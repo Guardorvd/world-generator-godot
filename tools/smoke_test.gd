@@ -3,11 +3,15 @@ extends SceneTree
 ## снимает точку появления, едет на велосипеде и прыгает, немного идёт вперёд, открывает карту, паузу и настройки и сохраняет снимки экрана. Запуск из папки проекта:
 ##   godot --path . --script res://tools/smoke_test.gd -- <зерно> <размер> <папка для снимков>
 
+const LOAD_TIMEOUT_MS := 180000  # дольше этого мир не загрузится: считаем, что игра зависла
+
 var main: Node
 var frames := 0
 var started := 0
 var ready_at := 0
 var shots := {}
+var failed := false
+var done := false
 
 
 func _initialize() -> void:
@@ -15,15 +19,33 @@ func _initialize() -> void:
 	root.add_child(main)
 
 
+## Сохраняет снимок; ошибка записи (например, нет папки) отмечается и даёт код выхода 1
 func _shot(name: String) -> void:
 	var args := OS.get_cmdline_user_args()
 	var dir: String = args[2] if args.size() > 2 else OS.get_user_data_dir()
 	var path := dir.path_join(name + ".png")
-	root.get_texture().get_image().save_png(path)
+	var err := root.get_texture().get_image().save_png(path)
+	if err != OK:
+		printerr("Не удалось сохранить снимок %s (ошибка %d): проверьте, что папка существует" % [path, err])
+		failed = true
+		return
 	print("Снимок: ", path)
 
 
+## Завершает проверку с кодом 0 (всё прошло) или 1
+func _finish() -> bool:
+	done = true
+	if failed:
+		printerr("Дымовая проверка не прошла")
+	else:
+		print("Дымовая проверка прошла")
+	quit(1 if failed else 0)
+	return false
+
+
 func _process(_delta: float) -> bool:
+	if done:
+		return false
 	var args := OS.get_cmdline_user_args()
 	frames += 1
 	if frames == 400:
@@ -34,6 +56,10 @@ func _process(_delta: float) -> bool:
 		_shot("loading")
 	var game: GameWorld = main.game
 	if game == null or game.player == null:
+		if started > 0 and Time.get_ticks_msec() - started > LOAD_TIMEOUT_MS:
+			printerr("Мир не загрузился за %d с" % (LOAD_TIMEOUT_MS / 1000))
+			failed = true
+			return _finish()
 		return false
 	if ready_at == 0:
 		ready_at = Time.get_ticks_msec()
@@ -77,5 +103,5 @@ func _process(_delta: float) -> bool:
 	elif shots.has("pause") and not shots.has("settings"):
 		shots.settings = true
 		_shot("settings")
-		return true
+		return _finish()
 	return false

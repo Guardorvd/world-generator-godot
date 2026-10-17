@@ -6,6 +6,7 @@ extends Node3D
 ## когда задача готова: так ходьба не подтормаживает на каждом обновлении.
 
 const TILE := GameConfig.TILE
+const WATER_MARGIN := 0.3  # на сколько метров вода должна быть выше земли, чтобы дерево сочли затопленным
 
 var world: WorldData
 var heights: Heightfield
@@ -16,7 +17,7 @@ var last_fill := Vector2.INF
 var last_trees := Vector2.INF
 var _task := -1           # задача заполнения буферов или -1
 var _task_trees := false  # задача заполняет и деревья, не только траву
-var _tree_counts := {}    # вид -> число экземпляров в буферах
+var _tree_counts := {}    # вид -> число экземпляров в буферах (пишет задача, читает главный поток после её конца)
 var _grass_n := 0
 
 
@@ -81,7 +82,8 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, colors: bool) -> MultiMesh:
 
 
 ## Заполнение деревьев и травы вокруг игрока (x, z в метрах). force — сразу и в этом же кадре
-## (при появлении игрока), иначе в фоне: результат появится через кадр-другой
+## (при появлении игрока), иначе в фоне: результат появится через кадр-другой.
+## Пока задача идёт, новую не запускаем; перезаполнение травы — не чаще чем через 8 м, деревьев — через 30 м
 func update(px: float, pz: float, force: bool) -> void:
 	if _task != -1:
 		if not force and not WorkerThreadPool.is_task_completed(_task):
@@ -105,6 +107,7 @@ func update(px: float, pz: float, force: bool) -> void:
 
 
 func _exit_tree() -> void:
+	# Задача обращается к узлу, поэтому дожидаемся её до выхода из дерева
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
@@ -185,14 +188,22 @@ func _fill_trees(px: float, pz: float) -> void:
 				var n: int = counts[kind]
 				if n >= e.cap:
 					continue
-				counts[kind] = n + 1
 				var x := ox * TILE
 				var z := oy * TILE
+				# Дорогу и мост не занимаем; дерево, стоящее под водой, не показываем.
+				# Тростник растёт у воды, его не трогаем
+				var cell := floori(oy) * w.W + floori(ox)
+				if w.path_mask[cell] >= 2:
+					continue
+				var ground := heights.ground_at(x, z)
+				if kind != Biomes.T_REED and ground < heights.water_level[cell] - WATER_MARGIN:
+					continue
+				counts[kind] = n + 1
 				var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * PI * 2.0
 				var v := w.obj_v[o]
 				var s := w.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
 				var sy := s * (0.9 + (v % 3) * 0.08)
-				var y := heights.ground_at(x, z) - 0.1
+				var y := ground - 0.1
 				if tbufs.has(kind):
 					_put_xform(tbufs[kind], n * 12, x, y, z, rot, s, sy)
 				if cbufs.has(kind):
@@ -218,6 +229,9 @@ func _fill_grass(px: float, pz: float) -> void:
 	var n := 0
 	for j in range(maxi(0, floori(tz - rT)), mini(w.H - 1, floori(tz + rT)) + 1):
 		for i in range(maxi(0, floori(tx - rT)), mini(w.W - 1, floori(tx + rT)) + 1):
+			# Буфер полон: остальные клетки уже не поместятся
+			if n >= GameConfig.GRASS_MAX:
+				break
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
 			if not bd.has("grass") or w.river[k] != 0 or w.path_mask[k] >= 2:

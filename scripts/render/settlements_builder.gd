@@ -3,6 +3,7 @@ extends RefCounted
 ## Поселения и вершины в 3D: дома, костры, туры с флажками, подписи. Копия js/render3d/settlements.js.
 
 const TILE := GameConfig.TILE
+const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
 
 
 static func _mat(c: Color, unshaded: bool = false) -> StandardMaterial3D:
@@ -75,6 +76,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var core_m := _mat(Color8(0xff, 0xd3, 0x6b), true)
 	var fires: Array = []
 	var labels: Array = []
+	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
 	for s in w.settlements:
 		for hut in s.huts:
@@ -117,6 +119,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var label := _label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz))
 		parent.add_child(label)
 		labels.append(label)
+		settle_pos.append(Vector2(fx, fz))
 	# Туры на вершинах
 	var stone := _mat(Color8(0x8f, 0x88, 0x80))
 	var flag_m := _mat(Color8(0xc0, 0x39, 0x2b))
@@ -157,6 +160,14 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		g.add_child(flag)
 		g.position = Vector3(x, y, z)
 		parent.add_child(g)
+		# подпись вершины рядом с поселением закрыла бы его название: такую не ставим
+		var near := false
+		for sp in settle_pos:
+			if sp.distance_to(Vector2(x, z)) < PEAK_LABEL_CLEAR:
+				near = true
+				break
+		if near:
+			continue
 		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
 		parent.add_child(label)
 		labels.append(label)

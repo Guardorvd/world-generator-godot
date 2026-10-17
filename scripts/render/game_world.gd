@@ -84,6 +84,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
+	_dragging = false
 	if p:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
@@ -132,7 +134,8 @@ func _unhandled_input(event: InputEvent) -> void:
 			pause_requested.emit()
 		get_viewport().set_input_as_handled()
 		return
-	if paused:
+	# до start() узлы игрока и велосипеда ещё не созданы
+	if paused or player == null:
 		return
 	if event.is_action_pressed("toggle_map"):
 		toggle_map()
@@ -153,8 +156,15 @@ func _unhandled_input(event: InputEvent) -> void:
 
 
 func _notification(what: int) -> void:
-	# окно потеряло фокус — пауза, как при выходе из захвата мыши в браузере
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and not paused and is_inside_tree():
+	if what != NOTIFICATION_APPLICATION_FOCUS_OUT or not is_inside_tree():
+		return
+	# окно потеряло фокус: кнопки мыши и клавиш движения могли отпуститься без нас,
+	# иначе игрок продолжит идти или тянуть взгляд после возвращения
+	_dragging = false
+	for action in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
+		Input.action_release(action)
+	# пауза, как при выходе из захвата мыши в браузере
+	if not paused and player != null:
 		pause_requested.emit()
 
 
@@ -209,6 +219,14 @@ func _process(delta: float) -> void:
 	hud.set_bike(bike.x, bike.z, not bike.riding)
 
 
+## Камера на велосипеде упирается в землю, настил моста или стену (перила, стены туннеля) в точке p
+func _cam_blocked(p: Vector3) -> bool:
+	if p.y < heights.surface_at(p.x, p.z, p.y) + 0.3:
+		return true
+	# перила и стены: на высоте глаз (чуть выше ног) стена на пути камеры закрывает обзор
+	return heights.wall_at(p.x, p.z, p.y - 1.0)
+
+
 ## Тряска камеры после приземления сильнее soft (м/с)
 func _shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
@@ -261,13 +279,14 @@ func _update_camera(moving: bool, dt: float = 0.0) -> void:
 		var dist := GameConfig.BIKE_CAM
 		for k in range(1, 7):
 			var p := target - dir * (GameConfig.BIKE_CAM * k / 6.0)
-			if p.y < heights.ground_at(p.x, p.z) + 0.3:
+			if _cam_blocked(p):
 				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / 6.0)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
 		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, minf(1.0, dt * 3.0))
 		var pos := target - dir * _cam_dist + jolt * 0.12
-		pos.y = maxf(pos.y, heights.ground_at(pos.x, pos.z) + 0.4)
+		# не ниже земли и настила моста, под которым камера окажется в стене или в воздухе
+		pos.y = maxf(pos.y, heights.surface_at(pos.x, pos.z, pos.y) + 0.4)
 		camera.look_at_from_position(pos, target, Vector3.UP)
 		return
 	_bob_amp = lerpf(_bob_amp, 1.0 if moving and player.on_ground and GameSettings.head_bob else 0.0, minf(1.0, dt * 8.0))

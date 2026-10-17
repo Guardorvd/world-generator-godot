@@ -1,6 +1,6 @@
 extends SceneTree
 ## Самопроверка генератора: тот же сид должен давать тот же мир.
-## Хеши массивов мира (FNV-1a по байтам, как в tools/selftest.js JS-версии) сравниваются с эталоном
+## Хеши массивов мира (FNV-1a по байтам, как в JS-версии) сравниваются с эталоном
 ## tools/selftest_reference.json. До версии 1.7 эталон был снят с JS-версии 1.2; с 1.8 генерация
 ## намеренно другая (дороги, мосты, туннели), эталон снят с неё. Ещё проверяется, что по дорогам
 ## и тропам из любого поселения можно дойти до любого другого. Запуск из папки проекта:
@@ -71,9 +71,13 @@ static func fingerprint(w: WorldData) -> Dictionary:
 func _init() -> void:
 	var print_only := OS.get_cmdline_user_args().has("--print")
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
-	var ref := {}
+	var ref: Variant = {}
 	if not print_only:
 		ref = JSON.parse_string(FileAccess.get_file_as_string("res://tools/selftest_reference.json"))
+		if not (ref is Dictionary):
+			printerr("Эталон tools/selftest_reference.json не прочитан: нет файла или он повреждён")
+			quit(1)
+			return
 	var fresh := {}
 	var fails := 0
 	for c in CASES:
@@ -87,10 +91,13 @@ func _init() -> void:
 		var exp: Dictionary = ref.get(key, {})
 		var bad := PackedStringArray()
 		if not settlements_connected(w):
-			bad.append("связь поселений")
-		for k in fp:
-			if not exp.has(k) or (str(exp[k]) != str(fp[k]) if fp[k] is String else int(exp[k]) != int(fp[k])):
-				bad.append(k)
+			bad.append("связь поселений по дорогам и тропам")
+		if exp.is_empty():
+			bad.append("нет случая в эталоне (запустите с -- --print)")
+		else:
+			for k in fp:
+				if not exp.has(k) or (str(exp[k]) != str(fp[k]) if fp[k] is String else int(exp[k]) != int(fp[k])):
+					bad.append(k)
 		if bad.size() > 0:
 			fails += 1
 		print("%s %s (%d мс)%s" % ["✗" if bad.size() > 0 else "✓", key, Time.get_ticks_msec() - t0, (" — отличается: " + ", ".join(bad)) if bad.size() > 0 else ""])

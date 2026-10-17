@@ -8,8 +8,12 @@ extends RefCounted
 const BAND := 16
 
 
-## job(y0, y1) -> результат полосы; возвращает результаты полос по порядку
+## job(y0, y1) -> результат полосы; возвращает результаты полос по порядку.
+## Полосы по band строк, последняя может быть короче. Строк нет — пустой массив, без задач в пуле.
 static func bands(h: int, job: Callable, band: int = BAND) -> Array:
+	if h <= 0:
+		return []
+	band = maxi(1, band)
 	var out: Array = []
 	out.resize(ceili(float(h) / band))
 	var lock := Mutex.new()
@@ -18,6 +22,7 @@ static func bands(h: int, job: Callable, band: int = BAND) -> Array:
 		lock.lock()
 		out[b] = r
 		lock.unlock()
+	# полос может быть меньше, чем потоков, — пул просто займёт не все
 	var id := WorkerThreadPool.add_group_task(task, out.size(), -1, true)
 	WorkerThreadPool.wait_for_group_task_completion(id)
 	return out

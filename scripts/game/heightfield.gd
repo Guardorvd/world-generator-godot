@@ -138,7 +138,8 @@ func _axis(a: int, b: int, tunnel: bool) -> Dictionary:
 	var W := world.W
 	var s := {tunnel = tunnel, half = TUNNEL_HALF if tunnel else BRIDGE_HALF,
 		ax = (a % W + 0.5) * TILE, az = (a / W + 0.5) * TILE, bx = (b % W + 0.5) * TILE, bz = (b / W + 0.5) * TILE}
-	s.len = Grid.hypot(s.bx - s.ax, s.bz - s.az)
+	# концы не могут совпасть (иначе направление оси не считается), длина не ниже сантиметра
+	s.len = maxf(Grid.hypot(s.bx - s.ax, s.bz - s.az), 0.01)
 	s.arch = 0.0 if tunnel else minf(s.len * ARCH, 3.0)
 	s.ux = (s.bx - s.ax) / s.len
 	s.uz = (s.bz - s.az) / s.len
@@ -152,9 +153,18 @@ func level(s: Dictionary, t: float) -> float:
 	return lerpf(s.ay, s.by, u) + s.arch * sin(PI * u)
 
 
+## Сооружения, которые задевает клетка с точкой (x, z); null, если точка за картой (сооружений там нет)
+func _cell_list(x: float, z: float) -> Variant:
+	var cx := floori(x / TILE)
+	var cz := floori(z / TILE)
+	if cx < 0 or cz < 0 or cx >= world.W or cz >= world.H:
+		return null
+	return _cells.get(cz * world.W + cx)
+
+
 ## Высота настила моста под точкой (x, z), если ноги на высоте feet могут на нём стоять, иначе -INF
 func deck_at(x: float, z: float, feet: float) -> float:
-	var list = _cells.get(floori(z / TILE) * world.W + floori(x / TILE))
+	var list = _cell_list(x, z)
 	if list == null:
 		return -INF
 	var best := -INF   # где мосты пересекаются, ноги на верхнем из тех, до которых достают
@@ -181,7 +191,7 @@ func surface_at(x: float, z: float, feet: float) -> float:
 ## Перила моста или стена туннеля в точке (x, z) на высоте ног feet. Там, где сооружения сходятся,
 ## настил или пол одного не перегораживается перилами или стеной другого
 func wall_at(x: float, z: float, feet: float) -> bool:
-	var list = _cells.get(floori(z / TILE) * world.W + floori(x / TILE))
+	var list = _cell_list(x, z)
 	if list == null:
 		return false
 	var wall := false

@@ -312,6 +312,12 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Полный экран"
 
+[node name="Reset" type="Button" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Сбросить настройки"
+
 [node name="Done" type="Button" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
@@ -334,4 +340,5 @@ text = "Готово"
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/FovSlider" to="." method="_on_fov_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/HeadBob" to="." method="_on_head_bob_toggled"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/Fullscreen" to="." method="_on_fullscreen_toggled"]
+[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Reset" to="." method="_on_reset_settings"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]

@@ -19,20 +19,24 @@ static func px_for(size: int) -> int:
 	return 4 if size <= 256 else 2
 
 
-## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки
+## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
+## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
 static func load_world(seed_text: String, size: int, on_progress: Callable = Callable()) -> WorldLoader:
 	var r := WorldLoader.new()
 	var px := px_for(size)
 	var side := Thread.new()
 	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
 		side.start(r._prepare.bind(w, px)))
-	var painted: Array = side.wait_to_finish()
+	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
+	if on_progress.is_valid():
+		on_progress.call(0.88, "Рельеф, вода и заливка")
+	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
 	# мосты и туннели известны только после троп: рельеф опускается под туннелями, меш поправляется
 	var changed := r.heights.build_structures()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_mesh, r.world, r.heights, changed)
 	if on_progress.is_valid():
-		on_progress.call(0.95, "Строительство 3D-сцены")
+		on_progress.call(0.93, "Текстура рельефа и карта")
 	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
 	# векторный слой на них рисуется одновременно в двух потоках
 	var tex_bytes: Array[PackedByteArray] = [painted[0][0]]

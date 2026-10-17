@@ -8,6 +8,7 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const WHEEL_R := 0.34   # радиус колеса, м
 const GEAR := 2.8       # оборотов колеса на один оборот педалей
+const WALL_LOSS := 6.0  # 1/с: как быстро удар в стену в лоб гасит скорость (при скольжении вдоль стены почти не гасит)
 
 var x := 0.0          # метры
 var z := 0.0
@@ -29,6 +30,7 @@ var _dist := 0.0      # пройденный путь, для покачиван
 var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
 var _hop_buf := 0.0   # пробел, нажатый чуть раньше, чем прыжок стал доступен
+var _brake_hold := 0.0 # сколько секунд подряд держат тормоз
 var crashed := false  # жёстко приземлились: седок упал (GameWorld ссадит его и сбросит флаг)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
 
@@ -63,6 +65,7 @@ func mount(p: PlayerState) -> void:
 	p.vx = 0.0
 	p.vz = 0.0
 	p.on_ground = true
+	p.feet = y
 
 
 ## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
@@ -75,15 +78,29 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	squash = 0.0
 	squash_v = 0.0
 	_hop_buf = 0.0
+	_brake_hold = 0.0
 	y = heights.surface_at(x, z, y)
 	p.vx = 0.0
+	p.vy = 0.0
 	p.vz = 0.0
-	var px := x - cos(heading) * 0.9
-	var pz := z + sin(heading) * 0.9
-	if PlayerState.is_passable(w, heights, px, pz, y):
-		p.x = px
-		p.z = pz
+	p.on_ground = true
+	var spot := _dismount_spot(w, heights)
+	p.x = spot.x
+	p.z = spot.y
 	p.feet = heights.surface_at(p.x, p.z, y)
+
+
+## Место для седока у велосипеда: слева, справа, сзади или спереди, первое проходимое.
+## Если рядом нигде не пройти, седок встаёт на место велосипеда
+func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
+	var fwd := Vector2(-sin(heading), -cos(heading))
+	var dirs: Array[Vector2] = [Vector2(-cos(heading), sin(heading)), Vector2(cos(heading), -sin(heading)), -fwd, fwd]
+	for dist: float in [0.9, 1.5]:
+		for d in dirs:
+			var q := Vector2(x, z) + d * dist
+			if PlayerState.is_passable(w, heights, q.x, q.y, y):
+				return q
+	return Vector2(x, z)
 
 
 ## Подъём земли на метр пути вдоль курса
@@ -98,6 +115,10 @@ func _slope(heights: Heightfield) -> float:
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var slope := _slope(heights)
 	var climb := slope if speed >= 0.0 else -slope
+	if throttle < 0.0:
+		_brake_hold += dt
+	else:
+		_brake_hold = 0.0
 	if not airborne:
 		var top := GameConfig.BIKE_SPEED * (GameConfig.BIKE_BOOST if boost else 1.0) * PlayerState.terrain_speed(w, x, z)
 		if heights.depth_at(x, z, y) > 0.3:
@@ -112,7 +133,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			# с места разгон резвее, у предельной скорости — мягче
 			rate = GameConfig.BIKE_ACCEL * clampf(1.6 - speed / maxf(top, 1.0), 0.5, 1.6) if speed < goal else GameConfig.BIKE_ROLL
 		elif throttle < 0.0:
-			goal = -GameConfig.BIKE_REVERSE if speed < 0.5 else 0.0
+			# тормоз останавливает велосипед до нуля; задний ход включается, только если тормоз держат дольше паузы,
+			# иначе короткое нажатие на ходу сразу уводило бы велосипед назад
+			var reversing := speed < -0.05 or (speed <= 0.05 and _brake_hold > 0.4)
+			goal = -GameConfig.BIKE_REVERSE if reversing else 0.0
 			rate = GameConfig.BIKE_BRAKE
 		speed = move_toward(speed, goal, rate * dt)
 	else:
@@ -134,11 +158,12 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		x = nx
 		z = nz
 	elif PlayerState.is_passable(w, heights, nx, z, y):
+		# скользим вдоль стены: в лоб скорость гаснет, вдоль стены почти нет
 		x = nx
-		speed *= 1.0 - minf(1.0, dt * 3.0)
+		speed *= _slide_keep(dt, absf(nx - x0), absf(speed) * dt)
 	elif PlayerState.is_passable(w, heights, x, nz, y):
 		z = nz
-		speed *= 1.0 - minf(1.0, dt * 3.0)
+		speed *= _slide_keep(dt, absf(nz - z0), absf(speed) * dt)
 	else:
 		speed = 0.0
 	var moved := Grid.hypot(x - x0, z - z0)
@@ -202,15 +227,23 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		squash_v += sin(_dist * 6.1) * sin(_dist * 2.3) * rough * absf(speed) * dt * 0.5
 	sway = lerpf(sway, sway_goal, minf(1.0, dt * 8.0))
 
-	wheel += speed * dt / WHEEL_R
-	# педали крутятся, только пока их жмут: накатом и в полёте свободный ход
-	if throttle > 0.0 and speed > 0.3:
-		crank += speed * dt / WHEEL_R / GEAR
+	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность
+	wheel = fmod(wheel + speed * dt / WHEEL_R, TAU)
+	# педали крутятся, только пока их жмут на земле: накатом и в полёте свободный ход
+	if throttle > 0.0 and speed > 0.3 and not airborne:
+		crank = fmod(crank + speed * dt / WHEEL_R / GEAR, TAU)
 	p.x = x
 	p.z = z
 	p.feet = y
 	p.vy = vy
 	p.on_ground = not airborne
+
+
+## Доля скорости, которая остаётся после касания стены: moved — путь, который всё же прошли, full — весь путь за кадр
+func _slide_keep(dt: float, moved: float, full: float) -> float:
+	if full <= 0.0:
+		return 1.0
+	return 1.0 - minf(1.0, dt * WALL_LOSS * (1.0 - moved / full))
 
 
 ## Приземление: подвеска проседает тем сильнее, чем жёстче удар; жёсткий удар гасит скорость,

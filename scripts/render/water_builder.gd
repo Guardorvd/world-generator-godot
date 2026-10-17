@@ -39,7 +39,9 @@ static func build(w: WorldData, heights: Heightfield) -> Array[MeshInstance3D]:
 	return out
 
 
-static func _flat_mesh(pos: PackedVector3Array, mat: Material, node_name: String) -> MeshInstance3D:
+## Меш из вершин pos с общим материалом. idx — необязательный индексный буфер (по две клетки на
+## четыре вершины экономят память); без него вершины идут тройками
+static func _flat_mesh(pos: PackedVector3Array, mat: Material, node_name: String, idx: PackedInt32Array = PackedInt32Array()) -> MeshInstance3D:
 	if pos.is_empty():
 		return null
 	var nor := PackedVector3Array()
@@ -49,6 +51,8 @@ static func _flat_mesh(pos: PackedVector3Array, mat: Material, node_name: String
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
+	if not idx.is_empty():
+		arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	mesh.surface_set_material(0, mat)
@@ -85,6 +89,7 @@ static func _lake_mesh(w: WorldData, mat: Material) -> MeshInstance3D:
 					if l > level[n]:
 						level[n] = l
 	var pos := PackedVector3Array()
+	var idx := PackedInt32Array()
 	for j in H:
 		for i in W:
 			var y := level[j * W + i]
@@ -94,30 +99,36 @@ static func _lake_mesh(w: WorldData, mat: Material) -> MeshInstance3D:
 			var x1 := (i + 1) * TILE
 			var z0 := j * TILE
 			var z1 := (j + 1) * TILE
-			pos.append_array([Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x0, y, z1), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1)])
-	return _flat_mesh(pos, mat, "Lakes")
+			var v := pos.size()
+			pos.append_array([Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1)])
+			idx.append_array([v, v + 1, v + 2, v, v + 2, v + 3])
+	return _flat_mesh(pos, mat, "Lakes", idx)
 
 
 ## Реки: ленты вдоль средних линий из Heightfield.ribbons
 static func _river_mesh(ribbons: Array, mat: Material) -> MeshInstance3D:
 	var pos := PackedVector3Array()
 	for pts in ribbons:
+		var n: int = pts.size()
+		if n < 2:
+			continue # одна точка ленты не даёт ни одной полосы
 		var L: Array[Vector3] = []
 		var R: Array[Vector3] = []
-		var n: int = pts.size()
+		# направление поперёк ленты; если соседние точки совпадают (нулевой отрезок), берём прошлое
+		var dx := 1.0
+		var dz := 0.0
 		for k in n:
 			var a: Dictionary = pts[maxi(0, k - 1)]
 			var b: Dictionary = pts[mini(n - 1, k + 1)]
-			var dx: float = b.x - a.x
-			var dz: float = b.z - a.z
-			var ln := Grid.hypot(dx, dz)
-			if ln == 0.0:
-				ln = 1.0
-			dx /= ln
-			dz /= ln
+			var ex: float = b.x - a.x
+			var ez: float = b.z - a.z
+			var ln := Grid.hypot(ex, ez)
+			if ln > 0.000001:
+				dx = ex / ln
+				dz = ez / ln
 			var p: Dictionary = pts[k]
 			L.append(Vector3(p.x - dz * p.w, p.y, p.z + dx * p.w))
 			R.append(Vector3(p.x + dz * p.w, p.y, p.z - dx * p.w))
 		for k in n - 1:
 			pos.append_array([L[k], R[k], L[k + 1], L[k + 1], R[k], R[k + 1]])
-	return _flat_mesh(pos, mat.duplicate(), "Rivers")
+	return _flat_mesh(pos, mat, "Rivers")

@@ -31,11 +31,12 @@ static func random_seed() -> String:
 func _ready() -> void:
 	GameSettings.load_settings()
 	GameSettings.apply_window()
-	seed_edit.text = random_seed()
+	# в поле — зерно последнего мира (если было), иначе случайное
+	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
 	for s in SIZES:
 		size_select.add_item(s[1], s[0])
 	size_select.select(maxi(0, size_select.get_item_index(GameSettings.world_size)))
-	%Version.text = "Версия " + ProjectSettings.get_setting("application/config/version")
+	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
 	_show("menu")
 	bg_thread = Thread.new()
 	bg_thread.start(_menu_background_job.bind("menu-%d" % randi_range(0, 999999)))
@@ -56,8 +57,8 @@ func _show(screen: String) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	# Esc в настройках из главного меню (в игре Esc приходит через GameWorld.pause_requested)
-	if event.is_action_pressed("pause") and screens.settings.visible and game == null:
+	# Esc (или B на геймпаде) в настройках из главного меню; в игре Esc приходит через GameWorld.pause_requested
+	if (event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")) and screens.settings.visible and game == null:
 		_close_settings()
 		get_viewport().set_input_as_handled()
 
@@ -66,18 +67,30 @@ func _unhandled_input(event: InputEvent) -> void:
 
 func _open_settings() -> void:
 	_settings_from = "pause" if screens.pause.visible else "menu"
-	%MouseSlider.set_value_no_signal(GameSettings.mouse)
-	%FovSlider.set_value_no_signal(GameSettings.fov)
-	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
-	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
-	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
-	_show_values()
+	_sync_settings_controls()
 	_show("settings")
 
 
 func _close_settings() -> void:
 	GameSettings.save_settings()
 	_show(_settings_from)
+
+
+## Ставит ползунки и флажки в соответствие с GameSettings; без сигналов, чтобы не сохранять лишнее
+func _sync_settings_controls() -> void:
+	%MouseSlider.set_value_no_signal(GameSettings.mouse)
+	%FovSlider.set_value_no_signal(GameSettings.fov)
+	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
+	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
+	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
+	_show_values()
+
+
+func _on_reset_settings() -> void:
+	GameSettings.reset_defaults()
+	GameSettings.apply_window()
+	GameSettings.save_settings()
+	_sync_settings_controls()
 
 
 func _show_values() -> void:
@@ -150,10 +163,15 @@ func _process(delta: float) -> void:
 # ---------- Старт игры ----------
 
 func _on_start() -> void:
+	# второй запуск во время загрузки не нужен: мир уже строится
+	if busy:
+		return
 	var seed_text := seed_edit.text.strip_edges()
 	if seed_text.is_empty():
 		seed_text = random_seed()
+	seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
 	GameSettings.world_size = size_select.get_selected_id()
+	GameSettings.last_seed = seed_text
 	GameSettings.save_settings()
 	start_game(seed_text, GameSettings.world_size)
 

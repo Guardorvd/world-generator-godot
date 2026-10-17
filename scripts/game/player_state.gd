@@ -3,6 +3,8 @@ extends RefCounted
 ## Игрок: появление, движение по местности, прыжок, проходимость. Копия js/game/player.js, без узлов сцены.
 
 const TILE := GameConfig.TILE
+const MAX_SUBSTEP := 1.0 / 20.0  # самый долгий подшаг, с: длинный кадр делится, чтобы не проскакивать стены и воду
+const MAX_SUBSTEPS := 16         # предел дроблению, чтобы сильный «затык» кадра не повесил игру
 
 var x := 0.0          # метры
 var z := 0.0
@@ -88,6 +90,19 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 ## Прыжок срабатывает и чуть после схода с края (COYOTE), и если пробел нажат чуть раньше приземления
 ## (JUMP_BUFFER). Возвращает true, если игрок пытался идти.
 func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
+	# длинный кадр делится на подшаги: поведение почти не зависит от частоты кадров, а стена или
+	# полоса воды не пропускаются за один большой шаг. Нажатие пробела учитывается только в первом подшаге
+	var n := clampi(ceili(dt / MAX_SUBSTEP), 1, MAX_SUBSTEPS)
+	var h := dt / n
+	var moving := false
+	for k in n:
+		if _integrate(fw, st, running, jump and k == 0, yaw, h, w, heights):
+			moving = true
+	return moving
+
+
+## Один подшаг движения, см. step
+func _integrate(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
 	var sy := sin(yaw)
 	var cy := cos(yaw)
 	var mx := -sy * fw + cy * st

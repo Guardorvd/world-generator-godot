@@ -35,10 +35,14 @@ static func build(parent: Node3D, heights: Heightfield) -> void:
 		if s.tunnel:
 			var a := Vector3(s.ax, s.ay, s.az)
 			var b := Vector3(s.bx, s.by, s.bz)
+			if a.distance_to(b) < 0.01:
+				continue  # вырожденный туннель без оси: нечего строить
 			# узел в начале оси, -Z смотрит вдоль неё (с уклоном), X — вбок
 			var node := Node3D.new()
 			node.position = a
-			node.basis = Basis.looking_at(b - a, Vector3.UP)
+			# почти вертикальная ось (крутой въезд) — сверяем с мировым Z, иначе Up даёт вырожденный базис
+			var up := Vector3.UP if absf((b - a).normalized().y) < 0.99 else Vector3.BACK
+			node.basis = Basis.looking_at(b - a, up)
 			_tunnel(node, s.half, a.distance_to(b), -a.distance_to(b) * 0.5, stone, portal)
 			parent.add_child(node)
 		else:
@@ -56,6 +60,8 @@ static func _bridge(parent: Node3D, heights: Heightfield, s: Dictionary, wood: M
 		var p0 := Vector3(s.ax + s.ux * t0, heights.level(s, t0), s.az + s.uz * t0)
 		var p1 := Vector3(s.ax + s.ux * t1, heights.level(s, t1), s.az + s.uz * t1)
 		var seg := p0.distance_to(p1)
+		if seg < 0.01:
+			continue  # вырожденный пролёт: направление не задано
 		var node := Node3D.new()
 		node.position = p0
 		node.basis = Basis.looking_at(p1 - p0, Vector3.UP)

@@ -12,6 +12,9 @@ static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
+	var mesh := ArrayMesh.new()
+	if W < 2 or H < 2:
+		return mesh # меньше двух клеток в любую сторону не из чего собрать треугольники
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
 	var uv := PackedVector2Array()
@@ -50,7 +53,6 @@ static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	arrays[Mesh.ARRAY_NORMAL] = nor
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
-	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return mesh
 
@@ -60,6 +62,8 @@ static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: 
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
+	if changed.is_empty() or mesh.get_surface_count() == 0:
+		return # нечего поправлять (или меш пустой и поправлять нечего)
 	var arrays := mesh.surface_get_arrays(0)
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]

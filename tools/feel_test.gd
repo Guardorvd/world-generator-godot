@@ -9,8 +9,10 @@ var _fails := 0
 
 
 func _check(ok: bool, what: String) -> void:
-	print(("✓ " if ok else "✗ ") + what)
-	if not ok:
+	if ok:
+		print("✓ " + what)
+	else:
+		printerr("✗ " + what)
 		_fails += 1
 
 
@@ -81,7 +83,10 @@ func _init() -> void:
 		_check(ok == h2.structures.size() * 2, "%s@%d: мостов %d, туннелей %d, пройдено пешком и на велосипеде %d из %d" % [c[0], c[1], w2.bridges.size(), w2.tunnels.size(), ok, h2.structures.size() * 2])
 	_check(kinds.size() == 2, "есть и мосты, и туннели")
 
-	print("Все проверки прошли." if _fails == 0 else "Не прошло проверок: %d" % _fails)
+	if _fails == 0:
+		print("Все проверки прошли.")
+	else:
+		printerr("Не прошло проверок: %d" % _fails)
 	quit(1 if _fails > 0 else 0)
 
 
