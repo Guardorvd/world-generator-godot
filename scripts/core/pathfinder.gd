@@ -36,9 +36,14 @@ func find_path(s: int, t: int) -> PackedInt32Array:
 	var done := self.done
 	var ids := heap_ids
 	var keys := heap_keys
-	var DX := Grid.DX
-	var DY := Grid.DY
-	var DL := Grid.DL
+	var DX := PackedInt32Array(Grid.DX)
+	var DY := PackedInt32Array(Grid.DY)
+	var DL := PackedFloat64Array(Grid.DL)
+	var OFF := PackedInt32Array()
+	for k in 8:
+		OFF.append(DY[k] * W + DX[k])
+	var W1 := W - 1
+	var H1 := H - 1
 	gen += 1
 	var gn := gen
 	var tx := t % W
@@ -80,18 +85,18 @@ func find_path(s: int, t: int) -> PackedInt32Array:
 		var cy := c / W
 		var gc := g[c]
 		var cc := cost[c]
+		# у клеток не на краю все 8 соседей внутри карты: проверка границ не нужна
+		var inner := cx > 0 and cy > 0 and cx < W1 and cy < H1
 		for k in 8:
-			var nx: int = cx + DX[k]
-			var ny: int = cy + DY[k]
-			if nx < 0 or ny < 0 or nx >= W or ny >= H:
-				continue
-			var n := ny * W + nx
-			if done[n] == gn:
+			var nx := cx + DX[k]
+			var ny := cy + DY[k]
+			var n := c + OFF[k]
+			if not inner and (nx < 0 or ny < 0 or nx >= W or ny >= H):
 				continue
 			var cn := cost[n]
-			if cn == INF:
+			if cn == INF or done[n] == gn:
 				continue
-			var ng: float = gc + DL[k] * (cc + cn) * 0.5
+			var ng := gc + DL[k] * (cc + cn) * 0.5
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn
 				g[n] = ng

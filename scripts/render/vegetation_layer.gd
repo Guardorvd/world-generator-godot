@@ -2,6 +2,8 @@ class_name VegetationLayer
 extends Node3D
 ## Растительность вокруг игрока: деревья, кусты, камни и трава — мультимеши, которые
 ## перезаполняются, когда игрок отходит достаточно далеко. Копия js/render3d/vegetation.js.
+## Буферы экземпляров заполняются в задаче WorkerThreadPool, а в мультимеши попадают в главном потоке,
+## когда задача готова: так ходьба не подтормаживает на каждом обновлении.
 
 const TILE := GameConfig.TILE
 
@@ -12,6 +14,10 @@ var grass: MultiMesh
 var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
+var _task := -1           # задача заполнения буферов или -1
+var _task_trees := false  # задача заполняет и деревья, не только траву
+var _tree_counts := {}    # вид -> число экземпляров в буферах
+var _grass_n := 0
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh) -> void:
@@ -74,8 +80,15 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, colors: bool) -> MultiMesh:
 	return mm
 
 
-## Заполнение деревьев и травы вокруг игрока (x, z в метрах)
+## Заполнение деревьев и травы вокруг игрока (x, z в метрах). force — сразу и в этом же кадре
+## (при появлении игрока), иначе в фоне: результат появится через кадр-другой
 func update(px: float, pz: float, force: bool) -> void:
+	if _task != -1:
+		if not force and not WorkerThreadPool.is_task_completed(_task):
+			return
+		WorkerThreadPool.wait_for_task_completion(_task)
+		_task = -1
+		_apply(_task_trees)
 	var p := Vector2(px, pz)
 	if not force and last_fill != Vector2.INF and p.distance_to(last_fill) < 8.0:
 		return
@@ -83,8 +96,40 @@ func update(px: float, pz: float, force: bool) -> void:
 	last_fill = p
 	if move_trees:
 		last_trees = p
+	if force:
+		_fill(px, pz, move_trees)
+		_apply(move_trees)
+	else:
+		_task_trees = move_trees
+		_task = WorkerThreadPool.add_task(_fill.bind(px, pz, move_trees), false, "Растительность")
+
+
+func _exit_tree() -> void:
+	if _task != -1:
+		WorkerThreadPool.wait_for_task_completion(_task)
+		_task = -1
+
+
+## Заполнить буферы (в задаче пула потоков): мультимеши здесь не трогаются
+func _fill(px: float, pz: float, trees: bool) -> void:
+	if trees:
 		_fill_trees(px, pz)
 	_fill_grass(px, pz)
+
+
+## Передать заполненные буферы мультимешам (в главном потоке)
+func _apply(trees: bool) -> void:
+	if trees:
+		for k in veg:
+			var e: Dictionary = veg[k]
+			if e.has("trunk"):
+				e.trunk.buffer = e.tbuf
+				e.trunk.visible_instance_count = _tree_counts[k]
+			if e.has("crown"):
+				e.crown.buffer = e.cbuf
+				e.crown.visible_instance_count = _tree_counts[k]
+	grass.buffer = grass_buf
+	grass.visible_instance_count = _grass_n
 
 
 ## Строка матрицы экземпляра: поворот вокруг вертикали, масштаб (s, sy, s), положение
@@ -159,14 +204,7 @@ func _fill_trees(px: float, pz: float) -> void:
 					buf[n * 16 + 13] = col.g
 					buf[n * 16 + 14] = col.b
 					buf[n * 16 + 15] = 1.0
-	for k in veg:
-		var e: Dictionary = veg[k]
-		if e.has("trunk"):
-			e.trunk.buffer = tbufs[k]
-			e.trunk.visible_instance_count = counts[k]
-		if e.has("crown"):
-			e.crown.buffer = cbufs[k]
-			e.crown.visible_instance_count = counts[k]
+	_tree_counts = counts
 
 
 ## Трава: детерминированно по клеткам, чтобы не «прыгала» при обновлении.
@@ -205,5 +243,4 @@ func _fill_grass(px: float, pz: float) -> void:
 				buf[n * 16 + 14] = tc[2] * v
 				buf[n * 16 + 15] = 1.0
 				n += 1
-	grass.buffer = buf
-	grass.visible_instance_count = n
+	_grass_n = n

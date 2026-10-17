@@ -128,7 +128,7 @@ static func run(w: WorldData) -> void:
 	var dist_ocean := Grid.distance_field(W, H, ocean)
 
 	# Предварительная влажность (осадки): шум + близость к морю
-	var moist_n := Parallel.fbm_field(w, w.noise.moist, 170.0, 4)
+	var moist_n := w.noise_field("moist")
 	var rain := PackedFloat32Array()
 	rain.resize(N)
 	for i in N:

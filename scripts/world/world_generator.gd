@@ -8,8 +8,10 @@ extends RefCounted
 ## JS-версию 1.2 бит в бит (проверка: tools/selftest.gd).
 
 
-## seed — строка зерна, size — сторона мира в клетках; on_progress(p 0..1, подпись этапа) — необязательно
-static func generate(seed_text: String, size: int, on_progress: Callable = Callable()) -> WorldData:
+## seed — строка зерна, size — сторона мира в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
+## after_climate(w) — необязательно: вызывается, когда рельеф, вода и биомы готовы. Следующие этапы их
+## уже не меняют, поэтому то, что зависит только от них, можно считать в другом потоке параллельно с ними.
+static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
 	var w := WorldData.new()
 	w.W = size
 	w.H = size
@@ -28,6 +30,7 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 
 	step.call(StageRelief.PROGRESS, StageRelief.LABEL)
 	StageRelief.run(w)
+	w.start_noise_fields()
 	step.call(StageOcean.PROGRESS, StageOcean.LABEL)
 	StageOcean.run(w)
 	step.call(StageHydrology.PROGRESS, StageHydrology.LABEL)
@@ -36,6 +39,8 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 	StageRivers.run(w)
 	step.call(StageClimate.PROGRESS, StageClimate.LABEL)
 	StageClimate.run(w)
+	if after_climate.is_valid():
+		after_climate.call(w)
 	step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
 	StageLandmarks.run(w)
 	step.call(StageTrails.PROGRESS, StageTrails.LABEL)

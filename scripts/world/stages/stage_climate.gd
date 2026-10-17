@@ -71,7 +71,7 @@ static func run(w: WorldData) -> void:
 			var gx := r - l
 			var gy := d - u
 			slope[y * W + x] = sqrt(gx * gx + gy * gy) * 0.5 * 60.0
-	var temp_n := Parallel.fbm_field(w, w.noise.temp, 200.0, 3)
+	var temp_n := w.noise_field("temp")
 	var temp := PackedFloat32Array()
 	temp.resize(N)
 	var moist := PackedFloat32Array()

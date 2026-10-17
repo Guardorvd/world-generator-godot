@@ -19,18 +19,29 @@ static func bake(w: WorldData, px: int, flat: bool) -> Image:
 
 ## Две картинки за один проход: [без отмывки, с отмывкой]
 static func bake_both(w: WorldData, px: int) -> Array[Image]:
+	return finish(w, px, paint(w, px))
+
+
+## Попиксельная заливка: [без отмывки, с отмывкой] в байтах RGB8. Читает только рельеф, воду и биомы,
+## поэтому её можно считать сразу после этапа климата, параллельно с тропами и растительностью
+static func paint(w: WorldData, px: int) -> Array[PackedByteArray]:
 	var fields := _cell_fields(w)
-	var iw := w.W * px
-	var ih := w.H * px
 	var rng := WGRandom.new(w.seed_num ^ 0xa5a5a5)
 	var noises := [Simplex.new(rng), Simplex.new(rng), Simplex.new(rng), Simplex.new(rng)]
 	var flat := PackedByteArray()
 	var shaded := PackedByteArray()
-	for b in Parallel.bands(ih, func(y0: int, y1: int) -> Array: return _paint_rows(w, px, fields, noises, y0, y1), BAND):
+	for b in Parallel.bands(w.H * px, func(y0: int, y1: int) -> Array: return _paint_rows(w, px, fields, noises, y0, y1), BAND):
 		flat.append_array(b[0])
 		shaded.append_array(b[1])
+	return [flat, shaded]
+
+
+## Векторный слой (поселения, реки, тропы) поверх заливки из paint, когда мир готов целиком
+static func finish(w: WorldData, px: int, painted: Array[PackedByteArray]) -> Array[Image]:
+	var iw := w.W * px
+	var ih := w.H * px
 	var out: Array[Image] = []
-	for data in [flat, shaded]:
+	for data in painted:
 		var canvas := Canvas.new(data, iw, ih)
 		_draw_overlays(w, px, canvas)
 		out.append(Image.create_from_data(iw, ih, false, Image.FORMAT_RGB8, canvas.data))

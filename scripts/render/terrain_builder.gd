@@ -7,7 +7,8 @@ extends RefCounted
 const TILE := GameConfig.TILE
 
 
-static func build(w: WorldData, heights: Heightfield, base: Image) -> MeshInstance3D:
+## Меш без материала: его можно строить в фоновом потоке, пока запекается текстура
+static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
@@ -51,13 +52,14 @@ static func build(w: WorldData, heights: Heightfield, base: Image) -> MeshInstan
 	arrays[Mesh.ARRAY_INDEX] = idx
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
+
+
+## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни)
+static func material(base: Image) -> StandardMaterial3D:
 	base.generate_mipmaps()
 	var mat := StandardMaterial3D.new()
 	mat.albedo_texture = ImageTexture.create_from_image(base)
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 	mat.roughness = 1.0
-	mesh.surface_set_material(0, mat)
-	var mi := MeshInstance3D.new()
-	mi.mesh = mesh
-	mi.name = "Terrain"
-	return mi
+	return mat

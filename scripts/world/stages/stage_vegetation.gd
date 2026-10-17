@@ -18,7 +18,7 @@ static func run(w: WorldData) -> void:
 	var slope := w.slope
 	var temp := w.temp
 	var dist_water := w.dist_water
-	var forest := Parallel.fbm_field(w, w.noise.forest, 36.0, 3)
+	var forest := w.noise_field("forest")
 	var path_src := PackedByteArray()
 	path_src.resize(N)
 	for i in N:
@@ -35,20 +35,31 @@ static func run(w: WorldData) -> void:
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
 	var store := ObjStore.new(w, village)
+	# Свойства биомов в плоских таблицах: в цикле по всем клеткам словари читать дорого
+	var b_water := PackedByteArray()
+	var b_trees := PackedFloat64Array()
+	var b_kinds: Array = []
+	for bd: Dictionary in Biomes.LIST:
+		b_water.append(1 if bd.get("water", false) else 0)
+		b_trees.append(bd.get("trees", 0.0))
+		b_kinds.append(bd.get("kinds", []))
 
 	for y in H:
 		for x in W:
 			var i := y * W + x
-			var bd: Dictionary = Biomes.LIST[biome[i]]
-			if bd.get("water", false) or river[i] != 0:
+			var bi := biome[i]
+			if b_water[bi] != 0 or river[i] != 0:
 				continue
-			var dens: float = bd.get("trees", 0.0)
+			var dens := b_trees[bi]
 			var f := forest[i]
+			# Grid.smoothstep_js развёрнут на месте
 			if dens > 0.3:
-				dens *= Grid.smoothstep_js(-0.35, 0.15, f) # поляны в лесу
+				var t := clampf((f - -0.35) / (0.15 - -0.35), 0.0, 1.0)
+				dens *= t * t * (3.0 - 2.0 * t) # поляны в лесу
 			else:
-				dens *= 0.3 + 1.8 * Grid.smoothstep_js(0.1, 0.5, f) # рощи в открытой местности
-			if biome[i] == Biomes.BEACH and temp[i] < 0.6:
+				var t := clampf((f - 0.1) / (0.5 - 0.1), 0.0, 1.0)
+				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
+			if bi == Biomes.BEACH and temp[i] < 0.6:
 				dens = 0.0
 			if dist_path[i] < 1.2:
 				continue
@@ -56,7 +67,7 @@ static func run(w: WorldData) -> void:
 				dens *= 0.35
 			if village[i] != 0:
 				dens *= 0.08
-			var kinds: Array = bd.get("kinds", [])
+			var kinds: Array = b_kinds[bi]
 			# Порядок вызовов rng тот же, что в JS: x, y, вид, вариант, масштаб
 			for k in 2:
 				if rng.next_float() < dens * 0.6:
@@ -70,7 +81,7 @@ static func run(w: WorldData) -> void:
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
 				store.add(px, py, Biomes.T_ROCK, v, 0.7 + rng.next_float() * 0.6)
-			if dist_water[i] < 1.6 and (biome[i] == Biomes.GRASS or biome[i] == Biomes.FOREST or biome[i] == Biomes.SWAMP) and rng.next_float() < 0.12:
+			if dist_water[i] < 1.6 and (bi == Biomes.GRASS or bi == Biomes.FOREST or bi == Biomes.SWAMP) and rng.next_float() < 0.12:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)

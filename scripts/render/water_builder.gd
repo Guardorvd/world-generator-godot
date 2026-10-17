@@ -16,8 +16,10 @@ static func _material(color: Color, alpha: float) -> StandardMaterial3D:
 	return m
 
 
-## Добавляет всю воду в parent
-static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> void:
+## Узлы воды: океан, озёра, реки (озёр и рек может не быть). Узлы не в дереве сцены,
+## поэтому их можно собирать в фоновом потоке
+static func build(w: WorldData, heights: Heightfield) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
 	var water_mat := _material(Color8(0x4f, 0x9c, 0xcc), 0.85)
 	var ocean_mat := _material(Color8(0x24, 0x60, 0x9a), 0.88)
 	var plane := PlaneMesh.new()
@@ -27,13 +29,14 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> void:
 	ocean.name = "Ocean"
 	ocean.mesh = plane
 	ocean.position = Vector3(w.W * TILE / 2.0, 0.0, w.H * TILE / 2.0)
-	parent.add_child(ocean)
+	out.append(ocean)
 	var lakes := _lake_mesh(w, water_mat)
 	if lakes:
-		parent.add_child(lakes)
+		out.append(lakes)
 	var rivers := _river_mesh(heights.ribbons, water_mat)
 	if rivers:
-		parent.add_child(rivers)
+		out.append(rivers)
+	return out
 
 
 static func _flat_mesh(pos: PackedVector3Array, mat: Material, node_name: String) -> MeshInstance3D:

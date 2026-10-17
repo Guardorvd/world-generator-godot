@@ -1,0 +1,51 @@
+class_name WorldLoader
+extends RefCounted
+## Всё, что нужно игре от мира, собранное в фоновом потоке: данные мира, рельеф в метрах, меши рельефа
+## и воды, материал рельефа и карта. Узлы сцены не в дереве, поэтому сборка не трогает главный поток.
+## Заливка текстуры и карты, рельеф и вода зависят только от первых этапов генерации (до климата),
+## поэтому считаются в отдельном потоке, пока генератор прокладывает тропы и сажает лес.
+
+var world: WorldData
+var heights: Heightfield
+var terrain_mesh: ArrayMesh
+var terrain_material: StandardMaterial3D
+var water: Array[MeshInstance3D] = []
+var map_image: Image
+
+
+## Пикселей текстуры рельефа на клетку. В JS-версии 8 / 6 / 4, здесь меньше: в GDScript запекание
+## заметно медленнее. Начиная со среднего мира текстура и карта (2 пикселя на клетку) пекутся за один проход.
+static func px_for(size: int) -> int:
+	return 4 if size <= 256 else 2
+
+
+## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable()) -> WorldLoader:
+	var r := WorldLoader.new()
+	var px := px_for(size)
+	var side := Thread.new()
+	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
+		side.start(r._prepare.bind(w, px)))
+	var painted: Array = side.wait_to_finish()
+	if on_progress.is_valid():
+		on_progress.call(0.95, "Строительство 3D-сцены")
+	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
+	# векторный слой на них рисуется одновременно в двух потоках
+	var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
+	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
+	var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
+	r.terrain_material = TerrainBuilder.material(MapBaker.finish(r.world, px, tex_bytes)[0])
+	WorkerThreadPool.wait_for_task_completion(map_task)
+	return r
+
+
+## Часть загрузки, которой нужны только рельеф, вода и биомы: заливка картинок, рельеф в метрах, меши.
+## Возвращает заливку [[без отмывки, с отмывкой] для px] и, если px не 2, ещё такую же пару для карты
+func _prepare(w: WorldData, px: int) -> Array:
+	var painted := [MapBaker.paint(w, px)]
+	if px != 2:
+		painted.append(MapBaker.paint(w, 2))
+	heights = Heightfield.new(w)
+	terrain_mesh = TerrainBuilder.build_mesh(w, heights)
+	water = WaterBuilder.build(w, heights)
+	return painted

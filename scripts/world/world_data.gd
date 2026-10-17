@@ -8,6 +8,8 @@ extends RefCounted
 const LAND_FRAC := 0.46   # доля суши на карте
 const RIVER_ACC := 70.0   # накопленный сток, начиная с которого клетка — река
 const CHUNK_SIZE := 16    # сторона чанка растительности в клетках
+## Поля шума, которые этапы берут целиком: имя шума -> [масштаб в клетках, число октав]
+const NOISE_FIELDS := {moist = [170.0, 4], temp = [200.0, 3], forest = [36.0, 3], cost = [14.0, 2]}
 
 var W := 0
 var H := 0
@@ -21,6 +23,8 @@ var rng: WGRandom
 var noise := {}           # имя -> Simplex
 var scale := 1.0          # во сколько раз мир больше среднего: от этого зависит число поселений и троп
 var used_names := {}
+var _fields_thread: Thread
+var _fields := {}         # имя -> поле fbm из NOISE_FIELDS
 
 # Рельеф и вода
 var h := PackedFloat32Array()        # высота (0 — уровень моря, суша до 1, дно до -1)
@@ -62,6 +66,29 @@ var CS := CHUNK_SIZE
 var CW := 0
 var CH := 0
 var obj_count := 0
+
+
+## Начать считать поля NOISE_FIELDS в отдельном потоке. Они зависят только от сида, поэтому
+## их расчёт идёт одновременно с последовательными этапами (заполнение впадин), а не после них
+func start_noise_fields() -> void:
+	_fields_thread = Thread.new()
+	_fields_thread.start(func() -> Dictionary:
+		var out := {}
+		for name: String in NOISE_FIELDS:
+			var p: Array = NOISE_FIELDS[name]
+			out[name] = Parallel.fbm_field(self, noise[name], p[0], p[1])
+		return out)
+
+
+## Поле шума из NOISE_FIELDS (ждёт поток, если поле ещё не готово)
+func noise_field(name: String) -> PackedFloat64Array:
+	if _fields_thread != null:
+		_fields = _fields_thread.wait_to_finish()
+		_fields_thread = null
+	if not _fields.has(name):
+		var p: Array = NOISE_FIELDS[name]
+		_fields[name] = Parallel.fbm_field(self, noise[name], p[0], p[1])
+	return _fields[name]
 
 
 ## Уникальное название из двух частей (см. scripts/data/names.gd)

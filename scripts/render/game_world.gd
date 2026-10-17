@@ -1,7 +1,8 @@
 class_name GameWorld
 extends Node3D
-## 3D-режим от первого лица: собирает сцену из частей и ведёт игровой цикл. Копия js/render3d/game3d.js
-## и js/ui/input.js. Логика без движка (рельеф, движение игрока) — в scripts/game, интерфейс — в Hud.
+## 3D-режим от первого лица: сцена scenes/game_world.tscn (окружение, солнце, камера и пустые узлы
+## для рельефа, воды и построек) и игровой цикл. Копия js/render3d/game3d.js и js/ui/input.js.
+## Логика без движка (рельеф, движение игрока) — в scripts/game, интерфейс — в Hud.
 
 signal pause_requested
 
@@ -10,9 +11,7 @@ const TILE := GameConfig.TILE
 var world: WorldData
 var heights: Heightfield
 var hud: Hud
-var camera: Camera3D
 var player: PlayerState
-var vegetation: VegetationLayer
 var fires: Array = []
 var labels: Array = []
 var yaw := 0.0       # смотрим на север, на костёр
@@ -27,39 +26,33 @@ var _captured_at := 0
 static var _defs: Dictionary
 static var _grass_mesh: Mesh
 
+@onready var camera: Camera3D = $Camera
+@onready var vegetation: VegetationLayer = $Vegetation
 
-## w — мир, heights — Heightfield(w), base — текстура рельефа, map_image — карта (MapBaker)
-func start(w: WorldData, h: Heightfield, base: Image, map_image: Image, hud_node: Hud) -> void:
-	world = w
-	heights = h
+
+## Заполнить сцену загруженным миром (WorldLoader) и начать игру
+func start(loaded: WorldLoader, hud_node: Hud) -> void:
+	world = loaded.world
+	heights = loaded.heights
 	hud = hud_node
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
-	EnvironmentBuilder.build(self)
-	add_child(TerrainBuilder.build(w, heights, base))
-	WaterBuilder.build(self, w, heights)
-	vegetation = VegetationLayer.new()
-	vegetation.name = "Vegetation"
-	add_child(vegetation)
-	vegetation.setup(w, heights, _defs, _grass_mesh)
-	var built := SettlementsBuilder.build(self, w, heights)
+	$Terrain.mesh = loaded.terrain_mesh
+	$Terrain.material_override = loaded.terrain_material
+	for node in loaded.water:
+		$Water.add_child(node)
+	vegetation.setup(world, heights, _defs, _grass_mesh)
+	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
 	labels = built.labels
 
-	camera = Camera3D.new()
-	camera.fov = 70.0
-	camera.near = 0.1
-	camera.far = 9000.0
-	add_child(camera)
-	camera.current = true
-
-	player = PlayerState.spawn(w, heights)
-	hud.set_world(w, map_image)
+	player = PlayerState.spawn(world, heights)
+	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	_update_camera(false)
-	if w.settlements.size() > 0:
-		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % w.settlements[0].name)
+	if world.settlements.size() > 0:
+		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % world.settlements[0].name)
 	capture_mouse()
 
 

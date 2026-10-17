@@ -14,26 +14,27 @@ static func _mat(c: Color, unshaded: bool = false) -> StandardMaterial3D:
 	return m
 
 
-static func _box(size: Vector3, offset: Vector3, mat: Material) -> MeshInstance3D:
+static func _box_mesh(size: Vector3) -> BoxMesh:
 	var b := BoxMesh.new()
 	b.size = size
-	var mi := MeshInstance3D.new()
-	mi.mesh = b
-	mi.position = offset
-	mi.material_override = mat
-	return mi
+	return b
 
 
-static func _cone(r: float, h: float, seg: int, y: float, mat: Material) -> MeshInstance3D:
+static func _cone_mesh(r: float, h: float, seg: int) -> CylinderMesh:
 	var c := CylinderMesh.new()
 	c.top_radius = 0.0
 	c.bottom_radius = r
 	c.height = h
 	c.radial_segments = seg
 	c.rings = 0
+	return c
+
+
+## Экземпляр меша; один меш и материал на все дома: движок не хранит копии и лучше группирует отрисовку
+static func _part(mesh: Mesh, offset: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
-	mi.mesh = c
-	mi.position = Vector3(0, y, 0)
+	mi.mesh = mesh
+	mi.position = offset
 	mi.material_override = mat
 	return mi
 
@@ -59,6 +60,19 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
 	var door_m := _mat(Color8(0x3a, 0x2a, 0x1c))
 	var win_m := _mat(Color8(0xf2, 0xd2, 0x7a), true)
+	var wall_mesh := _box_mesh(Vector3(3.2, 2.6, 3.2))
+	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
+	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
+	var win_mesh := _box_mesh(Vector3(0.6, 0.5, 0.1))
+	var log_mesh := CylinderMesh.new()
+	log_mesh.top_radius = 0.1
+	log_mesh.bottom_radius = 0.1
+	log_mesh.height = 1.2
+	log_mesh.radial_segments = 5
+	var flame_mesh := _cone_mesh(0.4, 1.1, 6)
+	var core_mesh := _cone_mesh(0.22, 0.7, 6)
+	var flame_m := _mat(Color8(0xff, 0x8a, 0x2a), true)
+	var core_m := _mat(Color8(0xff, 0xd3, 0x6b), true)
 	var fires: Array = []
 	var labels: Array = []
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
@@ -67,12 +81,12 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			var x: float = hut.x * TILE
 			var z: float = hut.y * TILE
 			var g := Node3D.new()
-			g.add_child(_box(Vector3(3.2, 2.6, 3.2), Vector3(0, 1.3, 0), walls[hut.v]))
-			var roof := _cone(2.8, 2.2, 4, 2.6 + 1.1, roofs[hut.v])
+			g.add_child(_part(wall_mesh, Vector3(0, 1.3, 0), walls[hut.v]))
+			var roof := _part(roof_mesh, Vector3(0, 2.6 + 1.1, 0), roofs[hut.v])
 			roof.rotation.y = PI / 4.0
 			g.add_child(roof)
-			g.add_child(_box(Vector3(0.9, 1.7, 0.1), Vector3(0, 0.85, 1.62), door_m))
-			g.add_child(_box(Vector3(0.6, 0.5, 0.1), Vector3(0.95, 1.6, 1.62), win_m))
+			g.add_child(_part(door_mesh, Vector3(0, 0.85, 1.62), door_m))
+			g.add_child(_part(win_mesh, Vector3(0.95, 1.6, 1.62), win_m))
 			# дом стоит на самом низком из углов, чтобы не висел над склоном
 			var y := INF
 			for c in [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]:
@@ -87,22 +101,14 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var fy := heights.ground_at(fx, fz)
 		var fire := Node3D.new()
 		for k in 3:
-			var log_mesh := CylinderMesh.new()
-			log_mesh.top_radius = 0.1
-			log_mesh.bottom_radius = 0.1
-			log_mesh.height = 1.2
-			log_mesh.radial_segments = 5
-			var log_node := MeshInstance3D.new()
-			log_node.mesh = log_mesh
-			log_node.material_override = door_m
-			log_node.position.y = 0.1
+			var log_node := _part(log_mesh, Vector3(0, 0.1, 0), door_m)
 			log_node.rotation = Vector3(0, k * PI / 3.0, PI / 2.0)
 			fire.add_child(log_node)
 		# пламя растёт от земли: узлы-основания масштабируются, конусы сдвинуты вверх
 		var flame := Node3D.new()
-		flame.add_child(_cone(0.4, 1.1, 6, 0.55, _mat(Color8(0xff, 0x8a, 0x2a), true)))
+		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
 		var core := Node3D.new()
-		core.add_child(_cone(0.22, 0.7, 6, 0.35, _mat(Color8(0xff, 0xd3, 0x6b), true)))
+		core.add_child(_part(core_mesh, Vector3(0, 0.35, 0), core_m))
 		fire.add_child(flame)
 		fire.add_child(core)
 		fire.position = Vector3(fx, fy, fz)

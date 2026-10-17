@@ -26,7 +26,7 @@ static func _build_cost(w: WorldData) -> void:
 	var H := w.H
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
-	var cost_n := Parallel.fbm_field(w, w.noise.cost, 14.0, 2)
+	var cost_n := w.noise_field("cost")
 	for y in H:
 		for x in W:
 			var i := y * W + x

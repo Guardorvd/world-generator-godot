@@ -1,0 +1,118 @@
+[gd_resource type="Theme" format=3]
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_fgeqy"]
+content_margin_left = 10.0
+content_margin_top = 10.0
+content_margin_right = 10.0
+content_margin_bottom = 10.0
+bg_color = Color(0.12, 0.15, 0.21, 0.95)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_cviax"]
+content_margin_left = 10.0
+content_margin_top = 10.0
+content_margin_right = 10.0
+content_margin_bottom = 10.0
+bg_color = Color(0.24, 0.29, 0.38, 0.95)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_yl303"]
+content_margin_left = 10.0
+content_margin_top = 10.0
+content_margin_right = 10.0
+content_margin_bottom = 10.0
+bg_color = Color(0.16, 0.2, 0.28, 0.95)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_qosx5"]
+content_margin_left = 10.0
+content_margin_top = 10.0
+content_margin_right = 10.0
+content_margin_bottom = 10.0
+bg_color = Color(0.12, 0.16, 0.23, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_m7jai"]
+content_margin_left = 10.0
+content_margin_top = 10.0
+content_margin_right = 10.0
+content_margin_bottom = 10.0
+bg_color = Color(0.1, 0.13, 0.19, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ufndy"]
+content_margin_left = 28.0
+content_margin_top = 28.0
+content_margin_right = 28.0
+content_margin_bottom = 28.0
+bg_color = Color(0.05, 0.08, 0.13, 0.86)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_ybqih"]
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+bg_color = Color(0.86, 0.7, 0.38, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="StyleBoxFlat_wp64m"]
+content_margin_left = 12.0
+content_margin_top = 12.0
+content_margin_right = 12.0
+content_margin_bottom = 12.0
+bg_color = Color(0.78, 0.62, 0.32, 1)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[resource]
+default_font_size = 18
+Button/styles/disabled = SubResource("StyleBoxFlat_fgeqy")
+Button/styles/focus = SubResource("StyleBoxFlat_cviax")
+Button/styles/hover = SubResource("StyleBoxFlat_cviax")
+Button/styles/normal = SubResource("StyleBoxFlat_yl303")
+Button/styles/pressed = SubResource("StyleBoxFlat_fgeqy")
+Label/colors/font_color = Color(0.93, 0.93, 0.9, 1)
+LineEdit/styles/focus = SubResource("StyleBoxFlat_qosx5")
+LineEdit/styles/normal = SubResource("StyleBoxFlat_m7jai")
+OptionButton/styles/disabled = SubResource("StyleBoxFlat_fgeqy")
+OptionButton/styles/focus = SubResource("StyleBoxFlat_cviax")
+OptionButton/styles/hover = SubResource("StyleBoxFlat_cviax")
+OptionButton/styles/normal = SubResource("StyleBoxFlat_yl303")
+OptionButton/styles/pressed = SubResource("StyleBoxFlat_fgeqy")
+PanelContainer/styles/panel = SubResource("StyleBoxFlat_ufndy")
+PrimaryButton/base_type = &"Button"
+PrimaryButton/colors/font_color = Color(0.1, 0.08, 0.05, 1)
+PrimaryButton/colors/font_focus_color = Color(0.1, 0.08, 0.05, 1)
+PrimaryButton/colors/font_hover_color = Color(0.1, 0.08, 0.05, 1)
+PrimaryButton/colors/font_pressed_color = Color(0.1, 0.08, 0.05, 1)
+PrimaryButton/styles/focus = SubResource("StyleBoxFlat_ybqih")
+PrimaryButton/styles/hover = SubResource("StyleBoxFlat_ybqih")
+PrimaryButton/styles/normal = SubResource("StyleBoxFlat_wp64m")
+PrimaryButton/styles/pressed = SubResource("StyleBoxFlat_wp64m")
+TitleLabel/base_type = &"Label"
+TitleLabel/colors/font_color = Color(0.85, 0.72, 0.42, 1)
+TitleLabel/font_sizes/font_size = 34
