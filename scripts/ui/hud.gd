@@ -48,7 +48,7 @@ func _init() -> void:
 	add_child(minimap)
 
 	var hint := Label.new()
-	hint.text = "Мышь — осмотреться · WASD — идти · Shift — бег · Пробел — прыжок · M — карта · Esc — пауза"
+	hint.text = "Мышь — осмотреться · WASD — идти · Shift — бег · Пробел — прыжок · F — велосипед · M — карта · Esc — пауза"
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
 	_place(hint, Vector4(0, 1, 1, 1), Vector4(0, -40, 0, -14))

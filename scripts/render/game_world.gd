@@ -2,7 +2,8 @@ class_name GameWorld
 extends Node3D
 ## 3D-режим от первого лица: сцена scenes/game_world.tscn (окружение, солнце, камера и пустые узлы
 ## для рельефа, воды и построек) и игровой цикл. Копия js/render3d/game3d.js и js/ui/input.js.
-## Логика без движка (рельеф, движение игрока) — в scripts/game, интерфейс — в Hud.
+## Логика без движка (рельеф, движение игрока, езда на велосипеде) — в scripts/game, интерфейс — в Hud.
+## На велосипеде (F) камера переходит за спину седока.
 
 signal pause_requested
 
@@ -12,6 +13,8 @@ var world: WorldData
 var heights: Heightfield
 var hud: Hud
 var player: PlayerState
+var bike: BikeRide
+var bike_view: BikeView
 var fires: Array = []
 var labels: Array = []
 var yaw := 0.0       # смотрим на север, на костёр
@@ -22,6 +25,7 @@ var show_map := false
 var info_timer := 0.0
 var _dragging := false
 var _captured_at := 0
+var _looked_at := 0.0   # время последнего движения мыши, чтобы камера на велосипеде не спорила с ней
 
 static var _defs: Dictionary
 static var _grass_mesh: Mesh
@@ -52,6 +56,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		# лицом к костру
 		var s: Dictionary = world.settlements[0]
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
+	bike = BikeRide.park_near(player, yaw, world, heights)
+	bike_view = preload("res://scenes/bike.tscn").instantiate()
+	add_child(bike_view)
+	bike_view.show_state(bike, heights.ground_at(bike.x, bike.z))
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	_update_camera(false)
@@ -76,6 +84,24 @@ func set_paused(p: bool) -> void:
 func look(dx: float, dy: float) -> void:
 	yaw -= dx * GameConfig.MOUSE
 	pitch = clampf(pitch - dy * GameConfig.MOUSE, -1.5, 1.5)
+	_looked_at = time
+
+
+## F: сесть на велосипед, если он рядом, или слезть с него
+func toggle_bike() -> void:
+	if bike.riding:
+		bike.dismount(player, world, heights)
+		yaw = bike.heading
+		pitch = -0.05
+		return
+	var d := bike.distance_to(player)
+	if d > GameConfig.BIKE_MOUNT:
+		hud.toast("Велосипед в %d м отсюда" % roundi(d))
+		return
+	bike.mount(player)
+	yaw = bike.heading
+	pitch = -0.3
+	hud.toast("W — крутить педали, S — тормоз, A и D — руль, F — слезть")
 
 
 func toggle_map() -> void:
@@ -92,6 +118,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("toggle_map"):
 		toggle_map()
+	elif event.is_action_pressed("bike"):
+		toggle_bike()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
@@ -121,7 +149,18 @@ func _process(delta: float) -> void:
 	time += dt
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-	var moving := player.step(fw, st, Input.is_action_pressed("run"), Input.is_action_pressed("jump"), yaw, dt, world, heights)
+	var moving := false
+	if bike.riding:
+		var h0 := bike.heading
+		bike.step(player, fw, st, Input.is_action_pressed("run"), dt, world, heights)
+		# камера поворачивает вместе с велосипедом, а если мышь не трогали — сама уходит за спину
+		yaw += bike.heading - h0
+		if absf(bike.speed) > 1.0 and time - _looked_at > 1.0:
+			yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0))
+			pitch = lerpf(pitch, -0.3, 1.0 - exp(-dt * 2.0))
+	else:
+		moving = player.step(fw, st, Input.is_action_pressed("run"), Input.is_action_pressed("jump"), yaw, dt, world, heights)
+	bike_view.show_state(bike, heights.ground_at(bike.x, bike.z))
 	_update_camera(moving)
 
 	vegetation.update(player.x, player.z, false)
@@ -136,10 +175,18 @@ func _process(delta: float) -> void:
 	if info_timer <= 0.0:
 		info_timer = 0.15
 		hud.update_info(player, yaw, heights.depth_at(player.x, player.z))
-	hud.set_player(player.x, player.z, yaw)
+	hud.set_player(player.x, player.z, bike.heading if bike.riding else yaw)
 
 
 func _update_camera(moving: bool) -> void:
+	if bike != null and bike.riding:
+		# от третьего лица: камера сзади на луче взгляда, не ниже земли
+		var target := Vector3(player.x, player.feet + 1.4, player.z)
+		var dir := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+		var pos := target - dir * GameConfig.BIKE_CAM
+		pos.y = maxf(pos.y, heights.ground_at(pos.x, pos.z) + 0.4)
+		camera.look_at_from_position(pos, target, Vector3.UP)
+		return
 	var bob := sin(player.bob) * 0.06 if moving and player.on_ground else 0.0
 	camera.position = Vector3(player.x, player.feet + GameConfig.EYE + bob, player.z)
 	camera.rotation = Vector3(pitch, yaw, 0.0)
