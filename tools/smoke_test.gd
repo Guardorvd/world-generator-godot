@@ -1,6 +1,6 @@
 extends SceneTree
 ## Дымовая проверка: открывает главную сцену, запускает игру с заданным зерном и размером,
-## снимает точку появления, едет на велосипеде, немного идёт вперёд, открывает карту и сохраняет снимки экрана. Запуск из папки проекта:
+## снимает точку появления, едет на велосипеде и прыгает, немного идёт вперёд, открывает карту и сохраняет снимки экрана. Запуск из папки проекта:
 ##   godot --path . --script res://tools/smoke_test.gd -- <зерно> <размер> <папка для снимков>
 
 var main: Node
@@ -45,6 +45,15 @@ func _process(_delta: float) -> bool:
 		_shot("spawn")
 		game.toggle_bike()
 	Input.action_press("move_forward")
+	if game.time > 2.0 and not shots.has("hop"):
+		shots.hop = true
+		Input.action_press("jump")
+	elif game.time > 2.1:
+		Input.action_release("jump")
+	if game.bike.airborne and game.bike.air_time > 0.15 and not shots.has("bike_air"):
+		shots.bike_air = true
+		_shot("bike_air")
+		print("В воздухе: ", game.bike.y - game.heights.ground_at(game.bike.x, game.bike.z), " м над землёй")
 	if game.time > 3.0 and not shots.has("bike"):
 		shots.bike = true
 		_shot("bike")

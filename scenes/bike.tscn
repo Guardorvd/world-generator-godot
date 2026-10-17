@@ -151,30 +151,43 @@ rings = 0
 [sub_resource type="CylinderMesh" id="mesh21"]
 top_radius = 0.065
 bottom_radius = 0.065
-height = 0.4111
+height = 0.43
 radial_segments = 6
 rings = 0
 
 [sub_resource type="CylinderMesh" id="mesh22"]
 top_radius = 0.05
 bottom_radius = 0.05
-height = 0.4472
+height = 0.43
 radial_segments = 6
 rings = 0
 
 [sub_resource type="CylinderMesh" id="mesh23"]
 top_radius = 0.065
 bottom_radius = 0.065
-height = 0.4022
+height = 0.43
 radial_segments = 6
 rings = 0
 
 [sub_resource type="CylinderMesh" id="mesh24"]
 top_radius = 0.05
 bottom_radius = 0.05
-height = 0.3053
+height = 0.43
 radial_segments = 6
 rings = 0
+
+[sub_resource type="CylinderMesh" id="mesh_ring"]
+top_radius = 0.1
+bottom_radius = 0.1
+height = 0.02
+radial_segments = 12
+rings = 0
+
+[sub_resource type="BoxMesh" id="mesh_arm"]
+size = Vector3(0.03, 0.2, 0.035)
+
+[sub_resource type="BoxMesh" id="mesh_pedal"]
+size = Vector3(0.1, 0.025, 0.07)
 
 [node name="Bike" type="Node3D"]
 script = ExtResource("1_bike")
@@ -295,10 +308,35 @@ position = Vector3(0, 0.9, 0.2)
 mesh = SubResource("mesh15")
 surface_material_override/0 = SubResource("m_tire")
 
-[node name="Crank" type="MeshInstance3D" parent="."]
+[node name="Crank" type="Node3D" parent="."]
 position = Vector3(0, 0.3, 0)
-mesh = SubResource("mesh16")
+
+[node name="Ring" type="MeshInstance3D" parent="Crank"]
+position = Vector3(0.06, 0, 0)
+rotation = Vector3(0, 0, 1.5708)
+mesh = SubResource("mesh_ring")
 surface_material_override/0 = SubResource("m_metal")
+
+[node name="ArmR" type="MeshInstance3D" parent="Crank"]
+position = Vector3(0.09, -0.085, 0)
+mesh = SubResource("mesh_arm")
+surface_material_override/0 = SubResource("m_metal")
+
+[node name="PedalR" type="MeshInstance3D" parent="Crank"]
+position = Vector3(0.14, -0.17, 0)
+mesh = SubResource("mesh_pedal")
+surface_material_override/0 = SubResource("m_tire")
+
+[node name="ArmL" type="MeshInstance3D" parent="Crank"]
+position = Vector3(-0.09, 0.085, 0)
+mesh = SubResource("mesh_arm")
+surface_material_override/0 = SubResource("m_metal")
+
+[node name="PedalL" type="MeshInstance3D" parent="Crank"]
+position = Vector3(-0.14, 0.17, 0)
+mesh = SubResource("mesh_pedal")
+surface_material_override/0 = SubResource("m_tire")
+
 
 [node name="Rider" type="Node3D" parent="."]
 position = Vector3(0, 0, 0)
