@@ -1,0 +1,166 @@
+class_name SettlementsBuilder
+extends RefCounted
+## Поселения и вершины в 3D: дома, костры, туры с флажками, подписи. Копия js/render3d/settlements.js.
+
+const TILE := GameConfig.TILE
+
+
+static func _mat(c: Color, unshaded: bool = false) -> StandardMaterial3D:
+	var m := StandardMaterial3D.new()
+	m.albedo_color = c
+	m.roughness = 1.0
+	if unshaded:
+		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	return m
+
+
+static func _box(size: Vector3, offset: Vector3, mat: Material) -> MeshInstance3D:
+	var b := BoxMesh.new()
+	b.size = size
+	var mi := MeshInstance3D.new()
+	mi.mesh = b
+	mi.position = offset
+	mi.material_override = mat
+	return mi
+
+
+static func _cone(r: float, h: float, seg: int, y: float, mat: Material) -> MeshInstance3D:
+	var c := CylinderMesh.new()
+	c.top_radius = 0.0
+	c.bottom_radius = r
+	c.height = h
+	c.radial_segments = seg
+	c.rings = 0
+	var mi := MeshInstance3D.new()
+	mi.mesh = c
+	mi.position = Vector3(0, y, 0)
+	mi.material_override = mat
+	return mi
+
+
+static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
+	var l := Label3D.new()
+	l.text = text
+	l.modulate = color
+	l.outline_modulate = Color(0, 0, 0, 0.7)
+	l.font_size = 40
+	l.outline_size = 10
+	l.pixel_size = 0.0006
+	l.fixed_size = true
+	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l.position = pos
+	return l
+
+
+## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase}], labels: [Label3D]}
+## для анимации огня и скрытия подписей по расстоянию.
+static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
+	var walls := [0xa7825a, 0xb89470, 0x8f6e4c, 0xc2a27a].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
+	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
+	var door_m := _mat(Color8(0x3a, 0x2a, 0x1c))
+	var win_m := _mat(Color8(0xf2, 0xd2, 0x7a), true)
+	var fires: Array = []
+	var labels: Array = []
+	var rng := WGRandom.new(w.seed_num ^ 0x1234)
+	for s in w.settlements:
+		for hut in s.huts:
+			var x: float = hut.x * TILE
+			var z: float = hut.y * TILE
+			var g := Node3D.new()
+			g.add_child(_box(Vector3(3.2, 2.6, 3.2), Vector3(0, 1.3, 0), walls[hut.v]))
+			var roof := _cone(2.8, 2.2, 4, 2.6 + 1.1, roofs[hut.v])
+			roof.rotation.y = PI / 4.0
+			g.add_child(roof)
+			g.add_child(_box(Vector3(0.9, 1.7, 0.1), Vector3(0, 0.85, 1.62), door_m))
+			g.add_child(_box(Vector3(0.6, 0.5, 0.1), Vector3(0.95, 1.6, 1.62), win_m))
+			# дом стоит на самом низком из углов, чтобы не висел над склоном
+			var y := INF
+			for c in [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]:
+				y = minf(y, heights.ground_at(x + c.x, z + c.y))
+			g.position = Vector3(x, y, z)
+			# дверью к костру
+			g.rotation.y = atan2(s.x * TILE - x, s.y * TILE - z)
+			parent.add_child(g)
+		# костёр
+		var fx: float = s.x * TILE
+		var fz: float = s.y * TILE
+		var fy := heights.ground_at(fx, fz)
+		var fire := Node3D.new()
+		for k in 3:
+			var log_mesh := CylinderMesh.new()
+			log_mesh.top_radius = 0.1
+			log_mesh.bottom_radius = 0.1
+			log_mesh.height = 1.2
+			log_mesh.radial_segments = 5
+			var log_node := MeshInstance3D.new()
+			log_node.mesh = log_mesh
+			log_node.material_override = door_m
+			log_node.position.y = 0.1
+			log_node.rotation = Vector3(0, k * PI / 3.0, PI / 2.0)
+			fire.add_child(log_node)
+		# пламя растёт от земли: узлы-основания масштабируются, конусы сдвинуты вверх
+		var flame := Node3D.new()
+		flame.add_child(_cone(0.4, 1.1, 6, 0.55, _mat(Color8(0xff, 0x8a, 0x2a), true)))
+		var core := Node3D.new()
+		core.add_child(_cone(0.22, 0.7, 6, 0.35, _mat(Color8(0xff, 0xd3, 0x6b), true)))
+		fire.add_child(flame)
+		fire.add_child(core)
+		fire.position = Vector3(fx, fy, fz)
+		parent.add_child(fire)
+		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0})
+		var label := _label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz))
+		parent.add_child(label)
+		labels.append(label)
+	# Туры на вершинах
+	var stone := _mat(Color8(0x8f, 0x88, 0x80))
+	var flag_m := _mat(Color8(0xc0, 0x39, 0x2b))
+	flag_m.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var pole_m := _mat(Color8(0x5a, 0x3d, 0x24))
+	for pk in w.peaks:
+		var x: float = pk.x * TILE
+		var z: float = pk.y * TILE
+		var y := heights.ground_at(x, z)
+		var g := Node3D.new()
+		for rh in [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)]:
+			var sm := SphereMesh.new()
+			sm.radius = rh.x
+			sm.height = rh.x * 2.0
+			sm.radial_segments = 5
+			sm.rings = 2
+			var m := MeshInstance3D.new()
+			m.mesh = sm
+			m.material_override = stone
+			m.position.y = rh.y
+			g.add_child(m)
+		var pole_mesh := CylinderMesh.new()
+		pole_mesh.top_radius = 0.04
+		pole_mesh.bottom_radius = 0.04
+		pole_mesh.height = 2.2
+		pole_mesh.radial_segments = 4
+		var pole := MeshInstance3D.new()
+		pole.mesh = pole_mesh
+		pole.material_override = pole_m
+		pole.position.y = 3.2
+		g.add_child(pole)
+		var flag_mesh := QuadMesh.new()
+		flag_mesh.size = Vector2(1.0, 0.6)
+		var flag := MeshInstance3D.new()
+		flag.mesh = flag_mesh
+		flag.material_override = flag_m
+		flag.position = Vector3(0.5, 3.9, 0)
+		g.add_child(flag)
+		g.position = Vector3(x, y, z)
+		parent.add_child(g)
+		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
+		parent.add_child(label)
+		labels.append(label)
+	return {fires = fires, labels = labels}
+
+
+## Покачивание пламени костров; time — секунды игры
+static func animate_fires(fires: Array, time: float) -> void:
+	for f in fires:
+		var t: float = time * 9.0 + f.phase
+		var s := 0.85 + sin(t) * 0.1 + sin(t * 1.7) * 0.08
+		f.flame.scale = Vector3(1, s, 1)
+		f.core.scale = Vector3(1, s * 1.1, 1)
