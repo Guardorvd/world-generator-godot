@@ -2,6 +2,7 @@ extends Node
 ## Приложение: меню, экраны, загрузка мира, пауза, выход. Копия js/ui/app.js и js/ui/menu-background.js.
 ## Экраны собраны в сцене scenes/main.tscn (оформление — resources/ui_theme.tres), здесь только поведение.
 ## Мир загружается в отдельном потоке (WorldLoader), чтобы экран загрузки обновлялся.
+## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const SIZES := [[256, "Малый (256 × 256)"], [512, "Средний (512 × 512)"], [768, "Большой (768 × 768)"]]
@@ -12,6 +13,7 @@ var busy := false
 var gen_thread: Thread
 var bg_thread: Thread
 var bg_time := 0.0
+var _settings_from := "menu"   # куда вернуться из настроек
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -19,7 +21,7 @@ var bg_time := 0.0
 @onready var size_select: OptionButton = %SizeSelect
 @onready var bar: ProgressBar = %Progress
 @onready var load_step: Label = %Step
-@onready var screens := {back = %Back, menu = %Menu, loading = %Loading, pause = %Pause}
+@onready var screens := {back = %Back, menu = %Menu, loading = %Loading, pause = %Pause, settings = %Settings}
 
 
 static func random_seed() -> String:
@@ -27,10 +29,12 @@ static func random_seed() -> String:
 
 
 func _ready() -> void:
+	GameSettings.load_settings()
+	GameSettings.apply_window()
 	seed_edit.text = random_seed()
 	for s in SIZES:
 		size_select.add_item(s[1], s[0])
-	size_select.select(1)
+	size_select.select(maxi(0, size_select.get_item_index(GameSettings.world_size)))
 	%Version.text = "Версия " + ProjectSettings.get_setting("application/config/version")
 	_show("menu")
 	bg_thread = Thread.new()
@@ -38,9 +42,70 @@ func _ready() -> void:
 
 
 func _show(screen: String) -> void:
-	for s in ["menu", "loading", "pause"]:
+	for s in ["menu", "loading", "pause", "settings"]:
 		screens[s].visible = s == screen
-	screens.back.visible = screen == "menu" or screen == "loading"
+	screens.back.visible = screen == "menu" or screen == "loading" or (screen == "settings" and game == null)
+	# фокус на главной кнопке экрана: можно пользоваться клавиатурой (стрелки, Enter)
+	match screen:
+		"menu":
+			%Start.grab_focus()
+		"pause":
+			%Resume.grab_focus()
+		"settings":
+			%Done.grab_focus()
+
+
+func _unhandled_input(event: InputEvent) -> void:
+	# Esc в настройках из главного меню (в игре Esc приходит через GameWorld.pause_requested)
+	if event.is_action_pressed("pause") and screens.settings.visible and game == null:
+		_close_settings()
+		get_viewport().set_input_as_handled()
+
+
+# ---------- Настройки ----------
+
+func _open_settings() -> void:
+	_settings_from = "pause" if screens.pause.visible else "menu"
+	%MouseSlider.set_value_no_signal(GameSettings.mouse)
+	%FovSlider.set_value_no_signal(GameSettings.fov)
+	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
+	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
+	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
+	_show_values()
+	_show("settings")
+
+
+func _close_settings() -> void:
+	GameSettings.save_settings()
+	_show(_settings_from)
+
+
+func _show_values() -> void:
+	%MouseValue.text = "%.2f×" % GameSettings.mouse
+	%FovValue.text = "%d°" % roundi(GameSettings.fov)
+
+
+func _on_mouse_changed(v: float) -> void:
+	GameSettings.mouse = v
+	_show_values()
+
+
+func _on_fov_changed(v: float) -> void:
+	GameSettings.fov = v
+	_show_values()
+
+
+func _on_invert_toggled(on: bool) -> void:
+	GameSettings.invert_y = on
+
+
+func _on_head_bob_toggled(on: bool) -> void:
+	GameSettings.head_bob = on
+
+
+func _on_fullscreen_toggled(on: bool) -> void:
+	GameSettings.fullscreen = on
+	GameSettings.apply_window()
 
 
 func _on_seed_submitted(_text: String) -> void:
@@ -88,7 +153,9 @@ func _on_start() -> void:
 	var seed_text := seed_edit.text.strip_edges()
 	if seed_text.is_empty():
 		seed_text = random_seed()
-	start_game(seed_text, size_select.get_selected_id())
+	GameSettings.world_size = size_select.get_selected_id()
+	GameSettings.save_settings()
+	start_game(seed_text, GameSettings.world_size)
 
 
 func start_game(seed_text: String, size: int) -> void:
@@ -129,16 +196,22 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 func _toggle_pause() -> void:
 	if game == null:
 		return
-	if game.paused:
+	if screens.settings.visible:
+		_close_settings()
+	elif game.paused:
 		_resume()
 	else:
 		game.set_paused(true)
+		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		_show("pause")
 
 
 func _resume() -> void:
 	_show("")
+	hud.visible = true
 	game.set_paused(false)
+	# щелчок по кнопке «Продолжить» не должен сразу считаться щелчком по миру
+	get_viewport().gui_release_focus()
 
 
 func _free_game() -> void:

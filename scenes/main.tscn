@@ -106,10 +106,16 @@ unique_name_in_owner = true
 layout_mode = 2
 
 [node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 theme_type_variation = &"PrimaryButton"
 text = "Начать игру"
+
+[node name="Settings" type="Button" parent="UI/Root/Menu/Panel/Box"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Настройки"
 
 [node name="Exit" type="Button" parent="UI/Root/Menu/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
@@ -186,10 +192,16 @@ text = "Пауза"
 horizontal_alignment = 1
 
 [node name="Resume" type="Button" parent="UI/Root/Pause/Panel/Box"]
+unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 theme_type_variation = &"PrimaryButton"
 text = "Продолжить"
+
+[node name="Settings" type="Button" parent="UI/Root/Pause/Panel/Box"]
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Настройки"
 
 [node name="NewWorld" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
@@ -206,6 +218,107 @@ custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
 text = "Выход"
 
+[node name="Controls" type="Label" parent="UI/Root/Pause/Panel/Box"]
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_override_font_sizes/font_size = 14
+text = "Мышь — осмотреться · WASD — идти · Shift — бег
+Пробел — прыжок · F — сесть на велосипед или слезть
+M — карта · Esc — пауза"
+horizontal_alignment = 1
+
+[node name="Settings" type="CenterContainer" parent="UI/Root"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="UI/Root/Settings"]
+custom_minimum_size = Vector2(420, 0)
+layout_mode = 2
+
+[node name="Box" type="VBoxContainer" parent="UI/Root/Settings/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="Title" type="Label" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+theme_type_variation = &"TitleLabel"
+text = "Настройки"
+horizontal_alignment = 1
+
+[node name="MouseRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="MouseLabel" type="Label" parent="UI/Root/Settings/Panel/Box/MouseRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Чувствительность мыши"
+
+[node name="MouseValue" type="Label" parent="UI/Root/Settings/Panel/Box/MouseRow"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+text = "1"
+
+[node name="MouseSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+min_value = 0.2
+max_value = 3.0
+step = 0.05
+value = 0.2
+
+[node name="InvertY" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Инвертировать мышь по вертикали"
+
+[node name="FovRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="FovLabel" type="Label" parent="UI/Root/Settings/Panel/Box/FovRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Угол обзора"
+
+[node name="FovValue" type="Label" parent="UI/Root/Settings/Panel/Box/FovRow"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+text = "1"
+
+[node name="FovSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+min_value = 55
+max_value = 100
+step = 1
+value = 55
+
+[node name="HeadBob" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Покачивание камеры при ходьбе"
+
+[node name="Fullscreen" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Полный экран"
+
+[node name="Done" type="Button" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+text = "Готово"
+
 [connection signal="text_submitted" from="UI/Root/Menu/Panel/Box/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/SeedRow/Dice" to="." method="_on_dice_pressed"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Start" to="." method="_on_start"]
@@ -214,3 +327,11 @@ text = "Выход"
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/NewWorld" to="." method="_on_new_world"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/ToMenu" to="." method="_back_to_menu"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Exit" to="." method="_exit_game"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Settings" to="." method="_open_settings"]
+[connection signal="pressed" from="UI/Root/Pause/Panel/Box/Settings" to="." method="_open_settings"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/MouseSlider" to="." method="_on_mouse_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/InvertY" to="." method="_on_invert_toggled"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/FovSlider" to="." method="_on_fov_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/HeadBob" to="." method="_on_head_bob_toggled"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/Fullscreen" to="." method="_on_fullscreen_toggled"]
+[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]

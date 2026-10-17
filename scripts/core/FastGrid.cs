@@ -2,7 +2,8 @@ using System;
 using Godot;
 
 /// <summary>
-/// Самые долгие циклы генерации на C#: поиск пути A* (Pathfinder) и заполнение впадин (StageHydrology).
+/// Самые долгие циклы генерации на C#: поиск пути A* (Pathfinder), заполнение впадин (StageHydrology),
+/// шум макрорельефа (StageRelief) и поля шума (Parallel.fbm_field).
 /// Алгоритмы те же, что в GDScript, и дают тот же результат бит в бит, но в десятки раз быстрее.
 /// Работает только в сборке Godot .NET, иначе генерация идёт на GDScript (см. Grid.fast_grid).
 /// Арифметика повторяет GDScript: расчёт в double, значения в массивах float — во float.
@@ -160,6 +161,143 @@ public partial class FastGrid : RefCounted
 			["order"] = order,
 			["order_n"] = orderN,
 		};
+	}
+
+	// ---------- Шум: копия Simplex.noise / fbm / ridged и циклов StageRelief._rows, Parallel.fbm_field ----------
+
+	private static readonly double F2 = 0.5 * (Math.Sqrt(3.0) - 1.0);
+	private static readonly double G2 = (3.0 - Math.Sqrt(3.0)) / 6.0;
+
+	private static double Grad(int g, double x, double y)
+	{
+		if (g < 4)
+			return ((g & 1) == 0 ? x : -x) + (g < 2 ? y : -y);
+		if (g < 6)
+			return g == 4 ? x : -x;
+		return g == 6 ? y : -y;
+	}
+
+	/// <summary>Копия Simplex.noise; perm — Simplex.perm (512 чисел).</summary>
+	private static double Noise(int[] pm, double xin, double yin)
+	{
+		double g2 = G2;
+		double s = (xin + yin) * F2;
+		int i = (int)Math.Floor(xin + s);
+		int j = (int)Math.Floor(yin + s);
+		double t = (i + j) * g2;
+		double x0 = xin - (i - t);
+		double y0 = yin - (j - t);
+		int i1 = 0, j1 = 1;
+		if (x0 > y0)
+		{
+			i1 = 1;
+			j1 = 0;
+		}
+		double x1 = x0 - i1 + g2;
+		double y1 = y0 - j1 + g2;
+		double x2 = x0 - 1.0 + 2.0 * g2;
+		double y2 = y0 - 1.0 + 2.0 * g2;
+		int ii = i & 255, jj = j & 255;
+		double n = 0.0;
+		double t0 = 0.5 - x0 * x0 - y0 * y0;
+		if (t0 > 0.0)
+		{
+			double d = Grad(pm[ii + pm[jj]] & 7, x0, y0);
+			t0 *= t0;
+			n += t0 * t0 * d;
+		}
+		double t1 = 0.5 - x1 * x1 - y1 * y1;
+		if (t1 > 0.0)
+		{
+			double d = Grad(pm[ii + i1 + pm[jj + j1]] & 7, x1, y1);
+			t1 *= t1;
+			n += t1 * t1 * d;
+		}
+		double t2 = 0.5 - x2 * x2 - y2 * y2;
+		if (t2 > 0.0)
+		{
+			double d = Grad(pm[ii + 1 + pm[jj + 1]] & 7, x2, y2);
+			t2 *= t2;
+			n += t2 * t2 * d;
+		}
+		return 70.0 * n;
+	}
+
+	private static double Fbm(int[] pm, double x, double y, int oct)
+	{
+		double a = 1.0, f = 1.0, s = 0.0, n = 0.0;
+		for (int o = 0; o < oct; o++)
+		{
+			s += a * Noise(pm, x * f, y * f);
+			n += a;
+			a *= 0.5;
+			f *= 2.0;
+		}
+		return s / n;
+	}
+
+	private static double Ridged(int[] pm, double x, double y, int oct)
+	{
+		double a = 0.5, f = 1.0, s = 0.0, w = 1.0;
+		for (int o = 0; o < oct; o++)
+		{
+			double v = 1.0 - Math.Abs(Noise(pm, x * f, y * f));
+			v *= v;
+			v *= w;
+			w = Math.Min(1.0, Math.Max(0.0, v * 2.0));
+			s += v * a;
+			f *= 2.1;
+			a *= 0.5;
+		}
+		return s;
+	}
+
+	private static double Clamp01(double v) => v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
+
+	/// <summary>Поле fbm(x / d + ox, y / d + oy, oct) по всем клеткам. Копия Parallel.fbm_field.</summary>
+	public double[] FbmField(int[] perm, int W, int H, double d, int oct, double ox, double oy)
+	{
+		var r = new double[W * H];
+		System.Threading.Tasks.Parallel.For(0, H, y =>
+		{
+			for (int x = 0; x < W; x++)
+				r[y * W + x] = Fbm(perm, x / d + ox, y / d + oy, oct);
+		});
+		return r;
+	}
+
+	/// <summary>
+	/// Макрорельеф до уровня моря: копия цикла StageRelief._rows. Шумы — perm в порядке
+	/// warpX, warpY, cont, mask, ridge, hill.
+	/// </summary>
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, int W, int H)
+	{
+		var outH = new float[W * H];
+		System.Threading.Tasks.Parallel.For(0, H, y =>
+		{
+			for (int x = 0; x < W; x++)
+			{
+				double wx = Fbm(warpX, x / 170.0, y / 170.0, 3) * 45.0;
+				double wy = Fbm(warpY, x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0;
+				double X = x + wx;
+				double Y = y + wy;
+				double c = Fbm(cont, X / 240.0, Y / 240.0, 6);
+				double dx = Math.Abs(((double)x / (W - 1)) * 2.0 - 1.0);
+				double dy = Math.Abs(((double)y / (H - 1)) * 2.0 - 1.0);
+				double d = Math.Sqrt(Math.Sqrt(dx * dx * dx * dx + dy * dy * dy * dy));
+				double t = Clamp01((d - 0.55) / (1.0 - 0.55));
+				double fall = t * t * (3.0 - 2.0 * t);
+				double bas = c + 0.1 - fall * 0.75;
+				t = Clamp01((bas - -0.05) / (0.25 - -0.05));
+				double land = t * t * (3.0 - 2.0 * t);
+				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - -0.15) / (0.3 - -0.15));
+				double m = t * t * (3.0 - 2.0 * t);
+				double r = Ridged(ridge, X / 120.0, Y / 120.0, 5);
+				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
+				outH[y * W + x] = (float)(bas * 0.55 + r * r * m * land * 0.9 + hills * 0.05 * (0.3 + land));
+			}
+		});
+		return outH;
 	}
 
 	// Куча как MinHeap.push / MinHeap.pop

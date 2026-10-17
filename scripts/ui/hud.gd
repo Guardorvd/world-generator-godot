@@ -1,7 +1,8 @@
 class_name Hud
 extends Control
 ## Интерфейс поверх 3D: сведения о местности, мини-карта, большая карта, всплывающие сообщения,
-## прицел и подсказки. Копия js/ui/hud.js.
+## прицел и подсказки. Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
+## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
 
 const TILE := GameConfig.TILE
 const DIRS := ["С", "СЗ", "З", "ЮЗ", "Ю", "ЮВ", "В", "СВ"]
@@ -14,6 +15,8 @@ var minimap: MiniMap
 var big_map: BigMap
 var toast_label: Label
 var lock_hint: Label
+var hint: Label
+var prompt: Label
 var _toast_left := 0.0
 
 # Состояние игрока для отрисовки карт
@@ -21,6 +24,8 @@ var px := 0.0
 var pz := 0.0
 var yaw := 0.0
 var visited := {}
+var bike_pos := Vector2.ZERO
+var bike_shown := false
 
 
 func _init() -> void:
@@ -47,14 +52,15 @@ func _init() -> void:
 	_place(minimap, Vector4(1, 0, 1, 0), Vector4(-MINI - 14, 14, -14, MINI + 14))
 	add_child(minimap)
 
-	var hint := Label.new()
-	hint.text = "Мышь — осмотреться · WASD — идти · Shift — бег · Пробел — прыжок · F — велосипед · M — карта · Esc — пауза"
+	hint = Label.new()
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
 	_place(hint, Vector4(0, 1, 1, 1), Vector4(0, -40, 0, -14))
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	add_child(hint)
 
+	prompt = _center_label("", 0.55)
+	prompt.add_theme_font_size_override("font_size", 18)
 	lock_hint = _center_label("Щёлкните по экрану, чтобы управлять взглядом мышью", 0.62)
 	toast_label = _center_label("", 0.16)
 	toast_label.add_theme_font_size_override("font_size", 22)
@@ -101,6 +107,25 @@ func set_world(w: WorldData, map_image: Image) -> void:
 
 func set_map_visible(v: bool) -> void:
 	big_map.visible = v
+
+
+## Строка подсказок внизу и подсказка у прицела (пустая — скрыта)
+func set_hints(bottom: String, near: String) -> void:
+	if hint.text != bottom:
+		hint.text = bottom
+	if prompt.text != near:
+		prompt.text = near
+
+
+## Где стоит велосипед (метры) и показывать ли его на картах
+func set_bike(x: float, z: float, shown: bool) -> void:
+	bike_pos = Vector2(x, z)
+	bike_shown = shown
+
+
+static func draw_bike(c: CanvasItem, at: Vector2, r: float) -> void:
+	c.draw_circle(at, r, Color.html("#3fa7ff"))
+	c.draw_arc(at, r, 0.0, TAU, 16, Color.WHITE, 1.5)
 
 
 func toast(text: String) -> void:
@@ -190,6 +215,8 @@ class MiniMap extends Control:
 		draw_rect(Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), Color(1, 1, 1, 0.5), false, 2.0)
 		for s in w.settlements:
 			draw_rect(Rect2(s.x * k - 1.5, s.y * k - 1.5, 3, 3), Color.html("#ffdd55"))
+		if hud.bike_shown:
+			Hud.draw_bike(self, hud.bike_pos / Hud.TILE * k, 3.0)
 		Hud.draw_arrow(self, Vector2(hud.px / Hud.TILE * k, hud.pz / Hud.TILE * k), 6.0, hud.yaw)
 
 
@@ -215,5 +242,7 @@ class BigMap extends Control:
 			Hud.draw_label(self, s.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
 		for pk in w.peaks:
 			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, Color.html("#e8f0ff"), 13)
+		if hud.bike_shown:
+			Hud.draw_bike(self, o + hud.bike_pos / Hud.TILE * k, 5.0)
 		Hud.draw_arrow(self, o + Vector2(hud.px, hud.pz) / Hud.TILE * k, 9.0, hud.yaw)
-		Hud.draw_label(self, "Карта мира «%s» — M, чтобы закрыть" % w.seed_text, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
+		Hud.draw_label(self, "Карта мира «%s» — M или Esc, чтобы закрыть · синим отмечен велосипед" % w.seed_text, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)

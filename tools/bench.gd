@@ -25,4 +25,7 @@ func _init() -> void:
 	var loaded := WorldLoader.load_world(seed_text, size, func(_p: float, label: String) -> void: _mark(label))
 	_mark("")
 	print("Всего %d мс" % (Time.get_ticks_msec() - t0))
+	# узлы воды не в дереве сцены: освободить вручную, иначе Godot жалуется на утечки при выходе
+	for node in loaded.water:
+		node.free()
 	quit()

@@ -10,6 +10,11 @@ var feet := 0.0       # высота ног
 var vy := 0.0
 var on_ground := true
 var bob := 0.0        # фаза покачивания
+var vx := 0.0         # скорость по земле, м/с
+var vz := 0.0
+var land_impact := 0.0 # скорость удара о землю при последнем приземлении (камера забирает и обнуляет)
+var _air := 0.0       # сколько секунд без опоры
+var _jump_buf := 0.0  # сколько ещё ждать земли, чтобы прыгнуть по уже нажатому пробелу
 
 
 ## Точка появления: в 3,5 м от костра первого поселения, внутри кольца домов (дома стоят не ближе 6 м
@@ -72,8 +77,10 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float) 
 	return heights.depth_at(x, z) < GameConfig.FORD_DEPTH
 
 
-## Шаг движения за dt секунд. fw/st — вперёд и вбок (-1..1), yaw — курс взгляда.
-## Возвращает true, если игрок пытался идти.
+## Шаг движения за dt секунд. fw/st — вперёд и вбок (-1..1), yaw — курс взгляда, jump — пробел нажат
+## в этом кадре. Скорость набирается и гасится быстро, но не мгновенно; в прыжке управление слабее.
+## Прыжок срабатывает и чуть после схода с края (COYOTE), и если пробел нажат чуть раньше приземления
+## (JUMP_BUFFER). Возвращает true, если игрок пытался идти.
 func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
 	var sy := sin(yaw)
 	var cy := cos(yaw)
@@ -81,35 +88,62 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 	var mz := -cy * fw - sy * st
 	var ln := Grid.hypot(mx, mz)
 	var moving := ln > 0.0
+	var gx := 0.0   # скорость, к которой стремимся
+	var gz := 0.0
 	if moving:
 		mx /= ln
 		mz /= ln
 		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z)
 		if heights.depth_at(x, z) > 0.3:
 			sp *= 0.5
-		var nx := x + mx * sp * dt
-		var nz := z + mz * sp * dt
 		# в крутой подъём идти тяжелее
-		var rise := (heights.ground_at(nx, nz) - heights.ground_at(x, z)) / maxf(1e-3, sp * dt)
+		var rise := (heights.ground_at(x + mx, z + mz) - heights.ground_at(x, z))
 		var slow := 1.0 / (1.0 + rise * 1.2) if rise > 0.0 else 1.0
-		var ax := x + mx * sp * slow * dt
-		var az := z + mz * sp * slow * dt
-		if is_passable(w, heights, ax, az):
-			x = ax
-			z = az
-		elif is_passable(w, heights, ax, z):
-			x = ax
-		elif is_passable(w, heights, x, az):
-			z = az
-		if on_ground:
-			bob += dt * sp * 1.6
-	if jump and on_ground:
+		gx = mx * sp * slow
+		gz = mz * sp * slow
+	var rate := GameConfig.WALK_ACCEL if moving else GameConfig.WALK_STOP
+	if not on_ground:
+		rate *= GameConfig.AIR_CONTROL
+	var dvx := gx - vx
+	var dvz := gz - vz
+	var dl := Grid.hypot(dvx, dvz)
+	if dl <= rate * dt:
+		vx = gx
+		vz = gz
+	else:
+		vx += dvx / dl * rate * dt
+		vz += dvz / dl * rate * dt
+
+	var ax := x + vx * dt
+	var az := z + vz * dt
+	if is_passable(w, heights, ax, az):
+		x = ax
+		z = az
+	elif is_passable(w, heights, ax, z):
+		x = ax
+		vz = 0.0
+	elif is_passable(w, heights, x, az):
+		z = az
+		vx = 0.0
+	else:
+		vx = 0.0
+		vz = 0.0
+	if on_ground:
+		bob += dt * Grid.hypot(vx, vz) * 1.6
+
+	_air = 0.0 if on_ground else _air + dt
+	_jump_buf = GameConfig.JUMP_BUFFER if jump else _jump_buf - dt
+	if _jump_buf > 0.0 and vy <= 0.0 and (on_ground or _air < GameConfig.COYOTE):
 		vy = GameConfig.JUMP
 		on_ground = false
+		_jump_buf = 0.0
+		_air = GameConfig.COYOTE
 	vy -= GameConfig.GRAVITY * dt
 	feet += vy * dt
 	var g := heights.ground_at(x, z)
 	if feet <= g:
+		if not on_ground:
+			land_impact = maxf(land_impact, -vy)
 		feet = g
 		vy = 0.0
 		on_ground = true
@@ -121,6 +155,11 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		vy = 0.0
 		on_ground = true
 	return moving
+
+
+## Скорость по земле, м/с
+func ground_speed() -> float:
+	return Grid.hypot(vx, vz)
 
 
 ## Открытия: поселения и вершины рядом с игроком. Возвращает тексты новых открытий

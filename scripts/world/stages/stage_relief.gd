@@ -2,7 +2,8 @@ class_name StageRelief
 extends RefCounted
 ## Этап 1. Макрорельеф: континенты, хребты, холмы, уровень моря, микрорельеф суши.
 ## Пишет: w.h — высота клетки (0 — уровень моря, суша до 1, дно до -1).
-## Строки карты независимы, поэтому считаются параллельно полосами.
+## Строки карты независимы, поэтому считаются параллельно полосами. В сборке Godot .NET тот же цикл
+## идёт на C# (FastGrid.ReliefField), результат тот же бит в бит.
 
 const PROGRESS := 0.02
 const LABEL := "Формирование континентов"
@@ -13,8 +14,13 @@ static func run(w: WorldData) -> void:
 	var H := w.H
 	var N := w.N
 	var h := PackedFloat32Array()
-	for b in Parallel.bands(H, func(y0: int, y1: int) -> PackedFloat32Array: return _rows(w, y0, y1)):
-		h.append_array(b)
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var n := w.noise
+		h = fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, W, H)
+	else:
+		for b in Parallel.bands(H, func(y0: int, y1: int) -> PackedFloat32Array: return _rows(w, y0, y1)):
+			h.append_array(b)
 
 	# Уровень моря по процентилю, чтобы суша занимала заданную долю карты
 	var sorted := h.duplicate()

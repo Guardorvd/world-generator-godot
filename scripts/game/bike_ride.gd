@@ -28,6 +28,9 @@ var sway := 0.0       # покачивание на неровностях, ра
 var _dist := 0.0      # пройденный путь, для покачивания
 var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
+var _hop_buf := 0.0   # пробел, нажатый чуть раньше, чем прыжок стал доступен
+var crashed := false  # жёстко приземлились: седок упал (GameWorld ссадит его и сбросит флаг)
+var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
 
 
 ## Поставить велосипед справа от игрока, лицом туда же, куда смотрит игрок
@@ -57,6 +60,8 @@ func mount(p: PlayerState) -> void:
 	p.x = x
 	p.z = z
 	p.vy = 0.0
+	p.vx = 0.0
+	p.vz = 0.0
 	p.on_ground = true
 
 
@@ -69,7 +74,10 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	sway = 0.0
 	squash = 0.0
 	squash_v = 0.0
+	_hop_buf = 0.0
 	y = heights.ground_at(x, z)
+	p.vx = 0.0
+	p.vz = 0.0
 	var px := x - cos(heading) * 0.9
 	var pz := z + sin(heading) * 0.9
 	if PlayerState.is_passable(w, heights, px, pz):
@@ -86,7 +94,7 @@ func _slope(heights: Heightfield) -> float:
 
 
 ## Шаг езды за dt секунд. throttle — газ (+) и тормоз (-), turn — руль вправо (+) и влево (-),
-## hop — прыжок (пробел).
+## hop — пробел нажат в этом кадре (срабатывает, как только прыжок доступен, если ждать недолго).
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var slope := _slope(heights)
 	var climb := slope if speed >= 0.0 else -slope
@@ -101,7 +109,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var rate := GameConfig.BIKE_ROLL
 		if throttle > 0.0:
 			goal = top * throttle
-			rate = GameConfig.BIKE_ACCEL if speed < goal else GameConfig.BIKE_ROLL
+			# с места разгон резвее, у предельной скорости — мягче
+			rate = GameConfig.BIKE_ACCEL * clampf(1.6 - speed / maxf(top, 1.0), 0.5, 1.6) if speed < goal else GameConfig.BIKE_ROLL
 		elif throttle < 0.0:
 			goal = -GameConfig.BIKE_REVERSE if speed < 0.5 else 0.0
 			rate = GameConfig.BIKE_BRAKE
@@ -136,8 +145,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	_dist += moved
 
 	_hop_wait -= dt
+	_hop_buf = GameConfig.JUMP_BUFFER if hop else _hop_buf - dt
 	var g := heights.ground_at(x, z)
-	if not airborne and hop and _hop_wait <= 0.0:
+	if not airborne and _hop_buf > 0.0 and _hop_wait <= 0.0:
+		_hop_buf = 0.0
 		# прыжок: подвеска сначала распрямляется
 		airborne = true
 		air_time = 0.0
@@ -202,15 +213,20 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	p.on_ground = not airborne
 
 
-## Приземление: подвеска проседает тем сильнее, чем жёстче удар; очень жёсткий удар гасит скорость
+## Приземление: подвеска проседает тем сильнее, чем жёстче удар; жёсткий удар гасит скорость,
+## а слишком жёсткий (с высоты больше 5 м на ровное) сбрасывает седока
 func _land(g: float, heights: Heightfield) -> void:
 	var gv := _slope(heights) * speed
 	var impact := maxf(0.0, gv - vy)
 	airborne = false
 	y = g
 	vy = gv
+	land_impact = maxf(land_impact, impact)
 	squash_v += impact * 0.28
-	if impact > 7.0:
+	if impact > GameConfig.BIKE_CRASH:
+		crashed = true
+		speed = 0.0
+	elif impact > 7.0:
 		speed *= 1.0 - clampf((impact - 7.0) * 0.05, 0.0, 0.5)
 	# короткие подскоки на неровностях не мешают прыгать
 	if air_time > 0.2:
