@@ -91,3 +91,34 @@ static func chaikin(pts: Array, iter: int) -> Array:
 ## Длина вектора в двойной точности (Vector2 в Godot хранит float32)
 static func hypot(a: float, b: float) -> float:
 	return sqrt(a * a + b * b)
+
+
+## Клетки отрезка от (x0, y0) до (x1, y1) по восьми соседям (Брезенхем), оба конца включены
+static func line_cells(x0: int, y0: int, x1: int, y1: int, w: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var dx := absi(x1 - x0)
+	var dy := -absi(y1 - y0)
+	var sx := 1 if x0 < x1 else -1
+	var sy := 1 if y0 < y1 else -1
+	var err := dx + dy
+	while true:
+		out.append(y0 * w + x0)
+		if x0 == x1 and y0 == y1:
+			break
+		var e2 := 2 * err
+		if e2 >= dy:
+			err += dy
+			x0 += sx
+		if e2 <= dx:
+			err += dx
+			y0 += sy
+	return out
+
+
+## Расстояние от точки (px, py) до отрезка (ax, ay)–(bx, by)
+static func segment_dist(px: float, py: float, ax: float, ay: float, bx: float, by: float) -> float:
+	var vx := bx - ax
+	var vy := by - ay
+	var l2 := vx * vx + vy * vy
+	var t := 0.0 if l2 == 0.0 else clampf(((px - ax) * vx + (py - ay) * vy) / l2, 0.0, 1.0)
+	return hypot(px - ax - vx * t, py - ay - vy * t)

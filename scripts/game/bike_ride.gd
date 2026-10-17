@@ -2,8 +2,8 @@ class_name BikeRide
 extends RefCounted
 ## Велосипед: где стоит, разгон и торможение, руль, подъёмы, полёт с горбов и прыжок, подвеска.
 ## Без узлов сцены, как PlayerState. Пока игрок едет, велосипед везёт его: положение игрока
-## берётся отсюда. Проходимость та же, что у пешехода (PlayerState.is_passable): глубокая вода
-## и дома не пускают.
+## берётся отсюда. Проходимость та же, что у пешехода (PlayerState.is_passable): глубокая вода,
+## дома, перила мостов и стены туннелей не пускают; по настилу моста велосипед едет, как по земле.
 
 const TILE := GameConfig.TILE
 const WHEEL_R := 0.34   # радиус колеса, м
@@ -42,11 +42,11 @@ static func park_near(p: PlayerState, yaw: float, w: WorldData, heights: Heightf
 	for side in [1.6, -1.6]:
 		var bx: float = p.x + cos(yaw) * side
 		var bz: float = p.z - sin(yaw) * side
-		if PlayerState.is_passable(w, heights, bx, bz):
+		if PlayerState.is_passable(w, heights, bx, bz, p.feet):
 			b.x = bx
 			b.z = bz
 			break
-	b.y = heights.ground_at(b.x, b.z)
+	b.y = heights.surface_at(b.x, b.z, p.feet)
 	return b
 
 
@@ -75,22 +75,22 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	squash = 0.0
 	squash_v = 0.0
 	_hop_buf = 0.0
-	y = heights.ground_at(x, z)
+	y = heights.surface_at(x, z, y)
 	p.vx = 0.0
 	p.vz = 0.0
 	var px := x - cos(heading) * 0.9
 	var pz := z + sin(heading) * 0.9
-	if PlayerState.is_passable(w, heights, px, pz):
+	if PlayerState.is_passable(w, heights, px, pz, y):
 		p.x = px
 		p.z = pz
-	p.feet = heights.ground_at(p.x, p.z)
+	p.feet = heights.surface_at(p.x, p.z, y)
 
 
 ## Подъём земли на метр пути вдоль курса
 func _slope(heights: Heightfield) -> float:
 	var fx := -sin(heading)
 	var fz := -cos(heading)
-	return (heights.ground_at(x + fx, z + fz) - heights.ground_at(x - fx, z - fz)) * 0.5
+	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) * 0.5
 
 
 ## Шаг езды за dt секунд. throttle — газ (+) и тормоз (-), turn — руль вправо (+) и влево (-),
@@ -100,7 +100,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var climb := slope if speed >= 0.0 else -slope
 	if not airborne:
 		var top := GameConfig.BIKE_SPEED * (GameConfig.BIKE_BOOST if boost else 1.0) * PlayerState.terrain_speed(w, x, z)
-		if heights.depth_at(x, z) > 0.3:
+		if heights.depth_at(x, z, y) > 0.3:
 			top *= 0.4
 		# в подъём заметно медленнее, с горы чуть быстрее
 		top *= 1.0 / (1.0 + climb * 6.0) if climb > 0.0 else 1.0 + minf(-climb, 0.3)
@@ -130,13 +130,13 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var nz := z - cos(heading) * speed * dt
 	var x0 := x
 	var z0 := z
-	if PlayerState.is_passable(w, heights, nx, nz):
+	if PlayerState.is_passable(w, heights, nx, nz, y):
 		x = nx
 		z = nz
-	elif PlayerState.is_passable(w, heights, nx, z):
+	elif PlayerState.is_passable(w, heights, nx, z, y):
 		x = nx
 		speed *= 1.0 - minf(1.0, dt * 3.0)
-	elif PlayerState.is_passable(w, heights, x, nz):
+	elif PlayerState.is_passable(w, heights, x, nz, y):
 		z = nz
 		speed *= 1.0 - minf(1.0, dt * 3.0)
 	else:
@@ -146,7 +146,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 
 	_hop_wait -= dt
 	_hop_buf = GameConfig.JUMP_BUFFER if hop else _hop_buf - dt
-	var g := heights.ground_at(x, z)
+	var g := heights.surface_at(x, z, y)
 	if not airborne and _hop_buf > 0.0 and _hop_wait <= 0.0:
 		_hop_buf = 0.0
 		# прыжок: подвеска сначала распрямляется

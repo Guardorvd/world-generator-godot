@@ -220,7 +220,7 @@ func _fill_grass(px: float, pz: float) -> void:
 		for i in range(maxi(0, floori(tx - rT)), mini(w.W - 1, floori(tx + rT)) + 1):
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
-			if not bd.has("grass") or w.river[k] != 0 or w.path_mask[k] == 2:
+			if not bd.has("grass") or w.river[k] != 0 or w.path_mask[k] >= 2:
 				continue
 			if (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2 > rT * rT:
 				continue

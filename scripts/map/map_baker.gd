@@ -273,7 +273,7 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas) -> void:
 		cv.stroke_poly(r, Color8(62, 128, 176), 1.0, 1.0, 0.0, PX)
 	for r in w.rivers:
 		cv.stroke_poly(r, Color8(140, 200, 230), 0.35, 0.35, 0.0, PX)
-	# Тропы: звериные бледные и узкие, людские — утоптанная земля
+	# Тропы: звериные бледные и узкие, людские — утоптанная земля, дороги шире и посыпаны гравием
 	for t in w.trails:
 		if t.kind == "animal":
 			cv.stroke_poly(t.pts, Color8(120, 100, 70), 0.45, 1.0, 0.0, PX)
@@ -281,8 +281,12 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas) -> void:
 		if t.kind != "animal":
 			cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)
 	for t in w.trails:
-		if t.kind != "animal":
+		if t.kind != "animal" and t.kind != "road":
 			cv.stroke_poly(t.pts, Color8(150, 136, 112) if t.kind == "mountain" else Color8(156, 124, 84), 1.0, 1.0, 0.0, PX)
+	# дороги поверх троп: где тропа слилась с дорогой, видна дорога
+	for t in w.trails:
+		if t.kind == "road":
+			cv.stroke_poly(t.pts, Color8(172, 162, 142), 1.0, 1.0, 0.0, PX)
 	for t in w.trails:
 		if t.kind == "trail":
 			cv.stroke_poly(t.pts, Color8(190, 160, 115), 0.5, 0.35, 0.0, PX)

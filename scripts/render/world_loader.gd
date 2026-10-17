@@ -27,6 +27,10 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
 		side.start(r._prepare.bind(w, px)))
 	var painted: Array = side.wait_to_finish()
+	# мосты и туннели известны только после троп: рельеф опускается под туннелями, меш поправляется
+	var changed := r.heights.build_structures()
+	if changed.size() > 0:
+		TerrainBuilder.patch(r.terrain_mesh, r.world, r.heights, changed)
 	if on_progress.is_valid():
 		on_progress.call(0.95, "Строительство 3D-сцены")
 	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;

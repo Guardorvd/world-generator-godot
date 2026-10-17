@@ -50,8 +50,10 @@ var biome := PackedByteArray()
 # Реки, тропы, поселения, вершины
 var rivers: Array = []        # ломаные из точек {x, y, w — ширина в клетках, e — высота воды}
 var cost := PackedFloat32Array()
-var path_mask := PackedByteArray()   # 1 — звериная тропа, 2 — тропа людей
-var trails: Array = []        # [{kind: "animal" | "trail" | "mountain", pts}]
+var path_mask := PackedByteArray()   # 1 — звериная тропа, 2 — тропа людей, 3 — дорога
+var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts}]
+var bridges: Array = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
+var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array = []   # [{x, y, i, name, huts: [{x, y, v}]}]
 var peaks: Array = []         # [{x, y, i, elev, name}]
 

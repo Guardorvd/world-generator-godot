@@ -31,13 +31,14 @@ func _init(w: WorldData) -> void:
 	heap_keys.resize(1 << 16)
 
 
-## Путь от клетки s до клетки t (индексы клеток) или пустой массив, если пути нет
-func find_path(s: int, t: int) -> PackedInt32Array:
+## Путь от клетки s до клетки t (индексы клеток) или пустой массив, если пути нет.
+## cost — своя стоимость прохода вместо world.cost (так дороги ищутся с мостами через воду)
+func find_path(s: int, t: int, cost_override: PackedFloat32Array = PackedFloat32Array()) -> PackedInt32Array:
+	var cost := world.cost if cost_override.is_empty() else cost_override
 	if _fast != null:
-		return _fast.FindPath(world.cost, s, t)
+		return _fast.FindPath(cost, s, t)
 	var W := world.W
 	var H := world.H
-	var cost := world.cost
 	var g := self.g
 	var from := self.from
 	var seen := self.seen

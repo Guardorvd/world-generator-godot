@@ -57,14 +57,18 @@ static func terrain_speed(w: WorldData, x: float, z: float) -> float:
 	var sp: float = Biomes.LIST[info.biome].speed
 	if sp == 0.0:
 		sp = 0.4
-	if info.path == 2:
+	if info.path == 3:
+		sp = maxf(sp, 1.0) * 1.4
+	elif info.path == 2:
 		sp = maxf(sp, 0.9) * 1.3
 	elif info.path == 1:
 		sp = maxf(sp, 0.8) * 1.12
 	return sp
 
 
-static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float) -> bool:
+## feet — высота ног: от неё зависит, стоит ли игрок на мосту (тогда вода под ним не мешает)
+## и упирается ли в перила моста или стену туннеля
+static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF) -> bool:
 	if x < TILE or z < TILE or x > (w.W - 1) * TILE or z > (w.H - 1) * TILE:
 		return false
 	# сквозь дома не пройти
@@ -74,7 +78,9 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float) 
 		for u in s.huts:
 			if Grid.hypot(u.x * TILE - x, u.y * TILE - z) < 2.1:
 				return false
-	return heights.depth_at(x, z) < GameConfig.FORD_DEPTH
+	if heights.wall_at(x, z, feet):
+		return false
+	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
 
 
 ## Шаг движения за dt секунд. fw/st — вперёд и вбок (-1..1), yaw — курс взгляда, jump — пробел нажат
@@ -94,10 +100,10 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		mx /= ln
 		mz /= ln
 		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z)
-		if heights.depth_at(x, z) > 0.3:
+		if heights.depth_at(x, z, feet) > 0.3:
 			sp *= 0.5
 		# в крутой подъём идти тяжелее
-		var rise := (heights.ground_at(x + mx, z + mz) - heights.ground_at(x, z))
+		var rise := (heights.surface_at(x + mx, z + mz, feet) - heights.surface_at(x, z, feet))
 		var slow := 1.0 / (1.0 + rise * 1.2) if rise > 0.0 else 1.0
 		gx = mx * sp * slow
 		gz = mz * sp * slow
@@ -116,13 +122,13 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 
 	var ax := x + vx * dt
 	var az := z + vz * dt
-	if is_passable(w, heights, ax, az):
+	if is_passable(w, heights, ax, az, feet):
 		x = ax
 		z = az
-	elif is_passable(w, heights, ax, z):
+	elif is_passable(w, heights, ax, z, feet):
 		x = ax
 		vz = 0.0
-	elif is_passable(w, heights, x, az):
+	elif is_passable(w, heights, x, az, feet):
 		z = az
 		vx = 0.0
 	else:
@@ -139,8 +145,8 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		_jump_buf = 0.0
 		_air = GameConfig.COYOTE
 	vy -= GameConfig.GRAVITY * dt
+	var g := heights.surface_at(x, z, feet)
 	feet += vy * dt
-	var g := heights.ground_at(x, z)
 	if feet <= g:
 		if not on_ground:
 			land_impact = maxf(land_impact, -vy)

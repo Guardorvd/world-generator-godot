@@ -1,7 +1,9 @@
 extends SceneTree
-## Самопроверка генератора: тот же сид должен давать тот же мир, что и в JS-версии 1.2.
+## Самопроверка генератора: тот же сид должен давать тот же мир.
 ## Хеши массивов мира (FNV-1a по байтам, как в tools/selftest.js JS-версии) сравниваются с эталоном
-## tools/selftest_reference.json, снятым с JS-версии. Запуск из папки проекта:
+## tools/selftest_reference.json. До версии 1.7 эталон был снят с JS-версии 1.2; с 1.8 генерация
+## намеренно другая (дороги, мосты, туннели), эталон снят с неё. Ещё проверяется, что по дорогам
+## и тропам из любого поселения можно дойти до любого другого. Запуск из папки проекта:
 ##   godot --headless --script res://tools/selftest.gd
 ## С ключом -- --print печатает свежие хеши вместо сравнения (так обновляется эталон).
 ## С ключом -- --gdscript проверяет генерацию без C# (FastGrid.cs), как в обычной сборке Godot.
@@ -16,6 +18,35 @@ static func fnv(bytes: PackedByteArray) -> int:
 	return h
 
 
+## Связаны ли все поселения путями людей (клетки path_mask 2 и 3, по восьми соседям; мосты в них входят)
+static func settlements_connected(w: WorldData) -> bool:
+	if w.settlements.is_empty():
+		return true
+	var seen := PackedByteArray()
+	seen.resize(w.N)
+	var queue := PackedInt32Array([w.settlements[0].i])
+	seen[queue[0]] = 1
+	var head := 0
+	while head < queue.size():
+		var c := queue[head]
+		head += 1
+		var cx := c % w.W
+		var cy := c / w.W
+		for k in 8:
+			var nx: int = cx + Grid.DX[k]
+			var ny: int = cy + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H:
+				continue
+			var n := ny * w.W + nx
+			if seen[n] == 0 and w.path_mask[n] >= 2:
+				seen[n] = 1
+				queue.append(n)
+	for s in w.settlements:
+		if seen[s.i] == 0:
+			return false
+	return true
+
+
 static func fingerprint(w: WorldData) -> Dictionary:
 	var r := {}
 	for key in ["h", "filled", "elev", "acc", "slope", "temp", "moist", "dist_ocean", "dist_water"]:
@@ -26,6 +57,8 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	r.obj_count = w.obj_count
 	r.rivers = w.rivers.size()
 	r.trails = w.trails.size()
+	r.bridges = w.bridges.size()
+	r.tunnels = w.tunnels.size()
 	var names := PackedStringArray()
 	for s in w.settlements:
 		names.append(s.name)
@@ -46,12 +79,15 @@ func _init() -> void:
 	for c in CASES:
 		var key := "%s@%d" % [c[0], c[1]]
 		var t0 := Time.get_ticks_msec()
-		var fp := fingerprint(WorldGenerator.generate(c[0], c[1]))
+		var w := WorldGenerator.generate(c[0], c[1])
+		var fp := fingerprint(w)
 		fresh[key] = fp
 		if print_only:
 			continue
 		var exp: Dictionary = ref.get(key, {})
 		var bad := PackedStringArray()
+		if not settlements_connected(w):
+			bad.append("связь поселений")
 		for k in fp:
 			if not exp.has(k) or (str(exp[k]) != str(fp[k]) if fp[k] is String else int(exp[k]) != int(fp[k])):
 				bad.append(k)

@@ -55,6 +55,31 @@ static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	return mesh
 
 
+## Поправить высоты меша в клетках changed (и нормали вокруг них) по heights.hv
+static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: PackedInt32Array) -> void:
+	var W := w.W
+	var H := w.H
+	var hv := heights.hv
+	var arrays := mesh.surface_get_arrays(0)
+	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	for k in changed:
+		pos[k] = Vector3(pos[k].x, hv[k], pos[k].z)
+		var ci := k % W
+		var cj := k / W
+		for j in range(maxi(0, cj - 1), mini(H, cj + 2)):
+			for i in range(maxi(0, ci - 1), mini(W, ci + 2)):
+				var l := hv[j * W + maxi(0, i - 1)]
+				var r := hv[j * W + mini(W - 1, i + 1)]
+				var u := hv[maxi(0, j - 1) * W + i]
+				var d := hv[mini(H - 1, j + 1) * W + i]
+				nor[j * W + i] = Vector3(l - r, 2.0 * TILE, u - d).normalized()
+	arrays[Mesh.ARRAY_VERTEX] = pos
+	arrays[Mesh.ARRAY_NORMAL] = nor
+	mesh.clear_surfaces()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+
+
 ## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни)
 static func material(base: Image) -> StandardMaterial3D:
 	base.generate_mipmaps()

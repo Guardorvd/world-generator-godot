@@ -39,6 +39,8 @@ light_energy = 0.85
 
 [node name="Settlements" type="Node3D" parent="."]
 
+[node name="Structures" type="Node3D" parent="."]
+
 [node name="Vegetation" type="Node3D" parent="."]
 script = ExtResource("2_veg")
 

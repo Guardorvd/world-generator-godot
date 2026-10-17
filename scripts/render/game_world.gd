@@ -1,7 +1,7 @@
 class_name GameWorld
 extends Node3D
 ## 3D-режим от первого лица: сцена scenes/game_world.tscn (окружение, солнце, камера и пустые узлы
-## для рельефа, воды и построек) и игровой цикл. Копия js/render3d/game3d.js и js/ui/input.js.
+## для рельефа, воды, построек, мостов и туннелей) и игровой цикл. Копия js/render3d/game3d.js и js/ui/input.js.
 ## Логика без движка (рельеф, движение игрока, езда на велосипеде) — в scripts/game, интерфейс — в Hud.
 ## На велосипеде (F) камера переходит за спину седока. Чувствительность мыши, угол обзора и покачивание
 ## берутся из GameSettings.
@@ -57,6 +57,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
 	labels = built.labels
+	StructuresBuilder.build($Structures, heights)
 
 	player = PlayerState.spawn(world, heights)
 	if world.settlements.size() > 0:
@@ -203,7 +204,7 @@ func _process(delta: float) -> void:
 	info_timer -= dt
 	if info_timer <= 0.0:
 		info_timer = 0.15
-		hud.update_info(player, yaw, heights.depth_at(player.x, player.z))
+		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet))
 	hud.set_player(player.x, player.z, bike.heading if bike.riding else yaw)
 	hud.set_bike(bike.x, bike.z, not bike.riding)
 

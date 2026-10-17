@@ -1,6 +1,6 @@
 extends SceneTree
 ## Проверка движения без окна: разгон и остановка шага, прыжок с запасом (COYOTE, JUMP_BUFFER),
-## начало разгона велосипеда, мягкое и жёсткое приземление. Запуск из папки проекта:
+## начало разгона велосипеда, мягкое и жёсткое приземление, проход по мостам и туннелям. Запуск из папки проекта:
 ##   godot --headless --path . --script res://tools/feel_test.gd
 
 const DT := 1.0 / 60.0
@@ -64,5 +64,56 @@ func _init() -> void:
 				break
 		_check(b.crashed == (drop > 5.0), "падение с %d м: %s" % [drop, "упал" if b.crashed else "удержался"])
 
+	# Мосты и туннели: каждый пешком и на велосипеде по оси от начала до конца, не падая с настила
+	var kinds := {}
+	for c in [["abc", 128], ["Туман-4821", 192], ["Север-1234", 256]]:
+		var w2 := WorldGenerator.generate(c[0], c[1])
+		var h2 := Heightfield.new(w2)
+		var ok := 0
+		for st: Dictionary in h2.structures:
+			kinds[st.tunnel] = true
+			var name := "туннель" if st.tunnel else "мост"
+			for ride in [false, true]:
+				if _cross(w2, h2, st, ride):
+					ok += 1
+				else:
+					print("  %s %d м %s не пройден" % [name, roundi(st.len), "на велосипеде" if ride else "пешком"])
+		_check(ok == h2.structures.size() * 2, "%s@%d: мостов %d, туннелей %d, пройдено пешком и на велосипеде %d из %d" % [c[0], c[1], w2.bridges.size(), w2.tunnels.size(), ok, h2.structures.size() * 2])
+	_check(kinds.size() == 2, "есть и мосты, и туннели")
+
 	print("Все проверки прошли." if _fails == 0 else "Не прошло проверок: %d" % _fails)
 	quit(1 if _fails > 0 else 0)
+
+
+## Пройти или проехать сооружение s по оси от точки за 2 м до начала до точки за 2 м после конца.
+## true, если дошли и всё время держались на высоте настила или пола (не провалились, не взлетели)
+func _cross(w: WorldData, heights: Heightfield, s: Dictionary, ride: bool) -> bool:
+	var yaw := atan2(-s.ux, -s.uz)
+	var p := PlayerState.new()
+	p.x = s.ax - s.ux * 2.0
+	p.z = s.az - s.uz * 2.0
+	p.feet = heights.surface_at(p.x, p.z, s.ay)
+	var b := BikeRide.new()
+	if ride:
+		b.x = p.x
+		b.z = p.z
+		b.y = p.feet
+		b.heading = yaw
+		b.mount(p)
+	for k in 60 * 120:
+		if ride:
+			b.step(p, 0.5, 0.0, false, false, DT, w, heights)
+		else:
+			p.step(1.0, 0.0, false, false, yaw, DT, w, heights)
+		var t: float = (p.x - s.ax) * s.ux + (p.z - s.az) * s.uz
+		if t > s.len + 2.0:
+			return true
+		# у концов настил может уходить под берег, а пол туннеля — под землю у входа
+		if t > 3.0 and t < s.len - 3.0:
+			var level := heights.level(s, t)
+			if p.feet < level - 0.6 or (s.tunnel and p.feet > level + 0.6):
+				print("  на %.0f м из %.0f: ноги на %.1f м, настил или пол на %.1f м" % [t, s.len, p.feet, level])
+				return false
+	var t: float = (p.x - s.ax) * s.ux + (p.z - s.az) * s.uz
+	print("  не дошли: застряли на %.1f м из %.0f, ноги на %.1f м, вода %.1f м, стена %s" % [t, s.len, p.feet, heights.depth_at(p.x, p.z, p.feet), heights.wall_at(p.x, p.z, p.feet)])
+	return false

@@ -1,11 +1,28 @@
 class_name StageTrails
 extends RefCounted
-## Этап 7. Естественные тропы: поиск пути A* по стоимости местности.
-## Пишет: w.cost (стоимость прохода), w.path_mask (1 — звериная тропа, 2 — тропа людей),
-## w.trails [{kind: "animal" | "trail" | "mountain", pts}].
+## Этап 7. Естественные тропы и дороги: поиск пути A* по стоимости местности.
+## Пишет: w.cost (стоимость прохода), w.path_mask (1 — звериная тропа, 2 — тропа людей, 3 — дорога),
+## w.trails [{kind: "animal" | "trail" | "mountain" | "road", pts}], w.bridges, w.tunnels;
+## убирает дома поселений, которые оказались на мосту или в туннеле.
+##
+## Дороги связывают все поселения (остовное дерево), поэтому ищутся по стоимости, в которой вода
+## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
+## Где дорога или тропа между поселениями пересекает реку, озеро или овраг, ставится мост,
+## где переваливает через крутой хребет — туннель. Высоты здесь в единицах w.h (1 = 260 м).
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
+
+const BRIDGE_COST := 30.0   # стоимость клетки воды для дороги: дорога обходит воду, если обход не слишком длинный
+const DIP := 0.03           # овраг глубже этого (около 8 м) под краями — мост
+const DIP_LEN := 20         # самый длинный мост через овраг, клеток
+const RISE := 0.1           # хребет выше этого (около 26 м) над входами — туннель
+const RISE_LEN := 30        # самый длинный туннель, клеток
+const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
+const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
+const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
+const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
+const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -39,11 +56,12 @@ static func _build_cost(w: WorldData) -> void:
 
 
 ## Записать найденный путь как тропу
-static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String) -> void:
+## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost)
+static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array()) -> void:
 	var W := w.W
 	var H := w.H
 	var rng := w.rng
-	var width := 0.32 if kind == "animal" else (0.42 if kind == "mountain" else 0.55)
+	var width := 0.32 if kind == "animal" else (0.42 if kind == "mountain" else (0.9 if kind == "road" else 0.55))
 	var pts: Array = []
 	for i in path:
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * 0.5
@@ -51,13 +69,16 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String) -> vo
 		pts.append({x = px, y = py, w = width})
 	var cost := w.cost
 	var mask := w.path_mask
-	var mark := 1 if kind == "animal" else 2
+	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
 	var cheaper := 0.6 if kind == "animal" else 0.35
+	var both := road_cost.size() > 0
 	for i in path:
 		if mask[i] < mark:
 			mask[i] = mark
 		# протоптанная тропа дешевле: следующие маршруты сливаются с ней
 		cost[i] = maxf(0.3, cost[i] * cheaper)
+		if both:
+			road_cost[i] = maxf(0.3, road_cost[i] * cheaper)
 		var cx := i % W
 		var cy := i / W
 		for k in 8:
@@ -68,6 +89,8 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String) -> vo
 			var n := ny * W + nx
 			if cost[n] != INF:
 				cost[n] = maxf(0.5, cost[n] * 0.9)
+			if both:
+				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
 	w.cost = cost
 	w.path_mask = mask
 	w.trails.append({kind = kind, pts = Grid.chaikin(pts, 3)})
@@ -110,7 +133,8 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 			k += 1
 
 
-## Тропы людей: остовное дерево между поселениями + несколько дополнительных связей
+## Пути людей: остовное дерево между поселениями (дороги, через воду — по мостам)
+## и несколько дополнительных связей (тропы, только по суше)
 static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	var W := w.W
 	var st := w.settlements
@@ -151,10 +175,218 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 				have[_key(a, b)] = true
 				edges.append([a, b, d, edges.size()])
 	edges.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else p[3] < q[3])
+	w.bridges = []
+	w.tunnels = []
+	var road_cost := w.cost.duplicate()
+	var ocean := w.ocean
+	var lake := w.lake
+	for i in w.N:
+		if ocean[i] != 0 or lake[i] != 0:
+			road_cost[i] = BRIDGE_COST
 	for e in edges:
-		var p := finder.find_path(st[e[0]].i, st[e[1]].i)
+		# первые n - 1 связей — остовное дерево
+		var road: bool = e[3] < n - 1
+		var p := finder.find_path(st[e[0]].i, st[e[1]].i, road_cost if road else PackedFloat32Array())
 		if p.size() > 0:
-			_add_trail(w, p, "trail")
+			_add_trail(w, _structures(w, p), "road" if road else "trail", road_cost)
+	_clear_huts(w)
+
+
+## Дома, которые стоят на мосту, в туннеле или вплотную к ним, убираются: иначе в них упрётся дорога
+static func _clear_huts(w: WorldData) -> void:
+	var W := w.W
+	var spans: Array = w.bridges + w.tunnels
+	for st in w.settlements:
+		var keep: Array = []
+		for u in st.huts:
+			var free := true
+			for sp in spans:
+				if Grid.segment_dist(u.x, u.y, sp.a % W + 0.5, sp.a / W + 0.5, sp.b % W + 0.5, sp.b / W + 0.5) < HUT_CLEAR:
+					free = false
+					break
+			if free:
+				keep.append(u)
+		st.huts = keep
+
+
+## Мокрая клетка: море, озеро или река
+static func _wet(w: WorldData, i: int) -> bool:
+	return w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
+
+
+## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
+## в котором участки под ними заменены прямыми. Мост — через воду (от берега до берега) или через овраг
+## глубже DIP; туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
+static func _structures(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+	var W := w.W
+	var n := p.size()
+	# высоты, мокрые клетки и координаты вдоль пути в плоских массивах: в цикле так быстрее
+	var hp := PackedFloat32Array()
+	var wet := PackedByteArray()
+	var xs := PackedInt32Array()
+	var ys := PackedInt32Array()
+	hp.resize(n)
+	wet.resize(n)
+	xs.resize(n)
+	ys.resize(n)
+	for k in n:
+		var c := p[k]
+		hp[k] = w.h[c]
+		wet[k] = 1 if _wet(w, c) else 0
+		xs[k] = c % W
+		ys[k] = c / W
+	# наибольшая и наименьшая высота на SPAN клеток пути вперёд: где до хребта или оврага далеко,
+	# конец моста или туннеля не ищется
+	var ahead_max := _window(hp, SPAN, true)
+	var ahead_min := _window(hp, SPAN, false)
+	var out := PackedInt32Array([p[0]])
+	var i := 0
+	while i < n - 1:
+		var j := -1
+		var kind := "bridge"
+		if wet[i + 1] != 0:
+			j = i + 1
+			while j < n and wet[j] != 0:
+				j += 1
+			if j >= n:
+				j = -1
+		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE or hp[i + 1] < hp[i] and ahead_min[i] <= hp[i] - DIP:
+			var up := hp[i + 1] > hp[i]
+			j = _span_end(hp, wet, xs, ys, i, up)
+			# вход как можно ближе к хребту или оврагу
+			while j > 0 and i + 1 < j - 2 and _span_end(hp, wet, xs, ys, i + 1, up) == j:
+				out.append(p[i + 1])
+				i += 1
+			if up:
+				kind = "tunnel"
+				# под горным озером и наперерез другому туннелю туннель не прокладывается
+				if j > 0 and not _built(w, w.tunnels, p[i], p[j]):
+					if _near_tunnel(w, p[i], p[j]):
+						j = -1
+					else:
+						for c in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
+							if _wet(w, c):
+								j = -1
+								break
+		if j < 0:
+			out.append(p[i + 1])
+			i += 1
+			continue
+		var a := p[i]
+		var b := p[j]
+		var list: Array = w.tunnels if kind == "tunnel" else w.bridges
+		# дорога, слившаяся с прежней, проходит по уже построенному
+		if not _built(w, list, a, b):
+			list.append({a = a, b = b})
+			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)
+		var line := Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W)
+		for k in range(1, line.size()):
+			out.append(line[k])
+		i = j
+	return out
+
+
+## Наибольшее (big) или наименьшее значение v[i..i+span] для каждого i (очередь с монотонными значениями)
+static func _window(v: PackedFloat32Array, span: int, big: bool) -> PackedFloat32Array:
+	var n := v.size()
+	var out := PackedFloat32Array()
+	out.resize(n)
+	var q := PackedInt32Array()
+	q.resize(n)
+	var head := 0
+	var tail := 0
+	for i in range(n - 1, -1, -1):
+		while tail > head and (v[q[tail - 1]] <= v[i] if big else v[q[tail - 1]] >= v[i]):
+			tail -= 1
+		q[tail] = i
+		tail += 1
+		while q[head] > i + span:
+			head += 1
+		out[i] = v[q[head]]
+	return out
+
+
+## Есть ли уже мост или туннель, вдоль которого идёт отрезок a–b (оба конца не дальше трёх клеток от него)
+static func _built(w: WorldData, list: Array, a: int, b: int) -> bool:
+	var W := w.W
+	for s in list:
+		var sx: float = s.a % W
+		var sy: float = s.a / W
+		var ex: float = s.b % W
+		var ey: float = s.b / W
+		if Grid.segment_dist(a % W, a / W, sx, sy, ex, ey) <= 3.0 and Grid.segment_dist(b % W, b / W, sx, sy, ex, ey) <= 3.0:
+			return true
+	return false
+
+
+## Проходит ли отрезок a–b ближе 2 * TUNNEL_R + 1 клеток к уже прорезанному туннелю
+static func _near_tunnel(w: WorldData, a: int, b: int) -> bool:
+	var W := w.W
+	var ax: float = a % W
+	var ay: float = a / W
+	var bx: float = b % W
+	var by: float = b / W
+	for t in w.tunnels:
+		var cx: float = t.a % W
+		var cy: float = t.a / W
+		var dx: float = t.b % W
+		var dy: float = t.b / W
+		# отрезки пересекаются, если концы каждого лежат по разные стороны от другого
+		var s1 := (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)
+		var s2 := (bx - ax) * (dy - ay) - (by - ay) * (dx - ax)
+		var s3 := (dx - cx) * (ay - cy) - (dy - cy) * (ax - cx)
+		var s4 := (dx - cx) * (by - cy) - (dy - cy) * (bx - cx)
+		if s1 * s2 < 0.0 and s3 * s4 < 0.0:
+			return true
+		var d := minf(minf(Grid.segment_dist(ax, ay, cx, cy, dx, dy), Grid.segment_dist(bx, by, cx, cy, dx, dy)),
+			minf(Grid.segment_dist(cx, cy, ax, ay, bx, by), Grid.segment_dist(dx, dy, ax, ay, bx, by)))
+		if d < TUNNEL_R * 2.0 + 1.0:
+			return true
+	return false
+
+
+## Конец моста через овраг (up = false) или туннеля (up = true), который начинается в p[i]:
+## первая клетка, после которой путь уже перевалил через хребет или овраг, или -1
+static func _span_end(hp: PackedFloat32Array, wet: PackedByteArray, xs: PackedInt32Array, ys: PackedInt32Array, i: int, up: bool) -> int:
+	var ha := hp[i]
+	var ax := xs[i]
+	var ay := ys[i]
+	var lim := RISE_LEN if up else DIP_LEN
+	var lim2 := lim * lim
+	var top := -INF
+	var bottom := INF
+	for j in range(i + 1, mini(hp.size(), i + SPAN + 1)):
+		if wet[j] != 0:
+			return -1
+		var hb := hp[j]
+		var dx := xs[j] - ax
+		var dy := ys[j] - ay
+		var d2 := dx * dx + dy * dy
+		if d2 > lim2:
+			return -1
+		if j >= i + 3 and (hb - ha) * (hb - ha) <= GRADE * GRADE * d2:
+			if up and top - maxf(ha, hb) >= RISE:
+				return j
+			if not up and minf(ha, hb) - bottom >= DIP:
+				return j
+		top = maxf(top, hb)
+		bottom = minf(bottom, hb)
+	return -1
+
+
+## Клетки у оси моста или туннеля (ближе r) — дорога: по ней идут быстро, деревья в выемке туннеля не растут
+static func _mark_cut(w: WorldData, a: int, b: int, r: float) -> void:
+	var W := w.W
+	var mask := w.path_mask
+	var ax := a % W + 0.5
+	var ay := a / W + 0.5
+	var bx := b % W + 0.5
+	var by := b / W + 0.5
+	for y in range(maxi(0, floori(minf(ay, by) - r)), mini(w.H, ceili(maxf(ay, by) + r))):
+		for x in range(maxi(0, floori(minf(ax, bx) - r)), mini(W, ceili(maxf(ax, bx) + r))):
+			if Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= r:
+				mask[y * W + x] = 3
+	w.path_mask = mask
 
 
 static func _key(a: int, b: int) -> String:
