@@ -1,6 +1,6 @@
 extends SceneTree
 ## Дымовая проверка: открывает главную сцену, запускает игру с заданным зерном и размером,
-## немного идёт вперёд, открывает карту и сохраняет снимки экрана. Запуск из папки проекта:
+## снимает точку появления, немного идёт вперёд, открывает карту и сохраняет снимки экрана. Запуск из папки проекта:
 ##   godot --path . --script res://tools/smoke_test.gd -- <зерно> <размер> <папка для снимков>
 
 var main: Node
@@ -38,6 +38,11 @@ func _process(_delta: float) -> bool:
 	if ready_at == 0:
 		ready_at = Time.get_ticks_msec()
 		print("Мир готов за %d мс" % (ready_at - started))
+	if game.time < 0.5:
+		return false
+	if not shots.has("spawn"):
+		shots.spawn = true
+		_shot("spawn")
 	Input.action_press("move_forward")
 	if game.time > 3.0 and not shots.has("walk"):
 		shots.walk = true

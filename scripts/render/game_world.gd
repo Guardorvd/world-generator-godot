@@ -48,6 +48,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	labels = built.labels
 
 	player = PlayerState.spawn(world, heights)
+	if world.settlements.size() > 0:
+		# лицом к костру
+		var s: Dictionary = world.settlements[0]
+		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	_update_camera(false)

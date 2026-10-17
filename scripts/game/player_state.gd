@@ -12,15 +12,34 @@ var on_ground := true
 var bob := 0.0        # фаза покачивания
 
 
-## Точка появления: у костра первого поселения, внутри кольца домов (дома стоят не ближе 6 м от центра)
+## Точка появления: в 3,5 м от костра первого поселения, внутри кольца домов (дома стоят не ближе 6 м
+## от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего, чтобы не стоять
+## носом в стену. При равенстве — юг, как в JS-версии.
 static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
 	var p := PlayerState.new()
 	p.x = (w.W / 2.0) * TILE
 	p.z = (w.H / 2.0) * TILE
 	if w.settlements.size() > 0:
 		var s: Dictionary = w.settlements[0]
-		p.x = s.x * TILE
-		p.z = s.y * TILE + 3.5
+		var fx: float = s.x * TILE
+		var fz: float = s.y * TILE
+		var best := -1.0
+		for k in 8:
+			var a := k * PI / 4.0
+			var x := fx + sin(a) * 3.5
+			var z := fz + cos(a) * 3.5
+			if heights.depth_at(x, z) >= GameConfig.FORD_DEPTH:
+				continue
+			var clear := INF
+			for u in s.huts:
+				clear = minf(clear, Grid.hypot(u.x * TILE - x, u.y * TILE - z))
+			if clear > best:
+				best = clear
+				p.x = x
+				p.z = z
+		if best < 0.0:
+			p.x = fx
+			p.z = fz + 3.5
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
 

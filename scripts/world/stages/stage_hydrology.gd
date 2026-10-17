@@ -13,75 +13,12 @@ static func run(w: WorldData) -> void:
 	var N := w.N
 	var h := w.h
 	var ocean := w.ocean
-	var filled := h.duplicate()
-	var down := PackedInt32Array()
-	down.resize(N)
-	down.fill(-1)
-	var order := PackedInt32Array()
-	order.resize(N)
-	var order_n := 0
-	var closed := PackedByteArray()
-	closed.resize(N)
-	var heap := MinHeap.new(N + 16)
-	for i in N:
-		if ocean[i] != 0:
-			closed[i] = 1
-			heap.push(i, h[i])
-	# Цикл заполнения с развёрнутой кучей (тот же алгоритм, что MinHeap, без вызовов методов)
-	var ids := heap.ids
-	var keys := heap.keys
-	var hn := heap.n
-	var DX := Grid.DX
-	var DY := Grid.DY
-	while hn > 0:
-		var c := ids[0]
-		hn -= 1
-		if hn > 0:
-			var id := ids[hn]
-			var kk := keys[hn]
-			var i := 0
-			while true:
-				var l := 2 * i + 1
-				if l >= hn:
-					break
-				var r := l + 1
-				if r < hn and keys[r] < keys[l]:
-					l = r
-				if keys[l] >= kk:
-					break
-				ids[i] = ids[l]
-				keys[i] = keys[l]
-				i = l
-			ids[i] = id
-			keys[i] = kk
-		order[order_n] = c
-		order_n += 1
-		var cx := c % W
-		var cy := c / W
-		var fc := filled[c]
-		for k in 8:
-			var nx: int = cx + DX[k]
-			var ny: int = cy + DY[k]
-			if nx < 0 or ny < 0 or nx >= W or ny >= H:
-				continue
-			var n := ny * W + nx
-			if closed[n] != 0:
-				continue
-			closed[n] = 1
-			filled[n] = maxf(h[n], fc + 1e-5)
-			down[n] = c
-			var key := filled[n]
-			var i := hn
-			hn += 1
-			while i > 0:
-				var p := (i - 1) >> 1
-				if keys[p] <= key:
-					break
-				ids[i] = ids[p]
-				keys[i] = keys[p]
-				i = p
-			ids[i] = n
-			keys[i] = key
+	var fast := Grid.fast_grid()
+	var flood: Dictionary = fast.PriorityFlood(h, ocean, W, H) if fast != null else _priority_flood(w)
+	var filled: PackedFloat32Array = flood.filled
+	var down: PackedInt32Array = flood.down
+	var order: PackedInt32Array = flood.order
+	var order_n: int = flood.order_n
 
 	var lake := PackedByteArray()
 	lake.resize(N)
@@ -162,3 +99,83 @@ static func run(w: WorldData) -> void:
 	w.rain = rain
 	w.acc = acc
 	w.river = river
+
+
+## Заполнение впадин от океана (priority flood). Возвращает {filled, down, order, order_n}.
+## В сборке Godot .NET вместо него работает FastGrid.PriorityFlood, результат тот же.
+static func _priority_flood(w: WorldData) -> Dictionary:
+	var W := w.W
+	var H := w.H
+	var N := w.N
+	var h := w.h
+	var ocean := w.ocean
+	var filled := h.duplicate()
+	var down := PackedInt32Array()
+	down.resize(N)
+	down.fill(-1)
+	var order := PackedInt32Array()
+	order.resize(N)
+	var order_n := 0
+	var closed := PackedByteArray()
+	closed.resize(N)
+	var heap := MinHeap.new(N + 16)
+	for i in N:
+		if ocean[i] != 0:
+			closed[i] = 1
+			heap.push(i, h[i])
+	# Цикл заполнения с развёрнутой кучей (тот же алгоритм, что MinHeap, без вызовов методов)
+	var ids := heap.ids
+	var keys := heap.keys
+	var hn := heap.n
+	var DX := Grid.DX
+	var DY := Grid.DY
+	while hn > 0:
+		var c := ids[0]
+		hn -= 1
+		if hn > 0:
+			var id := ids[hn]
+			var kk := keys[hn]
+			var i := 0
+			while true:
+				var l := 2 * i + 1
+				if l >= hn:
+					break
+				var r := l + 1
+				if r < hn and keys[r] < keys[l]:
+					l = r
+				if keys[l] >= kk:
+					break
+				ids[i] = ids[l]
+				keys[i] = keys[l]
+				i = l
+			ids[i] = id
+			keys[i] = kk
+		order[order_n] = c
+		order_n += 1
+		var cx := c % W
+		var cy := c / W
+		var fc := filled[c]
+		for k in 8:
+			var nx: int = cx + DX[k]
+			var ny: int = cy + DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			if closed[n] != 0:
+				continue
+			closed[n] = 1
+			filled[n] = maxf(h[n], fc + 1e-5)
+			down[n] = c
+			var key := filled[n]
+			var i := hn
+			hn += 1
+			while i > 0:
+				var p := (i - 1) >> 1
+				if keys[p] <= key:
+					break
+				ids[i] = ids[p]
+				keys[i] = keys[p]
+				i = p
+			ids[i] = n
+			keys[i] = key
+	return {filled = filled, down = down, order = order, order_n = order_n}

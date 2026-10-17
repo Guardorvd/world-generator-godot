@@ -4,6 +4,7 @@ extends SceneTree
 ## tools/selftest_reference.json, снятым с JS-версии. Запуск из папки проекта:
 ##   godot --headless --script res://tools/selftest.gd
 ## С ключом -- --print печатает свежие хеши вместо сравнения (так обновляется эталон).
+## С ключом -- --gdscript проверяет генерацию без C# (FastGrid.cs), как в обычной сборке Godot.
 
 const CASES := [["Север-1234", 256], ["Туман-4821", 192], ["abc", 128]]
 
@@ -36,6 +37,7 @@ static func fingerprint(w: WorldData) -> Dictionary:
 
 func _init() -> void:
 	var print_only := OS.get_cmdline_user_args().has("--print")
+	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	var ref := {}
 	if not print_only:
 		ref = JSON.parse_string(FileAccess.get_file_as_string("res://tools/selftest_reference.json"))

@@ -9,6 +9,22 @@ const DY: Array[int] = [0, 0, 1, -1, 1, -1, 1, -1]
 const DL: Array[float] = [1.0, 1.0, 1.0, 1.0, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951]
 const SQRT2 := 1.4142135623730951
 
+## Самые долгие циклы генерации есть и на C# (FastGrid.cs): в сборке Godot .NET они идут там.
+const FAST_GRID_SCRIPT := "res://scripts/core/FastGrid.cs"
+
+## false — всё считать на GDScript (так проверяется, что C# даёт тот же мир)
+static var allow_fast := true
+
+
+## Новый объект FastGrid (C#) или null, если игра запущена не в сборке Godot .NET
+static func fast_grid() -> Object:
+	if not allow_fast or not ClassDB.class_exists("CSharpScript") or not ResourceLoader.exists(FAST_GRID_SCRIPT):
+		return null
+	var script: Script = load(FAST_GRID_SCRIPT)
+	if script == null or not script.can_instantiate():
+		return null
+	return script.new()
+
 
 static func smoothstep_js(a: float, b: float, x: float) -> float:
 	var t := clampf((x - a) / (b - a), 0.0, 1.0)

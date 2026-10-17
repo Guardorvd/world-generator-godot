@@ -4,6 +4,7 @@ extends RefCounted
 ## Стоимость читается из world.cost при каждом поиске, поэтому её можно менять между вызовами
 ## (так протоптанные тропы становятся дешевле). INF — непроходимо.
 ## Куча из MinHeap развёрнута прямо в цикле поиска: в GDScript вызовы методов дороги, а алгоритм тот же.
+## В сборке Godot .NET поиск ведёт FastGrid.FindPath: тот же алгоритм на C#, в десятки раз быстрее.
 
 var world: WorldData
 var g := PackedFloat32Array()
@@ -13,10 +14,15 @@ var done := PackedInt32Array()
 var heap_ids := PackedInt32Array()
 var heap_keys := PackedFloat64Array()
 var gen := 0
+var _fast: Object = null
 
 
 func _init(w: WorldData) -> void:
 	world = w
+	_fast = Grid.fast_grid()
+	if _fast != null:
+		_fast.Setup(w.W, w.H)
+		return
 	g.resize(w.N)
 	from.resize(w.N)
 	seen.resize(w.N)
@@ -27,6 +33,8 @@ func _init(w: WorldData) -> void:
 
 ## Путь от клетки s до клетки t (индексы клеток) или пустой массив, если пути нет
 func find_path(s: int, t: int) -> PackedInt32Array:
+	if _fast != null:
+		return _fast.FindPath(world.cost, s, t)
 	var W := world.W
 	var H := world.H
 	var cost := world.cost
