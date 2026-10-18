@@ -41,21 +41,23 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh) -> 
 			entry.trunk = _multimesh(def.trunk, mat, cap, false)
 			entry.tbuf = _buffer(cap, 12)
 		if def.has("crown"):
-			var mat := StandardMaterial3D.new()
-			mat.vertex_color_use_as_albedo = true
-			mat.vertex_color_is_srgb = true
-			mat.roughness = 1.0
-			entry.crown = _multimesh(def.crown, mat, cap, true)
+			entry.crown = _multimesh(def.crown, _vcolor_mat(false), cap, true)
 			entry.cbuf = _buffer(cap, 16)
 		veg[k] = entry
 	# Трава у ног
-	var gmat := StandardMaterial3D.new()
-	gmat.vertex_color_use_as_albedo = true
-	gmat.vertex_color_is_srgb = true
-	gmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	gmat.roughness = 1.0
-	grass = _multimesh(grass_mesh, gmat, GameConfig.GRASS_MAX, true)
+	grass = _multimesh(grass_mesh, _vcolor_mat(true), GameConfig.GRASS_MAX, true)
 	grass_buf = _buffer(GameConfig.GRASS_MAX, 16)
+
+
+## Материал для мешей с цветом вершин (крона, трава)
+static func _vcolor_mat(two_sided: bool) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.vertex_color_is_srgb = true
+	mat.roughness = 1.0
+	if two_sided:
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	return mat
 
 
 ## Буфер экземпляров: по stride чисел на экземпляр (матрица 3×4 и, если есть, цвет)

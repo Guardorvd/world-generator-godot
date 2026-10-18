@@ -66,8 +66,8 @@ static func _build_cost(w: WorldData) -> void:
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
 	var cost_n := w.noise_field("cost")
-	for y in H:
-		for x in W:
+	for y: int in H:
+		for x: int in W:
 			var i := y * W + x
 			if w.ocean[i] != 0 or w.lake[i] != 0:
 				cost[i] = INF
@@ -91,11 +91,11 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var width := 0.32 if kind == "animal" else (0.42 if kind == "mountain" else (0.9 if kind == "road" else 0.55))
 	var pts: Array = []
 	var last := path.size() - 1
-	for k in path.size():
+	for k: int in path.size():
 		var i := path[k]
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * 0.5
 		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * 0.5
-		if on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0) \
+		if (on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0)) \
 				or _by_water(w, i):
 			px = (i % W) + 0.5
 			py = (i / W) + 0.5
@@ -105,7 +105,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
 	var cheaper := 0.6 if kind == "animal" else 0.35
 	var both := road_cost.size() > 0
-	for i in path:
+	for i: int in path:
 		if mask[i] < mark:
 			mask[i] = mark
 		# протоптанная тропа дешевле: следующие маршруты сливаются с ней
@@ -114,7 +114,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			road_cost[i] = maxf(0.3, road_cost[i] * cheaper)
 		var cx := i % W
 		var cy := i / W
-		for k in 8:
+		for k: int in 8:
 			var nx: int = cx + Grid.DX[k]
 			var ny: int = cy + Grid.DY[k]
 			if nx < 0 or ny < 0 or nx >= W or ny >= H:
@@ -142,20 +142,20 @@ static func _mark_line(w: WorldData, pts: Array, mark: int, half: float) -> void
 	var last: Dictionary = pts[0]
 	var px: float = last.x
 	var py: float = last.y
-	for k in range(1, pts.size()):
+	for k: int in range(1, pts.size()):
 		var b: Dictionary = pts[k]
 		var ax: float = last.x
 		var ay: float = last.y
 		var dx: float = b.x - ax
 		var dy: float = b.y - ay
 		last = b
-		var len := sqrt(dx * dx + dy * dy)
-		if len == 0.0:
+		var seg_len := sqrt(dx * dx + dy * dy)
+		if seg_len == 0.0:
 			continue
-		var nx := -dy / len * half
-		var ny := dx / len * half
-		var m := ceili(len / LINE_STEP)
-		for s in range(1, m + 1):
+		var nx := -dy / seg_len * half
+		var ny := dx / seg_len * half
+		var m := ceili(seg_len / LINE_STEP)
+		for s: int in range(1, m + 1):
 			var f := float(s) / m
 			var x := ax + dx * f
 			var y := ay + dy * f
@@ -184,12 +184,13 @@ static func _mark_cell(mask: PackedByteArray, W: int, H: int, x: int, y: int, ma
 		mask[y * W + x] = mark
 
 
-## Путь p, в котором каждый диагональный шаг между двумя мокрыми клетками (река, текущая по диагонали)
-## идёт через одну из них: так переход реки виден в клетках пути (мост, брод), а не проскакивает в угол
+## Путь p, в котором каждый диагональный шаг между двумя сухими клетками, которые разделяет река (обе соседние
+## по сторонам клетки мокрые), идёт через одну из этих клеток: так переход реки виден в клетках пути (мост, брод),
+## а не проскакивает в угол
 static func _explicit(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
 	var W := w.W
 	var out := PackedInt32Array()
-	for k in p.size():
+	for k: int in p.size():
 		var b := p[k]
 		if k > 0:
 			var a := p[k - 1]
@@ -258,7 +259,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	in_tree.fill(false)
 	if n > 0:
 		in_tree[0] = true
-	for it in range(1, n):
+	for it: int in range(1, n):
 		var best: Array = []
 		for a in n:
 			if not in_tree[a]:
@@ -300,7 +301,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	for i in w.N:
 		if ocean[i] != 0 or lake[i] != 0:
 			road_cost[i] = BRIDGE_COST
-	var paths: Array = []   # [a, b, путь, дорога ли] найденных связей
+	var paths: Array = []   # [a, b, путь, дорога ли, прямое расстояние] найденных связей
 	for e in edges:
 		# первые n - 1 связей — остовное дерево
 		var road: bool = e[3] < n - 1
@@ -352,7 +353,8 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var a: int = v[0]
 		var avoid: Array = v[2]
 		var road: bool = v[3]
-		var c := _avoiding(w, avoid)
+		var corr := _corridor(w, avoid)
+		var c := _avoiding(w, corr)
 		var found := false
 		# к первому соседу, до которого нашёлся подходящий путь
 		for nb in v[1]:
@@ -360,7 +362,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if have.has(_key(a, b)) and not road:
 				continue
 			var p := finder.find_path(c, st[a].i, st[b].i)
-			if p.size() == 0 or p.size() > nb[1] * v[4] or _share(w, p, avoid) > AVOID_SHARE:
+			if p.size() == 0 or p.size() > nb[1] * v[4] or _share(p, corr) > AVOID_SHARE:
 				continue
 			have[_key(a, b)] = true
 			_add_trail(w, _structures(w, p, road, finder, w.cost, state), "road" if road else "trail", road_cost, state.on_axis)
@@ -369,11 +371,11 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if found or road:
 			continue
 		# до соседей по суше не дойти (обычно это остров): тропа к морю на другой стороне
-		var t := _shore(w, st[a].i, _corridor(w, avoid))
+		var t := _shore(w, st[a].i, corr)
 		if t >= 0:
 			var p := finder.find_path(c, st[a].i, t)
 			var d := Grid.hypot(t % w.W - st[a].x, t / w.W - st[a].y)
-			if p.size() > 0 and p.size() <= d * DEAD_LEN and _share(w, p, avoid) <= AVOID_SHARE:
+			if p.size() > 0 and p.size() <= d * DEAD_LEN and _share(p, corr) <= AVOID_SHARE:
 				_add_trail(w, _structures(w, p, false, finder, w.cost, state), "trail", road_cost, state.on_axis)
 
 
@@ -396,11 +398,10 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 	return best
 
 
-## Стоимость по суше (w.cost), в которой клетки ближе AVOID_R к путям avoid в AVOID_MUL раз дороже
-static func _avoiding(w: WorldData, avoid: Array) -> PackedFloat32Array:
+## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в AVOID_MUL раз дороже
+static func _avoiding(w: WorldData, near: PackedByteArray) -> PackedFloat32Array:
 	var c := w.cost.duplicate()
-	var near := _corridor(w, avoid)
-	for i in w.N:
+	for i: int in w.N:
 		if near[i] != 0 and c[i] != INF:
 			c[i] *= AVOID_MUL
 	return c
@@ -421,11 +422,12 @@ static func _corridor(w: WorldData, avoid: Array) -> PackedByteArray:
 	return near
 
 
-## Доля клеток пути p в коридоре прежних путей avoid
-static func _share(w: WorldData, p: PackedInt32Array, avoid: Array) -> float:
-	var near := _corridor(w, avoid)
+## Доля клеток пути p в коридоре near (_corridor) прежних путей; 0, если путь пуст
+static func _share(p: PackedInt32Array, near: PackedByteArray) -> float:
+	if p.is_empty():
+		return 0.0
 	var k := 0
-	for i in p:
+	for i: int in p:
 		if near[i] != 0:
 			k += 1
 	return float(k) / p.size()
@@ -508,7 +510,7 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 						j = -1
 			elif j > 0:
 				# над озером или заливом мост через овраг не ставится: путь идёт по берегу
-				for c in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
+				for c: int in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
 					if w.ocean[c] != 0 or w.lake[c] != 0:
 						j = -1
 						break
@@ -560,7 +562,7 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 ## или туннеля лежит позади точки, где путь к нему свернул
 static func _no_backtrack(p: PackedInt32Array) -> PackedInt32Array:
 	var out := PackedInt32Array()
-	for c in p:
+	for c: int in p:
 		var n := out.size()
 		if n >= 2 and out[n - 2] == c:
 			out.resize(n - 1)
@@ -569,7 +571,7 @@ static func _no_backtrack(p: PackedInt32Array) -> PackedInt32Array:
 	return out
 
 
-## Путь по суше от клетки a до клетки b (без a); если его нет — прямая
+## Путь по суше от клетки a до клетки b (без a); если его нет или он длиннее REUSE_R * 3 — прямая
 static func _link(w: WorldData, finder: Pathfinder, a: int, b: int) -> PackedInt32Array:
 	if a == b:
 		return PackedInt32Array()
@@ -581,7 +583,7 @@ static func _link(w: WorldData, finder: Pathfinder, a: int, b: int) -> PackedInt
 
 ## Есть ли в клетках p вода (море, озеро, река)
 static func _has_wet(w: WorldData, p: PackedInt32Array) -> bool:
-	for c in p:
+	for c: int in p:
 		if _wet(w, c):
 			return true
 	return false
@@ -674,7 +676,7 @@ static func _window(v: PackedFloat32Array, span: int, big: bool) -> PackedFloat3
 ## не годится: путь по нему пересекал бы воду или гору не там, где построено
 static func _same(w: WorldData, list: Array, a: int, b: int, key: int) -> Array:
 	var W := w.W
-	for s in list:
+	for s: Dictionary in list:
 		if Grid.segment_dist(key % W + 0.5, key / W + 0.5, s.a % W + 0.5, s.a / W + 0.5, s.b % W + 0.5, s.b / W + 0.5) > KEY_R:
 			continue
 		for e in [[s.a, s.b], [s.b, s.a]]:
@@ -685,14 +687,14 @@ static func _same(w: WorldData, list: Array, a: int, b: int, key: int) -> Array:
 	return []
 
 
-## Проходит ли отрезок a–b ближе 2 * TUNNEL_R + 1 клеток к уже прорезанному туннелю
+## Проходит ли отрезок a–b ближе 2 * TUNNEL_R + 1 клеток к уже прорезанному туннелю или пересекает его
 static func _near_tunnel(w: WorldData, a: int, b: int) -> bool:
 	var W := w.W
 	var ax: float = a % W
 	var ay: float = a / W
 	var bx: float = b % W
 	var by: float = b / W
-	for t in w.tunnels:
+	for t: Dictionary in w.tunnels:
 		var cx: float = t.a % W
 		var cy: float = t.a / W
 		var dx: float = t.b % W
@@ -751,7 +753,7 @@ static func _mark_cut(w: WorldData, a: int, b: int, r: float) -> void:
 	for y in range(maxi(0, floori(minf(ay, by) - r)), mini(w.H, ceili(maxf(ay, by) + r))):
 		for x in range(maxi(0, floori(minf(ax, bx) - r)), mini(W, ceili(maxf(ax, bx) + r))):
 			if Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= r:
-				mask[y * W + x] = 3
+				mask[y * W + x] = 3   # дорога (как road в _add_trail)
 	w.path_mask = mask
 
 

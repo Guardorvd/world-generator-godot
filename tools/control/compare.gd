@@ -19,8 +19,8 @@ var notes: PackedStringArray = []   # что заметно изменилось
 func _init() -> void:
 	var base := Dev.arg("base", Dev.latest_baseline())
 	var fresh := Dev.arg("new", Dev.RUNS.path_join(Dev.version()))
-	base = _abs(base)
-	fresh = _abs(fresh)
+	base = Dev.abs_dir(base)
+	fresh = Dev.abs_dir(fresh)
 	if base == "" or not DirAccess.dir_exists_absolute(base) or not DirAccess.dir_exists_absolute(fresh):
 		printerr("Нет папки базы (%s) или прогона (%s)" % [base, fresh])
 		quit(1)
@@ -44,14 +44,6 @@ func _init() -> void:
 	print(report)
 	print("Отчёт: ", out.path_join("report.md"))
 	quit()
-
-
-static func _abs(dir: String) -> String:
-	if dir.begins_with("res://"):
-		return ProjectSettings.globalize_path(dir)
-	if dir != "" and dir.is_relative_path():
-		return ProjectSettings.globalize_path("res://").path_join(dir)
-	return dir
 
 
 static func _files(dir: String, prefix: String, ext: PackedStringArray) -> PackedStringArray:

@@ -33,7 +33,7 @@ static func hash_string(s: String) -> int:
 	var buf := s.to_utf16_buffer()
 	var n := buf.size() >> 1
 	var h := (1779033703 ^ n) & MASK
-	for i in n:
+	for i: int in n:
 		var c := buf[i * 2] | (buf[i * 2 + 1] << 8)
 		h = imul(h ^ c, 3432918353)
 		h = ((h << 13) | (h >> 19)) & MASK

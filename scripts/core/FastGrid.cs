@@ -25,12 +25,15 @@ public partial class FastGrid : RefCounted
 	private int[] _heapIds = new int[1 << 16];
 	private double[] _heapKeys = new double[1 << 16];
 	private int _gen;
+	private readonly int[] _off = new int[8];
 
-	/// <summary>Размер карты для FindPath.</summary>
+	/// <summary>Задаёт размер карты и выделяет буферы поиска; вызывается из Pathfinder._init до FindPath.</summary>
 	public void Setup(int w, int h)
 	{
 		_w = w;
 		_h = h;
+		for (int k = 0; k < 8; k++)
+			_off[k] = Dy[k] * w + Dx[k];
 		_g = new float[w * h];
 		_from = new int[w * h];
 		_seen = new int[w * h];
@@ -42,9 +45,7 @@ public partial class FastGrid : RefCounted
 	public int[] FindPath(float[] cost, int s, int t)
 	{
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
-		var off = new int[8];
-		for (int k = 0; k < 8; k++)
-			off[k] = Dy[k] * W + Dx[k];
+		var off = _off;
 		var g = _g;
 		var from = _from;
 		var seen = _seen;
@@ -119,7 +120,7 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>
-	/// Заполнение впадин (priority flood) от океана. Копия цикла из StageHydrology.run.
+	/// Заполнение впадин (priority flood) от океана. Копия цикла из StageHydrology._priority_flood.
 	/// Возвращает {filled, down, order, order_n}.
 	/// </summary>
 	public Godot.Collections.Dictionary PriorityFlood(float[] h, byte[] ocean, int W, int H)
@@ -409,7 +410,7 @@ public partial class FastGrid : RefCounted
 		return s;
 	}
 
-	// Куча как MinHeap.push / MinHeap.pop
+	// Двоичная куча (min-heap): та же, что MinHeap.push и развёрнутое извлечение в GDScript
 	private static void Push(int[] ids, double[] keys, ref int hn, int id, double key)
 	{
 		int i = hn++;

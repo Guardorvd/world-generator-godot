@@ -3,7 +3,7 @@ extends SceneTree
 ## проезжает по нему и снимает въезд и середину. Нужно окно (не headless). Запуск из папки проекта:
 ##   godot --path . --script res://tools/structures_shots.gd -- <зерно> <размер> <папка для снимков>
 
-const LOAD_TIMEOUT_MS := 180000  # дольше этого мир не загрузится: считаем, что игра зависла
+const ShotUtil := preload("res://tools/shot_util.gd")
 
 var main: Node
 var frames := 0
@@ -20,17 +20,11 @@ func _initialize() -> void:
 	root.add_child(main)
 
 
-## Сохраняет снимок; ошибка записи (например, нет папки) отмечается и даёт код выхода 1
+## Сохраняет снимок; ошибка записи даёт код выхода 1
 func _shot(name: String) -> void:
 	var args := OS.get_cmdline_user_args()
-	var dir: String = args[2] if args.size() > 2 else OS.get_user_data_dir()
-	var path := dir.path_join(name + ".png")
-	var err := root.get_texture().get_image().save_png(path)
-	if err != OK:
-		printerr("Не удалось сохранить снимок %s (ошибка %d): проверьте, что папка существует" % [path, err])
+	if not ShotUtil.save_png(root, args[2] if args.size() > 2 else OS.get_user_data_dir(), name):
 		failed = true
-		return
-	print("Снимок: ", path)
 
 
 ## Сооружение не удалось пройти или снять вовремя: пишем причину и отмечаем провал
@@ -60,8 +54,8 @@ func _process(delta: float) -> bool:
 		main.start_game(args[0] if args.size() > 0 else "Туман-4821", int(args[1]) if args.size() > 1 else 192)
 	var game: GameWorld = main.game
 	if game == null or game.player == null or game.time < 0.5:
-		if started > 0 and Time.get_ticks_msec() - started > LOAD_TIMEOUT_MS:
-			_miss("мир не загрузился за %d с" % (LOAD_TIMEOUT_MS / 1000))
+		if started > 0 and Time.get_ticks_msec() - started > ShotUtil.LOAD_TIMEOUT_MS:
+			_miss("мир не загрузился за %d с" % (ShotUtil.LOAD_TIMEOUT_MS / 1000))
 			return _finish()
 		return false
 	var list := game.heights.structures

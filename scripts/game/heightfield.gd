@@ -10,7 +10,7 @@ const HS := GameConfig.HS
 const BRIDGE_HALF := 2.0    # полуширина настила моста, м
 const TUNNEL_HALF := 2.5    # полуширина туннеля, м
 const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
-const TUNNEL_CUT := 2.3     # выемка под туннелем: клетки ближе этого к оси, в клетках (как StageTrails.TUNNEL_R)
+const TUNNEL_CUT := StageTrails.TUNNEL_R   # выемка под туннелем: клетки ближе этого к оси, в клетках
 const ARCH := 0.04          # подъём середины моста на метр длины (не больше 3 м)
 const STEP := 0.8           # на настил можно шагнуть или въехать, если ноги не ниже него на столько
 const WALL := 0.6           # толщина перил моста, в которые упирается игрок, м
@@ -27,9 +27,9 @@ var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 
 
-## structures — сразу посчитать мосты и туннели (build_structures). WorldLoader строит рельеф раньше, чем
+## with_structures — сразу посчитать мосты и туннели (build_structures). WorldLoader строит рельеф раньше, чем
 ## тропы готовы, и передаёт false: мосты и туннели в это время ещё пишет генератор
-func _init(w: WorldData, structures := true) -> void:
+func _init(w: WorldData, with_structures := true) -> void:
 	world = w
 	var N := w.N
 	var W := w.W
@@ -43,20 +43,20 @@ func _init(w: WorldData, structures := true) -> void:
 	# Реки: где лента срезает угол или идёт по диагонали между клетками берега,
 	# рельеф под ней опускается чуть ниже воды, чтобы русло не уходило под землю
 	ribbons = _river_ribbons()
-	for pts in ribbons:
-		for p in pts:
+	for pts: Array in ribbons:
+		for p: Dictionary in pts:
 			var fx := clampf(p.x / TILE - 0.5, 0.0, W - 1.001)
 			var fz := clampf(p.z / TILE - 0.5, 0.0, H - 1.001)
 			var i := floori(fx)
 			var j := floori(fz)
-			var tri: Array
+			var tri: Array[int]
 			if (fx - i) + (fz - j) <= 1.0:
 				tri = [j * W + i, j * W + i + 1, (j + 1) * W + i]
 			else:
 				tri = [(j + 1) * W + i + 1, (j + 1) * W + i, j * W + i + 1]
 			var bed: float = p.y - 0.3
 			if ground_at(p.x, p.z) > bed:
-				for k in tri:
+				for k: int in tri:
 					if hv[k] > bed:
 						hv[k] = bed
 	water_level.resize(N)
@@ -68,7 +68,7 @@ func _init(w: WorldData, structures := true) -> void:
 			water_level[i] = w.filled[i] * HS
 		elif w.river[i] != 0:
 			water_level[i] = minf(hv_raw[i] - 0.45, hv[i] + 0.95) # брод: не глубже метра
-	if structures:
+	if with_structures:
 		build_structures()
 
 
@@ -80,13 +80,13 @@ func build_structures() -> PackedInt32Array:
 	structures = []
 	_cells = {}
 	var changed := PackedInt32Array()
-	for b in world.bridges:
+	for b: Dictionary in world.bridges:
 		var s := _axis(b.a, b.b, false)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
 		structures.append(s)
 	var tunnels: Array = []
-	for t in world.tunnels:
+	for t: Dictionary in world.tunnels:
 		var s := _axis(t.a, t.b, true)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
@@ -94,7 +94,7 @@ func build_structures() -> PackedInt32Array:
 		tunnels.append(s)
 	# сначала рельеф за входами опускается до пола, потом пол внутри выравнивается:
 	# так соседний туннель не опустит пол уже прорезанного
-	for inside in [false, true]:
+	for inside: bool in [false, true]:
 		for t: Dictionary in tunnels:
 			_cut(t, inside, changed)
 	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
@@ -168,7 +168,7 @@ func _cell_list(x: float, z: float) -> Variant:
 
 ## Высота настила моста под точкой (x, z), если ноги на высоте feet могут на нём стоять, иначе -INF
 func deck_at(x: float, z: float, feet: float) -> float:
-	var list = _cell_list(x, z)
+	var list: Variant = _cell_list(x, z)
 	if list == null:
 		return -INF
 	var best := -INF   # где мосты пересекаются, ноги на верхнем из тех, до которых достают
@@ -196,7 +196,7 @@ func surface_at(x: float, z: float, feet: float) -> float:
 ## проверяется (игрок, колесо велосипеда, камера). Там, где сооружения сходятся, настил или пол одного
 ## не перегораживается перилами или стеной другого
 func wall_at(x: float, z: float, feet: float, r: float = 0.0) -> bool:
-	var list = _cell_list(x, z)
+	var list: Variant = _cell_list(x, z)
 	if list == null:
 		return false
 	var wall := false
@@ -209,8 +209,8 @@ func wall_at(x: float, z: float, feet: float, r: float = 0.0) -> bool:
 		if t < 0.0 or t > s.len or side > s.half + (TUNNEL_WALL if s.tunnel else WALL) + r:
 			continue
 		var d := level(s, t)
-		var level: bool = feet < d + TUNNEL_HEIGHT if s.tunnel else (feet >= d - STEP and feet < d + 1.5)
-		if not level:
+		var on_level: bool = feet < d + TUNNEL_HEIGHT if s.tunnel else (feet >= d - STEP and feet < d + 1.5)
+		if not on_level:
 			continue
 		if side <= s.half - r:
 			return false
@@ -221,9 +221,9 @@ func wall_at(x: float, z: float, feet: float, r: float = 0.0) -> bool:
 ## Средние линии рек в метрах: вода не выше берега и вниз по течению только убывает
 func _river_ribbons() -> Array:
 	var out: Array = []
-	for r in world.rivers:
+	for r: Array in world.rivers:
 		var pts: Array = []
-		for p in r:
+		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
 			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.6, y = minf(p.e * HS, ground_at(x, z, true)) - 0.45})

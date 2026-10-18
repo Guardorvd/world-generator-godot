@@ -25,13 +25,7 @@ static func _ico(r: float, y: float, sx: float = 1.0, sy: float = 1.0, sz: float
 
 
 static func _cone(r: float, h: float, y: float, seg: int = 7) -> Array:
-	var m := CylinderMesh.new()
-	m.top_radius = 0.0
-	m.bottom_radius = r
-	m.height = h
-	m.radial_segments = seg
-	m.rings = 0
-	return [m, Transform3D(Basis(), Vector3(0, y + h / 2.0, 0))]
+	return _moved(_cyl(0.0, r, h, seg), Vector3(0, y, 0))
 
 
 ## Сдвинуть часть модели
@@ -58,9 +52,13 @@ static func _c(r: int, g: int, b: int) -> Color:
 	return Color8(r, g, b)
 
 
+## Крона ели: три яруса конусов
+static func _pine_crown() -> ArrayMesh:
+	return merge([_cone(1.9, 3.2, 1.4), _cone(1.5, 2.8, 3.0), _cone(1.0, 2.4, 4.6)])
+
+
 static func tree_defs() -> Dictionary:
 	var bark := _c(107, 74, 43)
-	var pine := func() -> ArrayMesh: return merge([_cone(1.9, 3.2, 1.4), _cone(1.5, 2.8, 3.0), _cone(1.0, 2.4, 4.6)])
 	var rock := SphereMesh.new()
 	rock.radius = 1.1
 	rock.height = 2.2
@@ -69,8 +67,8 @@ static func tree_defs() -> Dictionary:
 	return {
 		Biomes.T_OAK: {trunk = merge([_cyl(0.22, 0.32, 3.2)]), crown = merge([_ico(2.1, 4.4), _moved(_ico(1.5, 3.6), Vector3(1.2, 0, 0.4)), _moved(_ico(1.4, 3.8), Vector3(-1.1, 0, -0.5))]), bark = bark, leaves = [_c(64, 128, 52), _c(84, 140, 50), _c(58, 112, 60)]},
 		Biomes.T_BIRCH: {trunk = merge([_cyl(0.12, 0.17, 4.6)]), crown = merge([_ico(1.4, 4.8, 1, 1.6, 1)]), bark = _c(232, 228, 218), leaves = [_c(120, 170, 70), _c(140, 176, 74), _c(110, 160, 80)]},
-		Biomes.T_PINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = pine.call(), bark = bark, leaves = [_c(36, 82, 56), _c(44, 92, 52), _c(32, 74, 62)]},
-		Biomes.T_SNOWPINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = pine.call(), bark = bark, leaves = [_c(150, 175, 170), _c(120, 150, 140), _c(170, 190, 190)]},
+		Biomes.T_PINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = _pine_crown(), bark = bark, leaves = [_c(36, 82, 56), _c(44, 92, 52), _c(32, 74, 62)]},
+		Biomes.T_SNOWPINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = _pine_crown(), bark = bark, leaves = [_c(150, 175, 170), _c(120, 150, 140), _c(170, 190, 190)]},
 		Biomes.T_PALM: {trunk = merge([_cyl(0.16, 0.26, 6.2, 5)]), crown = merge([_ico(2.6, 6.3, 1, 0.22, 1)]), bark = _c(138, 106, 64), leaves = [_c(60, 140, 60), _c(80, 150, 55), _c(50, 128, 70)]},
 		Biomes.T_JUNGLE: {trunk = merge([_cyl(0.3, 0.45, 5)]), crown = merge([_ico(3.0, 6.0, 1, 0.75, 1), _moved(_ico(2.0, 4.5), Vector3(1.8, 0, 0))]), bark = _c(90, 64, 38), leaves = [_c(30, 100, 44), _c(40, 112, 40), _c(26, 90, 52)]},
 		Biomes.T_ACACIA: {trunk = merge([_cyl(0.14, 0.22, 3.4)]), crown = merge([_ico(3.2, 3.8, 1, 0.18, 1)]), bark = bark, leaves = [_c(110, 140, 60), _c(126, 146, 64), _c(98, 130, 58)]},
@@ -96,6 +94,6 @@ static func grass_mesh() -> ArrayMesh:
 		var h := 0.32 + (k % 3) * 0.08
 		var tx := ox + cos(a + 1.0) * 0.1
 		var tz := oz + sin(a + 1.0) * 0.1
-		for v in [Vector3(ox - cx, 0, oz - cz), Vector3(ox + cx, 0, oz + cz), Vector3(tx, h, tz)]:
+		for v: Vector3 in [Vector3(ox - cx, 0, oz - cz), Vector3(ox + cx, 0, oz + cz), Vector3(tx, h, tz)]:
 			st.add_vertex(v)
 	return st.commit()

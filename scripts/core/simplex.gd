@@ -15,16 +15,16 @@ func _init(rng: WGRandom = null) -> void:
 		return
 	var p := PackedInt32Array()
 	p.resize(256)
-	for i in 256:
+	for i: int in 256:
 		p[i] = i
-	for i in range(255, 0, -1):
+	for i: int in range(255, 0, -1):
 		var j := floori(rng.next_float() * (i + 1))
 		var t := p[i]
 		p[i] = p[j]
 		p[j] = t
 	perm.resize(512)
 	pm8.resize(512)
-	for i in 512:
+	for i: int in 512:
 		perm[i] = p[i & 255]
 		pm8[i] = perm[i] & 7
 
@@ -103,7 +103,7 @@ func fbm(x: float, y: float, oct: int, lac: float = 2.0, gain: float = 0.5) -> f
 	var f := 1.0
 	var s := 0.0
 	var n := 0.0
-	for o in oct:
+	for _o: int in oct:
 		s += a * noise(x * f, y * f)
 		n += a
 		a *= gain
@@ -117,7 +117,7 @@ func ridged(x: float, y: float, oct: int) -> float:
 	var f := 1.0
 	var s := 0.0
 	var w := 1.0
-	for o in oct:
+	for _o: int in oct:
 		var v := 1.0 - absf(noise(x * f, y * f))
 		v *= v
 		v *= w

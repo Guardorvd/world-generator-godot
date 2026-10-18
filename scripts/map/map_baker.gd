@@ -10,6 +10,12 @@ extends RefCounted
 const ROCKC := [150.0, 144.0, 138.0]
 const FLOWERS := [[230, 220, 80], [230, 110, 140], [240, 240, 240], [150, 120, 220], [235, 140, 60]]
 const BAND := 32
+# Множители и сиды пиксельного хеша (как в WGRandom.hash2) и сид шумов заливки
+const HASH_X := 374761393
+const HASH_Y := 668265263
+const HASH_MIX := 1274126177
+const SEED_PAINT := 0xa5a5a5
+const SEED_DETAIL := 0x5bd1e995
 
 
 ## Одна картинка: flat — без отмывки склонов
@@ -26,7 +32,7 @@ static func bake_both(w: WorldData, px: int) -> Array[Image]:
 ## поэтому её можно считать сразу после этапа климата, параллельно с тропами и растительностью
 static func paint(w: WorldData, px: int) -> Array[PackedByteArray]:
 	var fields := _cell_fields(w)
-	var rng := WGRandom.new(w.seed_num ^ 0xa5a5a5)
+	var rng := WGRandom.new(w.seed_num ^ SEED_PAINT)
 	var noises := [Simplex.new(rng), Simplex.new(rng), Simplex.new(rng), Simplex.new(rng)]
 	var flat := PackedByteArray()
 	var shaded := PackedByteArray()
@@ -119,7 +125,7 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 	var rock_g: float = ROCKC[1]
 	var rock_b: float = ROCKC[2]
 	var pix_seed := w.seed_num
-	var seed2 := (w.seed_num ^ 0x5bd1e995) & 0xFFFFFFFF
+	var seed2 := (w.seed_num ^ SEED_DETAIL) & 0xFFFFFFFF
 	var IW := W * PX
 	var out := PackedByteArray()
 	out.resize((py1 - py0) * IW * 3)
@@ -148,9 +154,9 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 			var w01 := (1.0 - tx) * ty
 			var w11 := tx * ty
 			# WGRandom.hash2(px, py, pix_seed), развёрнут на месте (см. Parallel)
-			var hh := ((((px & 0xFFFF) * 374761393 + ((((px >> 16) * 374761393) & 0xFFFF) << 16)) + ((py & 0xFFFF) * 668265263 + ((((py >> 16) * 668265263) & 0xFFFF) << 16))) & 0xFFFFFFFF) ^ pix_seed
+			var hh := ((((px & 0xFFFF) * HASH_X + ((((px >> 16) * HASH_X) & 0xFFFF) << 16)) + ((py & 0xFFFF) * HASH_Y + ((((py >> 16) * HASH_Y) & 0xFFFF) << 16))) & 0xFFFFFFFF) ^ pix_seed
 			hh ^= hh >> 13
-			hh = ((hh & 0xFFFF) * 1274126177 + ((((hh >> 16) * 1274126177) & 0xFFFF) << 16)) & 0xFFFFFFFF
+			hh = ((hh & 0xFFFF) * HASH_MIX + ((((hh >> 16) * HASH_MIX) & 0xFFFF) << 16)) & 0xFFFFFFFF
 			var hs := float((hh ^ (hh >> 16)) & 0xFFFFFFFF) / 4294967296.0
 			var wv := wf[a] * w00 + wf[b] * w10 + wf[c] * w01 + wf[d] * w11 + n_jx.noise(fx * 0.25, fy * 0.25) * 0.006 + n_jy.noise(fx * 0.9 + 31.0, fy * 0.9) * 0.004
 			var near := ny_t * W + mini(W - 1, maxi(0, roundi(fx)))
@@ -187,10 +193,10 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 				Gs = G
 				Bs = Bc
 			else:
-				# WGRandom.hash2(py, px, pix_seed ^ 0x5bd1e995)
-				hh = ((((py & 0xFFFF) * 374761393 + ((((py >> 16) * 374761393) & 0xFFFF) << 16)) + ((px & 0xFFFF) * 668265263 + ((((px >> 16) * 668265263) & 0xFFFF) << 16))) & 0xFFFFFFFF) ^ seed2
+				# WGRandom.hash2(py, px, pix_seed ^ SEED_DETAIL)
+				hh = ((((py & 0xFFFF) * HASH_X + ((((py >> 16) * HASH_X) & 0xFFFF) << 16)) + ((px & 0xFFFF) * HASH_Y + ((((px >> 16) * HASH_Y) & 0xFFFF) << 16))) & 0xFFFFFFFF) ^ seed2
 				hh ^= hh >> 13
-				hh = ((hh & 0xFFFF) * 1274126177 + ((((hh >> 16) * 1274126177) & 0xFFFF) << 16)) & 0xFFFFFFFF
+				hh = ((hh & 0xFFFF) * HASH_MIX + ((((hh >> 16) * HASH_MIX) & 0xFFFF) << 16)) & 0xFFFFFFFF
 				var hs2 := float((hh ^ (hh >> 16)) & 0xFFFFFFFF) / 4294967296.0
 				var jx := n_jx.noise(fx * 0.3, fy * 0.3) * 1.0 + n_jx.noise(fx * 1.1 + 50.0, fy * 1.1) * 0.5 + (hs - 0.5) * 0.6
 				var jy := n_jy.noise(fx * 0.3, fy * 0.3) * 1.0 + n_jy.noise(fx * 1.1, fy * 1.1 - 50.0) * 0.5 + (hs2 - 0.5) * 0.6
@@ -340,7 +346,8 @@ class Canvas:
 		var g := col.g * 255.0
 		var b := col.b * 255.0
 		var avg := 0.0
-		if alpha < 1.0:
+		var translucent := alpha < 1.0
+		if translucent:
 			for p in pts:
 				avg += p.w
 			avg /= pts.size()
@@ -348,7 +355,7 @@ class Canvas:
 			var p: Dictionary = pts[k]
 			var q: Dictionary = pts[k + 1]
 			var width: float
-			if alpha < 1.0:
+			if translucent:
 				width = maxf(1.0, (avg * w_mul + w_add) * PX)
 			else:
 				width = maxf(1.0, ((p.w + q.w) * 0.5 * w_mul + w_add) * PX)

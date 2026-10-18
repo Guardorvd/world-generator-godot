@@ -42,6 +42,7 @@ const PICK_MIN := 0.36
 const PICK_MAX := 0.6
 
 
+## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
 static func run(w: WorldData) -> void:
 	var N := w.N
 	_pick_start(w)
@@ -88,6 +89,7 @@ static func normalize(v: float) -> float:
 	return minf(pow((v - SEA_RAW) / (TOP_RAW - SEA_RAW), 1.25), 1.4) if v >= SEA_RAW else (v - SEA_RAW) / (SEA_RAW - BOTTOM_RAW)
 
 
+## Микрорельеф на суше (h > 0); под водой (h <= 0) не действует. Тот же вид развёрнут в OuterLand.compute
 static func add_micro(h: float, micro: float) -> float:
 	return maxf(1e-4, h + micro * 0.006 * minf(1.0, h * 40.0)) if h > 0.0 else h
 
@@ -108,6 +110,7 @@ static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel:
 	return h
 
 
+## Строки j0..j1 прямоугольника (один кусок работы для Parallel.bands)
 static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int) -> PackedFloat32Array:
 	var warp_x: Simplex = w.noise.warpX.clone()
 	var warp_y: Simplex = w.noise.warpY.clone()
@@ -134,7 +137,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var macro := cont.fbm((X + mx) / MACRO + 91.7, (Y + my) / MACRO - 43.1, 2)
 	var base := c + minf(macro * MACRO_AMP, MACRO_LIFT) + 0.1
 	# smoothstep развёрнут на месте (см. Parallel)
-	var t := clampf((base - -0.05) / (0.25 - -0.05), 0.0, 1.0)
+	var t := clampf((base + 0.05) / (0.25 + 0.05), 0.0, 1.0)
 	var land := t * t * (3.0 - 2.0 * t)
 	# Где горы. Медленный шум размера сдвигает порог: где он высок, массив большой, где низок — небольшая группа гор
 	var lo := -0.15 - mask_n.fbm(X / MASSIF - 21.3, Y / MASSIF + 5.9, 2) * 0.3
@@ -145,7 +148,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# Характер местности (с 1.9.8): медленный шум делит сушу на равнины и холмистые края. На равнинах
 	# слабые окраины гор стихают (там, где горы во всю силу, массив остаётся), а вокруг гор холмистость
 	# растёт сама (предгорья): равнина переходит в горы через холмы, без резкой границы
-	t = clampf((hill.fbm(X / CHARACTER + 41.9, Y / CHARACTER - 66.1, 2) - -0.15) / 0.4, 0.0, 1.0)
+	t = clampf((hill.fbm(X / CHARACTER + 41.9, Y / CHARACTER - 66.1, 2) + 0.15) / 0.4, 0.0, 1.0)
 	var rough := t * t * (3.0 - 2.0 * t)
 	t = clampf((mask - FOOTHILLS) / FOOTHILLS, 0.0, 1.0)
 	mask *= rough + (1.0 - rough) * mask * mask
@@ -193,7 +196,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var k := int(s)
 	var t := clampf((s - k - 0.3) / 0.4, 0.0, 1.0)
 	var f := t * t * (3.0 - 2.0 * t)
-	t = clampf((hill.fbm(X / MASSIF + 63.2, Y / MASSIF + 12.5, 2) - -0.25) / 0.5, 0.0, 1.0)
+	t = clampf((hill.fbm(X / MASSIF + 63.2, Y / MASSIF + 12.5, 2) + 0.25) / 0.5, 0.0, 1.0)
 	var sharp := t * t * (3.0 - 2.0 * t)
 	var asym := 1.0 + (ASYM - 1.0) * sharp
 	var r := 0.0
@@ -209,7 +212,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	r = maxf(0.0, r + sp * sp * maxf(0.0, r * (1.0 - r)) * 0.9)
 	# Острые горы — узкие гребни (r^2), сглаженные — широкие (r^1.5)
 	var q := sqrt(r) * r
-	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) - -0.3) / 0.6, 0.0, 1.0)
+	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) + 0.3) / 0.6, 0.0, 1.0)
 	var amp := 0.6 + 0.55 * t * t * (3.0 - 2.0 * t)
 	return (q + (r * r - q) * sharp) * amp
 

@@ -3,11 +3,12 @@ extends RefCounted
 ## Алгоритмы на квадратной сетке карты: соседи, поля расстояний, сглаживание ломаных.
 ## Клетка (x, y) хранится в плоских массивах по индексу i = y * W + x. Копия js/core/grid.js.
 
+const SQRT2 := 1.4142135623730951
+
 ## 8 соседей: сначала 4 по сторонам, затем 4 по диагоналям; DL — длина шага
 const DX: Array[int] = [1, -1, 0, 0, 1, 1, -1, -1]
 const DY: Array[int] = [0, 0, 1, -1, 1, -1, 1, -1]
-const DL: Array[float] = [1.0, 1.0, 1.0, 1.0, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951]
-const SQRT2 := 1.4142135623730951
+const DL: Array[float] = [1.0, 1.0, 1.0, 1.0, SQRT2, SQRT2, SQRT2, SQRT2]
 
 ## Самые долгие циклы генерации есть и на C# (FastGrid.cs): в сборке Godot .NET они идут там.
 const FAST_GRID_SCRIPT := "res://scripts/core/FastGrid.cs"
@@ -26,19 +27,15 @@ static func fast_grid() -> Object:
 	return script.new()
 
 
-static func smoothstep_js(a: float, b: float, x: float) -> float:
-	var t := clampf((x - a) / (b - a), 0.0, 1.0)
-	return t * t * (3.0 - 2.0 * t)
-
-
-## Дистанционное преобразование (фаска 1 / √2): расстояние в клетках до ближайшей клетки, где source[i] != 0
 ## Лежит ли клетка i на краю карты w × h
+@warning_ignore("integer_division")
 static func on_edge(i: int, w: int, h: int) -> bool:
 	var x := i % w
 	var y := i / w
 	return x == 0 or y == 0 or x == w - 1 or y == h - 1
 
 
+## Дистанционное преобразование (фаска 1 / √2): расстояние в клетках до ближайшей клетки, где source[i] != 0
 static func distance_field(w: int, h: int, source: PackedByteArray) -> PackedFloat32Array:
 	var n := w * h
 	var d := PackedFloat32Array()
@@ -74,7 +71,8 @@ static func distance_field(w: int, h: int, source: PackedByteArray) -> PackedFlo
 	return d
 
 
-## Сглаживание ломаной (алгоритм Чайкина). Точки {x, y, w[, e]}: w и e интерполируются вместе с координатами
+## Сглаживание ломаной (алгоритм Чайкина). Точки {x, y, w[, e]}: w и e интерполируются вместе с координатами.
+## Поле e должно быть либо у всех точек, либо ни у одной (проверяется только у первой точки отрезка)
 static func chaikin(pts: Array, iter: int) -> Array:
 	for k in iter:
 		if pts.size() < 3:

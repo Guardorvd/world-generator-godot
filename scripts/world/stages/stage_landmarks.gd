@@ -47,14 +47,14 @@ static func _place_settlements(w: WorldData) -> void:
 	cand.sort_custom(_by_score_desc)
 	var want := clampi(roundi(12.0 * w.scale), 4, 26)
 	var min_d := maxf(28.0, W / 6.5)
-	for c in cand:
+	for c: Array in cand:
 		if settlements.size() >= want:
 			break
 		var i: int = c[1]
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
 		var close := false
-		for s in settlements:
+		for s: Dictionary in settlements:
 			if Grid.hypot(s.x - x, s.y - y) < min_d:
 				close = true
 				break
@@ -62,7 +62,7 @@ static func _place_settlements(w: WorldData) -> void:
 			continue
 		settlements.append({x = x, y = y, i = i, name = w.make_name(Names.SETTLEMENT), huts = []})
 	# Дома вокруг центра поселения, не на воде и не на крутых склонах
-	for s in settlements:
+	for s: Dictionary in settlements:
 		var n := 4 + floori(rng.next_float() * 6)
 		var k := 0
 		var tries := 0
@@ -78,7 +78,7 @@ static func _place_settlements(w: WorldData) -> void:
 			if ocean[ti] != 0 or lake[ti] != 0 or river[ti] != 0 or biome[ti] == Biomes.ROCK or slope[ti] > 0.45:
 				continue
 			var near := false
-			for u in s.huts:
+			for u: Dictionary in s.huts:
 				if Grid.hypot(u.x - hx, u.y - hy) < 1.4:
 					near = true
 					break
@@ -115,14 +115,14 @@ static func _place_peaks(w: WorldData) -> void:
 				cand.append([elev[i], i])
 	cand.sort_custom(_by_score_desc)
 	var want := clampi(roundi(6.0 * w.scale), 2, 14)
-	for c in cand:
+	for c: Array in cand:
 		if peaks.size() >= want:
 			break
 		var i: int = c[1]
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
 		var close := false
-		for p in peaks:
+		for p: Dictionary in peaks:
 			if Grid.hypot(p.x - x, p.y - y) < 40.0:
 				close = true
 				break

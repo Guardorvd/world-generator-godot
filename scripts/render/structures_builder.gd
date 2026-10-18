@@ -21,6 +21,11 @@ static func _box(batch: MeshBatch, at: Transform3D, size: Vector3, offset: Vecto
 	batch.add(b, at * Transform3D(Basis(), offset), mat)
 
 
+## Перило-столбик высотой 1 м, основанием в точке at
+static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
+	_box(batch, Transform3D(), Vector3(0.14, 1.0, 0.14), at + Vector3(0, 0.5, 0), mat)
+
+
 ## Добавляет все мосты и туннели в parent одним мешем (см. MeshBatch)
 static func build(parent: Node3D, heights: Heightfield) -> void:
 	var batch := MeshBatch.new()
@@ -63,29 +68,29 @@ static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood:
 		var extra := (0.5 if k == 0 else 0.0) + (0.5 if k == n - 1 else 0.0)
 		var shift := (0.25 if k == n - 1 else 0.0) - (0.25 if k == 0 else 0.0)
 		_box(batch, at, Vector3(half * 2.0, 0.3, seg + extra + 0.05), Vector3(0, -0.15, -seg * 0.5 - shift), wood)
-		for sd in [-1.0, 1.0]:
+		for sd: float in [-1.0, 1.0]:
 			_box(batch, at, Vector3(0.12, 0.12, seg), Vector3(sd * (half + 0.1), 1.0, -seg * 0.5), rail)
-		for q in [p0 + side, p0 - side]:
-			_box(batch, Transform3D(), Vector3(0.14, 1.0, 0.14), q + Vector3(0, 0.5, 0), rail)
+		for q: Vector3 in [p0 + side, p0 - side]:
+			_post(batch, q, rail)
 		# опора под стыком пролётов примерно через 8 м
 		if k > 0 and k % 2 == 0:
-			for q in [p0 + side * 0.85, p0 - side * 0.85]:
+			for q: Vector3 in [p0 + side * 0.85, p0 - side * 0.85]:
 				var g := heights.ground_at(q.x, q.z)
 				var tall: float = q.y - 0.3 - g + 1.0
 				if tall >= 1.0:
 					_box(batch, Transform3D(), Vector3(0.35, tall, 0.35), Vector3(q.x, g - 1.0 + tall * 0.5, q.z), wood)
 	var end := Vector3(s.bx, s.by, s.bz)
-	for q in [end + side, end - side]:
-		_box(batch, Transform3D(), Vector3(0.14, 1.0, 0.14), q + Vector3(0, 0.5, 0), rail)
+	for q: Vector3 in [end + side, end - side]:
+		_post(batch, q, rail)
 
 
 static func _tunnel(batch: MeshBatch, at: Transform3D, half: float, length: float, mid: float, stone: Material, portal: Material) -> void:
 	var h := TUNNEL_HEIGHT
-	for side in [-1.0, 1.0]:
+	for side: float in [-1.0, 1.0]:
 		_box(batch, at, Vector3(1.0, h + 1.0, length), Vector3(side * (half + 0.5), h * 0.5 - 0.5, mid), stone)
 	_box(batch, at, Vector3(half * 2.0 + 2.0, 0.8, length), Vector3(0, h + 0.4, mid), stone)
 	# порталы на обоих концах: два столба и перемычка
-	for z in [0.0, -length]:
-		for side in [-1.0, 1.0]:
+	for z: float in [0.0, -length]:
+		for side: float in [-1.0, 1.0]:
 			_box(batch, at, Vector3(1.4, h + 2.0, 1.0), Vector3(side * (half + 0.7), h * 0.5, z), portal)
 		_box(batch, at, Vector3(half * 2.0 + 2.8, 1.2, 1.0), Vector3(0, h + 0.8, z), portal)

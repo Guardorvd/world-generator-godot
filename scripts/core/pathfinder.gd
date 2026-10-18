@@ -12,9 +12,12 @@ extends RefCounted
 ## стоимости и путь может выйти чуть дороже самого дешёвого. Замер 2.3 (5 миров, ~380 поисков): так вышло
 ## у 4 путей, дороже не больше чем на 0,1 %; с честной оценкой 0.3 пути те же, а поиск дорог на четверть дольше
 const H_COST := 0.6
+## Начальная ёмкость кучи (элементов); растёт вдвое по необходимости
+const HEAP_START_CAP := 1 << 16
 
 var W := 0
 var H := 0
+## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
 var g := PackedFloat32Array()
 var from := PackedInt32Array()
 var seen := PackedInt32Array()
@@ -36,14 +39,16 @@ func _init(width: int, height: int) -> void:
 	from.resize(W * H)
 	seen.resize(W * H)
 	done.resize(W * H)
-	heap_ids.resize(1 << 16)
-	heap_keys.resize(1 << 16)
+	heap_ids.resize(HEAP_START_CAP)
+	heap_keys.resize(HEAP_START_CAP)
 
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
+@warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int) -> PackedInt32Array:
 	if _fast != null:
 		return _fast.FindPath(cost, s, t)
+	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
 	var H := self.H
 	var g := self.g
@@ -129,6 +134,8 @@ func find_path(cost: PackedFloat32Array, s: int, t: int) -> PackedInt32Array:
 				from[n] = c
 				var ax := absi(nx - tx)
 				var ay := absi(ny - ty)
+				# 0.414 ≈ √2 − 1 (октильная оценка). Не заменять на Grid.SQRT2 - 1: другие знаки меняют
+				# тай-брейки и результат, и тогда GDScript перестаёт совпадать с FastGrid.cs
 				var key: float = ng + (maxi(ax, ay) + 0.414 * mini(ax, ay)) * H_COST
 				# добавить в кучу
 				if hn >= ids.size():

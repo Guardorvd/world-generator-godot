@@ -39,13 +39,13 @@ static func fbm_field(W: int, H: int, noise: Simplex, d: float, oct: int, ox: fl
 		var r := PackedFloat64Array()
 		r.resize((y1 - y0) * W)
 		var o := 0
-		for y in range(y0, y1):
-			for x in W:
+		for y: int in range(y0, y1):
+			for x: int in W:
 				r[o] = n.fbm(x / d + ox, y / d + oy, oct)
 				o += 1
 		return r)
 	var out := PackedFloat64Array()
-	for p in parts:
+	for p: PackedFloat64Array in parts:
 		out.append_array(p)
 	return out
 
@@ -60,8 +60,8 @@ static func fbm_rect(noise: Simplex, x0: int, y0: int, cw: int, ch: int, d: floa
 	var r := PackedFloat64Array()
 	r.resize(cw * ch)
 	var o := 0
-	for j in ch:
-		for i in cw:
+	for j: int in ch:
+		for i: int in cw:
 			r[o] = n.fbm((x0 + i) / d, (y0 + j) / d, oct)
 			o += 1
 	return r

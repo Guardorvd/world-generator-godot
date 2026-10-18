@@ -7,12 +7,16 @@ extends RefCounted
 ## С 2.2 велосипед для столкновений — три круга вдоль рамы (колёса и середина), а не точка:
 ## переднее колесо не въезжает в дом и не высовывается за перила.
 
-const TILE := GameConfig.TILE
 const WHEEL_R := 0.34   # радиус колеса, м
 const GEAR := 2.8       # оборотов колеса на один оборот педалей
 const WALL_LOSS := 6.0  # 1/с: как быстро удар в стену в лоб гасит скорость (при скольжении вдоль стены почти не гасит)
 const BODY_R := 0.3     # радиус кругов, которыми велосипед задевает препятствия, м (руль шириной 0,6 м)
 const AXLE := 0.57      # круги колёс — на столько впереди и позади середины, м: вместе с BODY_R до края колеса (0,53 + 0,34)
+const SPRING_K := 170.0   # жёсткость подвески, 1/с²
+const SPRING_DAMP := 14.0 # затухание подвески, 1/с
+const SAG_MAX := 0.16     # подвеска просаживается не больше этого, м
+const STRETCH_MAX := 0.08 # и вытягивается при прыжке не больше этого, м
+const SOFT_IMPACT := 7.0  # приземление жёстче этого (м/с) гасит скорость
 
 var x := 0.0          # метры
 var z := 0.0
@@ -46,7 +50,7 @@ static func park_near(p: PlayerState, yaw: float, w: WorldData, heights: Heightf
 	b.x = p.x
 	b.z = p.z
 	b.y = p.feet
-	for side in [1.6, -1.6]:
+	for side: float in [1.6, -1.6]:
 		var bx: float = p.x + cos(yaw) * side
 		var bz: float = p.z - sin(yaw) * side
 		if b.fits(bx, bz, yaw, w, heights):
@@ -101,7 +105,7 @@ func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
 	var fwd := Vector2(-sin(heading), -cos(heading))
 	var dirs: Array[Vector2] = [Vector2(-cos(heading), sin(heading)), Vector2(cos(heading), -sin(heading)), -fwd, fwd]
 	for dist: float in [0.9, 1.5]:
-		for d in dirs:
+		for d: Vector2 in dirs:
 			var q := Vector2(x, z) + d * dist
 			if PlayerState.is_passable(w, heights, q.x, q.y, y, PlayerState.BODY_R):
 				return q
@@ -167,11 +171,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	if full > 0.0:
 		# если велосипед уже задевает препятствие (поставлен вплотную), выехать можно: проверяется середина
 		var hd := heading
-		var f := y
 		var free := func(px: float, pz: float) -> bool:
 			if free_now:
 				return fits(px, pz, hd, w, heights)
-			return PlayerState.is_passable(w, heights, px, pz, f)
+			return PlayerState.is_passable(w, heights, px, pz, y)
 		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt)
 		x = to[0]
 		z = to[1]
@@ -214,13 +217,13 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			y = g
 
 	# подвеска — пружина с затуханием, упирается в ход 0.16 м
-	squash_v += (-170.0 * squash - 14.0 * squash_v) * dt
+	squash_v += (-SPRING_K * squash - SPRING_DAMP * squash_v) * dt
 	squash += squash_v * dt
-	if squash > 0.16:
-		squash = 0.16
+	if squash > SAG_MAX:
+		squash = SAG_MAX
 		squash_v = minf(squash_v, 0.0)
-	elif squash < -0.08:
-		squash = -0.08
+	elif squash < -STRETCH_MAX:
+		squash = -STRETCH_MAX
 		squash_v = maxf(squash_v, 0.0)
 
 	var tilt_goal := atan(climb)
@@ -281,8 +284,8 @@ func _land(g: float, heights: Heightfield) -> void:
 	if impact > GameConfig.BIKE_CRASH:
 		crashed = true
 		speed = 0.0
-	elif impact > 7.0:
-		speed *= 1.0 - clampf((impact - 7.0) * 0.05, 0.0, 0.5)
+	elif impact > SOFT_IMPACT:
+		speed *= 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)
 	# короткие подскоки на неровностях не мешают прыгать
 	if air_time > 0.2:
 		_hop_wait = 0.25

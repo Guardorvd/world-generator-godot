@@ -38,9 +38,12 @@ func setup(w: WorldData, h: Heightfield) -> void:
 ## Сразу загрузить все куски в радиусе radius (при старте игры), чтобы ближний рельеф не вырастал на глазах
 func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 	var keys: Array[Vector2i] = []
-	for key in _wanted(x, z, radius):
+	for key: Vector2i in _wanted(x, z, radius):
 		if not _nodes.has(key) and not _tasks.has(key):
 			keys.append(key)
+	if keys.is_empty():
+		_checked_at = Vector2.INF
+		return # группу задач без элементов не создаём
 	var outs: Array = []
 	outs.resize(keys.size())
 	var lock := Mutex.new()
@@ -73,7 +76,7 @@ func update(x: float, z: float) -> void:
 				_nodes.erase(key)
 				land.chunks.erase(key)
 		_queue.clear()
-		for key in _wanted(x, z):
+		for key: Vector2i in _wanted(x, z):
 			if not _nodes.has(key) and not _tasks.has(key):
 				_queue.append(key)
 		_queue.reverse()
@@ -159,7 +162,7 @@ func _build(key: Vector2i) -> Dictionary:
 	var i0 := key.x * C
 	var j0 := key.y * C
 	var palette := PackedColorArray()
-	for bd in Biomes.LIST:
+	for bd: Dictionary in Biomes.LIST:
 		palette.append(Color8(bd.color[0], bd.color[1], bd.color[2]))
 	# высоты и цвета клеток куска с запасом в клетку (для нормалей): на карте — из неё
 	var hs := PackedFloat32Array()
@@ -176,7 +179,7 @@ func _build(key: Vector2i) -> Dictionary:
 				hs[k] = hv[j * W + i]
 				bi = biome[j * W + i]
 			else:
-				# Heightfield.outer_meters, развёрнута на месте (задача в потоке, см. Parallel)
+				# Heightfield.outer_meters, развёрнута на месте (тот же расчёт, что в ней)
 				var h := fh[k]
 				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
@@ -203,7 +206,13 @@ func _build(key: Vector2i) -> Dictionary:
 			if i >= 0 and j >= 0 and i + 1 <= W - 1 and j + 1 <= H - 1:
 				continue
 			var p := b * V + a
-			idx.append_array([p, p + 1, p + V, p + 1, p + V + 1, p + V])
+			# два треугольника квадрата; без временного массива на каждый квадрат
+			idx.append(p)
+			idx.append(p + 1)
+			idx.append(p + V)
+			idx.append(p + 1)
+			idx.append(p + V + 1)
+			idx.append(p + V)
 	var mesh: ArrayMesh = null
 	if not idx.is_empty():
 		var arrays := []

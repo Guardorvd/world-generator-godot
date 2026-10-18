@@ -101,7 +101,7 @@ func make_name(parts: Dictionary) -> String:
 	var a: Array = parts.first
 	var b: Array = parts.second
 	var sep: String = parts.sep
-	for k in 40:
+	for _attempt in 40:
 		var n: String = a[floori(rng.next_float() * a.size())] + sep + b[floori(rng.next_float() * b.size())]
 		if not used_names.has(n):
 			used_names[n] = true

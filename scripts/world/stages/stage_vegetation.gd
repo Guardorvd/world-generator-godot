@@ -6,6 +6,7 @@ extends RefCounted
 
 const PROGRESS := 0.76
 const LABEL := "Леса, кустарники и камни"
+const VILLAGE_R := 7.0 # полуширина квадрата вокруг поселения, клеток
 
 
 static func run(w: WorldData) -> void:
@@ -27,9 +28,9 @@ static func run(w: WorldData) -> void:
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)
-	for s in w.settlements:
-		for y in range(maxi(0, ceili(s.y - 7)), mini(H - 1, floori(s.y + 7)) + 1):
-			for x in range(maxi(0, ceili(s.x - 7)), mini(W - 1, floori(s.x + 7)) + 1):
+	for s: Dictionary in w.settlements:
+		for y in range(maxi(0, ceili(s.y - VILLAGE_R)), mini(H - 1, floori(s.y + VILLAGE_R)) + 1):
+			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
 				village[y * W + x] = 1
 	w.CS = WorldData.CHUNK_SIZE
 	w.CW = ceili(float(W) / w.CS)
@@ -52,9 +53,9 @@ static func run(w: WorldData) -> void:
 				continue
 			var dens := b_trees[bi]
 			var f := forest[i]
-			# Grid.smoothstep_js развёрнут на месте
+			# smoothstep развёрнут на месте
 			if dens > 0.3:
-				var t := clampf((f - -0.35) / (0.15 - -0.35), 0.0, 1.0)
+				var t := clampf((f + 0.35) / (0.15 + 0.35), 0.0, 1.0)
 				dens *= t * t * (3.0 - 2.0 * t) # поляны в лесу
 			else:
 				var t := clampf((f - 0.1) / (0.5 - 0.1), 0.0, 1.0)
@@ -103,10 +104,10 @@ static func run(w: WorldData) -> void:
 
 
 static func near_hut(settlements: Array, ox: float, oy: float) -> bool:
-	for s in settlements:
-		if absf(s.x - ox) > 7.0 or absf(s.y - oy) > 7.0:
+	for s: Dictionary in settlements:
+		if absf(s.x - ox) > VILLAGE_R or absf(s.y - oy) > VILLAGE_R:
 			continue
-		for u in s.huts:
+		for u: Dictionary in s.huts:
 			if absf(u.x - ox) < 0.75 and absf(u.y - oy) < 0.75:
 				return true
 	return false
@@ -126,7 +127,7 @@ class ObjStore:
 	func _init(world: WorldData, village_mask: PackedByteArray) -> void:
 		w = world
 		village = village_mask
-		for c in w.CW * w.CH:
+		for c: int in w.CW * w.CH:
 			chunk_lists.append([])
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:

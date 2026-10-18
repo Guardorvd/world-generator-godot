@@ -20,14 +20,14 @@ static func run(w: WorldData) -> void:
 	var qh := 0
 	var qt := 0
 	for x in W:
-		for y in [0, H - 1]:
+		for y: int in [0, H - 1]:
 			var i: int = y * W + x
 			if h[i] < 0.0 and ocean[i] == 0:
 				ocean[i] = 1
 				q[qt] = i
 				qt += 1
 	for y in H:
-		for x in [0, W - 1]:
+		for x: int in [0, W - 1]:
 			var i: int = y * W + x
 			if h[i] < 0.0 and ocean[i] == 0:
 				ocean[i] = 1

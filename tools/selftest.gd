@@ -88,15 +88,15 @@ func _init() -> void:
 		fresh[key] = fp
 		if print_only:
 			continue
-		var exp: Dictionary = ref.get(key, {})
+		var want: Dictionary = ref.get(key, {})
 		var bad := PackedStringArray()
 		if not settlements_connected(w):
 			bad.append("связь поселений по дорогам и тропам")
-		if exp.is_empty():
+		if want.is_empty():
 			bad.append("нет случая в эталоне (запустите с -- --print)")
 		else:
 			for k in fp:
-				if not exp.has(k) or (str(exp[k]) != str(fp[k]) if fp[k] is String else int(exp[k]) != int(fp[k])):
+				if not want.has(k) or (str(want[k]) != str(fp[k]) if fp[k] is String else int(want[k]) != int(fp[k])):
 					bad.append(k)
 		if bad.size() > 0:
 			fails += 1

@@ -3,6 +3,7 @@ extends RefCounted
 ## Игрок: появление, движение по местности, прыжок, проходимость. Копия js/game/player.js, без узлов сцены.
 
 const TILE := GameConfig.TILE
+const SPAWN_DIST := 3.5          # м от костра поселения до точки появления
 const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
 const BODY_R := 0.3     # радиус тела пешехода, м: стены, перила и дома не подпускают центр ближе (и камеру в них)
 const HUT_HALF := 1.6   # полуширина стен дома, м (квадрат 3,2 × 3,2, повёрнут дверью к костру, как в SettlementsBuilder)
@@ -55,8 +56,8 @@ static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
 		var best := -1.0
 		for k in 8:
 			var a := k * PI / 4.0
-			var x := fx + sin(a) * 3.5
-			var z := fz + cos(a) * 3.5
+			var x := fx + sin(a) * SPAWN_DIST
+			var z := fz + cos(a) * SPAWN_DIST
 			if heights.depth_at(x, z) >= GameConfig.FORD_DEPTH:
 				continue
 			var clear := INF
@@ -68,7 +69,7 @@ static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
 				p.z = z
 		if best < 0.0:
 			p.x = fx
-			p.z = fz + 3.5
+			p.z = fz + SPAWN_DIST
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
 

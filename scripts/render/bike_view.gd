@@ -12,10 +12,24 @@ const PEDAL_X := 0.14
 const HIP := Vector3(0.11, 0.95, 0.17)
 const THIGH := 0.43
 const SHIN := 0.43
+const STEER_VIEW := 0.35 # поворот переднего колеса в долях угла руля
 
-# состояние на двух последних тактах: x, высота рамы, z, наклон, курс, крен, подвеска, колёса, руль, педали
+# индексы состояния в tick: x, высота рамы, z, наклон, курс, крен, подвеска, колёса, руль, педали
+const S_X := 0
+const S_BODY_Y := 1
+const S_Z := 2
+const S_TILT := 3
+const S_HEADING := 4
+const S_ROLL := 5
+const S_SQUASH := 6
+const S_WHEEL := 7
+const S_STEER := 8
+const S_CRANK := 9
+
+# состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
 var _cur := PackedFloat64Array()
+var _mix := PackedFloat64Array() # буфер для draw, чтобы не выделять память на каждый кадр
 var _riding := false
 
 @onready var rider: Node3D = $Rider
@@ -47,28 +61,28 @@ func snap(b: BikeRide) -> void:
 
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
 func draw(alpha: float) -> void:
-	var v := PackedFloat64Array()
-	v.resize(_cur.size())
+	_mix.resize(_cur.size())
 	for i in _cur.size():
 		# курс и углы колёс и педалей идут через полный оборот: переход по короткой дуге
-		v[i] = lerp_angle(_prev[i], _cur[i], alpha) if i == 4 or i == 7 or i == 9 else lerpf(_prev[i], _cur[i], alpha)
+		var angular := i == S_HEADING or i == S_WHEEL or i == S_CRANK
+		_mix[i] = lerp_angle(_prev[i], _cur[i], alpha) if angular else lerpf(_prev[i], _cur[i], alpha)
 	# рама и седок опускаются на ход подвески, колёса остаются на земле
-	position = Vector3(v[0], v[1], v[2])
-	rotation = Vector3(v[3], v[4], v[5])
-	rear_wheel.position.y = WHEEL_Y + v[6]
-	front_wheel.position.y = WHEEL_Y + v[6]
-	rear_wheel.rotation.x = -v[7]
-	front_wheel.rotation.x = -v[7]
-	front_wheel.rotation.y = -v[8] * 0.35
-	crank.rotation.x = -v[9]
+	position = Vector3(_mix[S_X], _mix[S_BODY_Y], _mix[S_Z])
+	rotation = Vector3(_mix[S_TILT], _mix[S_HEADING], _mix[S_ROLL])
+	rear_wheel.position.y = WHEEL_Y + _mix[S_SQUASH]
+	front_wheel.position.y = WHEEL_Y + _mix[S_SQUASH]
+	rear_wheel.rotation.x = -_mix[S_WHEEL]
+	front_wheel.rotation.x = -_mix[S_WHEEL]
+	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW
+	crank.rotation.x = -_mix[S_CRANK]
 	# педали держатся горизонтально
-	pedal_l.rotation.x = v[9]
-	pedal_r.rotation.x = v[9]
+	pedal_l.rotation.x = _mix[S_CRANK]
+	pedal_r.rotation.x = _mix[S_CRANK]
 	rider.visible = _riding
 	if _riding:
-		var c := cos(-v[9]) * CRANK_R
-		var s := sin(-v[9]) * CRANK_R
-		_leg(thigh_r, shin_r, Vector3(HIP.x, HIP.y, HIP.z), Vector3(PEDAL_X, CRANK_Y - c, -s))
+		var c := cos(-_mix[S_CRANK]) * CRANK_R
+		var s := sin(-_mix[S_CRANK]) * CRANK_R
+		_leg(thigh_r, shin_r, HIP, Vector3(PEDAL_X, CRANK_Y - c, -s))
 		_leg(thigh_l, shin_l, Vector3(-HIP.x, HIP.y, HIP.z), Vector3(-PEDAL_X, CRANK_Y + c, s))
 
 

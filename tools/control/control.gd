@@ -7,6 +7,9 @@ const BASELINE := "res://tools/control/baseline"
 const RUNS := "res://tools/control/runs"
 const TILE := GameConfig.TILE
 const SelfTest := preload("res://tools/selftest.gd")
+const ShotUtil := preload("res://tools/shot_util.gd")
+const LOAD_TIMEOUT_MS := ShotUtil.LOAD_TIMEOUT_MS
+const WINDOW_SIZE := Vector2i(1280, 720)   # окно для снимков и замеров
 
 
 ## Список миров из seeds.json
@@ -25,13 +28,18 @@ static func arg(name: String, default: String = "") -> String:
 	return args[k + 1] if k >= 0 and k + 1 < args.size() else default
 
 
+## Путь к папке без res://: относительный считается от папки проекта (пустой остаётся пустым)
+static func abs_dir(dir: String) -> String:
+	if dir.begins_with("res://"):
+		return ProjectSettings.globalize_path(dir)
+	if dir != "" and dir.is_relative_path():
+		return ProjectSettings.globalize_path("res://").path_join(dir)
+	return dir
+
+
 ## Папка результатов: --out или tools/control/runs/<версия>; создаётся, если её нет
 static func out_dir() -> String:
-	var dir := arg("out", RUNS.path_join(version()))
-	if dir.begins_with("res://"):
-		dir = ProjectSettings.globalize_path(dir)
-	elif dir.is_relative_path():
-		dir = ProjectSettings.globalize_path("res://").path_join(dir)
+	var dir := abs_dir(arg("out", RUNS.path_join(version())))
 	DirAccess.make_dir_recursive_absolute(dir)
 	# Godot не должен импортировать снимки как ресурсы проекта
 	var gdignore := dir.path_join(".gdignore")
@@ -113,7 +121,7 @@ static func world_stats(w: WorldData) -> Dictionary:
 	var lengths := {}
 	for t in w.trails:
 		kinds[t.kind] = int(kinds.get(t.kind, 0)) + 1
-		lengths[t.kind] = float(lengths.get(t.kind, 0.0)) + _length(t.pts) * TILE
+		lengths[t.kind] = float(lengths.get(t.kind, 0.0)) + path_length(t.pts) * TILE
 	var huts := 0
 	for s in w.settlements:
 		huts += s.huts.size()
@@ -147,7 +155,8 @@ static func _rounded(d: Dictionary) -> Dictionary:
 	return r
 
 
-static func _length(pts: Array) -> float:
+## Длина ломаной в клетках
+static func path_length(pts: Array) -> float:
 	var s := 0.0
 	for k in range(1, pts.size()):
 		s += Vector2(pts[k].x - pts[k - 1].x, pts[k].y - pts[k - 1].y).length()
@@ -208,7 +217,7 @@ static func _longest(lines: Array) -> Array:
 	var best: Array = []
 	var best_len := 0.0
 	for pts in lines:
-		var l := _length(pts)
+		var l := path_length(pts)
 		if l > best_len:
 			best_len = l
 			best = pts
@@ -235,7 +244,8 @@ static func views(game: GameWorld) -> Array:
 	if river.size() > 2:
 		var m := river.size() / 2
 		var pos := _at(h, river[m].x, river[m].y, 22.0)
-		var t := _at(h, river[_along(river, m, 40.0)].x, river[_along(river, m, 40.0)].y, 0.0)
+		var end: Dictionary = river[_along(river, m, 40.0)]
+		var t := _at(h, end.x, end.y, 0.0)
 		out.append({name = "valley", title = "Долина реки", pos = pos, target = t})
 	var roads: Array = []
 	for t in w.trails:

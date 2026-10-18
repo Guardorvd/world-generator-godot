@@ -61,7 +61,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		_grass_mesh = Models.grass_mesh()
 	$Terrain.mesh = loaded.terrain_mesh
 	$Terrain.material_override = loaded.terrain_material
-	for node in loaded.water:
+	for node: Node in loaded.water:
 		$Water.add_child(node)
 		if node.name == "Ocean":
 			_ocean = node
@@ -182,7 +182,7 @@ func _notification(what: int) -> void:
 	# окно потеряло фокус: кнопки мыши и клавиш движения могли отпуститься без нас,
 	# иначе игрок продолжит идти или тянуть взгляд после возвращения
 	_dragging = false
-	for action in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
+	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
 		Input.action_release(action)
 	# пауза, как при выходе из захвата мыши в браузере
 	if not paused and player != null:
@@ -196,8 +196,7 @@ func _notification(what: int) -> void:
 func _physics_process(dt: float) -> void:
 	if player == null or paused:
 		return
-	_prev = Vector3(player.x, player.feet, player.z)
-	_prev_bob = player.bob
+	_store_prev()
 	var yaw0 := yaw
 	var pitch0 := pitch
 	time += dt
@@ -236,15 +235,20 @@ func _physics_process(dt: float) -> void:
 	bike_view.tick(bike)
 	if crashed:
 		_snap()
-	for text in player.check_discoveries(world, hud.visited):
+	for text: String in player.check_discoveries(world, hud.visited):
 		hud.toast(text)
+
+
+## Запомнить положение игрока как предпоследний такт (для интерполяции кадра)
+func _store_prev() -> void:
+	_prev = Vector3(player.x, player.feet, player.z)
+	_prev_bob = player.bob
 
 
 ## Последний такт становится и предпоследним: после переноса игрока (сел, слез, упал) кадр не тянет
 ## его плавно со старого места
 func _snap() -> void:
-	_prev = Vector3(player.x, player.feet, player.z)
-	_prev_bob = player.bob
+	_store_prev()
 	_tick_yaw = 0.0
 	_tick_pitch = 0.0
 	bike_view.snap(bike)

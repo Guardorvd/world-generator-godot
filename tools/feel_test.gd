@@ -5,6 +5,8 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/feel_test.gd
 
 const DT := 1.0 / 60.0
+const BODY_REACH := 0.1     # пешеход: запас до стены на центр и камеру, м
+const WHEEL_REACH := 0.87   # край колеса от середины велосипеда: ось в 0,53 м, радиус колеса 0,34 м
 
 var _fails := 0
 
@@ -81,7 +83,7 @@ func _init() -> void:
 
 	# Мосты и туннели: каждый пешком и на велосипеде по оси от начала до конца, не падая с настила
 	var kinds := {}
-	for c in [["abc", 128], ["Туман-4821", 192], ["Север-1234", 256], ["Ущелье", 512]]:
+	for c: Array in [["abc", 128], ["Туман-4821", 192], ["Север-1234", 256], ["Ущелье", 512]]:
 		var w2 := WorldGenerator.generate(c[0], c[1])
 		var h2 := Heightfield.new(w2)
 		# как в игре: за краем карты есть земля (мост бывает и у самого края)
@@ -90,7 +92,7 @@ func _init() -> void:
 		for st: Dictionary in h2.structures:
 			kinds[st.tunnel] = true
 			var name := "туннель" if st.tunnel else "мост"
-			for ride in [false, true]:
+			for ride: bool in [false, true]:
 				if _cross(w2, h2, st, ride):
 					ok += 1
 				else:
@@ -103,7 +105,7 @@ func _init() -> void:
 				continue
 			for deg in [15.0, 45.0, 90.0]:
 				for sd in [-1.0, 1.0]:
-					for ride in [false, true]:
+					for ride: bool in [false, true]:
 						leaks += _into_wall(w2, h2, st, deg_to_rad(deg) * sd, ride, DT)
 		# длинный такт (4 в секунду): тело всё равно не перепрыгивает перила и стены
 		for st: Dictionary in h2.structures:
@@ -123,7 +125,7 @@ func _init() -> void:
 	for u in PlayerState.home(w).huts:
 		huts += 1
 		for k in 8:
-			for ride in [false, true]:
+			for ride: bool in [false, true]:
 				hut_hits += _into_hut(w, heights, PlayerState.home(w), u, k * PI / 4.0, ride)
 	_check(huts > 0 and hut_hits == 0, "в стены %d домов не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [huts, hut_hits])
 
@@ -142,13 +144,7 @@ func _cross(w: WorldData, heights: Heightfield, s: Dictionary, ride: bool) -> bo
 	p.x = s.ax - s.ux * 2.0
 	p.z = s.az - s.uz * 2.0
 	p.feet = heights.surface_at(p.x, p.z, s.ay)
-	var b := BikeRide.new()
-	if ride:
-		b.x = p.x
-		b.z = p.z
-		b.y = p.feet
-		b.heading = yaw
-		b.mount(p)
+	var b := _bike_for(p, yaw, ride)
 	for k in 60 * 120:
 		if ride:
 			b.step(p, 0.5, 0.0, false, false, DT, w, heights)
@@ -258,13 +254,8 @@ func _into_wall(w: WorldData, heights: Heightfield, s: Dictionary, angle: float,
 	p.x = s.ax + s.ux * t0
 	p.z = s.az + s.uz * t0
 	p.feet = heights.level(s, t0)
-	var b := BikeRide.new()
+	var b := _bike_for(p, yaw, ride)
 	if ride:
-		b.x = p.x
-		b.z = p.z
-		b.y = p.feet
-		b.heading = yaw
-		b.mount(p)
 		b.speed = 20.0
 	# внутренняя сторона модели: перила — брус в 0,1 м за краем настила, стена туннеля — сразу за краем пола
 	var face: float = s.half + (0.04 if not s.tunnel else 0.0)
@@ -273,14 +264,8 @@ func _into_wall(w: WorldData, heights: Heightfield, s: Dictionary, angle: float,
 			b.step(p, 1.0, 0.0, true, false, dt, w, heights)
 		else:
 			p.step(1.0, 0.0, true, false, yaw, dt, w, heights)
-		var reach := 0.1   # пешеход: центр и камера
-		var pts: Array[Vector2] = [Vector2(p.x, p.z)]
-		if ride:
-			# край колеса: ось в 0,53 м от середины, радиус колеса 0,34 м
-			var f := Vector2(-sin(b.heading), -cos(b.heading)) * 0.87
-			pts = [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]
-			reach = 0.0
-		for q in pts:
+		var reach := 0.0 if ride else BODY_REACH
+		for q in _body_points(p, b, ride):
 			var dx: float = q.x - s.ax
 			var dz: float = q.y - s.az
 			var t: float = dx * s.ux + dz * s.uz
@@ -308,25 +293,14 @@ func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary,
 	if not PlayerState.is_passable(w, heights, p.x, p.z, p.feet, BikeRide.BODY_R + BikeRide.AXLE):
 		return 0   # подойти отсюда не к чему: вода или другой дом
 	var yaw := atan2(sin(a), cos(a))   # лицом к дому: вперёд — это -Z, т.е. от (sin, cos) к центру
-	var b := BikeRide.new()
-	if ride:
-		b.x = p.x
-		b.z = p.z
-		b.y = p.feet
-		b.heading = yaw
-		b.mount(p)
+	var b := _bike_for(p, yaw, ride)
 	for k in 120:
 		if ride:
 			b.step(p, 1.0, 0.0, true, false, DT, w, heights)
 		else:
 			p.step(1.0, 0.0, true, false, yaw, DT, w, heights)
-		var pts: Array[Vector2] = [Vector2(p.x, p.z)]
-		var reach := 0.1
-		if ride:
-			var f := Vector2(-sin(b.heading), -cos(b.heading)) * 0.87
-			pts = [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]
-			reach = 0.0
-		for q in pts:
+		var reach := 0.0 if ride else BODY_REACH
+		for q in _body_points(p, b, ride):
 			var dx := q.x - hx
 			var dz := q.y - hz
 			# в систему дома: стены — квадрат 3,2 × 3,2 м
@@ -337,3 +311,23 @@ func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary,
 					roundi(rad_to_deg(a)), maxf(absf(lx), absf(lz)) - 1.6])
 				return 1
 	return 0
+
+
+## Велосипед игрока p в его месте и с курсом yaw; если ride — игрок уже сидит на нём
+func _bike_for(p: PlayerState, yaw: float, ride: bool) -> BikeRide:
+	var b := BikeRide.new()
+	if ride:
+		b.x = p.x
+		b.z = p.z
+		b.y = p.feet
+		b.heading = yaw
+		b.mount(p)
+	return b
+
+
+## Точки тела, которые не должны входить в стены: центр пешехода или края обоих колёс велосипеда
+func _body_points(p: PlayerState, b: BikeRide, ride: bool) -> Array[Vector2]:
+	if not ride:
+		return [Vector2(p.x, p.z)]
+	var f := Vector2(-sin(b.heading), -cos(b.heading)) * WHEEL_REACH
+	return [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]

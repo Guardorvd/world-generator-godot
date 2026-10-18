@@ -6,8 +6,6 @@ extends SceneTree
 ##   godot --path . --script res://tools/control/shots.gd -- [--out <папка>]
 
 const Dev := preload("res://tools/control/control.gd")
-const LOAD_TIMEOUT_MS := 180000
-const SHOT_SIZE := Vector2i(1280, 720)
 const SETTLE_FRAMES := 12   # кадров после переноса камеры до снимка
 
 var main: Node
@@ -79,13 +77,13 @@ func _process(_delta: float) -> bool:
 		return false
 	if index < 0:
 		DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-		DisplayServer.window_set_size(SHOT_SIZE)
+		DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 		_next_world()
 		return false
 	var game: GameWorld = main.game
 	if game == null or game.player == null:
-		if Time.get_ticks_msec() - started > LOAD_TIMEOUT_MS:
-			printerr("Мир не загрузился за %d с" % (LOAD_TIMEOUT_MS / 1000))
+		if Time.get_ticks_msec() - started > Dev.LOAD_TIMEOUT_MS:
+			printerr("Мир не загрузился за %d с" % (Dev.LOAD_TIMEOUT_MS / 1000))
 			failed = true
 			return _finish()
 		return false

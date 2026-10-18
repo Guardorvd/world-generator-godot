@@ -4,6 +4,8 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
+const HUT_CORNERS := [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]
+const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
 
 
 static func _mat(c: Color, unshaded: bool = false) -> StandardMaterial3D:
@@ -31,7 +33,7 @@ static func _cone_mesh(r: float, h: float, seg: int) -> CylinderMesh:
 	return c
 
 
-## Экземпляр меша; один меш и материал на все дома: движок не хранит копии и лучше группирует отрисовку
+## Узел с мешем и материалом (для костров); дома и туры собираются в один меш через MeshBatch
 static func _part(mesh: Mesh, offset: Vector3, mat: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -86,7 +88,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			var z: float = hut.y * TILE
 			# дом стоит на самом низком из углов, чтобы не висел над склоном
 			var y := INF
-			for c in [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]:
+			for c: Vector2 in HUT_CORNERS:
 				y = minf(y, heights.ground_at(x + c.x, z + c.y))
 			# дверью к костру
 			var at := Transform3D(Basis(Vector3.UP, atan2(s.x * TILE - x, s.y * TILE - z)), Vector3(x, y, z))
@@ -134,7 +136,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var z: float = pk.y * TILE
 		var y := heights.ground_at(x, z)
 		var at := Transform3D(Basis(), Vector3(x, y, z))
-		for rh in [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)]:
+		for rh: Vector2 in PEAK_STONES:
 			var sm := SphereMesh.new()
 			sm.radius = rh.x
 			sm.height = rh.x * 2.0
@@ -145,7 +147,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		batch.add(flag_mesh, at.translated_local(Vector3(0.5, 3.9, 0)), flag_m)
 		# подпись вершины рядом с поселением закрыла бы его название: такую не ставим
 		var near := false
-		for sp in settle_pos:
+		for sp: Vector2 in settle_pos:
 			if sp.distance_to(Vector2(x, z)) < PEAK_LABEL_CLEAR:
 				near = true
 				break
@@ -162,7 +164,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 
 ## Покачивание пламени костров; time — секунды игры
 static func animate_fires(fires: Array, time: float) -> void:
-	for f in fires:
+	for f: Dictionary in fires:
 		var t: float = time * 9.0 + f.phase
 		var s := 0.85 + sin(t) * 0.1 + sin(t * 1.7) * 0.08
 		f.flame.scale = Vector3(1, s, 1)

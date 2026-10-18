@@ -7,6 +7,15 @@ extends RefCounted
 const TILE := GameConfig.TILE
 
 
+## Нормаль вершины клетки (i, j) по соседним высотам (на краю соседи берутся с края карты)
+static func _normal(hv: PackedFloat32Array, W: int, H: int, i: int, j: int) -> Vector3:
+	var l := hv[j * W + maxi(0, i - 1)]
+	var r := hv[j * W + mini(W - 1, i + 1)]
+	var u := hv[maxi(0, j - 1) * W + i]
+	var d := hv[mini(H - 1, j + 1) * W + i]
+	return Vector3(l - r, 2.0 * TILE, u - d).normalized()
+
+
 ## Меш без материала: его можно строить в фоновом потоке, пока запекается текстура
 static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	var W := w.W
@@ -26,11 +35,7 @@ static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 			var k := j * W + i
 			pos[k] = Vector3((i + 0.5) * TILE, hv[k], (j + 0.5) * TILE)
 			uv[k] = Vector2((i + 0.5) / W, (j + 0.5) / H)
-			var l := hv[j * W + maxi(0, i - 1)]
-			var r := hv[j * W + mini(W - 1, i + 1)]
-			var u := hv[maxi(0, j - 1) * W + i]
-			var d := hv[mini(H - 1, j + 1) * W + i]
-			nor[k] = Vector3(l - r, 2.0 * TILE, u - d).normalized()
+			nor[k] = _normal(hv, W, H, i, j)
 	var idx := PackedInt32Array()
 	idx.resize((W - 1) * (H - 1) * 6)
 	var p := 0
@@ -67,17 +72,13 @@ static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: 
 	var arrays := mesh.surface_get_arrays(0)
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-	for k in changed:
+	for k: int in changed:
 		pos[k] = Vector3(pos[k].x, hv[k], pos[k].z)
 		var ci := k % W
 		var cj := k / W
 		for j in range(maxi(0, cj - 1), mini(H, cj + 2)):
 			for i in range(maxi(0, ci - 1), mini(W, ci + 2)):
-				var l := hv[j * W + maxi(0, i - 1)]
-				var r := hv[j * W + mini(W - 1, i + 1)]
-				var u := hv[maxi(0, j - 1) * W + i]
-				var d := hv[mini(H - 1, j + 1) * W + i]
-				nor[j * W + i] = Vector3(l - r, 2.0 * TILE, u - d).normalized()
+				nor[j * W + i] = _normal(hv, W, H, i, j)
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
 	mesh.clear_surfaces()

@@ -11,7 +11,7 @@ extends SceneTree
 const Dev := preload("res://tools/control/control.gd")
 const LOAD_TIMEOUT_MS := 300000
 const WARMUP_S := 1.5   # первые кадры компилируют шейдеры, их не считаем
-const ROAD_SPEED := 11.0
+const ROAD_SPEED := GameConfig.BIKE_SPEED   # пролёт со скоростью велосипеда, м/с
 
 var main: Node
 var out := ""
@@ -78,13 +78,14 @@ static func print_table(all: Dictionary) -> void:
 			r.memory.rss_mb, r.memory.video_mb])
 
 
-func _ready_road(game: GameWorld) -> void:
+## Ломаная самой длинной дороги в метрах (road, road_len); если дорог нет — прямая на север от точки появления
+func _load_road(game: GameWorld) -> void:
 	var w := game.world
 	var best: Array = []
 	var best_n := 0.0
 	for tr in w.trails:
-		if tr.kind == "road" and Dev._length(tr.pts) > best_n:
-			best_n = Dev._length(tr.pts)
+		if tr.kind == "road" and Dev.path_length(tr.pts) > best_n:
+			best_n = Dev.path_length(tr.pts)
 			best = tr.pts
 	if best.size() < 2:
 		# дорог нет: летим на север от точки появления
@@ -166,7 +167,7 @@ func _process(delta: float) -> bool:
 		"menu":
 			if frames == 1:
 				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
-				DisplayServer.window_set_size(Vector2i(1280, 720))
+				DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
 			if frames == 30:
@@ -187,7 +188,7 @@ func _process(delta: float) -> bool:
 			game.camera.fov = 70.0
 			spawn = game.camera.global_position
 			yaw0 = game.yaw
-			_ready_road(game)
+			_load_road(game)
 			result.loaded_memory = _memory()
 			phase = "warmup"
 			t = 0.0
@@ -211,7 +212,7 @@ func _process(delta: float) -> bool:
 			# на настиле моста, над водой брода, на полу туннеля
 			var hf := game.heights
 			p.y = maxf(hf.surface_at(p.x, p.z, INF), hf.ground_at(p.x, p.z) + hf.depth_at(p.x, p.z)) + GameConfig.EYE
-			ahead.y = game.heights.ground_at(ahead.x, ahead.z) + GameConfig.EYE
+			ahead.y = hf.ground_at(ahead.x, ahead.z) + GameConfig.EYE
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
 			game.vegetation.update(p.x, p.z, false)
