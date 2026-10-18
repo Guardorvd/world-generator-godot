@@ -5,6 +5,8 @@ extends Node3D
 ## Логика без движка (рельеф, движение игрока, езда на велосипеде) — в scripts/game, интерфейс — в Hud.
 ## На велосипеде (F) камера переходит за спину седока. Чувствительность мыши, угол обзора и покачивание
 ## берутся из GameSettings. Звуки путешествия — узел Audio (WorldAudio, с 2.7).
+## С 2.8 на открытой карте (M) курсор свободен: там выбирают цель путешествия и место быстрого перемещения
+## (travel_to по сигналу Hud.travel_requested).
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -96,6 +98,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
 	audio.setup(world, heights)
+	hud.travel_requested.connect(travel_to)
 	capture_mouse()
 
 
@@ -117,7 +120,7 @@ func set_paused(p: bool) -> void:
 	audio.set_paused(p)
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false
-	if p:
+	if p or show_map:
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
 		capture_mouse()
@@ -156,6 +159,38 @@ func toggle_bike() -> void:
 func toggle_map() -> void:
 	show_map = not show_map
 	hud.set_map_visible(show_map)
+	# на карте курсор нужен, чтобы выбрать место; закрыли — снова осматриваемся мышью
+	if show_map:
+		_dragging = false
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	else:
+		capture_mouse()
+
+
+## Быстрое перемещение в место с карты, где игрок уже побывал (Hud.places): к костру поселения или
+## к вершине. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
+func travel_to(place: Dictionary) -> void:
+	if paused or player == null:
+		return
+	if bike.riding and bike.airborne:
+		return
+	player = PlayerState.arrive(world, heights, place)
+	if not place.peak:
+		# лицом к костру
+		yaw = atan2(player.x - place.x * TILE, player.z - place.y * TILE)
+	pitch = -0.05
+	bike = BikeRide.park_near(player, yaw, world, heights)
+	_dip = 0.0
+	_dip_v = 0.0
+	_trauma = 0.0
+	_snap()
+	bike_view.draw(1.0)
+	if world.outer != null:
+		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
+	vegetation.update(player.x, player.z, true)
+	if show_map:
+		toggle_map()
+	hud.toast("Вы переместились: «%s»" % place.name)
 
 
 func _unhandled_input(event: InputEvent) -> void:
@@ -253,6 +288,9 @@ func _physics_process(dt: float) -> void:
 		_snap()
 	for text: String in player.check_discoveries(world, hud.visited):
 		hud.toast(text)
+	var reached := hud.check_goal(player.x, player.z)
+	if reached != "":
+		hud.toast(reached)
 
 
 ## Запомнить положение игрока как предпоследний такт (для интерполяции кадра)

@@ -4,6 +4,10 @@ extends Control
 ## прицел и подсказки. Прицел, панель сведений и надписи — узлы сцены main.tscn (правятся в редакторе),
 ## мини-карта и большая карта рисуются кодом (MiniMap, BigMap). Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
 ## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
+## С 2.8 на большой карте можно выбрать цель путешествия (ЛКМ по поселению или вершине) — она видна
+## только меткой на компасе вверху и на картах — и переместиться в место, где уже побывали (ПКМ).
+
+signal travel_requested(place: Dictionary)
 
 const TILE := GameConfig.TILE
 const DIRS := ["С", "СЗ", "З", "ЮЗ", "Ю", "ЮВ", "В", "СВ"]
@@ -11,11 +15,14 @@ const MINI := 200.0
 const TOAST_TIME := 3.5 # сколько сообщение висит на экране (с)
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
+const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 
 var world: WorldData
 var map_tex: ImageTexture
 var minimap: MiniMap
 var big_map: BigMap
+var compass: Compass
+var goal := {}  # цель путешествия — место из places() или пусто
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
@@ -47,6 +54,17 @@ func _ready() -> void:
 	add_child(minimap)
 	move_child(minimap, $InfoPanel.get_index() + 1)
 
+	compass = Compass.new()
+	compass.hud = self
+	compass.anchor_left = 0.5
+	compass.anchor_right = 0.5
+	compass.offset_left = -150
+	compass.offset_right = 150
+	compass.offset_top = 10
+	compass.offset_bottom = 38
+	add_child(compass)
+	move_child(compass, minimap.get_index() + 1)
+
 	big_map = BigMap.new()
 	big_map.hud = self
 	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -60,6 +78,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
 	map_tex = ImageTexture.create_from_image(map_image)
 	visited = {}
+	goal = {}
 	_toast_queue.clear()
 	_stop_toast_tween()
 	_toast_left = 0.0
@@ -71,12 +90,56 @@ func clear_world() -> void:
 	world = null
 	map_tex = null
 	visited = {}
+	goal = {}
 
 
 func set_map_visible(v: bool) -> void:
 	big_map.visible = v
+	# открытая карта ловит мышь: щелчки по ней выбирают цель и место перемещения
+	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
+	big_map.hover = {}
 	if v:
 		big_map.queue_redraw()
+
+
+## Места мира, которые можно выбрать на карте: поселения и вершины.
+## {key — ключ в visited, name, x, y — клетки, peak, src — запись поселения или вершины}
+func places() -> Array:
+	var out: Array = []
+	if world == null:
+		return out
+	for s in world.settlements:
+		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, peak = false, src = s})
+	for pk in world.peaks:
+		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, peak = true, src = pk})
+	return out
+
+
+## Новая цель путешествия (пустой словарь — без цели)
+func set_goal(place: Dictionary) -> void:
+	goal = place
+	# вне сцены (проверки без окна) карт и компаса нет
+	if is_node_ready():
+		compass.queue_redraw()
+		minimap.queue_redraw()
+		big_map.queue_redraw()
+
+
+## Игрок в (x, z) метрах: если он дошёл до цели, цель снимается и возвращается текст сообщения
+func check_goal(x: float, z: float) -> String:
+	if goal.is_empty():
+		return ""
+	var reach := 2.5 if goal.peak else 6.0
+	if Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= reach:
+		return ""
+	var text := "Вы добрались до цели: «%s»" % goal.name
+	set_goal({})
+	return text
+
+
+## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
+func heading_to(x: float, z: float) -> float:
+	return atan2(-(x - px), -(z - pz))
 
 
 ## Строка подсказок внизу и подсказка у прицела (пустая — скрыта)
@@ -146,6 +209,7 @@ func set_player(x: float, z: float, y: float) -> void:
 	pz = z
 	yaw = y
 	minimap.queue_redraw()
+	compass.queue_redraw()
 	if big_map.visible:
 		big_map.queue_redraw()
 
@@ -178,7 +242,9 @@ func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
 	var heading: String = DIRS[posmod(roundi(look_yaw / (PI / 4.0)), 8)]
 	var text := "%s\nВысота: %d м · %s%d°C\nВлажность: %d%% · Курс: %s" % [
 		where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c, roundi(ti.moist * 100.0), heading]
-	if nearest != null:
+	if not goal.is_empty():
+		text += "\nЦель «%s»: %s" % [goal.name, _fmt_dist(Grid.hypot(goal.x * TILE - p.x, goal.y * TILE - p.z))]
+	elif nearest != null:
 		text += "\nДо «%s»: %s" % [nearest.name, _fmt_dist(nd)]
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же
 	if info.text != text:
@@ -225,6 +291,8 @@ class MiniMap extends Control:
 		draw_rect(Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), Color(1, 1, 1, 0.5), false, 2.0)
 		for s in w.settlements:
 			draw_rect(Rect2(s.x * k - 1.5, s.y * k - 1.5, 3, 3), Color.html("#ffdd55"))
+		if not hud.goal.is_empty():
+			draw_arc(_inside(Vector2(hud.goal.x, hud.goal.y) * k, 5.0), 4.5, 0.0, TAU, 16, Hud.GOLD, 2.0)
 		if hud.bike_shown:
 			Hud.draw_bike(self, _inside(hud.bike_pos / Hud.TILE * k, 4.0), 3.0)
 		Hud.draw_arrow(self, _inside(Vector2(hud.px, hud.pz) / Hud.TILE * k, 8.0), 6.0, hud.yaw)
@@ -234,20 +302,95 @@ class MiniMap extends Control:
 		return at.clamp(Vector2(margin, margin), Vector2(Hud.MINI - margin, Hud.MINI - margin))
 
 
-## Большая карта (M): посещённые поселения отмечены жёлтым
-class BigMap extends Control:
+## Компас вверху экрана: стороны света по курсу взгляда и неяркая метка цели, если она выбрана.
+## Метка цели за краем видимой дуги прижимается к краю и бледнеет
+class Compass extends Control:
+	const SPAN := PI * 0.8   # видимая дуга курса
 	var hud: Hud
+
+	func _init() -> void:
+		mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+	func _draw() -> void:
+		if hud.world == null:
+			return
+		var half := size.x / 2.0
+		var font := ThemeDB.fallback_font
+		draw_line(Vector2(0, size.y - 1), Vector2(size.x, size.y - 1), Color(1, 1, 1, 0.18), 1.0)
+		for d in 8:
+			var off := wrapf(d * PI / 4.0 - hud.yaw, -PI, PI)
+			if absf(off) > SPAN / 2.0:
+				continue
+			var x := half - off / (SPAN / 2.0) * half
+			var a := 1.0 - absf(off) / (SPAN / 2.0)
+			var fs := 15 if d % 2 == 0 else 11
+			var t: String = Hud.DIRS[d]
+			var tw := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
+			var at := Vector2(x - tw / 2.0, size.y - 8.0)
+			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.45 * a))
+			draw_string(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.8 * a))
+		if hud.goal.is_empty():
+			return
+		var g := hud.goal
+		var off := wrapf(hud.heading_to(g.x * Hud.TILE, g.y * Hud.TILE) - hud.yaw, -PI, PI)
+		var seen := absf(off) <= SPAN / 2.0
+		var x := half - clampf(off / (SPAN / 2.0), -1.0, 1.0) * (half - 4.0)
+		var c := Hud.GOLD if seen else Color(Hud.GOLD, 0.45)
+		var y := size.y - 1.0
+		draw_colored_polygon(PackedVector2Array([Vector2(x, y - 7), Vector2(x + 4, y - 3), Vector2(x, y + 1), Vector2(x - 4, y - 3)]), c)
+
+
+## Большая карта (M): посещённые поселения и вершины отмечены жёлтым. С 2.8 карта ловит мышь:
+## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по месту, где уже побывали, — перемещение туда
+class BigMap extends Control:
+	const PICK := 12.0  # на сколько пикселей можно промахнуться по метке места
+	var hud: Hud
+	var hover := {}     # место под курсором или пусто
+
+	## Где на экране лежит карта: [левый верхний угол, сторона, пикселей на клетку]
+	func _frame() -> Array:
+		var sz := minf(size.x, size.y) * 0.88
+		return [Vector2((size.x - sz) / 2.0, (size.y - sz) / 2.0), sz, sz / hud.world.W]
+
+	## Ближайшее к точке экрана место не дальше PICK пикселей
+	func _place_at(pos: Vector2) -> Dictionary:
+		if hud.world == null:
+			return {}
+		var f := _frame()
+		var best := {}
+		var bd := PICK
+		for pl: Dictionary in hud.places():
+			var d := pos.distance_to(f[0] + Vector2(pl.x, pl.y) * f[2])
+			if d < bd:
+				bd = d
+				best = pl
+		return best
+
+	func _gui_input(event: InputEvent) -> void:
+		if event is InputEventMouseMotion:
+			var h := _place_at(event.position)
+			if h.get("key") != hover.get("key"):
+				hover = h
+				queue_redraw()
+		elif event is InputEventMouseButton and event.pressed:
+			var pl := _place_at(event.position)
+			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
+				var same: bool = pl.key == hud.goal.get("key")
+				hud.set_goal({} if same else pl)
+			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.visited.has(pl.key):
+				hud.travel_requested.emit(pl)
+			accept_event()
 
 	func _draw() -> void:
 		if hud.world == null:
 			return
 		var w := hud.world
 		var cw := size.x
-		var ch := size.y
 		draw_rect(Rect2(Vector2.ZERO, size), Color(8 / 255.0, 12 / 255.0, 20 / 255.0, 0.82))
-		var sz := minf(cw, ch) * 0.88
-		var o := Vector2((cw - sz) / 2.0, (ch - sz) / 2.0)
-		var k := sz / w.W
+		var f := _frame()
+		var o: Vector2 = f[0]
+		var sz: float = f[1]
+		var k: float = f[2]
 		draw_texture_rect(hud.map_tex, Rect2(o, Vector2(sz, sz)), false)
 		draw_rect(Rect2(o, Vector2(sz, sz)), Color.html("#d8c79a"), false, 2.0)
 		for s in w.settlements:
@@ -255,7 +398,10 @@ class BigMap extends Control:
 			draw_circle(at, 3.5, Color.html("#ffdd55") if hud.visited.has("s%d" % s.i) else Color.WHITE)
 			Hud.draw_label(self, s.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
 		for pk in w.peaks:
-			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, Color.html("#e8f0ff"), 13)
+			var col := Color.html("#ffdd55") if hud.visited.has("p%d" % pk.i) else Color.html("#e8f0ff")
+			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, col, 13)
+		if not hud.goal.is_empty():
+			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		if hud.bike_shown:
 			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, o, sz, 5.0), 5.0)
 		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, o, sz, 9.0), 9.0, hud.yaw)
@@ -264,6 +410,13 @@ class BigMap extends Control:
 		if hud.bike_shown:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
+		var tip := "Щёлкните по поселению или вершине, чтобы выбрать цель путешествия"
+		if not hover.is_empty():
+			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
+			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
+			tip += "ПКМ — переместиться сюда" if hud.visited.has(hover.key) else "переместиться можно, когда побываете здесь"
+			draw_arc(o + Vector2(hover.x, hover.y) * k, 7.0, 0.0, TAU, 20, Color.WHITE, 1.5)
+		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
 
 	## Маркер у края карты остаётся внутри её рамки
 	func _inside(at: Vector2, o: Vector2, sz: float, margin: float) -> Vector2:

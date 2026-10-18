@@ -1,6 +1,7 @@
 extends SceneTree
 ## Дымовая проверка: открывает главную сцену, запускает игру с заданным зерном и размером,
-## снимает точку появления, едет на велосипеде и прыгает, немного идёт вперёд, открывает карту, паузу и настройки и сохраняет снимки экрана. Запуск из папки проекта:
+## снимает точку появления, едет на велосипеде и прыгает, немного идёт вперёд, открывает карту и выбирает цель,
+## смотрит на компас, перемещается к цели, открывает паузу и настройки и сохраняет снимки экрана. Запуск из папки проекта:
 ##   godot --path . --script res://tools/smoke_test.gd -- <зерно> <размер> <папка для снимков>
 
 const ShotUtil := preload("res://tools/shot_util.gd")
@@ -85,12 +86,29 @@ func _process(_delta: float) -> bool:
 		print("Игрок: ", game.player.x, ", ", game.player.z, ", высота ", game.player.feet)
 		Input.action_release("move_forward")
 		game.toggle_map()
+		# цель путешествия — самое дальнее поселение, курсор над ним (с 2.8)
+		var far := _farthest(game)
+		game.hud.set_goal(far)
+		game.hud.big_map.hover = far
 	elif game.time > 5.3 and not shots.has("map"):
 		shots.map = true
 		_shot("map")
 		game.toggle_map()
+	elif game.time > 5.6 and not shots.has("compass"):
+		shots.compass = true
+		_shot("compass")
+		# быстрое перемещение к цели, как будто там уже побывали
+		var goal: Dictionary = game.hud.goal
+		game.hud.visited[goal.key] = true
+		game.travel_to(goal)
+	elif game.time > 6.2 and not shots.has("travel"):
+		shots.travel = true
+		_shot("travel")
+		print("После перемещения: ", game.player.x, ", ", game.player.z, ", цель снята: ", game.hud.goal.is_empty())
+		if not game.hud.goal.is_empty():
+			failed = true
 		main._toggle_pause()
-	elif shots.has("map") and not shots.has("pause"):
+	elif shots.has("travel") and not shots.has("pause"):
 		shots.pause = true
 		_shot("pause")
 		main._open_settings()
@@ -99,3 +117,15 @@ func _process(_delta: float) -> bool:
 		_shot("settings")
 		return _finish()
 	return false
+
+
+## Самое дальнее от игрока поселение — как место из Hud.places()
+func _farthest(game: GameWorld) -> Dictionary:
+	var best := {}
+	var bd := -1.0
+	for pl: Dictionary in game.hud.places():
+		var d := Grid.hypot(pl.x * GameConfig.TILE - game.player.x, pl.y * GameConfig.TILE - game.player.z)
+		if not pl.peak and d > bd:
+			bd = d
+			best = pl
+	return best

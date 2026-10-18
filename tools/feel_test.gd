@@ -129,6 +129,23 @@ func _init() -> void:
 				hut_hits += _into_hut(w, heights, PlayerState.home(w), u, k * PI / 4.0, ride)
 	_check(huts > 0 and hut_hits == 0, "в стены %d домов не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [huts, hut_hits])
 
+	# Быстрое перемещение (с 2.8): в каждое место карты игрок встаёт на свободную сушу рядом с ним,
+	# место сразу считается открытым, а цель путешествия там снимается
+	var hud := Hud.new()
+	hud.world = w
+	var arrived := 0
+	var all := hud.places()
+	for pl: Dictionary in all:
+		var q := PlayerState.arrive(w, heights, pl)
+		var visited := {}
+		q.check_discoveries(w, visited)
+		var near := Grid.hypot(q.x - pl.x * GameConfig.TILE, q.z - pl.y * GameConfig.TILE) < 60.0
+		hud.goal = pl
+		if near and visited.has(pl.key) and PlayerState.is_passable(w, heights, q.x, q.z, q.feet, PlayerState.BODY_R) and hud.check_goal(q.x, q.z) != "":
+			arrived += 1
+	hud.free()
+	_check(all.size() > 0 and arrived == all.size(), "быстрое перемещение: в %d из %d мест игрок встаёт на сушу, место открыто, цель достигнута" % [arrived, all.size()])
+
 	if _fails == 0:
 		print("Все проверки прошли.")
 	else:

@@ -1,12 +1,21 @@
 class_name StageVegetation
 extends RefCounted
 ## Этап 8. Растительность и камни. Объекты раскладываются по чанкам, чтобы 3D-сцена быстро брала ближайшие.
+## С 2.8 вид, густота и рост деревьев зависят от местности: выше — хвойные и граница леса, на кручах
+## реже деревья и больше камней, у воды в сухих краях — рощи и оазисы, валуны лежат россыпями.
 ## Пишет: w.obj_* (объекты: x, y, k — вид из Biomes.T_*, v — вариант, s — масштаб), w.chunks (номера объектов
 ## по чанкам), w.CS (сторона чанка в клетках), CW, CH (чанков по ширине и высоте), obj_count.
 
 const PROGRESS := 0.76
 const LABEL := "Леса, кустарники и камни"
 const VILLAGE_R := 7.0 # полуширина квадрата вокруг поселения, клеток
+# С 2.8 растительность следует характеру местности (высота, крутизна, вода), а не только биому
+const HIGH_LO := 0.12    # с этой высоты в лесах прибавляется хвойных
+const HIGH_HI := 0.26    # выше — почти одни хвойные
+const LINE_LO := 0.2     # граница леса: с этой высоты деревья редеют и мельчают
+const LINE_HI := 0.4     # а здесь их остаётся треть
+const STEEP := 0.6       # крутизна, с которой деревьев меньше, а камней больше
+const SHORE := 3.0       # клеток до воды: прибрежные рощи, оазисы, тростник
 
 
 static func run(w: WorldData) -> void:
@@ -19,7 +28,10 @@ static func run(w: WorldData) -> void:
 	var slope := w.slope
 	var temp := w.temp
 	var dist_water := w.dist_water
+	var elev := w.elev
+	var moist := w.moist
 	var forest := w.noise_field("forest")
+	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
 	var path_src := PackedByteArray()
 	path_src.resize(N)
 	for i in N:
@@ -53,15 +65,30 @@ static func run(w: WorldData) -> void:
 				continue
 			var dens := b_trees[bi]
 			var f := forest[i]
+			var e := elev[i]
+			var sl := slope[i]
+			var dw := dist_water[i]
 			# smoothstep развёрнут на месте
+			var interior := 0.0 # насколько клетка в глубине леса (0 — опушка или поле)
 			if dens > 0.3:
 				var t := clampf((f + 0.35) / (0.15 + 0.35), 0.0, 1.0)
-				dens *= t * t * (3.0 - 2.0 * t) # поляны в лесу
+				interior = t * t * (3.0 - 2.0 * t)
+				dens *= interior # поляны в лесу
 			else:
 				var t := clampf((f - 0.1) / (0.5 - 0.1), 0.0, 1.0)
 				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
+				# у воды в сухих и открытых краях — прибрежные рощи и оазисы
+				if dw < SHORE and _dry_open(bi):
+					dens += 0.22 * (1.0 - dw / SHORE)
 			if bi == Biomes.BEACH and temp[i] < 0.6:
 				dens = 0.0
+			# граница леса в горах и редкие деревья на кручах
+			# вызов функции на каждую клетку заметен по времени: большинство клеток ниже границы леса
+			var line := 0.0 if e <= LINE_LO else _ss(LINE_LO, LINE_HI, e)
+			if line > 0.0 and bi != Biomes.SNOW and bi != Biomes.ROCK and bi != Biomes.PEAK:
+				dens *= 1.0 - 0.65 * line
+			if sl > STEEP:
+				dens /= 1.0 + (sl - STEEP) * 1.5
 			if dist_path[i] < 1.2:
 				continue
 			if dist_path[i] < 2.5:
@@ -69,20 +96,26 @@ static func run(w: WorldData) -> void:
 			if village[i] != 0:
 				dens *= 0.08
 			var kinds: Array = b_kinds[bi]
-			# Порядок вызовов rng тот же, что в JS: x, y, вид, вариант, масштаб
+			# Числа rng на объект: проверка, x, y, вид, вариант, масштаб
 			for k in 2:
 				if rng.next_float() < dens * 0.6:
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
-					var kind: int = kinds[floori(rng.next_float() * kinds.size())]
+					var kind := _kind(bi, kinds, rng.next_float(), e, moist[i], sl, dw)
 					var v := floori(rng.next_float() * 3)
-					store.add(px, py, kind, v, 0.8 + rng.next_float() * 0.45)
-			if slope[i] > 0.7 and rng.next_float() < 0.06:
+					# в глубине леса деревья выше, на опушке и у границы леса ниже
+					var sc := (0.8 + rng.next_float() * 0.45) * (0.88 + 0.22 * interior) * (1.0 - 0.3 * line)
+					store.add(px, py, kind, v, sc)
+			# камни: на кручах и россыпями там, где местность неровная
+			var rocky := 0.06 if sl > 0.7 else 0.0
+			if sl > 0.25 and stony[i] > 0.3:
+				rocky += 0.05 * clampf((stony[i] - 0.3) * 4.0, 0.0, 1.0) * clampf(sl, 0.0, 1.0)
+			if rocky > 0.0 and rng.next_float() < rocky:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
 				store.add(px, py, Biomes.T_ROCK, v, 0.7 + rng.next_float() * 0.6)
-			if dist_water[i] < 1.6 and (bi == Biomes.GRASS or bi == Biomes.FOREST or bi == Biomes.SWAMP) and rng.next_float() < 0.12:
+			if dw < 1.6 and _reedy(bi) and sl < 0.5 and rng.next_float() < 0.12:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
@@ -101,6 +134,60 @@ static func run(w: WorldData) -> void:
 	w.obj_s = store.s
 	w.chunks = chunks
 	w.obj_count = store.x.size()
+
+
+static func _ss(a: float, b: float, x: float) -> float:
+	var t := clampf((x - a) / (b - a), 0.0, 1.0)
+	return t * t * (3.0 - 2.0 * t)
+
+
+## Сухие и открытые биомы, где у воды появляются рощи
+static func _dry_open(bi: int) -> bool:
+	return bi == Biomes.DESERT or bi == Biomes.SAVANNA or bi == Biomes.STEPPE or bi == Biomes.TUNDRA or bi == Biomes.GRASS
+
+
+## Где у самой воды растёт тростник
+static func _reedy(bi: int) -> bool:
+	return bi == Biomes.GRASS or bi == Biomes.FOREST or bi == Biomes.SWAMP or bi == Biomes.TAIGA or bi == Biomes.STEPPE or bi == Biomes.SAVANNA
+
+
+## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
+## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
+static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float) -> int:
+	var shore := dw < SHORE
+	match bi:
+		Biomes.FOREST, Biomes.GRASS:
+			# выше — сосны, у воды — берёзы, на сухих лугах — кусты
+			if r < 0.85 * _ss(HIGH_LO, HIGH_HI, e):
+				return Biomes.T_PINE
+			if shore and r > 0.75:
+				return Biomes.T_BIRCH
+			if bi == Biomes.GRASS and m < 0.35 and r < 0.6:
+				return Biomes.T_BUSH
+		Biomes.TAIGA:
+			if shore and r < 0.2:
+				return Biomes.T_BIRCH
+			if e > HIGH_HI:
+				return Biomes.T_PINE
+		Biomes.DESERT:
+			if shore:
+				return Biomes.T_PALM if r < 0.7 else Biomes.T_BUSH # оазис
+		Biomes.SAVANNA:
+			if shore and r < 0.4:
+				return Biomes.T_PALM
+		Biomes.STEPPE, Biomes.TUNDRA:
+			if shore:
+				return Biomes.T_BIRCH if r < 0.45 else Biomes.T_BUSH
+		Biomes.ROCK:
+			# нижние скалы ещё в соснах, верхние — голый камень
+			return Biomes.T_PINE if e < 0.3 and r < 0.5 else Biomes.T_ROCK
+		Biomes.JUNGLE:
+			if e > HIGH_HI and r < 0.5:
+				return Biomes.T_PINE
+	# на кручах вместо дерева — куст или камень
+	if sl > 1.0 and r < 0.4:
+		return Biomes.T_ROCK if r < 0.2 else Biomes.T_BUSH
+	return kinds[floori(r * kinds.size())]
 
 
 static func near_hut(settlements: Array, ox: float, oy: float) -> bool:

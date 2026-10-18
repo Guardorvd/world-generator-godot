@@ -244,7 +244,9 @@ func _fill_grass(px: float, pz: float) -> void:
 			if (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2 > rT * rT:
 				continue
 			var gr: Dictionary = bd.grass
-			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)))
+			# с 2.8: на кручах травы меньше, у воды гуще
+			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
+			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
 			for m in cnt:
 				if n >= GameConfig.GRASS_MAX:

@@ -42,15 +42,15 @@ static func home(w: WorldData) -> Dictionary:
 	return best
 
 
-## Точка появления: в 3,5 м от костра поселения home, внутри кольца домов (дома стоят не ближе 6 м
-## от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего, чтобы не стоять
-## носом в стену. При равенстве — юг, как в JS-версии.
-static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
+## Точка появления: в 3,5 м от костра поселения (по умолчанию home), внутри кольца домов (дома стоят
+## не ближе 6 м от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего,
+## чтобы не стоять носом в стену. При равенстве — юг, как в JS-версии.
+static func spawn(w: WorldData, heights: Heightfield, at: Dictionary = {}) -> PlayerState:
 	var p := PlayerState.new()
 	p.x = (w.W / 2.0) * TILE
 	p.z = (w.H / 2.0) * TILE
 	if w.settlements.size() > 0:
-		var s := home(w)
+		var s := at if not at.is_empty() else home(w)
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
 		var best := -1.0
@@ -70,6 +70,36 @@ static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
 		if best < 0.0:
 			p.x = fx
 			p.z = fz + SPAWN_DIST
+	p.feet = heights.ground_at(p.x, p.z)
+	return p
+
+
+## Быстрое перемещение (с 2.8): к костру поселения или на свободное место рядом с вершиной.
+## place — место из Hud.places(): {peak, x, y, ...}, x и y в клетках
+static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> PlayerState:
+	if not place.peak:
+		return spawn(w, heights, place.src)
+	var p := PlayerState.new()
+	var cx: float = place.x * TILE
+	var cz: float = place.y * TILE
+	p.x = cx
+	p.z = cz
+	# по кольцам от вершины наружу: первое место, где можно стоять
+	var found := false
+	for ring in range(0, 40):
+		var r := ring * 1.5
+		var n := maxi(1, ring * 6)
+		for k in n:
+			var a := k * TAU / n
+			var x := cx + sin(a) * r
+			var z := cz + cos(a) * r
+			if is_passable(w, heights, x, z, -INF, BODY_R):
+				p.x = x
+				p.z = z
+				found = true
+				break
+		if found:
+			break
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
 
