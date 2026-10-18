@@ -356,8 +356,8 @@ public partial class FastGrid : RefCounted
 	private const double Massif = 650.0;
 	private const double MountainAmp = 1.0;
 	private const double MountainWarp = 0.35;
-	private const double RidgeAlong = 190.0;
-	private const double RidgeAcross = 95.0;
+	private const double RidgeAlong = 220.0;
+	private const double RidgeAcross = 125.0;
 	private static readonly double[] DirC = { 1.0, 0.5, -0.5 };
 	private static readonly double[] DirS = { 0.0, 0.8660254037844386, 0.8660254037844386 };
 	private const double Asym = 1.8;
@@ -384,15 +384,16 @@ public partial class FastGrid : RefCounted
 		double asym = 1.0 + (Asym - 1.0) * sharp;
 		t = Clamp01((Fbm(hill, X / Massif + 25.1, Y / Massif - 71.3, 2) + UplandShift) / 0.4);
 		double up = t * t * (3.0 - 2.0 * t);
-		double fine = 1.0 - UplandSmooth * up;
+		// С 3.1 мелкие детали сильнее у острых массивов; главный гребень шире и цельнее.
+		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
 		if (f < 1.0)
 			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine) * (1.0 - f);
 		if (f > 0.0)
 			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine) * f;
-		r = Math.Min(r * (1.0 + 0.5 * Fbm(hill, X / 55.0 + 17.7, Y / 55.0 - 29.3, 2) * r), PeakCap);
-		double sp = Ridged(ridge, X / 40.0 - 57.1, Y / 40.0 + 11.9, 3);
-		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.9 * fine);
+		r = Math.Min(r * (1.0 + 0.35 * Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PeakCap);
+		double sp = Ridged(ridge, X / 70.0 - 57.1, Y / 70.0 + 11.9, 2);
+		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.55 * fine);
 		double q = Math.Sqrt(r) * r;
 		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
 		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
@@ -408,8 +409,8 @@ public partial class FastGrid : RefCounted
 	{
 		double u = (X * dc + Y * ds) / RidgeAlong;
 		double v = (Y * dc - X * ds) / RidgeAcross;
-		double a = 0.5, fq = 1.0, s = 0.0, wt = 1.0;
-		for (int o = 0; o < 5; o++)
+		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0;
+		for (int o = 0; o < 4; o++)
 		{
 			double n = Noise(pm, u * fq, v * fq);
 			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
@@ -421,7 +422,7 @@ public partial class FastGrid : RefCounted
 			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
 			s += val * a * (o >= 2 ? fine : 1.0);
 			fq *= 2.1;
-			a *= 0.5;
+			a = o == 0 ? 0.25 : a * 0.3;
 		}
 		return s;
 	}
