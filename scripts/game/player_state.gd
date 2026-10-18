@@ -3,8 +3,6 @@ extends RefCounted
 ## Игрок: появление, движение по местности, прыжок, проходимость. Копия js/game/player.js, без узлов сцены.
 
 const TILE := GameConfig.TILE
-const MAX_SUBSTEP := 1.0 / 20.0  # самый долгий подшаг, с: длинный кадр делится, чтобы не проскакивать стены и воду
-const MAX_SUBSTEPS := 16         # предел дроблению, чтобы сильный «затык» кадра не повесил игру
 const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
 
 var x := 0.0          # метры
@@ -105,24 +103,12 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
 
 
-## Шаг движения за dt секунд. fw/st — вперёд и вбок (-1..1), yaw — курс взгляда, jump — пробел нажат
-## в этом кадре. Скорость набирается и гасится быстро, но не мгновенно; в прыжке управление слабее.
+## Шаг движения за dt секунд (в игре — один такт физики, 1/60 с, см. GameWorld._physics_process).
+## fw/st — вперёд и вбок (-1..1), yaw — курс взгляда, jump — пробел нажат в этом такте.
+## Скорость набирается и гасится быстро, но не мгновенно; в прыжке управление слабее.
 ## Прыжок срабатывает и чуть после схода с края (COYOTE), и если пробел нажат чуть раньше приземления
 ## (JUMP_BUFFER). Возвращает true, если игрок пытался идти.
 func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
-	# длинный кадр делится на подшаги: поведение почти не зависит от частоты кадров, а стена или
-	# полоса воды не пропускаются за один большой шаг. Нажатие пробела учитывается только в первом подшаге
-	var n := clampi(ceili(dt / MAX_SUBSTEP), 1, MAX_SUBSTEPS)
-	var h := dt / n
-	var moving := false
-	for k in n:
-		if _integrate(fw, st, running, jump and k == 0, yaw, h, w, heights):
-			moving = true
-	return moving
-
-
-## Один подшаг движения, см. step
-func _integrate(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
 	var sy := sin(yaw)
 	var cy := cos(yaw)
 	var mx := -sy * fw + cy * st
@@ -179,9 +165,10 @@ func _integrate(fw: float, st: float, running: bool, jump: bool, yaw: float, dt:
 		on_ground = false
 		_jump_buf = 0.0
 		_air = GameConfig.COYOTE
-	vy -= GameConfig.GRAVITY * dt
+	# путь за такт по средней скорости такта: высота прыжка точно та же, что при бесконечно частых тактах
 	var g := heights.surface_at(x, z, feet)
-	feet += vy * dt
+	feet += (vy - GameConfig.GRAVITY * dt * 0.5) * dt
+	vy -= GameConfig.GRAVITY * dt
 	if feet <= g:
 		if not on_ground:
 			land_impact = maxf(land_impact, -vy)

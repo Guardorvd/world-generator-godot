@@ -5,6 +5,8 @@ extends Node3D
 ## Логика без движка (рельеф, движение игрока, езда на велосипеде) — в scripts/game, интерфейс — в Hud.
 ## На велосипеде (F) камера переходит за спину седока. Чувствительность мыши, угол обзора и покачивание
 ## берутся из GameSettings.
+## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
+## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
 signal pause_requested
 
@@ -35,6 +37,11 @@ var _bob_amp := 0.0     # сила покачивания при ходьбе: �
 var _dip := 0.0         # проседание камеры при приземлении, м (пружина)
 var _dip_v := 0.0
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
+var _moving := false    # игрок шёл в последнем такте (для покачивания камеры)
+var _prev := Vector3()  # игрок (x, ноги, z) на предпоследнем такте: кадр показывает его между тактами
+var _prev_bob := 0.0
+var _tick_yaw := 0.0    # насколько последний такт повернул камеру сам (вслед за велосипедом);
+var _tick_pitch := 0.0  # кадр доворачивает этот поворот плавно, а мышь — сразу
 
 static var _defs: Dictionary
 static var _grass_mesh: Mesh
@@ -77,11 +84,12 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
-	bike_view.show_state(bike)
+	_snap()
+	bike_view.draw(1.0)
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	camera.fov = GameSettings.fov
-	_update_camera(false)
+	_update_camera(1.0, 0.0)
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
 	capture_mouse()
@@ -118,6 +126,7 @@ func toggle_bike() -> void:
 		bike.dismount(player, world, heights)
 		yaw = bike.heading
 		pitch = -0.05
+		_snap()
 		return
 	var d := bike.distance_to(player)
 	if d > GameConfig.BIKE_MOUNT:
@@ -128,6 +137,7 @@ func toggle_bike() -> void:
 	_cam_dist = GameConfig.BIKE_CAM
 	yaw = bike.heading
 	pitch = -0.3
+	_snap()
 
 
 func toggle_map() -> void:
@@ -178,18 +188,24 @@ func _notification(what: int) -> void:
 		pause_requested.emit()
 
 
-func _process(delta: float) -> void:
-	if player == null:
+## Такт симуляции: движение игрока и велосипеда, игровое время, пружины камеры. Длина такта всегда
+## одна (1/60 с), поэтому разгон, прыжки и полёт одинаковы при любом FPS, и за такт не проскочить стену.
+## При FPS ниже 60 за кадр проходит несколько тактов, ниже 7,5 (8 тактов за кадр) игра замедляется,
+## чтобы не захлебнуться
+func _physics_process(dt: float) -> void:
+	if player == null or paused:
 		return
-	hud.lock_hint.visible = not paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
-	if paused:
-		return
-	var dt := clampf(delta, 0.0, 0.05)
+	_prev = Vector3(player.x, player.feet, player.z)
+	_prev_bob = player.bob
+	var yaw0 := yaw
+	var pitch0 := pitch
 	time += dt
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
-	var moving := false
+	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
+	_moving = false
+	var crashed := false
 	if bike.riding:
 		var h0 := bike.heading
 		bike.step(player, fw, st, Input.is_action_pressed("run"), jump, dt, world, heights)
@@ -200,36 +216,67 @@ func _process(delta: float) -> void:
 			pitch = lerpf(pitch, -0.3, 1.0 - exp(-dt * 2.0))
 		_shake_on_landing(bike.land_impact, 6.0)
 		bike.land_impact = 0.0
-		if bike.crashed:
+		crashed = bike.crashed
+		if crashed:
 			_crash()
 	else:
-		moving = player.step(fw, st, Input.is_action_pressed("run"), jump, yaw, dt, world, heights)
+		_moving = player.step(fw, st, Input.is_action_pressed("run"), jump, yaw, dt, world, heights)
 		if player.land_impact > 0.0:
 			# проседание камеры: заметное после высокого прыжка, едва заметное после обычного
 			_dip_v -= clampf(player.land_impact - 3.0, 0.0, 14.0) * 0.25
 			_shake_on_landing(player.land_impact, 10.0)
 			player.land_impact = 0.0
-	bike_view.show_state(bike)
-	_update_hints()
-	_update_camera(moving, dt)
-
-	vegetation.update(player.x, player.z, false)
-	if world.outer != null:
-		outer.update(player.x, player.z)
-	if _ocean != null:
-		_ocean.position = Vector3(player.x, 0.0, player.z)
+	_tick_yaw = yaw - yaw0
+	_tick_pitch = pitch - pitch0
+	# пружина проседания и затухающая тряска камеры
+	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
+	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
+	_trauma = maxf(0.0, _trauma - dt * 1.6)
+	bike_view.tick(bike)
+	if crashed:
+		_snap()
 	for text in player.check_discoveries(world, hud.visited):
 		hud.toast(text)
+
+
+## Последний такт становится и предпоследним: после переноса игрока (сел, слез, упал) кадр не тянет
+## его плавно со старого места
+func _snap() -> void:
+	_prev = Vector3(player.x, player.feet, player.z)
+	_prev_bob = player.bob
+	_tick_yaw = 0.0
+	_tick_pitch = 0.0
+	bike_view.snap(bike)
+
+
+func _process(delta: float) -> void:
+	if player == null:
+		return
+	hud.lock_hint.visible = not paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	if paused:
+		return
+	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
+	var alpha := Engine.get_physics_interpolation_fraction()
+	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
+	bike_view.draw(alpha)
+	_update_hints()
+	_update_camera(alpha, delta)
+
+	vegetation.update(pos.x, pos.z, false)
+	if world.outer != null:
+		outer.update(pos.x, pos.z)
+	if _ocean != null:
+		_ocean.position = Vector3(pos.x, 0.0, pos.z)
 	for l: Label3D in labels:
-		var d := Vector2(l.position.x - player.x, l.position.z - player.z).length()
+		var d := Vector2(l.position.x - pos.x, l.position.z - pos.z).length()
 		l.visible = d > 25.0 and d < 900.0
 	SettlementsBuilder.animate_fires(fires, time)
 
-	info_timer -= dt
+	info_timer -= delta
 	if info_timer <= 0.0:
 		info_timer = 0.15
 		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet))
-	hud.set_player(player.x, player.z, bike.heading if bike.riding else yaw)
+	hud.set_player(pos.x, pos.z, bike.heading if bike.riding else yaw)
 	hud.set_bike(bike.x, bike.z, not bike.riding)
 
 
@@ -268,28 +315,29 @@ func _update_hints() -> void:
 		"F — сесть на велосипед" if near else "")
 
 
-func _update_camera(moving: bool, dt: float = 0.0) -> void:
+## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания
+func _update_camera(alpha: float, dt: float) -> void:
 	var riding := bike != null and bike.riding
+	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
+	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
+	var view_yaw := yaw - _tick_yaw * (1.0 - alpha)
+	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := GameSettings.fov
 	if riding:
 		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3)
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
-	camera.fov = lerpf(camera.fov, fov_goal, minf(1.0, dt * 4.0))
-	# пружина проседания и затухающая тряска
-	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
-	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
-	_trauma = maxf(0.0, _trauma - dt * 1.6)
+	camera.fov = lerpf(camera.fov, fov_goal, _smooth(4.0, dt))
 	var shake := _trauma * _trauma
 	var jolt := Vector3(sin(time * 41.0), sin(time * 37.0 + 1.7), sin(time * 29.0 + 3.1)) * shake
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
-		_cam_y = lerpf(_cam_y, player.feet + 1.4, minf(1.0, dt * 10.0))
-		if absf(_cam_y - player.feet - 1.4) > 2.0:
-			_cam_y = player.feet + 1.4 + clampf(_cam_y - player.feet - 1.4, -2.0, 2.0)
-		var target := Vector3(player.x, _cam_y, player.z)
-		var dir := Vector3(-sin(yaw) * cos(pitch), sin(pitch), -cos(yaw) * cos(pitch))
+		_cam_y = lerpf(_cam_y, pos.y + 1.4, _smooth(10.0, dt))
+		if absf(_cam_y - pos.y - 1.4) > 2.0:
+			_cam_y = pos.y + 1.4 + clampf(_cam_y - pos.y - 1.4, -2.0, 2.0)
+		var target := Vector3(pos.x, _cam_y, pos.z)
+		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var dist := GameConfig.BIKE_CAM
 		for k in range(1, 7):
 			var p := target - dir * (GameConfig.BIKE_CAM * k / 6.0)
@@ -297,14 +345,19 @@ func _update_camera(moving: bool, dt: float = 0.0) -> void:
 				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / 6.0)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
-		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, minf(1.0, dt * 3.0))
-		var pos := target - dir * _cam_dist + jolt * 0.12
+		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(3.0, dt))
+		var cam := target - dir * _cam_dist + jolt * 0.12
 		# не ниже земли и настила моста, под которым камера окажется в стене или в воздухе
-		pos.y = maxf(pos.y, heights.surface_at(pos.x, pos.z, pos.y) + 0.4)
-		camera.look_at_from_position(pos, target, Vector3.UP)
+		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + 0.4)
+		camera.look_at_from_position(cam, target, Vector3.UP)
 		return
-	_bob_amp = lerpf(_bob_amp, 1.0 if moving and player.on_ground and GameSettings.head_bob else 0.0, minf(1.0, dt * 8.0))
+	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and GameSettings.head_bob else 0.0, _smooth(8.0, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
-	var bob := sin(player.bob) * 0.05 * stride * _bob_amp
-	camera.position = Vector3(player.x, player.feet + GameConfig.EYE + bob + _dip, player.z)
-	camera.rotation = Vector3(pitch + jolt.x * 0.03, yaw + jolt.y * 0.02, jolt.z * 0.03)
+	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * 0.05 * stride * _bob_amp
+	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + _dip, pos.z)
+	camera.rotation = Vector3(view_pitch + jolt.x * 0.03, view_yaw + jolt.y * 0.02, jolt.z * 0.03)
+
+
+## Доля, на которую за кадр dt догоняют цель при скорости rate (1/с): одинаково при любом FPS
+static func _smooth(rate: float, dt: float) -> float:
+	return 1.0 - exp(-rate * dt)

@@ -110,8 +110,9 @@ func _slope(heights: Heightfield) -> float:
 	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) * 0.5
 
 
-## Шаг езды за dt секунд. throttle — газ (+) и тормоз (-), turn — руль вправо (+) и влево (-),
-## hop — пробел нажат в этом кадре (срабатывает, как только прыжок доступен, если ждать недолго).
+## Шаг езды за dt секунд (в игре — один такт физики, 1/60 с). throttle — газ (+) и тормоз (-),
+## turn — руль вправо (+) и влево (-), hop — пробел нажат в этом такте (срабатывает, как только прыжок
+## доступен, если ждать недолго).
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var slope := _slope(heights)
 	var climb := slope if speed >= 0.0 else -slope
@@ -181,13 +182,14 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		squash_v -= 0.9
 	if airborne:
 		air_time += dt
+		# путь по средней скорости такта, как у пешехода
+		y += (vy - GameConfig.GRAVITY * dt * 0.5) * dt
 		vy -= GameConfig.GRAVITY * dt
-		y += vy * dt
 		if y <= g:
 			_land(g, heights)
 	else:
 		# куда унесло бы велосипед без опоры: если земля уходит вниз быстрее — он летит
-		var fly := y + (vy - GameConfig.GRAVITY * dt) * dt
+		var fly := y + (vy - GameConfig.GRAVITY * dt * 0.5) * dt
 		if fly > g + 0.01:
 			airborne = true
 			air_time = 0.0

@@ -1,8 +1,9 @@
 class_name BikeView
 extends Node3D
 ## Велосипед с седоком, сцена scenes/bike.tscn: модель из примитивов, смотрит вдоль -Z.
-## Каждый кадр повторяет состояние BikeRide: место, курс, наклон, крен, вращение колёс и педалей,
-## ход подвески. Ноги седока ставятся на педали (два звена: бедро и голень).
+## Повторяет состояние BikeRide: место, курс, наклон, крен, вращение колёс и педалей, ход подвески.
+## Ноги седока ставятся на педали (два звена: бедро и голень). Езда считается тактами физики (60 в секунду),
+## а кадров бывает и 800: между двумя последними тактами модель плавно переходит (draw), иначе дёргалась бы.
 
 const WHEEL_Y := 0.34    # высота осей колёс над землёй
 const CRANK_Y := 0.3     # высота каретки
@@ -11,6 +12,11 @@ const PEDAL_X := 0.14
 const HIP := Vector3(0.11, 0.95, 0.17)
 const THIGH := 0.43
 const SHIN := 0.43
+
+# состояние на двух последних тактах: x, высота рамы, z, наклон, курс, крен, подвеска, колёса, руль, педали
+var _prev := PackedFloat64Array()
+var _cur := PackedFloat64Array()
+var _riding := false
 
 @onready var rider: Node3D = $Rider
 @onready var rear_wheel: Node3D = $RearWheel
@@ -24,23 +30,44 @@ const SHIN := 0.43
 @onready var shin_r: Node3D = $Rider/ShinR
 
 
-func show_state(b: BikeRide) -> void:
+## Запомнить состояние после такта физики
+func tick(b: BikeRide) -> void:
+	_prev = _cur
+	_cur = PackedFloat64Array([b.x, b.y - b.squash, b.z, b.tilt, b.heading, b.lean + b.sway, b.squash, b.wheel, b.steer, b.crank])
+	_riding = b.riding
+	if _prev.is_empty():
+		_prev = _cur
+
+
+## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
+func snap(b: BikeRide) -> void:
+	tick(b)
+	_prev = _cur
+
+
+## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
+func draw(alpha: float) -> void:
+	var v := PackedFloat64Array()
+	v.resize(_cur.size())
+	for i in _cur.size():
+		# курс и углы колёс и педалей идут через полный оборот: переход по короткой дуге
+		v[i] = lerp_angle(_prev[i], _cur[i], alpha) if i == 4 or i == 7 or i == 9 else lerpf(_prev[i], _cur[i], alpha)
 	# рама и седок опускаются на ход подвески, колёса остаются на земле
-	position = Vector3(b.x, b.y - b.squash, b.z)
-	rotation = Vector3(b.tilt, b.heading, b.lean + b.sway)
-	rear_wheel.position.y = WHEEL_Y + b.squash
-	front_wheel.position.y = WHEEL_Y + b.squash
-	rear_wheel.rotation.x = -b.wheel
-	front_wheel.rotation.x = -b.wheel
-	front_wheel.rotation.y = -b.steer * 0.35
-	crank.rotation.x = -b.crank
+	position = Vector3(v[0], v[1], v[2])
+	rotation = Vector3(v[3], v[4], v[5])
+	rear_wheel.position.y = WHEEL_Y + v[6]
+	front_wheel.position.y = WHEEL_Y + v[6]
+	rear_wheel.rotation.x = -v[7]
+	front_wheel.rotation.x = -v[7]
+	front_wheel.rotation.y = -v[8] * 0.35
+	crank.rotation.x = -v[9]
 	# педали держатся горизонтально
-	pedal_l.rotation.x = b.crank
-	pedal_r.rotation.x = b.crank
-	rider.visible = b.riding
-	if b.riding:
-		var c := cos(-b.crank) * CRANK_R
-		var s := sin(-b.crank) * CRANK_R
+	pedal_l.rotation.x = v[9]
+	pedal_r.rotation.x = v[9]
+	rider.visible = _riding
+	if _riding:
+		var c := cos(-v[9]) * CRANK_R
+		var s := sin(-v[9]) * CRANK_R
 		_leg(thigh_r, shin_r, Vector3(HIP.x, HIP.y, HIP.z), Vector3(PEDAL_X, CRANK_Y - c, -s))
 		_leg(thigh_l, shin_l, Vector3(-HIP.x, HIP.y, HIP.z), Vector3(-PEDAL_X, CRANK_Y + c, s))
 
