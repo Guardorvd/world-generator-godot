@@ -413,9 +413,9 @@ public partial class FastGrid : RefCounted
 		for (int o = 0; o < 4; o++)
 		{
 			double n = Noise(pm, u * fq, v * fq);
-			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
 			if (o == 0)
-				e *= n > 0.0 ? asym : 1.0 / asym;
+				n *= n > 0.0 ? asym : 1.0 / asym;
+			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
 			double val = Math.Max(0.0, 1.0 - e);
 			val *= val;
 			val *= wt;

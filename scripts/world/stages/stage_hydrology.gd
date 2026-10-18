@@ -96,21 +96,6 @@ static func run(w: WorldData, again := false) -> void:
 		run(w, true)
 		return
 
-	for i in N:
-		if lake[i] == 0 or ocean[i] != 0:
-			continue
-		var cx := i % W
-		var cy := i / W
-		for k in 8:
-			var nx: int = cx + Grid.DX[k]
-			var ny: int = cy + Grid.DY[k]
-			if nx < 0 or ny < 0 or nx >= W or ny >= H:
-				continue
-			var n := ny * W + nx
-			if lake[n] == 0 and ocean[n] == 0 and h[n] < filled[i] + SHORE_LIFT:
-				h[n] = filled[i] + SHORE_LIFT
-				filled[n] = maxf(filled[n], h[n])
-
 	var dist_ocean := Grid.distance_field(W, H, ocean)
 
 	# Предварительная влажность (осадки): шум + близость к морю
@@ -137,6 +122,23 @@ static func run(w: WorldData, again := false) -> void:
 	for i in N:
 		if ocean[i] == 0 and lake[i] == 0 and acc[i] >= WorldData.RIVER_ACC:
 			river[i] = 1
+
+	# С 3.1 берег поднимается после определения рек: русла у входа и выхода озера остаются
+	# на высоте стока. Иначе береговая прибавка делала в реке порог против течения
+	for i in N:
+		if lake[i] == 0 or ocean[i] != 0:
+			continue
+		var cx := i % W
+		var cy := i / W
+		for k in 8:
+			var nx: int = cx + Grid.DX[k]
+			var ny: int = cy + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			if lake[n] == 0 and ocean[n] == 0 and river[n] == 0 and h[n] < filled[i] + SHORE_LIFT:
+				h[n] = filled[i] + SHORE_LIFT
+				filled[n] = maxf(filled[n], h[n])
 
 	w.h = h
 	w.filled = filled

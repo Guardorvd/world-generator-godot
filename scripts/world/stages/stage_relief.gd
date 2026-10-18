@@ -253,9 +253,11 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 	var wt := 1.0
 	for o in 4:
 		var n := ridge.noise(u * fq, v * fq)
-		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
+		# С 3.1 асимметрия до скругления: умножение e давало разные высоты справа и слева
+		# от n = 0, то есть отвесную ступеньку вдоль гребня даже при плавном шуме
 		if o == 0:
-			e *= asym if n > 0.0 else 1.0 / asym
+			n *= asym if n > 0.0 else 1.0 / asym
+		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
 		var val := maxf(0.0, 1.0 - e)
 		val *= val
 		val *= wt
