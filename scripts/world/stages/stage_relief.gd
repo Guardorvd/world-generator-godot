@@ -49,7 +49,7 @@ static func run(w: WorldData) -> void:
 	for i in N:
 		h[i] = normalize(h[i])
 	# Микрорельеф суши: мелкие неровности, из-за которых реки на равнинах петляют
-	var micro := Parallel.fbm_field(w, w.noise.micro, 9.0, 2)
+	var micro := Parallel.fbm_field(w.W, w.H, w.noise.micro, 9.0, 2)
 	for i in N:
 		h[i] = add_micro(h[i], micro[i])
 	w.h = h

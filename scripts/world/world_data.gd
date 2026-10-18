@@ -81,7 +81,7 @@ func start_noise_fields() -> void:
 		var out := {}
 		for name: String in NOISE_FIELDS:
 			var p: Array = NOISE_FIELDS[name]
-			out[name] = Parallel.fbm_field(self, noise[name], p[0], p[1])
+			out[name] = Parallel.fbm_field(W, H, noise[name], p[0], p[1])
 		return out)
 
 
@@ -92,7 +92,7 @@ func noise_field(name: String) -> PackedFloat64Array:
 		_fields_thread = null
 	if not _fields.has(name):
 		var p: Array = NOISE_FIELDS[name]
-		_fields[name] = Parallel.fbm_field(self, noise[name], p[0], p[1])
+		_fields[name] = Parallel.fbm_field(W, H, noise[name], p[0], p[1])
 	return _fields[name]
 
 

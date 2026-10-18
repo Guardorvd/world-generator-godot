@@ -82,7 +82,3 @@ const LIST: Array[Dictionary] = [
 	{name = "Каменистый берег", color = [140, 136, 126], speed = 0.8, cost = 1.6, trees = 0.06, kinds = [T_ROCK],
 		habit = 0.3, pebbles = true},
 ]
-
-
-static func is_water(b: int) -> bool:
-	return LIST[b].get("water", false)

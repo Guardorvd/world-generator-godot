@@ -25,10 +25,6 @@ static func arg(name: String, default: String = "") -> String:
 	return args[k + 1] if k >= 0 and k + 1 < args.size() else default
 
 
-static func has_flag(name: String) -> bool:
-	return OS.get_cmdline_user_args().has("--" + name)
-
-
 ## Папка результатов: --out или tools/control/runs/<версия>; создаётся, если её нет
 static func out_dir() -> String:
 	var dir := arg("out", RUNS.path_join(version()))

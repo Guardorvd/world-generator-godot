@@ -268,7 +268,13 @@ func ground_at(x: float, z: float, raw: bool = false) -> float:
 func _cell_height(arr: PackedFloat32Array, i: int, j: int) -> float:
 	if i >= 0 and j >= 0 and i < world.W and j < world.H:
 		return arr[j * world.W + i]
-	return world.outer.height(i, j)
+	return outer_meters(world.outer.height(i, j))
+
+
+## Высота клетки за краем карты (OuterLand, единицы WorldData.h) в метрах: ниже 0 — дно моря, как у
+## клеток океана на карте. Копия развёрнута в OuterTerrain._build
+static func outer_meters(h: float) -> float:
+	return h * HS if h >= 0.0 else maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5
 
 
 ## Известна ли земля в точке (x, z): на карте всегда, за краем — если OuterLand уже посчитал клетки вокруг.

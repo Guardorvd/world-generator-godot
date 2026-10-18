@@ -28,14 +28,13 @@ static func bands(h: int, job: Callable, band: int = BAND) -> Array:
 	return out
 
 
-## Поле fbm(x / d + ox, y / d + oy, oct) по всем клеткам, в двойной точности (как в JS).
+## Поле fbm(x / d + ox, y / d + oy, oct) по всем клеткам карты W × H, в двойной точности (как в JS).
 ## В сборке Godot .NET считается на C# (FastGrid.FbmField), результат тот же.
-static func fbm_field(w: WorldData, noise: Simplex, d: float, oct: int, ox: float = 0.0, oy: float = 0.0) -> PackedFloat64Array:
-	var W := w.W
+static func fbm_field(W: int, H: int, noise: Simplex, d: float, oct: int, ox: float = 0.0, oy: float = 0.0) -> PackedFloat64Array:
 	var fast := Grid.fast_grid()
 	if fast != null:
-		return fast.FbmField(noise.perm, W, w.H, d, oct, ox, oy)
-	var parts := bands(w.H, func(y0: int, y1: int) -> PackedFloat64Array:
+		return fast.FbmField(noise.perm, W, H, d, oct, ox, oy)
+	var parts := bands(H, func(y0: int, y1: int) -> PackedFloat64Array:
 		var n := noise.clone()
 		var r := PackedFloat64Array()
 		r.resize((y1 - y0) * W)
@@ -51,7 +50,7 @@ static func fbm_field(w: WorldData, noise: Simplex, d: float, oct: int, ox: floa
 	return out
 
 
-## То же поле по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за картой (OuterLand).
+## То же поле по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за краем карты.
 ## Без C# считается в текущем потоке: прямоугольники маленькие и сами считаются в фоновых задачах
 static func fbm_rect(noise: Simplex, x0: int, y0: int, cw: int, ch: int, d: float, oct: int) -> PackedFloat64Array:
 	var fast := Grid.fast_grid()

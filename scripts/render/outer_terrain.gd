@@ -7,6 +7,8 @@ extends Node3D
 ## берутся из Heightfield.
 
 const TILE := GameConfig.TILE
+const HS := GameConfig.HS
+const OCEAN_DEPTH := GameConfig.OCEAN_DEPTH
 const C := OuterLand.C
 const RADIUS := 1200.0   # куски ближе этого держатся загруженными (дальше всё равно туман)
 const DROP := 1600.0     # куски дальше этого выгружаются
@@ -174,7 +176,9 @@ func _build(key: Vector2i) -> Dictionary:
 				hs[k] = hv[j * W + i]
 				bi = biome[j * W + i]
 			else:
-				hs[k] = fh[k]
+				# Heightfield.outer_meters, развёрнута на месте (задача в потоке, см. Parallel)
+				var h := fh[k]
+				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
 			col[k] = palette[bi]
 	var V := C + 1

@@ -1,7 +1,8 @@
 class_name Hud
 extends Control
 ## Интерфейс поверх 3D: сведения о местности, мини-карта, большая карта, всплывающие сообщения,
-## прицел и подсказки. Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
+## прицел и подсказки. Прицел, панель сведений и надписи — узлы сцены main.tscn (правятся в редакторе),
+## мини-карта и большая карта рисуются кодом (MiniMap, BigMap). Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
 ## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
 
 const TILE := GameConfig.TILE
@@ -13,13 +14,13 @@ const TOAST_QUEUE := 3 # сколько сообщений ждут в очер�
 
 var world: WorldData
 var map_tex: ImageTexture
-var info: Label
 var minimap: MiniMap
 var big_map: BigMap
-var toast_label: Label
-var lock_hint: Label
-var hint: Label
-var prompt: Label
+@onready var info: Label = $InfoPanel/Info
+@onready var toast_label: Label = $Toast
+@onready var lock_hint: Label = $LockHint
+@onready var hint: Label = $Hint
+@onready var prompt: Label = $Prompt
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
 var _toast_tween: Tween
@@ -33,43 +34,18 @@ var bike_pos := Vector2.ZERO
 var bike_shown := false
 
 
-func _init() -> void:
-	set_anchors_preset(Control.PRESET_FULL_RECT)
-	mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	var crosshair := ColorRect.new()
-	crosshair.color = Color(1, 1, 1, 0.8)
-	_place(crosshair, Vector4(0.5, 0.5, 0.5, 0.5), Vector4(-2, -2, 2, 2))
-	crosshair.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(crosshair)
-
-	var info_panel := PanelContainer.new()
-	info_panel.position = Vector2(14, 14)
-	info_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	info_panel.add_theme_stylebox_override("panel", UiStyle.panel(Color(0.04, 0.06, 0.1, 0.55), 8, 10))
-	info = Label.new()
-	info.add_theme_font_size_override("font_size", 15)
-	info_panel.add_child(info)
-	add_child(info_panel)
-
+func _ready() -> void:
+	# мини-карта в правом верхнем углу, под надписями (как вторым узлом после панели сведений)
 	minimap = MiniMap.new()
 	minimap.hud = self
-	_place(minimap, Vector4(1, 0, 1, 0), Vector4(-MINI - 14, 14, -14, MINI + 14))
+	minimap.anchor_left = 1.0
+	minimap.anchor_right = 1.0
+	minimap.offset_left = -MINI - 14
+	minimap.offset_top = 14
+	minimap.offset_right = -14
+	minimap.offset_bottom = MINI + 14
 	add_child(minimap)
-
-	hint = Label.new()
-	hint.add_theme_font_size_override("font_size", 14)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.75))
-	_place(hint, Vector4(0, 1, 1, 1), Vector4(0, -40, 0, -14))
-	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	add_child(hint)
-
-	prompt = _center_label("", 0.55)
-	prompt.add_theme_font_size_override("font_size", 18)
-	lock_hint = _center_label("Щёлкните по экрану, чтобы управлять взглядом мышью", 0.62)
-	toast_label = _center_label("", 0.16)
-	toast_label.add_theme_font_size_override("font_size", 22)
-	toast_label.modulate.a = 0.0
+	move_child(minimap, $InfoPanel.get_index() + 1)
 
 	big_map = BigMap.new()
 	big_map.hud = self
@@ -77,30 +53,6 @@ func _init() -> void:
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
 	add_child(big_map)
-
-
-## Якоря (left, top, right, bottom) и отступы от них
-static func _place(c: Control, anchors: Vector4, offsets: Vector4) -> void:
-	c.anchor_left = anchors.x
-	c.anchor_top = anchors.y
-	c.anchor_right = anchors.z
-	c.anchor_bottom = anchors.w
-	c.offset_left = offsets.x
-	c.offset_top = offsets.y
-	c.offset_right = offsets.z
-	c.offset_bottom = offsets.w
-
-
-func _center_label(text: String, y_frac: float) -> Label:
-	var l := Label.new()
-	l.text = text
-	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_place(l, Vector4(0, y_frac, 1, y_frac), Vector4(0, 0, 0, 40))
-	l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.8))
-	l.add_theme_constant_override("outline_size", 6)
-	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(l)
-	return l
 
 
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры

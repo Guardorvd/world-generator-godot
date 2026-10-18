@@ -46,7 +46,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.path_mask = PackedByteArray()
 	w.path_mask.resize(w.N)
 	w.trails = []
-	var finder := Pathfinder.new(w)
+	var finder := Pathfinder.new(w.W, w.H)
 	_animal_trails(w, finder)
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder)
@@ -143,7 +143,7 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 					best = i
 		if best < 0:
 			continue
-		var p := finder.find_path(s, best)
+		var p := finder.find_path(w.cost, s, best)
 		if p.size() > 6:
 			_add_trail(w, p, "animal")
 			k += 1
@@ -204,7 +204,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	for e in edges:
 		# первые n - 1 связей — остовное дерево
 		var road: bool = e[3] < n - 1
-		var p := finder.find_path(st[e[0]].i, st[e[1]].i, road_cost if road else PackedFloat32Array())
+		var p := finder.find_path(road_cost if road else w.cost, st[e[0]].i, st[e[1]].i)
 		if p.size() > 0:
 			var q := _structures(w, p, road, finder, road_cost if road else w.cost, turn)
 			_add_trail(w, q, "road" if road else "trail", road_cost)
@@ -259,7 +259,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var b: int = nb[0]
 			if have.has(_key(a, b)) and not road:
 				continue
-			var p := finder.find_path(st[a].i, st[b].i, c)
+			var p := finder.find_path(c, st[a].i, st[b].i)
 			if p.size() == 0 or p.size() > nb[1] * v[4] or _share(w, p, avoid) > AVOID_SHARE:
 				continue
 			have[_key(a, b)] = true
@@ -271,7 +271,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		# до соседей по суше не дойти (обычно это остров): тропа к морю на другой стороне
 		var t := _shore(w, st[a].i, _corridor(w, avoid))
 		if t >= 0:
-			var p := finder.find_path(st[a].i, t, c)
+			var p := finder.find_path(c, st[a].i, t)
 			var d := Grid.hypot(t % w.W - st[a].x, t / w.W - st[a].y)
 			if p.size() > 0 and p.size() <= d * DEAD_LEN and _share(w, p, avoid) <= AVOID_SHARE:
 				_add_trail(w, _structures(w, p, false, finder, w.cost, turn), "trail", road_cost)
@@ -462,7 +462,7 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 			var k := y * W + x
 			if w.h[k] <= top and not _wet(w, k):
 				c[k] = cost[k]
-	var q := finder.find_path(a, b, c)
+	var q := finder.find_path(c, a, b)
 	if q.size() > d * DETOUR:
 		return PackedInt32Array()
 	return q
@@ -594,6 +594,6 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder) -> void:
 				bd = d
 				best = s
 		if best != null and bd < w.W * 0.4:
-			var p := finder.find_path(best.i, pk.i)
+			var p := finder.find_path(w.cost, best.i, pk.i)
 			if p.size() > 0:
 				_add_trail(w, p, "mountain")

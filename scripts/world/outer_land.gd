@@ -8,9 +8,7 @@ extends RefCounted
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
 
-const C := 64              # сторона куска в клетках (256 м)
-const TILE := GameConfig.TILE
-const HS := GameConfig.HS
+const C := 64              # сторона куска в клетках
 
 var world: WorldData
 ## Vector2i(номер куска по x, по y) -> поля compute по (C + 3)² клеткам с углом (x0 - 1, y0 - 1),
@@ -25,7 +23,8 @@ func _init(w: WorldData) -> void:
 		compute(w, -1, 0, 1, w.H), compute(w, w.W, 0, 1, w.H)]
 
 
-## Поля клеток прямоугольника cw × ch с углом (x0, y0): h — высота в метрах (ниже 0 — море), biome,
+## Поля клеток прямоугольника cw × ch с углом (x0, y0): h — высота в единицах WorldData.h (ниже 0 — море,
+## в метры её переводит Heightfield.outer_meters), biome,
 ## temp, moist, elev, slope. Климат упрощён против StageClimate: влажность без близости воды, берег —
 ## клетка суши рядом с морем
 static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
@@ -68,11 +67,10 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			var b: int
 			if hh < 0.0:
 				b = Biomes.DEEP if hh < -0.35 else (Biomes.OCEAN if hh < -0.07 else Biomes.SHALLOW)
-				out.h[o] = maxf(-GameConfig.OCEAN_DEPTH, hh * GameConfig.OCEAN_DEPTH) - 0.5
 			else:
 				var shore := hn[c + 1] < 0.0 or hn[c - 1] < 0.0 or hn[c + pw] < 0.0 or hn[c - pw] < 0.0
 				b = StageClimate.land_biome(e, t, m, slope, 1.0 if shore else 99.0)
-				out.h[o] = hh * HS
+			out.h[o] = hh
 			out.biome[o] = b
 			out.temp[o] = t
 			out.moist[o] = m
@@ -105,7 +103,7 @@ func _locate(i: int, j: int) -> Array:
 	return [f, (j - key.y * C + 1) * (C + 3) + i - key.x * C + 1]
 
 
-## Высота клетки за краем карты в метрах; где кусок ещё не посчитан — уровень моря
+## Высота клетки за краем карты в единицах WorldData.h (ниже 0 — море); где кусок ещё не посчитан — уровень моря
 func height(i: int, j: int) -> float:
 	var at := _locate(i, j)
 	return at[0].h[at[1]] if not at.is_empty() else 0.0
