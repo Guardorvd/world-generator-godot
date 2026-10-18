@@ -11,7 +11,7 @@ extends RefCounted
 var world: WorldData
 var heights: Heightfield
 var terrain_mesh: ArrayMesh
-var terrain_material: StandardMaterial3D
+var terrain_material: ShaderMaterial
 var water: Array[MeshInstance3D] = []
 var map_image: Image
 

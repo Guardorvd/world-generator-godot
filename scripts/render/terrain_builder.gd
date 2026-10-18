@@ -5,6 +5,10 @@ extends RefCounted
 ## потому что в Godot лицевая сторона — по часовой стрелке.
 
 const TILE := GameConfig.TILE
+const SHADER := preload("res://resources/terrain.gdshader")
+const DETAIL_SIZE := 256   # сторона бесшовной текстуры шума для мелкой детали
+
+static var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на все миры
 
 
 ## Нормаль вершины клетки (i, j) по соседним высотам (на краю соседи берутся с края карты)
@@ -85,11 +89,40 @@ static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: 
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
-## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни)
-static func material(base: Image) -> StandardMaterial3D:
+## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни).
+## С 2.5 это шейдер resources/terrain.gdshader: вблизи поверх карты мелкая деталь, см. комментарий в нём
+static func material(base: Image) -> ShaderMaterial:
 	base.generate_mipmaps()
-	var mat := StandardMaterial3D.new()
-	mat.albedo_texture = ImageTexture.create_from_image(base)
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
-	mat.roughness = 1.0
+	var mat := _detail_material()
+	mat.set_shader_parameter("base_tex", ImageTexture.create_from_image(base))
+	mat.set_shader_parameter("base_texel", Vector2(1.0 / base.get_width(), 1.0 / base.get_height()))
+	return mat
+
+
+## Тот же материал для рельефа за краем карты: цвет из вершин
+static func outer_material() -> ShaderMaterial:
+	var mat := _detail_material()
+	mat.set_shader_parameter("use_vertex_color", true)
+	return mat
+
+
+static func _detail_material() -> ShaderMaterial:
+	if _detail.is_empty():
+		# бесшовный шум один раз за запуск игры; не зависит от сида, это фактура, а не мир
+		var noise := FastNoiseLite.new()
+		noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+		noise.frequency = 0.035
+		noise.fractal_octaves = 4
+		noise.seed = 2025
+		var img := noise.get_seamless_image(DETAIL_SIZE, DETAIL_SIZE)
+		var nrm := img.duplicate() as Image
+		nrm.convert(Image.FORMAT_RGBA8)
+		nrm.bump_map_to_normal_map(6.0)
+		img.generate_mipmaps()
+		nrm.generate_mipmaps()
+		_detail = [ImageTexture.create_from_image(img), ImageTexture.create_from_image(nrm)]
+	var mat := ShaderMaterial.new()
+	mat.shader = SHADER
+	mat.set_shader_parameter("detail_tex", _detail[0])
+	mat.set_shader_parameter("detail_normal", _detail[1])
 	return mat

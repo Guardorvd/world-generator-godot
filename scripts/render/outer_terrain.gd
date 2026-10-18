@@ -18,7 +18,7 @@ const RECHECK := 32.0    # через сколько метров пути за�
 var world: WorldData
 var heights: Heightfield
 var land: OuterLand
-var _mat: StandardMaterial3D
+var _mat: ShaderMaterial
 var _nodes := {}         # номер куска -> MeshInstance3D (или null, если в куске нечего рисовать)
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
@@ -29,10 +29,7 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
 	land = w.outer
-	_mat = StandardMaterial3D.new()
-	_mat.vertex_color_use_as_albedo = true
-	_mat.vertex_color_is_srgb = true
-	_mat.roughness = 1.0
+	_mat = TerrainBuilder.outer_material()
 
 
 ## Сразу загрузить все куски в радиусе radius (при старте игры), чтобы ближний рельеф не вырастал на глазах
