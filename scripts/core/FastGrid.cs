@@ -279,6 +279,18 @@ public partial class FastGrid : RefCounted
 	private const double MacroAmp = 1.2;
 	private const double MacroLift = 0.25;
 
+	/// <summary>Негорный рельеф: копия StageRelief.SEA_RAW, CHARACTER, PLAIN_LIFT, PLAIN_HILLS, HILL_AMP, FOOTHILLS, MASK_EDGE, VALLEY, VALLEY_WIDTH, VALLEY_DEPTH.</summary>
+	private const double SeaRaw = 0.067;
+	private const double Character = 520.0;
+	private const double PlainLift = 0.3;
+	private const double PlainHills = 0.15;
+	private const double HillAmp = 0.07;
+	private const double Foothills = 0.35;
+	private const double MaskEdge = 0.9;
+	private const double Valley = 260.0;
+	private const double ValleyWidth = 0.16;
+	private const double ValleyDepth = 0.06;
+
 	/// <summary>
 	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
 	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
@@ -303,10 +315,22 @@ public partial class FastGrid : RefCounted
 				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
 				double lo = -0.15 - Fbm(mask, X / Massif - 21.3, Y / Massif + 5.9, 2) * 0.3;
-				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo) / 0.45);
+				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo + (MaskEdge - 0.45) * 0.5) / MaskEdge);
 				double m = t * t * (3.0 - 2.0 * t) * land;
+				t = Clamp01((Fbm(hill, X / Character + 41.9, Y / Character - 66.1, 2) - -0.15) / 0.4);
+				double rough = t * t * (3.0 - 2.0 * t);
+				t = Clamp01((m - Foothills) / Foothills);
+				m *= rough + (1.0 - rough) * m * m;
+				rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
+				double h = bas * 0.55;
+				if (h > SeaRaw)
+					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
-				double h = bas * 0.55 + hills * 0.05 * (0.3 + land);
+				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough);
+				t = Clamp01((bas - 0.18) / 0.17);
+				double inland = t * t * (3.0 - 2.0 * t);
+				t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
+				h -= t * t * (3.0 - 2.0 * t) * ValleyDepth * rough * inland;
 				if (m > 0.0)
 					h += Mountain(ridge, hill, x + wx * MountainWarp, y + wy * MountainWarp) * m * MountainAmp;
 				outH[j * W + i] = (float)h;

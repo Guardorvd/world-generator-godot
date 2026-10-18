@@ -1,6 +1,6 @@
 class_name StageRelief
 extends RefCounted
-## Этап 1. Макрорельеф: континенты, горные массивы (с 1.9.7, см. mountain), холмы, уровень моря, микрорельеф суши.
+## Этап 1. Макрорельеф: континенты, горные массивы (с 1.9.7, см. mountain), равнины и холмистые края (с 1.9.8), уровень моря, микрорельеф суши.
 ## Пишет: w.macro_x, macro_y — сдвиг шума материков (место старта), w.h — высота клетки (0 — уровень моря,
 ## суша до 1, дно до -1).
 ## Строки карты независимы, поэтому считаются параллельно полосами. В сборке Godot .NET тот же цикл
@@ -22,6 +22,20 @@ const MACRO_LIFT := 0.25
 const SEA_RAW := 0.067
 const TOP_RAW := 1.05
 const BOTTOM_RAW := -0.7
+## Негорный рельеф (с 1.9.8). CHARACTER — масштаб шума характера местности в клетках (около 2 км):
+## равнина (0) или холмистый край (1). На равнине высота над морем — PLAIN_LIFT от прежней, а холмов
+## PLAIN_HILLS. Предгорья — где сила гор (mask) от FOOTHILLS до 2 × FOOTHILLS: там холмы растут до полных
+const CHARACTER := 520.0
+const PLAIN_LIFT := 0.3
+const PLAIN_HILLS := 0.15
+const HILL_AMP := 0.07
+const FOOTHILLS := 0.35
+## Ширина подъёма от равнины к горам (в долях шума гор)
+const MASK_EDGE := 0.9
+## Небольшие долины: масштаб шума в клетках, ширина (в долях шума) и глубина
+const VALLEY := 260.0
+const VALLEY_WIDTH := 0.16
+const VALLEY_DEPTH := 0.06
 ## Сколько мест старта пробовать и какая доля суши в стартовой области подходит
 const PICK_TRIES := 48
 const PICK_MIN := 0.36
@@ -124,10 +138,29 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var land := t * t * (3.0 - 2.0 * t)
 	# Где горы. Медленный шум размера сдвигает порог: где он высок, массив большой, где низок — небольшая группа гор
 	var lo := -0.15 - mask_n.fbm(X / MASSIF - 21.3, Y / MASSIF + 5.9, 2) * 0.3
-	t = clampf((mask_n.fbm(X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo) / 0.45, 0.0, 1.0)
+	# С 1.9.8 подъём к горам вдвое шире (MASK_EDGE вместо 0.45), середина подъёма на прежнем месте:
+	# иначе у края массива на ровном месте вырастал уступ в десятки метров
+	t = clampf((mask_n.fbm(X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo + (MASK_EDGE - 0.45) * 0.5) / MASK_EDGE, 0.0, 1.0)
 	var mask := t * t * (3.0 - 2.0 * t) * land
+	# Характер местности (с 1.9.8): медленный шум делит сушу на равнины и холмистые края. На равнинах
+	# слабые окраины гор стихают (там, где горы во всю силу, массив остаётся), а вокруг гор холмистость
+	# растёт сама (предгорья): равнина переходит в горы через холмы, без резкой границы
+	t = clampf((hill.fbm(X / CHARACTER + 41.9, Y / CHARACTER - 66.1, 2) - -0.15) / 0.4, 0.0, 1.0)
+	var rough := t * t * (3.0 - 2.0 * t)
+	t = clampf((mask - FOOTHILLS) / FOOTHILLS, 0.0, 1.0)
+	mask *= rough + (1.0 - rough) * mask * mask
+	rough = maxf(rough, t * t * (3.0 - 2.0 * t))
+	# Суша на равнинах ниже и положе: высота над морем сжата до PLAIN_LIFT. Берега от этого не сдвигаются
+	var h := base * 0.55
+	if h > SEA_RAW:
+		h = SEA_RAW + (h - SEA_RAW) * (PLAIN_LIFT + (1.0 - PLAIN_LIFT) * rough)
 	var hills := hill.fbm(X / 40.0, Y / 40.0, 4)
-	var h := base * 0.55 + hills * 0.05 * (0.3 + land)
+	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough)
+	t = clampf((base - 0.18) / 0.17, 0.0, 1.0)
+	var inland := t * t * (3.0 - 2.0 * t)
+	# Небольшие долины в холмистых краях: узкие ложбины вдоль линий нуля шума
+	t = clampf(1.0 - absf(ridge.noise(X / VALLEY + 5.3, Y / VALLEY - 9.4)) / VALLEY_WIDTH, 0.0, 1.0)
+	h -= t * t * (3.0 - 2.0 * t) * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
 		h += mountain(ridge, hill, x + wx * MOUNTAIN_WARP, y + wy * MOUNTAIN_WARP) * mask * MOUNTAIN_AMP
 	return h
