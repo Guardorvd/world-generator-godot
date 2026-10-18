@@ -12,6 +12,8 @@ extends RefCounted
 ## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу.
 ## Туннели и обходы горы чередуются: после туннеля следующий хребет путь по возможности обходит
 ## понизу (_detour), после обхода — снова туннель. Высоты здесь в единицах w.h (1 = 260 м).
+## Путь, который пересекает воду или хребет там же, где уже построен мост или туннель (концы рядом,
+## _same), проходит по нему: к его входу и от выхода — короткими путями по суше.
 ## Из поселения-тупика (с одной связью) идёт ответвление к ближайшему соседу другой стороной, по суше,
 ## а у части дорог есть второй путь в обход первого (_second_ways).
 
@@ -39,6 +41,7 @@ const SHORE_MAX := 45       # и не дальше стольких
 const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
 const AVOID_MUL := 8.0      # во столько раз дороже клетки коридора
 const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
+const REUSE_R := 3.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -72,16 +75,24 @@ static func _build_cost(w: WorldData) -> void:
 
 
 ## Записать найденный путь как тропу
-## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost)
-static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array()) -> void:
+## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost; on_axis — клетки на осях мостов и туннелей:
+## там и на соседних с ними клетках пути точки линии не смещаются случайно, чтобы дорога входила
+## на настил и в портал ровно, а не через перила)
+static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
+		on_axis: PackedByteArray = PackedByteArray()) -> void:
 	var W := w.W
 	var H := w.H
 	var rng := w.rng
 	var width := 0.32 if kind == "animal" else (0.42 if kind == "mountain" else (0.9 if kind == "road" else 0.55))
 	var pts: Array = []
-	for i in path:
+	var last := path.size() - 1
+	for k in path.size():
+		var i := path[k]
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * 0.5
 		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * 0.5
+		if on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0):
+			px = (i % W) + 0.5
+			py = (i / W) + 0.5
 		pts.append({x = px, y = py, w = width})
 	var cost := w.cost
 	var mask := w.path_mask
@@ -194,7 +205,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	w.bridges = []
 	w.tunnels = []
 	var road_cost := w.cost.duplicate()
-	var turn := {detour = w.seed_num % 2 == 1}   # что пробовать на следующем хребте: обход (true) или туннель; с чего начать — по сиду
+	# detour — что пробовать на следующем хребте: обход (true) или туннель, с чего начать — по сиду;
+	# on_axis — клетки на осях мостов и туннелей (_add_trail)
+	var state := {detour = w.seed_num % 2 == 1, on_axis = PackedByteArray()}
+	state.on_axis.resize(w.N)
 	var ocean := w.ocean
 	var lake := w.lake
 	for i in w.N:
@@ -206,10 +220,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 		var road: bool = e[3] < n - 1
 		var p := finder.find_path(road_cost if road else w.cost, st[e[0]].i, st[e[1]].i)
 		if p.size() > 0:
-			var q := _structures(w, p, road, finder, road_cost if road else w.cost, turn)
-			_add_trail(w, q, "road" if road else "trail", road_cost)
+			var q := _structures(w, p, road, finder, road_cost if road else w.cost, state)
+			_add_trail(w, q, "road" if road else "trail", road_cost, state.on_axis)
 			paths.append([e[0], e[1], q, road, e[2]])
-	_second_ways(w, finder, paths, road_cost, turn)
+	_second_ways(w, finder, paths, road_cost, state)
 	_clear_huts(w)
 
 
@@ -217,7 +231,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 ## у каждой ALT_EVERY-й дороги остовного дерева (по длине, с самой длинной) появляется вторая дорога
 ## между теми же поселениями. Оба ищутся только по суше и в стороне от прежнего пути (_avoiding),
 ## поэтому петляют по другой местности; слишком длинный или почти совпадающий с прежним путь отбрасывается.
-static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, turn: Dictionary) -> void:
+static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, state: Dictionary) -> void:
 	var st := w.settlements
 	var n := st.size()
 	var links: Array = []   # пути у каждого поселения
@@ -263,7 +277,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if p.size() == 0 or p.size() > nb[1] * v[4] or _share(w, p, avoid) > AVOID_SHARE:
 				continue
 			have[_key(a, b)] = true
-			_add_trail(w, _structures(w, p, road, finder, w.cost, turn), "road" if road else "trail", road_cost)
+			_add_trail(w, _structures(w, p, road, finder, w.cost, state), "road" if road else "trail", road_cost, state.on_axis)
 			found = true
 			break
 		if found or road:
@@ -274,7 +288,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var p := finder.find_path(c, st[a].i, t)
 			var d := Grid.hypot(t % w.W - st[a].x, t / w.W - st[a].y)
 			if p.size() > 0 and p.size() <= d * DEAD_LEN and _share(w, p, avoid) <= AVOID_SHARE:
-				_add_trail(w, _structures(w, p, false, finder, w.cost, turn), "trail", road_cost)
+				_add_trail(w, _structures(w, p, false, finder, w.cost, state), "trail", road_cost, state.on_axis)
 
 
 ## Ближайшая к клетке s клетка морского берега на расстоянии от SHORE_MIN до SHORE_MAX клеток,
@@ -357,8 +371,9 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## в котором участки под ними заменены прямыми. Мост — через воду (от берега до берега) или через овраг
 ## глубже DIP; туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
 ## Тропа (road = false) переходит реку не шире FORD_LEN вброд. Новый туннель через раз заменяется
-## обходом горы, если он есть (turn.detour — очередь обхода; cost — стоимость, по которой ищется обход).
-static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, turn: Dictionary) -> PackedInt32Array:
+## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
+## Клетки осей мостов и туннелей отмечаются в state.on_axis.
+static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary) -> PackedInt32Array:
 	var W := w.W
 	var n := p.size()
 	# высоты, мокрые клетки и координаты вдоль пути в плоских массивах: в цикле так быстрее
@@ -401,7 +416,7 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 			if up:
 				kind = "tunnel"
 				# под горным озером и наперерез другому туннелю туннель не прокладывается
-				if j > 0 and not _built(w, w.tunnels, p[i], p[j]):
+				if j > 0 and _same(w, w.tunnels, p[i], p[j]).is_empty():
 					if _near_tunnel(w, p[i], p[j]):
 						j = -1
 					else:
@@ -421,26 +436,43 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 			continue
 		var a := p[i]
 		var b := p[j]
-		if kind == "tunnel" and not _built(w, w.tunnels, a, b):
-			if turn.detour:
+		var list: Array = w.tunnels if kind == "tunnel" else w.bridges
+		var ends := _same(w, list, a, b)
+		if kind == "tunnel" and ends.is_empty():
+			if state.detour:
 				var q := _detour(w, finder, cost, a, b)
 				if q.size() > 0:
-					turn.detour = false
+					state.detour = false
 					for k in range(1, q.size()):
 						out.append(q[k])
 					i = j
 					continue
-			turn.detour = true
-		var list: Array = w.tunnels if kind == "tunnel" else w.bridges
-		# дорога, слившаяся с прежней, проходит по уже построенному
-		if not _built(w, list, a, b):
+			state.detour = true
+		if ends.is_empty():
 			list.append({a = a, b = b})
 			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)
-		var line := Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W)
-		for k in range(1, line.size()):
-			out.append(line[k])
+			ends = [a, b]
+		# дорога, слившаяся с прежней, проходит по уже построенному: к его входу и от выхода — по суше
+		_link(w, finder, out, a, ends[0])
+		var line := Grid.line_cells(ends[0] % W, ends[0] / W, ends[1] % W, ends[1] / W, W)
+		for k in line.size():
+			state.on_axis[line[k]] = 1
+			if k > 0:
+				out.append(line[k])
+		_link(w, finder, out, ends[1], b)
 		i = j
 	return out
+
+
+## Дописать к out путь по суше от клетки a до клетки b (без a); если его нет — прямую
+static func _link(w: WorldData, finder: Pathfinder, out: PackedInt32Array, a: int, b: int) -> void:
+	if a == b:
+		return
+	var q := finder.find_path(w.cost, a, b)
+	if q.size() == 0 or q.size() > REUSE_R * 3.0:
+		q = Grid.line_cells(a % w.W, a / w.W, b % w.W, b / w.W, w.W)
+	for k in range(1, q.size()):
+		out.append(q[k])
 
 
 ## Обход горы от a до b вместо туннеля: путь в окрестности отрезка a–b, не выше входов больше чем
@@ -496,17 +528,18 @@ static func _window(v: PackedFloat32Array, span: int, big: bool) -> PackedFloat3
 	return out
 
 
-## Есть ли уже мост или туннель, вдоль которого идёт отрезок a–b (оба конца не дальше трёх клеток от него)
-static func _built(w: WorldData, list: Array, a: int, b: int) -> bool:
+## Уже построенный мост или туннель из list с концами у клеток a и b (каждый не дальше REUSE_R, в любом
+## порядке): [его конец у a, его конец у b] или пустой массив. Сооружение, которое лишь проходит рядом,
+## не годится: путь по нему пересекал бы воду или гору не там, где построено
+static func _same(w: WorldData, list: Array, a: int, b: int) -> Array:
 	var W := w.W
 	for s in list:
-		var sx: float = s.a % W
-		var sy: float = s.a / W
-		var ex: float = s.b % W
-		var ey: float = s.b / W
-		if Grid.segment_dist(a % W, a / W, sx, sy, ex, ey) <= 3.0 and Grid.segment_dist(b % W, b / W, sx, sy, ex, ey) <= 3.0:
-			return true
-	return false
+		for e in [[s.a, s.b], [s.b, s.a]]:
+			var ea: int = e[0]
+			var eb: int = e[1]
+			if Grid.hypot(ea % W - a % W, ea / W - a / W) <= REUSE_R and Grid.hypot(eb % W - b % W, eb / W - b / W) <= REUSE_R:
+				return e
+	return []
 
 
 ## Проходит ли отрезок a–b ближе 2 * TUNNEL_R + 1 клеток к уже прорезанному туннелю

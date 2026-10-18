@@ -13,7 +13,8 @@ const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
 const TUNNEL_CUT := 2.3     # выемка под туннелем: клетки ближе этого к оси, в клетках (как StageTrails.TUNNEL_R)
 const ARCH := 0.04          # подъём середины моста на метр длины (не больше 3 м)
 const STEP := 0.8           # на настил можно шагнуть или въехать, если ноги не ниже него на столько
-const WALL := 0.6           # толщина перил и стен, в которые упирается игрок, м
+const WALL := 0.6           # толщина перил моста, в которые упирается игрок, м
+const TUNNEL_WALL := 1.0    # толщина стен туннеля, м (как у их модели в StructuresBuilder)
 
 var world: WorldData
 var hv := PackedFloat32Array()      # высоты с прорезанными руслами
@@ -99,7 +100,7 @@ func build_structures() -> PackedInt32Array:
 	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
 	for k in structures.size():
 		var s: Dictionary = structures[k]
-		var r: float = (s.half + WALL) / TILE + 1.0
+		var r: float = (s.half + TUNNEL_WALL) / TILE + 1.0
 		var ax: float = s.ax / TILE
 		var az: float = s.az / TILE
 		var bx: float = s.bx / TILE
@@ -191,9 +192,10 @@ func surface_at(x: float, z: float, feet: float) -> float:
 	return maxf(ground_at(x, z), deck_at(x, z, feet))
 
 
-## Перила моста или стена туннеля в точке (x, z) на высоте ног feet. Там, где сооружения сходятся,
-## настил или пол одного не перегораживается перилами или стеной другого
-func wall_at(x: float, z: float, feet: float) -> bool:
+## Перила моста или стена туннеля ближе r к точке (x, z) на высоте ног feet: r — радиус тела, которое
+## проверяется (игрок, колесо велосипеда, камера). Там, где сооружения сходятся, настил или пол одного
+## не перегораживается перилами или стеной другого
+func wall_at(x: float, z: float, feet: float, r: float = 0.0) -> bool:
 	var list = _cell_list(x, z)
 	if list == null:
 		return false
@@ -204,13 +206,13 @@ func wall_at(x: float, z: float, feet: float) -> bool:
 		var dz: float = z - s.az
 		var t: float = dx * s.ux + dz * s.uz
 		var side := absf(dx * s.uz - dz * s.ux)
-		if t < 0.0 or t > s.len or side > s.half + WALL:
+		if t < 0.0 or t > s.len or side > s.half + (TUNNEL_WALL if s.tunnel else WALL) + r:
 			continue
 		var d := level(s, t)
 		var level: bool = feet < d + TUNNEL_HEIGHT if s.tunnel else (feet >= d - STEP and feet < d + 1.5)
 		if not level:
 			continue
-		if side <= s.half:
+		if side <= s.half - r:
 			return false
 		wall = true
 	return wall

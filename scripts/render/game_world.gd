@@ -11,6 +11,7 @@ extends Node3D
 signal pause_requested
 
 const TILE := GameConfig.TILE
+const CAM_STEPS := 15   # столько точек на луче от седока до камеры проверяется на стены и склон
 
 var world: WorldData
 var heights: Heightfield
@@ -284,8 +285,9 @@ func _process(delta: float) -> void:
 func _cam_blocked(p: Vector3) -> bool:
 	if p.y < heights.surface_at(p.x, p.z, p.y) + 0.3:
 		return true
-	# перила и стены: на высоте глаз (чуть выше ног) стена на пути камеры закрывает обзор
-	return heights.wall_at(p.x, p.z, p.y - 1.0)
+	# перила и стены: на высоте глаз (чуть выше ног) стена на пути камеры закрывает обзор;
+	# камера держится в 0,25 м от них, чтобы ближняя плоскость отсечения не заглядывала за стену
+	return heights.wall_at(p.x, p.z, p.y - 1.0, 0.25)
 
 
 ## Тряска камеры после приземления сильнее soft (м/с)
@@ -339,10 +341,11 @@ func _update_camera(alpha: float, dt: float) -> void:
 		var target := Vector3(pos.x, _cam_y, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var dist := GameConfig.BIKE_CAM
-		for k in range(1, 7):
-			var p := target - dir * (GameConfig.BIKE_CAM * k / 6.0)
+		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть
+		for k in range(1, CAM_STEPS + 1):
+			var p := target - dir * (GameConfig.BIKE_CAM * k / CAM_STEPS)
 			if _cam_blocked(p):
-				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / 6.0)
+				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / CAM_STEPS)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
 		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(3.0, dt))

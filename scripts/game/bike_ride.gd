@@ -4,11 +4,15 @@ extends RefCounted
 ## Без узлов сцены, как PlayerState. Пока игрок едет, велосипед везёт его: положение игрока
 ## берётся отсюда. Проходимость та же, что у пешехода (PlayerState.is_passable): глубокая вода,
 ## дома, перила мостов и стены туннелей не пускают; по настилу моста велосипед едет, как по земле.
+## С 2.2 велосипед для столкновений — три круга вдоль рамы (колёса и середина), а не точка:
+## переднее колесо не въезжает в дом и не высовывается за перила.
 
 const TILE := GameConfig.TILE
 const WHEEL_R := 0.34   # радиус колеса, м
 const GEAR := 2.8       # оборотов колеса на один оборот педалей
 const WALL_LOSS := 6.0  # 1/с: как быстро удар в стену в лоб гасит скорость (при скольжении вдоль стены почти не гасит)
+const BODY_R := 0.3     # радиус кругов, которыми велосипед задевает препятствия, м (руль шириной 0,6 м)
+const AXLE := 0.57      # круги колёс — на столько впереди и позади середины, м: вместе с BODY_R до края колеса (0,53 + 0,34)
 
 var x := 0.0          # метры
 var z := 0.0
@@ -41,10 +45,11 @@ static func park_near(p: PlayerState, yaw: float, w: WorldData, heights: Heightf
 	b.heading = yaw
 	b.x = p.x
 	b.z = p.z
+	b.y = p.feet
 	for side in [1.6, -1.6]:
 		var bx: float = p.x + cos(yaw) * side
 		var bz: float = p.z - sin(yaw) * side
-		if PlayerState.is_passable(w, heights, bx, bz, p.feet):
+		if b.fits(bx, bz, yaw, w, heights):
 			b.x = bx
 			b.z = bz
 			break
@@ -98,7 +103,7 @@ func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
 	for dist: float in [0.9, 1.5]:
 		for d in dirs:
 			var q := Vector2(x, z) + d * dist
-			if PlayerState.is_passable(w, heights, q.x, q.y, y):
+			if PlayerState.is_passable(w, heights, q.x, q.y, y, PlayerState.BODY_R):
 				return q
 	return Vector2(x, z)
 
@@ -149,26 +154,32 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var turn_rate := GameConfig.BIKE_TURN * clampf(absf(speed) / 3.0, 0.15, 1.0) / (1.0 + absf(speed) * 0.04)
 	if airborne:
 		turn_rate *= 0.3
+	var free_now := fits(x, z, heading, w, heights)
+	var h0 := heading
 	heading -= steer * turn_rate * dt * (1.0 if speed >= 0.0 else -1.0)
+	# вплотную к стене колесо в неё не поворачивается
+	if free_now and not fits(x, z, heading, w, heights):
+		heading = h0
 
-	var nx := x - sin(heading) * speed * dt
-	var nz := z - cos(heading) * speed * dt
 	var x0 := x
 	var z0 := z
-	if PlayerState.is_passable(w, heights, nx, nz, y):
-		x = nx
-		z = nz
-	elif PlayerState.is_passable(w, heights, nx, z, y):
-		# скользим вдоль стены: в лоб скорость гаснет, вдоль стены почти нет
-		x = nx
-		speed *= _slide_keep(dt, absf(nx - x0), absf(speed) * dt)
-	elif PlayerState.is_passable(w, heights, x, nz, y):
-		z = nz
-		speed *= _slide_keep(dt, absf(nz - z0), absf(speed) * dt)
-	else:
-		speed = 0.0
-	var moved := Grid.hypot(x - x0, z - z0)
-	_dist += moved
+	var full := absf(speed) * dt
+	if full > 0.0:
+		# если велосипед уже задевает препятствие (поставлен вплотную), выехать можно: проверяется середина
+		var hd := heading
+		var f := y
+		var free := func(px: float, pz: float) -> bool:
+			if free_now:
+				return fits(px, pz, hd, w, heights)
+			return PlayerState.is_passable(w, heights, px, pz, f)
+		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt)
+		x = to[0]
+		z = to[1]
+		var moved := Grid.hypot(x - x0, z - z0)
+		if moved < full - 1e-5:
+			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
+			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
+	_dist += Grid.hypot(x - x0, z - z0)
 
 	_hop_wait -= dt
 	_hop_buf = GameConfig.JUMP_BUFFER if hop else _hop_buf - dt
@@ -239,6 +250,15 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	p.feet = y
 	p.vy = vy
 	p.on_ground = not airborne
+
+
+## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны
+func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -> bool:
+	var fx := -sin(hd) * AXLE
+	var fz := -cos(hd) * AXLE
+	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R)
+		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R)
+		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R))
 
 
 ## Доля скорости, которая остаётся после касания стены: moved — путь, который всё же прошли, full — весь путь за кадр

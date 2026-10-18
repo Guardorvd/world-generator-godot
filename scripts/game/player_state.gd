@@ -4,6 +4,10 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
+const BODY_R := 0.3     # радиус тела пешехода, м: стены, перила и дома не подпускают центр ближе (и камеру в них)
+const HUT_HALF := 1.6   # полуширина стен дома, м (квадрат 3,2 × 3,2, повёрнут дверью к костру, как в SettlementsBuilder)
+const PIECE := 0.2      # движение проверяется кусками не длиннее этого, м: тонкую стену не перепрыгнуть
+                        # даже при длинном такте (в игре такт 1/60 с, это 0,1–0,35 м)
 
 var x := 0.0          # метры
 var z := 0.0
@@ -86,21 +90,61 @@ static func terrain_speed(w: WorldData, x: float, z: float) -> float:
 	return sp
 
 
-## feet — высота ног: от неё зависит, стоит ли игрок на мосту (тогда вода под ним не мешает)
-## и упирается ли в перила моста или стену туннеля
-static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF) -> bool:
+## Свободна ли точка (x, z) для тела радиуса r с ногами на высоте feet. feet решает, стоит ли тело
+## на мосту (тогда вода под ним не мешает) и упирается ли в перила моста или стену туннеля.
+## Дома и стены держат тело на расстоянии r, вода и край известной земли проверяются по центру
+static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0) -> bool:
 	if not heights.known(x, z):
 		return false
-	# сквозь дома не пройти
+	# сквозь дома не пройти: стены — квадрат, тело не ближе r к нему
+	var reach := HUT_HALF * 1.5 + r
 	for s in w.settlements:
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:
-			if Grid.hypot(u.x * TILE - x, u.y * TILE - z) < 2.1:
+			var dx: float = x - u.x * TILE
+			var dz: float = z - u.y * TILE
+			if absf(dx) > reach or absf(dz) > reach:
+				continue
+			# оси дома: к костру и поперёк
+			var fx: float = s.x - u.x
+			var fz: float = s.y - u.y
+			var fl := Grid.hypot(fx, fz)
+			if fl > 0.0:
+				fx /= fl
+				fz /= fl
+			else:
+				fz = 1.0
+			var ox := absf(dx * fz - dz * fx) - HUT_HALF
+			var oz := absf(dx * fx + dz * fz) - HUT_HALF
+			if ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r):
 				return false
-	if heights.wall_at(x, z, feet):
+	if heights.wall_at(x, z, feet, r):
 		return false
 	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
+
+
+## Сдвиг из (x, z) на (dx, dz) кусками не длиннее PIECE: free(x, z) -> bool говорит, свободно ли тело
+## в точке. Где путь закрыт, тело скользит вдоль препятствия по одной из осей, а где закрыто всё —
+## останавливается. Возвращает, куда удалось дойти: [x, z] в двойной точности (Vector2 округлил бы
+## до float и мог сдвинуть тело за проверенную границу)
+static func slide(free: Callable, x: float, z: float, dx: float, dz: float) -> PackedFloat64Array:
+	var n := maxi(1, ceili(Grid.hypot(dx, dz) / PIECE))
+	var sx := dx / n
+	var sz := dz / n
+	for k in n:
+		if free.call(x + sx, z + sz):
+			x += sx
+			z += sz
+		elif sx != 0.0 and free.call(x + sx, z):
+			x += sx
+			sz = 0.0
+		elif sz != 0.0 and free.call(x, z + sz):
+			z += sz
+			sx = 0.0
+		else:
+			break
+	return PackedFloat64Array([x, z])
 
 
 ## Шаг движения за dt секунд (в игре — один такт физики, 1/60 с, см. GameWorld._physics_process).
@@ -141,20 +185,18 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		vx += dvx / dl * rate * dt
 		vz += dvz / dl * rate * dt
 
-	var ax := x + vx * dt
-	var az := z + vz * dt
-	if is_passable(w, heights, ax, az, feet):
-		x = ax
-		z = az
-	elif is_passable(w, heights, ax, z, feet):
-		x = ax
-		vz = 0.0
-	elif is_passable(w, heights, x, az, feet):
-		z = az
-		vx = 0.0
-	else:
-		vx = 0.0
-		vz = 0.0
+	if vx != 0.0 or vz != 0.0:
+		# если тело уже задевает препятствие (появилось вплотную к дому), выйти можно: проверяется центр
+		var r := BODY_R if is_passable(w, heights, x, z, feet, BODY_R) else 0.0
+		var f := feet
+		var to := slide(func(px: float, pz: float) -> bool: return is_passable(w, heights, px, pz, f, r), x, z, vx * dt, vz * dt)
+		# упёрлись: скорость — та, с которой действительно сдвинулись
+		if absf(to[0] - x - vx * dt) > 1e-5:
+			vx = (to[0] - x) / dt
+		if absf(to[1] - z - vz * dt) > 1e-5:
+			vz = (to[1] - z) / dt
+		x = to[0]
+		z = to[1]
 	if on_ground:
 		bob += dt * Grid.hypot(vx, vz) * 1.6
 

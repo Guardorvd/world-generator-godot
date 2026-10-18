@@ -95,7 +95,33 @@ func _init() -> void:
 				else:
 					print("  %s %d м %s не пройден" % [name, roundi(st.len), "на велосипеде" if ride else "пешком"])
 		_check(ok == h2.structures.size() * 2, "%s@%d: мостов %d, туннелей %d, пройдено пешком и на велосипеде %d из %d" % [c[0], c[1], w2.bridges.size(), w2.tunnels.size(), ok, h2.structures.size() * 2])
+		# узкие препятствия: в перила и стены с середины сооружения под разными углами, на полной скорости
+		var leaks := 0
+		for st: Dictionary in h2.structures:
+			if st.len < 12.0:
+				continue
+			for deg in [15.0, 45.0, 90.0]:
+				for sd in [-1.0, 1.0]:
+					for ride in [false, true]:
+						leaks += _into_wall(w2, h2, st, deg_to_rad(deg) * sd, ride, DT)
+		# длинный такт (4 в секунду): тело всё равно не перепрыгивает перила и стены
+		for st: Dictionary in h2.structures:
+			if st.len >= 12.0:
+				leaks += _into_wall(w2, h2, st, PI / 2.0, false, 0.25)
+		_check(leaks == 0, "%s@%d: в перила и стены не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [c[0], c[1], leaks])
+		var off := _off_structures(w2, h2)
+		_check(off == 0, "%s@%d: дороги и тропы у мостов и туннелей идут по настилу и полу, а не рядом (мест вне их: %d)" % [c[0], c[1], off])
 	_check(kinds.size() == 2, "есть и мосты, и туннели")
+
+	# дома: идём и едем прямо в каждый дом поселения появления с восьми сторон
+	var hut_hits := 0
+	var huts := 0
+	for u in PlayerState.home(w).huts:
+		huts += 1
+		for k in 8:
+			for ride in [false, true]:
+				hut_hits += _into_hut(w, heights, PlayerState.home(w), u, k * PI / 4.0, ride)
+	_check(huts > 0 and hut_hits == 0, "в стены %d домов не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [huts, hut_hits])
 
 	if _fails == 0:
 		print("Все проверки прошли.")
@@ -136,3 +162,132 @@ func _cross(w: WorldData, heights: Heightfield, s: Dictionary, ride: bool) -> bo
 	var t: float = (p.x - s.ax) * s.ux + (p.z - s.az) * s.uz
 	print("  не дошли: застряли на %.1f м из %.0f, ноги на %.1f м, вода %.1f м, стена %s" % [t, s.len, p.feet, heights.depth_at(p.x, p.z, p.feet), heights.wall_at(p.x, p.z, p.feet)])
 	return false
+
+
+## Сколько раз линия дороги или тропы между поселениями, проходя вдоль моста или туннеля (в его полосе
+## с перилами или стенами, дальше 3 м от концов), сходит с настила или пола: в глубокую воду рядом с мостом,
+## в перила или в стену
+func _off_structures(w: WorldData, heights: Heightfield) -> int:
+	# у самых концов дорога, подходящая сбоку, срезает угол по краю настила: это стык, а не путь мимо
+	const END := 3.0
+	var count := 0
+	for tr in w.trails:
+		if tr.kind != "road" and tr.kind != "trail":
+			continue
+		var pts: Array = tr.pts
+		var off := false
+		for k in range(1, pts.size()):
+			var a := Vector2(pts[k - 1].x, pts[k - 1].y) * GameConfig.TILE
+			var b := Vector2(pts[k].x, pts[k].y) * GameConfig.TILE
+			var n := maxi(1, ceili(a.distance_to(b) / 0.5))
+			for m in n:
+				var q := a.lerp(b, float(m) / n)
+				var bad := false
+				for s: Dictionary in heights.structures:
+					var dx: float = q.x - s.ax
+					var dz: float = q.y - s.az
+					var t: float = dx * s.ux + dz * s.uz
+					if t < END or t > s.len - END or absf(dx * s.uz - dz * s.ux) > s.half + Heightfield.WALL:
+						continue
+					# путь под мостом по дну оврага или над туннелем по горе — не по сооружению, ему перила не мешают
+					var feet := heights.level(s, t)
+					var g := heights.ground_at(q.x, q.y)
+					var along := g > feet - 2.0 and g < feet + Heightfield.TUNNEL_HEIGHT
+					bad = heights.depth_at(q.x, q.y, feet) >= GameConfig.FORD_DEPTH or (along and heights.wall_at(q.x, q.y, feet))
+					if bad and not off:
+						print("  %s у %s %.0f м сходит с него на (%.0f, %.0f)" % [tr.kind, "туннеля" if s.tunnel else "моста", s.len, q.x / GameConfig.TILE, q.y / GameConfig.TILE])
+						count += 1
+					break
+				off = bad
+	return count
+
+
+## Упереться в перила или стену сооружения s: с середины оси повернуть на angle от неё и 1,5 с идти бегом
+## (ride — ехать на велосипеде с разгона 20 м/с) с тактом dt. Возвращает 1, если тело зашло за внутреннюю
+## сторону перил или стены (пешеход с запасом 0,1 м на камеру; велосипед — краем колеса) или упало с настила
+func _into_wall(w: WorldData, heights: Heightfield, s: Dictionary, angle: float, ride: bool, dt: float) -> int:
+	var t0: float = s.len * 0.5
+	var yaw: float = atan2(-s.ux, -s.uz) + angle
+	var p := PlayerState.new()
+	p.x = s.ax + s.ux * t0
+	p.z = s.az + s.uz * t0
+	p.feet = heights.level(s, t0)
+	var b := BikeRide.new()
+	if ride:
+		b.x = p.x
+		b.z = p.z
+		b.y = p.feet
+		b.heading = yaw
+		b.mount(p)
+		b.speed = 20.0
+	# внутренняя сторона модели: перила — брус в 0,1 м за краем настила, стена туннеля — сразу за краем пола
+	var face: float = s.half + (0.04 if not s.tunnel else 0.0)
+	for k in roundi(1.5 / dt):
+		if ride:
+			b.step(p, 1.0, 0.0, true, false, dt, w, heights)
+		else:
+			p.step(1.0, 0.0, true, false, yaw, dt, w, heights)
+		var reach := 0.1   # пешеход: центр и камера
+		var pts: Array[Vector2] = [Vector2(p.x, p.z)]
+		if ride:
+			# край колеса: ось в 0,53 м от середины, радиус колеса 0,34 м
+			var f := Vector2(-sin(b.heading), -cos(b.heading)) * 0.87
+			pts = [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]
+			reach = 0.0
+		for q in pts:
+			var dx: float = q.x - s.ax
+			var dz: float = q.y - s.az
+			var t: float = dx * s.ux + dz * s.uz
+			if t < 1.0 or t > s.len - 1.0:
+				continue
+			var side := absf(dx * s.uz - dz * s.ux)
+			if side > face - reach or p.feet < heights.level(s, t) - 0.6:
+				print("  %s %.0f м %s под %d°%s: %.2f м от оси при стенке в %.2f м, ноги %.1f м над настилом" % ["туннель" if s.tunnel else "мост", s.len,
+					"на велосипеде" if ride else "пешком", roundi(rad_to_deg(angle)), " (такт %.2f с)" % dt if dt > DT else "", side, face, p.feet - heights.level(s, t)])
+				return 1
+	return 0
+
+
+## Идти или ехать в дом u поселения s с направления a (8 м от центра дома). Возвращает 1, если пешеход
+## подошёл к стене ближе 0,1 м (камера) или колесо велосипеда вошло в стену
+func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary, a: float, ride: bool) -> int:
+	var hx: float = u.x * GameConfig.TILE
+	var hz: float = u.y * GameConfig.TILE
+	# дом повёрнут дверью к костру, как в SettlementsBuilder
+	var rot := atan2(s.x * GameConfig.TILE - hx, s.y * GameConfig.TILE - hz)
+	var p := PlayerState.new()
+	p.x = hx + sin(a) * 8.0
+	p.z = hz + cos(a) * 8.0
+	p.feet = heights.ground_at(p.x, p.z)
+	if not PlayerState.is_passable(w, heights, p.x, p.z, p.feet, BikeRide.BODY_R + BikeRide.AXLE):
+		return 0   # подойти отсюда не к чему: вода или другой дом
+	var yaw := atan2(sin(a), cos(a))   # лицом к дому: вперёд — это -Z, т.е. от (sin, cos) к центру
+	var b := BikeRide.new()
+	if ride:
+		b.x = p.x
+		b.z = p.z
+		b.y = p.feet
+		b.heading = yaw
+		b.mount(p)
+	for k in 120:
+		if ride:
+			b.step(p, 1.0, 0.0, true, false, DT, w, heights)
+		else:
+			p.step(1.0, 0.0, true, false, yaw, DT, w, heights)
+		var pts: Array[Vector2] = [Vector2(p.x, p.z)]
+		var reach := 0.1
+		if ride:
+			var f := Vector2(-sin(b.heading), -cos(b.heading)) * 0.87
+			pts = [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]
+			reach = 0.0
+		for q in pts:
+			var dx := q.x - hx
+			var dz := q.y - hz
+			# в систему дома: стены — квадрат 3,2 × 3,2 м
+			var lx := dx * cos(rot) - dz * sin(rot)
+			var lz := dx * sin(rot) + dz * cos(rot)
+			if maxf(absf(lx), absf(lz)) - 1.6 < reach:
+				print("  дом %s %s с %d°: %.2f м до стены" % [str(Vector2(u.x, u.y)), "на велосипеде" if ride else "пешком",
+					roundi(rad_to_deg(a)), maxf(absf(lx), absf(lz)) - 1.6])
+				return 1
+	return 0
