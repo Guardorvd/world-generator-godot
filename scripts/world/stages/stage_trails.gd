@@ -8,7 +8,8 @@ extends RefCounted
 ## Дороги связывают все поселения (остовное дерево), поэтому ищутся по стоимости, в которой вода
 ## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
 ## Где дорога или тропа между поселениями пересекает реку, озеро или овраг, ставится мост,
-## где переваливает через крутой хребет — туннель. Высоты здесь в единицах w.h (1 = 260 м).
+## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
+## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу. Высоты здесь в единицах w.h (1 = 260 м).
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
@@ -23,6 +24,7 @@ const GRADE := 0.0018       # наибольший уклон моста и ту
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
+const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -188,7 +190,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 		var road: bool = e[3] < n - 1
 		var p := finder.find_path(st[e[0]].i, st[e[1]].i, road_cost if road else PackedFloat32Array())
 		if p.size() > 0:
-			_add_trail(w, _structures(w, p), "road" if road else "trail", road_cost)
+			_add_trail(w, _structures(w, p, road), "road" if road else "trail", road_cost)
 	_clear_huts(w)
 
 
@@ -217,7 +219,8 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
 ## в котором участки под ними заменены прямыми. Мост — через воду (от берега до берега) или через овраг
 ## глубже DIP; туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
-static func _structures(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+## Тропа (road = false) переходит реку не шире FORD_LEN вброд.
+static func _structures(w: WorldData, p: PackedInt32Array, road: bool) -> PackedInt32Array:
 	var W := w.W
 	var n := p.size()
 	# высоты, мокрые клетки и координаты вдоль пути в плоских массивах: в цикле так быстрее
@@ -248,7 +251,7 @@ static func _structures(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
 			j = i + 1
 			while j < n and wet[j] != 0:
 				j += 1
-			if j >= n:
+			if j >= n or not road and j - i - 1 <= FORD_LEN and _river_only(w, p, i + 1, j):
 				j = -1
 		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE or hp[i + 1] < hp[i] and ahead_min[i] <= hp[i] - DIP:
 			var up := hp[i + 1] > hp[i]
@@ -268,6 +271,12 @@ static func _structures(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
 							if _wet(w, c):
 								j = -1
 								break
+			elif j > 0:
+				# над озером или заливом мост через овраг не ставится: путь идёт по берегу
+				for c in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
+					if w.ocean[c] != 0 or w.lake[c] != 0:
+						j = -1
+						break
 		if j < 0:
 			out.append(p[i + 1])
 			i += 1
@@ -284,6 +293,14 @@ static func _structures(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
 			out.append(line[k])
 		i = j
 	return out
+
+
+## Только река (не море и не озеро) в клетках пути p[from..to)
+static func _river_only(w: WorldData, p: PackedInt32Array, from: int, to: int) -> bool:
+	for k in range(from, to):
+		if w.ocean[p[k]] != 0 or w.lake[p[k]] != 0:
+			return false
+	return true
 
 
 ## Наибольшее (big) или наименьшее значение v[i..i+span] для каждого i (очередь с монотонными значениями)
