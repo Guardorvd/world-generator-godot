@@ -9,7 +9,9 @@ extends RefCounted
 ## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
 ## Где дорога или тропа между поселениями пересекает реку, озеро или овраг, ставится мост,
 ## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
-## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу. Высоты здесь в единицах w.h (1 = 260 м).
+## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу.
+## Туннели и обходы горы чередуются: после туннеля следующий хребет путь по возможности обходит
+## понизу (_detour), после обхода — снова туннель. Высоты здесь в единицах w.h (1 = 260 м).
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
@@ -25,6 +27,7 @@ const TUNNEL_R := 2.3       # клетки ближе этого к оси ту�
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
+const DETOUR := 4.5         # обход горы не длиннее стольких прямых расстояний между входами туннеля
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -180,6 +183,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	w.bridges = []
 	w.tunnels = []
 	var road_cost := w.cost.duplicate()
+	var turn := {detour = w.seed_num % 2 == 1}   # что пробовать на следующем хребте: обход (true) или туннель; с чего начать — по сиду
 	var ocean := w.ocean
 	var lake := w.lake
 	for i in w.N:
@@ -190,7 +194,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 		var road: bool = e[3] < n - 1
 		var p := finder.find_path(st[e[0]].i, st[e[1]].i, road_cost if road else PackedFloat32Array())
 		if p.size() > 0:
-			_add_trail(w, _structures(w, p, road), "road" if road else "trail", road_cost)
+			_add_trail(w, _structures(w, p, road, finder, road_cost if road else w.cost, turn), "road" if road else "trail", road_cost)
 	_clear_huts(w)
 
 
@@ -219,8 +223,9 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
 ## в котором участки под ними заменены прямыми. Мост — через воду (от берега до берега) или через овраг
 ## глубже DIP; туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
-## Тропа (road = false) переходит реку не шире FORD_LEN вброд.
-static func _structures(w: WorldData, p: PackedInt32Array, road: bool) -> PackedInt32Array:
+## Тропа (road = false) переходит реку не шире FORD_LEN вброд. Новый туннель через раз заменяется
+## обходом горы, если он есть (turn.detour — очередь обхода; cost — стоимость, по которой ищется обход).
+static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, turn: Dictionary) -> PackedInt32Array:
 	var W := w.W
 	var n := p.size()
 	# высоты, мокрые клетки и координаты вдоль пути в плоских массивах: в цикле так быстрее
@@ -283,6 +288,16 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool) -> Packed
 			continue
 		var a := p[i]
 		var b := p[j]
+		if kind == "tunnel" and not _built(w, w.tunnels, a, b):
+			if turn.detour:
+				var q := _detour(w, finder, cost, a, b)
+				if q.size() > 0:
+					turn.detour = false
+					for k in range(1, q.size()):
+						out.append(q[k])
+					i = j
+					continue
+			turn.detour = true
 		var list: Array = w.tunnels if kind == "tunnel" else w.bridges
 		# дорога, слившаяся с прежней, проходит по уже построенному
 		if not _built(w, list, a, b):
@@ -293,6 +308,31 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool) -> Packed
 			out.append(line[k])
 		i = j
 	return out
+
+
+## Обход горы от a до b вместо туннеля: путь в окрестности отрезка a–b, не выше входов больше чем
+## на 0.7 RISE (около 18 м), без воды и не длиннее DETOUR прямых расстояний; пустой, если такого нет
+static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int) -> PackedInt32Array:
+	var W := w.W
+	var ax := a % W
+	var ay := a / W
+	var bx := b % W
+	var by := b / W
+	var d := Grid.hypot(bx - ax, by - ay)
+	var m := ceili(d * 2.0)   # обход ищется не дальше двух длин туннеля от входов
+	var top := maxf(w.h[a], w.h[b]) + RISE * 0.7
+	var c := PackedFloat32Array()
+	c.resize(w.N)
+	c.fill(INF)
+	for y in range(maxi(0, mini(ay, by) - m), mini(w.H, maxi(ay, by) + m + 1)):
+		for x in range(maxi(0, mini(ax, bx) - m), mini(W, maxi(ax, bx) + m + 1)):
+			var k := y * W + x
+			if w.h[k] <= top and not _wet(w, k):
+				c[k] = cost[k]
+	var q := finder.find_path(a, b, c)
+	if q.size() > d * DETOUR:
+		return PackedInt32Array()
+	return q
 
 
 ## Только река (не море и не озеро) в клетках пути p[from..to)
