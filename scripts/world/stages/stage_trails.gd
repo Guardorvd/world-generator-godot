@@ -41,7 +41,10 @@ const SHORE_MAX := 45       # и не дальше стольких
 const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
 const AVOID_MUL := 8.0      # во столько раз дороже клетки коридора
 const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
+const LINE_IN := 0.1        # клетки под лентой (ширина w, как в MapBaker) глубже этого от её края — тоже дорога (path_mask), клеток
+const LINE_STEP := 0.25     # шаг, с которым линия проверяется по клеткам (_mark_line), клеток
 const REUSE_R := 3.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
+const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -77,9 +80,11 @@ static func _build_cost(w: WorldData) -> void:
 ## Записать найденный путь как тропу
 ## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost; on_axis — клетки на осях мостов и туннелей:
 ## там и на соседних с ними клетках пути точки линии не смещаются случайно, чтобы дорога входила
-## на настил и в портал ровно, а не через перила)
+## на настил и в портал ровно, а не через перила; у воды линия тоже не смещается, чтобы не уйти в неё).
+## path_mask (скорость, деревья) отмечается по нарисованной линии (_mark_line), а дешевле становятся клетки пути
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
 		on_axis: PackedByteArray = PackedByteArray()) -> void:
+	path = _explicit(w, path)
 	var W := w.W
 	var H := w.H
 	var rng := w.rng
@@ -90,7 +95,8 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		var i := path[k]
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * 0.5
 		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * 0.5
-		if on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0):
+		if on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0) \
+				or _by_water(w, i):
 			px = (i % W) + 0.5
 			py = (i / W) + 0.5
 		pts.append({x = px, y = py, w = width})
@@ -119,8 +125,88 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			if both:
 				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
 	w.cost = cost
+	var line := Grid.chaikin(pts, 3)
+	_mark_line(w, line, mark, width * 0.5 - LINE_IN)
+	w.trails.append({kind = kind, pts = line})
+
+
+## Отметить в path_mask значением mark клетки, по которым проходит нарисованная линия pts: средняя линия
+## и края ленты (half — полуширина ленты, в клетках). Так игра считает дорогой то, что видно дорогой:
+## по ней быстрее, на ней не растут деревья
+static func _mark_line(w: WorldData, pts: Array, mark: int, half: float) -> void:
+	var W := w.W
+	var H := w.H
+	var mask := w.path_mask
+	# у узкой линии (звериная тропа) края ленты почти там же, где середина
+	var sides := half > 0.1
+	var last: Dictionary = pts[0]
+	var px: float = last.x
+	var py: float = last.y
+	for k in range(1, pts.size()):
+		var b: Dictionary = pts[k]
+		var ax: float = last.x
+		var ay: float = last.y
+		var dx: float = b.x - ax
+		var dy: float = b.y - ay
+		last = b
+		var len := sqrt(dx * dx + dy * dy)
+		if len == 0.0:
+			continue
+		var nx := -dy / len * half
+		var ny := dx / len * half
+		var m := ceili(len / LINE_STEP)
+		for s in range(1, m + 1):
+			var f := float(s) / m
+			var x := ax + dx * f
+			var y := ay + dy * f
+			# середина: клетка точки и, если линия ушла от прошлой точки в соседнюю по диагонали клетку,
+			# та из двух клеток у общего угла, через которую она прошла
+			var x0 := floori(px)
+			var y0 := floori(py)
+			var x1 := floori(x)
+			var y1 := floori(y)
+			if x0 != x1 and y0 != y1:
+				var bx := maxi(x0, x1)
+				var cy := py + (bx - px) * (y - py) / (x - px)
+				_mark_cell(mask, W, H, x1 if floori(cy) == y0 else x0, y0 if floori(cy) == y0 else y1, mark)
+			_mark_cell(mask, W, H, x0, y0, mark)
+			_mark_cell(mask, W, H, x1, y1, mark)
+			if sides:
+				_mark_cell(mask, W, H, floori(x + nx), floori(y + ny), mark)
+				_mark_cell(mask, W, H, floori(x - nx), floori(y - ny), mark)
+			px = x
+			py = y
 	w.path_mask = mask
-	w.trails.append({kind = kind, pts = Grid.chaikin(pts, 3)})
+
+
+static func _mark_cell(mask: PackedByteArray, W: int, H: int, x: int, y: int, mark: int) -> void:
+	if x >= 0 and y >= 0 and x < W and y < H and mask[y * W + x] < mark:
+		mask[y * W + x] = mark
+
+
+## Путь p, в котором каждый диагональный шаг между двумя мокрыми клетками (река, текущая по диагонали)
+## идёт через одну из них: так переход реки виден в клетках пути (мост, брод), а не проскакивает в угол
+static func _explicit(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+	var W := w.W
+	var out := PackedInt32Array()
+	for k in p.size():
+		var b := p[k]
+		if k > 0:
+			var a := p[k - 1]
+			var dx := b % W - a % W
+			var dy := b / W - a / W
+			if dx != 0 and dy != 0 and not _wet(w, a) and not _wet(w, b):
+				var c1 := a + dx
+				var c2 := a + dy * W
+				if _wet(w, c1) and _wet(w, c2):
+					out.append(c1 if w.cost[c1] <= w.cost[c2] else c2)
+		out.append(b)
+	return out
+
+
+## Есть ли вода (море, озеро, река) в клетке i или рядом с ней (w.dist_water считается по тем же клеткам, что _wet)
+static func _by_water(w: WorldData, i: int) -> bool:
+	return w.dist_water[i] < 1.5
 
 
 ## Звериные тропы: от лесов и лугов к ближайшему водопою
@@ -374,6 +460,7 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary) -> PackedInt32Array:
+	p = _explicit(w, p)
 	var W := w.W
 	var n := p.size()
 	# высоты, мокрые клетки и координаты вдоль пути в плоских массивах: в цикле так быстрее
@@ -415,15 +502,10 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 				i += 1
 			if up:
 				kind = "tunnel"
-				# под горным озером и наперерез другому туннелю туннель не прокладывается
-				if j > 0 and _same(w, w.tunnels, p[i], p[j]).is_empty():
-					if _near_tunnel(w, p[i], p[j]):
+				# под горным озером, через реку в выемке и наперерез другому туннелю туннель не прокладывается
+				if j > 0 and _same(w, w.tunnels, p[i], p[j], _key_cell(p, hp, wet, i, j)).is_empty():
+					if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R):
 						j = -1
-					else:
-						for c in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
-							if _wet(w, c):
-								j = -1
-								break
 			elif j > 0:
 				# над озером или заливом мост через овраг не ставится: путь идёт по берегу
 				for c in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
@@ -437,7 +519,17 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 		var a := p[i]
 		var b := p[j]
 		var list: Array = w.tunnels if kind == "tunnel" else w.bridges
-		var ends := _same(w, list, a, b)
+		var ends := _same(w, list, a, b, _key_cell(p, hp, wet, i, j))
+		# к входу и от выхода уже построенного — по суше: если так не дойти, строится своё
+		var to_a := PackedInt32Array()
+		var from_b := PackedInt32Array()
+		if not ends.is_empty():
+			to_a = _link(w, finder, a, ends[0])
+			from_b = _link(w, finder, ends[1], b)
+			if _has_wet(w, to_a) or _has_wet(w, from_b):
+				ends = []
+				to_a = PackedInt32Array()
+				from_b = PackedInt32Array()
 		if kind == "tunnel" and ends.is_empty():
 			if state.detour:
 				var q := _detour(w, finder, cost, a, b)
@@ -452,27 +544,60 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 			list.append({a = a, b = b})
 			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)
 			ends = [a, b]
-		# дорога, слившаяся с прежней, проходит по уже построенному: к его входу и от выхода — по суше
-		_link(w, finder, out, a, ends[0])
+		# дорога, слившаяся с прежней, проходит по уже построенному
+		out.append_array(to_a)
 		var line := Grid.line_cells(ends[0] % W, ends[0] / W, ends[1] % W, ends[1] / W, W)
 		for k in line.size():
 			state.on_axis[line[k]] = 1
 			if k > 0:
 				out.append(line[k])
-		_link(w, finder, out, ends[1], b)
+		out.append_array(from_b)
 		i = j
+	return _no_backtrack(out)
+
+
+## Путь p без возвратов на шаг назад (A, B, A -> A): они остаются, когда вход уже построенного моста
+## или туннеля лежит позади точки, где путь к нему свернул
+static func _no_backtrack(p: PackedInt32Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for c in p:
+		var n := out.size()
+		if n >= 2 and out[n - 2] == c:
+			out.resize(n - 1)
+		else:
+			out.append(c)
 	return out
 
 
-## Дописать к out путь по суше от клетки a до клетки b (без a); если его нет — прямую
-static func _link(w: WorldData, finder: Pathfinder, out: PackedInt32Array, a: int, b: int) -> void:
+## Путь по суше от клетки a до клетки b (без a); если его нет — прямая
+static func _link(w: WorldData, finder: Pathfinder, a: int, b: int) -> PackedInt32Array:
 	if a == b:
-		return
+		return PackedInt32Array()
 	var q := finder.find_path(w.cost, a, b)
 	if q.size() == 0 or q.size() > REUSE_R * 3.0:
 		q = Grid.line_cells(a % w.W, a / w.W, b % w.W, b / w.W, w.W)
-	for k in range(1, q.size()):
-		out.append(q[k])
+	return q.slice(1)
+
+
+## Есть ли в клетках p вода (море, озеро, река)
+static func _has_wet(w: WorldData, p: PackedInt32Array) -> bool:
+	for c in p:
+		if _wet(w, c):
+			return true
+	return false
+
+
+## Клетка, которую пересекает участок пути p[i..j] под мостом или туннелем: середина воды, дно оврага
+## или верх хребта. Уже построенное подходит этому участку, только если проходит над ней (_same)
+static func _key_cell(p: PackedInt32Array, hp: PackedFloat32Array, wet: PackedByteArray, i: int, j: int) -> int:
+	if wet[i + 1] != 0:
+		return p[(i + j) / 2]
+	var up := hp[i + 1] > hp[i]
+	var best := i + 1
+	for k in range(i + 1, j):
+		if hp[k] > hp[best] if up else hp[k] < hp[best]:
+			best = k
+	return p[best]
 
 
 ## Обход горы от a до b вместо туннеля: путь в окрестности отрезка a–b, не выше входов больше чем
@@ -498,6 +623,21 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 	if q.size() > d * DETOUR:
 		return PackedInt32Array()
 	return q
+
+
+## Есть ли вода (море, озеро, река) в клетках ближе r к отрезку между центрами клеток a и b
+## (у туннеля это его выемка: вода в ней стояла бы у портала и на полу)
+static func _wet_near(w: WorldData, a: int, b: int, r: float) -> bool:
+	var W := w.W
+	var ax := a % W + 0.5
+	var ay := a / W + 0.5
+	var bx := b % W + 0.5
+	var by := b / W + 0.5
+	for y in range(maxi(0, floori(minf(ay, by) - r)), mini(w.H, ceili(maxf(ay, by) + r))):
+		for x in range(maxi(0, floori(minf(ax, bx) - r)), mini(W, ceili(maxf(ax, bx) + r))):
+			if Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= r and _wet(w, y * W + x):
+				return true
+	return false
 
 
 ## Только река (не море и не озеро) в клетках пути p[from..to)
@@ -529,11 +669,14 @@ static func _window(v: PackedFloat32Array, span: int, big: bool) -> PackedFloat3
 
 
 ## Уже построенный мост или туннель из list с концами у клеток a и b (каждый не дальше REUSE_R, в любом
-## порядке): [его конец у a, его конец у b] или пустой массив. Сооружение, которое лишь проходит рядом,
+## порядке) и осью над клеткой key, которую пересекает путь (_key_cell): [его конец у a, его конец у b] или
+## пустой массив. Сооружение, которое лишь проходит рядом (например, мост через соседнюю петлю реки),
 ## не годится: путь по нему пересекал бы воду или гору не там, где построено
-static func _same(w: WorldData, list: Array, a: int, b: int) -> Array:
+static func _same(w: WorldData, list: Array, a: int, b: int, key: int) -> Array:
 	var W := w.W
 	for s in list:
+		if Grid.segment_dist(key % W + 0.5, key / W + 0.5, s.a % W + 0.5, s.a / W + 0.5, s.b % W + 0.5, s.b / W + 0.5) > KEY_R:
+			continue
 		for e in [[s.a, s.b], [s.b, s.a]]:
 			var ea: int = e[0]
 			var eb: int = e[1]

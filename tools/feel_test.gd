@@ -1,6 +1,7 @@
 extends SceneTree
 ## Проверка движения без окна: разгон и остановка шага, прыжок с запасом (COYOTE, JUMP_BUFFER),
-## начало разгона велосипеда, мягкое и жёсткое приземление, проход по мостам и туннелям. Запуск из папки проекта:
+## начало разгона велосипеда, мягкое и жёсткое приземление, проход по мостам и туннелям, линии дорог и троп
+## на их клетках и не в глубокой воде. Запуск из папки проекта:
 ##   godot --headless --path . --script res://tools/feel_test.gd
 
 const DT := 1.0 / 60.0
@@ -111,6 +112,9 @@ func _init() -> void:
 		_check(leaks == 0, "%s@%d: в перила и стены не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [c[0], c[1], leaks])
 		var off := _off_structures(w2, h2)
 		_check(off == 0, "%s@%d: дороги и тропы у мостов и туннелей идут по настилу и полу, а не рядом (мест вне их: %d)" % [c[0], c[1], off])
+		var lines := _line_vs_cells(w2, h2)
+		_check(lines[0] == 0, "%s@%d: нарисованные дороги и тропы лежат на их клетках (скорость, без деревьев; мест вне них: %d)" % [c[0], c[1], lines[0]])
+		_check(lines[1] == 0, "%s@%d: дороги и тропы не уходят в глубокую воду мимо мостов (мест: %d)" % [c[0], c[1], lines[1]])
 	_check(kinds.size() == 2, "есть и мосты, и туннели")
 
 	# дома: идём и едем прямо в каждый дом поселения появления с восьми сторон
@@ -200,6 +204,48 @@ func _off_structures(w: WorldData, heights: Heightfield) -> int:
 					break
 				off = bad
 	return count
+
+
+## Сверка нарисованных линий путей (w.trails, как их рисует MapBaker) с тем, что видит игра: [сколько мест,
+## где средняя линия сходит с клеток своего пути в path_mask, сколько мест, где она в воде глубже FORD_DEPTH
+## (не на мосту)]. Место — участок подряд идущих точек через 0,5 м
+func _line_vs_cells(w: WorldData, heights: Heightfield) -> Array:
+	const EDGE := 0.05
+	var cells := 0
+	var deep := 0
+	for tr in w.trails:
+		var mark := 1 if tr.kind == "animal" else (3 if tr.kind == "road" else 2)
+		var pts: Array = tr.pts
+		var was_off := false
+		var was_deep := false
+		for k in range(1, pts.size()):
+			# в клетках и в double: Vector2 хранит float32, и точка на границе клеток попадала бы в соседнюю
+			var ax: float = pts[k - 1].x
+			var ay: float = pts[k - 1].y
+			var bx: float = pts[k].x
+			var by: float = pts[k].y
+			var n := maxi(1, ceili(Grid.hypot(bx - ax, by - ay) * GameConfig.TILE / 0.5))
+			for m in n:
+				var f := float(m) / n
+				var x := ax + (bx - ax) * f
+				var y := ay + (by - ay) * f
+				# у самой границы клеток (ближе 0,05 клетки, 20 см) годится и соседняя
+				var off := true
+				for e in [Vector2(0, 0), Vector2(EDGE, 0), Vector2(-EDGE, 0), Vector2(0, EDGE), Vector2(0, -EDGE)]:
+					var info := w.tile_info(x + e.x, y + e.y)
+					if info.is_empty() or info.path >= mark:
+						off = false
+						break
+				var dp := heights.depth_at(x * GameConfig.TILE, y * GameConfig.TILE, INF) >= GameConfig.FORD_DEPTH
+				if off and not was_off:
+					cells += 1
+					print("  %s вне своих клеток на (%.0f, %.0f)" % [tr.kind, x, y])
+				if dp and not was_deep:
+					deep += 1
+					print("  %s в воде на (%.0f, %.0f)" % [tr.kind, x, y])
+				was_off = off
+				was_deep = dp
+	return [cells, deep]
 
 
 ## Упереться в перила или стену сооружения s: с середины оси повернуть на angle от неё и 1,5 с идти бегом

@@ -12,6 +12,8 @@ public partial class FastGrid : RefCounted
 {
 	private static readonly int[] Dx = { 1, -1, 0, 0, 1, 1, -1, -1 };
 	private static readonly int[] Dy = { 0, 0, 1, -1, 1, -1, 1, -1 };
+	/// <summary>Множитель оценки остатка пути A* (как Pathfinder.H_COST).</summary>
+	private const double HCost = 0.6;
 	private static readonly double[] Dl = { 1.0, 1.0, 1.0, 1.0, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951 };
 
 	private int _w;
@@ -78,14 +80,22 @@ public partial class FastGrid : RefCounted
 				double cn = cost[n];
 				if (double.IsPositiveInfinity(cn) || done[n] == gn)
 					continue;
-				double ng = gc + Dl[k] * (cc + cn) * 0.5;
+				double step = (cc + cn) * 0.5;
+				if (k >= 4)
+				{
+					double ca = cost[c + Dx[k]], cb = cost[c + Dy[k] * W];
+					if (double.IsPositiveInfinity(ca) || double.IsPositiveInfinity(cb))
+						continue;
+					step = Math.Max(step, (ca + cb) * 0.5);
+				}
+				double ng = gc + Dl[k] * step;
 				if (seen[n] != gn || ng < g[n])
 				{
 					seen[n] = gn;
 					g[n] = (float)ng;
 					from[n] = c;
 					int ax = Math.Abs(nx - tx), ay = Math.Abs(ny - ty);
-					double key = ng + (Math.Max(ax, ay) + 0.414 * Math.Min(ax, ay)) * 0.6;
+					double key = ng + (Math.Max(ax, ay) + 0.414 * Math.Min(ax, ay)) * HCost;
 					if (hn >= ids.Length)
 					{
 						Array.Resize(ref ids, ids.Length * 2);
