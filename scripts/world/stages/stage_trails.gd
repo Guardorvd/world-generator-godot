@@ -12,6 +12,8 @@ extends RefCounted
 ## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу.
 ## Туннели и обходы горы чередуются: после туннеля следующий хребет путь по возможности обходит
 ## понизу (_detour), после обхода — снова туннель. Высоты здесь в единицах w.h (1 = 260 м).
+## Из поселения-тупика (с одной связью) идёт ответвление к ближайшему соседу другой стороной, по суше,
+## а у части дорог есть второй путь в обход первого (_second_ways).
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
@@ -28,6 +30,15 @@ const BRIDGE_R := 0.8       # клетки ближе этого к оси мо�
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
 const DETOUR := 4.5         # обход горы не длиннее стольких прямых расстояний между входами туннеля
+const ALT_EVERY := 3        # второй путь у каждой третьей дороги остовного дерева (от самой длинной)
+const ALT_LEN := 2.0        # второй путь не длиннее стольких первых
+const DEAD_LEN := 3.0       # ответвление из тупика не длиннее стольких прямых расстояний до соседа
+const DEAD_TRIES := 3       # ответвление ищется к стольким ближайшим соседям по очереди
+const SHORE_MIN := 15       # если соседи по суше недоступны — тропа к берегу моря не ближе стольких клеток
+const SHORE_MAX := 45       # и не дальше стольких
+const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
+const AVOID_MUL := 8.0      # во столько раз дороже клетки коридора
+const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -189,13 +200,135 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	for i in w.N:
 		if ocean[i] != 0 or lake[i] != 0:
 			road_cost[i] = BRIDGE_COST
+	var paths: Array = []   # [a, b, путь, дорога ли] найденных связей
 	for e in edges:
 		# первые n - 1 связей — остовное дерево
 		var road: bool = e[3] < n - 1
 		var p := finder.find_path(st[e[0]].i, st[e[1]].i, road_cost if road else PackedFloat32Array())
 		if p.size() > 0:
-			_add_trail(w, _structures(w, p, road, finder, road_cost if road else w.cost, turn), "road" if road else "trail", road_cost)
+			var q := _structures(w, p, road, finder, road_cost if road else w.cost, turn)
+			_add_trail(w, q, "road" if road else "trail", road_cost)
+			paths.append([e[0], e[1], q, road, e[2]])
+	_second_ways(w, finder, paths, road_cost, turn)
 	_clear_huts(w)
+
+
+## Вторые пути. Поселение-тупик (одна связь) получает тропу к ближайшему соседу, с которым не связано;
+## у каждой ALT_EVERY-й дороги остовного дерева (по длине, с самой длинной) появляется вторая дорога
+## между теми же поселениями. Оба ищутся только по суше и в стороне от прежнего пути (_avoiding),
+## поэтому петляют по другой местности; слишком длинный или почти совпадающий с прежним путь отбрасывается.
+static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_cost: PackedFloat32Array, turn: Dictionary) -> void:
+	var st := w.settlements
+	var n := st.size()
+	var links: Array = []   # пути у каждого поселения
+	links.resize(n)
+	for a in n:
+		links[a] = []
+	var have := {}
+	for e in paths:
+		links[e[0]].append(e[2])
+		links[e[1]].append(e[2])
+		have[_key(e[0], e[1])] = true
+	var ways: Array = []   # [a, соседи по удалённости, пути, которых избегать, дорога ли, предел длины на клетку расстояния]
+	for a in n:
+		if links[a].size() != 1:
+			continue
+		var near: Array = []
+		for b in n:
+			var d := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
+			if b != a and not have.has(_key(a, b)) and d < w.W * 0.45:
+				near.append([b, d])
+		near.sort_custom(func(p: Array, q: Array) -> bool: return p[1] < q[1] if p[1] != q[1] else p[0] < q[0])
+		ways.append([a, near.slice(0, DEAD_TRIES), links[a], false, DEAD_LEN])
+	var roads: Array = []
+	for e in paths:
+		if e[3]:
+			roads.append(e)
+	roads.sort_custom(func(p: Array, q: Array) -> bool: return p[4] > q[4] if p[4] != q[4] else p[0] < q[0])
+	for k in range(0, roads.size(), ALT_EVERY):
+		var e: Array = roads[k]
+		ways.append([e[0], [[e[1], e[4]]], [e[2]], true, e[2].size() * ALT_LEN / e[4]])
+	for v in ways:
+		var a: int = v[0]
+		var avoid: Array = v[2]
+		var road: bool = v[3]
+		var c := _avoiding(w, avoid)
+		var found := false
+		# к первому соседу, до которого нашёлся подходящий путь
+		for nb in v[1]:
+			var b: int = nb[0]
+			if have.has(_key(a, b)) and not road:
+				continue
+			var p := finder.find_path(st[a].i, st[b].i, c)
+			if p.size() == 0 or p.size() > nb[1] * v[4] or _share(w, p, avoid) > AVOID_SHARE:
+				continue
+			have[_key(a, b)] = true
+			_add_trail(w, _structures(w, p, road, finder, w.cost, turn), "road" if road else "trail", road_cost)
+			found = true
+			break
+		if found or road:
+			continue
+		# до соседей по суше не дойти (обычно это остров): тропа к морю на другой стороне
+		var t := _shore(w, st[a].i, _corridor(w, avoid))
+		if t >= 0:
+			var p := finder.find_path(st[a].i, t, c)
+			var d := Grid.hypot(t % w.W - st[a].x, t / w.W - st[a].y)
+			if p.size() > 0 and p.size() <= d * DEAD_LEN and _share(w, p, avoid) <= AVOID_SHARE:
+				_add_trail(w, _structures(w, p, false, finder, w.cost, turn), "trail", road_cost)
+
+
+## Ближайшая к клетке s клетка морского берега на расстоянии от SHORE_MIN до SHORE_MAX клеток,
+## не в коридоре near прежних путей; -1, если такой нет
+static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
+	var W := w.W
+	var sx := s % W
+	var sy := s / W
+	var best := -1
+	var bd := INF
+	for y in range(maxi(0, sy - SHORE_MAX), mini(w.H, sy + SHORE_MAX + 1)):
+		for x in range(maxi(0, sx - SHORE_MAX), mini(W, sx + SHORE_MAX + 1)):
+			var i := y * W + x
+			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
+			if d < SHORE_MIN * SHORE_MIN or d >= bd or near[i] != 0 or w.cost[i] == INF or w.dist_ocean[i] > 1.5:
+				continue
+			bd = d
+			best = i
+	return best
+
+
+## Стоимость по суше (w.cost), в которой клетки ближе AVOID_R к путям avoid в AVOID_MUL раз дороже
+static func _avoiding(w: WorldData, avoid: Array) -> PackedFloat32Array:
+	var c := w.cost.duplicate()
+	var near := _corridor(w, avoid)
+	for i in w.N:
+		if near[i] != 0 and c[i] != INF:
+			c[i] *= AVOID_MUL
+	return c
+
+
+## Клетки ближе AVOID_R к путям avoid (квадрат вокруг каждой клетки пути)
+static func _corridor(w: WorldData, avoid: Array) -> PackedByteArray:
+	var W := w.W
+	var near := PackedByteArray()
+	near.resize(w.N)
+	for path in avoid:
+		for i in (path as PackedInt32Array):
+			var cx := i % W
+			var cy := i / W
+			for y in range(maxi(0, cy - AVOID_R), mini(w.H, cy + AVOID_R + 1)):
+				for x in range(maxi(0, cx - AVOID_R), mini(W, cx + AVOID_R + 1)):
+					near[y * W + x] = 1
+	return near
+
+
+## Доля клеток пути p в коридоре прежних путей avoid
+static func _share(w: WorldData, p: PackedInt32Array, avoid: Array) -> float:
+	var near := _corridor(w, avoid)
+	var k := 0
+	for i in p:
+		if near[i] != 0:
+			k += 1
+	return float(k) / p.size()
 
 
 ## Дома, которые стоят на мосту, в туннеле или вплотную к ним, убираются: иначе в них упрётся дорога
