@@ -209,10 +209,11 @@ func _off_structures(w: WorldData, heights: Heightfield) -> int:
 					var t: float = dx * s.ux + dz * s.uz
 					if t < END or t > s.len - END or absf(dx * s.uz - dz * s.ux) > s.half + Heightfield.WALL:
 						continue
-					# путь под мостом по дну оврага или над туннелем по горе — не по сооружению, ему перила не мешают
+					# Тропа ниже настила больше чем на высоту шага проходит под мостом:
+					# его перила не мешают ей, как и в Heightfield.wall_at
 					var feet := heights.level(s, t)
 					var g := heights.ground_at(q.x, q.y)
-					var along := g > feet - 2.0 and g < feet + Heightfield.TUNNEL_HEIGHT
+					var along := g > feet - Heightfield.STEP and g < feet + Heightfield.TUNNEL_HEIGHT
 					bad = heights.depth_at(q.x, q.y, feet) >= GameConfig.FORD_DEPTH or (along and heights.wall_at(q.x, q.y, feet))
 					if bad and not off:
 						print("  %s у %s %.0f м сходит с него на (%.0f, %.0f)" % [tr.kind, "туннеля" if s.tunnel else "моста", s.len, q.x / GameConfig.TILE, q.y / GameConfig.TILE])
@@ -292,7 +293,8 @@ func _into_wall(w: WorldData, heights: Heightfield, s: Dictionary, angle: float,
 			if t < 1.0 or t > s.len - 1.0:
 				continue
 			var side := absf(dx * s.uz - dz * s.ux)
-			if side > face - reach or p.feet < heights.level(s, t) - 0.6:
+			# Точки тела — Vector2 (float32): у дальних туннелей округление координат даёт доли мм
+			if side > face - reach + 0.001 or p.feet < heights.level(s, t) - 0.6:
 				print("  %s %.0f м %s под %d°%s: %.2f м от оси при стенке в %.2f м, ноги %.1f м над настилом" % ["туннель" if s.tunnel else "мост", s.len,
 					"на велосипеде" if ride else "пешком", roundi(rad_to_deg(angle)), " (такт %.2f с)" % dt if dt > DT else "", side, face, p.feet - heights.level(s, t)])
 				return 1

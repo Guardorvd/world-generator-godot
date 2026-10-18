@@ -70,6 +70,9 @@ func _stats(w: WorldData) -> Dictionary:
 	var land := 0
 	var mountains := 0
 	var steep := 0
+	var high := 0
+	var hills := 0
+	var steep_land := 0
 	var curvature := 0.0
 	var max_height := 0.0
 	for y in range(1, w.H - 1):
@@ -80,14 +83,20 @@ func _stats(w: WorldData) -> Dictionary:
 			land += 1
 			var h := w.h[i] * GameConfig.HS
 			max_height = maxf(max_height, h)
-			if h < 80.0 or w.river[i] != 0:
-				continue
-			mountains += 1
 			var l := w.h[i - 1] * GameConfig.HS
 			var r := w.h[i + 1] * GameConfig.HS
 			var u := w.h[i - w.W] * GameConfig.HS
 			var d := w.h[i + w.W] * GameConfig.HS
 			var slope := Vector2(r - l, d - u).length() / (2.0 * GameConfig.TILE)
+			if h > 150.0:
+				high += 1
+			if h >= 20.0 and h < 80.0 and slope < tan(deg_to_rad(25.0)):
+				hills += 1
+			if slope > tan(deg_to_rad(35.0)):
+				steep_land += 1
+			if h < 80.0 or w.river[i] != 0:
+				continue
+			mountains += 1
 			if slope > tan(deg_to_rad(45.0)):
 				steep += 1
 			curvature += (absf(l + r - 2.0 * h) + absf(u + d - 2.0 * h)) * 0.5
@@ -107,6 +116,9 @@ func _stats(w: WorldData) -> Dictionary:
 	out.mountain_steep_share = 100.0 * steep / maxi(1, mountains)
 	out.mountain_curvature_m = curvature / maxi(1, mountains)
 	out.max_height_m = max_height
+	out.high_share = 100.0 * high / maxi(1, land)
+	out.hill_share = 100.0 * hills / maxi(1, land)
+	out.steep_land_share = 100.0 * steep_land / maxi(1, land)
 	return out
 
 
