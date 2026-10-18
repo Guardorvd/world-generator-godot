@@ -4,6 +4,9 @@ extends RefCounted
 ## и воды, материал рельефа и карта. Узлы сцены не в дереве, поэтому сборка не трогает главный поток.
 ## Заливка текстуры и карты, рельеф и вода зависят только от первых этапов генерации (до климата),
 ## поэтому считаются в отдельном потоке, пока генератор прокладывает тропы и сажает лес.
+## Этот поток читает только то, что после климата уже не меняется (рельеф, вода, реки, биомы). Мосты и
+## туннели пишет этап троп, поэтому они встраиваются в рельеф после генерации, в одном потоке: так
+## результат один и тот же, как бы ни легли задачи (до 2.0 поток мог застать их недописанными).
 
 var world: WorldData
 var heights: Heightfield
@@ -31,7 +34,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
 	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
-	# мосты и туннели известны только после троп: рельеф опускается под туннелями, меш поправляется
+	# мосты и туннели известны только после троп: рельеф опускается под туннелями, меш поправляется.
+	# Без потока (_prepare здесь же) рельеф всё равно построен без них, чтобы путь был один
 	var changed := r.heights.build_structures()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_mesh, r.world, r.heights, changed)
@@ -55,7 +59,7 @@ func _prepare(w: WorldData, px: int) -> Array:
 	var painted := [MapBaker.paint(w, px)]
 	if px != 2:
 		painted.append(MapBaker.paint(w, 2))
-	heights = Heightfield.new(w)
+	heights = Heightfield.new(w, false)
 	terrain_mesh = TerrainBuilder.build_mesh(w, heights)
 	water = WaterBuilder.build(w, heights)
 	return painted

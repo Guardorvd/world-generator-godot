@@ -7,10 +7,13 @@ extends RefCounted
 ## compute — чистая функция, её считают фоновые задачи; в chunks куски кладёт и убирает главный поток.
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
+## Сам мир здесь не хранится, только его размер: мир держит OuterLand (WorldData.outer), и обратная ссылка
+## замкнула бы их друг на друга, тогда мир не освобождался бы после выхода в меню (до 2.0 так и было).
 
 const C := 64              # сторона куска в клетках
 
-var world: WorldData
+var W := 0                 # размер карты в клетках
+var H := 0
 ## Vector2i(номер куска по x, по y) -> поля compute по (C + 3)² клеткам с углом (x0 - 1, y0 - 1),
 ## где x0, y0 — первая клетка куска: с запасом на соседей для меша и нормалей
 var chunks := {}
@@ -18,7 +21,8 @@ var _ring: Array[Dictionary] = []   # над картой, под ней, сле
 
 
 func _init(w: WorldData) -> void:
-	world = w
+	W = w.W
+	H = w.H
 	_ring = [compute(w, -1, -1, w.W + 2, 1), compute(w, -1, w.H, w.W + 2, 1),
 		compute(w, -1, 0, 1, w.H), compute(w, w.W, 0, 1, w.H)]
 
@@ -86,8 +90,6 @@ static func compute_chunk(w: WorldData, key: Vector2i) -> Dictionary:
 
 ## Где лежит клетка (i, j) за краем карты: [поля, номер в них] или [] — куска ещё нет
 func _locate(i: int, j: int) -> Array:
-	var W := world.W
-	var H := world.H
 	if i >= -1 and j >= -1 and i <= W and j <= H:
 		if j == -1:
 			return [_ring[0], i + 1]

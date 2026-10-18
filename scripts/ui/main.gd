@@ -232,10 +232,14 @@ func _resume() -> void:
 	get_viewport().gui_release_focus()
 
 
+## Мир живёт, пока на него ссылаются игра и интерфейс: обе ссылки снимаются здесь, а внутри мира ссылок
+## наверх нет (рельеф за краем знает только размер карты), поэтому он освобождается сам целиком.
+## Проверка: tools/lifecycle_test.gd
 func _free_game() -> void:
 	if game != null:
 		game.queue_free()
 		game = null
+	hud.clear_world()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 

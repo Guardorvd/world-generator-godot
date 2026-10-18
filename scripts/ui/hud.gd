@@ -66,6 +66,13 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	toast_label.modulate.a = 0.0
 
 
+## Выход из игры: забыть мир и карту, чтобы прошлый мир освободился, пока в меню
+func clear_world() -> void:
+	world = null
+	map_tex = null
+	visited = {}
+
+
 func set_map_visible(v: bool) -> void:
 	big_map.visible = v
 	if v:

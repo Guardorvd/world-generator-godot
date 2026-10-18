@@ -26,7 +26,9 @@ var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 
 
-func _init(w: WorldData) -> void:
+## structures — сразу посчитать мосты и туннели (build_structures). WorldLoader строит рельеф раньше, чем
+## тропы готовы, и передаёт false: мосты и туннели в это время ещё пишет генератор
+func _init(w: WorldData, structures := true) -> void:
 	world = w
 	var N := w.N
 	var W := w.W
@@ -65,11 +67,12 @@ func _init(w: WorldData) -> void:
 			water_level[i] = w.filled[i] * HS
 		elif w.river[i] != 0:
 			water_level[i] = minf(hv_raw[i] - 0.45, hv[i] + 0.95) # брод: не глубже метра
-	build_structures()
+	if structures:
+		build_structures()
 
 
 ## Мосты и туннели из w.bridges и w.tunnels в метрах; под туннелями рельеф опускается до пола.
-## Вызывается и повторно, когда тропы проложены позже рельефа (загрузка в WorldLoader).
+## Вызывается один раз: из _init или, когда тропы проложены позже рельефа, из WorldLoader.
 ## Возвращает клетки, высота которых изменилась
 func build_structures() -> PackedInt32Array:
 	var W := world.W
