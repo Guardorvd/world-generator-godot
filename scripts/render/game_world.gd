@@ -90,10 +90,19 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	camera.fov = GameSettings.fov
+	_apply_shadows()
 	_update_camera(1.0, 0.0)
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
 	capture_mouse()
+
+
+## Тени солнца и затенение (SSAO) по настройке; настройку можно поменять на паузе
+func _apply_shadows() -> void:
+	var sun: DirectionalLight3D = $Sun
+	if sun.shadow_enabled != GameSettings.shadows:
+		sun.shadow_enabled = GameSettings.shadows
+		$WorldEnvironment.environment.ssao_enabled = GameSettings.shadows
 
 
 func capture_mouse() -> void:
@@ -265,6 +274,7 @@ func _process(delta: float) -> void:
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	bike_view.draw(alpha)
 	_update_hints()
+	_apply_shadows()
 	_update_camera(alpha, delta)
 
 	vegetation.update(pos.x, pos.z, false)

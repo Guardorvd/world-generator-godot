@@ -5,9 +5,9 @@
 
 [sub_resource type="ProceduralSkyMaterial" id="sky_mat"]
 sky_top_color = Color(0.32, 0.52, 0.82, 1)
-sky_horizon_color = Color(0.72, 0.82, 0.92, 1)
-ground_bottom_color = Color(0.72, 0.82, 0.92, 1)
-ground_horizon_color = Color(0.72, 0.82, 0.92, 1)
+sky_horizon_color = Color(0.62, 0.74, 0.88, 1)
+ground_bottom_color = Color(0.62, 0.74, 0.88, 1)
+ground_horizon_color = Color(0.62, 0.74, 0.88, 1)
 
 [sub_resource type="Sky" id="sky"]
 sky_material = SubResource("sky_mat")
@@ -16,11 +16,28 @@ sky_material = SubResource("sky_mat")
 background_mode = 2
 sky = SubResource("sky")
 ambient_light_source = 3
-ambient_light_energy = 0.6
+ambient_light_color = Color(0.62, 0.72, 0.9, 1)
+ambient_light_sky_contribution = 0.6
+ambient_light_energy = 0.5
+tonemap_mode = 3
+tonemap_exposure = 0.92
+tonemap_white = 6.0
+ssao_enabled = true
+ssao_radius = 1.6
+ssao_intensity = 1.6
+ssao_detail = 0.3
+glow_enabled = true
+glow_intensity = 0.35
+glow_bloom = 0.04
+glow_blend_mode = 1
 fog_enabled = true
-fog_light_color = Color(0.72, 0.82, 0.92, 1)
+fog_light_color = Color(0.62, 0.74, 0.88, 1)
+fog_sun_scatter = 0.12
 fog_density = 0.0021
+fog_aerial_perspective = 0.15
 fog_sky_affect = 0.0
+adjustment_enabled = true
+adjustment_saturation = 1.1
 
 [node name="GameWorld" type="Node3D"]
 script = ExtResource("1_game")
@@ -29,9 +46,15 @@ script = ExtResource("1_game")
 environment = SubResource("env")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
-transform = Transform3D(-0.6139406, 0.5810546, -0.53427756, 0, 0.6768557, 0.73611575, 0.78935224, 0.45193136, -0.4155492, 0, 0, 0)
-light_color = Color(1, 0.9490196, 0.84705883, 1)
-light_energy = 0.85
+transform = Transform3D(-0.6139406, 0, 0.7893522, 0.5073858, 0.7660445, 0.3946334, -0.6046789, 0.6427876, -0.4703058, 0, 0, 0)
+light_color = Color(1, 0.93, 0.8, 1)
+light_energy = 1.5
+shadow_enabled = true
+shadow_bias = 0.04
+shadow_normal_bias = 1.2
+shadow_blur = 1.2
+directional_shadow_blend_splits = true
+directional_shadow_max_distance = 220.0
 
 [node name="Terrain" type="MeshInstance3D" parent="."]
 

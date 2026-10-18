@@ -37,6 +37,9 @@ static func build(w: WorldData, heights: Heightfield) -> Array[MeshInstance3D]:
 	var rivers := _river_mesh(heights.ribbons, water_mat)
 	if rivers:
 		out.append(rivers)
+	# полупрозрачная вода тень не отбрасывает: иначе дно и берег под ней темнели бы целиком (с 2.6)
+	for mi in out:
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return out
 
 

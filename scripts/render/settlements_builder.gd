@@ -8,12 +8,15 @@ const HUT_CORNERS := [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
 
 
-static func _mat(c: Color, unshaded: bool = false) -> StandardMaterial3D:
+## glow > 0 — светится сам (огонь, окна): цвет идёт в излучение с этой силой, яркое пятно подхватывает
+## свечение окружения (glow). До 2.6 такие материалы были без освещения (unshaded)
+static func _mat(c: Color, glow: float = 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
 	m.roughness = 1.0
-	if unshaded:
+	if glow > 0.0:
 		m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.albedo_color = c * glow
 	return m
 
 
@@ -39,6 +42,8 @@ static func _part(mesh: Mesh, offset: Vector3, mat: Material) -> MeshInstance3D:
 	mi.mesh = mesh
 	mi.position = offset
 	mi.material_override = mat
+	# костёр мелкий, а пламя светится: тени от них не нужны
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return mi
 
 
@@ -62,7 +67,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var walls := [0xa7825a, 0xb89470, 0x8f6e4c, 0xc2a27a].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
 	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
 	var door_m := _mat(Color8(0x3a, 0x2a, 0x1c))
-	var win_m := _mat(Color8(0xf2, 0xd2, 0x7a), true)
+	var win_m := _mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
 	var wall_mesh := _box_mesh(Vector3(3.2, 2.6, 3.2))
 	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
 	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
@@ -74,8 +79,8 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	log_mesh.radial_segments = 5
 	var flame_mesh := _cone_mesh(0.4, 1.1, 6)
 	var core_mesh := _cone_mesh(0.22, 0.7, 6)
-	var flame_m := _mat(Color8(0xff, 0x8a, 0x2a), true)
-	var core_m := _mat(Color8(0xff, 0xd3, 0x6b), true)
+	var flame_m := _mat(Color8(0xff, 0x8a, 0x2a), 2.2)
+	var core_m := _mat(Color8(0xff, 0xd3, 0x6b), 3.0)
 	var fires: Array = []
 	var labels: Array = []
 	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия

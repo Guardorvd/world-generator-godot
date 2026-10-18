@@ -1,6 +1,7 @@
 class_name GameSettings
 extends RefCounted
 ## Настройки игрока: чувствительность мыши, инверсия, угол обзора, покачивание камеры, полный экран,
+## тени и затенение (с 2.6),
 ## размер мира в меню. Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
 
 const PATH := "user://settings.cfg"
@@ -17,12 +18,14 @@ const DEFAULT_INVERT_Y := false
 const DEFAULT_FOV := 70.0
 const DEFAULT_HEAD_BOB := true
 const DEFAULT_FULLSCREEN := false
+const DEFAULT_SHADOWS := true
 
 static var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 static var invert_y := DEFAULT_INVERT_Y
 static var fov := DEFAULT_FOV            # угол обзора по вертикали, градусы
 static var head_bob := DEFAULT_HEAD_BOB  # покачивание камеры при ходьбе
 static var fullscreen := DEFAULT_FULLSCREEN
+static var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
 static var world_size := DEFAULT_WORLD_SIZE
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 
@@ -36,6 +39,7 @@ static func load_settings() -> void:
 	fov = clampf(cfg.get_value("view", "fov", fov), MIN_FOV, MAX_FOV)
 	head_bob = cfg.get_value("view", "head_bob", head_bob)
 	fullscreen = cfg.get_value("view", "fullscreen", fullscreen)
+	shadows = cfg.get_value("view", "shadows", shadows)
 	# файл мог быть испорчен вручную: неизвестный размер мира заменяем на средний
 	world_size = int(cfg.get_value("world", "size", world_size))
 	if not SIZES.has(world_size):
@@ -50,6 +54,7 @@ static func reset_defaults() -> void:
 	fov = DEFAULT_FOV
 	head_bob = DEFAULT_HEAD_BOB
 	fullscreen = DEFAULT_FULLSCREEN
+	shadows = DEFAULT_SHADOWS
 
 
 static func save_settings() -> void:
@@ -59,6 +64,7 @@ static func save_settings() -> void:
 	cfg.set_value("view", "fov", fov)
 	cfg.set_value("view", "head_bob", head_bob)
 	cfg.set_value("view", "fullscreen", fullscreen)
+	cfg.set_value("view", "shadows", shadows)
 	cfg.set_value("world", "size", world_size)
 	cfg.set_value("world", "seed", last_seed)
 	cfg.save(PATH)

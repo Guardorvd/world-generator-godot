@@ -83,6 +83,7 @@ func _sync_settings_controls() -> void:
 	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
 	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
 	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
+	%Shadows.set_pressed_no_signal(GameSettings.shadows)
 	_show_values()
 
 
@@ -119,6 +120,10 @@ func _on_head_bob_toggled(on: bool) -> void:
 func _on_fullscreen_toggled(on: bool) -> void:
 	GameSettings.fullscreen = on
 	GameSettings.apply_window()
+
+
+func _on_shadows_toggled(on: bool) -> void:
+	GameSettings.shadows = on
 
 
 func _on_seed_submitted(_text: String) -> void:

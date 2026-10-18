@@ -46,6 +46,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh) -> 
 		veg[k] = entry
 	# Трава у ног
 	grass = _multimesh(grass_mesh, _vcolor_mat(true), GameConfig.GRASS_MAX, true)
+	# тень от травы почти не видна, а пучков тысячи: трава тень не отбрасывает (с 2.6)
+	(grass.get_meta("instance") as MultiMeshInstance3D).cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	grass_buf = _buffer(GameConfig.GRASS_MAX, 16)
 
 
@@ -80,6 +82,7 @@ func _multimesh(mesh: Mesh, mat: Material, cap: int, colors: bool) -> MultiMesh:
 	# экземпляры разбросаны вокруг игрока, рамки отсечения не нужны
 	mmi.custom_aabb = AABB(Vector3(-1e5, -1e4, -1e5), Vector3(2e5, 2e4, 2e5))
 	add_child(mmi)
+	mm.set_meta("instance", mmi)
 	return mm
 
 
