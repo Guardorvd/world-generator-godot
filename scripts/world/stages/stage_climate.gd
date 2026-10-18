@@ -40,6 +40,16 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 	return Biomes.JUNGLE
 
 
+## Широта строки y для температуры: 0 — холодный север, 1 — жаркий юг. С 1.9.6 шкала не зависит от
+## размера карты (LAT_CELLS клеток на весь размах, середина карты — 0.5) и продолжается за край:
+## к северу холоднее, к югу жарче
+const LAT_CELLS := 511.0
+
+
+static func latitude(w: WorldData, y: int) -> float:
+	return 0.5 + (y - w.H * 0.5 + 0.5) / LAT_CELLS
+
+
 static func run(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
@@ -81,7 +91,7 @@ static func run(w: WorldData) -> void:
 	for y in H:
 		for x in W:
 			var i := y * W + x
-			var lat := float(y) / (H - 1) # север холодный, юг жаркий
+			var lat := latitude(w, y)
 			var e := elev[i]
 			var t := clampf(0.16 + lat * 0.86 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)

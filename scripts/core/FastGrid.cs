@@ -126,7 +126,8 @@ public partial class FastGrid : RefCounted
 		int hn = 0;
 		for (int i = 0; i < N; i++)
 		{
-			if (ocean[i] != 0)
+			int ex = i % W, ey = i / W;
+			if (ocean[i] != 0 || ex == 0 || ey == 0 || ex == W - 1 || ey == H - 1)
 			{
 				closed[i] = true;
 				Push(ids, keys, ref hn, i, h[i]);
@@ -273,11 +274,16 @@ public partial class FastGrid : RefCounted
 		return r;
 	}
 
+	/// <summary>Масштаб и вклад шума материков: копия StageRelief.MACRO, MACRO_AMP, MACRO_LIFT.</summary>
+	private const double Macro = 1400.0;
+	private const double MacroAmp = 1.2;
+	private const double MacroLift = 0.25;
+
 	/// <summary>
-	/// Макрорельеф до уровня моря: копия цикла StageRelief._rows по прямоугольнику клеток W × H с углом (x0, y0).
-	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill.
+	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
+	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, int x0, int y0, int W, int H)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H)
 	{
 		var outH = new float[W * H];
 		System.Threading.Tasks.Parallel.For(0, H, j =>
@@ -291,7 +297,9 @@ public partial class FastGrid : RefCounted
 				double X = x + wx;
 				double Y = y + wy;
 				double c = Fbm(cont, X / 240.0, Y / 240.0, 6);
-				double bas = c + 0.1;
+				double macro = Fbm(cont, (X + mx) / Macro + 91.7, (Y + my) / Macro - 43.1, 2);
+				double lift = macro * MacroAmp;
+				double bas = c + (lift < MacroLift ? lift : MacroLift) + 0.1;
 				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
 				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - -0.15) / (0.3 - -0.15));

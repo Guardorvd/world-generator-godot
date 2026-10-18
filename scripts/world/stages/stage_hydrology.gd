@@ -101,7 +101,8 @@ static func run(w: WorldData) -> void:
 	w.river = river
 
 
-## Заполнение впадин от океана (priority flood). Возвращает {filled, down, order, order_n}.
+## Заполнение впадин от океана и от края карты (priority flood): с 1.9.6 за краем мир продолжается, и вода
+## с суши у края стекает туда, а не ищет выход к океану через всю карту. Возвращает {filled, down, order, order_n}.
 ## В сборке Godot .NET вместо него работает FastGrid.PriorityFlood, результат тот же.
 static func _priority_flood(w: WorldData) -> Dictionary:
 	var W := w.W
@@ -120,7 +121,7 @@ static func _priority_flood(w: WorldData) -> Dictionary:
 	closed.resize(N)
 	var heap := MinHeap.new(N + 16)
 	for i in N:
-		if ocean[i] != 0:
+		if ocean[i] != 0 or Grid.on_edge(i, W, H):
 			closed[i] = 1
 			heap.push(i, h[i])
 	# Цикл заполнения с развёрнутой кучей (тот же алгоритм, что MinHeap, без вызовов методов)

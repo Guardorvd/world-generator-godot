@@ -1,6 +1,6 @@
 class_name OuterLand
 extends RefCounted
-## Рельеф за краем карты (с 1.9.5): тот же шум, что у StageRelief, с теми же уровнями моря, поэтому на
+## Рельеф за краем карты (с 1.9.5): тот же шум, что у StageRelief, с теми же постоянными уровнями моря, поэтому на
 ## границе карты нет ступеньки. Считается кусками по C × C клеток вокруг игрока (OuterTerrain).
 ## Пока это только высота и биом по климату: рек, озёр, растительности, поселений и троп за краем нет,
 ## вода — море на уровне 0 везде, где рельеф ниже уровня моря.
@@ -37,9 +37,9 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 	var hn := PackedFloat32Array()
 	hn.resize(pw * ph)
 	# StageRelief.normalize и add_micro развёрнуты на месте: куски считаются в потоках (см. Parallel)
-	var sea := w.sea_raw
-	var top := w.top_raw
-	var bottom := w.bottom_raw
+	var sea := StageRelief.SEA_RAW
+	var top := StageRelief.TOP_RAW
+	var bottom := StageRelief.BOTTOM_RAW
 	for k in pw * ph:
 		var v := raw[k]
 		var hh := minf(pow((v - sea) / (top - sea), 1.25), 1.4) if v >= sea else (v - sea) / (sea - bottom)
@@ -54,7 +54,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 	for key in out:
 		out[key].resize(n)
 	for j in ch:
-		var lat := clampf(float(y0 + j) / (w.H - 1), 0.0, 1.0)
+		var lat := StageClimate.latitude(w, y0 + j)
 		for i in cw:
 			var c := (j + 1) * pw + i + 1
 			var hh := hn[c]

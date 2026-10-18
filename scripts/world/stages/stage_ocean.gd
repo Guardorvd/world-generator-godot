@@ -1,6 +1,7 @@
 class_name StageOcean
 extends RefCounted
-## Этап 2. Океан: всё, что ниже уровня моря и связано с краем карты.
+## Этап 2. Океан: всё, что ниже уровня моря и связано с краем карты. Если у края моря нет, океана на карте
+## нет (с 1.9.6 вода тогда стекает за край карты, см. StageHydrology).
 ## Пишет: w.ocean (1 — океан).
 
 const PROGRESS := 0.16
@@ -47,8 +48,4 @@ static func run(w: WorldData) -> void:
 				ocean[n] = 1
 				q[qt] = n
 				qt += 1
-	if qt == 0:
-		for x in W:
-			ocean[x] = 1
-			ocean[(H - 1) * W + x] = 1
 	w.ocean = ocean

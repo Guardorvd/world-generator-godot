@@ -32,6 +32,13 @@ static func smoothstep_js(a: float, b: float, x: float) -> float:
 
 
 ## Дистанционное преобразование (фаска 1 / √2): расстояние в клетках до ближайшей клетки, где source[i] != 0
+## Лежит ли клетка i на краю карты w × h
+static func on_edge(i: int, w: int, h: int) -> bool:
+	var x := i % w
+	var y := i / w
+	return x == 0 or y == 0 or x == w - 1 or y == h - 1
+
+
 static func distance_field(w: int, h: int, source: PackedByteArray) -> PackedFloat32Array:
 	var n := w * h
 	var d := PackedFloat32Array()
