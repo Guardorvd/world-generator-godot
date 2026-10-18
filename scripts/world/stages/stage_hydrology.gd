@@ -16,6 +16,9 @@ const LAKE_MAX := 1200
 
 
 const DRAIN_TILT := 0.0003  # подъём сухой низины на клетку от стока (≈ 8 см)
+## Берег озера не ниже уровня воды плюс SHORE_LIFT (≈ 0,8 м, с 3.0): засыпанные мелководья вокруг озера лежали
+## ровно на уровне воды, и вода расползалась по берегу рваными треугольниками
+const SHORE_LIFT := 0.003
 
 
 ## again — второй проход после того, как большие котловины стали низинами
@@ -92,6 +95,21 @@ static func run(w: WorldData, again := false) -> void:
 		# у низин новый рельеф: впадины и сток считаются заново
 		run(w, true)
 		return
+
+	for i in N:
+		if lake[i] == 0 or ocean[i] != 0:
+			continue
+		var cx := i % W
+		var cy := i / W
+		for k in 8:
+			var nx: int = cx + Grid.DX[k]
+			var ny: int = cy + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			if lake[n] == 0 and ocean[n] == 0 and h[n] < filled[i] + SHORE_LIFT:
+				h[n] = filled[i] + SHORE_LIFT
+				filled[n] = maxf(filled[n], h[n])
 
 	var dist_ocean := Grid.distance_field(W, H, ocean)
 

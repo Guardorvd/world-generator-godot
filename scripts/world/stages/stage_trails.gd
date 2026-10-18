@@ -28,6 +28,7 @@ const RISE_LEN := 30        # самый длинный туннель, клет
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
+const PORTAL_LEN := 3.0     # у входа туннеля, ближе стольких клеток, прежний путь не пересекает выемку
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
@@ -514,9 +515,10 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 				i += 1
 			if up:
 				kind = "tunnel"
-				# под горным озером, через реку в выемке и наперерез другому туннелю туннель не прокладывается
+				# под горным озером, через реку в выемке, наперерез другому туннелю и поперёк прежней дороги у входа
+				# туннель не прокладывается
 				if j > 0 and _same(w, w.tunnels, p[i], p[j], _key_cell(p, hp, wet, i, j)).is_empty():
-					if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R):
+					if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R) or _path_at_portal(w, p[i], p[j]):
 						j = -1
 			elif j > 0:
 				# над озером или заливом мост через овраг не ставится: путь идёт по берегу. С 3.0 и там, где
@@ -637,6 +639,23 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 	if q.size() > d * DETOUR:
 		return PackedInt32Array()
 	return q
+
+
+## Проходит ли прежний путь (path_mask) поперёк выемки будущего туннеля a–b у его входов (с 3.0): выемка там
+## почти до пола, и путь шёл бы сквозь стену у портала
+static func _path_at_portal(w: WorldData, a: int, b: int) -> bool:
+	var W := w.W
+	var ax := a % W + 0.5
+	var ay := a / W + 0.5
+	var bx := b % W + 0.5
+	var by := b / W + 0.5
+	for y in range(maxi(0, floori(minf(ay, by) - TUNNEL_R)), mini(w.H, ceili(maxf(ay, by) + TUNNEL_R))):
+		for x in range(maxi(0, floori(minf(ax, bx) - TUNNEL_R)), mini(W, ceili(maxf(ax, bx) + TUNNEL_R))):
+			var da := Grid.hypot(x + 0.5 - ax, y + 0.5 - ay)
+			var db := Grid.hypot(x + 0.5 - bx, y + 0.5 - by)
+			if w.path_mask[y * W + x] >= 2 and minf(da, db) > 0.5 and minf(da, db) < PORTAL_LEN 					and Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= TUNNEL_R:
+				return true
+	return false
 
 
 ## Есть ли вода (море, озеро, река) в клетках ближе r к отрезку между центрами клеток a и b

@@ -226,9 +226,13 @@ func _river_ribbons() -> Array:
 		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
-			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.6, y = minf(p.e * HS, ground_at(x, z, true)) - 0.45})
+			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.6, y = minf(p.e * HS, ground_at(x, z, true)) - 0.45,
+				lo = p.e * HS - 1.4})
 		for k in range(1, pts.size()):
 			pts[k].y = minf(pts[k].y, pts[k - 1].y)
+		# у устья лента не уходит ниже обычного русла (дно озера рядом глубже): она под водой озера
+		for p: Dictionary in pts:
+			p.y = maxf(p.y, p.lo + 0.3)
 		out.append(pts)
 	return out
 
