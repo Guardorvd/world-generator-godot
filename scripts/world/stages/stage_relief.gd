@@ -159,7 +159,8 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	if h > SEA_RAW:
 		h = SEA_RAW + (h - SEA_RAW) * (PLAIN_LIFT + (1.0 - PLAIN_LIFT) * rough)
 	var hills := hill.fbm(X / 40.0, Y / 40.0, 4)
-	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough)
+	# С 3.2 мелкие холмы слабее внутри массива: широкие склоны не покрываются частыми буграми
+	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough) * (1.0 - mask * 0.6)
 	t = clampf((base - 0.18) / 0.17, 0.0, 1.0)
 	var inland := t * t * (3.0 - 2.0 * t)
 	# Небольшие долины в холмистых краях: узкие ложбины вдоль линий нуля шума
@@ -190,18 +191,19 @@ const ASYM := 1.8
 const PEAK_CAP := 1.05
 ## Скругление главного гребня (в долях шума): без него гребень — острый излом, а вершины — иглы
 const CREST_ROUND := 0.12
-## С 3.0 острых массивов меньше: доля шума формы, с которой массив считается острым
-const SHARP_SHIFT := 0.2
+## Доля шума формы, с которой массив считается острым; с 3.2 острые массивы реже
+const SHARP_SHIFT := 0.28
 ## Возвышенности (с 3.0): медленный шум масштаба MASSIF превращает часть массивов в холмистые
 ## возвышенности и широкие склоны: форма гребня шире (r вместо r^1.5..r^2), высота UPLAND_AMP от горной,
 ## мелких гребней меньше (UPLAND_SMOOTH)
-const UPLAND_SHIFT := 0.08
-const UPLAND_AMP := 0.4
+## С 3.2 возвышенностей больше, их высота ниже: прежние гребни становятся широкими холмами
+const UPLAND_SHIFT := 0.24
+const UPLAND_AMP := 0.3
 ## Какую долю мелких гребней и отрогов возвышенность теряет
 const UPLAND_SMOOTH := 0.8
 ## Горы выше PEAK_KNEE растут всё медленнее (PEAK_SOFT — насколько плавно): высоких пиков меньше, но они есть
-const PEAK_KNEE := 0.4
-const PEAK_SOFT := 0.3
+const PEAK_KNEE := 0.36
+const PEAK_SOFT := 0.25
 
 
 static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float:
@@ -211,10 +213,12 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var f := t * t * (3.0 - 2.0 * t)
 	t = clampf((hill.fbm(X / MASSIF + 63.2, Y / MASSIF + 12.5, 2) + 0.25 - SHARP_SHIFT) / 0.5, 0.0, 1.0)
 	var sharp := t * t * (3.0 - 2.0 * t)
-	var asym := 1.0 + (ASYM - 1.0) * sharp
 	# Возвышенность вместо гор (с 3.0): те же гребни, но ниже, с широкими склонами и почти без мелких гребней
 	t = clampf((hill.fbm(X / MASSIF + 25.1, Y / MASSIF - 71.3, 2) + UPLAND_SHIFT) / 0.4, 0.0, 1.0)
 	var up := t * t * (3.0 - 2.0 * t)
+	# С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня
+	sharp *= 1.0 - up
+	var asym := 1.0 + (ASYM - 1.0) * sharp
 	# С 3.1 мелкая складчатость зависит и от формы массива: у сглаженных гор главный гребень
 	# цельный, у острых остаются скалистые детали. Возвышенности по-прежнему теряют большую их часть
 	var fine := (1.0 - UPLAND_SMOOTH * up) * (0.35 + 0.65 * sharp)

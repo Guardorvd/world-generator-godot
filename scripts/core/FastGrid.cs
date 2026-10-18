@@ -339,7 +339,7 @@ public partial class FastGrid : RefCounted
 				if (h > SeaRaw)
 					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
-				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough);
+				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough) * (1.0 - m * 0.6);
 				t = Clamp01((bas - 0.18) / 0.17);
 				double inland = t * t * (3.0 - 2.0 * t);
 				t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
@@ -364,12 +364,12 @@ public partial class FastGrid : RefCounted
 	private const double PeakCap = 1.05;
 	private const double CrestRound = 0.12;
 	/// <summary>Острые массивы, возвышенности и мягкий предел вершин (с 3.0): копия StageRelief.SHARP_SHIFT, UPLAND_SHIFT, UPLAND_AMP, UPLAND_SMOOTH, PEAK_KNEE, PEAK_SOFT.</summary>
-	private const double SharpShift = 0.2;
-	private const double UplandShift = 0.08;
-	private const double UplandAmp = 0.4;
+	private const double SharpShift = 0.28;
+	private const double UplandShift = 0.24;
+	private const double UplandAmp = 0.3;
 	private const double UplandSmooth = 0.8;
-	private const double PeakKnee = 0.4;
-	private const double PeakSoft = 0.3;
+	private const double PeakKnee = 0.36;
+	private const double PeakSoft = 0.25;
 
 	/// <summary>Копия StageRelief.mountain.</summary>
 	private static double Mountain(int[] ridge, int[] hill, double X, double Y)
@@ -381,9 +381,11 @@ public partial class FastGrid : RefCounted
 		double f = t * t * (3.0 - 2.0 * t);
 		t = Clamp01((Fbm(hill, X / Massif + 63.2, Y / Massif + 12.5, 2) + 0.25 - SharpShift) / 0.5);
 		double sharp = t * t * (3.0 - 2.0 * t);
-		double asym = 1.0 + (Asym - 1.0) * sharp;
 		t = Clamp01((Fbm(hill, X / Massif + 25.1, Y / Massif - 71.3, 2) + UplandShift) / 0.4);
 		double up = t * t * (3.0 - 2.0 * t);
+		// С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня.
+		sharp *= 1.0 - up;
+		double asym = 1.0 + (Asym - 1.0) * sharp;
 		// С 3.1 мелкие детали сильнее у острых массивов; главный гребень шире и цельнее.
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
