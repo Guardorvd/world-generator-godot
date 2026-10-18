@@ -1,0 +1,31 @@
+{
+	"seed": "Север-1234",
+	"size": 512,
+	"land_share": 0.485,
+	"lake_cells": 9076,
+	"rivers": 228,
+	"peaks": 6,
+	"settlements": 12,
+	"huts": 72,
+	"ways": {
+		"animal": 30,
+		"road": 13,
+		"trail": 5,
+		"mountain": 6
+	},
+	"ways_m": {
+		"animal": 1289,
+		"road": 7358,
+		"trail": 5569,
+		"mountain": 2040
+	},
+	"road_cells": 1463,
+	"trail_cells": 309,
+	"bridges": 5,
+	"tunnels": 1,
+	"objects": 30090,
+	"connected": true,
+	"hash_relief": 3482892525,
+	"hash_paths": 772376791,
+	"hash_biome": 3173280356
+}

@@ -1,0 +1,31 @@
+{
+	"seed": "Ущелье",
+	"size": 512,
+	"land_share": 0.46,
+	"lake_cells": 4703,
+	"rivers": 269,
+	"peaks": 6,
+	"settlements": 12,
+	"huts": 87,
+	"ways": {
+		"animal": 30,
+		"road": 14,
+		"trail": 4,
+		"mountain": 6
+	},
+	"ways_m": {
+		"animal": 1255,
+		"road": 7348,
+		"trail": 1925,
+		"mountain": 1827
+	},
+	"road_cells": 1679,
+	"trail_cells": 349,
+	"bridges": 9,
+	"tunnels": 3,
+	"objects": 35860,
+	"connected": true,
+	"hash_relief": 318224649,
+	"hash_paths": 190844039,
+	"hash_biome": 3540698253
+}

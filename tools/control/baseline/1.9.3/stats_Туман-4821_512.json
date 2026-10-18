@@ -1,0 +1,31 @@
+{
+	"seed": "Туман-4821",
+	"size": 512,
+	"land_share": 0.486,
+	"lake_cells": 8852,
+	"rivers": 228,
+	"peaks": 6,
+	"settlements": 12,
+	"huts": 84,
+	"ways": {
+		"animal": 30,
+		"road": 14,
+		"trail": 3,
+		"mountain": 6
+	},
+	"ways_m": {
+		"animal": 1224,
+		"road": 9393,
+		"trail": 3550,
+		"mountain": 3038
+	},
+	"road_cells": 1572,
+	"trail_cells": 582,
+	"bridges": 4,
+	"tunnels": 0,
+	"objects": 34784,
+	"connected": true,
+	"hash_relief": 1469887615,
+	"hash_paths": 3970004520,
+	"hash_biome": 2784121430
+}

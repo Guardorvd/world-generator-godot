@@ -1,0 +1,31 @@
+{
+	"seed": "Янтарь-5150",
+	"size": 512,
+	"land_share": 0.522,
+	"lake_cells": 21141,
+	"rivers": 239,
+	"peaks": 6,
+	"settlements": 12,
+	"huts": 67,
+	"ways": {
+		"animal": 30,
+		"road": 12,
+		"trail": 5,
+		"mountain": 6
+	},
+	"ways_m": {
+		"animal": 1361,
+		"road": 6561,
+		"trail": 5686,
+		"mountain": 1882
+	},
+	"road_cells": 1337,
+	"trail_cells": 245,
+	"bridges": 5,
+	"tunnels": 0,
+	"objects": 35678,
+	"connected": true,
+	"hash_relief": 4037221734,
+	"hash_paths": 1039165646,
+	"hash_biome": 2627859666
+}

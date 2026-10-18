@@ -1,0 +1,154 @@
+{
+	"version": "1.9.3",
+	"seed": "Север-1234",
+	"sizes": {
+		"256": {
+			"menu_memory": {
+				"rss_mb": 460.2,
+				"peak_rss_mb": 460.2,
+				"static_mb": 81.8,
+				"video_mb": 60.0,
+				"texture_mb": 43.6,
+				"buffer_mb": 3.9,
+				"objects": 1845.0,
+				"nodes": 77.0
+			},
+			"load_s": 4.07,
+			"loaded_memory": {
+				"rss_mb": 609.0,
+				"peak_rss_mb": 609.0,
+				"static_mb": 103.7,
+				"video_mb": 190.5,
+				"texture_mb": 126.1,
+				"buffer_mb": 20.3,
+				"objects": 2438.0,
+				"nodes": 474.0
+			},
+			"look": {
+				"fps": 805.5,
+				"low1": 582.1,
+				"max_ms": 3.3,
+				"frames": 6445.0
+			},
+			"road": {
+				"fps": 688.8,
+				"low1": 452.1,
+				"max_ms": 2.8,
+				"frames": 6890.0
+			},
+			"draw_calls": 116.0,
+			"primitives": 430794.0,
+			"memory": {
+				"rss_mb": 608.1,
+				"peak_rss_mb": 609.1,
+				"static_mb": 104.8,
+				"video_mb": 190.8,
+				"texture_mb": 126.1,
+				"buffer_mb": 20.3,
+				"objects": 2440.0,
+				"nodes": 474.0
+			}
+		},
+		"512": {
+			"menu_memory": {
+				"rss_mb": 457.8,
+				"peak_rss_mb": 457.8,
+				"static_mb": 80.9,
+				"video_mb": 60.0,
+				"texture_mb": 43.6,
+				"buffer_mb": 3.9,
+				"objects": 1846.0,
+				"nodes": 77.0
+			},
+			"load_s": 6.66,
+			"loaded_memory": {
+				"rss_mb": 690.0,
+				"peak_rss_mb": 690.0,
+				"static_mb": 164.4,
+				"video_mb": 222.3,
+				"texture_mb": 129.1,
+				"buffer_mb": 35.4,
+				"objects": 3356.0,
+				"nodes": 1100.0
+			},
+			"look": {
+				"fps": 694.3,
+				"low1": 479.4,
+				"max_ms": 2.7,
+				"frames": 5555.0
+			},
+			"road": {
+				"fps": 618.0,
+				"low1": 435.4,
+				"max_ms": 4.4,
+				"frames": 6181.0
+			},
+			"draw_calls": 160.0,
+			"primitives": 832136.0,
+			"memory": {
+				"rss_mb": 689.8,
+				"peak_rss_mb": 690.4,
+				"static_mb": 166.3,
+				"video_mb": 222.5,
+				"texture_mb": 129.1,
+				"buffer_mb": 35.3,
+				"objects": 3358.0,
+				"nodes": 1100.0
+			}
+		},
+		"768": {
+			"menu_memory": {
+				"rss_mb": 460.3,
+				"peak_rss_mb": 460.3,
+				"static_mb": 81.5,
+				"video_mb": 60.0,
+				"texture_mb": 43.6,
+				"buffer_mb": 3.9,
+				"objects": 1838.0,
+				"nodes": 77.0
+			},
+			"load_s": 16.98,
+			"loaded_memory": {
+				"rss_mb": 821.9,
+				"peak_rss_mb": 821.9,
+				"static_mb": 286.8,
+				"video_mb": 126.5,
+				"texture_mb": 57.9,
+				"buffer_mb": 42.0,
+				"objects": 8183.0,
+				"nodes": 3929.0
+			},
+			"look": {
+				"fps": 456.9,
+				"low1": 175.1,
+				"max_ms": 7.9,
+				"frames": 3660.0
+			},
+			"road": {
+				"fps": 253.8,
+				"low1": 203.2,
+				"max_ms": 8.6,
+				"frames": 2535.0
+			},
+			"draw_calls": 977.0,
+			"primitives": 1581099.0,
+			"memory": {
+				"rss_mb": 870.4,
+				"peak_rss_mb": 871.0,
+				"static_mb": 302.2,
+				"video_mb": 269.0,
+				"texture_mb": 140.7,
+				"buffer_mb": 62.9,
+				"objects": 8188.0,
+				"nodes": 3929.0
+			}
+		}
+	},
+	"machine": {
+		"gpu": "NVIDIA GeForce GTX 1650 SUPER",
+		"cpu": "AMD Ryzen 7 2700 Eight-Core Processor",
+		"threads": 16.0,
+		"os": "Windows",
+		"dotnet": true
+	}
+}
