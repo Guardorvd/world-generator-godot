@@ -4,7 +4,7 @@ extends Node3D
 ## для рельефа, воды, построек, мостов и туннелей) и игровой цикл. Копия js/render3d/game3d.js и js/ui/input.js.
 ## Логика без движка (рельеф, движение игрока, езда на велосипеде) — в scripts/game, интерфейс — в Hud.
 ## На велосипеде (F) камера переходит за спину седока. Чувствительность мыши, угол обзора и покачивание
-## берутся из GameSettings.
+## берутся из GameSettings. Звуки путешествия — узел Audio (WorldAudio, с 2.7).
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -49,6 +49,7 @@ static var _grass_mesh: Mesh
 
 @onready var camera: Camera3D = $Camera
 @onready var vegetation: VegetationLayer = $Vegetation
+@onready var audio: WorldAudio = $Audio
 
 
 ## Заполнить сцену загруженным миром (WorldLoader) и начать игру
@@ -94,6 +95,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	_update_camera(1.0, 0.0)
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
+	audio.setup(world, heights)
 	capture_mouse()
 
 
@@ -112,6 +114,7 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	audio.set_paused(p)
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false
 	if p:
@@ -224,6 +227,8 @@ func _physics_process(dt: float) -> void:
 			yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0))
 			pitch = lerpf(pitch, -0.3, 1.0 - exp(-dt * 2.0))
 		_shake_on_landing(bike.land_impact, 6.0)
+		if bike.land_impact > 0.0:
+			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
 		bike.land_impact = 0.0
 		crashed = bike.crashed
 		if crashed:
@@ -234,6 +239,7 @@ func _physics_process(dt: float) -> void:
 			# проседание камеры: заметное после высокого прыжка, едва заметное после обычного
 			_dip_v -= clampf(player.land_impact - 3.0, 0.0, 14.0) * 0.25
 			_shake_on_landing(player.land_impact, 10.0)
+			audio.land(player.x, player.z, player.feet, player.land_impact)
 			player.land_impact = 0.0
 	_tick_yaw = yaw - yaw0
 	_tick_pitch = pitch - pitch0
@@ -242,6 +248,7 @@ func _physics_process(dt: float) -> void:
 	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
 	_trauma = maxf(0.0, _trauma - dt * 1.6)
 	bike_view.tick(bike)
+	audio.tick(player, bike.riding)
 	if crashed:
 		_snap()
 	for text: String in player.check_discoveries(world, hud.visited):
@@ -286,6 +293,7 @@ func _process(delta: float) -> void:
 		var d := Vector2(l.position.x - pos.x, l.position.z - pos.z).length()
 		l.visible = d > 25.0 and d < 900.0
 	SettlementsBuilder.animate_fires(fires, time)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta)
 
 	info_timer -= delta
 	if info_timer <= 0.0:

@@ -31,6 +31,7 @@ static func random_seed() -> String:
 func _ready() -> void:
 	GameSettings.load_settings()
 	GameSettings.apply_window()
+	GameSettings.apply_volume()
 	# в поле — зерно последнего мира (если было), иначе случайное
 	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
 	for s in SIZES:
@@ -84,12 +85,14 @@ func _sync_settings_controls() -> void:
 	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
 	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
 	%Shadows.set_pressed_no_signal(GameSettings.shadows)
+	%VolumeSlider.set_value_no_signal(GameSettings.volume)
 	_show_values()
 
 
 func _on_reset_settings() -> void:
 	GameSettings.reset_defaults()
 	GameSettings.apply_window()
+	GameSettings.apply_volume()
 	GameSettings.save_settings()
 	_sync_settings_controls()
 
@@ -97,6 +100,7 @@ func _on_reset_settings() -> void:
 func _show_values() -> void:
 	%MouseValue.text = "%.2f×" % GameSettings.mouse
 	%FovValue.text = "%d°" % roundi(GameSettings.fov)
+	%VolumeValue.text = "%d %%" % roundi(GameSettings.volume * 100.0)
 
 
 func _on_mouse_changed(v: float) -> void:
@@ -106,6 +110,12 @@ func _on_mouse_changed(v: float) -> void:
 
 func _on_fov_changed(v: float) -> void:
 	GameSettings.fov = v
+	_show_values()
+
+
+func _on_volume_changed(v: float) -> void:
+	GameSettings.volume = v
+	GameSettings.apply_volume()
 	_show_values()
 
 
