@@ -47,5 +47,6 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 	StageTrails.run(w, step)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w)
+	StageLakes.run(w)
 	step.call(0.86, "Отрисовка ландшафта")
 	return w

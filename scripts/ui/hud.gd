@@ -6,6 +6,7 @@ extends Control
 ## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
 ## С 2.8 на большой карте можно выбрать цель путешествия (ЛКМ по поселению или вершине) — она видна
 ## только меткой на компасе вверху и на картах — и переместиться в место, где уже побывали (ПКМ).
+## С 2.9 к местам добавились крупные озёра с названиями (WorldData.lakes): открываются на берегу.
 
 signal travel_requested(place: Dictionary)
 
@@ -102,16 +103,18 @@ func set_map_visible(v: bool) -> void:
 		big_map.queue_redraw()
 
 
-## Места мира, которые можно выбрать на карте: поселения и вершины.
-## {key — ключ в visited, name, x, y — клетки, peak, src — запись поселения или вершины}
+## Места мира, которые можно выбрать на карте: поселения, вершины и озёра.
+## {key — ключ в visited, name, x, y — клетки, kind — "settlement" | "peak" | "lake", src — запись места}
 func places() -> Array:
 	var out: Array = []
 	if world == null:
 		return out
 	for s in world.settlements:
-		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, peak = false, src = s})
+		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, kind = "settlement", src = s})
 	for pk in world.peaks:
-		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, peak = true, src = pk})
+		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, kind = "peak", src = pk})
+	for lk in world.lakes:
+		out.append({key = "l%d" % lk.i, name = lk.name, x = lk.x, y = lk.y, kind = "lake", src = lk})
 	return out
 
 
@@ -129,8 +132,10 @@ func set_goal(place: Dictionary) -> void:
 func check_goal(x: float, z: float) -> String:
 	if goal.is_empty():
 		return ""
-	var reach := 2.5 if goal.peak else 6.0
-	if Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= reach:
+	if goal.kind == "lake":
+		if world.lake_near(x / TILE, z / TILE, PlayerState.LAKE_REACH) != goal.src.i:
+			return ""
+	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind == "peak" else 6.0):
 		return ""
 	var text := "Вы добрались до цели: «%s»" % goal.name
 	set_goal({})
@@ -172,6 +177,12 @@ func toast(text: String) -> void:
 			while _toast_queue.size() > TOAST_QUEUE:
 				_toast_queue.remove_at(0)
 		return
+	_show_toast(text)
+
+
+## Сообщение сразу, без очереди: прежние уже не к месту (например, после быстрого перемещения)
+func toast_now(text: String) -> void:
+	_toast_queue.clear()
 	_show_toast(text)
 
 
@@ -400,6 +411,11 @@ class BigMap extends Control:
 		for pk in w.peaks:
 			var col := Color.html("#ffdd55") if hud.visited.has("p%d" % pk.i) else Color.html("#e8f0ff")
 			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, col, 13)
+		for lk in w.lakes:
+			var at := o + Vector2(lk.x, lk.y) * k
+			var col := Color.html("#ffdd55") if hud.visited.has("l%d" % lk.i) else Color.html("#cfeaff")
+			draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
+			Hud.draw_label(self, lk.name, at - Vector2(0, 7), col, 12)
 		if not hud.goal.is_empty():
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		if hud.bike_shown:
@@ -410,13 +426,25 @@ class BigMap extends Control:
 		if hud.bike_shown:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
-		var tip := "Щёлкните по поселению или вершине, чтобы выбрать цель путешествия"
+		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, o.y + sz + 44.0), Color(1, 1, 1, 0.6), 13)
+		var tip := "Щёлкните по поселению, вершине или озеру, чтобы выбрать цель путешествия"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
 			tip += "ПКМ — переместиться сюда" if hud.visited.has(hover.key) else "переместиться можно, когда побываете здесь"
 			draw_arc(o + Vector2(hover.x, hover.y) * k, 7.0, 0.0, TAU, 20, Color.WHITE, 1.5)
 		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
+
+	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»
+	func _found_line() -> String:
+		var n := {s = 0, p = 0, l = 0}
+		for key: String in hud.visited:
+			n[key.left(1)] += 1
+		var w := hud.world
+		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.s, w.settlements.size(), n.p, w.peaks.size()]
+		if not w.lakes.is_empty():
+			text += " · озёр %d из %d" % [n.l, w.lakes.size()]
+		return text
 
 	## Маркер у края карты остаётся внутри её рамки
 	func _inside(at: Vector2, o: Vector2, sz: float, margin: float) -> Vector2:

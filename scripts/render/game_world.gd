@@ -167,16 +167,16 @@ func toggle_map() -> void:
 		capture_mouse()
 
 
-## Быстрое перемещение в место с карты, где игрок уже побывал (Hud.places): к костру поселения или
-## к вершине. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
+## Быстрое перемещение в место с карты, где игрок уже побывал (Hud.places): к костру поселения,
+## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
 func travel_to(place: Dictionary) -> void:
 	if paused or player == null:
 		return
 	if bike.riding and bike.airborne:
 		return
 	player = PlayerState.arrive(world, heights, place)
-	if not place.peak:
-		# лицом к костру
+	if place.kind != "peak":
+		# лицом к костру или к середине озера
 		yaw = atan2(player.x - place.x * TILE, player.z - place.y * TILE)
 	pitch = -0.05
 	bike = BikeRide.park_near(player, yaw, world, heights)
@@ -190,7 +190,7 @@ func travel_to(place: Dictionary) -> void:
 	vegetation.update(player.x, player.z, true)
 	if show_map:
 		toggle_map()
-	hud.toast("Вы переместились: «%s»" % place.name)
+	hud.toast_now("Вы переместились: «%s»" % place.name)
 
 
 func _unhandled_input(event: InputEvent) -> void:

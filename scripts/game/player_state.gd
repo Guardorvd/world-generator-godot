@@ -9,6 +9,8 @@ const BODY_R := 0.3     # радиус тела пешехода, м: стены
 const HUT_HALF := 1.6   # полуширина стен дома, м (квадрат 3,2 × 3,2, повёрнут дверью к костру, как в SettlementsBuilder)
 const PIECE := 0.2      # движение проверяется кусками не длиннее этого, м: тонкую стену не перепрыгнуть
                         # даже при длинном такте (в игре такт 1/60 с, это 0,1–0,35 м)
+const LAKE_REACH := 3   # клеток от воды озера: игрок на берегу (открытие озера и цель у него, с 2.9)
+const LAKE_STEP_BACK := 2.0  # на сколько клеток от воды встаёт игрок при быстром перемещении к озеру
 
 var x := 0.0          # метры
 var z := 0.0
@@ -74,17 +76,22 @@ static func spawn(w: WorldData, heights: Heightfield, at: Dictionary = {}) -> Pl
 	return p
 
 
-## Быстрое перемещение (с 2.8): к костру поселения или на свободное место рядом с вершиной.
-## place — место из Hud.places(): {peak, x, y, ...}, x и y в клетках
+## Быстрое перемещение (с 2.8): к костру поселения, на свободное место рядом с вершиной или (с 2.9)
+## на берег озера. place — место из Hud.places(): {kind, x, y, src, ...}, x и y в клетках
 static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> PlayerState:
-	if not place.peak:
+	if place.kind == "settlement":
 		return spawn(w, heights, place.src)
 	var p := PlayerState.new()
 	var cx: float = place.x * TILE
 	var cz: float = place.y * TILE
+	if place.kind == "lake":
+		# на пару клеток от воды: у самой кромки озеро закрыло бы весь вид
+		var back := Vector2(place.src.sx - place.x, place.src.sy - place.y).normalized() * LAKE_STEP_BACK
+		cx = (place.src.sx + back.x) * TILE
+		cz = (place.src.sy + back.y) * TILE
 	p.x = cx
 	p.z = cz
-	# по кольцам от вершины наружу: первое место, где можно стоять
+	# по кольцам наружу: первое место, где можно стоять посуху (не в реке или заливе рядом с озером)
 	var found := false
 	for ring in range(0, 40):
 		var r := ring * 1.5
@@ -93,7 +100,7 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 			var a := k * TAU / n
 			var x := cx + sin(a) * r
 			var z := cz + cos(a) * r
-			if is_passable(w, heights, x, z, -INF, BODY_R):
+			if heights.depth_at(x, z) <= 0.0 and is_passable(w, heights, x, z, -INF, BODY_R):
 				p.x = x
 				p.z = z
 				found = true
@@ -263,7 +270,7 @@ func ground_speed() -> float:
 	return Grid.hypot(vx, vz)
 
 
-## Открытия: поселения и вершины рядом с игроком. Возвращает тексты новых открытий
+## Открытия: поселения, вершины и озёра (на берегу) рядом с игроком. Возвращает тексты новых открытий
 func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 	var found := PackedStringArray()
 	var tx := x / TILE
@@ -276,4 +283,8 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 		if not visited.has("p%d" % pk.i) and Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
 			visited["p%d" % pk.i] = true
 			found.append("Вы покорили вершину «%s»!" % pk.name)
+	var lk := w.lake_near(tx, tz, LAKE_REACH)
+	if lk >= 0 and not visited.has("l%d" % lk):
+		visited["l%d" % lk] = true
+		found.append("Вы вышли к озеру: «%s»" % w.lakes[lk].name)
 	return found

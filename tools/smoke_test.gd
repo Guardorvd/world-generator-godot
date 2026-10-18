@@ -125,7 +125,7 @@ func _farthest(game: GameWorld) -> Dictionary:
 	var bd := -1.0
 	for pl: Dictionary in game.hud.places():
 		var d := Grid.hypot(pl.x * GameConfig.TILE - game.player.x, pl.y * GameConfig.TILE - game.player.z)
-		if not pl.peak and d > bd:
+		if pl.kind == "settlement" and d > bd:
 			bd = d
 			best = pl
 	return best

@@ -3,6 +3,7 @@ extends RefCounted
 ## Поселения и вершины в 3D: дома, костры, туры с флажками, подписи. Копия js/render3d/settlements.js.
 
 const TILE := GameConfig.TILE
+const HS := GameConfig.HS
 const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
 const HUT_CORNERS := [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
@@ -159,6 +160,19 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		if near:
 			continue
 		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
+		parent.add_child(label)
+		labels.append(label)
+	# названия озёр над серединой воды (с 2.9)
+	for lk in w.lakes:
+		var at := Vector2(lk.x * TILE, lk.y * TILE)
+		var near := false
+		for sp: Vector2 in settle_pos:
+			if sp.distance_to(at) < PEAK_LABEL_CLEAR:
+				near = true
+				break
+		if near:
+			continue
+		var label := _label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y))
 		parent.add_child(label)
 		labels.append(label)
 	var mi := batch.build("Buildings")

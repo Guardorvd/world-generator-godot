@@ -59,6 +59,8 @@ var bridges: Array = []       # мосты [{a, b}]: клетки на бере�
 var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array = []   # [{x, y, i, name, huts: [{x, y, v}]}]
 var peaks: Array = []         # [{x, y, i, elev, name}]
+var lakes: Array = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
+var lake_id := PackedInt32Array()    # номер озера из lakes для клетки или -1
 
 # Растительность: объекты хранятся столбцами, чанки — списки номеров объектов
 var obj_x := PackedFloat64Array()
@@ -107,6 +109,20 @@ func make_name(parts: Dictionary) -> String:
 			used_names[n] = true
 			return n
 	return a[0] + sep + b[0] + " " + str(used_names.size())
+
+
+## Номер озера из lakes, у которого стоит точка (клетки): озеро в квадрате ±r клеток или -1
+func lake_near(x: float, y: float, r: int) -> int:
+	if lake_id.is_empty():
+		return -1
+	var tx := floori(x)
+	var ty := floori(y)
+	for dy in range(maxi(0, ty - r), mini(H, ty + r + 1)):
+		for dx in range(maxi(0, tx - r), mini(W, tx + r + 1)):
+			var id := lake_id[dy * W + dx]
+			if id >= 0:
+				return id
+	return -1
 
 
 ## Сведения о местности в точке (координаты в клетках). За краем карты — из OuterLand, если он

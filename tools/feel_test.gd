@@ -129,7 +129,7 @@ func _init() -> void:
 				hut_hits += _into_hut(w, heights, PlayerState.home(w), u, k * PI / 4.0, ride)
 	_check(huts > 0 and hut_hits == 0, "в стены %d домов не входят ни пешеход, ни колёса велосипеда (нарушений %d)" % [huts, hut_hits])
 
-	# Быстрое перемещение (с 2.8): в каждое место карты игрок встаёт на свободную сушу рядом с ним,
+	# Быстрое перемещение (с 2.8): в каждое место карты (с 2.9 и на берег озера) игрок встаёт на свободную сушу рядом с ним,
 	# место сразу считается открытым, а цель путешествия там снимается
 	var hud := Hud.new()
 	hud.world = w
@@ -139,7 +139,9 @@ func _init() -> void:
 		var q := PlayerState.arrive(w, heights, pl)
 		var visited := {}
 		q.check_discoveries(w, visited)
-		var near := Grid.hypot(q.x - pl.x * GameConfig.TILE, q.z - pl.y * GameConfig.TILE) < 60.0
+		# у озера игрок встаёт на берег, а не к середине (с 2.9)
+		var at := Vector2(pl.src.sx, pl.src.sy) if pl.kind == "lake" else Vector2(pl.x, pl.y)
+		var near := Grid.hypot(q.x - at.x * GameConfig.TILE, q.z - at.y * GameConfig.TILE) < 60.0
 		hud.goal = pl
 		if near and visited.has(pl.key) and PlayerState.is_passable(w, heights, q.x, q.z, q.feet, PlayerState.BODY_R) and hud.check_goal(q.x, q.z) != "":
 			arrived += 1

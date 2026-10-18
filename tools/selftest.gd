@@ -65,6 +65,11 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	for p in w.peaks:
 		names.append(p.name)
 	r.names = ",".join(names)
+	# озёра с названиями (с 2.9): имя, клеток, середина
+	var lakes := PackedStringArray()
+	for lk in w.lakes:
+		lakes.append("%s %d %d,%d" % [lk.name, lk.cells, lk.x, lk.y])
+	r.lakes = "; ".join(lakes)
 	return r
 
 
