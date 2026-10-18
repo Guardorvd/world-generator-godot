@@ -289,6 +289,8 @@ public partial class FastGrid : RefCounted
 	private const double Macro = 1400.0;
 	private const double MacroAmp = 1.2;
 	private const double MacroLift = 0.25;
+	/// <summary>Сдвиг шума материков вверх (больше суши): копия StageRelief.LAND_BIAS.</summary>
+	private const double LandBias = 0.18;
 
 	/// <summary>Негорный рельеф: копия StageRelief.SEA_RAW, CHARACTER, PLAIN_LIFT, PLAIN_HILLS, HILL_AMP, FOOTHILLS, MASK_EDGE, VALLEY, VALLEY_WIDTH, VALLEY_DEPTH.</summary>
 	private const double SeaRaw = 0.067;
@@ -322,7 +324,7 @@ public partial class FastGrid : RefCounted
 				double c = Fbm(cont, X / 240.0, Y / 240.0, 6);
 				double macro = Fbm(cont, (X + mx) / Macro + 91.7, (Y + my) / Macro - 43.1, 2);
 				double lift = macro * MacroAmp;
-				double bas = c + (lift < MacroLift ? lift : MacroLift) + 0.1;
+				double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
 				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
 				double lo = -0.15 - Fbm(mask, X / Massif - 21.3, Y / Massif + 5.9, 2) * 0.3;

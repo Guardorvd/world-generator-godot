@@ -59,7 +59,17 @@ static func run(w: WorldData, step: Callable) -> void:
 	_mountain_trails(w, finder)
 
 
-## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод)
+## Река у самого устья в озеро или море (с 2.9): там она глубже брода, путь обходит её выше по течению
+static func _at_mouth(w: WorldData, x: int, y: int) -> bool:
+	for dy in range(maxi(0, y - 1), mini(w.H, y + 2)):
+		for dx in range(maxi(0, x - 1), mini(w.W, x + 2)):
+			var c := dy * w.W + dx
+			if w.ocean[c] != 0 or w.lake[c] != 0:
+				return true
+	return false
+
+
+## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод), устья рек непроходимы
 static func _build_cost(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
@@ -69,7 +79,7 @@ static func _build_cost(w: WorldData) -> void:
 	for y: int in H:
 		for x: int in W:
 			var i := y * W + x
-			if w.ocean[i] != 0 or w.lake[i] != 0:
+			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 and _at_mouth(w, x, y):
 				cost[i] = INF
 				continue
 			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)

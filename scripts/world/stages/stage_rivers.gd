@@ -5,10 +5,11 @@ extends RefCounted
 
 const PROGRESS := 0.3
 const LABEL := "Русла рек и озёра"
+const WIDTH_ACC := 70.0  # сток, от которого считается ширина (прежний порог реки: с 2.9 реки реже, но не уже)
 
 
 static func _width_of(w: WorldData, i: int) -> float:
-	return 0.22 + minf(1.5, sqrt(w.acc[i] / WorldData.RIVER_ACC) * 0.2)
+	return 0.22 + minf(1.5, sqrt(w.acc[i] / WIDTH_ACC) * 0.2)
 
 
 ## e — высота воды (0 — уровень моря): вдоль стока она только убывает

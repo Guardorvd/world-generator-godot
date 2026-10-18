@@ -7,8 +7,8 @@ extends RefCounted
 ## sx, sy — клетка берега}],
 ## w.lake_id — номер озера с названием для каждой клетки или -1.
 
-const MIN_CELLS := 40   # озеро меньше этого (клеток) не получает названия
-const MAX_LAKES := 12   # больше названий на карте — каша (в среднем мире 512)
+const MIN_CELLS := 150  # озеро меньше этого (клеток) не получает названия: названия — редкость
+const MAX_LAKES := 5    # больше названий на одной карте не бывает
 ## Доли стороны карты по x и y: ближе к поселению, вершине или другому озеру название не ставится, иначе
 ## подписи на большой карте ложатся друг на друга (подпись широкая и низкая)
 const CLEAR := Vector2(1.0 / 10.0, 1.0 / 60.0)
@@ -48,7 +48,7 @@ static func run(w: WorldData) -> void:
 		if groups[g].size() >= MIN_CELLS:
 			big.append([groups[g].size(), g])
 	big.sort_custom(StageLandmarks._by_score_desc)
-	var want := clampi(roundi(8.0 * w.scale), 3, MAX_LAKES)
+	var want := clampi(roundi(3.0 * w.scale), 1, MAX_LAKES)
 	var lake_id := PackedInt32Array()
 	lake_id.resize(w.N)
 	lake_id.fill(-1)

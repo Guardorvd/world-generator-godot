@@ -7,10 +7,19 @@ const PROGRESS := 0.2
 const LABEL := "Течение рек"
 ## Озеро меньше стольких клеток засыпается, как мелкая впадина (с 1.9.9): на пологих равнинах такие ямы
 ## глубиной в пару метров выглядели квадратными прудами с отвесными стенками
-const LAKE_MIN := 12
+const LAKE_MIN := 30
+## С 2.9 озёр меньше: мелкое (глубже LAKE_DEPTH нигде нет) засыпается, как и маленькое, а слишком большое
+## (больше LAKE_MAX клеток на мир 512, это бывшие морские котловины внутри суши) становится сухой низиной
+## с уклоном к стоку и мелкими неровностями (_drain), иначе по ровному дну реки шли бы прямыми линиями
+const LAKE_DEPTH := 0.035   # ≈ 9 м
+const LAKE_MAX := 1200
 
 
-static func run(w: WorldData) -> void:
+const DRAIN_TILT := 0.0003  # подъём сухой низины на клетку от стока (≈ 8 см)
+
+
+## again — второй проход после того, как большие котловины стали низинами
+static func run(w: WorldData, again := false) -> void:
 	var W := w.W
 	var H := w.H
 	var N := w.N
@@ -39,6 +48,8 @@ static func run(w: WorldData) -> void:
 	seen.resize(N)
 	var stack := PackedInt32Array()
 	var cells := PackedInt32Array()
+	var lake_max := LAKE_MAX * w.scale
+	var drained := false
 	for s in N:
 		if lake[s] == 0 or seen[s] != 0:
 			continue
@@ -46,12 +57,14 @@ static func run(w: WorldData) -> void:
 		stack.append(s)
 		cells.clear()
 		var lvl := INF
+		var deep := 0.0
 		while stack.size() > 0:
 			var c := stack[stack.size() - 1]
 			stack.resize(stack.size() - 1)
 			cells.append(c)
 			if filled[c] < lvl:
 				lvl = filled[c]
+			deep = maxf(deep, filled[c] - h[c])
 			var cx := c % W
 			var cy := c / W
 			for k in 8:
@@ -63,13 +76,22 @@ static func run(w: WorldData) -> void:
 				if lake[n] != 0 and seen[n] == 0:
 					seen[n] = 1
 					stack.append(n)
-		if cells.size() < LAKE_MIN:
+		if cells.size() > lake_max and deep >= LAKE_DEPTH and not again:
+			_drain(w, cells, down, lvl)
+			drained = true
+			continue
+		if cells.size() < LAKE_MIN or cells.size() > lake_max or deep < LAKE_DEPTH:
 			for c in cells:
 				lake[c] = 0
 				h[c] = filled[c]
 			continue
 		for c in cells:
 			filled[c] = lvl
+
+	if drained:
+		# у низин новый рельеф: впадины и сток считаются заново
+		run(w, true)
+		return
 
 	var dist_ocean := Grid.distance_field(W, H, ocean)
 
@@ -108,6 +130,36 @@ static func run(w: WorldData) -> void:
 	w.rain = rain
 	w.acc = acc
 	w.river = river
+
+
+## Большая котловина становится сухой низиной: дно поднимается к уровню порога, от стока (клетки, откуда
+## вода уходит из котловины) вглубь растёт на DRAIN_TILT за клетку, сверху мелкие неровности
+static func _drain(w: WorldData, cells: PackedInt32Array, down: PackedInt32Array, lvl: float) -> void:
+	var W := w.W
+	var h := w.h
+	var dist := {}
+	for c in cells:
+		dist[c] = -1
+	var queue := PackedInt32Array()
+	for c in cells:
+		if down[c] < 0 or not dist.has(down[c]):
+			dist[c] = 0
+			queue.append(c)
+	var head := 0
+	while head < queue.size():
+		var c := queue[head]
+		head += 1
+		var x := c % W
+		for n: int in [c - 1 if x > 0 else -1, c + 1 if x < W - 1 else -1, c - W, c + W]:
+			if dist.get(n, 0) == -1:
+				dist[n] = dist[c] + 1
+				queue.append(n)
+	var base := maxf(lvl, 0.002)
+	var micro: Simplex = w.noise.micro
+	for c in cells:
+		var x := c % W
+		var y := c / W
+		h[c] = base + maxf(0, dist[c]) * DRAIN_TILT + (micro.noise(x / 9.0, y / 9.0) + 1.0) * 0.003
 
 
 ## Заполнение впадин от океана и от края карты (priority flood): с 1.9.6 за краем мир продолжается, и вода

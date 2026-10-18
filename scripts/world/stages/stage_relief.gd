@@ -38,8 +38,10 @@ const VALLEY_WIDTH := 0.16
 const VALLEY_DEPTH := 0.06
 ## Сколько мест старта пробовать и какая доля суши в стартовой области подходит
 const PICK_TRIES := 48
-const PICK_MIN := 0.36
-const PICK_MAX := 0.6
+## С 2.9 суши больше: шум материков сдвинут вверх на LAND_BIAS (было 0.1), окно — первое по спирали,
+## где суши хотя бы PICK_LAND. Верхней границы нет: сколько суши выше неё, решает сам шум
+const LAND_BIAS := 0.18
+const PICK_LAND := 0.6
 
 
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
@@ -58,10 +60,10 @@ static func run(w: WorldData) -> void:
 
 ## Стартовая область — окно в бесконечный мир. Мир один на сид, а окно выбирается сдвигом шума
 ## материков: пробуем сдвиги по спирали и берём первый, где доля суши в окне (по сетке 16 × 16 точек)
-## подходит для игры, иначе самый близкий к w.land_frac. Шумы мельче материков не сдвигаются
+## не меньше PICK_LAND, иначе тот, где суши больше всего. Шумы мельче материков не сдвигаются
 static func _pick_start(w: WorldData) -> void:
 	var n := w.noise
-	var best := INF
+	var best := -1.0
 	for k in PICK_TRIES:
 		var a := k * 2.39996323
 		var r := MACRO * 0.6 * sqrt(float(k))
@@ -75,12 +77,11 @@ static func _pick_start(w: WorldData) -> void:
 				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my) >= SEA_RAW:
 					land += 1
 		var frac := land / 256.0
-		var miss := absf(frac - w.land_frac)
-		if miss < best:
-			best = miss
+		if frac > best:
+			best = frac
 			w.macro_x = mx
 			w.macro_y = my
-		if frac >= PICK_MIN and frac <= PICK_MAX:
+		if frac >= PICK_LAND:
 			return
 
 
@@ -135,7 +136,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var Y := y + wy
 	var c := cont.fbm(X / 240.0, Y / 240.0, 6)
 	var macro := cont.fbm((X + mx) / MACRO + 91.7, (Y + my) / MACRO - 43.1, 2)
-	var base := c + minf(macro * MACRO_AMP, MACRO_LIFT) + 0.1
+	var base := c + minf(macro * MACRO_AMP, MACRO_LIFT) + LAND_BIAS
 	# smoothstep развёрнут на месте (см. Parallel)
 	var t := clampf((base + 0.05) / (0.25 + 0.05), 0.0, 1.0)
 	var land := t * t * (3.0 - 2.0 * t)
