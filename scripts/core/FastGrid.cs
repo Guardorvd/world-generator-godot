@@ -302,14 +302,77 @@ public partial class FastGrid : RefCounted
 				double bas = c + (lift < MacroLift ? lift : MacroLift) + 0.1;
 				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
-				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - -0.15) / (0.3 - -0.15));
-				double m = t * t * (3.0 - 2.0 * t);
-				double r = Ridged(ridge, X / 120.0, Y / 120.0, 5);
+				double lo = -0.15 - Fbm(mask, X / Massif - 21.3, Y / Massif + 5.9, 2) * 0.3;
+				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo) / 0.45);
+				double m = t * t * (3.0 - 2.0 * t) * land;
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
-				outH[j * W + i] = (float)(bas * 0.55 + r * r * m * land * 0.9 + hills * 0.05 * (0.3 + land));
+				double h = bas * 0.55 + hills * 0.05 * (0.3 + land);
+				if (m > 0.0)
+					h += Mountain(ridge, hill, x + wx * MountainWarp, y + wy * MountainWarp) * m * MountainAmp;
+				outH[j * W + i] = (float)h;
 			}
 		});
 		return outH;
+	}
+
+	/// <summary>Горы: копия StageRelief.MASSIF, MOUNTAIN_AMP, MOUNTAIN_WARP, RIDGE_ALONG, RIDGE_ACROSS, DIR_C, DIR_S, ASYM, PEAK_CAP, CREST_ROUND.</summary>
+	private const double Massif = 650.0;
+	private const double MountainAmp = 1.0;
+	private const double MountainWarp = 0.35;
+	private const double RidgeAlong = 190.0;
+	private const double RidgeAcross = 95.0;
+	private static readonly double[] DirC = { 1.0, 0.5, -0.5 };
+	private static readonly double[] DirS = { 0.0, 0.8660254037844386, 0.8660254037844386 };
+	private const double Asym = 1.8;
+	private const double PeakCap = 1.05;
+	private const double CrestRound = 0.12;
+
+	/// <summary>Копия StageRelief.mountain.</summary>
+	private static double Mountain(int[] ridge, int[] hill, double X, double Y)
+	{
+		double s = Fbm(ridge, X / Massif + 31.4, Y / Massif - 17.2, 2) * 3.0 + 1.5;
+		s = s < 0.0 ? 0.0 : (s > 2.999 ? 2.999 : s);
+		int k = (int)s;
+		double t = Clamp01((s - k - 0.3) / 0.4);
+		double f = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((Fbm(hill, X / Massif + 63.2, Y / Massif + 12.5, 2) - -0.25) / 0.5);
+		double sharp = t * t * (3.0 - 2.0 * t);
+		double asym = 1.0 + (Asym - 1.0) * sharp;
+		double r = 0.0;
+		if (f < 1.0)
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym) * (1.0 - f);
+		if (f > 0.0)
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym) * f;
+		r = Math.Min(r * (1.0 + 0.5 * Fbm(hill, X / 55.0 + 17.7, Y / 55.0 - 29.3, 2) * r), PeakCap);
+		double sp = Ridged(ridge, X / 40.0 - 57.1, Y / 40.0 + 11.9, 3);
+		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.9);
+		double q = Math.Sqrt(r) * r;
+		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
+		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
+		return (q + (r * r - q) * sharp) * amp;
+	}
+
+	/// <summary>Копия StageRelief._crest.</summary>
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym)
+	{
+		double u = (X * dc + Y * ds) / RidgeAlong;
+		double v = (Y * dc - X * ds) / RidgeAcross;
+		double a = 0.5, fq = 1.0, s = 0.0, wt = 1.0;
+		for (int o = 0; o < 5; o++)
+		{
+			double n = Noise(pm, u * fq, v * fq);
+			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
+			if (o == 0)
+				e *= n > 0.0 ? asym : 1.0 / asym;
+			double val = Math.Max(0.0, 1.0 - e);
+			val *= val;
+			val *= wt;
+			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
+			s += val * a;
+			fq *= 2.1;
+			a *= 0.5;
+		}
+		return s;
 	}
 
 	// Куча как MinHeap.push / MinHeap.pop
