@@ -27,6 +27,10 @@ var _fields_thread: Thread
 var _fields := {}         # имя -> поле fbm из NOISE_FIELDS
 
 # Рельеф и вода
+var sea_raw := 0.0       # уровень моря, самая высокая и самая низкая точка в шуме рельефа (до нормировки, StageRelief)
+var top_raw := 1.0
+var bottom_raw := -1.0
+var outer: OuterLand     # рельеф за краем карты (с 1.9.5), если игра его подключила; иначе null
 var h := PackedFloat32Array()        # высота (0 — уровень моря, суша до 1, дно до -1)
 var filled := PackedFloat32Array()   # высота с заполненными впадинами (уровень озёр)
 var elev := PackedFloat32Array()     # высота для климата
@@ -106,12 +110,13 @@ func make_name(parts: Dictionary) -> String:
 	return a[0] + sep + b[0] + " " + str(used_names.size())
 
 
-## Сведения о местности в точке (координаты в клетках) или пустой словарь за краем карты
+## Сведения о местности в точке (координаты в клетках). За краем карты — из OuterLand, если он
+## подключён и этот кусок уже посчитан, иначе пустой словарь
 func tile_info(x: float, y: float) -> Dictionary:
 	var tx := floori(x)
 	var ty := floori(y)
 	if tx < 0 or ty < 0 or tx >= W or ty >= H:
-		return {}
+		return outer.info(tx, ty) if outer != null else {}
 	var i := ty * W + tx
 	return {
 		i = i, biome = biome[i], river = river[i] == 1, path = path_mask[i],

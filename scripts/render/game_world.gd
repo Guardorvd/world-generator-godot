@@ -18,6 +18,8 @@ var bike: BikeRide
 var bike_view: BikeView
 var fires: Array = []
 var labels: Array = []
+var outer: OuterTerrain   # рельеф за краем стартовой области
+var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
 var yaw := 0.0       # смотрим на север, на костёр
 var pitch := -0.05
 var time := 0.0
@@ -53,6 +55,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	$Terrain.material_override = loaded.terrain_material
 	for node in loaded.water:
 		$Water.add_child(node)
+		if node.name == "Ocean":
+			_ocean = node
 	vegetation.setup(world, heights, _defs, _grass_mesh)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
@@ -64,6 +68,12 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		# лицом к костру
 		var s: Dictionary = world.settlements[0]
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
+	outer = OuterTerrain.new()
+	outer.name = "OuterTerrain"
+	add_child(outer)
+	if world.outer != null:
+		outer.setup(world, heights)
+		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
@@ -204,6 +214,10 @@ func _process(delta: float) -> void:
 	_update_camera(moving, dt)
 
 	vegetation.update(player.x, player.z, false)
+	if world.outer != null:
+		outer.update(player.x, player.z)
+	if _ocean != null:
+		_ocean.position = Vector3(player.x, 0.0, player.z)
 	for text in player.check_discoveries(world, hud.visited):
 		hud.toast(text)
 	for l: Label3D in labels:

@@ -229,23 +229,59 @@ func _river_ribbons() -> Array:
 
 
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
-## raw — без прорезанных русел
+## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
 	var W := world.W
 	var arr := hv_raw if raw else hv
-	var fx := clampf(x / TILE - 0.5, 0.0, W - 1.001)
-	var fz := clampf(z / TILE - 0.5, 0.0, world.H - 1.001)
-	var i := floori(fx)
-	var j := floori(fz)
+	var fx := x / TILE - 0.5
+	var fz := z / TILE - 0.5
+	var a: float
+	var b: float
+	var c: float
+	var d: float
+	var i: int
+	var j: int
+	if world.outer == null or (fx >= 0.0 and fz >= 0.0 and fx <= W - 1.001 and fz <= world.H - 1.001):
+		fx = clampf(fx, 0.0, W - 1.001)
+		fz = clampf(fz, 0.0, world.H - 1.001)
+		i = floori(fx)
+		j = floori(fz)
+		a = arr[j * W + i]
+		b = arr[j * W + i + 1]
+		c = arr[(j + 1) * W + i]
+		d = arr[(j + 1) * W + i + 1]
+	else:
+		i = floori(fx)
+		j = floori(fz)
+		a = _cell_height(arr, i, j)
+		b = _cell_height(arr, i + 1, j)
+		c = _cell_height(arr, i, j + 1)
+		d = _cell_height(arr, i + 1, j + 1)
 	var tx := fx - i
 	var tz := fz - j
-	var a := arr[j * W + i]
-	var b := arr[j * W + i + 1]
-	var c := arr[(j + 1) * W + i]
-	var d := arr[(j + 1) * W + i + 1]
 	if tx + tz <= 1.0:
 		return a + (b - a) * tx + (c - a) * tz
 	return d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz)
+
+
+## Высота клетки (i, j): на карте из arr (hv или hv_raw), за краем — из OuterLand
+func _cell_height(arr: PackedFloat32Array, i: int, j: int) -> float:
+	if i >= 0 and j >= 0 and i < world.W and j < world.H:
+		return arr[j * world.W + i]
+	return world.outer.height(i, j)
+
+
+## Известна ли земля в точке (x, z): на карте всегда, за краем — если OuterLand уже посчитал клетки вокруг.
+## Без OuterLand (самопроверки) мир кончается в клетке от края карты, как до 1.9.5
+func known(x: float, z: float) -> bool:
+	var outer := world.outer
+	if outer == null:
+		return x >= TILE and z >= TILE and x <= (world.W - 1) * TILE and z <= (world.H - 1) * TILE
+	if x >= 0.0 and z >= 0.0 and x <= world.W * TILE and z <= world.H * TILE:
+		return true # клетки сразу за краем — в кольце OuterLand, оно есть всегда
+	var i := floori(x / TILE - 0.5)
+	var j := floori(z / TILE - 0.5)
+	return outer.has(i, j) and outer.has(i + 1, j) and outer.has(i, j + 1) and outer.has(i + 1, j + 1)
 
 
 ## Глубина воды в точке (0, если сухо или ноги на высоте feet стоят на мосту)
@@ -255,7 +291,10 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 	var tx := floori(x / TILE)
 	var tz := floori(z / TILE)
 	if tx < 0 or tz < 0 or tx >= world.W or tz >= world.H:
-		return 0.0
+		# за краем карты вода только морская: клетка ниже уровня моря
+		if world.outer == null or world.outer.height(tx, tz) >= 0.0:
+			return 0.0
+		return maxf(0.0, -ground_at(x, z))
 	var l := water_level[tz * world.W + tx]
 	if l == -INF:
 		return 0.0

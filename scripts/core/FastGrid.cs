@@ -257,44 +257,48 @@ public partial class FastGrid : RefCounted
 	/// <summary>Поле fbm(x / d + ox, y / d + oy, oct) по всем клеткам. Копия Parallel.fbm_field.</summary>
 	public double[] FbmField(int[] perm, int W, int H, double d, int oct, double ox, double oy)
 	{
+		return FbmRect(perm, 0, 0, W, H, d, oct, ox, oy);
+	}
+
+	/// <summary>То же поле по прямоугольнику клеток W × H с углом (x0, y0), в том числе за картой (OuterLand).</summary>
+	public double[] FbmRect(int[] perm, int x0, int y0, int W, int H, double d, int oct, double ox, double oy)
+	{
 		var r = new double[W * H];
-		System.Threading.Tasks.Parallel.For(0, H, y =>
+		System.Threading.Tasks.Parallel.For(0, H, j =>
 		{
-			for (int x = 0; x < W; x++)
-				r[y * W + x] = Fbm(perm, x / d + ox, y / d + oy, oct);
+			int y = y0 + j;
+			for (int i = 0; i < W; i++)
+				r[j * W + i] = Fbm(perm, (x0 + i) / d + ox, y / d + oy, oct);
 		});
 		return r;
 	}
 
 	/// <summary>
-	/// Макрорельеф до уровня моря: копия цикла StageRelief._rows. Шумы — perm в порядке
-	/// warpX, warpY, cont, mask, ridge, hill.
+	/// Макрорельеф до уровня моря: копия цикла StageRelief._rows по прямоугольнику клеток W × H с углом (x0, y0).
+	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, int W, int H)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, int x0, int y0, int W, int H)
 	{
 		var outH = new float[W * H];
-		System.Threading.Tasks.Parallel.For(0, H, y =>
+		System.Threading.Tasks.Parallel.For(0, H, j =>
 		{
-			for (int x = 0; x < W; x++)
+			int y = y0 + j;
+			for (int i = 0; i < W; i++)
 			{
+				int x = x0 + i;
 				double wx = Fbm(warpX, x / 170.0, y / 170.0, 3) * 45.0;
 				double wy = Fbm(warpY, x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0;
 				double X = x + wx;
 				double Y = y + wy;
 				double c = Fbm(cont, X / 240.0, Y / 240.0, 6);
-				double dx = Math.Abs(((double)x / (W - 1)) * 2.0 - 1.0);
-				double dy = Math.Abs(((double)y / (H - 1)) * 2.0 - 1.0);
-				double d = Math.Sqrt(Math.Sqrt(dx * dx * dx * dx + dy * dy * dy * dy));
-				double t = Clamp01((d - 0.55) / (1.0 - 0.55));
-				double fall = t * t * (3.0 - 2.0 * t);
-				double bas = c + 0.1 - fall * 0.75;
-				t = Clamp01((bas - -0.05) / (0.25 - -0.05));
+				double bas = c + 0.1;
+				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
 				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - -0.15) / (0.3 - -0.15));
 				double m = t * t * (3.0 - 2.0 * t);
 				double r = Ridged(ridge, X / 120.0, Y / 120.0, 5);
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
-				outH[y * W + x] = (float)(bas * 0.55 + r * r * m * land * 0.9 + hills * 0.05 * (0.3 + land));
+				outH[j * W + i] = (float)(bas * 0.55 + r * r * m * land * 0.9 + hills * 0.05 * (0.3 + land));
 			}
 		});
 		return outH;

@@ -71,7 +71,7 @@ static func terrain_speed(w: WorldData, x: float, z: float) -> float:
 ## feet — высота ног: от неё зависит, стоит ли игрок на мосту (тогда вода под ним не мешает)
 ## и упирается ли в перила моста или стену туннеля
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF) -> bool:
-	if x < TILE or z < TILE or x > (w.W - 1) * TILE or z > (w.H - 1) * TILE:
+	if not heights.known(x, z):
 		return false
 	# сквозь дома не пройти
 	for s in w.settlements:

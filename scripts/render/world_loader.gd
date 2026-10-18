@@ -35,6 +35,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var changed := r.heights.build_structures()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_mesh, r.world, r.heights, changed)
+	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
+	r.world.outer = OuterLand.new(r.world)
 	if on_progress.is_valid():
 		on_progress.call(0.93, "Текстура рельефа и карта")
 	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;

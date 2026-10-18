@@ -21,10 +21,22 @@ func _init() -> void:
 	var heights := Heightfield.new(w)
 	var p := PlayerState.spawn(w, heights)
 
-	# Шаг: до полной скорости меньше чем за 0.2 с, остановка меньше чем за 0.3 с
+	# Шаг: до полной скорости меньше чем за 0.2 с, остановка меньше чем за 0.3 с. Идём в самую ровную
+	# из восьми сторон, где нет дома: в подъём шаг медленнее, и проверка была бы про рельеф, а не про разгон
+	var walk_yaw := 0.0
+	var flattest := INF
+	for k in 8:
+		var a := k * PI / 4.0
+		var ok := true
+		for d in [1.0, 2.0, 3.0]:
+			ok = ok and PlayerState.is_passable(w, heights, p.x - sin(a) * d, p.z - cos(a) * d, p.feet)
+		var rise := absf(heights.ground_at(p.x - sin(a) * 3.0, p.z - cos(a) * 3.0) - p.feet)
+		if ok and rise < flattest:
+			flattest = rise
+			walk_yaw = a
 	var t := 0.0
 	while p.ground_speed() < GameConfig.WALK * PlayerState.terrain_speed(w, p.x, p.z) * 0.95 and t < 1.0:
-		p.step(1.0, 0.0, false, false, 0.0, DT, w, heights)
+		p.step(1.0, 0.0, false, false, walk_yaw, DT, w, heights)
 		t += DT
 	_check(t < 0.2, "разгон шага за %.2f с" % t)
 	t = 0.0
@@ -71,6 +83,8 @@ func _init() -> void:
 	for c in [["abc", 128], ["Туман-4821", 192], ["Север-1234", 256], ["Ущелье", 512]]:
 		var w2 := WorldGenerator.generate(c[0], c[1])
 		var h2 := Heightfield.new(w2)
+		# как в игре: за краем карты есть земля (мост бывает и у самого края)
+		w2.outer = OuterLand.new(w2)
 		var ok := 0
 		for st: Dictionary in h2.structures:
 			kinds[st.tunnel] = true

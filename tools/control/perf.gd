@@ -215,6 +215,9 @@ func _process(delta: float) -> bool:
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
 			game.vegetation.update(p.x, p.z, false)
+			# рельеф за краем карты подгружается по ходу, как в игре
+			if game.world.outer != null:
+				game.outer.update(p.x, p.z)
 			_count("road")
 			if t >= float(cfg.road_s):
 				return _finish(true)
