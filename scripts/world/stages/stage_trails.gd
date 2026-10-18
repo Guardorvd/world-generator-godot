@@ -519,9 +519,11 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 					if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R):
 						j = -1
 			elif j > 0:
-				# над озером или заливом мост через овраг не ставится: путь идёт по берегу
+				# над озером или заливом мост через овраг не ставится: путь идёт по берегу. С 3.0 и там, где
+				# земля по прямой между концами выше обоих концов (два оврага с бугром между ними): настил ушёл бы в бугор
+				var top := maxf(hp[i], hp[j])
 				for c: int in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
-					if w.ocean[c] != 0 or w.lake[c] != 0:
+					if w.ocean[c] != 0 or w.lake[c] != 0 or w.h[c] > top:
 						j = -1
 						break
 		if j < 0:

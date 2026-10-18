@@ -1,6 +1,6 @@
 class_name StageRelief
 extends RefCounted
-## Этап 1. Макрорельеф: континенты, горные массивы (с 1.9.7, см. mountain), равнины и холмистые края (с 1.9.8), уровень моря, микрорельеф суши.
+## Этап 1. Макрорельеф: континенты, горные массивы (с 1.9.7, см. mountain) и возвышенности (с 3.0), равнины и холмистые края (с 1.9.8), уровень моря, микрорельеф суши.
 ## Пишет: w.macro_x, macro_y — сдвиг шума материков (место старта), w.h — высота клетки (0 — уровень моря,
 ## суша до 1, дно до -1).
 ## Строки карты независимы, поэтому считаются параллельно полосами. В сборке Godot .NET тот же цикл
@@ -190,6 +190,18 @@ const ASYM := 1.8
 const PEAK_CAP := 1.05
 ## Скругление главного гребня (в долях шума): без него гребень — острый излом, а вершины — иглы
 const CREST_ROUND := 0.12
+## С 3.0 острых массивов меньше: доля шума формы, с которой массив считается острым
+const SHARP_SHIFT := 0.2
+## Возвышенности (с 3.0): медленный шум масштаба MASSIF превращает часть массивов в холмистые
+## возвышенности и широкие склоны: форма гребня шире (r вместо r^1.5..r^2), высота UPLAND_AMP от горной,
+## мелких гребней меньше (UPLAND_SMOOTH)
+const UPLAND_SHIFT := 0.08
+const UPLAND_AMP := 0.4
+## Какую долю мелких гребней и отрогов возвышенность теряет
+const UPLAND_SMOOTH := 0.8
+## Горы выше PEAK_KNEE растут всё медленнее (PEAK_SOFT — насколько плавно): высоких пиков меньше, но они есть
+const PEAK_KNEE := 0.4
+const PEAK_SOFT := 0.3
 
 
 static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float:
@@ -197,30 +209,39 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var k := int(s)
 	var t := clampf((s - k - 0.3) / 0.4, 0.0, 1.0)
 	var f := t * t * (3.0 - 2.0 * t)
-	t = clampf((hill.fbm(X / MASSIF + 63.2, Y / MASSIF + 12.5, 2) + 0.25) / 0.5, 0.0, 1.0)
+	t = clampf((hill.fbm(X / MASSIF + 63.2, Y / MASSIF + 12.5, 2) + 0.25 - SHARP_SHIFT) / 0.5, 0.0, 1.0)
 	var sharp := t * t * (3.0 - 2.0 * t)
 	var asym := 1.0 + (ASYM - 1.0) * sharp
+	# Возвышенность вместо гор (с 3.0): те же гребни, но ниже, с широкими склонами и почти без мелких гребней
+	t = clampf((hill.fbm(X / MASSIF + 25.1, Y / MASSIF - 71.3, 2) + UPLAND_SHIFT) / 0.4, 0.0, 1.0)
+	var up := t * t * (3.0 - 2.0 * t)
+	var fine := 1.0 - UPLAND_SMOOTH * up
 	var r := 0.0
 	if f < 1.0:
-		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym) * (1.0 - f)
+		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine) * (1.0 - f)
 	if f > 0.0:
-		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym) * f
+		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	r = minf(r * (1.0 + 0.5 * hill.fbm(X / 55.0 + 17.7, Y / 55.0 - 29.3, 2) * r), PEAK_CAP)
 	# Отроги: мелкие гребни на склонах (на гребне и у подножия их нет)
 	var sp := ridge.ridged(X / 40.0 - 57.1, Y / 40.0 + 11.9, 3)
-	r = maxf(0.0, r + sp * sp * maxf(0.0, r * (1.0 - r)) * 0.9)
+	r = maxf(0.0, r + sp * sp * maxf(0.0, r * (1.0 - r)) * 0.9 * fine)
 	# Острые горы — узкие гребни (r^2), сглаженные — широкие (r^1.5)
 	var q := sqrt(r) * r
 	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) + 0.3) / 0.6, 0.0, 1.0)
 	var amp := 0.6 + 0.55 * t * t * (3.0 - 2.0 * t)
-	return (q + (r * r - q) * sharp) * amp
+	var m := (q + (r * r - q) * sharp) * amp
+	m += (r * UPLAND_AMP - m) * up
+	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
+	if m > PEAK_KNEE:
+		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / PEAK_SOFT)
+	return m
 
 
 ## Гребень одного направления (dc, ds) = (cos, sin): ridged-шум в повёрнутых и вытянутых координатах. Первая октава (главный
-## гребень) несимметрична: с одной стороны склон круче в asym раз
-static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float) -> float:
+## гребень) несимметрична: с одной стороны склон круче в asym раз. Октавы с третьей (мелкие гребни) берутся с долей fine
+static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float) -> float:
 	var u := (X * dc + Y * ds) / RIDGE_ALONG
 	var v := (Y * dc - X * ds) / RIDGE_ACROSS
 	var a := 0.5
@@ -236,7 +257,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		val *= val
 		val *= wt
 		wt = minf(1.0, maxf(0.0, val * 2.0))
-		s += val * a
+		s += val * a * (fine if o >= 2 else 1.0)
 		fq *= 2.1
 		a *= 0.5
 	return s

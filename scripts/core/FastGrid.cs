@@ -363,6 +363,13 @@ public partial class FastGrid : RefCounted
 	private const double Asym = 1.8;
 	private const double PeakCap = 1.05;
 	private const double CrestRound = 0.12;
+	/// <summary>Острые массивы, возвышенности и мягкий предел вершин (с 3.0): копия StageRelief.SHARP_SHIFT, UPLAND_SHIFT, UPLAND_AMP, UPLAND_SMOOTH, PEAK_KNEE, PEAK_SOFT.</summary>
+	private const double SharpShift = 0.2;
+	private const double UplandShift = 0.08;
+	private const double UplandAmp = 0.4;
+	private const double UplandSmooth = 0.8;
+	private const double PeakKnee = 0.4;
+	private const double PeakSoft = 0.3;
 
 	/// <summary>Копия StageRelief.mountain.</summary>
 	private static double Mountain(int[] ridge, int[] hill, double X, double Y)
@@ -372,25 +379,32 @@ public partial class FastGrid : RefCounted
 		int k = (int)s;
 		double t = Clamp01((s - k - 0.3) / 0.4);
 		double f = t * t * (3.0 - 2.0 * t);
-		t = Clamp01((Fbm(hill, X / Massif + 63.2, Y / Massif + 12.5, 2) - -0.25) / 0.5);
+		t = Clamp01((Fbm(hill, X / Massif + 63.2, Y / Massif + 12.5, 2) + 0.25 - SharpShift) / 0.5);
 		double sharp = t * t * (3.0 - 2.0 * t);
 		double asym = 1.0 + (Asym - 1.0) * sharp;
+		t = Clamp01((Fbm(hill, X / Massif + 25.1, Y / Massif - 71.3, 2) + UplandShift) / 0.4);
+		double up = t * t * (3.0 - 2.0 * t);
+		double fine = 1.0 - UplandSmooth * up;
 		double r = 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym) * (1.0 - f);
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym) * f;
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine) * f;
 		r = Math.Min(r * (1.0 + 0.5 * Fbm(hill, X / 55.0 + 17.7, Y / 55.0 - 29.3, 2) * r), PeakCap);
 		double sp = Ridged(ridge, X / 40.0 - 57.1, Y / 40.0 + 11.9, 3);
-		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.9);
+		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.9 * fine);
 		double q = Math.Sqrt(r) * r;
 		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
 		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
-		return (q + (r * r - q) * sharp) * amp;
+		double m = (q + (r * r - q) * sharp) * amp;
+		m += (r * UplandAmp - m) * up;
+		if (m > PeakKnee)
+			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / PeakSoft);
+		return m;
 	}
 
 	/// <summary>Копия StageRelief._crest.</summary>
-	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym)
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine)
 	{
 		double u = (X * dc + Y * ds) / RidgeAlong;
 		double v = (Y * dc - X * ds) / RidgeAcross;
@@ -405,7 +419,7 @@ public partial class FastGrid : RefCounted
 			val *= val;
 			val *= wt;
 			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
-			s += val * a;
+			s += val * a * (o >= 2 ? fine : 1.0);
 			fq *= 2.1;
 			a *= 0.5;
 		}
