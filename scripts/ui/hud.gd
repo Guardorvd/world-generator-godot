@@ -5,7 +5,7 @@ extends Control
 ## мини-карта и большая карта рисуются кодом (MiniMap, BigMap). Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
 ## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
 ## С 2.8 на большой карте можно выбрать цель путешествия (ЛКМ по поселению или вершине) — она видна
-## только меткой на компасе вверху и на картах — и переместиться в место, где уже побывали (ПКМ).
+## только меткой на компасе вверху и на картах — и переместиться в любое из них (ПКМ; до 3.0.2 — только где уже побывали).
 ## С 2.9 к местам добавились крупные озёра с названиями (WorldData.lakes): открываются на берегу.
 
 signal travel_requested(place: Dictionary)
@@ -352,7 +352,7 @@ class Compass extends Control:
 
 
 ## Большая карта (M): посещённые поселения и вершины отмечены жёлтым. С 2.8 карта ловит мышь:
-## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по месту, где уже побывали, — перемещение туда
+## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по любому месту — перемещение туда (с 3.0.2 и туда, где ещё не были)
 class BigMap extends Control:
 	const PICK := 12.0  # на сколько пикселей можно промахнуться по метке места
 	var hud: Hud
@@ -388,7 +388,7 @@ class BigMap extends Control:
 			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
 				var same: bool = pl.key == hud.goal.get("key")
 				hud.set_goal({} if same else pl)
-			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.visited.has(pl.key):
+			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty():
 				hud.travel_requested.emit(pl)
 			accept_event()
 
@@ -431,7 +431,7 @@ class BigMap extends Control:
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
-			tip += "ПКМ — переместиться сюда" if hud.visited.has(hover.key) else "переместиться можно, когда побываете здесь"
+			tip += "ПКМ — переместиться сюда"
 			draw_arc(o + Vector2(hover.x, hover.y) * k, 7.0, 0.0, TAU, 20, Color.WHITE, 1.5)
 		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
 
