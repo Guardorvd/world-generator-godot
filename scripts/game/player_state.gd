@@ -5,6 +5,7 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const MAX_SUBSTEP := 1.0 / 20.0  # самый долгий подшаг, с: длинный кадр делится, чтобы не проскакивать стены и воду
 const MAX_SUBSTEPS := 16         # предел дроблению, чтобы сильный «затык» кадра не повесил игру
+const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
 
 var x := 0.0          # метры
 var z := 0.0
@@ -19,7 +20,26 @@ var _air := 0.0       # сколько секунд без опоры
 var _jump_buf := 0.0  # сколько ещё ждать земли, чтобы прыгнуть по уже нажатому пробелу
 
 
-## Точка появления: в 3,5 м от костра первого поселения, внутри кольца домов (дома стоят не ближе 6 м
+## Поселение, где игрок появляется: первое (лучшее место) не ближе HOME_EDGE стороны карты к её краю.
+## С 1.9.9: карта — лишь стартовая область, за краем нет дорог, леса и поселений, и появляться у самого
+## края нельзя. Если таких нет — ближайшее к середине карты
+static func home(w: WorldData) -> Dictionary:
+	if w.settlements.is_empty():
+		return {}
+	var best: Dictionary = w.settlements[0]
+	var best_d := INF
+	var margin := w.W * HOME_EDGE
+	for s in w.settlements:
+		if minf(minf(s.x, s.y), minf(w.W - s.x, w.H - s.y)) >= margin:
+			return s
+		var d := Vector2(s.x - w.W / 2.0, s.y - w.H / 2.0).length()
+		if d < best_d:
+			best_d = d
+			best = s
+	return best
+
+
+## Точка появления: в 3,5 м от костра поселения home, внутри кольца домов (дома стоят не ближе 6 м
 ## от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего, чтобы не стоять
 ## носом в стену. При равенстве — юг, как в JS-версии.
 static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
@@ -27,7 +47,7 @@ static func spawn(w: WorldData, heights: Heightfield) -> PlayerState:
 	p.x = (w.W / 2.0) * TILE
 	p.z = (w.H / 2.0) * TILE
 	if w.settlements.size() > 0:
-		var s: Dictionary = w.settlements[0]
+		var s := home(w)
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
 		var best := -1.0

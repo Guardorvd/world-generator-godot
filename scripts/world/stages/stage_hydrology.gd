@@ -5,6 +5,9 @@ extends RefCounted
 
 const PROGRESS := 0.2
 const LABEL := "Течение рек"
+## Озеро меньше стольких клеток засыпается, как мелкая впадина (с 1.9.9): на пологих равнинах такие ямы
+## глубиной в пару метров выглядели квадратными прудами с отвесными стенками
+const LAKE_MIN := 12
 
 
 static func run(w: WorldData) -> void:
@@ -30,7 +33,8 @@ static func run(w: WorldData) -> void:
 	for i in N:
 		if ocean[i] == 0 and lake[i] == 0:
 			h[i] = filled[i]
-	# Одно озеро — один уровень воды (уровень порога стока), без ступенек на поверхности
+	# Одно озеро — один уровень воды (уровень порога стока), без ступенек на поверхности; совсем маленькие
+	# озёра засыпаются
 	var seen := PackedByteArray()
 	seen.resize(N)
 	var stack := PackedInt32Array()
@@ -59,6 +63,11 @@ static func run(w: WorldData) -> void:
 				if lake[n] != 0 and seen[n] == 0:
 					seen[n] = 1
 					stack.append(n)
+		if cells.size() < LAKE_MIN:
+			for c in cells:
+				lake[c] = 0
+				h[c] = filled[c]
+			continue
 		for c in cells:
 			filled[c] = lvl
 

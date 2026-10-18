@@ -78,25 +78,22 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var labels: Array = []
 	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
+	# дома и туры неподвижны: они собираются в один меш (MeshBatch), костры с огнём — отдельные узлы
+	var batch := MeshBatch.new()
 	for s in w.settlements:
 		for hut in s.huts:
 			var x: float = hut.x * TILE
 			var z: float = hut.y * TILE
-			var g := Node3D.new()
-			g.add_child(_part(wall_mesh, Vector3(0, 1.3, 0), walls[hut.v]))
-			var roof := _part(roof_mesh, Vector3(0, 2.6 + 1.1, 0), roofs[hut.v])
-			roof.rotation.y = PI / 4.0
-			g.add_child(roof)
-			g.add_child(_part(door_mesh, Vector3(0, 0.85, 1.62), door_m))
-			g.add_child(_part(win_mesh, Vector3(0.95, 1.6, 1.62), win_m))
 			# дом стоит на самом низком из углов, чтобы не висел над склоном
 			var y := INF
 			for c in [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]:
 				y = minf(y, heights.ground_at(x + c.x, z + c.y))
-			g.position = Vector3(x, y, z)
 			# дверью к костру
-			g.rotation.y = atan2(s.x * TILE - x, s.y * TILE - z)
-			parent.add_child(g)
+			var at := Transform3D(Basis(Vector3.UP, atan2(s.x * TILE - x, s.y * TILE - z)), Vector3(x, y, z))
+			batch.add(wall_mesh, at.translated_local(Vector3(0, 1.3, 0)), walls[hut.v])
+			batch.add(roof_mesh, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 2.6 + 1.1, 0)), roofs[hut.v])
+			batch.add(door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), door_m)
+			batch.add(win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), win_m)
 		# костёр
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
@@ -125,41 +122,27 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var flag_m := _mat(Color8(0xc0, 0x39, 0x2b))
 	flag_m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var pole_m := _mat(Color8(0x5a, 0x3d, 0x24))
+	var pole_mesh := CylinderMesh.new()
+	pole_mesh.top_radius = 0.04
+	pole_mesh.bottom_radius = 0.04
+	pole_mesh.height = 2.2
+	pole_mesh.radial_segments = 4
+	var flag_mesh := QuadMesh.new()
+	flag_mesh.size = Vector2(1.0, 0.6)
 	for pk in w.peaks:
 		var x: float = pk.x * TILE
 		var z: float = pk.y * TILE
 		var y := heights.ground_at(x, z)
-		var g := Node3D.new()
+		var at := Transform3D(Basis(), Vector3(x, y, z))
 		for rh in [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)]:
 			var sm := SphereMesh.new()
 			sm.radius = rh.x
 			sm.height = rh.x * 2.0
 			sm.radial_segments = 5
 			sm.rings = 2
-			var m := MeshInstance3D.new()
-			m.mesh = sm
-			m.material_override = stone
-			m.position.y = rh.y
-			g.add_child(m)
-		var pole_mesh := CylinderMesh.new()
-		pole_mesh.top_radius = 0.04
-		pole_mesh.bottom_radius = 0.04
-		pole_mesh.height = 2.2
-		pole_mesh.radial_segments = 4
-		var pole := MeshInstance3D.new()
-		pole.mesh = pole_mesh
-		pole.material_override = pole_m
-		pole.position.y = 3.2
-		g.add_child(pole)
-		var flag_mesh := QuadMesh.new()
-		flag_mesh.size = Vector2(1.0, 0.6)
-		var flag := MeshInstance3D.new()
-		flag.mesh = flag_mesh
-		flag.material_override = flag_m
-		flag.position = Vector3(0.5, 3.9, 0)
-		g.add_child(flag)
-		g.position = Vector3(x, y, z)
-		parent.add_child(g)
+			batch.add(sm, at.translated_local(Vector3(0, rh.y, 0)), stone)
+		batch.add(pole_mesh, at.translated_local(Vector3(0, 3.2, 0)), pole_m)
+		batch.add(flag_mesh, at.translated_local(Vector3(0.5, 3.9, 0)), flag_m)
 		# подпись вершины рядом с поселением закрыла бы его название: такую не ставим
 		var near := false
 		for sp in settle_pos:
@@ -171,6 +154,9 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
 		parent.add_child(label)
 		labels.append(label)
+	var mi := batch.build("Buildings")
+	if mi != null:
+		parent.add_child(mi)
 	return {fires = fires, labels = labels}
 
 

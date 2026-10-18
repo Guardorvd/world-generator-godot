@@ -4,6 +4,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
+const LAKE_DROP := 0.1   # м, см. _lake_mesh
 
 
 static func _material(color: Color, alpha: float) -> StandardMaterial3D:
@@ -62,43 +63,31 @@ static func _flat_mesh(pos: PackedVector3Array, mat: Material, node_name: String
 	return mi
 
 
-## Озёра: квадрат воды на уровне озера над каждой клеткой озера и её сухими соседями (чтобы закрыть берег)
+## Озёра: ровная вода на уровне озера над каждой ячейкой сетки рельефа (вершины в центрах клеток), у которой
+## хоть одна вершина в озере. Рельеф в ячейке — те же треугольники, поэтому берег — линия, где земля
+## поднимается над водой, а не край квадрата клетки. До 1.9.9 вода лежала квадратами клеток и на пологих
+## берегах равнин стояла над землёй прямоугольниками. Вода на LAKE_DROP ниже уровня: засыпанные мелкие
+## впадины у озера лежат ровно на его уровне, и в одной плоскости с ними вода просвечивала бы сквозь землю
 static func _lake_mesh(w: WorldData, mat: Material) -> MeshInstance3D:
 	var W := w.W
 	var H := w.H
-	var level := PackedFloat32Array()
-	level.resize(w.N)
-	level.fill(-INF)
-	for j in H:
-		for i in W:
-			var k := j * W + i
-			if w.lake[k] == 0:
-				continue
-			var l := w.filled[k] * HS
-			for dj in range(-1, 2):
-				for di in range(-1, 2):
-					var ni := i + di
-					var nj := j + dj
-					if ni < 0 or nj < 0 or ni >= W or nj >= H:
-						continue
-					var n := nj * W + ni
-					if w.ocean[n] != 0:
-						continue
-					if w.lake[n] != 0 and n != k:
-						continue
-					if l > level[n]:
-						level[n] = l
 	var pos := PackedVector3Array()
 	var idx := PackedInt32Array()
-	for j in H:
-		for i in W:
-			var y := level[j * W + i]
-			if y == -INF:
+	var lake := w.lake
+	var filled := w.filled
+	for j in H - 1:
+		for i in W - 1:
+			var a := j * W + i
+			if lake[a] == 0 and lake[a + 1] == 0 and lake[a + W] == 0 and lake[a + W + 1] == 0:
 				continue
-			var x0 := i * TILE
-			var x1 := (i + 1) * TILE
-			var z0 := j * TILE
-			var z1 := (j + 1) * TILE
+			var y := -INF
+			for k in [a, a + 1, a + W, a + W + 1]:
+				if lake[k] != 0:
+					y = maxf(y, filled[k] * HS - LAKE_DROP)
+			var x0 := (i + 0.5) * TILE
+			var x1 := (i + 1.5) * TILE
+			var z0 := (j + 0.5) * TILE
+			var z1 := (j + 1.5) * TILE
 			var v := pos.size()
 			pos.append_array([Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1)])
 			idx.append_array([v, v + 1, v + 2, v, v + 2, v + 3])

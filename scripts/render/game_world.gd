@@ -66,7 +66,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	player = PlayerState.spawn(world, heights)
 	if world.settlements.size() > 0:
 		# лицом к костру
-		var s: Dictionary = world.settlements[0]
+		var s := PlayerState.home(world)
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
 	outer = OuterTerrain.new()
 	outer.name = "OuterTerrain"
@@ -83,7 +83,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	camera.fov = GameSettings.fov
 	_update_camera(false)
 	if world.settlements.size() > 0:
-		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % world.settlements[0].name)
+		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
 	capture_mouse()
 
 
