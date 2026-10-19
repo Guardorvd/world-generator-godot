@@ -299,6 +299,7 @@ public partial class FastGrid : RefCounted
 	private const double PlainHills = 0.15;
 	private const double HillAmp = 0.07;
 	private const double Foothills = 0.35;
+	private const double FoothillLift = 0.18; // StageRelief.FOOTHILL_LIFT (с 3.6)
 	private const double MaskEdge = 0.9;
 	private const double Valley = 260.0;
 	private const double ValleyWidth = 0.16;
@@ -308,7 +309,7 @@ public partial class FastGrid : RefCounted
 	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
 	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread)
 	{
 		var outH = new float[W * H];
 		System.Threading.Tasks.Parallel.For(0, H, j =>
@@ -327,25 +328,38 @@ public partial class FastGrid : RefCounted
 				double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
 				double t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
-				double lo = -0.15 - Fbm(mask, X / Massif - 21.3, Y / Massif + 5.9, 2) * 0.3;
-				t = Clamp01((Fbm(mask, X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo + (MaskEdge - 0.45) * 0.5) / MaskEdge);
-				double m = t * t * (3.0 - 2.0 * t) * land;
+				// С 3.3 широкая область подъёма объединяет гребни и общее основание массива.
+				double mountainField = Fbm(mask, X / (Massif * mountainScale) + 7.0, Y / (Massif * mountainScale) - 3.0, 2) + mountainBias;
+				t = Clamp01(mountainField / MaskEdge);
+				double core = t * t * (3.0 - 2.0 * t);
+				double m = core * land;
 				t = Clamp01((Fbm(hill, X / Character + 41.9, Y / Character - 66.1, 2) - -0.15) / 0.4);
 				double rough = t * t * (3.0 - 2.0 * t);
+				t = Clamp01((bas - 0.18) / 0.17);
+				double inland = t * t * (3.0 - 2.0 * t);
+				t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
+				double valley = t * t * (3.0 - 2.0 * t);
+				double width = 0.1 + 0.4 * foothillSpread * (0.6 + 0.4 * rough);
+				t = Clamp01((mountainField + width) / (MaskEdge * 0.65 + width));
+				double foothills = t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothillSpread * (0.5 + 0.5 * rough) * (1.0 - 0.75 * valley);
 				t = Clamp01((m - Foothills) / Foothills);
 				m *= rough + (1.0 - rough) * m * m;
 				rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
+				rough += (1.0 - rough) * foothills;
 				double h = bas * 0.55;
 				if (h > SeaRaw)
 					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
+				if (foothills > 0.0)
+				{
+					double rolling = Fbm(hill, X / (100.0 * mountainScale) + 32.4, Y / (100.0 * mountainScale) - 18.6, 2);
+					hills += (rolling - hills) * foothills;
+					h += foothills * (FoothillLift + 0.08 * rolling) * mountainHeight;
+				}
 				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough) * (1.0 - m * 0.6);
-				t = Clamp01((bas - 0.18) / 0.17);
-				double inland = t * t * (3.0 - 2.0 * t);
-				t = Clamp01(1.0 - Math.Abs(Noise(ridge, X / Valley + 5.3, Y / Valley - 9.4)) / ValleyWidth);
-				h -= t * t * (3.0 - 2.0 * t) * ValleyDepth * rough * inland;
+				h -= valley * ValleyDepth * rough * inland;
 				if (m > 0.0)
-					h += Mountain(ridge, hill, x + wx * MountainWarp, y + wy * MountainWarp) * m * MountainAmp;
+					h += Mountain(ridge, hill, (x + wx * MountainWarp) / mountainScale, (y + wy * MountainWarp) / mountainScale) * m * MountainAmp * mountainHeight;
 				outH[j * W + i] = (float)h;
 			}
 		});
@@ -355,6 +369,14 @@ public partial class FastGrid : RefCounted
 	/// <summary>Горы: копия StageRelief.MASSIF, MOUNTAIN_AMP, MOUNTAIN_WARP, RIDGE_ALONG, RIDGE_ACROSS, DIR_C, DIR_S, ASYM, PEAK_CAP, CREST_ROUND.</summary>
 	private const double Massif = 650.0;
 	private const double MountainAmp = 1.0;
+	/// <summary>Общее основание и доля гребней (с 3.3): копия StageRelief.MASSIF_BASE, CREST_SHARE.</summary>
+	private const double MassifBase = 0.24;
+	private const double CrestShare = 0.75;
+	/// <summary>Внутренние долины (с 3.4): копия StageRelief.INNER_ALONG, INNER_ACROSS, INNER_CUT, SIDE_CUT.</summary>
+	private const double InnerAlong = 520.0;
+	private const double InnerAcross = 180.0;
+	private const double InnerCut = 0.85;
+	private const double SideCut = 0.28;
 	private const double MountainWarp = 0.35;
 	private const double RidgeAlong = 220.0;
 	private const double RidgeAcross = 125.0;
@@ -390,27 +412,35 @@ public partial class FastGrid : RefCounted
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine) * (1.0 - f);
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine) * f;
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f;
 		r = Math.Min(r * (1.0 + 0.35 * Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PeakCap);
 		double sp = Ridged(ridge, X / 70.0 - 57.1, Y / 70.0 + 11.9, 2);
 		r = Math.Max(0.0, r + sp * sp * Math.Max(0.0, r * (1.0 - r)) * 0.55 * fine);
+		// С 3.5 пологое плечо сглаженного массива, с плавным входом и выходом.
+		t = Clamp01((r - 0.25) / 0.15);
+		double shoulder = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((0.7 - r) / 0.15);
+		r += (0.475 - r) * shoulder * t * t * (3.0 - 2.0 * t) * 0.45 * up;
 		double q = Math.Sqrt(r) * r;
 		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
 		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
 		double m = (q + (r * r - q) * sharp) * amp;
 		m += (r * UplandAmp - m) * up;
+		m = MassifBase * amp * (1.0 - (1.0 - UplandAmp) * up) + m * CrestShare;
 		if (m > PeakKnee)
 			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / PeakSoft);
 		return m;
 	}
 
 	/// <summary>Копия StageRelief._crest.</summary>
-	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine)
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior)
 	{
-		double u = (X * dc + Y * ds) / RidgeAlong;
-		double v = (Y * dc - X * ds) / RidgeAcross;
+		double along = X * dc + Y * ds;
+		double across = Y * dc - X * ds;
+		double u = along / RidgeAlong;
+		double v = across / RidgeAcross;
 		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0;
 		for (int o = 0; o < 4; o++)
 		{
@@ -425,6 +455,21 @@ public partial class FastGrid : RefCounted
 			s += val * a * (o >= 2 ? fine : 1.0);
 			fq *= 2.1;
 			a = o == 0 ? 0.25 : a * 0.3;
+		}
+		if (interior > 0.0)
+		{
+			// Продольная долина, широкие котловины и впадающие сбоку ложбины.
+			double course = Noise(pm, along / InnerAlong + 18.7, across / InnerAcross - 37.1);
+			double side = Noise(pm, along / 180.0 - 51.3, across / 320.0 + 24.8);
+			double t = Clamp01((side + 0.2) / 0.6);
+			double opening = t * t * (3.0 - 2.0 * t);
+			t = Clamp01(1.0 - Math.Abs(course) / ((0.2 + 0.25 * opening) * (1.4 - 0.7 * interior)));
+			double valley = t * t * (3.0 - 2.0 * t);
+			s -= Math.Max(0.0, s - (0.18 + 0.16 * opening)) * valley * InnerCut * interior;
+			t = Clamp01(1.0 - Math.Abs(side) / 0.16);
+			double branch = t * t * (3.0 - 2.0 * t);
+			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
+			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SideCut * interior;
 		}
 		return s;
 	}

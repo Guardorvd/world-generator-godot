@@ -30,6 +30,8 @@ const PLAIN_LIFT := 0.3
 const PLAIN_HILLS := 0.15
 const HILL_AMP := 0.07
 const FOOTHILLS := 0.35
+## Широкое основание предгорий (с 3.6), до нормировки высоты. Прорезается общими долинами.
+const FOOTHILL_LIFT := 0.18
 ## Ширина подъёма от равнины к горам (в долях шума гор)
 const MASK_EDGE := 0.9
 ## Небольшие долины: масштаб шума в клетках, ширина (в долях шума) и глубина
@@ -47,6 +49,11 @@ const PICK_LAND := 0.6
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
 static func run(w: WorldData) -> void:
 	var N := w.N
+	# Свойства гор и предгорий на весь мир, без расхода общего rng. Редкие горы могут оставаться крупными.
+	w.mountain_scale = 0.8 + 0.8 * WGRandom.hash2(31, 7, w.seed_num)
+	w.mountain_bias = 0.05 + 0.4 * WGRandom.hash2(17, 19, w.seed_num)
+	w.mountain_height = 0.75 + 0.6 * WGRandom.hash2(47, 3, w.seed_num)
+	w.foothill_spread = 0.15 + 0.85 * WGRandom.hash2(73, 11, w.seed_num)
 	_pick_start(w)
 	var h := raw_rect(w, 0, 0, w.W, w.H, true)
 	for i in N:
@@ -74,7 +81,7 @@ static func _pick_start(w: WorldData) -> void:
 			for si in 16:
 				var x := (si + 0.5) * w.W / 16.0
 				var y := (sj + 0.5) * w.H / 16.0
-				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my) >= SEA_RAW:
+				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread) >= SEA_RAW:
 					land += 1
 		var frac := land / 256.0
 		if frac > best:
@@ -102,7 +109,7 @@ static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel:
 	var fast := Grid.fast_grid()
 	if fast != null:
 		var n := w.noise
-		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch)
+		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
 	if not parallel:
 		return _rows(w, x0, y0, cw, 0, ch)
 	var h := PackedFloat32Array()
@@ -123,13 +130,13 @@ static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int) -> 
 	out.resize((j1 - j0) * cw)
 	for j in range(j0, j1):
 		for i in cw:
-			out[(j - j0) * cw + i] = raw_at(warp_x, warp_y, cont, mask_n, ridge, hill, x0 + i, y0 + j, w.macro_x, w.macro_y)
+			out[(j - j0) * cw + i] = raw_at(warp_x, warp_y, cont, mask_n, ridge, hill, x0 + i, y0 + j, w.macro_x, w.macro_y, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
 	return out
 
 
 ## Макрорельеф в клетке (x, y); (mx, my) — сдвиг шума материков. Копия — FastGrid.ReliefField
 static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simplex, ridge: Simplex, hill: Simplex,
-		x: float, y: float, mx: float, my: float) -> float:
+		x: float, y: float, mx: float, my: float, mountain_scale: float = 1.0, mountain_bias: float = 0.3, mountain_height: float = 1.0, foothill_spread: float = 0.0) -> float:
 	var wx := warp_x.fbm(x / 170.0, y / 170.0, 3) * 45.0
 	var wy := warp_y.fbm(x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0
 	var X := x + wx
@@ -140,42 +147,63 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# smoothstep развёрнут на месте (см. Parallel)
 	var t := clampf((base + 0.05) / (0.25 + 0.05), 0.0, 1.0)
 	var land := t * t * (3.0 - 2.0 * t)
-	# Где горы. Медленный шум размера сдвигает порог: где он высок, массив большой, где низок — небольшая группа гор
-	var lo := -0.15 - mask_n.fbm(X / MASSIF - 21.3, Y / MASSIF + 5.9, 2) * 0.3
-	# С 1.9.8 подъём к горам вдвое шире (MASK_EDGE вместо 0.45), середина подъёма на прежнем месте:
-	# иначе у края массива на ровном месте вырастал уступ в десятки метров
-	t = clampf((mask_n.fbm(X / 280.0 + 7.0, Y / 280.0 - 3.0, 3) - lo + (MASK_EDGE - 0.45) * 0.5) / MASK_EDGE, 0.0, 1.0)
-	var mask := t * t * (3.0 - 2.0 * t) * land
+	# С 3.3 единая широкая область подъёма: две медленные октавы вместо мелкой пятнистой маски.
+	# Плавный край даёт предгорья, сильная середина объединяет несколько гребней в один массив.
+	var mountain_field := mask_n.fbm(X / (MASSIF * mountain_scale) + 7.0, Y / (MASSIF * mountain_scale) - 3.0, 2) + mountain_bias
+	t = clampf(mountain_field / MASK_EDGE, 0.0, 1.0)
+	var core := t * t * (3.0 - 2.0 * t)
+	var mask := core * land
 	# Характер местности (с 1.9.8): медленный шум делит сушу на равнины и холмистые края. На равнинах
 	# слабые окраины гор стихают (там, где горы во всю силу, массив остаётся), а вокруг гор холмистость
 	# растёт сама (предгорья): равнина переходит в горы через холмы, без резкой границы
 	t = clampf((hill.fbm(X / CHARACTER + 41.9, Y / CHARACTER - 66.1, 2) + 0.15) / 0.4, 0.0, 1.0)
 	var rough := t * t * (3.0 - 2.0 * t)
+	# Общие понижения проходят через холмы и предгорья, разрывая пояс у подножия.
+	t = clampf((base - 0.18) / 0.17, 0.0, 1.0)
+	var inland := t * t * (3.0 - 2.0 * t)
+	t = clampf(1.0 - absf(ridge.noise(X / VALLEY + 5.3, Y / VALLEY - 9.4)) / VALLEY_WIDTH, 0.0, 1.0)
+	var valley := t * t * (3.0 - 2.0 * t)
+	# Пояс шире горной маски и неодинаков по периметру: зависит от сида и местных холмов.
+	var width := 0.1 + 0.4 * foothill_spread * (0.6 + 0.4 * rough)
+	t = clampf((mountain_field + width) / (MASK_EDGE * 0.65 + width), 0.0, 1.0)
+	var foothills := t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothill_spread * (0.5 + 0.5 * rough) * (1.0 - 0.75 * valley)
 	t = clampf((mask - FOOTHILLS) / FOOTHILLS, 0.0, 1.0)
 	mask *= rough + (1.0 - rough) * mask * mask
 	rough = maxf(rough, t * t * (3.0 - 2.0 * t))
+	rough += (1.0 - rough) * foothills
 	# Суша на равнинах ниже и положе: высота над морем сжата до PLAIN_LIFT. Берега от этого не сдвигаются
 	var h := base * 0.55
 	if h > SEA_RAW:
 		h = SEA_RAW + (h - SEA_RAW) * (PLAIN_LIFT + (1.0 - PLAIN_LIFT) * rough)
 	var hills := hill.fbm(X / 40.0, Y / 40.0, 4)
+	if foothills > 0.0:
+		var rolling := hill.fbm(X / (100.0 * mountain_scale) + 32.4, Y / (100.0 * mountain_scale) - 18.6, 2)
+		hills += (rolling - hills) * foothills
+		h += foothills * (FOOTHILL_LIFT + 0.08 * rolling) * mountain_height
 	# С 3.2 мелкие холмы слабее внутри массива: широкие склоны не покрываются частыми буграми
 	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough) * (1.0 - mask * 0.6)
-	t = clampf((base - 0.18) / 0.17, 0.0, 1.0)
-	var inland := t * t * (3.0 - 2.0 * t)
-	# Небольшие долины в холмистых краях: узкие ложбины вдоль линий нуля шума
-	t = clampf(1.0 - absf(ridge.noise(X / VALLEY + 5.3, Y / VALLEY - 9.4)) / VALLEY_WIDTH, 0.0, 1.0)
-	h -= t * t * (3.0 - 2.0 * t) * VALLEY_DEPTH * rough * inland
+	# То же поле понижений, что ослабляет предгорный подъём.
+	h -= valley * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
-		h += mountain(ridge, hill, x + wx * MOUNTAIN_WARP, y + wy * MOUNTAIN_WARP) * mask * MOUNTAIN_AMP
+		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / mountain_scale, (y + wy * MOUNTAIN_WARP) / mountain_scale) * mask * MOUNTAIN_AMP * mountain_height
 	return h
 
 
 ## Горы (с 1.9.7). Как и весь рельеф, функция мировых координат, поэтому за краем карты горы продолжаются.
-## Медленные шумы масштаба MASSIF (около 2,5 км) дают каждому массиву свой характер: направление гребней,
+## Медленные шумы масштаба MASSIF (около 2,6 км) задают область подъёма и характер: направление гребней,
 ## высоту и острые молодые или сглаженные старые формы. Копия — FastGrid.Mountain
 const MASSIF := 650.0
 const MOUNTAIN_AMP := 1.0
+## Общее основание под гребнями (с 3.3). Растёт вместе с маской массива, даже в седловинах.
+## У возвышенностей ниже; часть высоты гребня отдана основанию, чтобы не раздувать вершины.
+const MASSIF_BASE := 0.24
+const CREST_SHARE := 0.75
+## Внутренние долины (с 3.4): вдоль направления массива, с широкими котловинами и боковыми ложбинами.
+## Масштаб в клетках; вырезается только часть гребней, общее основание сохраняется.
+const INNER_ALONG := 520.0
+const INNER_ACROSS := 180.0
+const INNER_CUT := 0.85
+const SIDE_CUT := 0.28
 ## Горы искривлены слабее остального рельефа: при полном искривлении гребни вытягиваются в одинаковые
 ## волнистые полосы
 const MOUNTAIN_WARP := 0.35
@@ -224,21 +252,28 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var fine := (1.0 - UPLAND_SMOOTH * up) * (0.35 + 0.65 * sharp)
 	var r := 0.0
 	if f < 1.0:
-		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine) * (1.0 - f)
+		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f)
 	if f > 0.0:
-		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine) * f
+		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	r = minf(r * (1.0 + 0.35 * hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PEAK_CAP)
 	# Отроги: мелкие гребни на склонах (на гребне и у подножия их нет)
 	var sp := ridge.ridged(X / 70.0 - 57.1, Y / 70.0 + 11.9, 2)
 	r = maxf(0.0, r + sp * sp * maxf(0.0, r * (1.0 - r)) * 0.55 * fine)
+	# С 3.5 у сглаженных массивов середина склона образует широкое пологое плечо.
+	# Два плавных края ограничивают его одним поясом; долины и вершины сохраняются.
+	t = clampf((r - 0.25) / 0.15, 0.0, 1.0)
+	var shoulder := t * t * (3.0 - 2.0 * t)
+	t = clampf((0.7 - r) / 0.15, 0.0, 1.0)
+	r += (0.475 - r) * shoulder * t * t * (3.0 - 2.0 * t) * 0.45 * up
 	# Острые горы — узкие гребни (r^2), сглаженные — широкие (r^1.5)
 	var q := sqrt(r) * r
 	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) + 0.3) / 0.6, 0.0, 1.0)
 	var amp := 0.6 + 0.55 * t * t * (3.0 - 2.0 * t)
 	var m := (q + (r * r - q) * sharp) * amp
 	m += (r * UPLAND_AMP - m) * up
+	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) + m * CREST_SHARE
 	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
 	if m > PEAK_KNEE:
 		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / PEAK_SOFT)
@@ -248,9 +283,12 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 ## Гребень одного направления (dc, ds) = (cos, sin): ridged-шум в повёрнутых и вытянутых координатах. Первая октава (главный
 ## гребень) несимметрична: с одной стороны склон круче в asym раз. С 3.1 больше веса у главного гребня,
 ## мелких октав две вместо трёх, их вес убывает быстрее: они уточняют склон, а не дробят его на бугры
-static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float) -> float:
-	var u := (X * dc + Y * ds) / RIDGE_ALONG
-	var v := (Y * dc - X * ds) / RIDGE_ACROSS
+## interior — сила внутренних долин и котловин (с 3.4); у сглаженных массивов 0.45, у гор до 1.
+static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0) -> float:
+	var along := X * dc + Y * ds
+	var across := Y * dc - X * ds
+	var u := along / RIDGE_ALONG
+	var v := across / RIDGE_ACROSS
 	var a := 0.6
 	var fq := 1.0
 	var s := 0.0
@@ -269,4 +307,20 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		s += val * a * (fine if o >= 2 else 1.0)
 		fq *= 2.1
 		a = 0.25 if o == 0 else a * 0.3
+	if interior > 0.0:
+		# Медленная продольная линия задаёт извилистую долину. Поперечное поле расширяет её
+		# в котловины; их дно меняет высоту плавно, а не становится горизонтальной ступенью.
+		var course := ridge.noise(along / INNER_ALONG + 18.7, across / INNER_ACROSS - 37.1)
+		var side := ridge.noise(along / 180.0 - 51.3, across / 320.0 + 24.8)
+		var t := clampf((side + 0.2) / 0.6, 0.0, 1.0)
+		var opening := t * t * (3.0 - 2.0 * t)
+		# У скалистых гор долины уже и глубже, у сглаженных — широкие и неглубокие.
+		t = clampf(1.0 - absf(course) / ((0.2 + 0.25 * opening) * (1.4 - 0.7 * interior)), 0.0, 1.0)
+		var valley := t * t * (3.0 - 2.0 * t)
+		s -= maxf(0.0, s - (0.18 + 0.16 * opening)) * valley * INNER_CUT * interior
+		# Боковые ложбины соединяются с главной долиной; между ними остаются отроги и седловины.
+		t = clampf(1.0 - absf(side) / 0.16, 0.0, 1.0)
+		var branch := t * t * (3.0 - 2.0 * t)
+		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
+		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
 	return s

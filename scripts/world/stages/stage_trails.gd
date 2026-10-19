@@ -32,6 +32,7 @@ const PORTAL_LEN := 3.0     # у входа туннеля, ближе стол�
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
+const FORD_SLOPE := 0.3     # на более крутом перепаде русла глубина между клетками ненадёжна для брода
 const DETOUR := 4.5         # обход горы не длиннее стольких прямых расстояний между входами туннеля
 const ALT_EVERY := 3        # второй путь у каждой третьей дороги остовного дерева (от самой длинной)
 const ALT_LEN := 2.0        # второй путь не длиннее стольких первых
@@ -70,7 +71,7 @@ static func _at_mouth(w: WorldData, x: int, y: int) -> bool:
 	return false
 
 
-## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод), устья рек непроходимы
+## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод), устья и крутые русла непроходимы
 static func _build_cost(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
@@ -80,7 +81,7 @@ static func _build_cost(w: WorldData) -> void:
 	for y: int in H:
 		for x: int in W:
 			var i := y * W + x
-			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 and _at_mouth(w, x, y):
+			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 and (_at_mouth(w, x, y) or w.slope[i] > FORD_SLOPE):
 				cost[i] = INF
 				continue
 			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)
@@ -95,7 +96,7 @@ static func _build_cost(w: WorldData) -> void:
 ## path_mask (скорость, деревья) отмечается по нарисованной линии (_mark_line), а дешевле становятся клетки пути
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
 		on_axis: PackedByteArray = PackedByteArray()) -> void:
-	path = _explicit(w, path)
+	path = _explicit(w, path, on_axis)
 	var W := w.W
 	var H := w.H
 	var rng := w.rng
@@ -136,9 +137,46 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			if both:
 				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
 	w.cost = cost
+	_protect_structures(w, road_cost)
 	var line := Grid.chaikin(pts, 3)
 	_mark_line(w, line, mark, width * 0.5 - LINE_IN)
 	w.trails.append({kind = kind, pts = line})
+
+
+## Следующие пути входят на сооружения с концов: боковые клетки у стен непроходимы,
+## ось остаётся дешёвой. Под высокими мостами исходная стоимость прохода сохраняется.
+static func _protect_structures(w: WorldData, road_cost: PackedFloat32Array) -> void:
+	var cost := w.cost
+	var both := not road_cost.is_empty()
+	for span: Dictionary in w.tunnels + w.bridges:
+		var tunnel := w.tunnels.has(span)
+		var radius := TUNNEL_R if tunnel else 1.4
+		var ax: float = span.a % w.W + 0.5
+		var ay: float = span.a / w.W + 0.5
+		var bx: float = span.b % w.W + 0.5
+		var by: float = span.b / w.W + 0.5
+		var dx := bx - ax
+		var dy := by - ay
+		var length_sq := dx * dx + dy * dy
+		for y in range(maxi(0, floori(minf(ay, by) - radius)), mini(w.H, ceili(maxf(ay, by) + radius))):
+			for x in range(maxi(0, floori(minf(ax, bx) - radius)), mini(w.W, ceili(maxf(ax, bx) + radius))):
+				var along := (x + 0.5 - ax) * dx + (y + 0.5 - ay) * dy
+				if along <= 0.0 or along >= length_sq or Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) > radius:
+					continue
+				var i := y * w.W + x
+				# Высоты нормированы: запас 0.015 (около 4 м) учитывает арку настила.
+				# Земля значительно ниже или выше моста остаётся доступной отдельно от него.
+				var deck: float = w.h[span.a] + (w.h[span.b] - w.h[span.a]) * along / length_sq
+				if not tunnel and absf(w.h[i] - deck) > 0.015:
+					continue
+				cost[i] = INF
+				if both:
+					road_cost[i] = INF
+		for i: int in Grid.line_cells(span.a % w.W, span.a / w.W, span.b % w.W, span.b / w.W, w.W):
+			cost[i] = 0.3
+			if both:
+				road_cost[i] = 0.3
+	w.cost = cost
 
 
 ## Отметить в path_mask значением mark клетки, по которым проходит нарисованная линия pts: средняя линия
@@ -197,8 +235,8 @@ static func _mark_cell(mask: PackedByteArray, W: int, H: int, x: int, y: int, ma
 
 ## Путь p, в котором каждый диагональный шаг между двумя сухими клетками, которые разделяет река (обе соседние
 ## по сторонам клетки мокрые), идёт через одну из этих клеток: так переход реки виден в клетках пути (мост, брод),
-## а не проскакивает в угол
-static func _explicit(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+## а не проскакивает в угол. Готовые оси сооружений не меняются: вставка боковой клетки увела бы путь с настила.
+static func _explicit(w: WorldData, p: PackedInt32Array, on_axis: PackedByteArray = PackedByteArray()) -> PackedInt32Array:
 	var W := w.W
 	var out := PackedInt32Array()
 	for k: int in p.size():
@@ -207,7 +245,8 @@ static func _explicit(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
 			var a := p[k - 1]
 			var dx := b % W - a % W
 			var dy := b / W - a / W
-			if dx != 0 and dy != 0 and not _wet(w, a) and not _wet(w, b):
+			if dx != 0 and dy != 0 and not _wet(w, a) and not _wet(w, b) \
+					and not (not on_axis.is_empty() and on_axis[a] != 0 and on_axis[b] != 0):
 				var c1 := a + dx
 				var c2 := a + dy * W
 				if _wet(w, c1) and _wet(w, c2):
@@ -310,7 +349,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder) -> void:
 	var ocean := w.ocean
 	var lake := w.lake
 	for i in w.N:
-		if ocean[i] != 0 or lake[i] != 0:
+		if ocean[i] != 0 or lake[i] != 0 or w.river[i] != 0 and w.cost[i] == INF:
 			road_cost[i] = BRIDGE_COST
 	var paths: Array = []   # [a, b, путь, дорога ли, прямое расстояние] найденных связей
 	for e in edges:
@@ -673,10 +712,10 @@ static func _wet_near(w: WorldData, a: int, b: int, r: float) -> bool:
 	return false
 
 
-## Только река (не море и не озеро) в клетках пути p[from..to)
+## Только река (не море и не озеро), без крутого перепада русла: возможен брод p[from..to)
 static func _river_only(w: WorldData, p: PackedInt32Array, from: int, to: int) -> bool:
 	for k in range(from, to):
-		if w.ocean[p[k]] != 0 or w.lake[p[k]] != 0:
+		if w.ocean[p[k]] != 0 or w.lake[p[k]] != 0 or w.slope[p[k]] > FORD_SLOPE:
 			return false
 	return true
 
@@ -797,7 +836,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder) -> void:
 	# С 3.1 горная тропа обходит крутые участки реки: на перепаде русла такой «брод» глубже,
 	# чем кажется по одной клетке. Это последний поиск путей, дороги уже проложены по мостам
 	for i in w.N:
-		if w.river[i] != 0 and w.slope[i] > 0.3:
+		if w.river[i] != 0 and w.slope[i] > FORD_SLOPE:
 			w.cost[i] = INF
 	for pk in w.peaks:
 		var best = null

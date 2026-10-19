@@ -1,6 +1,6 @@
 extends SceneTree
 ## География на разных сидах: сток, поселения, стыки кусков и совпадение C#/GDScript.
-## Печатает высоты и крутизну гор для сравнения версий. Полный прогон — 12 миров по 512 клеток;
+## Печатает высоты, крутизну и площади связных горных участков. Полный прогон — 12 миров по 512 клеток;
 ## -- --quick — четыре мира самопроверки; -- --out <файл.json> — сохранить сводку.
 
 const SelfTest := preload("res://tools/selftest.gd")
@@ -23,14 +23,16 @@ func _relief_check(w: WorldData) -> void:
 	# В начале координат noise = 0. При подходе с обеих сторон высота гребня одна:
 	# асимметрия после скругления раньше давала здесь скачок даже при бесконечно малом шаге
 	for d: Vector2 in [Vector2(0.0001, 0.0001), Vector2(0.0001, -0.0001)]:
-		var a := StageRelief._crest(w.noise.ridge, d.x, d.y, 1.0, 0.0, StageRelief.ASYM, 0.0)
-		var b := StageRelief._crest(w.noise.ridge, -d.x, -d.y, 1.0, 0.0, StageRelief.ASYM, 0.0)
-		_check(absf(a - b) < 1e-5, "%s: непрерывность асимметричного гребня" % w.seed_text)
+		for interior in [0.0, 1.0]:
+			for k in 3:
+				var a := StageRelief._crest(w.noise.ridge, d.x, d.y, StageRelief.DIR_C[k], StageRelief.DIR_S[k], StageRelief.ASYM, 0.0, interior)
+				var b := StageRelief._crest(w.noise.ridge, -d.x, -d.y, StageRelief.DIR_C[k], StageRelief.DIR_S[k], StageRelief.ASYM, 0.0, interior)
+				_check(absf(a - b) < 1e-5, "%s: непрерывность гребня и внутренних долин" % w.seed_text)
 	var top := 0
 	for i in w.N:
 		if w.h[i] > w.h[top]:
 			top = i
-	for p: Vector2i in [Vector2i(-65, -2), Vector2i(w.W - 2, w.H - 2), Vector2i(top % w.W - 2, top / w.W - 2)]:
+	for p: Vector2i in [Vector2i(-65, -2), Vector2i(-1025, 767), Vector2i(w.W - 2, w.H - 2), Vector2i(top % w.W - 2, top / w.W - 2)]:
 		var whole := StageRelief.raw_rect(w, p.x, p.y, 6, 4, false)
 		var left := StageRelief.raw_rect(w, p.x, p.y, 3, 4, false)
 		var right := StageRelief.raw_rect(w, p.x + 3, p.y, 3, 4, false)
@@ -73,6 +75,7 @@ func _stats(w: WorldData) -> Dictionary:
 	var high := 0
 	var hills := 0
 	var steep_land := 0
+	var gentle_mountains := 0
 	var curvature := 0.0
 	var max_height := 0.0
 	for y in range(1, w.H - 1):
@@ -97,6 +100,8 @@ func _stats(w: WorldData) -> Dictionary:
 			if h < 80.0 or w.river[i] != 0:
 				continue
 			mountains += 1
+			if slope < tan(deg_to_rad(25.0)):
+				gentle_mountains += 1
 			if slope > tan(deg_to_rad(45.0)):
 				steep += 1
 			curvature += (absf(l + r - 2.0 * h) + absf(u + d - 2.0 * h)) * 0.5
@@ -105,6 +110,7 @@ func _stats(w: WorldData) -> Dictionary:
 		if w.lake[i] != 0:
 			lake_cells += 1
 	var out := {seed = w.seed_text, size = w.W, land_share = 0.0,
+		mountain_scale = w.mountain_scale, mountain_bias = w.mountain_bias, mountain_height = w.mountain_height,
 		lake_cells = lake_cells, rivers = w.rivers.size(), settlements = w.settlements.size(),
 		bridges = w.bridges.size(), tunnels = w.tunnels.size(), connected = SelfTest.settlements_connected(w)}
 	var dry := 0
@@ -113,13 +119,111 @@ func _stats(w: WorldData) -> Dictionary:
 			dry += 1
 	out.land_share = float(dry) / w.N
 	out.mountain_share = 100.0 * mountains / maxi(1, land)
+	out.mountain_gentle_share = 100.0 * gentle_mountains / maxi(1, mountains)
 	out.mountain_steep_share = 100.0 * steep / maxi(1, mountains)
 	out.mountain_curvature_m = curvature / maxi(1, mountains)
 	out.max_height_m = max_height
 	out.high_share = 100.0 * high / maxi(1, land)
 	out.hill_share = 100.0 * hills / maxi(1, land)
 	out.steep_land_share = 100.0 * steep_land / maxi(1, land)
+	out.merge(_massif_stats(w))
+	out.mountain_gentle_largest_km2 = _massif_stats(w, true).mountain_largest_km2
+	out.merge(_foothill_stats(w))
 	return out
+
+
+## На редкой сетке сравниваем исходный рельеф с отключённым дополнительным поясом.
+## Это площадь влияния предгорий, а не новый биом; вода и дороги считаются позже по общему рельефу.
+func _foothill_stats(w: WorldData) -> Dictionary:
+	var without := WorldData.new()
+	for key in ["W", "H", "N", "noise", "macro_x", "macro_y", "mountain_scale", "mountain_bias", "mountain_height"]:
+		without.set(key, w.get(key))
+	var before := StageRelief.raw_rect(without, 0, 0, w.W, w.H, false)
+	var after := StageRelief.raw_rect(w, 0, 0, w.W, w.H, false)
+	var land := 0
+	var affected := 0
+	var shift := 0.0
+	var max_shift := 0.0
+	for y in range(4, w.H - 4, 8):
+		for x in range(4, w.W - 4, 8):
+			var i := y * w.W + x
+			if before[i] <= StageRelief.SEA_RAW:
+				continue
+			land += 1
+			var delta := (StageRelief.normalize(after[i]) - StageRelief.normalize(before[i])) * GameConfig.HS
+			max_shift = maxf(max_shift, absf(delta))
+			if absf(delta) > 1.0:
+				affected += 1
+				shift += delta
+	return {foothill_spread = w.foothill_spread, foothill_affected_share = 100.0 * affected / maxi(1, land),
+		foothill_mean_change_m = shift / maxi(1, affected), foothill_max_change_m = max_shift}
+
+
+## Связные участки выше 80 м (8 соседей). Крупный — от 0,04 км²: сравниваем цельность,
+## а не только число высоких клеток. Вода и край карты не входят, как в _stats.
+func _massif_stats(w: WorldData, gentle: bool = false) -> Dictionary:
+	var seen := PackedByteArray()
+	seen.resize(w.N)
+	for y in range(1, w.H - 1):
+		for x in range(1, w.W - 1):
+			var i := y * w.W + x
+			if w.ocean[i] == 0 and w.lake[i] == 0 and w.river[i] == 0 and w.h[i] * GameConfig.HS >= 80.0:
+				if gentle:
+					var dx := (w.h[i + 1] - w.h[i - 1]) * GameConfig.HS
+					var dy := (w.h[i + w.W] - w.h[i - w.W]) * GameConfig.HS
+					if Grid.hypot(dx, dy) / (2.0 * GameConfig.TILE) >= tan(deg_to_rad(25.0)):
+						continue
+				seen[i] = 1
+	var total := 0
+	var large := 0
+	var large_count := 0
+	var largest := 0
+	var cell_area := GameConfig.TILE * GameConfig.TILE / 1e6
+	for i in w.N:
+		if seen[i] != 1:
+			continue
+		var queue := PackedInt32Array([i])
+		seen[i] = 0
+		var head := 0
+		while head < queue.size():
+			var c := queue[head]
+			head += 1
+			for k in 8:
+				var nx: int = c % w.W + Grid.DX[k]
+				var ny: int = c / w.W + Grid.DY[k]
+				if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H:
+					continue
+				var n := ny * w.W + nx
+				if seen[n] == 1:
+					seen[n] = 0
+					queue.append(n)
+		total += queue.size()
+		largest = maxi(largest, queue.size())
+		if queue.size() * cell_area >= 0.04:
+			large += queue.size()
+			large_count += 1
+	return {mountain_largest_km2 = largest * cell_area, mountain_large_share = 100.0 * large / maxi(1, total), mountain_large_count = large_count}
+
+
+## Проверка разнообразия на всей фиксированной подборке, а не требование гор к каждому сиду.
+func _variety_check(results: Array) -> void:
+	var sparse := false
+	var rich := false
+	var low := INF
+	var high := 0.0
+	var low_foothills := INF
+	var high_foothills := 0.0
+	for s: Dictionary in results:
+		sparse = sparse or (s.mountain_large_count == 1 and s.mountain_share < 8.0)
+		rich = rich or (s.mountain_share > 20.0 and s.mountain_largest_km2 > 0.2)
+		low = minf(low, s.max_height_m)
+		high = maxf(high, s.max_height_m)
+		low_foothills = minf(low_foothills, s.foothill_affected_share)
+		high_foothills = maxf(high_foothills, s.foothill_affected_share)
+	_check(sparse, "есть мир с одним крупным горным участком среди низкой местности")
+	_check(rich, "есть мир с протяжённой горной областью")
+	_check(high - low > 80.0, "высота миров заметно различается")
+	_check(high_foothills - low_foothills > 10.0, "распространённость предгорий различается между сидами")
 
 
 func _init() -> void:
@@ -138,6 +242,8 @@ func _init() -> void:
 		s.generation_ms = ms
 		results.append(s)
 		print("%s@%d: %d мс; горы %.1f%%; на них >45° %.1f%%; излом %.2f м; рек %d; поселений %d; связь %s" % [w.seed_text, w.W, ms, s.mountain_share, s.mountain_steep_share, s.mountain_curvature_m, w.rivers.size(), w.settlements.size(), s.connected])
+	if not OS.get_cmdline_user_args().has("--quick"):
+		_variety_check(results)
 	var path := Dev.arg("out")
 	if path != "":
 		Dev.save_json(Dev.abs_dir(path), results)

@@ -156,9 +156,12 @@ func _init() -> void:
 	quit(1 if _fails > 0 else 0)
 
 
-## Пройти или проехать сооружение s по оси от точки за 2 м до начала до точки за 2 м после конца.
+## Пройти или проехать сооружение s по оси от точки за 2 м до начала до сухого берега за концом.
 ## true, если дошли и всё время держались на высоте настила или пола (не провалились, не взлетели)
 func _cross(w: WorldData, heights: Heightfield, s: Dictionary, ride: bool) -> bool:
+	# 1 м больше вылета колеса WHEEL_REACH: велосипед целиком вышел на берег.
+	# Дальше оси дорога может повернуть: прямой выезд на 2 м иногда упирается в перила соседнего моста.
+	const EXIT := 1.0
 	var yaw := atan2(-s.ux, -s.uz)
 	var p := PlayerState.new()
 	p.x = s.ax - s.ux * 2.0
@@ -171,7 +174,7 @@ func _cross(w: WorldData, heights: Heightfield, s: Dictionary, ride: bool) -> bo
 		else:
 			p.step(1.0, 0.0, false, false, yaw, DT, w, heights)
 		var t: float = (p.x - s.ax) * s.ux + (p.z - s.az) * s.uz
-		if t > s.len + 2.0:
+		if t > s.len + EXIT:
 			return true
 		# у концов настил может уходить под берег, а пол туннеля — под землю у входа
 		if t > 3.0 and t < s.len - 3.0:
