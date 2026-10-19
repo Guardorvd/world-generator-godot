@@ -50,9 +50,15 @@ func _world_check(w: WorldData) -> void:
 	var bad_height := 0
 	var uphill := 0
 	var wet_huts := 0
+	var bad_climate := 0
+	var bad_biomes := 0
 	for i in w.N:
 		if not is_finite(w.h[i]):
 			bad_height += 1
+		if not is_finite(w.temp[i]) or not is_finite(w.moist[i]) or not is_finite(w.slope[i]) or w.temp[i] < 0.0 or w.temp[i] > 1.0 or w.moist[i] < 0.0 or w.moist[i] > 1.0 or w.slope[i] < 0.0:
+			bad_climate += 1
+		if w.biome[i] >= Biomes.LIST.size() or (w.lake[i] != 0 and w.biome[i] != Biomes.LAKE) or (w.ocean[i] == 0 and w.lake[i] == 0 and w.biome[i] <= Biomes.LAKE):
+			bad_biomes += 1
 		var d := w.down[i]
 		if w.river[i] != 0 and d >= 0 and w.ocean[d] == 0 and w.lake[d] == 0 and w.h[d] > w.h[i] + 1e-6:
 			uphill += 1
@@ -65,6 +71,8 @@ func _world_check(w: WorldData) -> void:
 	_check(bad_height == 0, "%s: конечные высоты (%d)" % [w.seed_text, bad_height])
 	_check(uphill == 0, "%s: сток рек вниз (%d)" % [w.seed_text, uphill])
 	_check(wet_huts == 0, "%s: дома на суше (%d)" % [w.seed_text, wet_huts])
+	_check(bad_climate == 0, "%s: конечные и допустимые значения климата/уклона (%d)" % [w.seed_text, bad_climate])
+	_check(bad_biomes == 0, "%s: биомы согласованы с сушей и озёрами (%d)" % [w.seed_text, bad_biomes])
 	_check(SelfTest.settlements_connected(w), "%s: поселения связаны" % w.seed_text)
 
 
@@ -129,7 +137,81 @@ func _stats(w: WorldData) -> Dictionary:
 	out.merge(_massif_stats(w))
 	out.mountain_gentle_largest_km2 = _massif_stats(w, true).mountain_largest_km2
 	out.merge(_foothill_stats(w))
+	out.merge(_traversal_stats(w))
 	return out
+
+
+## Оценка только земли, без путей и физики. Уклон до 25° проверяется по каждому ребру,
+## а не центральной разностью, которая может пропустить узкую ступеньку или гребень.
+## Оставляем центр лишь там, где все 3 × 3 клетки пригодны: исключаем узкие полки у воды/обрыва.
+## Связность по четырём сторонам не позволяет перескочить угол препятствия по диагонали.
+func _traversal_stats(w: WorldData) -> Dictionary:
+	var gentle := PackedByteArray()
+	gentle.resize(w.N)
+	var wide := gentle.duplicate()
+	var mountain_cells := 0
+	var step_limit := tan(deg_to_rad(25.0)) * GameConfig.TILE / GameConfig.HS
+	for y in range(1, w.H - 1):
+		for x in range(1, w.W - 1):
+			var i := y * w.W + x
+			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
+				continue
+			if w.h[i] * GameConfig.HS >= 80.0:
+				mountain_cells += 1
+			var ok := true
+			for offset in [1, -1, w.W, -w.W]:
+				if absf(w.h[i + offset] - w.h[i]) > step_limit:
+					ok = false
+			gentle[i] = int(ok)
+	var wide_mountains := 0
+	for y in range(2, w.H - 2):
+		for x in range(2, w.W - 2):
+			var i := y * w.W + x
+			var ok := gentle[i] != 0
+			for k in 8:
+				if gentle[i + Grid.DY[k] * w.W + Grid.DX[k]] == 0:
+					ok = false
+			wide[i] = int(ok)
+			if ok and w.h[i] * GameConfig.HS >= 80.0:
+				wide_mountains += 1
+	var linked_mountains := 0
+	var best_rise := 0.0
+	var rise_area := 0
+	var largest := 0
+	for i in w.N:
+		if wide[i] == 0:
+			continue
+		var queue := PackedInt32Array([i])
+		wide[i] = 0
+		var head := 0
+		var low := INF
+		var high := 0.0
+		var mountains := 0
+		var foot := false
+		while head < queue.size():
+			var c := queue[head]
+			head += 1
+			var h := w.h[c] * GameConfig.HS
+			low = minf(low, h)
+			high = maxf(high, h)
+			mountains += int(h >= 80.0)
+			foot = foot or (h >= 20.0 and h < 60.0)
+			for offset in [1, -1, w.W, -w.W]:
+				var n: int = c + offset
+				if wide[n] != 0:
+					wide[n] = 0
+					queue.append(n)
+		if mountains > 0:
+			if high - low > best_rise:
+				best_rise = high - low
+				rise_area = queue.size()
+			largest = maxi(largest, queue.size())
+			if foot:
+				linked_mountains += mountains
+	return {mountain_wide_share = 100.0 * wide_mountains / maxi(1, mountain_cells),
+		mountain_foot_linked_share = 100.0 * linked_mountains / maxi(1, mountain_cells),
+		traversal_rise_m = best_rise, traversal_rise_area_km2 = rise_area * GameConfig.TILE * GameConfig.TILE / 1e6,
+		traversal_largest_km2 = largest * GameConfig.TILE * GameConfig.TILE / 1e6}
 
 
 ## На редкой сетке сравниваем исходный рельеф с отключённым дополнительным поясом.
@@ -209,6 +291,7 @@ func _massif_stats(w: WorldData, gentle: bool = false) -> Dictionary:
 func _variety_check(results: Array) -> void:
 	var sparse := false
 	var rich := false
+	var long_gentle := false
 	var low := INF
 	var high := 0.0
 	var low_foothills := INF
@@ -216,6 +299,7 @@ func _variety_check(results: Array) -> void:
 	for s: Dictionary in results:
 		sparse = sparse or (s.mountain_large_count == 1 and s.mountain_share < 8.0)
 		rich = rich or (s.mountain_share > 20.0 and s.mountain_largest_km2 > 0.2)
+		long_gentle = long_gentle or (s.traversal_rise_m > 50.0 and s.traversal_rise_area_km2 > 0.01)
 		low = minf(low, s.max_height_m)
 		high = maxf(high, s.max_height_m)
 		low_foothills = minf(low_foothills, s.foothill_affected_share)
@@ -224,9 +308,34 @@ func _variety_check(results: Array) -> void:
 	_check(rich, "есть мир с протяжённой горной областью")
 	_check(high - low > 80.0, "высота миров заметно различается")
 	_check(high_foothills - low_foothills > 10.0, "распространённость предгорий различается между сидами")
+	_check(long_gentle, "есть протяжённые пологие горные участки с перепадом более 50 м")
+
+
+## Контроль самой оценки: широкий склон проходит, крутой склон и одноклеточная полка — нет.
+func _traversal_check() -> void:
+	var w := WorldData.new()
+	w.W = 32
+	w.H = 32
+	w.N = w.W * w.H
+	w.h.resize(w.N)
+	w.ocean.resize(w.N)
+	w.lake.resize(w.N)
+	w.river.resize(w.N)
+	for i in w.N:
+		w.h[i] = (40.0 + 1.5 * (i % w.W)) / GameConfig.HS
+	var gentle := _traversal_stats(w)
+	_check(gentle.mountain_foot_linked_share > 50.0 and gentle.traversal_rise_m > 40.0, "оценка видит широкий подъём от подножия")
+	for i in w.N:
+		w.ocean[i] = int(i / w.W != 16)
+	_check(_traversal_stats(w).mountain_wide_share == 0.0, "оценка исключает узкую полку у воды")
+	w.ocean.fill(0)
+	for i in w.N:
+		w.h[i] = (40.0 + 6.0 * (i % w.W)) / GameConfig.HS
+	_check(_traversal_stats(w).mountain_wide_share == 0.0, "оценка исключает крутой склон")
 
 
 func _init() -> void:
+	_traversal_check()
 	var cases: Array = SelfTest.CASES if OS.get_cmdline_user_args().has("--quick") else []
 	if cases.is_empty():
 		for s in SEEDS:
@@ -242,6 +351,7 @@ func _init() -> void:
 		s.generation_ms = ms
 		results.append(s)
 		print("%s@%d: %d мс; горы %.1f%%; на них >45° %.1f%%; излом %.2f м; рек %d; поселений %d; связь %s" % [w.seed_text, w.W, ms, s.mountain_share, s.mountain_steep_share, s.mountain_curvature_m, w.rivers.size(), w.settlements.size(), s.connected])
+		print("  широкие пологие участки гор %.1f%%; связаны с подножием %.1f%%; перепад связного участка %.1f м" % [s.mountain_wide_share, s.mountain_foot_linked_share, s.traversal_rise_m])
 	if not OS.get_cmdline_user_args().has("--quick"):
 		_variety_check(results)
 	var path := Dev.arg("out")

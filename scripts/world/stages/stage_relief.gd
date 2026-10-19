@@ -36,7 +36,7 @@ const FOOTHILL_LIFT := 0.18
 const MASK_EDGE := 0.9
 ## Небольшие долины: масштаб шума в клетках, ширина (в долях шума) и глубина
 const VALLEY := 260.0
-const VALLEY_WIDTH := 0.16
+const VALLEY_WIDTH := 0.24
 const VALLEY_DEPTH := 0.06
 ## Сколько мест старта пробовать и какая доля суши в стартовой области подходит
 const PICK_TRIES := 48
@@ -141,17 +141,19 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var wy := warp_y.fbm(x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0
 	var X := x + wx
 	var Y := y + wy
-	var c := cont.fbm(X / 240.0, Y / 240.0, 6)
+	# С 3.7 мелкие октавы основания слабее внутри гор: они дробили длинные склоны
+	# на короткие крутые бугры, даже у широких сглаженных массивов.
+	var mountain_field := mask_n.fbm(X / (MASSIF * mountain_scale) + 7.0, Y / (MASSIF * mountain_scale) - 3.0, 2) + mountain_bias
+	var t := clampf(mountain_field / MASK_EDGE, 0.0, 1.0)
+	var core := t * t * (3.0 - 2.0 * t)
+	var c := _continental(cont, X / 240.0, Y / 240.0, 1.0 - 0.85 * core)
 	var macro := cont.fbm((X + mx) / MACRO + 91.7, (Y + my) / MACRO - 43.1, 2)
 	var base := c + minf(macro * MACRO_AMP, MACRO_LIFT) + LAND_BIAS
 	# smoothstep развёрнут на месте (см. Parallel)
-	var t := clampf((base + 0.05) / (0.25 + 0.05), 0.0, 1.0)
+	t = clampf((base + 0.05) / (0.25 + 0.05), 0.0, 1.0)
 	var land := t * t * (3.0 - 2.0 * t)
 	# С 3.3 единая широкая область подъёма: две медленные октавы вместо мелкой пятнистой маски.
 	# Плавный край даёт предгорья, сильная середина объединяет несколько гребней в один массив.
-	var mountain_field := mask_n.fbm(X / (MASSIF * mountain_scale) + 7.0, Y / (MASSIF * mountain_scale) - 3.0, 2) + mountain_bias
-	t = clampf(mountain_field / MASK_EDGE, 0.0, 1.0)
-	var core := t * t * (3.0 - 2.0 * t)
 	var mask := core * land
 	# Характер местности (с 1.9.8): медленный шум делит сушу на равнины и холмистые края. На равнинах
 	# слабые окраины гор стихают (там, где горы во всю силу, массив остаётся), а вокруг гор холмистость
@@ -166,7 +168,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# Пояс шире горной маски и неодинаков по периметру: зависит от сида и местных холмов.
 	var width := 0.1 + 0.4 * foothill_spread * (0.6 + 0.4 * rough)
 	t = clampf((mountain_field + width) / (MASK_EDGE * 0.65 + width), 0.0, 1.0)
-	var foothills := t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothill_spread * (0.5 + 0.5 * rough) * (1.0 - 0.75 * valley)
+	var foothills := t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothill_spread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley)
 	t = clampf((mask - FOOTHILLS) / FOOTHILLS, 0.0, 1.0)
 	mask *= rough + (1.0 - rough) * mask * mask
 	rough = maxf(rough, t * t * (3.0 - 2.0 * t))
@@ -180,13 +182,28 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 		var rolling := hill.fbm(X / (100.0 * mountain_scale) + 32.4, Y / (100.0 * mountain_scale) - 18.6, 2)
 		hills += (rolling - hills) * foothills
 		h += foothills * (FOOTHILL_LIFT + 0.08 * rolling) * mountain_height
-	# С 3.2 мелкие холмы слабее внутри массива: широкие склоны не покрываются частыми буграми
-	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough) * (1.0 - mask * 0.6)
+	# Мелкие холмы затухают внутри массива, оставляя место широким склонам и плечам.
+	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough) * (1.0 - mask * 0.85)
 	# То же поле понижений, что ослабляет предгорный подъём.
 	h -= valley * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
 		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / mountain_scale, (y + wy * MOUNTAIN_WARP) / mountain_scale) * mask * MOUNTAIN_AMP * mountain_height
 	return h
+
+
+## Те же шесть октав континентального основания; detail ослабляет только три мелкие.
+## Нормировка прежняя: крупные формы не усиливаются, новых отсчётов шума нет.
+static func _continental(cont: Simplex, x: float, y: float, detail: float) -> float:
+	var a := 1.0
+	var f := 1.0
+	var s := 0.0
+	var n := 0.0
+	for o in 6:
+		s += a * cont.noise(x * f, y * f) * (detail if o >= 3 else 1.0)
+		n += a
+		a *= 0.5
+		f *= 2.0
+	return s / n
 
 
 ## Горы (с 1.9.7). Как и весь рельеф, функция мировых координат, поэтому за краем карты горы продолжаются.
@@ -202,7 +219,7 @@ const CREST_SHARE := 0.75
 ## Масштаб в клетках; вырезается только часть гребней, общее основание сохраняется.
 const INNER_ALONG := 520.0
 const INNER_ACROSS := 180.0
-const INNER_CUT := 0.85
+const INNER_CUT := 0.75
 const SIDE_CUT := 0.28
 ## Горы искривлены слабее остального рельефа: при полном искривлении гребни вытягиваются в одинаковые
 ## волнистые полосы
@@ -315,11 +332,11 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		var t := clampf((side + 0.2) / 0.6, 0.0, 1.0)
 		var opening := t * t * (3.0 - 2.0 * t)
 		# У скалистых гор долины уже и глубже, у сглаженных — широкие и неглубокие.
-		t = clampf(1.0 - absf(course) / ((0.2 + 0.25 * opening) * (1.4 - 0.7 * interior)), 0.0, 1.0)
+		t = clampf(1.0 - absf(course) / ((0.24 + 0.32 * opening) * (1.4 - 0.7 * interior)), 0.0, 1.0)
 		var valley := t * t * (3.0 - 2.0 * t)
 		s -= maxf(0.0, s - (0.18 + 0.16 * opening)) * valley * INNER_CUT * interior
 		# Боковые ложбины соединяются с главной долиной; между ними остаются отроги и седловины.
-		t = clampf(1.0 - absf(side) / 0.16, 0.0, 1.0)
+		t = clampf(1.0 - absf(side) / 0.2, 0.0, 1.0)
 		var branch := t * t * (3.0 - 2.0 * t)
 		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
 		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
