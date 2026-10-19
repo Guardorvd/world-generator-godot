@@ -48,8 +48,9 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
-	public int[] FindPath(float[] cost, int s, int t)
+	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb)
 	{
+		bool terrain = heights.Length > 0 && climb > 0.0;
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
 		var off = _off;
 		var g = _g;
@@ -94,6 +95,11 @@ public partial class FastGrid : RefCounted
 					if (double.IsPositiveInfinity(ca) || double.IsPositiveInfinity(cb))
 						continue;
 					step = Math.Max(step, (ca + cb) * 0.5);
+				}
+				if (terrain)
+				{
+					double grade = Math.Abs((double)heights[n] - heights[c]) / Dl[k];
+					step += climb * grade * grade;
 				}
 				double ng = gc + Dl[k] * step;
 				if (seen[n] != gn || ng < g[n])

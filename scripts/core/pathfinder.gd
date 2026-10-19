@@ -17,6 +17,8 @@ const HEAP_START_CAP := 1 << 16
 
 var W := 0
 var H := 0
+## Высоты в тех же единицах, что шаг сетки. Пустой массив отключает учёт подъёмов.
+var heights := PackedFloat32Array()
 ## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
 var g := PackedFloat32Array()
 var from := PackedInt32Array()
@@ -28,9 +30,10 @@ var gen := 0
 var _fast: Object = null
 
 
-func _init(width: int, height: int) -> void:
+func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32Array()) -> void:
 	W = width
 	H = height
+	heights = terrain
 	_fast = Grid.fast_grid()
 	if _fast != null:
 		_fast.Setup(W, H)
@@ -45,12 +48,14 @@ func _init(width: int, height: int) -> void:
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
-func find_path(cost: PackedFloat32Array, s: int, t: int) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0) -> PackedInt32Array:
 	if _fast != null:
-		return _fast.FindPath(cost, s, t)
+		return _fast.FindPath(cost, s, t, heights, climb)
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
 	var H := self.H
+	var heights := self.heights
+	var terrain := not heights.is_empty() and climb > 0.0
 	var g := self.g
 	var from := self.from
 	var seen := self.seen
@@ -127,6 +132,11 @@ func find_path(cost: PackedFloat32Array, s: int, t: int) -> PackedInt32Array:
 				if ca == INF or cb == INF:
 					continue
 				step = maxf(step, (ca + cb) * 0.5)
+			# Штраф за уклон вдоль шага, а не только за крутизну всей клетки:
+			# по склону можно идти поперёк подъёма. Квадрат предпочитает плавный набор высоты.
+			if terrain:
+				var grade := absf(heights[n] - heights[c]) / DL[k]
+				step += climb * grade * grade
 			var ng := gc + DL[k] * step
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn

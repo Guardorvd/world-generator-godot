@@ -119,7 +119,30 @@ func _init() -> void:
 		var lines := _line_vs_cells(w2, h2)
 		_check(lines[0] == 0, "%s@%d: нарисованные дороги и тропы лежат на их клетках (скорость, без деревьев; мест вне них: %d)" % [c[0], c[1], lines[0]])
 		_check(lines[1] == 0, "%s@%d: дороги и тропы не уходят в глубокую воду мимо мостов (мест: %d)" % [c[0], c[1], lines[1]])
-	_check(kinds.size() == 2, "есть и мосты, и туннели")
+	# Поиск 4.0 чаще обходит хребты; контрольные миры могут обходиться без туннелей.
+	# Независимый стенд сохраняет проверку прохода и стен туннеля при любой географии.
+	var tw := WorldGenerator.generate("abc", 128)
+	tw.h.fill(0.1)
+	tw.ocean.fill(0)
+	tw.lake.fill(0)
+	tw.river.fill(0)
+	tw.biome.fill(Biomes.GRASS)
+	tw.path_mask.fill(3)
+	tw.rivers = []
+	tw.settlements = []
+	tw.bridges = []
+	tw.tunnels = [{a = 64 * tw.W + 40, b = 64 * tw.W + 56}]
+	for y in range(60, 69):
+		for x in range(44, 53):
+			tw.h[y * tw.W + x] = 0.3
+	var th := Heightfield.new(tw)
+	var tunnel: Dictionary = th.structures[0]
+	_check(_cross(tw, th, tunnel, false) and _cross(tw, th, tunnel, true), "контрольный туннель пройден пешком и на велосипеде")
+	var tunnel_leaks := 0
+	for angle in [-PI / 2.0, -PI / 4.0, PI / 4.0, PI / 2.0]:
+		for ride in [false, true]:
+			tunnel_leaks += _into_wall(tw, th, tunnel, angle, ride, DT)
+	_check(tunnel_leaks == 0 and kinds.has(false), "стены контрольного туннеля держат; мосты проверены в мирах")
 
 	# дома: идём и едем прямо в каждый дом поселения появления с восьми сторон
 	var hut_hits := 0
@@ -217,7 +240,9 @@ func _off_structures(w: WorldData, heights: Heightfield) -> int:
 					# его перила не мешают ей, как и в Heightfield.wall_at
 					var feet := heights.level(s, t)
 					var g := heights.ground_at(q.x, q.y)
-					var along := g > feet - Heightfield.STEP and g < feet + Heightfield.TUNNEL_HEIGHT
+					# Высокий берег над перилами проходит отдельно от настила (как в wall_at).
+					var wall_height := Heightfield.TUNNEL_HEIGHT if s.tunnel else 1.5
+					var along := g > feet - Heightfield.STEP and g < feet + wall_height
 					bad = heights.depth_at(q.x, q.y, feet) >= GameConfig.FORD_DEPTH or (along and heights.wall_at(q.x, q.y, feet))
 					if bad and not off:
 						print("  %s у %s %.0f м сходит с него на (%.0f, %.0f)" % [tr.kind, "туннеля" if s.tunnel else "моста", s.len, q.x / GameConfig.TILE, q.y / GameConfig.TILE])
