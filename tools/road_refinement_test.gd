@@ -63,7 +63,7 @@ func _init() -> void:
 						if Grid.segment_dist(px, pz, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN:
 							protected_error = maxf(protected_error, diff)
 		check(boundary < 0.001 and joins < 0.001, "%s: разрыв сетки: %f / %f" % [seed_text, boundary, joins])
-		check(biggest <= 0.651, "%s: превышен предел уточнения: %f" % [seed_text, biggest])
+		check(biggest <= RoadRefinement.FIT_LIMIT + 0.001, "%s: превышен предел уточнения: %f" % [seed_text, biggest])
 		check(protected_error < 0.001, "%s: сдвинут подход сооружения" % seed_text)
 		check(r.patches.size() < w.N * 0.25, "%s: уточнение захватывает слишком много мира" % seed_text)
 		# Оба способа загрузки должны давать одну и ту же поверхность.
