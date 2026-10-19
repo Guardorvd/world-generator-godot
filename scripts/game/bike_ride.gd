@@ -17,6 +17,10 @@ const SPRING_DAMP := 14.0 # затухание подвески, 1/с
 const SAG_MAX := 0.16     # подвеска просаживается не больше этого, м
 const STRETCH_MAX := 0.08 # и вытягивается при прыжке не больше этого, м
 const SOFT_IMPACT := 7.0  # приземление жёстче этого (м/с) гасит скорость
+## С 4.3 на пути людей езда мягче (покрытие — RoadSurface): подъём меньше режет скорость, колёса
+## держатся полотна на мелких изломах, а не подлетают, руль зависит от сцепления покрытия
+const PATH_CLIMB := 4.5   # насколько подъём режет скорость на пути (вне пути 6)
+const PATH_STICK := 0.06  # на пути велосипед не отрывается, пока земля уходит вниз не больше этого за такт, м
 
 var x := 0.0          # метры
 var z := 0.0
@@ -125,6 +129,8 @@ func _slope(heights: Heightfield) -> float:
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var slope := _slope(heights)
 	var climb := slope if speed >= 0.0 else -slope
+	var surf := PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
+	var on_path := surf != RoadSurface.NONE
 	if throttle < 0.0:
 		_brake_hold += dt
 	else:
@@ -134,7 +140,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		if heights.depth_at(x, z, y) > 0.3:
 			top *= 0.4
 		# в подъём заметно медленнее, с горы чуть быстрее
-		top *= 1.0 / (1.0 + climb * 6.0) if climb > 0.0 else 1.0 + minf(-climb, 0.3)
+		top *= 1.0 / (1.0 + climb * (PATH_CLIMB if on_path else 6.0)) if climb > 0.0 else 1.0 + minf(-climb, 0.3)
 
 		var goal := 0.0
 		var rate := GameConfig.BIKE_ROLL
@@ -158,6 +164,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var turn_rate := GameConfig.BIKE_TURN * clampf(absf(speed) / 3.0, 0.15, 1.0) / (1.0 + absf(speed) * 0.04)
 	if airborne:
 		turn_rate *= 0.3
+	elif on_path:
+		turn_rate *= RoadSurface.LIST[surf].grip
 	var free_now := fits(x, z, heading, w, heights)
 	var h0 := heading
 	heading -= steer * turn_rate * dt * (1.0 if speed >= 0.0 else -1.0)
@@ -204,7 +212,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	else:
 		# куда унесло бы велосипед без опоры: если земля уходит вниз быстрее — он летит
 		var fly := y + (vy - GameConfig.GRAVITY * dt * 0.5) * dt
-		if fly > g + 0.01:
+		if fly > g + (PATH_STICK if on_path else 0.01):
 			airborne = true
 			air_time = 0.0
 			vy -= GameConfig.GRAVITY * dt
@@ -236,7 +244,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var lean_goal := 0.0 if airborne else -steer * minf(1.0, absf(speed) / 6.0) * 0.35
 	lean = lerpf(lean, lean_goal, minf(1.0, dt * 6.0))
 	# на неровной местности (лес, кусты, бездорожье) качает сильнее, чем на тропе
-	var rough := clampf(1.3 - PlayerState.terrain_speed(w, x, z), 0.15, 1.0)
+	var rough: float = RoadSurface.LIST[surf].rough if on_path else clampf(1.3 - PlayerState.terrain_speed(w, x, z), 0.15, 1.0)
 	var sway_goal := 0.0
 	if not airborne:
 		sway_goal = (sin(_dist * 1.9) * 0.6 + sin(_dist * 4.7 + 1.3) * 0.4) * 0.03 * rough * minf(1.0, absf(speed) / 5.0)

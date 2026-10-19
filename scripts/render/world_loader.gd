@@ -34,9 +34,11 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
 	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
-	# мосты и туннели известны только после троп: рельеф опускается под туннелями, меш поправляется.
-	# Без потока (_prepare здесь же) рельеф всё равно построен без них, чтобы путь был один
-	var changed := r.heights.build_structures()
+	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
+	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
+	# построен без них, чтобы путь был один
+	var changed := RoadBed.refine(r.heights)
+	changed.append_array(r.heights.build_structures())
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры

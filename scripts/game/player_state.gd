@@ -119,13 +119,24 @@ static func terrain_speed(w: WorldData, x: float, z: float) -> float:
 	var sp: float = Biomes.LIST[info.biome].speed
 	if sp == 0.0:
 		sp = 0.4
-	if info.path == 3:
-		sp = maxf(sp, 1.0) * 1.4
-	elif info.path == 2:
-		sp = maxf(sp, 0.9) * 1.3
+	var surf := surface(info)
+	if surf != RoadSurface.NONE:
+		# с 4.3 скорость пути зависит от покрытия: гравий как прежняя дорога, тропа по лесу или камню медленнее
+		sp = maxf(sp, 1.0 if info.path == 3 else 0.9) * RoadSurface.LIST[surf].speed
 	elif info.path == 1:
 		sp = maxf(sp, 0.8) * 1.12
 	return sp
+
+
+## Покрытие пути людей в клетке из tile_info (RoadSurface.*, NONE — не путь людей). Клетка дороги
+## без своего покрытия (угол диагонали) — гравий, тропы — грунт
+static func surface(info: Dictionary) -> int:
+	if info.is_empty() or info.path < 2:
+		return RoadSurface.NONE
+	var s: int = info.get("surface", RoadSurface.NONE)
+	if s != RoadSurface.NONE:
+		return s
+	return RoadSurface.GRAVEL if info.path == 3 else RoadSurface.DIRT
 
 
 ## Свободна ли точка (x, z) для тела радиуса r с ногами на высоте feet. feet решает, стоит ли тело

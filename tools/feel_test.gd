@@ -31,9 +31,11 @@ func _init() -> void:
 	for k in 8:
 		var a := k * PI / 4.0
 		var ok := true
+		var rise := 0.0   # с 4.3 по наибольшему перепаду на первых метрах, а не только в 3 м: у выровненного
+		                  # полотна у костра несколько сторон ровные в 3 м, но одна из них сразу идёт в подъём
 		for d in [1.0, 2.0, 3.0]:
 			ok = ok and PlayerState.is_passable(w, heights, p.x - sin(a) * d, p.z - cos(a) * d, p.feet)
-		var rise := absf(heights.ground_at(p.x - sin(a) * 3.0, p.z - cos(a) * 3.0) - p.feet)
+			rise = maxf(rise, absf(heights.ground_at(p.x - sin(a) * d, p.z - cos(a) * d) - p.feet) / d)
 		if ok and rise < flattest:
 			flattest = rise
 			walk_yaw = a

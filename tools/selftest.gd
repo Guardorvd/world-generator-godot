@@ -2,7 +2,8 @@ extends SceneTree
 ## Самопроверка генератора: тот же сид должен давать тот же мир.
 ## Хеши массивов мира (FNV-1a по байтам, как в JS-версии) сравниваются с эталоном
 ## tools/selftest_reference.json. До версии 1.7 эталон был снят с JS-версии 1.2; с 1.8 генерация
-## намеренно другая; текущий эталон обновлён для маршрутов 4.2. Ещё проверяется, что по дорогам
+## намеренно другая; текущий эталон обновлён для маршрутов 4.2, с 4.3 в нём ещё покрытие путей и игровой
+## рельеф с полотном (road_surface, road_bed). Ещё проверяется, что по дорогам
 ## и тропам из любого поселения можно дойти до любого другого. Запуск из папки проекта:
 ##   godot --headless --script res://tools/selftest.gd
 ## С ключом -- --print печатает свежие хеши вместо сравнения (так обновляется эталон).
@@ -51,8 +52,10 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	var r := {}
 	for key in ["h", "filled", "elev", "acc", "slope", "temp", "moist", "dist_ocean", "dist_water"]:
 		r[key] = fnv((w.get(key) as PackedFloat32Array).to_byte_array())
-	for key in ["ocean", "lake", "river", "biome", "path_mask"]:
+	for key in ["ocean", "lake", "river", "biome", "path_mask", "road_surface"]:
 		r[key] = fnv(w.get(key))
+	# с 4.3: игровой рельеф с полотном путей (RoadBed), мостами и туннелями
+	r.road_bed = fnv(Heightfield.new(w).hv.to_byte_array())
 	r.seed_num = w.seed_num
 	r.obj_count = w.obj_count
 	r.rivers = w.rivers.size()

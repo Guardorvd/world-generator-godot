@@ -236,8 +236,9 @@ func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
 	var where: String = Biomes.LIST[ti.biome].name
 	if ti.river:
 		where += ", брод через реку"
-	if ti.path == 2:
-		where += ", тропа"
+	var surf := PlayerState.surface(ti)
+	if surf != RoadSurface.NONE:
+		where += ", %s (%s)" % ["дорога" if ti.path == 3 else "тропа", RoadSurface.LIST[surf].name]
 	elif ti.path == 1:
 		where += ", звериная тропа"
 	if depth > 0.3:

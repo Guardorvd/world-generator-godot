@@ -57,7 +57,8 @@ var biome := PackedByteArray()
 var rivers: Array = []        # ломаные из точек {x, y, w — ширина в клетках, e — высота воды}
 var cost := PackedFloat32Array()
 var path_mask := PackedByteArray()   # 1 — звериная тропа, 2 — тропа людей, 3 — дорога
-var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts}]
+var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]
+var road_surface := PackedByteArray() # покрытие клетки пути людей из RoadSurface (с 4.3), 0 — нет
 var bridges: Array = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
 var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array = []   # [{x, y, i, name, huts: [{x, y, v}]}]
@@ -146,5 +147,6 @@ func tile_info(x: float, y: float) -> Dictionary:
 	var i := ty * W + tx
 	return {
 		i = i, biome = biome[i], river = river[i] == 1, path = path_mask[i],
+		surface = road_surface[i] if road_surface.size() == N else 0,
 		elev = elev[i], temp = temp[i], moist = moist[i], slope = slope[i],
 	}

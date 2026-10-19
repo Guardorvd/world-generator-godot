@@ -288,14 +288,30 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas) -> void:
 			cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)
 	for t in w.trails:
 		if t.kind != "animal" and t.kind != "road":
-			cv.stroke_poly(t.pts, Color8(150, 136, 112) if t.kind == "mountain" else Color8(156, 124, 84), 1.0, 1.0, 0.0, PX)
+			_stroke_surface(cv, t, Color8(150, 136, 112) if t.kind == "mountain" else Color8(156, 124, 84), PX)
 	# дороги поверх троп: где тропа слилась с дорогой, видна дорога
 	for t in w.trails:
 		if t.kind == "road":
-			cv.stroke_poly(t.pts, Color8(172, 162, 142), 1.0, 1.0, 0.0, PX)
+			_stroke_surface(cv, t, Color8(172, 162, 142), PX)
 	for t in w.trails:
 		if t.kind == "trail":
 			cv.stroke_poly(t.pts, Color8(190, 160, 115), 0.5, 0.35, 0.0, PX)
+
+
+## Полоса пути цветом покрытия (RoadSurface, с 4.3): ломаная режется на куски с одним покрытием,
+## соседние куски делят общую точку. Без покрытия — цвет fallback, как до 4.3
+static func _stroke_surface(cv: Canvas, t: Dictionary, fallback: Color, PX: int) -> void:
+	var surf: PackedByteArray = t.get("surf", PackedByteArray())
+	if surf.size() != t.pts.size():
+		cv.stroke_poly(t.pts, fallback, 1.0, 1.0, 0.0, PX)
+		return
+	var start := 0
+	for n: int in range(1, t.pts.size() + 1):
+		if n < t.pts.size() and surf[n] == surf[start]:
+			continue
+		var c: Array = RoadSurface.LIST[surf[start]].get("color", [])
+		cv.stroke_poly(t.pts.slice(start, mini(n + 1, t.pts.size())), fallback if c.is_empty() else Color8(c[0], c[1], c[2]), 1.0, 1.0, 0.0, PX)
+		start = n
 
 
 ## Простая растровая «кисть» поверх массива RGB8: круглые концы и стыки, без сглаживания

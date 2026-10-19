@@ -123,5 +123,5 @@ func info(i: int, j: int) -> Dictionary:
 		return {}
 	var f: Dictionary = at[0]
 	var k: int = at[1]
-	return {i = -1, biome = f.biome[k], river = false, path = 0,
+	return {i = -1, biome = f.biome[k], river = false, path = 0, surface = 0,
 		elev = f.elev[k], temp = f.temp[k], moist = f.moist[k], slope = f.slope[k]}

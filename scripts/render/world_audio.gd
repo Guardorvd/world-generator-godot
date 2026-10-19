@@ -151,7 +151,10 @@ func _surface(x: float, z: float, feet: float) -> String:
 	var info := world.tile_info(x / TILE, z / TILE)
 	if info.is_empty():
 		return "soft"
-	if info.path == 3 or HARD.has(info.biome):
+	var surf := PlayerState.surface(info)
+	if surf != RoadSurface.NONE:
+		return "gravel" if RoadSurface.LIST[surf].hard else "soft"
+	if HARD.has(info.biome):
 		return "gravel"
 	return "soft"
 

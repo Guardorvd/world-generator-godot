@@ -27,8 +27,9 @@ var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 
 
-## with_structures — сразу посчитать мосты и туннели (build_structures). WorldLoader строит рельеф раньше, чем
-## тропы готовы, и передаёт false: мосты и туннели в это время ещё пишет генератор
+## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
+## и туннели (build_structures). WorldLoader строит рельеф раньше, чем тропы готовы, и передаёт false:
+## пути, мосты и туннели в это время ещё пишет генератор (его рельеф для поиска — без полотна)
 func _init(w: WorldData, with_structures := true) -> void:
 	world = w
 	var N := w.N
@@ -69,6 +70,7 @@ func _init(w: WorldData, with_structures := true) -> void:
 		elif w.river[i] != 0:
 			water_level[i] = minf(hv_raw[i] - 0.45, hv[i] + 0.95) # брод: не глубже метра
 	if with_structures:
+		RoadBed.refine(self)
 		build_structures()
 
 
