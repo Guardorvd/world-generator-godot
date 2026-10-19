@@ -1,5 +1,5 @@
 extends SceneTree
-## Проверка маршрутов: характер езды, полезные связи 4.1, препятствия и реальные миры.
+## Проверка маршрутов: проезжаемый рельеф 4.2, полезные связи, препятствия и реальные миры.
 ## -- --gdscript проверяет ту же логику без C#; -- --quick — только искусственный рельеф.
 
 const SelfTest := preload("res://tools/selftest.gd")
@@ -127,10 +127,100 @@ func _connection_check(blocked: bool) -> void:
 		_check(not w.trails.is_empty(), "долина рядом с дорогой через гребень создаёт альтернативный проход")
 
 
+func _surface_check() -> void:
+	# Равные концы диагонали не делают её ровной: между ними проходит ребро меша.
+	var saddle := Pathfinder.new(2, 2, PackedFloat32Array([0, 2, 2, 0]))
+	var cost := PackedFloat32Array([1, 1, 1, 1])
+	_check(saddle.find_path(cost, 0, 3, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty(), "дорога не перескакивает скрытый выступ между равными концами диагонали")
+	saddle.links = PackedByteArray([1 << 4, 0, 0, 1 << 7])
+	_check(saddle.find_path(PackedFloat32Array([1, INF, INF, 1]), 0, 3, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == PackedInt32Array([0, 3]), "готовый диагональный настил доступен вдоль оси между непроходимыми берегами")
+	var w := WorldData.new()
+	w.W = 16
+	w.H = 16
+	w.N = w.W * w.H
+	w.h.resize(w.N)
+	w.h.fill(0.1)
+	w.filled.resize(w.N)
+	w.ocean.resize(w.N)
+	w.lake.resize(w.N)
+	w.river.resize(w.N)
+	w.cost.resize(w.N)
+	w.cost.fill(1.0)
+	# Обрыв с пологим обходом в конце: строгий поиск обязан найти этот проход.
+	for y in 12:
+		for x in range(8, 16):
+			w.h[y * w.W + x] += 0.04 * minf(1.0, float(12 - y) / 12.0)
+	var ground := Heightfield.new(w, false)
+	var heights := ground.hv.duplicate()
+	for i in w.N:
+		heights[i] /= GameConfig.TILE
+	var finder := Pathfinder.new(w.W, w.H, heights)
+	var p := finder.find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	var passed := false
+	var drivable := not p.is_empty()
+	for i in p:
+		passed = passed or i / w.W >= 10
+	for k in range(1, p.size()):
+		var a := {x = p[k - 1] % w.W + 0.5, y = p[k - 1] / w.W + 0.5, w = 0.0}
+		var b := {x = p[k] % w.W + 0.5, y = p[k] / w.W + 0.5, w = 0.0}
+		drivable = drivable and StageTrails._road_segment(ground, a, b)
+	_check(drivable and passed, "дорога обходит обрыв через проход с проезжаемым уклоном игрового меша")
+	if Grid.allow_fast:
+		Grid.allow_fast = false
+		_check(Pathfinder.new(w.W, w.H, heights).find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == p, "C# и GDScript совпадают при ограничении реального уклона")
+		Grid.allow_fast = true
+	# Плоский берег разрешён. Вода и склон под краем ленты запрещают срезать угол.
+	w.h.fill(0.1)
+	w.lake[5 * w.W + 6] = 1
+	w.filled[5 * w.W + 6] = 0.14
+	ground = Heightfield.new(w, false)
+	var a := {x = 5.5, y = 4.5, w = 0.9}
+	var b := {x = 5.5, y = 5.5, w = 0.9}
+	_check(StageTrails._road_segment(ground, a, b), "пологий подход непосредственно к воде разрешён")
+	var q := {x = 5.8, y = 4.5, w = 0.9}
+	var r := {x = 5.8, y = 6.5, w = 0.9}
+	_check(not StageTrails._road_segment(ground, q, r), "сглаживание не уводит край дороги в глубокую воду")
+	w.lake.fill(0)
+	w.h[5 * w.W + 6] = 0.2
+	ground = Heightfield.new(w, false)
+	_check(not StageTrails._road_segment(ground, q, r), "сглаживание проверяет крутизну под всей шириной дороги")
+	var axis := PackedByteArray()
+	axis.resize(w.N)
+	axis[5 * w.W + 5] = 1
+	var corner := [a, b, {x = 6.5, y = 5.5, w = 0.9}]
+	_check(StageTrails._road_line(w, corner, axis, ground) == corner, "скругление сохраняет точный вход на ось сооружения")
+	# Непригодная переправа не должна превращаться в мост ради связи любой ценой.
+	w.h.fill(0.1)
+	w.h[4 * w.W + 8] = 0.2
+	w.river[4 * w.W + 6] = 1
+	w.river[4 * w.W + 7] = 1
+	ground = Heightfield.new(w, false)
+	var crossing := Grid.line_cells(5, 4, 8, 4, w.W)
+	var closed := w.cost.duplicate()
+	closed.fill(INF)
+	for i in crossing:
+		closed[i] = 1.0
+	var state := {detour = false, on_axis = axis, surface = ground}
+	_check(StageTrails._structures(w, crossing, true, finder, closed, state).is_empty() and w.bridges.is_empty(), "слишком крутая переправа без безопасного обхода отклоняется")
+	w.river.fill(0)
+	w.h.fill(0.1)
+	ground = Heightfield.new(w, false)
+	_check(StageTrails._bridge_clear(ground, crossing[0], crossing[-1]), "ровный свободный настил допускается")
+	_check(not StageTrails._bridge_clear(Heightfield.new(w, false), 4 * w.W + 5, 4 * w.W + 5), "нулевой мост не создаётся")
+	# Нельзя подменить отсутствующий сухой подход к мосту прямой через преграду.
+	w.cost[4 * w.W + 4] = INF
+	w.cost[3 * w.W + 4] = INF
+	w.cost[5 * w.W + 4] = INF
+	for y in w.H:
+		w.cost[y * w.W + 4] = INF
+	_check(StageTrails._link(w, finder, 4 * w.W + 3, 4 * w.W + 5).is_empty(), "отсутствующий подход к сооружению не заменяется опасной прямой")
+
+
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
 	_terrain_check()
+	_surface_check()
 	_connection_check(false)
 	_connection_check(true)
 	if not args.has("--quick"):

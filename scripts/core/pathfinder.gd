@@ -19,6 +19,8 @@ var W := 0
 var H := 0
 ## Высоты в тех же единицах, что шаг сетки. Пустой массив отключает учёт подъёмов.
 var heights := PackedFloat32Array()
+## Разрешённые шаги по готовому настилу/полу: биты восьми направлений Grid.DX/DY.
+var links := PackedByteArray()
 ## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
 var g := PackedFloat32Array()
 var from := PackedInt32Array()
@@ -48,14 +50,14 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
-func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> PackedInt32Array:
 	if _fast != null:
-		return _fast.FindPath(cost, s, t, heights, climb)
+		return _fast.FindPath(cost, s, t, heights, climb, max_grade, links)
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
 	var H := self.H
 	var heights := self.heights
-	var terrain := not heights.is_empty() and climb > 0.0
+	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
 	var g := self.g
 	var from := self.from
 	var seen := self.seen
@@ -123,10 +125,11 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0) -> 
 			if cn == INF or done[n] == gn:
 				continue
 			var step := (cc + cn) * 0.5
+			var linked := not links.is_empty() and (links[c] & (1 << k)) != 0
 			# диагональный шаг проходит через угол двух соседних клеток: нельзя мимо непроходимой,
 			# и он стоит не меньше, чем их пересечь (иначе путь срезает угол озера и бесплатно переходит
 			# реку, текущую по диагонали)
-			if k >= 4:
+			if k >= 4 and not linked:
 				var ca := cost[c + DX[k]]
 				var cb := cost[c + DY[k] * W]
 				if ca == INF or cb == INF:
@@ -136,7 +139,15 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0) -> 
 			# по склону можно идти поперёк подъёма. Квадрат предпочитает плавный набор высоты.
 			if terrain:
 				var grade := absf(heights[n] - heights[c]) / DL[k]
-				step += climb * grade * grade
+				# Эта диагональ пересекает два треугольника меша: между равными концами
+				# может быть крутая ложбина или выступ. Вторая диагональ идёт по ребру.
+				if (k == 4 or k == 7) and not linked:
+					var mid := (float(heights[c + DX[k]]) + heights[c + DY[k] * W]) * 0.5
+					grade = maxf(absf(mid - heights[c]), absf(heights[n] - mid)) * 2.0 / DL[k]
+				if grade > max_grade:
+					continue
+				var steep := maxf(0.0, grade - 0.22)
+				step += climb * (grade * grade + 4.0 * steep * steep)
 			var ng := gc + DL[k] * step
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn

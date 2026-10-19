@@ -48,9 +48,9 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
-	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb)
+	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links)
 	{
-		bool terrain = heights.Length > 0 && climb > 0.0;
+		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
 		var off = _off;
 		var g = _g;
@@ -89,7 +89,8 @@ public partial class FastGrid : RefCounted
 				if (double.IsPositiveInfinity(cn) || done[n] == gn)
 					continue;
 				double step = (cc + cn) * 0.5;
-				if (k >= 4)
+				bool linked = links.Length > 0 && (links[c] & (1 << k)) != 0;
+				if (k >= 4 && !linked)
 				{
 					double ca = cost[c + Dx[k]], cb = cost[c + Dy[k] * W];
 					if (double.IsPositiveInfinity(ca) || double.IsPositiveInfinity(cb))
@@ -99,7 +100,15 @@ public partial class FastGrid : RefCounted
 				if (terrain)
 				{
 					double grade = Math.Abs((double)heights[n] - heights[c]) / Dl[k];
-					step += climb * grade * grade;
+					if ((k == 4 || k == 7) && !linked)
+					{
+						double mid = ((double)heights[c + Dx[k]] + heights[c + Dy[k] * W]) * 0.5;
+						grade = Math.Max(Math.Abs(mid - heights[c]), Math.Abs(heights[n] - mid)) * 2.0 / Dl[k];
+					}
+					if (grade > maxGrade)
+						continue;
+					double steep = Math.Max(0.0, grade - 0.22);
+					step += climb * (grade * grade + 4.0 * steep * steep);
 				}
 				double ng = gc + Dl[k] * step;
 				if (seen[n] != gn || ng < g[n])
