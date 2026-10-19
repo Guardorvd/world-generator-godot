@@ -62,9 +62,12 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
-	$Terrain.mesh = loaded.terrain_mesh
-	$Terrain.material_override = loaded.terrain_material
-	for node: Node in loaded.water:
+	var terrain := ArrayMesh.new()
+	if not loaded.terrain_arrays.is_empty():
+		terrain.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, loaded.terrain_arrays)
+	$Terrain.mesh = terrain
+	$Terrain.material_override = TerrainBuilder.material(loaded.terrain_image)
+	for node: Node in WaterBuilder.build(world, loaded.water_arrays):
 		$Water.add_child(node)
 		if node.name == "Ocean":
 			_ocean = node
@@ -322,9 +325,9 @@ func _process(delta: float) -> void:
 	_apply_shadows()
 	_update_camera(alpha, delta)
 
-	vegetation.update(pos.x, pos.z, false)
+	var uploaded := vegetation.update(pos.x, pos.z, false)
 	if world.outer != null:
-		outer.update(pos.x, pos.z)
+		outer.update(pos.x, pos.z, not uploaded)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
 	for l: Label3D in labels:

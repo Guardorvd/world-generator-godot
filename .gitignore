@@ -16,4 +16,5 @@ data_*/
 mono_crash.*.json
 
 # Прогоны контроля разработки (база — в tools/control/baseline)
-tools/control/runs/
+tools/control/runs/*
+!tools/control/runs/.gdignore

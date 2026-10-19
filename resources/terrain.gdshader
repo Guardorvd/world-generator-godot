@@ -35,7 +35,13 @@ void fragment() {
 	float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));
 	float n_big = texture(detail_tex, p * (1.0 / 37.0)).r;
 	float n_mid = texture(detail_tex, p * (1.0 / 7.3)).r;
-	float n_fine = texture(detail_tex, p * (1.0 / 1.9)).r;
+	float n_fine = 0.5;
+	vec3 detail_n = vec3(0.5, 0.5, 1.0);
+	// Вдали вес этих деталей нулевой: не читать две текстуры для невидимой детали.
+	if (near > 0.0) {
+		n_fine = texture(detail_tex, p * (1.0 / 1.9)).r;
+		detail_n = texture(detail_normal, p * (1.0 / 2.3)).rgb;
+	}
 	vec3 col;
 	if (use_vertex_color) {
 		col = COLOR.rgb;
@@ -55,6 +61,6 @@ void fragment() {
 	ALBEDO = col * (1.0 + v);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
-	NORMAL_MAP = texture(detail_normal, p * (1.0 / 2.3)).rgb;
+	NORMAL_MAP = detail_n;
 	NORMAL_MAP_DEPTH = (0.6 + 0.6 * rock) * near;
 }

@@ -101,6 +101,14 @@ func noise_field(name: String) -> PackedFloat64Array:
 	return _fields[name]
 
 
+## Поля нужны только этапам генерации; готовый мир не держит четыре временных карты шума.
+func clear_noise_fields() -> void:
+	if _fields_thread != null:
+		_fields_thread.wait_to_finish()
+		_fields_thread = null
+	_fields.clear()
+
+
 ## Уникальное название из двух частей (см. scripts/data/names.gd)
 func make_name(parts: Dictionary) -> String:
 	var a: Array = parts.first

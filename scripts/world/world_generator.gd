@@ -48,5 +48,6 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w)
 	StageLakes.run(w)
+	w.clear_noise_fields()
 	step.call(0.86, "Отрисовка ландшафта")
 	return w

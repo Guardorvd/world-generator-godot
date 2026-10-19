@@ -109,7 +109,7 @@ static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel:
 	var fast := Grid.fast_grid()
 	if fast != null:
 		var n := w.noise
-		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, parallel)
 	if not parallel:
 		return _rows(w, x0, y0, cw, 0, ch)
 	var h := PackedFloat32Array()

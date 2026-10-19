@@ -215,10 +215,10 @@ func _process(delta: float) -> bool:
 			ahead.y = hf.ground_at(ahead.x, ahead.z) + GameConfig.EYE
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
-			game.vegetation.update(p.x, p.z, false)
+			var uploaded := game.vegetation.update(p.x, p.z, false)
 			# рельеф за краем карты подгружается по ходу, как в игре
 			if game.world.outer != null:
-				game.outer.update(p.x, p.z)
+				game.outer.update(p.x, p.z, not uploaded)
 			_count("road")
 			if t >= float(cfg.road_s):
 				return _finish(true)

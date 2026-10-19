@@ -20,14 +20,13 @@ static func _normal(hv: PackedFloat32Array, W: int, H: int, i: int, j: int) -> V
 	return Vector3(l - r, 2.0 * TILE, u - d).normalized()
 
 
-## Меш без материала: его можно строить в фоновом потоке, пока запекается текстура
-static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
+## Только CPU-массивы: подготовка в фоне, загрузка на GPU — в GameWorld.start.
+static func build_arrays(w: WorldData, heights: Heightfield) -> Array:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
-	var mesh := ArrayMesh.new()
 	if W < 2 or H < 2:
-		return mesh # меньше двух клеток в любую сторону не из чего собрать треугольники
+		return []
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
 	var uv := PackedVector2Array()
@@ -62,18 +61,16 @@ static func build_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:
 	arrays[Mesh.ARRAY_NORMAL] = nor
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return mesh
+	return arrays
 
 
 ## Поправить высоты меша в клетках changed (и нормали вокруг них) по heights.hv
-static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: PackedInt32Array) -> void:
+static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: PackedInt32Array) -> void:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
-	if changed.is_empty() or mesh.get_surface_count() == 0:
-		return # нечего поправлять (или меш пустой и поправлять нечего)
-	var arrays := mesh.surface_get_arrays(0)
+	if changed.is_empty() or arrays.is_empty():
+		return
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
 	for k: int in changed:
@@ -85,8 +82,6 @@ static func patch(mesh: ArrayMesh, w: WorldData, heights: Heightfield, changed: 
 				nor[j * W + i] = _normal(hv, W, H, i, j)
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
-	mesh.clear_surfaces()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 
 
 ## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни).

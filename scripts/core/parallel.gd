@@ -55,7 +55,7 @@ static func fbm_field(W: int, H: int, noise: Simplex, d: float, oct: int, ox: fl
 static func fbm_rect(noise: Simplex, x0: int, y0: int, cw: int, ch: int, d: float, oct: int) -> PackedFloat64Array:
 	var fast := Grid.fast_grid()
 	if fast != null:
-		return fast.FbmRect(noise.perm, x0, y0, cw, ch, d, oct, 0.0, 0.0)
+		return fast.FbmRect(noise.perm, x0, y0, cw, ch, d, oct, 0.0, 0.0, false)
 	var n := noise.clone()
 	var r := PackedFloat64Array()
 	r.resize(cw * ch)

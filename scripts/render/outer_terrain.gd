@@ -1,7 +1,7 @@
 class_name OuterTerrain
 extends Node3D
 ## Рельеф за краем стартовой области (с 1.9.5): куски OuterLand вокруг игрока. Кусок считается и
-## собирается в меш в задаче WorkerThreadPool, ближние первыми, а в дерево сцены и в OuterLand.chunks
+## готовится в массивах в задаче WorkerThreadPool, ближние первыми, а меш, узел и OuterLand.chunks
 ## попадает в главном потоке. Дальние куски выгружаются. Меш раскрашен цветами биомов по вершинам
 ## (у стартовой области — запечённая текстура) и примыкает к её краю без щели: клетки карты на границе
 ## берутся из Heightfield.
@@ -23,6 +23,7 @@ var _nodes := {}         # номер куска -> MeshInstance3D (или null,
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
 var _checked_at := Vector2.INF
+var _task_limit := mini(TASKS, maxi(1, OS.get_processor_count() - 2))
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
@@ -57,13 +58,20 @@ func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 
 
 ## Каждый кадр: забрать готовые куски, выгрузить дальние, запустить расчёт ближайших недостающих
-func update(x: float, z: float) -> void:
-	for key: Vector2i in _tasks.keys():
+func update(x: float, z: float, allow_apply: bool = true) -> void:
+	# Не более одного готового куска за кадр, без временного массива ключей каждый кадр.
+	var done: Variant = null
+	for key: Vector2i in _tasks:
 		var t: Dictionary = _tasks[key]
-		if WorkerThreadPool.is_task_completed(t.id):
+		if allow_apply and WorkerThreadPool.is_task_completed(t.id):
 			WorkerThreadPool.wait_for_task_completion(t.id)
-			_tasks.erase(key)
-			_add(key, t.out.r)
+			done = key
+			# При переносе игрока результат старого запроса уже может оказаться слишком далеко.
+			if _center(key).distance_to(Vector2(x, z)) <= DROP:
+				_add(key, t.out.r)
+			break
+	if done != null:
+		_tasks.erase(done)
 	if Vector2(x, z).distance_to(_checked_at) > RECHECK:
 		_checked_at = Vector2(x, z)
 		for key: Vector2i in _nodes.keys():
@@ -77,7 +85,7 @@ func update(x: float, z: float) -> void:
 			if not _nodes.has(key) and not _tasks.has(key):
 				_queue.append(key)
 		_queue.reverse()
-	while _tasks.size() < TASKS and not _queue.is_empty():
+	while _tasks.size() < _task_limit and not _queue.is_empty():
 		var key: Vector2i = _queue.pop_back()
 		if _nodes.has(key):
 			continue # уже загружен сразу (preload_around)
@@ -135,10 +143,18 @@ func _center(key: Vector2i) -> Vector2:
 func _add(key: Vector2i, built: Dictionary) -> void:
 	land.chunks[key] = built.fields
 	var mi: MeshInstance3D = null
-	if built.mesh != null:
+	if not built.arrays.is_empty():
+		var mesh := ArrayMesh.new()
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, built.arrays, [], built.lods)
 		mi = MeshInstance3D.new()
-		mi.mesh = built.mesh
+		mi.mesh = mesh
+		var center := _center(key)
+		mi.position = Vector3(center.x, 0.0, center.y)
 		mi.material_override = _mat
+		mi.lod_bias = 0.25
+		# Радиус загрузки считается до ближайшей точки куска, видимость — с запасом на его половину.
+		mi.visibility_range_end = RADIUS + C * TILE * sqrt(2.0) * 0.5
+		mi.visibility_range_end_margin = RECHECK
 		# далёкий рельеф без теней: каждая тень — ещё по проходу отрисовки на кусок, а вдали их скрывает туман
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(mi)
@@ -192,7 +208,7 @@ func _build(key: Vector2i) -> Dictionary:
 		for a in V:
 			var k := (b + 1) * S + a + 1
 			var v := b * V + a
-			pos[v] = Vector3((i0 + a + 0.5) * TILE, hs[k], (j0 + b + 0.5) * TILE)
+			pos[v] = Vector3((a + 0.5 - C * 0.5) * TILE, hs[k], (b + 0.5 - C * 0.5) * TILE)
 			nor[v] = Vector3(hs[k - 1] - hs[k + 1], 2.0 * TILE, hs[k - S] - hs[k + S]).normalized()
 			vc[v] = col[k]
 	var idx := PackedInt32Array()
@@ -210,14 +226,56 @@ func _build(key: Vector2i) -> Dictionary:
 			idx.append(p + 1)
 			idx.append(p + V + 1)
 			idx.append(p + V)
-	var mesh: ArrayMesh = null
+	var arrays: Array = []
+	var lods := {}
 	if not idx.is_empty():
-		var arrays := []
 		arrays.resize(Mesh.ARRAY_MAX)
 		arrays[Mesh.ARRAY_VERTEX] = pos
 		arrays[Mesh.ARRAY_NORMAL] = nor
 		arrays[Mesh.ARRAY_COLOR] = vc
 		arrays[Mesh.ARRAY_INDEX] = idx
-		mesh = ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	return {fields = f, mesh = mesh}
+		# Частично закрытые картой куски сохраняют исходные треугольники и точный край выреза.
+		if not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):
+			lods = _lod(pos)
+	return {fields = f, arrays = arrays, lods = lods}
+
+
+## Один LOD с шагом две клетки. Периметр остаётся с шагом в клетку при любом LOD соседей.
+## Выбор по экранной ошибке делает Godot; отдельного переключателя в игровом кадре нет.
+static func _lod(pos: PackedVector3Array) -> Dictionary:
+	var V := C + 1
+	var idx := PackedInt32Array()
+	var error := 0.0
+	for b in range(0, C, 2):
+		for a in range(0, C, 2):
+			var p := b * V + a
+			var q := p + 2 * V
+			var h00 := pos[p].y
+			var h10 := pos[p + 2].y
+			var h01 := pos[q].y
+			var h11 := pos[q + 2].y
+			error = maxf(error, absf(pos[p + 1].y - (h00 + h10) * 0.5))
+			error = maxf(error, absf(pos[q + 1].y - (h01 + h11) * 0.5))
+			error = maxf(error, absf(pos[p + V].y - (h00 + h01) * 0.5))
+			error = maxf(error, absf(pos[p + V + 2].y - (h10 + h11) * 0.5))
+			error = maxf(error, absf(pos[p + V + 1].y - (h10 + h01) * 0.5))
+			if a > 0 and b > 0 and a + 2 < C and b + 2 < C:
+				idx.append_array([p, p + 2, q, p + 2, q + 2, q])
+				continue
+			# Веер к центру квадрата: только внешние рёбра сохраняют промежуточную вершину.
+			var ring: Array[int] = [p]
+			if b == 0:
+				ring.append(p + 1)
+			ring.append(p + 2)
+			if a + 2 == C:
+				ring.append(p + V + 2)
+			ring.append(q + 2)
+			if b + 2 == C:
+				ring.append(q + 1)
+			ring.append(q)
+			if a == 0:
+				ring.append(p + V)
+			for k in ring.size():
+				idx.append_array([p + V + 1, ring[k], ring[(k + 1) % ring.size()]])
+	# Запас на смену диагоналей у края. На резком рельефе LOD включается дальше.
+	return {maxf(0.5, error * 2.0): idx}

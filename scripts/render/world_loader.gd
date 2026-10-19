@@ -1,7 +1,7 @@
 class_name WorldLoader
 extends RefCounted
-## Всё, что нужно игре от мира, собранное в фоновом потоке: данные мира, рельеф в метрах, меши рельефа
-## и воды, материал рельефа и карта. Узлы сцены не в дереве, поэтому сборка не трогает главный поток.
+## Данные для игры, подготовленные в фоне: мир, высоты, массивы геометрии и изображения.
+## Узлы отображения и GPU-ресурсы создаёт GameWorld.start в главном потоке.
 ## Заливка текстуры и карты, рельеф и вода зависят только от рельефа, климата и биомов (без троп и поселений),
 ## поэтому считаются в отдельном потоке, пока генератор прокладывает тропы и сажает лес.
 ## Этот поток читает только то, что после климата уже не меняется (рельеф, вода, реки, биомы). Мосты и
@@ -10,9 +10,9 @@ extends RefCounted
 
 var world: WorldData
 var heights: Heightfield
-var terrain_mesh: ArrayMesh
-var terrain_material: ShaderMaterial
-var water: Array[MeshInstance3D] = []
+var terrain_arrays: Array
+var terrain_image: Image
+var water_arrays: Array[Array]
 var map_image: Image
 
 
@@ -38,7 +38,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# Без потока (_prepare здесь же) рельеф всё равно построен без них, чтобы путь был один
 	var changed := r.heights.build_structures()
 	if changed.size() > 0:
-		TerrainBuilder.patch(r.terrain_mesh, r.world, r.heights, changed)
+		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
 	r.world.outer = OuterLand.new(r.world)
 	if on_progress.is_valid():
@@ -48,18 +48,18 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
 	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
 	var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
-	r.terrain_material = TerrainBuilder.material(MapBaker.finish(r.world, px, tex_bytes)[0])
+	r.terrain_image = MapBaker.finish(r.world, px, tex_bytes)[0]
 	WorkerThreadPool.wait_for_task_completion(map_task)
 	return r
 
 
-## Часть загрузки, которой нужны только рельеф, вода и биомы: заливка картинок, рельеф в метрах, меши.
+## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
 ## Возвращает заливку [[без отмывки, с отмывкой] для px] и, если px не 2, ещё такую же пару для карты
 func _prepare(w: WorldData, px: int) -> Array:
 	var painted := [MapBaker.paint(w, px)]
 	if px != 2:
 		painted.append(MapBaker.paint(w, 2))
 	heights = Heightfield.new(w, false)
-	terrain_mesh = TerrainBuilder.build_mesh(w, heights)
-	water = WaterBuilder.build(w, heights)
+	terrain_arrays = TerrainBuilder.build_arrays(w, heights)
+	water_arrays = WaterBuilder.prepare(w, heights)
 	return painted

@@ -22,8 +22,9 @@ public partial class FastGrid : RefCounted
 	private int[] _from = Array.Empty<int>();
 	private int[] _seen = Array.Empty<int>();
 	private int[] _done = Array.Empty<int>();
-	private int[] _heapIds = new int[1 << 16];
-	private double[] _heapKeys = new double[1 << 16];
+	// Шумы и гидрология тоже создают FastGrid, но буферы A* нужны только после Setup.
+	private int[] _heapIds = Array.Empty<int>();
+	private double[] _heapKeys = Array.Empty<double>();
 	private int _gen;
 	private readonly int[] _off = new int[8];
 
@@ -38,6 +39,11 @@ public partial class FastGrid : RefCounted
 		_from = new int[w * h];
 		_seen = new int[w * h];
 		_done = new int[w * h];
+		if (_heapIds.Length == 0)
+		{
+			_heapIds = new int[1 << 16];
+			_heapKeys = new double[1 << 16];
+		}
 		_gen = 0;
 	}
 
@@ -269,20 +275,32 @@ public partial class FastGrid : RefCounted
 	/// <summary>Поле fbm(x / d + ox, y / d + oy, oct) по всем клеткам. Копия Parallel.fbm_field.</summary>
 	public double[] FbmField(int[] perm, int W, int H, double d, int oct, double ox, double oy)
 	{
-		return FbmRect(perm, 0, 0, W, H, d, oct, ox, oy);
+		return FbmRect(perm, 0, 0, W, H, d, oct, ox, oy, true);
 	}
 
 	/// <summary>То же поле по прямоугольнику клеток W × H с углом (x0, y0), в том числе за картой (OuterLand).</summary>
-	public double[] FbmRect(int[] perm, int x0, int y0, int W, int H, double d, int oct, double ox, double oy)
+	public double[] FbmRect(int[] perm, int x0, int y0, int W, int H, double d, int oct, double ox, double oy, bool parallel)
 	{
 		var r = new double[W * H];
-		System.Threading.Tasks.Parallel.For(0, H, j =>
+		void Row(int j)
 		{
 			int y = y0 + j;
 			for (int i = 0; i < W; i++)
 				r[j * W + i] = Fbm(perm, (x0 + i) / d + ox, y / d + oy, oct);
-		});
+		}
+		RunRows(H, parallel, Row);
 		return r;
+	}
+
+	// Куски уже параллельны на WorkerThreadPool Godot. Вложенный пул .NET здесь
+	// лишь отнимает ядра у кадра и растительности. Целое поле при загрузке распараллеливаем.
+	private static void RunRows(int height, bool parallel, Action<int> row)
+	{
+		if (parallel)
+			System.Threading.Tasks.Parallel.For(0, height, row);
+		else
+			for (int j = 0; j < height; j++)
+				row(j);
 	}
 
 	/// <summary>Масштаб и вклад шума материков: копия StageRelief.MACRO, MACRO_AMP, MACRO_LIFT.</summary>
@@ -309,10 +327,10 @@ public partial class FastGrid : RefCounted
 	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
 	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel)
 	{
 		var outH = new float[W * H];
-		System.Threading.Tasks.Parallel.For(0, H, j =>
+		void Row(int j)
 		{
 			int y = y0 + j;
 			for (int i = 0; i < W; i++)
@@ -362,7 +380,8 @@ public partial class FastGrid : RefCounted
 					h += Mountain(ridge, hill, (x + wx * MountainWarp) / mountainScale, (y + wy * MountainWarp) / mountainScale) * m * MountainAmp * mountainHeight;
 				outH[j * W + i] = (float)h;
 			}
-		});
+		}
+		RunRows(H, parallel, Row);
 		return outH;
 	}
 

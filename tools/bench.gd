@@ -1,5 +1,6 @@
 extends SceneTree
-## Замер скорости загрузки мира по этапам (WorldLoader.load_world, как при старте игры).
+## Замер подготовки данных мира по этапам (WorldLoader.load_world).
+## Создание GPU-ресурсов в GameWorld.start сюда не входит; полную загрузку измеряет control/perf.gd.
 ## Заливка текстуры, рельеф и вода считаются параллельно с этапами после климата, поэтому их времени
 ## в списке нет: оно прячется за тропами и растительностью. В конце — таблица по этапам с долей от общего времени.
 ## Запуск из папки проекта:
@@ -37,12 +38,9 @@ func _init() -> void:
 	print("%s@%d" % [seed_text, size])
 	var t0 := Time.get_ticks_msec()
 	_t = t0
-	var loaded := WorldLoader.load_world(seed_text, size, func(_p: float, label: String) -> void: _mark(label))
+	WorldLoader.load_world(seed_text, size, func(_p: float, label: String) -> void: _mark(label))
 	_mark("")
 	var total := Time.get_ticks_msec() - t0
 	_print_table(total)
 	print("Всего %d мс" % total)
-	# узлы воды не в дереве сцены: освободить вручную, иначе Godot жалуется на утечки при выходе
-	for node in loaded.water:
-		node.free()
 	quit()
