@@ -2,6 +2,7 @@ class_name Heightfield
 extends RefCounted
 ## Рельеф и вода в метрах: высоты в центрах клеток, русла рек, уровень воды. Копия js/game/heightfield.js.
 ## Чистые данные и математика: по ним строятся меши и считается движение игрока.
+## С 4.4 ground_at также читает локальную метровую сетку дорог RoadRefinement.
 ## С 1.8 здесь же мосты и туннели в метрах (build_structures): настил моста — опора для ног и колёс,
 ## перила моста и стены туннеля не пускают вбок, а пол туннеля — выемка, прорезанная в рельефе.
 
@@ -25,6 +26,7 @@ var ribbons: Array = []             # средние линии рек: масс
 ## Концы настила и пола вровень с землёй, чтобы на них въезжать без ступеньки
 var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
+var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 
 
 ## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
@@ -72,6 +74,7 @@ func _init(w: WorldData, with_structures := true) -> void:
 	if with_structures:
 		RoadBed.refine(self)
 		build_structures()
+		road_refinement = RoadRefinement.build(self)
 
 
 ## Мосты и туннели из w.bridges и w.tunnels в метрах; под туннелями рельеф опускается до пола.
@@ -242,6 +245,15 @@ func _river_ribbons() -> Array:
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
+	if not raw and road_refinement != null:
+		var local := road_refinement.height_at(x, z, world.W)
+		if local != INF:
+			return local
+	return base_ground_at(x, z, raw)
+
+
+## Сетка 4 м без локальной детализации, также используется при её подготовке.
+func base_ground_at(x: float, z: float, raw: bool = false) -> float:
 	var W := world.W
 	var arr := hv_raw if raw else hv
 	var fx := x / TILE - 0.5

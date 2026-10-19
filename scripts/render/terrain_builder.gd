@@ -3,6 +3,7 @@ extends RefCounted
 ## Меш рельефа: сетка с вершиной в центре каждой клетки, раскрашенная запечённой картой биомов.
 ## Треугольники те же, что в JS-версии и в Heightfield.ground_at; порядок вершин обратный,
 ## потому что в Godot лицевая сторона — по часовой стрелке.
+## С 4.4 квадраты у дорог заменяются метровой сеткой RoadRefinement, остальные остаются прежними.
 
 const TILE := GameConfig.TILE
 const SHADER := preload("res://resources/terrain.gdshader")
@@ -61,6 +62,8 @@ static func build_arrays(w: WorldData, heights: Heightfield) -> Array:
 	arrays[Mesh.ARRAY_NORMAL] = nor
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
+	if heights.road_refinement != null:
+		refine_arrays(arrays, w, heights)
 	return arrays
 
 
@@ -82,6 +85,76 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 				nor[j * W + i] = _normal(hv, W, H, i, j)
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
+
+
+## Заменить только квадраты у путей сеткой 1 м. Это часть земли, отдельной накладной ленты нет.
+static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> void:
+	var refinement := heights.road_refinement
+	if arrays.is_empty() or refinement == null:
+		return
+	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
+	var colors := PackedColorArray()
+	colors.resize(pos.size())
+	colors.fill(Color(0, 0, 0, 0))
+	var uv2 := PackedVector2Array()
+	uv2.resize(pos.size())
+	var idx := PackedInt32Array()
+	var old: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var vertex_ids := {} # общие метровые вершины соседних патчей не дублируются
+	for j in w.H - 1:
+		for i in w.W - 1:
+			if not refinement.patches.has(j * w.W + i):
+				var at := (j * (w.W - 1) + i) * 6
+				for k in 6:
+					idx.append(old[at + k])
+	for key: int in refinement.patches:
+		var p: Dictionary = refinement.patches[key]
+		var cx := key % w.W
+		var cz := key / w.W
+		var grid := PackedInt32Array()
+		for z in RoadRefinement.STRIDE:
+			for x in RoadRefinement.STRIDE:
+				var vk := (cz * RoadRefinement.DIV + z) * (w.W * RoadRefinement.DIV) + cx * RoadRefinement.DIV + x
+				if vertex_ids.has(vk):
+					grid.append(vertex_ids[vk])
+					continue
+				var px := (cx + 0.5) * TILE + x * RoadRefinement.STEP
+				var pz := (cz + 0.5) * TILE + z * RoadRefinement.STEP
+				var n := z * RoadRefinement.STRIDE + x
+				var id := pos.size()
+				var normal := _local_normal(heights, px, pz)
+				if x % RoadRefinement.DIV == 0 and z % RoadRefinement.DIV == 0:
+					id = (cz + z / RoadRefinement.DIV) * w.W + cx + x / RoadRefinement.DIV
+					pos[id].y = p.h[n]
+					nor[id] = normal
+					colors[id] = p.color[n]
+					uv2[id] = p.uv[n]
+				else:
+					pos.append(Vector3(px, p.h[n], pz))
+					nor.append(normal)
+					uv.append(Vector2(px / (w.W * TILE), pz / (w.H * TILE)))
+					colors.append(p.color[n])
+					uv2.append(p.uv[n])
+				vertex_ids[vk] = id
+				grid.append(id)
+		for z in RoadRefinement.DIV:
+			for x in RoadRefinement.DIV:
+				var a := z * RoadRefinement.STRIDE + x
+				idx.append_array(PackedInt32Array([grid[a], grid[a + 1], grid[a + RoadRefinement.STRIDE],
+					grid[a + 1], grid[a + RoadRefinement.STRIDE + 1], grid[a + RoadRefinement.STRIDE]]))
+	arrays[Mesh.ARRAY_VERTEX] = pos
+	arrays[Mesh.ARRAY_NORMAL] = nor
+	arrays[Mesh.ARRAY_TEX_UV] = uv
+	arrays[Mesh.ARRAY_TEX_UV2] = uv2
+	arrays[Mesh.ARRAY_COLOR] = colors
+	arrays[Mesh.ARRAY_INDEX] = idx
+
+
+static func _local_normal(heights: Heightfield, x: float, z: float) -> Vector3:
+	return Vector3(heights.ground_at(x - 1.0, z) - heights.ground_at(x + 1.0, z), 2.0,
+		heights.ground_at(x, z - 1.0) - heights.ground_at(x, z + 1.0)).normalized()
 
 
 ## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни).

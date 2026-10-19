@@ -41,6 +41,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	changed.append_array(r.heights.build_structures())
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
+	r.heights.road_refinement = RoadRefinement.build(r.heights)
+	TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
 	r.world.outer = OuterLand.new(r.world)
 	if on_progress.is_valid():
@@ -50,7 +52,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
 	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
 	var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
-	r.terrain_image = MapBaker.finish(r.world, px, tex_bytes)[0]
+	r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
 	WorkerThreadPool.wait_for_task_completion(map_task)
 	return r
 

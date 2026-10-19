@@ -275,7 +275,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				break
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
-			if not bd.has("grass") or w.river[k] != 0 or w.path_mask[k] >= 2:
+			if not bd.has("grass") or w.river[k] != 0:
 				continue
 			if (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2 > rT * rT:
 				continue
@@ -289,6 +289,13 @@ func _fill_grass(px: float, pz: float) -> void:
 					break
 				var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
 				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
+				# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
+				if heights.road_refinement != null:
+					var contact := heights.road_refinement.sample(x, z, w.W)
+					if not contact.is_empty() and contact.weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
+						continue
+				elif w.path_mask[k] >= 2:
+					continue
 				var y := heights.ground_at(x, z)
 				if y < heights.water_level[k]:
 					continue

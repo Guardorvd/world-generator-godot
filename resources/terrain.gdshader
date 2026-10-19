@@ -58,9 +58,27 @@ void fragment() {
 	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
+	// Пути 4.4: цвет и мягкая маска из локальной сетки, без растровых ступеней карты.
+	// Рябь края имеет сантиметровый масштаб и не требует новых вершин.
+	float road = 0.0;
+	if (!use_vertex_color && COLOR.a > 0.0 && UV2.y > 0.0) {
+		float edge_noise = ((n_mid - 0.5) * 0.20 + (n_fine - 0.5) * 0.13) * 4.0 * COLOR.a * (1.0 - COLOR.a);
+		road = smoothstep(0.03, 0.92, COLOR.a + edge_noise);
+		float grains = texture(detail_tex, p * 3.7).r;
+		float pebbles = smoothstep(0.60, 0.78, grains);
+		float tracks = exp(-pow((abs(UV2.x) - 0.48) * 6.0, 2.0));
+		vec3 soil = COLOR.rgb * (0.89 + n_mid * 0.19 + (grains - 0.5) * 0.28 * near);
+		soil *= 1.0 - tracks * 0.10 * near;
+		soil += vec3(pebbles * 0.035 * near);
+		col = mix(col, soil, road);
+		// Мелкое зерно — только свет, бугорки метрового масштаба находятся в геометрии.
+		if (road * near > 0.0) {
+			detail_n = mix(detail_n, texture(detail_normal, p * 2.1).rgb, road * 0.72);
+		}
+	}
 	ALBEDO = col * (1.0 + v);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
 	NORMAL_MAP = detail_n;
-	NORMAL_MAP_DEPTH = (0.6 + 0.6 * rock) * near;
+	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock, 0.3 + UV2.y * 0.5, road) * near;
 }

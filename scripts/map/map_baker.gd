@@ -43,13 +43,13 @@ static func paint(w: WorldData, px: int) -> Array[PackedByteArray]:
 
 
 ## Векторный слой (поселения, реки, тропы) поверх заливки из paint, когда мир готов целиком
-static func finish(w: WorldData, px: int, painted: Array[PackedByteArray]) -> Array[Image]:
+static func finish(w: WorldData, px: int, painted: Array[PackedByteArray], human_paths := true) -> Array[Image]:
 	var iw := w.W * px
 	var ih := w.H * px
 	var out: Array[Image] = []
 	for data in painted:
 		var canvas := Canvas.new(data, iw, ih)
-		_draw_overlays(w, px, canvas)
+		_draw_overlays(w, px, canvas, human_paths)
 		out.append(Image.create_from_data(iw, ih, false, Image.FORMAT_RGB8, canvas.data))
 	return out
 
@@ -268,7 +268,7 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 
 
 ## Векторный слой поверх заливки: поляны поселений, реки, тропы
-static func _draw_overlays(w: WorldData, PX: int, cv: Canvas) -> void:
+static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := true) -> void:
 	# Поляны вокруг поселений
 	for s in w.settlements:
 		cv.radial_glade(s.x * PX, s.y * PX, 6.5 * PX)
@@ -283,6 +283,9 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas) -> void:
 	for t in w.trails:
 		if t.kind == "animal":
 			cv.stroke_poly(t.pts, Color8(120, 100, 70), 0.45, 1.0, 0.0, PX)
+	# В 3D пути смешивает шейдер метровой сетки; на карте остаются прежние линии.
+	if not human_paths:
+		return
 	for t in w.trails:
 		if t.kind != "animal":
 			cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)

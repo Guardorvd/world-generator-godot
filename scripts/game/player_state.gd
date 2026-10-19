@@ -112,13 +112,21 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 
 
 ## Множитель скорости по местности
-static func terrain_speed(w: WorldData, x: float, z: float) -> float:
+static func terrain_speed(w: WorldData, x: float, z: float, heights: Heightfield = null) -> float:
 	var info := w.tile_info(x / TILE, z / TILE)
 	if info.is_empty():
 		return 0.0
 	var sp: float = Biomes.LIST[info.biome].speed
 	if sp == 0.0:
 		sp = 0.4
+	if heights != null and heights.road_refinement != null:
+		var contact := heights.road_refinement.sample(x, z, w.W)
+		if not contact.is_empty() and contact.surface != RoadSurface.NONE:
+			var path_speed: float = maxf(sp, 1.0 if contact.road else 0.9) * RoadSurface.LIST[contact.surface].speed
+			return lerpf(sp, path_speed, smoothstep(0.05, 0.9, contact.weight))
+		# Уточнённая лента заменяет клеточный бонус даже там, где она уже закончилась.
+		if info.path >= 2:
+			return sp
 	var surf := surface(info)
 	if surf != RoadSurface.NONE:
 		# с 4.3 скорость пути зависит от покрытия: гравий как прежняя дорога, тропа по лесу или камню медленнее
@@ -213,7 +221,7 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 	if moving:
 		mx /= ln
 		mz /= ln
-		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z)
+		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z, heights)
 		if heights.depth_at(x, z, feet) > 0.3:
 			sp *= 0.5
 		# в крутой подъём идти тяжелее
