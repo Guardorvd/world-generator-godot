@@ -379,6 +379,36 @@ func height_at(x: float, z: float, width: int) -> float:
 	return hs[d] + (hs[a + STRIDE] - hs[d]) * (1.0 - tx) + (hs[a + 1] - hs[d]) * (1.0 - tz)
 
 
+## Вес покрытия для травы: та же интерполяция, без словаря и выборки высоты/вида пути.
+func weight_at(x: float, z: float, width: int) -> float:
+	var fx := x / TILE - 0.5
+	var fz := z / TILE - 0.5
+	if fx < 0.0 or fz < 0.0 or fx >= width - 1 or fz >= _height - 1:
+		return 0.0
+	var key := floori(fz) * width + floori(fx)
+	if not patches.has(key):
+		return 0.0
+	var sx := (fx - floorf(fx)) * DIV
+	var sz := (fz - floorf(fz)) * DIV
+	var ix := mini(DIV - 1, floori(sx))
+	var iz := mini(DIV - 1, floori(sz))
+	var tx := sx - ix
+	var tz := sz - iz
+	var a := iz * STRIDE + ix
+	var b := a + 1
+	var c := a + STRIDE
+	var wa := 1.0 - tx - tz
+	var wb := tx
+	var wc := tz
+	if tx + tz > 1.0:
+		a = c + 1
+		wa = tx + tz - 1.0
+		wb = 1.0 - tz
+		wc = 1.0 - tx
+	var colors: PackedColorArray = patches[key].color
+	return colors[a].a * wa + colors[b].a * wb + colors[c].a * wc
+
+
 func sample(x: float, z: float, width: int) -> Dictionary:
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5

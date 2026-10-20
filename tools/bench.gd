@@ -38,9 +38,13 @@ func _init() -> void:
 	print("%s@%d" % [seed_text, size])
 	var t0 := Time.get_ticks_msec()
 	_t = t0
-	WorldLoader.load_world(seed_text, size, func(_p: float, label: String) -> void: _mark(label))
+	var loaded := WorldLoader.load_world(seed_text, size, func(_p: float, label: String) -> void: _mark(label))
 	_mark("")
 	var total := Time.get_ticks_msec() - t0
 	_print_table(total)
 	print("Всего %d мс" % total)
+	print("CPU-подготовка (prepare_* перекрываются с generate): ", JSON.stringify(loaded.timings))
+	print("Меш: %d вершин, %d треугольников; дорожных патчей: %d" % [
+		loaded.terrain_arrays[Mesh.ARRAY_VERTEX].size(), loaded.terrain_arrays[Mesh.ARRAY_INDEX].size() / 3,
+		loaded.heights.road_refinement.patches.size()])
 	quit()

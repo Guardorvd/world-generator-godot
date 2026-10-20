@@ -14,6 +14,8 @@ var terrain_arrays: Array
 var terrain_image: Image
 var water_arrays: Array[Array]
 var map_image: Image
+## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
+var timings := {}
 
 
 ## Пикселей текстуры рельефа на клетку. В JS-версии 8 / 6 / 4, здесь меньше: в GDScript запекание
@@ -28,21 +30,32 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var r := WorldLoader.new()
 	var px := px_for(size)
 	var side := Thread.new()
+	var started := Time.get_ticks_usec()
 	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
 		side.start(r._prepare.bind(w, px)))
+	var generated := Time.get_ticks_usec()
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
 	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
+	r.timings.generate_ms = (generated - started) / 1000.0
+	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - generated) / 1000.0
+	var t := Time.get_ticks_usec()
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
 	var changed := r.heights.finish_paths()
+	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
 	TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
+	r.timings.patch_refine_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
 	r.world.outer = OuterLand.new(r.world)
+	r.timings.outer_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	if on_progress.is_valid():
 		on_progress.call(0.93, "Текстура рельефа и карта")
 	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
@@ -52,16 +65,26 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
 	r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
 	WorkerThreadPool.wait_for_task_completion(map_task)
+	r.timings.overlays_ms = (Time.get_ticks_usec() - t) / 1000.0
+	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return r
 
 
 ## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
-## Возвращает заливку [[без отмывки, с отмывкой] для px] и, если px не 2, ещё такую же пару для карты
+## Возвращает пары [без отмывки, с отмывкой]; при разных разрешениях ненужный вариант пустой.
 func _prepare(w: WorldData, px: int) -> Array:
-	var painted := [MapBaker.paint(w, px)]
+	var t := Time.get_ticks_usec()
+	var painted := [MapBaker.paint(w, px, true, px == 2)]
 	if px != 2:
-		painted.append(MapBaker.paint(w, 2))
+		painted.append(MapBaker.paint(w, 2, false, true))
+	timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	heights = Heightfield.new(w, false)
+	timings.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	terrain_arrays = TerrainBuilder.build_arrays(w, heights)
+	timings.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	water_arrays = WaterBuilder.prepare(w, heights)
+	timings.prepare_water_ms = (Time.get_ticks_usec() - t) / 1000.0
 	return painted

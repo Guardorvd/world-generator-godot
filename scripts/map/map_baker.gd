@@ -20,7 +20,8 @@ const SEED_DETAIL := 0x5bd1e995
 
 ## Одна картинка: flat — без отмывки склонов
 static func bake(w: WorldData, px: int, flat: bool) -> Image:
-	return bake_both(w, px)[0 if flat else 1]
+	var painted := paint(w, px, flat, not flat)
+	return finish(w, px, [painted[0 if flat else 1]])[0]
 
 
 ## Две картинки за один проход: [без отмывки, с отмывкой]
@@ -30,13 +31,14 @@ static func bake_both(w: WorldData, px: int) -> Array[Image]:
 
 ## Попиксельная заливка: [без отмывки, с отмывкой] в байтах RGB8. Читает только рельеф, воду и биомы,
 ## поэтому её можно считать сразу после этапа климата, параллельно с тропами и растительностью
-static func paint(w: WorldData, px: int) -> Array[PackedByteArray]:
+## Ненужный вариант можно не выделять и не записывать; его место в паре остаётся пустым.
+static func paint(w: WorldData, px: int, want_flat := true, want_shaded := true) -> Array[PackedByteArray]:
 	var fields := _cell_fields(w)
 	var rng := WGRandom.new(w.seed_num ^ SEED_PAINT)
 	var noises := [Simplex.new(rng), Simplex.new(rng), Simplex.new(rng), Simplex.new(rng)]
 	var flat := PackedByteArray()
 	var shaded := PackedByteArray()
-	for b in Parallel.bands(w.H * px, func(y0: int, y1: int) -> Array: return _paint_rows(w, px, fields, noises, y0, y1), BAND):
+	for b in Parallel.bands(w.H * px, func(y0: int, y1: int) -> Array: return _paint_rows(w, px, fields, noises, y0, y1, want_flat, want_shaded), BAND):
 		flat.append_array(b[0])
 		shaded.append_array(b[1])
 	return [flat, shaded]
@@ -89,7 +91,7 @@ static func _cell_fields(w: WorldData) -> Array:
 	return [shade, wf, depth]
 
 
-static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0: int, py1: int) -> Array:
+static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0: int, py1: int, want_flat: bool, want_shaded: bool) -> Array:
 	var W := w.W
 	var H := w.H
 	var biome := w.biome
@@ -128,9 +130,11 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 	var seed2 := (w.seed_num ^ SEED_DETAIL) & 0xFFFFFFFF
 	var IW := W * PX
 	var out := PackedByteArray()
-	out.resize((py1 - py0) * IW * 3)
+	if want_flat:
+		out.resize((py1 - py0) * IW * 3)
 	var out_s := PackedByteArray()
-	out_s.resize((py1 - py0) * IW * 3)
+	if want_shaded:
+		out_s.resize((py1 - py0) * IW * 3)
 	var o := 0
 	for py in range(py0, py1):
 		var fy := (py + 0.5) / PX - 0.5
@@ -257,12 +261,14 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 					Rs *= 0.85
 					Gs *= 0.9
 					Bs *= 0.85
-			out[o] = clampi(roundi(R), 0, 255)
-			out[o + 1] = clampi(roundi(G), 0, 255)
-			out[o + 2] = clampi(roundi(Bc), 0, 255)
-			out_s[o] = clampi(roundi(Rs), 0, 255)
-			out_s[o + 1] = clampi(roundi(Gs), 0, 255)
-			out_s[o + 2] = clampi(roundi(Bs), 0, 255)
+			if want_flat:
+				out[o] = clampi(roundi(R), 0, 255)
+				out[o + 1] = clampi(roundi(G), 0, 255)
+				out[o + 2] = clampi(roundi(Bc), 0, 255)
+			if want_shaded:
+				out_s[o] = clampi(roundi(Rs), 0, 255)
+				out_s[o + 1] = clampi(roundi(Gs), 0, 255)
+				out_s[o + 2] = clampi(roundi(Bs), 0, 255)
 			o += 3
 	return [out, out_s]
 

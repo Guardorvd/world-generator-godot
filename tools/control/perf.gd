@@ -7,6 +7,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/control/perf.gd -- [--out <папка>]
 ## Один размер (так скрипт запускает сам себя для каждого размера; нужно окно):
 ##   godot --path . --script res://tools/control/perf.gd -- --size 512 [--out <папка>]
+## Для сравнения графики: --shadows on|off (по умолчанию on), --scale 0.25..1 (по умолчанию 1).
 
 const Dev := preload("res://tools/control/control.gd")
 const LOAD_TIMEOUT_MS := 300000
@@ -53,7 +54,8 @@ func _run_all() -> void:
 		print("Размер %d…" % s)
 		var log := []
 		var code := OS.execute(OS.get_executable_path(), ["--path", ProjectSettings.globalize_path("res://"),
-			"--script", "res://tools/control/perf.gd", "--", "--size", str(s), "--out", out], log, true)
+			"--script", "res://tools/control/perf.gd", "--", "--size", str(s), "--out", out,
+			"--shadows", Dev.arg("shadows", "on"), "--scale", Dev.arg("scale", "1")], log, true)
 		var part: Variant = Dev.load_json(out.path_join("perf_%d.json" % s))
 		if code != 0 or part == null:
 			printerr("Замер размера %d не удался (код %d):\n%s" % [s, code, "".join(log)])
@@ -170,6 +172,12 @@ func _process(delta: float) -> bool:
 				DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
+				# Один и тот же контроль вне зависимости от пользовательского settings.cfg.
+				GameSettings.shadows = Dev.arg("shadows", "on") != "off"
+				root.scaling_3d_scale = clampf(float(Dev.arg("scale", "1")), 0.25, 1.0)
+				result.render = {method = RenderingServer.get_current_rendering_method(),
+					viewport = str(root.size), scale = root.scaling_3d_scale,
+					shadows = GameSettings.shadows, msaa = root.msaa_3d}
 			if frames == 30:
 				result.menu_memory = _memory()
 				started = Time.get_ticks_msec()

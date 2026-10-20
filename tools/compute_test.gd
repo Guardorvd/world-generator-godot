@@ -7,9 +7,32 @@ var fails := 0
 func _initialize() -> void:
 	var probe: Object = load("res://tools/ComputeProbe.cs").new()
 	print("FastGrid constructor: %d managed bytes" % probe.ConstructorBytes(100))
+	for size in [256, 512, 768]:
+		var allocated: PackedInt64Array = probe.CorridorBytes(size, 3)
+		print("Corridor %d managed bytes: %s" % [size, allocated])
+		_check(allocated[1] == 0 and allocated[2] == 0, "повторная ширина прохода без новых буферов %d" % size)
 	if OS.get_cmdline_user_args().has("--alloc-only"):
-		quit()
+		quit(0 if fails == 0 else 1)
 		return
+	# На одном finder меняем и ширину, и поверхность. Кэш прежнего прохода не должен выжить.
+	var flat := PackedFloat32Array()
+	flat.resize(12 * 12)
+	var water := flat.duplicate()
+	water.fill(-INF)
+	var wet := PackedByteArray()
+	wet.resize(flat.size())
+	var costs := flat.duplicate()
+	costs.fill(1.0)
+	var finder := Pathfinder.new(12, 12, flat)
+	for phase in 3:
+		var ground := flat.duplicate()
+		if phase == 1:
+			for y in 12:
+				for x in range(6, 12):
+					ground[y * 12 + x] = 10.0
+		finder.set_corridor(ground, water, wet, 0.45 - phase * 0.05)
+		var route := finder.find_path(costs, 5 * 12 + 1, 5 * 12 + 10, 32.0, 0.35)
+		_check(route.is_empty() == (phase == 1), "сброс кэша прохода при смене поверхности %d" % phase)
 	var w := WorldData.new()
 	w.rng = WGRandom.new(1234)
 	for name in ["warpX", "warpY", "cont", "mask", "ridge", "hill"]:

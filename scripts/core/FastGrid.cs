@@ -42,9 +42,14 @@ public partial class FastGrid : RefCounted
 		_corridorWater = water;
 		_corridorWet = wet;
 		_corridorHalf = half;
-		_corridorGrades = new float[_w * _h * 8];
+		int count = _w * _h * 8;
+		if (_corridorGrades.Length != count)
+			_corridorGrades = new float[count];
 		Array.Fill(_corridorGrades, -1f);
-		_corridorCross = new float[_w * _h * 8];
+		if (_corridorCross.Length != count)
+			_corridorCross = new float[count];
+		// Cross читается только после MeasureCorridor, который заполняет обе величины.
+		// Sentinel в Grades сбрасывает кэш при смене поверхности или ширины прохода.
 	}
 
 	private double CorridorHeight(double x, double y)

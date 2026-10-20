@@ -291,8 +291,8 @@ func _fill_grass(px: float, pz: float) -> void:
 				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
 				# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
 				if heights.road_refinement != null:
-					var contact := heights.road_refinement.sample(x, z, w.W)
-					if not contact.is_empty() and contact.weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
+					var weight := heights.road_refinement.weight_at(x, z, w.W)
+					if weight > 0.0 and weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
 						continue
 				elif w.path_mask[k] >= 2:
 					continue
