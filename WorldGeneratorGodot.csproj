@@ -2,6 +2,8 @@
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <EnableDynamicLoading>true</EnableDynamicLoading>
+    <!-- Численные циклы генерации должны быть быстрыми и при запуске из редактора. -->
+    <Optimize>true</Optimize>
     <RootNamespace>WorldGeneratorGodot</RootNamespace>
   </PropertyGroup>
 </Project>
