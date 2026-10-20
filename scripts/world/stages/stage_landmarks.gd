@@ -52,7 +52,11 @@ static func _place_settlements(w: WorldData) -> void:
 				score += 0.1
 			cand.append([score, i])
 	cand.sort_custom(_by_score_desc)
-	var want := clampi(roundi(12.0 * w.scale), 4, 26)
+	# Плотность мира зависит от сида; прежнее количество — верхняя граница.
+	var maximum := clampi(roundi(12.0 * w.scale), 4, 26)
+	var minimum := maxi(2, ceili(maximum * 0.55))
+	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
+	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
 	var min_d := maxf(28.0, W / 6.5)
 	var min_d2 := min_d * min_d
 	for c: Array in cand:
@@ -74,8 +78,10 @@ static func _place_settlements(w: WorldData) -> void:
 			continue
 		settlements.append({x = x, y = y, i = i, name = w.make_name(Names.SETTLEMENT), huts = []})
 	# Дома вокруг центра поселения, не на воде и не на крутых склонах
+	var ground := Heightfield.new(w, false)
 	for s: Dictionary in settlements:
-		var n := 4 + floori(rng.next_float() * 6)
+		var n := 3 + floori(rng.next_float() * 7)
+		s.character = "прибрежный посёлок" if dist_water[s.i] < 5.0 else ("лесная деревня" if biome[s.i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else "деревня у дороги")
 		var k := 0
 		var tries := 0
 		while k < n and tries < 80:
@@ -88,6 +94,20 @@ static func _place_settlements(w: WorldData) -> void:
 			if hx < 1 or hy < 1 or hx >= W - 1 or hy >= H - 1:
 				continue
 			if ocean[ti] != 0 or lake[ti] != 0 or river[ti] != 0 or biome[ti] == Biomes.ROCK or slope[ti] > 0.45:
+				continue
+			# Проверяем весь фундамент: сухой центр не спасает дом над рекой или обрывом.
+			var low := INF
+			var high := -INF
+			var dry := true
+			for dz: float in [-2.3, 0.0, 2.3]:
+				for dx: float in [-2.3, 0.0, 2.3]:
+					var px: float = hx * GameConfig.TILE + dx
+					var pz: float = hy * GameConfig.TILE + dz
+					var h := ground.ground_at(px, pz)
+					low = minf(low, h)
+					high = maxf(high, h)
+					dry = dry and ground.depth_at(px, pz) <= 0.0
+			if not dry or high - low > 1.6:
 				continue
 			var near := false
 			for u: Dictionary in s.huts:

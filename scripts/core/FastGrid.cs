@@ -28,6 +28,7 @@ public partial class FastGrid : RefCounted
 	private double[] _heapKeys = Array.Empty<double>();
 	private int _gen;
 	public bool ProfileSearches { get; set; }
+	public int SearchBudget { get; set; } = -1;
 	private long _searchCount, _expandedCount, _searchTicks;
 	public Godot.Collections.Dictionary SearchStats() => new()
 	{
@@ -231,6 +232,13 @@ public partial class FastGrid : RefCounted
 				break;
 			if (done[c] == gn)
 				continue;
+			if (SearchBudget == 0)
+			{
+				_heapIds = ids;
+				_heapKeys = keys;
+				return Array.Empty<int>();
+			}
+			if (SearchBudget > 0) SearchBudget--;
 			done[c] = gn;
 			if (ProfileSearches) _expandedCount++;
 			int cx = c % W, cy = c / W;

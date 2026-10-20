@@ -23,6 +23,7 @@ var map_tex: ImageTexture
 var minimap: MiniMap
 var big_map: BigMap
 var compass: Compass
+var settlement_panel
 var goal := {}  # цель путешествия — место из places() или пусто
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
@@ -72,6 +73,8 @@ func _ready() -> void:
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
 	add_child(big_map)
+	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
+	add_child(settlement_panel)
 
 
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры
@@ -88,6 +91,8 @@ func set_world(w: WorldData, map_image: Image) -> void:
 
 ## Выход из игры: забыть мир и карту, чтобы прошлый мир освободился, пока в меню
 func clear_world() -> void:
+	if settlement_panel != null:
+		settlement_panel.hide()
 	world = null
 	map_tex = null
 	visited = {}

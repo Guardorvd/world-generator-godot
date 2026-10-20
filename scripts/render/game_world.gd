@@ -59,6 +59,9 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	world = loaded.world
 	heights = loaded.heights
 	hud = hud_node
+	hud.settlement_panel.closed.connect(_close_settlement)
+	hud.settlement_panel.destination_selected.connect(_choose_settlement_route)
+	hud.settlement_panel.bike_requested.connect(_recall_bike)
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
@@ -120,6 +123,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	if p:
+		_close_settlement(false)
 	audio.set_paused(p)
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false
@@ -160,6 +165,7 @@ func toggle_bike() -> void:
 
 
 func toggle_map() -> void:
+	_close_settlement(false)
 	show_map = not show_map
 	hud.set_map_visible(show_map)
 	# на карте курсор нужен, чтобы выбрать место; закрыли — снова осматриваемся мышью
@@ -177,6 +183,7 @@ func travel_to(place: Dictionary) -> void:
 		return
 	if bike.riding and bike.airborne:
 		return
+	_close_settlement(false)
 	player = PlayerState.arrive(world, heights, place)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера
@@ -197,6 +204,13 @@ func travel_to(place: Dictionary) -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event.is_echo():
+		return
+	if _settlement_open():
+		if event.is_action_pressed("pause") or event.is_action_pressed("interact"):
+			_close_settlement()
+			get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("pause"):
 		# Esc сначала закрывает большую карту, потом ставит паузу
 		if show_map and not paused:
@@ -212,6 +226,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		toggle_map()
 	elif event.is_action_pressed("bike"):
 		toggle_bike()
+	elif event.is_action_pressed("interact") and not show_map:
+		_open_settlement()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
@@ -244,7 +260,7 @@ func _notification(what: int) -> void:
 ## При FPS ниже 60 за кадр проходит несколько тактов, ниже 7,5 (8 тактов за кадр) игра замедляется,
 ## чтобы не захлебнуться
 func _physics_process(dt: float) -> void:
-	if player == null or paused:
+	if player == null or paused or _settlement_open():
 		return
 	_store_prev()
 	var yaw0 := yaw
@@ -318,7 +334,7 @@ func _snap() -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
-	hud.lock_hint.visible = not paused and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	hud.lock_hint.visible = not paused and not _settlement_open() and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if paused:
 		return
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
@@ -376,12 +392,79 @@ func _crash() -> void:
 
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас
 func _update_hints() -> void:
+	if _settlement_open():
+		hud.set_hints("", "")
+		return
+	var village := _near_settlement()
+	var visit := "E — маршруты поселения «%s»" % village.name if not village.is_empty() else ""
 	if bike.riding:
-		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · F — слезть · Esc — пауза", "")
+		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · F — слезть · Esc — пауза", visit)
 		return
 	var near := bike.distance_to(player) <= GameConfig.BIKE_MOUNT
 	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · F — велосипед · M — карта · Esc — пауза",
-		"F — сесть на велосипед" if near else "")
+		visit if not visit.is_empty() else ("F — сесть на велосипед" if near else ""))
+
+
+func _settlement_open() -> bool:
+	return hud != null and hud.settlement_panel != null and hud.settlement_panel.visible
+
+
+func _near_settlement() -> Dictionary:
+	if world == null or player == null or not player.on_ground:
+		return {}
+	var nearest := {}
+	var distance := 7.0
+	for s: Dictionary in world.settlements:
+		var d := Grid.hypot(s.x * TILE - player.x, s.y * TILE - player.z)
+		if d < distance and absf(player.feet - heights.ground_at(s.x * TILE, s.y * TILE)) < 3.0:
+			nearest = s
+			distance = d
+	return nearest
+
+
+func _open_settlement() -> void:
+	if paused or show_map or _settlement_open():
+		return
+	var village := _near_settlement()
+	if village.is_empty():
+		return
+	if bike.riding:
+		if absf(bike.speed) > 0.5 or bike.airborne:
+			hud.toast("Остановитесь у костра, чтобы прочитать указатель")
+			return
+		toggle_bike()
+	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
+		Input.action_release(action)
+	player.vx = 0.0
+	player.vz = 0.0
+	_snap()
+	_dragging = false
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	hud.settlement_panel.open(village, hud.places(), bike.distance_to(player) < 4.0)
+
+
+func _close_settlement(capture := true) -> void:
+	if not _settlement_open():
+		return
+	hud.settlement_panel.hide()
+	if capture and not paused and not show_map:
+		capture_mouse()
+
+
+func _choose_settlement_route(place: Dictionary) -> void:
+	hud.set_goal(place)
+	_close_settlement()
+	hud.toast_now("На указателе: путь к «%s». Цель отмечена на компасе и карте" % place.name)
+
+
+func _recall_bike() -> void:
+	if not _settlement_open() or paused or not player.on_ground:
+		return
+	bike = BikeRide.park_near(player, yaw, world, heights)
+	bike_view.snap(bike)
+	bike_view.draw(1.0)
+	_close_settlement()
+	hud.toast_now("Велосипед ждёт рядом с костром")
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания

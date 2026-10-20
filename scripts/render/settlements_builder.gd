@@ -73,6 +73,15 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
 	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
 	var win_mesh := _box_mesh(Vector3(0.6, 0.5, 0.1))
+	var stone_m := _mat(Color.html("#736d60"))
+	var timber_m := _mat(Color.html("#755337"))
+	var foundation_mesh := _box_mesh(Vector3(3.3, 1.0, 3.3))
+	var step_mesh := _box_mesh(Vector3(1.1, 0.18, 0.65))
+	var chimney_mesh := _box_mesh(Vector3(0.45, 1.1, 0.45))
+	var bench_seat := _box_mesh(Vector3(1.8, 0.16, 0.48))
+	var bench_leg := _box_mesh(Vector3(0.15, 0.45, 0.4))
+	var board_post := _box_mesh(Vector3(0.12, 1.8, 0.12))
+	var board_mesh := _box_mesh(Vector3(1.8, 0.95, 0.13))
 	var log_mesh := CylinderMesh.new()
 	log_mesh.top_radius = 0.1
 	log_mesh.bottom_radius = 0.1
@@ -92,20 +101,54 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		for hut in s.huts:
 			var x: float = hut.x * TILE
 			var z: float = hut.y * TILE
-			# дом стоит на самом низком из углов, чтобы не висел над склоном
-			var y := INF
+			var facing := Basis(Vector3.UP, atan2(s.x * TILE - x, s.y * TILE - z))
+			# Пол выше верхнего угла; каменный цоколь закрывает перепад до нижнего.
+			var low := INF
+			var y := -INF
 			for c: Vector2 in HUT_CORNERS:
-				y = minf(y, heights.ground_at(x + c.x, z + c.y))
+				var corner := facing * Vector3(c.x, 0, c.y)
+				var h := heights.ground_at(x + corner.x, z + corner.z)
+				low = minf(low, h)
+				y = maxf(y, h)
 			# дверью к костру
-			var at := Transform3D(Basis(Vector3.UP, atan2(s.x * TILE - x, s.y * TILE - z)), Vector3(x, y, z))
+			var at := Transform3D(facing, Vector3(x, y, z))
+			var base := at.translated_local(Vector3(0, -(y - low + 0.15) * 0.5, 0))
+			base.basis = base.basis.scaled(Vector3(1, y - low + 0.15, 1))
+			batch.add(foundation_mesh, base, stone_m)
 			batch.add(wall_mesh, at.translated_local(Vector3(0, 1.3, 0)), walls[hut.v])
 			batch.add(roof_mesh, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 2.6 + 1.1, 0)), roofs[hut.v])
 			batch.add(door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), door_m)
 			batch.add(win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), win_m)
+			batch.add(win_mesh, at * Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(1.62, 1.6, 0)), win_m)
+			batch.add(step_mesh, at.translated_local(Vector3(0, 0.02, 1.8)), stone_m)
+			if hut.v % 2 == 0:
+				batch.add(chimney_mesh, at.translated_local(Vector3(0.85, 3.6, 0.45)), stone_m)
 		# костёр
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
 		var fy := heights.ground_at(fx, fz)
+		# Небольшое общее место: скамьи и указатель стоят внутри кольца домов.
+		for side: float in [-1.0, 1.0]:
+			var bx := fx + side * 3.0
+			var by := heights.ground_at(bx, fz)
+			var bench := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(bx, by, fz))
+			batch.add(bench_seat, bench.translated_local(Vector3(0, 0.5, 0)), timber_m)
+			for leg: float in [-0.65, 0.65]:
+				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), timber_m)
+		var board_pos := Vector3(fx + 3.0, 0.0, fz - 3.0)
+		board_pos.y = heights.ground_at(board_pos.x, board_pos.z)
+		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
+		for side: float in [-0.7, 0.7]:
+			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), timber_m)
+		batch.add(board_mesh, board.translated_local(Vector3(0, 1.35, 0)), door_m)
+		var board_text := Label3D.new()
+		board_text.text = "МАРШРУТЫ\n[E]"
+		board_text.font_size = 24
+		board_text.pixel_size = 0.005
+		board_text.no_depth_test = false
+		board_text.visibility_range_end = 35.0
+		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
+		parent.add_child(board_text)
 		var fire := Node3D.new()
 		for k in 3:
 			var log_node := _part(log_mesh, Vector3(0, 0.1, 0), door_m)

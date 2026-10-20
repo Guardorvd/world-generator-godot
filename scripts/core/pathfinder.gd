@@ -25,6 +25,9 @@ var heights := PackedFloat32Array()
 ## Разрешённые шаги по готовому настилу/полу: биты восьми направлений Grid.DX/DY.
 var links := PackedByteArray()
 var use_corridor := true # запасной поиск оси для связи, которой нужны сооружения
+## Общий остаток раскрытий для нескольких поисков: -1 без ограничения, 0 — отказаться.
+## Позволяет проверять кандидат поселения без полного перебора карты по каждому соседу.
+var search_budget := -1
 ## Реальная ширина прохода: кэш продольного уклона и поперечного крена шагов.
 var _ground := PackedFloat32Array()
 var _water := PackedFloat32Array()
@@ -132,12 +135,15 @@ func _measure_corridor(c: int, k: int) -> void:
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> PackedInt32Array:
+	if search_budget == 0:
+		return PackedInt32Array()
 	if _fast != null:
-		if not profile_searches:
-			return _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
+		_fast.SearchBudget = search_budget
 		var started := Time.get_ticks_usec()
 		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
-		_search_us += Time.get_ticks_usec() - started
+		search_budget = _fast.SearchBudget
+		if profile_searches:
+			_search_us += Time.get_ticks_usec() - started
 		return path
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
@@ -194,6 +200,12 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 			break
 		if done[c] == gn:
 			continue
+		if search_budget == 0:
+			heap_ids = ids
+			heap_keys = keys
+			return PackedInt32Array()
+		if search_budget > 0:
+			search_budget -= 1
 		done[c] = gn
 		var cx := c % W
 		var cy := c / W

@@ -73,6 +73,10 @@ func _settlements() -> void:
 	w.N = w.W * w.H
 	w.scale = float(w.N) / (512 * 512)
 	w.rng = WGRandom.new(53)
+	w.seed_num = 53
+	w.h.resize(w.N)
+	w.h.fill(0.1)
+	w.filled.resize(w.N)
 	w.biome.resize(w.N)
 	w.biome.fill(Biomes.OCEAN)
 	w.ocean.resize(w.N)
@@ -94,8 +98,8 @@ func _settlements() -> void:
 	StageLandmarks._place_settlements(w)
 	var mainland := true
 	for s in w.settlements: mainland = mainland and s.x < 60.0
-	_check(w.settlements.size() == 4 and mainland,
-		"недоступный привлекательный остров заменяется кандидатами на материке, число поселений сохраняется")
+	_check(w.settlements.size() >= 2 and w.settlements.size() <= 4 and mainland,
+		"число поселений меняется в пределах прежнего максимума, недоступный остров исключается")
 
 
 func _init() -> void:

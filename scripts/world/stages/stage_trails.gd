@@ -81,7 +81,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	step.call(0.74, "Прокладка горных троп")
 	_mountain_trails(w, finder, surface)
 	if Pathfinder.profile_searches:
-		w.generation_profile = finder.search_stats()
+		w.generation_profile.merge(finder.search_stats())
 		w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 
 
@@ -361,98 +361,120 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 			k += 1
 
 
-## Основные дороги связывают поселения; полезные связи по суше добавляет _second_ways.
+## Сеть растёт только через уже построенные безопасные дороги. Недоступный кандидат
+## не требует связи любой ценой: не больше трёх соседей и 2*N раскрытий A* суммарно.
+## Так последний остров или закрытый склон не запускает квадратичный перебор всех пар.
+const SETTLEMENT_NEIGHBORS := 3
+const BRIDGE_RETRIES := 2
+
 static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable = Callable()) -> void:
+	var started := Time.get_ticks_msec()
 	var st := w.settlements
 	var n := st.size()
-	var edges: Array = []   # [a, b, d, порядок добавления]
-	var in_tree: Array[bool] = []
-	in_tree.resize(n)
-	in_tree.fill(false)
-	if n > 0:
-		in_tree[0] = true
-	for it: int in range(1, n):
-		var best: Array = []
-		for a in n:
-			if not in_tree[a]:
-				continue
-			for b in n:
-				if in_tree[b]:
-					continue
-				var d := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
-				if best.is_empty() or d < best[2]:
-					best = [a, b, d]
-		in_tree[best[1]] = true
-		best.append(edges.size())
-		edges.append(best)
-	edges.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else p[3] < q[3])
-	# Если ближайшая связь требует небезопасной переправы, подключаем поселение
-	# через другого соседа. Запасные пары используются только между разными компонентами.
-	var primary := {}
-	for e in edges:
-		primary[_key(e[0], e[1])] = true
-	var reserve: Array = []
-	for a in n:
-		for b in range(a + 1, n):
-			if not primary.has(_key(a, b)):
-				reserve.append([a, b, Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)])
-	reserve.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else _key(p[0], p[1]) < _key(q[0], q[1]))
-	edges.append_array(reserve)
-	var groups := PackedInt32Array()
-	for a in n:
-		groups.append(a)
 	w.bridges = []
 	w.tunnels = []
 	var road_cost := w.cost.duplicate()
-	# detour — что пробовать на следующем хребте: обход (true) или туннель, с чего начать — по сиду;
-	# on_axis — клетки на осях мостов и туннелей (_add_trail)
 	var state := {detour = w.seed_num % 2 == 1, on_axis = PackedByteArray(), surface = surface}
 	state.on_axis.resize(w.N)
 	finder.links.resize(w.N)
-	var ocean := w.ocean
-	var lake := w.lake
 	for i in w.N:
-		if ocean[i] != 0 or lake[i] != 0 or w.river[i] != 0 and w.cost[i] == INF:
+		if _wet(w, i) and w.cost[i] == INF:
 			road_cost[i] = BRIDGE_COST
-	var paths: Array = []   # [a, b, путь, дорога ли, прямое расстояние] найденных связей
-	for e in edges:
-		if groups[e[0]] == groups[e[1]]:
-			continue
-		if step.is_valid():
-			step.call(0.66 + 0.03 * paths.size() / maxi(1, n - 1), "Дороги между поселениями: %d/%d" % [paths.size(), maxi(0, n - 1)])
-		var p := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i)
-		if p.size() > 0:
-			var attempts: Array = []
-			var q := _try_road_structures(w, p, finder, road_cost, state, attempts)
-			if q.is_empty():
-				# Ширина относится к земле, а мост/туннель создаёт своё полотно.
-				# Если такой проход не строится, проверяем другой вариант по оси.
-				var axis := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i, false)
-				if not axis.is_empty():
-					q = _try_road_structures(w, axis, finder, road_cost, state, attempts)
-			if q.is_empty():
-				# Технический проход дополняет прежние варианты связи, не вытесняя рабочие подходы.
-				var technical := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i, true, ROAD_LIMIT)
-				if not technical.is_empty():
-					q = _try_road_structures(w, technical, finder, road_cost, state, attempts)
-			finder.use_corridor = true
-			if q.is_empty():
+	var joined := PackedByteArray()
+	joined.resize(n)
+	var tries := PackedInt32Array()
+	tries.resize(n)
+	var budgets := PackedInt32Array()
+	budgets.resize(n)
+	budgets.fill(w.N * 2)
+	var tried := {}
+	var paths: Array = []
+	var connected := 0
+	if n > 0:
+		joined[0] = 1
+		connected = 1
+	while connected < n:
+		var best: Array = []
+		for b in n:
+			if joined[b] != 0 or tries[b] >= SETTLEMENT_NEIGHBORS or budgets[b] == 0:
 				continue
-			surface.build_structures()
-			_add_trail(w, q, "road", road_cost, state.on_axis, surface)
-			paths.append([e[0], e[1], q, true, e[2]])
-			var joined := groups[e[1]]
 			for a in n:
-				if groups[a] == joined:
-					groups[a] = groups[e[0]]
+				if joined[a] == 0 or tried.has(_key(a, b)):
+					continue
+				var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
+				if best.is_empty() or distance < best[2]:
+					best = [a, b, distance]
+		if best.is_empty():
+			break
+		var a: int = best[0]
+		var b: int = best[1]
+		tried[_key(a, b)] = true
+		tries[b] += 1
+		if step.is_valid():
+			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d/%d" % [connected - 1, maxi(0, n - 1), tries[b], SETTLEMENT_NEIGHBORS])
+		finder.search_budget = budgets[b]
+		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
+		budgets[b] = finder.search_budget
+		finder.search_budget = -1
+		if q.is_empty():
+			continue
+		surface.build_structures()
+		_add_trail(w, q, "road", road_cost, state.on_axis, surface)
+		paths.append([a, b, q, true, best[2]])
+		joined[b] = 1
+		connected += 1
+	# Только подтверждённые поселения попадают на карту, в растительность и постройки.
+	var keep: Array = []
+	var remap := {}
+	for a in n:
+		if joined[a] != 0:
+			remap[a] = keep.size()
+			keep.append(st[a])
+	for e: Array in paths:
+		e[0] = remap[e[0]]
+		e[1] = remap[e[1]]
+	w.settlements = keep
+	w.generation_profile.settlement_candidates = n
+	w.generation_profile.settlement_attempts = tried.size()
+	w.generation_profile.settlement_rejected = n - keep.size()
+	var expanded := 0
+	for budget in budgets:
+		expanded += w.N * 2 - budget
+	w.generation_profile.settlement_expanded = expanded
+	w.generation_profile.main_roads_ms = Time.get_ticks_msec() - started
 	finder.use_corridor = true
 	_route_surface(finder, surface, WIDTHS.trail)
+	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
+	finder.search_budget = w.N * maxi(1, keep.size())
 	_second_ways(w, finder, paths, road_cost, state, step)
+	finder.search_budget = -1
+	for s: Dictionary in w.settlements:
+		s.connections = []
+	for e: Array in paths:
+		var a: Dictionary = w.settlements[e[0]]
+		var b: Dictionary = w.settlements[e[1]]
+		if not a.connections.has(b.i): a.connections.append(b.i)
+		if not b.connections.has(a.i): b.connections.append(a.i)
 	_clear_huts(w)
 
 
+static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
+		a: int, b: int, state: Dictionary) -> PackedInt32Array:
+	var attempts: Array = []
+	for mode: Array in [[true, ROAD_GRADE], [false, ROAD_GRADE], [true, ROAD_LIMIT]]:
+		var p := _road_path(finder, cost, a, b, mode[0], mode[1])
+		if p.is_empty():
+			continue
+		var q := _try_road_structures(w, p, finder, cost, state, attempts)
+		if not q.is_empty():
+			finder.use_corridor = true
+			return q
+	finder.use_corridor = true
+	return PackedInt32Array()
+
+
 ## После неудачи _structures полностью восстанавливает состояние. Запасной поиск может
-## вернуть ту же ось в том же режиме: повторная проверка мостов и 12 объездов ничего не изменит.
+## вернуть ту же ось в том же режиме: повторная проверка мостов и объездов ничего не изменит.
 ## Разные режимы ширины проверяются отдельно: они влияют на поиск объездов внутри _structures.
 static func _try_road_structures(w: WorldData, path: PackedInt32Array, finder: Pathfinder,
 		cost: PackedFloat32Array, state: Dictionary, attempts: Array) -> PackedInt32Array:
@@ -666,6 +688,13 @@ static func _clear_huts(w: WorldData) -> void:
 		var keep: Array = []
 		for u in st.huts:
 			var free := true
+			# Полоса дороги должна оставаться свободной и внутри деревни, не только на мостах.
+			for dz: float in [-0.55, 0.0, 0.55]:
+				for dx: float in [-0.55, 0.0, 0.55]:
+					var x := clampi(floori(u.x + dx), 0, w.W - 1)
+					var y := clampi(floori(u.y + dz), 0, w.H - 1)
+					if w.path_mask[y * W + x] >= 2:
+						free = false
 			for sp in spans:
 				if Grid.segment_dist(u.x, u.y, sp.a % W + 0.5, sp.a / W + 0.5, sp.b % W + 0.5, sp.b / W + 0.5) < HUT_CLEAR:
 					free = false
@@ -780,7 +809,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					back += 1
 				if j >= mini(n, i + SPAN):
 					# Последняя неудача уже исчерпала запас объездов: ещё один A* не используется.
-					if retries >= 12:
+					if retries >= BRIDGE_RETRIES:
 						return PackedInt32Array()
 					var bypass := cost.duplicate()
 					for k in range(i + 1, shore):
