@@ -13,6 +13,9 @@ var busy := false
 var gen_thread: Thread
 var bg_thread: Thread
 var bg_time := 0.0
+var _load_started_ms := 0
+var _load_elapsed := -1
+var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
 
 @onready var hud: Hud = %Hud
@@ -163,6 +166,11 @@ func _on_menu_background(img: Image) -> void:
 
 
 func _process(delta: float) -> void:
+	if busy:
+		var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
+		if seconds != _load_elapsed:
+			_load_elapsed = seconds
+			load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, seconds / 60, seconds % 60]
 	if not screens.back.visible or bg.texture == null:
 		return
 	bg_time += delta * 1000.0
@@ -195,6 +203,7 @@ func start_game(seed_text: String, size: int) -> void:
 	if busy:
 		return
 	busy = true
+	_load_started_ms = Time.get_ticks_msec()
 	_free_game()
 	hud.visible = false
 	_set_progress(0.0, "Подготовка")
@@ -211,6 +220,8 @@ func _generate_job(seed_text: String, size: int) -> void:
 
 func _set_progress(p: float, label: String) -> void:
 	bar.value = p
+	_load_label = label
+	_load_elapsed = -1
 	load_step.text = label
 
 

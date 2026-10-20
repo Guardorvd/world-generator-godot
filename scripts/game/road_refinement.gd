@@ -13,10 +13,13 @@ const FIT_FADE := 12.0   # 4.5: плавный переход у концов, �
 const FIT_LIMIT := 1.2   # обычное уточнение относительно сетки RoadBed, м
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
+static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
+var build_timings := {}
 var _segments := {}
+var _segment_list: Array[Dictionary] = []
 var _structures := {}
 var _heights: Heightfield
 var _noise: FastNoiseLite
@@ -33,15 +36,24 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._noise.seed = heights.world.seed_num
 	r._noise.frequency = 1.0
 	r._noise.fractal_octaves = 2
+	var started_us := Time.get_ticks_usec()
 	for route in heights.world.trails.size():
 		var t: Dictionary = heights.world.trails[route]
 		if RoadBed.KINDS.has(t.kind):
 			r._index(t, route)
 	r._index_structures()
+	r.build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	started_us = Time.get_ticks_usec()
 	if fit_road:
 		r._fit_network()
+	r.build_timings.fit_network_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	started_us = Time.get_ticks_usec()
 	var cache := {}
 	var fine_width := heights.world.W * DIV
+	var nearest := PackedFloat64Array()
+	var fast := Grid.fast_grid() if allow_fast_nearest else null
+	if fast != null:
+		nearest = r._nearest_vertices(cache, fast)
 	for key: int in r._segments:
 		var cx := key % heights.world.W
 		var cz := key / heights.world.W
@@ -50,28 +62,75 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 		var uvs := PackedVector2Array()
 		var surfaces := PackedByteArray()
 		var roads := PackedByteArray()
+		hs.resize(STRIDE * STRIDE)
+		colors.resize(STRIDE * STRIDE)
+		uvs.resize(STRIDE * STRIDE)
+		surfaces.resize(STRIDE * STRIDE)
+		roads.resize(STRIDE * STRIDE)
 		for z in STRIDE:
 			for x in STRIDE:
 				var ix := cx * DIV + x
 				var iz := cz * DIV + z
 				var vk := iz * fine_width + ix
-				if not cache.has(vk):
-					cache[vk] = r._vertex((ix * STEP) + TILE * 0.5, (iz * STEP) + TILE * 0.5)
+				if not cache.has(vk) or cache[vk] is int:
+					var at: int = cache[vk] * 4 if cache.has(vk) else -1
+					cache[vk] = r._vertex((ix * STEP) + TILE * 0.5, (iz * STEP) + TILE * 0.5, nearest, at)
 				var v: Dictionary = cache[vk]
-				hs.append(v.h)
-				colors.append(v.color)
-				uvs.append(v.uv)
-				surfaces.append(v.surface)
-				roads.append(1 if v.road else 0)
+				var idx := z * STRIDE + x
+				hs[idx] = v.h
+				colors[idx] = v.color
+				uvs[idx] = v.uv
+				surfaces[idx] = v.surface
+				roads[idx] = 1 if v.road else 0
 		r.patches[key] = {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
+	r.build_timings.vertices_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	# После запекания нет ссылок на Heightfield (цикл RefCounted) и временного пространственного индекса.
 	r._heights = null
 	r._segments.clear()
+	r._segment_list.clear()
 	r._structures.clear()
 	r._noise = null
 	r._base_cache.clear()
 	r._wet_cache.clear()
 	return r
+
+
+## Один вызов C# для всех уникальных вершин, без межъязыкового вызова на каждую из них.
+## В cache сначала номера запросов, затем они заменяются готовыми словарями вершин.
+func _nearest_vertices(cache: Dictionary, fast: Object) -> PackedFloat64Array:
+	var w := _heights.world
+	var points := PackedVector2Array()
+	for key: int in _segments:
+		var cx := key % w.W
+		var cz := key / w.W
+		for z in STRIDE:
+			for x in STRIDE:
+				var ix := cx * DIV + x
+				var iz := cz * DIV + z
+				var vk := iz * (w.W * DIV) + ix
+				if not cache.has(vk):
+					cache[vk] = points.size()
+					points.append(Vector2(ix * STEP + TILE * 0.5, iz * STEP + TILE * 0.5))
+	var anchors := PackedVector2Array()
+	var deltas := PackedVector2Array()
+	var lengths := PackedFloat64Array()
+	var halves := PackedFloat64Array()
+	var roads := PackedByteArray()
+	for s: Dictionary in _segment_list:
+		anchors.append(s.a)
+		deltas.append(s.delta)
+		lengths.append(s.len2)
+		halves.append(s.half)
+		roads.append(1 if s.kind == "road" else 0)
+	var starts := PackedInt32Array()
+	starts.resize(w.N + 1)
+	var candidates := PackedInt32Array()
+	for key in w.N:
+		starts[key] = candidates.size()
+		for s: Dictionary in _segments.get(key, []):
+			candidates.append(s.id)
+	starts[w.N] = candidates.size()
+	return fast.NearestRoadSegments(points, w.W, w.H, TILE, REACH, anchors, deltas, lengths, halves, roads, starts, candidates)
 
 
 ## Вершине нужны только близкие сооружения, а не перебор всех мостов мира.
@@ -93,6 +152,12 @@ func _index(t: Dictionary, route: int) -> void:
 	var profile := PackedFloat32Array()
 	# У троп сохраняем естественные перегибы; поперечная полка считается отдельно.
 	var smoothing := 0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0)
+	# Соседние окна используют одни и те же высоты; хранить в double, как результат выборки.
+	var base_heights := PackedFloat64Array()
+	if smoothing > 0.0:
+		base_heights.resize(pts.size())
+		for n in pts.size():
+			base_heights[n] = _heights.base_ground_at(pts[n].x * TILE, pts[n].y * TILE)
 	# Короткое симметричное окно по уже выровненному полотну; концы развилок закреплены.
 	for n in pts.size():
 		var p := Vector2(pts[n].x, pts[n].y) * TILE
@@ -102,7 +167,7 @@ func _index(t: Dictionary, route: int) -> void:
 		var radius := mini(3, mini(n, pts.size() - 1 - n)) if smoothing > 0.0 else 0
 		for j in range(n - radius, n + radius + 1):
 			if j != n:
-				sum_h += _heights.base_ground_at(pts[j].x * TILE, pts[j].y * TILE)
+				sum_h += base_heights[j]
 				count += 1
 		profile.append(lerpf(h, sum_h / count, smoothing))
 	var along := 0.0
@@ -116,6 +181,8 @@ func _index(t: Dictionary, route: int) -> void:
 		var next_surf: int = t.surf[n]
 		var s := {a = a, delta = b - a, len2 = a.distance_squared_to(b), half = half,
 			ha = profile[n - 1], hb = profile[n], surf = surf, next = next_surf, kind = t.kind, route = route, along = along}
+		s.id = _segment_list.size()
+		_segment_list.append(s)
 		along += a.distance_to(b)
 		var reach := half + REACH + TILE
 		for z in range(maxi(0, floori((minf(a.y, b.y) - reach) / TILE - 0.5)), mini(w.H - 1, ceili((maxf(a.y, b.y) + reach) / TILE - 0.5))):
@@ -249,10 +316,7 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 
 
 func _base_at(x: float, z: float) -> float:
-	var key := Vector2(x, z)
-	if not _base_cache.has(key):
-		_base_cache[key] = _heights.base_ground_at(x, z)
-	return _base_cache[key]
+	return _heights.base_ground_at(x, z)
 
 
 func _wet_near(i: int) -> float:
@@ -261,7 +325,7 @@ func _wet_near(i: int) -> float:
 	return _wet_cache[i]
 
 
-func _vertex(x: float, z: float) -> Dictionary:
+func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := -1) -> Dictionary:
 	var w := _heights.world
 	var base := _base_at(x, z)
 	var key := clampi(floori(z / TILE - 0.5), 0, w.H - 2) * w.W + clampi(floori(x / TILE - 0.5), 0, w.W - 2)
@@ -270,7 +334,13 @@ func _vertex(x: float, z: float) -> Dictionary:
 	var u := 0.0
 	var side := 0.0
 	var distance := 0.0
-	for s: Dictionary in _segments.get(key, []):
+	if nearest_at >= 0:
+		if nearest[nearest_at] >= 0.0:
+			road = _segment_list[int(nearest[nearest_at])]
+			u = nearest[nearest_at + 1]
+			distance = nearest[nearest_at + 2]
+			side = nearest[nearest_at + 3]
+	for s: Dictionary in (_segments.get(key, []) if nearest_at < 0 else []):
 		var delta: Vector2 = s.delta
 		var f := clampf((Vector2(x, z) - s.a).dot(delta) / s.len2, 0.0, 1.0)
 		var offset: Vector2 = Vector2(x, z) - (s.a + delta * f)

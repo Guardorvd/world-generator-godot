@@ -14,6 +14,9 @@ extends RefCounted
 const H_COST := 0.6
 ## Начальная ёмкость кучи (элементов); растёт вдвое по необходимости
 const HEAP_START_CAP := 1 << 16
+## Дополнительные счётчики только для tools/bench.gd; в игре выключены.
+static var profile_searches := false
+var _search_us := 0
 
 var W := 0
 var H := 0
@@ -47,6 +50,7 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 	_fast = Grid.fast_grid()
 	if _fast != null:
 		_fast.Setup(W, H)
+		_fast.ProfileSearches = profile_searches
 		return
 	g.resize(W * H)
 	from.resize(W * H)
@@ -54,6 +58,10 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 	done.resize(W * H)
 	heap_ids.resize(HEAP_START_CAP)
 	heap_keys.resize(HEAP_START_CAP)
+
+
+func fast() -> Object:
+	return _fast
 
 
 ## Высоты в клетках, как heights. Кэш ленивый: считаются только просмотренные A* шаги.
@@ -125,7 +133,12 @@ func _measure_corridor(c: int, k: int) -> void:
 @warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> PackedInt32Array:
 	if _fast != null:
-		return _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
+		if not profile_searches:
+			return _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
+		var started := Time.get_ticks_usec()
+		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
+		_search_us += Time.get_ticks_usec() - started
+		return path
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
 	var H := self.H
@@ -265,3 +278,11 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		c = from[c]
 	path.reverse()
 	return path
+
+
+func search_stats() -> Dictionary:
+	if not profile_searches or _fast == null:
+		return {}
+	var stats: Dictionary = _fast.SearchStats()
+	stats.call_ms = _search_us / 1000.0
+	return stats

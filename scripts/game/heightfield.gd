@@ -27,6 +27,7 @@ var ribbons: Array = []             # средние линии рек: масс
 var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
+var path_timings := {}
 
 
 ## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
@@ -79,9 +80,14 @@ func _init(w: WorldData, with_structures := true) -> void:
 ## сначала базовое полотно, затем сооружения и метровая сетка для меша и движения.
 ## Возвращает изменённые вершины базовой сетки для уже подготовленного меша загрузчика.
 func finish_paths() -> PackedInt32Array:
+	var t := Time.get_ticks_usec()
 	var changed := RoadBed.refine(self)
+	path_timings.road_bed_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	changed.append_array(build_structures())
+	path_timings.structures_ms = (Time.get_ticks_usec() - t) / 1000.0
 	road_refinement = RoadRefinement.build(self)
+	path_timings.merge(road_refinement.build_timings)
 	return changed
 
 

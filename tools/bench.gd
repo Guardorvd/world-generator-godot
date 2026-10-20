@@ -13,6 +13,10 @@ var _rows: Array = []
 
 
 func _mark(label: String) -> void:
+	# Счётчик внутри одного этапа обновляет экран, но не дробит таблицу на каждую дорогу.
+	label = label.get_slice(": ", 0)
+	if label == _label:
+		return
 	var now := Time.get_ticks_msec()
 	if _label != "":
 		_rows.append([_label, now - _t])
@@ -32,6 +36,7 @@ func _print_table(total: int) -> void:
 
 
 func _init() -> void:
+	Pathfinder.profile_searches = true
 	var args := OS.get_cmdline_user_args()
 	var seed_text: String = args[0] if args.size() > 0 else "Север-1234"
 	var size: int = int(args[1]) if args.size() > 1 else 512
@@ -44,6 +49,8 @@ func _init() -> void:
 	_print_table(total)
 	print("Всего %d мс" % total)
 	print("CPU-подготовка (prepare_* перекрываются с generate): ", JSON.stringify(loaded.timings))
+	print("Дорожный рельеф: ", JSON.stringify(loaded.heights.path_timings))
+	print("Поиск маршрутов: ", JSON.stringify(loaded.world.generation_profile))
 	print("Меш: %d вершин, %d треугольников; дорожных патчей: %d" % [
 		loaded.terrain_arrays[Mesh.ARRAY_VERTEX].size(), loaded.terrain_arrays[Mesh.ARRAY_INDEX].size() / 3,
 		loaded.heights.road_refinement.patches.size()])

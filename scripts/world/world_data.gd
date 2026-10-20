@@ -21,6 +21,7 @@ var rng: WGRandom
 var noise := {}           # имя -> Simplex
 var scale := 1.0          # во сколько раз мир больше среднего: от этого зависит число поселений и троп
 var used_names := {}
+var generation_profile := {} # необязательные счётчики дорожного этапа из bench.gd
 var _fields_thread: Thread
 var _fields := {}         # имя -> поле fbm из NOISE_FIELDS
 

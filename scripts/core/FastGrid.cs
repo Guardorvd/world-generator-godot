@@ -4,6 +4,7 @@ using Godot;
 /// <summary>
 /// Самые долгие циклы генерации на C#: поиск пути A* (Pathfinder), заполнение впадин (StageHydrology),
 /// шум макрорельефа (StageRelief) и поля шума (Parallel.fbm_field).
+/// Пакетный выбор сегментов метровой дорожной сетки — NearestRoadSegments.
 /// Алгоритмы те же, что в GDScript, и дают тот же результат бит в бит, но в десятки раз быстрее.
 /// Работает только в сборке Godot .NET, иначе генерация идёт на GDScript (см. Grid.fast_grid).
 /// Арифметика повторяет GDScript: расчёт в double, значения в массивах float — во float.
@@ -26,6 +27,13 @@ public partial class FastGrid : RefCounted
 	private int[] _heapIds = Array.Empty<int>();
 	private double[] _heapKeys = Array.Empty<double>();
 	private int _gen;
+	public bool ProfileSearches { get; set; }
+	private long _searchCount, _expandedCount, _searchTicks;
+	public Godot.Collections.Dictionary SearchStats() => new()
+	{
+		["calls"] = _searchCount, ["expanded"] = _expandedCount,
+		["native_ms"] = _searchTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency
+	};
 	private readonly int[] _off = new int[8];
 	private float[] _corridorGround = Array.Empty<float>();
 	private float[] _corridorWater = Array.Empty<float>();
@@ -34,6 +42,74 @@ public partial class FastGrid : RefCounted
 	private float[] _corridorCross = Array.Empty<float>();
 	private double _corridorHalf;
 	private static readonly int[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+
+	/// <summary>Поиск ближайшей ячейки водопоя, точная копия цикла StageTrails._animal_trails.</summary>
+	public int FindNearestWater(float[] cost, float[] distWater, int W, int H, int sx, int sy, int R)
+	{
+		int y0 = Math.Max(0, sy - R);
+		int y1 = Math.Min(H, sy + R);
+		int x0 = Math.Max(0, sx - R);
+		int x1 = Math.Min(W, sx + R);
+		double bd = double.PositiveInfinity;
+		int best = -1;
+		for (int y = y0; y < y1; y++)
+		{
+			int row = y * W;
+			int dy = y - sy;
+			int dy2 = dy * dy;
+			for (int x = x0; x < x1; x++)
+			{
+				int i = row + x;
+				if (float.IsPositiveInfinity(cost[i]) || distWater[i] > 1.5f)
+					continue;
+				int dx = x - sx;
+				int d = dx * dx + dy2;
+				if (d < bd)
+				{
+					bd = d;
+					best = i;
+				}
+			}
+		}
+		return best;
+	}
+
+	/// <summary>Пакетный выбор ближайшего сегмента, точная копия цикла RoadRefinement._vertex.
+	/// Индекс ячейки содержит те же сегменты в прежнем порядке; геометрия и покрытие считаются GDScript.</summary>
+	public double[] NearestRoadSegments(Vector2[] points, int width, int height, double tile, double reach,
+		Vector2[] anchors, Vector2[] deltas, double[] lengths, double[] halves, byte[] roads,
+		int[] starts, int[] candidates)
+	{
+		var result = new double[points.Length * 4];
+		for (int i = 0; i < points.Length; i++)
+		{
+			Vector2 point = points[i];
+			int x = Math.Clamp((int)Math.Floor(point.X / tile - 0.5), 0, width - 2);
+			int z = Math.Clamp((int)Math.Floor(point.Y / tile - 0.5), 0, height - 2);
+			int key = z * width + x;
+			double best = double.PositiveInfinity;
+			int at = i * 4;
+			result[at] = -1;
+			for (int j = starts[key]; j < starts[key + 1]; j++)
+			{
+				int id = candidates[j];
+				Vector2 delta = deltas[id];
+				double f = Math.Clamp((double)(point - anchors[id]).Dot(delta) / lengths[id], 0.0, 1.0);
+				Vector2 offset = point - (anchors[id] + delta * (float)f);
+				double d = offset.Length();
+				double rank = d / halves[id] - (roads[id] != 0 ? 0.08 : 0.0);
+				if (d < halves[id] + reach && rank < best)
+				{
+					best = rank;
+					result[at] = id;
+					result[at + 1] = f;
+					result[at + 2] = d;
+					result[at + 3] = offset.Cross(delta.Normalized());
+				}
+			}
+		}
+		return result;
+	}
 
 	/// <summary>Ленивый кэш ширины прохода, копия Pathfinder.set_corridor.</summary>
 	public void SetCorridor(float[] ground, float[] water, byte[] wet, double half)
@@ -120,6 +196,17 @@ public partial class FastGrid : RefCounted
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
 	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor)
 	{
+		if (!ProfileSearches)
+			return FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor);
+		long started = System.Diagnostics.Stopwatch.GetTimestamp();
+		_searchCount++;
+		var path = FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor);
+		_searchTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
+		return path;
+	}
+
+	private int[] FindPathCore(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor)
+	{
 		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
 		var off = _off;
@@ -145,6 +232,7 @@ public partial class FastGrid : RefCounted
 			if (done[c] == gn)
 				continue;
 			done[c] = gn;
+			if (ProfileSearches) _expandedCount++;
 			int cx = c % W, cy = c / W;
 			double gc = g[c];
 			double cc = cost[c];

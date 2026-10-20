@@ -134,7 +134,11 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 				var px := (cx + 0.5) * TILE + x * RoadRefinement.STEP
 				var pz := (cz + 0.5) * TILE + z * RoadRefinement.STEP
 				var id := pos.size()
-				var normal := _local_normal(heights, px, pz)
+				var normal: Vector3
+				if x > 0 and x < RoadRefinement.DIV and z > 0 and z < RoadRefinement.DIV:
+					normal = Vector3(p.h[n - 1] - p.h[n + 1], 2.0, p.h[n - RoadRefinement.STRIDE] - p.h[n + RoadRefinement.STRIDE]).normalized()
+				else:
+					normal = _local_normal(heights, px, pz)
 				if x % RoadRefinement.DIV == 0 and z % RoadRefinement.DIV == 0:
 					id = (cz + z / RoadRefinement.DIV) * w.W + cx + x / RoadRefinement.DIV
 					pos[id].y = p.h[n]
