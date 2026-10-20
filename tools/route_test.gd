@@ -314,6 +314,19 @@ func _rollback_check() -> void:
 	var result := StageTrails._structures(w, path, true, finder, w.cost, state)
 	_check(result.is_empty() and w.bridges.is_empty() and w.tunnels.is_empty(), "отказ от второй переправы убирает мост от отброшенной связи")
 	_check(w.path_mask == mask and surface.hv == before and finder.heights == heights_before and finder.links.is_empty() and state.on_axis == axis_before, "после отказа восстановлены земля, маска пути и шаги поиска")
+	# Повторно используемый мост тоже пишет оси и шаги, даже если нового сооружения нет.
+	w.bridges = [{a = 8 * w.W + 7, b = 8 * w.W + 9}]
+	surface.build_structures()
+	var bridges_before := w.bridges.duplicate(true)
+	result = StageTrails._structures(w, path, true, finder, w.cost, state)
+	_check(result.is_empty() and w.bridges == bridges_before and w.tunnels.is_empty()
+		and finder.links.is_empty() and finder.heights == heights_before and state.on_axis == axis_before
+		and surface.hv == before and not state.detour,
+		"отказ после повторного использования моста восстанавливает оси, высоты, шаги и очередь обходов")
+	# Отказ до первого сооружения не должен оставлять даже пустой рабочий массив links.
+	result = StageTrails._structures(w, Grid.line_cells(14, 8, 23, 8, w.W), true, finder, w.cost, state)
+	_check(result.is_empty() and finder.links.is_empty() and state.on_axis == axis_before,
+		"ранний отказ без снимка сохраняет исходное пустое состояние поиска")
 
 
 ## Технический участок разрешён по своему классу, отвесная геометрия — нет.

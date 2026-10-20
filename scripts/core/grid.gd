@@ -8,6 +8,7 @@ const PATH_STEP := 0.25 # шаг разметки, клеток
 
 const SQRT2 := 1.4142135623730951
 
+
 ## 8 соседей: сначала 4 по сторонам, затем 4 по диагоналям; DL — длина шага
 const DX: Array[int] = [1, -1, 0, 0, 1, 1, -1, -1]
 const DY: Array[int] = [0, 0, 1, -1, 1, -1, 1, -1]
@@ -28,6 +29,75 @@ static func fast_grid() -> Object:
 	if script == null or not script.can_instantiate():
 		return null
 	return script.new()
+
+
+## Крупнейшая область суши с учётом возможных коротких переправ. Вода дальше половины
+## предельного пролёта от любого берега не может принадлежать допустимому мосту.
+## Связность здесь намеренно щедрая: уклон и безопасность самой переправы проверяются позже.
+## Расстояние Чебышёва соответствует числу восьмисвязных шагов, в которых задан max_span.
+static func bridge_region(w: int, h: int, wet: PackedByteArray, max_span: int) -> PackedByteArray:
+	var n := w * h
+	var result := PackedByteArray()
+	result.resize(n)
+	if n == 0:
+		return result
+	var distance := PackedInt32Array()
+	distance.resize(n)
+	var reach := maxi(0, max_span / 2)
+	for i in n:
+		distance[i] = reach + 1 if wet[i] != 0 else 0
+	for y in h:
+		for x in w:
+			var i := y * w + x
+			if x > 0: distance[i] = mini(distance[i], distance[i - 1] + 1)
+			if y > 0:
+				distance[i] = mini(distance[i], distance[i - w] + 1)
+				if x > 0: distance[i] = mini(distance[i], distance[i - w - 1] + 1)
+				if x + 1 < w: distance[i] = mini(distance[i], distance[i - w + 1] + 1)
+	for y in range(h - 1, -1, -1):
+		for x in range(w - 1, -1, -1):
+			var i := y * w + x
+			if x + 1 < w: distance[i] = mini(distance[i], distance[i + 1] + 1)
+			if y + 1 < h:
+				distance[i] = mini(distance[i], distance[i + w] + 1)
+				if x > 0: distance[i] = mini(distance[i], distance[i + w - 1] + 1)
+				if x + 1 < w: distance[i] = mini(distance[i], distance[i + w + 1] + 1)
+	var regions := PackedInt32Array()
+	regions.resize(n)
+	var queue := PackedInt32Array()
+	queue.resize(n)
+	var region := 0
+	var largest := 0
+	var largest_land := 0
+	for start in n:
+		if regions[start] != 0 or distance[start] > reach:
+			continue
+		region += 1
+		regions[start] = region
+		queue[0] = start
+		var head := 0
+		var tail := 1
+		var land := 0
+		while head < tail:
+			var c := queue[head]
+			head += 1
+			if wet[c] == 0: land += 1
+			var x := c % w
+			var y := c / w
+			for dy in range(maxi(0, y - 1), mini(h, y + 2)):
+				for dx in range(maxi(0, x - 1), mini(w, x + 2)):
+					var next := dy * w + dx
+					if regions[next] == 0 and distance[next] <= reach:
+						regions[next] = region
+						queue[tail] = next
+						tail += 1
+		if land > largest_land:
+			largest_land = land
+			largest = region
+	if largest != 0:
+		for i in n:
+			result[i] = 1 if regions[i] == largest else 0
+	return result
 
 
 ## Лежит ли клетка i на краю карты w × h

@@ -32,6 +32,13 @@ static func _place_settlements(w: WorldData) -> void:
 	var lake := w.lake
 	var settlements: Array = []
 	var cand: Array = []
+	# Не размещаем поселение за проливом, который шире любого допустимого моста.
+	# Иначе дороги перебирают все соседние поселения и десятки объездов без шанса на связь.
+	var wet := PackedByteArray()
+	wet.resize(w.N)
+	for i in w.N:
+		wet[i] = 1 if ocean[i] != 0 or lake[i] != 0 or river[i] != 0 else 0
+	var reachable := Grid.bridge_region(W, H, wet, StageTrails.SPAN)
 	for y in range(6, H - 6, 2):
 		for x in range(6, W - 6, 2):
 			var i := y * W + x
@@ -52,6 +59,8 @@ static func _place_settlements(w: WorldData) -> void:
 		if settlements.size() >= want:
 			break
 		var i: int = c[1]
+		if reachable[i] == 0:
+			continue
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
 		var close := false

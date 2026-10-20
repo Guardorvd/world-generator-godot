@@ -124,6 +124,8 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 		var p: Dictionary = refinement.patches[key]
 		var cx := key % w.W
 		var cz := key / w.W
+		var right_patch := refinement.patches.has(key + 1)
+		var lower_patch := refinement.patches.has(key + w.W)
 		for z in RoadRefinement.STRIDE:
 			for x in RoadRefinement.STRIDE:
 				var n := z * RoadRefinement.STRIDE + x
@@ -135,7 +137,11 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 				var pz := (cz + 0.5) * TILE + z * RoadRefinement.STEP
 				var id := pos.size()
 				var normal: Vector3
-				if x > 0 and x < RoadRefinement.DIV and z > 0 and z < RoadRefinement.DIV:
+				# При выборке на правой/нижней границе height_at читает соседний патч.
+				# Если его нет, нужна прежняя выборка исходного рельефа в double.
+				if x > 0 and x < RoadRefinement.DIV and z > 0 and z < RoadRefinement.DIV \
+						and (x < RoadRefinement.DIV - 1 or right_patch) \
+						and (z < RoadRefinement.DIV - 1 or lower_patch):
 					normal = Vector3(p.h[n - 1] - p.h[n + 1], 2.0, p.h[n - RoadRefinement.STRIDE] - p.h[n + RoadRefinement.STRIDE]).normalized()
 				else:
 					normal = _local_normal(heights, px, pz)

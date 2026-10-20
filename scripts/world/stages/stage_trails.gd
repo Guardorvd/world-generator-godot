@@ -695,7 +695,7 @@ static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary
 
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int = 0) -> PackedInt32Array:
 	# Неудачная связь не оставляет за собой мосты, выемки и разрешённые шаги по их осям.
-	var ctx := {checkpoint = null, initial_detour = state.detour}
+	var ctx := {checkpoint = null, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
 	var result := _build_structures(w, p, road, finder, cost, state, retries, ctx)
 	if result.is_empty():
 		_restore_structures(w, finder, state, ctx)
@@ -705,15 +705,17 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 static func _restore_structures(w: WorldData, finder: Pathfinder, state: Dictionary, ctx: Dictionary) -> void:
 	if ctx.checkpoint == null:
 		state.detour = ctx.initial_detour
+		if ctx.initial_links_empty:
+			finder.links = PackedByteArray()
 		return
 	var checkpoint: Dictionary = ctx.checkpoint
 	w.bridges = checkpoint.bridges.duplicate()
 	w.tunnels = checkpoint.tunnels.duplicate()
 	w.path_mask = checkpoint.mask.duplicate()
 	finder.heights = checkpoint.heights.duplicate()
-	finder.links = checkpoint.links.duplicate()
+	finder.links = PackedByteArray() if ctx.initial_links_empty else checkpoint.links.duplicate()
 	state.on_axis = checkpoint.on_axis.duplicate()
-	state.detour = checkpoint.detour
+	state.detour = ctx.initial_detour
 	if state.has("surface"):
 		state.surface.hv = checkpoint.hv.duplicate()
 		state.surface.build_structures()
@@ -833,7 +835,8 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				ends = []
 				to_a = PackedInt32Array()
 				from_b = PackedInt32Array()
-		if (kind == "tunnel" or ends.is_empty()) and ctx.checkpoint == null:
+		# Повторно используемый мост тоже записывает on_axis, heights и links ниже.
+		if ctx.checkpoint == null:
 			ctx.checkpoint = _make_checkpoint(w, finder, state)
 		if kind == "tunnel" and ends.is_empty():
 			if state.detour:
