@@ -19,6 +19,7 @@ func _init() -> void:
 	var shore := _compare(_world("shore"), "полка у озера на склоне 150 %", true)
 	check(shore.cross < shore.raw_cross * 0.3, "полка дороги у озера осталась на стене")
 	_shore_invariants()
+	_trail_bench()
 	check(flat.power < bank.power * 0.7 and flat.power < bumps.power * 0.7, "удобная земля обрабатывается так же сильно, как трудная")
 	check(bank.cross < bank.raw_cross * 0.5, "косой склон не получил удобного полотна")
 	check(bumps.bumps < bumps.raw_bumps * 0.9 and bumps.height_range < bumps.raw_range * 0.85, "локальные перегибы и перепад высот не смягчились")
@@ -53,7 +54,7 @@ func _world(mode: String) -> WorldData:
 				value += 3.5 * exp(-pow((x - 90.0) / 5.0, 2.0)) - 3.0 * exp(-pow((x - 155.0) / 6.0, 2.0))
 			elif mode == "steep":
 				value += (x - 100.0) * 0.8
-			elif mode == "shore":
+			elif mode == "shore" or mode == "trail_bank":
 				value += (z - 130.0) * 1.5
 			w.h[j * w.W + i] = value / GameConfig.HS
 	for name: String in ["ocean", "lake", "river", "biome", "path_mask", "road_surface"]:
@@ -99,6 +100,44 @@ func _shore_invariants() -> void:
 				elif value < base:
 					check(value >= minf(base, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "полка затопила сухой берег")
 	check(changed > 1.2 and changed <= RoadRefinement.BENCH_LIMIT + 0.001, "полка не использовала ограниченную выемку в склоне")
+
+
+func _trail_bench() -> void:
+	var w := _world("trail_bank")
+	w.trails[0].kind = "trail"
+	for p: Dictionary in w.trails[0].pts:
+		p.w = 0.55
+	var h := Heightfield.new(w)
+	var before := 0.0
+	var after := 0.0
+	for x in range(64, 193):
+		before += absf(h.base_ground_at(x, 131.0) - h.base_ground_at(x, 129.0)) * 0.5
+		after += absf(h.ground_at(x, 131.0) - h.ground_at(x, 129.0)) * 0.5
+	check(after < before * 0.3, "обычная тропа на склоне осталась без полки")
+	var change := 0.0
+	for key: int in h.road_refinement.patches:
+		var patch: Dictionary = h.road_refinement.patches[key]
+		for z in RoadRefinement.STRIDE:
+			for x in RoadRefinement.STRIDE:
+				var px := (key % w.W + 0.5) * GameConfig.TILE + x
+				var pz := (key / w.W + 0.5) * GameConfig.TILE + z
+				var base := h.base_ground_at(px, pz)
+				var value: float = patch.h[z * RoadRefinement.STRIDE + x]
+				change = maxf(change, absf(value - base))
+	check(change <= RoadRefinement.TRAIL_BENCH_LIMIT + 0.001, "тропа превысила предел земляных работ")
+	print("Полка обычной тропы: крен %.1f → %.1f %%, срез/подсыпка до %.2f м" % [100.0 * before / 129.0, 100.0 * after / 129.0, change])
+	var shore := _world("shore")
+	shore.trails[0].kind = "trail"
+	var shore_h := Heightfield.new(shore)
+	for x in range(64, 193):
+		check(absf(shore_h.ground_at(x, 130.0) - shore_h.base_ground_at(x, 130.0)) < 0.001,
+			"полка обычной тропы изменила защищённый ближний берег")
+	var steep := _world("steep")
+	steep.trails[0].kind = "trail"
+	var steep_h := Heightfield.new(steep)
+	for x in range(64, 193):
+		check(absf(steep_h.ground_at(x, 130.0) - steep_h.base_ground_at(x, 130.0)) < 0.005,
+			"полка тропы пытается выровнять постоянный подъём 80 %")
 
 
 func _compare(w: WorldData, label: String, ride: bool) -> Dictionary:

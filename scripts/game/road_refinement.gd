@@ -12,6 +12,7 @@ const REACH := 3.0
 const FIT_FADE := 12.0   # 4.5: плавный переход у концов, развилок и защищённых мест, м
 const FIT_LIMIT := 1.2   # обычное уточнение относительно сетки RoadBed, м
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
+const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
@@ -176,7 +177,8 @@ func _fit_network() -> void:
 			lo = maxi(0, j - 12)
 			hi = mini(count - 1, j + 12)
 			var sustained := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
-			allowed[j] = (1.0 - smoothstep(0.45, 0.7, sustained)) * (1.0 if t.kind == "road" else 1.0 - smoothstep(0.55, 0.85, cross_grade))
+			# Косой склон требует полки и у обычной тропы. Непригодный продольный подъём остаётся защищён.
+			allowed[j] = 1.0 - smoothstep(0.45, 0.7, sustained)
 			if not _fit_safe(p, tangent, route, j * STEP, t.kind == "road"):
 				allowed[j] = 0.0
 			distance[j] = 0.0 if allowed[j] <= 0.0 else (distance[j - 1] + STEP if j > 0 else 0.0)
@@ -211,10 +213,11 @@ func _fit_network() -> void:
 			var target := ground[j] + clampf((average - ground[j]) * lerpf(0.35, 0.95, amount), -axial_limit, axial_limit)
 			profile.append(target)
 			var power := lerpf(0.25, 1.0, amount) * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j])
-			strength.append(power * (0.55 if t.kind == "trail" else 1.0))
+			var trail_power := lerpf(0.55, 0.85, smoothstep(0.5, 0.9, cross_slope)) if t.kind == "trail" else 1.0
+			strength.append(power * trail_power)
 			var cap := lerpf(0.2, FIT_LIMIT, amount) * (0.5 if t.kind == "trail" else 1.0)
-			if t.kind == "road":
-				cap = maxf(cap, minf(BENCH_LIMIT, cross_slope * float(t.pts[0].w) * TILE * 0.5))
+			var bench_limit := BENCH_LIMIT if t.kind == "road" else TRAIL_BENCH_LIMIT
+			cap = maxf(cap, minf(bench_limit, cross_slope * float(t.pts[0].w) * TILE * 0.5))
 			limits.append(cap)
 		fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
 
@@ -326,15 +329,17 @@ func _vertex(x: float, z: float) -> Dictionary:
 		var power := lerpf(fit.strength[j], fit.strength[j + 1], f)
 		var cap := lerpf(fit.limit[j], fit.limit[j + 1], f)
 		h = base + clampf(level + detail - base, -cap, cap) * influence * pin * power
-		# 4.5+: ограниченная земляная полка там, где прежняя обработка отключалась.
+		# Ограниченная земляная полка дороги или обычной тропы на косом склоне.
 		# Полотно остаётся частью того же меша и поверхности движения; вода закреплена.
-		if road.kind == "road" and _heights.water_level[i] == -INF and power > 0.0:
+		if _heights.water_level[i] == -INF and power > 0.0:
 			var normal := Vector2(-road.delta.y, road.delta.x).normalized() * half
 			var on_axis: Vector2 = road.a + road.delta * u
 			var cross_grade := absf(_heights.base_ground_at(on_axis.x + normal.x, on_axis.y + normal.y) - _heights.base_ground_at(on_axis.x - normal.x, on_axis.y - normal.y)) / (2.0 * half)
 			var bench := smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, cross_grade)
 			if bench > 0.0:
-				var dry_level := maxf(level + detail, _wet_near(i) + RoadBed.WATER_GAP)
+				# Узкая тропа следует высоте своей оси: сильная полка не усиливает продольное сглаживание у поворота.
+				var axis_level := level if road.kind == "road" else _heights.base_ground_at(on_axis.x, on_axis.y)
+				var dry_level := maxf(axis_level + detail, _wet_near(i) + RoadBed.WATER_GAP)
 				var shelf := base + clampf(dry_level - base, -cap, cap)
 				h = lerpf(h, shelf, influence * structure_pin * power * bench)
 	if _heights.water_level[i] == -INF and h < base:
