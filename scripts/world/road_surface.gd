@@ -18,16 +18,17 @@ const MEADOW := 7    # травяная колея, тропа заросла
 
 ## name — для интерфейса; speed — множитель скорости поверх биома (раньше у дороги 1.4, у тропы 1.3);
 ## rough — тряска и покачивание велосипеда (0 — гладко, 1 — бездорожье; до 4.3 у всех путей 0.15); grip — сцепление в повороте;
-## hard — звук шагов «гравий»; color — цвет полосы на текстуре и карте
+## hard — звук шагов «гравий»; color — цвет полосы на текстуре и карте;
+## grain — выраженность каменного зерна; organic — примесь лесной подстилки и травы (только внешний вид)
 const LIST := [
 	{},
-	{name = "гравий", speed = 1.4, rough = 0.18, grip = 0.95, hard = true, color = [172, 162, 142]},
-	{name = "грунтовка", speed = 1.33, rough = 0.2, grip = 1.0, hard = false, color = [160, 128, 88]},
-	{name = "укатанная земля", speed = 1.4, rough = 0.12, grip = 1.0, hard = false, color = [150, 126, 96]},
-	{name = "камень", speed = 1.2, rough = 0.45, grip = 0.9, hard = true, color = [150, 145, 136]},
-	{name = "песок", speed = 1.1, rough = 0.2, grip = 0.75, hard = false, color = [212, 194, 148]},
-	{name = "лесная тропа", speed = 1.22, rough = 0.32, grip = 0.95, hard = false, color = [124, 98, 68]},
-	{name = "травяная колея", speed = 1.15, rough = 0.28, grip = 0.95, hard = false, color = [150, 146, 96]},
+	{name = "гравий", grain = 0.8, organic = 0.0, speed = 1.4, rough = 0.18, grip = 0.95, hard = true, color = [172, 162, 142]},
+	{name = "грунтовка", grain = 0.3, organic = 0.0, speed = 1.33, rough = 0.2, grip = 1.0, hard = false, color = [160, 128, 88]},
+	{name = "укатанная земля", grain = 0.08, organic = 0.0, speed = 1.4, rough = 0.12, grip = 1.0, hard = false, color = [150, 126, 96]},
+	{name = "камень", grain = 1.0, organic = 0.0, speed = 1.2, rough = 0.45, grip = 0.9, hard = true, color = [150, 145, 136]},
+	{name = "песок", grain = 0.12, organic = 0.0, speed = 1.1, rough = 0.2, grip = 0.75, hard = false, color = [212, 194, 148]},
+	{name = "лесная тропа", grain = 0.18, organic = 0.65, speed = 1.22, rough = 0.32, grip = 0.95, hard = false, color = [124, 98, 68]},
+	{name = "травяная колея", grain = 0.05, organic = 1.0, speed = 1.15, rough = 0.28, grip = 0.95, hard = false, color = [150, 146, 96]},
 ]
 
 const SPAN := 18.0        # длина отрезка пути (клеток, ~70 м), на котором покрытие меняется по хешу

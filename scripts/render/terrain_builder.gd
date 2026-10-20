@@ -208,4 +208,8 @@ static func _detail_material() -> ShaderMaterial:
 	mat.shader = SHADER
 	mat.set_shader_parameter("detail_tex", _detail[0])
 	mat.set_shader_parameter("detail_normal", _detail[1])
+	var surfaces := PackedVector3Array([Vector3.ZERO])
+	for s: Dictionary in RoadSurface.LIST.slice(1):
+		surfaces.append(Vector3(s.grain, s.organic, s.rough))
+	mat.set_shader_parameter("surface_detail", surfaces)
 	return mat

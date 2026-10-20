@@ -14,7 +14,7 @@ const FIT_LIMIT := 1.2   # обычное уточнение относител�
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
 
-var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}
+var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
 var _segments := {}
 var _structures := {}
@@ -298,7 +298,13 @@ func _vertex(x: float, z: float) -> Dictionary:
 	var color := Color8(ca[0], ca[1], ca[2]).lerp(Color8(cb[0], cb[1], cb[2]), smoothstep(0.0, 1.0, u)).srgb_to_linear()
 	if surf == RoadSurface.MEADOW:
 		mask *= 0.65
-	color.a = mask
+	# Меняется только вид края. Прежняя маска остаётся для геометрической микронеровности.
+	var ground_mask := mask
+	var blend := smoothstep(0.0, 1.0, u)
+	var organic := lerpf(RoadSurface.LIST[road.surf].organic, RoadSurface.LIST[road.next].organic, blend)
+	var visual_edge := edge * (1.0 - organic * 0.12)
+	var visual_shoulder := shoulder * (1.0 + organic * 0.5)
+	color.a = (1.0 - smoothstep(visual_edge * 0.55, visual_edge + visual_shoulder, d)) * (1.0 - organic * 0.35)
 	var influence := 1.0 - smoothstep(half + 0.3, half + REACH, d)
 	var cx := clampi(floori(x / TILE), 0, w.W - 1)
 	var cz := clampi(floori(z / TILE), 0, w.H - 1)
@@ -318,7 +324,7 @@ func _vertex(x: float, z: float) -> Dictionary:
 	var rough: float = RoadSurface.LIST[surf].rough
 	var crown := 0.035 * (1.0 - smoothstep(0.0, half, d))
 	var rut := -0.045 * exp(-pow((d - half * 0.48) / 0.3, 2.0))
-	var detail := crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - mask)
+	var detail := crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - ground_mask)
 	var limit := 0.65 if road.kind == "road" else 0.3
 	var target := lerpf(road.ha, road.hb, u) + detail
 	var h := base + clampf(target - base, -limit, limit) * influence * pin
@@ -346,7 +352,7 @@ func _vertex(x: float, z: float) -> Dictionary:
 				h = lerpf(h, shelf, influence * structure_pin * power * bench)
 	if _heights.water_level[i] == -INF and h < base:
 		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
-	return {h = h, color = color, uv = Vector2(side / half, rough), surface = surf, road = road.kind == "road"}
+	return {h = h, color = color, uv = Vector2(side / half, float(surf)), surface = surf, road = road.kind == "road"}
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).
