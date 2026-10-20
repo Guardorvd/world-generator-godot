@@ -8,7 +8,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
-const BRIDGE_HALF := 2.0    # полуширина настила моста, м
+const BRIDGE_HALF := 2.6    # настил шире основной дороги, чтобы опираться на берег по обе стороны въезда
 const TUNNEL_HALF := 2.5    # полуширина туннеля, м
 const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
 const TUNNEL_CUT := StageTrails.TUNNEL_R   # выемка под туннелем: клетки ближе этого к оси, в клетках

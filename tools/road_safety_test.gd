@@ -3,9 +3,16 @@ extends SceneTree
 ## -- --out res://tools/control/runs/roads.json --seeds 6 --size 512
 const Connectivity := preload("res://tools/selftest.gd")
 const SEEDS := ["Север-1234", "Туман-4821", "Ущелье", "Янтарь-5150", "Озёра-5", "Гряда-310", "a1", "b2", "c3", "d4", "e5", "f6"]
+var fails := 0
 
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
+	Grid.allow_fast = not args.has("--gdscript")
+	_route_grade_check()
+	if args.has("--route-only"):
+		print("Предел уклона основной дороги проверен; нарушений: %d" % fails)
+		quit(1 if fails > 0 else 0)
+		return
 	var count := 6
 	var size := 512
 	var output := ""
@@ -15,9 +22,7 @@ func _init() -> void:
 		if args[k] == "--size": size = int(args[k + 1])
 		if args[k] == "--out": output = args[k + 1]
 		if args[k] == "--seed": only_seed = args[k + 1]
-	Grid.allow_fast = not args.has("--gdscript")
 	var results := {}
-	var fails := 0
 	for seed_text in ([only_seed] if not only_seed.is_empty() else SEEDS.slice(0, count)):
 		var start := Time.get_ticks_msec()
 		var trace := func(_p: float, label: String) -> void:
@@ -25,6 +30,10 @@ func _init() -> void:
 		var w := WorldGenerator.generate(seed_text, size, trace)
 		var heights := Heightfield.new(w)
 		var row := {connected = Connectivity.settlements_connected(w), settlements = w.settlements.size(), routes = w.trails.size(), bridges = w.bridges.size(), tunnels = w.tunnels.size()}
+		row.bridge_landing = _bridge_landing_measure(heights)
+		if row.bridge_landing.wet > 0 or row.bridge_landing.max_gap > StageTrails.BRIDGE_LANDING_GAP + 0.01:
+			printerr("Небезопасный стык моста: ", seed_text, " ", JSON.stringify(row.bridge_landing))
+			fails += 1
 		for kind in ["road", "trail", "mountain"]:
 			row[kind] = measure(w, heights, kind)
 			if row[kind].lake_wet > 0.0 or not is_finite(row[kind].max_grade):
@@ -45,6 +54,34 @@ func _init() -> void:
 		var file := FileAccess.open(output, FileAccess.WRITE)
 		file.store_string(JSON.stringify(results, "\t"))
 	quit(1 if fails > 0 else 0)
+
+
+func _route_grade_check() -> void:
+	# На карте из двух клеток нет обхода: дорога не должна принимать крутой
+	# перепад только из-за запасного поиска без ограничения уклона.
+	var finder := Pathfinder.new(2, 1, PackedFloat32Array([0.0, 0.8]))
+	var cost := PackedFloat32Array([1.0, 1.0])
+	var path := StageTrails._road_path(finder, cost, 0, 1)
+	if not path.is_empty():
+		fails += 1
+		printerr("Основная дорога приняла участок с уклоном 80 % без обхода")
+
+
+func _bridge_landing_measure(heights: Heightfield) -> Dictionary:
+	var max_gap := 0.0
+	var wet := 0
+	for s: Dictionary in heights.structures:
+		if s.tunnel:
+			continue
+		for end in 2:
+			var t: float = 0.0 if end == 0 else s.len
+			var deck: float = s.ay if end == 0 else s.by
+			for side in [-1.0, 0.0, 1.0]:
+				var x: float = s.ax + s.ux * t - s.uz * side * s.half
+				var z: float = s.az + s.uz * t + s.ux * side * s.half
+				max_gap = maxf(max_gap, absf(heights.ground_at(x, z) - deck))
+				wet += 1 if heights.depth_at(x, z) > 0.3 else 0
+	return {max_gap = max_gap, wet = wet}
 
 static func measure(w: WorldData, h: Heightfield, kind: String) -> Dictionary:
 	var r := {length = 0.0, steep35 = 0.0, steep60 = 0.0, wet = 0.0, edge_wet = 0.0, lake_wet = 0.0, deep_wet = 0.0, tilted50 = 0.0, max_grade = 0.0, worst = Vector2.ZERO}

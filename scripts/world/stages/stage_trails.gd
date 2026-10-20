@@ -27,6 +27,7 @@ const RISE := 0.1           # хребет выше этого (около 26 м
 const RISE_LEN := 30        # самый длинный туннель, клеток
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
+const BRIDGE_LANDING_GAP := 0.8 # перепад под концами настила не больше обычной ступени, м
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
 const PORTAL_LEN := 3.0     # у входа туннеля, ближе стольких клеток, прежний путь не пересекает выемку
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
@@ -54,7 +55,7 @@ const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; ед
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## Внутри них крутизна оплачивается штрафом climb, а не общим запретом 35 %.
 const ROAD_GRADE := 0.35 # предпочтительный проход основной сети
-const ROAD_LIMIT := 0.55 # запасной технический проход, когда прежние варианты связи не построены
+const ROAD_LIMIT := 0.4 # предел уклона при поиске основной дороги; более крутой участок требует обхода
 const TRAIL_GRADE := 0.75
 const MOUNTAIN_GRADE := 0.9
 const BENCH_CROSS := 1.5 # косой склон, для которого уже предусмотрена ограниченная земляная полка
@@ -590,8 +591,6 @@ static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: 
 	if p.is_empty() and wide:
 		finder.use_corridor = false
 		p = finder.find_path(cost, a, b, ROAD_CLIMB, limit)
-	if p.is_empty():
-		p = finder.find_path(cost, a, b, ROAD_CLIMB)
 	return p
 
 
@@ -846,6 +845,10 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					if w.ocean[c] != 0 or w.lake[c] != 0 or w.h[c] > top:
 						j = -1
 						break
+				# Водная переправа уже ищет безопасный берег. Мост через овраг тоже
+				# проверяет всю ширину въезда, прежде чем заменить естественный путь.
+				if j > 0 and state.has("surface") and not _bridge_clear(state.surface, p[i], p[j]):
+					j = -1
 		if j < 0:
 			out.append(p[i + 1])
 			i += 1
@@ -917,6 +920,16 @@ static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
 	s.by = surface.ground_at(s.bx, s.bz)
 	if absf(s.by - s.ay) > GRADE * HEIGHT_SCALE * s.len:
 		return false
+	# Концы моста не должны попадать на узкий мыс: проверяем сушу под обоими краями
+	# настила. Иначе центр касается берега, а большая часть въезда нависает над водой.
+	for end in 2:
+		var t: float = 0.0 if end == 0 else s.len
+		var deck: float = s.ay if end == 0 else s.by
+		for side in [-1.0, 0.0, 1.0]:
+			var x: float = s.ax + s.ux * t - s.uz * side * s.half
+			var z: float = s.az + s.uz * t + s.ux * side * s.half
+			if surface.depth_at(x, z) > 0.3 or absf(surface.ground_at(x, z) - deck) > BRIDGE_LANDING_GAP:
+				return false
 	for k in range(-2, ceili(s.len) + 3):
 		var t := clampf(float(k), -2.0, s.len + 2.0)
 		var deck := surface.level(s, t)

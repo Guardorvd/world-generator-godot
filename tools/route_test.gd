@@ -206,6 +206,12 @@ func _surface_check() -> void:
 	w.h.fill(0.1)
 	ground = Heightfield.new(w, false)
 	_check(StageTrails._bridge_clear(ground, crossing[0], crossing[-1]), "ровный свободный настил допускается")
+	# Мост не должен приземляться на узкий сухой выступ, если края настила остаются над водой.
+	w.lake[3 * w.W + 5] = 1
+	w.filled[3 * w.W + 5] = 0.14
+	ground = Heightfield.new(w, false)
+	_check(not StageTrails._bridge_clear(ground, crossing[0], crossing[-1]), "узкий береговой выступ не принимается как полноширинная опора моста")
+	w.lake.fill(0)
 	_check(not StageTrails._bridge_clear(Heightfield.new(w, false), 4 * w.W + 5, 4 * w.W + 5), "нулевой мост не создаётся")
 	# Нельзя подменить отсутствующий сухой подход к мосту прямой через преграду.
 	w.cost[4 * w.W + 4] = INF
@@ -214,6 +220,51 @@ func _surface_check() -> void:
 	for y in w.H:
 		w.cost[y * w.W + 4] = INF
 	_check(StageTrails._link(w, finder, 4 * w.W + 3, 4 * w.W + 5).is_empty(), "отсутствующий подход к сооружению не заменяется опасной прямой")
+
+
+func _ravine_landing_check() -> void:
+	const W := 24
+	var w := WorldData.new()
+	w.W = W
+	w.H = W
+	w.N = W * W
+	w.h.resize(w.N)
+	w.h.fill(0.1)
+	for name: String in ["filled", "ocean", "lake", "river", "path_mask", "cost"]:
+		var values: Variant = PackedFloat32Array() if name == "filled" or name == "cost" else PackedByteArray()
+		values.resize(w.N)
+		if name == "cost": values.fill(1.0)
+		w.set(name, values)
+	# A dry ravine triggers the ravine bridge branch without going through the
+	# water-crossing scan. First prove that this profile normally gets a bridge.
+	for x in range(9, 12): w.h[12 * W + x] = 0.06
+	var path := Grid.line_cells(2, 12, 21, 12, W)
+	var ground := Heightfield.new(w, false)
+	var heights := ground.hv.duplicate()
+	for i in W * W: heights[i] /= GameConfig.TILE
+	var finder := Pathfinder.new(W, W, heights)
+	var on_axis := PackedByteArray()
+	on_axis.resize(w.N)
+	var state := {detour = false, on_axis = on_axis, surface = ground}
+	var normal := StageTrails._structures(w, path, true, finder, w.cost, state)
+	var makes_ravine_bridge := not normal.is_empty() and not w.bridges.is_empty()
+	_check(makes_ravine_bridge, "ровный сухой овраг использует мостовую ветку")
+	# Lower the lateral terrain beside both actual bridge endpoints. The center path
+	# remains unchanged, but the full-width bank support is no longer safe.
+	w.bridges.clear()
+	w.path_mask.fill(0)
+	w.h[11 * W + 8] -= 20.0 / GameConfig.HS
+	w.h[11 * W + 12] -= 20.0 / GameConfig.HS
+	ground = Heightfield.new(w, false)
+	heights = ground.hv.duplicate()
+	for i in W * W: heights[i] /= GameConfig.TILE
+	finder = Pathfinder.new(W, W, heights)
+	on_axis = PackedByteArray()
+	on_axis.resize(w.N)
+	state = {detour = false, on_axis = on_axis, surface = ground}
+	_check(not StageTrails._bridge_clear(ground, path[6], path[10]), "ухудшение берега выключает полноширинную опору")
+	var no_bridge := StageTrails._structures(w, path, true, finder, w.cost, state)
+	_check(not no_bridge.is_empty() and w.bridges.is_empty(), "сухой овраг без полноширинной опоры оставляет путь без моста")
 
 
 func _corridor_check() -> void:
@@ -359,10 +410,10 @@ func _technical_check() -> void:
 		and finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_LIMIT).is_empty(),
 		"пределы дороги и технической тропы различаются")
 	var road_terrain := terrain.duplicate()
-	for i in road_terrain.size(): road_terrain[i] *= 0.75
+	for i in road_terrain.size(): road_terrain[i] *= 0.65
 	var road_finder := Pathfinder.new(W, W, road_terrain)
 	_check(not StageTrails._road_path(road_finder, cost, start, finish, true, StageTrails.ROAD_LIMIT).is_empty() and road_finder.use_corridor,
-		"дорога допускает технический проход 45 % до отключения проверки ширины")
+		"дорога допускает обход с уклоном до нового предела 40 % и сохраняет проверку ширины")
 	for i in terrain.size(): terrain[i] *= 2.0
 	finder = Pathfinder.new(W, W, terrain)
 	_check(StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty(),
@@ -428,6 +479,7 @@ func _init() -> void:
 	_raster_check()
 	_terrain_check()
 	_surface_check()
+	_ravine_landing_check()
 	_corridor_check()
 	_rollback_check()
 	_connection_check(false)

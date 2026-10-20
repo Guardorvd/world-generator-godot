@@ -18,7 +18,7 @@ const PIN_FADE := 4.0    # и пола остаются вровень с зем
 ## неровности, которая остаётся; cut — наибольший срез или подсыпка профиля, м; side — то же для
 ## точки рельефа сбоку от линии (поперечный уклон), м
 const KINDS := {
-	road = {flat = 0.6, shoulder = 3.0, window = 10.0, keep = 0.2, cut = 1.2, side = 1.6},
+	road = {flat = 0.6, shoulder = 3.0, window = 14.0, keep = 0.12, cut = 1.2, side = 1.6},
 	trail = {flat = 0.4, shoulder = 2.0, window = 4.0, keep = 0.65, cut = 0.4, side = 0.8},
 	mountain = {flat = 0.3, shoulder = 1.5, window = 2.0, keep = 0.85, cut = 0.2, side = 0.5},
 }
