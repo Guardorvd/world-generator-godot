@@ -91,18 +91,20 @@ func _index(t: Dictionary, route: int) -> void:
 	var w := _heights.world
 	var pts: Array = t.pts
 	var profile := PackedFloat32Array()
+	# У троп сохраняем естественные перегибы; поперечная полка считается отдельно.
+	var smoothing := 0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0)
 	# Короткое симметричное окно по уже выровненному полотну; концы развилок закреплены.
 	for n in pts.size():
 		var p := Vector2(pts[n].x, pts[n].y) * TILE
 		var h := _heights.base_ground_at(p.x, p.y)
 		var sum_h := h
 		var count := 1
-		var radius := mini(3, mini(n, pts.size() - 1 - n))
+		var radius := mini(3, mini(n, pts.size() - 1 - n)) if smoothing > 0.0 else 0
 		for j in range(n - radius, n + radius + 1):
 			if j != n:
 				sum_h += _heights.base_ground_at(pts[j].x * TILE, pts[j].y * TILE)
 				count += 1
-		profile.append(lerpf(h, sum_h / count, 0.65))
+		profile.append(lerpf(h, sum_h / count, smoothing))
 	var along := 0.0
 	for n in range(1, pts.size()):
 		var a := Vector2(pts[n - 1].x, pts[n - 1].y) * TILE
@@ -209,7 +211,7 @@ func _fit_network() -> void:
 				if absi(k - j) <= small:
 					sum_small += ground[k]
 			var average := lerpf(sum_small / (2 * small + 1), sum_h / (2 * radius + 1), amount)
-			var axial_limit := lerpf(0.15, 0.9, amount)
+			var axial_limit := lerpf(0.15, 0.9, amount) * (0.35 if t.kind == "trail" else 1.0)
 			var target := ground[j] + clampf((average - ground[j]) * lerpf(0.35, 0.95, amount), -axial_limit, axial_limit)
 			profile.append(target)
 			var power := lerpf(0.25, 1.0, amount) * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j])

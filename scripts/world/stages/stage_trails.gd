@@ -51,7 +51,13 @@ const ROAD_CLIMB := 32.0
 const TRAIL_CLIMB := 12.0
 const MOUNTAIN_CLIMB := 4.0
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
-const ROAD_GRADE := 0.35   # сначала ищем непрерывный проезжаемый проход; сложные связи остаются с сооружениями
+## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
+## Внутри них крутизна оплачивается штрафом climb, а не общим запретом 35 %.
+const ROAD_GRADE := 0.35 # предпочтительный проход основной сети
+const ROAD_LIMIT := 0.55 # запасной технический проход, когда прежние варианты связи не построены
+const TRAIL_GRADE := 0.75
+const MOUNTAIN_GRADE := 0.9
+const BENCH_CROSS := 1.5 # косой склон, для которого уже предусмотрена ограниченная земляная полка
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -184,14 +190,16 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
 	w.cost = cost
 	_protect_structures(w, road_cost)
-	var line := _road_line(w, pts, on_axis, surface) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
+	var line := _road_line(w, pts, on_axis, surface, kind) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
 	Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
 	w.trails.append({kind = kind, pts = line})
 
 
 ## Скругляем только безопасные углы. У сооружений сохраняем точный вход на ось;
 ## на суше проверяем высоты игрового меша и воду по середине и краям будущей ленты.
-static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield) -> Array:
+static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield, kind := "road") -> Array:
+	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
+	var cross_grade := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
 	for iteration in 3:
 		var out: Array = [pts[0]]
 		for k in range(1, pts.size() - 1):
@@ -204,7 +212,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				fixed = fixed or not on_axis.is_empty() and on_axis[i] != 0
 			var q := {x = lerpf(b.x, a.x, 0.25), y = lerpf(b.y, a.y, 0.25), w = b.w}
 			var r := {x = lerpf(b.x, c.x, 0.25), y = lerpf(b.y, c.y, 0.25), w = b.w}
-			if not fixed and _road_segment(surface, out[-1], q) and _road_segment(surface, q, r) and _road_segment(surface, r, c):
+			if not fixed and _road_segment(surface, out[-1], q, grade, cross_grade) and _road_segment(surface, q, r, grade, cross_grade) and _road_segment(surface, r, c, grade, cross_grade):
 				out.append(q)
 				out.append(r)
 			else:
@@ -214,7 +222,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	return pts
 
 
-static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary) -> bool:
+static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary, max_grade := ROAD_LIMIT, max_cross := BENCH_CROSS) -> bool:
 	var dx: float = b.x - a.x
 	var dy: float = b.y - a.y
 	var length := Grid.hypot(dx, dy)
@@ -230,7 +238,7 @@ static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary) ->
 			var x: float = (a.x + dx * t + nx * side) * GameConfig.TILE
 			var z: float = (a.y + dy * t + ny * side) * GameConfig.TILE
 			var h := surface.ground_at(x, z)
-			if surface.depth_at(x, z) > 0.3 or k > 0 and absf(h - previous) > ROAD_GRADE * length * GameConfig.TILE / steps + 0.00001:
+			if surface.depth_at(x, z) > 0.3 or k > 0 and absf(h - previous) > max_grade * length * GameConfig.TILE / steps + 0.00001:
 				return false
 			previous = h
 	# Поперёк стены ось может быть горизонтальной. Не срезаем туда безопасный поворот.
@@ -239,7 +247,7 @@ static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary) ->
 		var x: float = (a.x + dx * t) * GameConfig.TILE
 		var z: float = (a.y + dy * t) * GameConfig.TILE
 		var across := absf(surface.ground_at(x + nx * GameConfig.TILE, z + ny * GameConfig.TILE) - surface.ground_at(x - nx * GameConfig.TILE, z - ny * GameConfig.TILE))
-		if across > RoadBed.STEEP.x * float(a.w) * GameConfig.TILE + 0.00001:
+		if across > max_cross * float(a.w) * GameConfig.TILE + 0.00001:
 			return false
 	return true
 
@@ -410,6 +418,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 				var axis := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i, false)
 				if not axis.is_empty():
 					q = _structures(w, axis, true, finder, road_cost, state)
+			if q.is_empty():
+				# Технический проход дополняет прежние варианты связи, не вытесняя рабочие подходы.
+				var technical := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i, true, ROAD_LIMIT)
+				if not technical.is_empty():
+					q = _structures(w, technical, true, finder, road_cost, state)
 			finder.use_corridor = true
 			if q.is_empty():
 				continue
@@ -508,20 +521,19 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 	return cost
 
 
-## Сначала ищем пологий проход и для троп/обходов; технический остаётся запасным.
-static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = RoadBed.STEEP.x) -> PackedInt32Array:
-	var p := finder.find_path(cost, a, b, climb, ROAD_GRADE)
-	return finder.find_path(cost, a, b, climb, limit) if p.is_empty() else p
+## У троп свой предел: короткий технический подъём конкурирует с длинным обходом по цене A*.
+static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = TRAIL_GRADE) -> PackedInt32Array:
+	return finder.find_path(cost, a, b, climb, limit)
 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
-## Поэтому пологая ось ищется раньше, чем снимается ограничение ради сооружений.
-static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true) -> PackedInt32Array:
+## Сначала проверяется полная ширина, затем ось для сооружений; limit задаёт допустимый подъём.
+static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE) -> PackedInt32Array:
 	finder.use_corridor = wide
-	var p := finder.find_path(cost, a, b, ROAD_CLIMB, ROAD_GRADE)
+	var p := finder.find_path(cost, a, b, ROAD_CLIMB, limit)
 	if p.is_empty() and wide:
 		finder.use_corridor = false
-		p = finder.find_path(cost, a, b, ROAD_CLIMB, ROAD_GRADE)
+		p = finder.find_path(cost, a, b, ROAD_CLIMB, limit)
 	if p.is_empty():
 		p = finder.find_path(cost, a, b, ROAD_CLIMB)
 	return p
@@ -1089,6 +1101,6 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 				best = i
 		if best >= 0 and bd < w.W * 0.4:
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
-			var p := finder.find_path(w.cost, best, pk.i, MOUNTAIN_CLIMB, RoadBed.STEEP.y)
+			var p := finder.find_path(w.cost, best, pk.i, MOUNTAIN_CLIMB, MOUNTAIN_GRADE)
 			if p.size() > 0:
 				_add_trail(w, p, "mountain", PackedFloat32Array(), on_axis, surface)

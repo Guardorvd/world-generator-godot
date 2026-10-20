@@ -20,6 +20,7 @@ func _init() -> void:
 	check(shore.cross < shore.raw_cross * 0.3, "полка дороги у озера осталась на стене")
 	_shore_invariants()
 	_trail_bench()
+	_technical_profile()
 	check(flat.power < bank.power * 0.7 and flat.power < bumps.power * 0.7, "удобная земля обрабатывается так же сильно, как трудная")
 	check(bank.cross < bank.raw_cross * 0.5, "косой склон не получил удобного полотна")
 	check(bumps.bumps < bumps.raw_bumps * 0.9 and bumps.height_range < bumps.raw_range * 0.85, "локальные перегибы и перепад высот не смягчились")
@@ -30,6 +31,27 @@ func _init() -> void:
 			_compare(WorldGenerator.generate(seed_text, 256), seed_text + "@256", false)
 	print("Road fit 4.5: нарушений %d" % fails)
 	quit(1 if fails else 0)
+
+
+## Один и тот же короткий бугор: тропы сохраняют больше исходного профиля, чем дорога.
+func _technical_profile() -> void:
+	var ranges: Array[float] = []
+	for kind: String in ["road", "trail", "mountain"]:
+		var w := _world("bumps")
+		w.trails[0].kind = kind
+		for p: Dictionary in w.trails[0].pts:
+			p.w = StageTrails.WIDTHS[kind]
+		var h := Heightfield.new(w)
+		var low := INF
+		var high := -INF
+		for x in range(70, 176):
+			var ground := h.ground_at(x, 130.0)
+			low = minf(low, ground)
+			high = maxf(high, ground)
+		ranges.append(high - low)
+	check(ranges[1] > ranges[0] * 1.1 and ranges[2] > ranges[1],
+		"обычная и горная тропы потеряли технический профиль из-за дорожного сглаживания")
+	print("Перепад на одном бугре и впадине: дорога %.2f, тропа %.2f, горная %.2f м" % ranges)
 
 
 func _world(mode: String) -> WorldData:

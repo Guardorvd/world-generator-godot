@@ -19,8 +19,8 @@ const PIN_FADE := 4.0    # и пола остаются вровень с зем
 ## точки рельефа сбоку от линии (поперечный уклон), м
 const KINDS := {
 	road = {flat = 0.6, shoulder = 3.0, window = 10.0, keep = 0.2, cut = 1.2, side = 1.6},
-	trail = {flat = 0.4, shoulder = 2.0, window = 6.0, keep = 0.4, cut = 0.6, side = 0.8},
-	mountain = {flat = 0.3, shoulder = 1.5, window = 4.0, keep = 0.55, cut = 0.4, side = 0.5},
+	trail = {flat = 0.4, shoulder = 2.0, window = 4.0, keep = 0.65, cut = 0.4, side = 0.8},
+	mountain = {flat = 0.3, shoulder = 1.5, window = 2.0, keep = 0.85, cut = 0.2, side = 0.5},
 }
 const WATER_GAP := 0.4   # рельеф у воды не опускается ниже уровня соседней воды плюс это, м
 const STEEP := Vector2(0.5, 0.9) # на склоне круче (уклон земли у линии) полотно сходит на нет: серпантин

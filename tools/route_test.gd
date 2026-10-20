@@ -316,6 +316,66 @@ func _rollback_check() -> void:
 	_check(w.path_mask == mask and surface.hv == before and finder.heights == heights_before and finder.links.is_empty() and state.on_axis == axis_before, "после отказа восстановлены земля, маска пути и шаги поиска")
 
 
+## Технический участок разрешён по своему классу, отвесная геометрия — нет.
+func _technical_check() -> void:
+	const W := 41
+	var terrain := PackedFloat32Array()
+	var cost := PackedFloat32Array()
+	terrain.resize(W * W)
+	cost.resize(W * W)
+	cost.fill(1.0)
+	for y in W:
+		for x in W:
+			terrain[y * W + x] = maxf(0.0, 2.0 - absf(x - 20.0)) * (0.6 if y < 35 else 0.0)
+	var finder := Pathfinder.new(W, W, terrain)
+	var start := 4 * W + 14
+	var finish := 4 * W + 26
+	var gentle := finder.find_path(cost, start, finish, StageTrails.TRAIL_CLIMB, StageTrails.ROAD_GRADE)
+	var technical := StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB)
+	_check(not technical.is_empty() and technical.size() < gentle.size(),
+		"тропа выбирает короткий технический проход при существующем длинном пологом обходе")
+	if Grid.allow_fast:
+		Grid.allow_fast = false
+		_check(StageTrails._land_path(Pathfinder.new(W, W, terrain), cost, start, finish, StageTrails.TRAIL_CLIMB) == technical,
+			"C# и GDScript совпадают на техническом проходе")
+		Grid.allow_fast = true
+	# Единственный коридор с подъёмом 60 %: тропа проходит, дорожный предел его запрещает.
+	cost.fill(INF)
+	for x in range(14, 27): cost[4 * W + x] = 1.0
+	_check(not StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty()
+		and finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_LIMIT).is_empty(),
+		"пределы дороги и технической тропы различаются")
+	var road_terrain := terrain.duplicate()
+	for i in road_terrain.size(): road_terrain[i] *= 0.75
+	var road_finder := Pathfinder.new(W, W, road_terrain)
+	_check(not StageTrails._road_path(road_finder, cost, start, finish, true, StageTrails.ROAD_LIMIT).is_empty() and road_finder.use_corridor,
+		"дорога допускает технический проход 45 % до отключения проверки ширины")
+	for i in terrain.size(): terrain[i] *= 2.0
+	finder = Pathfinder.new(W, W, terrain)
+	_check(StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty(),
+		"ослабление предпочтений не разрешает тропу через обрыв 120 %")
+	var w := WorldData.new()
+	w.W = 16
+	w.H = 16
+	w.N = 256
+	w.h.resize(w.N)
+	w.ocean.resize(w.N)
+	w.lake.resize(w.N)
+	w.river.resize(w.N)
+	w.filled.resize(w.N)
+	for y in w.H:
+		for x in w.W:
+			w.h[y * w.W + x] = (20.0 + x * GameConfig.TILE * 0.8) / GameConfig.HS
+	var surface := Heightfield.new(w, false)
+	var corner: Array = [{x = 4.5, y = 4.5, w = 0.42}, {x = 6.5, y = 4.5, w = 0.42}, {x = 8.5, y = 6.5, w = 0.42}]
+	var mountain := StageTrails._road_line(w, corner, PackedByteArray(), surface, "mountain")
+	_check(mountain.size() > corner.size() and StageTrails._road_line(w, corner, PackedByteArray(), surface) == corner,
+		"горная тропа скругляется на своём допустимом уклоне, дорога такой угол не срезает")
+	for i in w.N: w.h[i] *= 1.5
+	_check(StageTrails._road_line(w, corner, PackedByteArray(), Heightfield.new(w, false), "mountain") == corner,
+		"скругление горной тропы не срезает угол через обрыв")
+
+
 ## Ось пересекает угол между выборками: покрытие обязано включить ту же клетку, что маска.
 func _raster_check() -> void:
 	var pts: Array = [{x = 0.9, y = 0.95, w = 0.55}, {x = 2.1, y = 1.55, w = 0.55}]
@@ -351,6 +411,7 @@ func _raster_check() -> void:
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
+	_technical_check()
 	_raster_check()
 	_terrain_check()
 	_surface_check()
