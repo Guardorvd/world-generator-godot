@@ -3,6 +3,9 @@ extends RefCounted
 ## Алгоритмы на квадратной сетке карты: соседи, поля расстояний, сглаживание ломаных.
 ## Клетка (x, y) хранится в плоских массивах по индексу i = y * W + x. Копия js/core/grid.js.
 
+const PATH_IN := 0.1   # отступ внутрь края ленты при разметке клеток
+const PATH_STEP := 0.25 # шаг разметки, клеток
+
 const SQRT2 := 1.4142135623730951
 
 ## 8 соседей: сначала 4 по сторонам, затем 4 по диагоналям; DL — длина шага
@@ -127,3 +130,58 @@ static func segment_dist(px: float, py: float, ax: float, ay: float, bx: float, 
 	var l2 := vx * vx + vy * vy
 	var t := 0.0 if l2 == 0.0 else clampf(((px - ax) * vx + (py - ay) * vy) / l2, 0.0, 1.0)
 	return hypot(px - ax - vx * t, py - ay - vy * t)
+
+
+## Клетки под осью и краями ленты; диагональ включает клетку у общего угла.
+## Без values повышает маску до mark; с values пишет значение ближайшего конца сегмента.
+## Один обход для маски пути и его покрытия. half — полуширина в клетках.
+static func stamp_path(mask: PackedByteArray, W: int, H: int, pts: Array, mark: int, half: float,
+		values: PackedByteArray = PackedByteArray()) -> void:
+	if pts.size() < 2:
+		return
+	var overwrite := not values.is_empty()
+	# у узкой линии (звериная тропа) края ленты почти там же, где середина
+	var sides := half > 0.1
+	var last: Dictionary = pts[0]
+	var px: float = last.x
+	var py: float = last.y
+	for k: int in range(1, pts.size()):
+		var b: Dictionary = pts[k]
+		var ax: float = last.x
+		var ay: float = last.y
+		var dx: float = b.x - ax
+		var dy: float = b.y - ay
+		last = b
+		var seg_len := sqrt(dx * dx + dy * dy)
+		if seg_len == 0.0:
+			continue
+		var nx := -dy / seg_len * half
+		var ny := dx / seg_len * half
+		var m := ceili(seg_len / PATH_STEP)
+		for s: int in range(1, m + 1):
+			var f := float(s) / m
+			var value := mark if not overwrite else int(values[k - 1] if f < 0.5 else values[k])
+			var x := ax + dx * f
+			var y := ay + dy * f
+			# середина: клетка точки и, если линия ушла от прошлой точки в соседнюю по диагонали клетку,
+			# та из двух клеток у общего угла, через которую она прошла
+			var x0 := floori(px)
+			var y0 := floori(py)
+			var x1 := floori(x)
+			var y1 := floori(y)
+			if x0 != x1 and y0 != y1:
+				var bx := maxi(x0, x1)
+				var cy := py + (bx - px) * (y - py) / (x - px)
+				_mark_cell(mask, W, H, x1 if floori(cy) == y0 else x0, y0 if floori(cy) == y0 else y1, value, overwrite)
+			_mark_cell(mask, W, H, x0, y0, value, overwrite)
+			_mark_cell(mask, W, H, x1, y1, value, overwrite)
+			if sides:
+				_mark_cell(mask, W, H, floori(x + nx), floori(y + ny), value, overwrite)
+				_mark_cell(mask, W, H, floori(x - nx), floori(y - ny), value, overwrite)
+			px = x
+			py = y
+
+
+static func _mark_cell(mask: PackedByteArray, W: int, H: int, x: int, y: int, value: int, overwrite: bool) -> void:
+	if x >= 0 and y >= 0 and x < W and y < H and (overwrite or mask[y * W + x] < value):
+		mask[y * W + x] = value

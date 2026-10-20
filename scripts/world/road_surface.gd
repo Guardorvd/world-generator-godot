@@ -83,26 +83,9 @@ static func pick(w: WorldData, kind: String, x: float, y: float, v: float) -> in
 	return MEADOW if v < TRAIL_MEADOW else DIRT
 
 
-## Клетки под лентой пути t получают его покрытие (как отмечает их StageTrails._mark_line)
+## Та же разметка ленты, что у path_mask, включая угловые клетки диагоналей.
 static func _stamp(w: WorldData, t: Dictionary) -> void:
-	var pts: Array = t.pts
-	for n: int in range(1, pts.size()):
-		var a: Dictionary = pts[n - 1]
-		var b: Dictionary = pts[n]
-		var dx: float = b.x - a.x
-		var dy: float = b.y - a.y
-		var len := Grid.hypot(dx, dy)
-		if len == 0.0:
-			continue
-		var half: float = maxf(float(a.w) * 0.5 - StageTrails.LINE_IN, 0.0)
-		var nx := -dy / len * half
-		var ny := dx / len * half
-		var m := ceili(len / StageTrails.LINE_STEP)
-		for s: int in m + 1:
-			var f := float(s) / m
-			var surf: int = t.surf[n - 1] if f < 0.5 else t.surf[n]
-			for side: float in [-1.0, 0.0, 1.0]:
-				var cx := floori(a.x + dx * f + nx * side)
-				var cy := floori(a.y + dy * f + ny * side)
-				if cx >= 0 and cy >= 0 and cx < w.W and cy < w.H and w.path_mask[cy * w.W + cx] >= 2:
-					w.road_surface[cy * w.W + cx] = surf
+	if t.pts.size() < 2:
+		return
+	var half := maxf(float(t.pts[0].w) * 0.5 - Grid.PATH_IN, 0.0)
+	Grid.stamp_path(w.road_surface, w.W, w.H, t.pts, 0, half, t.surf)

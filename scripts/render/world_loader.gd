@@ -37,11 +37,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
-	var changed := RoadBed.refine(r.heights)
-	changed.append_array(r.heights.build_structures())
+	var changed := r.heights.finish_paths()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
-	r.heights.road_refinement = RoadRefinement.build(r.heights)
 	TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
 	r.world.outer = OuterLand.new(r.world)

@@ -72,9 +72,17 @@ func _init(w: WorldData, with_structures := true) -> void:
 		elif w.river[i] != 0:
 			water_level[i] = minf(hv_raw[i] - 0.45, hv[i] + 0.95) # брод: не глубже метра
 	if with_structures:
-		RoadBed.refine(self)
-		build_structures()
-		road_refinement = RoadRefinement.build(self)
+		finish_paths()
+
+
+## Завершить игровой рельеф после генерации путей. Один раз на исходном Heightfield:
+## сначала базовое полотно, затем сооружения и метровая сетка для меша и движения.
+## Возвращает изменённые вершины базовой сетки для уже подготовленного меша загрузчика.
+func finish_paths() -> PackedInt32Array:
+	var changed := RoadBed.refine(self)
+	changed.append_array(build_structures())
+	road_refinement = RoadRefinement.build(self)
+	return changed
 
 
 ## Мосты и туннели из w.bridges и w.tunnels в метрах; под туннелями рельеф опускается до пола.

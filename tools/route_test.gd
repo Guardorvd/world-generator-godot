@@ -316,9 +316,42 @@ func _rollback_check() -> void:
 	_check(w.path_mask == mask and surface.hv == before and finder.heights == heights_before and finder.links.is_empty() and state.on_axis == axis_before, "после отказа восстановлены земля, маска пути и шаги поиска")
 
 
+## Ось пересекает угол между выборками: покрытие обязано включить ту же клетку, что маска.
+func _raster_check() -> void:
+	var pts: Array = [{x = 0.9, y = 0.95, w = 0.55}, {x = 2.1, y = 1.55, w = 0.55}]
+	var mask := PackedByteArray()
+	mask.resize(16)
+	Grid.stamp_path(mask, 4, 4, pts, 2, 0.175)
+	var w := WorldData.new()
+	w.W = 4
+	w.H = 4
+	w.N = 16
+	w.path_mask = mask
+	w.road_surface.resize(16)
+	var trail := {pts = pts, surf = PackedByteArray([RoadSurface.FOREST, RoadSurface.DIRT])}
+	RoadSurface._stamp(w, trail)
+	var same := true
+	for i in 16:
+		same = same and ((mask[i] >= 2) == (w.road_surface[i] != RoadSurface.NONE))
+	_check(same and mask[1] == 2, "маска и покрытие включают одни и те же клетки, в том числе угол диагонали")
+	_check(w.road_surface[0] == RoadSurface.FOREST and w.road_surface[6] == RoadSurface.DIRT,
+		"покрытие меняется между концами сегмента")
+	Grid.stamp_path(mask, 4, 4, pts, 3, 0.175)
+	Grid.stamp_path(mask, 4, 4, pts, 1, 0.175)
+	_check(mask[1] == 3, "звериная тропа не понижает маску дороги")
+	# Выход за границы и нулевой сегмент не должны ни ломать обход, ни оставлять ложные клетки.
+	var clipped: Array = [{x = -0.5, y = 2.5, w = 0.55}, {x = -0.5, y = 2.5, w = 0.55}, {x = 4.5, y = 2.5, w = 0.55}]
+	var edge := PackedByteArray()
+	edge.resize(16)
+	Grid.stamp_path(edge, 4, 4, clipped, 2, 0.175)
+	_check(edge.slice(8, 12) == PackedByteArray([2, 2, 2, 2]) and edge.count(2) == 4,
+		"разметка обрезается границами карты и пропускает нулевые сегменты")
+
+
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
+	_raster_check()
 	_terrain_check()
 	_surface_check()
 	_corridor_check()

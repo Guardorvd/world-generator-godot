@@ -43,11 +43,10 @@ const SHORE_MAX := 45       # и не дальше стольких
 const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
 const AVOID_MUL := 8.0      # во столько раз дороже клетки коридора
 const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
-const LINE_IN := 0.1        # клетки под лентой (ширина w, как в MapBaker) глубже этого от её края — тоже дорога (path_mask), клеток
-const LINE_STEP := 0.25     # шаг, с которым линия проверяется по клеткам (_mark_line), клеток
 const REUSE_R := 5.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
 const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
 ## Три характера езды без отдельных режимов: дорога, извилистый обход, техническая горная тропа.
+const WIDTHS := {animal = 0.32, mountain = 0.42, trail = 0.55, road = 0.9}
 const ROAD_CLIMB := 32.0
 const TRAIL_CLIMB := 12.0
 const MOUNTAIN_CLIMB := 4.0
@@ -68,10 +67,10 @@ static func run(w: WorldData, step: Callable) -> void:
 		heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	_animal_trails(w, finder)
-	_route_surface(finder, surface, 0.9)
+	_route_surface(finder, surface, WIDTHS.road)
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface)
-	_route_surface(finder, surface, 0.42)
+	_route_surface(finder, surface, WIDTHS.mountain)
 	_mountain_trails(w, finder, surface)
 
 
@@ -120,14 +119,14 @@ static func _build_cost(w: WorldData) -> void:
 ## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost; on_axis — клетки на осях мостов и туннелей:
 ## там и на соседних с ними клетках пути точки линии не смещаются случайно, чтобы дорога входила
 ## на настил и в портал ровно, а не через перила; у воды линия тоже не смещается, чтобы не уйти в неё).
-## path_mask (скорость, деревья) отмечается по нарисованной линии (_mark_line), а дешевле становятся клетки пути
+## path_mask (скорость, деревья) отмечается по нарисованной линии (Grid.stamp_path), а дешевле становятся клетки пути
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
 		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null) -> void:
 	path = _explicit(w, path, on_axis)
 	var W := w.W
 	var H := w.H
 	var rng := w.rng
-	var width := 0.32 if kind == "animal" else (0.42 if kind == "mountain" else (0.9 if kind == "road" else 0.55))
+	var width: float = WIDTHS[kind]
 	var jitter := 0.1 if kind == "road" else (0.35 if kind == "mountain" else 0.5)
 	var pts: Array = []
 	var last := path.size() - 1
@@ -186,7 +185,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	w.cost = cost
 	_protect_structures(w, road_cost)
 	var line := _road_line(w, pts, on_axis, surface) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
-	_mark_line(w, line, mark, width * 0.5 - LINE_IN)
+	Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
 	w.trails.append({kind = kind, pts = line})
 
 
@@ -279,60 +278,6 @@ static func _protect_structures(w: WorldData, road_cost: PackedFloat32Array) -> 
 			if both:
 				road_cost[i] = 0.3
 	w.cost = cost
-
-
-## Отметить в path_mask значением mark клетки, по которым проходит нарисованная линия pts: средняя линия
-## и края ленты (half — полуширина ленты, в клетках). Так игра считает дорогой то, что видно дорогой:
-## по ней быстрее, на ней не растут деревья
-static func _mark_line(w: WorldData, pts: Array, mark: int, half: float) -> void:
-	var W := w.W
-	var H := w.H
-	var mask := w.path_mask
-	# у узкой линии (звериная тропа) края ленты почти там же, где середина
-	var sides := half > 0.1
-	var last: Dictionary = pts[0]
-	var px: float = last.x
-	var py: float = last.y
-	for k: int in range(1, pts.size()):
-		var b: Dictionary = pts[k]
-		var ax: float = last.x
-		var ay: float = last.y
-		var dx: float = b.x - ax
-		var dy: float = b.y - ay
-		last = b
-		var seg_len := sqrt(dx * dx + dy * dy)
-		if seg_len == 0.0:
-			continue
-		var nx := -dy / seg_len * half
-		var ny := dx / seg_len * half
-		var m := ceili(seg_len / LINE_STEP)
-		for s: int in range(1, m + 1):
-			var f := float(s) / m
-			var x := ax + dx * f
-			var y := ay + dy * f
-			# середина: клетка точки и, если линия ушла от прошлой точки в соседнюю по диагонали клетку,
-			# та из двух клеток у общего угла, через которую она прошла
-			var x0 := floori(px)
-			var y0 := floori(py)
-			var x1 := floori(x)
-			var y1 := floori(y)
-			if x0 != x1 and y0 != y1:
-				var bx := maxi(x0, x1)
-				var cy := py + (bx - px) * (y - py) / (x - px)
-				_mark_cell(mask, W, H, x1 if floori(cy) == y0 else x0, y0 if floori(cy) == y0 else y1, mark)
-			_mark_cell(mask, W, H, x0, y0, mark)
-			_mark_cell(mask, W, H, x1, y1, mark)
-			if sides:
-				_mark_cell(mask, W, H, floori(x + nx), floori(y + ny), mark)
-				_mark_cell(mask, W, H, floori(x - nx), floori(y - ny), mark)
-			px = x
-			py = y
-	w.path_mask = mask
-
-
-static func _mark_cell(mask: PackedByteArray, W: int, H: int, x: int, y: int, mark: int) -> void:
-	if x >= 0 and y >= 0 and x < W and y < H and mask[y * W + x] < mark:
-		mask[y * W + x] = mark
 
 
 ## Путь p, в котором каждый диагональный шаг между двумя сухими клетками, которые разделяет река (обе соседние
@@ -476,7 +421,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 				if groups[a] == joined:
 					groups[a] = groups[e[0]]
 	finder.use_corridor = true
-	_route_surface(finder, surface, 0.55)
+	_route_surface(finder, surface, WIDTHS.trail)
 	_second_ways(w, finder, paths, road_cost, state)
 	_clear_huts(w)
 

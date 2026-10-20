@@ -113,7 +113,7 @@ func _invariants(w: WorldData, before: Heightfield, after: Heightfield) -> void:
 	for i in w.N:
 		if w.path_mask[i] >= 2 and w.road_surface[i] == RoadSurface.NONE:
 			bare += 1
-	# угловые клетки диагоналей могут остаться без своего покрытия (PlayerState.surface даёт им гравий или грунт)
+	# Маска выемки сооружения может быть шире самой линии полотна.
 	print("  клеток пути без своего покрытия: %d" % bare)
 
 

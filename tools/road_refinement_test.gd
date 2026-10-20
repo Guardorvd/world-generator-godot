@@ -12,11 +12,27 @@ func check(ok: bool, what: String) -> void:
 			printerr(what)
 
 
+## Загрузчик готовит базовый меш до путей; прямое построение получает уже готовый мир.
+## Оба входа должны дать одинаковые высоты, сооружения и окончательный меш.
+func _loading() -> void:
+	var loaded := WorldLoader.load_world("abc", 128)
+	# Внешнее продолжение появляется после подготовки дорог; сравниваем одинаковые входные данные.
+	loaded.world.outer = null
+	var direct := Heightfield.new(loaded.world)
+	check(loaded.heights.hv == direct.hv, "загрузчик и Heightfield расходятся по базовому полотну")
+	check(loaded.heights.structures == direct.structures, "загрузчик и Heightfield расходятся по сооружениям")
+	check(loaded.heights.road_refinement.patches == direct.road_refinement.patches,
+		"загрузчик и Heightfield расходятся по метровой поверхности")
+	var rebuilt := TerrainBuilder.build_arrays(loaded.world, direct)
+	check(loaded.terrain_arrays == rebuilt, "загрузчик и прямая сборка дают разные меши")
+
+
 func _init() -> void:
 	_ride()
 	if OS.get_cmdline_user_args().has("--ride-only"):
 		quit(1 if fails else 0)
 		return
+	_loading()
 	for seed_text: String in ["Север-1234", "Туман-4821", "Ущелье"]:
 		var w := WorldGenerator.generate(seed_text, 256)
 		var h := Heightfield.new(w)
