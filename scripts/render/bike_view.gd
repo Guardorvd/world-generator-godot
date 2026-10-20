@@ -25,7 +25,8 @@ const S_SQUASH := 6
 const S_WHEEL := 7
 const S_STEER := 8
 const S_CRANK := 9
-const STATE_SIZE := 10
+const S_TUCK := 10
+const STATE_SIZE := 11
 
 # состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
@@ -33,11 +34,18 @@ var _cur := PackedFloat64Array()
 var _mix := PackedFloat64Array() # буфер для draw, чтобы не выделять память на каждый кадр
 var _riding := false
 var _has_state := false
+var _steering: Node3D
 
 
 func _ready() -> void:
 	_prev.resize(STATE_SIZE)
 	_cur.resize(STATE_SIZE)
+	# Вилка, вынос и руль поворачиваются вместе; колесо отдельно вращается вокруг оси.
+	_steering = Node3D.new()
+	add_child(_steering)
+	_steering.position = Vector3(0.0, 0.76, -0.415)
+	for part: String in ["ForkL", "ForkR", "Stem", "Handlebar"]:
+		get_node(part).reparent(_steering)
 
 @onready var rider: Node3D = $Rider
 @onready var rear_wheel: Node3D = $RearWheel
@@ -68,6 +76,7 @@ func tick(b: BikeRide) -> void:
 	_cur[S_WHEEL] = b.wheel
 	_cur[S_STEER] = b.steer
 	_cur[S_CRANK] = b.crank
+	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_riding = b.riding
 	if not _has_state:
 		_prev = _cur.duplicate()
@@ -96,12 +105,17 @@ func draw(alpha: float) -> void:
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW
+	_steering.rotation.y = front_wheel.rotation.y
 	crank.rotation.x = -_mix[S_CRANK]
 	# педали держатся горизонтально
 	pedal_l.rotation.x = _mix[S_CRANK]
 	pedal_r.rotation.x = _mix[S_CRANK]
 	rider.visible = _riding
 	if _riding:
+		# Небольшая группировка на скорости и работа корпусом при сжатии подвески.
+		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4
+		$Rider/Torso.rotation.x = -0.5105 - tuck
+		$Rider/Head.position = Vector3(0.0, 1.66 - tuck * 0.3, -0.17 - tuck * 0.3)
 		var c := cos(-_mix[S_CRANK]) * CRANK_R
 		var s := sin(-_mix[S_CRANK]) * CRANK_R
 		_leg(thigh_r, shin_r, HIP, Vector3(PEDAL_X, CRANK_Y - c, -s))

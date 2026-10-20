@@ -195,7 +195,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			tilt_goal = -tilt_goal
 	tilt = lerpf(tilt, tilt_goal, 1.0 - exp(-dt * (5.0 if airborne else 12.0)))
 	# Крен от реального поворота, а не от кнопки: на месте не заваливаемся.
-	var lean_goal := 0.0 if airborne else clampf(atan(lateral / GameConfig.GRAVITY), -0.55, 0.55)
+	# Умеренный визуальный крен (до 16°), без изменения радиуса поворота и сцепления.
+	var lean_goal := 0.0 if airborne else clampf(atan(lateral / GameConfig.GRAVITY) * 0.5, -0.28, 0.28)
 	lean = lerpf(lean, lean_goal, 1.0 - exp(-dt * (2.5 if airborne else 9.0)))
 	# на неровной местности (лес, кусты, бездорожье) качает сильнее, чем на тропе
 	var rough := clampf(1.3 - PlayerState.terrain_speed(w, x, z, heights), 0.15, 1.0)

@@ -397,7 +397,7 @@ value = 55
 [node name="HeadBob" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Покачивание камеры при ходьбе"
+text = "Покачивание и удары камеры"
 
 [node name="Fullscreen" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true

@@ -263,9 +263,13 @@ func _physics_process(dt: float) -> void:
 		yaw += bike.heading - h0
 		if absf(bike.speed) > 1.0 and time - _looked_at > 1.0:
 			yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0))
-			pitch = lerpf(pitch, -0.3, 1.0 - exp(-dt * 2.0))
+			# Следуем склону только при автоматическом взгляде; мышь сохраняет приоритет.
+			var slope_pitch := 0.0 if bike.airborne else clampf(bike.tilt * 0.3, -0.12, 0.12)
+			pitch = lerpf(pitch, -0.3 + slope_pitch, 1.0 - exp(-dt * 2.0))
 		_shake_on_landing(bike.land_impact, 6.0)
 		if bike.land_impact > 0.0:
+			if GameSettings.head_bob:
+				_dip_v -= clampf(bike.land_impact - 2.5, 0.0, 8.0) * 0.12
 			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
 		bike.land_impact = 0.0
 		crashed = bike.crashed
@@ -334,7 +338,7 @@ func _process(delta: float) -> void:
 		var d := Vector2(l.position.x - pos.x, l.position.z - pos.z).length()
 		l.visible = d > 25.0 and d < 900.0
 	SettlementsBuilder.animate_fires(fires, time)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0)
 
 	info_timer -= delta
 	if info_timer <= 0.0:
@@ -394,14 +398,15 @@ func _update_camera(alpha: float, dt: float) -> void:
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	camera.fov = lerpf(camera.fov, fov_goal, _smooth(4.0, dt))
-	var shake := _trauma * _trauma
+	var shake := _trauma * _trauma if GameSettings.head_bob else 0.0
 	var jolt := Vector3(sin(time * 41.0), sin(time * 37.0 + 1.7), sin(time * 29.0 + 3.1)) * shake
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
-		_cam_y = lerpf(_cam_y, pos.y + 1.4, _smooth(10.0, dt))
+		var suspension := -bike.squash * 0.25 if GameSettings.head_bob else 0.0
+		_cam_y = lerpf(_cam_y, pos.y + 1.4 + suspension, _smooth(10.0, dt))
 		if absf(_cam_y - pos.y - 1.4) > 2.0:
 			_cam_y = pos.y + 1.4 + clampf(_cam_y - pos.y - 1.4, -2.0, 2.0)
-		var target := Vector3(pos.x, _cam_y, pos.z)
+		var target := Vector3(pos.x, _cam_y + (_dip if GameSettings.head_bob else 0.0), pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var dist := GameConfig.BIKE_CAM
 		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть

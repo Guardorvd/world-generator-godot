@@ -39,7 +39,7 @@ func _run() -> void:
 	if a._fire.playing != (Vector2(p.x, p.z).distance_to(Vector2(PlayerState.home(w).x, PlayerState.home(w).y) * GameConfig.TILE) < WorldAudio.FIRE_R):
 		push_error("костёр")
 		ok = false
-	print("у точки появления: вода %.2f, море %.2f, ветер открыт %.2f, птицы %s" % [a._goal[a._water], a._goal[a._surf], a._open, a._bird_ok], ", костёр ", a._fire.playing)
+	print("у точки появления: вода %.2f, море %.2f, птицы %s" % [a._goal[a._water], a._goal[a._surf], a._bird_ok], ", костёр ", a._fire.playing)
 	# без окна звук не выводится, и при выходе Godot пишет про 4 «неосвобождённых» петли: это
 	# воспроизведения, которые снимает только звуковой поток; в игре (lifecycle_test) ничего не копится
 	a.free()

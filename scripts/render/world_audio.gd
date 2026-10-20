@@ -1,9 +1,9 @@
 class_name WorldAudio
 extends Node
-## Звуки путешествия (с 2.7): ветер, вода, прибой, костёр в поселении, птицы, шаги, шины велосипеда,
+## Звуки путешествия (с 2.7): вода, прибой, костёр в поселении, птицы, шаги, шины велосипеда,
 ## приземление. Звуки — короткие WAV в resources/sounds, синтезированы tools/make_sounds.py.
-## Фон — петли AudioStreamPlayer, громкость которых плавно следует за местом: высота и открытость
-## (ветер), расстояние до реки или озера и до моря (по полям WorldData.dist_water и dist_ocean), до
+## Фон — петли AudioStreamPlayer, громкость которых плавно следует за местом:
+## расстояние до реки или озера и до моря (по полям WorldData.dist_water и dist_ocean), до
 ## ближайшего костра. Костёр и птицы — AudioStreamPlayer3D, их слышно с нужной стороны. Шаги и
 ## удары — AudioStreamRandomizer: случайный вариант, высота и громкость, без повтора подряд.
 ## Местность проверяется не каждый кадр, а раз в SAMPLE секунд. Общая громкость — шина Master
@@ -19,7 +19,6 @@ const FIRE_R := 30.0        # м: костёр слышно ближе этог�
 const BIRD_DELAY := Vector2(3.0, 9.0)   # с: пауза между голосами птиц
 
 # наибольшая громкость каждого звука, дБ: всё негромкое, фон под шагами
-const DB_WIND := -17.0
 const DB_WATER := -15.0
 const DB_SURF := -14.0
 const DB_FIRE := -9.0
@@ -30,13 +29,11 @@ const DB_BIRD := -6.0
 
 const S := "res://resources/sounds/"
 
-# биомы без звонкого ветра (лес гасит его) и с хрустом под ногами
-const SHELTERED := [Biomes.FOREST, Biomes.JUNGLE, Biomes.TAIGA, Biomes.SWAMP]
+# Биомы с хрустом под ногами.
 const HARD := [Biomes.BEACH, Biomes.DESERT, Biomes.ROCK, Biomes.PEAK, Biomes.STONESHORE]
 
 var world: WorldData
 var heights: Heightfield
-var _wind: AudioStreamPlayer
 var _water: AudioStreamPlayer
 var _surf: AudioStreamPlayer
 var _roll: AudioStreamPlayer
@@ -48,12 +45,15 @@ var _goal := {}             # петля -> громкость, к которо�
 var _sample_t := 0.0
 var _bird_t := 4.0
 var _bird_ok := false       # вокруг есть где жить птицам
-var _open := 1.0            # 0..1: насколько место открыто ветру
 var _step_phase := 0
+var _roll_surface := "soft"
+var _roll_rough := 0.3
+var _roll_pitch := 1.0
+var _contact_dist := 0.0
+var _contact_wait := 0.0
 
 
 func _ready() -> void:
-	_wind = _loop("wind")
 	_water = _loop("water")
 	_surf = _loop("surf")
 	_roll = _loop("roll")
@@ -152,6 +152,9 @@ func _surface(x: float, z: float, feet: float) -> String:
 	if info.is_empty():
 		return "soft"
 	var surf := PlayerState.surface(info)
+	if heights.road_refinement != null:
+		var contact := heights.road_refinement.sample(x, z, world.W)
+		surf = contact.surface if not contact.is_empty() and contact.weight > 0.25 else RoadSurface.NONE
 	if surf != RoadSurface.NONE:
 		return "gravel" if RoadSurface.LIST[surf].hard else "soft"
 	if HARD.has(info.biome):
@@ -161,18 +164,31 @@ func _surface(x: float, z: float, feet: float) -> String:
 
 ## Кадр: фон по месту (pos — ноги игрока); bike_speed — скорость велосипеда (м/с, 0 — пешком),
 ## rolling — колёса на земле
-func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float) -> void:
+func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean := 0.0) -> void:
 	_sample_t -= dt
 	if _sample_t <= 0.0:
 		_sample_t = SAMPLE
 		_sample(pos)
-	# ветер сильнее высоко и на открытом месте, на велосипеде добавляется встречный поток
+		_sample_rolling(pos)
+	# Скорость передаётся шинами и касаниями покрытия, без постоянного шума ветра.
 	var rush := clampf(absf(bike_speed) / GameConfig.BIKE_SPEED, 0.0, 1.3)
-	var high := clampf(pos.y / (GameConfig.HS * 0.5), 0.0, 1.0)
-	_goal[_wind] = clampf((0.35 + 0.45 * high) * _open + 0.35 * rush, 0.0, 1.0)
-	_wind.pitch_scale = 1.0 + 0.15 * rush
-	_goal[_roll] = clampf(rush, 0.0, 1.0) if rolling else 0.0
-	_roll.pitch_scale = 0.7 + 0.45 * rush
+	# Покрытие меняет плотность и тембр шин, поворот чуть усиливает их шорох.
+	var corner := clampf(absf(bike_lean) / 0.28, 0.0, 1.0)
+	_goal[_roll] = clampf(rush * (0.55 + _roll_rough * 0.45 + corner * 0.12), 0.0, 1.0) if rolling else 0.0
+	_roll.pitch_scale = lerpf(_roll.pitch_scale, (0.7 + 0.45 * rush) * _roll_pitch, 1.0 - exp(-8.0 * dt))
+	_contact_wait = maxf(0.0, _contact_wait - dt)
+	if rolling and absf(bike_speed) > 1.0:
+		_contact_dist += absf(bike_speed) * dt
+		# Короткие тихие касания из имеющихся звуков: камешки, доски, брызги.
+		if _contact_dist >= 2.0 and _contact_wait <= 0.0:
+			_contact_dist = fmod(_contact_dist, 2.0)
+			_contact_wait = 0.16
+			if _roll_surface != "soft":
+				var contact_player: AudioStreamPlayer = _steps[_roll_surface]
+				contact_player.volume_db = DB_STEP - 12.0 + minf(rush, 1.0) * 4.0
+				contact_player.play()
+	else:
+		_contact_dist = 0.0
 	var a := 1.0 - exp(-SMOOTH * dt)
 	var fast := 1.0 - exp(-8.0 * dt)   # шины затихают сразу, как велосипед оторвался от земли
 	for p: AudioStreamPlayer in _goal:
@@ -189,9 +205,28 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float) -> void:
 			_bird.play()
 
 
+## Дешёвая выборка вместе с фоном, без новых звуков и проигрывателей.
+func _sample_rolling(pos: Vector3) -> void:
+	_roll_surface = _surface(pos.x, pos.z, pos.y)
+	_roll_rough = 0.65
+	_roll_pitch = 0.9
+	var info := world.tile_info(pos.x / TILE, pos.z / TILE)
+	var surf := PlayerState.surface(info) if not info.is_empty() else RoadSurface.NONE
+	if heights.road_refinement != null:
+		var contact := heights.road_refinement.sample(pos.x, pos.z, world.W)
+		surf = contact.surface if not contact.is_empty() and contact.weight > 0.25 else RoadSurface.NONE
+	if surf != RoadSurface.NONE:
+		_roll_rough = RoadSurface.LIST[surf].rough
+		_roll_pitch = 1.12 if RoadSurface.LIST[surf].hard else 0.85
+	if _roll_surface == "wood":
+		_roll_rough = 0.4
+		_roll_pitch = 0.75
+	elif _roll_surface == "splash":
+		_roll_rough = 0.8
+		_roll_pitch = 0.8
+
+
 func _max_db(p: AudioStreamPlayer) -> float:
-	if p == _wind:
-		return DB_WIND
 	if p == _water:
 		return DB_WATER
 	if p == _surf:
@@ -199,7 +234,7 @@ func _max_db(p: AudioStreamPlayer) -> float:
 	return DB_ROLL
 
 
-## Что слышно вокруг: вода, море, открытость ветру, птицы, ближайший костёр
+## Что слышно вокруг: вода, море, птицы, ближайший костёр
 func _sample(pos: Vector3) -> void:
 	var tx := floori(pos.x / TILE)
 	var tz := floori(pos.z / TILE)
@@ -217,7 +252,6 @@ func _sample(pos: Vector3) -> void:
 	_goal[_surf] = pow(clampf(1.0 - sea_d / SEA_R, 0.0, 1.0), 2.0)
 	var info := world.tile_info(pos.x / TILE, pos.z / TILE)
 	var biome: int = info.biome if not info.is_empty() else Biomes.OCEAN
-	_open = 0.55 if SHELTERED.has(biome) else 1.0
 	var b: Dictionary = Biomes.LIST[biome]
 	_bird_ok = b.get("trees", 0.0) > 0.05 and not b.get("water", false) and biome != Biomes.SNOW
 	# костёр: звук стоит у ближайшего, если он ближе FIRE_R
