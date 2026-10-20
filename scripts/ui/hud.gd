@@ -179,13 +179,16 @@ static func draw_bike(c: CanvasItem, at: Vector2, r: float) -> void:
 ## Сообщение внизу у прицела. Пока одно висит на экране, следующие ждут в очереди,
 ## чтобы не затирать друг друга (например, сразу два открытия поселений)
 func toast(text: String) -> void:
+	if text.is_empty():
+		return
 	if _toast_left > 0.0:
-		if toast_label.text == text:
+		# Одинаковое событие может прийти повторно, пока другое сообщение стоит между ним и очередью.
+		# Не показываем его второй раз после опустошения очереди.
+		if toast_label.text == text or _toast_queue.has(text):
 			return
-		if _toast_queue.is_empty() or _toast_queue[_toast_queue.size() - 1] != text:
-			_toast_queue.append(text)
-			while _toast_queue.size() > TOAST_QUEUE:
-				_toast_queue.remove_at(0)
+		_toast_queue.append(text)
+		while _toast_queue.size() > TOAST_QUEUE:
+			_toast_queue.remove_at(0)
 		return
 	_show_toast(text)
 

@@ -269,6 +269,9 @@ func _fill_grass(px: float, pz: float) -> void:
 	var low := Vector3.INF
 	var high := -Vector3.INF
 	for j in range(maxi(0, floori(tz - rT)), mini(w.H - 1, floori(tz + rT)) + 1):
+		# Буфер полон: дальнейшие строки всё равно не смогут добавить экземпляры.
+		if n >= GameConfig.GRASS_MAX:
+			break
 		for i in range(maxi(0, floori(tx - rT)), mini(w.W - 1, floori(tx + rT)) + 1):
 			# Буфер полон: остальные клетки уже не поместятся
 			if n >= GameConfig.GRASS_MAX:

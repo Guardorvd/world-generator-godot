@@ -36,18 +36,36 @@ static func load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(PATH) != OK:
 		return
-	mouse = clampf(cfg.get_value("input", "mouse", mouse), MIN_MOUSE, MAX_MOUSE)
-	invert_y = cfg.get_value("input", "invert_y", invert_y)
-	fov = clampf(cfg.get_value("view", "fov", fov), MIN_FOV, MAX_FOV)
-	head_bob = cfg.get_value("view", "head_bob", head_bob)
-	fullscreen = cfg.get_value("view", "fullscreen", fullscreen)
-	shadows = cfg.get_value("view", "shadows", shadows)
-	volume = clampf(cfg.get_value("sound", "volume", volume), 0.0, 1.0)
+	_apply_config(cfg)
+
+
+## Повреждённое отдельное поле не мешает прочитать остальные настройки.
+static func _apply_config(cfg: ConfigFile) -> void:
+	mouse = _number(cfg, "input", "mouse", mouse, MIN_MOUSE, MAX_MOUSE)
+	invert_y = _flag(cfg, "input", "invert_y", invert_y)
+	fov = _number(cfg, "view", "fov", fov, MIN_FOV, MAX_FOV)
+	head_bob = _flag(cfg, "view", "head_bob", head_bob)
+	fullscreen = _flag(cfg, "view", "fullscreen", fullscreen)
+	shadows = _flag(cfg, "view", "shadows", shadows)
+	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	# файл мог быть испорчен вручную: неизвестный размер мира заменяем на средний
-	world_size = int(cfg.get_value("world", "size", world_size))
-	if not SIZES.has(world_size):
-		world_size = DEFAULT_WORLD_SIZE
+	var size_value: Variant = cfg.get_value("world", "size", world_size)
+	world_size = int(size_value) if typeof(size_value) == TYPE_INT and SIZES.has(size_value) else DEFAULT_WORLD_SIZE
 	last_seed = str(cfg.get_value("world", "seed", "")).strip_edges().left(MAX_SEED_LEN)
+
+
+static func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
+	var value: Variant = cfg.get_value(section, key, fallback)
+	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+		return fallback
+	if not is_finite(float(value)):
+		return fallback
+	return clampf(float(value), low, high)
+
+
+static func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool) -> bool:
+	var value: Variant = cfg.get_value(section, key, fallback)
+	return value if typeof(value) == TYPE_BOOL else fallback
 
 
 ## Возвращает настройки игрока к значениям по умолчанию; размер мира и последнее зерно не трогает

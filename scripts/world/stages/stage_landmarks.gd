@@ -47,6 +47,7 @@ static func _place_settlements(w: WorldData) -> void:
 	cand.sort_custom(_by_score_desc)
 	var want := clampi(roundi(12.0 * w.scale), 4, 26)
 	var min_d := maxf(28.0, W / 6.5)
+	var min_d2 := min_d * min_d
 	for c: Array in cand:
 		if settlements.size() >= want:
 			break
@@ -55,7 +56,9 @@ static func _place_settlements(w: WorldData) -> void:
 		var y := (i / W) + 0.5
 		var close := false
 		for s: Dictionary in settlements:
-			if Grid.hypot(s.x - x, s.y - y) < min_d:
+			var dx: float = s.x - x
+			var dy: float = s.y - y
+			if dx * dx + dy * dy < min_d2:
 				close = true
 				break
 		if close:
@@ -79,7 +82,9 @@ static func _place_settlements(w: WorldData) -> void:
 				continue
 			var near := false
 			for u: Dictionary in s.huts:
-				if Grid.hypot(u.x - hx, u.y - hy) < 1.4:
+				var dx: float = u.x - hx
+				var dy: float = u.y - hy
+				if dx * dx + dy * dy < 1.96:
 					near = true
 					break
 			if near:
@@ -123,7 +128,9 @@ static func _place_peaks(w: WorldData) -> void:
 		var y := (i / W) + 0.5
 		var close := false
 		for p: Dictionary in peaks:
-			if Grid.hypot(p.x - x, p.y - y) < 40.0:
+			var dx: float = p.x - x
+			var dy: float = p.y - y
+			if dx * dx + dy * dy < 1600.0:
 				close = true
 				break
 		if close:

@@ -18,8 +18,15 @@ func _run() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	var hud: Hud = main.get_node("UI/Root/Hud")
+	hud.toast("")
+	_check(hud._toast_left == 0.0 and hud._toast_queue.is_empty(), "пустое сообщение не занимает HUD")
 	hud.toast("Сообщение прошлого мира")
 	hud.toast("Сообщение в очереди")
+	hud.toast("Ещё одно сообщение")
+	hud.toast("Сообщение в очереди")
+	hud.toast("Сообщение прошлого мира")
+	_check(hud._toast_queue == PackedStringArray(["Сообщение в очереди", "Ещё одно сообщение"]),
+		"повтор текущего и несоседнего сообщения в очереди не дублируется")
 	hud.set_hints("Подсказка", "Действие")
 	hud.bike_shown = true
 	hud.bike_pos = Vector2(20, 30)
