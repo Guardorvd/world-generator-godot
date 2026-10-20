@@ -9,7 +9,7 @@ extends SceneTree
 const HOLD := 2.0          # сколько секунд держать «вперёд»
 const TOLERANCE := 0.06    # допустимое отличие от прогона без ограничения FPS (доля)
 
-enum { LOADING, SETTLE, WALK, BIKE, JUMP }
+enum { LOADING, SETTLE, WALK, BIKE, JUMP, DONE }
 
 var main: Node
 var game: GameWorld
@@ -69,6 +69,8 @@ func _begin(next: int) -> void:
 
 
 func _process(_delta: float) -> bool:
+	if phase == DONE:
+		return false
 	if phase == LOADING:
 		# меню готово только после первого кадра
 		if not start.has("asked"):
@@ -158,5 +160,17 @@ func _finish() -> bool:
 	if fails == 0:
 		print("✓ Движение, прыжок и игровое время одинаковы при всех FPS (в пределах %.0f %%), камера движется плавно" % (TOLERANCE * 100.0))
 	Engine.max_fps = 0
-	quit(1 if fails > 0 else 0)
-	return true
+	phase = DONE
+	_cleanup_and_quit.call_deferred(1 if fails > 0 else 0)
+	return false
+
+
+func _cleanup_and_quit(code: int) -> void:
+	# Выгружаем мир как игрок: фоновые задачи завершаются до остановки дерева.
+	main._back_to_menu()
+	game = null
+	await process_frame
+	main.queue_free()
+	main = null
+	await process_frame
+	quit(code)

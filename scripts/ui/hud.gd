@@ -92,6 +92,16 @@ func clear_world() -> void:
 	map_tex = null
 	visited = {}
 	goal = {}
+	bike_pos = Vector2.ZERO
+	bike_shown = false
+	_toast_queue.clear()
+	_stop_toast_tween()
+	_toast_left = 0.0
+	toast_label.modulate.a = 0.0
+	set_hints("", "")
+	big_map.visible = false
+	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	big_map.hover = {}
 
 
 func set_map_visible(v: bool) -> void:

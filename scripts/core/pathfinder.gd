@@ -21,6 +21,14 @@ var H := 0
 var heights := PackedFloat32Array()
 ## Разрешённые шаги по готовому настилу/полу: биты восьми направлений Grid.DX/DY.
 var links := PackedByteArray()
+var use_corridor := true # запасной поиск оси для связи, которой нужны сооружения
+## Реальная ширина прохода: кэш продольного уклона и поперечного крена шагов.
+var _ground := PackedFloat32Array()
+var _water := PackedFloat32Array()
+var _wet := PackedByteArray()
+var _half := 0.0
+var _corridor := PackedFloat32Array()
+var _cross := PackedFloat32Array()
 ## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
 var g := PackedFloat32Array()
 var from := PackedInt32Array()
@@ -48,11 +56,76 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 	heap_keys.resize(HEAP_START_CAP)
 
 
+## Высоты в клетках, как heights. Кэш ленивый: считаются только просмотренные A* шаги.
+## Вода под будущим мостом остаётся доступной; сухой шаг не может задеть её краем.
+## water — минимальная высота сухого прохода (уровень воды минус разрешённая глубина).
+func set_corridor(ground: PackedFloat32Array, water: PackedFloat32Array, wet: PackedByteArray, half: float) -> void:
+	if _fast != null:
+		_fast.SetCorridor(ground, water, wet, half)
+		return
+	_ground = ground
+	_water = water
+	_wet = wet
+	_half = half
+	_corridor.resize(W * H * 8)
+	_corridor.fill(-1.0)
+	_cross.resize(W * H * 8)
+
+
+func _height(x: float, y: float) -> float:
+	x = clampf(x, 0.0, W - 1.001)
+	y = clampf(y, 0.0, H - 1.001)
+	var ix := floori(x)
+	var iy := floori(y)
+	var tx := x - ix
+	var ty := y - iy
+	var a := iy * W + ix
+	if tx + ty <= 1.0:
+		return _ground[a] + (_ground[a + 1] - _ground[a]) * tx + (_ground[a + W] - _ground[a]) * ty
+	var d := a + W + 1
+	return _ground[d] + (_ground[d - 1] - _ground[d]) * (1.0 - tx) + (_ground[d - W] - _ground[d]) * (1.0 - ty)
+
+
+func _measure_corridor(c: int, k: int) -> void:
+	var key := c * 8 + k
+	if _corridor[key] >= 0.0:
+		return
+	var n := c + Grid.DY[k] * W + Grid.DX[k]
+	var grade := 0.0
+	var cross_grade := 0.0
+	if _wet[c] == 0 and _wet[n] == 0:
+		var nx := -Grid.DY[k] / Grid.DL[k] * _half
+		var ny := Grid.DX[k] / Grid.DL[k] * _half
+		var previous := [0.0, 0.0, 0.0]
+		for j in 5:
+			var left := 0.0
+			var right := 0.0
+			for side in 3:
+				var x: float = c % W + Grid.DX[k] * j * 0.25 + nx * (side - 1)
+				var y: float = c / W + Grid.DY[k] * j * 0.25 + ny * (side - 1)
+				var h := _height(x, y)
+				var cell := clampi(floori(y + 0.5), 0, H - 1) * W + clampi(floori(x + 0.5), 0, W - 1)
+				if _water[cell] > h:
+					grade = INF
+				if j > 0:
+					grade = maxf(grade, absf(h - previous[side]) * 4.0 / Grid.DL[k])
+				previous[side] = h
+				if side == 0: left = h
+				if side == 2: right = h
+			cross_grade = maxf(cross_grade, maxf(absf(right - previous[1]), absf(left - previous[1])) / _half)
+	_corridor[key] = grade
+	_cross[key] = cross_grade
+	# Обратный шаг имеет тот же профиль и ширину.
+	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
+	_corridor[n * 8 + opposite[k]] = grade
+	_cross[n * 8 + opposite[k]] = cross_grade
+
+
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> PackedInt32Array:
 	if _fast != null:
-		return _fast.FindPath(cost, s, t, heights, climb, max_grade, links)
+		return _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
 	var H := self.H
@@ -144,10 +217,18 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 				if (k == 4 or k == 7) and not linked:
 					var mid := (float(heights[c + DX[k]]) + heights[c + DY[k] * W]) * 0.5
 					grade = maxf(absf(mid - heights[c]), absf(heights[n] - mid)) * 2.0 / DL[k]
+				var cross_grade := 0.0
+				if use_corridor and not _ground.is_empty() and not linked:
+					_measure_corridor(c, k)
+					grade = maxf(grade, _corridor[c * 8 + k])
+					cross_grade = _cross[c * 8 + k]
+					if grade == INF:
+						continue
 				if grade > max_grade:
 					continue
 				var steep := maxf(0.0, grade - 0.22)
-				step += climb * (grade * grade + 4.0 * steep * steep)
+				# Подъём и земляные работы оплачиваются отдельно: крен не скрывает крутой подъём.
+				step += climb * (grade * grade + 4.0 * steep * steep + cross_grade * cross_grade)
 			var ng := gc + DL[k] * step
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn

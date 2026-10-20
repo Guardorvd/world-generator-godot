@@ -25,12 +25,19 @@ const S_SQUASH := 6
 const S_WHEEL := 7
 const S_STEER := 8
 const S_CRANK := 9
+const STATE_SIZE := 10
 
 # состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
 var _cur := PackedFloat64Array()
 var _mix := PackedFloat64Array() # буфер для draw, чтобы не выделять память на каждый кадр
 var _riding := false
+var _has_state := false
+
+
+func _ready() -> void:
+	_prev.resize(STATE_SIZE)
+	_cur.resize(STATE_SIZE)
 
 @onready var rider: Node3D = $Rider
 @onready var rear_wheel: Node3D = $RearWheel
@@ -46,17 +53,32 @@ var _riding := false
 
 ## Запомнить состояние после такта физики
 func tick(b: BikeRide) -> void:
-	_prev = _cur
-	_cur = PackedFloat64Array([b.x, b.y - b.squash, b.z, b.tilt, b.heading, b.lean + b.sway, b.squash, b.wheel, b.steer, b.crank])
-	_riding = b.riding
-	if _prev.is_empty():
+	# Переиспользуем два буфера: состояние приходит 60 раз в секунду.
+	if _has_state:
+		var spare := _prev
 		_prev = _cur
+		_cur = spare
+	_cur[S_X] = b.x
+	_cur[S_BODY_Y] = b.y - b.squash
+	_cur[S_Z] = b.z
+	_cur[S_TILT] = b.tilt
+	_cur[S_HEADING] = b.heading
+	_cur[S_ROLL] = b.lean + b.sway
+	_cur[S_SQUASH] = b.squash
+	_cur[S_WHEEL] = b.wheel
+	_cur[S_STEER] = b.steer
+	_cur[S_CRANK] = b.crank
+	_riding = b.riding
+	if not _has_state:
+		_prev = _cur.duplicate()
+		_has_state = true
 
 
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
 func snap(b: BikeRide) -> void:
 	tick(b)
-	_prev = _cur
+	for i in STATE_SIZE:
+		_prev[i] = _cur[i]
 
 
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему

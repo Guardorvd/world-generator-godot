@@ -216,11 +216,113 @@ func _surface_check() -> void:
 	_check(StageTrails._link(w, finder, 4 * w.W + 3, 4 * w.W + 5).is_empty(), "отсутствующий подход к сооружению не заменяется опасной прямой")
 
 
+func _corridor_check() -> void:
+	# Плоская ось вдоль стены: точечный поиск не видит, что край полотна уже на скале.
+	var w := WorldData.new()
+	w.W = 24
+	w.H = 24
+	w.N = w.W * w.H
+	w.h.resize(w.N)
+	w.h.fill(0.1)
+	w.filled.resize(w.N)
+	w.ocean.resize(w.N)
+	w.lake.resize(w.N)
+	w.river.resize(w.N)
+	for y in range(4, 8):
+		for x in range(6, 17):
+			w.h[y * w.W + x] = 0.2
+	var surface := Heightfield.new(w, false)
+	var heights := surface.hv.duplicate()
+	for i in w.N: heights[i] /= GameConfig.TILE
+	var cost := PackedFloat32Array()
+	cost.resize(w.N)
+	cost.fill(1.0)
+	var start := 8 * w.W + 2
+	var finish := 8 * w.W + 20
+	var finder := Pathfinder.new(w.W, w.H, heights)
+	var axis := finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	StageTrails._route_surface(finder, surface, 0.9)
+	var wide := finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	var safe := not wide.is_empty()
+	for k in range(1, wide.size()):
+		var a := {x = wide[k - 1] % w.W + 0.5, y = wide[k - 1] / w.W + 0.5, w = 0.9}
+		var b := {x = wide[k] % w.W + 0.5, y = wide[k] / w.W + 0.5, w = 0.9}
+		safe = safe and StageTrails._road_segment(surface, a, b)
+	_check(wide != axis and safe, "поиск по ширине уводит горизонтальную дорогу со стены на пологую землю")
+	var narrow := cost.duplicate()
+	narrow.fill(INF)
+	for x in range(2, 21): narrow[8 * w.W + x] = 1.0
+	var fallback := StageTrails._road_path(finder, narrow, start, finish)
+	_check(fallback == axis and not finder.use_corridor, "пологая ось выбирается раньше снятия ограничения уклона ради ширины")
+	finder.use_corridor = true
+	if Grid.allow_fast:
+		Grid.allow_fast = false
+		var gd := Pathfinder.new(w.W, w.H, heights)
+		StageTrails._route_surface(gd, surface, 0.9)
+		_check(gd.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == wide, "C# и GDScript совпадают при проверке ширины прохода")
+		Grid.allow_fast = true
+	# Обычная тропа проходит той же проверкой углов и сохраняет вход на ось.
+	w.rng = WGRandom.new(41)
+	w.cost = cost
+	w.path_mask.resize(w.N)
+	var on_axis := PackedByteArray()
+	w.dist_water.resize(w.N)
+	w.dist_water.fill(INF)
+	on_axis.resize(w.N)
+	on_axis[wide[0]] = 1
+	StageTrails._add_trail(w, wide, "trail", PackedFloat32Array(), on_axis, surface)
+	var points: Array = w.trails[0].pts
+	safe = Vector2(points[0].x, points[0].y) == Vector2(2.5, 8.5)
+	for k in range(1, points.size()):
+		safe = safe and StageTrails._road_segment(surface, points[k - 1], points[k])
+	_check(safe, "обычная тропа после скругления сохраняет безопасный проход и точный вход")
+
+
+func _rollback_check() -> void:
+	# Первый мост пригоден, вторая переправа закрыта. Отброшенная связь не должна менять мир.
+	var w := WorldData.new()
+	w.W = 32
+	w.H = 16
+	w.N = w.W * w.H
+	w.h.resize(w.N)
+	w.h.fill(0.1)
+	w.filled.resize(w.N)
+	w.ocean.resize(w.N)
+	w.lake.resize(w.N)
+	w.river.resize(w.N)
+	w.path_mask.resize(w.N)
+	w.cost.resize(w.N)
+	w.cost.fill(INF)
+	for y in w.H:
+		w.river[y * w.W + 8] = 1
+		w.river[y * w.W + 16] = 1
+		for x in range(17, w.W): w.h[y * w.W + x] = 0.2
+	var path := Grid.line_cells(2, 8, 23, 8, w.W)
+	for i in path: w.cost[i] = 1.0
+	var surface := Heightfield.new(w, false)
+	var heights := surface.hv.duplicate()
+	for i in w.N: heights[i] /= GameConfig.TILE
+	var finder := Pathfinder.new(w.W, w.H, heights)
+	var on_axis := PackedByteArray()
+	on_axis.resize(w.N)
+	var state := {surface = surface, on_axis = on_axis, detour = false}
+	var mask := w.path_mask.duplicate()
+	var before := surface.hv.duplicate()
+	var heights_before := heights.duplicate()
+	var axis_before := on_axis.duplicate()
+	_check(StageTrails._bridge_clear(surface, 8 * w.W + 7, 8 * w.W + 9), "первая переправа контрольной связи действительно пригодна")
+	var result := StageTrails._structures(w, path, true, finder, w.cost, state)
+	_check(result.is_empty() and w.bridges.is_empty() and w.tunnels.is_empty(), "отказ от второй переправы убирает мост от отброшенной связи")
+	_check(w.path_mask == mask and surface.hv == before and finder.heights == heights_before and finder.links.is_empty() and state.on_axis == axis_before, "после отказа восстановлены земля, маска пути и шаги поиска")
+
+
 func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
 	_terrain_check()
 	_surface_check()
+	_corridor_check()
+	_rollback_check()
 	_connection_check(false)
 	_connection_check(true)
 	if not args.has("--quick"):

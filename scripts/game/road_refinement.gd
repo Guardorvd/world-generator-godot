@@ -10,7 +10,8 @@ const STEP := TILE / DIV
 const STRIDE := DIV + 1
 const REACH := 3.0
 const FIT_FADE := 12.0   # 4.5: плавный переход у концов, развилок и защищённых мест, м
-const FIT_LIMIT := 1.2   # наибольший срез/подсыпка относительно сетки RoadBed, м
+const FIT_LIMIT := 1.2   # обычное уточнение относительно сетки RoadBed, м
+const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
@@ -19,6 +20,8 @@ var _structures := {}
 var _heights: Heightfield
 var _noise: FastNoiseLite
 var _height := 0
+var _base_cache := {} # одинаковые метровые выборки у соседних вершин, только на время запекания
+var _wet_cache := {}  # уровень соседней воды одинаков для всех вершин одной клетки
 
 
 static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
@@ -65,6 +68,8 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._segments.clear()
 	r._structures.clear()
 	r._noise = null
+	r._base_cache.clear()
+	r._wet_cache.clear()
 	return r
 
 
@@ -150,9 +155,11 @@ func _fit_network() -> void:
 		for j in count:
 			ground[j] = _heights.base_ground_at(points[j].x, points[j].y)
 		var need := PackedFloat32Array()
+		var cross_slopes := PackedFloat32Array()
 		var allowed := PackedFloat32Array()
 		var distance := PackedFloat32Array()
 		need.resize(count)
+		cross_slopes.resize(count)
 		allowed.resize(count)
 		distance.resize(count)
 		for j in count:
@@ -162,14 +169,15 @@ func _fit_network() -> void:
 			var tangent := (points[hi] - points[lo]).normalized()
 			var normal := Vector2(-tangent.y, tangent.x) * 1.5
 			var cross_grade := absf(_heights.base_ground_at(p.x + normal.x, p.y + normal.y) - _heights.base_ground_at(p.x - normal.x, p.y - normal.y)) / 3.0
+			cross_slopes[j] = cross_grade
 			var grade := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
 			var ripple := absf(ground[maxi(0, j - 4)] - 2.0 * ground[j] + ground[mini(count - 1, j + 4)]) / (8.0 * STEP)
 			need[j] = maxf(smoothstep(0.02, 0.10, cross_grade), maxf(smoothstep(0.08, 0.30, grade), smoothstep(0.004, 0.035, ripple)))
 			lo = maxi(0, j - 12)
 			hi = mini(count - 1, j + 12)
 			var sustained := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
-			allowed[j] = (1.0 - smoothstep(0.45, 0.7, sustained)) * (1.0 - smoothstep(0.55, 0.85, cross_grade))
-			if not _fit_safe(p, tangent, route, j * STEP):
+			allowed[j] = (1.0 - smoothstep(0.45, 0.7, sustained)) * (1.0 if t.kind == "road" else 1.0 - smoothstep(0.55, 0.85, cross_grade))
+			if not _fit_safe(p, tangent, route, j * STEP, t.kind == "road"):
 				allowed[j] = 0.0
 			distance[j] = 0.0 if allowed[j] <= 0.0 else (distance[j - 1] + STEP if j > 0 else 0.0)
 		# Симметричное окно не пересекает берег, сооружение, развилку или конец пути.
@@ -182,11 +190,14 @@ func _fit_network() -> void:
 		var limits := PackedFloat32Array()
 		for j in count:
 			var amount := 0.0
+			var cross_slope := 0.0
 			var lo := maxi(0, j - 4)
 			var hi := mini(count - 1, j + 4)
 			for k in range(lo, hi + 1):
 				amount += need[k]
+				cross_slope += cross_slopes[k]
 			amount /= hi - lo + 1
+			cross_slope /= hi - lo + 1
 			var radius := mini(12, maxi(0, floori(distance[j] / STEP) - 1))
 			var small := mini(4, radius)
 			var sum_h := 0.0
@@ -201,14 +212,17 @@ func _fit_network() -> void:
 			profile.append(target)
 			var power := lerpf(0.25, 1.0, amount) * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j])
 			strength.append(power * (0.55 if t.kind == "trail" else 1.0))
-			limits.append(lerpf(0.2, FIT_LIMIT, amount) * (0.5 if t.kind == "trail" else 1.0))
+			var cap := lerpf(0.2, FIT_LIMIT, amount) * (0.5 if t.kind == "trail" else 1.0)
+			if t.kind == "road":
+				cap = maxf(cap, minf(BENCH_LIMIT, cross_slope * float(t.pts[0].w) * TILE * 0.5))
+			limits.append(cap)
 		fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
 
 
-func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float) -> bool:
+func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false) -> bool:
 	var w := _heights.world
 	var cell := floori(p.y / TILE) * w.W + floori(p.x / TILE)
-	if cell < 0 or cell >= w.N or w.dist_water[cell] < RoadBed.SHORE.y or _heights.water_level[cell] != -INF:
+	if cell < 0 or cell >= w.N or (not shore_ok and w.dist_water[cell] < RoadBed.SHORE.y) or _heights.water_level[cell] != -INF:
 		return false
 	var key := floori(p.y / TILE - 0.5) * w.W + floori(p.x / TILE - 0.5)
 	for s: Dictionary in _structures.get(key, []):
@@ -229,9 +243,22 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float) -> bool:
 	return true
 
 
+func _base_at(x: float, z: float) -> float:
+	var key := Vector2(x, z)
+	if not _base_cache.has(key):
+		_base_cache[key] = _heights.base_ground_at(x, z)
+	return _base_cache[key]
+
+
+func _wet_near(i: int) -> float:
+	if not _wet_cache.has(i):
+		_wet_cache[i] = RoadBed._wet_near(_heights, i)
+	return _wet_cache[i]
+
+
 func _vertex(x: float, z: float) -> Dictionary:
 	var w := _heights.world
-	var base := _heights.base_ground_at(x, z)
+	var base := _base_at(x, z)
 	var key := clampi(floori(z / TILE - 0.5), 0, w.H - 2) * w.W + clampi(floori(x / TILE - 0.5), 0, w.W - 2)
 	var best := INF
 	var road: Dictionary = {}
@@ -272,14 +299,16 @@ func _vertex(x: float, z: float) -> Dictionary:
 	var cz := clampi(floori(z / TILE), 0, w.H - 1)
 	var i := cz * w.W + cx
 	var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, w.dist_water[i])
-	# Вода и ближний берег остаются прежними; от сооружений изменение включается плавно.
+	# Базовое уточнение затухает у берега; земляная полка дороги обрабатывается отдельно ниже.
 	if _heights.water_level[i] != -INF:
 		pin = 0.0
+	var structure_pin := 1.0
 	for s: Dictionary in _structures.get(key, []):
 		var dist := Grid.segment_dist(x, z, s.ax, s.az, s.bx, s.bz)
-		pin = minf(pin, smoothstep(RoadBed.PIN, RoadBed.PIN + RoadBed.PIN_FADE, dist))
-	var gx := _heights.base_ground_at(x + 1.0, z) - _heights.base_ground_at(x - 1.0, z)
-	var gz := _heights.base_ground_at(x, z + 1.0) - _heights.base_ground_at(x, z - 1.0)
+		structure_pin = minf(structure_pin, smoothstep(RoadBed.PIN, RoadBed.PIN + RoadBed.PIN_FADE, dist))
+	pin = minf(pin, structure_pin)
+	var gx := _base_at(x + 1.0, z) - _base_at(x - 1.0, z)
+	var gz := _base_at(x, z + 1.0) - _base_at(x, z - 1.0)
 	pin *= 1.0 - smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, Vector2(gx, gz).length() * 0.5)
 	var rough: float = RoadSurface.LIST[surf].rough
 	var crown := 0.035 * (1.0 - smoothstep(0.0, half, d))
@@ -297,6 +326,19 @@ func _vertex(x: float, z: float) -> Dictionary:
 		var power := lerpf(fit.strength[j], fit.strength[j + 1], f)
 		var cap := lerpf(fit.limit[j], fit.limit[j + 1], f)
 		h = base + clampf(level + detail - base, -cap, cap) * influence * pin * power
+		# 4.5+: ограниченная земляная полка там, где прежняя обработка отключалась.
+		# Полотно остаётся частью того же меша и поверхности движения; вода закреплена.
+		if road.kind == "road" and _heights.water_level[i] == -INF and power > 0.0:
+			var normal := Vector2(-road.delta.y, road.delta.x).normalized() * half
+			var on_axis: Vector2 = road.a + road.delta * u
+			var cross_grade := absf(_heights.base_ground_at(on_axis.x + normal.x, on_axis.y + normal.y) - _heights.base_ground_at(on_axis.x - normal.x, on_axis.y - normal.y)) / (2.0 * half)
+			var bench := smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, cross_grade)
+			if bench > 0.0:
+				var dry_level := maxf(level + detail, _wet_near(i) + RoadBed.WATER_GAP)
+				var shelf := base + clampf(dry_level - base, -cap, cap)
+				h = lerpf(h, shelf, influence * structure_pin * power * bench)
+	if _heights.water_level[i] == -INF and h < base:
+		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
 	return {h = h, color = color, uv = Vector2(side / half, rough), surface = surf, road = road.kind == "road"}
 
 

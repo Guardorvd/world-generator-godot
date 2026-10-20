@@ -49,8 +49,10 @@ func _init() -> void:
 					var value: float = patch.h[z * RoadRefinement.STRIDE + x]
 					var diff := absf(value - h.base_ground_at(px, pz))
 					var cell := floori(pz / GameConfig.TILE) * w.W + floori(px / GameConfig.TILE)
-					if w.dist_water[cell] <= RoadBed.SHORE.x or h.water_level[cell] != -INF:
-						check(diff < 0.001, "изменена вода или ближний берег")
+					if h.water_level[cell] != -INF:
+						check(diff < 0.001, "изменена вода")
+					elif value < h.base_ground_at(px, pz):
+						check(value >= minf(h.base_ground_at(px, pz), RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "срез сухого берега затопил полотно")
 					biggest = maxf(biggest, diff)
 					var on_boundary := (x == 0 and not r.patches.has(key - 1)) or (x == RoadRefinement.DIV and not r.patches.has(key + 1)) or (z == 0 and not r.patches.has(key - w.W)) or (z == RoadRefinement.DIV and not r.patches.has(key + w.W))
 					if on_boundary:
@@ -63,7 +65,7 @@ func _init() -> void:
 						if Grid.segment_dist(px, pz, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN:
 							protected_error = maxf(protected_error, diff)
 		check(boundary < 0.001 and joins < 0.001, "%s: разрыв сетки: %f / %f" % [seed_text, boundary, joins])
-		check(biggest <= RoadRefinement.FIT_LIMIT + 0.001, "%s: превышен предел уточнения: %f" % [seed_text, biggest])
+		check(biggest <= RoadRefinement.BENCH_LIMIT + 0.001, "%s: превышен предел уточнения: %f" % [seed_text, biggest])
 		check(protected_error < 0.001, "%s: сдвинут подход сооружения" % seed_text)
 		check(r.patches.size() < w.N * 0.25, "%s: уточнение захватывает слишком много мира" % seed_text)
 		# Оба способа загрузки должны давать одну и ту же поверхность.

@@ -137,18 +137,21 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	pole_mesh.radial_segments = 4
 	var flag_mesh := QuadMesh.new()
 	flag_mesh.size = Vector2(1.0, 0.6)
+	var stone_meshes: Array[SphereMesh] = []
+	for rh: Vector2 in PEAK_STONES:
+		var sm := SphereMesh.new()
+		sm.radius = rh.x
+		sm.height = rh.x * 2.0
+		sm.radial_segments = 5
+		sm.rings = 2
+		stone_meshes.append(sm)
 	for pk in w.peaks:
 		var x: float = pk.x * TILE
 		var z: float = pk.y * TILE
 		var y := heights.ground_at(x, z)
 		var at := Transform3D(Basis(), Vector3(x, y, z))
-		for rh: Vector2 in PEAK_STONES:
-			var sm := SphereMesh.new()
-			sm.radius = rh.x
-			sm.height = rh.x * 2.0
-			sm.radial_segments = 5
-			sm.rings = 2
-			batch.add(sm, at.translated_local(Vector3(0, rh.y, 0)), stone)
+		for k in PEAK_STONES.size():
+			batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
 		batch.add(pole_mesh, at.translated_local(Vector3(0, 3.2, 0)), pole_m)
 		batch.add(flag_mesh, at.translated_local(Vector3(0.5, 3.9, 0)), flag_m)
 		# подпись вершины рядом с поселением закрыла бы его название: такую не ставим

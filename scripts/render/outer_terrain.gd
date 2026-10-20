@@ -19,6 +19,7 @@ var world: WorldData
 var heights: Heightfield
 var land: OuterLand
 var _mat: ShaderMaterial
+var _palette := PackedColorArray()
 var _nodes := {}         # номер куска -> MeshInstance3D (или null, если в куске нечего рисовать)
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
@@ -31,6 +32,9 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	heights = h
 	land = w.outer
 	_mat = TerrainBuilder.outer_material()
+	_palette.clear()
+	for bd: Dictionary in Biomes.LIST:
+		_palette.append(Color8(bd.color[0], bd.color[1], bd.color[2]))
 
 
 ## Сразу загрузить все куски в радиусе radius (при старте игры), чтобы ближний рельеф не вырастал на глазах
@@ -174,9 +178,6 @@ func _build(key: Vector2i) -> Dictionary:
 	var S := C + 3
 	var i0 := key.x * C
 	var j0 := key.y * C
-	var palette := PackedColorArray()
-	for bd: Dictionary in Biomes.LIST:
-		palette.append(Color8(bd.color[0], bd.color[1], bd.color[2]))
 	# высоты и цвета клеток куска с запасом в клетку (для нормалей): на карте — из неё
 	var hs := PackedFloat32Array()
 	var col := PackedColorArray()
@@ -196,7 +197,7 @@ func _build(key: Vector2i) -> Dictionary:
 				var h := fh[k]
 				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
-			col[k] = palette[bi]
+			col[k] = _palette[bi]
 	var V := C + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()

@@ -68,9 +68,24 @@ static func run(w: WorldData, step: Callable) -> void:
 		heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	_animal_trails(w, finder)
+	_route_surface(finder, surface, 0.9)
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface)
-	_mountain_trails(w, finder)
+	_route_surface(finder, surface, 0.42)
+	_mountain_trails(w, finder, surface)
+
+
+## Поиск видит тот же прорезанный рельеф, что и полотно. Ширина в клетках, высоты / TILE.
+static func _route_surface(finder: Pathfinder, surface: Heightfield, width: float) -> void:
+	var ground := surface.hv.duplicate()
+	var water := surface.water_level.duplicate()
+	var wet := PackedByteArray()
+	wet.resize(surface.world.N)
+	for i in surface.world.N:
+		ground[i] /= GameConfig.TILE
+		water[i] = (water[i] - 0.3) / GameConfig.TILE
+		wet[i] = 1 if _wet(surface.world, i) else 0
+	finder.set_corridor(ground, water, wet, width * 0.5)
 
 
 ## Река у самого устья в озеро или море (с 2.9): там она глубже брода, путь обходит её выше по течению
@@ -121,7 +136,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		var i := path[k]
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * jitter
 		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * jitter
-		if kind == "road":
+		if kind != "animal":
 			# Случайное смещение поперёк склона меняет реальный уклон выбранного прохода.
 			px = (i % W) + 0.5
 			py = (i / W) + 0.5
@@ -170,7 +185,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
 	w.cost = cost
 	_protect_structures(w, road_cost)
-	var line := _road_line(w, pts, on_axis, surface) if kind == "road" and surface != null else Grid.chaikin(pts, 3)
+	var line := _road_line(w, pts, on_axis, surface) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
 	_mark_line(w, line, mark, width * 0.5 - LINE_IN)
 	w.trails.append({kind = kind, pts = line})
 
@@ -190,7 +205,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				fixed = fixed or not on_axis.is_empty() and on_axis[i] != 0
 			var q := {x = lerpf(b.x, a.x, 0.25), y = lerpf(b.y, a.y, 0.25), w = b.w}
 			var r := {x = lerpf(b.x, c.x, 0.25), y = lerpf(b.y, c.y, 0.25), w = b.w}
-			if not fixed and _road_segment(surface, q, r):
+			if not fixed and _road_segment(surface, out[-1], q) and _road_segment(surface, q, r) and _road_segment(surface, r, c):
 				out.append(q)
 				out.append(r)
 			else:
@@ -219,6 +234,14 @@ static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary) ->
 			if surface.depth_at(x, z) > 0.3 or k > 0 and absf(h - previous) > ROAD_GRADE * length * GameConfig.TILE / steps + 0.00001:
 				return false
 			previous = h
+	# Поперёк стены ось может быть горизонтальной. Не срезаем туда безопасный поворот.
+	for k in steps + 1:
+		var t := float(k) / steps
+		var x: float = (a.x + dx * t) * GameConfig.TILE
+		var z: float = (a.y + dy * t) * GameConfig.TILE
+		var across := absf(surface.ground_at(x + nx * GameConfig.TILE, z + ny * GameConfig.TILE) - surface.ground_at(x - nx * GameConfig.TILE, z - ny * GameConfig.TILE))
+		if across > RoadBed.STEEP.x * float(a.w) * GameConfig.TILE + 0.00001:
+			return false
 	return true
 
 
@@ -433,12 +456,16 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	for e in edges:
 		if groups[e[0]] == groups[e[1]]:
 			continue
-		var p := finder.find_path(road_cost, st[e[0]].i, st[e[1]].i, ROAD_CLIMB, ROAD_GRADE)
-		if p.is_empty():
-			# Изолированный берег/хребет может требовать моста или туннеля.
-			p = finder.find_path(road_cost, st[e[0]].i, st[e[1]].i, ROAD_CLIMB)
+		var p := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i)
 		if p.size() > 0:
 			var q := _structures(w, p, true, finder, road_cost, state)
+			if q.is_empty():
+				# Ширина относится к земле, а мост/туннель создаёт своё полотно.
+				# Если такой проход не строится, проверяем другой вариант по оси.
+				var axis := _road_path(finder, road_cost, st[e[0]].i, st[e[1]].i, false)
+				if not axis.is_empty():
+					q = _structures(w, axis, true, finder, road_cost, state)
+			finder.use_corridor = true
 			if q.is_empty():
 				continue
 			surface.build_structures()
@@ -448,6 +475,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 			for a in n:
 				if groups[a] == joined:
 					groups[a] = groups[e[0]]
+	finder.use_corridor = true
+	_route_surface(finder, surface, 0.55)
 	_second_ways(w, finder, paths, road_cost, state)
 	_clear_huts(w)
 
@@ -484,13 +513,13 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if old.is_empty() or old_len <= e[2] * SHORTCUT:
 			continue
 		var corr := _corridor(w, [old])
-		var p := finder.find_path(_avoiding(w, corr), a, b, TRAIL_CLIMB)
+		var p := _land_path(finder, _avoiding(w, corr), a, b, TRAIL_CLIMB)
 		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(p, corr) > AVOID_SHARE or not _new_ground(w, p):
 			continue
 		var q := _structures(w, p, false, finder, w.cost, state)
 		if q.is_empty():
 			continue
-		_add_trail(w, q, "trail", road_cost, state.on_axis)
+		_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
 		paths.append([e[0], e[1], q, false, e[2]])
 		network = _network_cost(w)
 	# Проверяем каждую основную связь; плоская копия соседней дороги сама по себе не повод для петли.
@@ -498,14 +527,14 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if not e[3]:
 			continue
 		var corr := _corridor(w, [e[2]])
-		var p := finder.find_path(_avoiding(w, corr), st[e[0]].i, st[e[1]].i, TRAIL_CLIMB)
+		var p := _land_path(finder, _avoiding(w, corr), st[e[0]].i, st[e[1]].i, TRAIL_CLIMB)
 		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(p, corr) > AVOID_SHARE \
 				or not _new_ground(w, p) or not _different_relief(w, p, e[2]):
 			continue
 		var q := _structures(w, p, false, finder, w.cost, state)
 		if q.is_empty():
 			continue
-		_add_trail(w, q, "trail", road_cost, state.on_axis)
+		_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
 		paths.append([e[0], e[1], q, false, e[4]])
 	# Берег — самостоятельная цель исследования, даже у поселения с несколькими дорогами.
 	var all_paths: Array = []
@@ -515,13 +544,13 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var corr := _corridor(w, all_paths)
 		var t := _shore(w, s.i, corr)
 		if t >= 0:
-			var p := finder.find_path(_avoiding(w, corr), s.i, t, TRAIL_CLIMB)
+			var p := _land_path(finder, _avoiding(w, corr), s.i, t, TRAIL_CLIMB)
 			var d := Grid.hypot(t % w.W - s.x, t / w.W - s.y)
 			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _share(p, corr) <= AVOID_SHARE:
 				var q := _structures(w, p, false, finder, w.cost, state)
 				if q.is_empty():
 					continue
-				_add_trail(w, q, "trail", road_cost, state.on_axis)
+				_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
 				all_paths.append(q)
 
 
@@ -532,6 +561,25 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 	for i in w.N:
 		cost[i] = 1.0 if w.path_mask[i] >= 2 else INF
 	return cost
+
+
+## Сначала ищем пологий проход и для троп/обходов; технический остаётся запасным.
+static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = RoadBed.STEEP.x) -> PackedInt32Array:
+	var p := finder.find_path(cost, a, b, climb, ROAD_GRADE)
+	return finder.find_path(cost, a, b, climb, limit) if p.is_empty() else p
+
+
+## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
+## Поэтому пологая ось ищется раньше, чем снимается ограничение ради сооружений.
+static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true) -> PackedInt32Array:
+	finder.use_corridor = wide
+	var p := finder.find_path(cost, a, b, ROAD_CLIMB, ROAD_GRADE)
+	if p.is_empty() and wide:
+		finder.use_corridor = false
+		p = finder.find_path(cost, a, b, ROAD_CLIMB, ROAD_GRADE)
+	if p.is_empty():
+		p = finder.find_path(cost, a, b, ROAD_CLIMB)
+	return p
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:
@@ -648,6 +696,31 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int = 0) -> PackedInt32Array:
+	# Неудачная связь не оставляет за собой мосты, выемки и разрешённые шаги по их осям.
+	var surface: Heightfield = state.get("surface")
+	var checkpoint := {bridges = w.bridges.duplicate(), tunnels = w.tunnels.duplicate(), mask = w.path_mask.duplicate(),
+		heights = finder.heights.duplicate(), links = finder.links.duplicate(), on_axis = state.on_axis.duplicate(),
+		detour = state.detour, hv = surface.hv.duplicate() if surface != null else PackedFloat32Array()}
+	var result := _build_structures(w, p, road, finder, cost, state, retries, checkpoint)
+	if result.is_empty():
+		_restore_structures(w, finder, state, checkpoint)
+	return result
+
+
+static func _restore_structures(w: WorldData, finder: Pathfinder, state: Dictionary, checkpoint: Dictionary) -> void:
+	w.bridges = checkpoint.bridges.duplicate()
+	w.tunnels = checkpoint.tunnels.duplicate()
+	w.path_mask = checkpoint.mask.duplicate()
+	finder.heights = checkpoint.heights.duplicate()
+	finder.links = checkpoint.links.duplicate()
+	state.on_axis = checkpoint.on_axis.duplicate()
+	state.detour = checkpoint.detour
+	if state.has("surface"):
+		state.surface.hv = checkpoint.hv.duplicate()
+		state.surface.build_structures()
+
+
+static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int, checkpoint: Dictionary) -> PackedInt32Array:
 	if finder.links.is_empty():
 		finder.links.resize(w.N)
 	p = _explicit(w, p)
@@ -713,10 +786,9 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 									bypass[y * W + x] = INF
 					# Новый переход ищется от начала связи: фиксированный крутой берег
 					# не должен заставлять объезд карабкаться вверх сразу от воды.
-					var q := finder.find_path(bypass, p[0], p[-1], ROAD_CLIMB, ROAD_GRADE if road and retries < 3 else INF)
-					if q.is_empty():
-						q = finder.find_path(bypass, p[0], p[-1], ROAD_CLIMB)
+					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor) if road else _land_path(finder, bypass, p[0], p[-1], TRAIL_CLIMB)
 					if not q.is_empty() and retries < 12:
+						_restore_structures(w, finder, state, checkpoint)
 						return _structures(w, q, road, finder, bypass, state, retries + 1)
 					return PackedInt32Array()
 		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE or hp[i + 1] < hp[i] and ahead_min[i] <= hp[i] - DIP:
@@ -889,7 +961,7 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 			var k := y * W + x
 			if w.h[k] <= top and not _wet(w, k):
 				c[k] = cost[k]
-	var q := finder.find_path(c, a, b, TRAIL_CLIMB)
+	var q := _land_path(finder, c, a, b, TRAIL_CLIMB)
 	if q.size() > d * DETOUR:
 		return PackedInt32Array()
 	return q
@@ -1047,7 +1119,7 @@ static func _key(a: int, b: int) -> String:
 
 
 ## Горные тропы ответвляются от ближайшего доступного пути людей, а не обязательно от поселения.
-static func _mountain_trails(w: WorldData, finder: Pathfinder) -> void:
+static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfield = null) -> void:
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
 	for span: Dictionary in w.bridges + w.tunnels:
@@ -1071,6 +1143,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder) -> void:
 				bd = d
 				best = i
 		if best >= 0 and bd < w.W * 0.4:
-			var p := finder.find_path(w.cost, best, pk.i, MOUNTAIN_CLIMB)
+			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
+			var p := finder.find_path(w.cost, best, pk.i, MOUNTAIN_CLIMB, RoadBed.STEEP.y)
 			if p.size() > 0:
-				_add_trail(w, p, "mountain", PackedFloat32Array(), on_axis)
+				_add_trail(w, p, "mountain", PackedFloat32Array(), on_axis, surface)

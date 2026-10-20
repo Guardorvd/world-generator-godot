@@ -16,6 +16,9 @@ func _init() -> void:
 	var bank := _compare(_world("bank"), "косой склон", true)
 	var bumps := _compare(_world("bumps"), "короткий подъём и впадина", true)
 	var steep := _compare(_world("steep"), "постоянный уклон 80 %", false)
+	var shore := _compare(_world("shore"), "полка у озера на склоне 150 %", true)
+	check(shore.cross < shore.raw_cross * 0.3, "полка дороги у озера осталась на стене")
+	_shore_invariants()
 	check(flat.power < bank.power * 0.7 and flat.power < bumps.power * 0.7, "удобная земля обрабатывается так же сильно, как трудная")
 	check(bank.cross < bank.raw_cross * 0.5, "косой склон не получил удобного полотна")
 	check(bumps.bumps < bumps.raw_bumps * 0.9 and bumps.height_range < bumps.raw_range * 0.85, "локальные перегибы и перепад высот не смягчились")
@@ -50,12 +53,23 @@ func _world(mode: String) -> WorldData:
 				value += 3.5 * exp(-pow((x - 90.0) / 5.0, 2.0)) - 3.0 * exp(-pow((x - 155.0) / 6.0, 2.0))
 			elif mode == "steep":
 				value += (x - 100.0) * 0.8
+			elif mode == "shore":
+				value += (z - 130.0) * 1.5
 			w.h[j * w.W + i] = value / GameConfig.HS
 	for name: String in ["ocean", "lake", "river", "biome", "path_mask", "road_surface"]:
 		var values := PackedByteArray()
 		values.resize(w.N)
 		values.fill(Biomes.GRASS if name == "biome" else 0)
 		w.set(name, values)
+	if mode == "shore":
+		for z in w.H:
+			for x in w.W:
+				var cell := z * w.W + x
+				w.dist_water[cell] = maxf(0.0, z - 31.0)
+				if z <= 31:
+					w.lake[cell] = 1
+					w.h[cell] = minf(w.h[cell], 52.0 / GameConfig.HS)
+					w.filled[cell] = 56.0 / GameConfig.HS
 	var points: Array = []
 	var surfaces := PackedByteArray()
 	for x in range(8, 57):
@@ -65,6 +79,26 @@ func _world(mode: String) -> WorldData:
 		w.road_surface[32 * w.W + x] = RoadSurface.DIRT
 	w.trails = [{kind = "road", pts = points, surf = surfaces}]
 	return w
+
+
+func _shore_invariants() -> void:
+	var h := Heightfield.new(_world("shore"))
+	var changed := 0.0
+	for key: int in h.road_refinement.patches:
+		var patch: Dictionary = h.road_refinement.patches[key]
+		for z in RoadRefinement.STRIDE:
+			for x in RoadRefinement.STRIDE:
+				var px := (key % h.world.W + 0.5) * GameConfig.TILE + x * RoadRefinement.STEP
+				var pz := (key / h.world.W + 0.5) * GameConfig.TILE + z * RoadRefinement.STEP
+				var base := h.base_ground_at(px, pz)
+				var value: float = patch.h[z * RoadRefinement.STRIDE + x]
+				var cell := floori(pz / GameConfig.TILE) * h.world.W + floori(px / GameConfig.TILE)
+				changed = maxf(changed, absf(value - base))
+				if h.water_level[cell] != -INF:
+					check(absf(value - base) < 0.001, "полка изменила дно озера")
+				elif value < base:
+					check(value >= minf(base, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "полка затопила сухой берег")
+	check(changed > 1.2 and changed <= RoadRefinement.BENCH_LIMIT + 0.001, "полка не использовала ограниченную выемку в склоне")
 
 
 func _compare(w: WorldData, label: String, ride: bool) -> Dictionary:

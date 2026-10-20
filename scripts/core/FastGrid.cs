@@ -27,6 +27,71 @@ public partial class FastGrid : RefCounted
 	private double[] _heapKeys = Array.Empty<double>();
 	private int _gen;
 	private readonly int[] _off = new int[8];
+	private float[] _corridorGround = Array.Empty<float>();
+	private float[] _corridorWater = Array.Empty<float>();
+	private byte[] _corridorWet = Array.Empty<byte>();
+	private float[] _corridorGrades = Array.Empty<float>();
+	private float[] _corridorCross = Array.Empty<float>();
+	private double _corridorHalf;
+	private static readonly int[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
+
+	/// <summary>Ленивый кэш ширины прохода, копия Pathfinder.set_corridor.</summary>
+	public void SetCorridor(float[] ground, float[] water, byte[] wet, double half)
+	{
+		_corridorGround = ground;
+		_corridorWater = water;
+		_corridorWet = wet;
+		_corridorHalf = half;
+		_corridorGrades = new float[_w * _h * 8];
+		Array.Fill(_corridorGrades, -1f);
+		_corridorCross = new float[_w * _h * 8];
+	}
+
+	private double CorridorHeight(double x, double y)
+	{
+		x = Math.Clamp(x, 0.0, _w - 1.001);
+		y = Math.Clamp(y, 0.0, _h - 1.001);
+		int ix = (int)Math.Floor(x), iy = (int)Math.Floor(y);
+		double tx = x - ix, ty = y - iy;
+		int a = iy * _w + ix;
+		var h = _corridorGround;
+		if (tx + ty <= 1.0)
+			return h[a] + ((double)h[a + 1] - h[a]) * tx + ((double)h[a + _w] - h[a]) * ty;
+		int d = a + _w + 1;
+		return h[d] + ((double)h[d - 1] - h[d]) * (1.0 - tx) + ((double)h[d - _w] - h[d]) * (1.0 - ty);
+	}
+
+	private void MeasureCorridor(int c, int k)
+	{
+		int key = c * 8 + k;
+		if (_corridorGrades[key] >= 0f) return;
+		int n = c + _off[k];
+		double grade = 0.0, cross = 0.0;
+		if (_corridorWet[c] == 0 && _corridorWet[n] == 0)
+		{
+			double nx = -Dy[k] / Dl[k] * _corridorHalf, ny = Dx[k] / Dl[k] * _corridorHalf;
+			Span<double> previous = stackalloc double[3];
+			for (int j = 0; j < 5; j++)
+			{
+				double left = 0.0, right = 0.0;
+				for (int side = 0; side < 3; side++)
+				{
+					double x = c % _w + Dx[k] * j * 0.25 + nx * (side - 1);
+					double y = c / _w + Dy[k] * j * 0.25 + ny * (side - 1);
+					double h = CorridorHeight(x, y);
+					int cell = Math.Clamp((int)Math.Floor(y + 0.5), 0, _h - 1) * _w + Math.Clamp((int)Math.Floor(x + 0.5), 0, _w - 1);
+					if (_corridorWater[cell] > h) grade = double.PositiveInfinity;
+					if (j > 0) grade = Math.Max(grade, Math.Abs(h - previous[side]) * 4.0 / Dl[k]);
+					previous[side] = h;
+					if (side == 0) left = h;
+					if (side == 2) right = h;
+				}
+				cross = Math.Max(cross, Math.Max(Math.Abs(right - previous[1]), Math.Abs(left - previous[1])) / _corridorHalf);
+			}
+		}
+		_corridorGrades[key] = _corridorGrades[n * 8 + Opposite[k]] = (float)grade;
+		_corridorCross[key] = _corridorCross[n * 8 + Opposite[k]] = (float)cross;
+	}
 
 	/// <summary>Задаёт размер карты и выделяет буферы поиска; вызывается из Pathfinder._init до FindPath.</summary>
 	public void Setup(int w, int h)
@@ -48,7 +113,7 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
-	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links)
+	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor)
 	{
 		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
@@ -105,10 +170,18 @@ public partial class FastGrid : RefCounted
 						double mid = ((double)heights[c + Dx[k]] + heights[c + Dy[k] * W]) * 0.5;
 						grade = Math.Max(Math.Abs(mid - heights[c]), Math.Abs(heights[n] - mid)) * 2.0 / Dl[k];
 					}
+					double crossGrade = 0.0;
+					if (useCorridor && _corridorGround.Length > 0 && !linked)
+					{
+						MeasureCorridor(c, k);
+						grade = Math.Max(grade, _corridorGrades[c * 8 + k]);
+						crossGrade = _corridorCross[c * 8 + k];
+						if (double.IsPositiveInfinity(grade)) continue;
+					}
 					if (grade > maxGrade)
 						continue;
 					double steep = Math.Max(0.0, grade - 0.22);
-					step += climb * (grade * grade + 4.0 * steep * steep);
+					step += climb * (grade * grade + 4.0 * steep * steep + crossGrade * crossGrade);
 				}
 				double ng = gc + Dl[k] * step;
 				if (seen[n] != gn || ng < g[n])

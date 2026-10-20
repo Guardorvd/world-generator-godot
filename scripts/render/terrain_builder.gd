@@ -76,13 +76,18 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 		return
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var touched := PackedByteArray()
+	touched.resize(w.N)
 	for k: int in changed:
 		pos[k] = Vector3(pos[k].x, hv[k], pos[k].z)
 		var ci := k % W
 		var cj := k / W
 		for j in range(maxi(0, cj - 1), mini(H, cj + 2)):
 			for i in range(maxi(0, ci - 1), mini(W, ci + 2)):
-				nor[j * W + i] = _normal(hv, W, H, i, j)
+				var n := j * W + i
+				if touched[n] == 0:
+					nor[n] = _normal(hv, W, H, i, j)
+					touched[n] = 1
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
 
@@ -102,27 +107,32 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 	uv2.resize(pos.size())
 	var idx := PackedInt32Array()
 	var old: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	# Число индексов известно заранее: каждый дорожный квадрат заменяется DIV² квадратами.
+	idx.resize(old.size() + refinement.patches.size() * (RoadRefinement.DIV * RoadRefinement.DIV - 1) * 6)
+	var write := 0
 	var vertex_ids := {} # общие метровые вершины соседних патчей не дублируются
 	for j in w.H - 1:
 		for i in w.W - 1:
 			if not refinement.patches.has(j * w.W + i):
 				var at := (j * (w.W - 1) + i) * 6
 				for k in 6:
-					idx.append(old[at + k])
+					idx[write] = old[at + k]
+					write += 1
+	var grid := PackedInt32Array()
+	grid.resize(RoadRefinement.STRIDE * RoadRefinement.STRIDE)
 	for key: int in refinement.patches:
 		var p: Dictionary = refinement.patches[key]
 		var cx := key % w.W
 		var cz := key / w.W
-		var grid := PackedInt32Array()
 		for z in RoadRefinement.STRIDE:
 			for x in RoadRefinement.STRIDE:
+				var n := z * RoadRefinement.STRIDE + x
 				var vk := (cz * RoadRefinement.DIV + z) * (w.W * RoadRefinement.DIV) + cx * RoadRefinement.DIV + x
 				if vertex_ids.has(vk):
-					grid.append(vertex_ids[vk])
+					grid[n] = vertex_ids[vk]
 					continue
 				var px := (cx + 0.5) * TILE + x * RoadRefinement.STEP
 				var pz := (cz + 0.5) * TILE + z * RoadRefinement.STEP
-				var n := z * RoadRefinement.STRIDE + x
 				var id := pos.size()
 				var normal := _local_normal(heights, px, pz)
 				if x % RoadRefinement.DIV == 0 and z % RoadRefinement.DIV == 0:
@@ -138,12 +148,17 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 					colors.append(p.color[n])
 					uv2.append(p.uv[n])
 				vertex_ids[vk] = id
-				grid.append(id)
+				grid[n] = id
 		for z in RoadRefinement.DIV:
 			for x in RoadRefinement.DIV:
 				var a := z * RoadRefinement.STRIDE + x
-				idx.append_array(PackedInt32Array([grid[a], grid[a + 1], grid[a + RoadRefinement.STRIDE],
-					grid[a + 1], grid[a + RoadRefinement.STRIDE + 1], grid[a + RoadRefinement.STRIDE]]))
+				idx[write] = grid[a]
+				idx[write + 1] = grid[a + 1]
+				idx[write + 2] = grid[a + RoadRefinement.STRIDE]
+				idx[write + 3] = grid[a + 1]
+				idx[write + 4] = grid[a + RoadRefinement.STRIDE + 1]
+				idx[write + 5] = grid[a + RoadRefinement.STRIDE]
+				write += 6
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
 	arrays[Mesh.ARRAY_TEX_UV] = uv
