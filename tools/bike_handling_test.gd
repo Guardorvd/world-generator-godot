@@ -38,6 +38,17 @@ func bike(pace := 8.0) -> BikeRide:
 func tick(b: BikeRide, turn := 0.0, hop := false, throttle := 0.0, dt := DT) -> void:
 	b.step(p, throttle, turn, false, hop, dt, w, ground)
 
+## Сколько раз велосипед оторвался от земли за ticks тактов под педалями на нынешнем профиле
+func takeoffs(pace: float, ticks: int) -> int:
+	var b := bike(pace)
+	var count := 0
+	var was := false
+	for i in ticks:
+		tick(b, 0.0, false, 1.0)
+		count += int(b.airborne and not was)
+		was = b.airborne
+	return count
+
 func corner(pace: float, surface: int, hz := 60) -> BikeRide:
 	w.surface = surface
 	var b := bike(pace)
@@ -120,6 +131,31 @@ func _init() -> void:
 		tick(crest, 0.0, false, 1.0)
 		launched = launched or (crest.airborne and crest.vy > 0.0)
 	check(launched, "с быстрого гребня отрыв с сохранением подъёмного импульса")
+	# 7.0: тот же гребень медленно и пологий излом быстро проезжаются по земле
+	check(takeoffs(4.0, 50) == 0, "медленно гребень проезжается без отрыва")
+	ground.profile = func(d: float) -> float: return 0.12 * d if d < 6.0 else 0.72
+	check(takeoffs(13.0, 60) == 0, "пологий излом на скорости не подбрасывает")
+	# холмы, как сетка рельефа: изломы через 2 м, на крейсерской без ложных подлётов и рывков
+	ground.profile = func(d: float) -> float:
+		var k := floorf(d / 2.0)
+		var a := 0.8 * sin(k * 0.45) + 0.12 * sin(k * 1.7)
+		var b := 0.8 * sin((k + 1.0) * 0.45) + 0.12 * sin((k + 1.0) * 1.7)
+		return lerpf(a, b, d / 2.0 - k)
+	var hills := bike(11.0)
+	var hill_flights := 0
+	var jerk := 0.0
+	var was := false
+	var vy_prev := 0.0
+	for i in 300:
+		tick(hills, 0.0, false, 1.0)
+		hill_flights += int(hills.airborne and not was)
+		if i > 0 and not was and not hills.airborne:
+			jerk = maxf(jerk, absf(hills.vy - vy_prev))
+		was = hills.airborne
+		vy_prev = hills.vy
+	check(hill_flights <= 2 and jerk < 1.5, "холмы с изломами: отрывов %d, рывок по вертикали на земле %.2f м/с за такт" % [hill_flights, jerk])
+	ground.profile = func(d: float) -> float: return 0.4 * d if d < 3.0 else 1.2
+	check(takeoffs(10.0, 40) == 1, "трамплин на скорости — настоящий прыжок")
 	ground.profile = func(_d: float) -> float: return 0.0
 	var air_turn := bike(12.0)
 	air_turn.airborne = true

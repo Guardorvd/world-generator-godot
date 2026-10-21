@@ -22,6 +22,11 @@ const SLOPE_GRAVITY := 7.5 # смягчённая сила склона: ине�
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
 const MOUNT_RISE := 1.5  # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу после схода с края, с
+## С 7.0 опора — середина между точками касания колёс, отрыв — по форме рельефа впереди.
+const HUB := 0.53        # оси колёс впереди и позади середины, м (как в scenes/bike.tscn)
+const LIFT := 0.2        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
+const LOOK: Array[float] = [0.1, 0.2, 0.3]
+const DROP_STEP := 0.12  # земля ушла вниз за один такт больше этого — это край, а не излом: падаем
 
 var x := 0.0          # метры
 var z := 0.0
@@ -131,11 +136,31 @@ func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
 	return Vector2(x, z)
 
 
-## Подъём земли на метр пути вдоль курса
+## Подъём земли на метр пути вдоль курса: от заднего колеса к переднему
 func _slope(heights: Heightfield) -> float:
-	var fx := -sin(heading)
-	var fz := -cos(heading)
-	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) * 0.5
+	var fx := -sin(heading) * HUB
+	var fz := -cos(heading) * HUB
+	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) / (2.0 * HUB)
+
+
+## Высота опоры в (px, pz): середина между точками касания колёс. Велосипед перекрывает
+## мелкие изломы базой, а не повторяет каждый под одной точкой.
+func _contact(px: float, pz: float, heights: Heightfield) -> float:
+	var fx := -sin(heading) * HUB
+	var fz := -cos(heading) * HUB
+	return (heights.surface_at(px + fx, pz + fz, y) + heights.surface_at(px - fx, pz - fz, y)) * 0.5
+
+
+## Уходит ли рельеф впереди из-под полёта: летим с нынешней вертикальной скоростью
+## и смотрим, насколько ниже окажется земля через 0,1–0,3 с.
+func _lifts(heights: Heightfield) -> bool:
+	var fx := -sin(heading) * speed
+	var fz := -cos(heading) * speed
+	for t: float in LOOK:
+		var fly := y + vy * t - GameConfig.GRAVITY * t * t * 0.5
+		if fly - _contact(x + fx * t, z + fz * t, heights) > LIFT:
+			return true
+	return false
 
 
 ## Шаг езды за dt секунд (в игре — один такт физики, 1/60 с). throttle — газ (+) и тормоз (-),
@@ -195,7 +220,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
 
-	_step_vertical(heights.surface_at(x, z, y), path_weight, hop, dt, heights)
+	_step_vertical(_contact(x, z, heights), hop, dt, heights)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015))
 
 	# Рама следует рельефу; разгон приподнимает нос, торможение слегка загружает передок.
@@ -249,8 +274,9 @@ func _step_turn(turn: float, grip: float, dt: float) -> float:
 	return _yaw_rate * dt
 
 
-## Опора держит мелкие неровности; с выпуклого гребня велосипед уходит по касательной.
-func _step_vertical(g: float, path_weight: float, hop: bool, dt: float, heights: Heightfield) -> void:
+## Опора держит мелкие неровности и изломы; отрыв — только с края или когда рельеф впереди
+## уходит вниз быстрее, чем позволяет тяжесть на этой скорости (гребень, трамплин).
+func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	_hop_wait = maxf(0.0, _hop_wait - dt)
 	_hop_buf = GameConfig.JUMP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
 	_coyote = maxf(0.0, _coyote - dt) if airborne else HOP_COYOTE
@@ -270,9 +296,9 @@ func _step_vertical(g: float, path_weight: float, hop: bool, dt: float, heights:
 			_land(g, heights)
 	else:
 		var fly := y + (vy - GameConfig.GRAVITY * dt * 0.5) * dt
-		# Допуск по ускорению, а не сантиметрам за кадр: одинаковый гребень при разных dt.
-		var release := GameConfig.GRAVITY * lerpf(0.35, 1.0, path_weight) * dt * dt
-		if fly > g + (release if absf(speed) > 3.0 else 0.18):
+		# Земля уходит вниз быстрее падения: отрываемся с края сразу, с излома — только если
+		# впереди рельеф действительно уходит из-под колёс; иначе прижимаемся к земле.
+		if fly > g and (fly - g > DROP_STEP or _lifts(heights)):
 			airborne = true
 			air_time = dt
 			vy -= GameConfig.GRAVITY * dt
