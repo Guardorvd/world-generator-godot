@@ -174,8 +174,8 @@ func _surface_check() -> void:
 	w.lake[5 * w.W + 6] = 1
 	w.filled[5 * w.W + 6] = 0.14
 	ground = Heightfield.new(w, false)
-	var a := {x = 5.5, y = 4.5, w = 0.9}
-	var b := {x = 5.5, y = 5.5, w = 0.9}
+	var a := {x = 5.0, y = 4.5, w = 0.9}
+	var b := {x = 5.0, y = 5.5, w = 0.9}
 	_check(StageTrails._road_segment(ground, a, b), "пологий подход непосредственно к воде разрешён")
 	var q := {x = 5.8, y = 4.5, w = 0.9}
 	var r := {x = 5.8, y = 6.5, w = 0.9}
@@ -304,7 +304,7 @@ func _corridor_check() -> void:
 	narrow.fill(INF)
 	for x in range(2, 21): narrow[8 * w.W + x] = 1.0
 	var fallback := StageTrails._road_path(finder, narrow, start, finish)
-	_check(fallback == axis and not finder.use_corridor, "пологая ось выбирается раньше снятия ограничения уклона ради ширины")
+	_check(fallback.is_empty() and finder.use_corridor, "запасной поиск не принимает горизонтальную ось на стене без ширины")
 	finder.use_corridor = true
 	if Grid.allow_fast:
 		Grid.allow_fast = false
@@ -390,7 +390,7 @@ func _technical_check() -> void:
 	cost.fill(1.0)
 	for y in W:
 		for x in W:
-			terrain[y * W + x] = maxf(0.0, 2.0 - absf(x - 20.0)) * (0.6 if y < 35 else 0.0)
+			terrain[y * W + x] = maxf(0.0, 2.0 - absf(x - 20.0)) * (0.38 if y < 35 else 0.0)
 	var finder := Pathfinder.new(W, W, terrain)
 	var start := 4 * W + 14
 	var finish := 4 * W + 26
@@ -403,7 +403,7 @@ func _technical_check() -> void:
 		_check(StageTrails._land_path(Pathfinder.new(W, W, terrain), cost, start, finish, StageTrails.TRAIL_CLIMB) == technical,
 			"C# и GDScript совпадают на техническом проходе")
 		Grid.allow_fast = true
-	# Единственный коридор с подъёмом 60 %: тропа проходит, дорожный предел его запрещает.
+	# Единственный коридор с подъёмом 38 %: тропа проходит, дорожный предел его запрещает.
 	cost.fill(INF)
 	for x in range(14, 27): cost[4 * W + x] = 1.0
 	_check(not StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty()
@@ -413,11 +413,11 @@ func _technical_check() -> void:
 	for i in road_terrain.size(): road_terrain[i] *= 0.65
 	var road_finder := Pathfinder.new(W, W, road_terrain)
 	_check(not StageTrails._road_path(road_finder, cost, start, finish, true, StageTrails.ROAD_LIMIT).is_empty() and road_finder.use_corridor,
-		"дорога допускает обход с уклоном до нового предела 40 % и сохраняет проверку ширины")
+		"дорога допускает короткий подъём 25 % и сохраняет проверку ширины")
 	for i in terrain.size(): terrain[i] *= 2.0
 	finder = Pathfinder.new(W, W, terrain)
 	_check(StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty(),
-		"ослабление предпочтений не разрешает тропу через обрыв 120 %")
+		"тропа не принимает подъём 76 %")
 	var w := WorldData.new()
 	w.W = 16
 	w.H = 16
@@ -429,7 +429,7 @@ func _technical_check() -> void:
 	w.filled.resize(w.N)
 	for y in w.H:
 		for x in w.W:
-			w.h[y * w.W + x] = (20.0 + x * GameConfig.TILE * 0.8) / GameConfig.HS
+			w.h[y * w.W + x] = (20.0 + x * GameConfig.TILE * 0.5) / GameConfig.HS
 	var surface := Heightfield.new(w, false)
 	var corner: Array = [{x = 4.5, y = 4.5, w = 0.42}, {x = 6.5, y = 4.5, w = 0.42}, {x = 8.5, y = 6.5, w = 0.42}]
 	var mountain := StageTrails._road_line(w, corner, PackedByteArray(), surface, "mountain")

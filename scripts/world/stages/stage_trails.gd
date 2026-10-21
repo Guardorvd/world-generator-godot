@@ -27,7 +27,7 @@ const RISE := 0.1           # хребет выше этого (около 26 м
 const RISE_LEN := 30        # самый длинный туннель, клеток
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
-const BRIDGE_LANDING_GAP := 0.8 # перепад под концами настила не больше обычной ступени, м
+const BRIDGE_LANDING_GAP := 0.25 # въезд проверяется по всей ширине настила, м
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
@@ -52,12 +52,12 @@ const TRAIL_CLIMB := 12.0
 const MOUNTAIN_CLIMB := 4.0
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
-## Внутри них крутизна оплачивается штрафом climb, а не общим запретом 35 %.
-const ROAD_GRADE := 0.35 # предпочтительный проход основной сети
-const ROAD_LIMIT := 0.4 # предел уклона при поиске основной дороги; более крутой участок требует обхода
-const TRAIL_GRADE := 0.75
-const MOUNTAIN_GRADE := 0.9
-const BENCH_CROSS := 1.5 # косой склон, для которого уже предусмотрена ограниченная земляная полка
+## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
+const ROAD_GRADE := 0.22 # удобный проход основной сети
+const ROAD_LIMIT := 0.28 # короткий запасной подъём; дальше нужен обход
+const TRAIL_GRADE := 0.4
+const MOUNTAIN_GRADE := 0.55
+const BENCH_CROSS := 0.65 # полка не должна превращаться в стену у поворота или берега
 
 
 static func run(w: WorldData, step: Callable) -> void:
@@ -87,13 +87,15 @@ static func run(w: WorldData, step: Callable) -> void:
 
 ## Поиск видит тот же прорезанный рельеф, что и полотно. Ширина в клетках, высоты / TILE.
 static func _route_surface(finder: Pathfinder, surface: Heightfield, width: float) -> void:
+	finder.max_cross_grade = BENCH_CROSS
 	var ground := surface.hv.duplicate()
 	var water := surface.water_level.duplicate()
 	var wet := PackedByteArray()
 	wet.resize(surface.world.N)
 	for i in surface.world.N:
 		ground[i] /= GameConfig.TILE
-		water[i] = (water[i] - 0.3) / GameConfig.TILE
+		# Запас между выборками: край сухой дороги не должен становиться бродом.
+		water[i] = (maxf(0.0, water[i]) - 0.1) / GameConfig.TILE
 		wet[i] = 1 if _wet(surface.world, i) else 0
 	finder.set_corridor(ground, water, wet, width * 0.5)
 
@@ -463,8 +465,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
 		a: int, b: int, state: Dictionary) -> PackedInt32Array:
 	var attempts: Array = []
-	for mode: Array in [[true, ROAD_GRADE], [false, ROAD_GRADE], [true, ROAD_LIMIT]]:
-		var p := _road_path(finder, cost, a, b, mode[0], mode[1])
+	for limit: float in [ROAD_GRADE, ROAD_LIMIT]:
+		var p := _road_path(finder, cost, a, b, true, limit)
 		if p.is_empty():
 			continue
 		var q := _try_road_structures(w, p, finder, cost, state, attempts)
@@ -585,14 +587,10 @@ static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: 
 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
-## Сначала проверяется полная ширина, затем ось для сооружений; limit задаёт допустимый подъём.
+## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
 static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE) -> PackedInt32Array:
 	finder.use_corridor = wide
-	var p := finder.find_path(cost, a, b, ROAD_CLIMB, limit)
-	if p.is_empty() and wide:
-		finder.use_corridor = false
-		p = finder.find_path(cost, a, b, ROAD_CLIMB, limit)
-	return p
+	return finder.find_path(cost, a, b, ROAD_CLIMB, limit)
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:

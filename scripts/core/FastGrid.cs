@@ -149,7 +149,8 @@ public partial class FastGrid : RefCounted
 		if (_corridorGrades[key] >= 0f) return;
 		int n = c + _off[k];
 		double grade = 0.0, cross = 0.0;
-		if (_corridorWet[c] == 0 && _corridorWet[n] == 0)
+		if ((_corridorWet[c] == 0 || _corridorGround[c] >= _corridorWater[c]) &&
+			(_corridorWet[n] == 0 || _corridorGround[n] >= _corridorWater[n]))
 		{
 			double nx = -Dy[k] / Dl[k] * _corridorHalf, ny = Dx[k] / Dl[k] * _corridorHalf;
 			Span<double> previous = stackalloc double[3];
@@ -195,18 +196,18 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
-	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor)
+	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade)
 	{
 		if (!ProfileSearches)
-			return FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor);
+			return FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor, maxCrossGrade);
 		long started = System.Diagnostics.Stopwatch.GetTimestamp();
 		_searchCount++;
-		var path = FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor);
+		var path = FindPathCore(cost, s, t, heights, climb, maxGrade, links, useCorridor, maxCrossGrade);
 		_searchTicks += System.Diagnostics.Stopwatch.GetTimestamp() - started;
 		return path;
 	}
 
-	private int[] FindPathCore(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor)
+	private int[] FindPathCore(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade)
 	{
 		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 		int W = _w, H = _h, W1 = W - 1, H1 = H - 1;
@@ -279,7 +280,7 @@ public partial class FastGrid : RefCounted
 						crossGrade = _corridorCross[c * 8 + k];
 						if (double.IsPositiveInfinity(grade)) continue;
 					}
-					if (grade > maxGrade)
+					if (grade > maxGrade || crossGrade > maxCrossGrade)
 						continue;
 					double steep = Math.Max(0.0, grade - 0.22);
 					step += climb * (grade * grade + 4.0 * steep * steep + crossGrade * crossGrade);
@@ -525,8 +526,8 @@ public partial class FastGrid : RefCounted
 			for (int i = 0; i < W; i++)
 			{
 				int x = x0 + i;
-				double wx = Fbm(warpX, x / 170.0, y / 170.0, 3) * 45.0;
-				double wy = Fbm(warpY, x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0;
+				double wx = Fbm(warpX, x / 240.0, y / 240.0, 3) * 25.0;
+				double wy = Fbm(warpY, x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0;
 				double X = x + wx;
 				double Y = y + wy;
 				// С 3.7 мелкие октавы основания затухают внутри массива.
@@ -539,7 +540,7 @@ public partial class FastGrid : RefCounted
 				double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
 				t = Clamp01((bas - -0.05) / (0.25 - -0.05));
 				double land = t * t * (3.0 - 2.0 * t);
-				double m = core * land;
+				double m = core;
 				t = Clamp01((Fbm(hill, X / Character + 41.9, Y / Character - 66.1, 2) - -0.15) / 0.4);
 				double rough = t * t * (3.0 - 2.0 * t);
 				t = Clamp01((bas - 0.18) / 0.17);
@@ -548,7 +549,7 @@ public partial class FastGrid : RefCounted
 				double valley = t * t * (3.0 - 2.0 * t);
 				double width = 0.1 + 0.4 * foothillSpread * (0.6 + 0.4 * rough);
 				t = Clamp01((mountainField + width) / (MaskEdge * 0.65 + width));
-				double foothills = t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothillSpread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley);
+				double foothills = t * t * (3.0 - 2.0 * t) * (1.0 - core) * foothillSpread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley);
 				t = Clamp01((m - Foothills) / Foothills);
 				m *= rough + (1.0 - rough) * m * m;
 				rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
@@ -580,7 +581,7 @@ public partial class FastGrid : RefCounted
 		double a = 1.0, f = 1.0, s = 0.0, n = 0.0;
 		for (int o = 0; o < 6; o++)
 		{
-			s += a * Noise(pm, x * f, y * f) * (o >= 3 ? detail : 1.0);
+			s += a * Noise(pm, x * f, y * f) * (o >= 2 ? detail : 1.0);
 			n += a;
 			a *= 0.5;
 			f *= 2.0;

@@ -137,8 +137,8 @@ static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int) -> 
 ## Макрорельеф в клетке (x, y); (mx, my) — сдвиг шума материков. Копия — FastGrid.ReliefField
 static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simplex, ridge: Simplex, hill: Simplex,
 		x: float, y: float, mx: float, my: float, mountain_scale: float = 1.0, mountain_bias: float = 0.3, mountain_height: float = 1.0, foothill_spread: float = 0.0) -> float:
-	var wx := warp_x.fbm(x / 170.0, y / 170.0, 3) * 45.0
-	var wy := warp_y.fbm(x / 170.0 + 13.1, y / 170.0 - 7.7, 3) * 45.0
+	var wx := warp_x.fbm(x / 240.0, y / 240.0, 3) * 25.0
+	var wy := warp_y.fbm(x / 240.0 + 13.1, y / 240.0 - 7.7, 3) * 25.0
 	var X := x + wx
 	var Y := y + wy
 	# С 3.7 мелкие октавы основания слабее внутри гор: они дробили длинные склоны
@@ -154,7 +154,9 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var land := t * t * (3.0 - 2.0 * t)
 	# С 3.3 единая широкая область подъёма: две медленные октавы вместо мелкой пятнистой маски.
 	# Плавный край даёт предгорья, сильная середина объединяет несколько гребней в один массив.
-	var mask := core * land
+	# Берег определяется окончательной высотой, а не обрезает весь массив
+	# по мелкому шуму континентов: такая маска превращала подножие в стену.
+	var mask := core
 	# Характер местности (с 1.9.8): медленный шум делит сушу на равнины и холмистые края. На равнинах
 	# слабые окраины гор стихают (там, где горы во всю силу, массив остаётся), а вокруг гор холмистость
 	# растёт сама (предгорья): равнина переходит в горы через холмы, без резкой границы
@@ -168,7 +170,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# Пояс шире горной маски и неодинаков по периметру: зависит от сида и местных холмов.
 	var width := 0.1 + 0.4 * foothill_spread * (0.6 + 0.4 * rough)
 	t = clampf((mountain_field + width) / (MASK_EDGE * 0.65 + width), 0.0, 1.0)
-	var foothills := t * t * (3.0 - 2.0 * t) * (1.0 - core) * land * inland * foothill_spread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley)
+	var foothills := t * t * (3.0 - 2.0 * t) * (1.0 - core) * foothill_spread * (0.5 + 0.5 * rough) * (1.0 - 0.5 * valley)
 	t = clampf((mask - FOOTHILLS) / FOOTHILLS, 0.0, 1.0)
 	mask *= rough + (1.0 - rough) * mask * mask
 	rough = maxf(rough, t * t * (3.0 - 2.0 * t))
@@ -191,7 +193,7 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	return h
 
 
-## Те же шесть октав континентального основания; detail ослабляет только три мелкие.
+## Шесть октав континентального основания; detail ослабляет четыре мелкие.
 ## Нормировка прежняя: крупные формы не усиливаются, новых отсчётов шума нет.
 static func _continental(cont: Simplex, x: float, y: float, detail: float) -> float:
 	var a := 1.0
@@ -199,7 +201,7 @@ static func _continental(cont: Simplex, x: float, y: float, detail: float) -> fl
 	var s := 0.0
 	var n := 0.0
 	for o in 6:
-		s += a * cont.noise(x * f, y * f) * (detail if o >= 3 else 1.0)
+		s += a * cont.noise(x * f, y * f) * (detail if o >= 2 else 1.0)
 		n += a
 		a *= 0.5
 		f *= 2.0

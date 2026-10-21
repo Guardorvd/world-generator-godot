@@ -9,6 +9,7 @@ func _init() -> void:
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
 	_route_grade_check()
+	_dry_river_bank_check()
 	if args.has("--route-only"):
 		print("Предел уклона основной дороги проверен; нарушений: %d" % fails)
 		quit(1 if fails > 0 else 0)
@@ -39,8 +40,11 @@ func _init() -> void:
 			if row[kind].lake_wet > 0.0 or not is_finite(row[kind].max_grade):
 				printerr("Небезопасный путь: ", seed_text, " ", kind)
 				fails += 1
-		if row.road.wet > 0.0:
-			printerr("Основная дорога в воде: ", seed_text)
+		if row.road.wet > 0.0 or row.road.edge_wet > 0.0:
+			printerr("Основная дорога или её край в воде: ", seed_text)
+			fails += 1
+		if row.road.max_grade > 0.4 or row.road.tilted50 > 0.0:
+			printerr("Основная дорога слишком крутая или наклонена вбок: ", seed_text)
 			fails += 1
 		if args.has("--raw"):
 			var raw := Heightfield.new(w, false)
@@ -82,6 +86,50 @@ func _bridge_landing_measure(heights: Heightfield) -> Dictionary:
 				max_gap = maxf(max_gap, absf(heights.ground_at(x, z) - deck))
 				wet += 1 if heights.depth_at(x, z) > 0.3 else 0
 	return {max_gap = max_gap, wet = wet}
+
+
+## Речная маска включает сухую ось, но один край дороги касается воды.
+## Такой берег обязан проверять ширину в обоих вариантах поиска.
+func _dry_river_bank_check() -> void:
+	var original := Grid.allow_fast
+	for fast in ([true, false] if original else [false]):
+		Grid.allow_fast = fast
+		var ground := PackedFloat32Array()
+		ground.resize(15)
+		var water := ground.duplicate()
+		water.fill(-INF)
+		water[2] = 1.0
+		var wet := PackedByteArray()
+		wet.resize(15)
+		wet.fill(1)
+		var cost := ground.duplicate()
+		cost.fill(INF)
+		for x in range(1, 4): cost[5 + x] = 1.0
+		var finder := Pathfinder.new(5, 3, ground)
+		finder.set_corridor(ground, water, wet, 0.6)
+		if not StageTrails._road_path(finder, cost, 6, 8).is_empty():
+			fails += 1
+			printerr("Сухой берег внутри маски реки пропустил мокрый край дороги")
+		# Морская плоскость есть везде, в том числе в низком углу сухой клетки.
+		var w := WorldData.new()
+		w.W = 5
+		w.H = 3
+		w.N = 15
+		w.h.resize(15)
+		w.h.fill(0.1 / GameConfig.HS)
+		for x in 5: w.h[x] = -0.6 / GameConfig.HS
+		for key in ["ocean", "lake", "river"]:
+			var field := PackedByteArray()
+			field.resize(15)
+			w.set(key, field)
+		w.filled.resize(15)
+		var surface := Heightfield.new(w, false)
+		finder = Pathfinder.new(5, 3, surface.hv)
+		StageTrails._route_surface(finder, surface, 0.9)
+		if not StageTrails._road_path(finder, cost, 6, 8).is_empty():
+			fails += 1
+			printerr("Дорога не учла море в низком углу сухой клетки")
+	Grid.allow_fast = original
 
 static func measure(w: WorldData, h: Heightfield, kind: String) -> Dictionary:
 	var r := {length = 0.0, steep35 = 0.0, steep60 = 0.0, wet = 0.0, edge_wet = 0.0, lake_wet = 0.0, deep_wet = 0.0, tilted50 = 0.0, max_grade = 0.0, worst = Vector2.ZERO}

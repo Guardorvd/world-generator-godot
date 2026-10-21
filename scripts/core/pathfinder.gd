@@ -24,7 +24,8 @@ var H := 0
 var heights := PackedFloat32Array()
 ## Разрешённые шаги по готовому настилу/полу: биты восьми направлений Grid.DX/DY.
 var links := PackedByteArray()
-var use_corridor := true # запасной поиск оси для связи, которой нужны сооружения
+var use_corridor := true # проверять ширину прохода
+var max_cross_grade := INF # предел земляных работ поперёк прохода
 ## Общий остаток раскрытий для нескольких поисков: -1 без ограничения, 0 — отказаться.
 ## Позволяет проверять кандидат поселения без полного перебора карты по каждому соседу.
 var search_budget := -1
@@ -104,7 +105,9 @@ func _measure_corridor(c: int, k: int) -> void:
 	var n := c + Grid.DY[k] * W + Grid.DX[k]
 	var grade := 0.0
 	var cross_grade := 0.0
-	if _wet[c] == 0 and _wet[n] == 0:
+	# Консервативный коридор реки включает сухой берег. Пропускается только
+	# настоящий водный шаг под будущим мостом, а не проверка всей дороги у реки.
+	if (_wet[c] == 0 or _ground[c] >= _water[c]) and (_wet[n] == 0 or _ground[n] >= _water[n]):
 		var nx := -Grid.DY[k] / Grid.DL[k] * _half
 		var ny := Grid.DX[k] / Grid.DL[k] * _half
 		var previous := [0.0, 0.0, 0.0]
@@ -140,7 +143,7 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	if _fast != null:
 		_fast.SearchBudget = search_budget
 		var started := Time.get_ticks_usec()
-		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor)
+		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
 		search_budget = _fast.SearchBudget
 		if profile_searches:
 			_search_us += Time.get_ticks_usec() - started
@@ -249,7 +252,7 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 					cross_grade = _cross[c * 8 + k]
 					if grade == INF:
 						continue
-				if grade > max_grade:
+				if grade > max_grade or cross_grade > max_cross_grade:
 					continue
 				var steep := maxf(0.0, grade - 0.22)
 				# Подъём и земляные работы оплачиваются отдельно: крен не скрывает крутой подъём.

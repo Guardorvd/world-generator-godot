@@ -135,7 +135,7 @@ func _ride() -> void:
 		low = minf(low, b.y)
 		high = maxf(high, b.y)
 		air_ticks += 1 if b.airborne else 0
-		check(is_finite(b.y) and absf(b.y - h.ground_at(b.x, b.z)) < 0.002, "колёса расходятся с грунтом")
+		check(is_finite(b.y) and absf(b.y - b._contact(b.x, b.z, h)) < 0.002, "база колёс расходится с грунтом")
 	check(high - low > 0.005 and high - low < 0.15, "грунтовка не даёт разумной локальной неровности")
 	check(air_ticks == 0 and b.x > 85.0, "мелкий грунт мешает езде или вызывает ложные взлёты")
 	print("Контрольная грунтовка: неровность %.1f см, ложных взлётов %d, путь %.1f м" % [(high - low) * 100.0, air_ticks, b.x - 50.0])
