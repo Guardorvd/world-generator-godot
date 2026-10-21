@@ -57,6 +57,27 @@ func corner(pace: float, surface: int, hz := 60) -> BikeRide:
 	return b
 
 func _init() -> void:
+	# 7.3+: каменистый участок на скорости расходует сцепление сверх свойств покрытия.
+	w.surface = RoadSurface.STONE
+	var rocks := bike(16.0)
+	rocks.steer = 1.0
+	rocks._yaw_rate = -2.0
+	tick(rocks, 1.0)
+	check(absf(rocks._yaw_rate) * rocks.speed < BikeRide.CORNER_GRIP * 0.9 * 0.98,
+		"быстрый поворот по камням требует дополнительного запаса сцепления")
+	var careful := bike(4.0)
+	var careful_reference := bike(4.0)
+	careful_reference._step_speed(0.0, false, 0.0, PlayerState.terrain_speed(w, 0.0, 0.0, ground), DT, 0.9)
+	tick(careful)
+	check(absf(careful.speed - careful_reference.speed) < 0.00001,
+		"медленный проезд камней не получает дополнительного сопротивления")
+	var quick := bike(16.0)
+	var quick_reference := bike(16.0)
+	quick_reference._step_speed(0.0, false, 0.0, PlayerState.terrain_speed(w, 0.0, 0.0, ground), DT, 0.9)
+	tick(quick)
+	check(quick.speed < quick_reference.speed - 0.001,
+		"быстрый прямой проезд камней расходует часть наката")
+	w.surface = RoadSurface.PACKED
 	# 7.3: инерция перекладки и общий запас сцепления тормоза/поворота.
 	var slow_response := bike(4.0)
 	var fast_response := bike(16.0)

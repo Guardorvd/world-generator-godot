@@ -16,6 +16,17 @@ func ride(initial: float, throttle: float, slope: float, seconds: float, boost :
 	return b
 
 func _init() -> void:
+	var climb := ride(2.0, 1.0, 0.35, 2.0)
+	var climb_push := ride(2.0, 1.0, 0.35, 2.0, true)
+	check(climb_push.speed > climb.speed + 0.7, "Shift ощутимо помогает дожать крутой подъём")
+	check(ride(9.0, 0.0, 0.25, 1.0).speed > ride(3.0, 0.0, 0.25, 1.0).speed + 4.0,
+		"запас хода перед подъёмом помогает пройти его накатом")
+	var descent := ride(0.0, 0.0, -0.4, 90.0, false, 1.4).speed
+	check(descent > 18.0 and descent < 23.0, "длинный спуск по дороге: мягкое ограничение воздухом, %.2f м/с" % descent)
+	check(ride(24.0, 0.0, -0.4, 0.1).speed > 23.0, "на быстром спуске нет мгновенного обрезания скорости")
+	check(ride(12.0, -0.35, -0.25, 2.0).speed < 12.0, "лёгкое торможение позволяет дозировать скорость спуска")
+	check(absf(ride(2.0, 1.0, 0.35, 4.0, true, 1.0, 30).speed - ride(2.0, 1.0, 0.35, 4.0, true, 1.0, 120).speed) < 0.1,
+		"помощь в подъём близка при 30 и 120 тактах/с")
 	var start := ride(0.0, 1.0, 0.0, 0.5).speed
 	check(start > 2.5 and start < 3.5, "отзывчивый старт: %.2f м/с за 0.5 с" % start)
 	var cruise := ride(0.0, 1.0, 0.0, 25.0).speed

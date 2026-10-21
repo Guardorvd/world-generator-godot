@@ -198,14 +198,19 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		surf = PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
 		path_weight = 1.0 if surf != RoadSurface.NONE else 0.0
 	var on_path := surf != RoadSurface.NONE
+	var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
+	var rough := clampf(1.3 - terrain, 0.15, 1.0)
 	var grip := 0.85
 	if on_path:
 		grip = lerpf(grip, RoadSurface.LIST[surf].grip, path_weight)
+		rough = lerpf(rough, RoadSurface.LIST[surf].rough, path_weight)
+	# На корнях и камнях медленный проезд точный; быстрый требует более широкой дуги.
+	var technical := smoothstep(0.25, 0.8, rough) * smoothstep(6.0, 15.0, absf(speed))
+	grip *= 1.0 - technical * 0.2
 	var speed0 := speed
 	if not airborne:
-		var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
 		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
-		_step_speed(throttle, boost, slope, terrain, dt, grip)
+		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
 		_brake_hold = 0.0
@@ -238,11 +243,6 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
-
-	# на неровной местности (лес, кусты, бездорожье) кочек под колёсами больше, чем на тропе
-	var rough := clampf(1.3 - PlayerState.terrain_speed(w, x, z, heights), 0.15, 1.0)
-	if on_path:
-		rough = lerpf(rough, RoadSurface.LIST[surf].rough, path_weight)
 
 	_step_vertical(_contact(x, z, heights), hop, dt, heights)
 	_step_wheels(heights, rough, dt)
@@ -413,7 +413,7 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
 ## speed — скорость по горизонтали, поэтому проекция тяжести — slope / (1 + slope²).
-func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0) -> void:
+func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0) -> void:
 	var top := GameConfig.BIKE_SPEED * terrain
 	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
 	var drag := GameConfig.BIKE_DRAG / (terrain * terrain)
@@ -440,7 +440,12 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		var push := GameConfig.BIKE_ACCEL * 1.75
 		var taper := maxf(0.1, push / (rolling + drag * top * top) - 1.0)
 		drive = push / (1.0 + taper * ratio * ratio) * throttle
-	var resistance := rolling + drag * speed * speed
+		# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
+		if boost:
+			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * throttle * grip
+	# Кочки съедают ход только при быстром проезде. На длинном спуске воздух мягко
+	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
+	var resistance := rolling + drag * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
 	if throttle < 0.0:
 		# Тормоз удерживает остановку даже на спуске; сила нарастает с нажатием стика.
 		speed += gravity * dt
