@@ -5,6 +5,9 @@ render_mode cull_disabled;
 uniform sampler2D depth_texture : hint_depth_texture, repeat_disable, filter_nearest;
 uniform bool ocean = false;
 uniform bool river_surface = false;
+// xz центра, возраст, сила; уровень отдельно, чтобы не задевать воду под мостом/на другом ярусе.
+uniform vec4 disturbances[16];
+uniform float disturbance_levels[16];
 uniform vec3 shallow_color : source_color = vec3(0.22, 0.43, 0.38);
 uniform vec3 deep_color : source_color = vec3(0.10, 0.27, 0.25);
 varying vec3 world_position;
@@ -48,11 +51,24 @@ void fragment() {
 	float strength = mix(0.045, 0.13, rapid) * detail;
 	float antialias = 1.0 - smoothstep(0.15, 0.8, max(length(dFdx(drift)), length(dFdy(drift))));
 	vec2 gradient = (small.yz * vec2(2.7, 1.8) * antialias + broad.yz * 0.8) * strength;
+	vec2 wake_gradient = vec2(0.0);
+	float wake_foam = 0.0;
+	for (int i = 0; i < 16; i++) {
+		vec4 event = disturbances[i];
+		float age = event.z;
+		float fade = max(0.0, 1.0 - age / 1.6) * event.w;
+		fade *= 1.0 - smoothstep(0.08, 0.3, abs(world_position.y - disturbance_levels[i]));
+		if (fade <= 0.001) { continue; }
+		vec2 delta = world_position.xz - event.xy;
+		float radius = length(delta);
+		float front = radius - (0.12 + age * 1.45);
+		float envelope = exp(-front * front * 32.0) * fade * detail;
+		wake_gradient += delta / max(radius, 0.01) * sin(front * 24.0) * envelope * 0.18;
+		wake_foam = max(wake_foam, envelope * exp(-age * 4.0) * 0.45);
+	}
 	vec3 base_normal = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	vec3 normal_world = normalize(base_normal + vec3(-across.x * gradient.x - direction.x * gradient.y, 0.0,
 		-across.y * gradient.x - direction.y * gradient.y));
-	NORMAL = normalize((VIEW_MATRIX * vec4(normal_world, 0.0)).xyz);
-	if (!FRONT_FACING) { NORMAL = -NORMAL; }
 
 	float depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
 	#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
@@ -64,14 +80,24 @@ void fragment() {
 	behind /= behind.w;
 	vec3 ground = (INV_VIEW_MATRIX * behind).xyz;
 	float thickness = max(0.0, world_position.y - ground.y);
-	float absorption = 1.0 - exp(-thickness * 0.65);
+	float absorption = 1.0 - exp(-thickness * 1.15);
 	float shoal = 1.0 - smoothstep(0.18, 1.2, thickness);
+	// Пересечения с видимыми камнями, опорами и берегом: дробящаяся рябь в мелкой воде.
+	// Используем ту же выборку глубины, без списка препятствий и дополнительных проходов.
+	float contact = (1.0 - smoothstep(0.04, 0.5, thickness)) * smoothstep(0.0, 0.035, thickness);
+	float turbulence = contact * mix(0.12, 0.8, river) * (0.4 + 0.6 * broad.x) * detail;
+	vec2 contact_gradient = small.yz * turbulence * 0.12 * antialias;
+	vec2 interaction = wake_gradient + across * contact_gradient.x + direction * contact_gradient.y;
+	normal_world = normalize(normal_world - vec3(interaction.x, 0.0, interaction.y));
+	NORMAL = normalize((VIEW_MATRIX * vec4(normal_world, 0.0)).xyz);
+	if (!FRONT_FACING) { NORMAL = -NORMAL; }
 	// Пятна пены движутся вниз, перекаты возникают на мелком крутом русле.
 	float crest = smoothstep(0.55, 0.78, small.x) * smoothstep(0.3, 0.65, broad.x) * antialias;
 	float riffle = rapid * mix(0.3, 1.0, shoal);
 	float foam = crest * riffle * 0.72 * detail;
 	float shore = (1.0 - smoothstep(0.02, 0.18, thickness)) * smoothstep(0.0, 0.035, thickness);
 	foam = max(foam, shore * crest * mix(0.08, 0.24, rapid) * detail);
+	foam = max(foam, max(wake_foam, turbulence * crest * 0.6));
 	vec3 deep = ocean ? vec3(0.045, 0.15, 0.23) : deep_color;
 	ALBEDO = mix(mix(shallow_color, deep, absorption), vec3(0.80, 0.87, 0.82), foam);
 	METALLIC = 0.0;
@@ -80,5 +106,5 @@ void fragment() {
 	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 5.0);
 	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV2.x, 1.0 - UV2.x)) : 1.0;
 	float join = river_surface ? 1.0 - COLOR.b : 1.0;
-	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * join * clamp(0.22 + absorption * 0.69 + fresnel * 0.22 + foam * 0.4, 0.0, 0.97);
+	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * join * clamp(0.38 + absorption * 0.56 + fresnel * 0.22 + foam * 0.4, 0.0, 0.97);
 }

@@ -225,14 +225,14 @@ func _fill_trees(px: float, pz: float) -> void:
 					continue
 				var x := ox * TILE
 				var z := oy * TILE
-				# Дорогу и мост не занимаем; дерево, стоящее под водой, не показываем.
-				# Тростник растёт у воды, его не трогаем
+				# Коридор рек консервативен: сухой берег проверяем в точке объекта.
 				var cell := floori(oy) * w.W + floori(ox)
 				if w.path_mask[cell] >= 2:
 					continue
 				var ground := heights.ground_at(x, z)
-				if kind != Biomes.T_REED and ground < heights.water_level[cell] - WATER_MARGIN:
-					continue
+				if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < heights.water_level[cell] - WATER_MARGIN:
+					if heights.depth_at(x, z) > WATER_MARGIN:
+						continue
 				counts[kind] = n + 1
 				var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * PI * 2.0
 				var v := w.obj_v[o]
@@ -300,7 +300,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				elif w.path_mask[k] >= 2:
 					continue
 				var y := heights.ground_at(x, z)
-				if y < heights.water_level[k]:
+				if y < heights.water_level[k] and heights.depth_at(x, z) > 0.0:
 					continue
 				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
 				_put_xform(buf, n * 16, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, s)

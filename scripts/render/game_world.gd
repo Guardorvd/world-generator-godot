@@ -21,6 +21,7 @@ var hud: Hud
 var player: PlayerState
 var bike: BikeRide
 var bike_view: BikeView
+var water_effects: WaterEffects
 var fires: Array = []
 var labels: Array = []
 var outer: OuterTerrain   # рельеф за краем стартовой области
@@ -74,6 +75,9 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		$Water.add_child(node)
 		if node.name == "Ocean":
 			_ocean = node
+	water_effects = WaterEffects.new()
+	water_effects.setup($Water)
+	$Water.add_child(water_effects)
 	vegetation.setup(world, heights, _defs, _grass_mesh)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
@@ -300,6 +304,7 @@ func _physics_process(dt: float) -> void:
 			audio.land(player.x, player.z, player.feet, player.land_impact)
 			player.land_impact = 0.0
 	_tick_yaw = yaw - yaw0
+	water_effects.tick(dt, player, bike, _prev, heights)
 	_tick_pitch = pitch - pitch0
 	# пружина проседания и затухающая тряска камеры
 	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
@@ -326,6 +331,8 @@ func _store_prev() -> void:
 ## его плавно со старого места
 func _snap() -> void:
 	_store_prev()
+	if water_effects != null:
+		water_effects.clear()
 	_tick_yaw = 0.0
 	_tick_pitch = 0.0
 	bike_view.snap(bike)

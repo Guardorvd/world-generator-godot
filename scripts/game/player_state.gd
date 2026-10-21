@@ -222,8 +222,7 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		mx /= ln
 		mz /= ln
 		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z, heights)
-		if heights.depth_at(x, z, feet) > 0.3:
-			sp *= 0.5
+		sp *= lerpf(1.0, 0.5, smoothstep(0.05, 0.8, heights.immersion_at(x, z, feet)))
 		# в крутой подъём идти тяжелее
 		var rise := (heights.surface_at(x + mx, z + mz, feet) - heights.surface_at(x, z, feet))
 		var slow := 1.0 / (1.0 + rise * 1.2) if rise > 0.0 else 1.0

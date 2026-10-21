@@ -65,8 +65,13 @@ func synthetic() -> void:
 	var end: Dictionary = h.ribbons[0][-1]
 	check(absf(end.y - h.lake_level(end.x, end.z)) < 0.001, "Река соединяется с озером без ступеньки воды")
 	# Сухая часть той же клетки рядом с узким ручьём: не квадратная вода.
-	var dry := Vector2(14.0, 12.05)
+	var gap := Vector2(14.0, 12.05)
+	check(h.depth_at(gap.x, gap.y) > 0.0, "Вода заполняет подрезанное дно за прежним краем ленты")
+	check(h.current_at(gap.x, gap.y).x > 0.0, "Течение в заполненном русле направлено вниз по реке")
+	var dry := Vector2(14.0, 6.0)
 	check(h.river_level(dry.x, dry.y) == -INF and h.depth_at(dry.x, dry.y) == 0.0, "На сухом берегу нет клеточной воды")
+	check(h.current_at(dry.x, dry.y) == Vector2.ZERO, "На суше течения нет")
+	check(h.current_at(end.x, end.z) == Vector2.ZERO, "В озере речной след успокаивается")
 	var shoal := 0.0
 	for p: Dictionary in h.ribbons[0]:
 		if p.bend < 0.05:

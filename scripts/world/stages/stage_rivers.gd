@@ -96,12 +96,11 @@ static func run(w: WorldData) -> void:
 	# Консервативный коридор ленты для дорог, домов и растительности.
 	# Не меняем гидрологическую сеть: acc/down по-прежнему относятся к river.
 	w.river_area = river.duplicate()
-	for pts: Array in rivers:
-		for k in range(1, pts.size()):
-			var half := half_width(maxf(pts[k - 1].w, pts[k].w)) / GameConfig.TILE + 0.12
-			Grid.stamp_path(w.river_area, w.W, w.H, [pts[k - 1], pts[k]], 1, half)
-			if half > 0.9:
-				Grid.stamp_path(w.river_area, w.W, w.H, [pts[k - 1], pts[k]], 1, half * 0.5)
+	# Берег определяется по окончательному игровому дну: тот же коридор нужен
+	# дорогам, растительности и расстояниям до воды ещё до этапа климата.
+	var surface := Heightfield.new(w, false)
+	for cell: int in surface._river_cells:
+		w.river_area[cell] = 1
 
 
 ## Один проход вместо эрозии. Вода в руслах опускается от устья вверх,

@@ -137,13 +137,11 @@ static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 			var b: Dictionary = pts[mini(n - 1, k + 1)]
 			var delta := Vector2(b.x - a.x, b.z - a.z)
 			var grade := maxf(0.0, a.y - b.y) / maxf(delta.length(), 0.01)
-			# Узкий крутой участок быстрее; глубокий плёс спокойнее.
-			var speed := clampf(0.22 + sqrt(grade) * 1.8 + 0.12 / pts[k].w, 0.22, 1.0)
-			var rapid := smoothstep(0.025, 0.24, grade)
-			var dir := delta.normalized()
+			var motion := Heightfield.river_motion(pts, k)
+			var dir := Vector2(motion.x, motion.y)
 			directions.append(dir)
 			slopes.append(Vector3(dir.x * grade, 1.0, dir.y * grade).normalized())
-			conditions.append(Color(speed, rapid, 0.0, 1.0))
+			conditions.append(Color(motion.z, motion.w, 0.0, 1.0))
 		# Берега уже посчитаны Heightfield: геометрия и проверка глубины совпадают.
 		for k in n - 1:
 			pos.append_array([pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].left, pts[k].right, pts[k + 1].right])

@@ -66,6 +66,7 @@ func _init(w: WorldData, with_structures := true) -> void:
 				# выравнивание всех вершин в одну отметку стирало отмели.
 				for k: int in tri:
 					hv[k] -= cut
+	_fit_river_banks()
 	water_level.resize(N)
 	water_level.fill(-INF)
 	for i in N:
@@ -273,8 +274,38 @@ func _river_ribbons() -> Array:
 			var incoming := Vector2(p.x - a.x, p.z - a.z).normalized()
 			var outgoing := Vector2(b.x - p.x, b.z - p.z).normalized()
 			p.bend = clampf(incoming.cross(outgoing) * 3.0, -1.0, 1.0)
+			p.motion = river_motion(pts, k)
 		out.append(pts)
 	return out
+
+
+## Направление, скорость (0..1) и пороги: общие для поверхности и следа.
+static func river_motion(pts: Array, k: int) -> Vector4:
+	var a: Dictionary = pts[maxi(0, k - 1)]
+	var b: Dictionary = pts[mini(pts.size() - 1, k + 1)]
+	var delta := Vector2(b.x - a.x, b.z - a.z)
+	var grade := maxf(0.0, a.y - b.y) / maxf(delta.length(), 0.01)
+	var dir := delta.normalized()
+	var speed := clampf(0.22 + sqrt(grade) * 1.8 + 0.12 / maxf(pts[k].w, 0.01), 0.22, 1.0)
+	return Vector4(dir.x, dir.y, speed, smoothstep(0.025, 0.24, grade))
+
+
+## Локальное течение на видимой реке. Озеро и море сохраняют спокойный след.
+func current_at(x: float, z: float) -> Vector2:
+	var level_here := river_level(x, z)
+	if level_here <= maxf(0.0, lake_level(x, z)) + 0.001:
+		return Vector2.ZERO
+	var cell := floori(z / TILE) * world.W + floori(x / TILE)
+	for s: Dictionary in _river_cells.get(cell, []):
+		var top := maxf(_water_triangle(x, z, s.a.left, s.a.right, s.b.left),
+			_water_triangle(x, z, s.b.left, s.a.right, s.b.right))
+		if absf(top - level_here) > 0.001:
+			continue
+		var delta := Vector2(s.b.x - s.a.x, s.b.z - s.a.z)
+		var u := clampf(Vector2(x - s.a.x, z - s.a.z).dot(delta) / maxf(delta.length_squared(), 0.0001), 0.0, 1.0)
+		var motion: Vector4 = s.a.motion.lerp(s.b.motion, u)
+		return Vector2(motion.x, motion.y).normalized() * lerpf(0.3, 2.8, motion.z)
+	return Vector2.ZERO
 
 
 ## Малая локальная подрезка базовой сетки: стрежень, отмель внутри изгиба,
@@ -290,7 +321,6 @@ func _carve_rivers() -> void:
 			if len2 < 1e-8:
 				continue
 			var reach := maxf(a.w, b.w) * 1.8 + TILE
-			var segment := {a = a, b = b}
 			for y in range(maxi(0, floori((minf(a.z, b.z) - reach) / TILE)), mini(world.H, ceili((maxf(a.z, b.z) + reach) / TILE))):
 				for x in range(maxi(0, floori((minf(a.x, b.x) - reach) / TILE)), mini(W, ceili((maxf(a.x, b.x) + reach) / TILE))):
 					var i := y * W + x
@@ -298,11 +328,6 @@ func _carve_rivers() -> void:
 					var u := clampf(offset.dot(delta) / len2, 0.0, 1.0)
 					var width := lerpf(a.w, b.w, u)
 					var distance := (offset - delta * u).length()
-					# Запас до углов клетки: индекс охватывает всю видимую ленту.
-					if distance <= width + TILE * 0.72:
-						if not _river_cells.has(i):
-							_river_cells[i] = []
-						_river_cells[i].append(segment)
 					if world.ocean[i] != 0 or world.lake[i] != 0 or distance >= width * 1.8:
 						continue
 					var t := distance / width
@@ -315,6 +340,49 @@ func _carve_rivers() -> void:
 					if t > 1.0:
 						bed = lerpf(level + 0.06, hv_raw[i], smoothstep(1.0, 1.8, t))
 					hv[i] = minf(hv[i], bed)
+
+
+## Сетка дна грубее ленты: после подрезки вода должна доходить до реального
+## берега, а не обрываться на исходной расчётной ширине посреди впадины.
+func _fit_river_banks() -> void:
+	for pts: Array in ribbons:
+		for p: Dictionary in pts:
+			var normal := Vector2(p.left.x - p.x, p.left.z - p.z).normalized()
+			for side in [1.0, -1.0]:
+				var reach: float = p.w
+				if p.y > maxf(0.0, lake_level(p.x, p.z)) + 0.001:
+					reach = 0.0
+					var limit: float = p.w + TILE
+					while reach < limit:
+						reach += 0.5
+						var q: Vector2 = Vector2(p.x, p.z) + normal * side * reach
+						if ground_at(q.x, q.y) >= p.y + 0.02:
+							break
+					# У обрыва нет бокового берега: не растягиваем поток
+					# в висящую над соседней долиной широкую плоскость.
+					if reach >= limit:
+						reach = p.w
+				var bank := Vector3(p.x + normal.x * side * reach, p.y, p.z + normal.y * side * reach)
+				if side > 0.0:
+					p.left = bank
+				else:
+					p.right = bank
+		# Индекс строится по окончательным берегам, как и видимые треугольники.
+		for k in range(1, pts.size()):
+			var a: Dictionary = pts[k - 1]
+			var b: Dictionary = pts[k]
+			var lo := Vector2(INF, INF)
+			var hi := Vector2(-INF, -INF)
+			for v: Vector3 in [a.left, a.right, b.left, b.right]:
+				lo = lo.min(Vector2(v.x, v.z))
+				hi = hi.max(Vector2(v.x, v.z))
+			var segment := {a = a, b = b}
+			for z in range(maxi(0, floori(lo.y / TILE)), mini(world.H, floori(hi.y / TILE) + 1)):
+				for x in range(maxi(0, floori(lo.x / TILE)), mini(world.W, floori(hi.x / TILE) + 1)):
+					var cell := z * world.W + x
+					if not _river_cells.has(cell):
+						_river_cells[cell] = []
+					_river_cells[cell].append(segment)
 
 
 ## Уровень на тех же треугольниках, которые WaterBuilder отдаёт GPU.
@@ -440,3 +508,12 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 	# также видима, даже если центр клетки относится к речному берегу.
 	var l := maxf(0.0, maxf(river_level(x, z), lake_level(x, z)))
 	return maxf(0.0, l - ground_at(x, z))
+
+
+## Погружение ног/низа колеса, в отличие от полной глубины под ними.
+## На мосту и в прыжке над поверхностью — ноль.
+func immersion_at(x: float, z: float, feet: float) -> float:
+	var depth := depth_at(x, z, feet)
+	if depth <= 0.0:
+		return 0.0
+	return clampf(ground_at(x, z) + depth - feet, 0.0, depth)

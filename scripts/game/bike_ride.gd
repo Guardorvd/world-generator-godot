@@ -144,8 +144,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var speed0 := speed
 	if not airborne:
 		var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
-		if heights.depth_at(x, z, y) > 0.3:
-			terrain *= 0.4
+		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
 		_step_speed(throttle, boost, slope, terrain, dt)
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
