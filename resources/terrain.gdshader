@@ -72,6 +72,7 @@ void fragment() {
 	float rock = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
 	// на снегу скала проступает слабее, чтобы вершины оставались белыми
 	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
+	float sky = 1.0;
 	if (forest_enabled && !use_vertex_color) {
 		vec4 forest = texture(forest_tex, UV);
 		float cover = smoothstep(0.03, 0.8, forest.r) * (1.0 - snow);
@@ -98,6 +99,14 @@ void fragment() {
 			soil = mix(soil, dry_litter * mix(0.85, 1.2, scatter.x), litter * near * (0.55 - moss * 0.25));
 		}
 		col = mix(col, soil, cover * (0.62 + patch * 0.25));
+		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
+		// медленно плывут тёплые просветы — как солнце сквозь качающуюся листву.
+		sky = 1.0 - cover * mix(0.35, 0.55, forest.g);
+		col *= mix(vec3(1.0), vec3(0.93, 0.97, 1.0), cover * forest.g);
+		if (near > 0.0) {
+			float sun = texture(detail_tex, p * (1.0 / 3.1) + vec2(TIME * 0.006, TIME * 0.004)).r;
+			col *= 1.0 + smoothstep(0.6, 0.78, sun) * cover * (1.0 - forest.g) * near * vec3(0.14, 0.12, 0.07);
+		}
 	}
 	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
@@ -145,6 +154,8 @@ void fragment() {
 	ALBEDO = col * (1.0 + v);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
+	AO = sky;
+	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
 	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock, 0.2 + road_rough * 0.4, road) * near;
 }

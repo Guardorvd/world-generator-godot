@@ -13,6 +13,25 @@ const Understory := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
 const UNDERSTORY_MAX := 2048 # на форму, только в радиусе травы
+const SHADER := preload("res://resources/vegetation.gdshader")
+const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
+const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
+# [sway, flutter, sway_speed, ao, glow]; см. _wind_mat
+const CALM := [0.0, 0.0, 1.0, 1.0, 0.0]
+const WIND := {
+	Biomes.T_OAK: [0.14, 0.035, 0.8, 0.6, 0.3],
+	Biomes.T_BIRCH: [0.22, 0.06, 1.0, 0.75, 0.42],
+	Biomes.T_PINE: [0.1, 0.012, 0.65, 0.5, 0.12],
+	Biomes.T_SNOWPINE: [0.07, 0.008, 0.6, 0.55, 0.08],
+	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
+	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.5, 0.25],
+	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],
+	Biomes.T_BUSH: [0.06, 0.035, 1.3, 0.7, 0.25],
+	Biomes.T_REED: [0.16, 0.03, 1.4, 0.8, 0.3],
+	Biomes.T_DEAD: [0.04, 0.0, 0.8, 0.8, 0.0],
+}
+const GRASS_WIND := [0.09, 0.02, 1.6, 0.7, 0.3]
+const PLANT_WIND := [0.05, 0.02, 1.2, 0.7, 0.25]
 
 var world: WorldData
 var heights: Heightfield
@@ -52,18 +71,22 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			var box: AABB = def[part].get_aabb()
 			entry.box = box if first else entry.box.merge(box)
 			first = false
-			var mat := _vcolor_mat(false)
-			mat.albedo_texture = def.get(part + "_texture", null)
-			if part == "crown" and def.get("cutout", false):
-				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
-				mat.alpha_scissor_threshold = 0.4
-				mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+			var shader := TRUNK_SHADER if part == "trunk" else (CUTOUT_SHADER if def.get("cutout", false) else SHADER)
+			var mat := _wind_mat(shader, WIND.get(kind % ForestModels.MODEL_STRIDE, CALM), part == "crown")
+			if def.has(part + "_texture"):
+				mat.set_shader_parameter("albedo_tex", def[part + "_texture"])
 			if part == "trunk":
-				mat.vertex_color_use_as_albedo = def.get("colored_bark", false)
-				mat.albedo_color = def.bark
+				mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
+				mat.set_shader_parameter("albedo_color", def.bark)
 			entry[part + "_mat"] = mat
+		# Высота у кроны и ствола общая, иначе листва отрывается от веток.
+		for part in ["trunk", "crown"]:
+			if entry.has(part + "_mat"):
+				entry[part + "_mat"].set_shader_parameter("height", maxf(entry.box.end.y, 0.3))
 		_defs[kind] = entry
-	grass = _multimesh(grass_mesh, _vcolor_mat(true), GameConfig.GRASS_MAX, true, false).multimesh
+	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
+	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
+	grass = _multimesh(grass_mesh, grass_mat, GameConfig.GRASS_MAX, true, false).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb()
 	grass_buf = _buffer(GameConfig.GRASS_MAX, 16)
@@ -72,20 +95,27 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	for mesh in meshes:
 		var kind := understory.size() - Floor.FIRST
 		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG]
-		var node := _multimesh(mesh, _vcolor_mat(true), UNDERSTORY_MAX, true, shadows)
+		# Мох, подстилка, валежник и камни неподвижны.
+		var still := kind >= 0 or understory.size() == Understory.MOSS
+		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
+		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
+		var node := _multimesh(mesh, mat, UNDERSTORY_MAX, true, shadows)
 		node.visibility_range_end = GameConfig.GRASS_R
 		node.visibility_range_end_margin = 8.0
 		understory.append({mm = node.multimesh, buf = _buffer(UNDERSTORY_MAX, 16), count = 0,
 			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
 
 
-static func _vcolor_mat(two_sided: bool) -> StandardMaterial3D:
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.vertex_color_is_srgb = true
-	mat.roughness = 1.0
-	if two_sided:
-		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+## 6.7: ветер и свет по виду. sway/flutter — м, ao — свет неба у основания и в глубине кроны,
+## glow — просвечивание листвы. Хвоя жёсткая и густая, берёза лёгкая и дрожит, пальма гибкая.
+static func _wind_mat(shader: Shader, wind: Array, leaves: bool) -> ShaderMaterial:
+	var mat := ShaderMaterial.new()
+	mat.shader = shader
+	mat.set_shader_parameter("sway", wind[0])
+	mat.set_shader_parameter("flutter", wind[1] if leaves else 0.0)
+	mat.set_shader_parameter("sway_speed", wind[2])
+	mat.set_shader_parameter("ao_low", wind[3])
+	mat.set_shader_parameter("translucency", wind[4] if leaves else 0.0)
 	return mat
 
 
@@ -389,7 +419,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				buf[n * 16 + 12] = tc[0] * v
 				buf[n * 16 + 13] = tc[1] * v
 				buf[n * 16 + 14] = tc[2] * v
-				buf[n * 16 + 15] = 1.0
+				buf[n * 16 + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
 				n += 1
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
@@ -470,7 +500,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.buf[offset + 6] = xf.basis.z.y
 	for c in 3:
 		entry.buf[offset + 12 + c] = tint
-	entry.buf[offset + 15] = 1.0
+	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
 	entry.low = entry.low.min(box.position)
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
