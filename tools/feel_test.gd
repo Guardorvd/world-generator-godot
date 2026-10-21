@@ -40,7 +40,8 @@ func _init() -> void:
 			flattest = rise
 			walk_yaw = a
 	var t := 0.0
-	while p.ground_speed() < GameConfig.WALK * PlayerState.terrain_speed(w, p.x, p.z) * 0.95 and t < 1.0:
+	# Как в PlayerState.step: скорость уточнённой ленты, а не бонус целой клетки пути.
+	while p.ground_speed() < GameConfig.WALK * PlayerState.terrain_speed(w, p.x, p.z, heights) * 0.95 and t < 1.0:
 		p.step(1.0, 0.0, false, false, walk_yaw, DT, w, heights)
 		t += DT
 	_check(t < 0.2, "разгон шага за %.2f с" % t)

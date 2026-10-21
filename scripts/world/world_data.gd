@@ -41,6 +41,7 @@ var elev := PackedFloat32Array()     # StageGeography: высота суши / �
 var ocean := PackedByteArray()
 var lake := PackedByteArray()
 var river := PackedByteArray()
+var river_area := PackedByteArray() # коридор сглаженной воды с учётом ширины; river остаётся сетью стока
 var acc := PackedFloat32Array()      # накопленный сток
 var slope := PackedFloat32Array()    # StageGeography: уклон по elev (историческая шкала ×60)
 var down := PackedInt32Array()       # клетка, куда стекает вода (-1 — нет)
@@ -80,6 +81,11 @@ var CS := CHUNK_SIZE
 var CW := 0
 var CH := 0
 var obj_count := 0
+
+
+## Для размещения и маршрутов нужен весь коридор, а не только клетки стока.
+func river_cells() -> PackedByteArray:
+	return river_area if river_area.size() == N else river
 
 
 ## Начать считать поля NOISE_FIELDS в отдельном потоке. Они зависят только от сида, поэтому
@@ -149,7 +155,7 @@ func tile_info(x: float, y: float) -> Dictionary:
 		return outer.info(tx, ty) if outer != null else {}
 	var i := ty * W + tx
 	return {
-		i = i, biome = biome[i], river = river[i] == 1, path = path_mask[i],
+		i = i, biome = biome[i], river = river_cells()[i] == 1, path = path_mask[i],
 		surface = road_surface[i] if road_surface.size() == N else 0,
 		elev = elev[i], temp = temp[i], moist = moist[i], slope = slope[i],
 	}

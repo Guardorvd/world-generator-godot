@@ -17,7 +17,7 @@ static func run(w: WorldData) -> void:
 	var h := w.h
 	var ocean := w.ocean
 	var lake := w.lake
-	var river := w.river
+	var river := w.river_cells()
 	var filled := w.filled
 	var water_src := PackedByteArray()
 	water_src.resize(N)

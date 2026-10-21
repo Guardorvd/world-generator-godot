@@ -112,23 +112,7 @@ static func _river_arrays(ribbons: Array) -> Array:
 		var n: int = pts.size()
 		if n < 2:
 			continue # одна точка ленты не даёт ни одной полосы
-		var L: Array[Vector3] = []
-		var R: Array[Vector3] = []
-		# направление поперёк ленты; если соседние точки совпадают (нулевой отрезок), берём прошлое
-		var dx := 1.0
-		var dz := 0.0
-		for k in n:
-			var a: Dictionary = pts[maxi(0, k - 1)]
-			var b: Dictionary = pts[mini(n - 1, k + 1)]
-			var ex: float = b.x - a.x
-			var ez: float = b.z - a.z
-			var ln := Grid.hypot(ex, ez)
-			if ln > 0.000001:
-				dx = ex / ln
-				dz = ez / ln
-			var p: Dictionary = pts[k]
-			L.append(Vector3(p.x - dz * p.w, p.y, p.z + dx * p.w))
-			R.append(Vector3(p.x + dz * p.w, p.y, p.z - dx * p.w))
+		# Берега уже посчитаны Heightfield: геометрия и проверка глубины совпадают.
 		for k in n - 1:
-			pos.append_array([L[k], R[k], L[k + 1], L[k + 1], R[k], R[k + 1]])
+			pos.append_array([pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].left, pts[k].right, pts[k + 1].right])
 	return _arrays(pos)

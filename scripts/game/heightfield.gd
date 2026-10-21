@@ -22,6 +22,7 @@ var hv := PackedFloat32Array()      # высоты с прорезанными �
 var hv_raw := PackedFloat32Array()  # высоты как в генераторе
 var water_level := PackedFloat32Array() # уровень воды в клетке (или -INF, если воды нет)
 var ribbons: Array = []             # средние линии рек: массивы точек {x, z, w — полуширина, y — уровень воды}
+var _river_cells := {}             # клетка -> сегменты ленты; одни треугольники для воды и depth_at
 ## мосты и туннели: {tunnel, ax, az, ay, bx, bz, by — концы оси в метрах (y — настил или пол), half, len, ux, uz — направление}.
 ## Концы настила и пола вровень с землёй, чтобы на них въезжать без ступеньки
 var structures: Array = []
@@ -43,11 +44,10 @@ func _init(w: WorldData, with_structures := true) -> void:
 	for i in N:
 		var h := w.h[i]
 		hv_raw[i] = (maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5) if w.ocean[i] != 0 else h * HS
-		var depth := 0.75 + minf(0.65, sqrt(w.acc[i] / WorldData.RIVER_ACC) * 0.4) if w.river[i] != 0 else 0.0
-		hv[i] = hv_raw[i] - depth
-	# Реки: где лента срезает угол или идёт по диагонали между клетками берега,
-	# рельеф под ней опускается чуть ниже воды, чтобы русло не уходило под землю
+		hv[i] = hv_raw[i]
+	# Сначала полный профиль дна/берега, затем защита непрерывного стрежня.
 	ribbons = _river_ribbons()
+	_carve_rivers()
 	for pts: Array in ribbons:
 		for p: Dictionary in pts:
 			var fx := clampf(p.x / TILE - 0.5, 0.0, W - 1.001)
@@ -59,11 +59,13 @@ func _init(w: WorldData, with_structures := true) -> void:
 				tri = [j * W + i, j * W + i + 1, (j + 1) * W + i]
 			else:
 				tri = [(j + 1) * W + i + 1, (j + 1) * W + i, j * W + i + 1]
-			var bed: float = p.y - 0.3
-			if ground_at(p.x, p.z) > bed:
+			var bed: float = p.y - p.depth
+			var cut := ground_at(p.x, p.z) - bed
+			if cut > 0.0:
+				# Сдвиг треугольника сохраняет уже заданный поперечный профиль;
+				# выравнивание всех вершин в одну отметку стирало отмели.
 				for k: int in tri:
-					if hv[k] > bed:
-						hv[k] = bed
+					hv[k] -= cut
 	water_level.resize(N)
 	water_level.fill(-INF)
 	for i in N:
@@ -71,8 +73,16 @@ func _init(w: WorldData, with_structures := true) -> void:
 			water_level[i] = 0.0
 		elif w.lake[i] != 0:
 			water_level[i] = w.filled[i] * HS
-		elif w.river[i] != 0:
-			water_level[i] = minf(hv_raw[i] - 0.45, hv[i] + 0.95) # брод: не глубже метра
+		elif w.river_cells()[i] != 0:
+			# Для коридора A* и закрепления берегов — верхняя оценка по ленте.
+			# В точке depth_at проверяет её фактические треугольники.
+			var level := river_level((i % W + 0.5) * TILE, (i / W + 0.5) * TILE)
+			water_level[i] = maxf(level, w.filled[i] * HS - WaterBuilder.LAKE_DROP) if w.river[i] != 0 else level
+	for cell: int in _river_cells:
+		if w.ocean[cell] != 0 or w.lake[cell] != 0:
+			continue
+		for segment: Dictionary in _river_cells[cell]:
+			water_level[cell] = maxf(water_level[cell], maxf(segment.a.y, segment.b.y))
 	if with_structures:
 		finish_paths()
 
@@ -246,15 +256,102 @@ func _river_ribbons() -> Array:
 		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
-			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.3, y = p.e * HS - 0.45,
-				lo = p.e * HS - 1.4})
+			pts.append({x = x, z = z, w = StageRivers.half_width(p.w), y = maxf(0.0, p.e * HS - WaterBuilder.LAKE_DROP),
+				depth = clampf(0.3 + p.w * 0.6, 0.45, 1.2)})
 		for k in range(1, pts.size()):
 			pts[k].y = minf(pts[k].y, pts[k - 1].y)
-		# у устья лента не уходит ниже обычного русла (дно озера рядом глубже): она под водой озера
-		for p: Dictionary in pts:
-			p.y = maxf(p.y, p.lo + 0.3)
+		for k in pts.size():
+			var p: Dictionary = pts[k]
+			var a: Dictionary = pts[maxi(0, k - 1)]
+			var b: Dictionary = pts[mini(pts.size() - 1, k + 1)]
+			var dir := Vector2(b.x - a.x, b.z - a.z).normalized()
+			if dir.length_squared() < 0.1:
+				dir = Vector2.RIGHT
+			p.left = Vector3(p.x - dir.y * p.w, p.y, p.z + dir.x * p.w)
+			p.right = Vector3(p.x + dir.y * p.w, p.y, p.z - dir.x * p.w)
+			# Внутренний берег изгиба — мельче, внешний — глубже.
+			var incoming := Vector2(p.x - a.x, p.z - a.z).normalized()
+			var outgoing := Vector2(b.x - p.x, b.z - p.z).normalized()
+			p.bend = clampf(incoming.cross(outgoing) * 3.0, -1.0, 1.0)
 		out.append(pts)
 	return out
+
+
+## Малая локальная подрезка базовой сетки: стрежень, отмель внутри изгиба,
+## пологая кромка. В озере сохраняем его дно. Никакой отдельной симуляции.
+func _carve_rivers() -> void:
+	var W := world.W
+	for pts: Array in ribbons:
+		for k in range(1, pts.size()):
+			var a: Dictionary = pts[k - 1]
+			var b: Dictionary = pts[k]
+			var delta := Vector2(b.x - a.x, b.z - a.z)
+			var len2 := delta.length_squared()
+			if len2 < 1e-8:
+				continue
+			var reach := maxf(a.w, b.w) * 1.8 + TILE
+			var segment := {a = a, b = b}
+			for y in range(maxi(0, floori((minf(a.z, b.z) - reach) / TILE)), mini(world.H, ceili((maxf(a.z, b.z) + reach) / TILE))):
+				for x in range(maxi(0, floori((minf(a.x, b.x) - reach) / TILE)), mini(W, ceili((maxf(a.x, b.x) + reach) / TILE))):
+					var i := y * W + x
+					var offset := Vector2((x + 0.5) * TILE - a.x, (y + 0.5) * TILE - a.z)
+					var u := clampf(offset.dot(delta) / len2, 0.0, 1.0)
+					var width := lerpf(a.w, b.w, u)
+					var distance := (offset - delta * u).length()
+					# Запас до углов клетки: индекс охватывает всю видимую ленту.
+					if distance <= width + TILE * 0.72:
+						if not _river_cells.has(i):
+							_river_cells[i] = []
+						_river_cells[i].append(segment)
+					if world.ocean[i] != 0 or world.lake[i] != 0 or distance >= width * 1.8:
+						continue
+					var t := distance / width
+					var level := lerpf(a.y, b.y, u)
+					var depth := lerpf(a.depth, b.depth, u)
+					var bend := lerpf(a.bend, b.bend, u)
+					var inside := maxf(0.0, -signf(offset.cross(delta)) * bend)
+					var bed := level - depth * (1.0 - 0.85 * smoothstep(0.15, 1.0, t))
+					bed += inside * depth * 0.55 * smoothstep(0.1, 0.7, t)
+					if t > 1.0:
+						bed = lerpf(level + 0.06, hv_raw[i], smoothstep(1.0, 1.8, t))
+					hv[i] = minf(hv[i], bed)
+
+
+## Уровень на тех же треугольниках, которые WaterBuilder отдаёт GPU.
+## -INF снаружи ленты, даже в клетке исходного стока.
+func river_level(x: float, z: float) -> float:
+	if x < 0.0 or z < 0.0 or x >= world.W * TILE or z >= world.H * TILE:
+		return -INF
+	var cell := floori(z / TILE) * world.W + floori(x / TILE)
+	var top := -INF
+	for s: Dictionary in _river_cells.get(cell, []):
+		top = maxf(top, _water_triangle(x, z, s.a.left, s.a.right, s.b.left))
+		top = maxf(top, _water_triangle(x, z, s.b.left, s.a.right, s.b.right))
+	return top
+
+
+func lake_level(x: float, z: float) -> float:
+	var cx := floori(x / TILE - 0.5)
+	var cy := floori(z / TILE - 0.5)
+	if cx < 0 or cy < 0 or cx >= world.W - 1 or cy >= world.H - 1:
+		return -INF
+	var a := cy * world.W + cx
+	var top := -INF
+	for i in [a, a + 1, a + world.W, a + world.W + 1]:
+		if world.lake[i] != 0:
+			top = maxf(top, world.filled[i] * HS - WaterBuilder.LAKE_DROP)
+	return top
+
+
+static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vector3) -> float:
+	var denominator := (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
+	if absf(denominator) < 1e-8:
+		return -INF
+	var u := ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator
+	var v := ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator
+	if u < -1e-5 or v < -1e-5 or u + v > 1.00001:
+		return -INF
+	return u * a.y + v * b.y + (1.0 - u - v) * c.y
 
 
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
@@ -339,7 +436,7 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 		if world.outer == null or world.outer.height(tx, tz) >= 0.0:
 			return 0.0
 		return maxf(0.0, -ground_at(x, z))
-	var l := water_level[tz * world.W + tx]
-	if l == -INF:
-		return 0.0
+	# Плоскость моря рисуется во всём мире; в углублениях ниже нуля она
+	# также видима, даже если центр клетки относится к речному берегу.
+	var l := maxf(0.0, maxf(river_level(x, z), lake_level(x, z)))
 	return maxf(0.0, l - ground_at(x, z))

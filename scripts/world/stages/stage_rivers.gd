@@ -9,7 +9,16 @@ const WIDTH_ACC := 70.0  # сток, от которого считается ш
 
 
 static func _width_of(w: WorldData, i: int) -> float:
-	return 0.08 + minf(1.65, sqrt(w.acc[i] / WIDTH_ACC) * 0.2)
+	var variation := 0.0
+	if w.noise.has("micro"):
+		variation = w.noise.micro.noise((i % w.W + w.macro_x) / 26.0, (i / w.W + w.macro_y) / 26.0)
+	var d := w.down[i]
+	var grade := 0.0 if d < 0 else maxf(0.0, w.filled[i] - w.filled[d]) * GameConfig.HS / GameConfig.TILE
+	return (0.08 + minf(1.65, sqrt(w.acc[i] / WIDTH_ACC) * 0.2)) * (1.0 + variation * 0.12) * lerpf(1.0, 0.85, smoothstep(0.05, 0.5, grade))
+
+
+static func half_width(width: float) -> float:
+	return width * GameConfig.TILE * 0.55 + 0.3
 
 
 ## e — высота воды (0 — уровень моря): вдоль стока она только убывает
@@ -84,6 +93,15 @@ static func run(w: WorldData) -> void:
 		if pts.size() >= 2:
 			rivers.append(Grid.chaikin(pts, 2))
 	w.rivers = rivers
+	# Консервативный коридор ленты для дорог, домов и растительности.
+	# Не меняем гидрологическую сеть: acc/down по-прежнему относятся к river.
+	w.river_area = river.duplicate()
+	for pts: Array in rivers:
+		for k in range(1, pts.size()):
+			var half := half_width(maxf(pts[k - 1].w, pts[k].w)) / GameConfig.TILE + 0.12
+			Grid.stamp_path(w.river_area, w.W, w.H, [pts[k - 1], pts[k]], 1, half)
+			if half > 0.9:
+				Grid.stamp_path(w.river_area, w.W, w.H, [pts[k - 1], pts[k]], 1, half * 0.5)
 
 
 ## Один проход вместо эрозии. Вода в руслах опускается от устья вверх,

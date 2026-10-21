@@ -24,7 +24,7 @@ static func _place_settlements(w: WorldData) -> void:
 	var H := w.H
 	var rng := w.rng
 	var biome := w.biome
-	var river := w.river
+	var river := w.river_cells()
 	var slope := w.slope
 	var dist_water := w.dist_water
 	var acc := w.acc

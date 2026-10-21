@@ -116,14 +116,15 @@ static func _build_cost(w: WorldData) -> void:
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
 	var cost_n := w.noise_field("cost")
+	var river := w.river_cells()
 	for y: int in H:
 		for x: int in W:
 			var i := y * W + x
-			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 and (_at_mouth(w, x, y) or w.slope[i] > FORD_SLOPE):
+			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0 and (_at_mouth(w, x, y) or w.slope[i] > FORD_SLOPE):
 				cost[i] = INF
 				continue
 			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)
-			cost[i] = bc + w.slope[i] * 7.0 + (cost_n[i] * 0.5 + 0.5) * 0.9 + (12.0 if w.river[i] != 0 else 0.0)
+			cost[i] = bc + w.slope[i] * 7.0 + (cost_n[i] * 0.5 + 0.5) * 0.9 + (12.0 if river[i] != 0 else 0.0)
 	w.cost = cost
 
 
@@ -705,7 +706,7 @@ static func _clear_huts(w: WorldData) -> void:
 
 ## Мокрая клетка: море, озеро или река
 static func _wet(w: WorldData, i: int) -> bool:
-	return w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
+	return w.ocean[i] != 0 or w.lake[i] != 0 or w.river_cells()[i] != 0
 
 
 ## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
@@ -768,6 +769,9 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 		var c := p[k]
 		hp[k] = w.h[c]
 		wet[k] = 1 if _wet(w, c) else 0
+		if state.has("surface"):
+			var surface: Heightfield = state.surface
+			hp[k] = (surface.water_level[c] if wet[k] != 0 and surface.water_level[c] > -INF else surface.hv[c]) / GameConfig.HS
 		xs[k] = c % W
 		ys[k] = c / W
 	# наибольшая и наименьшая высота на SPAN клеток пути вперёд: где до хребта или оврага далеко,
@@ -785,7 +789,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 			while j < n and (wet[j] != 0 or j + 1 < n and wet[j + 1] != 0 and hp[j] <= hp[i] + GRADE \
 					and Grid.segment_dist(xs[j], ys[j], xs[i], ys[i], xs[j + 1], ys[j + 1]) < 0.1):
 				j += 1
-			if j >= n or not road and j - i - 1 <= FORD_LEN and _river_only(w, p, i + 1, j):
+			if j >= n or not road and j - i - 1 <= FORD_LEN and _river_only(w, p, i + 1, j, state.get("surface")):
 				j = -1
 			elif state.has("surface"):
 				var shore := j
@@ -1049,10 +1053,19 @@ static func _wet_near(w: WorldData, a: int, b: int, r: float) -> bool:
 
 
 ## Только река (не море и не озеро), без крутого перепада русла: возможен брод p[from..to)
-static func _river_only(w: WorldData, p: PackedInt32Array, from: int, to: int) -> bool:
+static func _river_only(w: WorldData, p: PackedInt32Array, from: int, to: int, surface: Heightfield = null) -> bool:
 	for k in range(from, to):
 		if w.ocean[p[k]] != 0 or w.lake[p[k]] != 0 or w.slope[p[k]] > FORD_SLOPE:
 			return false
+	if surface != null:
+		for k in range(maxi(1, from), mini(p.size(), to + 1)):
+			var a := Vector2(p[k - 1] % w.W + 0.5, p[k - 1] / w.W + 0.5) * GameConfig.TILE
+			var b := Vector2(p[k] % w.W + 0.5, p[k] / w.W + 0.5) * GameConfig.TILE
+			var steps := maxi(1, ceili(a.distance_to(b) / 0.5))
+			for step in steps + 1:
+				var q := a.lerp(b, float(step) / steps)
+				if surface.depth_at(q.x, q.y) > GameConfig.FORD_DEPTH - 0.15:
+					return false
 	return true
 
 
@@ -1176,8 +1189,19 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 			on_axis[c] = 1
 	# С 3.1 горная тропа обходит крутые участки реки: на перепаде русла такой «брод» глубже,
 	# чем кажется по одной клетке. Это последний поиск путей, дороги уже проложены по мостам
+	var river := w.river_cells()
 	for i in w.N:
-		if w.river[i] != 0 and w.slope[i] > FORD_SLOPE:
+		if river[i] == 0:
+			continue
+		var unsafe := w.slope[i] > FORD_SLOPE
+		if surface != null:
+			# Узкий глубокий участок может лежать между центрами клеток.
+			# Горные тропы не строят мостов: заранее закрываем такой проход.
+			for dz in [-0.4, 0.0, 0.4]:
+				for dx in [-0.4, 0.0, 0.4]:
+					if surface.depth_at((i % w.W + 0.5 + dx) * GameConfig.TILE, (i / w.W + 0.5 + dz) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15:
+						unsafe = true
+		if unsafe and on_axis[i] == 0:
 			w.cost[i] = INF
 	for pk in w.peaks:
 		var best := -1

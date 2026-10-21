@@ -24,7 +24,7 @@ static func run(w: WorldData) -> void:
 	var N := w.N
 	var rng := w.rng
 	var biome := w.biome
-	var river := w.river
+	var river := w.river_cells()
 	var slope := w.slope
 	var temp := w.temp
 	var dist_water := w.dist_water

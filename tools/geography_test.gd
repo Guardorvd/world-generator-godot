@@ -345,7 +345,7 @@ func _traversal_check() -> void:
 ## Контракт after_climate: поздние этапы не меняют данные, уже читаемые загрузчиком.
 func _geography_fingerprint(w: WorldData) -> Dictionary:
 	var out := {}
-	for key in ["h", "filled", "ocean", "lake", "river", "rivers", "down", "acc", "rain", "dist_ocean", "dist_water", "elev", "slope", "temp", "moist", "biome"]:
+	for key in ["h", "filled", "ocean", "lake", "river", "river_area", "rivers", "down", "acc", "rain", "dist_ocean", "dist_water", "elev", "slope", "temp", "moist", "biome"]:
 		out[key] = var_to_bytes(w.get(key)).hex_encode().sha256_text()
 	return out
 
