@@ -29,6 +29,8 @@ const float EDGE_JITTER = 0.9;    // в пикселях карты: наско�
 const float ROCK_FROM = 0.30;     // 1 - нормаль.y: с какого уклона (около 45°) проступает скала
 const float ROCK_TO = 0.46;
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 varying vec3 wpos;
 varying vec3 wnormal;
 varying vec3 road_detail;
@@ -155,7 +157,7 @@ void fragment() {
 			detail_n = mix(detail_n, road_normal, road);
 		}
 	}
-	ALBEDO = col * (1.0 + v);
+	ALBEDO = col * (1.0 + v) * cloud_light(p);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
 	AO = sky;

@@ -1,7 +1,10 @@
 // Стилизованное небо (с 7.8): градиент зенит — горизонт, мягкое гало солнца, диск луны, звёзды ночью
-// и плоские мультяшные облака. Цвета и направления каждый кадр задаёт DayCycle (scripts/render/day_cycle.gd).
+// и облака. Цвета и направления каждый кадр задаёт DayCycle (scripts/render/day_cycle.gd).
 // Ниже горизонта небо — цвет горизонта: он же цвет тумана, иначе на краю земли виден шов.
 // В проходе карты отражений (AT_CUBEMAP_PASS) только градиент и гало: звёзды, облака и диски там не нужны.
+// 7.9: облака в два слоя — кучевые (искажённый шум, покрытие плавает по небу, объём: сторона к солнцу
+// светлее, низ темнее и холоднее, тонкие края у солнца светятся) и высокие перистые полосы.
+// Солнце и гало просвечивают сквозь тонкие края.
 shader_type sky;
 
 uniform vec3 zenith_color : source_color = vec3(0.32, 0.52, 0.82);
@@ -12,6 +15,7 @@ uniform float halo = 0.3;                        // сила гало вокру
 uniform vec3 moon_dir = vec3(0.0, -0.7, -0.7);
 uniform float night = 0.0;                       // 0 днём, 1 ночью: звёзды и луна
 uniform vec3 cloud_color : source_color = vec3(1.0);
+uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
 uniform float cloud_time = 0.0;
 
 float hash(vec2 p) {
@@ -32,6 +36,10 @@ float noise(vec2 p) {
 	vec2 u = f * f * (3.0 - 2.0 * f);
 	return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), u.x),
 		mix(hash(i + vec2(0.0, 1.0)), hash(i + vec2(1.0, 1.0)), u.x), u.y);
+}
+
+float fbm(vec2 p) {
+	return noise(p) * 0.5 + noise(p * 2.13 + 4.1) * 0.28 + noise(p * 4.37 - 2.7) * 0.14 + noise(p * 8.9 + 9.2) * 0.08;
 }
 
 void sky() {
@@ -58,14 +66,36 @@ void sky() {
 		// солнце: диск, днём не ярче, чем выдержит тоновая кривая
 		float sun_disc = smoothstep(0.9993, 0.9996, sd) * smoothstep(-0.05, 0.02, sun_dir.y);
 		col += sun_color * sun_disc * 3.0;
-		// облака: шум на плоскости над головой, края мягкие, к горизонту тают
-		vec2 uv = d.xz / (d.y + 0.12) * 2.4 + vec2(cloud_time * 0.012, cloud_time * 0.004);
-		float n = noise(uv) * 0.55 + noise(uv * 2.3 + 4.1) * 0.3 + noise(uv * 5.1 - 2.7) * 0.15;
-		float cloud = smoothstep(0.62, 0.69, n) * smoothstep(0.03, 0.3, d.y);
-		// плоская заливка в два тона: светлая шапка и тень снизу облака
-		float lit = 0.8 + 0.2 * smoothstep(0.66, 0.74, n) + pow(sd, 4.0) * 0.35 * halo;
-		vec3 behind = col + (stars * vec3(0.9, 0.95, 1.0) * 1.4 * up + moon * smoothstep(-0.02, 0.03, d.y)) * night;
-		col = mix(behind, cloud_color * lit, cloud * 0.9);
+		col += (stars * vec3(0.9, 0.95, 1.0) * 1.4 * up + moon * smoothstep(-0.02, 0.03, d.y)) * night;
+
+		// облака лежат на плоскости над головой; к горизонту тают в дымке
+		vec2 uv = d.xz / (d.y + 0.12);
+		vec2 wind = vec2(cloud_time * 0.012, cloud_time * 0.004);
+		float fade = smoothstep(0.03, 0.3, d.y);
+		// перистые: вытянутые полосы высоко, движутся быстрее
+		vec2 cq = mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * (uv * 0.9 + wind * 1.6);
+		float cirrus = smoothstep(0.5, 0.85, fbm(cq * vec2(0.6, 5.0))) * smoothstep(0.35, 0.65, noise(uv * 0.3 + 3.3));
+		vec3 cirrus_col = mix(cloud_color, sun_color * 1.2, pow(sd, 3.0) * halo);
+		col = mix(col, cirrus_col, cirrus * 0.25 * fade);
+		// кучевые: покрытие меняется по небу (где-то ясно, где-то гряда), форма — искажённый шум
+		vec2 q = uv * 1.7 + wind;
+		q += (vec2(noise(q * 0.6 + 1.3), noise(q * 0.6 + 7.1)) - 0.5) * 0.5;
+		float cover = cloud_cover + (noise(uv * 0.4 + wind * 0.3 + 11.0) - 0.5) * 0.3;
+		float n = fbm(q);
+		float edge = 1.0 - cover;
+		float dens = smoothstep(edge - 0.02, edge + 0.09, n);
+		if (dens > 0.001) {
+			// объём: шум чуть ближе к солнцу меньше — значит, эта сторона облака освещена
+			vec2 to_sun = normalize(sun_dir.xz + vec2(1e-4)) * 0.09;
+			float lit = clamp((n - fbm(q + to_sun)) * 7.0 + 0.55, 0.0, 1.0);
+			lit = mix(lit, 0.75, smoothstep(0.6, 0.95, sun_dir.y));   // солнце в зените: свет сверху ровнее
+			vec3 base = mix(cloud_color * vec3(0.62, 0.66, 0.78), zenith_color, 0.25);  // низ облака в тени
+			vec3 ccol = mix(base, cloud_color * 1.08, lit);
+			// свет сквозь облака: тонкие края у солнца светятся, толща закрывает солнце и гало
+			float thin = 1.0 - smoothstep(0.0, 0.7, dens);
+			ccol += sun_color * pow(sd, 10.0) * thin * halo * above * 2.2;
+			col = mix(col, ccol, dens * 0.95 * fade);
+		}
 	}
 	COLOR = col;
 }

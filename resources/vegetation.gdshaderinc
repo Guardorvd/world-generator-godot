@@ -18,9 +18,12 @@ uniform float ao_low = 1.0;        // доля света неба у основ
 uniform float translucency = 0.0;  // просвечивание листвы против солнца
 uniform float shelter_ao = 0.65;   // свет неба под сомкнутым пологом (по альфе экземпляра)
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 const vec2 WIND_DIR = vec2(0.82, 0.57);
 
 varying float v_ao;
+varying float v_cloud;   // 7.9: тень облака на растении (одна на экземпляр)
 
 void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
@@ -43,6 +46,7 @@ void vertex() {
 		float scale2 = max(dot(basis[0], basis[0]), 1e-4);
 		VERTEX += transpose(basis) * world * (sqrt(scale2) / scale2);
 	}
+	v_cloud = cloud_light(origin.xz);
 	v_ao = mix(ao_low, 1.0, h) * mix(1.0, shelter_ao, sheltered);
 	if (use_vertex_color) {
 		// как vertex_color_is_srgb у StandardMaterial3D
@@ -56,7 +60,7 @@ void fragment() {
 	if (use_vertex_color) {
 		col *= COLOR.rgb;
 	}
-	ALBEDO = col;
+	ALBEDO = col * v_cloud;
 	ROUGHNESS = 1.0;
 	AO = v_ao;
 	AO_LIGHT_AFFECT = 0.15;
