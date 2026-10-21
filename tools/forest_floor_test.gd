@@ -81,6 +81,7 @@ func run() -> void:
 		check(saved[kind - Floor.FIRST] == veg.understory[kind].buf, "Детали должны повторяться при обновлении")
 	var tree_x := w.obj_x[0] * GameConfig.TILE
 	var tree_z := w.obj_y[0] * GameConfig.TILE
+	veg.placement.prepare(tree_x, tree_z, 16.0)
 	check(not veg.placement.objects_clear(tree_x, tree_z, 0.0, 1.0, veg.understory[Floor.FIRST + Floor.LOG].box, 3.0), "Поваленное дерево не должно пересекать живой ствол")
 	check(not veg.placement.ground_clear(124.0 * GameConfig.TILE - 1.0, 120.0 * GameConfig.TILE, 2.0), "Дорога у края бревна должна запрещать размещение")
 	check(frozen == var_to_bytes([w.obj_x, w.obj_y, w.obj_k, w.obj_s, w.h, w.moist, w.path_mask]), "Оформление не должно менять мир")

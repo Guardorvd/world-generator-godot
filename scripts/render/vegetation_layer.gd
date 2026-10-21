@@ -339,19 +339,15 @@ func _fill_grass(px: float, pz: float) -> void:
 	var low := Vector3.INF
 	var high := -Vector3.INF
 	placement.occupied.clear()
+	placement.prepare(px, pz, GameConfig.GRASS_R + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
 		entry.count = 0
 		entry.low = Vector3.INF
 		entry.high = -Vector3.INF
+	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
 	for j in range(maxi(0, floori(tz - rT)), mini(w.H - 1, floori(tz + rT)) + 1):
-		# Буфер полон: дальнейшие строки всё равно не смогут добавить экземпляры.
-		if n >= GameConfig.GRASS_MAX:
-			break
 		for i in range(maxi(0, floori(tx - rT)), mini(w.W - 1, floori(tx + rT)) + 1):
-			# Буфер полон: остальные клетки уже не поместятся
-			if n >= GameConfig.GRASS_MAX:
-				break
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
 			if not bd.has("grass") or w.river[k] != 0:
@@ -363,9 +359,9 @@ func _fill_grass(px: float, pz: float) -> void:
 			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
 			var light := StageClimate.natural_conditions(w, i, j).x
 			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
-			var canopy := _forest_surface.get_pixel(i, j).r
-			lush *= 1.0 - 0.65 * canopy
-			_fill_understory(i, j, canopy, light, px, pz)
+			var surface := _forest_surface.get_pixel(i, j)
+			lush *= 1.0 - 0.65 * surface.r
+			_fill_understory(i, j, surface, light, px, pz)
 			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
 			for m in cnt:
@@ -406,14 +402,14 @@ func _fill_grass(px: float, pz: float) -> void:
 	_understory_sites.clear()
 
 
-func _fill_understory(i: int, j: int, canopy: float, sunlight: float, px: float, pz: float) -> void:
+func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> void:
 	var k := j * world.W + i
 	var bi := world.biome[k]
+	var canopy := surface.r
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
 		return
 	if world.path_mask[k] > 0 or world.slope[k] > 0.9:
 		return
-	var surface := _forest_surface.get_pixel(i, j)
 	var moisture := surface.b
 	var light := sunlight * (1.0 - canopy * 0.85)
 	var weights := Understory.weights(bi, moisture, light, canopy)

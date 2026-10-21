@@ -7,6 +7,8 @@ const Floor := preload("res://scripts/render/forest_floor.gd")
 var world: WorldData
 var heights: Heightfield
 var occupied: Array[AABB] = [] # несколько крупных деталей в ближнем круге
+var _cells := {} # Vector2i(клетка) -> [x, z, радиус, объект, ...], см. prepare
+var _max_r := 0.0
 
 
 func _init(w: WorldData, h: Heightfield) -> void:
@@ -64,25 +66,45 @@ func ground_clear(x: float, z: float, radius: float) -> bool:
 	return true
 
 
-func objects_clear(x: float, z: float, rot: float, scale: float, box: AABB, radius: float, owner: int = -1) -> bool:
-	var footprint := Rect2(Vector2(box.position.x, box.position.z), Vector2(box.size.x, box.size.z))
-	# Запас покрывает самый большой валун и ствол за краем соседнего чанка.
-	var reach := radius + 4.0
+## Один раз на обновление: стволы, валуны и кусты вокруг игрока раскладываются по клеткам мира,
+## чтобы проверка детали или травинки смотрела несколько соседних клеток, а не целые чанки.
+func prepare(px: float, pz: float, radius: float) -> void:
+	_cells.clear()
+	_max_r = 0.0
 	var side := world.CS * TILE
-	for cy in range(maxi(0, floori((z - reach) / side)), mini(world.CH, ceili((z + reach) / side))):
-		for cx in range(maxi(0, floori((x - reach) / side)), mini(world.CW, ceili((x + reach) / side))):
+	for cy in range(maxi(0, floori((pz - radius) / side)), mini(world.CH, ceili((pz + radius) / side))):
+		for cx in range(maxi(0, floori((px - radius) / side)), mini(world.CW, ceili((px + radius) / side))):
 			for o in world.chunks[cy * world.CW + cx]:
-				if o == owner:
-					continue
 				var kind := world.obj_k[o]
 				if not Biomes.is_tree(kind) and kind not in [Biomes.T_ROCK, Biomes.T_BUSH, Biomes.T_DEAD, Biomes.T_CACTUS]:
 					continue
 				var r := 0.3 * world.obj_s[o]
 				if kind == Biomes.T_ROCK or kind == Biomes.T_BUSH:
 					r = Biomes.CROWN_RADIUS[kind] * TILE * world.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
-				var dx := world.obj_x[o] * TILE - x
-				var dz := world.obj_y[o] * TILE - z
-				var local := Vector2(cos(rot) * dx - sin(rot) * dz, sin(rot) * dx + cos(rot) * dz) / scale
+				_max_r = maxf(_max_r, r)
+				var cell := Vector2i(floori(world.obj_x[o]), floori(world.obj_y[o]))
+				if not _cells.has(cell):
+					_cells[cell] = []
+				_cells[cell].append_array([world.obj_x[o] * TILE, world.obj_y[o] * TILE, r, o])
+
+
+func objects_clear(x: float, z: float, rot: float, scale: float, box: AABB, radius: float, owner: int = -1) -> bool:
+	var footprint := Rect2(Vector2(box.position.x, box.position.z), Vector2(box.size.x, box.size.z))
+	var reach := radius + _max_r
+	var c := cos(rot)
+	var s := sin(rot)
+	for cy in range(floori((z - reach) / TILE), floori((z + reach) / TILE) + 1):
+		for cx in range(floori((x - reach) / TILE), floori((x + reach) / TILE) + 1):
+			var list: Array = _cells.get(Vector2i(cx, cy), [])
+			for n in range(0, list.size(), 4):
+				if list[n + 3] == owner:
+					continue
+				var dx: float = list[n] - x
+				var dz: float = list[n + 1] - z
+				var r: float = list[n + 2]
+				if absf(dx) > radius + r or absf(dz) > radius + r:
+					continue
+				var local := Vector2(c * dx - s * dz, s * dx + c * dz) / scale
 				if footprint.grow(r / scale).has_point(local):
 					return false
 	return true
