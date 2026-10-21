@@ -87,6 +87,10 @@ static func run(w: WorldData) -> void:
 			else:
 				# t и m в JS читаются из локальных переменных (double), а не из Float32Array
 				b = land_biome(e, t, m, slope[i], dist_ocean[i])
+				# Быстрые горные потоки обнажают камень; равнинные берега остаются
+				# травянистыми. Используем готовые уклон и расстояние, без нового поля.
+				if dist_water[i] <= 1.0 and dist_ocean[i] > 2.5 and slope[i] > 0.55 and e < 0.62:
+					b = Biomes.STONESHORE
 			biome[i] = b
 	w.temp = temp
 	w.moist = moist

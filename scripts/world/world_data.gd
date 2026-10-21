@@ -5,7 +5,8 @@ extends RefCounted
 ## Генерация не зависит от отрисовки, поэтому её можно запускать в отдельном потоке.
 
 # Настройки генерации (js/world/config.js)
-const RIVER_ACC := 200.0  # накопленный сток, начиная с которого клетка — река (до 2.9 — 70: рек было больше)
+const RIVER_ACC := 200.0  # характерный сток небольшой реки; русла начинаются с STREAM_ACC
+const STREAM_ACC := 55.0 # постоянные ручьи; ширина плавно растёт с водосбором, без классов рек
 const CHUNK_SIZE := 16    # сторона чанка растительности в клетках
 ## Поля шума, которые этапы берут целиком: имя шума -> [масштаб в клетках, число октав]
 const NOISE_FIELDS := {moist = [170.0, 4], temp = [200.0, 3], forest = [36.0, 3], cost = [14.0, 2]}
@@ -56,6 +57,7 @@ var biome := PackedByteArray()
 
 # Реки, тропы, поселения, вершины
 var rivers: Array = []        # ломаные из точек {x, y, w — ширина в клетках, e — высота воды}
+var river_exits: Array = []   # выходы за карту: {x, y, dx, dy, acc, e, w}; задел для продолжения стока
 var cost := PackedFloat32Array()
 var path_mask := PackedByteArray()   # 1 — звериная тропа, 2 — тропа людей, 3 — дорога
 var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]

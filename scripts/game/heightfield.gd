@@ -43,7 +43,8 @@ func _init(w: WorldData, with_structures := true) -> void:
 	for i in N:
 		var h := w.h[i]
 		hv_raw[i] = (maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5) if w.ocean[i] != 0 else h * HS
-		hv[i] = hv_raw[i] - (1.4 if w.river[i] != 0 else 0.0)
+		var depth := 0.75 + minf(0.65, sqrt(w.acc[i] / WorldData.RIVER_ACC) * 0.4) if w.river[i] != 0 else 0.0
+		hv[i] = hv_raw[i] - depth
 	# Реки: где лента срезает угол или идёт по диагонали между клетками берега,
 	# рельеф под ней опускается чуть ниже воды, чтобы русло не уходило под землю
 	ribbons = _river_ribbons()
@@ -245,7 +246,7 @@ func _river_ribbons() -> Array:
 		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
-			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.6, y = minf(p.e * HS, ground_at(x, z, true)) - 0.45,
+			pts.append({x = x, z = z, w = p.w * TILE * 0.55 + 0.3, y = p.e * HS - 0.45,
 				lo = p.e * HS - 1.4})
 		for k in range(1, pts.size()):
 			pts[k].y = minf(pts[k].y, pts[k - 1].y)

@@ -97,6 +97,29 @@ static func run(w: WorldData, again := false) -> void:
 		return
 
 	var dist_ocean := Grid.distance_field(W, H, ocean)
+	# Flood даёт безопасный выход из впадин; на склонах выбираем самый крутой
+	# спуск по длине ребра, а не первого соседа, обнаруженного кучей.
+	# Ранг сохраняет порядок накопления и исключает циклы на плоских участках.
+	var rank := PackedInt32Array()
+	rank.resize(N)
+	for k in order_n:
+		rank[order[k]] = k
+	for i in N:
+		if ocean[i] != 0 or lake[i] != 0 or down[i] < 0:
+			continue
+		var best := 0.0
+		var x := i % W
+		var y := i / W
+		for k in 8:
+			var nx: int = x + Grid.DX[k]
+			var ny: int = y + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			var drop := (filled[i] - filled[n]) / Grid.DL[k]
+			if rank[n] < rank[i] and drop > best:
+				best = drop
+				down[i] = n
 
 	# Предварительная влажность (осадки): шум + близость к морю
 	var moist_n := w.noise_field("moist")
@@ -112,7 +135,9 @@ static func run(w: WorldData, again := false) -> void:
 		var i := order[k]
 		if ocean[i] != 0:
 			continue
-		acc[i] += rain[i]
+		# Часть осадков впитывается; небольшой базовый сток поддерживает ручьи
+		# умеренного климата. Единицы и пороги не зависят от размера окна мира.
+		acc[i] += maxf(0.04, rain[i] - 0.12)
 		var d := down[i]
 		if d >= 0:
 			acc[d] += acc[i]
@@ -120,7 +145,7 @@ static func run(w: WorldData, again := false) -> void:
 	var river := PackedByteArray()
 	river.resize(N)
 	for i in N:
-		if ocean[i] == 0 and lake[i] == 0 and acc[i] >= WorldData.RIVER_ACC:
+		if ocean[i] == 0 and lake[i] == 0 and acc[i] >= WorldData.STREAM_ACC:
 			river[i] = 1
 
 	# С 3.1 берег поднимается после определения рек: русла у входа и выхода озера остаются
