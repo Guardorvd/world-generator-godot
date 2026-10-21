@@ -206,6 +206,9 @@ func _surface_check() -> void:
 	w.h.fill(0.1)
 	ground = Heightfield.new(w, false)
 	_check(StageTrails._bridge_clear(ground, crossing[0], crossing[-1]), "ровный свободный настил допускается")
+	_check(StageTrails._bridge_site(ground, crossing, PackedByteArray([0, 1, 1, 0]), 0, 3,
+		PackedInt32Array([crossing[0]]), axis) == Vector2i(-1, -1),
+		"мокрая маска без настоящей воды не создаёт мост")
 	# Мост не должен приземляться на узкий сухой выступ, если края настила остаются над водой.
 	w.lake[3 * w.W + 5] = 1
 	w.filled[3 * w.W + 5] = 0.14
@@ -235,8 +238,7 @@ func _ravine_landing_check() -> void:
 		values.resize(w.N)
 		if name == "cost": values.fill(1.0)
 		w.set(name, values)
-	# A dry ravine triggers the ravine bridge branch without going through the
-	# water-crossing scan. First prove that this profile normally gets a bridge.
+	# Сухая впадина больше не заменяется декоративным мостом.
 	for x in range(9, 12): w.h[12 * W + x] = 0.06
 	var path := Grid.line_cells(2, 12, 21, 12, W)
 	var ground := Heightfield.new(w, false)
@@ -247,10 +249,9 @@ func _ravine_landing_check() -> void:
 	on_axis.resize(w.N)
 	var state := {detour = false, on_axis = on_axis, surface = ground}
 	var normal := StageTrails._structures(w, path, true, finder, w.cost, state)
-	var makes_ravine_bridge := not normal.is_empty() and not w.bridges.is_empty()
-	_check(makes_ravine_bridge, "ровный сухой овраг использует мостовую ветку")
-	# Lower the lateral terrain beside both actual bridge endpoints. The center path
-	# remains unchanged, but the full-width bank support is no longer safe.
+	var keeps_ground_route := normal == path and w.bridges.is_empty()
+	_check(keeps_ground_route, "сухой овраг сохраняет наземную дорогу без лишнего моста")
+	# Понижение бокового рельефа тоже не должно создавать мост над сушей.
 	w.bridges.clear()
 	w.path_mask.fill(0)
 	w.h[11 * W + 8] -= 20.0 / GameConfig.HS

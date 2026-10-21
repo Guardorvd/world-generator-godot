@@ -7,9 +7,9 @@ extends RefCounted
 ##
 ## Дороги связывают все поселения (остовное дерево), поэтому ищутся по стоимости, в которой вода
 ## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
-## Где дорога или тропа между поселениями пересекает реку, озеро или овраг, ставится мост,
+## Где дорога или тропа между поселениями пересекает воду, ставится мост,
 ## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
-## мост через овраг, под которым озеро или море, не ставится: дорога огибает воду по берегу.
+## сухие впадины дорога проходит по рельефу, без декоративных мостов.
 ## Туннели и обходы горы чередуются: после туннеля следующий хребет путь по возможности обходит
 ## понизу (_detour), после обхода — снова туннель. Высоты здесь в единицах w.h (1 = 260 м).
 ## Путь, который пересекает воду или хребет там же, где уже построен мост или туннель (концы рядом,
@@ -21,8 +21,6 @@ const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
 
 const BRIDGE_COST := 30.0   # стоимость клетки воды для дороги: дорога обходит воду, если обход не слишком длинный
-const DIP := 0.03           # овраг глубже этого (около 8 м) под краями — мост
-const DIP_LEN := 20         # самый длинный мост через овраг, клеток
 const RISE := 0.1           # хребет выше этого (около 26 м) над входами — туннель
 const RISE_LEN := 30        # самый длинный туннель, клеток
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
@@ -708,8 +706,8 @@ static func _wet(w: WorldData, i: int) -> bool:
 
 
 ## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
-## в котором участки под ними заменены прямыми. Мост — через воду (от берега до берега) или через овраг
-## глубже DIP; туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
+## в котором участки под ними заменены прямыми. Мост — только через воду между берегами;
+## туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
 ## Тропа (road = false) переходит реку не шире FORD_LEN вброд. Новый туннель через раз заменяется
 ## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
@@ -772,10 +770,8 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 			hp[k] = (surface.water_level[c] if wet[k] != 0 and surface.water_level[c] > -INF else surface.hv[c]) / GameConfig.HS
 		xs[k] = c % W
 		ys[k] = c / W
-	# наибольшая и наименьшая высота на SPAN клеток пути вперёд: где до хребта или оврага далеко,
-	# конец моста или туннеля не ищется
+	# Наибольшая высота впереди: без хребта конец туннеля не ищется.
 	var ahead_max := _window(hp, SPAN, true)
-	var ahead_min := _window(hp, SPAN, false)
 	var out := PackedInt32Array([p[0]])
 	var i := 0
 	while i < n - 1:
@@ -791,24 +787,14 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				j = -1
 			elif state.has("surface"):
 				var shore := j
-				# Не обязательно ставить конец на первой сухой клетке: чуть дальше берег
-				# может дать ровный настил и безопасный выезд вместо ступеньки или стены.
-				while j < mini(n, i + SPAN) and (wet[j] != 0 or not _bridge_clear(state.surface, p[i], p[j])):
-					j += 1
-				# Иногда безопасная опора находится на пару клеток раньше кромки воды.
-				var back := 1
-				while j >= mini(n, i + SPAN) and back <= 3 and i >= back and out.size() > back \
-						and out[-1 - back] == p[i - back] and wet[i - back] == 0 and state.on_axis[p[i - back]] == 0:
-					j = shore
-					while j < mini(n, i - back + SPAN) and (wet[j] != 0 or not _bridge_clear(state.surface, p[i - back], p[j])):
-						j += 1
-					if j < mini(n, i - back + SPAN):
-						i -= back
-						out.resize(out.size() - back)
-						break
-					j = n
-					back += 1
-				if j >= mini(n, i + SPAN):
+				# Короткая переправа между устойчивыми берегами; не вытягиваем мост
+				# вдоль дороги до случайной далёкой клетки с подходящей высотой.
+				var site := _bridge_site(state.surface, p, wet, i, shore, out, state.on_axis)
+				j = site.y
+				if site.x >= 0:
+					out.resize(out.size() - (i - site.x))
+					i = site.x
+				if j < 0:
 					# Последняя неудача уже исчерпала запас объездов: ещё один A* не используется.
 					if retries >= BRIDGE_RETRIES:
 						return PackedInt32Array()
@@ -825,31 +811,14 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 						_restore_structures(w, finder, state, ctx)
 						return _structures(w, q, road, finder, bypass, state, retries + 1)
 					return PackedInt32Array()
-		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE or hp[i + 1] < hp[i] and ahead_min[i] <= hp[i] - DIP:
-			var up := hp[i + 1] > hp[i]
-			j = _span_end(hp, wet, xs, ys, i, up)
-			# вход как можно ближе к хребту или оврагу
-			while j > 0 and i + 1 < j - 2 and _span_end(hp, wet, xs, ys, i + 1, up) == j:
+		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE:
+			j = _span_end(hp, wet, xs, ys, i)
+			while j > 0 and i + 1 < j - 2 and _span_end(hp, wet, xs, ys, i + 1) == j:
 				out.append(p[i + 1])
 				i += 1
-			if up:
-				kind = "tunnel"
-				# под горным озером, через реку в выемке, наперерез другому туннелю и поперёк прежней дороги у входа
-				# туннель не прокладывается
-				if j > 0 and _same(w, w.tunnels, p[i], p[j], _key_cell(p, hp, wet, i, j)).is_empty():
-					if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R) or _path_at_portal(w, p[i], p[j]):
-						j = -1
-			elif j > 0:
-				# над озером или заливом мост через овраг не ставится: путь идёт по берегу. С 3.0 и там, где
-				# земля по прямой между концами выше обоих концов (два оврага с бугром между ними): настил ушёл бы в бугор
-				var top := maxf(hp[i], hp[j])
-				for c: int in Grid.line_cells(xs[i], ys[i], xs[j], ys[j], W):
-					if w.ocean[c] != 0 or w.lake[c] != 0 or w.h[c] > top:
-						j = -1
-						break
-				# Водная переправа уже ищет безопасный берег. Мост через овраг тоже
-				# проверяет всю ширину въезда, прежде чем заменить естественный путь.
-				if j > 0 and state.has("surface") and not _bridge_clear(state.surface, p[i], p[j]):
+			kind = "tunnel"
+			if j > 0 and _same(w, w.tunnels, p[i], p[j], _key_cell(p, hp, wet, i, j)).is_empty():
+				if _near_tunnel(w, p[i], p[j]) or _wet_near(w, p[i], p[j], TUNNEL_R) or _path_at_portal(w, p[i], p[j]):
 					j = -1
 		if j < 0:
 			out.append(p[i + 1])
@@ -911,6 +880,39 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 		out.append_array(from_b)
 		i = j
 	return _no_backtrack(out)
+
+
+## Ищем ближайшую пару берегов, а не первый подходящий дальний конец.
+## Не меняем уже принятую ось или путь до текущего подхода.
+static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedByteArray,
+		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray) -> Vector2i:
+	var best := Vector2i(-1, -1)
+	var score := INF
+	for back in range(4):
+		var a := start - back
+		if a < 0 or out.size() <= back or out[-1 - back] != p[a] or wet[a] != 0:
+			break
+		if back > 0 and on_axis[p[a]] != 0:
+			break
+		for b in range(shore, mini(p.size(), mini(shore + 7, a + SPAN))):
+			if wet[b] != 0:
+				continue
+			var length := Grid.hypot(p[b] % surface.world.W - p[a] % surface.world.W,
+				p[b] / surface.world.W - p[a] / surface.world.W)
+			if length >= score or not _crosses_water(surface, p[a], p[b]) or not _bridge_clear(surface, p[a], p[b]):
+				continue
+			best = Vector2i(a, b)
+			score = length
+	return best
+
+
+## Маска реки включает сухой берег; мост нужен над самой водой, а не над маской.
+static func _crosses_water(surface: Heightfield, a: int, b: int) -> bool:
+	var s := surface._axis(a, b, false)
+	for k in range(1, ceili(s.len)):
+		if surface.depth_at(s.ax + s.ux * k, s.az + s.uz * k) > 0.3:
+			return true
+	return false
 
 
 ## Тот же настил, что в игре: пологий, выше воды и земли, с доступными подходами.
@@ -1139,16 +1141,15 @@ static func _near_tunnel(w: WorldData, a: int, b: int) -> bool:
 	return false
 
 
-## Конец моста через овраг (up = false) или туннеля (up = true), который начинается в p[i]:
-## первая клетка, после которой путь уже перевалил через хребет или овраг, или -1
-static func _span_end(hp: PackedFloat32Array, wet: PackedByteArray, xs: PackedInt32Array, ys: PackedInt32Array, i: int, up: bool) -> int:
+## Конец туннеля, который начинается в p[i]:
+## первая клетка, после которой путь уже перевалил через хребет, или -1
+static func _span_end(hp: PackedFloat32Array, wet: PackedByteArray, xs: PackedInt32Array, ys: PackedInt32Array, i: int) -> int:
 	var ha := hp[i]
 	var ax := xs[i]
 	var ay := ys[i]
-	var lim := RISE_LEN if up else DIP_LEN
+	var lim := RISE_LEN
 	var lim2 := lim * lim
 	var top := -INF
-	var bottom := INF
 	for j in range(i + 1, mini(hp.size(), i + SPAN + 1)):
 		if wet[j] != 0:
 			return -1
@@ -1159,12 +1160,9 @@ static func _span_end(hp: PackedFloat32Array, wet: PackedByteArray, xs: PackedIn
 		if d2 > lim2:
 			return -1
 		if j >= i + 3 and (hb - ha) * (hb - ha) <= GRADE * GRADE * d2:
-			if up and top - maxf(ha, hb) >= RISE:
-				return j
-			if not up and minf(ha, hb) - bottom >= DIP:
+			if top - maxf(ha, hb) >= RISE:
 				return j
 		top = maxf(top, hb)
-		bottom = minf(bottom, hb)
 	return -1
 
 

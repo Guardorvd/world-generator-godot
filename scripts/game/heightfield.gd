@@ -8,11 +8,12 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
-const BRIDGE_HALF := 2.6    # настил шире основной дороги, чтобы опираться на берег по обе стороны въезда
+const BRIDGE_HALF := 2.2    # настил шире основной дороги, чтобы опираться на берег по обе стороны въезда
 const TUNNEL_HALF := 2.5    # полуширина туннеля, м
 const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
 const TUNNEL_CUT := StageTrails.TUNNEL_R   # выемка под туннелем: клетки ближе этого к оси, в клетках
-const ARCH := 0.04          # подъём середины моста на метр длины (не больше 3 м)
+const BRIDGE_SECTION := 2.0 # общая длина секции модели и опоры, м
+const ARCH := 0.02          # подъём середины моста на метр длины (не больше 1.2 м)
 const STEP := 0.8           # на настил можно шагнуть или въехать, если ноги не ниже него на столько
 const WALL := 0.6           # толщина перил моста, в которые упирается игрок, м
 const _NO_SEGMENTS: Array = []  # пустой список отрезков реки: не новый массив на каждый вызов
@@ -183,7 +184,7 @@ func _axis(a: int, b: int, tunnel: bool) -> Dictionary:
 		ax = (a % W + 0.5) * TILE, az = (a / W + 0.5) * TILE, bx = (b % W + 0.5) * TILE, bz = (b / W + 0.5) * TILE}
 	# концы не могут совпасть (иначе направление оси не считается), длина не ниже сантиметра
 	s.len = maxf(Grid.hypot(s.bx - s.ax, s.bz - s.az), 0.01)
-	s.arch = 0.0 if tunnel else minf(s.len * ARCH, 3.0)
+	s.arch = 0.0 if tunnel else minf(s.len * ARCH, 1.2)
 	s.ux = (s.bx - s.ax) / s.len
 	s.uz = (s.bz - s.az) / s.len
 	return s
@@ -193,7 +194,15 @@ func _axis(a: int, b: int, tunnel: bool) -> Dictionary:
 ## (s.arch — подъём середины), чтобы длинный настил не лежал на воде
 func level(s: Dictionary, t: float) -> float:
 	var u := clampf(t / s.len, 0.0, 1.0)
-	return lerpf(s.ay, s.by, u) + s.arch * sin(PI * u)
+	if s.arch == 0.0:
+		return lerpf(s.ay, s.by, u)
+	# Та же ломаная, что верх настила в StructuresBuilder: колёса не висят над мешем.
+	var count := maxi(1, ceili(s.len / BRIDGE_SECTION))
+	var section := minf(u * count, count - 1.0)
+	var k := floori(section)
+	var blend := u * count - k
+	var rise := lerpf(sin(PI * k / count), sin(PI * (k + 1) / count), blend)
+	return lerpf(s.ay, s.by, u) + s.arch * rise
 
 
 ## Сооружения, которые задевает клетка с точкой (x, z); null, если точка за картой (сооружений там нет)

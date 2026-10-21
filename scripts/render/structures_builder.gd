@@ -36,6 +36,7 @@ static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
 static func build(parent: Node3D, heights: Heightfield) -> void:
 	var batch := MeshBatch.new()
 	var wood := _mat(Color8(0x8a, 0x6a, 0x48))
+	var board := _mat(Color8(0x80, 0x64, 0x47))
 	var rail := _mat(Color8(0x6b, 0x4f, 0x35))
 	var stone := _mat(Color8(0x8c, 0x87, 0x80))
 	var portal := _mat(Color8(0x6f, 0x6a, 0x63))
@@ -50,7 +51,7 @@ static func build(parent: Node3D, heights: Heightfield) -> void:
 			var up := Vector3.UP if absf((b - a).normalized().y) < 0.99 else Vector3.BACK
 			_tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, stone, portal)
 		else:
-			_bridge(batch, heights, s, wood, rail)
+			_bridge(batch, heights, s, wood, rail, board)
 	# у каждого моста свои длины пролётов: кэш нужен только на время сборки, иначе он растёт от мира к миру
 	_boxes.clear()
 	var mi := batch.build("Structures")
@@ -58,10 +59,10 @@ static func build(parent: Node3D, heights: Heightfield) -> void:
 		parent.add_child(mi)
 
 
-## Мост: настил дугой из прямых пролётов около 4 м, перила со столбиками, опоры до земли или дна
-static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: Material, rail: Material) -> void:
+## Мост: невысокий деревянный настил, перила и сваи; профиль общий с движением.
+static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: Material, rail: Material, board: Material) -> void:
 	var half: float = s.half
-	var n := maxi(1, ceili(s.len / 4.0))
+	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	var side := Vector3(s.uz, 0, -s.ux) * (half + 0.1)
 	for k in n:
 		var t0: float = s.len * k / n
@@ -72,16 +73,19 @@ static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood:
 		if seg < 0.01:
 			continue  # вырожденный пролёт: направление не задано
 		var at := Transform3D(Basis.looking_at(p1 - p0, Vector3.UP), p0)
-		# у крайних пролётов настил чуть длиннее, чтобы концы лежали на берегу
-		var extra := (0.5 if k == 0 else 0.0) + (0.5 if k == n - 1 else 0.0)
-		var shift := (0.25 if k == n - 1 else 0.0) - (0.25 if k == 0 else 0.0)
-		_box(batch, at, Vector3(half * 2.0, 0.3, seg + extra + 0.05), Vector3(0, -0.15, -seg * 0.5 - shift), wood)
+		# Поперечные доски лежат в одной плоскости: швы видны цветом, без щелей и ступенек.
+		var boards := maxi(1, ceili((t1 - t0) / 0.4))
+		for plank in boards:
+			_deck(batch, p0.lerp(p1, float(plank) / boards),
+				p0.lerp(p1, float(plank + 1) / boards), half, wood if plank % 2 == 0 else board)
+		for sd: float in [-1.0, 1.0]:
+			_box(batch, at, Vector3(0.18, 0.28, seg), Vector3(sd * (half - 0.3), -0.36, -seg * 0.5), rail)
 		for sd: float in [-1.0, 1.0]:
 			_box(batch, at, Vector3(0.12, 0.12, seg), Vector3(sd * (half + 0.1), 1.0, -seg * 0.5), rail)
 		for q: Vector3 in [p0 + side, p0 - side]:
 			_post(batch, q, rail)
 		# опора под стыком пролётов примерно через 8 м
-		if k > 0 and k % 2 == 0:
+		if k > 0 and k % 4 == 0:
 			for q: Vector3 in [p0 + side * 0.85, p0 - side * 0.85]:
 				var g := heights.ground_at(q.x, q.z)
 				var tall: float = q.y - 0.3 - g + 1.0
@@ -90,6 +94,15 @@ static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood:
 	var end := Vector3(s.bx, s.by, s.bz)
 	for q: Vector3 in [end + side, end - side]:
 		_post(batch, q, rail)
+
+
+## Верх точно совпадает с level(), толщина откладывается вертикально.
+static func _deck(batch: MeshBatch, a: Vector3, b: Vector3, half: float, mat: Material) -> void:
+	var forward := (b - a).normalized()
+	var side := Vector3(-forward.z, 0, forward.x).normalized()
+	var length := Vector2(b.x - a.x, b.z - a.z).length()
+	var basis := Basis(side, Vector3.UP, -(b - a) / length)
+	_box(batch, Transform3D(basis, (a + b) * 0.5), Vector3(half * 2.0, 0.24, length), Vector3(0, -0.12, 0), mat)
 
 
 static func _tunnel(batch: MeshBatch, at: Transform3D, half: float, length: float, mid: float, stone: Material, portal: Material) -> void:
