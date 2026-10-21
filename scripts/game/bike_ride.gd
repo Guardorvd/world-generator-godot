@@ -198,22 +198,22 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		surf = PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
 		path_weight = 1.0 if surf != RoadSurface.NONE else 0.0
 	var on_path := surf != RoadSurface.NONE
+	var grip := 0.85
+	if on_path:
+		grip = lerpf(grip, RoadSurface.LIST[surf].grip, path_weight)
 	var speed0 := speed
 	if not airborne:
 		var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
 		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
-		_step_speed(throttle, boost, slope, terrain, dt)
+		_step_speed(throttle, boost, slope, terrain, dt, grip)
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
 		_brake_hold = 0.0
 		speed *= exp(-0.03 * dt)
 
-	var grip := 0.85
-	if on_path:
-		grip = lerpf(grip, RoadSurface.LIST[surf].grip, path_weight)
 	var free_now := fits(x, z, heading, w, heights)
 	var h0 := heading
-	heading += _step_turn(turn, grip, dt)
+	heading += _step_turn(turn, grip, dt, maxf(0.0, -throttle))
 	# Вплотную к стене колесо не поворачивается в неё, накопленного рывка тоже нет.
 	if free_now and not fits(x, z, heading, w, heights):
 		heading = h0
@@ -276,19 +276,28 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Отдельного заноса и балансирования нет: поворот всегда идёт в сторону управления.
-func _step_turn(turn: float, grip: float, dt: float) -> float:
+func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	steer = move_toward(steer, turn, dt * (7.0 if is_zero_approx(turn) else 5.0))
 	var pace := absf(speed)
+	# На малой скорости манёвр лёгкий; на большой у перекладки появляется вес.
+	var response := lerpf(10.0, 4.5, smoothstep(3.0, 16.0, pace)) * grip
 	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
 	var wanted := -steer * rate * (1.0 if speed >= 0.0 else -1.0)
+	var limit := rate
 	if airborne:
 		wanted *= 0.25
+		limit *= 0.25
+		response = 3.0
 	else:
-		var limit := CORNER_GRIP * grip / maxf(pace, 3.0)
-		var excess := maxf(0.0, absf(wanted) * pace - CORNER_GRIP * grip)
+		# Торможение расходует часть сцепления: дуга шире, но управление сохраняется.
+		var corner_grip := CORNER_GRIP * grip * lerpf(1.0, 0.75, clampf(brake, 0.0, 1.0))
+		limit = minf(rate, corner_grip / maxf(pace, 3.0))
+		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
 		wanted = clampf(wanted, -limit, limit)
 		speed = move_toward(speed, 0.0, excess * 0.08 * dt)
-	_yaw_rate = move_toward(_yaw_rate, wanted, (3.0 if airborne else 7.0) * dt)
+	_yaw_rate = move_toward(_yaw_rate, wanted, response * dt)
+	# Остаточная инерция не вращает стоящий велосипед и не превышает сцепление.
+	_yaw_rate = clampf(_yaw_rate, -limit, limit)
 	return _yaw_rate * dt
 
 
@@ -404,7 +413,7 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
 ## speed — скорость по горизонтали, поэтому проекция тяжести — slope / (1 + slope²).
-func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float) -> void:
+func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0) -> void:
 	var top := GameConfig.BIKE_SPEED * terrain
 	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
 	var drag := GameConfig.BIKE_DRAG / (terrain * terrain)
@@ -435,7 +444,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	if throttle < 0.0:
 		# Тормоз удерживает остановку даже на спуске; сила нарастает с нажатием стика.
 		speed += gravity * dt
-		speed = move_toward(speed, 0.0, (GameConfig.BIKE_BRAKE * absf(throttle) + resistance) * dt)
+		speed = move_toward(speed, 0.0, (GameConfig.BIKE_BRAKE * grip * absf(throttle) + resistance) * dt)
 	else:
 		speed += (drive + gravity) * dt
 		speed = move_toward(speed, 0.0, resistance * dt)

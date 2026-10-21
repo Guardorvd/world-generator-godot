@@ -57,6 +57,34 @@ func corner(pace: float, surface: int, hz := 60) -> BikeRide:
 	return b
 
 func _init() -> void:
+	# 7.3: инерция перекладки и общий запас сцепления тормоза/поворота.
+	var slow_response := bike(4.0)
+	var fast_response := bike(16.0)
+	slow_response.steer = 1.0
+	fast_response.steer = 1.0
+	slow_response._step_turn(1.0, 1.0, DT)
+	fast_response._step_turn(1.0, 1.0, DT)
+	check(absf(slow_response._yaw_rate) > absf(fast_response._yaw_rate), "на скорости поворот набирается более инерционно")
+	fast_response.speed = 0.0
+	check(fast_response._step_turn(1.0, 1.0, DT) == 0.0, "остановка гасит остаточное вращение")
+	var coast_turn := bike(16.0)
+	var brake_turn := bike(16.0)
+	for i in 30:
+		coast_turn._step_turn(1.0, 1.0, DT)
+		brake_turn._step_turn(1.0, 1.0, DT, 1.0)
+	check(absf(brake_turn._yaw_rate) < absf(coast_turn._yaw_rate), "тормоз оставляет меньше сцепления для резкого поворота")
+	coast_turn._step_turn(1.0, 0.75, DT)
+	check(absf(coast_turn._yaw_rate * coast_turn.speed) <= BikeRide.CORNER_GRIP * 0.75 + 0.01,
+		"при въезде на песок накопленный поворот ограничен сцеплением")
+	var packed_brake := bike(12.0)
+	var sand_brake := bike(12.0)
+	for i in 60:
+		w.surface = RoadSurface.PACKED
+		tick(packed_brake, 0.0, false, -1.0)
+		w.surface = RoadSurface.SAND
+		tick(sand_brake, 0.0, false, -1.0)
+	check(sand_brake.speed > packed_brake.speed + 1.0 and absf(sand_brake.z) > absf(packed_brake.z),
+		"на песке тормозной путь длиннее, чем на укатанной земле")
 	var stopped := corner(0.0, RoadSurface.PACKED)
 	check(stopped.heading == 0.0 and stopped.lean == 0.0, "на месте нет поворота корпуса и завала")
 	var tight := corner(5.0, RoadSurface.PACKED)
