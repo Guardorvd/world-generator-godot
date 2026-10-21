@@ -67,11 +67,17 @@ func _run() -> void:
 	b.speed = 11.0
 	b.steer = 1.0
 	b.squash = 0.12
+	b.squash_f = 0.14
+	b.squash_r = 0.1
+	var fork_len: float = view._front_struts[0][3]
 	view.snap(b)
 	view.draw(1.0)
 	check(is_equal_approx(view._steering.rotation.y, view.front_wheel.rotation.y), "руль, вилка и колесо поворачиваются вместе")
 	check(view.get_node("Rider/Head").position.y < 1.66 and view.rear_wheel.position.y > BikeView.WHEEL_Y,
 		"седок группируется, колёса компенсируют сжатие подвески")
+	var fork: Node3D = view._front_struts[0][0]
+	check(view.front_wheel.position.y > view.rear_wheel.position.y and fork.basis.y.length() * fork_len < fork_len - 0.1,
+		"у каждого колеса свой ход, вилка укорачивается на сжатие")
 	view.free()
 	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
 	root.add_child(game)

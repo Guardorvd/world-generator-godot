@@ -1,6 +1,6 @@
 class_name BikeRide
 extends RefCounted
-## Велосипед: где стоит, разгон и торможение, руль, подъёмы, полёт с горбов и прыжок, подвеска.
+## Велосипед: где стоит, разгон и торможение, руль, подъёмы, полёт с горбов и прыжок, подвеска колёс.
 ## Без узлов сцены, как PlayerState. Пока игрок едет, велосипед везёт его: положение игрока
 ## берётся отсюда. Проходимость та же, что у пешехода (PlayerState.is_passable): глубокая вода,
 ## дома, перила мостов и стены туннелей не пускают; по настилу моста велосипед едет, как по земле.
@@ -27,6 +27,10 @@ const HUB := 0.53        # оси колёс впереди и позади се
 const LIFT := 0.2        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
 const LOOK: Array[float] = [0.1, 0.2, 0.3]
 const DROP_STEP := 0.12  # земля ушла вниз за один такт больше этого — это край, а не излом: падаем
+## С 7.1 подвеска у каждого колеса своя: пружина-демпфер от профиля под этим колесом.
+const KICK_MAX := 6.0    # больший скачок (ступенька, телепорт) ограничивается, м/с
+const PITCH_LOAD := 0.004 # м хода на 1 м/с² разгона: торможение грузит вилку, разгон — задний ход
+const BUMP := 0.035      # высота мелких кочек под колесом на бездорожье (rough 1), м
 
 var x := 0.0          # метры
 var z := 0.0
@@ -41,9 +45,18 @@ var tilt := 0.0       # наклон вдоль склона или полёта
 var wheel := 0.0      # угол поворота колёс
 var crank := 0.0      # угол педалей
 var steer := 0.0      # положение руля -1..1
-var squash := 0.0     # насколько просела подвеска, м (меньше нуля — вытянулась при прыжке)
-var squash_v := 0.0
-var sway := 0.0       # покачивание на неровностях, радианы крена
+var squash := 0.0     # средний ход подвески, м (меньше нуля — вытянулась при прыжке); для камеры и седока
+var squash_f := 0.0   # ход вилки, м
+var squash_r := 0.0   # ход заднего колеса, м
+var squash_fv := 0.0  # скорость сжатия вилки, м/с
+var squash_rv := 0.0
+var ground_f := 0.0   # точка касания переднего колеса относительно y, м (в полёте — где колесо висит)
+var ground_r := 0.0   # то же для заднего
+var _g_f := 0.0       # высота земли под колёсами на прошлом такте и её вертикальная скорость
+var _g_r := 0.0
+var _gv_f := 0.0
+var _gv_r := 0.0
+var _fresh := true    # колёса только встали на землю: прошлых высот нет, толчка не считаем
 var _dist := 0.0      # пройденный путь, для покачивания
 var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
@@ -87,6 +100,7 @@ func mount(p: PlayerState) -> void:
 	speed = 0.0
 	_yaw_rate = 0.0
 	_coyote = 0.0
+	_fresh = true
 	p.x = x
 	p.z = z
 	p.vy = 0.0
@@ -102,9 +116,14 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	speed = 0.0
 	lean = 0.0
 	steer = 0.0
-	sway = 0.0
 	squash = 0.0
-	squash_v = 0.0
+	squash_f = 0.0
+	squash_r = 0.0
+	squash_fv = 0.0
+	squash_rv = 0.0
+	ground_f = 0.0
+	ground_r = 0.0
+	_fresh = true
 	_hop_buf = 0.0
 	_brake_hold = 0.0
 	_yaw_rate = 0.0
@@ -220,29 +239,28 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
 
-	_step_vertical(_contact(x, z, heights), hop, dt, heights)
-	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015))
+	# на неровной местности (лес, кусты, бездорожье) кочек под колёсами больше, чем на тропе
+	var rough := clampf(1.3 - PlayerState.terrain_speed(w, x, z, heights), 0.15, 1.0)
+	if on_path:
+		rough = lerpf(rough, RoadSurface.LIST[surf].rough, path_weight)
 
-	# Рама следует рельефу; разгон приподнимает нос, торможение слегка загружает передок.
+	_step_vertical(_contact(x, z, heights), hop, dt, heights)
+	_step_wheels(heights, rough, dt)
 	var acceleration := clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 7.0)
-	var tilt_goal := atan(_slope(heights)) + acceleration * 0.008
+	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015), acceleration)
+
+	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
+	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
+	var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB)
 	if airborne:
 		tilt_goal = clampf(atan2(vy, maxf(absf(speed), 4.0)), -0.55, 0.55)
 		if speed < 0.0:
 			tilt_goal = -tilt_goal
-	tilt = lerpf(tilt, tilt_goal, 1.0 - exp(-dt * (5.0 if airborne else 12.0)))
+	tilt = lerpf(tilt, tilt_goal, 1.0 - exp(-dt * (5.0 if airborne else 25.0)))
 	# Крен от реального поворота, а не от кнопки: на месте не заваливаемся.
 	# Умеренный визуальный крен (до 16°), без изменения радиуса поворота и сцепления.
 	var lean_goal := 0.0 if airborne else clampf(atan(lateral / GameConfig.GRAVITY) * 0.5, -0.28, 0.28)
 	lean = lerpf(lean, lean_goal, 1.0 - exp(-dt * (2.5 if airborne else 9.0)))
-	# на неровной местности (лес, кусты, бездорожье) качает сильнее, чем на тропе
-	var rough := clampf(1.3 - PlayerState.terrain_speed(w, x, z, heights), 0.15, 1.0)
-	if on_path:
-		rough = lerpf(rough, RoadSurface.LIST[surf].rough, path_weight)
-	var sway_goal := 0.0
-	if not airborne:
-		sway_goal = (sin(_dist * 1.9) * 0.6 + sin(_dist * 4.7 + 1.3) * 0.4) * 0.03 * rough * minf(1.0, absf(speed) / 5.0)
-	sway = lerpf(sway, sway_goal, minf(1.0, dt * 8.0))
 
 	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность
 	wheel = fmod(wheel + speed * dt / WHEEL_R, TAU)
@@ -287,7 +305,8 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 		air_time = 0.0
 		# Наследуем подъём, но крутой излом не превращается в катапульту.
 		vy = clampf(vy, 0.0, 3.0) + GameConfig.BIKE_HOP
-		squash_v -= 0.9
+		squash_fv -= 0.9
+		squash_rv -= 0.9
 	if airborne:
 		air_time += dt
 		y += (vy - GameConfig.GRAVITY * dt * 0.5) * dt
@@ -307,25 +326,80 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 			var gv := (g - y) / maxf(dt, 0.0001)
 			# ступенька (въезд на настил, шов полотна) — не склон: её подъём не становится скоростью взлёта
 			gv = minf(gv, absf(speed) * 1.2 + 0.5)
-			squash_v += clampf(gv - vy, -4.0, 6.0) * 0.18
 			vy = gv
 			y = g
 
 
-## Пружина с короткими подшагами не раскачивается от длинного такта.
-func _step_suspension(dt: float, load := 0.0) -> void:
+## Колёса на точках касания. Подвеска колеса получает толчок, когда вертикальная скорость земли
+## под ним меняется (излом, ступенька, кочка): переднее колесо встречает излом раньше заднего.
+func _step_wheels(heights: Heightfield, rough: float, dt: float) -> void:
+	if airborne:
+		# в полёте колёса висят на подвеске под рамой
+		ground_f = sin(tilt) * HUB
+		ground_r = -ground_f
+		_fresh = true
+		return
+	var fx := -sin(heading) * HUB
+	var fz := -cos(heading) * HUB
+	var gf := heights.surface_at(x + fx, z + fz, y)
+	var gr := heights.surface_at(x - fx, z - fz, y)
+	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
+	gf += BUMP * rough * _bump(_dist + HUB)
+	gr += BUMP * rough * _bump(_dist - HUB)
+	ground_f = gf - y
+	ground_r = gr - y
+	if _fresh:
+		_fresh = false
+		_g_f = gf
+		_g_r = gr
+		_gv_f = vy
+		_gv_r = vy
+		return
+	var vf := (gf - _g_f) / maxf(dt, 0.0001)
+	var vr := (gr - _g_r) / maxf(dt, 0.0001)
+	# колесо поднимается вместе с землёй сразу, рама — через пружину: разница и есть сжатие
+	squash_fv += clampf(vf - _gv_f, -KICK_MAX, KICK_MAX)
+	squash_rv += clampf(vr - _gv_r, -KICK_MAX, KICK_MAX)
+	_g_f = gf
+	_g_r = gr
+	_gv_f = vf
+	_gv_r = vr
+
+
+## Кочка под колесом на отметке пути d, 0..1
+static func _bump(d: float) -> float:
+	var n := sin(d * 2.3) * 0.6 + sin(d * 5.9 + 1.3) * 0.4
+	return maxf(0.0, n) ** 2
+
+
+## Две пружины-демпфера, вилка и задний ход. Короткие подшаги не дают раскачки от длинного такта.
+## load — сжатие от поворота, acceleration — разгон (+) и торможение (-), м/с².
+func _step_suspension(dt: float, load := 0.0, acceleration := 0.0) -> void:
 	var target := -0.035 if airborne else load
+	var shift := 0.0 if airborne else acceleration * PITCH_LOAD
 	var ticks := maxi(1, ceili(dt * 120.0))
 	var h := dt / ticks
+	var f := Vector2(squash_f, squash_fv)
+	var r := Vector2(squash_r, squash_rv)
 	for i in ticks:
-		squash_v += (SPRING_K * (target - squash) - SPRING_DAMP * squash_v) * h
-		squash += squash_v * h
-		if squash > SAG_MAX:
-			squash = SAG_MAX
-			squash_v = minf(squash_v, 0.0)
-		elif squash < -STRETCH_MAX:
-			squash = -STRETCH_MAX
-			squash_v = maxf(squash_v, 0.0)
+		f = _spring(f, target - shift, h)
+		r = _spring(r, target + shift, h)
+	squash_f = f.x
+	squash_fv = f.y
+	squash_r = r.x
+	squash_rv = r.y
+	squash = (squash_f + squash_r) * 0.5
+
+
+## Подшаг одной пружины: s — ход и скорость сжатия; упоры на SAG_MAX и STRETCH_MAX
+static func _spring(s: Vector2, target: float, h: float) -> Vector2:
+	s.y += (SPRING_K * (target - s.x) - SPRING_DAMP * s.y) * h
+	s.x += s.y * h
+	if s.x > SAG_MAX:
+		s = Vector2(SAG_MAX, minf(s.y, 0.0))
+	elif s.x < -STRETCH_MAX:
+		s = Vector2(-STRETCH_MAX, maxf(s.y, 0.0))
+	return s
 
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
@@ -394,7 +468,8 @@ func _land(g: float, heights: Heightfield) -> void:
 	airborne = false
 	y = g
 	land_impact = maxf(land_impact, impact)
-	squash_v = clampf(squash_v + impact * 0.4, -2.0, 4.0)
+	squash_fv = clampf(squash_fv + impact * 0.4, -2.0, 4.0)
+	squash_rv = clampf(squash_rv + impact * 0.4, -2.0, 4.0)
 	if impact > GameConfig.BIKE_CRASH:
 		crashed = true
 		speed = 0.0

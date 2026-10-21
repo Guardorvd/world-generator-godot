@@ -146,14 +146,68 @@ func _init() -> void:
 	var jerk := 0.0
 	var was := false
 	var vy_prev := 0.0
+	var hill_travel := 0.0
+	var tilt_jerk := 0.0
+	var tilt_prev := 0.0
+	var turn_prev := 0.0
+	var geo_jerk := 0.0
+	var geo_prev := 0.0
+	var geo_turn := 0.0
 	for i in 300:
 		tick(hills, 0.0, false, 1.0)
 		hill_flights += int(hills.airborne and not was)
 		if i > 0 and not was and not hills.airborne:
 			jerk = maxf(jerk, absf(hills.vy - vy_prev))
+		if i > 30:
+			hill_travel = maxf(hill_travel, maxf(absf(hills.squash_f), absf(hills.squash_r)))
+			tilt_jerk = maxf(tilt_jerk, absf(hills.tilt - tilt_prev - turn_prev))
+			geo_jerk = maxf(geo_jerk, absf(atan(hills._slope(ground)) - geo_prev - geo_turn))
 		was = hills.airborne
 		vy_prev = hills.vy
+		turn_prev = hills.tilt - tilt_prev
+		tilt_prev = hills.tilt
+		geo_turn = atan(hills._slope(ground)) - geo_prev
+		geo_prev = atan(hills._slope(ground))
 	check(hill_flights <= 2 and jerk < 1.5, "холмы с изломами: отрывов %d, рывок по вертикали на земле %.2f м/с за такт" % [hill_flights, jerk])
+	# 7.1: подвеска отрабатывает изломы, не пробиваясь, рама идёт за колёсами без рывков
+	check(hill_travel > 0.005 and hill_travel < BikeRide.SAG_MAX * 0.8 and tilt_jerk < geo_jerk * 0.5,
+		"холмы: ход подвески %.3f м, рывок наклона рамы %.4f при %.4f у рельефа" % [hill_travel, tilt_jerk, geo_jerk])
+	# ступенька 8 см: сначала сжимается вилка, задний ход — на базу позже
+	ground.profile = func(d: float) -> float: return 0.08 if d > 1.0 else 0.0
+	var step := bike(6.0)
+	var first_f := -1
+	var first_r := -1
+	for i in 40:
+		tick(step, 0.0, false, 1.0)
+		if first_f < 0 and step.squash_f > 0.01:
+			first_f = i
+		if first_r < 0 and step.squash_r > 0.01:
+			first_r = i
+	check(first_f >= 0 and first_r > first_f, "ступенька: вилка сжимается на такте %d, задний ход на такте %d" % [first_f, first_r])
+	# частые кочки 3 см: колесо идёт по ним, рама почти стоит — подвеска их поглощает
+	ground.profile = func(d: float) -> float: return 0.03 * maxf(0.0, sin(d * 6.0))
+	var rough := bike(8.0)
+	var wheel_lo := INF
+	var wheel_hi := -INF
+	var frame_lo := INF
+	var frame_hi := -INF
+	for i in 120:
+		tick(rough, 0.0, false, 1.0)
+		if i > 30:
+			var wheel_y := rough.y + rough.ground_f
+			var frame_y := wheel_y - rough.squash_f
+			wheel_lo = minf(wheel_lo, wheel_y)
+			wheel_hi = maxf(wheel_hi, wheel_y)
+			frame_lo = minf(frame_lo, frame_y)
+			frame_hi = maxf(frame_hi, frame_y)
+	check(not rough.airborne and frame_hi - frame_lo < (wheel_hi - wheel_lo) * 0.5,
+		"кочки: колесо ходит на %.3f м, рама над ним на %.3f м" % [wheel_hi - wheel_lo, frame_hi - frame_lo])
+	# торможение грузит вилку, рама клюёт носом
+	ground.profile = func(_d: float) -> float: return 0.0
+	var dive := bike(10.0)
+	for i in 15:
+		tick(dive, 0.0, false, -1.0)
+	check(dive.squash_f > dive.squash_r + 0.01 and dive.tilt < 0.0, "торможение: вилка %.3f м, зад %.3f м" % [dive.squash_f, dive.squash_r])
 	ground.profile = func(d: float) -> float: return 0.4 * d if d < 3.0 else 1.2
 	check(takeoffs(10.0, 40) == 1, "трамплин на скорости — настоящий прыжок")
 	ground.profile = func(_d: float) -> float: return 0.0
@@ -172,8 +226,9 @@ func _init() -> void:
 	slope_land._land(100.0, ground)
 	check(slope_land.land_impact < flat_land.land_impact and slope_land.speed > flat_land.speed, "приземление вдоль склона мягче и лучше сохраняет скорость")
 	var spring := bike()
-	spring.squash_v = 20.0
+	spring.squash_fv = 20.0
+	spring.squash_rv = -20.0
 	for i in 30:
 		spring._step_suspension(0.1)
-	check(absf(spring.squash) < 0.001 and is_finite(spring.squash_v), "подвеска устойчива при длинном такте и сильном ударе")
+	check(absf(spring.squash_f) < 0.001 and absf(spring.squash_r) < 0.001 and is_finite(spring.squash_fv), "подвеска устойчива при длинном такте и сильном ударе")
 	quit(1 if fails else 0)
