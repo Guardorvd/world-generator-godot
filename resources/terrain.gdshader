@@ -14,6 +14,13 @@ uniform sampler2D detail_normal : hint_normal, filter_linear_mipmap_anisotropic,
 // Зерно, органическая примесь и шероховатость из RoadSurface.LIST.
 uniform vec3 surface_detail[8];
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
+// 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
+uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
+uniform bool forest_enabled = false;
+uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
+uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
+uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
+uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
 
 const float DETAIL_FAR = 110.0;   // м: дальше мелкой детали нет
 const float EDGE_JITTER = 0.9;    // в пикселях карты: насколько рваный край между биомами
@@ -65,6 +72,33 @@ void fragment() {
 	float rock = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
 	// на снегу скала проступает слабее, чтобы вершины оставались белыми
 	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
+	if (forest_enabled && !use_vertex_color) {
+		vec4 forest = texture(forest_tex, UV);
+		float cover = smoothstep(0.03, 0.8, forest.r) * (1.0 - snow);
+		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
+		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
+		soil *= mix(1.12, 0.72, forest.b);
+		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65);
+		soil = mix(soil, floor_moss, moss * 0.7);
+		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
+		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
+		soil = mix(soil, rock_color * 0.72, stones * 0.75);
+		if (near > 0.0) {
+			// Листья/иголки читаются вблизи, с производными для гашения мерцания.
+			vec2 cells = p * 5.7;
+			vec2 scatter = grain_hash(floor(cells));
+			vec2 local = fract(cells) - vec2(0.25) - scatter * 0.5;
+			float angle = scatter.x * 6.28318;
+			local = mat2(vec2(cos(angle), sin(angle)), vec2(-sin(angle), cos(angle))) * local;
+			float shape = mix(abs(local.x) * 0.75 + abs(local.y) * 1.5,
+				max(abs(local.x) * 0.55, abs(local.y) * 5.0), forest.g);
+			float aa = max(length(fwidth(cells)), 0.015);
+			float litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
+			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
+			soil = mix(soil, dry_litter * mix(0.85, 1.2, scatter.x), litter * near * (0.55 - moss * 0.25));
+		}
+		col = mix(col, soil, cover * (0.62 + patch * 0.25));
+	}
 	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;

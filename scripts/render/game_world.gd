@@ -70,7 +70,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	if not loaded.terrain_arrays.is_empty():
 		terrain.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, loaded.terrain_arrays)
 	$Terrain.mesh = terrain
-	$Terrain.material_override = TerrainBuilder.material(loaded.terrain_image)
+	$Terrain.material_override = TerrainBuilder.material(loaded.terrain_image, loaded.forest_surface)
 	for node: Node in WaterBuilder.build(world, loaded.water_arrays):
 		$Water.add_child(node)
 		if node.name == "Ocean":
@@ -78,7 +78,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	water_effects = WaterEffects.new()
 	water_effects.setup($Water)
 	$Water.add_child(water_effects)
-	vegetation.setup(world, heights, _defs, _grass_mesh)
+	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
 	labels = built.labels

@@ -184,11 +184,16 @@ static func _local_normal(heights: Heightfield, x: float, z: float) -> Vector3:
 
 ## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни).
 ## С 2.5 это шейдер resources/terrain.gdshader: вблизи поверх карты мелкая деталь, см. комментарий в нём
-static func material(base: Image) -> ShaderMaterial:
+static func material(base: Image, forest: Image = null) -> ShaderMaterial:
 	base.generate_mipmaps()
 	var mat := _detail_material()
 	mat.set_shader_parameter("base_tex", ImageTexture.create_from_image(base))
 	mat.set_shader_parameter("base_texel", Vector2(1.0 / base.get_width(), 1.0 / base.get_height()))
+	if forest != null:
+		var masks := forest.duplicate() as Image
+		masks.generate_mipmaps()
+		mat.set_shader_parameter("forest_tex", ImageTexture.create_from_image(masks))
+		mat.set_shader_parameter("forest_enabled", true)
 	return mat
 
 

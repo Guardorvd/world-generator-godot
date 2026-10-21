@@ -12,6 +12,7 @@ var world: WorldData
 var heights: Heightfield
 var terrain_arrays: Array
 var terrain_image: Image
+var forest_surface: Image
 var water_arrays: Array[Array]
 var map_image: Image
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
@@ -41,6 +42,10 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	r.timings.generate_ms = (generated - started) / 1000.0
 	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - generated) / 1000.0
 	var t := Time.get_ticks_usec()
+	# Состав леса известен после генерации; параллельная заливка его не читает.
+	r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
+	r.timings.forest_surface_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
