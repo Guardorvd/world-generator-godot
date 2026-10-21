@@ -17,6 +17,8 @@ const SPRING_DAMP := 16.0 # затухание подвески, 1/с
 const SAG_MAX := 0.16     # подвеска просаживается не больше этого, м
 const STRETCH_MAX := 0.08 # и вытягивается при прыжке не больше этого, м
 const SOFT_IMPACT := 7.0  # приземление жёстче этого (м/с) гасит скорость
+const FACE_CRASH := 5.0   # приземление в подъём (крутизна 1 = 45°) роняет при ударе слабее BIKE_CRASH на столько, м/с
+const WALL_CRASH := 9.0   # удар в стену в лоб быстрее этого (м/с) роняет седока
 ## На пути колёса держатся полотна на мелких изломах, руль зависит от сцепления покрытия.
 const SLOPE_GRAVITY := 7.5 # смягчённая сила склона: инерция ощутима, но подъёмы доступны
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
@@ -64,7 +66,8 @@ var _hop_buf := 0.0   # пробел, нажатый чуть раньше, че
 var _yaw_rate := 0.0   # фактическая угловая скорость поворота, рад/с
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
-var crashed := false  # жёстко приземлились: седок упал (GameWorld ссадит его и сбросит флаг)
+var crashed := false  # седок упал: жёстко приземлился или врезался в стену (GameWorld покажет падение и сбросит флаг)
+var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
 
 
@@ -241,6 +244,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var moved := Grid.hypot(x - x0, z - z0)
 		if moved < full - 1e-5:
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
+			if moved < 1e-5 and absf(speed) > WALL_CRASH and not airborne:
+				_crash(vy)
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
 
@@ -457,6 +462,12 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		speed = maxf(0.0, speed)
 
 
+## Седок падает: запомнить, с какой скоростью летел велосипед
+func _crash(v_up: float) -> void:
+	crashed = true
+	crash_velocity = Vector3(-sin(heading) * speed, v_up, -cos(heading) * speed)
+
+
 ## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны
 func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -> bool:
 	var fx := -sin(hd) * AXLE
@@ -484,8 +495,9 @@ func _land(g: float, heights: Heightfield) -> void:
 	land_impact = maxf(land_impact, impact)
 	squash_fv = clampf(squash_fv + impact * 0.4, -2.0, 4.0)
 	squash_rv = clampf(squash_rv + impact * 0.4, -2.0, 4.0)
-	if impact > GameConfig.BIKE_CRASH:
-		crashed = true
+	# В подъём (нос в склон) удар опаснее, чем на ровное: порог падения ниже.
+	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(slope * signf(speed), 0.0, 1.0):
+		_crash(vy)
 		speed = 0.0
 	elif impact > SOFT_IMPACT:
 		speed *= 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)

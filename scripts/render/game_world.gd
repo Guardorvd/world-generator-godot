@@ -21,6 +21,7 @@ var hud: Hud
 var player: PlayerState
 var bike: BikeRide
 var bike_view: BikeView
+var crash: BikeCrash     # падение с велосипеда (с 7.6): ragdoll и возврат в седло
 var water_effects: WaterEffects
 var fires: Array = []
 var labels: Array = []
@@ -100,6 +101,9 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
+	crash = BikeCrash.new()
+	crash.name = "BikeCrash"
+	add_child(crash)
 	_snap()
 	bike_view.draw(1.0)
 	hud.set_world(world, loaded.map_image)
@@ -151,6 +155,8 @@ func look(dx: float, dy: float) -> void:
 
 ## F: сесть на велосипед, если он рядом, или слезть с него
 func toggle_bike() -> void:
+	if crash.active():
+		return
 	if bike.riding:
 		if bike.airborne:
 			hud.toast("Сначала приземлитесь")
@@ -195,6 +201,7 @@ func travel_to(place: Dictionary) -> void:
 	if bike.riding and bike.airborne:
 		return
 	_close_settlement(false)
+	crash.abort()
 	player = PlayerState.arrive(world, heights, place)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера
@@ -283,7 +290,19 @@ func _physics_process(dt: float) -> void:
 	var jump := Input.is_action_just_pressed("jump")
 	_moving = false
 	var crashed := false
-	if bike.riding:
+	if crash.active():
+		# седок падает: управление ждёт, пока он снова в седле; камера следит за телом
+		var back := crash.tick(dt, bike, world, heights)
+		var at := crash.focus(bike)
+		player.x = at.x
+		player.z = at.z
+		player.feet = at.y
+		if back:
+			bike.dismount(player, world, heights)
+			bike.mount(player)
+			yaw = bike.heading
+			crashed = true
+	elif bike.riding:
 		var h0 := bike.heading
 		bike.step(player, fw, st, Input.is_action_pressed("run"), jump, dt, world, heights)
 		# камера поворачивает вместе с велосипедом, а если мышь не трогали — сама уходит за спину
@@ -316,7 +335,8 @@ func _physics_process(dt: float) -> void:
 	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
 	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
 	_trauma = maxf(0.0, _trauma - dt * 1.6)
-	bike_view.tick(bike, dt, fw, Input.is_action_pressed("run"))
+	if not crash.active():
+		bike_view.tick(bike, dt, fw, Input.is_action_pressed("run"))
 	bike.land_impact = 0.0
 	audio.tick(player, bike.riding)
 	if crashed:
@@ -356,7 +376,10 @@ func _process(delta: float) -> void:
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
-	bike_view.draw(alpha)
+	if crash.active():
+		crash.draw()
+	else:
+		bike_view.draw(alpha)
 	_update_hints()
 	_update_camera(alpha, delta)
 
@@ -396,15 +419,17 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 		_trauma = minf(1.0, _trauma + (impact - soft) * 0.08)
 
 
-## Жёсткое приземление на велосипеде: седок падает рядом, велосипед остаётся на месте
+## Седок упал (жёсткое приземление, удар в стену): велосипед и тело разлетаются (BikeCrash),
+## через пару секунд седок снова в седле
 func _crash() -> void:
 	bike.crashed = false
-	bike.dismount(player, world, heights)
-	yaw = bike.heading
-	pitch = -0.25
+	crash.start(bike_view, bike, bike.crash_velocity, heights)
+	if bike.land_impact <= 0.0:
+		audio.land(bike.x, bike.z, bike.y, 12.0) # удар в стену: глухой стук, как от жёсткой посадки
+	bike.speed = 0.0
+	pitch = -0.35
 	_dip_v -= 3.0
 	_trauma = 1.0
-	hud.toast("Слишком жёсткое приземление: вы упали с велосипеда")
 
 
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас
@@ -440,7 +465,7 @@ func _near_settlement() -> Dictionary:
 
 
 func _open_settlement() -> void:
-	if paused or show_map or _settlement_open():
+	if paused or show_map or _settlement_open() or crash.active():
 		return
 	var village := _near_settlement()
 	if village.is_empty():
