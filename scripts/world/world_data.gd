@@ -36,18 +36,18 @@ var foothill_spread := 0.0 # ширина и выраженность предг
 var outer: OuterLand     # рельеф за краем карты (с 1.9.5), если игра его подключила; иначе null
 var h := PackedFloat32Array()        # высота (0 — уровень моря, суша до 1, дно до -1)
 var filled := PackedFloat32Array()   # высота с заполненными впадинами (уровень озёр)
-var elev := PackedFloat32Array()     # высота для климата
+var elev := PackedFloat32Array()     # StageGeography: высота суши / поверхности озера, океан = 0
 var ocean := PackedByteArray()
 var lake := PackedByteArray()
 var river := PackedByteArray()
 var acc := PackedFloat32Array()      # накопленный сток
-var slope := PackedFloat32Array()
+var slope := PackedFloat32Array()    # StageGeography: уклон по elev (историческая шкала ×60)
 var down := PackedInt32Array()       # клетка, куда стекает вода (-1 — нет)
 var order := PackedInt32Array()      # порядок заполнения впадин
 var order_n := 0
 var rain := PackedFloat32Array()
 var dist_ocean := PackedFloat32Array()
-var dist_water := PackedFloat32Array()
+var dist_water := PackedFloat32Array() # StageGeography: расстояние до океана, озёр и рек в клетках
 
 # Климат
 var temp := PackedFloat32Array()

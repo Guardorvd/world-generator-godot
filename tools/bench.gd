@@ -5,6 +5,9 @@ extends SceneTree
 ## в списке нет: оно прячется за тропами и растительностью. В конце — таблица по этапам с долей от общего времени.
 ## Запуск из папки проекта:
 ##   godot --headless --path . --script res://tools/bench.gd -- <зерно> <размер>
+## По умолчанию Север-1234, 256 (малый мир из меню). Также --seed, --size, --gdscript, --out <файл.json>.
+
+const Dev := preload("res://tools/control/control.gd")
 
 var _t := 0
 var _label := ""
@@ -36,10 +39,17 @@ func _print_table(total: int) -> void:
 
 
 func _init() -> void:
+	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	Pathfinder.profile_searches = true
 	var args := OS.get_cmdline_user_args()
-	var seed_text: String = args[0] if args.size() > 0 else "Север-1234"
-	var size: int = int(args[1]) if args.size() > 1 else 512
+	var positional := args.size() > 0 and not args[0].begins_with("--")
+	var seed_text := Dev.arg("seed", args[0] if positional else "Север-1234")
+	var size_text := Dev.arg("size", args[1] if positional and args.size() > 1 else "256")
+	if not size_text.is_valid_int() or int(size_text) < 2:
+		printerr("--size: требуется целое число не меньше 2")
+		quit(1)
+		return
+	var size := int(size_text)
 	print("%s@%d" % [seed_text, size])
 	var t0 := Time.get_ticks_msec()
 	_t = t0
@@ -54,4 +64,12 @@ func _init() -> void:
 	print("Меш: %d вершин, %d треугольников; дорожных патчей: %d" % [
 		loaded.terrain_arrays[Mesh.ARRAY_VERTEX].size(), loaded.terrain_arrays[Mesh.ARRAY_INDEX].size() / 3,
 		loaded.heights.road_refinement.patches.size()])
+	var path := Dev.arg("out")
+	if path != "":
+		Dev.save_json(Dev.abs_dir(path), {
+			version = Dev.version(), seed = seed_text, size = size,
+			backend = "fast" if Grid.fast_grid() != null else "gdscript",
+			total_ms = total, stages = _rows, timings = loaded.timings,
+			path_timings = loaded.heights.path_timings, searches = loaded.world.generation_profile,
+		})
 	quit()

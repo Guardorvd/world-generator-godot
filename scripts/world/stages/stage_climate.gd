@@ -1,7 +1,8 @@
 class_name StageClimate
 extends RefCounted
-## Этап 5. Климат и биомы: высота для климата, крутизна, температура, влажность, выбор биома.
-## Пишет: w.dist_water, elev, slope, temp, moist, biome.
+## Этап 5. Климат и биомы по готовым полям StageGeography.
+## Читает: w.elev, slope, dist_water, dist_ocean, rain, h и маски воды.
+## Пишет: w.temp, moist, biome.
 
 const PROGRESS := 0.38
 const LABEL := "Климат и биомы"
@@ -57,30 +58,11 @@ static func run(w: WorldData) -> void:
 	var h := w.h
 	var ocean := w.ocean
 	var lake := w.lake
-	var river := w.river
-	var filled := w.filled
 	var rain := w.rain
 	var dist_ocean := w.dist_ocean
-	var water_src := PackedByteArray()
-	water_src.resize(N)
-	for i in N:
-		water_src[i] = 1 if (ocean[i] != 0 or lake[i] != 0 or river[i] != 0) else 0
-	var dist_water := Grid.distance_field(W, H, water_src)
-	var elev := PackedFloat32Array()
-	elev.resize(N)
-	for i in N:
-		elev[i] = 0.0 if ocean[i] != 0 else (filled[i] if lake[i] != 0 else maxf(0.0, h[i]))
-	var slope := PackedFloat32Array()
-	slope.resize(N)
-	for y in H:
-		for x in W:
-			var l := elev[y * W + maxi(0, x - 1)]
-			var r := elev[y * W + mini(W - 1, x + 1)]
-			var u := elev[maxi(0, y - 1) * W + x]
-			var d := elev[mini(H - 1, y + 1) * W + x]
-			var gx := r - l
-			var gy := d - u
-			slope[y * W + x] = sqrt(gx * gx + gy * gy) * 0.5 * 60.0
+	var dist_water := w.dist_water
+	var elev := w.elev
+	var slope := w.slope
 	var temp_n := w.noise_field("temp")
 	var temp := PackedFloat32Array()
 	temp.resize(N)
@@ -106,9 +88,6 @@ static func run(w: WorldData) -> void:
 				# t и m в JS читаются из локальных переменных (double), а не из Float32Array
 				b = land_biome(e, t, m, slope[i], dist_ocean[i])
 			biome[i] = b
-	w.dist_water = dist_water
-	w.elev = elev
-	w.slope = slope
 	w.temp = temp
 	w.moist = moist
 	w.biome = biome

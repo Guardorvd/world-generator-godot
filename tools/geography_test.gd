@@ -1,7 +1,8 @@
 extends SceneTree
 ## География на разных сидах: сток, поселения, стыки кусков и совпадение C#/GDScript.
 ## Печатает высоты, крутизну и площади связных горных участков. Полный прогон — 12 миров по 512 клеток;
-## -- --quick — четыре мира самопроверки; -- --out <файл.json> — сохранить сводку.
+## -- --quick — четыре штатных малых мира (256); --seed <сид> --size 256 — один мир.
+## --gdscript — без C#; --out <файл.json> — сохранить сводку.
 
 const SelfTest := preload("res://tools/selftest.gd")
 const Dev := preload("res://tools/control/control.gd")
@@ -43,7 +44,8 @@ func _relief_check(w: WorldData) -> void:
 				var part := left[y * 3 + x] if x < 3 else right[y * 3 + x - 3]
 				_check(whole[i] == part, "%s: стык рельефа %s" % [w.seed_text, p])
 				_check(whole[i] == gd[i], "%s: C#/GDScript %s" % [w.seed_text, p])
-	_check(fast != null, "для сравнения C#/GDScript нужна сборка Godot .NET")
+	if Grid.allow_fast:
+		_check(fast != null, "для сравнения C#/GDScript нужна сборка Godot .NET")
 
 
 func _world_check(w: WorldData) -> void:
@@ -134,6 +136,12 @@ func _stats(w: WorldData) -> Dictionary:
 	out.high_share = 100.0 * high / maxi(1, land)
 	out.hill_share = 100.0 * hills / maxi(1, land)
 	out.steep_land_share = 100.0 * steep_land / maxi(1, land)
+	out.river_cells = w.river.count(1)
+	out.vegetation_objects = w.obj_count
+	var kinds := {}
+	for kind in w.obj_k:
+		kinds[str(kind)] = kinds.get(str(kind), 0) + 1
+	out.vegetation_by_kind = kinds
 	out.merge(_massif_stats(w))
 	out.mountain_gentle_largest_km2 = _massif_stats(w, true).mountain_largest_km2
 	out.merge(_foothill_stats(w))
@@ -334,25 +342,117 @@ func _traversal_check() -> void:
 	_check(_traversal_stats(w).mountain_wide_share == 0.0, "оценка исключает крутой склон")
 
 
+## Контракт after_climate: поздние этапы не меняют данные, уже читаемые загрузчиком.
+func _geography_fingerprint(w: WorldData) -> Dictionary:
+	var out := {}
+	for key in ["h", "filled", "ocean", "lake", "river", "rivers", "down", "acc", "rain", "dist_ocean", "dist_water", "elev", "slope", "temp", "moist", "biome"]:
+		out[key] = var_to_bytes(w.get(key)).hex_encode().sha256_text()
+	return out
+
+
+## Изменение русла/берега обновляет общие поля, климат и стоимость прохода.
+func _geography_check() -> void:
+	var w := WorldData.new()
+	w.W = 5
+	w.H = 5
+	w.N = 25
+	for key in ["h", "filled", "rain", "dist_ocean"]:
+		var field := PackedFloat32Array()
+		field.resize(w.N)
+		field.fill(0.2 if key == "h" else (0.4 if key == "filled" else 0.3))
+		w.set(key, field)
+	for key in ["ocean", "lake", "river"]:
+		var field := PackedByteArray()
+		field.resize(w.N)
+		w.set(key, field)
+	w.rng = WGRandom.new(57)
+	w.noise.temp = Simplex.new(w.rng)
+	w.noise.cost = Simplex.new(w.rng)
+	StageGeography.run(w)
+	StageClimate.run(w)
+	var dry_moist := w.moist[12]
+	w.river[12] = 1
+	w.h[12] = 0.6
+	w.h[13] = 0.6
+	StageGeography.run(w)
+	StageClimate.run(w)
+	StageTrails._build_cost(w)
+	_check(w.dist_water[12] == 0.0 and w.dist_water[11] == 1.0, "новое русло обновляет расстояние до воды")
+	_check(is_equal_approx(w.slope[11], 12.0) and w.moist[12] > dry_moist, "новый рельеф/вода обновляют уклон и влажность")
+	_check(w.cost[12] == INF, "крутое русло учитывается дорогами")
+	w.river[12] = 0
+	w.lake[12] = 1
+	StageGeography.run(w)
+	StageClimate.run(w)
+	_check(w.elev[12] == w.filled[12] and w.biome[12] == Biomes.LAKE, "озеро использует уровень поверхности и водный биом")
+	w.lake[12] = 0
+	w.ocean[12] = 1
+	StageGeography.run(w)
+	_check(w.elev[12] == 0.0, "океан имеет нулевую климатическую высоту")
+	w.ocean[12] = 0
+	w.h[12] = 0.2
+	w.h[13] = 0.2
+	StageGeography.run(w)
+	StageClimate.run(w)
+	_check(w.dist_water[12] > 1.0 and w.slope[11] == 0.0 and w.moist[12] == dry_moist, "удаление воды и выравнивание не оставляют старых полей")
+	w.clear_noise_fields()
+
+
+func _vegetation_check(w: WorldData) -> void:
+	var invalid := 0
+	var near_hut := 0
+	for k in w.obj_count:
+		var x := w.obj_x[k]
+		var y := w.obj_y[k]
+		if not is_finite(x) or not is_finite(y) or x < 0 or y < 0 or x >= w.W or y >= w.H:
+			invalid += 1
+			continue
+		var i := floori(y) * w.W + floori(x)
+		if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 or w.path_mask[i] != 0:
+			invalid += 1
+		if StageVegetation.near_hut(w.settlements, x, y):
+			near_hut += 1
+	_check(invalid == 0, "%s: растительность на суше вне путей (%d)" % [w.seed_text, invalid])
+	_check(near_hut == 0, "%s: растительность вне домов (%d)" % [w.seed_text, near_hut])
+
+
 func _init() -> void:
+	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	_traversal_check()
-	var cases: Array = SelfTest.CASES if OS.get_cmdline_user_args().has("--quick") else []
-	if cases.is_empty():
-		for s in SEEDS:
-			cases.append([s, 512])
+	_geography_check()
+	var quick := OS.get_cmdline_user_args().has("--quick")
+	var seed_text := Dev.arg("seed")
+	var size_text := Dev.arg("size", "256" if quick or seed_text != "" else "512")
+	if not size_text.is_valid_int() or int(size_text) < 2:
+		printerr("--size: требуется целое число не меньше 2")
+		quit(1)
+		return
+	var size := int(size_text)
+	var cases: Array = []
+	if seed_text != "":
+		cases.append([seed_text, size])
+	else:
+		for seed in (SEEDS.slice(0, 4) if quick else SEEDS):
+			cases.append([seed, size])
 	var results: Array = []
 	for c: Array in cases:
+		var frozen := {}
 		var t0 := Time.get_ticks_msec()
-		var w := WorldGenerator.generate(c[0], c[1])
+		var w := WorldGenerator.generate(c[0], c[1], Callable(), func(ready: WorldData) -> void: frozen.merge(_geography_fingerprint(ready)))
 		var ms := Time.get_ticks_msec() - t0
+		_check(frozen == _geography_fingerprint(w), "%s: география неизменна после after_climate" % w.seed_text)
 		_world_check(w)
+		_vegetation_check(w)
 		_relief_check(w)
 		var s := _stats(w)
 		s.generation_ms = ms
+		s.version = Dev.version()
+		s.backend = "fast" if Grid.fast_grid() != null else "gdscript"
 		results.append(s)
 		print("%s@%d: %d мс; горы %.1f%%; на них >45° %.1f%%; излом %.2f м; рек %d; поселений %d; связь %s" % [w.seed_text, w.W, ms, s.mountain_share, s.mountain_steep_share, s.mountain_curvature_m, w.rivers.size(), w.settlements.size(), s.connected])
 		print("  широкие пологие участки гор %.1f%%; связаны с подножием %.1f%%; перепад связного участка %.1f м" % [s.mountain_wide_share, s.mountain_foot_linked_share, s.traversal_rise_m])
-	if not OS.get_cmdline_user_args().has("--quick"):
+		print("  клеток рек %d; озёр %d; объектов растительности %d; по видам %s" % [s.river_cells, s.lake_cells, s.vegetation_objects, str(s.vegetation_by_kind)])
+	if not quick and seed_text == "" and size == 512:
 		_variety_check(results)
 	var path := Dev.arg("out")
 	if path != "":

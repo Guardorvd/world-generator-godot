@@ -37,6 +37,9 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 	StageHydrology.run(w)
 	step.call(StageRivers.PROGRESS, StageRivers.LABEL)
 	StageRivers.run(w)
+	step.call(StageGeography.PROGRESS, StageGeography.LABEL)
+	# Последняя граница изменений географии: общие поля нужны всем зависимым системам.
+	StageGeography.run(w)
 	step.call(StageClimate.PROGRESS, StageClimate.LABEL)
 	StageClimate.run(w)
 	if after_climate.is_valid():
