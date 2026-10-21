@@ -1,7 +1,7 @@
 extends SceneTree
 ## Синтетический густой лес: GPU + подгрузка при движении. Нужен запуск с окном.
 ## --copies 4|8 --out <json>; --layer <скрипт> позволяет сравнить другую реализацию.
-## Модели, разрешение, камера и число объектов одинаковы в обоих запусках.
+## --models <скрипт> позволяет сравнить библиотеку моделей при одинаковой сцене.
 
 const Test := preload("res://tools/vegetation_test.gd")
 const Dev := preload("res://tools/control/control.gd")
@@ -31,7 +31,8 @@ func setup() -> void:
 	var layer: Script = load(Dev.arg("layer", "res://scripts/render/vegetation_layer.gd"))
 	veg = layer.new()
 	root.add_child(veg)
-	veg.setup(world, h, Models.tree_defs(), Models.grass_mesh())
+	var models: Script = load(Dev.arg("models", "res://scripts/render/models.gd"))
+	veg.setup(world, h, models.tree_defs(), Models.grass_mesh())
 	veg.update(512.0, 340.0, true)
 	var ground := MeshInstance3D.new()
 	var plane := PlaneMesh.new()

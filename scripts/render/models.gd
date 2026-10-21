@@ -1,6 +1,6 @@
 class_name Models
 extends RefCounted
-## Низкополигональные модели: деревья, кусты, камни, трава. Копия js/render3d/models.js.
+## Общая библиотека растительности; умеренные деревья строит ForestModels.
 ## Модели вида: trunk — ствол (цвет bark), crown — крона (цвет из leaves по варианту объекта).
 ## Новый вид объекта: константа в Biomes.T_* и запись здесь.
 
@@ -57,11 +57,6 @@ static func _c(r: int, g: int, b: int) -> Color:
 	return Color8(r, g, b)
 
 
-## Крона ели: три яруса конусов
-static func _pine_crown() -> ArrayMesh:
-	return merge([_cone(1.9, 3.2, 1.4), _cone(1.5, 2.8, 3.0), _cone(1.0, 2.4, 4.6)])
-
-
 static func tree_defs() -> Dictionary:
 	var bark := _c(107, 74, 43)
 	var rock := SphereMesh.new()
@@ -69,11 +64,7 @@ static func tree_defs() -> Dictionary:
 	rock.height = 2.2
 	rock.radial_segments = 5
 	rock.rings = 2
-	return {
-		Biomes.T_OAK: {trunk = merge([_cyl(0.22, 0.32, 3.2)]), crown = merge([_ico(2.1, 4.4), _moved(_ico(1.5, 3.6), Vector3(1.2, 0, 0.4)), _moved(_ico(1.4, 3.8), Vector3(-1.1, 0, -0.5))]), bark = bark, leaves = [_c(64, 128, 52), _c(84, 140, 50), _c(58, 112, 60)]},
-		Biomes.T_BIRCH: {trunk = merge([_cyl(0.12, 0.17, 4.6)]), crown = merge([_ico(1.4, 4.8, 1, 1.6, 1)]), bark = _c(232, 228, 218), leaves = [_c(120, 170, 70), _c(140, 176, 74), _c(110, 160, 80)]},
-		Biomes.T_PINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = _pine_crown(), bark = bark, leaves = [_c(36, 82, 56), _c(44, 92, 52), _c(32, 74, 62)]},
-		Biomes.T_SNOWPINE: {trunk = merge([_cyl(0.15, 0.25, 2)]), crown = _pine_crown(), bark = bark, leaves = [_c(150, 175, 170), _c(120, 150, 140), _c(170, 190, 190)]},
+	var defs := {
 		Biomes.T_PALM: {trunk = merge([_cyl(0.16, 0.26, 6.2, 5)]), crown = merge([_ico(2.6, 6.3, 1, 0.22, 1)]), bark = _c(138, 106, 64), leaves = [_c(60, 140, 60), _c(80, 150, 55), _c(50, 128, 70)]},
 		Biomes.T_JUNGLE: {trunk = merge([_cyl(0.3, 0.45, 5)]), crown = merge([_ico(3.0, 6.0, 1, 0.75, 1), _moved(_ico(2.0, 4.5), Vector3(1.8, 0, 0))]), bark = _c(90, 64, 38), leaves = [_c(30, 100, 44), _c(40, 112, 40), _c(26, 90, 52)]},
 		Biomes.T_ACACIA: {trunk = merge([_cyl(0.14, 0.22, 3.4)]), crown = merge([_ico(3.2, 3.8, 1, 0.18, 1)]), bark = bark, leaves = [_c(110, 140, 60), _c(126, 146, 64), _c(98, 130, 58)]},
@@ -83,6 +74,10 @@ static func tree_defs() -> Dictionary:
 		Biomes.T_DEAD: {trunk = merge([_cyl(0.12, 0.2, 3.5), _rotz(_cyl(0.06, 0.08, 1.4), 0.8, Vector3(0.4, 2.0, 0)), _rotz(_cyl(0.06, 0.08, 1.2), -0.7, Vector3(-0.4, 2.4, 0))]), bark = _c(78, 61, 44)},
 		Biomes.T_REED: {crown = merge([_cone(0.08, 1.5, 0, 4), _moved(_cone(0.08, 1.2, 0, 4), Vector3(0.3, 0, 0.1)), _moved(_cone(0.08, 1.35, 0, 4), Vector3(-0.2, 0, 0.25))]), leaves = [_c(111, 143, 58), _c(93, 125, 52), _c(120, 140, 70)]},
 	}
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE]:
+		for variant in ForestModels.VARIANTS:
+			defs[kind + variant * ForestModels.MODEL_STRIDE] = ForestModels.definition(kind, variant)
+	return defs
 
 
 ## Пучок травы: пять травинок веером, нормали вверх, чтобы трава освещалась как земля под ней

@@ -1,6 +1,6 @@
 class_name VegetationLayer
 extends Node3D
-## 6.4: неподвижные MultiMesh по чанкам и видам, штатный Mesh LOD и отсечение по AABB.
+## 6.5: неподвижные MultiMesh по чанкам, видам и силуэтам, Mesh LOD и точные AABB.
 ## Фон готовит только новые чанки и траву. Главный поток передаёт один чанк за кадр.
 
 const TILE := GameConfig.TILE
@@ -41,8 +41,13 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh) -> 
 			entry.box = box if first else entry.box.merge(box)
 			first = false
 			var mat := _vcolor_mat(false)
+			mat.albedo_texture = def.get(part + "_texture", null)
+			if part == "crown" and def.get("cutout", false):
+				mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
+				mat.alpha_scissor_threshold = 0.4
+				mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 			if part == "trunk":
-				mat.vertex_color_use_as_albedo = false
+				mat.vertex_color_use_as_albedo = def.get("colored_bark", false)
 				mat.albedo_color = def.bark
 			entry[part + "_mat"] = mat
 		_defs[kind] = entry
@@ -203,10 +208,15 @@ func _build_chunk(chunk: int) -> Dictionary:
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < heights.water_level[cell] - WATER_MARGIN:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
-		if not groups.has(kind):
-			groups[kind] = {ids = [], ground = []}
-		groups[kind].ids.append(o)
-		groups[kind].ground.append(ground)
+		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
+		var model := kind
+		if _defs.has(kind + ForestModels.MODEL_STRIDE):
+			var variant := mini(ForestModels.VARIANTS - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * ForestModels.VARIANTS))
+			model += variant * ForestModels.MODEL_STRIDE
+		if not groups.has(model):
+			groups[model] = {ids = [], ground = []}
+		groups[model].ids.append(o)
+		groups[model].ground.append(ground)
 	var entries: Array = []
 	for kind: int in groups:
 		var def: Dictionary = _defs[kind]
