@@ -11,6 +11,7 @@ const DROP_RADIUS := LOAD_RADIUS + 96.0     # гистерезис: не пер�
 const RECHECK := 24.0
 const Understory := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const Placement := preload("res://scripts/render/vegetation_placement.gd")
 const UNDERSTORY_MAX := 2048 # на форму, только в радиусе травы
 
 var world: WorldData
@@ -28,13 +29,17 @@ var _defs := {}         # неизменяемые меши, материалы 
 var _grass_n := 0
 var _grass_bounds := AABB()
 var _grass_margin := 0.0
+var _grass_box := AABB()
 var understory: Array = [] # те же фоновые буферы и цикл обновления, что у травы
 var _forest_surface: Image
+var placement: Placement
+var _understory_sites: Array = []
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
 	world = w
 	heights = h
+	placement = Placement.new(w, h)
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
 	for kind in defs:
 		var def: Dictionary = defs[kind]
@@ -60,6 +65,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		_defs[kind] = entry
 	grass = _multimesh(grass_mesh, _vcolor_mat(true), GameConfig.GRASS_MAX, true, false).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
+	_grass_box = grass_mesh.get_aabb()
 	grass_buf = _buffer(GameConfig.GRASS_MAX, 16)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
@@ -222,7 +228,7 @@ func _build_chunk(chunk: int) -> Dictionary:
 		var x := ox * TILE
 		var z := oy * TILE
 		var ground := heights.ground_at(x, z)
-		if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < heights.water_level[cell] - WATER_MARGIN:
+		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
 		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
@@ -332,6 +338,8 @@ func _fill_grass(px: float, pz: float) -> void:
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
+	placement.occupied.clear()
+	_understory_sites.clear()
 	for entry: Dictionary in understory:
 		entry.count = 0
 		entry.low = Vector3.INF
@@ -373,7 +381,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				elif w.path_mask[k] >= 2:
 					continue
 				var y := heights.ground_at(x, z)
-				if y < heights.water_level[k] and heights.depth_at(x, z) > 0.0:
+				if heights.depth_at(x, z) > 0.0:
 					continue
 				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
 				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9)
@@ -389,7 +397,13 @@ func _fill_grass(px: float, pz: float) -> void:
 				n += 1
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
+	for priority in 3:
+		for site: Array in _understory_sites:
+			if Placement.priority(site[0]) == priority:
+				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5])
 	_fill_tree_roots(px, pz)
+	_filter_grass()
+	_understory_sites.clear()
 
 
 func _fill_understory(i: int, j: int, canopy: float, sunlight: float, px: float, pz: float) -> void:
@@ -426,80 +440,66 @@ func _fill_understory(i: int, j: int, canopy: float, sunlight: float, px: float,
 		var scale := 0.7 + WGRandom.hash2(i * 4 + m, j, seed + 5) * 0.6
 		var rot := WGRandom.hash2(i * 4 + m, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(i * 4 + m, j, seed + 7) * 0.3
-		_put_understory(kind, x, z, rot, scale, tint)
+		_understory_sites.append([kind, x, z, rot, scale, tint])
 
 
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0) -> void:
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1) -> void:
 	var entry: Dictionary = understory[kind]
 	if entry.count >= UNDERSTORY_MAX:
 		return
 	var floor_kind := kind - Floor.FIRST
 	var local_box: AABB = entry.box
-	var radius := 0.0
-	if floor_kind >= 0:
-		var reach := local_box.position.abs().max(local_box.end.abs()) * scale
-		radius = Vector2(reach.x, reach.z).length()
-	if not _floor_clear(x, z, radius):
+	var reach := local_box.position.abs().max(local_box.end.abs()) * scale
+	var radius := Vector2(reach.x, reach.z).length()
+	if not placement.ground_clear(x, z, radius):
 		return
-	if floor_kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG] and not _trunks_clear(x, z, rot, scale, local_box, radius):
+	if not placement.objects_clear(x, z, rot, scale, local_box, radius, owner):
 		return
 	var pos := Vector3(x, heights.ground_at(x, z) - 0.015, z)
 	var offset: int = entry.count * 16
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
-	_put_xform(entry.buf, offset, x, pos.y, z, rot, scale, scale)
 	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind != Floor.SNAG):
 		# Почвенные детали и валежник следуют склону; сухостой остаётся вертикальным.
 		var dx := heights.ground_at(x + 0.3, z) - heights.ground_at(x - 0.3, z)
 		var dz := heights.ground_at(x, z + 0.3) - heights.ground_at(x, z - 0.3)
 		xf.basis.x.y = (dx * xf.basis.x.x + dz * xf.basis.x.z) / 0.6
 		xf.basis.z.y = (dx * xf.basis.z.x + dz * xf.basis.z.z) / 0.6
-		entry.buf[offset + 4] = xf.basis.x.y
-		entry.buf[offset + 6] = xf.basis.z.y
+		if not placement.terrain_fits(xf, local_box):
+			return
+	var box: AABB = xf * local_box
+	if not placement.details_clear(box):
+		return
+	_put_xform(entry.buf, offset, x, pos.y, z, rot, scale, scale)
+	entry.buf[offset + 4] = xf.basis.x.y
+	entry.buf[offset + 6] = xf.basis.z.y
 	for c in 3:
 		entry.buf[offset + 12 + c] = tint
 	entry.buf[offset + 15] = 1.0
-	var box: AABB = xf * local_box
 	entry.low = entry.low.min(box.position)
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
+	if Placement.priority(kind) < 2:
+		placement.occupied.append(box.grow(0.03))
 
 
-func _trunks_clear(x: float, z: float, rot: float, scale: float, box: AABB, radius: float) -> bool:
-	var footprint := Rect2(Vector2(box.position.x, box.position.z), Vector2(box.size.x, box.size.z)).grow(0.3 / scale)
-	for cy in range(maxi(0, floori((z - radius - 1.0) / (world.CS * TILE))), mini(world.CH, ceili((z + radius + 1.0) / (world.CS * TILE)))):
-		for cx in range(maxi(0, floori((x - radius - 1.0) / (world.CS * TILE))), mini(world.CW, ceili((x + radius + 1.0) / (world.CS * TILE)))):
-			for o in world.chunks[cy * world.CW + cx]:
-				if not Biomes.is_tree(world.obj_k[o]):
-					continue
-				var dx := world.obj_x[o] * TILE - x
-				var dz := world.obj_y[o] * TILE - z
-				var local := Vector2(cos(rot) * dx - sin(rot) * dz, sin(rot) * dx + cos(rot) * dz) / scale
-				if footprint.has_point(local):
-					return false
-	return true
-
-
-## Проверяем весь след крупных деталей, а не только центр бревна у дороги/воды.
-func _floor_clear(x: float, z: float, radius: float) -> bool:
-	if StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, radius / TILE + 0.3):
-		return false
-	var steps := ceili(radius * 2.0)
-	for j in steps + 1:
-		for i in steps + 1:
-			var px := x + lerpf(-radius, radius, float(i) / maxi(1, steps))
-			var pz := z + lerpf(-radius, radius, float(j) / maxi(1, steps))
-			var cx := floori(px / TILE)
-			var cy := floori(pz / TILE)
-			if cx < 0 or cy < 0 or cx >= world.W or cy >= world.H:
-				return false
-			var k := cy * world.W + cx
-			if world.path_mask[k] > 0 or world.river[k] != 0:
-				return false
-			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, world.W) > 0.08:
-				return false
-			if heights.ground_at(px, pz) < heights.water_level[k] and heights.depth_at(px, pz) > 0.0:
-				return false
-	return true
+func _filter_grass() -> void:
+	var write := 0
+	for n in _grass_n:
+		var offset := n * 16
+		var pos := Vector3(grass_buf[offset + 3], grass_buf[offset + 7], grass_buf[offset + 11])
+		var xf := Transform3D(Basis(Vector3(grass_buf[offset], 0, grass_buf[offset + 8]), Vector3(0, grass_buf[offset + 5], 0), Vector3(grass_buf[offset + 2], 0, grass_buf[offset + 10])), pos)
+		var box: AABB = xf * _grass_box
+		if not placement.details_clear(box):
+			continue
+		var local_box := AABB(box.position - pos, box.size)
+		var reach := local_box.position.abs().max(local_box.end.abs())
+		if not placement.objects_clear(pos.x, pos.z, 0.0, 1.0, local_box, Vector2(reach.x, reach.z).length()):
+			continue
+		if write != n:
+			for c in 16:
+				grass_buf[write * 16 + c] = grass_buf[offset + c]
+		write += 1
+	_grass_n = write
 
 
 func _fill_tree_roots(px: float, pz: float) -> void:
@@ -517,4 +517,4 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 				if world.slope[k] > 0.9:
 					continue
 				var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
-				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(world.obj_s[o] * 0.7, 0.6, 1.3))
+				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(world.obj_s[o] * 0.7, 0.6, 1.3), 1.0, o)
