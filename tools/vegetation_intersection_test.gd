@@ -58,7 +58,7 @@ func run() -> void:
 	for n in veg._grass_n:
 		check(h.depth_at(veg.grass_buf[n * 16 + 3], veg.grass_buf[n * 16 + 11]) == 0.0, "Трава не должна появляться на затопленном краю берега")
 	w.lake.fill(0)
-	veg.placement.occupied.clear()
+	veg.placement.clear_occupied()
 	# Молодняк не должен расти прямо из живого ствола или валуна.
 	veg._put_understory(Plants.SAPLING, 514.0, 514.0, 0.0, 1.0)
 	check(veg.understory[Plants.SAPLING].count == 0, "Молодняк не должен пересекать живой ствол")

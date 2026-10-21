@@ -280,6 +280,11 @@ func _outer_sea(tx: int, tz: int) -> float:
 			var ang := k * TAU / 12.0
 			var i := tx + roundi(cos(ang) * r)
 			var j := tz + roundi(sin(ang) * r)
-			if world.outer.has(i, j) and world.outer.height(i, j) < 0.0:
+			var sea: bool
+			if i >= 0 and j >= 0 and i < world.W and j < world.H:
+				sea = world.dist_ocean[j * world.W + i] < 0.5 # точка круга попала на карту
+			else:
+				sea = world.outer.has(i, j) and world.outer.height(i, j) < 0.0
+			if sea:
 				return r * TILE
 	return INF

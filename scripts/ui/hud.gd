@@ -33,6 +33,7 @@ var goal := {}  # цель путешествия — место из places() �
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
 var _toast_tween: Tween
+var _places: Array = []  # places() мира: не меняются, пока мир тот же
 
 # Состояние игрока для отрисовки карт
 var px := 0.0
@@ -81,6 +82,8 @@ func _ready() -> void:
 func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
 	map_tex = ImageTexture.create_from_image(map_image)
+	_places = []
+	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
 	_toast_queue.clear()
@@ -92,8 +95,9 @@ func set_world(w: WorldData, map_image: Image) -> void:
 ## Выход из игры: забыть мир и карту, чтобы прошлый мир освободился, пока в меню
 func clear_world() -> void:
 	if settlement_panel != null:
-		settlement_panel.hide()
+		settlement_panel.clear()
 	world = null
+	_places = []
 	map_tex = null
 	visited = {}
 	goal = {}
@@ -121,15 +125,18 @@ func set_map_visible(v: bool) -> void:
 ## Места мира, которые можно выбрать на карте: поселения, вершины и озёра.
 ## {key — ключ в visited, name, x, y — клетки, kind — "settlement" | "peak" | "lake", src — запись места}
 func places() -> Array:
-	var out: Array = []
 	if world == null:
-		return out
+		return []
+	if not _places.is_empty():
+		return _places
+	var out: Array = []
 	for s in world.settlements:
 		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, kind = "settlement", src = s})
 	for pk in world.peaks:
 		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, kind = "peak", src = pk})
 	for lk in world.lakes:
 		out.append({key = "l%d" % lk.i, name = lk.name, x = lk.x, y = lk.y, kind = "lake", src = lk})
+	_places = out
 	return out
 
 
@@ -148,7 +155,7 @@ func check_goal(x: float, z: float) -> String:
 	if goal.is_empty():
 		return ""
 	if goal.kind == "lake":
-		if world.lake_near(x / TILE, z / TILE, PlayerState.LAKE_REACH) != goal.src.i:
+		if not world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, goal.src.i):
 			return ""
 	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind == "peak" else 6.0):
 		return ""
@@ -234,6 +241,9 @@ func _process(delta: float) -> void:
 
 ## Положение игрока для мини-карты и большой карты
 func set_player(x: float, z: float, y: float) -> void:
+	# стоит на месте и не крутит головой — карты и компас не перерисовываются каждый кадр
+	if x == px and z == pz and y == yaw:
+		return
 	px = x
 	pz = z
 	yaw = y

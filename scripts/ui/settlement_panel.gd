@@ -33,10 +33,15 @@ func _button(text: String, action: Callable) -> Button:
 	_box.add_child(button)
 	return button
 
-func open(settlement: Dictionary, places: Array, bicycle_near: bool) -> void:
+## Убрать строки и кнопки: кнопки держат места (и записи поселений) прошлого мира
+func clear() -> void:
 	for child: Node in _box.get_children():
 		_box.remove_child(child)
 		child.queue_free()
+	hide()
+
+func open(settlement: Dictionary, places: Array, bicycle_near: bool) -> void:
+	clear()
 	_label(settlement.name, 25)
 	_label("%s · домов: %d" % [settlement.get("character", "деревня"), settlement.huts.size()])
 	_label("Доска маршрутов", 19)

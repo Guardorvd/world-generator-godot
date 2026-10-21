@@ -29,7 +29,6 @@ const SPAN := 60            # мост или туннель охватывае�
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
 const BRIDGE_LANDING_GAP := 0.8 # перепад под концами настила не больше обычной ступени, м
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
-const PORTAL_LEN := 3.0     # у входа туннеля, ближе стольких клеток, прежний путь не пересекает выемку
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
@@ -191,10 +190,11 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			if nx < 0 or ny < 0 or nx >= W or ny >= H:
 				continue
 			var n := ny * W + nx
+			# соседние клетки дешевеют, но не дорожают: уже дешёвый путь (0,3) не поднимается до 0,5 (с 6.9)
 			if cost[n] != INF:
-				cost[n] = maxf(0.5, cost[n] * 0.9)
-			if both:
-				road_cost[n] = maxf(0.5, road_cost[n] * 0.9)
+				cost[n] = minf(cost[n], maxf(0.5, cost[n] * 0.9))
+			if both and road_cost[n] != INF:
+				road_cost[n] = minf(road_cost[n], maxf(0.5, road_cost[n] * 0.9))
 	w.cost = cost
 	_protect_structures(w, road_cost)
 	var line := _road_line(w, pts, on_axis, surface, kind) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
@@ -1020,8 +1020,8 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 	return q
 
 
-## Проходит ли прежний путь (path_mask) поперёк выемки будущего туннеля a–b у его входов (с 3.0): выемка там
-## почти до пола, и путь шёл бы сквозь стену у портала
+## Проходит ли прежний путь (path_mask) поперёк выемки будущего туннеля a–b (с 3.0 — у входов, с 6.9 — по всей
+## длине): выемка опускает рельеф до пола, и путь упирался бы в стену у портала или в провал над туннелем
 static func _path_at_portal(w: WorldData, a: int, b: int) -> bool:
 	var W := w.W
 	var ax := a % W + 0.5
@@ -1032,7 +1032,7 @@ static func _path_at_portal(w: WorldData, a: int, b: int) -> bool:
 		for x in range(maxi(0, floori(minf(ax, bx) - TUNNEL_R)), mini(W, ceili(maxf(ax, bx) + TUNNEL_R))):
 			var da := Grid.hypot(x + 0.5 - ax, y + 0.5 - ay)
 			var db := Grid.hypot(x + 0.5 - bx, y + 0.5 - by)
-			if w.path_mask[y * W + x] >= 2 and minf(da, db) > 0.5 and minf(da, db) < PORTAL_LEN 					and Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= TUNNEL_R:
+			if w.path_mask[y * W + x] >= 2 and minf(da, db) > 0.5 and Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= TUNNEL_R:
 				return true
 	return false
 
@@ -1098,11 +1098,20 @@ static func _same(w: WorldData, list: Array, a: int, b: int, key: int) -> Array:
 	for s: Dictionary in list:
 		if Grid.segment_dist(key % W + 0.5, key / W + 0.5, s.a % W + 0.5, s.a / W + 0.5, s.b % W + 0.5, s.b / W + 0.5) > KEY_R:
 			continue
+		# у короткого моста оба порядка концов проходят REUSE_R: берётся тот, где концы ближе к a и b.
+		# До 6.9 брался первый, путь шёл к дальнему концу через воду, и рядом строился второй такой же мост
+		var best: Array = []
+		var best_d := INF
 		for e in [[s.a, s.b], [s.b, s.a]]:
 			var ea: int = e[0]
 			var eb: int = e[1]
-			if Grid.hypot(ea % W - a % W, ea / W - a / W) <= REUSE_R and Grid.hypot(eb % W - b % W, eb / W - b / W) <= REUSE_R:
-				return e
+			var da := Grid.hypot(ea % W - a % W, ea / W - a / W)
+			var db := Grid.hypot(eb % W - b % W, eb / W - b / W)
+			if da <= REUSE_R and db <= REUSE_R and da + db < best_d:
+				best = e
+				best_d = da + db
+		if not best.is_empty():
+			return best
 	return []
 
 

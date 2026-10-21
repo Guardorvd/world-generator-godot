@@ -293,14 +293,19 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 	var found := PackedStringArray()
 	var tx := x / TILE
 	var tz := z / TILE
+	# сначала расстояние, потом ключ: строки не собираются 60 раз в секунду для каждого места
 	for s in w.settlements:
-		if not visited.has("s%d" % s.i) and Grid.hypot(s.x - tx, s.y - tz) < 6.0:
-			visited["s%d" % s.i] = true
-			found.append("Поселение «%s»" % s.name)
+		if Grid.hypot(s.x - tx, s.y - tz) < 6.0:
+			var key := "s%d" % s.i
+			if not visited.has(key):
+				visited[key] = true
+				found.append("Поселение «%s»" % s.name)
 	for pk in w.peaks:
-		if not visited.has("p%d" % pk.i) and Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
-			visited["p%d" % pk.i] = true
-			found.append("Вы покорили вершину «%s»!" % pk.name)
+		if Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
+			var key := "p%d" % pk.i
+			if not visited.has(key):
+				visited[key] = true
+				found.append("Вы покорили вершину «%s»!" % pk.name)
 	var lk := w.lake_near(tx, tz, LAKE_REACH)
 	if lk >= 0 and not visited.has("l%d" % lk):
 		visited["l%d" % lk] = true

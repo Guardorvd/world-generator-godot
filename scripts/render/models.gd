@@ -1,6 +1,6 @@
 class_name Models
 extends RefCounted
-## Общая библиотека растительности; умеренные деревья строит ForestModels.
+## Общая библиотека растительности; деревья (кроме кактуса) строит ForestModels.
 ## Модели вида: trunk — ствол (цвет bark), crown — крона (цвет из leaves по варианту объекта).
 ## Новый вид объекта: константа в Biomes.T_* и запись здесь.
 
@@ -58,23 +58,18 @@ static func _c(r: int, g: int, b: int) -> Color:
 
 
 static func tree_defs() -> Dictionary:
-	var bark := _c(107, 74, 43)
 	var rock := SphereMesh.new()
 	rock.radius = 1.1
 	rock.height = 2.2
 	rock.radial_segments = 5
 	rock.rings = 2
 	var defs := {
-		Biomes.T_PALM: {trunk = merge([_cyl(0.16, 0.26, 6.2, 5)]), crown = merge([_ico(2.6, 6.3, 1, 0.22, 1)]), bark = _c(138, 106, 64), leaves = [_c(60, 140, 60), _c(80, 150, 55), _c(50, 128, 70)]},
-		Biomes.T_JUNGLE: {trunk = merge([_cyl(0.3, 0.45, 5)]), crown = merge([_ico(3.0, 6.0, 1, 0.75, 1), _moved(_ico(2.0, 4.5), Vector3(1.8, 0, 0))]), bark = _c(90, 64, 38), leaves = [_c(30, 100, 44), _c(40, 112, 40), _c(26, 90, 52)]},
-		Biomes.T_ACACIA: {trunk = merge([_cyl(0.14, 0.22, 3.4)]), crown = merge([_ico(3.2, 3.8, 1, 0.18, 1)]), bark = bark, leaves = [_c(110, 140, 60), _c(126, 146, 64), _c(98, 130, 58)]},
 		Biomes.T_BUSH: {crown = merge([_ico(0.8, 0.55), _moved(_ico(0.6, 0.45), Vector3(0.6, 0, 0.2))]), leaves = [_c(78, 120, 52), _c(96, 130, 56), _c(70, 104, 60)]},
 		Biomes.T_CACTUS: {trunk = merge([_cyl(0.28, 0.32, 2.6, 7), _moved(_cyl(0.18, 0.18, 0.9, 6), Vector3(0.5, 1.0, 0)), _moved(_cyl(0.18, 0.18, 0.8, 6), Vector3(-0.5, 1.3, 0))]), bark = _c(79, 138, 60)},
 		Biomes.T_ROCK: {crown = merge([[rock, Transform3D(Basis().scaled(Vector3(1.3, 0.75, 1)), Vector3(0, 0.35, 0))]]), leaves = [_c(128, 124, 118), _c(112, 108, 104), _c(140, 132, 120)]},
-		Biomes.T_DEAD: {trunk = merge([_cyl(0.12, 0.2, 3.5), _rotz(_cyl(0.06, 0.08, 1.4), 0.8, Vector3(0.4, 2.0, 0)), _rotz(_cyl(0.06, 0.08, 1.2), -0.7, Vector3(-0.4, 2.4, 0))]), bark = _c(78, 61, 44)},
 		Biomes.T_REED: {crown = merge([_cone(0.08, 1.5, 0, 4), _moved(_cone(0.08, 1.2, 0, 4), Vector3(0.3, 0, 0.1)), _moved(_cone(0.08, 1.35, 0, 4), Vector3(-0.2, 0, 0.25))]), leaves = [_c(111, 143, 58), _c(93, 125, 52), _c(120, 140, 70)]},
 	}
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD]:
 		for variant in ForestModels.VARIANTS:
 			defs[kind + variant * ForestModels.MODEL_STRIDE] = ForestModels.definition(kind, variant)
 	return defs

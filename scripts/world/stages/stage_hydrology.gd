@@ -160,6 +160,9 @@ static func run(w: WorldData, again := false) -> void:
 			var ny: int = cy + Grid.DY[k]
 			if nx < 0 or ny < 0 or nx >= W or ny >= H:
 				continue
+			# с 6.9 край карты не поднимается: он должен совпадать с рельефом за краем (OuterLand)
+			if nx == 0 or ny == 0 or nx == W - 1 or ny == H - 1:
+				continue
 			var n := ny * W + nx
 			if lake[n] == 0 and ocean[n] == 0 and river[n] == 0 and h[n] < filled[i] + SHORE_LIFT:
 				h[n] = filled[i] + SHORE_LIFT

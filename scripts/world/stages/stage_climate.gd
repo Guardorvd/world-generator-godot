@@ -90,9 +90,9 @@ static func run(w: WorldData) -> void:
 	var biome := PackedByteArray()
 	biome.resize(N)
 	for y in H:
+		var lat := latitude(w, y)
 		for x in W:
 			var i := y * W + x
-			var lat := latitude(w, y)
 			var e := elev[i]
 			var t := clampf(0.16 + lat * 0.86 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)

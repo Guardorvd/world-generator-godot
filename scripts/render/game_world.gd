@@ -44,6 +44,8 @@ var _trauma := 0.0      # тряска камеры 0..1 после жёстки
 var _moving := false    # игрок шёл в последнем такте (для покачивания камеры)
 var _prev := Vector3()  # игрок (x, ноги, z) на предпоследнем такте: кадр показывает его между тактами
 var _prev_bob := 0.0
+var _prev_dip := 0.0    # проседание и время на предпоследнем такте: кадр показывает их между тактами
+var _prev_time := 0.0
 var _tick_yaw := 0.0    # насколько последний такт повернул камеру сам (вслед за велосипедом);
 var _tick_pitch := 0.0  # кадр доворачивает этот поворот плавно, а мышь — сразу
 
@@ -129,6 +131,8 @@ func set_paused(p: bool) -> void:
 	paused = p
 	if p:
 		_close_settlement(false)
+	else:
+		_apply_shadows() # тени меняются в настройках на паузе
 	audio.set_paused(p)
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false
@@ -159,6 +163,9 @@ func toggle_bike() -> void:
 	var d := bike.distance_to(player)
 	if d > GameConfig.BIKE_MOUNT:
 		hud.toast("Велосипед в %d м отсюда" % roundi(d))
+		return
+	if not bike.can_mount(player):
+		hud.toast("Велосипед выше или ниже вас")
 		return
 	bike.mount(player)
 	_cam_y = player.feet + 1.4
@@ -325,6 +332,8 @@ func _physics_process(dt: float) -> void:
 func _store_prev() -> void:
 	_prev = Vector3(player.x, player.feet, player.z)
 	_prev_bob = player.bob
+	_prev_dip = _dip
+	_prev_time = time
 
 
 ## Последний такт становится и предпоследним: после переноса игрока (сел, слез, упал) кадр не тянет
@@ -349,7 +358,6 @@ func _process(delta: float) -> void:
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	bike_view.draw(alpha)
 	_update_hints()
-	_apply_shadows()
 	_update_camera(alpha, delta)
 
 	var uploaded := vegetation.update(pos.x, pos.z, false)
@@ -360,7 +368,7 @@ func _process(delta: float) -> void:
 	for l: Label3D in labels:
 		var d := Vector2(l.position.x - pos.x, l.position.z - pos.z).length()
 		l.visible = d > 25.0 and d < 900.0
-	SettlementsBuilder.animate_fires(fires, time)
+	SettlementsBuilder.animate_fires(fires, lerpf(_prev_time, time, alpha))
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0)
 
 	info_timer -= delta
@@ -372,9 +380,11 @@ func _process(delta: float) -> void:
 
 
 ## Камера на велосипеде упирается в землю, настил моста или стену (перила, стены туннеля) в точке p
-func _cam_blocked(p: Vector3) -> bool:
+func _cam_blocked(p: Vector3, feet: float) -> bool:
 	if p.y < heights.surface_at(p.x, p.z, p.y) + 0.3:
 		return true
+	if p.y > heights.ceiling_at(p.x, p.z, feet) - 0.3:
+		return true # свод туннеля, в котором едет седок
 	# перила и стены: на высоте глаз (чуть выше ног) стена на пути камеры закрывает обзор;
 	# камера держится в 0,25 м от них, чтобы ближняя плоскость отсечения не заглядывала за стену
 	return heights.wall_at(p.x, p.z, p.y - 1.0, 0.25)
@@ -407,7 +417,7 @@ func _update_hints() -> void:
 	if bike.riding:
 		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · F — слезть · Esc — пауза", visit)
 		return
-	var near := bike.distance_to(player) <= GameConfig.BIKE_MOUNT
+	var near := bike.can_mount(player)
 	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · F — велосипед · M — карта · Esc — пауза",
 		visit if not visit.is_empty() else ("F — сесть на велосипед" if near else ""))
 
@@ -489,20 +499,22 @@ func _update_camera(alpha: float, dt: float) -> void:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	camera.fov = lerpf(camera.fov, fov_goal, _smooth(4.0, dt))
 	var shake := _trauma * _trauma if GameSettings.head_bob else 0.0
-	var jolt := Vector3(sin(time * 41.0), sin(time * 37.0 + 1.7), sin(time * 29.0 + 3.1)) * shake
+	var t := lerpf(_prev_time, time, alpha)
+	var jolt := Vector3(sin(t * 41.0), sin(t * 37.0 + 1.7), sin(t * 29.0 + 3.1)) * shake
+	var dip := lerpf(_prev_dip, _dip, alpha) if GameSettings.head_bob else 0.0
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
-		var suspension := -bike.squash * 0.25 if GameSettings.head_bob else 0.0
+		var suspension := -bike_view.view_squash() * 0.25 if GameSettings.head_bob else 0.0
 		_cam_y = lerpf(_cam_y, pos.y + 1.4 + suspension, _smooth(10.0, dt))
 		if absf(_cam_y - pos.y - 1.4) > 2.0:
 			_cam_y = pos.y + 1.4 + clampf(_cam_y - pos.y - 1.4, -2.0, 2.0)
-		var target := Vector3(pos.x, _cam_y + (_dip if GameSettings.head_bob else 0.0), pos.z)
+		var target := Vector3(pos.x, _cam_y + dip, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var dist := GameConfig.BIKE_CAM
 		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть
 		for k in range(1, CAM_STEPS + 1):
 			var p := target - dir * (GameConfig.BIKE_CAM * k / CAM_STEPS)
-			if _cam_blocked(p):
+			if _cam_blocked(p, pos.y):
 				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / CAM_STEPS)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
@@ -510,12 +522,14 @@ func _update_camera(alpha: float, dt: float) -> void:
 		var cam := target - dir * _cam_dist + jolt * 0.12
 		# не ниже земли и настила моста, под которым камера окажется в стене или в воздухе
 		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + 0.4)
+		# в туннеле — не выше свода
+		cam.y = minf(cam.y, heights.ceiling_at(cam.x, cam.z, pos.y) - 0.3)
 		camera.look_at_from_position(cam, target, Vector3.UP)
 		return
 	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and GameSettings.head_bob else 0.0, _smooth(8.0, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
 	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * 0.05 * stride * _bob_amp
-	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + _dip, pos.z)
+	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip, pos.z)
 	camera.rotation = Vector3(view_pitch + jolt.x * 0.03, view_yaw + jolt.y * 0.02, jolt.z * 0.03)
 
 

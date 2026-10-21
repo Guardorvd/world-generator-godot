@@ -98,7 +98,7 @@ static func run(w: WorldData) -> void:
 	w.river_area = river.duplicate()
 	# Берег определяется по окончательному игровому дну: тот же коридор нужен
 	# дорогам, растительности и расстояниям до воды ещё до этапа климата.
-	var surface := Heightfield.new(w, false)
+	var surface := Heightfield.new(w, false, true)
 	for cell: int in surface._river_cells:
 		w.river_area[cell] = 1
 
@@ -123,32 +123,61 @@ static func _shape_valleys(w: WorldData) -> void:
 		var level := maxf(floor_level, original[i] - (0.003 + 0.003 * size) * fade)
 		w.filled[i] = level
 		w.h[i] = level
+	var W := w.W
+	var H := w.H
+	var h := w.h
+	var filled := w.filled
+	var ocean := w.ocean
+	var lake := w.lake
+	var river := w.river
+	var acc := w.acc
+	var DX := Grid.DX
+	var DY := Grid.DY
+	# С 6.9 подрезка долины не опускает берег озера ниже его воды плюс SHORE_LIFT
+	# (у выхода реки из озера склон долины уходил под уровень озера)
+	var bank := PackedFloat32Array()
+	bank.resize(w.N)
+	bank.fill(-INF)
+	for i in w.N:
+		if lake[i] == 0 or ocean[i] != 0:
+			continue
+		var cx := i % W
+		var cy := i / W
+		for k in 8:
+			var nx: int = cx + DX[k]
+			var ny: int = cy + DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			bank[n] = maxf(bank[n], filled[i] + StageHydrology.SHORE_LIFT)
 	# Снимок высот и min делают результат независимым от порядка соседних русел.
 	for i in w.N:
-		if w.river[i] == 0:
+		if river[i] == 0:
 			continue
-		var x := i % w.W
-		var y := i / w.W
+		var x := i % W
+		var y := i / W
 		var relief := 0.0
 		for k in 8:
-			var nx: int = clampi(x + Grid.DX[k] * 2, 0, w.W - 1)
-			var ny: int = clampi(y + Grid.DY[k] * 2, 0, w.H - 1)
-			relief = maxf(relief, absf(original[ny * w.W + nx] - original[i]))
+			var nx: int = clampi(x + DX[k] * 2, 0, W - 1)
+			var ny: int = clampi(y + DY[k] * 2, 0, H - 1)
+			relief = maxf(relief, absf(original[ny * W + nx] - original[i]))
 		var steep := smoothstep(0.012, 0.09, relief)
-		var size := clampf(sqrt(w.acc[i] / WorldData.RIVER_ACC), 0.0, 3.0)
+		var size := clampf(sqrt(acc[i] / WorldData.RIVER_ACC), 0.0, 3.0)
 		var radius := lerpf(3.0 + size * 1.5, 1.5 + size * 0.4, steep)
 		var r := ceili(radius)
-		for ny in range(maxi(0, y - r), mini(w.H, y + r + 1)):
-			for nx in range(maxi(0, x - r), mini(w.W, x + r + 1)):
-				var n := ny * w.W + nx
-				if w.ocean[n] != 0 or w.lake[n] != 0 or w.river[n] != 0:
+		var fi := filled[i]
+		for ny in range(maxi(0, y - r), mini(H, y + r + 1)):
+			for nx in range(maxi(0, x - r), mini(W, x + r + 1)):
+				var n := ny * W + nx
+				if ocean[n] != 0 or lake[n] != 0 or river[n] != 0:
 					continue
 				var t := Vector2(nx - x, ny - y).length() / radius
 				if t >= 1.0:
 					continue
-				var edge := minf(minf(nx, w.W - 1 - nx), minf(ny, w.H - 1 - ny))
+				var edge := minf(minf(nx, W - 1 - nx), minf(ny, H - 1 - ny))
 				var blend := (1.0 - smoothstep(0.0, 1.0, t)) * smoothstep(0.0, 8.0, edge)
-				var profile := w.filled[i] + 0.002 + lerpf(0.012 * t * t, 0.09 * t, steep)
+				var profile := fi + 0.002 + lerpf(0.012 * t * t, 0.09 * t, steep)
 				# Ограниченный срез: горы не превращаются в глубокие щели.
 				var target := maxf(profile, original[n] - lerpf(0.012, 0.035, steep))
-				w.h[n] = minf(w.h[n], lerpf(original[n], minf(original[n], target), blend))
+				var cut := lerpf(original[n], minf(original[n], target), blend)
+				h[n] = minf(h[n], maxf(cut, minf(original[n], bank[n])))

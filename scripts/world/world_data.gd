@@ -146,6 +146,19 @@ func lake_near(x: float, y: float, r: int) -> int:
 	return -1
 
 
+## Есть ли озеро id в квадрате ±r клеток вокруг точки (клетки)
+func lake_within(x: float, y: float, r: int, id: int) -> bool:
+	if lake_id.is_empty():
+		return false
+	var tx := floori(x)
+	var ty := floori(y)
+	for dy in range(maxi(0, ty - r), mini(H, ty + r + 1)):
+		for dx in range(maxi(0, tx - r), mini(W, tx + r + 1)):
+			if lake_id[dy * W + dx] == id:
+				return true
+	return false
+
+
 ## Сведения о местности в точке (координаты в клетках). За краем карты — из OuterLand, если он
 ## подключён и этот кусок уже посчитан, иначе пустой словарь
 func tile_info(x: float, y: float) -> Dictionary:

@@ -90,6 +90,8 @@ static func compute_chunk(w: WorldData, key: Vector2i) -> Dictionary:
 
 ## Где лежит клетка (i, j) за краем карты: [поля, номер в них] или [] — куска ещё нет
 func _locate(i: int, j: int) -> Array:
+	if i >= 0 and j >= 0 and i < W and j < H:
+		return [] # клетка на карте: её поля в WorldData, не здесь
 	if i >= -1 and j >= -1 and i <= W and j <= H:
 		if j == -1:
 			return [_ring[0], i + 1]

@@ -6,7 +6,8 @@ const Plants := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 var world: WorldData
 var heights: Heightfield
-var occupied: Array[AABB] = [] # несколько крупных деталей в ближнем круге
+var occupied: Array[AABB] = [] # несколько крупных деталей в ближнем круге (только через occupy и clear_occupied)
+var _occ_cells := {} # Vector2i(клетка мира) -> PackedInt32Array номеров в occupied: травинка смотрит 1–4 клетки, а не весь список
 var _cells := {} # Vector2i(клетка) -> [x, z, радиус, объект, ...], см. prepare
 var _max_r := 0.0
 
@@ -25,10 +26,33 @@ static func priority(kind: int) -> int:
 	return 2
 
 
+func clear_occupied() -> void:
+	occupied.clear()
+	_occ_cells.clear()
+
+
+## Занять место крупной деталью (валежник, камни, кусты): по ней проверяются следующие детали и трава
+func occupy(box: AABB) -> void:
+	var k := occupied.size()
+	occupied.append(box)
+	for cz in range(floori(box.position.z / TILE), floori(box.end.z / TILE) + 1):
+		for cx in range(floori(box.position.x / TILE), floori(box.end.x / TILE) + 1):
+			var key := Vector2i(cx, cz)
+			var list: PackedInt32Array = _occ_cells.get(key, PackedInt32Array())
+			list.append(k)
+			_occ_cells[key] = list
+
+
 func details_clear(box: AABB) -> bool:
-	for obstacle in occupied:
-		if obstacle.intersects(box):
-			return false
+	# с 6.9 по клеткам: раньше каждая из ~12 000 травинок перебирала все занятые места
+	for cz in range(floori(box.position.z / TILE), floori(box.end.z / TILE) + 1):
+		for cx in range(floori(box.position.x / TILE), floori(box.end.x / TILE) + 1):
+			var list: Variant = _occ_cells.get(Vector2i(cx, cz))
+			if list == null:
+				continue
+			for k: int in list:
+				if occupied[k].intersects(box):
+					return false
 	return true
 
 
@@ -47,6 +71,7 @@ func ground_clear(x: float, z: float, radius: float) -> bool:
 	if StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, radius / TILE + 0.3):
 		return false
 	var steps := ceili(radius * 2.0)
+	var rc := world.river_cells() # коридор ленты реки, как у генератора растительности
 	for j in steps + 1:
 		for i in steps + 1:
 			var px := x + lerpf(-radius, radius, float(i) / maxi(1, steps))
@@ -56,7 +81,7 @@ func ground_clear(x: float, z: float, radius: float) -> bool:
 			if cx < 0 or cy < 0 or cx >= world.W or cy >= world.H:
 				return false
 			var k := cy * world.W + cx
-			if world.path_mask[k] > 0 or world.river[k] != 0:
+			if world.path_mask[k] > 0 or rc[k] != 0:
 				return false
 			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, world.W) > 0.08:
 				return false

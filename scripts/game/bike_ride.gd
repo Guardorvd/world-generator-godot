@@ -20,6 +20,7 @@ const SOFT_IMPACT := 7.0  # приземление жёстче этого (м/�
 ## На пути колёса держатся полотна на мелких изломах, руль зависит от сцепления покрытия.
 const SLOPE_GRAVITY := 7.5 # смягчённая сила склона: инерция ощутима, но подъёмы доступны
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
+const MOUNT_RISE := 1.5  # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу после схода с края, с
 
 var x := 0.0          # метры
@@ -71,6 +72,11 @@ func distance_to(p: PlayerState) -> float:
 	return Grid.hypot(x - p.x, z - p.z)
 
 
+## Можно ли сесть: велосипед рядом и на том же уровне (не на мосту над бредущим под ним игроком)
+func can_mount(p: PlayerState) -> bool:
+	return distance_to(p) <= GameConfig.BIKE_MOUNT and absf(y - p.feet) < MOUNT_RISE
+
+
 func mount(p: PlayerState) -> void:
 	riding = true
 	speed = 0.0
@@ -98,6 +104,9 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	_brake_hold = 0.0
 	_yaw_rate = 0.0
 	_coyote = 0.0
+	vy = 0.0
+	air_time = 0.0
+	_hop_wait = 0.0
 	y = heights.surface_at(x, z, y)
 	p.vx = 0.0
 	p.vy = 0.0
@@ -134,12 +143,16 @@ func _slope(heights: Heightfield) -> float:
 ## доступен, если ждать недолго).
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var slope := _slope(heights)
-	var surf := PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
-	var path_weight := 1.0 if surf != RoadSurface.NONE else 0.0
+	var surf := RoadSurface.NONE
+	var path_weight := 0.0
 	if heights.road_refinement != null:
 		var contact := heights.road_refinement.sample(x, z, w.W)
-		surf = contact.surface if not contact.is_empty() else RoadSurface.NONE
-		path_weight = smoothstep(0.05, 0.9, contact.weight) if not contact.is_empty() else 0.0
+		if not contact.is_empty():
+			surf = contact.surface
+			path_weight = smoothstep(0.05, 0.9, contact.weight)
+	else:
+		surf = PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
+		path_weight = 1.0 if surf != RoadSurface.NONE else 0.0
 	var on_path := surf != RoadSurface.NONE
 	var speed0 := speed
 	if not airborne:
@@ -266,6 +279,8 @@ func _step_vertical(g: float, path_weight: float, hop: bool, dt: float, heights:
 			y = fly
 		else:
 			var gv := (g - y) / maxf(dt, 0.0001)
+			# ступенька (въезд на настил, шов полотна) — не склон: её подъём не становится скоростью взлёта
+			gv = minf(gv, absf(speed) * 1.2 + 0.5)
 			squash_v += clampf(gv - vy, -4.0, 6.0) * 0.18
 			vy = gv
 			y = g

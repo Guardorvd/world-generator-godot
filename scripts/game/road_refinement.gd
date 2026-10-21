@@ -432,8 +432,8 @@ func height_at(x: float, z: float, width: int) -> float:
 	var fz := z / TILE - 0.5
 	if fx < 0.0 or fz < 0.0 or fx >= width - 1 or fz >= _height - 1:
 		return INF
-	var key := floori(fz) * width + floori(fx)
-	if not patches.has(key):
+	var patch: Variant = patches.get(floori(fz) * width + floori(fx)) # один поиск вместо has + []
+	if patch == null:
 		return INF
 	var sx := (fx - floorf(fx)) * DIV
 	var sz := (fz - floorf(fz)) * DIV
@@ -442,7 +442,7 @@ func height_at(x: float, z: float, width: int) -> float:
 	var tx := sx - ix
 	var tz := sz - iz
 	var a := iz * STRIDE + ix
-	var hs: PackedFloat32Array = patches[key].h
+	var hs: PackedFloat32Array = patch.h
 	if tx + tz <= 1.0:
 		return hs[a] + (hs[a + 1] - hs[a]) * tx + (hs[a + STRIDE] - hs[a]) * tz
 	var d := a + STRIDE + 1

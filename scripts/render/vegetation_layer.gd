@@ -368,7 +368,7 @@ func _fill_grass(px: float, pz: float) -> void:
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
-	placement.occupied.clear()
+	placement.clear_occupied()
 	placement.prepare(px, pz, GameConfig.GRASS_R + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
@@ -505,7 +505,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
 	if Placement.priority(kind) < 2:
-		placement.occupied.append(box.grow(0.03))
+		placement.occupy(box.grow(0.03))
 
 
 func _filter_grass() -> void:

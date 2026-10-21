@@ -6,6 +6,8 @@ extends RefCounted
 
 const TUNNEL_HEIGHT := Heightfield.TUNNEL_HEIGHT
 
+static var _boxes := {} # Vector3 (размер) -> BoxMesh
+
 
 static func _mat(c: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
@@ -15,9 +17,13 @@ static func _mat(c: Color) -> StandardMaterial3D:
 
 
 ## Ящик size с центром в offset в системе координат at
+## Ящики одного размера (перила, столбики, доски) — один BoxMesh: на длинном мосту их тысячи
 static func _box(batch: MeshBatch, at: Transform3D, size: Vector3, offset: Vector3, mat: Material) -> void:
-	var b := BoxMesh.new()
-	b.size = size
+	var b: BoxMesh = _boxes.get(size)
+	if b == null:
+		b = BoxMesh.new()
+		b.size = size
+		_boxes[size] = b
 	batch.add(b, at * Transform3D(Basis(), offset), mat)
 
 
@@ -45,6 +51,8 @@ static func build(parent: Node3D, heights: Heightfield) -> void:
 			_tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, stone, portal)
 		else:
 			_bridge(batch, heights, s, wood, rail)
+	# у каждого моста свои длины пролётов: кэш нужен только на время сборки, иначе он растёт от мира к миру
+	_boxes.clear()
 	var mi := batch.build("Structures")
 	if mi != null:
 		parent.add_child(mi)

@@ -38,7 +38,9 @@ static func run(w: WorldData) -> void:
 		qh += 1
 		var cx := c % W
 		var cy := c / W
-		for k in 4:
+		# с 6.9 — 8 соседей, как у заполнения впадин: море за диагональным перешейком тоже океан,
+		# а не суша ниже уровня моря
+		for k in 8:
 			var nx: int = cx + Grid.DX[k]
 			var ny: int = cy + Grid.DY[k]
 			if nx < 0 or ny < 0 or nx >= W or ny >= H:

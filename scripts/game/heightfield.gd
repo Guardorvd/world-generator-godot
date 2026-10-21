@@ -15,6 +15,7 @@ const TUNNEL_CUT := StageTrails.TUNNEL_R   # выемка под туннеле�
 const ARCH := 0.04          # подъём середины моста на метр длины (не больше 3 м)
 const STEP := 0.8           # на настил можно шагнуть или въехать, если ноги не ниже него на столько
 const WALL := 0.6           # толщина перил моста, в которые упирается игрок, м
+const _NO_SEGMENTS: Array = []  # пустой список отрезков реки: не новый массив на каждый вызов
 const TUNNEL_WALL := 1.0    # толщина стен туннеля, м (как у их модели в StructuresBuilder)
 
 var world: WorldData
@@ -34,7 +35,8 @@ var path_timings := {}
 ## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
 ## и туннели (build_structures). WorldLoader строит рельеф раньше, чем тропы готовы, и передаёт false:
 ## пути, мосты и туннели в это время ещё пишет генератор (его рельеф для поиска — без полотна)
-func _init(w: WorldData, with_structures := true) -> void:
+## rivers_only — только ленты рек и _river_cells (StageRivers берёт из них коридор, остальное не нужно)
+func _init(w: WorldData, with_structures := true, rivers_only := false) -> void:
 	world = w
 	var N := w.N
 	var W := w.W
@@ -67,14 +69,17 @@ func _init(w: WorldData, with_structures := true) -> void:
 				for k: int in tri:
 					hv[k] -= cut
 	_fit_river_banks()
+	if rivers_only:
+		return
 	water_level.resize(N)
 	water_level.fill(-INF)
+	var rc := w.river_cells()
 	for i in N:
 		if w.ocean[i] != 0:
 			water_level[i] = 0.0
 		elif w.lake[i] != 0:
 			water_level[i] = w.filled[i] * HS
-		elif w.river_cells()[i] != 0:
+		elif rc[i] != 0:
 			# Для коридора A* и закрепления берегов — верхняя оценка по ленте.
 			# В точке depth_at проверяет её фактические треугольники.
 			var level := river_level((i % W + 0.5) * TILE, (i / W + 0.5) * TILE)
@@ -111,23 +116,25 @@ func build_structures() -> PackedInt32Array:
 	structures = []
 	_cells = {}
 	var changed := PackedInt32Array()
-	for b: Dictionary in world.bridges:
-		var s := _axis(b.a, b.b, false)
-		s.ay = ground_at(s.ax, s.az)
-		s.by = ground_at(s.bx, s.bz)
-		structures.append(s)
 	var tunnels: Array = []
 	for t: Dictionary in world.tunnels:
 		var s := _axis(t.a, t.b, true)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
-		structures.append(s)
 		tunnels.append(s)
 	# сначала рельеф за входами опускается до пола, потом пол внутри выравнивается:
 	# так соседний туннель не опустит пол уже прорезанного
 	for inside: bool in [false, true]:
 		for t: Dictionary in tunnels:
 			_cut(t, inside, changed)
+	# концы мостов меряются после выемок (с 6.9): мост у портала стоит на опущенном рельефе, как при генерации,
+	# и повторный вызов даёт те же высоты. Порядок в structures прежний: мосты, затем туннели
+	for b: Dictionary in world.bridges:
+		var s := _axis(b.a, b.b, false)
+		s.ay = ground_at(s.ax, s.az)
+		s.by = ground_at(s.bx, s.bz)
+		structures.append(s)
+	structures.append_array(tunnels)
 	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
 	for k in structures.size():
 		var s: Dictionary = structures[k]
@@ -223,6 +230,27 @@ func surface_at(x: float, z: float, feet: float) -> float:
 	return maxf(ground_at(x, z), deck_at(x, z, feet))
 
 
+## Свод туннеля над точкой (x, z) для ног на высоте feet (ноги внутри туннеля) или INF
+func ceiling_at(x: float, z: float, feet: float) -> float:
+	var list: Variant = _cell_list(x, z)
+	if list == null:
+		return INF
+	var top := INF
+	for k in list:
+		var s: Dictionary = structures[k]
+		if not s.tunnel:
+			continue
+		var dx: float = x - s.ax
+		var dz: float = z - s.az
+		var t: float = dx * s.ux + dz * s.uz
+		if t < 0.0 or t > s.len or absf(dx * s.uz - dz * s.ux) > s.half + TUNNEL_WALL:
+			continue
+		var d := level(s, t)
+		if feet >= d - STEP and feet < d + TUNNEL_HEIGHT:
+			top = minf(top, d + TUNNEL_HEIGHT)
+	return top
+
+
 ## Перила моста или стена туннеля ближе r к точке (x, z) на высоте ног feet: r — радиус тела, которое
 ## проверяется (игрок, колесо велосипеда, камера). Там, где сооружения сходятся, настил или пол одного
 ## не перегораживается перилами или стеной другого
@@ -296,7 +324,7 @@ func current_at(x: float, z: float) -> Vector2:
 	if level_here <= maxf(0.0, lake_level(x, z)) + 0.001:
 		return Vector2.ZERO
 	var cell := floori(z / TILE) * world.W + floori(x / TILE)
-	for s: Dictionary in _river_cells.get(cell, []):
+	for s: Dictionary in _river_cells.get(cell, _NO_SEGMENTS):
 		var top := maxf(_water_triangle(x, z, s.a.left, s.a.right, s.b.left),
 			_water_triangle(x, z, s.b.left, s.a.right, s.b.right))
 		if absf(top - level_here) > 0.001:
@@ -392,7 +420,7 @@ func river_level(x: float, z: float) -> float:
 		return -INF
 	var cell := floori(z / TILE) * world.W + floori(x / TILE)
 	var top := -INF
-	for s: Dictionary in _river_cells.get(cell, []):
+	for s: Dictionary in _river_cells.get(cell, _NO_SEGMENTS):
 		top = maxf(top, _water_triangle(x, z, s.a.left, s.a.right, s.b.left))
 		top = maxf(top, _water_triangle(x, z, s.b.left, s.a.right, s.b.right))
 	return top
@@ -405,9 +433,16 @@ func lake_level(x: float, z: float) -> float:
 		return -INF
 	var a := cy * world.W + cx
 	var top := -INF
-	for i in [a, a + 1, a + world.W, a + world.W + 1]:
-		if world.lake[i] != 0:
-			top = maxf(top, world.filled[i] * HS - WaterBuilder.LAKE_DROP)
+	# четыре соседние клетки без нового массива на вызов: функция в самом частом пути проверки воды
+	if world.lake[a] != 0:
+		top = world.filled[a] * HS - WaterBuilder.LAKE_DROP
+	if world.lake[a + 1] != 0:
+		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
+	a += world.W
+	if world.lake[a] != 0:
+		top = maxf(top, world.filled[a] * HS - WaterBuilder.LAKE_DROP)
+	if world.lake[a + 1] != 0:
+		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
 	return top
 
 

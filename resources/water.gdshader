@@ -101,8 +101,11 @@ void fragment() {
 	vec3 deep = ocean ? vec3(0.045, 0.15, 0.23) : deep_color;
 	ALBEDO = mix(mix(shallow_color, deep, absorption), vec3(0.80, 0.87, 0.82), foam);
 	METALLIC = 0.0;
-	SPECULAR = 0.4;
-	ROUGHNESS = mix(mix(0.24, 0.36, rapid), 0.65, foam);
+	// 6.9: вдали рябь гаснет (detail → 0) и вода становилась зеркалом — каждое озеро и изгиб реки давали
+	// резкий круглый блик солнца, а свечение раздувало его в пятно. Пропавшую рябь заменяет шероховатость.
+	float far_rough = 1.0 - detail;
+	ROUGHNESS = mix(mix(mix(0.24, 0.36, rapid), 0.5, far_rough), 0.65, foam);
+	SPECULAR = mix(0.4, 0.25, far_rough);
 	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 5.0);
 	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV2.x, 1.0 - UV2.x)) : 1.0;
 	float join = river_surface ? 1.0 - COLOR.b : 1.0;

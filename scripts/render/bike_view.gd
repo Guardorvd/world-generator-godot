@@ -57,6 +57,8 @@ func _ready() -> void:
 @onready var shin_l: Node3D = $Rider/ShinL
 @onready var thigh_r: Node3D = $Rider/ThighR
 @onready var shin_r: Node3D = $Rider/ShinR
+@onready var torso: Node3D = $Rider/Torso
+@onready var head: Node3D = $Rider/Head
 
 
 ## Запомнить состояние после такта физики
@@ -114,12 +116,17 @@ func draw(alpha: float) -> void:
 	if _riding:
 		# Небольшая группировка на скорости и работа корпусом при сжатии подвески.
 		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4
-		$Rider/Torso.rotation.x = -0.5105 - tuck
-		$Rider/Head.position = Vector3(0.0, 1.66 - tuck * 0.3, -0.17 - tuck * 0.3)
+		torso.rotation.x = -0.5105 - tuck
+		head.position = Vector3(0.0, 1.66 - tuck * 0.3, -0.17 - tuck * 0.3)
 		var c := cos(-_mix[S_CRANK]) * CRANK_R
 		var s := sin(-_mix[S_CRANK]) * CRANK_R
 		_leg(thigh_r, shin_r, HIP, Vector3(PEDAL_X, CRANK_Y - c, -s))
 		_leg(thigh_l, shin_l, Vector3(-HIP.x, HIP.y, HIP.z), Vector3(-PEDAL_X, CRANK_Y + c, s))
+
+
+## Ход подвески в последнем кадре draw (для камеры, без ступенек 60 Гц)
+func view_squash() -> float:
+	return _mix[S_SQUASH] if _mix.size() > S_SQUASH else 0.0
 
 
 ## Бедро от таза до колена и голень от колена до стопы; колено смотрит вперёд и вверх
