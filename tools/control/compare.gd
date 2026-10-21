@@ -1,5 +1,5 @@
 extends SceneTree
-## Сравнение прогона с базой: снимки (доля изменившихся пикселей и картинка «было | стало | разница»),
+## Сравнение прогона с базой (сравнивается то, что есть в новом прогоне): снимки (доля изменившихся пикселей и картинка «было | стало | разница»),
 ## сводки миров (stats_*.json) и замеры (perf.json). Пишет <новая папка>/compare/report.md и картинки рядом.
 ## По умолчанию база — самая свежая версия в tools/control/baseline, новая папка — tools/control/runs/<версия>.
 ## Запуск из папки проекта:
@@ -72,17 +72,17 @@ static func _flat(d: Dictionary, prefix: String, out: Dictionary) -> void:
 func _compare_stats(base: String, fresh: String) -> void:
 	lines.append("## Миры")
 	lines.append("")
-	for f in _files(base, "stats_", ["json"]):
+	# сравнивается то, что снято в новом прогоне: быстрая проверка снимает один мир, а база может быть полной
+	for f in _files(fresh, "stats_", ["json"]):
 		var a := {}
 		var b := {}
-		_flat(Dev.load_json(base.path_join(f)), "", a)
-		var nb: Variant = Dev.load_json(fresh.path_join(f))
+		var na: Variant = Dev.load_json(base.path_join(f))
 		var name := f.trim_prefix("stats_").trim_suffix(".json")
-		if nb == null:
-			lines.append("- %s: в новом прогоне нет сводки" % name)
-			notes.append("%s: нет сводки мира" % name)
+		if na == null:
+			lines.append("- %s: в базе этого мира нет" % name)
 			continue
-		_flat(nb, "", b)
+		_flat(na, "", a)
+		_flat(Dev.load_json(fresh.path_join(f)), "", b)
 		var diff: PackedStringArray = []
 		var keys := a.keys()
 		for k in b:
@@ -108,11 +108,10 @@ func _compare_images(base: String, fresh: String, out: String) -> void:
 	lines.append("")
 	lines.append("| Снимок | Изменилось, % | |")
 	lines.append("|---|---:|---|")
-	for f in _files(base, "", ["png", "jpg"]):
+	for f in _files(fresh, "", ["png", "jpg"]):
 		var name := f.get_basename()
-		if not FileAccess.file_exists(fresh.path_join(f)):
-			lines.append("| %s | — | нет в новом прогоне |" % name)
-			notes.append("%s: нет снимка" % name)
+		if not FileAccess.file_exists(base.path_join(f)):
+			lines.append("| %s | — | нет в базе |" % name)
 			continue
 		var a := Image.load_from_file(base.path_join(f))
 		var b := Image.load_from_file(fresh.path_join(f))
@@ -187,9 +186,9 @@ func _compare_perf(base: String, fresh: String) -> void:
 	lines.append("")
 	lines.append("| Размер | Показатель | Было | Стало | Разница |")
 	lines.append("|---|---|---:|---:|---:|")
-	for s in a.sizes:
-		if not b.sizes.has(s):
-			lines.append("| %s | нет замера | | | |" % s)
+	for s in b.sizes:
+		if not a.sizes.has(s):
+			lines.append("| %s | нет в базе | | | |" % s)
 			continue
 		var ra: Dictionary = a.sizes[s]
 		var rb: Dictionary = b.sizes[s]
