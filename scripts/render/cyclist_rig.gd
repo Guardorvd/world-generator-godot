@@ -5,18 +5,21 @@ extends Node3D
 @onready var skeleton: Skeleton3D = $Skeleton3D
 var _poses: Dictionary = {}
 
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0) -> void:
 	if not procedural_pose:
 		return
 	_poses.clear()
-	var hip := Vector3(0, 0.97, 0.17)
-	var chest := Vector3(0, 1.37 - tuck * 0.25, -0.08 - tuck * 0.45)
+	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.
+	var hip := Vector3(motion.y * 0.35, 0.97 - motion.z * 0.45, 0.17 + motion.x * 0.5)
+	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z, -0.08 - tuck * 0.45 + motion.x)
+	var upper_basis := Basis(Vector3.UP, look * 0.35)
+	var head_basis := Basis.from_euler(Vector3(-pitch * 0.4, look, -roll * 0.35))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip)
 	_aim("Spine", hip, chest)
 	_aim("Chest", hip.lerp(chest, 0.55), chest)
 	_set_bone("Neck", chest + Vector3(0, 0.07, -0.02))
-	_set_bone("Head", Vector3(0, 1.59 - tuck * 0.3, -0.17 - tuck * 0.3))
+	_set_bone("Head", chest + Vector3(0, 0.22 - tuck * 0.05, -0.09 + tuck * 0.15), head_basis)
 	for side in [-1.0, 1.0]:
 		var suffix := "L" if side < 0 else "R"
 		var foot := Vector3(side * 0.14, 0.3 - side * cos(-crank_angle) * 0.17, -side * sin(-crank_angle) * 0.17)
@@ -27,13 +30,13 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		_aim("LowerLeg" + suffix, knee, ankle)
 		_set_bone("Foot" + suffix, ankle)
 		_set_bone("Toe" + suffix, foot + Vector3(0, 0.04, -0.07))
-		var shoulder := chest + Vector3(side * 0.18, 0, 0)
+		var shoulder := chest + upper_basis * Vector3(side * 0.18, 0, 0)
 		var grip := left_grip if side < 0 else right_grip
 		_set_bone("Clavicle" + suffix, chest)
 		var elbow := _joint(shoulder, grip, 0.31, Vector3(side * 0.6, 0, 1))
 		_aim("UpperArm" + suffix, shoulder, elbow)
 		_aim("Forearm" + suffix, elbow, grip)
-		_set_bone("Hand" + suffix, grip)
+		_set_bone("Hand" + suffix, grip, Basis(Vector3.UP, atan2(-(right_grip - left_grip).z, (right_grip - left_grip).x)))
 
 func _set_bone(bone_name: String, origin: Vector3, basis := Basis.IDENTITY) -> void:
 	var index := skeleton.find_bone(bone_name)

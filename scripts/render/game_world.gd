@@ -298,7 +298,6 @@ func _physics_process(dt: float) -> void:
 			if GameSettings.head_bob:
 				_dip_v -= clampf(bike.land_impact - 2.5, 0.0, 8.0) * 0.12
 			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
-		bike.land_impact = 0.0
 		crashed = bike.crashed
 		if crashed:
 			_crash()
@@ -317,7 +316,8 @@ func _physics_process(dt: float) -> void:
 	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
 	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
 	_trauma = maxf(0.0, _trauma - dt * 1.6)
-	bike_view.tick(bike)
+	bike_view.tick(bike, dt, fw, Input.is_action_pressed("run"))
+	bike.land_impact = 0.0
 	audio.tick(player, bike.riding)
 	if crashed:
 		_snap()

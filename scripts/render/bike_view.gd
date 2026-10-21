@@ -23,7 +23,11 @@ const S_CRANK := 9
 const S_TUCK := 10
 const S_SQUASH_F := 11
 const S_SQUASH_R := 12
-const STATE_SIZE := 13
+const S_SHIFT := 13 # корпус вперёд/назад
+const S_SIDE := 14
+const S_CROUCH := 15
+const S_LOOK := 16
+const STATE_SIZE := 17
 
 # состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
@@ -31,6 +35,9 @@ var _cur := PackedFloat64Array()
 var _mix := PackedFloat64Array() # буфер для draw, чтобы не выделять память на каждый кадр
 var _riding := false
 var _has_state := false
+var _last_speed := 0.0
+var _last_crank := 0.0
+var _landing := 0.0
 var _steering: Node3D
 # перья, которые тянутся к оси колеса: [узел, неподвижный конец, конец у оси, длина]; передние — вилка
 var _front_struts: Array = []
@@ -61,7 +68,7 @@ func _ready() -> void:
 
 
 ## Запомнить состояние после такта физики
-func tick(b: BikeRide) -> void:
+func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> void:
 	# Переиспользуем два буфера: состояние приходит 60 раз в секунду.
 	if _has_state:
 		var spare := _prev
@@ -81,14 +88,45 @@ func tick(b: BikeRide) -> void:
 	_cur[S_STEER] = b.steer
 	_cur[S_CRANK] = b.crank
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
+	_update_rider(b, dt, throttle, boost)
 	_riding = b.riding
 	if not _has_state:
 		_prev = _cur.duplicate()
 		_has_state = true
 
 
+## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
+func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void:
+	var continuous := _has_state and _riding and b.riding
+	var acceleration := clampf((b.speed - _last_speed) / maxf(dt, 0.001), -9.0, 7.0) if continuous else 0.0
+	var cadence := absf(angle_difference(_last_crank, b.crank)) / maxf(dt, 0.001) if continuous else 0.0
+	_last_speed = b.speed
+	_last_crank = b.crank
+	var pedal := clampf(cadence / 4.0, 0.0, 1.0) if not b.airborne else 0.0
+	var effort := pedal * (1.25 if boost else 1.0)
+	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0
+	var braking := maxf(-throttle, 0.0) * smoothstep(0.1, 2.0, b.speed)
+	# Под нагрузкой подаёмся вперёд; при торможении и спуске уходим назад.
+	var shift := clampf(-acceleration * 0.004 - slope * 0.09 - effort * 0.012 + braking * 0.025, -0.055, 0.055)
+	var side := clampf(-b.lean * 0.12 + sin(b.crank) * effort * 0.009, -0.04, 0.04)
+	_landing *= exp(-dt * 9.0)
+	if continuous and b.land_impact > 0.0:
+		_landing = maxf(_landing, clampf(b.land_impact / 10.0, 0.0, 1.0))
+	# В полёте компактная стойка, при приземлении сгибаем колени и локти.
+	var crouch := (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.012
+	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.22
+	var blend := 1.0 - exp(-maxf(dt, 0.0) * 10.0)
+	var targets := [shift, side, crouch, look]
+	for j in targets.size():
+		var index := S_SHIFT + j
+		_cur[index] = lerpf(_prev[index], targets[j], blend) if continuous else targets[j]
+
+
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
 func snap(b: BikeRide) -> void:
+	# Не переносим ускорение и удар через посадку, спешивание или телепорт.
+	_has_state = false
+	_landing = 0.0
 	tick(b)
 	for i in STATE_SIZE:
 		_prev[i] = _cur[i]
@@ -124,7 +162,8 @@ func draw(alpha: float) -> void:
 		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4
 		var grip_l := _steering.position + _steering.basis * Vector3(-0.24, 0.22, -0.015)
 		var grip_r := _steering.position + _steering.basis * Vector3(0.24, 0.22, -0.015)
-		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r)
+		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
+		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL])
 
 
 ## Ход подвески в последнем кадре draw (для камеры, без ступенек 60 Гц)
