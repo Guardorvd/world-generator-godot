@@ -1,32 +1,31 @@
 class_name WaterBuilder
 extends RefCounted
-## Вода: океан, озёра (каждое на своём уровне) и реки-ленты. Копия js/render3d/water.js.
+## Общая поверхность воды; течение и пороги заданы атрибутами, без симуляции.
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const LAKE_DROP := 0.1   # м, см. _lake_arrays
+const SHADER := preload("res://resources/water.gdshader")
 
 
-static func _material(color: Color, alpha: float) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = Color(color, alpha)
-	m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	m.roughness = 0.15
-	m.metallic_specular = 0.6
+static func _material(ocean := false, river := false) -> ShaderMaterial:
+	var m := ShaderMaterial.new()
+	m.shader = SHADER
+	m.set_shader_parameter("ocean", ocean)
+	m.set_shader_parameter("river_surface", river)
 	return m
 
 
 ## Тяжёлые циклы готовят только массивы, без узлов отображения и GPU-ресурсов.
 static func prepare(w: WorldData, heights: Heightfield) -> Array[Array]:
-	return [_lake_arrays(w), _river_arrays(heights.ribbons)]
+	return [_lake_arrays(w, heights), _river_arrays(heights.ribbons, heights)]
 
 
 ## Создание узлов из готовых массивов — в главном потоке.
 static func build(w: WorldData, prepared: Array[Array]) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []
-	var water_mat := _material(Color8(0x4f, 0x9c, 0xcc), 0.85)
-	var ocean_mat := _material(Color8(0x24, 0x60, 0x9a), 0.88)
+	var water_mat := _material()
+	var ocean_mat := _material(true)
 	var plane := PlaneMesh.new()
 	plane.size = Vector2(w.W * TILE + 16000.0, w.H * TILE + 16000.0)
 	plane.material = ocean_mat
@@ -38,7 +37,7 @@ static func build(w: WorldData, prepared: Array[Array]) -> Array[MeshInstance3D]
 	var lakes := _flat_mesh(prepared[0], water_mat, "Lakes")
 	if lakes:
 		out.append(lakes)
-	var rivers := _flat_mesh(prepared[1], water_mat, "Rivers")
+	var rivers := _flat_mesh(prepared[1], _material(false, true), "Rivers")
 	if rivers:
 		out.append(rivers)
 	# полупрозрачная вода тень не отбрасывает: иначе дно и берег под ней темнели бы целиком (с 2.6)
@@ -74,12 +73,9 @@ static func _flat_mesh(arrays: Array, mat: Material, node_name: String) -> MeshI
 	return mi
 
 
-## Озёра: ровная вода на уровне озера над каждой ячейкой сетки рельефа (вершины в центрах клеток), у которой
-## хоть одна вершина в озере. Рельеф в ячейке — те же треугольники, поэтому берег — линия, где земля
-## поднимается над водой, а не край квадрата клетки. До 1.9.9 вода лежала квадратами клеток и на пологих
-## берегах равнин стояла над землёй прямоугольниками. Вода на LAKE_DROP ниже уровня: засыпанные мелкие
-## впадины у озера лежат ровно на его уровне, и в одной плоскости с ними вода просвечивала бы сквозь землю
-static func _lake_arrays(w: WorldData) -> Array:
+## Режем плоскость озера по той же диагонали и высотам, что у земли.
+## LAKE_DROP убирает наложение на заполненные впадины у берега.
+static func _lake_arrays(w: WorldData, heights: Heightfield) -> Array:
 	var W := w.W
 	var H := w.H
 	var pos := PackedVector3Array()
@@ -99,20 +95,75 @@ static func _lake_arrays(w: WorldData) -> Array:
 			var x1 := (i + 1.5) * TILE
 			var z0 := (j + 0.5) * TILE
 			var z1 := (j + 1.5) * TILE
-			var v := pos.size()
-			pos.append_array([Vector3(x0, y, z0), Vector3(x1, y, z0), Vector3(x1, y, z1), Vector3(x0, y, z1)])
-			idx.append_array([v, v + 1, v + 2, v, v + 2, v + 3])
+			var corners := [Vector3(x0, heights.hv[a], z0), Vector3(x1, heights.hv[a + 1], z0),
+				Vector3(x0, heights.hv[a + W], z1), Vector3(x1, heights.hv[a + W + 1], z1)]
+			_clip_lake([corners[0], corners[1], corners[2]], y, pos, idx)
+			_clip_lake([corners[1], corners[3], corners[2]], y, pos, idx)
 	return _arrays(pos, idx)
 
 
+static func _clip_lake(tri: Array, level: float, pos: PackedVector3Array, idx: PackedInt32Array) -> void:
+	var polygon: Array[Vector3] = []
+	for k in 3:
+		var a: Vector3 = tri[k]
+		var b: Vector3 = tri[(k + 1) % 3]
+		if a.y < level:
+			polygon.append(Vector3(a.x, level, a.z))
+		if (a.y < level) != (b.y < level):
+			var edge := a.lerp(b, (level - a.y) / (b.y - a.y))
+			polygon.append(Vector3(edge.x, level, edge.z))
+	var start := pos.size()
+	pos.append_array(polygon)
+	for k in range(1, polygon.size() - 1):
+		idx.append_array([start, start + k, start + k + 1])
+
+
 ## Реки: ленты вдоль средних линий из Heightfield.ribbons
-static func _river_arrays(ribbons: Array) -> Array:
+static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 	var pos := PackedVector3Array()
+	var flow := PackedVector2Array()
+	var normals := PackedVector3Array()
+	var banks := PackedVector2Array()
+	var character := PackedColorArray()
 	for pts in ribbons:
 		var n: int = pts.size()
 		if n < 2:
 			continue # одна точка ленты не даёт ни одной полосы
+		var directions: Array[Vector2] = []
+		var slopes: Array[Vector3] = []
+		var conditions: Array[Color] = []
+		for k in n:
+			var a: Dictionary = pts[maxi(0, k - 1)]
+			var b: Dictionary = pts[mini(n - 1, k + 1)]
+			var delta := Vector2(b.x - a.x, b.z - a.z)
+			var grade := maxf(0.0, a.y - b.y) / maxf(delta.length(), 0.01)
+			# Узкий крутой участок быстрее; глубокий плёс спокойнее.
+			var speed := clampf(0.22 + sqrt(grade) * 1.8 + 0.12 / pts[k].w, 0.22, 1.0)
+			var rapid := smoothstep(0.025, 0.24, grade)
+			var dir := delta.normalized()
+			directions.append(dir)
+			slopes.append(Vector3(dir.x * grade, 1.0, dir.y * grade).normalized())
+			conditions.append(Color(speed, rapid, 0.0, 1.0))
 		# Берега уже посчитаны Heightfield: геометрия и проверка глубины совпадают.
 		for k in n - 1:
 			pos.append_array([pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].left, pts[k].right, pts[k + 1].right])
-	return _arrays(pos)
+			for v in [k, k, k + 1, k + 1, k, k + 1]:
+				flow.append(directions[v])
+				normals.append(slopes[v])
+				var state := conditions[v]
+				if heights != null:
+					var vertex := pos[character.size()]
+					var lake := heights.lake_level(vertex.x, vertex.z)
+					# Устье растворяется в общей плоскости: две прозрачные
+					# поверхности одного уровня не образуют мерцающих пятен.
+					if (lake >= vertex.y - 0.001 and heights.ground_at(vertex.x, vertex.z) < lake) or vertex.y <= 0.001:
+						state.b = 1.0
+				character.append(state)
+			banks.append_array([Vector2(0, 0), Vector2(1, 0), Vector2(0, 0), Vector2(0, 0), Vector2(1, 0), Vector2(1, 0)])
+	var arrays := _arrays(pos)
+	if not arrays.is_empty():
+		arrays[Mesh.ARRAY_NORMAL] = normals
+		arrays[Mesh.ARRAY_TEX_UV] = flow
+		arrays[Mesh.ARRAY_TEX_UV2] = banks
+		arrays[Mesh.ARRAY_COLOR] = character
+	return arrays

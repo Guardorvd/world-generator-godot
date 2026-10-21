@@ -21,12 +21,13 @@ const SEED_DETAIL := 0x5bd1e995
 ## Одна картинка: flat — без отмывки склонов
 static func bake(w: WorldData, px: int, flat: bool) -> Image:
 	var painted := paint(w, px, flat, not flat)
-	return finish(w, px, [painted[0 if flat else 1]])[0]
+	return finish(w, px, [painted[0 if flat else 1]], not flat)[0]
 
 
 ## Две картинки за один проход: [без отмывки, с отмывкой]
 static func bake_both(w: WorldData, px: int) -> Array[Image]:
-	return finish(w, px, paint(w, px))
+	var painted := paint(w, px)
+	return [finish(w, px, [painted[0]], false)[0], finish(w, px, [painted[1]])[0]]
 
 
 ## Попиксельная заливка: [без отмывки, с отмывкой] в байтах RGB8. Читает только рельеф, воду и биомы,
@@ -44,7 +45,8 @@ static func paint(w: WorldData, px: int, want_flat := true, want_shaded := true)
 	return [flat, shaded]
 
 
-## Векторный слой (поселения, реки, тропы) поверх заливки из paint, когда мир готов целиком
+## Векторный слой поверх заливки. human_paths=false — 3D: дно вместо синей воды,
+## людские пути рисует шейдер рельефа; true — условные обозначения для карты.
 static func finish(w: WorldData, px: int, painted: Array[PackedByteArray], human_paths := true) -> Array[Image]:
 	var iw := w.W * px
 	var ih := w.H * px
@@ -196,6 +198,10 @@ static func _paint_rows(w: WorldData, PX: int, fields: Array, noises: Array, py0
 				Rs = R
 				Gs = G
 				Bs = Bc
+				# В 3D это дно под прозрачной поверхностью, а не синяя вода.
+				R = 112.0 + (hs - 0.5) * 16.0
+				G = 108.0 + (hs - 0.5) * 14.0
+				Bc = 91.0 + (hs - 0.5) * 12.0
 			else:
 				# WGRandom.hash2(py, px, pix_seed ^ SEED_DETAIL)
 				hh = ((((py & 0xFFFF) * HASH_X + ((((py >> 16) * HASH_X) & 0xFFFF) << 16)) + ((px & 0xFFFF) * HASH_Y + ((((px >> 16) * HASH_Y) & 0xFFFF) << 16))) & 0xFFFFFFFF) ^ seed2
@@ -278,13 +284,14 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 	# Поляны вокруг поселений
 	for s in w.settlements:
 		cv.radial_glade(s.x * PX, s.y * PX, 6.5 * PX)
-	# Реки: берег, затем вода
+	# На карте — вода, на текстуре 3D — естественное гравийное дно.
 	for r in w.rivers:
 		cv.stroke_poly(r, Color8(70, 80, 50), 0.35, 1.0, 0.35, PX)
 	for r in w.rivers:
-		cv.stroke_poly(r, Color8(62, 128, 176), 1.0, 1.0, 0.0, PX)
-	for r in w.rivers:
-		cv.stroke_poly(r, Color8(140, 200, 230), 0.35, 0.35, 0.0, PX)
+		cv.stroke_poly(r, Color8(62, 128, 176) if human_paths else Color8(112, 108, 91), 1.0, 1.0, 0.0, PX)
+	if human_paths:
+		for r in w.rivers:
+			cv.stroke_poly(r, Color8(140, 200, 230), 0.35, 0.35, 0.0, PX)
 	# Тропы: звериные бледные и узкие, людские — утоптанная земля, дороги шире и посыпаны гравием
 	for t in w.trails:
 		if t.kind == "animal":
