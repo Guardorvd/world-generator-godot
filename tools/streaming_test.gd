@@ -3,9 +3,9 @@ extends SceneTree
 
 class TrackedVegetation extends VegetationLayer:
 	var uploads := 0
-	func _apply_tree(kind: int) -> void:
+	func _apply_chunk(built: Dictionary) -> void:
 		uploads += 1
-		super._apply_tree(kind)
+		super._apply_chunk(built)
 
 var fails := 0
 
@@ -26,14 +26,14 @@ func _run() -> void:
 	root.add_child(veg)
 	veg.setup(loaded.world, loaded.heights, Models.tree_defs(), Models.grass_mesh())
 	veg.update(500.0, 500.0, true)
-	veg.update(540.0, 500.0, false)
+	veg.update(700.0, 500.0, false)
 	if await _wait_vegetation(veg):
-		veg.update(540.0, 500.0, false)
+		veg.update(700.0, 500.0, false)
 		_check(veg._task == -1 and not veg._pending.is_empty(), "трава передана, деревья ожидают")
 		while not veg._pending.is_empty():
 			var before := veg.uploads
-			veg.update(540.0, 500.0, false)
-			_check(veg.uploads - before == 1 and veg._task == -1, "один вид за кадр, буферы не перезаписываются")
+			veg.update(700.0, 500.0, false)
+			_check(veg.uploads - before == 1 and veg._task == -1, "один чанк за кадр, буферы не перезаписываются")
 		_check_buffers(veg)
 	# Force дожидается старого расчёта и показывает только новое положение.
 	veg.update(580.0, 500.0, false)
@@ -92,7 +92,7 @@ func _check_buffers(veg: VegetationLayer) -> void:
 		for part: String in ["trunk", "crown"]:
 			if e.has(part):
 				var buf: PackedFloat32Array = e.tbuf if part == "trunk" else e.cbuf
-				_check(e[part].buffer == buf and e[part].visible_instance_count == veg._tree_counts[k], "буфер и число деревьев %d %s" % [k, part])
+				_check(e[part].buffer == buf and e[part].visible_instance_count == e.count, "буфер и число деревьев %s %s" % [str(k), part])
 				_check_bounds(e[part])
 
 

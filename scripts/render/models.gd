@@ -5,7 +5,7 @@ extends RefCounted
 ## Новый вид объекта: константа в Biomes.T_* и запись здесь.
 
 
-static func _cyl(rt: float, rb: float, h: float, seg: int = 6) -> Array:
+static func _cyl(rt: float, rb: float, h: float, seg: int = 8) -> Array:
 	var m := CylinderMesh.new()
 	m.top_radius = rt
 	m.bottom_radius = rb
@@ -19,12 +19,12 @@ static func _ico(r: float, y: float, sx: float = 1.0, sy: float = 1.0, sz: float
 	var m := SphereMesh.new()
 	m.radius = r
 	m.height = r * 2.0
-	m.radial_segments = 6
-	m.rings = 3
+	m.radial_segments = 10
+	m.rings = 5
 	return [m, Transform3D(Basis().scaled(Vector3(sx, sy, sz)), Vector3(0, y, 0))]
 
 
-static func _cone(r: float, h: float, y: float, seg: int = 7) -> Array:
+static func _cone(r: float, h: float, y: float, seg: int = 10) -> Array:
 	return _moved(_cyl(0.0, r, h, seg), Vector3(0, y, 0))
 
 
@@ -45,7 +45,12 @@ static func merge(parts: Array) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	for p in parts:
 		st.append_from(p[0], 0, p[1])
-	return st.commit()
+	st.index()
+	var source := st.commit()
+	var importer := ImporterMesh.new()
+	importer.add_surface(Mesh.PRIMITIVE_TRIANGLES, source.surface_get_arrays(0))
+	importer.generate_lods(25.0, 60.0, [])
+	return importer.get_mesh()
 
 
 static func _c(r: int, g: int, b: int) -> Color:

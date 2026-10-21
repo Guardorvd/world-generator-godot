@@ -53,7 +53,7 @@ var dist_water := PackedFloat32Array() # StageGeography: расстояние д
 
 # Климат
 var temp := PackedFloat32Array()
-var moist := PackedFloat32Array()
+var moist := PackedFloat32Array() # доступная почвенная влага: осадки, вода, микрорельеф и прогрев
 var biome := PackedByteArray()
 
 # Реки, тропы, поселения, вершины

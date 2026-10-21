@@ -372,13 +372,17 @@ func _geography_check() -> void:
 	StageClimate.run(w)
 	var dry_moist := w.moist[12]
 	w.river[12] = 1
+	StageGeography.run(w)
+	StageClimate.run(w)
+	_check(w.moist[12] > dry_moist, "новая вода увлажняет неизменённый рельеф")
+	var wet_moist := w.moist[12]
 	w.h[12] = 0.6
 	w.h[13] = 0.6
 	StageGeography.run(w)
 	StageClimate.run(w)
 	StageTrails._build_cost(w)
 	_check(w.dist_water[12] == 0.0 and w.dist_water[11] == 1.0, "новое русло обновляет расстояние до воды")
-	_check(is_equal_approx(w.slope[11], 12.0) and w.moist[12] > dry_moist, "новый рельеф/вода обновляют уклон и влажность")
+	_check(is_equal_approx(w.slope[11], 12.0) and w.moist[12] < wet_moist, "новый крутой гребень обновляет уклон и осушает почву")
 	_check(w.cost[12] == INF, "крутое русло учитывается дорогами")
 	w.river[12] = 0
 	w.lake[12] = 1

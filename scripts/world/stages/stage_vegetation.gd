@@ -1,8 +1,8 @@
 class_name StageVegetation
 extends RefCounted
 ## Этап 8. Растительность и камни. Объекты раскладываются по чанкам, чтобы 3D-сцена быстро брала ближайшие.
-## С 2.8 вид, густота и рост деревьев зависят от местности: выше — хвойные и граница леса, на кручах
-## реже деревья и больше камней, у воды в сухих краях — рощи и оазисы, валуны лежат россыпями.
+## 6.3: массивы, поляны, молодняк и старый лес; соседство и отступы учитывают размер крон.
+## Вид, густота и размер также зависят от природных условий 6.2; валуны лежат россыпями.
 ## Пишет: w.obj_* (объекты: x, y, k — вид из Biomes.T_*, v — вариант, s — масштаб), w.chunks (номера объектов
 ## по чанкам), w.CS (сторона чанка в клетках), CW, CH (чанков по ширине и высоте), obj_count.
 
@@ -22,7 +22,8 @@ static func run(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var N := w.N
-	var rng := w.rng
+	# Лес не расходует общий поток: его густота больше не меняет имена озёр.
+	var rng := WGRandom.new(w.seed_num ^ 0x63f07e57)
 	var biome := w.biome
 	var river := w.river_cells()
 	var slope := w.slope
@@ -47,7 +48,7 @@ static func run(w: WorldData) -> void:
 	w.CS = WorldData.CHUNK_SIZE
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
-	var store := ObjStore.new(w, village)
+	var store := ObjStore.new(w)
 	# Свойства биомов в плоских таблицах: в цикле по всем клеткам словари читать дорого
 	var b_water := PackedByteArray()
 	var b_trees := PackedFloat64Array()
@@ -68,18 +69,24 @@ static func run(w: WorldData) -> void:
 			var e := elev[i]
 			var sl := slope[i]
 			var dw := dist_water[i]
+			var light := StageClimate.natural_conditions(w, x, y).x
+			# Один медленный шум задаёт возраст участка и плавную смену сообщества.
+			var age := _ss(-0.45, 0.45, w.noise.forest.fbm(x / 78.0 + 91.0, y / 78.0 - 47.0, 2))
 			# smoothstep развёрнут на месте
 			var interior := 0.0 # насколько клетка в глубине леса (0 — опушка или поле)
 			if dens > 0.3:
 				var t := clampf((f + 0.35) / (0.15 + 0.35), 0.0, 1.0)
 				interior = t * t * (3.0 - 2.0 * t)
-				dens *= interior # поляны в лесу
+				dens *= interior * _ss(-0.45, -0.12, stony[i]) * lerpf(1.35, 0.75, age)
 			else:
 				var t := clampf((f - 0.1) / (0.5 - 0.1), 0.0, 1.0)
 				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
 				# у воды в сухих и открытых краях — прибрежные рощи и оазисы
-				if dw < SHORE and _dry_open(bi):
+				if dw < SHORE and _dry_open(bi) and temp[i] > 0.24:
 					dens += 0.22 * (1.0 - dw / SHORE)
+			# Влажные защищённые места поддерживают лес, сухие склоны разрежают его.
+			if bi == Biomes.FOREST or bi == Biomes.TAIGA or bi == Biomes.JUNGLE or bi == Biomes.GRASS:
+				dens *= (0.55 + 0.65 * _ss(0.2, 0.75, moist[i])) * (1.08 - 0.16 * light)
 			if bi == Biomes.BEACH and temp[i] < 0.6:
 				dens = 0.0
 			# граница леса в горах и редкие деревья на кручах
@@ -101,10 +108,10 @@ static func run(w: WorldData) -> void:
 				if rng.next_float() < dens * 0.6:
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
-					var kind := _kind(bi, kinds, rng.next_float(), e, moist[i], sl, dw)
+					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22, 0.0, 1.0)
+					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
-					# в глубине леса деревья выше, на опушке и у границы леса ниже
-					var sc := (0.8 + rng.next_float() * 0.45) * (0.88 + 0.22 * interior) * (1.0 - 0.3 * line)
+					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if Biomes.is_tree(kind) else 0.8 + rng.next_float() * 0.45
 					store.add(px, py, kind, v, sc)
 			# камни: на кручах и россыпями там, где местность неровная
 			var rocky := 0.06 if sl > 0.7 else 0.0
@@ -115,7 +122,7 @@ static func run(w: WorldData) -> void:
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
 				store.add(px, py, Biomes.T_ROCK, v, 0.7 + rng.next_float() * 0.6)
-			if dw < 1.6 and _reedy(bi) and sl < 0.5 and rng.next_float() < 0.12:
+			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48 and rng.next_float() < 0.12:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
@@ -141,6 +148,28 @@ static func _ss(a: float, b: float, x: float) -> float:
 	return t * t * (3.0 - 2.0 * t)
 
 
+## Возраст — характер участка, а не симуляция лет. Под старым пологом есть молодые деревья.
+static func tree_scale(age: float, interior: float, line: float, moist: float, r: float) -> float:
+	var size := lerpf(0.5, 1.6, age) * (0.85 + r * 0.3)
+	if r < 0.18 * age:
+		size *= 0.42
+	return size * (0.82 + 0.18 * interior) * (1.0 - 0.3 * line) * (0.85 + 0.15 * moist)
+
+
+## Локальный полог готового леса для травы. Только ближайшие чанки, без новой карты теней.
+static func canopy_at(w: WorldData, px: float, py: float) -> float:
+	var cover := 0.0
+	for cy in range(maxi(0, floori((py - 2.5) / w.CS)), mini(w.CH - 1, floori((py + 2.5) / w.CS)) + 1):
+		for cx in range(maxi(0, floori((px - 2.5) / w.CS)), mini(w.CW - 1, floori((px + 2.5) / w.CS)) + 1):
+			for o in w.chunks[cy * w.CW + cx]:
+				if not Biomes.is_tree(w.obj_k[o]):
+					continue
+				var r: float = Biomes.CROWN_RADIUS[w.obj_k[o]] * w.obj_s[o] + 0.5
+				var d := Vector2(px - w.obj_x[o], py - w.obj_y[o]).length()
+				cover += maxf(0.0, 1.0 - d / r)
+	return minf(1.0, cover)
+
+
 ## Сухие и открытые биомы, где у воды появляются рощи
 static func _dry_open(bi: int) -> bool:
 	return bi == Biomes.DESERT or bi == Biomes.SAVANNA or bi == Biomes.STEPPE or bi == Biomes.TUNDRA or bi == Biomes.GRASS
@@ -153,30 +182,36 @@ static func _reedy(bi: int) -> bool:
 
 ## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
-static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float) -> int:
+static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float, interior: float) -> int:
 	var shore := dw < SHORE
+	# Ограничение действует и на специальные сообщества ниже.
+	if sl > 1.0 and r < 0.4:
+		return Biomes.T_ROCK if r < 0.2 else Biomes.T_BUSH
 	match bi:
 		Biomes.FOREST, Biomes.GRASS:
-			# выше — сосны, у воды — берёзы, на сухих лугах — кусты
-			if r < 0.85 * _ss(HIGH_LO, HIGH_HI, e):
+			# Пятна лесного шума задают опушки и сообщества, условия — их состав.
+			var pine := 0.1 + 0.5 * _ss(HIGH_LO, HIGH_HI, e) + 0.25 * (1.0 - m) + 0.1 * light
+			var birch := 0.12 + 0.18 * m + 0.12 * (1.0 - interior)
+			if bi == Biomes.GRASS and m < 0.35:
+				return Biomes.T_BUSH if r < 0.75 else Biomes.T_PINE
+			if r < pine:
 				return Biomes.T_PINE
-			if shore and r > 0.75:
+			if r < pine + birch:
 				return Biomes.T_BIRCH
-			if bi == Biomes.GRASS and m < 0.35 and r < 0.6:
-				return Biomes.T_BUSH
+			return Biomes.T_OAK if r < 0.94 or interior > 0.75 else Biomes.T_BUSH
 		Biomes.TAIGA:
-			if shore and r < 0.2:
+			if r < (0.08 + 0.22 * m) * (1.0 - 0.5 * _ss(HIGH_LO, HIGH_HI, e)):
 				return Biomes.T_BIRCH
 			if e > HIGH_HI:
 				return Biomes.T_PINE
 		Biomes.DESERT:
 			if shore:
-				return Biomes.T_PALM if r < 0.7 else Biomes.T_BUSH # оазис
+				return Biomes.T_PALM if t > 0.65 and r < 0.7 else Biomes.T_BUSH # оазис
 		Biomes.SAVANNA:
-			if shore and r < 0.4:
+			if shore and t > 0.65 and r < 0.4:
 				return Biomes.T_PALM
 		Biomes.STEPPE, Biomes.TUNDRA:
-			if shore:
+			if shore and t > 0.24:
 				return Biomes.T_BIRCH if r < 0.45 else Biomes.T_BUSH
 		Biomes.ROCK:
 			# нижние скалы ещё в соснах, верхние — голый камень
@@ -184,18 +219,15 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 		Biomes.JUNGLE:
 			if e > HIGH_HI and r < 0.5:
 				return Biomes.T_PINE
-	# на кручах вместо дерева — куст или камень
-	if sl > 1.0 and r < 0.4:
-		return Biomes.T_ROCK if r < 0.2 else Biomes.T_BUSH
 	return kinds[floori(r * kinds.size())]
 
 
-static func near_hut(settlements: Array, ox: float, oy: float) -> bool:
+static func near_hut(settlements: Array, ox: float, oy: float, radius: float = 0.0) -> bool:
 	for s: Dictionary in settlements:
-		if absf(s.x - ox) > VILLAGE_R or absf(s.y - oy) > VILLAGE_R:
+		if absf(s.x - ox) > VILLAGE_R + radius or absf(s.y - oy) > VILLAGE_R + radius:
 			continue
 		for u: Dictionary in s.huts:
-			if absf(u.x - ox) < 0.75 and absf(u.y - oy) < 0.75:
+			if absf(u.x - ox) < 0.75 + radius and absf(u.y - oy) < 0.75 + radius:
 				return true
 	return false
 
@@ -209,17 +241,47 @@ class ObjStore:
 	var s := PackedFloat64Array()
 	var chunk_lists: Array = []
 	var w: WorldData
-	var village: PackedByteArray
+	# Временный индекс соседей: головы списков по клеткам и ссылки по объектам.
+	# В готовом WorldData остаются только прежние obj_* и chunks.
+	var heads := PackedInt32Array()
+	var next := PackedInt32Array()
 
-	func _init(world: WorldData, village_mask: PackedByteArray) -> void:
+	func _init(world: WorldData) -> void:
 		w = world
-		village = village_mask
+		heads.resize(w.N)
+		heads.fill(-1)
 		for c: int in w.CW * w.CH:
 			chunk_lists.append([])
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
-		if village[floori(oy) * w.W + floori(ox)] != 0 and StageVegetation.near_hut(w.settlements, ox, oy):
+		var radius: float = Biomes.CROWN_RADIUS[kind] * sc
+		if StageVegetation.near_hut(w.settlements, ox, oy, radius):
 			return
+		var cx := floori(ox)
+		var cy := floori(oy)
+		# Увеличенные кроны не заходят на полотно. Животные тропы тоже сохраняются.
+		var reach := ceili(radius + 1.0)
+		for yy in range(maxi(0, cy - reach), mini(w.H, cy + reach + 1)):
+			for xx in range(maxi(0, cx - reach), mini(w.W, cx + reach + 1)):
+				if w.path_mask[yy * w.W + xx] == 0:
+					continue
+				var dx := maxf(maxf(xx - ox, ox - xx - 1.0), 0.0)
+				var dy := maxf(maxf(yy - oy, oy - yy - 1.0), 0.0)
+				if dx * dx + dy * dy < (radius + 0.25) ** 2:
+					return
+		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
+		# Максимальный масштаб дерева < 1.85; поиск ±3 клетки покрывает любую пару.
+		for yy in range(maxi(0, cy - 3), mini(w.H, cy + 4)):
+			for xx in range(maxi(0, cx - 3), mini(w.W, cx + 4)):
+				var o := heads[yy * w.W + xx]
+				while o != -1:
+					var gap: float = 0.18 + 0.55 * (radius + Biomes.CROWN_RADIUS[k[o]] * s[o])
+					if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
+						return
+					o = next[o]
+		var cell := cy * w.W + cx
+		next.append(heads[cell])
+		heads[cell] = x.size()
 		chunk_lists[floori(oy / w.CS) * w.CW + floori(ox / w.CS)].append(x.size())
 		x.append(ox)
 		y.append(oy)

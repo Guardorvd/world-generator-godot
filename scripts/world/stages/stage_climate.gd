@@ -8,6 +8,25 @@ const PROGRESS := 0.38
 const LABEL := "Климат и биомы"
 
 
+## x — относительное освещение склона (0..1), y — удержание влаги в микроложбинах.
+## Солнце с юга; это средний прогрев, без трассировки теней. Только готовые высоты,
+## без дополнительных полей мира. На границе берём ближайшую клетку.
+static func natural_conditions(w: WorldData, x: int, y: int) -> Vector2:
+	var i := y * w.W + x
+	var gx := (w.elev[y * w.W + mini(w.W - 1, x + 1)] - w.elev[y * w.W + maxi(0, x - 1)]) * 30.0
+	var gy := (w.elev[mini(w.H - 1, y + 1) * w.W + x] - w.elev[maxi(0, y - 1) * w.W + x]) * 30.0
+	var light := clampf(0.5 - 0.5 * gy / sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0)
+	var around := (w.elev[y * w.W + maxi(0, x - 2)] + w.elev[y * w.W + mini(w.W - 1, x + 2)]
+		+ w.elev[maxi(0, y - 2) * w.W + x] + w.elev[mini(w.H - 1, y + 2) * w.W + x]) * 0.25
+	return Vector2(light, clampf((around - w.elev[i]) * 18.0, -0.16, 0.16))
+
+
+## Влажность почвы: осадки, вода, накопление в ложбинах, дренаж и испарение.
+static func soil_moisture(rain: float, dw: float, sl: float, t: float, conditions: Vector2) -> float:
+	return clampf(rain + 0.22 * exp(-dw / 4.0) + conditions.y
+		- 0.10 * clampf(sl, 0.0, 1.5) - (conditions.x - 0.5) * (0.08 + 0.12 * t), 0.0, 1.0)
+
+
 ## Правило выбора биома для клетки суши. e — высота, t — температура, m — влажность (0..1)
 static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float) -> int:
 	if e > 0.62 or (e > 0.42 and t < 0.2):
@@ -77,6 +96,10 @@ static func run(w: WorldData) -> void:
 			var e := elev[i]
 			var t := clampf(0.16 + lat * 0.86 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)
+			if ocean[i] == 0 and lake[i] == 0:
+				var conditions := natural_conditions(w, x, y)
+				t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)
+				m = soil_moisture(rain[i], dist_water[i], slope[i], t, conditions)
 			temp[i] = t
 			moist[i] = m
 			var b: int
