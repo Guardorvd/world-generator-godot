@@ -430,6 +430,48 @@ layout_mode = 2
 max_value = 1.0
 step = 0.05
 
+[node name="DayRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="DayLabel" type="Label" parent="UI/Root/Settings/Panel/Box/DayRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Длина суток"
+
+[node name="DayValue" type="Label" parent="UI/Root/Settings/Panel/Box/DayRow"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+text = "1"
+
+[node name="DaySlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+max_value = 120
+step = 4
+
+[node name="StartHourRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="StartHourLabel" type="Label" parent="UI/Root/Settings/Panel/Box/StartHourRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Час начала"
+
+[node name="StartHourValue" type="Label" parent="UI/Root/Settings/Panel/Box/StartHourRow"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+text = "1"
+
+[node name="StartHourSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 24)
+layout_mode = 2
+max_value = 23
+step = 1
+
 [node name="Reset" type="Button" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
@@ -462,3 +504,5 @@ text = "Готово"
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Reset" to="." method="_on_reset_settings"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/DaySlider" to="." method="_on_day_changed"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/StartHourSlider" to="." method="_on_start_hour_changed"]

@@ -7,6 +7,8 @@ extends Node3D
 ## берутся из GameSettings. Звуки путешествия — узел Audio (WorldAudio, с 2.7).
 ## С 2.8 на открытой карте (M) курсор свободен: там выбирают цель путешествия и место быстрого перемещения
 ## (travel_to по сигналу Hud.travel_requested).
+## С 7.8 сутки сменяются (DayCycle): час идёт тактами игры, скорость и час начала — в GameSettings, T — час вперёд
+## (Shift+T — назад).
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -30,6 +32,8 @@ var _ocean: Node3D        # плоскость моря: ездит за игр�
 var yaw := 0.0       # смотрим на север, на костёр
 var pitch := -0.05
 var time := 0.0
+var hour := 9.0          # час суток в мире, 0..24
+var day: DayCycle
 var paused := false
 var show_map := false
 var info_timer := 0.0
@@ -112,6 +116,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	vegetation.update(player.x, player.z, true)
 	camera.fov = GameSettings.fov
 	_apply_shadows()
+	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	day.terrain_mats = [$Terrain.material_override]
+	hour = GameSettings.start_hour
+	day.apply(hour, time)
 	_update_camera(1.0, 0.0)
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
@@ -249,6 +257,9 @@ func _unhandled_input(event: InputEvent) -> void:
 		toggle_map()
 	elif event.is_action_pressed("bike"):
 		toggle_bike()
+	elif event.is_action_pressed("time_skip"):
+		hour = fposmod(hour + (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0), 24.0)
+		hud.toast_now("Время %s" % DayCycle.clock(hour))
 	elif event.is_action_pressed("interact") and not show_map:
 		_open_settlement()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
@@ -289,6 +300,8 @@ func _physics_process(dt: float) -> void:
 	var yaw0 := yaw
 	var pitch0 := pitch
 	time += dt
+	if GameSettings.day_minutes > 0.0:
+		hour = fposmod(hour + dt * 24.0 / (GameSettings.day_minutes * 60.0), 24.0)
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
@@ -388,6 +401,7 @@ func _process(delta: float) -> void:
 		bike_view.draw(alpha)
 	_update_hints()
 	_update_camera(alpha, delta)
+	day.apply(hour, time)
 
 	var uploaded := vegetation.update(pos.x, pos.z, false)
 	if world.outer != null:

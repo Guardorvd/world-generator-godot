@@ -1,7 +1,7 @@
 class_name GameSettings
 extends RefCounted
 ## Настройки игрока: чувствительность мыши, инверсия, угол обзора, покачивание камеры, полный экран,
-## тени и затенение (с 2.6), громкость (с 2.7),
+## тени и затенение (с 2.6), громкость (с 2.7), длина суток и час начала игры (с 7.8),
 ## размер мира в меню. Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
 
 const PATH := "user://settings.cfg"
@@ -20,6 +20,9 @@ const DEFAULT_HEAD_BOB := true
 const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
 const DEFAULT_VOLUME := 0.8
+const DEFAULT_DAY_MINUTES := 24.0  # сутки за 24 минуты игры; 0 — время стоит
+const DEFAULT_START_HOUR := 9.0
+const MAX_DAY_MINUTES := 120.0
 
 static var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 static var invert_y := DEFAULT_INVERT_Y
@@ -28,6 +31,8 @@ static var head_bob := DEFAULT_HEAD_BOB  # покачивание и удары 
 static var fullscreen := DEFAULT_FULLSCREEN
 static var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
 static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
+static var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
+static var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
 static var world_size := DEFAULT_WORLD_SIZE
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 
@@ -48,6 +53,8 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	fullscreen = _flag(cfg, "view", "fullscreen", fullscreen)
 	shadows = _flag(cfg, "view", "shadows", shadows)
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
+	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
+	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
 	# файл мог быть испорчен вручную: неизвестный размер мира заменяем на средний
 	var size_value: Variant = cfg.get_value("world", "size", world_size)
 	world_size = int(size_value) if typeof(size_value) == TYPE_INT and SIZES.has(size_value) else DEFAULT_WORLD_SIZE
@@ -77,6 +84,8 @@ static func reset_defaults() -> void:
 	fullscreen = DEFAULT_FULLSCREEN
 	shadows = DEFAULT_SHADOWS
 	volume = DEFAULT_VOLUME
+	day_minutes = DEFAULT_DAY_MINUTES
+	start_hour = DEFAULT_START_HOUR
 
 
 static func save_settings() -> void:
@@ -88,6 +97,8 @@ static func save_settings() -> void:
 	cfg.set_value("view", "fullscreen", fullscreen)
 	cfg.set_value("view", "shadows", shadows)
 	cfg.set_value("sound", "volume", volume)
+	cfg.set_value("time", "day_minutes", day_minutes)
+	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("world", "size", world_size)
 	cfg.set_value("world", "seed", last_seed)
 	cfg.save(PATH)

@@ -202,6 +202,7 @@ func _process(delta: float) -> bool:
 			t = 0.0
 		"warmup", "look":
 			t += delta
+			_advance_day(game, delta)
 			game.camera.rotation = Vector3(-0.05, yaw0 + TAU * t / float(cfg.look_s), 0.0)
 			game.camera.position = spawn
 			if phase == "warmup" and t >= WARMUP_S:
@@ -215,6 +216,7 @@ func _process(delta: float) -> bool:
 					t = 0.0
 		"road":
 			t += delta
+			_advance_day(game, delta)
 			var p := _road_at(t * ROAD_SPEED)
 			var ahead := _road_at(t * ROAD_SPEED + 15.0)
 			# на настиле моста, над водой брода, на полу туннеля
@@ -244,3 +246,12 @@ func _count(key: String) -> void:
 	draw_calls += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 	primitives += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
 	counted += 1
+
+
+## 7.8: игра на замере стоит на паузе, но сутки идут (полчаса в секунду): небо, свет и туман
+## пересчитываются каждый кадр, как в игре. В сборках до 7.8 смены суток нет
+func _advance_day(game: Node, delta: float) -> void:
+	var day: Variant = game.get("day")
+	if day != null:
+		game.hour = fposmod(game.hour + delta * 0.5, 24.0)
+		day.apply(game.hour, Time.get_ticks_msec() / 1000.0)

@@ -18,6 +18,8 @@ uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool forest_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
+// 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
+uniform float sunlight = 1.0;
 uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
 uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
 uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
@@ -105,9 +107,9 @@ void fragment() {
 		float shade = smoothstep(0.12, 1.0, forest.r) * (1.0 - snow);
 		sky = 1.0 - shade * mix(0.32, 0.42, forest.g);
 		col *= mix(vec3(1.0), vec3(0.95, 0.98, 1.0), shade * forest.g);
-		if (near > 0.0) {
+		if (near > 0.0 && sunlight > 0.0) {
 			float sun = texture(detail_tex, p * (1.0 / 3.1) + vec2(TIME * 0.006, TIME * 0.004)).r;
-			col *= 1.0 + smoothstep(0.55, 0.75, sun) * cover * (1.0 - forest.g) * near * vec3(0.22, 0.18, 0.1);
+			col *= 1.0 + smoothstep(0.55, 0.75, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.22, 0.18, 0.1);
 		}
 	}
 	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
