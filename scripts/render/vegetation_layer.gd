@@ -53,6 +53,9 @@ var understory: Array = [] # те же фоновые буферы и цикл �
 var _forest_surface: Image
 var placement: Placement
 var _understory_sites: Array = []
+var obstacles := PackedFloat32Array() # 7.7: валежник и сухостой рядом с игроком для ForestObstacles (тот же формат)
+var obstacles_version := 0            # растёт с каждой новой раскладкой подлеска
+var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
@@ -333,6 +336,8 @@ func _apply_chunk(built: Dictionary) -> void:
 
 
 func _apply_grass() -> void:
+	obstacles = _obstacles_next
+	obstacles_version += 1
 	grass.buffer = grass_buf
 	grass.custom_aabb = _grass_bounds
 	grass.visible_instance_count = _grass_n
@@ -369,6 +374,7 @@ func _fill_grass(px: float, pz: float) -> void:
 	var low := Vector3.INF
 	var high := -Vector3.INF
 	placement.clear_occupied()
+	_obstacles_next = PackedFloat32Array()
 	placement.prepare(px, pz, GameConfig.GRASS_R + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
@@ -504,6 +510,13 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.low = entry.low.min(box.position)
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
+	if floor_kind == Floor.LOG or floor_kind == Floor.MOSS_LOG:
+		# бревно — капсула вдоль ствола (меш: от -2,2 до 2,1 м по X, толщина 0,23 м), верх ~0,45 м
+		var a := xf * Vector3(-2.2, 0.0, 0.0)
+		var b := xf * Vector3(2.1, 0.0, 0.07)
+		_obstacles_next.append_array([a.x, a.z, b.x, b.z, 0.2 * scale, pos.y, pos.y + 0.42 * scale])
+	elif floor_kind == Floor.SNAG:
+		_obstacles_next.append_array([x, z, x, z, 0.16 * scale, pos.y, INF])
 	if Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))
 

@@ -149,7 +149,8 @@ static func surface(info: Dictionary) -> int:
 
 ## Свободна ли точка (x, z) для тела радиуса r с ногами на высоте feet. feet решает, стоит ли тело
 ## на мосту (тогда вода под ним не мешает) и упирается ли в перила моста или стену туннеля.
-## Дома и стены держат тело на расстоянии r, вода и край известной земли проверяются по центру
+## Дома, стены и (с 7.7) крупные стволы, валуны и валежник держат тело на расстоянии r,
+## вода и край известной земли проверяются по центру
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0) -> bool:
 	if not heights.known(x, z):
 		return false
@@ -178,14 +179,18 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 				return false
 	if heights.wall_at(x, z, feet, r):
 		return false
+	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r):
+		return false
 	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
 
 
 ## Сдвиг из (x, z) на (dx, dz) кусками не длиннее PIECE: free(x, z) -> bool говорит, свободно ли тело
 ## в точке. Где путь закрыт, тело скользит вдоль препятствия по одной из осей, а где закрыто всё —
-## останавливается. Возвращает, куда удалось дойти: [x, z] в двойной точности (Vector2 округлил бы
+## останавливается. around(x, z) -> Vector2 (с 7.7, необязательно) — нормаль круглого препятствия
+## (ствол, бревно) в закрытой точке: вдоль него тело скользит по касательной, а не по осям.
+## Возвращает, куда удалось дойти: [x, z] в двойной точности (Vector2 округлил бы
 ## до float и мог сдвинуть тело за проверенную границу)
-static func slide(free: Callable, x: float, z: float, dx: float, dz: float) -> PackedFloat64Array:
+static func slide(free: Callable, x: float, z: float, dx: float, dz: float, around := Callable()) -> PackedFloat64Array:
 	var n := maxi(1, ceili(Grid.hypot(dx, dz) / PIECE))
 	var sx := dx / n
 	var sz := dz / n
@@ -193,6 +198,11 @@ static func slide(free: Callable, x: float, z: float, dx: float, dz: float) -> P
 		if free.call(x + sx, z + sz):
 			x += sx
 			z += sz
+			continue
+		var t := _tangent(around, x + sx, z + sz, sx, sz) if around.is_valid() else Vector2.ZERO
+		if t != Vector2.ZERO and free.call(x + t.x, z + t.y):
+			x += t.x
+			z += t.y
 		elif sx != 0.0 and free.call(x + sx, z):
 			x += sx
 			sz = 0.0
@@ -202,6 +212,17 @@ static func slide(free: Callable, x: float, z: float, dx: float, dz: float) -> P
 		else:
 			break
 	return PackedFloat64Array([x, z])
+
+
+## Касательный кусок пути вдоль препятствия с нормалью around(px, pz); ноль, если не к чему прижиматься
+static func _tangent(around: Callable, px: float, pz: float, sx: float, sz: float) -> Vector2:
+	var nrm: Vector2 = around.call(px, pz)
+	var d := Vector2(sx, sz)
+	var into := d.dot(nrm)
+	if nrm == Vector2.ZERO or into >= 0.0:
+		return Vector2.ZERO
+	var t := d - nrm * into
+	return t if t.length_squared() > 1e-10 else Vector2.ZERO
 
 
 ## Шаг движения за dt секунд (в игре — один такт физики, 1/60 с, см. GameWorld._physics_process).
@@ -245,7 +266,11 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 		# если тело уже задевает препятствие (появилось вплотную к дому), выйти можно: проверяется центр
 		var r := BODY_R if is_passable(w, heights, x, z, feet, BODY_R) else 0.0
 		var f := feet
-		var to := slide(func(px: float, pz: float) -> bool: return is_passable(w, heights, px, pz, f, r), x, z, vx * dt, vz * dt)
+		var around := Callable()
+		if heights.obstacles != null:
+			var obs := heights.obstacles
+			around = func(px: float, pz: float) -> Vector2: return obs.normal(px, pz, f, r)
+		var to := slide(func(px: float, pz: float) -> bool: return is_passable(w, heights, px, pz, f, r), x, z, vx * dt, vz * dt, around)
 		# упёрлись: скорость — та, с которой действительно сдвинулись
 		if absf(to[0] - x - vx * dt) > 1e-5:
 			vx = (to[0] - x) / dt

@@ -18,7 +18,8 @@ const SAG_MAX := 0.16     # подвеска просаживается не б�
 const STRETCH_MAX := 0.08 # и вытягивается при прыжке не больше этого, м
 const SOFT_IMPACT := 7.0  # приземление жёстче этого (м/с) гасит скорость
 const FACE_CRASH := 5.0   # приземление в подъём (крутизна 1 = 45°) роняет при ударе слабее BIKE_CRASH на столько, м/с
-const WALL_CRASH := 9.0   # удар в стену в лоб быстрее этого (м/с) роняет седока
+const WALL_CRASH := 9.0   # удар в стену в лоб быстрее этого (м/с) роняет седока; с 7.7 и в ствол, валун, бревно —
+                          # по скорости поперёк их поверхности (вскользь не роняет)
 ## На пути колёса держатся полотна на мелких изломах, руль зависит от сцепления покрытия.
 const SLOPE_GRAVITY := 7.5 # смягчённая сила склона: инерция ощутима, но подъёмы доступны
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
@@ -238,13 +239,17 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			if free_now:
 				return fits(px, pz, hd, w, heights)
 			return PlayerState.is_passable(w, heights, px, pz, y)
-		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt)
+		# 7.7: вдоль ствола и бревна велосипед скользит по касательной
+		var around := Callable()
+		if heights.obstacles != null:
+			around = func(px: float, pz: float) -> Vector2: return _obstacle_normal(px, pz, hd, heights)
+		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt, around)
 		x = to[0]
 		z = to[1]
 		var moved := Grid.hypot(x - x0, z - z0)
 		if moved < full - 1e-5:
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
-			if moved < 1e-5 and absf(speed) > WALL_CRASH and not airborne:
+			if absf(speed) > WALL_CRASH and not airborne and (moved < 1e-5 or _tree_impact(heights) > WALL_CRASH):
 				_crash(vy)
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
@@ -466,6 +471,25 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 func _crash(v_up: float) -> void:
 	crashed = true
 	crash_velocity = Vector3(-sin(heading) * speed, v_up, -cos(heading) * speed)
+
+
+## Нормаль препятствия леса (ствол, валун, бревно), которое задевает один из трёх кругов велосипеда
+## с серединой в (px, pz) и курсом hd; ноль, если не задевает
+func _obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> Vector2:
+	for side: float in [1.0, 0.0, -1.0]:
+		var n := heights.obstacles.normal(px - sin(hd) * AXLE * side, pz - cos(hd) * AXLE * side, y, BODY_R)
+		if n != Vector2.ZERO:
+			return n
+	return Vector2.ZERO
+
+
+## Скорость удара в препятствие леса поперёк его поверхности, м/с: в лоб — вся скорость, вскользь — малая доля
+func _tree_impact(heights: Heightfield) -> float:
+	if heights.obstacles == null:
+		return 0.0
+	var v := Vector2(-sin(heading), -cos(heading)) * speed
+	var ahead := v.normalized() * PlayerState.PIECE * 0.5
+	return -v.dot(_obstacle_normal(x + ahead.x, z + ahead.y, heading, heights))
 
 
 ## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны

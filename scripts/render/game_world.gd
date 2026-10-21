@@ -98,6 +98,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	if world.outer != null:
 		outer.setup(world, heights)
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
+	heights.obstacles = ForestObstacles.new(world, heights)
+	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
@@ -202,7 +204,10 @@ func travel_to(place: Dictionary) -> void:
 		return
 	_close_settlement(false)
 	crash.abort()
+	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
+	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	player = PlayerState.arrive(world, heights, place)
+	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера
 		yaw = atan2(player.x - place.x * TILE, player.z - place.y * TILE)
@@ -290,6 +295,7 @@ func _physics_process(dt: float) -> void:
 	var jump := Input.is_action_just_pressed("jump")
 	_moving = false
 	var crashed := false
+	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
 	if crash.active():
 		# седок падает: управление ждёт, пока он снова в седле; камера следит за телом
 		var back := crash.tick(dt, bike, world, heights)

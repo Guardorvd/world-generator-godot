@@ -30,6 +30,7 @@ var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 var path_timings := {}
+var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
 
 
 ## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
