@@ -73,7 +73,7 @@ func _run() -> void:
 	view.snap(b)
 	view.draw(1.0)
 	check(is_equal_approx(view._steering.rotation.y, view.front_wheel.rotation.y), "руль, вилка и колесо поворачиваются вместе")
-	check(view.get_node("Rider/Head").position.y < 1.66 and view.rear_wheel.position.y > BikeView.WHEEL_Y,
+	check(view.rider.skeleton.get_bone_global_pose(view.rider.skeleton.find_bone("Head")).origin.y < 1.59 and view.rear_wheel.position.y > BikeView.WHEEL_Y,
 		"седок группируется, колёса компенсируют сжатие подвески")
 	var fork: Node3D = view._front_struts[0][0]
 	check(view.front_wheel.position.y > view.rear_wheel.position.y and fork.basis.y.length() * fork_len < fork_len - 0.1,

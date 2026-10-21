@@ -1,18 +1,12 @@
 class_name BikeView
 extends Node3D
-## Велосипед с седоком, сцена scenes/bike.tscn: модель из примитивов, смотрит вдоль -Z.
+## Велосипед с седоком, сцена scenes/bike.tscn: стилизованная модель со скелетным седоком, смотрит вдоль -Z.
 ## Повторяет состояние BikeRide: место, курс, наклон, крен, вращение колёс и педалей, ход подвески.
 ## С 7.1 колёса стоят на своих точках касания, а вилка и задние перья тянутся к осям: видно сжатие каждого колеса.
 ## Ноги седока ставятся на педали (два звена: бедро и голень). Езда считается тактами физики (60 в секунду),
 ## а кадров бывает и 800: между двумя последними тактами модель плавно переходит (draw), иначе дёргалась бы.
 
 const WHEEL_Y := 0.34    # высота осей колёс над землёй
-const CRANK_Y := 0.3     # высота каретки
-const CRANK_R := 0.17    # длина шатуна
-const PEDAL_X := 0.14
-const HIP := Vector3(0.11, 0.95, 0.17)
-const THIGH := 0.43
-const SHIN := 0.43
 const STEER_VIEW := 0.35 # поворот переднего колеса в долях угла руля
 
 # индексы состояния в tick: x, высота рамы, z, наклон, курс, крен, подвеска (средняя, вилка, зад), колёса, руль, педали
@@ -64,12 +58,6 @@ func _ready() -> void:
 @onready var crank: Node3D = $Crank
 @onready var pedal_l: Node3D = $Crank/PedalL
 @onready var pedal_r: Node3D = $Crank/PedalR
-@onready var thigh_l: Node3D = $Rider/ThighL
-@onready var shin_l: Node3D = $Rider/ShinL
-@onready var thigh_r: Node3D = $Rider/ThighR
-@onready var shin_r: Node3D = $Rider/ShinR
-@onready var torso: Node3D = $Rider/Torso
-@onready var head: Node3D = $Rider/Head
 
 
 ## Запомнить состояние после такта физики
@@ -134,12 +122,9 @@ func draw(alpha: float) -> void:
 	if _riding:
 		# Небольшая группировка на скорости и работа корпусом при сжатии подвески.
 		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4
-		torso.rotation.x = -0.5105 - tuck
-		head.position = Vector3(0.0, 1.66 - tuck * 0.3, -0.17 - tuck * 0.3)
-		var c := cos(-_mix[S_CRANK]) * CRANK_R
-		var s := sin(-_mix[S_CRANK]) * CRANK_R
-		_leg(thigh_r, shin_r, HIP, Vector3(PEDAL_X, CRANK_Y - c, -s))
-		_leg(thigh_l, shin_l, Vector3(-HIP.x, HIP.y, HIP.z), Vector3(-PEDAL_X, CRANK_Y + c, s))
+		var grip_l := _steering.position + _steering.basis * Vector3(-0.24, 0.22, -0.015)
+		var grip_r := _steering.position + _steering.basis * Vector3(0.24, 0.22, -0.015)
+		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r)
 
 
 ## Ход подвески в последнем кадре draw (для камеры, без ступенек 60 Гц)
@@ -164,22 +149,3 @@ func _stretch(st: Array, travel: float) -> void:
 	var along := axle - fixed
 	var basis := Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1.0, along.length() / st[3], 1.0))
 	(st[0] as Node3D).transform = Transform3D(basis, (fixed + axle) * 0.5)
-
-
-## Бедро от таза до колена и голень от колена до стопы; колено смотрит вперёд и вверх
-func _leg(thigh: Node3D, shin: Node3D, hip: Vector3, foot: Vector3) -> void:
-	var to_foot := foot - hip
-	var d := clampf(to_foot.length(), 0.05, THIGH + SHIN - 0.001)
-	var dir := to_foot.normalized()
-	var ca := clampf((THIGH * THIGH + d * d - SHIN * SHIN) / (2.0 * THIGH * d), -1.0, 1.0)
-	var bend := Vector3(0.0, 0.3, -1.0)
-	bend = (bend - dir * bend.dot(dir)).normalized()
-	var knee := hip + (dir * ca + bend * sqrt(1.0 - ca * ca)) * THIGH
-	foot = hip + dir * d
-	_place(thigh, hip, knee)
-	_place(shin, knee, foot)
-
-
-## Поставить цилиндр (ось — местная Y) между двумя точками
-func _place(part: Node3D, a: Vector3, b: Vector3) -> void:
-	part.transform = Transform3D(Basis(Quaternion(Vector3.UP, (b - a).normalized())), (a + b) * 0.5)
