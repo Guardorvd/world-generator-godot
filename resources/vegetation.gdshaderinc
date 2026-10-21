@@ -16,7 +16,7 @@ uniform float flutter = 0.0;       // м: дрожь листьев и трав�
 uniform float sway_speed = 1.0;    // крупные и жёсткие растения качаются медленнее
 uniform float ao_low = 1.0;        // доля света неба у основания / в глубине кроны
 uniform float translucency = 0.0;  // просвечивание листвы против солнца
-uniform float shelter_ao = 0.55;   // свет неба под сомкнутым пологом (по альфе экземпляра)
+uniform float shelter_ao = 0.65;   // свет неба под сомкнутым пологом (по альфе экземпляра)
 
 const vec2 WIND_DIR = vec2(0.82, 0.57);
 
@@ -31,7 +31,7 @@ void vertex() {
 		float along = dot(origin.xz, WIND_DIR);
 		float gust = 0.55 + 0.3 * sin(TIME * 0.31 - along * 0.035) + 0.15 * sin(TIME * 0.83 + origin.x * 0.11 + origin.z * 0.07);
 		float phase = fract(sin(dot(origin.xz, vec2(12.99, 78.23))) * 437.58) * 6.28318;
-		float swing = gust * (0.75 + 0.25 * sin(TIME * 1.3 * sway_speed + phase));
+		float swing = gust * (0.7 + 0.3 * sin(TIME * 1.3 * sway_speed + phase));
 		// Под пологом ветер слабее.
 		swing *= 1.0 - sheltered * 0.6;
 		vec3 world = vec3(WIND_DIR.x, 0.0, WIND_DIR.y) * swing * sway * h * h;
@@ -59,7 +59,7 @@ void fragment() {
 	ALBEDO = col;
 	ROUGHNESS = 1.0;
 	AO = v_ao;
-	AO_LIGHT_AFFECT = 0.25;
+	AO_LIGHT_AFFECT = 0.15;
 	BACKLIGHT = col * translucency;
 #ifdef CUTOUT
 	ALPHA = tex.a;

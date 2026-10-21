@@ -101,11 +101,13 @@ void fragment() {
 		col = mix(col, soil, cover * (0.62 + patch * 0.25));
 		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
 		// медленно плывут тёплые просветы — как солнце сквозь качающуюся листву.
-		sky = 1.0 - cover * mix(0.35, 0.55, forest.g);
-		col *= mix(vec3(1.0), vec3(0.93, 0.97, 1.0), cover * forest.g);
+		// 6.8: на опушке тень набирается медленнее, под ельником светлее, просветы заметнее.
+		float shade = smoothstep(0.12, 1.0, forest.r) * (1.0 - snow);
+		sky = 1.0 - shade * mix(0.32, 0.42, forest.g);
+		col *= mix(vec3(1.0), vec3(0.95, 0.98, 1.0), shade * forest.g);
 		if (near > 0.0) {
 			float sun = texture(detail_tex, p * (1.0 / 3.1) + vec2(TIME * 0.006, TIME * 0.004)).r;
-			col *= 1.0 + smoothstep(0.6, 0.78, sun) * cover * (1.0 - forest.g) * near * vec3(0.14, 0.12, 0.07);
+			col *= 1.0 + smoothstep(0.55, 0.75, sun) * cover * (1.0 - forest.g) * near * vec3(0.22, 0.18, 0.1);
 		}
 	}
 	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
