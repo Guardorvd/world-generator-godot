@@ -73,7 +73,7 @@ func run() -> void:
 		max_batch = maxi(max_batch, entry.count)
 	check(total == w.obj_count and total > 24000, "Густой лес не должен обрезаться общим лимитом вида")
 	check(max_batch <= 2048 and veg.veg.size() == 16 * ForestModels.VARIANTS, "Лес должен делиться по чанкам и трём силуэтам")
-	var key: Vector2i = veg.veg.keys()[0]
+	var key: Vector3i = veg.veg.keys()[0]
 	var original: MultiMesh = veg.veg[key].crown
 	veg.update(536.0, 512.0, true)
 	check(veg.veg[key].crown == original, "Соседний шаг должен сохранять уже загруженный MultiMesh")

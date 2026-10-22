@@ -72,6 +72,30 @@ func _add_objects(px: float, pz: float) -> void:
 					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				elif heights.depth_at(x, z) <= VegetationLayer.WATER_MARGIN:
 					_add(x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+	if world.outer == null:
+		return
+	# 8.4: за краем карты — объекты, которые VegetationLayer уже разложил (OuterLand.veg, с высотой земли)
+	for cy in range(floori((pz - REACH) / side), floori((pz + REACH) / side) + 1):
+		for cx in range(floori((px - REACH) / side), floori((px + REACH) / side) + 1):
+			var items: Variant = world.outer.veg.get(Vector2i(cx, cy))
+			if items == null:
+				continue
+			var xs: PackedFloat64Array = items.x
+			for o in xs.size():
+				var kind: int = items.k[o]
+				var s: float = items.s[o]
+				if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or s < MIN_SCALE):
+					continue
+				var x: float = xs[o] * TILE
+				var z: float = items.y[o] * TILE
+				if absf(x - px) > REACH or absf(z - pz) > REACH:
+					continue
+				var base: float = items.ground[o]
+				if kind == Biomes.T_ROCK:
+					s *= 1.2
+					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
+				else:
+					_add(x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
 
 
 ## Отрезок a–b толщиной r (у круга a = b), от основания base до верха top

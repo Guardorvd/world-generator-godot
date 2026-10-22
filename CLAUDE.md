@@ -21,6 +21,7 @@
 | Рельеф | + дороги (`road_bed_test`, `road_refinement_test`) и велосипед (`feel_test`) — их задевает высота |
 | Дороги, мосты, туннели | `route_test`, `road_bed_test` / `road_refinement_test`, `check.gd --world Ущелье --views road --fps off` |
 | Реки, озёра, вода | `hydrology_test` / `river_geometry_test` / `water_surface_test`, `check.gd --views valley` |
+| Местность за краем стартовой области, хеш по месту | `territory_test` (+ selftest, если менялась стартовая область), 1–2 снимка края |
 | Растительность, лес | `vegetation_test` / `forest_test` / `understory_test`, `check.gd` с FPS |
 | Графика, шейдеры, свет, небо | `check.gd` (снимки + FPS), для света `--hours 7.5,19.1` |
 | Тяжёлые системы (подгрузка, сетки, большие циклы) | `check.gd` с FPS; глубокая — если FPS или загрузка упали больше шума |

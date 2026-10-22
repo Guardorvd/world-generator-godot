@@ -61,6 +61,7 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	r.road_bed = fnv(Heightfield.new(w).hv.to_byte_array())
 	r.seed_num = w.seed_num
 	r.obj_count = w.obj_count
+	r.objects = fnv(w.obj_x.to_byte_array()) # с 8.4: где именно стоят объекты
 	r.rivers = w.rivers.size()
 	r.trails = w.trails.size()
 	r.bridges = w.bridges.size()

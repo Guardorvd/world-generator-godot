@@ -3,6 +3,8 @@ extends Node3D
 ## Неподвижные MultiMesh по чанкам, видам и силуэтам, Mesh LOD и точные AABB.
 ## 6.6+: подлесок и лесная поверхность обновляются вместе с травой в фоне.
 ## Главный поток передаёт один чанк за кадр.
+## С 8.4 чанки — Vector2i(cx, cy) в общих координатах: за краем стартовой области их объекты считает
+## OuterLand.vegetation тем же кодом, что и на карте (трава и подлесок пока только на карте).
 
 const TILE := GameConfig.TILE
 const WATER_MARGIN := 0.3
@@ -35,7 +37,7 @@ const PLANT_WIND := [0.05, 0.02, 1.2, 0.7, 0.25]
 
 var world: WorldData
 var heights: Heightfield
-var veg := {} # Vector2i(чанк, вид) -> буферы, MultiMesh и узлы
+var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 var grass: MultiMesh
 var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
@@ -179,7 +181,7 @@ func update(px: float, pz: float, force: bool) -> bool:
 	if not force and not _pending.is_empty():
 		if p.distance_to(last_fill) >= 8.0:
 			last_fill = p
-			var none: Array[int] = []
+			var none: Array[Vector2i] = []
 			_task = WorkerThreadPool.add_task(_fill.bind(px, pz, none), true, "Трава")
 			return false
 		_apply_chunk(_pending.pop_back())
@@ -209,47 +211,118 @@ func _exit_tree() -> void:
 	_finish()
 
 
-func _distance(chunk: int, p: Vector2) -> float:
+func _distance(chunk: Vector2i, p: Vector2) -> float:
 	var side := world.CS * TILE
-	var corner := Vector2(chunk % world.CW, chunk / world.CW) * side
+	var corner := Vector2(chunk) * side
 	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * side))
 
 
-func _wanted(p: Vector2) -> Array[int]:
-	var out: Array[int] = []
+func _on_map(chunk: Vector2i) -> bool:
+	return chunk.x >= 0 and chunk.y >= 0 and chunk.x < world.CW and chunk.y < world.CH
+
+
+func _wanted(p: Vector2) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
 	var side := world.CS * TILE
-	for cy in range(maxi(0, floori((p.y - LOAD_RADIUS) / side)), mini(world.CH - 1, floori((p.y + LOAD_RADIUS) / side)) + 1):
-		for cx in range(maxi(0, floori((p.x - LOAD_RADIUS) / side)), mini(world.CW - 1, floori((p.x + LOAD_RADIUS) / side)) + 1):
-			var c := cy * world.CW + cx
+	var x0 := floori((p.x - LOAD_RADIUS) / side)
+	var x1 := floori((p.x + LOAD_RADIUS) / side)
+	var y0 := floori((p.y - LOAD_RADIUS) / side)
+	var y1 := floori((p.y + LOAD_RADIUS) / side)
+	if world.outer == null: # без местности за краем — только чанки карты
+		x0 = maxi(0, x0)
+		y0 = maxi(0, y0)
+		x1 = mini(world.CW - 1, x1)
+		y1 = mini(world.CH - 1, y1)
+	for cy in range(y0, y1 + 1):
+		for cx in range(x0, x1 + 1):
+			var c := Vector2i(cx, cy)
 			if not _loaded.has(c) and _distance(c, p) <= LOAD_RADIUS:
 				out.append(c)
 	# Фон строит список от дальних к ближним; главный поток берёт с конца.
-	out.sort_custom(func(a: int, b: int) -> bool: return _distance(a, p) > _distance(b, p))
+	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _distance(a, p) > _distance(b, p))
 	return out
 
 
 func _drop(p: Vector2) -> void:
-	for key: Vector2i in veg.keys():
-		if _distance(key.x, p) > DROP_RADIUS:
+	for key: Vector3i in veg.keys():
+		if _distance(Vector2i(key.x, key.y), p) > DROP_RADIUS:
 			for node: MultiMeshInstance3D in veg[key].nodes:
 				node.visible = false
 				node.queue_free()
 			veg.erase(key)
-	for chunk: int in _loaded.keys():
+	for chunk: Vector2i in _loaded.keys():
 		if _distance(chunk, p) > DROP_RADIUS:
 			_loaded.erase(chunk)
+			if world.outer != null:
+				world.outer.veg.erase(chunk)
 
 
-func _fill(px: float, pz: float, missing: Array[int]) -> void:
+func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 	_built = []
 	for chunk in missing:
-		_built.append(_build_chunk(chunk))
+		_built.append(_build_chunk(chunk) if _on_map(chunk) else _build_outer(chunk))
 	_fill_grass(px, pz)
 
 
-func _build_chunk(chunk: int) -> Dictionary:
-	var groups := {}
-	for o in world.chunks[chunk]:
+## Чанк за краем стартовой области (в фоновой задаче): объекты OuterLand.vegetation, земля под ними — той же
+## триангуляцией, что у меша OuterTerrain (клетки карты у края — из Heightfield.hv, остальные — из куска).
+## Карта OuterLand.chunks здесь не читается: она главного потока.
+func _build_outer(chunk: Vector2i) -> Dictionary:
+	var f := OuterLand.vegetation(world, chunk)
+	var fx: PackedFloat64Array = f.x
+	var fy: PackedFloat64Array = f.y
+	var fk: PackedInt32Array = f.k
+	var fh: PackedFloat32Array = f.h
+	var side: int = f.side
+	var hx0: int = f.x0
+	var hy0: int = f.y0
+	var hv := heights.hv
+	var W := world.W
+	var H := world.H
+	var items := {x = PackedFloat64Array(), y = PackedFloat64Array(), k = PackedInt32Array(), v = PackedInt32Array(),
+		s = PackedFloat64Array(), ground = PackedFloat32Array()}
+	var corner := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	for o in fx.size():
+		var kind := fk[o]
+		if not _defs.has(kind):
+			continue
+		var gx := fx[o] - 0.5
+		var gz := fy[o] - 0.5
+		var i := floori(gx)
+		var j := floori(gz)
+		for c in 4:
+			var ci := i + (c & 1)
+			var cj := j + (c >> 1)
+			if ci >= 0 and cj >= 0 and ci < W and cj < H:
+				corner[c] = hv[cj * W + ci]
+			else:
+				corner[c] = Heightfield.outer_meters(fh[(cj - hy0) * side + ci - hx0])
+		var tx := gx - i
+		var tz := gz - j
+		var ground: float
+		if tx + tz <= 1.0:
+			ground = corner[0] + (corner[1] - corner[0]) * tx + (corner[2] - corner[0]) * tz
+		else:
+			ground = corner[3] + (corner[2] - corner[3]) * (1.0 - tx) + (corner[1] - corner[3]) * (1.0 - tz)
+		# за краем вода только морская, её уровень 0
+		if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < -WATER_MARGIN:
+			continue
+		items.x.append(fx[o])
+		items.y.append(fy[o])
+		items.k.append(kind)
+		items.v.append(f.v[o])
+		items.s.append(f.s[o])
+		items.ground.append(ground)
+	var built := _build_entries(items)
+	built.chunk = chunk
+	built.outer = items
+	return built
+
+
+func _build_chunk(chunk: Vector2i) -> Dictionary:
+	var items := {x = PackedFloat64Array(), y = PackedFloat64Array(), k = PackedInt32Array(), v = PackedInt32Array(),
+		s = PackedFloat64Array(), ground = PackedFloat32Array()}
+	for o in world.chunks[chunk.y * world.CW + chunk.x]:
 		var kind := world.obj_k[o]
 		if not _defs.has(kind):
 			continue
@@ -260,10 +333,30 @@ func _build_chunk(chunk: int) -> Dictionary:
 			continue
 		var x := ox * TILE
 		var z := oy * TILE
-		var ground := heights.ground_at(x, z)
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
+		items.x.append(ox)
+		items.y.append(oy)
+		items.k.append(kind)
+		items.v.append(world.obj_v[o])
+		items.s.append(world.obj_s[o])
+		items.ground.append(heights.ground_at(x, z))
+	var built := _build_entries(items)
+	built.chunk = chunk
+	return built
+
+
+## Буферы MultiMesh по силуэтам для объектов items (столбцы x, y в клетках, k, v, s, ground — земля, м)
+func _build_entries(items: Dictionary) -> Dictionary:
+	var groups := {}
+	var xs: PackedFloat64Array = items.x
+	var ys: PackedFloat64Array = items.y
+	for o in xs.size():
+		var kind: int = items.k[o]
+		var ox := xs[o]
+		var oy := ys[o]
+		var ground: float = items.ground[o]
 		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
 		var model := kind
 		if _defs.has(kind + ForestModels.MODEL_STRIDE):
@@ -285,10 +378,10 @@ func _build_chunk(chunk: int) -> Dictionary:
 			entry.cbuf = _buffer(count, 16)
 		for n in count:
 			var o: int = group.ids[n]
-			var ox := world.obj_x[o]
-			var oy := world.obj_y[o]
-			var v := world.obj_v[o]
-			var s := world.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
+			var ox := xs[o]
+			var oy := ys[o]
+			var v: int = items.v[o]
+			var s: float = items.s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
 			var sy := s * (0.9 + (v % 3) * 0.08)
 			var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
@@ -307,13 +400,15 @@ func _build_chunk(chunk: int) -> Dictionary:
 				buf[n * 16 + 14] = col.b
 				buf[n * 16 + 15] = 1.0
 		entries.append(entry)
-	return {chunk = chunk, entries = entries}
+	return {entries = entries}
 
 
 func _apply_chunk(built: Dictionary) -> void:
-	var chunk: int = built.chunk
+	var chunk: Vector2i = built.chunk
 	if _loaded.has(chunk):
 		return
+	if built.has("outer"):
+		world.outer.veg[chunk] = built.outer
 	for entry: Dictionary in built.entries:
 		var kind: int = entry.kind
 		var def: Dictionary = _defs[kind]
@@ -331,7 +426,7 @@ func _apply_chunk(built: Dictionary) -> void:
 			node.visibility_range_end_margin = 16.0
 			entry[part] = mm
 			entry.nodes.append(node)
-		veg[Vector2i(chunk, kind)] = entry
+		veg[Vector3i(chunk.x, chunk.y, kind)] = entry
 	_loaded[chunk] = true
 
 

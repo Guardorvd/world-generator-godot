@@ -482,6 +482,46 @@ public partial class FastGrid : RefCounted
 		return r;
 	}
 
+	/// <summary>Расстояние в клетках до ближайшей клетки source != 0 (фаска 1 / √2): копия Grid.distance_field,
+	/// с теми же округлениями (сравнение в double, хранение во float). С 8.4: его считают и куски OuterLand.</summary>
+	public float[] DistanceField(int w, int h, byte[] source)
+	{
+		const double Sqrt2 = 1.4142135623730951;
+		int n = w * h;
+		var d = new float[n];
+		for (int i = 0; i < n; i++)
+			d[i] = source[i] != 0 ? 0f : 1e9f;
+		for (int y = 0; y < h; y++)
+			for (int x = 0; x < w; x++)
+			{
+				int i = y * w + x;
+				double v = d[i];
+				if (x > 0) v = Math.Min(v, d[i - 1] + 1.0);
+				if (y > 0)
+				{
+					v = Math.Min(v, d[i - w] + 1.0);
+					if (x > 0) v = Math.Min(v, d[i - w - 1] + Sqrt2);
+					if (x < w - 1) v = Math.Min(v, d[i - w + 1] + Sqrt2);
+				}
+				d[i] = (float)v;
+			}
+		for (int y = h - 1; y >= 0; y--)
+			for (int x = w - 1; x >= 0; x--)
+			{
+				int i = y * w + x;
+				double v = d[i];
+				if (x < w - 1) v = Math.Min(v, d[i + 1] + 1.0);
+				if (y < h - 1)
+				{
+					v = Math.Min(v, d[i + w] + 1.0);
+					if (x < w - 1) v = Math.Min(v, d[i + w + 1] + Sqrt2);
+					if (x > 0) v = Math.Min(v, d[i + w - 1] + Sqrt2);
+				}
+				d[i] = (float)v;
+			}
+		return d;
+	}
+
 	// Куски уже параллельны на WorkerThreadPool Godot. Вложенный пул .NET здесь
 	// лишь отнимает ядра у кадра и растительности. Целое поле при загрузке распараллеливаем.
 	private static void RunRows(int height, bool parallel, Action<int> row)

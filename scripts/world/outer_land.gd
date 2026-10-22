@@ -1,22 +1,33 @@
 class_name OuterLand
 extends RefCounted
-## Рельеф за краем карты (с 1.9.5): тот же шум, что у StageRelief, с теми же постоянными уровнями моря, поэтому на
-## границе карты нет ступеньки. Считается кусками по C × C клеток вокруг игрока (OuterTerrain).
-## Пока это только высота и биом по климату: рек, озёр, растительности, поселений и троп за краем нет,
-## вода — море на уровне 0 везде, где рельеф ниже уровня моря.
-## compute — чистая функция, её считают фоновые задачи; в chunks куски кладёт и убирает главный поток.
+## Местность за краем стартовой области (с 1.9.5): тот же шум, что у StageRelief, с теми же постоянными уровнями
+## моря, поэтому на границе карты нет ступеньки. Считается кусками по C × C клеток вокруг игрока (OuterTerrain).
+## С 8.4 здесь и климат по тем же правилам, что у StageClimate (осадки, близость моря, свет склона, почвенная
+## влага), и лес, камни и тростник тем же кодом, что в стартовой области (StageVegetation.place_chunk).
+## Всё зависит только от места: клетка — в общих координатах мира, случайные числа — хеш (сид, клетка, слой),
+## а соседей кусок не спрашивает: всё, что нужно рядом (море в SEA_REACH клетках, соседи для крутизны), он
+## считает сам в полосе вокруг себя. Поэтому одна и та же местность получается в любом порядке загрузки.
+## Рек, озёр, троп и поселений за краем нет: им нужен сток и связи всего мира, вода — море на уровне 0.
+## compute — чистая функция, её считают фоновые задачи; в chunks и veg куски кладёт и убирает главный поток.
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
 ## Сам мир здесь не хранится, только его размер: мир держит OuterLand (WorldData.outer), и обратная ссылка
 ## замкнула бы их друг на друга, тогда мир не освобождался бы после выхода в меню (до 2.0 так и было).
 
 const C := 64              # сторона куска в клетках
+## Насколько далеко клетка видит море (осадки, берег, влага). Дальше море не учитывается ни здесь, ни в
+## полосе вокруг куска; поправка на близость моря сведена к нулю на этом расстоянии (см. compute)
+const SEA_REACH := 32
+const PAD := SEA_REACH + 2 # полоса вокруг прямоугольника: море и ещё две клетки на свет склона
 
 var W := 0                 # размер карты в клетках
 var H := 0
 ## Vector2i(номер куска по x, по y) -> поля compute по (C + 3)² клеткам с углом (x0 - 1, y0 - 1),
 ## где x0, y0 — первая клетка куска: с запасом на соседей для меша и нормалей
 var chunks := {}
+## Vector2i(чанк растительности, WorldData.CHUNK_SIZE клеток) -> объекты из vegetation с высотой земли ground;
+## кладёт VegetationLayer, читают препятствия (ForestObstacles)
+var veg := {}
 var _ring: Array[Dictionary] = []   # над картой, под ней, слева, справа
 
 
@@ -28,17 +39,19 @@ func _init(w: WorldData) -> void:
 
 
 ## Поля клеток прямоугольника cw × ch с углом (x0, y0): h — высота в единицах WorldData.h (ниже 0 — море,
-## в метры её переводит Heightfield.outer_meters), biome,
-## temp, moist, elev, slope. Климат упрощён против StageClimate: влажность без близости воды, берег —
-## клетка суши рядом с морем
+## в метры её переводит Heightfield.outer_meters), biome, temp, moist, elev, slope, dist — клеток до моря
+## (не больше SEA_REACH), light — освещение склона. Климат — правила StageClimate; вместо рек и озёр только
+## море, поэтому dist — и близость воды, и близость океана. Значение клетки не зависит от того, в каком
+## прямоугольнике её считали: всё, что ей нужно, лежит в полосе PAD вокруг
 static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
-	# на клетку шире с каждой стороны: крутизне и берегу нужны соседи
-	var pw := cw + 2
-	var ph := ch + 2
-	var raw := StageRelief.raw_rect(w, x0 - 1, y0 - 1, pw, ph, false)
-	var micro := Parallel.fbm_rect(w.noise.micro, x0 - 1, y0 - 1, pw, ph, 9.0, 2)
+	var pw := cw + 2 * PAD
+	var ph := ch + 2 * PAD
+	var raw := StageRelief.raw_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
+	var micro := Parallel.fbm_rect(w.noise.micro, x0 - PAD, y0 - PAD, pw, ph, 9.0, 2)
 	var hn := PackedFloat32Array()
 	hn.resize(pw * ph)
+	var sea_src := PackedByteArray()
+	sea_src.resize(pw * ph)
 	# StageRelief.normalize и add_micro развёрнуты на месте: куски считаются в потоках (см. Parallel)
 	var sea := StageRelief.SEA_RAW
 	var top := StageRelief.TOP_RAW
@@ -47,40 +60,76 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 		var v := raw[k]
 		var hh := minf(pow((v - sea) / (top - sea), 1.25), 1.4) if v >= sea else (v - sea) / (sea - bottom)
 		hn[k] = maxf(1e-4, hh + micro[k] * 0.006 * minf(1.0, hh * 40.0)) if hh > 0.0 else hh
+		sea_src[k] = 1 if hn[k] < 0.0 else 0
+	var dist := Grid.distance_field(pw, ph, sea_src)
 	var p: Array = WorldData.NOISE_FIELDS.temp
 	var temp_n := Parallel.fbm_rect(w.noise.temp, x0, y0, cw, ch, p[0], p[1])
 	p = WorldData.NOISE_FIELDS.moist
 	var moist_n := Parallel.fbm_rect(w.noise.moist, x0, y0, cw, ch, p[0], p[1])
 	var n := cw * ch
 	var out := {h = PackedFloat32Array(), biome = PackedByteArray(), temp = PackedFloat32Array(),
-		moist = PackedFloat32Array(), elev = PackedFloat32Array(), slope = PackedFloat32Array()}
+		moist = PackedFloat32Array(), elev = PackedFloat32Array(), slope = PackedFloat32Array(),
+		dist = PackedFloat32Array(), light = PackedFloat32Array()}
 	for key in out:
 		out[key].resize(n)
+	var far := exp(-SEA_REACH / 30.0)
 	for j in ch:
 		var lat := StageClimate.latitude(w, y0 + j)
 		for i in cw:
-			var c := (j + 1) * pw + i + 1
+			var c := (j + PAD) * pw + i + PAD
 			var hh := hn[c]
 			var o := j * cw + i
 			var e := maxf(0.0, hh)
 			var gx := maxf(0.0, hn[c + 1]) - maxf(0.0, hn[c - 1])
 			var gy := maxf(0.0, hn[c + pw]) - maxf(0.0, hn[c - pw])
 			var slope := sqrt(gx * gx + gy * gy) * 0.5 * 60.0
+			# StageClimate.natural_conditions по высотам суши, развёрнута на месте
+			var lgx := gx * 30.0
+			var lgy := gy * 30.0
+			var light := clampf(0.5 - 0.5 * lgy / sqrt(1.0 + lgx * lgx + lgy * lgy), 0.0, 1.0)
+			var around := (maxf(0.0, hn[c - 2]) + maxf(0.0, hn[c + 2]) + maxf(0.0, hn[c - 2 * pw]) + maxf(0.0, hn[c + 2 * pw])) * 0.25
+			var hollow := clampf((around - e) * 18.0, -0.16, 0.16)
+			var d := minf(dist[c], SEA_REACH)
+			# осадки — как в StageHydrology, поправка на близость моря гаснет к SEA_REACH
+			var rain := clampf(0.36 + 0.85 * moist_n[o] + 0.18 * (exp(-d / 30.0) - far) / (1.0 - far), 0.02, 1.0)
 			var t := clampf(0.16 + lat * 0.86 + temp_n[o] * 0.18 - e * 0.6, 0.0, 1.0)
-			var m := clampf(0.36 + 0.85 * moist_n[o], 0.02, 1.0)
+			var m := clampf(rain + 0.22 * exp(-d / 4.0), 0.0, 1.0)
 			var b: int
 			if hh < 0.0:
 				b = Biomes.DEEP if hh < -0.35 else (Biomes.OCEAN if hh < -0.07 else Biomes.SHALLOW)
 			else:
-				var shore := hn[c + 1] < 0.0 or hn[c - 1] < 0.0 or hn[c + pw] < 0.0 or hn[c - pw] < 0.0
-				b = StageClimate.land_biome(e, t, m, slope, 1.0 if shore else 99.0)
+				t = clampf(t + (light - 0.5) * 0.08, 0.0, 1.0)
+				m = StageClimate.soil_moisture(rain, d, slope, t, Vector2(light, hollow))
+				b = StageClimate.land_biome(e, t, m, slope, d)
 			out.h[o] = hh
 			out.biome[o] = b
 			out.temp[o] = t
 			out.moist[o] = m
 			out.elev[o] = e
 			out.slope[o] = slope
+			out.dist[o] = d
+			out.light[o] = light
 	return out
+
+
+## Лес, камни и тростник чанка растительности key (WorldData.CHUNK_SIZE клеток, в общих координатах; для
+## фоновой задачи). Тот же код, что у стартовой области, без троп и домов. Кроме объектов (x, y в клетках, k, v, s)
+## возвращает высоты h клеток от (x0 - 1, y0 - 1) со стороной side: по ним считается земля под объектами
+static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
+	var cs := WorldData.CHUNK_SIZE
+	var x0 := key.x * cs
+	var y0 := key.y * cs
+	var side := cs + 2
+	var f := compute(w, x0 - 1, y0 - 1, side, side)
+	var p: Array = WorldData.NOISE_FIELDS.forest
+	f.forest = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, p[0], p[1])
+	p = WorldData.NOISE_FIELDS.cost
+	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 1, y0 - 1, side, side, p[0], p[1])
+	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
+	f.dw = f.dist
+	var store := StageVegetation.ObjStore.new(null)
+	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - 1, y0 - 1, side, null, store)
+	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, x0 = x0 - 1, y0 = y0 - 1, side = side}
 
 
 ## Поля куска key (для фоновой задачи)

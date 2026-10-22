@@ -115,7 +115,11 @@ static func on_edge(i: int, w: int, h: int) -> bool:
 
 
 ## Дистанционное преобразование (фаска 1 / √2): расстояние в клетках до ближайшей клетки, где source[i] != 0
+## В сборке .NET считается на C# (FastGrid.DistanceField), результат тот же
 static func distance_field(w: int, h: int, source: PackedByteArray) -> PackedFloat32Array:
+	var fast := fast_grid()
+	if fast != null:
+		return fast.DistanceField(w, h, source)
 	var n := w * h
 	var d := PackedFloat32Array()
 	d.resize(n)
