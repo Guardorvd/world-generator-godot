@@ -118,6 +118,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	_apply_shadows()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
 	day.terrain_mats = [$Terrain.material_override]
+	day.camera = camera
+	day.world_seed = world.seed_num
 	hour = GameSettings.start_hour
 	day.apply(hour, time)
 	_update_camera(1.0, 0.0)
