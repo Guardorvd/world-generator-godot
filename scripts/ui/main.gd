@@ -207,8 +207,8 @@ func _on_start() -> void:
 	start_game(seed_text)
 
 
-## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте
-## (инструменты проверки ставят своё). Остальные земли открываются по ходу (WorldData.open_around).
+## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте.
+## С 9.8 по умолчанию открыт весь план; меньшее окно ставят инструменты проверки (WorldData.open_around).
 func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE) -> void:
 	if busy:
 		return

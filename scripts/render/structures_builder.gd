@@ -25,7 +25,7 @@ static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
 	_box(batch, Transform3D(), Vector3(0.14, 1.0, 0.14), at + Vector3(0, 0.5, 0), mat)
 
 
-## Добавляет все мосты и туннели в parent одним мешем (см. MeshBatch)
+## Добавляет все мосты и туннели в parent общими мешами по квадратам мира (см. MeshBatch)
 static func build(parent: Node3D, heights: Heightfield) -> void:
 	var batch := MeshBatch.new()
 	var wood := SettlementsBuilder.mat(Color8(0x8a, 0x6a, 0x48))

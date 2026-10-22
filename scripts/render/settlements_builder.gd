@@ -46,7 +46,7 @@ static func _cone_mesh(r: float, h: float, seg: int) -> CylinderMesh:
 	return c
 
 
-## Узел с мешем и материалом (для костров); дома и туры собираются в один меш через MeshBatch
+## Узел с мешем и материалом (для костров); дома и туры собираются в общие меши через MeshBatch
 static func _part(mesh: Mesh, offset: Vector3, material: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
@@ -121,7 +121,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var fires: Array = []
 	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
-	# дома и туры неподвижны: они собираются в один меш (MeshBatch), костры с огнём — отдельные узлы
+	# дома и туры неподвижны: они собираются в общие меши по квадратам мира (MeshBatch), костры с огнём — отдельные узлы
 	var batch := MeshBatch.new()
 	for s in w.settlements:
 		for hut in s.huts:

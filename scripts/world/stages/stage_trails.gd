@@ -408,6 +408,15 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var tried := {}
 	var paths: Array = []
 	var connected := 0
+	# С 9.8 сетей может быть несколько: большая река без места для моста делила мир, и все поселения
+	# за ней пропадали (на контрольном мире оставалось 2 из 11). Когда текущая сеть больше не растёт,
+	# следующее по значимости поселение начинает свою. Связи ищутся только с текущей сетью.
+	# Неудачи у непроходимой реки съедают весь запас A* места, поэтому с новой сетью оставшиеся
+	# получают ещё один запас w.N — один раз за генерацию: худший случай в 1,5 раза дольше прежнего.
+	var network := PackedInt32Array()
+	network.resize(n)
+	var refreshed := false
+	var current := 0
 	if n > 0:
 		joined[0] = 1
 		connected = 1
@@ -417,14 +426,32 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 			if joined[b] != 0 or tries[b] >= SETTLEMENT_NEIGHBORS or budgets[b] == 0:
 				continue
 			for a in n:
-				if joined[a] == 0 or tried.has(_key(a, b)):
+				if joined[a] == 0 or network[a] != current or tried.has(_key(a, b)):
 					continue
 				var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
 				var priority := _direction_cost(w, st[a], st[b])
 				if best.is_empty() or priority < best[3]:
 					best = [a, b, distance, priority]
 		if best.is_empty():
-			break
+			# Одно оставшееся место сети не образует.
+			var root := -1
+			for b in n:
+				if joined[b] == 0:
+					root = b
+					break
+			if connected > n - 2:
+				break
+			current += 1
+			network[root] = current
+			joined[root] = 1
+			connected += 1
+			for b in n:
+				if joined[b] == 0:
+					tries[b] = 0
+					if not refreshed:
+						budgets[b] += w.N
+			refreshed = true
+			continue
 		var a: int = best[0]
 		var b: int = best[1]
 		tried[_key(a, b)] = true
@@ -444,12 +471,22 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		_add_trail(w, q, kind, road_cost, state.on_axis, surface)
 		paths.append([a, b, q, true, best[2]])
 		joined[b] = 1
+		network[b] = current
 		connected += 1
-	# Только подтверждённые поселения попадают на карту, в растительность и постройки.
+	# Только подтверждённые поселения попадают на карту, в растительность и постройки:
+	# у каждого есть дорога к соседу. Первое (самое удобное) место остаётся всегда, как раньше;
+	# начало новой сети, к которому никто не подъехал, — нет.
+	var linked := PackedByteArray()
+	linked.resize(n)
+	if n > 0:
+		linked[0] = 1
+	for e: Array in paths:
+		linked[e[0]] = 1
+		linked[e[1]] = 1
 	var keep: Array = []
 	var remap := {}
 	for a in n:
-		if joined[a] != 0:
+		if joined[a] != 0 and linked[a] != 0:
 			remap[a] = keep.size()
 			keep.append(st[a])
 	for e: Array in paths:
@@ -567,6 +604,16 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var a: int = st[e[0]].i
 		var b: int = st[e[1]].i
 		var old := finder.find_path(network, a, b)
+		if old.is_empty():
+			# С 9.8: соседи из разных сетей дорог (между ними река без места для моста) —
+			# тропа между сетями: вброд, по мосту для тропы или в обход.
+			var link := _land_path(finder, w.cost, a, b, TRAIL_CLIMB)
+			var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
+			if not joint.is_empty():
+				_add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface"))
+				paths.append([e[0], e[1], joint, false, e[2]])
+				network = _network_cost(w)
+			continue
 		var old_len := _length(w, old)
 		if old.is_empty() or old_len <= e[2] * SHORTCUT:
 			continue

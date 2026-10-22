@@ -31,16 +31,18 @@ func _init() -> void:
 			var a := Vector3(s.ax + s.ux * t0, h.level(s, t0), s.az + s.uz * t0)
 			var b := Vector3(s.ax + s.ux * t1, h.level(s, t1), s.az + s.uz * t1)
 			StructuresBuilder._deck(batch, a, b, s.half, null)
-		var mesh := batch.build("DeckTest")
-		var arrays := mesh.mesh.surface_get_arrays(0)
-		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-		for k in vertices.size():
-			if normals[k].y < 0.9: continue
-			var v := vertices[k]
-			var t: float = (v.x - s.ax) * s.ux + (v.z - s.az) * s.uz
-			check(absf(v.y - h.level(s, t)) < 0.001, "Меш и опора расходятся")
-		mesh.free()
+		# С 9.8 сборка делится на квадраты мира: проверяются все части
+		var built := batch.build("DeckTest")
+		for part: MeshInstance3D in built.get_children():
+			var arrays := part.mesh.surface_get_arrays(0)
+			var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+			for k in vertices.size():
+				if normals[k].y < 0.9: continue
+				var v := vertices[k]
+				var t: float = (v.x - s.ax) * s.ux + (v.z - s.az) * s.uz
+				check(absf(v.y - h.level(s, t)) < 0.001, "Меш и опора расходятся")
+		built.free()
 		for reverse in [false, true]:
 			var span: Dictionary = s.duplicate()
 			if reverse:
