@@ -22,6 +22,12 @@ const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подле�
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
 ## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
 ## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
+## 9.9+: растения растворяются у края дальности (fade_far/fade_len в vegetation.gdshaderinc) на этой доле радиуса.
+## Деревья гаснут к tree_r: чанк включается, когда его ближайшие деревья уже дальше tree_r, — без рывка.
+## Трава и подлесок гаснут на FADE_AHEAD раньше своего радиуса: раскладка обновляется через 8 м пути
+## и догоняет игрока не сразу, а её край должен быть уже невидим.
+const FADE_SHARE := 0.2
+const FADE_AHEAD := 12.0
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
@@ -68,6 +74,7 @@ var obstacles_version := 0            # растёт с каждой новой 
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
 var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
 var draw_level := -1
+var _grass_mat: ShaderMaterial
 var tree_r := GameConfig.TREE_R      # деревья, м
 var grass_r := GameConfig.GRASS_R    # трава и мелкие растения, м
 var under_r := UNDERSTORY_FAR_R      # крупный подлесок, м
@@ -127,6 +134,24 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		node.visibility_range_end_margin = 8.0
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, 16), count = 0, cap = cap, far = far,
 			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
+	_grass_mat = grass_mat
+	_apply_fade()
+
+
+## Границы растворения по нынешним дальностям (с 9.9+)
+func _apply_fade() -> void:
+	for kind: int in _defs:
+		for part in ["trunk", "crown"]:
+			if _defs[kind].has(part + "_mat"):
+				_fade(_defs[kind][part + "_mat"], tree_r, 0.0)
+	_fade(_grass_mat, grass_r, FADE_AHEAD)
+	for entry: Dictionary in understory:
+		_fade(entry.node.material_override, under_r if entry.far else grass_r, FADE_AHEAD)
+
+
+static func _fade(mat: ShaderMaterial, radius: float, ahead: float) -> void:
+	mat.set_shader_parameter("fade_far", radius - ahead)
+	mat.set_shader_parameter("fade_len", radius * FADE_SHARE)
 
 
 ## Дальности уровня GameSettings.DRAW_LEVELS[level]
@@ -180,6 +205,7 @@ func set_draw(level: int) -> bool:
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
 			node.visibility_range_end = tree_r + world.CS * TILE * 0.7072
+	_apply_fade()
 	last_fill = Vector2.INF
 	return true
 
@@ -229,6 +255,7 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 ## force используется при появлении/переносе: дождаться фона и показать только нужное место.
 func update(px: float, pz: float, force: bool) -> bool:
 	var p := Vector2(px, pz)
+	RenderingServer.global_shader_parameter_set("veg_center", p)
 	if force:
 		_finish()
 		_pending.clear()

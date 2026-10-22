@@ -17,6 +17,12 @@ uniform float sway_speed = 1.0;    // крупные и жёсткие раст�
 uniform float ao_low = 1.0;        // доля света неба у основания / в глубине кроны
 uniform float translucency = 0.0;  // просвечивание листвы против солнца
 uniform float shelter_ao = 0.8;    // свет неба под сомкнутым пологом (по альфе экземпляра; 9.4: светлее)
+// 9.9+: растворение у края дальности прорисовки. Растение целиком (по своему основанию) редеет
+// точками экрана от fade_far - fade_len до fade_far от игрока (veg_center, ставит VegetationLayer.update).
+// Дальше fade_far его не видно, поэтому чанк или новая раскладка травы за этой границей появляются незаметно.
+uniform float fade_far = 1.0e9;
+uniform float fade_len = 1.0;
+global uniform vec2 veg_center;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 
@@ -24,11 +30,13 @@ const vec2 WIND_DIR = vec2(0.82, 0.57);
 
 varying float v_ao;
 varying float v_cloud;   // 7.9: тень облака на растении (одна на экземпляр)
+varying float v_fade;    // 9.9+: 1 — видно целиком, 0 — растворилось
 
 void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
+	v_fade = clamp((fade_far - distance(origin.xz, veg_center)) / fade_len, 0.0, 1.0);
 	if (sway > 0.0 || flutter > 0.0) {
 		// Порыв: медленная волна вдоль ветра и вторая, поперёк, чтобы соседние деревья не качались строем.
 		float along = dot(origin.xz, WIND_DIR);
@@ -55,6 +63,10 @@ void vertex() {
 }
 
 void fragment() {
+	// Сетка порогов (interleaved gradient noise): без прозрачности и сортировки, тени редеют так же.
+	if (v_fade < 1.0 && v_fade <= fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))))) {
+		discard;
+	}
 	// 9.4: у двусторонней листвы движок разворачивает нормаль обратной стороны вниз и внутрь кроны —
 	// из-за этого половина листьев и травинок была почти чёрной. Возвращаем заданную нормаль модели.
 	if (!FRONT_FACING) {
