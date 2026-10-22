@@ -52,6 +52,8 @@ var road: PackedVector3Array = []
 var road_len: PackedFloat32Array = []
 var look_ms := PackedFloat32Array()
 var road_ms := PackedFloat32Array()
+## С 9.8+: в каждом кадре пролёта — расстояние до ближайшего чанка леса в радиусе деревьев, который ещё не показан, м
+var veg_gap := PackedFloat32Array()
 var draw_calls := 0.0
 var primitives := 0.0
 var counted := 0
@@ -297,6 +299,12 @@ func _process(delta: float) -> bool:
 				if t >= look_s:
 					phase = "road"
 					t = 0.0
+					# Как быстрое перемещение в игре: лес у начала пролёта готовится сразу, иначе метрика
+					# veg_gap мерила бы прыжок камеры, а не догрузку по ходу. Этот кадр в замер FPS не входит.
+					var start := _road_at(0.0)
+					game.vegetation.update(start.x, start.z, true)
+					game.terrain_stream.update(start.x, start.z, true, true, GameWorld.NEAR)
+					last_us = Time.get_ticks_usec()
 		"road":
 			t += delta
 			_advance_day(game, delta)
@@ -311,6 +319,7 @@ func _process(delta: float) -> bool:
 			uploaded = game.terrain_stream.update(p.x, p.z, false, not uploaded) or uploaded
 			if game.world.outer != null:
 				game.outer.update(p.x, p.z, not uploaded)
+			veg_gap.append(_veg_gap(game.vegetation, Vector2(p.x, p.z)))
 			_count(road_ms)
 			if t >= road_s:
 				timing.fps = snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.1)
@@ -384,6 +393,15 @@ func _memory() -> Dictionary:
 func _save_perf() -> void:
 	result.look = Perf._frame_stats(look_ms)
 	result.road = Perf._frame_stats(road_ms)
+	if not veg_gap.is_empty():
+		var sorted := veg_gap.duplicate()
+		sorted.sort()
+		var close := 0
+		for g in veg_gap:
+			if g < GameConfig.TREE_R * 0.5:
+				close += 1
+		result.veg_gap = {min_m = snappedf(sorted[0], 0.1), p10_m = snappedf(sorted[sorted.size() / 10], 0.1),
+			close_share = snappedf(float(close) / veg_gap.size(), 0.001)}
 	result.draw_calls = roundi(draw_calls / maxi(1, counted))
 	result.primitives = roundi(primitives / maxi(1, counted))
 	result.memory = _memory()
@@ -398,9 +416,28 @@ func _save_perf() -> void:
 	Dev.save_json(path, all)
 	print("FPS %s: осмотр %.0f (1%% %.0f), дорога %.0f (1%% %.0f), загрузка %.1f с" % [key, result.look.fps,
 		result.look.low1, result.road.fps, result.road.low1, result.load_s])
+	if result.has("veg_gap"):
+		print("Лес на пролёте: ближайший не показанный чанк %.0f м (10 %% кадров ближе %.0f м), кадров ближе %.0f м: %.1f %%" % [
+			result.veg_gap.min_m, result.veg_gap.p10_m, GameConfig.TREE_R * 0.5, result.veg_gap.close_share * 100.0])
 
 
 ## Ломаная самой длинной дороги в метрах; если дорог нет — прямая на север от точки появления
+## Ближайший не показанный чанк леса в радиусе деревьев (TREE_R, если все показаны). Чанк, показанный
+## ближе половины радиуса, игрок видит как лес, выросший на глазах.
+func _veg_gap(veg: VegetationLayer, p: Vector2) -> float:
+	var side: float = veg.world.CS * GameConfig.TILE
+	var r := GameConfig.TREE_R
+	var best := r
+	for cy in range(floori((p.y - r) / side), floori((p.y + r) / side) + 1):
+		for cx in range(floori((p.x - r) / side), floori((p.x + r) / side) + 1):
+			var c := Vector2i(cx, cy)
+			if veg.world.outer == null and not veg._on_map(c):
+				continue
+			if not veg._loaded.has(c):
+				best = minf(best, veg._distance(c, p))
+	return best
+
+
 func _load_road(game: GameWorld) -> void:
 	var best: Array = []
 	var best_n := 0.0

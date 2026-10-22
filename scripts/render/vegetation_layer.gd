@@ -14,7 +14,12 @@ const RECHECK := 24.0
 const Understory := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
-const UNDERSTORY_MAX := 2048 # на форму, только в радиусе травы
+const UNDERSTORY_MAX := 2048 # на форму мелкого подлеска, только в радиусе травы
+## С 9.8+ крупный подлесок (кусты, подрост, молодые деревья, валежник, сухостой, камни) виден дальше травы:
+## с 9.4 он гуще и на границе GRASS_R (52 м) вырастал прямо перед игроком. Мелкие растения — как прежде.
+const UNDERSTORY_FAR_R := 140.0
+const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подлеска: площадь круга в 7 раз больше
+const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
 const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
@@ -58,6 +63,7 @@ var _understory_sites: Array = []
 var obstacles := PackedFloat32Array() # 7.7: валежник и сухостой рядом с игроком для ForestObstacles (тот же формат)
 var obstacles_version := 0            # растёт с каждой новой раскладкой подлеска
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
+var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
@@ -104,10 +110,12 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var still := kind >= 0 or understory.size() == Understory.MOSS
 		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
-		var node := _multimesh(mesh, mat, UNDERSTORY_MAX, true, shadows)
-		node.visibility_range_end = GameConfig.GRASS_R
+		var far := Placement.priority(understory.size()) < 2
+		var cap := UNDERSTORY_FAR_MAX if far else UNDERSTORY_MAX
+		var node := _multimesh(mesh, mat, cap, true, shadows)
+		node.visibility_range_end = UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
 		node.visibility_range_end_margin = 8.0
-		understory.append({mm = node.multimesh, buf = _buffer(UNDERSTORY_MAX, 16), count = 0,
+		understory.append({mm = node.multimesh, buf = _buffer(cap, 16), count = 0, cap = cap, far = far,
 			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
 
 
@@ -171,6 +179,10 @@ func update(px: float, pz: float, force: bool) -> bool:
 			_pending.append_array(_built)
 			_built = []
 			_apply_grass()
+			return true
+		# С 9.8+ раскладка травы и подлеска дольше: готовые чанки деревьев не ждут её конца.
+		if not _pending.is_empty():
+			_apply_chunk(_pending.pop_back())
 			return true
 		return false
 	# Проверяем положение и до передачи очереди: старые результаты переноса не показываем.
@@ -465,28 +477,35 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 func _fill_grass(px: float, pz: float) -> void:
 	var w := world
 	var rT := GameConfig.GRASS_R / TILE
+	var rF := UNDERSTORY_FAR_R / TILE
 	var tx := px / TILE
 	var tz := pz / TILE
 	var buf := grass_buf
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
+	_fill_at = Vector2(px, pz)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
-	placement.prepare(px, pz, GameConfig.GRASS_R + 12.0)
+	placement.prepare(px, pz, UNDERSTORY_FAR_R + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
 		entry.count = 0
 		entry.low = Vector3.INF
 		entry.high = -Vector3.INF
 	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
-	for j in range(maxi(0, floori(tz - rT)), mini(w.H - 1, floori(tz + rT)) + 1):
-		for i in range(maxi(0, floori(tx - rT)), mini(w.W - 1, floori(tx + rT)) + 1):
+	for j in range(maxi(0, floori(tz - rF)), mini(w.H - 1, floori(tz + rF)) + 1):
+		for i in range(maxi(0, floori(tx - rF)), mini(w.W - 1, floori(tx + rF)) + 1):
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
 			if not bd.has("grass") or w.river[k] != 0:
 				continue
-			if (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2 > rT * rT:
+			var d2 := (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2
+			if d2 > rF * rF:
+				continue
+			if d2 > rT * rT:
+				# За кругом травы — только крупный подлесок
+				_fill_understory(i, j, _forest_surface.get_pixel(i, j), StageClimate.natural_conditions(w, i, j).x, px, pz)
 				continue
 			var gr: Dictionary = bd.grass
 			# Почвенная влага и освещение общие с генератором леса.
@@ -574,7 +593,8 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 			kind += 1
 		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
-		if Vector2(x - px, z - pz).length_squared() > GameConfig.GRASS_R ** 2:
+		var reach := UNDERSTORY_FAR_R if understory[kind].far else GameConfig.GRASS_R
+		if Vector2(x - px, z - pz).length_squared() > reach * reach:
 			continue
 		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
@@ -585,7 +605,7 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 
 func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1) -> void:
 	var entry: Dictionary = understory[kind]
-	if entry.count >= UNDERSTORY_MAX:
+	if entry.count >= entry.cap:
 		return
 	var floor_kind := kind - Floor.FIRST
 	var local_box: AABB = entry.box
@@ -618,6 +638,10 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.low = entry.low.min(box.position)
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
+	if Placement.priority(kind) < 2:
+		placement.occupy(box.grow(0.03))
+	if Vector2(x, z).distance_squared_to(_fill_at) > OBSTACLE_R * OBSTACLE_R:
+		return
 	if floor_kind == Floor.LOG or floor_kind == Floor.MOSS_LOG:
 		# бревно — капсула вдоль ствола (меш: от -2,2 до 2,1 м по X, толщина 0,23 м), верх ~0,45 м
 		var a := xf * Vector3(-2.2, 0.0, 0.0)
@@ -629,8 +653,6 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		_obstacles_next.append_array([x, z, x, z, 0.3 * scale, pos.y, pos.y + 0.45 * scale])
 	elif floor_kind == Floor.BOULDER:
 		_obstacles_next.append_array([x, z, x, z, 0.75 * scale, pos.y, pos.y + 0.95 * scale])
-	if Placement.priority(kind) < 2:
-		placement.occupy(box.grow(0.03))
 
 
 func _filter_grass() -> void:
