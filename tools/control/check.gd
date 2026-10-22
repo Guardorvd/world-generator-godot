@@ -269,6 +269,7 @@ func _process(delta: float) -> bool:
 			# назад на точку появления: растительность и край карты вокруг неё, как сразу после загрузки
 			game.camera.global_transform = spawn
 			game.vegetation.update(spawn.origin.x, spawn.origin.z, true)
+			game.terrain_stream.update(spawn.origin.x, spawn.origin.z, true)
 			if game.world.outer != null:
 				game.outer.preload_around(spawn.origin.x, spawn.origin.z)
 			_set_hour(game, NOON)
@@ -301,6 +302,7 @@ func _process(delta: float) -> bool:
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
 			var uploaded := game.vegetation.update(p.x, p.z, false)
+			uploaded = game.terrain_stream.update(p.x, p.z, false, not uploaded) or uploaded
 			if game.world.outer != null:
 				game.outer.update(p.x, p.z, not uploaded)
 			_count(road_ms)
@@ -333,6 +335,7 @@ func _place(game: GameWorld, v: Dictionary) -> void:
 	game.camera.fov = 70.0
 	game.camera.look_at_from_position(v.pos, v.target, Vector3.UP)
 	game.vegetation.update(v.pos.x, v.pos.z, true)
+	game.terrain_stream.update(v.pos.x, v.pos.z, true)
 	if game.world.outer != null:
 		game.outer.preload_around(v.pos.x, v.pos.z)
 	for l: Label3D in game.labels:

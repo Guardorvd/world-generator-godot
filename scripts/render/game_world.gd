@@ -28,6 +28,7 @@ var water_effects: WaterEffects
 var fires: Array = []
 var labels: Array = []
 var outer: OuterTerrain   # рельеф за краем стартовой области
+var terrain_stream: PlanTerrain
 var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
 var yaw := 0.0       # смотрим на север, на костёр
 var pitch := -0.05
@@ -73,11 +74,13 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
-	var terrain := ArrayMesh.new()
-	if not loaded.terrain_arrays.is_empty():
-		terrain.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, loaded.terrain_arrays)
-	$Terrain.mesh = terrain
 	$Terrain.material_override = TerrainBuilder.material(loaded.terrain_image, loaded.forest_surface)
+	terrain_stream = PlanTerrain.new()
+	terrain_stream.name = "PlanTerrain"
+	$Terrain.add_child(terrain_stream)
+	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override)
+	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.
+	loaded.terrain_arrays = []
 	for node: Node in WaterBuilder.build(world, loaded.water_arrays):
 		$Water.add_child(node)
 		if node.name == "Ocean":
@@ -92,6 +95,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	StructuresBuilder.build($Structures, heights)
 
 	player = PlayerState.spawn(world, heights)
+	terrain_stream.update(player.x, player.z, true)
 	if world.settlements.size() > 0:
 		# лицом к костру
 		var s := PlayerState.home(world)
@@ -217,6 +221,7 @@ func travel_to(place: Dictionary) -> void:
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	player = PlayerState.arrive(world, heights, place)
+	terrain_stream.update(player.x, player.z, true)
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера
@@ -298,6 +303,7 @@ func _notification(what: int) -> void:
 func _physics_process(dt: float) -> void:
 	if player == null or paused or _settlement_open():
 		return
+	world.open_around(player.x / TILE, player.z / TILE)
 	_store_prev()
 	var yaw0 := yaw
 	var pitch0 := pitch
@@ -406,6 +412,7 @@ func _process(delta: float) -> void:
 	day.apply(hour, time)
 
 	var uploaded := vegetation.update(pos.x, pos.z, false)
+	uploaded = terrain_stream.update(pos.x, pos.z, false, not uploaded) or uploaded
 	if world.outer != null:
 		outer.update(pos.x, pos.z, not uploaded)
 	if _ocean != null:

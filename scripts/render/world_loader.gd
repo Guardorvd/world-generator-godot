@@ -11,6 +11,7 @@ extends RefCounted
 var world: WorldData
 var heights: Heightfield
 var terrain_arrays: Array
+var terrain_chunks := {} # CPU-кэш окончательной геометрии, без узлов и GPU
 var terrain_image: Image
 var forest_surface: Image
 var water_arrays: Array[Array]
@@ -56,6 +57,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
 	TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
 	r.timings.patch_refine_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
+	r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays)
+	r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	# рельеф за краем карты: кольцо клеток вокруг неё сразу, остальное — кусками по ходу игры
 	r.world.outer = OuterLand.new(r.world)

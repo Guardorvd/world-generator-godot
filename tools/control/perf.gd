@@ -226,6 +226,7 @@ func _process(delta: float) -> bool:
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
 			var uploaded := game.vegetation.update(p.x, p.z, false)
+			uploaded = game.terrain_stream.update(p.x, p.z, false, not uploaded) or uploaded
 			# рельеф за краем карты подгружается по ходу, как в игре
 			if game.world.outer != null:
 				game.outer.update(p.x, p.z, not uploaded)

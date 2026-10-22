@@ -445,7 +445,7 @@ class BigMap extends Control:
 		var k: float = f[2]
 		draw_texture_rect(hud.map_tex, Rect2(o, Vector2(sz, sz)), false)
 		draw_rect(Rect2(o, Vector2(sz, sz)), Color.html("#d8c79a"), false, 2.0)
-		# За рамкой виден тот же мир; затемнение обозначает ещё недоступную территорию.
+		# За рамкой виден тот же мир; соседняя территория откроется при приближении.
 		if w.available_rect.has_area():
 			var a := o + Vector2(w.available_rect.position) * k
 			var b := o + Vector2(w.available_rect.end) * k
@@ -484,7 +484,7 @@ class BigMap extends Control:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
 		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, o.y + sz + 44.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "Щёлкните по поселению, вершине или озеру, чтобы выбрать цель путешествия"
+		var tip := "Выберите место для путешествия. Соседние земли открываются по пути"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]

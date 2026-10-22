@@ -20,10 +20,12 @@ var seed_num := 0
 ## 8.5: W/H — неизменный общий план, доступная территория — вложенное окно в нём.
 ## Координаты всегда мировые: при расширении нет ни сдвига, ни пересчёта массивов.
 ## Пустое окно у вручную созданных WorldData означает отсутствие ограничения.
+## С 8.8 соседнее окно открывается заранее при движении (open_around).
 const REGION_SIZE := 256
 var territory_center := Vector2i.ZERO
 var available_rect := Rect2i()
 var territory_revision := 0
+const TRAVEL_MARGIN := 32.0 # клетки: открыть соседей до того, как тело/велосипед достигнет границы
 
 
 ## Только открывает новые клетки того же мира. Меньший размер не закрывает уже открытое.
@@ -36,6 +38,25 @@ func expand_territory(size: int) -> void:
 	if next != available_rect:
 		available_rect = next
 		territory_revision += 1
+
+
+## Движение открывает соседнюю часть уже готового плана, без генерации и загрузочного экрана.
+## Вызывать перед физикой: проверка столкновений не должна встретить старую границу.
+func open_around(x: float, y: float) -> bool:
+	if not available_rect.has_area() or x < 0.0 or y < 0.0 or x >= W or y >= H:
+		return false
+	var revision := territory_revision
+	var limit := mini(W, H)
+	while available_rect.size.x < limit:
+		# Внешняя граница плана не требует открытия ещё одной области.
+		var left := available_rect.position.x > 0 and x < available_rect.position.x + TRAVEL_MARGIN
+		var top := available_rect.position.y > 0 and y < available_rect.position.y + TRAVEL_MARGIN
+		var right := available_rect.end.x < W and x >= available_rect.end.x - TRAVEL_MARGIN
+		var bottom := available_rect.end.y < H and y >= available_rect.end.y - TRAVEL_MARGIN
+		if not (left or top or right or bottom):
+			break
+		expand_territory(mini(limit, available_rect.size.x + REGION_SIZE))
+	return territory_revision != revision
 
 
 ## Координаты в клетках; margin — запас для тела игрока, тоже в клетках.

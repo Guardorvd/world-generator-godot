@@ -105,6 +105,7 @@ func _setup_view(game: GameWorld) -> void:
 	if Dev.arg("hide-outer", "0") == "1":
 		game.outer.hide()
 	game.vegetation.update(position.x, position.z, true)
+	game.terrain_stream.update(position.x, position.z, true)
 	position.y = game.heights.ground_at(position.x, position.z) + (180.0 if view == 1 else GameConfig.EYE)
 	game.camera.position = position
 	game.camera.rotation = Vector3(-0.18, -PI / 2.0, 0.0)
