@@ -5,7 +5,7 @@ extends SceneTree
 ##   godot --path . --script res://tools/control/check.gd -- [ключи]
 ## Быстрая (по умолчанию): один мир (Север-1234@512), все виды, FPS. Ключи:
 ##   --world <сид> --size <N>     другой мир
-##   --views all|none|spawn,road  что снимать: spawn, peak, valley, road, settlement, site, map (all — всё)
+##   --views all|none|spawn,road  что снимать: spawn, peak, valley, road, settlement, site, forest, map (all — всё)
 ##   --fps on|off                 мерить ли FPS (по умолчанию on)
 ##   --hours 7.5,19.1             снять виды ещё и в эти часы (по умолчанию только полдень, 12)
 ##   --look S --road S            длительность осмотра и пролёта, с (по умолчанию из seeds.json)
@@ -18,7 +18,7 @@ extends SceneTree
 
 const Dev := preload("res://tools/control/control.gd")
 const Perf := preload("res://tools/control/perf.gd")
-const ALL_VIEWS := ["map", "spawn", "peak", "valley", "road", "settlement", "site"]
+const ALL_VIEWS := ["map", "spawn", "peak", "valley", "road", "settlement", "site", "forest"]
 const NOON := 12.0
 const SETTLE_FRAMES := 12   # кадров после переноса камеры до снимка
 const WARMUP_S := 1.5       # первые кадры компилируют шейдеры, их не считаем

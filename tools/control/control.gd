@@ -278,4 +278,51 @@ static func views(game: GameWorld) -> Array:
 		var t := Vector3(site.x * TILE, h.ground_at(site.x * TILE, site.y * TILE) + 3.0, site.y * TILE)
 		var kind: String = StageSites.TYPES[site.type].title
 		out.append({name = "site", title = "%s «%s»" % [kind.left(1).to_upper() + kind.substr(1), site.name], pos = _look_from(h, t, 32.0, 10.0, 8.0), target = t})
+	# с 9.4: лес изнутри на высоте глаз — у ближайшего к дому взрослого дерева в густом
+	# (не меньше 60 % самого лесистого чанка) лиственном лесу или тайге
+	var stand := PackedInt32Array()
+	stand.resize(w.chunks.size())
+	for c in w.chunks.size():
+		for o in w.chunks[c]:
+			if Biomes.is_tree(w.obj_k[o]):
+				stand[c] += 1
+	var densest := 0
+	for c in stand:
+		densest = maxi(densest, c)
+	var tree := -1
+	var tree_d := INF
+	for o in w.obj_count:
+		if not Biomes.is_tree(w.obj_k[o]) or w.obj_s[o] < 1.0:
+			continue
+		if stand[floori(w.obj_y[o] / w.CS) * w.CW + floori(w.obj_x[o] / w.CS)] < densest * 0.6:
+			continue
+		var cell := floori(w.obj_y[o]) * w.W + floori(w.obj_x[o])
+		if w.biome[cell] != Biomes.FOREST and w.biome[cell] != Biomes.TAIGA or w.path_mask[cell] > 0:
+			continue
+		var d := home.distance_to(Vector2(w.obj_x[o], w.obj_y[o]))
+		if d < tree_d:
+			tree_d = d
+			tree = o
+	if tree >= 0:
+		# Камера в 6 м от дерева, с той из восьми сторон, где ближайший ствол дальше всего (не в кроне)
+		var tx := w.obj_x[tree] * TILE
+		var tz := w.obj_y[tree] * TILE
+		var best := Vector2(tx + 6.0, tz)
+		var room := -1.0
+		for k in 8:
+			var p := Vector2(tx, tz) + Vector2.from_angle(k * TAU / 8.0) * 6.0
+			var near := INF
+			var cx := floori(p.x / TILE / w.CS)
+			var cy := floori(p.y / TILE / w.CS)
+			for j in range(maxi(0, cy - 1), mini(w.CH, cy + 2)):
+				for i in range(maxi(0, cx - 1), mini(w.CW, cx + 2)):
+					for o in w.chunks[j * w.CW + i]:
+						if Biomes.is_tree(w.obj_k[o]):
+							near = minf(near, p.distance_to(Vector2(w.obj_x[o], w.obj_y[o]) * TILE))
+			if near > room:
+				room = near
+				best = p
+		var eye := Vector3(best.x, h.ground_at(best.x, best.y) + GameConfig.EYE, best.y)
+		var ahead := Vector2(tx, tz) + (Vector2(tx, tz) - best).normalized() * 14.0
+		out.append({name = "forest", title = "Лес", pos = eye, target = Vector3(ahead.x, h.ground_at(ahead.x, ahead.y) + 2.0, ahead.y)})
 	return out

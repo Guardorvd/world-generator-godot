@@ -19,6 +19,8 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		return _acacia(variant)
 	if kind == Biomes.T_DEAD:
 		return _dead(variant)
+	if kind == Biomes.T_BUSH:
+		return _bush(variant)
 	var birch := kind == Biomes.T_BIRCH
 	var conifer := kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE
 	var rng := RandomNumberGenerator.new()
@@ -69,11 +71,17 @@ static func definition(kind: int, variant: int) -> Dictionary:
 				var twig := middle + Vector3(-dir.z, -0.4 if birch else 0.25, dir.x) * 0.65
 				branches.append([[middle, twig], 0.025, 0.005, bark, birch])
 				foliage.append([twig, size * 0.7, a + 0.8, rng.randf() * 10.0])
-	var colors := [Color("708a48"), Color("809750"), Color("647e48")] if birch else [Color("526d40"), Color("607b43"), Color("49663e")]
+		# 9.4: густая середина кроны: без неё сквозь редкие концы ветвей видна тёмная пустота.
+		for i in 6:
+			var a := i * TAU / 6.0 + rng.randf()
+			var p := Vector3(cos(a) * 0.55, height * rng.randf_range(0.62, 0.82), sin(a) * 0.55) + bend * 0.6
+			foliage.append([p, Vector3(0.9, 0.62, 0.8) * (0.85 if birch else 1.05), a, rng.randf() * 10.0])
+	# 9.4: светлее и теплее, стилизованная листва вместо почти чёрной.
+	var colors := [Color("94b85e"), Color("a2bf63"), Color("88ae5a")] if birch else [Color("80ad52"), Color("90b657"), Color("74a350")]
 	if conifer:
-		colors = [Color("3e6252"), Color("486b51"), Color("395c50")]
+		colors = [Color("5e8d60"), Color("6a9962"), Color("57855c")]
 	if kind == Biomes.T_SNOWPINE:
-		colors = [Color("a7bbb3"), Color("94aaa0"), Color("bacac3")]
+		colors = [Color("b3c7bd"), Color("a1b6aa"), Color("c3d3ca")]
 	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, conifer), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, conifer)}
 
 
@@ -137,7 +145,7 @@ static func _palm(variant: int) -> Dictionary:
 		outer.append([p1.lerp(p2, 0.5), Vector3(p1.distance_to(p2) * 0.55, 0.1, width * 0.72), a, rng.randf() * 10.0, _frame(p2 - p1), 0.45])
 	for k in range(0, count, 2):
 		foliage.append_array([inner[k], inner[k + 1], outer[k], outer[k + 1]])
-	return _leafy(branches, foliage, [Color8(60, 140, 60), Color8(80, 150, 55), Color8(50, 128, 70)], true)
+	return _leafy(branches, foliage, [Color8(84, 158, 70), Color8(104, 168, 66), Color8(74, 148, 80)], true)
 
 
 ## Тропическое дерево: высокий ствол с досковидными корнями и ярусная неровная крона.
@@ -180,7 +188,7 @@ static func _jungle(variant: int) -> Dictionary:
 			foliage.append([end + Vector3(0, 0.1, 0), size, a, rng.randf() * 10.0])
 			if (j + tier) % 2 == 0:
 				foliage.append([middle + Vector3(-dir.z, 0.3, dir.x) * 0.45, size * 0.72, a + 0.9, rng.randf() * 10.0])
-	return _leafy(branches, foliage, [Color8(30, 100, 44), Color8(40, 112, 40), Color8(26, 90, 52)], false)
+	return _leafy(branches, foliage, [Color8(52, 128, 58), Color8(66, 140, 54), Color8(46, 118, 66)], false)
 
 
 ## Акация: развилка у земли, восходящие ветви и плоский широкий зонтик.
@@ -216,7 +224,27 @@ static func _acacia(variant: int) -> Dictionary:
 				branches.append([[tip, leaf], 0.03, 0.008, bark, false])
 				var tilt := Basis(tdir.cross(Vector3.UP).normalized(), rng.randf_range(0.04, 0.12))
 				foliage.append([leaf + Vector3(0, 0.06, 0), Vector3(0.85, 0.42, 0.7) * rng.randf_range(0.85, 1.1), a, rng.randf() * 10.0, tilt * Basis(Vector3.UP, -a - twig), 0.1])
-	return _leafy(branches, foliage, [Color8(110, 140, 60), Color8(126, 146, 64), Color8(98, 130, 58)], false)
+	return _leafy(branches, foliage, [Color8(134, 160, 70), Color8(150, 166, 76), Color8(122, 152, 68)], false)
+
+
+## 9.4: куст вместо двух шаров: несколько стеблей от земли и купол из побегов с вырезанными листьями.
+static func _bush(variant: int) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 6940 + variant * 331
+	var bark := Color("6a5640")
+	var branches: Array = []
+	var foliage: Array = []
+	for i in 5:
+		var a := i * TAU / 5.0 + rng.randf_range(-0.4, 0.4)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var end := dir * rng.randf_range(0.35, 0.6) + Vector3(0, rng.randf_range(0.55, 0.9), 0)
+		branches.append([[dir * 0.05, dir * 0.2 + Vector3(0, 0.3, 0), end], 0.03, 0.01, bark, false])
+	for i in 10 + variant * 2:
+		var a := i * 2.399 + rng.randf_range(-0.3, 0.3)
+		var r := rng.randf_range(0.15, 0.75)
+		var p := Vector3(cos(a) * r, 0.5 + (0.75 - r) * 0.55 + rng.randf_range(0.0, 0.2), sin(a) * r)
+		foliage.append([p, Vector3(0.6, 0.42, 0.52) * rng.randf_range(0.85, 1.15), a, rng.randf() * 10.0])
+	return _leafy(branches, foliage, [Color("7fa94f"), Color("8fb255"), Color("749f52")], false)
 
 
 ## Сухое дерево: голый кривой ствол с обломанной вершиной и сучьями. Кроны нет.
@@ -269,13 +297,13 @@ static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
 	if leaves:
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 651
-		for i in (240 if needles else 110):
+		for i in (240 if needles else 150):
 			var a := rng.randf() * TAU
 			var r := sqrt(rng.randf()) * 50.0
 			var center := Vector2(64, 64) + Vector2(cos(a), sin(a)) * r
 			var angle := rng.randf() * TAU
-			var length := rng.randf_range(5, 11)
-			var width := length * (0.15 if needles else 0.4)
+			var length := rng.randf_range(5, 11) if needles else rng.randf_range(6, 12)
+			var width := length * (0.15 if needles else 0.5) # 9.4: круглее и мягче
 			for dy in range(-12, 13):
 				for dx in range(-12, 13):
 					var p := Vector2(dx, dy).rotated(angle)
@@ -304,13 +332,26 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 	var colors := PackedColorArray()
 	var uvs := PackedVector2Array()
 	var indices: Array[PackedInt32Array] = []
+	# 9.4: эллипсоид кроны. Нормали листвы смотрят от его центра: крона освещается как мягкий
+	# цельный объём (приём стилизованных деревьев), а не как стопка плоских веток.
+	var crown := [Vector3.ZERO, Vector3.ONE]
+	if not foliage.is_empty():
+		var center := Vector3.ZERO
+		for spray: Array in foliage:
+			center += spray[0]
+		center /= foliage.size()
+		var extent := Vector3.ONE * 0.5
+		for spray: Array in foliage:
+			extent = extent.max((spray[0] - center).abs() + Vector3.ONE * 0.4)
+		crown = [center, extent]
 	for level in 3:
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
 		for branch: Array in branches:
-			if level == 2 and branch[1] < 0.06:
+			# Первая ветвь (ствол, у куста главный стебель) остаётся на всех уровнях: поверхность не пустеет.
+			if level == 2 and branch[1] < 0.06 and branch != branches[0]:
 				continue # Тонкие веточки уже меньше пикселя; силуэт остаётся в листве.
-			if level == 1 and branch[1] < 0.035:
+			if level == 1 and branch[1] < 0.035 and branch != branches[0]:
 				continue
 			_tube(st, branch, (6 - level) if branch[1] > 0.12 else 3)
 		for i in foliage.size():
@@ -319,7 +360,7 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 			var spray: Array = foliage[i].duplicate()
 			if level == 2:
 				spray[1] *= 1.12 # Сохраняем заполнение дальней кроны меньшим числом побегов.
-			_spray(st, spray, level, conifer)
+			_spray(st, spray, level, conifer, crown)
 		st.index()
 		var arrays := st.commit_to_arrays()
 		var offset := vertices.size()
@@ -376,7 +417,16 @@ static func _tube(st: SurfaceTool, data: Array, segments: int) -> void:
 				_vertex(st, p, normal, color)
 
 
-static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool) -> void:
+## Нормаль и яркость точки листвы по эллипсоиду кроны crown = [центр, полуоси]: снаружи светлее,
+## в глубине темнее — объём без лишней геометрии.
+static func _crown_light(p: Vector3, crown: Array) -> Array:
+	var d: Vector3 = (p - crown[0]) / crown[1]
+	var normal := (d + Vector3.UP * 0.6).normalized() if d.length() > 0.05 else Vector3.UP
+	var shade := 0.8 + 0.24 * clampf(d.length(), 0.0, 1.0)
+	return [normal, Color(shade, shade, shade, 1)]
+
+
+static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crown: Array) -> void:
 	var center: Vector3 = data[0]
 	var size: Vector3 = data[1]
 	var rotation := Basis(Vector3.UP, data[2])
@@ -384,7 +434,7 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool) -> v
 	# Пространственные веера с вырезанными листьями вместо гладких оболочек.
 	var planes := 4 if level == 0 else (3 if level == 1 else 2)
 	if data.size() > 4:
-		_flat_spray(st, data, planes)
+		_flat_spray(st, data, planes, crown)
 		return
 	for i in planes:
 		var a := phase + i * 2.399
@@ -398,13 +448,13 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool) -> v
 		var uv := [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)]
 		for index in [0, 1, 2, 0, 2, 3]:
 			st.set_uv(uv[index])
-			var shade := 0.85 + i * 0.025
-			_vertex(st, points[index], (axis * 0.35 + Vector3.UP).normalized(), Color(shade, shade, shade, 1))
+			var lit := _crown_light(points[index], crown)
+			_vertex(st, points[index], lit[0], lit[1])
 
 
 ## Побег в собственной рамке data[4]: плоскости вдоль оси X, сложенные веером
 ## вокруг неё на угол data[5]. Так строятся вайи пальмы и плоский зонтик акации.
-static func _flat_spray(st: SurfaceTool, data: Array, planes: int) -> void:
+static func _flat_spray(st: SurfaceTool, data: Array, planes: int, crown: Array) -> void:
 	var center: Vector3 = data[0]
 	var size: Vector3 = data[1]
 	var phase: float = data[3]
@@ -420,7 +470,7 @@ static func _flat_spray(st: SurfaceTool, data: Array, planes: int) -> void:
 		var points := [c - x - z, c + x - z, c + x + z, c - x + z]
 		var normal := b.y if b.y.y >= 0.0 else -b.y
 		normal = (normal * 0.6 + Vector3.UP * 0.4).normalized()
-		var shade := 0.85 + i * 0.025
 		for index in [0, 1, 2, 0, 2, 3]:
 			st.set_uv(uv[index])
-			_vertex(st, points[index], normal, Color(shade, shade, shade, 1))
+			var lit := _crown_light(points[index], crown)
+			_vertex(st, points[index], (normal + lit[0]).normalized(), lit[1])

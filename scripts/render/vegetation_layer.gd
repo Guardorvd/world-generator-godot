@@ -21,19 +21,19 @@ const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 # [sway, flutter, sway_speed, ao, glow]; см. _wind_mat
 const CALM := [0.0, 0.0, 1.0, 1.0, 0.0]
 const WIND := {
-	Biomes.T_OAK: [0.14, 0.035, 0.8, 0.6, 0.3],
-	Biomes.T_BIRCH: [0.22, 0.06, 1.0, 0.75, 0.42],
-	Biomes.T_PINE: [0.1, 0.012, 0.65, 0.6, 0.12],
+	Biomes.T_OAK: [0.14, 0.035, 0.8, 0.72, 0.32],
+	Biomes.T_BIRCH: [0.22, 0.06, 1.0, 0.8, 0.42],
+	Biomes.T_PINE: [0.1, 0.012, 0.65, 0.7, 0.15],
 	Biomes.T_SNOWPINE: [0.07, 0.008, 0.6, 0.62, 0.08],
 	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
-	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.55, 0.25],
+	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.65, 0.25],
 	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],
-	Biomes.T_BUSH: [0.06, 0.035, 1.3, 0.7, 0.25],
+	Biomes.T_BUSH: [0.06, 0.035, 1.3, 0.75, 0.3],
 	Biomes.T_REED: [0.16, 0.03, 1.4, 0.8, 0.3],
 	Biomes.T_DEAD: [0.04, 0.0, 0.8, 0.8, 0.0],
 }
-const GRASS_WIND := [0.09, 0.02, 1.6, 0.7, 0.3]
-const PLANT_WIND := [0.05, 0.02, 1.2, 0.7, 0.25]
+const GRASS_WIND := [0.09, 0.02, 1.6, 0.85, 0.3]
+const PLANT_WIND := [0.05, 0.02, 1.2, 0.85, 0.25]
 
 var world: WorldData
 var heights: Heightfield
@@ -99,7 +99,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
 		var kind := understory.size() - Floor.FIRST
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG] or understory.size() in [Understory.YOUNG, Understory.YOUNG_PINE]
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or understory.size() in [Understory.YOUNG, Understory.YOUNG_PINE]
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or understory.size() == Understory.MOSS
 		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
@@ -384,7 +384,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var ox := xs[o]
 			var oy := ys[o]
 			var v: int = items.v[o]
-			var s: float = items.s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
+			var s: float = items.s[o] * (1.2 if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK else 1.0)
 			var sy := s * (0.9 + (v % 3) * 0.08)
 			var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
@@ -519,7 +519,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				var origin := Vector3(x, y - 0.05, z)
 				low = low.min(origin)
 				high = high.max(origin)
-				var v := 1.0 + WGRandom.hash2(m, i + j, 23) * 0.3
+				var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
 				buf[n * 16 + 12] = tc[0] * v
 				buf[n * 16 + 13] = tc[1] * v
 				buf[n * 16 + 14] = tc[2] * v
@@ -553,7 +553,7 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 	var weights := Understory.weights(bi, moisture, light, canopy, ch)
 	var floor_weights := Floor.weights(canopy, surface.g, moisture, light, surface.a)
 	var deadwood := Understory.mix(Understory.DEADWOOD, ch)
-	for f in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG]:
+	for f in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP]:
 		floor_weights[f] *= deadwood
 	weights.append_array(floor_weights)
 	var total := 0.0
@@ -562,9 +562,9 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 	# Пятна по 12 м и случайные пропуски; соседние клетки связаны без нового шума.
 	var seed := world.seed_num ^ 6601
 	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
-	var density := (0.25 + 0.7 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch)
+	var density := (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) # 9.4: гуще
 	# В чаще мест больше: кусты и подрост стоят стеной.
-	for m in 4 + roundi(3.0 * ch[Understory.THICKET]):
+	for m in 5 + roundi(3.0 * ch[Understory.THICKET]):
 		if WGRandom.hash2(i * 8 + m, j, seed + 1) > density:
 			continue
 		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
@@ -598,8 +598,8 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var pos := Vector3(x, heights.ground_at(x, z) - 0.015, z)
 	var offset: int = entry.count * 16
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
-	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind != Floor.SNAG):
-		# Почвенные детали и валежник следуют склону; сухостой остаётся вертикальным.
+	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind not in [Floor.SNAG, Floor.STUMP, Floor.BOULDER]):
+		# Почвенные детали и валежник следуют склону; сухостой, пни и валуны остаются вертикальными.
 		var dx := heights.ground_at(x + 0.3, z) - heights.ground_at(x - 0.3, z)
 		var dz := heights.ground_at(x, z + 0.3) - heights.ground_at(x, z - 0.3)
 		xf.basis.x.y = (dx * xf.basis.x.x + dz * xf.basis.x.z) / 0.6
@@ -625,6 +625,10 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		_obstacles_next.append_array([a.x, a.z, b.x, b.z, 0.2 * scale, pos.y, pos.y + 0.42 * scale])
 	elif floor_kind == Floor.SNAG:
 		_obstacles_next.append_array([x, z, x, z, 0.16 * scale, pos.y, INF])
+	elif floor_kind == Floor.STUMP: # невысокий, перепрыгивается
+		_obstacles_next.append_array([x, z, x, z, 0.3 * scale, pos.y, pos.y + 0.45 * scale])
+	elif floor_kind == Floor.BOULDER:
+		_obstacles_next.append_array([x, z, x, z, 0.75 * scale, pos.y, pos.y + 0.95 * scale])
 	if Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))
 

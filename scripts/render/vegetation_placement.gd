@@ -19,7 +19,7 @@ func _init(w: WorldData, h: Heightfield) -> void:
 
 ## Сначала валежник/камни, затем кусты/молодняк, затем мягкая подстилка и растения.
 static func priority(kind: int) -> int:
-	if kind - Floor.FIRST in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STONES]:
+	if kind - Floor.FIRST in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STONES, Floor.STUMP, Floor.BOULDER]:
 		return 0
 	if kind in [Plants.BUSH, Plants.SAPLING, Plants.PINE, Plants.YOUNG, Plants.YOUNG_PINE]:
 		return 1

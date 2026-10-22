@@ -16,7 +16,7 @@ uniform float flutter = 0.0;       // м: дрожь листьев и трав�
 uniform float sway_speed = 1.0;    // крупные и жёсткие растения качаются медленнее
 uniform float ao_low = 1.0;        // доля света неба у основания / в глубине кроны
 uniform float translucency = 0.0;  // просвечивание листвы против солнца
-uniform float shelter_ao = 0.65;   // свет неба под сомкнутым пологом (по альфе экземпляра)
+uniform float shelter_ao = 0.8;    // свет неба под сомкнутым пологом (по альфе экземпляра; 9.4: светлее)
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 
@@ -55,6 +55,11 @@ void vertex() {
 }
 
 void fragment() {
+	// 9.4: у двусторонней листвы движок разворачивает нормаль обратной стороны вниз и внутрь кроны —
+	// из-за этого половина листьев и травинок была почти чёрной. Возвращаем заданную нормаль модели.
+	if (!FRONT_FACING) {
+		NORMAL = -NORMAL;
+	}
 	vec4 tex = texture(albedo_tex, UV);
 	vec3 col = albedo_color.rgb * tex.rgb;
 	if (use_vertex_color) {
@@ -67,6 +72,6 @@ void fragment() {
 	BACKLIGHT = col * translucency;
 #ifdef CUTOUT
 	ALPHA = tex.a;
-	ALPHA_SCISSOR_THRESHOLD = 0.4;
+	ALPHA_SCISSOR_THRESHOLD = 0.35; // 9.4: полнее крона вдали
 #endif
 }

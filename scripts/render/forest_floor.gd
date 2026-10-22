@@ -2,7 +2,7 @@ extends RefCounted
 ## 6.6+: подстилка и валежник. Только оформление готового мира.
 
 const Plants := preload("res://scripts/render/understory_models.gd")
-enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES }
+enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER } # 9.4: пни и мшистые валуны
 const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
@@ -61,6 +61,8 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 		sheltered * wet * 0.035,
 		cover * (0.012 + light * 0.02 + (1.0 - wet) * 0.015),
 		rocky * (0.25 + cover * 0.2),
+		cover * (0.012 + (1.0 - wet) * 0.01),
+		cover * (0.008 + rocky * 0.05),
 	])
 
 
@@ -116,14 +118,21 @@ static func meshes() -> Array[Mesh]:
 		var a := n * 2.4
 		var p := Vector3(0.05, 1.3 + n * 0.5, 0)
 		snag.append([_beam(p, p + Vector3(cos(a) * 0.65, 0.45, sin(a) * 0.65), 0.045), BARK])
-	var stones: Array = []
+	# 9.4: россыпь из тех же бугристых камней, что валуны мира, а не из сплюснутых сфер
+	var stones := SurfaceTool.new()
 	for n in 5:
 		var a := n * 2.4
-		var stone := SphereMesh.new()
-		stone.radius = 0.18 + (n % 3) * 0.09
-		stone.height = stone.radius * 2.0
-		stone.radial_segments = 5
-		stone.rings = 2
-		stones.append([[stone, Transform3D(Basis().scaled(Vector3(1.2, 0.55, 0.85)), Vector3(cos(a) * 0.45, 0.07, sin(a) * 0.45))], Color(0.39 + n * 0.015, 0.38 + n * 0.012, 0.34 + n * 0.012)])
-	return [Plants._leaves(leaves, Color(0.40, 0.30, 0.15)), Plants._leaves(needles, Color(0.35, 0.29, 0.17)),
-		twig, Plants._colored(roots), _log(false), _log(true), Plants._colored(snag), Plants._colored(stones)]
+		var r := 0.18 + (n % 3) * 0.09
+		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * r, 300 + n, 0.35, 0.5)
+		stones.append_from(stone, 0, Transform3D(Basis(), Vector3(cos(a) * 0.45, 0.0, sin(a) * 0.45)))
+	# Пень: срез светлой древесины, корневые лапы и шапка мха.
+	var stump: Array = [[_beam(Vector3(0, -0.05, 0), Vector3(0.02, 0.45, 0), 0.3), BARK],
+		[_beam(Vector3(0.02, 0.45, 0), Vector3(0.02, 0.47, 0), 0.22), WOOD],
+		[Models._moved(Models._ico(0.2, 0.47, 1.0, 0.25, 0.8), Vector3(-0.06, 0, 0.05)), Color(0.36, 0.5, 0.2)]]
+	for n in 4:
+		var a := n * TAU / 4.0 + 0.4
+		var f := Vector3(cos(a), 0, sin(a))
+		stump.append([_beam(f * 0.15 + Vector3.UP * 0.25, f * 0.62, 0.09), BARK])
+	return [Plants._leaves(leaves, Color(0.46, 0.35, 0.18)), Plants._leaves(needles, Color(0.4, 0.33, 0.19)),
+		twig, Plants._colored(roots), _log(false), _log(true), Plants._colored(snag), stones.commit(),
+		Plants._colored(stump), Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62)]
