@@ -14,6 +14,8 @@ extends SceneTree
 ## Общие: --out <папка> (по умолчанию runs/<версия>), --base <папка> (по умолчанию прошлая версия в runs),
 ##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1,
 ##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию как в игре — высокая).
+##   --cache — с 10.0: после проверки тот же мир загружается ещё раз из кэша миров (WorldCache, файл во временной
+##   папке прогона): время загрузки из кэша, размер файла и совпадение мира, рельефа и карты; итог в cache.json.
 ## Кэш: в папке прогона лежит check.json; если тот же коммит без правок уже снят с теми же видами и FPS,
 ## мир не генерируется повторно. Поэтому «было» снимается один раз до правок и дальше берётся из кэша.
 
@@ -65,6 +67,8 @@ var counted := 0
 var result := {}
 var failed := false
 var done := false
+var cache_check := false   # --cache: ещё одна загрузка того же мира из кэша
+var fresh := {}            # что сравнить после загрузки из кэша: сводка мира, хеши рельефа и карты
 
 
 func _initialize() -> void:
@@ -88,6 +92,7 @@ func _initialize() -> void:
 		print("%s уже снят на этом коммите (--again — снять заново)" % Dev.world_id(seed_text, size))
 		_after_run()
 		return
+	cache_check = "--cache" in OS.get_cmdline_user_args()
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 
@@ -213,6 +218,8 @@ func _process(delta: float) -> bool:
 	frames += 1
 	var game: GameWorld = main.game
 	match phase:
+		"cache":
+			return _process_cache(game)
 		"menu":
 			if frames == 1:
 				DisplayServer.window_set_mode(DisplayServer.WINDOW_MODE_WINDOWED)
@@ -228,6 +235,11 @@ func _process(delta: float) -> bool:
 			if frames == 30:
 				result.menu_memory = _memory()
 				print("Мир %s@%d" % [seed_text, size])
+				if cache_check:
+					# первая загрузка генерирует мир и пишет его в чистый кэш прогона
+					WorldCache.enabled = true
+					WorldCache.dir = out.path_join("world_cache")
+					DirAccess.remove_absolute(WorldCache.path_for(seed_text, size))
 				started = Time.get_ticks_msec()
 				main.start_game(seed_text, size)
 				phase = "loading"
@@ -252,6 +264,8 @@ func _process(delta: float) -> bool:
 			var id := Dev.world_id(seed_text, size)
 			var stats := Dev.world_stats(game.world, true)
 			Dev.save_json(out.path_join("fingerprint_%s.json" % id), stats.fingerprint)
+			if cache_check:
+				fresh = _cache_sums(game, stats.fingerprint)
 			stats.erase("fingerprint")
 			Dev.save_json(out.path_join("stats_%s.json" % id), stats)
 			if "map" in want_views:
@@ -339,7 +353,58 @@ func _process(delta: float) -> bool:
 	return false
 
 
+## Загрузить тот же мир из кэша и сравнить с первой загрузкой
+func _process_cache(game: GameWorld) -> bool:
+	if game == null or game.player == null:
+		if Time.get_ticks_msec() - started > Dev.LOAD_TIMEOUT_MS:
+			printerr("Мир из кэша не загрузился за %d с" % (Dev.LOAD_TIMEOUT_MS / 1000))
+			failed = true
+			cache_check = false
+			return _finish()
+		return false
+	var load_s := snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.01)
+	var now := _cache_sums(game, Dev.world_stats(game.world, true).fingerprint)
+	var same := {}
+	for k: String in fresh:
+		same[k] = fresh[k] == now[k]
+	var path := WorldCache.path_for(seed_text, size)
+	var res := {from_cache = game.load_timings.has("cache_read_ms"), load_s = load_s, fresh_load_s = timing.get("load", 0.0),
+		file_mb = snappedf(FileAccess.get_size(path) / 1048576.0, 0.1), save_wait_s = timing.get("cache_save_wait", 0.0),
+		same = same, load_ms = game.load_timings.duplicate()}
+	Dev.save_json(out.path_join("cache.json"), res)
+	print("Кэш: из кэша %s, загрузка %.1f с (с генерацией %.1f с), файл %.1f МБ, совпадает %s" % [res.from_cache, load_s,
+		res.fresh_load_s, res.file_mb, same])
+	if not res.from_cache or same.values().has(false):
+		failed = true
+	DirAccess.remove_absolute(path)
+	DirAccess.remove_absolute(WorldCache.dir)
+	cache_check = false
+	return _finish()
+
+
+func _cache_sums(game: GameWorld, fingerprint: Dictionary) -> Dictionary:
+	return {world = JSON.stringify(fingerprint, "", true).md5_text(), heights = _md5(game.heights.hv.to_byte_array()),
+		map = _md5(main.hud.map_tex.get_image().get_data()), objects = game.world.obj_count}
+
+
+static func _md5(b: PackedByteArray) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_MD5)
+	ctx.update(b)
+	return ctx.finish().hex_encode()
+
+
 func _finish() -> bool:
+	if cache_check and not failed:
+		# вторая загрузка того же мира, теперь из кэша (запись первой дожидается здесь)
+		phase = "cache"
+		main._back_to_menu()
+		var t0 := Time.get_ticks_msec()
+		WorldCache.wait_writes()
+		timing.cache_save_wait = snappedf((Time.get_ticks_msec() - t0) / 1000.0, 0.01)
+		started = Time.get_ticks_msec()
+		main.start_game(seed_text, size)
+		return false
 	if not failed:
 		_remember(Dev.world_id(seed_text, size))
 	print("%s: загрузка %.1f с, снимки %.1f с, FPS %.1f с" % [Dev.world_id(seed_text, size), timing.get("load", 0.0),

@@ -16,6 +16,7 @@ var terrain_image: Image
 var forest_surface: Image
 var water_arrays: Array[Array]
 var map_image: Image
+var from_cache := false   # мир взят из WorldCache (10.0), а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
 var timings := {}
 
@@ -33,19 +34,30 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
-	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
-		side.start(r._prepare.bind(w, px, w.base_heights)))
+	# 10.0: готовый мир из кэша (WorldCache) вместо генерации; рельеф и всё остальное считаются как обычно
+	r.world = WorldCache.load_world(seed_text, size) if WorldCache.enabled else null
+	if r.world != null:
+		r.from_cache = true
+		if on_progress.is_valid():
+			on_progress.call(0.5, "Мир из сохранённых")
+		side.start(r._prepare.bind(r.world, px))
+	else:
+		r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
+			side.start(r._prepare.bind(w, px, w.base_heights)))
+		if WorldCache.enabled:
+			WorldCache.save_world(r.world, size)
 	var generated := Time.get_ticks_usec()
+	var t := Time.get_ticks_usec()
+	# Состав леса известен после генерации; параллельная заливка его не читает (с 10.0 — пока она идёт).
+	r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
+	r.timings.forest_surface_ms = (Time.get_ticks_usec() - t) / 1000.0
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
+	var waited := Time.get_ticks_usec()
 	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
-	r.timings.generate_ms = (generated - started) / 1000.0
-	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - generated) / 1000.0
-	var t := Time.get_ticks_usec()
-	# Состав леса известен после генерации; параллельная заливка его не читает.
-	r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
-	r.timings.forest_surface_ms = (Time.get_ticks_usec() - t) / 1000.0
+	r.timings["cache_read_ms" if r.from_cache else "generate_ms"] = (generated - started) / 1000.0
+	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	t = Time.get_ticks_usec()
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно

@@ -2,7 +2,7 @@ class_name GameSettings
 extends RefCounted
 ## Настройки игрока: чувствительность мыши, инверсия, угол обзора, покачивание камеры, полный экран,
 ## тени и затенение (с 2.6), громкость (с 2.7), длина суток и час начала игры (с 7.8),
-## дальность прорисовки растительности (с 9.8+), последнее зерно. Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
+## дальность прорисовки растительности (с 9.8+), последнее зерно, последние и избранные зёрна (с 10.0). Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
 ## С 9.0 размера мира нет (мир один), старый ключ world/size в файле просто не читается.
 
 const PATH := "user://settings.cfg"
@@ -11,6 +11,8 @@ const MAX_MOUSE := 3.0
 const MIN_FOV := 55.0
 const MAX_FOV := 100.0
 const MAX_SEED_LEN := 32         # длина зерна, как у поля ввода в меню
+const RECENT_MAX := 3            # сколько последних зёрен помнить (их миры хранятся в кэше, WorldCache)
+const FAVORITES_MAX := 12        # избранных зёрен не больше: каждое держит свой мир в кэше
 
 const DEFAULT_MOUSE := 1.0
 const DEFAULT_INVERT_Y := false
@@ -42,6 +44,8 @@ static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (ш
 static var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 static var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
+static var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
+static var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
 
 
 static func load_settings() -> void:
@@ -64,6 +68,8 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
 	last_seed = str(cfg.get_value("world", "seed", "")).strip_edges().left(MAX_SEED_LEN)
+	recent_seeds = _seeds(cfg, "recent", RECENT_MAX)
+	favorite_seeds = _seeds(cfg, "favorites", FAVORITES_MAX)
 
 
 static func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
@@ -73,6 +79,47 @@ static func _number(cfg: ConfigFile, section: String, key: String, fallback: flo
 	if not is_finite(float(value)):
 		return fallback
 	return clampf(float(value), low, high)
+
+
+## Список зёрен из файла: только непустые строки, без повторов, не длиннее поля ввода
+static func _seeds(cfg: ConfigFile, key: String, limit: int) -> Array[String]:
+	var out: Array[String] = []
+	var value: Variant = cfg.get_value("world", key, [])
+	if not (value is Array):
+		return out
+	for v: Variant in value:
+		var s := str(v).strip_edges().left(MAX_SEED_LEN) if v is String else ""
+		if not s.is_empty() and not s in out and out.size() < limit:
+			out.append(s)
+	return out
+
+
+## Запущенный мир: первым в последних, лишние уходят
+static func remember_seed(seed_text: String) -> void:
+	last_seed = seed_text
+	recent_seeds.erase(seed_text)
+	recent_seeds.push_front(seed_text)
+	recent_seeds.resize(mini(recent_seeds.size(), RECENT_MAX))
+
+
+## Звёздочка: добавить в избранное или убрать; false — избранное уже полное
+static func toggle_favorite(seed_text: String) -> bool:
+	if seed_text in favorite_seeds:
+		favorite_seeds.erase(seed_text)
+	elif favorite_seeds.size() < FAVORITES_MAX:
+		favorite_seeds.append(seed_text)
+	else:
+		return false
+	return true
+
+
+## Зёрна, чьи миры держит кэш: последние и избранные
+static func keep_seeds() -> Array[String]:
+	var out: Array[String] = recent_seeds.duplicate()
+	for s in favorite_seeds:
+		if not s in out:
+			out.append(s)
+	return out
 
 
 static func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool) -> bool:
@@ -107,6 +154,8 @@ static func save_settings() -> void:
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
 	cfg.set_value("world", "seed", last_seed)
+	cfg.set_value("world", "recent", Array(recent_seeds))
+	cfg.set_value("world", "favorites", Array(favorite_seeds))
 	cfg.save(PATH)
 
 

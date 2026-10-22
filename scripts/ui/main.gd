@@ -3,6 +3,8 @@ extends Node
 ## Экраны собраны в сцене scenes/main.tscn (оформление — resources/ui_theme.tres), здесь только поведение.
 ## Мир загружается в отдельном потоке (WorldLoader), чтобы экран загрузки обновлялся.
 ## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
+## С 10.0 под полем зерна — список миров: недавние, избранные (звёздочка) и рекомендованные автором
+## (RecommendedSeeds). Миры недавних и избранных хранятся готовыми в кэше (WorldCache), остальные удаляются.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
@@ -16,6 +18,7 @@ var _load_started_ms := 0
 var _load_elapsed := -1
 var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
+var _seed_tab := "recent"      # вкладка списка миров: recent, favorites, recommended
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -36,6 +39,16 @@ func _ready() -> void:
 	# в поле — зерно последнего мира (если было), иначе случайное
 	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
 	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
+	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
+	WorldCache.enabled = get_tree().current_scene == self
+	if WorldCache.enabled:
+		WorldCache.keep_only(GameSettings.keep_seeds())
+	var tabs := ButtonGroup.new()
+	for tab: String in ["recent", "favorites", "recommended"]:
+		var b: Button = _tab_button(tab)
+		b.button_group = tabs
+		b.pressed.connect(_show_seed_tab.bind(tab))
+	_show_seed_tab("recent" if not GameSettings.recent_seeds.is_empty() else "recommended")
 	_show("menu")
 	bg_thread = Thread.new()
 	bg_thread.start(_menu_background_job.bind("menu-%d" % randi_range(0, 999999)))
@@ -164,6 +177,94 @@ func _on_dice_pressed() -> void:
 	seed_edit.text = random_seed()
 
 
+# ---------- Список миров ----------
+
+func _tab_button(tab: String) -> Button:
+	return {recent = %Recent, favorites = %Favorites, recommended = %Recommended}[tab]
+
+
+func _show_seed_tab(tab: String) -> void:
+	_seed_tab = tab
+	# выбранная вкладка — золотой подписью, как заголовок; остальные приглушены
+	for name: String in ["recent", "favorites", "recommended"]:
+		var b := _tab_button(name)
+		b.set_pressed_no_signal(name == tab)
+		var color := Color(0.85, 0.72, 0.42) if name == tab else Color(1, 1, 1, 0.55)
+		for key: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
+			b.add_theme_color_override(key, color)
+	var list: VBoxContainer = %SeedList
+	for child in list.get_children():
+		list.remove_child(child)
+		child.queue_free()
+	var rows: Array = []
+	match tab:
+		"recent":
+			rows = GameSettings.recent_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
+		"favorites":
+			rows = GameSettings.favorite_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
+		"recommended":
+			rows = RecommendedSeeds.SEEDS
+	if rows.is_empty():
+		var hint := Label.new()
+		hint.text = {recent = "Здесь появятся три последних мира", favorites = "Отметьте мир звёздочкой, и он останется здесь",
+			recommended = "Автор пока ничего не рекомендовал"}[tab]
+		hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
+		hint.add_theme_font_size_override("font_size", 14)
+		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		list.add_child(hint)
+	for r: Dictionary in rows:
+		list.add_child(_seed_row(str(r.seed), str(r.get("note", ""))))
+
+
+## Строка списка: зерно (щелчок — в поле), пометка готового мира и звёздочка избранного
+func _seed_row(seed_text: String, note: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 6)
+	var pick := Button.new()
+	pick.text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
+	pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	pick.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pick.custom_minimum_size = Vector2(0, 30)
+	pick.add_theme_font_size_override("font_size", 14)
+	pick.tooltip_text = "Взять это зерно" if note.is_empty() else note
+	pick.pressed.connect(_pick_seed.bind(seed_text))
+	row.add_child(pick)
+	if WorldCache.enabled and WorldCache.has(seed_text):
+		var mark := Label.new()
+		mark.text = "готов"
+		mark.tooltip_text = "Мир сохранён и загрузится быстро"
+		mark.mouse_filter = Control.MOUSE_FILTER_STOP
+		mark.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42, 0.85))
+		mark.add_theme_font_size_override("font_size", 13)
+		row.add_child(mark)
+	var fav := seed_text in GameSettings.favorite_seeds
+	var star := Button.new()
+	star.text = "★" if fav else "☆"
+	star.custom_minimum_size = Vector2(36, 30)
+	star.add_theme_font_size_override("font_size", 16)
+	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
+	star.disabled = full
+	star.tooltip_text = "Убрать из избранного" if fav else ("Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX if full 		else "В избранное: мир останется в списке и в сохранённых")
+	star.pressed.connect(_on_star.bind(seed_text))
+	row.add_child(star)
+	return row
+
+
+func _pick_seed(seed_text: String) -> void:
+	seed_edit.text = seed_text
+	%Start.grab_focus()
+
+
+func _on_star(seed_text: String) -> void:
+	GameSettings.toggle_favorite(seed_text)
+	GameSettings.save_settings()
+	if WorldCache.enabled:
+		WorldCache.keep_only(GameSettings.keep_seeds())
+	_show_seed_tab(_seed_tab)
+
+
 func _on_new_world() -> void:
 	seed_edit.text = random_seed()
 	_on_start()
@@ -210,8 +311,11 @@ func _on_start() -> void:
 	if seed_text.is_empty():
 		seed_text = random_seed()
 	seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
-	GameSettings.last_seed = seed_text
+	GameSettings.remember_seed(seed_text)
 	GameSettings.save_settings()
+	# мир, выпавший из последних и не избранный, больше не хранится
+	if WorldCache.enabled:
+		WorldCache.keep_only(GameSettings.keep_seeds())
 	start_game(seed_text)
 
 
@@ -293,6 +397,7 @@ func _free_game() -> void:
 func _back_to_menu() -> void:
 	_free_game()
 	hud.visible = false
+	_show_seed_tab(_seed_tab)
 	_show("menu")
 
 
@@ -304,3 +409,4 @@ func _exit_tree() -> void:
 	for t in [gen_thread, bg_thread]:
 		if t != null and t.is_started():
 			t.wait_to_finish()
+	WorldCache.wait_writes()   # мир дописывается в кэш в фоне; оборванная запись осталась бы только .tmp

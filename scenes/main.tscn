@@ -189,6 +189,40 @@ layout_mode = 2
 tooltip_text = "Случайное зерно"
 text = "🎲"
 
+[node name="SeedTabs" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="Recent" type="Button" parent="UI/Root/Menu/Panel/Box/SeedTabs"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Недавние"
+
+[node name="Favorites" type="Button" parent="UI/Root/Menu/Panel/Box/SeedTabs"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Избранное"
+
+[node name="Recommended" type="Button" parent="UI/Root/Menu/Panel/Box/SeedTabs"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "От автора"
+
+[node name="SeedList" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 132)
+layout_mode = 2
+theme_override_constants/separation = 4
+
 [node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
