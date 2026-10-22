@@ -104,7 +104,7 @@ var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road"
 var road_surface := PackedByteArray() # покрытие клетки пути людей из RoadSurface (с 4.3), 0 — нет
 var bridges: Array = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
 var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
-var settlements: Array = []   # [{x, y, i, name, character, huts: [{x, y, v}], connections: [i соседей по дорогам]}]
+var settlements: Array = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
 var peaks: Array = []         # [{x, y, i, elev, name}]
 var lakes: Array = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
 var lake_id := PackedInt32Array()    # номер озера из lakes для клетки или -1
@@ -167,7 +167,7 @@ func make_name(parts: Dictionary, kind: String, x: int, y: int) -> String:
 	return a[floori(local.next_float() * a.size())] + parts.sep + b[floori(local.next_float() * b.size())]
 
 
-## Область и её полоса соседних клеток читают общий результат рельефа, стока и долин.
+## Область и её полоса читают общий результат географии, поселений и сети путешествий.
 func read_region(key: Vector2i, halo: int = 2) -> Dictionary:
 	return WorldRegion.read(self, key, halo)
 

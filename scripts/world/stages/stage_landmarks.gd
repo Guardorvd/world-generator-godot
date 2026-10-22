@@ -27,7 +27,6 @@ static func _place_settlements(w: WorldData) -> void:
 	var river := w.river_cells()
 	var slope := w.slope
 	var dist_water := w.dist_water
-	var acc := w.acc
 	var ocean := w.ocean
 	var lake := w.lake
 	var settlements: Array = []
@@ -45,44 +44,59 @@ static func _place_settlements(w: WorldData) -> void:
 			var bd: Dictionary = Biomes.LIST[biome[i]]
 			if not bd.has("habit") or river[i] != 0 or slope[i] > 0.6:
 				continue
-			var score: float = bd.habit + (WGRandom.hash2(x, y, candidate_seed) * 0.35) - slope[i] * 0.6
+			if wet[i] != 0 or reachable[i] == 0:
+				continue
+			# Центр на ровной клетке ещё не означает пригодную долину: нужны сухие
+			# окрестности для домов и подходов. Пять проб вместо нового поля/поиска пути.
+			var access := _site_access(w, i, wet)
+			if access < 0.35:
+				continue
+			var density_value := _settlement_density(w, x, y)
+			var score: float = bd.habit + WGRandom.hash2(x, y, candidate_seed) * 0.2 - slope[i] * 0.6
+			score += access * 0.45 + density_value * 0.35
 			if dist_water[i] >= 1.5 and dist_water[i] <= 6.0:
 				score += 0.6
-			if acc[i] > 0.0 and dist_water[i] < 6.0:
-				score += 0.1
-			cand.append([score, i])
+			elif dist_water[i] > 16.0:
+				score -= minf(0.6, (dist_water[i] - 16.0) / 40.0)
+			# Сухая площадка непосредственно у воды уступает береговой террасе.
+			if dist_water[i] < 1.5:
+				score -= 0.4
+			cand.append([score, i, access, density_value])
 	cand.sort_custom(_by_score_desc)
 	# Плотность мира зависит от сида; прежнее количество — верхняя граница.
 	var maximum := clampi(roundi(12.0 * w.scale), 4, 26)
 	var minimum := maxi(2, ceili(maximum * 0.55))
 	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
 	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
-	var min_d := maxf(28.0, W / 6.5)
-	var min_d2 := min_d * min_d
+	var min_d := maxf(28.0, W / 10.0)
 	for c: Array in cand:
 		if settlements.size() >= want:
 			break
 		var i: int = c[1]
-		if reachable[i] == 0:
-			continue
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
+		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
+		# Радиусы обоих соседей действуют и через границу любой области.
+		var spacing: float = min_d * lerpf(1.35, 0.7, c[3])
 		var close := false
 		for s: Dictionary in settlements:
 			var dx: float = s.x - x
 			var dy: float = s.y - y
-			if dx * dx + dy * dy < min_d2:
+			var separation: float = (spacing + s.spacing) * 0.5
+			if dx * dx + dy * dy < separation * separation:
 				close = true
 				break
 		if close:
 			continue
-		settlements.append({x = x, y = y, i = i, name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
+		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.55 + c[3] * 0.3, 0.0, 1.0)
+		settlements.append({x = x, y = y, i = i, spacing = spacing, importance = importance,
+			name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
 	# Дома вокруг центра поселения, не на воде и не на крутых склонах
 	var ground := Heightfield.new(w, false)
 	for s: Dictionary in settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
-		var n := 3 + floori(rng.next_float() * 7)
-		s.character = "прибрежный посёлок" if dist_water[s.i] < 5.0 else ("лесная деревня" if biome[s.i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else "деревня у дороги")
+		var n := 3 + roundi(s.importance * 4.0) + floori(rng.next_float() * 3)
+		s.character = "прибрежный посёлок" if dist_water[s.i] < 5.0 else ("лесная деревня" if biome[s.i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else ("земледельческая деревня" if s.importance >= 0.6 else "окраинная деревня"))
 		var k := 0
 		var tries := 0
 		while k < n and tries < 80:
@@ -122,6 +136,32 @@ static func _place_settlements(w: WorldData) -> void:
 			s.huts.append({x = hx, y = hy, v = floori(rng.next_float() * 4)})
 			k += 1
 	w.settlements = settlements
+
+
+## Плавная неоднородность заселения в мировых координатах, без квот по областям.
+static func _settlement_density(w: WorldData, x: int, y: int) -> float:
+	const CELL := 96.0
+	var seed := WGRandom.derive(w.seed_num, "settlement.density")
+	var gx := floori(x / CELL)
+	var gy := floori(y / CELL)
+	var tx := smoothstep(0.0, 1.0, fmod(x / CELL, 1.0))
+	var ty := smoothstep(0.0, 1.0, fmod(y / CELL, 1.0))
+	return lerpf(lerpf(WGRandom.hash2(gx, gy, seed), WGRandom.hash2(gx + 1, gy, seed), tx),
+		lerpf(WGRandom.hash2(gx, gy + 1, seed), WGRandom.hash2(gx + 1, gy + 1, seed), tx), ty)
+
+
+static func _site_access(w: WorldData, i: int, wet: PackedByteArray) -> float:
+	var usable := 0.0
+	for offset: Vector2i in [Vector2i.ZERO, Vector2i(-4, 0), Vector2i(4, 0), Vector2i(0, -4), Vector2i(0, 4)]:
+		var x := i % w.W + offset.x
+		var y := i / w.W + offset.y
+		if x < 0 or y < 0 or x >= w.W or y >= w.H:
+			continue
+		var j := y * w.W + x
+		if wet[j] != 0 or not Biomes.LIST[w.biome[j]].has("habit"):
+			continue
+		usable += maxf(0.0, 1.0 - w.slope[j] / 0.45)
+	return usable / 5.0
 
 
 ## Вершины — локальные максимумы высоты, самые высокие и не слишком близко друг к другу

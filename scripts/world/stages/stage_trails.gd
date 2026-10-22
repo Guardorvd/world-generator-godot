@@ -5,7 +5,7 @@ extends RefCounted
 ## w.trails [{kind: "animal" | "trail" | "mountain" | "road", pts}], w.bridges, w.tunnels;
 ## убирает дома поселений, которые оказались на мосту или в туннеле.
 ##
-## Дороги связывают все поселения (остовное дерево), поэтому ищутся по стоимости, в которой вода
+## Основная сеть связывает принятые поселения дорогами и местными тропами (остов), по стоимости, в которой вода
 ## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
 ## Где дорога или тропа между поселениями пересекает воду, ставится мост,
 ## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
@@ -406,8 +406,9 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 				if joined[a] == 0 or tried.has(_key(a, b)):
 					continue
 				var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
-				if best.is_empty() or distance < best[2]:
-					best = [a, b, distance]
+				var priority := _direction_cost(w, st[a], st[b])
+				if best.is_empty() or priority < best[3]:
+					best = [a, b, distance, priority]
 		if best.is_empty():
 			break
 		var a: int = best[0]
@@ -423,7 +424,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if q.is_empty():
 			continue
 		surface.build_structures()
-		_add_trail(w, q, "road", road_cost, state.on_axis, surface)
+		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
+		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
+		var kind := "road" if minf(st[a].get("importance", 1.0), st[b].get("importance", 1.0)) >= 0.6 else "trail"
+		_add_trail(w, q, kind, road_cost, state.on_axis, surface)
 		paths.append([a, b, q, true, best[2]])
 		joined[b] = 1
 		connected += 1
@@ -460,6 +464,25 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if not a.connections.has(b.i): a.connections.append(b.i)
 		if not b.connections.has(a.i): b.connections.append(a.i)
 	_clear_huts(w)
+
+
+## Дешёвая оценка направления до A*: ширина воды, крутизна и важность центров.
+## Это приоритет попыток, а не разрешение строить сквозь препятствия.
+static func _direction_cost(w: WorldData, a: Dictionary, b: Dictionary) -> float:
+	var distance := Grid.hypot(a.x - b.x, a.y - b.y)
+	var obstacle := 0.0
+	var previous: int = a.i
+	const SAMPLES := 16
+	for k in range(1, SAMPLES + 1):
+		var t := float(k) / SAMPLES
+		var x := clampi(floori(lerpf(a.x, b.x, t)), 0, w.W - 1)
+		var y := clampi(floori(lerpf(a.y, b.y, t)), 0, w.H - 1)
+		var i := y * w.W + x
+		obstacle += 4.0 if _wet(w, i) else minf(2.0, w.slope[i] * 4.0)
+		obstacle += absf(w.h[i] - w.h[previous]) * HEIGHT_SCALE / maxf(1.0, distance / SAMPLES)
+		previous = i
+	var importance := (float(a.get("importance", 0.6)) + float(b.get("importance", 0.6))) * 0.5
+	return distance * (1.0 + obstacle / SAMPLES) / (0.75 + importance * 0.5)
 
 
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
@@ -562,14 +585,33 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var corr := _corridor(w, all_paths)
 		var t := _shore(w, s.i, corr)
 		if t >= 0:
-			var p := _land_path(finder, _avoiding(w, corr), s.i, t, TRAIL_CLIMB)
-			var d := Grid.hypot(t % w.W - s.x, t / w.W - s.y)
-			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _share(p, corr) <= AVOID_SHARE:
+			# Ответвление от общей сети: не строим отдельный длинный подход от каждого дома.
+			var source := _nearest_path(w, t, SHORE_MAX)
+			if source < 0:
+				source = s.i # У единственного поселения ещё нет общей линии пути.
+			var p := _land_path(finder, w.cost, source, t, TRAIL_CLIMB)
+			var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
+			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p):
 				var q := _structures(w, p, false, finder, w.cost, state)
 				if q.is_empty():
 					continue
 				_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
 				all_paths.append(q)
+
+
+static func _nearest_path(w: WorldData, target: int, radius: int) -> int:
+	var best := -1
+	var distance := radius * radius + 1
+	var tx := target % w.W
+	var ty := target / w.W
+	for y in range(maxi(0, ty - radius), mini(w.H, ty + radius + 1)):
+		for x in range(maxi(0, tx - radius), mini(w.W, tx + radius + 1)):
+			var i := y * w.W + x
+			var d := (x - tx) * (x - tx) + (y - ty) * (y - ty)
+			if w.path_mask[i] >= 2 and w.cost[i] != INF and d < distance:
+				best = i
+				distance = d
+	return best
 
 
 ## Сеть уже нарисованных путей людей: реальный обход учитывает развилки вне поселений.

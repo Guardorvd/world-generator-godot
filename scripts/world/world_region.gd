@@ -1,7 +1,7 @@
 class_name WorldRegion
 extends RefCounted
 ## Область — чтение общего результата, не ещё один запуск flood у её края.
-## Массивы возвращаются копиями; координаты рек, связей и номера down/watershed остаются мировыми.
+## Массивы возвращаются копиями; места, реки, пути, связи и номера клеток остаются мировыми.
 const FIELDS := ["h", "filled", "elev", "slope", "ocean", "lake", "river", "river_area", "acc",
 	"down", "watershed", "rain", "dist_ocean", "dist_water", "temp", "moist", "biome"]
 
@@ -16,9 +16,9 @@ static func ready(w: WorldData) -> bool:
 
 
 ## Только прямоугольник внутри плана. Отдельные строки копируются целиком, без вызова на клетку.
-static func fields(w: WorldData, rect: Rect2i) -> Dictionary:
+static func fields(w: WorldData, rect: Rect2i, names: Array = FIELDS) -> Dictionary:
 	var out := {}
-	for name: String in FIELDS:
+	for name: String in names:
 		var src: Variant = w.get(name)
 		if src.size() != w.N:
 			continue
@@ -35,7 +35,7 @@ static func read(w: WorldData, key: Vector2i, halo: int = 2) -> Dictionary:
 	if not ready(w) or not core.has_area():
 		return {}
 	var rect := core.grow(maxi(0, halo)).intersection(Rect2i(0, 0, w.W, w.H))
-	var out := fields(w, rect)
+	var out := fields(w, rect, FIELDS + ["path_mask", "road_surface"])
 	out.rect = rect
 	out.core = core
 	out.stride = rect.size.x
@@ -51,7 +51,45 @@ static func read(w: WorldData, key: Vector2i, halo: int = 2) -> Dictionary:
 		if box.grow(4.0).intersects(Rect2(rect), true):
 			out.rivers.append(line.duplicate(true))
 	out.links = river_links(w, core)
+	_read_travel(w, rect, core, out)
 	return out
+
+
+## Области читают те же поселения и целые линии путешествий из общего плана.
+## Речные links остаются отдельными; travel_links — переходы путей людей.
+static func _read_travel(w: WorldData, rect: Rect2i, core: Rect2i, out: Dictionary) -> void:
+	for name: String in ["settlements", "peaks"]:
+		out[name] = []
+		for place: Dictionary in w.get(name):
+			if Rect2(rect).has_point(Vector2(place.x, place.y)):
+				out[name].append(place.duplicate(true))
+	out.trails = []
+	out.travel_links = []
+	for id in w.trails.size():
+		var trail: Dictionary = w.trails[id]
+		var pts: Array = trail.pts
+		if pts.is_empty():
+			continue
+		var box := Rect2(Vector2(pts[0].x, pts[0].y), Vector2.ZERO)
+		for p: Dictionary in pts:
+			box = box.expand(Vector2(p.x, p.y))
+		if not box.grow(2.0).intersects(Rect2(rect), true):
+			continue
+		out.trails.append({id = id, kind = trail.kind, pts = pts.duplicate(true)})
+		if trail.kind == "animal":
+			continue
+		for k in range(1, pts.size()):
+			var a := Vector2(pts[k - 1].x, pts[k - 1].y)
+			var b := Vector2(pts[k].x, pts[k].y)
+			if Rect2(core).has_point(a) != Rect2(core).has_point(b):
+				out.travel_links.append({id = Vector2i(id, k), from = a, to = b, kind = trail.kind})
+	for name: String in ["bridges", "tunnels"]:
+		out[name] = []
+		for span: Dictionary in w.get(name):
+			var a := Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5)
+			var b := Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5)
+			if Rect2(a, Vector2.ZERO).expand(b).grow(3.0).intersects(Rect2(rect), true):
+				out[name].append(span.duplicate(true))
 
 
 ## Одно и то же направленное ребро возвращается обеим областям без смены направления/знака.
