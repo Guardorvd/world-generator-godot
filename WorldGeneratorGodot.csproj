@@ -4,6 +4,8 @@
     <EnableDynamicLoading>true</EnableDynamicLoading>
     <!-- Численные циклы генерации должны быть быстрыми и при запуске из редактора. -->
     <Optimize>true</Optimize>
+    <!-- A* (FastGrid.Path.cs) читает массивы по указателям: без проверок границ в горячем цикле. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>WorldGeneratorGodot</RootNamespace>
   </PropertyGroup>
 </Project>

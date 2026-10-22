@@ -5,7 +5,8 @@ extends RefCounted
 ## Стоимость прохода передаётся в каждый поиск, поэтому её можно менять между вызовами
 ## (так протоптанные тропы становятся дешевле). INF — непроходимо. Знает только размер сетки, не мир.
 ## Куча из MinHeap развёрнута прямо в цикле поиска: в GDScript вызовы методов дороги, а алгоритм тот же.
-## В сборке Godot .NET поиск ведёт FastGrid.FindPath: тот же алгоритм на C#, в десятки раз быстрее.
+## В сборке Godot .NET поиск ведёт FastGrid.FindPath (FastGrid.Path.cs): тот же алгоритм на C#, в десятки раз быстрее;
+## с 9.9 он ещё помнит последние поиски и умеет заранее искать запасной путь в фоне (prefetch) — пути те же.
 
 ## Оценка остатка пути A* — восьмисвязное расстояние до цели, умноженное на H_COST. Самая дешёвая клетка
 ## (протоптанная тропа, StageTrails._add_trail) стоит 0.3, так что оценка у троп бывает выше настоящей
@@ -293,6 +294,25 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		c = from[c]
 	path.reverse()
 	return path
+
+
+## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
+## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
+## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
+func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> void:
+	if _fast != null and search_budget != 0:
+		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
+
+
+func cancel_prefetch() -> void:
+	if _fast != null:
+		_fast.CancelPrefetch()
+
+
+## Поиски закончены: C# отпускает буферы, кэш и мусор копий массивов (с 9.9).
+func release() -> void:
+	if _fast != null:
+		_fast.Release()
 
 
 func search_stats() -> Dictionary:

@@ -90,6 +90,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	if Pathfinder.profile_searches:
 		w.generation_profile.merge(finder.search_stats())
 		w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	finder.release()
 
 
 ## Поиск видит тот же прорезанный рельеф, что и полотно. Ширина в клетках, высоты / TILE.
@@ -549,14 +550,20 @@ static func _direction_cost(w: WorldData, a: Dictionary, b: Dictionary) -> float
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
 		a: int, b: int, state: Dictionary) -> PackedInt32Array:
 	var attempts: Array = []
+	# С 9.9 запасной поиск (ROAD_LIMIT) идёт в фоне, пока проверяется первый путь: после неудачи
+	# состояние восстановлено, и он с теми же входами. Совпадение входов проверяет сам поиск.
+	finder.use_corridor = true
+	finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT)
 	for limit: float in [ROAD_GRADE, ROAD_LIMIT]:
 		var p := _road_path(finder, cost, a, b, true, limit)
 		if p.is_empty():
 			continue
 		var q := _try_road_structures(w, p, finder, cost, state, attempts)
 		if not q.is_empty():
+			finder.cancel_prefetch()
 			finder.use_corridor = true
 			return q
+	finder.cancel_prefetch()
 	finder.use_corridor = true
 	return PackedInt32Array()
 
