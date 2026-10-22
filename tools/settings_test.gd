@@ -29,14 +29,11 @@ func _initialize() -> void:
 		"переключатели принимают только логические значения")
 	_check(not GameSettings.shadows and GameSettings.last_seed == "Север-1234",
 		"исправные поля читаются даже при повреждении соседних")
-	_check(GameSettings.world_size == GameSettings.DEFAULT_WORLD_SIZE, "повреждённый размер мира заменяется средним")
 	cfg.set_value("input", "mouse", 100)
 	cfg.set_value("view", "fov", 1.0)
 	cfg.set_value("sound", "volume", -2.0)
-	cfg.set_value("world", "size", 768)
 	GameSettings._apply_config(cfg)
 	_check(GameSettings.mouse == GameSettings.MAX_MOUSE and GameSettings.fov == GameSettings.MIN_FOV
-		and GameSettings.volume == 0.0 and GameSettings.world_size == 768,
-		"числа ограничены диапазонами, допустимый размер мира сохранён")
+		and GameSettings.volume == 0.0, "числа ограничены диапазонами, старый ключ размера мира не мешает")
 	print("Настройки: ошибок %d" % fails)
 	quit(0 if fails == 0 else 1)

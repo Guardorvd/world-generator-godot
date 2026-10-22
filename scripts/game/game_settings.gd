@@ -2,11 +2,10 @@ class_name GameSettings
 extends RefCounted
 ## Настройки игрока: чувствительность мыши, инверсия, угол обзора, покачивание камеры, полный экран,
 ## тени и затенение (с 2.6), громкость (с 2.7), длина суток и час начала игры (с 7.8),
-## размер мира в меню. Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
+## последнее зерно. Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
+## С 9.0 размера мира нет (мир один), старый ключ world/size в файле просто не читается.
 
 const PATH := "user://settings.cfg"
-const SIZES := [256, 512, 768]   # допустимые размеры мира, как в меню
-const DEFAULT_WORLD_SIZE := 512
 const MIN_MOUSE := 0.2           # пределы чувствительности и угла обзора, как у ползунков в меню
 const MAX_MOUSE := 3.0
 const MIN_FOV := 55.0
@@ -33,7 +32,6 @@ static var shadows := DEFAULT_SHADOWS  # тени солнца и затенен
 static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 static var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 static var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
-static var world_size := DEFAULT_WORLD_SIZE
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 
 
@@ -55,9 +53,6 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
-	# файл мог быть испорчен вручную: неизвестный размер мира заменяем на средний
-	var size_value: Variant = cfg.get_value("world", "size", world_size)
-	world_size = int(size_value) if typeof(size_value) == TYPE_INT and SIZES.has(size_value) else DEFAULT_WORLD_SIZE
 	last_seed = str(cfg.get_value("world", "seed", "")).strip_edges().left(MAX_SEED_LEN)
 
 
@@ -75,7 +70,7 @@ static func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool)
 	return value if typeof(value) == TYPE_BOOL else fallback
 
 
-## Возвращает настройки игрока к значениям по умолчанию; размер мира и последнее зерно не трогает
+## Возвращает настройки игрока к значениям по умолчанию; последнее зерно не трогает
 static func reset_defaults() -> void:
 	mouse = DEFAULT_MOUSE
 	invert_y = DEFAULT_INVERT_Y
@@ -99,7 +94,6 @@ static func save_settings() -> void:
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
-	cfg.set_value("world", "size", world_size)
 	cfg.set_value("world", "seed", last_seed)
 	cfg.save(PATH)
 

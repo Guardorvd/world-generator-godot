@@ -135,6 +135,22 @@ func geometry() -> Dictionary:
 	return pieces
 
 
+## 9.0: старт готовит только ближнюю землю, очередь берёт сначала части впереди по ходу.
+## Ряд частей вдоль x; игрок едет на +x, хотя часть -2 к нему чуть ближе, чем часть 2.
+func ahead_first(arrays: Array) -> void:
+	var row := {}
+	for k in range(-3, 4):
+		row[Vector2i(k, 0)] = arrays
+	var stream := PlanTerrain.new()
+	root.add_child(stream)
+	stream.setup(row, StandardMaterial3D.new())
+	stream.update(96, 128, true, true, PlanTerrain.SIDE)
+	check(stream.nodes.size() == 3 and stream.pending.size() == 4, "старт сразу готовит только ближнюю землю")
+	stream.update(128, 128)
+	check(stream.nodes.has(Vector2i(2, 0)) and not stream.nodes.has(Vector2i(-2, 0)), "сначала догружается земля впереди")
+	stream.queue_free()
+
+
 func _initialize() -> void:
 	call_deferred("run")
 
@@ -164,5 +180,6 @@ func run() -> void:
 		"возвращение восстанавливает те же поверхности из CPU-кэша")
 	stream.queue_free()
 	await process_frame
+	ahead_first(pieces.values()[0])
 	print("continuation_test: %s" % ("OK" if fails == 0 else str(fails)))
 	quit(1 if fails else 0)

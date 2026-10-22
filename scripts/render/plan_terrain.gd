@@ -2,11 +2,14 @@ class_name PlanTerrain
 extends Node3D
 ## Готовый рельеф общего плана: CPU-геометрия сохраняется, дальние GPU-меши выгружаются.
 ## Все атрибуты копируются из одного окончательного меша, включая метровое полотно дорог.
+## С 9.0 при старте и переносе сразу передаются только ближние части (near), дальние — по одной за кадр,
+## сначала те, что впереди по ходу движения.
 const CELLS := 64
 const SIDE := CELLS * GameConfig.TILE
 const RADIUS := 1800.0 # за плотным туманом; дальний силуэт не обрывается у стартового окна
 const DROP := RADIUS + SIDE
 const RECHECK := 32.0
+const AHEAD := 600.0   # точка впереди по ходу, к которой тянется очередь
 
 var chunks := {}
 var nodes := {}
@@ -61,11 +64,13 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * SIDE))
 
 
-## force — старт/быстрое перемещение, иначе не больше одной передачи на GPU за кадр.
-## true означает, что этот кадр уже занят передачей геометрии.
-func update(x: float, z: float, force := false, allow_apply := true) -> bool:
+## force — старт/быстрое перемещение: части ближе near передаются сразу, остальные ждут очереди.
+## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
+func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
 	if force or p.distance_to(checked_at) >= RECHECK:
+		# последние RECHECK метров пути задают направление: очередь берёт сначала части впереди
+		var ahead := p if force or checked_at == Vector2.INF else p + (p - checked_at).normalized() * AHEAD
 		checked_at = p
 		for key: Vector2i in nodes.keys():
 			if distance_to_chunk(key, p) > DROP:
@@ -76,9 +81,10 @@ func update(x: float, z: float, force := false, allow_apply := true) -> bool:
 		for key: Vector2i in chunks:
 			if not nodes.has(key) and distance_to_chunk(key, p) <= RADIUS:
 				pending.append(key)
-		pending.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return distance_to_chunk(a, p) > distance_to_chunk(b, p))
+		pending.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+			return distance_to_chunk(a, p) + distance_to_chunk(a, ahead) > distance_to_chunk(b, p) + distance_to_chunk(b, ahead))
 	var uploaded := false
-	while not pending.is_empty() and (force or allow_apply and not uploaded):
+	while not pending.is_empty() and (force and distance_to_chunk(pending.back(), p) <= near or allow_apply and not uploaded):
 		var key: Vector2i = pending.pop_back()
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, chunks[key])

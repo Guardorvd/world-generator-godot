@@ -5,7 +5,6 @@ extends Node
 ## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
-const SIZES := [[256, "Стартовая область (256 × 256)"], [512, "Стартовая область (512 × 512)"], [768, "Весь мир (768 × 768)"]]
 const GameScene := preload("res://scenes/game_world.tscn")
 
 var game: GameWorld
@@ -21,7 +20,6 @@ var _settings_from := "menu"   # куда вернуться из настрое
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
 @onready var seed_edit: LineEdit = %SeedEdit
-@onready var size_select: OptionButton = %SizeSelect
 @onready var bar: ProgressBar = %Progress
 @onready var load_step: Label = %Step
 @onready var screens := {back = %Back, menu = %Menu, loading = %Loading, pause = %Pause, settings = %Settings}
@@ -37,9 +35,6 @@ func _ready() -> void:
 	GameSettings.apply_volume()
 	# в поле — зерно последнего мира (если было), иначе случайное
 	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
-	for s in SIZES:
-		size_select.add_item(s[1], s[0])
-	size_select.select(maxi(0, size_select.get_item_index(GameSettings.world_size)))
 	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
 	_show("menu")
 	bg_thread = Thread.new()
@@ -207,13 +202,14 @@ func _on_start() -> void:
 	if seed_text.is_empty():
 		seed_text = random_seed()
 	seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
-	GameSettings.world_size = size_select.get_selected_id()
 	GameSettings.last_seed = seed_text
 	GameSettings.save_settings()
-	start_game(seed_text, GameSettings.world_size)
+	start_game(seed_text)
 
 
-func start_game(seed_text: String, size: int) -> void:
+## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте
+## (инструменты проверки ставят своё). Остальные земли открываются по ходу (WorldData.open_around).
+func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE) -> void:
 	if busy:
 		return
 	busy = true
@@ -241,6 +237,9 @@ func _set_progress(p: float, label: String) -> void:
 
 func _on_world_ready(loaded: WorldLoader) -> void:
 	gen_thread.wait_to_finish()
+	# GameWorld.start идёт в главном потоке: подпись должна успеть показаться до него
+	_set_progress(0.97, "Окружение вокруг игрока")
+	await get_tree().process_frame
 	game = GameScene.instantiate()
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)

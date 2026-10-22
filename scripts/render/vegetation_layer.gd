@@ -188,8 +188,10 @@ func update(px: float, pz: float, force: bool) -> bool:
 		return true
 	if not force and last_fill != Vector2.INF and p.distance_to(last_fill) < 8.0:
 		return false
+	# с 9.0 фон строит сначала чанки по ходу движения (направление — от прошлой раскладки)
+	var ahead := p if force or last_fill == Vector2.INF else p + (p - last_fill).normalized() * LOAD_RADIUS * 0.5
 	last_fill = p
-	var missing := _wanted(p)
+	var missing := _wanted(p, ahead)
 	if force:
 		_fill(px, pz, missing)
 		for built: Dictionary in _built:
@@ -221,7 +223,7 @@ func _on_map(chunk: Vector2i) -> bool:
 	return chunk.x >= 0 and chunk.y >= 0 and chunk.x < world.CW and chunk.y < world.CH
 
 
-func _wanted(p: Vector2) -> Array[Vector2i]:
+func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	var side := world.CS * TILE
 	var x0 := floori((p.x - LOAD_RADIUS) / side)
@@ -239,7 +241,8 @@ func _wanted(p: Vector2) -> Array[Vector2i]:
 			if not _loaded.has(c) and _distance(c, p) <= LOAD_RADIUS:
 				out.append(c)
 	# Фон строит список от дальних к ближним; главный поток берёт с конца.
-	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _distance(a, p) > _distance(b, p))
+	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
+		return _distance(a, p) + _distance(a, ahead) > _distance(b, p) + _distance(b, ahead))
 	return out
 
 

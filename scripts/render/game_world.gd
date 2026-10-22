@@ -16,6 +16,9 @@ signal pause_requested
 
 const TILE := GameConfig.TILE
 const CAM_STEPS := 15   # столько точек на луче от седока до камеры проверяется на стены и склон
+## Рельеф, готовый сразу при старте и переносе (м). Дальше в тумане части догружаются по одной за кадр:
+## на 900 м туман уже скрывает больше 80 % цвета, а за секунды загрузки игрок проходит считанные метры.
+const NEAR := PlanTerrain.RADIUS / 2.0
 
 var world: WorldData
 var heights: Heightfield
@@ -29,6 +32,7 @@ var fires: Array = []
 var labels: Array = []
 var outer: OuterTerrain   # рельеф за краем стартовой области
 var terrain_stream: PlanTerrain
+var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
 var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
 var yaw := 0.0       # смотрим на север, на костёр
 var pitch := -0.05
@@ -63,8 +67,12 @@ static var _grass_mesh: Mesh
 @onready var audio: WorldAudio = $Audio
 
 
-## Заполнить сцену загруженным миром (WorldLoader) и начать игру
+## Заполнить сцену загруженным миром (WorldLoader) и начать игру.
+## С 9.0 сразу готовится только окружение игрока: ближний рельеф (до NEAR), лес вокруг и край за картой;
+## дальний рельеф и растительность догружаются в игре, сначала по ходу движения.
 func start(loaded: WorldLoader, hud_node: Hud) -> void:
+	var t := Time.get_ticks_usec()
+	load_timings = loaded.timings
 	world = loaded.world
 	heights = loaded.heights
 	hud = hud_node
@@ -93,9 +101,11 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	fires = built.fires
 	labels = built.labels
 	StructuresBuilder.build($Structures, heights)
+	t = _mark("start_scene_ms", t)
 
 	player = PlayerState.spawn(world, heights)
-	terrain_stream.update(player.x, player.z, true)
+	terrain_stream.update(player.x, player.z, true, true, NEAR)
+	t = _mark("start_terrain_ms", t)
 	if world.settlements.size() > 0:
 		# лицом к костру
 		var s := PlayerState.home(world)
@@ -116,8 +126,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	add_child(crash)
 	_snap()
 	bike_view.draw(1.0)
+	t = _mark("start_outer_ms", t)
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
+	t = _mark("start_vegetation_ms", t)
 	camera.fov = GameSettings.fov
 	_apply_shadows()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
@@ -132,6 +144,14 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	audio.setup(world, heights)
 	hud.travel_requested.connect(travel_to)
 	capture_mouse()
+	_mark("start_rest_ms", t)
+
+
+## Время шага запуска в load_timings (мс); возвращает новую отметку
+func _mark(key: String, since: int) -> int:
+	var now := Time.get_ticks_usec()
+	load_timings[key] = (now - since) / 1000.0
+	return now
 
 
 ## Тени солнца и затенение (SSAO) по настройке; настройку можно поменять на паузе
@@ -221,7 +241,7 @@ func travel_to(place: Dictionary) -> void:
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	player = PlayerState.arrive(world, heights, place)
-	terrain_stream.update(player.x, player.z, true)
+	terrain_stream.update(player.x, player.z, true, true, NEAR)
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера

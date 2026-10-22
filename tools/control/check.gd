@@ -36,6 +36,7 @@ var look_s := 8.0
 var road_s := 10.0
 var t_start := 0
 var timing := {}           # секунды по этапам
+var load_ms := {}          # из чего сложилась загрузка: WorldLoader.timings и шаги GameWorld.start, мс
 
 var phase := "menu"
 var frames := 0
@@ -125,7 +126,7 @@ func _remember(id: String) -> void:
 	if "map" in want_views:
 		views.append("map")
 	c.worlds[id] = {commit = _clean_commit(), views = views, fps = want_fps, hours = hours.map(func(h): return h[0]),
-		seconds = timing}
+		seconds = timing, load_ms = load_ms}
 	Dev.save_json(path, c)
 
 
@@ -230,6 +231,7 @@ func _process(delta: float) -> bool:
 				return false
 			result.load_s = snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.01)
 			timing.load = result.load_s
+			load_ms = game.load_timings.duplicate()
 			game.paused = true
 			main.hud.visible = false
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
