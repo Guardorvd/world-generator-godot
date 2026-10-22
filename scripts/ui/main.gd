@@ -55,7 +55,6 @@ func _show(screen: String) -> void:
 		"menu":
 			%Start.grab_focus()
 		"pause":
-			%ExpandTerritory.disabled = game == null or game.world.available_rect.size.x >= WorldGenerator.PLAN_SIZE
 			%Resume.grab_focus()
 		"settings":
 			%Done.grab_focus()
@@ -263,20 +262,6 @@ func _toggle_pause() -> void:
 		game.set_paused(true)
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		_show("pause")
-
-
-## Открыть следующую территорию, сохранив тот же мир, игрока, велосипед и меши.
-func _expand_territory() -> void:
-	if game == null:
-		return
-	var side := game.world.available_rect.size.x
-	var next_size := 512 if side < 512 else WorldGenerator.PLAN_SIZE
-	game.world.expand_territory(next_size)
-	GameSettings.world_size = next_size
-	size_select.select(size_select.get_item_index(next_size))
-	GameSettings.save_settings()
-	_resume()
-	hud.toast_now("Территория расширена до %d × %d" % [next_size, next_size])
 
 
 func _resume() -> void:

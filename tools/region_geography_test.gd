@@ -112,16 +112,21 @@ func _init() -> void:
 	check(bad_links == 0, "Русло теряет сток или поднимает воду: %d рёбер" % bad_links)
 	check(links > 0, "Не проверено ни одного пересечения реки с границей области")
 	var rect := w.region_rect(Vector2i(1, 1)).grow(2)
-	var region := WorldRegion.fields(w, rect)
 	var terrain := OuterLand.compute(w, rect.position.x, rect.position.y, rect.size.x, rect.size.y)
-	check(terrain.h == region.h and terrain.dw == region.dist_water and terrain.river == region.river_area,
-		"Семплер области потерял готовые долины, русла или близость воды")
-	region.h[0] = 99.0
-	check(geo_fingerprint(w) == before, "Чтение полей области изменило общую географию")
+	var lost := 0
+	for y in rect.size.y:
+		for x in rect.size.x:
+			var k := y * rect.size.x + x
+			var i := (y + rect.position.y) * w.W + x + rect.position.x
+			if terrain.h[k] != w.h[i] or terrain.dw[k] != w.dist_water[i] or terrain.river[k] != w.river_area[i]:
+				lost += 1
+	check(lost == 0, "Семплер области потерял готовые долины, русла или близость воды")
+	terrain.h[0] = 99.0
+	check(geo_fingerprint(w) == before, "Семплер области изменил общую географию")
 	StageLandmarks.run(w)
 	var places := w.settlements.duplicate(true)
 	var peaks := w.peaks.duplicate(true)
-	for i in 3000: w.rng.next_float()
+	check(w.rng == null, "Генератор снова создаёт общий RNG мира")
 	for i in 100: w.make_name(Names.PEAK, "unrelated", i, -i)
 	StageLandmarks.run(w)
 	check(w.settlements == places and w.peaks == peaks, "Имена или общий RNG сдвинули поселения/дома/вершины")

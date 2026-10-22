@@ -34,12 +34,6 @@ static func _moved(part: Array, offset: Vector3) -> Array:
 	return [part[0], Transform3D(t.basis, t.origin + offset)]
 
 
-## Повернуть часть модели вокруг оси Z (после её собственного сдвига), затем сдвинуть
-static func _rotz(part: Array, angle: float, offset: Vector3) -> Array:
-	var t: Transform3D = part[1]
-	return [part[0], Transform3D(Basis(Vector3.BACK, angle), offset) * t]
-
-
 ## Объединение частей в один меш
 static func merge(parts: Array) -> ArrayMesh:
 	var st := SurfaceTool.new()

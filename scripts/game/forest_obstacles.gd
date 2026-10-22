@@ -22,7 +22,9 @@ const ROCK_R := 1.15    # валун: сфера 1,1 м, сплюснутая д
 const ROCK_TOP := 1.07
 
 var world: WorldData
-var heights: Heightfield
+## Хозяин — Heightfield.obstacles. Сильная ссылка замкнула бы цикл RefCounted, и мир не освобождался бы
+## после выхода в меню (lifecycle_test). Поэтому только слабая.
+var _heights: WeakRef
 var data := PackedFloat32Array()  # препятствия подряд по STRIDE
 var _grid := {}                   # Vector2i(клетка) -> PackedInt32Array номеров (начало записи в data)
 var _center := Vector2.INF
@@ -31,7 +33,7 @@ var _version := -1
 
 func _init(w: WorldData, h: Heightfield) -> void:
 	world = w
-	heights = h
+	_heights = weakref(h)
 
 
 ## Каждый такт: пересобрать, если игрок отошёл или подлесок обновился. details — валежник из
@@ -51,6 +53,9 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 
 ## Деревья, валуны, сухие деревья и кактусы мира — те же, что рисует VegetationLayer
 func _add_objects(px: float, pz: float) -> void:
+	var heights: Heightfield = _heights.get_ref()
+	if heights == null:
+		return
 	var side := world.CS * TILE
 	for cy in range(maxi(0, floori((pz - REACH) / side)), mini(world.CH, floori((pz + REACH) / side) + 1)):
 		for cx in range(maxi(0, floori((px - REACH) / side)), mini(world.CW, floori((px + REACH) / side) + 1)):

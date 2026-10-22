@@ -91,8 +91,6 @@ func _begin_case() -> void:
 		bike.z = 0.0
 		bike.heading = 0.0
 		(heights as FlatGround).slope = 0.2 if case_i == 9 else 0.0
-		if heights.obstacles != null:
-			heights.obstacles.heights = null
 		heights.obstacles = ForestObstacles.new(w, heights)
 		if case_i == 3:
 			heights.obstacles._add(0, -1.8, 0, -1.8, 0.6, 100, INF)
@@ -205,9 +203,6 @@ func _finish_case(back: bool) -> void:
 	case_i += 1
 	if case_i >= cases.size():
 		print("FAILS: %d" % fails)
-		if heights.obstacles != null:
-			heights.obstacles.heights = null
-			heights.obstacles = null
 		quit(1 if fails > 0 else 0)
 		return
 	_begin_case()

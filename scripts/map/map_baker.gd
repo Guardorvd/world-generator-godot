@@ -24,12 +24,6 @@ static func bake(w: WorldData, px: int, flat: bool) -> Image:
 	return finish(w, px, [painted[0 if flat else 1]], not flat)[0]
 
 
-## Две картинки за один проход: [без отмывки, с отмывкой]
-static func bake_both(w: WorldData, px: int) -> Array[Image]:
-	var painted := paint(w, px)
-	return [finish(w, px, [painted[0]], false)[0], finish(w, px, [painted[1]])[0]]
-
-
 ## Попиксельная заливка: [без отмывки, с отмывкой] в байтах RGB8. Читает только рельеф, воду и биомы,
 ## поэтому её можно считать сразу после этапа климата, параллельно с тропами и растительностью
 ## Ненужный вариант можно не выделять и не записывать; его место в паре остаётся пустым.

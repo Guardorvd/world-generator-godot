@@ -91,6 +91,5 @@ func _target(place: Dictionary) -> Dictionary:
 
 
 func _destination(place: Dictionary, center: Vector2) -> void:
-	var distance := center.distance_to(Vector2(place.x, place.y)) * GameConfig.TILE
-	var length := "%d м" % roundi(distance) if distance < 1000.0 else "%.1f км" % (distance / 1000.0)
+	var length := Hud._fmt_dist(center.distance_to(Vector2(place.x, place.y)) * GameConfig.TILE)
 	_button("%s · %s" % [place.name, length], func() -> void: destination_selected.emit(place))

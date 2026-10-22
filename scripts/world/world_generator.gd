@@ -58,7 +58,6 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 	w.N = w.W * w.H
 	w.seed_text = seed_text
 	w.seed_num = WGRandom.hash_string(seed_text)
-	w.rng = WGRandom.new(w.seed_num) # совместимость со старыми инструментами; игровые стадии не читают
 	for name: String in NOISE_SLOTS:
 		w.noise[name] = Simplex.new(noise_rng(w.seed_num, name))
 	w.scale = float(w.N) / (512 * 512)

@@ -7,8 +7,8 @@ extends RefCounted
 ## Всё зависит только от места: клетка — в общих координатах мира, случайные числа — хеш (сид, клетка, слой),
 ## а соседей кусок не спрашивает: всё, что нужно рядом (море в SEA_REACH клетках, соседи для крутизны), он
 ## считает сам в полосе вокруг себя. Поэтому одна и та же местность получается в любом порядке загрузки.
-## За внешним краем плана рек и озёр нет. Внутри плана compute с 8.6 читает общую готовую
-## географию через WorldRegion: с долинами, руслами и расстоянием до всей воды, а не сырой шум.
+## За внешним краем плана рек и озёр нет. Клетки внутри плана compute с 8.6 берёт из общей готовой
+## географии (_overlay): с долинами, руслами и расстоянием до всей воды, а не сырой шум.
 ## compute — чистая функция, её считают фоновые задачи; в chunks и veg куски кладёт и убирает главный поток.
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
@@ -45,9 +45,6 @@ func _init(w: WorldData) -> void:
 ## море, поэтому dist — и близость воды, и близость океана. Значение клетки не зависит от того, в каком
 ## прямоугольнике её считали: всё, что ей нужно, лежит в полосе PAD вокруг
 static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
-	var rect := Rect2i(x0, y0, cw, ch)
-	if WorldRegion.ready(w) and Rect2i(0, 0, w.W, w.H).encloses(rect):
-		return WorldRegion.terrain(w, rect)
 	var pw := cw + 2 * PAD
 	var ph := ch + 2 * PAD
 	var raw := StageRelief.raw_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
@@ -113,9 +110,31 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			out.slope[o] = slope
 			out.dist[o] = d
 			out.light[o] = light
-	# Внутри общего плана брать окончательные долины и воду, а не заново сырой шум.
-	WorldRegion.overlay(w, Rect2i(x0, y0, cw, ch), out)
+	_overlay(w, Rect2i(x0, y0, cw, ch), out)
 	return out
+
+
+## Внутри общего плана брать окончательные долины, воду и климат, а не заново сырой шум.
+## dw — расстояние до любой воды, river — коридор русла; снаружи плана только море.
+static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
+	out.dw = out.dist.duplicate()
+	out.river = PackedByteArray()
+	out.river.resize(rect.get_area())
+	# Готовая география есть после StageClimate; заготовки WorldData в тестах её не имеют.
+	if w.N <= 0 or w.biome.size() != w.N or w.dist_water.size() != w.N:
+		return
+	var overlap := rect.intersection(Rect2i(0, 0, w.W, w.H))
+	var river := w.river_cells()
+	for y in range(overlap.position.y, overlap.end.y):
+		for x in range(overlap.position.x, overlap.end.x):
+			var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
+			var src := y * w.W + x
+			for name: String in ["h", "biome", "temp", "moist", "elev", "slope"]:
+				out[name][dst] = w.get(name)[src]
+			out.dist[dst] = w.dist_ocean[src]
+			out.dw[dst] = w.dist_water[src]
+			out.river[dst] = river[src]
+			out.light[dst] = StageClimate.natural_conditions(w, x, y).x
 
 
 ## Лес, камни и тростник чанка растительности key (WorldData.CHUNK_SIZE клеток, в общих координатах; для
