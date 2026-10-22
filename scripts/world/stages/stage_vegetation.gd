@@ -24,6 +24,14 @@ const WOOD_OCT := 4
 const WOOD_OX := -133.0
 const WOOD_OY := 271.0
 const SPREAD := 0.55     # насколько густо массив заходит из леса на соседние луга
+# 9.2: строение массива. Древостой (около 220 м): густые и редкие участки, хвойные или лиственные пятна.
+# Поляны (около 80 м): открытые места в глубине леса с мягкой опушкой.
+const STAND_SCALE := 56.0
+const STAND_OX := 17.0
+const STAND_OY := -83.0
+const GLADE_SCALE := 20.0
+const GLADE_OX := -61.0
+const GLADE_OY := 39.0
 
 
 static func run(w: WorldData) -> void:
@@ -83,13 +91,17 @@ static func fields(w: WorldData) -> Dictionary:
 			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
 				village[y * W + x] = 1
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
-		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
-		wood = wood_rect(w, 0, 0, W, H)}
+		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village}.merged(
+		structure_rect(w, 0, 0, W, H))
 
 
-## Поле лесистости прямоугольника клеток (9.1): то же поле внутри плана и за его краем
-static func wood_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> PackedFloat64Array:
-	return Parallel.fbm_rect(w.noise.forest, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY)
+## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
+## stand — густой или редкий древостой и его состав (9.2), glade — поляны (9.2). Все — сдвиги одного лесного Simplex
+static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
+	var n: Simplex = w.noise.forest
+	return {wood = Parallel.fbm_rect(n, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY),
+		stand = Parallel.fbm_rect(n, x0, y0, cw, ch, STAND_SCALE, 2, STAND_OX, STAND_OY),
+		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY)}
 
 
 ## Доля лесов мира по сиду (9.1), -0.36..0.36: одни миры лесистые, другие открытые. Без квот — только сдвиг
@@ -103,7 +115,8 @@ static func world_cover(seed_num: int) -> float:
 ## (y - oy) * stride + (x - ox). Числа rng у каждой клетки свои: WGRandom.hash_cell(seed, x, y, LAYER), а
 ## отступы между объектами проверяются только внутри чанка, поэтому чанк не зависит ни от соседей, ни от
 ## порядка, в котором считаются чанки. f: biome, forest, stony, elev, slope, dw, temp, moist и необязательные
-## river, dist_path, village (стартовая область), light, age_n (за краем: без них они считаются по w).
+## river, dist_path, village (стартовая область), light, age_n, wood, stand, glade (без них они считаются по w).
+## Просеки и лесные дороги вписываются через dist_path: у пути лес редеет, на полотне его нет.
 ## w — стартовая область (тропы и дома) или null за её краем.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictionary, ox: int, oy: int, stride: int,
 		w: WorldData, store: ObjStore) -> void:
@@ -122,6 +135,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var age_n: PackedFloat64Array = f.get("age_n", PackedFloat64Array())
 	var wood: PackedFloat64Array = f.get("wood", PackedFloat64Array())
 	var has_wood := not wood.is_empty()
+	var stand_f: PackedFloat64Array = f.get("stand", PackedFloat64Array())
+	var glade_f: PackedFloat64Array = f.get("glade", PackedFloat64Array())
+	var has_stand := not stand_f.is_empty()
 	var cover_bias := world_cover(seed_num)
 	var has_river := not river.is_empty()
 	var has_path := not dist_path.is_empty()
@@ -159,10 +175,17 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			# 9.1: лесистость — крупный шум и доля лесов мира, мелкий лесной шум только рвёт опушки
 			var wv: float = wood[i] if has_wood else w.noise.forest.fbm(x / WOOD_SCALE + WOOD_OX, y / WOOD_SCALE + WOOD_OY, WOOD_OCT)
 			var cover := wv * 1.15 + cover_bias + fv * 0.4
+			var stand := 0.5 # 9.2: 0 — редкий светлый древостой, 1 — сомкнутый
 			if dens > 0.3:
 				var t := clampf((cover + 0.3) / (0.12 + 0.3), 0.0, 1.0)
 				interior = t * t * (3.0 - 2.0 * t)
-				dens *= interior * _ss(-0.45, -0.12, stony[i]) * lerpf(1.35, 0.75, age)
+				var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
+				var gv: float = glade_f[i] if has_stand else w.noise.forest.fbm(x / GLADE_SCALE + GLADE_OX, y / GLADE_SCALE + GLADE_OY, 2)
+				stand = _ss(-0.4, 0.4, sv)
+				# поляны только в глубине массива: на опушке и так светло
+				var glade := _ss(0.3, 0.45, gv) * interior
+				dens *= interior * _ss(-0.45, -0.12, stony[i]) * lerpf(1.35, 0.75, age) * lerpf(0.55, 1.3, stand) * (1.0 - 0.92 * glade)
+				interior *= 1.0 - 0.6 * glade # у края поляны — опушечные виды
 			else:
 				var t := clampf((fv - 0.1) / (0.5 - 0.1), 0.0, 1.0)
 				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
@@ -200,7 +223,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				if rng.next_float() < dens * 0.6:
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
-					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22, 0.0, 1.0)
+					# сомкнутые участки — влажнее и лиственнее, редкие — светлые сосняки (9.2)
+					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if Biomes.is_tree(kind) else 0.8 + rng.next_float() * 0.45

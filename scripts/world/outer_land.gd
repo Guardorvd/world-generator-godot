@@ -151,7 +151,7 @@ static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 	p = WorldData.NOISE_FIELDS.cost
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 1, y0 - 1, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
-	f.wood = StageVegetation.wood_rect(w, x0 - 1, y0 - 1, side, side)
+	f.merge(StageVegetation.structure_rect(w, x0 - 1, y0 - 1, side, side))
 	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
 	if not f.has("dw"):
 		f.dw = f.dist
