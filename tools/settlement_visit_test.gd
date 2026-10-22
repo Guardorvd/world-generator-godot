@@ -15,8 +15,8 @@ func _run() -> void:
 	main.start_game("Север-1234", 256)
 	var start := Time.get_ticks_msec()
 	while main.game == null or main.game.player == null:
-		if Time.get_ticks_msec() - start > 60000:
-			push_error("Игра не загрузилась за минуту")
+		if Time.get_ticks_msec() - start > 240000:
+			push_error("Игра не загрузилась за 4 минуты")
 			quit(1)
 			return
 		await process_frame

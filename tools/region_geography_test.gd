@@ -38,19 +38,6 @@ static func geo_fingerprint(w: WorldData) -> Dictionary:
 	return fp
 
 
-func overlap(a: Dictionary, b: Dictionary) -> void:
-	var shared: Rect2i = a.rect.intersection(b.rect)
-	for name: String in WorldRegion.FIELDS:
-		var mismatches := 0
-		for y in range(shared.position.y, shared.end.y):
-			for x in range(shared.position.x, shared.end.x):
-				var ai: int = (y - a.rect.position.y) * a.stride + x - a.rect.position.x
-				var bi: int = (y - b.rect.position.y) * b.stride + x - b.rect.position.x
-				if a[name][ai] != b[name][bi]:
-					mismatches += 1
-		check(mismatches == 0, "На границе областей расходится поле " + name)
-
-
 func synthetic_routes() -> void:
 	var w := WorldData.new()
 	w.W = 48
@@ -100,25 +87,6 @@ func _init() -> void:
 	synthetic_routes()
 	var started := Time.get_ticks_msec()
 	var w := WorldGenerator.geography("Север-1234")
-	if OS.get_cmdline_user_args().has("--links-only"):
-		var edges := {}
-		for y in 3:
-			for x in 3:
-				for edge: Dictionary in w.read_region(Vector2i(x, y)).links:
-					var source: int = edge.from.y * w.W + edge.from.x
-					check(w.river[source] != 0 or w.lake[source] != 0, "Сухой подход к истоку выдан как река")
-					check(edge.width > 0.0 and edge.next_width > 0.0 and edge.e + 1e-6 >= edge.next_e, "Недопустимый профиль перехода")
-					if edges.has(edge.id):
-						check(edges[edge.id].data == edge, "Соседи не согласны о речном переходе")
-						edges[edge.id].count += 1
-					else:
-						edges[edge.id] = {data = edge, count = 1}
-		for id: Vector4i in edges:
-			check(edges[id].count == 2, "Река не продолжена в соседнюю область")
-		check(not edges.is_empty(), "Не проверено ни одного перехода")
-		print("region_links_test: %s; речных переходов %d" % ["OK" if fails == 0 else "ошибок %d" % fails, edges.size()])
-		quit(1 if fails > 0 else 0)
-		return
 	var before := geo_fingerprint(w)
 	var reference: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tools/selftest_reference.json"))["Север-1234@256"]
 	for name: String in before:
@@ -129,41 +97,27 @@ func _init() -> void:
 		if root < 0 or root >= w.N or w.down[root] >= 0 or (w.down[i] >= 0 and root != w.watershed[w.down[i]]):
 			bad_basins += 1
 	check(bad_basins == 0, "Водосборы разорваны: %d клеток" % bad_basins)
-	var snapshots := {}
-	var links := {}
-	for y in 3:
-		for x in 3:
-			var key := Vector2i(x, y)
-			var region := w.read_region(key)
-			snapshots[key] = SelfTest.fnv(var_to_bytes(region))
-			for link: Dictionary in region.links:
-				if links.has(link.id):
-					check(links[link.id].data == link, "Области не согласны о ширине, высоте или стоке реки")
-					links[link.id].count += 1
-				else:
-					links[link.id] = {data = link, count = 1}
-				check(link.acc <= link.receiving_acc + 0.001 and link.e + 1e-6 >= link.next_e,
-					"Переход реки через границу теряет сток или поднимает воду")
-	check(not links.is_empty(), "Не проверено ни одного пересечения реки с границей области")
-	for id: Vector4i in links:
-		check(links[id].count == 2, "Речное ребро не возвращено обоим соседям")
-	for y in range(2, -1, -1):
-		for x in range(2, -1, -1):
-			var key := Vector2i(x, y)
-			check(SelfTest.fnv(var_to_bytes(w.read_region(key))) == snapshots[key], "География зависит от порядка чтения областей")
-	for y in 3:
-		for x in 3:
-			var a := w.read_region(Vector2i(x, y))
-			if x < 2: overlap(a, w.read_region(Vector2i(x + 1, y)))
-			if y < 2: overlap(a, w.read_region(Vector2i(x, y + 1)))
-	var region := w.read_region(Vector2i(1, 1))
-	var rect: Rect2i = region.rect
+	# Области — адреса одного плана: русло через их границу — то же ребро стока, что внутри.
+	# Проверяем целостность сети по всему плану и отдельно считаем переходы границ.
+	var links := 0
+	var bad_links := 0
+	for i in w.N:
+		var d := w.down[i]
+		if d < 0 or w.river[i] == 0:
+			continue
+		if w.acc[i] > w.acc[d] + 0.001 or w.filled[i] + 1e-6 < w.filled[d]:
+			bad_links += 1
+		if w.region_at(Vector2i(i % w.W, i / w.W)) != w.region_at(Vector2i(d % w.W, d / w.W)):
+			links += 1
+	check(bad_links == 0, "Русло теряет сток или поднимает воду: %d рёбер" % bad_links)
+	check(links > 0, "Не проверено ни одного пересечения реки с границей области")
+	var rect := w.region_rect(Vector2i(1, 1)).grow(2)
+	var region := WorldRegion.fields(w, rect)
 	var terrain := OuterLand.compute(w, rect.position.x, rect.position.y, rect.size.x, rect.size.y)
 	check(terrain.h == region.h and terrain.dw == region.dist_water and terrain.river == region.river_area,
 		"Семплер области потерял готовые долины, русла или близость воды")
 	region.h[0] = 99.0
-	if not region.rivers.is_empty(): region.rivers[0][0].x = 999999.0
-	check(geo_fingerprint(w) == before, "Читатель области изменил общую географию")
+	check(geo_fingerprint(w) == before, "Чтение полей области изменило общую географию")
 	StageLandmarks.run(w)
 	var places := w.settlements.duplicate(true)
 	var peaks := w.peaks.duplicate(true)
@@ -174,5 +128,5 @@ func _init() -> void:
 	check(geo_fingerprint(w) == before, "Объекты или порядок чтения перестроили природную географию")
 	w.clear_noise_fields()
 	print("region_geography_test: %s; речных переходов %d; %d мс" % ["OK" if fails == 0 else "ошибок %d" % fails,
-		links.size(), Time.get_ticks_msec() - started])
+		links, Time.get_ticks_msec() - started])
 	quit(1 if fails > 0 else 0)

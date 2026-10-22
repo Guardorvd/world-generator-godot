@@ -321,20 +321,23 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 	var tx := x / TILE
 	var tz := z / TILE
 	# сначала расстояние, потом ключ: строки не собираются 60 раз в секунду для каждого места
+	# ключи visited — устойчивые адреса мест (WorldData.place_id)
 	for s in w.settlements:
 		if Grid.hypot(s.x - tx, s.y - tz) < 6.0:
-			var key := "s%d" % s.i
+			var key := WorldData.place_id("settlement", s.x, s.y)
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Поселение «%s»" % s.name)
 	for pk in w.peaks:
 		if Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
-			var key := "p%d" % pk.i
+			var key := WorldData.place_id("peak", pk.x, pk.y)
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Вы покорили вершину «%s»!" % pk.name)
 	var lk := w.lake_near(tx, tz, LAKE_REACH)
-	if lk >= 0 and not visited.has("l%d" % lk):
-		visited["l%d" % lk] = true
-		found.append("Вы вышли к озеру: «%s»" % w.lakes[lk].name)
+	if lk >= 0:
+		var key := WorldData.place_id("lake", w.lakes[lk].x, w.lakes[lk].y)
+		if not visited.has(key):
+			visited[key] = true
+			found.append("Вы вышли к озеру: «%s»" % w.lakes[lk].name)
 	return found

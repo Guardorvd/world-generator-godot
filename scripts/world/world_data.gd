@@ -76,6 +76,90 @@ func region_rect(key: Vector2i) -> Rect2i:
 func region_at(cell: Vector2i) -> Vector2i:
 	return Vector2i(floori(float(cell.x) / REGION_SIZE), floori(float(cell.y) / REGION_SIZE))
 
+
+## 8.9 extra: адреса мест и направлений для игровых систем. id — тип и мировая клетка: не зависит
+## от порядка списков, открытой территории, имени и загрузки рельефа/леса. Устойчив для сида в пределах
+## версии генератора. Индекс строится один раз из готового плана и не копирует записи мест.
+static func place_id(kind: String, x: float, y: float) -> String:
+	return "%s:%d:%d" % [kind, floori(x), floori(y)]
+
+
+## Места: id -> {id, kind ("settlement" | "peak" | "lake"), name, x, y — клетки, region, src — запись плана}.
+## Направления: связи сети поселений {id, from, to — id мест, road, regions — пара областей}.
+func place(id: String) -> Dictionary:
+	return _places().places.get(id, {})
+
+
+func places_in_region(key: Vector2i) -> Array:
+	var out: Array = []
+	for id: String in _places().regions.get(key, []):
+		out.append(_index.places[id])
+	return out
+
+
+## Направления из места; пустой from — все направления мира.
+func routes(from: String = "") -> Array:
+	var all: Array = _places().routes
+	return all if from.is_empty() else all.filter(func(r: Dictionary) -> bool: return r.from == from or r.to == from)
+
+
+## Далёкое место назначения по сети: поселение в другой области, больше всего переходов от начала.
+## Это выбор цели, а не задание: игрок сам решает, ехать ли и какой дорогой. Пусто, если такого нет.
+func far_destination(from: String) -> Dictionary:
+	var start := place(from)
+	if start.is_empty():
+		return {}
+	var hops := {from: 0}
+	var queue: Array[String] = [from]
+	var best := {}
+	var best_key := Vector2(-1.0, -1.0)
+	while not queue.is_empty():
+		var id: String = queue.pop_front()
+		for r: Dictionary in routes(id):
+			var next: String = r.to if r.from == id else r.from
+			if hops.has(next):
+				continue
+			hops[next] = hops[id] + 1
+			queue.append(next)
+			var p := place(next)
+			var key := Vector2(hops[next], Vector2(p.x, p.y).distance_to(Vector2(start.x, start.y)))
+			if p.region != start.region and (key.x > best_key.x or key.x == best_key.x and key.y > best_key.y):
+				best = p
+				best_key = key
+	return best
+
+
+var _index := {}
+
+
+func _places() -> Dictionary:
+	# Пересобрать, только если этап генерации или тест заменил сами списки.
+	if not _index.is_empty() and is_same(_index.lists[0], settlements) and is_same(_index.lists[1], peaks) \
+			and is_same(_index.lists[2], lakes):
+		return _index
+	_index = {lists = [settlements, peaks, lakes], places = {}, regions = {}, routes = []}
+	for kind: String in ["settlement", "peak", "lake"]:
+		for src: Dictionary in get(kind + "s"):
+			var id := place_id(kind, src.x, src.y)
+			var region := region_at(Vector2i(floori(src.x), floori(src.y)))
+			_index.places[id] = {id = id, kind = kind, name = src.get("name", ""), x = src.x, y = src.y, region = region, src = src}
+			if not _index.regions.has(region):
+				_index.regions[region] = []
+			_index.regions[region].append(id)
+	var by_cell := {}
+	for s: Dictionary in settlements:
+		by_cell[s.i] = s
+	for s: Dictionary in settlements:
+		for other: int in s.get("connections", []):
+			var o: Dictionary = by_cell.get(other, {})
+			if o.is_empty() or other < s.i:
+				continue
+			var a := place_id("settlement", s.x, s.y)
+			var b := place_id("settlement", o.x, o.y)
+			_index.routes.append({id = a + ">" + b, from = a, to = b, road = StageTrails.main_road(s, o),
+				regions = [_index.places[a].region, _index.places[b].region]})
+	return _index
+
 # Общее состояние генерации
 var rng: WGRandom
 var noise := {}           # имя -> Simplex
@@ -186,11 +270,6 @@ func make_name(parts: Dictionary, kind: String, x: int, y: int) -> String:
 	var a: Array = parts.first
 	var b: Array = parts.second
 	return a[floori(local.next_float() * a.size())] + parts.sep + b[floori(local.next_float() * b.size())]
-
-
-## Область и её полоса читают общий результат географии, поселений и сети путешествий.
-func read_region(key: Vector2i, halo: int = 2) -> Dictionary:
-	return WorldRegion.read(self, key, halo)
 
 
 ## Номер озера из lakes, у которого стоит точка (клетки): озеро в квадрате ±r клеток или -1

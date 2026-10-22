@@ -93,26 +93,30 @@ func network() -> void:
 	check(w.settlements[0].connections.size() + w.settlements[1].connections.size() + w.settlements[2].connections.size() == 4,
 		"три возможные пары не превращаются в три обязательные дороги")
 	check(w.path_mask[w.peaks[0].i] >= 2, "значимое место получает ответвление от общей сети")
-	var crossings := {}
-	var valid := true
-	for x in 3:
-		var region := w.read_region(Vector2i(x, 0), 0)
-		check(not region.trails.is_empty() and not region.settlements.is_empty(), "область %d читает места и пути общего плана" % x)
-		check(region.path_mask.size() == region.core.get_area(), "область %d читает готовую маску пути" % x)
-		for link: Dictionary in region.travel_links:
-			if crossings.has(link.id):
-				valid = valid and crossings[link.id][0] == link
-				crossings[link.id][1] += 1
-			else:
-				crossings[link.id] = [link, 1]
-		region.settlements[0].name = "копия"
-		region.trails[0].pts[0].x = -999.0
-	for entry: Array in crossings.values(): valid = valid and entry[1] == 2
-	check(valid and crossings.size() >= 2, "оба соседа получают одинаковые переходы сети на каждой границе")
-	check(w.settlements[0].name == "230" and w.trails[0].pts[0].x >= 0.0, "чтение и изменение области не меняет сеть мира")
+	# 8.9 extra: места и направления находятся по адресу, без чтения рельефа и леса областей.
+	var ids: Array = []
+	for s: Dictionary in w.settlements:
+		ids.append(WorldData.place_id("settlement", s.x, s.y))
+	check(w.place(ids[2]).src == w.settlements[2] and w.place(ids[2]).region == Vector2i(2, 0),
+		"место находится по устойчивому адресу вместе со своей областью")
+	check(w.places_in_region(Vector2i(1, 0)).any(func(p: Dictionary) -> bool: return p.id == ids[1])
+		and w.places_in_region(Vector2i(1, 0)).all(func(p: Dictionary) -> bool: return p.region == Vector2i(1, 0)),
+		"поиск по области возвращает только её места")
+	var routes := w.routes()
+	check(routes.size() == 2 and routes.any(func(r: Dictionary) -> bool: return r.regions[0] != r.regions[1]),
+		"межрегиональные направления — связи сети с адресами обоих концов")
+	var far := w.far_destination(ids[0])
+	check(not far.is_empty() and far.region != Vector2i(0, 0), "далёкая цель выбирается в другой области по сети")
 	var before := var_to_bytes([w.settlements, w.trails, w.bridges, w.tunnels])
+	var route_ids := routes.map(func(r: Dictionary) -> String: return r.id)
 	w.expand_territory(256)
 	w.expand_territory(768)
+	var original := w.settlements
+	w.settlements = original.duplicate()
+	w.settlements.reverse()
+	check(w.routes().map(func(r: Dictionary) -> String: return r.id).all(func(id: String) -> bool: return route_ids.has(id)),
+		"адреса направлений не зависят от порядка списка мест")
+	w.settlements = original
 	check(var_to_bytes([w.settlements, w.trails, w.bridges, w.tunnels]) == before, "расширение территории сохраняет места и маршруты")
 
 

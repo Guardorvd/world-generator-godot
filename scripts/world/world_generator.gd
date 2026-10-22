@@ -43,8 +43,8 @@ static func menu_background(seed_text: String) -> WorldData:
 	return _generate_plan(seed_text, 192)
 
 
-## Общая природная география без домов и дорог. Для соседних областей читать read_region,
-## а не запускать flood в отдельном окне другого размера.
+## Общая природная география без домов и дорог. Соседние области — прямоугольники этого же плана
+## (WorldData.region_rect), а не flood в отдельном окне другого размера.
 static func geography(seed_text: String, on_progress: Callable = Callable()) -> WorldData:
 	var w := _geography(seed_text, PLAN_SIZE, on_progress)
 	w.clear_noise_fields()

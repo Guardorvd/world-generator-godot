@@ -40,19 +40,21 @@ func clear() -> void:
 		child.queue_free()
 	hide()
 
-func open(settlement: Dictionary, places: Array, bicycle_near: bool) -> void:
+## places — открытые места (Hud.places); направления по дорогам берутся из индекса мира,
+## поэтому видны и соседи за краем открытых земель.
+func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near: bool) -> void:
 	clear()
 	_label(settlement.name, 25)
 	_label("%s · домов: %d" % [settlement.get("character", "деревня"), settlement.huts.size()])
 	_label("Доска маршрутов", 19)
 	_label("Выберите цель — указатель появится на компасе и карте.", 14)
+	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var routes: Array = []
+	for r: Dictionary in world.routes(here):
+		routes.append(_target(world.place(r.to if r.from == here else r.from)))
 	var nearby: Array = []
 	for place: Dictionary in places:
-		if place.kind == "settlement":
-			if settlement.get("connections", []).has(place.src.i):
-				routes.append(place)
-		elif place.kind in ["peak", "lake"]:
+		if place.kind in ["peak", "lake"]:
 			nearby.append(place)
 	var center := Vector2(settlement.x, settlement.y)
 	var by_distance := func(a: Dictionary, b: Dictionary) -> bool:
@@ -67,6 +69,11 @@ func open(settlement: Dictionary, places: Array, bicycle_near: bool) -> void:
 		_label("Окрестности", 15)
 	for place: Dictionary in nearby.slice(0, 2):
 		_destination(place, center)
+	# Одна далёкая цель по сети дорог — повод для путешествия, без условий и наград.
+	var far := world.far_destination(here)
+	if not far.is_empty() and not routes.any(func(p: Dictionary) -> bool: return p.key == far.id):
+		_label("Дальний путь", 15)
+		_destination(_target(far), center)
 	var bicycle := _button("Велосипед уже рядом" if bicycle_near else "Вернуть велосипед к костру", func() -> void: bike_requested.emit())
 	bicycle.disabled = bicycle_near
 	var close := _button("Продолжить путь · Esc", func() -> void: closed.emit())
@@ -75,6 +82,13 @@ func open(settlement: Dictionary, places: Array, bicycle_near: bool) -> void:
 	reset_size()
 	position = (get_parent_control().size - size) * 0.5
 	close.grab_focus()
+
+## Место индекса как цель HUD: ключ цели и visited — его id.
+func _target(place: Dictionary) -> Dictionary:
+	var out := place.duplicate()
+	out.key = place.id
+	return out
+
 
 func _destination(place: Dictionary, center: Vector2) -> void:
 	var distance := center.distance_to(Vector2(place.x, place.y)) * GameConfig.TILE

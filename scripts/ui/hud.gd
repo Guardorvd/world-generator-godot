@@ -123,8 +123,8 @@ func set_map_visible(v: bool) -> void:
 		big_map.queue_redraw()
 
 
-## Места мира, которые можно выбрать на карте: поселения, вершины и озёра.
-## {key — ключ в visited, name, x, y — клетки, kind — "settlement" | "peak" | "lake", src — запись места}
+## Открытые места мира: поселения, вершины и озёра из индекса WorldData (с 8.9 extra).
+## {key = id — устойчивый адрес и ключ в visited, name, x, y — клетки, kind, region, src — запись места}
 func places() -> Array:
 	if world == null:
 		return []
@@ -132,20 +132,30 @@ func places() -> Array:
 		return _places
 	_places_revision = world.territory_revision
 	var out: Array = []
-	for s in world.settlements:
-		if not world.accessible(s.x, s.y, 2.0):
-			continue
-		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, kind = "settlement", src = s})
-	for pk in world.peaks:
-		if not world.accessible(pk.x, pk.y):
-			continue
-		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, kind = "peak", src = pk})
-	for lk in world.lakes:
-		if not world.accessible(lk.x, lk.y) or not world.accessible(lk.sx, lk.sy, 3.0):
-			continue
-		out.append({key = "l%d" % lk.i, name = lk.name, x = lk.x, y = lk.y, kind = "lake", src = lk})
+	for p: Dictionary in all_places():
+		if in_open_land(p):
+			out.append(p)
 	_places = out
 	return out
+
+
+## Все места плана, включая ещё не открытые земли: далёкую цель можно выбрать заранее.
+func all_places() -> Array:
+	var out: Array = []
+	for kind: String in ["settlement", "peak", "lake"]:
+		for src: Dictionary in world.get(kind + "s"):
+			var p := world.place(WorldData.place_id(kind, src.x, src.y)).duplicate()
+			p.key = p.id
+			out.append(p)
+	return out
+
+
+## Место на открытой территории: туда можно переместиться с карты.
+func in_open_land(p: Dictionary) -> bool:
+	match p.kind:
+		"settlement": return world.accessible(p.x, p.y, 2.0)
+		"lake": return world.accessible(p.x, p.y) and world.accessible(p.src.sx, p.src.sy, 3.0)
+	return world.accessible(p.x, p.y)
 
 
 ## Новая цель путешествия (пустой словарь — без цели)
@@ -411,7 +421,9 @@ class BigMap extends Control:
 		var f := _frame()
 		var best := {}
 		var bd := PICK
-		for pl: Dictionary in hud.places():
+		for pl: Dictionary in hud.all_places():
+			if pl.kind != "settlement" and not hud.world.accessible(pl.x, pl.y):
+				continue # за краем открытых земель на карте видны только поселения
 			var d := pos.distance_to(f[0] + Vector2(pl.x, pl.y) * f[2])
 			if d < bd:
 				bd = d
@@ -429,7 +441,7 @@ class BigMap extends Control:
 			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
 				var same: bool = pl.key == hud.goal.get("key")
 				hud.set_goal({} if same else pl)
-			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty():
+			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
 				hud.travel_requested.emit(pl)
 			accept_event()
 
@@ -455,24 +467,24 @@ class BigMap extends Control:
 			draw_rect(Rect2(Vector2(o.x, a.y), Vector2(a.x - o.x, b.y - a.y)), shade)
 			draw_rect(Rect2(Vector2(b.x, a.y), Vector2(o.x + sz - b.x, b.y - a.y)), shade)
 			draw_rect(Rect2(a, b - a), Hud.GOLD, false, 1.5)
-		for s in w.settlements:
-			if not w.accessible(s.x, s.y):
+		for pl: Dictionary in hud.all_places():
+			var at := o + Vector2(pl.x, pl.y) * k
+			if not w.accessible(pl.x, pl.y):
+				# Дальние поселения — тусклые точки без подписи: их можно выбрать целью заранее.
+				if pl.kind == "settlement":
+					draw_circle(at, 2.5, Color(1, 1, 1, 0.45))
 				continue
-			var at := o + Vector2(s.x, s.y) * k
-			draw_circle(at, 3.5, Color.html("#ffdd55") if hud.visited.has("s%d" % s.i) else Color.WHITE)
-			Hud.draw_label(self, s.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
-		for pk in w.peaks:
-			if not w.accessible(pk.x, pk.y):
-				continue
-			var col := Color.html("#ffdd55") if hud.visited.has("p%d" % pk.i) else Color.html("#e8f0ff")
-			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, col, 13)
-		for lk in w.lakes:
-			if not w.accessible(lk.x, lk.y):
-				continue
-			var at := o + Vector2(lk.x, lk.y) * k
-			var col := Color.html("#ffdd55") if hud.visited.has("l%d" % lk.i) else Color.html("#cfeaff")
-			draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
-			Hud.draw_label(self, lk.name, at - Vector2(0, 7), col, 12)
+			var seen: bool = hud.visited.has(pl.key)
+			match pl.kind:
+				"settlement":
+					draw_circle(at, 3.5, Color.html("#ffdd55") if seen else Color.WHITE)
+					Hud.draw_label(self, pl.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
+				"peak":
+					Hud.draw_label(self, "▲ " + pl.name, at, Color.html("#ffdd55") if seen else Color.html("#e8f0ff"), 13)
+				"lake":
+					var col := Color.html("#ffdd55") if seen else Color.html("#cfeaff")
+					draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
+					Hud.draw_label(self, pl.name, at - Vector2(0, 7), col, 12)
 		if not hud.goal.is_empty():
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		if hud.bike_shown:
@@ -488,21 +500,21 @@ class BigMap extends Control:
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
-			tip += "ПКМ — переместиться сюда"
+			tip += "ПКМ — переместиться сюда" if hud.in_open_land(hover) else "земли откроются по пути"
 			draw_arc(o + Vector2(hover.x, hover.y) * k, 7.0, 0.0, TAU, 20, Color.WHITE, 1.5)
 		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
 
 	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»
 	func _found_line() -> String:
-		var n := {s = 0, p = 0, l = 0}
+		var n := {settlement = 0, peak = 0, lake = 0}
 		for key: String in hud.visited:
-			n[key.left(1)] += 1
+			n[key.get_slice(":", 0)] += 1
 		var counts := {settlement = 0, peak = 0, lake = 0}
 		for place: Dictionary in hud.places():
 			counts[place.kind] += 1
-		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.s, counts.settlement, n.p, counts.peak]
+		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.settlement, counts.settlement, n.peak, counts.peak]
 		if counts.lake > 0:
-			text += " · озёр %d из %d" % [n.l, counts.lake]
+			text += " · озёр %d из %d" % [n.lake, counts.lake]
 		return text
 
 	## Маркер у края карты остаётся внутри её рамки

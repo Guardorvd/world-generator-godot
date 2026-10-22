@@ -511,7 +511,7 @@ func _open_settlement() -> void:
 	_snap()
 	_dragging = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.settlement_panel.open(village, hud.places(), bike.distance_to(player) < 4.0)
+	hud.settlement_panel.open(village, world, hud.places(), bike.distance_to(player) < 4.0)
 
 
 func _close_settlement(capture := true) -> void:

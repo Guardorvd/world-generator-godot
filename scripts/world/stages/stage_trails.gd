@@ -426,7 +426,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		surface.build_structures()
 		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
 		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
-		var kind := "road" if minf(st[a].get("importance", 1.0), st[b].get("importance", 1.0)) >= 0.6 else "trail"
+		var kind := "road" if main_road(st[a], st[b]) else "trail"
 		_add_trail(w, q, kind, road_cost, state.on_axis, surface)
 		paths.append([a, b, q, true, best[2]])
 		joined[b] = 1
@@ -464,6 +464,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if not a.connections.has(b.i): a.connections.append(b.i)
 		if not b.connections.has(a.i): b.connections.append(a.i)
 	_clear_huts(w)
+
+
+## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
+static func main_road(a: Dictionary, b: Dictionary) -> bool:
+	return minf(a.get("importance", 1.0), b.get("importance", 1.0)) >= 0.6
 
 
 ## Дешёвая оценка направления до A*: ширина воды, крутизна и важность центров.
