@@ -81,9 +81,11 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	hud.settlement_panel.closed.connect(_close_settlement)
 	hud.settlement_panel.destination_selected.connect(_choose_settlement_route)
 	hud.settlement_panel.bike_requested.connect(_recall_bike)
+	var scene_started := t
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
 		_grass_mesh = Models.grass_mesh()
+	t = _mark("start_models_ms", t)
 	$Terrain.material_override = TerrainBuilder.material(loaded.terrain_image, loaded.forest_surface)
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
@@ -91,6 +93,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override)
 	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.
 	loaded.terrain_arrays = []
+	t = _mark("start_material_terrain_setup_ms", t)
 	for node: Node in WaterBuilder.build(world, loaded.water_arrays):
 		$Water.add_child(node)
 		if node.name == "Ocean":
@@ -98,7 +101,9 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	water_effects = WaterEffects.new()
 	water_effects.setup($Water)
 	$Water.add_child(water_effects)
+	t = _mark("start_water_ms", t)
 	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
+	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
 	windows = built.windows
@@ -107,8 +112,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	fire_light.omni_range = 14.0
 	fire_light.visible = false
 	$Settlements.add_child(fire_light)
+	t = _mark("start_settlements_ms", t)
 	StructuresBuilder.build($Structures, heights)
-	t = _mark("start_scene_ms", t)
+	t = _mark("start_structures_ms", t)
+	load_timings.start_scene_ms = (t - scene_started) / 1000.0
 
 	player = PlayerState.spawn(world, heights)
 	terrain_stream.update(player.x, player.z, true, true, NEAR)

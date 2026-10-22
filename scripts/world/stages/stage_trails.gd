@@ -61,23 +61,32 @@ const BENCH_CROSS := 0.65 # полка не должна превращатьс�
 static func run(w: WorldData, step: Callable) -> void:
 	var started_us := Time.get_ticks_usec()
 	_build_cost(w)
+	var detail_us := Time.get_ticks_usec()
+	w.generation_profile.cost_ms = (detail_us - started_us) / 1000.0
 	w.path_mask = PackedByteArray()
 	w.path_mask.resize(w.N)
 	w.trails = []
 	var surface := Heightfield.new(w, false)
+	w.generation_profile.route_heightfield_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	detail_us = Time.get_ticks_usec()
 	var heights := PackedFloat32Array()
 	heights.resize(w.N)
 	for i in w.N:
 		# По воде ищется мост, поэтому учитывается уровень воды, а не морское дно.
 		heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
 	var finder := Pathfinder.new(w.W, w.H, heights)
+	w.generation_profile.finder_setup_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	detail_us = Time.get_ticks_usec()
 	_animal_trails(w, finder)
+	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	_route_surface(finder, surface, WIDTHS.road)
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface, step)
 	_route_surface(finder, surface, WIDTHS.mountain)
 	step.call(0.74, "Прокладка горных троп")
+	detail_us = Time.get_ticks_usec()
 	_mountain_trails(w, finder, surface)
+	w.generation_profile.mountain_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	if Pathfinder.profile_searches:
 		w.generation_profile.merge(finder.search_stats())
 		w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
@@ -454,7 +463,9 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	_route_surface(finder, surface, WIDTHS.trail)
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
 	finder.search_budget = w.N * maxi(1, keep.size())
+	var detail_us := Time.get_ticks_usec()
 	_second_ways(w, finder, paths, road_cost, state, step)
+	w.generation_profile.secondary_roads_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	finder.search_budget = -1
 	for s: Dictionary in w.settlements:
 		s.connections = []
@@ -463,8 +474,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		var b: Dictionary = w.settlements[e[1]]
 		if not a.connections.has(b.i): a.connections.append(b.i)
 		if not b.connections.has(a.i): b.connections.append(a.i)
+	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
 	_clear_huts(w)
+	w.generation_profile.layout_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 
 
 ## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
@@ -1237,6 +1250,10 @@ static func _key(a: int, b: int) -> String:
 
 ## Горные тропы ответвляются от ближайшего доступного пути людей, а не обязательно от поселения.
 static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfield = null) -> void:
+	var started_us := Time.get_ticks_usec()
+	var nearest_us := 0
+	var search_us := 0
+	var add_us := 0
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
 	for span: Dictionary in w.bridges + w.tunnels:
@@ -1248,17 +1265,11 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	for i in w.N:
 		if river[i] == 0:
 			continue
-		var unsafe := w.slope[i] > FORD_SLOPE
-		if surface != null:
-			# Узкий глубокий участок может лежать между центрами клеток.
-			# Горные тропы не строят мостов: заранее закрываем такой проход.
-			for dz in [-0.4, 0.0, 0.4]:
-				for dx in [-0.4, 0.0, 0.4]:
-					if surface.depth_at((i % w.W + 0.5 + dx) * GameConfig.TILE, (i / w.W + 0.5 + dz) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15:
-						unsafe = true
-		if unsafe and on_axis[i] == 0:
+		if on_axis[i] == 0 and _unsafe_ford(w, surface, i):
 			w.cost[i] = INF
+	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	for pk in w.peaks:
+		var detail_us := Time.get_ticks_usec()
 		var best := -1
 		var bd := INF
 		if w.path_mask[pk.i] >= 2:
@@ -1270,8 +1281,29 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 			if d < bd:
 				bd = d
 				best = i
+		nearest_us += Time.get_ticks_usec() - detail_us
 		if best >= 0 and bd < w.W * 0.4:
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
+			detail_us = Time.get_ticks_usec()
 			var p := finder.find_path(w.cost, best, pk.i, MOUNTAIN_CLIMB, MOUNTAIN_GRADE)
+			search_us += Time.get_ticks_usec() - detail_us
+			detail_us = Time.get_ticks_usec()
 			if p.size() > 0:
 				_add_trail(w, p, "mountain", PackedFloat32Array(), on_axis, surface)
+			add_us += Time.get_ticks_usec() - detail_us
+	w.generation_profile.mountain_nearest_ms = nearest_us / 1000.0
+	w.generation_profile.mountain_search_ms = search_us / 1000.0
+	w.generation_profile.mountain_add_ms = add_us / 1000.0
+
+
+## Глубина только читается: одного нарушения достаточно, чтобы закрыть клетку.
+## Проверяем и точки между центрами клеток — там может проходить узкое глубокое русло.
+static func _unsafe_ford(w: WorldData, surface: Heightfield, i: int) -> bool:
+	if w.slope[i] > FORD_SLOPE:
+		return true
+	if surface != null:
+		for dz in [-0.4, 0.0, 0.4]:
+			for dx in [-0.4, 0.0, 0.4]:
+				if surface.depth_at((i % w.W + 0.5 + dx) * GameConfig.TILE, (i / w.W + 0.5 + dz) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15:
+					return true
+	return false

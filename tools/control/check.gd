@@ -232,6 +232,7 @@ func _process(delta: float) -> bool:
 			result.load_s = snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.01)
 			timing.load = result.load_s
 			load_ms = game.load_timings.duplicate()
+			load_ms.generation_profile = game.world.generation_profile.duplicate()
 			game.paused = true
 			main.hud.visible = false
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -240,7 +241,10 @@ func _process(delta: float) -> bool:
 			yaw0 = game.yaw
 			result.loaded_memory = _memory()
 			var id := Dev.world_id(seed_text, size)
-			Dev.save_json(out.path_join("stats_%s.json" % id), Dev.world_stats(game.world))
+			var stats := Dev.world_stats(game.world, true)
+			Dev.save_json(out.path_join("fingerprint_%s.json" % id), stats.fingerprint)
+			stats.erase("fingerprint")
+			Dev.save_json(out.path_join("stats_%s.json" % id), stats)
 			if "map" in want_views:
 				_save(main.hud.map_tex.get_image(), "%s_map" % id, true)
 			for v: Dictionary in Dev.views(game):

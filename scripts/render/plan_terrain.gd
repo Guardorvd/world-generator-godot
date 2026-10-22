@@ -21,6 +21,14 @@ var checked_at := Vector2.INF
 ## Один проход по готовым треугольникам в потоке WorldLoader. Никакой новой триангуляции:
 ## общие высоты, нормали, UV, цвета и дорожные атрибуты остаются побайтно теми же.
 static func partition(arrays: Array) -> Dictionary:
+	var fast := Grid.fast_grid()
+	if fast != null and not arrays.is_empty():
+		return fast.PartitionTerrain(arrays, GameConfig.TILE, CELLS)
+	return partition_reference(arrays)
+
+
+## Эталон и путь для сборки без .NET.
+static func partition_reference(arrays: Array) -> Dictionary:
 	var out := {}
 	if arrays.is_empty():
 		return out

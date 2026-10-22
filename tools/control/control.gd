@@ -103,7 +103,7 @@ static func process_memory() -> Dictionary:
 
 
 ## Сводка мира: числа, по которым видно, что изменилось, и хеши массивов (как в selftest)
-static func world_stats(w: WorldData) -> Dictionary:
+static func world_stats(w: WorldData, include_fingerprint := false) -> Dictionary:
 	var land := 0
 	var lake := 0
 	var road_cells := 0
@@ -129,7 +129,7 @@ static func world_stats(w: WorldData) -> Dictionary:
 	var sites := {}
 	for s in w.sites:
 		sites[s.type] = int(sites.get(s.type, 0)) + 1
-	return {
+	var stats := {
 		seed = w.seed_text, size = w.W,
 		land_share = snappedf(float(land) / w.N, 0.001),
 		lake_cells = lake,
@@ -150,6 +150,9 @@ static func world_stats(w: WorldData) -> Dictionary:
 		hash_paths = fp.path_mask,
 		hash_biome = fp.biome,
 	}
+	if include_fingerprint:
+		stats.fingerprint = fp
+	return stats
 
 
 static func _rounded(d: Dictionary) -> Dictionary:
