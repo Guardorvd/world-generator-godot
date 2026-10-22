@@ -74,14 +74,13 @@ func _init() -> void:
 			var d := maxf(maxf(path_x - p.x, p.x - path_x - 1.0), 0.0)
 			if d < r + 0.25:
 				path_bad += 1
-		for cy in range(maxi(0, floori((p.y - 3.0) / w.CS)), mini(w.CH - 1, floori((p.y + 3.0) / w.CS)) + 1):
-			for cx in range(maxi(0, floori((p.x - 3.0) / w.CS)), mini(w.CW - 1, floori((p.x + 3.0) / w.CS)) + 1):
-				for other in w.chunks[cy * w.CW + cx]:
-					if other >= o:
-						continue
-					var gap: float = 0.18 + 0.55 * (r + Biomes.CROWN_RADIUS[w.obj_k[other]] * w.obj_s[other])
-					if p.distance_to(Vector2(w.obj_x[other], w.obj_y[other])) < gap - 0.00001:
-						spacing_bad += 1
+		# С 8.4 отступы держатся внутри чанка (чанки раскладываются независимо), соседей через границу не сравниваем
+		for other in w.chunks[floori(p.y / w.CS) * w.CW + floori(p.x / w.CS)]:
+			if other >= o:
+				continue
+			var gap: float = 0.18 + 0.55 * (r + Biomes.CROWN_RADIUS[w.obj_k[other]] * w.obj_s[other])
+			if p.distance_to(Vector2(w.obj_x[other], w.obj_y[other])) < gap - 0.00001:
+				spacing_bad += 1
 	check(young > 20 and old > 20, "Нужны молодняк и крупные старые деревья")
 	check(species.size() >= 3 and occupied.size() > 50, "Нужны смешанные лесные массивы")
 	check(spacing_bad == 0 and path_bad == 0 and hut_bad == 0, "Кроны и соседи должны учитывать размеры, пути, воду и дома")

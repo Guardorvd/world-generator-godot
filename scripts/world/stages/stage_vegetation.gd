@@ -17,6 +17,13 @@ const LINE_HI := 0.4     # а здесь их остаётся треть
 const STEEP := 0.6       # крутизна, с которой деревьев меньше, а камней больше
 const SHORE := 3.0       # клеток до воды: прибрежные рощи, оазисы, тростник
 const LAYER := 1         # слой растительности в WGRandom.hash_cell (с 8.4)
+# 9.1: лесистость местности — медленный шум лесного Simplex (крупнейшая волна около 1,7 км, мельчайшая ~200 м)
+# плюс доля лесов всего мира по сиду. Зависит только от клетки, поэтому массивы идут через границы областей.
+const WOOD_SCALE := 420.0
+const WOOD_OCT := 4
+const WOOD_OX := -133.0
+const WOOD_OY := 271.0
+const SPREAD := 0.55     # насколько густо массив заходит из леса на соседние луга
 
 
 static func run(w: WorldData) -> void:
@@ -76,7 +83,19 @@ static func fields(w: WorldData) -> Dictionary:
 			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
 				village[y * W + x] = 1
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
-		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village}
+		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
+		wood = wood_rect(w, 0, 0, W, H)}
+
+
+## Поле лесистости прямоугольника клеток (9.1): то же поле внутри плана и за его краем
+static func wood_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> PackedFloat64Array:
+	return Parallel.fbm_rect(w.noise.forest, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY)
+
+
+## Доля лесов мира по сиду (9.1), -0.36..0.36: одни миры лесистые, другие открытые. Без квот — только сдвиг
+## порога, поэтому массивы по-прежнему разного размера.
+static func world_cover(seed_num: int) -> float:
+	return 0.36 * (WGRandom.new(WGRandom.derive(seed_num, "forest.cover")).next_float() * 2.0 - 1.0)
 
 
 ## Растительность клеток [x0, x1) × [y0, y1) одного чанка (с 8.4). Клетка (x, y) — в общих координатах мира
@@ -101,6 +120,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var village: PackedByteArray = f.get("village", PackedByteArray())
 	var light_f: PackedFloat32Array = f.get("light", PackedFloat32Array())
 	var age_n: PackedFloat64Array = f.get("age_n", PackedFloat64Array())
+	var wood: PackedFloat64Array = f.get("wood", PackedFloat64Array())
+	var has_wood := not wood.is_empty()
+	var cover_bias := world_cover(seed_num)
 	var has_river := not river.is_empty()
 	var has_path := not dist_path.is_empty()
 	var has_village := not village.is_empty()
@@ -134,13 +156,22 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			var age := _ss(-0.45, 0.45, age_raw) # = age_at, без лишнего вызова
 			# smoothstep развёрнут на месте
 			var interior := 0.0 # насколько клетка в глубине леса (0 — опушка или поле)
+			# 9.1: лесистость — крупный шум и доля лесов мира, мелкий лесной шум только рвёт опушки
+			var wv: float = wood[i] if has_wood else w.noise.forest.fbm(x / WOOD_SCALE + WOOD_OX, y / WOOD_SCALE + WOOD_OY, WOOD_OCT)
+			var cover := wv * 1.15 + cover_bias + fv * 0.4
 			if dens > 0.3:
-				var t := clampf((fv + 0.35) / (0.15 + 0.35), 0.0, 1.0)
+				var t := clampf((cover + 0.3) / (0.12 + 0.3), 0.0, 1.0)
 				interior = t * t * (3.0 - 2.0 * t)
 				dens *= interior * _ss(-0.45, -0.12, stony[i]) * lerpf(1.35, 0.75, age)
 			else:
 				var t := clampf((fv - 0.1) / (0.5 - 0.1), 0.0, 1.0)
 				dens *= 0.3 + 1.8 * (t * t * (3.0 - 2.0 * t)) # рощи в открытой местности
+				# там, где лесистость высокая, массив продолжается и на влажных лугах
+				if bi == Biomes.GRASS:
+					var spread := _ss(0.2, 0.55, cover) * _ss(0.3, 0.42, moist[i])
+					if spread > 0.0:
+						interior = spread
+						dens = maxf(dens, SPREAD * spread)
 				# у воды в сухих и открытых краях — прибрежные рощи и оазисы
 				if dw < SHORE and _dry_open(bi) and temp[i] > 0.24:
 					dens += 0.22 * (1.0 - dw / SHORE)
