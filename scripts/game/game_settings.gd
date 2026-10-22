@@ -29,7 +29,7 @@ const DRAW_LEVELS := [
 	{title = "средняя", trees = 330.0, grass = 140.0, under = 140.0},
 	{title = "высокая", trees = 450.0, grass = 300.0, under = 300.0},
 ]
-const DEFAULT_DRAW := 0
+const DEFAULT_DRAW := 2 # высокая (решение пользователя в 9.8+)
 
 static var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 static var invert_y := DEFAULT_INVERT_Y

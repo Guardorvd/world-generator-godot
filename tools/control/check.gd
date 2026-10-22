@@ -13,7 +13,7 @@ extends SceneTree
 ##   Север-1234@512 снимается и меряется за одну генерацию.
 ## Общие: --out <папка> (по умолчанию runs/<версия>), --base <папка> (по умолчанию прошлая версия в runs),
 ##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1,
-##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию 0).
+##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию как в игре — высокая).
 ## Кэш: в папке прогона лежит check.json; если тот же коммит без правок уже снят с теми же видами и FPS,
 ## мир не генерируется повторно. Поэтому «было» снимается один раз до правок и дальше берётся из кэша.
 
@@ -149,7 +149,7 @@ func _run_deep() -> void:
 		else:
 			views[id] = [cfg.seed, int(s), "none", "on"]
 	var pass_args: PackedStringArray = ["--out", out, "--look", str(look_s), "--road", str(road_s),
-		"--shadows", Dev.arg("shadows", "on"), "--draw", Dev.arg("draw", "0"), "--scale", Dev.arg("scale", "1"), "--child", "1"]
+		"--shadows", Dev.arg("shadows", "on"), "--draw", Dev.arg("draw", str(GameSettings.DEFAULT_DRAW)), "--scale", Dev.arg("scale", "1"), "--child", "1"]
 	if Dev.arg("hours") != "":
 		pass_args.append_array(["--hours", Dev.arg("hours")])
 	if "--again" in OS.get_cmdline_user_args():
@@ -217,7 +217,7 @@ func _process(delta: float) -> bool:
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
 				GameSettings.shadows = Dev.arg("shadows", "on") != "off"
-				GameSettings.draw = int(Dev.arg("draw", "0"))
+				GameSettings.draw = int(Dev.arg("draw", str(GameSettings.DEFAULT_DRAW)))
 				result.draw = GameSettings.draw
 				root.scaling_3d_scale = clampf(float(Dev.arg("scale", "1")), 0.25, 1.0)
 				result.render = {method = RenderingServer.get_current_rendering_method(), viewport = str(root.size),
