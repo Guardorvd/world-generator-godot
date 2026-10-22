@@ -113,7 +113,9 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	if continuous and b.land_impact > 0.0:
 		_landing = maxf(_landing, clampf(b.land_impact / 10.0, 0.0, 1.0))
 	# В полёте компактная стойка, при приземлении сгибаем колени и локти.
-	var crouch := (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.012
+	# Два мягких импульса за оборот: корпус слегка пружинит при каждом нажатии.
+	var pedal_bob := (1.0 - cos(b.crank * 2.0)) * effort * 0.003
+	var crouch := (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.012 + pedal_bob
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.22
 	var blend := 1.0 - exp(-maxf(dt, 0.0) * 10.0)
 	var targets := [shift, side, crouch, look]

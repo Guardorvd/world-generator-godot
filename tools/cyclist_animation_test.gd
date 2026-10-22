@@ -43,6 +43,16 @@ func run() -> void:
 	root.add_child(bike)
 	reset()
 	var neutral := bone("Head")
+	# Pedalling adds a small vertical response; coasting lets it settle completely.
+	for i in 60:
+		state.crank += 4 * DT
+		advance(1)
+	check(bike._cur[BikeView.S_CROUCH] > 0.001, "Pedalling adds subtle body bob")
+	contacts()
+	for i in 120:
+		advance()
+	check(bike._cur[BikeView.S_CROUCH] < 0.00001, "Coasting settles pedal bob")
+	reset()
 	for i in 30:
 		state.speed += 4 * DT
 		state.crank += 4 * DT

@@ -14,7 +14,8 @@ roughness = 0.8
 
 [sub_resource type="StandardMaterial3D" id="m_metal"]
 albedo_color = Color(0.47, 0.55, 0.58, 1)
-roughness = 0.8
+metallic = 0.65
+roughness = 0.38
 
 [sub_resource type="TorusMesh" id="mesh1"]
 inner_radius = 0.29
@@ -129,6 +130,16 @@ ring_segments = 6
 
 [sub_resource type="BoxMesh" id="grip"]
 size = Vector3(0.105, 0.047, 0.05)
+
+[sub_resource type="CylinderMesh" id="hub"]
+top_radius = 0.035
+bottom_radius = 0.035
+height = 0.13
+radial_segments = 10
+rings = 0
+
+[sub_resource type="BoxMesh" id="saddle_top"]
+size = Vector3(0.145, 0.018, 0.19)
 
 [node name="Bike" type="Node3D"]
 script = ExtResource("1_bike")
@@ -286,6 +297,11 @@ rotation = Vector3(0, 0, 1.5708)
 mesh = SubResource("rim")
 material_override = SubResource("m_metal")
 
+[node name="Hub" type="MeshInstance3D" parent="FrontWheel"]
+rotation = Vector3(0, 0, 1.5708)
+mesh = SubResource("hub")
+material_override = SubResource("m_metal")
+
 [node name="SpokeExtra1" type="MeshInstance3D" parent="FrontWheel"]
 rotation = Vector3(0.5235987750000001, 0, 0)
 mesh = SubResource("mesh2")
@@ -309,6 +325,11 @@ material_override = SubResource("m_metal")
 [node name="Rim" type="MeshInstance3D" parent="RearWheel"]
 rotation = Vector3(0, 0, 1.5708)
 mesh = SubResource("rim")
+material_override = SubResource("m_metal")
+
+[node name="Hub" type="MeshInstance3D" parent="RearWheel"]
+rotation = Vector3(0, 0, 1.5708)
+mesh = SubResource("hub")
 material_override = SubResource("m_metal")
 
 [node name="SpokeExtra1" type="MeshInstance3D" parent="RearWheel"]
@@ -340,3 +361,8 @@ material_override = SubResource("m_tire")
 position = Vector3(0.23, 0, 0)
 mesh = SubResource("grip")
 material_override = SubResource("m_tire")
+
+[node name="Top" type="MeshInstance3D" parent="Saddle"]
+position = Vector3(0, 0.025, 0.03)
+mesh = SubResource("saddle_top")
+material_override = SubResource("m_frame")
