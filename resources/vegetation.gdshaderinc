@@ -23,6 +23,12 @@ uniform float shelter_ao = 0.8;    // свет неба под сомкнуты�
 uniform float fade_far = 1.0e9;
 uniform float fade_len = 1.0;
 global uniform vec2 veg_center;
+// Поредение травы и подлеска дальше thin_full (м, 0 — нет): остаётся доля (thin_full / расстояние)²;
+// экземпляр с порогом INSTANCE_CUSTOM.x гаснет, когда доля опускается от 1,3 порога до порога.
+// Считается по нынешнему расстоянию, а не по раскладке: новая раскладка ничего не включает рывком.
+// thin_grow — пучки за thin_full крупнее, тоже по нынешнему расстоянию.
+uniform float thin_full = 0.0;
+uniform float thin_grow = 0.0;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 
@@ -36,7 +42,16 @@ void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
-	v_fade = clamp((fade_far - distance(origin.xz, veg_center)) / fade_len, 0.0, 1.0);
+	float dist = distance(origin.xz, veg_center);
+	v_fade = clamp((fade_far - dist) / fade_len, 0.0, 1.0);
+	if (thin_full > 0.0) {
+		float keep = min(1.0, thin_full * thin_full / max(dist * dist, 1.0));
+		float rank = INSTANCE_CUSTOM.x;
+		if (rank > 0.0) {
+			v_fade *= clamp((keep - rank) / max(min(1.0, rank * 1.3) - rank, 1e-4), 0.0, 1.0);
+		}
+		VERTEX *= 1.0 + thin_grow * (1.0 - keep);
+	}
 	if (sway > 0.0 || flutter > 0.0) {
 		// Порыв: медленная волна вдоль ветра и вторая, поперёк, чтобы соседние деревья не качались строем.
 		float along = dot(origin.xz, WIND_DIR);

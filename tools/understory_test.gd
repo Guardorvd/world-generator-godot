@@ -67,7 +67,7 @@ func run() -> void:
 		counts.append(entry.count)
 		check(entry.mm.visible_instance_count == entry.count, "Буферы подлеска должны передаваться на отображение")
 		for n: int in entry.count:
-			var offset := n * 16
+			var offset := n * VegetationLayer.STRIDE
 			var buf: PackedFloat32Array = entry.buf
 			var x := buf[offset + 3]
 			var z := buf[offset + 11]

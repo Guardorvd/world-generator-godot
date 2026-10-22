@@ -27,6 +27,10 @@ const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подле�
 ## Трава и подлесок гаснут на FADE_AHEAD раньше своего радиуса: раскладка обновляется через 8 м пути
 ## и догоняет игрока не сразу, а её край должен быть уже невидим.
 const FADE_SHARE := 0.2
+## Трава и подлесок: преобразование (12), цвет (4) и порог поредения в INSTANCE_CUSTOM.x (4)
+const STRIDE := 20
+## Пучки травы за GRASS_R крупнее до 35 % (с 9.9+ — в шейдере, по нынешнему расстоянию)
+const GRASS_GROW := 0.35
 const FADE_AHEAD := 12.0
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
@@ -114,10 +118,10 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
 	_set_radii(GameSettings.draw)
-	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false).multimesh
+	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb()
-	grass_buf = _buffer(_grass_cap(), 16)
+	grass_buf = _buffer(_grass_cap(), STRIDE)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
@@ -129,10 +133,10 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
 		var far := Placement.priority(understory.size()) < 2
 		var cap := _understory_cap(far)
-		var node := _multimesh(mesh, mat, cap, true, shadows)
+		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		node.visibility_range_end = under_r if far else grass_r
 		node.visibility_range_end_margin = 8.0
-		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, 16), count = 0, cap = cap, far = far,
+		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
 			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
 	_grass_mat = grass_mat
 	_apply_fade()
@@ -145,8 +149,11 @@ func _apply_fade() -> void:
 			if _defs[kind].has(part + "_mat"):
 				_fade(_defs[kind][part + "_mat"], tree_r, 0.0)
 	_fade(_grass_mat, grass_r, FADE_AHEAD)
+	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
+	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
 	for entry: Dictionary in understory:
 		_fade(entry.node.material_override, under_r if entry.far else grass_r, FADE_AHEAD)
+		entry.node.material_override.set_shader_parameter("thin_full", UNDERSTORY_FAR_R if entry.far else GameConfig.GRASS_R)
 
 
 static func _fade(mat: ShaderMaterial, radius: float, ahead: float) -> void:
@@ -193,13 +200,13 @@ func set_draw(level: int) -> bool:
 	_set_radii(level)
 	grass.visible_instance_count = 0
 	grass.instance_count = _grass_cap()
-	grass_buf = _buffer(grass.instance_count, 16)
+	grass_buf = _buffer(grass.instance_count, STRIDE)
 	_grass_n = 0
 	for entry: Dictionary in understory:
 		entry.cap = _understory_cap(entry.far)
 		entry.mm.visible_instance_count = 0
 		entry.mm.instance_count = entry.cap
-		entry.buf = _buffer(entry.cap, 16)
+		entry.buf = _buffer(entry.cap, STRIDE)
 		entry.count = 0
 		entry.node.visibility_range_end = under_r if entry.far else grass_r
 	for key: Vector3i in veg:
@@ -234,10 +241,11 @@ static func _radius(mesh: Mesh) -> float:
 	return box.position.length() + box.size.length()
 
 
-func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bool = true) -> MultiMeshInstance3D:
+func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bool = true, custom: bool = false) -> MultiMeshInstance3D:
 	var mm := MultiMesh.new()
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = colors
+	mm.use_custom_data = custom
 	mm.mesh = mesh
 	mm.instance_count = count
 	mm.visible_instance_count = 0
@@ -609,12 +617,14 @@ func _fill_grass(px: float, pz: float) -> void:
 			lush *= _fill_understory(i, j, surface, light, px, pz)
 			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
-			# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности)
-			var keep := minf(1.0, GameConfig.GRASS_R * GameConfig.GRASS_R / (d2 * TILE * TILE))
+			# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
+			# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на FADE_AHEAD ближе.
+			var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R)
 			for m in cnt:
-				if n >= grass_buf.size() / 16:
+				if n >= grass_buf.size() / STRIDE:
 					break
-				if keep < 1.0 and WGRandom.hash2(i * 5 + m, j, 41) > keep:
+				var rank := WGRandom.hash2(i * 5 + m, j, 41)
+				if rank > keep:
 					continue
 				var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
 				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
@@ -628,27 +638,35 @@ func _fill_grass(px: float, pz: float) -> void:
 				var y := heights.ground_at(x, z)
 				if heights.depth_at(x, z) > 0.0:
 					continue
-				var s := (0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7) * (1.0 + 0.35 * (1.0 - keep))
+				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
 				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9)
-				_put_xform(buf, n * 16, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, sy)
+				_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, sy)
 				var origin := Vector3(x, y - 0.05, z)
 				low = low.min(origin)
 				high = high.max(origin)
 				var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
-				buf[n * 16 + 12] = tc[0] * v
-				buf[n * 16 + 13] = tc[1] * v
-				buf[n * 16 + 14] = tc[2] * v
-				buf[n * 16 + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
+				buf[n * STRIDE + 12] = tc[0] * v
+				buf[n * STRIDE + 13] = tc[1] * v
+				buf[n * STRIDE + 14] = tc[2] * v
+				buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
+				buf[n * STRIDE + 16] = rank
 				n += 1
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
 	for priority in 3:
 		for site: Array in _understory_sites:
 			if Placement.priority(site[0]) == priority:
-				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5])
+				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
 	_fill_tree_roots(px, pz)
 	_filter_grass()
 	_understory_sites.clear()
+
+
+## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
+## с запасом: игрок до следующей раскладки может подъехать на FADE_AHEAD ближе (шейдер считает без запаса).
+static func _keep(d: float, full: float) -> float:
+	var near := maxf(d - FADE_AHEAD, 1.0)
+	return minf(1.0, full * full / (near * near))
 
 
 ## Возвращает множитель низкой травы по характеру леса (вне леса 1).
@@ -694,16 +712,17 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 		if d > (under_r if far else grass_r):
 			continue
 		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
-		if d > full and WGRandom.hash2(i * 8 + m, j, seed + 8) > full * full / (d * d):
+		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
+		if rank > _keep(d, full):
 			continue
 		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
-		_understory_sites.append([kind, x, z, rot, scale, tint])
+		_understory_sites.append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
 
 
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1) -> void:
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0) -> void:
 	var entry: Dictionary = understory[kind]
 	if entry.count >= entry.cap:
 		return
@@ -716,7 +735,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	if not placement.objects_clear(x, z, rot, scale, local_box, radius, owner):
 		return
 	var pos := Vector3(x, heights.ground_at(x, z) - 0.015, z)
-	var offset: int = entry.count * 16
+	var offset: int = entry.count * STRIDE
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
 	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind not in [Floor.SNAG, Floor.STUMP, Floor.BOULDER]):
 		# Почвенные детали и валежник следуют склону; сухостой, пни и валуны остаются вертикальными.
@@ -735,6 +754,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	for c in 3:
 		entry.buf[offset + 12 + c] = tint
 	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
+	entry.buf[offset + 16] = rank
 	entry.low = entry.low.min(box.position)
 	entry.high = entry.high.max(box.end)
 	entry.count += 1
@@ -758,7 +778,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 func _filter_grass() -> void:
 	var write := 0
 	for n in _grass_n:
-		var offset := n * 16
+		var offset := n * STRIDE
 		var pos := Vector3(grass_buf[offset + 3], grass_buf[offset + 7], grass_buf[offset + 11])
 		var xf := Transform3D(Basis(Vector3(grass_buf[offset], 0, grass_buf[offset + 8]), Vector3(0, grass_buf[offset + 5], 0), Vector3(grass_buf[offset + 2], 0, grass_buf[offset + 10])), pos)
 		var box: AABB = xf * _grass_box
@@ -769,8 +789,8 @@ func _filter_grass() -> void:
 		if not placement.objects_clear(pos.x, pos.z, 0.0, 1.0, local_box, Vector2(reach.x, reach.z).length()):
 			continue
 		if write != n:
-			for c in 16:
-				grass_buf[write * 16 + c] = grass_buf[offset + c]
+			for c in STRIDE:
+				grass_buf[write * STRIDE + c] = grass_buf[offset + c]
 		write += 1
 	_grass_n = write
 

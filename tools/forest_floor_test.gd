@@ -59,7 +59,7 @@ func run() -> void:
 		saved.append(entry.buf.duplicate())
 		check(entry.count > 0, "Смешанный лес должен содержать подстилку, корни, ветки, валежник, сухостой и камни: %d" % kind)
 		for n: int in entry.count:
-			var offset := n * 16
+			var offset := n * VegetationLayer.STRIDE
 			var buf: PackedFloat32Array = entry.buf
 			var pos := Vector3(buf[offset + 3], buf[offset + 7], buf[offset + 11])
 			var xf := Transform3D(Basis(Vector3(buf[offset], buf[offset + 4], buf[offset + 8]), Vector3(buf[offset + 1], buf[offset + 5], buf[offset + 9]), Vector3(buf[offset + 2], buf[offset + 6], buf[offset + 10])), pos)

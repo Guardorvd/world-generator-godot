@@ -56,7 +56,7 @@ func run() -> void:
 	w.obj_y[0] = 128.5
 	veg._fill_grass(516.0, 510.0)
 	for n in veg._grass_n:
-		check(h.depth_at(veg.grass_buf[n * 16 + 3], veg.grass_buf[n * 16 + 11]) == 0.0, "Трава не должна появляться на затопленном краю берега")
+		check(h.depth_at(veg.grass_buf[n * VegetationLayer.STRIDE + 3], veg.grass_buf[n * VegetationLayer.STRIDE + 11]) == 0.0, "Трава не должна появляться на затопленном краю берега")
 	w.lake.fill(0)
 	veg.placement.clear_occupied()
 	# Молодняк не должен расти прямо из живого ствола или валуна.
