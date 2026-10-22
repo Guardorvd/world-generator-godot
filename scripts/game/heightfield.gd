@@ -32,13 +32,22 @@ var _cells := {}                    # клетка -> номера сооруж�
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 var path_timings := {}
 var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
+## 9.7: отрезки лент для C# (FastGrid.Water.cs): по 12 чисел (a.left, a.right, b.left, b.right) и пары клетка — отрезок
+var _seg_pts := PackedFloat32Array()
+var _pair_cells := PackedInt32Array()
+var _pair_segs := PackedInt32Array()
+var _fast_water: Object
 
 
 ## with_structures — мир уже готов: сразу выровнять полотно путей (RoadBed, с 4.3) и посчитать мосты
 ## и туннели (build_structures). WorldLoader строит рельеф раньше, чем тропы готовы, и передаёт false:
 ## пути, мосты и туннели в это время ещё пишет генератор (его рельеф для поиска — без полотна)
-## rivers_only — только ленты рек и _river_cells (StageRivers берёт из них коридор, остальное не нужно)
-func _init(w: WorldData, with_structures := true, rivers_only := false) -> void:
+## rivers_only — только ленты рек и _river_cells (StageRivers берёт из них коридор, остальное не нужно).
+## С 9.7 этот рельеф строится один раз (StageRivers, complete_water) и раздаётся копиями (base_of).
+## Без w — пустой объект для copy.
+func _init(w: WorldData = null, with_structures := true, rivers_only := false) -> void:
+	if w == null:
+		return
 	world = w
 	var N := w.N
 	var W := w.W
@@ -73,6 +82,57 @@ func _init(w: WorldData, with_structures := true, rivers_only := false) -> void:
 	_fit_river_banks()
 	if rivers_only:
 		return
+	complete_water()
+	if with_structures:
+		finish_paths()
+
+
+## Базовый рельеф мира без путей и сооружений (9.7): копия общего из StageRivers, пока идёт генерация,
+## иначе построенный заново. Результат тот же, что у Heightfield.new(w, false)
+static func base_of(w: WorldData) -> Heightfield:
+	if w.base_heights != null:
+		return w.base_heights.copy()
+	return Heightfield.new(w, false)
+
+
+## Копия для своих путей, полотна и сооружений: hv своё, остальное общее и только читается
+## (hv_raw, уровни воды, ленты рек). Копировать до finish_paths и build_structures.
+func copy() -> Heightfield:
+	var c := Heightfield.new()
+	c.world = world
+	c.hv = hv.duplicate()
+	c.hv_raw = hv_raw
+	c.water_level = water_level
+	c.ribbons = ribbons
+	c._river_cells = _river_cells
+	c._seg_pts = _seg_pts
+	c._pair_cells = _pair_cells
+	c._pair_segs = _pair_segs
+	return c
+
+
+## C#-копия земли и воды (FastGrid.Water.cs) для дорожного этапа или null: без .NET, с полотном дорог
+## или с землёй за краем карты (их копия не знает). Высоты передаются при каждом вызове: выемки туннелей меняют hv
+func fast_water() -> Object:
+	if road_refinement != null or world.outer != null:
+		return null
+	if _fast_water == null:
+		_fast_water = Grid.fast_grid()
+		if _fast_water == null:
+			return null
+		_fast_water.SetWater(world.W, world.H, TILE, HS, WaterBuilder.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
+			world.lake, world.filled)
+	_fast_water.SetGround(hv)
+	return _fast_water
+
+
+## Уровни воды по клеткам: после того как StageRivers отметил коридор рек (w.river_cells)
+func complete_water() -> void:
+	var w := world
+	var N := w.N
+	var W := w.W
+	if water_level.size() == N:
+		return
 	water_level.resize(N)
 	water_level.fill(-INF)
 	var rc := w.river_cells()
@@ -91,8 +151,6 @@ func _init(w: WorldData, with_structures := true, rivers_only := false) -> void:
 			continue
 		for segment: Dictionary in _river_cells[cell]:
 			water_level[cell] = maxf(water_level[cell], maxf(segment.a.y, segment.b.y))
-	if with_structures:
-		finish_paths()
 
 
 ## Завершить игровой рельеф после генерации путей. Один раз на исходном Heightfield:
@@ -415,12 +473,19 @@ func _fit_river_banks() -> void:
 				lo = lo.min(Vector2(v.x, v.z))
 				hi = hi.max(Vector2(v.x, v.z))
 			var segment := {a = a, b = b}
+			var id := _seg_pts.size() / 12
+			for v: Vector3 in [a.left, a.right, b.left, b.right]:
+				_seg_pts.append(v.x)
+				_seg_pts.append(v.y)
+				_seg_pts.append(v.z)
 			for z in range(maxi(0, floori(lo.y / TILE)), mini(world.H, floori(hi.y / TILE) + 1)):
 				for x in range(maxi(0, floori(lo.x / TILE)), mini(world.W, floori(hi.x / TILE) + 1)):
 					var cell := z * world.W + x
 					if not _river_cells.has(cell):
 						_river_cells[cell] = []
 					_river_cells[cell].append(segment)
+					_pair_cells.append(cell)
+					_pair_segs.append(id)
 
 
 ## Уровень на тех же треугольниках, которые WaterBuilder отдаёт GPU.

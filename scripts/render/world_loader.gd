@@ -34,7 +34,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
 	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
-		side.start(r._prepare.bind(w, px)))
+		side.start(r._prepare.bind(w, px, w.base_heights)))
 	var generated := Time.get_ticks_usec()
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
@@ -81,14 +81,15 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 
 ## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
 ## Возвращает пары [без отмывки, с отмывкой]; при разных разрешениях ненужный вариант пустой.
-func _prepare(w: WorldData, px: int) -> Array:
+## base — общий рельеф генератора (9.7), снятый в момент запуска потока: к концу генерации его уже нет в мире
+func _prepare(w: WorldData, px: int, base: Heightfield = null) -> Array:
 	var t := Time.get_ticks_usec()
 	var painted := [MapBaker.paint(w, px, true, px == 2)]
 	if px != 2:
 		painted.append(MapBaker.paint(w, 2, false, true))
 	timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
-	heights = Heightfield.new(w, false)
+	heights = base.copy() if base != null else Heightfield.new(w, false)
 	timings.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	terrain_arrays = TerrainBuilder.build_arrays(w, heights)

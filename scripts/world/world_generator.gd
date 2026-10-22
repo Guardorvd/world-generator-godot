@@ -51,6 +51,7 @@ static func menu_background(seed_text: String) -> WorldData:
 static func geography(seed_text: String, on_progress: Callable = Callable()) -> WorldData:
 	var w := _geography(seed_text, PLAN_SIZE, on_progress)
 	w.clear_noise_fields()
+	w.base_heights = null
 	return w
 
 
@@ -105,5 +106,6 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	# слой полотна поверх готовых путей: покрытие, без rng и без изменения маршрутов
 	RoadSurface.run(w)
 	w.clear_noise_fields()
+	w.base_heights = null
 	step.call(0.86, "Отрисовка ландшафта")
 	return w

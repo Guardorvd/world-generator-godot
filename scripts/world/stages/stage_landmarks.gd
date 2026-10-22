@@ -119,7 +119,7 @@ static func _place_settlements(w: WorldData) -> void:
 static func lay_out(w: WorldData) -> void:
 	var W := w.W
 	var river := w.river_cells()
-	var ground := Heightfield.new(w, false)
+	var ground := Heightfield.base_of(w)
 	for s: Dictionary in w.settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.layout", floori(s.x), floori(s.y))
 		var town: bool = s.get("town", false)

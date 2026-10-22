@@ -183,6 +183,9 @@ var mountain_bias := 0.3   # распространённость гор: ниж
 var mountain_height := 1.0 # высота горного подъёма
 var foothill_spread := 0.0 # ширина и выраженность предгорий (с 3.6), 0 — без дополнительного пояса
 var outer: OuterLand     # рельеф за краем карты (с 1.9.5), если игра его подключила; иначе null
+## Общий базовый рельеф Heightfield (9.7): от StageRivers до конца генерации, потом null —
+## он ссылается на мир, и постоянная ссылка замкнула бы цикл RefCounted. Брать копии: Heightfield.base_of
+var base_heights: Heightfield
 var h := PackedFloat32Array()        # высота (0 — уровень моря, суша до 1, дно до -1)
 var filled := PackedFloat32Array()   # высота с заполненными впадинами (уровень озёр)
 var elev := PackedFloat32Array()     # StageGeography: высота суши / поверхности озера, океан = 0

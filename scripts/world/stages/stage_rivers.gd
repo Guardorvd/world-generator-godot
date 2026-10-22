@@ -101,6 +101,10 @@ static func run(w: WorldData) -> void:
 	var surface := Heightfield.new(w, false, true)
 	for cell: int in surface._river_cells:
 		w.river_area[cell] = 1
+	# Дальше рельеф, вода и реки не меняются: этот же рельеф (с уровнями воды по готовому коридору)
+	# служит базой загрузчику, дорогам и планировке домов (с 9.7), а не строится каждым заново
+	surface.complete_water()
+	w.base_heights = surface
 
 
 ## Один проход вместо эрозии. Вода в руслах опускается от устья вверх,

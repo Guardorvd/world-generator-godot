@@ -7,6 +7,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/bench.gd -- <зерно> <размер>
 ## По умолчанию Север-1234, окно 256. Также --seed, --size, --gdscript, --out <файл.json>.
 ## --verify-partition / --verify-fords: сравнение с исходными циклами после замера.
+## --fingerprint <файл.json>: сравнить мир с сохранённым fingerprint (selftest.fingerprint) прошлой версии.
 
 const Dev := preload("res://tools/control/control.gd")
 
@@ -86,21 +87,45 @@ func _init() -> void:
 			quit(1)
 			return
 	if args.has("--verify-fords"):
-		var same := true
-		var checked := 0
+		# Рельеф как у горных троп в генерации (9.7): без полотна и рельефа за краем, с сооружениями.
+		# На нём работает и быстрая оценка max_depth_near; игровой рельеф проверяет только полный цикл
 		var w := loaded.world
+		var outer := w.outer
+		w.outer = null
+		var surface := Heightfield.new(w, false)
+		surface.build_structures()
+		var expected := PackedInt32Array()
 		var river := w.river_cells()
+		var checked := 0
 		for i in w.N:
 			if river[i] == 0: continue
-			var expected := w.slope[i] > StageTrails.FORD_SLOPE
+			checked += 1
+			var unsafe := w.slope[i] > StageTrails.FORD_SLOPE
 			for dz in [-0.4, 0.0, 0.4]:
 				for dx in [-0.4, 0.0, 0.4]:
-					if loaded.heights.depth_at((i % w.W + 0.5 + dx) * GameConfig.TILE, (i / w.W + 0.5 + dz) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15:
-						expected = true
-			same = same and expected == StageTrails._unsafe_ford(w, loaded.heights, i)
-			checked += 1
-		print("Ford decision parity: ", same, " (", checked, " cells)")
+					if surface.depth_at((i % w.W + 0.5 + dx) * GameConfig.TILE, (i / w.W + 0.5 + dz) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15:
+						unsafe = true
+			if unsafe:
+				expected.append(i)
+		var no_axis := PackedByteArray()
+		no_axis.resize(w.N)
+		var same := expected == StageTrails._unsafe_fords(w, surface, no_axis)
+		w.outer = outer
+		print("Ford decision parity: ", same, " (", checked, " cells, unsafe ", expected.size(), ")")
 		if not same:
+			quit(1)
+			return
+	var fingerprint := Dev.arg("fingerprint")
+	if fingerprint != "":
+		# Мир тот же, что у прошлой версии: все поля selftest.fingerprint совпадают с сохранёнными
+		var expected: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(fingerprint))
+		var actual: Dictionary = JSON.parse_string(JSON.stringify(preload("res://tools/selftest.gd").fingerprint(loaded.world)))
+		var diff: Array = []
+		for key: String in expected:
+			if str(expected[key]) != str(actual.get(key)):
+				diff.append(key)
+		print("Fingerprint parity: ", diff.is_empty(), " (", expected.size(), " fields)", "" if diff.is_empty() else " differ: " + str(diff))
+		if not diff.is_empty():
 			quit(1)
 			return
 	quit()

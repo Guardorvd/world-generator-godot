@@ -66,7 +66,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.path_mask = PackedByteArray()
 	w.path_mask.resize(w.N)
 	w.trails = []
-	var surface := Heightfield.new(w, false)
+	var surface := Heightfield.base_of(w)
 	w.generation_profile.route_heightfield_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()
 	var heights := PackedFloat32Array()
@@ -218,6 +218,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield, kind := "road") -> Array:
 	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
 	var cross_grade := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
+	var probe: Object = surface.fast_water() # 9.7: проверки отрезков на C#, если рельеф генерации
 	for iteration in 3:
 		var out: Array = [pts[0]]
 		for k in range(1, pts.size() - 1):
@@ -230,7 +231,8 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				fixed = fixed or not on_axis.is_empty() and on_axis[i] != 0
 			var q := {x = lerpf(b.x, a.x, 0.25), y = lerpf(b.y, a.y, 0.25), w = b.w}
 			var r := {x = lerpf(b.x, c.x, 0.25), y = lerpf(b.y, c.y, 0.25), w = b.w}
-			if not fixed and _road_segment(surface, out[-1], q, grade, cross_grade) and _road_segment(surface, q, r, grade, cross_grade) and _road_segment(surface, r, c, grade, cross_grade):
+			if not fixed and _road_segment(surface, out[-1], q, grade, cross_grade, probe) and _road_segment(surface, q, r, grade, cross_grade, probe) \
+					and _road_segment(surface, r, c, grade, cross_grade, probe):
 				out.append(q)
 				out.append(r)
 			else:
@@ -240,7 +242,10 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	return pts
 
 
-static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary, max_grade := ROAD_LIMIT, max_cross := BENCH_CROSS) -> bool:
+## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)
+static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary, max_grade := ROAD_LIMIT, max_cross := BENCH_CROSS, probe: Object = null) -> bool:
+	if probe != null:
+		return probe.RoadSegment(a.x, a.y, b.x, b.y, a.w, max_grade, max_cross)
 	var dx: float = b.x - a.x
 	var dy: float = b.y - a.y
 	var length := Grid.hypot(dx, dy)
@@ -1261,26 +1266,28 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 			on_axis[c] = 1
 	# С 3.1 горная тропа обходит крутые участки реки: на перепаде русла такой «брод» глубже,
 	# чем кажется по одной клетке. Это последний поиск путей, дороги уже проложены по мостам
-	var river := w.river_cells()
-	for i in w.N:
-		if river[i] == 0:
-			continue
-		if on_axis[i] == 0 and _unsafe_ford(w, surface, i):
-			w.cost[i] = INF
+	for i: int in _unsafe_fords(w, surface, on_axis):
+		w.cost[i] = INF
 	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	var fast := finder.fast() # 9.7: ближайший путь к вершине ищет C# (FastGrid.NearestPath), тот же перебор
 	for pk in w.peaks:
 		var detail_us := Time.get_ticks_usec()
 		var best := -1
 		var bd := INF
 		if w.path_mask[pk.i] >= 2:
 			continue
-		for i in w.N:
-			if w.path_mask[i] < 2 or w.cost[i] == INF:
-				continue
-			var d := Grid.hypot(i % w.W + 0.5 - pk.x, i / w.W + 0.5 - pk.y)
-			if d < bd:
-				bd = d
-				best = i
+		if fast != null:
+			var found: PackedFloat64Array = fast.NearestPath(w.path_mask, w.cost, w.W, pk.x, pk.y)
+			best = int(found[0])
+			bd = found[1]
+		else:
+			for i in w.N:
+				if w.path_mask[i] < 2 or w.cost[i] == INF:
+					continue
+				var d := Grid.hypot(i % w.W + 0.5 - pk.x, i / w.W + 0.5 - pk.y)
+				if d < bd:
+					bd = d
+					best = i
 		nearest_us += Time.get_ticks_usec() - detail_us
 		if best >= 0 and bd < w.W * 0.4:
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
@@ -1294,6 +1301,27 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	w.generation_profile.mountain_nearest_ms = nearest_us / 1000.0
 	w.generation_profile.mountain_search_ms = search_us / 1000.0
 	w.generation_profile.mountain_add_ms = add_us / 1000.0
+
+
+## Клетки рек (не на осях сооружений), где брод небезопасен (_unsafe_ford). С 9.7 в сборке .NET полная
+## проверка идёт только там, где C# нашёл воду глубже порога хотя бы в одной точке без учёта мостов
+## (с мостами глубина только меньше): решения те же, проверка дешевле в десятки раз
+static func _unsafe_fords(w: WorldData, surface: Heightfield, on_axis: PackedByteArray) -> PackedInt32Array:
+	var river := w.river_cells()
+	var cells := PackedInt32Array()
+	for i in w.N:
+		if river[i] != 0 and on_axis[i] == 0:
+			cells.append(i)
+	var probe: Object = surface.fast_water() if surface != null else null
+	var deep := {}
+	if probe != null:
+		for i: int in probe.DeepFords(cells, GameConfig.FORD_DEPTH - 0.15 - 0.000001):
+			deep[i] = true
+	var out := PackedInt32Array()
+	for i in cells:
+		if w.slope[i] > FORD_SLOPE or (probe == null or deep.has(i)) and _unsafe_ford(w, surface, i):
+			out.append(i)
+	return out
 
 
 ## Глубина только читается: одного нарушения достаточно, чтобы закрыть клетку.
