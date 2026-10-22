@@ -84,6 +84,10 @@ void vertex() {
 		float scale2 = max(dot(basis[0], basis[0]), 1e-4);
 		VERTEX += transpose(basis) * world * (sqrt(scale2) / scale2);
 	}
+	// Целиком растворившееся растение (запас раскладки, чужой уровень детализации) не растеризуется вовсе.
+	if (v_fade <= 0.0 || v_lod.x >= min(v_lod.y, 1.0)) {
+		VERTEX = vec3(0.0);
+	}
 	v_cloud = cloud_light(origin.xz);
 	v_ao = mix(ao_low, 1.0, h) * mix(1.0, shelter_ao, sheltered);
 	if (use_vertex_color) {
