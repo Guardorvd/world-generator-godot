@@ -535,7 +535,13 @@ func known(x: float, z: float) -> bool:
 		return true # клетки сразу за краем — в кольце OuterLand, оно есть всегда
 	var i := floori(x / TILE - 0.5)
 	var j := floori(z / TILE - 0.5)
-	return outer.has(i, j) and outer.has(i + 1, j) and outer.has(i, j + 1) and outer.has(i + 1, j + 1)
+	# в полоске в полклетки за краем часть углов — клетки карты, OuterLand их не хранит
+	return _cell_known(outer, i, j) and _cell_known(outer, i + 1, j) and _cell_known(outer, i, j + 1) \
+		and _cell_known(outer, i + 1, j + 1)
+
+
+func _cell_known(outer: OuterLand, i: int, j: int) -> bool:
+	return (i >= 0 and j >= 0 and i < world.W and j < world.H) or outer.has(i, j)
 
 
 ## Глубина воды в точке (0, если сухо или ноги на высоте feet стоят на мосту)

@@ -42,6 +42,7 @@ var _bird: AudioStreamPlayer3D
 var _land: AudioStreamPlayer
 var _steps := {}            # поверхность -> AudioStreamPlayer
 var _goal := {}             # петля -> громкость, к которой она стремится, 0..1
+var _level := {}            # петля -> текущая громкость 0..1
 var _sample_t := 0.0
 var _bird_t := 4.0
 var _bird_ok := false       # вокруг есть где жить птицам
@@ -192,8 +193,9 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 	var a := 1.0 - exp(-SMOOTH * dt)
 	var fast := 1.0 - exp(-8.0 * dt)   # шины затихают сразу, как велосипед оторвался от земли
 	for p: AudioStreamPlayer in _goal:
-		var cur := db_to_linear(p.volume_db - _max_db(p)) if p.volume_db > SILENT else 0.0
-		cur = lerpf(cur, _goal[p], fast if p == _roll else a)
+		# уровень хранится отдельно: из volume_db тихий звук читался как «молчит» и не мог разгореться
+		var cur := lerpf(_level.get(p, 0.0), _goal[p], fast if p == _roll else a)
+		_level[p] = cur
 		p.volume_db = _max_db(p) + linear_to_db(cur) if cur > 0.001 else SILENT
 	_bird_t -= dt
 	if _bird_t <= 0.0:

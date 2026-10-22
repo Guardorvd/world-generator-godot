@@ -266,10 +266,12 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	# седок поднимается там, где лёг, и подтягивает велосипед к себе, носом туда, куда тот смотрел;
 	# если там стена — велосипед встаёт там, где лежал, или на месте падения
 	var fwd := -_from_view.basis.z
-	if Vector2(fwd.x, fwd.z).length() > 0.3:
-		b.heading = atan2(-fwd.x, -fwd.z)
+	var turned := atan2(-fwd.x, -fwd.z) if Vector2(fwd.x, fwd.z).length() > 0.3 else b.heading
+	# новый курс — только вместе с местом, где велосипед с ним помещается: иначе остаётся прежний,
+	# с которым велосипед стоял до падения, и не оказывается боком в стене
 	for spot: Vector3 in [_from_feet, _from_view.origin]:
-		if b.fits(spot.x, spot.z, b.heading, w, heights):
+		if b.fits(spot.x, spot.z, turned, w, heights):
+			b.heading = turned
 			b.x = spot.x
 			b.z = spot.z
 			b.y = heights.surface_at(b.x, b.z, spot.y + 1.0)
