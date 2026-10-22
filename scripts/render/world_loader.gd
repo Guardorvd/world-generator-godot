@@ -29,7 +29,7 @@ static func px_for(size: int) -> int:
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
 static func load_world(seed_text: String, size: int, on_progress: Callable = Callable()) -> WorldLoader:
 	var r := WorldLoader.new()
-	var px := px_for(size)
+	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
 	r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:

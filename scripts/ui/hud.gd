@@ -33,7 +33,8 @@ var goal := {}  # цель путешествия — место из places() �
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
 var _toast_tween: Tween
-var _places: Array = []  # places() мира: не меняются, пока мир тот же
+var _places: Array = []
+var _places_revision := -1 # доступные места обновляются при расширении территории
 
 # Состояние игрока для отрисовки карт
 var px := 0.0
@@ -127,14 +128,21 @@ func set_map_visible(v: bool) -> void:
 func places() -> Array:
 	if world == null:
 		return []
-	if not _places.is_empty():
+	if _places_revision == world.territory_revision and not _places.is_empty():
 		return _places
+	_places_revision = world.territory_revision
 	var out: Array = []
 	for s in world.settlements:
+		if not world.accessible(s.x, s.y, 2.0):
+			continue
 		out.append({key = "s%d" % s.i, name = s.name, x = s.x, y = s.y, kind = "settlement", src = s})
 	for pk in world.peaks:
+		if not world.accessible(pk.x, pk.y):
+			continue
 		out.append({key = "p%d" % pk.i, name = pk.name, x = pk.x, y = pk.y, kind = "peak", src = pk})
 	for lk in world.lakes:
+		if not world.accessible(lk.x, lk.y) or not world.accessible(lk.sx, lk.sy, 3.0):
+			continue
 		out.append({key = "l%d" % lk.i, name = lk.name, x = lk.x, y = lk.y, kind = "lake", src = lk})
 	_places = out
 	return out
@@ -275,6 +283,8 @@ func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
 	var nearest = null
 	var nd := INF
 	for s in w.settlements:
+		if not w.accessible(s.x, s.y):
+			continue
 		var d := Grid.hypot(s.x * TILE - p.x, s.y * TILE - p.z)
 		if d < nd:
 			nd = d
@@ -330,6 +340,8 @@ class MiniMap extends Control:
 		draw_texture_rect(hud.map_tex, Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), false)
 		draw_rect(Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), Color(1, 1, 1, 0.5), false, 2.0)
 		for s in w.settlements:
+			if not w.accessible(s.x, s.y):
+				continue
 			draw_rect(Rect2(s.x * k - 1.5, s.y * k - 1.5, 3, 3), Color.html("#ffdd55"))
 		if not hud.goal.is_empty():
 			draw_arc(_inside(Vector2(hud.goal.x, hud.goal.y) * k, 5.0), 4.5, 0.0, TAU, 16, Hud.GOLD, 2.0)
@@ -433,14 +445,30 @@ class BigMap extends Control:
 		var k: float = f[2]
 		draw_texture_rect(hud.map_tex, Rect2(o, Vector2(sz, sz)), false)
 		draw_rect(Rect2(o, Vector2(sz, sz)), Color.html("#d8c79a"), false, 2.0)
+		# За рамкой виден тот же мир; затемнение обозначает ещё недоступную территорию.
+		if w.available_rect.has_area():
+			var a := o + Vector2(w.available_rect.position) * k
+			var b := o + Vector2(w.available_rect.end) * k
+			var shade := Color(0.0, 0.0, 0.0, 0.65)
+			draw_rect(Rect2(o, Vector2(sz, a.y - o.y)), shade)
+			draw_rect(Rect2(Vector2(o.x, b.y), Vector2(sz, o.y + sz - b.y)), shade)
+			draw_rect(Rect2(Vector2(o.x, a.y), Vector2(a.x - o.x, b.y - a.y)), shade)
+			draw_rect(Rect2(Vector2(b.x, a.y), Vector2(o.x + sz - b.x, b.y - a.y)), shade)
+			draw_rect(Rect2(a, b - a), Hud.GOLD, false, 1.5)
 		for s in w.settlements:
+			if not w.accessible(s.x, s.y):
+				continue
 			var at := o + Vector2(s.x, s.y) * k
 			draw_circle(at, 3.5, Color.html("#ffdd55") if hud.visited.has("s%d" % s.i) else Color.WHITE)
 			Hud.draw_label(self, s.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
 		for pk in w.peaks:
+			if not w.accessible(pk.x, pk.y):
+				continue
 			var col := Color.html("#ffdd55") if hud.visited.has("p%d" % pk.i) else Color.html("#e8f0ff")
 			Hud.draw_label(self, "▲ " + pk.name, o + Vector2(pk.x, pk.y) * k, col, 13)
 		for lk in w.lakes:
+			if not w.accessible(lk.x, lk.y):
+				continue
 			var at := o + Vector2(lk.x, lk.y) * k
 			var col := Color.html("#ffdd55") if hud.visited.has("l%d" % lk.i) else Color.html("#cfeaff")
 			draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
@@ -451,7 +479,7 @@ class BigMap extends Control:
 			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, o, sz, 5.0), 5.0)
 		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, o, sz, 9.0), 9.0, hud.yaw)
 		# легенду про велосипед пишем, только когда он действительно нарисован
-		var legend := "Карта мира «%s» — M или Esc, чтобы закрыть" % w.seed_text
+		var legend := "Мир «%s» · территория %d × %d — M или Esc, чтобы закрыть" % [w.seed_text, w.available_rect.size.x, w.available_rect.size.y]
 		if hud.bike_shown:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
@@ -469,10 +497,12 @@ class BigMap extends Control:
 		var n := {s = 0, p = 0, l = 0}
 		for key: String in hud.visited:
 			n[key.left(1)] += 1
-		var w := hud.world
-		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.s, w.settlements.size(), n.p, w.peaks.size()]
-		if not w.lakes.is_empty():
-			text += " · озёр %d из %d" % [n.l, w.lakes.size()]
+		var counts := {settlement = 0, peak = 0, lake = 0}
+		for place: Dictionary in hud.places():
+			counts[place.kind] += 1
+		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.s, counts.settlement, n.p, counts.peak]
+		if counts.lake > 0:
+			text += " · озёр %d из %d" % [n.l, counts.lake]
 		return text
 
 	## Маркер у края карты остаётся внутри её рамки

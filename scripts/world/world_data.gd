@@ -17,6 +17,44 @@ var N := 0
 var seed_text := ""
 var seed_num := 0
 
+## 8.5: W/H — неизменный общий план, доступная территория — вложенное окно в нём.
+## Координаты всегда мировые: при расширении нет ни сдвига, ни пересчёта массивов.
+## Пустое окно у вручную созданных WorldData означает отсутствие ограничения.
+const REGION_SIZE := 256
+var territory_center := Vector2i.ZERO
+var available_rect := Rect2i()
+var territory_revision := 0
+
+
+## Только открывает новые клетки того же мира. Меньший размер не закрывает уже открытое.
+func expand_territory(size: int) -> void:
+	var side := clampi(size, 1, mini(W, H))
+	side = maxi(side, maxi(available_rect.size.x, available_rect.size.y))
+	var corner := Vector2i(clampi(territory_center.x - side / 2, 0, W - side),
+		clampi(territory_center.y - side / 2, 0, H - side))
+	var next := Rect2i(corner, Vector2i(side, side))
+	if next != available_rect:
+		available_rect = next
+		territory_revision += 1
+
+
+## Координаты в клетках; margin — запас для тела игрока, тоже в клетках.
+func accessible(x: float, y: float, margin: float = 0.0) -> bool:
+	if not available_rect.has_area():
+		return true
+	return x >= available_rect.position.x + margin and y >= available_rect.position.y + margin \
+		and x < available_rect.end.x - margin and y < available_rect.end.y - margin
+
+
+## Соседние области — адреса в общем плане, а не отдельные генерации с новым RNG.
+## Их можно читать в любом порядке; индекс клетки остаётся y * W + x.
+func region_rect(key: Vector2i) -> Rect2i:
+	return Rect2i(key * REGION_SIZE, Vector2i(REGION_SIZE, REGION_SIZE)).intersection(Rect2i(0, 0, W, H))
+
+
+func region_at(cell: Vector2i) -> Vector2i:
+	return Vector2i(floori(float(cell.x) / REGION_SIZE), floori(float(cell.y) / REGION_SIZE))
+
 # Общее состояние генерации
 var rng: WGRandom
 var noise := {}           # имя -> Simplex

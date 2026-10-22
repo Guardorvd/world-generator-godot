@@ -61,13 +61,13 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 
 
 ## Широта строки y для температуры: 0 — холодный север, 1 — жаркий юг. С 1.9.6 шкала не зависит от
-## размера карты (LAT_CELLS клеток на весь размах, середина карты — 0.5) и продолжается за край:
+## размера карты (LAT_CELLS клеток на весь размах, фиксированная строка 255.5 — 0.5) и продолжается за край:
 ## к северу холоднее, к югу жарче
 const LAT_CELLS := 511.0
 
 
-static func latitude(w: WorldData, y: int) -> float:
-	return 0.5 + (y - w.H * 0.5 + 0.5) / LAT_CELLS
+static func latitude(_w: WorldData, y: int) -> float:
+	return 0.5 + (y - 255.5) / LAT_CELLS
 
 
 static func run(w: WorldData) -> void:

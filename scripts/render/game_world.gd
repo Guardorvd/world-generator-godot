@@ -208,7 +208,7 @@ func toggle_map() -> void:
 ## Быстрое перемещение в любое место с карты (Hud.places; с 3.0.2 и туда, где игрок ещё не был): к костру поселения,
 ## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
 func travel_to(place: Dictionary) -> void:
-	if paused or player == null:
+	if paused or player == null or not world.accessible(place.x, place.y):
 		return
 	if bike.riding and bike.airborne:
 		return

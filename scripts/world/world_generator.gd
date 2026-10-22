@@ -10,14 +10,33 @@ extends RefCounted
 ## местность за краем (OuterLand), воспроизводятся по отдельности.
 
 
-## seed — строка зерна, size — сторона мира в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
+## Фиксированный план для всех трёх размеров территории. Не подставлять сюда размер из меню:
+## flood, реки и дорожная сеть должны видеть одни и те же границы при любом выборе игрока.
+const PLAN_SIZE := 768
+
+
+## seed — строка зерна, size — сторона доступной территории в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
 ## after_climate(w) — необязательно: вызывается, когда рельеф, вода и биомы готовы. Следующие этапы их
 ## уже не меняют, поэтому то, что зависит только от них, можно считать в другом потоке параллельно с ними.
 static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate)
+	# Генерация не читает размер из меню: открываем окно только после всех этапов.
+	var home := PlayerState.home(w)
+	w.territory_center = Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
+	w.expand_territory(size)
+	return w
+
+
+## Только декоративный фон меню; не игровой мир и не источник соседних областей.
+static func menu_background(seed_text: String) -> WorldData:
+	return _generate_plan(seed_text, 192)
+
+
+static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
 	var w := WorldData.new()
-	w.W = size
-	w.H = size
-	w.N = size * size
+	w.W = side
+	w.H = side
+	w.N = w.W * w.H
 	w.seed_text = seed_text
 	w.seed_num = WGRandom.hash_string(seed_text)
 	w.rng = WGRandom.new(w.seed_num)

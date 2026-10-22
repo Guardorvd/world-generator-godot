@@ -99,6 +99,11 @@ func _init() -> void:
 		var fp := fingerprint(w)
 		fresh[key] = fp
 		if print_only:
+			# Новый эталон принимаем только после проверки связности, как и обычный прогон.
+			if not settlements_connected(w):
+				fails += 1
+				printerr("%s — поселения не связаны" % key)
+			print("Посчитан %s (%d мс)" % [key, Time.get_ticks_msec() - t0])
 			continue
 		var want: Dictionary = ref.get(key, {})
 		var bad := PackedStringArray()

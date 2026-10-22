@@ -290,6 +290,12 @@ layout_mode = 2
 theme_type_variation = &"PrimaryButton"
 text = "Продолжить"
 
+[node name="ExpandTerritory" type="Button" parent="UI/Root/Pause/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+text = "Расширить территорию"
+
 [node name="Settings" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
@@ -490,6 +496,7 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Start" to="." method="_on_start"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Exit" to="." method="_exit_game"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Resume" to="." method="_resume"]
+[connection signal="pressed" from="UI/Root/Pause/Panel/Box/ExpandTerritory" to="." method="_expand_territory"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/NewWorld" to="." method="_on_new_world"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/ToMenu" to="." method="_back_to_menu"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Exit" to="." method="_exit_game"]

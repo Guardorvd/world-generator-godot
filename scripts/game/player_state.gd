@@ -107,6 +107,8 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 				break
 		if found:
 			break
+	if not found and not w.accessible(p.x / TILE, p.z / TILE, BODY_R / TILE):
+		return spawn(w, heights)
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
 
@@ -152,7 +154,7 @@ static func surface(info: Dictionary) -> int:
 ## Дома, стены и (с 7.7) крупные стволы, валуны и валежник держат тело на расстоянии r,
 ## вода и край известной земли проверяются по центру
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0) -> bool:
-	if not heights.known(x, z):
+	if not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z):
 		return false
 	# сквозь дома не пройти: стены — квадрат, тело не ближе r к нему
 	var reach := HUT_HALF * 1.5 + r

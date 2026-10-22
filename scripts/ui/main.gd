@@ -5,7 +5,7 @@ extends Node
 ## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
-const SIZES := [[256, "Малый (256 × 256)"], [512, "Средний (512 × 512)"], [768, "Большой (768 × 768)"]]
+const SIZES := [[256, "Малая территория (256 × 256)"], [512, "Средняя территория (512 × 512)"], [768, "Большая территория (768 × 768)"]]
 const GameScene := preload("res://scenes/game_world.tscn")
 
 var game: GameWorld
@@ -55,6 +55,7 @@ func _show(screen: String) -> void:
 		"menu":
 			%Start.grab_focus()
 		"pause":
+			%ExpandTerritory.disabled = game == null or game.world.available_rect.size.x >= WorldGenerator.PLAN_SIZE
 			%Resume.grab_focus()
 		"settings":
 			%Done.grab_focus()
@@ -169,7 +170,7 @@ func _on_new_world() -> void:
 # ---------- Фон меню: маленький мир сверху, медленно проплывающий под панелью ----------
 
 func _menu_background_job(seed_text: String) -> void:
-	var w := WorldGenerator.generate(seed_text, 192)
+	var w := WorldGenerator.menu_background(seed_text)
 	var img := MapBaker.bake(w, 4, false)
 	_on_menu_background.call_deferred(img)
 
@@ -262,6 +263,20 @@ func _toggle_pause() -> void:
 		game.set_paused(true)
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		_show("pause")
+
+
+## Открыть следующую территорию, сохранив тот же мир, игрока, велосипед и меши.
+func _expand_territory() -> void:
+	if game == null:
+		return
+	var side := game.world.available_rect.size.x
+	var next_size := 512 if side < 512 else WorldGenerator.PLAN_SIZE
+	game.world.expand_territory(next_size)
+	GameSettings.world_size = next_size
+	size_select.select(size_select.get_item_index(next_size))
+	GameSettings.save_settings()
+	_resume()
+	hud.toast_now("Территория расширена до %d × %d" % [next_size, next_size])
 
 
 func _resume() -> void:

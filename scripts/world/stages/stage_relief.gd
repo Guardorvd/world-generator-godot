@@ -40,6 +40,7 @@ const VALLEY_WIDTH := 0.24
 const VALLEY_DEPTH := 0.06
 ## Сколько мест старта пробовать и какая доля суши в стартовой области подходит
 const PICK_TRIES := 48
+const START_SIDE := 512 # постоянное окно выбора старта на сид, не размер доступной территории
 ## С 2.9 суши больше: шум материков сдвинут вверх на LAND_BIAS (было 0.1), окно — первое по спирали,
 ## где суши хотя бы PICK_LAND. Верхней границы нет: сколько суши выше неё, решает сам шум
 const LAND_BIAS := 0.18
@@ -79,8 +80,8 @@ static func _pick_start(w: WorldData) -> void:
 		var land := 0
 		for sj in 16:
 			for si in 16:
-				var x := (si + 0.5) * w.W / 16.0
-				var y := (sj + 0.5) * w.H / 16.0
+				var x := (si + 0.5) * START_SIDE / 16.0
+				var y := (sj + 0.5) * START_SIDE / 16.0
 				if raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, floorf(x), floorf(y), mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread) >= SEA_RAW:
 					land += 1
 		var frac := land / 256.0
