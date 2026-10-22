@@ -137,7 +137,8 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	path = _explicit(w, path, on_axis)
 	var W := w.W
 	var H := w.H
-	var rng := w.rng
+	var jitter_seed := WGRandom.derive(w.seed_num, "trail.jitter." + kind)
+	var rng := WGRandom.new(0)
 	var width: float = WIDTHS[kind]
 	var jitter := 0.1 if kind == "road" else (0.35 if kind == "mountain" else 0.5)
 	var pts: Array = []
@@ -145,6 +146,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var spans: Array = w.bridges + w.tunnels
 	for k: int in path.size():
 		var i := path[k]
+		rng.reset(WGRandom.hash_cell(jitter_seed, i % W, i / W, 0))
 		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * jitter
 		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * jitter
 		if kind != "animal":
@@ -326,7 +328,7 @@ static func _by_water(w: WorldData, i: int) -> bool:
 static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 	var W := w.W
 	var H := w.H
-	var rng := w.rng
+	var rng := WGRandom.at(w.seed_num, "trail.animal.sources")
 	var dist_water := w.dist_water
 	var count := clampi(roundi(30.0 * w.scale), 8, 70)
 	var k := 0

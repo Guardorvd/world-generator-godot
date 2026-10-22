@@ -59,7 +59,7 @@ func region_at(cell: Vector2i) -> Vector2i:
 var rng: WGRandom
 var noise := {}           # имя -> Simplex
 var scale := 1.0          # во сколько раз мир больше среднего: от этого зависит число поселений и троп
-var used_names := {}
+# Названия не служат идентификаторами: идентификатор места — его мировая клетка.
 var generation_profile := {} # необязательные счётчики дорожного этапа из bench.gd
 var _fields_thread: Thread
 var _fields := {}         # имя -> поле fbm из NOISE_FIELDS
@@ -82,6 +82,7 @@ var river := PackedByteArray()
 var river_area := PackedByteArray() # коридор сглаженной воды с учётом ширины; river остаётся сетью стока
 var acc := PackedFloat32Array()      # накопленный сток
 var slope := PackedFloat32Array()    # StageGeography: уклон по elev (историческая шкала ×60)
+var watershed := PackedInt32Array()  # клетка выхода водосбора в общей сетке; не локальный номер области
 var down := PackedInt32Array()       # клетка, куда стекает вода (-1 — нет)
 var order := PackedInt32Array()      # порядок заполнения впадин
 var order_n := 0
@@ -157,17 +158,18 @@ func clear_noise_fields() -> void:
 	_fields.clear()
 
 
-## Уникальное название из двух частей (см. scripts/data/names.gd)
-func make_name(parts: Dictionary) -> String:
+## Чистое имя места: дома, другие имена и порядок чтения областей не расходуют его RNG.
+## Как в реальной географии, названия могут повторяться; UI использует клетку/тип, не текст имени.
+func make_name(parts: Dictionary, kind: String, x: int, y: int) -> String:
+	var local := WGRandom.at(seed_num, "name." + kind, x, y)
 	var a: Array = parts.first
 	var b: Array = parts.second
-	var sep: String = parts.sep
-	for _attempt in 40:
-		var n: String = a[floori(rng.next_float() * a.size())] + sep + b[floori(rng.next_float() * b.size())]
-		if not used_names.has(n):
-			used_names[n] = true
-			return n
-	return a[0] + sep + b[0] + " " + str(used_names.size())
+	return a[floori(local.next_float() * a.size())] + parts.sep + b[floori(local.next_float() * b.size())]
+
+
+## Область и её полоса соседних клеток читают общий результат рельефа, стока и долин.
+func read_region(key: Vector2i, halo: int = 2) -> Dictionary:
+	return WorldRegion.read(self, key, halo)
 
 
 ## Номер озера из lakes, у которого стоит точка (клетки): озеро в квадрате ±r клеток или -1
@@ -206,7 +208,7 @@ func tile_info(x: float, y: float) -> Dictionary:
 		return outer.info(tx, ty) if outer != null else {}
 	var i := ty * W + tx
 	return {
-		i = i, biome = biome[i], river = river_cells()[i] == 1, path = path_mask[i],
+		i = i, biome = biome[i], river = river_cells()[i] == 1, path = path_mask[i] if path_mask.size() == N else 0,
 		surface = road_surface[i] if road_surface.size() == N else 0,
 		elev = elev[i], temp = temp[i], moist = moist[i], slope = slope[i],
 	}

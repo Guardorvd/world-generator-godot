@@ -178,6 +178,15 @@ static func run(w: WorldData, again := false) -> void:
 	w.rain = rain
 	w.acc = acc
 	w.river = river
+	# Выход каждого водосбора один на весь план. down уже идёт к меньшему рангу,
+	# поэтому его метку можно переиспользовать одним проходом без нового поиска.
+	var watershed := PackedInt32Array()
+	watershed.resize(N)
+	watershed.fill(-1)
+	for k in order_n:
+		var i := order[k]
+		watershed[i] = i if down[i] < 0 else watershed[down[i]]
+	w.watershed = watershed
 
 
 ## Большая котловина становится сухой низиной: дно поднимается к уровню порога, от стока (клетки, откуда

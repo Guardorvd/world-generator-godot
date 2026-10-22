@@ -3,9 +3,9 @@ extends RefCounted
 ## Генерация мира: запускает этапы из scripts/world/stages по порядку и возвращает WorldData.
 ## Мир — чистые данные (массивы и списки), без узлов сцены, поэтому генерацию можно вести в отдельном потоке.
 ##
-## Главное правило: тот же сид — тот же мир. Этапы делят один генератор случайных чисел w.rng,
-## поэтому любое изменение порядка или числа вызовов rng меняет все миры. Генерация своя (с 1.8 она уже
-## не повторяет JS-версию); эталон мира по сиду проверяет tools/selftest.gd.
+## Главное правило: тот же сид — тот же мир. С 8.6 шумы, места, дома, имена и тропы имеют
+## независимые ключи. Порядок географических стадий остаётся обязательным: климат читает готовую воду,
+## а дороги — готовый рельеф. Эталон мира по сиду проверяет tools/selftest.gd.
 ## С 8.4 растительность берёт числа не из w.rng, а из хеша места (WGRandom.hash_cell): её чанки, как и
 ## местность за краем (OuterLand), воспроизводятся по отдельности.
 
@@ -13,6 +13,17 @@ extends RefCounted
 ## Фиксированный план для всех трёх размеров территории. Не подставлять сюда размер из меню:
 ## flood, реки и дорожная сеть должны видеть одни и те же границы при любом выборе игрока.
 const PLAN_SIZE := 768
+## Замороженные адреса перестановок 8.5: Simplex расходует ровно 255 чисел.
+## Это сохраняет всю природную географию 8.5, но создание/перестановка шумов больше не делит RNG.
+## Новые шумы используют derive(seed, "noise.<имя>"), старые адреса не перенумеровывать.
+const NOISE_SLOTS := {warpX = 0, warpY = 1, cont = 2, mask = 3, ridge = 4, hill = 5,
+	moist = 6, temp = 7, forest = 8, cost = 9, micro = 10}
+
+
+static func noise_rng(seed_num: int, name: String) -> WGRandom:
+	if NOISE_SLOTS.has(name):
+		return WGRandom.new((seed_num + int(NOISE_SLOTS[name]) * 255 * 0x6d2b79f5) & WGRandom.MASK)
+	return WGRandom.new(WGRandom.derive(seed_num, "noise." + name))
 
 
 ## seed — строка зерна, size — сторона доступной территории в клетках; on_progress(p 0..1, подпись этапа) — необязательно.
@@ -32,17 +43,24 @@ static func menu_background(seed_text: String) -> WorldData:
 	return _generate_plan(seed_text, 192)
 
 
-static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
+## Общая природная география без домов и дорог. Для соседних областей читать read_region,
+## а не запускать flood в отдельном окне другого размера.
+static func geography(seed_text: String, on_progress: Callable = Callable()) -> WorldData:
+	var w := _geography(seed_text, PLAN_SIZE, on_progress)
+	w.clear_noise_fields()
+	return w
+
+
+static func _geography(seed_text: String, side: int, on_progress: Callable = Callable()) -> WorldData:
 	var w := WorldData.new()
 	w.W = side
 	w.H = side
 	w.N = w.W * w.H
 	w.seed_text = seed_text
 	w.seed_num = WGRandom.hash_string(seed_text)
-	w.rng = WGRandom.new(w.seed_num)
-	# Порядок создания шумов важен: каждый забирает числа из общего rng
-	for name in ["warpX", "warpY", "cont", "mask", "ridge", "hill", "moist", "temp", "forest", "cost", "micro"]:
-		w.noise[name] = Simplex.new(w.rng)
+	w.rng = WGRandom.new(w.seed_num) # совместимость со старыми инструментами; игровые стадии не читают
+	for name: String in NOISE_SLOTS:
+		w.noise[name] = Simplex.new(noise_rng(w.seed_num, name))
 	w.scale = float(w.N) / (512 * 512)
 
 	var step := func(p: float, label: String) -> void:
@@ -63,8 +81,16 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	StageGeography.run(w)
 	step.call(StageClimate.PROGRESS, StageClimate.LABEL)
 	StageClimate.run(w)
+	return w
+
+
+static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
+	var w := _geography(seed_text, side, on_progress)
 	if after_climate.is_valid():
 		after_climate.call(w)
+	var step := func(p: float, label: String) -> void:
+		if on_progress.is_valid():
+			on_progress.call(p, label)
 	step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
 	StageLandmarks.run(w)
 	step.call(StageTrails.PROGRESS, StageTrails.LABEL)

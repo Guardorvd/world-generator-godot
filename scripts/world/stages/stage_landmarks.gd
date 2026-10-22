@@ -22,7 +22,7 @@ static func _by_score_desc(a: Array, b: Array) -> bool:
 static func _place_settlements(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
-	var rng := w.rng
+	var candidate_seed := WGRandom.derive(w.seed_num, "settlement.candidate")
 	var biome := w.biome
 	var river := w.river_cells()
 	var slope := w.slope
@@ -45,7 +45,7 @@ static func _place_settlements(w: WorldData) -> void:
 			var bd: Dictionary = Biomes.LIST[biome[i]]
 			if not bd.has("habit") or river[i] != 0 or slope[i] > 0.6:
 				continue
-			var score: float = bd.habit + (rng.next_float() * 0.35) - slope[i] * 0.6
+			var score: float = bd.habit + (WGRandom.hash2(x, y, candidate_seed) * 0.35) - slope[i] * 0.6
 			if dist_water[i] >= 1.5 and dist_water[i] <= 6.0:
 				score += 0.6
 			if acc[i] > 0.0 and dist_water[i] < 6.0:
@@ -76,10 +76,11 @@ static func _place_settlements(w: WorldData) -> void:
 				break
 		if close:
 			continue
-		settlements.append({x = x, y = y, i = i, name = w.make_name(Names.SETTLEMENT), huts = []})
+		settlements.append({x = x, y = y, i = i, name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
 	# Дома вокруг центра поселения, не на воде и не на крутых склонах
 	var ground := Heightfield.new(w, false)
 	for s: Dictionary in settlements:
+		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
 		var n := 3 + floori(rng.next_float() * 7)
 		s.character = "прибрежный посёлок" if dist_water[s.i] < 5.0 else ("лесная деревня" if biome[s.i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else "деревня у дороги")
 		var k := 0
@@ -164,5 +165,5 @@ static func _place_peaks(w: WorldData) -> void:
 				break
 		if close:
 			continue
-		peaks.append({x = x, y = y, i = i, elev = c[0], name = w.make_name(Names.PEAK)})
+		peaks.append({x = x, y = y, i = i, elev = c[0], name = w.make_name(Names.PEAK, "peak", floori(x), floori(y))})
 	w.peaks = peaks

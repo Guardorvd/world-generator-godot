@@ -57,6 +57,7 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	r.river_area = fnv(w.river_area)
 	r.river_geometry = fnv(var_to_bytes(w.rivers))
 	r.river_exits = fnv(var_to_bytes(w.river_exits))
+	r.watershed = fnv(w.watershed.to_byte_array())
 	# с 4.3: игровой рельеф с полотном путей (RoadBed), мостами и туннелями
 	r.road_bed = fnv(Heightfield.new(w).hv.to_byte_array())
 	r.seed_num = w.seed_num

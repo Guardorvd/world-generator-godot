@@ -7,7 +7,8 @@ extends RefCounted
 ## Всё зависит только от места: клетка — в общих координатах мира, случайные числа — хеш (сид, клетка, слой),
 ## а соседей кусок не спрашивает: всё, что нужно рядом (море в SEA_REACH клетках, соседи для крутизны), он
 ## считает сам в полосе вокруг себя. Поэтому одна и та же местность получается в любом порядке загрузки.
-## Рек, озёр, троп и поселений за краем нет: им нужен сток и связи всего мира, вода — море на уровне 0.
+## За внешним краем плана рек и озёр нет. Внутри плана compute с 8.6 читает общую готовую
+## географию через WorldRegion: с долинами, руслами и расстоянием до всей воды, а не сырой шум.
 ## compute — чистая функция, её считают фоновые задачи; в chunks и veg куски кладёт и убирает главный поток.
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
@@ -44,6 +45,9 @@ func _init(w: WorldData) -> void:
 ## море, поэтому dist — и близость воды, и близость океана. Значение клетки не зависит от того, в каком
 ## прямоугольнике её считали: всё, что ей нужно, лежит в полосе PAD вокруг
 static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
+	var rect := Rect2i(x0, y0, cw, ch)
+	if WorldRegion.ready(w) and Rect2i(0, 0, w.W, w.H).encloses(rect):
+		return WorldRegion.terrain(w, rect)
 	var pw := cw + 2 * PAD
 	var ph := ch + 2 * PAD
 	var raw := StageRelief.raw_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
@@ -109,6 +113,8 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			out.slope[o] = slope
 			out.dist[o] = d
 			out.light[o] = light
+	# Внутри общего плана брать окончательные долины и воду, а не заново сырой шум.
+	WorldRegion.overlay(w, Rect2i(x0, y0, cw, ch), out)
 	return out
 
 
@@ -126,7 +132,9 @@ static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 	p = WorldData.NOISE_FIELDS.cost
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 1, y0 - 1, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
-	f.dw = f.dist
+	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
+	if not f.has("dw"):
+		f.dw = f.dist
 	var store := StageVegetation.ObjStore.new(null)
 	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - 1, y0 - 1, side, null, store)
 	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, x0 = x0 - 1, y0 = y0 - 1, side = side}

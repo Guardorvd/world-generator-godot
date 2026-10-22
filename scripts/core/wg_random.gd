@@ -26,6 +26,16 @@ func next_float() -> float:
 	return float((t ^ (t >> 14)) & MASK) / 4294967296.0
 
 
+## Независимое зерно системы. domain — постоянный смысловой ключ, а не номер в списке.
+static func derive(seed_num: int, domain: String) -> int:
+	return hash_string("%08x:%s" % [seed_num & MASK, domain])
+
+
+## Независимый поток объекта в мировых координатах; создание не расходует другие потоки.
+static func at(seed_num: int, domain: String, x: int = 0, y: int = 0) -> WGRandom:
+	return WGRandom.new(hash_cell(derive(seed_num, domain), x, y, 0))
+
+
 ## Math.imul: младшие 32 бита произведения (результат без знака)
 static func imul(a: int, b: int) -> int:
 	a &= MASK

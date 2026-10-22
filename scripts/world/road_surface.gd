@@ -2,7 +2,7 @@ class_name RoadSurface
 extends RefCounted
 ## Слой дорожного полотна (с 4.3), часть 1: покрытие. Идёт после всех этапов генерации, по готовым
 ## линиям w.trails; маршруты, клетки путей и общий RNG не трогает. Покрытие выбирается по виду пути,
-## биому, крутизне, близости поселения и по длинным отрезкам пути (хеш сида, без rng), поэтому одна
+## биому, крутизне, близости поселения и мировым участкам длиной SPAN (хеш сида, без rng), поэтому одна
 ## дорога может идти гравием, грунтовкой и камнем. Высоты полотна — вторая часть, RoadBed (scripts/game).
 ## Пишет: t.surf (покрытие у каждой точки t.pts) и w.road_surface (покрытие клетки пути людей, 0 — нет).
 ## Звериные тропы остаются как были: это не полотно, а примятая трава.
@@ -48,17 +48,30 @@ static func run(w: WorldData) -> void:
 		if t.kind == "animal":
 			t.surf.resize(t.pts.size())
 			continue
-		var along := 0.0
+		var surface_seed := WGRandom.derive(w.seed_num, "surface." + t.kind)
 		for n: int in t.pts.size():
 			var p: Dictionary = t.pts[n]
-			if n > 0:
-				var q: Dictionary = t.pts[n - 1]
-				along += Grid.hypot(p.x - q.x, p.y - q.y)
-			t.surf.append(pick(w, t.kind, p.x, p.y, WGRandom.hash2(k, floori(along / SPAN), w.seed_num)))
+			t.surf.append(pick(w, t.kind, p.x, p.y,
+				WGRandom.hash2(floori(p.x / SPAN), floori(p.y / SPAN), surface_seed)))
+	# На пересечении путей одного типа приоритет также не зависит от порядка их загрузки.
+	var routes := w.trails.duplicate()
+	routes.sort_custom(_route_less)
 	for kind: String in ORDER:
-		for t: Dictionary in w.trails:
+		for t: Dictionary in routes:
 			if t.kind == kind:
 				_stamp(w, t)
+
+
+static func _route_less(a: Dictionary, b: Dictionary) -> bool:
+	if a.kind != b.kind:
+		return a.kind < b.kind
+	if a.pts.size() != b.pts.size():
+		return a.pts.size() < b.pts.size()
+	for n in a.pts.size():
+		for field: String in ["x", "y", "w"]:
+			if a.pts[n][field] != b.pts[n][field]:
+				return a.pts[n][field] < b.pts[n][field]
+	return false
 
 
 ## Покрытие пути вида kind в точке (x, y), в клетках; v — хеш отрезка пути [0, 1)
