@@ -381,6 +381,16 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 	arrays[Mesh.ARRAY_INDEX] = indices[0]
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays, [], {0.012: indices[1], 0.045: indices[2]})
+	# 9.9+: те же уровни отдельными мешами — VegetationLayer сменяет их по расстоянию растворением,
+	# а не скачком автоматического LOD (meta "levels").
+	var levels: Array[ArrayMesh] = []
+	for level in 3:
+		var part := arrays.duplicate()
+		part[Mesh.ARRAY_INDEX] = indices[level]
+		var level_mesh := ArrayMesh.new()
+		level_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, part)
+		levels.append(level_mesh)
+	mesh.set_meta("levels", levels)
 	return mesh
 
 

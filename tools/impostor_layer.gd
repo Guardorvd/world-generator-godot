@@ -56,7 +56,7 @@ func _apply_chunk(built: Dictionary) -> void:
 			# Контроль с сохранением тех же теней: дальние 3D-модели только в shadow pass.
 			for part in ["trunk", "crown"]:
 				var def: Dictionary = _defs[entry.kind]
-				var proxy := _multimesh(def[part], def[part + "_mat"], entry.count, part == "crown")
+				var proxy := _multimesh(def[part], def[part + "_mats"][0], entry.count, part == "crown")
 				proxy.multimesh = entry[part]
 				proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 				proxy.visibility_range_end = node.visibility_range_end

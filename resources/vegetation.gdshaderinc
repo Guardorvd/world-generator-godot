@@ -29,6 +29,14 @@ global uniform vec2 veg_center;
 // thin_grow — пучки за thin_full крупнее, тоже по нынешнему расстоянию.
 uniform float thin_full = 0.0;
 uniform float thin_grow = 0.0;
+// 9.9+: уровень детализации дерева у материала (-1 — без смены уровней; у каждого уровня своя копия материала). Соседние уровни смешиваются той же сеткой
+// порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
+// Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
+uniform int lod_level = -1;
+const float LOD1_D = 70.0;
+const float LOD1_BAND = 24.0;
+const float LOD2_D = 160.0;
+const float LOD2_BAND = 48.0;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 
@@ -37,6 +45,7 @@ const vec2 WIND_DIR = vec2(0.82, 0.57);
 varying float v_ao;
 varying float v_cloud;   // 7.9: тень облака на растении (одна на экземпляр)
 varying float v_fade;    // 9.9+: 1 — видно целиком, 0 — растворилось
+varying vec2 v_lod;      // 9.9+: порог пикселя должен быть в [x, y), иначе этот уровень его не рисует
 
 void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
@@ -44,6 +53,12 @@ void vertex() {
 	float sheltered = 1.0 - COLOR.a;
 	float dist = distance(origin.xz, veg_center);
 	v_fade = clamp((fade_far - dist) / fade_len, 0.0, 1.0);
+	v_lod = vec2(0.0, 2.0);
+	if (lod_level >= 0) {
+		float s1 = smoothstep(LOD1_D - LOD1_BAND * 0.5, LOD1_D + LOD1_BAND * 0.5, dist);
+		float s2 = smoothstep(LOD2_D - LOD2_BAND * 0.5, LOD2_D + LOD2_BAND * 0.5, dist);
+		v_lod = lod_level == 0 ? vec2(s1, 2.0) : (lod_level == 1 ? vec2(s2, s1) : vec2(0.0, s2));
+	}
 	if (thin_full > 0.0) {
 		float keep = min(1.0, thin_full * thin_full / max(dist * dist, 1.0));
 		float rank = INSTANCE_CUSTOM.x;
@@ -79,7 +94,8 @@ void vertex() {
 
 void fragment() {
 	// Сетка порогов (interleaved gradient noise): без прозрачности и сортировки, тени редеют так же.
-	if (v_fade < 1.0 && v_fade <= fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))))) {
+	float dither = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
+	if (v_fade < 1.0 && v_fade <= dither || dither < v_lod.x || dither >= v_lod.y) {
 		discard;
 	}
 	// 9.4: у двусторонней листвы движок разворачивает нормаль обратной стороны вниз и внутрь кроны —

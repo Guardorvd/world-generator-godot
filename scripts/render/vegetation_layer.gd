@@ -27,6 +27,9 @@ const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подле�
 ## Трава и подлесок гаснут на FADE_AHEAD раньше своего радиуса: раскладка обновляется через 8 м пути
 ## и догоняет игрока не сразу, а её край должен быть уже невидим.
 const FADE_SHARE := 0.2
+## 9.9+: смена уровней детализации деревьев — [середина полосы, ширина], м; копия LOD1_*/LOD2_* в шейдере.
+## Узлы уровней видны с запасом на полосу и полдиагонали чанка (видимость считается от центра чанка).
+const LOD_STEPS := [[70.0, 24.0], [160.0, 48.0]]
 ## Трава и подлесок: преобразование (12), цвет (4) и порог поредения в INSTANCE_CUSTOM.x (4)
 const STRIDE := 20
 ## Пучки травы за GRASS_R крупнее до 35 % (с 9.9+ — в шейдере, по нынешнему расстоянию)
@@ -109,11 +112,20 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			if part == "trunk":
 				mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
 				mat.set_shader_parameter("albedo_color", def.bark)
-			entry[part + "_mat"] = mat
+			# 9.9+: у дерева с отдельными уровнями (ForestModels, meta "levels") своя копия материала на уровень.
+			var mats: Array[ShaderMaterial] = [mat]
+			var levels: Array = def[part].get_meta("levels", [])
+			if levels.size() > 1:
+				mats.clear()
+				for level in levels.size():
+					var copy: ShaderMaterial = mat.duplicate()
+					copy.set_shader_parameter("lod_level", level)
+					mats.append(copy)
+			entry[part + "_mats"] = mats
 		# Высота у кроны и ствола общая, иначе листва отрывается от веток.
 		for part in ["trunk", "crown"]:
-			if entry.has(part + "_mat"):
-				entry[part + "_mat"].set_shader_parameter("height", maxf(entry.box.end.y, 0.3))
+			for mat: ShaderMaterial in entry.get(part + "_mats", []):
+				mat.set_shader_parameter("height", maxf(entry.box.end.y, 0.3))
 		_defs[kind] = entry
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
@@ -142,12 +154,17 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_apply_fade()
 
 
+## Полдиагонали чанка растительности, м
+func _half_chunk() -> float:
+	return world.CS * TILE * 0.7072
+
+
 ## Границы растворения по нынешним дальностям (с 9.9+)
 func _apply_fade() -> void:
 	for kind: int in _defs:
 		for part in ["trunk", "crown"]:
-			if _defs[kind].has(part + "_mat"):
-				_fade(_defs[kind][part + "_mat"], tree_r, 0.0)
+			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):
+				_fade(mat, tree_r, 0.0)
 	_fade(_grass_mat, grass_r, FADE_AHEAD)
 	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
@@ -211,7 +228,8 @@ func set_draw(level: int) -> bool:
 		entry.node.visibility_range_end = under_r if entry.far else grass_r
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
-			node.visibility_range_end = tree_r + world.CS * TILE * 0.7072
+			if node.get_meta("level", 2) == 2:
+				node.visibility_range_end = tree_r + _half_chunk()
 	_apply_fade()
 	last_fill = Vector2.INF
 	return true
@@ -531,16 +549,26 @@ func _apply_chunk(built: Dictionary) -> void:
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
 				continue
-			var node := _multimesh(def[part], def[part + "_mat"], entry.count, part == "crown")
-			var mm := node.multimesh
-			mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf
-			mm.custom_aabb = entry.bounds
-			mm.visible_instance_count = entry.count
-			# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
-			node.visibility_range_end = tree_r + world.CS * TILE * 0.7072
-			node.visibility_range_end_margin = 16.0
-			entry[part] = mm
-			entry.nodes.append(node)
+			var mesh: Mesh = def[part]
+			var levels: Array = mesh.get_meta("levels", [mesh])
+			for level in levels.size():
+				var node := _multimesh(levels[level], def[part + "_mats"][level], entry.count, part == "crown")
+				var mm := node.multimesh
+				mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf
+				mm.custom_aabb = entry.bounds
+				mm.visible_instance_count = entry.count
+				# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
+				if levels.size() > 1:
+					node.set_meta("level", level)
+					if level > 0:
+						node.visibility_range_begin = maxf(0.0, LOD_STEPS[level - 1][0] - LOD_STEPS[level - 1][1] * 0.5 - _half_chunk())
+				if level < levels.size() - 1:
+					node.visibility_range_end = LOD_STEPS[level][0] + LOD_STEPS[level][1] * 0.5 + _half_chunk()
+				else:
+					node.visibility_range_end = tree_r + _half_chunk()
+				node.visibility_range_end_margin = 16.0
+				entry[part] = mm
+				entry.nodes.append(node)
 		veg[Vector3i(chunk.x, chunk.y, kind)] = entry
 	_loaded[chunk] = true
 
