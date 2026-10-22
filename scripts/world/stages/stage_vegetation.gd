@@ -71,7 +71,7 @@ static func run(w: WorldData) -> void:
 			var dw := dist_water[i]
 			var light := StageClimate.natural_conditions(w, x, y).x
 			# Один медленный шум задаёт возраст участка и плавную смену сообщества.
-			var age := _ss(-0.45, 0.45, w.noise.forest.fbm(x / 78.0 + 91.0, y / 78.0 - 47.0, 2))
+			var age := _ss(-0.45, 0.45, w.noise.forest.fbm(x / 78.0 + 91.0, y / 78.0 - 47.0, 2)) # = age_at, без лишнего вызова
 			# smoothstep развёрнут на месте
 			var interior := 0.0 # насколько клетка в глубине леса (0 — опушка или поле)
 			if dens > 0.3:
@@ -146,6 +146,13 @@ static func run(w: WorldData) -> void:
 static func _ss(a: float, b: float, x: float) -> float:
 	var t := clampf((x - a) / (b - a), 0.0, 1.0)
 	return t * t * (3.0 - 2.0 * t)
+
+
+## 0 — молодой участок, 1 — старый лес. 8.2: тот же шум задаёт подлесок и характер леса.
+static func age_at(w: WorldData, x: float, y: float) -> float:
+	if not w.noise.has("forest"):
+		return 0.5 # тестовые миры без шумов
+	return _ss(-0.45, 0.45, w.noise.forest.fbm(x / 78.0 + 91.0, y / 78.0 - 47.0, 2))
 
 
 ## Возраст — характер участка, а не симуляция лет. Под старым пологом есть молодые деревья.

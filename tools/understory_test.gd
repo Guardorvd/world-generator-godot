@@ -23,6 +23,24 @@ func run() -> void:
 	check(dry[Understory.GRASS] > wet[Understory.GRASS] and dry[Understory.BUSH] > wet[Understory.BUSH], "Просветы должны поддерживать траву и кусты")
 	var taiga := Understory.weights(Biomes.TAIGA, 0.9, 0.2, 0.8)
 	check(taiga[Understory.PINE] > wet[Understory.PINE] and taiga[Understory.SAPLING] < wet[Understory.SAPLING], "Молодняк должен соответствовать характеру леса")
+	# 8.2: характеры леса
+	var bright := Understory.character(0.2, 0.0, 0.4, 0.9, 0.8)
+	var gloomy := Understory.character(0.95, 0.9, 0.4, 0.3, 0.9)
+	var thicket := Understory.character(0.6, 0.2, 0.5, 0.6, 0.02)
+	var ferny := Understory.character(0.7, 0.0, 0.95, 0.3, 0.6)
+	for pair: Array in [[bright, Understory.LIGHT, "светлый"], [gloomy, Understory.DARK, "тёмный"], [thicket, Understory.THICKET, "чаща"], [ferny, Understory.FERNY, "папоротниковый"]]:
+		var ch: PackedFloat32Array = pair[0]
+		var best := 0
+		for c in 4:
+			if ch[c] > ch[best]:
+				best = c
+		check(best == pair[1], "Характер леса должен определяться условиями: " + pair[2] + " " + str(ch))
+	var w_bright := Understory.weights(Biomes.FOREST, 0.4, 0.8, 0.2, bright)
+	var w_dark := Understory.weights(Biomes.FOREST, 0.4, 0.2, 0.95, gloomy)
+	var w_thick := Understory.weights(Biomes.FOREST, 0.5, 0.4, 0.6, thicket)
+	check(w_bright[Understory.FLOWERS] > w_dark[Understory.FLOWERS] and w_bright[Understory.HIGH_GRASS] > w_dark[Understory.HIGH_GRASS], "В светлом лесу должны быть цветы и высокая трава")
+	check(w_dark[Understory.MOSS] / w_dark[Understory.GRASS] > w_bright[Understory.MOSS] / w_bright[Understory.GRASS], "В тёмном лесу мох должен вытеснять траву")
+	check(w_thick[Understory.BUSH] > w_dark[Understory.BUSH] * 3.0 and w_thick[Understory.YOUNG] > 0.0, "В чаще должны преобладать кусты и подрост")
 	var w: WorldData = Fixture.fixture(1)
 	w.seed_num = 660
 	w.biome.fill(Biomes.FOREST)

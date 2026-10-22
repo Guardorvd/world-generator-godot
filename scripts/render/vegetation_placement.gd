@@ -21,7 +21,7 @@ func _init(w: WorldData, h: Heightfield) -> void:
 static func priority(kind: int) -> int:
 	if kind - Floor.FIRST in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STONES]:
 		return 0
-	if kind in [Plants.BUSH, Plants.SAPLING, Plants.PINE]:
+	if kind in [Plants.BUSH, Plants.SAPLING, Plants.PINE, Plants.YOUNG, Plants.YOUNG_PINE]:
 		return 1
 	return 2
 

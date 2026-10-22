@@ -60,19 +60,22 @@ func run() -> void:
 	w.lake.fill(0)
 	veg.placement.clear_occupied()
 	# Молодняк не должен расти прямо из живого ствола или валуна.
+	var before: int = veg.understory[Plants.SAPLING].count # 8.2: в чаще подрост мог появиться при заполнении
 	veg._put_understory(Plants.SAPLING, 514.0, 514.0, 0.0, 1.0)
-	check(veg.understory[Plants.SAPLING].count == 0, "Молодняк не должен пересекать живой ствол")
+	check(veg.understory[Plants.SAPLING].count == before, "Молодняк не должен пересекать живой ствол")
 	w.obj_k[0] = Biomes.T_ROCK
 	veg.placement.prepare(514.0, 514.0, 16.0) # мир изменён после заполнения
+	before = veg.understory[Plants.PINE].count
 	veg._put_understory(Plants.PINE, 514.0, 514.0, 0.0, 1.0)
-	check(veg.understory[Plants.PINE].count == 0, "Молодняк не должен расти из валуна")
+	check(veg.understory[Plants.PINE].count == before, "Молодняк не должен расти из валуна")
 	var log_kind := Floor.FIRST + Floor.LOG
 	veg._put_understory(log_kind, 514.0, 514.0, 0.0, 1.0)
 	check(veg.understory[log_kind].count == 0, "Валежник не должен проходить сквозь валун")
 	w.obj_k[0] = Biomes.T_BUSH
 	veg.placement.prepare(514.0, 514.0, 16.0)
+	before = veg.understory[Plants.PINE].count
 	veg._put_understory(Plants.PINE, 514.0, 514.0, 0.0, 1.0)
-	check(veg.understory[Plants.PINE].count == 0, "Молодняк не должен пересекать существующий куст")
+	check(veg.understory[Plants.PINE].count == before, "Молодняк не должен пересекать существующий куст")
 	veg._put_understory(log_kind, 490.0, 490.0, 0.0, 1.0)
 	var logs: int = veg.understory[log_kind].count
 	check(logs == 1, "В свободном месте должно помещаться бревно")

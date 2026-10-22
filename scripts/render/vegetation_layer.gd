@@ -97,7 +97,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
 		var kind := understory.size() - Floor.FIRST
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG]
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG] or understory.size() in [Understory.YOUNG, Understory.YOUNG_PINE]
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or understory.size() == Understory.MOSS
 		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
@@ -397,7 +397,7 @@ func _fill_grass(px: float, pz: float) -> void:
 			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
 			var surface := _forest_surface.get_pixel(i, j)
 			lush *= 1.0 - 0.65 * surface.r
-			_fill_understory(i, j, surface, light, px, pz)
+			lush *= _fill_understory(i, j, surface, light, px, pz)
 			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
 			for m in cnt:
@@ -438,41 +438,51 @@ func _fill_grass(px: float, pz: float) -> void:
 	_understory_sites.clear()
 
 
-func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> void:
+## Возвращает множитель низкой травы по характеру леса (вне леса 1).
+func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var k := j * world.W + i
 	var bi := world.biome[k]
 	var canopy := surface.r
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
-		return
-	if world.path_mask[k] > 0 or world.slope[k] > 0.9:
-		return
+		return 1.0
 	var moisture := surface.b
+	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
+	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
+	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
+	if world.path_mask[k] > 0 or world.slope[k] > 0.9:
+		return grass_mul
 	var light := sunlight * (1.0 - canopy * 0.85)
-	var weights := Understory.weights(bi, moisture, light, canopy)
-	weights.append_array(Floor.weights(canopy, surface.g, moisture, light, surface.a))
+	var weights := Understory.weights(bi, moisture, light, canopy, ch)
+	var floor_weights := Floor.weights(canopy, surface.g, moisture, light, surface.a)
+	var deadwood := Understory.mix(Understory.DEADWOOD, ch)
+	for f in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG]:
+		floor_weights[f] *= deadwood
+	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
 		total += weight
 	# Пятна по 12 м и случайные пропуски; соседние клетки связаны без нового шума.
 	var seed := world.seed_num ^ 6601
 	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
-	var density := (0.25 + 0.7 * patch) * (0.5 + 0.5 * moisture)
-	for m in 4:
-		if WGRandom.hash2(i * 4 + m, j, seed + 1) > density:
+	var density := (0.25 + 0.7 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch)
+	# В чаще мест больше: кусты и подрост стоят стеной.
+	for m in 4 + roundi(3.0 * ch[Understory.THICKET]):
+		if WGRandom.hash2(i * 8 + m, j, seed + 1) > density:
 			continue
-		var pick := WGRandom.hash2(i * 4 + m, j, seed + 2) * total
+		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
 		var kind := 0
 		while kind < weights.size() - 1 and pick >= weights[kind]:
 			pick -= weights[kind]
 			kind += 1
-		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 4 + m, j, seed + 3)) * TILE
-		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 4 + m, j, seed + 4)) * TILE
+		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
+		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
 		if Vector2(x - px, z - pz).length_squared() > GameConfig.GRASS_R ** 2:
 			continue
-		var scale := 0.7 + WGRandom.hash2(i * 4 + m, j, seed + 5) * 0.6
-		var rot := WGRandom.hash2(i * 4 + m, j, seed + 6) * TAU
-		var tint := 0.85 + WGRandom.hash2(i * 4 + m, j, seed + 7) * 0.3
+		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
+		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
+		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
 		_understory_sites.append([kind, x, z, rot, scale, tint])
+	return grass_mul
 
 
 func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1) -> void:
