@@ -1,10 +1,12 @@
 class_name StageLandmarks
 extends RefCounted
 ## Этап 6. Поселения с домами и вершины с названиями.
-## Пишет: w.settlements [{x, y, i, name, huts: [{x, y, v}]}], w.peaks [{x, y, i, elev, name}].
+## Пишет: w.settlements [{x, y, i, name, town, homes, style, character, huts: []}], w.peaks [{x, y, i, elev, name}].
+## Дома (huts) ставит lay_out после путей.
 
 const PROGRESS := 0.46
 const LABEL := "Основание поселений"
+const LAYOUT_R := 6.8 # клеток: дома и сараи не дальше от костра (вырубка леса у поселения — 7 клеток)
 
 
 static func run(w: WorldData) -> void:
@@ -94,57 +96,161 @@ static func _place_settlements(w: WorldData) -> void:
 		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3 + shore, 0.0, 1.0)
 		settlements.append({x = x, y = y, i = i, spacing = spacing, importance = importance,
 			name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
-	# Дома вокруг центра поселения, не на воде и не на крутых склонах
-	var ground := Heightfield.new(w, false)
 	# Посёлков — примерно треть, самые важные места; остальные — деревни.
 	var ranks: Array = settlements.map(func(s: Dictionary) -> float: return s.importance)
 	ranks.sort()
 	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
 	for s: Dictionary in settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
-		# Посёлок — узел округи: вдвое больше домов и шире кольцо, чем у деревни.
-		var town: bool = s.importance >= town_from
-		var n := (8 if town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
-		s.character = _character(w, s.i, town)
-		var k := 0
-		var tries := 0
-		while k < n and tries < 160:
-			tries += 1
-			var a := rng.next_float() * PI * 2.0
-			var r := 1.6 + rng.next_float() * (4.4 if town else 3.4)
-			var hx: float = s.x + cos(a) * r
-			var hy: float = s.y + sin(a) * r
-			var ti := floori(hy) * W + floori(hx)
-			if hx < 1 or hy < 1 or hx >= W - 1 or hy >= H - 1:
-				continue
-			if ocean[ti] != 0 or lake[ti] != 0 or river[ti] != 0 or biome[ti] == Biomes.ROCK or slope[ti] > 0.45:
-				continue
-			# Проверяем весь фундамент: сухой центр не спасает дом над рекой или обрывом.
-			var low := INF
-			var high := -INF
-			var dry := true
-			for dz: float in [-2.3, 0.0, 2.3]:
-				for dx: float in [-2.3, 0.0, 2.3]:
-					var px: float = hx * GameConfig.TILE + dx
-					var pz: float = hy * GameConfig.TILE + dz
-					var h := ground.ground_at(px, pz)
-					low = minf(low, h)
-					high = maxf(high, h)
-					dry = dry and ground.depth_at(px, pz) <= 0.0
-			if not dry or high - low > 1.6:
-				continue
-			var near := false
-			for u: Dictionary in s.huts:
-				var dx: float = u.x - hx
-				var dy: float = u.y - hy
-				if dx * dx + dy * dy < 1.96:
-					near = true
-					break
-			if near:
-				continue
-			s.huts.append({x = hx, y = hy, v = floori(rng.next_float() * 4)})
-			k += 1
+		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
+		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
+		s.town = s.importance >= town_from
+		s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
+		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
+		s.style = floori(rng.next_float() * 4)
+		s.character = _character(w, s.i, s.town)
 	w.settlements = settlements
+
+
+## Дома, площадь и хозяйственные постройки (с 9.5, после путей). Улица — путь людей у поселения: дома
+## стоят по обе её стороны дверью к ней, за ними второй ряд и сараи, в середине свободная площадь
+## с костром (у посёлка — шире и с колодцем). Где путей мало, остальные дома встают кольцом у площади.
+## Пишет s.huts [{x, y, v, t — вид (SettlementsBuilder.HOMES или хозяйственная постройка), a — поворот как у Basis(UP, a)}].
+static func lay_out(w: WorldData) -> void:
+	var W := w.W
+	var river := w.river_cells()
+	var ground := Heightfield.new(w, false)
+	for s: Dictionary in w.settlements:
+		var rng := WGRandom.at(w.seed_num, "settlement.layout", floori(s.x), floori(s.y))
+		var town: bool = s.get("town", false)
+		var plaza := 2.4 if town else 1.9
+		var slots: Array = [] # Vector4(порядок, x, y, поворот)
+		# Улицы: клетки путей вокруг площади; направление улицы — главная ось соседних клеток пути
+		for y in range(floori(s.y - LAYOUT_R), ceili(s.y + LAYOUT_R)):
+			for x in range(floori(s.x - LAYOUT_R), ceili(s.x + LAYOUT_R)):
+				if x < 1 or y < 1 or x >= W - 1 or y >= w.H - 1 or w.path_mask[y * W + x] < 2:
+					continue
+				var c := Vector2(x + 0.5, y + 0.5)
+				var r := c.distance_to(Vector2(s.x, s.y))
+				if r < plaza - 0.6 or r > LAYOUT_R - 1.5:
+					continue
+				var sxx := 0.0
+				var syy := 0.0
+				var sxy := 0.0
+				for dy in range(-2, 3):
+					for dx in range(-2, 3):
+						var j := clampi(y + dy, 0, w.H - 1) * W + clampi(x + dx, 0, W - 1)
+						if w.path_mask[j] >= 2:
+							sxx += dx * dx
+							syy += dy * dy
+							sxy += dx * dy
+				var along := 0.5 * atan2(2.0 * sxy, sxx - syy)
+				var t := Vector2(cos(along), sin(along))
+				var n := Vector2(-t.y, t.x)
+				for side: float in [-1.0, 1.0]:
+					for row in 2:
+						var p := c + n * side * (1.75 + row * 2.5) + t * (rng.next_float() - 0.5) * 0.6
+						var face := -n * side
+						var order := p.distance_to(Vector2(s.x, s.y)) + row * 2.2 + rng.next_float() * 0.8
+						slots.append(Vector4(order, p.x, p.y, atan2(face.x, face.y)))
+		# Кольцо у площади: запас на случай, если улиц мало; дома дверью к костру
+		for k in 24:
+			var a := TAU * k / 24.0 + rng.next_float() * 0.2
+			var r := plaza + 0.3 + rng.next_float() * 3.2
+			var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+			slots.append(Vector4(r + 3.0 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+		# Vector4 сортируется встроенным сравнением: сначала ближние к площади места первого ряда
+		slots.sort()
+		var huts: Array = []
+		var homes: int = s.get("homes", 6)
+		var placed := 0
+		for sl: Vector4 in slots:
+			if placed >= homes:
+				break
+			var p := Vector2(sl.y, sl.z)
+			var r := p.distance_to(Vector2(s.x, s.y))
+			if r < plaza or r > LAYOUT_R - 1.0:
+				continue
+			var kind := _house_kind(s, r - plaza, rng.next_float())
+			if _crowded(huts, p, 1.95) or not _fits(w, ground, river, p, sl.w, kind):
+				continue
+			huts.append({x = p.x, y = p.y, v = floori(rng.next_float() * 4), t = kind, a = sl.w + (rng.next_float() - 0.5) * 0.12})
+			placed += 1
+		# Хозяйственный пояс: за частью домов, дальше от улицы — сарай, сеновал или поленница
+		var character: String = s.get("character", "")
+		var farming := character.begins_with("земледель") or character.begins_with("торгов")
+		var chance := 0.7 if farming else (0.55 if character.begins_with("горн") or character.begins_with("лесн") else 0.35)
+		for h in placed:
+			var u: Dictionary = huts[h]
+			if rng.next_float() > chance:
+				continue
+			var back := Vector2(-sin(u.a), -cos(u.a))
+			var side := Vector2(back.y, -back.x) * (rng.next_float() - 0.5) * 1.4
+			var p := Vector2(u.x, u.y) + back * (1.9 + rng.next_float() * 0.5) + side
+			var kinds: Array = ["barn", "hay", "shed"] if farming else ["shed", "barn", "hay", "shed"]
+			var kind: String = kinds[floori(rng.next_float() * kinds.size())]
+			var a: float = u.a + (PI / 2.0 if kind == "barn" and rng.next_float() < 0.5 else 0.0)
+			if p.distance_to(Vector2(s.x, s.y)) > LAYOUT_R - 0.3 or _crowded(huts, p, 1.45) or not _fits(w, ground, river, p, a, kind):
+				continue
+			huts.append({x = p.x, y = p.y, v = floori(rng.next_float() * 4), t = kind, a = a})
+		# Колодец на краю площади, со стороны, дальней от путей
+		if town or rng.next_float() < 0.4:
+			var best := -1.0
+			var spot := Vector2.ZERO
+			for k in 8:
+				var a := TAU * k / 8.0
+				var p := Vector2(s.x + cos(a) * 1.4, s.y + sin(a) * 1.4)
+				var j := floori(p.y) * W + floori(p.x)
+				var free := 0.0 if w.path_mask[j] >= 2 else 1.0 + float(not _crowded(huts, p, 1.3))
+				if free > best:
+					best = free
+					spot = p
+			if best >= 2.0 and _fits(w, ground, river, spot, atan2(s.x - spot.x, s.y - spot.y), "fountain"):
+				huts.append({x = spot.x, y = spot.y, v = 0, t = "fountain", a = atan2(s.x - spot.x, s.y - spot.y)})
+		s.huts = huts
+
+
+## Вид жилого дома: в горах и лесу — больше шале, у посёлка у площади — высокие дома
+static func _house_kind(s: Dictionary, from_plaza: float, r: float) -> String:
+	var character: String = s.get("character", "")
+	if s.get("town", false) and from_plaza < 1.6 and r < 0.6:
+		return "tall"
+	var chalets := 0.65 if character.begins_with("горн") or character.begins_with("лесн") else 0.35
+	return "chalet" if r < chalets else "house"
+
+
+static func _crowded(huts: Array, p: Vector2, gap: float) -> bool:
+	for u: Dictionary in huts:
+		if Vector2(u.x, u.y).distance_squared_to(p) < gap * gap:
+			return true
+	return false
+
+
+## Постройка вида kind (PlayerState.SITE_HALF) встаёт на сухую землю с перепадом не больше FLAT,
+## не на путь и не на голую скалу. Пробы — по углам и серединам стен, повёрнутых на a
+static func _fits(w: WorldData, ground: Heightfield, river: PackedByteArray, p: Vector2, a: float, kind: String) -> bool:
+	var half: Vector2 = PlayerState.SITE_HALF[kind] + Vector2(0.4, 0.4)
+	var low := INF
+	var high := -INF
+	var basis := Basis(Vector3.UP, a)
+	for dz: float in [-1.0, 0.0, 1.0]:
+		for dx: float in [-1.0, 0.0, 1.0]:
+			var o := basis * Vector3(dx * half.x, 0, dz * half.y)
+			var px := p.x * GameConfig.TILE + o.x
+			var pz := p.y * GameConfig.TILE + o.z
+			var cx := floori(px / GameConfig.TILE)
+			var cy := floori(pz / GameConfig.TILE)
+			if cx < 0 or cy < 0 or cx >= w.W or cy >= w.H:
+				return false
+			var j := cy * w.W + cx
+			if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or river[j] != 0 or w.biome[j] == Biomes.ROCK or w.slope[j] > 0.45:
+				return false
+			if ground.depth_at(px, pz) > 0.0:
+				return false
+			var h := ground.ground_at(px, pz)
+			low = minf(low, h)
+			high = maxf(high, h)
+	return high - low <= StageSites.FLAT[kind]
 
 
 ## Характер поселения по месту: «приморский посёлок», «горная деревня»…

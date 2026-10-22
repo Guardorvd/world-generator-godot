@@ -463,6 +463,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		var b: Dictionary = w.settlements[e[1]]
 		if not a.connections.has(b.i): a.connections.append(b.i)
 		if not b.connections.has(a.i): b.connections.append(a.i)
+	StageLandmarks.lay_out(w)
 	_clear_huts(w)
 
 

@@ -5,8 +5,16 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
-const HUT_CORNERS := [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]
 const FIRE_SEEN := 300.0  # м: дальше костры не рисуются и не анимируются
+const HOMES := ["house", "chalet", "tall"] # жилые дома поселений (с 9.5), остальное в huts — сараи и колодцы
+## Облик жилых домов (с 9.5, по мотивам альпийских деревень): этажи снизу вверх [высота, стена],
+## стена фронтона, уклон крыши (рад) и свес (м). Размер в плане — PlayerState.SITE_HALF, конёк вдоль z,
+## фронтон с дверью смотрит на улицу
+const HOUSE_FORM := {
+	house = {floors = [[2.5, "plaster"]], gable = "timber", pitch = 0.62, eave = 0.55},
+	chalet = {floors = [[2.1, "stone"], [2.2, "timber"]], gable = "timber", pitch = 0.45, eave = 0.9, balcony = true},
+	tall = {floors = [[2.4, "plaster"], [2.3, "plaster"]], gable = "plaster", pitch = 0.72, eave = 0.5},
+}
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
 
 
@@ -70,19 +78,21 @@ static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
 ## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: Material}:
 ## огонь анимируется, окна ночью светятся ярче (set_night).
 static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
-	var walls := [0xa7825a, 0xb89470, 0x8f6e4c, 0xc2a27a].map(func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff)))
-	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff)))
+	var tint := func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff))
+	# Палитры домов (с 9.5): светлая штукатурка, тёмное дерево, гонт, сланец и черепица, ставни, герань
+	var plasters := [0xece2cc, 0xf3eee4, 0xdcc08a, 0xe6cbb8, 0xd3d6c6].map(tint)
+	var timbers := [0x7a4b2b, 0x5f3b23, 0x8d5e36].map(tint)
+	var roofs := [0x4a3a30, 0x464b54, 0x94452f, 0x67503e].map(tint)
+	var shutters := [0x3f6e3c, 0x9a3a2e, 0x4c6283, 0x2f2a24].map(tint)
+	var flowers := [0xd23a3f, 0xe0709a].map(tint)
 	var door_m := mat(Color8(0x3a, 0x2a, 0x1c))
 	var win_m := mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
-	var wall_mesh := _box_mesh(Vector3(3.2, 2.6, 3.2))
 	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
 	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
 	var win_mesh := _box_mesh(Vector3(0.6, 0.5, 0.1))
 	var stone_m := mat(Color.html("#736d60"))
 	var timber_m := mat(Color.html("#755337"))
-	var foundation_mesh := _box_mesh(Vector3(3.3, 1.0, 3.3))
 	var step_mesh := _box_mesh(Vector3(1.1, 0.18, 0.65))
-	var chimney_mesh := _box_mesh(Vector3(0.45, 1.1, 0.45))
 	var bench_seat := _box_mesh(Vector3(1.8, 0.16, 0.48))
 	var bench_leg := _box_mesh(Vector3(0.15, 0.45, 0.4))
 	var board_post := _box_mesh(Vector3(0.12, 1.8, 0.12))
@@ -96,9 +106,18 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var core_mesh := _cone_mesh(0.22, 0.7, 6)
 	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
 	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
-	var house := {walls = walls, roofs = roofs, door = door_m, win = win_m, stone = stone_m, timber = timber_m,
-		foundation = foundation_mesh, wall = wall_mesh, roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh,
-		step = step_mesh, chimney = chimney_mesh}
+	var prism := PrismMesh.new()
+	var hay := CylinderMesh.new()
+	hay.top_radius = 0.75
+	hay.bottom_radius = 0.9
+	hay.height = 1.3
+	hay.radial_segments = 8
+	var house := {plasters = plasters, timbers = timbers, roofs = roofs, shutters = shutters, flowers = flowers,
+		leaf = mat(Color.html("#4f6e2f")), rail = mat(Color.html("#a57446")), logs = mat(Color.html("#b48d5c")),
+		water = mat(Color.html("#5d8ea6")), dark_roof = mat(Color.html("#4a3f36")), straw = mat(Color.html("#c2a35a")),
+		hay = hay, hay_top = _cone_mesh(0.75, 0.7, 8),
+		door = door_m, win = win_m, stone = stone_m, timber = timber_m, unit = _box_mesh(Vector3.ONE), prism = prism,
+		roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh, step = step_mesh}
 	var fires: Array = []
 	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
@@ -106,19 +125,16 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var batch := MeshBatch.new()
 	for s in w.settlements:
 		for hut in s.huts:
-			var x: float = hut.x * TILE
-			var z: float = hut.y * TILE
-			var facing := Basis(Vector3.UP, atan2(s.x * TILE - x, s.y * TILE - z))
+			# С 9.5 дом стоит дверью к улице (поворот a), у заготовок тестов — к костру
+			var kind: String = hut.get("t", "house")
+			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
 			# Пол выше верхнего угла; каменный цоколь закрывает перепад до нижнего.
-			var low := INF
-			var y := -INF
-			for c: Vector2 in HUT_CORNERS:
-				var corner := facing * Vector3(c.x, 0, c.y)
-				var h := heights.ground_at(x + corner.x, z + corner.z)
-				low = minf(low, h)
-				y = maxf(y, h)
-			# дверью к костру
-			_house(batch, Transform3D(facing, Vector3(x, y, z)), y - low, hut.v, house)
+			var foot := _footing(heights, at, PlayerState.SITE_HALF[kind])
+			at.origin.y = foot.y
+			if kind in HOMES:
+				_house(batch, at, foot.y - foot.x, hut.v, house, kind, s.get("style", hut.v))
+			else:
+				_outbuilding(batch, at, foot.y - foot.x, kind, house)
 		# костёр
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
@@ -218,20 +234,137 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	return {fires = fires, windows = win_m}
 
 
-## Жилой дом: цоколь на drop м вниз до нижнего угла, стены, крыша, дверь (к +z), два окна, порог; труба у
-## чётных вариантов. at — пол дома. Общий для поселений и хуторов, m — меши и материалы из build
-static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Dictionary) -> void:
-	var base := at.translated_local(Vector3(0, -(drop + 0.15) * 0.5, 0))
-	base.basis = base.basis.scaled(Vector3(1, drop + 0.15, 1))
-	batch.add(m.foundation, base, m.stone)
-	batch.add(m.wall, at.translated_local(Vector3(0, 1.3, 0)), m.walls[v])
-	batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 2.6 + 1.1, 0)), m.roofs[v])
-	batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), m.door)
-	batch.add(m.win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), m.win)
-	batch.add(m.win_mesh, at * Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(1.62, 1.6, 0)), m.win)
-	batch.add(m.step, at.translated_local(Vector3(0, 0.02, 1.8)), m.stone)
+## Жилой дом вида kind (HOUSE_FORM): цоколь на drop м вниз до нижнего угла, этажи, фронтон, двускатная
+## крыша со свесами, дверь и порог (к +z), окна со ставнями и ящиками герани, у шале — балкон, у чётных
+## вариантов — труба. at — пол дома. style — облик поселения (крыши, штукатурка, ставни), v — вариант дома.
+## Общий для поселений, хуторов и одиноких домов, m — меши и материалы из build
+static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Dictionary, kind := "house", style := -1) -> void:
+	if style < 0:
+		style = v
+	var half: Vector2 = PlayerState.SITE_HALF[kind]
+	var form: Dictionary = HOUSE_FORM[kind]
+	var wall := {stone = m.stone, plaster = m.plasters[(style * 2 + v) % 5], timber = m.timbers[(style + v / 2) % 3]}
+	# В деревне крыши в основном одного цвета: так видно, что это одно место
+	var roof: Material = m.roofs[(style + (1 if v == 3 else 0)) % 4]
+	var trim := {shutter = m.shutters[(style + (1 if v == 2 else 0)) % 4], flower = m.flowers[v % 2]}
+	var floors: Array = form.floors
+	# Маленький дом бывает и бревенчатым на каменном низе
+	if kind == "house" and v % 2 == 1:
+		floors = [[1.2, "stone"], [1.4, "timber"]]
+	_plinth(batch, m.unit, at, drop, half * 2.0 + Vector2(0.1, 0.1), m.stone)
+	var y := 0.0
+	for f in floors.size():
+		var h: float = floors[f][0]
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, h, half.y * 2.0)), Vector3(0, y + h * 0.5, 0)), wall[floors[f][1]])
+		# Окна по этажу (низкий каменный низ — без окон): у земли место у фасада занимает дверь
+		if h >= 1.5:
+			var wy := maxf(y + h * 0.55, 1.45)
+			var front: Array = [-half.x * 0.5, half.x * 0.5] if y > 0.5 or half.x < 1.8 else [half.x * 0.5]
+			for wx: float in front:
+				var spread := 1.15 if y < 0.5 and half.x < 1.8 else 1.0
+				_window(batch, at, 0.0, Vector3(wx * spread, wy, half.y), m, trim, true)
+			var sides: Array = [0.0] if half.y < 1.7 else [-half.y * 0.45, half.y * 0.45]
+			for sz: float in sides:
+				_window(batch, at, PI / 2.0, Vector3(-sz, wy, half.x), m, trim, false)
+				_window(batch, at, -PI / 2.0, Vector3(sz, wy, half.x), m, trim, false)
+			if y > 0.5:
+				_window(batch, at, PI, Vector3(0, wy, half.y), m, trim, false)
+		y += h
+	var gable := half.x * tan(form.pitch)
+	batch.add(m.prism, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, gable, half.y * 2.0)), Vector3(0, y + gable * 0.5, 0)), wall[form.gable])
+	# Окошко чердака во фронтоне
+	batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.42, 0.42, 0.06)), Vector3(0, y + gable * 0.35, half.y + 0.02)), m.win)
+	_gable_roof(batch, at, half, y, form.pitch, form.eave, roof, m)
+	var door_x := -half.x * 0.45 if half.x >= 1.8 else 0.0
+	batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.95, 1.85, 0.1)), Vector3(door_x, 0.93, half.y + 0.03)), m.door)
+	batch.add(m.step, at.translated_local(Vector3(door_x, 0.02, half.y + 0.2)), m.stone)
+	if form.get("balcony", false):
+		# Балкон вдоль фасада второго этажа под свесом крыши, на перилах герань
+		var by: float = floors[0][0]
+		var bw := half.x * 2.0 + 0.3
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(bw, 0.12, 0.95)), Vector3(0, by, half.y + 0.47)), m.timber)
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(bw, 0.8, 0.07)), Vector3(0, by + 0.46, half.y + 0.92)), m.rail)
+		for sx: float in [-1.0, 1.0]:
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.07, 0.8, 0.95)), Vector3(sx * bw * 0.5, by + 0.46, half.y + 0.47)), m.rail)
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(bw - 0.2, 0.16, 0.22)), Vector3(0, by + 0.94, half.y + 0.98)), m.leaf)
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(bw - 0.3, 0.14, 0.2)), Vector3(0, by + 1.07, half.y + 0.98)), trim.flower)
 	if v % 2 == 0:
-		batch.add(m.chimney, at.translated_local(Vector3(0.85, 3.6, 0.45)), m.stone)
+		var cx := half.x * 0.45
+		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.5, 1.6, 0.5)), Vector3(cx, y + gable * (1.0 - 0.45) + 0.45, -half.y * 0.35)), m.stone)
+
+
+## Двускатная крыша над стенами half (конёк вдоль z) высотой top: два ската со свесом eave и конёк
+static func _gable_roof(batch: MeshBatch, at: Transform3D, half: Vector2, top: float, pitch: float, eave: float, roof: Material, m: Dictionary) -> void:
+	var gable := half.x * tan(pitch)
+	var run := half.x + eave
+	var thick := 0.22
+	var depth := half.y * 2.0 + eave * 2.0
+	for side: float in [-1.0, 1.0]:
+		var mid := Vector3(side * run * 0.5, top + gable - run * tan(pitch) * 0.5, 0)
+		mid += Vector3(side * sin(pitch), cos(pitch), 0) * thick * 0.5
+		var b := Basis(Vector3.BACK, -side * pitch) * Basis.from_scale(Vector3(run / cos(pitch), thick, depth))
+		batch.add(m.unit, at * Transform3D(b, mid), roof)
+	var ridge := Basis(Vector3.BACK, PI / 4.0) * Basis.from_scale(Vector3(0.3, 0.3, depth))
+	batch.add(m.unit, at * Transform3D(ridge, Vector3(0, top + gable + thick * 0.8, 0)), roof)
+
+
+## Окно в стене: angle — поворот стены (0 — фасад к +z), pos — середина окна в местных осях стены
+## (z — расстояние стены от середины дома). Стекло ночью светится, по бокам ставни, на фасаде — ящик цветов
+static func _window(batch: MeshBatch, at: Transform3D, angle: float, pos: Vector3, m: Dictionary, trim: Dictionary, flowers: bool) -> void:
+	var b := Basis(Vector3.UP, angle)
+	var f := at * Transform3D(b, b * pos)
+	batch.add(m.unit, f * Transform3D(Basis.from_scale(Vector3(0.62, 0.78, 0.08)), Vector3.ZERO), m.win)
+	for sx: float in [-0.48, 0.48]:
+		batch.add(m.unit, f * Transform3D(Basis.from_scale(Vector3(0.3, 0.84, 0.05)), Vector3(sx, 0, 0.04)), trim.shutter)
+	if flowers:
+		batch.add(m.unit, f * Transform3D(Basis.from_scale(Vector3(0.78, 0.16, 0.22)), Vector3(0, -0.48, 0.11)), m.leaf)
+		batch.add(m.unit, f * Transform3D(Basis.from_scale(Vector3(0.7, 0.13, 0.18)), Vector3(0, -0.36, 0.11)), trim.flower)
+
+
+## Хозяйственная постройка поселения или хутора (с 9.5 общая): сарай с двускатной крышей, сеновал,
+## поленница под навесом, колодец-корыто. at — пол, drop — перепад до нижнего угла
+static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: String, m: Dictionary) -> void:
+	var half: Vector2 = PlayerState.SITE_HALF[kind]
+	match kind:
+		"barn":
+			_plinth(batch, m.unit, at, drop, half * 2.0 + Vector2(0.1, 0.1), m.stone)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 0.8, half.y * 2.0)), Vector3(0, 0.4, 0)), m.stone)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 2.0, half.y * 2.0)), Vector3(0, 1.8, 0)), m.timber)
+			var gable := half.x * tan(0.5)
+			batch.add(m.prism, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, gable, half.y * 2.0)), Vector3(0, 2.8 + gable * 0.5, 0)), m.timber)
+			_gable_roof(batch, at, half, 2.8, 0.5, 0.6, m.dark_roof, m)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(1.6, 2.0, 0.1)), Vector3(0, 1.0, half.y + 0.02)), m.door)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.9, 0.6, 0.08)), Vector3(0, 3.1, half.y + 0.02)), m.door)
+		"hay":
+			batch.add(m.hay, at.translated_local(Vector3(0, 0.55, 0)), m.straw)
+			batch.add(m.hay_top, at.translated_local(Vector3(0, 1.5, 0)), m.straw)
+		"shed":
+			# Навес у задней стенки, под ним поленья торцами наружу
+			_plinth(batch, m.unit, at, drop, half * 2.0, m.stone)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 1.9, 0.15)), Vector3(0, 0.95, -half.y + 0.08)), m.timber)
+			for sx: float in [-1.0, 1.0]:
+				batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.12, 1.7, half.y * 2.0)), Vector3(sx * (half.x - 0.06), 0.85, 0)), m.timber)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0 - 0.3, 1.25, half.y * 1.6)), Vector3(0, 0.63, 0.05)), m.logs)
+			var lean := Basis(Vector3.RIGHT, 0.28) * Basis.from_scale(Vector3(half.x * 2.0 + 0.5, 0.14, half.y * 2.0 + 0.6))
+			batch.add(m.unit, at * Transform3D(lean, Vector3(0, 1.95, 0.05)), m.dark_roof)
+		"fountain":
+			# Каменное корыто с водой и столбик с трубкой, как на площадях горных деревень
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 0.7, half.y * 2.0)), Vector3(0, 0.3, 0)), m.stone)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0 - 0.2, 0.05, half.y * 2.0 - 0.2)), Vector3(0, 0.66, 0)), m.water)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.3, 1.5, 0.3)), Vector3(-half.x + 0.15, 0.75, 0)), m.timber)
+			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.35, 0.06, 0.06)), Vector3(-half.x + 0.45, 1.25, 0)), m.stone)
+
+
+## Нижний и верхний угол земли под постройкой half (м), повёрнутой как at: Vector2(низ, верх)
+static func _footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vector2:
+	var low := INF
+	var high := -INF
+	for c: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
+		var corner := at.basis * Vector3(c.x * half.x, 0, c.y * half.y)
+		var h := heights.ground_at(at.origin.x + corner.x, at.origin.z + corner.z)
+		low = minf(low, h)
+		high = maxf(high, h)
+	return Vector2(low, high)
 
 
 ## Места вне поселений (с 9.3): постройки из тех же простых мешей в общий MeshBatch. Вид постройки — u.t,
@@ -242,19 +375,12 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 	# камень руин: старый, потемневший и заросший мхом — стены одного места разные
 	var weathered := [old_stone, mat(Color.html("#585749")), mat(Color.html("#5d6b48"))]
 	var pale_stone := mat(Color.html("#9a958a"))
-	var straw := mat(Color.html("#c2a35a"))
-	var dark_roof := mat(Color.html("#4a3f36"))
+	var dark_roof: Material = m.dark_roof
 	var leg := _box_mesh(Vector3(0.25, 7.0, 0.25))
 	var deck := _box_mesh(Vector3(2.8, 0.2, 2.8))
 	var rail := _box_mesh(Vector3(2.8, 0.1, 0.08))
 	var tower_roof := _cone_mesh(2.2, 1.6, 4)
 	var tip := _cone_mesh(0.5, 0.7, 4)
-	var hay := CylinderMesh.new()
-	hay.top_radius = 0.75
-	hay.bottom_radius = 0.9
-	hay.height = 1.3
-	hay.radial_segments = 8
-	var hay_top := _cone_mesh(0.75, 0.7, 8)
 	var keep := CylinderMesh.new()
 	keep.top_radius = 1.5
 	keep.bottom_radius = 1.6
@@ -263,27 +389,19 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 	for s: Dictionary in w.sites:
 		var top := -INF
 		for u: Dictionary in s.huts:
-			var x: float = u.x * TILE
-			var z: float = u.y * TILE
-			var low := INF
-			var high := -INF
-			for c: Vector2 in HUT_CORNERS:
-				var corner := Basis(Vector3.UP, u.a) * Vector3(c.x, 0, c.y)
-				var h := heights.ground_at(x + corner.x, z + corner.z)
-				low = minf(low, h)
-				high = maxf(high, h)
 			var v: int = u.v
+			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(u.x * TILE, 0, u.y * TILE))
+			var foot := _footing(heights, at, PlayerState.SITE_HALF[u.t])
+			var low := foot.x
+			var high := foot.y
 			# Жилые постройки стоят на цоколе по верхнему углу, камни и руины уходят в землю.
-			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(x, high if u.t in ["house", "barn", "shelter"] else low, z))
+			at.origin.y = high if u.t in ["house", "barn", "shelter"] else low
 			top = maxf(top, at.origin.y)
 			match u.t:
 				"house":
 					_house(batch, at, high - low, v, m)
-				"barn":
-					_plinth(batch, unit, at, high - low, Vector2(4.1, 3.1), m.stone)
-					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(4.0, 2.8, 3.0)), Vector3(0, 1.4, 0)), m.timber)
-					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(1.05, 0.9, 1.05)), Vector3(0, 3.6, 0)), dark_roof)
-					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(1.6, 2.0, 0.1)), Vector3(0, 1.0, 1.52)), m.door)
+				"barn", "hay":
+					_outbuilding(batch, at, high - low, u.t, m)
 				"shelter":
 					_plinth(batch, unit, at, high - low, Vector2(3.1, 3.1), old_stone)
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(3.0, 2.0, 3.0)), Vector3(0, 1.0, 0)), old_stone)
@@ -309,9 +427,6 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 				"stone":
 					var tilt := Basis(Vector3.UP, u.a).rotated(Vector3.RIGHT, (v - 1.5) * 0.06)
 					batch.add(unit, Transform3D(tilt.scaled(Vector3(0.65, 1.7 + v * 0.3, 0.45)), at.origin + Vector3(0, 0.6, 0)), pale_stone)
-				"hay":
-					batch.add(hay, at.translated_local(Vector3(0, 0.55, 0)), straw)
-					batch.add(hay_top, at.translated_local(Vector3(0, 1.5, 0)), straw)
 				"ruin":
 					# Три стены комнаты разной высоты, четвёртой нет; рядом выпавший камень.
 					var hs := [2.4, 1.3, 0.7]

@@ -45,7 +45,9 @@ func clear() -> void:
 func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near: bool) -> void:
 	clear()
 	_label(settlement.name, 25)
-	_label("%s · домов: %d" % [settlement.get("character", "деревня"), settlement.huts.size()])
+	# с 9.5 в huts есть и сараи с колодцем: считаются только жилые дома
+	var homes: int = settlement.huts.filter(func(u: Dictionary) -> bool: return u.get("t", "house") in SettlementsBuilder.HOMES).size()
+	_label("%s · домов: %d" % [settlement.get("character", "деревня"), homes])
 	_label("Доска маршрутов", 19)
 	_label("Выберите цель — указатель появится на компасе и карте.", 14)
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)

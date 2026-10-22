@@ -268,6 +268,16 @@ static func views(game: GameWorld) -> Array:
 				big = s
 		var t := Vector3(big.x * TILE, h.ground_at(big.x * TILE, big.y * TILE) + 2.0, big.y * TILE)
 		out.append({name = "settlement", title = "Поселение «%s»" % big.name, pos = _look_from(h, t, 95.0, 40.0, 40.0), target = t})
+		# с 9.5: то же поселение вблизи — с края площади на сторону, где больше построек, с высоты второго этажа
+		var lean := Vector2.ZERO
+		for u in big.huts:
+			lean += Vector2(u.x - big.x, u.y - big.y)
+		lean = lean.normalized() if lean.length() > 0.01 else Vector2(1, 0)
+		var from := Vector2(big.x, big.y) - lean * 4.0
+		var pos := _at(h, from.x - 0.5, from.y - 0.5, 0.0)
+		pos.y = maxf(pos.y, t.y) + 6.0
+		var look := _at(h, big.x + lean.x * 3.0 - 0.5, big.y + lean.y * 3.0 - 0.5, 2.0)
+		out.append({name = "village", title = "Улица «%s»" % big.name, pos = pos, target = look})
 	# с 9.3: самое значимое место вне поселений, из равных — ближайшее к дому
 	var site := {}
 	var home := Vector2(w.territory_center)

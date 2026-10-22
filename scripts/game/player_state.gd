@@ -6,11 +6,12 @@ const TILE := GameConfig.TILE
 const SPAWN_DIST := 3.5          # м от костра поселения до точки появления
 const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
 const BODY_R := 0.3     # радиус тела пешехода, м: стены, перила и дома не подпускают центр ближе (и камеру в них)
-const HUT_HALF := 1.6   # полуширина стен дома, м (квадрат 3,2 × 3,2, повёрнут дверью к костру, как в SettlementsBuilder)
-## Полуширина построек мест (StageSites) по местным осям x и z, м
+## Полуширина построек мест (StageSites) и (с 9.5) поселений по местным осям x и z, м: дом, шале,
+## высокий дом у площади, сарай, сеновал, поленница, колодец
 const SITE_HALF := {house = Vector2(1.6, 1.6), barn = Vector2(2.0, 1.5), shelter = Vector2(1.5, 1.5),
 	tower = Vector2(1.3, 1.3), obelisk = Vector2(0.75, 0.75), ruin = Vector2(1.7, 1.7), keep = Vector2(1.6, 1.6),
-	stone = Vector2(0.35, 0.25), hay = Vector2(0.9, 0.9)}
+	stone = Vector2(0.35, 0.25), hay = Vector2(0.9, 0.9), chalet = Vector2(2.2, 1.9), tall = Vector2(1.9, 1.9),
+	shed = Vector2(1.1, 0.75), fountain = Vector2(1.0, 0.45)}
 const PIECE := 0.2      # движение проверяется кусками не длиннее этого, м: тонкую стену не перепрыгнуть
                         # даже при длинном такте (в игре такт 1/60 с, это 0,1–0,35 м)
 const LAKE_REACH := 3   # клеток от воды озера: игрок на берегу (открытие озера и цель у него, с 2.9)
@@ -160,12 +161,12 @@ static func surface(info: Dictionary) -> int:
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0) -> bool:
 	if not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z):
 		return false
-	# сквозь дома не пройти: стены — квадрат, тело не ближе r к нему. Дом поселения повёрнут дверью к костру
+	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
 	for s in w.settlements:
-		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
+		if absf(s.x * TILE - x) > 32.0 or absf(s.y * TILE - z) > 32.0:
 			continue
 		for u in s.huts:
-			if _box_hits(x - u.x * TILE, z - u.y * TILE, atan2(s.x - u.x, s.y - u.y), Vector2(HUT_HALF, HUT_HALF), r):
+			if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):
 				return false
 	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
 	for s in w.sites:
@@ -179,6 +180,16 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r):
 		return false
 	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
+
+
+## Поворот постройки поселения u (с 9.5 свой, a); у заготовок тестов без a — дом дверью к костру s
+static func hut_angle(s: Dictionary, u: Dictionary) -> float:
+	return u.a if u.has("a") else atan2(s.x - u.x, s.y - u.y)
+
+
+## Полуширина постройки по видам SITE_HALF; без вида — дом
+static func hut_half(u: Dictionary) -> Vector2:
+	return SITE_HALF[u.get("t", "house")]
 
 
 ## Задевает ли тело радиуса r стены прямоугольника half (м), повёрнутого на angle вокруг вертикали,

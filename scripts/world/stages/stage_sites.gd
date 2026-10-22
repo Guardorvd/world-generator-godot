@@ -28,7 +28,9 @@ const TYPES := {
 	house = {base = 3.5, space = 30.0, clear = 3.0, title = "одинокий дом"},
 }
 ## Наибольший перепад земли под постройкой, м: руинам и камням неровность не мешает
-const FLAT := {house = 1.6, barn = 1.6, shelter = 1.8, tower = 1.4, obelisk = 1.2, ruin = 3.0, keep = 2.4, stone = 3.0, hay = 2.0}
+## (с 9.5 и для построек поселений: шале на склоне стоит на высоком каменном цоколе)
+const FLAT := {house = 1.6, barn = 1.6, shelter = 1.8, tower = 1.4, obelisk = 1.2, ruin = 3.0, keep = 2.4, stone = 3.0, hay = 2.0,
+	chalet = 2.0, tall = 1.5, shed = 1.4, fountain = 0.8}
 
 
 static func run(w: WorldData) -> void:

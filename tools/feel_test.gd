@@ -338,8 +338,9 @@ func _into_wall(w: WorldData, heights: Heightfield, s: Dictionary, angle: float,
 func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary, a: float, ride: bool) -> int:
 	var hx: float = u.x * GameConfig.TILE
 	var hz: float = u.y * GameConfig.TILE
-	# дом повёрнут дверью к костру, как в SettlementsBuilder
-	var rot := atan2(s.x * GameConfig.TILE - hx, s.y * GameConfig.TILE - hz)
+	# поворот и стены — как у столкновений и SettlementsBuilder (с 9.5 у каждой постройки свои)
+	var rot := PlayerState.hut_angle(s, u)
+	var half := PlayerState.hut_half(u)
 	var p := PlayerState.new()
 	p.x = hx + sin(a) * 8.0
 	p.z = hz + cos(a) * 8.0
@@ -357,12 +358,11 @@ func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary,
 		for q in _body_points(p, b, ride):
 			var dx := q.x - hx
 			var dz := q.y - hz
-			# в систему дома: стены — квадрат 3,2 × 3,2 м
-			var lx := dx * cos(rot) - dz * sin(rot)
-			var lz := dx * sin(rot) + dz * cos(rot)
-			if maxf(absf(lx), absf(lz)) - 1.6 < reach:
+			# в систему дома
+			var gap := maxf(absf(dx * cos(rot) - dz * sin(rot)) - half.x, absf(dx * sin(rot) + dz * cos(rot)) - half.y)
+			if gap < reach:
 				print("  дом %s %s с %d°: %.2f м до стены" % [str(Vector2(u.x, u.y)), "на велосипеде" if ride else "пешком",
-					roundi(rad_to_deg(a)), maxf(absf(lx), absf(lz)) - 1.6])
+					roundi(rad_to_deg(a)), gap])
 				return 1
 	return 0
 
