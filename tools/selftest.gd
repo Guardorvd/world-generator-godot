@@ -66,6 +66,7 @@ static func fingerprint(w: WorldData) -> Dictionary:
 	r.rivers = w.rivers.size()
 	r.trails = w.trails.size()
 	r.settlements = fnv(var_to_bytes(w.settlements))
+	r.sites = fnv(var_to_bytes(w.sites)) # с 9.3: места вне поселений
 	r.travel_geometry = fnv(var_to_bytes(w.trails))
 	r.bridges = w.bridges.size()
 	r.tunnels = w.tunnels.size()

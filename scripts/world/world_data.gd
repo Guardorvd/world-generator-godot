@@ -84,7 +84,12 @@ static func place_id(kind: String, x: float, y: float) -> String:
 	return "%s:%d:%d" % [kind, floori(x), floori(y)]
 
 
-## Места: id -> {id, kind ("settlement" | "peak" | "lake"), name, x, y — клетки, region, src — запись плана}.
+## Виды мест с адресами; список каждого — поле с тем же именем и «s» на конце. «site» (с 9.3) — вышки,
+## руины, хутора и другие места вне поселений (StageSites), вид внутри записи — src.type.
+const PLACE_KINDS := ["settlement", "peak", "lake", "site"]
+
+
+## Места: id -> {id, kind (из PLACE_KINDS), name, x, y — клетки, region, src — запись плана}.
 ## Направления: связи сети поселений {id, from, to — id мест, road, regions — пара областей}.
 func place(id: String) -> Dictionary:
 	return _places().places.get(id, {})
@@ -135,10 +140,10 @@ var _index := {}
 func _places() -> Dictionary:
 	# Пересобрать, только если этап генерации или тест заменил сами списки.
 	if not _index.is_empty() and is_same(_index.lists[0], settlements) and is_same(_index.lists[1], peaks) \
-			and is_same(_index.lists[2], lakes):
+			and is_same(_index.lists[2], lakes) and is_same(_index.lists[3], sites):
 		return _index
-	_index = {lists = [settlements, peaks, lakes], places = {}, regions = {}, routes = []}
-	for kind: String in ["settlement", "peak", "lake"]:
+	_index = {lists = [settlements, peaks, lakes, sites], places = {}, regions = {}, routes = []}
+	for kind: String in PLACE_KINDS:
 		for src: Dictionary in get(kind + "s"):
 			var id := place_id(kind, src.x, src.y)
 			var region := region_at(Vector2i(floori(src.x), floori(src.y)))
@@ -211,6 +216,7 @@ var bridges: Array = []       # мосты [{a, b}]: клетки на бере�
 var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
 var peaks: Array = []         # [{x, y, i, elev, name}]
+var sites: Array = []         # места вне поселений (с 9.3) [{x, y, i, type, rank, name, clear, huts: [{x, y, v, t, a}]}], см. StageSites
 var lakes: Array = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
 var lake_id := PackedInt32Array()    # номер озера из lakes для клетки или -1
 

@@ -54,7 +54,7 @@ func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near:
 		routes.append(_target(world.place(r.to if r.from == here else r.from)))
 	var nearby: Array = []
 	for place: Dictionary in places:
-		if place.kind in ["peak", "lake"]:
+		if place.kind in ["peak", "lake"] or place.kind == "site" and place.src.rank >= 2:
 			nearby.append(place)
 	var center := Vector2(settlement.x, settlement.y)
 	var by_distance := func(a: Dictionary, b: Dictionary) -> bool:
@@ -67,7 +67,7 @@ func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near:
 		_destination(place, center)
 	if not nearby.is_empty():
 		_label("Окрестности", 15)
-	for place: Dictionary in nearby.slice(0, 2):
+	for place: Dictionary in nearby.slice(0, 3):
 		_destination(place, center)
 	# Одна далёкая цель по сети дорог — повод для путешествия, без условий и наград.
 	var far := world.far_destination(here)

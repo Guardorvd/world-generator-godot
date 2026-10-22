@@ -63,12 +63,13 @@ static func _place_settlements(w: WorldData) -> void:
 				score -= 0.4
 			cand.append([score, i, access, density_value])
 	cand.sort_custom(_by_score_desc)
-	# Плотность мира зависит от сида; прежнее количество — верхняя граница.
-	var maximum := clampi(roundi(12.0 * w.scale), 4, 26)
-	var minimum := maxi(2, ceili(maximum * 0.55))
+	# Плотность мира зависит от сида. С 9.3 деревень почти вдвое меньше и они дальше друг от друга:
+	# мелкое жильё между ними — хутора и одинокие дома (StageSites).
+	var maximum := clampi(roundi(7.0 * w.scale), 3, 16)
+	var minimum := maxi(2, ceili(maximum * 0.5))
 	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
 	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
-	var min_d := maxf(28.0, W / 10.0)
+	var min_d := maxf(32.0, W / 8.0)
 	for c: Array in cand:
 		if settlements.size() >= want:
 			break
@@ -88,21 +89,29 @@ static func _place_settlements(w: WorldData) -> void:
 				break
 		if close:
 			continue
-		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.55 + c[3] * 0.3, 0.0, 1.0)
+		# Берег большой воды и удобная долина делают место узлом округи.
+		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
+		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3 + shore, 0.0, 1.0)
 		settlements.append({x = x, y = y, i = i, spacing = spacing, importance = importance,
 			name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
 	# Дома вокруг центра поселения, не на воде и не на крутых склонах
 	var ground := Heightfield.new(w, false)
+	# Посёлков — примерно треть, самые важные места; остальные — деревни.
+	var ranks: Array = settlements.map(func(s: Dictionary) -> float: return s.importance)
+	ranks.sort()
+	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
 	for s: Dictionary in settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
-		var n := 3 + roundi(s.importance * 4.0) + floori(rng.next_float() * 3)
-		s.character = "прибрежный посёлок" if dist_water[s.i] < 5.0 else ("лесная деревня" if biome[s.i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else ("земледельческая деревня" if s.importance >= 0.6 else "окраинная деревня"))
+		# Посёлок — узел округи: вдвое больше домов и шире кольцо, чем у деревни.
+		var town: bool = s.importance >= town_from
+		var n := (8 if town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
+		s.character = _character(w, s.i, town)
 		var k := 0
 		var tries := 0
-		while k < n and tries < 80:
+		while k < n and tries < 160:
 			tries += 1
 			var a := rng.next_float() * PI * 2.0
-			var r := 1.6 + rng.next_float() * 3.4
+			var r := 1.6 + rng.next_float() * (4.4 if town else 3.4)
 			var hx: float = s.x + cos(a) * r
 			var hy: float = s.y + sin(a) * r
 			var ti := floori(hy) * W + floori(hx)
@@ -138,14 +147,34 @@ static func _place_settlements(w: WorldData) -> void:
 	w.settlements = settlements
 
 
+## Характер поселения по месту: «приморский посёлок», «горная деревня»…
+static func _character(w: WorldData, i: int, town: bool) -> String:
+	var adj := ["окраинный", "окраинная"]
+	# Заготовки тестов задают не все поля
+	var sea := not w.dist_ocean.is_empty() and w.dist_ocean[i] < 8.0
+	var high := not w.h.is_empty() and w.h[i] > 0.38
+	if w.dist_water[i] < 5.0:
+		adj = ["приморский", "приморская"] if sea else ["речной", "речная"]
+	elif high:
+		adj = ["горный", "горная"]
+	elif w.biome[i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]:
+		adj = ["лесной", "лесная"]
+	elif w.biome[i] in [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA]:
+		adj = ["торговый", "земледельческая"] if town else ["земледельческий", "земледельческая"]
+	return adj[0] + " посёлок" if town else adj[1] + " деревня"
+
+
 ## Плавная неоднородность заселения в мировых координатах, без квот по областям.
 static func _settlement_density(w: WorldData, x: int, y: int) -> float:
-	const CELL := 96.0
-	var seed := WGRandom.derive(w.seed_num, "settlement.density")
-	var gx := floori(x / CELL)
-	var gy := floori(y / CELL)
-	var tx := smoothstep(0.0, 1.0, fmod(x / CELL, 1.0))
-	var ty := smoothstep(0.0, 1.0, fmod(y / CELL, 1.0))
+	return patches(x, y, 96.0, WGRandom.derive(w.seed_num, "settlement.density"))
+
+
+## Плавные пятна 0..1 размером cell клеток в мировых координатах (заселённость, частота типов мест)
+static func patches(x: int, y: int, cell: float, seed: int) -> float:
+	var gx := floori(x / cell)
+	var gy := floori(y / cell)
+	var tx := smoothstep(0.0, 1.0, fmod(x / cell, 1.0))
+	var ty := smoothstep(0.0, 1.0, fmod(y / cell, 1.0))
 	return lerpf(lerpf(WGRandom.hash2(gx, gy, seed), WGRandom.hash2(gx + 1, gy, seed), tx),
 		lerpf(WGRandom.hash2(gx, gy + 1, seed), WGRandom.hash2(gx + 1, gy + 1, seed), tx), ty)
 

@@ -97,6 +97,8 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	StageLandmarks.run(w)
 	step.call(StageTrails.PROGRESS, StageTrails.LABEL)
 	StageTrails.run(w, step)
+	step.call(StageSites.PROGRESS, StageSites.LABEL)
+	StageSites.run(w)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w)
 	StageLakes.run(w)

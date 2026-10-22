@@ -126,6 +126,9 @@ static func world_stats(w: WorldData) -> Dictionary:
 	for s in w.settlements:
 		huts += s.huts.size()
 	var fp := SelfTest.fingerprint(w)
+	var sites := {}
+	for s in w.sites:
+		sites[s.type] = int(sites.get(s.type, 0)) + 1
 	return {
 		seed = w.seed_text, size = w.W,
 		land_share = snappedf(float(land) / w.N, 0.001),
@@ -134,6 +137,7 @@ static func world_stats(w: WorldData) -> Dictionary:
 		peaks = w.peaks.size(),
 		settlements = w.settlements.size(),
 		huts = huts,
+		sites = sites,
 		ways = kinds,
 		ways_m = _rounded(lengths),
 		road_cells = road_cells,
@@ -264,4 +268,14 @@ static func views(game: GameWorld) -> Array:
 				big = s
 		var t := Vector3(big.x * TILE, h.ground_at(big.x * TILE, big.y * TILE) + 2.0, big.y * TILE)
 		out.append({name = "settlement", title = "Поселение «%s»" % big.name, pos = _look_from(h, t, 95.0, 40.0, 40.0), target = t})
+	# с 9.3: самое значимое место вне поселений, из равных — ближайшее к дому
+	var site := {}
+	var home := Vector2(w.territory_center)
+	for s in w.sites:
+		if site.is_empty() or s.rank > site.rank or s.rank == site.rank and home.distance_to(Vector2(s.x, s.y)) < home.distance_to(Vector2(site.x, site.y)):
+			site = s
+	if not site.is_empty():
+		var t := Vector3(site.x * TILE, h.ground_at(site.x * TILE, site.y * TILE) + 3.0, site.y * TILE)
+		var kind: String = StageSites.TYPES[site.type].title
+		out.append({name = "site", title = "%s «%s»" % [kind.left(1).to_upper() + kind.substr(1), site.name], pos = _look_from(h, t, 32.0, 10.0, 8.0), target = t})
 	return out

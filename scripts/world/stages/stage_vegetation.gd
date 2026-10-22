@@ -90,6 +90,13 @@ static func fields(w: WorldData) -> Dictionary:
 		for y in range(maxi(0, ceili(s.y - VILLAGE_R)), mini(H - 1, floori(s.y + VILLAGE_R)) + 1):
 			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
 				village[y * W + x] = 1
+	# Поляны у хуторов, домов и вышек (с 9.3); руины остаются в лесу
+	for s: Dictionary in w.sites:
+		var r: float = s.clear
+		for y in range(maxi(0, ceili(s.y - r)), mini(H - 1, floori(s.y + r)) + 1):
+			for x in range(maxi(0, ceili(s.x - r)), mini(W - 1, floori(s.x + r)) + 1):
+				if Grid.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < r:
+					village[y * W + x] = 1
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village}.merged(
 		structure_rect(w, 0, 0, W, H))
@@ -398,7 +405,7 @@ class ObjStore:
 		var cx := floori(ox)
 		var cy := floori(oy)
 		if w != null:
-			if StageVegetation.near_hut(w.settlements, ox, oy, radius):
+			if StageVegetation.near_hut(w.settlements, ox, oy, radius) or StageVegetation.near_hut(w.sites, ox, oy, radius):
 				return
 			# Увеличенные кроны не заходят на полотно. Животные тропы тоже сохраняются.
 			var reach := ceili(radius + 1.0)

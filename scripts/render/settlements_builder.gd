@@ -208,6 +208,8 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
 		parent.add_child(label)
 		labels.append(label)
+	_build_sites(parent, w, heights, batch, labels, {walls = walls, roofs = roofs, door = door_m, win = win_m,
+		stone = stone_m, timber = timber_m, wall = wall_mesh, roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh})
 	# названия озёр над серединой воды (с 2.9)
 	for lk in w.lakes:
 		var at := Vector2(lk.x * TILE, lk.y * TILE)
@@ -225,6 +227,108 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	if mi != null:
 		parent.add_child(mi)
 	return {fires = fires, labels = labels}
+
+
+## Места вне поселений (с 9.3): постройки из тех же простых мешей в общий MeshBatch. Вид постройки — u.t,
+## поворот — u.a (тот же, что у столкновений PlayerState.SITE_HALF). Подписи — у значимых мест.
+static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, labels: Array, m: Dictionary) -> void:
+	var unit := _box_mesh(Vector3.ONE)
+	var old_stone := _mat(Color.html("#6b6a5c"))
+	var pale_stone := _mat(Color.html("#9a958a"))
+	var straw := _mat(Color.html("#c2a35a"))
+	var dark_roof := _mat(Color.html("#4a3f36"))
+	var leg := _box_mesh(Vector3(0.25, 7.0, 0.25))
+	var deck := _box_mesh(Vector3(2.8, 0.2, 2.8))
+	var rail := _box_mesh(Vector3(2.8, 0.1, 0.08))
+	var tower_roof := _cone_mesh(2.2, 1.6, 4)
+	var tip := _cone_mesh(0.5, 0.7, 4)
+	var hay := CylinderMesh.new()
+	hay.top_radius = 0.75
+	hay.bottom_radius = 0.9
+	hay.height = 1.3
+	hay.radial_segments = 8
+	var hay_top := _cone_mesh(0.75, 0.7, 8)
+	var keep := CylinderMesh.new()
+	keep.top_radius = 1.5
+	keep.bottom_radius = 1.6
+	keep.height = 1.0
+	keep.radial_segments = 8
+	for s: Dictionary in w.sites:
+		var top := -INF
+		for u: Dictionary in s.huts:
+			var x: float = u.x * TILE
+			var z: float = u.y * TILE
+			var low := INF
+			var high := -INF
+			for c: Vector2 in HUT_CORNERS:
+				var corner := Basis(Vector3.UP, u.a) * Vector3(c.x, 0, c.y)
+				var h := heights.ground_at(x + corner.x, z + corner.z)
+				low = minf(low, h)
+				high = maxf(high, h)
+			var v: int = u.v
+			# Жилые постройки стоят на цоколе по верхнему углу, камни и руины уходят в землю.
+			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(x, high if u.t in ["house", "barn", "shelter"] else low, z))
+			top = maxf(top, at.origin.y)
+			match u.t:
+				"house":
+					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
+					base.basis = base.basis.scaled(Vector3(1, high - low + 0.15, 1))
+					batch.add(unit, base * Transform3D(Basis.from_scale(Vector3(3.3, 1, 3.3)), Vector3.ZERO), m.stone)
+					batch.add(m.wall, at.translated_local(Vector3(0, 1.3, 0)), m.walls[v])
+					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 3.7, 0)), m.roofs[v])
+					batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), m.door)
+					batch.add(m.win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), m.win)
+				"barn":
+					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
+					base.basis = base.basis.scaled(Vector3(4.1, high - low + 0.15, 3.1))
+					batch.add(unit, base, m.stone)
+					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(4.0, 2.8, 3.0)), Vector3(0, 1.4, 0)), m.timber)
+					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(1.05, 0.9, 1.05)), Vector3(0, 3.6, 0)), dark_roof)
+					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(1.6, 2.0, 0.1)), Vector3(0, 1.0, 1.52)), m.door)
+				"shelter":
+					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
+					base.basis = base.basis.scaled(Vector3(3.1, high - low + 0.15, 3.1))
+					batch.add(unit, base, old_stone)
+					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(3.0, 2.0, 3.0)), Vector3(0, 1.0, 0)), old_stone)
+					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(0.95, 0.6, 0.95)), Vector3(0, 2.65, 0)), dark_roof)
+					batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.52)), m.door)
+				"tower":
+					for cx: float in [-1.0, 1.0]:
+						for cz: float in [-1.0, 1.0]:
+							batch.add(leg, at.translated_local(Vector3(cx, 3.2, cz)), m.timber)
+					batch.add(deck, at.translated_local(Vector3(0, 6.4, 0)), m.timber)
+					for k in 4:
+						batch.add(rail, at * Transform3D(Basis(Vector3.UP, k * PI / 2.0)) * Transform3D(Basis(), Vector3(0, 7.2, 1.36)), m.timber)
+					batch.add(tower_roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 8.5, 0)), m.roofs[v])
+				"obelisk":
+					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(1.5, 0.8, 1.5)), Vector3(0, 0.2, 0)), old_stone)
+					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(0.7, 4.6, 0.7)), Vector3(0, 2.9, 0)), pale_stone)
+					batch.add(tip, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 5.55, 0)), pale_stone)
+				"stone":
+					var tilt := Basis(Vector3.UP, u.a).rotated(Vector3.RIGHT, (v - 1.5) * 0.06)
+					batch.add(unit, Transform3D(tilt.scaled(Vector3(0.65, 1.7 + v * 0.3, 0.45)), at.origin + Vector3(0, 0.6, 0)), pale_stone)
+				"hay":
+					batch.add(hay, at.translated_local(Vector3(0, 0.55, 0)), straw)
+					batch.add(hay_top, at.translated_local(Vector3(0, 1.5, 0)), straw)
+				"ruin":
+					# Три стены комнаты разной высоты, четвёртой нет; рядом выпавший камень.
+					var hs := [2.4, 1.3, 0.7]
+					for k in 3:
+						var h: float = hs[(k + v) % 3]
+						var wall: Vector3 = [Vector3(3.4, h, 0.45), Vector3(0.45, h, 3.4), Vector3(0.45, h, 1.8)][k]
+						var pos: Vector3 = [Vector3(0, h * 0.5 - 0.2, -1.5), Vector3(-1.5, h * 0.5 - 0.2, 0), Vector3(1.5, h * 0.5 - 0.2, -0.8)][k]
+						batch.add(unit, at * Transform3D(Basis.from_scale(wall), pos), old_stone)
+					batch.add(unit, at * Transform3D(Basis(Vector3.UP, 0.4).scaled(Vector3(0.7, 0.45, 0.9)), Vector3(1.2, 0.1, 1.4)), old_stone)
+				"keep":
+					var h := 5.0 + v * 1.5
+					batch.add(keep, at * Transform3D(Basis.from_scale(Vector3(1, h, 1)), Vector3(0, h * 0.5 - 0.3, 0)), old_stone)
+		if s.rank < 2 or s.huts.is_empty():
+			continue
+		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (11.0 if s.type == "tower" else 7.0), s.y * TILE))
+		# Мелкие подписи не висят над всей округой
+		label.visibility_range_end = 900.0 if s.rank >= 3 else 350.0
+		parent.add_child(label)
+		labels.append(label)
 
 
 ## Покачивание пламени костров; time — секунды игры

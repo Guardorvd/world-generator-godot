@@ -68,7 +68,8 @@ func terrain_fits(xf: Transform3D, box: AABB) -> bool:
 
 ## Проверяем весь след у воды, дорог и домов; шаг не больше метра.
 func ground_clear(x: float, z: float, radius: float) -> bool:
-	if StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, radius / TILE + 0.3):
+	if StageVegetation.near_hut(world.settlements, x / TILE, z / TILE, radius / TILE + 0.3) \
+			or StageVegetation.near_hut(world.sites, x / TILE, z / TILE, radius / TILE + 0.3):
 		return false
 	var steps := ceili(radius * 2.0)
 	var rc := world.river_cells() # коридор ленты реки, как у генератора растительности

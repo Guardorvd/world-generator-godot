@@ -278,6 +278,10 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 	# Поляны вокруг поселений
 	for s in w.settlements:
 		cv.radial_glade(s.x * PX, s.y * PX, 6.5 * PX)
+	# и у хуторов и домов (с 9.3)
+	for s in w.sites:
+		if s.clear >= 3.0:
+			cv.radial_glade(s.x * PX, s.y * PX, s.clear * PX)
 	# На карте — вода, на текстуре 3D — естественное гравийное дно.
 	for r in w.rivers:
 		cv.stroke_poly(r, Color8(70, 80, 50), 0.35, 1.0, 0.35, PX)

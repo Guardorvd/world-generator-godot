@@ -142,7 +142,7 @@ func places() -> Array:
 ## Все места плана, включая ещё не открытые земли: далёкую цель можно выбрать заранее.
 func all_places() -> Array:
 	var out: Array = []
-	for kind: String in ["settlement", "peak", "lake"]:
+	for kind: String in WorldData.PLACE_KINDS:
 		for src: Dictionary in world.get(kind + "s"):
 			var p := world.place(WorldData.place_id(kind, src.x, src.y)).duplicate()
 			p.key = p.id
@@ -175,7 +175,7 @@ func check_goal(x: float, z: float) -> String:
 	if goal.kind == "lake":
 		if not world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, goal.src.i):
 			return ""
-	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind == "peak" else 6.0):
+	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind == "peak" else (4.0 if goal.kind == "site" else 6.0)):
 		return ""
 	var text := "Вы добрались до цели: «%s»" % goal.name
 	set_goal({})
@@ -485,6 +485,13 @@ class BigMap extends Control:
 					var col := Color.html("#ffdd55") if seen else Color.html("#cfeaff")
 					draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
 					Hud.draw_label(self, pl.name, at - Vector2(0, 7), col, 12)
+				"site":
+					# Ромбик по значимости; название — у крупных мест и у тех, где уже были.
+					var col := Color.html("#ffdd55") if seen else Color.html("#e6d6b0")
+					var r: float = 1.5 + pl.src.rank
+					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -r), at + Vector2(r, 0), at + Vector2(0, r), at + Vector2(-r, 0)]), col)
+					if seen or pl.src.rank >= 3:
+						Hud.draw_label(self, pl.name, at - Vector2(0, 6), col, 11)
 		if not hud.goal.is_empty():
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		if hud.bike_shown:
@@ -506,15 +513,17 @@ class BigMap extends Control:
 
 	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»
 	func _found_line() -> String:
-		var n := {settlement = 0, peak = 0, lake = 0}
+		var n := {settlement = 0, peak = 0, lake = 0, site = 0}
 		for key: String in hud.visited:
 			n[key.get_slice(":", 0)] += 1
-		var counts := {settlement = 0, peak = 0, lake = 0}
+		var counts := {settlement = 0, peak = 0, lake = 0, site = 0}
 		for place: Dictionary in hud.places():
 			counts[place.kind] += 1
 		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.settlement, counts.settlement, n.peak, counts.peak]
 		if counts.lake > 0:
 			text += " · озёр %d из %d" % [n.lake, counts.lake]
+		if counts.site > 0:
+			text += " · мест %d из %d" % [n.site, counts.site]
 		return text
 
 	## Маркер у края карты остаётся внутри её рамки

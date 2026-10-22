@@ -7,6 +7,10 @@ const SPAWN_DIST := 3.5          # м от костра поселения до 
 const HOME_EDGE := 0.2           # поселение появления не ближе такой доли стороны карты к её краю (home)
 const BODY_R := 0.3     # радиус тела пешехода, м: стены, перила и дома не подпускают центр ближе (и камеру в них)
 const HUT_HALF := 1.6   # полуширина стен дома, м (квадрат 3,2 × 3,2, повёрнут дверью к костру, как в SettlementsBuilder)
+## Полуширина построек мест (StageSites) по местным осям x и z, м
+const SITE_HALF := {house = Vector2(1.6, 1.6), barn = Vector2(2.0, 1.5), shelter = Vector2(1.5, 1.5),
+	tower = Vector2(1.3, 1.3), obelisk = Vector2(0.75, 0.75), ruin = Vector2(1.7, 1.7), keep = Vector2(1.6, 1.6),
+	stone = Vector2(0.35, 0.25), hay = Vector2(0.9, 0.9)}
 const PIECE := 0.2      # движение проверяется кусками не длиннее этого, м: тонкую стену не перепрыгнуть
                         # даже при длинном такте (в игре такт 1/60 с, это 0,1–0,35 м)
 const LAKE_REACH := 3   # клеток от воды озера: игрок на берегу (открытие озера и цель у него, с 2.9)
@@ -179,6 +183,21 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 			var oz := absf(dx * fx + dz * fz) - HUT_HALF
 			if ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r):
 				return false
+	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
+	for s in w.sites:
+		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
+			continue
+		for u in s.huts:
+			var half: Vector2 = SITE_HALF[u.t]
+			var dx: float = x - u.x * TILE
+			var dz: float = z - u.y * TILE
+			var reach_site := maxf(half.x, half.y) * 1.5 + r
+			if absf(dx) > reach_site or absf(dz) > reach_site:
+				continue
+			var ox := absf(dx * cos(u.a) - dz * sin(u.a)) - half.x
+			var oz := absf(dx * sin(u.a) + dz * cos(u.a)) - half.y
+			if ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r):
+				return false
 	if heights.wall_at(x, z, feet, r):
 		return false
 	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r):
@@ -334,6 +353,12 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Вы покорили вершину «%s»!" % pk.name)
+	for st in w.sites:
+		if Grid.hypot(st.x - tx, st.y - tz) < 4.0:
+			var key := WorldData.place_id("site", st.x, st.y)
+			if not visited.has(key):
+				visited[key] = true
+				found.append("Новое место: «%s», %s" % [st.name, StageSites.TYPES[st.type].title])
 	var lk := w.lake_near(tx, tz, LAKE_REACH)
 	if lk >= 0:
 		var key := WorldData.place_id("lake", w.lakes[lk].x, w.lakes[lk].y)
