@@ -187,6 +187,8 @@ func set_paused(p: bool) -> void:
 		_close_settlement(false)
 	else:
 		_apply_shadows() # тени меняются в настройках на паузе
+		if vegetation.set_draw(GameSettings.draw): # и дальность прорисовки (с 9.8+)
+			vegetation.update(player.x, player.z, true)
 	audio.set_paused(p)
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false

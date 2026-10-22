@@ -83,6 +83,10 @@ func _sync_settings_controls() -> void:
 	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
 	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
 	%Shadows.set_pressed_no_signal(GameSettings.shadows)
+	if %DrawOption.item_count == 0:
+		for level: Dictionary in GameSettings.DRAW_LEVELS:
+			%DrawOption.add_item(level.title.capitalize())
+	%DrawOption.select(GameSettings.draw)
 	%VolumeSlider.set_value_no_signal(GameSettings.volume)
 	%DaySlider.set_value_no_signal(GameSettings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameSettings.start_hour)
@@ -146,6 +150,10 @@ func _on_fullscreen_toggled(on: bool) -> void:
 
 func _on_shadows_toggled(on: bool) -> void:
 	GameSettings.shadows = on
+
+
+func _on_draw_selected(index: int) -> void:
+	GameSettings.draw = index
 
 
 func _on_seed_submitted(_text: String) -> void:

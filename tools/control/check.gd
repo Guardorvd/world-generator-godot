@@ -12,7 +12,8 @@ extends SceneTree
 ## Глубокая: godot --headless --path . --script res://tools/control/check.gd -- --deep — все миры из seeds.json (виды) и все размеры замера (FPS), по процессу на мир;
 ##   Север-1234@512 снимается и меряется за одну генерацию.
 ## Общие: --out <папка> (по умолчанию runs/<версия>), --base <папка> (по умолчанию прошлая версия в runs),
-##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1.
+##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1,
+##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию 0).
 ## Кэш: в папке прогона лежит check.json; если тот же коммит без правок уже снят с теми же видами и FPS,
 ## мир не генерируется повторно. Поэтому «было» снимается один раз до правок и дальше берётся из кэша.
 
@@ -54,6 +55,7 @@ var look_ms := PackedFloat32Array()
 var road_ms := PackedFloat32Array()
 ## С 9.8+: в каждом кадре пролёта — расстояние до ближайшего чанка леса в радиусе деревьев, который ещё не показан, м
 var veg_gap := PackedFloat32Array()
+var tree_r := GameConfig.TREE_R
 var draw_calls := 0.0
 var primitives := 0.0
 var counted := 0
@@ -147,7 +149,7 @@ func _run_deep() -> void:
 		else:
 			views[id] = [cfg.seed, int(s), "none", "on"]
 	var pass_args: PackedStringArray = ["--out", out, "--look", str(look_s), "--road", str(road_s),
-		"--shadows", Dev.arg("shadows", "on"), "--scale", Dev.arg("scale", "1"), "--child", "1"]
+		"--shadows", Dev.arg("shadows", "on"), "--draw", Dev.arg("draw", "0"), "--scale", Dev.arg("scale", "1"), "--child", "1"]
 	if Dev.arg("hours") != "":
 		pass_args.append_array(["--hours", Dev.arg("hours")])
 	if "--again" in OS.get_cmdline_user_args():
@@ -215,6 +217,8 @@ func _process(delta: float) -> bool:
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
 				GameSettings.shadows = Dev.arg("shadows", "on") != "off"
+				GameSettings.draw = int(Dev.arg("draw", "0"))
+				result.draw = GameSettings.draw
 				root.scaling_3d_scale = clampf(float(Dev.arg("scale", "1")), 0.25, 1.0)
 				result.render = {method = RenderingServer.get_current_rendering_method(), viewport = str(root.size),
 					scale = root.scaling_3d_scale, shadows = GameSettings.shadows, msaa = root.msaa_3d}
@@ -398,7 +402,7 @@ func _save_perf() -> void:
 		sorted.sort()
 		var close := 0
 		for g in veg_gap:
-			if g < GameConfig.TREE_R * 0.5:
+			if g < tree_r * 0.5:
 				close += 1
 		result.veg_gap = {min_m = snappedf(sorted[0], 0.1), p10_m = snappedf(sorted[sorted.size() / 10], 0.1),
 			close_share = snappedf(float(close) / veg_gap.size(), 0.001)}
@@ -418,7 +422,7 @@ func _save_perf() -> void:
 		result.look.low1, result.road.fps, result.road.low1, result.load_s])
 	if result.has("veg_gap"):
 		print("Лес на пролёте: ближайший не показанный чанк %.0f м (10 %% кадров ближе %.0f м), кадров ближе %.0f м: %.1f %%" % [
-			result.veg_gap.min_m, result.veg_gap.p10_m, GameConfig.TREE_R * 0.5, result.veg_gap.close_share * 100.0])
+			result.veg_gap.min_m, result.veg_gap.p10_m, tree_r * 0.5, result.veg_gap.close_share * 100.0])
 
 
 ## Ломаная самой длинной дороги в метрах; если дорог нет — прямая на север от точки появления
@@ -426,7 +430,8 @@ func _save_perf() -> void:
 ## ближе половины радиуса, игрок видит как лес, выросший на глазах.
 func _veg_gap(veg: VegetationLayer, p: Vector2) -> float:
 	var side: float = veg.world.CS * GameConfig.TILE
-	var r := GameConfig.TREE_R
+	var r := veg.tree_r
+	tree_r = r
 	var best := r
 	for cy in range(floori((p.y - r) / side), floori((p.y + r) / side) + 1):
 		for cx in range(floori((p.x - r) / side), floori((p.x + r) / side) + 1):

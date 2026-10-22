@@ -401,6 +401,18 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Тени и затенение"
 
+[node name="DrawRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="DrawLabel" type="Label" parent="UI/Root/Settings/Panel/Box/DrawRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Дальность прорисовки"
+
+[node name="DrawOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/DrawRow"]
+unique_name_in_owner = true
+layout_mode = 2
+
 [node name="VolumeRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
 layout_mode = 2
 
@@ -493,6 +505,7 @@ text = "Готово"
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/HeadBob" to="." method="_on_head_bob_toggled"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/Fullscreen" to="." method="_on_fullscreen_toggled"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/Shadows" to="." method="_on_shadows_toggled"]
+[connection signal="item_selected" from="UI/Root/Settings/Panel/Box/DrawRow/DrawOption" to="." method="_on_draw_selected"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Reset" to="." method="_on_reset_settings"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]

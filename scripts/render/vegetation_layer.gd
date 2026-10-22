@@ -8,8 +8,8 @@ extends Node3D
 
 const TILE := GameConfig.TILE
 const WATER_MARGIN := 0.3
-const LOAD_RADIUS := GameConfig.TREE_R + 64.0 # запас на фоновую подготовку при движении
-const DROP_RADIUS := LOAD_RADIUS + 96.0     # гистерезис: не пересоздаём чанк на границе
+const LOAD_MARGIN := 64.0 # запас на фоновую подготовку при движении
+const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём чанк на границе
 const RECHECK := 24.0
 const Understory := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -19,6 +19,9 @@ const UNDERSTORY_MAX := 2048 # на форму мелкого подлеска, 
 ## с 9.4 он гуще и на границе GRASS_R (52 м) вырастал прямо перед игроком. Мелкие растения — как прежде.
 const UNDERSTORY_FAR_R := 140.0
 const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подлеска: площадь круга в 7 раз больше
+## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
+## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
+## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
@@ -64,6 +67,12 @@ var obstacles := PackedFloat32Array() # 7.7: валежник и сухосто�
 var obstacles_version := 0            # растёт с каждой новой раскладкой подлеска
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
 var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
+var draw_level := -1
+var tree_r := GameConfig.TREE_R      # деревья, м
+var grass_r := GameConfig.GRASS_R    # трава и мелкие растения, м
+var under_r := UNDERSTORY_FAR_R      # крупный подлесок, м
+var load_radius := tree_r + LOAD_MARGIN
+var drop_radius := load_radius + DROP_MARGIN
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
@@ -97,10 +106,11 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		_defs[kind] = entry
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
-	grass = _multimesh(grass_mesh, grass_mat, GameConfig.GRASS_MAX, true, false).multimesh
+	_set_radii(GameSettings.draw)
+	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb()
-	grass_buf = _buffer(GameConfig.GRASS_MAX, 16)
+	grass_buf = _buffer(_grass_cap(), 16)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
@@ -111,12 +121,67 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
 		var far := Placement.priority(understory.size()) < 2
-		var cap := UNDERSTORY_FAR_MAX if far else UNDERSTORY_MAX
+		var cap := _understory_cap(far)
 		var node := _multimesh(mesh, mat, cap, true, shadows)
-		node.visibility_range_end = UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
+		node.visibility_range_end = under_r if far else grass_r
 		node.visibility_range_end_margin = 8.0
-		understory.append({mm = node.multimesh, buf = _buffer(cap, 16), count = 0, cap = cap, far = far,
+		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, 16), count = 0, cap = cap, far = far,
 			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
+
+
+## Дальности уровня GameSettings.DRAW_LEVELS[level]
+func _set_radii(level: int) -> void:
+	draw_level = clampi(level, 0, GameSettings.DRAW_LEVELS.size() - 1)
+	var d: Dictionary = GameSettings.DRAW_LEVELS[draw_level]
+	tree_r = d.trees
+	grass_r = d.grass
+	under_r = maxf(d.under, UNDERSTORY_FAR_R)
+	load_radius = tree_r + LOAD_MARGIN
+	drop_radius = load_radius + DROP_MARGIN
+
+
+## Во сколько раз больше объектов при дальности r и полной густоте до full (с поредением за ней)
+static func _spread(r: float, full: float) -> float:
+	return 1.0 + 2.0 * log(maxf(r, full) / full)
+
+
+## Запас буфера: на минимальной дальности прежний, на большей — с запасом на неровную густоту
+static func _cap(base: int, spread: float) -> int:
+	return roundi(base * (spread * 1.25 - 0.25))
+
+
+func _grass_cap() -> int:
+	return _cap(GameConfig.GRASS_MAX, _spread(grass_r, GameConfig.GRASS_R))
+
+
+func _understory_cap(far: bool) -> int:
+	if far:
+		return _cap(UNDERSTORY_FAR_MAX, _spread(under_r, UNDERSTORY_FAR_R))
+	return _cap(UNDERSTORY_MAX, _spread(grass_r, GameConfig.GRASS_R))
+
+
+## Смена дальности на паузе. true — уровень другой: вызывающий затем делает update(..., true).
+func set_draw(level: int) -> bool:
+	if clampi(level, 0, GameSettings.DRAW_LEVELS.size() - 1) == draw_level:
+		return false
+	_finish()
+	_set_radii(level)
+	grass.visible_instance_count = 0
+	grass.instance_count = _grass_cap()
+	grass_buf = _buffer(grass.instance_count, 16)
+	_grass_n = 0
+	for entry: Dictionary in understory:
+		entry.cap = _understory_cap(entry.far)
+		entry.mm.visible_instance_count = 0
+		entry.mm.instance_count = entry.cap
+		entry.buf = _buffer(entry.cap, 16)
+		entry.count = 0
+		entry.node.visibility_range_end = under_r if entry.far else grass_r
+	for key: Vector3i in veg:
+		for node: MultiMeshInstance3D in veg[key].nodes:
+			node.visibility_range_end = tree_r + world.CS * TILE * 0.7072
+	last_fill = Vector2.INF
+	return true
 
 
 ## 6.7: ветер и свет по виду. sway/flutter — м, ao — свет неба у основания и в глубине кроны,
@@ -171,7 +236,7 @@ func update(px: float, pz: float, force: bool) -> bool:
 	elif _task != -1:
 		if WorkerThreadPool.is_task_completed(_task):
 			_finish()
-			if p.distance_to(last_fill) > LOAD_RADIUS:
+			if p.distance_to(last_fill) > load_radius:
 				_built.clear()
 				_pending.clear()
 				last_fill = Vector2.INF
@@ -189,7 +254,7 @@ func update(px: float, pz: float, force: bool) -> bool:
 	if force or last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK:
 		last_trees = p
 		_drop(p)
-		_pending = _pending.filter(func(b: Dictionary) -> bool: return _distance(b.chunk, p) <= LOAD_RADIUS)
+		_pending = _pending.filter(func(b: Dictionary) -> bool: return _distance(b.chunk, p) <= load_radius)
 	if not force and not _pending.is_empty():
 		if p.distance_to(last_fill) >= 8.0:
 			last_fill = p
@@ -201,7 +266,7 @@ func update(px: float, pz: float, force: bool) -> bool:
 	if not force and last_fill != Vector2.INF and p.distance_to(last_fill) < 8.0:
 		return false
 	# с 9.0 фон строит сначала чанки по ходу движения (направление — от прошлой раскладки)
-	var ahead := p if force or last_fill == Vector2.INF else p + (p - last_fill).normalized() * LOAD_RADIUS * 0.5
+	var ahead := p if force or last_fill == Vector2.INF else p + (p - last_fill).normalized() * load_radius * 0.5
 	last_fill = p
 	var missing := _wanted(p, ahead)
 	if force:
@@ -238,10 +303,10 @@ func _on_map(chunk: Vector2i) -> bool:
 func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	var side := world.CS * TILE
-	var x0 := floori((p.x - LOAD_RADIUS) / side)
-	var x1 := floori((p.x + LOAD_RADIUS) / side)
-	var y0 := floori((p.y - LOAD_RADIUS) / side)
-	var y1 := floori((p.y + LOAD_RADIUS) / side)
+	var x0 := floori((p.x - load_radius) / side)
+	var x1 := floori((p.x + load_radius) / side)
+	var y0 := floori((p.y - load_radius) / side)
+	var y1 := floori((p.y + load_radius) / side)
 	if world.outer == null: # без местности за краем — только чанки карты
 		x0 = maxi(0, x0)
 		y0 = maxi(0, y0)
@@ -250,7 +315,7 @@ func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 	for cy in range(y0, y1 + 1):
 		for cx in range(x0, x1 + 1):
 			var c := Vector2i(cx, cy)
-			if not _loaded.has(c) and _distance(c, p) <= LOAD_RADIUS:
+			if not _loaded.has(c) and _distance(c, p) <= load_radius:
 				out.append(c)
 	# Фон строит список от дальних к ближним; главный поток берёт с конца.
 	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
@@ -260,13 +325,13 @@ func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 
 func _drop(p: Vector2) -> void:
 	for key: Vector3i in veg.keys():
-		if _distance(Vector2i(key.x, key.y), p) > DROP_RADIUS:
+		if _distance(Vector2i(key.x, key.y), p) > drop_radius:
 			for node: MultiMeshInstance3D in veg[key].nodes:
 				node.visible = false
 				node.queue_free()
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
-		if _distance(chunk, p) > DROP_RADIUS:
+		if _distance(chunk, p) > drop_radius:
 			_loaded.erase(chunk)
 			if world.outer != null:
 				world.outer.veg.erase(chunk)
@@ -437,7 +502,7 @@ func _apply_chunk(built: Dictionary) -> void:
 			mm.custom_aabb = entry.bounds
 			mm.visible_instance_count = entry.count
 			# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
-			node.visibility_range_end = GameConfig.TREE_R + world.CS * TILE * 0.7072
+			node.visibility_range_end = tree_r + world.CS * TILE * 0.7072
 			node.visibility_range_end_margin = 16.0
 			entry[part] = mm
 			entry.nodes.append(node)
@@ -476,8 +541,8 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 
 func _fill_grass(px: float, pz: float) -> void:
 	var w := world
-	var rT := GameConfig.GRASS_R / TILE
-	var rF := UNDERSTORY_FAR_R / TILE
+	var rT := grass_r / TILE
+	var rF := maxf(grass_r, under_r) / TILE
 	var tx := px / TILE
 	var tz := pz / TILE
 	var buf := grass_buf
@@ -487,7 +552,7 @@ func _fill_grass(px: float, pz: float) -> void:
 	_fill_at = Vector2(px, pz)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
-	placement.prepare(px, pz, UNDERSTORY_FAR_R + 12.0)
+	placement.prepare(px, pz, rF * TILE + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
 		entry.count = 0
@@ -517,9 +582,13 @@ func _fill_grass(px: float, pz: float) -> void:
 			lush *= _fill_understory(i, j, surface, light, px, pz)
 			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
+			# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности)
+			var keep := minf(1.0, GameConfig.GRASS_R * GameConfig.GRASS_R / (d2 * TILE * TILE))
 			for m in cnt:
-				if n >= GameConfig.GRASS_MAX:
+				if n >= grass_buf.size() / 16:
 					break
+				if keep < 1.0 and WGRandom.hash2(i * 5 + m, j, 41) > keep:
+					continue
 				var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
 				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
 				# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
@@ -532,7 +601,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				var y := heights.ground_at(x, z)
 				if heights.depth_at(x, z) > 0.0:
 					continue
-				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
+				var s := (0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7) * (1.0 + 0.35 * (1.0 - keep))
 				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9)
 				_put_xform(buf, n * 16, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, sy)
 				var origin := Vector3(x, y - 0.05, z)
@@ -593,8 +662,12 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 			kind += 1
 		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
-		var reach := UNDERSTORY_FAR_R if understory[kind].far else GameConfig.GRASS_R
-		if Vector2(x - px, z - pz).length_squared() > reach * reach:
+		var far: bool = understory[kind].far
+		var d := Vector2(x - px, z - pz).length()
+		if d > (under_r if far else grass_r):
+			continue
+		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
+		if d > full and WGRandom.hash2(i * 8 + m, j, seed + 8) > full * full / (d * d):
 			continue
 		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
