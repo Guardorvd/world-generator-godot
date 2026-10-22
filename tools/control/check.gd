@@ -55,6 +55,9 @@ var look_ms := PackedFloat32Array()
 var road_ms := PackedFloat32Array()
 ## С 9.8+: в каждом кадре пролёта — расстояние до ближайшего чанка леса в радиусе деревьев, который ещё не показан, м
 var veg_gap := PackedFloat32Array()
+var grass_lag := PackedFloat32Array() # 9.9+: от игрока до центра показанной раскладки травы, м
+var grass_allowed := 0.0 # запас VegetationLayer._ahead на это отставание, м
+var grass_capped := 0    # сколько раз раскладка упёрлась в буфер
 var tree_r := GameConfig.TREE_R
 var draw_calls := 0.0
 var primitives := 0.0
@@ -324,6 +327,10 @@ func _process(delta: float) -> bool:
 			if game.world.outer != null:
 				game.outer.update(p.x, p.z, not uploaded)
 			veg_gap.append(_veg_gap(game.vegetation, Vector2(p.x, p.z)))
+			if game.vegetation.grass_at != Vector2.INF:
+				grass_lag.append(Vector2(p.x, p.z).distance_to(game.vegetation.grass_at))
+			grass_allowed = VegetationLayer._ahead(game.vegetation.grass_r)
+			grass_capped = game.vegetation.fill_capped
 			_count(road_ms)
 			if t >= road_s:
 				timing.fps = snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.1)
@@ -406,6 +413,13 @@ func _save_perf() -> void:
 				close += 1
 		result.veg_gap = {min_m = snappedf(sorted[0], 0.1), p10_m = snappedf(sorted[sorted.size() / 10], 0.1),
 			close_share = snappedf(float(close) / veg_gap.size(), 0.001)}
+	if not grass_lag.is_empty():
+		var lag := grass_lag.duplicate()
+		lag.sort()
+		result.grass_lag = {max_m = snappedf(lag[-1], 0.1), p90_m = snappedf(lag[lag.size() * 9 / 10], 0.1),
+			allowed_m = snappedf(grass_allowed, 0.1), capped = grass_capped}
+		print("Трава на пролёте: раскладка отстаёт до %.0f м (90 %% кадров до %.0f м), запас %.0f м, упёрлась в буфер %d раз" % [
+			result.grass_lag.max_m, result.grass_lag.p90_m, result.grass_lag.allowed_m, result.grass_lag.capped])
 	result.draw_calls = roundi(draw_calls / maxi(1, counted))
 	result.primitives = roundi(primitives / maxi(1, counted))
 	result.memory = _memory()

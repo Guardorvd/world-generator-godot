@@ -24,7 +24,7 @@ const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подле�
 ## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
 ## 9.9+: растения растворяются у края дальности (fade_far/fade_len в vegetation.gdshaderinc) на этой доле радиуса.
 ## Деревья гаснут к tree_r: чанк включается, когда его ближайшие деревья уже дальше tree_r, — без рывка.
-## Трава и подлесок гаснут на FADE_AHEAD раньше своего радиуса: раскладка обновляется через 8 м пути
+## Трава и подлесок гаснут на _ahead(радиус) раньше своего радиуса: раскладка обновляется через 8 м пути
 ## и догоняет игрока не сразу, а её край должен быть уже невидим.
 const FADE_SHARE := 0.2
 ## 9.9+: смена уровней детализации деревьев — [середина полосы, ширина], м; копия LOD1_*/LOD2_* в шейдере.
@@ -32,9 +32,10 @@ const FADE_SHARE := 0.2
 const LOD_STEPS := [[70.0, 24.0], [160.0, 48.0]]
 ## Трава и подлесок: преобразование (12), цвет (4) и порог поредения в INSTANCE_CUSTOM.x (4)
 const STRIDE := 20
+## Запас буферов травы и подлеска на пучки, положенные с запасом _ahead (они ещё невидимы)
+const AHEAD_CAP := 1.3
 ## Пучки травы за GRASS_R крупнее до 35 % (с 9.9+ — в шейдере, по нынешнему расстоянию)
 const GRASS_GROW := 0.35
-const FADE_AHEAD := 12.0
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
@@ -81,6 +82,8 @@ var obstacles_version := 0            # растёт с каждой новой 
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
 var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
 var draw_level := -1
+var grass_at := Vector2.INF # центр показанной раскладки травы, м (check.gd: насколько она отстаёт)
+var fill_capped := 0        # сколько раз раскладка упёрлась в буфер (check.gd)
 var _grass_mat: ShaderMaterial
 var tree_r := GameConfig.TREE_R      # деревья, м
 var grass_r := GameConfig.GRASS_R    # трава и мелкие растения, м
@@ -154,6 +157,13 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_apply_fade()
 
 
+## На сколько метров раньше радиуса r гаснет трава или подлесок и на сколько ближе раскладка кладёт пучки
+## с поредением: столько игрок может проехать до того, как новая раскладка покажется (8 м — шаг раскладки,
+## остальное — её время: на радиусе 300 м до 1,5–2 с, замер 9.9+ — отставание до 32 м на 11 м/с). Сверяется в check.gd (grass_lag).
+static func _ahead(r: float) -> float:
+	return clampf(r * 0.13, 12.0, 40.0)
+
+
 ## Полдиагонали чанка растительности, м
 func _half_chunk() -> float:
 	return world.CS * TILE * 0.7072
@@ -165,11 +175,16 @@ func _apply_fade() -> void:
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):
 				_fade(mat, tree_r, 0.0)
-	_fade(_grass_mat, grass_r, FADE_AHEAD)
+	_fade(_grass_mat, grass_r, _ahead(grass_r))
 	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
-	for entry: Dictionary in understory:
-		_fade(entry.node.material_override, under_r if entry.far else grass_r, FADE_AHEAD)
+	for kind in understory.size():
+		var entry: Dictionary = understory[kind]
+		var radius := under_r if entry.far else grass_r
+		if kind == Floor.FIRST + Floor.ROOTS:
+			# Корни раскладываются только у больших деревьев до GRASS_R (+ запас), без поредения.
+			radius = GameConfig.GRASS_R
+		_fade(entry.node.material_override, radius, _ahead(radius))
 		entry.node.material_override.set_shader_parameter("thin_full", UNDERSTORY_FAR_R if entry.far else GameConfig.GRASS_R)
 
 
@@ -196,7 +211,7 @@ static func _spread(r: float, full: float) -> float:
 
 ## Запас буфера: на минимальной дальности прежний, на большей — с запасом на неровную густоту
 static func _cap(base: int, spread: float) -> int:
-	return roundi(base * (spread * 1.25 - 0.25))
+	return roundi(base * (spread * 1.25 - 0.25) * AHEAD_CAP)
 
 
 func _grass_cap() -> int:
@@ -574,6 +589,7 @@ func _apply_chunk(built: Dictionary) -> void:
 
 
 func _apply_grass() -> void:
+	grass_at = _fill_at
 	obstacles = _obstacles_next
 	obstacles_version += 1
 	grass.buffer = grass_buf
@@ -646,10 +662,11 @@ func _fill_grass(px: float, pz: float) -> void:
 			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
 			var tc: Array = gr.tint
 			# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
-			# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на FADE_AHEAD ближе.
-			var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R)
+			# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
+			var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r))
 			for m in cnt:
 				if n >= grass_buf.size() / STRIDE:
+					fill_capped += 1
 					break
 				var rank := WGRandom.hash2(i * 5 + m, j, 41)
 				if rank > keep:
@@ -681,6 +698,9 @@ func _fill_grass(px: float, pz: float) -> void:
 				n += 1
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
+	# 9.9+: внутри одного приоритета — по порогу поредения: место занимает тот, кто виден дальше.
+	# Иначе невидимый ещё куст, попавший в раскладку с запасом, вытеснял бы видимый соседний.
+	_understory_sites.sort_custom(func(a: Array, b: Array) -> bool: return a[6] < b[6])
 	for priority in 3:
 		for site: Array in _understory_sites:
 			if Placement.priority(site[0]) == priority:
@@ -691,9 +711,9 @@ func _fill_grass(px: float, pz: float) -> void:
 
 
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
-## с запасом: игрок до следующей раскладки может подъехать на FADE_AHEAD ближе (шейдер считает без запаса).
-static func _keep(d: float, full: float) -> float:
-	var near := maxf(d - FADE_AHEAD, 1.0)
+## с запасом: игрок до следующей раскладки может подъехать на ahead ближе (шейдер считает без запаса).
+static func _keep(d: float, full: float, ahead: float) -> float:
+	var near := maxf(d - ahead, 1.0)
 	return minf(1.0, full * full / (near * near))
 
 
@@ -741,7 +761,7 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 			continue
 		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
 		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
-		if rank > _keep(d, full):
+		if rank > _keep(d, full, _ahead(under_r if far else grass_r)):
 			continue
 		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
@@ -753,6 +773,7 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0) -> void:
 	var entry: Dictionary = understory[kind]
 	if entry.count >= entry.cap:
+		fill_capped += 1
 		return
 	var floor_kind := kind - Floor.FIRST
 	var local_box: AABB = entry.box
@@ -824,7 +845,8 @@ func _filter_grass() -> void:
 
 
 func _fill_tree_roots(px: float, pz: float) -> void:
-	var r := GameConfig.GRASS_R / TILE
+	var reach := GameConfig.GRASS_R + _ahead(grass_r) # корни гаснут к GRASS_R от игрока, а не от раскладки
+	var r := reach / TILE
 	for cy in range(maxi(0, floori((pz / TILE - r) / world.CS)), mini(world.CH, ceili((pz / TILE + r) / world.CS))):
 		for cx in range(maxi(0, floori((px / TILE - r) / world.CS)), mini(world.CW, ceili((px / TILE + r) / world.CS))):
 			for o in world.chunks[cy * world.CW + cx]:
@@ -832,7 +854,7 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
-				if Vector2(x - px, z - pz).length_squared() > GameConfig.GRASS_R ** 2:
+				if Vector2(x - px, z - pz).length_squared() > reach * reach:
 					continue
 				var k := floori(z / TILE) * world.W + floori(x / TILE)
 				if world.slope[k] > 0.9:
