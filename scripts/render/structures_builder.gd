@@ -9,13 +9,6 @@ const TUNNEL_HEIGHT := Heightfield.TUNNEL_HEIGHT
 static var _boxes := {} # Vector3 (размер) -> BoxMesh
 
 
-static func _mat(c: Color) -> StandardMaterial3D:
-	var m := StandardMaterial3D.new()
-	m.albedo_color = c
-	m.roughness = 1.0
-	return m
-
-
 ## Ящик size с центром в offset в системе координат at
 ## Ящики одного размера (перила, столбики, доски) — один BoxMesh: на длинном мосту их тысячи
 static func _box(batch: MeshBatch, at: Transform3D, size: Vector3, offset: Vector3, mat: Material) -> void:
@@ -35,11 +28,11 @@ static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
 ## Добавляет все мосты и туннели в parent одним мешем (см. MeshBatch)
 static func build(parent: Node3D, heights: Heightfield) -> void:
 	var batch := MeshBatch.new()
-	var wood := _mat(Color8(0x8a, 0x6a, 0x48))
-	var board := _mat(Color8(0x80, 0x64, 0x47))
-	var rail := _mat(Color8(0x6b, 0x4f, 0x35))
-	var stone := _mat(Color8(0x8c, 0x87, 0x80))
-	var portal := _mat(Color8(0x6f, 0x6a, 0x63))
+	var wood := SettlementsBuilder.mat(Color8(0x8a, 0x6a, 0x48))
+	var board := SettlementsBuilder.mat(Color8(0x80, 0x64, 0x47))
+	var rail := SettlementsBuilder.mat(Color8(0x6b, 0x4f, 0x35))
+	var stone := SettlementsBuilder.mat(Color8(0x8c, 0x87, 0x80))
+	var portal := SettlementsBuilder.mat(Color8(0x6f, 0x6a, 0x63))
 	for s: Dictionary in heights.structures:
 		if s.tunnel:
 			var a := Vector3(s.ax, s.ay, s.az)

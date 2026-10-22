@@ -6,12 +6,13 @@ const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
 const HUT_CORNERS := [Vector2(-1.6, -1.6), Vector2(1.6, -1.6), Vector2(-1.6, 1.6), Vector2(1.6, 1.6)]
+const FIRE_SEEN := 300.0  # м: дальше костры не рисуются и не анимируются
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
 
 
 ## glow > 0 — светится сам (огонь, окна): цвет идёт в излучение с этой силой, яркое пятно подхватывает
 ## свечение окружения (glow). До 2.6 такие материалы были без освещения (unshaded)
-static func _mat(c: Color, glow: float = 0.0) -> StandardMaterial3D:
+static func mat(c: Color, glow: float = 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
 	m.roughness = 1.0
@@ -38,13 +39,14 @@ static func _cone_mesh(r: float, h: float, seg: int) -> CylinderMesh:
 
 
 ## Узел с мешем и материалом (для костров); дома и туры собираются в один меш через MeshBatch
-static func _part(mesh: Mesh, offset: Vector3, mat: Material) -> MeshInstance3D:
+static func _part(mesh: Mesh, offset: Vector3, material: Material) -> MeshInstance3D:
 	var mi := MeshInstance3D.new()
 	mi.mesh = mesh
 	mi.position = offset
-	mi.material_override = mat
+	mi.material_override = material
 	# костёр мелкий, а пламя светится: тени от них не нужны
 	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.visibility_range_end = FIRE_SEEN
 	return mi
 
 
@@ -59,22 +61,25 @@ static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
 	l.fixed_size = true
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.position = pos
+	# Подписи видны от 25 м (вблизи закрыли бы постройку) до 900 м; движок отсекает их сам
+	l.visibility_range_begin = 25.0
+	l.visibility_range_end = 900.0
 	return l
 
 
-## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase}], labels: [Label3D]}
-## для анимации огня и скрытия подписей по расстоянию.
+## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: Material}:
+## огонь анимируется, окна ночью светятся ярче (set_night).
 static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
-	var walls := [0xa7825a, 0xb89470, 0x8f6e4c, 0xc2a27a].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
-	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return _mat(Color.hex((c << 8) | 0xff)))
-	var door_m := _mat(Color8(0x3a, 0x2a, 0x1c))
-	var win_m := _mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
+	var walls := [0xa7825a, 0xb89470, 0x8f6e4c, 0xc2a27a].map(func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff)))
+	var roofs := [0x7b3f2a, 0x5c4632, 0x8a5a2b, 0x6d3b3b].map(func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff)))
+	var door_m := mat(Color8(0x3a, 0x2a, 0x1c))
+	var win_m := mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
 	var wall_mesh := _box_mesh(Vector3(3.2, 2.6, 3.2))
 	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
 	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
 	var win_mesh := _box_mesh(Vector3(0.6, 0.5, 0.1))
-	var stone_m := _mat(Color.html("#736d60"))
-	var timber_m := _mat(Color.html("#755337"))
+	var stone_m := mat(Color.html("#736d60"))
+	var timber_m := mat(Color.html("#755337"))
 	var foundation_mesh := _box_mesh(Vector3(3.3, 1.0, 3.3))
 	var step_mesh := _box_mesh(Vector3(1.1, 0.18, 0.65))
 	var chimney_mesh := _box_mesh(Vector3(0.45, 1.1, 0.45))
@@ -89,10 +94,12 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	log_mesh.radial_segments = 5
 	var flame_mesh := _cone_mesh(0.4, 1.1, 6)
 	var core_mesh := _cone_mesh(0.22, 0.7, 6)
-	var flame_m := _mat(Color8(0xff, 0x8a, 0x2a), 2.2)
-	var core_m := _mat(Color8(0xff, 0xd3, 0x6b), 3.0)
+	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
+	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
+	var house := {walls = walls, roofs = roofs, door = door_m, win = win_m, stone = stone_m, timber = timber_m,
+		foundation = foundation_mesh, wall = wall_mesh, roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh,
+		step = step_mesh, chimney = chimney_mesh}
 	var fires: Array = []
-	var labels: Array = []
 	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
 	# дома и туры неподвижны: они собираются в один меш (MeshBatch), костры с огнём — отдельные узлы
@@ -111,18 +118,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 				low = minf(low, h)
 				y = maxf(y, h)
 			# дверью к костру
-			var at := Transform3D(facing, Vector3(x, y, z))
-			var base := at.translated_local(Vector3(0, -(y - low + 0.15) * 0.5, 0))
-			base.basis = base.basis.scaled(Vector3(1, y - low + 0.15, 1))
-			batch.add(foundation_mesh, base, stone_m)
-			batch.add(wall_mesh, at.translated_local(Vector3(0, 1.3, 0)), walls[hut.v])
-			batch.add(roof_mesh, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 2.6 + 1.1, 0)), roofs[hut.v])
-			batch.add(door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), door_m)
-			batch.add(win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), win_m)
-			batch.add(win_mesh, at * Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(1.62, 1.6, 0)), win_m)
-			batch.add(step_mesh, at.translated_local(Vector3(0, 0.02, 1.8)), stone_m)
-			if hut.v % 2 == 0:
-				batch.add(chimney_mesh, at.translated_local(Vector3(0.85, 3.6, 0.45)), stone_m)
+			_house(batch, Transform3D(facing, Vector3(x, y, z)), y - low, hut.v, house)
 		# костёр
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
@@ -149,11 +145,10 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		board_text.visibility_range_end = 35.0
 		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
 		parent.add_child(board_text)
-		var fire := Node3D.new()
+		# Поленья неподвижны — в общий меш; узлами остаются только два языка пламени.
 		for k in 3:
-			var log_node := _part(log_mesh, Vector3(0, 0.1, 0), door_m)
-			log_node.rotation = Vector3(0, k * PI / 3.0, PI / 2.0)
-			fire.add_child(log_node)
+			batch.add(log_mesh, Transform3D(Basis.from_euler(Vector3(0, k * PI / 3.0, PI / 2.0)), Vector3(fx, fy + 0.1, fz)), door_m)
+		var fire := Node3D.new()
 		# пламя растёт от земли: узлы-основания масштабируются, конусы сдвинуты вверх
 		var flame := Node3D.new()
 		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
@@ -163,16 +158,14 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		fire.add_child(core)
 		fire.position = Vector3(fx, fy, fz)
 		parent.add_child(fire)
-		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0})
-		var label := _label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz))
-		parent.add_child(label)
-		labels.append(label)
+		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
+		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz)))
 		settle_pos.append(Vector2(fx, fz))
 	# Туры на вершинах
-	var stone := _mat(Color8(0x8f, 0x88, 0x80))
-	var flag_m := _mat(Color8(0xc0, 0x39, 0x2b))
+	var stone := mat(Color8(0x8f, 0x88, 0x80))
+	var flag_m := mat(Color8(0xc0, 0x39, 0x2b))
 	flag_m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var pole_m := _mat(Color8(0x5a, 0x3d, 0x24))
+	var pole_m := mat(Color8(0x5a, 0x3d, 0x24))
 	var pole_mesh := CylinderMesh.new()
 	pole_mesh.top_radius = 0.04
 	pole_mesh.bottom_radius = 0.04
@@ -205,11 +198,9 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 				break
 		if near:
 			continue
-		var label := _label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z))
-		parent.add_child(label)
-		labels.append(label)
-	_build_sites(parent, w, heights, batch, labels, {walls = walls, roofs = roofs, door = door_m, win = win_m,
-		stone = stone_m, timber = timber_m, wall = wall_mesh, roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh})
+		parent.add_child(_label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z)))
+	house.merge({flag = flag_mesh, flag_m = flag_m, pole = pole_mesh, pole_m = pole_m})
+	_build_sites(parent, w, heights, batch, house)
 	# названия озёр над серединой воды (с 2.9)
 	for lk in w.lakes:
 		var at := Vector2(lk.x * TILE, lk.y * TILE)
@@ -220,23 +211,39 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 				break
 		if near:
 			continue
-		var label := _label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y))
-		parent.add_child(label)
-		labels.append(label)
+		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y)))
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
-	return {fires = fires, labels = labels}
+	return {fires = fires, windows = win_m}
+
+
+## Жилой дом: цоколь на drop м вниз до нижнего угла, стены, крыша, дверь (к +z), два окна, порог; труба у
+## чётных вариантов. at — пол дома. Общий для поселений и хуторов, m — меши и материалы из build
+static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Dictionary) -> void:
+	var base := at.translated_local(Vector3(0, -(drop + 0.15) * 0.5, 0))
+	base.basis = base.basis.scaled(Vector3(1, drop + 0.15, 1))
+	batch.add(m.foundation, base, m.stone)
+	batch.add(m.wall, at.translated_local(Vector3(0, 1.3, 0)), m.walls[v])
+	batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 2.6 + 1.1, 0)), m.roofs[v])
+	batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), m.door)
+	batch.add(m.win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), m.win)
+	batch.add(m.win_mesh, at * Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(1.62, 1.6, 0)), m.win)
+	batch.add(m.step, at.translated_local(Vector3(0, 0.02, 1.8)), m.stone)
+	if v % 2 == 0:
+		batch.add(m.chimney, at.translated_local(Vector3(0.85, 3.6, 0.45)), m.stone)
 
 
 ## Места вне поселений (с 9.3): постройки из тех же простых мешей в общий MeshBatch. Вид постройки — u.t,
 ## поворот — u.a (тот же, что у столкновений PlayerState.SITE_HALF). Подписи — у значимых мест.
-static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, labels: Array, m: Dictionary) -> void:
+static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary) -> void:
 	var unit := _box_mesh(Vector3.ONE)
-	var old_stone := _mat(Color.html("#6b6a5c"))
-	var pale_stone := _mat(Color.html("#9a958a"))
-	var straw := _mat(Color.html("#c2a35a"))
-	var dark_roof := _mat(Color.html("#4a3f36"))
+	var old_stone := mat(Color.html("#6b6a5c"))
+	# камень руин: старый, потемневший и заросший мхом — стены одного места разные
+	var weathered := [old_stone, mat(Color.html("#585749")), mat(Color.html("#5d6b48"))]
+	var pale_stone := mat(Color.html("#9a958a"))
+	var straw := mat(Color.html("#c2a35a"))
+	var dark_roof := mat(Color.html("#4a3f36"))
 	var leg := _box_mesh(Vector3(0.25, 7.0, 0.25))
 	var deck := _box_mesh(Vector3(2.8, 0.2, 2.8))
 	var rail := _box_mesh(Vector3(2.8, 0.1, 0.08))
@@ -271,27 +278,19 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 			top = maxf(top, at.origin.y)
 			match u.t:
 				"house":
-					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
-					base.basis = base.basis.scaled(Vector3(1, high - low + 0.15, 1))
-					batch.add(unit, base * Transform3D(Basis.from_scale(Vector3(3.3, 1, 3.3)), Vector3.ZERO), m.stone)
-					batch.add(m.wall, at.translated_local(Vector3(0, 1.3, 0)), m.walls[v])
-					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 3.7, 0)), m.roofs[v])
-					batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.62)), m.door)
-					batch.add(m.win_mesh, at.translated_local(Vector3(0.95, 1.6, 1.62)), m.win)
+					_house(batch, at, high - low, v, m)
 				"barn":
-					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
-					base.basis = base.basis.scaled(Vector3(4.1, high - low + 0.15, 3.1))
-					batch.add(unit, base, m.stone)
+					_plinth(batch, unit, at, high - low, Vector2(4.1, 3.1), m.stone)
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(4.0, 2.8, 3.0)), Vector3(0, 1.4, 0)), m.timber)
 					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(1.05, 0.9, 1.05)), Vector3(0, 3.6, 0)), dark_roof)
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(1.6, 2.0, 0.1)), Vector3(0, 1.0, 1.52)), m.door)
 				"shelter":
-					var base := at.translated_local(Vector3(0, -(high - low + 0.15) * 0.5, 0))
-					base.basis = base.basis.scaled(Vector3(3.1, high - low + 0.15, 3.1))
-					batch.add(unit, base, old_stone)
+					_plinth(batch, unit, at, high - low, Vector2(3.1, 3.1), old_stone)
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(3.0, 2.0, 3.0)), Vector3(0, 1.0, 0)), old_stone)
 					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(0.95, 0.6, 0.95)), Vector3(0, 2.65, 0)), dark_roof)
 					batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.52)), m.door)
+					# фонарь у двери: тот же материал окон, ночью светится (set_night)
+					batch.add(m.win_mesh, at * Transform3D(Basis.from_scale(Vector3(0.4, 0.7, 2.0)), Vector3(0.85, 1.55, 1.52)), m.win)
 				"tower":
 					for cx: float in [-1.0, 1.0]:
 						for cz: float in [-1.0, 1.0]:
@@ -300,6 +299,9 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					for k in 4:
 						batch.add(rail, at * Transform3D(Basis(Vector3.UP, k * PI / 2.0)) * Transform3D(Basis(), Vector3(0, 7.2, 1.36)), m.timber)
 					batch.add(tower_roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 8.5, 0)), m.roofs[v])
+					# флажок над крышей, как на турах вершин
+					batch.add(m.pole, at.translated_local(Vector3(0, 9.9, 0)), m.pole_m)
+					batch.add(m.flag, at.translated_local(Vector3(0.5, 10.6, 0)), m.flag_m)
 				"obelisk":
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(1.5, 0.8, 1.5)), Vector3(0, 0.2, 0)), old_stone)
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(0.7, 4.6, 0.7)), Vector3(0, 2.9, 0)), pale_stone)
@@ -317,23 +319,37 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 						var h: float = hs[(k + v) % 3]
 						var wall: Vector3 = [Vector3(3.4, h, 0.45), Vector3(0.45, h, 3.4), Vector3(0.45, h, 1.8)][k]
 						var pos: Vector3 = [Vector3(0, h * 0.5 - 0.2, -1.5), Vector3(-1.5, h * 0.5 - 0.2, 0), Vector3(1.5, h * 0.5 - 0.2, -0.8)][k]
-						batch.add(unit, at * Transform3D(Basis.from_scale(wall), pos), old_stone)
-					batch.add(unit, at * Transform3D(Basis(Vector3.UP, 0.4).scaled(Vector3(0.7, 0.45, 0.9)), Vector3(1.2, 0.1, 1.4)), old_stone)
+						batch.add(unit, at * Transform3D(Basis.from_scale(wall), pos), weathered[(k + v) % 3])
+					batch.add(unit, at * Transform3D(Basis(Vector3.UP, 0.4).scaled(Vector3(0.7, 0.45, 0.9)), Vector3(1.2, 0.1, 1.4)), weathered[2])
 				"keep":
 					var h := 5.0 + v * 1.5
 					batch.add(keep, at * Transform3D(Basis.from_scale(Vector3(1, h, 1)), Vector3(0, h * 0.5 - 0.3, 0)), old_stone)
 		if s.rank < 2 or s.huts.is_empty():
 			continue
-		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (11.0 if s.type == "tower" else 7.0), s.y * TILE))
+		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (12.5 if s.type == "tower" else 7.0), s.y * TILE))
 		# Мелкие подписи не висят над всей округой
 		label.visibility_range_end = 900.0 if s.rank >= 3 else 350.0
 		parent.add_child(label)
-		labels.append(label)
 
 
-## Покачивание пламени костров; time — секунды игры
-static func animate_fires(fires: Array, time: float) -> void:
+## Каменный цоколь под постройкой size (м по x и z): от пола at на drop м вниз до нижнего угла
+static func _plinth(batch: MeshBatch, unit: Mesh, at: Transform3D, drop: float, size: Vector2, material: Material) -> void:
+	var base := at.translated_local(Vector3(0, -(drop + 0.15) * 0.5, 0))
+	base.basis = base.basis.scaled(Vector3(size.x, drop + 0.15, size.y))
+	batch.add(unit, base, material)
+
+
+## Окна и фонари: днём тусклые, ночью светятся (яркость выше 1 подхватывает свечение окружения).
+## night — 0 днём, 1 ночью
+static func set_night(windows: StandardMaterial3D, night: float) -> void:
+	windows.albedo_color = Color8(0xf2, 0xd2, 0x7a) * lerpf(0.85, 2.6, night)
+
+
+## Покачивание пламени костров; time — секунды игры. Дальше FIRE_SEEN от at пламя не видно (_part) и не качается
+static func animate_fires(fires: Array, time: float, at: Vector3) -> void:
 	for f: Dictionary in fires:
+		if at.distance_squared_to(f.pos) > FIRE_SEEN * FIRE_SEEN:
+			continue
 		var t: float = time * 9.0 + f.phase
 		var s := 0.85 + sin(t) * 0.1 + sin(t * 1.7) * 0.08
 		f.flame.scale = Vector3(1, s, 1)

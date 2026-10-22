@@ -340,9 +340,6 @@ func _place(game: GameWorld, v: Dictionary) -> void:
 	game.terrain_stream.update(v.pos.x, v.pos.z, true)
 	if game.world.outer != null:
 		game.outer.preload_around(v.pos.x, v.pos.z)
-	for l: Label3D in game.labels:
-		var d := Vector2(l.position.x - v.pos.x, l.position.z - v.pos.z).length()
-		l.visible = d > 25.0 and d < 900.0
 	_set_hour(game, v.hour)
 
 

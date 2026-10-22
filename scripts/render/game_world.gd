@@ -29,7 +29,9 @@ var bike_view: BikeView
 var crash: BikeCrash     # падение с велосипеда (с 7.6): ragdoll и возврат в седло
 var water_effects: WaterEffects
 var fires: Array = []
-var labels: Array = []
+var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
+var fire_light: OmniLight3D     # один свет на весь мир: ночью у ближайшего костра
+var _night := -1.0
 var outer: OuterTerrain   # рельеф за краем стартовой области
 var terrain_stream: PlanTerrain
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
@@ -99,7 +101,12 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	fires = built.fires
-	labels = built.labels
+	windows = built.windows
+	fire_light = OmniLight3D.new()
+	fire_light.light_color = Color8(0xff, 0xa8, 0x55)
+	fire_light.omni_range = 14.0
+	fire_light.visible = false
+	$Settlements.add_child(fire_light)
 	StructuresBuilder.build($Structures, heights)
 	t = _mark("start_scene_ms", t)
 
@@ -414,6 +421,29 @@ func _snap() -> void:
 	bike_view.snap(bike)
 
 
+## Вечером окна разгораются, а ближайший костёр (до 80 м) освещает дома вокруг. Один источник света
+## на весь мир: на слабой видеокарте свет на каждый костёр дорог
+func _light_night(pos: Vector3, t: float) -> void:
+	var night := 1.0 - day.sunlight
+	if absf(night - _night) > 0.02:
+		_night = night
+		SettlementsBuilder.set_night(windows, night)
+	var near := {}
+	var best := 80.0 * 80.0
+	if night > 0.05:
+		for f: Dictionary in fires:
+			var d := pos.distance_squared_to(f.pos)
+			if d < best:
+				best = d
+				near = f
+	fire_light.visible = not near.is_empty()
+	if near.is_empty():
+		return
+	fire_light.position = near.pos + Vector3(0, 1.2, 0)
+	var s: float = t * 9.0 + near.phase
+	fire_light.light_energy = night * (1.5 + sin(s) * 0.15 + sin(s * 1.7) * 0.1)
+
+
 func _process(delta: float) -> void:
 	if player == null:
 		return
@@ -437,10 +467,9 @@ func _process(delta: float) -> void:
 		outer.update(pos.x, pos.z, not uploaded)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
-	for l: Label3D in labels:
-		var d := Vector2(l.position.x - pos.x, l.position.z - pos.z).length()
-		l.visible = d > 25.0 and d < 900.0
-	SettlementsBuilder.animate_fires(fires, lerpf(_prev_time, time, alpha))
+	var fire_time := lerpf(_prev_time, time, alpha)
+	SettlementsBuilder.animate_fires(fires, fire_time, pos)
+	_light_night(pos, fire_time)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0)
 
 	info_timer -= delta

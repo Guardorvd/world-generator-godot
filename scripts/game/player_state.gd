@@ -160,49 +160,36 @@ static func surface(info: Dictionary) -> int:
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0) -> bool:
 	if not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z):
 		return false
-	# сквозь дома не пройти: стены — квадрат, тело не ближе r к нему
-	var reach := HUT_HALF * 1.5 + r
+	# сквозь дома не пройти: стены — квадрат, тело не ближе r к нему. Дом поселения повёрнут дверью к костру
 	for s in w.settlements:
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:
-			var dx: float = x - u.x * TILE
-			var dz: float = z - u.y * TILE
-			if absf(dx) > reach or absf(dz) > reach:
-				continue
-			# оси дома: к костру и поперёк
-			var fx: float = s.x - u.x
-			var fz: float = s.y - u.y
-			var fl := Grid.hypot(fx, fz)
-			if fl > 0.0:
-				fx /= fl
-				fz /= fl
-			else:
-				fz = 1.0
-			var ox := absf(dx * fz - dz * fx) - HUT_HALF
-			var oz := absf(dx * fx + dz * fz) - HUT_HALF
-			if ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r):
+			if _box_hits(x - u.x * TILE, z - u.y * TILE, atan2(s.x - u.x, s.y - u.y), Vector2(HUT_HALF, HUT_HALF), r):
 				return false
 	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
 	for s in w.sites:
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:
-			var half: Vector2 = SITE_HALF[u.t]
-			var dx: float = x - u.x * TILE
-			var dz: float = z - u.y * TILE
-			var reach_site := maxf(half.x, half.y) * 1.5 + r
-			if absf(dx) > reach_site or absf(dz) > reach_site:
-				continue
-			var ox := absf(dx * cos(u.a) - dz * sin(u.a)) - half.x
-			var oz := absf(dx * sin(u.a) + dz * cos(u.a)) - half.y
-			if ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r):
+			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SITE_HALF[u.t], r):
 				return false
 	if heights.wall_at(x, z, feet, r):
 		return false
 	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r):
 		return false
 	return heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
+
+
+## Задевает ли тело радиуса r стены прямоугольника half (м), повёрнутого на angle вокруг вертикали,
+## если тело смещено от его середины на (dx, dz) м. Поворот — как Basis(Vector3.UP, angle) у мешей
+static func _box_hits(dx: float, dz: float, angle: float, half: Vector2, r: float) -> bool:
+	var reach := maxf(half.x, half.y) * 1.5 + r
+	if absf(dx) > reach or absf(dz) > reach:
+		return false
+	var ox := absf(dx * cos(angle) - dz * sin(angle)) - half.x
+	var oz := absf(dx * sin(angle) + dz * cos(angle)) - half.y
+	return ox < r and oz < r and (ox <= 0.0 or oz <= 0.0 or ox * ox + oz * oz < r * r)
 
 
 ## Сдвиг из (x, z) на (dx, dz) кусками не длиннее PIECE: free(x, z) -> bool говорит, свободно ли тело
