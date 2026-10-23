@@ -73,6 +73,8 @@ var crash_cause := CrashCause.FALL
 var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
+var fallen := false # рама остаётся в физической позе до ручной посадки
+var fallen_transform := Transform3D.IDENTITY
 
 
 ## Поставить велосипед справа от игрока, лицом туда же, куда смотрит игрок
@@ -102,8 +104,53 @@ func can_mount(p: PlayerState) -> bool:
 	return distance_to(p) <= GameConfig.BIKE_MOUNT and absf(y - p.feet) < MOUNT_RISE
 
 
+## Поднимаем раму только рядом с игроком, на опору и без прохода сквозь стены.
+## Отказ оставляет состояние велосипеда и игрока прежним.
+func prepare_mount(p: PlayerState, w: WorldData, heights: Heightfield) -> bool:
+	if not can_mount(p) or not p.on_ground:
+		return false
+	if not fallen:
+		return true
+	for radius: float in [0.0, 0.5, 1.0, 1.5]:
+		for i in (1 if radius == 0.0 else 8):
+			var px := x + cos(i * TAU / 8.0) * radius
+			var pz := z + sin(i * TAU / 8.0) * radius
+			if Grid.hypot(px - p.x, pz - p.z) > GameConfig.BIKE_MOUNT:
+				continue
+			var floor_y := heights.surface_at(px, pz, y + 0.4)
+			if absf(floor_y - p.feet) > 0.6 or heights.ceiling_at(px, pz, floor_y) < floor_y + 1.8:
+				continue
+			var frame_free := func(qx: float, qz: float) -> bool:
+				return PlayerState.is_passable(w, heights, qx, qz, y, BODY_R, true)
+			var frame_path := PlayerState.slide(frame_free, x, z, px - x, pz - z)
+			if Grid.hypot(frame_path[0] - px, frame_path[1] - pz) > 0.01:
+				continue
+			var free := func(qx: float, qz: float) -> bool:
+				return PlayerState.is_passable(w, heights, qx, qz, p.feet, BODY_R) and absf(heights.surface_at(qx, qz, p.feet) - p.feet) < 0.6
+			var path := PlayerState.slide(free, p.x, p.z, px - p.x, pz - p.z)
+			if Grid.hypot(path[0] - px, path[1] - pz) > 0.01:
+				continue
+			for direction: float in [heading, heading + PI * 0.5, heading - PI * 0.5]:
+				var saved_y := y
+				y = floor_y
+				var clear := fits(px, pz, direction, w, heights)
+				y = saved_y
+				if not clear:
+					continue
+				var wheel := Vector2(-sin(direction), -cos(direction)) * HUB
+				if absf(heights.surface_at(px + wheel.x, pz + wheel.y, floor_y) - floor_y) > 0.6 or absf(heights.surface_at(px - wheel.x, pz - wheel.y, floor_y) - floor_y) > 0.6:
+					continue
+				x = px
+				z = pz
+				y = floor_y
+				heading = direction
+				return true
+	return false
+
+
 func mount(p: PlayerState) -> void:
 	riding = true
+	fallen = false
 	speed = 0.0
 	_yaw_rate = 0.0
 	_coyote = 0.0
@@ -117,8 +164,8 @@ func mount(p: PlayerState) -> void:
 	p.feet = y
 
 
-## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
-func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
+## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
+func reset_motion() -> void:
 	riding = false
 	speed = 0.0
 	lean = 0.0
@@ -138,6 +185,14 @@ func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
 	vy = 0.0
 	air_time = 0.0
 	_hop_wait = 0.0
+	airborne = false
+	crashed = false
+	land_impact = 0.0
+
+
+## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
+func dismount(p: PlayerState, w: WorldData, heights: Heightfield) -> void:
+	reset_motion()
 	y = heights.surface_at(x, z, y)
 	p.vx = 0.0
 	p.vy = 0.0

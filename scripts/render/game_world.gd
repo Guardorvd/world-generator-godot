@@ -30,7 +30,7 @@ var hud: Hud
 var player: PlayerState
 var bike: BikeRide
 var bike_view: BikeView
-var crash: BikeCrash     # падение с велосипеда (с 7.6): ragdoll и возврат в седло
+var crash: BikeCrash     # падение с велосипеда: ragdoll и подъём пешком
 var water_effects: WaterEffects
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
@@ -234,6 +234,9 @@ func toggle_bike() -> void:
 	if not bike.can_mount(player):
 		hud.toast("Велосипед выше или ниже вас")
 		return
+	if not bike.prepare_mount(player, world, heights):
+		hud.toast("Не хватает места для посадки. Подойдите с другой стороны")
+		return
 	bike.mount(player)
 	_cam_y = player.feet + 1.4
 	_cam_dist = GameConfig.BIKE_CAM
@@ -363,16 +366,29 @@ func _physics_process(dt: float) -> void:
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
 	if crash.active():
-		# седок падает: управление ждёт, пока он снова в седле; камера следит за телом
+		# Камера следит за телом; завершение возвращает пешее управление на месте падения.
+		var was_ragdoll := crash.phase == BikeCrash.Phase.RAGDOLL
 		var back := crash.tick(dt, bike, world, heights)
 		var at := crash.focus(bike)
 		player.x = at.x
 		player.z = at.z
 		player.feet = at.y
+		if was_ragdoll and crash.phase == BikeCrash.Phase.RECOVER:
+			player.vx = 0.0
+			player.vy = 0.0
+			player.vz = 0.0
+			pitch = -0.05
+			_dip = 0.0
+			_dip_v = 0.0
+			_trauma = 0.0
+			crashed = true
 		if back:
-			bike.dismount(player, world, heights)
-			bike.mount(player)
-			yaw = bike.heading
+			player.vx = 0.0
+			player.vy = 0.0
+			player.vz = 0.0
+			player.on_ground = true
+			player.land_impact = 0.0
+			hud.toast("Вы встали. Подойдите к велосипеду и нажмите E")
 			crashed = true
 	elif bike.riding:
 		var h0 := bike.heading
@@ -563,7 +579,8 @@ func _aim() -> Dictionary:
 	var eye := Vector3(player.x, player.feet + GameConfig.EYE, player.z)
 	var items: Array = []
 	if not bike.riding and bike.can_mount(player):
-		var at := Transform3D(Basis(Vector3.UP, bike.heading), Vector3(bike.x, bike.y + 0.55, bike.z))
+		var at := bike.fallen_transform if bike.fallen else Transform3D(Basis(Vector3.UP, bike.heading), Vector3(bike.x, bike.y, bike.z))
+		at.origin += at.basis.y * 0.55
 		items.append({kind = "bike", at = at, half = Vector3(0.3, 0.55, 0.9)})
 	for b: Dictionary in _boards:
 		if eye.distance_squared_to(b.at.origin) < REACH * REACH:

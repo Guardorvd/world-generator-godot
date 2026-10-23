@@ -38,6 +38,8 @@ var _prev := PackedFloat64Array()
 var _cur := PackedFloat64Array()
 var _mix := PackedFloat64Array() # буфер для draw, чтобы не выделять память на каждый кадр
 var _riding := false
+var _fallen := false
+var _fallen_transform := Transform3D.IDENTITY
 var _has_state := false
 var _last_speed := 0.0
 var _last_crank := 0.0
@@ -130,6 +132,8 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_update_rider(b, dt, throttle, boost)
 	_riding = b.riding
+	_fallen = b.fallen
+	_fallen_transform = b.fallen_transform
 	if not _has_state:
 		_prev = _cur.duplicate()
 		_has_state = true
@@ -200,6 +204,10 @@ func snap(b: BikeRide) -> void:
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
 func draw(alpha: float) -> void:
 	if not _has_state:
+		return
+	if _fallen:
+		global_transform = _fallen_transform
+		rider.visible = false
 		return
 	alpha = clampf(alpha, 0.0, 1.0) if is_finite(alpha) else 0.0
 	_mix.resize(_cur.size())

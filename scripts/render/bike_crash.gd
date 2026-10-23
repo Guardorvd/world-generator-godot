@@ -1,16 +1,15 @@
 class_name BikeCrash
 extends Node3D
-## Падение с велосипеда (с 7.6): потеря равновесия → тело на физических костях (ragdoll) → возврат в седло.
+## Падение: потеря равновесия → физические кости → подъём пешком у места остановки тела.
 ## BikeRide по-прежнему решает только, что седок упал (жёсткое приземление или удар в стену); здесь — как это выглядит.
 ## Физика движка нужна лишь на время падения: под местом падения ставится кусок рельефа (HeightMapShape3D),
-## на скелет седока — PhysicalBone3D, велосипед становится RigidBody3D. После возврата всё удаляется.
+## на скелет седока — PhysicalBone3D, велосипед становится RigidBody3D. После подъёма физика удаляется.
 ## Тела сталкиваются с землёй и ближайшими препятствиями леса, но не друг с другом и не с велосипедом.
 
 const BALANCE := 0.22   # потеря равновесия: велосипед заваливается, седок ещё на нём, с
 const LIE_MIN := 1.0    # тело лежит не меньше этого, с
-const LIE_MAX := 2.4    # и не дольше этого, с
-const RECOVER := 0.45   # возврат в седло, с (дольше, если велосипед лежит далеко: не быстрее RECOVER_SPEED)
-const RECOVER_SPEED := 6.0 # м/с
+const LIE_MAX := 2.4    # запасной срок для нестабильной позы у опоры, с
+const RECOVER := 0.45   # пауза подъёма перед пешим управлением
 const SETTLE := 0.2     # остановка должна держаться, а не быть одним тактом в верхней точке полёта
 const GROUND_R := 16    # радиус куска рельефа под падением, м
 const LAYER_GROUND := 4
@@ -57,24 +56,18 @@ var _ground: StaticBody3D
 var _bike_body: RigidBody3D
 var _sim: PhysicalBoneSimulator3D
 var _bones: Dictionary[String, PhysicalBone3D] = {}         # имя кости → PhysicalBone3D
-var _from_view := Transform3D()     # возврат: откуда едет велосипед
-var _from_root := Transform3D()     # и где в мире лежала корневая кость седока
-var _from_pose: Array[Transform3D] = []          # местные позы костей в конце падения (Transform3D)
 var _from_feet := Vector3()
 var _recover_time := RECOVER
-var _to_view := Transform3D()
-var _to_pose: Array[Transform3D] = []
+var standing_position := Vector3.ZERO # ноги после подъёма, независимо от велосипеда
 var _seated_pose: Array[Transform3D] = []
 var _procedural_pose := true
 var _bone_order: Array[int] = []
-var _root_bone := -1
 var _animation_player: AnimationPlayer
 var _animation_active := false
 var style := FallStyle.LANDING
 var _impact_normal := Vector3.UP
 var _severity := 0.0
 var _balance_time := BALANCE
-var _recover_lift := 0.0
 var _recover_retry := 0.0
 
 
@@ -103,7 +96,6 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	if is_instance_valid(_animation_player):
 		_animation_active = _animation_player.active
 		_animation_player.active = false
-	_root_bone = _rider.skeleton.find_bone("Root")
 	# Дополнительные кости могут иметь произвольные индексы: родители всегда первыми.
 	_bone_order.clear()
 	for root_bone in _rider.skeleton.get_parentless_bones():
@@ -140,7 +132,7 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	t = 0.0
 
 
-## Такт физики игры (60 в секунду). Возвращает true, когда седок снова в седле.
+## Такт физики игры. true: подъём закончен, можно вернуть пешее управление.
 func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 	if not active():
 		return false
@@ -184,7 +176,7 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			var settled := near_ground and lying and hips.linear_velocity.length() < 0.8 and head.linear_velocity.length() < 0.8 and hips.angular_velocity.length() < 1.0 and _bike_body.linear_velocity.length() < 0.8
 			_settled_time = _settled_time + dt if settled else 0.0
 			var lost := Vector2(hips.global_position.x - _ground.position.x, hips.global_position.z - _ground.position.z).length() > GROUND_R - 2
-			if ((t >= LIE_MIN and _settled_time >= SETTLE) or t >= LIE_MAX or lost) and t >= _recover_retry:
+			if ((t >= LIE_MIN and _settled_time >= SETTLE) or (t >= LIE_MAX and near_ground) or lost) and t >= _recover_retry:
 				_begin_recover(b, w, heights)
 		Phase.RECOVER:
 			if t >= _recover_time:
@@ -193,48 +185,23 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 	return false
 
 
-## Кадр: во время возврата седок и велосипед плавно переходят из позы падения в посадку
+## Поза рамы заморожена после физики; перелёта седока в седло больше нет.
 func draw() -> void:
-	if phase != Phase.RECOVER:
-		return
-	if not is_instance_valid(_view) or not is_instance_valid(_rider):
-		_finish()
-		return
-	var s := smoothstep(0.0, 1.0, t / _recover_time)
-	var goal := _to_view
-	var skel := _rider.skeleton
-	var skel_goal := goal * _rider_local * skel.transform
-	_view.global_transform = _blend(_from_view, goal, s)
-	for i in skel.get_bone_count():
-		var from: Transform3D = _from_pose[i]
-		var to := _to_pose[i]
-		if i == _root_bone:
-			# корень переходит в мире по прямой: из места, где лежал, в седло (велосипед в это время поворачивается)
-			var root_world := _blend(_from_root, skel_goal * to, s)
-			root_world.origin.y += sin(PI * s) * _recover_lift
-			to = skel.global_transform.affine_inverse() * root_world
-			from = to
-		skel.set_bone_pose_position(i, from.origin.lerp(to.origin, s))
-		skel.set_bone_pose_rotation(i, from.basis.get_rotation_quaternion().slerp(to.basis.get_rotation_quaternion(), s))
-		skel.set_bone_pose_scale(i, from.basis.get_scale().lerp(to.basis.get_scale(), s))
+	pass
 
 
-static func _blend(a: Transform3D, b: Transform3D, s: float) -> Transform3D:
-	return Transform3D(a.basis.orthonormalized().slerp(b.basis.orthonormalized(), s), a.origin.lerp(b.origin, s))
-
-
-## Где сейчас седок (для камеры, звука и подгрузки мира): таз в падении, велосипед в остальное время
+## Положение игрока для камеры, звука и подгрузки мира; после падения не привязано к раме.
 func focus(b: BikeRide) -> Vector3:
 	match phase:
 		Phase.RAGDOLL:
 			var hips := (_bones["Hips"] as PhysicalBone3D).global_position
 			return Vector3(hips.x, hips.y - 0.5, hips.z)
 		Phase.RECOVER:
-			return _from_feet.lerp(Vector3(b.x, b.y, b.z), smoothstep(0.0, 1.0, t / _recover_time))
-	return _view.global_position if is_instance_valid(_view) else Vector3(b.x, b.y, b.z)
+			return _from_feet.lerp(standing_position, smoothstep(0.0, 1.0, t / _recover_time))
+	return standing_position if b.fallen else (_view.global_position if is_instance_valid(_view) else Vector3(b.x, b.y, b.z))
 
 
-## Прервать падение (быстрое перемещение, выход из мира): седок сразу в седле
+## Прервать падение при переносе/выходе: вернуть модель владельцу и удалить физику.
 func abort() -> void:
 	if phase == Phase.NONE:
 		return
@@ -330,34 +297,28 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	var destination := _recovery_spot(b, w, heights)
 	if destination.is_empty():
 		_recover_retry = t + 0.25
-		return # ждём, пока тело выйдет к свободному месту; сквозь стену не возвращаем
+		return
 	phase = Phase.RECOVER
 	t = 0.0
-	# поза падения: кости с телами — по телам, остальные — как были
-	var skel := _rider.skeleton
-	var globals := _sync_pose()
-	_from_pose = _rider.capture_pose()
-	_from_root = skel.global_transform * globals[_root_bone]
 	var hips: Vector3 = (_bones["Hips"] as PhysicalBone3D).global_position
 	_from_feet = Vector3(hips.x, hips.y - 0.5, hips.z)
-	_from_view = _bike_body.global_transform
-	_free_physics()
-	b.x = destination.position.x
-	b.y = destination.position.y
-	b.z = destination.position.z
+	standing_position = destination.position
+	_recover_time = RECOVER
+	# Сохраняем раму до удаления временных физических тел.
+	b.fallen_transform = _bike_body.global_transform
+	b.x = b.fallen_transform.origin.x
+	b.z = b.fallen_transform.origin.z
+	b.y = heights.surface_at(b.x, b.z, b.fallen_transform.origin.y + 0.4)
 	b.heading = destination.heading
-	_recover_lift = 0.35
-	_recover_time = maxf(RECOVER, _from_feet.distance_to(Vector3(b.x, b.y, b.z)) / RECOVER_SPEED)
+	b.reset_motion()
+	b.fallen = true
+	_free_physics()
 	_rider.reparent(_view, false)
 	_rider.transform = _rider_local
-	_view.snap(b)
 	_rider.restore_pose(_seated_pose)
-	_rider.procedural_pose = _procedural_pose
+	_view.snap(b)
 	_view.draw(1.0)
-	_to_view = _view.global_transform
-	_to_pose = _rider.capture_pose()
-	_rider.procedural_pose = false
-	draw() # первый кадр восстановления сохраняет позу падения
+	_rider.visible = false
 
 
 ## Видимая модель следует телам и в такте физики, включая кости без PhysicalBone у родителей.
@@ -449,41 +410,28 @@ static func _water_velocity(velocity: Vector3, immersion: float, dt: float) -> V
 	return velocity * exp(-wet * dt * 4.0) + Vector3.UP * wet * dt * 4.0
 
 
-## Ищем место с опорой для обоих колёс и свободным путём подъёма, а не только свободным центром.
+## Встаём у таза, а не у велосипеда. Ближайшая безопасная поправка у ствола/воды
+## допускается только без переноса через стены, настил и свод.
 func _recovery_spot(b: BikeRide, w: WorldData, heights: Heightfield) -> Dictionary:
-	var hips := _bones["Hips"].global_position
+	var hips: Vector3 = _bones["Hips"].global_position
 	var from := hips - Vector3.UP * 0.5
-	var at := _bike_body.global_transform
-	var fwd := -at.basis.z
+	var fwd := -_bike_body.global_basis.z
 	var heading := atan2(-fwd.x, -fwd.z) if Vector2(fwd.x, fwd.z).length() > 0.3 else b.heading
-	var spots: Array[Vector3] = [from, at.origin, Vector3(b.x, b.y, b.z)]
-	for radius: float in [0.75, 1.5, 3.0, 5.0, 8.0, 12.0]:
-		for i in 8:
-			spots.append(from + Vector3(cos(i * TAU / 8.0), 0.0, sin(i * TAU / 8.0)) * radius)
-	var saved_y := b.y
-	for spot in spots:
-		var floor_y := heights.surface_at(spot.x, spot.z, spot.y + 0.4)
-		for direction: float in [heading, b.heading]:
-			b.y = floor_y
-			if not b.fits(spot.x, spot.z, direction, w, heights):
+	for radius: float in [0.0, 0.35, 0.75, 1.5, 3.0, 5.0, 8.0, 12.0]:
+		for i in (1 if radius == 0.0 else 16):
+			var spot := from + Vector3(cos(i * TAU / 16.0), 0.0, sin(i * TAU / 16.0)) * radius
+			var floor_y := heights.surface_at(spot.x, spot.z, hips.y)
+			if absf(floor_y - from.y) > 1.2:
+				continue
+			if not PlayerState.is_passable(w, heights, spot.x, spot.z, floor_y, PlayerState.BODY_R):
 				continue
 			if heights.ceiling_at(spot.x, spot.z, floor_y) < floor_y + 1.8:
 				continue
-			var wheel := Vector3(-sin(direction), 0, -cos(direction)) * BikeRide.HUB
-			var front := heights.surface_at(spot.x + wheel.x, spot.z + wheel.z, floor_y)
-			var rear := heights.surface_at(spot.x - wheel.x, spot.z - wheel.z, floor_y)
-			if absf(front - floor_y) > 0.6 or absf(rear - floor_y) > 0.6:
-				continue
 			var goal := Vector3(spot.x, floor_y + 0.8, spot.z)
-			var middle := hips.lerp(goal, 0.5) + Vector3.UP * 0.5
-			var first := PhysicsRayQueryParameters3D.create(hips, middle, LAYER_GROUND)
-			var second := PhysicsRayQueryParameters3D.create(middle, goal, LAYER_GROUND)
 			var space := get_world_3d().direct_space_state
-			if not space.intersect_ray(first).is_empty() or not space.intersect_ray(second).is_empty():
+			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(hips, goal, LAYER_GROUND)).is_empty():
 				continue
-			b.y = saved_y
-			return {position = Vector3(spot.x, floor_y, spot.z), heading = direction}
-	b.y = saved_y
+			return {position = Vector3(spot.x, floor_y, spot.z), heading = heading}
 	return {}
 
 
@@ -498,7 +446,7 @@ func _finish() -> void:
 			if _rider.get_parent() != _view:
 				_rider.reparent(_view, false)
 			_rider.transform = _rider_local
-			_rider.restore_pose(_to_pose if not _to_pose.is_empty() else _seated_pose)
+			_rider.restore_pose(_seated_pose)
 			_rider.procedural_pose = _procedural_pose
 			_view.draw(1.0)
 		else:
@@ -506,8 +454,6 @@ func _finish() -> void:
 	if is_instance_valid(_ground):
 		_ground.queue_free()
 	_ground = null
-	_from_pose.clear()
-	_to_pose.clear()
 	_seated_pose.clear()
 	_bone_order.clear()
 	if is_instance_valid(_animation_player):

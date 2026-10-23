@@ -1,6 +1,6 @@
 extends SceneTree
 ## Падение с велосипеда (7.6): godot --headless --path . --script res://tools/bike_crash_test.gd
-## Жёсткое приземление и падение с разгона: потеря равновесия → ragdoll лежит на земле → плавный возврат в седло.
+## Потеря равновесия → ragdoll → подъём пешком; лежащая рама, ручная посадка и повторные падения.
 
 const DT := 1.0 / 60.0
 
@@ -47,8 +47,6 @@ var start_at := Vector3()
 var lie_at := Vector3()
 var bike_tipped := false
 var finite := true
-var last_hips := Vector3()
-var max_jump := 0.0
 var started := false
 var capture := "--capture" in OS.get_cmdline_user_args()
 var camera: Camera3D
@@ -157,13 +155,11 @@ func _begin_case() -> void:
 	max_hips_y = -INF
 	bike_tipped = false
 	finite = true
-	max_jump = 0.0
 	ground_slide = 0.0
 	last_ground_hips = Vector3.INF
 	crossed_tree = false
 	pose_matches = true
 	recovery_stable = true
-	last_hips = Vector3.INF
 	start_at = Vector3(bike.x, bike.y, bike.z)
 	crash.start(view, bike, cases[case_i][1], heights)
 	started = true
@@ -212,15 +208,15 @@ func _physics_process(_delta: float) -> bool:
 		var repeated := view.rider.capture_pose()
 		for i in held.size():
 			recovery_stable = recovery_stable and held[i].is_equal_approx(repeated[i])
-		var skel: Skeleton3D = (view.rider as CyclistRig).skeleton
-		var hips: Vector3 = (skel.global_transform * skel.get_bone_global_pose(skel.find_bone("Hips"))).origin
-		if last_hips != Vector3.INF:
-			max_jump = maxf(max_jump, hips.distance_to(last_hips))
-			if OS.has_environment("CRASH_DEBUG"): print("  %.2f %.3f %s" % [crash.t, hips.distance_to(last_hips), hips])
-		last_hips = hips
 	if capture:
 		var cam_at: Vector3 = crash.focus(bike)
-		camera.look_at_from_position(cam_at + Vector3(3.2, 2.2, 3.2), cam_at + Vector3(0, 0.5, 0))
+		if crash.phase == BikeCrash.Phase.RECOVER:
+			camera.look_at_from_position(cam_at + Vector3.UP * GameConfig.EYE, bike.fallen_transform.origin + Vector3.UP * 0.3)
+			if case_i in [0, 11] and crash.t > 0.2 and not phases.has("fp"):
+				phases["fp"] = true
+				shots.append(str(case_i) + "_first_person")
+		else:
+			camera.look_at_from_position(cam_at + Vector3(3.2, 2.2, 3.2), cam_at + Vector3(0, 0.5, 0))
 		if flat and case_i in [10, 15] and crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.5 and not phases.has("r"):
 			phases["r"] = true
 			shots.append(str(case_i) + "_ragdoll")
@@ -233,8 +229,8 @@ func _finish_case(back: bool) -> void:
 	var name: String = cases[case_i][0]
 	var v: Vector3 = cases[case_i][1]
 	var seconds := frames * DT
-	check(back and seconds < 3.6, "%s: снова в седле через %.2f с" % [name, seconds])
-	check(phases.has(BikeCrash.Phase.BALANCE) and phases.has(BikeCrash.Phase.RAGDOLL) and phases.has(BikeCrash.Phase.RECOVER), "%s: потеря равновесия → ragdoll → возврат" % name)
+	check(back and seconds < 3.6, "%s: пешее управление через %.2f с" % [name, seconds])
+	check(phases.has(BikeCrash.Phase.BALANCE) and phases.has(BikeCrash.Phase.RAGDOLL) and phases.has(BikeCrash.Phase.RECOVER), "%s: потеря равновесия → ragdoll → подъём" % name)
 	check(finite, "%s: позы конечны" % name)
 	check(pose_matches, "%s: видимые кости совпадают с физическими телами" % name)
 	var head_limit := 1.4 if flat and case_i == 14 else (0.7 if flat and case_i == 4 else 0.45) # голова может лежать на бревне
@@ -248,14 +244,28 @@ func _finish_case(back: bool) -> void:
 		check(bike_tipped, "%s: велосипед завалился набок" % name)
 	check(recovery_stable, "%s: повторная отрисовка восстановления не меняет позу" % name)
 	check(view.rider.procedural_pose, "%s: процедурная анимация восстановлена" % name)
-	check(max_jump < 0.25, "%s: возврат в седло плавный (шаг таза за такт %.3f м)" % [name, max_jump])
-	check(view.rider.get_parent() == view and (view.rider as CyclistRig).skeleton.get_child_count() > 0 and not _has_sim(), "%s: седок снова на велосипеде, физика убрана" % name)
-	check(bike.fits(bike.x, bike.z, bike.heading, w, heights), "%s: восстановление в свободном месте" % name)
+	check(not view.rider.visible and view.global_transform.is_equal_approx(bike.fallen_transform), "%s: рама сохранена, сидящего дубля игрока нет" % name)
+	check(view.rider.get_parent() == view and (view.rider as CyclistRig).skeleton.get_child_count() > 0 and not _has_sim(), "%s: модель возвращена владельцу, временная физика убрана" % name)
+	check(PlayerState.is_passable(w, heights, crash.standing_position.x, crash.standing_position.z, crash.standing_position.y, PlayerState.BODY_R), "%s: игрок встал в свободном месте" % name)
 	if flat and case_i in [10, 13]:
 		check(not crossed_wall, "%s: тело не прошло сквозь стену" % name)
 	if flat and case_i == 12:
 		check(max_hips_y < 103.0, "под мостом тело не вытолкнуто на настил")
-	check(bike.riding and not bike.airborne and absf(bike.y - heights.surface_at(bike.x, bike.z, bike.y + 1.0)) < 0.05, "%s: велосипед стоит на земле" % name)
+	check(not bike.riding and bike.fallen and not bike.airborne, "%s: игрок пешком, велосипед лежит отдельно" % name)
+	if not flat or case_i < 3:
+		check(Vector2(crash.standing_position.x - lie_at.x, crash.standing_position.z - lie_at.z).length() < 0.4, "%s: встаём у тела, не у велосипеда" % name)
+	var parked := bike.fallen_transform
+	player.x = crash.standing_position.x
+	player.z = crash.standing_position.z
+	player.feet = crash.standing_position.y
+	player.vx = 0.0
+	player.vy = 0.0
+	player.vz = 0.0
+	player.on_ground = true
+	player.step(1, 0, false, false, 0, DT, w, heights)
+	view.tick(bike)
+	view.draw(0.5)
+	check(view.global_transform.is_equal_approx(parked), "%s: пешее движение не поднимает и не перемещает раму" % name)
 	if flat and case_i in [0, 2]:
 		check(ground_slide > 0.05 and ground_slide < 3.0, "%s: короткое скольжение по земле %.2f м" % [name, ground_slide])
 	if flat and case_i == 3:
@@ -263,12 +273,69 @@ func _finish_case(back: bool) -> void:
 	case_i += 1
 	if case_i >= cases.size():
 		if flat:
+			_check_on_foot()
 			_check_impact_contract()
 		_check_lifecycle()
 		print("FAILS: %d" % fails)
 		quit(1 if fails > 0 else 0)
 		return
 	_begin_case()
+
+
+func _check_on_foot() -> void:
+	var test_world := FlatWorld.new()
+	test_world.W = 64
+	test_world.H = 64
+	var ground := FlatGround.new(test_world)
+	var p := PlayerState.new()
+	p.feet = 100.0
+	p.x = 5.0
+	var b := BikeRide.new()
+	b.y = 100.0
+	b.fallen = true
+	b.fallen_transform = Transform3D(Basis(Vector3.FORWARD, 1.4), Vector3(0, 100, 0))
+	var parked := b.fallen_transform
+	check(not b.prepare_mount(p, test_world, ground) and b.fallen_transform == parked, "дальняя посадка не притягивает велосипед")
+	for i in 180:
+		if b.can_mount(p):
+			break
+		p.step(1, 0, false, false, PI * 0.5, DT, test_world, ground)
+	check(b.can_mount(p) and b.fallen and not b.riding, "к лежащему велосипеду можно подойти пешком")
+	check(b.prepare_mount(p, test_world, ground), "на свободной земле раму можно поднять")
+	b.mount(p)
+	check(b.riding and not b.fallen and p.vx == 0 and p.vz == 0, "ручная посадка возвращает езду без пешей инерции")
+	b.step(p, 1, 0, false, false, DT, test_world, ground)
+	check(not b.crashed, "после подъёма нет повторного удара от старого состояния")
+	b.reset_motion()
+	b.fallen = true
+	p.x = b.x
+	p.z = b.z
+	p.feet = b.y - 4.0
+	check(not b.prepare_mount(p, test_world, ground), "нельзя сесть с другого уровня моста")
+	p.feet = b.y
+	p.on_ground = false
+	check(not b.prepare_mount(p, test_world, ground), "нельзя поднять велосипед в прыжке")
+	p.on_ground = true
+	test_world.sites.append({x = 0.0, y = 0.0, huts = [{x = 0.0, y = 0.0, a = 0.0, t = "house"}]})
+	check(not b.prepare_mount(p, test_world, ground) and b.fallen and not b.riding, "заблокированная посадка сохраняет лежащую раму")
+	test_world.sites.clear()
+	ground.obstacles = ForestObstacles.new(test_world, ground)
+	ground.obstacles._add(0, -10, 0, 10, 0.1, 100, INF)
+	b.x = 0.8
+	b.z = 0.0
+	p.x = -0.8
+	p.z = 0.0
+	check(not b.prepare_mount(p, test_world, ground) and b.x == 0.8, "при подъёме нельзя перенести раму на свою сторону стены")
+	# Камера после рэгдолла использует координаты пешехода, даже если рама далеко.
+	var game := GameWorld.new()
+	game.player = p
+	game.bike = b
+	game.camera = Camera3D.new()
+	game.add_child(game.camera)
+	game._prev = Vector3(p.x, p.feet, p.z)
+	game._update_camera(1.0, DT)
+	check(game.camera.position.is_equal_approx(Vector3(p.x, p.feet + GameConfig.EYE, p.z)), "после падения камера от первого лица на месте игрока")
+	game.free()
 
 
 func _check_environment() -> void:
@@ -375,7 +442,7 @@ func _check_lifecycle() -> void:
 		crash.abort()
 		check(not crash.active() and rig.get_parent() == view and not _has_sim() and crash._bones.is_empty(), "прерывание фазы %s возвращает седока и убирает физику" % target_phase)
 		check(rig.procedural_pose and player_animation.active, "прерывание возвращает прежнее управление анимацией")
-		check(crash._from_pose.is_empty() and crash._to_pose.is_empty(), "снимки падения освобождены")
+		check(crash._seated_pose.is_empty(), "снимки падения освобождены")
 	check(crash.focus(bike).is_finite() and not crash.tick(DT, bike, w, heights), "завершённое падение безопасно для камеры и tick")
 	# Внешняя анимация была выключена до падения — такой и должна остаться.
 	rig.procedural_pose = false
@@ -405,7 +472,7 @@ func _has_sim() -> bool:
 func _process(_delta: float) -> bool:
 	if not shots.is_empty():
 		# снимок предыдущего кадра: отрисовка отстаёт от такта на кадр
-		root.get_texture().get_image().save_png("res://tools/control/runs/crash_107_%s.png" % shots.pop_front())
+		root.get_texture().get_image().save_png("res://tools/control/runs/crash_109_%s.png" % shots.pop_front())
 	return false
 
 
