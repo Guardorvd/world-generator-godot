@@ -86,6 +86,10 @@ func _run() -> void:
 		game.pitch = atan2(to_bag.y, Vector2(to_bag.x, to_bag.z).length())
 		game._update_camera(1.0, 0.0)
 		check(game._aim().get("kind", "") == "cargo", "взгляд на сумку выбирает её для E")
+		if DisplayServer.get_name() != "headless" and not args.is_empty():
+			await process_frame
+			await process_frame
+			root.get_texture().get_image().save_png(args[0].path_join("quest_bag.png"))
 		game._unhandled_input(event)
 		check(game.quests.cargo and not game._bag.visible and game.hud.goal.get("key") == game.quests.active.target.key, "E надевает сумку, цель — поселение доставки")
 		var before := Vector2(game.player.x, game.player.z)

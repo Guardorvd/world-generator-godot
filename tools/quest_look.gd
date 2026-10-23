@@ -29,7 +29,7 @@ func _initialize() -> void:
 	world.settlements = [home, {x = 180, y = 130, i = 1, name = "Каменка", importance = 1.0, connections = [0], huts = []}]
 	world.peaks = [{x = 160, y = 40, i = 2, name = "Седая"}]
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
-	world.sites = [{x = 120, y = 60, i = 4, name = "Сторожевая", type = 0, rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = 0, rank = 2}]
+	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = 0, rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = 0, rank = 2}]
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Dictionary in world.get(kind + "s"):
 			places.append(SettlementPanel._target(world.place(WorldData.place_id(kind, src.x, src.y))))
@@ -67,7 +67,8 @@ func _by_kind(list: Array, kind: String) -> Dictionary:
 func _logic() -> void:
 	var quests := Quests.new()
 	var offers := _offers(quests)
-	_check(offers.map(func(q: Dictionary) -> String: return q.kind) == ["delivery", "photo", "visit"], "доска предлагает доставку, снимок и посещение")
+	var kinds := offers.map(func(q: Dictionary) -> String: return q.kind)
+	_check(kinds.size() == 3 and kinds[0] == "delivery" and kinds[1] == "photo" and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход")
 	_check(offers == _offers(quests), "те же задания при повторном открытии доски")
 	_check(not offers.any(func(q: Dictionary) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
 	var changes := [0]
@@ -89,18 +90,28 @@ func _logic() -> void:
 	var photo := _by_kind(_offers(quests), "photo")
 	quests.accept(photo)
 	_check(quests.step().do == "shoot" and quests.goal().key == photo.target.key, "снимок: цель — место съёмки")
+	_check(quests.known.has(photo.target.key) and quests.known.has(quests.active.steps[1].place.key), "взятое задание открывает названия своих мест")
 	_check(quests.photographed("") == "" and quests.photographed("peak:0:0") == "", "снимок без места или чужого места не засчитан")
-	_check(quests.photographed(photo.target.key) != "" and quests.step().do == "bring", "снимок нужного места — дальше отвезти его")
+	_check(quests.photographed(photo.target.key, Quests.SHOT_REACH + 50.0) == "" and quests.step().do == "shoot", "снимок издалека не засчитан")
+	_check(quests.photographed(photo.target.key, 120.0) != "" and quests.step().do == "bring", "снимок нужного места вблизи — дальше отвезти его")
 	var back: Dictionary = quests.step().place
 	at = Vector2(back.x, back.y)
 	_check(quests.tick(_arrived).begins_with("Задание выполнено") and quests.done == 2, "снимок привезён — задание выполнено")
+	_check(quests.by_giver.get(_place("Ольховка").key, 0) == 2, "счёт выполненных для поселения")
+	# обход: два места по очереди
+	var tour := Quests._make("tour", _place("Ольховка"), [_place("Седая"), _place("Сторожевая")])
+	quests.accept(tour)
+	at = Vector2(160, 40)
+	_check(quests.tick(_arrived) != "" and quests.goal().name == "Сторожевая" and quests.marker().name == "Сторожевая", "обход: после первого места цель — второе")
+	at = Vector2(130, 40)
+	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "обход: второе место — задание выполнено")
 	# посещение и отказ
-	var visit := _by_kind(_offers(quests), "visit")
+	var visit := Quests._make("visit", _place("Ольховка"), [_place("Тихое")])
 	quests.accept(visit)
 	_check(quests.goal().key == visit.target.key, "посещение ставит место целью")
 	quests.abandon()
-	_check(quests.active.is_empty() and quests.done == 2, "отказ снимает задание без засчёта")
-	_check(changes[0] == 8, "каждое изменение задания сообщается (%d)" % changes[0])
+	_check(quests.active.is_empty() and quests.done == 3, "отказ снимает задание без засчёта")
+	_check(changes[0] == 11, "каждое изменение задания сообщается (%d)" % changes[0])
 
 
 func _shot(name: String) -> void:
@@ -181,6 +192,13 @@ func _run() -> void:
 	_check(buttons.any(func(b: Button) -> bool: return b.text == "Отказаться от задания") and not buttons.any(func(b: Button) -> bool: return b.text.begins_with("Взять")),
 		"с текущим заданием — «Отказаться», новых не взять")
 	await _shot("quest_board_active")
+	var dropped := [0]
+	hud.settlement_panel.quest_abandoned.connect(func() -> void: dropped[0] += 1)
+	var drop: Button = buttons.filter(func(b: Button) -> bool: return b.text == "Отказаться от задания")[0]
+	drop.pressed.emit()
+	_check(dropped[0] == 0 and drop.text.begins_with("Точно"), "отказ — первое нажатие только переспрашивает")
+	drop.pressed.emit()
+	_check(dropped[0] == 1, "второе нажатие отказывается")
 	hud.settlement_panel.hide()
 	# сумка за спиной седока и счётчик
 	quests.pick_up()
@@ -199,9 +217,13 @@ func _run() -> void:
 	_check(not hud.tracker.visible, "в видоискателе счётчика нет")
 	hud.set_photo_mode(false)
 	hud.quest_done("Посылка: «Каменка»")
+	hud.banner("Задание выполнено", "Посылка: «Каменка» · всего выполнено: 1", Hud.GOLD)
 	quests.cargo = false
 	bike.set_pack(false)
 	_check(hud.tracker.visible and hud._tracker_title.text.begins_with("✓"), "выполненное задание видно в счётчике")
+	for i in 30:
+		await process_frame
+	_check(hud._banner.visible and hud._banner.modulate.a > 0.9, "крупная надпись «Задание выполнено» посередине")
 	await _shot("quest_done")
 	print("quest_look: %s, снимки в %s" % ["FAIL %d" % failed if failed else "ok", out])
 	quit(1 if failed else 0)

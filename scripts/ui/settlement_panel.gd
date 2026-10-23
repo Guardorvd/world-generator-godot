@@ -71,10 +71,15 @@ func clear() -> void:
 ## поэтому видны и соседи за краем открытых земель. quests — задания игры, offers — что предлагает эта доска
 func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near: bool, quests: Quests = null, offers: Array = []) -> void:
 	clear()
-	_label(settlement.name, 25)
+	# название и сведения одной строкой: высота доски уходит на задания
+	var head := HBoxContainer.new()
+	head.add_theme_constant_override("separation", 12)
+	_box.add_child(head)
+	_label(settlement.name, 25, head)
 	# с 9.5 в huts есть и сараи с колодцем: считаются только жилые дома
 	var homes: int = settlement.huts.filter(func(u: Dictionary) -> bool: return u.get("t", "house") in SettlementsBuilder.HOMES).size()
-	_label("%s · домов: %d" % [settlement.get("character", "деревня"), homes], 16, _box, MUTED)
+	var info := _label("%s · домов: %d" % [settlement.get("character", "деревня"), homes], 15, head, MUTED)
+	info.size_flags_vertical = Control.SIZE_SHRINK_END
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 6)
 	_box.add_child(tabs)
@@ -83,6 +88,9 @@ func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near:
 	for i in 2:
 		var tab := Button.new()
 		tab.text = ["Задания", "Маршруты"][i]
+		if i == 0 and quests != null:
+			# на вкладке видно, есть ли что взять, ещё до перехода на неё
+			tab.text = "Задания · идёт" if not quests.active.is_empty() else ("Задания · %d" % offers.size() if not offers.is_empty() else "Задания")
 		tab.toggle_mode = true
 		tab.button_group = group
 		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -132,13 +140,20 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 	var busy := not quests.active.is_empty()
 	if busy:
 		var q := quests.active
-		var card := _card(page, true)
-		_label("Текущее задание · %s" % Quests.KINDS[q.kind].title, 13, card, GOLD)
-		_label(q.title, 18, card, Color.WHITE, CARD_W)
+		var kind: Dictionary = Quests.KINDS[q.kind]
+		var card := _card(page, kind.color, true)
+		_label("Текущее задание · %s" % kind.title, 13, card, kind.color)
+		_label("%s %s" % [kind.icon, q.title], 18, card, Color.WHITE, CARD_W)
 		for i in q.steps.size():
 			var mark := "✓" if i < q.step else ("›" if i == q.step else "·")
 			_label("%s %s" % [mark, quests.step_text(q.steps[i])], 14, card, Color.WHITE if i == q.step else MUTED, CARD_W)
-		_button("Отказаться от задания", func() -> void: quest_abandoned.emit(), card)
+		# отказ — в два нажатия: случайный щелчок не теряет сумку и пройденные шаги
+		var drop := _button("Отказаться от задания", func() -> void: pass, card)
+		drop.pressed.connect(func() -> void:
+			if drop.text == "Точно отказаться? Нажмите ещё раз":
+				quest_abandoned.emit()
+			else:
+				drop.text = "Точно отказаться? Нажмите ещё раз")
 	if offers.is_empty():
 		_label("Сейчас доске нечего предложить.", 15, page, MUTED)
 		return
@@ -150,9 +165,11 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		# одно задание за раз: остальные — строкой, взять можно после текущего
 		_label("Ещё здесь: %s — после текущего" % ", ".join(PackedStringArray(offers.map(func(q: Dictionary) -> String: return q.title))), 13, page, MUTED, PAGE_W)
 		return
-	_label("Задания поселения «%s»" % settlement.name, 14, page, MUTED)
+	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
+	var thanks: int = quests.by_giver.get(here, 0)
+	_label("Задания поселения «%s»%s" % [settlement.name, " · выполнено для него: %d" % thanks if thanks > 0 else ""], 14, page, MUTED)
 	for q: Dictionary in offers:
-		var card := _card(page, false)
+		var card := _card(page, Quests.KINDS[q.kind].color, false)
 		var head := HBoxContainer.new()
 		card.add_child(head)
 		var kind: Dictionary = Quests.KINDS[q.kind]
@@ -164,21 +181,24 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		take.custom_minimum_size = Vector2(96, 30)
 		take.tooltip_text = "Взять задание: %s" % kind.title.to_lower()
 		var length := Hud._fmt_dist(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
-		_label("%s · %s · %s" % [kind.title, length, q.text], 13, card, MUTED, CARD_W)
+		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)
+		_label(q.text, 13, card, MUTED, CARD_W)
 
 
-func _card(parent: Container, current: bool) -> VBoxContainer:
+## Карточка задания: полоска слева — цвет вида (Quests.KINDS), у текущего ярче и с подложкой
+func _card(parent: Container, color: Color, current: bool) -> VBoxContainer:
 	var panel := PanelContainer.new()
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(1, 1, 1, 0.05) if not current else Color(GOLD, 0.08)
-	style.border_color = Color(GOLD, 0.8) if current else Color(1, 1, 1, 0.12)
+	style.bg_color = Color(color, 0.1) if current else Color(1, 1, 1, 0.05)
+	style.border_color = Color(color, 0.9 if current else 0.55)
 	style.border_width_left = 3
 	style.set_corner_radius_all(4)
-	style.set_content_margin_all(10)
+	style.set_content_margin_all(8)
+	style.content_margin_left = 10
 	panel.add_theme_stylebox_override("panel", style)
 	parent.add_child(panel)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 5)
+	box.add_theme_constant_override("separation", 3)
 	panel.add_child(box)
 	return box
 

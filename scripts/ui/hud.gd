@@ -36,6 +36,11 @@ var _tracker_note: Label
 var _done_text := ""
 var _done_left := 0.0
 var _photo_mode := false
+var _banner: VBoxContainer
+var _banner_title: Label
+var _banner_sub: Label
+var _banner_tween: Tween
+var _flash_tween: Tween
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
@@ -83,6 +88,9 @@ func _ready() -> void:
 	tracker = _build_tracker()
 	add_child(tracker)
 	move_child(tracker, compass.get_index() + 1)
+	_banner = _build_banner()
+	add_child(_banner)
+	move_child(_banner, tracker.get_index() + 1)
 
 	big_map = BigMap.new()
 	big_map.hud = self
@@ -121,6 +129,9 @@ func clear_world() -> void:
 	quests = null
 	_done_left = 0.0
 	update_tracker()
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
+	_banner.visible = false
 	bike_pos = Vector2.ZERO
 	bike_shown = false
 	_toast_queue.clear()
@@ -206,6 +217,72 @@ func at_place(place: Dictionary, x: float, z: float) -> bool:
 	return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < (2.5 if place.kind in ["peak", "marker"] else (4.0 if place.kind == "site" else 6.0))
 
 
+## Название места известно: посещено, цель или место взятого задания (11.9+)
+func knows(id: String) -> bool:
+	return visited.has(id) or goal.get("key") == id or (quests != null and quests.known.has(id))
+
+
+## Место текущего шага задания (метка на компасе и картах) или пусто
+func quest_place() -> Dictionary:
+	return {} if quests == null else quests.marker()
+
+
+## Цвет вида активного задания
+func quest_color() -> Color:
+	return GOLD if quests == null or quests.active.is_empty() else Quests.KINDS[quests.active.kind].color
+
+
+## Метка задания: квадрат, повёрнутый ромбом, с тёмной обводкой и точкой — не путается с целью (золотой ромб)
+static func draw_quest_mark(c: CanvasItem, at: Vector2, r: float, color: Color) -> void:
+	var pts := PackedVector2Array([at + Vector2(-r, -r), at + Vector2(r, -r), at + Vector2(r, r), at + Vector2(-r, r)])
+	c.draw_colored_polygon(pts, color)
+	pts.append(pts[0])
+	c.draw_polyline(pts, Color(0, 0, 0, 0.7 * color.a), 1.5)
+	c.draw_circle(at, r * 0.35, Color(0, 0, 0, 0.7 * color.a))
+
+
+## Крупная надпись посередине экрана: взято задание, выполнено. Всплывает, держится и гаснет
+func banner(title: String, sub: String, color: Color) -> void:
+	if _banner == null:
+		return
+	_banner_title.text = title
+	_banner_title.add_theme_color_override("font_color", color)
+	_banner_sub.text = sub
+	if _banner_tween != null and _banner_tween.is_valid():
+		_banner_tween.kill()
+	_banner.visible = true
+	_banner.modulate.a = 0.0
+	_banner.scale = Vector2.ONE * 0.92
+	_banner.pivot_offset = _banner.size * 0.5
+	_banner_tween = create_tween()
+	_banner_tween.set_parallel(true)
+	_banner_tween.tween_property(_banner, "modulate:a", 1.0, 0.25)
+	_banner_tween.tween_property(_banner, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_banner_tween.chain().tween_property(_banner, "modulate:a", 0.0, 0.6).set_delay(2.4)
+	_banner_tween.chain().tween_callback(func() -> void: _banner.visible = false)
+
+
+func _build_banner() -> VBoxContainer:
+	var box := VBoxContainer.new()
+	box.anchor_left = 0.0
+	box.anchor_right = 1.0
+	box.anchor_top = 0.26
+	box.anchor_bottom = 0.26
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.alignment = BoxContainer.ALIGNMENT_CENTER
+	_banner_title = Label.new()
+	_banner_sub = Label.new()
+	for l: Label in [_banner_title, _banner_sub]:
+		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
+		l.add_theme_constant_override("outline_size", 6)
+		box.add_child(l)
+	_banner_title.add_theme_font_size_override("font_size", 30)
+	_banner_sub.add_theme_font_size_override("font_size", 18)
+	box.visible = false
+	return box
+
+
 ## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
 func _build_tracker() -> PanelContainer:
 	var panel := PanelContainer.new()
@@ -253,6 +330,22 @@ func quest_done(text: String) -> void:
 	update_tracker()
 
 
+## Задание изменилось: счётчик вспыхивает, чтобы взгляд заметил новый шаг; карты и компас — с новой меткой
+func quest_changed() -> void:
+	update_tracker()
+	if is_node_ready():
+		compass.queue_redraw()
+		minimap.queue_redraw()
+		big_map.queue_redraw()
+	if not tracker.visible:
+		return
+	if _flash_tween != null and _flash_tween.is_valid():
+		_flash_tween.kill()
+	tracker.modulate = Color(1.6, 1.5, 1.2)
+	_flash_tween = create_tween()
+	_flash_tween.tween_property(tracker, "modulate", Color.WHITE, 0.8)
+
+
 ## Перерисовать счётчик задания (игрок в px, pz)
 func update_tracker() -> void:
 	if tracker == null:
@@ -262,6 +355,7 @@ func update_tracker() -> void:
 	var note := ""
 	if _done_left > 0.0:
 		title = "✓ " + _done_text
+		_tracker_title.add_theme_color_override("font_color", GOLD)
 		if quests != null:
 			note = "Выполнено заданий: %d" % quests.done
 	elif quests != null and not quests.active.is_empty():
@@ -271,9 +365,14 @@ func update_tracker() -> void:
 		line = quests.step_text(s)
 		if not is_nan(px):
 			line += " · " + _fmt_dist(Grid.hypot(s.place.x * TILE - px, s.place.y * TILE - pz))
-		note = "%s · шаг %d из %d" % [Quests.KINDS[q.kind].title, q.step + 1, q.steps.size()]
+		# шаги точками: ● пройден или текущий, ○ впереди
+		var pips := ""
+		for i in q.steps.size():
+			pips += "●" if i <= q.step else "○"
+		note = "%s %s · шаг %d из %d" % [pips, Quests.KINDS[q.kind].title, q.step + 1, q.steps.size()]
 		if quests.cargo:
 			note += " · сумка за спиной"
+		_tracker_title.add_theme_color_override("font_color", quest_color())
 	tracker.visible = title != "" and not _photo_mode
 	if _tracker_title.text != title:
 		_tracker_title.text = title
@@ -472,6 +571,9 @@ class MiniMap extends Control:
 			draw_rect(Rect2(s.x * k - 1.5, s.y * k - 1.5, 3, 3), Color.html("#ffdd55"))
 		if not hud.goal.is_empty():
 			draw_arc(_inside(Vector2(hud.goal.x, hud.goal.y) * k, 5.0), 4.5, 0.0, TAU, 16, Hud.GOLD, 2.0)
+		var q := hud.quest_place()
+		if not q.is_empty():
+			Hud.draw_quest_mark(self, _inside(Vector2(q.x, q.y) * k, 6.0), 4.0, hud.quest_color())
 		if hud.bike_shown:
 			Hud.draw_bike(self, _inside(hud.bike_pos / Hud.TILE * k, 4.0), 3.0)
 		Hud.draw_arrow(self, _inside(Vector2(hud.px, hud.pz) / Hud.TILE * k, 8.0), 6.0, hud.yaw)
@@ -508,6 +610,20 @@ class Compass extends Control:
 			var at := Vector2(x - tw / 2.0, size.y - 8.0)
 			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.45 * a))
 			draw_string(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.8 * a))
+		# метка задания (11.9+) — квадрат цвета вида над линией, с расстоянием, если она в поле зрения
+		var q := hud.quest_place()
+		if not q.is_empty():
+			var qoff := wrapf(hud.heading_to(q.x * Hud.TILE, q.y * Hud.TILE) - hud.yaw, -PI, PI)
+			var qseen := absf(qoff) <= SPAN / 2.0
+			var qx := half - clampf(qoff / (SPAN / 2.0), -1.0, 1.0) * (half - 6.0)
+			var qc := hud.quest_color()
+			Hud.draw_quest_mark(self, Vector2(qx, size.y - 15.0), 4.5, qc if qseen else Color(qc, 0.5))
+			if qseen:
+				var dist := Hud._fmt_dist(Grid.hypot(q.x * Hud.TILE - hud.px, q.y * Hud.TILE - hud.pz))
+				var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+				var dat := Vector2(qx - dw / 2.0, size.y + 13.0)
+				draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.5))
+				draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, qc)
 		if hud.goal.is_empty():
 			return
 		var g := hud.goal
@@ -641,11 +757,17 @@ class BigMap extends Control:
 					var col := Color.html("#ffdd55") if seen else Color.html("#e6d6b0")
 					var r: float = 1.5 + pl.src.rank
 					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -r), at + Vector2(r, 0), at + Vector2(0, r), at + Vector2(-r, 0)]), col)
-					if seen or pl.src.rank >= 3 or pl.key == hud.goal.get("key"):
+					if seen or pl.src.rank >= 3 or pl.key == hud.goal.get("key") or hud.knows(pl.key):
 						_queue_name(names, pl, at - Vector2(0, 6), col, 11)
 		_draw_names(names)
 		if not hud.goal.is_empty():
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
+		var q := hud.quest_place()
+		if not q.is_empty():
+			var qat := _inside(o + Vector2(q.x, q.y) * k, o, sz, 8.0)
+			Hud.draw_quest_mark(self, qat + Vector2(11, -11), 5.5, hud.quest_color())
+			# шаг задания — вверху внутри рамки карты: под ней уже две строки
+			Hud.draw_label(self, "Задание: " + hud.quests.step_text(), Vector2(cw / 2.0, o.y + 24.0), hud.quest_color(), 15)
 		if hud.bike_shown:
 			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, o, sz, 5.0), 5.0)
 		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, o, sz, 9.0), 9.0, hud.yaw)

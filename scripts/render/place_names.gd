@@ -1,6 +1,7 @@
 extends RefCounted
 ## Ближние названия: цель имеет приоритет, затем ближайшее место. Без перестановки подписей.
 ## С 11.8 видны только названия посещённых мест и цели; остальные узнают через фотоаппарат (PhotoCamera).
+## С 11.9+ и названия мест взятых заданий.
 ## В видоискателе подписи над миром спрятаны: снимок без них.
 const FADE_FROM := 180.0
 const RANGE := 300.0
@@ -27,12 +28,13 @@ func set_goal(goal: Dictionary) -> void:
 	_timer = 0.0
 
 
-## visited — посещённые места (Hud.visited); hidden — спрятать все подписи сразу (фотоаппарат)
-func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false) -> void:
+## visited — посещённые места (Hud.visited); hidden — спрятать все подписи сразу (фотоаппарат);
+## known — места взятых заданий (Quests.known, с 11.9+): их названия тоже видны
+func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false, known := {}) -> void:
 	_timer -= dt
 	if _timer <= 0.0:
 		_timer = 0.1
-		_select(camera, visited)
+		_select(camera, visited, known)
 	for item: Dictionary in _items:
 		var label: Label3D = item.label
 		item.alpha = 0.0 if hidden else lerpf(item.alpha, item.want, 1.0 - exp(-dt * 10.0))
@@ -45,7 +47,7 @@ func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false) -
 		label.outline_modulate = Color(0.40, 0.24, 0.05, item.alpha * 0.95) if selected else Color(0, 0, 0, item.alpha * 0.7)
 
 
-func _select(camera: Camera3D, visited: Dictionary) -> void:
+func _select(camera: Camera3D, visited: Dictionary, known: Dictionary) -> void:
 	var candidates: Array[Dictionary] = []
 	var view := camera.get_viewport().get_visible_rect()
 	var pixels := (view.size.y if camera.keep_aspect == Camera3D.KEEP_HEIGHT else view.size.x) / (2.0 * tan(deg_to_rad(camera.fov) * 0.5))
@@ -53,7 +55,7 @@ func _select(camera: Camera3D, visited: Dictionary) -> void:
 		item.want = 0.0
 		var label: Label3D = item.label
 		var selected: bool = label.get_meta("place_id") == _goal_id
-		if not selected and not visited.has(label.get_meta("place_id")):
+		if not selected and not visited.has(label.get_meta("place_id")) and not known.has(label.get_meta("place_id")):
 			continue
 		var distance := camera.global_position.distance_to(label.global_position)
 		var limit := GOAL_RANGE if selected else RANGE

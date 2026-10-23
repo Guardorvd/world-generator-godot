@@ -39,6 +39,7 @@ var place_names: PlaceNames
 var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
 var _bag: Node3D         # сумка доставки у доски, пока её не взяли
+var _bag_label: Label3D  # подпись над ней
 var _quest_goal := ""    # key места, которое задание поставило целью на компасе
 var navigation_line: NavigationLine
 var _speed_wind: SpeedWind
@@ -149,7 +150,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	add_child(photo)
 	photo.anchors = _photo_anchors()
 	photo.occluded = _occluded
-	photo.familiar = func(id: String) -> bool: return hud.visited.has(id) or hud.goal.get("key") == id
+	photo.familiar = func(id: String) -> bool: return hud.knows(id)
 	photo.capturing.connect(func(on: bool) -> void: hud.visible = not on)
 	fires = built.fires
 	windows = built.windows
@@ -250,7 +251,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	quests = Quests.new()
 	quests.changed.connect(_quest_changed)
 	hud.quests = quests
-	photo.photo_taken.connect(func(shot: Dictionary) -> void: _quest_progress(quests.photographed(shot.place)))
+	photo.photo_taken.connect(_quest_photo)
+	photo.wanted_reach = Quests.SHOT_REACH
 	for s: Dictionary in world.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
@@ -783,7 +785,11 @@ func _process(delta: float) -> void:
 	if navigation_line != null:
 		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active() and not photo.active)
 	if place_names != null:
-		place_names.update(camera, delta, hud.visited, photo.active)
+		place_names.update(camera, delta, hud.visited, photo.active, quests.known)
+	if _bag != null and _bag.visible:
+		# подпись над сумкой покачивается, чтобы её было видно издалека
+		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
+		_bag_label.visible = camera.global_position.distance_to(_bag.position) < 60.0 and not photo.active
 	photo.update(camera, delta)
 	_target = _aim()
 	_update_hints()
@@ -1045,7 +1051,8 @@ func _offers(village: Dictionary) -> Array:
 func _accept_quest(q: Dictionary) -> void:
 	quests.accept(q)
 	_close_settlement()
-	hud.toast_now("Задание взято: %s. %s" % [q.title, quests.step_text()])
+	hud.banner("Новое задание", q.title, Quests.KINDS[q.kind].color)
+	hud.toast_now(quests.step_text())
 
 
 func _abandon_quest() -> void:
@@ -1054,15 +1061,30 @@ func _abandon_quest() -> void:
 	hud.toast_now("Вы отказались от задания")
 
 
-## Сообщение о шаге задания: следующий шаг или «Задание выполнено» (тогда и в счётчике)
+## Сообщение о шаге задания: следующий шаг или «Задание выполнено» (крупно посередине и в счётчике)
 func _quest_progress(text: String) -> void:
 	if text.is_empty():
 		return
 	if quests.active.is_empty():
 		hud.quest_done(quests.last)
-		hud.toast_now(text)
+		hud.banner("Задание выполнено", "%s · всего выполнено: %d" % [quests.last, quests.done], Hud.GOLD)
 	else:
 		hud.toast_now("Дальше: " + text)
+
+
+## Снимок: засчитать для задания или подсказать, почему не засчитан
+func _quest_photo(shot: Dictionary) -> void:
+	var s := quests.step()
+	if s.get("do") != "shoot":
+		return
+	if shot.place.is_empty():
+		hud.toast_now("Наведите фотоаппарат на «%s»: снимок засчитается, когда в видоискателе появится название" % s.place.name)
+	elif not quests.wants_photo(shot.place):
+		hud.toast_now("Это «%s». Для задания нужен снимок «%s»" % [shot.name, s.place.name])
+	elif shot.dist > Quests.SHOT_REACH:
+		hud.toast_now("Слишком далеко для задания: подойдите к «%s» ближе %s (сейчас %s)" % [s.place.name, Hud._fmt_dist(Quests.SHOT_REACH), Hud._fmt_dist(shot.dist)])
+	else:
+		_quest_progress(quests.photographed(shot.place, shot.dist))
 
 
 ## Задание изменилось: цель на компасе, сумка у доски и за спиной, нужный снимок в видоискателе, счётчик
@@ -1081,6 +1103,17 @@ func _quest_changed() -> void:
 		if _bag == null:
 			_bag = CargoBag.build()
 			add_child(_bag)
+			# подпись над сумкой: видна издалека и сквозь кусты, как метка предмета в играх
+			_bag_label = Label3D.new()
+			_bag_label.text = "▼ Сумка · E"
+			_bag_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+			_bag_label.no_depth_test = true
+			_bag_label.fixed_size = true
+			_bag_label.pixel_size = 0.0015
+			_bag_label.font_size = 28
+			_bag_label.outline_size = 8
+			_bag_label.modulate = Quests.KINDS.delivery.color
+			_bag.add_child(_bag_label)
 		# у правого края доски, лицом туда же, куда щит; стоит на земле
 		var board := SettlementsBuilder.board_foot(s.place.src, heights)
 		var basis := Basis(Vector3.UP, -PI / 4.0)
@@ -1091,7 +1124,7 @@ func _quest_changed() -> void:
 	elif _bag != null:
 		_bag.visible = false
 	bike_view.set_pack(quests.cargo)
-	hud.update_tracker()
+	hud.quest_changed()
 
 
 func _close_settlement(capture := true) -> void:
