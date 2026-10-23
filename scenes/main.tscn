@@ -447,8 +447,8 @@ layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
 theme_override_font_sizes/font_size = 14
 text = "Мышь — осмотреться · WASD — идти · Shift — бег
-Пробел — прыжок · F — сесть на велосипед или слезть
-M — карта · Esc — пауза"
+Пробел — прыжок · E — действие / слезть · F — фонарик
+Y — с велосипедом к ближайшему месту · M — карта · Esc — пауза"
 horizontal_alignment = 1
 
 [node name="Settings" type="CenterContainer" parent="UI/Root"]

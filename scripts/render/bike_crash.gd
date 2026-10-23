@@ -166,17 +166,20 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			if t >= _balance_time:
 				_begin_ragdoll()
 		Phase.RAGDOLL:
-			_view.global_transform = _bike_body.global_transform
-			_keep_above_ground(heights, dt)
-			_sync_pose()
 			var hips := _bones["Hips"] as PhysicalBone3D
+			var ground_center := Vector2(_ground.global_position.x, _ground.global_position.z)
+			if Vector2(hips.global_position.x, hips.global_position.z).distance_to(ground_center) > GROUND_R - 4:
+				# Долгое падение не заканчивается из-за края временного коллайдера земли.
+				_build_ground(hips.global_position, hips.global_position.y, heights)
+			_keep_above_ground(heights, dt)
+			_view.global_transform = _bike_body.global_transform
+			_sync_pose()
 			var near_ground := hips.global_position.y - _support_height(hips.global_position, heights) < 0.65
 			var head := _bones["Head"] as PhysicalBone3D
 			var lying := head.global_position.y - _support_height(head.global_position, heights) < 0.45
 			var settled := near_ground and lying and hips.linear_velocity.length() < 0.8 and head.linear_velocity.length() < 0.8 and hips.angular_velocity.length() < 1.0 and _bike_body.linear_velocity.length() < 0.8
 			_settled_time = _settled_time + dt if settled else 0.0
-			var lost := Vector2(hips.global_position.x - _ground.position.x, hips.global_position.z - _ground.position.z).length() > GROUND_R - 2
-			if ((t >= LIE_MIN and _settled_time >= SETTLE) or (t >= LIE_MAX and near_ground) or lost) and t >= _recover_retry:
+			if ((t >= LIE_MIN and _settled_time >= SETTLE) or (t >= LIE_MAX and near_ground)) and t >= _recover_retry:
 				_begin_recover(b, w, heights)
 		Phase.RECOVER:
 			if t >= _recover_time:
@@ -303,7 +306,7 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	var hips: Vector3 = (_bones["Hips"] as PhysicalBone3D).global_position
 	_from_feet = Vector3(hips.x, hips.y - 0.5, hips.z)
 	standing_position = destination.position
-	_recover_time = RECOVER
+	_recover_time = maxf(RECOVER, _from_feet.distance_to(standing_position) / GameConfig.WALK)
 	# Сохраняем раму до удаления временных физических тел.
 	b.fallen_transform = _bike_body.global_transform
 	b.x = b.fallen_transform.origin.x
@@ -383,11 +386,33 @@ func _keep_above_ground(heights: Heightfield, dt: float) -> void:
 	var water := heights.immersion_at(_bike_body.global_position.x, _bike_body.global_position.z, _bike_body.global_position.y)
 	if water > 0.0:
 		_bike_body.linear_velocity = _water_velocity(_bike_body.linear_velocity, water, dt)
+	# Рама может остаться за пределами участка тела; страхуем колёса от падения сквозь землю.
+	var lift := 0.0
+	for child in _bike_body.get_children():
+		if not child is CollisionShape3D:
+			continue
+		var col := child as CollisionShape3D
+		var at := _bike_body.global_transform * col.transform
+		var extent := 0.0
+		if col.shape is BoxShape3D:
+			var half := (col.shape as BoxShape3D).size * 0.5
+			extent = absf(at.basis.x.y) * half.x + absf(at.basis.y.y) * half.y + absf(at.basis.z.y) * half.z
+		elif col.shape is CylinderShape3D:
+			var cylinder := col.shape as CylinderShape3D
+			var vertical := absf(at.basis.y.y)
+			extent = cylinder.height * 0.5 * vertical + cylinder.radius * sqrt(maxf(0.0, 1.0 - vertical * vertical))
+		lift = maxf(lift, _support_height(at.origin, heights) + extent - at.origin.y)
+	if lift > 0.2:
+		_bike_body.global_position.y += lift
+		var velocity := _bike_body.linear_velocity
+		velocity.y = maxf(velocity.y, 0.0)
+		_bike_body.linear_velocity = velocity
 
 
 ## Опора под телом: луч не видит настил над головой, в отличие от одной карты высот.
 func _support_height(at: Vector3, heights: Heightfield) -> float:
-	var floor_y := heights.ground_at(at.x, at.z)
+	# deck_at обычно допускает шаг вверх на STEP; для лежащего тела нужен именно настил ПОД ним.
+	var floor_y := heights.surface_at(at.x, at.z, at.y - Heightfield.STEP + 0.05)
 	var query := PhysicsRayQueryParameters3D.create(at, at - Vector3.UP * 2.0, LAYER_GROUND)
 	var hit := get_world_3d().direct_space_state.intersect_ray(query)
 	if not hit.is_empty() and (hit.normal as Vector3).y > 0.25:
@@ -420,15 +445,17 @@ func _recovery_spot(b: BikeRide, w: WorldData, heights: Heightfield) -> Dictiona
 	for radius: float in [0.0, 0.35, 0.75, 1.5, 3.0, 5.0, 8.0, 12.0]:
 		for i in (1 if radius == 0.0 else 16):
 			var spot := from + Vector3(cos(i * TAU / 16.0), 0.0, sin(i * TAU / 16.0)) * radius
-			var floor_y := heights.surface_at(spot.x, spot.z, hips.y)
+			var floor_y := heights.surface_at(spot.x, spot.z, hips.y - Heightfield.STEP + 0.05)
 			if absf(floor_y - from.y) > 1.2:
 				continue
 			if not PlayerState.is_passable(w, heights, spot.x, spot.z, floor_y, PlayerState.BODY_R):
 				continue
-			if heights.ceiling_at(spot.x, spot.z, floor_y) < floor_y + 1.8:
+			if not BikeRecovery.headroom(heights, spot.x, spot.z, floor_y):
 				continue
 			var goal := Vector3(spot.x, floor_y + 0.8, spot.z)
 			var space := get_world_3d().direct_space_state
+			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(spot.x, floor_y + 0.1, spot.z), Vector3(spot.x, floor_y + 1.8, spot.z), LAYER_GROUND)).is_empty():
+				continue
 			if not space.intersect_ray(PhysicsRayQueryParameters3D.create(hips, goal, LAYER_GROUND)).is_empty():
 				continue
 			return {position = Vector3(spot.x, floor_y, spot.z), heading = heading}
@@ -479,6 +506,7 @@ func _free_physics() -> void:
 ## Земля отдельно от объёмных сооружений: под мостом нет искусственной стены или поднятого берега.
 func _build_ground(center: Vector3, _y: float, heights: Heightfield) -> void:
 	if _ground != null:
+		_ground.collision_layer = 0
 		_ground.queue_free()
 	_ground = StaticBody3D.new()
 	_ground.collision_layer = LAYER_GROUND

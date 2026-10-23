@@ -109,9 +109,7 @@ func can_mount(p: PlayerState) -> bool:
 func prepare_mount(p: PlayerState, w: WorldData, heights: Heightfield) -> bool:
 	if not can_mount(p) or not p.on_ground:
 		return false
-	if not fallen:
-		return true
-	for radius: float in [0.0, 0.5, 1.0, 1.5]:
+	for radius: float in ([0.0, 0.5, 1.0, 1.5] if fallen else [0.0]):
 		for i in (1 if radius == 0.0 else 8):
 			var px := x + cos(i * TAU / 8.0) * radius
 			var pz := z + sin(i * TAU / 8.0) * radius
@@ -120,25 +118,13 @@ func prepare_mount(p: PlayerState, w: WorldData, heights: Heightfield) -> bool:
 			var floor_y := heights.surface_at(px, pz, y + 0.4)
 			if absf(floor_y - p.feet) > 0.6 or heights.ceiling_at(px, pz, floor_y) < floor_y + 1.8:
 				continue
-			var frame_free := func(qx: float, qz: float) -> bool:
-				return PlayerState.is_passable(w, heights, qx, qz, y, BODY_R, true)
-			var frame_path := PlayerState.slide(frame_free, x, z, px - x, pz - z)
-			if Grid.hypot(frame_path[0] - px, frame_path[1] - pz) > 0.01:
+			var destination := Vector3(px, floor_y, pz)
+			if not BikeRecovery.clear_path(w, heights, Vector3(x, y, z), destination, true):
 				continue
-			var free := func(qx: float, qz: float) -> bool:
-				return PlayerState.is_passable(w, heights, qx, qz, p.feet, BODY_R) and absf(heights.surface_at(qx, qz, p.feet) - p.feet) < 0.6
-			var path := PlayerState.slide(free, p.x, p.z, px - p.x, pz - p.z)
-			if Grid.hypot(path[0] - px, path[1] - pz) > 0.01:
+			if not BikeRecovery.clear_path(w, heights, Vector3(p.x, p.feet, p.z), destination):
 				continue
 			for direction: float in [heading, heading + PI * 0.5, heading - PI * 0.5]:
-				var saved_y := y
-				y = floor_y
-				var clear := fits(px, pz, direction, w, heights)
-				y = saved_y
-				if not clear:
-					continue
-				var wheel := Vector2(-sin(direction), -cos(direction)) * HUB
-				if absf(heights.surface_at(px + wheel.x, pz + wheel.y, floor_y) - floor_y) > 0.6 or absf(heights.surface_at(px - wheel.x, pz - wheel.y, floor_y) - floor_y) > 0.6:
+				if BikeRecovery.placement(w, heights, destination, direction).is_empty():
 					continue
 				x = px
 				z = pz
@@ -149,6 +135,7 @@ func prepare_mount(p: PlayerState, w: WorldData, heights: Heightfield) -> bool:
 
 
 func mount(p: PlayerState) -> void:
+	reset_motion()
 	riding = true
 	fallen = false
 	speed = 0.0

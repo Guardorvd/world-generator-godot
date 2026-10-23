@@ -53,6 +53,8 @@ var info_timer := 0.0
 var _dragging := false
 var _captured_at := 0
 var _looked_at := 0.0   # время последнего движения мыши, чтобы камера на велосипеде не спорила с ней
+var _rescue_ready := 0.0 # игровое время: защита от повторной дорогой операции Y
+var _rescue_input_until := 0.0
 var _cam_y := 0.0       # высота, за которой следит камера на велосипеде: мягко, чтобы не дёргало на приземлении
 var _cam_dist := GameConfig.BIKE_CAM  # расстояние до седока: короче, если сзади склон
 var _bob_amp := 0.0     # сила покачивания при ходьбе: нарастает и стихает плавно
@@ -289,6 +291,79 @@ func travel_to(place: Dictionary) -> void:
 	hud.toast_now("Вы переместились: «%s»" % place.name)
 
 
+## Y доступна и в воздухе/рэгдолле. Сначала ищем и проверяем место, лишь затем меняем состояние.
+func restore_at_place() -> bool:
+	if paused or player == null or bike == null or not is_instance_valid(bike_view) or world == null or heights == null or _settlement_open() or time < _rescue_ready:
+		return false
+	_rescue_ready = time + 1.0
+	var origin := Vector3(player.x, player.feet, player.z)
+	var spot := {}
+	var refreshed := false
+	# После прогрева растительности проверяем свежий валежник; отказ не переносит игрока.
+	for attempt in 3:
+		var details := vegetation.obstacles if vegetation != null else (heights.obstacles.data if heights.obstacles != null else PackedFloat32Array())
+		spot = BikeRecovery.find(world, heights, origin, yaw, details)
+		if spot.is_empty():
+			break
+		_refresh_recovery_area(spot.position)
+		refreshed = true
+		if not BikeRecovery.placement(world, heights, spot.position, spot.heading, null, true).is_empty():
+			break
+		spot = {}
+	if spot.is_empty():
+		if refreshed:
+			_refresh_recovery_area(origin)
+		if hud != null:
+			hud.toast_now("Безопасное место не найдено. Положение сохранено")
+		return false
+	if crash != null:
+		crash.abort()
+	player = PlayerState.new()
+	player.x = spot.position.x
+	player.z = spot.position.z
+	player.feet = spot.position.y
+	# Сохраняем сам велосипед и фару, очищаем только движение и состояние падения.
+	bike.x = player.x
+	bike.z = player.z
+	bike.y = player.feet
+	bike.heading = spot.heading
+	bike.tilt = 0.0
+	bike.mount(player)
+	yaw = bike.heading
+	pitch = -0.3
+	_cam_y = player.feet + 1.4
+	_cam_dist = GameConfig.BIKE_CAM
+	_dip = 0.0
+	_dip_v = 0.0
+	_trauma = 0.0
+	_bob_amp = 0.0
+	_moving = false
+	_dragging = false
+	_target = {}
+	_rescue_input_until = time + 0.35
+	if terrain_stream != null:
+		terrain_stream.update(player.x, player.z, true, true, NEAR)
+	if world.outer != null and outer != null:
+		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
+	_snap()
+	bike_view.draw(1.0)
+	if show_map:
+		toggle_map()
+	if camera != null:
+		_update_camera(1.0, 0.0)
+	if hud != null:
+		hud.toast_now("Вы с велосипедом у места «%s»" % spot.name)
+	return true
+
+
+func _refresh_recovery_area(at: Vector3) -> void:
+	if vegetation != null:
+		vegetation.update(at.x, at.z, true)
+	if heights.obstacles != null:
+		var details := vegetation.obstacles if vegetation != null else heights.obstacles.data.duplicate()
+		heights.obstacles.update(at.x, at.z, details, vegetation.obstacles_version if vegetation != null else 0, true)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_echo():
 		return
@@ -308,7 +383,10 @@ func _unhandled_input(event: InputEvent) -> void:
 	# до start() узлы игрока и велосипеда ещё не созданы
 	if paused or player == null:
 		return
-	if event.is_action_pressed("toggle_map"):
+	if event.is_action_pressed("recover_bike"):
+		restore_at_place()
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("toggle_map"):
 		toggle_map()
 	elif event.is_action_pressed("flashlight"):
 		toggle_flashlight()
@@ -362,6 +440,10 @@ func _physics_process(dt: float) -> void:
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
+	if time < _rescue_input_until:
+		fw = 0.0
+		st = 0.0
+		jump = false
 	_moving = false
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
@@ -533,7 +615,7 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 
 
 ## Седок упал (жёсткое приземление, удар в стену): велосипед и тело разлетаются (BikeCrash),
-## через пару секунд седок снова в седле
+## после остановки игрок встаёт пешком; Y позволяет явно восстановиться вместе с рамой
 func _crash() -> void:
 	bike.crashed = false
 	crash.start(bike_view, bike, bike.crash_velocity, heights)
@@ -551,13 +633,16 @@ func _update_hints() -> void:
 		hud.set_hints("", "")
 		return
 	var prompt := ""
+	if crash.active():
+		hud.set_hints("Падение · Y — восстановиться у ближайшего места · Esc — пауза", "")
+		return
 	match _target.get("kind", ""):
 		"board": prompt = "E — маршруты поселения «%s»" % _target.place.name
 		"bike": prompt = "E — сесть на велосипед"
 	if bike.riding:
-		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · F — фонарик · Esc — пауза", prompt)
+		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фонарик · Esc — пауза", prompt)
 		return
-	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · F — фонарик · M — карта · Esc — пауза", prompt)
+	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · Y — к ближайшему месту · F — фонарик · M — карта · Esc — пауза", prompt)
 
 
 func _settlement_open() -> bool:
