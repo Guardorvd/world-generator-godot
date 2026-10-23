@@ -237,14 +237,17 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if Biomes.is_tree(kind) else 0.8 + rng.next_float() * 0.45
 					store.add(px, py, kind, v, sc)
 			# камни: на кручах и россыпями там, где местность неровная
-			var rocky := 0.06 if sl > 0.7 else 0.0
+			# 10.4: на кручах валуны тоже пятнами (россыпи), а не ровной сыпью по всему склону;
+			# размеры разные: много мелких, редкие крупные
+			var rocky := 0.06 * (0.12 + 0.88 * _ss(-0.1, 0.45, stony[i])) if sl > 0.7 else 0.0
 			if sl > 0.25 and stony[i] > 0.3:
 				rocky += 0.05 * clampf((stony[i] - 0.3) * 4.0, 0.0, 1.0) * clampf(sl, 0.0, 1.0)
 			if rocky > 0.0 and rng.next_float() < rocky:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
-				store.add(px, py, Biomes.T_ROCK, v, 0.7 + rng.next_float() * 0.6)
+				var size := rng.next_float()
+				store.add(px, py, Biomes.T_ROCK, v, 0.5 + size * size * 1.1)
 			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48 and rng.next_float() < 0.12:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()

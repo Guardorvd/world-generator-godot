@@ -23,7 +23,6 @@ const CAM_STEPS := 15   # столько точек на луче от седо�
 const NEAR := PlanTerrain.RADIUS / 2.0
 const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
 const AIM_R := 0.3     # «толщина» луча взгляда, м: предмет можно задеть краем
-const FLASH_TILT := 0.17  # фонарик светит ниже взгляда (~10°), как фара велосипеда, рад
 
 var world: WorldData
 var heights: Heightfield
@@ -46,7 +45,6 @@ var pitch := -0.05
 var time := 0.0
 var hour := 9.0          # час суток в мире, 0..24
 var day: DayCycle
-var flashlight: SpotLight3D
 var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
 var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board", place}
 var paused := false
@@ -168,8 +166,6 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	for s: Dictionary in world.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
-	flashlight = _make_flashlight()
-	add_child(flashlight)
 	capture_mouse()
 	_mark("start_rest_ms", t)
 
@@ -480,7 +476,6 @@ func _process(delta: float) -> void:
 	else:
 		bike_view.draw(alpha)
 	_update_camera(alpha, delta)
-	_place_flashlight(pos)
 	_target = _aim()
 	_update_hints()
 	day.apply(hour, time)
@@ -667,37 +662,11 @@ func _recall_bike() -> void:
 	hud.toast_now("Велосипед ждёт рядом с костром")
 
 
-## Фонарик (F, с 10.1): мягкий конус от головы игрока по взгляду, ниже его, как фара велосипеда. Без теней: светит из глаз,
-## своих теней почти не видно, а тень прожектора — лишний проход рендера
-func _make_flashlight() -> SpotLight3D:
-	var l := SpotLight3D.new()
-	l.light_color = Color(1.0, 0.92, 0.78)
-	l.light_energy = 2.5
-	l.light_specular = 0.3
-	l.spot_range = 32.0
-	l.spot_attenuation = 1.2
-	l.spot_angle = 34.0
-	l.spot_angle_attenuation = 0.8  # мягкий, чуть рассеянный край: яркость спадает от середины плавно
-	l.shadow_enabled = false
-	l.visible = false
-	return l
-
-
+## Фонарик (F): с 10.4 это фара на руле велосипеда (BikeView.lamp), светит туда, куда повёрнут руль.
+## Пешком она остаётся на велосипеде и освещает место, где он стоит
 func toggle_flashlight() -> void:
-	flashlight.visible = not flashlight.visible
-	hud.toast_now("Фонарик включён" if flashlight.visible else "Фонарик выключен")
-
-
-## Фонарик у головы игрока (на велосипеде — у головы седока, а не у камеры за спиной), светит по взгляду
-func _place_flashlight(pos: Vector3) -> void:
-	if not flashlight.visible:
-		return
-	var b := camera.global_basis * Basis(Vector3.RIGHT, -FLASH_TILT)
-	var at := camera.global_position
-	if bike.riding or crash.active():
-		var ahead := Vector3(-b.z.x, 0.0, -b.z.z).normalized()
-		at = Vector3(pos.x, pos.y + 1.55, pos.z) + ahead * 0.35
-	flashlight.global_transform = Transform3D(b, at)
+	bike_view.set_lamp(not bike_view.lamp_on())
+	hud.toast_now("Фара включена" if bike_view.lamp_on() else "Фара выключена")
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания

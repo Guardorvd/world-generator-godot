@@ -13,6 +13,7 @@ extends SceneTree
 ##   Север-1234@512 снимается и меряется за одну генерацию.
 ## Общие: --out <папка> (по умолчанию runs/<версия>), --base <папка> (по умолчанию прошлая версия в runs),
 ##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1,
+##   --lamp on — с 10.4: включить фару велосипеда (для ночных снимков с --hours).
 ##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию как в игре — высокая).
 ##   --cache — с 10.0: после проверки тот же мир загружается ещё раз из кэша миров (WorldCache, файл во временной
 ##   папке прогона): время загрузки из кэша, размер файла и совпадение мира, рельефа и карты; итог в cache.json.
@@ -273,6 +274,8 @@ func _process(delta: float) -> bool:
 			Dev.save_json(out.path_join("stats_%s.json" % id), stats)
 			if "map" in want_views:
 				_save(main.hud.map_tex.get_image(), "%s_map" % id, true)
+			if Dev.arg("lamp", "no") != "no":
+				game.bike_view.set_lamp(true)
 			for v: Dictionary in Dev.views(game):
 				if v.name in want_views:
 					for h in hours:

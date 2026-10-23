@@ -43,6 +43,7 @@ const AVOID_MUL := 8.0      # во столько раз дороже клетк
 const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
 const REUSE_R := 5.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
 const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
+const CROSS_GAP := 8.0      # 10.4: вода ближе стольких клеток к мосту закрыта для следующих путей — они сходятся к одной переправе
 ## Три характера езды без отдельных режимов: дорога, извилистый обход, техническая горная тропа.
 const WIDTHS := {animal = 0.32, mountain = 0.42, trail = 0.55, road = 0.9}
 const ROAD_CLIMB := 32.0
@@ -305,6 +306,17 @@ static func _protect_structures(w: WorldData, road_cost: PackedFloat32Array) -> 
 				cost[i] = INF
 				if both:
 					road_cost[i] = INF
+		# С 10.4 у моста своя переправа: вода рядом для следующих дорог закрыта, и они подходят к этому
+		# мосту, а не строят свой в паре клеток (раньше у дороги и тропы вдоль берега было по мосту).
+		# Тропы ищут путь по w.cost, поэтому закрыто в обеих стоимостях
+		if not tunnel:
+			for y in range(maxi(0, floori(minf(ay, by) - CROSS_GAP)), mini(w.H, ceili(maxf(ay, by) + CROSS_GAP))):
+				for x in range(maxi(0, floori(minf(ax, bx) - CROSS_GAP)), mini(w.W, ceili(maxf(ax, bx) + CROSS_GAP))):
+					var i := y * w.W + x
+					if _wet(w, i) and Grid.segment_dist(x + 0.5, y + 0.5, ax, ay, bx, by) <= CROSS_GAP:
+						cost[i] = INF
+						if both:
+							road_cost[i] = INF
 		for i: int in Grid.line_cells(span.a % w.W, span.a / w.W, span.b % w.W, span.b / w.W, w.W):
 			cost[i] = 0.3
 			if both:

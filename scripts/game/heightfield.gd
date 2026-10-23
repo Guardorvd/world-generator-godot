@@ -18,6 +18,11 @@ const STEP := 0.8           # на настил можно шагнуть или
 const WALL := 0.6           # толщина перил моста, в которые упирается игрок, м
 const _NO_SEGMENTS: Array = []  # пустой список отрезков реки: не новый массив на каждый вызов
 const TUNNEL_WALL := 1.0    # толщина стен туннеля, м (как у их модели в StructuresBuilder)
+## 10.4: вид переправы. Деревянный мост с перилами — только где он нужен (длинный пролёт или широкая вода);
+## короткая переправа дороги — каменный мостик с низким парапетом, тропы — несколько досок без перил
+const WOOD_LEN := 32.0      # пролёт от стольких метров — деревянный мост
+const WOOD_WATER := 12.0    # или воды под ним от стольких метров
+const PLANKS_HALF := 0.9    # полуширина дощатого настила тропы, м
 
 var world: WorldData
 var hv := PackedFloat32Array()      # высоты с прорезанными руслами
@@ -25,7 +30,8 @@ var hv_raw := PackedFloat32Array()  # высоты как в генератор�
 var water_level := PackedFloat32Array() # уровень воды в клетке (или -INF, если воды нет)
 var ribbons: Array = []             # средние линии рек: массивы точек {x, z, w — полуширина, y — уровень воды}
 var _river_cells := {}             # клетка -> сегменты ленты; одни треугольники для воды и depth_at
-## мосты и туннели: {tunnel, ax, az, ay, bx, bz, by — концы оси в метрах (y — настил или пол), half, len, ux, uz — направление}.
+## мосты и туннели: {tunnel, ax, az, ay, bx, bz, by — концы оси в метрах (y — настил или пол), half, len, ux, uz — направление;
+## у мостов ещё style: "wood" | "stone" | "planks" и rails — есть ли перила, в которые упираются}.
 ## Концы настила и пола вровень с землёй, чтобы на них въезжать без ступеньки
 var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
@@ -193,6 +199,7 @@ func build_structures() -> PackedInt32Array:
 		var s := _axis(b.a, b.b, false)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
+		_style(s)
 		structures.append(s)
 	structures.append_array(tunnels)
 	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
@@ -233,6 +240,20 @@ func _cut(t: Dictionary, inside: bool, changed: PackedInt32Array) -> void:
 			if (not inside and hv[i] > floor_y) or (inside and along > 0.0 and along < t.len and hv[i] != floor_y):
 				hv[i] = floor_y
 				changed.append(i)
+
+
+## Вид моста по длине, ширине воды под ним и пути на нём (дорога или тропа)
+func _style(s: Dictionary) -> void:
+	var water := 0.0
+	for k in range(0, ceili(s.len) + 1):
+		if depth_at(s.ax + s.ux * k, s.az + s.uz * k) > 0.3:
+			water += 1.0
+	var mid := clampi(floori((s.az + s.bz) * 0.5 / TILE), 0, world.H - 1) * world.W + clampi(floori((s.ax + s.bx) * 0.5 / TILE), 0, world.W - 1)
+	var road := world.path_mask.size() == world.N and world.path_mask[mid] == 3
+	s.style = "wood" if s.len >= WOOD_LEN or water >= WOOD_WATER else ("stone" if road else "planks")
+	s.rails = s.style != "planks"
+	if s.style == "planks":
+		s.half = PLANKS_HALF
 
 
 ## Ось сооружения между центрами клеток a и b
@@ -335,6 +356,8 @@ func wall_at(x: float, z: float, feet: float, r: float = 0.0) -> bool:
 		var side := absf(dx * s.uz - dz * s.ux)
 		if t < 0.0 or t > s.len or side > s.half + (TUNNEL_WALL if s.tunnel else WALL) + r:
 			continue
+		if not s.tunnel and not s.rails:
+			continue # доски без перил: с них можно съехать в воду
 		var d := level(s, t)
 		var on_level: bool = feet < d + TUNNEL_HEIGHT if s.tunnel else (feet >= d - STEP and feet < d + 1.5)
 		if not on_level:
