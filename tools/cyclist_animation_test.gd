@@ -41,6 +41,28 @@ func contacts() -> void:
 func run() -> void:
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
+	# draw до первого tick безопасен, а интерполяция не выходит за границы тактов.
+	var initial := bike.transform
+	bike.draw(1)
+	check(bike.transform == initial, "Draw before state is a no-op")
+	reset()
+	bike.set_lamp(true)
+	check(bike.lamp_on(), "Lamp enabled")
+	check(bike.lamp.get_node("Beam").visible and bike.lamp.get_node("Flood").visible, "Both lamp beams enabled")
+	bike.set_lamp(false)
+	check(not bike.lamp_on(), "Lamp disabled")
+	check(not bike.lamp.get_node("Beam").visible and not bike.lamp.get_node("Flood").visible, "Both lamp beams disabled")
+	state.x += 2.0
+	bike.tick(state)
+	bike.draw(-1)
+	check(is_equal_approx(bike.position.x, 0.0), "Interpolation lower bound")
+	bike.draw(2)
+	check(is_equal_approx(bike.position.x, 2.0), "Interpolation upper bound")
+	# Вырожденный IK сохраняет длины двух звеньев и конечные координаты.
+	for target in [Vector3.ZERO, Vector3.DOWN * 0.4]:
+		var joint := bike.rider._joint(Vector3.ZERO, target, 0.43, Vector3.DOWN)
+		check(joint.is_finite() and is_equal_approx(joint.length(), 0.43), "Degenerate IK has a finite joint and valid first limb")
+		check(absf(joint.distance_to(target) - 0.43) < 0.001, "Degenerate IK has valid second limb")
 	reset()
 	var neutral := bone("Head")
 	# Pedalling adds a small vertical response; coasting lets it settle completely.
@@ -128,6 +150,14 @@ func run() -> void:
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
+	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
+	root.add_child(invalid)
+	invalid.skeleton.set_bone_name(invalid.skeleton.find_bone("HandL"), "MissingHand")
+	var before := invalid.skeleton.get_bone_pose(0)
+	invalid.pose(0, 0, Vector3.ZERO, Vector3.ZERO)
+	check(not invalid._rig_valid, "Incomplete skeleton rejected")
+	check(invalid.skeleton.get_bone_pose(0) == before, "Invalid rig does not write partial pose")
+	invalid.free()
 	print("Cyclist animation: ", fails, " failures; reactions, 360 extreme poses, timing and reset")
 	if "--capture" in OS.get_cmdline_user_args():
 		await capture()

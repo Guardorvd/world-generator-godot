@@ -8,6 +8,7 @@ extends Node3D
 
 const WHEEL_Y := 0.34    # высота осей колёс над землёй
 const STEER_VIEW := 0.35 # поворот переднего колеса в долях угла руля
+const Lamp = preload("res://scripts/render/bike_lamp.gd")
 
 # индексы состояния в tick: x, высота рамы, z, наклон, курс, крен, подвеска (средняя, вилка, зад), колёса, руль, педали
 const S_X := 0
@@ -39,21 +40,37 @@ var _last_speed := 0.0
 var _last_crank := 0.0
 var _landing := 0.0
 var _steering: Node3D
-# перья, которые тянутся к оси колеса: [узел, неподвижный конец, конец у оси, длина]; передние — вилка
-var _front_struts: Array = []
-var _rear_struts: Array = []
-## 10.4: фара на руле (F): видимый корпус со стеклом и два прожектора — дальний узкий луч и мягкая
-## ближняя заливка. Поворачивается с рулём и наклоняется с рамой, как настоящая велофара
-var lamp: Node3D
-var _lens_on: StandardMaterial3D
-var _lens_off: StandardMaterial3D
-var _lens: MeshInstance3D
-const LAMP_TILT := 0.045 # дальний луч чуть ниже горизонта, рад
+var _view_ready := false
+# Перья подвески имеют именованные поля вместо позиционных массивов.
+class Strut:
+	var part: MeshInstance3D
+	var fixed: Vector3
+	var axle: Vector3
+	var length: float
+
+var _front_struts: Array[Strut] = []
+var _rear_struts: Array[Strut] = []
+var lamp: Lamp
+
+@onready var rider: CyclistRig = get_node_or_null("Rider") as CyclistRig
+@onready var rear_wheel: Node3D = get_node_or_null("RearWheel") as Node3D
+@onready var front_wheel: Node3D = get_node_or_null("FrontWheel") as Node3D
+@onready var crank: Node3D = get_node_or_null("Crank") as Node3D
+@onready var pedal_l: Node3D = get_node_or_null("Crank/PedalL") as Node3D
+@onready var pedal_r: Node3D = get_node_or_null("Crank/PedalR") as Node3D
 
 
 func _ready() -> void:
 	_prev.resize(STATE_SIZE)
 	_cur.resize(STATE_SIZE)
+	# Проверяем обязательные узлы до переподчинения деталей.
+	for path: String in ["Rider", "RearWheel", "FrontWheel", "Crank", "Crank/PedalL", "Crank/PedalR", "ForkL", "ForkR", "Stem", "Handlebar", "ChainStayL", "ChainStayR", "SeatStayL", "SeatStayR"]:
+		if not get_node_or_null(path) is Node3D:
+			push_warning("BikeView: отсутствует узел Node3D %s; анимация отключена" % path)
+			return
+	if rider == null:
+		push_warning("BikeView: Rider должен использовать CyclistRig; анимация отключена")
+		return
 	# Вилка, вынос и руль поворачиваются вместе; колесо отдельно вращается вокруг оси.
 	_steering = Node3D.new()
 	add_child(_steering)
@@ -62,112 +79,30 @@ func _ready() -> void:
 		get_node(part).reparent(_steering)
 	var front_axle := Vector3(0.0, WHEEL_Y, -BikeRide.HUB) - _steering.position
 	for part: String in ["ForkL", "ForkR"]:
-		_front_struts.append(_strut(_steering.get_node(part), front_axle))
+		_front_struts.append(_strut(_steering.get_node(part) as MeshInstance3D, front_axle))
 	for part: String in ["ChainStayL", "ChainStayR", "SeatStayL", "SeatStayR"]:
-		_rear_struts.append(_strut(get_node(part), Vector3(0.0, WHEEL_Y, BikeRide.HUB)))
-	_make_lamp()
-
-@onready var rider: Node3D = $Rider
-@onready var rear_wheel: Node3D = $RearWheel
-@onready var front_wheel: Node3D = $FrontWheel
-@onready var crank: Node3D = $Crank
-@onready var pedal_l: Node3D = $Crank/PedalL
-@onready var pedal_r: Node3D = $Crank/PedalR
-
-
-## Фара под рулём перед выносом: кронштейн, корпус, стекло; свет выходит из стекла
-func _make_lamp() -> void:
-	lamp = Node3D.new()
+		_rear_struts.append(_strut(get_node(part) as MeshInstance3D, Vector3(0.0, WHEEL_Y, BikeRide.HUB)))
+	lamp = Lamp.new()
 	lamp.name = "Lamp"
-	_steering.add_child(lamp)
 	lamp.position = Vector3(0.0, 0.17, -0.1)
-	var body_mat := StandardMaterial3D.new()
-	body_mat.albedo_color = Color(0.12, 0.12, 0.13)
-	body_mat.roughness = 0.45
-	body_mat.metallic = 0.3
-	var bracket := MeshInstance3D.new()
-	var bracket_mesh := BoxMesh.new()
-	bracket_mesh.size = Vector3(0.025, 0.06, 0.05)
-	bracket.mesh = bracket_mesh
-	bracket.material_override = body_mat
-	bracket.position = Vector3(0.0, 0.035, 0.035)
-	lamp.add_child(bracket)
-	var body := MeshInstance3D.new()
-	var body_mesh := CylinderMesh.new()
-	body_mesh.top_radius = 0.034
-	body_mesh.bottom_radius = 0.03
-	body_mesh.height = 0.085
-	body_mesh.radial_segments = 12
-	body_mesh.rings = 1
-	body.mesh = body_mesh
-	body.material_override = body_mat
-	body.rotation = Vector3(-PI * 0.5, 0.0, 0.0) # ось цилиндра вдоль -Z, широкий край — вперёд
-	lamp.add_child(body)
-	_lens_off = StandardMaterial3D.new()
-	_lens_off.albedo_color = Color(0.75, 0.78, 0.8)
-	_lens_off.roughness = 0.1
-	_lens_off.metallic = 0.6
-	_lens_on = StandardMaterial3D.new()
-	_lens_on.albedo_color = Color(1.0, 0.95, 0.85)
-	_lens_on.emission_enabled = true
-	_lens_on.emission = Color(1.0, 0.9, 0.72)
-	_lens_on.emission_energy_multiplier = 6.0
-	_lens = MeshInstance3D.new()
-	var lens_mesh := CylinderMesh.new()
-	lens_mesh.top_radius = 0.029
-	lens_mesh.bottom_radius = 0.029
-	lens_mesh.height = 0.006
-	lens_mesh.radial_segments = 12
-	lens_mesh.rings = 1
-	_lens.mesh = lens_mesh
-	_lens.material_override = _lens_off
-	_lens.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
-	_lens.position = Vector3(0.0, 0.0, -0.044)
-	lamp.add_child(_lens)
-	# Дальний луч: узкий, далеко, медленно слабеет; мягкий край без резкой границы
-	var beam := SpotLight3D.new()
-	beam.name = "Beam"
-	beam.light_color = Color(1.0, 0.93, 0.8)
-	beam.light_energy = 14.0
-	beam.light_specular = 0.25
-	beam.spot_range = 60.0
-	beam.spot_attenuation = 0.35
-	beam.spot_angle = 16.0
-	beam.spot_angle_attenuation = 1.4
-	beam.shadow_enabled = false
-	beam.position = Vector3(0.0, 0.0, -0.05)
-	beam.rotation = Vector3(-LAMP_TILT, 0.0, 0.0)
-	lamp.add_child(beam)
-	# Ближняя заливка: широкая и слабая, рассеивает пятно под колесом и края луча
-	var flood := SpotLight3D.new()
-	flood.name = "Flood"
-	flood.light_color = Color(1.0, 0.9, 0.76)
-	flood.light_energy = 1.6
-	flood.light_specular = 0.1
-	flood.spot_range = 16.0
-	flood.spot_attenuation = 0.8
-	flood.spot_angle = 48.0
-	flood.spot_angle_attenuation = 2.2
-	flood.shadow_enabled = false
-	flood.position = Vector3(0.0, 0.0, -0.05)
-	flood.rotation = Vector3(-0.2, 0.0, 0.0)
-	lamp.add_child(flood)
-	set_lamp(false)
+	_steering.add_child(lamp)
+	_view_ready = true
 
 
+## Совместимый интерфейс управления фарой из игры.
 func set_lamp(on: bool) -> void:
-	for light: Node in lamp.get_children():
-		if light is SpotLight3D:
-			light.visible = on
-	_lens.material_override = _lens_on if on else _lens_off
+	if is_instance_valid(lamp):
+		lamp.set_enabled(on)
 
 
 func lamp_on() -> bool:
-	return lamp.get_node("Beam").visible
+	return is_instance_valid(lamp) and lamp.is_enabled()
 
 
 ## Запомнить состояние после такта физики
 func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> void:
+	if not _view_ready:
+		return
 	# Переиспользуем два буфера: состояние приходит 60 раз в секунду.
 	if _has_state:
 		var spare := _prev
@@ -225,6 +160,8 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
 func snap(b: BikeRide) -> void:
+	if not _view_ready:
+		return
 	# Не переносим ускорение и удар через посадку, спешивание или телепорт.
 	_has_state = false
 	_landing = 0.0
@@ -235,6 +172,9 @@ func snap(b: BikeRide) -> void:
 
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
 func draw(alpha: float) -> void:
+	if not _has_state:
+		return
+	alpha = clampf(alpha, 0.0, 1.0) if is_finite(alpha) else 0.0
 	_mix.resize(_cur.size())
 	for i in _cur.size():
 		# курс и углы колёс и педалей идут через полный оборот: переход по короткой дуге
@@ -245,9 +185,9 @@ func draw(alpha: float) -> void:
 	rotation = Vector3(_mix[S_TILT], _mix[S_HEADING], _mix[S_ROLL])
 	rear_wheel.position.y = WHEEL_Y + _mix[S_SQUASH_R]
 	front_wheel.position.y = WHEEL_Y + _mix[S_SQUASH_F]
-	for st: Array in _front_struts:
+	for st: Strut in _front_struts:
 		_stretch(st, _mix[S_SQUASH_F])
-	for st: Array in _rear_struts:
+	for st: Strut in _rear_struts:
 		_stretch(st, _mix[S_SQUASH_R])
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.x = -_mix[S_WHEEL]
@@ -273,19 +213,35 @@ func view_squash() -> float:
 
 
 ## Перо рамы (цилиндр вдоль местной Y): какой конец у оси колеса, какой неподвижен, и длина
-func _strut(part: MeshInstance3D, axle: Vector3) -> Array:
-	var half := part.basis.y.normalized() * (part.mesh as CylinderMesh).height * 0.5
+func _strut(part: MeshInstance3D, axle: Vector3) -> Strut:
+	if part == null:
+		push_warning("BikeView: перо должно быть MeshInstance3D")
+		return null
+	var cylinder := part.mesh as CylinderMesh
+	if cylinder == null or cylinder.height <= 0.0001 or part.basis.y.length_squared() < 0.00000001:
+		push_warning("BikeView: перо %s должно быть непустым CylinderMesh" % part.name)
+		return null
+	var half := part.basis.y.normalized() * cylinder.height * 0.5
 	var a := part.position + half
 	var b := part.position - half
+	var strut := Strut.new()
+	strut.part = part
+	strut.fixed = a
+	strut.axle = b
+	strut.length = half.length() * 2.0
 	if absf(a.z - axle.z) + absf(a.y - axle.y) < absf(b.z - axle.z) + absf(b.y - axle.y):
-		return [part, b, a, half.length() * 2.0]
-	return [part, a, b, half.length() * 2.0]
+		strut.fixed = b
+		strut.axle = a
+	return strut
 
 
-## Перо от неподвижного конца до оси колеса, поднятой на ход подвески: вилка короче, задние перья поворачиваются
-func _stretch(st: Array, travel: float) -> void:
-	var fixed: Vector3 = st[1]
-	var axle: Vector3 = st[2] + Vector3(0.0, travel, 0.0)
-	var along := axle - fixed
-	var basis := Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1.0, along.length() / st[3], 1.0))
-	(st[0] as Node3D).transform = Transform3D(basis, (fixed + axle) * 0.5)
+## Растянуть перо между неподвижной точкой и осью колеса.
+func _stretch(st: Strut, travel: float) -> void:
+	if st == null:
+		return
+	var axle := st.axle + Vector3(0.0, travel, 0.0)
+	var along := axle - st.fixed
+	if along.length_squared() < 0.00000001:
+		return
+	var basis := Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1.0, along.length() / st.length, 1.0))
+	st.part.transform = Transform3D(basis, (st.fixed + axle) * 0.5)
