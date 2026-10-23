@@ -103,6 +103,7 @@ func _sync_settings_controls() -> void:
 	%VolumeSlider.set_value_no_signal(GameSettings.volume)
 	%DaySlider.set_value_no_signal(GameSettings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameSettings.start_hour)
+	%RandomHour.set_pressed_no_signal(not GameSettings.start_hour_set)
 	_show_values()
 
 
@@ -119,7 +120,7 @@ func _show_values() -> void:
 	%FovValue.text = "%d°" % roundi(GameSettings.fov)
 	%VolumeValue.text = "%d %%" % roundi(GameSettings.volume * 100.0)
 	%DayValue.text = "%d мин" % roundi(GameSettings.day_minutes) if GameSettings.day_minutes > 0.0 else "время стоит"
-	%StartHourValue.text = DayCycle.clock(GameSettings.start_hour)
+	%StartHourValue.text = DayCycle.clock(GameSettings.start_hour) if GameSettings.start_hour_set else "случайный"
 
 
 func _on_mouse_changed(v: float) -> void:
@@ -145,6 +146,13 @@ func _on_day_changed(v: float) -> void:
 
 func _on_start_hour_changed(v: float) -> void:
 	GameSettings.start_hour = v
+	GameSettings.start_hour_set = true
+	%RandomHour.set_pressed_no_signal(false)
+	_show_values()
+
+
+func _on_random_hour_toggled(on: bool) -> void:
+	GameSettings.start_hour_set = not on
 	_show_values()
 
 

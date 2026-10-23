@@ -75,6 +75,13 @@ static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
 	return l
 
 
+## Где у костра поселения s стоит доска маршрутов (низ столбов, м); её же ищет наведение GameWorld._aim
+static func board_foot(s: Dictionary, heights: Heightfield) -> Vector3:
+	var x: float = s.x * TILE + 3.0
+	var z: float = s.y * TILE - 3.0
+	return Vector3(x, heights.ground_at(x, z), z)
+
+
 ## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: Material}:
 ## огонь анимируется, окна ночью светятся ярче (set_night).
 static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
@@ -147,14 +154,13 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			batch.add(bench_seat, bench.translated_local(Vector3(0, 0.5, 0)), timber_m)
 			for leg: float in [-0.65, 0.65]:
 				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), timber_m)
-		var board_pos := Vector3(fx + 3.0, 0.0, fz - 3.0)
-		board_pos.y = heights.ground_at(board_pos.x, board_pos.z)
+		var board_pos := board_foot(s, heights)
 		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
 		for side: float in [-0.7, 0.7]:
 			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), timber_m)
 		batch.add(board_mesh, board.translated_local(Vector3(0, 1.35, 0)), door_m)
 		var board_text := Label3D.new()
-		board_text.text = "МАРШРУТЫ\n[E]"
+		board_text.text = "МАРШРУТЫ"
 		board_text.font_size = 24
 		board_text.pixel_size = 0.005
 		board_text.no_depth_test = false

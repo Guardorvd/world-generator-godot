@@ -26,6 +26,17 @@ func _run() -> void:
 	print("HOUSES ", game.world.settlements.map(func(s: Dictionary) -> int: return s.huts.size()))
 	check(game.world.settlements.size() <= 4, "малый мир не превышает прежний максимум поселений")
 	check(InputMap.has_action("interact"), "действие E зарегистрировано")
+	# с 10.1 E действует на то, на что смотрит игрок: встать в 3 м перед доской и посмотреть на неё
+	var board := SettlementsBuilder.board_foot(settlement, game.heights) + Vector3(0, 1.35, 0)
+	game.player.x = board.x - 2.0
+	game.player.z = board.z + 2.0
+	game.player.feet = game.heights.ground_at(game.player.x, game.player.z)
+	game._snap()
+	var look := board - Vector3(game.player.x, game.player.feet + GameConfig.EYE, game.player.z)
+	game.yaw = atan2(-look.x, -look.z)
+	game.pitch = atan2(look.y, Vector2(look.x, look.z).length())
+	game._update_camera(1.0, 0.0)
+	check(game._aim().get("kind", "") == "board", "взгляд на доску выбирает её для E")
 	var event := InputEventAction.new()
 	event.action = "interact"
 	event.pressed = true

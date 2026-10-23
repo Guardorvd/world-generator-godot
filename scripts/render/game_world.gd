@@ -9,6 +9,8 @@ extends Node3D
 ## (travel_to по сигналу Hud.travel_requested).
 ## С 7.8 сутки сменяются (DayCycle): час идёт тактами игры, скорость и час начала — в GameSettings, T — час вперёд
 ## (Shift+T — назад).
+## С 10.1 одна система наведения: E действует на то, на что смотрит игрок (велосипед, доска маршрутов; _aim),
+## на велосипеде E — слезть. F — фонарик.
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -19,6 +21,9 @@ const CAM_STEPS := 15   # столько точек на луче от седо�
 ## Рельеф, готовый сразу при старте и переносе (м). Дальше в тумане части догружаются по одной за кадр:
 ## на 900 м туман уже скрывает больше 80 % цвета, а за секунды загрузки игрок проходит считанные метры.
 const NEAR := PlanTerrain.RADIUS / 2.0
+const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
+const AIM_R := 0.3     # «толщина» луча взгляда, м: предмет можно задеть краем
+const FLASH_TILT := 0.17  # фонарик светит ниже взгляда (~10°), как фара велосипеда, рад
 
 var world: WorldData
 var heights: Heightfield
@@ -41,6 +46,9 @@ var pitch := -0.05
 var time := 0.0
 var hour := 9.0          # час суток в мире, 0..24
 var day: DayCycle
+var flashlight: SpotLight3D
+var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
+var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board", place}
 var paused := false
 var show_map := false
 var info_timer := 0.0
@@ -150,13 +158,18 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	day.terrain_mats = [$Terrain.material_override]
 	day.camera = camera
 	day.world_seed = world.seed_num
-	hour = GameSettings.start_hour
+	hour = GameSettings.pick_start_hour()
 	day.apply(hour, time)
 	_update_camera(1.0, 0.0)
 	if world.settlements.size() > 0:
 		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
 	audio.setup(world, heights)
 	hud.travel_requested.connect(travel_to)
+	for s: Dictionary in world.settlements:
+		var foot := SettlementsBuilder.board_foot(s, heights)
+		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
+	flashlight = _make_flashlight()
+	add_child(flashlight)
 	capture_mouse()
 	_mark("start_rest_ms", t)
 
@@ -205,7 +218,7 @@ func look(dx: float, dy: float) -> void:
 	_looked_at = time
 
 
-## F: сесть на велосипед, если он рядом, или слезть с него
+## Сесть на велосипед, если он рядом, или слезть с него (E, с 10.1; до этого F)
 func toggle_bike() -> void:
 	if crash.active():
 		return
@@ -298,13 +311,13 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("toggle_map"):
 		toggle_map()
-	elif event.is_action_pressed("bike"):
-		toggle_bike()
+	elif event.is_action_pressed("flashlight"):
+		toggle_flashlight()
 	elif event.is_action_pressed("time_skip"):
 		hour = fposmod(hour + (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0), 24.0)
 		hud.toast_now("Время %s" % DayCycle.clock(hour))
 	elif event.is_action_pressed("interact") and not show_map:
-		_open_settlement()
+		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
@@ -466,8 +479,10 @@ func _process(delta: float) -> void:
 		crash.draw()
 	else:
 		bike_view.draw(alpha)
-	_update_hints()
 	_update_camera(alpha, delta)
+	_place_flashlight(pos)
+	_target = _aim()
+	_update_hints()
 	day.apply(hour, time)
 
 	var uploaded := vegetation.update(pos.x, pos.z, false)
@@ -524,37 +539,93 @@ func _update_hints() -> void:
 	if _settlement_open():
 		hud.set_hints("", "")
 		return
-	var village := _near_settlement()
-	var visit := "E — маршруты поселения «%s»" % village.name if not village.is_empty() else ""
+	var prompt := ""
+	match _target.get("kind", ""):
+		"board": prompt = "E — маршруты поселения «%s»" % _target.place.name
+		"bike": prompt = "E — сесть на велосипед"
 	if bike.riding:
-		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · F — слезть · Esc — пауза", visit)
+		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · F — фонарик · Esc — пауза", prompt)
 		return
-	var near := bike.can_mount(player)
-	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · F — велосипед · M — карта · Esc — пауза",
-		visit if not visit.is_empty() else ("F — сесть на велосипед" if near else ""))
+	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · F — фонарик · M — карта · Esc — пауза", prompt)
 
 
 func _settlement_open() -> bool:
 	return hud != null and hud.settlement_panel != null and hud.settlement_panel.visible
 
 
-func _near_settlement() -> Dictionary:
-	if world == null or player == null or not player.on_ground:
+## Наведение: каждый предмет — коробка по его форме (велосипед — узкая и длинная по ходу, доска — щит).
+## Луч из камеры по центру экрана:
+## 1) если он попадает в коробки, выбирается та, что ближе к глазам, — то, на что игрок смотрит прямо
+##    (велосипед у самой доски выбирается, когда взгляд на нём, а не на щите за ним);
+## 2) если не попал никуда, луч «толще» на AIM_R: из задетых краем — ближайший к центру взгляда по углу.
+## Берутся только предметы рядом: велосипед, на который можно сесть, доски не дальше REACH от глаз.
+## Подсказку E показывают только для выбранного
+func _aim() -> Dictionary:
+	if player == null or paused or show_map or crash.active() or _settlement_open():
 		return {}
-	var nearest := {}
-	var distance := 7.0
-	for s: Dictionary in world.settlements:
-		var d := Grid.hypot(s.x * TILE - player.x, s.y * TILE - player.z)
-		if d < distance and absf(player.feet - heights.ground_at(s.x * TILE, s.y * TILE)) < 3.0:
-			nearest = s
-			distance = d
-	return nearest
+	var from := camera.global_position
+	var dir := -camera.global_basis.z
+	var eye := Vector3(player.x, player.feet + GameConfig.EYE, player.z)
+	var items: Array = []
+	if not bike.riding and bike.can_mount(player):
+		var at := Transform3D(Basis(Vector3.UP, bike.heading), Vector3(bike.x, bike.y + 0.55, bike.z))
+		items.append({kind = "bike", at = at, half = Vector3(0.3, 0.55, 0.9)})
+	for b: Dictionary in _boards:
+		if eye.distance_squared_to(b.at.origin) < REACH * REACH:
+			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
+	var best := {}
+	var best_hit := INF
+	var best_angle := INF
+	for it: Dictionary in items:
+		var inv: Transform3D = it.at.affine_inverse()
+		var o := inv * from
+		var d := inv.basis * dir
+		var hit := _ray_box(o, d, it.half)
+		if hit < best_hit:
+			best = it
+			best_hit = hit
+		elif best_hit == INF and _ray_box(o, d, it.half + Vector3.ONE * AIM_R) < INF:
+			var to: Vector3 = it.at.origin - from
+			var angle := to.angle_to(dir)
+			if angle < best_angle:
+				best = it
+				best_angle = angle
+	return best
 
 
-func _open_settlement() -> void:
+## Расстояние вдоль луча (o, d) до коробки с половинами сторон half вокруг нуля; INF — мимо
+static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
+	var near := 0.0
+	var far := INF
+	for k in 3:
+		if absf(d[k]) < 1e-6:
+			if absf(o[k]) > half[k]:
+				return INF
+			continue
+		var a := (-half[k] - o[k]) / d[k]
+		var b := (half[k] - o[k]) / d[k]
+		near = maxf(near, minf(a, b))
+		far = minf(far, maxf(a, b))
+	return near if near <= far else INF
+
+
+## E: действие с тем, на что смотрит игрок; на велосипеде, если смотреть не на что, — слезть
+func interact() -> void:
+	_target = _aim()
+	match _target.get("kind", ""):
+		"board": _open_settlement(_target.place)
+		"bike": toggle_bike()
+		_:
+			if bike.riding:
+				toggle_bike()
+
+
+## Доска маршрутов поселения village; без него — та, на которую смотрит игрок
+func _open_settlement(village := {}) -> void:
 	if paused or show_map or _settlement_open() or crash.active():
 		return
-	var village := _near_settlement()
+	if village.is_empty():
+		village = _aim().get("place", {})
 	if village.is_empty():
 		return
 	if bike.riding:
@@ -594,6 +665,39 @@ func _recall_bike() -> void:
 	bike_view.draw(1.0)
 	_close_settlement()
 	hud.toast_now("Велосипед ждёт рядом с костром")
+
+
+## Фонарик (F, с 10.1): мягкий конус от головы игрока по взгляду, ниже его, как фара велосипеда. Без теней: светит из глаз,
+## своих теней почти не видно, а тень прожектора — лишний проход рендера
+func _make_flashlight() -> SpotLight3D:
+	var l := SpotLight3D.new()
+	l.light_color = Color(1.0, 0.92, 0.78)
+	l.light_energy = 2.5
+	l.light_specular = 0.3
+	l.spot_range = 32.0
+	l.spot_attenuation = 1.2
+	l.spot_angle = 34.0
+	l.spot_angle_attenuation = 0.8  # мягкий, чуть рассеянный край: яркость спадает от середины плавно
+	l.shadow_enabled = false
+	l.visible = false
+	return l
+
+
+func toggle_flashlight() -> void:
+	flashlight.visible = not flashlight.visible
+	hud.toast_now("Фонарик включён" if flashlight.visible else "Фонарик выключен")
+
+
+## Фонарик у головы игрока (на велосипеде — у головы седока, а не у камеры за спиной), светит по взгляду
+func _place_flashlight(pos: Vector3) -> void:
+	if not flashlight.visible:
+		return
+	var b := camera.global_basis * Basis(Vector3.RIGHT, -FLASH_TILT)
+	var at := camera.global_position
+	if bike.riding or crash.active():
+		var ahead := Vector3(-b.z.x, 0.0, -b.z.z).normalized()
+		at = Vector3(pos.x, pos.y + 1.55, pos.z) + ahead * 0.35
+	flashlight.global_transform = Transform3D(b, at)
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания

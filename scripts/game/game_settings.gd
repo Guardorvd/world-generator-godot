@@ -1,7 +1,8 @@
 class_name GameSettings
 extends RefCounted
 ## Настройки игрока: чувствительность мыши, инверсия, угол обзора, покачивание камеры, полный экран,
-## тени и затенение (с 2.6), громкость (с 2.7), длина суток и час начала игры (с 7.8),
+## тени и затенение (с 2.6), громкость (с 2.7), длина суток и час начала игры (с 7.8; с 10.1 час случайный, пока игрок
+## не выбрал его сам),
 ## дальность прорисовки растительности (с 9.8+), последнее зерно, последние и избранные зёрна (с 10.0). Хранятся в user://settings.cfg (ConfigFile) и живут между запусками.
 ## С 9.0 размера мира нет (мир один), старый ключ world/size в файле просто не читается.
 
@@ -21,7 +22,8 @@ const DEFAULT_HEAD_BOB := true
 const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
 const DEFAULT_VOLUME := 0.8
-const DEFAULT_DAY_MINUTES := 24.0  # сутки за 24 минуты игры; 0 — время стоит
+const DEFAULT_DAY_MINUTES := 19.0  # сутки за 19 минут игры (с 10.1; было 24 — время идёт на ~25 % быстрее); 0 — время стоит
+const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
 const DEFAULT_START_HOUR := 9.0
 const MAX_DAY_MINUTES := 120.0
 ## Дальность прорисовки растительности, м: деревья, трава с мелкими растениями, крупный подлесок
@@ -43,6 +45,7 @@ static var shadows := DEFAULT_SHADOWS  # тени солнца и затенен
 static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 static var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 static var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
+static var start_hour_set := false  # час начала выбран игроком; иначе каждый мир начинается в случайный час
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 static var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
 static var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
@@ -67,6 +70,11 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
+	# в файлах до 10.1 флага нет: час, отличный от прежнего значения по умолчанию, игрок выбирал сам;
+	# длина суток, равная прежней по умолчанию, становится новой по умолчанию
+	if not cfg.has_section_key("time", "start_hour_set") and day_minutes == OLD_DAY_MINUTES:
+		day_minutes = DEFAULT_DAY_MINUTES
+	start_hour_set = _flag(cfg, "time", "start_hour_set", start_hour != DEFAULT_START_HOUR)
 	last_seed = str(cfg.get_value("world", "seed", "")).strip_edges().left(MAX_SEED_LEN)
 	recent_seeds = _seeds(cfg, "recent", RECENT_MAX)
 	favorite_seeds = _seeds(cfg, "favorites", FAVORITES_MAX)
@@ -139,6 +147,7 @@ static func reset_defaults() -> void:
 	volume = DEFAULT_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
 	start_hour = DEFAULT_START_HOUR
+	start_hour_set = false
 
 
 static func save_settings() -> void:
@@ -153,6 +162,7 @@ static func save_settings() -> void:
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
+	cfg.set_value("time", "start_hour_set", start_hour_set)
 	cfg.set_value("world", "seed", last_seed)
 	cfg.set_value("world", "recent", Array(recent_seeds))
 	cfg.set_value("world", "favorites", Array(favorite_seeds))
@@ -164,6 +174,11 @@ static func apply_window() -> void:
 	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
 	if DisplayServer.window_get_mode() != mode:
 		DisplayServer.window_set_mode(mode)
+
+
+## Час, в который начинается мир: выбранный игроком или случайный
+static func pick_start_hour() -> float:
+	return start_hour if start_hour_set else randf() * 24.0
 
 
 ## Общая громкость: шина Master, на нуле звук выключен совсем

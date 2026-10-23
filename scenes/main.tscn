@@ -487,7 +487,7 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 max_value = 120
-step = 4
+step = 1
 
 [node name="StartHourRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
 layout_mode = 2
@@ -509,6 +509,11 @@ custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 max_value = 23
 step = 1
+
+[node name="RandomHour" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Случайный час начала"
 
 [node name="Reset" type="Button" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
@@ -545,3 +550,4 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/DaySlider" to="." method="_on_day_changed"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/StartHourSlider" to="." method="_on_start_hour_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/RandomHour" to="." method="_on_random_hour_toggled"]
