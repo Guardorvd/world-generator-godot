@@ -10,6 +10,7 @@ extends Node
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
 const Saves := preload("res://scripts/game/save_game.gd")
+const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 
 var game: GameWorld
 var busy := false
@@ -28,6 +29,7 @@ var _save_status: Label
 var _load_manual: Button
 var _saved_discoveries := 0
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
+var display_options: DisplayOptions
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -53,6 +55,8 @@ func _ready() -> void:
 	WorldCache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
+	display_options = DisplayOptions.new()
+	display_options.setup(self)
 	if WorldCache.enabled:
 		WorldCache.keep_only(GameSettings.keep_seeds())
 	var tabs := ButtonGroup.new()
@@ -97,6 +101,8 @@ func _open_settings() -> void:
 
 
 func _close_settings() -> void:
+	if display_options != null:
+		display_options.revert()
 	GameSettings.save_settings()
 	_show(_settings_from)
 
@@ -117,15 +123,24 @@ func _sync_settings_controls() -> void:
 	%DaySlider.set_value_no_signal(GameSettings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameSettings.start_hour)
 	%RandomHour.set_pressed_no_signal(not GameSettings.start_hour_set)
+	if display_options != null:
+		display_options.sync()
 	_show_values()
 
 
 func _on_reset_settings() -> void:
+	var display_state := GameSettings.display_state()
 	GameSettings.reset_defaults()
-	GameSettings.apply_window()
+	# Режим экрана меняется только через «Применить» и подтверждение.
+	var defaults := GameSettings.display_state()
+	GameSettings.set_display_state(display_state)
 	GameSettings.apply_volume()
 	GameSettings.save_settings()
 	_sync_settings_controls()
+	if display_options != null:
+		GameSettings.set_display_state(defaults)
+		display_options.sync()
+		GameSettings.set_display_state(display_state)
 
 
 func _show_values() -> void:
@@ -178,16 +193,21 @@ func _on_head_bob_toggled(on: bool) -> void:
 
 
 func _on_fullscreen_toggled(on: bool) -> void:
-	GameSettings.fullscreen = on
-	GameSettings.apply_window()
+	if display_options != null:
+		display_options.mode.select(1 if on else 0)
+	else:
+		GameSettings.fullscreen = on
+		GameSettings.apply_window()
 
 
 func _on_shadows_toggled(on: bool) -> void:
-	GameSettings.shadows = on
+	if display_options == null:
+		GameSettings.shadows = on
 
 
 func _on_draw_selected(index: int) -> void:
-	GameSettings.draw = index
+	if display_options == null:
+		GameSettings.draw = index
 
 
 func _on_seed_submitted(_text: String) -> void:
@@ -448,6 +468,8 @@ func _on_menu_background(img: Image) -> void:
 
 
 func _process(delta: float) -> void:
+	if display_options != null:
+		display_options.tick()
 	if game != null and not busy and not game.paused:
 		_save_elapsed += delta
 		if _save_elapsed >= 60.0 or hud.visited.size() != _saved_discoveries:
@@ -563,6 +585,9 @@ func _toggle_pause() -> void:
 	if game == null:
 		return
 	if screens.settings.visible:
+		if display_options != null and display_options.pending():
+			display_options.revert()
+			return
 		_close_settings()
 	elif game.paused:
 		_resume()
@@ -603,6 +628,8 @@ func _back_to_menu() -> void:
 
 
 func _exit_game() -> void:
+	if display_options != null:
+		display_options.revert()
 	if busy:
 		_message("Мир загружается", "Дождитесь завершения загрузки перед выходом.")
 		return
@@ -706,6 +733,8 @@ func _setup_save_controls() -> void:
 
 
 func _exit_tree() -> void:
+	if display_options != null:
+		display_options.shutdown()
 	for t in [gen_thread, bg_thread]:
 		if t != null and t.is_started():
 			t.wait_to_finish()

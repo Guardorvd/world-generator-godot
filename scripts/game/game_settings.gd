@@ -7,6 +7,8 @@ extends RefCounted
 ## С 9.0 размера мира нет (мир один), старый ключ world/size в файле просто не читается.
 
 const PATH := "user://settings.cfg"
+static var settings_path := PATH # тесты могут использовать отдельный файл, не профиль игрока
+const DisplayConfig := preload("res://scripts/game/display_config.gd")
 const MIN_MOUSE := 0.2           # пределы чувствительности и угла обзора, как у ползунков в меню
 const MAX_MOUSE := 3.0
 const MIN_FOV := 55.0
@@ -40,6 +42,10 @@ static var invert_y := DEFAULT_INVERT_Y
 static var fov := DEFAULT_FOV            # угол обзора по вертикали, градусы
 static var head_bob := DEFAULT_HEAD_BOB  # покачивание и удары камеры пешком и на велосипеде
 static var fullscreen := DEFAULT_FULLSCREEN
+static var resolution := DisplayConfig.BASE
+static var render_scale := 1.0
+static var msaa := 2 # прежнее MSAA 4x
+static var vsync := true
 static var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
 static var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
 static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
@@ -53,7 +59,7 @@ static var favorite_seeds: Array[String] = []  # избранные зёрна (
 
 static func load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(PATH) != OK:
+	if cfg.load(settings_path) != OK:
 		return
 	_apply_config(cfg)
 
@@ -65,6 +71,12 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	fov = _number(cfg, "view", "fov", fov, MIN_FOV, MAX_FOV)
 	head_bob = _flag(cfg, "view", "head_bob", head_bob)
 	fullscreen = _flag(cfg, "view", "fullscreen", fullscreen)
+	var saved_resolution: Variant = cfg.get_value("display", "resolution", Vector2i.ZERO if fullscreen else resolution)
+	if DisplayConfig.valid_resolution(saved_resolution):
+		resolution = saved_resolution
+	render_scale = _number(cfg, "display", "render_scale", render_scale, 0.5, 1.0)
+	msaa = roundi(_number(cfg, "display", "msaa", msaa, 0, 2))
+	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
@@ -142,6 +154,10 @@ static func reset_defaults() -> void:
 	fov = DEFAULT_FOV
 	head_bob = DEFAULT_HEAD_BOB
 	fullscreen = DEFAULT_FULLSCREEN
+	resolution = DisplayConfig.BASE
+	render_scale = 1.0
+	msaa = 2
+	vsync = true
 	shadows = DEFAULT_SHADOWS
 	draw = DEFAULT_DRAW
 	volume = DEFAULT_VOLUME
@@ -150,13 +166,17 @@ static func reset_defaults() -> void:
 	start_hour_set = false
 
 
-static func save_settings() -> void:
+static func save_settings() -> Error:
 	var cfg := ConfigFile.new()
 	cfg.set_value("input", "mouse", mouse)
 	cfg.set_value("input", "invert_y", invert_y)
 	cfg.set_value("view", "fov", fov)
 	cfg.set_value("view", "head_bob", head_bob)
 	cfg.set_value("view", "fullscreen", fullscreen)
+	cfg.set_value("display", "resolution", resolution)
+	cfg.set_value("display", "render_scale", render_scale)
+	cfg.set_value("display", "msaa", msaa)
+	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("sound", "volume", volume)
@@ -166,14 +186,29 @@ static func save_settings() -> void:
 	cfg.set_value("world", "seed", last_seed)
 	cfg.set_value("world", "recent", Array(recent_seeds))
 	cfg.set_value("world", "favorites", Array(favorite_seeds))
-	cfg.save(PATH)
+	return cfg.save(settings_path)
 
 
 ## Полноэкранный режим или окно
 static func apply_window() -> void:
-	var mode := DisplayServer.WINDOW_MODE_FULLSCREEN if fullscreen else DisplayServer.WINDOW_MODE_WINDOWED
-	if DisplayServer.window_get_mode() != mode:
-		DisplayServer.window_set_mode(mode)
+	var tree := Engine.get_main_loop() as SceneTree
+	if tree != null:
+		DisplayConfig.apply(tree.root, display_state())
+
+
+static func display_state() -> Dictionary:
+	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw}
+
+
+static func set_display_state(state: Dictionary) -> void:
+	fullscreen = state.fullscreen
+	resolution = state.resolution
+	render_scale = state.render_scale
+	msaa = state.msaa
+	vsync = state.vsync
+	shadows = state.shadows
+	draw = state.draw
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный
