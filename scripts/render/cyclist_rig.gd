@@ -37,12 +37,42 @@ func _bind_skeleton() -> bool:
 	return true
 
 
+## Проверка доступна анимации и рэгдоллу до передачи управления костями.
+func is_rig_valid() -> bool:
+	if not _rig_checked:
+		_rig_valid = _bind_skeleton()
+	return _rig_valid and is_instance_valid(skeleton)
+
+
+func capture_pose() -> Array[Transform3D]:
+	var result: Array[Transform3D] = []
+	if is_instance_valid(skeleton):
+		for i in skeleton.get_bone_count():
+			result.append(skeleton.get_bone_pose(i))
+	return result
+
+
+## Снимки принадлежат этому экземпляру скелета; неверный снимок не применяется частично.
+func restore_pose(snapshot: Array[Transform3D]) -> void:
+	if not is_instance_valid(skeleton) or snapshot.size() != skeleton.get_bone_count():
+		return
+	for local in snapshot:
+		if not local.is_finite():
+			return
+	for i in snapshot.size():
+		skeleton.set_bone_pose_position(i, snapshot[i].origin)
+		skeleton.set_bone_pose_rotation(i, snapshot[i].basis.get_rotation_quaternion())
+		skeleton.set_bone_pose_scale(i, snapshot[i].basis.get_scale())
+
+
 func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0) -> void:
 	if not procedural_pose:
 		return
-	if not _rig_checked:
-		_rig_valid = _bind_skeleton()
-	if not _rig_valid:
+	if not is_rig_valid():
+		return
+	if not left_grip.is_finite() or not right_grip.is_finite() or not motion.is_finite():
+		return
+	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll):
 		return
 	_poses.clear()
 	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.

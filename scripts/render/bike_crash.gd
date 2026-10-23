@@ -17,23 +17,24 @@ const LAYER_GROUND := 4
 const LAYER_BODY := 8
 const GRAVITY_SCALE := GameConfig.GRAVITY / 9.8
 
-# кость: [форма (0 — шар, 1 — капсула, 2 — обувь), радиус, длина капсулы, центр по оси кости, масса, конус сустава, кручение]
+enum BodyShape { SPHERE, CAPSULE, SHOE }
+# Именованные параметры: размеры в метрах, масса в кг, пределы суставов в градусах.
 const BODIES := {
-	"Hips": [0, 0.13, 0.0, 0.0, 12.0, 0.0, 0.0],
-	"Spine": [1, 0.14, 0.42, 0.15, 20.0, 30.0, 20.0],
-	"Head": [1, 0.145, 0.38, 0.035, 5.0, 40.0, 30.0],
-	"UpperArmL": [1, 0.06, 0.34, 0.15, 2.5, 70.0, 40.0],
-	"UpperArmR": [1, 0.06, 0.34, 0.15, 2.5, 70.0, 40.0],
-	"ForearmL": [1, 0.05, 0.32, 0.15, 1.5, 50.0, 10.0],
-	"ForearmR": [1, 0.05, 0.32, 0.15, 1.5, 50.0, 10.0],
-	"HandL": [0, 0.06, 0.0, 0.0, 0.5, 35.0, 15.0],
-	"HandR": [0, 0.06, 0.0, 0.0, 0.5, 35.0, 15.0],
-	"UpperLegL": [1, 0.08, 0.46, 0.21, 8.0, 50.0, 20.0],
-	"UpperLegR": [1, 0.08, 0.46, 0.21, 8.0, 50.0, 20.0],
-	"LowerLegL": [1, 0.06, 0.44, 0.21, 4.0, 50.0, 10.0],
-	"LowerLegR": [1, 0.06, 0.44, 0.21, 4.0, 50.0, 10.0],
-	"FootL": [2, 0.0, 0.0, 0.0, 1.0, 30.0, 15.0],
-	"FootR": [2, 0.0, 0.0, 0.0, 1.0, 30.0, 15.0],
+	"Hips": {shape = BodyShape.SPHERE, radius = 0.13, length = 0.0, offset = 0.0, mass = 12.0, swing = 0.0, twist = 0.0},
+	"Spine": {shape = BodyShape.CAPSULE, radius = 0.14, length = 0.42, offset = 0.15, mass = 20.0, swing = 30.0, twist = 20.0},
+	"Head": {shape = BodyShape.CAPSULE, radius = 0.145, length = 0.38, offset = 0.035, mass = 5.0, swing = 40.0, twist = 30.0},
+	"UpperArmL": {shape = BodyShape.CAPSULE, radius = 0.06, length = 0.34, offset = 0.15, mass = 2.5, swing = 70.0, twist = 40.0},
+	"UpperArmR": {shape = BodyShape.CAPSULE, radius = 0.06, length = 0.34, offset = 0.15, mass = 2.5, swing = 70.0, twist = 40.0},
+	"ForearmL": {shape = BodyShape.CAPSULE, radius = 0.05, length = 0.32, offset = 0.15, mass = 1.5, swing = 50.0, twist = 10.0},
+	"ForearmR": {shape = BodyShape.CAPSULE, radius = 0.05, length = 0.32, offset = 0.15, mass = 1.5, swing = 50.0, twist = 10.0},
+	"HandL": {shape = BodyShape.SPHERE, radius = 0.06, length = 0.0, offset = 0.0, mass = 0.5, swing = 35.0, twist = 15.0},
+	"HandR": {shape = BodyShape.SPHERE, radius = 0.06, length = 0.0, offset = 0.0, mass = 0.5, swing = 35.0, twist = 15.0},
+	"UpperLegL": {shape = BodyShape.CAPSULE, radius = 0.08, length = 0.46, offset = 0.21, mass = 8.0, swing = 50.0, twist = 20.0},
+	"UpperLegR": {shape = BodyShape.CAPSULE, radius = 0.08, length = 0.46, offset = 0.21, mass = 8.0, swing = 50.0, twist = 20.0},
+	"LowerLegL": {shape = BodyShape.CAPSULE, radius = 0.06, length = 0.44, offset = 0.21, mass = 4.0, swing = 50.0, twist = 10.0},
+	"LowerLegR": {shape = BodyShape.CAPSULE, radius = 0.06, length = 0.44, offset = 0.21, mass = 4.0, swing = 50.0, twist = 10.0},
+	"FootL": {shape = BodyShape.SHOE, radius = 0.0, length = 0.0, offset = 0.0, mass = 1.0, swing = 30.0, twist = 15.0},
+	"FootR": {shape = BodyShape.SHOE, radius = 0.0, length = 0.0, offset = 0.0, mass = 1.0, swing = 30.0, twist = 15.0},
 }
 
 enum Phase { NONE, BALANCE, RAGDOLL, RECOVER }
@@ -53,12 +54,20 @@ var _start := Transform3D()         # велосипед в момент пад�
 var _ground: StaticBody3D
 var _bike_body: RigidBody3D
 var _sim: PhysicalBoneSimulator3D
-var _bones: Dictionary = {}         # имя кости → PhysicalBone3D
+var _bones: Dictionary[String, PhysicalBone3D] = {}         # имя кости → PhysicalBone3D
 var _from_view := Transform3D()     # возврат: откуда едет велосипед
 var _from_root := Transform3D()     # и где в мире лежала корневая кость седока
-var _from_pose: Array = []          # местные позы костей в конце падения (Transform3D)
+var _from_pose: Array[Transform3D] = []          # местные позы костей в конце падения (Transform3D)
 var _from_feet := Vector3()
 var _recover_time := RECOVER
+var _to_view := Transform3D()
+var _to_pose: Array[Transform3D] = []
+var _seated_pose: Array[Transform3D] = []
+var _procedural_pose := true
+var _bone_order: Array[int] = []
+var _root_bone := -1
+var _animation_player: AnimationPlayer
+var _animation_active := false
 
 
 func active() -> bool:
@@ -68,9 +77,34 @@ func active() -> bool:
 ## Начать падение: velocity — скорость велосипеда до удара (BikeRide.crash_velocity)
 func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield) -> void:
 	abort()
+	if not is_instance_valid(view) or not is_instance_valid(view.rider) or not view.rider.is_rig_valid():
+		return
+	if not velocity.is_finite():
+		return
+	for bone_name: String in BODIES:
+		if view.rider.skeleton.find_bone(bone_name) < 0:
+			push_warning("BikeCrash: отсутствует физическая кость %s" % bone_name)
+			return
 	_view = view
 	_rider = view.rider
 	_rider_local = _rider.transform
+	_procedural_pose = _rider.procedural_pose
+	_seated_pose = _rider.capture_pose()
+	_rider.procedural_pose = false
+	_animation_player = _rider.get_node_or_null("AnimationPlayer") as AnimationPlayer
+	if is_instance_valid(_animation_player):
+		_animation_active = _animation_player.active
+		_animation_player.active = false
+	_root_bone = _rider.skeleton.find_bone("Root")
+	# Дополнительные кости могут иметь произвольные индексы: родители всегда первыми.
+	_bone_order.clear()
+	for root_bone in _rider.skeleton.get_parentless_bones():
+		_bone_order.append(root_bone)
+	var cursor := 0
+	while cursor < _bone_order.size():
+		for child in _rider.skeleton.get_bone_children(_bone_order[cursor]):
+			_bone_order.append(child)
+		cursor += 1
 	_vel = velocity
 	_release_velocity = velocity
 	_settled_time = 0.0
@@ -85,6 +119,13 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 
 ## Такт физики игры (60 в секунду). Возвращает true, когда седок снова в седле.
 func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
+	if not active():
+		return false
+	if not is_instance_valid(_view) or not is_instance_valid(_rider):
+		_finish()
+		return true
+	if not is_finite(dt) or dt <= 0.0:
+		return false
 	t += dt
 	match phase:
 		Phase.BALANCE:
@@ -133,21 +174,24 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 func draw() -> void:
 	if phase != Phase.RECOVER:
 		return
+	if not is_instance_valid(_view) or not is_instance_valid(_rider):
+		_finish()
+		return
 	var s := smoothstep(0.0, 1.0, t / _recover_time)
-	_view.draw(1.0) # велосипед стоит, седок в обычной посадке: это цель
-	var goal := _view.global_transform
+	var goal := _to_view
 	var skel := _rider.skeleton
-	var skel_goal := skel.global_transform
+	var skel_goal := goal * _rider_local * skel.transform
 	_view.global_transform = _blend(_from_view, goal, s)
 	for i in skel.get_bone_count():
 		var from: Transform3D = _from_pose[i]
-		var to := Transform3D(Basis(skel.get_bone_pose_rotation(i)), skel.get_bone_pose_position(i))
-		if i == 0:
+		var to := _to_pose[i]
+		if i == _root_bone:
 			# корень переходит в мире по прямой: из места, где лежал, в седло (велосипед в это время поворачивается)
 			to = skel.global_transform.affine_inverse() * _blend(_from_root, skel_goal * to, s)
 			from = to
 		skel.set_bone_pose_position(i, from.origin.lerp(to.origin, s))
 		skel.set_bone_pose_rotation(i, from.basis.get_rotation_quaternion().slerp(to.basis.get_rotation_quaternion(), s))
+		skel.set_bone_pose_scale(i, from.basis.get_scale().lerp(to.basis.get_scale(), s))
 
 
 static func _blend(a: Transform3D, b: Transform3D, s: float) -> Transform3D:
@@ -162,7 +206,7 @@ func focus(b: BikeRide) -> Vector3:
 			return Vector3(hips.x, hips.y - 0.5, hips.z)
 		Phase.RECOVER:
 			return _from_feet.lerp(Vector3(b.x, b.y, b.z), smoothstep(0.0, 1.0, t / _recover_time))
-	return _view.global_position
+	return _view.global_position if is_instance_valid(_view) else Vector3(b.x, b.y, b.z)
 
 
 ## Прервать падение (быстрое перемещение, выход из мира): седок сразу в седле
@@ -211,34 +255,34 @@ func _build_ragdoll() -> void:
 	skel.add_child(_sim)
 	_bones.clear()
 	for bone_name: String in BODIES:
-		var spec: Array = BODIES[bone_name]
+		var spec: Dictionary = BODIES[bone_name]
 		var bone := PhysicalBone3D.new()
 		bone.name = bone_name
 		bone.bone_name = bone_name
 		bone.collision_layer = LAYER_BODY
 		bone.collision_mask = LAYER_GROUND
-		bone.mass = spec[4]
+		bone.mass = spec.mass
 		bone.friction = 0.45
 		bone.gravity_scale = GRAVITY_SCALE
 		bone.linear_damp = 0.7
 		bone.angular_damp = 3.0
-		bone.body_offset = Transform3D(Basis(), Vector3(0, spec[3], 0))
-		bone.joint_offset = Transform3D(Basis(), Vector3(0, -spec[3], 0))
-		if spec[5] > 0.0:
+		bone.body_offset = Transform3D(Basis(), Vector3(0, spec.offset, 0))
+		bone.joint_offset = Transform3D(Basis(), Vector3(0, -spec.offset, 0))
+		if spec.swing > 0.0:
 			bone.joint_type = PhysicalBone3D.JOINT_TYPE_CONE
-			bone.set("joint_constraints/swing_span", spec[5])
-			bone.set("joint_constraints/twist_span", spec[6])
+			bone.set("joint_constraints/swing_span", spec.swing)
+			bone.set("joint_constraints/twist_span", spec.twist)
 		var shape: Shape3D
-		if spec[0] == 0:
+		if spec.shape == BodyShape.SPHERE:
 			shape = SphereShape3D.new()
-			(shape as SphereShape3D).radius = spec[1]
-		elif spec[0] == 1:
+			(shape as SphereShape3D).radius = spec.radius
+		elif spec.shape == BodyShape.CAPSULE:
 			shape = CapsuleShape3D.new()
-			(shape as CapsuleShape3D).radius = spec[1]
-			(shape as CapsuleShape3D).height = spec[2]
+			(shape as CapsuleShape3D).radius = spec.radius
+			(shape as CapsuleShape3D).height = spec.length
 		else:
 			shape = _box(Vector3(0.14, 0.10, 0.25))
-		var shape_at := Transform3D(Basis(), Vector3(0, -0.01, -0.035)) if spec[0] == 2 else Transform3D()
+		var shape_at := Transform3D(Basis(), Vector3(0, -0.01, -0.035)) if spec.shape == BodyShape.SHOE else Transform3D()
 		_add_shape(bone, shape, shape_at)
 		_sim.add_child(bone)
 		# тело сразу на месте кости (в начале кадра симулятор ещё не успел бы его поставить)
@@ -255,10 +299,8 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	# поза падения: кости с телами — по телам, остальные — как были
 	var skel := _rider.skeleton
 	var globals := _sync_pose()
-	_from_pose.clear()
-	for i in skel.get_bone_count():
-		_from_pose.append(skel.get_bone_pose(i))
-	_from_root = skel.global_transform * (globals[0] as Transform3D)
+	_from_pose = _rider.capture_pose()
+	_from_root = skel.global_transform * globals[_root_bone]
 	var hips: Vector3 = (_bones["Hips"] as PhysicalBone3D).global_position
 	_from_feet = Vector3(hips.x, hips.y - 0.5, hips.z)
 	_from_view = _bike_body.global_transform
@@ -281,27 +323,37 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	_rider.reparent(_view, false)
 	_rider.transform = _rider_local
 	_view.snap(b)
+	_rider.restore_pose(_seated_pose)
+	_rider.procedural_pose = _procedural_pose
+	_view.draw(1.0)
+	_to_view = _view.global_transform
+	_to_pose = _rider.capture_pose()
+	_rider.procedural_pose = false
+	draw() # первый кадр восстановления сохраняет позу падения
 
 
 ## Видимая модель следует телам и в такте физики, включая кости без PhysicalBone у родителей.
-func _sync_pose() -> Array:
+func _sync_pose() -> Array[Transform3D]:
 	var skel := _rider.skeleton
-	var globals: Array = []
-	for i in skel.get_bone_count():
-		var local := Transform3D(Basis(skel.get_bone_pose_rotation(i)), skel.get_bone_pose_position(i))
+	var globals: Array[Transform3D] = []
+	globals.resize(skel.get_bone_count())
+	for i in _bone_order:
+		var local := skel.get_bone_pose(i)
 		var parent := skel.get_bone_parent(i)
 		var global := (globals[parent] as Transform3D) * local if parent >= 0 else local
 		var bone := _bones.get(skel.get_bone_name(i)) as PhysicalBone3D
 		if bone != null:
 			global = skel.global_transform.affine_inverse() * bone.global_transform * bone.body_offset.affine_inverse()
 			local = (globals[parent] as Transform3D).affine_inverse() * global if parent >= 0 else global
-		globals.append(global)
+		globals[i] = global
 		skel.set_bone_pose_position(i, local.origin)
 		skel.set_bone_pose_rotation(i, local.basis.get_rotation_quaternion())
 	# Жёсткие low-poly детали на BoneAttachment должны обновиться в том же такте, что и кости.
 	for child: Node in skel.get_children():
 		if child is BoneAttachment3D:
-			(child as BoneAttachment3D).transform = globals[skel.find_bone((child as BoneAttachment3D).bone_name)]
+			var index := skel.find_bone((child as BoneAttachment3D).bone_name)
+			if index >= 0:
+				(child as BoneAttachment3D).transform = globals[index]
 	return globals
 
 
@@ -336,24 +388,45 @@ func _keep_above_ground(heights: Heightfield, dt: float) -> void:
 			bone.linear_velocity = velocity
 
 
+func _exit_tree() -> void:
+	abort()
+
+
 func _finish() -> void:
 	_free_physics()
-	if _rider != null and _rider.get_parent() != _view:
-		_rider.reparent(_view, false)
-		_rider.transform = _rider_local
-	if _ground != null:
+	if is_instance_valid(_rider):
+		if is_instance_valid(_view):
+			if _rider.get_parent() != _view:
+				_rider.reparent(_view, false)
+			_rider.transform = _rider_local
+			_rider.restore_pose(_to_pose if not _to_pose.is_empty() else _seated_pose)
+			_rider.procedural_pose = _procedural_pose
+			_view.draw(1.0)
+		else:
+			_rider.queue_free()
+	if is_instance_valid(_ground):
 		_ground.queue_free()
-		_ground = null
+	_ground = null
+	_from_pose.clear()
+	_to_pose.clear()
+	_seated_pose.clear()
+	_bone_order.clear()
+	if is_instance_valid(_animation_player):
+		_animation_player.active = _animation_active
+	_animation_player = null
+	_view = null
+	_rider = null
+	t = 0.0
 	phase = Phase.NONE
 
 
 func _free_physics() -> void:
-	if _sim != null:
+	if is_instance_valid(_sim):
 		_sim.physical_bones_stop_simulation()
 		_sim.free()
 		_sim = null
 	_bones.clear()
-	if _bike_body != null:
+	if is_instance_valid(_bike_body):
 		_bike_body.free()
 		_bike_body = null
 

@@ -103,6 +103,7 @@ func lamp_on() -> bool:
 func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> void:
 	if not _view_ready:
 		return
+	dt = maxf(dt, 0.0) if is_finite(dt) else 0.0
 	# Переиспользуем два буфера: состояние приходит 60 раз в секунду.
 	if _has_state:
 		var spare := _prev
@@ -152,10 +153,10 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	var crouch := (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.012 + pedal_bob
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.22
 	var blend := 1.0 - exp(-maxf(dt, 0.0) * 10.0)
-	var targets := [shift, side, crouch, look]
-	for j in targets.size():
-		var index := S_SHIFT + j
-		_cur[index] = lerpf(_prev[index], targets[j], blend) if continuous else targets[j]
+	_cur[S_SHIFT] = lerpf(_prev[S_SHIFT], shift, blend) if continuous else shift
+	_cur[S_SIDE] = lerpf(_prev[S_SIDE], side, blend) if continuous else side
+	_cur[S_CROUCH] = lerpf(_prev[S_CROUCH], crouch, blend) if continuous else crouch
+	_cur[S_LOOK] = lerpf(_prev[S_LOOK], look, blend) if continuous else look
 
 
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)

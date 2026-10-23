@@ -52,6 +52,7 @@ var ground_slide := 0.0
 var last_ground_hips := Vector3.INF
 var crossed_tree := false
 var pose_matches := true
+var recovery_stable := true
 
 
 func check(ok: bool, label: String) -> void:
@@ -117,6 +118,7 @@ func _begin_case() -> void:
 	last_ground_hips = Vector3.INF
 	crossed_tree = false
 	pose_matches = true
+	recovery_stable = true
 	last_hips = Vector3.INF
 	start_at = Vector3(bike.x, bike.y, bike.z)
 	crash.start(view, bike, cases[case_i][1], heights)
@@ -152,6 +154,13 @@ func _physics_process(_delta: float) -> bool:
 				crossed_tree = crossed_tree or (absf(hips.x) < 0.5 and hips.z < -1.8)
 	if crash.phase == BikeCrash.Phase.RECOVER:
 		crash.draw()
+		var held := view.rider.capture_pose()
+		var held_view := view.global_transform
+		crash.draw()
+		recovery_stable = recovery_stable and held_view.is_equal_approx(view.global_transform)
+		var repeated := view.rider.capture_pose()
+		for i in held.size():
+			recovery_stable = recovery_stable and held[i].is_equal_approx(repeated[i])
 		var skel: Skeleton3D = (view.rider as CyclistRig).skeleton
 		var hips: Vector3 = (skel.global_transform * skel.get_bone_global_pose(skel.find_bone("Hips"))).origin
 		if last_hips != Vector3.INF:
@@ -193,6 +202,8 @@ func _finish_case(back: bool) -> void:
 	var want := Vector2(v.x, v.z).length() * 0.12 if not flat or case_i < 3 else 0.0
 	check(flew >= want, "%s: тело пролетело по инерции %.1f м (нужно ≥ %.1f)" % [name, flew, want])
 	check(bike_tipped, "%s: велосипед завалился набок" % name)
+	check(recovery_stable, "%s: повторная отрисовка восстановления не меняет позу" % name)
+	check(view.rider.procedural_pose, "%s: процедурная анимация восстановлена" % name)
 	check(max_jump < 0.25, "%s: возврат в седло плавный (шаг таза за такт %.3f м)" % [name, max_jump])
 	check(view.rider.get_parent() == view and (view.rider as CyclistRig).skeleton.get_child_count() > 0 and not _has_sim(), "%s: седок снова на велосипеде, физика убрана" % name)
 	check(bike.riding and not bike.airborne and absf(bike.y - heights.surface_at(bike.x, bike.z, bike.y + 1.0)) < 0.05, "%s: велосипед стоит на земле" % name)
@@ -202,10 +213,58 @@ func _finish_case(back: bool) -> void:
 		check(not crossed_tree, "при падении таз не прошёл насквозь через ствол")
 	case_i += 1
 	if case_i >= cases.size():
+		_check_lifecycle()
 		print("FAILS: %d" % fails)
 		quit(1 if fails > 0 else 0)
 		return
 	_begin_case()
+
+
+## Переходы и владение позой проверяем в той же изолированной сцене.
+func _check_lifecycle() -> void:
+	var rig := view.rider
+	var player_animation := rig.get_node("AnimationPlayer") as AnimationPlayer
+	var original := rig.capture_pose()
+	# Неполный снимок и NaN не должны менять скелет частично.
+	var short_pose: Array[Transform3D] = [Transform3D.IDENTITY]
+	rig.restore_pose(short_pose)
+	rig.pose(NAN, 0, Vector3.ZERO, Vector3.ZERO)
+	check(rig.capture_pose() == original, "неверные данные анимации оставляют позу целой")
+	for target_phase in [BikeCrash.Phase.BALANCE, BikeCrash.Phase.RAGDOLL, BikeCrash.Phase.RECOVER]:
+		crash.start(view, bike, Vector3(0, 0, -8), heights)
+		check(not rig.procedural_pose and not player_animation.active, "рэгдолл блокирует обоих авторов анимации")
+		crash.tick(0, bike, w, heights)
+		crash.tick(NAN, bike, w, heights)
+		check(crash.t == 0, "неверное время не сдвигает падение")
+		if target_phase >= BikeCrash.Phase.RAGDOLL:
+			crash._begin_ragdoll()
+		if target_phase == BikeCrash.Phase.RECOVER:
+			crash._begin_recover(bike, w, heights)
+		var held := rig.capture_pose()
+		rig.pose(2, 0.2, Vector3.ZERO, Vector3.ZERO)
+		check(rig.capture_pose() == held, "процедурная поза не перезаписывает фазу %s" % target_phase)
+		crash.abort()
+		crash.abort()
+		check(not crash.active() and rig.get_parent() == view and not _has_sim() and crash._bones.is_empty(), "прерывание фазы %s возвращает седока и убирает физику" % target_phase)
+		check(rig.procedural_pose and player_animation.active, "прерывание возвращает прежнее управление анимацией")
+		check(crash._from_pose.is_empty() and crash._to_pose.is_empty(), "снимки падения освобождены")
+	check(crash.focus(bike).is_finite() and not crash.tick(DT, bike, w, heights), "завершённое падение безопасно для камеры и tick")
+	# Внешняя анимация была выключена до падения — такой и должна остаться.
+	rig.procedural_pose = false
+	player_animation.active = false
+	crash.start(view, bike, Vector3.ZERO, heights)
+	crash._begin_ragdoll()
+	crash._begin_recover(bike, w, heights)
+	crash.tick(crash._recover_time, bike, w, heights)
+	check(not rig.procedural_pose and not player_animation.active, "возврат сохраняет исходно выключенную анимацию")
+	rig.procedural_pose = true
+	player_animation.active = true
+	# Новый start должен полностью убрать прежнее падение, даже при отделённом седоке.
+	crash.start(view, bike, Vector3.ZERO, heights)
+	crash._begin_ragdoll()
+	crash.start(view, bike, Vector3.ZERO, heights)
+	check(crash.phase == BikeCrash.Phase.BALANCE and not _has_sim() and rig.get_parent() == view, "повторный start освобождает прежний рэгдолл")
+	crash.abort()
 
 
 func _has_sim() -> bool:
