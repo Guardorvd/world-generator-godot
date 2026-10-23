@@ -1,5 +1,7 @@
 extends SceneTree
-## Модель v4. Пересборка перезаписывает scenes/cyclist.tscn.
+## Модель v5 (12.3). Пересборка перезаписывает scenes/cyclist.tscn.
+## v5: шлем сидит на голове (ниже и плотнее, козырёк короче и под наклоном), из-под шлема видны волосы,
+## велотрусы до колена и открытые голени с носками, рукав джерси короче — у локтя видна рука.
 ## Один штатный skinned ArrayMesh, прежние 22 кости, без внешних моделей и текстур.
 var rider: CyclistRig
 var skeleton: Skeleton3D
@@ -13,6 +15,11 @@ var cream := material(Color("f0e5cc"))
 var dark := material(Color("17252e"))
 var lens := material(Color("315363"), 0.22)
 var warm := material(Color("9d6753"))
+# Шлем v5: низ оболочки (м над костью головы), её высота и полуоси низа.
+const HELMET_Y := 0.052
+const HELMET_H := 0.112
+const HELMET_R := Vector2(0.118, 0.138)
+const HELMET_Z := -0.012
 
 
 func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
@@ -25,7 +32,7 @@ func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
 func _init() -> void:
 	rider = CyclistRig.new()
 	rider.name = "Rider"
-	rider.set_meta("model_version", 4)
+	rider.set_meta("model_version", 5)
 	skeleton = Skeleton3D.new()
 	skeleton.name = "Skeleton3D"
 	rider.add_child(skeleton)
@@ -76,7 +83,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v4: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v5: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -117,20 +124,26 @@ func _head() -> void:
 		bar("Head", Vector3(side * 0.09, 0.018, -0.05), Vector3(side * 0.098, 0.012, 0.035), 0.01, dark)
 		# Y-образный ремень проходит у уха и сходится под подбородком.
 		var junction := Vector3(side * 0.086, -0.074, 0.018)
-		bar("Head", Vector3(side * 0.105, 0.08, -0.064), junction, 0.007, navy)
-		bar("Head", Vector3(side * 0.108, 0.08, 0.067), junction, 0.007, navy)
+		bar("Head", Vector3(side * 0.098, HELMET_Y + 0.004, -0.06), junction, 0.007, navy)
+		bar("Head", Vector3(side * 0.1, HELMET_Y + 0.004, 0.062), junction, 0.007, navy)
+		# виски: волосы из-под шлема
+		ellipsoid("Head", Vector3(0.012, 0.03, 0.026), Vector3(side * 0.086, 0.03, 0.022), dark)
 		bar("Head", junction, Vector3(side * 0.04, -0.135, -0.055), 0.007, navy)
 	bar("Head", Vector3(-0.008, 0.02, -0.113), Vector3(0.008, 0.02, -0.113), 0.009, dark)
 	local_loft("Head", [Vector3(0, -0.05, -0.105), Vector3(0, -0.031, -0.118), Vector3(0, 0.006, -0.105), Vector3(0, 0.025, -0.095)], [Vector2(0.017, 0.012), Vector2(0.019, 0.024), Vector2(0.012, 0.018), Vector2(0.01, 0.008)], skin)
 	ellipsoid("Head", Vector3(0.022, 0.004, 0.004), Vector3(0, -0.085, -0.088), warm)
+	# Волосы на затылке, ниже края шлема
+	ellipsoid("Head", Vector3(0.082, 0.05, 0.07), Vector3(0, 0.035, 0.03), dark)
 	var centers: Array[Vector3] = []
 	var sizes: Array[Vector2] = []
 	for i in 8:
 		var theta := PI * 0.5 * i / 7.0
-		centers.append(Vector3(0, 0.08 + sin(theta) * 0.1, -0.015))
-		sizes.append(Vector2(0.134, 0.155) * maxf(cos(theta), 0.01))
+		centers.append(Vector3(0, HELMET_Y + sin(theta) * HELMET_H, HELMET_Z))
+		sizes.append(HELMET_R * maxf(cos(theta), 0.01))
 	local_loft("Head", centers, sizes, cream)
-	box("Head", Vector3(0.2, 0.013, 0.055), Vector3(0, 0.079, -0.153), navy)
+	# Тёмный обод по краю оболочки и короткий козырёк под наклоном
+	local_loft("Head", [Vector3(0, HELMET_Y - 0.008, HELMET_Z), Vector3(0, HELMET_Y + 0.006, HELMET_Z)], [HELMET_R * 1.008, HELMET_R * 1.012], navy)
+	box("Head", Vector3(0.16, 0.01, 0.04), Vector3(0, HELMET_Y + 0.006, HELMET_Z - HELMET_R.y - 0.012), navy, Basis(Vector3.RIGHT, 0.3))
 	for x in [-0.075, -0.032, 0.032, 0.075]:
 		helmet_strip(x, 0.012, dark)
 	helmet_strip(0.0, 0.012, teal)
@@ -157,7 +170,7 @@ func helmet_strip(x: float, width: float, mat: Material) -> void:
 		for corner: Vector2 in [Vector2(-0.5, float(i) / 6), Vector2(0.5, float(i) / 6), Vector2(0.5, float(i + 1) / 6), Vector2(-0.5, float(i + 1) / 6)]:
 			var px := x + corner.x * width
 			var z := lerpf(-0.09, 0.07, corner.y)
-			var y := 0.082 + 0.1 * sqrt(maxf(0.0, 1.0 - pow(px / 0.134, 2) - pow((z + 0.015) / 0.155, 2)))
+			var y := HELMET_Y + 0.002 + HELMET_H * sqrt(maxf(0.0, 1.0 - pow(px / HELMET_R.x, 2) - pow((z - HELMET_Z) / HELMET_R.y, 2)))
 			vertices.append({position = at * Vector3(px, y, z), bones = r.bones, weights = r.weights})
 		triangle(vertices[0], vertices[2], vertices[1], mat)
 		triangle(vertices[0], vertices[3], vertices[2], mat)
@@ -165,13 +178,19 @@ func helmet_strip(x: float, width: float, mat: Material) -> void:
 
 func _limbs(side: float) -> void:
 	var s := "L" if side < 0 else "R"
-	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.033, 0.036), Vector3(0, 0.06, 0.06), Vector3(0.12, 0.068, 0.061), Vector3(0.38, 0.064, 0.058), Vector3(0.68, 0.054, 0.05), Vector3(0.84, 0.046, 0.044), Vector3(1, 0.042, 0.043)], teal, "", true)
+	# v5: рукав до середины плеча с тёмной манжетой, ниже — рука
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.033, 0.036), Vector3(0, 0.06, 0.06), Vector3(0.12, 0.068, 0.061), Vector3(0.38, 0.064, 0.058), Vector3(0.5, 0.062, 0.056)], teal, "", true)
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(0.5, 0.063, 0.057), Vector3(0.56, 0.062, 0.056)], panel, "", true)
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(0.56, 0.05, 0.047), Vector3(0.68, 0.049, 0.045), Vector3(0.84, 0.044, 0.042), Vector3(1, 0.041, 0.042)], skin, "", true)
 	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.042, 0.043), Vector3(0.16, 0.047, 0.046), Vector3(0.35, 0.049, 0.045), Vector3(0.65, 0.038, 0.036), Vector3(0.86, 0.03, 0.03), Vector3(1, 0.028, 0.028)], skin, "UpperArm" + s)
 	ellipsoid("Hand" + s, Vector3(0.047, 0.044, 0.056), Vector3(0, 0.0, -0.009), navy)
 	ellipsoid("Hand" + s, Vector3(0.019, 0.03, 0.028), Vector3(-side * 0.036, -0.015, -0.018), navy)
 	box("Hand" + s, Vector3(0.045, 0.012, 0.027), Vector3(0, 0.04, -0.008), panel)
 	limb("UpperLeg" + s, "LowerLeg" + s, [Vector3(0, 0.077, 0.08), Vector3(0.17, 0.086, 0.088), Vector3(0.4, 0.08, 0.081), Vector3(0.68, 0.069, 0.069), Vector3(0.88, 0.052, 0.054), Vector3(1, 0.047, 0.05)], navy, "", true)
-	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.047, 0.05), Vector3(0.12, 0.049, 0.052), Vector3(0.38, 0.056, 0.06), Vector3(0.7, 0.039, 0.042), Vector3(0.9, 0.029, 0.032), Vector3(1, 0.026, 0.029)], navy, "UpperLeg" + s)
+	# v5: велотрусы до колена, голень открыта, носок над обувью
+	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.047, 0.05), Vector3(0.1, 0.049, 0.052), Vector3(0.14, 0.05, 0.053)], navy, "UpperLeg" + s)
+	limb("LowerLeg" + s, "Foot" + s, [Vector3(0.14, 0.046, 0.049), Vector3(0.38, 0.053, 0.057), Vector3(0.7, 0.037, 0.04), Vector3(0.8, 0.032, 0.035)], skin)
+	limb("LowerLeg" + s, "Foot" + s, [Vector3(0.8, 0.034, 0.037), Vector3(0.9, 0.031, 0.034), Vector3(1, 0.028, 0.031)], cream)
 	local_loft("Foot" + s, [Vector3(0, -0.048, -0.035), Vector3(0, -0.033, -0.035)], [Vector2(0.064, 0.124), Vector2(0.065, 0.125)], dark)
 	local_loft("Foot" + s, [Vector3(0, -0.033, -0.035), Vector3(0, -0.005, -0.035), Vector3(0, 0.025, -0.015)], [Vector2(0.065, 0.125), Vector2(0.059, 0.105), Vector2(0.034, 0.055)], cream)
 	box("Foot" + s, Vector3(0.1, 0.014, 0.026), Vector3(0, 0.013, -0.065), panel)

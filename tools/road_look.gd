@@ -6,6 +6,7 @@ extends SceneTree
 ##   godot --path . --script res://tools/road_look.gd -- [--out <папка>] [--surfaces 1,2,6,7] [--shader <файл>]
 ## --shader — другой код шейдера рельефа (например, прошлая версия) для сравнения «было | стало».
 ## --obstacles — 11.6: на полотне ветка, камни, бревно поперёк и валун у края (модели подстилки, цвет вершин).
+## --shift x,z — 12.3: сдвиг участка в мире (м): поля RoadBump (разбитые участки, колеи, ямы) — в мировых координатах.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -16,6 +17,7 @@ const WINDOW := Vector2i(1280, 720)
 var out := ""
 var surfaces: Array[int] = [1, 2, 3, 4, 5, 6, 7]
 var shader_path := ""
+var shift := Vector3.ZERO
 var mesh_node: MeshInstance3D
 var camera: Camera3D
 var shots: Array[Dictionary] = []
@@ -34,6 +36,8 @@ func _initialize() -> void:
 	out = _arg("out", OS.get_user_data_dir().path_join("road_look"))
 	DirAccess.make_dir_recursive_absolute(out)
 	shader_path = _arg("shader", "")
+	var moved := _arg("shift", "0,0").split(",")
+	shift = Vector3(float(moved[0]), 0.0, float(moved[1]))
 	var list := _arg("surfaces", "")
 	if list != "":
 		surfaces.clear()
@@ -56,6 +60,7 @@ func _initialize() -> void:
 	sun.shadow_enabled = false
 	root.add_child(sun)
 	mesh_node = MeshInstance3D.new()
+	mesh_node.position = shift
 	root.add_child(mesh_node)
 	camera = Camera3D.new()
 	camera.fov = 70.0
@@ -204,4 +209,4 @@ func _place() -> void:
 	var s: Dictionary = shots[shot]
 	if shot == 0 or shots[shot - 1].surface != s.surface:
 		_build(s.surface)
-	camera.look_at_from_position(s.pos, s.target, Vector3.UP)
+	camera.look_at_from_position(s.pos + shift, s.target + shift, Vector3.UP)

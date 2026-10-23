@@ -551,6 +551,9 @@ func sample(x: float, z: float, width: int) -> Dictionary:
 		wc = 1.0 - tx
 	var hs: PackedFloat32Array = p.h
 	var colors: PackedColorArray = p.color
+	var uvs: PackedVector2Array = p.uv
 	var closest := a if wa >= wb and wa >= wc else (b if wb >= wc else c)
+	# 12.3: across — поперечная координата полотна (UV2.x меша): колеи RoadBump у колёс там же, где в шейдере
 	return {h = hs[a] * wa + hs[b] * wb + hs[c] * wc,
-		weight = colors[a].a * wa + colors[b].a * wb + colors[c].a * wc, surface = p.surface[closest], road = p.road[closest] != 0}
+		weight = colors[a].a * wa + colors[b].a * wb + colors[c].a * wc, surface = p.surface[closest], road = p.road[closest] != 0,
+		across = uvs[a].x * wa + uvs[b].x * wb + uvs[c].x * wc}

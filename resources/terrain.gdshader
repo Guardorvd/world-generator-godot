@@ -13,8 +13,10 @@ uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap_anisotro
 uniform sampler2D detail_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 // Зерно, органическая примесь и шероховатость из RoadSurface.LIST.
 uniform vec3 surface_detail[8];
-// 11.5: кочки полотна из RoadBump.LIST — высота (м) и длина волны (м); та же форма трясёт велосипед.
-uniform vec2 surface_bump[8];
+// 11.5: кочки полотна из RoadBump.LIST; та же форма трясёт велосипед.
+// 12.3: высота кочек (м), длина волны (м), глубина колеи (м), доля клеток с ямой; трещины — RoadBump.CRACKS.
+uniform vec4 surface_bump[8];
+uniform float surface_crack[8];
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
@@ -36,10 +38,11 @@ const float ROCK_TO = 0.46;
 varying vec3 wpos;
 varying vec3 wnormal;
 varying vec3 road_detail;
-varying vec2 road_bump_p;
+varying vec4 road_bump_p;
+varying float road_crack;
 
-// 11.5: поле кочек RoadBump.shape и его наклон: x — высота 0..1, yz — производные по x и z мира.
-vec3 road_bump(vec2 p, float wave) {
+// 11.5: волна RoadBump.shape и её наклон: x — высота 0..1, yz — производные по x и z мира.
+vec3 road_wave(vec2 p, float wave) {
 	float k = 6.2831853 / wave;
 	vec2 q = vec2(0.8 * p.x + 0.6 * p.y, -0.6 * p.x + 0.8 * p.y) * k;
 	float u = q.x + 1.3 * sin(q.y * 0.37);
@@ -53,6 +56,63 @@ vec3 road_bump(vec2 p, float wave) {
 	return vec3(m * m, 0.8 * g.x - 0.6 * g.y, 0.6 * g.x + 0.8 * g.y);
 }
 
+// 12.3: RoadBump.patch — медленные поля участков: x — разбитость, y — где колеи.
+vec2 road_patch(vec2 p) {
+	return vec2(0.5 + 0.5 * (0.55 * sin(0.083 * p.x + 0.047 * p.y + 1.7) + 0.45 * sin(-0.039 * p.x + 0.091 * p.y + 4.1)),
+		0.5 + 0.5 * (0.6 * sin(0.061 * p.x - 0.037 * p.y + 0.4) + 0.4 * sin(0.027 * p.x + 0.083 * p.y + 2.6)));
+}
+
+// RoadBump.cell_hash
+uint road_hash(ivec2 c, uint salt) {
+	uint h = (uint(c.x) * 73856093u) ^ (uint(c.y) * 19349663u) ^ salt;
+	h = (h ^ (h >> 16u)) * 0x45d9f3bu;
+	h = (h ^ (h >> 16u)) * 0x45d9f3bu;
+	return h ^ (h >> 16u);
+}
+
+// RoadBump.hole: x — глубина в долях 0..1, yz — её наклон по x и z мира (1/м), w — радиус ямы (0 — нет).
+vec4 road_hole(vec2 p, float chance) {
+	const float CELL = 2.5;
+	ivec2 c = ivec2(floor(p / CELL));
+	uint h = road_hash(c, 12301u);
+	if (float(h & 0xFFFFu) / 65536.0 >= chance) {
+		return vec4(0.0);
+	}
+	uint g = road_hash(c, 4517u);
+	vec2 center = (vec2(c) + 0.25 + 0.5 * vec2(float(g & 0xFFFFu), float((g >> 16u) & 0xFFFFu)) / 65536.0) * CELL;
+	float r = 0.25 + 0.3 * float((h >> 16u) & 0xFFFFu) / 65536.0;
+	vec2 d = p - center;
+	float q = dot(d, d) / (r * r);
+	if (q >= 1.0) {
+		return vec4(0.0);
+	}
+	return vec4((1.0 - q) * (1.0 - q), -4.0 * (1.0 - q) * d / (r * r), r);
+}
+
+// RoadBump.height целиком (м) и его наклон по x и z мира; ga — наклон поперечной координаты в мире.
+vec3 road_field(vec2 p, vec4 b, float grade, float across, vec2 ga) {
+	vec2 pt = road_patch(p);
+	float rough = mix(0.35, 1.6, smoothstep(0.25, 0.75, pt.x));
+	float amp = b.x * rough * (1.0 + 1.2 * smoothstep(0.06, 0.30, grade));
+	vec3 w1 = road_wave(p, b.y);
+	vec3 w2 = road_wave(vec2(0.28 * p.x - 0.96 * p.y, 0.96 * p.x + 0.28 * p.y), b.y * 0.57);
+	// наклон второй волны — обратно в координаты мира
+	w2.yz = vec2(0.28 * w2.y + 0.96 * w2.z, -0.96 * w2.y + 0.28 * w2.z);
+	vec3 f = amp * (w1 + 0.7 * smoothstep(0.3, 0.8, 1.0 - pt.y) * w2);
+	float a = abs(across);
+	if (b.z > 0.0 && a < 1.0) {
+		float e = exp(-pow((a - 0.47) / 0.13, 2.0));
+		float depth = b.z * smoothstep(0.35, 0.7, pt.y);
+		f.x -= depth * e;
+		f.yz -= depth * e * (-2.0 * (a - 0.47) / (0.13 * 0.13)) * sign(across) * ga;
+	}
+	if (b.w > 0.0 && a < 0.75) {
+		vec4 pit = road_hole(p, b.w * smoothstep(0.3, 0.8, pt.x) * 1.5);
+		f -= vec3(pit.x, pit.yz) * pit.w * 0.09;
+	}
+	return f;
+}
+
 // Разброс зёрен в мировых координатах, без короткого периода текстуры.
 vec2 grain_hash(vec2 cell) {
 	return fract(sin(vec2(dot(cell, vec2(127.1, 311.7)), dot(cell, vec2(269.5, 183.3)))) * 43758.5453);
@@ -64,6 +124,7 @@ void vertex() {
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.
 	road_detail = surface_detail[clamp(int(round(UV2.y)), 0, 7)];
 	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
+	road_crack = surface_crack[clamp(int(round(UV2.y)), 0, 7)];
 	if (use_vertex_color) {
 		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
 		COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
@@ -143,6 +204,12 @@ void fragment() {
 	// неё даёт мусор (тёмный пунктир по рёбрам сетки).
 	float mask_w = fwidth(COLOR.a);
 	float pixel_m = length(fwidth(p));
+	// 12.3: наклон поперечной координаты полотна в мире (для колей): из экранных производных UV2.x и p.
+	vec2 dpx = dFdx(p);
+	vec2 dpy = dFdy(p);
+	vec2 dax = vec2(dFdx(UV2.x), dFdy(UV2.x));
+	float jdet = dpx.x * dpy.y - dpx.y * dpy.x;
+	vec2 across_grad = abs(jdet) > 1e-8 ? vec2(dax.x * dpy.y - dax.y * dpx.y, dax.y * dpx.x - dax.x * dpy.x) / jdet : vec2(0.0);
 	if (!use_vertex_color && COLOR.a > 0.0 && UV2.y > 0.0) {
 		float grain = road_detail.x;
 		float organic = road_detail.y;
@@ -168,12 +235,12 @@ void fragment() {
 		// Поперечная координата полотна: 0 — ось, 1 — половина ширины (по ближайшему отрезку пути).
 		float across = abs(UV2.x + (n_mid - 0.5) * 0.18);
 		// 11.5: кочки полотна — то же поле, что у колёс (RoadBump): по покрытию, на крутом выше.
-		// Видны светом и лёгким тоном; гаснут, когда волна меньше нескольких пикселей.
+		// 12.3: с участками, колеями и ямами. Видны светом и тоном; гаснут, когда волна меньше нескольких пикселей.
 		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
 		float bump_wave = max(road_bump_p.y, 0.1);
-		vec3 bump = road_bump(p, bump_wave);
-		float bump_h = road_bump_p.x * (1.0 + 1.2 * smoothstep(0.06, 0.30, grade))
-			* (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
+		vec3 bump = road_field(p, road_bump_p, grade, UV2.x, across_grad);
+		float bump_fade = (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
+		vec2 ruts_patch = road_patch(p);
 		// Гравий и камень читаются отдельным зерном; песок и укатанная земля — мелкой фактурой.
 		// Камешки — купола со светлой макушкой и тёмным краем; гаснут раньше, чем начнут мерцать.
 		float grain_scale = mix(22.0, 9.7, grain);
@@ -221,9 +288,41 @@ void fragment() {
 		soil *= 1.0 + (litter - 0.5) * organic * 0.22 * near;
 		road *= 1.0 - organic * smoothstep(0.55, 0.8, fleck) * 0.25 * near;
 		// Накатанные колеи: местами, с разрывами, плотнее и темнее, мелкий камень с них выбит.
-		float tracks = exp(-pow((across - 0.46) / 0.12, 2.0)) * smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5)
-			* (1.0 - organic * 0.7) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
-		soil *= 1.0 - tracks * (0.07 + fine * 0.05);
+		// 12.3: там же, где колея RoadBump (её участки), а глубокие колеи на мягком ещё темнее.
+		float rut_on = smoothstep(0.35, 0.7, ruts_patch.y);
+		float tracks = exp(-pow((abs(UV2.x) - 0.47) / 0.13, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
+			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
+			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
+		soil *= 1.0 - tracks * (0.07 + fine * 0.05 + road_bump_p.z * 2.5);
+		// На заросшей колее в колеях проступает земля.
+		road = max(road, tracks * organic * 0.7 * smoothstep(0.0, 0.02, road_bump_p.z));
+		// Ямы: дно темнее и влажнее.
+		float pit = clamp(-bump.x / 0.03, 0.0, 1.0) * (1.0 - tracks) * near;
+		soil *= 1.0 - pit * 0.28;
+		// 12.3: трещины — сетка ячеек ~0,9 м (Вороной по повёрнутым координатам), местами, тонкие тёмные линии.
+		if (road_crack > 0.0 && near > 0.0 && pixel_m < 0.06) {
+			vec2 cp = rp * 1.1;
+			vec2 base_c = floor(cp);
+			float f1 = 8.0;
+			float f2 = 8.0;
+			for (int cy = -1; cy <= 1; cy++) {
+				for (int cx = -1; cx <= 1; cx++) {
+					vec2 o = base_c + vec2(float(cx), float(cy));
+					float dd = length(cp - o - grain_hash(o));
+					if (dd < f1) {
+						f2 = f1;
+						f1 = dd;
+					} else if (dd < f2) {
+						f2 = dd;
+					}
+				}
+			}
+			float edge_m = (f2 - f1) * 0.5 / 1.1;
+			float crack_w = 0.012 + 0.02 * fine;
+			float lines = 1.0 - smoothstep(crack_w, crack_w + pixel_m, edge_m);
+			float zone = smoothstep(0.42, 0.62, n_big + (fleck - 0.5) * 0.5) * road_crack;
+			soil *= 1.0 - lines * zone * (1.0 - smoothstep(0.02, 0.06, pixel_m)) * (1.0 - tracks * 0.6) * 0.4;
+		}
 		float wear = exp(-pow((UV2.x + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
 		soil *= 1.0 - wear * (1.0 - grain) * (1.0 - organic) * (0.02 + fleck * 0.04) * near;
 		// Трава пробивается между колеями и у краёв заросших троп и грунтовок.
@@ -231,7 +330,7 @@ void fragment() {
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
 		soil *= 1.0 - lip * 0.06;
-		soil *= 1.0 + (bump.x - 0.3) * min(bump_h * 8.0, 0.2);
+		soil *= 1.0 + clamp(bump.x * 6.0, -0.12, 0.15) * bump_fade;
 		col = mix(mix(col, verge_col, verge), soil, road);
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
@@ -241,7 +340,7 @@ void fragment() {
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
 			vec3 grit = texture(detail_normal, rp * 1.37).rgb * 2.0 - 1.0;
 			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks)
-				- bump.yz * bump_h * 4.0 * road; // глубина карты нормалей на полотне ~0,3: запас в 2,5 раза
+				- bump.yz * bump_fade * 4.0 * road; // глубина карты нормалей на полотне ~0,3: запас в 2,5 раза
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
 			detail_n = mix(detail_n, road_normal, relief);
 		}

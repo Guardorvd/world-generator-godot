@@ -12,7 +12,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 enum { BRANCH, STONES, LOG, BOULDER }
-const KIND_SCALE := {road = 0.45, trail = 1.0, mountain = 0.8} # дорогу расчищают, горную тропу засыпает камнем
+const KIND_SCALE := {road = 0.6, trail = 1.0, mountain = 0.8} # дорогу расчищают, горную тропу засыпает камнем
 const MAX_P := 0.16      # не чаще одного препятствия на шесть отрезков (~30 м)
 const CHUNK := 8         # клеток в стороне ячейки индекса линий
 const CLEAR_R := 45.0    # у старта (вступительный проезд 11.0) пусто, м
@@ -96,9 +96,10 @@ func pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var cross := absf(up) / 8.0
 	var organic := 1.3 if surf == RoadSurface.FOREST or surf == RoadSurface.MEADOW else (0.5 if surf == RoadSurface.GRAVEL or surf == RoadSurface.PACKED else 1.0)
 	var weights := PackedFloat32Array([
-		cover * 0.06 * organic,
-		# камни скатываются на крутое и размытое полотно
-		(rocky * 0.05 + smoothstep(0.08, 0.3, grade) * 0.03) * (1.6 if surf == RoadSurface.STONE else (0.3 if surf == RoadSurface.SAND else 1.0)),
+		# 12.3: ветки и у отдельных деревьев (полог от 0,05)
+		(cover * 0.06 + smoothstep(0.02, 0.1, cover) * 0.006) * organic,
+		# камни скатываются на крутое и размытое полотно; 12.3: немного камней и в поле (с обочин, с телег)
+		(0.012 + rocky * 0.05 + smoothstep(0.08, 0.3, grade) * 0.03) * (1.6 if surf == RoadSurface.STONE else (0.3 if surf == RoadSurface.SAND else 1.0)),
 		pow(cover, 1.5) * 0.035 * seen * (0.5 if t.kind == "road" else 1.0),
 		# валун скатился с косогора
 		rocky * smoothstep(0.1, 0.5, cross) * 0.06 * lerpf(0.5, 1.0, seen),

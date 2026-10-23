@@ -7,6 +7,9 @@ extends RefCounted
 ## Задания предлагает доска: до трёх (доставка, снимок, посещение или обход), одни и те же, пока задание не выполнено.
 ## 11.9+: снимок засчитывается не дальше SHOT_REACH от места, места для заданий — не ближе SPOT_MIN к поселению
 ## (иначе снимок «с порога» закрывал задание, не выходя из деревни), обход двух мест, счёт по поселениям.
+## 12.3: формулировки по виду места и с вариантами (выбор по id задания — устойчив), два новых вида из тех же
+## шагов: «Хрупкий груз» (доставка; падение с велосипеда разбивает груз — за новым к доске, crashed())
+## и «Летопись» (снять два места и привезти снимки). Доска по-прежнему предлагает до трёх заданий.
 
 signal changed  # взято, пройден шаг, выполнено или брошено: интерфейсу пора перерисоваться
 
@@ -16,7 +19,11 @@ const KINDS := {
 	tour = {title = "Обход", icon = "◇", color = Color(0.55, 0.85, 1.0)},
 	delivery = {title = "Доставка", icon = "▣", color = Color(1.0, 0.7, 0.4)},
 	photo = {title = "Снимок", icon = "◫", color = Color(0.75, 0.95, 0.6)},
+	fragile = {title = "Хрупкий груз", icon = "◈", color = Color(1.0, 0.55, 0.45)},
+	chronicle = {title = "Летопись", icon = "▤", color = Color(0.6, 0.9, 0.75)},
 }
+## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
+const CARGO_KINDS := ["delivery", "fragile"]
 ## Шаги. reach — дойти до места; pickup — взять сумку у доски (E); carry — довезти сумку;
 ## shoot — снять место в видоискателе (в прицеле его название); bring — довезти снимок.
 ## goal — ставить ли место шага целью на компасе (у pickup сумка рядом, хватает метки задания)
@@ -36,7 +43,38 @@ const SPOT_MIN := 60.0   # клеток (240 м): ближе к поселени
 const FAR := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
 const SHOT_REACH := 400.0 # м: снимок для задания — не дальше этого от места
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
+const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
+const CHRONICLE_CHANCE := 0.35 # доля досок, где вместо снимка — летопись двух мест
 
+## Формулировки: %s — название цели (в кавычках, без склонения — поэтому через двоеточие). Выбор варианта — по хешу id задания (одно и то же на каждой доске).
+const DELIVERY_TITLES := ["Посылка: «%s»", "Письма: «%s»", "Инструменты: «%s»", "Соль и мука: «%s»"]
+const DELIVERY_TEXTS := [
+	"Отвезите сумку с письмами и припасами. Дорога надёжнее троп: на ней меньше брёвен и камней.",
+	"Там ждут инструменты из нашей кузни. Сумка тяжёлая, но падение ей не страшно — главное, довезите.",
+	"Обменяемся припасами с соседями. Сумку берите у доски — и в путь по дороге.",
+]
+const FRAGILE_TITLES := ["Склянки: «%s»", "Яйца: «%s»", "Стекло: «%s»"]
+const FRAGILE_TEXTS := [
+	"Бьётся от любого падения: объезжайте брёвна и валуны, на камнях и в ямах сбавляйте ход, не прыгайте с обрывов. Разобьёте — придётся вернуться за новым.",
+	"Аккуратно: в лесу на тропах лежат ветки и брёвна, на разбитой грунтовке — ямы и колеи. Упадёте — груз пропал, новый ждёт у доски.",
+]
+const VISIT_TITLES := {
+	peak = ["Подъём: «%s»", "Вершина «%s»"],
+	lake = ["К озеру «%s»", "Озеро «%s»"],
+	site = ["Разведка: «%s»", "Что у места «%s»?"],
+}
+const VISIT_TEXTS := {
+	peak = ["Наверх ведут тропы: крутой подъём легче взять стоя на педалях, а камни на горной тропе — объехать.",
+		"Говорят, оттуда видно полмира. Тропа к вершине каменистая — не торопитесь на спуске."],
+	lake = ["Доберитесь до воды. Броды через ручьи мелкие, а вот в глубокую воду на велосипеде не въехать.",
+		"Рыбаки давно не были на том берегу. Посмотрите, проходима ли туда дорога."],
+	site = ["Странники рассказывают об этом месте. Проверьте, правда ли там что-то есть.",
+		"Место отмечено на старой карте. Доберитесь и посмотрите своими глазами."],
+}
+const PHOTO_TEXTS := [
+	"Нужен снимок для летописи. Подойдите ближе %s — в видоискателе место узнаётся сразу — снимите и привезите %s.",
+	"Художник просит вид на это место. Снимите его не дальше %s и привезите снимок %s.",
+]
 var active := {}       # {id, kind, giver — id поселения, title, text, steps: [{do, place}], step}
 var cargo := false     # сумка за спиной
 var done := 0          # выполнено заданий
@@ -62,17 +100,25 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if not far.is_empty() and not towns.any(func(t: Dictionary) -> bool: return t.key == far.key):
 		towns.append(far)
 	var out: Array = []
-	# доставка: в соседнее по дороге поселение, иногда — в дальнее
-	var to := _pick(towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id("delivery", here, t))), rng)
+	# доставка: в соседнее по дороге поселение, иногда — в дальнее; иногда хрупкий груз
+	var carry_kind := "fragile" if rng.randf() < FRAGILE_CHANCE else "delivery"
+	var to := _pick(towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id(carry_kind, here, t))), rng)
 	if not to.is_empty():
-		out.append(_make("delivery", here, [to]))
-	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда
+		out.append(_make(carry_kind, here, [to]))
+	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда;
+	# иногда летопись — два соседних места и обратно сюда
 	var used := {}
-	var shot := _pick(spots.slice(0, 6).filter(func(p: Dictionary) -> bool: return not _done.has(_id("photo", here, p))), rng)
+	var shot_kind := "chronicle" if rng.randf() < CHRONICLE_CHANCE else "photo"
+	var shot := _pick(spots.slice(0, 6).filter(func(p: Dictionary) -> bool: return not _done.has(_id(shot_kind, here, p))), rng)
 	if not shot.is_empty():
 		used[shot.key] = true
-		var bring: Dictionary = here if neighbors.is_empty() or rng.randf() < 0.5 else _nearest(neighbors, shot)
-		out.append(_make("photo", here, [shot, bring]))
+		var pair := _nearest(spots.slice(0, 8).filter(func(p: Dictionary) -> bool: return p.key != shot.key), shot) if shot_kind == "chronicle" else {}
+		if not pair.is_empty() and Vector2(shot.x, shot.y).distance_to(Vector2(pair.x, pair.y)) < FAR * 0.5:
+			used[pair.key] = true
+			out.append(_make("chronicle", here, [shot, pair, here]))
+		else:
+			var bring: Dictionary = here if neighbors.is_empty() or rng.randf() < 0.5 else _nearest(neighbors, shot)
+			out.append(_make("photo", here, [shot, bring]))
 	# посещение: место, где игрок ещё не был, сначала ближние; иногда обход двух соседних мест
 	var fresh := spots.filter(func(p: Dictionary) -> bool: return not used.has(p.key) and not visited.has(p.key))
 	var walk := _pick(fresh.slice(0, 5).filter(func(p: Dictionary) -> bool: return not _done.has(_id("visit", here, p)) and not _done.has(_id("tour", here, p))), rng)
@@ -104,28 +150,47 @@ static func _nearest(list: Array, to: Dictionary) -> Dictionary:
 	return best
 
 
-## Задание вида kind от поселения here: at[0] — главное место, дальше — следующие (куда отвезти снимок, второе место обхода)
+## Вариант формулировки из списка: устойчив для задания (по хешу id и соли)
+static func _variant(list: Array, id: String, salt := 0) -> String:
+	return list[absi(hash(id) + salt * 7919) % list.size()]
+
+
+## Задание вида kind от поселения here: at[0] — главное место, дальше — следующие (куда отвезти снимок, второе место
+## обхода и летописи, куда вернуться)
 static func _make(kind: String, here: Dictionary, at: Array) -> Dictionary:
 	var target: Dictionary = at[0]
-	var q := {id = _id(kind, here, target), kind = kind, giver = here.key, target = target, step = 0}
+	var id := _id(kind, here, target)
+	var q := {id = id, kind = kind, giver = here.key, target = target, step = 0}
+	var known_text := " Названия мест задания видны на карте и над ними."
 	match kind:
 		"delivery":
-			q.title = "Посылка: «%s»" % target.name
-			q.text = "Отвезите сумку с письмами и припасами. С сумкой за спиной быстрое перемещение недоступно."
+			q.title = _variant(DELIVERY_TITLES, id) % target.name
+			q.text = _variant(DELIVERY_TEXTS, id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
+			q.steps = [{do = "pickup", place = here}, {do = "carry", place = target}]
+		"fragile":
+			q.title = _variant(FRAGILE_TITLES, id) % target.name
+			q.text = _variant(FRAGILE_TEXTS, id, 1) + " Быстрое перемещение с грузом недоступно."
 			q.steps = [{do = "pickup", place = here}, {do = "carry", place = target}]
 		"photo":
 			var back: Dictionary = at[1]
 			q.title = "Снимок: «%s»" % target.name
-			q.text = "Подойдите ближе %d м — в видоискателе место узнаётся сразу — снимите и привезите снимок %s." % [
-				SHOT_REACH, "сюда" if back.key == here.key else "в поселение «%s»" % back.name]
+			q.text = _variant(PHOTO_TEXTS, id, 1) % ["%d м" % int(SHOT_REACH), "сюда" if back.key == here.key else "в поселение «%s»" % back.name]
 			q.steps = [{do = "shoot", place = target}, {do = "bring", place = back}]
+		"chronicle":
+			var second: Dictionary = at[1]
+			var back: Dictionary = at[2]
+			q.title = "Летопись: «%s» и «%s»" % [target.name, second.name]
+			q.text = "Летописцу нужны два снимка: сначала «%s», потом «%s» — каждое не дальше %s. Снимки привезите %s.%s" % [
+				target.name, second.name, "%d м" % int(SHOT_REACH), "сюда" if back.key == here.key else "в «%s»" % back.name, known_text]
+			q.steps = [{do = "shoot", place = target}, {do = "shoot", place = second}, {do = "bring", place = back}]
 		"tour":
 			q.title = "Обход: «%s» и «%s»" % [target.name, at[1].name]
-			q.text = "Побывайте в двух местах по очереди. Взятое задание откроет их названия на карте и над ними."
+			q.text = "Побывайте в двух местах по очереди: путь между ними — по тропам и напрямик, как удобнее.%s" % known_text
 			q.steps = [{do = "reach", place = target}, {do = "reach", place = at[1]}]
 		_:
-			q.title = "Дорога: «%s»" % target.name
-			q.text = "Вы там ещё не были. Взятое задание откроет название места на карте и над ним."
+			var titles: Array = VISIT_TITLES.get(target.kind, ["Дорога: «%s»"])
+			q.title = _variant(titles, id) % target.name
+			q.text = "Вы там ещё не были. " + _variant(VISIT_TEXTS.get(target.kind, VISIT_TEXTS.site), id, 1) + known_text
 			q.steps = [{do = "reach", place = target}]
 	return q
 
@@ -145,6 +210,17 @@ func abandon() -> void:
 	active = {}
 	cargo = false
 	changed.emit()
+
+
+## Седок упал с велосипеда. Хрупкий груз разбит: задание возвращается к шагу «взять у доски».
+## Возвращает сообщение или пусто
+func crashed() -> String:
+	if active.get("kind") != "fragile" or not cargo:
+		return ""
+	cargo = false
+	active.step = 0
+	changed.emit()
+	return "Груз разбился. Новый — у доски поселения «%s»" % active.steps[0].place.name
 
 
 ## Текущий шаг активного задания или пусто
@@ -252,7 +328,7 @@ static func valid_save(d: Dictionary) -> bool:
 	for s: Variant in q.steps:
 		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
 			return false
-	return d.cargo == (q.kind == "delivery" and q.steps[q.step].do == "carry")
+	return d.cargo == (q.kind in CARGO_KINDS and q.steps[q.step].do == "carry")
 
 
 func restore_state(d: Dictionary, places: Dictionary) -> bool:

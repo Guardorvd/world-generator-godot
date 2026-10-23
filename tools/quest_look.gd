@@ -68,13 +68,13 @@ func _logic() -> void:
 	var quests := Quests.new()
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: Dictionary) -> String: return q.kind)
-	_check(kinds.size() == 3 and kinds[0] == "delivery" and kinds[1] == "photo" and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход")
+	_check(kinds.size() == 3 and kinds[0] in Quests.CARGO_KINDS and kinds[1] in ["photo", "chronicle"] and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход (%s)" % ", ".join(PackedStringArray(kinds)))
 	_check(offers == _offers(quests), "те же задания при повторном открытии доски")
 	_check(not offers.any(func(q: Dictionary) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
 	var changes := [0]
 	quests.changed.connect(func() -> void: changes[0] += 1)
 	# доставка: сумка у доски, цель на компасе только после неё, быстрое перемещение — по cargo
-	var delivery := _by_kind(offers, "delivery")
+	var delivery := Quests._make("delivery", _place("Ольховка"), [_place("Каменка")])
 	quests.accept(delivery)
 	_check(quests.step().do == "pickup" and quests.goal().is_empty() and not quests.cargo, "доставка начинается у доски с сумкой, без цели на компасе")
 	at = Vector2(180, 130)
@@ -87,7 +87,7 @@ func _logic() -> void:
 	_check(text.begins_with("Задание выполнено") and not quests.cargo and quests.active.is_empty() and quests.done == 1, "сумка доставлена — задание выполнено, сумки нет")
 	_check(not _offers(quests).any(func(q: Dictionary) -> bool: return q.id == delivery.id), "выполненная доставка больше не предлагается")
 	# снимок: только нужное место в прицеле, потом отвезти
-	var photo := _by_kind(_offers(quests), "photo")
+	var photo := Quests._make("photo", _place("Ольховка"), [_place("Седая"), _place("Каменка")])
 	quests.accept(photo)
 	_check(quests.step().do == "shoot" and quests.goal().key == photo.target.key, "снимок: цель — место съёмки")
 	_check(quests.known.has(photo.target.key) and quests.known.has(quests.active.steps[1].place.key), "взятое задание открывает названия своих мест")
@@ -112,6 +112,32 @@ func _logic() -> void:
 	quests.abandon()
 	_check(quests.active.is_empty() and quests.done == 3, "отказ снимает задание без засчёта")
 	_check(changes[0] == 11, "каждое изменение задания сообщается (%d)" % changes[0])
+	# 12.3: хрупкий груз — падение возвращает к доске; летопись — два снимка и обратно
+	var fragile := Quests._make("fragile", _place("Ольховка"), [_place("Каменка")])
+	quests.accept(fragile)
+	_check(quests.crashed() == "", "падение без груза ничего не бьёт")
+	quests.pick_up()
+	at = Vector2(150, 120)
+	var broken := quests.crashed()
+	_check(broken != "" and not quests.cargo and quests.step().do == "pickup", "падение с хрупким грузом — груз разбит, снова к доске")
+	quests.pick_up()
+	at = Vector2(180, 130)
+	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "хрупкий груз довезён без падения")
+	var chronicle := Quests._make("chronicle", _place("Ольховка"), [_place("Седая"), _place("Сторожевая"), _place("Ольховка")])
+	quests.accept(chronicle)
+	_check(quests.photographed(_place("Сторожевая").key, 100.0) == "", "летопись: снимки по порядку")
+	_check(quests.photographed(_place("Седая").key, 100.0) != "" and quests.wants_photo(_place("Сторожевая").key), "летопись: после первого — второе место")
+	_check(quests.photographed(_place("Сторожевая").key, 100.0) != "" and quests.step().do == "bring", "летопись: оба снимка — отвезти")
+	at = Vector2(100, 100)
+	_check(quests.tick(_arrived).begins_with("Задание выполнено"), "летопись выполнена")
+	var texts := {}
+	for kind: String in ["delivery", "fragile", "visit"]:
+		for p: Dictionary in places:
+			if p.kind != "settlement" or kind == "visit":
+				texts[Quests._make(kind, _place("Ольховка"), [p, p, p]).title.split("«")[0]] = true
+	_check(texts.size() >= 6, "формулировки разные (%d): %s" % [texts.size(), ", ".join(PackedStringArray(texts.keys()))])
+	var saved := quests.save_state()
+	_check(Quests.valid_save(saved), "сохранение после новых видов проходит проверку")
 
 
 func _shot(name: String) -> void:
@@ -183,9 +209,9 @@ func _run() -> void:
 	var accepted := []
 	hud.settlement_panel.quest_accepted.connect(func(q: Dictionary) -> void: accepted.append(q))
 	for b: Button in buttons:
-		if b.tooltip_text == "Взять задание: доставка":
+		if b.tooltip_text == "Взять задание: " + Quests.KINDS[offers[0].kind].title.to_lower():
 			b.pressed.emit()
-	_check(accepted.size() == 1 and accepted[0].kind == "delivery", "кнопка «Взять» отдаёт задание")
+	_check(accepted.size() == 1 and accepted[0].kind in Quests.CARGO_KINDS, "кнопка «Взять» отдаёт задание")
 	quests.accept(accepted[0])
 	hud.settlement_panel.open(home, world, [], true, quests, offers)
 	buttons = hud.settlement_panel.find_children("*", "Button", true, false)

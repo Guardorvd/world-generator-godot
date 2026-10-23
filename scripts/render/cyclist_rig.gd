@@ -65,21 +65,27 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 		skeleton.set_bone_pose_scale(i, snapshot[i].basis.get_scale())
 
 
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0) -> void:
+## stand (12.3): 1 — привстал над седлом и подался вперёд (подъём, рывок), −1 — привстал на спуске
+## («атака»: таз над седлом, вес на ногах), 0 — сидит.
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
 		return
 	if not left_grip.is_finite() or not right_grip.is_finite() or not motion.is_finite():
 		return
-	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag):
+	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag) or not is_finite(stand):
 		return
 	_poses.clear()
-	sway = clampf(sway, -0.09, 0.09)
+	sway = clampf(sway, -0.13, 0.13)
 	breath = clampf(breath, -0.004, 0.004)
+	stand = clampf(stand, -1.0, 1.0)
+	var up := maxf(stand, 0.0)
+	var attack := maxf(-stand, 0.0)
 	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.
-	var hip := Vector3(motion.y * 0.35, 0.97 - motion.z * 0.45, 0.17 + motion.x * 0.5)
-	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath, -0.08 - tuck * 0.45 + motion.x)
+	# Стоя таз выше и над кареткой (нога внизу почти прямая), плечи ближе к рулю, таз ходит в такт педалям.
+	var hip := Vector3(motion.y * 0.35 - sway * 0.25 * up, 0.97 - motion.z * 0.45 + up * 0.06 + attack * 0.035, 0.17 + motion.x * 0.5 - up * 0.13)
+	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath - up * 0.03 - attack * 0.03, -0.08 - tuck * 0.45 + motion.x - up * 0.17)
 	var body_look := look + look_lag
 	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.3 + sway, -sway * 0.4))
 	var head_basis := Basis.from_euler(Vector3(-pitch * 0.6, look, -roll * 0.6 + sway * 0.12))

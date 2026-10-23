@@ -52,7 +52,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 4 and body_mesh != null, "Fourth model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 5 and body_mesh != null, "Fifth model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -85,7 +85,7 @@ func _check_model() -> void:
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
 	check(triangles < 5000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 5000 triangles and 8 material surfaces")
-	print("Cyclist v4 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	print("Cyclist v5 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
 func check_skin_pose() -> void:
@@ -171,6 +171,27 @@ func run() -> void:
 	for i in 40:
 		advance()
 	check(bone("Head").z > neutral.z + 0.025, "Descent shifts weight back")
+	# 12.3: на крутом подъёме под нагрузкой — стоя, на быстром спуске без педалей — «атака», на ровном — сидя.
+	reset()
+	state.tilt = 0.25
+	state.speed = 4
+	for i in 90:
+		state.crank += 6 * DT
+		advance(1)
+		contacts()
+	check(bike._cur[BikeView.S_STAND] > 0.6 and bone("Hips").y > 1.0, "Steep climb under load: out of the saddle")
+	reset()
+	state.tilt = -0.25
+	state.speed = 10
+	for i in 90:
+		advance()
+		contacts()
+	check(bike._cur[BikeView.S_STAND] < -0.5 and bone("Hips").y > 0.98, "Fast descent: hips off the saddle")
+	reset()
+	for i in 90:
+		state.crank += 6 * DT
+		advance(1)
+	check(absf(bike._cur[BikeView.S_STAND]) < 0.05, "Flat pedalling stays seated")
 	reset()
 	state.steer = 1
 	state.lean = -0.28
@@ -367,7 +388,7 @@ func capture() -> void:
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
-	for mode in ["pedal", "rough"]:
+	for mode in ["pedal", "rough", "climb"]:
 		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else Vector3(2.4, 1.8, -0.4)
 		camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.23, -0.04))
 		camera.size = 2.4 if mode == "pedal" else 1.35
@@ -380,10 +401,13 @@ func capture() -> void:
 		state.squash_f = 0.12 if mode == "rough" else 0.0
 		state.squash_fv = 2.0 if mode == "rough" else 0.0
 		state.squash_rv = -1.0 if mode == "rough" else 0.0
-		for i in 30:
+		if mode == "climb":
+			state.tilt = 0.25
+			state.speed = 4
+		for i in (90 if mode == "climb" else 30):
 			state.crank += 4.0 * DT
 			advance(1.0, true)
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_108plus_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_v5_" + mode + ".png")

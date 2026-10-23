@@ -227,5 +227,6 @@ static func _detail_material() -> ShaderMaterial:
 	for s: Dictionary in RoadSurface.LIST.slice(1):
 		surfaces.append(Vector3(s.grain, s.organic, s.rough))
 	mat.set_shader_parameter("surface_detail", surfaces)
-	mat.set_shader_parameter("surface_bump", PackedVector2Array(RoadBump.LIST))
+	mat.set_shader_parameter("surface_bump", PackedVector4Array(RoadBump.LIST))
+	mat.set_shader_parameter("surface_crack", PackedFloat32Array(RoadBump.CRACKS))
 	return mat

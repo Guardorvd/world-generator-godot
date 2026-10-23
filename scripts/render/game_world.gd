@@ -976,6 +976,10 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 func _crash() -> void:
 	bike.crashed = false
 	crash.start(bike_view, bike, bike.crash_velocity, heights)
+	# 12.3: хрупкий груз бьётся при падении
+	var broken := quests.crashed() if quests != null else ""
+	if not broken.is_empty():
+		hud.banner("Груз разбит", broken, Quests.KINDS.fragile.color)
 	if bike.land_impact <= 0.0:
 		audio.land(bike.x, bike.z, bike.y, 12.0) # удар в стену: глухой стук, как от жёсткой посадки
 	bike.speed = 0.0
