@@ -1,5 +1,5 @@
 extends SceneTree
-## Модель v3. Пересборка перезаписывает scenes/cyclist.tscn.
+## Модель v4. Пересборка перезаписывает scenes/cyclist.tscn.
 ## Один штатный skinned ArrayMesh, прежние 22 кости, без внешних моделей и текстур.
 var rider: CyclistRig
 var skeleton: Skeleton3D
@@ -25,7 +25,7 @@ func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
 func _init() -> void:
 	rider = CyclistRig.new()
 	rider.name = "Rider"
-	rider.set_meta("model_version", 3)
+	rider.set_meta("model_version", 4)
 	skeleton = Skeleton3D.new()
 	skeleton.name = "Skeleton3D"
 	rider.add_child(skeleton)
@@ -76,7 +76,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v3: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v4: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -85,19 +85,20 @@ func _body() -> void:
 	var chest := Vector3(0, 1.37, -0.08)
 	var rings: Array[Dictionary] = []
 	# Сужение в талии, грудь и линия плеч вместо пересекающихся овалов.
-	for spec: Vector3 in [Vector3(0.06, 0.143, 0.099), Vector3(0.32, 0.15, 0.10), Vector3(0.65, 0.175, 0.11), Vector3(0.93, 0.19, 0.105), Vector3(1.03, 0.16, 0.095), Vector3(1.16, 0.064, 0.06)]:
+	for spec: Vector3 in [Vector3(0.06, 0.14, 0.09), Vector3(0.25, 0.137, 0.095), Vector3(0.48, 0.152, 0.104), Vector3(0.72, 0.174, 0.108), Vector3(0.87, 0.188, 0.101), Vector3(0.90, 0.187, 0.10), Vector3(1.02, 0.176, 0.094), Vector3(1.10, 0.12, 0.076), Vector3(1.18, 0.052, 0.048)]:
 		var t := spec.x
 		var lower := "Hips" if t < 0.5 else "Spine"
 		var upper := "Spine" if t < 0.5 else "Chest"
 		var weight := clampf(t * 2.0 if t < 0.5 else (t - 0.5) * 2.0, 0.0, 1.0)
 		rings.append(ring(hip.lerp(chest, t), Basis.IDENTITY, spec.y, spec.z, lower, upper, weight))
 	loft(rings, teal, panel)
+	patch(rings.slice(7, 9), PI * 0.5, PI, panel)
 	local_loft("Hips", [Vector3(0, -0.09, 0), Vector3(0, 0.025, 0), Vector3(0, 0.055, 0)], [Vector2(0.135, 0.09), Vector2(0.15, 0.105), Vector2(0.14, 0.095)], navy)
-	ellipsoid("Neck", Vector3(0.052, 0.068, 0.052), Vector3(0, 0, 0.005), skin)
+	ellipsoid("Neck", Vector3(0.046, 0.058, 0.047), Vector3(0, 0, 0.005), skin)
 	# Детали лежат на той же поверхности и имеют те же веса: не висят над одеждой.
-	patch(rings.slice(0, 5), -PI * 0.5, 0.035, dark)
-	patch(rings.slice(3, 5), -PI * 0.5 - 0.42, 0.28, cream)
-	patch(rings.slice(3, 5), PI * 0.5, 0.7, cream)
+	patch(rings.slice(0, 7), -PI * 0.5, 0.035, dark)
+	patch(rings.slice(4, 6), -PI * 0.5 - 0.42, 0.28, cream)
+	patch(rings.slice(4, 6), PI * 0.5, 0.7, cream)
 	patch(rings.slice(1, 3), PI * 0.5, 0.68, panel)
 	for angle in [PI * 0.5 - 0.24, PI * 0.5 + 0.24]:
 		patch(rings.slice(1, 3), angle, 0.018, navy)
@@ -105,33 +106,72 @@ func _body() -> void:
 
 
 func _head() -> void:
-	local_loft("Head", [Vector3(0, -0.135, -0.012), Vector3(0, -0.095, -0.012), Vector3(0, -0.025, 0), Vector3(0, 0.065, 0), Vector3(0, 0.115, 0.005)], [Vector2(0.052, 0.06), Vector2(0.08, 0.086), Vector2(0.103, 0.102), Vector2(0.104, 0.094), Vector2(0.078, 0.074)], skin)
+	# Челюсть, скулы и лоб имеют разный профиль; лицо уже, чем у третьей модели.
+	local_loft("Head", [Vector3(0, -0.138, -0.022), Vector3(0, -0.107, -0.012), Vector3(0, -0.06, -0.006), Vector3(0, 0.005, 0), Vector3(0, 0.055, 0.003), Vector3(0, 0.095, 0.005), Vector3(0, 0.12, 0.01)], [Vector2(0.044, 0.054), Vector2(0.063, 0.075), Vector2(0.079, 0.09), Vector2(0.091, 0.096), Vector2(0.089, 0.09), Vector2(0.08, 0.08), Vector2(0.06, 0.064)], skin)
 	for side in [-1.0, 1.0]:
-		ellipsoid("Head", Vector3(0.022, 0.033, 0.018), Vector3(side * 0.105, -0.005, 0.01), skin)
-		box("Head", Vector3(0.086, 0.038, 0.026), Vector3(side * 0.048, 0.018, -0.097), dark)
-		box("Head", Vector3(0.068, 0.024, 0.01), Vector3(side * 0.048, 0.019, -0.114), lens)
-		box("Head", Vector3(0.013, 0.014, 0.1), Vector3(side * 0.102, 0.021, -0.035), dark)
-		# Ремни у висков и под подбородком, без отдельного лицевого рига.
-		bar("Head", Vector3(side * 0.11, 0.08, 0.025), Vector3(side * 0.06, -0.115, 0.005), 0.009, navy)
-	box("Head", Vector3(0.024, 0.012, 0.018), Vector3(0, 0.02, -0.11), dark)
-	ellipsoid("Head", Vector3(0.021, 0.033, 0.034), Vector3(0, -0.025, -0.105), skin)
-	box("Head", Vector3(0.036, 0.005, 0.006), Vector3(0, -0.076, -0.091), warm)
-	local_loft("Head", [Vector3(0, 0.075, -0.012), Vector3(0, 0.11, -0.018), Vector3(0, 0.17, -0.009), Vector3(0, 0.195, 0.005)], [Vector2(0.129, 0.145), Vector2(0.14, 0.16), Vector2(0.105, 0.133), Vector2(0.04, 0.065)], cream)
-	box("Head", Vector3(0.23, 0.018, 0.075), Vector3(0, 0.079, -0.146), navy)
-	for x in [-0.066, -0.026, 0.026, 0.066]:
-		box("Head", Vector3(0.017, 0.01, 0.09), Vector3(x, 0.174 if absf(x) > 0.04 else 0.191, -0.018), dark)
-	box("Head", Vector3(0.014, 0.012, 0.12), Vector3(0, 0.195, -0.012), teal)
+		ellipsoid("Head", Vector3(0.015, 0.026, 0.014), Vector3(side * 0.092, -0.001, 0.012), skin)
+		var start := 0.075 if side > 0 else -1.05
+		var end := 1.05 if side > 0 else -0.075
+		goggle(start, end, 0.036, 0.018, 1.0, dark)
+		goggle(start + 0.055, end - 0.055, 0.024, 0.019, 1.018, lens)
+		bar("Head", Vector3(side * 0.09, 0.018, -0.05), Vector3(side * 0.098, 0.012, 0.035), 0.01, dark)
+		# Y-образный ремень проходит у уха и сходится под подбородком.
+		var junction := Vector3(side * 0.086, -0.074, 0.018)
+		bar("Head", Vector3(side * 0.105, 0.08, -0.064), junction, 0.007, navy)
+		bar("Head", Vector3(side * 0.108, 0.08, 0.067), junction, 0.007, navy)
+		bar("Head", junction, Vector3(side * 0.04, -0.135, -0.055), 0.007, navy)
+	bar("Head", Vector3(-0.008, 0.02, -0.113), Vector3(0.008, 0.02, -0.113), 0.009, dark)
+	local_loft("Head", [Vector3(0, -0.05, -0.105), Vector3(0, -0.031, -0.118), Vector3(0, 0.006, -0.105), Vector3(0, 0.025, -0.095)], [Vector2(0.017, 0.012), Vector2(0.019, 0.024), Vector2(0.012, 0.018), Vector2(0.01, 0.008)], skin)
+	ellipsoid("Head", Vector3(0.022, 0.004, 0.004), Vector3(0, -0.085, -0.088), warm)
+	var centers: Array[Vector3] = []
+	var sizes: Array[Vector2] = []
+	for i in 8:
+		var theta := PI * 0.5 * i / 7.0
+		centers.append(Vector3(0, 0.08 + sin(theta) * 0.1, -0.015))
+		sizes.append(Vector2(0.134, 0.155) * maxf(cos(theta), 0.01))
+	local_loft("Head", centers, sizes, cream)
+	box("Head", Vector3(0.2, 0.013, 0.055), Vector3(0, 0.079, -0.153), navy)
+	for x in [-0.075, -0.032, 0.032, 0.075]:
+		helmet_strip(x, 0.012, dark)
+	helmet_strip(0.0, 0.012, teal)
+
+
+func goggle(start: float, end: float, height: float, y: float, radius: float, mat: Material) -> void:
+	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
+	var r := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
+	for i in 5:
+		var vertices: Array[Dictionary] = []
+		for corner: Vector2 in [Vector2(float(i) / 5, -0.5), Vector2(float(i + 1) / 5, -0.5), Vector2(float(i + 1) / 5, 0.5), Vector2(float(i) / 5, 0.5)]:
+			var angle := lerpf(start, end, corner.x)
+			var point_at := Vector3(sin(angle) * 0.102 * radius, y + corner.y * height, -cos(angle) * 0.112 * radius)
+			vertices.append({position = at * point_at, bones = r.bones, weights = r.weights})
+		triangle(vertices[0], vertices[2], vertices[1], mat)
+		triangle(vertices[0], vertices[3], vertices[2], mat)
+
+
+func helmet_strip(x: float, width: float, mat: Material) -> void:
+	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
+	var r := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
+	for i in 6:
+		var vertices: Array[Dictionary] = []
+		for corner: Vector2 in [Vector2(-0.5, float(i) / 6), Vector2(0.5, float(i) / 6), Vector2(0.5, float(i + 1) / 6), Vector2(-0.5, float(i + 1) / 6)]:
+			var px := x + corner.x * width
+			var z := lerpf(-0.09, 0.07, corner.y)
+			var y := 0.082 + 0.1 * sqrt(maxf(0.0, 1.0 - pow(px / 0.134, 2) - pow((z + 0.015) / 0.155, 2)))
+			vertices.append({position = at * Vector3(px, y, z), bones = r.bones, weights = r.weights})
+		triangle(vertices[0], vertices[2], vertices[1], mat)
+		triangle(vertices[0], vertices[3], vertices[2], mat)
 
 
 func _limbs(side: float) -> void:
 	var s := "L" if side < 0 else "R"
-	limb("UpperArm" + s, "Forearm" + s, [Vector3(0, 0.066, 0.063), Vector3(0.3, 0.074, 0.068), Vector3(0.7, 0.06, 0.058), Vector3(1, 0.049, 0.048)], teal, "", true)
-	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.049, 0.048), Vector3(0.28, 0.052, 0.048), Vector3(0.75, 0.038, 0.036), Vector3(1, 0.031, 0.03)], skin, "UpperArm" + s)
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.033, 0.036), Vector3(0, 0.06, 0.06), Vector3(0.12, 0.068, 0.061), Vector3(0.38, 0.064, 0.058), Vector3(0.68, 0.054, 0.05), Vector3(0.84, 0.046, 0.044), Vector3(1, 0.042, 0.043)], teal, "", true)
+	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.042, 0.043), Vector3(0.16, 0.047, 0.046), Vector3(0.35, 0.049, 0.045), Vector3(0.65, 0.038, 0.036), Vector3(0.86, 0.03, 0.03), Vector3(1, 0.028, 0.028)], skin, "UpperArm" + s)
 	ellipsoid("Hand" + s, Vector3(0.047, 0.044, 0.056), Vector3(0, 0.0, -0.009), navy)
 	ellipsoid("Hand" + s, Vector3(0.019, 0.03, 0.028), Vector3(-side * 0.036, -0.015, -0.018), navy)
 	box("Hand" + s, Vector3(0.045, 0.012, 0.027), Vector3(0, 0.04, -0.008), panel)
-	limb("UpperLeg" + s, "LowerLeg" + s, [Vector3(0, 0.084, 0.085), Vector3(0.28, 0.087, 0.085), Vector3(0.68, 0.071, 0.07), Vector3(1, 0.055, 0.054)], navy, "", true)
-	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.055, 0.054), Vector3(0.3, 0.06, 0.057), Vector3(0.72, 0.042, 0.04), Vector3(1, 0.031, 0.03)], navy, "UpperLeg" + s)
+	limb("UpperLeg" + s, "LowerLeg" + s, [Vector3(0, 0.077, 0.08), Vector3(0.17, 0.086, 0.088), Vector3(0.4, 0.08, 0.081), Vector3(0.68, 0.069, 0.069), Vector3(0.88, 0.052, 0.054), Vector3(1, 0.047, 0.05)], navy, "", true)
+	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.047, 0.05), Vector3(0.12, 0.049, 0.052), Vector3(0.38, 0.056, 0.06), Vector3(0.7, 0.039, 0.042), Vector3(0.9, 0.029, 0.032), Vector3(1, 0.026, 0.029)], navy, "UpperLeg" + s)
 	local_loft("Foot" + s, [Vector3(0, -0.048, -0.035), Vector3(0, -0.033, -0.035)], [Vector2(0.064, 0.124), Vector2(0.065, 0.125)], dark)
 	local_loft("Foot" + s, [Vector3(0, -0.033, -0.035), Vector3(0, -0.005, -0.035), Vector3(0, 0.025, -0.015)], [Vector2(0.065, 0.125), Vector2(0.059, 0.105), Vector2(0.034, 0.055)], cream)
 	box("Foot" + s, Vector3(0.1, 0.014, 0.026), Vector3(0, 0.013, -0.065), panel)
@@ -173,11 +213,22 @@ func ring(center: Vector3, basis: Basis, rx: float, rz: float, bone_name: String
 
 
 func point(r: Dictionary, angle: float) -> Dictionary:
-	return {position = r.center + r.basis * Vector3(cos(angle) * r.rx, 0, sin(angle) * r.rz), bones = r.bones, weights = r.weights}
+	var result := {position = r.center + r.basis * Vector3(cos(angle) * r.rx, 0, sin(angle) * r.rz), bones = r.bones, weights = r.weights}
+	if r.has("delta_center"):
+		var axial: Vector3 = r.delta_center + cos(angle) * r.delta_x + sin(angle) * r.delta_z
+		var around: Vector3 = r.basis * Vector3(-sin(angle) * r.rx, 0, cos(angle) * r.rz)
+		result.normal = axial.cross(around).normalized()
+	return result
 
 
 func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null) -> void:
 	const SIDES := 12
+	for i in rings.size():
+		var lower := rings[maxi(0, i - 1)]
+		var upper := rings[mini(rings.size() - 1, i + 1)]
+		rings[i].delta_center = upper.center - lower.center
+		rings[i].delta_x = upper.basis.x * upper.rx - lower.basis.x * lower.rx
+		rings[i].delta_z = upper.basis.z * upper.rz - lower.basis.z * lower.rz
 	for i in rings.size() - 1:
 		for j in SIDES:
 			var use_mat := side_mat if side_mat != null and j in [0, 5, 6, 11] else mat
@@ -190,9 +241,12 @@ func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null) ->
 	for end in [0, rings.size() - 1]:
 		var center := point(rings[end], 0)
 		center.position = rings[end].center
+		center.erase("normal")
 		for j in SIDES:
 			var a := point(rings[end], TAU * j / SIDES)
 			var b := point(rings[end], TAU * (j + 1) / SIDES)
+			a.erase("normal")
+			b.erase("normal")
 			triangle(center, a, b, mat) if end == 0 else triangle(center, b, a, mat)
 
 
@@ -219,6 +273,8 @@ func surface_point(r: Dictionary, angle: float) -> Dictionary:
 	var b := point(r, (lower + 1.0) * TAU / 12.0)
 	var position: Vector3 = a.position.lerp(b.position, section - lower)
 	a.position = r.center + (position - r.center) * 1.012
+	if a.has("normal") and b.has("normal"):
+		a.normal = (a.normal as Vector3).lerp(b.normal, section - lower).normalized()
 	return a
 
 
@@ -233,7 +289,12 @@ func triangle(a: Dictionary, b: Dictionary, c: Dictionary, mat: Material) -> voi
 		tool.set_material(mat)
 		surfaces[mat] = tool
 	for vertex: Dictionary in [a, c, b]: # Godot использует обход лицевых треугольников по часовой стрелке.
-		tool.set_normal(normal)
+		var vertex_normal: Vector3 = vertex.get("normal", normal)
+		# На резком переходе гладкая нормаль не должна уходить внутрь соседней грани.
+		var facing := vertex_normal.dot(normal)
+		if facing < 0.15:
+			vertex_normal = (vertex_normal + normal * (0.15 - facing)).normalized()
+		tool.set_normal(vertex_normal)
 		tool.set_bones(vertex.bones)
 		tool.set_weights(vertex.weights)
 		tool.add_vertex(vertex.position)

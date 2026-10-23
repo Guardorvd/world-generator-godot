@@ -7,6 +7,25 @@ const DT := 1.0 / 60.0
 var body_mesh: MeshInstance3D
 var skin_samples: Array[Dictionary] = []
 
+class PreviewWorld extends WorldData:
+	func accessible(_x: float, _z: float, _margin := 0.0) -> bool:
+		return true
+	func tile_info(_x: float, _z: float) -> Dictionary:
+		return {biome = Biomes.GRASS, path = 0}
+
+class PreviewGround extends Heightfield:
+	func _init(data: WorldData) -> void:
+		super()
+		world = data
+	func ground_at(_x: float, _z: float, _raw := false) -> float:
+		return 0.0
+	func surface_at(_x: float, _z: float, _feet := -INF) -> float:
+		return 0.0
+	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
+		return 0.0
+	func known(_x: float, _z: float) -> bool:
+		return true
+
 func _init() -> void:
 	run.call_deferred()
 
@@ -33,7 +52,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 3 and body_mesh != null, "Third model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 4 and body_mesh != null, "Fourth model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -66,10 +85,10 @@ func _check_model() -> void:
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
 	check(triangles < 5000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 5000 triangles and 8 material surfaces")
-	print("Cyclist v3 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	print("Cyclist v4 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
-func contacts() -> void:
+func check_skin_pose() -> void:
 	# Проверяем и геометрию после skinning, а не только положение костей.
 	if body_mesh != null:
 		var palette: Array[Transform3D] = []
@@ -82,6 +101,10 @@ func contacts() -> void:
 				posed += (palette[sample.bones[j]] * sample.position) * sample.weights[j]
 			valid = valid and posed.is_finite() and posed.distance_to(bone("Hips")) < 2.0
 		check(valid, "Deformed mesh remains finite and within the rider envelope")
+
+
+func contacts() -> void:
+	check_skin_pose()
 	for side in ["L", "R"]:
 		var pedal: Node3D = bike.pedal_l if side == "L" else bike.pedal_r
 		check(bone("Foot" + side).distance_to(bike.to_local(pedal.global_position) + Vector3(0, 0.055, 0.025)) < 0.001, "Foot contact")
@@ -290,6 +313,7 @@ func run() -> void:
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
+	await check_ragdoll_skin()
 	var invalid: CyclistRig = load("res://scenes/cyclist.tscn").instantiate()
 	root.add_child(invalid)
 	invalid.skeleton.set_bone_name(invalid.skeleton.find_bone("HandL"), "MissingHand")
@@ -303,6 +327,27 @@ func run() -> void:
 		await capture()
 	bike.free()
 	quit(1 if fails else 0)
+
+
+## Короткое физическое падение в той же сцене: новая оболочка должна следовать костям после отделения от рамы.
+func check_ragdoll_skin() -> void:
+	reset()
+	var world := PreviewWorld.new()
+	var heights := PreviewGround.new(world)
+	var crash := BikeCrash.new()
+	root.add_child(crash)
+	crash.start(bike, state, Vector3(0, -5, -6), heights)
+	crash._begin_ragdoll()
+	for i in 12:
+		await physics_frame
+		crash.tick(DT, state, world, heights)
+		check_skin_pose()
+	check(bike.rider.get_parent() == crash and body_mesh.get_node(body_mesh.skeleton) == bike.rider.skeleton, "Native skin remains bound while ragdoll is detached")
+	check(crash._bones.size() == BikeCrash.BODIES.size(), "Ragdoll still creates all physical bones")
+	crash.abort()
+	check(bike.rider.get_parent() == bike and bike.rider.procedural_pose, "Skin returns to the animated rider after abort")
+	crash.free()
+	reset()
 
 func capture() -> void:
 	var camera := Camera3D.new()
@@ -323,8 +368,9 @@ func capture() -> void:
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
 	for mode in ["pedal", "rough"]:
-		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else Vector3(-2.8, 1.9, 2.8)
-		camera.look_at(Vector3(0, 0.9, 0))
+		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else Vector3(2.4, 1.8, -0.4)
+		camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.23, -0.04))
+		camera.size = 2.4 if mode == "pedal" else 1.35
 		reset()
 		state.crank = 0.4
 		state.speed = 12
@@ -340,4 +386,4 @@ func capture() -> void:
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_108_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_108plus_" + mode + ".png")
