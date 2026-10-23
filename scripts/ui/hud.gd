@@ -7,6 +7,8 @@ extends Control
 ## С 2.8 на большой карте можно выбрать цель путешествия (ЛКМ по поселению или вершине) — она видна
 ## только меткой на компасе вверху и на картах — и переместиться в любое из них (ПКМ; до 3.0.2 — только где уже побывали).
 ## С 2.9 к местам добавились крупные озёра с названиями (WorldData.lakes): открываются на берегу.
+## С 12.5+ у каждого сведения одно место: курс и расстояния до цели и задания — на компасе, что делать — в
+## счётчике задания, местность под ногами — в панели сведений. Перемещение с большой карты — с подтверждением.
 
 signal travel_requested(place: Dictionary)
 signal goal_changed(place: Dictionary)
@@ -45,6 +47,7 @@ var _banner_title: Label
 var _banner_sub: Label
 var _banner_tween: Tween
 var _flash_tween: Tween
+var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
@@ -151,6 +154,8 @@ func clear_world() -> void:
 
 
 func set_map_visible(v: bool) -> void:
+	if not v:
+		_close_travel()
 	big_map.visible = v
 	# открытая карта ловит мышь: щелчки по ней выбирают цель и место перемещения
 	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
@@ -161,6 +166,35 @@ func set_map_visible(v: bool) -> void:
 
 ## Открытые места мира: поселения, вершины и озёра из индекса WorldData (с 8.9 extra).
 ## {key = id — устойчивый адрес и ключ в visited, name, x, y — клетки, kind, region, src — запись места}
+## Быстрое перемещение — только после подтверждения: случайный ПКМ по карте не переносит игрока.
+## Фокус на «Остаться», Esc закрывает вопрос, а не карту
+func ask_travel(place: Dictionary) -> void:
+	_close_travel()
+	var dialog := ConfirmationDialog.new()
+	_travel_dialog = dialog
+	dialog.title = "Переместиться?"
+	dialog.dialog_text = "В «%s», %s отсюда. Велосипед будет рядом." % [place.name,
+		_fmt_dist(Grid.hypot(place.x * TILE - px, place.y * TILE - pz))]
+	dialog.dialog_autowrap = true
+	dialog.ok_button_text = "Переместиться"
+	dialog.cancel_button_text = "Остаться"
+	dialog.get_ok_button().theme_type_variation = &"PrimaryButton"
+	add_child(dialog)
+	dialog.confirmed.connect(func() -> void:
+		_close_travel()
+		travel_requested.emit(place))
+	dialog.canceled.connect(_close_travel)
+	dialog.popup_centered(Vector2i(440, 0))
+	dialog.get_cancel_button().grab_focus()
+
+
+func _close_travel() -> void:
+	if _travel_dialog != null:
+		_travel_dialog.hide()   # скрыть сразу: до удаления окно ещё держит модальность
+		_travel_dialog.queue_free()
+		_travel_dialog = null
+
+
 func places() -> Array:
 	if world == null:
 		return []
@@ -369,9 +403,7 @@ func update_tracker() -> void:
 		_tracker_icon.texture = UiIcons.quest(q.kind)
 		_tracker_icon.modulate = quest_color()
 		var s := quests.step()
-		line = quests.step_text(s)
-		if not is_nan(px):
-			line += " · " + _fmt_dist(Grid.hypot(s.place.x * TILE - px, s.place.y * TILE - pz))
+		line = quests.step_text(s)  # расстояние до места шага — на компасе у метки задания
 		# шаги точками: ● пройден или текущий, ○ впереди
 		var pips := ""
 		for i in q.steps.size():
@@ -512,8 +544,9 @@ func set_player(x: float, z: float, y: float) -> void:
 		big_map.queue_redraw()
 
 
-## Строки о местности под ногами: биом, высота, температура, влажность, курс, ближайшее поселение
-func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
+## Строки о местности под ногами: биом и дорога, высота и температура; без цели — ближайшее поселение.
+## Курс, цель и задание сюда не пишутся: они на компасе (12.5+)
+func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 	var w := world
 	if w == null:
 		return
@@ -540,13 +573,9 @@ func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
 		if d < nd:
 			nd = d
 			nearest = s
-	var heading: String = DIRS[posmod(roundi(look_yaw / (PI / 4.0)), 8)]
-	var text := "%s\nВысота: %d м · %s%d°C\nВлажность: %d%% · Курс: %s" % [
-		where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c, roundi(ti.moist * 100.0), heading]
-	if not goal.is_empty():
-		text += "\nЦель «%s»: %s" % [goal.name, _fmt_dist(Grid.hypot(goal.x * TILE - p.x, goal.y * TILE - p.z))]
-	elif nearest != null:
-		text += "\nДо «%s»: %s" % [nearest.name, _fmt_dist(nd)]
+	var text := "%s\nВысота: %d м · %s%d°C" % [where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c]
+	if goal.is_empty() and nearest != null:
+		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, _fmt_dist(nd)]
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же
 	if info.text != text:
 		info.text = text
@@ -638,20 +667,17 @@ class Compass extends Control:
 			var at := Vector2(x - tw / 2.0, size.y - 8.0)
 			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.45 * a))
 			draw_string(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.8 * a))
-		# метка задания (11.9+) — квадрат цвета вида над линией, с расстоянием, если она в поле зрения
+		# метка задания (11.9+) — квадрат цвета вида над линией; за краем дуги прижата к краю и бледнее.
+		# Расстояние подписано под меткой (12.5+ только здесь, не в счётчике и не в панели сведений)
 		var q := hud.quest_place()
+		var qx := -INF
 		if not q.is_empty():
 			var qoff := wrapf(hud.heading_to(q.x * Hud.TILE, q.y * Hud.TILE) - hud.yaw, -PI, PI)
 			var qseen := absf(qoff) <= SPAN / 2.0
-			var qx := half - clampf(qoff / (SPAN / 2.0), -1.0, 1.0) * (half - 6.0)
-			var qc := hud.quest_color()
-			Hud.draw_quest_mark(self, Vector2(qx, size.y - 15.0), 4.5, qc if qseen else Color(qc, 0.5))
-			if qseen:
-				var dist := Hud._fmt_dist(Grid.hypot(q.x * Hud.TILE - hud.px, q.y * Hud.TILE - hud.pz))
-				var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-				var dat := Vector2(qx - dw / 2.0, size.y + 13.0)
-				draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.5))
-				draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, qc)
+			qx = half - clampf(qoff / (SPAN / 2.0), -1.0, 1.0) * (half - 6.0)
+			var qc := hud.quest_color() if qseen else Color(hud.quest_color(), 0.5)
+			Hud.draw_quest_mark(self, Vector2(qx, size.y - 15.0), 4.5, qc)
+			_distance(font, qx, q, qc)
 		if hud.goal.is_empty():
 			return
 		var g := hud.goal
@@ -661,12 +687,24 @@ class Compass extends Control:
 		var c := Hud.GOLD if seen else Color(Hud.GOLD, 0.45)
 		var y := size.y - 1.0
 		draw_colored_polygon(PackedVector2Array([Vector2(x, y - 7), Vector2(x + 4, y - 3), Vector2(x, y + 1), Vector2(x - 4, y - 3)]), c)
+		# у задания и цели в одной стороне подпись одна (задания): иначе они наползают друг на друга
+		if absf(x - qx) > 40.0:
+			_distance(font, x, g, c)
+
+	## Расстояние до места под его меткой
+	func _distance(font: Font, x: float, place: Dictionary, color: Color) -> void:
+		var dist := Hud._fmt_dist(Grid.hypot(place.x * Hud.TILE - hud.px, place.y * Hud.TILE - hud.pz))
+		var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
+		var dat := Vector2(clampf(x - dw / 2.0, 0.0, size.x - dw), size.y + 13.0)
+		draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.5))
+		draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
 
 
 ## Большая карта (M): посещённые поселения и вершины отмечены жёлтым. С 2.8 карта ловит мышь:
-## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по любому месту — перемещение туда (с 3.0.2 и туда, где ещё не были)
+## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по любому месту — перемещение туда (с 3.0.2 и туда, где ещё не были).
+## С 12.5+ метку легче поймать (PICK 24 px), а перемещение спрашивает подтверждение (Hud.ask_travel)
 class BigMap extends Control:
-	const PICK := 12.0  # на сколько пикселей можно промахнуться по метке места
+	const PICK := 24.0  # на сколько пикселей можно промахнуться по метке места
 	var hud: Hud
 	var hover := {}     # место под курсором или пусто
 
@@ -732,7 +770,7 @@ class BigMap extends Control:
 					var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
 					hud.set_goal({} if same else {key = "marker", kind = "marker", name = "Метка", x = cell.x, y = cell.y})
 			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
-				hud.travel_requested.emit(pl)
+				hud.ask_travel(pl)
 			accept_event()
 
 	func _draw() -> void:
@@ -810,7 +848,7 @@ class BigMap extends Control:
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
 			tip += "ПКМ — переместиться сюда" if hud.in_open_land(hover) else "земли откроются по пути"
-			draw_arc(o + Vector2(hover.x, hover.y) * k, 7.0, 0.0, TAU, 20, Color.WHITE, 1.5)
+			draw_arc(o + Vector2(hover.x, hover.y) * k, 10.0, 0.0, TAU, 24, Color.WHITE, 2.0)
 		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
 
 	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»

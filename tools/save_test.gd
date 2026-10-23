@@ -75,7 +75,7 @@ func run() -> void:
 	main._show("menu")
 	await process_frame
 	await process_frame
-	check(main.get_node("%Start").text == "Продолжить" and not main._load_manual.disabled, "menu reflects saved progress")
+	check(main.get_node("%Start").text.begins_with("Продолжить") and not main._load_manual.disabled, "menu reflects saved progress")
 	if DisplayServer.get_name() != "headless":
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png("res://.godot/save_test_menu.png")

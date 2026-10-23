@@ -146,20 +146,24 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="UI/Root/Menu"]
-custom_minimum_size = Vector2(860, 0)
+custom_minimum_size = Vector2(920, 620)
 layout_mode = 2
 
 [node name="Box" type="VBoxContainer" parent="UI/Root/Menu/Panel"]
 layout_mode = 2
-theme_override_constants/separation = 12
+theme_override_constants/separation = 16
 
-[node name="Title" type="Label" parent="UI/Root/Menu/Panel/Box"]
+[node name="Header" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box"]
+layout_mode = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="UI/Root/Menu/Panel/Box/Header"]
 layout_mode = 2
 theme_type_variation = &"TitleLabel"
 text = "Генератор миров"
 horizontal_alignment = 1
 
-[node name="Subtitle" type="Label" parent="UI/Root/Menu/Panel/Box"]
+[node name="Subtitle" type="Label" parent="UI/Root/Menu/Panel/Box/Header"]
 layout_mode = 2
 theme_type_variation = &"SubtitleLabel"
 text = "Исследуйте мир, открывайте места и выполняйте задания"
@@ -168,58 +172,64 @@ autowrap_mode = 3
 
 [node name="Columns" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
 layout_mode = 2
-theme_override_constants/separation = 20
+size_flags_vertical = 3
+theme_override_constants/separation = 24
 
 [node name="Worlds" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
 layout_mode = 2
 size_flags_horizontal = 3
-theme_override_constants/separation = 8
+size_flags_stretch_ratio = 1.2
 
 [node name="WorldsLabel" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
 layout_mode = 2
-text = "Миры"
+theme_type_variation = &"SectionLabel"
+text = "Ваши миры"
 
 [node name="SeedTabs" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
 layout_mode = 2
-theme_override_constants/separation = 6
 
 [node name="Saved" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
-theme_type_variation = &"TabButton"
 unique_name_in_owner = true
-layout_mode = 2
-toggle_mode = true
-text = "Сохранения"
-theme_override_font_sizes/font_size = 14
-
-[node name="Recent" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
-theme_type_variation = &"TabButton"
-unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
 size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+toggle_mode = true
+text = "Сохранения"
+
+[node name="Recent" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
 theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "Недавние"
 
 [node name="Favorites" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
-theme_type_variation = &"TabButton"
 unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
 size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
 theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "Избранное"
 
 [node name="Recommended" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
-theme_type_variation = &"TabButton"
 unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
 size_flags_horizontal = 3
+theme_type_variation = &"TabButton"
 theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "От автора"
 
 [node name="SeedScroll" type="ScrollContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
-custom_minimum_size = Vector2(0, 330)
+custom_minimum_size = Vector2(0, 240)
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
@@ -230,33 +240,21 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="CacheRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
-layout_mode = 2
-
-[node name="CacheInfo" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/CacheRow"]
-unique_name_in_owner = true
+[node name="Side" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
+custom_minimum_size = Vector2(360, 0)
 layout_mode = 2
 size_flags_horizontal = 3
-tooltip_text = "Недавние и избранные миры хранятся готовыми и загружаются быстрее. После обновления игры то, что не изменилось, берётся из сохранённого"
-mouse_filter = 0
-theme_type_variation = &"CaptionLabel"
-text = "Сохранённых миров нет"
 
-[node name="ClearCache" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/CacheRow"]
+[node name="ChoiceLabel" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
 unique_name_in_owner = true
 layout_mode = 2
-tooltip_text = "Удалить кэш. Сохранения прогресса и задания останутся. Миры создадутся заново при запуске."
-theme_override_font_sizes/font_size = 13
-text = "Очистить кэш"
-
-[node name="Side" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
-custom_minimum_size = Vector2(320, 0)
-layout_mode = 2
-theme_override_constants/separation = 8
+theme_type_variation = &"SectionLabel"
+text = "Выбранный мир"
 
 [node name="PreviewFrame" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-custom_minimum_size = Vector2(320, 160)
+custom_minimum_size = Vector2(0, 140)
 layout_mode = 2
+size_flags_vertical = 3
 theme_type_variation = &"InsetPanel"
 
 [node name="Preview" type="TextureRect" parent="UI/Root/Menu/Panel/Box/Columns/Side/PreviewFrame"]
@@ -274,14 +272,68 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 3
 
-[node name="SeedLabel" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-layout_mode = 2
-text = "Зерно мира"
-
-[node name="SeedRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="ChoiceRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
 layout_mode = 2
 
-[node name="SeedEdit" type="LineEdit" parent="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow"]
+[node name="ChoiceName" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(200, 0)
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_font_sizes/font_size = 22
+text = "Мир"
+text_overrun_behavior = 3
+
+[node name="Star" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(40, 40)
+layout_mode = 2
+theme_type_variation = &"IconButton"
+focus_mode = 0
+icon = ExtResource("5_star")
+icon_alignment = 1
+
+[node name="WorldStatus" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(320, 0)
+layout_mode = 2
+theme_type_variation = &"AccentLabel"
+text = "Новый мир"
+autowrap_mode = 3
+
+[node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_font_sizes/font_size = 22
+text = "Начать путешествие"
+icon = ExtResource("6_play")
+
+[node name="LoadManual" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Загрузить ручное сохранение"
+icon = ExtResource("8_load")
+
+[node name="NewWorld" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+layout_mode = 2
+theme_type_variation = &"SectionPanel"
+
+[node name="NewBox" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld"]
+layout_mode = 2
+
+[node name="NewTitle" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "Новый мир по зерну"
+
+[node name="SeedRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+layout_mode = 2
+
+[node name="SeedEdit" type="LineEdit" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -289,53 +341,22 @@ placeholder_text = "любое слово или число"
 max_length = 32
 clear_button_enabled = true
 
-[node name="Dice" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow"]
-custom_minimum_size = Vector2(48, 0)
+[node name="Dice" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow"]
+custom_minimum_size = Vector2(44, 0)
 layout_mode = 2
 tooltip_text = "Случайное зерно"
 icon = ExtResource("4_dice")
 icon_alignment = 1
 
-[node name="Star" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(48, 0)
-layout_mode = 2
-icon = ExtResource("5_star")
-icon_alignment = 1
-
-[node name="SeedHelp" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-custom_minimum_size = Vector2(320, 0)
+[node name="SeedHelp" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 theme_type_variation = &"CaptionLabel"
-text = "Зерно задаёт мир. Ваш прогресс сохраняется отдельно."
+text = "Одно зерно — один и тот же мир. Прогресс хранится отдельно."
 autowrap_mode = 3
-
-[node name="WorldStatus" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(320, 0)
-layout_mode = 2
-theme_type_variation = &"AccentLabel"
-text = "Другой случайный мир"
-autowrap_mode = 3
-
-[node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 48)
-layout_mode = 2
-size_flags_vertical = 10
-theme_type_variation = &"PrimaryButton"
-text = "Начать игру"
-
-[node name="LoadManual" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
-layout_mode = 2
-text = "Загрузить ручное сохранение"
-icon = ExtResource("8_load")
 
 [node name="Bottom" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
 layout_mode = 2
-theme_override_constants/separation = 8
 
 [node name="Settings" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
 custom_minimum_size = Vector2(160, 40)
@@ -348,6 +369,15 @@ custom_minimum_size = Vector2(120, 40)
 layout_mode = 2
 text = "Выход"
 icon = ExtResource("11_exit")
+
+[node name="Storage" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+tooltip_text = "Сколько места занимают готовые миры; очистка не трогает сохранения"
+text = "Хранилище миров"
 
 [node name="Version" type="Label" parent="UI/Root/Menu/Panel/Box/Bottom"]
 unique_name_in_owner = true
@@ -547,12 +577,12 @@ grow_horizontal = 2
 grow_vertical = 2
 
 [node name="Panel" type="PanelContainer" parent="UI/Root/Settings"]
-custom_minimum_size = Vector2(420, 0)
+custom_minimum_size = Vector2(640, 0)
 layout_mode = 2
 
 [node name="Box" type="VBoxContainer" parent="UI/Root/Settings/Panel"]
 layout_mode = 2
-theme_override_constants/separation = 10
+theme_override_constants/separation = 16
 
 [node name="Title" type="Label" parent="UI/Root/Settings/Panel/Box"]
 layout_mode = 2
@@ -560,21 +590,178 @@ theme_type_variation = &"TitleLabel"
 text = "Настройки"
 horizontal_alignment = 1
 
-[node name="MouseRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+[node name="SettingsTabs" type="TabContainer" parent="UI/Root/Settings/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(580, 420)
+layout_mode = 2
+current_tab = 0
+
+[node name="Экран" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]
+layout_mode = 2
+horizontal_scroll_mode = 0
+follow_focus = true
+metadata/_tab_index = 0
+
+[node name="Page" type="VBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ModeRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page"]
 layout_mode = 2
 
-[node name="MouseLabel" type="Label" parent="UI/Root/Settings/Panel/Box/MouseRow"]
+[node name="ModeLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page/ModeRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Режим экрана"
+
+[node name="ModeOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page/ModeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+item_count = 2
+popup/item_0/text = "В окне"
+popup/item_0/id = 0
+popup/item_1/text = "Полный экран"
+popup/item_1/id = 1
+
+[node name="ResolutionRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page"]
+layout_mode = 2
+
+[node name="ResolutionLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page/ResolutionRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Разрешение"
+
+[node name="ResolutionOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page/ResolutionRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+
+[node name="ScreenHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page"]
+custom_minimum_size = Vector2(520, 0)
+layout_mode = 2
+theme_type_variation = &"HintLabel"
+text = "В окне разрешение задаёт размер окна. На полном экране — предел детализации 3D с сохранением пропорций. Интерфейс остаётся чётким.
+
+Новый режим нужно подтвердить за 15 секунд, иначе вернётся прежний."
+autowrap_mode = 3
+
+[node name="ApplyDisplay" type="Button" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Экран/Page"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 44)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+text = "Применить режим экрана"
+
+[node name="Графика" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+follow_focus = true
+metadata/_tab_index = 1
+
+[node name="Page" type="VBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="ScaleRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="ScaleLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ScaleRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Масштаб 3D"
+
+[node name="ScaleOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ScaleRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+item_count = 4
+popup/item_0/text = "50% — быстрее"
+popup/item_0/id = 0
+popup/item_1/text = "67%"
+popup/item_1/id = 1
+popup/item_2/text = "75%"
+popup/item_2/id = 2
+popup/item_3/text = "100% — чётче"
+popup/item_3/id = 3
+
+[node name="AARow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="AALabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/AARow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Сглаживание"
+
+[node name="AAOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/AARow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+item_count = 3
+popup/item_0/text = "Выключено"
+popup/item_0/id = 0
+popup/item_1/text = "MSAA 2×"
+popup/item_1/id = 1
+popup/item_2/text = "MSAA 4×"
+popup/item_2/id = 2
+
+[node name="DrawRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="DrawLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/DrawRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Дальность прорисовки"
+
+[node name="DrawOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/DrawRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+
+[node name="VSync" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Вертикальная синхронизация"
+
+[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+text = "Тени и затенение"
+
+[node name="QualityHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+custom_minimum_size = Vector2(520, 0)
+layout_mode = 2
+theme_type_variation = &"HintLabel"
+text = "Применяется сразу. Для слабой видеокарты: масштаб 3D 67–75%, сглаживание выключено или 2×, минимальная дальность, тени выключены."
+autowrap_mode = 3
+
+[node name="Управление" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]
+visible = false
+layout_mode = 2
+horizontal_scroll_mode = 0
+follow_focus = true
+metadata/_tab_index = 2
+
+[node name="Page" type="VBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="MouseRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
+layout_mode = 2
+
+[node name="MouseLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/MouseRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Чувствительность мыши"
 
-[node name="MouseValue" type="Label" parent="UI/Root/Settings/Panel/Box/MouseRow"]
+[node name="MouseValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/MouseRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_type_variation = &"SubtitleLabel"
 text = "1"
 
-[node name="MouseSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+[node name="MouseSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
@@ -583,139 +770,146 @@ max_value = 3.0
 step = 0.05
 value = 0.2
 
-[node name="InvertY" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+[node name="InvertY" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Инвертировать мышь по вертикали"
 
-[node name="FovRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+[node name="FovRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 layout_mode = 2
 
-[node name="FovLabel" type="Label" parent="UI/Root/Settings/Panel/Box/FovRow"]
+[node name="FovLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/FovRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Угол обзора"
 
-[node name="FovValue" type="Label" parent="UI/Root/Settings/Panel/Box/FovRow"]
+[node name="FovValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/FovRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_type_variation = &"SubtitleLabel"
 text = "1"
 
-[node name="FovSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+[node name="FovSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
-min_value = 55
-max_value = 100
-step = 1
-value = 55
+min_value = 55.0
+max_value = 100.0
+step = 1.0
+value = 55.0
 
-[node name="HeadBob" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+[node name="HeadBob" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Покачивание и удары камеры"
 
-[node name="Fullscreen" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
-unique_name_in_owner = true
+[node name="ControlsHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
+custom_minimum_size = Vector2(520, 0)
 layout_mode = 2
-text = "Полный экран"
+theme_type_variation = &"HintLabel"
+text = "Применяется сразу."
+autowrap_mode = 3
 
-[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
-unique_name_in_owner = true
+[node name="Звук" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]
+visible = false
 layout_mode = 2
-text = "Тени и затенение"
+horizontal_scroll_mode = 0
+follow_focus = true
+metadata/_tab_index = 3
 
-[node name="DrawRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
-layout_mode = 2
-
-[node name="DrawLabel" type="Label" parent="UI/Root/Settings/Panel/Box/DrawRow"]
+[node name="Page" type="VBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук"]
 layout_mode = 2
 size_flags_horizontal = 3
-text = "Дальность прорисовки"
 
-[node name="DrawOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/DrawRow"]
-unique_name_in_owner = true
+[node name="VolumeRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 layout_mode = 2
 
-[node name="VolumeRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
-layout_mode = 2
-
-[node name="VolumeLabel" type="Label" parent="UI/Root/Settings/Panel/Box/VolumeRow"]
+[node name="VolumeLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/VolumeRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Громкость"
 
-[node name="VolumeValue" type="Label" parent="UI/Root/Settings/Panel/Box/VolumeRow"]
+[node name="VolumeValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/VolumeRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_type_variation = &"SubtitleLabel"
 text = "1"
 
-[node name="VolumeSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+[node name="VolumeSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
 max_value = 1.0
 step = 0.05
 
-[node name="DayRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+[node name="TimeTitle" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
+layout_mode = 2
+theme_type_variation = &"SectionLabel"
+text = "Время в мире"
+
+[node name="DayRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 layout_mode = 2
 
-[node name="DayLabel" type="Label" parent="UI/Root/Settings/Panel/Box/DayRow"]
+[node name="DayLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/DayRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Длина суток"
 
-[node name="DayValue" type="Label" parent="UI/Root/Settings/Panel/Box/DayRow"]
+[node name="DayValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/DayRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_type_variation = &"SubtitleLabel"
 text = "1"
 
-[node name="DaySlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+[node name="DaySlider" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
-max_value = 120
-step = 1
+max_value = 120.0
+step = 1.0
 
-[node name="StartHourRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+[node name="StartHourRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 layout_mode = 2
 
-[node name="StartHourLabel" type="Label" parent="UI/Root/Settings/Panel/Box/StartHourRow"]
+[node name="StartHourLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/StartHourRow"]
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Час начала"
 
-[node name="StartHourValue" type="Label" parent="UI/Root/Settings/Panel/Box/StartHourRow"]
+[node name="StartHourValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/StartHourRow"]
 unique_name_in_owner = true
 layout_mode = 2
-theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
+theme_type_variation = &"SubtitleLabel"
 text = "1"
 
-[node name="StartHourSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box"]
+[node name="StartHourSlider" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 24)
 layout_mode = 2
-max_value = 23
-step = 1
+max_value = 23.0
+step = 1.0
 
-[node name="RandomHour" type="CheckBox" parent="UI/Root/Settings/Panel/Box"]
+[node name="RandomHour" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Случайный час начала"
 
-[node name="Reset" type="Button" parent="UI/Root/Settings/Panel/Box"]
+[node name="Bottom" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box"]
+layout_mode = 2
+
+[node name="Reset" type="Button" parent="UI/Root/Settings/Panel/Box/Bottom"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Вернуть исходные настройки. Спросит подтверждение"
 text = "Сбросить настройки"
 
-[node name="Done" type="Button" parent="UI/Root/Settings/Panel/Box"]
+[node name="Done" type="Button" parent="UI/Root/Settings/Panel/Box/Bottom"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
+size_flags_horizontal = 3
 theme_type_variation = &"PrimaryButton"
 text = "Готово"
 
@@ -723,24 +917,22 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Leave/ToMenu" to="." method="_confirm_to_menu"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Leave/Exit" to="." method="_confirm_exit"]
 [connection signal="pressed" from="UI/Root/Pause/Panel/Box/Settings" to="." method="_open_settings"]
-[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/MouseSlider" to="." method="_on_mouse_changed"]
-[connection signal="toggled" from="UI/Root/Settings/Panel/Box/InvertY" to="." method="_on_invert_toggled"]
-[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/FovSlider" to="." method="_on_fov_changed"]
-[connection signal="toggled" from="UI/Root/Settings/Panel/Box/HeadBob" to="." method="_on_head_bob_toggled"]
-[connection signal="toggled" from="UI/Root/Settings/Panel/Box/Fullscreen" to="." method="_on_fullscreen_toggled"]
-[connection signal="toggled" from="UI/Root/Settings/Panel/Box/Shadows" to="." method="_on_shadows_toggled"]
-[connection signal="item_selected" from="UI/Root/Settings/Panel/Box/DrawRow/DrawOption" to="." method="_on_draw_selected"]
-[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/VolumeSlider" to="." method="_on_volume_changed"]
-[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Reset" to="." method="_on_reset_settings"]
-[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Done" to="." method="_close_settings"]
-[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/DaySlider" to="." method="_on_day_changed"]
-[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/StartHourSlider" to="." method="_on_start_hour_changed"]
-[connection signal="toggled" from="UI/Root/Settings/Panel/Box/RandomHour" to="." method="_on_random_hour_toggled"]
-[connection signal="text_submitted" from="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
-[connection signal="text_changed" from="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow/Dice" to="." method="_on_dice_pressed"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/SeedRow/Star" to="." method="_on_star_selected"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/MouseSlider" to="." method="_on_mouse_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/InvertY" to="." method="_on_invert_toggled"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/FovSlider" to="." method="_on_fov_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/HeadBob" to="." method="_on_head_bob_toggled"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/VolumeSlider" to="." method="_on_volume_changed"]
+[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Reset" to="." method="_on_reset_settings"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Storage" to="." method="_open_storage"]
+[connection signal="focus_entered" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_choose_typed"]
+[connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Done" to="." method="_close_settings"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/DaySlider" to="." method="_on_day_changed"]
+[connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/StartHourSlider" to="." method="_on_start_hour_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/RandomHour" to="." method="_on_random_hour_toggled"]
+[connection signal="text_submitted" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
+[connection signal="text_changed" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/Dice" to="." method="_on_dice_pressed"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/Start" to="." method="_on_start"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Worlds/CacheRow/ClearCache" to="." method="_on_clear_cache"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Settings" to="." method="_open_settings"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Exit" to="." method="_exit_game"]

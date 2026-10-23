@@ -63,6 +63,11 @@ func run() -> void:
 	main._sync_settings_controls()
 	main.seed_edit.text = "Север-1234"
 	main._show_seed_tab("saved")
+	# 12.5+: мир из списка и зерно в поле — разные источники
+	main._pick_seed("Туман-4821")
+	check(main.seed_edit.text == "Север-1234" and main._chosen_seed() == "Туман-4821", "picking a world keeps the typed seed")
+	main._choose_typed()
+	check(main._chosen_seed() == "Север-1234", "typing switches back to the seed field")
 	var camera := Camera3D.new()
 	main.add_child(camera)
 	camera.current = true
@@ -120,38 +125,76 @@ func run() -> void:
 		main.hud.big_map._gui_input(click)
 		check(main.hud.goal.get("kind") == "marker" and absf(main.hud.goal.x - 12.0) < 0.1, "map picking matches scaled UI %s" % size)
 		main.hud.set_goal({})
+		if size == Vector2i(1280, 720):
+			# 12.5+: перемещение с карты только после подтверждения
+			var travelled := [0]
+			main.hud.travel_requested.connect(func(_p: Dictionary) -> void: travelled[0] += 1)
+			main.hud.ask_travel({name = "Каменка", x = 20, y = 20})
+			await settle()
+			check(travelled[0] == 0 and main.hud._travel_dialog.visible and main.hud._travel_dialog.get_cancel_button().has_focus(), "fast travel asks first, focus on Stay")
+			if DisplayServer.get_name() != "headless":
+				root.get_texture().get_image().save_png(out.path_join("travel_1280x720.png"))
+			main.hud._travel_dialog.confirmed.emit()
+			check(travelled[0] == 1 and main.hud._travel_dialog == null, "confirmed travel goes once")
 		main.hud.set_map_visible(false)
 		main.hud.hide()
 	root.size = Vector2i(1024, 768)
 	main._show("settings")
 	await settle()
 	var original := GameSettings.display_state()
+	# 12.5+: графика применяется и сохраняется сразу, без таймера
 	options.scale.select(0)
+	options.apply_graphics()
+	check(not options.pending() and GameSettings.render_scale == 0.5 and is_equal_approx(root.scaling_3d_scale, 0.5), "graphics apply instantly without confirmation")
+	main._save_due = 0
+	main._flush_settings()
+	GameSettings.reset_defaults()
+	GameSettings.load_settings()
+	check(GameSettings.render_scale == 0.5, "graphics change saved")
+	options.sync()
+	options.scale.select(3)
+	options.apply_graphics()
+	# видеорежим — пробно, с подтверждением
+	var other := func() -> int:
+		for i in range(1, options._sizes.size()):
+			if options._sizes[i] != GameSettings.resolution:
+				return i
+		return 0
+	var pick: int = other.call()
+	var target: Vector2i = options._sizes[pick]
+	check(options.apply_button.disabled, "apply disabled while video mode unchanged")
+	options.resolution.select(pick)
+	options._update_apply()
+	check(not options.apply_button.disabled, "apply enabled for a new video mode")
 	options.preview()
-	check(options.pending() and GameSettings.display_state() == original and is_equal_approx(root.scaling_3d_scale, 0.5), "preview changes 3D without committing settings")
+	check(options.pending() and GameSettings.resolution == original.resolution, "video mode preview does not commit")
 	options._deadline = Time.get_ticks_msec() - 1
 	options.tick()
 	await settle()
-	check(not options.pending() and GameSettings.display_state() == original and root.scaling_3d_scale == 1.0, "timeout restores original")
-	options.scale.select(2)
+	check(not options.pending() and GameSettings.resolution == original.resolution, "timeout restores video mode")
+	options.resolution.select(options._sizes.find(target))
 	options.preview()
 	options.keep()
 	GameSettings.reset_defaults()
 	GameSettings.load_settings()
-	check(GameSettings.render_scale == 0.75, "confirmed settings survive reload")
+	check(GameSettings.resolution == target, "confirmed video mode survives reload")
 	options.sync()
-	options.scale.select(0)
+	options.resolution.select(other.call())
 	options.preview()
 	main._close_settings()
-	check(not options.pending() and GameSettings.render_scale == 0.75, "closing settings cancels unconfirmed preview")
+	check(not options.pending() and GameSettings.resolution == target, "closing settings cancels unconfirmed preview")
+	options.scale.select(0)
+	options.apply_graphics()
 	main._on_reset_settings()
-	check(GameSettings.render_scale == 0.75 and options.selected_state().render_scale == 1.0, "reset stages display defaults without unsafe switch")
-	options.sync()
-	main.get_node("%Shadows").set_pressed(true)
-	main.get_node("%DrawOption").select(0)
-	options.preview()
-	options.keep()
-	check(GameSettings.draw == 0, "graphics quality commits with display settings")
+	check(main._confirm != null and GameSettings.render_scale == 0.5, "reset asks for confirmation first")
+	if DisplayServer.get_name() != "headless":
+		main._show("settings")
+		await settle()
+		root.get_texture().get_image().save_png(out.path_join("reset_1024x768.png"))
+	main._close_confirm()
+	main._do_reset_settings()
+	check(GameSettings.resolution == target and options.selected_state().resolution == Config.BASE and GameSettings.render_scale == 1.0,
+		"reset: graphics at once, video mode only staged")
 	if DisplayServer.get_name() != "headless":
 		options.sync()
 		options.mode.select(1)
@@ -166,7 +209,8 @@ func run() -> void:
 	# Только отдельный файл теста: каталог на месте cfg имитирует ошибку записи.
 	DirAccess.remove_absolute(GameSettings.settings_path)
 	DirAccess.make_dir_absolute(GameSettings.settings_path)
-	options.scale.select(0)
+	options.sync()
+	options.resolution.select(other.call())
 	options.preview()
 	options.keep()
 	check(not options.pending() and GameSettings.display_state() == committed, "write failure restores confirmed display state")

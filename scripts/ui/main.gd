@@ -8,6 +8,9 @@ extends Node
 ## С 10.2 меню в две колонки: список миров с картами-миниатюрами и выбранный мир с картой и состоянием.
 ## С 12.5 оформление только из темы (вариации кнопок и надписей), пиктограммы — UiIcons. Пауза: продолжить,
 ## быстрое сохранение, настройки, компактное управление; уход в меню и выход — с подтверждением.
+## С 12.5+ в меню выбранный мир (из списка) и новый мир по зерну (поле ввода) — разные источники: щелчок по
+## строке не трогает поле, ввод в поле снимает выбор строки. Кэш — в «Хранилище миров», не на первом плане.
+## Настройки: вкладки в сцене, управление и звук применяются сразу, сброс — с подтверждением.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
@@ -42,6 +45,8 @@ var _saved_discoveries := 0
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
 var display_options: DisplayOptions
 var _confirm: ConfirmationDialog   # открытое подтверждение (выход, меню, загрузка)
+var _list_seed := ""      # мир, выбранный в списке; пусто — запускается зерно из поля ввода
+var _save_due := -1       # когда записать изменённые настройки (мс), -1 — нечего
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -78,6 +83,7 @@ func _ready() -> void:
 		b.pressed.connect(_show_seed_tab.bind(tab))
 	_show_seed_tab("saved" if not Saves.seeds().is_empty() else ("recent" if not GameSettings.recent_seeds.is_empty() else "recommended"))
 	%LoadPreview.texture = null
+	get_viewport().size_changed.connect(_fit_menu)
 	_show("menu")
 	bg_thread = Thread.new()
 	bg_thread.start(_menu_background_job.bind("menu-%d" % randi_range(0, 999999)))
@@ -90,6 +96,7 @@ func _show(screen: String) -> void:
 	# фокус на главной кнопке экрана: можно пользоваться клавиатурой (стрелки, Enter)
 	match screen:
 		"menu":
+			_fit_menu()
 			%Start.grab_focus()
 		"pause":
 			%Resume.grab_focus()
@@ -115,8 +122,20 @@ func _open_settings() -> void:
 func _close_settings() -> void:
 	if display_options != null:
 		display_options.revert()
+	_save_due = -1
 	GameSettings.save_settings()
 	_show(_settings_from)
+
+
+## Управление, звук и графика применяются сразу; на диск — чуть позже, чтобы не писать файл на каждый шаг ползунка
+func _settings_changed() -> void:
+	_save_due = Time.get_ticks_msec() + 400
+
+
+func _flush_settings() -> void:
+	if _save_due >= 0 and Time.get_ticks_msec() >= _save_due:
+		_save_due = -1
+		GameSettings.save_settings()
 
 
 ## Ставит ползунки и флажки в соответствие с GameSettings; без сигналов, чтобы не сохранять лишнее
@@ -125,12 +144,6 @@ func _sync_settings_controls() -> void:
 	%FovSlider.set_value_no_signal(GameSettings.fov)
 	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
 	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
-	%Fullscreen.set_pressed_no_signal(GameSettings.fullscreen)
-	%Shadows.set_pressed_no_signal(GameSettings.shadows)
-	if %DrawOption.item_count == 0:
-		for level: Dictionary in GameSettings.DRAW_LEVELS:
-			%DrawOption.add_item(level.title.capitalize())
-	%DrawOption.select(GameSettings.draw)
 	%VolumeSlider.set_value_no_signal(GameSettings.volume)
 	%DaySlider.set_value_no_signal(GameSettings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameSettings.start_hour)
@@ -140,19 +153,26 @@ func _sync_settings_controls() -> void:
 	_show_values()
 
 
+## Сброс — только после подтверждения
 func _on_reset_settings() -> void:
+	_ask("Сбросить настройки?", "Управление, звук, время и графика вернутся к исходным. Режим экрана будет только выбран: он включится после «Применить».",
+		"Сбросить", true, _do_reset_settings)
+
+
+func _do_reset_settings() -> void:
 	var display_state := GameSettings.display_state()
 	GameSettings.reset_defaults()
-	# Режим экрана меняется только через «Применить» и подтверждение.
+	# видеорежим меняется только через «Применить» и подтверждение; графика — сразу
 	var defaults := GameSettings.display_state()
-	GameSettings.set_display_state(display_state)
+	GameSettings.fullscreen = display_state.fullscreen
+	GameSettings.resolution = display_state.resolution
 	GameSettings.apply_volume()
 	GameSettings.save_settings()
+	_save_due = -1
 	_sync_settings_controls()
 	if display_options != null:
-		GameSettings.set_display_state(defaults)
-		display_options.sync()
-		GameSettings.set_display_state(display_state)
+		display_options._resize()
+		display_options.stage_mode(defaults)
 
 
 func _show_values() -> void:
@@ -165,22 +185,26 @@ func _show_values() -> void:
 
 func _on_mouse_changed(v: float) -> void:
 	GameSettings.mouse = v
+	_settings_changed()
 	_show_values()
 
 
 func _on_fov_changed(v: float) -> void:
 	GameSettings.fov = v
+	_settings_changed()
 	_show_values()
 
 
 func _on_volume_changed(v: float) -> void:
 	GameSettings.volume = v
 	GameSettings.apply_volume()
+	_settings_changed()
 	_show_values()
 
 
 func _on_day_changed(v: float) -> void:
 	GameSettings.day_minutes = v
+	_settings_changed()
 	_show_values()
 
 
@@ -188,38 +212,24 @@ func _on_start_hour_changed(v: float) -> void:
 	GameSettings.start_hour = v
 	GameSettings.start_hour_set = true
 	%RandomHour.set_pressed_no_signal(false)
+	_settings_changed()
 	_show_values()
 
 
 func _on_random_hour_toggled(on: bool) -> void:
 	GameSettings.start_hour_set = not on
+	_settings_changed()
 	_show_values()
 
 
 func _on_invert_toggled(on: bool) -> void:
 	GameSettings.invert_y = on
+	_settings_changed()
 
 
 func _on_head_bob_toggled(on: bool) -> void:
 	GameSettings.head_bob = on
-
-
-func _on_fullscreen_toggled(on: bool) -> void:
-	if display_options != null:
-		display_options.mode.select(1 if on else 0)
-	else:
-		GameSettings.fullscreen = on
-		GameSettings.apply_window()
-
-
-func _on_shadows_toggled(on: bool) -> void:
-	if display_options == null:
-		GameSettings.shadows = on
-
-
-func _on_draw_selected(index: int) -> void:
-	if display_options == null:
-		GameSettings.draw = index
+	_settings_changed()
 
 
 func _on_seed_submitted(_text: String) -> void:
@@ -228,7 +238,7 @@ func _on_seed_submitted(_text: String) -> void:
 
 func _on_dice_pressed() -> void:
 	seed_edit.text = random_seed()
-	_update_selection()
+	_choose_typed()
 
 
 # ---------- Список миров ----------
@@ -247,18 +257,14 @@ func _preview_tex(seed_text: String) -> Texture2D:
 	return _previews[seed_text]
 
 
-## Состояние мира в кэше: [коротко для строки, подробно для панели]
+## Как быстро мир откроется: [коротко для строки, подробно для панели]. Без слов о кэше: игроку важно,
+## ждать ли около минуты; подробности — в «Хранилище миров»
 func _world_status(seed_text: String) -> Array:
 	if not WorldCache.enabled:
 		return ["", ""]
-	var n := WorldCache.ready_layers(seed_text)
-	if n > WorldGenerator.LAYERS.size():
-		return ["готов", "Кэш готов: мир загрузится быстрее. Прогресс хранится отдельно."]
-	if n > 0:
-		return ["частично", "Кэш обновится частично. Сохранение прогресса хранится отдельно."]
-	if _preview_tex(seed_text) != null:
-		return ["обновится", "Игра обновилась: мир создастся заново, это около минуты."]
-	return ["новый", "Кэша нет: создание займёт около минуты. Сохранения прогресса сохраняются."]
+	if WorldCache.ready_layers(seed_text) > 0:
+		return ["быстрый запуск", "Мир уже создавался и откроется быстро."]
+	return ["", "Мир создастся при запуске, это около минуты."]
 
 
 func _show_seed_tab(tab: String) -> void:
@@ -291,7 +297,6 @@ func _show_seed_tab(tab: String) -> void:
 	for r: Dictionary in rows:
 		list.add_child(_seed_row(str(r.seed), str(r.get("note", ""))))
 	_update_selection()
-	_update_cache_info()
 
 
 ## Строка списка: миниатюра карты, зерно, подпись и состояние, звёздочка. Щелчок — выбрать мир, двойной — играть
@@ -351,7 +356,7 @@ func _seed_row(seed_text: String, note: String) -> Button:
 		var sub_label := Label.new()
 		sub_label.text = sub
 		sub_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		sub_label.theme_type_variation = &"SectionLabel" if status == "готов" else &"CaptionLabel"
+		sub_label.theme_type_variation = &"SectionLabel" if not status.is_empty() else &"CaptionLabel"
 		sub_label.add_theme_font_size_override("font_size", 12)
 		texts.add_child(sub_label)
 	box.add_child(texts)
@@ -379,27 +384,40 @@ func _star_tip(fav: bool, full: bool) -> String:
 	return "В избранное: мир останется в списке и кэше"
 
 
+## Щелчок по строке выбирает мир из списка; поле ввода зерна остаётся как было
 func _pick_seed(seed_text: String) -> void:
-	seed_edit.text = seed_text
+	_list_seed = seed_text
 	_update_selection()
 	%Start.grab_focus()
 
 
-func _on_seed_changed(_text: String) -> void:
+## Ввод в поле, кубик или фокус на поле: запускаться будет зерно из поля
+func _choose_typed() -> void:
+	_list_seed = ""
 	_update_selection()
 
 
-## Выбранный мир (зерно в поле): подсветка строки, карта, звёздочка и что будет при запуске
+func _on_seed_changed(_text: String) -> void:
+	_choose_typed()
+
+
+## Что запустит главная кнопка: мир из списка или зерно из поля (пустое — случайный мир)
+func _chosen_seed() -> String:
+	return _list_seed if not _list_seed.is_empty() else seed_edit.text.strip_edges()
+
+
+## Выбранный мир: подсветка строки, карта, звёздочка, прогресс и подпись главной кнопки
 func _update_selection() -> void:
-	var seed_text := seed_edit.text.strip_edges()
+	var seed_text := _chosen_seed()
 	for row in %SeedList.get_children():
 		if row is Button:
-			(row as Button).set_pressed_no_signal(row.get_meta("seed", "") == seed_text)
+			(row as Button).set_pressed_no_signal(not _list_seed.is_empty() and row.get_meta("seed", "") == seed_text)
 	var tex := _preview_tex(seed_text) if not seed_text.is_empty() else null
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
-	%PreviewHint.text = "Введите зерно или выберите мир" if seed_text.is_empty() \
-		else "Карта мира появится после первого запуска"
+	%PreviewHint.text = "Карта мира появится после первого запуска"
+	%ChoiceLabel.text = "Выбран мир из списка" if not _list_seed.is_empty() else "Выбрано зерно из поля ниже"
+	%ChoiceName.text = "Случайный мир" if seed_text.is_empty() else "«%s»" % seed_text
 	%WorldStatus.text = _world_status(seed_text)[1] if not seed_text.is_empty() \
 		else "Пустое поле — будет случайный мир."
 	var star: Button = %Star
@@ -408,17 +426,17 @@ func _update_selection() -> void:
 	star.icon = UiIcons.star(fav)
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
-	var latest := _latest_save(seed_text)
-	%Start.text = "Продолжить" if not latest.data.is_empty() else "Начать путешествие"
-	_load_manual.disabled = Saves.read_slot(seed_text, "manual").data.is_empty()
+	var latest := _latest_save(seed_text) if not seed_text.is_empty() else {data = {}}
+	%Start.text = "Продолжить путешествие" if not latest.data.is_empty() else "Начать путешествие"
+	_load_manual.disabled = seed_text.is_empty() or Saves.read_slot(seed_text, "manual").data.is_empty()
 	if not latest.data.is_empty():
 		var d: Dictionary = latest.data
-		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s\nКэш: %s" % [
-			d.visited.size(), d.quest.done, Time.get_datetime_string_from_unix_time(int(d.saved_at)).replace("T", " ") + " UTC", _world_status(seed_text)[0]]
+		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s" % [
+			d.visited.size(), d.quest.done, Time.get_datetime_string_from_unix_time(int(d.saved_at)).replace("T", " ") + " UTC"]
 
 
 func _on_star_selected() -> void:
-	var seed_text := seed_edit.text.strip_edges()
+	var seed_text := _chosen_seed()
 	if not seed_text.is_empty():
 		_on_star(seed_text)
 
@@ -431,21 +449,26 @@ func _on_star(seed_text: String) -> void:
 	_show_seed_tab(_seed_tab)
 
 
-## Сколько миров сохранено и сколько места они занимают
-func _update_cache_info() -> void:
-	%CacheInfo.get_parent().visible = WorldCache.enabled
-	if not WorldCache.enabled:
-		return
-	var u := WorldCache.usage()
-	%CacheInfo.text = "Кэш пуст" if u.worlds == 0 \
-		else "Кэш: %d миров · %d МБ" % [u.worlds, roundi(u.bytes / 1048576.0)]
-	%ClearCache.disabled = u.worlds == 0
+## Хранилище миров: сколько готовых миров и места; очистка не трогает сохранения прогресса
+func _open_storage() -> void:
+	var u := WorldCache.usage() if WorldCache.enabled else {worlds = 0, bytes = 0}
+	var body := "Готовых миров нет." if u.worlds == 0 else "Готовых миров: %d, занято %d МБ." % [u.worlds, roundi(u.bytes / 1048576.0)]
+	body += "\nНедавние и избранные миры хранятся готовыми и открываются быстрее. Если очистить, они создадутся заново при запуске; сохранения прогресса и задания останутся."
+	_ask("Хранилище миров", body, "Очистить", true, _on_clear_cache)
+	_confirm.get_ok_button().disabled = u.worlds == 0
+	_confirm.cancel_button_text = "Закрыть"
 
 
 func _on_clear_cache() -> void:
 	WorldCache.keep_only([])
 	_previews.clear()
 	_show_seed_tab(_seed_tab)
+
+
+## Две колонки меню растут с экраном: шире на широких мониторах, выше — на 4:3 (интерфейс не меньше 1280 × 720)
+func _fit_menu() -> void:
+	var vs := get_viewport().get_visible_rect().size
+	(screens.menu.get_node("Panel") as Control).custom_minimum_size = Vector2(clampf(vs.x * 0.74, 920.0, 1320.0), clampf(vs.y * 0.86, 600.0, 940.0))
 
 
 # ---------- Фон меню: маленький мир сверху, медленно проплывающий под панелью ----------
@@ -464,6 +487,7 @@ func _on_menu_background(img: Image) -> void:
 func _process(delta: float) -> void:
 	if display_options != null:
 		display_options.tick()
+	_flush_settings()
 	if game != null and not busy and not game.paused:
 		_save_elapsed += delta
 		if _save_elapsed >= 60.0 or hud.visited.size() != _saved_discoveries:
@@ -492,10 +516,10 @@ func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится
 	if busy:
 		return
-	var seed_text := seed_edit.text.strip_edges()
+	var seed_text := _chosen_seed()
 	if seed_text.is_empty():
 		seed_text = random_seed()
-	seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
+		seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
 	var latest := _latest_save(seed_text)
 	if latest.data.is_empty() and _has_save(seed_text):
 		_message("Не удалось загрузить прогресс", latest.error + " Файлы оставлены без изменений.")
@@ -649,6 +673,7 @@ func _ask(title: String, body: String, ok_text: String, danger: bool, action: Ca
 
 func _close_confirm() -> void:
 	if _confirm != null:
+		_confirm.hide()   # скрыть сразу: до удаления окно ещё держит модальность
 		_confirm.queue_free()
 		_confirm = null
 
@@ -732,7 +757,7 @@ func _confirm_load(seed_text: String, slot: String) -> void:
 ## здесь только поведение и подсказки управления паузы
 func _setup_save_controls() -> void:
 	_load_manual = %LoadManual
-	_load_manual.pressed.connect(func() -> void: _confirm_load(seed_edit.text.strip_edges(), "manual"))
+	_load_manual.pressed.connect(func() -> void: _confirm_load(_chosen_seed(), "manual"))
 	_save_status = %SaveStatus
 	%QuickSave.pressed.connect(func() -> void: _save_current("manual"))
 	%QuickLoad.pressed.connect(func() -> void:
