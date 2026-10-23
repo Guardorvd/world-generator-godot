@@ -68,8 +68,10 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 			for n in range(a, b):
 				out.append(own._vertex(points[n].x, points[n].y, nearest, n * 4))
 			return out
-		# по куску на ядро: копия для потока стоит заметно (массивы рельефа), больше кусков — больше копий
-		var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(OS.get_processor_count())))
+		# по куску на ядро, но не больше 8: у каждого куска свои копии массивов рельефа (около 10 МБ на мир 512),
+		# на 32-поточном процессоре они заняли бы лишнюю память при почти том же времени
+		var pieces := clampi(OS.get_processor_count(), 1, 8)
+		var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(pieces)))
 		var done: Array = []
 		for part: Array in parts:
 			done.append_array(part)
