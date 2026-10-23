@@ -438,10 +438,12 @@ static func _plinth(batch: MeshBatch, unit: Mesh, at: Transform3D, drop: float, 
 	batch.add(unit, base, material)
 
 
-## Окна и фонари: днём тусклые, ночью светятся (яркость выше 1 подхватывает свечение окружения).
+## Окна и фонари: днём тёмное стекло (материал без освещения, тёплый цвет днём читался как горящий свет),
+## в сумерках разгораются, ночью светятся (яркость выше 1 подхватывает свечение окружения).
 ## night — 0 днём, 1 ночью
 static func set_night(windows: StandardMaterial3D, night: float) -> void:
-	windows.albedo_color = Color8(0xf2, 0xd2, 0x7a) * lerpf(0.85, 2.6, night)
+	var lit := smoothstep(0.25, 0.85, night)
+	windows.albedo_color = Color(0.16, 0.18, 0.2).lerp(Color8(0xf2, 0xd2, 0x7a) * 2.6, lit)
 
 
 ## Покачивание пламени костров; time — секунды игры. Дальше FIRE_SEEN от at пламя не видно (_part) и не качается
