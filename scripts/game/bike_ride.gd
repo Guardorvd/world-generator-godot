@@ -35,6 +35,8 @@ const DROP_STEP := 0.12  # земля ушла вниз за один такт �
 const KICK_MAX := 6.0    # больший скачок (ступенька, телепорт) ограничивается, м/с
 const PITCH_LOAD := 0.004 # м хода на 1 м/с² разгона: торможение грузит вилку, разгон — задний ход
 const BUMP := 0.035      # высота мелких кочек под колесом на бездорожье (rough 1), м
+const REVERSE_HOLD := 0.22 # столько секунд держать тормоз у остановки до заднего хода (12.7: было 0,4)
+const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 
 var x := 0.0          # метры
 var z := 0.0
@@ -75,6 +77,8 @@ var crash_cause := CrashCause.FALL
 var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
+var bottom_out := 0.0  # 12.7: скорость удара вилки в упор, м/с (для звука; GameWorld сбрасывает)
+var braking := 0.0     # 12.7: резкое торможение на скорости 0..1 (для хруста покрытия)
 var fallen := false # рама остаётся в физической позе до ручной посадки
 var fallen_transform := Transform3D.IDENTITY
 
@@ -156,6 +160,7 @@ func mount(p: PlayerState) -> void:
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
 	acceleration = 0.0
+	braking = 0.0
 	riding = false
 	speed = 0.0
 	lean = 0.0
@@ -484,7 +489,10 @@ func _step_suspension(dt: float, load := 0.0, acceleration := 0.0) -> void:
 	var f := Vector2(squash_f, squash_fv)
 	var r := Vector2(squash_r, squash_rv)
 	for i in ticks:
+		var hit := f.y
 		f = _spring(f, target - shift, h)
+		if f.x >= SAG_MAX and hit > BOTTOM_OUT:
+			bottom_out = maxf(bottom_out, hit)
 		r = _spring(r, target + shift, h)
 	squash_f = f.x
 	squash_fv = f.y
@@ -512,12 +520,13 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
+	braking = absf(throttle) * smoothstep(5.0, 8.0, speed) if throttle < 0.0 else 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle < 0.0 and absf(speed) < 0.05:
 		_brake_hold += dt
 	elif throttle >= 0.0 or speed > 0.05:
 		_brake_hold = 0.0
-	var reversing := throttle < 0.0 and (speed < -0.05 or _brake_hold >= 0.4)
+	var reversing := throttle < 0.0 and (speed < -0.05 or _brake_hold >= REVERSE_HOLD)
 	if reversing:
 		# Медленный манёвр назад остаётся предсказуемым и на склоне.
 		speed = move_toward(speed, -GameConfig.BIKE_REVERSE * absf(throttle), GameConfig.BIKE_ACCEL * dt)

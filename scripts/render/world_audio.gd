@@ -149,6 +149,15 @@ func tick(player: PlayerState, riding: bool) -> void:
 		_play_step(player.x, player.z, player.feet, DB_STEP + run * 3.0)
 
 
+## 12.7: пробой вилки (удар в упор со скоростью impact, м/с) — короткий глухой стук выше и тише приземления
+func bottom_out(impact: float) -> void:
+	if _land.playing and _land.get_playback_position() < 0.15:
+		return
+	_land.volume_db = DB_LAND - 14.0 + clampf((impact - 0.8) / 2.0, 0.0, 1.0) * 6.0
+	_land.pitch_scale = 1.7
+	_land.play()
+
+
 ## Приземление с ударом impact (м/с): мягкий удар и шаг по той поверхности, куда пришли ноги
 func land(x: float, z: float, feet: float, impact: float) -> void:
 	if impact < 2.5:
@@ -156,6 +165,7 @@ func land(x: float, z: float, feet: float, impact: float) -> void:
 	var k := clampf((impact - 2.5) / 10.0, 0.0, 1.0)
 	_play_step(x, z, feet, DB_STEP + 2.0)
 	_land.volume_db = DB_LAND - 12.0 + k * 12.0
+	_land.pitch_scale = 1.0
 	_land.play()
 
 
@@ -186,8 +196,9 @@ func _surface(x: float, z: float, feet: float) -> String:
 
 
 ## Кадр: фон по месту (pos — ноги игрока); bike_speed — скорость велосипеда (м/с, 0 — пешком),
-## rolling — колёса на земле, crank — угол педалей (меняется, пока крутят педали)
-func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean := 0.0, crank := 0.0) -> void:
+## rolling — колёса на земле, crank — угол педалей (меняется, пока крутят педали),
+## braking — резкое торможение на скорости 0..1 (12.7: покрытие хрустит громче и ниже — юз)
+func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean := 0.0, crank := 0.0, braking := 0.0) -> void:
 	_sample_t -= dt
 	if _sample_t <= 0.0:
 		_sample_t = SAMPLE
@@ -202,8 +213,9 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 	_goal[_roll] = clampf(rush * (0.55 + _roll_rough * 0.45 + corner * 0.12), 0.0, 1.0) if rolling else 0.0
 	_roll.pitch_scale = lerpf(_roll.pitch_scale, (0.7 + 0.45 * rush) * _roll_pitch, near)
 	# Покрытие: песчинки гуще на гравии и камне, реже на земле; на скорости гуще и выше.
-	_goal[_grit] = clampf(_grit_level * smoothstep(0.5, 4.0, v) * (0.6 + 0.4 * minf(rush, 1.0)), 0.0, 1.0) if rolling else 0.0
-	_grit.pitch_scale = lerpf(_grit.pitch_scale, _grit_pitch * (0.85 + 0.25 * minf(rush, 1.0)), near)
+	var skid := braking * maxf(_grit_level, 0.5)
+	_goal[_grit] = clampf(_grit_level * smoothstep(0.5, 4.0, v) * (0.6 + 0.4 * minf(rush, 1.0)) + skid * 1.6, 0.0, 1.6) if rolling else 0.0
+	_grit.pitch_scale = lerpf(_grit.pitch_scale, _grit_pitch * (0.85 + 0.25 * minf(rush, 1.0)) * (1.0 - 0.25 * skid), near)
 	# Педали крутят — тихая цепь; накатом — трещотка втулки, её щелчки идут за скоростью колеса.
 	if crank != _crank:
 		_crank = crank

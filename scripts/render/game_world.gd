@@ -90,6 +90,7 @@ var _bob_amp := 0.0     # сила покачивания при ходьбе: �
 var _dip := 0.0         # проседание камеры при приземлении, м (пружина)
 var _dip_v := 0.0
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
+var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
 var _moving := false    # игрок шёл в последнем такте (для покачивания камеры)
 var _prev := Vector3()  # игрок (x, ноги, z) на предпоследнем такте: кадр показывает его между тактами
 var _prev_bob := 0.0
@@ -757,6 +758,8 @@ func _physics_process(dt: float) -> void:
 			if GameSettings.head_bob:
 				_dip_v -= clampf(bike.land_impact - 2.5, 0.0, 8.0) * 0.12
 			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
+		elif bike.bottom_out > 0.0:
+			audio.bottom_out(bike.bottom_out)
 		crashed = bike.crashed
 		if crashed:
 			_crash()
@@ -780,6 +783,7 @@ func _physics_process(dt: float) -> void:
 	if not crash.active():
 		bike_view.tick(bike, dt, fw, not _opening and Input.is_action_pressed("run"))
 	bike.land_impact = 0.0
+	bike.bottom_out = 0.0
 	audio.tick(player, bike.riding)
 	if crashed:
 		_snap()
@@ -874,7 +878,7 @@ func _process(delta: float) -> void:
 	var fire_time := lerpf(_prev_time, time, alpha)
 	SettlementsBuilder.animate_fires(fires, fire_time, pos)
 	_light_night(pos, fire_time)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, bike.braking if bike.riding else 0.0)
 
 	info_timer -= delta
 	if info_timer <= 0.0:
@@ -1245,6 +1249,13 @@ func _update_camera(alpha: float, dt: float) -> void:
 	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
 	var view_yaw := yaw - _tick_yaw * (1.0 - alpha)
 	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
+	# 12.7: на скорости камера заглядывает внутрь поворота, куда повёрнут руль; мышь её не трогает
+	var lead_goal := 0.0
+	if riding and not crash.active() and not _opening and time - _looked_at > 1.0:
+		lead_goal = -bike.steer * deg_to_rad(8.5) * smoothstep(3.0, 12.0, bike.speed)
+	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(4.0, dt))
+	if riding:
+		view_yaw += _cam_lead
 	var rush_goal := 0.0
 	if riding and not crash.active() and not _opening:
 		rush_goal = smoothstep(12.0, 26.0, absf(bike.speed))
