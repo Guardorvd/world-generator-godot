@@ -5,6 +5,7 @@ extends Node
 ## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
 ## С 10.0 под полем зерна — список миров: недавние, избранные (звёздочка) и рекомендованные автором
 ## (RecommendedSeeds). Миры недавних и избранных хранятся готовыми в кэше (WorldCache), остальные удаляются.
+## С 10.2 меню в две колонки: список миров с картами-миниатюрами и выбранный мир с картой и состоянием.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
@@ -19,6 +20,7 @@ var _load_elapsed := -1
 var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
 var _seed_tab := "recent"      # вкладка списка миров: recent, favorites, recommended
+var _previews := {}            # зерно -> превью карты из кэша (ImageTexture) или null
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -49,6 +51,7 @@ func _ready() -> void:
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
 	_show_seed_tab("recent" if not GameSettings.recent_seeds.is_empty() else "recommended")
+	%LoadPreview.texture = null
 	_show("menu")
 	bg_thread = Thread.new()
 	bg_thread.start(_menu_background_job.bind("menu-%d" % randi_range(0, 999999)))
@@ -183,12 +186,37 @@ func _on_seed_submitted(_text: String) -> void:
 
 func _on_dice_pressed() -> void:
 	seed_edit.text = random_seed()
+	_update_selection()
 
 
 # ---------- Список миров ----------
+# С 10.2 меню в две колонки: слева список миров с картой-миниатюрой и состоянием, справа выбранный мир —
+# карта крупно, зерно, звёздочка, что будет при запуске (из сохранённого или заново) и «Начать игру».
 
 func _tab_button(tab: String) -> Button:
 	return {recent = %Recent, favorites = %Favorites, recommended = %Recommended}[tab]
+
+
+## Превью карты мира из кэша (null — мир ещё не запускали)
+func _preview_tex(seed_text: String) -> Texture2D:
+	if not _previews.has(seed_text):
+		var img := WorldCache.preview(seed_text) if WorldCache.enabled else null
+		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
+	return _previews[seed_text]
+
+
+## Состояние мира в кэше: [коротко для строки, подробно для панели]
+func _world_status(seed_text: String) -> Array:
+	if not WorldCache.enabled:
+		return ["", ""]
+	var n := WorldCache.ready_layers(seed_text)
+	if n > WorldGenerator.LAYERS.size():
+		return ["готов", "Мир сохранён и загрузится быстро."]
+	if n > 0:
+		return ["частично", "Мир сохранён частично: игра обновилась, изменившаяся часть мира создастся заново."]
+	if _preview_tex(seed_text) != null:
+		return ["обновится", "Игра обновилась: мир создастся заново, это около минуты."]
+	return ["новый", "Новый мир: создание займёт около минуты, дальше он сохранится."]
 
 
 func _show_seed_tab(tab: String) -> void:
@@ -214,7 +242,7 @@ func _show_seed_tab(tab: String) -> void:
 			rows = RecommendedSeeds.SEEDS
 	if rows.is_empty():
 		var hint := Label.new()
-		hint.text = {recent = "Здесь появятся три последних мира", favorites = "Отметьте мир звёздочкой, и он останется здесь",
+		hint.text = {recent = "Здесь появятся последние миры", favorites = "Отметьте мир звёздочкой, и он останется здесь",
 			recommended = "Автор пока ничего не рекомендовал"}[tab]
 		hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		hint.add_theme_font_size_override("font_size", 14)
@@ -223,46 +251,138 @@ func _show_seed_tab(tab: String) -> void:
 		list.add_child(hint)
 	for r: Dictionary in rows:
 		list.add_child(_seed_row(str(r.seed), str(r.get("note", ""))))
+	_update_selection()
+	_update_cache_info()
 
 
-## Строка списка: зерно (щелчок — в поле), пометка готового мира и звёздочка избранного
-func _seed_row(seed_text: String, note: String) -> HBoxContainer:
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 6)
-	var pick := Button.new()
-	pick.text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
-	pick.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	pick.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	pick.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	pick.custom_minimum_size = Vector2(0, 30)
-	pick.add_theme_font_size_override("font_size", 14)
-	pick.tooltip_text = "Взять это зерно" if note.is_empty() else note
-	pick.pressed.connect(_pick_seed.bind(seed_text))
-	row.add_child(pick)
-	if WorldCache.enabled and WorldCache.has(seed_text):
-		var mark := Label.new()
-		mark.text = "готов"
-		mark.tooltip_text = "Мир сохранён и загрузится быстро"
-		mark.mouse_filter = Control.MOUSE_FILTER_STOP
-		mark.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42, 0.85))
-		mark.add_theme_font_size_override("font_size", 13)
-		row.add_child(mark)
+## Строка списка: миниатюра карты, зерно, подпись и состояние, звёздочка. Щелчок — выбрать мир, двойной — играть
+func _seed_row(seed_text: String, note: String) -> Button:
+	var row := Button.new()
+	row.toggle_mode = true
+	row.custom_minimum_size = Vector2(0, 60)
+	row.set_meta("seed", seed_text)
+	# выбранный мир — золотая рамка
+	var selected := StyleBoxFlat.new()
+	selected.bg_color = Color(0.85, 0.72, 0.42, 0.16)
+	selected.border_color = Color(0.85, 0.72, 0.42, 0.9)
+	selected.set_border_width_all(2)
+	selected.set_corner_radius_all(6)
+	for key: String in ["pressed", "hover_pressed"]:
+		row.add_theme_stylebox_override(key, selected)
+	row.tooltip_text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
+	row.pressed.connect(_pick_seed.bind(seed_text))
+	row.gui_input.connect(func(e: InputEvent) -> void:
+		if e is InputEventMouseButton and e.double_click and e.button_index == MOUSE_BUTTON_LEFT:
+			_on_start())
+	var box := HBoxContainer.new()
+	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 6)
+	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_theme_constant_override("separation", 10)
+	row.add_child(box)
+	var tex := _preview_tex(seed_text)
+	var thumb := TextureRect.new()
+	thumb.custom_minimum_size = Vector2(48, 48)
+	thumb.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	thumb.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	thumb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	thumb.texture = tex
+	if tex == null:
+		# мир ещё не запускали: вместо карты — тёмный квадрат с вопросом
+		var empty := ColorRect.new()
+		empty.color = Color(1, 1, 1, 0.06)
+		empty.set_anchors_preset(Control.PRESET_FULL_RECT)
+		empty.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var q := Label.new()
+		q.text = "?"
+		q.set_anchors_preset(Control.PRESET_FULL_RECT)
+		q.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		q.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
+		empty.add_child(q)
+		thumb.add_child(empty)
+	box.add_child(thumb)
+	var texts := VBoxContainer.new()
+	texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	texts.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	texts.add_theme_constant_override("separation", 0)
+	var name_label := Label.new()
+	name_label.text = seed_text
+	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	name_label.add_theme_font_size_override("font_size", 15)
+	texts.add_child(name_label)
+	var status: String = _world_status(seed_text)[0]
+	var sub := " · ".join(PackedStringArray([note, status]).slice(0 if not note.is_empty() else 1)) \
+		if not status.is_empty() else note
+	if not sub.is_empty():
+		var sub_label := Label.new()
+		sub_label.text = sub
+		sub_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		sub_label.add_theme_font_size_override("font_size", 12)
+		sub_label.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42, 0.85) if status == "готов" \
+			else Color(1, 1, 1, 0.5))
+		texts.add_child(sub_label)
+	box.add_child(texts)
 	var fav := seed_text in GameSettings.favorite_seeds
 	var star := Button.new()
+	star.flat = true
 	star.text = "★" if fav else "☆"
-	star.custom_minimum_size = Vector2(36, 30)
-	star.add_theme_font_size_override("font_size", 16)
+	star.custom_minimum_size = Vector2(36, 36)
+	star.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	star.focus_mode = Control.FOCUS_NONE
+	star.add_theme_font_size_override("font_size", 18)
 	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.disabled = full
-	star.tooltip_text = "Убрать из избранного" if fav else ("Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX if full 		else "В избранное: мир останется в списке и в сохранённых")
+	star.tooltip_text = _star_tip(fav, full)
 	star.pressed.connect(_on_star.bind(seed_text))
-	row.add_child(star)
+	box.add_child(star)
 	return row
+
+
+func _star_tip(fav: bool, full: bool) -> String:
+	if fav:
+		return "Убрать из избранного"
+	if full:
+		return "Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX
+	return "В избранное: мир останется в списке и сохранённым"
 
 
 func _pick_seed(seed_text: String) -> void:
 	seed_edit.text = seed_text
+	_update_selection()
 	%Start.grab_focus()
+
+
+func _on_seed_changed(_text: String) -> void:
+	_update_selection()
+
+
+## Выбранный мир (зерно в поле): подсветка строки, карта, звёздочка и что будет при запуске
+func _update_selection() -> void:
+	var seed_text := seed_edit.text.strip_edges()
+	for row in %SeedList.get_children():
+		if row is Button:
+			(row as Button).set_pressed_no_signal(row.get_meta("seed", "") == seed_text)
+	var tex := _preview_tex(seed_text) if not seed_text.is_empty() else null
+	%Preview.texture = tex
+	%PreviewHint.visible = tex == null
+	%PreviewHint.text = "Введите зерно или выберите мир" if seed_text.is_empty() \
+		else "Карта мира появится после первого запуска"
+	%WorldStatus.text = _world_status(seed_text)[1] if not seed_text.is_empty() \
+		else "Пустое поле — будет случайный мир."
+	var star: Button = %Star
+	var fav := seed_text in GameSettings.favorite_seeds
+	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
+	star.text = "★" if fav else "☆"
+	star.disabled = seed_text.is_empty() or full
+	star.tooltip_text = _star_tip(fav, full)
+
+
+func _on_star_selected() -> void:
+	var seed_text := seed_edit.text.strip_edges()
+	if not seed_text.is_empty():
+		_on_star(seed_text)
 
 
 func _on_star(seed_text: String) -> void:
@@ -270,6 +390,23 @@ func _on_star(seed_text: String) -> void:
 	GameSettings.save_settings()
 	if WorldCache.enabled:
 		WorldCache.keep_only(GameSettings.keep_seeds())
+	_show_seed_tab(_seed_tab)
+
+
+## Сколько миров сохранено и сколько места они занимают
+func _update_cache_info() -> void:
+	%CacheInfo.get_parent().visible = WorldCache.enabled
+	if not WorldCache.enabled:
+		return
+	var u := WorldCache.usage()
+	%CacheInfo.text = "Сохранённых миров нет" if u.worlds == 0 \
+		else "Сохранено миров: %d · %d МБ" % [u.worlds, roundi(u.bytes / 1048576.0)]
+	%ClearCache.disabled = u.worlds == 0
+
+
+func _on_clear_cache() -> void:
+	WorldCache.keep_only([])
+	_previews.clear()
 	_show_seed_tab(_seed_tab)
 
 
@@ -337,6 +474,9 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE) -> voi
 	_free_game()
 	hud.visible = false
 	_set_progress(0.0, "Подготовка")
+	%LoadPreview.texture = _preview_tex(seed_text)
+	%LoadPreview.visible = %LoadPreview.texture != null
+	%Title.text = "Мир «%s»" % seed_text
 	_show("loading")
 	gen_thread = Thread.new()
 	gen_thread.start(_generate_job.bind(seed_text, size))
@@ -405,6 +545,7 @@ func _free_game() -> void:
 func _back_to_menu() -> void:
 	_free_game()
 	hud.visible = false
+	_previews.clear()   # после игры у мира появилось или обновилось превью
 	_show_seed_tab(_seed_tab)
 	_show("menu")
 

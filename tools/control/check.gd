@@ -371,7 +371,7 @@ func _process_cache(game: GameWorld) -> bool:
 	for k: String in fresh:
 		same[k] = fresh[k] == now[k]
 	var paths := WorldCache.paths_for(seed_text, size)
-	var layers: int = game.load_timings.get("cache_layers", 0)
+	var layers: int = game.load_timings.get("cache_layers", 0) + game.load_timings.get("cache_view", 0)
 	if cache_res.is_empty():
 		var mb := 0.0
 		for path in paths:
@@ -407,7 +407,14 @@ func _process_cache(game: GameWorld) -> bool:
 
 func _cache_sums(game: GameWorld, fingerprint: Dictionary) -> Dictionary:
 	return {world = JSON.stringify(fingerprint, "", true).md5_text(), heights = _md5(game.heights.hv.to_byte_array()),
-		map = _md5(main.hud.map_tex.get_image().get_data()), objects = game.world.obj_count}
+		map = _md5(main.hud.map_tex.get_image().get_data()), objects = game.world.obj_count,
+		terrain = _tex_md5(game, "base_tex"), forest = _tex_md5(game, "forest_tex")}
+
+
+## Хеш текстуры рельефа или подстилки из материала (10.2: они тоже берутся из кэша)
+static func _tex_md5(game: GameWorld, param: String) -> String:
+	var tex: Variant = (game.get_node("Terrain").material_override as ShaderMaterial).get_shader_parameter(param)
+	return _md5(tex.get_image().get_data()) if tex is Texture2D else ""
 
 
 static func _md5(b: PackedByteArray) -> String:

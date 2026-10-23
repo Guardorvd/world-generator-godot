@@ -10,6 +10,8 @@ extends RefCounted
 ## после патча, который не трогал генерацию, мир берётся из кэша целиком; если поменялись только этапы мест
 ## и путей, география берётся из кэша, а генерация продолжается с мест. Первый слой хранит все поля мира,
 ## следующие — только поля, которые этот слой поменял.
+## Четвёртый файл (VIEW) — готовые картинки мира: текстура рельефа, карта и лесная подстилка (их рисование —
+## ~14 с загрузки из кэша), ключ — слой природы и код рисования. Рядом — превью карты для меню (PREVIEW).
 ##
 ## Защиты:
 ## - ключ файла — формат кэша, сид, размеры и хеш исходников: старый файл не подходит и перезаписывается;
@@ -38,6 +40,14 @@ const LAYER_SOURCES := [
 	["res://scripts/world/stages/stage_vegetation.gd", "res://scripts/world/stages/stage_lakes.gd",
 		"res://scripts/world/road_surface.gd", "res://scripts/game/player_state.gd"],
 ]
+## Картинки мира: имя файла и исходники рисования
+const VIEW := "view"
+const VIEW_SOURCES := ["res://scripts/map/map_baker.gd", "res://scripts/render/forest_floor.gd"]
+const VIEW_IMAGES := ["terrain", "map", "forest"]
+const PREVIEW := ".preview.png"
+const PREVIEW_SIZE := 256
+## Байт на пиксель у форматов картинок мира (другой формат в файле — файл чужой)
+const PIXEL_BYTES := {Image.FORMAT_L8: 1, Image.FORMAT_R8: 1, Image.FORMAT_RG8: 2, Image.FORMAT_RGB8: 3, Image.FORMAT_RGBA8: 4}
 ## Поля мира, которые не сохраняются: объекты и временное состояние генерации
 const SKIP := ["rng", "noise", "outer", "base_heights", "_fields_thread", "_fields", "_index"]
 ## Поля по клетке: длина ровно N
@@ -57,7 +67,7 @@ static func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
 		var prev := _hash(("%d|%d" % [FORMAT, WorldGenerator.PLAN_SIZE]).to_utf8_buffer() + _sources(COMMON))
-		for sources: Array in LAYER_SOURCES:
+		for sources: Array in LAYER_SOURCES + [VIEW_SOURCES]:
 			prev = _hash(prev + _sources(sources))
 			_layer_keys.append(prev.hex_encode().left(32))
 	var keys := _layer_keys
@@ -93,31 +103,103 @@ static func _base(seed_text: String, size: int) -> String:
 	return ("%s|%d|%d" % [seed_text, WorldGenerator.PLAN_SIZE, size]).md5_text()
 
 
+## Имя слоя: слои генерации, за ними картинки (VIEW)
+static func _layer_name(layer: int) -> String:
+	return WorldGenerator.LAYERS[layer] if layer < WorldGenerator.LAYERS.size() else VIEW
+
+
 static func _key(seed_text: String, size: int, layer: int) -> String:
-	return "%s|%d|%d|%s|%s" % [seed_text, WorldGenerator.PLAN_SIZE, size, WorldGenerator.LAYERS[layer], layer_keys()[layer]]
+	return "%s|%d|%d|%s|%s" % [seed_text, WorldGenerator.PLAN_SIZE, size, _layer_name(layer), layer_keys()[layer]]
 
 
-## Файл слоя layer мира
+## Файл слоя layer мира (WorldGenerator.LAYERS.size() — картинки)
 static func path_for(seed_text: String, size: int, layer: int) -> String:
-	return dir.path_join("%s.%s%s" % [_base(seed_text, size), WorldGenerator.LAYERS[layer], EXT])
+	return dir.path_join("%s.%s%s" % [_base(seed_text, size), _layer_name(layer), EXT])
 
 
-## Файлы всех слоёв мира
+## Файлы всех слоёв мира и картинок
 static func paths_for(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Array[String]:
 	var out: Array[String] = []
-	for k in WorldGenerator.LAYERS.size():
+	for k in WorldGenerator.LAYERS.size() + 1:
 		out.append(path_for(seed_text, size, k))
 	return out
 
 
-## Все слои мира в кэше и подходят к нынешнему коду (читается только заголовок)
-static func has(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
-	for k in WorldGenerator.LAYERS.size():
+## Превью карты мира для меню или null. Остаётся и после обновлений: мир от зерна почти не меняется.
+static func preview(seed_text: String) -> Image:
+	var path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
+	return Image.load_from_file(path) if FileAccess.file_exists(path) else null
+
+
+## Сколько файлов мира подряд подходят к нынешнему коду: 0 — ничего, WorldGenerator.LAYERS.size() — мир
+## без картинок, на 1 больше — всё (читаются только заголовки)
+static func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZE) -> int:
+	for k in WorldGenerator.LAYERS.size() + 1:
 		var f := FileAccess.open(path_for(seed_text, size, k), FileAccess.READ)
 		if f == null or f.get_length() < 64 or f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT \
 				or f.get_pascal_string() != _key(seed_text, size, k):
-			return false
-	return true
+			return k
+	return WorldGenerator.LAYERS.size() + 1
+
+
+## Мир в кэше целиком и подходит к нынешнему коду
+static func has(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
+	return ready_layers(seed_text, size) > WorldGenerator.LAYERS.size()
+
+
+## Сколько миров в кэше и сколько байт на диске
+static func usage() -> Dictionary:
+	var bases := {}
+	var bytes := 0
+	if DirAccess.dir_exists_absolute(dir):
+		for f in DirAccess.get_files_at(dir):
+			bases[f.get_slice(".", 0)] = true
+			bytes += FileAccess.get_size(dir.path_join(f))
+	return {worlds = bases.size(), bytes = bytes}
+
+
+## Картинки мира из кэша: {terrain, map, forest} или пусто (нет, старые или битые — тогда файл удаляется)
+static func load_view(seed_text: String, size: int) -> Dictionary:
+	var layer := WorldGenerator.LAYERS.size()
+	var path := path_for(seed_text, size, layer)
+	if not FileAccess.file_exists(path):
+		return {}
+	var data: Variant = _read(path, _key(seed_text, size, layer))
+	var out := {}
+	if data != null:
+		for name: String in VIEW_IMAGES:
+			var d: Variant = data.get(name)
+			if not d is Dictionary or not d.get("data") is PackedByteArray or not d.get("w") is int \
+					or not d.get("h") is int or not PIXEL_BYTES.has(d.get("f")) or d.w <= 0 or d.h <= 0 \
+					or d.data.size() != d.w * d.h * PIXEL_BYTES[d.f]:
+				out.clear()
+				break
+			out[name] = Image.create_from_data(d.w, d.h, false, d.f, d.data)
+	if out.is_empty():
+		DirAccess.remove_absolute(path)
+	return out
+
+
+## Сохранить картинки мира ({terrain, map, forest}, сразу после загрузки, пока их никто не менял) и превью
+static func save_view(seed_text: String, size: int, images: Dictionary) -> void:
+	var data := {}
+	for name: String in VIEW_IMAGES:
+		var img: Image = images[name]
+		data[name] = {w = img.get_width(), h = img.get_height(), f = img.get_format(), data = img.get_data()}
+	var raw := var_to_bytes(data)
+	var layer := WorldGenerator.LAYERS.size()
+	var path := path_for(seed_text, size, layer)
+	var key := _key(seed_text, size, layer)
+	var small: Image = (images.map as Image).duplicate()
+	var preview_path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
+	var job := func() -> void:
+		_write(path, key, raw)
+		small.resize(PREVIEW_SIZE, PREVIEW_SIZE, Image.INTERPOLATE_BILINEAR)
+		small.save_png(preview_path)
+	var task := WorkerThreadPool.add_task(job, false, "Кэш мира")
+	_lock.lock()
+	_writes.append(task)
+	_lock.unlock()
 
 
 ## Мир с кэшем: подходящие слои читаются, с первого неподходящего генерация продолжается обычным путём,
@@ -195,7 +277,7 @@ static func wait_writes() -> void:
 		WorkerThreadPool.wait_for_task_completion(t)
 
 
-## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE)
+## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE); пустой seeds — очистить всё
 static func keep_only(seeds: Array) -> void:
 	wait_writes()
 	var keep := {}

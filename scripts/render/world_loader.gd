@@ -38,6 +38,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# С 10.2 кэш по слоям: подошли не все — генерация продолжается с первого неподходящего слоя
 	var on_climate := func(w: WorldData) -> void:
 		side.start(r._prepare.bind(w, px, w.base_heights))
+	# Картинки мира (текстура, карта, подстилка) тоже из кэша, если мир из кэша целиком (10.2)
+	var view := {}
 	if WorldCache.enabled:
 		var got := WorldCache.generate(seed_text, size, on_progress, on_climate)
 		r.world = got.world
@@ -46,13 +48,15 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		if r.from_cache:
 			if on_progress.is_valid():
 				on_progress.call(0.5, "Мир из сохранённых")
-			side.start(r._prepare.bind(r.world, px))
+			view = WorldCache.load_view(seed_text, size)
+			r.timings.cache_view = int(not view.is_empty())
+			side.start(r._prepare.bind(r.world, px, null, view.is_empty()))
 	else:
 		r.world = WorldGenerator.generate(seed_text, size, on_progress, on_climate)
 	var generated := Time.get_ticks_usec()
 	var t := Time.get_ticks_usec()
 	# Состав леса известен после генерации; параллельная заливка его не читает (с 10.0 — пока она идёт).
-	r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
+	r.forest_surface = view.forest if not view.is_empty() else preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
 	r.timings.forest_surface_ms = (Time.get_ticks_usec() - t) / 1000.0
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
@@ -84,11 +88,17 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		on_progress.call(0.93, "Текстура рельефа и карта")
 	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
 	# векторный слой на них рисуется одновременно в двух потоках
-	var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
-	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
-	var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
-	r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
-	WorkerThreadPool.wait_for_task_completion(map_task)
+	if not view.is_empty():
+		r.terrain_image = view.terrain
+		r.map_image = view.map
+	else:
+		var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
+		var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
+		var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
+		r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
+		WorkerThreadPool.wait_for_task_completion(map_task)
+		if WorldCache.enabled:
+			WorldCache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	r.timings.overlays_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return r
@@ -96,13 +106,16 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 
 ## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
 ## Возвращает пары [без отмывки, с отмывкой]; при разных разрешениях ненужный вариант пустой.
-## base — общий рельеф генератора (9.7), снятый в момент запуска потока: к концу генерации его уже нет в мире
-func _prepare(w: WorldData, px: int, base: Heightfield = null) -> Array:
+## base — общий рельеф генератора (9.7), снятый в момент запуска потока: к концу генерации его уже нет в мире;
+## paint — false, когда картинки взяты из кэша (10.2)
+func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) -> Array:
 	var t := Time.get_ticks_usec()
-	var painted := [MapBaker.paint(w, px, true, px == 2)]
-	if px != 2:
-		painted.append(MapBaker.paint(w, 2, false, true))
-	timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
+	var painted := []
+	if paint:
+		painted.append(MapBaker.paint(w, px, true, px == 2))
+		if px != 2:
+			painted.append(MapBaker.paint(w, 2, false, true))
+		timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	heights = base.copy() if base != null else Heightfield.new(w, false)
 	timings.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0

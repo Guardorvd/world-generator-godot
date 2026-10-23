@@ -12,7 +12,7 @@ const MAX_MOUSE := 3.0
 const MIN_FOV := 55.0
 const MAX_FOV := 100.0
 const MAX_SEED_LEN := 32         # длина зерна, как у поля ввода в меню
-const RECENT_MAX := 3            # сколько последних зёрен помнить (их миры хранятся в кэше, WorldCache)
+const RECENT_MAX := 5            # сколько последних зёрен помнить (их миры хранятся в кэше, WorldCache; с 10.2 пять)
 const FAVORITES_MAX := 12        # избранных зёрен не больше: каждое держит свой мир в кэше
 
 const DEFAULT_MOUSE := 1.0
