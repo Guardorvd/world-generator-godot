@@ -22,6 +22,13 @@ func _run() -> void:
 		await process_frame
 	var game: GameWorld = main.game
 	game.set_paused(false)
+	# с 11.0 игра начинается проездом на велосипеде: доску читают пешком
+	if game.opening_active():
+		game._finish_opening()
+	if game.bike.riding:
+		game.bike.speed = 0.0
+		game.bike.airborne = false
+		game.toggle_bike()
 	var settlement := PlayerState.home(game.world)
 	print("HOUSES ", game.world.settlements.map(func(s: Dictionary) -> int: return s.huts.size()))
 	check(game.world.settlements.size() <= 4, "малый мир не превышает прежний максимум поселений")
@@ -56,23 +63,51 @@ func _run() -> void:
 	check(not routes.is_empty(), "у поселения есть подтверждённый выход по дороге")
 	if not routes.is_empty():
 		var chosen: Dictionary = routes[0]
-		for node: Node in game.hud.settlement_panel._box.get_children():
+		for node: Node in game.hud.settlement_panel._box.find_children("*", "Button", true, false):
 			if node is Button and node.text.begins_with(chosen.name):
 				node.pressed.emit()
 				break
 		check(game.hud.goal.get("key") == chosen.key and not game._settlement_open(), "кнопка маршрута ставит цель на компасе и закрывает доску")
+	# 11.9: задание доставки — сумка у доски, E по ней, сумка за спиной, без быстрого перемещения
+	game._open_settlement(settlement)
+	var take: Array = game.hud.settlement_panel.find_children("*", "Button", true, false).filter(
+		func(b: Button) -> bool: return b.tooltip_text == "Взять задание: доставка")
+	check(take.size() == 1, "на доске есть задание доставки")
+	if take.size() == 1:
+		take[0].pressed.emit()
+		check(game.quests.active.get("kind") == "delivery" and game._bag != null and game._bag.visible and not game._settlement_open(), "доставка взята, сумка у доски")
+		var bag: Vector3 = game._bag.position
+		game.player.x = bag.x + 1.5
+		game.player.z = bag.z + 1.5
+		game.player.feet = game.heights.ground_at(game.player.x, game.player.z)
+		game._snap()
+		var to_bag := bag - Vector3(game.player.x, game.player.feet + GameConfig.EYE, game.player.z)
+		game.yaw = atan2(-to_bag.x, -to_bag.z)
+		game.pitch = atan2(to_bag.y, Vector2(to_bag.x, to_bag.z).length())
+		game._update_camera(1.0, 0.0)
+		check(game._aim().get("kind", "") == "cargo", "взгляд на сумку выбирает её для E")
+		game._unhandled_input(event)
+		check(game.quests.cargo and not game._bag.visible and game.hud.goal.get("key") == game.quests.active.target.key, "E надевает сумку, цель — поселение доставки")
+		var before := Vector2(game.player.x, game.player.z)
+		game.travel_to(game.quests.active.target)
+		check(before == Vector2(game.player.x, game.player.z), "с сумкой быстрое перемещение недоступно")
+		if DisplayServer.get_name() != "headless" and not args.is_empty():
+			game.hud.update_tracker()
+			await process_frame
+			await process_frame
+			root.get_texture().get_image().save_png(args[0].path_join("quest_in_game.png"))
 	game.bike.x += 150.0
-	game._open_settlement()
+	game._open_settlement(settlement)
 	game.hud.settlement_panel.bike_requested.emit()
 	check(game.bike.distance_to(game.player) < 3.0 and not game.bike.riding, "оставленный велосипед возвращается рядом с игроком")
-	game._open_settlement()
+	game._open_settlement(settlement)
 	game._unhandled_input(event)
 	check(not game._settlement_open(), "повторное E закрывает доску")
-	game._open_settlement()
+	game._open_settlement(settlement)
 	game.toggle_map()
 	check(game.show_map and not game._settlement_open(), "карта закрывает доску без двух перекрывающихся экранов")
 	game.toggle_map()
-	game._open_settlement()
+	game._open_settlement(settlement)
 	game.set_paused(true)
 	check(not game._settlement_open() and game.paused, "пауза закрывает доску и сохраняет свободный курсор")
 	if DisplayServer.get_name() != "headless" and not args.is_empty():
@@ -82,7 +117,7 @@ func _run() -> void:
 		await process_frame
 		root.get_texture().get_image().save_png(args[0].path_join("settlement_overview.png"))
 	game.set_paused(false)
-	game._open_settlement()
+	game._open_settlement(settlement)
 	game.hud.clear_world()
 	check(not game.hud.settlement_panel.visible, "выход из мира очищает доску маршрутов")
 	main.queue_free()

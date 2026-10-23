@@ -9,6 +9,8 @@ extends Node3D
 const WHEEL_Y := 0.34    # высота осей колёс над землёй
 const STEER_VIEW := 0.35 # поворот переднего колеса в долях угла руля
 const Lamp = preload("res://scripts/render/bike_lamp.gd")
+const PACK_AT := Vector3(0.0, -0.08, 0.06) # сумка на кости Chest: у спины (+Z), низ — у поясницы
+const PACK_SCALE := 0.8
 
 # индексы состояния в tick: x, высота рамы, z, наклон, курс, крен, подвеска (средняя, вилка, зад), колёса, руль, педали
 const S_X := 0
@@ -104,6 +106,24 @@ func set_lamp(on: bool) -> void:
 
 func lamp_on() -> bool:
 	return is_instance_valid(lamp) and lamp.is_enabled()
+
+
+## 11.9: сумка доставки за спиной седока (CargoBag) — на кости Chest, поэтому едет и падает вместе с ним
+func set_pack(on: bool) -> void:
+	if rider == null or not rider.is_rig_valid():
+		return
+	var pack := rider.skeleton.get_node_or_null("Pack") as BoneAttachment3D
+	if pack == null and on:
+		pack = BoneAttachment3D.new()
+		pack.name = "Pack"
+		pack.bone_name = "Chest"
+		rider.skeleton.add_child(pack)
+		var bag := preload("res://scripts/render/cargo_bag.gd").build()
+		bag.position = PACK_AT
+		bag.scale = Vector3.ONE * PACK_SCALE
+		pack.add_child(bag)
+	if pack != null:
+		pack.visible = on
 
 
 ## Запомнить состояние после такта физики

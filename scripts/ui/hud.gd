@@ -18,6 +18,8 @@ const TOAST_TIME := 3.5 # сколько сообщение висит на эк
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
+const Quests = preload("res://scripts/game/quests.gd")
+const DONE_TIME := 4.0 # сколько висит «Задание выполнено» в счётчике (с)
 
 var world: WorldData
 var map_tex: ImageTexture
@@ -26,6 +28,14 @@ var big_map: BigMap
 var compass: Compass
 var settlement_panel
 var goal := {}  # цель путешествия — место из places() или пусто
+var quests: Quests  # 11.9: задания игры (GameWorld), счётчик под мини-картой показывает активное
+var tracker: PanelContainer
+var _tracker_title: Label
+var _tracker_step: Label
+var _tracker_note: Label
+var _done_text := ""
+var _done_left := 0.0
+var _photo_mode := false
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
@@ -70,6 +80,10 @@ func _ready() -> void:
 	add_child(compass)
 	move_child(compass, minimap.get_index() + 1)
 
+	tracker = _build_tracker()
+	add_child(tracker)
+	move_child(tracker, compass.get_index() + 1)
+
 	big_map = BigMap.new()
 	big_map.hud = self
 	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
@@ -88,6 +102,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
+	_done_left = 0.0
 	_toast_queue.clear()
 	_stop_toast_tween()
 	_toast_left = 0.0
@@ -103,6 +118,9 @@ func clear_world() -> void:
 	map_tex = null
 	visited = {}
 	goal = {}
+	quests = null
+	_done_left = 0.0
+	update_tracker()
 	bike_pos = Vector2.ZERO
 	bike_shown = false
 	_toast_queue.clear()
@@ -173,16 +191,97 @@ func set_goal(place: Dictionary) -> void:
 
 ## Игрок в (x, z) метрах: если он дошёл до цели, цель снимается и возвращается текст сообщения
 func check_goal(x: float, z: float) -> String:
-	if goal.is_empty():
-		return ""
-	if goal.kind == "lake":
-		if not world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, goal.src.i):
-			return ""
-	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind in ["peak", "marker"] else (4.0 if goal.kind == "site" else 6.0)):
+	if goal.is_empty() or not at_place(goal, x, z):
 		return ""
 	var text := "Вы добрались до цели: «%s»" % goal.name
 	set_goal({})
 	return text
+
+
+## Игрок в (x, z) метрах дошёл до места: у озера — на берегу, у остальных — ближе радиуса по виду места.
+## Им же проверяют шаги заданий (Quests.tick)
+func at_place(place: Dictionary, x: float, z: float) -> bool:
+	if place.kind == "lake":
+		return world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, place.src.i)
+	return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < (2.5 if place.kind in ["peak", "marker"] else (4.0 if place.kind == "site" else 6.0))
+
+
+## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
+func _build_tracker() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.offset_left = -MINI - 74
+	panel.offset_right = -14
+	panel.offset_top = MINI + 24
+	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.06, 0.07, 0.06, 0.62)
+	style.border_color = Color(GOLD, 0.85)
+	style.border_width_left = 3
+	style.set_corner_radius_all(4)
+	style.set_content_margin_all(9)
+	style.content_margin_left = 12
+	panel.add_theme_stylebox_override("panel", style)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 3)
+	panel.add_child(box)
+	_tracker_title = _tracker_label(box, 15, GOLD)
+	_tracker_step = _tracker_label(box, 14, Color(1, 1, 1, 0.95))
+	_tracker_note = _tracker_label(box, 12, Color(1, 1, 1, 0.6))
+	panel.visible = false
+	return panel
+
+
+func _tracker_label(box: VBoxContainer, font_size: int, color: Color) -> Label:
+	var label := Label.new()
+	label.add_theme_font_size_override("font_size", font_size)
+	label.add_theme_color_override("font_color", color)
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
+	label.add_theme_constant_override("outline_size", 3)
+	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	label.custom_minimum_size.x = MINI + 60 - 21 # ширина счётчика без полей: перенос считает высоту по ней
+	box.add_child(label)
+	return label
+
+
+## Задание выполнено: счётчик ещё DONE_TIME секунд показывает это вместо шага
+func quest_done(text: String) -> void:
+	_done_text = text
+	_done_left = DONE_TIME
+	update_tracker()
+
+
+## Перерисовать счётчик задания (игрок в px, pz)
+func update_tracker() -> void:
+	if tracker == null:
+		return
+	var title := ""
+	var line := ""
+	var note := ""
+	if _done_left > 0.0:
+		title = "✓ " + _done_text
+		if quests != null:
+			note = "Выполнено заданий: %d" % quests.done
+	elif quests != null and not quests.active.is_empty():
+		var q := quests.active
+		title = "%s %s" % [Quests.KINDS[q.kind].icon, q.title]
+		var s := quests.step()
+		line = quests.step_text(s)
+		if not is_nan(px):
+			line += " · " + _fmt_dist(Grid.hypot(s.place.x * TILE - px, s.place.y * TILE - pz))
+		note = "%s · шаг %d из %d" % [Quests.KINDS[q.kind].title, q.step + 1, q.steps.size()]
+		if quests.cargo:
+			note += " · сумка за спиной"
+	tracker.visible = title != "" and not _photo_mode
+	if _tracker_title.text != title:
+		_tracker_title.text = title
+	if _tracker_step.text != line:
+		_tracker_step.text = line
+	_tracker_step.visible = line != ""
+	if _tracker_note.text != note:
+		_tracker_note.text = note
 
 
 ## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
@@ -194,6 +293,8 @@ func heading_to(x: float, z: float) -> float:
 func set_photo_mode(on: bool) -> void:
 	for node: CanvasItem in [$Crosshair, $InfoPanel, minimap, compass, hint, prompt]:
 		node.visible = not on
+	_photo_mode = on
+	update_tracker()
 
 
 ## Строка подсказок внизу и подсказка у прицела (пустая — скрыта)
@@ -251,6 +352,10 @@ func _stop_toast_tween() -> void:
 
 
 func _process(delta: float) -> void:
+	if _done_left > 0.0:
+		_done_left -= delta
+		if _done_left <= 0.0:
+			update_tracker()
 	if _toast_left <= 0.0:
 		return
 	_toast_left -= delta
@@ -318,6 +423,7 @@ func update_info(p: PlayerState, look_yaw: float, depth: float) -> void:
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же
 	if info.text != text:
 		info.text = text
+	update_tracker()
 
 
 ## Расстояние в метрах или километрах

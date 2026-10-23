@@ -28,6 +28,7 @@ var anchors: Array[Dictionary] = []  # {id, name, kind — подпись вид
 var occluded := Callable()           # (from: Vector3, to: Vector3) -> bool: склон закрывает место
 var familiar := Callable()           # (id: String) -> bool: посещено или цель
 var known := {}                      # id -> true: узнанные в видоискателе
+var wanted := ""                     # 11.9: id места, снимок которого нужен для задания (Quests, шаг shoot)
 var shots: Array[Dictionary] = []
 var zoom := 0
 var target := {}                     # место в прицеле
@@ -191,6 +192,8 @@ func shoot() -> void:
 		_thumb_text = "Не удалось сохранить снимок"
 	else:
 		_thumb_text = "Снимок сохранён" + ("" if place.is_empty() else " · «%s»" % place.name)
+		if not place.is_empty() and place.id == wanted:
+			_thumb_text = "Снимок для задания · «%s»" % place.name
 		var shot := {path = path, place = place.get("id", ""), name = place.get("name", "")}
 		shots.append(shot)
 		photo_taken.emit(shot)
@@ -258,6 +261,8 @@ func _draw_view(c: Control) -> void:
 			var a := ne * e
 			_text(c, font, _shown.name, Vector2(0.0, -30.0), 26, Color(1.0, 0.97, 0.88, a), 0.5)
 			_text(c, font, "%s · %s" % [_shown.kind, _distance(_name_dist)], Vector2(0.0, -10.0), 15, Color(1, 1, 1, 0.75 * a), 0.5)
+			if _shown.id == wanted:
+				_text(c, font, "Снимок для задания · ЛКМ", Vector2(0.0, -58.0), 15, Color(AMBER, a), 0.5)
 			c.draw_colored_polygon(PackedVector2Array([Vector2(-5, -1), Vector2(5, -1), Vector2(0, 5)]), Color(1, 1, 1, 0.8 * a))
 			c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	# карточка последнего снимка: выезжает справа, чуть повёрнута, гаснет

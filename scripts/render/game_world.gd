@@ -12,6 +12,7 @@ extends Node3D
 ## С 10.1 одна система наведения: E действует на то, на что смотрит игрок (велосипед, доска маршрутов; _aim),
 ## на велосипеде E — слезть. F — фара.
 ## С 11.8 пешком ПКМ — фотоаппарат (PhotoCamera): видоискатель, снимки, названия мест по наведению.
+## С 11.9 доска даёт задания (Quests): посещение, доставка сумки (E у доски, сумка за спиной седока), снимок места.
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -31,8 +32,14 @@ const SpeedWind = preload("res://scripts/render/speed_wind.gd")
 const NavigationLine = preload("res://scripts/render/navigation_line.gd")
 const PlaceNames = preload("res://scripts/render/place_names.gd")
 const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
+const Quests = preload("res://scripts/game/quests.gd")
+const CargoBag = preload("res://scripts/render/cargo_bag.gd")
+const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 var place_names: PlaceNames
 var photo: PhotoCamera
+var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
+var _bag: Node3D         # сумка доставки у доски, пока её не взяли
+var _quest_goal := ""    # key места, которое задание поставило целью на компасе
 var navigation_line: NavigationLine
 var _speed_wind: SpeedWind
 var _speed_rush := 0.0
@@ -110,6 +117,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	hud.settlement_panel.closed.connect(_close_settlement)
 	hud.settlement_panel.destination_selected.connect(_choose_settlement_route)
 	hud.settlement_panel.bike_requested.connect(_recall_bike)
+	hud.settlement_panel.quest_accepted.connect(_accept_quest)
+	hud.settlement_panel.quest_abandoned.connect(_abandon_quest)
 	var scene_started := t
 	if _defs.is_empty():
 		_defs = Models.tree_defs()
@@ -238,6 +247,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	navigation_line.setup(world, heights)
 	hud.goal_changed.connect(_navigation_goal)
 	hud.travel_requested.connect(travel_to)
+	quests = Quests.new()
+	quests.changed.connect(_quest_changed)
+	hud.quests = quests
+	photo.photo_taken.connect(func(shot: Dictionary) -> void: _quest_progress(quests.photographed(shot.place)))
 	for s: Dictionary in world.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
@@ -415,6 +428,9 @@ func travel_to(place: Dictionary) -> void:
 	if _opening or paused or player == null or not world.accessible(place.x, place.y):
 		return
 	if bike.riding and bike.airborne:
+		return
+	if quests != null and quests.cargo:
+		hud.toast_now("С сумкой за спиной быстро не переместиться — довезите её сами")
 		return
 	_set_photo(false)
 	_close_settlement(false)
@@ -697,6 +713,8 @@ func _physics_process(dt: float) -> void:
 		_snap()
 	for text: String in player.check_discoveries(world, hud.visited):
 		hud.toast(text)
+	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
+	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
 	var reached := hud.check_goal(player.x, player.z)
 	if reached != "":
 		hud.toast(reached)
@@ -903,8 +921,9 @@ func _update_hints() -> void:
 		hud.set_hints("Падение · Y — восстановиться у ближайшего места · Esc — пауза", "")
 		return
 	match _target.get("kind", ""):
-		"board": prompt = "E — маршруты поселения «%s»" % _target.place.name
+		"board": prompt = "E — доска поселения «%s»: задания и маршруты" % _target.place.name
 		"bike": prompt = "E — сесть на велосипед"
+		"cargo": prompt = "E — надеть сумку"
 	if bike.riding:
 		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фара · Esc — пауза", prompt)
 		return
@@ -936,6 +955,10 @@ func _aim() -> Dictionary:
 	for b: Dictionary in _boards:
 		if eye.distance_squared_to(b.at.origin) < REACH * REACH:
 			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
+	if _bag != null and _bag.visible and not bike.riding and eye.distance_squared_to(_bag.position) < REACH * REACH:
+		var at := _bag.transform
+		at.origin += at.basis * Vector3(0.0, 0.0, CargoBag.SIZE.z * 0.5)
+		items.append({kind = "cargo", at = at, half = CargoBag.SIZE * 0.5 + Vector3(0.05, 0.08, 0.05)})
 	var best := {}
 	var best_hit := INF
 	var best_angle := INF
@@ -979,6 +1002,7 @@ func interact() -> void:
 	match _target.get("kind", ""):
 		"board": _open_settlement(_target.place)
 		"bike": toggle_bike()
+		"cargo": _quest_progress(quests.pick_up())
 		_:
 			if bike.riding:
 				toggle_bike()
@@ -1005,7 +1029,69 @@ func _open_settlement(village := {}) -> void:
 	_snap()
 	_dragging = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.settlement_panel.open(village, world, hud.places(), bike.distance_to(player) < 4.0)
+	hud.settlement_panel.open(village, world, hud.places(), bike.distance_to(player) < 4.0, quests, _offers(village))
+
+
+## Задания доски поселения village (Quests.offers): соседи по дорогам и дальнее поселение — из индекса мира
+func _offers(village: Dictionary) -> Array:
+	var here := SettlementPanel._target(world.place(WorldData.place_id("settlement", village.x, village.y)))
+	var neighbors: Array = []
+	for r: Dictionary in world.routes(here.id):
+		neighbors.append(SettlementPanel._target(world.place(r.to if r.from == here.id else r.from)))
+	var far := world.far_destination(here.id)
+	return quests.offers(here, hud.all_places(), neighbors, {} if far.is_empty() else SettlementPanel._target(far), hud.visited, world.seed_num)
+
+
+func _accept_quest(q: Dictionary) -> void:
+	quests.accept(q)
+	_close_settlement()
+	hud.toast_now("Задание взято: %s. %s" % [q.title, quests.step_text()])
+
+
+func _abandon_quest() -> void:
+	quests.abandon()
+	_close_settlement()
+	hud.toast_now("Вы отказались от задания")
+
+
+## Сообщение о шаге задания: следующий шаг или «Задание выполнено» (тогда и в счётчике)
+func _quest_progress(text: String) -> void:
+	if text.is_empty():
+		return
+	if quests.active.is_empty():
+		hud.quest_done(quests.last)
+		hud.toast_now(text)
+	else:
+		hud.toast_now("Дальше: " + text)
+
+
+## Задание изменилось: цель на компасе, сумка у доски и за спиной, нужный снимок в видоискателе, счётчик
+func _quest_changed() -> void:
+	var goal := quests.goal()
+	if not goal.is_empty():
+		_quest_goal = goal.key
+		hud.set_goal(goal)
+	elif not _quest_goal.is_empty():
+		if hud.goal.get("key") == _quest_goal:
+			hud.set_goal({})
+		_quest_goal = ""
+	var s := quests.step()
+	photo.wanted = s.place.key if s.get("do") == "shoot" else ""
+	if s.get("do") == "pickup":
+		if _bag == null:
+			_bag = CargoBag.build()
+			add_child(_bag)
+		# у правого края доски, лицом туда же, куда щит; стоит на земле
+		var board := SettlementsBuilder.board_foot(s.place.src, heights)
+		var basis := Basis(Vector3.UP, -PI / 4.0)
+		var at := board + basis * Vector3(1.35, 0.0, 0.35)
+		at.y = heights.ground_at(at.x, at.z) + CargoBag.SIZE.y * 0.5 + 0.03
+		_bag.transform = Transform3D(basis.rotated(Vector3.UP, 0.4), at)
+		_bag.visible = true
+	elif _bag != null:
+		_bag.visible = false
+	bike_view.set_pack(quests.cargo)
+	hud.update_tracker()
 
 
 func _close_settlement(capture := true) -> void:
