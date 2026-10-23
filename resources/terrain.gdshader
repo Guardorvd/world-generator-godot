@@ -143,9 +143,8 @@ void fragment() {
 		float soft = mix(0.16, 0.32, organic);
 		float aa = clamp(mask_w + pixel_m * 2.5 * edge_amp, 0.004, 0.3);
 		road = smoothstep(0.5 - soft - aa, 0.5 + soft + aa, edge_v);
-		// Утоптанная полоса по обе стороны кромки: трава примята и темнее, у полотна сухой ободок.
-		float rim = smoothstep(0.08, 0.45, edge_v) * (1.0 - road);
-		col *= 1.0 - rim * vec3(0.10, 0.08, 0.13) * (1.0 - organic * 0.5);
+		// 11.4: обочина — полоса снаружи кромки, до конца маски вершин (около метра). У полотна сухой ободок.
+		float verge = smoothstep(0.02, 0.30, edge_v) * (1.0 - road);
 		float lip = road * (1.0 - smoothstep(0.55, 0.85, edge_v));
 		// Поперечная координата полотна: 0 — ось, 1 — половина ширины (по ближайшему отрезку пути).
 		float across = abs(UV2.x + (n_mid - 0.5) * 0.18);
@@ -160,7 +159,7 @@ void fragment() {
 		float grain_fade = 1.0 - smoothstep(0.25, 0.6, grain_aa);
 		float pebbles = (1.0 - smoothstep(radius - grain_aa, radius + grain_aa, length(stone))) * step(0.25, scatter.y) * grain * grain_fade;
 		float dome = clamp(1.0 - length(stone) / radius, 0.0, 1.0);
-		// Редкие крупные камни на гравии и камне, по краям полотна чаще, чем на колее.
+		// Редкие крупные камни на гравии и камне, по краям полотна чаще, чем на колее; на обочине — у любого покрытия.
 		vec2 big_cells = rp * 2.9 + vec2(13.1, 7.7);
 		vec2 big_scatter = grain_hash(floor(big_cells));
 		vec2 rock_at = fract(big_cells) - (vec2(0.35) + big_scatter * 0.3);
@@ -168,8 +167,21 @@ void fragment() {
 		float big_aa = max(pixel_m * 2.9 * 0.5, 0.01);
 		float big_rocks = (1.0 - smoothstep(rock_r - big_aa, rock_r + big_aa, length(rock_at)))
 			* step(0.86 - grain * 0.10 - smoothstep(0.55, 0.95, across) * 0.08, big_scatter.x)
-			* smoothstep(0.25, 0.7, grain) * (1.0 - smoothstep(0.2, 0.6, big_aa));
+			* max(smoothstep(0.25, 0.7, grain), verge * (0.6 - organic * 0.3)) * (1.0 - smoothstep(0.2, 0.6, big_aa));
 		float big_dome = clamp(1.0 - length(rock_at) / rock_r, 0.0, 1.0);
+		// Обочина: трава гуще и темнее, с сухими пятнами; просветы почвы, разнесённой с полотна;
+		// на них — выкатившийся гравий; камни. Цвет почвы — смесь покрытия и травы, без новых данных.
+		vec3 verge_col = col;
+		if (verge > 0.0) {
+			float dry_grass = smoothstep(0.42, 0.72, fine * 0.5 + fleck * 0.5);
+			verge_col *= mix(vec3(0.93, 0.97, 0.88), vec3(1.08, 1.03, 0.78), dry_grass);
+			float bare = smoothstep(0.56, 0.76, fleck * 0.55 + (1.0 - n_mid) * 0.35 + verge * 0.25 - organic * 0.1) * near;
+			vec3 earth = mix(COLOR.rgb * (0.9 + (fine - 0.5) * 0.12), col * 0.7, 0.22 + organic * 0.3);
+			earth *= 1.0 + vec3(pebbles * (dome * 1.2 - 0.3) * 0.4 * near);
+			verge_col = mix(verge_col, earth, bare * 0.8);
+			vec3 verge_rock = rock_color * 0.78 * (0.8 + big_dome * 0.28) * mix(0.9, 1.06, big_scatter.y);
+			verge_col = mix(verge_col, verge_rock, big_rocks * near);
+		}
 		float soil_detail = (fine - 0.5) * mix(0.05, 0.10, grain) + (fleck - 0.5) * 0.08;
 		vec3 soil = COLOR.rgb * (0.95 + (n_mid - 0.5) * 0.14 + soil_detail * near);
 		// Крупные пятна: суше и светлее / сырее, темнее и холоднее, чтобы полотно не было одного тона.
@@ -193,16 +205,17 @@ void fragment() {
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
 		soil *= 1.0 - lip * 0.06;
-		col = mix(col, soil, road);
+		col = mix(mix(col, verge_col, verge), soil, road);
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
-		if (road * near > 0.0) {
+		float relief = max(road, verge * big_rocks);
+		if (relief * near > 0.0) {
 			// Свет следует отдельным зёрнам и камням; на середине полотна нет контуров карты нормалей биома,
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
 			vec3 grit = texture(detail_normal, rp * 1.37).rgb * 2.0 - 1.0;
 			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks);
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
-			detail_n = mix(detail_n, road_normal, road);
+			detail_n = mix(detail_n, road_normal, relief);
 		}
 	}
 	ALBEDO = col * (1.0 + v) * cloud_light(p);

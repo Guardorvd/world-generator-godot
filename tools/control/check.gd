@@ -260,6 +260,9 @@ func _process(delta: float) -> bool:
 			load_ms.generation_profile = game.world.generation_profile.duplicate()
 			game.paused = true
 			main.hud.visible = false
+			# 11.4: окно проверки может терять фокус — игра тогда ставит паузу и меню закрывает снимки
+			if game.pause_requested.is_connected(main._toggle_pause):
+				game.pause_requested.disconnect(main._toggle_pause)
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			game.camera.fov = 70.0
 			spawn = game.camera.global_transform

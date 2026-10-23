@@ -674,25 +674,28 @@ func _fill_grass(px: float, pz: float) -> void:
 				var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
 				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
 				# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
+				var verge := 0.0
 				if heights.road_refinement != null:
 					var weight := heights.road_refinement.weight_at(x, z, w.W)
 					if weight > 0.0 and weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
 						continue
+					# 11.4: уцелевшая у полотна трава — выше и суше (некошеная обочина), та же раскладка.
+					verge = clampf(weight * 5.0, 0.0, 1.0)
 				elif w.path_mask[k] >= 2:
 					continue
 				var y := heights.ground_at(x, z)
 				if heights.depth_at(x, z) > 0.0:
 					continue
 				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
-				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9)
+				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9) * (1.0 + verge * 0.35)
 				_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, sy)
 				var origin := Vector3(x, y - 0.05, z)
 				low = low.min(origin)
 				high = high.max(origin)
 				var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
-				buf[n * STRIDE + 12] = tc[0] * v
+				buf[n * STRIDE + 12] = tc[0] * v * (1.0 + verge * 0.12)
 				buf[n * STRIDE + 13] = tc[1] * v
-				buf[n * STRIDE + 14] = tc[2] * v
+				buf[n * STRIDE + 14] = tc[2] * v * (1.0 - verge * 0.2)
 				buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
 				buf[n * STRIDE + 16] = rank
 				n += 1
