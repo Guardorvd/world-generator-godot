@@ -16,6 +16,7 @@ extends SceneTree
 ##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию как в игре — высокая).
 ##   --cache — с 10.0: после проверки тот же мир загружается ещё раз из кэша миров (WorldCache, файл во временной
 ##   папке прогона): время загрузки из кэша, размер файла и совпадение мира, рельефа и карты; итог в cache.json.
+##   С 10.2 ещё третья загрузка: из кэша только география (файлы следующих слоёв удалены), остальное генерируется.
 ## Кэш: в папке прогона лежит check.json; если тот же коммит без правок уже снят с теми же видами и FPS,
 ## мир не генерируется повторно. Поэтому «было» снимается один раз до правок и дальше берётся из кэша.
 
@@ -69,6 +70,7 @@ var failed := false
 var done := false
 var cache_check := false   # --cache: ещё одна загрузка того же мира из кэша
 var fresh := {}            # что сравнить после загрузки из кэша: сводка мира, хеши рельефа и карты
+var cache_res := {}        # 10.2: итог загрузки из кэша целиком, пока идёт загрузка с одной географией
 
 
 func _initialize() -> void:
@@ -239,7 +241,8 @@ func _process(delta: float) -> bool:
 					# первая загрузка генерирует мир и пишет его в чистый кэш прогона
 					WorldCache.enabled = true
 					WorldCache.dir = out.path_join("world_cache")
-					DirAccess.remove_absolute(WorldCache.path_for(seed_text, size))
+					for path in WorldCache.paths_for(seed_text, size):
+						DirAccess.remove_absolute(path)
 				started = Time.get_ticks_msec()
 				main.start_game(seed_text, size)
 				phase = "loading"
@@ -367,16 +370,36 @@ func _process_cache(game: GameWorld) -> bool:
 	var same := {}
 	for k: String in fresh:
 		same[k] = fresh[k] == now[k]
-	var path := WorldCache.path_for(seed_text, size)
-	var res := {from_cache = game.load_timings.has("cache_read_ms"), load_s = load_s, fresh_load_s = timing.get("load", 0.0),
-		file_mb = snappedf(FileAccess.get_size(path) / 1048576.0, 0.1), save_wait_s = timing.get("cache_save_wait", 0.0),
-		same = same, load_ms = game.load_timings.duplicate()}
-	Dev.save_json(out.path_join("cache.json"), res)
-	print("Кэш: из кэша %s, загрузка %.1f с (с генерацией %.1f с), файл %.1f МБ, совпадает %s" % [res.from_cache, load_s,
-		res.fresh_load_s, res.file_mb, same])
-	if not res.from_cache or same.values().has(false):
+	var paths := WorldCache.paths_for(seed_text, size)
+	var layers: int = game.load_timings.get("cache_layers", 0)
+	if cache_res.is_empty():
+		var mb := 0.0
+		for path in paths:
+			mb += FileAccess.get_size(path) / 1048576.0
+		cache_res = {from_cache = layers == paths.size(), load_s = load_s, fresh_load_s = timing.get("load", 0.0),
+			file_mb = snappedf(mb, 0.1), save_wait_s = timing.get("cache_save_wait", 0.0),
+			same = same, load_ms = game.load_timings.duplicate()}
+		print("Кэш: из кэша %s, загрузка %.1f с (с генерацией %.1f с), файлы %.1f МБ, совпадает %s" % [cache_res.from_cache,
+			load_s, cache_res.fresh_load_s, cache_res.file_mb, same])
+		if cache_res.from_cache and not same.values().has(false):
+			# 10.2: третья загрузка — из кэша только география, места и природа генерируются заново
+			for k in range(1, paths.size()):
+				DirAccess.remove_absolute(paths[k])
+			main._back_to_menu()
+			started = Time.get_ticks_msec()
+			main.start_game(seed_text, size)
+			return false
+	else:
+		cache_res.geo_only = {layers = layers, load_s = load_s, same = same, load_ms = game.load_timings.duplicate()}
+		print("Кэш с одной географией: слоёв из кэша %d, загрузка %.1f с, совпадает %s" % [layers, load_s, same])
+		if layers != 1:
+			failed = true
+	Dev.save_json(out.path_join("cache.json"), cache_res)
+	if not cache_res.from_cache or cache_res.same.values().has(false) or same.values().has(false):
 		failed = true
-	DirAccess.remove_absolute(path)
+	WorldCache.wait_writes()
+	for path in paths:
+		DirAccess.remove_absolute(path)
 	DirAccess.remove_absolute(WorldCache.dir)
 	cache_check = false
 	return _finish()

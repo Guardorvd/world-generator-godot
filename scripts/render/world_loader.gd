@@ -16,7 +16,7 @@ var terrain_image: Image
 var forest_surface: Image
 var water_arrays: Array[Array]
 var map_image: Image
-var from_cache := false   # мир взят из WorldCache (10.0), а не сгенерирован
+var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
 var timings := {}
 
@@ -34,18 +34,21 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
-	# 10.0: готовый мир из кэша (WorldCache) вместо генерации; рельеф и всё остальное считаются как обычно
-	r.world = WorldCache.load_world(seed_text, size) if WorldCache.enabled else null
-	if r.world != null:
-		r.from_cache = true
-		if on_progress.is_valid():
-			on_progress.call(0.5, "Мир из сохранённых")
-		side.start(r._prepare.bind(r.world, px))
+	# 10.0: готовый мир из кэша (WorldCache) вместо генерации; рельеф и всё остальное считаются как обычно.
+	# С 10.2 кэш по слоям: подошли не все — генерация продолжается с первого неподходящего слоя
+	var on_climate := func(w: WorldData) -> void:
+		side.start(r._prepare.bind(w, px, w.base_heights))
+	if WorldCache.enabled:
+		var got := WorldCache.generate(seed_text, size, on_progress, on_climate)
+		r.world = got.world
+		r.from_cache = got.layers == WorldGenerator.LAYERS.size()
+		r.timings.cache_layers = got.layers
+		if r.from_cache:
+			if on_progress.is_valid():
+				on_progress.call(0.5, "Мир из сохранённых")
+			side.start(r._prepare.bind(r.world, px))
 	else:
-		r.world = WorldGenerator.generate(seed_text, size, on_progress, func(w: WorldData) -> void:
-			side.start(r._prepare.bind(w, px, w.base_heights)))
-		if WorldCache.enabled:
-			WorldCache.save_world(r.world, size)
+		r.world = WorldGenerator.generate(seed_text, size, on_progress, on_climate)
 	var generated := Time.get_ticks_usec()
 	var t := Time.get_ticks_usec()
 	# Состав леса известен после генерации; параллельная заливка его не читает (с 10.0 — пока она идёт).

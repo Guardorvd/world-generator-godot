@@ -33,11 +33,25 @@ static func noise_rng(seed_num: int, name: String) -> WGRandom:
 ## after_climate(w) — необязательно: вызывается, когда рельеф, вода и биомы готовы. Следующие этапы их
 ## уже не меняют, поэтому то, что зависит только от них, можно считать в другом потоке параллельно с ними.
 static func generate(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
-	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate)
+	return generate_layers(seed_text, size, on_progress, after_climate)
+
+
+## Слои генерации для кэша миров (с 10.2, WorldCache): география (рельеф, вода, климат), места и пути,
+## природа (растительность, озёра, полотно путей, окно территории). Слой читает только готовые прошлые слои.
+const LAYERS := ["geo", "places", "nature"]
+
+
+## Генерация по слоям. from — мир с готовыми слоями до start (из кэша: шумы на месте, без base_heights);
+## on_layer(w, k) — после каждого слоя k, пока следующий его не тронул.
+static func generate_layers(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
+		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer)
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
 	var home := PlayerState.home(w)
 	w.territory_center = Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
 	w.expand_territory(size)
+	if on_layer.is_valid():
+		on_layer.call(w, LAYERS.size() - 1)
 	return w
 
 
@@ -87,19 +101,32 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 	return w
 
 
-static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable()) -> WorldData:
-	var w := _geography(seed_text, side, on_progress)
+static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
+		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
+	var w := from
+	if start == 0:
+		w = _geography(seed_text, side, on_progress)
+		if on_layer.is_valid():
+			on_layer.call(w, 0)
+	else:
+		# 10.2: география из кэша. Общий базовый рельеф строится заново (тот же, см. Heightfield.base_of),
+		# поля шума — из сида
+		w.base_heights = Heightfield.new(w, false)
+		w.start_noise_fields()
 	if after_climate.is_valid():
 		after_climate.call(w)
 	var step := func(p: float, label: String) -> void:
 		if on_progress.is_valid():
 			on_progress.call(p, label)
-	step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
-	StageLandmarks.run(w)
-	step.call(StageTrails.PROGRESS, StageTrails.LABEL)
-	StageTrails.run(w, step)
-	step.call(StageSites.PROGRESS, StageSites.LABEL)
-	StageSites.run(w)
+	if start <= 1:
+		step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
+		StageLandmarks.run(w)
+		step.call(StageTrails.PROGRESS, StageTrails.LABEL)
+		StageTrails.run(w, step)
+		step.call(StageSites.PROGRESS, StageSites.LABEL)
+		StageSites.run(w)
+		if on_layer.is_valid():
+			on_layer.call(w, 1)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	StageVegetation.run(w)
 	StageLakes.run(w)
