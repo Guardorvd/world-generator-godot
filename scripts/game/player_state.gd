@@ -249,7 +249,8 @@ static func _tangent(around: Callable, px: float, pz: float, sx: float, sz: floa
 ## Скорость набирается и гасится быстро, но не мгновенно; в прыжке управление слабее.
 ## Прыжок срабатывает и чуть после схода с края (COYOTE), и если пробел нажат чуть раньше приземления
 ## (JUMP_BUFFER). Возвращает true, если игрок пытался идти.
-func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield) -> bool:
+## pace — доля обычной скорости шага (с 11.8 с фотоаппаратом у глаз — тише).
+func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float, w: WorldData, heights: Heightfield, pace := 1.0) -> bool:
 	var sy := sin(yaw)
 	var cy := cos(yaw)
 	var mx := -sy * fw + cy * st
@@ -261,7 +262,7 @@ func step(fw: float, st: float, running: bool, jump: bool, yaw: float, dt: float
 	if moving:
 		mx /= ln
 		mz /= ln
-		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * terrain_speed(w, x, z, heights)
+		var sp := GameConfig.WALK * (GameConfig.RUN if running else 1.0) * pace * terrain_speed(w, x, z, heights)
 		sp *= lerpf(1.0, 0.5, smoothstep(0.05, 0.8, heights.immersion_at(x, z, feet)))
 		# в крутой подъём идти тяжелее
 		var rise := (heights.surface_at(x + mx, z + mz, feet) - heights.surface_at(x, z, feet))

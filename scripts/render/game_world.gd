@@ -11,6 +11,7 @@ extends Node3D
 ## (Shift+T — назад).
 ## С 10.1 одна система наведения: E действует на то, на что смотрит игрок (велосипед, доска маршрутов; _aim),
 ## на велосипеде E — слезть. F — фара.
+## С 11.8 пешком ПКМ — фотоаппарат (PhotoCamera): видоискатель, снимки, названия мест по наведению.
 ## Движение и игровое время считаются тактами физики (_physics_process, 60 в секунду при любом FPS),
 ## а кадр (_process) показывает игрока, велосипед и камеру между двумя последними тактами.
 
@@ -29,7 +30,9 @@ const OPENING_FOLLOW := 3.0
 const SpeedWind = preload("res://scripts/render/speed_wind.gd")
 const NavigationLine = preload("res://scripts/render/navigation_line.gd")
 const PlaceNames = preload("res://scripts/render/place_names.gd")
+const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
 var place_names: PlaceNames
+var photo: PhotoCamera
 var navigation_line: NavigationLine
 var _speed_wind: SpeedWind
 var _speed_rush := 0.0
@@ -133,6 +136,12 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	place_names = PlaceNames.new()
 	place_names.setup($Settlements)
+	photo = PhotoCamera.new()
+	add_child(photo)
+	photo.anchors = _photo_anchors()
+	photo.occluded = _occluded
+	photo.familiar = func(id: String) -> bool: return hud.visited.has(id) or hud.goal.get("key") == id
+	photo.capturing.connect(func(on: bool) -> void: hud.visible = not on)
 	fires = built.fires
 	windows = built.windows
 	fire_light = OmniLight3D.new()
@@ -257,6 +266,8 @@ func capture_mouse() -> void:
 
 
 func set_paused(p: bool) -> void:
+	if p:
+		_set_photo(false)
 	paused = p
 	if is_instance_valid(navigation_line) and p:
 		navigation_line.visible = false
@@ -282,7 +293,7 @@ func set_paused(p: bool) -> void:
 func look(dx: float, dy: float) -> void:
 	if _opening:
 		return
-	var k := GameConfig.MOUSE * GameSettings.mouse
+	var k := GameConfig.MOUSE * GameSettings.mouse * (photo.look_scale() if photo.active else 1.0)
 	yaw -= dx * k
 	pitch = clampf(pitch - dy * k * (-1.0 if GameSettings.invert_y else 1.0), -1.5, 1.5)
 	_looked_at = time
@@ -319,9 +330,74 @@ func toggle_bike() -> void:
 	_snap()
 
 
+## ПКМ пешком: достать фотоаппарат или убрать его
+func toggle_photo() -> void:
+	if photo.active:
+		_set_photo(false)
+		return
+	if _opening or paused or show_map or crash.active() or _settlement_open():
+		return
+	if bike.riding:
+		hud.toast_now("Фотоаппарат — пешком: слезьте с велосипеда (E)")
+		return
+	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
+		capture_mouse()
+	_set_photo(true)
+
+
+func _set_photo(on: bool) -> void:
+	if photo == null or photo.active == on:
+		return
+	if on:
+		photo.enter()
+	else:
+		photo.exit()
+	hud.set_photo_mode(on)
+
+
+## Точки наведения фотоаппарата — подписи мест (SettlementsBuilder._label): над костром поселения,
+## над вершиной, над серединой озера, над местом. Радиус — примерный размер места, reach — дальше не узнать
+func _photo_anchors() -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for child in $Settlements.get_children():
+		if not (child is Label3D and child.has_meta("place_id")):
+			continue
+		var p := world.place(child.get_meta("place_id"))
+		if p.is_empty():
+			continue
+		var a := {id = p.id, name = p.name, pos = (child as Label3D).global_position}
+		match p.kind:
+			"settlement":
+				a.merge({kind = "Поселение", radius = 40.0, reach = 1500.0})
+			"peak":
+				a.merge({kind = "Вершина", radius = 50.0, reach = 2500.0})
+			"lake":
+				a.merge({kind = "Озеро", radius = sqrt(p.src.cells / PI) * TILE, reach = 1500.0})
+			_:
+				var title: String = StageSites.TYPES[p.src.type].title
+				a.merge({kind = title.left(1).to_upper() + title.substr(1), radius = 12.0, reach = 700.0})
+		out.append(a)
+	return out
+
+
+## Склон между глазами и местом: точки луча ниже земли больше чем на метр. Последние 8 % пути не проверяются —
+## это склон самой вершины или берег под подписью
+func _occluded(from: Vector3, to: Vector3) -> bool:
+	var steps := clampi(int(from.distance_to(to) / 25.0), 8, 48)
+	for i in range(1, steps):
+		var t := float(i) / steps
+		if t > 0.92:
+			break
+		var p := from.lerp(to, t)
+		if heights.ground_at(p.x, p.z) > p.y + 1.0:
+			return true
+	return false
+
+
 func toggle_map() -> void:
 	if _opening:
 		return
+	_set_photo(false)
 	_close_settlement(false)
 	show_map = not show_map
 	hud.set_map_visible(show_map)
@@ -340,6 +416,7 @@ func travel_to(place: Dictionary) -> void:
 		return
 	if bike.riding and bike.airborne:
 		return
+	_set_photo(false)
 	_close_settlement(false)
 	crash.abort()
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
@@ -394,6 +471,7 @@ func restore_at_place() -> bool:
 		return false
 	if crash != null:
 		crash.abort()
+	_set_photo(false)
 	player = PlayerState.new()
 	player.x = spot.position.x
 	player.z = spot.position.z
@@ -449,9 +527,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			get_viewport().set_input_as_handled()
 		return
 	if event.is_action_pressed("pause"):
-		# Esc сначала закрывает большую карту, потом ставит паузу
+		# Esc сначала закрывает большую карту и убирает фотоаппарат, потом ставит паузу
 		if show_map and not paused:
 			toggle_map()
+		elif photo != null and photo.active and not paused:
+			_set_photo(false)
 		else:
 			pause_requested.emit()
 		get_viewport().set_input_as_handled()
@@ -476,9 +556,17 @@ func _unhandled_input(event: InputEvent) -> void:
 		hud.toast_now("Время %s" % DayCycle.clock(hour))
 	elif event.is_action_pressed("interact") and not show_map:
 		interact()
+	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
+		if event.pressed and not show_map:
+			toggle_photo()
+	elif event is InputEventMouseButton and photo.active and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+		if event.pressed:
+			photo.zoom_by(1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
+		elif event.pressed and photo.active:
+			photo.shoot()
 		_dragging = event.pressed
 	elif event is InputEventMouseMotion:
 		# без захвата мыши можно смотреть, зажав левую кнопку
@@ -585,7 +673,9 @@ func _physics_process(dt: float) -> void:
 		if crashed:
 			_crash()
 	else:
-		_moving = player.step(fw, st, Input.is_action_pressed("run"), jump, yaw, dt, world, heights)
+		# с фотоаппаратом у глаз — медленный шаг, без бега и прыжков
+		var aiming := photo.active
+		_moving = player.step(fw, st, Input.is_action_pressed("run") and not aiming, jump and not aiming, yaw, dt, world, heights, 0.5 if aiming else 1.0)
 		if player.land_impact > 0.0:
 			# проседание камеры: заметное после высокого прыжка, едва заметное после обычного
 			_dip_v -= clampf(player.land_impact - 3.0, 0.0, 14.0) * 0.25
@@ -673,9 +763,10 @@ func _process(delta: float) -> void:
 	if _opening:
 		_draw_opening(alpha)
 	if navigation_line != null:
-		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active())
+		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active() and not photo.active)
 	if place_names != null:
-		place_names.update(camera, delta)
+		place_names.update(camera, delta, hud.visited, photo.active)
+	photo.update(camera, delta)
 	_target = _aim()
 	_update_hints()
 	day.apply(hour, time)
@@ -804,7 +895,7 @@ func _update_hints() -> void:
 	if _opening:
 		hud.set_hints("Пробел — пропустить · Esc — пауза", "")
 		return
-	if _settlement_open():
+	if _settlement_open() or photo.active:
 		hud.set_hints("", "")
 		return
 	var prompt := ""
@@ -817,7 +908,7 @@ func _update_hints() -> void:
 	if bike.riding:
 		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фара · Esc — пауза", prompt)
 		return
-	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · Y — к ближайшему месту · F — фара · M — карта · Esc — пауза", prompt)
+	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · ПКМ — фотоаппарат · Y — к ближайшему месту · F — фара · M — карта · Esc — пауза", prompt)
 
 
 func _settlement_open() -> bool:
@@ -832,7 +923,7 @@ func _settlement_open() -> bool:
 ## Берутся только предметы рядом: велосипед, на который можно сесть, доски не дальше REACH от глаз.
 ## Подсказку E показывают только для выбранного
 func _aim() -> Dictionary:
-	if player == null or paused or show_map or crash.active() or _settlement_open():
+	if player == null or paused or show_map or crash.active() or _settlement_open() or photo.active:
 		return {}
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
@@ -883,6 +974,7 @@ static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
 
 ## E: действие с тем, на что смотрит игрок; на велосипеде, если смотреть не на что, — слезть
 func interact() -> void:
+	_set_photo(false) # E с фотоаппаратом у глаз — сначала убрать его
 	_target = _aim()
 	match _target.get("kind", ""):
 		"board": _open_settlement(_target.place)
@@ -900,6 +992,7 @@ func _open_settlement(village := {}) -> void:
 		village = _aim().get("place", {})
 	if village.is_empty():
 		return
+	_set_photo(false)
 	if bike.riding:
 		if absf(bike.speed) > 0.5 or bike.airborne:
 			hud.toast("Остановитесь у костра, чтобы прочитать указатель")
@@ -969,7 +1062,9 @@ func _update_camera(alpha: float, dt: float) -> void:
 		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3)
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
-	camera.fov = lerpf(camera.fov, fov_goal, _smooth(4.0, dt))
+	if photo != null and photo.active:
+		fov_goal = photo.fov(GameSettings.fov)
+	camera.fov = lerpf(camera.fov, fov_goal, _smooth(9.0 if photo != null and photo.active else 4.0, dt))
 	var shake := _trauma * _trauma if GameSettings.head_bob else 0.0
 	var t := lerpf(_prev_time, time, alpha)
 	var jolt := Vector3(sin(t * 41.0), sin(t * 37.0 + 1.7), sin(t * 29.0 + 3.1)) * shake
@@ -1002,7 +1097,7 @@ func _update_camera(alpha: float, dt: float) -> void:
 		return
 	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and GameSettings.head_bob else 0.0, _smooth(8.0, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
-	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * 0.05 * stride * _bob_amp
+	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * 0.05 * stride * _bob_amp * (0.3 if photo != null and photo.active else 1.0)
 	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip, pos.z)
 	camera.rotation = Vector3(view_pitch + jolt.x * 0.03, view_yaw + jolt.y * 0.02, jolt.z * 0.03)
 

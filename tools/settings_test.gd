@@ -149,24 +149,27 @@ func _place_names_test(hud: Hud, w: WorldData) -> void:
 		parent.add_child(label)
 	var names := preload("res://scripts/render/place_names.gd").new()
 	names.setup(parent)
-	names.update(camera, 1.0)
+	names.update(camera, 1.0, {})
+	_check(not near.visible and not faded.visible, "11.8: названия непосещённых мест скрыты")
+	var seen := {near = true, far = true, distant = true, faded = true}
+	names.update(camera, 1.0, seen)
 	_check(near.visible and not far.visible, "при наложении ближнее название остаётся, дальнее затухает")
 	_check(not distant.visible and faded.visible and faded.modulate.a < 0.8, "названия бледнеют после 180 м и скрыты за 300 м")
 	names.set_goal({key = "far"})
-	names.update(camera, 1.0)
+	names.update(camera, 1.0, seen)
 	_check(far.visible and not near.visible and far.outline_size == 12, "выбранное название имеет обводку и приоритет над ближним")
 	names.set_goal({key = "distant"})
-	names.update(camera, 1.0)
+	names.update(camera, 1.0, seen)
 	_check(distant.visible and distant.modulate.a > 0.1, "для выбранной цели дальность увеличивается до 450 м")
 	distant.position.z = -500
-	names.update(camera, 1.0)
+	names.update(camera, 1.0, seen)
 	_check(not distant.visible, "даже выбранная цель не видна через всю карту")
 	names.set_goal({})
-	names.update(camera, 1.0)
+	names.update(camera, 1.0, seen)
 	_check(near.visible and near.outline_size == 8 and not far.visible, "снятие цели возвращает обычное выделение и приоритет расстояния")
 	if "--capture" in OS.get_cmdline_user_args():
 		names.set_goal({key = "far"})
-		names.update(camera, 1.0)
+		names.update(camera, 1.0, seen)
 		await process_frame
 		await RenderingServer.frame_post_draw
 		_check(preload("res://tools/shot_util.gd").save_png(root, "res://tools/control/runs/11.2", "place_names"), "снимок названий в мире")

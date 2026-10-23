@@ -110,6 +110,7 @@ func clear_world() -> void:
 	_toast_left = 0.0
 	toast_label.modulate.a = 0.0
 	set_hints("", "")
+	set_photo_mode(false)
 	big_map.visible = false
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.hover = {}
@@ -187,6 +188,12 @@ func check_goal(x: float, z: float) -> String:
 ## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
 func heading_to(x: float, z: float) -> float:
 	return atan2(-(x - px), -(z - pz))
+
+
+## 11.8: с фотоаппаратом у глаз (GameWorld.photo) видны только рамка видоискателя и сообщения
+func set_photo_mode(on: bool) -> void:
+	for node: CanvasItem in [$Crosshair, $InfoPanel, minimap, compass, hint, prompt]:
+		node.visible = not on
 
 
 ## Строка подсказок внизу и подсказка у прицела (пустая — скрыта)
