@@ -434,13 +434,14 @@ func set_photo_mode(on: bool) -> void:
 	update_tracker()
 
 
-## 12.4: интерфейс чистый — прицел, подсказка у прицела и сообщения; остальное только с зажатым Tab
+## 12.4: интерфейс чистый — подсказка у прицела и сообщения; остальное только с зажатым Tab.
+## 12.7: прицел тоже только с Tab; наведение и E работают и без него
 func _apply_reveal() -> void:
 	var shown := _revealed and not _photo_mode
 	for node: CanvasItem in [$InfoPanel, minimap, compass]:
 		node.visible = shown
 	hint.visible = (shown or _hint_urgent) and not _photo_mode
-	$Crosshair.visible = not _photo_mode
+	$Crosshair.visible = shown
 	prompt.visible = not _photo_mode
 
 
