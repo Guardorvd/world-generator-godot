@@ -25,7 +25,9 @@ var _heights: Heightfield
 var _noise: FastNoiseLite
 var _height := 0
 var _base_cache := {} # одинаковые метровые выборки у соседних вершин, только на время запекания
-var _wet_cache := {}  # уровень соседней воды одинаков для всех вершин одной клетки
+var _points := PackedVector2Array() # точки уникальных вершин, только на время запекания (12.2)
+var _dist_water := PackedFloat32Array() # w.dist_water; у копии потока — своя копия (12.2)
+var _surf: Array = RoadSurface.LIST # у копии потока — своя копия таблицы покрытий (12.2)
 
 
 static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
@@ -36,6 +38,7 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._noise.seed = heights.world.seed_num
 	r._noise.frequency = 1.0
 	r._noise.fractal_octaves = 2
+	r._dist_water = heights.world.dist_water
 	var started_us := Time.get_ticks_usec()
 	for route in heights.world.trails.size():
 		var t: Dictionary = heights.world.trails[route]
@@ -54,6 +57,26 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	var fast := Grid.fast_grid() if allow_fast_nearest else null
 	if fast != null:
 		nearest = r._nearest_vertices(cache, fast)
+		r.build_timings.nearest_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+		var vertices_us := Time.get_ticks_usec()
+		# С 12.2 уникальные вершины считаются на всех ядрах: каждая зависит только от своей точки
+		# и уже готовых данных (рельеф, отрезки, профили), результат тот же, что подряд
+		var points := r._points
+		var job := func(a: int, b: int) -> Array:
+			var own := r._thread_copy()
+			var out := []
+			for n in range(a, b):
+				out.append(own._vertex(points[n].x, points[n].y, nearest, n * 4))
+			return out
+		# по куску на ядро: копия для потока стоит заметно (массивы рельефа), больше кусков — больше копий
+		var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(OS.get_processor_count())))
+		var done: Array = []
+		for part: Array in parts:
+			done.append_array(part)
+		for vk: int in cache:
+			cache[vk] = done[cache[vk]]
+		r._points = PackedVector2Array()
+		r.build_timings.vertex_math_ms = (Time.get_ticks_usec() - vertices_us) / 1000.0
 	for key: int in r._segments:
 		var cx := key % heights.world.W
 		var cz := key / heights.world.W
@@ -91,8 +114,28 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._structures.clear()
 	r._noise = null
 	r._base_cache.clear()
-	r._wet_cache.clear()
 	return r
+
+
+## Копия для одного потока (12.2): свои массивы рельефа и воды и свои таблицы покрытий. Общие массивы,
+## которые читают все потоки на каждой вершине, упираются в один счётчик ссылок и почти не ускоряются
+func _thread_copy() -> RoadRefinement:
+	var c := RoadRefinement.new()
+	c.fit_routes = fit_routes.duplicate(true)
+	c._segments = _segments
+	c._segment_list = _segment_list
+	c._structures = _structures
+	c._noise = _noise.duplicate() # тот же шум (те же свойства), но свой объект
+	c._height = _height
+	var h := Heightfield.new()
+	h.world = _heights.world
+	h.hv = _heights.hv.duplicate()
+	h.hv_raw = _heights.hv_raw.duplicate()
+	h.water_level = _heights.water_level.duplicate()
+	c._heights = h
+	c._dist_water = _heights.world.dist_water.duplicate()
+	c._surf = RoadSurface.LIST.duplicate(true)
+	return c
 
 
 ## Один вызов C# для всех уникальных вершин, без межъязыкового вызова на каждую из них.
@@ -111,6 +154,7 @@ func _nearest_vertices(cache: Dictionary, fast: Object) -> PackedFloat64Array:
 				if not cache.has(vk):
 					cache[vk] = points.size()
 					points.append(Vector2(ix * STEP + TILE * 0.5, iz * STEP + TILE * 0.5))
+	_points = points
 	var anchors := PackedVector2Array()
 	var deltas := PackedVector2Array()
 	var lengths := PackedFloat64Array()
@@ -319,16 +363,16 @@ func _base_at(x: float, z: float) -> float:
 	return _heights.base_ground_at(x, z)
 
 
+## Без кэша (с 12.2): вершины считаются в нескольких потоках, а это всего восемь чтений
 func _wet_near(i: int) -> float:
-	if not _wet_cache.has(i):
-		_wet_cache[i] = RoadBed._wet_near(_heights, i)
-	return _wet_cache[i]
+	return RoadBed._wet_near(_heights, i)
 
 
 func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := -1) -> Dictionary:
-	var w := _heights.world
+	var W := _heights.world.W
+	var H := _height
 	var base := _base_at(x, z)
-	var key := clampi(floori(z / TILE - 0.5), 0, w.H - 2) * w.W + clampi(floori(x / TILE - 0.5), 0, w.W - 2)
+	var key := clampi(floori(z / TILE - 0.5), 0, H - 2) * W + clampi(floori(x / TILE - 0.5), 0, W - 2)
 	var best := INF
 	var road: Dictionary = {}
 	var u := 0.0
@@ -363,23 +407,23 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 	var shoulder := 0.7 + (slow + 1.0) * 0.3
 	var mask := 1.0 - smoothstep(edge * 0.55, edge + shoulder, d)
 	var surf: int = road.surf if u < 0.5 else road.next
-	var ca: Array = RoadSurface.LIST[road.surf].color
-	var cb: Array = RoadSurface.LIST[road.next].color
+	var ca: Array = _surf[road.surf].color
+	var cb: Array = _surf[road.next].color
 	var color := Color8(ca[0], ca[1], ca[2]).lerp(Color8(cb[0], cb[1], cb[2]), smoothstep(0.0, 1.0, u)).srgb_to_linear()
 	if surf == RoadSurface.MEADOW:
 		mask *= 0.65
 	# Меняется только вид края. Прежняя маска остаётся для геометрической микронеровности.
 	var ground_mask := mask
 	var blend := smoothstep(0.0, 1.0, u)
-	var organic := lerpf(RoadSurface.LIST[road.surf].organic, RoadSurface.LIST[road.next].organic, blend)
+	var organic := lerpf(_surf[road.surf].organic, _surf[road.next].organic, blend)
 	var visual_edge := edge * (1.0 - organic * 0.12)
 	var visual_shoulder := shoulder * (1.0 + organic * 0.5)
 	color.a = (1.0 - smoothstep(visual_edge * 0.55, visual_edge + visual_shoulder, d)) * (1.0 - organic * 0.35)
 	var influence := 1.0 - smoothstep(half + 0.3, half + REACH, d)
-	var cx := clampi(floori(x / TILE), 0, w.W - 1)
-	var cz := clampi(floori(z / TILE), 0, w.H - 1)
-	var i := cz * w.W + cx
-	var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, w.dist_water[i])
+	var cx := clampi(floori(x / TILE), 0, W - 1)
+	var cz := clampi(floori(z / TILE), 0, H - 1)
+	var i := cz * W + cx
+	var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, _dist_water[i])
 	# Базовое уточнение затухает у берега; земляная полка дороги обрабатывается отдельно ниже.
 	if _heights.water_level[i] != -INF:
 		pin = 0.0
@@ -391,7 +435,7 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 	var gx := _base_at(x + 1.0, z) - _base_at(x - 1.0, z)
 	var gz := _base_at(x, z + 1.0) - _base_at(x, z - 1.0)
 	pin *= 1.0 - smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, Vector2(gx, gz).length() * 0.5)
-	var rough: float = RoadSurface.LIST[surf].rough
+	var rough: float = _surf[surf].rough
 	var crown := 0.035 * (1.0 - smoothstep(0.0, half, d))
 	var rut := -0.045 * exp(-pow((d - half * 0.48) / 0.3, 2.0))
 	var detail := crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - ground_mask)

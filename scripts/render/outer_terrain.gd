@@ -12,7 +12,7 @@ const OCEAN_DEPTH := GameConfig.OCEAN_DEPTH
 const C := OuterLand.C
 const RADIUS := 1200.0   # куски ближе этого держатся загруженными (дальше всё равно туман)
 const DROP := 1600.0     # куски дальше этого выгружаются
-const TASKS := 3         # сколько кусков считается одновременно
+const TASKS := 8         # сколько кусков считается одновременно, не больше (12.2: было 3 на любом ПК)
 const RECHECK := 32.0    # через сколько метров пути заново решать, какие куски нужны
 
 var world: WorldData
@@ -24,7 +24,8 @@ var _nodes := {}         # номер куска -> MeshInstance3D (или null,
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
 var _checked_at := Vector2.INF
-var _task_limit := mini(TASKS, maxi(1, OS.get_processor_count() - 2))
+## по куску на два ядра: главному потоку и растительности остаются свои
+var _task_limit := clampi(OS.get_processor_count() / 2, 1, TASKS)
 
 
 func setup(w: WorldData, h: Heightfield) -> void:

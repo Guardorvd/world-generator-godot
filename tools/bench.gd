@@ -8,6 +8,7 @@ extends SceneTree
 ## По умолчанию Север-1234, окно 256. Также --seed, --size, --gdscript, --out <файл.json>.
 ## --verify-partition / --verify-fords: сравнение с исходными циклами после замера.
 ## --fingerprint <файл.json>: сравнить мир с сохранённым fingerprint (selftest.fingerprint) прошлой версии.
+## --save-fingerprint <файл.json>: записать fingerprint этого мира (для сравнения следующей версии).
 
 const Dev := preload("res://tools/control/control.gd")
 
@@ -15,6 +16,7 @@ var _t := 0
 var _label := ""
 ## [подпись этапа, мс]
 var _rows: Array = []
+var _done := false # _init дошёл до конца; ошибка скрипта обрывает его, и тогда выходим в _process
 
 
 func _mark(label: String) -> void:
@@ -115,6 +117,9 @@ func _init() -> void:
 		if not same:
 			quit(1)
 			return
+	var save_to := Dev.arg("save-fingerprint")
+	if save_to != "":
+		Dev.save_json(Dev.abs_dir(save_to), preload("res://tools/selftest.gd").fingerprint(loaded.world))
 	var fingerprint := Dev.arg("fingerprint")
 	if fingerprint != "":
 		# Мир тот же, что у прошлой версии: все поля selftest.fingerprint совпадают с сохранёнными
@@ -128,4 +133,13 @@ func _init() -> void:
 		if not diff.is_empty():
 			quit(1)
 			return
+	_done = true
 	quit()
+
+
+## Ошибка скрипта в _init не доходит до quit, и процесс висел бы без конца (12.2)
+func _process(_delta: float) -> bool:
+	if not _done:
+		printerr("bench: замер оборвался с ошибкой")
+		quit(1)
+	return false

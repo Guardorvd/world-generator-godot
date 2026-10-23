@@ -21,7 +21,7 @@ extends RefCounted
 ## Какие миры хранить, решает меню (последние и избранные, GameSettings.keep_seeds); остальное удаляет keep_only.
 ## Включает кэш только сама игра (Main): инструменты проверки по умолчанию генерируют честно.
 
-const FORMAT := 2
+const FORMAT := 3 # 12.2: файлы слоёв, записанные после частичной загрузки, могли быть неполными
 const MAGIC := "WGC2"
 const EXT := ".wgc"
 ## Исходники, от которых зависят все слои: общий код генерации, данные, рельеф с водой (Heightfield).
@@ -210,7 +210,10 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 	var n: int = got.layers
 	if n == WorldGenerator.LAYERS.size():
 		return {world = got.world, layers = n}
-	var state := {prev = got.data}
+	# Снимок для сравнения — отдельная копия: мир из кэша держит те же массивы и словари, и следующий слой,
+	# меняя их на месте (тропы получают покрытие), менял бы и снимок. Тогда изменения не попадали в файл
+	# слоя, и при следующем запуске дороги грузились без покрытия (исправлено в 12.2)
+	var state := {prev = got.data.duplicate(true)}
 	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, after_climate, got.world, n,
 		func(cur: WorldData, k: int) -> void:
 			state.prev = _save_layer(cur, size, k, state.prev))

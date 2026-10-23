@@ -56,8 +56,18 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var generated := Time.get_ticks_usec()
 	var t := Time.get_ticks_usec()
 	# Состав леса известен после генерации; параллельная заливка его не читает (с 10.0 — пока она идёт).
-	r.forest_surface = view.forest if not view.is_empty() else preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
-	r.timings.forest_surface_ms = (Time.get_ticks_usec() - t) / 1000.0
+	# С 12.2 подстилка и картинки считаются в задачах пула рядом с полотном путей: они читают только
+	# мир (объекты, тропы, реки), а полотно меняет только рельеф. Время каждой задачи пишется после ожидания
+	var side_ms := {}
+	var forest_task := -1
+	if not view.is_empty():
+		r.forest_surface = view.forest
+	else:
+		var forest_job := func() -> void:
+			var t0 := Time.get_ticks_usec()
+			r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
+			side_ms.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		forest_task = WorkerThreadPool.add_task(forest_job, true, "Подстилка леса")
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
@@ -65,6 +75,25 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var painted: Array = side.wait_to_finish() if side.is_started() else r._prepare(r.world, px)
 	r.timings["cache_read_ms" if r.from_cache else "generate_ms"] = (generated - started) / 1000.0
 	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
+	var image_tasks: Array[int] = []
+	if not view.is_empty():
+		r.terrain_image = view.terrain
+		r.map_image = view.map
+	else:
+		# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
+		# векторный слой на них рисуется одновременно в двух потоках
+		var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
+		var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
+		var map_job := func() -> void:
+			var t0 := Time.get_ticks_usec()
+			r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0]
+			side_ms.map_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		var texture_job := func() -> void:
+			var t0 := Time.get_ticks_usec()
+			r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
+			side_ms.terrain_image_ms = (Time.get_ticks_usec() - t0) / 1000.0
+		image_tasks.append(WorkerThreadPool.add_task(map_job, true, "Карта"))
+		image_tasks.append(WorkerThreadPool.add_task(texture_job, true, "Текстура рельефа"))
 	t = Time.get_ticks_usec()
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
@@ -86,20 +115,14 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	t = Time.get_ticks_usec()
 	if on_progress.is_valid():
 		on_progress.call(0.93, "Текстура рельефа и карта")
-	# Текстура рельефа без отмывки (свет считает движок) и карта с отмывкой для мини-карты;
-	# векторный слой на них рисуется одновременно в двух потоках
-	if not view.is_empty():
-		r.terrain_image = view.terrain
-		r.map_image = view.map
-	else:
-		var tex_bytes: Array[PackedByteArray] = [painted[0][0]]
-		var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
-		var map_task := WorkerThreadPool.add_task(func() -> void: r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0], true)
-		r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
-		WorkerThreadPool.wait_for_task_completion(map_task)
-		if WorldCache.enabled:
-			WorldCache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
-	r.timings.overlays_ms = (Time.get_ticks_usec() - t) / 1000.0
+	if forest_task >= 0:
+		WorkerThreadPool.wait_for_task_completion(forest_task)
+	for task in image_tasks:
+		WorkerThreadPool.wait_for_task_completion(task)
+	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
+	r.timings.merge(side_ms)
+	if view.is_empty() and WorldCache.enabled:
+		WorldCache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return r
 

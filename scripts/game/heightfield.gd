@@ -430,7 +430,15 @@ func current_at(x: float, z: float) -> Vector2:
 ## Малая локальная подрезка базовой сетки: стрежень, отмель внутри изгиба,
 ## пологая кромка. В озере сохраняем его дно. Никакой отдельной симуляции.
 func _carve_rivers() -> void:
+	# С 12.2 полосы строк считаются на всех ядрах: каждая берёт свою часть hv и все отрезки лент,
+	# задевающие её строки. Дно — минимум по отрезкам, поэтому порядок не меняет результат
 	var W := world.W
+	var H := world.H
+	var ocean := world.ocean
+	var lake := world.lake
+	var raw := hv_raw
+	var src := hv
+	var segs: Array = []
 	for pts: Array in ribbons:
 		for k in range(1, pts.size()):
 			var a: Dictionary = pts[k - 1]
@@ -440,14 +448,26 @@ func _carve_rivers() -> void:
 			if len2 < 1e-8:
 				continue
 			var reach := maxf(a.w, b.w) * 1.8 + TILE
-			for y in range(maxi(0, floori((minf(a.z, b.z) - reach) / TILE)), mini(world.H, ceili((maxf(a.z, b.z) + reach) / TILE))):
-				for x in range(maxi(0, floori((minf(a.x, b.x) - reach) / TILE)), mini(W, ceili((maxf(a.x, b.x) + reach) / TILE))):
+			segs.append([a, b, delta, len2, maxi(0, floori((minf(a.z, b.z) - reach) / TILE)),
+				mini(H, ceili((maxf(a.z, b.z) + reach) / TILE)),
+				maxi(0, floori((minf(a.x, b.x) - reach) / TILE)), mini(W, ceili((maxf(a.x, b.x) + reach) / TILE))])
+	var job := func(y0: int, y1: int) -> PackedFloat32Array:
+		var part := src.slice(y0 * W, y1 * W)
+		for sg: Array in segs:
+			if sg[5] <= y0 or sg[4] >= y1:
+				continue
+			var a: Dictionary = sg[0]
+			var b: Dictionary = sg[1]
+			var delta: Vector2 = sg[2]
+			var len2: float = sg[3]
+			for y in range(maxi(y0, sg[4]), mini(y1, sg[5])):
+				for x in range(sg[6], sg[7]):
 					var i := y * W + x
 					var offset := Vector2((x + 0.5) * TILE - a.x, (y + 0.5) * TILE - a.z)
 					var u := clampf(offset.dot(delta) / len2, 0.0, 1.0)
 					var width := lerpf(a.w, b.w, u)
 					var distance := (offset - delta * u).length()
-					if world.ocean[i] != 0 or world.lake[i] != 0 or distance >= width * 1.8:
+					if ocean[i] != 0 or lake[i] != 0 or distance >= width * 1.8:
 						continue
 					var t := distance / width
 					var level := lerpf(a.y, b.y, u)
@@ -457,35 +477,26 @@ func _carve_rivers() -> void:
 					var bed := level - depth * (1.0 - 0.85 * smoothstep(0.15, 1.0, t))
 					bed += inside * depth * 0.55 * smoothstep(0.1, 0.7, t)
 					if t > 1.0:
-						bed = lerpf(level + 0.06, hv_raw[i], smoothstep(1.0, 1.8, t))
-					hv[i] = minf(hv[i], bed)
+						bed = lerpf(level + 0.06, raw[i], smoothstep(1.0, 1.8, t))
+					var o := i - y0 * W
+					part[o] = minf(part[o], bed)
+		return part
+	var out := PackedFloat32Array()
+	for part: PackedFloat32Array in Parallel.bands(H, job):
+		out.append_array(part)
+	hv = out
 
 
 ## Сетка дна грубее ленты: после подрезки вода должна доходить до реального
 ## берега, а не обрываться на исходной расчётной ширине посреди впадины.
 func _fit_river_banks() -> void:
+	# С 12.2 берега лент ищутся на всех ядрах: каждая лента меняет только свои точки, рельеф только читается
+	var job := func(r0: int, r1: int) -> int:
+		for n in range(r0, r1):
+			_fit_banks_of(ribbons[n])
+		return 0
+	Parallel.bands(ribbons.size(), job, 2)
 	for pts: Array in ribbons:
-		for p: Dictionary in pts:
-			var normal := Vector2(p.left.x - p.x, p.left.z - p.z).normalized()
-			for side in [1.0, -1.0]:
-				var reach: float = p.w
-				if p.y > maxf(0.0, lake_level(p.x, p.z)) + 0.001:
-					reach = 0.0
-					var limit: float = p.w + TILE
-					while reach < limit:
-						reach += 0.5
-						var q: Vector2 = Vector2(p.x, p.z) + normal * side * reach
-						if ground_at(q.x, q.y) >= p.y + 0.02:
-							break
-					# У обрыва нет бокового берега: не растягиваем поток
-					# в висящую над соседней долиной широкую плоскость.
-					if reach >= limit:
-						reach = p.w
-				var bank := Vector3(p.x + normal.x * side * reach, p.y, p.z + normal.y * side * reach)
-				if side > 0.0:
-					p.left = bank
-				else:
-					p.right = bank
 		# Индекс строится по окончательным берегам, как и видимые треугольники.
 		for k in range(1, pts.size()):
 			var a: Dictionary = pts[k - 1]
@@ -509,6 +520,31 @@ func _fit_river_banks() -> void:
 					_river_cells[cell].append(segment)
 					_pair_cells.append(cell)
 					_pair_segs.append(id)
+
+
+## Берега одной ленты: от оси в обе стороны до первой земли выше воды
+func _fit_banks_of(pts: Array) -> void:
+	for p: Dictionary in pts:
+		var normal := Vector2(p.left.x - p.x, p.left.z - p.z).normalized()
+		for side in [1.0, -1.0]:
+			var reach: float = p.w
+			if p.y > maxf(0.0, lake_level(p.x, p.z)) + 0.001:
+				reach = 0.0
+				var limit: float = p.w + TILE
+				while reach < limit:
+					reach += 0.5
+					var q: Vector2 = Vector2(p.x, p.z) + normal * side * reach
+					if ground_at(q.x, q.y) >= p.y + 0.02:
+						break
+				# У обрыва нет бокового берега: не растягиваем поток
+				# в висящую над соседней долиной широкую плоскость.
+				if reach >= limit:
+					reach = p.w
+			var bank := Vector3(p.x + normal.x * side * reach, p.y, p.z + normal.y * side * reach)
+			if side > 0.0:
+				p.left = bank
+			else:
+				p.right = bank
 
 
 ## Уровень на тех же треугольниках, которые WaterBuilder отдаёт GPU.

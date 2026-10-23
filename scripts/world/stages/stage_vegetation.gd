@@ -40,28 +40,53 @@ static func run(w: WorldData) -> void:
 	w.CS = WorldData.CHUNK_SIZE
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
-	var store := ObjStore.new(w)
 	var f := fields(w)
-	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты
-	for cy in w.CH:
-		for cx in w.CW:
-			var x0 := cx * w.CS
-			var y0 := cy * w.CS
-			place_chunk(w.seed_num, x0, y0, mini(W, x0 + w.CS), mini(H, y0 + w.CS), f, 0, 0, W, w, store)
-
-	# Объекты в чанке — с севера на юг (при равных y — в порядке добавления, как стабильная сортировка JS)
-	var oy := store.y
+	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
+	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
+	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.
+	var CS := w.CS
+	var CW := w.CW
+	var seed_num := w.seed_num
+	var job := func(c0: int, c1: int) -> ObjStore:
+		var st := ObjStore.new(w)
+		for cy in range(c0, c1):
+			for cx in CW:
+				var x0 := cx * CS
+				var y0 := cy * CS
+				place_chunk(seed_num, x0, y0, mini(W, x0 + CS), mini(H, y0 + CS), f, 0, 0, W, w, st)
+		# Объекты в чанке — с севера на юг (при равных y — в порядке добавления, как стабильная сортировка JS)
+		var oy := st.y
+		for c in range(c0 * CW, c1 * CW):
+			st.chunk_lists[c].sort_custom(func(a: int, b: int) -> bool: return oy[a] < oy[b] if oy[a] != oy[b] else a < b)
+		return st
+	var rows := Parallel.bands(w.CH, job, 1)
 	var chunks: Array[PackedInt32Array] = []
-	for list: Array in store.chunk_lists:
-		list.sort_custom(func(a: int, b: int) -> bool: return oy[a] < oy[b] if oy[a] != oy[b] else a < b)
-		chunks.append(PackedInt32Array(list))
-	w.obj_x = store.x
-	w.obj_y = store.y
-	w.obj_k = store.k
-	w.obj_v = store.v
-	w.obj_s = store.s
+	chunks.resize(CW * w.CH)
+	var ox := PackedFloat64Array()
+	var oy := PackedFloat64Array()
+	var ok := PackedInt32Array()
+	var ov := PackedInt32Array()
+	var os := PackedFloat64Array()
+	for cy in rows.size():
+		var st: ObjStore = rows[cy]
+		var base := ox.size()
+		for c in range(cy * CW, (cy + 1) * CW):
+			var list := PackedInt32Array(st.chunk_lists[c])
+			for j in list.size():
+				list[j] += base
+			chunks[c] = list
+		ox.append_array(st.x)
+		oy.append_array(st.y)
+		ok.append_array(st.k)
+		ov.append_array(st.v)
+		os.append_array(st.s)
+	w.obj_x = ox
+	w.obj_y = oy
+	w.obj_k = ok
+	w.obj_v = ov
+	w.obj_s = os
 	w.chunks = chunks
-	w.obj_count = store.x.size()
+	w.obj_count = ox.size()
 
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
@@ -97,9 +122,25 @@ static func fields(w: WorldData) -> Dictionary:
 			for x in range(maxi(0, ceili(s.x - r)), mini(W - 1, floori(s.x + r)) + 1):
 				if Grid.hypot(x + 0.5 - s.x, y + 0.5 - s.y) < r:
 					village[y * W + x] = 1
+	# С 12.2 освещённость склона и возраст леса — готовыми полями, как за краем карты (OuterLand):
+	# чанки идут в нескольких потоках, а общий шум и вызовы чужого класса на каждой клетке их тормозят
+	var light_job := func(y0: int, y1: int) -> PackedFloat32Array:
+		var out := PackedFloat32Array()
+		out.resize((y1 - y0) * W)
+		for y in range(y0, y1):
+			for x in W:
+				# = StageClimate.natural_conditions(w, x, y).x, развёрнут
+				var gx := (elev[y * W + mini(W - 1, x + 1)] - elev[y * W + maxi(0, x - 1)]) * 30.0
+				var gy := (elev[mini(H - 1, y + 1) * W + x] - elev[maxi(0, y - 1) * W + x]) * 30.0
+				out[(y - y0) * W + x] = Vector2(clampf(0.5 - 0.5 * gy / sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0), 0.0).x
+		return out
+	var light := PackedFloat32Array()
+	for part: PackedFloat32Array in Parallel.bands(H, light_job):
+		light.append_array(part)
+	var age_n := Parallel.fbm_rect(w.noise.forest, 0, 0, W, H, 78.0, 2, 91.0, -47.0) # как в age_at
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
-		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village}.merged(
-		structure_rect(w, 0, 0, W, H))
+		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
+		light = light, age_n = age_n}.merged(structure_rect(w, 0, 0, W, H))
 
 
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
@@ -153,7 +194,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var has_age := not age_n.is_empty()
 	var b_water: PackedByteArray = _TABLES.water
 	var b_trees: PackedFloat64Array = _TABLES.trees
-	var b_kinds: Array = _TABLES.kinds
+	# Своя копия списков видов: чанки считаются в нескольких потоках (12.2), а общий массив на каждой
+	# клетке менял бы один и тот же счётчик ссылок из всех потоков
+	var b_kinds: Array = _TABLES.kinds.duplicate(true)
+	var b_tree: PackedByteArray = _TABLES.tree
 	var rng := WGRandom.new(0)
 	var mask := WGRandom.MASK
 	store.begin_chunk(x0, y0, x1, y1)
@@ -234,7 +278,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
-					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if Biomes.is_tree(kind) else 0.8 + rng.next_float() * 0.45
+					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
 					store.add(px, py, kind, v, sc)
 			# камни: на кручах и россыпями там, где местность неровная
 			# 10.4: на кручах валуны тоже пятнами (россыпи), а не ровной сыпью по всему склону;
@@ -260,7 +304,9 @@ static var _TABLES := _make_tables()
 
 
 static func _make_tables() -> Dictionary:
-	var t := {water = PackedByteArray(), trees = PackedFloat64Array(), kinds = []}
+	var t := {water = PackedByteArray(), trees = PackedFloat64Array(), kinds = [], tree = PackedByteArray()}
+	for kind in Biomes.CROWN_RADIUS.size():
+		t.tree.append(1 if Biomes.is_tree(kind) else 0)
 	for bd: Dictionary in Biomes.LIST:
 		t.water.append(1 if bd.get("water", false) else 0)
 		t.trees.append(bd.get("trees", 0.0))
@@ -375,6 +421,13 @@ class ObjStore:
 	var s := PackedFloat64Array()
 	var chunk_lists: Array = []
 	var w: WorldData
+	# Поля мира копируются в хранилище: с 12.2 хранилищ несколько, по одному на поток, а частое чтение
+	# свойств общего объекта из многих потоков упирается в общие счётчики ссылок
+	var _huts := PackedFloat64Array() # x, y поселения или места и x, y дома — по четыре числа на дом
+	var _crown := PackedFloat64Array(Biomes.CROWN_RADIUS)
+	var _path_mask := PackedByteArray()
+	var _W := 0
+	var _H := 0
 	# Временный индекс соседей чанка: головы списков по клеткам и ссылки по объектам.
 	# В готовом WorldData остаются только прежние obj_* и chunks.
 	var heads := PackedInt32Array()
@@ -388,6 +441,13 @@ class ObjStore:
 	func _init(world: WorldData) -> void:
 		w = world
 		if w != null:
+			for list: Array in [w.settlements, w.sites]:
+				for st: Dictionary in list:
+					for u: Dictionary in st.huts:
+						_huts.append_array([st.x, st.y, u.x, u.y])
+			_path_mask = w.path_mask
+			_W = w.W
+			_H = w.H
 			for c: int in w.CW * w.CH:
 				chunk_lists.append([])
 		else:
@@ -404,17 +464,19 @@ class ObjStore:
 			_list = chunk_lists[floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)]
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
-		var radius: float = Biomes.CROWN_RADIUS[kind] * sc
+		var radius: float = _crown[kind] * sc
 		var cx := floori(ox)
 		var cy := floori(oy)
 		if w != null:
-			if StageVegetation.near_hut(w.settlements, ox, oy, radius) or StageVegetation.near_hut(w.sites, ox, oy, radius):
-				return
+			# = near_hut по поселениям и местам, по плоскому списку домов
+			for n in range(0, _huts.size(), 4):
+				if absf(_huts[n] - ox) <= VILLAGE_R + radius and absf(_huts[n + 1] - oy) <= VILLAGE_R + radius 						and absf(_huts[n + 2] - ox) < 0.75 + radius and absf(_huts[n + 3] - oy) < 0.75 + radius:
+					return
 			# Увеличенные кроны не заходят на полотно. Животные тропы тоже сохраняются.
 			var reach := ceili(radius + 1.0)
-			for yy in range(maxi(0, cy - reach), mini(w.H, cy + reach + 1)):
-				for xx in range(maxi(0, cx - reach), mini(w.W, cx + reach + 1)):
-					if w.path_mask[yy * w.W + xx] == 0:
+			for yy in range(maxi(0, cy - reach), mini(_H, cy + reach + 1)):
+				for xx in range(maxi(0, cx - reach), mini(_W, cx + reach + 1)):
+					if _path_mask[yy * _W + xx] == 0:
 						continue
 					var dx := maxf(maxf(xx - ox, ox - xx - 1.0), 0.0)
 					var dy := maxf(maxf(yy - oy, oy - yy - 1.0), 0.0)
@@ -427,7 +489,7 @@ class ObjStore:
 			for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
 				var o := heads[(yy - _y0) * cw + xx - _x0]
 				while o != -1:
-					var gap: float = 0.18 + 0.55 * (radius + Biomes.CROWN_RADIUS[k[o]] * s[o])
+					var gap: float = 0.18 + 0.55 * (radius + _crown[k[o]] * s[o])
 					if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
 						return
 					o = next[o]
