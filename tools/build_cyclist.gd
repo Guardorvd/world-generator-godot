@@ -104,7 +104,7 @@ func _body() -> void:
 	loft(rings, teal, panel)
 	patch(rings.slice(7, 9), PI * 0.5, PI, panel)
 	local_loft("Hips", [Vector3(0, -0.09, 0), Vector3(0, 0.025, 0), Vector3(0, 0.055, 0)], [Vector2(0.135, 0.09), Vector2(0.15, 0.105), Vector2(0.14, 0.095)], navy)
-	ellipsoid("Neck", Vector3(0.046, 0.058, 0.047), Vector3(0, 0, 0.005), skin)
+	_neck()
 	# Детали лежат на той же поверхности и имеют те же веса: не висят над одеждой.
 	patch(rings.slice(0, 7), -PI * 0.5, 0.035, dark)
 	patch(rings.slice(4, 6), -PI * 0.5 - 0.42, 0.28, cream)
@@ -113,6 +113,26 @@ func _body() -> void:
 	for angle in [PI * 0.5 - 0.24, PI * 0.5 + 0.24]:
 		patch(rings.slice(1, 3), angle, 0.018, navy)
 
+
+
+## v5: шея — одна поверхность от ворота джерси (внутри последнего сечения торса) до основания черепа
+## (внутри головы), по оси шеи и с весами Chest → Neck → Head. Раньше эллипсоид на кости Neck висел
+## отдельно и на наклоне торчал горбом за затылком, а спереди голова не соединялась с шеей.
+func _neck() -> void:
+	var head := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
+	var collar := Vector3(0, 1.405, -0.11)
+	var skull := head * Vector3(0, -0.075, 0.015)
+	var axis := (skull - collar).normalized()
+	var basis := Basis(Quaternion(Vector3.UP, axis))
+	var rings: Array[Dictionary] = []
+	for spec: Array in [[0.0, 0.054, 0.056, "Chest", "Neck", 0.5], [0.3, 0.052, 0.055, "Neck", "", 0.0], [0.6, 0.051, 0.055, "Neck", "Head", 0.3], [0.85, 0.056, 0.062, "Neck", "Head", 0.7], [1.0, 0.058, 0.064, "Head", "", 0.0]]:
+		rings.append(ring(collar.lerp(skull, spec[0]), basis, spec[1], spec[2], spec[3], spec[4], spec[5]))
+	loft(rings, skin)
+	# Воротник джерси: низкая стойка вокруг шеи закрывает гранёный верх торса
+	var band: Array[Dictionary] = []
+	for spec: Vector3 in [Vector3(-0.012, 0.066, 0.068), Vector3(0.02, 0.061, 0.063), Vector3(0.026, 0.057, 0.059)]:
+		band.append(ring(collar + axis * (spec.x + 0.02), basis, spec.y, spec.z, "Chest", "Neck", 0.3))
+	loft(band, panel)
 
 
 func _head() -> void:
@@ -164,8 +184,8 @@ func _hair() -> void:
 	for row in ROWS + 1:
 		for col in COLS + 1:
 			var u := float(col) / COLS * 2.0 - 1.0
-			var angle := PI * 0.5 + u * 1.15
-			var bottom := lerpf(-0.045, 0.02, u * u)
+			var angle := PI * 0.5 + u * 0.95
+			var bottom := lerpf(-0.035, 0.025, u * u)
 			var y := lerpf(bottom, HELMET_Y + 0.01, float(row) / ROWS)
 			var size := head_size(y) * 1.025
 			var local := Vector3(cos(angle) * size.x, y, head_z(y) + sin(angle) * size.y)
