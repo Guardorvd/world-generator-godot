@@ -4,6 +4,8 @@ var fails := 0
 var bike: BikeView
 var state: BikeRide
 const DT := 1.0 / 60.0
+var body_mesh: MeshInstance3D
+var skin_samples: Array[Dictionary] = []
 
 func _init() -> void:
 	run.call_deferred()
@@ -29,7 +31,57 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 	bike.draw(1)
 	state.land_impact = 0
 
+func _check_model() -> void:
+	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
+	check(bike.rider.get_meta("model_version", 0) == 3 and body_mesh != null, "Third model version uses one native skinned body")
+	if body_mesh == null:
+		return
+	var sk := bike.rider.skeleton
+	check(body_mesh.get_node(body_mesh.skeleton) == sk and body_mesh.skin.get_bind_count() == 22, "Skin uses the existing 22-bone skeleton")
+	for i in body_mesh.skin.get_bind_count():
+		check(body_mesh.skin.get_bind_bone(i) == i and (sk.get_bone_global_rest(i) * body_mesh.skin.get_bind_pose(i)).is_equal_approx(Transform3D.IDENTITY), "Skin inverse bind matches bone rest")
+	check(body_mesh.extra_cull_margin >= BikeCrash.GROUND_R + 1.0, "Skin culling margin covers the ragdoll contact region")
+	var triangles := 0
+	var valid := true
+	for surface in body_mesh.mesh.get_surface_count():
+		var data := body_mesh.mesh.surface_get_arrays(surface)
+		var vertices: PackedVector3Array = data[Mesh.ARRAY_VERTEX]
+		var bones: PackedInt32Array = data[Mesh.ARRAY_BONES]
+		var weights: PackedFloat32Array = data[Mesh.ARRAY_WEIGHTS]
+		var indices: PackedInt32Array = data[Mesh.ARRAY_INDEX]
+		var normals: PackedVector3Array = data[Mesh.ARRAY_NORMAL]
+		triangles += indices.size() / 3
+		for i in range(0, indices.size(), 3):
+			var normal := (vertices[indices[i + 1]] - vertices[indices[i]]).cross(vertices[indices[i + 2]] - vertices[indices[i]])
+			valid = valid and normal.dot(normals[indices[i]]) < 0.0
+		valid = valid and bones.size() == vertices.size() * 4 and weights.size() == vertices.size() * 4
+		for i in vertices.size():
+			var total := 0.0
+			for j in 4:
+				var at := i * 4 + j
+				valid = valid and bones[at] >= 0 and bones[at] < 22 and is_finite(weights[at]) and weights[at] >= 0
+				total += weights[at]
+			valid = valid and vertices[i].is_finite() and absf(total - 1.0) < 0.0001
+		for i in range(0, vertices.size(), maxi(1, vertices.size() / 20)):
+			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
+	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
+	check(triangles < 5000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 5000 triangles and 8 material surfaces")
+	print("Cyclist v3 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+
+
 func contacts() -> void:
+	# Проверяем и геометрию после skinning, а не только положение костей.
+	if body_mesh != null:
+		var palette: Array[Transform3D] = []
+		for i in 22:
+			palette.append(bike.rider.skeleton.get_bone_global_pose(i) * body_mesh.skin.get_bind_pose(i))
+		var valid := true
+		for sample in skin_samples:
+			var posed := Vector3.ZERO
+			for j in 4:
+				posed += (palette[sample.bones[j]] * sample.position) * sample.weights[j]
+			valid = valid and posed.is_finite() and posed.distance_to(bone("Hips")) < 2.0
+		check(valid, "Deformed mesh remains finite and within the rider envelope")
 	for side in ["L", "R"]:
 		var pedal: Node3D = bike.pedal_l if side == "L" else bike.pedal_r
 		check(bone("Foot" + side).distance_to(bike.to_local(pedal.global_position) + Vector3(0, 0.055, 0.025)) < 0.001, "Foot contact")
@@ -41,6 +93,7 @@ func contacts() -> void:
 func run() -> void:
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
+	_check_model()
 	# draw до первого tick безопасен, а интерполяция не выходит за границы тактов.
 	var initial := bike.transform
 	bike.draw(1)
@@ -270,6 +323,8 @@ func capture() -> void:
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
 	for mode in ["pedal", "rough"]:
+		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else Vector3(-2.8, 1.9, 2.8)
+		camera.look_at(Vector3(0, 0.9, 0))
 		reset()
 		state.crank = 0.4
 		state.speed = 12
@@ -285,4 +340,4 @@ func capture() -> void:
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_106plus_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_108_" + mode + ".png")
