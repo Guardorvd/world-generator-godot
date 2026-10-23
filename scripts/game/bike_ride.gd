@@ -21,7 +21,8 @@ const FACE_CRASH := 5.0   # приземление в подъём (крутиз
 const WALL_CRASH := 9.0   # удар в стену в лоб быстрее этого (м/с) роняет седока; с 7.7 и в ствол, валун, бревно —
                           # по скорости поперёк их поверхности (вскользь не роняет)
 ## На пути колёса держатся полотна на мелких изломах, руль зависит от сцепления покрытия.
-const SLOPE_GRAVITY := 7.5 # смягчённая сила склона: инерция ощутима, но подъёмы доступны
+const SLOPE_GRAVITY := GameConfig.GRAVITY # та же тяжесть, что в полёте; склон не превращается в вязкий тормоз
+const CLIFF_GRADE := 2.0 # около 63°: на такой стене колёса уже не удерживают седока
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
 const MOUNT_RISE := 1.5  # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу после схода с края, с
@@ -42,6 +43,7 @@ var vy := 0.0         # вертикальная скорость, м/с
 var airborne := false
 var heading := 0.0    # курс, как yaw камеры: 0 — на север (-Z)
 var speed := 0.0      # м/с вдоль курса, назад — меньше нуля
+var acceleration := 0.0 # фактический продольный разгон за последний такт, для ощущения скорости
 var riding := false
 var lean := 0.0       # крен в повороте, радианы
 var tilt := 0.0       # наклон вдоль склона или полёта, радианы
@@ -153,6 +155,7 @@ func mount(p: PlayerState) -> void:
 
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
+	acceleration = 0.0
 	riding = false
 	speed = 0.0
 	lean = 0.0
@@ -311,8 +314,12 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	_dist += Grid.hypot(x - x0, z - z0)
 
 	_step_vertical(_contact(x, z, heights), hop, dt, heights)
+	# Непрерывный крутой склон раньше подменял падение покадровой привязкой к земле.
+	# Даже медленный съезд по почти отвесной стене теперь теряет равновесие и запускает ragdoll.
+	if not airborne and absf(speed) > 0.25 and slope * signf(speed) < -CLIFF_GRADE:
+		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
 	_step_wheels(heights, rough, dt)
-	var acceleration := clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 7.0)
+	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015), acceleration)
 
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
@@ -482,7 +489,8 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0) -> void:
 	var top := GameConfig.BIKE_SPEED * terrain
 	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
-	var drag := GameConfig.BIKE_DRAG / (terrain * terrain)
+	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
+	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle < 0.0 and absf(speed) < 0.05:

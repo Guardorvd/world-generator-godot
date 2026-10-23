@@ -20,6 +20,9 @@ func _check(ok: bool, what: String) -> void:
 
 
 func _init() -> void:
+	if "--downhill" in OS.get_cmdline_user_args():
+		_downhill_test.call_deferred()
+		return
 	if "--opening" in OS.get_cmdline_user_args():
 		_opening_test.call_deferred()
 		return
@@ -478,5 +481,138 @@ func _opening_test() -> void:
 	_check(kinds.size() > 1, "выбор не привязан к деревне")
 	main._free_game()
 	main.queue_free()
+	await process_frame
+	quit(1 if _fails > 0 else 0)
+
+
+class DescentWorld extends WorldData:
+	func tile_info(_x: float, _z: float) -> Dictionary:
+		return {biome = Biomes.GRASS, path = 3, surface = RoadSurface.PACKED}
+
+
+class DescentGround extends Heightfield:
+	var profile: Callable = func(d: float) -> float: return -0.2 * d
+	func _init(w: WorldData) -> void:
+		super()
+		world = w
+	func surface_at(_x: float, z: float, _feet := -INF) -> float:
+		return 100.0 + float(profile.call(-z))
+	func ground_at(x: float, z: float, _raw := false) -> float:
+		return surface_at(x, z)
+	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
+		return 0.0
+	func immersion_at(_x: float, _z: float, _feet: float) -> float:
+		return 0.0
+	func known(_x: float, _z: float) -> bool:
+		return true
+
+
+func _descent_ride(ground: DescentGround, seconds: float, initial := 2.0, throttle := 0.0, hz := 60) -> BikeRide:
+	var rider := PlayerState.new()
+	var ride := BikeRide.new()
+	ride.y = ground.surface_at(0, 0)
+	ride.mount(rider)
+	ride.speed = initial
+	for tick in roundi(seconds * hz):
+		ride.step(rider, throttle, 0.0, false, false, 1.0 / hz, ground.world, ground)
+		if ride.crashed:
+			break
+	return ride
+
+
+## Контролируемые спуски, обрыв, приземление и камера; генерация не нужна.
+func _downhill_test() -> void:
+	var w := DescentWorld.new()
+	w.W = 64
+	w.H = 64
+	var h := DescentGround.new(w)
+	var descent := _descent_ride(h, 2.0)
+	_check(descent.speed > 6.0 and not descent.crashed, "20%% спуск без педалей: %.2f м/с через 2 с" % descent.speed)
+	_check(not descent.airborne, "пологий ровный спуск держит колёса на земле")
+	var braked := _descent_ride(h, 1.5, 8.0, -1.0)
+	_check(absf(braked.speed) < 0.1, "тормоз останавливает на спуске")
+	var slow_tick := _descent_ride(h, 3.0, 2.0, 0.0, 30)
+	var fast_tick := _descent_ride(h, 3.0, 2.0, 0.0, 120)
+	_check(absf(slow_tick.speed - fast_tick.speed) < 0.15, "разгон близок при 30 и 120 тактах/с")
+	h.profile = func(d: float) -> float: return -0.4 * d
+	var long_descent := _descent_ride(h, 60.0, 0.0)
+	_check(long_descent.speed > 23.0 and long_descent.speed < 32.0, "длинный спуск: %.2f м/с, воздух сдерживает разгон" % long_descent.speed)
+	var coast := BikeRide.new()
+	coast.speed = 20.0
+	coast._step_speed(0.0, false, -0.4, 0.4, DT)
+	_check(coast.speed > 20.0, "камни не превращают воздух в вязкий тормоз на спуске")
+	h.profile = func(d: float) -> float: return -3.0 * d
+	var cliff := _descent_ride(h, 2.0, 0.5)
+	_check(cliff.crashed and cliff.crash_cause == BikeRide.CrashCause.FALL, "медленный съезд на стену 72° запускает падение")
+	_check(cliff.crash_velocity.is_finite() and cliff.crash_velocity.y < 0.0, "ragdoll получает скорость вниз по скале")
+	h.profile = func(d: float) -> float: return 0.0 if d < 2.0 else -20.0
+	var edge := _descent_ride(h, 4.0, 2.0)
+	_check(edge.crashed and edge.land_impact > GameConfig.BIKE_CRASH, "съезд с обрыва 20 м заканчивается жёстким приземлением и падением")
+	h.profile = func(_d: float) -> float: return 0.0
+	var small_drop := BikeRide.new()
+	var p := PlayerState.new()
+	small_drop.y = 102.0
+	small_drop.mount(p)
+	small_drop.airborne = true
+	for tick in 90:
+		small_drop.step(p, 0.0, 0.0, false, false, DT, w, h)
+	_check(not small_drop.crashed, "небольшое падение 2 м остаётся переносимым")
+	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
+	root.add_child(game)
+	game.set_process(false)
+	game.set_physics_process(false)
+	game.world = w
+	game.heights = h
+	game.player = PlayerState.new()
+	game.player.feet = 100.0
+	game._prev = Vector3(0, 100, 0)
+	game._cam_y = 101.4
+	game.pitch = -0.3
+	game.bike = BikeRide.new()
+	game.bike.y = 100.0
+	game.bike.riding = true
+	game.bike_view = load("res://scenes/bike.tscn").instantiate()
+	game.add_child(game.bike_view)
+	game.bike_view.snap(game.bike)
+	game.bike_view.draw(1.0)
+	game.crash = BikeCrash.new()
+	game.add_child(game.crash)
+	for tick in 240:
+		game._update_camera(1.0, DT)
+	var ordinary_distance := game._cam_dist
+	game.bike.speed = 26.0
+	for tick in 240:
+		game._update_camera(1.0, DT)
+	_check(game._cam_dist > ordinary_distance + 0.6 and game._cam_dist <= GameConfig.BIKE_CAM + 0.71, "на скорости камера отдаляется максимум на 0,7 м")
+	_check(game.camera.fov <= GameSettings.fov + GameConfig.BIKE_FOV * 1.3 + 0.01, "эффект не увеличивает прежний предел FOV")
+	var wall_distance := 2.0
+	h.profile = func(_d: float) -> float: return 3.0 if _d < -wall_distance else 0.0
+	game._update_camera(1.0, DT)
+	_check(game._cam_dist < 2.5, "скоростная камера уступает препятствию сзади")
+	h.profile = func(_d: float) -> float: return 0.0
+	var wind: Control = preload("res://scripts/render/speed_wind.gd").new()
+	var canvas := CanvasLayer.new()
+	game.add_child(canvas)
+	canvas.add_child(wind)
+	wind.update_effect(1.0, 0.5)
+	if "--capture" in OS.get_cmdline_user_args():
+		var mesh := MeshInstance3D.new()
+		var plane := PlaneMesh.new()
+		plane.size = Vector2(300, 300)
+		mesh.mesh = plane
+		mesh.position.y = 100.0
+		var material := StandardMaterial3D.new()
+		material.albedo_color = Color(0.28, 0.35, 0.21)
+		mesh.material_override = material
+		game.add_child(mesh)
+		game._update_camera(1.0, 1.0)
+		var directory := "res://tools/control/runs/11.1"
+		DirAccess.make_dir_recursive_absolute(directory)
+		await process_frame
+		await RenderingServer.frame_post_draw
+		_check(preload("res://tools/shot_util.gd").save_png(root, directory, "speed_wind"), "снимок эффекта скорости")
+	wind.update_effect(0.0, DT)
+	_check(wind.strength == 0.0, "полосы полностью исчезают при нулевом эффекте")
+	game.queue_free()
 	await process_frame
 	quit(1 if _fails > 0 else 0)

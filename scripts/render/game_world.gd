@@ -26,6 +26,9 @@ const AIM_R := 0.3     # «толщина» луча взгляда, м: пре�
 const OpeningRoute = preload("res://scripts/game/opening_route.gd")
 const OPENING_PASS := 1.6
 const OPENING_FOLLOW := 3.0
+const SpeedWind = preload("res://scripts/render/speed_wind.gd")
+var _speed_wind: SpeedWind
+var _speed_rush := 0.0
 var opening_place := {}
 var _opening := false
 var _opening_time := 0.0
@@ -195,6 +198,11 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		bike_view.draw(1.0)
 	t = _mark("start_vegetation_ms", t)
 	camera.fov = GameSettings.fov
+	var wind_layer := CanvasLayer.new()
+	wind_layer.layer = 0
+	add_child(wind_layer)
+	_speed_wind = SpeedWind.new()
+	wind_layer.add_child(_speed_wind)
 	_apply_shadows()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
 	day.terrain_mats = [$Terrain.material_override]
@@ -238,6 +246,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	if is_instance_valid(_speed_wind):
+		_speed_wind.visible = not p
 	if is_instance_valid(_opening_caption):
 		_opening_caption.visible = not p and _opening
 	if p:
@@ -643,6 +653,8 @@ func _process(delta: float) -> void:
 	else:
 		bike_view.draw(alpha)
 	_update_camera(alpha, delta)
+	if _speed_wind != null:
+		_speed_wind.update_effect(_speed_rush, delta)
 	if _opening:
 		_draw_opening(alpha)
 	_target = _aim()
@@ -922,6 +934,11 @@ func _update_camera(alpha: float, dt: float) -> void:
 	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
 	var view_yaw := yaw - _tick_yaw * (1.0 - alpha)
 	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
+	var rush_goal := 0.0
+	if riding and not crash.active() and not _opening:
+		rush_goal = smoothstep(12.0, 26.0, absf(bike.speed))
+		rush_goal += smoothstep(1.0, 5.0, bike.acceleration) * smoothstep(8.0, 18.0, absf(bike.speed)) * 0.2
+	_speed_rush = lerpf(_speed_rush, minf(rush_goal, 1.0), _smooth(2.5, dt))
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := GameSettings.fov
 	if riding:
@@ -941,12 +958,14 @@ func _update_camera(alpha: float, dt: float) -> void:
 			_cam_y = pos.y + 1.4 + clampf(_cam_y - pos.y - 1.4, -2.0, 2.0)
 		var target := Vector3(pos.x, _cam_y + dip, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
-		var dist := GameConfig.BIKE_CAM
+		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * 0.7
+		var dist := desired_dist
+		var steps := maxi(CAM_STEPS, ceili(desired_dist / 0.3))
 		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть
-		for k in range(1, CAM_STEPS + 1):
-			var p := target - dir * (GameConfig.BIKE_CAM * k / CAM_STEPS)
+		for k in range(1, steps + 1):
+			var p := target - dir * (desired_dist * k / steps)
 			if _cam_blocked(p, pos.y):
-				dist = maxf(1.2, GameConfig.BIKE_CAM * (k - 1) / CAM_STEPS)
+				dist = maxf(1.2, desired_dist * (k - 1) / steps)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
 		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(3.0, dt))
