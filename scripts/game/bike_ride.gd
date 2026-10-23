@@ -301,7 +301,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			var blocked := Vector3(x - x0, 0.0, z - z0) - wanted
 			var normal := blocked.normalized()
 			var impact := maxf(0.0, -Vector3(-sin(heading) * speed, 0, -cos(heading) * speed).dot(normal))
-			var ahead := wanted.normalized() * PlayerState.PIECE * 0.5
+			# 11.6: щуп на весь несделанный кусок пути: тонкое бревно, на котором встали за 0,1–0,2 м, тоже удар
+			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, full - moved + 0.01)
 			var solid := false
 			for axle: float in [-AXLE, 0.0, AXLE]:
 				if not PlayerState.is_passable(w, heights, x + ahead.x - sin(heading) * axle, z + ahead.z - cos(heading) * axle, y, BODY_R, true):
@@ -415,6 +416,7 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 ## Колёса на точках касания. Подвеска колеса получает толчок, когда вертикальная скорость земли
 ## под ним меняется (излом, ступенька, кочка): переднее колесо встречает излом раньше заднего.
 ## 11.5: на полотне кочки — поле RoadBump в точке касания (то же, что видно в шейдере), вне пути — прежние.
+## 11.6: поверх — кочки веток и камней на полотне (ForestObstacles.bump_at).
 func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSurface.NONE, path_weight := 0.0, grade := 0.0) -> void:
 	if airborne:
 		# в полёте колёса висят на подвеске под рамой
@@ -430,6 +432,10 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var wild := BUMP * rough * (1.0 - path_weight)
 	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx, z + fz, surf, grade) * path_weight
 	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx, z - fz, surf, grade) * path_weight
+	# 11.6: ветки и камни на полотне (RoadObstacles) — та же кочка, только с места препятствия
+	if heights.obstacles != null:
+		gf += heights.obstacles.bump_at(x + fx, z + fz)
+		gr += heights.obstacles.bump_at(x - fx, z - fz)
 	ground_f = gf - y
 	ground_r = gr - y
 	if _fresh:

@@ -2,7 +2,7 @@ extends RefCounted
 ## 6.6+: подстилка и валежник. Только оформление готового мира.
 
 const Plants := preload("res://scripts/render/understory_models.gd")
-enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER } # 9.4: пни и мшистые валуны
+enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге
 const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
@@ -63,6 +63,7 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 		rocky * (0.25 + cover * 0.2),
 		cover * (0.012 + (1.0 - wet) * 0.01),
 		cover * (0.008 + rocky * 0.05),
+		0.0, # ветки кладёт только RoadObstacles на полотно
 	])
 
 
@@ -133,6 +134,13 @@ static func meshes() -> Array[Mesh]:
 		var a := n * TAU / 4.0 + 0.4
 		var f := Vector3(cos(a), 0, sin(a))
 		stump.append([_beam(f * 0.15 + Vector3.UP * 0.25, f * 0.62, 0.09), BARK])
+	# 11.6: упавшая сухая ветка поперёк колеи — 2,2 м, развилки и пучок сухой листвы (кочка RoadObstacles.BUMP)
+	var branch: Array = [[_beam(Vector3(-1.1, 0.05, 0), Vector3(1.1, 0.04, 0.1), 0.05), BARK]]
+	for n in 5:
+		var x := -0.8 + n * 0.4
+		var side := 1.0 if n % 2 == 0 else -1.0
+		branch.append([_beam(Vector3(x, 0.05, 0.02), Vector3(x + 0.45, 0.07 + n * 0.015, side * 0.42), 0.022), BARK])
+	branch.append([Models._moved(Models._ico(0.16, 0.05, 1.6, 0.45, 0.4), Vector3(0.95, 0.0, 0.05)), Color(0.42, 0.31, 0.16)])
 	return [Plants._leaves(leaves, Color(0.46, 0.35, 0.18)), Plants._leaves(needles, Color(0.4, 0.33, 0.19)),
 		twig, Plants._colored(roots), _log(false), _log(true), Plants._colored(snag), stones.commit(),
-		Plants._colored(stump), Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62)]
+		Plants._colored(stump), Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62), Plants._colored(branch)]

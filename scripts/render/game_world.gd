@@ -158,6 +158,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		yaw = opening_spot.heading
 		opening_place = opening_spot.place
 		_opening_points = opening_spot.points
+		# 11.6: вступительный проезд по дороге не упирается в бревно
+		vegetation.road.clear.append(Vector2(player.x, player.z))
 	terrain_stream.update(player.x, player.z, true, true, NEAR)
 	t = _mark("start_terrain_ms", t)
 	if opening_spot.is_empty() and world.settlements.size() > 0:
@@ -536,6 +538,7 @@ func _physics_process(dt: float) -> void:
 	_moving = false
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
+	heights.obstacles.set_bumps(vegetation.bumps, vegetation.obstacles_version)
 	if crash.active():
 		# Камера следит за телом; завершение возвращает пешее управление на месте падения.
 		var was_ragdoll := crash.phase == BikeCrash.Phase.RAGDOLL

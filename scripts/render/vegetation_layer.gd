@@ -80,6 +80,9 @@ var _understory_sites: Array = []
 var obstacles := PackedFloat32Array() # 7.7: валежник и сухостой рядом с игроком для ForestObstacles (тот же формат)
 var obstacles_version := 0            # растёт с каждой новой раскладкой подлеска
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
+var road: RoadObstacles                # 11.6: препятствия на полотне путей
+var bumps := PackedFloat32Array()      # их кочки под колёсом для ForestObstacles.set_bumps (та же версия, что obstacles)
+var _bumps_next := PackedFloat32Array()
 var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
 var draw_level := -1
 var grass_at := Vector2.INF # центр показанной раскладки травы, м (check.gd: насколько она отстаёт)
@@ -96,6 +99,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	world = w
 	heights = h
 	placement = Placement.new(w, h)
+	road = RoadObstacles.new(w)
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
 	for kind in defs:
 		var def: Dictionary = defs[kind]
@@ -591,6 +595,7 @@ func _apply_chunk(built: Dictionary) -> void:
 func _apply_grass() -> void:
 	grass_at = _fill_at
 	obstacles = _obstacles_next
+	bumps = _bumps_next
 	obstacles_version += 1
 	grass.buffer = grass_buf
 	grass.custom_aabb = _grass_bounds
@@ -631,8 +636,11 @@ func _fill_grass(px: float, pz: float) -> void:
 	_fill_at = Vector2(px, pz)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
+	_bumps_next = PackedFloat32Array()
 	placement.prepare(px, pz, rF * TILE + 12.0)
 	_understory_sites.clear()
+	# Препятствия на полотне — первыми: обочина, подлесок и трава обходят их, а не наоборот.
+	_fill_road(px, pz)
 	for entry: Dictionary in understory:
 		entry.count = 0
 		entry.low = Vector3.INF
@@ -773,7 +781,23 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 	return grass_mul
 
 
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0) -> void:
+## 11.6: на полотне путей — препятствия RoadObstacles в радиусе подлеска, тем же размещением, что подстилка
+func _fill_road(px: float, pz: float) -> void:
+	if road == null:
+		return
+	var pairs := road.around(px, pz, maxf(grass_r, under_r))
+	for p in range(0, pairs.size(), 2):
+		var o := road.pick(heights, _forest_surface, pairs[p], pairs[p + 1])
+		if o.is_empty():
+			continue
+		var kind: int = Floor.FIRST + [Floor.BRANCH, Floor.STONES, Floor.MOSS_LOG if o.moss else Floor.LOG, Floor.BOULDER][o.kind]
+		if Vector2(o.x - px, o.z - pz).length() > (under_r if understory[kind].far else grass_r):
+			continue
+		_put_understory(kind, o.x, o.z, o.rot, o.scale, 1.0, -1, 0.0, true)
+
+
+## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false) -> void:
 	var entry: Dictionary = understory[kind]
 	if entry.count >= entry.cap:
 		fill_capped += 1
@@ -782,7 +806,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var local_box: AABB = entry.box
 	var reach := local_box.position.abs().max(local_box.end.abs()) * scale
 	var radius := Vector2(reach.x, reach.z).length()
-	if not placement.ground_clear(x, z, radius):
+	if not on_road and not placement.ground_clear(x, z, radius):
 		return
 	if not placement.objects_clear(x, z, rot, scale, local_box, radius, owner):
 		return
@@ -825,6 +849,8 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		_obstacles_next.append_array([x, z, x, z, 0.3 * scale, pos.y, pos.y + 0.45 * scale])
 	elif floor_kind == Floor.BOULDER:
 		_obstacles_next.append_array([x, z, x, z, 0.75 * scale, pos.y, pos.y + 0.95 * scale])
+	elif on_road and (floor_kind == Floor.BRANCH or floor_kind == Floor.STONES): # не держат, а встряхивают колесо
+		_bumps_next.append_array(RoadObstacles.bump(RoadObstacles.BRANCH if floor_kind == Floor.BRANCH else RoadObstacles.STONES, xf, scale))
 
 
 func _filter_grass() -> void:

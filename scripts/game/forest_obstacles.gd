@@ -29,6 +29,12 @@ var data := PackedFloat32Array()  # препятствия подряд по STR
 var _grid := {}                   # Vector2i(клетка) -> PackedInt32Array номеров (начало записи в data)
 var _center := Vector2.INF
 var _version := -1
+## 11.6: мелочь на полотне (ветки, россыпь камней) не держит, а поднимает колесо: отрезки a–b с радиусом
+## и высотой (RoadObstacles.bump), подряд по BUMP_STRIDE. Кладёт VegetationLayer.bumps уже в радиусе столкновений.
+const BUMP_STRIDE := 6
+var bumps := PackedFloat32Array()
+var _bump_grid := {}
+var _bump_version := -1
 
 
 func _init(w: WorldData, h: Heightfield) -> void:
@@ -157,9 +163,43 @@ func _nearest(x: float, z: float, feet: float, r: float) -> int:
 
 ## Ближайшая к (x, z) точка оси препятствия
 func _closest(at: int, x: float, z: float) -> Vector2:
-	var a := Vector2(data[at], data[at + 1])
-	var ab := Vector2(data[at + 2], data[at + 3]) - a
+	return _on_axis(data, at, x, z)
+
+
+static func _on_axis(list: PackedFloat32Array, at: int, x: float, z: float) -> Vector2:
+	var a := Vector2(list[at], list[at + 1])
+	var ab := Vector2(list[at + 2], list[at + 3]) - a
 	var ln := ab.length_squared()
 	if ln < 1e-8:
 		return a
 	return a + ab * clampf((Vector2(x, z) - a).dot(ab) / ln, 0.0, 1.0)
+
+
+## Новые кочки, если подлесок обновился (version — его счётчик, как у update)
+func set_bumps(list: PackedFloat32Array, version: int) -> void:
+	if version == _bump_version:
+		return
+	_bump_version = version
+	bumps = list
+	_bump_grid.clear()
+	for at in range(0, list.size(), BUMP_STRIDE):
+		var r := list[at + 4]
+		for cy in range(floori((minf(list[at + 1], list[at + 3]) - r) / CELL), floori((maxf(list[at + 1], list[at + 3]) + r) / CELL) + 1):
+			for cx in range(floori((minf(list[at], list[at + 2]) - r) / CELL), floori((maxf(list[at], list[at + 2]) + r) / CELL) + 1):
+				var key := Vector2i(cx, cy)
+				var cell: PackedInt32Array = _bump_grid.get(key, PackedInt32Array())
+				cell.append(at)
+				_bump_grid[key] = cell
+
+
+## Подъём точки касания колеса в (x, z) над землёй, м: купол от оси ветки или середины россыпи
+func bump_at(x: float, z: float) -> float:
+	var cell: Variant = _bump_grid.get(Vector2i(floori(x / CELL), floori(z / CELL)))
+	if cell == null:
+		return 0.0
+	var top := 0.0
+	for at: int in cell:
+		var t := Vector2(x, z).distance_to(_on_axis(bumps, at, x, z)) / bumps[at + 4]
+		if t < 1.0:
+			top = maxf(top, bumps[at + 5] * (1.0 - t * t))
+	return top

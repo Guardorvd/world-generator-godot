@@ -5,8 +5,10 @@ extends SceneTree
 ## Снимки: вид с велосипеда и сверху-сбоку для каждого покрытия. Нужно окно (не headless).
 ##   godot --path . --script res://tools/road_look.gd -- [--out <папка>] [--surfaces 1,2,6,7] [--shader <файл>]
 ## --shader — другой код шейдера рельефа (например, прошлая версия) для сравнения «было | стало».
+## --obstacles — 11.6: на полотне ветка, камни, бревно поперёк и валун у края (модели подстилки, цвет вершин).
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const SIZE := 64        # м, сторона участка
 const SETTLE := 8       # кадров до снимка
 const WINDOW := Vector2i(1280, 720)
@@ -60,9 +62,30 @@ func _initialize() -> void:
 	camera.far = 400.0
 	root.add_child(camera)
 	camera.make_current()
+	if "--obstacles" in OS.get_cmdline_user_args():
+		_obstacles()
 	for s in surfaces:
 		shots.append({surface = s, name = "low", pos = Vector3(_axis(6.0) , 1.45, 6.0), target = Vector3(_axis(20.0), 0.6, 20.0)})
 		shots.append({surface = s, name = "high", pos = Vector3(_axis(10.0) + 5.0, 4.5, 8.0), target = Vector3(_axis(16.0), 0.0, 16.0)})
+
+
+## Препятствия RoadObstacles на оси дороги: ветка, камни, бревно поперёк (с перекосом) и валун у края
+func _obstacles() -> void:
+	var meshes := Floor.meshes()
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	mat.roughness = 0.9
+	for item: Array in [[Floor.BRANCH, 10.0, 0.4, 1.0], [Floor.STONES, 14.0, -0.5, 1.0], [Floor.LOG, 19.0, 0.0, 0.85], [Floor.BOULDER, 25.0, 1.0, 0.85]]:
+		var z: float = item[1]
+		var tangent := Vector2(_axis(z + 0.05) - _axis(z), 0.05).normalized()
+		var side := Vector2(-tangent.y, tangent.x)
+		var at := Vector2(_axis(z), z) + side * float(item[2])
+		var node := MeshInstance3D.new()
+		node.mesh = meshes[item[0]]
+		node.material_override = mat
+		var rot := atan2(-side.y, side.x) + (0.3 if item[0] == Floor.LOG else 1.1)
+		node.transform = Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * float(item[3])), Vector3(at.x, -0.015, at.y))
+		root.add_child.call_deferred(node)
 
 
 ## Ось дороги: x по z, плавный изгиб
