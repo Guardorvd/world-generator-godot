@@ -20,6 +20,9 @@ func _check(ok: bool, what: String) -> void:
 
 
 func _init() -> void:
+	if "--opening" in OS.get_cmdline_user_args():
+		_opening_test.call_deferred()
+		return
 	var w := WorldGenerator.generate("Север-1234", 256)
 	var heights := Heightfield.new(w)
 	var p := PlayerState.spawn(w, heights)
@@ -385,3 +388,95 @@ func _body_points(p: PlayerState, b: BikeRide, ride: bool) -> Array[Vector2]:
 		return [Vector2(p.x, p.z)]
 	var f := Vector2(-sin(b.heading), -cos(b.heading)) * WHEEL_REACH
 	return [Vector2(b.x, b.z) + f, Vector2(b.x, b.z) - f]
+
+
+## Одна генерация и проверка всей заставки; --capture сохраняет два кадра и передачу управления.
+func _opening_test() -> void:
+	var main: Node = load("res://scenes/main.tscn").instantiate()
+	root.add_child(main)
+	WorldCache.enabled = false
+	# Малый план теми же стадиями: полный 768 без .NET слишком дорог для теста камеры.
+	var loaded := WorldLoader.new()
+	loaded.world = WorldGenerator._generate_plan("Север-1234", 384)
+	loaded.world.expand_territory(384)
+	print("План проверки: ", loaded.world.settlements.size(), " поселений, ", loaded.world.trails.size(), " путей, ", loaded.world.peaks.size(), " вершин")
+	var painted := loaded._prepare(loaded.world, 2)
+	var changed := loaded.heights.finish_paths()
+	if not changed.is_empty():
+		TerrainBuilder.patch(loaded.terrain_arrays, loaded.world, loaded.heights, changed)
+	TerrainBuilder.refine_arrays(loaded.terrain_arrays, loaded.world, loaded.heights)
+	loaded.terrain_chunks = PlanTerrain.partition(loaded.terrain_arrays)
+	var terrain_bytes: Array[PackedByteArray] = [painted[0][0]]
+	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]
+	loaded.terrain_image = MapBaker.finish(loaded.world, 2, terrain_bytes, false)[0]
+	loaded.map_image = MapBaker.finish(loaded.world, 2, map_bytes)[0]
+	loaded.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(loaded.world)
+	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
+	main.game = game
+	main.add_child(game)
+	game.start(loaded, main.hud)
+	game.hud.visible = not game.opening_active()
+	main._show("")
+	game.set_physics_process(false)
+	game.set_process(false)
+	_check(not game.opening_place.is_empty(), "старт у точки интереса: %s" % game.opening_place.get("name", "нет"))
+	_check(game.opening_active() and game.bike.riding, "катсцена началась в седле")
+	if not game.opening_active():
+		quit(1)
+		return
+	var begin := Vector2(game.player.x, game.player.z)
+	var heading := game.bike.heading
+	var clock := game._opening_time
+	game.set_paused(true)
+	game._physics_process(DT)
+	_check(game._opening_time == clock and not game._opening_caption.visible, "пауза останавливает заставку и скрывает подпись")
+	game.set_paused(false)
+	game.look(200, 100)
+	game.toggle_map()
+	_check(is_equal_approx(game.yaw, heading) and not game.show_map, "мышь и карта не вмешиваются в катсцену")
+	var directory := "res://tools/control/runs/11.0-opening"
+	DirAccess.make_dir_recursive_absolute(directory)
+	Input.action_press("move_right")
+	Input.action_press("run")
+	for tick in 285:
+		game._physics_process(DT)
+		game._update_camera(1.0, DT)
+		if game.opening_active():
+			game._draw_opening(1.0)
+		game.bike_view.draw(1.0)
+		if tick in [60, 150, 275] and "--capture" in OS.get_cmdline_user_args():
+			await process_frame
+			await RenderingServer.frame_post_draw
+			_check(preload("res://tools/shot_util.gd").save_png(root, directory, "frame_%d" % tick), "снимок заставки")
+		if not game.opening_active():
+			break
+	Input.action_release("move_right")
+	Input.action_release("run")
+	_check(not game.opening_active() and game.hud.visible, "через 4,6 с управление и HUD включаются")
+	_check(game.bike.riding and not game.crash.active() and not game.bike.airborne, "проезд завершён без падения")
+	_check(Vector2(game.player.x, game.player.z).distance_to(begin) > 5.0, "велосипед проехал по готовой дороге")
+	var final_camera := game.camera.transform
+	game._update_camera(1.0, 0.0)
+	_check(final_camera.is_equal_approx(game.camera.transform), "конец приближения совпадает с обычной камерой")
+	game._opening = true
+	game._opening_time = 0.5
+	var before_skip := Vector3(game.bike.x, game.bike.y, game.bike.z)
+	var skip := InputEventAction.new()
+	skip.action = "jump"
+	skip.pressed = true
+	game._unhandled_input(skip)
+	_check(not game.opening_active() and before_skip == Vector3(game.bike.x, game.bike.y, game.bike.z), "пропуск не переносит велосипед")
+	var kinds := {}
+	for seed_value in 4:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = seed_value
+		var chosen := game.OpeningRoute.choose(game.world, game.heights, rng)
+		_check(not chosen.is_empty(), "найден старт для RNG %d" % seed_value)
+		if not chosen.is_empty():
+			kinds[chosen.place.kind] = true
+	print("Виды стартов на одном мире: ", kinds.keys())
+	_check(kinds.size() > 1, "выбор не привязан к деревне")
+	main._free_game()
+	main.queue_free()
+	await process_frame
+	quit(1 if _fails > 0 else 0)

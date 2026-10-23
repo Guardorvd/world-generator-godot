@@ -23,6 +23,17 @@ const CAM_STEPS := 15   # столько точек на луче от седо�
 const NEAR := PlanTerrain.RADIUS / 2.0
 const REACH := 3.5     # предметы дальше этого от глаз игрока (м) не выбираются взглядом
 const AIM_R := 0.3     # «толщина» луча взгляда, м: предмет можно задеть краем
+const OpeningRoute = preload("res://scripts/game/opening_route.gd")
+const OPENING_PASS := 1.6
+const OPENING_FOLLOW := 3.0
+var opening_place := {}
+var _opening := false
+var _opening_time := 0.0
+var _opening_camera := Vector3.ZERO
+var _opening_target := Vector3.ZERO
+var _opening_caption: Label
+var _opening_points: Array[Vector2] = []
+var _opening_point := 1
 
 var world: WorldData
 var heights: Heightfield
@@ -125,10 +136,22 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	t = _mark("start_structures_ms", t)
 	load_timings.start_scene_ms = (t - scene_started) / 1000.0
 
+	var spawn_started := Time.get_ticks_usec()
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	var opening_spot := OpeningRoute.choose(world, heights, rng)
+	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
 	player = PlayerState.spawn(world, heights)
+	if not opening_spot.is_empty():
+		player.x = opening_spot.position.x
+		player.z = opening_spot.position.z
+		player.feet = opening_spot.position.y
+		yaw = opening_spot.heading
+		opening_place = opening_spot.place
+		_opening_points = opening_spot.points
 	terrain_stream.update(player.x, player.z, true, true, NEAR)
 	t = _mark("start_terrain_ms", t)
-	if world.settlements.size() > 0:
+	if opening_spot.is_empty() and world.settlements.size() > 0:
 		# лицом к костру
 		var s := PlayerState.home(world)
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
@@ -151,6 +174,25 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	t = _mark("start_outer_ms", t)
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
+	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+	if not opening_spot.is_empty():
+		bike.x = player.x
+		bike.z = player.z
+		bike.y = player.feet
+		bike.heading = yaw
+		bike.mount(player)
+		pitch = -0.3
+		_cam_y = player.feet + 1.4
+		_opening = opening_spot.cinematic
+		if _opening:
+			bike.speed = OpeningRoute.SPEED
+			var forward := Vector3(-sin(yaw), 0.0, -cos(yaw))
+			var side := Vector3(cos(yaw), 0.0, -sin(yaw))
+			_opening_target = opening_spot.position + forward * 2.4 + Vector3.UP * 0.65
+			_opening_camera = opening_spot.position + forward * 2.4 + side * 3.2
+			_opening_camera.y = heights.surface_at(_opening_camera.x, _opening_camera.z, player.feet) + 0.45
+		_snap()
+		bike_view.draw(1.0)
 	t = _mark("start_vegetation_ms", t)
 	camera.fov = GameSettings.fov
 	_apply_shadows()
@@ -161,8 +203,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	hour = GameSettings.pick_start_hour()
 	day.apply(hour, time)
 	_update_camera(1.0, 0.0)
-	if world.settlements.size() > 0:
-		hud.toast("Вы в поселении «%s». Щёлкните по экрану, чтобы осмотреться" % PlayerState.home(world).name)
+	if _opening:
+		_draw_opening(1.0)
+	else:
+		_opening_welcome()
 	audio.setup(world, heights)
 	hud.travel_requested.connect(travel_to)
 	for s: Dictionary in world.settlements:
@@ -194,6 +238,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	if is_instance_valid(_opening_caption):
+		_opening_caption.visible = not p and _opening
 	if p:
 		_close_settlement(false)
 	else:
@@ -210,6 +256,8 @@ func set_paused(p: bool) -> void:
 
 
 func look(dx: float, dy: float) -> void:
+	if _opening:
+		return
 	var k := GameConfig.MOUSE * GameSettings.mouse
 	yaw -= dx * k
 	pitch = clampf(pitch - dy * k * (-1.0 if GameSettings.invert_y else 1.0), -1.5, 1.5)
@@ -218,7 +266,7 @@ func look(dx: float, dy: float) -> void:
 
 ## Сесть на велосипед, если он рядом, или слезть с него (E, с 10.1; до этого F)
 func toggle_bike() -> void:
-	if crash.active():
+	if _opening or crash.active():
 		return
 	if bike.riding:
 		if bike.airborne:
@@ -248,6 +296,8 @@ func toggle_bike() -> void:
 
 
 func toggle_map() -> void:
+	if _opening:
+		return
 	_close_settlement(false)
 	show_map = not show_map
 	hud.set_map_visible(show_map)
@@ -262,7 +312,7 @@ func toggle_map() -> void:
 ## Быстрое перемещение в любое место с карты (Hud.places; с 3.0.2 и туда, где игрок ещё не был): к костру поселения,
 ## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
 func travel_to(place: Dictionary) -> void:
-	if paused or player == null or not world.accessible(place.x, place.y):
+	if _opening or paused or player == null or not world.accessible(place.x, place.y):
 		return
 	if bike.riding and bike.airborne:
 		return
@@ -293,6 +343,8 @@ func travel_to(place: Dictionary) -> void:
 
 ## Y доступна и в воздухе/рэгдолле. Сначала ищем и проверяем место, лишь затем меняем состояние.
 func restore_at_place() -> bool:
+	if _opening:
+		return false
 	if paused or player == null or bike == null or not is_instance_valid(bike_view) or world == null or heights == null or _settlement_open() or time < _rescue_ready:
 		return false
 	_rescue_ready = time + 1.0
@@ -383,6 +435,11 @@ func _unhandled_input(event: InputEvent) -> void:
 	# до start() узлы игрока и велосипеда ещё не созданы
 	if paused or player == null:
 		return
+	if _opening:
+		if event.is_action_pressed("jump"):
+			_finish_opening()
+		get_viewport().set_input_as_handled()
+		return
 	if event.is_action_pressed("recover_bike"):
 		restore_at_place()
 		get_viewport().set_input_as_handled()
@@ -440,6 +497,16 @@ func _physics_process(dt: float) -> void:
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
+	if _opening:
+		_opening_time += dt
+		fw = 1.0 if bike.speed < OpeningRoute.SPEED else (-1.0 if bike.speed > OpeningRoute.SPEED + 0.2 else 0.0)
+		var at := Vector2(bike.x, bike.z)
+		while _opening_point < _opening_points.size() - 1 and at.distance_to(_opening_points[_opening_point]) < 2.5:
+			_opening_point += 1
+		var forward := _opening_points[_opening_point] - at
+		var wanted := atan2(-forward.x, -forward.y)
+		st = clampf(-wrapf(wanted - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		jump = false
 	if time < _rescue_input_until:
 		fw = 0.0
 		st = 0.0
@@ -474,7 +541,9 @@ func _physics_process(dt: float) -> void:
 			crashed = true
 	elif bike.riding:
 		var h0 := bike.heading
-		bike.step(player, fw, st, Input.is_action_pressed("run"), jump, dt, world, heights)
+		bike.step(player, fw, st, not _opening and Input.is_action_pressed("run"), jump, dt, world, heights)
+		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
+			_finish_opening()
 		# камера поворачивает вместе с велосипедом, а если мышь не трогали — сама уходит за спину
 		yaw += bike.heading - h0
 		if absf(bike.speed) > 1.0 and time - _looked_at > 1.0:
@@ -506,7 +575,7 @@ func _physics_process(dt: float) -> void:
 	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
 	_trauma = maxf(0.0, _trauma - dt * 1.6)
 	if not crash.active():
-		bike_view.tick(bike, dt, fw, Input.is_action_pressed("run"))
+		bike_view.tick(bike, dt, fw, not _opening and Input.is_action_pressed("run"))
 	bike.land_impact = 0.0
 	audio.tick(player, bike.riding)
 	if crashed:
@@ -574,6 +643,8 @@ func _process(delta: float) -> void:
 	else:
 		bike_view.draw(alpha)
 	_update_camera(alpha, delta)
+	if _opening:
+		_draw_opening(alpha)
 	_target = _aim()
 	_update_hints()
 	day.apply(hour, time)
@@ -608,6 +679,76 @@ func _cam_blocked(p: Vector3, feet: float) -> bool:
 	return heights.wall_at(p.x, p.z, p.y - 1.0, 0.25)
 
 
+func opening_active() -> bool:
+	return _opening
+
+
+func _opening_welcome() -> void:
+	if not opening_place.is_empty():
+		hud.toast_now("Начало пути: «%s»" % opening_place.name)
+
+
+func _finish_opening() -> void:
+	_opening = false
+	_opening_time = 0.0
+	if is_instance_valid(_opening_caption):
+		_opening_caption.queue_free()
+	# Тот же велосипед, скорость и камера: никаких переносов при передаче управления.
+	_rescue_input_until = time + 0.2
+	hud.visible = not paused
+	_update_camera(1.0, 0.0)
+	_opening_welcome()
+
+
+## Только геометрия рельефа и мостов/туннелей, как у обычной камеры. Растения могут закрывать кадр.
+func _opening_safe_camera(target: Vector3, desired: Vector3, feet: float) -> Vector3:
+	var count := maxi(1, ceili(target.distance_to(desired) / 0.2))
+	var safe := target
+	for i in range(1, count + 1):
+		var point := target.lerp(desired, float(i) / count)
+		if _cam_blocked(point, feet):
+			break
+		safe = point
+	return safe
+
+
+func _draw_opening(alpha: float) -> void:
+	if not is_instance_valid(_opening_caption):
+		var layer := CanvasLayer.new()
+		add_child(layer)
+		_opening_caption = Label.new()
+		layer.add_child(_opening_caption)
+		_opening_caption.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
+		_opening_caption.offset_top = -65
+		_opening_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_opening_caption.add_theme_color_override("font_shadow_color", Color.BLACK)
+		_opening_caption.add_theme_constant_override("shadow_offset_x", 2)
+		_opening_caption.add_theme_constant_override("shadow_offset_y", 2)
+		_opening_caption.text = "«%s»\nПробел — пропустить · Esc — пауза" % opening_place.name
+	var elapsed := maxf(0.0, _opening_time - (1.0 - alpha) / Engine.physics_ticks_per_second)
+	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
+	var target := pos + Vector3.UP * 1.4
+	var standard := camera.transform
+	if elapsed < OPENING_PASS:
+		var safe := _opening_safe_camera(_opening_target, _opening_camera, pos.y)
+		if safe.distance_to(_opening_camera) < 0.1:
+			camera.look_at_from_position(safe, _opening_target)
+		# Если низкий кадр закрыла местность, используем безопасный штатный ракурс.
+		return
+	var fraction := clampf((elapsed - OPENING_PASS) / OPENING_FOLLOW, 0.0, 1.0)
+	var forward := Vector3(-sin(bike.heading), 0.0, -cos(bike.heading))
+	var desired := target - forward * 9.0 + Vector3.UP * 3.0
+	var far := _opening_safe_camera(target, desired, pos.y)
+	if far.distance_to(target) > 0.1:
+		camera.look_at_from_position(far, target)
+		var blended := camera.transform.interpolate_with(standard, smoothstep(0.0, 1.0, fraction))
+		var safe := _opening_safe_camera(target, blended.origin, pos.y)
+		blended.origin = safe
+		camera.transform = blended
+	if fraction >= 1.0:
+		_finish_opening()
+
+
 ## Тряска камеры после приземления сильнее soft (м/с)
 func _shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
@@ -629,6 +770,9 @@ func _crash() -> void:
 
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас
 func _update_hints() -> void:
+	if _opening:
+		hud.set_hints("Пробел — пропустить · Esc — пауза", "")
+		return
 	if _settlement_open():
 		hud.set_hints("", "")
 		return

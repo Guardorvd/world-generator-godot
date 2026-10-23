@@ -504,7 +504,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
 	game.start(loaded, hud)
-	hud.visible = true
+	hud.visible = not game.opening_active()
 	hud.set_map_visible(false)
 	_show("")
 	busy = false
@@ -525,7 +525,7 @@ func _toggle_pause() -> void:
 
 func _resume() -> void:
 	_show("")
-	hud.visible = true
+	hud.visible = not game.opening_active()
 	game.set_paused(false)
 	# щелчок по кнопке «Продолжить» не должен сразу считаться щелчком по миру
 	get_viewport().gui_release_focus()
