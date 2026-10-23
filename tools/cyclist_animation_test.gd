@@ -115,6 +115,59 @@ func run() -> void:
 	for i in 120:
 		advance()
 	check(bone("Head").distance_to(neutral) < 0.001, "Landing settles")
+	# 10.6: плечи работают в такт усилию и затихают на накате.
+	var shoulder_ranges: Array[float] = []
+	for boosting in [false, true]:
+		reset()
+		var shoulder_min := INF
+		var shoulder_max := -INF
+		for i in 120:
+			state.crank += TAU / 60.0
+			advance(1, boosting)
+			var shoulder := bone("UpperArmL").z - bone("UpperArmR").z
+			shoulder_min = minf(shoulder_min, shoulder)
+			shoulder_max = maxf(shoulder_max, shoulder)
+			contacts()
+		shoulder_ranges.append(shoulder_max - shoulder_min)
+	check(shoulder_ranges[0] > 0.025, "Pedalling alternates shoulders")
+	check(shoulder_ranges[1] > shoulder_ranges[0] * 1.15, "Boost visibly increases body effort")
+	for i in 120:
+		advance()
+	check(absf(bike._cur[BikeView.S_SWAY]) < 0.00001, "Coasting settles shoulder effort")
+	reset()
+	state.speed = 0
+	var breath_min := INF
+	var breath_max := -INF
+	for i in 180:
+		advance()
+		breath_min = minf(breath_min, bone("Neck").y)
+		breath_max = maxf(breath_max, bone("Neck").y)
+		contacts()
+	check(breath_max - breath_min > 0.003, "Resting rider breathes subtly")
+	reset()
+	state.squash_fv = 2
+	state.squash_rv = -1
+	for i in 30:
+		advance()
+	check(bike._cur[BikeView.S_CROUCH] > 0.018, "Moving suspension is absorbed by body and elbows")
+	contacts()
+	state.speed = 0
+	for i in 120:
+		advance()
+	check(bike._cur[BikeView.S_CROUCH] < 0.00001, "No artificial road vibration when stopped")
+	state.speed = 6
+	state.airborne = true
+	for i in 90:
+		advance()
+	check(absf(bike._cur[BikeView.S_CROUCH] - 0.035) < 0.0001, "Airborne pose ignores suspension vibration")
+	contacts()
+	reset()
+	state.tilt = 0.4
+	bike.snap(state)
+	bike.draw(1)
+	var sk := bike.rider.skeleton
+	var head_world := bike.global_basis * sk.get_bone_global_pose(sk.find_bone("Head")).basis
+	check(absf(head_world.get_euler().x) < 0.2, "Head stabilizes against the slope")
 	# Extreme combined inputs through a full pedal revolution, including angle wrap.
 	for sign_value in [-1.0, 1.0]:
 		reset()
@@ -127,13 +180,17 @@ func run() -> void:
 			state.land_impact = 10 if i == 110 else 0
 			state.crank = fmod(state.crank + 6 * DT, TAU)
 			state.speed = 12 + sin(i * DT) * 3
+			state.squash_fv = sin(i * DT * 12.0) * 2.0
+			state.squash_rv = cos(i * DT * 9.0) * 1.5
 			advance(sign_value, true)
 			contacts()
 	# No time integration in draw: repeated rendering cannot alter a pose.
 	var held := bone("Head")
+	var held_pose := bike.rider.capture_pose()
 	for i in 120:
 		bike.draw(1)
 	check(bone("Head").is_equal_approx(held), "Render rate independence")
+	check(bike.rider.capture_pose() == held_pose, "Rendering does not advance breathing or shoulder movement")
 	var results: Array[Vector3] = []
 	for hz in [30, 60, 120]:
 		reset()
@@ -147,6 +204,7 @@ func run() -> void:
 	bike.snap(state)
 	bike.draw(1)
 	check(bike._landing == 0, "Snap clears transient motion")
+	check(bike._cur[BikeView.S_SWAY] == 0 and bike._cur[BikeView.S_BREATH] == 0 and bike._breath_phase == 0, "Snap clears effort and breathing phase")
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
@@ -158,7 +216,7 @@ func run() -> void:
 	check(not invalid._rig_valid, "Incomplete skeleton rejected")
 	check(invalid.skeleton.get_bone_pose(0) == before, "Invalid rig does not write partial pose")
 	invalid.free()
-	print("Cyclist animation: ", fails, " failures; reactions, 360 extreme poses, timing and reset")
+	print("Cyclist animation: ", fails, " failures; breathing, effort, suspension, reactions, 360 extreme poses, timing and reset")
 	if "--capture" in OS.get_cmdline_user_args():
 		await capture()
 	bike.free()
@@ -182,18 +240,20 @@ func capture() -> void:
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
-	for mode in ["brake", "turn", "jump"]:
+	for mode in ["pedal", "rough"]:
 		reset()
-		state.crank = 1.2
-		state.steer = 1.0 if mode == "turn" else 0.0
-		state.lean = -0.28 if mode == "turn" else 0.0
-		state.airborne = mode == "jump"
-		state.tilt = 0.3 if mode == "jump" else 0.0
+		state.crank = 0.4
+		state.speed = 12
+		state.steer = 0.45 if mode == "rough" else 0.0
+		state.lean = -0.2 if mode == "rough" else 0.0
+		state.squash = 0.08 if mode == "rough" else 0.0
+		state.squash_f = 0.12 if mode == "rough" else 0.0
+		state.squash_fv = 2.0 if mode == "rough" else 0.0
+		state.squash_rv = -1.0 if mode == "rough" else 0.0
 		for i in 30:
-			if mode == "brake":
-				state.speed -= 4 * DT
-			advance(-1.0 if mode == "brake" else 0.0)
+			state.crank += 4.0 * DT
+			advance(1.0, true)
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_75_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_106_" + mode + ".png")
