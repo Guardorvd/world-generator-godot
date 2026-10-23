@@ -175,12 +175,15 @@ func recorded_terrain() -> int:
 			var values := PackedByteArray()
 			values.resize(sample.get_area())
 			f[name] = values
-		f.water_level = f.h.duplicate()
+		f.water_level = PackedFloat32Array()
+		f.water_level.resize(sample.get_area())
+		f.water_level.fill(-INF) # как в prepare_rect: снаружи суша без готовой воды, море — 0
 		for y in sample.size.y:
 			for x in sample.size.x:
 				var i := y * sample.size.x + x
 				f.fixed[i] = int(Rect2i(0, 0, 768, 768).has_point(sample.position + Vector2i(x, y)))
 				f.ocean[i] = int(f.h[i] < 0.0)
+				if f.ocean[i] != 0: f.water_level[i] = 0.0
 		var r := {rect = rect, sample_rect = sample, fields = f, river_inputs = inputs}
 		var network := Regions.prepare_rivers(r)
 		var result := Regions.finish_neighbors(w, [r], [network])

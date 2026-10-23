@@ -5,6 +5,10 @@ extends RefCounted
 ## вызывающему потоку; ссылок на изменяемые массивы/словари мира в нём нет.
 
 const HALO := 2 # соседи для уклонов и освещения; НЕ граница расчёта водосбора
+const Rivers := preload("res://scripts/world/region_rivers.gd")
+const WaterSurface := preload("res://scripts/world/region_water_surface.gd")
+const WaterBatch := preload("res://scripts/world/region_water_batch.gd")
+const Settlements := preload("res://scripts/world/region_settlements.gd")
 
 
 ## В отличие от WorldData.region_rect, адрес существует и за краем стартового плана.
@@ -19,23 +23,23 @@ static func prepare(w: WorldData, key: Vector2i) -> Dictionary:
 ## 13.1: отдельный, явный шаг. Не меняет поля заготовки и не открывает игровую границу.
 ## unresolved требует дальнейшей обработки впадин/слияний, а не публикации оборванной реки.
 static func prepare_rivers(region: Dictionary) -> Dictionary:
-	return preload("res://scripts/world/region_rivers.gd").trace(region)
+	return Rivers.trace(region)
 
 
 ## 13.2: сеть + отдельный проект поверхности; исходные поля не меняются.
 static func prepare_water(region: Dictionary) -> Dictionary:
 	var network := prepare_rivers(region)
-	network.surface = preload("res://scripts/world/region_water_surface.gd").prepare(region, network)
+	network.surface = WaterSurface.prepare(region, network)
 	return network
 
 
 ## 13.3: поверхности соседей утверждаются вместе; поселения получают только этот результат.
 static func finish_neighbors(source: WorldData, regions: Array, networks: Array) -> Dictionary:
-	var batch := preload("res://scripts/world/region_water_batch.gd").finish(regions, networks)
+	var batch := WaterBatch.finish(regions, networks)
 	batch.settlements = []
 	if not batch.ready: return batch
 	for i in regions.size():
-		var places := preload("res://scripts/world/region_settlements.gd").prepare(source, regions[i], batch.surfaces[i])
+		var places := Settlements.prepare(source, regions[i], batch.surfaces[i])
 		batch.settlements.append(places.settlements)
 	return batch
 

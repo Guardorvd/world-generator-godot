@@ -29,3 +29,23 @@ func push(id: int, k: float) -> void:
 		i = p
 	ids[i] = id
 	keys[i] = k
+
+
+## Снять элемент с наименьшим ключом (13.4: для подготовки соседних областей, где куча небольшая).
+func pop() -> int:
+	var result := ids[0]
+	n -= 1
+	if n == 0: return result
+	var id := ids[n]
+	var key := keys[n]
+	var at := 0
+	while at * 2 + 1 < n:
+		var child := at * 2 + 1
+		if child + 1 < n and keys[child + 1] < keys[child]: child += 1
+		if keys[child] >= key: break
+		ids[at] = ids[child]
+		keys[at] = keys[child]
+		at = child
+	ids[at] = id
+	keys[at] = key
+	return result

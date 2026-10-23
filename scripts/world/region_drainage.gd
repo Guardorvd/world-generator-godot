@@ -1,7 +1,7 @@
 extends RefCounted
 ## Ограниченный priority flood от допустимых выходов. Не меняет исходный рельеф.
-const MAX_FILL := 0.012
-const MAX_CUT := 0.02
+const MAX_FILL := 0.012 # подъём уровня над исходной землёй, 3.12 м
+const MAX_CUT := 0.02 # выемка входа и русла, 5.2 м
 const DIRS := [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]
 
 
@@ -41,7 +41,7 @@ static func resolve(r: Dictionary, input: Dictionary) -> Dictionary:
 			heap.push((y - rect.position.y) * rect.size.x + x - rect.position.x, best)
 	var settled := {}
 	while heap.n > 0:
-		var id := pop(heap)
+		var id := heap.pop()
 		var c := rect.position + Vector2i(id % rect.size.x, id / rect.size.x)
 		if settled.has(c): continue
 		settled[c] = true
@@ -83,22 +83,3 @@ static func idx(r: Dictionary, c: Vector2i) -> int:
 
 static func height(r: Dictionary, c: Vector2i) -> float:
 	return maxf(0.0, r.fields.h[idx(r, c)])
-
-
-static func pop(heap: MinHeap) -> int:
-	var result := heap.ids[0]
-	heap.n -= 1
-	if heap.n == 0: return result
-	var id := heap.ids[heap.n]
-	var key := heap.keys[heap.n]
-	var at := 0
-	while at * 2 + 1 < heap.n:
-		var child := at * 2 + 1
-		if child + 1 < heap.n and heap.keys[child + 1] < heap.keys[child]: child += 1
-		if heap.keys[child] >= key: break
-		heap.ids[at] = heap.ids[child]
-		heap.keys[at] = heap.keys[child]
-		at = child
-	heap.ids[at] = id
-	heap.keys[at] = key
-	return result

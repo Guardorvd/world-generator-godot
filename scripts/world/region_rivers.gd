@@ -5,6 +5,7 @@ extends RefCounted
 ## Выход за край — передача следующему соседу, а не доказательство выхода к морю.
 
 const DIRECTIONS := [Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT, Vector2i.UP]
+const Drainage := preload("res://scripts/world/region_drainage.gd")
 
 
 static func trace(region: Dictionary) -> Dictionary:
@@ -86,10 +87,10 @@ static func _trace_one(region: Dictionary, input: Dictionary) -> Dictionary:
 			or not is_finite(input.acc) or input.acc <= 0.0 or not is_finite(input.w) or input.w <= 0.0:
 		return {reason = "invalid_input"}
 	var fields: Dictionary = region.fields
-	if fields.fixed[_index(region, start)] != 0 or _level(region, start) - input.e > 0.02:
+	if fields.fixed[_index(region, start)] != 0 or _level(region, start) - input.e > Drainage.MAX_CUT:
 		return {reason = "blocked_entry"}
 	if _level(region, start) > input.e:
-		return preload("res://scripts/world/region_drainage.gd").resolve(region, input)
+		return Drainage.resolve(region, input)
 	var queue: Array[Vector2i] = [start]
 	var parent := {start: start}
 	var head := 0
@@ -124,7 +125,7 @@ static func _trace_one(region: Dictionary, input: Dictionary) -> Dictionary:
 				parent[next] = cell
 				queue.append(next)
 		if found: break
-	if not found: return preload("res://scripts/world/region_drainage.gd").resolve(region, input)
+	if not found: return Drainage.resolve(region, input)
 	var cells: Array[Vector2i] = [end]
 	while cells.back() != start: cells.append(parent[cells.back()])
 	cells.reverse()

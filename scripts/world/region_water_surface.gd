@@ -3,8 +3,9 @@ extends RefCounted
 ## Это ещё не публикация в игре: климат, меши и соседние растровые края проверяются отдельно.
 const DEPTH := 0.8 / GameConfig.HS
 const BANK := 0.15 / GameConfig.HS
-const MAX_FILL := 0.012
-const MAX_CUT := 0.02
+# Те же пределы земляных работ, что у поиска стока.
+const MAX_FILL: float = preload("res://scripts/world/region_drainage.gd").MAX_FILL
+const MAX_CUT: float = preload("res://scripts/world/region_drainage.gd").MAX_CUT
 
 
 static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:

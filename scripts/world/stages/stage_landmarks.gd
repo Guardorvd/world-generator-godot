@@ -275,12 +275,14 @@ static func _settlement_density(w: WorldData, x: int, y: int) -> float:
 	return patches(x, y, 96.0, WGRandom.derive(w.seed_num, "settlement.density"))
 
 
-## Плавные пятна 0..1 размером cell клеток в мировых координатах (заселённость, частота типов мест)
+## Плавные пятна 0..1 размером cell клеток в мировых координатах (заселённость, частота типов мест).
+## 13.4: дробная часть через floor, а не fmod — верна и в отрицательных координатах соседних областей;
+## для неотрицательных значение то же до бита.
 static func patches(x: int, y: int, cell: float, seed: int) -> float:
 	var gx := floori(x / cell)
 	var gy := floori(y / cell)
-	var tx := smoothstep(0.0, 1.0, fmod(x / cell, 1.0))
-	var ty := smoothstep(0.0, 1.0, fmod(y / cell, 1.0))
+	var tx := smoothstep(0.0, 1.0, x / cell - gx)
+	var ty := smoothstep(0.0, 1.0, y / cell - gy)
 	return lerpf(lerpf(WGRandom.hash2(gx, gy, seed), WGRandom.hash2(gx + 1, gy, seed), tx),
 		lerpf(WGRandom.hash2(gx, gy + 1, seed), WGRandom.hash2(gx + 1, gy + 1, seed), tx), ty)
 

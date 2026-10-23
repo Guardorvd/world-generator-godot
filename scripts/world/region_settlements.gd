@@ -80,15 +80,9 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) 
 	return {ready = true, reason = "", settlements = out}
 
 
-## Те же пятна плотности, но дробная часть корректна и к западу/северу от нуля.
+## Те же пятна плотности, что у стартового плана (StageLandmarks.patches верна и к западу/северу от нуля).
 static func density_at(seed_num: int, x: int, y: int) -> float:
-	var seed := WGRandom.derive(seed_num, "settlement.density")
-	var gx := floori(x / 96.0)
-	var gy := floori(y / 96.0)
-	var tx := smoothstep(0.0, 1.0, x / 96.0 - gx)
-	var ty := smoothstep(0.0, 1.0, y / 96.0 - gy)
-	return lerpf(lerpf(WGRandom.hash2(gx, gy, seed), WGRandom.hash2(gx + 1, gy, seed), tx),
-		lerpf(WGRandom.hash2(gx, gy + 1, seed), WGRandom.hash2(gx + 1, gy + 1, seed), tx), ty)
+	return StageLandmarks.patches(x, y, 96.0, WGRandom.derive(seed_num, "settlement.density"))
 
 
 ## Адаптер к существующим правилам домов: координаты в нём локальные, география — готовая.
@@ -112,6 +106,7 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 	w.biome = region.fields.biome.duplicate()
 	StageGeography.run(w) # новые уклоны и расстояния до воды после земляных работ
 	for i in w.N:
-		if w.ocean[i] == 0 and w.lake[i] == 0:
+		# Готовые клетки ореола сохраняют биом стартового плана.
+		if w.ocean[i] == 0 and w.lake[i] == 0 and region.fields.fixed[i] == 0:
 			w.biome[i] = StageClimate.land_biome(w.elev[i], region.fields.temp[i], region.fields.moist[i], w.slope[i], w.dist_ocean[i])
 	return w
