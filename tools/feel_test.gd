@@ -9,6 +9,7 @@ const BODY_REACH := 0.1     # пешеход: запас до стены на ц
 const WHEEL_REACH := 0.87   # край колеса от середины велосипеда: ось в 0,53 м, радиус колеса 0,34 м
 
 var _fails := 0
+var _plans := {}   # сид -> [WorldData, Heightfield], см. _plan
 
 
 func _check(ok: bool, what: String) -> void:
@@ -26,8 +27,9 @@ func _init() -> void:
 	if "--opening" in OS.get_cmdline_user_args():
 		_opening_test.call_deferred()
 		return
-	var w := WorldGenerator.generate("Север-1234", 256)
-	var heights := Heightfield.new(w)
+	var start := _plan("Север-1234", 256)
+	var w: WorldData = start[0]
+	var heights: Heightfield = start[1]
 	var p := PlayerState.spawn(w, heights)
 
 	# Шаг: до полной скорости меньше чем за 0.2 с, остановка меньше чем за 0.3 с. Идём в самую ровную
@@ -95,12 +97,20 @@ func _init() -> void:
 	# С 3.1 дополнительно проверяем сооружения среди высоких гор среднего «Север-1234»
 	# С 3.7 в прежних пяти мирах нет туннелей; «Туман-4821»@512 сохраняет их проверку.
 	for c: Array in [["abc", 128], ["Туман-4821", 192], ["Север-1234", 256], ["Ущелье", 512], ["Север-1234", 512], ["Туман-4821", 512]]:
-		var w2 := WorldGenerator.generate(c[0], c[1])
-		var h2 := Heightfield.new(w2)
+		var plan := _plan(c[0], c[1])
+		var w2: WorldData = plan[0]
+		var h2: Heightfield = plan[1]
 		# как в игре: за краем карты есть земля (мост бывает и у самого края)
-		w2.outer = OuterLand.new(w2)
+		if w2.outer == null:
+			w2.outer = OuterLand.new(w2)
 		var ok := 0
+		var total := 0
 		for st: Dictionary in h2.structures:
+			# С 8.5 мир — весь план 768, размер задаёт только открытое окно: за ним проход закрыт границей.
+			if not w2.accessible(st.ax / GameConfig.TILE, st.az / GameConfig.TILE, 2.0) \
+					or not w2.accessible(st.bx / GameConfig.TILE, st.bz / GameConfig.TILE, 2.0):
+				continue
+			total += 2
 			kinds[st.tunnel] = true
 			var name := "туннель" if st.tunnel else "мост"
 			for ride: bool in [false, true]:
@@ -108,7 +118,7 @@ func _init() -> void:
 					ok += 1
 				else:
 					print("  %s %d м %s не пройден" % [name, roundi(st.len), "на велосипеде" if ride else "пешком"])
-		_check(ok == h2.structures.size() * 2, "%s@%d: мостов %d, туннелей %d, пройдено пешком и на велосипеде %d из %d" % [c[0], c[1], w2.bridges.size(), w2.tunnels.size(), ok, h2.structures.size() * 2])
+		_check(ok == total, "%s@%d: мостов %d, туннелей %d, в открытом окне пройдено пешком и на велосипеде %d из %d" % [c[0], c[1], w2.bridges.size(), w2.tunnels.size(), ok, total])
 		# узкие препятствия: в перила и стены с середины сооружения под разными углами, на полной скорости
 		var leaks := 0
 		for st: Dictionary in h2.structures:
@@ -130,7 +140,10 @@ func _init() -> void:
 		_check(lines[1] == 0, "%s@%d: дороги и тропы не уходят в глубокую воду мимо мостов (мест: %d)" % [c[0], c[1], lines[1]])
 	# Поиск 4.0 чаще обходит хребты; контрольные миры могут обходиться без туннелей.
 	# Независимый стенд сохраняет проверку прохода и стен туннеля при любой географии.
-	var tw := WorldGenerator.generate("abc", 128)
+	# Мир «abc» дальше не нужен: стенд перезаписывает его. Окно территории снято — стенд в любом месте плана.
+	var tw: WorldData = _plan("abc", 128)[0]
+	tw.available_rect = Rect2i()
+	tw.outer = null
 	tw.h.fill(0.1)
 	tw.ocean.fill(0)
 	tw.lake.fill(0)
@@ -186,7 +199,23 @@ func _init() -> void:
 		print("Все проверки прошли.")
 	else:
 		printerr("Не прошло проверок: %d" % _fails)
+	WorldCache.wait_writes()
 	quit(1 if _fails > 0 else 0)
+
+
+## 11.5: мир «сид» с окном территории size. С 8.5 любой размер — один и тот же план 768, поэтому план
+## каждого сида строится один раз за прогон (было 8 генераций, стало 4) и берётся из кэша миров игры,
+## если он подходит к нынешнему коду (повторный прогон — без генерации). Рельеф с сооружениями тоже один.
+func _plan(seed_text: String, size: int) -> Array:
+	if not _plans.has(seed_text):
+		WorldCache.enabled = true
+		var pw: WorldData = WorldCache.generate(seed_text, WorldGenerator.START_SIZE).world
+		_plans[seed_text] = [pw, Heightfield.new(pw)]
+	var got: Array = _plans[seed_text]
+	var pw: WorldData = got[0]
+	pw.available_rect = Rect2i()
+	pw.expand_territory(size)
+	return got
 
 
 ## Пройти или проехать сооружение s по оси от точки за 2 м до начала до сухого берега за концом.
@@ -360,7 +389,8 @@ func _into_hut(w: WorldData, heights: Heightfield, s: Dictionary, u: Dictionary,
 			b.step(p, 1.0, 0.0, true, false, DT, w, heights)
 		else:
 			p.step(1.0, 0.0, true, false, yaw, DT, w, heights)
-		var reach := 0.0 if ride else BODY_REACH
+		# Колесо — точка на вылете WHEEL_REACH, а не круг столкновения: касание стены в пределах 1 см — не вход.
+		var reach := -0.01 if ride else BODY_REACH
 		for q in _body_points(p, b, ride):
 			var dx := q.x - hx
 			var dz := q.y - hz
