@@ -160,6 +160,9 @@ func pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 ## Кочка мелкого препятствия для ForestObstacles: отрезок a–b, радиус и высота (формат set_bumps)
 static func bump(kind: int, xf: Transform3D, scale: float) -> PackedFloat32Array:
 	var size: Vector2 = BUMP[kind] * scale
+	# 11.7: колесо обкатывает ветку дугой, а не проваливается за неё: радиус не меньше этой дуги,
+	# иначе на 10 м/с купол попадает в одну-две точки за такт и подвеска получает случайный удар
+	size.x = maxf(size.x, sqrt(2.0 * BikeRide.WHEEL_R * size.y))
 	var a := xf * (Vector3(-1.1, 0.0, 0.0) if kind == BRANCH else Vector3.ZERO)
 	var b := xf * (Vector3(1.1, 0.0, 0.1) if kind == BRANCH else Vector3.ZERO)
 	return PackedFloat32Array([a.x, a.z, b.x, b.z, size.x, size.y])

@@ -201,5 +201,7 @@ func bump_at(x: float, z: float) -> float:
 	for at: int in cell:
 		var t := Vector2(x, z).distance_to(_on_axis(bumps, at, x, z)) / bumps[at + 4]
 		if t < 1.0:
-			top = maxf(top, bumps[at + 5] * (1.0 - t * t))
+			# 11.7: край без излома (наклон у края ноль): подвеска не получает толчок на входе и выходе
+			var s := 1.0 - t * t
+			top = maxf(top, bumps[at + 5] * s * s)
 	return top

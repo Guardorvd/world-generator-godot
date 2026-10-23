@@ -16,7 +16,7 @@ extends Node
 const TILE := GameConfig.TILE
 const SAMPLE := 0.25        # раз в столько секунд проверяется местность вокруг
 const SMOOTH := 1.5         # 1/с: как быстро фон догоняет нужную громкость
-const SILENT := -60.0       # дБ: тише этого петля не слышна
+const SILENT := -80.0       # дБ: тише этого петля не слышна (11.7: было -60 — шесть петель вместе давали шорох)
 const WATER_R := 45.0       # м: дальше реки и озера не слышно
 const SEA_R := 140.0        # м: дальше моря не слышно
 const FIRE_R := 30.0        # м: костёр слышно ближе этого
@@ -211,7 +211,7 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 	_pedal_t = maxf(0.0, _pedal_t - dt)
 	var wheel := smoothstep(0.6, 2.5, v) if bike_speed > 0.0 else 0.0   # назад трещотка молчит
 	_goal[_tick] = wheel * (0.0 if _pedal_t > 0.0 else 1.0)
-	_tick.pitch_scale = clampf(v / TICK_SPEED, 0.3, 2.0)
+	_tick.pitch_scale = lerpf(_tick.pitch_scale, clampf(v / TICK_SPEED, 0.3, 2.0), near)
 	_goal[_chain] = (0.5 + 0.5 * minf(rush, 1.0)) * wheel if _pedal_t > 0.0 else 0.0
 	_chain.pitch_scale = lerpf(_chain.pitch_scale, 0.85 + 0.3 * minf(rush, 1.0), near)
 	_contact_wait = maxf(0.0, _contact_wait - dt)
@@ -234,7 +234,8 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 		# Звуки велосипеда идут за ним сразу (затихают, как только колёса оторвались), фон — плавно.
 		var cur := lerpf(_level.get(p, 0.0), _goal[p], a if p == _water or p == _surf else near)
 		_level[p] = cur
-		p.volume_db = _db[p] + linear_to_db(cur) if cur > 0.001 else SILENT
+		# затухание доходит до тишины без скачка громкости вверх в конце
+		p.volume_db = maxf(_db[p] + linear_to_db(maxf(cur, 1e-4)), SILENT)
 	_bird_t -= dt
 	if _bird_t <= 0.0:
 		_bird_t = randf_range(BIRD_DELAY.x, BIRD_DELAY.y)

@@ -286,7 +286,14 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var free := func(px: float, pz: float) -> bool:
 			if free_now:
 				return fits(px, pz, hd, w, heights)
-			return PlayerState.is_passable(w, heights, px, pz, y)
+			if PlayerState.is_passable(w, heights, px, pz, y):
+				return true
+			# 11.7: после прыжка середина внутри валуна или бревна: наружу выехать можно, иначе застрял бы
+			# (прыжок ниже верха валуна), а вглубь и в сторону — нет
+			if heights.obstacles == null or not w.accessible(px / GameConfig.TILE, pz / GameConfig.TILE) or not heights.known(px, pz) \
+					or heights.depth_at(px, pz, y) >= GameConfig.FORD_DEPTH:
+				return false
+			return heights.obstacles.normal(x, z, y, 0.0).dot(Vector2(px - x, pz - z)) > 0.0
 		# 7.7: вдоль ствола и бревна велосипед скользит по касательной
 		var around := Callable()
 		if heights.obstacles != null:
@@ -302,7 +309,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			var normal := blocked.normalized()
 			var impact := maxf(0.0, -Vector3(-sin(heading) * speed, 0, -cos(heading) * speed).dot(normal))
 			# 11.6: щуп на весь несделанный кусок пути: тонкое бревно, на котором встали за 0,1–0,2 м, тоже удар
-			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, full - moved + 0.01)
+			# 11.7: не дальше куска шага: то, что остановило, лежит в его пределах, а не за ним
+			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, minf(full - moved, PlayerState.PIECE) + 0.01)
 			var solid := false
 			for axle: float in [-AXLE, 0.0, AXLE]:
 				if not PlayerState.is_passable(w, heights, x + ahead.x - sin(heading) * axle, z + ahead.z - cos(heading) * axle, y, BODY_R, true):
