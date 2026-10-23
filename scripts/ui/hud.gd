@@ -9,6 +9,7 @@ extends Control
 ## С 2.9 к местам добавились крупные озёра с названиями (WorldData.lakes): открываются на берегу.
 
 signal travel_requested(place: Dictionary)
+signal goal_changed(place: Dictionary)
 
 const TILE := GameConfig.TILE
 const DIRS := ["С", "СЗ", "З", "ЮЗ", "Ю", "ЮВ", "В", "СВ"]
@@ -161,6 +162,7 @@ func in_open_land(p: Dictionary) -> bool:
 ## Новая цель путешествия (пустой словарь — без цели)
 func set_goal(place: Dictionary) -> void:
 	goal = place
+	goal_changed.emit(place)
 	# вне сцены (проверки без окна) карт и компаса нет
 	if is_node_ready():
 		compass.queue_redraw()
@@ -175,7 +177,7 @@ func check_goal(x: float, z: float) -> String:
 	if goal.kind == "lake":
 		if not world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, goal.src.i):
 			return ""
-	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind == "peak" else (4.0 if goal.kind == "site" else 6.0)):
+	elif Grid.hypot(goal.x - x / TILE, goal.y - z / TILE) >= (2.5 if goal.kind in ["peak", "marker"] else (4.0 if goal.kind == "site" else 6.0)):
 		return ""
 	var text := "Вы добрались до цели: «%s»" % goal.name
 	set_goal({})
@@ -327,10 +329,12 @@ static func draw_arrow(c: CanvasItem, pos: Vector2, size: float, look_yaw: float
 	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 
-static func draw_label(c: CanvasItem, text: String, pos: Vector2, color: Color, font_size: int) -> void:
+static func draw_label(c: CanvasItem, text: String, pos: Vector2, color: Color, font_size: int, selected := false) -> void:
 	var font := ThemeDB.fallback_font
 	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
 	var at := pos - Vector2(w / 2.0, 0)
+	if selected:
+		c.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 8, Color(GOLD, 0.85))
 	c.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 6, Color(0, 0, 0, 0.7))
 	c.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
 
@@ -409,6 +413,29 @@ class BigMap extends Control:
 	var hud: Hud
 	var hover := {}     # место под курсором или пусто
 
+	func _queue_name(names: Array[Dictionary], pl: Dictionary, at: Vector2, color: Color, fs: int, text := "") -> void:
+		var selected: bool = pl.key == hud.goal.get("key")
+		names.append({text = pl.name if text.is_empty() else text, at = at, color = Hud.GOLD if selected else color,
+			fs = fs, selected = selected, distance = Vector2(pl.x * Hud.TILE - hud.px, pl.y * Hud.TILE - hud.pz).length_squared()})
+
+	func _draw_names(names: Array[Dictionary]) -> void:
+		names.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return a.selected if a.selected != b.selected else a.distance < b.distance)
+		var occupied: Array[Rect2] = []
+		var font := ThemeDB.fallback_font
+		for item: Dictionary in names:
+			var size := font.get_string_size(item.text, HORIZONTAL_ALIGNMENT_LEFT, -1, item.fs)
+			var rect := Rect2(item.at - Vector2(size.x * 0.5, font.get_ascent(item.fs)), Vector2(size.x, font.get_height(item.fs))).grow(6.0)
+			var overlaps := false
+			for other: Rect2 in occupied:
+				if rect.intersects(other):
+					overlaps = true
+					break
+			if overlaps:
+				continue
+			occupied.append(rect)
+			Hud.draw_label(self, item.text, item.at, item.color, item.fs, item.selected)
+
 	## Где на экране лежит карта: [левый верхний угол, сторона, пикселей на клетку]
 	func _frame() -> Array:
 		var sz := minf(size.x, size.y) * 0.88
@@ -441,6 +468,12 @@ class BigMap extends Control:
 			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
 				var same: bool = pl.key == hud.goal.get("key")
 				hud.set_goal({} if same else pl)
+			elif event.button_index == MOUSE_BUTTON_LEFT:
+				var frame := _frame()
+				var cell: Vector2 = (event.position - frame[0]) / float(frame[2])
+				if Rect2(Vector2.ZERO, Vector2(hud.world.W, hud.world.H)).has_point(cell):
+					var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
+					hud.set_goal({} if same else {key = "marker", kind = "marker", name = "Метка", x = cell.x, y = cell.y})
 			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
 				hud.travel_requested.emit(pl)
 			accept_event()
@@ -467,31 +500,37 @@ class BigMap extends Control:
 			draw_rect(Rect2(Vector2(o.x, a.y), Vector2(a.x - o.x, b.y - a.y)), shade)
 			draw_rect(Rect2(Vector2(b.x, a.y), Vector2(o.x + sz - b.x, b.y - a.y)), shade)
 			draw_rect(Rect2(a, b - a), Hud.GOLD, false, 1.5)
+		var names: Array[Dictionary] = []
 		for pl: Dictionary in hud.all_places():
 			var at := o + Vector2(pl.x, pl.y) * k
 			if not w.accessible(pl.x, pl.y):
 				# Дальние поселения — тусклые точки без подписи: их можно выбрать целью заранее.
 				if pl.kind == "settlement":
 					draw_circle(at, 2.5, Color(1, 1, 1, 0.45))
+				if pl.key == hud.goal.get("key"):
+					_queue_name(names, pl, at - Vector2(0, 7), Hud.GOLD, 13)
 				continue
 			var seen: bool = hud.visited.has(pl.key)
 			match pl.kind:
 				"settlement":
 					draw_circle(at, 3.5, Color.html("#ffdd55") if seen else Color.WHITE)
-					Hud.draw_label(self, pl.name, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
+					_queue_name(names, pl, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
 				"peak":
-					Hud.draw_label(self, "▲ " + pl.name, at, Color.html("#ffdd55") if seen else Color.html("#e8f0ff"), 13)
+					var col := Color.html("#ffdd55") if seen else Color.html("#e8f0ff")
+					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -3), at + Vector2(3, 3), at + Vector2(-3, 3)]), col)
+					_queue_name(names, pl, at - Vector2(0, 7), col, 13)
 				"lake":
 					var col := Color.html("#ffdd55") if seen else Color.html("#cfeaff")
 					draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
-					Hud.draw_label(self, pl.name, at - Vector2(0, 7), col, 12)
+					_queue_name(names, pl, at - Vector2(0, 7), col, 12)
 				"site":
 					# Ромбик по значимости; название — у крупных мест и у тех, где уже были.
 					var col := Color.html("#ffdd55") if seen else Color.html("#e6d6b0")
 					var r: float = 1.5 + pl.src.rank
 					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -r), at + Vector2(r, 0), at + Vector2(0, r), at + Vector2(-r, 0)]), col)
-					if seen or pl.src.rank >= 3:
-						Hud.draw_label(self, pl.name, at - Vector2(0, 6), col, 11)
+					if seen or pl.src.rank >= 3 or pl.key == hud.goal.get("key"):
+						_queue_name(names, pl, at - Vector2(0, 6), col, 11)
+		_draw_names(names)
 		if not hud.goal.is_empty():
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		if hud.bike_shown:
@@ -503,7 +542,7 @@ class BigMap extends Control:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
 		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, o.y + sz + 44.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "Выберите место для путешествия. Соседние земли открываются по пути"
+		var tip := "ЛКМ — цель или метка на карте · повторный щелчок по метке — убрать"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]

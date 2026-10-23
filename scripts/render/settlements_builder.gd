@@ -4,7 +4,6 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
-const PEAK_LABEL_CLEAR := 24.0 # м: ближе к поселению подпись вершины не ставится
 const FIRE_SEEN := 300.0  # м: дальше костры не рисуются и не анимируются
 const HOMES := ["house", "chalet", "tall"] # жилые дома поселений (с 9.5), остальное в huts — сараи и колодцы
 ## Облик жилых домов (с 9.5, по мотивам альпийских деревень): этажи снизу вверх [высота, стена],
@@ -58,7 +57,7 @@ static func _part(mesh: Mesh, offset: Vector3, material: Material) -> MeshInstan
 	return mi
 
 
-static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
+static func _label(text: String, color: Color, pos: Vector3, place_id: String = "") -> Label3D:
 	var l := Label3D.new()
 	l.text = text
 	l.modulate = color
@@ -69,9 +68,9 @@ static func _label(text: String, color: Color, pos: Vector3) -> Label3D:
 	l.fixed_size = true
 	l.billboard = BaseMaterial3D.BILLBOARD_ENABLED
 	l.position = pos
-	# Подписи видны от 25 м (вблизи закрыли бы постройку) до 900 м; движок отсекает их сам
-	l.visibility_range_begin = 25.0
-	l.visibility_range_end = 900.0
+	l.set_meta("place_id", place_id)
+	# Плавную дальность и перекрытия регулирует PlaceNames; движок отсекает всё за 450 м.
+	l.visibility_range_end = 450.0
 	return l
 
 
@@ -126,7 +125,6 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		door = door_m, win = win_m, stone = stone_m, timber = timber_m, unit = _box_mesh(Vector3.ONE), prism = prism,
 		roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh, step = step_mesh}
 	var fires: Array = []
-	var settle_pos := PackedVector2Array() # центры поселений, чтобы подписи вершин не ложились на их названия
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
 	# дома и туры неподвижны: они собираются в общие меши по квадратам мира (MeshBatch), костры с огнём — отдельные узлы
 	var batch := MeshBatch.new()
@@ -181,8 +179,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		fire.position = Vector3(fx, fy, fz)
 		parent.add_child(fire)
 		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
-		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz)))
-		settle_pos.append(Vector2(fx, fz))
+		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
 	# Туры на вершинах
 	var stone := mat(Color8(0x8f, 0x88, 0x80))
 	var flag_m := mat(Color8(0xc0, 0x39, 0x2b))
@@ -212,28 +209,13 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
 		batch.add(pole_mesh, at.translated_local(Vector3(0, 3.2, 0)), pole_m)
 		batch.add(flag_mesh, at.translated_local(Vector3(0.5, 3.9, 0)), flag_m)
-		# подпись вершины рядом с поселением закрыла бы его название: такую не ставим
-		var near := false
-		for sp: Vector2 in settle_pos:
-			if sp.distance_to(Vector2(x, z)) < PEAK_LABEL_CLEAR:
-				near = true
-				break
-		if near:
-			continue
-		parent.add_child(_label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z)))
+		parent.add_child(_label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z), WorldData.place_id("peak", pk.x, pk.y)))
 	house.merge({flag = flag_mesh, flag_m = flag_m, pole = pole_mesh, pole_m = pole_m})
 	_build_sites(parent, w, heights, batch, house)
 	# названия озёр над серединой воды (с 2.9)
 	for lk in w.lakes:
 		var at := Vector2(lk.x * TILE, lk.y * TILE)
-		var near := false
-		for sp: Vector2 in settle_pos:
-			if sp.distance_to(at) < PEAK_LABEL_CLEAR:
-				near = true
-				break
-		if near:
-			continue
-		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y)))
+		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y), WorldData.place_id("lake", lk.x, lk.y)))
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
@@ -445,11 +427,7 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 				"keep":
 					var h := 5.0 + v * 1.5
 					batch.add(keep, at * Transform3D(Basis.from_scale(Vector3(1, h, 1)), Vector3(0, h * 0.5 - 0.3, 0)), old_stone)
-		if s.rank < 2 or s.huts.is_empty():
-			continue
-		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (12.5 if s.type == "tower" else 7.0), s.y * TILE))
-		# Мелкие подписи не висят над всей округой
-		label.visibility_range_end = 900.0 if s.rank >= 3 else 350.0
+		var label := _label(s.name, Color.html("#efe2c0"), Vector3(s.x * TILE, top + (12.5 if s.type == "tower" else 7.0), s.y * TILE), WorldData.place_id("site", s.x, s.y))
 		parent.add_child(label)
 
 

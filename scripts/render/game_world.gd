@@ -27,6 +27,10 @@ const OpeningRoute = preload("res://scripts/game/opening_route.gd")
 const OPENING_PASS := 1.6
 const OPENING_FOLLOW := 3.0
 const SpeedWind = preload("res://scripts/render/speed_wind.gd")
+const NavigationLine = preload("res://scripts/render/navigation_line.gd")
+const PlaceNames = preload("res://scripts/render/place_names.gd")
+var place_names: PlaceNames
+var navigation_line: NavigationLine
 var _speed_wind: SpeedWind
 var _speed_rush := 0.0
 var opening_place := {}
@@ -127,6 +131,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	vegetation.setup(world, heights, _defs, _grass_mesh, loaded.forest_surface)
 	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
+	place_names = PlaceNames.new()
+	place_names.setup($Settlements)
 	fires = built.fires
 	windows = built.windows
 	fire_light = OmniLight3D.new()
@@ -216,6 +222,10 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	else:
 		_opening_welcome()
 	audio.setup(world, heights)
+	navigation_line = NavigationLine.new()
+	add_child(navigation_line)
+	navigation_line.setup(world, heights)
+	hud.goal_changed.connect(_navigation_goal)
 	hud.travel_requested.connect(travel_to)
 	for s: Dictionary in world.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
@@ -246,6 +256,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	paused = p
+	if is_instance_valid(navigation_line) and p:
+		navigation_line.visible = false
 	if is_instance_valid(_speed_wind):
 		_speed_wind.visible = not p
 	if is_instance_valid(_opening_caption):
@@ -657,6 +669,10 @@ func _process(delta: float) -> void:
 		_speed_wind.update_effect(_speed_rush, delta)
 	if _opening:
 		_draw_opening(alpha)
+	if navigation_line != null:
+		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active())
+	if place_names != null:
+		place_names.update(camera, delta)
 	_target = _aim()
 	_update_hints()
 	day.apply(hour, time)
@@ -902,6 +918,11 @@ func _close_settlement(capture := true) -> void:
 	hud.settlement_panel.hide()
 	if capture and not paused and not show_map:
 		capture_mouse()
+
+
+func _navigation_goal(place: Dictionary) -> void:
+	navigation_line.set_goal(place, Vector2(player.x, player.z))
+	place_names.set_goal(place)
 
 
 func _choose_settlement_route(place: Dictionary) -> void:
