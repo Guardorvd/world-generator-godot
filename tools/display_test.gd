@@ -88,6 +88,14 @@ func run() -> void:
 			check(visible.encloses(rect), "%s fits %s (UI %s)" % [screen, size, visible.size])
 			if DisplayServer.get_name() != "headless" and size in [Vector2i(1280, 720), Vector2i(3840, 2160)]:
 				root.get_texture().get_image().save_png(out.path_join("%s_%dx%d.png" % [screen, size.x, size.y]))
+			if screen == "pause" and size == Vector2i(1280, 720):
+				# 12.5: подтверждение выхода поверх паузы, фокус на «Остаться»
+				main._ask("Выйти из игры?", "Прогресс сохранится, игра закроется.", "Выйти", true, func() -> void: pass)
+				await settle()
+				check(main._confirm.visible and main._confirm.get_cancel_button().has_focus(), "exit confirmation focuses Stay")
+				if DisplayServer.get_name() != "headless":
+					root.get_texture().get_image().save_png(out.path_join("confirm_1280x720.png"))
+				main._close_confirm()
 		options.tabs.current_tab = 1
 		await settle()
 		var graphics: ScrollContainer = options.tabs.get_child(1)

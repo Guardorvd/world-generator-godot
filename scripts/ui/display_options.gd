@@ -50,7 +50,7 @@ func setup(host: Node) -> void:
 	var hint := Label.new()
 	hint.text = "В окне разрешение задаёт размер окна. На полном экране — предел детализации 3D с сохранением пропорций. Интерфейс остаётся чётким.\n\nПосле выбора нажмите «Применить». Изменения нужно подтвердить за 15 секунд. Иначе вернутся прежние настройки."
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 13)
+	hint.theme_type_variation = &"HintLabel"
 	pages["Экран"].add_child(hint)
 	for node: Node in original:
 		if node.name in ["Title", "Reset", "Done"]:
@@ -65,7 +65,7 @@ func setup(host: Node) -> void:
 	var quality_hint := Label.new()
 	quality_hint.text = "Для слабой видеокарты: масштаб 3D 67–75%, сглаживание выключено или 2×, минимальная дальность, тени выключены."
 	quality_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	quality_hint.add_theme_font_size_override("font_size", 13)
+	quality_hint.theme_type_variation = &"HintLabel"
 	pages["Графика"].add_child(quality_hint)
 	apply_button = Button.new()
 	apply_button.text = "Применить экран и графику"

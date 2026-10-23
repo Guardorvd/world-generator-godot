@@ -9,6 +9,7 @@ signal quest_accepted(quest: Dictionary)
 signal quest_abandoned
 
 const Quests = preload("res://scripts/game/quests.gd")
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const GOLD := Color(1.0, 0.82, 0.32)
 const MUTED := Color(1, 1, 1, 0.62)
 const PAGE_W := 456.0  # ширина строк доски: 500 без полей
@@ -94,9 +95,8 @@ func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near:
 		tab.toggle_mode = true
 		tab.button_group = group
 		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		tab.custom_minimum_size.y = 34
-		tab.add_theme_color_override("font_pressed_color", GOLD)
-		tab.add_theme_color_override("font_hover_pressed_color", GOLD)
+		tab.custom_minimum_size.y = 36
+		tab.theme_type_variation = &"TabButton"
 		tabs.add_child(tab)
 		var page := VBoxContainer.new()
 		page.add_theme_constant_override("separation", 8)
@@ -143,12 +143,17 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		var kind: Dictionary = Quests.KINDS[q.kind]
 		var card := _card(page, kind.color, true)
 		_label("Текущее задание · %s" % kind.title, 13, card, kind.color)
-		_label("%s %s" % [kind.icon, q.title], 18, card, Color.WHITE, CARD_W)
+		_titled(q, 18, card, CARD_W)
+		# шаги: пройденный — галочка, текущий — стрелка цвета задания, впереди — без знака
 		for i in q.steps.size():
-			var mark := "✓" if i < q.step else ("›" if i == q.step else "·")
-			_label("%s %s" % [mark, quests.step_text(q.steps[i])], 14, card, Color.WHITE if i == q.step else MUTED, CARD_W)
+			var step := HBoxContainer.new()
+			card.add_child(step)
+			var mark: Texture2D = UiIcons.CHECK if i < q.step else (UiIcons.PLAY if i == q.step else null)
+			step.add_child(UiIcons.rect(mark, 14, MUTED if i < q.step else kind.color))
+			_label(quests.step_text(q.steps[i]), 14, step, Color.WHITE if i == q.step else MUTED, CARD_W - 22)
 		# отказ — в два нажатия: случайный щелчок не теряет сумку и пройденные шаги
 		var drop := _button("Отказаться от задания", func() -> void: pass, card)
+		drop.theme_type_variation = &"DangerButton"
 		drop.pressed.connect(func() -> void:
 			if drop.text == "Точно отказаться? Нажмите ещё раз":
 				quest_abandoned.emit()
@@ -173,7 +178,7 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		var head := HBoxContainer.new()
 		card.add_child(head)
 		var kind: Dictionary = Quests.KINDS[q.kind]
-		var title := _label("%s %s" % [kind.icon, q.title], 16, head)
+		var title := _titled(q, 16, head)
 		title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		title.clip_text = true
@@ -183,6 +188,16 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		var length := Hud._fmt_dist(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
 		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)
 		_label(q.text, 13, card, MUTED, CARD_W)
+
+
+## Название задания с пиктограммой вида (UiIcons.QUESTS) цвета вида; wrap — как у _label.
+## В строке (head) растягивается сама надпись: её и возвращает
+func _titled(q: Dictionary, size: int, parent: Container, wrap := 0.0) -> Label:
+	var row := HBoxContainer.new()
+	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	parent.add_child(row)
+	row.add_child(UiIcons.rect(UiIcons.quest(q.kind), size + 2, Quests.KINDS[q.kind].color))
+	return _label(q.title, size, row, Color.WHITE, wrap - size - 10 if wrap > 0.0 else 0.0)
 
 
 ## Карточка задания: полоска слева — цвет вида (Quests.KINDS), у текущего ярче и с подложкой

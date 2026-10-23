@@ -6,11 +6,22 @@ extends Node
 ## С 10.0 под полем зерна — список миров: недавние, избранные (звёздочка) и рекомендованные автором
 ## (RecommendedSeeds). Миры недавних и избранных хранятся готовыми в кэше (WorldCache), остальные удаляются.
 ## С 10.2 меню в две колонки: список миров с картами-миниатюрами и выбранный мир с картой и состоянием.
+## С 12.5 оформление только из темы (вариации кнопок и надписей), пиктограммы — UiIcons. Пауза: продолжить,
+## быстрое сохранение, настройки, компактное управление; уход в меню и выход — с подтверждением.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
 const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
+const UiIcons := preload("res://scripts/ui/ui_icons.gd")
+## Подсказки управления в паузе: клавиша — действие, по две пары в строке
+const CONTROLS := [
+	["Мышь", "осмотреться"], ["WASD", "идти"],
+	["Shift", "бег"], ["Пробел", "прыжок"],
+	["E", "действие, слезть"], ["F", "фонарик"],
+	["Y", "велосипед к месту"], ["M", "карта"],
+	["Tab", "сводка (зажать)"], ["Esc", "пауза"],
+]
 
 var game: GameWorld
 var busy := false
@@ -30,6 +41,7 @@ var _load_manual: Button
 var _saved_discoveries := 0
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
 var display_options: DisplayOptions
+var _confirm: ConfirmationDialog   # открытое подтверждение (выход, меню, загрузка)
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -251,13 +263,9 @@ func _world_status(seed_text: String) -> Array:
 
 func _show_seed_tab(tab: String) -> void:
 	_seed_tab = tab
-	# выбранная вкладка — золотой подписью, как заголовок; остальные приглушены
+	# выбранная вкладка — золотой подписью (TabButton в теме)
 	for name: String in ["recent", "favorites", "recommended", "saved"]:
-		var b := _tab_button(name)
-		b.set_pressed_no_signal(name == tab)
-		var color := Color(0.85, 0.72, 0.42) if name == tab else Color(1, 1, 1, 0.55)
-		for key: String in ["font_color", "font_hover_color", "font_pressed_color", "font_focus_color", "font_hover_pressed_color"]:
-			b.add_theme_color_override(key, color)
+		_tab_button(name).set_pressed_no_signal(name == tab)
 	var list: VBoxContainer = %SeedList
 	for child in list.get_children():
 		list.remove_child(child)
@@ -276,8 +284,7 @@ func _show_seed_tab(tab: String) -> void:
 		var hint := Label.new()
 		hint.text = {recent = "Здесь появятся последние миры", favorites = "Отметьте мир звёздочкой, и он останется здесь",
 			recommended = "Автор пока ничего не рекомендовал", saved = "Сохранения появятся после начала игры"}[tab]
-		hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-		hint.add_theme_font_size_override("font_size", 14)
+		hint.theme_type_variation = &"CaptionLabel"
 		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		list.add_child(hint)
@@ -293,14 +300,7 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	row.toggle_mode = true
 	row.custom_minimum_size = Vector2(0, 60)
 	row.set_meta("seed", seed_text)
-	# выбранный мир — золотая рамка
-	var selected := StyleBoxFlat.new()
-	selected.bg_color = Color(0.85, 0.72, 0.42, 0.16)
-	selected.border_color = Color(0.85, 0.72, 0.42, 0.9)
-	selected.set_border_width_all(2)
-	selected.set_corner_radius_all(6)
-	for key: String in ["pressed", "hover_pressed"]:
-		row.add_theme_stylebox_override(key, selected)
+	row.theme_type_variation = &"ListRow"   # выбранный мир — золотая рамка
 	row.tooltip_text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
 	row.pressed.connect(_pick_seed.bind(seed_text))
 	row.gui_input.connect(func(e: InputEvent) -> void:
@@ -330,7 +330,7 @@ func _seed_row(seed_text: String, note: String) -> Button:
 		q.set_anchors_preset(Control.PRESET_FULL_RECT)
 		q.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		q.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		q.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
+		q.theme_type_variation = &"CaptionLabel"
 		empty.add_child(q)
 		thumb.add_child(empty)
 	box.add_child(thumb)
@@ -351,19 +351,18 @@ func _seed_row(seed_text: String, note: String) -> Button:
 		var sub_label := Label.new()
 		sub_label.text = sub
 		sub_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		sub_label.theme_type_variation = &"SectionLabel" if status == "готов" else &"CaptionLabel"
 		sub_label.add_theme_font_size_override("font_size", 12)
-		sub_label.add_theme_color_override("font_color", Color(0.85, 0.72, 0.42, 0.85) if status == "готов" \
-			else Color(1, 1, 1, 0.5))
 		texts.add_child(sub_label)
 	box.add_child(texts)
 	var fav := seed_text in GameSettings.favorite_seeds
 	var star := Button.new()
-	star.flat = true
-	star.text = "★" if fav else "☆"
-	star.custom_minimum_size = Vector2(36, 36)
+	star.theme_type_variation = &"IconButton"
+	star.icon = UiIcons.star(fav)
+	star.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	star.custom_minimum_size = Vector2(40, 40)
 	star.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	star.focus_mode = Control.FOCUS_NONE
-	star.add_theme_font_size_override("font_size", 18)
 	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.disabled = full
 	star.tooltip_text = _star_tip(fav, full)
@@ -406,7 +405,7 @@ func _update_selection() -> void:
 	var star: Button = %Star
 	var fav := seed_text in GameSettings.favorite_seeds
 	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
-	star.text = "★" if fav else "☆"
+	star.icon = UiIcons.star(fav)
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
 	var latest := _latest_save(seed_text)
@@ -447,11 +446,6 @@ func _on_clear_cache() -> void:
 	WorldCache.keep_only([])
 	_previews.clear()
 	_show_seed_tab(_seed_tab)
-
-
-func _on_new_world() -> void:
-	seed_edit.text = random_seed()
-	_on_start()
 
 
 # ---------- Фон меню: маленький мир сверху, медленно проплывающий под панелью ----------
@@ -595,10 +589,12 @@ func _toggle_pause() -> void:
 		game.set_paused(true)
 		_save_current()
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
+		%PauseWorld.text = "Мир «%s»" % game.world.seed_text
 		_show("pause")
 
 
 func _resume() -> void:
+	_close_confirm()
 	_show("")
 	hud.visible = not game.opening_active()
 	game.set_paused(false)
@@ -615,6 +611,46 @@ func _free_game() -> void:
 		game = null
 	hud.clear_world()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+
+
+## Уход из мира — только с подтверждением: случайное нажатие не закрывает мир (его загрузка — до минуты)
+func _confirm_to_menu() -> void:
+	_ask("Выйти в главное меню?", "Прогресс сохранится. Мир закроется, снова его загружать придётся с экрана загрузки.",
+		"В меню", false, _back_to_menu)
+
+
+func _confirm_exit() -> void:
+	if game == null:
+		_exit_game()
+		return
+	_ask("Выйти из игры?", "Прогресс сохранится, игра закроется.", "Выйти", true, _exit_game)
+
+
+## Подтверждение; фокус на «Остаться», чтобы Enter по привычке ничего не закрыл
+func _ask(title: String, body: String, ok_text: String, danger: bool, action: Callable) -> void:
+	_close_confirm()
+	var dialog := ConfirmationDialog.new()
+	_confirm = dialog
+	dialog.title = title
+	dialog.dialog_text = body
+	dialog.dialog_autowrap = true
+	dialog.ok_button_text = ok_text
+	dialog.cancel_button_text = "Остаться"
+	if danger:
+		dialog.get_ok_button().theme_type_variation = &"DangerButton"
+	add_child(dialog)
+	dialog.confirmed.connect(func() -> void:
+		_close_confirm()
+		action.call())
+	dialog.canceled.connect(_close_confirm)
+	dialog.popup_centered(Vector2i(440, 0))
+	dialog.get_cancel_button().grab_focus()
+
+
+func _close_confirm() -> void:
+	if _confirm != null:
+		_confirm.queue_free()
+		_confirm = null
 
 
 func _back_to_menu() -> void:
@@ -688,48 +724,35 @@ func _message(title: String, body: String) -> void:
 
 
 func _confirm_load(seed_text: String, slot: String) -> void:
-	var dialog := ConfirmationDialog.new()
-	dialog.title = "Загрузить сохранение?"
-	dialog.dialog_text = "Текущий прогресс будет записан в автосохранение.\nЗатем загрузится ручное сохранение этого мира."
-	dialog.ok_button_text = "Загрузить"
-	add_child(dialog)
-	dialog.popup_centered()
-	dialog.confirmed.connect(func() -> void:
-		start_game(seed_text, WorldGenerator.START_SIZE, slot)
-		dialog.queue_free())
-	dialog.canceled.connect(dialog.queue_free)
+	_ask("Загрузить сохранение?", "Текущий прогресс будет записан в автосохранение.\nЗатем загрузится ручное сохранение этого мира.",
+		"Загрузить", false, start_game.bind(seed_text, WorldGenerator.START_SIZE, slot))
 
 
+## Кнопки сохранения стоят в сцене (меню — «Загрузить ручное», пауза — быстрое сохранение и загрузка),
+## здесь только поведение и подсказки управления паузы
 func _setup_save_controls() -> void:
-	_load_manual = Button.new()
-	_load_manual.text = "Загрузить ручное сохранение"
-	_load_manual.custom_minimum_size.y = 36
-	%Start.get_parent().add_child(_load_manual)
+	_load_manual = %LoadManual
 	_load_manual.pressed.connect(func() -> void: _confirm_load(seed_edit.text.strip_edges(), "manual"))
-	var box := %Resume.get_parent()
-	var row := HBoxContainer.new()
-	box.add_child(row)
-	box.move_child(row, %Resume.get_index() + 1)
-	for action: String in ["Сохранить", "Загрузить"]:
-		var button := Button.new()
-		button.text = action
-		button.custom_minimum_size.y = 40
-		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(button)
-		if action == "Сохранить":
-			button.pressed.connect(func() -> void: _save_current("manual"))
+	_save_status = %SaveStatus
+	%QuickSave.pressed.connect(func() -> void: _save_current("manual"))
+	%QuickLoad.pressed.connect(func() -> void:
+		if Saves.read_slot(game.world.seed_text, "manual").data.is_empty():
+			_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
 		else:
-			button.pressed.connect(func() -> void:
-				if Saves.read_slot(game.world.seed_text, "manual").data.is_empty():
-					_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
-				else:
-					_confirm_load(game.world.seed_text, "manual"))
-	_save_status = Label.new()
-	_save_status.text = "Автосохранение: каждые 60 секунд, при паузе и выходе"
-	_save_status.add_theme_font_size_override("font_size", 13)
-	_save_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	box.add_child(_save_status)
-	box.move_child(_save_status, row.get_index() + 1)
+			_confirm_load(game.world.seed_text, "manual"))
+	var grid: GridContainer = %Controls
+	for pair: Array in CONTROLS:
+		var key := Label.new()
+		key.theme_type_variation = &"KeyLabel"
+		key.text = pair[0]
+		key.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		key.custom_minimum_size.x = 64
+		grid.add_child(key)
+		var what := Label.new()
+		what.theme_type_variation = &"HintLabel"
+		what.text = pair[1]
+		what.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_child(what)
 
 
 func _exit_tree() -> void:

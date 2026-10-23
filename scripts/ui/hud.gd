@@ -19,6 +19,7 @@ const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
+const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const DONE_TIME := 4.0 # сколько висит «Задание выполнено» в счётчике (с)
 
 var world: WorldData
@@ -31,6 +32,7 @@ var goal := {}  # цель путешествия — место из places() �
 var quests: Quests  # 11.9: задания игры (GameWorld), счётчик под мини-картой показывает активное
 var tracker: PanelContainer
 var _tracker_title: Label
+var _tracker_icon: TextureRect  # 12.5: пиктограмма вида задания или галочка выполненного
 var _tracker_step: Label
 var _tracker_note: Label
 var _done_text := ""
@@ -296,32 +298,30 @@ func _build_tracker() -> PanelContainer:
 	panel.offset_top = MINI + 24
 	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.06, 0.07, 0.06, 0.62)
-	style.border_color = Color(GOLD, 0.85)
-	style.border_width_left = 3
-	style.set_corner_radius_all(4)
-	style.set_content_margin_all(9)
-	style.content_margin_left = 12
-	panel.add_theme_stylebox_override("panel", style)
+	panel.theme_type_variation = &"TrackerPanel"  # золотая черта слева, поля 12 и 8 px
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 3)
 	panel.add_child(box)
-	_tracker_title = _tracker_label(box, 15, GOLD)
+	var head := HBoxContainer.new()
+	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(head)
+	_tracker_icon = UiIcons.rect(null, 18)
+	head.add_child(_tracker_icon)
+	_tracker_title = _tracker_label(head, 15, GOLD, 18 + 8)
 	_tracker_step = _tracker_label(box, 14, Color(1, 1, 1, 0.95))
 	_tracker_note = _tracker_label(box, 12, Color(1, 1, 1, 0.6))
 	panel.visible = false
 	return panel
 
 
-func _tracker_label(box: VBoxContainer, font_size: int, color: Color) -> Label:
+func _tracker_label(box: BoxContainer, font_size: int, color: Color, inset := 0.0) -> Label:
 	var label := Label.new()
 	label.add_theme_font_size_override("font_size", font_size)
 	label.add_theme_color_override("font_color", color)
 	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
 	label.add_theme_constant_override("outline_size", 3)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.custom_minimum_size.x = MINI + 60 - 21 # ширина счётчика без полей: перенос считает высоту по ней
+	label.custom_minimum_size.x = MINI + 60 - 20 - inset # ширина счётчика без полей: перенос считает высоту по ней
 	box.add_child(label)
 	return label
 
@@ -357,13 +357,17 @@ func update_tracker() -> void:
 	var line := ""
 	var note := ""
 	if _done_left > 0.0:
-		title = "✓ " + _done_text
+		title = _done_text
+		_tracker_icon.texture = UiIcons.CHECK
+		_tracker_icon.modulate = GOLD
 		_tracker_title.add_theme_color_override("font_color", GOLD)
 		if quests != null:
 			note = "Выполнено заданий: %d" % quests.done
 	elif quests != null and not quests.active.is_empty():
 		var q := quests.active
-		title = "%s %s" % [Quests.KINDS[q.kind].icon, q.title]
+		title = q.title
+		_tracker_icon.texture = UiIcons.quest(q.kind)
+		_tracker_icon.modulate = quest_color()
 		var s := quests.step()
 		line = quests.step_text(s)
 		if not is_nan(px):

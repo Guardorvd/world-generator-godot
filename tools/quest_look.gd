@@ -231,11 +231,16 @@ func _run() -> void:
 	bike.set_pack(quests.cargo)
 	hud.px = 100 * GameConfig.TILE
 	hud.pz = 100 * GameConfig.TILE
+	# с 12.4 счётчик виден, пока зажат Tab
+	Input.action_press("show_hud")
+	for i in 2:
+		await process_frame
 	hud.update_tracker()
 	_check(hud.tracker.visible and hud._tracker_note.text.contains("сумка за спиной"), "счётчик: шаг и сумка за спиной")
 	var pack := bike.rider.skeleton.get_node_or_null("Pack") as Node3D
 	_check(pack != null and pack.visible, "сумка висит на седоке")
 	await _shot("quest_pack")
+	Input.action_release("show_hud")
 	camera.look_at_from_position(Vector3(2.6, 1.3, 0.2), Vector3(0.0, 1.0, 0.1), Vector3.UP)
 	await _shot("quest_pack_side")
 	camera.look_at_from_position(Vector3(1.7, 1.6, 2.4), Vector3(-0.3, 0.9, 0.0), Vector3.UP)
@@ -246,7 +251,7 @@ func _run() -> void:
 	hud.banner("Задание выполнено", "Посылка: «Каменка» · всего выполнено: 1", Hud.GOLD)
 	quests.cargo = false
 	bike.set_pack(false)
-	_check(hud.tracker.visible and hud._tracker_title.text.begins_with("✓"), "выполненное задание видно в счётчике")
+	_check(hud.tracker.visible and hud._tracker_icon.texture == hud.UiIcons.CHECK, "выполненное задание видно в счётчике")
 	for i in 30:
 		await process_frame
 	_check(hud._banner.visible and hud._banner.modulate.a > 0.9, "крупная надпись «Задание выполнено» посередине")

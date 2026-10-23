@@ -13,14 +13,14 @@ extends RefCounted
 
 signal changed  # взято, пройден шаг, выполнено или брошено: интерфейсу пора перерисоваться
 
-## Виды заданий: подпись, значок и цвет для доски, счётчика и меток
+## Виды заданий: подпись и цвет для доски, счётчика и меток; значок — UiIcons.QUESTS (с 12.5 векторный)
 const KINDS := {
-	visit = {title = "Посещение", icon = "◎", color = Color(0.55, 0.85, 1.0)},
-	tour = {title = "Обход", icon = "◇", color = Color(0.55, 0.85, 1.0)},
-	delivery = {title = "Доставка", icon = "▣", color = Color(1.0, 0.7, 0.4)},
-	photo = {title = "Снимок", icon = "◫", color = Color(0.75, 0.95, 0.6)},
-	fragile = {title = "Хрупкий груз", icon = "◈", color = Color(1.0, 0.55, 0.45)},
-	chronicle = {title = "Летопись", icon = "▤", color = Color(0.6, 0.9, 0.75)},
+	visit = {title = "Посещение", color = Color(0.55, 0.85, 1.0)},
+	tour = {title = "Обход", color = Color(0.55, 0.85, 1.0)},
+	delivery = {title = "Доставка", color = Color(1.0, 0.7, 0.4)},
+	photo = {title = "Снимок", color = Color(0.75, 0.95, 0.6)},
+	fragile = {title = "Хрупкий груз", color = Color(1.0, 0.55, 0.45)},
+	chronicle = {title = "Летопись", color = Color(0.6, 0.9, 0.75)},
 }
 ## Виды с сумкой за спиной (доставка): быстрое перемещение недоступно, сумка у доски
 const CARGO_KINDS := ["delivery", "fragile"]
