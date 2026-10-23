@@ -16,6 +16,8 @@ const GROUND_R := 16    # радиус куска рельефа под паде
 const LAYER_GROUND := 4
 const LAYER_BODY := 8
 const GRAVITY_SCALE := GameConfig.GRAVITY / 9.8
+const EnvironmentContacts = preload("res://scripts/render/crash_environment.gd")
+enum FallStyle { LANDING, OVER_BARS, SIDE_SLIDE, GLANCING }
 
 enum BodyShape { SPHERE, CAPSULE, SHOE }
 # Именованные параметры: размеры в метрах, масса в кг, пределы суставов в градусах.
@@ -68,6 +70,12 @@ var _bone_order: Array[int] = []
 var _root_bone := -1
 var _animation_player: AnimationPlayer
 var _animation_active := false
+var style := FallStyle.LANDING
+var _impact_normal := Vector3.UP
+var _severity := 0.0
+var _balance_time := BALANCE
+var _recover_lift := 0.0
+var _recover_retry := 0.0
 
 
 func active() -> bool:
@@ -108,9 +116,24 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 	_vel = velocity
 	_release_velocity = velocity
 	_settled_time = 0.0
+	_recover_retry = 0.0
 	_side = signf(b.lean) if absf(b.lean) > 0.02 else (signf(b.steer) if absf(b.steer) > 0.05 else 1.0)
 	_tumble = smoothstep(2.0, 10.0, Vector2(velocity.x, velocity.z).length()) * (1.0 - clampf(absf(b.lean) / 0.4, 0.0, 0.6))
 	_start = view.global_transform
+	_impact_normal = b.crash_normal.normalized()
+	var collision := b.crash_cause == BikeRide.CrashCause.COLLISION
+	var normal_speed := maxf(0.0, -velocity.dot(_impact_normal))
+	_severity = clampf((normal_speed if collision else absf(velocity.y)) / 18.0, 0.0, 1.0)
+	if collision:
+		var approach := normal_speed / maxf(velocity.length(), 0.01)
+		style = FallStyle.OVER_BARS if approach > 0.7 else FallStyle.GLANCING
+		_tumble *= approach
+		var away := _impact_normal.dot(_start.basis.x)
+		if absf(away) > 0.15:
+			_side = signf(away)
+	else:
+		style = FallStyle.SIDE_SLIDE if absf(b.lean) > 0.15 else FallStyle.LANDING
+	_balance_time = lerpf(0.22, 0.14, _severity) if collision else BALANCE
 	_forward = -1.0 if velocity.dot(-_start.basis.z) < -0.1 else 1.0
 	_build_ground(Vector3(b.x, b.y, b.z) + Vector3(velocity.x, 0.0, velocity.z) * 0.35, b.y, heights)
 	phase = Phase.BALANCE
@@ -130,13 +153,13 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 	match phase:
 		Phase.BALANCE:
 			# велосипед уходит из-под седока: катится по инерции и валится набок, нос клюёт вниз
-			var k := clampf(t / BALANCE, 0.0, 1.0)
+			var k := clampf(t / _balance_time, 0.0, 1.0)
 			var fwd := -_start.basis.z
 			var roll := Basis(fwd, -_side * 0.7 * k * k) * Basis(_start.basis.x, -0.25 * _tumble * _forward * k * k)
 			var travel := Vector3(_vel.x, 0.0, _vel.z) * t * (1.0 - 0.3 * k)
 			var before := _view.global_position
 			var prev_t := maxf(0.0, t - dt)
-			var prev_k := clampf(prev_t / BALANCE, 0.0, 1.0)
+			var prev_k := clampf(prev_t / _balance_time, 0.0, 1.0)
 			var prev_travel := Vector3(_vel.x, 0.0, _vel.z) * prev_t * (1.0 - 0.3 * prev_k)
 			var delta := travel - prev_travel
 			var free := func(px: float, pz: float) -> bool: return b.fits(px, pz, b.heading, w, heights)
@@ -148,20 +171,20 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			_release_velocity.x = (at.x - before.x) / maxf(dt, 0.001)
 			_release_velocity.z = (at.z - before.z) / maxf(dt, 0.001)
 			_view.global_transform = Transform3D(roll * _start.basis, at)
-			if t >= BALANCE:
+			if t >= _balance_time:
 				_begin_ragdoll()
 		Phase.RAGDOLL:
 			_view.global_transform = _bike_body.global_transform
 			_keep_above_ground(heights, dt)
 			_sync_pose()
 			var hips := _bones["Hips"] as PhysicalBone3D
-			var near_ground := hips.global_position.y - heights.surface_at(hips.global_position.x, hips.global_position.z, hips.global_position.y + 1.0) < 0.65
+			var near_ground := hips.global_position.y - _support_height(hips.global_position, heights) < 0.65
 			var head := _bones["Head"] as PhysicalBone3D
-			var lying := head.global_position.y - heights.surface_at(head.global_position.x, head.global_position.z, head.global_position.y + 1.0) < 0.45
+			var lying := head.global_position.y - _support_height(head.global_position, heights) < 0.45
 			var settled := near_ground and lying and hips.linear_velocity.length() < 0.8 and head.linear_velocity.length() < 0.8 and hips.angular_velocity.length() < 1.0 and _bike_body.linear_velocity.length() < 0.8
 			_settled_time = _settled_time + dt if settled else 0.0
 			var lost := Vector2(hips.global_position.x - _ground.position.x, hips.global_position.z - _ground.position.z).length() > GROUND_R - 2
-			if (t >= LIE_MIN and _settled_time >= SETTLE) or t >= LIE_MAX or lost:
+			if ((t >= LIE_MIN and _settled_time >= SETTLE) or t >= LIE_MAX or lost) and t >= _recover_retry:
 				_begin_recover(b, w, heights)
 		Phase.RECOVER:
 			if t >= _recover_time:
@@ -187,7 +210,9 @@ func draw() -> void:
 		var to := _to_pose[i]
 		if i == _root_bone:
 			# корень переходит в мире по прямой: из места, где лежал, в седло (велосипед в это время поворачивается)
-			to = skel.global_transform.affine_inverse() * _blend(_from_root, skel_goal * to, s)
+			var root_world := _blend(_from_root, skel_goal * to, s)
+			root_world.origin.y += sin(PI * s) * _recover_lift
+			to = skel.global_transform.affine_inverse() * root_world
 			from = to
 		skel.set_bone_pose_position(i, from.origin.lerp(to.origin, s))
 		skel.set_bone_pose_rotation(i, from.basis.get_rotation_quaternion().slerp(to.basis.get_rotation_quaternion(), s))
@@ -223,10 +248,18 @@ func _begin_ragdoll() -> void:
 	# седок отделяется от велосипеда и летит по инерции, чуть вверх и через руль
 	_rider.reparent(self)
 	_build_ragdoll()
-	var fling := Vector3(_release_velocity.x * 0.7, maxf(_vel.y, 0.0) * 0.3 + 1.6, _release_velocity.z * 0.7)
+	var fling := Vector3(_release_velocity.x * 0.7, maxf(_vel.y, -5.0) * 0.15 + 1.4, _release_velocity.z * 0.7)
+	fling += view_at.basis.x * _side * (0.25 + _severity * 0.25)
+	if style == FallStyle.OVER_BARS or style == FallStyle.GLANCING:
+		# Не проталкиваем тело обратно в стену; касательная скорость сохраняется.
+		var into := minf(fling.dot(_impact_normal), 0.0)
+		fling -= _impact_normal * into
+		fling += _impact_normal * (0.3 + _severity * 0.6)
 	for bone: PhysicalBone3D in _bones.values():
 		bone.linear_velocity = fling
 		bone.angular_velocity = -view_at.basis.x * _forward * lerpf(0.6, 2.5, _tumble) + view_at.basis.z * _side * lerpf(2.2, 1.0, _tumble)
+		if bone.bone_name.begins_with("Forearm"):
+			bone.angular_velocity += view_at.basis.z * _side * 0.25
 	_bike_body = RigidBody3D.new()
 	_bike_body.collision_layer = LAYER_BODY
 	_bike_body.collision_mask = LAYER_GROUND
@@ -244,7 +277,7 @@ func _begin_ragdoll() -> void:
 		_add_shape(_bike_body, wheel, Transform3D(Basis(Vector3.BACK, PI / 2), Vector3(0, BikeView.WHEEL_Y, z)))
 	add_child(_bike_body)
 	_bike_body.global_transform = view_at
-	_bike_body.linear_velocity = Vector3(_release_velocity.x * 0.6, 0.5, _release_velocity.z * 0.6)
+	_bike_body.linear_velocity = Vector3(_release_velocity.x * 0.6, 0.5, _release_velocity.z * 0.6) - view_at.basis.x * _side * 0.25
 	_bike_body.angular_velocity = -view_at.basis.z * _side * 3.0
 
 
@@ -294,6 +327,10 @@ func _build_ragdoll() -> void:
 
 
 func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
+	var destination := _recovery_spot(b, w, heights)
+	if destination.is_empty():
+		_recover_retry = t + 0.25
+		return # ждём, пока тело выйдет к свободному месту; сквозь стену не возвращаем
 	phase = Phase.RECOVER
 	t = 0.0
 	# поза падения: кости с телами — по телам, остальные — как были
@@ -305,20 +342,11 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	_from_feet = Vector3(hips.x, hips.y - 0.5, hips.z)
 	_from_view = _bike_body.global_transform
 	_free_physics()
-	# седок поднимается там, где лёг, и подтягивает велосипед к себе, носом туда, куда тот смотрел;
-	# если там стена — велосипед встаёт там, где лежал, или на месте падения
-	var fwd := -_from_view.basis.z
-	var turned := atan2(-fwd.x, -fwd.z) if Vector2(fwd.x, fwd.z).length() > 0.3 else b.heading
-	# новый курс — только вместе с местом, где велосипед с ним помещается: иначе остаётся прежний,
-	# с которым велосипед стоял до падения, и не оказывается боком в стене
-	for spot: Vector3 in [_from_feet, _from_view.origin]:
-		if b.fits(spot.x, spot.z, turned, w, heights):
-			b.heading = turned
-			b.x = spot.x
-			b.z = spot.z
-			b.y = heights.surface_at(b.x, b.z, spot.y + 1.0)
-			break
-	b.y = heights.surface_at(b.x, b.z, b.y + 1.0)
+	b.x = destination.position.x
+	b.y = destination.position.y
+	b.z = destination.position.z
+	b.heading = destination.heading
+	_recover_lift = 0.35
 	_recover_time = maxf(RECOVER, _from_feet.distance_to(Vector3(b.x, b.y, b.z)) / RECOVER_SPEED)
 	_rider.reparent(_view, false)
 	_rider.transform = _rider_local
@@ -372,20 +400,91 @@ func _keep_above_ground(heights: Heightfield, dt: float) -> void:
 		else:
 			var half := (col.shape as BoxShape3D).size * 0.5
 			extent = absf(at.basis.x.y) * half.x + absf(at.basis.y.y) * half.y + absf(at.basis.z.y) * half.z
-		var floor_y := heights.surface_at(at.origin.x, at.origin.z, at.origin.y + 1.0)
+		var floor_y := _support_height(at.origin, heights)
 		var penetration := floor_y + extent + 0.015 - at.origin.y
 		if penetration > -0.04:
 			# Короткое затухающее скольжение; склон не должен уносить лежащее тело.
-			var drag := exp(-maxf(dt, 0.0) * 3.0)
+			var drag := exp(-maxf(dt, 0.0) * _surface_drag(at.origin, heights))
 			var sliding := bone.linear_velocity
 			sliding.x *= drag
 			sliding.z *= drag
 			bone.linear_velocity = sliding
+		var immersion := heights.immersion_at(at.origin.x, at.origin.z, at.origin.y)
+		if immersion > 0.0:
+			bone.linear_velocity = _water_velocity(bone.linear_velocity, immersion, dt)
+			bone.angular_velocity *= exp(-immersion * dt * 3.0)
 		if penetration > 0.0:
 			bone.global_position.y += penetration
 			var velocity := bone.linear_velocity
 			velocity.y = maxf(velocity.y, 0.0)
 			bone.linear_velocity = velocity
+
+	var water := heights.immersion_at(_bike_body.global_position.x, _bike_body.global_position.z, _bike_body.global_position.y)
+	if water > 0.0:
+		_bike_body.linear_velocity = _water_velocity(_bike_body.linear_velocity, water, dt)
+
+
+## Опора под телом: луч не видит настил над головой, в отличие от одной карты высот.
+func _support_height(at: Vector3, heights: Heightfield) -> float:
+	var floor_y := heights.ground_at(at.x, at.z)
+	var query := PhysicsRayQueryParameters3D.create(at, at - Vector3.UP * 2.0, LAYER_GROUND)
+	var hit := get_world_3d().direct_space_state.intersect_ray(query)
+	if not hit.is_empty() and (hit.normal as Vector3).y > 0.25:
+		floor_y = maxf(floor_y, hit.position.y)
+	return floor_y
+
+
+static func _surface_drag(at: Vector3, heights: Heightfield) -> float:
+	var surface := PlayerState.surface(heights.world.tile_info(at.x / GameConfig.TILE, at.z / GameConfig.TILE))
+	if heights.road_refinement != null:
+		var sample := heights.road_refinement.sample(at.x, at.z, heights.world.W)
+		if not sample.is_empty() and sample.surface != RoadSurface.NONE:
+			surface = sample.surface
+	var grip := 0.85 if surface == RoadSurface.NONE else float(RoadSurface.LIST[surface].grip)
+	return 1.0 + grip * 2.0
+
+
+static func _water_velocity(velocity: Vector3, immersion: float, dt: float) -> Vector3:
+	var wet := clampf(immersion, 0.0, 1.0)
+	return velocity * exp(-wet * dt * 4.0) + Vector3.UP * wet * dt * 4.0
+
+
+## Ищем место с опорой для обоих колёс и свободным путём подъёма, а не только свободным центром.
+func _recovery_spot(b: BikeRide, w: WorldData, heights: Heightfield) -> Dictionary:
+	var hips := _bones["Hips"].global_position
+	var from := hips - Vector3.UP * 0.5
+	var at := _bike_body.global_transform
+	var fwd := -at.basis.z
+	var heading := atan2(-fwd.x, -fwd.z) if Vector2(fwd.x, fwd.z).length() > 0.3 else b.heading
+	var spots: Array[Vector3] = [from, at.origin, Vector3(b.x, b.y, b.z)]
+	for radius: float in [0.75, 1.5, 3.0, 5.0, 8.0, 12.0]:
+		for i in 8:
+			spots.append(from + Vector3(cos(i * TAU / 8.0), 0.0, sin(i * TAU / 8.0)) * radius)
+	var saved_y := b.y
+	for spot in spots:
+		var floor_y := heights.surface_at(spot.x, spot.z, spot.y + 0.4)
+		for direction: float in [heading, b.heading]:
+			b.y = floor_y
+			if not b.fits(spot.x, spot.z, direction, w, heights):
+				continue
+			if heights.ceiling_at(spot.x, spot.z, floor_y) < floor_y + 1.8:
+				continue
+			var wheel := Vector3(-sin(direction), 0, -cos(direction)) * BikeRide.HUB
+			var front := heights.surface_at(spot.x + wheel.x, spot.z + wheel.z, floor_y)
+			var rear := heights.surface_at(spot.x - wheel.x, spot.z - wheel.z, floor_y)
+			if absf(front - floor_y) > 0.6 or absf(rear - floor_y) > 0.6:
+				continue
+			var goal := Vector3(spot.x, floor_y + 0.8, spot.z)
+			var middle := hips.lerp(goal, 0.5) + Vector3.UP * 0.5
+			var first := PhysicsRayQueryParameters3D.create(hips, middle, LAYER_GROUND)
+			var second := PhysicsRayQueryParameters3D.create(middle, goal, LAYER_GROUND)
+			var space := get_world_3d().direct_space_state
+			if not space.intersect_ray(first).is_empty() or not space.intersect_ray(second).is_empty():
+				continue
+			b.y = saved_y
+			return {position = Vector3(spot.x, floor_y, spot.z), heading = direction}
+	b.y = saved_y
+	return {}
 
 
 func _exit_tree() -> void:
@@ -431,8 +530,8 @@ func _free_physics() -> void:
 		_bike_body = null
 
 
-## Кусок рельефа под падением: высоты поверхности игры с настилами мостов и небольшим запасом от пересечений.
-func _build_ground(center: Vector3, y: float, heights: Heightfield) -> void:
+## Земля отдельно от объёмных сооружений: под мостом нет искусственной стены или поднятого берега.
+func _build_ground(center: Vector3, _y: float, heights: Heightfield) -> void:
 	if _ground != null:
 		_ground.queue_free()
 	_ground = StaticBody3D.new()
@@ -446,7 +545,7 @@ func _build_ground(center: Vector3, y: float, heights: Heightfield) -> void:
 	data.resize(n * n)
 	for j in n:
 		for i in n:
-			data[j * n + i] = heights.surface_at(cx + i - GROUND_R, cz + j - GROUND_R, y + 1.0) + 0.025
+			data[j * n + i] = heights.ground_at(cx + i - GROUND_R, cz + j - GROUND_R) + 0.025
 	var shape := HeightMapShape3D.new()
 	shape.map_width = n
 	shape.map_depth = n
@@ -455,6 +554,7 @@ func _build_ground(center: Vector3, y: float, heights: Heightfield) -> void:
 	add_child(_ground)
 	_ground.global_position = Vector3(cx, 0.0, cz)
 	_build_obstacles(heights)
+	EnvironmentContacts.build(_ground, heights, GROUND_R)
 
 
 ## Только на время падения: те же простые объёмы леса, что уже используются при езде.

@@ -68,6 +68,9 @@ var _yaw_rate := 0.0   # фактическая угловая скорость 
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
 var crashed := false  # седок упал: жёстко приземлился или врезался в стену (GameWorld покажет падение и сбросит флаг)
+enum CrashCause { FALL, COLLISION }
+var crash_cause := CrashCause.FALL
+var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
 
@@ -249,8 +252,19 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var moved := Grid.hypot(x - x0, z - z0)
 		if moved < full - 1e-5:
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
-			if absf(speed) > WALL_CRASH and not airborne and (moved < 1e-5 or _tree_impact(heights) > WALL_CRASH):
-				_crash(vy)
+			var wanted := Vector3(-sin(heading), 0.0, -cos(heading)) * speed * dt
+			var blocked := Vector3(x - x0, 0.0, z - z0) - wanted
+			var normal := blocked.normalized()
+			var impact := maxf(0.0, -Vector3(-sin(heading) * speed, 0, -cos(heading) * speed).dot(normal))
+			var ahead := wanted.normalized() * PlayerState.PIECE * 0.5
+			var solid := false
+			for axle: float in [-AXLE, 0.0, AXLE]:
+				if not PlayerState.is_passable(w, heights, x + ahead.x - sin(heading) * axle, z + ahead.z - cos(heading) * axle, y, BODY_R, true):
+					solid = true
+					break
+			# Удар о предмет опасен и в прыжке; вода и граница открытой земли не являются стеной.
+			if solid and impact > WALL_CRASH:
+				_crash(vy, normal, CrashCause.COLLISION)
 			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
 	_dist += Grid.hypot(x - x0, z - z0)
 
@@ -468,8 +482,10 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 
 
 ## Седок падает: запомнить, с какой скоростью летел велосипед
-func _crash(v_up: float) -> void:
+func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void:
 	crashed = true
+	crash_cause = cause
+	crash_normal = normal.normalized() if normal.length_squared() > 0.000001 else Vector3.UP
 	crash_velocity = Vector3(-sin(heading) * speed, v_up, -cos(heading) * speed)
 
 
@@ -521,7 +537,7 @@ func _land(g: float, heights: Heightfield) -> void:
 	squash_rv = clampf(squash_rv + impact * 0.4, -2.0, 4.0)
 	# В подъём (нос в склон) удар опаснее, чем на ровное: порог падения ниже.
 	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(slope * signf(speed), 0.0, 1.0):
-		_crash(vy)
+		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
 		speed = 0.0
 	elif impact > SOFT_IMPACT:
 		speed *= 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)

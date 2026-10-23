@@ -5,21 +5,27 @@ extends SceneTree
 const DT := 1.0 / 60.0
 
 class FlatWorld extends WorldData:
+	var road_surface_kind := RoadSurface.NONE
 	func accessible(_x: float, _z: float, _margin := 0.0) -> bool:
 		return true
 	func tile_info(_x: float, _z: float) -> Dictionary:
-		return {biome = Biomes.GRASS, path = 0}
+		return {biome = Biomes.GRASS, path = 3 if road_surface_kind != RoadSurface.NONE else 0, surface = road_surface_kind}
 
 class FlatGround extends Heightfield:
 	var slope := 0.0
+	var water := false
+	var water_depth := 1.0
 	func _init(world_data: WorldData) -> void:
-		super(world_data, false)
-	func surface_at(_x: float, z: float, _feet := -INF) -> float:
-		return 100.0 + z * slope
+		super()
+		world = world_data # синтетическая опора не требует массивов генератора
+	func surface_at(x: float, z: float, feet := -INF) -> float:
+		return maxf(100.0 + z * slope, deck_at(x, z, feet))
 	func ground_at(_x: float, z: float, _raw := false) -> float:
 		return 100.0 + z * slope
-	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
-		return 0.0
+	func depth_at(x: float, z: float, feet := -INF) -> float:
+		if feet > -INF and deck_at(x, z, feet) > -INF:
+			return 0.0
+		return water_depth if water and absf(x - 32.0) < 3.0 and absf(z - 32.0) < 8.0 else 0.0
 	func known(_x: float, _z: float) -> bool:
 		return true
 
@@ -35,6 +41,7 @@ var cases: Array = [["с разгона 12 м/с", Vector3(0, -14, -12)], ["с �
 var frames := 0
 var phases := {}
 var lowest_head := INF
+var crossed_wall := false
 var max_hips_y := -INF
 var start_at := Vector3()
 var lie_at := Vector3()
@@ -46,6 +53,8 @@ var started := false
 var capture := "--capture" in OS.get_cmdline_user_args()
 var camera: Camera3D
 var capture_ground: MeshInstance3D
+var capture_objects: Node3D
+var environment_checked := false
 var shots: Array = []  # [кадр, имя] — снимки с --capture
 var flat := "--flat" in OS.get_cmdline_user_args()
 var ground_slide := 0.0
@@ -64,12 +73,16 @@ func check(ok: bool, label: String) -> void:
 func _initialize() -> void:
 	if flat:
 		w = FlatWorld.new()
+		w.W = 64
+		w.H = 64
+		w.N = 4096
 		heights = FlatGround.new(w)
 		player = PlayerState.new()
 		player.feet = 100.0
 		bike = BikeRide.new()
 		bike.y = 100.0
 		cases.append_array([["в ствол", Vector3(0, 0, -12)], ["в бревно", Vector3(0, 0, -12)], ["в валун", Vector3(0, 0, -12)], ["на левый бок", Vector3(0, 0, -8)], ["на правый бок", Vector3(0, 0, -8)], ["задним ходом", Vector3(0, 0, 10)], ["на склоне", Vector3(0, 0, -12)]])
+		cases.append_array([["стена дома", Vector3(0, 0, -12)], ["настил моста", Vector3(0, -6, -10)], ["под мостом", Vector3(0, 0, -8)], ["стена туннеля", Vector3(12, 0, 0)], ["вода у берега", Vector3(6, -6, -8)], ["с края досок", Vector3(6, 0, 0)]])
 	else:
 		w = WorldGenerator.generate("abc", 128)
 		heights = Heightfield.new(w)
@@ -91,6 +104,13 @@ func _begin_case() -> void:
 		bike.x = 0.0
 		bike.z = 0.0
 		bike.heading = 0.0
+		bike.crash_cause = BikeRide.CrashCause.FALL
+		bike.crash_normal = Vector3.UP
+		w.settlements.clear()
+		w.sites.clear()
+		heights.structures.clear()
+		heights._cells.clear()
+		(heights as FlatGround).water = case_i == 14
 		(heights as FlatGround).slope = 0.2 if case_i == 9 else 0.0
 		heights.obstacles = ForestObstacles.new(w, heights)
 		if case_i == 3:
@@ -103,13 +123,37 @@ func _begin_case() -> void:
 	bike.mount(player)
 	if flat:
 		bike.lean = -0.28 if case_i == 6 else (0.28 if case_i == 7 else 0.0)
+	if flat and case_i >= 10:
+		bike.x = 32
+		bike.z = 32
+		if case_i == 10:
+			w.settlements.append({x = 8.0, y = 7.5, huts = [{x = 8.0, y = 7.5, a = 0.0, v = 0, t = "house"}]})
+			bike.crash_cause = BikeRide.CrashCause.COLLISION
+			bike.crash_normal = Vector3.BACK
+		if case_i in [11, 12, 13, 15]:
+			var tunnel := case_i == 13
+			var level_y := 100.0 if tunnel else (103.0 if case_i == 15 else 104.0)
+			heights.structures.append({tunnel = tunnel, ax = 32.0, az = 16.0, ay = level_y, bx = 32.0, bz = 48.0, by = level_y, len = 32.0, ux = 0.0, uz = 1.0, half = 2.5 if tunnel else (0.9 if case_i == 15 else 2.2), arch = 0.0, style = "planks" if case_i == 15 else "wood", rails = case_i != 15})
+			for z in range(3, 14):
+				for x in range(6, 11):
+					heights._cells[z * w.W + x] = [0]
+		if case_i == 13:
+			bike.x = 33
+			bike.heading = -PI * 0.5
+			bike.crash_cause = BikeRide.CrashCause.COLLISION
+			bike.crash_normal = Vector3.LEFT
+		if case_i == 15:
+			bike.heading = -PI * 0.5
+		bike.y = 104.0 if case_i == 11 else (103.0 if case_i == 15 else 100.0)
 	view.snap(bike)
 	view.draw(1.0)
 	if capture:
 		_update_capture_ground()
 	frames = 0
+	environment_checked = false
 	phases.clear()
 	lowest_head = INF
+	crossed_wall = false
 	max_hips_y = -INF
 	bike_tipped = false
 	finite = true
@@ -134,14 +178,21 @@ func _physics_process(_delta: float) -> bool:
 	var back := crash.tick(DT, bike, w, heights)
 	if crash.phase == BikeCrash.Phase.RAGDOLL:
 		var skel: Skeleton3D = (view.rider as CyclistRig).skeleton
+		if not environment_checked and crash.t > 0.1:
+			environment_checked = true
+			_check_environment()
 		var head: Vector3 = (skel.global_transform * skel.get_bone_global_pose(skel.find_bone("Head"))).origin
 		var hips: Vector3 = crash.focus(bike) + Vector3(0, 0.5, 0)
 		for bone_name: String in crash._bones:
 			var physical: PhysicalBone3D = crash._bones[bone_name]
 			var visible := skel.global_transform * skel.get_bone_global_pose(skel.find_bone(bone_name)) * physical.body_offset
 			pose_matches = pose_matches and visible.origin.distance_to(physical.global_position) < 0.005
-		lowest_head = minf(lowest_head, head.y - heights.surface_at(head.x, head.z, head.y + 1.0))
+		lowest_head = minf(lowest_head, head.y - crash._support_height(head, heights))
 		max_hips_y = maxf(max_hips_y, hips.y)
+		if flat and case_i == 10:
+			crossed_wall = crossed_wall or (absf(hips.x - 32.0) < 1.5 and hips.z < 31.5)
+		if flat and case_i == 13:
+			crossed_wall = crossed_wall or hips.x > 35.0
 		lie_at = hips
 		finite = finite and is_finite(head.y) and is_finite(hips.x)
 		bike_tipped = bike_tipped or view.global_transform.basis.y.y < 0.7
@@ -170,18 +221,9 @@ func _physics_process(_delta: float) -> bool:
 	if capture:
 		var cam_at: Vector3 = crash.focus(bike)
 		camera.look_at_from_position(cam_at + Vector3(3.2, 2.2, 3.2), cam_at + Vector3(0, 0.5, 0))
-		if crash.phase == BikeCrash.Phase.BALANCE and crash.t > 0.15 and not phases.has("b"):
-			phases["b"] = true
-			shots.append(str(case_i) + "_balance")
-		elif crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.5 and not phases.has("r"):
+		if flat and case_i in [10, 15] and crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.5 and not phases.has("r"):
 			phases["r"] = true
 			shots.append(str(case_i) + "_ragdoll")
-		elif crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.8 and crash._settled_time > 0.05 and not phases.has("l"):
-			phases["l"] = true
-			shots.append(str(case_i) + "_lying")
-		elif crash.phase == BikeCrash.Phase.RECOVER and crash.t > 0.2 and not phases.has("u"):
-			phases["u"] = true
-			shots.append(str(case_i) + "_recover")
 	if back or frames > 600:
 		_finish_case(back)
 	return false
@@ -195,17 +237,24 @@ func _finish_case(back: bool) -> void:
 	check(phases.has(BikeCrash.Phase.BALANCE) and phases.has(BikeCrash.Phase.RAGDOLL) and phases.has(BikeCrash.Phase.RECOVER), "%s: потеря равновесия → ragdoll → возврат" % name)
 	check(finite, "%s: позы конечны" % name)
 	check(pose_matches, "%s: видимые кости совпадают с физическими телами" % name)
-	var head_limit := 0.7 if flat and case_i == 4 else 0.45 # голова может лежать на бревне
+	var head_limit := 1.4 if flat and case_i == 14 else (0.7 if flat and case_i == 4 else 0.45) # голова может лежать на бревне
 	check(lowest_head < head_limit, "%s: тело легло на землю (голова в %.2f м над землёй)" % [name, lowest_head])
 	check(lowest_head > -0.05, "%s: голова не провалилась под поверхность" % name)
 	var flew := Vector2(lie_at.x - start_at.x, lie_at.z - start_at.z).length()
 	var want := Vector2(v.x, v.z).length() * 0.12 if not flat or case_i < 3 else 0.0
 	check(flew >= want, "%s: тело пролетело по инерции %.1f м (нужно ≥ %.1f)" % [name, flew, want])
-	check(bike_tipped, "%s: велосипед завалился набок" % name)
+	# Вода гасит импульс: рама может остаться на колёсах, это допустимый исход.
+	if not flat or case_i != 14:
+		check(bike_tipped, "%s: велосипед завалился набок" % name)
 	check(recovery_stable, "%s: повторная отрисовка восстановления не меняет позу" % name)
 	check(view.rider.procedural_pose, "%s: процедурная анимация восстановлена" % name)
 	check(max_jump < 0.25, "%s: возврат в седло плавный (шаг таза за такт %.3f м)" % [name, max_jump])
 	check(view.rider.get_parent() == view and (view.rider as CyclistRig).skeleton.get_child_count() > 0 and not _has_sim(), "%s: седок снова на велосипеде, физика убрана" % name)
+	check(bike.fits(bike.x, bike.z, bike.heading, w, heights), "%s: восстановление в свободном месте" % name)
+	if flat and case_i in [10, 13]:
+		check(not crossed_wall, "%s: тело не прошло сквозь стену" % name)
+	if flat and case_i == 12:
+		check(max_hips_y < 103.0, "под мостом тело не вытолкнуто на настил")
 	check(bike.riding and not bike.airborne and absf(bike.y - heights.surface_at(bike.x, bike.z, bike.y + 1.0)) < 0.05, "%s: велосипед стоит на земле" % name)
 	if flat and case_i in [0, 2]:
 		check(ground_slide > 0.05 and ground_slide < 3.0, "%s: короткое скольжение по земле %.2f м" % [name, ground_slide])
@@ -213,11 +262,90 @@ func _finish_case(back: bool) -> void:
 		check(not crossed_tree, "при падении таз не прошёл насквозь через ствол")
 	case_i += 1
 	if case_i >= cases.size():
+		if flat:
+			_check_impact_contract()
 		_check_lifecycle()
 		print("FAILS: %d" % fails)
 		quit(1 if fails > 0 else 0)
 		return
 	_begin_case()
+
+
+func _check_environment() -> void:
+	if not flat or case_i < 10:
+		return
+	var space := crash.get_world_3d().direct_space_state
+	if case_i == 10:
+		var wall := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(32, 101, 32), Vector3(32, 101, 28), BikeCrash.LAYER_GROUND))
+		check(not wall.is_empty() and absf(wall.position.z - 31.6) < 0.03, "коллайдер дома совпадает с границей PlayerState")
+	if case_i == 11:
+		var deck := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(32, 105, 30.13), Vector3(32, 102, 30.13), BikeCrash.LAYER_GROUND))
+		check(not deck.is_empty() and absf(deck.position.y - 104.0) < 0.03, "верх настила совпадает с Heightfield.level: %s" % deck.get("position", "нет контакта"))
+	if case_i == 12:
+		var clear := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(32, 102, 30), Vector3(32, 103.5, 30), BikeCrash.LAYER_GROUND))
+		check(clear.is_empty(), "под мостом нет ложной стены из карты высот")
+	if case_i == 13:
+		var ceiling := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(32, 103, 30), Vector3(32, 106, 30), BikeCrash.LAYER_GROUND))
+		check(not ceiling.is_empty() and absf(ceiling.position.y - 104.5) < 0.03, "свод туннеля совпадает с Heightfield.TUNNEL_HEIGHT")
+	if case_i == 15:
+		var rail := space.intersect_ray(PhysicsRayQueryParameters3D.create(Vector3(32, 104, 30), Vector3(34, 104, 30), BikeCrash.LAYER_GROUND))
+		check(rail.is_empty(), "у дощатой переправы нет выдуманных перил")
+
+
+func _check_impact_contract() -> void:
+	var saved_structures := heights.structures.duplicate()
+	var saved_cells := heights._cells.duplicate()
+	heights.structures.clear()
+	heights._cells.clear()
+	w.settlements.append({x = 8.0, y = 7.0, huts = [{x = 8.0, y = 7.0, a = 0.0, v = 0, t = "house"}]})
+	for in_air in [false, true]:
+		var moving := BikeRide.new()
+		moving.x = 32
+		moving.z = 32
+		moving.y = 100.4 if in_air else 100.0
+		moving.speed = 16
+		moving.riding = true
+		moving.airborne = in_air
+		for i in 20:
+			moving.step(player, 0, 0, false, false, DT, w, heights)
+			if moving.crashed:
+				break
+		check(moving.crashed and moving.crash_cause == BikeRide.CrashCause.COLLISION and moving.crash_normal.z > 0.8, "езда распознаёт стену и нормаль удара, прыжок=%s" % in_air)
+	w.settlements.clear()
+	(heights as FlatGround).water = true
+	(heights as FlatGround).water_depth = GameConfig.FORD_DEPTH + 0.5
+	check(not PlayerState.is_passable(w, heights, 32, 32, 100.0, 0.3) and PlayerState.is_passable(w, heights, 32, 32, 100.0, 0.3, true), "глубокая вода блокирует езду, но не считается твёрдой стеной")
+	(heights as FlatGround).water = false
+	(heights as FlatGround).water_depth = 1.0
+	heights.structures = saved_structures
+	heights._cells = saved_cells
+	var sample := BikeRide.new()
+	sample.speed = 12
+	sample._crash(-2, Vector3.BACK, BikeRide.CrashCause.COLLISION)
+	check(sample.crash_cause == BikeRide.CrashCause.COLLISION and sample.crash_normal == Vector3.BACK and sample.crash_velocity.z == -12, "удар хранит причину, нормаль и исходную скорость")
+	view.snap(bike)
+	view.draw(1)
+	bike.crash_cause = BikeRide.CrashCause.COLLISION
+	bike.crash_normal = Vector3.BACK
+	crash.start(view, bike, Vector3(0, 0, -12), heights)
+	check(crash.style == BikeCrash.FallStyle.OVER_BARS, "лобовой удар выбирает опрокидывание через руль")
+	crash.abort()
+	crash.start(view, bike, Vector3(12, 0, -4), heights)
+	check(crash.style == BikeCrash.FallStyle.GLANCING, "косой удар выбирает скользящее падение")
+	crash.abort()
+	bike.crash_cause = BikeRide.CrashCause.FALL
+	bike.lean = 0.28
+	crash.start(view, bike, Vector3(0, -5, -8), heights)
+	check(crash.style == BikeCrash.FallStyle.SIDE_SLIDE, "крен выбирает боковой завал")
+	crash.abort()
+	bike.lean = 0
+	var water_velocity := BikeCrash._water_velocity(Vector3(10, -10, 0), 1.0, DT)
+	check(water_velocity.x < 10 and water_velocity.y > -10, "вода гасит пролёт и падение")
+	(heights.world as FlatWorld).road_surface_kind = RoadSurface.DIRT
+	var dirt_drag := BikeCrash._surface_drag(Vector3.ZERO, heights)
+	(heights.world as FlatWorld).road_surface_kind = RoadSurface.SAND
+	check(BikeCrash._surface_drag(Vector3.ZERO, heights) < dirt_drag, "покрытие использует сцепление RoadSurface")
+	(heights.world as FlatWorld).road_surface_kind = RoadSurface.NONE
 
 
 ## Переходы и владение позой проверяем в той же изолированной сцене.
@@ -277,7 +405,7 @@ func _has_sim() -> bool:
 func _process(_delta: float) -> bool:
 	if not shots.is_empty():
 		# снимок предыдущего кадра: отрисовка отстаёт от такта на кадр
-		root.get_texture().get_image().save_png("res://tools/control/runs/crash_89plus_%s.png" % shots.pop_front())
+		root.get_texture().get_image().save_png("res://tools/control/runs/crash_107_%s.png" % shots.pop_front())
 	return false
 
 
@@ -297,6 +425,8 @@ func _setup_capture() -> void:
 	env.environment.ambient_light_color = Color.WHITE
 	env.environment.ambient_light_energy = 0.6
 	root.add_child(env)
+	capture_objects = Node3D.new()
+	root.add_child(capture_objects)
 	capture_ground = MeshInstance3D.new()
 	root.add_child(capture_ground)
 	_update_capture_ground()
@@ -313,8 +443,21 @@ func _update_capture_ground() -> void:
 			for d: Vector2 in [Vector2(0, 0), Vector2(1, 0), Vector2(1, 1), Vector2(0, 0), Vector2(1, 1), Vector2(0, 1)]:
 				var px := cx + i + d.x
 				var pz := cz + j + d.y
-				quad.append(Vector3(px, heights.surface_at(px, pz, bike.y + 1.0), pz))
+				quad.append(Vector3(px, heights.ground_at(px, pz), pz))
 			for v: Vector3 in quad:
 				st.add_vertex(v)
 	st.generate_normals()
 	capture_ground.mesh = st.commit()
+	for child in capture_objects.get_children():
+		child.queue_free()
+	StructuresBuilder.build(capture_objects, heights)
+	for settlement: Dictionary in w.settlements:
+		for hut: Dictionary in settlement.huts:
+			var visual := MeshInstance3D.new()
+			var box := BoxMesh.new()
+			var half := PlayerState.hut_half(hut)
+			box.size = Vector3(half.x * 2, 2.5, half.y * 2)
+			visual.mesh = box
+			visual.position = Vector3(hut.x * GameConfig.TILE, heights.ground_at(hut.x * GameConfig.TILE, hut.y * GameConfig.TILE) + 1.25, hut.y * GameConfig.TILE)
+			visual.rotation.y = PlayerState.hut_angle(settlement, hut)
+			capture_objects.add_child(visual)
