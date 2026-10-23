@@ -86,7 +86,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v5: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v5 with cycling mask: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -156,6 +156,7 @@ func _head() -> void:
 	bar("Head", Vector3(-0.008, 0.02, -0.113), Vector3(0.008, 0.02, -0.113), 0.009, dark)
 	local_loft("Head", [Vector3(0, -0.05, -0.105), Vector3(0, -0.031, -0.118), Vector3(0, 0.006, -0.105), Vector3(0, 0.025, -0.095)], [Vector2(0.017, 0.012), Vector2(0.019, 0.024), Vector2(0.012, 0.018), Vector2(0.01, 0.008)], skin)
 	ellipsoid("Head", Vector3(0.022, 0.004, 0.004), Vector3(0, -0.085, -0.088), warm)
+	_mask()
 	_hair()
 	var centers: Array[Vector3] = []
 	var sizes: Array[Vector2] = []
@@ -171,6 +172,33 @@ func _head() -> void:
 	for x in [-0.075, -0.032, 0.032, 0.075]:
 		helmet_strip(x, 0.012, dark)
 	helmet_strip(0.0, 0.012, teal)
+
+
+func _mask() -> void:
+	# Веломаска поверх неизменённого лица: закрывает нос, рот и подбородок, глаза открыты.
+	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
+	var skinning := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
+	var grid: Array[Dictionary] = []
+	for row in 5:
+		for col in 9:
+			var angle := lerpf(-PI + 0.2, -0.2, float(col) / 8.0)
+			var front := maxf(0.0, -sin(angle))
+			var y := lerpf(-0.132, -0.038 + pow(front, 4.0) * 0.052, float(row) / 4.0)
+			var size := head_size(y)
+			var local := Vector3(cos(angle) * (size.x + 0.008), y,
+				head_z(y) + sin(angle) * (size.y + 0.012) - pow(front, 6.0) * smoothstep(-0.09, -0.035, y) * 0.045)
+			grid.append({position = at * local, bones = skinning.bones, weights = skinning.weights})
+	for row in 4:
+		for col in 8:
+			var a := grid[row * 9 + col]
+			var b := grid[(row + 1) * 9 + col]
+			var c := grid[row * 9 + col + 1]
+			var d := grid[(row + 1) * 9 + col + 1]
+			triangle(a, b, c, navy)
+			triangle(c, b, d, navy)
+	for side in [-1.0, 1.0]:
+		bar("Head", Vector3(side * 0.087, -0.04, -0.025), Vector3(side * 0.105, 0.005, 0.025), 0.005, navy)
+		bar("Head", Vector3(side * 0.055, -0.115, -0.025), Vector3(side * 0.105, -0.025, 0.028), 0.005, navy)
 
 
 ## Волосы: короткая стрижка по затылку и за ушами, на 2,5 % над кожей головы, до края шлема.

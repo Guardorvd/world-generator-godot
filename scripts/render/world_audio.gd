@@ -25,10 +25,10 @@ const TICK_SPEED := 6.0     # м/с: при этой скорости трещо
 const PEDAL_HOLD := 0.3     # с: столько после последнего поворота педалей ещё слышна цепь
 
 # наибольшая громкость каждого звука, дБ: всё негромкое, фон под шагами
-const DB_WATER := -15.0
-const DB_SURF := -14.0
+const DB_WATER := -21.0
+const DB_SURF := -22.0
 const DB_FIRE := -9.0
-const DB_ROLL := -14.0
+const DB_ROLL := -22.0
 const DB_GRIT := -19.0
 const DB_TICK := -24.0
 const DB_CHAIN := -25.0

@@ -84,17 +84,32 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	var attack := maxf(-stand, 0.0)
 	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.
 	# Стоя таз выше и над кареткой (нога внизу почти прямая), плечи ближе к рулю, таз ходит в такт педалям.
-	var hip := Vector3(motion.y * 0.35 - sway * 0.25 * up, 0.97 - motion.z * 0.45 + up * 0.06 + attack * 0.035, 0.17 + motion.x * 0.5 - up * 0.13)
-	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath - up * 0.03 - attack * 0.03, -0.08 - tuck * 0.45 + motion.x - up * 0.17)
+	# Сидя таз держится над седлом; подвеску принимает корпус, а не проваливающийся в седло таз.
+	var hip := Vector3(motion.y * 0.25 - sway * 0.2 * up, 1.015 - motion.z * 0.15 + up * 0.045 + attack * 0.025, 0.20 + motion.x * 0.25 - up * 0.14)
+	# Подъём таза ограничен длиной обеих ног до педалей, без растягивания голени в нижней точке.
+	for side in [-1.0, 1.0]:
+		var ankle := Vector3(side * 0.14, 0.355 - side * cos(-crank_angle) * 0.17, 0.025 - side * sin(-crank_angle) * 0.17)
+		var horizontal := Vector2(hip.x + side * 0.11 - ankle.x, hip.z - ankle.z).length_squared()
+		hip.y = minf(hip.y, ankle.y + sqrt(maxf(0.0, pow(LEG_LENGTH * 2.0 - 0.004, 2.0) - horizontal)))
+	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath - up * 0.015 - attack * 0.03, -0.08 - tuck * 0.45 + motion.x - up * 0.14)
 	var body_look := look + look_lag
 	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.3 + sway, -sway * 0.4))
-	var head_basis := Basis.from_euler(Vector3(-pitch * 0.6, look, -roll * 0.6 + sway * 0.12))
+	# Взгляд компенсирует склон в пределах движения шеи, сохраняя небольшой наклон по дороге.
+	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75, -0.32, 0.32), clampf(look, -0.5, 0.5), -roll * 0.6 + sway * 0.12))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, Basis(Vector3.UP, -sway * 0.3))
 	_aim("Spine", hip, chest, sway * 0.25)
 	_aim("Chest", hip.lerp(chest, 0.55), chest, body_look * 0.3 + sway)
-	_set_bone("Neck", chest + Vector3(0, 0.07, -0.02))
-	_set_bone("Head", chest + Vector3(0, 0.22 - tuck * 0.05 - breath * 0.65, -0.09 + tuck * 0.15), head_basis)
+	# Основание шеи следует вороту на Chest, а голова вращается через шею с постоянной длиной.
+	# Отдельные смещения головы раньше растягивали кожу и вдавливали подбородок в ворот на подъёме.
+	var chest_pose: Transform3D = _poses[_bones["Chest"]]
+	var rest_hip := Vector3(0, 0.97, 0.17)
+	var rest_chest := Vector3(0, 1.37, -0.08)
+	var rest_upper := Transform3D(Basis(Quaternion(Vector3.UP, (rest_chest - rest_hip).normalized())), rest_hip.lerp(rest_chest, 0.55))
+	var neck := chest_pose * (rest_upper.affine_inverse() * Vector3(0, 1.44, -0.1))
+	var neck_basis := chest_pose.basis.slerp(head_basis, 0.55).orthonormalized()
+	_set_bone("Neck", neck, neck_basis)
+	_set_bone("Head", neck + neck_basis * Vector3(0, 0.15, -0.07), head_basis)
 	for side in [-1.0, 1.0]:
 		var suffix := "L" if side < 0 else "R"
 		var foot := Vector3(side * 0.14, 0.3 - side * cos(-crank_angle) * 0.17, -side * sin(-crank_angle) * 0.17)

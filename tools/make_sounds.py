@@ -176,7 +176,7 @@ def water(n, rng):
         f0 = rng.uniform(320.0, 700.0)
         b = tone(rng.uniform(0.03, 0.07), f0, f0 * rng.uniform(1.4, 2.2), harm=0.0)
         mix(out, b, rng.randrange(n), rng.uniform(0.04, 0.12))
-    return out
+    return lowpass(out, 2200.0)
 
 
 def surf(n, rng):
@@ -188,9 +188,9 @@ def surf(n, rng):
         t = (i % period) / period
         e = math.sin(math.pi * t / 0.35) if t < 0.35 * 0.5 else math.exp(-(t - 0.175) * 4.0)
         env.append(max(0.0, e))
-    hiss = lowpass(noise, [300.0 + 1500.0 * e for e in env])
+    hiss = lowpass(noise, [300.0 + 900.0 * e for e in env])
     rumble = lowpass(pink(n, rng), 120.0)
-    return [h * (0.15 + 0.85 * e) + r * 0.5 for h, r, e in zip(hiss, rumble, env)]
+    return [h * (0.15 + 0.85 * e) + r * 0.15 for h, r, e in zip(hiss, rumble, env)]
 
 
 def fire(n, rng):
@@ -208,9 +208,12 @@ def roll(n, rng):
     """Шины по грунту: мягкий низкий шорох. С 10.3 без частой волны громкости (она «ухала» 4 раза в
     секунду), только медленное неровное дыхание; высоту и громкость в игре задаёт скорость"""
     body = lowpass(pink(n, rng), 380.0)
+    # Убираем постоянный басовый гул, который воспринимался как ветер в микрофоне.
+    sub = lowpass(body, 100.0)
+    body = [b - s for b, s in zip(body, sub)]
     hum = bandpass(pink(n, rng), 140.0, 1.2)
     breath = smooth_noise(n, 0.3, rng)
-    return [(b + h * 0.6) * (0.85 + 0.15 * w) for b, h, w in zip(body, hum, breath)]
+    return [(b + h * 0.15) * (0.85 + 0.15 * w) for b, h, w in zip(body, hum, breath)]
 
 
 def grit(n, rng):

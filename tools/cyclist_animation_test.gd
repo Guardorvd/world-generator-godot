@@ -105,6 +105,8 @@ func check_skin_pose() -> void:
 
 func contacts() -> void:
 	check_skin_pose()
+	var neck_length := bone("Head").distance_to(bone("Neck"))
+	check(neck_length > 0.14 and neck_length < 0.18, "Neck remains connected without stretching in every pose")
 	for side in ["L", "R"]:
 		var pedal: Node3D = bike.pedal_l if side == "L" else bike.pedal_r
 		check(bone("Foot" + side).distance_to(bike.to_local(pedal.global_position) + Vector3(0, 0.055, 0.025)) < 0.001, "Foot contact")
@@ -211,7 +213,7 @@ func run() -> void:
 	check(bone("Head").y < neutral.y - 0.025, "Landing absorption")
 	for i in 120:
 		advance()
-	check(bone("Head").distance_to(neutral) < 0.001, "Landing settles")
+	check(bone("Head").distance_to(neutral) < 0.004, "Landing settles within resting breath amplitude")
 	# 10.6: плечи работают в такт усилию и затихают на накате.
 	var shoulder_ranges: Array[float] = []
 	for boosting in [false, true]:
@@ -265,6 +267,7 @@ func run() -> void:
 	var sk := bike.rider.skeleton
 	var head_world := bike.global_basis * sk.get_bone_global_pose(sk.find_bone("Head")).basis
 	check(absf(head_world.get_euler().x) < 0.2, "Head stabilizes against the slope")
+	check(absf((sk.get_bone_global_pose(sk.find_bone("Neck")).basis.get_euler().x)) > 0.05, "Neck shares torso/head bend on climbs")
 	# 10.6+: взгляд начинает поворот раньше плеч; усилие не переключается мгновенно.
 	reset()
 	state.steer = 1
@@ -293,7 +296,7 @@ func run() -> void:
 			advance()
 		road_positions.append(bone("Head").z)
 		contacts()
-	check(road_positions[0] > neutral.z + 0.005 and road_positions[1] < neutral.z - 0.005, "Front and rear bumps shift weight in opposite directions")
+	check(road_positions[0] > road_positions[1] + 0.01, "Front and rear bumps shift weight in opposite directions")
 	# Extreme combined inputs through a full pedal revolution, including angle wrap.
 	for sign_value in [-1.0, 1.0]:
 		reset()

@@ -47,10 +47,12 @@ void fragment() {
 	vec3 small = ripple(drift * vec2(2.7, 1.8));
 	vec3 broad = ripple(drift * vec2(0.75, 0.9) + vec2(17.2, 9.4));
 	// Только нормали: берег, уровень воды и игровая глубина остаются согласованы.
-	float detail = 1.0 - smoothstep(55.0, 210.0, length(VERTEX));
+	float distance_to_eye = length(VERTEX);
+	float detail = 1.0 - smoothstep(55.0, 210.0, distance_to_eye);
 	float strength = mix(0.045, 0.13, rapid) * detail;
 	float antialias = 1.0 - smoothstep(0.15, 0.8, max(length(dFdx(drift)), length(dFdy(drift))));
-	vec2 gradient = (small.yz * vec2(2.7, 1.8) * antialias + broad.yz * 0.8) * strength;
+	float broad_antialias = 1.0 - smoothstep(0.4, 1.6, max(length(dFdx(drift)), length(dFdy(drift))));
+	vec2 gradient = (small.yz * vec2(2.7, 1.8) * antialias + broad.yz * 0.8 * broad_antialias) * strength;
 	vec2 wake_gradient = vec2(0.0);
 	float wake_foam = 0.0;
 	for (int i = 0; i < 16; i++) {
@@ -101,11 +103,11 @@ void fragment() {
 	vec3 deep = ocean ? vec3(0.045, 0.15, 0.23) : deep_color;
 	ALBEDO = mix(mix(shallow_color, deep, absorption), vec3(0.80, 0.87, 0.82), foam);
 	METALLIC = 0.0;
-	// 6.9: вдали рябь гаснет (detail → 0) и вода становилась зеркалом — каждое озеро и изгиб реки давали
-	// резкий круглый блик солнца, а свечение раздувало его в пятно. Пропавшую рябь заменяет шероховатость.
-	float far_rough = 1.0 - detail;
-	ROUGHNESS = mix(mix(mix(0.24, 0.36, rapid), 0.5, far_rough), 0.65, foam);
-	SPECULAR = mix(0.4, 0.25, far_rough);
+	// Микроблики остаются только вблизи. Одной шероховатости 0.5 было мало:
+	// вдали плоская нормаль всё ещё давала большие круглые пятна от источников света.
+	float far_rough = smoothstep(55.0, 220.0, distance_to_eye);
+	ROUGHNESS = mix(mix(mix(0.24, 0.36, rapid), 0.88, far_rough), 0.65, foam);
+	SPECULAR = 0.4 * (1.0 - smoothstep(45.0, 180.0, distance_to_eye));
 	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 5.0);
 	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV2.x, 1.0 - UV2.x)) : 1.0;
 	float join = river_surface ? 1.0 - COLOR.b : 1.0;
