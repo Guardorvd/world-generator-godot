@@ -26,6 +26,12 @@ godot --path . --script res://tools/road_look.gd -- --out <папка> [--surfac
 godot --path . --script res://tools/photo_look.gd -- --out <папка>
 ```
 
+`tools/lamp_look.gd` (12.4) — фара велосипеда (`bike_lamp.gd`) ночью: ровная земля с дорогой, стволы и камни. Снимки от глаз седока `lamp_rider.png` и сбоку `lamp_side.png` (видимый луч в воздухе). «Было» — прошлая версия фары тем же запуском: `--lamp <файл .gd>` (например из `git show HEAD:scripts/render/bike_lamp.gd`) и `--tag _old` к именам снимков. Нужно окно.
+
+```
+godot --path . --script res://tools/lamp_look.gd -- --out <папка> [--lamp <файл>] [--tag <суффикс>]
+```
+
 `tools/quest_look.gd` (11.9) — задания (`Quests`), доска и счётчик: места словарями, `WorldData` только со списками мест, интерфейс из `main.tscn` без мира, велосипед с седоком. Проверяет выбор заданий и шаги всех видов, снимает `quest_board.png`, `quest_board_active.png`, `quest_pack.png`, `quest_pack_side.png`, `quest_done.png`. Нужно окно.
 
 ```

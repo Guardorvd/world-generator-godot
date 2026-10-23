@@ -102,6 +102,11 @@ recover_bike={
 "events": [Object(InputEventKey,"physical_keycode":89)
 ]
 }
+show_hud={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":4194306)
+]
+}
 
 [physics]
 

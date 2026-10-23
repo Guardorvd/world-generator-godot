@@ -36,6 +36,8 @@ var _tracker_note: Label
 var _done_text := ""
 var _done_left := 0.0
 var _photo_mode := false
+var _revealed := false # 12.4: мини-карта, компас, сведения, задание и подсказки видны, пока зажат Tab
+var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _banner: VBoxContainer
 var _banner_title: Label
 var _banner_sub: Label
@@ -100,6 +102,7 @@ func _ready() -> void:
 	add_child(big_map)
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
+	_apply_reveal()
 
 
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры
@@ -373,7 +376,7 @@ func update_tracker() -> void:
 		if quests.cargo:
 			note += " · сумка за спиной"
 		_tracker_title.add_theme_color_override("font_color", quest_color())
-	tracker.visible = title != "" and not _photo_mode
+	tracker.visible = title != "" and not _photo_mode and (_revealed or _done_left > 0.0)
 	if _tracker_title.text != title:
 		_tracker_title.text = title
 	if _tracker_step.text != line:
@@ -390,18 +393,31 @@ func heading_to(x: float, z: float) -> float:
 
 ## 11.8: с фотоаппаратом у глаз (GameWorld.photo) видны только рамка видоискателя и сообщения
 func set_photo_mode(on: bool) -> void:
-	for node: CanvasItem in [$Crosshair, $InfoPanel, minimap, compass, hint, prompt]:
-		node.visible = not on
 	_photo_mode = on
+	_apply_reveal()
 	update_tracker()
 
 
-## Строка подсказок внизу и подсказка у прицела (пустая — скрыта)
-func set_hints(bottom: String, near: String) -> void:
+## 12.4: интерфейс чистый — прицел, подсказка у прицела и сообщения; остальное только с зажатым Tab
+func _apply_reveal() -> void:
+	var shown := _revealed and not _photo_mode
+	for node: CanvasItem in [$InfoPanel, minimap, compass]:
+		node.visible = shown
+	hint.visible = (shown or _hint_urgent) and not _photo_mode
+	$Crosshair.visible = not _photo_mode
+	prompt.visible = not _photo_mode
+
+
+## Строка подсказок внизу и подсказка у прицела (пустая — скрыта).
+## urgent — строку видно и без Tab (падение: как восстановиться)
+func set_hints(bottom: String, near: String, urgent := false) -> void:
 	if hint.text != bottom:
 		hint.text = bottom
 	if prompt.text != near:
 		prompt.text = near
+	if _hint_urgent != urgent:
+		_hint_urgent = urgent
+		_apply_reveal()
 
 
 ## Где стоит велосипед (метры) и показывать ли его на картах
@@ -451,6 +467,14 @@ func _stop_toast_tween() -> void:
 
 
 func _process(delta: float) -> void:
+	var reveal := Input.is_action_pressed("show_hud")
+	if reveal != _revealed:
+		_revealed = reveal
+		_apply_reveal()
+		update_tracker()
+		if reveal:
+			minimap.queue_redraw()
+			compass.queue_redraw()
 	if _done_left > 0.0:
 		_done_left -= delta
 		if _done_left <= 0.0:

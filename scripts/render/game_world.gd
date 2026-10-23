@@ -902,6 +902,7 @@ func opening_active() -> bool:
 func _opening_welcome() -> void:
 	if not opening_place.is_empty():
 		hud.toast_now("Начало пути: «%s»" % opening_place.name)
+	hud.toast("Tab — мини-карта, компас и задание")
 
 
 func _finish_opening() -> void:
@@ -998,16 +999,16 @@ func _update_hints() -> void:
 		return
 	var prompt := ""
 	if crash.active():
-		hud.set_hints("Падение · Y — восстановиться у ближайшего места · Esc — пауза", "")
+		hud.set_hints("Падение · Y — восстановиться у ближайшего места · Esc — пауза", "", true)
 		return
 	match _target.get("kind", ""):
 		"board": prompt = "E — доска поселения «%s»: задания и маршруты" % _target.place.name
 		"bike": prompt = "E — сесть на велосипед"
 		"cargo": prompt = "E — надеть сумку"
 	if bike.riding:
-		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фара · Esc — пауза", prompt)
+		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фара · Tab — карта и задание · Esc — пауза", prompt)
 		return
-	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · ПКМ — фотоаппарат · Y — к ближайшему месту · F — фара · M — карта · Esc — пауза", prompt)
+	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · ПКМ — фотоаппарат · Y — к ближайшему месту · F — фара · M — карта · Tab — карта и задание · Esc — пауза", prompt)
 
 
 func _settlement_open() -> bool:
