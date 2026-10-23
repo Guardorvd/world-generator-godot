@@ -13,6 +13,8 @@ uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap_anisotro
 uniform sampler2D detail_normal : hint_normal, filter_linear_mipmap_anisotropic, repeat_enable;
 // Зерно, органическая примесь и шероховатость из RoadSurface.LIST.
 uniform vec3 surface_detail[8];
+// 11.5: кочки полотна из RoadBump.LIST — высота (м) и длина волны (м); та же форма трясёт велосипед.
+uniform vec2 surface_bump[8];
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
@@ -34,6 +36,22 @@ const float ROCK_TO = 0.46;
 varying vec3 wpos;
 varying vec3 wnormal;
 varying vec3 road_detail;
+varying vec2 road_bump_p;
+
+// 11.5: поле кочек RoadBump.shape и его наклон: x — высота 0..1, yz — производные по x и z мира.
+vec3 road_bump(vec2 p, float wave) {
+	float k = 6.2831853 / wave;
+	vec2 q = vec2(0.8 * p.x + 0.6 * p.y, -0.6 * p.x + 0.8 * p.y) * k;
+	float u = q.x + 1.3 * sin(q.y * 0.37);
+	float w = q.y * 0.71 + q.x * 0.29 + 2.1;
+	float n = 0.6 * sin(u) + 0.4 * sin(w * 1.9);
+	float cu = 0.6 * cos(u);
+	float cw = 0.4 * cos(w * 1.9) * 1.9;
+	vec2 dn = vec2(cu + cw * 0.29, cu * 0.481 * cos(q.y * 0.37) + cw * 0.71);
+	float m = max(n, 0.0);
+	vec2 g = 2.0 * m * dn * k;
+	return vec3(m * m, 0.8 * g.x - 0.6 * g.y, 0.6 * g.x + 0.8 * g.y);
+}
 
 // Разброс зёрен в мировых координатах, без короткого периода текстуры.
 vec2 grain_hash(vec2 cell) {
@@ -45,6 +63,7 @@ void vertex() {
 	wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.
 	road_detail = surface_detail[clamp(int(round(UV2.y)), 0, 7)];
+	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
 	if (use_vertex_color) {
 		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
 		COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
@@ -148,6 +167,13 @@ void fragment() {
 		float lip = road * (1.0 - smoothstep(0.55, 0.85, edge_v));
 		// Поперечная координата полотна: 0 — ось, 1 — половина ширины (по ближайшему отрезку пути).
 		float across = abs(UV2.x + (n_mid - 0.5) * 0.18);
+		// 11.5: кочки полотна — то же поле, что у колёс (RoadBump): по покрытию, на крутом выше.
+		// Видны светом и лёгким тоном; гаснут, когда волна меньше нескольких пикселей.
+		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
+		float bump_wave = max(road_bump_p.y, 0.1);
+		vec3 bump = road_bump(p, bump_wave);
+		float bump_h = road_bump_p.x * (1.0 + 1.2 * smoothstep(0.06, 0.30, grade))
+			* (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
 		// Гравий и камень читаются отдельным зерном; песок и укатанная земля — мелкой фактурой.
 		// Камешки — купола со светлой макушкой и тёмным краем; гаснут раньше, чем начнут мерцать.
 		float grain_scale = mix(22.0, 9.7, grain);
@@ -205,6 +231,7 @@ void fragment() {
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
 		soil *= 1.0 - lip * 0.06;
+		soil *= 1.0 + (bump.x - 0.3) * min(bump_h * 8.0, 0.2);
 		col = mix(mix(col, verge_col, verge), soil, road);
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
@@ -213,7 +240,8 @@ void fragment() {
 			// Свет следует отдельным зёрнам и камням; на середине полотна нет контуров карты нормалей биома,
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
 			vec3 grit = texture(detail_normal, rp * 1.37).rgb * 2.0 - 1.0;
-			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks);
+			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks)
+				- bump.yz * bump_h * 4.0 * road; // глубина карты нормалей на полотне ~0,3: запас в 2,5 раза
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
 			detail_n = mix(detail_n, road_normal, relief);
 		}

@@ -318,7 +318,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	# Даже медленный съезд по почти отвесной стене теперь теряет равновесие и запускает ragdoll.
 	if not airborne and absf(speed) > 0.25 and slope * signf(speed) < -CLIFF_GRADE:
 		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
-	_step_wheels(heights, rough, dt)
+	_step_wheels(heights, rough, dt, surf, path_weight, slope)
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015), acceleration)
 
@@ -414,7 +414,8 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 
 ## Колёса на точках касания. Подвеска колеса получает толчок, когда вертикальная скорость земли
 ## под ним меняется (излом, ступенька, кочка): переднее колесо встречает излом раньше заднего.
-func _step_wheels(heights: Heightfield, rough: float, dt: float) -> void:
+## 11.5: на полотне кочки — поле RoadBump в точке касания (то же, что видно в шейдере), вне пути — прежние.
+func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSurface.NONE, path_weight := 0.0, grade := 0.0) -> void:
 	if airborne:
 		# в полёте колёса висят на подвеске под рамой
 		ground_f = sin(tilt) * HUB
@@ -426,8 +427,9 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float) -> void:
 	var gf := heights.surface_at(x + fx, z + fz, y)
 	var gr := heights.surface_at(x - fx, z - fz, y)
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
-	gf += BUMP * rough * _bump(_dist + HUB)
-	gr += BUMP * rough * _bump(_dist - HUB)
+	var wild := BUMP * rough * (1.0 - path_weight)
+	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx, z + fz, surf, grade) * path_weight
+	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx, z - fz, surf, grade) * path_weight
 	ground_f = gf - y
 	ground_r = gr - y
 	if _fresh:
