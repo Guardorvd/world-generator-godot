@@ -67,10 +67,16 @@ func _run() -> void:
 	var surface := MeshInstance3D.new()
 	surface.mesh = plane
 	water.add_child(surface)
+	# посторонние дети воды: не сетка и сетка без поверхностей
+	water.add_child(Node3D.new())
+	var empty := MeshInstance3D.new()
+	empty.mesh = ArrayMesh.new()
+	water.add_child(empty)
 	root.add_child(water)
 	var fx := WaterEffects.new()
-	fx.setup(water)
 	water.add_child(fx)
+	fx.setup(water)
+	check(fx._materials.size() == 1, "setup берёт только материалы поверхностей воды")
 	var previous := Vector3(-0.05, 0, 0)
 	fx.tick(1.0 / 60.0, p, b, previous, h)
 	check(fx._ring == 1 and fx.rings[0].w > 0, "Ходьба создаёт всплеск")
@@ -114,6 +120,7 @@ func _run() -> void:
 	check(fx._ring == ring, "Остановка не создаёт непрерывные всплески")
 	check(fx.rings[first].z > WaterEffects.LIFETIME, "След затухает за 1.6 секунды")
 	check(fx._life.count(0.0) == WaterEffects.DROPS, "Капли освобождаются")
+	check(not fx._spray.visible and fx._idle, "Без кругов и капель пул скрыт, шейдер не обновляется")
 	fx.tick(1.0 / 60.0, p, b, Vector3(100, 0, 0), h)
 	var cleared := true
 	for event in fx.rings:

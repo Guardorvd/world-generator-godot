@@ -3,9 +3,9 @@ extends Node3D
 ## Короткий след на существующей поверхности и фиксированный пул капель.
 ## Никакой симуляции жидкости: глубину и уровень берём из игрового Heightfield.
 
-const RINGS := 16
+const RINGS := 16      # = размер disturbances[] в water.gdshader
 const DROPS := 64
-const LIFETIME := 1.6
+const LIFETIME := 1.6  # = 1.6 в water.gdshader
 
 var rings := PackedVector4Array()
 var levels := PackedFloat32Array()
@@ -20,15 +20,22 @@ var _velocities := PackedVector3Array()
 var _life := PackedFloat32Array()
 var _water_y := PackedFloat32Array()
 var _spray: MultiMeshInstance3D
+var _idle := false  # кругов нет и это уже передано в материалы: такт не трогает шейдер
 
 
 func setup(water: Node3D) -> void:
 	rings.resize(RINGS)
 	levels.resize(RINGS)
 	_currents.resize(RINGS)
-	for node: MeshInstance3D in water.get_children():
-		var mat := node.mesh.surface_get_material(0) as ShaderMaterial
-		if mat != null:
+	_materials.clear()
+	# Среди детей воды бывают не только поверхности (сам WaterEffects, другие узлы) и сетки без
+	# поверхностей: их пропускаем, а не падаем на типе
+	for node in water.get_children():
+		var mi := node as MeshInstance3D
+		if mi == null or mi.mesh == null or mi.mesh.get_surface_count() == 0:
+			continue
+		var mat := mi.mesh.surface_get_material(0) as ShaderMaterial
+		if mat != null and not _materials.has(mat):
 			_materials.append(mat)
 	var mesh := SphereMesh.new()
 	mesh.radius = 0.022
@@ -60,6 +67,8 @@ func clear() -> void:
 	_wait = 0.0
 	for i in DROPS:
 		_spray.multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ZERO), Vector3.ZERO))
+	_spray.visible = false
+	_idle = false
 	_upload()
 
 
@@ -74,9 +83,11 @@ func tick(dt: float, p: PlayerState, b: BikeRide, previous: Vector3, h: Heightfi
 				rings[i].w = 0.0
 			else:
 				levels[i] = h.ground_at(rings[i].x, rings[i].y) + depth
+	var drops := false
 	for i in DROPS:
 		if _life[i] <= 0.0:
 			continue
+		drops = true
 		_life[i] = maxf(0.0, _life[i] - dt)
 		_velocities[i].y -= 9.8 * dt
 		_positions[i] += _velocities[i] * dt
@@ -84,6 +95,8 @@ func tick(dt: float, p: PlayerState, b: BikeRide, previous: Vector3, h: Heightfi
 			_life[i] = 0.0
 		var size := minf(1.0, _life[i] * 6.0)
 		_spray.multimesh.set_instance_transform(i, Transform3D(Basis.IDENTITY.scaled(Vector3.ONE * size), _positions[i]))
+	# без живых капель пул не рисуется: 64 нулевых экземпляра — всё равно вызов отрисовки
+	_spray.visible = drops
 	_wait -= dt
 	var pos := Vector3(p.x, p.feet, p.z)
 	var velocity := (pos - previous) / maxf(dt, 0.0001)
@@ -127,9 +140,17 @@ func _emit(pos: Vector3, velocity: Vector3, power: float, current := Vector2.ZER
 		_velocities[_drop].y = 0.65 + power * (0.7 + k * 0.16)
 		_life[_drop] = 0.22 + power * 0.20
 		_drop = (_drop + 1) % DROPS
+	_spray.visible = true
+	_idle = false
 
 
 func _upload() -> void:
+	var active := false
+	for event in rings:
+		active = active or (event.z < LIFETIME and event.w > 0.0)
+	if not active and _idle:
+		return
+	_idle = not active
 	for material in _materials:
 		material.set_shader_parameter("disturbances", rings)
 		material.set_shader_parameter("disturbance_levels", levels)
