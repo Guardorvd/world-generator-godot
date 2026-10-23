@@ -183,6 +183,7 @@ func reset_motion() -> void:
 	airborne = false
 	crashed = false
 	land_impact = 0.0
+	bottom_out = 0.0
 
 
 ## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
@@ -207,7 +208,9 @@ func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
 	for dist: float in [0.9, 1.5]:
 		for d: Vector2 in dirs:
 			var q := Vector2(x, z) + d * dist
-			if PlayerState.is_passable(w, heights, q.x, q.y, y, PlayerState.BODY_R):
+			var floor_y := heights.surface_at(q.x, q.y, y)
+			if BikeRecovery.clear_path(w, heights, Vector3(x, y, z), Vector3(q.x, floor_y, q.y)) \
+					and BikeRecovery.headroom(heights, q.x, q.y, floor_y):
 				return q
 	return Vector2(x, z)
 

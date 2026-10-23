@@ -213,9 +213,6 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 			bike.z = b.z
 			bike.y = heights.surface_at(b.x, b.z, b.y)
 			bike.heading = b.heading
-		# После загрузки стоим: скорость, падение и полёт не переносятся.
-		if b.riding and Vector2(bike.x - player.x, bike.z - player.z).length() < 3.0:
-			bike.mount(player)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
 	crash = BikeCrash.new()
@@ -227,6 +224,11 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	hud.set_world(world, loaded.map_image)
 	vegetation.update(player.x, player.z, true)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+	# Посадка из сохранения проходит те же проверки после появления локальных препятствий.
+	if not saved.is_empty() and saved.bike.riding and bike.prepare_mount(player, world, heights):
+		bike.mount(player)
+		_snap()
+		bike_view.draw(1.0)
 	if not opening_spot.is_empty():
 		bike.x = player.x
 		bike.z = player.z
@@ -652,12 +654,16 @@ func _unhandled_input(event: InputEvent) -> void:
 		if event.pressed:
 			photo.zoom_by(1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1)
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if show_map:
+			return
 		if event.pressed and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 			capture_mouse()
 		elif event.pressed and photo.active:
 			photo.shoot()
 		_dragging = event.pressed
 	elif event is InputEventMouseMotion:
+		if show_map:
+			return
 		# без захвата мыши можно смотреть, зажав левую кнопку
 		# сразу после захвата курсор переносится в центр окна, этот скачок — не взгляд
 		if Time.get_ticks_msec() - _captured_at < 150:

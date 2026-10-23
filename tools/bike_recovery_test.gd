@@ -79,6 +79,7 @@ func _run() -> void:
 	h.gap = false
 	_check_bridge()
 	_check_mount()
+	_check_dismount()
 	_check_rescue()
 	var key := InputEventKey.new()
 	key.physical_keycode = KEY_Y
@@ -121,6 +122,40 @@ func _check_mount() -> void:
 	check(not b.prepare_mount(p, w, h), "стоячий велосипед нельзя оседлать через провал")
 	h.gap = false
 	check(b.prepare_mount(p, w, h), "обычная посадка на свободном месте работает")
+
+
+func _check_dismount() -> void:
+	var b := BikeRide.new()
+	b.x = 40.4
+	b.z = 40.0
+	b.y = 100.0
+	var p := PlayerState.new()
+	h.obstacles = ForestObstacles.new(w, h)
+	# Тонкая стена между рамой и свободной точкой слева.
+	h.obstacles._add(39.95, 20, 39.95, 60, 0.05, 100, INF)
+	b.mount(p)
+	b.bottom_out = 2.0
+	b.dismount(p, w, h)
+	check(p.x > 40.0 and not b.riding, "сход не переносит пешехода сквозь тонкую стену")
+	check(b.bottom_out == 0.0, "сход очищает отложенный стук подвески")
+	h.obstacles = ForestObstacles.new(w, h)
+	h.cliff = true
+	b.x = 39.6
+	b.heading = PI
+	b.mount(p)
+	b.dismount(p, w, h)
+	check(p.x < 40.0 and p.feet == 100.0, "сход у обрыва выбирает опору на прежнем уровне")
+	h.cliff = false
+	h.gap = true
+	b.x = 40.4
+	b.heading = 0.0
+	b.mount(p)
+	b.dismount(p, w, h)
+	check(p.x > 40.0, "сход не перескакивает узкий провал")
+	h.gap = false
+	b.mount(p)
+	b.dismount(p, w, h)
+	check(is_equal_approx(p.x, b.x - 0.9), "на свободной земле сохраняется обычный сход слева")
 
 
 func _check_rescue() -> void:

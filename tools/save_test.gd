@@ -15,7 +15,8 @@ func _initialize() -> void:
 
 func run() -> void:
 	root.size = Vector2i(1280, 720)
-	Saves.dir = "res://.godot/save_test"
+	# Отдельный каталог запуска: не трогаем результаты предыдущих проверок.
+	Saves.dir = "res://.godot/save_test_%d_%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	DirAccess.make_dir_recursive_absolute(Saves.dir)
 	var a := {key = "settlement:1", kind = "settlement", name = "Дом", x = 1, y = 1, src = {}}
 	var b := {key = "settlement:2", kind = "settlement", name = "Цель", x = 20, y = 20, src = {}}
@@ -89,8 +90,13 @@ func run() -> void:
 		await integration(main)
 	main.queue_free()
 	await process_frame
-	for name: String in DirAccess.get_files_at(Saves.dir):
-		DirAccess.remove_absolute(Saves.dir.path_join(name))
+	for seed_text: String in ["save-test", "another-world", "Север-1234"]:
+		for slot: String in ["auto", "manual"]:
+			var path := Saves.path_for(seed_text, slot)
+			for suffix: String in ["", ".bak"]:
+				if FileAccess.file_exists(path + suffix):
+					DirAccess.remove_absolute(path + suffix)
+	DirAccess.remove_absolute(Saves.dir)
 	print("SAVE TEST failures: ", failed)
 	quit(1 if failed else 0)
 
@@ -121,6 +127,43 @@ func integration(main: Node) -> void:
 	check(main.hud.visited.has(towns[0].key) and game.quests.cargo and game.quests.step().do == "carry", "live discoveries and delivery restored")
 	check(Vector2(game.player.x - snapshot.player.x, game.player.z - snapshot.player.z).length() < 0.1, "live player position restored")
 	check(absf(game.hour - snapshot.player.hour) < 0.01, "world time restored")
+	check(not game.bike.riding or (game.bike.can_mount(game.player) and not BikeRecovery.placement(game.world, game.heights,
+		Vector3(game.bike.x, game.bike.y, game.bike.z), game.bike.heading).is_empty()), "restored rider has a safe bicycle placement")
+	game.set_paused(false)
+	game.bike.speed = 0.0
+	game._open_settlement(towns[0].src)
+	check(game._settlement_open(), "settlement board opens after restore")
+	var before := Vector3(game.player.x, game.player.feet, game.player.z)
+	Input.action_press("move_forward")
+	game._physics_process(1.0 / 60.0)
+	Input.action_release("move_forward")
+	check(before == Vector3(game.player.x, game.player.feet, game.player.z), "settlement board blocks movement")
+	game._choose_settlement_route(towns[1])
+	check(not game._settlement_open() and main.hud.goal.key == towns[1].key, "settlement route closes board and updates goal")
+	game._open_settlement(towns[0].src)
+	game.toggle_map()
+	check(game.show_map and not game._settlement_open(), "map closes settlement board")
+	var click := InputEventMouseButton.new()
+	click.button_index = MOUSE_BUTTON_LEFT
+	click.pressed = true
+	game._unhandled_input(click)
+	check(not game._dragging, "unhandled map click cannot start camera dragging")
+	var old_yaw := game.yaw
+	game._captured_at = -1000
+	game._dragging = true
+	var motion := InputEventMouseMotion.new()
+	motion.screen_relative = Vector2(100, 50)
+	game._unhandled_input(motion)
+	check(game.yaw == old_yaw, "map mouse motion cannot rotate camera")
+	game.set_paused(true)
+	check(game.paused and not game._settlement_open(), "pause closes modal gameplay states")
+	game.set_paused(false)
+	check(game.show_map, "resume preserves open map")
+	game.toggle_map()
+	before = Vector3(game.player.x, game.player.feet, game.player.z)
+	game.travel_to(towns[1])
+	check(before == Vector3(game.player.x, game.player.feet, game.player.z), "restored cargo still blocks fast travel")
+	game.set_paused(true)
 	snapshot.signature = "outdated"
 	check(not GameWorld.can_restore(snapshot, loaded.world), "changed world blocked")
 	game.queue_free()
