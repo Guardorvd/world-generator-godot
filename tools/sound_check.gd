@@ -3,7 +3,7 @@ extends SceneTree
 ## WorldAudio в мире выбирает поверхность шагов и слышит воду. Запуск:
 ##   godot --headless --script res://tools/sound_check.gd
 
-const LOOPS := ["wind", "water", "surf", "fire", "roll"]
+const LOOPS := ["wind", "water", "surf", "fire", "roll", "grit", "freewheel", "chain"]
 
 
 func _init() -> void:

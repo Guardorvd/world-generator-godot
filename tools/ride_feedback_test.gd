@@ -55,7 +55,7 @@ func _run() -> void:
 	audio.update(pos, 11.0, false, 1.0)
 	check(audio._goal[audio._roll] == 0.0 and audio._roll.volume_db <= WorldAudio.SILENT and audio._contact_dist == 0.0,
 		"в полёте шины и касания затихают")
-	check(audio._goal.size() == 3, "в звуковом фоне только вода, прибой и шины, без петли ветра")
+	check(audio._goal.size() == 6, "в звуковом фоне вода, прибой и слои велосипеда (шины, покрытие, трещотка, цепь), без петли ветра")
 	audio.free()
 	h.depth = 0.0
 	h.deck = 0.0

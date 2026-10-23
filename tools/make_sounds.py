@@ -1,7 +1,7 @@
 """Звуки игры (с 2.7): синтез из шума и синусов, без чужих записей.
 
 Запуск из папки проекта:  python tools/make_sounds.py
-Пишет resources/sounds/*.wav (22050 Гц, моно, 16 бит). Петли (ветер, вода, прибой, костёр, шины)
+Пишет resources/sounds/*.wav (22050 Гц, моно, 16 бит). Петли (ветер, вода, прибой, костёр, шины, покрытие, трещотка, цепь)
 сшиты плавным переходом конца в начало и помечены точками петли (блок smpl), поэтому Godot
 повторяет их сам. Случайность с постоянным зерном: повторный запуск даёт те же файлы.
 Громкость каждого звука в игре задаёт scripts/render/world_audio.gd, здесь все нормированы одинаково.
@@ -205,11 +205,49 @@ def fire(n, rng):
 
 
 def roll(n, rng):
-    """Шины по грунту: низкий шорох; высоту и громкость в игре задаёт скорость"""
-    body = lowpass(pink(n, rng), 520.0)
-    hum = bandpass(pink(n, rng), 170.0, 1.5)
-    wob = [0.8 + 0.2 * math.sin(TAU * 4.0 * i / RATE) for i in range(n)]
-    return [(b + h * 0.8) * w for b, h, w in zip(body, hum, wob)]
+    """Шины по грунту: мягкий низкий шорох. С 10.3 без частой волны громкости (она «ухала» 4 раза в
+    секунду), только медленное неровное дыхание; высоту и громкость в игре задаёт скорость"""
+    body = lowpass(pink(n, rng), 380.0)
+    hum = bandpass(pink(n, rng), 140.0, 1.2)
+    breath = smooth_noise(n, 0.3, rng)
+    return [(b + h * 0.6) * (0.85 + 0.15 * w) for b, h, w in zip(body, hum, breath)]
+
+
+def grit(n, rng):
+    """Покрытие под шиной (10.3): россыпь мелких мягких песчинок на тихой подложке. Плотность
+    случайная, без ритма, поэтому не звучит как очередь щелчков"""
+    out = [v * 0.25 for v in lowpass(pink(n, rng), 700.0)]
+    t = 0
+    while t < n:
+        t += int(RATE * rng.expovariate(90.0)) + 1
+        g = bandpass(burst(rng.uniform(1.5, 3.5), rng.uniform(0.5, 1.2), rng, 0.3), rng.uniform(1300, 2800), 1.3)
+        mix(out, g, t, rng.expovariate(1.0) * 0.35)
+    return lowpass(out, 3500.0)
+
+
+def freewheel(rng, seconds=2.0, rate=20):
+    """Трещотка втулки накатом (10.3): ровные тихие щелчки собачек, rate в секунду. В игре высота
+    (а с ней и частота щелчков) идёт за скоростью колеса. Целое число щелчков — петля без шва"""
+    n = int(RATE * seconds)
+    out = [0.0] * n
+    step = n / int(seconds * rate)
+    for k in range(int(seconds * rate)):
+        at = int(k * step + rng.uniform(-0.0004, 0.0004) * RATE) % n
+        g = rng.uniform(0.85, 1.0)
+        mix(out, bandpass(burst(4, 0.7, rng, 0.15), 3000.0, 2.5), at, g)
+        mix(out, tone(0.008, 5200.0, 5100.0, harm=0.0), at, g * 0.12)
+    return out
+
+
+def chain(n, rng):
+    """Цепь под нагрузкой (10.3): мягкое жужжание звёздочек и едва слышный стрекот звеньев"""
+    out = [v * 0.7 for v in bandpass(pink(n, rng), 650.0, 1.8)]
+    mix(out, [v * 0.5 for v in lowpass(pink(n, rng), 160.0)])
+    t = 0
+    while t < n:
+        t += int(RATE / 55.0 * rng.uniform(0.9, 1.1))
+        mix(out, bandpass(burst(3, 0.6, rng, 0.2), 2200.0, 2.0), t, rng.uniform(0.08, 0.15))
+    return out
 
 
 def bird(kind, rng):
@@ -243,8 +281,8 @@ def step(kind, rng):
         mix(out, bandpass(burst(150, 45, rng, 15), rng.uniform(2400, 3400), 0.8), int(RATE * 0.01), 0.35)
         mix(out, thump(60, 90, 60, 18), 0, 0.5)
     elif kind == "gravel":
-        for _ in range(rng.randint(26, 38)):
-            g = bandpass(burst(rng.uniform(1.5, 4), rng.uniform(0.6, 1.5), rng, 0.2), rng.uniform(1800, 4200), 1.5)
+        for _ in range(rng.randint(18, 26)):   # с 10.3 реже и ниже: меньше колючего «треска»
+            g = bandpass(burst(rng.uniform(1.5, 4), rng.uniform(0.6, 1.5), rng, 0.2), rng.uniform(1200, 3000), 1.5)
             mix(out, g, int(RATE * 0.11 * rng.random() ** 1.6), rng.uniform(0.3, 1.0))
         mix(out, lowpass(burst(70, 20, rng, 4), 600.0), 0, 0.6)
         mix(out, thump(50, 95, 65, 14), 0, 0.4)
@@ -293,7 +331,10 @@ def main():
     write_wav("water", loop(lambda n: water(n, rng), 6.0, 0.8), True)
     write_wav("surf", loop(lambda n: surf(n, rng), 12.0, 1.0), True)
     write_wav("fire", loop(lambda n: fire(n, rng), 6.0, 0.6), True)
-    write_wav("roll", loop(lambda n: roll(n, rng), 4.0, 0.5), True)
+    write_wav("roll", loop(lambda n: roll(n, rng), 8.0, 0.8), True)
+    write_wav("grit", loop(lambda n: grit(n, rng), 5.0, 0.4), True)
+    write_wav("freewheel", freewheel(rng), True)
+    write_wav("chain", loop(lambda n: chain(n, rng), 4.0, 0.4), True)
     for k in range(3):
         write_wav("bird_%d" % (k + 1), bird(k, rng))
     for kind, count in (("soft", 4), ("gravel", 4), ("wood", 3), ("splash", 3)):

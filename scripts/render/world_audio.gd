@@ -1,6 +1,6 @@
 class_name WorldAudio
 extends Node
-## Звуки путешествия (с 2.7): вода, прибой, костёр в поселении, птицы, шаги, шины велосипеда,
+## Звуки путешествия (с 2.7): вода, прибой, костёр в поселении, птицы, шаги, звуки велосипеда,
 ## приземление. Звуки — короткие WAV в resources/sounds, синтезированы tools/make_sounds.py.
 ## Фон — петли AudioStreamPlayer, громкость которых плавно следует за местом:
 ## расстояние до реки или озера и до моря (по полям WorldData.dist_water и dist_ocean), до
@@ -8,6 +8,10 @@ extends Node
 ## удары — AudioStreamRandomizer: случайный вариант, высота и громкость, без повтора подряд.
 ## Местность проверяется не каждый кадр, а раз в SAMPLE секунд. Общая громкость — шина Master
 ## (GameSettings.volume).
+##
+## Езда (с 10.3) собрана слоями, как у звукорежиссёра: шины (основа, громкость и высота от скорости),
+## покрытие (россыпь песчинок, плотность и тембр по поверхности), трещотка втулки накатом и мягкая цепь,
+## пока крутят педали. Трещотка и цепь сменяют друг друга, слои плавно перетекают, без ритмичных щелчков.
 
 const TILE := GameConfig.TILE
 const SAMPLE := 0.25        # раз в столько секунд проверяется местность вокруг
@@ -16,13 +20,18 @@ const SILENT := -60.0       # дБ: тише этого петля не слыш
 const WATER_R := 45.0       # м: дальше реки и озера не слышно
 const SEA_R := 140.0        # м: дальше моря не слышно
 const FIRE_R := 30.0        # м: костёр слышно ближе этого
-const BIRD_DELAY := Vector2(3.0, 9.0)   # с: пауза между голосами птиц
+const BIRD_DELAY := Vector2(5.0, 14.0)  # с: пауза между голосами птиц (с 10.3 реже, чтобы не надоедали)
+const TICK_SPEED := 6.0     # м/с: при этой скорости трещотка щёлкает как записано (20 раз в секунду)
+const PEDAL_HOLD := 0.3     # с: столько после последнего поворота педалей ещё слышна цепь
 
 # наибольшая громкость каждого звука, дБ: всё негромкое, фон под шагами
 const DB_WATER := -15.0
 const DB_SURF := -14.0
 const DB_FIRE := -9.0
-const DB_ROLL := -13.0
+const DB_ROLL := -14.0
+const DB_GRIT := -19.0
+const DB_TICK := -24.0
+const DB_CHAIN := -25.0
 const DB_STEP := -15.0
 const DB_LAND := -10.0
 const DB_BIRD := -6.0
@@ -37,6 +46,10 @@ var heights: Heightfield
 var _water: AudioStreamPlayer
 var _surf: AudioStreamPlayer
 var _roll: AudioStreamPlayer
+var _grit: AudioStreamPlayer
+var _tick: AudioStreamPlayer
+var _chain: AudioStreamPlayer
+var _db := {}               # петля -> наибольшая громкость, дБ
 var _fire: AudioStreamPlayer3D
 var _bird: AudioStreamPlayer3D
 var _land: AudioStreamPlayer
@@ -52,12 +65,20 @@ var _roll_rough := 0.3
 var _roll_pitch := 1.0
 var _contact_dist := 0.0
 var _contact_wait := 0.0
+var _contact_next := 2.0    # м до следующего касания досок или брызг (случайно, без ритма)
+var _grit_level := 0.0      # сколько песчинок на этой поверхности, 0..1
+var _grit_pitch := 1.0
+var _crank := 0.0
+var _pedal_t := 0.0
 
 
 func _ready() -> void:
-	_water = _loop("water")
-	_surf = _loop("surf")
-	_roll = _loop("roll")
+	_water = _loop("water", DB_WATER)
+	_surf = _loop("surf", DB_SURF)
+	_roll = _loop("roll", DB_ROLL)
+	_grit = _loop("grit", DB_GRIT)
+	_tick = _loop("freewheel", DB_TICK)
+	_chain = _loop("chain", DB_CHAIN)
 	_fire = AudioStreamPlayer3D.new()
 	_fire.stream = load(S + "fire.wav")
 	_fire.unit_size = 4.0
@@ -83,12 +104,13 @@ func _ready() -> void:
 	add_child(_land)
 
 
-func _loop(file: String) -> AudioStreamPlayer:
+func _loop(file: String, db: float) -> AudioStreamPlayer:
 	var p := AudioStreamPlayer.new()
 	p.stream = load(S + file + ".wav")
 	p.volume_db = SILENT
 	add_child(p)
 	_goal[p] = 0.0
+	_db[p] = db
 	return p
 
 
@@ -164,39 +186,55 @@ func _surface(x: float, z: float, feet: float) -> String:
 
 
 ## Кадр: фон по месту (pos — ноги игрока); bike_speed — скорость велосипеда (м/с, 0 — пешком),
-## rolling — колёса на земле
-func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean := 0.0) -> void:
+## rolling — колёса на земле, crank — угол педалей (меняется, пока крутят педали)
+func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean := 0.0, crank := 0.0) -> void:
 	_sample_t -= dt
 	if _sample_t <= 0.0:
 		_sample_t = SAMPLE
 		_sample(pos)
 		_sample_rolling(pos)
+	var v := absf(bike_speed)
 	# Скорость передаётся шинами и касаниями покрытия, без постоянного шума ветра.
-	var rush := clampf(absf(bike_speed) / GameConfig.BIKE_SPEED, 0.0, 1.3)
+	var rush := clampf(v / GameConfig.BIKE_SPEED, 0.0, 1.3)
 	# Покрытие меняет плотность и тембр шин, поворот чуть усиливает их шорох.
 	var corner := clampf(absf(bike_lean) / 0.28, 0.0, 1.0)
+	var near := 1.0 - exp(-8.0 * dt)
 	_goal[_roll] = clampf(rush * (0.55 + _roll_rough * 0.45 + corner * 0.12), 0.0, 1.0) if rolling else 0.0
-	_roll.pitch_scale = lerpf(_roll.pitch_scale, (0.7 + 0.45 * rush) * _roll_pitch, 1.0 - exp(-8.0 * dt))
+	_roll.pitch_scale = lerpf(_roll.pitch_scale, (0.7 + 0.45 * rush) * _roll_pitch, near)
+	# Покрытие: песчинки гуще на гравии и камне, реже на земле; на скорости гуще и выше.
+	_goal[_grit] = clampf(_grit_level * smoothstep(0.5, 4.0, v) * (0.6 + 0.4 * minf(rush, 1.0)), 0.0, 1.0) if rolling else 0.0
+	_grit.pitch_scale = lerpf(_grit.pitch_scale, _grit_pitch * (0.85 + 0.25 * minf(rush, 1.0)), near)
+	# Педали крутят — тихая цепь; накатом — трещотка втулки, её щелчки идут за скоростью колеса.
+	if crank != _crank:
+		_crank = crank
+		_pedal_t = PEDAL_HOLD
+	_pedal_t = maxf(0.0, _pedal_t - dt)
+	var wheel := smoothstep(0.6, 2.5, v) if bike_speed > 0.0 else 0.0   # назад трещотка молчит
+	_goal[_tick] = wheel * (0.0 if _pedal_t > 0.0 else 1.0)
+	_tick.pitch_scale = clampf(v / TICK_SPEED, 0.3, 2.0)
+	_goal[_chain] = (0.5 + 0.5 * minf(rush, 1.0)) * wheel if _pedal_t > 0.0 else 0.0
+	_chain.pitch_scale = lerpf(_chain.pitch_scale, 0.85 + 0.3 * minf(rush, 1.0), near)
 	_contact_wait = maxf(0.0, _contact_wait - dt)
-	if rolling and absf(bike_speed) > 1.0:
-		_contact_dist += absf(bike_speed) * dt
-		# Короткие тихие касания из имеющихся звуков: камешки, доски, брызги.
-		if _contact_dist >= 2.0 and _contact_wait <= 0.0:
-			_contact_dist = fmod(_contact_dist, 2.0)
+	if rolling and v > 1.0:
+		_contact_dist += v * dt
+		# Доски и брызги — редкие тихие касания на случайном расстоянии; гравий звучит слоем песчинок.
+		if _contact_dist >= _contact_next and _contact_wait <= 0.0:
+			_contact_dist = 0.0
+			_contact_next = randf_range(1.5, 4.0)
 			_contact_wait = 0.16
-			if _roll_surface != "soft":
+			if _roll_surface == "wood" or _roll_surface == "splash":
 				var contact_player: AudioStreamPlayer = _steps[_roll_surface]
 				contact_player.volume_db = DB_STEP - 12.0 + minf(rush, 1.0) * 4.0
 				contact_player.play()
 	else:
 		_contact_dist = 0.0
 	var a := 1.0 - exp(-SMOOTH * dt)
-	var fast := 1.0 - exp(-8.0 * dt)   # шины затихают сразу, как велосипед оторвался от земли
 	for p: AudioStreamPlayer in _goal:
-		# уровень хранится отдельно: из volume_db тихий звук читался как «молчит» и не мог разгореться
-		var cur := lerpf(_level.get(p, 0.0), _goal[p], fast if p == _roll else a)
+		# уровень хранится отдельно: из volume_db тихий звук читался как «молчит» и не мог разгореться.
+		# Звуки велосипеда идут за ним сразу (затихают, как только колёса оторвались), фон — плавно.
+		var cur := lerpf(_level.get(p, 0.0), _goal[p], a if p == _water or p == _surf else near)
 		_level[p] = cur
-		p.volume_db = _max_db(p) + linear_to_db(cur) if cur > 0.001 else SILENT
+		p.volume_db = _db[p] + linear_to_db(cur) if cur > 0.001 else SILENT
 	_bird_t -= dt
 	if _bird_t <= 0.0:
 		_bird_t = randf_range(BIRD_DELAY.x, BIRD_DELAY.y)
@@ -212,6 +250,8 @@ func _sample_rolling(pos: Vector3) -> void:
 	_roll_surface = _surface(pos.x, pos.z, pos.y)
 	_roll_rough = 0.65
 	_roll_pitch = 0.9
+	_grit_level = 0.3 if _roll_surface == "soft" else 1.0
+	_grit_pitch = 0.7 if _roll_surface == "soft" else 1.0
 	var info := world.tile_info(pos.x / TILE, pos.z / TILE)
 	var surf := PlayerState.surface(info) if not info.is_empty() else RoadSurface.NONE
 	if heights.road_refinement != null:
@@ -223,17 +263,11 @@ func _sample_rolling(pos: Vector3) -> void:
 	if _roll_surface == "wood":
 		_roll_rough = 0.4
 		_roll_pitch = 0.75
+		_grit_level = 0.15
 	elif _roll_surface == "splash":
 		_roll_rough = 0.8
 		_roll_pitch = 0.8
-
-
-func _max_db(p: AudioStreamPlayer) -> float:
-	if p == _water:
-		return DB_WATER
-	if p == _surf:
-		return DB_SURF
-	return DB_ROLL
+		_grit_level = 0.0
 
 
 ## Что слышно вокруг: вода, море, птицы, ближайший костёр

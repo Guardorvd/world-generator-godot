@@ -494,7 +494,7 @@ func _process(delta: float) -> void:
 	var fire_time := lerpf(_prev_time, time, alpha)
 	SettlementsBuilder.animate_fires(fires, fire_time, pos)
 	_light_night(pos, fire_time)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0)
 
 	info_timer -= delta
 	if info_timer <= 0.0:
