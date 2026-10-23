@@ -65,14 +65,14 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 		skeleton.set_bone_pose_scale(i, snapshot[i].basis.get_scale())
 
 
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
 		return
 	if not left_grip.is_finite() or not right_grip.is_finite() or not motion.is_finite():
 		return
-	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath):
+	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag):
 		return
 	_poses.clear()
 	sway = clampf(sway, -0.09, 0.09)
@@ -80,12 +80,13 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.
 	var hip := Vector3(motion.y * 0.35, 0.97 - motion.z * 0.45, 0.17 + motion.x * 0.5)
 	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath, -0.08 - tuck * 0.45 + motion.x)
-	var upper_basis := Basis.from_euler(Vector3(0.0, look * 0.3 + sway, -sway * 0.4))
+	var body_look := look + look_lag
+	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.3 + sway, -sway * 0.4))
 	var head_basis := Basis.from_euler(Vector3(-pitch * 0.6, look, -roll * 0.6 + sway * 0.12))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, Basis(Vector3.UP, -sway * 0.3))
 	_aim("Spine", hip, chest, sway * 0.25)
-	_aim("Chest", hip.lerp(chest, 0.55), chest, look * 0.3 + sway)
+	_aim("Chest", hip.lerp(chest, 0.55), chest, body_look * 0.3 + sway)
 	_set_bone("Neck", chest + Vector3(0, 0.07, -0.02))
 	_set_bone("Head", chest + Vector3(0, 0.22 - tuck * 0.05 - breath * 0.65, -0.09 + tuck * 0.15), head_basis)
 	for side in [-1.0, 1.0]:

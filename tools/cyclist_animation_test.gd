@@ -168,6 +168,35 @@ func run() -> void:
 	var sk := bike.rider.skeleton
 	var head_world := bike.global_basis * sk.get_bone_global_pose(sk.find_bone("Head")).basis
 	check(absf(head_world.get_euler().x) < 0.2, "Head stabilizes against the slope")
+	# 10.6+: взгляд начинает поворот раньше плеч; усилие не переключается мгновенно.
+	reset()
+	state.steer = 1
+	advance()
+	check(absf(bike._cur[BikeView.S_LOOK]) > absf(bike._cur[BikeView.S_BODY_LOOK]) * 2.0, "Head leads shoulders into a turn")
+	for i in 90:
+		advance()
+	check(absf(bike._cur[BikeView.S_LOOK] - bike._cur[BikeView.S_BODY_LOOK]) < 0.001, "Shoulders catch up to a steady turn")
+	reset()
+	state.crank += 4 * DT
+	advance(1)
+	check(bike._effort > 0 and bike._effort < 0.2, "Pedal effort eases in")
+	for i in 60:
+		state.crank += 4 * DT
+		advance(1)
+	var loaded := bike._effort
+	advance()
+	check(bike._effort < loaded and bike._effort > loaded * 0.8, "Releasing pedals retains a brief body follow-through")
+	# Одинаковые толчки разными колёсами дают противоположный перенос веса.
+	var road_positions: Array[float] = []
+	for front in [true, false]:
+		reset()
+		state.squash_fv = 2.0 if front else 0.0
+		state.squash_rv = 0.0 if front else 2.0
+		for i in 30:
+			advance()
+		road_positions.append(bone("Head").z)
+		contacts()
+	check(road_positions[0] > neutral.z + 0.005 and road_positions[1] < neutral.z - 0.005, "Front and rear bumps shift weight in opposite directions")
 	# Extreme combined inputs through a full pedal revolution, including angle wrap.
 	for sign_value in [-1.0, 1.0]:
 		reset()
@@ -204,7 +233,7 @@ func run() -> void:
 	bike.snap(state)
 	bike.draw(1)
 	check(bike._landing == 0, "Snap clears transient motion")
-	check(bike._cur[BikeView.S_SWAY] == 0 and bike._cur[BikeView.S_BREATH] == 0 and bike._breath_phase == 0, "Snap clears effort and breathing phase")
+	check(bike._cur[BikeView.S_SWAY] == 0 and bike._cur[BikeView.S_BREATH] == 0 and bike._breath_phase == 0 and bike._effort == 0, "Snap clears effort and breathing phase")
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")
@@ -256,4 +285,4 @@ func capture() -> void:
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_106_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_106plus_" + mode + ".png")
