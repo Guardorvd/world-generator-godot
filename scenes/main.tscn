@@ -166,7 +166,7 @@ horizontal_alignment = 1
 layout_mode = 2
 theme_override_colors/font_color = Color(0.8, 0.82, 0.85, 1)
 theme_override_font_sizes/font_size = 15
-text = "Прогулка от первого лица по миру, который создаётся заново: горы, реки, леса и тропы"
+text = "Исследуйте мир, открывайте места и выполняйте задания"
 horizontal_alignment = 1
 autowrap_mode = 3
 
@@ -186,6 +186,13 @@ text = "Миры"
 [node name="SeedTabs" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
 layout_mode = 2
 theme_override_constants/separation = 6
+
+[node name="Saved" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+unique_name_in_owner = true
+layout_mode = 2
+toggle_mode = true
+text = "Сохранения"
+theme_override_font_sizes/font_size = 14
 
 [node name="Recent" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
@@ -239,9 +246,9 @@ text = "Сохранённых миров нет"
 [node name="ClearCache" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/CacheRow"]
 unique_name_in_owner = true
 layout_mode = 2
-tooltip_text = "Удалить сохранённые миры с диска. Списки миров останутся, миры создадутся заново при запуске"
+tooltip_text = "Удалить кэш. Сохранения прогресса и задания останутся. Миры создадутся заново при запуске."
 theme_override_font_sizes/font_size = 13
-text = "Очистить"
+text = "Очистить кэш"
 
 [node name="Side" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
 custom_minimum_size = Vector2(320, 0)
@@ -249,7 +256,7 @@ layout_mode = 2
 theme_override_constants/separation = 8
 
 [node name="PreviewFrame" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-custom_minimum_size = Vector2(320, 280)
+custom_minimum_size = Vector2(320, 160)
 layout_mode = 2
 
 [node name="Preview" type="TextureRect" parent="UI/Root/Menu/Panel/Box/Columns/Side/PreviewFrame"]
@@ -301,7 +308,7 @@ custom_minimum_size = Vector2(320, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(1, 1, 1, 0.5)
 theme_override_font_sizes/font_size = 13
-text = "Одно зерно — всегда один и тот же мир. Поделитесь зерном, и друг попадёт в тот же мир."
+text = "Зерно задаёт мир. Ваш прогресс сохраняется отдельно."
 autowrap_mode = 3
 
 [node name="WorldStatus" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
@@ -310,7 +317,7 @@ custom_minimum_size = Vector2(320, 0)
 layout_mode = 2
 theme_override_colors/font_color = Color(0.85, 0.72, 0.42, 0.9)
 theme_override_font_sizes/font_size = 14
-text = "Новый мир"
+text = "Другой случайный мир"
 autowrap_mode = 3
 
 [node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
@@ -430,12 +437,12 @@ text = "Настройки"
 [node name="NewWorld" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-text = "Новый мир"
+text = "Другой случайный мир"
 
 [node name="ToMenu" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)
 layout_mode = 2
-text = "Главное меню"
+text = "Сохранить и в меню"
 
 [node name="Exit" type="Button" parent="UI/Root/Pause/Panel/Box"]
 custom_minimum_size = Vector2(0, 44)

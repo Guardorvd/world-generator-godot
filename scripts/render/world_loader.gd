@@ -47,7 +47,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		r.timings.cache_layers = got.layers
 		if r.from_cache:
 			if on_progress.is_valid():
-				on_progress.call(0.5, "Мир из сохранённых")
+				on_progress.call(0.5, "Мир из кэша")
 			view = WorldCache.load_view(seed_text, size)
 			r.timings.cache_view = int(not view.is_empty())
 			side.start(r._prepare.bind(r.world, px, null, view.is_empty()))

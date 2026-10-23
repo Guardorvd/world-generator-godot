@@ -9,6 +9,7 @@ extends Node
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
+const Saves := preload("res://scripts/game/save_game.gd")
 
 var game: GameWorld
 var busy := false
@@ -21,6 +22,12 @@ var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
 var _seed_tab := "recent"      # вкладка списка миров: recent, favorites, recommended
 var _previews := {}            # зерно -> превью карты из кэша (ImageTexture) или null
+var _pending_save := {}
+var _save_elapsed := 0.0
+var _save_status: Label
+var _load_manual: Button
+var _saved_discoveries := 0
+var _progress_enabled := false # инструменты не записывают пользовательский прогресс
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -42,15 +49,18 @@ func _ready() -> void:
 	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
 	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
-	WorldCache.enabled = get_tree().current_scene == self
+	_progress_enabled = get_tree().current_scene == self
+	WorldCache.enabled = _progress_enabled
+	get_tree().auto_accept_quit = false
+	_setup_save_controls()
 	if WorldCache.enabled:
 		WorldCache.keep_only(GameSettings.keep_seeds())
 	var tabs := ButtonGroup.new()
-	for tab: String in ["recent", "favorites", "recommended"]:
+	for tab: String in ["recent", "favorites", "recommended", "saved"]:
 		var b: Button = _tab_button(tab)
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
-	_show_seed_tab("recent" if not GameSettings.recent_seeds.is_empty() else "recommended")
+	_show_seed_tab("saved" if not Saves.seeds().is_empty() else ("recent" if not GameSettings.recent_seeds.is_empty() else "recommended"))
 	%LoadPreview.texture = null
 	_show("menu")
 	bg_thread = Thread.new()
@@ -194,7 +204,7 @@ func _on_dice_pressed() -> void:
 # карта крупно, зерно, звёздочка, что будет при запуске (из сохранённого или заново) и «Начать игру».
 
 func _tab_button(tab: String) -> Button:
-	return {recent = %Recent, favorites = %Favorites, recommended = %Recommended}[tab]
+	return {recent = %Recent, favorites = %Favorites, recommended = %Recommended, saved = %Saved}[tab]
 
 
 ## Превью карты мира из кэша (null — мир ещё не запускали)
@@ -211,18 +221,18 @@ func _world_status(seed_text: String) -> Array:
 		return ["", ""]
 	var n := WorldCache.ready_layers(seed_text)
 	if n > WorldGenerator.LAYERS.size():
-		return ["готов", "Мир сохранён и загрузится быстро."]
+		return ["готов", "Кэш готов: мир загрузится быстрее. Прогресс хранится отдельно."]
 	if n > 0:
-		return ["частично", "Мир сохранён частично: игра обновилась, изменившаяся часть мира создастся заново."]
+		return ["частично", "Кэш обновится частично. Сохранение прогресса хранится отдельно."]
 	if _preview_tex(seed_text) != null:
 		return ["обновится", "Игра обновилась: мир создастся заново, это около минуты."]
-	return ["новый", "Новый мир: создание займёт около минуты, дальше он сохранится."]
+	return ["новый", "Кэша нет: создание займёт около минуты. Сохранения прогресса сохраняются."]
 
 
 func _show_seed_tab(tab: String) -> void:
 	_seed_tab = tab
 	# выбранная вкладка — золотой подписью, как заголовок; остальные приглушены
-	for name: String in ["recent", "favorites", "recommended"]:
+	for name: String in ["recent", "favorites", "recommended", "saved"]:
 		var b := _tab_button(name)
 		b.set_pressed_no_signal(name == tab)
 		var color := Color(0.85, 0.72, 0.42) if name == tab else Color(1, 1, 1, 0.55)
@@ -234,6 +244,8 @@ func _show_seed_tab(tab: String) -> void:
 		child.queue_free()
 	var rows: Array = []
 	match tab:
+		"saved":
+			rows = Saves.seeds().map(func(s: String) -> Dictionary: return {seed = s, note = "Прогресс"})
 		"recent":
 			rows = GameSettings.recent_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
 		"favorites":
@@ -243,7 +255,7 @@ func _show_seed_tab(tab: String) -> void:
 	if rows.is_empty():
 		var hint := Label.new()
 		hint.text = {recent = "Здесь появятся последние миры", favorites = "Отметьте мир звёздочкой, и он останется здесь",
-			recommended = "Автор пока ничего не рекомендовал"}[tab]
+			recommended = "Автор пока ничего не рекомендовал", saved = "Сохранения появятся после начала игры"}[tab]
 		hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 		hint.add_theme_font_size_override("font_size", 14)
 		hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -345,7 +357,7 @@ func _star_tip(fav: bool, full: bool) -> String:
 		return "Убрать из избранного"
 	if full:
 		return "Избранное заполнено (%d)" % GameSettings.FAVORITES_MAX
-	return "В избранное: мир останется в списке и сохранённым"
+	return "В избранное: мир останется в списке и кэше"
 
 
 func _pick_seed(seed_text: String) -> void:
@@ -377,6 +389,13 @@ func _update_selection() -> void:
 	star.text = "★" if fav else "☆"
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
+	var latest := _latest_save(seed_text)
+	%Start.text = "Продолжить" if not latest.data.is_empty() else "Начать путешествие"
+	_load_manual.disabled = Saves.read_slot(seed_text, "manual").data.is_empty()
+	if not latest.data.is_empty():
+		var d: Dictionary = latest.data
+		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s\nКэш: %s" % [
+			d.visited.size(), d.quest.done, Time.get_datetime_string_from_unix_time(int(d.saved_at)).replace("T", " ") + " UTC", _world_status(seed_text)[0]]
 
 
 func _on_star_selected() -> void:
@@ -399,8 +418,8 @@ func _update_cache_info() -> void:
 	if not WorldCache.enabled:
 		return
 	var u := WorldCache.usage()
-	%CacheInfo.text = "Сохранённых миров нет" if u.worlds == 0 \
-		else "Сохранено миров: %d · %d МБ" % [u.worlds, roundi(u.bytes / 1048576.0)]
+	%CacheInfo.text = "Кэш пуст" if u.worlds == 0 \
+		else "Кэш: %d миров · %d МБ" % [u.worlds, roundi(u.bytes / 1048576.0)]
 	%ClearCache.disabled = u.worlds == 0
 
 
@@ -429,6 +448,11 @@ func _on_menu_background(img: Image) -> void:
 
 
 func _process(delta: float) -> void:
+	if game != null and not busy and not game.paused:
+		_save_elapsed += delta
+		if _save_elapsed >= 60.0 or hud.visited.size() != _saved_discoveries:
+			_save_elapsed = 0.0
+			_save_current()
 	if busy:
 		var seconds := (Time.get_ticks_msec() - _load_started_ms) / 1000
 		if seconds != _load_elapsed:
@@ -456,19 +480,34 @@ func _on_start() -> void:
 	if seed_text.is_empty():
 		seed_text = random_seed()
 	seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
+	var latest := _latest_save(seed_text)
+	if latest.data.is_empty() and _has_save(seed_text):
+		_message("Не удалось загрузить прогресс", latest.error + " Файлы оставлены без изменений.")
+		return
 	GameSettings.remember_seed(seed_text)
 	GameSettings.save_settings()
 	# мир, выпавший из последних и не избранный, больше не хранится
 	if WorldCache.enabled:
 		WorldCache.keep_only(GameSettings.keep_seeds())
-	start_game(seed_text)
+	start_game(seed_text, WorldGenerator.START_SIZE, latest.slot)
 
 
 ## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте.
 ## С 9.8 по умолчанию открыт весь план; меньшее окно ставят инструменты проверки (WorldData.open_around).
-func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE) -> void:
+func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "") -> void:
 	if busy:
 		return
+	if not _save_current():
+		return
+	_pending_save = {}
+	if not slot.is_empty():
+		var result := Saves.read_slot(seed_text, slot)
+		if result.data.is_empty():
+			_message("Ошибка загрузки", result.error)
+			return
+		_pending_save = result.data
+		if result.backup:
+			_message("Резервная копия", "Основное сохранение повреждено. Загружается предыдущая исправная копия.")
 	busy = true
 	_load_started_ms = Time.get_ticks_msec()
 	_free_game()
@@ -497,17 +536,27 @@ func _set_progress(p: float, label: String) -> void:
 
 func _on_world_ready(loaded: WorldLoader) -> void:
 	gen_thread.wait_to_finish()
+	if not _pending_save.is_empty() and not GameWorld.can_restore(_pending_save, loaded.world):
+		busy = false
+		_show("menu")
+		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Для нового путешествия выберите другое зерно.")
+		return
 	# GameWorld.start идёт в главном потоке: подпись должна успеть показаться до него
 	_set_progress(0.97, "Окружение вокруг игрока")
 	await get_tree().process_frame
 	game = GameScene.instantiate()
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
-	game.start(loaded, hud)
+	game.start(loaded, hud, _pending_save)
+	_save_elapsed = 0.0
+	_saved_discoveries = hud.visited.size()
+	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)
 	hud.visible = not game.opening_active()
 	hud.set_map_visible(false)
 	_show("")
 	busy = false
+	if _pending_save.is_empty():
+		_save_current()
 
 
 func _toggle_pause() -> void:
@@ -519,6 +568,7 @@ func _toggle_pause() -> void:
 		_resume()
 	else:
 		game.set_paused(true)
+		_save_current()
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		_show("pause")
 
@@ -543,6 +593,8 @@ func _free_game() -> void:
 
 
 func _back_to_menu() -> void:
+	if not _save_current():
+		return
 	_free_game()
 	hud.visible = false
 	_previews.clear()   # после игры у мира появилось или обновилось превью
@@ -551,7 +603,106 @@ func _back_to_menu() -> void:
 
 
 func _exit_game() -> void:
+	if busy:
+		_message("Мир загружается", "Дождитесь завершения загрузки перед выходом.")
+		return
+	if not _save_current():
+		return
 	get_tree().quit()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		_exit_game()
+
+
+func _latest_save(seed_text: String) -> Dictionary:
+	var auto := Saves.read_slot(seed_text)
+	var manual := Saves.read_slot(seed_text, "manual")
+	var use_manual: bool = not manual.data.is_empty() and (auto.data.is_empty() or manual.data.saved_at > auto.data.saved_at)
+	var result: Dictionary = manual if use_manual else auto
+	result.slot = ("manual" if use_manual else "auto") if not result.data.is_empty() else ""
+	return result
+
+
+func _has_save(seed_text: String) -> bool:
+	for slot: String in ["auto", "manual"]:
+		var path := Saves.path_for(seed_text, slot)
+		if FileAccess.file_exists(path) or FileAccess.file_exists(path + ".bak"):
+			return true
+	return false
+
+
+func _save_current(slot := "auto") -> bool:
+	if game == null or game.quests == null or not _progress_enabled:
+		return true
+	var err := Saves.write_slot(game.save_state(), slot)
+	if err == OK:
+		_saved_discoveries = hud.visited.size()
+	_save_status.text = ("Ручное сохранение записано" if slot == "manual" else "Автосохранение записано") if err == OK else "Ошибка сохранения: " + error_string(err)
+	if err != OK:
+		_message("Не удалось сохранить", "Прогресс остаётся в текущей игре. Освободите место и повторите сохранение.\n" + error_string(err))
+	return err == OK
+
+
+func _message(title: String, body: String) -> void:
+	if game != null and not game.paused and not busy:
+		game.set_paused(true)
+		hud.visible = false
+		_show("pause")
+	var dialog := AcceptDialog.new()
+	dialog.title = title
+	dialog.dialog_text = body
+	dialog.dialog_autowrap = true
+	add_child(dialog)
+	dialog.popup_centered(Vector2i(520, 180))
+	dialog.confirmed.connect(dialog.queue_free)
+	dialog.canceled.connect(dialog.queue_free)
+
+
+func _confirm_load(seed_text: String, slot: String) -> void:
+	var dialog := ConfirmationDialog.new()
+	dialog.title = "Загрузить сохранение?"
+	dialog.dialog_text = "Текущий прогресс будет записан в автосохранение.\nЗатем загрузится ручное сохранение этого мира."
+	dialog.ok_button_text = "Загрузить"
+	add_child(dialog)
+	dialog.popup_centered()
+	dialog.confirmed.connect(func() -> void:
+		start_game(seed_text, WorldGenerator.START_SIZE, slot)
+		dialog.queue_free())
+	dialog.canceled.connect(dialog.queue_free)
+
+
+func _setup_save_controls() -> void:
+	_load_manual = Button.new()
+	_load_manual.text = "Загрузить ручное сохранение"
+	_load_manual.custom_minimum_size.y = 36
+	%Start.get_parent().add_child(_load_manual)
+	_load_manual.pressed.connect(func() -> void: _confirm_load(seed_edit.text.strip_edges(), "manual"))
+	var box := %Resume.get_parent()
+	var row := HBoxContainer.new()
+	box.add_child(row)
+	box.move_child(row, %Resume.get_index() + 1)
+	for action: String in ["Сохранить", "Загрузить"]:
+		var button := Button.new()
+		button.text = action
+		button.custom_minimum_size.y = 40
+		button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(button)
+		if action == "Сохранить":
+			button.pressed.connect(func() -> void: _save_current("manual"))
+		else:
+			button.pressed.connect(func() -> void:
+				if Saves.read_slot(game.world.seed_text, "manual").data.is_empty():
+					_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
+				else:
+					_confirm_load(game.world.seed_text, "manual"))
+	_save_status = Label.new()
+	_save_status.text = "Автосохранение: каждые 60 секунд, при паузе и выходе"
+	_save_status.add_theme_font_size_override("font_size", 13)
+	_save_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	box.add_child(_save_status)
+	box.move_child(_save_status, row.get_index() + 1)
 
 
 func _exit_tree() -> void:

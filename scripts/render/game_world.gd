@@ -109,7 +109,7 @@ static var _grass_mesh: Mesh
 ## Заполнить сцену загруженным миром (WorldLoader) и начать игру.
 ## С 9.0 сразу готовится только окружение игрока: ближний рельеф (до NEAR), лес вокруг и край за картой;
 ## дальний рельеф и растительность догружаются в игре, сначала по ходу движения.
-func start(loaded: WorldLoader, hud_node: Hud) -> void:
+func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	var t := Time.get_ticks_usec()
 	load_timings = loaded.timings
 	world = loaded.world
@@ -167,9 +167,20 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	var spawn_started := Time.get_ticks_usec()
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var opening_spot := OpeningRoute.choose(world, heights, rng)
+	var opening_spot := OpeningRoute.choose(world, heights, rng) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
 	player = PlayerState.spawn(world, heights)
+	if not saved.is_empty():
+		world.expand_territory(world.W)
+		player.x = saved.player.x
+		player.z = saved.player.z
+		player.feet = saved.player.feet
+		if not safe_position(player.x, player.z, player.feet):
+			player = PlayerState.spawn(world, heights)
+		else:
+			player.feet = heights.surface_at(player.x, player.z, player.feet)
+		yaw = saved.player.yaw
+		pitch = clampf(saved.player.pitch, -1.4, 1.4)
 	if not opening_spot.is_empty():
 		player.x = opening_spot.position.x
 		player.z = opening_spot.position.z
@@ -181,7 +192,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		vegetation.road.clear.append(Vector2(player.x, player.z))
 	terrain_stream.update(player.x, player.z, true, true, NEAR)
 	t = _mark("start_terrain_ms", t)
-	if opening_spot.is_empty() and world.settlements.size() > 0:
+	if saved.is_empty() and opening_spot.is_empty() and world.settlements.size() > 0:
 		# лицом к костру
 		var s := PlayerState.home(world)
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
@@ -194,6 +205,16 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
+	if not saved.is_empty():
+		var b: Dictionary = saved.bike
+		if safe_position(b.x, b.z, b.y):
+			bike.x = b.x
+			bike.z = b.z
+			bike.y = heights.surface_at(b.x, b.z, b.y)
+			bike.heading = b.heading
+		# После загрузки стоим: скорость, падение и полёт не переносятся.
+		if b.riding and Vector2(bike.x - player.x, bike.z - player.z).length() < 3.0:
+			bike.mount(player)
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
 	crash = BikeCrash.new()
@@ -224,6 +245,8 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		_snap()
 		bike_view.draw(1.0)
 	t = _mark("start_vegetation_ms", t)
+	if not saved.is_empty():
+		bike_view.set_lamp(saved.get("lamp", false))
 	camera.fov = GameSettings.fov
 	var wind_layer := CanvasLayer.new()
 	wind_layer.layer = 0
@@ -235,7 +258,7 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	day.terrain_mats = [$Terrain.material_override]
 	day.camera = camera
 	day.world_seed = world.seed_num
-	hour = GameSettings.pick_start_hour()
+	hour = GameSettings.pick_start_hour() if saved.is_empty() else fposmod(saved.player.hour, 24.0)
 	day.apply(hour, time)
 	_update_camera(1.0, 0.0)
 	if _opening:
@@ -251,6 +274,14 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 	quests = Quests.new()
 	quests.changed.connect(_quest_changed)
 	hud.quests = quests
+	if not saved.is_empty():
+		var places := {}
+		for p: Dictionary in hud.all_places():
+			places[p.key] = p
+		hud.visited = saved.visited.duplicate()
+		quests.restore_state(saved.quest, places)
+		_quest_changed()
+		hud.set_goal(places.get(saved.goal, {}))
 	photo.photo_taken.connect(_quest_photo)
 	photo.wanted_reach = Quests.SHOT_REACH
 	for s: Dictionary in world.settlements:
@@ -258,6 +289,45 @@ func start(loaded: WorldLoader, hud_node: Hud) -> void:
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
 	capture_mouse()
 	_mark("start_rest_ms", t)
+
+
+func safe_position(x: float, z: float, feet: float) -> bool:
+	return absf(x) < world.W * TILE * 4.0 and absf(z) < world.H * TILE * 4.0 \
+		and heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH \
+		and PlayerState.is_passable(world, heights, x, z, feet, PlayerState.BODY_R)
+
+
+static func save_signature(w: WorldData) -> String:
+	var rows: Array = []
+	for kind: String in WorldData.PLACE_KINDS:
+		for p: Dictionary in w.get(kind + "s"):
+			rows.append([kind, p.x, p.y, p.get("name", "")])
+	return var_to_bytes(rows).hex_encode().sha256_text()
+
+
+static func can_restore(saved: Dictionary, w: WorldData) -> bool:
+	if saved.signature != save_signature(w):
+		return false
+	var places := {}
+	for kind: String in WorldData.PLACE_KINDS:
+		for src: Dictionary in w.get(kind + "s"):
+			var id := WorldData.place_id(kind, src.x, src.y)
+			var p := w.place(id).duplicate()
+			p.key = id
+			places[id] = p
+	for id: String in saved.visited:
+		if not places.has(id):
+			return false
+	return Quests.new().restore_state(saved.quest, places)
+
+
+func save_state() -> Dictionary:
+	return {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
+		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
+		goal = hud.goal.get("key", ""),
+		lamp = bike_view.lamp_on(),
+		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour},
+		bike = {x = bike.x, z = bike.z, y = bike.y, heading = bike.heading, riding = bike.riding}}
 
 
 ## Время шага запуска в load_timings (мс); возвращает новую отметку

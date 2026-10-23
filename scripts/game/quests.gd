@@ -213,3 +213,65 @@ func _advance() -> String:
 	active = {}
 	changed.emit()
 	return "Задание выполнено: %s" % last
+
+
+## Только адреса мест: src и данные мира берутся из текущего мира.
+func save_state() -> Dictionary:
+	var q := active.duplicate(true)
+	if not q.is_empty():
+		q.target = q.target.key
+		for s: Dictionary in q.steps:
+			s.place = s.place.key
+	return {active = q, cargo = cargo, done = done, last = last,
+		by_giver = by_giver.duplicate(), known = known.duplicate(), completed = _done.duplicate()}
+
+
+static func valid_save(d: Dictionary) -> bool:
+	for key: String in ["active", "by_giver", "known", "completed"]:
+		if not d.get(key) is Dictionary:
+			return false
+	if not d.get("cargo") is bool or not d.get("done") is int or d.done < 0 or not d.get("last") is String:
+		return false
+	for key: Variant in d.by_giver:
+		if not key is String or not d.by_giver[key] is int or d.by_giver[key] < 0:
+			return false
+	for dict: Dictionary in [d.known, d.completed]:
+		for key: Variant in dict:
+			if not key is String or dict[key] != true:
+				return false
+	var q: Dictionary = d.active
+	if q.is_empty():
+		return not d.cargo
+	for key: String in ["id", "kind", "giver", "target", "title", "text"]:
+		if not q.get(key) is String:
+			return false
+	if not KINDS.has(q.kind) or not q.get("steps") is Array or not q.get("step") is int:
+		return false
+	if q.steps.is_empty() or q.step < 0 or q.step >= q.steps.size():
+		return false
+	for s: Variant in q.steps:
+		if not s is Dictionary or not STEPS.has(s.get("do", "")) or not s.get("place") is String:
+			return false
+	return d.cargo == (q.kind == "delivery" and q.steps[q.step].do == "carry")
+
+
+func restore_state(d: Dictionary, places: Dictionary) -> bool:
+	if not valid_save(d):
+		return false
+	var q: Dictionary = d.active.duplicate(true)
+	if not q.is_empty():
+		if not places.has(q.giver) or not places.has(q.target):
+			return false
+		q.target = places[q.target]
+		for s: Dictionary in q.steps:
+			if not places.has(s.place):
+				return false
+			s.place = places[s.place]
+	active = q
+	cargo = d.cargo
+	done = d.done
+	last = d.last
+	by_giver = d.by_giver.duplicate()
+	known = d.known.duplicate()
+	_done = d.completed.duplicate()
+	return true
