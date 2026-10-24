@@ -310,6 +310,22 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	_mark("start_rest_ms", t)
 
 
+func _exit_tree() -> void:
+	# Hud переживает игру; удалить только обработчики этой сцены, включая панель поселения.
+	if is_instance_valid(hud):
+		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to]]
+		if is_instance_valid(hud.settlement_panel):
+			var panel: SettlementPanel = hud.settlement_panel
+			connections.append_array([[panel.closed, _close_settlement],
+				[panel.destination_selected, _choose_settlement_route], [panel.bike_requested, _recall_bike],
+				[panel.quest_accepted, _accept_quest], [panel.quest_abandoned, _abandon_quest]])
+		for connection: Array in connections:
+			var source: Signal = connection[0]
+			var handler: Callable = connection[1]
+			if source.is_connected(handler):
+				source.disconnect(handler)
+
+
 func safe_position(x: float, z: float, feet: float) -> bool:
 	# 13.9+: дальние точки допустимы в закреплённых областях — их пропускает is_passable (accessible).
 	return is_finite(x) and is_finite(z) and (absf(x) < world.W * TILE * 4.0 and absf(z) < world.H * TILE * 4.0

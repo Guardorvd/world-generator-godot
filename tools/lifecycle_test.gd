@@ -14,12 +14,13 @@ var worlds := 4
 var k := 0
 var phase := "menu"
 var frames := 0
-var refs: Array[WeakRef] = []   # прошлые миры: после выхода в меню ссылки должны опустеть
+var refs: Array[WeakRef] = []   # мир, рельеф и остальные владельцы данных: все ссылки должны опустеть
 var mem: Array = []             # [статическая память МБ, объектов] в меню после каждого мира
 var fails := 0
 
 
 func _initialize() -> void:
+	_check_base_ownership()
 	var args := OS.get_cmdline_user_args()
 	for a in args.size() - 1:
 		if args[a] == "--size":
@@ -49,7 +50,7 @@ func _process(_delta: float) -> bool:
 				for r in refs:
 					if r.get_ref() != null:
 						alive += 1
-				_check(alive == 0, "после выхода в меню из мира %d прошлые миры освобождены (живых: %d)" % [k, alive])
+				_check(alive == 0, "после мира %d освобождены все %d объектов прошлых миров (живых: %d)" % [k, refs.size(), alive])
 				mem.append([Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0,
 					int(Performance.get_monitor(Performance.OBJECT_COUNT))])
 				print("  в меню после мира %d: память %.0f МБ, объектов %d" % [k, mem[-1][0], mem[-1][1]])
@@ -61,7 +62,14 @@ func _process(_delta: float) -> bool:
 		"loading":
 			if main.game == null or main.game.player == null:
 				return false
-			refs.append(weakref(main.game.world))
+			for value: Object in [main.game, main.game.world, main.game.heights, main.game.heights.road_refinement,
+					main.game.world.outer, main.game.player, main.game.bike, main.game.quests]:
+				if value != null:
+					refs.append(weakref(value))
+			# Панель открывает кнопки с замыканиями, которые тоже должны уйти вместе с миром.
+			if not main.game.world.settlements.is_empty():
+				main.game.hud.settlement_panel.open(main.game.world.settlements[0], main.game.world, [], false, main.game.quests)
+			main.game.tree_exited.connect(_check_hud_connections.bind(main.game))
 			# мир держат ровно игра и интерфейс; освобождаться он должен сам, без ручной уборки полей
 			phase = "play"
 			frames = 0
@@ -74,6 +82,36 @@ func _process(_delta: float) -> bool:
 				phase = "menu"
 				frames = 0
 	return false
+
+
+func _check_base_ownership() -> void:
+	# Прерванная генерация: финальная ручная очистка base_heights ещё не выполнялась.
+	var w := WorldData.new()
+	var h := Heightfield.new()
+	h.world = w
+	w.base_heights = h
+	var owner: WeakRef = weakref(w)
+	var cached: WeakRef = weakref(h)
+	var copy := h.copy()
+	w = null
+	_check(owner.get_ref() != null and copy.world != null, "игровая копия рельефа владеет миром")
+	copy = null
+	_check(owner.get_ref() == null and h.world == null, "общий рельеф не держит прерванный мир")
+	h = null
+	_check(cached.get_ref() == null, "общий рельеф освобождён без ручной очистки WorldData.base_heights")
+
+
+func _check_hud_connections(game: GameWorld) -> void:
+	# tree_exited испускается до удаления объекта: автоматическая уборка при free ещё не помогает.
+	var panel: Control = main.hud.settlement_panel
+	var sources: Array[Object] = [main.hud, panel]
+	var attached := 0
+	for source: Object in sources:
+		for description: Dictionary in source.get_signal_list():
+			for connection: Dictionary in source.get_signal_connection_list(description.name):
+				if connection.callable.get_object() == game:
+					attached += 1
+	_check(attached == 0, "обработчики GameWorld отключены от Hud и панели до удаления сцены")
 
 
 func _finish() -> void:

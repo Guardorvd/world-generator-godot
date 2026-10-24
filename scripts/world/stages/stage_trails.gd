@@ -562,12 +562,15 @@ static func _direction_cost(w: WorldData, a: Dictionary, b: Dictionary) -> float
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
 		a: int, b: int, state: Dictionary) -> PackedInt32Array:
 	var attempts: Array = []
+	# Стоимость не меняется внутри попытки связи: её правит _add_trail после возврата.
+	# Следующая связь получает новый номер, в том числе после изменения стоимости.
+	var cost_version := finder.next_cost_version()
 	# С 9.9 запасной поиск (ROAD_LIMIT) идёт в фоне, пока проверяется первый путь: после неудачи
 	# состояние восстановлено, и он с теми же входами. Совпадение входов проверяет сам поиск.
 	finder.use_corridor = true
-	finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT)
+	finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version)
 	for limit: float in [ROAD_GRADE, ROAD_LIMIT]:
-		var p := _road_path(finder, cost, a, b, true, limit)
+		var p := _road_path(finder, cost, a, b, true, limit, cost_version)
 		if p.is_empty():
 			continue
 		var q := _try_road_structures(w, p, finder, cost, state, attempts)
@@ -720,9 +723,9 @@ static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
 ## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
-static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE) -> PackedInt32Array:
+static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE, cost_version: int = -1) -> PackedInt32Array:
 	finder.use_corridor = wide
-	return finder.find_path(cost, a, b, ROAD_CLIMB, limit)
+	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version)
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:
@@ -997,6 +1000,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 		var dx: int = ends[1] % W - ends[0] % W
 		var dy: int = ends[1] / W - ends[0] / W
 		var length_sq := maxf(dx * dx + dy * dy, 1.0)
+		finder.terrain_changed()
 		for k in line.size():
 			state.on_axis[line[k]] = 1
 			# Следующие пути оценивают настил/пол, а не скрытое под сооружением дно или хребет.

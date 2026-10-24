@@ -22,9 +22,18 @@ var _search_us := 0
 var W := 0
 var H := 0
 ## Высоты в тех же единицах, что шаг сетки. Пустой массив отключает учёт подъёмов.
-var heights := PackedFloat32Array()
+var _heights_version := 0
+var _links_version := 0
+var _cost_version := 0
+var heights := PackedFloat32Array():
+	set(value):
+		heights = value
+		_heights_version += 1
 ## Разрешённые шаги по готовому настилу/полу: биты восьми направлений Grid.DX/DY.
-var links := PackedByteArray()
+var links := PackedByteArray():
+	set(value):
+		links = value
+		_links_version += 1
 var use_corridor := true # проверять ширину прохода
 var max_cross_grade := INF # предел земляных работ поперёк прохода
 ## Общий остаток раскрытий для нескольких поисков: -1 без ограничения, 0 — отказаться.
@@ -67,6 +76,25 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 
 func fast() -> Object:
 	return _fast
+
+
+## Новый неизменяемый снимок стоимости. После мутации/замены массива нужен новый номер.
+## Номер действует только в этом Pathfinder; -1 в find_path безопасно отключает повторное использование.
+func next_cost_version() -> int:
+	_cost_version += 1
+	return _cost_version
+
+
+## Поэлементные правки heights/links обходят setters: вызывать перед пакетом таких правок.
+func terrain_changed() -> void:
+	_heights_version += 1
+	_links_version += 1
+
+
+func _search_versions(cost_version: int) -> void:
+	_fast.CostVersion = cost_version
+	_fast.HeightsVersion = _heights_version
+	_fast.LinksVersion = _links_version
 
 
 ## Высоты в клетках, как heights. Кэш ленивый: считаются только просмотренные A* шаги.
@@ -138,10 +166,11 @@ func _measure_corridor(c: int, k: int) -> void:
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
-func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> PackedInt32Array:
 	if search_budget == 0:
 		return PackedInt32Array()
 	if _fast != null:
+		_search_versions(cost_version)
 		_fast.SearchBudget = search_budget
 		var started := Time.get_ticks_usec()
 		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
@@ -299,8 +328,9 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 ## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
 ## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
-func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> void:
+func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> void:
 	if _fast != null and search_budget != 0:
+		_search_versions(cost_version)
 		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
 
 

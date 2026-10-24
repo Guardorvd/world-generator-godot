@@ -2,7 +2,6 @@ using System;
 using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
-using System.Runtime.InteropServices;
 using System.Threading;
 using System.Threading.Tasks;
 using Godot;
@@ -14,7 +13,7 @@ using Godot;
 ///   обратный шаг берёт значение прямого — точки выборки и пары сравнений у них совпадают бит в бит;
 /// - узел поиска — одна запись (g и отметка «видел / раскрыл»), массивы читаются по указателям;
 /// - куча та же двоичная, с теми же сравнениями (порядок равных ключей не меняется), просеивание без ветвлений;
-/// - кэш поисков: тот же запрос (те же массивы по содержимому, концы, пределы) не ищется второй раз;
+/// - кэш поисков: тот же запрос (версии входов, концы, пределы) не ищется второй раз;
 /// - Prefetch: запасной поиск дороги заранее ищется в фоне, пока проверяется первый.
 /// Результат запроса с другим запасом раскрытий восстанавливается из числа раскрытий (Resolve).
 /// </summary>
@@ -26,6 +25,10 @@ public partial class FastGrid
 	private static readonly int[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
 	public bool ProfileSearches { get; set; }
 	public int SearchBudget { get; set; } = -1;
+	// Версия стоимости уникальна для снимка данных в пределах этого finder. -1 отключает кэш и prefetch.
+	public long CostVersion { get; set; } = -1;
+	public long HeightsVersion { get; set; }
+	public long LinksVersion { get; set; }
 	private long _searchCount, _expandedCount, _searchTicks, _cacheHits, _prefetchHits, _prefetchCount;
 	public Godot.Collections.Dictionary SearchStats() => new()
 	{
@@ -60,16 +63,15 @@ public partial class FastGrid
 		public float[] Cost, Heights;
 		public byte[] Links;
 		public int S, T, Version;
+		public long CostVersion, HeightsVersion, LinksVersion;
 		public double Climb, MaxGrade, MaxCross;
 		public bool UseCorridor;
 
 		public bool Same(Query o) =>
+			CostVersion >= 0 && CostVersion == o.CostVersion &&
+			HeightsVersion == o.HeightsVersion && LinksVersion == o.LinksVersion &&
 			S == o.S && T == o.T && Version == o.Version && UseCorridor == o.UseCorridor &&
-			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross) &&
-			Bits(Cost, o.Cost) && Bits(Heights, o.Heights) && Links.AsSpan().SequenceEqual(o.Links);
-
-		private static bool Bits(float[] a, float[] b) =>
-			ReferenceEquals(a, b) || MemoryMarshal.AsBytes(a.AsSpan()).SequenceEqual(MemoryMarshal.AsBytes(b.AsSpan()));
+			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross);
 	}
 
 	/// <summary>Итог поиска с запасом Budget (-1 — без предела): путь, число раскрытий, остановлен ли запасом.</summary>
@@ -197,7 +199,8 @@ public partial class FastGrid
 		new()
 		{
 			Cost = cost, S = s, T = t, Heights = heights, Climb = climb, MaxGrade = maxGrade, Links = links,
-			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Version = _corridorVersion
+			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Version = _corridorVersion,
+			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion
 		};
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
@@ -246,7 +249,7 @@ public partial class FastGrid
 	public void Prefetch(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade, int cap)
 	{
 		CancelPrefetch();
-		if (cap == 0)
+		if (cap == 0 || CostVersion < 0)
 			return;
 		_spare ??= new Search(_w * _h);
 		var q = MakeQuery(cost, s, t, heights, climb, maxGrade, links, useCorridor, maxCrossGrade);
@@ -288,6 +291,12 @@ public partial class FastGrid
 
 	private void Remember(Found found)
 	{
+		// Поиск завершён: скалярному ключу больше не нужны мегабайтные копии входных массивов.
+		found.Q.Cost = null;
+		found.Q.Heights = null;
+		found.Q.Links = null;
+		if (found.Q.CostVersion < 0)
+			return;
 		if (_found.Count >= CacheSize)
 			_found.RemoveAt(0);
 		_found.Add(found);

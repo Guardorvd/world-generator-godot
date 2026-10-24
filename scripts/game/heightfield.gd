@@ -24,7 +24,14 @@ const WOOD_LEN := 32.0      # пролёт от стольких метров �
 const WOOD_WATER := 12.0    # или воды под ним от стольких метров
 const PLANKS_HALF := 0.9    # полуширина дощатого настила тропы, м
 
-var world: WorldData
+var _world: WorldData
+var _world_ref: WeakRef
+var world: WorldData:
+	get:
+		return _world if _world != null else (_world_ref.get_ref() as WorldData if _world_ref != null else null)
+	set(value):
+		_world = value
+		_world_ref = null
 var hv := PackedFloat32Array()      # высоты с прорезанными руслами
 var hv_raw := PackedFloat32Array()  # высоты как в генераторе
 var water_level := PackedFloat32Array() # уровень воды в клетке (или -INF, если воды нет)
@@ -101,6 +108,14 @@ static func base_of(w: WorldData) -> Heightfield:
 	if w.base_heights != null:
 		return w.base_heights.copy()
 	return Heightfield.new(w, false)
+
+
+## Только общий рельеф, которым владеет сам WorldData: обратная ссылка не должна держать владельца.
+## Обычные игровые копии по-прежнему владеют миром через world.
+func weaken_world() -> void:
+	var owner := world
+	_world_ref = weakref(owner) if owner != null else null
+	_world = null
 
 
 ## Копия для своих путей, полотна и сооружений: hv своё, остальное общее и только читается

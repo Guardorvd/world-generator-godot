@@ -190,16 +190,38 @@ static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
 		return
 	var overlap := rect.intersection(Rect2i(0, 0, w.W, w.H))
 	var river := w.river_cells()
+	var source_h: PackedFloat32Array = w.h
+	var source_biome: PackedByteArray = w.biome
+	var source_temp: PackedFloat32Array = w.temp
+	var source_moist: PackedFloat32Array = w.moist
+	var source_elev: PackedFloat32Array = w.elev
+	var source_slope: PackedFloat32Array = w.slope
+	var source_dist: PackedFloat32Array = w.dist_ocean
+	var source_dw: PackedFloat32Array = w.dist_water
+	var dest_h: PackedFloat32Array = out.h
+	var dest_biome: PackedByteArray = out.biome
+	var dest_temp: PackedFloat32Array = out.temp
+	var dest_moist: PackedFloat32Array = out.moist
+	var dest_elev: PackedFloat32Array = out.elev
+	var dest_slope: PackedFloat32Array = out.slope
+	var dest_dist: PackedFloat32Array = out.dist
+	var dest_dw: PackedFloat32Array = out.dw
+	var dest_river: PackedByteArray = out.river
+	var dest_light: PackedFloat32Array = out.light
 	for y in range(overlap.position.y, overlap.end.y):
 		for x in range(overlap.position.x, overlap.end.x):
 			var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
 			var src := y * w.W + x
-			for name: String in ["h", "biome", "temp", "moist", "elev", "slope"]:
-				out[name][dst] = w.get(name)[src]
-			out.dist[dst] = w.dist_ocean[src]
-			out.dw[dst] = w.dist_water[src]
-			out.river[dst] = river[src]
-			out.light[dst] = StageClimate.natural_conditions(w, x, y).x
+			dest_h[dst] = source_h[src]
+			dest_biome[dst] = source_biome[src]
+			dest_temp[dst] = source_temp[src]
+			dest_moist[dst] = source_moist[src]
+			dest_elev[dst] = source_elev[src]
+			dest_slope[dst] = source_slope[src]
+			dest_dist[dst] = source_dist[src]
+			dest_dw[dst] = source_dw[src]
+			dest_river[dst] = river[src]
+			dest_light[dst] = StageClimate.natural_conditions(w, x, y).x
 
 
 ## Лес, камни и тростник чанка растительности key (WorldData.CHUNK_SIZE клеток, в общих координатах; для
