@@ -4,7 +4,10 @@ extends SceneTree
 ## стартовой области, разложенный отдельно, совпадает с разложенным при генерации; на границе стартовой
 ## области и местности за краем климат меняется не резче, чем между соседними клетками внутри карты.
 ##   godot --headless --path . --script res://tools/territory_test.gd
+## 13.9: -- --regions — три соседние области готовятся как в игре (RegionStream) и проверяются в загрузке:
+## куски рельефа, высоты, вода, мосты, дома, растительность и сборка их узлов.
 const SelfTest := preload("res://tools/selftest.gd")
+const TILE := GameConfig.TILE
 var fails := 0
 
 
@@ -127,5 +130,86 @@ func _init() -> void:
 			n_edge, edge / n_edge, inner / n_edge, 100.0 * biome_edge / n_edge, 100.0 * biome_inner / n_edge])
 		check(edge / n_edge < 4.0 * inner / n_edge + 0.02, "На границе стартовой области климат меняется скачком")
 	print("Кусков %d, чанков леса %d (объектов %d), суши на границе %d" % [keys.size(), vkeys.size(), trees, land])
+	if "--regions" in OS.get_cmdline_user_args():
+		regions_check(w)
 	print("territory_test: " + ("OK" if fails == 0 else "ошибок %d" % fails))
 	quit(1 if fails > 0 else 0)
+
+
+func regions_check(w: WorldData) -> void:
+	var started := Time.get_ticks_msec()
+	var heights := Heightfield.new(w)
+	var plan_hash := SelfTest.fnv(w.h.to_byte_array()) ^ SelfTest.fnv(w.path_mask)
+	var ledger := {}
+	var stream := RegionStream.new()
+	stream.world = w
+	stream.heights = heights
+	var C := OuterLand.C
+	var totals := {water = 0, bridges = 0, houses = 0, trails = 0, trees = 0, bad_trees = 0}
+	for key: Vector2i in [Vector2i(1, 0), Vector2i(2, 0), Vector2i(1, 1)]:
+		var done := RegionStream.prepare_region(w, key, ledger)
+		check(done.get("ready", false), "Область %s не подготовлена: %s" % [key, done.get("reason", "")])
+		if not done.get("ready", false):
+			continue
+		ledger = done.ledger
+		w.outer.set_ledger(ledger)
+		var region: Dictionary = ledger.regions[key]
+		var rect: Rect2i = region.rect
+		var f: Dictionary = region.fields
+		# Куски рельефа и высоты игры берут закреплённые клетки, а не сырой шум.
+		var cell := rect.position + Vector2i(C + 5, C + 7)
+		var chunk := OuterLand.compute_chunk(w, Vector2i(floori(float(cell.x) / C), floori(float(cell.y) / C)))
+		var k := (cell.y - rect.position.y) * rect.size.x + cell.x - rect.position.x
+		var at := (cell.y % C + 1) * (C + 3) + cell.x % C + 1
+		check(chunk.h[at] == f.h[k], "Кусок области %s не взял её высоту" % key)
+		check(absf(heights.ground_at((cell.x + 0.5) * TILE, (cell.y + 0.5) * TILE) - Heightfield.outer_meters(f.h[k])) < 0.001,
+			"Высота игры в области %s не совпадает с подготовленной" % key)
+		var wet := 0
+		var deep := 0
+		for i in f.river.size():
+			if f.river[i] == 0:
+				continue
+			wet += 1
+			var x: float = (rect.position.x + i % rect.size.x + 0.5) * TILE
+			var z: float = (rect.position.y + i / rect.size.x + 0.5) * TILE
+			deep += int(heights.depth_at(x, z) > 0.05)
+		check(wet == 0 or deep > 0, "В реке области %s нет глубины для движения" % key)
+		check(wet == 0 or not RegionStream.water_arrays(region).is_empty(), "У реки области %s нет меша воды" % key)
+		totals.water += wet
+		var roads: Dictionary = done.roads
+		var structs := heights.add_outer_bridges(roads.bridges)
+		for s: Dictionary in structs:
+			var mid := Vector2(s.ax + s.bx, s.az + s.bz) * 0.5
+			check(heights.deck_at(mid.x, mid.y, 1e9) > -INF, "На мост области %s нельзя встать" % key)
+		totals.bridges += structs.size()
+		for s: Dictionary in roads.settlements:
+			for hut: Dictionary in s.huts:
+				totals.houses += 1
+				check(not PlayerState.is_passable(w, heights, hut.x * TILE, hut.y * TILE), "Дом области %s проходим насквозь" % key)
+		totals.trails += roads.trails.size()
+		# Растительность по закреплённым маскам: деревья не стоят в воде и на полотне дорог.
+		for cy in range(rect.position.y / w.CS, rect.end.y / w.CS):
+			for cx in range(rect.position.x / w.CS, rect.end.x / w.CS):
+				var veg := OuterLand.vegetation(w, Vector2i(cx, cy))
+				for o in veg.x.size():
+					if veg.k[o] == Biomes.T_REED or veg.k[o] == Biomes.T_ROCK:
+						continue
+					totals.trees += 1
+					var q := (floori(veg.y[o]) - rect.position.y) * rect.size.x + floori(veg.x[o]) - rect.position.x
+					if f.river[q] != 0 or f.lake[q] != 0 or f.path[q] >= 2:
+						totals.bad_trees += 1
+		# Узлы собираются тем же кодом, что в игре.
+		var node := Node3D.new()
+		check(roads.trails.is_empty() or not stream._road_arrays(roads.trails).is_empty(), "Нет ленты дорог области %s" % key)
+		StructuresBuilder.build(node, heights, structs)
+		var places := WorldData.new()
+		places.settlements = roads.settlements
+		SettlementsBuilder.build(node, places, heights)
+		check(roads.settlements.is_empty() or node.get_child_count() > 0, "Дома области %s не собраны" % key)
+		node.free()
+	check(totals.bad_trees == 0, "Деревья в воде или на дороге: %d из %d" % [totals.bad_trees, totals.trees])
+	check(plan_hash == SelfTest.fnv(w.h.to_byte_array()) ^ SelfTest.fnv(w.path_mask), "Стартовый план изменился")
+	stream.free()
+	print("Области: %d, мокрых клеток %d, мостов %d, домов %d, дорог %d, деревьев %d; %d мс" % [
+		ledger.get("regions", {}).size(), totals.water, totals.bridges, totals.houses, totals.trails, totals.trees,
+		Time.get_ticks_msec() - started])

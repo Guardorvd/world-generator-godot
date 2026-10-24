@@ -27,7 +27,8 @@ static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
 
 
 ## Добавляет все мосты и туннели в parent общими мешами по квадратам мира (см. MeshBatch)
-static func build(parent: Node3D, heights: Heightfield) -> void:
+## only — свой список сооружений (13.9: мосты закреплённой области), иначе все heights.structures
+static func build(parent: Node3D, heights: Heightfield, only: Variant = null) -> void:
 	var batch := MeshBatch.new()
 	var wood := SettlementsBuilder.mat(Color8(0x8a, 0x6a, 0x48))
 	var board := SettlementsBuilder.mat(Color8(0x80, 0x64, 0x47))
@@ -37,7 +38,7 @@ static func build(parent: Node3D, heights: Heightfield) -> void:
 	var slab := SettlementsBuilder.mat(Color8(0x9d, 0x97, 0x8c))
 	var slab_dark := SettlementsBuilder.mat(Color8(0x86, 0x80, 0x76))
 	var plank_light := SettlementsBuilder.mat(Color8(0x9a, 0x7a, 0x55))
-	for s: Dictionary in heights.structures:
+	for s: Dictionary in (heights.structures if only == null else only):
 		if s.tunnel:
 			var a := Vector3(s.ax, s.ay, s.az)
 			var b := Vector3(s.bx, s.by, s.bz)

@@ -167,6 +167,17 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	for k in nodes.size():
 		var label: String = labels[_root(groups, k)]
 		if nodes[k].net != "" and nodes[k].net != label: merged_nets[nodes[k].net] = label
+	# 13.9: поля для растительности закреплённой области — как у плана в StageVegetation.
+	var path_src := PackedByteArray()
+	path_src.resize(w.N)
+	for i in w.N: path_src[i] = int(w.path_mask[i] > 0)
+	var village := PackedByteArray()
+	village.resize(w.N)
+	var reach := StageVegetation.VILLAGE_R
+	for s: Dictionary in w.settlements:
+		for y in range(maxi(0, ceili(s.y - reach)), mini(w.H - 1, floori(s.y + reach)) + 1):
+			for x in range(maxi(0, ceili(s.x - reach)), mini(w.W - 1, floori(s.x + reach)) + 1):
+				village[y * w.W + x] = 1
 	var out_places: Array = []
 	for k in w.settlements.size():
 		var s: Dictionary = w.settlements[k]
@@ -214,7 +225,8 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	return {ready = components.size() <= 1, reason = "" if components.size() <= 1 else "disconnected_routes",
 		trails = w.trails, bridges = bridges, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
 		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
-		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome}
+		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome,
+		slope = w.slope, dw = w.dist_water, dist_path = Grid.distance_field(w.W, w.H, path_src), village = village}
 
 
 ## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.
@@ -266,7 +278,7 @@ static func _nearest(w: WorldData, targets: PackedInt32Array, from: int) -> int:
 	return best
 
 
-## Дома, места и сооружения плана: подход их обходит, а не прокладывает дорогу сквозь них.
+## Дома, места, сооружения, деревья и камни плана: подход их обходит, а не прокладывает дорогу сквозь них.
 static func _old_places(source: WorldData, bounds: Rect2i) -> PackedByteArray:
 	var blocked := PackedByteArray()
 	blocked.resize(bounds.get_area())
@@ -282,6 +294,13 @@ static func _old_places(source: WorldData, bounds: Rect2i) -> PackedByteArray:
 		var b := Vector2(span.b % source.W + 0.5, span.b / source.W + 0.5)
 		var steps := maxi(1, ceili(a.distance_to(b)))
 		for k in steps + 1: mark.call(lerpf(a.x, b.x, float(k) / steps), lerpf(a.y, b.y, float(k) / steps), 2.0)
+	# Растительность плана уже стоит: подход идёт только по свободной земле (13.9).
+	var part := bounds.intersection(Rect2i(0, 0, source.W, source.H))
+	if part.has_area() and source.chunks.size() == source.CW * source.CH and source.CW > 0:
+		for cy in range(part.position.y / source.CS, (part.end.y - 1) / source.CS + 1):
+			for cx in range(part.position.x / source.CS, (part.end.x - 1) / source.CS + 1):
+				for o: int in source.chunks[cy * source.CW + cx]:
+					mark.call(source.obj_x[o], source.obj_y[o], 1.0)
 	return blocked
 
 

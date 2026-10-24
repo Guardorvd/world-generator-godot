@@ -77,7 +77,8 @@ static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: D
 		var rect: Rect2i = region.rect
 		var surface: Dictionary = batch.surfaces[n]
 		var cells := {h = PackedFloat32Array(), water_level = PackedFloat32Array(), dist = PackedFloat32Array(),
-			river = PackedByteArray(), ocean = PackedByteArray(), lake = PackedByteArray(), biome = PackedByteArray(), path = PackedByteArray()}
+			river = PackedByteArray(), ocean = PackedByteArray(), lake = PackedByteArray(), biome = PackedByteArray(), path = PackedByteArray(),
+			slope = PackedFloat32Array(), dw = PackedFloat32Array(), dist_path = PackedFloat32Array(), village = PackedByteArray()}
 		for name: String in cells: cells[name].resize(rect.get_area())
 		for y in range(rect.position.y, rect.end.y):
 			for x in range(rect.position.x, rect.end.x):
@@ -92,6 +93,9 @@ static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: D
 				cells.lake[dst] = region.fields.lake[src]
 				cells.biome[dst] = roads.biome[at]
 				cells.path[dst] = roads.path_mask[at]
+				# 13.9: для растительности и уклонов игры, как поля плана.
+				for name: String in ["slope", "dw", "dist_path", "village"]:
+					cells[name][dst] = roads[name][at] if roads.has(name) else 0
 		out.regions[keys[n]] = {rect = rect, fields = cells}
 	# Выходы, попавшие в закреплённые области, продолжены; остальные ждут следующего соседа.
 	var regions_now: Dictionary = out.regions

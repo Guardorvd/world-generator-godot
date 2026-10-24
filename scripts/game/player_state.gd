@@ -162,12 +162,14 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 	if not objects_only and (not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z)):
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
-	for s in w.settlements:
-		if absf(s.x * TILE - x) > 32.0 or absf(s.y * TILE - z) > 32.0:
-			continue
-		for u in s.huts:
-			if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):
-				return false
+	# (13.9: и в поселениях закреплённых соседних областей)
+	for list: Array in [w.settlements, w.outer.settlements if w.outer != null else []]:
+		for s in list:
+			if absf(s.x * TILE - x) > 32.0 or absf(s.y * TILE - z) > 32.0:
+				continue
+			for u in s.huts:
+				if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):
+					return false
 	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
 	for s in w.sites:
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:

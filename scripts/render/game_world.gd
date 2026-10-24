@@ -66,6 +66,7 @@ var windows: StandardMaterial3D # окна и фонари всех постро
 var fire_light: OmniLight3D     # один свет на весь мир: ночью у ближайшего костра
 var _night := -1.0
 var outer: OuterTerrain   # рельеф за краем стартовой области
+var regions: RegionStream # 13.9: подготовленные соседние области за краем плана
 var terrain_stream: PlanTerrain
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
 var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
@@ -203,6 +204,10 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	if world.outer != null:
 		outer.setup(world, heights)
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
+		regions = RegionStream.new()
+		regions.name = "Regions"
+		add_child(regions)
+		regions.setup(world, heights, outer, vegetation)
 	heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
@@ -828,14 +833,18 @@ func _light_night(pos: Vector3, t: float) -> void:
 	if absf(night - _night) > 0.02:
 		_night = night
 		SettlementsBuilder.set_night(windows, night)
+		if regions != null:
+			for m: StandardMaterial3D in regions.windows:
+				SettlementsBuilder.set_night(m, night)
 	var near := {}
 	var best := 80.0 * 80.0
 	if night > 0.05:
-		for f: Dictionary in fires:
-			var d := pos.distance_squared_to(f.pos)
-			if d < best:
-				best = d
-				near = f
+		for list: Array in [fires, regions.fires if regions != null else []]:
+			for f: Dictionary in list:
+				var d := pos.distance_squared_to(f.pos)
+				if d < best:
+					best = d
+					near = f
 	fire_light.visible = not near.is_empty()
 	if near.is_empty():
 		return
@@ -879,10 +888,16 @@ func _process(delta: float) -> void:
 	uploaded = terrain_stream.update(pos.x, pos.z, false, not uploaded) or uploaded
 	if world.outer != null:
 		outer.update(pos.x, pos.z, not uploaded)
+		# Новая область собирается в главном потоке: не в кадре с другой передачей на GPU.
+		if not uploaded and regions.update(pos.x, pos.z):
+			for m: StandardMaterial3D in regions.windows:
+				SettlementsBuilder.set_night(m, _night)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
 	var fire_time := lerpf(_prev_time, time, alpha)
 	SettlementsBuilder.animate_fires(fires, fire_time, pos)
+	if regions != null:
+		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
 	_light_night(pos, fire_time)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, bike.braking if bike.riding else 0.0)
 

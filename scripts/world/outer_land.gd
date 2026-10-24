@@ -30,6 +30,12 @@ var chunks := {}
 ## кладёт VegetationLayer, читают препятствия (ForestObstacles)
 var veg := {}
 var _ring: Array[Dictionary] = []   # над картой, под ней, слева, справа
+## 13.9: закреплённые соседние области (журнал RegionPreparation.commit). Их клетки окончательны:
+## compute берёт их поля вместо сырого шума, height/water/info — сначала из них. Журнал заменяется
+## целиком в главном потоке (set_ledger); фоновые задачи читают его под замком.
+var settlements: Array = []        # поселения закреплённых областей (мировые клетки), для столкновений
+var _ledger := {}
+var _lock := Mutex.new()
 
 
 func _init(w: WorldData) -> void:
@@ -111,7 +117,65 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			out.dist[o] = d
 			out.light[o] = light
 	_overlay(w, Rect2i(x0, y0, cw, ch), out)
+	if w.outer != null:
+		_overlay_regions(w.outer.get_ledger(), Rect2i(x0, y0, cw, ch), out)
 	return out
+
+
+func set_ledger(ledger: Dictionary) -> void:
+	_lock.lock()
+	_ledger = ledger
+	_lock.unlock()
+	settlements = ledger.get("settlements", [])
+
+
+func get_ledger() -> Dictionary:
+	_lock.lock()
+	var ledger := _ledger
+	_lock.unlock()
+	return ledger
+
+
+## Поля закреплённых областей поверх сырого шума: высоты после русел, вода, пути, биом, уклон.
+## water — уровень реки или озера (единицы h, иначе -INF), path — как path_mask. dist_path и
+## village для растительности появляются, только если прямоугольник задевает такую область.
+static func _overlay_regions(ledger: Dictionary, rect: Rect2i, out: Dictionary) -> void:
+	var area := rect.get_area()
+	out.water = PackedFloat32Array()
+	out.water.resize(area)
+	out.water.fill(-INF)
+	out.path = PackedByteArray()
+	out.path.resize(area)
+	var regions: Dictionary = ledger.get("regions", {})
+	for key: Vector2i in regions:
+		var r: Rect2i = regions[key].rect
+		var part := r.intersection(rect)
+		if not part.has_area():
+			continue
+		if not out.has("village"):
+			out.dist_path = PackedFloat32Array()
+			out.dist_path.resize(area)
+			out.dist_path.fill(99.0)
+			out.village = PackedByteArray()
+			out.village.resize(area)
+		var f: Dictionary = regions[key].fields
+		for y in range(part.position.y, part.end.y):
+			for x in range(part.position.x, part.end.x):
+				var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
+				var src := (y - r.position.y) * r.size.x + x - r.position.x
+				var h: float = f.h[src]
+				out.h[dst] = h
+				out.elev[dst] = maxf(0.0, h)
+				out.biome[dst] = f.biome[src]
+				out.slope[dst] = f.slope[src]
+				out.dist[dst] = f.dist[src]
+				out.dw[dst] = f.dw[src]
+				out.river[dst] = f.river[src]
+				out.path[dst] = f.path[src]
+				out.dist_path[dst] = f.dist_path[src]
+				out.village[dst] = f.village[src]
+				if f.river[src] != 0 or f.lake[src] != 0:
+					out.water[dst] = f.water_level[src]
 
 
 ## Внутри общего плана брать окончательные долины, воду и климат, а не заново сырой шум.
@@ -165,6 +229,19 @@ static func compute_chunk(w: WorldData, key: Vector2i) -> Dictionary:
 	return compute(w, key.x * C - 1, key.y * C - 1, C + 3, C + 3)
 
 
+## Клетка закреплённой области: [её поля, номер] или []. Эти поля окончательны и важнее кусков.
+func _region_at(i: int, j: int) -> Array:
+	var regions: Dictionary = get_ledger().get("regions", {})
+	if regions.is_empty():
+		return []
+	var size := WorldData.REGION_SIZE
+	var r: Variant = regions.get(Vector2i(floori(float(i) / size), floori(float(j) / size)))
+	if r == null:
+		return []
+	var rect: Rect2i = r.rect
+	return [r.fields, (j - rect.position.y) * rect.size.x + i - rect.position.x]
+
+
 ## Где лежит клетка (i, j) за краем карты: [поля, номер в них] или [] — куска ещё нет
 func _locate(i: int, j: int) -> Array:
 	if i >= 0 and j >= 0 and i < W and j < H:
@@ -186,20 +263,41 @@ func _locate(i: int, j: int) -> Array:
 
 ## Высота клетки за краем карты в единицах WorldData.h (ниже 0 — море); где кусок ещё не посчитан — уровень моря
 func height(i: int, j: int) -> float:
+	var known := _region_at(i, j)
+	if not known.is_empty():
+		return known[0].h[known[1]]
 	var at := _locate(i, j)
 	return at[0].h[at[1]] if not at.is_empty() else 0.0
 
 
 ## Посчитана ли клетка за краем карты
 func has(i: int, j: int) -> bool:
-	return not _locate(i, j).is_empty()
+	return not _region_at(i, j).is_empty() or not _locate(i, j).is_empty()
+
+
+## Уровень реки или озера закреплённой области в клетке (единицы h) или -INF; море — по высоте
+func water(i: int, j: int) -> float:
+	var known := _region_at(i, j)
+	if known.is_empty():
+		return -INF
+	var f: Dictionary = known[0]
+	var k: int = known[1]
+	return f.water_level[k] if f.river[k] != 0 or f.lake[k] != 0 else -INF
 
 
 ## Сведения о клетке за краем карты в том же виде, что WorldData.tile_info, или {}, если куска нет
 func info(i: int, j: int) -> Dictionary:
 	var at := _locate(i, j)
-	if at.is_empty():
+	var known := _region_at(i, j)
+	if at.is_empty() and known.is_empty():
 		return {}
+	if not known.is_empty():
+		# Закреплённая клетка: свои биом, вода и путь; климат — из куска, если он уже есть.
+		var g: Dictionary = known[0]
+		var q: int = known[1]
+		return {i = -1, biome = g.biome[q], river = g.river[q] != 0, path = g.path[q], surface = 0,
+			elev = maxf(0.0, g.h[q]), temp = at[0].temp[at[1]] if not at.is_empty() else 0.5,
+			moist = at[0].moist[at[1]] if not at.is_empty() else 0.5, slope = g.slope[q]}
 	var f: Dictionary = at[0]
 	var k: int = at[1]
 	return {i = -1, biome = f.biome[k], river = false, path = 0, surface = 0,

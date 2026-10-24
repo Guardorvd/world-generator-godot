@@ -24,6 +24,8 @@ var _nodes := {}         # номер куска -> MeshInstance3D (или null,
 var _tasks := {}         # номер куска -> {id, out}
 var _queue: Array[Vector2i] = []   # нужные куски, которых ещё нет, ближние в конце
 var _checked_at := Vector2.INF
+var _redo: Array[Vector2i] = []   # 13.9: загруженные куски закреплённой области, пересчитать поверх старых
+var _stale := {}                  # куски, чей расчёт начат до закрепления: после него пересчитать снова
 ## по куску на два ядра: главному потоку и растительности остаются свои
 var _task_limit := clampi(OS.get_processor_count() / 2, 1, TASKS)
 
@@ -77,6 +79,10 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 			break
 	if done != null:
 		_tasks.erase(done)
+		if _stale.has(done):
+			_stale.erase(done)
+			if _nodes.has(done):
+				_redo.append(done)
 	if Vector2(x, z).distance_to(_checked_at) > RECHECK:
 		_checked_at = Vector2(x, z)
 		for key: Vector2i in _nodes.keys():
@@ -90,6 +96,13 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 			if not _nodes.has(key) and not _tasks.has(key):
 				_queue.append(key)
 		_queue.reverse()
+	while _tasks.size() < _task_limit and not _redo.is_empty():
+		var key: Vector2i = _redo.pop_back()
+		if not _nodes.has(key) or _tasks.has(key):
+			continue
+		var out := {}
+		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
+		_tasks[key] = {id = id, out = out}
 	while _tasks.size() < _task_limit and not _queue.is_empty():
 		var key: Vector2i = _queue.pop_back()
 		if _nodes.has(key):
@@ -98,6 +111,18 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 		# низкий приоритет: растительность и кадр важнее дальнего рельефа
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
+
+
+## 13.9: область rect (клетки) закреплена — её куски пересчитываются. Старый кусок остаётся,
+## пока новый не готов: земля под игроком не пропадает.
+func refresh(rect: Rect2i) -> void:
+	for key: Vector2i in _nodes.keys() + _tasks.keys():
+		if not Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)).intersects(rect):
+			continue
+		if _tasks.has(key):
+			_stale[key] = true
+		elif not _redo.has(key):
+			_redo.append(key)
 
 
 ## Дождаться запущенных задач (перед выгрузкой мира)
@@ -146,6 +171,8 @@ func _center(key: Vector2i) -> Vector2:
 
 
 func _add(key: Vector2i, built: Dictionary) -> void:
+	if _nodes.get(key) != null:
+		_nodes[key].queue_free() # 13.9: пересчитанный кусок закреплённой области
 	land.chunks[key] = built.fields
 	var mi: MeshInstance3D = null
 	if not built.arrays.is_empty():

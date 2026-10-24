@@ -35,6 +35,8 @@ var _river_cells := {}             # клетка -> сегменты ленты
 ## Концы настила и пола вровень с землёй, чтобы на них въезжать без ступеньки
 var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
+var outer_structures: Array = []    # 13.9: мосты закреплённых соседних областей (в конце structures)
+var _outer_cells := {}              # Vector2i клетки за картой -> номера сооружений
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 var path_timings := {}
 var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
@@ -202,8 +204,12 @@ func build_structures() -> PackedInt32Array:
 		_style(s)
 		structures.append(s)
 	structures.append_array(tunnels)
+	var outer := outer_structures
+	outer_structures = []
+	_outer_cells = {}
+	_add_outer(outer)
 	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
-	for k in structures.size():
+	for k in structures.size() - outer_structures.size():
 		var s: Dictionary = structures[k]
 		var r: float = (s.half + TUNNEL_WALL) / TILE + 1.0
 		var ax: float = s.ax / TILE
@@ -218,6 +224,48 @@ func build_structures() -> PackedInt32Array:
 						_cells[i] = []
 					_cells[i].append(k)
 	return changed
+
+
+## 13.9: мосты закреплённых соседних областей: концы {a, b} — центры клеток в мировых клетках.
+## Высоты концов — земля области (OuterLand берёт её из журнала), вид — по длине и воде, как _style.
+## Возвращает новые сооружения для StructuresBuilder.
+func add_outer_bridges(spans: Array) -> Array:
+	var added: Array = []
+	for span: Dictionary in spans:
+		var a: Vector2 = span.a
+		var b: Vector2 = span.b
+		var s := _axis_between(a * TILE, b * TILE, false)
+		s.ay = ground_at(s.ax, s.az)
+		s.by = ground_at(s.bx, s.bz)
+		var water := 0.0
+		for k in range(0, ceili(s.len) + 1):
+			if depth_at(s.ax + s.ux * k, s.az + s.uz * k) > 0.3:
+				water += 1.0
+		s.style = "wood" if s.len >= WOOD_LEN or water >= WOOD_WATER else "stone" # в областях только дороги
+		s.rails = true
+		added.append(s)
+	_add_outer(added)
+	return added
+
+
+func _add_outer(list: Array) -> void:
+	for s: Dictionary in list:
+		var k := structures.size()
+		structures.append(s)
+		outer_structures.append(s)
+		var r: float = (s.half + TUNNEL_WALL) / TILE + 1.0
+		var ax: float = s.ax / TILE
+		var az: float = s.az / TILE
+		var bx: float = s.bx / TILE
+		var bz: float = s.bz / TILE
+		for y in range(floori(minf(az, bz) - r), ceili(maxf(az, bz) + r)):
+			for x in range(floori(minf(ax, bx) - r), ceili(maxf(ax, bx) + r)):
+				if (x >= 0 and y >= 0 and x < world.W and y < world.H) or Grid.segment_dist(x + 0.5, y + 0.5, ax, az, bx, bz) > r:
+					continue
+				var cell := Vector2i(x, y)
+				if not _outer_cells.has(cell):
+					_outer_cells[cell] = []
+				_outer_cells[cell].append(k)
 
 
 ## Выемка под туннелем t: клетки ближе TUNNEL_CUT к оси. inside — ровнять пол внутри туннеля (иначе только
@@ -259,8 +307,13 @@ func _style(s: Dictionary) -> void:
 ## Ось сооружения между центрами клеток a и b
 func _axis(a: int, b: int, tunnel: bool) -> Dictionary:
 	var W := world.W
+	return _axis_between(Vector2(a % W + 0.5, a / W + 0.5) * TILE, Vector2(b % W + 0.5, b / W + 0.5) * TILE, tunnel)
+
+
+## Ось между точками a и b в метрах
+static func _axis_between(a: Vector2, b: Vector2, tunnel: bool) -> Dictionary:
 	var s := {tunnel = tunnel, half = TUNNEL_HALF if tunnel else BRIDGE_HALF,
-		ax = (a % W + 0.5) * TILE, az = (a / W + 0.5) * TILE, bx = (b % W + 0.5) * TILE, bz = (b / W + 0.5) * TILE}
+		ax = a.x, az = a.y, bx = b.x, bz = b.y}
 	# концы не могут совпасть (иначе направление оси не считается), длина не ниже сантиметра
 	s.len = maxf(Grid.hypot(s.bx - s.ax, s.bz - s.az), 0.01)
 	s.arch = 0.0 if tunnel else minf(s.len * ARCH, 1.2)
@@ -289,7 +342,7 @@ func _cell_list(x: float, z: float) -> Variant:
 	var cx := floori(x / TILE)
 	var cz := floori(z / TILE)
 	if cx < 0 or cz < 0 or cx >= world.W or cz >= world.H:
-		return null
+		return _outer_cells.get(Vector2i(cx, cz)) # 13.9: мосты закреплённых областей
 	return _cells.get(cz * world.W + cx)
 
 
@@ -675,8 +728,13 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 	var tx := floori(x / TILE)
 	var tz := floori(z / TILE)
 	if tx < 0 or tz < 0 or tx >= world.W or tz >= world.H:
-		# за краем карты вода только морская: клетка ниже уровня моря
-		if world.outer == null or world.outer.height(tx, tz) >= 0.0:
+		if world.outer == null:
+			return 0.0
+		# 13.9: реки и озёра закреплённых областей; в остальном за краем только море
+		var level := world.outer.water(tx, tz)
+		if level > -INF:
+			return maxf(0.0, level * HS - ground_at(x, z))
+		if world.outer.height(tx, tz) >= 0.0:
 			return 0.0
 		return maxf(0.0, -ground_at(x, z))
 	# Плоскость моря рисуется во всём мире; в углублениях ниже нуля она

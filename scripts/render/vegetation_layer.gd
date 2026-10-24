@@ -68,6 +68,8 @@ var _task := -1
 var _pending: Array = [] # готовые чанки, ближайшие в конце
 var _built: Array = []   # пишет задача, читаем после wait_for_task_completion
 var _loaded := {}       # включая пустые чанки
+var _epoch := 0         # 13.9: номер закрепления областей; чанк, посчитанный раньше, устарел
+var _dirty := {}        # чанк за краем -> _epoch, когда его область закрепили
 var _defs := {}         # неизменяемые меши, материалы и локальные AABB
 var _grass_n := 0
 var _grass_bounds := AABB()
@@ -411,8 +413,11 @@ func _drop(p: Vector2) -> void:
 
 func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 	_built = []
+	var epoch := _epoch
 	for chunk in missing:
-		_built.append(_build_chunk(chunk) if _on_map(chunk) else _build_outer(chunk))
+		var built := _build_chunk(chunk) if _on_map(chunk) else _build_outer(chunk)
+		built.epoch = epoch
+		_built.append(built)
 	_fill_grass(px, pz)
 
 
@@ -555,9 +560,33 @@ func _build_entries(items: Dictionary) -> Dictionary:
 	return {entries = entries}
 
 
+## 13.9: область rect (клетки) закреплена: её чанки за краем убираются и строятся заново
+## по окончательной географии (вода, дороги, поселения).
+func refresh(rect: Rect2i) -> void:
+	_epoch += 1
+	var side := world.CS
+	for chunk: Vector2i in _loaded.keys():
+		if _on_map(chunk) or not Rect2i(chunk * side, Vector2i.ONE * side).intersects(rect):
+			continue
+		_dirty[chunk] = _epoch
+		_loaded.erase(chunk)
+		world.outer.veg.erase(chunk)
+		for key: Vector3i in veg.keys():
+			if key.x == chunk.x and key.y == chunk.y:
+				for node: MultiMeshInstance3D in veg[key].nodes:
+					node.visible = false
+					node.queue_free()
+				veg.erase(key)
+	for x in range(floori(float(rect.position.x) / side), floori(float(rect.end.x - 1) / side) + 1):
+		for y in range(floori(float(rect.position.y) / side), floori(float(rect.end.y - 1) / side) + 1):
+			if not _on_map(Vector2i(x, y)):
+				_dirty[Vector2i(x, y)] = _epoch
+	last_fill = Vector2.INF
+
+
 func _apply_chunk(built: Dictionary) -> void:
 	var chunk: Vector2i = built.chunk
-	if _loaded.has(chunk):
+	if _loaded.has(chunk) or built.get("epoch", _epoch) < _dirty.get(chunk, -1):
 		return
 	if built.has("outer"):
 		world.outer.veg[chunk] = built.outer
