@@ -115,8 +115,29 @@ func run() -> int:
 					divided.surfaces[n].river[i] = 1
 					divided.surfaces[n].water_level[i] = 0.16
 		var broken := Regions.prepare_roads(source, [left, right], divided)
-		check(not broken.ready and broken.components >= 2 and broken.trails.is_empty(),
-			"13.5: сплошная река требует переправы, дорога не прокладывается по воде")
+		check(not broken.ready and broken.components >= 2 and broken.trails.is_empty() and broken.bridges.is_empty(),
+			"13.6: вода выше берегов — отказ без оставшихся мостов и дорог")
+		for n in 2:
+			var region: Dictionary = [left, right][n]
+			for i in divided.surfaces[n].river.size():
+				if divided.surfaces[n].river[i] == 0: continue
+				divided.surfaces[n].h[i] = 0.14
+				divided.surfaces[n].water_level[i] = 0.1475
+		var before_bridge := var_to_bytes(divided)
+		var crossed := Regions.prepare_roads(source, [left, right], divided)
+		check(crossed.ready and not crossed.bridges.is_empty() and crossed.connections.size() == all.size() - 1,
+			"13.6: река на стыке областей пересечена мостом, поселения связаны")
+		var mirrored: Dictionary = divided.duplicate(true)
+		mirrored.surfaces.reverse()
+		mirrored.settlements.reverse()
+		var reversed_bridge := Regions.prepare_roads(source, [right, left], mirrored)
+		check(var_to_bytes(crossed) == var_to_bytes(reversed_bridge) and var_to_bytes(divided) == before_bridge,
+			"13.6: мосты детерминированы и не меняют принятую воду")
+		var shores: bool = not crossed.bridges.is_empty()
+		for bridge: Dictionary in crossed.bridges:
+			shores = shores and minf(bridge.a.x, bridge.b.x) < 252.0 and maxf(bridge.a.x, bridge.b.x) >= 260.0
+		check(shores, "13.6: мировые концы мостов лежат на противоположных сухих берегах")
+
 		check(not Regions.prepare_roads(source, [left], {ready = false}).ready, "13.5: дороги ждут согласованную воду")
 	source.settlements = all.duplicate(true)
 	var old := var_to_bytes(source.settlements)

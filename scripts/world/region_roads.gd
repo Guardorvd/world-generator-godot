@@ -1,7 +1,8 @@
 extends RefCounted
-## 13.5: сухопутные дороги общей группы подготовленных областей, без публикации в сцену.
+## 13.6: дороги и мосты общей группы подготовленных областей, без публикации в сцену.
 ## Группа не больше 4 областей. Разрывы и места, требующие сооружений, возвращаются явно.
 const Places := preload("res://scripts/world/region_settlements.gd")
+const RegionalGround := preload("res://scripts/world/region_road_heightfield.gd")
 const MAX_CELLS := 4 * 260 * 260
 
 
@@ -46,7 +47,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 	w.cost.resize(w.N)
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
-		w.cost[i] = INF if covered[i] == 0 or fields.fixed[i] != 0 or wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0
+		w.cost[i] = INF if covered[i] == 0 or fields.fixed[i] != 0 else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
 	for place: Dictionary in settlements:
 		var s: Dictionary = place.duplicate(true)
 		s.x -= bounds.position.x
@@ -54,9 +55,14 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 		s.i = floori(s.y) * w.W + floori(s.x)
 		s.huts = []
 		w.settlements.append(s)
-	var ground := Heightfield.new(w, false)
+	var ground := RegionalGround.new(w, surface.water_level)
+	var state := {detour = false, on_axis = PackedByteArray(), surface = ground}
+	state.on_axis.resize(w.N)
 	var heights := ground.hv.duplicate()
-	for i in heights.size(): heights[i] /= GameConfig.TILE
+	for i in heights.size():
+		# Поиск переправы оценивает воду, а не уклон спуска на дно.
+		if StageTrails._wet(w, i): heights[i] = maxf(heights[i], ground.water_level[i])
+		heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	StageTrails._route_surface(finder, ground, StageTrails.WIDTHS.road)
 	# Один суммарный бюджет на группу, включая неудачные направления.
@@ -76,15 +82,21 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 		if groups[a] == groups[b]: continue
 		if finder.search_budget <= 0 or attempts >= maxi(1, settlements.size() * 3): break
 		attempts += 1
-		var path := StageTrails._road_path(finder, w.cost, w.settlements[a].i, w.settlements[b].i)
+		var checkpoint := StageTrails._make_checkpoint(w, finder, state)
+		var ctx := {checkpoint = checkpoint, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
+		var path := StageTrails._connect_settlement(w, finder, w.cost, w.settlements[a].i, w.settlements[b].i, state)
 		if path.size() < 2: continue
-		var points: Array = []
-		for i: int in path: points.append({x = i % w.W + 0.5, y = i / w.W + 0.5, w = StageTrails.WIDTHS.road})
-		points = StageTrails._road_line(w, points, PackedByteArray(), ground)
-		if not dry_corridor(w, points, covered, fields.fixed): continue
-		w.trails.append({kind = "road", pts = points})
-		Grid.stamp_path(w.path_mask, w.W, w.H, points, 3, StageTrails.WIDTHS.road * 0.5 - Grid.PATH_IN)
-		for i: int in path: w.cost[i] = minf(w.cost[i], 0.6)
+		# Туннели требуют отдельной подготовки рельефа; этот этап допускает только мосты.
+		if not w.tunnels.is_empty():
+			StageTrails._restore_structures(w, finder, state, ctx)
+			continue
+		var old_cost := w.cost.duplicate()
+		StageTrails._add_trail(w, path, "road", PackedFloat32Array(), state.on_axis, ground)
+		if not ready_corridor(w, w.trails[-1].pts, covered, fields.fixed):
+			w.trails.pop_back()
+			w.cost = old_cost
+			StageTrails._restore_structures(w, finder, state, ctx)
+			continue
 		edges.append({from = settlements[a].id, to = settlements[b].id})
 		var old: int = groups[b]
 		for i in groups.size():
@@ -111,15 +123,19 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 		for p: Dictionary in trail.pts:
 			p.x += bounds.position.x
 			p.y += bounds.position.y
+	var bridges: Array = []
+	for span: Dictionary in w.bridges:
+		bridges.append({a = Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5) + Vector2(bounds.position),
+			b = Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5) + Vector2(bounds.position)})
 	var components := {}
 	for group: int in groups: components[group] = true
-	return {ready = components.size() <= 1, reason = "" if components.size() <= 1 else "disconnected_land_routes",
-		trails = w.trails, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
+	return {ready = components.size() <= 1, reason = "" if components.size() <= 1 else "disconnected_routes",
+		trails = w.trails, bridges = bridges, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
 		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface}
 
 
-## Сглаженная лента целиком лежит на готовой сухой земле, включая края и повороты.
-static func dry_corridor(w: WorldData, points: Array, covered: PackedByteArray, fixed: PackedByteArray) -> bool:
+## Вся лента лежит в готовой области; над водой разрешён только проверенный настил.
+static func ready_corridor(w: WorldData, points: Array, covered: PackedByteArray, fixed: PackedByteArray) -> bool:
 	for k in range(1, points.size()):
 		var a := Vector2(points[k - 1].x, points[k - 1].y)
 		var b := Vector2(points[k].x, points[k].y)
@@ -132,5 +148,16 @@ static func dry_corridor(w: WorldData, points: Array, covered: PackedByteArray, 
 				var y := floori(p.y)
 				if x < 0 or y < 0 or x >= w.W or y >= w.H: return false
 				var i := y * w.W + x
-				if covered[i] == 0 or fixed[i] != 0 or w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0: return false
+				if covered[i] == 0 or fixed[i] != 0: return false
+				if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
+					var on_bridge := false
+					for span: Dictionary in w.bridges:
+						var start := Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5)
+						var end := Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5)
+						var axis := end - start
+						var t := (p - start).dot(axis) / axis.length_squared()
+						if t >= 0.0 and t <= 1.0 and p.distance_to(start + axis * t) <= Heightfield.BRIDGE_HALF / GameConfig.TILE:
+							on_bridge = true
+							break
+					if not on_bridge: return false
 	return true
