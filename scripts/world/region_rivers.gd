@@ -129,6 +129,17 @@ static func _trace_one(region: Dictionary, input: Dictionary) -> Dictionary:
 	var cells: Array[Vector2i] = [end]
 	while cells.back() != start: cells.append(parent[cells.back()])
 	cells.reverse()
+	# Спуск по оси не знает ширины ленты: русло вдоль склона может требовать насыпи берега
+	# сверх предела. Тогда — поиск с поперечным профилем; если и он не находит выхода,
+	# остаётся этот маршрут, и поверхность честно сообщит earthwork_limit.
+	var sections := {}
+	for cell: Vector2i in cells:
+		var limits := Drainage.section_limits(region, cell, input.w, sections)
+		var level := _level(region, cell)
+		if level < limits.x or level > limits.y:
+			var resolved := Drainage.resolve(region, input)
+			if resolved.has("points"): return resolved
+			break
 	var points: Array[Dictionary] = [{x = input.x, y = input.y, e = input.e, w = input.w}]
 	for cell: Vector2i in cells:
 		points.append({x = cell.x + 0.5, y = cell.y + 0.5, e = _level(region, cell), w = input.w})

@@ -40,9 +40,16 @@ static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:
 					if region.fields.fixed[i] != 0 or region.fields.ocean[i] != 0: continue
 					var p := Vector2(x + 0.5, y + 0.5)
 					var t := (p - av).dot(delta) / maxf(delta.length_squared(), 1e-12)
-					# Не продолжать профиль круглой заглушкой за вход/выход сегмента.
-					# В общей полосе настоящий следующий сегмент предоставляет сосед.
-					if t < 0.0 or t > 1.0: continue
+					# Не продолжать профиль круглой заглушкой за начало и конец русла:
+					# в общей полосе настоящий следующий сегмент предоставляет сосед.
+					# Внутренние вершины скругляются, иначе на каждом повороте оси
+					# внешний угол ленты оставался сухим и без берега.
+					if t < 0.0:
+						if k == 1: continue
+						t = 0.0
+					elif t > 1.0:
+						if k == points.size() - 1: continue
+						t = 1.0
 					var distance := p.distance_to(av + delta * t)
 					var width := StageRivers.half_width(lerpf(a.w, b.w, t)) / GameConfig.TILE
 					if distance >= width + 1.0: continue
