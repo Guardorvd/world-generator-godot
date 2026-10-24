@@ -9,7 +9,7 @@ func check(ok: bool, label: String) -> void:
 		printerr(label)
 
 func inspect(w: WorldData, heights: Heightfield) -> void:
-	var mesh := WaterBuilder._river_arrays(heights.ribbons)
+	var mesh := WaterBuilder._river_arrays(heights.ribbons, heights)
 	var vertices: PackedVector3Array = mesh[Mesh.ARRAY_VERTEX] if not mesh.is_empty() else PackedVector3Array()
 	var mismatch := 0
 	var missing := 0

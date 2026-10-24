@@ -5,6 +5,7 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const LAKE_DROP := 0.1   # м, см. _lake_arrays
+const WaterJunction = preload("res://scripts/render/water_junction.gd")
 const SHADER := preload("res://resources/water.gdshader")
 
 
@@ -18,7 +19,7 @@ static func _material(ocean := false, river := false) -> ShaderMaterial:
 
 ## Тяжёлые циклы готовят только массивы, без узлов отображения и GPU-ресурсов.
 static func prepare(w: WorldData, heights: Heightfield) -> Array[Array]:
-	return [_lake_arrays(w, heights), _river_arrays(heights.ribbons, heights)]
+	return WaterJunction.partition(_lake_arrays(w, heights), _river_arrays(heights.ribbons))
 
 
 ## Создание узлов из готовых массивов — в главном потоке.
@@ -118,20 +119,27 @@ static func _clip_lake(tri: Array, level: float, pos: PackedVector3Array, idx: P
 		idx.append_array([start, start + k, start + k + 1])
 
 
-## Реки: ленты вдоль средних линий из Heightfield.ribbons
+## Spline coordinates: U across the banks, V metric arc length downstream.
+## Shared junctions have the same V, so ripple phase survives confluences.
 static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 	var pos := PackedVector3Array()
-	var flow := PackedVector2Array()
+	var uv := PackedVector2Array()
 	var normals := PackedVector3Array()
-	var banks := PackedVector2Array()
+	var tangents := PackedFloat32Array()
+	var widths := PackedVector2Array()
 	var character := PackedColorArray()
-	for pts in ribbons:
-		var n: int = pts.size()
+	var distances := _river_distances(ribbons)
+	for r in ribbons.size():
+		var pts: Array = ribbons[r]
+		var n := pts.size()
 		if n < 2:
-			continue # одна точка ленты не даёт ни одной полосы
-		var directions: Array[Vector2] = []
+			continue
 		var slopes: Array[Vector3] = []
+		var across: Array[Vector3] = []
 		var conditions: Array[Color] = []
+		var lengths := PackedFloat64Array([0.0])
+		for k in range(1, n):
+			lengths.append(lengths[-1] + _river_step(pts[k - 1], pts[k]))
 		for k in n:
 			var a: Dictionary = pts[maxi(0, k - 1)]
 			var b: Dictionary = pts[mini(n - 1, k + 1)]
@@ -139,29 +147,68 @@ static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 			var grade := maxf(0.0, a.y - b.y) / maxf(delta.length(), 0.01)
 			var motion := Heightfield.river_motion(pts, k)
 			var dir := Vector2(motion.x, motion.y)
-			directions.append(dir)
 			slopes.append(Vector3(dir.x * grade, 1.0, dir.y * grade).normalized())
+			across.append((pts[k].right - pts[k].left).normalized())
 			conditions.append(Color(motion.z, motion.w, 0.0, 1.0))
-		# Берега уже посчитаны Heightfield: геометрия и проверка глубины совпадают.
 		for k in n - 1:
+			# The ocean already owns the sea-level plane; no duplicate river layer.
+			if pts[k].y <= 0.0 and pts[k + 1].y <= 0.0:
+				continue
 			pos.append_array([pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].left, pts[k].right, pts[k + 1].right])
-			for v in [k, k, k + 1, k + 1, k, k + 1]:
-				flow.append(directions[v])
+			var sides := [0.0, 1.0, 0.0, 0.0, 1.0, 1.0]
+			var vertices := [k, k, k + 1, k + 1, k, k + 1]
+			for j in 6:
+				var v: int = vertices[j]
+				uv.append(Vector2(sides[j], lengths[v] - distances[r]))
 				normals.append(slopes[v])
-				var state := conditions[v]
-				if heights != null:
-					var vertex := pos[character.size()]
-					var lake := heights.lake_level(vertex.x, vertex.z)
-					# Устье растворяется в общей плоскости: две прозрачные
-					# поверхности одного уровня не образуют мерцающих пятен.
-					if (lake >= vertex.y - 0.001 and heights.ground_at(vertex.x, vertex.z) < lake) or vertex.y <= 0.001:
-						state.b = 1.0
-				character.append(state)
-			banks.append_array([Vector2(0, 0), Vector2(1, 0), Vector2(0, 0), Vector2(0, 0), Vector2(1, 0), Vector2(1, 0)])
+				tangents.append_array([across[v].x, across[v].y, across[v].z, -1.0])
+				widths.append(Vector2(pts[v].left.distance_to(pts[v].right), 0.0))
+				character.append(conditions[v])
 	var arrays := _arrays(pos)
 	if not arrays.is_empty():
 		arrays[Mesh.ARRAY_NORMAL] = normals
-		arrays[Mesh.ARRAY_TEX_UV] = flow
-		arrays[Mesh.ARRAY_TEX_UV2] = banks
+		arrays[Mesh.ARRAY_TANGENT] = tangents
+		arrays[Mesh.ARRAY_TEX_UV] = uv
+		arrays[Mesh.ARRAY_TEX_UV2] = widths
 		arrays[Mesh.ARRAY_COLOR] = character
+	if heights != null:
+		return WaterJunction.partition(_lake_arrays(heights.world, heights), arrays)[1]
 	return arrays
+
+
+static func _river_step(a: Dictionary, b: Dictionary) -> float:
+	return Vector3(b.x - a.x, b.y - a.y, b.z - a.z).length()
+
+
+## Remaining distance to the network outlet. Iterative DAG walk avoids recursion
+## limits in long river networks; lakes terminate the running ripple coordinate.
+static func _river_distances(ribbons: Array) -> PackedFloat64Array:
+	var starts := {}
+	var lengths := PackedFloat64Array()
+	lengths.resize(ribbons.size())
+	for r in ribbons.size():
+		var pts: Array = ribbons[r]
+		if pts.is_empty():
+			continue
+		starts[Vector2(pts[0].x, pts[0].z)] = r
+		for k in range(1, pts.size()):
+			lengths[r] += _river_step(pts[k - 1], pts[k])
+	var remaining := PackedFloat64Array()
+	remaining.resize(ribbons.size())
+	remaining.fill(-1.0)
+	for r in ribbons.size():
+		var chain: Array[int] = []
+		var seen := {}
+		var at := r
+		while at >= 0 and remaining[at] < 0.0 and not seen.has(at):
+			seen[at] = true
+			chain.append(at)
+			var pts: Array = ribbons[at]
+			var next: int = starts.get(Vector2(pts[-1].x, pts[-1].z), -1) if not pts.is_empty() else -1
+			at = next if next != at else -1
+		var tail := remaining[at] if at >= 0 and remaining[at] >= 0.0 else 0.0
+		for k in range(chain.size() - 1, -1, -1):
+			var id := chain[k]
+			tail += lengths[id]
+			remaining[id] = tail
+	return remaining

@@ -11,6 +11,7 @@ uniform float disturbance_levels[16];
 uniform vec3 shallow_color : source_color = vec3(0.22, 0.43, 0.38);
 uniform vec3 deep_color : source_color = vec3(0.10, 0.27, 0.25);
 varying vec3 world_position;
+varying vec3 water_across;
 
 float hash(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
@@ -34,16 +35,23 @@ vec3 ripple(vec2 p) {
 
 void vertex() {
 	world_position = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	water_across = (MODEL_MATRIX * vec4(TANGENT, 0.0)).xyz;
 }
 
 void fragment() {
 	float river = river_surface ? 1.0 : 0.0;
-	vec2 direction = river > 0.5 ? normalize(UV + vec2(0.00001)) : normalize(vec2(0.8, 0.35));
-	vec2 across = vec2(-direction.y, direction.x);
-	float speed = river > 0.5 ? mix(0.3, 2.8, COLOR.r) : 0.12;
+	vec3 base_normal = normalize((INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	vec3 across_world = river_surface
+		? normalize(water_across - base_normal * dot(water_across, base_normal))
+		: normalize(vec3(-0.35, 0.0, 0.8));
+	vec3 along_world = river_surface ? normalize(cross(across_world, base_normal)) : normalize(vec3(0.8, 0.0, 0.35));
+	// U spans the banks; V is metric spline arc length. Advection changes V only.
+	float speed = river_surface ? mix(0.3, 2.8, COLOR.r) : 0.12;
 	float rapid = river * COLOR.g;
-	vec2 p = vec2(dot(world_position.xz, across), dot(world_position.xz, direction));
-	vec2 drift = vec2(p.x, p.y - TIME * speed);
+	vec2 p = river_surface ? vec2(UV.x * 6.0, UV.y)
+		: vec2(dot(world_position, across_world), dot(world_position, along_world));
+	vec2 drift = p - vec2(0.0, TIME * speed);
+
 	vec3 small = ripple(drift * vec2(2.7, 1.8));
 	vec3 broad = ripple(drift * vec2(0.75, 0.9) + vec2(17.2, 9.4));
 	// Только нормали: берег, уровень воды и игровая глубина остаются согласованы.
@@ -68,9 +76,10 @@ void fragment() {
 		wake_gradient += delta / max(radius, 0.01) * sin(front * 24.0) * envelope * 0.18;
 		wake_foam = max(wake_foam, envelope * exp(-age * 4.0) * 0.45);
 	}
-	vec3 base_normal = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
-	vec3 normal_world = normalize(base_normal + vec3(-across.x * gradient.x - direction.x * gradient.y, 0.0,
-		-across.y * gradient.x - direction.y * gradient.y));
+	// Convert the normal perturbation from spline coordinates into the local frame.
+	float across_scale = river_surface ? 6.0 / max(UV2.x, 0.1) : 1.0;
+	gradient.x *= across_scale;
+	vec3 normal_world = normalize(base_normal - across_world * gradient.x - along_world * gradient.y);
 
 	float depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
 	#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
@@ -89,7 +98,7 @@ void fragment() {
 	float contact = (1.0 - smoothstep(0.04, 0.5, thickness)) * smoothstep(0.0, 0.035, thickness);
 	float turbulence = contact * mix(0.12, 0.8, river) * (0.4 + 0.6 * broad.x) * detail;
 	vec2 contact_gradient = small.yz * turbulence * 0.12 * antialias;
-	vec2 interaction = wake_gradient + across * contact_gradient.x + direction * contact_gradient.y;
+	vec2 interaction = wake_gradient + across_world.xz * (contact_gradient.x * across_scale) + along_world.xz * contact_gradient.y;
 	normal_world = normalize(normal_world - vec3(interaction.x, 0.0, interaction.y));
 	NORMAL = normalize((VIEW_MATRIX * vec4(normal_world, 0.0)).xyz);
 	if (!FRONT_FACING) { NORMAL = -NORMAL; }
@@ -109,7 +118,6 @@ void fragment() {
 	ROUGHNESS = mix(mix(mix(0.24, 0.36, rapid), 0.88, far_rough), 0.65, foam);
 	SPECULAR = 0.4 * (1.0 - smoothstep(45.0, 180.0, distance_to_eye));
 	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 5.0);
-	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV2.x, 1.0 - UV2.x)) : 1.0;
-	float join = river_surface ? 1.0 - COLOR.b : 1.0;
-	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * join * clamp(0.38 + absorption * 0.56 + fresnel * 0.22 + foam * 0.4, 0.0, 0.97);
+	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV.x, 1.0 - UV.x)) : 1.0;
+	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * clamp(0.38 + absorption * 0.56 + fresnel * 0.22 + foam * 0.4, 0.0, 0.97);
 }
