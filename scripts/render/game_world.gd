@@ -217,7 +217,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	if world.outer != null:
 		outer.setup(world, heights)
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
-		regions.terrain = outer
+		if regions != null:
+			regions.terrain = outer
 	heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
@@ -954,7 +955,7 @@ func _process(delta: float) -> void:
 	if world.outer != null:
 		outer.update(pos.x, pos.z, not uploaded)
 		# Новая область собирается в главном потоке: не в кадре с другой передачей на GPU.
-		if not uploaded and regions.update(pos.x, pos.z):
+		if not uploaded and regions != null and regions.update(pos.x, pos.z):
 			for m: StandardMaterial3D in regions.windows:
 				SettlementsBuilder.set_night(m, _night)
 	if _ocean != null:
