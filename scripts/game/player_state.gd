@@ -348,6 +348,12 @@ func check_discoveries(w: WorldData, visited: Dictionary) -> PackedStringArray:
 			if not visited.has(key):
 				visited[key] = true
 				found.append("Поселение «%s»" % s.name)
+	# 13.9+final: поселения соседних областей
+	if w.outer != null:
+		for s in w.outer.settlements:
+			if Grid.hypot(s.x - tx, s.y - tz) < 6.0 and not visited.has(s.id):
+				visited[s.id] = true
+				found.append("Поселение «%s»" % s.name)
 	for pk in w.peaks:
 		if Grid.hypot(pk.x - tx, pk.y - tz) < 2.5:
 			var key := WorldData.place_id("peak", pk.x, pk.y)

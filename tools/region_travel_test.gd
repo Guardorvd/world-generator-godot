@@ -64,6 +64,34 @@ func run() -> void:
 		"далёкие области выгружены: поля только у ближних")
 	check(counts.shown < counts.regions and stream.stats.hidden > 0, "узлы далёких областей убраны")
 	_seams(stream)
+	# 13.9+final: места областей на карте, их доски, задания и цели переживают сохранение.
+	var towns: Array = game.world.region_places().list
+	print("Поселений в областях: %d, направлений: %d" % [towns.size(), game.world.region_places().routes.size()])
+	var quest_title := ""
+	var goal_key := ""
+	if not towns.is_empty():
+		var town: Dictionary = towns[0]
+		goal_key = town.id
+		check(main.hud.all_places().any(func(p: Dictionary) -> bool: return p.key == town.id) and not game.world.place(town.id).is_empty(),
+			"поселение области в списке мест и в индексе мира")
+		main.hud.set_goal(main.hud.all_places().filter(func(p: Dictionary) -> bool: return p.key == town.id)[0])
+		var offers: Array = game._offers(town.src)
+		check(not offers.is_empty(), "доска поселения области предлагает задания")
+		if not offers.is_empty():
+			game.quests.accept(offers[0])
+			quest_title = offers[0].title
+	var map: Hud.BigMap = main.hud.big_map
+	map.size = Vector2(1280, 720)
+	var before_k: float = map._frame()[2]
+	var cursor := Vector2(900, 300)
+	var cell: Vector2 = (cursor - map._frame()[0]) / before_k
+	map._zoom_at(cursor, 1.25)
+	var f: Array = map._frame()
+	check(f[2] > before_k and ((cursor - f[0]) / float(f[2])).distance_to(cell) < 0.01, "колесо приближает карту вокруг курсора")
+	map.reset_view()
+	# Взятое задание само ставит свою цель: проверяется та, что была при сохранении.
+	goal_key = main.hud.goal.get("key", "")
+	print("Цель при сохранении: ", goal_key)
 	# Сохранение вдали и новая игровая сцена из него.
 	var saved := game.save_state()
 	check(Saves.write_slot(saved) == OK, "сохранение вдали от плана записано")
@@ -84,6 +112,10 @@ func run() -> void:
 		"закреплённые области восстановлены с диска, не перестроены")
 	check(absf(game.heights.ground_at(at.x, at.z) - at.y) < 2.0 or game.heights.depth_at(at.x, at.z) > 0.0,
 		"земля под игроком после загрузки та же")
+	if not goal_key.is_empty():
+		check(main.hud.goal.get("key") == goal_key, "цель в соседней области восстановлена")
+	if not quest_title.is_empty():
+		check(game.quests.active.get("title", "") == quest_title, "задание из поселения области восстановлено")
 	# Назад к плану: поля ближних областей читаются с диска, узлы строятся снова.
 	check(await _travel(game.player.x, home, z), "обратный путь к стартовому плану пройден")
 	var back: Dictionary = stream.ledger.regions[near_key]

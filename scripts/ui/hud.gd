@@ -57,6 +57,7 @@ var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
 var _toast_tween: Tween
 var _places: Array = []
+var _region_tex := {} # 13.9+final: картинки соседних областей для большой карты (область -> ImageTexture)
 var _places_revision := -1 # доступные места обновляются при расширении территории
 
 # Состояние игрока для отрисовки карт
@@ -115,6 +116,9 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
 	map_tex = ImageTexture.create_from_image(map_image)
 	_places = []
+	_region_tex = {}
+	if big_map != null:
+		big_map.reset_view()
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
@@ -131,6 +135,7 @@ func clear_world() -> void:
 		settlement_panel.clear()
 	world = null
 	_places = []
+	_region_tex = {}
 	map_tex = null
 	visited = {}
 	goal = {}
@@ -217,6 +222,11 @@ func all_places() -> Array:
 			var p := world.place(WorldData.place_id(kind, src.x, src.y)).duplicate()
 			p.key = p.id
 			out.append(p)
+	# 13.9+final: поселения закреплённых соседних областей
+	for src: Dictionary in world.region_places().list:
+		var p: Dictionary = src.duplicate()
+		p.key = p.id
+		out.append(p)
 	return out
 
 
@@ -226,6 +236,14 @@ func in_open_land(p: Dictionary) -> bool:
 		"settlement": return world.accessible(p.x, p.y, 2.0)
 		"lake": return world.accessible(p.x, p.y) and world.accessible(p.src.sx, p.src.sy, 3.0)
 	return world.accessible(p.x, p.y)
+
+
+## Картинка соседней области для карты (из её записи журнала), один раз на область
+func region_texture(key: Vector2i, png: PackedByteArray) -> ImageTexture:
+	if not _region_tex.has(key):
+		var img := Image.new()
+		_region_tex[key] = ImageTexture.create_from_image(img) if img.load_png_from_buffer(png) == OK else null
+	return _region_tex[key]
 
 
 ## Новая цель путешествия (пустой словарь — без цели)
@@ -701,13 +719,30 @@ class Compass extends Control:
 		draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
 
 
+## 13.9+final: колесо мыши — масштаб вокруг курсора, перетаскивание ЛКМ или средней кнопкой — сдвиг,
+## щелчок средней кнопкой — к игроку. Видны и закреплённые соседние области с их поселениями.
 ## Большая карта (M): посещённые поселения и вершины отмечены жёлтым. С 2.8 карта ловит мышь:
 ## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по любому месту — перемещение туда (с 3.0.2 и туда, где ещё не были).
 ## С 12.5+ метку легче поймать (PICK 24 px), а перемещение спрашивает подтверждение (Hud.ask_travel)
 class BigMap extends Control:
 	const PICK := 24.0  # на сколько пикселей можно промахнуться по метке места
+	const ZOOM_MIN := 0.25 # доля масштаба «весь план в рамке»
+	const ZOOM_MAX := 16.0
+	const ZOOM_STEP := 1.25
+	const DRAG := 6.0      # пикселей: дальше нажатие ЛКМ — перетаскивание, а не выбор
 	var hud: Hud
 	var hover := {}     # место под курсором или пусто
+	var zoom := 1.0
+	var center := Vector2.INF  # клетка в середине экрана; INF — середина плана
+	var _press := Vector2.INF  # где нажата ЛКМ или средняя кнопка
+	var _dragged := false
+
+	func _init() -> void:
+		clip_contents = true
+
+	func reset_view() -> void:
+		zoom = 1.0
+		center = Vector2.INF
 
 	func _queue_name(names: Array[Dictionary], pl: Dictionary, at: Vector2, color: Color, fs: int, text := "") -> void:
 		var selected: bool = pl.key == hud.goal.get("key")
@@ -732,10 +767,31 @@ class BigMap extends Control:
 			occupied.append(rect)
 			Hud.draw_label(self, item.text, item.at, item.color, item.fs, item.selected)
 
-	## Где на экране лежит карта: [левый верхний угол, сторона, пикселей на клетку]
+	## Где на экране лежит карта плана: [левый верхний угол, сторона, пикселей на клетку]
 	func _frame() -> Array:
-		var sz := minf(size.x, size.y) * 0.88
-		return [Vector2((size.x - sz) / 2.0, (size.y - sz) / 2.0), sz, sz / hud.world.W]
+		var k := minf(size.x, size.y) * 0.88 / hud.world.W * zoom
+		var c := center if center != Vector2.INF else Vector2(hud.world.W, hud.world.H) * 0.5
+		var o := size * 0.5 - c * k
+		return [o, hud.world.W * k, k]
+
+	## Масштаб вокруг точки экрана: клетка под курсором остаётся под ним
+	func _zoom_at(pos: Vector2, factor: float) -> void:
+		var f := _frame()
+		var cell: Vector2 = (pos - f[0]) / float(f[2])
+		zoom = clampf(zoom * factor, ZOOM_MIN, ZOOM_MAX)
+		var k := minf(size.x, size.y) * 0.88 / hud.world.W * zoom
+		center = cell - (pos - size * 0.5) / k
+		_clamp_center()
+		queue_redraw()
+
+	## Середина экрана не уходит дальше области от плана и закреплённых земель
+	func _clamp_center() -> void:
+		var known := Rect2(Vector2.ZERO, Vector2(hud.world.W, hud.world.H))
+		if hud.world.outer != null:
+			for key: Vector2i in hud.world.outer.get_ledger().get("regions", {}):
+				known = known.expand(Vector2(key * WorldData.REGION_SIZE)).expand(Vector2((key + Vector2i.ONE) * WorldData.REGION_SIZE))
+		known = known.grow(WorldData.REGION_SIZE)
+		center = center.clamp(known.position, known.end)
 
 	## Ближайшее к точке экрана место не дальше PICK пикселей
 	func _place_at(pos: Vector2) -> Dictionary:
@@ -755,11 +811,44 @@ class BigMap extends Control:
 
 	func _gui_input(event: InputEvent) -> void:
 		if event is InputEventMouseMotion:
+			if _press != Vector2.INF and event.button_mask & (MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_MIDDLE):
+				if _dragged or event.position.distance_to(_press) > DRAG:
+					if center == Vector2.INF:
+						center = Vector2(hud.world.W, hud.world.H) * 0.5
+					center -= event.relative / float(_frame()[2])
+					_clamp_center()
+					_dragged = true
+					queue_redraw()
+					accept_event()
+					return
 			var h := _place_at(event.position)
 			if h.get("key") != hover.get("key"):
 				hover = h
 				queue_redraw()
-		elif event is InputEventMouseButton and event.pressed:
+		elif event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			if event.pressed:
+				_zoom_at(event.position, ZOOM_STEP if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / ZOOM_STEP)
+			accept_event()
+		elif event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE] and event.pressed:
+			# выбор — при отпускании без перетаскивания
+			_press = event.position
+			_dragged = false
+			accept_event()
+		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
+			if not _dragged:
+				center = Vector2(hud.px, hud.pz) / Hud.TILE
+				_clamp_center()
+				queue_redraw()
+			_press = Vector2.INF
+			accept_event()
+		elif event is InputEventMouseButton and (event.pressed or event.button_index == MOUSE_BUTTON_LEFT):
+			var was_drag := _dragged
+			var from_map: bool = _press != Vector2.INF or event.pressed
+			_press = Vector2.INF
+			_dragged = false
+			if was_drag or not from_map: # отпускание после нажатия вне карты — не выбор
+				accept_event()
+				return
 			var pl := _place_at(event.position)
 			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
 				var same: bool = pl.key == hud.goal.get("key")
@@ -767,9 +856,8 @@ class BigMap extends Control:
 			elif event.button_index == MOUSE_BUTTON_LEFT:
 				var frame := _frame()
 				var cell: Vector2 = (event.position - frame[0]) / float(frame[2])
-				if Rect2(Vector2.ZERO, Vector2(hud.world.W, hud.world.H)).has_point(cell):
-					var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
-					hud.set_goal({} if same else {key = "marker", kind = "marker", name = "Метка", x = cell.x, y = cell.y})
+				var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
+				hud.set_goal({} if same else {key = "marker", kind = "marker", name = "Метка", x = cell.x, y = cell.y})
 			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
 				hud.ask_travel(pl)
 			accept_event()
@@ -785,6 +873,15 @@ class BigMap extends Control:
 		var sz: float = f[1]
 		var k: float = f[2]
 		draw_texture_rect(hud.map_tex, Rect2(o, Vector2(sz, sz)), false)
+		# Закреплённые соседние области — их картинки по местам в мире
+		if w.outer != null:
+			var regions: Dictionary = w.outer.get_ledger().get("regions", {})
+			for key: Vector2i in regions:
+				var png: PackedByteArray = regions[key].get("map", PackedByteArray())
+				var tex := hud.region_texture(key, png) if not png.is_empty() else null
+				if tex != null:
+					var r: Rect2i = regions[key].rect
+					draw_texture_rect(tex, Rect2(o + Vector2(r.position) * k, Vector2(r.size) * k), false)
 		draw_rect(Rect2(o, Vector2(sz, sz)), Color.html("#d8c79a"), false, 2.0)
 		# За рамкой виден тот же мир; соседняя территория откроется при приближении.
 		if w.available_rect.has_area():
@@ -831,26 +928,26 @@ class BigMap extends Control:
 			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
 		var q := hud.quest_place()
 		if not q.is_empty():
-			var qat := _inside(o + Vector2(q.x, q.y) * k, o, sz, 8.0)
+			var qat := _inside(o + Vector2(q.x, q.y) * k, 8.0)
 			Hud.draw_quest_mark(self, qat + Vector2(11, -11), 5.5, hud.quest_color())
 			# шаг задания — вверху внутри рамки карты: под ней уже две строки
-			Hud.draw_label(self, "Задание: " + hud.quests.step_text(), Vector2(cw / 2.0, o.y + 24.0), hud.quest_color(), 15)
+			Hud.draw_label(self, "Задание: " + hud.quests.step_text(), Vector2(cw / 2.0, 54.0), hud.quest_color(), 15)
 		if hud.bike_shown:
-			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, o, sz, 5.0), 5.0)
-		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, o, sz, 9.0), 9.0, hud.yaw)
+			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, 5.0), 5.0)
+		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, 9.0), 9.0, hud.yaw)
 		# легенду про велосипед пишем, только когда он действительно нарисован
 		var legend := "Мир «%s» · территория %d × %d — M или Esc, чтобы закрыть" % [w.seed_text, w.available_rect.size.x, w.available_rect.size.y]
 		if hud.bike_shown:
 			legend += " · синим отмечен велосипед"
-		Hud.draw_label(self, legend, Vector2(cw / 2.0, o.y - 10.0), Color.WHITE, 16)
-		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, o.y + sz + 44.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "ЛКМ — цель или метка на карте · повторный щелчок по метке — убрать"
+		Hud.draw_label(self, legend, Vector2(cw / 2.0, 30.0), Color.WHITE, 16)
+		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, size.y - 16.0), Color(1, 1, 1, 0.6), 13)
+		var tip := "ЛКМ — цель или метка · колесо — масштаб · перетаскивание — сдвиг · средняя кнопка — к себе"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
 			tip += "ПКМ — переместиться сюда" if hud.in_open_land(hover) else "земли откроются по пути"
 			draw_arc(o + Vector2(hover.x, hover.y) * k, 10.0, 0.0, TAU, 24, Color.WHITE, 2.0)
-		Hud.draw_label(self, tip, Vector2(cw / 2.0, o.y + sz + 22.0), Color(1, 1, 1, 0.85), 15)
+		Hud.draw_label(self, tip, Vector2(cw / 2.0, size.y - 38.0), Color(1, 1, 1, 0.85), 15)
 
 	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»
 	func _found_line() -> String:
@@ -867,6 +964,6 @@ class BigMap extends Control:
 			text += " · мест %d из %d" % [n.site, counts.site]
 		return text
 
-	## Маркер у края карты остаётся внутри её рамки
-	func _inside(at: Vector2, o: Vector2, sz: float, margin: float) -> Vector2:
-		return at.clamp(o + Vector2(margin, margin), o + Vector2(sz - margin, sz - margin))
+	## Маркер за краем видимой части карты прижимается к краю экрана
+	func _inside(at: Vector2, margin: float) -> Vector2:
+		return at.clamp(Vector2(margin, margin), size - Vector2(margin, margin))

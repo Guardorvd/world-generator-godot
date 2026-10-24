@@ -31,6 +31,7 @@ var ledger := {}
 var failed := {}        # области, которые не удалось подготовить: остаются внешним рельефом
 var fires: Array = []   # костры поселений показанных областей (как SettlementsBuilder.build)
 var windows: Array = [] # материалы окон, ночью ярче
+var boards: Array = []  # доски маршрутов показанных поселений: {at, place}, как GameWorld._boards
 var queue: Array[Vector2i] = []
 var stats := {prepared = 0, loaded = 0, evicted = 0, built = 0, hidden = 0, apply_ms = 0.0, show_ms = 0.0}
 var _task := -1
@@ -57,17 +58,24 @@ static func store_dir(w: WorldData) -> String:
 	return root.path_join(id.sha256_text().substr(0, 24))
 
 
-## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
-func restore(x: float, z: float) -> void:
-	var path := store_dir(world).path_join("ledger.bin")
+## Сохранённый журнал мира без полей клеток или {} (места и задания читают его и до игры)
+static func read_ledger(w: WorldData) -> Dictionary:
+	var path := store_dir(w).path_join("ledger.bin")
 	if not FileAccess.file_exists(path):
-		return
+		return {}
 	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
 	var saved: Variant = f.get_var() if f != null else null
 	if not saved is Dictionary or saved.get("format") != FORMAT:
 		push_warning("Журнал областей не прочитан: %s" % path)
+		return {}
+	return saved.ledger
+
+
+## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
+func restore(x: float, z: float) -> void:
+	ledger = read_ledger(world)
+	if ledger.is_empty():
 		return
-	ledger = saved.ledger
 	for key: Vector2i in ledger.regions:
 		if _distance(key, Vector2(x, z)) <= KEEP:
 			_load_fields(key)
@@ -147,6 +155,10 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 	var done := Regions.commit(current, [r], [network], batch, roads)
 	done.dropped_rivers = dropped
 	done.roads = roads
+	if done.ready:
+		# Картинка области для большой карты: остаётся в журнале и после выгрузки полей.
+		var entry: Dictionary = done.ledger.regions[key]
+		entry.map = map_png(entry)
 	if done.ready and not dir.is_empty():
 		var err := save(dir, done.ledger, key)
 		if err != OK:
@@ -167,7 +179,7 @@ static func save(dir: String, current: Dictionary, key: Vector2i) -> Error:
 	light.regions = {}
 	for k: Vector2i in current.regions:
 		var e: Dictionary = current.regions[k]
-		light.regions[k] = {rect = e.rect, decor = e.decor}
+		light.regions[k] = {rect = e.rect, decor = e.decor, map = e.get("map", PackedByteArray())}
 	return _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
 
 
@@ -299,7 +311,11 @@ func _show(key: Vector2i) -> void:
 	places.seed_num = world.seed_num ^ (key.x * 73856093) ^ (key.y * 19349663)
 	places.settlements = decor.settlements
 	var built := SettlementsBuilder.build(node, places, heights)
-	_shown[key] = {node = node, fires = built.fires, windows = built.windows}
+	var own: Array = []
+	for s: Dictionary in decor.settlements:
+		var foot := SettlementsBuilder.board_foot(s, heights)
+		own.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
+	_shown[key] = {node = node, fires = built.fires, windows = built.windows, boards = own}
 	stats.built += 1
 	stats.show_ms = maxf(stats.get("show_ms", 0.0), (Time.get_ticks_usec() - started) / 1000.0)
 	_collect()
@@ -315,9 +331,11 @@ func _hide(key: Vector2i) -> void:
 func _collect() -> void:
 	fires = []
 	windows = []
+	boards = []
 	for key: Vector2i in _shown:
 		fires.append_array(_shown[key].fires)
 		windows.append(_shown[key].windows)
+		boards.append_array(_shown[key].boards)
 
 
 ## Сколько областей с полями в памяти и показанных (для проверок памяти)
@@ -326,6 +344,34 @@ func counts() -> Dictionary:
 	for key: Vector2i in ledger.get("regions", {}):
 		with_fields += int(ledger.regions[key].has("fields"))
 	return {regions = ledger.get("regions", {}).size(), fields = with_fields, shown = _shown.size()}
+
+
+## Карта области в PNG, клетка — пиксель: цвет биома с отмывкой склонов, вода, дороги.
+static func map_png(region: Dictionary) -> PackedByteArray:
+	var rect: Rect2i = region.rect
+	var f: Dictionary = region.fields
+	var W := rect.size.x
+	var H := rect.size.y
+	var img := Image.create(W, H, false, Image.FORMAT_RGB8)
+	var water := Color8(0x4a, 0x7f, 0xb0)
+	var road := Color8(0xb8, 0x9a, 0x6a)
+	for y in H:
+		for x in W:
+			var i := y * W + x
+			var c: Color
+			if f.river[i] != 0 or f.lake[i] != 0:
+				c = water
+			elif f.path[i] >= 2:
+				c = road
+			else:
+				var rgb: Array = Biomes.LIST[f.biome[i]].color
+				c = Color8(rgb[0], rgb[1], rgb[2])
+				# свет с северо-запада, как отмывка карты плана
+				var dx: float = f.h[y * W + mini(x + 1, W - 1)] - f.h[y * W + maxi(x - 1, 0)]
+				var dy: float = f.h[mini(y + 1, H - 1) * W + x] - f.h[maxi(y - 1, 0) * W + x]
+				c = c * clampf(1.0 - (dx + dy) * 6.0, 0.6, 1.3)
+			img.set_pixel(x, y, c)
+	return img.save_png_to_buffer()
 
 
 ## Плоская вода области: квадрат на каждую мокрую клетку, углы — средний уровень соседних мокрых

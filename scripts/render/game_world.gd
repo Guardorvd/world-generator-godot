@@ -325,6 +325,9 @@ static func save_signature(w: WorldData) -> String:
 static func can_restore(saved: Dictionary, w: WorldData) -> bool:
 	if saved.signature != save_signature(w):
 		return false
+	# 13.9+final: места и задания соседних областей — из их журнала на диске
+	if w.outer != null and w.outer.get_ledger().is_empty():
+		w.outer.set_ledger(RegionStream.read_ledger(w))
 	var places := {}
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Dictionary in w.get(kind + "s"):
@@ -332,6 +335,10 @@ static func can_restore(saved: Dictionary, w: WorldData) -> bool:
 			var p := w.place(id).duplicate()
 			p.key = id
 			places[id] = p
+	for src: Dictionary in w.region_places().list:
+		var p: Dictionary = src.duplicate()
+		p.key = p.id
+		places[p.id] = p
 	for id: String in saved.visited:
 		if not places.has(id):
 			return false
@@ -461,7 +468,11 @@ func _set_photo(on: bool) -> void:
 ## над вершиной, над серединой озера, над местом. Радиус — примерный размер места, reach — дальше не узнать
 func _photo_anchors() -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
-	for child in $Settlements.get_children():
+	var labels: Array = $Settlements.get_children()
+	if regions != null:
+		for node: Node in regions.get_children():
+			labels.append_array(node.get_children())
+	for child in labels:
 		if not (child is Label3D and child.has_meta("place_id")):
 			continue
 		var p := world.place(child.get_meta("place_id"))
@@ -1067,7 +1078,7 @@ func _aim() -> Dictionary:
 		var at := bike.fallen_transform if bike.fallen else Transform3D(Basis(Vector3.UP, bike.heading), Vector3(bike.x, bike.y, bike.z))
 		at.origin += at.basis.y * 0.55
 		items.append({kind = "bike", at = at, half = Vector3(0.3, 0.55, 0.9)})
-	for b: Dictionary in _boards:
+	for b: Dictionary in _boards + (regions.boards if regions != null else []):
 		if eye.distance_squared_to(b.at.origin) < REACH * REACH:
 			items.append({kind = "board", at = b.at, half = Vector3(0.9, 0.48, 0.08), place = b.place})
 	if _bag != null and _bag.visible and not bike.riding and eye.distance_squared_to(_bag.position) < REACH * REACH:

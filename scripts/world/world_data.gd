@@ -102,7 +102,50 @@ const PLACE_KINDS := ["settlement", "peak", "lake", "site"]
 ## Места: id -> {id, kind (из PLACE_KINDS), name, x, y — клетки, region, src — запись плана}.
 ## Направления: связи сети поселений {id, from, to — id мест, road, regions — пара областей}.
 func place(id: String) -> Dictionary:
-	return _places().places.get(id, {})
+	var p: Dictionary = _places().places.get(id, {})
+	return p if not p.is_empty() else region_places().places.get(id, {})
+
+
+## 13.9+final: поселения закреплённых соседних областей (OuterLand), тот же вид записей, что у плана.
+## Направления — их дороги между собой; подход к старой сети (связь «plan») ведёт к ближайшему
+## поселению плана. Индекс пересобирается, когда журнал областей заменён.
+var _region_index := {}
+
+func region_places() -> Dictionary:
+	if outer == null:
+		return {places = {}, routes = [], list = []}
+	var current := outer.get_ledger()
+	if not _region_index.is_empty() and is_same(_region_index.ledger, current):
+		return _region_index
+	_region_index = {ledger = current, places = {}, routes = [], list = []}
+	var settlements_now: Array = current.get("settlements", [])
+	for src: Dictionary in settlements_now:
+		var region := region_at(Vector2i(floori(src.x), floori(src.y)))
+		var record := {id = src.id, kind = "settlement", name = src.get("name", ""), x = src.x, y = src.y, region = region, src = src}
+		_region_index.places[src.id] = record
+		_region_index.list.append(record)
+	for src: Dictionary in settlements_now:
+		for other: String in src.get("connections", []):
+			var to := other
+			if other == "plan":
+				to = _nearest_plan_settlement(Vector2(src.x, src.y))
+			if not _region_index.places.has(to) and place(to).is_empty() or src.id >= to and _region_index.places.has(to):
+				continue
+			var b := place(to)
+			_region_index.routes.append({id = src.id + ">" + to, from = src.id, to = to, road = true,
+				regions = [_region_index.places[src.id].region, b.region]})
+	return _region_index
+
+
+func _nearest_plan_settlement(at: Vector2) -> String:
+	var best := ""
+	var distance := INF
+	for s: Dictionary in settlements:
+		var d := at.distance_squared_to(Vector2(s.x, s.y))
+		if d < distance:
+			distance = d
+			best = place_id("settlement", s.x, s.y)
+	return best
 
 
 func places_in_region(key: Vector2i) -> Array:
@@ -114,7 +157,7 @@ func places_in_region(key: Vector2i) -> Array:
 
 ## Направления из места; пустой from — все направления мира.
 func routes(from: String = "") -> Array:
-	var all: Array = _places().routes
+	var all: Array = _places().routes + region_places().routes
 	return all if from.is_empty() else all.filter(func(r: Dictionary) -> bool: return r.from == from or r.to == from)
 
 
