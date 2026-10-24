@@ -10,6 +10,7 @@ const WaterSurface := preload("res://scripts/world/region_water_surface.gd")
 const WaterBatch := preload("res://scripts/world/region_water_batch.gd")
 const Settlements := preload("res://scripts/world/region_settlements.gd")
 const Roads := preload("res://scripts/world/region_roads.gd")
+const Known := preload("res://scripts/world/region_known.gd")
 
 
 ## В отличие от WorldData.region_rect, адрес существует и за краем стартового плана.
@@ -17,8 +18,9 @@ static func rect_for(key: Vector2i) -> Rect2i:
 	return Rect2i(key * WorldData.REGION_SIZE, Vector2i.ONE * WorldData.REGION_SIZE)
 
 
-static func prepare(w: WorldData, key: Vector2i) -> Dictionary:
-	return prepare_rect(w, rect_for(key))
+## ledger — закреплённые области (commit): их клетки так же окончательны, как стартовый план.
+static func prepare(w: WorldData, key: Vector2i, ledger := {}) -> Dictionary:
+	return prepare_rect(w, rect_for(key), ledger)
 
 
 ## 13.1: отдельный, явный шаг. Не меняет поля заготовки и не открывает игровую границу.
@@ -46,16 +48,84 @@ static func finish_neighbors(source: WorldData, regions: Array, networks: Array)
 
 
 ## 13.5: следующий явный этап после воды и поселений, не изменяет уже подготовленную группу.
-static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary) -> Dictionary:
-	return Roads.prepare(source, regions, batch)
+## 13.8: подходы к дорогам стартового плана, продолжение выходов закреплённых дорог и новые выходы.
+static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary, ledger := {}) -> Dictionary:
+	return Roads.prepare(source, regions, batch, ledger)
+
+
+## 13.8: закрепить принятую группу. Возвращает новый журнал, входной не меняется.
+## Клетки областей становятся окончательными: следующий сосед их не пересчитывает, а продолжает
+## выходы рек (outlets) и дорог (exits). Подходы к старым дорогам внутри плана — в plan_paths.
+static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: Dictionary, roads: Dictionary) -> Dictionary:
+	if not batch.get("ready", false) or not roads.has("sample_rect") or regions.size() != networks.size():
+		return {ready = false, reason = "not_ready", ledger = ledger}
+	var out: Dictionary = ledger.duplicate(true)
+	for key: String in ["regions", "plan_paths"]:
+		if not out.has(key): out[key] = {}
+	for key: String in ["outlets", "exits", "settlements", "trails", "bridges"]:
+		if not out.has(key): out[key] = []
+	var keys: Array[Vector2i] = []
+	for region: Dictionary in regions:
+		var key := Vector2i(floori(float(region.rect.position.x) / WorldData.REGION_SIZE),
+			floori(float(region.rect.position.y) / WorldData.REGION_SIZE))
+		if out.regions.has(key) or region.rect != rect_for(key):
+			return {ready = false, reason = "already_committed", ledger = ledger}
+		keys.append(key)
+	var bounds: Rect2i = roads.sample_rect
+	for n in regions.size():
+		var region: Dictionary = regions[n]
+		var rect: Rect2i = region.rect
+		var surface: Dictionary = batch.surfaces[n]
+		var cells := {h = PackedFloat32Array(), water_level = PackedFloat32Array(), dist = PackedFloat32Array(),
+			river = PackedByteArray(), ocean = PackedByteArray(), lake = PackedByteArray(), biome = PackedByteArray(), path = PackedByteArray()}
+		for name: String in cells: cells[name].resize(rect.get_area())
+		for y in range(rect.position.y, rect.end.y):
+			for x in range(rect.position.x, rect.end.x):
+				var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
+				var src: int = (y - region.sample_rect.position.y) * region.sample_rect.size.x + x - region.sample_rect.position.x
+				var at := (y - bounds.position.y) * bounds.size.x + x - bounds.position.x
+				cells.h[dst] = surface.h[src]
+				cells.water_level[dst] = maxf(surface.water_level[src], region.fields.water_level[src])
+				cells.dist[dst] = region.fields.dist[src]
+				cells.river[dst] = maxi(surface.river[src], region.fields.river[src])
+				cells.ocean[dst] = region.fields.ocean[src]
+				cells.lake[dst] = region.fields.lake[src]
+				cells.biome[dst] = roads.biome[at]
+				cells.path[dst] = roads.path_mask[at]
+		out.regions[keys[n]] = {rect = rect, fields = cells}
+	# Выходы, попавшие в закреплённые области, продолжены; остальные ждут следующего соседа.
+	var regions_now: Dictionary = out.regions
+	var reached := func(o: Dictionary) -> bool:
+		var cell := Vector2i(floori(o.x + o.dx * 0.5), floori(o.y + o.dy * 0.5))
+		return regions_now.has(Vector2i(floori(float(cell.x) / WorldData.REGION_SIZE), floori(float(cell.y) / WorldData.REGION_SIZE)))
+	var outlets: Array = out.outlets.filter(func(o: Dictionary) -> bool: return not reached.call(o))
+	for network: Dictionary in networks:
+		for outlet: Dictionary in network.outlets:
+			if not reached.call(outlet): outlets.append(outlet.duplicate(true))
+	out.outlets = outlets
+	var merged: Dictionary = roads.get("merged_nets", {})
+	var exits: Array = []
+	for exit: Dictionary in out.exits + roads.exits.duplicate(true):
+		if reached.call(exit): continue
+		exit.net = merged.get(exit.net, exit.net)
+		exits.append(exit)
+	out.exits = exits
+	for s: Dictionary in out.settlements: s.net = merged.get(s.net, s.net)
+	out.settlements.append_array(roads.settlements.duplicate(true))
+	out.trails.append_array(roads.trails.duplicate(true))
+	out.bridges.append_array(roads.bridges.duplicate(true))
+	for cell: Vector2i in roads.plan_paths:
+		out.plan_paths[cell] = maxi(int(out.plan_paths.get(cell, 0)), roads.plan_paths[cell])
+	return {ready = true, reason = "", ledger = out}
 
 
 ## Данные клеток лежат построчно в sample_rect, координаты — всегда мировые.
-## fixed=1: окончательная география стартового плана, её нельзя пересчитывать при продолжении.
+## fixed=1: окончательная география стартового плана или закреплённой области, её нельзя пересчитывать.
 ## fixed=0: существующий внешний рельеф/климат; пресная вода ещё НЕ рассчитана.
 ## ocean/lake/river — разные маски: отсутствие готовой реки снаружи не означает сухую область.
 ## water_level — нормализованные уровни filled внутри плана; снаружи море=0, суша=-INF.
-static func prepare_rect(w: WorldData, rect: Rect2i) -> Dictionary:
+## path (13.8) — готовые пути плана и закреплённых областей, как path_mask.
+static func prepare_rect(w: WorldData, rect: Rect2i, ledger := {}) -> Dictionary:
 	assert(rect.has_area(), "Область должна иметь положительный размер")
 	assert(w.N == w.W * w.H and w.N > 0, "Нужен готовый стартовый план")
 	for name: String in ["h", "biome", "temp", "moist", "elev", "slope", "dist_ocean",
@@ -64,41 +134,41 @@ static func prepare_rect(w: WorldData, rect: Rect2i) -> Dictionary:
 	var sample := rect.grow(HALO)
 	# Тот же источник, которым уже пользуются внешний меш и растительность.
 	var fields := OuterLand.compute(w, sample.position.x, sample.position.y, sample.size.x, sample.size.y)
-	var fixed := PackedByteArray()
-	fixed.resize(sample.get_area())
-	var ocean := fixed.duplicate()
-	var lake := fixed.duplicate()
-	var water_level := PackedFloat32Array()
-	water_level.resize(sample.get_area())
-	water_level.fill(-INF)
-	var plan := Rect2i(0, 0, w.W, w.H)
-	for y in sample.size.y:
-		for x in sample.size.x:
-			var cell := sample.position + Vector2i(x, y)
-			var dst := y * sample.size.x + x
-			if plan.has_point(cell):
-				var src := cell.y * w.W + cell.x
-				fixed[dst] = 1
-				ocean[dst] = w.ocean[src]
-				lake[dst] = w.lake[src]
-				water_level[dst] = w.filled[src]
-			else:
-				ocean[dst] = int(fields.h[dst] < 0.0)
-				if ocean[dst] != 0:
-					water_level[dst] = 0.0
-	fields.fixed = fixed
-	fields.ocean = ocean
-	fields.lake = lake
-	fields.water_level = water_level
-	return {rect = rect, sample_rect = sample, fields = fields, river_inputs = river_inputs(w, rect)}
+	var area := sample.get_area()
+	fields.fixed = PackedByteArray()
+	fields.fixed.resize(area)
+	fields.ocean = fields.fixed.duplicate()
+	fields.lake = fields.fixed.duplicate()
+	fields.path = fields.fixed.duplicate()
+	fields.water_level = PackedFloat32Array()
+	fields.water_level.resize(area)
+	fields.water_level.fill(-INF)
+	for i in area:
+		fields.ocean[i] = int(fields.h[i] < 0.0)
+		if fields.ocean[i] != 0: fields.water_level[i] = 0.0
+	Known.apply_known(fields, sample, w, ledger)
+	return {rect = rect, sample_rect = sample, fields = fields, river_inputs = river_inputs(w, rect, ledger)}
+
+
+## 13.8: та же окончательная география для заранее посчитанной заготовки (изолированные проверки).
+## Возвращает копию: клетки плана и журнала закреплены, входы рек взяты из плана и журнала.
+static func pin(region: Dictionary, w: WorldData, ledger: Dictionary) -> Dictionary:
+	var out: Dictionary = region.duplicate(true)
+	if not out.fields.has("path"):
+		out.fields.path = PackedByteArray()
+		out.fields.path.resize(out.sample_rect.get_area())
+	Known.apply_known(out.fields, out.sample_rect, w, ledger)
+	out.river_inputs = river_inputs(w, out.rect, ledger)
+	return out
 
 
 ## StageRivers уже хранит выходы в мировых координатах на геометрической границе.
 ## Полшага по направлению определяет ровно одну принимающую область, включая отрицательные
 ## координаты и углы. Ореол НЕ участвует в выборе владельца, иначе сток задвоится.
-static func river_inputs(w: WorldData, rect: Rect2i) -> Array[Dictionary]:
+## 13.8: к выходам плана добавлены выходы рек закреплённых областей (ledger.outlets).
+static func river_inputs(w: WorldData, rect: Rect2i, ledger := {}) -> Array[Dictionary]:
 	var inputs: Array[Dictionary] = []
-	for outlet: Dictionary in w.river_exits:
+	for outlet: Dictionary in w.river_exits + ledger.get("outlets", []):
 		var receiving := Vector2i(floori(outlet.x + outlet.dx * 0.5), floori(outlet.y + outlet.dy * 0.5))
 		if rect.has_point(receiving):
 			inputs.append(outlet.duplicate(true))

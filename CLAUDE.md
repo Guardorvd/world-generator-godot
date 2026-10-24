@@ -34,7 +34,7 @@
 | Полотно дорог, обочины, шейдер рельефа у дорог | изолированная `road_look.gd` (было/стало через `--shader`, разбитые участки — `--shift x,z`); `check.gd` не нужен |
 | Генерация мира, рельеф, реки, дороги, мосты, туннели | `check.gd`: хеши мира, снимки `road`/`valley` (`--world Ущелье` для мостов) |
 | Местность за краем стартовой области | `territory_test` |
-| Подготовка соседних областей (`scripts/world/region_*.gd`): реки, вода, поселения | изолированная `region_rivers_test.gd -- --neighbors`; заготовка области — `region_preparation_test.gd -- --gdscript` |
+| Подготовка соседних областей (`scripts/world/region_*.gd`): реки, вода, поселения, дороги, закрепление | изолированная `region_rivers_test.gd -- --neighbors`; заготовка области — `region_preparation_test.gd -- --gdscript` |
 | Препятствия на дорогах (раскладка, ступени, кочки) | изолированная `road_obstacles_test.gd` (+ `road_look.gd -- --obstacles` для вида) |
 | Подвеска, кочки полотна, ощущение езды без мира | изолированный `feel_test -- --downhill` (+ `road_look.gd` для вида кочек) |
 | Модель седока, его анимации | `cyclist_animation_test -- --capture` |

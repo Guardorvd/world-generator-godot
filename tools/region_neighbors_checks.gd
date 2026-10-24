@@ -92,6 +92,9 @@ func run() -> int:
 	var q := Regions.finish_neighbors(source, [right, left], [no_water, no_water])
 	check(var_to_bytes(p.settlements[0]) == var_to_bytes(q.settlements[1]), "поселения не зависят от порядка подготовки")
 	if not OS.get_cmdline_user_args().has("--water-only"):
+		# Дороги ищутся как в игре, через C# (без сборки .NET — тот же поиск на GDScript); с 13.8 выходов больше.
+		var gdscript_only := not Grid.allow_fast
+		Grid.allow_fast = true
 		var before_roads := var_to_bytes(p)
 		var roads := Regions.prepare_roads(source, [left, right], p)
 		check(roads.ready and roads.connections.size() == all.size() - 1 and not roads.trails.is_empty(),
@@ -115,7 +118,8 @@ func run() -> int:
 					divided.surfaces[n].river[i] = 1
 					divided.surfaces[n].water_level[i] = 0.16
 		var broken := Regions.prepare_roads(source, [left, right], divided)
-		check(not broken.ready and broken.components >= 2 and broken.trails.is_empty() and broken.bridges.is_empty(),
+		# 13.8: выходы на свободные стороны остаются, но связи через реку и мосты — нет.
+		check(not broken.ready and broken.components >= 2 and broken.connections.is_empty() and broken.bridges.is_empty(),
 			"13.6: вода выше берегов — отказ без оставшихся мостов и дорог")
 		for n in 2:
 			var region: Dictionary = [left, right][n]
@@ -139,6 +143,8 @@ func run() -> int:
 		check(shores, "13.6: мировые концы мостов лежат на противоположных сухих берегах")
 
 		check(not Regions.prepare_roads(source, [left], {ready = false}).ready, "13.5: дороги ждут согласованную воду")
+		pinning(no_water)
+		Grid.allow_fast = not gdscript_only
 	source.settlements = all.duplicate(true)
 	var old := var_to_bytes(source.settlements)
 	var excluded := Places.prepare(source, left, p.surfaces[0])
@@ -164,6 +170,71 @@ func run() -> int:
 		"небольшой подъём за входом допускает ограниченную выемку без изменения источника")
 	completed = true
 	return fails
+
+
+## 13.8: ровный стартовый план 256 с дорогой x = 220; восточный сосед подходит к ней,
+## закрепляется, затем юго-восточный продолжает его выход, не трогая готовых клеток.
+func pinning(no_water: Dictionary) -> void:
+	var plan := WorldData.new()
+	plan.seed_num = 734
+	plan.W = 256
+	plan.H = 256
+	plan.N = plan.W * plan.H
+	for name: String in ["h", "filled", "dist_ocean"]:
+		var values := PackedFloat32Array()
+		values.resize(plan.N)
+		plan.set(name, values)
+	for name: String in ["ocean", "lake", "river", "biome", "path_mask"]:
+		var values := PackedByteArray()
+		values.resize(plan.N)
+		plan.set(name, values)
+	plan.h.fill(0.15)
+	plan.filled.fill(0.15)
+	plan.dist_ocean.fill(50.0)
+	plan.biome.fill(Biomes.GRASS)
+	for y in plan.H: plan.path_mask[y * plan.W + 220] = 3
+	var plan_before := var_to_bytes([plan.h, plan.path_mask, plan.settlements])
+	var east := Regions.pin(plain(Rect2i(256, 0, 256, 256)), plan, {})
+	check(east.fields.fixed[Batch.index(east, 255, 10)] == 1 and east.fields.path[Batch.index(east, 255, 10)] == 0,
+		"13.8: ореол на стороне плана закреплён его клетками")
+	var p := Regions.finish_neighbors(plan, [east], [no_water])
+	var roads := Regions.prepare_roads(plan, [east], p, {})
+	var linked: bool = roads.ready and not roads.settlements.is_empty() and not roads.plan_paths.is_empty()
+	for s: Dictionary in roads.settlements: linked = linked and s.net == "plan"
+	var approach := false
+	for trail: Dictionary in roads.trails: approach = approach or trail.approach
+	check(linked and approach and var_to_bytes([plan.h, plan.path_mask, plan.settlements]) == plan_before,
+		"13.8: поселения соседа связаны подходом со старой дорогой, план не изменён")
+	var down: Array = roads.exits.filter(func(e: Dictionary) -> bool: return e.dy == 1)
+	check(down.size() == 1 and down[0].y == 256.0 and down[0].net == "plan" and roads.exits.all(func(e: Dictionary) -> bool: return e.dx >= 0),
+		"13.8: выходы дорог только на свободные стороны, на самой границе области")
+	var done := Regions.commit({}, [east], [no_water], p, roads)
+	var ledger: Dictionary = done.ledger
+	check(done.ready and ledger.regions.has(Vector2i(1, 0)) and not Regions.commit(ledger, [east], [no_water], p, roads).ready,
+		"13.8: принятая область закрепляется один раз")
+	var ledger_before := var_to_bytes(ledger)
+	var south := Regions.pin(plain(Rect2i(256, 256, 256, 256)), plan, ledger)
+	var seam := true
+	for x in range(256, 512):
+		seam = seam and south.fields.fixed[Batch.index(south, x, 255)] == 1 \
+			and south.fields.h[Batch.index(south, x, 255)] == ledger.regions[Vector2i(1, 0)].fields.h[255 * 256 + x - 256]
+	check(seam, "13.8: следующий сосед видит закреплённые клетки как готовые")
+	var p2 := Regions.finish_neighbors(plan, [south], [no_water])
+	var next := Regions.prepare_roads(plan, [south], p2, ledger)
+	var outside := true
+	var continued := false
+	for trail: Dictionary in next.trails:
+		for point: Dictionary in trail.pts: outside = outside and point.y >= 256.0
+		if not down.is_empty():
+			continued = continued or trail.pts[0].x == down[0].x and trail.pts[0].y == down[0].y \
+				or trail.pts[-1].x == down[0].x and trail.pts[-1].y == down[0].y
+	var joined: bool = next.ready and not next.settlements.is_empty()
+	for s: Dictionary in next.settlements: joined = joined and s.net == "plan"
+	check(joined and continued and outside, "13.8: сосед продолжает выход закреплённой дороги, не заходя в готовые клетки")
+	var later := Regions.commit(ledger, [south], [no_water], p2, next)
+	check(later.ready and var_to_bytes(ledger) == ledger_before and later.ledger.exits.all(func(e: Dictionary) -> bool:
+		return not Rect2i(256, 256, 256, 256).has_point(Vector2i(floori(e.x + e.dx * 0.5), floori(e.y + e.dy * 0.5)))),
+		"13.8: продолженный выход снят, прежний журнал не изменён")
 
 
 ## Один настоящий план географии; без домов/дорог стартового мира и повторной генерации.

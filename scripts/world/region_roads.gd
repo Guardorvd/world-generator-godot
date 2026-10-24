@@ -1,18 +1,30 @@
 extends RefCounted
 ## 13.6: дороги и мосты общей группы подготовленных областей, без публикации в сцену.
 ## Группа не больше 4 областей. Разрывы и места, требующие сооружений, возвращаются явно.
+## 13.8: узлы сети — поселения группы, выходы закреплённых дорог (ledger.exits) и старая сеть плана.
+## К дорогам плана ведут подходы по его сухой земле не глубже APPROACH; закреплённые области
+## не меняются, их дороги продолжаются от выходов. На свободных сторонах остаются новые выходы.
 const Places := preload("res://scripts/world/region_settlements.gd")
 const RegionalGround := preload("res://scripts/world/region_road_heightfield.gd")
+const Known := preload("res://scripts/world/region_known.gd")
 const MAX_CELLS := 4 * 260 * 260
+const APPROACH := 64 # клеток: глубина подхода к старой дороге внутри стартового плана
+const EXIT_MARGIN := 12 # выход не ставится у угла области
+const PLAN := "plan" # метка сети, связанной со старыми дорогами плана
+const SIDES := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
 
 
-static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dictionary:
+static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger := {}) -> Dictionary:
 	if not batch.get("ready", false) or regions.is_empty():
-		return {ready = false, reason = "water_not_ready", trails = [], settlements = []}
-	var bounds: Rect2i = regions[0].sample_rect
-	for region: Dictionary in regions: bounds = bounds.merge(region.sample_rect)
-	if bounds.get_area() > MAX_CELLS or regions.size() > 4:
-		return {ready = false, reason = "batch_too_large", trails = [], settlements = []}
+		return {ready = false, reason = "water_not_ready", trails = [], settlements = [], exits = []}
+	var union: Rect2i = regions[0].sample_rect
+	for region: Dictionary in regions: union = union.merge(region.sample_rect)
+	if union.get_area() > MAX_CELLS or regions.size() > 4:
+		return {ready = false, reason = "batch_too_large", trails = [], settlements = [], exits = []}
+	# Полоса стартового плана, по которой можно подойти к его дорогам.
+	var plan := Rect2i(0, 0, source.W, source.H) if source.N > 0 else Rect2i()
+	var strip := union.grow(APPROACH).intersection(plan)
+	var bounds := union.merge(strip) if strip.has_area() else union
 	# Фиксированный порядок копирования и центров: порядок загрузки не меняет сеть.
 	var order: Array = range(regions.size())
 	order.sort_custom(func(a: int, b: int) -> bool:
@@ -25,9 +37,16 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 		values.resize(bounds.get_area())
 		values.fill(0)
 		fields[name] = values
-	fields.fixed.fill(1)
+	if not fields.has("path"):
+		fields.path = PackedByteArray()
+		fields.path.resize(bounds.get_area())
+	fields.water_level.fill(-INF)
+	Known.apply_known(fields, bounds, source, ledger)
 	var surface := {ready = true, h = fields.h.duplicate(), river = fields.river.duplicate(), water_level = fields.water_level.duplicate()}
-	surface.water_level.fill(-INF)
+	for i in bounds.get_area():
+		# Готовая вода плана и журнала; сухая земля плана хранит в water_level свою высоту.
+		if fields.ocean[i] != 0: surface.water_level[i] = 0.0
+		elif fields.river[i] == 0 and fields.lake[i] == 0: surface.water_level[i] = -INF
 	var covered := PackedByteArray()
 	covered.resize(bounds.get_area())
 	var settlements: Array = []
@@ -37,17 +56,31 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 			for x in range(region.sample_rect.position.x, region.sample_rect.end.x):
 				var dst := (y - bounds.position.y) * bounds.size.x + x - bounds.position.x
 				var src: int = (y - region.sample_rect.position.y) * region.sample_rect.size.x + x - region.sample_rect.position.x
-				for name: String in fields: fields[name][dst] = region.fields[name][src]
+				for name: String in region.fields: fields[name][dst] = region.fields[name][src]
 				for name: String in ["h", "river", "water_level"]: surface[name][dst] = batch.surfaces[n][name][src]
 				if region.rect.has_point(Vector2i(x, y)): covered[dst] = 1
 		settlements.append_array(batch.settlements[n].duplicate(true))
 	settlements.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.id < b.id)
 	var merged := {rect = bounds, sample_rect = bounds, fields = fields}
 	var w := Places.local_world(source, merged, surface)
+	w.path_mask = fields.path.duplicate()
+	# Проходимо: свои клетки группы и сухая земля плана в полосе подхода, кроме домов и сооружений.
+	var blocked := _old_places(source, bounds)
+	var open := PackedByteArray()
+	open.resize(w.N)
+	var targets := PackedInt32Array()
 	w.cost.resize(w.N)
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
-		w.cost[i] = INF if covered[i] == 0 or fields.fixed[i] != 0 else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
+		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
+		if covered[i] != 0 and fields.fixed[i] == 0:
+			open[i] = 1
+		elif plan.has_point(cell) and not wet and blocked[i] == 0:
+			open[i] = 1
+			if w.path_mask[i] >= 2: targets.append(i)
+		w.cost[i] = INF if open[i] == 0 else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
+	# Узлы: поселения, приходящие выходы закреплённых дорог, старая сеть плана.
+	var nodes: Array = []
 	for place: Dictionary in settlements:
 		var s: Dictionary = place.duplicate(true)
 		s.x -= bounds.position.x
@@ -55,6 +88,24 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 		s.i = floori(s.y) * w.W + floori(s.x)
 		s.huts = []
 		w.settlements.append(s)
+		nodes.append({id = s.id, i = s.i, net = ""})
+	var edge_of := {} # локальная клетка выхода -> точка на границе области
+	var incoming: Array = []
+	for exit: Dictionary in ledger.get("exits", []):
+		var cell := Vector2i(floori(exit.x + exit.dx * 0.5), floori(exit.y + exit.dy * 0.5))
+		for region: Dictionary in regions:
+			if region.rect.has_point(cell): incoming.append(exit)
+	incoming.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.y < b.y or a.y == b.y and a.x < b.x)
+	for exit: Dictionary in incoming:
+		var cell := Vector2i(floori(exit.x + exit.dx * 0.5), floori(exit.y + exit.dy * 0.5)) - bounds.position
+		var i := cell.y * w.W + cell.x
+		edge_of[i] = Vector2(exit.x, exit.y) - Vector2(bounds.position)
+		nodes.append({id = "exit:%d:%d" % [cell.x + bounds.position.x, cell.y + bounds.position.y], i = i, net = exit.net})
+	if not targets.is_empty(): nodes.append({id = PLAN, i = -1, net = PLAN})
+	var groups: Array = range(nodes.size())
+	for a in nodes.size():
+		for b in range(a + 1, nodes.size()):
+			if nodes[a].net != "" and nodes[a].net == nodes[b].net: _join(groups, a, b)
 	var ground := RegionalGround.new(w, surface.water_level)
 	var state := {detour = false, on_axis = PackedByteArray(), surface = ground}
 	state.on_axis.resize(w.N)
@@ -67,50 +118,62 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 	StageTrails._route_surface(finder, ground, StageTrails.WIDTHS.road)
 	# Один суммарный бюджет на группу, включая неудачные направления.
 	finder.search_budget = w.N * 4
+	# Пара со старой сетью идёт к ближайшей клетке её дороги в полосе подхода.
 	var pairs: Array = []
-	for a in settlements.size():
-		for b in range(a + 1, settlements.size()):
-			pairs.append([Vector2(settlements[a].x, settlements[a].y).distance_squared_to(Vector2(settlements[b].x, settlements[b].y)), a, b])
+	for a in nodes.size():
+		for b in range(a + 1, nodes.size()):
+			if nodes[a].i < 0: continue
+			var to: int = nodes[b].i if nodes[b].i >= 0 else _nearest(w, targets, nodes[a].i)
+			pairs.append([_distance2(w, nodes[a].i, to), a, b, to])
 	pairs.sort_custom(func(a: Array, b: Array) -> bool:
 		return a[0] < b[0] or a[0] == b[0] and (a[1] < b[1] or a[1] == b[1] and a[2] < b[2]))
-	var groups: Array = range(settlements.size())
 	var edges: Array = []
 	var attempts := 0
 	for pair: Array in pairs:
 		var a: int = pair[1]
 		var b: int = pair[2]
-		if groups[a] == groups[b]: continue
-		if finder.search_budget <= 0 or attempts >= maxi(1, settlements.size() * 3): break
+		if _root(groups, a) == _root(groups, b): continue
+		if finder.search_budget <= 0 or attempts >= maxi(1, nodes.size() * 3): break
 		attempts += 1
-		var checkpoint := StageTrails._make_checkpoint(w, finder, state)
-		var ctx := {checkpoint = checkpoint, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
-		var path := StageTrails._connect_settlement(w, finder, w.cost, w.settlements[a].i, w.settlements[b].i, state)
-		if path.size() < 2: continue
-		# Туннели требуют отдельной подготовки рельефа; этот этап допускает только мосты.
-		if not w.tunnels.is_empty():
-			StageTrails._restore_structures(w, finder, state, ctx)
-			continue
-		var old_cost := w.cost.duplicate()
-		StageTrails._add_trail(w, path, "road", PackedFloat32Array(), state.on_axis, ground)
-		if not ready_corridor(w, w.trails[-1].pts, covered, fields.fixed):
-			w.trails.pop_back()
-			w.cost = old_cost
-			StageTrails._restore_structures(w, finder, state, ctx)
-			continue
-		edges.append({from = settlements[a].id, to = settlements[b].id})
-		var old: int = groups[b]
-		for i in groups.size():
-			if groups[i] == old: groups[i] = groups[a]
+		if not _build(w, finder, state, open, nodes[a].i, pair[3]): continue
+		edges.append({from = nodes[a].id, to = nodes[b].id})
+		_join(groups, a, b)
+	# Выходы на свободные стороны: следующий сосед продолжит дорогу, а не начнёт заново.
+	var exits: Array = []
+	for n: int in order:
+		var rect: Rect2i = regions[n].rect
+		for d: Vector2i in SIDES:
+			if finder.search_budget <= 0: break
+			var beyond := Rect2i(rect.position + d * rect.size, rect.size)
+			if not _free_side(beyond, regions, ledger, plan): continue
+			var from := _side_node(w, nodes, bounds, rect, d)
+			if from < 0: continue
+			var cell := _side_cell(w, fields, open, bounds, rect, d, nodes[from].i)
+			if cell < 0 or not _build(w, finder, state, open, nodes[from].i, cell): continue
+			edge_of[cell] = Vector2(cell % w.W, cell / w.W) + Vector2.ONE * 0.5 + Vector2(d) * 0.5
+			exits.append({cell = cell, dx = d.x, dy = d.y, node = from})
 	finder.release()
 	# Повторить штатную расстановку вдоль получившихся улиц; входные дома не меняются.
 	StageLandmarks.lay_out(w)
 	StageTrails._clear_huts(w)
 	RoadSurface.run(w)
+	# Сети: связанная со старыми дорогами — PLAN, иначе наименьшая метка своих узлов.
+	var labels := {}
+	for k in nodes.size():
+		var root: int = _root(groups, k)
+		var mine: String = nodes[k].net if nodes[k].net != "" else nodes[k].id
+		if not labels.has(root) or mine == PLAN or labels[root] != PLAN and mine < labels[root]: labels[root] = mine
+	var merged_nets := {}
+	for k in nodes.size():
+		var label: String = labels[_root(groups, k)]
+		if nodes[k].net != "" and nodes[k].net != label: merged_nets[nodes[k].net] = label
 	var out_places: Array = []
-	for s: Dictionary in w.settlements:
+	for k in w.settlements.size():
+		var s: Dictionary = w.settlements[k]
 		s.x += bounds.position.x
 		s.y += bounds.position.y
 		s.erase("i")
+		s.net = labels[_root(groups, k)]
 		s.connections = []
 		for edge: Dictionary in edges:
 			if edge.from == s.id: s.connections.append(edge.to)
@@ -120,22 +183,157 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary) -> Dic
 			hut.y += bounds.position.y
 		out_places.append(s)
 	for trail: Dictionary in w.trails:
+		# Конец у выхода продолжается до самой границы: две области сходятся в одной точке.
+		for end: int in [0, -1]:
+			var p: Dictionary = trail.pts[end]
+			var i := floori(p.y) * w.W + floori(p.x)
+			if edge_of.has(i) and Vector2(p.x, p.y).distance_to(Vector2(i % w.W, i / w.W) + Vector2.ONE * 0.5) < 0.01:
+				var tip := {x = edge_of[i].x, y = edge_of[i].y, w = p.w}
+				if end == 0: trail.pts.insert(0, tip)
+				else: trail.pts.append(tip)
+		trail.approach = false
 		for p: Dictionary in trail.pts:
 			p.x += bounds.position.x
 			p.y += bounds.position.y
+			trail.approach = trail.approach or plan.has_point(Vector2i(floori(p.x), floori(p.y)))
+	var out_exits: Array = []
+	for exit: Dictionary in exits:
+		var edge: Vector2 = edge_of[exit.cell] + Vector2(bounds.position)
+		out_exits.append({x = edge.x, y = edge.y, dx = exit.dx, dy = exit.dy, net = labels[_root(groups, exit.node)]})
+	# Подходы внутри плана: старые клетки не меняются, новые метки путей отдельно.
+	var plan_paths := {}
+	for i in w.N:
+		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
+		if plan.has_point(cell) and w.path_mask[i] > fields.path[i]: plan_paths[cell] = w.path_mask[i]
 	var bridges: Array = []
 	for span: Dictionary in w.bridges:
 		bridges.append({a = Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5) + Vector2(bounds.position),
 			b = Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5) + Vector2(bounds.position)})
 	var components := {}
-	for group: int in groups: components[group] = true
+	for k in nodes.size(): components[_root(groups, k)] = true
 	return {ready = components.size() <= 1, reason = "" if components.size() <= 1 else "disconnected_routes",
 		trails = w.trails, bridges = bridges, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
-		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface}
+		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
+		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome}
 
 
-## Вся лента лежит в готовой области; над водой разрешён только проверенный настил.
-static func ready_corridor(w: WorldData, points: Array, covered: PackedByteArray, fixed: PackedByteArray) -> bool:
+## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.
+static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: PackedByteArray, a: int, b: int) -> bool:
+	if a < 0 or b < 0 or a == b or w.cost[a] == INF or w.cost[b] == INF: return false
+	var checkpoint := StageTrails._make_checkpoint(w, finder, state)
+	var ctx := {checkpoint = checkpoint, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
+	var path := StageTrails._connect_settlement(w, finder, w.cost, a, b, state)
+	if path.size() < 2: return false
+	# Туннели требуют отдельной подготовки рельефа; этот этап допускает только мосты.
+	if not w.tunnels.is_empty():
+		StageTrails._restore_structures(w, finder, state, ctx)
+		return false
+	var old_cost := w.cost.duplicate()
+	StageTrails._add_trail(w, path, "road", PackedFloat32Array(), state.on_axis, state.surface)
+	if not ready_corridor(w, w.trails[-1].pts, open):
+		w.trails.pop_back()
+		w.cost = old_cost
+		StageTrails._restore_structures(w, finder, state, ctx)
+		return false
+	return true
+
+
+static func _root(groups: Array, k: int) -> int:
+	while groups[k] != k: k = groups[k]
+	return k
+
+
+## Меньший корень остаётся корнем: метки не зависят от порядка соединений.
+static func _join(groups: Array, a: int, b: int) -> void:
+	var ra := _root(groups, a)
+	var rb := _root(groups, b)
+	groups[maxi(ra, rb)] = mini(ra, rb)
+
+
+static func _distance2(w: WorldData, a: int, b: int) -> float:
+	if b < 0: return INF
+	return Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length_squared()
+
+
+static func _nearest(w: WorldData, targets: PackedInt32Array, from: int) -> int:
+	var best := -1
+	var distance := INF
+	for t: int in targets:
+		var d := _distance2(w, from, t)
+		if d < distance:
+			distance = d
+			best = t
+	return best
+
+
+## Дома, места и сооружения плана: подход их обходит, а не прокладывает дорогу сквозь них.
+static func _old_places(source: WorldData, bounds: Rect2i) -> PackedByteArray:
+	var blocked := PackedByteArray()
+	blocked.resize(bounds.get_area())
+	var mark := func(x: float, y: float, r: float) -> void:
+		for cy in range(floori(y - r), ceili(y + r)):
+			for cx in range(floori(x - r), ceili(x + r)):
+				if bounds.has_point(Vector2i(cx, cy)) and Vector2(cx + 0.5, cy + 0.5).distance_to(Vector2(x, y)) <= r:
+					blocked[(cy - bounds.position.y) * bounds.size.x + cx - bounds.position.x] = 1
+	for place: Dictionary in source.settlements + source.sites:
+		for hut: Dictionary in place.get("huts", []): mark.call(hut.x, hut.y, 1.5)
+	for span: Dictionary in source.bridges + source.tunnels:
+		var a := Vector2(span.a % source.W + 0.5, span.a / source.W + 0.5)
+		var b := Vector2(span.b % source.W + 0.5, span.b / source.W + 0.5)
+		var steps := maxi(1, ceili(a.distance_to(b)))
+		for k in steps + 1: mark.call(lerpf(a.x, b.x, float(k) / steps), lerpf(a.y, b.y, float(k) / steps), 2.0)
+	return blocked
+
+
+## Сторона свободна, если за ней нет области группы, закреплённой области и стартового плана.
+static func _free_side(beyond: Rect2i, regions: Array, ledger: Dictionary, plan: Rect2i) -> bool:
+	if beyond.intersects(plan): return false
+	for region: Dictionary in regions:
+		if region.rect.intersects(beyond): return false
+	for key: Vector2i in ledger.get("regions", {}):
+		if ledger.regions[key].rect.intersects(beyond): return false
+	return true
+
+
+## Ближайший к стороне узел этой области; старая сеть плана сюда не подходит.
+static func _side_node(w: WorldData, nodes: Array, bounds: Rect2i, rect: Rect2i, d: Vector2i) -> int:
+	var best := -1
+	var distance := INF
+	for k in nodes.size():
+		var i: int = nodes[k].i
+		if i < 0: continue
+		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
+		if not rect.has_point(cell): continue
+		var gap := float(rect.end.x - cell.x if d.x > 0 else (cell.x - rect.position.x if d.x < 0
+			else (rect.end.y - cell.y if d.y > 0 else cell.y - rect.position.y)))
+		if gap < distance:
+			distance = gap
+			best = k
+	return best
+
+
+## Клетка у границы напротив узла: сухая, своя, и за границей тоже сухая суша, не план.
+static func _side_cell(w: WorldData, fields: Dictionary, open: PackedByteArray, bounds: Rect2i, rect: Rect2i, d: Vector2i, from: int) -> int:
+	var along := Vector2i(absi(d.y), absi(d.x))
+	var anchor := bounds.position + Vector2i(from % w.W, from / w.W)
+	var low := rect.position.x if along.x != 0 else rect.position.y
+	var high := (rect.end.x if along.x != 0 else rect.end.y) - 1
+	var t := clampi(anchor.x if along.x != 0 else anchor.y, low + EXIT_MARGIN, high - EXIT_MARGIN)
+	var side := Vector2i(rect.end.x - 1 if d.x > 0 else rect.position.x, rect.end.y - 1 if d.y > 0 else rect.position.y)
+	for offset: int in [0, 6, -6, 12, -12]:
+		var cell := side * Vector2i(absi(d.x), absi(d.y)) + along * (t + offset)
+		var outside := cell + d
+		if not bounds.has_point(outside): continue
+		var i := (cell.y - bounds.position.y) * w.W + cell.x - bounds.position.x
+		var j := (outside.y - bounds.position.y) * w.W + outside.x - bounds.position.x
+		if open[i] == 0 or w.cost[i] == INF or StageTrails._wet(w, i): continue
+		if fields.fixed[j] != 0 or fields.h[j] < 0.0 or fields.river[j] != 0 or fields.lake[j] != 0 or w.river[j] != 0: continue
+		return i
+	return -1
+
+
+## Вся лента лежит на проходимых клетках; над водой разрешён только проверенный настил.
+static func ready_corridor(w: WorldData, points: Array, open: PackedByteArray) -> bool:
 	for k in range(1, points.size()):
 		var a := Vector2(points[k - 1].x, points[k - 1].y)
 		var b := Vector2(points[k].x, points[k].y)
@@ -148,7 +346,7 @@ static func ready_corridor(w: WorldData, points: Array, covered: PackedByteArray
 				var y := floori(p.y)
 				if x < 0 or y < 0 or x >= w.W or y >= w.H: return false
 				var i := y * w.W + x
-				if covered[i] == 0 or fixed[i] != 0: return false
+				if open[i] == 0: return false
 				if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
 					var on_bridge := false
 					for span: Dictionary in w.bridges:
