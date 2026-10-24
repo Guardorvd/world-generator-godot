@@ -29,7 +29,7 @@ static func apply_known(fields: Dictionary, rect: Rect2i, w: WorldData, ledger: 
 		var known: Dictionary = regions[key]
 		var r: Rect2i = known.rect
 		var part := r.intersection(rect)
-		if not part.has_area(): continue
+		if not part.has_area() or not known.has("fields"): continue # 13.9+: поля далёкой области на диске
 		for y in range(part.position.y, part.end.y):
 			for x in range(part.position.x, part.end.x):
 				var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x

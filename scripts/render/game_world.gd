@@ -171,6 +171,16 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	rng.randomize()
 	var opening_spot := OpeningRoute.choose(world, heights, rng) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
+	if world.outer != null:
+		# 13.9+: закреплённые области мира — до игрока: сохранённое место может лежать в них.
+		regions = RegionStream.new()
+		regions.name = "Regions"
+		add_child(regions)
+		regions.setup(world, heights, null, vegetation)
+		if saved.is_empty():
+			regions.restore(world.W * TILE * 0.5, world.H * TILE * 0.5)
+		else:
+			regions.restore(saved.player.x, saved.player.z)
 	player = PlayerState.spawn(world, heights)
 	if not saved.is_empty():
 		world.expand_territory(world.W)
@@ -204,10 +214,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	if world.outer != null:
 		outer.setup(world, heights)
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
-		regions = RegionStream.new()
-		regions.name = "Regions"
-		add_child(regions)
-		regions.setup(world, heights, outer, vegetation)
+		regions.terrain = outer
 	heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
@@ -300,7 +307,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 
 
 func safe_position(x: float, z: float, feet: float) -> bool:
-	return absf(x) < world.W * TILE * 4.0 and absf(z) < world.H * TILE * 4.0 \
+	# 13.9+: дальние точки допустимы в закреплённых областях — их пропускает is_passable (accessible).
+	return is_finite(x) and is_finite(z) and (absf(x) < world.W * TILE * 4.0 and absf(z) < world.H * TILE * 4.0
+		or world.outer != null and world.outer.committed(floori(x / TILE), floori(z / TILE))) \
 		and heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH \
 		and PlayerState.is_passable(world, heights, x, z, feet, PlayerState.BODY_R)
 

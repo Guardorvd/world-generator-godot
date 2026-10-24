@@ -60,11 +60,21 @@ func open_around(x: float, y: float) -> bool:
 
 
 ## Координаты в клетках; margin — запас для тела игрока, тоже в клетках.
+## 13.9+: за краем плана открыты закреплённые соседние области (OuterLand.committed).
 func accessible(x: float, y: float, margin: float = 0.0) -> bool:
 	if not available_rect.has_area():
 		return true
-	return x >= available_rect.position.x + margin and y >= available_rect.position.y + margin \
-		and x < available_rect.end.x - margin and y < available_rect.end.y - margin
+	if x >= available_rect.position.x + margin and y >= available_rect.position.y + margin \
+			and x < available_rect.end.x - margin and y < available_rect.end.y - margin:
+		return true
+	if outer == null:
+		return false
+	for corner: Vector2 in [Vector2(x - margin, y - margin), Vector2(x + margin, y - margin),
+			Vector2(x - margin, y + margin), Vector2(x + margin, y + margin)]:
+		var cell := Vector2i(floori(corner.x), floori(corner.y))
+		if not available_rect.has_point(cell) and not outer.committed(cell.x, cell.y):
+			return false
+	return true
 
 
 ## Соседние области — адреса в общем плане, а не отдельные генерации с новым RNG.

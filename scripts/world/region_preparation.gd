@@ -59,11 +59,12 @@ static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary, 
 static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: Dictionary, roads: Dictionary) -> Dictionary:
 	if not batch.get("ready", false) or not roads.has("sample_rect") or regions.size() != networks.size():
 		return {ready = false, reason = "not_ready", ledger = ledger}
-	var out: Dictionary = ledger.duplicate(true)
-	for key: String in ["regions", "plan_paths"]:
-		if not out.has(key): out[key] = {}
-	for key: String in ["outlets", "exits", "settlements", "trails", "bridges"]:
-		if not out.has(key): out[key] = []
+	# 13.9+: записи закреплённых областей не меняются — копируются ссылками, без их полей.
+	# Глубоко копируется только то, что commit правит: выходы и метки сетей поселений.
+	var out := {regions = ledger.get("regions", {}).duplicate(), plan_paths = ledger.get("plan_paths", {}).duplicate(),
+		outlets = ledger.get("outlets", []).duplicate(true), exits = ledger.get("exits", []).duplicate(true),
+		settlements = ledger.get("settlements", []).duplicate(true), trails = ledger.get("trails", []).duplicate(),
+		bridges = ledger.get("bridges", []).duplicate()}
 	var keys: Array[Vector2i] = []
 	for region: Dictionary in regions:
 		var key := Vector2i(floori(float(region.rect.position.x) / WorldData.REGION_SIZE),
@@ -96,7 +97,10 @@ static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: D
 				# 13.9: для растительности и уклонов игры, как поля плана.
 				for name: String in ["slope", "dw", "dist_path", "village"]:
 					cells[name][dst] = roads[name][at] if roads.has(name) else 0
-		out.regions[keys[n]] = {rect = rect, fields = cells}
+		# decor — что строит игра (RegionStream): у группы оно записано в первую её область.
+		var decor := {trails = roads.trails.duplicate(true), bridges = roads.bridges.duplicate(true),
+			settlements = roads.settlements.duplicate(true)} if n == 0 else {trails = [], bridges = [], settlements = []}
+		out.regions[keys[n]] = {rect = rect, fields = cells, decor = decor}
 	# Выходы, попавшие в закреплённые области, продолжены; остальные ждут следующего соседа.
 	var regions_now: Dictionary = out.regions
 	var reached := func(o: Dictionary) -> bool:

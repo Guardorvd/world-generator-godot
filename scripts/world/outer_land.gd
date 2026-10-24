@@ -150,7 +150,7 @@ static func _overlay_regions(ledger: Dictionary, rect: Rect2i, out: Dictionary) 
 	for key: Vector2i in regions:
 		var r: Rect2i = regions[key].rect
 		var part := r.intersection(rect)
-		if not part.has_area():
+		if not part.has_area() or not regions[key].has("fields"):
 			continue
 		if not out.has("village"):
 			out.dist_path = PackedFloat32Array()
@@ -236,7 +236,7 @@ func _region_at(i: int, j: int) -> Array:
 		return []
 	var size := WorldData.REGION_SIZE
 	var r: Variant = regions.get(Vector2i(floori(float(i) / size), floori(float(j) / size)))
-	if r == null:
+	if r == null or not r.has("fields"):
 		return []
 	var rect: Rect2i = r.rect
 	return [r.fields, (j - rect.position.y) * rect.size.x + i - rect.position.x]
@@ -273,6 +273,11 @@ func height(i: int, j: int) -> float:
 ## Посчитана ли клетка за краем карты
 func has(i: int, j: int) -> bool:
 	return not _region_at(i, j).is_empty() or not _locate(i, j).is_empty()
+
+
+## Закреплена ли клетка (её поля в памяти): по ней можно ходить (WorldData.accessible)
+func committed(i: int, j: int) -> bool:
+	return not _region_at(i, j).is_empty()
 
 
 ## Уровень реки или озера закреплённой области в клетке (единицы h) или -INF; море — по высоте

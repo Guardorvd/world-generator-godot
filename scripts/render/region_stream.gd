@@ -5,13 +5,23 @@ extends Node3D
 ## Готовая область передаётся в существующую загрузку: OuterLand берёт её клетки (рельеф кусков,
 ## высоты, вода, растительность), а здесь в главном потоке собираются вода, дороги, мосты и дома.
 ## Порядок подготовки зависит от пути игрока, но закреплённое потом не перестраивается.
+## 13.9+: журнал хранится на диске (store_dir, общий для слотов сохранения этого мира) и
+## восстанавливается при загрузке. Далёкие области освобождаются: узлы — дальше HIDE, поля
+## клеток — дальше EVICT (остаются в файле и читаются снова при возвращении ближе KEEP).
 
 const Regions := preload("res://scripts/world/region_preparation.gd")
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const REACH := OuterTerrain.RADIUS + 400.0 # м: области ближе готовятся заранее, до того как их видно
+const QUEUE := 4                            # сколько ближайших неготовых областей держать в очереди
+const HIDE := OuterTerrain.DROP + 200.0     # м: дальше узлы области (вода, дороги, мосты, дома) убираются
+const KEEP := 2800.0                        # м: ближе поля клеток в памяти (соседи готовящейся области — ближе)
+const EVICT := 3400.0                       # м: дальше поля клеток выгружаются из памяти
+const RECHECK := 32.0                       # м пути между пересмотром очереди и выгрузки
+const FORMAT := 1
 const ROAD_LIFT := 0.06                     # м: полотно над рельефом без мерцания
 const ROAD_COLOR := Color8(0x9c, 0x88, 0x66)
+static var root := "user://regions"         # тесты подменяют
 
 var world: WorldData
 var heights: Heightfield
@@ -19,11 +29,16 @@ var terrain: OuterTerrain
 var vegetation: VegetationLayer
 var ledger := {}
 var failed := {}        # области, которые не удалось подготовить: остаются внешним рельефом
-var fires: Array = []   # костры поселений областей (как SettlementsBuilder.build)
+var fires: Array = []   # костры поселений показанных областей (как SettlementsBuilder.build)
 var windows: Array = [] # материалы окон, ночью ярче
+var queue: Array[Vector2i] = []
+var stats := {prepared = 0, loaded = 0, evicted = 0, built = 0, hidden = 0, apply_ms = 0.0, show_ms = 0.0}
 var _task := -1
 var _out := {}
 var _key := Vector2i.ZERO
+var _shown := {}        # область -> {node, fires, windows}
+var _bridges := {}      # область -> её мосты в Heightfield (регистрируются один раз)
+var _checked_at := Vector2.INF
 var _road_mat: StandardMaterial3D
 
 
@@ -36,24 +51,71 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 	_road_mat.cull_mode = BaseMaterial3D.CULL_DISABLED # направление ленты зависит от хода дороги
 
 
-## Каждый кадр: забрать готовую область или начать следующую. true — область добавлена в этом кадре.
+## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
+static func store_dir(w: WorldData) -> String:
+	var id := "%s|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT]
+	return root.path_join(id.sha256_text().substr(0, 24))
+
+
+## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
+func restore(x: float, z: float) -> void:
+	var path := store_dir(world).path_join("ledger.bin")
+	if not FileAccess.file_exists(path):
+		return
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	var saved: Variant = f.get_var() if f != null else null
+	if not saved is Dictionary or saved.get("format") != FORMAT:
+		push_warning("Журнал областей не прочитан: %s" % path)
+		return
+	ledger = saved.ledger
+	for key: Vector2i in ledger.regions:
+		if _distance(key, Vector2(x, z)) <= KEEP:
+			_load_fields(key)
+	world.outer.set_ledger(ledger)
+
+
+## Каждый кадр: забрать готовую область, затем одно действие — показать, убрать, подгрузить,
+## выгрузить или начать следующую. true — в кадре была заметная работа главного потока.
 func update(x: float, z: float) -> bool:
-	if _task != -1:
-		if not WorkerThreadPool.is_task_completed(_task):
-			return false
+	var p := Vector2(x, z)
+	if _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		_apply(_key, _out.get("r", {}))
 		return true
-	var key: Variant = _next(x, z)
-	if key == null:
-		return false
-	_key = key
-	_out = {}
-	var out := _out
-	var snapshot := ledger
-	var w := world
-	_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot), false, "Область")
+	if p.distance_to(_checked_at) > RECHECK:
+		_checked_at = p
+		_plan(p)
+	for key: Vector2i in ledger.get("regions", {}):
+		var d := _distance(key, p)
+		var entry: Dictionary = ledger.regions[key]
+		if d <= KEEP and not entry.has("fields"):
+			_load_fields(key)
+			world.outer.set_ledger(ledger)
+			terrain.refresh(entry.rect.grow(2))
+			vegetation.refresh(entry.rect.grow(2))
+			return true
+		if d > EVICT and entry.has("fields"):
+			_evict(key)
+			return false
+		if d <= REACH and not _shown.has(key) and entry.has("fields"):
+			_show(key)
+			return true
+		if d > HIDE and _shown.has(key):
+			_hide(key)
+			return true
+	if _task == -1 and not queue.is_empty():
+		var key: Vector2i = queue.pop_front()
+		if ledger.get("regions", {}).has(key) or failed.has(key) or not _neighbors_ready(key):
+			_checked_at = Vector2.INF # пересмотреть очередь в следующем кадре
+			return false
+		_key = key
+		_out = {}
+		var out := _out
+		var snapshot := ledger
+		var w := world
+		var dir := store_dir(world)
+		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, dir), false, "Область")
 	return false
 
 
@@ -67,9 +129,9 @@ func _exit_tree() -> void:
 	finish()
 
 
-## Подготовить и закрепить одну область (в фоне). Река без допустимого русла не принимается:
+## Подготовить, закрепить и записать одну область (в фоне). Река без допустимого русла не принимается:
 ## тогда область готовится без входящих рек, и вода кончается у её границы.
-static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary) -> Dictionary:
+static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir := "") -> Dictionary:
 	var r := Regions.prepare(w, key, current)
 	var network := Regions.prepare_rivers(r)
 	var batch := Regions.finish_neighbors(w, [r], [network])
@@ -83,54 +145,143 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary) -> 
 			return {ready = false, reason = batch.reason}
 	var roads := Regions.prepare_roads(w, [r], batch, current)
 	var done := Regions.commit(current, [r], [network], batch, roads)
-	done.roads = roads
 	done.dropped_rivers = dropped
-	if done.ready:
-		done.water = water_arrays(done.ledger.regions[key])
+	done.roads = roads
+	if done.ready and not dir.is_empty():
+		var err := save(dir, done.ledger, key)
+		if err != OK:
+			push_warning("Область %s не записана: ошибка %d" % [key, err])
 	return done
 
 
-## Ближайшая к игроку область за краем плана, ещё не закреплённая; null — все в REACH готовы
-func _next(x: float, z: float) -> Variant:
-	var p := Vector2(x, z) / TILE
+## Поля области — в свой файл, журнал без полей — в ledger.bin; запись через временный файл.
+static func save(dir: String, current: Dictionary, key: Vector2i) -> Error:
+	var err := DirAccess.make_dir_recursive_absolute(dir)
+	if err != OK:
+		return err
+	var entry: Dictionary = current.regions[key]
+	err = _write(dir.path_join("%d_%d.region" % [key.x, key.y]), {format = FORMAT, rect = entry.rect, fields = entry.fields})
+	if err != OK:
+		return err
+	var light := current.duplicate()
+	light.regions = {}
+	for k: Vector2i in current.regions:
+		var e: Dictionary = current.regions[k]
+		light.regions[k] = {rect = e.rect, decor = e.decor}
+	return _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
+
+
+static func _write(path: String, value: Variant) -> Error:
+	var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
+	if f == null:
+		return FileAccess.get_open_error()
+	f.store_var(value)
+	f.close()
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	return DirAccess.rename_absolute(path + ".tmp", path)
+
+
+## Очередь: ближайшие неготовые области за краем плана ближе REACH, не больше QUEUE
+func _plan(p: Vector2) -> void:
+	var c := p / TILE
 	var reach := REACH / TILE
 	var size := WorldData.REGION_SIZE
 	var plan := Rect2i(0, 0, world.W, world.H)
 	var regions: Dictionary = ledger.get("regions", {})
-	var best: Variant = null
-	var distance := INF
-	for ky in range(floori((p.y - reach) / size), floori((p.y + reach) / size) + 1):
-		for kx in range(floori((p.x - reach) / size), floori((p.x + reach) / size) + 1):
+	var found: Array = []
+	for ky in range(floori((c.y - reach) / size), floori((c.y + reach) / size) + 1):
+		for kx in range(floori((c.x - reach) / size), floori((c.x + reach) / size) + 1):
 			var key := Vector2i(kx, ky)
-			var rect := Regions.rect_for(key)
-			if rect.intersects(plan) or regions.has(key) or failed.has(key):
+			if Regions.rect_for(key).intersects(plan) or regions.has(key) or failed.has(key) or (_task != -1 and key == _key):
 				continue
-			var d := p.distance_to(p.clamp(Vector2(rect.position), Vector2(rect.end)))
-			if d <= reach and d < distance:
-				distance = d
-				best = key
-	return best
+			var d := _distance(key, p)
+			if d <= REACH:
+				found.append([d, key])
+	found.sort_custom(func(a: Array, b: Array) -> bool:
+		return a[0] < b[0] or a[0] == b[0] and (a[1].y < b[1].y or a[1].y == b[1].y and a[1].x < b[1].x))
+	queue.clear()
+	for item: Array in found.slice(0, QUEUE):
+		queue.append(item[1])
+
+
+## Соседи готовящейся области передают ей окончательные клетки: их поля должны быть в памяти
+func _neighbors_ready(key: Vector2i) -> bool:
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var e: Variant = ledger.get("regions", {}).get(key + Vector2i(dx, dy))
+			if e != null and not e.has("fields"):
+				return false
+	return true
+
+
+func _distance(key: Vector2i, p: Vector2) -> float:
+	var rect := Regions.rect_for(key)
+	var a := Vector2(rect.position) * TILE
+	return p.distance_to(p.clamp(a, a + Vector2(rect.size) * TILE))
+
+
+func _load_fields(key: Vector2i) -> void:
+	var path := store_dir(world).path_join("%d_%d.region" % [key.x, key.y])
+	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+	var saved: Variant = f.get_var() if f != null else null
+	if not saved is Dictionary or saved.get("format") != FORMAT:
+		push_warning("Поля области %s не прочитаны" % key)
+		return
+	ledger = ledger.duplicate()
+	ledger.regions = ledger.regions.duplicate()
+	var entry: Dictionary = ledger.regions[key].duplicate()
+	entry.fields = saved.fields
+	ledger.regions[key] = entry
+	stats.loaded += 1
+
+
+## Поля далёкой области остаются только в файле; запись журнала (rect, decor) — в памяти
+func _evict(key: Vector2i) -> void:
+	ledger = ledger.duplicate()
+	ledger.regions = ledger.regions.duplicate()
+	var entry: Dictionary = ledger.regions[key].duplicate()
+	entry.erase("fields")
+	ledger.regions[key] = entry
+	world.outer.set_ledger(ledger)
+	stats.evicted += 1
 
 
 func _apply(key: Vector2i, done: Dictionary) -> void:
+	var started := Time.get_ticks_usec()
 	if not done.get("ready", false):
 		failed[key] = true
 		push_warning("Область %s не подготовлена: %s" % [key, done.get("reason", "")])
 		return
-	ledger = done.ledger
+	# Результат строился на снимке журнала: перенести прочитанные и выгруженные с тех пор поля.
+	var next: Dictionary = done.ledger
+	next.regions = next.regions.duplicate()
+	for k: Vector2i in ledger.get("regions", {}):
+		if next.regions.has(k) and ledger.regions[k].has("fields") != next.regions[k].has("fields"):
+			next.regions[k] = ledger.regions[k]
+	ledger = next
 	world.outer.set_ledger(ledger)
 	var rect := Regions.rect_for(key)
 	terrain.refresh(rect.grow(2))
 	vegetation.refresh(rect.grow(2))
+	stats.prepared += 1
+	stats.apply_ms = maxf(stats.apply_ms, (Time.get_ticks_usec() - started) / 1000.0)
+	_checked_at = Vector2.INF # узлы покажет следующий кадр: принятие и сборка в разных кадрах
+
+
+## Узлы области: вода по мокрым клеткам, лента дорог, мосты и дома штатными сборщиками
+func _show(key: Vector2i) -> void:
+	var started := Time.get_ticks_usec()
+	var entry: Dictionary = ledger.regions[key]
+	var decor: Dictionary = entry.decor
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
 	add_child(node)
-	var water := WaterBuilder._flat_mesh(done.water, WaterBuilder._material(), "Water")
+	var water := WaterBuilder._flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
 	if water != null:
 		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(water)
-	var roads: Dictionary = done.roads
-	var ribbons := _road_arrays(roads.trails)
+	var ribbons := _road_arrays(decor.trails)
 	if not ribbons.is_empty():
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ribbons)
@@ -140,14 +291,41 @@ func _apply(key: Vector2i, done: Dictionary) -> void:
 		mi.material_override = _road_mat
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
-	StructuresBuilder.build(node, heights, heights.add_outer_bridges(roads.bridges))
+	if not _bridges.has(key):
+		_bridges[key] = heights.add_outer_bridges(decor.bridges)
+	StructuresBuilder.build(node, heights, _bridges[key])
 	# Тот же сборщик домов, что у плана: временный мир только со списком поселений области.
 	var places := WorldData.new()
 	places.seed_num = world.seed_num ^ (key.x * 73856093) ^ (key.y * 19349663)
-	places.settlements = roads.settlements
+	places.settlements = decor.settlements
 	var built := SettlementsBuilder.build(node, places, heights)
-	fires.append_array(built.fires)
-	windows.append(built.windows)
+	_shown[key] = {node = node, fires = built.fires, windows = built.windows}
+	stats.built += 1
+	stats.show_ms = maxf(stats.get("show_ms", 0.0), (Time.get_ticks_usec() - started) / 1000.0)
+	_collect()
+
+
+func _hide(key: Vector2i) -> void:
+	_shown[key].node.queue_free()
+	_shown.erase(key)
+	stats.hidden += 1
+	_collect()
+
+
+func _collect() -> void:
+	fires = []
+	windows = []
+	for key: Vector2i in _shown:
+		fires.append_array(_shown[key].fires)
+		windows.append(_shown[key].windows)
+
+
+## Сколько областей с полями в памяти и показанных (для проверок памяти)
+func counts() -> Dictionary:
+	var with_fields := 0
+	for key: Vector2i in ledger.get("regions", {}):
+		with_fields += int(ledger.regions[key].has("fields"))
+	return {regions = ledger.get("regions", {}).size(), fields = with_fields, shown = _shown.size()}
 
 
 ## Плоская вода области: квадрат на каждую мокрую клетку, углы — средний уровень соседних мокрых
@@ -157,34 +335,36 @@ static func water_arrays(region: Dictionary) -> Array:
 	var f: Dictionary = region.fields
 	var W := rect.size.x
 	var H := rect.size.y
-	var wet := func(x: int, y: int) -> bool:
-		if x < 0 or y < 0 or x >= W or y >= H:
-			return false
-		var i := y * W + x
-		return (f.river[i] != 0 or f.lake[i] != 0) and is_finite(f.water_level[i])
-	var corner := PackedFloat32Array()
-	corner.resize((W + 1) * (H + 1))
-	for y in H + 1:
-		for x in W + 1:
-			var sum := 0.0
-			var n := 0
-			for d: Vector2i in [Vector2i(-1, -1), Vector2i(0, -1), Vector2i(-1, 0), Vector2i(0, 0)]:
-				if wet.call(x + d.x, y + d.y):
-					sum += f.water_level[(y + d.y) * W + x + d.x]
-					n += 1
-			corner[y * (W + 1) + x] = sum / n if n > 0 else 0.0
+	var level: PackedFloat32Array = f.water_level
+	var wet := PackedByteArray()
+	wet.resize(W * H)
+	var any := false
+	for i in W * H:
+		if (f.river[i] != 0 or f.lake[i] != 0) and is_finite(level[i]):
+			wet[i] = 1
+			any = true
 	var pos := PackedVector3Array()
+	if not any:
+		return []
+	var corner := PackedVector3Array()
+	corner.resize(4)
 	for y in H:
 		for x in W:
-			if not wet.call(x, y):
+			if wet[y * W + x] == 0:
 				continue
-			var v := func(cx: int, cy: int) -> Vector3:
-				return Vector3((rect.position.x + cx) * TILE, maxf(0.0, corner[cy * (W + 1) + cx]) * HS, (rect.position.y + cy) * TILE)
-			var a: Vector3 = v.call(x, y)
-			var b: Vector3 = v.call(x + 1, y)
-			var c: Vector3 = v.call(x, y + 1)
-			var d: Vector3 = v.call(x + 1, y + 1)
-			pos.append_array([a, b, c, b, d, c])
+			for c in 4:
+				var cx := x + (c & 1)
+				var cy := y + (c >> 1)
+				var sum := 0.0
+				var n := 0
+				for d in 4:
+					var nx := cx - 1 + (d & 1)
+					var ny := cy - 1 + (d >> 1)
+					if nx >= 0 and ny >= 0 and nx < W and ny < H and wet[ny * W + nx] != 0:
+						sum += level[ny * W + nx]
+						n += 1
+				corner[c] = Vector3((rect.position.x + cx) * TILE, maxf(0.0, sum / n) * HS, (rect.position.y + cy) * TILE)
+			pos.append_array([corner[0], corner[1], corner[2], corner[1], corner[3], corner[2]])
 	return WaterBuilder._arrays(pos)
 
 
