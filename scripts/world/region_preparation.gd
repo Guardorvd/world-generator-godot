@@ -9,6 +9,7 @@ const Rivers := preload("res://scripts/world/region_rivers.gd")
 const WaterSurface := preload("res://scripts/world/region_water_surface.gd")
 const WaterBatch := preload("res://scripts/world/region_water_batch.gd")
 const Settlements := preload("res://scripts/world/region_settlements.gd")
+const Roads := preload("res://scripts/world/region_roads.gd")
 
 
 ## В отличие от WorldData.region_rect, адрес существует и за краем стартового плана.
@@ -42,6 +43,11 @@ static func finish_neighbors(source: WorldData, regions: Array, networks: Array)
 		var places := Settlements.prepare(source, regions[i], batch.surfaces[i])
 		batch.settlements.append(places.settlements)
 	return batch
+
+
+## 13.5: следующий явный этап после воды и поселений, не изменяет уже подготовленную группу.
+static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary) -> Dictionary:
+	return Roads.prepare(source, regions, batch)
 
 
 ## Данные клеток лежат построчно в sample_rect, координаты — всегда мировые.

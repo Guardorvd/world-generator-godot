@@ -33,7 +33,7 @@ static func finish(regions: Array, networks: Array) -> Dictionary:
 	var surfaces: Array = []
 	for region: Dictionary in regions:
 		var surface := Surface.prepare(region, all)
-		if not surface.ready: return {ready = false, reason = surface.reason, surfaces = []}
+		if not surface.ready: return {ready = false, reason = surface.reason, failure = surface.failure, surfaces = []}
 		surfaces.append(surface)
 	# Проверить и исходные поля: нельзя склеивать заготовки разных версий/сидов.
 	for a in regions.size():

@@ -1,8 +1,8 @@
 extends RefCounted
 ## 13.2: проект земли и маски воды по сегментам русла. Без узлов и изменения источника.
 ## Это ещё не публикация в игре: климат, меши и соседние растровые края проверяются отдельно.
-const DEPTH := 0.8 / GameConfig.HS
-const BANK := 0.15 / GameConfig.HS
+const DEPTH: float = preload("res://scripts/world/region_drainage.gd").RIVER_DEPTH
+const BANK: float = preload("res://scripts/world/region_drainage.gd").BANK_HEIGHT
 # Те же пределы земляных работ, что у поиска стока.
 const MAX_FILL: float = preload("res://scripts/world/region_drainage.gd").MAX_FILL
 const MAX_CUT: float = preload("res://scripts/world/region_drainage.gd").MAX_CUT
@@ -21,6 +21,7 @@ static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:
 	var bank_weight := PackedFloat32Array()
 	bank_weight.resize(original.size())
 	var reason := ""
+	var failure := {}
 	for river: Dictionary in network.rivers:
 		var points: Array = river.points
 		for k in range(1, points.size()):
@@ -55,6 +56,9 @@ static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:
 						target = lerpf(maxf(original[i], level + BANK), original[i], smoothstep(0.0, 1.0, distance - width))
 					if target - original[i] > MAX_FILL or original[i] - target > MAX_CUT:
 						reason = "earthwork_limit"
+						if failure.is_empty():
+							failure = {cell = Vector2i(x, y), ground = original[i], target = target,
+								water = level, distance = distance, width = width}
 						continue
 					# У пересекающихся лент берём более глубокое дно; берег не засыпает русло.
 					if distance < width:
@@ -71,5 +75,5 @@ static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:
 		ground = original.duplicate()
 		water.fill(-INF)
 		mask.fill(0)
-	return {h = ground, water_level = water, river = mask, reason = reason,
+	return {h = ground, water_level = water, river = mask, reason = reason, failure = failure,
 		ready = reason.is_empty() and network.unresolved.is_empty()}

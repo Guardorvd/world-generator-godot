@@ -133,9 +133,12 @@ func _init() -> void:
 	if OS.get_cmdline_user_args().has("--neighbors"):
 		var checks := preload("res://tools/region_neighbors_checks.gd").new()
 		fails += checks.run()
+		fails += int(not checks.completed)
 		if fails == 0 and OS.get_cmdline_user_args().has("--real"):
 			fails += checks.real_terrain()
+			fails += int(not checks.completed)
 		if fails == 0 and OS.get_cmdline_user_args().has("--recorded"):
 			fails += checks.recorded_terrain()
+			fails += int(not checks.completed)
 	print("region_rivers_test: %d failures" % fails)
 	quit(1 if fails else 0)

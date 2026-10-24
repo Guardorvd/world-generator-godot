@@ -3,6 +3,7 @@ const Regions := preload("res://scripts/world/region_preparation.gd")
 const Batch := preload("res://scripts/world/region_water_batch.gd")
 const Places := preload("res://scripts/world/region_settlements.gd")
 var fails := 0
+var completed := false
 
 
 func check(ok: bool, label: String) -> void:
@@ -33,6 +34,7 @@ func plain(rect: Rect2i) -> Dictionary:
 
 
 func run() -> int:
+	completed = false
 	var source := WorldData.new()
 	source.seed_num = 734
 	var a := plain(Rect2i(0, 0, 32, 32))
@@ -89,6 +91,33 @@ func run() -> int:
 	check(valid, "мировые адреса, расстояния между соседями и дома внутри области")
 	var q := Regions.finish_neighbors(source, [right, left], [no_water, no_water])
 	check(var_to_bytes(p.settlements[0]) == var_to_bytes(q.settlements[1]), "поселения не зависят от порядка подготовки")
+	if not OS.get_cmdline_user_args().has("--water-only"):
+		var before_roads := var_to_bytes(p)
+		var roads := Regions.prepare_roads(source, [left, right], p)
+		check(roads.ready and roads.connections.size() == all.size() - 1 and not roads.trails.is_empty(),
+			"13.5: поселения соседних областей соединены без лишних дорог")
+		var reverse_roads := Regions.prepare_roads(source, [right, left], q)
+		check(var_to_bytes(roads) == var_to_bytes(reverse_roads) and before_roads == var_to_bytes(p),
+			"13.5: дороги независимы от порядка соседей и не меняют входные данные")
+		var houses_clear := true
+		for settlement: Dictionary in roads.settlements:
+			for hut: Dictionary in settlement.huts:
+				var i: int = (floori(hut.y) - roads.sample_rect.position.y) * roads.sample_rect.size.x + floori(hut.x) - roads.sample_rect.position.x
+				houses_clear = houses_clear and roads.path_mask[i] < 2
+		check(houses_clear, "13.5: дома перестроены вдоль улиц, полотно свободно")
+		var divided: Dictionary = p.duplicate(true)
+		for n in 2:
+			var region: Dictionary = [left, right][n]
+			for y in range(region.sample_rect.position.y, region.sample_rect.end.y):
+				for x in range(252, 260):
+					if not region.sample_rect.has_point(Vector2i(x, y)): continue
+					var i := Batch.index(region, x, y)
+					divided.surfaces[n].river[i] = 1
+					divided.surfaces[n].water_level[i] = 0.16
+		var broken := Regions.prepare_roads(source, [left, right], divided)
+		check(not broken.ready and broken.components >= 2 and broken.trails.is_empty(),
+			"13.5: сплошная река требует переправы, дорога не прокладывается по воде")
+		check(not Regions.prepare_roads(source, [left], {ready = false}).ready, "13.5: дороги ждут согласованную воду")
 	source.settlements = all.duplicate(true)
 	var old := var_to_bytes(source.settlements)
 	var excluded := Places.prepare(source, left, p.surfaces[0])
@@ -112,11 +141,13 @@ func run() -> int:
 	var carved := Regions.prepare_rivers(entrance)
 	check(carved.unresolved.is_empty() and carved.rivers.size() == 1 and var_to_bytes(entrance) == entry_before,
 		"небольшой подъём за входом допускает ограниченную выемку без изменения источника")
+	completed = true
 	return fails
 
 
 ## Один настоящий план географии; без домов/дорог стартового мира и повторной генерации.
 func real_terrain() -> int:
+	completed = false
 	Grid.allow_fast = true
 	var started := Time.get_ticks_msec()
 	var w := WorldGenerator.geography("Север-1234")
@@ -144,11 +175,13 @@ func real_terrain() -> int:
 	print(text)
 	var file := FileAccess.open("res://tools/control/runs/region_13_3.json", FileAccess.WRITE)
 	if file: file.store_string(text)
+	completed = true
 	return fails
 
 
 ## Повтор только внешнего шума по записанным выходам: без гидрологии/генерации плана.
 func recorded_terrain() -> int:
+	completed = false
 	Grid.allow_fast = true
 	var recorded: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://tools/control/runs/region_13_3.json"))
 	var w := WorldData.new()
@@ -188,11 +221,12 @@ func recorded_terrain() -> int:
 		var network := Regions.prepare_rivers(r)
 		var result := Regions.finish_neighbors(w, [r], [network])
 		report.append({region = item.region, rivers = network.rivers.size(), unresolved = network.unresolved,
-			ready = result.ready, reason = result.reason, settlements = result.settlements[0].size() if result.ready else 0})
+			ready = result.ready, reason = result.reason, failure = result.get("failure", {}), settlements = result.settlements[0].size() if result.ready else 0})
 		check(result.ready or result.surfaces.is_empty(), "повтор записанного участка: нет частичной публикации")
 	var text := JSON.stringify(report, "\t")
 	print(text)
 	var file := FileAccess.open("res://tools/control/runs/region_13_3_recorded.json", FileAccess.WRITE)
 	if file: file.store_string(text)
+	completed = true
 	return fails
 
