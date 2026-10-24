@@ -2,8 +2,9 @@ extends RefCounted
 ## 6.6: простые ближние растения. Цвета частей запечены в вершины.
 ## 8.2: мелкие цветы, высокая трава, молодые деревья и характеры леса.
 
-enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE }
-const COUNT := 12
+enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, HAZEL_LOW, HAZEL, JUNIPER_LOW, JUNIPER, REED_GRASS, GREAT_FERN }
+const BASE_COUNT := 12
+const COUNT := 18
 ## Характер леса: светлый (просветы, трава и цветы), тёмный (сомкнутый, чаще хвойный: мох и грибы),
 ## чаща (молодой участок: кусты и подрост стеной), папоротниковый (влажная тень).
 enum { LIGHT, DARK, THICKET, FERNY }
@@ -82,7 +83,8 @@ static func meshes() -> Array[Mesh]:
 	var young := _crowned(Models._cyl(0.04, 0.08, 3.0, 6), Color(0.62, 0.6, 0.55), Vector3(0, 2.35, 0), Vector3(0.85, 1.05, 0.85), 180)
 	# Молодая ель: узкие ярусы хвои, как у взрослых елей.
 	var young_pine := _spruce(3.3, bark, 5, 0.75, 0.22, Color(0.25, 0.41, 0.27))
-	return [fern, moss, _colored(mushrooms), herb, tall_grass, bush, sapling, pine, _colored(flowers), high_grass, young, young_pine]
+	return [fern, moss, _colored(mushrooms), herb, tall_grass, bush, sapling, pine, _colored(flowers), high_grass, young, young_pine,
+		_hazel(1.7, 15601), _hazel(4.1, 15602), _juniper(1.25), _juniper(3.1), _reed_grass(), _great_fern()]
 
 
 ## 9.4: ёлочка из звёздчатых ярусов с поникшими лапами и вырезами между ними вместо гладких конусов.
@@ -127,7 +129,7 @@ static func _colored(parts: Array) -> ArrayMesh:
 		var arrays: Array = part[0].surface_get_arrays(0)
 		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 		var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
-		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX] if arrays[Mesh.ARRAY_INDEX] != null else PackedInt32Array(range(vertices.size()))
 		var xf: Transform3D = part[1]
 		for i in indices:
 			st.set_color(entry[1])
@@ -216,7 +218,7 @@ static func mix(table: Array, ch: PackedFloat32Array) -> float:
 
 ## Накопленные веса: влажная тень — мох/грибы, просветы — трава/кусты/молодняк.
 ## ch — доли характеров; без них лес смешанный.
-static func weights(biome: int, moisture: float, light: float, canopy: float, ch := PackedFloat32Array([0.25, 0.25, 0.25, 0.25])) -> PackedFloat32Array:
+static func weights(biome: int, moisture: float, light: float, canopy: float, ch := PackedFloat32Array([0.25, 0.25, 0.25, 0.25]), relict := 0.0, needles := 0.0) -> PackedFloat32Array:
 	var shade := 1.0 - light
 	var wet := smoothstep(0.25, 0.8, moisture)
 	var conifer := biome == Biomes.TAIGA
@@ -237,11 +239,11 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	# Характер меняет состав, а не долю растений рядом с подстилкой: её задаёт DENSITY.
 	var before := 0.0
 	var after := 0.0
-	for k in COUNT:
+	for k in BASE_COUNT:
 		before += out[k]
 		out[k] *= TEMPLATE[0][k] * ch[0] + TEMPLATE[1][k] * ch[1] + TEMPLATE[2][k] * ch[2] + TEMPLATE[3][k] * ch[3]
 		after += out[k]
-	for k in COUNT:
+	for k in BASE_COUNT:
 		out[k] *= before / maxf(after, 0.0001)
 	# Чаща не ждёт просветов: подрост и кусты стоят стеной и под пологом.
 	var thicket := ch[THICKET]
@@ -250,4 +252,154 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	out[PINE] += thicket * (0.3 if conifer else 0.08)
 	out[YOUNG] += thicket * (0.04 if conifer else 0.14)
 	out[YOUNG_PINE] += thicket * (0.14 if conifer else 0.04)
+	var old_total := 0.0
+	for value in out: old_total += value
+	out.resize(COUNT)
+	var middle := middle_strength(relict, canopy)
+	if middle > 0.0:
+		var balance := PackedFloat32Array([
+			(0.5 + wet * 0.5) * (1.0 - needles * 0.65),
+			(0.35 + wet * 0.8) * (1.0 - needles * 0.8),
+			(0.6 + needles * 0.8) * (1.0 - wet * 0.35),
+			(0.35 + needles) * (1.0 - wet * 0.5),
+			0.45 + light * 0.65 + needles * 0.25,
+			wet * shade * (1.2 - needles * 0.55),
+		])
+		var sum := 0.0
+		for value in balance: sum += value
+		for k in BASE_COUNT: out[k] *= 1.0 - middle * 0.45
+		for k in balance.size(): out[BASE_COUNT + k] = old_total * middle * 0.9 * balance[k] / maxf(sum, 0.001)
 	return out
+
+
+static func is_middle(kind: int) -> bool:
+	return kind >= HAZEL_LOW and kind <= GREAT_FERN
+
+
+static func is_shrub(kind: int) -> bool:
+	return kind >= HAZEL_LOW and kind <= JUNIPER
+
+
+static func middle_strength(relict: float, canopy: float) -> float:
+	return clampf(relict, 0.0, 1.0) * smoothstep(0.25, 0.8, canopy)
+
+
+## Shared wind shader: stiffer woody stems, lighter fronds and long grass blades.
+static func middle_wind(kind: int) -> Array:
+	if kind in [JUNIPER_LOW, JUNIPER]: return [0.11, 0.018, 0.8, 0.75, 0.18]
+	if kind in [HAZEL_LOW, HAZEL]: return [0.19, 0.035, 0.7, 0.72, 0.28]
+	if kind == GREAT_FERN: return [0.21, 0.045, 1.15, 0.75, 0.3]
+	return [0.25, 0.055, 1.45, 0.8, 0.3]
+
+
+## Indexed plant meshes with the project's native LOD importer; stable UV/normal/color layout.
+static func _middle_mesh(source: ArrayMesh) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.create_from(source, 0)
+	st.index()
+	var arrays := st.commit_to_arrays()
+	if arrays[Mesh.ARRAY_TEX_UV] == null:
+		var uv := PackedVector2Array()
+		for p: Vector3 in arrays[Mesh.ARRAY_VERTEX]: uv.append(Vector2(p.x * 0.5, p.y * 0.5))
+		arrays[Mesh.ARRAY_TEX_UV] = uv
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return Models._with_lods(mesh)
+
+
+static func _leaf(st: SurfaceTool, center: Vector3, along: Vector3, width: float, color: Color) -> void:
+	var side := along.cross(Vector3.UP).normalized() * width
+	if side.length_squared() < 0.00001: side = Vector3.RIGHT * width
+	var points := [center - along * 0.45, center + side + Vector3.UP * width * 0.4, center + along * 0.55 + Vector3.UP * width * 0.25, center - side - Vector3.UP * width * 0.15]
+	var normal := (side.cross(along).normalized() + Vector3.UP * 0.35).normalized()
+	if normal.y < 0: normal = -normal
+	var uv := [Vector2(0.5, 1), Vector2(0, 0.5), Vector2(0.5, 0), Vector2(1, 0.5)]
+	for i in [0, 1, 2, 0, 2, 3]:
+		st.set_color(color)
+		st.set_normal(normal)
+		st.set_uv(uv[i])
+		st.add_vertex(points[i])
+
+
+## Multi-stem hazel: bowed canes and leaves distributed along branching twigs, not a solid ball.
+static func _hazel(height: float, seed_num: int) -> ArrayMesh:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_num
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bark := Color("796443")
+	var rings := 6 if height < 2.0 else 8
+	for stem in (4 if height < 2.0 else 6):
+		var a := stem * 2.399 + rng.randf_range(-0.2, 0.2)
+		var direction := Vector3(cos(a), 0, sin(a))
+		var path: Array[Vector3] = []
+		var top := height * rng.randf_range(0.82, 1.0)
+		for i in rings + 1:
+			var t := float(i) / rings
+			path.append(direction * (0.08 + pow(t, 1.5) * height * 0.22) + Vector3.UP * top * t)
+		ForestModels._tube(st, [path, height * 0.012, 0.006, bark, false], 4, true)
+		for i in range(3, rings + 1):
+			var t := float(i) / rings
+			var out := direction.rotated(Vector3.UP, -0.65 if i % 2 else 0.65)
+			var end := path[i] + out * height * (0.14 - t * 0.065) + Vector3.UP * 0.08
+			ForestModels._tube(st, [[path[i], end], 0.014, 0.003, bark, false], 3, true)
+			for leaf in 5:
+				var p := path[i].lerp(end, 0.3 + leaf * 0.16)
+				var axis := out.rotated(Vector3.UP, -0.8 if leaf % 2 else 0.8) * (0.18 + height * 0.035) + Vector3.UP * (0.1 + height * 0.025)
+				_leaf(st, p, axis, 0.08 + height * 0.014, Color(0.4 + t * 0.08, 0.56 + t * 0.09, 0.23))
+	return _middle_mesh(st.commit())
+
+
+## Juniper grows as several unequal evergreen shoots; low spreading and taller columnar forms.
+static func _juniper(height: float) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for shoot in 4:
+		var a := shoot * 2.399
+		var h := height * (0.7 + shoot * 0.1)
+		var mesh := _spruce(h, Color("6e624b"), 5, height * 0.24, 0.08, Color("557449"))
+		st.append_from(mesh, 0, Transform3D(Basis.IDENTITY, Vector3(cos(a), 0, sin(a)) * height * 0.12))
+	return _middle_mesh(st.commit())
+
+
+## Curved ribbon blades, with joints along their height so wind bends the whole tuft.
+static func _reed_grass() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for blade in 16:
+		var a := blade * 2.399
+		var direction := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-sin(a), 0, cos(a))
+		var height := 2.0 + (blade % 5) * 0.14
+		for joint in 7:
+			for corner: Vector2i in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 0), Vector2i(1, 1), Vector2i(0, 1)]:
+				var t := (joint + corner.x) / 7.0
+				var center := direction * (0.12 + 0.7 * t * t) + Vector3.UP * height * (t - 0.15 * pow(t, 4))
+				var width := 0.06 * (1.0 - t * 0.93)
+				st.set_normal((Vector3.UP * 0.35 - direction).normalized())
+				st.set_color(Color(0.38 + t * 0.12, 0.5 + t * 0.1, 0.22))
+				st.set_uv(Vector2(corner.y, t))
+				st.add_vertex(center + side * (corner.y * 2.0 - 1.0) * width)
+	return _middle_mesh(st.commit())
+
+
+## Large fern clump: arched rachises with paired pinnae; lower than the hazel/juniper canopy.
+static func _great_fern() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for frond in 8:
+		var a := frond * 2.399
+		var forward := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-sin(a), 0, cos(a))
+		var path: Array[Vector3] = []
+		for step in 9:
+			var t := step / 8.0
+			path.append(forward * (0.05 + t * 1.35) + Vector3.UP * (0.02 + sin(t * PI * 0.85) * (2.05 + frond % 3 * 0.1)))
+		ForestModels._tube(st, [path, 0.015, 0.004, Color("617d36"), false], 3, true)
+		for step in range(2, 9):
+			var t := step / 8.0
+			for sign_side: float in [-1.0, 1.0]:
+				var reach := 0.5 * (1.0 - t * 0.8)
+				_leaf(st, path[step] + side * sign_side * reach * 0.5, side * sign_side * reach + forward * 0.12 + Vector3.UP * 0.12 * (1.0 - t),
+					0.1 * (1.0 - t * 0.5), Color(0.33 + t * 0.08, 0.52 + t * 0.09, 0.23))
+	return _middle_mesh(st.commit())

@@ -67,6 +67,7 @@ var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 var grass: MultiMesh
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
 var _grass_high := -Vector3.INF
+var _outer_vegetation := {} # immutable tree-data snapshot; main-thread chunks are not read by the worker
 var _outer_regions := {}       # 14.4: снимок закреплённых областей для фоновой раскладки травы
 var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
@@ -159,18 +160,24 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
 		var kind := understory.size() - Floor.FIRST
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or understory.size() in [Understory.YOUNG, Understory.YOUNG_PINE]
+		var plant := understory.size()
+		var middle := Understory.is_middle(plant)
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or plant in [Understory.YOUNG, Understory.YOUNG_PINE] or Understory.is_shrub(plant)
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or understory.size() == Understory.MOSS
-		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
+		var wind: Array = CALM if still else (Understory.middle_wind(plant) if middle else PLANT_WIND)
+		var mat := _wind_mat(SHADER, wind, true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
-		var far := Placement.priority(understory.size()) < 2
-		var cap := _understory_cap(far)
+		var far := Placement.priority(plant) < 2 or middle
+		var box := mesh.get_aabb()
+		var cap_factor := 1.0 / maxf(1.0, box.size.x * box.size.z) if middle else 1.0
+		var full := minf(UNDERSTORY_FAR_R, GameConfig.GRASS_R + box.size.y * 10.0) if middle else (UNDERSTORY_FAR_R if far else GameConfig.GRASS_R)
+		var cap := ceili(_understory_cap(far, full) * cap_factor)
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		node.visibility_range_end = under_r if far else grass_r
 		node.visibility_range_end_margin = 8.0
-		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
+		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far, full = full, cap_factor = cap_factor,
+			wind_margin = float(wind[0]) + float(wind[1]) * 1.4, low = Vector3.INF, high = -Vector3.INF, box = box})
 	_grass_mat = grass_mat
 	_apply_fade()
 
@@ -203,7 +210,7 @@ func _apply_fade() -> void:
 			# Корни раскладываются только у больших деревьев до GRASS_R (+ запас), без поредения.
 			radius = GameConfig.GRASS_R
 		_fade(entry.node.material_override, radius, _ahead(radius))
-		entry.node.material_override.set_shader_parameter("thin_full", UNDERSTORY_FAR_R if entry.far else GameConfig.GRASS_R)
+		entry.node.material_override.set_shader_parameter("thin_full", entry.full)
 
 
 static func _fade(mat: ShaderMaterial, radius: float, ahead: float) -> void:
@@ -236,9 +243,9 @@ func _grass_cap() -> int:
 	return _cap(GameConfig.GRASS_MAX, _spread(grass_r, GameConfig.GRASS_R))
 
 
-func _understory_cap(far: bool) -> int:
+func _understory_cap(far: bool, full := UNDERSTORY_FAR_R) -> int:
 	if far:
-		return _cap(UNDERSTORY_FAR_MAX, _spread(under_r, UNDERSTORY_FAR_R))
+		return _cap(roundi(UNDERSTORY_FAR_MAX * pow(full / UNDERSTORY_FAR_R, 2)), _spread(under_r, full))
 	return _cap(UNDERSTORY_MAX, _spread(grass_r, GameConfig.GRASS_R))
 
 
@@ -253,7 +260,7 @@ func set_draw(level: int) -> bool:
 	grass_buf = _buffer(grass.instance_count, STRIDE)
 	_grass_n = 0
 	for entry: Dictionary in understory:
-		entry.cap = _understory_cap(entry.far)
+		entry.cap = ceili(_understory_cap(entry.far, entry.full) * entry.cap_factor)
 		entry.mm.visible_instance_count = 0
 		entry.mm.instance_count = entry.cap
 		entry.buf = _buffer(entry.cap, STRIDE)
@@ -347,6 +354,7 @@ func update(px: float, pz: float, force: bool) -> bool:
 		if p.distance_to(last_fill) >= 8.0:
 			last_fill = p
 			var none: Array[Vector2i] = []
+			_snapshot_outer_trees()
 			_task = WorkerThreadPool.add_task(_fill.bind(px, pz, none), true, "Трава")
 			return false
 		_apply_chunk(_pending.pop_back())
@@ -358,14 +366,21 @@ func update(px: float, pz: float, force: bool) -> bool:
 	last_fill = p
 	var missing := _wanted(p, ahead)
 	if force:
+		_snapshot_outer_trees()
 		_fill(px, pz, missing)
 		for built: Dictionary in _built:
 			_apply_chunk(built)
 		_built.clear()
 		_apply_grass()
 	else:
+		_snapshot_outer_trees()
 		_task = WorkerThreadPool.add_task(_fill.bind(px, pz, missing), true, "Растительность")
 	return force
+
+
+func _snapshot_outer_trees() -> void:
+	# Copy only when starting a refill, not on every physics frame.
+	if world.outer != null: _outer_vegetation = world.outer.veg.duplicate()
 
 
 func _finish() -> void:
@@ -668,6 +683,7 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 
 func _fill_grass(px: float, pz: float) -> void:
 	var w := world
+	var regions := _outer_regions
 	var rT := grass_r / TILE
 	var rF := maxf(grass_r, under_r) / TILE
 	var tx := px / TILE
@@ -684,7 +700,11 @@ func _fill_grass(px: float, pz: float) -> void:
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
 	_bumps_next = PackedFloat32Array()
-	placement.prepare(px, pz, rF * TILE + 12.0)
+	placement.regions = regions
+	var outer_trees := _outer_vegetation.duplicate()
+	for built: Dictionary in _built:
+		if built.has("outer"): outer_trees[built.chunk] = built.outer
+	placement.prepare(px, pz, rF * TILE + 12.0, outer_trees)
 	_understory_sites.clear()
 	# Препятствия на полотне — первыми: обочина, подлесок и трава обходят их, а не наоборот.
 	_fill_road(px, pz)
@@ -717,7 +737,6 @@ func _fill_grass(px: float, pz: float) -> void:
 			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
 	# 14.4: за краем плана — трава и подлесок закреплённых соседних областей. Поля берутся из снимка
 	# журнала (_outer_regions, его подменяют целиком в главном потоке), куски OuterLand не читаются
-	var regions := _outer_regions
 	if not regions.is_empty():
 		for j in range(floori(tz - rF), floori(tz + rF) + 1):
 			for i in range(floori(tx - rF), floori(tx + rF) + 1):
@@ -886,11 +905,12 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
 	var age := maxf(StageVegetation.age_at(world, i, j), StageVegetation.MassiveForest.OLD_AGE * massive)
 	var ch := Understory.character(canopy, surface.g, moisture, sunlight, age)
-	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
+	var middle := Understory.middle_strength(massive, canopy)
+	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch) * lerpf(1.0, 0.65, middle)
 	if path > 0 or slope > 0.9:
 		return grass_mul
 	var light := sunlight * (1.0 - canopy * 0.85)
-	var weights := Understory.weights(bi, moisture, light, canopy, ch)
+	var weights := Understory.weights(bi, moisture, light, canopy, ch, massive, surface.g)
 	var floor_weights := Floor.weights(canopy, surface.g, moisture, light, surface.a)
 	var deadwood := Understory.mix(Understory.DEADWOOD, ch)
 	for f in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP]:
@@ -903,8 +923,9 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 	var seed := world.seed_num ^ 6601
 	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
 	var density := (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) # 9.4: гуще
-	# В чаще мест больше: кусты и подрост стоят стеной.
-	for m in 5 + roundi(3.0 * ch[Understory.THICKET]):
+	# Same eight coordinate-hash slots; mature relict forest also supports a dense middle tier.
+	density *= lerpf(1.0, 1.25, middle)
+	for m in 5 + roundi(3.0 * maxf(ch[Understory.THICKET], middle)):
 		if WGRandom.hash2(i * 8 + m, j, seed + 1) > density:
 			continue
 		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
@@ -918,7 +939,7 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 		var d := Vector2(x - px, z - pz).length()
 		if d > (under_r if far else grass_r):
 			continue
-		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
+		var full: float = understory[kind].full
 		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
 		if rank > _keep(d, full, _ahead(under_r if far else grass_r)):
 			continue
@@ -958,13 +979,13 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		return
 	if not placement.objects_clear(x, z, rot, scale, local_box, radius, owner):
 		return
-	var pos := Vector3(x, heights.ground_at(x, z) - 0.015, z)
+	var pos := Vector3(x, placement.ground_at(x, z) - 0.015, z)
 	var offset: int = entry.count * STRIDE
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
 	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind not in [Floor.SNAG, Floor.STUMP, Floor.BOULDER]):
 		# Почвенные детали и валежник следуют склону; сухостой, пни и валуны остаются вертикальными.
-		var dx := heights.ground_at(x + 0.3, z) - heights.ground_at(x - 0.3, z)
-		var dz := heights.ground_at(x, z + 0.3) - heights.ground_at(x, z - 0.3)
+		var dx := placement.ground_at(x + 0.3, z) - placement.ground_at(x - 0.3, z)
+		var dz := placement.ground_at(x, z + 0.3) - placement.ground_at(x, z - 0.3)
 		xf.basis.x.y = (dx * xf.basis.x.x + dz * xf.basis.x.z) / 0.6
 		xf.basis.z.y = (dx * xf.basis.z.x + dz * xf.basis.z.z) / 0.6
 		if not placement.terrain_fits(xf, local_box):
@@ -977,10 +998,21 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.buf[offset + 6] = xf.basis.z.y
 	for c in 3:
 		entry.buf[offset + 12 + c] = tint
-	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
+	var i := floori(x / TILE)
+	var j := floori(z / TILE)
+	var cover := 0.0
+	if i >= 0 and j >= 0 and i < world.W and j < world.H:
+		cover = _forest_surface.get_pixel(i, j).r
+	else:
+		var cell := _region_cell(placement.regions, i, j)
+		if not cell.is_empty():
+			var massive := _massive_at(i, j, cell.biome, cell.elev, cell.slope, cell.moist, 0.5)
+			cover = _outer_surface(cell, massive, int(_massive_patch.get("massive_scenario", 0))).r
+	entry.buf[offset + 15] = 1.0 - cover
 	entry.buf[offset + 16] = rank
-	entry.low = entry.low.min(box.position)
-	entry.high = entry.high.max(box.end)
+	var animated_box := box.grow(entry.wind_margin * scale)
+	entry.low = entry.low.min(animated_box.position)
+	entry.high = entry.high.max(animated_box.end)
 	entry.count += 1
 	if Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))

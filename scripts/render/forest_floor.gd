@@ -3,7 +3,7 @@ extends RefCounted
 
 const Plants := preload("res://scripts/render/understory_models.gd")
 enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге
-const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
+const FIRST := Plants.COUNT # floor kinds follow the complete understory registry
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
 
