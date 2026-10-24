@@ -1,4 +1,5 @@
 using System;
+using System.Buffers;
 using System.Collections.Generic;
 using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
@@ -41,6 +42,10 @@ public partial class FastGrid
 	private float[] _corridor = Array.Empty<float>();
 	private bool _hasCorridor;
 	private int _corridorVersion;
+	private static readonly ParallelOptions CorridorParallel = new()
+	{
+		MaxDegreeOfParallelism = Math.Max(1, System.Environment.ProcessorCount)
+	};
 
 	private Search _main;
 	private Search _spare;
@@ -101,29 +106,20 @@ public partial class FastGrid
 		_corridorWet = wet;
 		_corridorHalf = half;
 		_hasCorridor = ground.Length > 0;
-		int count = _w * _h * 16;
-		if (_corridor.Length != count)
-			_corridor = new float[count];
 		if (!_hasCorridor)
 			return;
+		int count = checked(_w * _h * 16);
+		if (_corridor.Length < count)
+		{
+			var previous = _corridor;
+			_corridor = ArrayPool<float>.Shared.Rent(count);
+			if (previous.Length > 0)
+				ArrayPool<float>.Shared.Return(previous);
+		}
 		// Полосы по 32 строки: обратный шаг пишется в соседнюю строку, общие строки полос — только на их краях.
-		// Свои потоки, а не общий пул .NET: во время загрузки его занимают шумы (FbmRect) других потоков.
+		// Каждая пара направленных шагов имеет одного писателя; Parallel.For ждёт готовности всех полос.
 		int blocks = (_h + CorridorRows - 1) / CorridorRows;
-		int next = -1;
-		var threads = new Thread[Math.Max(1, Math.Min(blocks, System.Environment.ProcessorCount)) - 1];
-		void Work()
-		{
-			for (int block; (block = Interlocked.Increment(ref next)) < blocks;)
-				MeasureRows(block);
-		}
-		for (int i = 0; i < threads.Length; i++)
-		{
-			threads[i] = new Thread(Work) { IsBackground = true };
-			threads[i].Start();
-		}
-		Work();
-		foreach (var thread in threads)
-			thread.Join();
+		Parallel.For(0, blocks, CorridorParallel, MeasureRows);
 	}
 
 	private const int CorridorRows = 32;
@@ -274,20 +270,20 @@ public partial class FastGrid
 		_pendingQuery = null;
 	}
 
-	/// <summary>Отпустить буферы и кэш поиска после этапа троп. Кэш держит копии стоимости и высот (по 5 МБ на 768),
-	/// а прежние копии массивов из GDScript — мусор крупных объектов: без сборки он оставался в памяти процесса.</summary>
+	/// <summary>Отпустить буферы и кэш поиска после этапа троп, вернуть полосу в пул без принудительной сборки GC.</summary>
 	public void Release()
 	{
 		CancelPrefetch();
 		_found.Clear();
 		_main = null;
 		_spare = null;
+		if (_corridor.Length > 0)
+			ArrayPool<float>.Shared.Return(_corridor);
 		_corridor = Array.Empty<float>();
 		_corridorGround = Array.Empty<float>();
 		_corridorWater = Array.Empty<float>();
 		_corridorWet = Array.Empty<byte>();
 		_hasCorridor = false;
-		GC.Collect();
 	}
 
 	private void Remember(Found found)

@@ -159,7 +159,8 @@ func update(x: float, z: float) -> bool:
 		_key = key
 		_out = {}
 		var out := _out
-		var snapshot := ledger
+		# Словари и вложенные массивы принадлежат задаче до wait_for_task_completion.
+		var snapshot := ledger.duplicate(true)
 		var w := world
 		var dir := store_dir(world)
 		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, dir), false, "Область")
@@ -180,8 +181,8 @@ func _start_build(key: Vector2i) -> void:
 	_build_key = key
 	_build_out = {}
 	var out := _build_out
-	var entry: Dictionary = ledger.regions[key]
-	var regions: Dictionary = ledger.regions
+	var regions: Dictionary = ledger.regions.duplicate(true)
+	var entry: Dictionary = regions[key]
 	var w := world
 	var h := heights
 	_build_task = WorkerThreadPool.add_task(func() -> void:

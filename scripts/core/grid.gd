@@ -21,6 +21,7 @@ const FAST_GRID_SCRIPT := "res://scripts/core/FastGrid.cs"
 static var allow_fast := true
 static var _fast_script: Script = null
 static var _fast_checked := false
+static var _fast_lock := Mutex.new()
 
 
 ## Новый объект FastGrid (C#) или null, если игра запущена не в сборке Godot .NET
@@ -28,13 +29,17 @@ static var _fast_checked := false
 static func fast_grid() -> Object:
 	if not allow_fast:
 		return null
+	# Даже чтение флага — под замком: публикация Script должна быть видна всем потокам.
+	_fast_lock.lock()
 	if not _fast_checked:
-		_fast_checked = true
 		if ClassDB.class_exists("CSharpScript") and ResourceLoader.exists(FAST_GRID_SCRIPT):
 			var script: Script = load(FAST_GRID_SCRIPT)
 			if script != null and script.can_instantiate():
 				_fast_script = script
-	return _fast_script.new() if _fast_script != null else null
+		_fast_checked = true
+	var ready_script := _fast_script
+	_fast_lock.unlock()
+	return ready_script.new() if ready_script != null else null
 
 
 ## Крупнейшая область суши с учётом возможных коротких переправ. Вода дальше половины

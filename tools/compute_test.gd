@@ -5,15 +5,50 @@ var fails := 0
 
 
 func _initialize() -> void:
+	# Самый первый доступ к мосту одновременно из воркеров, до прогрева другими тестами.
+	var cold_results: Array = []
+	cold_results.resize(32)
+	var cold_task := WorkerThreadPool.add_group_task(func(i: int) -> void:
+		cold_results[i] = Grid.fast_grid() != null, cold_results.size())
+	WorkerThreadPool.wait_for_group_task_completion(cold_task)
+	_check(cold_results.all(func(ok: bool) -> bool: return ok), "параллельная первая загрузка C# без null")
 	var probe: Object = load("res://tools/ComputeProbe.cs").new()
 	print("FastGrid constructor: %d managed bytes" % probe.ConstructorBytes(100))
 	for size in [256, 512, 768]:
 		var allocated: PackedInt64Array = probe.CorridorBytes(size, 3)
 		print("Corridor %d managed bytes: %s" % [size, allocated])
 		_check(allocated[1] == 0 and allocated[2] == 0, "повторная ширина прохода без новых буферов %d" % size)
+	var reused: int = probe.CorridorReuseBytes()
+	print("Corridor reuse managed bytes: %d" % reused)
+	_check(reused < 85000, "повторный расчёт и Release без выделения крупных буферов")
 	if OS.get_cmdline_user_args().has("--alloc-only"):
 		quit(0 if fails == 0 else 1)
 		return
+	# Сравнить направления через границы полос 32/64 с последовательным GDScript.
+	var side := 70
+	var surface := PackedFloat32Array()
+	surface.resize(side * side)
+	var level := surface.duplicate()
+	level.fill(-INF)
+	var dry := PackedByteArray()
+	dry.resize(surface.size())
+	var price := surface.duplicate()
+	price.fill(1.0)
+	for y in side:
+		for x in side:
+			surface[y * side + x] = sin(x * 0.2) * cos(y * 0.1) * 0.01
+	var native := Pathfinder.new(side, side, surface)
+	Grid.allow_fast = false
+	var reference := Pathfinder.new(side, side, surface)
+	Grid.allow_fast = true
+	for half in [0.45, 0.3]:
+		native.set_corridor(surface, level, dry, half)
+		reference.set_corridor(surface, level, dry, half)
+		for ends in [Vector2i(30 * side + 10, 66 * side + 40), Vector2i(66 * side + 40, 30 * side + 10)]:
+			_check(native.find_path(price, ends.x, ends.y, 32.0, 0.35) == reference.find_path(price, ends.x, ends.y, 32.0, 0.35),
+				"путь через границы параллельных полос %s / %s" % [half, ends])
+	native.release()
+	reference.release()
 	# На одном finder меняем и ширину, и поверхность. Кэш прежнего прохода не должен выжить.
 	var flat := PackedFloat32Array()
 	flat.resize(12 * 12)
