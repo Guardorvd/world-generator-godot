@@ -6,6 +6,7 @@ extends SceneTree
 ##   godot --path . --script res://tools/photo_look.gd -- [--out <папка>]
 
 const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
+const PlaceNames = preload("res://scripts/render/place_names.gd")
 const DT := 1.0 / 60.0
 const FOV := 75.0
 const HILL := Vector3(0.0, 60.0, -300.0) # вершина холма; радиус основания 120 м
@@ -139,8 +140,17 @@ func _run() -> void:
 	await _shot("photo_aim")
 	_hold(1.0)
 	_check(photo.named.get("id") == "peak", "через 1,6 с над вершиной всплыло название")
+	# 14.3: оставленный велосипед — метка в кадре, вне кадра — стрелка у края
+	photo.bike_at = Vector3(60, 1, -140)
 	_hold(0.4)
+	_check(photo._bike_a > 0.9 and photo._bike_dir == 0.0, "велосипед в кадре — метка с расстоянием")
 	await _shot("photo_named")
+	photo.bike_at = Vector3(0, 1, 60)
+	_hold(0.1)
+	_check(photo._bike_dir != 0.0 and photo._bike_pos.y > root.size.y * 0.5, "велосипед за спиной — стрелка у нижнего края")
+	photo.bike_at = Vector3.INF
+	_hold(0.3)
+	_check(photo._bike_a == 0.0, "на велосипеде метки нет")
 	_look(places.peak, 1.3)
 	_hold(0.3)
 	_check(photo.target.get("id") == "peak", "выбранное место держится чуть за краем пятна")
@@ -183,5 +193,21 @@ func _run() -> void:
 	photo.exit()
 	_hold(0.3)
 	_check(photo._show == 0.0, "рамка уходит после выхода")
+	# 14.3: подпись места с пиктограммой и чертой до земли (PlaceNames)
+	var names_root := Node3D.new()
+	root.add_child(names_root)
+	var label := SettlementsBuilder._label("Ольховка", Color.html("#fff6d8"), Vector3(-120, 9, -200), "settlement:1:1")
+	names_root.add_child(label)
+	var names := PlaceNames.new()
+	names.setup(names_root)
+	camera.fov = FOV
+	camera.position = Vector3(-70, 1.6, -110)
+	camera.look_at(Vector3(-120, 6, -200), Vector3.UP)
+	for i in 40:
+		names.update(camera, DT, {"settlement:1:1": true})
+		await process_frame
+	var icon: Sprite3D = names._items[0].icon
+	_check(label.visible and icon != null and icon.visible and names._items[0].stem.visible, "подпись с пиктограммой и чертой до земли")
+	await _shot("place_names")
 	print("photo_look: %s, снимки в %s" % ["FAIL %d" % failed if failed else "ok", out])
 	quit(1 if failed else 0)

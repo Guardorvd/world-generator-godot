@@ -1,9 +1,19 @@
 extends MeshInstance3D
 ## Короткий спокойный пунктир на дороге. Перестройка геометрии 4 раза/с, поиск — только по событию.
+## 14.3: штрихи стоят на месте маршрута — фаза считается от начала пути (_cum), а не от ближайшей
+## к игроку точки, поэтому при перестройке они не скачут. Сечение штриха — пологая арка: середина чуть выше
+## и ярче (сердечник), края гаснут, полоска выглядит объёмной и мягкой.
 const Roads = preload("res://scripts/game/road_navigation.gd")
 const REACH := 70.0
+const PIECE := 0.75     # длина кусочка штриха, м; штрих — DASH кусочков, пауза — столько же
+const DASH := 2
+const HALF := 0.14      # полуширина, м
+const ARCH := 0.03      # насколько середина выше краёв, м
+const CORE := Color(1.0, 0.88, 0.55)
+const EDGE := Color(0.95, 0.72, 0.3)
 var roads: Roads
 var path := PackedVector2Array()
+var _cum := PackedFloat32Array() # длина маршрута от начала до каждой точки, м
 var _world: WorldData
 var _heights: Heightfield
 var _goal := {}
@@ -48,6 +58,12 @@ func _rebuild(at: Vector2) -> void:
 	if start != _last_start:
 		_last_start = start
 		path = roads.route(start, _finish)
+		_cum.resize(path.size())
+		var total := 0.0
+		for i in path.size():
+			if i > 0:
+				total += path[i - 1].distance_to(path[i])
+			_cum[i] = total
 	_reroute_timer = 2.0
 	_timer = 0.0
 
@@ -81,29 +97,28 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 		return
 	var vertices := PackedVector3Array()
 	var colors := PackedColorArray()
-	var travelled := 0.0
-	var from := nearest
+	var start: float = _cum[segment - 1] + path[segment - 1].distance_to(nearest)
+	var ground := at.y + 2.0
 	for i in range(segment, path.size()):
-		var to := path[i]
-		var length := from.distance_to(to)
-		var direction := from.direction_to(to)
-		var side := Vector2(-direction.y, direction.x) * 0.11
-		var along := 0.0
-		while along < length and travelled + along < REACH:
-			var end := minf(along + 0.75, length)
-			var middle := from + direction * ((along + end) * 0.5)
-			var fade := (1.0 - smoothstep(50.0, REACH, travelled + along)) * smoothstep(1.0, 4.0, here.distance_to(middle))
-			if fposmod(travelled + along, 3.0) < 1.4 and fade > 0.01:
-				var a := from + direction * along
-				var b := from + direction * end
-				var corners: Array[Vector2] = [a - side, a + side, b + side, a - side, b + side, b - side]
-				for p: Vector2 in corners:
-					vertices.append(Vector3(p.x, _heights.surface_at(p.x, p.y, at.y + 2.0) + 0.10, p.y))
-					colors.append(Color(0.95, 0.77, 0.35, fade * 0.48))
-			along += 0.75
-		travelled += length
-		from = to
-		if travelled >= REACH:
+		var a0 := path[i - 1]
+		var length: float = _cum[i] - _cum[i - 1]
+		if length <= 0.0:
+			continue
+		var direction := a0.direction_to(path[i])
+		var side := Vector2(-direction.y, direction.x) * HALF
+		# кусочки по сетке PIECE от начала маршрута: от ближайшей точки до конца отрезка
+		var k := floori(maxf(start, _cum[i - 1]) / PIECE)
+		while k * PIECE < _cum[i] and k * PIECE - start < REACH:
+			var s0 := maxf(k * PIECE, maxf(start, _cum[i - 1]))
+			var s1 := minf((k + 1) * PIECE, _cum[i])
+			if posmod(k, DASH * 2) < DASH and s1 > s0:
+				var pa := a0 + direction * (s0 - _cum[i - 1])
+				var pb := a0 + direction * (s1 - _cum[i - 1])
+				var fade := (1.0 - smoothstep(50.0, REACH, s0 - start)) * smoothstep(1.0, 4.0, here.distance_to((pa + pb) * 0.5))
+				if fade > 0.01:
+					_piece(vertices, colors, pa, pb, side, ground, fade)
+			k += 1
+		if _cum[i] - start >= REACH:
 			break
 	if vertices.is_empty():
 		return
@@ -112,3 +127,21 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 		line.surface_set_color(colors[i])
 		line.surface_add_vertex(vertices[i])
 	line.surface_end()
+
+
+## Кусочек штриха от pa до pb: две половины арки, края на земле и прозрачные, середина выше и ярче
+func _piece(vertices: PackedVector3Array, colors: PackedColorArray, pa: Vector2, pb: Vector2, side: Vector2, ground: float, fade: float) -> void:
+	var lift := func(p: Vector2, up: float) -> Vector3:
+		return Vector3(p.x, _heights.surface_at(p.x, p.y, ground) + 0.10 + up, p.y)
+	var al: Vector3 = lift.call(pa - side, 0.0)
+	var ac: Vector3 = lift.call(pa, ARCH)
+	var ar: Vector3 = lift.call(pa + side, 0.0)
+	var bl: Vector3 = lift.call(pb - side, 0.0)
+	var bc: Vector3 = lift.call(pb, ARCH)
+	var br: Vector3 = lift.call(pb + side, 0.0)
+	var edge := Color(EDGE, fade * 0.12)
+	var core := Color(CORE, fade * 0.62)
+	for v: Array in [[al, edge], [ac, core], [bc, core], [al, edge], [bc, core], [bl, edge],
+			[ac, core], [ar, edge], [br, edge], [ac, core], [br, edge], [bc, core]]:
+		vertices.append(v[0])
+		colors.append(v[1])

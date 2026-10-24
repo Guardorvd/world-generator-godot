@@ -148,7 +148,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	t = _mark("start_vegetation_setup_ms", t)
 	var built := SettlementsBuilder.build($Settlements, world, heights)
 	place_names = PlaceNames.new()
-	place_names.setup($Settlements)
+	place_names.setup($Settlements, heights)
 	photo = PhotoCamera.new()
 	add_child(photo)
 	photo.anchors = _photo_anchors()
@@ -941,6 +941,7 @@ func _process(delta: float) -> void:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
 		_bag_label.visible = camera.global_position.distance_to(_bag.position) < 60.0 and not photo.active
+	photo.bike_at = Vector3.INF if bike.riding or crash.active() else Vector3(bike.x, bike.y + 0.6, bike.z)
 	photo.update(camera, delta)
 	_target = _aim()
 	_update_hints()

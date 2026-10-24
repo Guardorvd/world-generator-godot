@@ -31,6 +31,11 @@ var known := {}                      # id -> true: узнанные в видо�
 var wanted := ""                     # 11.9: id места, снимок которого нужен для задания (Quests, шаг shoot)
 var wanted_reach := INF              # м: снимок для задания — не дальше этого от места
 var shots: Array[Dictionary] = []
+var bike_at := Vector3.INF           # 14.3: где оставлен велосипед (середина рамы); INF — на нём или его нет
+var _bike_pos := Vector2.ZERO        # метка велосипеда на экране и расстояние до него
+var _bike_dist := 0.0
+var _bike_dir := 0.0                 # 0 — велосипед в кадре; иначе угол стрелки у края рамки
+var _bike_a := 0.0
 var zoom := 0
 var target := {}                     # место в прицеле
 var progress := 0.0                  # 0..1: сколько выдержан взгляд на target
@@ -119,9 +124,40 @@ func update(camera: Camera3D, dt: float) -> void:
 	if _name_a > 0.0 and not _shown.is_empty() and not camera.is_position_behind(_shown.pos):
 		_name_pos = camera.unproject_position(_shown.pos)
 		_name_dist = camera.global_position.distance_to(_shown.pos)
+	_track_bike(camera, dt)
 	_view.visible = _show > 0.0 or _flash > 0.0 or _preview > 0.0
 	if _view.visible:
 		_view.queue_redraw()
+
+
+## 14.3: метка оставленного велосипеда в видоискателе — видна сквозь склоны и лес, ближе 8 м не нужна.
+## Рисуется на рамке (_view), а рамка на кадр снимка прячется (shoot), поэтому на фото метки нет.
+## Вне кадра — стрелка у края рамки в его сторону
+func _track_bike(camera: Camera3D, dt: float) -> void:
+	var on := active and bike_at.is_finite() and camera.global_position.distance_to(bike_at) > 8.0
+	_bike_a = move_toward(_bike_a, 1.0 if on else 0.0, dt / 0.25)
+	if not on:
+		return
+	_bike_dist = camera.global_position.distance_to(bike_at)
+	var local := camera.global_transform.affine_inverse() * bike_at
+	var s := _view.size
+	var frame := Rect2(Vector2(s.x * 0.05, s.y * 0.07), s * Vector2(0.9, 0.86)).grow(-28.0)
+	if local.z < 0.0:
+		var at := camera.unproject_position(bike_at)
+		if frame.has_point(at):
+			_bike_pos = at
+			_bike_dir = 0.0
+			return
+	# направление на экране: по осям камеры, сзади — к нижнему краю в нужную сторону
+	var d := Vector2(local.x, -local.y if local.z < 0.0 else absf(local.y) + 1.0)
+	if d.length() < 0.001:
+		d = Vector2.DOWN
+	d = d.normalized()
+	var c := frame.get_center()
+	var half := frame.size * 0.5
+	var t := minf(half.x / maxf(absf(d.x), 0.001), half.y / maxf(absf(d.y), 0.001))
+	_bike_pos = c + d * t
+	_bike_dir = d.angle() + (0.0001 if is_zero_approx(d.angle()) else 0.0)
 
 
 func _aim(camera: Camera3D, dt: float) -> void:
@@ -270,6 +306,8 @@ func _draw_view(c: Control) -> void:
 					Vector2(0.0, -58.0), 15, Color(GREEN if close else AMBER, a), 0.5)
 			c.draw_colored_polygon(PackedVector2Array([Vector2(-5, -1), Vector2(5, -1), Vector2(0, 5)]), Color(1, 1, 1, 0.8 * a))
 			c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	if _bike_a > 0.0 and _show > 0.0:
+		_draw_bike(c, font, _bike_a * _show)
 	# карточка последнего снимка: выезжает справа, чуть повёрнута, гаснет
 	if _preview > 0.0 and _thumb != null:
 		var t := PREVIEW - _preview
@@ -284,6 +322,26 @@ func _draw_view(c: Control) -> void:
 		c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 	if _flash > 0.0:
 		c.draw_rect(Rect2(Vector2.ZERO, s), Color(1, 1, 1, _flash * _flash))
+
+
+## Метка велосипеда: голубой ромб (как на картах) с подписью расстояния, у края кадра — стрелка наружу
+func _draw_bike(c: Control, font: Font, a: float) -> void:
+	var blue := Color(0.25, 0.65, 1.0, 0.95 * a)
+	var p := _bike_pos
+	if _bike_dir == 0.0:
+		var r := 7.0
+		var diamond := PackedVector2Array([p + Vector2(0, -r), p + Vector2(r, 0), p + Vector2(0, r), p + Vector2(-r, 0)])
+		c.draw_colored_polygon(diamond, blue)
+		diamond.append(diamond[0])
+		c.draw_polyline(diamond, Color(1, 1, 1, 0.9 * a), 1.5)
+	else:
+		var f := Vector2.from_angle(_bike_dir)
+		var tri := PackedVector2Array([p + f * 10.0, p - f * 6.0 + f.orthogonal() * 7.0, p - f * 6.0 - f.orthogonal() * 7.0])
+		c.draw_colored_polygon(tri, blue)
+		tri.append(tri[0])
+		c.draw_polyline(tri, Color(1, 1, 1, 0.9 * a), 1.5)
+	var below := 22.0 if p.y < _view.size.y * 0.8 else -14.0
+	_text(c, font, "Велосипед · %s" % _distance(_bike_dist), p + Vector2(0.0, below), 13, Color(0.85, 0.93, 1.0, 0.9 * a), 0.5)
 
 
 ## Уголки рамки rect длиной arm
