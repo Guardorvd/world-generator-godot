@@ -42,6 +42,8 @@ godot --path . --script res://tools/photo_look.gd -- --out <папка>
 godot --path . --script res://tools/lamp_look.gd -- --out <папка> [--lamp <файл>] [--tag <суффикс>]
 ```
 
+`tools/hud_look.gd` (14.2) — интерфейс игры без мира на снежном фоне: панель сведений, компас, сообщение, чипы подсказок, дуга выносливости (трата ниже 20 %, истощение, накат), меню выбора мира. Снимает `hud_drain.png`, `hud_coast.png`, `menu.png`. Нужно окно: `godot --path . --script res://tools/hud_look.gd -- --out <папка>`.
+
 `tools/quest_look.gd` (11.9) — задания (`Quests`), доска и счётчик: места словарями, `WorldData` только со списками мест, интерфейс из `main.tscn` без мира, велосипед с седоком. Проверяет выбор заданий и шаги всех видов, снимает `quest_board.png`, `quest_board_active.png`, `quest_pack.png`, `quest_pack_side.png`, `quest_done.png`. Нужно окно.
 
 ```

@@ -195,7 +195,7 @@ put("PanelContainer/styles/panel", box("panel", BG_PANEL, (1, 1, 1, 0.06), 1, ra
 put("InsetPanel/base_type", '&"PanelContainer"')
 put("InsetPanel/styles/panel", box("inset", INSET, radius=U, margin=(U // 2, U // 2)))
 put("HudPanel/base_type", '&"PanelContainer"')
-put("HudPanel/styles/panel", box("hud", (0.04, 0.06, 0.1, 0.55), radius=U, margin=(U + 2, U + 2)))
+put("HudPanel/styles/panel", box("hud", (0.04, 0.06, 0.1, 0.7), radius=U, margin=(U + 2, U + 2)))
 put("TrackerPanel/base_type", '&"PanelContainer"')
 put("TrackerPanel/styles/panel", box("tracker", (0.06, 0.07, 0.06, 0.62), (1, 0.82, 0.32, 0.85), {"left": 3}, radius=4,
                                        margin=(2 * U - 4, U, U, U)))

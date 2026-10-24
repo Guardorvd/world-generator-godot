@@ -80,34 +80,34 @@ theme_type_variation = &"HudPanel"
 
 [node name="Info" type="Label" parent="UI/Root/Hud/InfoPanel"]
 layout_mode = 2
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
+theme_override_constants/outline_size = 4
 theme_override_font_sizes/font_size = 15
 
-[node name="Hint" type="Label" parent="UI/Root/Hud"]
+[node name="Hint" type="HBoxContainer" parent="UI/Root/Hud"]
 layout_mode = 1
 anchors_preset = -1
 anchor_top = 1.0
 anchor_right = 1.0
 anchor_bottom = 1.0
-offset_top = -40.0
+offset_top = -42.0
 offset_bottom = -14.0
 grow_horizontal = 2
 grow_vertical = 0
-theme_override_colors/font_color = Color(1, 1, 1, 0.75)
-theme_override_font_sizes/font_size = 14
-horizontal_alignment = 1
+mouse_filter = 2
+theme_override_constants/separation = 18
+alignment = 1
 
-[node name="Prompt" type="Label" parent="UI/Root/Hud"]
+[node name="Prompt" type="HBoxContainer" parent="UI/Root/Hud"]
 layout_mode = 1
 anchors_preset = -1
 anchor_top = 0.55
 anchor_right = 1.0
 anchor_bottom = 0.55
-offset_bottom = 40.0
+offset_bottom = 32.0
 grow_horizontal = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
-theme_override_constants/outline_size = 6
-theme_override_font_sizes/font_size = 18
-horizontal_alignment = 1
+mouse_filter = 2
+alignment = 1
 
 [node name="LockHint" type="Label" parent="UI/Root/Hud"]
 layout_mode = 1
@@ -117,7 +117,7 @@ anchor_right = 1.0
 anchor_bottom = 0.62
 offset_bottom = 40.0
 grow_horizontal = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
 theme_override_constants/outline_size = 6
 text = "Щёлкните по экрану, чтобы управлять взглядом мышью"
 horizontal_alignment = 1
@@ -131,7 +131,7 @@ anchor_bottom = 0.16
 offset_bottom = 40.0
 grow_horizontal = 2
 modulate = Color(1, 1, 1, 0)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.8)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
 theme_override_constants/outline_size = 6
 theme_override_font_sizes/font_size = 22
 horizontal_alignment = 1
@@ -301,23 +301,6 @@ theme_type_variation = &"AccentLabel"
 text = "Новый мир"
 autowrap_mode = 3
 
-[node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 64)
-layout_mode = 2
-theme_type_variation = &"PrimaryButton"
-theme_override_font_sizes/font_size = 22
-text = "Начать путешествие"
-icon = ExtResource("6_play")
-
-[node name="LoadManual" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 15
-text = "Загрузить ручное сохранение"
-icon = ExtResource("8_load")
-
 [node name="NewWorld" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
 layout_mode = 2
 theme_type_variation = &"SectionPanel"
@@ -328,7 +311,7 @@ layout_mode = 2
 [node name="NewTitle" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
-text = "Новый мир по зерну"
+text = "Зерно мира"
 
 [node name="SeedRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
 layout_mode = 2
@@ -352,8 +335,25 @@ icon_alignment = 1
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 theme_type_variation = &"CaptionLabel"
-text = "Одно зерно — один и тот же мир. Прогресс хранится отдельно."
+text = "Выберите мир в списке или введите любое слово. Одно зерно — один и тот же мир."
 autowrap_mode = 3
+
+[node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 64)
+layout_mode = 2
+theme_type_variation = &"PrimaryButton"
+theme_override_font_sizes/font_size = 22
+text = "Начать путешествие"
+icon = ExtResource("6_play")
+
+[node name="LoadManual" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Загрузить ручное сохранение"
+icon = ExtResource("8_load")
 
 [node name="Bottom" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
 layout_mode = 2

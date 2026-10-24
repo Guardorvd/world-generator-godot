@@ -45,7 +45,6 @@ var _saved_discoveries := 0
 var _progress_enabled := false # инструменты не записывают пользовательский прогресс
 var display_options: DisplayOptions
 var _confirm: ConfirmationDialog   # открытое подтверждение (выход, меню, загрузка)
-var _list_seed := ""      # мир, выбранный в списке; пусто — запускается зерно из поля ввода
 var _save_due := -1       # когда записать изменённые настройки (мс), -1 — нечего
 
 @onready var hud: Hud = %Hud
@@ -384,16 +383,16 @@ func _star_tip(fav: bool, full: bool) -> String:
 	return "В избранное: мир останется в списке и кэше"
 
 
-## Щелчок по строке выбирает мир из списка; поле ввода зерна остаётся как было
+## Щелчок по строке ставит её зерно в поле: с 14.2 поле — единственный источник выбора (до этого
+## мир из списка и зерно в поле были разными, и не всегда было ясно, что запустится)
 func _pick_seed(seed_text: String) -> void:
-	_list_seed = seed_text
+	seed_edit.text = seed_text
 	_update_selection()
 	%Start.grab_focus()
 
 
-## Ввод в поле, кубик или фокус на поле: запускаться будет зерно из поля
+## Ввод в поле или кубик: выбор — то, что в поле; строка списка с тем же зерном подсвечивается
 func _choose_typed() -> void:
-	_list_seed = ""
 	_update_selection()
 
 
@@ -401,9 +400,9 @@ func _on_seed_changed(_text: String) -> void:
 	_choose_typed()
 
 
-## Что запустит главная кнопка: мир из списка или зерно из поля (пустое — случайный мир)
+## Что запустит главная кнопка: зерно из поля (пустое — случайный мир)
 func _chosen_seed() -> String:
-	return _list_seed if not _list_seed.is_empty() else seed_edit.text.strip_edges()
+	return seed_edit.text.strip_edges()
 
 
 ## Выбранный мир: подсветка строки, карта, звёздочка, прогресс и подпись главной кнопки
@@ -411,12 +410,11 @@ func _update_selection() -> void:
 	var seed_text := _chosen_seed()
 	for row in %SeedList.get_children():
 		if row is Button:
-			(row as Button).set_pressed_no_signal(not _list_seed.is_empty() and row.get_meta("seed", "") == seed_text)
+			(row as Button).set_pressed_no_signal(not seed_text.is_empty() and row.get_meta("seed", "") == seed_text)
 	var tex := _preview_tex(seed_text) if not seed_text.is_empty() else null
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
 	%PreviewHint.text = "Карта мира появится после первого запуска"
-	%ChoiceLabel.text = "Выбран мир из списка" if not _list_seed.is_empty() else "Выбрано зерно из поля ниже"
 	%ChoiceName.text = "Случайный мир" if seed_text.is_empty() else "«%s»" % seed_text
 	%WorldStatus.text = _world_status(seed_text)[1] if not seed_text.is_empty() \
 		else "Пустое поле — будет случайный мир."

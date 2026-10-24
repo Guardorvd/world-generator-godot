@@ -63,11 +63,12 @@ func run() -> void:
 	main._sync_settings_controls()
 	main.seed_edit.text = "Север-1234"
 	main._show_seed_tab("saved")
-	# 12.5+: мир из списка и зерно в поле — разные источники
+	# 14.2: строка списка ставит своё зерно в поле — один источник выбора
 	main._pick_seed("Туман-4821")
-	check(main.seed_edit.text == "Север-1234" and main._chosen_seed() == "Туман-4821", "picking a world keeps the typed seed")
+	check(main.seed_edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "picking a world fills the seed field")
+	main.seed_edit.text = "Север-1234"
 	main._choose_typed()
-	check(main._chosen_seed() == "Север-1234", "typing switches back to the seed field")
+	check(main._chosen_seed() == "Север-1234", "typing chooses the typed seed")
 	var camera := Camera3D.new()
 	main.add_child(camera)
 	camera.current = true

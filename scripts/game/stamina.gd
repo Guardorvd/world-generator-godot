@@ -18,8 +18,11 @@ const REST_DELAY := 0.8          # восстановление начинает
 const RECOVERED := 0.3           # после истощения Shift снова доступен с этого уровня
 const TIRED_PEDAL := 0.85        # педали при пустой полоске: доля газа (и крейсерской скорости)
 
+enum State { IDLE, DRAIN, COAST, REST } # 14.2: что происходит с полоской в последнем такте (для интерфейса)
+
 var value := 1.0
 var exhausted := false  # полоска опустела и ещё не набрала RECOVERED
+var state := State.IDLE
 var _rest_wait := 0.0
 
 
@@ -37,6 +40,7 @@ func pedal_scale() -> float:
 ## speed — м/с вдоль курса, grade — подъём земли на метр пути (BikeRide.grade), airborne — в полёте
 func tick_ride(dt: float, throttle: float, boost: bool, speed: float, grade: float, airborne: bool) -> void:
 	if airborne:
+		state = State.IDLE
 		return
 	var g := clampf(grade * signf(speed) / CLIMB, -1.0, 1.0)
 	var drain := 0.0
@@ -52,25 +56,32 @@ func tick_ride(dt: float, throttle: float, boost: bool, speed: float, grade: flo
 		_spend(drain * dt)
 	elif throttle <= 0.0:
 		_rest(COAST, dt)
+		state = State.COAST if value < 1.0 else State.IDLE
+	else:
+		state = State.IDLE
 
 
 ## Такт пешком: стоя и шагом полоска восстанавливается, на бегу замирает
 func tick_foot(dt: float, running: bool) -> void:
 	if running:
 		_rest_wait = REST_DELAY
+		state = State.IDLE
 		return
 	_rest(REST, dt)
+	state = State.REST if value < 1.0 else State.IDLE
 
 
 func reset() -> void:
 	value = 1.0
 	exhausted = false
 	_rest_wait = 0.0
+	state = State.IDLE
 
 
 func _spend(amount: float) -> void:
 	value = maxf(0.0, value - amount)
 	_rest_wait = REST_DELAY
+	state = State.DRAIN
 	if value <= 0.0:
 		exhausted = true
 

@@ -27,7 +27,7 @@ func _run() -> void:
 	hud.toast("Сообщение прошлого мира")
 	_check(hud._toast_queue == PackedStringArray(["Сообщение в очереди", "Ещё одно сообщение"]),
 		"повтор текущего и несоседнего сообщения в очереди не дублируется")
-	hud.set_hints("Подсказка", "Действие")
+	hud.set_hints([["E", "Подсказка"]], [["E", "Действие"]])
 	hud.bike_shown = true
 	hud.bike_pos = Vector2(20, 30)
 	hud.set_map_visible(true)
@@ -35,7 +35,7 @@ func _run() -> void:
 	hud.clear_world()
 	_check(hud._toast_queue.is_empty() and hud._toast_left == 0.0 and hud.toast_label.modulate.a == 0.0,
 		"выход в меню очищает текущие сообщения и очередь")
-	_check(not hud.bike_shown and hud.bike_pos == Vector2.ZERO and hud.hint.text.is_empty() and hud.prompt.text.is_empty(),
+	_check(not hud.bike_shown and hud.bike_pos == Vector2.ZERO and hud.hint.get_child_count() == 0 and hud.prompt.get_child_count() == 0,
 		"выход в меню очищает маркер велосипеда и подсказки")
 	_check(not hud.big_map.visible and hud.big_map.mouse_filter == Control.MOUSE_FILTER_IGNORE and hud.big_map.hover.is_empty(),
 		"закрытая карта не перехватывает мышь и не хранит старое место")

@@ -23,6 +23,14 @@ const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
 const DONE_TIME := 4.0 # сколько висит «Задание выполнено» в счётчике (с)
+## 14.2: края экрана темнеют к углам, середина не тронута; strength — от StaminaArc.warning
+const VIGNETTE_CODE := """shader_type canvas_item;
+uniform float strength = 0.0;
+void fragment() {
+	float d = length((UV - 0.5) * vec2(1.25, 1.0));
+	COLOR = vec4(0.12, 0.02, 0.02, strength * smoothstep(0.42, 0.85, d));
+}
+"""
 
 var world: WorldData
 var map_tex: ImageTexture
@@ -48,12 +56,16 @@ var _banner_sub: Label
 var _banner_tween: Tween
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
-var _stamina: StaminaBar  # 14.0: полоска выносливости над подсказками, видна, пока не полная
+var _stamina: StaminaArc  # 14.2: дуга выносливости слева от прицела, видна, пока силы тратятся или копятся
+var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
+var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
+var _prompt_items: Array = []
+var _chip_style: StyleBoxFlat
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
-@onready var hint: Label = $Hint
-@onready var prompt: Label = $Prompt
+@onready var hint: HBoxContainer = $Hint
+@onready var prompt: HBoxContainer = $Prompt
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
 var _toast_tween: Tween
@@ -109,15 +121,34 @@ func _ready() -> void:
 	add_child(big_map)
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
-	_stamina = StaminaBar.new()
-	_stamina.anchor_left = 0.5
-	_stamina.anchor_right = 0.5
-	_stamina.anchor_top = 1.0
-	_stamina.anchor_bottom = 1.0
-	_stamina.offset_left = -90
-	_stamina.offset_right = 90
-	_stamina.offset_top = -62
-	_stamina.offset_bottom = -54
+	_vignette = ColorRect.new()
+	_vignette.set_anchors_preset(Control.PRESET_FULL_RECT)
+	_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var vignette_shader := Shader.new()
+	vignette_shader.code = VIGNETTE_CODE
+	_vignette.material = ShaderMaterial.new()
+	_vignette.material.shader = vignette_shader
+	_chip_style = StyleBoxFlat.new()
+	_chip_style.bg_color = Color(0.04, 0.06, 0.1, 0.82)
+	_chip_style.border_color = Color(1, 1, 1, 0.9)
+	_chip_style.set_border_width_all(2)
+	_chip_style.set_corner_radius_all(4)
+	# светлая рамка видна на тёмном, тёмная кайма за ней — на снегу
+	_chip_style.shadow_color = Color(0, 0, 0, 0.75)
+	_chip_style.shadow_size = 2
+	_chip_style.content_margin_left = 7
+	_chip_style.content_margin_right = 7
+	_chip_style.content_margin_top = 1
+	_chip_style.content_margin_bottom = 1
+	_vignette.visible = false
+	add_child(_vignette)
+	move_child(_vignette, 0)
+	_stamina = StaminaArc.new()
+	_stamina.set_anchors_preset(Control.PRESET_CENTER)
+	_stamina.offset_left = -StaminaArc.R - 12
+	_stamina.offset_right = StaminaArc.R + 12
+	_stamina.offset_top = -StaminaArc.R - 12
+	_stamina.offset_bottom = StaminaArc.R + 12
 	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_stamina)
 	move_child(_stamina, big_map.get_index())
@@ -164,7 +195,7 @@ func clear_world() -> void:
 	_stop_toast_tween()
 	_toast_left = 0.0
 	toast_label.modulate.a = 0.0
-	set_hints("", "")
+	set_hints([], [])
 	set_photo_mode(false)
 	big_map.visible = false
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -476,21 +507,56 @@ func _apply_reveal() -> void:
 	prompt.visible = not _photo_mode
 
 
-## Строка подсказок внизу и подсказка у прицела (пустая — скрыта).
-## urgent — строку видно и без Tab (падение: как восстановиться)
-func set_hints(bottom: String, near: String, urgent := false) -> void:
-	if hint.text != bottom:
-		hint.text = bottom
-	if prompt.text != near:
-		prompt.text = near
+## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
+## urgent — нижние видно и без Tab (падение: как восстановиться)
+func set_hints(bottom: Array, near: Array, urgent := false) -> void:
+	if _hint_items != bottom:
+		_hint_items = bottom.duplicate()
+		_fill_chips(hint, bottom)
+	if _prompt_items != near:
+		_prompt_items = near.duplicate()
+		_fill_chips(prompt, near)
 	if _hint_urgent != urgent:
 		_hint_urgent = urgent
 		_apply_reveal()
 
 
-## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED
-func set_stamina(value: float, exhausted: bool) -> void:
-	_stamina.set_value(value, exhausted, not _photo_mode and not big_map.visible)
+## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED.
+## 14.2: state — Stamina.State: трата ниже LOW пульсирует и затемняет края, накат подсвечен
+func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
+	var allowed := not _photo_mode and not big_map.visible
+	_stamina.set_value(value, exhausted, state, allowed)
+	var mat: ShaderMaterial = _vignette.material
+	mat.set_shader_parameter("strength", _stamina.warning * 0.4)
+	_vignette.visible = _stamina.warning > 0.01
+
+
+## 14.2: чипы клавиш — тёмная плашка с контрастной обводкой, рядом действие; читаются боковым зрением
+func _fill_chips(row: HBoxContainer, items: Array) -> void:
+	for child in row.get_children():
+		row.remove_child(child)
+		child.queue_free()
+	for item: Array in items:
+		var pair := HBoxContainer.new()
+		pair.add_theme_constant_override("separation", 6)
+		pair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var chip := PanelContainer.new()
+		chip.add_theme_stylebox_override("panel", _chip_style)
+		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		var key := Label.new()
+		key.text = str(item[0])
+		key.add_theme_font_size_override("font_size", 14)
+		key.add_theme_color_override("font_color", Color.WHITE)
+		chip.add_child(key)
+		pair.add_child(chip)
+		var what := Label.new()
+		what.text = str(item[1])
+		what.add_theme_font_size_override("font_size", 15)
+		what.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
+		what.add_theme_constant_override("outline_size", 5)
+		pair.add_child(what)
+		row.add_child(pair)
 
 
 ## Где стоит велосипед (метры) и показывать ли его на картах
@@ -682,15 +748,20 @@ class MiniMap extends Control:
 class Compass extends Control:
 	const SPAN := PI * 0.8   # видимая дуга курса
 	var hud: Hud
+	var _back := StyleBoxFlat.new()
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_back.bg_color = Color(0.04, 0.06, 0.1, 0.45)
+		_back.set_corner_radius_all(8)
 
 	func _draw() -> void:
 		if hud.world == null:
 			return
 		var half := size.x / 2.0
 		var font := ThemeDB.fallback_font
+		# 14.2: тёмная подложка, чтобы буквы не терялись на снегу и в ярком небе
+		draw_style_box(_back, Rect2(Vector2(-10, -2), size + Vector2(20, 4)))
 		draw_line(Vector2(0, size.y - 1), Vector2(size.x, size.y - 1), Color(1, 1, 1, 0.18), 1.0)
 		for d in 8:
 			var off := wrapf(d * PI / 4.0 - hud.yaw, -PI, PI)
@@ -702,7 +773,7 @@ class Compass extends Control:
 			var t: String = Hud.DIRS[d]
 			var tw := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
 			var at := Vector2(x - tw / 2.0, size.y - 8.0)
-			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 4, Color(0, 0, 0, 0.45 * a))
+			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 5, Color(0, 0, 0, 0.9 * a))
 			draw_string(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.8 * a))
 		# метка задания (11.9+) — квадрат цвета вида над линией; за краем дуги прижата к краю и бледнее.
 		# Расстояние подписано под меткой (12.5+ только здесь, не в счётчике и не в панели сведений)
@@ -733,7 +804,7 @@ class Compass extends Control:
 		var dist := Hud._fmt_dist(Grid.hypot(place.x * Hud.TILE - hud.px, place.y * Hud.TILE - hud.pz))
 		var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
 		var dat := Vector2(clampf(x - dw / 2.0, 0.0, size.x - dw), size.y + 13.0)
-		draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.5))
+		draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.9))
 		draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
 
 
@@ -987,27 +1058,71 @@ class BigMap extends Control:
 		return at.clamp(Vector2(margin, margin), size - Vector2(margin, margin))
 
 
-## 14.0: полоска выносливости. Полная — гаснет, тратится — проявляется; истощение — красная, пока не наберётся
-class StaminaBar extends Control:
+## 14.2: дуга выносливости слева от прицела. Появляется, пока силы тратятся или копятся, полная — гаснет.
+## Засечка на Stamina.RECOVERED — с неё после истощения снова работает Shift. Белый шлейф за краем
+## заливки быстро тает и показывает темп траты. Ниже LOW при трате дуга пульсирует, warning (0..1) затемняет
+## края экрана; при восстановлении предупреждение гаснет быстро. Накат подсвечен холодным ореолом.
+class StaminaArc extends Control:
+	const R := 46.0                       # радиус дуги, px
+	const FROM := deg_to_rad(125.0)       # дуга слева от прицела: снизу (125°) вверх (235°), заливка растёт вверх
+	const SPAN := deg_to_rad(110.0)
+	const WIDTH := 4.0
+	const LOW := 0.2
+	const GHOST_LAG := 1.5                # 1/с: шлейф догоняет заливку с запаздыванием — чем быстрее трата, тем он
+	                                      # длиннее (Shift в подъём — ~5 % дуги), рывок тает за доли секунды
 	var value := 1.0
 	var exhausted := false
+	var state := Stamina.State.IDLE
+	var warning := 0.0                    # 0..1, сила предупреждения (виньетка, пульс)
 	var _alpha := 0.0
+	var _coast := 0.0                     # 0..1, ореол наката
+	var _ghost := 1.0
+	var _t := 0.0
 
-	func set_value(v: float, tired: bool, allowed: bool) -> void:
-		var goal := 1.0 if allowed and v < 0.999 else 0.0
-		var a := move_toward(_alpha, goal, get_process_delta_time() * (3.0 if goal > 0.0 else 1.0))
-		if is_equal_approx(v, value) and tired == exhausted and is_equal_approx(a, _alpha):
-			return
+	func set_value(v: float, tired: bool, st: Stamina.State, allowed: bool) -> void:
+		var dt := get_process_delta_time()
+		_t += dt
+		var active := st == Stamina.State.DRAIN or st == Stamina.State.COAST or st == Stamina.State.REST or v < 0.999
+		_alpha = move_toward(_alpha, 1.0 if allowed and active else 0.0, dt * (4.0 if allowed and active else 1.5))
+		_ghost = v if v >= _ghost else lerpf(_ghost, v, 1.0 - exp(-dt * GHOST_LAG))
+		var low := 1.0 - smoothstep(0.05, LOW, v) if v < LOW or tired else 0.0
+		# предупреждение нарастает мягко при трате и гаснет быстро, как только силы пошли в плюс
+		var warn_goal := low if st == Stamina.State.DRAIN and allowed else 0.0
+		warning = move_toward(warning, warn_goal, dt * (1.5 if warn_goal > warning else 5.0))
+		_coast = move_toward(_coast, 1.0 if st == Stamina.State.COAST and allowed else 0.0, dt * 4.0)
 		value = v
 		exhausted = tired
-		_alpha = a
+		state = st
 		queue_redraw()
 
-	func _draw() -> void:
-		if _alpha <= 0.0:
+	func _arc(from: float, to: float, width: float, color: Color) -> void:
+		if to - from < 0.002:
 			return
-		var r := Rect2(Vector2.ZERO, size)
-		draw_rect(r, Color(0, 0, 0, 0.45 * _alpha))
-		var fill := Color(0.9, 0.3, 0.25) if exhausted else (Color(1.0, 0.82, 0.32) if value < 0.25 else Color(0.92, 0.95, 0.9))
-		fill.a = 0.9 * _alpha
-		draw_rect(Rect2(r.position + Vector2.ONE, Vector2((size.x - 2.0) * value, size.y - 2.0)), fill)
+		var c := size / 2.0
+		draw_arc(c, R, FROM + SPAN * from, FROM + SPAN * to, 24, color, width, true)
+
+	func _draw() -> void:
+		if _alpha <= 0.01:
+			return
+		var a := _alpha
+		_arc(0.0, 1.0, WIDTH + 3.0, Color(0, 0, 0, 0.45 * a))
+		if _coast > 0.0:
+			_arc(0.0, value, WIDTH + 6.0, Color(0.45, 0.85, 1.0, 0.22 * _coast * a))
+		_arc(value, _ghost, WIDTH, Color(1, 1, 1, 0.8 * a))
+		var fill := Color(0.92, 0.95, 0.9)
+		if exhausted:
+			fill = Color(0.9, 0.3, 0.25)
+		elif value < LOW:
+			fill = Color(1.0, 0.72, 0.3)
+		fill = fill.lerp(Color(0.6, 0.9, 1.0), _coast * 0.6)
+		var pulse := 0.5 + 0.5 * sin(_t * 7.0)
+		fill.a = a * lerpf(0.95, 0.55 + 0.4 * pulse, warning)
+		_arc(0.0, value, WIDTH + warning * pulse * 1.5, fill)
+		# засечка разблокировки Shift: поперёк дуги, светлая с тёмной обводкой
+		var ang := FROM + SPAN * Stamina.RECOVERED
+		var dir := Vector2(cos(ang), sin(ang))
+		var c := size / 2.0
+		var mark := Color(1, 1, 1, a) if exhausted or value < Stamina.RECOVERED + 0.1 else Color(1, 1, 1, 0.6 * a)
+		draw_line(c + dir * (R - 6.0), c + dir * (R + 6.0), Color(0, 0, 0, 0.7 * a), 4.0)
+		draw_line(c + dir * (R - 5.0), c + dir * (R + 5.0), mark, 2.0)
+

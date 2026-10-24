@@ -920,7 +920,7 @@ func _process(delta: float) -> void:
 		var stick := Controls.look_delta(delta)
 		if stick != Vector2.ZERO:
 			look(stick.x, stick.y)
-	hud.set_stamina(stamina.value, stamina.exhausted)
+	hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
@@ -1028,7 +1028,7 @@ func _draw_opening(alpha: float) -> void:
 		_opening_caption.add_theme_color_override("font_shadow_color", Color.BLACK)
 		_opening_caption.add_theme_constant_override("shadow_offset_x", 2)
 		_opening_caption.add_theme_constant_override("shadow_offset_y", 2)
-		_opening_caption.text = "«%s»\nПробел — пропустить · Esc — пауза" % opening_place.name
+		_opening_caption.text = "«%s»\n%s — пропустить · %s — пауза" % [opening_place.name, Controls.label("jump"), Controls.label("pause")]
 	var elapsed := maxf(0.0, _opening_time - (1.0 - alpha) / Engine.physics_ticks_per_second)
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	var target := pos + Vector3.UP * 1.4
@@ -1081,32 +1081,27 @@ func _crash() -> void:
 	_trauma = 1.0
 
 
-## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас
+## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас.
+## 14.2: только действия к месту, чипами [клавиша] действие; постоянные клавиши (WASD, Esc, Tab, M) — в паузе
 func _update_hints() -> void:
 	var k := Controls.label
-	if _opening:
-		hud.set_hints("%s — пропустить · %s — пауза" % [k.call("jump"), k.call("pause")], "")
+	if _opening or _settlement_open() or photo.active:
+		hud.set_hints([], [])
 		return
-	if _settlement_open() or photo.active:
-		hud.set_hints("", "")
-		return
-	var prompt := ""
 	if crash.active():
-		hud.set_hints("Падение · %s — восстановиться у ближайшего места · %s — пауза" % [k.call("recover_bike"), k.call("pause")], "", true)
+		hud.set_hints([[k.call("recover_bike"), "Восстановиться"]], [], true)
 		return
+	var near: Array = []
 	match _target.get("kind", ""):
-		"board": prompt = "%s — доска поселения «%s»: задания и маршруты" % [k.call("interact"), _target.place.name]
-		"bike": prompt = "%s — сесть на велосипед" % k.call("interact")
-		"cargo": prompt = "%s — надеть сумку" % k.call("interact")
-	var common := "%s — фара · %s — карта · %s — карта и задание · %s — пауза" % [k.call("flashlight"), k.call("toggle_map"), k.call("show_hud"), k.call("pause")]
+		"board": near = [[k.call("interact"), "Доска «%s»" % _target.place.name]]
+		"bike": near = [[k.call("interact"), "Сесть"]]
+		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
+	# внизу (видно с зажатым Tab) — главное для того, чем игрок занят
 	if bike.riding:
-		var ride := "W — педали · S — тормоз · A, D — руль"
-		if Controls.joypad:
-			ride = "%s или стик — педали · %s — тормоз · стик — руль" % [Controls.trigger(true), Controls.trigger(false)]
-		hud.set_hints("%s · %s — сильнее · %s — прыжок · %s — слезть · %s — к месту · %s" % [ride, k.call("run"), k.call("jump"), k.call("interact"), k.call("recover_bike"), common], prompt)
+		hud.set_hints([[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "К месту"]], near)
 		return
-	var walk := "Стик — идти · %s — фотоаппарат" % k.call("photo") if Controls.joypad else "WASD — идти · ПКМ — фотоаппарат"
-	hud.set_hints("%s · %s — бег · %s — прыжок · %s — действие · %s — к ближайшему месту · %s" % [walk, k.call("run"), k.call("jump"), k.call("interact"), k.call("recover_bike"), common], prompt)
+	var photo_key: String = k.call("photo") if Controls.joypad else "ПКМ"
+	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "К месту"]], near)
 
 
 func _settlement_open() -> bool:
