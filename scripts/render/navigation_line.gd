@@ -3,6 +3,8 @@ extends MeshInstance3D
 ## 14.3: штрихи стоят на месте маршрута — фаза считается от начала пути (_cum), а не от ближайшей
 ## к игроку точки, поэтому при перестройке они не скачут. Сечение штриха — пологая арка: середина чуть выше
 ## и ярче (сердечник), края гаснут, полоска выглядит объёмной и мягкой.
+## 14.9: путь идёт по дорогам до ближайшей к цели точки, а последний участок — по прямой; игрок вне
+## дорог получает отрезок к ближайшей дороге. Перебора рельефа и новых дорог нет.
 const Roads = preload("res://scripts/game/road_navigation.gd")
 const REACH := 70.0
 const PIECE := 0.75     # длина кусочка штриха, м; штрих — DASH кусочков, пауза — столько же
@@ -17,8 +19,7 @@ var _cum := PackedFloat32Array() # длина маршрута от начала
 var _world: WorldData
 var _heights: Heightfield
 var _goal := {}
-var _finish := -1
-var _last_start := -1
+var _target := Vector2.ZERO
 var _timer := 0.0
 var _reroute_timer := 0.0
 
@@ -40,30 +41,25 @@ func set_goal(goal: Dictionary, at: Vector2) -> void:
 	_goal = goal
 	path.clear()
 	(mesh as ImmediateMesh).clear_surfaces()
-	_last_start = -1
 	if goal.is_empty():
 		return
 	if roads == null:
 		roads = Roads.new()
 		roads.build(_world)
-	var target := Vector2(goal.x, goal.y) * GameConfig.TILE
+	_target = Vector2(goal.x, goal.y) * GameConfig.TILE
 	if goal.kind == "lake":
-		target = Vector2(goal.src.sx, goal.src.sy) * GameConfig.TILE
-	_finish = roads.nearest(target)
+		_target = Vector2(goal.src.sx, goal.src.sy) * GameConfig.TILE
 	_rebuild(at)
 
 
 func _rebuild(at: Vector2) -> void:
-	var start := roads.nearest(at)
-	if start != _last_start:
-		_last_start = start
-		path = roads.route(start, _finish)
-		_cum.resize(path.size())
-		var total := 0.0
-		for i in path.size():
-			if i > 0:
-				total += path[i - 1].distance_to(path[i])
-			_cum[i] = total
+	path = roads.route_to(at, _target)
+	_cum.resize(path.size())
+	var total := 0.0
+	for i in path.size():
+		if i > 0:
+			total += path[i - 1].distance_to(path[i])
+		_cum[i] = total
 	_reroute_timer = 2.0
 	_timer = 0.0
 

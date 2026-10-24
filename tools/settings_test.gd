@@ -66,11 +66,18 @@ func _navigation_test() -> void:
 		{kind = "animal", pts = [{x = 30.5, y = 15.5}, {x = 50.5, y = 50.5}]}]
 	var roads := preload("res://scripts/game/road_navigation.gd").new()
 	roads.build(w)
-	var start := roads.nearest(Vector2(42, 122))
-	var finish := roads.nearest(Vector2(122, 62))
-	var route := roads.route(start, finish)
+	var route := roads.route_to(Vector2(42, 122), Vector2(122, 62))
 	_check(route.size() > 20 and route.has(Vector2(42, 62)) and route[-1] == Vector2(122, 62), "путь проходит по дороге через развилку к цели")
-	_check(roads.route(start, roads.nearest(Vector2(202, 202))).is_empty(), "нет выдуманного пути между несвязанными дорогами; звериная тропа не связывает их")
+	var from := Vector2(20, 122) # игрок в стороне от дороги
+	var far := Vector2(202, 202) # цель на несвязанной дороге, звериная тропа не связывает их
+	var fallback := roads.route_to(from, far)
+	_check(fallback.size() > 20 and fallback[0] == from and fallback[1] == Vector2(42, 122)
+		and fallback.has(Vector2(42, 62)) and fallback[fallback.size() - 2] == Vector2(122, 62) and fallback[-1] == far,
+		"14.9: от игрока вне дорог — к ближайшей дороге, по сети до ближайшей к цели точки, затем по прямой")
+	var none := preload("res://scripts/game/road_navigation.gd").new()
+	none.build(WorldData.new())
+	_check(none.route_to(Vector2(0, 0), Vector2(40, 30)) == PackedVector2Array([Vector2(0, 0), Vector2(40, 30)]),
+		"14.9: без дорог путь — прямая от игрока к цели")
 	var shell: Node = load("res://scenes/main.tscn").instantiate()
 	shell.set_script(null) # только готовый HUD, без генерации фона меню
 	root.add_child(shell)
@@ -102,7 +109,8 @@ func _navigation_test() -> void:
 	_check(line.roads.searches == searches, "при движении по маршруту поиск не запускается каждый кадр")
 	line.update_line(Vector3(202, 100, 202), 2.1, true)
 	line.update_line(Vector3(202, 100, 202), 0.3, true)
-	_check(line.path.is_empty() and line.mesh.get_surface_count() == 0, "при отклонении на другую сеть ошибочная линия убирается")
+	_check(line.path.size() > 2 and line.path[0] == Vector2(202, 202) and line.path[-1] == Vector2(122, 62)
+		and line.mesh.get_surface_count() == 1, "14.9: после отклонения путь заново ведёт от нового места к цели, последний участок — по прямой")
 	hud.set_goal({key = "lake:test", kind = "lake", name = "Озеро", x = 20.5, y = 5.5, src = {sx = 10.5, sy = 5.5}})
 	_check(line.path[-1] == Vector2(42, 22), "озёрная цель ведёт к берегу, не в середину воды")
 	_check(is_same(cached, line.roads), "новая цель использует уже собранную дорожную сеть")
@@ -112,6 +120,8 @@ func _navigation_test() -> void:
 	click.button_index = MOUSE_BUTTON_LEFT
 	click.pressed = true
 	click.position = frame[0] + Vector2(10.5, 5.5) * float(frame[2])
+	hud.big_map._gui_input(click)
+	click.pressed = false # карта выбирает при отпускании без перетаскивания
 	hud.big_map._gui_input(click)
 	_check(hud.goal.get("kind") == "marker" and not line.path.is_empty(), "щелчок по пустому месту карты ставит метку и включает навигацию")
 	line.update_line(Vector3(42, 100, 122), 0.3, false)

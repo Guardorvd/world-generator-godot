@@ -1,6 +1,8 @@
 extends RefCounted
 ## Компактная сеть только существующих путей людей. Один узел на клетку дороги;
 ## связи берутся из готовых линий, а не из соседства клеток рельефа.
+## 14.9: путь всегда доходит до цели. По дорогам — до ближайшей достижимой к цели точки,
+## последний участок — по прямой; игрок вне дорог — сначала по прямой к ближайшему узлу.
 const MAX_VISITS := 20000
 var points := {} # клетка -> точка на оси дороги в метрах
 var links := {}  # клетка -> соседние клетки той же линии
@@ -36,28 +38,43 @@ func nearest(at: Vector2) -> int:
 	return best
 
 
-## Один BFS по небольшой дорожной сети, с пределом работы. Не прокладывает новые дороги.
-func route(start: int, finish: int) -> PackedVector2Array:
+## Маршрут от игрока к цели: по дорогам до ближайшей к цели достижимой точки, дальше — по прямой.
+## Если дорог нет вовсе, ведёт по прямой. Один поиск в ширину, новых дорог не прокладывает.
+func route_to(from: Vector2, to: Vector2) -> PackedVector2Array:
 	searches += 1
-	if not points.has(start) or not points.has(finish):
-		return PackedVector2Array()
+	var out := PackedVector2Array([from])
+	var start := nearest(from)
+	if start == -1:
+		out.append(to)
+		return out
+	var finish := nearest(to)
 	var previous := {start: -1}
 	var queue: Array[int] = [start]
 	var cursor := 0
-	while cursor < queue.size() and cursor < MAX_VISITS and not previous.has(finish):
-		var id := queue[cursor]
+	var tail := start
+	var closest: float = points[start].distance_squared_to(to)
+	while cursor < queue.size() and cursor < MAX_VISITS:
+		var node := queue[cursor]
 		cursor += 1
-		for next: int in links[id]:
+		if node == finish:
+			tail = finish
+			break
+		var d: float = points[node].distance_squared_to(to)
+		if d < closest:
+			closest = d
+			tail = node
+		for next: int in links[node]:
 			if previous.has(next):
 				continue
-			previous[next] = id
+			previous[next] = node
 			queue.append(next)
-	var out := PackedVector2Array()
-	if not previous.has(finish):
-		return out
-	var id := finish
+	var chain: Array[Vector2] = []
+	var id := tail
 	while id != -1:
-		out.append(points[id])
-		id = previous[id]
-	out.reverse()
+		chain.append(points[id])
+		id = int(previous[id])
+	chain.reverse()
+	out.append_array(chain)
+	if out[out.size() - 1].distance_squared_to(to) > 1.0:
+		out.append(to)
 	return out
