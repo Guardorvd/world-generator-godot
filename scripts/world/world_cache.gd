@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 1
+const SCHEMA_GEO_VERSION := 2
 const SCHEMA_TRAILS_VERSION := 1
 const SCHEMA_NATURE_VERSION := 1
 const SCHEMA_VIEW_VERSION := 1
@@ -40,7 +40,7 @@ const PREVIEW_SIZE := 256
 ## Байт на пиксель у форматов картинок мира (другой формат в файле — файл чужой)
 const PIXEL_BYTES := {Image.FORMAT_L8: 1, Image.FORMAT_R8: 1, Image.FORMAT_RG8: 2, Image.FORMAT_RGB8: 3, Image.FORMAT_RGBA8: 4}
 ## Поля по клетке: длина ровно N
-const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area", "acc", "slope", "watershed",
+const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area", "wetland", "acc", "slope", "watershed",
 	"down", "rain", "dist_ocean", "dist_water", "temp", "moist", "biome", "cost", "path_mask", "road_surface", "lake_id"]
 const PER_OBJECT := ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]
 

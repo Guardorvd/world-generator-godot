@@ -126,7 +126,8 @@ public partial class FastGrid : RefCounted
 					continue;
 				closed[n] = true;
 				double hv = h[n];
-				double up = fc + 1e-5;
+				// Flat routing uses the flood rank; do not add an artificial terrain tilt.
+				double up = fc;
 				filled[n] = (float)(hv > up ? hv : up);
 				down[n] = c;
 				Push(ids, keys, ref hn, n, filled[n]);

@@ -358,6 +358,12 @@ var river: PackedByteArray:
 		return geology.river.data
 	set(value):
 		geology.river.data = value
+## Non-lake depressions before breaching: retained soil moisture.
+var wetland: PackedByteArray:
+	get:
+		return geology.wetland.data
+	set(value):
+		geology.wetland.data = value
 var river_area: PackedByteArray:
 	get:
 		return geology.river_area.data

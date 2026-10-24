@@ -14,20 +14,38 @@ func inspect(w: WorldData, heights: Heightfield) -> void:
 	var mismatch := 0
 	var missing := 0
 	var dry_axis := 0
+	var wet_objects := 0
+	for n in w.obj_count:
+		var x := w.obj_x[n] * GameConfig.TILE
+		var z := w.obj_y[n] * GameConfig.TILE
+		if heights.river_level(x, z) > heights.ground_at(x, z) + 0.001:
+			wet_objects += 1
+	check(wet_objects == 0, "%s: vegetation objects inside river water (%d)" % [w.seed_text, wet_objects])
+	if w.river_area.size() == w.N:
+		for cell: int in heights._river_cells:
+			var cx := cell % w.W
+			var cy := cell / w.W
+			for y in range(maxi(0, cy - 1), mini(w.H, cy + 2)):
+				for x in range(maxi(0, cx - 1), mini(w.W, cx + 2)):
+					check(w.river_area[y * w.W + x] != 0, "Final ribbon index has a one-cell mask margin")
 	# Центры реально нарисованных треугольников: в глубине учитываем верхнюю
 	# из перекрывающихся водных поверхностей и ту же игровую землю.
 	for k in range(0, vertices.size(), 3):
-		var p := (vertices[k] + vertices[k + 1] + vertices[k + 2]) / 3.0
-		if p.x < 2.0 or p.z < 2.0 or p.x >= w.W * 4.0 - 2.0 or p.z >= w.H * 4.0 - 2.0:
+		# Scalar doubles avoid rounding the centroid in Vector3 (float32).
+		# On thin sloping triangles that rounding changes the sampled height.
+		var px: float = (float(vertices[k].x) + vertices[k + 1].x + vertices[k + 2].x) / 3.0
+		var py: float = (float(vertices[k].y) + vertices[k + 1].y + vertices[k + 2].y) / 3.0
+		var pz: float = (float(vertices[k].z) + vertices[k + 1].z + vertices[k + 2].z) / 3.0
+		if px < 2.0 or pz < 2.0 or px >= w.W * 4.0 - 2.0 or pz >= w.H * 4.0 - 2.0:
 			continue
-		var level := heights.river_level(p.x, p.z)
-		if level < p.y - 0.001:
+		var level := heights.river_level(px, pz)
+		if level < py - 0.001:
 			missing += 1
-		var top := maxf(0.0, maxf(level, heights.lake_level(p.x, p.z)))
-		var expected := maxf(0.0, top - heights.ground_at(p.x, p.z))
-		if absf(heights.depth_at(p.x, p.z) - expected) > 0.001:
+		var top := maxf(0.0, maxf(level, heights.lake_level(px, pz)))
+		var expected := maxf(0.0, top - heights.ground_at(px, pz))
+		if absf(heights.depth_at(px, pz) - expected) > 0.001:
 			mismatch += 1
-		var i := floori(p.z / 4.0) * w.W + floori(p.x / 4.0)
+		var i := floori(pz / 4.0) * w.W + floori(px / 4.0)
 		if w.river_area.size() == w.N and w.river_area[i] == 0 and w.ocean[i] == 0 and w.lake[i] == 0:
 			missing += 1
 	for r: Array in heights.ribbons:
@@ -89,7 +107,7 @@ func _init() -> void:
 		quit(1 if fails > 0 else 0)
 		return
 	for seed_text in ["Север-1234", "Туман-4821", "Ущелье"]:
-		var w := WorldGenerator.generate(seed_text, 256)
+		var w := WorldGenerator._generate_plan(seed_text, 256) if OS.get_cmdline_user_args().has("--small-plan") else WorldGenerator.generate(seed_text, 256)
 		var h := Heightfield.new(w, false)
 		var water := h.water_level.duplicate()
 		var bed := h.hv.duplicate()

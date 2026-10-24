@@ -1,28 +1,20 @@
 class_name StageHydrology
 extends RefCounted
-## Этап 3. Гидрология: заполнение впадин (priority flood), направления стока, озёра, осадки, накопление стока.
-## Пишет: w.filled, down, order, order_n, lake, dist_ocean, rain, acc, river; засыпает мелкие впадины в w.h.
+## Priority flood detects lakes and supplies an acyclic flow order.
+## Non-lake sinks are breached, never filled into terrain terraces.
 
 const PROGRESS := 0.2
 const LABEL := "Течение рек"
-## Озеро меньше стольких клеток засыпается, как мелкая впадина (с 1.9.9): на пологих равнинах такие ямы
-## глубиной в пару метров выглядели квадратными прудами с отвесными стенками
 const LAKE_MIN := 30
-## С 2.9 озёр меньше: мелкое (глубже LAKE_DEPTH нигде нет) засыпается, как и маленькое, а слишком большое
-## (больше LAKE_MAX клеток на мир 512, это бывшие морские котловины внутри суши) становится сухой низиной
-## с уклоном к стоку и мелкими неровностями (_drain), иначе по ровному дну реки шли бы прямыми линиями
 const LAKE_DEPTH := 0.035   # ≈ 9 м
 const LAKE_MAX := 1200
 
 
-const DRAIN_TILT := 0.0003  # подъём сухой низины на клетку от стока (≈ 8 см)
-## Берег озера не ниже уровня воды плюс SHORE_LIFT (≈ 0,8 м, с 3.0): засыпанные мелководья вокруг озера лежали
-## ровно на уровне воды, и вода расползалась по берегу рваными треугольниками
+## Shore clearance above lake water (normalised height).
 const SHORE_LIFT := 0.003
 
 
-## again — второй проход после того, как большие котловины стали низинами
-static func run(w: WorldData, again := false) -> void:
+static func run(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var N := w.N
@@ -40,19 +32,11 @@ static func run(w: WorldData, again := false) -> void:
 	for i in N:
 		if ocean[i] == 0 and filled[i] - h[i] > 0.008:
 			lake[i] = 1
-	# Мелкие впадины (не озёра) засыпаны наносами: рельеф вдоль стока не поднимается,
-	# и реки не уходят под землю на порогах
-	for i in N:
-		if ocean[i] == 0 and lake[i] == 0:
-			h[i] = filled[i]
-	# Одно озеро — один уровень воды (уровень порога стока), без ступенек на поверхности; совсем маленькие
-	# озёра засыпаются
 	var seen := PackedByteArray()
 	seen.resize(N)
 	var stack := PackedInt32Array()
 	var cells := PackedInt32Array()
 	var lake_max := LAKE_MAX * w.scale
-	var drained := false
 	for s in N:
 		if lake[s] == 0 or seen[s] != 0:
 			continue
@@ -79,22 +63,50 @@ static func run(w: WorldData, again := false) -> void:
 				if lake[n] != 0 and seen[n] == 0:
 					seen[n] = 1
 					stack.append(n)
-		if cells.size() > lake_max and deep >= LAKE_DEPTH and not again:
-			_drain(w, cells, down, lvl)
-			drained = true
-			continue
 		if cells.size() < LAKE_MIN or cells.size() > lake_max or deep < LAKE_DEPTH:
 			for c in cells:
 				lake[c] = 0
-				h[c] = filled[c]
 			continue
 		for c in cells:
 			filled[c] = lvl
 
-	if drained:
-		# у низин новый рельеф: впадины и сток считаются заново
-		run(w, true)
-		return
+	# Include the shallow fringe of retained lakes up to their actual shoreline.
+	# Leaving it as dry land would force river shaping to raise submerged inflows.
+	stack.clear()
+	for i in N:
+		if lake[i] != 0:
+			stack.append(i)
+	var head := 0
+	while head < stack.size():
+		var c := stack[head]
+		head += 1
+		for k in 8:
+			var x: int = c % W + Grid.DX[k]
+			var y: int = c / W + Grid.DY[k]
+			if x < 0 or y < 0 or x >= W or y >= H:
+				continue
+			var n := y * W + x
+			if lake[n] == 0 and ocean[n] == 0 and h[n] < filled[c] and absf(filled[n] - filled[c]) < 1e-7:
+				lake[n] = 1
+				stack.append(n)
+
+	# Keep the original depression footprint for soil moisture, including shallow
+	# hollows below the lake candidate threshold. Flood's numerical tilt is not a wetland.
+	var wetland := PackedByteArray()
+	wetland.resize(N)
+	for i in N:
+		if ocean[i] == 0 and lake[i] == 0 and filled[i] - h[i] > 0.0001:
+			wetland[i] = 1
+	_breach_depressions(w, h, wetland, lake, down)
+	w.h = h
+	# Rebuild ranks, catchments and accumulation on the carved terrain. Retained
+	# lakes still use a virtual filled water surface; no virtual fill is copied to h.
+	flood = fast.PriorityFlood(h, ocean, W, H) if fast != null else _priority_flood(w)
+	filled = flood.filled
+	down = flood.down
+	order = flood.order
+	order_n = flood.order_n
+	w.wetland = wetland
 
 	var dist_ocean := Grid.distance_field(W, H, ocean)
 	# Flood даёт безопасный выход из впадин; на склонах выбираем самый крутой
@@ -189,34 +201,72 @@ static func run(w: WorldData, again := false) -> void:
 	w.watershed = watershed
 
 
-## Большая котловина становится сухой низиной: дно поднимается к уровню порога, от стока (клетки, откуда
-## вода уходит из котловины) вглубь растёт на DRAIN_TILT за клетку, сверху мелкие неровности
-static func _drain(w: WorldData, cells: PackedInt32Array, down: PackedInt32Array, lvl: float) -> void:
-	var W := w.W
-	var h := w.h
-	var dist := {}
-	for c in cells:
-		dist[c] = -1
-	var queue := PackedInt32Array()
-	for c in cells:
-		if down[c] < 0 or not dist.has(down[c]):
-			dist[c] = 0
-			queue.append(c)
-	var head := 0
-	while head < queue.size():
-		var c := queue[head]
-		head += 1
-		var x := c % W
-		for n: int in [c - 1 if x > 0 else -1, c + 1 if x < W - 1 else -1, c - W, c + W]:
-			if dist.get(n, 0) == -1:
-				dist[n] = dist[c] + 1
-				queue.append(n)
-	var base := maxf(lvl, 0.002)
-	var micro: Simplex = w.noise.micro
-	for c in cells:
-		var x := c % W
-		var y := c / W
-		h[c] = base + maxf(0, dist[c]) * DRAIN_TILT + (micro.noise(x / 9.0, y / 9.0) + 1.0) * 0.003
+## Least excavation cost (depth * edge length), with a small distance penalty
+## favouring a nearby lower slope when excavation costs match. Dijkstra explores
+## only visited cells; no N-sized scratch buffers per sink. Process low pits first
+## so later channels can drain into earlier breaches. Retained lake beds are protected.
+const BREACH_DROP := 0.0001
+const BREACH_DISTANCE_COST := 0.0001
+
+static func _breach_depressions(w: WorldData, h: PackedFloat32Array,
+		wetland: PackedByteArray, lake: PackedByteArray, down: PackedInt32Array) -> void:
+	var pits := MinHeap.new(64)
+	for i in w.N:
+		if wetland[i] == 0 or down[i] < 0 or h[down[i]] <= h[i]:
+			continue
+		var low := true
+		for k in 8:
+			var x: int = i % w.W + Grid.DX[k]
+			var y: int = i / w.W + Grid.DY[k]
+			if x >= 0 and y >= 0 and x < w.W and y < w.H and h[y * w.W + x] < h[i]:
+				low = false
+		if low:
+			pits.push(i, h[i])
+	while pits.n > 0:
+		_breach_from(w, h, lake, pits.pop())
+
+
+static func _breach_from(w: WorldData, h: PackedFloat32Array, lake: PackedByteArray, pit: int) -> void:
+	var level := h[pit] - BREACH_DROP
+	var costs := {pit: 0.0}
+	var parent := {pit: -1}
+	var closed := {}
+	var heap := MinHeap.new(64)
+	heap.push(pit, 0.0)
+	var outlet := -1
+	while heap.n > 0:
+		var c := heap.pop()
+		if closed.has(c):
+			continue
+		closed[c] = true
+		if c != pit and (h[c] <= level or Grid.on_edge(c, w.W, w.H)):
+			outlet = c
+			break
+		for k in 8:
+			var x: int = c % w.W + Grid.DX[k]
+			var y: int = c / w.W + Grid.DY[k]
+			if x < 0 or y < 0 or x >= w.W or y >= w.H:
+				continue
+			var n := y * w.W + x
+			if closed.has(n) or lake[n] != 0:
+				continue
+			var cost: float = costs[c] + (maxf(0.0, h[n] - level) + BREACH_DISTANCE_COST) * Grid.DL[k]
+			if cost < float(costs.get(n, INF)):
+				costs[n] = cost
+				parent[n] = c
+				heap.push(n, cost)
+	if outlet < 0:
+		return
+	var path := PackedInt32Array()
+	var c := outlet
+	while c != pit:
+		path.append(c)
+		c = parent[c]
+	# A tiny continuous fall opens the outlet without raising or flattening the
+	# surrounding bowl. Only the single-cell channel is excavated.
+	for k in path.size():
+		var target := lerpf(h[pit], level, float(path.size() - k) / path.size())
+		h[path[k]] = minf(h[path[k]], target)
 
 
 ## Заполнение впадин от океана и от края карты (priority flood): с 1.9.6 за краем мир продолжается, и вода
@@ -283,7 +333,7 @@ static func _priority_flood(w: WorldData) -> Dictionary:
 			if closed[n] != 0:
 				continue
 			closed[n] = 1
-			filled[n] = maxf(h[n], fc + 1e-5)
+			filled[n] = maxf(h[n], fc)
 			down[n] = c
 			var key := filled[n]
 			var i := hn

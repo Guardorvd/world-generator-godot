@@ -81,6 +81,7 @@ static func run(w: WorldData) -> void:
 	var h := w.h
 	var ocean := w.ocean
 	var lake := w.lake
+	var wetland := w.wetland
 	var rain := w.rain
 	var dist_ocean := w.dist_ocean
 	var dist_water := w.dist_water
@@ -104,6 +105,8 @@ static func run(w: WorldData) -> void:
 				var conditions := natural_conditions(w, x, y)
 				t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)
 				m = soil_moisture(rain[i], dist_water[i], slope[i], t, conditions)
+				if wetland.size() == N and wetland[i] != 0:
+					m = clampf(m + 0.24, 0.0, 1.0)
 			temp[i] = t
 			moist[i] = m
 			var b: int

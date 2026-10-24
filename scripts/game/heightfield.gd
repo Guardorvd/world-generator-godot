@@ -600,14 +600,22 @@ func _fit_banks_of(pts: Array) -> void:
 				reach = 0.0
 				var limit: float = p.w + TILE
 				while reach < limit:
-					reach += 0.5
+					var previous := reach
+					reach = minf(limit, reach + 0.5)
 					var q: Vector2 = Vector2(p.x, p.z) + normal * side * reach
 					if ground_at(q.x, q.y) >= p.y + 0.02:
+						var lo := previous
+						var hi := reach
+						for iteration in 8:
+							var mid := (lo + hi) * 0.5
+							var probe: Vector2 = Vector2(p.x, p.z) + normal * side * mid
+							if ground_at(probe.x, probe.y) >= p.y:
+								hi = mid
+							else:
+								lo = mid
+						reach = hi
 						break
-				# У обрыва нет бокового берега: не растягиваем поток
-				# в висящую над соседней долиной широкую плоскость.
-				if reach >= limit:
-					reach = p.w
+				# Keep the reached width on shallow banks; never snap back to p.w.
 			var bank := Vector3(p.x + normal.x * side * reach, p.y, p.z + normal.y * side * reach)
 			if side > 0.0:
 				p.left = bank

@@ -2,7 +2,7 @@ class_name GeologyData
 extends RefCounted
 ## Рельеф, гидрология и природные ориентиры. Единственный владелец этих полей; WorldData — фасад.
 const GridBuffer = preload("res://scripts/core/grid_buffer_2d.gd")
-const CACHE_FIELDS := ["h", "filled", "elev", "ocean", "lake", "river", "river_area", "acc", "slope", "watershed", "down", "rain", "dist_ocean", "dist_water", "lake_id", "macro_x", "macro_y", "mountain_scale", "mountain_bias", "mountain_height", "foothill_spread", "order", "order_n", "rivers", "river_exits", "peaks", "lakes"]
+const CACHE_FIELDS := ["h", "filled", "elev", "ocean", "lake", "river", "river_area", "wetland", "acc", "slope", "watershed", "down", "rain", "dist_ocean", "dist_water", "lake_id", "macro_x", "macro_y", "mountain_scale", "mountain_bias", "mountain_height", "foothill_spread", "order", "order_n", "rivers", "river_exits", "peaks", "lakes"]
 var layout: GridBuffer.Layout
 var h: GridBuffer.Float32
 var filled: GridBuffer.Float32
@@ -10,6 +10,7 @@ var elev: GridBuffer.Float32
 var ocean: GridBuffer.Byte
 var lake: GridBuffer.Byte
 var river: GridBuffer.Byte
+var wetland: GridBuffer.Byte
 var river_area: GridBuffer.Byte
 var acc: GridBuffer.Float32
 var slope: GridBuffer.Float32
@@ -42,6 +43,7 @@ func _init(shape: GridBuffer.Layout) -> void:
 	lake = GridBuffer.Byte.new(shape)
 	river = GridBuffer.Byte.new(shape)
 	river_area = GridBuffer.Byte.new(shape)
+	wetland = GridBuffer.Byte.new(shape)
 	acc = GridBuffer.Float32.new(shape)
 	slope = GridBuffer.Float32.new(shape)
 	watershed = GridBuffer.Int32.new(shape)

@@ -100,7 +100,12 @@ static func run(w: WorldData) -> void:
 	# дорогам, растительности и расстояниям до воды ещё до этапа климата.
 	var surface := Heightfield.new(w, false, true)
 	for cell: int in surface._river_cells:
-		w.river_area[cell] = 1
+		# Dilate the final bank index, including overhanging banks, by one cell.
+		var cx := cell % w.W
+		var cy := cell / w.W
+		for y in range(maxi(0, cy - 1), mini(w.H, cy + 2)):
+			for x in range(maxi(0, cx - 1), mini(w.W, cx + 2)):
+				w.river_area[y * w.W + x] = 1
 	# Дальше рельеф, вода и реки не меняются: этот же рельеф (с уровнями воды по готовому коридору)
 	# служит базой загрузчику, дорогам и планировке домов (с 9.7), а не строится каждым заново
 	surface.complete_water()
