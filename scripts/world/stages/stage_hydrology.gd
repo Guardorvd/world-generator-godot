@@ -140,19 +140,7 @@ static func run(w: WorldData) -> void:
 	for i in N:
 		rain[i] = clampf(0.36 + 0.85 * moist_n[i] + 0.18 * exp(-dist_ocean[i] / 30.0), 0.02, 1.0)
 
-	# Накопление стока сверху вниз по порядку заполнения
-	var acc := PackedFloat32Array()
-	acc.resize(N)
-	for k in range(order_n - 1, -1, -1):
-		var i := order[k]
-		if ocean[i] != 0:
-			continue
-		# Часть осадков впитывается; небольшой базовый сток поддерживает ручьи
-		# умеренного климата. Единицы и пороги не зависят от размера окна мира.
-		acc[i] += maxf(0.04, rain[i] - 0.12)
-		var d := down[i]
-		if d >= 0:
-			acc[d] += acc[i]
+	var acc := _accumulate(w, filled, down, order, order_n, rain, lake)
 
 	var river := PackedByteArray()
 	river.resize(N)
@@ -190,8 +178,8 @@ static func run(w: WorldData) -> void:
 	w.rain = rain
 	w.acc = acc
 	w.river = river
-	# Выход каждого водосбора один на весь план. down уже идёт к меньшему рангу,
-	# поэтому его метку можно переиспользовать одним проходом без нового поиска.
+	# Метка основного тальвега (на пологих склонах MFD может делить сток
+	# между водосборами). down идёт к меньшему рангу, метки строятся за один проход.
 	var watershed := PackedInt32Array()
 	watershed.resize(N)
 	watershed.fill(-1)
@@ -199,6 +187,64 @@ static func run(w: WorldData) -> void:
 		var i := order[k]
 		watershed[i] = i if down[i] < 0 else watershed[down[i]]
 	w.watershed = watershed
+
+
+## Sheet flow on gentle slopes converges continuously into a single thalweg.
+## Only strictly descending, lower-rank neighbours receive MFD flow: the flood
+## tree handles flats/lakes, preserving an acyclic order and all rainfall mass.
+static func _accumulate(w: WorldData, filled: PackedFloat32Array, down: PackedInt32Array,
+		order: PackedInt32Array, order_n: int, rain: PackedFloat32Array, lake: PackedByteArray) -> PackedFloat32Array:
+	var W := w.W
+	var H := w.H
+	var N := w.N
+	var ocean := w.ocean
+	var acc := PackedFloat32Array()
+	acc.resize(N)
+	var rank := PackedInt32Array()
+	rank.resize(N)
+	for k in order_n:
+		rank[order[k]] = k
+	var weights := PackedFloat64Array()
+	weights.resize(8)
+	for index in range(order_n - 1, -1, -1):
+		var i := order[index]
+		if ocean[i] != 0:
+			continue
+		acc[i] += maxf(0.04, rain[i] - 0.12)
+		var d := down[i]
+		if d < 0:
+			continue
+		var diffuse := 1.0 - smoothstep(WorldData.STREAM_ACC * 0.4, WorldData.STREAM_ACC, acc[i])
+		if lake[i] != 0 or diffuse <= 0.0:
+			acc[d] += acc[i]
+			continue
+		var x := i % W
+		var y := i / W
+		var total := 0.0
+		var steepest := 0.0
+		for k in 8:
+			weights[k] = 0.0
+			var nx: int = x + Grid.DX[k]
+			var ny: int = y + Grid.DY[k]
+			if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				continue
+			var n := ny * W + nx
+			var slope := (filled[i] - filled[n]) / Grid.DL[k]
+			if rank[n] >= rank[i] or slope <= 0.0:
+				continue
+			steepest = maxf(steepest, slope * GameConfig.HS / GameConfig.TILE)
+			weights[k] = pow(slope, 1.1)
+			total += weights[k]
+		diffuse *= 1.0 - smoothstep(0.03, 0.15, steepest)
+		if total <= 0.0 or diffuse <= 0.0:
+			acc[d] += acc[i]
+			continue
+		acc[d] += acc[i] * (1.0 - diffuse)
+		for k in 8:
+			if weights[k] > 0.0:
+				var n: int = (y + Grid.DY[k]) * W + x + Grid.DX[k]
+				acc[n] += acc[i] * diffuse * weights[k] / total
+	return acc
 
 
 ## Least excavation cost (depth * edge length), with a small distance penalty

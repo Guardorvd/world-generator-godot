@@ -5,6 +5,7 @@ extends RefCounted
 
 const PROGRESS := 0.3
 const LABEL := "Русла рек и озёра"
+const RiverSpline = preload("res://scripts/world/river_spline.gd")
 const WIDTH_ACC := 70.0  # сток, от которого считается ширина (прежний порог реки: с 2.9 реки реже, но не уже)
 
 
@@ -91,7 +92,7 @@ static func run(w: WorldData) -> void:
 				break
 			c = d
 		if pts.size() >= 2:
-			rivers.append(Grid.chaikin(pts, 2))
+			rivers.append(RiverSpline.sample(pts))
 	w.rivers = rivers
 	# Консервативный коридор ленты для дорог, домов и растительности.
 	# Не меняем гидрологическую сеть: acc/down по-прежнему относятся к river.

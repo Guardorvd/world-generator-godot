@@ -27,7 +27,7 @@ func inspect(w: WorldData, before: PackedFloat32Array) -> void:
 		if w.ocean[i] != 0 or w.lake[i] != 0:
 			check(w.h[i] == before[i], "Не менять море и дно озёр")
 		var d := w.down[i]
-		if d >= 0 and (rank[d] >= rank[i] or w.acc[d] + 0.001 < w.acc[i]):
+		if d >= 0 and (rank[d] >= rank[i] or (w.river[i] != 0 and w.acc[d] + 0.001 < w.acc[i])):
 			bad_flow += 1
 		if w.river[i] != 0 and d >= 0:
 			check(w.h[i] >= 0.0, "Речной профиль не ниже уровня моря")
@@ -35,6 +35,14 @@ func inspect(w: WorldData, before: PackedFloat32Array) -> void:
 				bad_flow += 1
 			if w.ocean[d] == 0 and w.lake[d] == 0 and w.river[d] == 0:
 				bad_flow += 1
+	var rainfall := 0.0
+	var discharged := 0.0
+	for i in w.N:
+		if w.ocean[i] == 0:
+			rainfall += maxf(0.04, w.rain[i] - 0.12)
+		if w.ocean[i] != 0 or w.down[i] < 0:
+			discharged += w.acc[i]
+	check(absf(rainfall - discharged) < maxf(0.01, rainfall * 1e-5), "MFD conserves total rainfall at outlets")
 	check(bad_flow == 0, "%s: циклы, потеря стока или разрыв реки (%d)" % [w.seed_text, bad_flow])
 	check(raised == 0, "Долины только срезают рельеф, устье не ниже моря")
 	check(cuts > 0, "%s: реки формируют соседние склоны" % w.seed_text)

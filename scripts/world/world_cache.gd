@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 2
+const SCHEMA_GEO_VERSION := 3
 const SCHEMA_TRAILS_VERSION := 1
 const SCHEMA_NATURE_VERSION := 1
 const SCHEMA_VIEW_VERSION := 1
