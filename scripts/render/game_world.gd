@@ -60,6 +60,7 @@ var player: PlayerState
 var bike: BikeRide
 var bike_view: BikeView
 var crash: BikeCrash     # падение с велосипеда: ragdoll и подъём пешком
+var stamina := Stamina.new() # 14.0: выносливость седока — Shift и быстрая езда тратят, накат и шаг восстанавливают
 var water_effects: WaterEffects
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
@@ -447,7 +448,7 @@ func toggle_photo() -> void:
 	if _opening or paused or show_map or crash.active() or _settlement_open():
 		return
 	if bike.riding:
-		hud.toast_now("Фотоаппарат — пешком: слезьте с велосипеда (E)")
+		hud.toast_now("Фотоаппарат — пешком: слезьте с велосипеда (%s)" % Controls.label("interact"))
 		return
 	if Input.mouse_mode != Input.MOUSE_MODE_CAPTURED:
 		capture_mouse()
@@ -634,11 +635,16 @@ func _refresh_recovery_area(at: Vector3) -> void:
 		heights.obstacles.update(at.x, at.z, details, vegetation.obstacles_version if vegetation != null else 0, true)
 
 
+## 14.0: подсказки показывают кнопки того, чем играют сейчас (Controls)
+func _input(event: InputEvent) -> void:
+	Controls.note(event)
+
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_echo():
 		return
 	if _settlement_open():
-		if event.is_action_pressed("pause") or event.is_action_pressed("interact"):
+		if event.is_action_pressed("pause") or event.is_action_pressed("interact") or event.is_action_pressed("back"):
 			_close_settlement()
 			get_viewport().set_input_as_handled()
 		return
@@ -660,7 +666,21 @@ func _unhandled_input(event: InputEvent) -> void:
 			_finish_opening()
 		get_viewport().set_input_as_handled()
 		return
-	if event.is_action_pressed("recover_bike"):
+	if event.is_action_pressed("back"):
+		# B на геймпаде закрывает карту и убирает фотоаппарат, как Esc, но паузу не ставит
+		if show_map:
+			toggle_map()
+		elif photo.active:
+			_set_photo(false)
+		get_viewport().set_input_as_handled()
+	elif photo.active and event.is_action_pressed("photo_shoot"):
+		photo.shoot()
+	elif photo.active and (event.is_action_pressed("photo_zoom_in") or event.is_action_pressed("photo_zoom_out")):
+		photo.zoom_by(1 if event.is_action_pressed("photo_zoom_in") else -1)
+	elif event.is_action_pressed("photo"):
+		if not show_map:
+			toggle_photo()
+	elif event.is_action_pressed("recover_bike"):
 		restore_at_place()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("toggle_map"):
@@ -770,11 +790,17 @@ func _physics_process(dt: float) -> void:
 			player.vz = 0.0
 			player.on_ground = true
 			player.land_impact = 0.0
-			hud.toast("Вы встали. Подойдите к велосипеду и нажмите E")
+			hud.toast("Вы встали. Подойдите к велосипеду и нажмите %s" % Controls.label("interact"))
 			crashed = true
 	elif bike.riding:
 		var h0 := bike.heading
-		bike.step(player, fw, st, not _opening and Input.is_action_pressed("run"), jump, dt, world, heights)
+		# Выносливость: пустая полоска выключает Shift и ослабляет педали; во вступлении не тратится
+		var boost := not _opening and stamina.can_boost(Input.is_action_pressed("run"), fw)
+		if fw > 0.0 and not _opening:
+			fw *= stamina.pedal_scale()
+		bike.step(player, fw, st, boost, jump, dt, world, heights)
+		if not _opening:
+			stamina.tick_ride(dt, fw, boost, bike.speed, bike.grade(heights), bike.airborne)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
 		# камера поворачивает вместе с велосипедом, а если мышь не трогали — сама уходит за спину
@@ -797,7 +823,9 @@ func _physics_process(dt: float) -> void:
 	else:
 		# с фотоаппаратом у глаз — медленный шаг, без бега и прыжков
 		var aiming := photo.active
-		_moving = player.step(fw, st, Input.is_action_pressed("run") and not aiming, jump and not aiming, yaw, dt, world, heights, 0.5 if aiming else 1.0)
+		var running := Input.is_action_pressed("run") and not aiming
+		_moving = player.step(fw, st, running, jump and not aiming, yaw, dt, world, heights, 0.5 if aiming else 1.0)
+		stamina.tick_foot(dt, running and _moving)
 		if player.land_impact > 0.0:
 			# проседание камеры: заметное после высокого прыжка, едва заметное после обычного
 			_dip_v -= clampf(player.land_impact - 3.0, 0.0, 14.0) * 0.25
@@ -812,7 +840,7 @@ func _physics_process(dt: float) -> void:
 	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
 	_trauma = maxf(0.0, _trauma - dt * 1.6)
 	if not crash.active():
-		bike_view.tick(bike, dt, fw, not _opening and Input.is_action_pressed("run"))
+		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.can_boost(Input.is_action_pressed("run"), fw))
 	bike.land_impact = 0.0
 	bike.bottom_out = 0.0
 	audio.tick(player, bike.riding)
@@ -876,9 +904,14 @@ func _light_night(pos: Vector3, t: float) -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
-	hud.lock_hint.visible = not paused and not _settlement_open() and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	hud.lock_hint.visible = not paused and not _settlement_open() and not Controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if paused:
 		return
+	if not show_map and not _settlement_open():
+		var stick := Controls.look_delta(delta)
+		if stick != Vector2.ZERO:
+			look(stick.x, stick.y)
+	hud.set_stamina(stamina.value, stamina.exhausted)
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
@@ -1036,24 +1069,30 @@ func _crash() -> void:
 
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас
 func _update_hints() -> void:
+	var k := Controls.label
 	if _opening:
-		hud.set_hints("Пробел — пропустить · Esc — пауза", "")
+		hud.set_hints("%s — пропустить · %s — пауза" % [k.call("jump"), k.call("pause")], "")
 		return
 	if _settlement_open() or photo.active:
 		hud.set_hints("", "")
 		return
 	var prompt := ""
 	if crash.active():
-		hud.set_hints("Падение · Y — восстановиться у ближайшего места · Esc — пауза", "", true)
+		hud.set_hints("Падение · %s — восстановиться у ближайшего места · %s — пауза" % [k.call("recover_bike"), k.call("pause")], "", true)
 		return
 	match _target.get("kind", ""):
-		"board": prompt = "E — доска поселения «%s»: задания и маршруты" % _target.place.name
-		"bike": prompt = "E — сесть на велосипед"
-		"cargo": prompt = "E — надеть сумку"
+		"board": prompt = "%s — доска поселения «%s»: задания и маршруты" % [k.call("interact"), _target.place.name]
+		"bike": prompt = "%s — сесть на велосипед" % k.call("interact")
+		"cargo": prompt = "%s — надеть сумку" % k.call("interact")
+	var common := "%s — фара · %s — карта · %s — карта и задание · %s — пауза" % [k.call("flashlight"), k.call("toggle_map"), k.call("show_hud"), k.call("pause")]
 	if bike.riding:
-		hud.set_hints("W — педали · S — тормоз · A, D — руль · Shift — сильнее · Пробел — прыжок · E — слезть · Y — к месту · F — фара · Tab — карта и задание · Esc — пауза", prompt)
+		var ride := "W — педали · S — тормоз · A, D — руль"
+		if Controls.joypad:
+			ride = "%s или стик — педали · %s — тормоз · стик — руль" % [Controls.trigger(true), Controls.trigger(false)]
+		hud.set_hints("%s · %s — сильнее · %s — прыжок · %s — слезть · %s — к месту · %s" % [ride, k.call("run"), k.call("jump"), k.call("interact"), k.call("recover_bike"), common], prompt)
 		return
-	hud.set_hints("WASD — идти · Shift — бег · Пробел — прыжок · E — действие · ПКМ — фотоаппарат · Y — к ближайшему месту · F — фара · M — карта · Tab — карта и задание · Esc — пауза", prompt)
+	var walk := "Стик — идти · %s — фотоаппарат" % k.call("photo") if Controls.joypad else "WASD — идти · ПКМ — фотоаппарат"
+	hud.set_hints("%s · %s — бег · %s — прыжок · %s — действие · %s — к ближайшему месту · %s" % [walk, k.call("run"), k.call("jump"), k.call("interact"), k.call("recover_bike"), common], prompt)
 
 
 func _settlement_open() -> bool:

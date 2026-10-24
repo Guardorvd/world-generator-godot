@@ -253,7 +253,7 @@ func _draw_view(c: Control) -> void:
 			var y := mid + (float(ZOOMS.size() - 1) / 2.0 - i) * 16.0
 			var on := i == zoom
 			c.draw_line(Vector2(frame.end.x - (20.0 if on else 12.0), y), Vector2(frame.end.x - 6.0, y), Color(1, 1, 1, (0.9 if on else 0.4) * e), 2.0 if on else 1.0)
-		_text(c, font, "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
+		_text(c, font, ("%s — снимок · ← → — приближение · %s — убрать фотоаппарат" % [Controls.label("photo_shoot"), Controls.label("photo")]) if Controls.joypad else "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
 		# название над местом: всплывает с лёгким увеличением
 		if _name_a > 0.0 and not _shown.is_empty():
 			var ne := 1.0 - pow(1.0 - _name_a, 3.0)

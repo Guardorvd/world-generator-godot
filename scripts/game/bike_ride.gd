@@ -215,6 +215,11 @@ func _dismount_spot(w: WorldData, heights: Heightfield) -> Vector2:
 	return Vector2(x, z)
 
 
+## 14.0: подъём земли на метр пути вдоль курса (для выносливости): больше нуля — в гору по курсу
+func grade(heights: Heightfield) -> float:
+	return _slope(heights)
+
+
 ## Подъём земли на метр пути вдоль курса: от заднего колеса к переднему
 func _slope(heights: Heightfield) -> float:
 	var fx := -sin(heading) * HUB

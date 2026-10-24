@@ -48,6 +48,7 @@ var _banner_sub: Label
 var _banner_tween: Tween
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
+var _stamina: StaminaBar  # 14.0: полоска выносливости над подсказками, видна, пока не полная
 @onready var info: Label = $InfoPanel/Info
 @onready var toast_label: Label = $Toast
 @onready var lock_hint: Label = $LockHint
@@ -108,6 +109,18 @@ func _ready() -> void:
 	add_child(big_map)
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
+	_stamina = StaminaBar.new()
+	_stamina.anchor_left = 0.5
+	_stamina.anchor_right = 0.5
+	_stamina.anchor_top = 1.0
+	_stamina.anchor_bottom = 1.0
+	_stamina.offset_left = -90
+	_stamina.offset_right = 90
+	_stamina.offset_top = -62
+	_stamina.offset_bottom = -54
+	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_stamina)
+	move_child(_stamina, big_map.get_index())
 	_apply_reveal()
 
 
@@ -473,6 +486,11 @@ func set_hints(bottom: String, near: String, urgent := false) -> void:
 	if _hint_urgent != urgent:
 		_hint_urgent = urgent
 		_apply_reveal()
+
+
+## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED
+func set_stamina(value: float, exhausted: bool) -> void:
+	_stamina.set_value(value, exhausted, not _photo_mode and not big_map.visible)
 
 
 ## Где стоит велосипед (метры) и показывать ли его на картах
@@ -967,3 +985,29 @@ class BigMap extends Control:
 	## Маркер за краем видимой части карты прижимается к краю экрана
 	func _inside(at: Vector2, margin: float) -> Vector2:
 		return at.clamp(Vector2(margin, margin), size - Vector2(margin, margin))
+
+
+## 14.0: полоска выносливости. Полная — гаснет, тратится — проявляется; истощение — красная, пока не наберётся
+class StaminaBar extends Control:
+	var value := 1.0
+	var exhausted := false
+	var _alpha := 0.0
+
+	func set_value(v: float, tired: bool, allowed: bool) -> void:
+		var goal := 1.0 if allowed and v < 0.999 else 0.0
+		var a := move_toward(_alpha, goal, get_process_delta_time() * (3.0 if goal > 0.0 else 1.0))
+		if is_equal_approx(v, value) and tired == exhausted and is_equal_approx(a, _alpha):
+			return
+		value = v
+		exhausted = tired
+		_alpha = a
+		queue_redraw()
+
+	func _draw() -> void:
+		if _alpha <= 0.0:
+			return
+		var r := Rect2(Vector2.ZERO, size)
+		draw_rect(r, Color(0, 0, 0, 0.45 * _alpha))
+		var fill := Color(0.9, 0.3, 0.25) if exhausted else (Color(1.0, 0.82, 0.32) if value < 0.25 else Color(0.92, 0.95, 0.9))
+		fill.a = 0.9 * _alpha
+		draw_rect(Rect2(r.position + Vector2.ONE, Vector2((size.x - 2.0) * value, size.y - 2.0)), fill)
