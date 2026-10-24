@@ -15,7 +15,7 @@ var terrain_arrays: Array
 var terrain_chunks := {} # CPU-кэш окончательной геометрии, без узлов и GPU
 var terrain_image: Image
 var forest_surface: Image
-var water_arrays: Array[Array]
+var water_arrays: Array[Array] # [lake chunks, river chunks], CPU arrays with local origins
 var map_image: Image
 var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.

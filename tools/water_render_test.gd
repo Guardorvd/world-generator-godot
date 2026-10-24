@@ -39,8 +39,10 @@ func run() -> void:
 	for p: Vector3 in [Vector3(-6, 1.4, -1), Vector3(-3, 1.2, 0.5), Vector3(-1, 1, 0), Vector3(2, 1, 0)]:
 		river.append({x = p.x, y = p.y, z = p.z, w = 1.0, left = p + Vector3(0, 0, 1), right = p - Vector3(0, 0, 1)})
 	var surfaces := Junction.partition(lake, WaterBuilder._river_arrays([river]))
-	scene.add_child(WaterBuilder._flat_mesh(surfaces[0], WaterBuilder._material(), "Lake"))
-	scene.add_child(WaterBuilder._flat_mesh(surfaces[1], WaterBuilder._material(false, true), "River"))
+	for mi in WaterBuilder.build_chunks(WaterBuilder.chunk_arrays(surfaces[0]), WaterBuilder._material(), "Lake"):
+		scene.add_child(mi)
+	for mi in WaterBuilder.build_chunks(WaterBuilder.chunk_arrays(surfaces[1]), WaterBuilder._material(false, true), "River"):
+		scene.add_child(mi)
 	var camera := Camera3D.new()
 	scene.add_child(camera)
 	camera.look_at_from_position(Vector3(8, 10, 12), Vector3(0, 1, 0))
@@ -52,7 +54,7 @@ func run() -> void:
 		printerr("GPU water render produced no image")
 		quit(1)
 		return
-	var path := "res://.godot/water15_2_render.png"
+	var path := "res://.godot/water15_3_render.png"
 	var error := img.save_png(path)
 	print("GPU water render: %s (%dx%d), save=%d" % [path, img.get_width(), img.get_height(), error])
 	quit(0 if error == OK else 1)

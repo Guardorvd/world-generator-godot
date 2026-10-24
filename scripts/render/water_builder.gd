@@ -4,6 +4,8 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
+# 16 cells; divides the 256-cell RegionStream grid, including negative coordinates.
+const CHUNK_SIZE := TILE * 16.0
 const LAKE_DROP := 0.1   # м, см. _lake_arrays
 const WaterJunction = preload("res://scripts/render/water_junction.gd")
 const SHADER := preload("res://resources/water.gdshader")
@@ -19,7 +21,8 @@ static func _material(ocean := false, river := false) -> ShaderMaterial:
 
 ## Тяжёлые циклы готовят только массивы, без узлов отображения и GPU-ресурсов.
 static func prepare(w: WorldData, heights: Heightfield) -> Array[Array]:
-	return WaterJunction.partition(_lake_arrays(w, heights), _river_arrays(heights.ribbons))
+	var surfaces := WaterJunction.partition(_lake_arrays(w, heights), _river_arrays(heights.ribbons))
+	return [chunk_arrays(surfaces[0]), chunk_arrays(surfaces[1])]
 
 
 ## Создание узлов из готовых массивов — в главном потоке.
@@ -35,15 +38,62 @@ static func build(w: WorldData, prepared: Array[Array]) -> Array[MeshInstance3D]
 	ocean.mesh = plane
 	ocean.position = Vector3(w.W * TILE / 2.0, 0.0, w.H * TILE / 2.0)
 	out.append(ocean)
-	var lakes := _flat_mesh(prepared[0], water_mat, "Lakes")
-	if lakes:
-		out.append(lakes)
-	var rivers := _flat_mesh(prepared[1], _material(false, true), "Rivers")
-	if rivers:
-		out.append(rivers)
+	out.append_array(build_chunks(prepared[0], water_mat, "Lakes"))
+	out.append_array(build_chunks(prepared[1], _material(false, true), "Rivers"))
 	# полупрозрачная вода тень не отбрасывает: иначе дно и берег под ней темнели бы целиком (с 2.6)
 	for mi in out:
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return out
+
+
+## CPU only: clip at chunk boundaries, preserving the river spline attributes.
+## Merely assigning whole triangles by centroid would leave large, overlapping AABBs.
+static func chunk_arrays(arrays: Array) -> Array:
+	if arrays.is_empty():
+		return []
+	var river := arrays[Mesh.ARRAY_TANGENT] != null
+	var bins := {}
+	for face: Dictionary in WaterJunction._faces(arrays):
+		var polygon := WaterJunction._polygon(arrays, face)
+		var low := Vector2i(floori(face.lo.x / CHUNK_SIZE), floori(face.lo.y / CHUNK_SIZE))
+		var high := Vector2i(ceili(face.hi.x / CHUNK_SIZE) - 1, ceili(face.hi.y / CHUNK_SIZE) - 1)
+		for z in range(low.y, high.y + 1):
+			for x in range(low.x, high.x + 1):
+				var key := Vector2i(x, z)
+				var piece := polygon
+				if low != high:
+					for plane: PackedFloat64Array in [
+						PackedFloat64Array([1, 0, 0, -x * CHUNK_SIZE]),
+						PackedFloat64Array([-1, 0, 0, (x + 1) * CHUNK_SIZE]),
+						PackedFloat64Array([0, 0, 1, -z * CHUNK_SIZE]),
+						PackedFloat64Array([0, 0, -1, (z + 1) * CHUNK_SIZE])]:
+						piece = WaterJunction._clip(piece, {c = plane}, true)
+						if piece.is_empty(): break
+				if piece.size() < 3: continue
+				if not bins.has(key): bins[key] = WaterJunction._output(river)
+				WaterJunction._emit([piece], bins[key])
+	var out: Array = []
+	for key: Vector2i in bins:
+		var chunk := WaterJunction._arrays(bins[key])
+		if chunk.is_empty(): continue
+		var origin := Vector3(key.x * CHUNK_SIZE, 0, key.y * CHUNK_SIZE)
+		var positions: PackedVector3Array = chunk[Mesh.ARRAY_VERTEX]
+		for i in positions.size(): positions[i] -= origin
+		chunk[Mesh.ARRAY_VERTEX] = positions
+		out.append({origin = origin, arrays = chunk})
+	return out
+
+
+static func build_chunks(chunks: Array, mat: Material, prefix: String) -> Array[MeshInstance3D]:
+	var out: Array[MeshInstance3D] = []
+	for chunk: Dictionary in chunks:
+		var mi := _flat_mesh(chunk.arrays, mat, "%s_%d_%d" % [prefix,
+			roundi(chunk.origin.x / CHUNK_SIZE), roundi(chunk.origin.z / CHUNK_SIZE)])
+		mi.position = chunk.origin
+		# The shader changes normals only; a small vertical thickness keeps flat bounds robust.
+		mi.custom_aabb = mi.mesh.get_aabb().grow(0.01)
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		out.append(mi)
 	return out
 
 

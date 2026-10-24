@@ -192,7 +192,7 @@ func _start_build(key: Vector2i) -> void:
 	var w := world
 	var h := heights
 	_build_task = WorkerThreadPool.add_task(func() -> void:
-		out.water = water_arrays(entry)
+		out.water = WaterBuilder.chunk_arrays(water_arrays(entry))
 		out.roads = road_arrays(w, func(x: float, z: float) -> float: return snapshot_ground(w, h, regions, x, z), entry.decor.trails),
 		false, "Узлы области")
 
@@ -354,9 +354,8 @@ func _show(key: Vector2i, arrays := {}) -> void:
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
 	add_child(node)
-	var water := WaterBuilder._flat_mesh(arrays.water if arrays.has("water") else water_arrays(entry), WaterBuilder._material(), "Water")
-	if water != null:
-		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	var water_chunks: Array = arrays.water if arrays.has("water") else WaterBuilder.chunk_arrays(water_arrays(entry))
+	for water in WaterBuilder.build_chunks(water_chunks, WaterBuilder._material(), "Water"):
 		node.add_child(water)
 	var ribbons: Array = arrays.roads if arrays.has("roads") else _road_arrays(decor.trails)
 	if not ribbons.is_empty():

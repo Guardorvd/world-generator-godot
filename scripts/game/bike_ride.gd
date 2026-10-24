@@ -38,6 +38,11 @@ const KICK_MAX := 6.0    # больший скачок (ступенька, те
 const PITCH_LOAD := 0.004 # м хода на 1 м/с² разгона: торможение грузит вилку, разгон — задний ход
 const BUMP := 0.035      # высота мелких кочек под колесом на бездорожье (rough 1), м
 const REVERSE_HOLD := 0.22 # столько секунд держать тормоз у остановки до заднего хода (12.7: было 0,4)
+# Effective water drag / combined rider-bike mass; current_at is in m/s.
+const WATER_DRAG := 0.65
+const WATER_SIDE_DRAG := 1.2
+const WATER_SLIP_DEPTH := 0.35
+const WATER_SLIP_RATE := 1.4 # maximum front-wheel disturbances per second
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 
 var x := 0.0          # метры
@@ -70,6 +75,10 @@ var _dist := 0.0      # пройденный путь, для покачиван
 var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
 var _hop_buf := 0.0   # пробел, нажатый чуть раньше, чем прыжок стал доступен
+var _water_drift := Vector2.ZERO # world-space lateral velocity, m/s
+var _water_yaw := 0.0 # brief partial front-wheel loss, rad/s
+var _water_slip_wait := 0.0
+var _water_rng := RandomNumberGenerator.new()
 var _yaw_rate := 0.0   # фактическая угловая скорость поворота, рад/с
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
@@ -162,6 +171,9 @@ func mount(p: PlayerState) -> void:
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
 	acceleration = 0.0
+	_water_drift = Vector2.ZERO
+	_water_yaw = 0.0
+	_water_slip_wait = 0.0
 	braking = 0.0
 	riding = false
 	speed = 0.0
@@ -285,18 +297,24 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		_brake_hold = 0.0
 		speed *= exp(-0.03 * dt)
 
+	_step_water(heights, w, surf, slope, dt)
 	var free_now := fits(x, z, heading, w, heights)
 	var h0 := heading
-	heading += _step_turn(turn, grip, dt, maxf(0.0, -throttle))
+	heading += _step_turn(turn, grip, dt, maxf(0.0, -throttle)) + _water_yaw * dt
 	# Вплотную к стене колесо не поворачивается в неё, накопленного рывка тоже нет.
 	if free_now and not fits(x, z, heading, w, heights):
 		heading = h0
 		_yaw_rate = 0.0
+		_water_yaw = 0.0
 	var lateral := speed * (heading - h0) / maxf(dt, 0.0001)
 
 	var x0 := x
 	var z0 := z
-	var full := absf(speed) * dt
+	var velocity := Vector2(-sin(heading), -cos(heading)) * speed + _water_drift
+	var dx := (-sin(heading) * speed + float(_water_drift.x)) * dt
+	var dz := (-cos(heading) * speed + float(_water_drift.y)) * dt
+	var wanted := Vector3(dx, 0, dz)
+	var full := absf(speed) * dt if _water_drift == Vector2.ZERO else velocity.length() * dt
 	if full > 0.0:
 		# если велосипед уже задевает препятствие (поставлен вплотную), выехать можно: проверяется середина
 		var hd := heading
@@ -315,16 +333,15 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var around := Callable()
 		if heights.obstacles != null:
 			around = func(px: float, pz: float) -> Vector2: return _obstacle_normal(px, pz, hd, heights)
-		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt, around)
+		var to := PlayerState.slide(free, x, z, dx, dz, around)
 		x = to[0]
 		z = to[1]
 		var moved := Grid.hypot(x - x0, z - z0)
 		if moved < full - 1e-5:
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
-			var wanted := Vector3(-sin(heading), 0.0, -cos(heading)) * speed * dt
 			var blocked := Vector3(x - x0, 0.0, z - z0) - wanted
 			var normal := blocked.normalized()
-			var impact := maxf(0.0, -Vector3(-sin(heading) * speed, 0, -cos(heading) * speed).dot(normal))
+			var impact := maxf(0.0, -Vector3(velocity.x, 0, velocity.y).dot(normal))
 			# 11.6: щуп на весь несделанный кусок пути: тонкое бревно, на котором встали за 0,1–0,2 м, тоже удар
 			# 11.7: не дальше куска шага: то, что остановило, лежит в его пределах, а не за ним
 			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, minf(full - moved, PlayerState.PIECE) + 0.01)
@@ -336,7 +353,9 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			# Удар о предмет опасен и в прыжке; вода и граница открытой земли не являются стеной.
 			if solid and impact > WALL_CRASH:
 				_crash(vy, normal, CrashCause.COLLISION)
-			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
+			var keep := 0.0 if moved < 1e-5 else _slide_keep(dt, moved, full)
+			speed *= keep
+			_water_drift *= keep
 	_dist += Grid.hypot(x - x0, z - z0)
 
 	_step_vertical(_contact(x, z, heights), hop, dt, heights)
@@ -373,8 +392,53 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	p.on_ground = not airborne
 
 
+## Two immersed wheel contacts: bridges and jumps use the actual wheel height.
+## Quadratic drag is integrated as v/(1+k*|v|*dt), so it cannot overshoot the flow.
+func _step_water(heights: Heightfield, w: WorldData, surf: int, slope: float, dt: float) -> void:
+	_water_yaw *= exp(-6.0 * dt)
+	_water_slip_wait = maxf(0.0, _water_slip_wait - dt)
+	var forward := Vector2(-sin(heading), -cos(heading))
+	var side := Vector2(-forward.y, forward.x)
+	var front := Vector2(x, z) + forward * HUB
+	var rear := Vector2(x, z) - forward * HUB
+	var df := heights.immersion_at(front.x, front.y, y + ground_f) if not airborne else 0.0
+	var dr := heights.immersion_at(rear.x, rear.y, y + ground_r) if not airborne else 0.0
+	var depth := (df + dr) * 0.5
+	if depth <= 0.0001:
+		_water_drift *= exp(-8.0 * dt)
+		return
+	var flow := (heights.current_at(front.x, front.y) * df + heights.current_at(rear.x, rear.y) * dr) / (df + dr)
+	var relative := forward * speed + _water_drift - flow
+	var along := relative.dot(forward)
+	var across := relative.dot(side)
+	var immersion := minf(depth, GameConfig.FORD_DEPTH)
+	along /= 1.0 + WATER_DRAG * immersion * absf(along) * dt
+	across /= 1.0 + WATER_SIDE_DRAG * immersion * absf(across) * dt
+	# Tyre contact still resists sideways motion, but submerged wheels lose grip.
+	var lateral := (flow.dot(side) + across) * exp(-lerpf(7.0, 1.2, clampf(depth, 0.0, 1.0)) * dt)
+	speed = flow.dot(forward) + along
+	_water_drift = side * lateral
+	if df <= WATER_SLIP_DEPTH or _water_slip_wait > 0.0 or flow.length_squared() < 0.01:
+		return
+	var info := w.tile_info(front.x / GameConfig.TILE, front.y / GameConfig.TILE)
+	var rocky := surf == RoadSurface.STONE or int(info.get("biome", -1)) in [Biomes.ROCK, Biomes.PEAK, Biomes.STONESHORE]
+	var cross_grade := (heights.surface_at(front.x + side.x, front.y + side.y, y)
+		- heights.surface_at(front.x - side.x, front.y - side.y, y)) * 0.5
+	var grade := maxf(absf(slope), absf(cross_grade))
+	if not rocky and grade <= 0.18:
+		return
+	var severity := smoothstep(WATER_SLIP_DEPTH, 1.0, df) * clampf(flow.length() / 2.8, 0.0, 1.0)
+	severity *= smoothstep(0.2, 2.0, absf(speed) + absf(lateral))
+	# Poisson probability per second, independent of the physics tick frequency.
+	if _water_rng.randf() < 1.0 - exp(-WATER_SLIP_RATE * severity * dt):
+		var direction := signf(flow.dot(side))
+		if direction == 0.0: direction = -1.0 if _water_rng.randf() < 0.5 else 1.0
+		_water_yaw = direction * lerpf(0.12, 0.5, severity)
+		_water_slip_wait = 0.65
+
+
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
-## Отдельного заноса и балансирования нет: поворот всегда идёт в сторону управления.
+## Рулевое управление; краткий доворот и боковой снос в броде добавляет _step_water.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	steer = move_toward(steer, turn, dt * (7.0 if is_zero_approx(turn) else 5.0))
 	var pace := absf(speed)
@@ -575,7 +639,7 @@ func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void
 	crashed = true
 	crash_cause = cause
 	crash_normal = normal.normalized() if normal.length_squared() > 0.000001 else Vector3.UP
-	crash_velocity = Vector3(-sin(heading) * speed, v_up, -cos(heading) * speed)
+	crash_velocity = Vector3(-sin(heading) * speed + _water_drift.x, v_up, -cos(heading) * speed + _water_drift.y)
 
 
 ## Нормаль препятствия леса (ствол, валун, бревно), которое задевает один из трёх кругов велосипеда
