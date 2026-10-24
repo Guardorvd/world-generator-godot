@@ -26,6 +26,8 @@ const CLIFF_GRADE := 2.0 # около 63°: на такой стене колё�
 const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
 const MOUNT_RISE := 1.5  # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу после схода с края, с
+const HOP_BUFFER := 0.22 # 14.1: пробел ждёт касания столько, с (было 0,12, как пешком): короткий отрыв на гребне
+                         # перед бревном длится 0,2–0,3 с и съедал нажатие, сделанное вовремя
 ## С 7.0 опора — середина между точками касания колёс, отрыв — по форме рельефа впереди.
 const HUB := 0.53        # оси колёс впереди и позади середины, м (как в scenes/bike.tscn)
 const LIFT := 0.2        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
@@ -402,7 +404,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 ## уходит вниз быстрее, чем позволяет тяжесть на этой скорости (гребень, трамплин).
 func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	_hop_wait = maxf(0.0, _hop_wait - dt)
-	_hop_buf = GameConfig.JUMP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
+	_hop_buf = HOP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
 	_coyote = maxf(0.0, _coyote - dt) if airborne else HOP_COYOTE
 	if _hop_buf > 0.0 and _hop_wait <= 0.0 and (not airborne or _coyote > 0.0):
 		_hop_buf = 0.0

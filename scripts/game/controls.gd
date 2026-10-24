@@ -70,6 +70,12 @@ static func label(action: StringName) -> String:
 	return ""
 
 
+## 14.1: отдача в руки — только на геймпаде, с которого играют. weak — лёгкий мотор, strong — тяжёлый, 0..1
+static func rumble(weak: float, strong: float, seconds: float) -> void:
+	if joypad:
+		Input.start_joy_vibration(device, clampf(weak, 0.0, 1.0), clampf(strong, 0.0, 1.0), seconds)
+
+
 ## Стик обзора: сдвиг взгляда за кадр в «пикселях мыши», чтобы чувствительность из настроек была общей.
 ## Квадратичный отклик: стик чуть отклонён — точное наведение, до упора — быстрый разворот
 static func look_delta(dt: float) -> Vector2:

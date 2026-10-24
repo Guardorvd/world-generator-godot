@@ -805,18 +805,27 @@ func _physics_process(dt: float) -> void:
 			_finish_opening()
 		# камера поворачивает вместе с велосипедом, а если мышь не трогали — сама уходит за спину
 		yaw += bike.heading - h0
-		if absf(bike.speed) > 1.0 and time - _looked_at > 1.0:
-			yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0))
+		# 14.1: после мыши слежение возвращается плавно (0,6–1,6 с), а не включается рывком через секунду
+		var follow := _auto_follow()
+		if absf(bike.speed) > 1.0 and follow > 0.0:
+			yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0 * follow))
 			# Следуем склону только при автоматическом взгляде; мышь сохраняет приоритет.
 			var slope_pitch := 0.0 if bike.airborne else clampf(bike.tilt * 0.3, -0.12, 0.12)
-			pitch = lerpf(pitch, -0.3 + slope_pitch, 1.0 - exp(-dt * 2.0))
+			pitch = lerpf(pitch, -0.3 + slope_pitch, 1.0 - exp(-dt * 2.0 * follow))
 		_shake_on_landing(bike.land_impact, 6.0)
 		if bike.land_impact > 0.0:
 			if GameSettings.head_bob:
 				_dip_v -= clampf(bike.land_impact - 2.5, 0.0, 8.0) * 0.12
 			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
+			Controls.rumble(clampf(bike.land_impact / 10.0, 0.0, 0.6), clampf((bike.land_impact - 4.0) / 8.0, 0.0, 1.0), 0.15)
 		elif bike.bottom_out > 0.0:
 			audio.bottom_out(bike.bottom_out)
+			# 14.1: пробой вилки — удар рамы: камера проседает и вздрагивает, геймпад отдаёт тяжёлым мотором
+			var hit := clampf(bike.bottom_out - BikeRide.BOTTOM_OUT, 0.0, 3.0)
+			if GameSettings.head_bob:
+				_dip_v -= 0.4 + hit * 0.35
+			_trauma = minf(1.0, _trauma + 0.12 + hit * 0.08)
+			Controls.rumble(0.3, 0.45 + hit * 0.15, 0.1)
 		crashed = bike.crashed
 		if crashed:
 			_crash()
@@ -1045,6 +1054,11 @@ func _draw_opening(alpha: float) -> void:
 
 
 ## Тряска камеры после приземления сильнее soft (м/с)
+## Насколько камера на велосипеде сама следует за курсом: 0 сразу после мыши или стика, 1 — через 1,6 с
+func _auto_follow() -> float:
+	return smoothstep(0.6, 1.6, time - _looked_at)
+
+
 func _shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
 		_trauma = minf(1.0, _trauma + (impact - soft) * 0.08)
@@ -1331,8 +1345,8 @@ func _update_camera(alpha: float, dt: float) -> void:
 	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
 	# 12.7: на скорости камера заглядывает внутрь поворота, куда повёрнут руль; мышь её не трогает
 	var lead_goal := 0.0
-	if riding and not crash.active() and not _opening and time - _looked_at > 1.0:
-		lead_goal = -bike.steer * deg_to_rad(8.5) * smoothstep(3.0, 12.0, bike.speed)
+	if riding and not crash.active() and not _opening:
+		lead_goal = -bike.steer * deg_to_rad(8.5) * smoothstep(3.0, 12.0, bike.speed) * _auto_follow()
 	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(4.0, dt))
 	if riding:
 		view_yaw += _cam_lead
