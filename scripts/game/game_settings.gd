@@ -55,6 +55,9 @@ static var start_hour_set := false  # час начала выбран игро�
 static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
 static var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
 static var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
+## 14.4+: бесконечная генерация — соседние области за краем стартовой готовятся и по ним можно ездить.
+## Выключена — мир это стартовая область, дальний рельеф виден, но выехать нельзя и области не готовятся
+static var infinite_world := false
 
 
 static func load_settings() -> void:
@@ -67,6 +70,7 @@ static func load_settings() -> void:
 ## Повреждённое отдельное поле не мешает прочитать остальные настройки.
 static func _apply_config(cfg: ConfigFile) -> void:
 	mouse = _number(cfg, "input", "mouse", mouse, MIN_MOUSE, MAX_MOUSE)
+	infinite_world = _flag(cfg, "world", "infinite", infinite_world)
 	invert_y = _flag(cfg, "input", "invert_y", invert_y)
 	fov = _number(cfg, "view", "fov", fov, MIN_FOV, MAX_FOV)
 	head_bob = _flag(cfg, "view", "head_bob", head_bob)
@@ -186,6 +190,7 @@ static func save_settings() -> Error:
 	cfg.set_value("world", "seed", last_seed)
 	cfg.set_value("world", "recent", Array(recent_seeds))
 	cfg.set_value("world", "favorites", Array(favorite_seeds))
+	cfg.set_value("world", "infinite", infinite_world)
 	return cfg.save(settings_path)
 
 

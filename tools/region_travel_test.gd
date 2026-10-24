@@ -41,6 +41,8 @@ func run() -> void:
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
+	# 14.4+: соседние области — только с бесконечной генерацией; меню уже прочитало настройки игрока
+	GameSettings.infinite_world = true
 	loaded = WorldLoader.load_world("Север-1234", 256)
 	_start({})
 	var size := WorldData.REGION_SIZE

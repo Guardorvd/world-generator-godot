@@ -71,6 +71,13 @@ func _ready() -> void:
 	WorldCache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
+	# 14.4+: бесконечная генерация (по умолчанию выключена), с предупреждением, пока она не доделана
+	%Infinite.set_pressed_no_signal(GameSettings.infinite_world)
+	%InfiniteWarning.visible = GameSettings.infinite_world
+	%Infinite.toggled.connect(func(on: bool) -> void:
+		GameSettings.infinite_world = on
+		%InfiniteWarning.visible = on
+		GameSettings.save_settings())
 	display_options = DisplayOptions.new()
 	display_options.setup(self)
 	if WorldCache.enabled:

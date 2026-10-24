@@ -338,6 +338,23 @@ theme_type_variation = &"CaptionLabel"
 text = "Выберите мир в списке или введите любое слово. Одно зерно — один и тот же мир."
 autowrap_mode = 3
 
+[node name="Infinite" type="CheckBox" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Выключено — мир это стартовая область: дальний рельеф виден, но выехать за край нельзя.
+Включено — за краем готовятся соседние области и по ним можно ездить."
+text = "Бесконечная генерация"
+
+[node name="InfiniteWarning" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+unique_name_in_owner = true
+visible = false
+custom_minimum_size = Vector2(300, 0)
+layout_mode = 2
+theme_override_colors/font_color = Color(1, 0.8, 0.25, 1)
+theme_override_font_sizes/font_size = 13
+text = "! Не доделано: соседние области работают плохо"
+autowrap_mode = 3
+
 [node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 64)

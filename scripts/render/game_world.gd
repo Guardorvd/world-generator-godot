@@ -172,7 +172,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	rng.randomize()
 	var opening_spot := OpeningRoute.choose(world, heights, rng) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
-	if world.outer != null:
+	# 14.4+: соседние области — только с бесконечной генерацией (галочка в меню); без неё граница
+	# стартовой области закрыта: незакреплённая земля за краем недоступна (WorldData.accessible)
+	if world.outer != null and GameSettings.infinite_world:
 		# 13.9+: закреплённые области мира — до игрока: сохранённое место может лежать в них.
 		regions = RegionStream.new()
 		regions.name = "Regions"
@@ -327,7 +329,7 @@ static func can_restore(saved: Dictionary, w: WorldData) -> bool:
 	if saved.signature != save_signature(w):
 		return false
 	# 13.9+final: места и задания соседних областей — из их журнала на диске
-	if w.outer != null and w.outer.get_ledger().is_empty():
+	if w.outer != null and w.outer.get_ledger().is_empty() and GameSettings.infinite_world:
 		w.outer.set_ledger(RegionStream.read_ledger(w))
 	var places := {}
 	for kind: String in WorldData.PLACE_KINDS:
