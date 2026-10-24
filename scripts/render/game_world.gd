@@ -154,7 +154,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 	photo.anchors = _photo_anchors()
 	photo.occluded = _occluded
 	photo.familiar = func(id: String) -> bool: return hud.knows(id)
-	photo.capturing.connect(func(on: bool) -> void: hud.visible = not on)
+	photo.capturing.connect(_photo_capturing)
 	fires = built.fires
 	windows = built.windows
 	fire_light = OmniLight3D.new()
@@ -308,6 +308,11 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}) -> void:
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
 	capture_mouse()
 	_mark("start_rest_ms", t)
+
+
+func _photo_capturing(on: bool) -> void:
+	if is_inside_tree() and not is_queued_for_deletion() and is_instance_valid(hud) and hud.world == world:
+		hud.visible = not on and not paused and not _opening
 
 
 func _exit_tree() -> void:

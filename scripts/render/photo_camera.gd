@@ -19,6 +19,7 @@ const MIN_AIM := 0.035    # «пятно» наведения — не мень�
 const MAX_AIM := 0.2      # и не больше этой (близкое поселение не ловится краем кадра)
 const KEEP := 1.4         # выбранное место держится, пока угол меньше пятна в столько раз: без мигания на краю
 const PREVIEW := 2.6      # с: сколько висит карточка снимка
+const SHUTTER_COOLDOWN := 0.35
 const FOLDER := "user://photos"
 const AMBER := Color(1.0, 0.78, 0.30)
 const GREEN := Color(0.66, 0.92, 0.58)
@@ -49,6 +50,9 @@ var _focus := 44.0                   # полусторона скобок фо�
 var _flash := 0.0
 var _pick := 0.0
 var _busy := false
+var _cooldown := 0.0
+var _capturing := false
+var _pending_place := {}
 var _thumb: ImageTexture
 var _thumb_text := ""
 var _preview := 0.0
@@ -91,6 +95,32 @@ func exit() -> void:
 	target = {}
 	named = {}
 	progress = 0.0
+	_cancel_capture()
+
+
+func _process(dt: float) -> void:
+	if _cooldown > 0.0:
+		_cooldown = maxf(0.0, _cooldown - dt)
+		if _cooldown == 0.0:
+			_busy = false
+
+
+func _exit_tree() -> void:
+	active = false
+	_cooldown = 0.0
+	_busy = false
+	_cancel_capture()
+
+
+func _cancel_capture() -> void:
+	if RenderingServer.frame_post_draw.is_connected(_capture_frame):
+		RenderingServer.frame_post_draw.disconnect(_capture_frame)
+	_pending_place = {}
+	visible = true
+	if _capturing:
+		_capturing = false
+		_busy = false
+		capturing.emit(false)
 
 
 ## Угол обзора видоискателя (градусы) при обычном угле base
@@ -206,18 +236,35 @@ func pick(camera: Camera3D) -> Dictionary:
 
 ## ЛКМ: снимок. Рамка и интерфейс прячутся на один кадр, он сохраняется в FOLDER, потом вспышка и карточка
 func shoot() -> void:
-	if not active or _busy:
+	if not active or _busy or not is_inside_tree() or is_queued_for_deletion() or not can_process():
 		return
 	_busy = true
-	var place := named
+	_pending_place = named.duplicate(true)
+	_capturing = true
 	visible = false
+	# Одноразовую подписку можно отменить при exit/_exit_tree; подвешенных корутин нет.
+	RenderingServer.frame_post_draw.connect(_capture_frame, CONNECT_ONE_SHOT)
 	capturing.emit(true)
-	await RenderingServer.frame_post_draw
-	if not is_inside_tree():
+
+
+func _capture_frame() -> void:
+	if not is_inside_tree() or is_queued_for_deletion() or not active or not can_process():
+		_cancel_capture()
 		return
-	var image := get_viewport().get_texture().get_image()
+	var place := _pending_place
+	_pending_place = {}
+	var image := _capture_image()
 	visible = true
+	_capturing = false
+	_cooldown = SHUTTER_COOLDOWN
 	capturing.emit(false)
+	# Подписчик сигнала может закрыть игру или убрать фотоаппарат синхронно.
+	if not is_instance_valid(self) or not is_inside_tree() or is_queued_for_deletion() or not active or not can_process():
+		return
+	if image == null or image.is_empty():
+		_busy = false
+		_cooldown = 0.0
+		return
 	_flash = 0.85
 	_click.play()
 	var path := _save(image)
@@ -226,7 +273,8 @@ func shoot() -> void:
 	_thumb = ImageTexture.create_from_image(thumb)
 	_preview = PREVIEW
 	# dist — от камеры до края места (м): задание засчитывает снимок только вблизи
-	var dist: float = maxf(0.0, get_viewport().get_camera_3d().global_position.distance_to(place.pos) - place.radius) if not place.is_empty() else 0.0
+	var camera := get_viewport().get_camera_3d()
+	var dist: float = maxf(0.0, camera.global_position.distance_to(place.pos) - place.radius) if not place.is_empty() and camera != null else 0.0
 	_thumb_text = "Снимок сохранён" + ("" if place.is_empty() else " · «%s»" % place.name)
 	if not place.is_empty() and place.id == wanted:
 		_thumb_text = ("Снимок для задания · «%s»" if dist <= wanted_reach else "Далеко для задания · «%s»") % place.name
@@ -236,8 +284,11 @@ func shoot() -> void:
 	var shot := {path = path, place = place.get("id", ""), name = place.get("name", ""), dist = dist}
 	shots.append(shot)
 	photo_taken.emit(shot)
-	await get_tree().create_timer(0.35).timeout
-	_busy = false
+
+
+func _capture_image() -> Image:
+	var texture := get_viewport().get_texture()
+	return texture.get_image() if texture != null else null
 
 
 ## Файл снимка в FOLDER; пусто, если не записался

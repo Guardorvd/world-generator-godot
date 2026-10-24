@@ -6,15 +6,15 @@ extends RefCounted
 ## Мир не меняется: в файле ровно то, что вернул генератор, а шумы пересоздаются из сида.
 ##
 ## С 10.2 кэш по слоям генерации (WorldGenerator.LAYERS): география, места и пути, природа — по файлу на слой.
-## Ключ слоя — хеш исходников его этапов, общих скриптов генерации и ключа прошлого слоя, а не версия игры:
+## Ключ слоя — явная версия его схемы/результата генерации и ключ прошлого слоя, а не версия игры:
 ## после патча, который не трогал генерацию, мир берётся из кэша целиком; если поменялись только этапы мест
 ## и путей, география берётся из кэша, а генерация продолжается с мест. Первый слой хранит все поля мира,
 ## следующие — только поля, которые этот слой поменял.
 ## Четвёртый файл (VIEW) — готовые картинки мира: текстура рельефа, карта и лесная подстилка (их рисование —
-## ~14 с загрузки из кэша), ключ — слой природы и код рисования. Рядом — превью карты для меню (PREVIEW).
+## ~14 с загрузки из кэша), ключ — слой природы и версия картинок. Рядом — превью карты для меню (PREVIEW).
 ##
 ## Защиты:
-## - ключ файла — формат кэша, сид, размеры и хеш исходников: старый файл не подходит и перезаписывается;
+## - ключ файла — формат кэша, сид, размеры и версии слоёв: старый файл не подходит и перезаписывается;
 ## - заголовок, размеры и хеш SHA-256 сжатых данных, проверка типов и длин массивов при чтении:
 ##   битый или чужой файл удаляется, мир генерируется заново;
 ## - запись во временный файл и переименование: оборванная запись не оставляет полуфайла под настоящим именем.
@@ -24,32 +24,21 @@ extends RefCounted
 const FORMAT := 3 # 12.2: файлы слоёв, записанные после частичной загрузки, могли быть неполными
 const MAGIC := "WGC2"
 const EXT := ".wgc"
-## Исходники, от которых зависят все слои: общий код генерации, данные, рельеф с водой (Heightfield).
-## Папка — все .gd и .cs в ней. Поменялся файл — кэш всех слоёв не подходит.
-const COMMON := ["res://scripts/core/", "res://scripts/data/biomes.gd", "res://scripts/data/names.gd",
-	"res://scripts/world/world_data.gd", "res://scripts/world/world_generator.gd", "res://scripts/game/heightfield.gd",
-	"res://scripts/game/game_config.gd", "res://scripts/render/water_builder.gd"]
-## Свои исходники слоёв WorldGenerator.LAYERS по порядку. Поменялся файл слоя — этот слой и следующие
-## генерируются заново, прошлые берутся из кэша. Новый этап или скрипт, который читает генерация, — дописать сюда.
-const LAYER_SOURCES := [
-	["res://scripts/world/stages/stage_relief.gd", "res://scripts/world/stages/stage_ocean.gd",
-		"res://scripts/world/stages/stage_hydrology.gd", "res://scripts/world/stages/stage_rivers.gd",
-		"res://scripts/world/stages/stage_geography.gd", "res://scripts/world/stages/stage_climate.gd"],
-	["res://scripts/world/stages/stage_landmarks.gd", "res://scripts/world/stages/stage_trails.gd",
-		"res://scripts/world/stages/stage_sites.gd"],
-	["res://scripts/world/stages/stage_vegetation.gd", "res://scripts/world/stages/stage_lakes.gd",
-		"res://scripts/world/road_surface.gd", "res://scripts/game/player_state.gd"],
-]
+## Повышать при несовместимом изменении полей ИЛИ результатов соответствующего этапа.
+## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
+## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
+const SCHEMA_WORLD_VERSION := 1
+const SCHEMA_GEO_VERSION := 1
+const SCHEMA_TRAILS_VERSION := 1
+const SCHEMA_NATURE_VERSION := 1
+const SCHEMA_VIEW_VERSION := 1
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"
-const VIEW_SOURCES := ["res://scripts/map/map_baker.gd", "res://scripts/render/forest_floor.gd"]
 const VIEW_IMAGES := ["terrain", "map", "forest"]
 const PREVIEW := ".preview.png"
 const PREVIEW_SIZE := 256
 ## Байт на пиксель у форматов картинок мира (другой формат в файле — файл чужой)
 const PIXEL_BYTES := {Image.FORMAT_L8: 1, Image.FORMAT_R8: 1, Image.FORMAT_RG8: 2, Image.FORMAT_RGB8: 3, Image.FORMAT_RGBA8: 4}
-## Поля мира, которые не сохраняются: объекты и временное состояние генерации
-const SKIP := ["rng", "noise", "outer", "base_heights", "_fields_thread", "_fields", "_index"]
 ## Поля по клетке: длина ровно N
 const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area", "acc", "slope", "watershed",
 	"down", "rain", "dist_ocean", "dist_water", "temp", "moist", "biome", "cost", "path_mask", "road_surface", "lake_id"]
@@ -64,41 +53,26 @@ static var _lock := Mutex.new()
 static var _layer_keys := PackedStringArray()
 
 
-## Ключи слоёв по исходникам (считаются один раз)
+## Ключи схем одинаковы в редакторе, PCK, Debug/Release и на всех платформах.
 static func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
-		var prev := _hash(("%d|%d" % [FORMAT, WorldGenerator.PLAN_SIZE]).to_utf8_buffer() + _sources(COMMON))
-		for sources: Array in LAYER_SOURCES + [VIEW_SOURCES]:
-			prev = _hash(prev + _sources(sources))
-			_layer_keys.append(prev.hex_encode().left(32))
-	var keys := _layer_keys
+		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
+			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]))
+	var keys := _layer_keys.duplicate()
 	_lock.unlock()
 	return keys
 
 
-## Содержимое исходников подряд. В экспортированной игре .gd может не быть (.gdc, C# в сборке):
-## тогда вместо файла — версия игры, и после обновления такой слой генерируется заново, как в 10.0.
-static func _sources(paths: Array) -> PackedByteArray:
-	var out := PackedByteArray()
-	for path: String in paths:
-		var files: Array[String] = [path]
-		if path.ends_with("/"):
-			files.clear()
-			for f in DirAccess.get_files_at(path):
-				f = f.trim_suffix(".remap")
-				if f.get_extension() in ["gd", "cs"] and not path.path_join(f) in files:
-					files.append(path.path_join(f))
-			files.sort()
-		for f in files:
-			var bytes := FileAccess.get_file_as_bytes(f)
-			if bytes.is_empty():
-				bytes = FileAccess.get_file_as_bytes(f.get_basename() + ".gdc")
-			if bytes.is_empty():
-				bytes = (f + "|" + str(ProjectSettings.get_setting("application/config/version", "?"))).to_utf8_buffer()
-			out.append_array(f.to_utf8_buffer())
-			out.append_array(_hash(bytes))
-	return out
+## Чистая функция: только формат, размер плана, имена слоёв и явно переданные целочисленные версии.
+static func schema_keys(world_version: int, versions: PackedInt32Array) -> PackedStringArray:
+	assert(versions.size() == WorldGenerator.LAYERS.size() + 1)
+	var keys := PackedStringArray()
+	var prev := "WGC|%d|%d|%d" % [FORMAT, WorldGenerator.PLAN_SIZE, world_version]
+	for k in versions.size():
+		prev = ("%s|%s|%d" % [prev, _layer_name(k), versions[k]]).sha256_text()
+		keys.append(prev.left(32))
+	return keys
 
 
 static func _base(seed_text: String, size: int) -> String:
@@ -251,18 +225,14 @@ static func _load(seed_text: String, size: int) -> Dictionary:
 static func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dictionary:
 	var snap := {}
 	var part := {}
-	for p: Dictionary in w.get_property_list():
-		if not (p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE) or p.name in SKIP:
-			continue
-		var v: Variant = w.get(p.name)
-		if typeof(v) == TYPE_OBJECT:
-			continue
+	for name: String in WorldData.CACHE_FIELDS:
+		var v: Variant = w.get(name)
 		# массивы и словари следующие слои меняют на месте; Packed*Array копируются при записи сами
 		if v is Array or v is Dictionary:
 			v = v.duplicate(true)
-		snap[p.name] = v
-		if not prev.has(p.name) or typeof(prev[p.name]) != typeof(v) or prev[p.name] != v:
-			part[p.name] = v
+		snap[name] = v
+		if not prev.has(name) or typeof(prev[name]) != typeof(v) or prev[name] != v:
+			part[name] = v
 	var raw := var_to_bytes(part)
 	var path := path_for(w.seed_text, size, layer)
 	var key := _key(w.seed_text, size, layer)
@@ -294,12 +264,25 @@ static func install_bundled() -> void:
 			continue
 		var to := dir.path_join(f.trim_suffix(".preview") + PREVIEW if f.ends_with(".preview") else f)
 		var src := BUNDLED.path_join(f)
-		if FileAccess.file_exists(to) and FileAccess.get_size(to) == FileAccess.get_size(src):
-			continue
+		if FileAccess.file_exists(to):
+			if f.ends_with(EXT):
+				# Новые ключи имеют ту же длину: совпадение размера не означает ту же схему.
+				var bundled_key := _cache_header_key(src)
+				if not bundled_key.is_empty() and _cache_header_key(to) == bundled_key:
+					continue
+			elif FileAccess.get_size(to) == FileAccess.get_size(src):
+				continue
 		var bytes := FileAccess.get_file_as_bytes(src)
 		var out := FileAccess.open(to, FileAccess.WRITE)
 		if out != null and not bytes.is_empty():
 			out.store_buffer(bytes)
+
+
+static func _cache_header_key(path: String) -> String:
+	var f := FileAccess.open(path, FileAccess.READ)
+	if f == null or f.get_length() < 64 or f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT:
+		return ""
+	return f.get_pascal_string()
 
 
 static func keep_only(seeds: Array) -> void:
@@ -372,18 +355,14 @@ static func _read(path: String, key: String) -> Variant:
 ## complete — все слои: иначе поля следующих слоёв ещё пустые.
 static func _restore(data: Dictionary, complete: bool) -> WorldData:
 	var w := WorldData.new()
-	for p: Dictionary in w.get_property_list():
-		if not (p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE) or p.name in SKIP:
-			continue
-		var cur: Variant = w.get(p.name)
-		if typeof(cur) == TYPE_OBJECT:
-			continue
-		if not data.has(p.name) or typeof(data[p.name]) != typeof(cur):
+	for name: String in WorldData.CACHE_FIELDS:
+		var cur: Variant = w.get(name)
+		if not data.has(name) or typeof(data[name]) != typeof(cur):
 			return null
 		if cur is Array and (cur as Array).is_typed():
-			(cur as Array).assign(data[p.name])
+			(cur as Array).assign(data[name])
 		else:
-			w.set(p.name, data[p.name])
+			w.set(name, data[name])
 	if w.W != WorldGenerator.PLAN_SIZE or w.H != WorldGenerator.PLAN_SIZE or w.N != w.W * w.H:
 		return null
 	for name: String in PER_CELL:

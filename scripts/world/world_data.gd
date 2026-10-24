@@ -1,6 +1,7 @@
 class_name WorldData
 extends RefCounted
-## Мир — чистые данные: сетка W × H клеток, клетка (x, y) лежит в массивах по индексу y * W + x.
+## Фасад мира: идентичность и совместимый API над геологией, климатом/природой и инфраструктурой.
+## Поля принадлежат контекстам, адресация — GridBuffer2D; packed-алиасы оставлены для массовых циклов/C#.
 ## Этот же объект служит общим состоянием этапов генерации (ctx в JS-версии): этапы читают и дополняют его поля.
 ## Генерация не зависит от отрисовки, поэтому её можно запускать в отдельном потоке.
 
@@ -11,8 +12,32 @@ const CHUNK_SIZE := 16    # сторона чанка растительност
 ## Поля шума, которые этапы берут целиком: имя шума -> [масштаб в клетках, число октав]
 const NOISE_FIELDS := {moist = [170.0, 4], temp = [200.0, 3], forest = [36.0, 3], cost = [14.0, 2]}
 
-var W := 0
-var H := 0
+const GridBuffer = preload("res://scripts/core/grid_buffer_2d.gd")
+const Geology = preload("res://scripts/world/geology_data.gd")
+const Climate = preload("res://scripts/world/climate_biogeography_data.gd")
+const Civil = preload("res://scripts/world/civil_infrastructure_data.gd")
+const Generation = preload("res://scripts/world/world_generation_state.gd")
+const Streaming = preload("res://scripts/world/world_streaming_state.gd")
+
+var grid := GridBuffer.Layout.new()
+var geology := Geology.new(grid)
+var climate := Climate.new(grid, CHUNK_SIZE)
+var civil := Civil.new(grid)
+var generation := Generation.new()
+var streaming := Streaming.new()
+
+## Явный плоский контракт кэша; служебные объекты и индексы в него не входят.
+const CACHE_FIELDS := ["W", "H", "N", "seed_text", "seed_num", "territory_center", "available_rect",
+	"territory_revision", "scale", "generation_profile"] + Geology.CACHE_FIELDS + Climate.CACHE_FIELDS + Civil.CACHE_FIELDS
+
+var W := 0:
+	set(value):
+		W = value
+		grid.width = value
+var H := 0:
+	set(value):
+		H = value
+		grid.height = value
 var N := 0
 var seed_text := ""
 var seed_num := 0
@@ -22,9 +47,21 @@ var seed_num := 0
 ## Пустое окно у вручную созданных WorldData означает отсутствие ограничения.
 ## С 8.8 соседнее окно открывается заранее при движении (open_around).
 const REGION_SIZE := 256
-var territory_center := Vector2i.ZERO
-var available_rect := Rect2i()
-var territory_revision := 0
+var territory_center: Vector2i:
+	get:
+		return streaming.territory_center
+	set(value):
+		streaming.territory_center = value
+var available_rect: Rect2i:
+	get:
+		return streaming.available_rect
+	set(value):
+		streaming.available_rect = value
+var territory_revision: int:
+	get:
+		return streaming.territory_revision
+	set(value):
+		streaming.territory_revision = value
 const TRAVEL_MARGIN := 32.0 # клетки: открыть соседей до того, как тело/велосипед достигнет границы
 
 
@@ -109,7 +146,11 @@ func place(id: String) -> Dictionary:
 ## 13.9+final: поселения закреплённых соседних областей (OuterLand), тот же вид записей, что у плана.
 ## Направления — их дороги между собой; подход к старой сети (связь «plan») ведёт к ближайшему
 ## поселению плана. Индекс пересобирается, когда журнал областей заменён.
-var _region_index := {}
+var _region_index: Dictionary:
+	get:
+		return streaming.region_index
+	set(value):
+		streaming.region_index = value
 
 func region_places() -> Dictionary:
 	if outer == null:
@@ -219,114 +260,309 @@ func _places() -> Dictionary:
 	return _index
 
 # Общее состояние генерации
-var rng: WGRandom         # только у заготовок тестов; с 8.9 extra генератор общий RNG мира не создаёт
-var noise := {}           # имя -> Simplex
-var scale := 1.0          # во сколько раз мир больше среднего: от этого зависит число поселений и троп
+var rng: WGRandom:
+	get:
+		return generation.rng
+	set(value):
+		generation.rng = value
+var noise: Dictionary:
+	get:
+		return generation.noise
+	set(value):
+		generation.noise = value
+var scale: float:
+	get:
+		return generation.scale
+	set(value):
+		generation.scale = value
 # Названия не служат идентификаторами: идентификатор места — его мировая клетка.
-var generation_profile := {} # необязательные счётчики дорожного этапа из bench.gd
-var _fields_thread: Thread
-var _fields := {}         # имя -> поле fbm из NOISE_FIELDS
+var generation_profile: Dictionary:
+	get:
+		return generation.profile
+	set(value):
+		generation.profile = value
 
 # Рельеф и вода
-var macro_x := 0.0       # сдвиг шума материков в клетках: где в бесконечном мире лежит стартовая область (StageRelief)
-var macro_y := 0.0
+var macro_x: float:
+	get:
+		return geology.macro_x
+	set(value):
+		geology.macro_x = value
+var macro_y: float:
+	get:
+		return geology.macro_y
+	set(value):
+		geology.macro_y = value
 ## Характер гор мира (с 3.5), постоянный на сид и независимый от размера стартовой карты.
-var mountain_scale := 1.0  # масштаб массивов, гребней и внутренних долин
-var mountain_bias := 0.3   # распространённость гор: ниже — реже
-var mountain_height := 1.0 # высота горного подъёма
-var foothill_spread := 0.0 # ширина и выраженность предгорий (с 3.6), 0 — без дополнительного пояса
-var outer: OuterLand     # рельеф за краем карты (с 1.9.5), если игра его подключила; иначе null
+var mountain_scale: float:
+	get:
+		return geology.mountain_scale
+	set(value):
+		geology.mountain_scale = value
+var mountain_bias: float:
+	get:
+		return geology.mountain_bias
+	set(value):
+		geology.mountain_bias = value
+var mountain_height: float:
+	get:
+		return geology.mountain_height
+	set(value):
+		geology.mountain_height = value
+var foothill_spread: float:
+	get:
+		return geology.foothill_spread
+	set(value):
+		geology.foothill_spread = value
+var outer: OuterLand:
+	get:
+		return streaming.outer
+	set(value):
+		streaming.outer = value
 ## Общий базовый рельеф: владеет только слабой обратной ссылкой на мир, в том числе при прерывании генерации.
 ## После генерации освобождается; игровые копии Heightfield.base_of владеют миром независимо.
 var base_heights: Heightfield:
+	get:
+		return generation.base_heights
 	set(value):
-		base_heights = value
+		generation.base_heights = value
 		if value != null:
 			value.weaken_world()
-var h := PackedFloat32Array()        # высота (0 — уровень моря, суша до 1, дно до -1)
-var filled := PackedFloat32Array()   # высота с заполненными впадинами (уровень озёр)
-var elev := PackedFloat32Array()     # StageGeography: высота суши / поверхности озера, океан = 0
-var ocean := PackedByteArray()
-var lake := PackedByteArray()
-var river := PackedByteArray()
-var river_area := PackedByteArray() # коридор сглаженной воды с учётом ширины; river остаётся сетью стока
-var acc := PackedFloat32Array()      # накопленный сток
-var slope := PackedFloat32Array()    # StageGeography: уклон по elev (историческая шкала ×60)
-var watershed := PackedInt32Array()  # клетка выхода водосбора в общей сетке; не локальный номер области
-var down := PackedInt32Array()       # клетка, куда стекает вода (-1 — нет)
-var order := PackedInt32Array()      # порядок заполнения впадин
-var order_n := 0
-var rain := PackedFloat32Array()
-var dist_ocean := PackedFloat32Array()
-var dist_water := PackedFloat32Array() # StageGeography: расстояние до океана, озёр и рек в клетках
+var h: PackedFloat32Array:
+	get:
+		return geology.h.data
+	set(value):
+		geology.h.data = value
+var filled: PackedFloat32Array:
+	get:
+		return geology.filled.data
+	set(value):
+		geology.filled.data = value
+var elev: PackedFloat32Array:
+	get:
+		return geology.elev.data
+	set(value):
+		geology.elev.data = value
+var ocean: PackedByteArray:
+	get:
+		return geology.ocean.data
+	set(value):
+		geology.ocean.data = value
+var lake: PackedByteArray:
+	get:
+		return geology.lake.data
+	set(value):
+		geology.lake.data = value
+var river: PackedByteArray:
+	get:
+		return geology.river.data
+	set(value):
+		geology.river.data = value
+var river_area: PackedByteArray:
+	get:
+		return geology.river_area.data
+	set(value):
+		geology.river_area.data = value
+var acc: PackedFloat32Array:
+	get:
+		return geology.acc.data
+	set(value):
+		geology.acc.data = value
+var slope: PackedFloat32Array:
+	get:
+		return geology.slope.data
+	set(value):
+		geology.slope.data = value
+var watershed: PackedInt32Array:
+	get:
+		return geology.watershed.data
+	set(value):
+		geology.watershed.data = value
+var down: PackedInt32Array:
+	get:
+		return geology.down.data
+	set(value):
+		geology.down.data = value
+var order: PackedInt32Array:
+	get:
+		return geology.order
+	set(value):
+		geology.order = value
+var order_n: int:
+	get:
+		return geology.order_n
+	set(value):
+		geology.order_n = value
+var rain: PackedFloat32Array:
+	get:
+		return geology.rain.data
+	set(value):
+		geology.rain.data = value
+var dist_ocean: PackedFloat32Array:
+	get:
+		return geology.dist_ocean.data
+	set(value):
+		geology.dist_ocean.data = value
+var dist_water: PackedFloat32Array:
+	get:
+		return geology.dist_water.data
+	set(value):
+		geology.dist_water.data = value
 
 # Климат
-var temp := PackedFloat32Array()
-var moist := PackedFloat32Array() # доступная почвенная влага: осадки, вода, микрорельеф и прогрев
-var biome := PackedByteArray()
+var temp: PackedFloat32Array:
+	get:
+		return climate.temp.data
+	set(value):
+		climate.temp.data = value
+var moist: PackedFloat32Array:
+	get:
+		return climate.moist.data
+	set(value):
+		climate.moist.data = value
+var biome: PackedByteArray:
+	get:
+		return climate.biome.data
+	set(value):
+		climate.biome.data = value
 
 # Реки, тропы, поселения, вершины
-var rivers: Array = []        # ломаные из точек {x, y, w — ширина в клетках, e — высота воды}
-var river_exits: Array = []   # выходы за карту: {x, y, dx, dy, acc, e, w}; задел для продолжения стока
-var cost := PackedFloat32Array()
-var path_mask := PackedByteArray()   # 1 — звериная тропа, 2 — тропа людей, 3 — дорога
-var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]
-var road_surface := PackedByteArray() # покрытие клетки пути людей из RoadSurface (с 4.3), 0 — нет
-var bridges: Array = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
-var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
-var settlements: Array = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
-var peaks: Array = []         # [{x, y, i, elev, name}]
-var sites: Array = []         # места вне поселений (с 9.3) [{x, y, i, type, rank, name, clear, huts: [{x, y, v, t, a}]}], см. StageSites
-var lakes: Array = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
-var lake_id := PackedInt32Array()    # номер озера из lakes для клетки или -1
+var rivers: Array:
+	get:
+		return geology.rivers
+	set(value):
+		geology.rivers = value
+var river_exits: Array:
+	get:
+		return geology.river_exits
+	set(value):
+		geology.river_exits = value
+var cost: PackedFloat32Array:
+	get:
+		return civil.cost.data
+	set(value):
+		civil.cost.data = value
+var path_mask: PackedByteArray:
+	get:
+		return civil.path_mask.data
+	set(value):
+		civil.path_mask.data = value
+var trails: Array:
+	get:
+		return civil.trails
+	set(value):
+		civil.trails = value
+var road_surface: PackedByteArray:
+	get:
+		return civil.road_surface.data
+	set(value):
+		civil.road_surface.data = value
+var bridges: Array:
+	get:
+		return civil.bridges
+	set(value):
+		civil.bridges = value
+var tunnels: Array:
+	get:
+		return civil.tunnels
+	set(value):
+		civil.tunnels = value
+var settlements: Array:
+	get:
+		return civil.settlements
+	set(value):
+		civil.settlements = value
+var peaks: Array:
+	get:
+		return geology.peaks
+	set(value):
+		geology.peaks = value
+var sites: Array:
+	get:
+		return civil.sites
+	set(value):
+		civil.sites = value
+var lakes: Array:
+	get:
+		return geology.lakes
+	set(value):
+		geology.lakes = value
+var lake_id: PackedInt32Array:
+	get:
+		return geology.lake_id.data
+	set(value):
+		geology.lake_id.data = value
 
 # Растительность: объекты хранятся столбцами, чанки — списки номеров объектов
-var obj_x := PackedFloat64Array()
-var obj_y := PackedFloat64Array()
-var obj_k := PackedInt32Array()      # вид из Biomes.T_*
-var obj_v := PackedInt32Array()      # вариант
-var obj_s := PackedFloat64Array()    # масштаб
-var chunks: Array[PackedInt32Array] = []
-var CS := CHUNK_SIZE
-var CW := 0
-var CH := 0
-var obj_count := 0
+var obj_x: PackedFloat64Array:
+	get:
+		return climate.obj_x
+	set(value):
+		climate.obj_x = value
+var obj_y: PackedFloat64Array:
+	get:
+		return climate.obj_y
+	set(value):
+		climate.obj_y = value
+var obj_k: PackedInt32Array:
+	get:
+		return climate.obj_k
+	set(value):
+		climate.obj_k = value
+var obj_v: PackedInt32Array:
+	get:
+		return climate.obj_v
+	set(value):
+		climate.obj_v = value
+var obj_s: PackedFloat64Array:
+	get:
+		return climate.obj_s
+	set(value):
+		climate.obj_s = value
+var chunks: Array[PackedInt32Array]:
+	get:
+		return climate.chunks
+	set(value):
+		climate.chunks = value
+var CS: int:
+	get:
+		return climate.CS
+	set(value):
+		climate.CS = value
+var CW: int:
+	get:
+		return climate.CW
+	set(value):
+		climate.CW = value
+var CH: int:
+	get:
+		return climate.CH
+	set(value):
+		climate.CH = value
+var obj_count: int:
+	get:
+		return climate.obj_count
+	set(value):
+		climate.obj_count = value
 
 
 ## Для размещения и маршрутов нужен весь коридор, а не только клетки стока.
 func river_cells() -> PackedByteArray:
-	return river_area if river_area.size() == N else river
+	return geology.river_mask(N).data
 
 
 ## Начать считать поля NOISE_FIELDS в отдельном потоке. Они зависят только от сида, поэтому
 ## их расчёт идёт одновременно с последовательными этапами (заполнение впадин), а не после них
 func start_noise_fields() -> void:
-	_fields_thread = Thread.new()
-	_fields_thread.start(func() -> Dictionary:
-		var out := {}
-		for name: String in NOISE_FIELDS:
-			var p: Array = NOISE_FIELDS[name]
-			out[name] = Parallel.fbm_field(W, H, noise[name], p[0], p[1])
-		return out)
+	generation.start_fields(W, H, NOISE_FIELDS)
 
 
-## Поле шума из NOISE_FIELDS (ждёт поток, если поле ещё не готово)
 func noise_field(name: String) -> PackedFloat64Array:
-	if _fields_thread != null:
-		_fields = _fields_thread.wait_to_finish()
-		_fields_thread = null
-	if not _fields.has(name):
-		var p: Array = NOISE_FIELDS[name]
-		_fields[name] = Parallel.fbm_field(W, H, noise[name], p[0], p[1])
-	return _fields[name]
+	return generation.field(name, W, H, NOISE_FIELDS)
 
 
-## Поля нужны только этапам генерации; готовый мир не держит четыре временных карты шума.
 func clear_noise_fields() -> void:
-	if _fields_thread != null:
-		_fields_thread.wait_to_finish()
-		_fields_thread = null
-	_fields.clear()
+	generation.clear_fields()
 
 
 ## Чистое имя места: дома, другие имена и порядок чтения областей не расходуют его RNG.
@@ -340,29 +576,11 @@ func make_name(parts: Dictionary, kind: String, x: int, y: int) -> String:
 
 ## Номер озера из lakes, у которого стоит точка (клетки): озеро в квадрате ±r клеток или -1
 func lake_near(x: float, y: float, r: int) -> int:
-	if lake_id.is_empty():
-		return -1
-	var tx := floori(x)
-	var ty := floori(y)
-	for dy in range(maxi(0, ty - r), mini(H, ty + r + 1)):
-		for dx in range(maxi(0, tx - r), mini(W, tx + r + 1)):
-			var id := lake_id[dy * W + dx]
-			if id >= 0:
-				return id
-	return -1
+	return geology.lake_near(x, y, r)
 
 
-## Есть ли озеро id в квадрате ±r клеток вокруг точки (клетки)
 func lake_within(x: float, y: float, r: int, id: int) -> bool:
-	if lake_id.is_empty():
-		return false
-	var tx := floori(x)
-	var ty := floori(y)
-	for dy in range(maxi(0, ty - r), mini(H, ty + r + 1)):
-		for dx in range(maxi(0, tx - r), mini(W, tx + r + 1)):
-			if lake_id[dy * W + dx] == id:
-				return true
-	return false
+	return geology.lake_within(x, y, r, id)
 
 
 ## Сведения о местности в точке (координаты в клетках). За краем карты — из OuterLand, если он
@@ -372,9 +590,9 @@ func tile_info(x: float, y: float) -> Dictionary:
 	var ty := floori(y)
 	if tx < 0 or ty < 0 or tx >= W or ty >= H:
 		return outer.info(tx, ty) if outer != null else {}
-	var i := ty * W + tx
+	var i := grid.index(tx, ty)
 	return {
-		i = i, biome = biome[i], river = river_cells()[i] == 1, path = path_mask[i] if path_mask.size() == N else 0,
-		surface = road_surface[i] if road_surface.size() == N else 0,
-		elev = elev[i], temp = temp[i], moist = moist[i], slope = slope[i],
+		i = i, biome = climate.biome.get_cell(tx, ty), river = geology.river_mask(N).get_cell(tx, ty) == 1, path = civil.path_mask.get_cell(tx, ty) if civil.path_mask.data.size() == N else 0,
+		surface = civil.road_surface.get_cell(tx, ty) if civil.road_surface.data.size() == N else 0,
+		elev = geology.elev.get_cell(tx, ty), temp = climate.temp.get_cell(tx, ty), moist = climate.moist.get_cell(tx, ty), slope = geology.slope.get_cell(tx, ty),
 	}

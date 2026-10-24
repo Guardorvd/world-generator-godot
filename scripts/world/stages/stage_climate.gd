@@ -12,13 +12,17 @@ const LABEL := "Климат и биомы"
 ## Солнце с юга; это средний прогрев, без трассировки теней. Только готовые высоты,
 ## без дополнительных полей мира. На границе берём ближайшую клетку.
 static func natural_conditions(w: WorldData, x: int, y: int) -> Vector2:
-	var i := y * w.W + x
-	var gx := (w.elev[y * w.W + mini(w.W - 1, x + 1)] - w.elev[y * w.W + maxi(0, x - 1)]) * 30.0
-	var gy := (w.elev[mini(w.H - 1, y + 1) * w.W + x] - w.elev[maxi(0, y - 1) * w.W + x]) * 30.0
+	# В массовых численных выборках берём packed-буфер контекста один раз.
+	var elev := w.geology.elev.data
+	var W := w.W
+	var H := w.H
+	var i := y * W + x
+	var gx := (elev[y * W + mini(W - 1, x + 1)] - elev[y * W + maxi(0, x - 1)]) * 30.0
+	var gy := (elev[mini(H - 1, y + 1) * W + x] - elev[maxi(0, y - 1) * W + x]) * 30.0
 	var light := clampf(0.5 - 0.5 * gy / sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0)
-	var around := (w.elev[y * w.W + maxi(0, x - 2)] + w.elev[y * w.W + mini(w.W - 1, x + 2)]
-		+ w.elev[maxi(0, y - 2) * w.W + x] + w.elev[mini(w.H - 1, y + 2) * w.W + x]) * 0.25
-	return Vector2(light, clampf((around - w.elev[i]) * 18.0, -0.16, 0.16))
+	var around := (elev[y * W + maxi(0, x - 2)] + elev[y * W + mini(W - 1, x + 2)]
+		+ elev[maxi(0, y - 2) * W + x] + elev[mini(H - 1, y + 2) * W + x]) * 0.25
+	return Vector2(light, clampf((around - elev[i]) * 18.0, -0.16, 0.16))
 
 
 ## Влажность почвы: осадки, вода, накопление в ложбинах, дренаж и испарение.
