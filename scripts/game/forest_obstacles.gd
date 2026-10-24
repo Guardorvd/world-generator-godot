@@ -15,6 +15,7 @@ const SNUG := 0.85      # круг ствола чуть уже видимого
 const STRIDE := 7       # ax, az, bx, bz, радиус, основание, верх
 ## радиус ствола у комля при масштабе 1, м (как в ForestModels и Models)
 const TRUNK := {
+	Biomes.T_RELICT_OAK: 1.07, Biomes.T_RELICT_PINE: 0.8,
 	Biomes.T_BIRCH: 0.14, Biomes.T_PINE: 0.23, Biomes.T_SNOWPINE: 0.23, Biomes.T_OAK: 0.32,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }

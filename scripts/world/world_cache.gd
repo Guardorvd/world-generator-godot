@@ -30,7 +30,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 3
 const SCHEMA_TRAILS_VERSION := 1
-const SCHEMA_NATURE_VERSION := 1
+const SCHEMA_NATURE_VERSION := 3 # 15.5: soft forest character and distinct giant tree species
 const SCHEMA_VIEW_VERSION := 1
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

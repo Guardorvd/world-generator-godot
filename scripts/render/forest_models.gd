@@ -11,6 +11,8 @@ static var _needle_texture: Texture2D
 
 
 static func definition(kind: int, variant: int) -> Dictionary:
+	if Biomes.is_relict(kind):
+		return _relict(variant, kind == Biomes.T_RELICT_PINE)
 	if kind == Biomes.T_PALM:
 		return _palm(variant)
 	if kind == Biomes.T_JUNGLE:
@@ -83,6 +85,61 @@ static func definition(kind: int, variant: int) -> Dictionary:
 	if kind == Biomes.T_SNOWPINE:
 		colors = [Color("b3c7bd"), Color("a1b6aa"), Color("c3d3ca")]
 	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, conifer), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, conifer)}
+
+
+## Cathedral-like relict trees: open lower trunk and a layered vault in the upper third.
+## The three silhouettes vary in height; crowns overlap without filling the forest floor with branches.
+static func _relict(variant: int, conifer: bool) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 15500 + variant * 331 + (97 if conifer else 0)
+	var height: float = ([18.0, 23.0, 29.0] if conifer else [15.5, 20.5, 26.0])[variant]
+	var reach: float = ([5.9, 6.4, 7.0] if conifer else [6.3, 7.0, 7.5])[variant]
+	var radius := 0.56 if conifer else 0.76
+	var bark := Color("74604c") if conifer else Color("74614d")
+	var bend := Vector3(rng.randf_range(-0.55, 0.55), 0, rng.randf_range(-0.55, 0.55))
+	var branches: Array = []
+	var foliage: Array = []
+	var path: Array[Vector3] = []
+	var rings := ceili(height / 1.5)
+	for i in rings + 1:
+		var t := float(i) / rings
+		path.append(bend * t * t + Vector3(sin(t * 5.0) * 0.09, height * 0.98 * t, 0))
+	branches.append([path, radius, radius * 0.12, bark, false])
+	_roots(branches, rng, 7, Vector2(1.2, 1.75) if not conifer else Vector2(1.1, 1.6), 1.4, 0.14, radius * 0.7, bark)
+	if not conifer:
+		# Oak limbs fork before the vault instead of making a pine-like central whorl.
+		for limb in 5:
+			var a := limb * TAU / 5.0
+			var dir := Vector3(cos(a), 0, sin(a))
+			branches.append([[Vector3(0, height * 0.49, 0), dir * reach * 0.15 + Vector3(0, height * 0.58, 0),
+				dir * reach * 0.3 + Vector3(0, height * 0.66, 0)], 0.33, 0.17, bark, false])
+	# Overlapping rings of horizontal, gently curved sprays. Lower rim starts above 2/3 height.
+	for tier in 4:
+		var t := 0.71 + tier * 0.078
+		var extent: float = [0.88, 1.0, 0.78, 0.48][tier] * reach
+		for ring in 2:
+			var count := 10 if ring == 1 else 5
+			for j in count:
+				var a := j * TAU / count + tier * 1.13 + ring * 0.7 + rng.randf_range(-0.14, 0.14)
+				var dir := Vector3(cos(a), 0, sin(a))
+				var spread := extent * (0.76 if ring == 1 else 0.25) * rng.randf_range(0.93, 1.07)
+				var top := height * t + (0.15 if ring == 1 else 0.55)
+				var start := bend * t * t + Vector3(0, height * (t - 0.085), 0)
+				if not conifer:
+					var sector := roundf(a / (TAU / 5.0)) * TAU / 5.0
+					start = Vector3(cos(sector), 0, sin(sector)) * reach * 0.3 + Vector3(0, height * 0.66, 0)
+				var end := bend * t * t + dir * spread + Vector3(0, top, 0)
+				var middle := start.lerp(end, 0.52) + Vector3(0, 0.6, 0)
+				branches.append([[start, middle, end], (0.14 if conifer else 0.21) * (1.0 - tier * 0.15), 0.025, bark, false])
+				var size := Vector3(extent * (0.32 if ring else 0.38), 0.45, extent * 0.32)
+				var frame := Basis(Vector3.UP, -a) * Basis(Vector3.FORWARD, -0.1 if ring else 0.05)
+				# Final flag selects a tessellated vault patch; metric size stays separate from UV coverage.
+				foliage.append([end, size, a, rng.randf() * 10.0, frame, 0.11, true])
+	var colors := [Color("63844d"), Color("799954"), Color("6b8f4d")]
+	if conifer: colors = [Color("547d5b"), Color("628a62"), Color("4e7758")]
+	return {trunk = _mesh(branches, [], false, true), crown = _mesh([], foliage, conifer, true),
+		bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true,
+		trunk_texture = _texture(false), crown_texture = _texture(true, conifer)}
 
 
 static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool) -> Dictionary:
@@ -326,7 +383,7 @@ static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
 
 ## Три согласованных LOD: сохраняют характер кроны и её просветы.
 ## Вершины уровней общие в одной поверхности, переключаются только индексы.
-static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
+static func _mesh(branches: Array, foliage: Array, conifer: bool, relict := false) -> ArrayMesh:
 	var vertices := PackedVector3Array()
 	var normals := PackedVector3Array()
 	var colors := PackedColorArray()
@@ -347,15 +404,18 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 	for level in 3:
 		var st := SurfaceTool.new()
 		st.begin(Mesh.PRIMITIVE_TRIANGLES)
-		for branch: Array in branches:
+		for branch_index in branches.size():
+			var branch: Array = branches[branch_index]
+			if relict and level == 2 and branch_index > 0 and branch[1] < 0.25 and branch_index % 3 != 0:
+				continue # Keep large structural forks; crown layers carry the distant silhouette.
 			# Первая ветвь (ствол, у куста главный стебель) остаётся на всех уровнях: поверхность не пустеет.
 			if level == 2 and branch[1] < 0.06 and branch != branches[0]:
 				continue # Тонкие веточки уже меньше пикселя; силуэт остаётся в листве.
 			if level == 1 and branch[1] < 0.035 and branch != branches[0]:
 				continue
-			_tube(st, branch, (6 - level) if branch[1] > 0.12 else 3)
+			_tube(st, branch, ((12 - level * 3) if relict else (6 - level)) if branch[1] > 0.12 else 3, relict)
 		for i in foliage.size():
-			if level == 2 and i % 2 == 1:
+			if level == 2 and i % 2 == 1 and not relict:
 				continue
 			var spray: Array = foliage[i].duplicate()
 			if level == 2:
@@ -400,8 +460,12 @@ static func _vertex(st: SurfaceTool, p: Vector3, normal: Vector3, color: Color) 
 	st.add_vertex(p)
 
 
-static func _tube(st: SurfaceTool, data: Array, segments: int) -> void:
+static func _tube(st: SurfaceTool, data: Array, segments: int, metric_uv := false) -> void:
 	var path: Array = data[0]
+	var arc := PackedFloat64Array([0.0])
+	if metric_uv:
+		for i in range(1, path.size()): arc.append(arc[-1] + path[i - 1].distance_to(path[i]))
+	var repeats := maxf(2.0, roundf(TAU * float(data[1]) * 0.85))
 	for k in path.size() - 1:
 		var direction: Vector3 = (path[k + 1] - path[k]).normalized()
 		var side := direction.cross(Vector3.FORWARD).normalized()
@@ -423,7 +487,7 @@ static func _tube(st: SurfaceTool, data: Array, segments: int) -> void:
 				if data[4] and sin(p.y * 21.0 + j * 4.7) > 0.72:
 					color = Color("514d45")
 				color.a = 1.0
-				st.set_uv(Vector2(a / TAU * 2.0, p.y * 0.65))
+				st.set_uv(Vector2(a / TAU * repeats, arc[ring] * 0.65) if metric_uv else Vector2(a / TAU * 2.0, p.y * 0.65))
 				_vertex(st, p, normal, color)
 
 
@@ -443,6 +507,9 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crow
 	var phase: float = data[3]
 	# Пространственные веера с вырезанными листьями вместо гладких оболочек.
 	var planes := 4 if level == 0 else (3 if level == 1 else 2)
+	if data.size() > 6 and data[6]:
+		_vault_spray(st, data, level, crown)
+		return
 	if data.size() > 4:
 		_flat_spray(st, data, planes, crown)
 		return
@@ -484,3 +551,31 @@ static func _flat_spray(st: SurfaceTool, data: Array, planes: int, crown: Array)
 			st.set_uv(uv[index])
 			var lit := _crown_light(points[index], crown)
 			_vertex(st, points[index], (normal + lit[0]).normalized(), lit[1])
+
+
+## Curved horizontal canopy cards, subdivided near the camera for wind and smooth arch silhouettes.
+## UV spans each entire spray, never resets at subdivision seams; both foliage shaders use the same layout.
+static func _vault_spray(st: SurfaceTool, data: Array, level: int, crown: Array) -> void:
+	var planes := 3 - level
+	var size: Vector3 = data[1]
+	var coordinates: Array[Vector2] = []
+	if level == 0:
+		for z in 2:
+			for x in 2:
+				for corner: Vector2i in [Vector2i(0, 0), Vector2i(1, 0), Vector2i(1, 1), Vector2i(0, 0), Vector2i(1, 1), Vector2i(0, 1)]:
+					coordinates.append(Vector2(x + corner.x, z + corner.y) * 0.5)
+	else:
+		# A centre fan retains the arch at distant LODs; a single flat quad would collapse it.
+		var corners := [Vector2.ZERO, Vector2.RIGHT, Vector2.ONE, Vector2.DOWN]
+		for side in 4: coordinates.append_array([corners[side], corners[(side + 1) % 4], Vector2(0.5, 0.5)])
+	for sheet in planes:
+		var frame: Basis = data[4] * Basis(Vector3.RIGHT, (sheet - (planes - 1) * 0.5) * 0.13)
+		var center: Vector3 = data[0] + Vector3.UP * (sheet - (planes - 1) * 0.5) * 0.18
+		for uv: Vector2 in coordinates:
+			var px := uv.x * 2.0 - 1.0
+			var pz := uv.y * 2.0 - 1.0
+			var p := center + frame * Vector3(px * size.x * 1.12,
+				0.7 * (1.0 - px * px) * (1.0 - pz * pz), pz * size.z * 1.12)
+			st.set_uv(uv)
+			var lit := _crown_light(p, crown)
+			_vertex(st, p, (frame.y + lit[0]).normalized(), lit[1])

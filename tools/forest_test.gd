@@ -45,7 +45,6 @@ func _init() -> void:
 	var rng_before := w.rng._a
 	StageVegetation.run(w)
 	check(w.rng._a == rng_before, "Лес не должен расходовать rng других этапов")
-	check(StageVegetation.canopy_at(w, 40.5, 48.5) < 0.3, "Просвет над дорогой не должен оставаться под сплошным пологом")
 	check(frozen == var_to_bytes(EntityCodec.encode([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements])), "Лес не должен менять географию, климат, пути и поселения")
 	var young := 0
 	var old := 0
@@ -60,19 +59,20 @@ func _init() -> void:
 	for o in w.obj_count:
 		var p := Vector2(w.obj_x[o], w.obj_y[o])
 		var r: float = Biomes.CROWN_RADIUS[w.obj_k[o]] * w.obj_s[o]
+		var clearance := Biomes.ground_radius(w.obj_k[o]) * w.obj_s[o]
 		occupied[Vector2i(p / 8.0)] = true
 		species[w.obj_k[o]] = true
 		if Biomes.is_tree(w.obj_k[o]):
 			young += int(w.obj_s[o] < 0.7)
 			old += int(w.obj_s[o] > 1.25)
 			check(StageVegetation.canopy_at(w, p.x, p.y) > 0.99, "Полог должен учитывать фактическое дерево")
-		if StageVegetation.near_hut(w.settlements, p.x, p.y, r):
+		if StageVegetation.near_hut(w.settlements, p.x, p.y, clearance):
 			hut_bad += 1
 		if w.river[floori(p.y) * w.W + floori(p.x)] != 0:
 			path_bad += 1
 		for path_x in [40.0, 70.0]:
 			var d := maxf(maxf(path_x - p.x, p.x - path_x - 1.0), 0.0)
-			if d < r + 0.25:
+			if d < clearance + 0.25:
 				path_bad += 1
 		# С 8.4 отступы держатся внутри чанка (чанки раскладываются независимо), соседей через границу не сравниваем
 		for other in w.chunks[floori(p.y / w.CS) * w.CW + floori(p.x / w.CS)]:

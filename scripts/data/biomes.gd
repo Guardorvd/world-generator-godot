@@ -37,10 +37,12 @@ const T_BIRCH := 8
 const T_DEAD := 9
 const T_REED := 10
 const T_ACACIA := 11
+const T_RELICT_OAK := 12
+const T_RELICT_PINE := 13
 
 # Приблизительный радиус кроны/объекта в клетках (клетка 4 м), по Models.
 # Общий для размещения и оценки полога; масштаб экземпляра применяется отдельно.
-const CROWN_RADIUS := [0.70, 0.475, 0.65, 0.95, 0.325, 0.20, 0.43, 0.475, 0.35, 0.20, 0.125, 0.80]
+const CROWN_RADIUS := [0.70, 0.475, 0.65, 0.95, 0.325, 0.20, 0.43, 0.475, 0.35, 0.20, 0.125, 0.80, 2.65, 2.5]
 # Поля записи биома (индекс в массиве = номер биома):
 #   name       — название для интерфейса
 #   color      — цвет на карте и в текстуре рельефа, [r, g, b]
@@ -88,4 +90,25 @@ const LIST: Array[Dictionary] = [
 
 
 static func is_tree(kind: int) -> bool:
-	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA
+	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA or is_relict(kind)
+
+
+static func is_relict(kind: int) -> bool:
+	return kind == T_RELICT_OAK or kind == T_RELICT_PINE
+
+
+static func is_conifer(kind: int) -> bool:
+	return kind == T_PINE or kind == T_SNOWPINE or kind == T_RELICT_PINE
+
+
+## Ground clearance differs from the high canopy: paths may pass under the vault.
+static func ground_radius(kind: int) -> float:
+	if kind == T_RELICT_OAK: return 0.55
+	if kind == T_RELICT_PINE: return 0.5
+	return CROWN_RADIUS[kind]
+
+
+static func base_tree(kind: int) -> int:
+	if kind == T_RELICT_OAK: return T_OAK
+	if kind == T_RELICT_PINE: return T_PINE
+	return kind

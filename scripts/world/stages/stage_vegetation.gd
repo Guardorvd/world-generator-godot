@@ -16,6 +16,7 @@ const LINE_LO := 0.2     # граница леса: с этой высоты д�
 const LINE_HI := 0.4     # а здесь их остаётся треть
 const STEEP := 0.6       # крутизна, с которой деревьев меньше, а камней больше
 const SHORE := 3.0       # клеток до воды: прибрежные рощи, оазисы, тростник
+const MassiveForest := preload("res://scripts/world/massive_forest.gd")
 const LAYER := 1         # слой растительности в WGRandom.hash_cell (с 8.4)
 # 9.1: лесистость местности — медленный шум лесного Simplex (крупнейшая волна около 1,7 км, мельчайшая ~200 м)
 # плюс доля лесов всего мира по сиду. Зависит только от клетки, поэтому массивы идут через границы областей.
@@ -144,12 +145,13 @@ static func fields(w: WorldData) -> Dictionary:
 
 
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
+## massive — единый ограниченный реликтовый массив (15.4), с теми же глобальными координатами.
 ## stand — густой или редкий древостой и его состав (9.2), glade — поляны (9.2). Все — сдвиги одного лесного Simplex
 static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
 	var n: Simplex = w.noise.forest
 	return {wood = Parallel.fbm_rect(n, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY),
 		stand = Parallel.fbm_rect(n, x0, y0, cw, ch, STAND_SCALE, 2, STAND_OX, STAND_OY),
-		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY)}
+		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY)}.merged(MassiveForest.fields(w, x0, y0, cw, ch))
 
 
 ## Доля лесов мира по сиду (9.1), -0.36..0.36: одни миры лесистые, другие открытые. Без квот — только сдвиг
@@ -165,6 +167,7 @@ static func world_cover(seed_num: int) -> float:
 ## порядка, в котором считаются чанки. f: biome, forest, stony, elev, slope, dw, temp, moist и необязательные
 ## river, dist_path, village (стартовая область), light, age_n, wood, stand, glade (без них они считаются по w).
 ## Просеки и лесные дороги вписываются через dist_path: у пути лес редеет, на полотне его нет.
+## massive, massive_scenario — необязательная маска реликтового массива из structure_rect (15.4).
 ## w — стартовая область (тропы и дома) или null за её краем.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictionary, ox: int, oy: int, stride: int,
 		w: WorldData, store: ObjStore) -> void:
@@ -186,6 +189,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var stand_f: PackedFloat64Array = f.get("stand", PackedFloat64Array())
 	var glade_f: PackedFloat64Array = f.get("glade", PackedFloat64Array())
 	var has_stand := not stand_f.is_empty()
+	var massive_f: PackedFloat32Array = f.get("massive", PackedFloat32Array())
+	var massive_scenario: int = f.get("massive_scenario", 0)
 	var cover_bias := world_cover(seed_num)
 	var has_river := not river.is_empty()
 	var has_path := not dist_path.is_empty()
@@ -249,6 +254,15 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				# у воды в сухих и открытых краях — прибрежные рощи и оазисы
 				if dw < SHORE and _dry_open(bi) and temp[i] > 0.24:
 					dens += 0.22 * (1.0 - dw / SHORE)
+			# Relict core fills small clearings, ages the stand and extends into suitable meadows.
+			# Apply before the existing terrain/path/village reductions and ObjStore exclusions.
+			var massive := 0.0
+			if not massive_f.is_empty() and massive_f[i] > 0.0:
+				massive = massive_f[i] * MassiveForest.suitability(massive_scenario, bi, e, sl, moist[i], temp[i])
+				age = maxf(age, MassiveForest.OLD_AGE * massive)
+				interior = maxf(interior, massive)
+				stand = maxf(stand, 0.85 * massive)
+				dens = maxf(dens, MassiveForest.DENSITY * massive)
 			# Влажные защищённые места поддерживают лес, сухие склоны разрежают его.
 			if bi == Biomes.FOREST or bi == Biomes.TAIGA or bi == Biomes.JUNGLE or bi == Biomes.GRASS:
 				dens *= (0.55 + 0.65 * _ss(0.2, 0.75, moist[i])) * (1.08 - 0.16 * light)
@@ -276,7 +290,17 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var py := y + 0.15 + rng.next_float() * 0.8
 					# сомкнутые участки — влажнее и лиственнее, редкие — светлые сосняки (9.2)
 					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
-					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
+					var kind_roll := rng.next_float()
+					var dominance := MassiveForest.DOMINANCE * massive
+					# Remap the remaining interval, retaining genuinely mixed companion species.
+					var community_roll := (kind_roll - dominance) / (1.0 - dominance) if dominance > 0.0 and kind_roll >= dominance else kind_roll
+					var kind := _kind(bi, kinds, community_roll, e, community_moist, sl, dw, temp[i], light, interior)
+					if kind_roll < dominance:
+						kind = Biomes.T_PINE if massive_scenario == MassiveForest.PINE else Biomes.T_OAK
+					if massive > 0.0 and kind in [Biomes.T_OAK, Biomes.T_PINE] and (not has_village or village[i] == 0):
+						var relic := smoothstep(0.25, 0.85, massive) * smoothstep(0.55, 0.9, age)
+						if WGRandom.hash2(x * 2 + k, y, seed_num ^ 15501) < relic:
+							kind = Biomes.T_RELICT_PINE if kind == Biomes.T_PINE else Biomes.T_RELICT_OAK
 					var v := floori(rng.next_float() * 3)
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
 					store.add(px, py, kind, v, sc)
@@ -304,9 +328,10 @@ static var _TABLES := _make_tables()
 
 
 static func _make_tables() -> Dictionary:
-	var t := {water = PackedByteArray(), trees = PackedFloat64Array(), kinds = [], tree = PackedByteArray()}
+	var t := {water = PackedByteArray(), trees = PackedFloat64Array(), kinds = [], tree = PackedByteArray(), max_crown = 0.0}
 	for kind in Biomes.CROWN_RADIUS.size():
 		t.tree.append(1 if Biomes.is_tree(kind) else 0)
+		t.max_crown = maxf(t.max_crown, Biomes.CROWN_RADIUS[kind])
 	for bd: Dictionary in Biomes.LIST:
 		t.water.append(1 if bd.get("water", false) else 0)
 		t.trees.append(bd.get("trees", 0.0))
@@ -337,8 +362,9 @@ static func tree_scale(age: float, interior: float, line: float, moist: float, r
 ## Локальный полог готового леса для травы. Только ближайшие чанки, без новой карты теней.
 static func canopy_at(w: WorldData, px: float, py: float) -> float:
 	var cover := 0.0
-	for cy in range(maxi(0, floori((py - 2.5) / w.CS)), mini(w.CH - 1, floori((py + 2.5) / w.CS)) + 1):
-		for cx in range(maxi(0, floori((px - 2.5) / w.CS)), mini(w.CW - 1, floori((px + 2.5) / w.CS)) + 1):
+	var reach: float = _TABLES.max_crown * tree_scale(1.0, 1.0, 0.0, 1.0, 1.0) + 0.5
+	for cy in range(maxi(0, floori((py - reach) / w.CS)), mini(w.CH - 1, floori((py + reach) / w.CS)) + 1):
+		for cx in range(maxi(0, floori((px - reach) / w.CS)), mini(w.CW - 1, floori((px + reach) / w.CS)) + 1):
 			for o in w.chunks[cy * w.CW + cx]:
 				if not Biomes.is_tree(w.obj_k[o]):
 					continue
@@ -425,6 +451,7 @@ class ObjStore:
 	# свойств общего объекта из многих потоков упирается в общие счётчики ссылок
 	var _huts := PackedFloat64Array() # x, y поселения или места и x, y дома — по четыре числа на дом
 	var _crown := PackedFloat64Array(Biomes.CROWN_RADIUS)
+	var _largest_radius := 0.0
 	var _path_mask := PackedByteArray()
 	var _W := 0
 	var _H := 0
@@ -454,6 +481,7 @@ class ObjStore:
 			chunk_lists.append(_list)
 
 	func begin_chunk(x0: int, y0: int, x1: int, y1: int) -> void:
+		_largest_radius = 0.0
 		_x0 = x0
 		_y0 = y0
 		_x1 = x1
@@ -465,28 +493,34 @@ class ObjStore:
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
 		var radius: float = _crown[kind] * sc
+		var clearance := Biomes.ground_radius(kind) * sc
 		var cx := floori(ox)
 		var cy := floori(oy)
+		# Independent chunks must not place giant root bases into an unqueried neighbour.
+		# Only the ground footprint stays inside; the high canopy freely crosses chunk borders.
+		if Biomes.is_relict(kind) and minf(minf(ox - _x0, _x1 - ox), minf(oy - _y0, _y1 - oy)) < clearance + 0.25:
+			return
 		if w != null:
 			# = near_hut по поселениям и местам, по плоскому списку домов
 			for n in range(0, _huts.size(), 4):
-				if absf(_huts[n] - ox) <= VILLAGE_R + radius and absf(_huts[n + 1] - oy) <= VILLAGE_R + radius 						and absf(_huts[n + 2] - ox) < 0.75 + radius and absf(_huts[n + 3] - oy) < 0.75 + radius:
+				if absf(_huts[n] - ox) <= VILLAGE_R + clearance and absf(_huts[n + 1] - oy) <= VILLAGE_R + clearance 						and absf(_huts[n + 2] - ox) < 0.75 + clearance and absf(_huts[n + 3] - oy) < 0.75 + clearance:
 					return
-			# Увеличенные кроны не заходят на полотно. Животные тропы тоже сохраняются.
-			var reach := ceili(radius + 1.0)
+			# Ground clearance protects paths; the high relict canopy may arch above them.
+			var reach := ceili(clearance + 1.0)
 			for yy in range(maxi(0, cy - reach), mini(_H, cy + reach + 1)):
 				for xx in range(maxi(0, cx - reach), mini(_W, cx + reach + 1)):
 					if _path_mask[yy * _W + xx] == 0:
 						continue
 					var dx := maxf(maxf(xx - ox, ox - xx - 1.0), 0.0)
 					var dy := maxf(maxf(yy - oy, oy - yy - 1.0), 0.0)
-					if dx * dx + dy * dy < (radius + 0.25) ** 2:
+					if dx * dx + dy * dy < (clearance + 0.25) ** 2:
 						return
 		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
-		# Максимальный масштаб дерева < 1.85; поиск ±3 клетки покрывает любую пару.
+		# Query reach follows actual crowns already inserted in this chunk, including giants.
+		var search := ceili(0.18 + 0.55 * (radius + _largest_radius))
 		var cw := _x1 - _x0
-		for yy in range(maxi(_y0, cy - 3), mini(_y1, cy + 4)):
-			for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
+		for yy in range(maxi(_y0, cy - search), mini(_y1, cy + search + 1)):
+			for xx in range(maxi(_x0, cx - search), mini(_x1, cx + search + 1)):
 				var o := heads[(yy - _y0) * cw + xx - _x0]
 				while o != -1:
 					var gap: float = 0.18 + 0.55 * (radius + _crown[k[o]] * s[o])
@@ -502,3 +536,4 @@ class ObjStore:
 		k.append(kind)
 		v.append(variant)
 		s.append(sc)
+		_largest_radius = maxf(_largest_radius, radius)

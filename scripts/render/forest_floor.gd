@@ -37,7 +37,7 @@ static func surface_image(w: WorldData) -> Image:
 				var k := j * w.W + i
 				var weight := maxf(0.0, 1.0 - Vector2(i + 0.5 - ox, j + 0.5 - oy).length() / r)
 				cover[k] += weight
-				if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE:
+				if Biomes.is_conifer(kind):
 					needles[k] += weight
 	var bytes := PackedByteArray()
 	bytes.resize(w.N * 4)

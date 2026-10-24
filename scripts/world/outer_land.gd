@@ -232,19 +232,27 @@ static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 	var x0 := key.x * cs
 	var y0 := key.y * cs
 	var side := cs + 2
-	var f := compute(w, x0 - 1, y0 - 1, side, side)
-	var p: Array = WorldData.NOISE_FIELDS.forest
-	f.forest = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, p[0], p[1])
-	p = WorldData.NOISE_FIELDS.cost
-	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 1, y0 - 1, side, side, p[0], p[1])
-	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
-	f.merge(StageVegetation.structure_rect(w, x0 - 1, y0 - 1, side, side))
-	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
-	if not f.has("dw"):
-		f.dw = f.dist
+	var f := vegetation_fields(w, Rect2i(x0 - 1, y0 - 1, side, side))
 	var store := StageVegetation.ObjStore.new(null)
 	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - 1, y0 - 1, side, null, store)
 	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, x0 = x0 - 1, y0 = y0 - 1, side = side}
+
+
+## Complete vegetation inputs for any global rectangle, independent of streaming chunk size.
+static func vegetation_fields(w: WorldData, rect: Rect2i) -> Dictionary:
+	var f := compute(w, rect.position.x, rect.position.y, rect.size.x, rect.size.y)
+	var p: Array = WorldData.NOISE_FIELDS.forest
+	f.forest = Parallel.fbm_rect(w.noise.forest, rect.position.x, rect.position.y, rect.size.x, rect.size.y, p[0], p[1])
+	p = WorldData.NOISE_FIELDS.cost
+	f.stony = Parallel.fbm_rect(w.noise.cost, rect.position.x, rect.position.y, rect.size.x, rect.size.y, p[0], p[1])
+	f.age_n = Parallel.fbm_rect(w.noise.forest, rect.position.x, rect.position.y, rect.size.x, rect.size.y, 78.0, 2, 91.0, -47.0) # как в age_at
+	# 15.4: the same global relict-forest mask/scenario as the plan, including the padded border.
+	var structure := StageVegetation.structure_rect(w, rect.position.x, rect.position.y, rect.size.x, rect.size.y)
+	f.merge(structure)
+	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
+	if not f.has("dw"):
+		f.dw = f.dist
+	return f
 
 
 ## Поля куска key (для фоновой задачи)

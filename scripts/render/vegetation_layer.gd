@@ -45,6 +45,8 @@ const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 # [sway, flutter, sway_speed, ao, glow]; см. _wind_mat
 const CALM := [0.0, 0.0, 1.0, 1.0, 0.0]
 const WIND := {
+	Biomes.T_RELICT_OAK: [0.20, 0.03, 0.35, 0.62, 0.3],
+	Biomes.T_RELICT_PINE: [0.17, 0.018, 0.3, 0.65, 0.16],
 	Biomes.T_OAK: [0.14, 0.035, 0.8, 0.72, 0.32],
 	Biomes.T_BIRCH: [0.22, 0.06, 1.0, 0.8, 0.42],
 	Biomes.T_PINE: [0.1, 0.012, 0.65, 0.7, 0.15],
@@ -81,6 +83,9 @@ var _grass_bounds := AABB()
 var _grass_margin := 0.0
 var _grass_box := AABB()
 var understory: Array = [] # те же фоновые буферы и цикл обновления, что у травы
+var _massive_profile := {}
+var _massive_patch := {} # 15.4: one global mask rectangle per grass refill, not per plant
+var _massive_rect := Rect2i()
 var _forest_surface: Image
 var placement: Placement
 var _understory_sites: Array = []
@@ -107,10 +112,12 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	heights = h
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
+	_massive_profile = StageVegetation.MassiveForest.profile(w)
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
 	for kind in defs:
 		var def: Dictionary = defs[kind]
-		var entry := {leaves = def.get("leaves", []), box = AABB()}
+		var wind: Array = WIND.get(kind % ForestModels.MODEL_STRIDE, CALM)
+		var entry := {leaves = def.get("leaves", []), box = AABB(), wind_margin = float(wind[0]) + float(wind[1]) * 1.4}
 		var first := true
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
@@ -551,7 +558,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
 			# Точный повёрнутый AABB вместо большой сферы вокруг всего вида.
 			var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3(s, sy, s)), pos)
-			var box: AABB = xf * def.box
+			var box: AABB = (xf * def.box).grow(def.wind_margin * maxf(s, sy))
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
 				_put_xform(entry.tbuf, n * 12, pos.x, pos.y, pos.z, rot, s, sy)
@@ -671,6 +678,9 @@ func _fill_grass(px: float, pz: float) -> void:
 	_grass_low = low
 	_grass_high = high
 	_fill_at = Vector2(px, pz)
+	_massive_rect = Rect2i(floori(tx - rF), floori(tz - rF), ceili(2.0 * rF) + 2, ceili(2.0 * rF) + 2)
+	_massive_patch = StageVegetation.MassiveForest.fields(w, _massive_rect.position.x, _massive_rect.position.y,
+		_massive_rect.size.x, _massive_rect.size.y, _massive_profile)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
 	_bumps_next = PackedFloat32Array()
@@ -722,14 +732,15 @@ func _fill_grass(px: float, pz: float) -> void:
 				var bd: Dictionary = Biomes.LIST[cell.biome]
 				if not bd.has("grass"):
 					continue
-				var surface := _outer_surface(cell)
+				var massive := _massive_at(i, j, cell.biome, cell.elev, cell.slope, cell.moist, 0.5) if cell.path == 0 else 0.0
+				var surface := _outer_surface(cell, massive, int(_massive_patch.get("massive_scenario", 0)))
 				if d2 > rT * rT:
-					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, massive)
 					continue
 				var lush := clampf(1.0 - 0.45 * (cell.slope - 0.5), 0.35, 1.0)
 				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * OUTER_LIGHT)
 				lush *= 1.0 - 0.65 * surface.r
-				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, massive)
 				n = _grass_cell(i, j, bd.grass, lush, surface, d2, n, cell.path, regions)
 	low = _grass_low
 	high = _grass_high
@@ -830,15 +841,26 @@ func _region_inner(regions: Dictionary, i: int, j: int) -> bool:
 
 
 ## 14.4: полог, хвоя, влага и каменистость клетки за краем плана — по биому (у плана это картинка леса)
-static func _outer_surface(cell: Dictionary) -> Color:
+static func _outer_surface(cell: Dictionary, massive := 0.0, scenario := 0) -> Color:
+	var surface := Color(0.0, 0.0, cell.moist, 0.2)
 	match cell.biome:
 		Biomes.FOREST, Biomes.JUNGLE:
-			return Color(0.6, 0.25, cell.moist, 0.15)
+			surface = Color(0.6, 0.25, cell.moist, 0.15)
 		Biomes.TAIGA:
-			return Color(0.55, 0.85, cell.moist, 0.2)
+			surface = Color(0.55, 0.85, cell.moist, 0.2)
 		Biomes.SWAMP:
-			return Color(0.35, 0.3, 0.9, 0.05)
-	return Color(0.0, 0.0, cell.moist, 0.2)
+			surface = Color(0.35, 0.3, 0.9, 0.05)
+	if massive > 0.0:
+		surface.r = maxf(surface.r, 0.75 * massive)
+		surface.g = lerpf(surface.g, 0.9 if scenario == StageVegetation.MassiveForest.PINE else 0.1, massive)
+	return surface
+
+
+func _massive_at(i: int, j: int, bi: int, elev: float, slope: float, moist: float, temp: float) -> float:
+	if not _massive_patch.has("massive") or not _massive_rect.has_point(Vector2i(i, j)): return 0.0
+	var strength: float = _massive_patch.massive[(j - _massive_rect.position.y) * _massive_rect.size.x + i - _massive_rect.position.x]
+	if strength <= 0.0: return 0.0
+	return strength * StageVegetation.MassiveForest.suitability(_massive_patch.massive_scenario, bi, elev, slope, moist, temp)
 
 
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
@@ -851,17 +873,19 @@ static func _keep(d: float, full: float, ahead: float) -> float:
 ## Возвращает множитель низкой травы по характеру леса (вне леса 1).
 func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var k := j * world.W + i
-	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz)
+	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz,
+		_massive_at(i, j, world.biome[k], world.elev[k], world.slope[k], world.moist[k], world.temp[k]))
 
 
 ## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info)
-func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
+func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float, massive := 0.0) -> float:
 	var canopy := surface.r
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
 		return 1.0
 	var moisture := surface.b
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
-	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
+	var age := maxf(StageVegetation.age_at(world, i, j), StageVegetation.MassiveForest.OLD_AGE * massive)
+	var ch := Understory.character(canopy, surface.g, moisture, sunlight, age)
 	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
 	if path > 0 or slope > 0.9:
 		return grass_mul
@@ -1003,7 +1027,7 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 	for cy in range(maxi(0, floori((pz / TILE - r) / world.CS)), mini(world.CH, ceili((pz / TILE + r) / world.CS))):
 		for cx in range(maxi(0, floori((px / TILE - r) / world.CS)), mini(world.CW, ceili((px / TILE + r) / world.CS))):
 			for o in world.chunks[cy * world.CW + cx]:
-				if not Biomes.is_tree(world.obj_k[o]) or world.obj_s[o] < 0.85:
+				if not Biomes.is_tree(world.obj_k[o]) or Biomes.is_relict(world.obj_k[o]) or world.obj_s[o] < 0.85:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE

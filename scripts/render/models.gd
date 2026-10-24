@@ -59,7 +59,7 @@ static func tree_defs() -> Dictionary:
 	var defs := {
 		Biomes.T_CACTUS: {trunk = merge([_cyl(0.28, 0.32, 2.6, 7), _moved(_cyl(0.18, 0.18, 0.9, 6), Vector3(0.5, 1.0, 0)), _moved(_cyl(0.18, 0.18, 0.8, 6), Vector3(-0.5, 1.3, 0))]), bark = _c(79, 138, 60)},
 	}
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH, Biomes.T_RELICT_OAK, Biomes.T_RELICT_PINE]:
 		for variant in ForestModels.VARIANTS:
 			defs[kind + variant * ForestModels.MODEL_STRIDE] = ForestModels.definition(kind, variant)
 	# 9.4: валуны и камыш вместо сфер и конусов, по три силуэта. Объём валуна прежний (ForestObstacles.ROCK_R).
