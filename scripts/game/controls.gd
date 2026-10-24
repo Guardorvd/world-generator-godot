@@ -20,12 +20,12 @@ const TRIGGERS := {
 }
 const STICK_LOOK := 2.6 # радиан в секунду при стике обзора до упора (умножается на чувствительность)
 
-static var joypad := false  # последний ввод был с геймпада
-static var device := 0      # с какого геймпада
+var joypad := false  # последний ввод был с геймпада
+var device := 0      # с какого геймпада
 
 
 ## Запомнить, откуда пришёл ввод (GameWorld._input). Дрожание стика у нуля не переключает подсказки.
-static func note(event: InputEvent) -> void:
+func note(event: InputEvent) -> void:
 	if event is InputEventJoypadButton:
 		joypad = true
 		device = event.device
@@ -39,7 +39,7 @@ static func note(event: InputEvent) -> void:
 		joypad = false
 
 
-static func family() -> Family:
+func family() -> Family:
 	var name := Input.get_joy_name(device).to_lower()
 	for word in ["nintendo", "switch", "pro controller", "joy-con"]:
 		if word in name:
@@ -50,17 +50,17 @@ static func family() -> Family:
 	return Family.XBOX
 
 
-static func button(index: JoyButton) -> String:
+func button(index: JoyButton) -> String:
 	var names: Array = BUTTONS[family()]
 	return names[index] if index < names.size() else str(index)
 
 
-static func trigger(right: bool) -> String:
+func trigger(right: bool) -> String:
 	return TRIGGERS[family()][1 if right else 0]
 
 
 ## Подпись первой кнопки действия: клавиши — если играют с клавиатуры, кнопки — если с геймпада
-static func label(action: StringName) -> String:
+func label(action: StringName) -> String:
 	for event in InputMap.action_get_events(action):
 		if joypad and event is InputEventJoypadButton:
 			return button(event.button_index)
@@ -71,13 +71,18 @@ static func label(action: StringName) -> String:
 
 
 ## 14.1: отдача в руки — только на геймпаде, с которого играют. weak — лёгкий мотор, strong — тяжёлый, 0..1
-static func rumble(weak: float, strong: float, seconds: float) -> void:
+func rumble(weak: float, strong: float, seconds: float) -> void:
 	if joypad:
 		Input.start_joy_vibration(device, clampf(weak, 0.0, 1.0), clampf(strong, 0.0, 1.0), seconds)
 
 
 ## Стик обзора: сдвиг взгляда за кадр в «пикселях мыши», чтобы чувствительность из настроек была общей.
 ## Квадратичный отклик: стик чуть отклонён — точное наведение, до упора — быстрый разворот
-static func look_delta(dt: float) -> Vector2:
+func look_delta(dt: float) -> Vector2:
 	var v := Input.get_vector("look_left", "look_right", "look_up", "look_down")
 	return v * v.length() * STICK_LOOK * dt / GameConfig.MOUSE
+
+
+func reset() -> void:
+	joypad = false
+	device = 0

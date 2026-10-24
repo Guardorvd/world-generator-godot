@@ -47,20 +47,20 @@ func placement() -> void:
 	check(w.settlements.size() >= 2, "пригодная часть мира получает несколько поселений")
 	var valid := true
 	var radii := {}
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		valid = valid and s.x < 384 and s.importance >= 0.0 and s.importance <= 1.0
 		radii[roundi(s.spacing)] = true
-		for other: Dictionary in w.settlements:
+		for other: SettlementData in w.settlements:
 			if s.i == other.i:
 				continue
 			var d := Vector2(s.x, s.y).distance_to(Vector2(other.x, other.y))
 			valid = valid and d >= (s.spacing + other.spacing) * 0.5
 	check(valid, "окрестности и взаимные расстояния учитываются для всего мира")
 	check(radii.size() > 1, "плотность различается между местами, нет равномерной решётки")
-	var before := var_to_bytes(w.settlements)
+	var before := var_to_bytes(EntityCodec.encode(w.settlements))
 	for k in 100: w.rng.next_float()
 	StageLandmarks._place_settlements(w)
-	check(var_to_bytes(w.settlements) == before, "повторное размещение независимо от общего RNG")
+	check(var_to_bytes(EntityCodec.encode(w.settlements)) == before, "повторное размещение независимо от общего RNG")
 	check(absf(StageLandmarks._settlement_density(w, 255, 64) - StageLandmarks._settlement_density(w, 256, 64)) < 0.02,
 		"плотность плавно проходит через границу областей")
 	var a := {x = 20.5, y = 30.5, i = 30 * w.W + 20, importance = 1.0}
@@ -76,8 +76,8 @@ func placement() -> void:
 func network() -> void:
 	var w := world()
 	for x in [230, 280, 530]:
-		w.settlements.append({x = x + 0.5, y = 64.5, i = 64 * w.W + x,
-			name = str(x), importance = 0.4 if x == 530 else 1.0, huts = []})
+		w.settlements.append(SettlementData.from_dict({x = x + 0.5, y = 64.5, i = 64 * w.W + x,
+			name = str(x), importance = 0.4 if x == 530 else 1.0, huts = []}))
 	w.peaks = [{x = 650.5, y = 90.5, i = 90 * w.W + 650}]
 	var surface := Heightfield.new(w, false)
 	var heights := surface.hv.duplicate()
@@ -95,7 +95,7 @@ func network() -> void:
 	check(w.path_mask[w.peaks[0].i] >= 2, "значимое место получает ответвление от общей сети")
 	# 8.9 extra: места и направления находятся по адресу, без чтения рельефа и леса областей.
 	var ids: Array = []
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		ids.append(WorldData.place_id("settlement", s.x, s.y))
 	check(w.place(ids[2]).src == w.settlements[2] and w.place(ids[2]).region == Vector2i(2, 0),
 		"место находится по устойчивому адресу вместе со своей областью")
@@ -107,7 +107,7 @@ func network() -> void:
 		"межрегиональные направления — связи сети с адресами обоих концов")
 	var far := w.far_destination(ids[0])
 	check(not far.is_empty() and far.region != Vector2i(0, 0), "далёкая цель выбирается в другой области по сети")
-	var before := var_to_bytes([w.settlements, w.trails, w.bridges, w.tunnels])
+	var before := var_to_bytes(EntityCodec.encode([w.settlements, w.trails, w.bridges, w.tunnels]))
 	var route_ids := routes.map(func(r: Dictionary) -> String: return r.id)
 	w.expand_territory(256)
 	w.expand_territory(768)
@@ -117,7 +117,7 @@ func network() -> void:
 	check(w.routes().map(func(r: Dictionary) -> String: return r.id).all(func(id: String) -> bool: return route_ids.has(id)),
 		"адреса направлений не зависят от порядка списка мест")
 	w.settlements = original
-	check(var_to_bytes([w.settlements, w.trails, w.bridges, w.tunnels]) == before, "расширение территории сохраняет места и маршруты")
+	check(var_to_bytes(EntityCodec.encode([w.settlements, w.trails, w.bridges, w.tunnels])) == before, "расширение территории сохраняет места и маршруты")
 
 
 func lone_shore() -> void:

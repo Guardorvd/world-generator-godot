@@ -37,12 +37,12 @@ func run() -> void:
 	_remove(dir)
 	RegionStream.root = dir.path_join("regions")
 	Saves.dir = dir.path_join("saves")
-	WorldCache.enabled = false
+	GameContext.scope.cache.enabled = false
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 	await process_frame
 	# 14.4+: соседние области — только с бесконечной генерацией; меню уже прочитало настройки игрока
-	GameSettings.infinite_world = true
+	GameContext.scope.settings.infinite_world = true
 	loaded = WorldLoader.load_world("Север-1234", 256)
 	_start({})
 	var size := WorldData.REGION_SIZE
@@ -117,7 +117,7 @@ func run() -> void:
 	if not goal_key.is_empty():
 		check(main.hud.goal.get("key") == goal_key, "цель в соседней области восстановлена")
 	if not quest_title.is_empty():
-		check(game.quests.active.get("title", "") == quest_title, "задание из поселения области восстановлено")
+		check(game.quests.active.title == quest_title, "задание из поселения области восстановлено")
 	# Назад к плану: поля ближних областей читаются с диска, узлы строятся снова.
 	check(await _travel(game.player.x, home, z), "обратный путь к стартовому плану пройден")
 	var back: Dictionary = stream.ledger.regions[near_key]

@@ -60,7 +60,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 				for name: String in ["h", "river", "water_level"]: surface[name][dst] = batch.surfaces[n][name][src]
 				if region.rect.has_point(Vector2i(x, y)): covered[dst] = 1
 		settlements.append_array(batch.settlements[n].duplicate(true))
-	settlements.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.id < b.id)
+	settlements.sort_custom(func(a: SettlementData, b: SettlementData) -> bool: return a.id < b.id)
 	var merged := {rect = bounds, sample_rect = bounds, fields = fields}
 	var w := Places.local_world(source, merged, surface)
 	w.path_mask = fields.path.duplicate()
@@ -81,8 +81,8 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		w.cost[i] = INF if open[i] == 0 else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
 	# Узлы: поселения, приходящие выходы закреплённых дорог, старая сеть плана.
 	var nodes: Array = []
-	for place: Dictionary in settlements:
-		var s: Dictionary = place.duplicate(true)
+	for place: SettlementData in settlements:
+		var s: SettlementData = place.duplicate(true)
 		s.x -= bounds.position.x
 		s.y -= bounds.position.y
 		s.i = floori(s.y) * w.W + floori(s.x)
@@ -174,22 +174,22 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	var village := PackedByteArray()
 	village.resize(w.N)
 	var reach := StageVegetation.VILLAGE_R
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		for y in range(maxi(0, ceili(s.y - reach)), mini(w.H - 1, floori(s.y + reach)) + 1):
 			for x in range(maxi(0, ceili(s.x - reach)), mini(w.W - 1, floori(s.x + reach)) + 1):
 				village[y * w.W + x] = 1
 	var out_places: Array = []
 	for k in w.settlements.size():
-		var s: Dictionary = w.settlements[k]
+		var s: SettlementData = w.settlements[k]
 		s.x += bounds.position.x
 		s.y += bounds.position.y
-		s.erase("i")
+		s.i = -1
 		s.net = labels[_root(groups, k)]
 		s.connections = []
 		for edge: Dictionary in edges:
 			if edge.from == s.id: s.connections.append(edge.to)
 			elif edge.to == s.id: s.connections.append(edge.from)
-		for hut: Dictionary in s.huts:
+		for hut: HutData in s.huts:
 			hut.x += bounds.position.x
 			hut.y += bounds.position.y
 		out_places.append(s)
@@ -217,7 +217,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
 		if plan.has_point(cell) and w.path_mask[i] > fields.path[i]: plan_paths[cell] = w.path_mask[i]
 	var bridges: Array = []
-	for span: Dictionary in w.bridges:
+	for span: BridgeData in w.bridges:
 		bridges.append({a = Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5) + Vector2(bounds.position),
 			b = Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5) + Vector2(bounds.position)})
 	var components := {}
@@ -287,9 +287,9 @@ static func _old_places(source: WorldData, bounds: Rect2i) -> PackedByteArray:
 			for cx in range(floori(x - r), ceili(x + r)):
 				if bounds.has_point(Vector2i(cx, cy)) and Vector2(cx + 0.5, cy + 0.5).distance_to(Vector2(x, y)) <= r:
 					blocked[(cy - bounds.position.y) * bounds.size.x + cx - bounds.position.x] = 1
-	for place: Dictionary in source.settlements + source.sites:
-		for hut: Dictionary in place.get("huts", []): mark.call(hut.x, hut.y, 1.5)
-	for span: Dictionary in source.bridges + source.tunnels:
+	for place: EntityRecord in source.settlements + source.sites:
+		for hut: HutData in EntityCodec.value(place, "huts", []): mark.call(hut.x, hut.y, 1.5)
+	for span: EntityRecord in source.bridges + source.tunnels:
 		var a := Vector2(span.a % source.W + 0.5, span.a / source.W + 0.5)
 		var b := Vector2(span.b % source.W + 0.5, span.b / source.W + 0.5)
 		var steps := maxi(1, ceili(a.distance_to(b)))
@@ -368,7 +368,7 @@ static func ready_corridor(w: WorldData, points: Array, open: PackedByteArray) -
 				if open[i] == 0: return false
 				if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
 					var on_bridge := false
-					for span: Dictionary in w.bridges:
+					for span: BridgeData in w.bridges:
 						var start := Vector2(span.a % w.W + 0.5, span.a / w.W + 0.5)
 						var end := Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5)
 						var axis := end - start

@@ -47,7 +47,7 @@ static func generate_layers(seed_text: String, size: int, on_progress: Callable 
 		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
 	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer)
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
-	var home := PlayerState.home(w)
+	var home: Variant = PlayerState.home(w)
 	w.territory_center = Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
 	w.expand_territory(size)
 	if on_layer.is_valid():

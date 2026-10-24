@@ -7,7 +7,7 @@ extends RefCounted
 ## С 9.0 размера мира нет (мир один), старый ключ world/size в файле просто не читается.
 
 const PATH := "user://settings.cfg"
-static var settings_path := PATH # тесты могут использовать отдельный файл, не профиль игрока
+var settings_path := PATH # тесты могут использовать отдельный файл, не профиль игрока
 const DisplayConfig := preload("res://scripts/game/display_config.gd")
 const MIN_MOUSE := 0.2           # пределы чувствительности и угла обзора, как у ползунков в меню
 const MAX_MOUSE := 3.0
@@ -37,30 +37,30 @@ const DRAW_LEVELS := [
 ]
 const DEFAULT_DRAW := 2 # высокая (решение пользователя в 9.8+)
 
-static var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
-static var invert_y := DEFAULT_INVERT_Y
-static var fov := DEFAULT_FOV            # угол обзора по вертикали, градусы
-static var head_bob := DEFAULT_HEAD_BOB  # покачивание и удары камеры пешком и на велосипеде
-static var fullscreen := DEFAULT_FULLSCREEN
-static var resolution := DisplayConfig.BASE
-static var render_scale := 1.0
-static var msaa := 2 # прежнее MSAA 4x
-static var vsync := true
-static var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
-static var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
-static var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
-static var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
-static var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
-static var start_hour_set := false  # час начала выбран игроком; иначе каждый мир начинается в случайный час
-static var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
-static var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
-static var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
+var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
+var invert_y := DEFAULT_INVERT_Y
+var fov := DEFAULT_FOV            # угол обзора по вертикали, градусы
+var head_bob := DEFAULT_HEAD_BOB  # покачивание и удары камеры пешком и на велосипеде
+var fullscreen := DEFAULT_FULLSCREEN
+var resolution := DisplayConfig.BASE
+var render_scale := 1.0
+var msaa := 2 # прежнее MSAA 4x
+var vsync := true
+var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
+var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
+var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
+var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
+var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
+var start_hour_set := false  # час начала выбран игроком; иначе каждый мир начинается в случайный час
+var last_seed := ""               # зерно последнего запущенного мира, в меню подставляется при открытии
+var recent_seeds: Array[String] = []    # последние запущенные зёрна, новое первым
+var favorite_seeds: Array[String] = []  # избранные зёрна (звёздочка в меню), в порядке добавления
 ## 14.4+: бесконечная генерация — соседние области за краем стартовой готовятся и по ним можно ездить.
 ## Выключена — мир это стартовая область, дальний рельеф виден, но выехать нельзя и области не готовятся
-static var infinite_world := false
+var infinite_world := false
 
 
-static func load_settings() -> void:
+func load_settings() -> void:
 	var cfg := ConfigFile.new()
 	if cfg.load(settings_path) != OK:
 		return
@@ -68,7 +68,7 @@ static func load_settings() -> void:
 
 
 ## Повреждённое отдельное поле не мешает прочитать остальные настройки.
-static func _apply_config(cfg: ConfigFile) -> void:
+func _apply_config(cfg: ConfigFile) -> void:
 	mouse = _number(cfg, "input", "mouse", mouse, MIN_MOUSE, MAX_MOUSE)
 	infinite_world = _flag(cfg, "world", "infinite", infinite_world)
 	invert_y = _flag(cfg, "input", "invert_y", invert_y)
@@ -96,7 +96,7 @@ static func _apply_config(cfg: ConfigFile) -> void:
 	favorite_seeds = _seeds(cfg, "favorites", FAVORITES_MAX)
 
 
-static func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
+func _number(cfg: ConfigFile, section: String, key: String, fallback: float, low: float, high: float) -> float:
 	var value: Variant = cfg.get_value(section, key, fallback)
 	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
 		return fallback
@@ -106,7 +106,7 @@ static func _number(cfg: ConfigFile, section: String, key: String, fallback: flo
 
 
 ## Список зёрен из файла: только непустые строки, без повторов, не длиннее поля ввода
-static func _seeds(cfg: ConfigFile, key: String, limit: int) -> Array[String]:
+func _seeds(cfg: ConfigFile, key: String, limit: int) -> Array[String]:
 	var out: Array[String] = []
 	var value: Variant = cfg.get_value("world", key, [])
 	if not (value is Array):
@@ -119,7 +119,7 @@ static func _seeds(cfg: ConfigFile, key: String, limit: int) -> Array[String]:
 
 
 ## Запущенный мир: первым в последних, лишние уходят
-static func remember_seed(seed_text: String) -> void:
+func remember_seed(seed_text: String) -> void:
 	last_seed = seed_text
 	recent_seeds.erase(seed_text)
 	recent_seeds.push_front(seed_text)
@@ -127,7 +127,7 @@ static func remember_seed(seed_text: String) -> void:
 
 
 ## Звёздочка: добавить в избранное или убрать; false — избранное уже полное
-static func toggle_favorite(seed_text: String) -> bool:
+func toggle_favorite(seed_text: String) -> bool:
 	if seed_text in favorite_seeds:
 		favorite_seeds.erase(seed_text)
 	elif favorite_seeds.size() < FAVORITES_MAX:
@@ -138,7 +138,7 @@ static func toggle_favorite(seed_text: String) -> bool:
 
 
 ## Зёрна, чьи миры держит кэш: последние и избранные
-static func keep_seeds() -> Array[String]:
+func keep_seeds() -> Array[String]:
 	var out: Array[String] = recent_seeds.duplicate()
 	for s in favorite_seeds:
 		if not s in out:
@@ -150,13 +150,13 @@ static func keep_seeds() -> Array[String]:
 	return out
 
 
-static func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool) -> bool:
+func _flag(cfg: ConfigFile, section: String, key: String, fallback: bool) -> bool:
 	var value: Variant = cfg.get_value(section, key, fallback)
 	return value if typeof(value) == TYPE_BOOL else fallback
 
 
 ## Возвращает настройки игрока к значениям по умолчанию; последнее зерно не трогает
-static func reset_defaults() -> void:
+func reset_defaults() -> void:
 	mouse = DEFAULT_MOUSE
 	invert_y = DEFAULT_INVERT_Y
 	fov = DEFAULT_FOV
@@ -174,7 +174,7 @@ static func reset_defaults() -> void:
 	start_hour_set = false
 
 
-static func save_settings() -> Error:
+func save_settings() -> Error:
 	var cfg := ConfigFile.new()
 	cfg.set_value("input", "mouse", mouse)
 	cfg.set_value("input", "invert_y", invert_y)
@@ -199,18 +199,18 @@ static func save_settings() -> Error:
 
 
 ## Полноэкранный режим или окно
-static func apply_window() -> void:
+func apply_window() -> void:
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree != null:
 		DisplayConfig.apply(tree.root, display_state())
 
 
-static func display_state() -> Dictionary:
+func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
 		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw}
 
 
-static func set_display_state(state: Dictionary) -> void:
+func set_display_state(state: Dictionary) -> void:
 	fullscreen = state.fullscreen
 	resolution = state.resolution
 	render_scale = state.render_scale
@@ -221,11 +221,21 @@ static func set_display_state(state: Dictionary) -> void:
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный
-static func pick_start_hour() -> float:
+func pick_start_hour() -> float:
 	return start_hour if start_hour_set else randf() * 24.0
 
 
 ## Общая громкость: шина Master, на нуле звук выключен совсем
-static func apply_volume() -> void:
+func apply_volume() -> void:
 	AudioServer.set_bus_volume_db(0, linear_to_db(maxf(volume, 0.001)))
 	AudioServer.set_bus_mute(0, volume <= 0.0)
+
+
+## Full in-memory reset; never touches the player profile.
+func reset() -> void:
+	reset_defaults()
+	settings_path = PATH
+	last_seed = ""
+	recent_seeds.clear()
+	favorite_seeds.clear()
+	infinite_world = false

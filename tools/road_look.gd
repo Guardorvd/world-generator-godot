@@ -1,7 +1,7 @@
 extends SceneTree
 ## 11.3: изолированная сцена полотна дорог без генерации мира. Ровный участок 64 × 64 м с метровой сеткой,
 ## извилистая дорога одного покрытия; цвет вершин и UV2 считаются так же, как RoadRefinement._vertex
-## (маска кромки, поперечная координата, номер покрытия). Материал — TerrainBuilder.material.
+## (маска кромки, поперечная координата, номер покрытия). Материал — GameContext.scope.terrain.material.
 ## Снимки: вид с велосипеда и сверху-сбоку для каждого покрытия. Нужно окно (не headless).
 ##   godot --path . --script res://tools/road_look.gd -- [--out <папка>] [--surfaces 1,2,6,7] [--shader <файл>]
 ## --shader — другой код шейдера рельефа (например, прошлая версия) для сравнения «было | стало».
@@ -173,7 +173,7 @@ func _build(surface: int) -> void:
 		for x in base.get_width():
 			var v := noise.get_noise_2d(x * 0.05, y * 0.05) * 0.06
 			base.set_pixel(x, y, Color(0.34 + v, 0.52 + v, 0.20 + v * 0.5))
-	var mat: ShaderMaterial = TerrainBuilderScript.material(base)
+	var mat: ShaderMaterial = GameContext.scope.terrain.material(base)
 	if shader_path != "":
 		var code := FileAccess.get_file_as_string(shader_path)
 		var sh := Shader.new()

@@ -1,5 +1,6 @@
 class_name VegetationLayer
 extends Node3D
+var settings: GameSettings = GameContext.scope.settings
 ## Неподвижные MultiMesh по чанкам, видам и силуэтам, Mesh LOD и точные AABB.
 ## 6.6+: подлесок и лесная поверхность обновляются вместе с травой в фоне.
 ## Главный поток передаёт один чанк за кадр.
@@ -142,7 +143,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		_defs[kind] = entry
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
-	_set_radii(GameSettings.draw)
+	_set_radii(settings.draw)
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb()

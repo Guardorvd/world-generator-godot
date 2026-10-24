@@ -69,7 +69,7 @@ static func _pins(w: WorldData) -> PackedFloat32Array:
 	for i in w.N:
 		pin[i] = smoothstep(SHORE.x, SHORE.y, w.dist_water[i])
 	var r := (PIN + PIN_FADE) / TILE + 1.0
-	for s: Dictionary in w.bridges + w.tunnels:
+	for s: EntityRecord in w.bridges + w.tunnels:
 		var ax: float = s.a % w.W + 0.5
 		var ay: float = s.a / w.W + 0.5
 		var bx: float = s.b % w.W + 0.5

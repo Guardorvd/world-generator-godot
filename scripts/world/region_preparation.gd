@@ -63,7 +63,7 @@ static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: D
 	# Глубоко копируется только то, что commit правит: выходы и метки сетей поселений.
 	var out := {regions = ledger.get("regions", {}).duplicate(), plan_paths = ledger.get("plan_paths", {}).duplicate(),
 		outlets = ledger.get("outlets", []).duplicate(true), exits = ledger.get("exits", []).duplicate(true),
-		settlements = ledger.get("settlements", []).duplicate(true), trails = ledger.get("trails", []).duplicate(),
+		settlements = EntityCodec.copy(EntityCodec.settlements(ledger.get("settlements", []))), trails = ledger.get("trails", []).duplicate(),
 		bridges = ledger.get("bridges", []).duplicate()}
 	var keys: Array[Vector2i] = []
 	for region: Dictionary in regions:
@@ -118,8 +118,8 @@ static func commit(ledger: Dictionary, regions: Array, networks: Array, batch: D
 		exit.net = merged.get(exit.net, exit.net)
 		exits.append(exit)
 	out.exits = exits
-	for s: Dictionary in out.settlements: s.net = merged.get(s.net, s.net)
-	out.settlements.append_array(roads.settlements.duplicate(true))
+	for s: SettlementData in out.settlements: s.net = merged.get(s.net, s.net)
+	out.settlements.append_array(EntityCodec.copy(EntityCodec.settlements(roads.settlements)))
 	out.trails.append_array(roads.trails.duplicate(true))
 	out.bridges.append_array(roads.bridges.duplicate(true))
 	for cell: Vector2i in roads.plan_paths:

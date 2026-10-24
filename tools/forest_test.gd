@@ -41,12 +41,12 @@ func fixture() -> WorldData:
 func _init() -> void:
 	Grid.allow_fast = false
 	var w := fixture()
-	var frozen := var_to_bytes([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements])
+	var frozen := var_to_bytes(EntityCodec.encode([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements]))
 	var rng_before := w.rng._a
 	StageVegetation.run(w)
 	check(w.rng._a == rng_before, "Лес не должен расходовать rng других этапов")
 	check(StageVegetation.canopy_at(w, 40.5, 48.5) < 0.3, "Просвет над дорогой не должен оставаться под сплошным пологом")
-	check(frozen == var_to_bytes([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements]), "Лес не должен менять географию, климат, пути и поселения")
+	check(frozen == var_to_bytes(EntityCodec.encode([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements])), "Лес не должен менять географию, климат, пути и поселения")
 	var young := 0
 	var old := 0
 	var occupied := {}

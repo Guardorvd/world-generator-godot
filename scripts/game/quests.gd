@@ -75,7 +75,7 @@ const PHOTO_TEXTS := [
 	"Нужен снимок для летописи. Подойдите ближе %s — в видоискателе место узнаётся сразу — снимите и привезите %s.",
 	"Художник просит вид на это место. Снимите его не дальше %s и привезите снимок %s.",
 ]
-var active := {}       # {id, kind, giver — id поселения, title, text, steps: [{do, place}], step}
+var active := QuestData.new()       # {id, kind, giver — id поселения, title, text, steps: [{do, place}], step}
 var cargo := false     # сумка за спиной
 var done := 0          # выполнено заданий
 var last := ""         # название последнего выполненного
@@ -93,7 +93,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	var spots: Array = []  # места для посещения и снимка: не поселения, не у порога и не за горизонтом
 	for p: Dictionary in places:
 		var d := center.distance_to(Vector2(p.x, p.y))
-		if p.kind != "settlement" and d > SPOT_MIN and d < FAR and (p.kind != "site" or p.src.get("rank", 0) >= 1):
+		if p.kind != "settlement" and d > SPOT_MIN and d < FAR and (p.kind != "site" or EntityCodec.value(p.src, "rank", 0) >= 1):
 			spots.append(p)
 	spots.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return center.distance_squared_to(Vector2(a.x, a.y)) < center.distance_squared_to(Vector2(b.x, b.y)))
 	var towns := neighbors.duplicate()
@@ -157,10 +157,10 @@ static func _variant(list: Array, id: String, salt := 0) -> String:
 
 ## Задание вида kind от поселения here: at[0] — главное место, дальше — следующие (куда отвезти снимок, второе место
 ## обхода и летописи, куда вернуться)
-static func _make(kind: String, here: Dictionary, at: Array) -> Dictionary:
+static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 	var target: Dictionary = at[0]
 	var id := _id(kind, here, target)
-	var q := {id = id, kind = kind, giver = here.key, target = target, step = 0}
+	var q := QuestData.new(id, kind, here.key, target)
 	var known_text := " Названия мест задания видны на карте и над ними."
 	match kind:
 		"delivery":
@@ -196,7 +196,7 @@ static func _make(kind: String, here: Dictionary, at: Array) -> Dictionary:
 
 
 ## Взять задание q (из offers). Прошлое активное бросается
-func accept(q: Dictionary) -> void:
+func accept(q: QuestData) -> void:
 	active = q.duplicate(true)
 	active.step = 0
 	cargo = false
@@ -207,7 +207,7 @@ func accept(q: Dictionary) -> void:
 
 
 func abandon() -> void:
-	active = {}
+	active = QuestData.new()
 	cargo = false
 	changed.emit()
 
@@ -215,7 +215,7 @@ func abandon() -> void:
 ## Седок упал с велосипеда. Хрупкий груз разбит: задание возвращается к шагу «взять у доски».
 ## Возвращает сообщение или пусто
 func crashed() -> String:
-	if active.get("kind") != "fragile" or not cargo:
+	if active.kind != "fragile" or not cargo:
 		return ""
 	cargo = false
 	active.step = 0
@@ -286,14 +286,14 @@ func _advance() -> String:
 	_done[active.id] = true
 	done += 1
 	by_giver[active.giver] = by_giver.get(active.giver, 0) + 1
-	active = {}
+	active = QuestData.new()
 	changed.emit()
 	return "Задание выполнено: %s" % last
 
 
 ## Только адреса мест: src и данные мира берутся из текущего мира.
 func save_state() -> Dictionary:
-	var q := active.duplicate(true)
+	var q := active.to_dict()
 	if not q.is_empty():
 		q.target = q.target.key
 		for s: Dictionary in q.steps:
@@ -343,7 +343,7 @@ func restore_state(d: Dictionary, places: Dictionary) -> bool:
 			if not places.has(s.place):
 				return false
 			s.place = places[s.place]
-	active = q
+	active = QuestData.from_dict(q)
 	cargo = d.cargo
 	done = d.done
 	last = d.last

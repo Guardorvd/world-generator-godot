@@ -263,7 +263,7 @@ func places() -> Array:
 func all_places() -> Array:
 	var out: Array = []
 	for kind: String in WorldData.PLACE_KINDS:
-		for src: Dictionary in world.get(kind + "s"):
+		for src: Variant in world.get(kind + "s"):
 			var p := world.place(WorldData.place_id(kind, src.x, src.y)).duplicate()
 			p.key = p.id
 			out.append(p)

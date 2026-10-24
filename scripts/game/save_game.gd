@@ -66,7 +66,7 @@ static func write_slot(data: Dictionary, slot := "auto") -> Error:
 	if err != OK:
 		return err
 	var path := path_for(data.seed, slot)
-	var raw := var_to_bytes(data)
+	var raw := var_to_bytes(EntityCodec.encode(data))
 	if raw.size() + 76 > MAX_BYTES:
 		return ERR_OUT_OF_MEMORY
 	var f := FileAccess.open(path + ".tmp", FileAccess.WRITE)

@@ -82,7 +82,7 @@ static func _place_settlements(w: WorldData) -> void:
 		# Радиусы обоих соседей действуют и через границу любой области.
 		var spacing: float = min_d * lerpf(1.35, 0.7, c[3])
 		var close := false
-		for s: Dictionary in settlements:
+		for s: SettlementData in settlements:
 			var dx: float = s.x - x
 			var dy: float = s.y - y
 			var separation: float = (spacing + s.spacing) * 0.5
@@ -94,13 +94,15 @@ static func _place_settlements(w: WorldData) -> void:
 		# Берег большой воды и удобная долина делают место узлом округи.
 		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
 		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3 + shore, 0.0, 1.0)
-		settlements.append({x = x, y = y, i = i, spacing = spacing, importance = importance,
-			name = w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)), huts = []})
+		var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
+		settlement.spacing = spacing
+		settlement.importance = importance
+		settlements.append(settlement)
 	# Посёлков — примерно треть, самые важные места; остальные — деревни.
-	var ranks: Array = settlements.map(func(s: Dictionary) -> float: return s.importance)
+	var ranks: Array = settlements.map(func(s: SettlementData) -> float: return s.importance)
 	ranks.sort()
 	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
-	for s: Dictionary in settlements:
+	for s: SettlementData in settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
 		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
 		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
@@ -120,9 +122,9 @@ static func lay_out(w: WorldData) -> void:
 	var W := w.W
 	var river := w.river_cells()
 	var ground := Heightfield.base_of(w)
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.layout", floori(s.x), floori(s.y))
-		var town: bool = s.get("town", false)
+		var town: bool = s.town
 		var plaza := 2.4 if town else 1.9
 		var slots: Array = [] # Vector4(порядок, x, y, поворот)
 		# Улицы: клетки путей вокруг площади; направление улицы — главная ось соседних клеток пути
@@ -161,8 +163,8 @@ static func lay_out(w: WorldData) -> void:
 			slots.append(Vector4(r + 3.0 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
 		# Vector4 сортируется встроенным сравнением: сначала ближние к площади места первого ряда
 		slots.sort()
-		var huts: Array = []
-		var homes: int = s.get("homes", 6)
+		var huts: Array[HutData] = []
+		var homes: int = s.homes
 		var placed := 0
 		for sl: Vector4 in slots:
 			if placed >= homes:
@@ -174,14 +176,14 @@ static func lay_out(w: WorldData) -> void:
 			var kind := _house_kind(s, r - plaza, rng.next_float())
 			if _crowded(huts, p, 1.95) or not _fits(w, ground, river, p, sl.w, kind):
 				continue
-			huts.append({x = p.x, y = p.y, v = floori(rng.next_float() * 4), t = kind, a = sl.w + (rng.next_float() - 0.5) * 0.12})
+			huts.append(HutData.new(p.x, p.y, floori(rng.next_float() * 4), kind, sl.w + (rng.next_float() - 0.5) * 0.12))
 			placed += 1
 		# Хозяйственный пояс: за частью домов, дальше от улицы — сарай, сеновал или поленница
-		var character: String = s.get("character", "")
+		var character: String = s.character
 		var farming := character.begins_with("земледель") or character.begins_with("торгов")
 		var chance := 0.7 if farming else (0.55 if character.begins_with("горн") or character.begins_with("лесн") else 0.35)
 		for h in placed:
-			var u: Dictionary = huts[h]
+			var u: HutData = huts[h]
 			if rng.next_float() > chance:
 				continue
 			var back := Vector2(-sin(u.a), -cos(u.a))
@@ -192,7 +194,7 @@ static func lay_out(w: WorldData) -> void:
 			var a: float = u.a + (PI / 2.0 if kind == "barn" and rng.next_float() < 0.5 else 0.0)
 			if p.distance_to(Vector2(s.x, s.y)) > LAYOUT_R - 0.3 or _crowded(huts, p, 1.45) or not _fits(w, ground, river, p, a, kind):
 				continue
-			huts.append({x = p.x, y = p.y, v = floori(rng.next_float() * 4), t = kind, a = a})
+			huts.append(HutData.new(p.x, p.y, floori(rng.next_float() * 4), kind, a))
 		# Колодец на краю площади, со стороны, дальней от путей
 		if town or rng.next_float() < 0.4:
 			var best := -1.0
@@ -206,21 +208,21 @@ static func lay_out(w: WorldData) -> void:
 					best = free
 					spot = p
 			if best >= 2.0 and _fits(w, ground, river, spot, atan2(s.x - spot.x, s.y - spot.y), "fountain"):
-				huts.append({x = spot.x, y = spot.y, v = 0, t = "fountain", a = atan2(s.x - spot.x, s.y - spot.y)})
+				huts.append(HutData.new(spot.x, spot.y, 0, "fountain", atan2(s.x - spot.x, s.y - spot.y)))
 		s.huts = huts
 
 
 ## Вид жилого дома: в горах и лесу — больше шале, у посёлка у площади — высокие дома
-static func _house_kind(s: Dictionary, from_plaza: float, r: float) -> String:
-	var character: String = s.get("character", "")
-	if s.get("town", false) and from_plaza < 1.6 and r < 0.6:
+static func _house_kind(s: SettlementData, from_plaza: float, r: float) -> String:
+	var character: String = s.character
+	if s.town and from_plaza < 1.6 and r < 0.6:
 		return "tall"
 	var chalets := 0.65 if character.begins_with("горн") or character.begins_with("лесн") else 0.35
 	return "chalet" if r < chalets else "house"
 
 
 static func _crowded(huts: Array, p: Vector2, gap: float) -> bool:
-	for u: Dictionary in huts:
+	for u: HutData in huts:
 		if Vector2(u.x, u.y).distance_squared_to(p) < gap * gap:
 			return true
 	return false

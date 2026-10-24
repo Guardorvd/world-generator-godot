@@ -11,7 +11,7 @@ func _initialize() -> void:
 	var versions := PackedInt32Array([WorldCache.SCHEMA_GEO_VERSION, WorldCache.SCHEMA_TRAILS_VERSION,
 		WorldCache.SCHEMA_NATURE_VERSION, WorldCache.SCHEMA_VIEW_VERSION])
 	var base := WorldCache.schema_keys(WorldCache.SCHEMA_WORLD_VERSION, versions)
-	check(base == WorldCache.layer_keys(), "производственные ключи равны явным версиям схем")
+	check(base == GameContext.scope.cache.layer_keys(), "производственные ключи равны явным версиям схем")
 	for changed in versions.size():
 		var next := versions.duplicate()
 		next[changed] += 1
@@ -24,12 +24,12 @@ func _initialize() -> void:
 	check(range(common.size()).all(func(k: int) -> bool: return common[k] != base[k]), "общая версия инвалидирует все слои")
 	var old_version: Variant = ProjectSettings.get_setting("application/config/version")
 	ProjectSettings.set_setting("application/config/version", "release-test-999")
-	WorldCache._layer_keys.clear()
-	check(WorldCache.layer_keys() == base, "версия приложения не влияет на ключи")
+	GameContext.scope.cache._layer_keys.clear()
+	check(GameContext.scope.cache.layer_keys() == base, "версия приложения не влияет на ключи")
 	ProjectSettings.set_setting("application/config/version", old_version)
-	var copy := WorldCache.layer_keys()
+	var copy := GameContext.scope.cache.layer_keys()
 	copy[0] = "changed-by-caller"
-	check(WorldCache.layer_keys() == base, "потребитель не может изменить опубликованные ключи")
+	check(GameContext.scope.cache.layer_keys() == base, "потребитель не может изменить опубликованные ключи")
 	var result := {keys = base}
 	var args := OS.get_cmdline_user_args()
 	if args.has("--packed"):

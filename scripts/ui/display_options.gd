@@ -59,7 +59,7 @@ func setup(host: Node) -> void:
 
 ## Элементы — по сохранённым настройкам (без сигналов)
 func sync() -> void:
-	var state := GameSettings.display_state()
+	var state := GameContext.scope.settings.display_state()
 	_sync_mode(state)
 	var nearest := 0
 	for i in SCALES.size():
@@ -96,19 +96,19 @@ func pending() -> bool:
 
 ## «Применить» нужна, только когда выбран другой видеорежим
 func _update_apply() -> void:
-	var state := GameSettings.display_state()
+	var state := GameContext.scope.settings.display_state()
 	apply_button.disabled = pending() or (mode.selected == (1 if state.fullscreen else 0)
 		and _sizes[resolution.selected] == state.resolution)
 
 ## Графика: сразу в GameSettings, на экран и на диск (тени и дальность игра читает из GameSettings)
 func apply_graphics() -> void:
-	var state := GameSettings.display_state()
+	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
 	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]
-	GameSettings.set_display_state(state)
+	GameContext.scope.settings.set_display_state(state)
 	_resize()
 	_host._settings_changed()
 
@@ -116,7 +116,7 @@ func apply_graphics() -> void:
 func preview() -> void:
 	if pending():
 		return
-	var state := GameSettings.display_state()
+	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
 	if chosen.fullscreen == state.fullscreen and chosen.resolution == state.resolution:
 		return
@@ -133,14 +133,14 @@ func preview() -> void:
 func keep() -> void:
 	if not pending():
 		return
-	var previous := GameSettings.display_state()
+	var previous := GameContext.scope.settings.display_state()
 	var state := previous.duplicate()
 	state.fullscreen = _pending.fullscreen
 	state.resolution = _pending.resolution
-	GameSettings.set_display_state(state)
-	var error := GameSettings.save_settings()
+	GameContext.scope.settings.set_display_state(state)
+	var error := GameContext.scope.settings.save_settings()
 	if error != OK:
-		GameSettings.set_display_state(previous)
+		GameContext.scope.settings.set_display_state(previous)
 		revert()
 		_host._message("Не удалось сохранить настройки", "Прежний режим экрана возвращён.\n" + error_string(error))
 		return
@@ -153,8 +153,8 @@ func revert() -> void:
 		return
 	_pending = {}
 	dialog.hide()
-	Config.apply(_window, GameSettings.display_state())
-	if not GameSettings.fullscreen and DisplayServer.get_name() != "headless":
+	Config.apply(_window, GameContext.scope.settings.display_state())
+	if not GameContext.scope.settings.fullscreen and DisplayServer.get_name() != "headless":
 		var usable := Config.usable_rect(_window)
 		_window.size = Config.fit_window(_old_geometry.size, usable.size)
 		var high := usable.end - _window.size
@@ -175,7 +175,7 @@ func tick() -> void:
 		dialog.dialog_text = "Изображение видно правильно?\nБез подтверждения прежний режим вернётся через %d с." % seconds
 
 func _resize() -> void:
-	Config.apply_quality(_window, _pending if pending() else GameSettings.display_state())
+	Config.apply_quality(_window, _pending if pending() else GameContext.scope.settings.display_state())
 
 func shutdown() -> void:
 	revert()

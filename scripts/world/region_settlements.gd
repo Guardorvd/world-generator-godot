@@ -37,8 +37,8 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) 
 					var density := density_at(source.seed_num, x, y)
 					var spacing := 96.0 * lerpf(1.35, 0.7, density)
 					var close := false
-					for old: Dictionary in source.settlements:
-						if Vector2(x + 0.5, y + 0.5).distance_to(Vector2(old.x, old.y)) < (spacing + old.get("spacing", 129.6)) * 0.5:
+					for old: SettlementData in source.settlements:
+						if Vector2(x + 0.5, y + 0.5).distance_to(Vector2(old.x, old.y)) < (spacing + EntityCodec.value(old, "spacing", 129.6)) * 0.5:
 							close = true
 							break
 					if close: continue
@@ -59,24 +59,24 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) 
 				+ (0.12 if w.dist_water[i] < 6.0 else 0.0), 0.0, 1.0)
 			var rng := WGRandom.at(source.seed_num, "settlement.huts", x, y)
 			var town := importance >= 0.8 # постоянный порог вместо ранга по ещё неизвестному миру
-			w.settlements.append({x = x - origin.x + 0.5, y = y - origin.y + 0.5, i = i,
+			w.settlements.append(SettlementData.from_dict({x = x - origin.x + 0.5, y = y - origin.y + 0.5, i = i,
 				spacing = c[4], importance = importance, town = town,
 				homes = (8 if town else 4) + roundi(importance * 3.0) + floori(rng.next_float() * 3),
 				style = floori(rng.next_float() * 4), character = StageLandmarks._character(w, i, town),
-				name = source.make_name(Names.SETTLEMENT, "settlement", x, y), huts = []})
+				name = source.make_name(Names.SETTLEMENT, "settlement", x, y), huts = []}))
 	# Тот же подбор домов, проверки девяти точек фундамента и хозяйственные постройки.
 	# Пока нет дорог, используется существующее кольцо вокруг площади.
 	StageLandmarks.lay_out(w)
 	var out: Array = []
-	for settlement: Dictionary in w.settlements:
+	for settlement: SettlementData in w.settlements:
 		if settlement.huts.is_empty(): continue
-		var s: Dictionary = settlement.duplicate(true)
+		var s: SettlementData = settlement.duplicate(true)
 		s.x += origin.x
 		s.y += origin.y
-		s.erase("i") # локальный индекс не является адресом в стартовом плане
+		s.i = -1 # локальный индекс не является адресом в стартовом плане
 		s.id = WorldData.place_id("settlement", s.x, s.y)
 		s.region = source.region_at(Vector2i(floori(s.x), floori(s.y)))
-		for hut: Dictionary in s.huts:
+		for hut: HutData in s.huts:
 			hut.x += origin.x
 			hut.y += origin.y
 		out.append(s)

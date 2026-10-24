@@ -9,6 +9,7 @@ extends RefCounted
 ## результат один и тот же, как бы ни легли задачи (до 2.0 поток мог застать их недописанными).
 
 var world: WorldData
+var service_scope: ServiceScope
 var heights: Heightfield
 var terrain_arrays: Array
 var terrain_chunks := {} # CPU-кэш окончательной геометрии, без узлов и GPU
@@ -29,8 +30,11 @@ static func px_for(size: int) -> int:
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable()) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null) -> WorldLoader:
+	if services == null:
+		services = GameContext.scope
 	var r := WorldLoader.new()
+	r.service_scope = services
 	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
@@ -40,15 +44,15 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		side.start(r._prepare.bind(w, px, w.base_heights))
 	# Картинки мира (текстура, карта, подстилка) тоже из кэша, если мир из кэша целиком (10.2)
 	var view := {}
-	if WorldCache.enabled:
-		var got := WorldCache.generate(seed_text, size, on_progress, on_climate)
+	if services.cache.enabled:
+		var got := services.cache.generate(seed_text, size, on_progress, on_climate)
 		r.world = got.world
 		r.from_cache = got.layers == WorldGenerator.LAYERS.size()
 		r.timings.cache_layers = got.layers
 		if r.from_cache:
 			if on_progress.is_valid():
 				on_progress.call(0.5, "Мир из кэша")
-			view = WorldCache.load_view(seed_text, size)
+			view = services.cache.load_view(seed_text, size)
 			r.timings.cache_view = int(not view.is_empty())
 			side.start(r._prepare.bind(r.world, px, null, view.is_empty()))
 	else:
@@ -121,8 +125,8 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.merge(side_ms)
-	if view.is_empty() and WorldCache.enabled:
-		WorldCache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
+	if view.is_empty() and services.cache.enabled:
+		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return r
 

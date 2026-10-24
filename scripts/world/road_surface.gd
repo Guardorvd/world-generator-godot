@@ -88,7 +88,7 @@ static func pick(w: WorldData, kind: String, x: float, y: float, v: float) -> in
 		return STONE if v < 0.5 or w.slope[i] > STONE_SLOPE * 0.6 else DIRT
 	var wooded := b == Biomes.FOREST or b == Biomes.TAIGA or b == Biomes.JUNGLE
 	if kind == "road":
-		for s: Dictionary in w.settlements:
+		for s: SettlementData in w.settlements:
 			if absf(s.x - x) < VILLAGE_R and absf(s.y - y) < VILLAGE_R and Grid.hypot(s.x - x, s.y - y) < VILLAGE_R:
 				return PACKED
 		return DIRT if v < ROAD_DIRT and not wooded and b != Biomes.SWAMP else GRAVEL

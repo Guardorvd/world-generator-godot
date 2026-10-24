@@ -5,7 +5,7 @@ extends PanelContainer
 signal closed
 signal destination_selected(place: Dictionary)
 signal bike_requested
-signal quest_accepted(quest: Dictionary)
+signal quest_accepted(quest: QuestData)
 signal quest_abandoned
 
 const Quests = preload("res://scripts/game/quests.gd")
@@ -70,7 +70,7 @@ func clear() -> void:
 
 ## places — открытые места (Hud.places); направления по дорогам берутся из индекса мира,
 ## поэтому видны и соседи за краем открытых земель. quests — задания игры, offers — что предлагает эта доска
-func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near: bool, quests: Quests = null, offers: Array = []) -> void:
+func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bool, quests: Quests = null, offers: Array = []) -> void:
 	clear()
 	# название и сведения одной строкой: высота доски уходит на задания
 	var head := HBoxContainer.new()
@@ -78,8 +78,8 @@ func open(settlement: Dictionary, world: WorldData, places: Array, bicycle_near:
 	_box.add_child(head)
 	_label(settlement.name, 25, head)
 	# с 9.5 в huts есть и сараи с колодцем: считаются только жилые дома
-	var homes: int = settlement.huts.filter(func(u: Dictionary) -> bool: return u.get("t", "house") in SettlementsBuilder.HOMES).size()
-	var info := _label("%s · домов: %d" % [settlement.get("character", "деревня"), homes], 15, head, MUTED)
+	var homes: int = settlement.huts.filter(func(u: Variant) -> bool: return EntityCodec.value(u, "t", "house") in SettlementsBuilder.HOMES).size()
+	var info := _label("%s · домов: %d" % [EntityCodec.value(settlement, "character", "деревня"), homes], 15, head, MUTED)
 	info.size_flags_vertical = Control.SIZE_SHRINK_END
 	var tabs := HBoxContainer.new()
 	tabs.add_theme_constant_override("separation", 6)
@@ -133,7 +133,7 @@ func _fit() -> void:
 
 
 ## Вкладка заданий: текущее задание со шагами и «Отказаться», ниже карточки предложений этой доски
-func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, offers: Array) -> void:
+func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offers: Array) -> void:
 	if quests == null:
 		_label("Заданий нет.", 15, page, MUTED)
 		return
@@ -164,16 +164,16 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 		return
 	var center := Vector2(settlement.x, settlement.y)
 	if busy:
-		offers = offers.filter(func(q: Dictionary) -> bool: return q.id != quests.active.id)
+		offers = offers.filter(func(q: QuestData) -> bool: return q.id != quests.active.id)
 		if offers.is_empty():
 			return
 		# одно задание за раз: остальные — строкой, взять можно после текущего
-		_label("Ещё здесь: %s — после текущего" % ", ".join(PackedStringArray(offers.map(func(q: Dictionary) -> String: return q.title))), 13, page, MUTED, PAGE_W)
+		_label("Ещё здесь: %s — после текущего" % ", ".join(PackedStringArray(offers.map(func(q: QuestData) -> String: return q.title))), 13, page, MUTED, PAGE_W)
 		return
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var thanks: int = quests.by_giver.get(here, 0)
 	_label("Задания поселения «%s»%s" % [settlement.name, " · выполнено для него: %d" % thanks if thanks > 0 else ""], 14, page, MUTED)
-	for q: Dictionary in offers:
+	for q: QuestData in offers:
 		var card := _card(page, Quests.KINDS[q.kind].color, false)
 		var head := HBoxContainer.new()
 		card.add_child(head)
@@ -192,7 +192,7 @@ func _quests_page(page: VBoxContainer, settlement: Dictionary, quests: Quests, o
 
 ## Название задания с пиктограммой вида (UiIcons.QUESTS) цвета вида; wrap — как у _label.
 ## В строке (head) растягивается сама надпись: её и возвращает
-func _titled(q: Dictionary, size: int, parent: Container, wrap := 0.0) -> Label:
+func _titled(q: QuestData, size: int, parent: Container, wrap := 0.0) -> Label:
 	var row := HBoxContainer.new()
 	row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	parent.add_child(row)
@@ -218,7 +218,7 @@ func _card(parent: Container, color: Color, current: bool) -> VBoxContainer:
 	return box
 
 
-func _routes_page(page: VBoxContainer, settlement: Dictionary, world: WorldData, places: Array) -> void:
+func _routes_page(page: VBoxContainer, settlement: Variant, world: WorldData, places: Array) -> void:
 	_label("Выберите цель — указатель появится на компасе и карте.", 14, page, MUTED, PAGE_W)
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var routes: Array = []

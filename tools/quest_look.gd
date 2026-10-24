@@ -29,9 +29,9 @@ func _initialize() -> void:
 	world.settlements = [home, {x = 180, y = 130, i = 1, name = "Каменка", importance = 1.0, connections = [0], huts = []}]
 	world.peaks = [{x = 160, y = 40, i = 2, name = "Седая"}]
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
-	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = 0, rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = 0, rank = 2}]
+	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2}]
 	for kind: String in WorldData.PLACE_KINDS:
-		for src: Dictionary in world.get(kind + "s"):
+		for src: Variant in world.get(kind + "s"):
 			places.append(SettlementPanel._target(world.place(WorldData.place_id(kind, src.x, src.y))))
 	_run()
 
@@ -57,20 +57,20 @@ func _arrived(place: Dictionary) -> bool:
 	return Vector2(place.x, place.y).distance_to(at) < 5.0
 
 
-func _by_kind(list: Array, kind: String) -> Dictionary:
-	for q: Dictionary in list:
+func _by_kind(list: Array, kind: String) -> QuestData:
+	for q: QuestData in list:
 		if q.kind == kind:
 			return q
-	return {}
+	return QuestData.new()
 
 
 func _logic() -> void:
 	var quests := Quests.new()
 	var offers := _offers(quests)
-	var kinds := offers.map(func(q: Dictionary) -> String: return q.kind)
+	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
 	_check(kinds.size() == 3 and kinds[0] in Quests.CARGO_KINDS and kinds[1] in ["photo", "chronicle"] and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход (%s)" % ", ".join(PackedStringArray(kinds)))
 	_check(offers == _offers(quests), "те же задания при повторном открытии доски")
-	_check(not offers.any(func(q: Dictionary) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
+	_check(not offers.any(func(q: QuestData) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
 	var changes := [0]
 	quests.changed.connect(func() -> void: changes[0] += 1)
 	# доставка: сумка у доски, цель на компасе только после неё, быстрое перемещение — по cargo
@@ -85,7 +85,7 @@ func _logic() -> void:
 	at = Vector2(180, 130)
 	var text := quests.tick(_arrived)
 	_check(text.begins_with("Задание выполнено") and not quests.cargo and quests.active.is_empty() and quests.done == 1, "сумка доставлена — задание выполнено, сумки нет")
-	_check(not _offers(quests).any(func(q: Dictionary) -> bool: return q.id == delivery.id), "выполненная доставка больше не предлагается")
+	_check(not _offers(quests).any(func(q: QuestData) -> bool: return q.id == delivery.id), "выполненная доставка больше не предлагается")
 	# снимок: только нужное место в прицеле, потом отвезти
 	var photo := Quests._make("photo", _place("Ольховка"), [_place("Седая"), _place("Каменка")])
 	quests.accept(photo)
@@ -197,7 +197,7 @@ func _run() -> void:
 	var quests := Quests.new()
 	hud.quests = quests
 	# доска с вкладкой заданий
-	var home: Dictionary = world.settlements[0]
+	var home: SettlementData = world.settlements[0]
 	var offers := _offers(quests)
 	hud.settlement_panel.open(home, world, [], true, quests, offers)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
@@ -207,7 +207,7 @@ func _run() -> void:
 	await _shot("quest_board")
 	# взять доставку кнопкой: текущее задание со шагами и «Отказаться»
 	var accepted := []
-	hud.settlement_panel.quest_accepted.connect(func(q: Dictionary) -> void: accepted.append(q))
+	hud.settlement_panel.quest_accepted.connect(func(q: QuestData) -> void: accepted.append(q))
 	for b: Button in buttons:
 		if b.tooltip_text == "Взять задание: " + Quests.KINDS[offers[0].kind].title.to_lower():
 			b.pressed.emit()

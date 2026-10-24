@@ -1,5 +1,6 @@
 class_name RegionStream
 extends Node3D
+var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## 13.9: соседние области в игре. Ближайшая к игроку неготовая область за краем плана готовится
 ## в задаче WorkerThreadPool (по одной): заготовка, реки, поселения, дороги, закрепление в журнале.
 ## Готовая область передаётся в существующую загрузку: OuterLand берёт её клетки (рельеф кусков,
@@ -80,7 +81,7 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 	_road_mat.shader = Shader.new()
 	_road_mat.shader.code = ROAD_SHADER
 	_road_mat.set_shader_parameter("road_color", ROAD_COLOR)
-	_road_mat.set_shader_parameter("detail_tex", TerrainBuilder.outer_material().get_shader_parameter("detail_tex"))
+	_road_mat.set_shader_parameter("detail_tex", terrain_builder.outer_material().get_shader_parameter("detail_tex"))
 
 
 ## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
@@ -99,7 +100,12 @@ static func read_ledger(w: WorldData) -> Dictionary:
 	if not saved is Dictionary or saved.get("format") != FORMAT:
 		push_warning("Журнал областей не прочитан: %s" % path)
 		return {}
-	return saved.ledger
+	var result: Dictionary = saved.ledger
+	result.settlements = EntityCodec.settlements(result.get("settlements", []))
+	for entry: Dictionary in result.get("regions", {}).values():
+		if entry.has("decor"):
+			entry.decor.settlements = EntityCodec.settlements(entry.decor.get("settlements", []))
+	return result
 
 
 ## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
@@ -160,7 +166,7 @@ func update(x: float, z: float) -> bool:
 		_out = {}
 		var out := _out
 		# Словари и вложенные массивы принадлежат задаче до wait_for_task_completion.
-		var snapshot := ledger.duplicate(true)
+		var snapshot: Dictionary = EntityCodec.copy(ledger)
 		var w := world
 		var dir := store_dir(world)
 		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, dir), false, "Область")
@@ -245,7 +251,7 @@ static func _write(path: String, value: Variant) -> Error:
 	var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
 	if f == null:
 		return FileAccess.get_open_error()
-	f.store_var(value)
+	f.store_var(EntityCodec.encode(value))
 	f.close()
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
@@ -371,7 +377,7 @@ func _show(key: Vector2i, arrays := {}) -> void:
 	places.settlements = decor.settlements
 	var built := SettlementsBuilder.build(node, places, heights)
 	var own: Array = []
-	for s: Dictionary in decor.settlements:
+	for s: SettlementData in decor.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		own.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
 	_shown[key] = {node = node, fires = built.fires, windows = built.windows, boards = own}

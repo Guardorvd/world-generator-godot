@@ -49,10 +49,10 @@ func run() -> void:
 	var other := state.duplicate(true)
 	other.seed = "another-world"
 	check(Saves.write_slot(other) == OK and Saves.read_slot(state.seed).data.seed == state.seed, "worlds isolated")
-	var old_dir := WorldCache.dir
-	WorldCache.dir = "res://.godot/save_test_cache"
-	WorldCache.keep_only([])
-	WorldCache.dir = old_dir
+	var old_dir := GameContext.scope.cache.dir
+	GameContext.scope.cache.dir = "res://.godot/save_test_cache"
+	GameContext.scope.cache.keep_only([])
+	GameContext.scope.cache.dir = old_dir
 	check(not Saves.read_slot(state.seed).data.is_empty(), "cache clear preserves progress")
 	var bad := state.duplicate(true)
 	bad.player.x = NAN
@@ -102,7 +102,7 @@ func run() -> void:
 
 func integration(main: Node) -> void:
 	print("Integration: generating one world")
-	WorldCache.enabled = false
+	GameContext.scope.cache.enabled = false
 	var loaded := WorldLoader.load_world("Север-1234", 256)
 	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
 	main.add_child(game)

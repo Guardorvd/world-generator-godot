@@ -115,7 +115,7 @@ func pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 		if spot.distance_to(mid) < CLEAR_R:
 			return {}
 	for list: Array in [world.settlements, world.sites]:
-		for place: Dictionary in list:
+		for place: EntityRecord in list:
 			if absf(place.x - mid.x / TILE) < VILLAGE and absf(place.y - mid.y / TILE) < VILLAGE:
 				return {}
 	if world.river[k] != 0 or world.dist_water[k] < 1.5 or h.depth_at(mid.x, mid.y) > 0.0:

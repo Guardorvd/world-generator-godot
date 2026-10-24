@@ -200,7 +200,7 @@ func build_structures() -> PackedInt32Array:
 	_cells = {}
 	var changed := PackedInt32Array()
 	var tunnels: Array = []
-	for t: Dictionary in world.tunnels:
+	for t: TunnelData in world.tunnels:
 		var s := _axis(t.a, t.b, true)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
@@ -212,7 +212,7 @@ func build_structures() -> PackedInt32Array:
 			_cut(t, inside, changed)
 	# концы мостов меряются после выемок (с 6.9): мост у портала стоит на опущенном рельефе, как при генерации,
 	# и повторный вызов даёт те же высоты. Порядок в structures прежний: мосты, затем туннели
-	for b: Dictionary in world.bridges:
+	for b: BridgeData in world.bridges:
 		var s := _axis(b.a, b.b, false)
 		s.ay = ground_at(s.ax, s.az)
 		s.by = ground_at(s.bx, s.bz)
@@ -339,7 +339,7 @@ static func _axis_between(a: Vector2, b: Vector2, tunnel: bool) -> Dictionary:
 
 ## Высота настила или пола сооружения s в t метрах от начала оси. Мост выгнут дугой
 ## (s.arch — подъём середины), чтобы длинный настил не лежал на воде
-func level(s: Dictionary, t: float) -> float:
+func level(s: Variant, t: float) -> float:
 	var u := clampf(t / s.len, 0.0, 1.0)
 	if s.arch == 0.0:
 		return lerpf(s.ay, s.by, u)

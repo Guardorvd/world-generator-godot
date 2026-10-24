@@ -80,31 +80,31 @@ func run() -> int:
 	var valid := true
 	var seen := {}
 	var all: Array = p.settlements[0] + p.settlements[1]
-	for s: Dictionary in all:
+	for s: SettlementData in all:
 		valid = valid and not seen.has(s.id) and not s.has("i") and not s.huts.is_empty()
 		seen[s.id] = true
-		for other: Dictionary in all:
+		for other: SettlementData in all:
 			if s.id != other.id:
 				valid = valid and Vector2(s.x, s.y).distance_to(Vector2(other.x, other.y)) >= (s.spacing + other.spacing) * 0.5
-		for hut: Dictionary in s.huts:
+		for hut: HutData in s.huts:
 			valid = valid and Rect2i(s.region * 256, Vector2i(256, 256)).has_point(Vector2i(floori(hut.x), floori(hut.y)))
 	check(valid, "мировые адреса, расстояния между соседями и дома внутри области")
 	var q := Regions.finish_neighbors(source, [right, left], [no_water, no_water])
-	check(var_to_bytes(p.settlements[0]) == var_to_bytes(q.settlements[1]), "поселения не зависят от порядка подготовки")
+	check(var_to_bytes(EntityCodec.encode(p.settlements[0])) == var_to_bytes(EntityCodec.encode(q.settlements[1])), "поселения не зависят от порядка подготовки")
 	if not OS.get_cmdline_user_args().has("--water-only"):
 		# Дороги ищутся как в игре, через C# (без сборки .NET — тот же поиск на GDScript); с 13.8 выходов больше.
 		var gdscript_only := not Grid.allow_fast
 		Grid.allow_fast = true
-		var before_roads := var_to_bytes(p)
+		var before_roads := var_to_bytes(EntityCodec.encode(p))
 		var roads := Regions.prepare_roads(source, [left, right], p)
 		check(roads.ready and roads.connections.size() == all.size() - 1 and not roads.trails.is_empty(),
 			"13.5: поселения соседних областей соединены без лишних дорог")
 		var reverse_roads := Regions.prepare_roads(source, [right, left], q)
-		check(var_to_bytes(roads) == var_to_bytes(reverse_roads) and before_roads == var_to_bytes(p),
+		check(var_to_bytes(EntityCodec.encode(roads)) == var_to_bytes(EntityCodec.encode(reverse_roads)) and before_roads == var_to_bytes(EntityCodec.encode(p)),
 			"13.5: дороги независимы от порядка соседей и не меняют входные данные")
 		var houses_clear := true
-		for settlement: Dictionary in roads.settlements:
-			for hut: Dictionary in settlement.huts:
+		for settlement: SettlementData in roads.settlements:
+			for hut: HutData in settlement.huts:
 				var i: int = (floori(hut.y) - roads.sample_rect.position.y) * roads.sample_rect.size.x + floori(hut.x) - roads.sample_rect.position.x
 				houses_clear = houses_clear and roads.path_mask[i] < 2
 		check(houses_clear, "13.5: дома перестроены вдоль улиц, полотно свободно")
@@ -121,7 +121,7 @@ func run() -> int:
 		# 13.8: выходы на свободные стороны остаются, но связи через реку и мосты — нет.
 		# 14.4: поселений в области больше — связи внутри одного берега остаются, через реку — нет.
 		var side_of := {}
-		for settlement: Dictionary in broken.settlements:
+		for settlement: SettlementData in broken.settlements:
 			side_of[settlement.id] = settlement.x < 256.0
 		var across: Array = broken.connections.filter(func(e: Dictionary) -> bool:
 			return side_of.has(e.from) and side_of.has(e.to) and side_of[e.from] != side_of[e.to])
@@ -133,7 +133,7 @@ func run() -> int:
 				if divided.surfaces[n].river[i] == 0: continue
 				divided.surfaces[n].h[i] = 0.14
 				divided.surfaces[n].water_level[i] = 0.1475
-		var before_bridge := var_to_bytes(divided)
+		var before_bridge := var_to_bytes(EntityCodec.encode(divided))
 		var crossed := Regions.prepare_roads(source, [left, right], divided)
 		check(crossed.ready and not crossed.bridges.is_empty() and crossed.connections.size() == all.size() - 1,
 			"13.6: река на стыке областей пересечена мостом, поселения связаны")
@@ -141,7 +141,7 @@ func run() -> int:
 		mirrored.surfaces.reverse()
 		mirrored.settlements.reverse()
 		var reversed_bridge := Regions.prepare_roads(source, [right, left], mirrored)
-		check(var_to_bytes(crossed) == var_to_bytes(reversed_bridge) and var_to_bytes(divided) == before_bridge,
+		check(var_to_bytes(EntityCodec.encode(crossed)) == var_to_bytes(EntityCodec.encode(reversed_bridge)) and var_to_bytes(EntityCodec.encode(divided)) == before_bridge,
 			"13.6: мосты детерминированы и не меняют принятую воду")
 		var shores: bool = not crossed.bridges.is_empty()
 		for bridge: Dictionary in crossed.bridges:
@@ -152,9 +152,9 @@ func run() -> int:
 		pinning(no_water)
 		Grid.allow_fast = not gdscript_only
 	source.settlements = all.duplicate(true)
-	var old := var_to_bytes(source.settlements)
+	var old := var_to_bytes(EntityCodec.encode(source.settlements))
 	var excluded := Places.prepare(source, left, p.surfaces[0])
-	check(excluded.settlements.is_empty() and old == var_to_bytes(source.settlements), "старые деревни сохраняются и исключают новые рядом")
+	check(excluded.settlements.is_empty() and old == var_to_bytes(EntityCodec.encode(source.settlements)), "старые деревни сохраняются и исключают новые рядом")
 	check(not Places.prepare(source, left, {ready = false}).ready, "поселения ждут готовую воду")
 	source.settlements.clear()
 	var ocean := plain(Rect2i(-256, 0, 256, 256))
@@ -199,17 +199,17 @@ func pinning(no_water: Dictionary) -> void:
 	plan.dist_ocean.fill(50.0)
 	plan.biome.fill(Biomes.GRASS)
 	for y in plan.H: plan.path_mask[y * plan.W + 220] = 3
-	var plan_before := var_to_bytes([plan.h, plan.path_mask, plan.settlements])
+	var plan_before := var_to_bytes(EntityCodec.encode([plan.h, plan.path_mask, plan.settlements]))
 	var east := Regions.pin(plain(Rect2i(256, 0, 256, 256)), plan, {})
 	check(east.fields.fixed[Batch.index(east, 255, 10)] == 1 and east.fields.path[Batch.index(east, 255, 10)] == 0,
 		"13.8: ореол на стороне плана закреплён его клетками")
 	var p := Regions.finish_neighbors(plan, [east], [no_water])
 	var roads := Regions.prepare_roads(plan, [east], p, {})
 	var linked: bool = roads.ready and not roads.settlements.is_empty() and not roads.plan_paths.is_empty()
-	for s: Dictionary in roads.settlements: linked = linked and s.net == "plan"
+	for s: SettlementData in roads.settlements: linked = linked and s.net == "plan"
 	var approach := false
 	for trail: Dictionary in roads.trails: approach = approach or trail.approach
-	check(linked and approach and var_to_bytes([plan.h, plan.path_mask, plan.settlements]) == plan_before,
+	check(linked and approach and var_to_bytes(EntityCodec.encode([plan.h, plan.path_mask, plan.settlements])) == plan_before,
 		"13.8: поселения соседа связаны подходом со старой дорогой, план не изменён")
 	var down: Array = roads.exits.filter(func(e: Dictionary) -> bool: return e.dy == 1)
 	check(down.size() == 1 and down[0].y == 256.0 and down[0].net == "plan" and roads.exits.all(func(e: Dictionary) -> bool: return e.dx >= 0),
@@ -218,7 +218,7 @@ func pinning(no_water: Dictionary) -> void:
 	var ledger: Dictionary = done.ledger
 	check(done.ready and ledger.regions.has(Vector2i(1, 0)) and not Regions.commit(ledger, [east], [no_water], p, roads).ready,
 		"13.8: принятая область закрепляется один раз")
-	var ledger_before := var_to_bytes(ledger)
+	var ledger_before := var_to_bytes(EntityCodec.encode(ledger))
 	var south := Regions.pin(plain(Rect2i(256, 256, 256, 256)), plan, ledger)
 	var seam := true
 	for x in range(256, 512):
@@ -235,10 +235,10 @@ func pinning(no_water: Dictionary) -> void:
 			continued = continued or trail.pts[0].x == down[0].x and trail.pts[0].y == down[0].y \
 				or trail.pts[-1].x == down[0].x and trail.pts[-1].y == down[0].y
 	var joined: bool = next.ready and not next.settlements.is_empty()
-	for s: Dictionary in next.settlements: joined = joined and s.net == "plan"
+	for s: SettlementData in next.settlements: joined = joined and s.net == "plan"
 	check(joined and continued and outside, "13.8: сосед продолжает выход закреплённой дороги, не заходя в готовые клетки")
 	var later := Regions.commit(ledger, [south], [no_water], p2, next)
-	check(later.ready and var_to_bytes(ledger) == ledger_before and later.ledger.exits.all(func(e: Dictionary) -> bool:
+	check(later.ready and var_to_bytes(EntityCodec.encode(ledger)) == ledger_before and later.ledger.exits.all(func(e: Dictionary) -> bool:
 		return not Rect2i(256, 256, 256, 256).has_point(Vector2i(floori(e.x + e.dx * 0.5), floori(e.y + e.dy * 0.5)))),
 		"13.8: продолженный выход снят, прежний журнал не изменён")
 

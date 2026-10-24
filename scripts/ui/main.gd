@@ -60,35 +60,35 @@ static func random_seed() -> String:
 
 
 func _ready() -> void:
-	GameSettings.load_settings()
-	GameSettings.apply_window()
-	GameSettings.apply_volume()
+	GameContext.scope.settings.load_settings()
+	GameContext.scope.settings.apply_window()
+	GameContext.scope.settings.apply_volume()
 	# в поле — зерно последнего мира (если было), иначе случайное
-	seed_edit.text = GameSettings.last_seed if not GameSettings.last_seed.is_empty() else random_seed()
+	seed_edit.text = GameContext.scope.settings.last_seed if not GameContext.scope.settings.last_seed.is_empty() else random_seed()
 	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
 	_progress_enabled = get_tree().current_scene == self
-	WorldCache.enabled = _progress_enabled
+	GameContext.scope.cache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
 	# 14.4+: бесконечная генерация (по умолчанию выключена), с предупреждением, пока она не доделана
-	%Infinite.set_pressed_no_signal(GameSettings.infinite_world)
-	%InfiniteWarning.visible = GameSettings.infinite_world
+	%Infinite.set_pressed_no_signal(GameContext.scope.settings.infinite_world)
+	%InfiniteWarning.visible = GameContext.scope.settings.infinite_world
 	%Infinite.toggled.connect(func(on: bool) -> void:
-		GameSettings.infinite_world = on
+		GameContext.scope.settings.infinite_world = on
 		%InfiniteWarning.visible = on
-		GameSettings.save_settings())
+		GameContext.scope.settings.save_settings())
 	display_options = DisplayOptions.new()
 	display_options.setup(self)
-	if WorldCache.enabled:
-		WorldCache.install_bundled()
-		WorldCache.keep_only(GameSettings.keep_seeds())
+	if GameContext.scope.cache.enabled:
+		GameContext.scope.cache.install_bundled()
+		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	var tabs := ButtonGroup.new()
 	for tab: String in ["recent", "favorites", "recommended", "saved"]:
 		var b: Button = _tab_button(tab)
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
-	_show_seed_tab("saved" if not Saves.seeds().is_empty() else ("recent" if not GameSettings.recent_seeds.is_empty() else "recommended"))
+	_show_seed_tab("saved" if not Saves.seeds().is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended"))
 	%LoadPreview.texture = null
 	get_viewport().size_changed.connect(_fit_menu)
 	_show("menu")
@@ -130,7 +130,7 @@ func _close_settings() -> void:
 	if display_options != null:
 		display_options.revert()
 	_save_due = -1
-	GameSettings.save_settings()
+	GameContext.scope.settings.save_settings()
 	_show(_settings_from)
 
 
@@ -142,19 +142,19 @@ func _settings_changed() -> void:
 func _flush_settings() -> void:
 	if _save_due >= 0 and Time.get_ticks_msec() >= _save_due:
 		_save_due = -1
-		GameSettings.save_settings()
+		GameContext.scope.settings.save_settings()
 
 
 ## Ставит ползунки и флажки в соответствие с GameSettings; без сигналов, чтобы не сохранять лишнее
 func _sync_settings_controls() -> void:
-	%MouseSlider.set_value_no_signal(GameSettings.mouse)
-	%FovSlider.set_value_no_signal(GameSettings.fov)
-	%InvertY.set_pressed_no_signal(GameSettings.invert_y)
-	%HeadBob.set_pressed_no_signal(GameSettings.head_bob)
-	%VolumeSlider.set_value_no_signal(GameSettings.volume)
-	%DaySlider.set_value_no_signal(GameSettings.day_minutes)
-	%StartHourSlider.set_value_no_signal(GameSettings.start_hour)
-	%RandomHour.set_pressed_no_signal(not GameSettings.start_hour_set)
+	%MouseSlider.set_value_no_signal(GameContext.scope.settings.mouse)
+	%FovSlider.set_value_no_signal(GameContext.scope.settings.fov)
+	%InvertY.set_pressed_no_signal(GameContext.scope.settings.invert_y)
+	%HeadBob.set_pressed_no_signal(GameContext.scope.settings.head_bob)
+	%VolumeSlider.set_value_no_signal(GameContext.scope.settings.volume)
+	%DaySlider.set_value_no_signal(GameContext.scope.settings.day_minutes)
+	%StartHourSlider.set_value_no_signal(GameContext.scope.settings.start_hour)
+	%RandomHour.set_pressed_no_signal(not GameContext.scope.settings.start_hour_set)
 	if display_options != null:
 		display_options.sync()
 	_show_values()
@@ -167,14 +167,14 @@ func _on_reset_settings() -> void:
 
 
 func _do_reset_settings() -> void:
-	var display_state := GameSettings.display_state()
-	GameSettings.reset_defaults()
+	var display_state := GameContext.scope.settings.display_state()
+	GameContext.scope.settings.reset_defaults()
 	# видеорежим меняется только через «Применить» и подтверждение; графика — сразу
-	var defaults := GameSettings.display_state()
-	GameSettings.fullscreen = display_state.fullscreen
-	GameSettings.resolution = display_state.resolution
-	GameSettings.apply_volume()
-	GameSettings.save_settings()
+	var defaults := GameContext.scope.settings.display_state()
+	GameContext.scope.settings.fullscreen = display_state.fullscreen
+	GameContext.scope.settings.resolution = display_state.resolution
+	GameContext.scope.settings.apply_volume()
+	GameContext.scope.settings.save_settings()
 	_save_due = -1
 	_sync_settings_controls()
 	if display_options != null:
@@ -183,59 +183,59 @@ func _do_reset_settings() -> void:
 
 
 func _show_values() -> void:
-	%MouseValue.text = "%.2f×" % GameSettings.mouse
-	%FovValue.text = "%d°" % roundi(GameSettings.fov)
-	%VolumeValue.text = "%d %%" % roundi(GameSettings.volume * 100.0)
-	%DayValue.text = "%d мин" % roundi(GameSettings.day_minutes) if GameSettings.day_minutes > 0.0 else "время стоит"
-	%StartHourValue.text = DayCycle.clock(GameSettings.start_hour) if GameSettings.start_hour_set else "случайный"
+	%MouseValue.text = "%.2f×" % GameContext.scope.settings.mouse
+	%FovValue.text = "%d°" % roundi(GameContext.scope.settings.fov)
+	%VolumeValue.text = "%d %%" % roundi(GameContext.scope.settings.volume * 100.0)
+	%DayValue.text = "%d мин" % roundi(GameContext.scope.settings.day_minutes) if GameContext.scope.settings.day_minutes > 0.0 else "время стоит"
+	%StartHourValue.text = DayCycle.clock(GameContext.scope.settings.start_hour) if GameContext.scope.settings.start_hour_set else "случайный"
 
 
 func _on_mouse_changed(v: float) -> void:
-	GameSettings.mouse = v
+	GameContext.scope.settings.mouse = v
 	_settings_changed()
 	_show_values()
 
 
 func _on_fov_changed(v: float) -> void:
-	GameSettings.fov = v
+	GameContext.scope.settings.fov = v
 	_settings_changed()
 	_show_values()
 
 
 func _on_volume_changed(v: float) -> void:
-	GameSettings.volume = v
-	GameSettings.apply_volume()
+	GameContext.scope.settings.volume = v
+	GameContext.scope.settings.apply_volume()
 	_settings_changed()
 	_show_values()
 
 
 func _on_day_changed(v: float) -> void:
-	GameSettings.day_minutes = v
+	GameContext.scope.settings.day_minutes = v
 	_settings_changed()
 	_show_values()
 
 
 func _on_start_hour_changed(v: float) -> void:
-	GameSettings.start_hour = v
-	GameSettings.start_hour_set = true
+	GameContext.scope.settings.start_hour = v
+	GameContext.scope.settings.start_hour_set = true
 	%RandomHour.set_pressed_no_signal(false)
 	_settings_changed()
 	_show_values()
 
 
 func _on_random_hour_toggled(on: bool) -> void:
-	GameSettings.start_hour_set = not on
+	GameContext.scope.settings.start_hour_set = not on
 	_settings_changed()
 	_show_values()
 
 
 func _on_invert_toggled(on: bool) -> void:
-	GameSettings.invert_y = on
+	GameContext.scope.settings.invert_y = on
 	_settings_changed()
 
 
 func _on_head_bob_toggled(on: bool) -> void:
-	GameSettings.head_bob = on
+	GameContext.scope.settings.head_bob = on
 	_settings_changed()
 
 
@@ -259,7 +259,7 @@ func _tab_button(tab: String) -> Button:
 ## Превью карты мира из кэша (null — мир ещё не запускали)
 func _preview_tex(seed_text: String) -> Texture2D:
 	if not _previews.has(seed_text):
-		var img := WorldCache.preview(seed_text) if WorldCache.enabled else null
+		var img := GameContext.scope.cache.preview(seed_text) if GameContext.scope.cache.enabled else null
 		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
 	return _previews[seed_text]
 
@@ -267,9 +267,9 @@ func _preview_tex(seed_text: String) -> Texture2D:
 ## Как быстро мир откроется: [коротко для строки, подробно для панели]. Без слов о кэше: игроку важно,
 ## ждать ли около минуты; подробности — в «Хранилище миров»
 func _world_status(seed_text: String) -> Array:
-	if not WorldCache.enabled:
+	if not GameContext.scope.cache.enabled:
 		return ["", ""]
-	if WorldCache.ready_layers(seed_text) > 0:
+	if GameContext.scope.cache.ready_layers(seed_text) > 0:
 		return ["быстрый запуск", "Мир уже создавался и откроется быстро."]
 	return ["", "Мир создастся при запуске, это около минуты."]
 
@@ -288,9 +288,9 @@ func _show_seed_tab(tab: String) -> void:
 		"saved":
 			rows = Saves.seeds().map(func(s: String) -> Dictionary: return {seed = s, note = "Прогресс"})
 		"recent":
-			rows = GameSettings.recent_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
+			rows = GameContext.scope.settings.recent_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
 		"favorites":
-			rows = GameSettings.favorite_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
+			rows = GameContext.scope.settings.favorite_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
 		"recommended":
 			rows = RecommendedSeeds.SEEDS
 	if rows.is_empty():
@@ -367,7 +367,7 @@ func _seed_row(seed_text: String, note: String) -> Button:
 		sub_label.add_theme_font_size_override("font_size", 12)
 		texts.add_child(sub_label)
 	box.add_child(texts)
-	var fav := seed_text in GameSettings.favorite_seeds
+	var fav := seed_text in GameContext.scope.settings.favorite_seeds
 	var star := Button.new()
 	star.theme_type_variation = &"IconButton"
 	star.icon = UiIcons.star(fav)
@@ -375,7 +375,7 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	star.custom_minimum_size = Vector2(40, 40)
 	star.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	star.focus_mode = Control.FOCUS_NONE
-	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
+	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.disabled = full
 	star.tooltip_text = _star_tip(fav, full)
 	star.pressed.connect(_on_star.bind(seed_text))
@@ -427,8 +427,8 @@ func _update_selection() -> void:
 	%WorldStatus.text = _world_status(seed_text)[1] if not seed_text.is_empty() \
 		else "Пустое поле — будет случайный мир."
 	var star: Button = %Star
-	var fav := seed_text in GameSettings.favorite_seeds
-	var full := not fav and GameSettings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
+	var fav := seed_text in GameContext.scope.settings.favorite_seeds
+	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.icon = UiIcons.star(fav)
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
@@ -448,16 +448,16 @@ func _on_star_selected() -> void:
 
 
 func _on_star(seed_text: String) -> void:
-	GameSettings.toggle_favorite(seed_text)
-	GameSettings.save_settings()
-	if WorldCache.enabled:
-		WorldCache.keep_only(GameSettings.keep_seeds())
+	GameContext.scope.settings.toggle_favorite(seed_text)
+	GameContext.scope.settings.save_settings()
+	if GameContext.scope.cache.enabled:
+		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	_show_seed_tab(_seed_tab)
 
 
 ## Хранилище миров: сколько готовых миров и места; очистка не трогает сохранения прогресса
 func _open_storage() -> void:
-	var u := WorldCache.usage() if WorldCache.enabled else {worlds = 0, bytes = 0}
+	var u := GameContext.scope.cache.usage() if GameContext.scope.cache.enabled else {worlds = 0, bytes = 0}
 	var body := "Готовых миров нет." if u.worlds == 0 else "Готовых миров: %d, занято %d МБ." % [u.worlds, roundi(u.bytes / 1048576.0)]
 	body += "\nНедавние и избранные миры хранятся готовыми и открываются быстрее. Если очистить, они создадутся заново при запуске; сохранения прогресса и задания останутся."
 	_ask("Хранилище миров", body, "Очистить", true, _on_clear_cache)
@@ -466,7 +466,7 @@ func _open_storage() -> void:
 
 
 func _on_clear_cache() -> void:
-	WorldCache.keep_only([])
+	GameContext.scope.cache.keep_only([])
 	_previews.clear()
 	_show_seed_tab(_seed_tab)
 
@@ -530,11 +530,11 @@ func _on_start() -> void:
 	if latest.data.is_empty() and _has_save(seed_text):
 		_message("Не удалось загрузить прогресс", latest.error + " Файлы оставлены без изменений.")
 		return
-	GameSettings.remember_seed(seed_text)
-	GameSettings.save_settings()
+	GameContext.scope.settings.remember_seed(seed_text)
+	GameContext.scope.settings.save_settings()
 	# мир, выпавший из последних и не избранный, больше не хранится
-	if WorldCache.enabled:
-		WorldCache.keep_only(GameSettings.keep_seeds())
+	if GameContext.scope.cache.enabled:
+		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	start_game(seed_text, WorldGenerator.START_SIZE, latest.slot)
 
 
@@ -792,4 +792,4 @@ func _exit_tree() -> void:
 	for t in [gen_thread, bg_thread]:
 		if t != null and t.is_started():
 			t.wait_to_finish()
-	WorldCache.wait_writes()   # мир дописывается в кэш в фоне; оборванная запись осталась бы только .tmp
+	GameContext.scope.cache.wait_writes()   # мир дописывается в кэш в фоне; оборванная запись осталась бы только .tmp

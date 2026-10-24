@@ -111,12 +111,12 @@ static func fields(w: WorldData) -> Dictionary:
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		for y in range(maxi(0, ceili(s.y - VILLAGE_R)), mini(H - 1, floori(s.y + VILLAGE_R)) + 1):
 			for x in range(maxi(0, ceili(s.x - VILLAGE_R)), mini(W - 1, floori(s.x + VILLAGE_R)) + 1):
 				village[y * W + x] = 1
 	# Поляны у хуторов, домов и вышек (с 9.3); руины остаются в лесу
-	for s: Dictionary in w.sites:
+	for s: SiteData in w.sites:
 		var r: float = s.clear
 		for y in range(maxi(0, ceili(s.y - r)), mini(H - 1, floori(s.y + r)) + 1):
 			for x in range(maxi(0, ceili(s.x - r)), mini(W - 1, floori(s.x + r)) + 1):
@@ -401,10 +401,10 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 
 
 static func near_hut(settlements: Array, ox: float, oy: float, radius: float = 0.0) -> bool:
-	for s: Dictionary in settlements:
+	for s: EntityRecord in settlements:
 		if absf(s.x - ox) > VILLAGE_R + radius or absf(s.y - oy) > VILLAGE_R + radius:
 			continue
-		for u: Dictionary in s.huts:
+		for u: HutData in s.huts:
 			if absf(u.x - ox) < 0.75 + radius and absf(u.y - oy) < 0.75 + radius:
 				return true
 	return false
@@ -442,8 +442,8 @@ class ObjStore:
 		w = world
 		if w != null:
 			for list: Array in [w.settlements, w.sites]:
-				for st: Dictionary in list:
-					for u: Dictionary in st.huts:
+				for st: EntityRecord in list:
+					for u: HutData in st.huts:
 						_huts.append_array([st.x, st.y, u.x, u.y])
 			_path_mask = w.path_mask
 			_W = w.W

@@ -125,7 +125,7 @@ func _begin_case() -> void:
 		bike.x = 32
 		bike.z = 32
 		if case_i == 10:
-			w.settlements.append({x = 8.0, y = 7.5, huts = [{x = 8.0, y = 7.5, a = 0.0, v = 0, t = "house"}]})
+			w.settlements.append(SettlementData.from_dict({x = 8.0, y = 7.5, huts = [{x = 8.0, y = 7.5, a = 0.0, v = 0, t = "house"}]}))
 			bike.crash_cause = BikeRide.CrashCause.COLLISION
 			bike.crash_normal = Vector3.BACK
 		if case_i in [11, 12, 13, 15]:
@@ -316,7 +316,7 @@ func _check_on_foot() -> void:
 	p.on_ground = false
 	check(not b.prepare_mount(p, test_world, ground), "нельзя поднять велосипед в прыжке")
 	p.on_ground = true
-	test_world.sites.append({x = 0.0, y = 0.0, huts = [{x = 0.0, y = 0.0, a = 0.0, t = "house"}]})
+	test_world.sites.append(SiteData.from_dict({x = 0.0, y = 0.0, huts = [{x = 0.0, y = 0.0, a = 0.0, t = "house"}]}))
 	check(not b.prepare_mount(p, test_world, ground) and b.fallen and not b.riding, "заблокированная посадка сохраняет лежащую раму")
 	test_world.sites.clear()
 	ground.obstacles = ForestObstacles.new(test_world, ground)
@@ -364,7 +364,7 @@ func _check_impact_contract() -> void:
 	var saved_cells := heights._cells.duplicate()
 	heights.structures.clear()
 	heights._cells.clear()
-	w.settlements.append({x = 8.0, y = 7.0, huts = [{x = 8.0, y = 7.0, a = 0.0, v = 0, t = "house"}]})
+	w.settlements.append(SettlementData.from_dict({x = 8.0, y = 7.0, huts = [{x = 8.0, y = 7.0, a = 0.0, v = 0, t = "house"}]}))
 	for in_air in [false, true]:
 		var moving := BikeRide.new()
 		moving.x = 32
@@ -518,8 +518,8 @@ func _update_capture_ground() -> void:
 	for child in capture_objects.get_children():
 		child.queue_free()
 	StructuresBuilder.build(capture_objects, heights)
-	for settlement: Dictionary in w.settlements:
-		for hut: Dictionary in settlement.huts:
+	for settlement: SettlementData in w.settlements:
+		for hut: HutData in settlement.huts:
 			var visual := MeshInstance3D.new()
 			var box := BoxMesh.new()
 			var half := PlayerState.hut_half(hut)

@@ -16,7 +16,7 @@ func _init() -> void:
 	check(SelfTest.settlements_connected(w), "Поселения потеряли связь")
 	var passed := 0
 	var seen := {}
-	for b: Dictionary in w.bridges:
+	for b: BridgeData in w.bridges:
 		check(StageTrails._crosses_water(h, b.a, b.b), "Мост без воды: %s" % b)
 		var key := Vector2i(mini(b.a, b.b), maxi(b.a, b.b))
 		check(not seen.has(key), "Дубликат моста: %s" % b)

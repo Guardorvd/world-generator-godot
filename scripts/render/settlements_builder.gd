@@ -75,7 +75,7 @@ static func _label(text: String, color: Color, pos: Vector3, place_id: String = 
 
 
 ## Где у костра поселения s стоит доска маршрутов (низ столбов, м); её же ищет наведение GameWorld._aim
-static func board_foot(s: Dictionary, heights: Heightfield) -> Vector3:
+static func board_foot(s: Variant, heights: Heightfield) -> Vector3:
 	var x: float = s.x * TILE + 3.0
 	var z: float = s.y * TILE - 3.0
 	return Vector3(x, heights.ground_at(x, z), z)
@@ -131,13 +131,13 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	for s in w.settlements:
 		for hut in s.huts:
 			# С 9.5 дом стоит дверью к улице (поворот a), у заготовок тестов — к костру
-			var kind: String = hut.get("t", "house")
+			var kind: String = EntityCodec.value(hut, "t", "house")
 			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
 			# Пол выше верхнего угла; каменный цоколь закрывает перепад до нижнего.
 			var foot := _footing(heights, at, PlayerState.SITE_HALF[kind])
 			at.origin.y = foot.y
 			if kind in HOMES:
-				_house(batch, at, foot.y - foot.x, hut.v, house, kind, s.get("style", hut.v))
+				_house(batch, at, foot.y - foot.x, hut.v, house, kind, EntityCodec.value(s, "style", hut.v))
 			else:
 				_outbuilding(batch, at, foot.y - foot.x, kind, house)
 		# костёр
@@ -374,9 +374,9 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 	keep.bottom_radius = 1.6
 	keep.height = 1.0
 	keep.radial_segments = 8
-	for s: Dictionary in w.sites:
+	for s: SiteData in w.sites:
 		var top := -INF
-		for u: Dictionary in s.huts:
+		for u: HutData in s.huts:
 			var v: int = u.v
 			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(u.x * TILE, 0, u.y * TILE))
 			var foot := _footing(heights, at, PlayerState.SITE_HALF[u.t])

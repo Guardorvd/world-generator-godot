@@ -79,10 +79,10 @@ static func find(w: WorldData, h: Heightfield, origin: Vector3, yaw: float, deta
 		return {}
 	var places: Array[Dictionary] = []
 	for kind: String in ["settlement", "site"]:
-		for place: Dictionary in (w.settlements if kind == "settlement" else w.sites):
+		for place: SettlementData in (w.settlements if kind == "settlement" else w.sites):
 			var center := Vector2(place.x, place.y) * TILE
 			if w.accessible(place.x, place.y) and h.known(center.x, center.y):
-				places.append({center = center, distance = Vector2(origin.x, origin.z).distance_squared_to(center), kind = kind, name = place.get("name", "Поселение" if kind == "settlement" else "Место")})
+				places.append({center = center, distance = Vector2(origin.x, origin.z).distance_squared_to(center), kind = kind, name = EntityCodec.value(place, "name", "Поселение" if kind == "settlement" else "Место")})
 	places.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.distance < b.distance)
 	var forest := ForestObstacles.new(w, h)
 	for place: Dictionary in places:

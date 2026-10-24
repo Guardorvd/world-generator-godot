@@ -10,7 +10,7 @@ static func choose(w: WorldData, h: Heightfield, rng: RandomNumberGenerator) -> 
 	for kind: String in kinds:
 		var places: Array = w.get(kind + "s").duplicate()
 		_shuffle(places, rng)
-		for src: Dictionary in places:
+		for src: Variant in places:
 			var center := Vector2(src.sx, src.sy) if kind == "lake" else Vector2(src.x, src.y)
 			center *= GameConfig.TILE
 			if not w.accessible(center.x / GameConfig.TILE, center.y / GameConfig.TILE):

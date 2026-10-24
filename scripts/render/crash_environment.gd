@@ -49,16 +49,16 @@ static func build(body: StaticBody3D, heights: Heightfield, radius: float) -> vo
 			StructuresBuilder._planks(batch, heights, s, null, null, null)
 		else:
 			StructuresBuilder._bridge(batch, heights, s, null, null, null)
-	for settlement: Dictionary in heights.world.settlements:
-		for hut: Dictionary in settlement.huts:
+	for settlement: SettlementData in heights.world.settlements:
+		for hut: HutData in settlement.huts:
 			_hut(batch, heights, hut, PlayerState.hut_angle(settlement, hut))
-	for site: Dictionary in heights.world.sites:
-		for hut: Dictionary in site.huts:
+	for site: SiteData in heights.world.sites:
+		for hut: HutData in site.huts:
 			_hut(batch, heights, hut, hut.a)
 
 
-static func _hut(batch: Contacts, heights: Heightfield, hut: Dictionary, angle: float) -> void:
-	var kind: String = hut.get("t", "house")
+static func _hut(batch: Contacts, heights: Heightfield, hut: HutData, angle: float) -> void:
+	var kind: String = EntityCodec.value(hut, "t", "house")
 	var half := PlayerState.hut_half(hut)
 	var at := Transform3D(Basis(Vector3.UP, angle), Vector3(hut.x * GameConfig.TILE, 0, hut.y * GameConfig.TILE))
 	if Vector2(at.origin.x - batch.body.global_position.x, at.origin.z - batch.body.global_position.z).length() > batch.radius + half.length():
@@ -73,7 +73,7 @@ static func _hut(batch: Contacts, heights: Heightfield, hut: Dictionary, angle: 
 	elif kind == "barn":
 		height = 2.8
 	else:
-		height = {hay = 2.0, shed = 2.2, fountain = 1.0, stone = 2.0, obelisk = 5.5, tower = 8.5, keep = 5.0 + hut.get("v", 0) * 1.5, ruin = 2.4}.get(kind, 2.0)
+		height = {hay = 2.0, shed = 2.2, fountain = 1.0, stone = 2.0, obelisk = 5.5, tower = 8.5, keep = 5.0 + hut.v * 1.5, ruin = 2.4}.get(kind, 2.0)
 	# Как в PlayerState: постройки — замкнутый объём по их габаритам, без входа внутрь.
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(half.x * 2.0, height + foot.y - foot.x + 0.15, half.y * 2.0)

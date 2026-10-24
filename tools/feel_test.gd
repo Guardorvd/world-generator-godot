@@ -199,7 +199,7 @@ func _init() -> void:
 		print("Все проверки прошли.")
 	else:
 		printerr("Не прошло проверок: %d" % _fails)
-	WorldCache.wait_writes()
+	GameContext.scope.cache.wait_writes()
 	quit(1 if _fails > 0 else 0)
 
 
@@ -208,8 +208,8 @@ func _init() -> void:
 ## если он подходит к нынешнему коду (повторный прогон — без генерации). Рельеф с сооружениями тоже один.
 func _plan(seed_text: String, size: int) -> Array:
 	if not _plans.has(seed_text):
-		WorldCache.enabled = true
-		var pw: WorldData = WorldCache.generate(seed_text, WorldGenerator.START_SIZE).world
+		GameContext.scope.cache.enabled = true
+		var pw: WorldData = GameContext.scope.cache.generate(seed_text, WorldGenerator.START_SIZE).world
 		_plans[seed_text] = [pw, Heightfield.new(pw)]
 	var got: Array = _plans[seed_text]
 	var pw: WorldData = got[0]
@@ -427,7 +427,7 @@ func _body_points(p: PlayerState, b: BikeRide, ride: bool) -> Array[Vector2]:
 func _opening_test() -> void:
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
-	WorldCache.enabled = false
+	GameContext.scope.cache.enabled = false
 	# Малый план теми же стадиями: полный 768 без .NET слишком дорог для теста камеры.
 	var loaded := WorldLoader.new()
 	loaded.world = WorldGenerator._generate_plan("Север-1234", 384)
@@ -452,7 +452,7 @@ func _opening_test() -> void:
 	main._show("")
 	game.set_physics_process(false)
 	game.set_process(false)
-	_check(not game.opening_place.is_empty(), "старт у точки интереса: %s" % game.opening_place.get("name", "нет"))
+	_check(not game.opening_place.is_empty(), "старт у точки интереса: %s" % EntityCodec.value(game.opening_place, "name", "нет"))
 	_check(game.opening_active() and game.bike.riding, "катсцена началась в седле")
 	if not game.opening_active():
 		quit(1)
@@ -614,7 +614,7 @@ func _downhill_test() -> void:
 	for tick in 240:
 		game._update_camera(1.0, DT)
 	_check(game._cam_dist > ordinary_distance + 0.6 and game._cam_dist <= GameConfig.BIKE_CAM + 0.71, "на скорости камера отдаляется максимум на 0,7 м")
-	_check(game.camera.fov <= GameSettings.fov + GameConfig.BIKE_FOV * 1.3 + 0.01, "эффект не увеличивает прежний предел FOV")
+	_check(game.camera.fov <= GameContext.scope.settings.fov + GameConfig.BIKE_FOV * 1.3 + 0.01, "эффект не увеличивает прежний предел FOV")
 	var wall_distance := 2.0
 	h.profile = func(_d: float) -> float: return 3.0 if _d < -wall_distance else 0.0
 	game._update_camera(1.0, DT)

@@ -18,7 +18,7 @@ extends RefCounted
 ## - заголовок, размеры и хеш SHA-256 сжатых данных, проверка типов и длин массивов при чтении:
 ##   битый или чужой файл удаляется, мир генерируется заново;
 ## - запись во временный файл и переименование: оборванная запись не оставляет полуфайла под настоящим именем.
-## Какие миры хранить, решает меню (последние и избранные, GameSettings.keep_seeds); остальное удаляет keep_only.
+## Какие миры хранить, решает меню (последние и избранные, GameContext.scope.settings.keep_seeds); остальное удаляет keep_only.
 ## Включает кэш только сама игра (Main): инструменты проверки по умолчанию генерируют честно.
 
 const FORMAT := 3 # 12.2: файлы слоёв, записанные после частичной загрузки, могли быть неполными
@@ -44,17 +44,17 @@ const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area"
 	"down", "rain", "dist_ocean", "dist_water", "temp", "moist", "biome", "cost", "path_mask", "road_surface", "lake_id"]
 const PER_OBJECT := ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]
 
-static var enabled := false
-static var dir := "user://world_cache"
+var enabled := false
+var dir := "user://world_cache"
 ## 14.5: готовые миры автора в проекте (RecommendedSeeds): копируются в dir, если их там нет
 const BUNDLED := "res://resources/world_cache"
-static var _writes: Array[int] = []
-static var _lock := Mutex.new()
-static var _layer_keys := PackedStringArray()
+var _writes: Array[int] = []
+var _lock := Mutex.new()
+var _layer_keys := PackedStringArray()
 
 
 ## Ключи схем одинаковы в редакторе, PCK, Debug/Release и на всех платформах.
-static func layer_keys() -> PackedStringArray:
+func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
@@ -75,7 +75,7 @@ static func schema_keys(world_version: int, versions: PackedInt32Array) -> Packe
 	return keys
 
 
-static func _base(seed_text: String, size: int) -> String:
+func _base(seed_text: String, size: int) -> String:
 	return ("%s|%d|%d" % [seed_text, WorldGenerator.PLAN_SIZE, size]).md5_text()
 
 
@@ -84,17 +84,17 @@ static func _layer_name(layer: int) -> String:
 	return WorldGenerator.LAYERS[layer] if layer < WorldGenerator.LAYERS.size() else VIEW
 
 
-static func _key(seed_text: String, size: int, layer: int) -> String:
+func _key(seed_text: String, size: int, layer: int) -> String:
 	return "%s|%d|%d|%s|%s" % [seed_text, WorldGenerator.PLAN_SIZE, size, _layer_name(layer), layer_keys()[layer]]
 
 
 ## Файл слоя layer мира (WorldGenerator.LAYERS.size() — картинки)
-static func path_for(seed_text: String, size: int, layer: int) -> String:
+func path_for(seed_text: String, size: int, layer: int) -> String:
 	return dir.path_join("%s.%s%s" % [_base(seed_text, size), _layer_name(layer), EXT])
 
 
 ## Файлы всех слоёв мира и картинок
-static func paths_for(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Array[String]:
+func paths_for(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Array[String]:
 	var out: Array[String] = []
 	for k in WorldGenerator.LAYERS.size() + 1:
 		out.append(path_for(seed_text, size, k))
@@ -102,14 +102,14 @@ static func paths_for(seed_text: String, size: int = WorldGenerator.START_SIZE) 
 
 
 ## Превью карты мира для меню или null. Остаётся и после обновлений: мир от зерна почти не меняется.
-static func preview(seed_text: String) -> Image:
+func preview(seed_text: String) -> Image:
 	var path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
 	return Image.load_from_file(path) if FileAccess.file_exists(path) else null
 
 
 ## Сколько файлов мира подряд подходят к нынешнему коду: 0 — ничего, WorldGenerator.LAYERS.size() — мир
 ## без картинок, на 1 больше — всё (читаются только заголовки)
-static func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZE) -> int:
+func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZE) -> int:
 	for k in WorldGenerator.LAYERS.size() + 1:
 		var f := FileAccess.open(path_for(seed_text, size, k), FileAccess.READ)
 		if f == null or f.get_length() < 64 or f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT \
@@ -119,12 +119,12 @@ static func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZ
 
 
 ## Мир в кэше целиком и подходит к нынешнему коду
-static func has(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
+func has(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
 	return ready_layers(seed_text, size) > WorldGenerator.LAYERS.size()
 
 
 ## Сколько миров в кэше и сколько байт на диске
-static func usage() -> Dictionary:
+func usage() -> Dictionary:
 	var bases := {}
 	var bytes := 0
 	if DirAccess.dir_exists_absolute(dir):
@@ -135,7 +135,7 @@ static func usage() -> Dictionary:
 
 
 ## Картинки мира из кэша: {terrain, map, forest} или пусто (нет, старые или битые — тогда файл удаляется)
-static func load_view(seed_text: String, size: int) -> Dictionary:
+func load_view(seed_text: String, size: int) -> Dictionary:
 	var layer := WorldGenerator.LAYERS.size()
 	var path := path_for(seed_text, size, layer)
 	if not FileAccess.file_exists(path):
@@ -157,7 +157,7 @@ static func load_view(seed_text: String, size: int) -> Dictionary:
 
 
 ## Сохранить картинки мира ({terrain, map, forest}, сразу после загрузки, пока их никто не менял) и превью
-static func save_view(seed_text: String, size: int, images: Dictionary) -> void:
+func save_view(seed_text: String, size: int, images: Dictionary) -> void:
 	var data := {}
 	for name: String in VIEW_IMAGES:
 		var img: Image = images[name]
@@ -180,7 +180,7 @@ static func save_view(seed_text: String, size: int, images: Dictionary) -> void:
 
 ## Мир с кэшем: подходящие слои читаются, с первого неподходящего генерация продолжается обычным путём,
 ## а новые слои пишутся в кэш в фоне (дождаться — wait_writes). layers — сколько слоёв взято из кэша.
-static func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
+func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 		after_climate: Callable = Callable()) -> Dictionary:
 	var got := _load(seed_text, size)
 	var n: int = got.layers
@@ -197,7 +197,7 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 
 
 ## Подходящие слои подряд с первого: {world — мир с ними или null, layers — сколько, data — их поля}
-static func _load(seed_text: String, size: int) -> Dictionary:
+func _load(seed_text: String, size: int) -> Dictionary:
 	var data := {}
 	var n := 0
 	for k in WorldGenerator.LAYERS.size():
@@ -222,11 +222,11 @@ static func _load(seed_text: String, size: int) -> Dictionary:
 
 ## Снимок слоя берётся сразу (пока следующий слой мир не тронул): в файл идут поля, которые слой поменял;
 ## сжатие и запись — в фоне. Возвращает снимок всех полей для сравнения со следующим слоем.
-static func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dictionary:
+func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dictionary:
 	var snap := {}
 	var part := {}
 	for name: String in WorldData.CACHE_FIELDS:
-		var v: Variant = w.get(name)
+		var v: Variant = EntityCodec.encode(w.get(name))
 		# массивы и словари следующие слои меняют на месте; Packed*Array копируются при записи сами
 		if v is Array or v is Dictionary:
 			v = v.duplicate(true)
@@ -243,7 +243,7 @@ static func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -
 	return snap
 
 
-static func wait_writes() -> void:
+func wait_writes() -> void:
 	_lock.lock()
 	var tasks := _writes.duplicate()
 	_writes.clear()
@@ -255,7 +255,7 @@ static func wait_writes() -> void:
 ## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE); пустой seeds — очистить всё
 ## 14.5: скопировать миры из проекта (BUNDLED) в кэш игрока, если там их ещё нет или они другие.
 ## Подходит ли файл к нынешнему коду, решает обычная проверка ключа при чтении: устаревший перегенерируется.
-static func install_bundled() -> void:
+func install_bundled() -> void:
 	if not DirAccess.dir_exists_absolute(BUNDLED):
 		return
 	DirAccess.make_dir_recursive_absolute(dir)
@@ -278,14 +278,14 @@ static func install_bundled() -> void:
 			out.store_buffer(bytes)
 
 
-static func _cache_header_key(path: String) -> String:
+func _cache_header_key(path: String) -> String:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null or f.get_length() < 64 or f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT:
 		return ""
 	return f.get_pascal_string()
 
 
-static func keep_only(seeds: Array) -> void:
+func keep_only(seeds: Array) -> void:
 	wait_writes()
 	var keep := {}
 	for s: String in seeds:
@@ -297,7 +297,7 @@ static func keep_only(seeds: Array) -> void:
 			DirAccess.remove_absolute(dir.path_join(f))
 
 
-static func _write(path: String, key: String, raw: PackedByteArray) -> void:
+func _write(path: String, key: String, raw: PackedByteArray) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var packed := raw.compress(FileAccess.COMPRESSION_ZSTD)
 	var tmp := path + ".tmp"
@@ -321,7 +321,7 @@ static func _write(path: String, key: String, raw: PackedByteArray) -> void:
 		DirAccess.remove_absolute(tmp)
 
 
-static func _hash(bytes: PackedByteArray) -> PackedByteArray:
+func _hash(bytes: PackedByteArray) -> PackedByteArray:
 	var ctx := HashingContext.new()
 	ctx.start(HashingContext.HASH_SHA256)
 	ctx.update(bytes)
@@ -329,7 +329,7 @@ static func _hash(bytes: PackedByteArray) -> PackedByteArray:
 
 
 ## Поля слоя из файла или null
-static func _read(path: String, key: String) -> Variant:
+func _read(path: String, key: String) -> Variant:
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null or f.get_length() < 64:
 		return null
@@ -353,13 +353,15 @@ static func _read(path: String, key: String) -> Variant:
 
 ## Мир из словаря полей; null, если поля не хватает, тип или длина не те.
 ## complete — все слои: иначе поля следующих слоёв ещё пустые.
-static func _restore(data: Dictionary, complete: bool) -> WorldData:
+func _restore(data: Dictionary, complete: bool) -> WorldData:
 	var w := WorldData.new()
 	for name: String in WorldData.CACHE_FIELDS:
 		var cur: Variant = w.get(name)
 		if not data.has(name) or typeof(data[name]) != typeof(cur):
 			return null
-		if cur is Array and (cur as Array).is_typed():
+		if name in ["settlements", "sites", "lakes", "bridges", "tunnels"]:
+			w.set(name, data[name])
+		elif cur is Array and (cur as Array).is_typed():
 			(cur as Array).assign(data[name])
 		else:
 			w.set(name, data[name])
@@ -377,3 +379,11 @@ static func _restore(data: Dictionary, complete: bool) -> WorldData:
 	for name: String in WorldGenerator.NOISE_SLOTS:
 		w.noise[name] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, name))
 	return w
+
+
+## Reset only while this context is idle; join pending writes before changing paths.
+func reset() -> void:
+	wait_writes()
+	enabled = false
+	dir = "user://world_cache"
+	_layer_keys.clear()

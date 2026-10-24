@@ -9,7 +9,7 @@ const TILE := GameConfig.TILE
 const SHADER := preload("res://resources/terrain.gdshader")
 const DETAIL_SIZE := 256   # сторона бесшовной текстуры шума для мелкой детали
 
-static var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на все миры
+var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на ServiceScope
 
 
 ## Нормаль вершины клетки (i, j) по соседним высотам (на краю соседи берутся с края карты)
@@ -184,7 +184,7 @@ static func _local_normal(heights: Heightfield, x: float, z: float) -> Vector3:
 
 ## Материал рельефа с запечённой картой биомов (картинка получает мип-уровни).
 ## С 2.5 это шейдер resources/terrain.gdshader: вблизи поверх карты мелкая деталь, см. комментарий в нём
-static func material(base: Image, forest: Image = null) -> ShaderMaterial:
+func material(base: Image, forest: Image = null) -> ShaderMaterial:
 	base.generate_mipmaps()
 	var mat := _detail_material()
 	mat.set_shader_parameter("base_tex", ImageTexture.create_from_image(base))
@@ -198,13 +198,13 @@ static func material(base: Image, forest: Image = null) -> ShaderMaterial:
 
 
 ## Тот же материал для рельефа за краем карты: цвет из вершин
-static func outer_material() -> ShaderMaterial:
+func outer_material() -> ShaderMaterial:
 	var mat := _detail_material()
 	mat.set_shader_parameter("use_vertex_color", true)
 	return mat
 
 
-static func _detail_material() -> ShaderMaterial:
+func _detail_material() -> ShaderMaterial:
 	if _detail.is_empty():
 		# бесшовный шум один раз за запуск игры; не зависит от сида, это фактура, а не мир
 		var noise := FastNoiseLite.new()
@@ -230,3 +230,7 @@ static func _detail_material() -> ShaderMaterial:
 	mat.set_shader_parameter("surface_bump", PackedVector4Array(RoadBump.LIST))
 	mat.set_shader_parameter("surface_crack", PackedFloat32Array(RoadBump.CRACKS))
 	return mat
+
+
+func reset() -> void:
+	_detail.clear()

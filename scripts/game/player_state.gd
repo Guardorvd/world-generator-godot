@@ -33,10 +33,10 @@ var _jump_buf := 0.0  # сколько ещё ждать земли, чтобы 
 ## Поселение, где игрок появляется: первое (лучшее место) не ближе HOME_EDGE стороны карты к её краю.
 ## С 1.9.9: карта — лишь стартовая область, за краем нет дорог, леса и поселений, и появляться у самого
 ## края нельзя. Если таких нет — ближайшее к середине карты
-static func home(w: WorldData) -> Dictionary:
+static func home(w: WorldData) -> Variant:
 	if w.settlements.is_empty():
 		return {}
-	var best: Dictionary = w.settlements[0]
+	var best: SettlementData = w.settlements[0]
 	var best_d := INF
 	var margin := w.W * HOME_EDGE
 	for s in w.settlements:
@@ -52,12 +52,12 @@ static func home(w: WorldData) -> Dictionary:
 ## Точка появления: в 3,5 м от костра поселения (по умолчанию home), внутри кольца домов (дома стоят
 ## не ближе 6 м от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего,
 ## чтобы не стоять носом в стену. При равенстве — юг, как в JS-версии.
-static func spawn(w: WorldData, heights: Heightfield, at: Dictionary = {}) -> PlayerState:
+static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> PlayerState:
 	var p := PlayerState.new()
 	p.x = (w.W / 2.0) * TILE
 	p.z = (w.H / 2.0) * TILE
 	if w.settlements.size() > 0:
-		var s := at if not at.is_empty() else home(w)
+		var s: Variant = at if not at.is_empty() else home(w)
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
 		var best := -1.0
@@ -185,13 +185,13 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 
 
 ## Поворот постройки поселения u (с 9.5 свой, a); у заготовок тестов без a — дом дверью к костру s
-static func hut_angle(s: Dictionary, u: Dictionary) -> float:
+static func hut_angle(s: Variant, u: Variant) -> float:
 	return u.a if u.has("a") else atan2(s.x - u.x, s.y - u.y)
 
 
 ## Полуширина постройки по видам SITE_HALF; без вида — дом
-static func hut_half(u: Dictionary) -> Vector2:
-	return SITE_HALF[u.get("t", "house")]
+static func hut_half(u: Variant) -> Vector2:
+	return SITE_HALF[EntityCodec.value(u, "t", "house")]
 
 
 ## Задевает ли тело радиуса r стены прямоугольника half (м), повёрнутого на angle вокруг вертикали,

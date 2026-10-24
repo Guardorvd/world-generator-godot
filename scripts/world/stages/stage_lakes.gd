@@ -115,7 +115,7 @@ static func run(w: WorldData) -> void:
 				if d < sd and not _river_near(w, nn % W, nn / W):
 					sd = d
 					shore = Vector2((nn % W) + 0.5, (nn / W) + 0.5)
-		lakes.append({x = mx, y = my, i = n, level = w.filled[mid], name = w.make_name(Names.LAKE, "lake", floori(mx), floori(my)), cells = cells.size(), sx = shore.x, sy = shore.y})
+		lakes.append(LakeData.new(mx, my, n, w.filled[mid], w.make_name(Names.LAKE, "lake", floori(mx), floori(my)), cells.size(), shore.x, shore.y))
 	w.lakes = lakes
 	w.lake_id = lake_id
 

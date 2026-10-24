@@ -1,4 +1,5 @@
 extends CanvasLayer
+var controls: Controls = GameContext.scope.controls
 ## 11.8: фотоаппарат. Пешком ПКМ — достать или убрать: взгляд «в видоискатель» (обзор уже, мышь медленнее,
 ## шаг тише и без бега), ЛКМ — снимок в user://photos, колесо — приближение. Снимок — кадр игры без рамки
 ## и интерфейса. Каждый снимок записывается в shots и photo_taken (для будущих заданий «сфотографируй…»).
@@ -281,7 +282,7 @@ func _capture_frame() -> void:
 	if path.is_empty():
 		_thumb_text = "Не удалось сохранить снимок"
 	# снимок для задания засчитывается и без файла: на диске могло не хватить места
-	var shot := {path = path, place = place.get("id", ""), name = place.get("name", ""), dist = dist}
+	var shot := {path = path, place = place.get("id", ""), name = EntityCodec.value(place, "name", ""), dist = dist}
 	shots.append(shot)
 	photo_taken.emit(shot)
 
@@ -340,7 +341,7 @@ func _draw_view(c: Control) -> void:
 			var y := mid + (float(ZOOMS.size() - 1) / 2.0 - i) * 16.0
 			var on := i == zoom
 			c.draw_line(Vector2(frame.end.x - (20.0 if on else 12.0), y), Vector2(frame.end.x - 6.0, y), Color(1, 1, 1, (0.9 if on else 0.4) * e), 2.0 if on else 1.0)
-		_text(c, font, ("%s — снимок · ← → — приближение · %s — убрать фотоаппарат" % [Controls.label("photo_shoot"), Controls.label("photo")]) if Controls.joypad else "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
+		_text(c, font, ("%s — снимок · ← → — приближение · %s — убрать фотоаппарат" % [controls.label("photo_shoot"), controls.label("photo")]) if controls.joypad else "ЛКМ — снимок · Колесо — приближение · ПКМ — убрать фотоаппарат", Vector2(center.x, frame.end.y - 18.0), 15, Color(1, 1, 1, 0.75 * e), 0.5)
 		# название над местом: всплывает с лёгким увеличением
 		if _name_a > 0.0 and not _shown.is_empty():
 			var ne := 1.0 - pow(1.0 - _name_a, 3.0)

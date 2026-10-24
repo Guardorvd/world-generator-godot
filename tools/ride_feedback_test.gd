@@ -90,8 +90,8 @@ func _run() -> void:
 	game._prev = pos
 	game._cam_y = 101.4
 	game.pitch = -0.3
-	var saved_bob := GameSettings.head_bob
-	GameSettings.head_bob = false
+	var saved_bob := GameContext.scope.settings.head_bob
+	GameContext.scope.settings.head_bob = false
 	game._trauma = 1.0
 	game._dip = -0.2
 	game._update_camera(1.0, 1.0)
@@ -100,6 +100,6 @@ func _run() -> void:
 	game._update_camera(1.0, 1.0)
 	check(cam.is_equal_approx(game.camera.transform), "отключённое покачивание убирает удары и работу подвески камеры")
 	check(absf(game.camera.rotation.z) < 0.001, "горизонт камеры не кренится вслед за велосипедом")
-	GameSettings.head_bob = saved_bob
+	GameContext.scope.settings.head_bob = saved_bob
 	game.free()
 	quit(1 if fails else 0)

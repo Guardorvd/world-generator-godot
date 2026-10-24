@@ -171,7 +171,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		if not on_axis.is_empty() and on_axis[i] != 0:
 			# Центры клеток диагональной оси идут лесенкой. Лента должна лежать на прямом настиле.
 			var best_dist := INF
-			for span: Dictionary in spans:
+			for span: EntityRecord in spans:
 				var ax: float = span.a % W + 0.5
 				var ay: float = span.a / W + 0.5
 				var dx: float = span.b % W - span.a % W
@@ -282,8 +282,8 @@ static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary, ma
 static func _protect_structures(w: WorldData, road_cost: PackedFloat32Array) -> void:
 	var cost := w.cost
 	var both := not road_cost.is_empty()
-	for span: Dictionary in w.tunnels + w.bridges:
-		var tunnel := w.tunnels.has(span)
+	for span: EntityRecord in w.tunnels + w.bridges:
+		var tunnel := span is TunnelData
 		var radius := TUNNEL_R if tunnel else 1.4
 		var ax: float = span.a % w.W + 0.5
 		var ay: float = span.a / w.W + 0.5
@@ -496,7 +496,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	for e: Array in paths:
 		linked[e[0]] = 1
 		linked[e[1]] = 1
-	var keep: Array = []
+	var keep: Array[SettlementData] = []
 	var remap := {}
 	for a in n:
 		if joined[a] != 0 and linked[a] != 0:
@@ -522,11 +522,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	_second_ways(w, finder, paths, road_cost, state, step)
 	w.generation_profile.secondary_roads_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	finder.search_budget = -1
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		s.connections = []
 	for e: Array in paths:
-		var a: Dictionary = w.settlements[e[0]]
-		var b: Dictionary = w.settlements[e[1]]
+		var a: SettlementData = w.settlements[e[0]]
+		var b: SettlementData = w.settlements[e[1]]
 		if not a.connections.has(b.i): a.connections.append(b.i)
 		if not b.connections.has(a.i): b.connections.append(a.i)
 	detail_us = Time.get_ticks_usec()
@@ -536,13 +536,13 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 
 
 ## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
-static func main_road(a: Dictionary, b: Dictionary) -> bool:
-	return minf(a.get("importance", 1.0), b.get("importance", 1.0)) >= 0.6
+static func main_road(a: SettlementData, b: SettlementData) -> bool:
+	return minf(EntityCodec.value(a, "importance", 1.0), EntityCodec.value(b, "importance", 1.0)) >= 0.6
 
 
 ## Дешёвая оценка направления до A*: ширина воды, крутизна и важность центров.
 ## Это приоритет попыток, а не разрешение строить сквозь препятствия.
-static func _direction_cost(w: WorldData, a: Dictionary, b: Dictionary) -> float:
+static func _direction_cost(w: WorldData, a: SettlementData, b: SettlementData) -> float:
 	var distance := Grid.hypot(a.x - b.x, a.y - b.y)
 	var obstacle := 0.0
 	var previous: int = a.i
@@ -555,7 +555,7 @@ static func _direction_cost(w: WorldData, a: Dictionary, b: Dictionary) -> float
 		obstacle += 4.0 if _wet(w, i) else minf(2.0, w.slope[i] * 4.0)
 		obstacle += absf(w.h[i] - w.h[previous]) * HEIGHT_SCALE / maxf(1.0, distance / SAMPLES)
 		previous = i
-	var importance := (float(a.get("importance", 0.6)) + float(b.get("importance", 0.6))) * 0.5
+	var importance := (float(EntityCodec.value(a, "importance", 0.6)) + float(EntityCodec.value(b, "importance", 0.6))) * 0.5
 	return distance * (1.0 + obstacle / SAMPLES) / (0.75 + importance * 0.5)
 
 
@@ -672,7 +672,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	for e in paths:
 		all_paths.append(e[2])
 	for index in st.size():
-		var s: Dictionary = st[index]
+		var s: SettlementData = st[index]
 		if step.is_valid():
 			step.call(0.72 + 0.02 * index / maxi(1, st.size()), "Тропы к берегам: %d/%d" % [index + 1, st.size()])
 		var corr := _corridor(w, all_paths)
@@ -818,7 +818,7 @@ static func _clear_huts(w: WorldData) -> void:
 	var W := w.W
 	var spans: Array = w.bridges + w.tunnels
 	for st in w.settlements:
-		var keep: Array = []
+		var keep: Array[HutData] = []
 		for u in st.huts:
 			var free := true
 			# Полоса дороги должна оставаться свободной и внутри деревни, не только на мостах.
@@ -989,7 +989,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					continue
 			state.detour = true
 		if ends.is_empty():
-			list.append({a = a, b = b})
+			list.append(TunnelData.new(a, b) if kind == "tunnel" else BridgeData.new(a, b))
 			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)
 			if state.has("surface"):
 				state.surface.build_structures()
@@ -1233,7 +1233,7 @@ static func _window(v: PackedFloat32Array, span: int, big: bool) -> PackedFloat3
 ## не годится: путь по нему пересекал бы воду или гору не там, где построено
 static func _same(w: WorldData, list: Array, a: int, b: int, key: int) -> Array:
 	var W := w.W
-	for s: Dictionary in list:
+	for s: EntityRecord in list:
 		if Grid.segment_dist(key % W + 0.5, key / W + 0.5, s.a % W + 0.5, s.a / W + 0.5, s.b % W + 0.5, s.b / W + 0.5) > KEY_R:
 			continue
 		# у короткого моста оба порядка концов проходят REUSE_R: берётся тот, где концы ближе к a и b.
@@ -1260,7 +1260,7 @@ static func _near_tunnel(w: WorldData, a: int, b: int) -> bool:
 	var ay: float = a / W
 	var bx: float = b % W
 	var by: float = b / W
-	for t: Dictionary in w.tunnels:
+	for t: TunnelData in w.tunnels:
 		var cx: float = t.a % W
 		var cy: float = t.a / W
 		var dx: float = t.b % W
@@ -1331,7 +1331,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	var add_us := 0
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
-	for span: Dictionary in w.bridges + w.tunnels:
+	for span: EntityRecord in w.bridges + w.tunnels:
 		for c: int in Grid.line_cells(span.a % w.W, span.a / w.W, span.b % w.W, span.b / w.W, w.W):
 			on_axis[c] = 1
 	# С 3.1 горная тропа обходит крутые участки реки: на перепаде русла такой «брод» глубже,

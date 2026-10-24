@@ -160,13 +160,13 @@ func region_places() -> Dictionary:
 		return _region_index
 	_region_index = {ledger = current, places = {}, routes = [], list = []}
 	var settlements_now: Array = current.get("settlements", [])
-	for src: Dictionary in settlements_now:
+	for src: SettlementData in settlements_now:
 		var region := region_at(Vector2i(floori(src.x), floori(src.y)))
-		var record := {id = src.id, kind = "settlement", name = src.get("name", ""), x = src.x, y = src.y, region = region, src = src}
+		var record := {id = src.id, kind = "settlement", name = EntityCodec.value(src, "name", ""), x = src.x, y = src.y, region = region, src = src}
 		_region_index.places[src.id] = record
 		_region_index.list.append(record)
-	for src: Dictionary in settlements_now:
-		for other: String in src.get("connections", []):
+	for src: SettlementData in settlements_now:
+		for other: String in EntityCodec.value(src, "connections", []):
 			var to := other
 			if other == "plan":
 				to = _nearest_plan_settlement(Vector2(src.x, src.y))
@@ -181,7 +181,7 @@ func region_places() -> Dictionary:
 func _nearest_plan_settlement(at: Vector2) -> String:
 	var best := ""
 	var distance := INF
-	for s: Dictionary in settlements:
+	for s: SettlementData in settlements:
 		var d := at.distance_squared_to(Vector2(s.x, s.y))
 		if d < distance:
 			distance = d
@@ -238,20 +238,20 @@ func _places() -> Dictionary:
 		return _index
 	_index = {lists = [settlements, peaks, lakes, sites], places = {}, regions = {}, routes = []}
 	for kind: String in PLACE_KINDS:
-		for src: Dictionary in get(kind + "s"):
+		for src: Variant in get(kind + "s"):
 			var id := place_id(kind, src.x, src.y)
 			var region := region_at(Vector2i(floori(src.x), floori(src.y)))
-			_index.places[id] = {id = id, kind = kind, name = src.get("name", ""), x = src.x, y = src.y, region = region, src = src}
+			_index.places[id] = {id = id, kind = kind, name = EntityCodec.value(src, "name", ""), x = src.x, y = src.y, region = region, src = src}
 			if not _index.regions.has(region):
 				_index.regions[region] = []
 			_index.regions[region].append(id)
 	var by_cell := {}
-	for s: Dictionary in settlements:
+	for s: SettlementData in settlements:
 		by_cell[s.i] = s
-	for s: Dictionary in settlements:
-		for other: int in s.get("connections", []):
-			var o: Dictionary = by_cell.get(other, {})
-			if o.is_empty() or other < s.i:
+	for s: SettlementData in settlements:
+		for other: int in s.connections:
+			var o: SettlementData = by_cell.get(other)
+			if o == null or other < s.i:
 				continue
 			var a := place_id("settlement", s.x, s.y)
 			var b := place_id("settlement", o.x, o.y)
@@ -461,17 +461,17 @@ var bridges: Array:
 	get:
 		return civil.bridges
 	set(value):
-		civil.bridges = value
+		civil.bridges = EntityCodec.bridges(value)
 var tunnels: Array:
 	get:
 		return civil.tunnels
 	set(value):
-		civil.tunnels = value
+		civil.tunnels = EntityCodec.tunnels(value)
 var settlements: Array:
 	get:
 		return civil.settlements
 	set(value):
-		civil.settlements = value
+		civil.settlements = EntityCodec.settlements(value)
 var peaks: Array:
 	get:
 		return geology.peaks
@@ -481,12 +481,12 @@ var sites: Array:
 	get:
 		return civil.sites
 	set(value):
-		civil.sites = value
+		civil.sites = EntityCodec.sites(value)
 var lakes: Array:
 	get:
 		return geology.lakes
 	set(value):
-		geology.lakes = value
+		geology.lakes = EntityCodec.lakes(value)
 var lake_id: PackedInt32Array:
 	get:
 		return geology.lake_id.data

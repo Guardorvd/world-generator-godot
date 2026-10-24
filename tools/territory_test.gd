@@ -155,7 +155,7 @@ func regions_check(w: WorldData) -> void:
 		w.outer.set_ledger(ledger)
 		var rr: Dictionary = done.roads
 		print("Область %s: поселений %d, дорог %d, связей %d, попыток %d, сетей %d, выходов %d; дороги %s" % [key, rr.settlements.size(),
-			rr.trails.size(), rr.get("connections", []).size(), rr.get("attempts", 0), rr.get("components", 0), rr.get("exits", []).size(),
+			rr.trails.size(), EntityCodec.value(rr, "connections", []).size(), rr.get("attempts", 0), rr.get("components", 0), rr.get("exits", []).size(),
 			"готовы" if rr.get("ready", false) else rr.get("reason", "")])
 		var region: Dictionary = ledger.regions[key]
 		var rect: Rect2i = region.rect
@@ -186,8 +186,8 @@ func regions_check(w: WorldData) -> void:
 			var mid := Vector2(s.ax + s.bx, s.az + s.bz) * 0.5
 			check(heights.deck_at(mid.x, mid.y, 1e9) > -INF, "На мост области %s нельзя встать" % key)
 		totals.bridges += structs.size()
-		for s: Dictionary in roads.settlements:
-			for hut: Dictionary in s.huts:
+		for s: SettlementData in roads.settlements:
+			for hut: HutData in s.huts:
 				totals.houses += 1
 				check(not PlayerState.is_passable(w, heights, hut.x * TILE, hut.y * TILE), "Дом области %s проходим насквозь" % key)
 		totals.trails += roads.trails.size()

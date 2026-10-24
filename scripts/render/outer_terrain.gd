@@ -1,5 +1,6 @@
 class_name OuterTerrain
 extends Node3D
+var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## Рельеф за краем стартовой области (с 1.9.5): куски OuterLand вокруг игрока. Кусок считается и
 ## готовится в массивах в задаче WorkerThreadPool, ближние первыми, а меш, узел и OuterLand.chunks
 ## попадает в главном потоке. Дальние куски выгружаются. Меш раскрашен цветами биомов по вершинам
@@ -34,7 +35,7 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
 	land = w.outer
-	_mat = TerrainBuilder.outer_material()
+	_mat = terrain_builder.outer_material()
 	_palette.clear()
 	for bd: Dictionary in Biomes.LIST:
 		_palette.append(Color8(bd.color[0], bd.color[1], bd.color[2]))

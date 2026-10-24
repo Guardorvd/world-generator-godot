@@ -355,7 +355,7 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 			hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
 		if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y) < s.half + REACH + 0.5:
 			return false
-	for village: Dictionary in w.settlements:
+	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
 			return false
 	return true

@@ -37,7 +37,7 @@ func world() -> WorldData:
 				w.cost[i] = INF
 	for at: Vector2i in [Vector2i(20, 16), Vector2i(20, 45), Vector2i(20, 75), Vector2i(44, 45),
 			Vector2i(92, 16), Vector2i(92, 45), Vector2i(92, 75), Vector2i(110, 45)]:
-		w.settlements.append({x = at.x + 0.5, y = at.y + 0.5, i = at.y * w.W + at.x, name = str(at), huts = []})
+		w.settlements.append(SettlementData.from_dict({x = at.x + 0.5, y = at.y + 0.5, i = at.y * w.W + at.x, name = str(at), huts = []}))
 	return w
 
 func budget_check(fast: bool) -> void:

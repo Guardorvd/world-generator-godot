@@ -71,7 +71,7 @@ static func run(w: WorldData) -> void:
 				cand[type].append(Vector2(s + (d - 0.5) * 1.2, -i))
 	var sites: Array = []
 	var names := {}
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		names[s.name] = true
 	for type: String in TYPES:
 		var list: Array = cand[type]
@@ -141,7 +141,7 @@ static func _score(type: String, f: Dictionary) -> float:
 
 static func _crowded(sites: Array, type: String, x: float, y: float) -> bool:
 	var space: float = TYPES[type].space
-	for s: Dictionary in sites:
+	for s: SiteData in sites:
 		var d := Grid.hypot(s.x - x, s.y - y)
 		if d < SPACE or s.type == type and d < space:
 			return true
@@ -149,7 +149,7 @@ static func _crowded(sites: Array, type: String, x: float, y: float) -> bool:
 
 
 ## Место со значимостью, названием и постройками; пусто, если главная постройка не встала
-static func _build(w: WorldData, river: PackedByteArray, type: String, x: float, y: float, i: int, names: Dictionary) -> Dictionary:
+static func _build(w: WorldData, river: PackedByteArray, type: String, x: float, y: float, i: int, names: Dictionary) -> SiteData:
 	var rng := WGRandom.at(w.seed_num, "site." + type, floori(x), floori(y))
 	var prom := _prominence(w, floori(x), floori(y))
 	var rank := 2
@@ -186,18 +186,18 @@ static func _build(w: WorldData, river: PackedByteArray, type: String, x: float,
 			if rank == 3:
 				parts.append(["keep", Vector2(-1.4, -0.6)])
 	var turn := rng.next_float() * TAU
-	var huts: Array = []
+	var huts: Array[HutData] = []
 	for k in parts.size():
 		var off: Vector2 = parts[k][1].rotated(turn)
 		var hx := x + off.x
 		var hy := y + off.y
 		if _fits(w, river, parts[k][0], hx, hy):
-			huts.append({x = hx, y = hy, v = floori(rng.next_float() * 4), t = parts[k][0], a = turn + (rng.next_float() - 0.5) * 0.3})
+			huts.append(HutData.new(hx, hy, floori(rng.next_float() * 4), parts[k][0], turn + (rng.next_float() - 0.5) * 0.3))
 		elif k == 0:
-			return {}
+			return SiteData.new()
 	# Круг, от которого осталась пара камней, не читается как круг
 	if type == "stones" and huts.size() < 5:
-		return {}
+		return SiteData.new()
 	# Названия в мире не повторяются: при совпадении берётся следующий вариант того же места.
 	var name := ""
 	for k in 6:
@@ -205,7 +205,7 @@ static func _build(w: WorldData, river: PackedByteArray, type: String, x: float,
 		if not names.has(name):
 			break
 	names[name] = true
-	return {x = x, y = y, i = i, type = type, rank = rank, name = name, clear = TYPES[type].clear, huts = huts}
+	return SiteData.new(x, y, i, type, rank, name, TYPES[type].clear, huts)
 
 
 ## Постройка на сухой ровной земле и не на пути (как дома поселений после StageTrails._clear_huts).
@@ -238,7 +238,7 @@ static func _name(w: WorldData, type: String, rank: int, x: int, y: int) -> Stri
 ## Расстояние до ближайшего поселения, клеток
 static func _settlement_dist(w: WorldData, x: int, y: int) -> float:
 	var best := INF
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		best = minf(best, Grid.hypot(s.x - x, s.y - y))
 	return best
 

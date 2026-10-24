@@ -265,7 +265,7 @@ static func views(game: GameWorld) -> Array:
 		var k := _along(road, m, 18.0)
 		out.append({name = "road", title = "Дорога", pos = pos, target = _at(h, road[k].x, road[k].y, 1.0)})
 	if w.settlements.size() > 0:
-		var big: Dictionary = w.settlements[0]
+		var big: SettlementData = w.settlements[0]
 		for s in w.settlements:
 			if s.huts.size() > big.huts.size():
 				big = s

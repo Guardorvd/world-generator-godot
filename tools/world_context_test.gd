@@ -31,7 +31,7 @@ func _initialize() -> void:
 	w.geology.lake_id.set_cell(2, 0, 7)
 	check(w.lake_near(1, 0, 1) == 7 and w.lake_within(1, 0, 1, 7), "поиск озёр использует координатный буфер")
 	w.obj_x.append(12.5)
-	w.settlements.append({name = "Тест"})
+	w.settlements.append(SettlementData.from_dict({name = "Тест"}))
 	check(w.climate.obj_x[0] == 12.5 and w.civil.settlements[0].name == "Тест", "столбцы объектов и списки доступны через фасад")
 	var another := WorldData.new()
 	check(another.h.is_empty() and another.settlements.is_empty() and another.grid.width == 0,
@@ -86,13 +86,13 @@ func cache_roundtrip() -> void:
 	w.obj_v = PackedInt32Array([0])
 	w.obj_s = PackedFloat64Array([1.0])
 	w.chunks = [PackedInt32Array([0])]
-	var old_dir := WorldCache.dir
-	WorldCache.dir = "res://.godot/context_cache_%d" % OS.get_process_id()
-	var snapshot := WorldCache._save_layer(w, 64, 0, {})
-	WorldCache.wait_writes()
+	var old_dir := GameContext.scope.cache.dir
+	GameContext.scope.cache.dir = "res://.godot/context_cache_%d" % OS.get_process_id()
+	var snapshot := GameContext.scope.cache._save_layer(w, 64, 0, {})
+	GameContext.scope.cache.wait_writes()
 	check(snapshot.size() == WorldData.CACHE_FIELDS.size() and not snapshot.has("_region_index")
 		and not snapshot.has("generation"), "сериализация сохраняет только явную схему данных")
-	var loaded := WorldCache._load(w.seed_text, 64)
+	var loaded := GameContext.scope.cache._load(w.seed_text, 64)
 	var restored: WorldData = loaded.world
 	check(loaded.layers == 1 and restored != null, "слой кэша восстановлен через фасад контекстов")
 	if restored != null:
@@ -103,34 +103,34 @@ func cache_roundtrip() -> void:
 			"размеры 2D-буферов восстановлены вместе с данными")
 	var invalid := snapshot.duplicate(true)
 	invalid.erase("h")
-	check(WorldCache._restore(invalid, false) == null, "отсутствующее обязательное поле отклоняется")
+	check(GameContext.scope.cache._restore(invalid, false) == null, "отсутствующее обязательное поле отклоняется")
 	invalid = snapshot.duplicate(true)
 	invalid.h = PackedFloat32Array([1.0])
-	check(WorldCache._restore(invalid, false) == null, "неверная длина буфера отклоняется")
-	for path: String in WorldCache.paths_for(w.seed_text, 64):
+	check(GameContext.scope.cache._restore(invalid, false) == null, "неверная длина буфера отклоняется")
+	for path: String in GameContext.scope.cache.paths_for(w.seed_text, 64):
 		if FileAccess.file_exists(path):
 			DirAccess.remove_absolute(path)
-	DirAccess.remove_absolute(WorldCache.dir)
-	WorldCache.dir = old_dir
+	DirAccess.remove_absolute(GameContext.scope.cache.dir)
+	GameContext.scope.cache.dir = old_dir
 
 
 func bundled_headers() -> void:
-	var old_dir := WorldCache.dir
-	WorldCache.dir = "res://.godot/bundled_header_test_%d" % OS.get_process_id()
-	WorldCache.install_bundled()
+	var old_dir := GameContext.scope.cache.dir
+	GameContext.scope.cache.dir = "res://.godot/bundled_header_test_%d" % OS.get_process_id()
+	GameContext.scope.cache.install_bundled()
 	var seed_text: String = RecommendedSeeds.SEEDS[0].seed
-	var path := WorldCache.path_for(seed_text, WorldGenerator.START_SIZE, 0)
-	var key := WorldCache._cache_header_key(path)
+	var path := GameContext.scope.cache.path_for(seed_text, WorldGenerator.START_SIZE, 0)
+	var key := GameContext.scope.cache._cache_header_key(path)
 	var size := FileAccess.get_size(path)
 	var f := FileAccess.open(path, FileAccess.READ_WRITE)
 	f.seek(8)
 	var wrong := key.left(key.length() - 1) + ("0" if not key.ends_with("0") else "1")
 	f.store_pascal_string(wrong)
 	f.close()
-	WorldCache.install_bundled()
-	check(WorldCache._cache_header_key(path) == key and FileAccess.get_size(path) == size,
+	GameContext.scope.cache.install_bundled()
+	check(GameContext.scope.cache._cache_header_key(path) == key and FileAccess.get_size(path) == size,
 		"встроенный кэш обновляется при новом ключе даже без изменения размера файла")
-	for name: String in DirAccess.get_files_at(WorldCache.dir):
-		DirAccess.remove_absolute(WorldCache.dir.path_join(name))
-	DirAccess.remove_absolute(WorldCache.dir)
-	WorldCache.dir = old_dir
+	for name: String in DirAccess.get_files_at(GameContext.scope.cache.dir):
+		DirAccess.remove_absolute(GameContext.scope.cache.dir.path_join(name))
+	DirAccess.remove_absolute(GameContext.scope.cache.dir)
+	GameContext.scope.cache.dir = old_dir

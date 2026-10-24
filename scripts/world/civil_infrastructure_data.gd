@@ -8,10 +8,10 @@ var cost: GridBuffer.Float32
 var path_mask: GridBuffer.Byte
 var road_surface: GridBuffer.Byte
 var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]
-var bridges: Array = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
-var tunnels: Array = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
-var settlements: Array = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
-var sites: Array = []         # места вне поселений (с 9.3) [{x, y, i, type, rank, name, clear, huts: [{x, y, v, t, a}]}], см. StageSites
+var bridges: Array[BridgeData] = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
+var tunnels: Array[TunnelData] = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
+var settlements: Array[SettlementData] = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
+var sites: Array[SiteData] = []         # места вне поселений (с 9.3) [{x, y, i, type, rank, name, clear, huts: [{x, y, v, t, a}]}], см. StageSites
 
 
 func _init(shape: GridBuffer.Layout) -> void:

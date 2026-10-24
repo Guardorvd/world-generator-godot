@@ -64,9 +64,9 @@ func _world_check(w: WorldData) -> void:
 		var d := w.down[i]
 		if w.river[i] != 0 and d >= 0 and w.ocean[d] == 0 and w.lake[d] == 0 and w.h[d] > w.h[i] + 1e-6:
 			uphill += 1
-	for s: Dictionary in w.settlements:
+	for s: SettlementData in w.settlements:
 		_check(w.ocean[s.i] == 0 and w.lake[s.i] == 0 and w.river[s.i] == 0, "%s: поселение на суше" % w.seed_text)
-		for h: Dictionary in s.huts:
+		for h: HutData in s.huts:
 			var i := floori(h.y) * w.W + floori(h.x)
 			if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
 				wet_huts += 1

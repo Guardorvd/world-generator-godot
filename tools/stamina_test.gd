@@ -65,12 +65,12 @@ func _init() -> void:
 		s.tick_ride(DT, 0.0, false, 5.0, 0.0, false)
 	_check(s.can_boost(true, 1.0), "после восстановления до %.0f %% Shift снова работает" % (Stamina.RECOVERED * 100.0))
 	# подписи: позиционная нижняя кнопка — A у Xbox, B у Nintendo
-	Controls.joypad = true
-	_check(Controls.label("jump") == "A", "геймпад: прыжок — %s" % Controls.label("jump"))
-	_check(Controls.trigger(true) == "RT", "геймпад: педали — %s" % Controls.trigger(true))
+	GameContext.scope.controls.joypad = true
+	_check(GameContext.scope.controls.label("jump") == "A", "геймпад: прыжок — %s" % GameContext.scope.controls.label("jump"))
+	_check(GameContext.scope.controls.trigger(true) == "RT", "геймпад: педали — %s" % GameContext.scope.controls.trigger(true))
 	_check(Controls.BUTTONS[Controls.Family.NINTENDO][JOY_BUTTON_A] == "B", "Nintendo: нижняя кнопка — B")
-	Controls.joypad = false
-	_check(Controls.label("run") == "Shift" and Controls.label("jump") == "Пробел", "клавиатура: Shift, Пробел")
+	GameContext.scope.controls.joypad = false
+	_check(GameContext.scope.controls.label("run") == "Shift" and GameContext.scope.controls.label("jump") == "Пробел", "клавиатура: Shift, Пробел")
 	# сцена игры собирается с новыми вызовами
 	_check(load("res://scripts/render/game_world.gd").can_instantiate(), "game_world.gd загружается")
 	_check(load("res://scripts/ui/hud.gd").can_instantiate(), "hud.gd загружается")

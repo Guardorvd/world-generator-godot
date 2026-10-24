@@ -229,20 +229,20 @@ func _process(delta: float) -> bool:
 				DisplayServer.window_set_size(Dev.WINDOW_SIZE)
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
-				GameSettings.shadows = Dev.arg("shadows", "on") != "off"
-				GameSettings.draw = int(Dev.arg("draw", str(GameSettings.DEFAULT_DRAW)))
-				result.draw = GameSettings.draw
+				GameContext.scope.settings.shadows = Dev.arg("shadows", "on") != "off"
+				GameContext.scope.settings.draw = int(Dev.arg("draw", str(GameSettings.DEFAULT_DRAW)))
+				result.draw = GameContext.scope.settings.draw
 				root.scaling_3d_scale = clampf(float(Dev.arg("scale", "1")), 0.25, 1.0)
 				result.render = {method = RenderingServer.get_current_rendering_method(), viewport = str(root.size),
-					scale = root.scaling_3d_scale, shadows = GameSettings.shadows, msaa = root.msaa_3d}
+					scale = root.scaling_3d_scale, shadows = GameContext.scope.settings.shadows, msaa = root.msaa_3d}
 			if frames == 30:
 				result.menu_memory = _memory()
 				print("Мир %s@%d" % [seed_text, size])
 				if cache_check:
 					# первая загрузка генерирует мир и пишет его в чистый кэш прогона
-					WorldCache.enabled = true
-					WorldCache.dir = out.path_join("world_cache")
-					for path in WorldCache.paths_for(seed_text, size):
+					GameContext.scope.cache.enabled = true
+					GameContext.scope.cache.dir = out.path_join("world_cache")
+					for path in GameContext.scope.cache.paths_for(seed_text, size):
 						DirAccess.remove_absolute(path)
 				started = Time.get_ticks_msec()
 				main.start_game(seed_text, size)
@@ -376,7 +376,7 @@ func _process_cache(game: GameWorld) -> bool:
 	var same := {}
 	for k: String in fresh:
 		same[k] = fresh[k] == now[k]
-	var paths := WorldCache.paths_for(seed_text, size)
+	var paths := GameContext.scope.cache.paths_for(seed_text, size)
 	var layers: int = game.load_timings.get("cache_layers", 0) + game.load_timings.get("cache_view", 0)
 	if cache_res.is_empty():
 		var mb := 0.0
@@ -403,10 +403,10 @@ func _process_cache(game: GameWorld) -> bool:
 	Dev.save_json(out.path_join("cache.json"), cache_res)
 	if not cache_res.from_cache or cache_res.same.values().has(false) or same.values().has(false):
 		failed = true
-	WorldCache.wait_writes()
+	GameContext.scope.cache.wait_writes()
 	for path in paths:
 		DirAccess.remove_absolute(path)
-	DirAccess.remove_absolute(WorldCache.dir)
+	DirAccess.remove_absolute(GameContext.scope.cache.dir)
 	cache_check = false
 	return _finish()
 
@@ -436,7 +436,7 @@ func _finish() -> bool:
 		phase = "cache"
 		main._back_to_menu()
 		var t0 := Time.get_ticks_msec()
-		WorldCache.wait_writes()
+		GameContext.scope.cache.wait_writes()
 		timing.cache_save_wait = snappedf((Time.get_ticks_msec() - t0) / 1000.0, 0.01)
 		started = Time.get_ticks_msec()
 		main.start_game(seed_text, size)

@@ -14,14 +14,14 @@ func _initialize() -> void:
 	if "--navigation" in OS.get_cmdline_user_args():
 		_navigation_test.call_deferred()
 		return
-	GameSettings.reset_defaults()
-	_check(GameSettings.day_minutes == 7.0, "стандартная длительность суток — 7 минут")
+	GameContext.scope.settings.reset_defaults()
+	_check(GameContext.scope.settings.day_minutes == 7.0, "стандартная длительность суток — 7 минут")
 	var cfg := ConfigFile.new()
 	cfg.set_value("time", "day_minutes", 12.0)
 	cfg.set_value("time", "start_hour_set", true)
-	GameSettings._apply_config(cfg)
-	_check(GameSettings.day_minutes == 12.0, "сохранённая длительность суток сохраняется")
-	GameSettings.reset_defaults()
+	GameContext.scope.settings._apply_config(cfg)
+	_check(GameContext.scope.settings.day_minutes == 12.0, "сохранённая длительность суток сохраняется")
+	GameContext.scope.settings.reset_defaults()
 	cfg.clear()
 	cfg.set_value("input", "mouse", "ошибка")
 	cfg.set_value("input", "invert_y", [])
@@ -32,19 +32,19 @@ func _initialize() -> void:
 	cfg.set_value("sound", "volume", INF)
 	cfg.set_value("world", "size", {})
 	cfg.set_value("world", "seed", "  Север-1234  ")
-	GameSettings._apply_config(cfg)
-	_check(GameSettings.mouse == GameSettings.DEFAULT_MOUSE and GameSettings.fov == GameSettings.DEFAULT_FOV
-		and GameSettings.volume == GameSettings.DEFAULT_VOLUME, "строки, NaN и бесконечность заменяются безопасными значениями")
-	_check(not GameSettings.invert_y and GameSettings.head_bob and not GameSettings.fullscreen,
+	GameContext.scope.settings._apply_config(cfg)
+	_check(GameContext.scope.settings.mouse == GameSettings.DEFAULT_MOUSE and GameContext.scope.settings.fov == GameSettings.DEFAULT_FOV
+		and GameContext.scope.settings.volume == GameSettings.DEFAULT_VOLUME, "строки, NaN и бесконечность заменяются безопасными значениями")
+	_check(not GameContext.scope.settings.invert_y and GameContext.scope.settings.head_bob and not GameContext.scope.settings.fullscreen,
 		"переключатели принимают только логические значения")
-	_check(not GameSettings.shadows and GameSettings.last_seed == "Север-1234",
+	_check(not GameContext.scope.settings.shadows and GameContext.scope.settings.last_seed == "Север-1234",
 		"исправные поля читаются даже при повреждении соседних")
 	cfg.set_value("input", "mouse", 100)
 	cfg.set_value("view", "fov", 1.0)
 	cfg.set_value("sound", "volume", -2.0)
-	GameSettings._apply_config(cfg)
-	_check(GameSettings.mouse == GameSettings.MAX_MOUSE and GameSettings.fov == GameSettings.MIN_FOV
-		and GameSettings.volume == 0.0, "числа ограничены диапазонами, старый ключ размера мира не мешает")
+	GameContext.scope.settings._apply_config(cfg)
+	_check(GameContext.scope.settings.mouse == GameSettings.MAX_MOUSE and GameContext.scope.settings.fov == GameSettings.MIN_FOV
+		and GameContext.scope.settings.volume == 0.0, "числа ограничены диапазонами, старый ключ размера мира не мешает")
 	print("Настройки: ошибок %d" % fails)
 	quit(0 if fails == 0 else 1)
 

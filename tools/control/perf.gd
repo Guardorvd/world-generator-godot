@@ -173,11 +173,11 @@ func _process(delta: float) -> bool:
 				DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 				Engine.max_fps = 0
 				# Один и тот же контроль вне зависимости от пользовательского settings.cfg.
-				GameSettings.shadows = Dev.arg("shadows", "on") != "off"
+				GameContext.scope.settings.shadows = Dev.arg("shadows", "on") != "off"
 				root.scaling_3d_scale = clampf(float(Dev.arg("scale", "1")), 0.25, 1.0)
 				result.render = {method = RenderingServer.get_current_rendering_method(),
 					viewport = str(root.size), scale = root.scaling_3d_scale,
-					shadows = GameSettings.shadows, msaa = root.msaa_3d}
+					shadows = GameContext.scope.settings.shadows, msaa = root.msaa_3d}
 			if frames == 30:
 				result.menu_memory = _memory()
 				started = Time.get_ticks_msec()

@@ -30,7 +30,7 @@ var order_n := 0
 var rivers: Array = []        # ломаные из точек {x, y, w — ширина в клетках, e — высота воды}
 var river_exits: Array = []   # выходы за карту: {x, y, dx, dy, acc, e, w}; задел для продолжения стока
 var peaks: Array = []         # [{x, y, i, elev, name}]
-var lakes: Array = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
+var lakes: Array[LakeData] = []         # озёра с названиями (с 2.9) [{x, y, i, level, name, cells, sx, sy}], см. StageLakes
 
 
 func _init(shape: GridBuffer.Layout) -> void:
