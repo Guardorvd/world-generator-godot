@@ -56,7 +56,7 @@ var _banner_sub: Label
 var _banner_tween: Tween
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
-var _stamina: StaminaArc  # 14.2: дуга выносливости слева от прицела, видна, пока силы тратятся или копятся
+var _stamina: StaminaArc  # 14.2: дуга выносливости (14.4: в левом нижнем углу), видна, пока силы тратятся или копятся
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
@@ -143,12 +143,13 @@ func _ready() -> void:
 	_vignette.visible = false
 	add_child(_vignette)
 	move_child(_vignette, 0)
+	# 14.4: в левом нижнем углу, а не у прицела
 	_stamina = StaminaArc.new()
-	_stamina.set_anchors_preset(Control.PRESET_CENTER)
-	_stamina.offset_left = -StaminaArc.R - 12
-	_stamina.offset_right = StaminaArc.R + 12
-	_stamina.offset_top = -StaminaArc.R - 12
-	_stamina.offset_bottom = StaminaArc.R + 12
+	_stamina.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_stamina.offset_left = 18
+	_stamina.offset_right = 18 + (StaminaArc.R + 12) * 2.0
+	_stamina.offset_top = -18 - (StaminaArc.R + 12) * 2.0
+	_stamina.offset_bottom = -18
 	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_stamina)
 	move_child(_stamina, big_map.get_index())
@@ -1058,15 +1059,15 @@ class BigMap extends Control:
 		return at.clamp(Vector2(margin, margin), size - Vector2(margin, margin))
 
 
-## 14.2: дуга выносливости слева от прицела. Появляется, пока силы тратятся или копятся, полная — гаснет.
+## 14.2: дуга выносливости (с 14.4 — кольцо в левом нижнем углу). Появляется, пока силы тратятся или копятся, полная — гаснет.
 ## Засечка на Stamina.RECOVERED — с неё после истощения снова работает Shift. Белый шлейф за краем
 ## заливки быстро тает и показывает темп траты. Ниже LOW при трате дуга пульсирует, warning (0..1) затемняет
 ## края экрана; при восстановлении предупреждение гаснет быстро. Накат подсвечен холодным ореолом.
 class StaminaArc extends Control:
-	const R := 46.0                       # радиус дуги, px
-	const FROM := deg_to_rad(125.0)       # дуга слева от прицела: снизу (125°) вверх (235°), заливка растёт вверх
-	const SPAN := deg_to_rad(110.0)
-	const WIDTH := 4.0
+	const R := 26.0                       # радиус кольца, px
+	const FROM := deg_to_rad(135.0)       # кольцо с разрывом внизу: от левого низа через верх к правому низу
+	const SPAN := deg_to_rad(270.0)
+	const WIDTH := 5.0
 	const LOW := 0.2
 	const GHOST_LAG := 1.5                # 1/с: шлейф догоняет заливку с запаздыванием — чем быстрее трата, тем он
 	                                      # длиннее (Shift в подъём — ~5 % дуги), рывок тает за доли секунды
@@ -1099,7 +1100,7 @@ class StaminaArc extends Control:
 		if to - from < 0.002:
 			return
 		var c := size / 2.0
-		draw_arc(c, R, FROM + SPAN * from, FROM + SPAN * to, 24, color, width, true)
+		draw_arc(c, R, FROM + SPAN * from, FROM + SPAN * to, 48, color, width, true)
 
 	func _draw() -> void:
 		if _alpha <= 0.01:

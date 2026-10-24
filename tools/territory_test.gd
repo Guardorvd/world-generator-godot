@@ -153,6 +153,10 @@ func regions_check(w: WorldData) -> void:
 			continue
 		ledger = done.ledger
 		w.outer.set_ledger(ledger)
+		var rr: Dictionary = done.roads
+		print("Область %s: поселений %d, дорог %d, связей %d, попыток %d, сетей %d, выходов %d; дороги %s" % [key, rr.settlements.size(),
+			rr.trails.size(), rr.get("connections", []).size(), rr.get("attempts", 0), rr.get("components", 0), rr.get("exits", []).size(),
+			"готовы" if rr.get("ready", false) else rr.get("reason", "")])
 		var region: Dictionary = ledger.regions[key]
 		var rect: Rect2i = region.rect
 		var f: Dictionary = region.fields

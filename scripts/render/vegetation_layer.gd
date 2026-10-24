@@ -12,6 +12,7 @@ const LOAD_MARGIN := 64.0 # запас на фоновую подготовку 
 const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём чанк на границе
 const RECHECK := 24.0
 const Understory := preload("res://scripts/render/understory_models.gd")
+const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
 const UNDERSTORY_MAX := 2048 # на форму мелкого подлеска, только в радиусе травы
@@ -61,6 +62,9 @@ var world: WorldData
 var heights: Heightfield
 var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 var grass: MultiMesh
+var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
+var _grass_high := -Vector3.INF
+var _outer_regions := {}       # 14.4: снимок закреплённых областей для фоновой раскладки травы
 var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
@@ -302,6 +306,8 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 ## force используется при появлении/переносе: дождаться фона и показать только нужное место.
 func update(px: float, pz: float, force: bool) -> bool:
 	var p := Vector2(px, pz)
+	if world.outer != null:
+		_outer_regions = world.outer.get_ledger().get("regions", {})
 	RenderingServer.global_shader_parameter_set("veg_center", p)
 	if force:
 		_finish()
@@ -658,10 +664,11 @@ func _fill_grass(px: float, pz: float) -> void:
 	var rF := maxf(grass_r, under_r) / TILE
 	var tx := px / TILE
 	var tz := pz / TILE
-	var buf := grass_buf
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
+	_grass_low = low
+	_grass_high = high
 	_fill_at = Vector2(px, pz)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
@@ -696,46 +703,35 @@ func _fill_grass(px: float, pz: float) -> void:
 			var surface := _forest_surface.get_pixel(i, j)
 			lush *= 1.0 - 0.65 * surface.r
 			lush *= _fill_understory(i, j, surface, light, px, pz)
-			var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
-			var tc: Array = gr.tint
-			# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
-			# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
-			var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r))
-			for m in cnt:
-				if n >= grass_buf.size() / STRIDE:
-					fill_capped += 1
-					break
-				var rank := WGRandom.hash2(i * 5 + m, j, 41)
-				if rank > keep:
+			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
+	# 14.4: за краем плана — трава и подлесок закреплённых соседних областей. Поля берутся из снимка
+	# журнала (_outer_regions, его подменяют целиком в главном потоке), куски OuterLand не читаются
+	var regions := _outer_regions
+	if not regions.is_empty():
+		for j in range(floori(tz - rF), floori(tz + rF) + 1):
+			for i in range(floori(tx - rF), floori(tx + rF) + 1):
+				if i >= 0 and j >= 0 and i < w.W and j < w.H:
 					continue
-				var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
-				var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
-				# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
-				var verge := 0.0
-				if heights.road_refinement != null:
-					var weight := heights.road_refinement.weight_at(x, z, w.W)
-					if weight > 0.0 and weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
-						continue
-					# 11.4: уцелевшая у полотна трава — выше и суше (некошеная обочина), та же раскладка.
-					verge = clampf(weight * 5.0, 0.0, 1.0)
-				elif w.path_mask[k] >= 2:
+				var d2 := (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2
+				if d2 > rF * rF:
 					continue
-				var y := heights.ground_at(x, z)
-				if heights.depth_at(x, z) > 0.0:
+				var cell := _region_cell(regions, i, j)
+				if cell.is_empty() or cell.river or cell.elev <= 0.0 or not _region_inner(regions, i, j):
 					continue
-				var s := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
-				var sy := s * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9) * (1.0 + verge * 0.35)
-				_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, s, sy)
-				var origin := Vector3(x, y - 0.05, z)
-				low = low.min(origin)
-				high = high.max(origin)
-				var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
-				buf[n * STRIDE + 12] = tc[0] * v * (1.0 + verge * 0.12)
-				buf[n * STRIDE + 13] = tc[1] * v
-				buf[n * STRIDE + 14] = tc[2] * v * (1.0 - verge * 0.2)
-				buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
-				buf[n * STRIDE + 16] = rank
-				n += 1
+				var bd: Dictionary = Biomes.LIST[cell.biome]
+				if not bd.has("grass"):
+					continue
+				var surface := _outer_surface(cell)
+				if d2 > rT * rT:
+					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+					continue
+				var lush := clampf(1.0 - 0.45 * (cell.slope - 0.5), 0.35, 1.0)
+				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * OUTER_LIGHT)
+				lush *= 1.0 - 0.65 * surface.r
+				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+				n = _grass_cell(i, j, bd.grass, lush, surface, d2, n, cell.path, regions)
+	low = _grass_low
+	high = _grass_high
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
 	# 9.9+: внутри одного приоритета — по порогу поредения: место занимает тот, кто виден дальше.
@@ -750,6 +746,100 @@ func _fill_grass(px: float, pz: float) -> void:
 	_understory_sites.clear()
 
 
+## Пучки травы клетки (i, j) в grass_buf начиная с n; возвращает новое n. path — путь клетки
+## (без локальной детализации дорог на нём травы нет)
+func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}) -> int:
+	var buf := grass_buf
+	var w := world
+	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
+	var tc: Array = gr.tint
+	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
+	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
+	var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r))
+	var inside := i >= 0 and j >= 0 and i < w.W and j < w.H
+	for m in cnt:
+		if n >= grass_buf.size() / STRIDE:
+			fill_capped += 1
+			break
+		var rank := WGRandom.hash2(i * 5 + m, j, 41)
+		if rank > keep:
+			continue
+		var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
+		var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
+		# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
+		var verge := 0.0
+		if inside and heights.road_refinement != null:
+			var weight := heights.road_refinement.weight_at(x, z, w.W)
+			if weight > 0.0 and weight > WGRandom.hash2(i + m, j, 29) * 0.8 + 0.08:
+				continue
+			# 11.4: уцелевшая у полотна трава — выше и суше (некошеная обочина), та же раскладка.
+			verge = clampf(weight * 5.0, 0.0, 1.0)
+		elif path >= 2:
+			continue
+		var y: float
+		if inside:
+			y = heights.ground_at(x, z)
+			if heights.depth_at(x, z) > 0.0:
+				continue
+		else:
+			y = RegionStream.snapshot_ground(w, heights, regions, x, z)
+		var sc := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
+		var sy := sc * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9) * (1.0 + verge * 0.35)
+		_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, sc, sy)
+		var origin := Vector3(x, y - 0.05, z)
+		_grass_low = _grass_low.min(origin)
+		_grass_high = _grass_high.max(origin)
+		var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
+		buf[n * STRIDE + 12] = tc[0] * v * (1.0 + verge * 0.12)
+		buf[n * STRIDE + 13] = tc[1] * v
+		buf[n * STRIDE + 14] = tc[2] * v * (1.0 - verge * 0.2)
+		buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
+		buf[n * STRIDE + 16] = rank
+		n += 1
+	return n
+
+
+## 14.4: клетка закреплённой области из снимка журнала: биом, путь, уклон, вода, высота; {} — нет
+static func _region_cell(regions: Dictionary, i: int, j: int) -> Dictionary:
+	var size := WorldData.REGION_SIZE
+	var r: Variant = regions.get(Vector2i(floori(float(i) / size), floori(float(j) / size)))
+	if r == null or not r.has("fields"):
+		return {}
+	var f: Dictionary = r.fields
+	var rect: Rect2i = r.rect
+	var q := (j - rect.position.y) * rect.size.x + i - rect.position.x
+	# влажности в полях области нет: у воды трава гуще, как у плана (dist_water)
+	return {biome = f.biome[q], path = f.path[q], slope = f.slope[q], river = f.river[q] != 0 or f.lake[q] != 0,
+		elev = f.h[q], moist = 0.45 + 0.4 * exp(-f.dw[q] / 3.0)}
+
+
+## Вокруг клетки (3 × 3) только план и закреплённые области: высоты подлеска (Heightfield) здесь
+## не трогают куски OuterLand, которые главный поток в это время меняет
+func _region_inner(regions: Dictionary, i: int, j: int) -> bool:
+	for dj in range(-1, 2):
+		for di in range(-1, 2):
+			var a := i + di
+			var b := j + dj
+			if a >= 0 and b >= 0 and a < world.W and b < world.H:
+				continue
+			var r: Variant = regions.get(Vector2i(floori(float(a) / WorldData.REGION_SIZE), floori(float(b) / WorldData.REGION_SIZE)))
+			if r == null or not r.has("fields"):
+				return false
+	return true
+
+
+## 14.4: полог, хвоя, влага и каменистость клетки за краем плана — по биому (у плана это картинка леса)
+static func _outer_surface(cell: Dictionary) -> Color:
+	match cell.biome:
+		Biomes.FOREST, Biomes.JUNGLE:
+			return Color(0.6, 0.25, cell.moist, 0.15)
+		Biomes.TAIGA:
+			return Color(0.55, 0.85, cell.moist, 0.2)
+		Biomes.SWAMP:
+			return Color(0.35, 0.3, 0.9, 0.05)
+	return Color(0.0, 0.0, cell.moist, 0.2)
+
+
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
 ## с запасом: игрок до следующей раскладки может подъехать на ahead ближе (шейдер считает без запаса).
 static func _keep(d: float, full: float, ahead: float) -> float:
@@ -760,7 +850,11 @@ static func _keep(d: float, full: float, ahead: float) -> float:
 ## Возвращает множитель низкой травы по характеру леса (вне леса 1).
 func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var k := j * world.W + i
-	var bi := world.biome[k]
+	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz)
+
+
+## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info)
+func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var canopy := surface.r
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
 		return 1.0
@@ -768,7 +862,7 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
 	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
 	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
-	if world.path_mask[k] > 0 or world.slope[k] > 0.9:
+	if path > 0 or slope > 0.9:
 		return grass_mul
 	var light := sunlight * (1.0 - canopy * 0.85)
 	var weights := Understory.weights(bi, moisture, light, canopy, ch)

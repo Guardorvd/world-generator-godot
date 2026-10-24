@@ -119,7 +119,13 @@ func run() -> int:
 					divided.surfaces[n].water_level[i] = 0.16
 		var broken := Regions.prepare_roads(source, [left, right], divided)
 		# 13.8: выходы на свободные стороны остаются, но связи через реку и мосты — нет.
-		check(not broken.ready and broken.components >= 2 and broken.connections.is_empty() and broken.bridges.is_empty(),
+		# 14.4: поселений в области больше — связи внутри одного берега остаются, через реку — нет.
+		var side_of := {}
+		for settlement: Dictionary in broken.settlements:
+			side_of[settlement.id] = settlement.x < 256.0
+		var across: Array = broken.connections.filter(func(e: Dictionary) -> bool:
+			return side_of.has(e.from) and side_of.has(e.to) and side_of[e.from] != side_of[e.to])
+		check(not broken.ready and broken.components >= 2 and across.is_empty() and broken.bridges.is_empty(),
 			"13.6: вода выше берегов — отказ без оставшихся мостов и дорог")
 		for n in 2:
 			var region: Dictionary = [left, right][n]

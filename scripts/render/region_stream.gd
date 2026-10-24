@@ -8,6 +8,10 @@ extends Node3D
 ## 13.9+: журнал хранится на диске (store_dir, общий для слотов сохранения этого мира) и
 ## восстанавливается при загрузке. Далёкие области освобождаются: узлы — дальше HIDE, поля
 ## клеток — дальше EVICT (остаются в файле и читаются снова при возвращении ближе KEEP).
+## 14.4: меши воды и дорог области считаются в фоновой задаче (build_arrays), главный поток только
+## собирает узлы — меньше заметных подёргиваний у края плана. Дороги — мягкая лента по рельефу
+## (ROAD_SHADER): сглаженные повороты, плотная сетка поперёк, рваный прозрачный край и фактура;
+## там, где у плана уже есть своя дорога, лента не кладётся поверх неё.
 
 const Regions := preload("res://scripts/world/region_preparation.gd")
 const TILE := GameConfig.TILE
@@ -18,9 +22,30 @@ const HIDE := OuterTerrain.DROP + 200.0     # м: дальше узлы обла
 const KEEP := 2800.0                        # м: ближе поля клеток в памяти (соседи готовящейся области — ближе)
 const EVICT := 3400.0                       # м: дальше поля клеток выгружаются из памяти
 const RECHECK := 32.0                       # м пути между пересмотром очереди и выгрузки
-const FORMAT := 1
-const ROAD_LIFT := 0.06                     # м: полотно над рельефом без мерцания
-const ROAD_COLOR := Color8(0x9c, 0x88, 0x66)
+const FORMAT := 2                           # 14.4: гуще поселения областей — прежние журналы не читаются
+const ROAD_LIFT := 0.05                     # м: полотно над рельефом без мерцания
+const ROAD_COLOR := Color8(0x8e, 0x7d, 0x62)
+const ROAD_STEP := 1.0                      # м: шаг точек ленты вдоль дороги
+const ROAD_ACROSS := [-1.15, -0.6, 0.0, 0.6, 1.15] # доли полуширины: края чуть шире полотна и прозрачны
+const ROAD_SHADER := """shader_type spatial;
+render_mode blend_mix, depth_draw_opaque, cull_disabled;
+uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap, repeat_enable;
+uniform vec3 road_color : source_color;
+varying vec3 wpos;
+void vertex() {
+	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+}
+void fragment() {
+	float n1 = texture(detail_tex, wpos.xz * 0.09).r;
+	float n2 = texture(detail_tex, wpos.xz * 0.47).r;
+	// край полотна рваный: прозрачность по поперечной доле с шумом, а не ровной линией
+	float edge = COLOR.a + (n1 - 0.5) * 0.4 + (n2 - 0.5) * 0.15;
+	ALPHA = smoothstep(0.12, 0.5, edge);
+	float ruts = exp(-pow((abs(UV.x) - 0.42) / 0.12, 2.0));
+	ALBEDO = road_color * (0.85 + (n1 - 0.5) * 0.32 + (n2 - 0.5) * 0.2) * (1.0 - ruts * 0.09);
+	ROUGHNESS = 0.95;
+}
+"""
 static var root := "user://regions"         # тесты подменяют
 
 var world: WorldData
@@ -40,7 +65,10 @@ var _key := Vector2i.ZERO
 var _shown := {}        # область -> {node, fires, windows}
 var _bridges := {}      # область -> её мосты в Heightfield (регистрируются один раз)
 var _checked_at := Vector2.INF
-var _road_mat: StandardMaterial3D
+var _road_mat: ShaderMaterial
+var _build_task := -1   # 14.4: фоновый расчёт мешей воды и дорог области _build_key
+var _build_key := Vector2i.ZERO
+var _build_out := {}
 
 
 func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) -> void:
@@ -48,8 +76,11 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 	heights = h
 	terrain = t
 	vegetation = v
-	_road_mat = SettlementsBuilder.mat(ROAD_COLOR)
-	_road_mat.cull_mode = BaseMaterial3D.CULL_DISABLED # направление ленты зависит от хода дороги
+	_road_mat = ShaderMaterial.new()
+	_road_mat.shader = Shader.new()
+	_road_mat.shader.code = ROAD_SHADER
+	_road_mat.set_shader_parameter("road_color", ROAD_COLOR)
+	_road_mat.set_shader_parameter("detail_tex", TerrainBuilder.outer_material().get_shader_parameter("detail_tex"))
 
 
 ## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
@@ -91,6 +122,13 @@ func update(x: float, z: float) -> bool:
 		_task = -1
 		_apply(_key, _out.get("r", {}))
 		return true
+	if _build_task != -1 and WorkerThreadPool.is_task_completed(_build_task):
+		WorkerThreadPool.wait_for_task_completion(_build_task)
+		_build_task = -1
+		var entry: Variant = ledger.get("regions", {}).get(_build_key)
+		if entry != null and entry.has("fields") and not _shown.has(_build_key) and _distance(_build_key, p) <= REACH:
+			_show(_build_key, _build_out)
+			return true
 	if p.distance_to(_checked_at) > RECHECK:
 		_checked_at = p
 		_plan(p)
@@ -107,8 +145,9 @@ func update(x: float, z: float) -> bool:
 			_evict(key)
 			return false
 		if d <= REACH and not _shown.has(key) and entry.has("fields"):
-			_show(key)
-			return true
+			if _build_task == -1:
+				_start_build(key)
+			continue
 		if d > HIDE and _shown.has(key):
 			_hide(key)
 			return true
@@ -131,6 +170,24 @@ func finish() -> void:
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
+	if _build_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_build_task)
+		_build_task = -1
+
+
+## 14.4: меши воды и дорог области — в фоне, по снимку журнала (поля областей там не меняются)
+func _start_build(key: Vector2i) -> void:
+	_build_key = key
+	_build_out = {}
+	var out := _build_out
+	var entry: Dictionary = ledger.regions[key]
+	var regions: Dictionary = ledger.regions
+	var w := world
+	var h := heights
+	_build_task = WorkerThreadPool.add_task(func() -> void:
+		out.water = water_arrays(entry)
+		out.roads = road_arrays(w, func(x: float, z: float) -> float: return snapshot_ground(w, h, regions, x, z), entry.decor.trails),
+		false, "Узлы области")
 
 
 func _exit_tree() -> void:
@@ -281,19 +338,20 @@ func _apply(key: Vector2i, done: Dictionary) -> void:
 	_checked_at = Vector2.INF # узлы покажет следующий кадр: принятие и сборка в разных кадрах
 
 
-## Узлы области: вода по мокрым клеткам, лента дорог, мосты и дома штатными сборщиками
-func _show(key: Vector2i) -> void:
+## Узлы области: вода по мокрым клеткам, лента дорог, мосты и дома штатными сборщиками.
+## arrays — посчитанные в фоне {water, roads}; без них считаются здесь
+func _show(key: Vector2i, arrays := {}) -> void:
 	var started := Time.get_ticks_usec()
 	var entry: Dictionary = ledger.regions[key]
 	var decor: Dictionary = entry.decor
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
 	add_child(node)
-	var water := WaterBuilder._flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
+	var water := WaterBuilder._flat_mesh(arrays.water if arrays.has("water") else water_arrays(entry), WaterBuilder._material(), "Water")
 	if water != null:
 		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(water)
-	var ribbons := _road_arrays(decor.trails)
+	var ribbons: Array = arrays.roads if arrays.has("roads") else _road_arrays(decor.trails)
 	if not ribbons.is_empty():
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ribbons)
@@ -414,43 +472,115 @@ static func water_arrays(region: Dictionary) -> Array:
 	return WaterBuilder._arrays(pos)
 
 
-## Полотно дорог области лентой над рельефом: точки каждые ~2 м, края по ширине дороги.
+## Полотно дорог области лентой над рельефом в главном потоке (Heightfield игры)
 func _road_arrays(trails: Array) -> Array:
+	return road_arrays(world, func(x: float, z: float) -> float: return heights.ground_at(x, z), trails)
+
+
+## Высота земли для фоновой задачи: внутри плана — Heightfield (его поля после загрузки не меняются),
+## за краем — поля закреплённых областей из снимка журнала, той же триангуляцией, что сетка рельефа.
+## Куски OuterLand не читаются: главный поток в это время их меняет.
+static func snapshot_ground(w: WorldData, heights: Heightfield, regions: Dictionary, x: float, z: float) -> float:
+	var fx := x / TILE - 0.5
+	var fz := z / TILE - 0.5
+	if fx >= 0.0 and fz >= 0.0 and fx <= w.W - 1.001 and fz <= w.H - 1.001:
+		return heights.ground_at(x, z)
+	var i := floori(fx)
+	var j := floori(fz)
+	var a := _cell_m(w, heights, regions, i, j)
+	var b := _cell_m(w, heights, regions, i + 1, j)
+	var c := _cell_m(w, heights, regions, i, j + 1)
+	var d := _cell_m(w, heights, regions, i + 1, j + 1)
+	var tx := fx - i
+	var tz := fz - j
+	if tx + tz <= 1.0:
+		return a + (b - a) * tx + (c - a) * tz
+	return d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz)
+
+
+static func _cell_m(w: WorldData, heights: Heightfield, regions: Dictionary, i: int, j: int) -> float:
+	if i >= 0 and j >= 0 and i < w.W and j < w.H:
+		return heights.hv[j * w.W + i]
+	var size := WorldData.REGION_SIZE
+	var r: Variant = regions.get(Vector2i(floori(float(i) / size), floori(float(j) / size)))
+	if r == null or not r.has("fields"):
+		return heights.hv[clampi(j, 0, w.H - 1) * w.W + clampi(i, 0, w.W - 1)]
+	var rect: Rect2i = r.rect
+	return Heightfield.outer_meters(r.fields.h[(j - rect.position.y) * rect.size.x + i - rect.position.x])
+
+
+## 14.4: лента дорог. Повороты сглажены (два прохода Чайкина), точки каждые ROAD_STEP м, поперёк пять
+## рядов: высота каждой вершины — земля под ней, поэтому лента ложится по рельефу, а не висит хордой.
+## Прозрачность края — в цвете вершины (шейдер рвёт её шумом), UV.x — поперечная доля для колей.
+## Участки по клеткам, где у плана уже есть дорога (path_mask ≥ 2), пропускаются: её рисует план.
+static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 	var pos := PackedVector3Array()
-	var nor := PackedVector3Array()
+	var col := PackedColorArray()
+	var uv := PackedVector2Array()
+	var idx := PackedInt32Array()
 	for trail: Dictionary in trails:
 		var pts: Array = trail.pts
-		var line: Array[Vector2] = []
-		var widths: Array[float] = []
-		for k in pts.size():
-			var p := Vector2(pts[k].x, pts[k].y) * TILE
-			if k > 0:
-				var q := line.back() as Vector2
-				var steps := maxi(1, ceili(q.distance_to(p) / 2.0))
-				for s in range(1, steps):
-					line.append(q.lerp(p, float(s) / steps))
-					widths.append(float(pts[k].w) * TILE * 0.5)
-			line.append(p)
-			widths.append(float(pts[k].w) * TILE * 0.5)
-		if line.size() < 2:
-			continue
-		var left := PackedVector3Array()
-		var right := PackedVector3Array()
+		var line := PackedVector2Array()
+		var half := PackedFloat32Array()
+		for p: Dictionary in pts:
+			line.append(Vector2(p.x, p.y) * TILE)
+			half.append(float(p.w) * TILE * 0.5)
+		for pass_n in 2:
+			if line.size() < 3:
+				break
+			var sl := PackedVector2Array([line[0]])
+			var sh := PackedFloat32Array([half[0]])
+			for k in line.size() - 1:
+				sl.append_array([line[k].lerp(line[k + 1], 0.25), line[k].lerp(line[k + 1], 0.75)])
+				sh.append_array([lerpf(half[k], half[k + 1], 0.25), lerpf(half[k], half[k + 1], 0.75)])
+			sl.append(line[-1])
+			sh.append(half[-1])
+			line = sl
+			half = sh
+		# ровный шаг вдоль дороги
+		var dense := PackedVector2Array()
+		var dhalf := PackedFloat32Array()
 		for k in line.size():
-			var along := (line[mini(k + 1, line.size() - 1)] - line[maxi(k - 1, 0)]).normalized()
-			var side := along.orthogonal() * widths[k]
-			var l := line[k] + side
-			var r := line[k] - side
-			left.append(Vector3(l.x, heights.surface_at(l.x, l.y, INF) + ROAD_LIFT, l.y))
-			right.append(Vector3(r.x, heights.surface_at(r.x, r.y, INF) + ROAD_LIFT, r.y))
-		for k in line.size() - 1:
-			pos.append_array([left[k], right[k], left[k + 1], left[k + 1], right[k], right[k + 1]])
-	if pos.is_empty():
+			if k > 0:
+				var q := line[k - 1]
+				var steps := maxi(1, ceili(q.distance_to(line[k]) / ROAD_STEP))
+				for st in range(1, steps):
+					dense.append(q.lerp(line[k], float(st) / steps))
+					dhalf.append(lerpf(half[k - 1], half[k], float(st) / steps))
+			dense.append(line[k])
+			dhalf.append(half[k])
+		var run := -1 # номер первой вершины текущего непрерывного участка
+		for k in dense.size():
+			var at := dense[k]
+			var cell := Vector2i(floori(at.x / TILE), floori(at.y / TILE))
+			if cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and w.path_mask[cell.y * w.W + cell.x] >= 2:
+				run = -1
+				continue
+			var along := (dense[mini(k + 1, dense.size() - 1)] - dense[maxi(k - 1, 0)]).normalized()
+			var side := along.orthogonal() * dhalf[k]
+			var base := pos.size()
+			for u: float in ROAD_ACROSS:
+				var v := at + side * u
+				pos.append(Vector3(v.x, ground.call(v.x, v.y) + ROAD_LIFT, v.y))
+				col.append(Color(1, 1, 1, clampf((1.15 - absf(u)) / 0.55, 0.0, 1.0)))
+				uv.append(Vector2(u, 0.0))
+			if run != -1:
+				var n := ROAD_ACROSS.size()
+				for c in n - 1:
+					var a0 := base - n + c
+					var b0 := base + c
+					idx.append_array([a0, b0, a0 + 1, a0 + 1, b0, b0 + 1])
+			run = base
+	if idx.is_empty():
 		return []
+	var nor := PackedVector3Array()
 	nor.resize(pos.size())
 	nor.fill(Vector3.UP)
 	var arrays := []
 	arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = pos
 	arrays[Mesh.ARRAY_NORMAL] = nor
+	arrays[Mesh.ARRAY_COLOR] = col
+	arrays[Mesh.ARRAY_TEX_UV] = uv
+	arrays[Mesh.ARRAY_INDEX] = idx
 	return arrays
