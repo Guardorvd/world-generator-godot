@@ -1077,6 +1077,8 @@ class StaminaArc extends Control:
 	var warning := 0.0                    # 0..1, сила предупреждения (виньетка, пульс)
 	var _alpha := 0.0
 	var _coast := 0.0                     # 0..1, ореол наката
+	var _drain := 0.0                     # 14.5: 0..1, расход идёт — дуга тёплого цвета и мягко пульсирует
+	var _kick := 0.0                      # 14.5: вспышка в момент, когда расход начался
 	var _ghost := 1.0
 	var _t := 0.0
 
@@ -1091,6 +1093,11 @@ class StaminaArc extends Control:
 		var warn_goal := low if st == Stamina.State.DRAIN and allowed else 0.0
 		warning = move_toward(warning, warn_goal, dt * (1.5 if warn_goal > warning else 5.0))
 		_coast = move_toward(_coast, 1.0 if st == Stamina.State.COAST and allowed else 0.0, dt * 4.0)
+		var draining := st == Stamina.State.DRAIN and allowed
+		if draining and state != Stamina.State.DRAIN:
+			_kick = 1.0
+		_kick = maxf(0.0, _kick - dt * 2.5)
+		_drain = move_toward(_drain, 1.0 if draining else 0.0, dt * (6.0 if draining else 3.0))
 		value = v
 		exhausted = tired
 		state = st
@@ -1116,9 +1123,14 @@ class StaminaArc extends Control:
 		elif value < LOW:
 			fill = Color(1.0, 0.72, 0.3)
 		fill = fill.lerp(Color(0.6, 0.9, 1.0), _coast * 0.6)
+		# 14.5: расход — тёплый оттенок и мягкий пульс, в начале расхода — вспышка шире и ярче
+		if not exhausted and value >= LOW:
+			fill = fill.lerp(Color(1.0, 0.8, 0.4), _drain * 0.55)
+		fill = fill.lerp(Color.WHITE, _kick * 0.5)
 		var pulse := 0.5 + 0.5 * sin(_t * 7.0)
-		fill.a = a * lerpf(0.95, 0.55 + 0.4 * pulse, warning)
-		_arc(0.0, value, WIDTH + warning * pulse * 1.5, fill)
+		var spend := 0.5 + 0.5 * sin(_t * 4.5)
+		fill.a = a * lerpf(lerpf(0.95, 0.75 + 0.25 * spend, _drain), 0.55 + 0.4 * pulse, warning)
+		_arc(0.0, value, WIDTH + warning * pulse * 1.5 + _drain * spend * 1.0 + _kick * 3.0, fill)
 		# засечка разблокировки Shift: поперёк дуги, светлая с тёмной обводкой
 		var ang := FROM + SPAN * Stamina.RECOVERED
 		var dir := Vector2(cos(ang), sin(ang))

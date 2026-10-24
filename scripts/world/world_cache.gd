@@ -57,6 +57,8 @@ const PER_OBJECT := ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]
 
 static var enabled := false
 static var dir := "user://world_cache"
+## 14.5: готовые миры автора в проекте (RecommendedSeeds): копируются в dir, если их там нет
+const BUNDLED := "res://resources/world_cache"
 static var _writes: Array[int] = []
 static var _lock := Mutex.new()
 static var _layer_keys := PackedStringArray()
@@ -281,6 +283,25 @@ static func wait_writes() -> void:
 
 
 ## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE); пустой seeds — очистить всё
+## 14.5: скопировать миры из проекта (BUNDLED) в кэш игрока, если там их ещё нет или они другие.
+## Подходит ли файл к нынешнему коду, решает обычная проверка ключа при чтении: устаревший перегенерируется.
+static func install_bundled() -> void:
+	if not DirAccess.dir_exists_absolute(BUNDLED):
+		return
+	DirAccess.make_dir_recursive_absolute(dir)
+	for f in DirAccess.get_files_at(BUNDLED):
+		if not f.ends_with(EXT) and not f.ends_with(".preview"):
+			continue
+		var to := dir.path_join(f.trim_suffix(".preview") + PREVIEW if f.ends_with(".preview") else f)
+		var src := BUNDLED.path_join(f)
+		if FileAccess.file_exists(to) and FileAccess.get_size(to) == FileAccess.get_size(src):
+			continue
+		var bytes := FileAccess.get_file_as_bytes(src)
+		var out := FileAccess.open(to, FileAccess.WRITE)
+		if out != null and not bytes.is_empty():
+			out.store_buffer(bytes)
+
+
 static func keep_only(seeds: Array) -> void:
 	wait_writes()
 	var keep := {}

@@ -143,6 +143,10 @@ static func keep_seeds() -> Array[String]:
 	for s in favorite_seeds:
 		if not s in out:
 			out.append(s)
+	# 14.5: миры автора готовы в проекте — их кэш не удаляется
+	for r: Dictionary in RecommendedSeeds.SEEDS:
+		if not r.seed in out:
+			out.append(r.seed)
 	return out
 
 

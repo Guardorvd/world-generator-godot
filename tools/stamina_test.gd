@@ -44,11 +44,11 @@ func _rest_time(foot: bool) -> float:
 func _init() -> void:
 	var cruise := GameConfig.BIKE_SPEED
 	var cases := [
-		["Shift по ровному", true, cruise * 1.3, 0.0, 18.75],
-		["Shift под уклон", true, cruise * 1.3, -0.15, 25.0],
-		["Shift в подъём", true, 5.0, 0.15, 24.0],
-		["педали без Shift, крейсерская", false, cruise, 0.0, 75.0],
-		["педали без Shift, подъём", false, 5.0, 0.15, 60.0],
+		["Shift по ровному", true, cruise * 1.3, 0.0, 22.5],
+		["Shift под уклон", true, cruise * 1.3, -0.15, 30.0],
+		["Shift в подъём", true, 5.0, 0.15, 28.8],
+		["педали без Shift, крейсерская", false, cruise, 0.0, 90.0],
+		["педали без Shift, подъём", false, 5.0, 0.15, 72.0],
 	]
 	for c in cases:
 		var t := _drain_time(c[1], c[2], c[3])

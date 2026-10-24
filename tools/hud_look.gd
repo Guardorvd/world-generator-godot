@@ -96,13 +96,13 @@ func _run() -> void:
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
 	# трата с Shift до 12 %: пульс и затемнение краёв
 	var stamina := Stamina.new()
-	stamina.value = 0.24
+	stamina.value = 0.18
 	await _tick(stamina, 75, true, 1.0, true)
 	_check(stamina.value < 0.2 and hud._stamina.warning > 0.05 and hud._vignette.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._stamina.warning)
 	_check(hud._stamina._ghost > stamina.value, "шлейф отстаёт от заливки")
 	await _shot("hud_drain")
 	# истощение, потом накат: предупреждение гаснет быстро, ореол наката
-	await _tick(stamina, 200, true, 1.0, true)
+	await _tick(stamina, 330, true, 1.0, true)
 	_check(stamina.exhausted, "полоска истощена")
 	await _tick(stamina, 30, true, 0.0, false)
 	_check(stamina.state == Stamina.State.COAST and hud._stamina.warning < 0.05 and hud._stamina._coast > 0.9, "накат: предупреждение погасло, ореол наката")

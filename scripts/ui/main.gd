@@ -81,6 +81,7 @@ func _ready() -> void:
 	display_options = DisplayOptions.new()
 	display_options.setup(self)
 	if WorldCache.enabled:
+		WorldCache.install_bundled()
 		WorldCache.keep_only(GameSettings.keep_seeds())
 	var tabs := ButtonGroup.new()
 	for tab: String in ["recent", "favorites", "recommended", "saved"]:

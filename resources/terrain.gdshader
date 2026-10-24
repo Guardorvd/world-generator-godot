@@ -240,6 +240,10 @@ void fragment() {
 		float bump_wave = max(road_bump_p.y, 0.1);
 		vec3 bump = road_field(p, road_bump_p, grade, UV2.x, across_grad);
 		float bump_fade = (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
+		// 14.5: волны кочек правильные (две синусоиды), и в тоне и свете они читались ровным узором
+		// тёмных «змеек» через равный шаг, особенно под фарой. Видимая сила теперь пятнами по крупному
+		// шуму, тон и наклон слабее; сами кочки (тряска, RoadBump) не меняются.
+		float bump_vis = bump_fade * mix(0.3, 1.0, smoothstep(0.3, 0.75, n_big + (n_mid - 0.5) * 0.6));
 		vec2 ruts_patch = road_patch(p);
 		// Гравий и камень читаются отдельным зерном; песок и укатанная земля — мелкой фактурой.
 		// Камешки — купола со светлой макушкой и тёмным краем; гаснут раньше, чем начнут мерцать.
@@ -330,7 +334,7 @@ void fragment() {
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
 		soil *= 1.0 - lip * 0.06;
-		soil *= 1.0 + clamp(bump.x * 6.0, -0.12, 0.15) * bump_fade;
+		soil *= 1.0 + clamp(bump.x * 3.5, -0.06, 0.07) * bump_vis;
 		col = mix(mix(col, verge_col, verge), soil, road);
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
@@ -340,7 +344,7 @@ void fragment() {
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
 			vec3 grit = texture(detail_normal, rp * 1.37).rgb * 2.0 - 1.0;
 			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks)
-				- bump.yz * bump_fade * 4.0 * road; // глубина карты нормалей на полотне ~0,3: запас в 2,5 раза
+				- bump.yz * bump_vis * 2.2 * road; // глубина карты нормалей на полотне ~0,3 (14.5: было 4,0 — узор)
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
 			detail_n = mix(detail_n, road_normal, relief);
 		}
