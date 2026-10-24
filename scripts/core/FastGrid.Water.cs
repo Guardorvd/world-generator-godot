@@ -2,15 +2,16 @@ using System;
 using Godot;
 
 /// <summary>
-/// Земля и вода базового рельефа для дорожного этапа (с 9.7): копии Heightfield.base_ground_at, river_level,
-/// lake_level, depth_at без настилов мостов и StageTrails._road_segment. Только для рельефа генерации:
+/// Земля и вода базового рельефа для дорожного этапа (с 9.7): аналоги Heightfield.base_ground_at, river_level,
+/// lake_level, depth_at без настилов мостов и StageTrails._road_segment. Численное ядро — WaterMath.cs,
+/// генерируется из water_math.gd. Только для рельефа генерации:
 /// без полотна дорог (RoadRefinement) и без земли за краем карты (OuterLand). Арифметика как в GDScript:
 /// double, значения массивов и вершин лент — float.
 /// </summary>
 public partial class FastGrid
 {
 	private int _sw, _sh;
-	private double _tile, _hs, _lakeDrop;
+	private double _tile, _hs;
 	private float[] _surfHv = Array.Empty<float>();
 	private float[] _segPts = Array.Empty<float>(); // по 12 на отрезок ленты: a.left, a.right, b.left, b.right
 	private int[] _cellStart = Array.Empty<int>();
@@ -19,13 +20,12 @@ public partial class FastGrid
 	private float[] _filled = Array.Empty<float>();
 
 	/// <summary>Ленты рек по клеткам: пары (клетка, отрезок) в любом порядке, как Heightfield._river_cells.</summary>
-	public void SetWater(int w, int h, double tile, double hs, double lakeDrop, float[] segPts, int[] pairCells, int[] pairSegs, byte[] lake, float[] filled)
+	public void SetWater(int w, int h, double tile, double hs, float[] segPts, int[] pairCells, int[] pairSegs, byte[] lake, float[] filled)
 	{
 		_sw = w;
 		_sh = h;
 		_tile = tile;
 		_hs = hs;
-		_lakeDrop = lakeDrop;
 		_segPts = segPts;
 		_lake = lake;
 		_filled = filled;
@@ -46,29 +46,20 @@ public partial class FastGrid
 	private double Ground(double x, double z)
 	{
 		int W = _sw;
-		double fx = Math.Clamp(x / _tile - 0.5, 0.0, W - 1.001);
-		double fz = Math.Clamp(z / _tile - 0.5, 0.0, _sh - 1.001);
+		double fx = Math.Clamp(x / _tile - 0.5, 0.0, W - WaterMath.GRID_EDGE_INSET);
+		double fz = Math.Clamp(z / _tile - 0.5, 0.0, _sh - WaterMath.GRID_EDGE_INSET);
 		int i = (int)Math.Floor(fx), j = (int)Math.Floor(fz);
 		var hv = _surfHv;
 		double a = hv[j * W + i], b = hv[j * W + i + 1], c = hv[(j + 1) * W + i], d = hv[(j + 1) * W + i + 1];
 		double tx = fx - i, tz = fz - j;
-		if (tx + tz <= 1.0)
-			return a + (b - a) * tx + (c - a) * tz;
-		return d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz);
+		return WaterMath.ground_height(a, b, c, d, tx, tz);
 	}
 
-	private static double WaterTriangle(double x, double z, double ax, double ay, double az,
-		double bx, double by, double bz, double cx, double cy, double cz)
-	{
-		double denominator = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
-		if (Math.Abs(denominator) < 1e-8)
-			return double.NegativeInfinity;
-		double u = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / denominator;
-		double v = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / denominator;
-		if (u < -1e-5 || v < -1e-5 || u + v > 1.00001)
-			return double.NegativeInfinity;
-		return u * ay + v * by + (1.0 - u - v) * cy;
-	}
+	/// <summary>Diagnostic entry points also used by water_parity_test.gd.</summary>
+	public string WaterMathSourceHash() => WaterMath.SourceHash;
+
+	public double WaterTriangle(double x, double z, Vector3 a, Vector3 b, Vector3 c) =>
+		WaterMath.triangle_height(x, z, a.X, a.Y, a.Z, b.X, b.Y, b.Z, c.X, c.Y, c.Z);
 
 	private double RiverLevel(double x, double z)
 	{
@@ -81,8 +72,8 @@ public partial class FastGrid
 		{
 			int o = _cellSeg[k] * 12;
 			// a.left = o, a.right = o + 3, b.left = o + 6, b.right = o + 9
-			top = Math.Max(top, WaterTriangle(x, z, p[o], p[o + 1], p[o + 2], p[o + 3], p[o + 4], p[o + 5], p[o + 6], p[o + 7], p[o + 8]));
-			top = Math.Max(top, WaterTriangle(x, z, p[o + 6], p[o + 7], p[o + 8], p[o + 3], p[o + 4], p[o + 5], p[o + 9], p[o + 10], p[o + 11]));
+			top = Math.Max(top, WaterMath.triangle_height(x, z, p[o], p[o + 1], p[o + 2], p[o + 3], p[o + 4], p[o + 5], p[o + 6], p[o + 7], p[o + 8]));
+			top = Math.Max(top, WaterMath.triangle_height(x, z, p[o + 6], p[o + 7], p[o + 8], p[o + 3], p[o + 4], p[o + 5], p[o + 9], p[o + 10], p[o + 11]));
 		}
 		return top;
 	}
@@ -95,22 +86,21 @@ public partial class FastGrid
 			return double.NegativeInfinity;
 		int a = cy * _sw + cx;
 		double top = double.NegativeInfinity;
-		if (_lake[a] != 0) top = _filled[a] * _hs - _lakeDrop;
-		if (_lake[a + 1] != 0) top = Math.Max(top, _filled[a + 1] * _hs - _lakeDrop);
+		if (_lake[a] != 0) top = WaterMath.lake_height(_filled[a], _hs);
+		if (_lake[a + 1] != 0) top = Math.Max(top, WaterMath.lake_height(_filled[a + 1], _hs));
 		a += _sw;
-		if (_lake[a] != 0) top = Math.Max(top, _filled[a] * _hs - _lakeDrop);
-		if (_lake[a + 1] != 0) top = Math.Max(top, _filled[a + 1] * _hs - _lakeDrop);
+		if (_lake[a] != 0) top = Math.Max(top, WaterMath.lake_height(_filled[a], _hs));
+		if (_lake[a + 1] != 0) top = Math.Max(top, WaterMath.lake_height(_filled[a + 1], _hs));
 		return top;
 	}
 
 	/// <summary>Heightfield.depth_at(x, z) без ног: настилы мостов не учитываются.</summary>
-	private double Depth(double x, double z)
+	public double Depth(double x, double z)
 	{
 		int tx = (int)Math.Floor(x / _tile), tz = (int)Math.Floor(z / _tile);
 		if (tx < 0 || tz < 0 || tx >= _sw || tz >= _sh)
 			return 0.0;
-		double l = Math.Max(0.0, Math.Max(RiverLevel(x, z), LakeLevel(x, z)));
-		return Math.Max(0.0, l - Ground(x, z));
+		return WaterMath.depth(Ground(x, z), RiverLevel(x, z), LakeLevel(x, z));
 	}
 
 	/// <summary>Клетки из cells, где хотя бы в одной из девяти точек StageTrails._unsafe_ford вода глубже limit

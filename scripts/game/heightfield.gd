@@ -8,6 +8,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
+const WaterMath := preload("res://scripts/core/water_math.gd")
 const BRIDGE_HALF := 2.2    # настил шире основной дороги, чтобы опираться на берег по обе стороны въезда
 const TUNNEL_HALF := 2.5    # полуширина туннеля, м
 const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
@@ -78,8 +79,8 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	_carve_rivers()
 	for pts: Array in ribbons:
 		for p: Dictionary in pts:
-			var fx := clampf(p.x / TILE - 0.5, 0.0, W - 1.001)
-			var fz := clampf(p.z / TILE - 0.5, 0.0, H - 1.001)
+			var fx := clampf(p.x / TILE - 0.5, 0.0, W - WaterMath.GRID_EDGE_INSET)
+			var fz := clampf(p.z / TILE - 0.5, 0.0, H - WaterMath.GRID_EDGE_INSET)
 			var i := floori(fx)
 			var j := floori(fz)
 			var tri: Array[int]
@@ -134,7 +135,7 @@ func copy() -> Heightfield:
 	return c
 
 
-## C#-копия земли и воды (FastGrid.Water.cs) для дорожного этапа или null: без .NET, с полотном дорог
+## C#-индекс земли и воды с общим численным ядром (FastGrid.Water.cs) для дорожного этапа или null: без .NET, с полотном дорог
 ## или с землёй за краем карты (их копия не знает). Высоты передаются при каждом вызове: выемки туннелей меняют hv
 func fast_water() -> Object:
 	if road_refinement != null or world.outer != null:
@@ -143,7 +144,7 @@ func fast_water() -> Object:
 		_fast_water = Grid.fast_grid()
 		if _fast_water == null:
 			return null
-		_fast_water.SetWater(world.W, world.H, TILE, HS, WaterBuilder.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
+		_fast_water.SetWater(world.W, world.H, TILE, HS, _seg_pts, _pair_cells, _pair_segs,
 			world.lake, world.filled)
 	_fast_water.SetGround(hv)
 	return _fast_water
@@ -168,7 +169,7 @@ func complete_water() -> void:
 			# Для коридора A* и закрепления берегов — верхняя оценка по ленте.
 			# В точке depth_at проверяет её фактические треугольники.
 			var level := river_level((i % W + 0.5) * TILE, (i / W + 0.5) * TILE)
-			water_level[i] = maxf(level, w.filled[i] * HS - WaterBuilder.LAKE_DROP) if w.river[i] != 0 else level
+			water_level[i] = maxf(level, WaterMath.lake_height(w.filled[i], HS)) if w.river[i] != 0 else level
 	for cell: int in _river_cells:
 		if w.ocean[cell] != 0 or w.lake[cell] != 0:
 			continue
@@ -444,7 +445,7 @@ func _river_ribbons() -> Array:
 		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
-			pts.append({x = x, z = z, w = StageRivers.half_width(p.w), y = maxf(0.0, p.e * HS - WaterBuilder.LAKE_DROP),
+			pts.append({x = x, z = z, w = StageRivers.half_width(p.w), y = maxf(0.0, WaterMath.lake_height(p.e, HS)),
 				depth = clampf(0.3 + p.w * 0.6, 0.45, 1.2)})
 		for k in range(1, pts.size()):
 			pts[k].y = minf(pts[k].y, pts[k - 1].y)
@@ -480,13 +481,13 @@ static func river_motion(pts: Array, k: int) -> Vector4:
 ## Локальное течение на видимой реке. Озеро и море сохраняют спокойный след.
 func current_at(x: float, z: float) -> Vector2:
 	var level_here := river_level(x, z)
-	if level_here <= maxf(0.0, lake_level(x, z)) + 0.001:
+	if level_here <= maxf(0.0, lake_level(x, z)) + WaterMath.LEVEL_EPS:
 		return Vector2.ZERO
 	var cell := floori(z / TILE) * world.W + floori(x / TILE)
 	for s: Dictionary in _river_cells.get(cell, _NO_SEGMENTS):
 		var top := maxf(_water_triangle(x, z, s.a.left, s.a.right, s.b.left),
 			_water_triangle(x, z, s.b.left, s.a.right, s.b.right))
-		if absf(top - level_here) > 0.001:
+		if absf(top - level_here) > WaterMath.LEVEL_EPS:
 			continue
 		var delta := Vector2(s.b.x - s.a.x, s.b.z - s.a.z)
 		var u := clampf(Vector2(x - s.a.x, z - s.a.z).dot(delta) / maxf(delta.length_squared(), 0.0001), 0.0, 1.0)
@@ -596,7 +597,7 @@ func _fit_banks_of(pts: Array) -> void:
 		var normal := Vector2(p.left.x - p.x, p.left.z - p.z).normalized()
 		for side in [1.0, -1.0]:
 			var reach: float = p.w
-			if p.y > maxf(0.0, lake_level(p.x, p.z)) + 0.001:
+			if p.y > maxf(0.0, lake_level(p.x, p.z)) + WaterMath.LEVEL_EPS:
 				reach = 0.0
 				var limit: float = p.w + TILE
 				while reach < limit:
@@ -645,26 +646,19 @@ func lake_level(x: float, z: float) -> float:
 	var top := -INF
 	# четыре соседние клетки без нового массива на вызов: функция в самом частом пути проверки воды
 	if world.lake[a] != 0:
-		top = world.filled[a] * HS - WaterBuilder.LAKE_DROP
+		top = WaterMath.lake_height(world.filled[a], HS)
 	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, WaterMath.lake_height(world.filled[a + 1], HS))
 	a += world.W
 	if world.lake[a] != 0:
-		top = maxf(top, world.filled[a] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, WaterMath.lake_height(world.filled[a], HS))
 	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, WaterMath.lake_height(world.filled[a + 1], HS))
 	return top
 
 
 static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vector3) -> float:
-	var denominator := (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
-	if absf(denominator) < 1e-8:
-		return -INF
-	var u := ((b.z - c.z) * (x - c.x) + (c.x - b.x) * (z - c.z)) / denominator
-	var v := ((c.z - a.z) * (x - c.x) + (a.x - c.x) * (z - c.z)) / denominator
-	if u < -1e-5 or v < -1e-5 or u + v > 1.00001:
-		return -INF
-	return u * a.y + v * b.y + (1.0 - u - v) * c.y
+	return WaterMath.triangle_height(x, z, a.x, a.y, a.z, b.x, b.y, b.z, c.x, c.y, c.z)
 
 
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
@@ -689,9 +683,9 @@ func base_ground_at(x: float, z: float, raw: bool = false) -> float:
 	var d: float
 	var i: int
 	var j: int
-	if world.outer == null or (fx >= 0.0 and fz >= 0.0 and fx <= W - 1.001 and fz <= world.H - 1.001):
-		fx = clampf(fx, 0.0, W - 1.001)
-		fz = clampf(fz, 0.0, world.H - 1.001)
+	if world.outer == null or (fx >= 0.0 and fz >= 0.0 and fx <= W - WaterMath.GRID_EDGE_INSET and fz <= world.H - WaterMath.GRID_EDGE_INSET):
+		fx = clampf(fx, 0.0, W - WaterMath.GRID_EDGE_INSET)
+		fz = clampf(fz, 0.0, world.H - WaterMath.GRID_EDGE_INSET)
 		i = floori(fx)
 		j = floori(fz)
 		a = arr[j * W + i]
@@ -707,9 +701,7 @@ func base_ground_at(x: float, z: float, raw: bool = false) -> float:
 		d = _cell_height(arr, i + 1, j + 1)
 	var tx := fx - i
 	var tz := fz - j
-	if tx + tz <= 1.0:
-		return a + (b - a) * tx + (c - a) * tz
-	return d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz)
+	return WaterMath.ground_height(a, b, c, d, tx, tz)
 
 
 ## Высота клетки (i, j): на карте из arr (hv или hv_raw), за краем — из OuterLand
@@ -762,8 +754,7 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 		return maxf(0.0, -ground_at(x, z))
 	# Плоскость моря рисуется во всём мире; в углублениях ниже нуля она
 	# также видима, даже если центр клетки относится к речному берегу.
-	var l := maxf(0.0, maxf(river_level(x, z), lake_level(x, z)))
-	return maxf(0.0, l - ground_at(x, z))
+	return WaterMath.depth(ground_at(x, z), river_level(x, z), lake_level(x, z))
 
 
 ## Погружение ног/низа колеса, в отличие от полной глубины под ними.

@@ -6,7 +6,8 @@ const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 # 16 cells; divides the 256-cell RegionStream grid, including negative coordinates.
 const CHUNK_SIZE := TILE * 16.0
-const LAKE_DROP := 0.1   # м, см. _lake_arrays
+const WaterMath := preload("res://scripts/core/water_math.gd")
+const LAKE_DROP := WaterMath.LAKE_DROP   # м, см. _lake_arrays
 const WaterJunction = preload("res://scripts/render/water_junction.gd")
 const SHADER := preload("res://resources/water.gdshader")
 
@@ -141,7 +142,7 @@ static func _lake_arrays(w: WorldData, heights: Heightfield) -> Array:
 			var y := -INF
 			for k in [a, a + 1, a + W, a + W + 1]:
 				if lake[k] != 0:
-					y = maxf(y, filled[k] * HS - LAKE_DROP)
+					y = maxf(y, WaterMath.lake_height(filled[k], HS))
 			var x0 := (i + 0.5) * TILE
 			var x1 := (i + 1.5) * TILE
 			var z0 := (j + 0.5) * TILE
