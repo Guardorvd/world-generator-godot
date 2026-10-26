@@ -1299,8 +1299,11 @@ func _recall_bike() -> void:
 
 
 ## Фонарик (F): с 10.4 это фара на руле велосипеда (BikeView.lamp), светит туда, куда повёрнут руль.
-## Пешком она остаётся на велосипеде и освещает место, где он стоит
+## Пешком переключается только рядом с велосипедом, в пределах доступности посадки.
 func toggle_flashlight() -> void:
+	if not bike.riding and not bike.can_mount(player):
+		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару")
+		return
 	bike_view.set_lamp(not bike_view.lamp_on())
 	hud.toast_now("Фара включена" if bike_view.lamp_on() else "Фара выключена")
 
