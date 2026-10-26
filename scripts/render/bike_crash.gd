@@ -132,6 +132,10 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 			_side = signf(away)
 	else:
 		style = FallStyle.SIDE_SLIDE if absf(b.lean) > 0.15 else FallStyle.LANDING
+	if b.crash_cause == BikeRide.CrashCause.BRAKING:
+		style = FallStyle.OVER_BARS
+		_tumble = 1.0
+		_severity = smoothstep(6.0, 20.0, velocity.length())
 	_balance_time = lerpf(0.22, 0.14, _severity) if collision else BALANCE
 	_forward = -1.0 if velocity.dot(-_start.basis.z) < -0.1 else 1.0
 	_build_ground(Vector3(b.x, b.y, b.z) + Vector3(velocity.x, 0.0, velocity.z) * 0.35, b.y, heights)

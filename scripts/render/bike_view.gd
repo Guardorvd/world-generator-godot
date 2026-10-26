@@ -37,7 +37,8 @@ const S_STAND := 20 # 12.3: привстал (подъём, рывок) +, «а�
 const S_HEAD_NOD := 21
 const S_PACK_PITCH := 22
 const S_PACK_ROLL := 23
-const STATE_SIZE := 24
+const S_BRAKE := 24
+const STATE_SIZE := 25
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
 const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
 const AIR_CROUCH := 0.055
@@ -68,6 +69,8 @@ var _fork_lowers: Array[Node3D] = []
 var _fork_parts: Array[Node3D] = []
 var _fork_rest: Array[Vector3] = []
 var _steering: Node3D
+var _levers: Array[Node3D] = []
+var _lever_rest: Array[Transform3D] = []
 var _view_ready := false
 # Перья подвески имеют именованные поля вместо позиционных массивов.
 class Strut:
@@ -108,6 +111,11 @@ func _ready() -> void:
 			continue
 		get_node(part).reparent(_steering)
 	var front_axle := Vector3(0.0, WHEEL_Y, -BikeRide.HUB) - _steering.position
+	for part: String in ["LeverL", "LeverR"]:
+		if _steering.has_node(part):
+			var lever := _steering.get_node(part) as Node3D
+			_levers.append(lever)
+			_lever_rest.append(lever.transform)
 	for part: String in ["ForkL", "ForkR"]:
 		var fork := _steering.get_node(part)
 		if fork.has_node("Lower"):
@@ -177,6 +185,13 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_BODY_Y] = b.y + (b.ground_f + b.ground_r) * 0.5 - (b.squash_f + b.squash_r) * 0.5
 	_cur[S_Z] = b.z
 	_cur[S_TILT] = b.tilt
+	_cur[S_BRAKE] = b.brakes.pressure
+	# Pitch about the front contact point while the rear wheel unloads.
+	var lift := b.brakes.lift if not b.airborne else 0.0
+	_cur[S_TILT] -= lift
+	_cur[S_BODY_Y] += sin(lift) * BikeRide.HUB
+	_cur[S_X] += sin(b.heading) * BikeRide.HUB * (cos(lift) - 1.0)
+	_cur[S_Z] += cos(b.heading) * BikeRide.HUB * (cos(lift) - 1.0)
 	_cur[S_HEADING] = b.heading
 	_cur[S_ROLL] = b.lean
 	_cur[S_SQUASH] = b.squash
@@ -233,7 +248,7 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	# Под нагрузкой подаёмся вперёд; при торможении и спуске уходим назад.
 	# 12.3: заметнее — разгон, подъём и тормоз двигают корпус до 9 см (было 5,5).
 	# Тормоз заменяет обычную инерционную компенсацию, а не складывается с ней.
-	var inertia_shift := lerpf(-acceleration * 0.007, braking * GameConfig.BIKE_BRAKE_SHIFT, braking)
+	var inertia_shift := lerpf(-acceleration * 0.007, b.brakes.brace * GameConfig.BIKE_BRAKE_SHIFT, braking)
 	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift, -0.09, 0.13)
 	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
 	_takeoff *= exp(-dt * 12.0)
@@ -333,6 +348,8 @@ func draw(alpha: float) -> void:
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW
+	for i in _levers.size():
+		_levers[i].transform = _lever_rest[i] * Transform3D(Basis(Vector3.UP, _mix[S_BRAKE] * (0.28 if i == 0 else -0.28)), Vector3.ZERO)
 	_steering.rotation.y = front_wheel.rotation.y
 	# Рейк не должен отрывать штаны вилки от оси при рулении: сохраняем прежний центр колеса.
 	var axle := Vector3(0, WHEEL_Y, -BikeRide.HUB) - _steering.position

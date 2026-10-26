@@ -90,6 +90,7 @@ func _initialize() -> void:
 		bike.y = 100.0
 		cases.append_array([["в ствол", Vector3(0, 0, -12)], ["в бревно", Vector3(0, 0, -12)], ["в валун", Vector3(0, 0, -12)], ["на левый бок", Vector3(0, 0, -8)], ["на правый бок", Vector3(0, 0, -8)], ["задним ходом", Vector3(0, 0, 10)], ["на склоне", Vector3(0, 0, -12)]])
 		cases.append_array([["стена дома", Vector3(0, 0, -12)], ["настил моста", Vector3(0, -6, -10)], ["под мостом", Vector3(0, 0, -8)], ["стена туннеля", Vector3(12, 0, 0)], ["вода у берега", Vector3(6, -6, -8)], ["с края досок", Vector3(6, 0, 0)]])
+		cases.append(["перелёт при торможении", Vector3(0, 0, -20)])
 	else:
 		w = WorldGenerator.generate("abc", 128)
 		heights = Heightfield.new(w)
@@ -153,6 +154,8 @@ func _begin_case() -> void:
 			bike.crash_normal = Vector3.LEFT
 		if case_i == 15:
 			bike.heading = -PI * 0.5
+		if case_i == 16:
+			bike.crash_cause = BikeRide.CrashCause.BRAKING
 		bike.y = 104.0 if case_i == 11 else (103.0 if case_i == 15 else 100.0)
 	view.snap(bike)
 	view.draw(1.0)
@@ -241,7 +244,7 @@ func _physics_process(_delta: float) -> bool:
 				shots.append(str(case_i) + "_first_person")
 		else:
 			camera.look_at_from_position(cam_at + Vector3(3.2, 2.2, 3.2), cam_at + Vector3(0, 0.5, 0))
-		if flat and case_i in [10, 15] and crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.5 and not phases.has("r"):
+		if flat and case_i in [10, 15, 16] and crash.phase == BikeCrash.Phase.RAGDOLL and crash.t > 0.5 and not phases.has("r"):
 			phases["r"] = true
 			shots.append(str(case_i) + "_ragdoll")
 	if back or frames > 600:

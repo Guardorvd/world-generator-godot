@@ -1,7 +1,7 @@
 class_name Stamina
 extends RefCounted
 ## 14.0: выносливость седока — одна полоска 0..1 без физиологии. Тратится, пока игрок давит на педали:
-## сильно с Shift, слабо на большой скорости без него; больше в подъём и меньше под уклон. Восстанавливается
+## только с Shift; больше в подъём и меньше под уклон. Восстанавливается
 ## накатом (педали и тормоз отпущены) и пешком. Пуста — Shift не работает, педали крутятся слабее,
 ## пока полоска не наберёт RECOVERED. Пеший бег пока не тратит её, но и не восстанавливает.
 ## Новые траты (бег, плавание, груз) — ещё одна ветка в tick_*, числа — константы ниже.
@@ -11,8 +11,6 @@ extends RefCounted
 const SHIFT_FLAT := 1.0 / 22.5   # Shift на ровном: пусто за 22,5 с
 const SHIFT_DOWN := 1.0 / 30.0   # Shift под пологий уклон: за 30 с
 const SHIFT_UP := 1.0 / 28.8     # Shift в подъём: за 28,8 с
-const PEDAL_FAST := 1.0 / 90.0   # педали без Shift на крейсерской скорости: за 90 с
-const PEDAL_UP := 1.0 / 72.0     # педали без Shift в подъём: за 72 с
 const CLIMB := 0.15              # подъём на метр пути, при котором трата уже как в подъём (≈ 8,5°)
 const COAST := 1.0 / 12.0        # накатом или стоя на велосипеде: с нуля до полной за 12 с
 const REST := 1.0 / 8.0          # пешком: за 8 с
@@ -49,18 +47,12 @@ func tick_ride(dt: float, throttle: float, boost: bool, speed: float, grade: flo
 	if throttle > 0.0:
 		if boost:
 			drain = lerpf(SHIFT_FLAT, SHIFT_UP, g) if g > 0.0 else lerpf(SHIFT_FLAT, SHIFT_DOWN, -g)
-		elif not exhausted:
-			# без Shift тратит быстрая езда и подъём; медленно по ровному и под уклон — почти даром
-			var fast := smoothstep(0.55, 1.0, absf(speed) / GameConfig.BIKE_SPEED) * (1.0 - maxf(-g, 0.0))
-			drain = maxf(PEDAL_FAST * fast, PEDAL_UP * maxf(g, 0.0))
 		drain *= throttle
 	if drain > 0.0:
 		_spend(drain * dt)
-	elif throttle <= 0.0:
+	else:
 		_rest(COAST, dt)
 		state = State.COAST if value < 1.0 else State.IDLE
-	else:
-		state = State.IDLE
 
 
 ## Такт пешком: стоя и шагом полоска восстанавливается, на бегу замирает

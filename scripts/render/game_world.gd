@@ -69,7 +69,7 @@ var bike: BikeRide
 var bike_view: BikeView
 var crash: BikeCrash     # падение с велосипеда: ragdoll и подъём пешком
 var stamina: Stamina:
-	get: return bike_controller.stamina # 14.0: выносливость седока — Shift и быстрая езда тратят, накат и шаг восстанавливают
+	get: return bike_controller.stamina # 14.0: выносливость седока — ускорение с Shift тратит, накат и шаг восстанавливают
 var water_effects: WaterEffects
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
@@ -967,6 +967,7 @@ func _process(delta: float) -> void:
 		if stick != Vector2.ZERO:
 			look(stick.x, stick.y)
 	hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
+	hud.set_brakes(bike)
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
 	var alpha := 1.0 if _placing_bike() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)

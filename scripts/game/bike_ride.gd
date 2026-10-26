@@ -29,7 +29,7 @@ const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу �
 const HOP_BUFFER := 0.22 # 14.1: пробел ждёт касания столько, с (было 0,12, как пешком): короткий отрыв на гребне
                          # перед бревном длится 0,2–0,3 с и съедал нажатие, сделанное вовремя
 ## С 7.0 опора — середина между точками касания колёс, отрыв — по форме рельефа впереди.
-const HUB := 0.53        # оси колёс впереди и позади середины, м (как в scenes/bike.tscn)
+const HUB := GameConfig.BIKE_WHEELBASE * 0.5 # оси колёс впереди и позади середины, м
 const LIFT := 0.2        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
 const LOOK: Array[float] = [0.1, 0.2, 0.3]
 const DROP_STEP := 0.12  # земля ушла вниз за один такт больше этого — это край, а не излом: падаем
@@ -49,9 +49,14 @@ var heading := 0.0    # курс, как yaw камеры: 0 — на север
 var speed := 0.0      # м/с вдоль курса, назад — меньше нуля
 var acceleration := 0.0 # фактический продольный разгон за последний такт, для ощущения скорости
 var lateral_speed := 0.0 # боковая скорость относительно рамы
-var brake_pressure := 0.0 # сглаженное усилие одной кнопки, 0..1
-var brake_deceleration := 0.0 # фактическое замедление от тормозов, м/с² (без склона и качения)
-var front_load := 0.5 # автоматическое распределение: доля нагрузки спереди
+const Brakes = preload("res://scripts/game/bike_brakes.gd")
+var brakes := Brakes.new()
+var brake_pressure: float:
+	get: return brakes.pressure
+var brake_deceleration: float:
+	get: return brakes.deceleration
+var front_load: float:
+	get: return brakes.front_load
 var grip_usage := 0.0 # фактически использованный общий запас, 0..1
 var slip := 0.0 # подписанный угол сноса, радианы
 var _corner_demand := 0.0
@@ -81,7 +86,7 @@ var _yaw_rate := 0.0   # фактическая угловая скорость 
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
 var crashed := false  # седок упал: жёстко приземлился или врезался в стену (GameWorld покажет падение и сбросит флаг)
-enum CrashCause { FALL, COLLISION }
+enum CrashCause { FALL, COLLISION, BRAKING }
 var crash_cause := CrashCause.FALL
 var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
@@ -170,9 +175,7 @@ func mount(p: PlayerState) -> void:
 func reset_motion() -> void:
 	acceleration = 0.0
 	lateral_speed = 0.0
-	brake_pressure = 0.0
-	brake_deceleration = 0.0
-	front_load = 0.5
+	brakes.reset()
 	grip_usage = 0.0
 	slip = 0.0
 	_corner_demand = 0.0
@@ -307,12 +310,13 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	if not airborne:
 		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
 		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
+		if brakes.tipped:
+			_crash(vy, Vector3.UP, CrashCause.BRAKING)
+			return
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
 		_brake_hold = 0.0
-		brake_pressure *= exp(-dt / GameConfig.BIKE_BRAKE_RELEASE)
-		brake_deceleration = 0.0
-		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
+		brakes.step(dt, 0.0, speed, slope, grip, 0.0, false)
 		braking = 0.0
 		speed *= exp(-0.03 * dt)
 		lateral_speed *= exp(-0.03 * dt)
@@ -609,10 +613,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
-	var pressure_goal := maxf(0.0, -throttle)
-	var pressure_time := GameConfig.BIKE_BRAKE_RISE if pressure_goal > brake_pressure else GameConfig.BIKE_BRAKE_RELEASE
-	brake_pressure = lerpf(brake_pressure, pressure_goal, 1.0 - exp(-dt / pressure_time))
-	brake_deceleration = 0.0
+	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand)
 	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle <= -GameConfig.BIKE_REVERSE_INPUT and absf(speed) < 0.05:
@@ -623,12 +624,12 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	if reversing:
 		# Медленный манёвр назад остаётся предсказуемым и на склоне.
 		speed = move_toward(speed, -GameConfig.BIKE_REVERSE * absf(throttle), GameConfig.BIKE_ACCEL * dt)
-		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
+		brakes.deceleration = 0.0
 		return
 	# Автобаланс и статический тормоз: не сползаем, пока игрок обдумывает задний ход.
 	if throttle < 0.0 and absf(speed) < 0.05:
 		speed = 0.0
-		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
+		brakes.deceleration = 0.0
 		return
 	if speed < 0.0:
 		var stop := GameConfig.BIKE_ACCEL if throttle > 0.0 else rolling + drag * speed * speed
@@ -649,23 +650,16 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
 	var resistance := rolling + drag * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
 	if brake_pressure > 0.001:
-		var capacity := CORNER_GRIP * grip
-		var reserve := capacity * GameConfig.BIKE_CORNER_RESERVE * _corner_demand
-		var brake_limit := sqrt(maxf(0.0, capacity * capacity - reserve * reserve))
-		var demand := GameConfig.BIKE_BRAKE * grip * brake_pressure
-		# Один рычаг: перед получает долю по нагрузке; зад оставляет небольшой запас от блокировки.
-		var force := minf(demand * front_load, brake_limit * front_load)
-		force += minf(demand * (1.0 - front_load), brake_limit * (1.0 - front_load) * 0.9)
+		var force := brakes.deceleration
 		var before_brake := maxf(0.0, speed + (drive + gravity) * dt)
 		speed = move_toward(before_brake, 0.0, (force + resistance) * dt)
-		brake_deceleration = minf(force, maxf(0.0, before_brake / dt - resistance))
+		brakes.deceleration = minf(force, maxf(0.0, before_brake / dt - resistance))
 		braking = clampf(brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) * smoothstep(0.3, 3.0, before_brake)
 	else:
 		speed += (drive + gravity) * dt
 		speed = move_toward(speed, 0.0, resistance * dt)
 		# Не заставляем новичка балансировать и ловить самопроизвольный откат в подъём.
 		speed = maxf(0.0, speed)
-	front_load = lerpf(front_load, clampf(0.5 + brake_deceleration * GameConfig.BIKE_LOAD_TRANSFER, 0.5, 0.8), 1.0 - exp(-dt * 12.0))
 
 
 ## Седок падает: запомнить, с какой скоростью летел велосипед

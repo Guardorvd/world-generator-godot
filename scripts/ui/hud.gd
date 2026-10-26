@@ -1,5 +1,7 @@
 class_name Hud
 extends Control
+const BrakeIndicator = preload("res://scripts/ui/brake_indicator.gd")
+var _brakes: BrakeIndicator
 ## Интерфейс поверх 3D: сведения о местности, мини-карта, большая карта, всплывающие сообщения,
 ## прицел и подсказки. Прицел, панель сведений и надписи — узлы сцены main.tscn (правятся в редакторе),
 ## мини-карта и большая карта рисуются кодом (MiniMap, BigMap). Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
@@ -153,6 +155,15 @@ func _ready() -> void:
 	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_stamina)
 	move_child(_stamina, big_map.get_index())
+	_brakes = BrakeIndicator.new()
+	_brakes.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_brakes.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	_brakes.offset_left = 100
+	_brakes.offset_right = 380
+	_brakes.offset_top = -82
+	_brakes.offset_bottom = -24
+	_brakes.hide()
+	add_child(_brakes)
 	_apply_reveal()
 
 
@@ -532,6 +543,10 @@ func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
 	var mat: ShaderMaterial = _vignette.material
 	mat.set_shader_parameter("strength", _stamina.warning * 0.4)
 	_vignette.visible = _stamina.warning > 0.01
+
+
+func set_brakes(bike: BikeRide) -> void:
+	_brakes.update_state(bike, not _photo_mode and not big_map.visible)
 
 
 ## 14.2: чипы клавиш — тёмная плашка с контрастной обводкой, рядом действие; читаются боковым зрением

@@ -47,13 +47,18 @@ func _init() -> void:
 		["Shift по ровному", true, cruise * 1.3, 0.0, 22.5],
 		["Shift под уклон", true, cruise * 1.3, -0.15, 30.0],
 		["Shift в подъём", true, 5.0, 0.15, 28.8],
-		["педали без Shift, крейсерская", false, cruise, 0.0, 90.0],
-		["педали без Shift, подъём", false, 5.0, 0.15, 72.0],
 	]
 	for c in cases:
 		var t := _drain_time(c[1], c[2], c[3])
 		_check(absf(t - c[4]) < 0.5, "%s: пусто за %.1f с (ждём %.0f)" % [c[0], t, c[4]])
 	_check(_drain_time(false, 4.0, 0.0) >= 600.0, "медленно по ровному без Shift — не тратится")
+	for grade in [-0.4, 0.0, 0.4]:
+		for speed in [5.0, cruise, 30.0]:
+			_check(_drain_time(false, speed, grade) >= 600.0, "без Shift нет расхода: скорость %.0f, уклон %.1f" % [speed, grade])
+	var recovering := Stamina.new()
+	recovering._spend(0.7)
+	for i in 300: recovering.tick_ride(DT, 1.0, false, cruise, 0.4, false)
+	_check(recovering.value > 0.3, "обычные педали восстанавливают силы после ускорения")
 	var coast := _rest_time(false)
 	var foot := _rest_time(true)
 	_check(absf(coast - 12.0 - Stamina.REST_DELAY) < 0.5, "накатом полная за %.1f с" % coast)

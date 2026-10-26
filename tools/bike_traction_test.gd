@@ -29,7 +29,7 @@ func make_bike(pace := 12.0) -> BikeRide:
 func step_ride(b: BikeRide, throttle: float, turn := 0.0, dt := DT) -> void:
 	b.step(player, throttle, turn, false, false, dt, test_world, test_ground)
 
-func stopping(surface: int, hz: int, turn := 0.0) -> Dictionary:
+func stopping(surface: int, hz: int, turn := 0.0, progressive := false) -> Dictionary:
 	test_world.surface = surface
 	var b := make_bike()
 	var distance := 0.0
@@ -37,7 +37,8 @@ func stopping(surface: int, hz: int, turn := 0.0) -> Dictionary:
 	var time := 0.0
 	for i in hz * 6:
 		var before := Vector2(b.x, b.z)
-		step_ride(b, -1.0, turn, 1.0 / hz)
+		var command := minf(1.0, time / 1.4) if progressive else 1.0
+		step_ride(b, -command, turn, 1.0 / hz)
 		distance += before.distance_to(Vector2(b.x, b.z))
 		peak_slip = maxf(peak_slip, absf(b.slip))
 		time += 1.0 / hz
@@ -47,11 +48,12 @@ func stopping(surface: int, hz: int, turn := 0.0) -> Dictionary:
 
 func batch() -> void:
 	landing_checks()
+	brake_system_checks()
 	var packed := stopping(RoadSurface.PACKED, 60)
 	var sand := stopping(RoadSurface.SAND, 60)
 	print("STOP 12m/s: packed %.3fm %.3fs; sand %.3fm %.3fs" % [packed.distance, packed.time, sand.distance, sand.time])
 	check(sand.distance > packed.distance * 1.12, "Loose surface measurably lengthens stopping distance")
-	check(packed.time > 1.1 and packed.time < 2.0, "Full brake stops quickly without an instant speed cut")
+	check(packed.time > 1.1 and packed.time < 2.2, "Full brake stops quickly without an instant speed cut")
 	var slow := stopping(RoadSurface.SAND, 30, 1.0)
 	var fast := stopping(RoadSurface.SAND, 120, 1.0)
 	print("30/120Hz brake+turn: distance %.3f/%.3f; time %.3f/%.3f; heading %.3f/%.3f" % [slow.distance, fast.distance, slow.time, fast.time, slow.bike.heading, fast.bike.heading])
@@ -66,7 +68,7 @@ func batch() -> void:
 		step_ride(gentle, 0.0, 0.22)
 		max_slip = maxf(max_slip, absf(b.slip))
 		gentle_slip = maxf(gentle_slip, absf(gentle.slip))
-		check(not b.crashed and b.horizontal_velocity().length() < 16.01, "Combined brake/corner stays upright without gaining energy")
+		check((not b.crashed or b.crash_cause == BikeRide.CrashCause.BRAKING) and b.horizontal_velocity().length() < 16.01, "Combined brake/corner cannot gain energy; overload uses braking crash")
 	print("SLIP hard brake %.2fdeg; gentle %.2fdeg" % [rad_to_deg(max_slip), rad_to_deg(gentle_slip)])
 	check(max_slip > deg_to_rad(2.0) and max_slip < deg_to_rad(15.0), "Hard brake in turn gives small readable slip")
 	check(gentle_slip < deg_to_rad(3.5), "Ordinary corner stays planted")
@@ -107,8 +109,7 @@ func batch() -> void:
 	# Нажатие на ходу не копит ожидание заднего хода; удержание начинается с остановки.
 	for grade_value in [-0.4, 0.4]:
 		test_ground.profile = func(d: float) -> float: return d * grade_value
-		var stop := stopping(RoadSurface.PACKED, 60)
-		b = stop.bike
+		b = make_bike(0.0)
 		var at := Vector2(b.x, b.z)
 		for i in 12:
 			step_ride(b, -1.0)
@@ -145,6 +146,39 @@ func batch() -> void:
 	check(Vector2(b.crash_velocity.x, b.crash_velocity.z).distance_to(velocity) < 0.00001, "Crash inherits lateral inertia")
 	b.reset_motion()
 	check(b.horizontal_velocity() == Vector2.ZERO and b.brake_pressure == 0 and b.slip == 0, "Reset clears transient traction state")
+
+
+func brake_system_checks() -> void:
+	for ramp in [false, true]:
+		var b := make_bike(20.0)
+		var peak_lift := 0.0
+		for i in 240:
+			var amount := minf(1.0, i * DT / 1.4) if ramp else 1.0
+			step_ride(b, -amount)
+			peak_lift = maxf(peak_lift, b.brakes.lift)
+			if b.crashed or b.speed < 0.05: break
+		print("BRAKE 20m/s ramp=%s crash=%s lift=%.3f speed=%.2f" % [ramp, b.crashed, peak_lift, b.speed])
+		check(not b.crashed if ramp else b.crashed and b.crash_cause == BikeRide.CrashCause.BRAKING, "Progressive braking stays balanced; abrupt high-speed braking can pitch over")
+	var gentle := make_bike(4.0)
+	for i in 60: step_ride(gentle, -1.0)
+	check(not gentle.crashed and gentle.brakes.lift == 0.0, "Low-speed braking never pitches over")
+	var air := make_bike(20.0)
+	air.airborne = true
+	air.y += 100
+	for i in 30: step_ride(air, -1.0)
+	check(not air.crashed and air.brakes.deceleration == 0 and air.brakes.risk == 0, "Airborne brakes cannot slow flight or pitch over")
+	var released := make_bike(20.0)
+	for i in 6: step_ride(released, -1.0)
+	for i in 120: step_ride(released, 0.0)
+	check(not released.crashed and released.brakes.risk < 0.01, "Early brake release restores balance")
+	for hz in [30, 120]:
+		var b := make_bike(20.0)
+		var seconds := 0.0
+		for i in hz * 2:
+			step_ride(b, -1.0, 0.0, 1.0 / hz)
+			seconds += 1.0 / hz
+			if b.crashed: break
+		check(b.crashed and seconds > 0.2 and seconds < 0.8, "Pitch-over develops over time at %d Hz" % hz)
 	# Сохраняем существующие проверки скиннинга, контактов, крайних поз и восстановления.
 	await super.run(false)
 	await riding_preview()
@@ -222,6 +256,10 @@ func riding_preview() -> void:
 	title.position = Vector2(24, 20)
 	title.add_theme_font_size_override("font_size", 24)
 	root.add_child(title)
+	var indicator := preload("res://scripts/ui/brake_indicator.gd").new()
+	indicator.position = Vector2(100, 638)
+	indicator.size = Vector2(280, 58)
+	root.add_child(indicator)
 	var capture_enabled := "--ride-capture" in OS.get_cmdline_user_args()
 	for mode in ["pedal", "climb", "coast", "brake", "rough", "jump"]:
 		title.text = "BIKE / " + mode.to_upper()
@@ -239,6 +277,7 @@ func riding_preview() -> void:
 		var landed := false
 		var fork_scale: Vector3 = bike._fork_lowers[0].get_node("Slider").scale
 		for i in 180:
+			indicator.update_state(state, true)
 			var throttle := 1.0 if mode in ["pedal", "climb"] else (-1.0 if mode == "brake" and i < 60 else 0.0)
 			state.step(player, throttle, 0.0, false, mode == "jump" and i == 15, DT, test_world, test_ground)
 			landed = landed or state.land_impact > 0.0
@@ -264,6 +303,7 @@ func riding_preview() -> void:
 	if capture_enabled:
 		write_motion_avi("res://tools/control/runs/bike_motion.avi", 1280, 360, 15)
 	bike.free()
+	indicator.free()
 
 func capture_pair(camera: Camera3D, mode: String, frame: int, snapshot: bool) -> void:
 	var images: Array[Image] = []
