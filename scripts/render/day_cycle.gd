@@ -13,6 +13,8 @@ extends RefCounted
 const SKY_SHADER := preload("res://resources/sky.gdshader")
 const TILT := deg_to_rad(35.0)   # наклон пути солнца к югу: высота в полдень 90° − 35° = 55°
 const DUSK := 0.08               # свет солнца и луны нарастает от горизонта до этой высоты (синус угла)
+const SHADOW_NORMAL_LOW := 1.2   # не увеличиваем normal bias при закате: тень сохраняет контакт
+const SHADOW_NORMAL_HIGH := 1.2
 const MOON_COLOR := Color(0.62, 0.72, 1.0)
 const MOON_ENERGY := 0.32        # лунный свет ночью; в сумерках слабее (доля «ночи» в таблице)
 const FOG := 0.0021              # дневная густота тумана, как в game_world.tscn (окружение общее для всех миров)
@@ -164,8 +166,9 @@ func apply(hour: float, time: float) -> void:
 		env.fog_height = minf(MIST_TOP, eye - MIST_BELOW_EYE)
 	env.adjustment_saturation = s[13]
 	light.shadow_opacity = s[14]
-	# низкое солнце ложится на склоны вскользь: больше смещение, чтобы тени не рябили
-	light.shadow_normal_bias = lerpf(2.2, 1.2, smoothstep(0.1, 0.45, src.y))
+	# При скользящем свете завышенное смещение особенно заметно на земле:
+	# деревья и камни кажутся парящими, особенно при низком разрешении карты теней.
+	light.shadow_normal_bias = lerpf(SHADOW_NORMAL_LOW, SHADOW_NORMAL_HIGH, smoothstep(0.1, 0.45, src.y))
 	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут)
 	var cover: float = s[11] + 0.12 * sin(time / 67.0) + 0.06 * sin(time / 23.0 + 1.0)
 	RenderingServer.global_shader_parameter_set("cloud_shadow",

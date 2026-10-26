@@ -71,9 +71,9 @@ func _navigation_test() -> void:
 	var from := Vector2(20, 122) # игрок в стороне от дороги
 	var far := Vector2(202, 202) # цель на несвязанной дороге, звериная тропа не связывает их
 	var fallback := roads.route_to(from, far)
-	_check(fallback.size() > 20 and fallback[0] == from and fallback[1] == Vector2(42, 122)
-		and fallback.has(Vector2(42, 62)) and fallback[fallback.size() - 2] == Vector2(122, 62) and fallback[-1] == far,
-		"14.9: от игрока вне дорог — к ближайшей дороге, по сети до ближайшей к цели точки, затем по прямой")
+	_check(fallback[0] == from and fallback[-1] == far and roads.complete,
+		"несвязанная дорожная сеть не мешает доступному более короткому подходу")
+	_check(roads.road_last == -1, "прямой подход не помечен как готовая дорога")
 	var none := preload("res://scripts/game/road_navigation.gd").new()
 	none.build(WorldData.new())
 	_check(none.route_to(Vector2(0, 0), Vector2(40, 30)) == PackedVector2Array([Vector2(0, 0), Vector2(40, 30)]),
@@ -107,10 +107,34 @@ func _navigation_test() -> void:
 	for i in 40:
 		line.update_line(Vector3(42, 100, 122), 0.25, true)
 	_check(line.roads.searches == searches, "при движении по маршруту поиск не запускается каждый кадр")
+	# 15.2: движение против маршрута
+	line.set_goal({key = "test", kind = "site", name = "Поворот", x = 30.5, y = 15.5}, Vector2(42, 80))
+	line.update_line(Vector3(42, 100, 95), 0.3, true) # шаг назад от начала пути
+	var warned: PackedColorArray = line.mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	var red := false
+	for c: Color in warned:
+		red = red or (c.r > 0.9 and c.g < 0.5)
+	_check(red, "15.2: движение против маршрута красит штрихи в предупреждающий цвет")
+	line.update_line(Vector3(42, 100, 70), 0.3, true)
+	line.update_line(Vector3(42, 100, 60), 0.3, true)
+	var calm: PackedColorArray = line.mesh.surface_get_arrays(0)[Mesh.ARRAY_COLOR]
+	var gold := true
+	for c: Color in calm:
+		gold = gold and c.g > 0.5
+	_check(gold, "15.2: возврат на маршрут снимает предупреждение")
 	line.update_line(Vector3(202, 100, 202), 2.1, true)
 	line.update_line(Vector3(202, 100, 202), 0.3, true)
-	_check(line.path.size() > 2 and line.path[0] == Vector2(202, 202) and line.path[-1] == Vector2(122, 62)
+	_check(line.path.size() >= 2 and line.path[0] == Vector2(202, 202) and line.path[-1] == Vector2(122, 62)
 		and line.mesh.get_surface_count() == 1, "14.9: после отклонения путь заново ведёт от нового места к цели, последний участок — по прямой")
+	# 15.2: вне дороги — парящие стрелки
+	line.set_goal({key = "field", kind = "marker", name = "Поле", x = 50.5, y = 50.5}, Vector2(150, 150))
+	line.update_line(Vector3(150, 100, 150), 0.3, true)
+	var arrows: PackedVector3Array = line.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]
+	var lifted := true
+	for p: Vector3 in arrows:
+		lifted = lifted and p.y > 100.5 and Vector2(p.x - 150, p.z - 150).length() < 72.0
+	_check(line.mesh.get_surface_count() == 1 and arrows.size() > 24 and lifted,
+		"15.2: вне дороги путь — парящие стрелки над опорой, а не штрихи на земле")
 	hud.set_goal({key = "lake:test", kind = "lake", name = "Озеро", x = 20.5, y = 5.5, src = {sx = 10.5, sy = 5.5}})
 	_check(line.path[-1] == Vector2(42, 22), "озёрная цель ведёт к берегу, не в середину воды")
 	_check(is_same(cached, line.roads), "новая цель использует уже собранную дорожную сеть")
@@ -144,6 +168,22 @@ func _navigation_test() -> void:
 		await process_frame
 		await RenderingServer.frame_post_draw
 		_check(preload("res://tools/shot_util.gd").save_png(root, directory, "navigation"), "снимок навигации")
+		# 15.2: стрелки вне дороги
+		var shots := "res://tools/control/runs/15.2"
+		DirAccess.make_dir_recursive_absolute(shots)
+		line.set_goal({key = "field", kind = "marker", name = "Поле", x = 10.5, y = 5.5}, Vector2(80, 120))
+		line.update_line(Vector3(80, 100, 120), 0.3, true)
+		camera.look_at_from_position(Vector3(86, 101.6, 122), Vector3(46, 100.8, 120))
+		await process_frame
+		await RenderingServer.frame_post_draw
+		_check(preload("res://tools/shot_util.gd").save_png(root, shots, "navigation_offroad"), "снимок пути вне дороги")
+		# 15.2: движение против маршрута
+		line.set_goal({key = "test", kind = "site", name = "Поворот", x = 30.5, y = 15.5}, Vector2(42, 118))
+		line.update_line(Vector3(42, 100, 124), 0.3, true)
+		camera.look_at_from_position(Vector3(42, 101.7, 126), Vector3(42, 100.7, 80))
+		await process_frame
+		await RenderingServer.frame_post_draw
+		_check(preload("res://tools/shot_util.gd").save_png(root, shots, "navigation_wrongway"), "снимок движения против маршрута")
 	hud.set_goal({})
 	_check(line.path.is_empty() and line.mesh.get_surface_count() == 0, "снятие цели сразу убирает линию")
 	hud.set_goal({key = "marker", kind = "marker", name = "Метка", x = 10.5, y = 5.5})
@@ -210,6 +250,10 @@ class NavigationGround extends Heightfield:
 		world = w
 	func surface_at(_x: float, _z: float, _feet: float) -> float:
 		return 100.0
+	func known(_x: float, _z: float) -> bool:
+		return true
+	func depth_at(_x: float, _z: float, _feet := -INF) -> float:
+		return 0.0
 
 
 func _navigation_plane(at: Vector3, size: Vector2, color: Color) -> void:

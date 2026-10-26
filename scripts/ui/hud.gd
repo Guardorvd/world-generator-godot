@@ -316,6 +316,8 @@ func check_goal(x: float, z: float) -> String:
 func at_place(place: Dictionary, x: float, z: float) -> bool:
 	if place.kind == "lake":
 		return world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, place.src.i)
+	if place.kind == "marker":
+		return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < 0.75
 	return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < (2.5 if place.kind in ["peak", "marker"] else (4.0 if place.kind == "site" else 6.0))
 
 

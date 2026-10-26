@@ -1,6 +1,6 @@
 class_name BikeRecovery
 extends RefCounted
-## Редкая явная помощь Y: поиск к ближайшему поселению или уникальному месту, без изменения игрока/мира при отказе.
+## Проверки опоры, габарита и подхода к велосипеду; используются посадкой и локальным размещением.
 
 const TILE := GameConfig.TILE
 const CLEARANCE := 1.8
@@ -72,33 +72,3 @@ static func clear_path(w: WorldData, h: Heightfield, from: Vector3, to: Vector3,
 			return false
 		previous = y
 	return absf(previous - to.y) < 0.3
-
-
-static func find(w: WorldData, h: Heightfield, origin: Vector3, yaw: float, details := PackedFloat32Array()) -> Dictionary:
-	if not origin.is_finite() or not is_finite(yaw):
-		return {}
-	var places: Array[Dictionary] = []
-	for kind: String in ["settlement", "site"]:
-		for place: SettlementData in (w.settlements if kind == "settlement" else w.sites):
-			var center := Vector2(place.x, place.y) * TILE
-			if w.accessible(place.x, place.y) and h.known(center.x, center.y):
-				places.append({center = center, distance = Vector2(origin.x, origin.z).distance_squared_to(center), kind = kind, name = EntityCodec.value(place, "name", "Поселение" if kind == "settlement" else "Место")})
-	places.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.distance < b.distance)
-	var forest := ForestObstacles.new(w, h)
-	for place: Dictionary in places:
-		# Начинаем с центра/костра, но не появляемся внутри колодца, дома, башни или дерева.
-		for radius: float in [0.0, 2.0, 3.5, 5.0, 8.0, 12.0, 18.0, 26.0]:
-			for i in (1 if radius == 0.0 else 16):
-				var angle := yaw + i * TAU / 16.0
-				var p: Vector2 = place.center + Vector2(cos(angle), sin(angle)) * radius
-				if not w.accessible(p.x / TILE, p.y / TILE, BikeRide.BODY_R / TILE) or not h.known(p.x, p.y):
-					continue
-				forest.update(p.x, p.y, details, 0)
-				var heading := atan2(p.x - place.center.x, p.y - place.center.y) if radius > 0.0 else yaw
-				for direction: float in [heading, heading + PI * 0.5]:
-					var spot := placement(w, h, Vector3(p.x, INF, p.y), direction, forest, true)
-					if not spot.is_empty():
-						spot.kind = place.kind
-						spot.name = place.name
-						return spot
-	return {}

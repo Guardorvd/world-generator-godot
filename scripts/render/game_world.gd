@@ -33,6 +33,8 @@ const PhotoCamera = preload("res://scripts/render/photo_camera.gd")
 const Quests = preload("res://scripts/game/quests.gd")
 const CargoBag = preload("res://scripts/render/cargo_bag.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
+const BikePlacement = preload("res://scripts/render/bike_placement.gd")
+var bike_placement: BikePlacement
 var place_names: PlaceNames
 var photo: PhotoCamera
 var quests: Quests       # 11.9: задания с досок (Quests), счётчик — Hud.tracker
@@ -40,6 +42,7 @@ var _bag: Node3D         # сумка доставки у доски, пока �
 var _bag_label: Label3D  # подпись над ней
 var _quest_goal := ""    # key места, которое задание поставило целью на компасе
 var navigation_line: NavigationLine
+var _navigation_status := ""
 var _speed_wind: SpeedWind
 var _speed_rush: float:
 	get: return camera_controller._speed_rush
@@ -96,7 +99,6 @@ var _captured_at := 0
 var _looked_at: float:
 	get: return camera_controller._looked_at
 	set(value): camera_controller._looked_at = value
-var _rescue_ready := 0.0 # игровое время: защита от повторной дорогой операции Y
 var _rescue_input_until := 0.0
 var _cam_y: float:
 	get: return camera_controller._cam_y
@@ -477,6 +479,7 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	if p:
+		_cancel_bike_placement()
 		_set_photo(false)
 	paused = p
 	if is_instance_valid(navigation_line) and p:
@@ -596,6 +599,7 @@ func _occluded(from: Vector3, to: Vector3) -> bool:
 func toggle_map() -> void:
 	if _opening:
 		return
+	_cancel_bike_placement()
 	_set_photo(false)
 	_close_settlement(false)
 	show_map = not show_map
@@ -615,6 +619,7 @@ func travel_to(place: Dictionary) -> void:
 		return
 	if bike.riding and bike.airborne:
 		return
+	_cancel_bike_placement()
 	if quests != null and quests.cargo:
 		hud.toast_now("С сумкой за спиной быстро не переместиться — довезите её сами")
 		return
@@ -644,81 +649,62 @@ func travel_to(place: Dictionary) -> void:
 	hud.toast_now("Вы переместились: «%s»" % place.name)
 
 
-## Y доступна и в воздухе/рэгдолле. Сначала ищем и проверяем место, лишь затем меняем состояние.
-func restore_at_place() -> bool:
-	if _opening:
+func _placing_bike() -> bool:
+	return is_instance_valid(bike_placement) and bike_placement.active
+
+func _cancel_bike_placement() -> void:
+	if is_instance_valid(bike_placement):
+		bike_placement.cancel()
+
+func toggle_bike_placement() -> bool:
+	if _placing_bike():
+		_cancel_bike_placement()
 		return false
-	if paused or player == null or bike == null or not is_instance_valid(bike_view) or world == null or heights == null or _settlement_open() or time < _rescue_ready:
+	if _opening or paused or show_map or player == null or bike == null or _settlement_open():
 		return false
-	_rescue_ready = time + 1.0
-	var origin := Vector3(player.x, player.feet, player.z)
-	var spot := {}
-	var refreshed := false
-	# После прогрева растительности проверяем свежий валежник; отказ не переносит игрока.
-	for attempt in 3:
-		var details := vegetation.obstacles if vegetation != null else (heights.obstacles.data if heights.obstacles != null else PackedFloat32Array())
-		spot = BikeRecovery.find(world, heights, origin, yaw, details)
-		if spot.is_empty():
-			break
-		_refresh_recovery_area(spot.position)
-		refreshed = true
-		if not BikeRecovery.placement(world, heights, spot.position, spot.heading, null, true).is_empty():
-			break
-		spot = {}
-	if spot.is_empty():
-		if refreshed:
-			_refresh_recovery_area(origin)
-		if hud != null:
-			hud.toast_now("Безопасное место не найдено. Положение сохранено")
+	if (crash != null and crash.active()) or bike.airborne or not player.on_ground:
+		if hud != null: hud.toast_now("Для размещения дождитесь остановки на земле")
 		return false
-	if crash != null:
-		crash.abort()
 	_set_photo(false)
-	player = PlayerState.new()
-	player.x = spot.position.x
-	player.z = spot.position.z
-	player.feet = spot.position.y
-	# Сохраняем сам велосипед и фару, очищаем только движение и состояние падения.
-	bike.x = player.x
-	bike.z = player.z
-	bike.y = player.feet
-	bike.heading = spot.heading
-	bike.tilt = 0.0
-	bike.mount(player)
-	yaw = bike.heading
-	pitch = -0.3
-	_cam_y = player.feet + 1.4
-	_cam_dist = GameConfig.BIKE_CAM
-	_dip = 0.0
-	_dip_v = 0.0
-	_trauma = 0.0
-	_bob_amp = 0.0
-	_moving = false
+	if not is_instance_valid(bike_placement):
+		bike_placement = BikePlacement.new()
+		add_child(bike_placement)
+	bike_placement.begin(world, heights, Vector3(player.x, player.feet, player.z), yaw)
+	if is_inside_tree(): capture_mouse()
+	player.vx = 0.0
+	player.vz = 0.0
 	_dragging = false
-	_target = {}
-	_rescue_input_until = time + 0.35
-	if terrain_stream != null:
-		stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
-	if world.outer != null and outer != null:
-		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
-	_snap()
-	bike_view.draw(1.0)
-	if show_map:
-		toggle_map()
-	if camera != null:
-		_update_camera(1.0, 0.0)
-	if hud != null:
-		hud.toast_now("Вы с велосипедом у места «%s»" % spot.name)
+	_update_bike_placement(0.0)
 	return true
 
+func _update_bike_placement(dt: float) -> void:
+	if not _placing_bike() or camera == null:
+		return
+	var turn := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+	bike_placement.rotate_by(-turn * BikePlacement.ROTATE_SPEED * dt)
+	var reach := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
+	if absf(reach) > 0.05:
+		bike_placement.adjust_distance(reach * dt * 2)
+	bike_placement.update_preview(camera.global_position, -camera.global_basis.z, yaw)
 
-func _refresh_recovery_area(at: Vector3) -> void:
-	if vegetation != null:
-		stream_coordinator.force_vegetation(at)
-	if heights.obstacles != null:
-		var details := vegetation.obstacles if vegetation != null else heights.obstacles.data.duplicate()
-		heights.obstacles.update(at.x, at.z, details, vegetation.obstacles_version if vegetation != null else 0, true)
-
+func confirm_bike_placement() -> bool:
+	if not _placing_bike() or paused or show_map:
+		return false
+	_update_bike_placement(0.0)
+	if not bike_placement.confirm(bike):
+		if hud != null: _update_hints()
+		return false
+	# Игрок остаётся на месте пешком; освобождаем только застрявшую/упавшую раму.
+	player.vx = 0
+	player.vz = 0
+	player.vy = 0
+	player.on_ground = true
+	_rescue_input_until = time + 0.2
+	_target = {}
+	_snap()
+	bike_view.draw(1.0)
+	if hud != null: hud.toast_now("Велосипед поставлен. Подойдите и нажмите %s" % services.controls.label("interact"))
+	return true
 
 ## 14.0: подсказки показывают кнопки того, чем играют сейчас (Controls)
 func _input(event: InputEvent) -> void:
@@ -727,6 +713,20 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_echo():
+		return
+	if _placing_bike():
+		if event.is_action_pressed("recover_bike") or event.is_action_pressed("pause") or event.is_action_pressed("back") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_RIGHT):
+			_cancel_bike_placement()
+		elif event.is_action_pressed("interact") or event.is_action_pressed("jump") or (event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT):
+			confirm_bike_placement()
+		elif event.is_action_pressed("toggle_map"):
+			toggle_map()
+		elif event is InputEventMouseButton and event.pressed and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			bike_placement.rotate_by(PI / 12 * (1 if event.button_index == MOUSE_BUTTON_WHEEL_UP else -1))
+		elif event is InputEventMouseMotion:
+			if Time.get_ticks_msec() - _captured_at >= 150:
+				look(event.screen_relative.x, event.screen_relative.y)
+		get_viewport().set_input_as_handled()
 		return
 	if _settlement_open():
 		if event.is_action_pressed("pause") or event.is_action_pressed("interact") or event.is_action_pressed("back"):
@@ -766,7 +766,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		if not show_map:
 			toggle_photo()
 	elif event.is_action_pressed("recover_bike"):
-		restore_at_place()
+		toggle_bike_placement()
 		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("toggle_map"):
 		toggle_map()
@@ -822,6 +822,9 @@ func _notification(what: int) -> void:
 ## чтобы не захлебнуться
 func _physics_process(dt: float) -> void:
 	if player == null or paused or _settlement_open():
+		return
+	if _placing_bike():
+		_store_prev()
 		return
 	world.open_around(player.x / TILE, player.z / TILE)
 	_store_prev()
@@ -905,7 +908,7 @@ func _physics_process(dt: float) -> void:
 		hud.toast(text)
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
-	var reached := hud.check_goal(player.x, player.z)
+	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
 		hud.toast(reached)
 
@@ -965,19 +968,23 @@ func _process(delta: float) -> void:
 			look(stick.x, stick.y)
 	hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
-	var alpha := Engine.get_physics_interpolation_fraction()
+	var alpha := 1.0 if _placing_bike() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	if crash.active():
 		crash.draw()
 	else:
 		bike_view.draw(alpha)
 	_update_camera(alpha, delta)
+	_update_bike_placement(delta)
 	if _speed_wind != null:
 		_speed_wind.update_effect(_speed_rush, delta)
 	if _opening:
 		_draw_opening(alpha)
 	if navigation_line != null:
-		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active() and not photo.active)
+		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike())
+		if navigation_line.visible and navigation_line.status != _navigation_status:
+			_navigation_status = navigation_line.status
+			if _navigation_status != "": hud.toast_now(_navigation_status)
 	if place_names != null:
 		place_names.update(camera, delta, hud.visited, photo.active, quests.known)
 	if _bag != null and _bag.visible:
@@ -1092,7 +1099,7 @@ func _shake_on_landing(impact: float, soft: float) -> void:
 	camera_controller.shake_on_landing(impact, soft)
 
 ## Седок упал (жёсткое приземление, удар в стену): велосипед и тело разлетаются (BikeCrash),
-## после остановки игрок встаёт пешком; Y позволяет явно восстановиться вместе с рамой
+## после остановки игрок встаёт пешком; Y позволяет выбрать новое место для рамы
 func _crash() -> void:
 	bike_controller.begin_crash(bike_view, bike, crash, heights)
 	# 12.3: хрупкий груз бьётся при падении
@@ -1110,11 +1117,17 @@ func _crash() -> void:
 ## 14.2: только действия к месту, чипами [клавиша] действие; постоянные клавиши (WASD, Esc, Tab, M) — в паузе
 func _update_hints() -> void:
 	var k := services.controls.label
+	if _placing_bike():
+		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / E"
+		var cancel_key: String = k.call("back") if services.controls.joypad else "ПКМ / Y / Esc"
+		var help := [[cancel_key, "Отмена"], ["Левый стик", "Поворот и расстояние"]] if services.controls.joypad else [[cancel_key, "Отмена"], ["A/D / колесо", "Поворот"], ["W/S", "Расстояние"]]
+		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true)
+		return
 	if _opening or _settlement_open() or photo.active:
 		hud.set_hints([], [])
 		return
 	if crash.active():
-		hud.set_hints([[k.call("recover_bike"), "Восстановиться"]], [], true)
+		hud.set_hints([], [], true)
 		return
 	var near: Array = []
 	match _target.get("kind", ""):
@@ -1123,10 +1136,10 @@ func _update_hints() -> void:
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
 	# внизу (видно с зажатым Tab) — главное для того, чем игрок занят
 	if bike.riding:
-		hud.set_hints([[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "К месту"]], near)
+		hud.set_hints([[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]], near)
 		return
 	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"
-	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "К месту"]], near)
+	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near)
 
 
 func _settlement_open() -> bool:
@@ -1141,7 +1154,7 @@ func _settlement_open() -> bool:
 ## Берутся только предметы рядом: велосипед, на который можно сесть, доски не дальше REACH от глаз.
 ## Подсказку E показывают только для выбранного
 func _aim() -> Dictionary:
-	if player == null or paused or show_map or crash.active() or _settlement_open() or photo.active:
+	if player == null or paused or show_map or crash.active() or _settlement_open() or photo.active or _placing_bike():
 		return {}
 	var from := camera.global_position
 	var dir := -camera.global_basis.z
@@ -1265,7 +1278,7 @@ func _close_settlement(capture := true) -> void:
 
 
 func _navigation_goal(place: Dictionary) -> void:
-	navigation_line.set_goal(place, Vector2(player.x, player.z))
+	navigation_line.set_goal(place, Vector2(player.x, player.z), player.feet)
 	place_names.set_goal(place)
 
 
