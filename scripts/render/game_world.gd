@@ -998,7 +998,7 @@ func _process(delta: float) -> void:
 	if regions != null:
 		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
 	_light_night(pos, fire_time)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, bike.braking if bike.riding else 0.0)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, maxf(bike.braking, smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65) if bike.riding else 0.0)
 
 	info_timer -= delta
 	if info_timer <= 0.0:

@@ -63,8 +63,15 @@ func _init() -> void:
 	rocks.steer = 1.0
 	rocks._yaw_rate = -2.0
 	tick(rocks, 1.0)
-	check(absf(rocks._yaw_rate) * rocks.speed < BikeRide.CORNER_GRIP * 0.9 * 0.98,
+	w.surface = RoadSurface.PACKED
+	var packed_corner := bike(16.0)
+	packed_corner.steer = 1.0
+	packed_corner._yaw_rate = -2.0
+	tick(packed_corner, 1.0)
+	# Курс рамы теперь может опережать траекторию: сравниваем направление движения.
+	check(absf(rocks.horizontal_velocity().angle_to(Vector2(0, -1))) < absf(packed_corner.horizontal_velocity().angle_to(Vector2(0, -1))),
 		"быстрый поворот по камням требует дополнительного запаса сцепления")
+	w.surface = RoadSurface.STONE
 	var careful := bike(4.0)
 	var careful_reference := bike(4.0)
 	careful_reference._step_speed(0.0, false, 0.0, PlayerState.terrain_speed(w, 0.0, 0.0, ground), DT, 0.9)
@@ -94,8 +101,9 @@ func _init() -> void:
 		coast_turn._step_turn(1.0, 1.0, DT)
 		brake_turn._step_turn(1.0, 1.0, DT, 1.0)
 	check(absf(brake_turn._yaw_rate) < absf(coast_turn._yaw_rate), "тормоз оставляет меньше сцепления для резкого поворота")
+	var packed_yaw := absf(coast_turn._yaw_rate)
 	coast_turn._step_turn(1.0, 0.75, DT)
-	check(absf(coast_turn._yaw_rate * coast_turn.speed) <= BikeRide.CORNER_GRIP * 0.75 + 0.01,
+	check(absf(coast_turn._yaw_rate) < packed_yaw,
 		"при въезде на песок накопленный поворот ограничен сцеплением")
 	var packed_brake := bike(12.0)
 	var sand_brake := bike(12.0)

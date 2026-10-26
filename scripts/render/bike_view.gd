@@ -163,7 +163,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 
 
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
-func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void:
+func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> void:
 	var continuous := _has_state and _riding and b.riding
 	var acceleration := clampf((b.speed - _last_speed) / maxf(dt, 0.001), -9.0, 7.0) if continuous else 0.0
 	var cadence := absf(angle_difference(_last_crank, b.crank)) / maxf(dt, 0.001) if continuous else 0.0
@@ -176,7 +176,7 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	_effort = lerpf(_effort, effort_target, 1.0 - exp(-dt * effort_rate)) if continuous else 0.0
 	var effort := _effort
 	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0
-	var braking := maxf(-throttle, 0.0) * smoothstep(0.1, 2.0, b.speed)
+	var braking := clampf(b.brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
 	var climb := smoothstep(0.07, 0.16, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(7.0, 11.0, absf(b.speed)))
@@ -190,8 +190,10 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	road_shift *= smoothstep(0.5, 3.0, absf(b.speed)) if not b.airborne else 0.0
 	# Под нагрузкой подаёмся вперёд; при торможении и спуске уходим назад.
 	# 12.3: заметнее — разгон, подъём и тормоз двигают корпус до 9 см (было 5,5).
-	var shift := clampf(-acceleration * 0.007 - slope * 0.16 - effort * 0.015 + braking * 0.05 + road_shift, -0.09, 0.09)
-	var side := clampf(-b.lean * 0.12 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.05, 0.05)
+	# Тормоз заменяет обычную инерционную компенсацию, а не складывается с ней.
+	var inertia_shift := lerpf(-acceleration * 0.007, braking * GameConfig.BIKE_BRAKE_SHIFT, braking)
+	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift, -0.09, 0.13)
+	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
 	_landing *= exp(-dt * 9.0)
 	if continuous and b.land_impact > 0.0:
 		_landing = maxf(_landing, clampf(b.land_impact / 10.0, 0.0, 1.0))
@@ -202,7 +204,7 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	var rough := clampf((absf(b.squash_fv) + absf(b.squash_rv)) * 0.009, 0.0, 0.022)
 	rough *= smoothstep(0.5, 3.0, absf(b.speed)) if not b.airborne else 0.0
 	# 12.3: тяжёлое нажатие (подъём, рывок) прижимает плечи к рулю
-	var crouch := rough + (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.02 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
+	var crouch := rough + (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.025 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.27
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * effort * (0.055 + up * 0.06)

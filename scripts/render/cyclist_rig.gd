@@ -85,7 +85,8 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	# motion: fore/aft shift, lateral balance, compression. Keep reach within limb lengths.
 	# Стоя таз выше и над кареткой (нога внизу почти прямая), плечи ближе к рулю, таз ходит в такт педалям.
 	# Сидя таз держится над седлом; подвеску принимает корпус, а не проваливающийся в седло таз.
-	var hip := Vector3(motion.y * 0.25 - sway * 0.2 * up, 1.015 - motion.z * 0.15 + up * 0.045 + attack * 0.025, 0.20 + motion.x * 0.25 - up * 0.14)
+	var hip_shift := motion.x * (0.7 if motion.x > 0.0 else 0.25)
+	var hip := Vector3(motion.y * 0.25 - sway * 0.2 * up, 1.015 - motion.z * 0.15 + up * 0.045 + attack * 0.025, 0.20 + hip_shift - up * 0.14)
 	# Подъём таза ограничен длиной обеих ног до педалей, без растягивания голени в нижней точке.
 	for side in [-1.0, 1.0]:
 		var ankle := Vector3(side * 0.14, 0.355 - side * cos(-crank_angle) * 0.17, 0.025 - side * sin(-crank_angle) * 0.17)
@@ -94,6 +95,15 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	var chest := Vector3(motion.y, 1.37 - tuck * 0.25 - motion.z + breath - up * 0.015 - attack * 0.03, -0.08 - tuck * 0.45 + motion.x - up * 0.14)
 	var body_look := look + look_lag
 	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.3 + sway, -sway * 0.4))
+	# Сильный тормоз выпрямляет руки. Ограничиваем дальность плеч до IK,
+	# чтобы компенсация назад не растягивала предплечья при повёрнутом руле.
+	for i in 3:
+		for side in [-1.0, 1.0]:
+			var shoulder := chest + upper_basis * Vector3(side * 0.18, 0, 0)
+			var grip := left_grip if side < 0 else right_grip
+			var reach := shoulder - grip
+			if reach.length() > ARM_LENGTH * 2.0 - 0.006:
+				chest -= reach.normalized() * (reach.length() - (ARM_LENGTH * 2.0 - 0.006))
 	# Взгляд компенсирует склон в пределах движения шеи, сохраняя небольшой наклон по дороге.
 	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75, -0.32, 0.32), clampf(look, -0.5, 0.5), -roll * 0.6 + sway * 0.12))
 	_set_bone("Root", Vector3.ZERO)

@@ -43,7 +43,7 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	# 12.7: на скорости камера заглядывает внутрь поворота, куда повёрнут руль; мышь её не трогает
 	var lead_goal := 0.0
 	if riding and not crash_active and not _opening:
-		lead_goal = -bike.steer * deg_to_rad(8.5) * smoothstep(3.0, 12.0, bike.speed) * auto_follow(time)
+		lead_goal = (-bike.steer * deg_to_rad(8.5) - bike.slip * 0.25) * smoothstep(3.0, 12.0, bike.speed) * auto_follow(time)
 	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(4.0, dt))
 	if riding:
 		view_yaw += _cam_lead

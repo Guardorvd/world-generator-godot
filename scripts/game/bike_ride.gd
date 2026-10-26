@@ -23,7 +23,7 @@ const WALL_CRASH := 9.0   # удар в стену в лоб быстрее эт
 ## На пути колёса держатся полотна на мелких изломах, руль зависит от сцепления покрытия.
 const SLOPE_GRAVITY := GameConfig.GRAVITY # та же тяжесть, что в полёте; склон не превращается в вязкий тормоз
 const CLIFF_GRADE := 2.0 # около 63°: на такой стене колёса уже не удерживают седока
-const CORNER_GRIP := 10.5 # допустимое боковое ускорение на плотной земле, м/с²
+const CORNER_GRIP := GameConfig.BIKE_GRIP
 const MOUNT_RISE := 1.5  # сесть можно, если велосипед не выше и не ниже ног на столько, м
 const HOP_COYOTE := 0.1  # можно успеть прыгнуть сразу после схода с края, с
 const HOP_BUFFER := 0.22 # 14.1: пробел ждёт касания столько, с (было 0,12, как пешком): короткий отрыв на гребне
@@ -35,9 +35,9 @@ const LOOK: Array[float] = [0.1, 0.2, 0.3]
 const DROP_STEP := 0.12  # земля ушла вниз за один такт больше этого — это край, а не излом: падаем
 ## С 7.1 подвеска у каждого колеса своя: пружина-демпфер от профиля под этим колесом.
 const KICK_MAX := 6.0    # больший скачок (ступенька, телепорт) ограничивается, м/с
-const PITCH_LOAD := 0.004 # м хода на 1 м/с² разгона: торможение грузит вилку, разгон — задний ход
+const PITCH_LOAD := GameConfig.BIKE_PITCH_LOAD
 const BUMP := 0.035      # высота мелких кочек под колесом на бездорожье (rough 1), м
-const REVERSE_HOLD := 0.22 # столько секунд держать тормоз у остановки до заднего хода (12.7: было 0,4)
+const REVERSE_HOLD := GameConfig.BIKE_REVERSE_WAIT
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 
 var x := 0.0          # метры
@@ -48,6 +48,13 @@ var airborne := false
 var heading := 0.0    # курс, как yaw камеры: 0 — на север (-Z)
 var speed := 0.0      # м/с вдоль курса, назад — меньше нуля
 var acceleration := 0.0 # фактический продольный разгон за последний такт, для ощущения скорости
+var lateral_speed := 0.0 # боковая скорость относительно рамы; течение хранится отдельно
+var brake_pressure := 0.0 # сглаженное усилие одной кнопки, 0..1
+var brake_deceleration := 0.0 # фактическое замедление от тормозов, м/с² (без склона и качения)
+var front_load := 0.5 # автоматическое распределение: доля нагрузки спереди
+var grip_usage := 0.0 # фактически использованный общий запас, 0..1
+var slip := 0.0 # подписанный угол сноса, радианы
+var _corner_demand := 0.0
 var riding := false
 var lean := 0.0       # крен в повороте, радианы
 var tilt := 0.0       # наклон вдоль склона или полёта, радианы
@@ -162,6 +169,13 @@ func mount(p: PlayerState) -> void:
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
 	acceleration = 0.0
+	lateral_speed = 0.0
+	brake_pressure = 0.0
+	brake_deceleration = 0.0
+	front_load = 0.5
+	grip_usage = 0.0
+	slip = 0.0
+	_corner_demand = 0.0
 	braking = 0.0
 	riding = false
 	speed = 0.0
@@ -240,8 +254,9 @@ func _contact(px: float, pz: float, heights: Heightfield) -> float:
 ## Уходит ли рельеф впереди из-под полёта: летим с нынешней вертикальной скоростью
 ## и смотрим, насколько ниже окажется земля через 0,1–0,3 с.
 func _lifts(heights: Heightfield) -> bool:
-	var fx := -sin(heading) * speed
-	var fz := -cos(heading) * speed
+	var velocity := horizontal_velocity()
+	var fx := velocity.x
+	var fz := velocity.y
 	for t: float in LOOK:
 		var fly := y + vy * t - GameConfig.GRAVITY * t * t * 0.5
 		if fly - _contact(x + fx * t, z + fz * t, heights) > LIFT:
@@ -253,6 +268,18 @@ func _lifts(heights: Heightfield) -> bool:
 ## turn — руль вправо (+) и влево (-), hop — пробел нажат в этом такте (срабатывает, как только прыжок
 ## доступен, если ждать недолго).
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
+	# Один и тот же короткий шаг при 30/60/120 Гц; hop передаётся только первому подшагу.
+	# Существующие рельеф, вода и подвеска остаются в том же цикле, без новой вертикальной модели.
+	if dt > 1.0 / 120.0 + 0.000001:
+		var ticks := ceili(dt * 120.0)
+		for i in ticks:
+			step(p, throttle, turn, boost, hop and i == 0, dt / ticks, w, heights)
+			if crashed:
+				break
+		return
+	if dt <= 0.0:
+		return
+	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
 	var slope := _slope(heights)
 	var surf := RoadSurface.NONE
 	var path_weight := 0.0
@@ -283,20 +310,29 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
 		_brake_hold = 0.0
+		brake_pressure *= exp(-dt / GameConfig.BIKE_BRAKE_RELEASE)
+		brake_deceleration = 0.0
+		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
+		braking = 0.0
 		speed *= exp(-0.03 * dt)
+		lateral_speed *= exp(-0.03 * dt)
 
 	var free_now := fits(x, z, heading, w, heights)
 	var h0 := heading
-	heading += _step_turn(turn, grip, dt, maxf(0.0, -throttle))
+	heading += _step_turn(turn, grip, dt, brake_deceleration / maxf(CORNER_GRIP * grip, 0.1))
 	# Вплотную к стене колесо не поворачивается в неё, накопленного рывка тоже нет.
 	if free_now and not fits(x, z, heading, w, heights):
 		heading = h0
 		_yaw_rate = 0.0
-	var lateral := speed * (heading - h0) / maxf(dt, 0.0001)
+	var lateral := _step_traction(h0, grip, dt)
 
 	var x0 := x
 	var z0 := z
-	var full := absf(speed) * dt
+	var velocity := horizontal_velocity()
+	var dx := velocity.x * dt
+	var dz := velocity.y * dt
+	var wanted := Vector3(dx, 0, dz)
+	var full := velocity.length() * dt
 	if full > 0.0:
 		# если велосипед уже задевает препятствие (поставлен вплотную), выехать можно: проверяется середина
 		var hd := heading
@@ -315,16 +351,15 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var around := Callable()
 		if heights.obstacles != null:
 			around = func(px: float, pz: float) -> Vector2: return _obstacle_normal(px, pz, hd, heights)
-		var to := PlayerState.slide(free, x, z, -sin(heading) * speed * dt, -cos(heading) * speed * dt, around)
+		var to := PlayerState.slide(free, x, z, dx, dz, around)
 		x = to[0]
 		z = to[1]
 		var moved := Grid.hypot(x - x0, z - z0)
 		if moved < full - 1e-5:
 			# в лоб скорость гаснет, при скольжении вдоль стены почти нет
-			var wanted := Vector3(-sin(heading), 0.0, -cos(heading)) * speed * dt
 			var blocked := Vector3(x - x0, 0.0, z - z0) - wanted
 			var normal := blocked.normalized()
-			var impact := maxf(0.0, -Vector3(-sin(heading) * speed, 0, -cos(heading) * speed).dot(normal))
+			var impact := maxf(0.0, -Vector3(velocity.x, 0, velocity.y).dot(normal))
 			# 11.6: щуп на весь несделанный кусок пути: тонкое бревно, на котором встали за 0,1–0,2 м, тоже удар
 			# 11.7: не дальше куска шага: то, что остановило, лежит в его пределах, а не за ним
 			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, minf(full - moved, PlayerState.PIECE) + 0.01)
@@ -336,7 +371,9 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			# Удар о предмет опасен и в прыжке; вода и граница открытой земли не являются стеной.
 			if solid and impact > WALL_CRASH:
 				_crash(vy, normal, CrashCause.COLLISION)
-			speed = 0.0 if moved < 1e-5 else speed * _slide_keep(dt, moved, full)
+			var keep := 0.0 if moved < 1e-5 else _slide_keep(dt, moved, full)
+			speed *= keep
+			lateral_speed *= keep
 	_dist += Grid.hypot(x - x0, z - z0)
 
 	_step_vertical(_contact(x, z, heights), hop, dt, heights)
@@ -373,6 +410,35 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	p.on_ground = not airborne
 
 
+## Полная горизонтальная скорость для движения, полёта и передачи импульса падению.
+func horizontal_velocity() -> Vector2:
+	var forward := Vector2(-sin(heading), -cos(heading))
+	return forward * speed + Vector2(-forward.y, forward.x) * lateral_speed
+
+
+## Рама доворачивается раньше траектории. В воздухе только меняем систему координат.
+func _step_traction(old_heading: float, grip: float, dt: float) -> float:
+	var old_forward := Vector2(-sin(old_heading), -cos(old_heading))
+	var velocity := old_forward * speed + Vector2(-old_forward.y, old_forward.x) * lateral_speed
+	var forward := Vector2(-sin(heading), -cos(heading))
+	var side := Vector2(-forward.y, forward.x)
+	speed = velocity.dot(forward)
+	lateral_speed = velocity.dot(side)
+	var lateral := 0.0
+	if not airborne:
+		var capacity := CORNER_GRIP * grip
+		var available := sqrt(maxf(0.0, capacity * capacity - brake_deceleration * brake_deceleration))
+		var correction := lateral_speed * (1.0 - exp(-GameConfig.BIKE_SIDE_RESPONSE * dt))
+		correction = clampf(correction, -available * dt, available * dt)
+		lateral_speed -= correction
+		lateral = correction / dt
+		grip_usage = clampf(Vector2(brake_deceleration, lateral).length() / maxf(capacity, 0.1), 0.0, 1.0)
+	else:
+		grip_usage = 0.0
+	slip = atan2(lateral_speed, maxf(absf(speed), 2.0))
+	return lateral
+
+
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Отдельного заноса и балансирования нет: поворот всегда идёт в сторону управления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
@@ -389,7 +455,10 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		response = 3.0
 	else:
 		# Торможение расходует часть сцепления: дуга шире, но управление сохраняется.
-		var corner_grip := CORNER_GRIP * grip * lerpf(1.0, 0.75, clampf(brake, 0.0, 1.0))
+		var corner_grip := CORNER_GRIP * grip * sqrt(maxf(0.0, 1.0 - brake * brake))
+		# Накопленный снос расширяет дугу до восстановления, вместо бесконечного дрифта.
+		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
+		corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
 		wanted = clampf(wanted, -limit, limit)
@@ -525,21 +594,36 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
 ## speed — скорость по горизонтали, поэтому проекция тяжести — slope / (1 + slope²).
 func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0) -> void:
+	if dt > 1.0 / 120.0 + 0.000001:
+		var ticks := ceili(dt * 120.0)
+		for i in ticks:
+			_step_speed(throttle, boost, slope, terrain, dt / ticks, grip, technical)
+		return
 	var top := GameConfig.BIKE_SPEED * terrain
 	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
-	braking = absf(throttle) * smoothstep(5.0, 8.0, speed) if throttle < 0.0 else 0.0
+	var pressure_goal := maxf(0.0, -throttle)
+	var pressure_time := GameConfig.BIKE_BRAKE_RISE if pressure_goal > brake_pressure else GameConfig.BIKE_BRAKE_RELEASE
+	brake_pressure = lerpf(brake_pressure, pressure_goal, 1.0 - exp(-dt / pressure_time))
+	brake_deceleration = 0.0
+	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
-	if throttle < 0.0 and absf(speed) < 0.05:
+	if throttle <= -GameConfig.BIKE_REVERSE_INPUT and absf(speed) < 0.05:
 		_brake_hold += dt
-	elif throttle >= 0.0 or speed > 0.05:
+	elif throttle > -GameConfig.BIKE_REVERSE_INPUT or speed > 0.05:
 		_brake_hold = 0.0
 	var reversing := throttle < 0.0 and (speed < -0.05 or _brake_hold >= REVERSE_HOLD)
 	if reversing:
 		# Медленный манёвр назад остаётся предсказуемым и на склоне.
 		speed = move_toward(speed, -GameConfig.BIKE_REVERSE * absf(throttle), GameConfig.BIKE_ACCEL * dt)
+		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
+		return
+	# Автобаланс и статический тормоз: не сползаем, пока игрок обдумывает задний ход.
+	if throttle < 0.0 and absf(speed) < 0.05:
+		speed = 0.0
+		front_load = lerpf(front_load, 0.5, 1.0 - exp(-dt * 10.0))
 		return
 	if speed < 0.0:
 		var stop := GameConfig.BIKE_ACCEL if throttle > 0.0 else rolling + drag * speed * speed
@@ -559,15 +643,24 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Кочки съедают ход только при быстром проезде. На длинном спуске воздух мягко
 	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
 	var resistance := rolling + drag * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
-	if throttle < 0.0:
-		# Тормоз удерживает остановку даже на спуске; сила нарастает с нажатием стика.
-		speed += gravity * dt
-		speed = move_toward(speed, 0.0, (GameConfig.BIKE_BRAKE * grip * absf(throttle) + resistance) * dt)
+	if brake_pressure > 0.001:
+		var capacity := CORNER_GRIP * grip
+		var reserve := capacity * GameConfig.BIKE_CORNER_RESERVE * _corner_demand
+		var brake_limit := sqrt(maxf(0.0, capacity * capacity - reserve * reserve))
+		var demand := GameConfig.BIKE_BRAKE * grip * brake_pressure
+		# Один рычаг: перед получает долю по нагрузке; зад оставляет небольшой запас от блокировки.
+		var force := minf(demand * front_load, brake_limit * front_load)
+		force += minf(demand * (1.0 - front_load), brake_limit * (1.0 - front_load) * 0.9)
+		var before_brake := maxf(0.0, speed + (drive + gravity) * dt)
+		speed = move_toward(before_brake, 0.0, (force + resistance) * dt)
+		brake_deceleration = minf(force, maxf(0.0, before_brake / dt - resistance))
+		braking = clampf(brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) * smoothstep(0.3, 3.0, before_brake)
 	else:
 		speed += (drive + gravity) * dt
 		speed = move_toward(speed, 0.0, resistance * dt)
 		# Не заставляем новичка балансировать и ловить самопроизвольный откат в подъём.
 		speed = maxf(0.0, speed)
+	front_load = lerpf(front_load, clampf(0.5 + brake_deceleration * GameConfig.BIKE_LOAD_TRANSFER, 0.5, 0.8), 1.0 - exp(-dt * 12.0))
 
 
 ## Седок падает: запомнить, с какой скоростью летел велосипед
@@ -575,7 +668,8 @@ func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void
 	crashed = true
 	crash_cause = cause
 	crash_normal = normal.normalized() if normal.length_squared() > 0.000001 else Vector3.UP
-	crash_velocity = Vector3(-sin(heading) * speed, v_up, -cos(heading) * speed)
+	var velocity := horizontal_velocity()
+	crash_velocity = Vector3(velocity.x, v_up, velocity.y)
 
 
 ## Нормаль препятствия леса (ствол, валун, бревно), которое задевает один из трёх кругов велосипеда
@@ -592,7 +686,7 @@ func _obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> 
 func _tree_impact(heights: Heightfield) -> float:
 	if heights.obstacles == null:
 		return 0.0
-	var v := Vector2(-sin(heading), -cos(heading)) * speed
+	var v := horizontal_velocity()
 	var ahead := v.normalized() * PlayerState.PIECE * 0.5
 	return -v.dot(_obstacle_normal(x + ahead.x, z + ahead.y, heading, heights))
 

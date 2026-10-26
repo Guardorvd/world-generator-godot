@@ -115,7 +115,7 @@ func contacts() -> void:
 		for pair in [["UpperArm", "Forearm", 0.31], ["Forearm", "Hand", 0.31], ["UpperLeg", "LowerLeg", 0.43], ["LowerLeg", "Foot", 0.43]]:
 			check(absf(bone(pair[0] + side).distance_to(bone(pair[1] + side)) - pair[2]) < 0.001, "Limb reach: " + pair[0])
 
-func run() -> void:
+func run(finish := true) -> void:
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
 	_check_model()
@@ -350,7 +350,8 @@ func run() -> void:
 	if "--capture" in OS.get_cmdline_user_args():
 		await capture()
 	bike.free()
-	quit(1 if fails else 0)
+	if finish:
+		quit(1 if fails else 0)
 
 
 ## Короткое физическое падение в той же сцене: новая оболочка должна следовать костям после отделения от рамы.
