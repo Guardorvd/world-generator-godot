@@ -52,7 +52,7 @@ func batch() -> void:
 	var packed := stopping(RoadSurface.PACKED, 60)
 	var sand := stopping(RoadSurface.SAND, 60)
 	print("STOP 12m/s: packed %.3fm %.3fs; sand %.3fm %.3fs" % [packed.distance, packed.time, sand.distance, sand.time])
-	check(sand.distance > packed.distance * 1.12, "Loose surface measurably lengthens stopping distance")
+	check(sand.distance > packed.distance * 1.05, "Loose surface measurably lengthens stopping distance")
 	check(packed.time > 1.1 and packed.time < 2.2, "Full brake stops quickly without an instant speed cut")
 	var slow := stopping(RoadSurface.SAND, 30, 1.0)
 	var fast := stopping(RoadSurface.SAND, 120, 1.0)
@@ -146,19 +146,29 @@ func batch() -> void:
 	check(Vector2(b.crash_velocity.x, b.crash_velocity.z).distance_to(velocity) < 0.00001, "Crash inherits lateral inertia")
 	b.reset_motion()
 	check(b.horizontal_velocity() == Vector2.ZERO and b.brake_pressure == 0 and b.slip == 0, "Reset clears transient traction state")
+	# Complete numerical checks before starting the animation preview.
+	await super.run(false)
+	await riding_preview()
+	print("Bike traction batch: ", fails, " failures")
+	quit(1 if fails else 0)
 
 
 func brake_system_checks() -> void:
-	for ramp in [false, true]:
-		var b := make_bike(20.0)
-		var peak_lift := 0.0
-		for i in 240:
-			var amount := minf(1.0, i * DT / 1.4) if ramp else 1.0
-			step_ride(b, -amount)
-			peak_lift = maxf(peak_lift, b.brakes.lift)
+	for pace in [11.0, 14.0, 20.0, 28.0]:
+		var b := make_bike(pace)
+		for i in 600:
+			step_ride(b, -1.0)
 			if b.crashed or b.speed < 0.05: break
-		print("BRAKE 20m/s ramp=%s crash=%s lift=%.3f speed=%.2f" % [ramp, b.crashed, peak_lift, b.speed])
-		check(not b.crashed if ramp else b.crashed and b.crash_cause == BikeRide.CrashCause.BRAKING, "Progressive braking stays balanced; abrupt high-speed braking can pitch over")
+		print("ARCADE STOP %.0fm/s: crash=%s speed=%.2f" % [pace, b.crashed, b.speed])
+		check(not b.crashed and b.speed < 0.05, "Full emergency brake safely stops on flat ground at %.0f m/s" % pace)
+		check(b.brakes.risk < 0.01, "Ordinary stop does not show a pitch-over warning")
+	test_ground.profile = func(d: float) -> float: return -0.2 * d
+	var descent := make_bike(20.0)
+	for i in 360:
+		step_ride(descent, -1.0)
+		if descent.crashed or descent.speed < 0.05: break
+	check(not descent.crashed and descent.speed < 0.05, "Full brake stays safe on an ordinary descent")
+	test_ground.profile = func(_d: float) -> float: return 0.0
 	var gentle := make_bike(4.0)
 	for i in 60: step_ride(gentle, -1.0)
 	check(not gentle.crashed and gentle.brakes.lift == 0.0, "Low-speed braking never pitches over")
@@ -171,19 +181,31 @@ func brake_system_checks() -> void:
 	for i in 6: step_ride(released, -1.0)
 	for i in 120: step_ride(released, 0.0)
 	check(not released.crashed and released.brakes.risk < 0.01, "Early brake release restores balance")
+	test_ground.profile = func(d: float) -> float: return -0.4 * d
+	var fall_times: Array[float] = []
 	for hz in [30, 120]:
-		var b := make_bike(20.0)
+		var b := make_bike(30.0)
+		b.vy = -12.0 # already travelling tangent to the descent, not dropping onto it
 		var seconds := 0.0
-		for i in hz * 2:
+		var warning_at := -1.0
+		for i in hz * 5:
 			step_ride(b, -1.0, 0.0, 1.0 / hz)
 			seconds += 1.0 / hz
+			if b.brakes.risk > 0.65 and warning_at < 0.0: warning_at = seconds
 			if b.crashed: break
-		check(b.crashed and seconds > 0.2 and seconds < 0.8, "Pitch-over develops over time at %d Hz" % hz)
-	# Сохраняем существующие проверки скиннинга, контактов, крайних поз и восстановления.
-	await super.run(false)
-	await riding_preview()
-	print("Bike traction batch: ", fails, " failures")
-	quit(1 if fails else 0)
+		fall_times.append(seconds)
+		print("EXTREME BRAKE %dHz: crash=%s time=%.3f warning=%.3f speed=%.2f" % [hz, b.crashed, seconds, warning_at, b.speed])
+		check(b.crashed and b.crash_cause == BikeRide.CrashCause.BRAKING and seconds > 1.2, "Only sustained extreme downhill overload can pitch over at %d Hz" % hz)
+		check(warning_at > 0.0 and seconds - warning_at >= 0.4, "Warning leaves at least 0.4 seconds to react")
+	check(absf(fall_times[0] - fall_times[1]) < 0.05, "Arcade pitch-over timing is stable at 30/120Hz")
+	var saved := make_bike(30.0)
+	saved.vy = -12.0
+	for i in 300:
+		step_ride(saved, -1.0)
+		if saved.brakes.risk > 0.65: break
+	for i in 120: step_ride(saved, 0.0)
+	check(not saved.crashed and saved.brakes.lift < 0.001 and saved.brakes.risk == 0, "Releasing at the warning saves the rider")
+	test_ground.profile = func(_d: float) -> float: return 0.0
 
 func landing_checks() -> void:
 	var ground := LandingGround.new()

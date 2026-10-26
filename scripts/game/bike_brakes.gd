@@ -5,8 +5,13 @@ const WHEELBASE := GameConfig.BIKE_WHEELBASE
 const COM_HEIGHT := 1.1
 const RIDER_RESPONSE := 0.55
 const SURGE_DECAY := 0.7
-const TIP_ANGLE := 0.16
-const MIN_TIP_SPEED := 6.0
+const TIP_ANGLE := 0.32
+const MIN_TIP_SPEED := 14.0
+# Arcade balance assistance: ordinary emergency stops stay safe, sustained
+# overload on a fast steep descent still allows a readable, avoidable pitch-over.
+const BALANCE_MARGIN := 0.22
+const OVERLOAD_GRACE := 1.0
+const HARD_BRAKE := 0.85
 
 var pressure := 0.0
 var deceleration := 0.0
@@ -20,6 +25,7 @@ var lift := 0.0 # rear wheel lift expressed as nose-down pitch, radians
 var brace := 0.0
 var _surge := 0.0
 var _pitch_rate := 0.0
+var _overload_time := 0.0
 var tipped := false
 
 func reset() -> void:
@@ -35,6 +41,7 @@ func reset() -> void:
 	brace = 0.0
 	_surge = 0.0
 	_pitch_rate = 0.0
+	_overload_time = 0.0
 	tipped = false
 
 func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true) -> void:
@@ -67,14 +74,22 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
 	grip_used = clampf(deceleration / maxf(available, 0.001), 0.0, 1.0)
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
-	if grounded and speed > MIN_TIP_SPEED and pressure > 0.05:
-		var torque := (front_load - 1.0) * normal_g * WHEELBASE
-		_pitch_rate += torque / (COM_HEIGHT * COM_HEIGHT * 0.5) * dt
-		_pitch_rate *= exp(-dt * 2.0)
-		lift = maxf(0.0, lift + _pitch_rate * dt)
-		if lift <= 0.0: _pitch_rate = maxf(0.0, _pitch_rate)
+	var overload := front_load - 1.0 - BALANCE_MARGIN
+	var danger := grounded and speed > MIN_TIP_SPEED and command > HARD_BRAKE and pressure > HARD_BRAKE and overload > 0.0
+	if danger:
+		_overload_time += dt
+		if _overload_time <= OVERLOAD_GRACE:
+			# Small visual warning first; no hidden angular momentum during the grace period.
+			lift = move_toward(lift, 0.04 * _overload_time / OVERLOAD_GRACE, dt * 0.08)
+			_pitch_rate = 0.0
+		else:
+			var torque := overload * normal_g * WHEELBASE
+			_pitch_rate += torque / (COM_HEIGHT * COM_HEIGHT * 0.5) * dt
+			_pitch_rate *= exp(-dt * 6.0)
+			lift = maxf(0.0, lift + _pitch_rate * dt)
 	else:
+		_overload_time = maxf(0.0, _overload_time - dt * 3.0)
 		lift = move_toward(lift, 0.0, dt * 0.8)
 		_pitch_rate = 0.0
-	risk = clampf(maxf((front_load - 0.8) / 0.2, lift / TIP_ANGLE), 0.0, 1.0) if grounded and speed > MIN_TIP_SPEED and pressure > 0.05 else 0.0
-	tipped = lift >= TIP_ANGLE
+	risk = clampf(maxf(_overload_time / OVERLOAD_GRACE * 0.8, lift / TIP_ANGLE), 0.0, 1.0) if danger else 0.0
+	tipped = danger and lift >= TIP_ANGLE
