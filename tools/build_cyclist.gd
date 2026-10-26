@@ -1,5 +1,5 @@
 extends SceneTree
-## Модель v5 (12.3). Пересборка перезаписывает scenes/cyclist.tscn.
+## Модель v6. Пересборка перезаписывает scenes/cyclist.tscn.
 ## v5: шлем сидит на голове (ниже и плотнее, козырёк короче и под наклоном), из-под шлема видны волосы,
 ## велотрусы выше колена и открытые голени с носками, рукав джерси короче — у локтя видна рука.
 ## Смена ткани на конечности — одна непрерывная поверхность с узким отворотом (кромка), а не отдельные
@@ -35,7 +35,7 @@ func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
 func _init() -> void:
 	rider = CyclistRig.new()
 	rider.name = "Rider"
-	rider.set_meta("model_version", 5)
+	rider.set_meta("model_version", 6)
 	skeleton = Skeleton3D.new()
 	skeleton.name = "Skeleton3D"
 	rider.add_child(skeleton)
@@ -86,7 +86,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v5 with cycling mask: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v6: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -95,7 +95,7 @@ func _body() -> void:
 	var chest := Vector3(0, 1.37, -0.08)
 	var rings: Array[Dictionary] = []
 	# Сужение в талии, грудь и линия плеч вместо пересекающихся овалов.
-	for spec: Vector3 in [Vector3(0.06, 0.14, 0.09), Vector3(0.25, 0.137, 0.095), Vector3(0.48, 0.152, 0.104), Vector3(0.72, 0.174, 0.108), Vector3(0.87, 0.188, 0.101), Vector3(0.90, 0.187, 0.10), Vector3(1.02, 0.176, 0.094), Vector3(1.10, 0.12, 0.076), Vector3(1.18, 0.052, 0.048)]:
+	for spec: Vector3 in [Vector3(0.06, 0.14, 0.09), Vector3(0.25, 0.137, 0.095), Vector3(0.48, 0.154, 0.106), Vector3(0.72, 0.18, 0.112), Vector3(0.87, 0.196, 0.105), Vector3(0.90, 0.195, 0.104), Vector3(1.02, 0.18, 0.094), Vector3(1.10, 0.12, 0.076), Vector3(1.18, 0.052, 0.048)]:
 		var t := spec.x
 		var lower := "Hips" if t < 0.5 else "Spine"
 		var upper := "Spine" if t < 0.5 else "Chest"
@@ -110,6 +110,10 @@ func _body() -> void:
 	patch(rings.slice(4, 6), -PI * 0.5 - 0.42, 0.28, cream)
 	patch(rings.slice(4, 6), PI * 0.5, 0.7, cream)
 	patch(rings.slice(1, 3), PI * 0.5, 0.68, panel)
+	# Крупная кокетка и боковые вставки читаются с игровой камеры, повторяя веса торса.
+	patch(rings.slice(5, 7), PI * 0.5, 0.8, panel)
+	for angle in [0.18, PI - 0.18]:
+		patch(rings.slice(2, 7), angle, 0.10, cream)
 	for angle in [PI * 0.5 - 0.24, PI * 0.5 + 0.24]:
 		patch(rings.slice(1, 3), angle, 0.018, navy)
 
@@ -284,22 +288,26 @@ func helmet_strip(x: float, width: float, mat: Material) -> void:
 func _limbs(side: float) -> void:
 	var s := "L" if side < 0 else "R"
 	# v5: рукав до двух третей плеча, кромка тёмная, ниже — рука (одна поверхность)
-	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.033, 0.036), Vector3(0, 0.06, 0.06), Vector3(0.12, 0.068, 0.061), Vector3(0.38, 0.064, 0.058), Vector3(0.58, 0.059, 0.054), Vector3(0.63, 0.058, 0.053), Vector3(0.634, 0.05, 0.047), Vector3(0.84, 0.045, 0.043), Vector3(1, 0.042, 0.043)], teal, "", true,
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.043, 0.043), Vector3(0, 0.067, 0.065), Vector3(0.12, 0.073, 0.067), Vector3(0.38, 0.064, 0.058), Vector3(0.58, 0.059, 0.054), Vector3(0.63, 0.058, 0.053), Vector3(0.634, 0.05, 0.047), Vector3(0.84, 0.045, 0.043), Vector3(1, 0.043, 0.046)], teal, "", true,
 		[teal, teal, teal, teal, panel, panel, skin, skin])
-	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.042, 0.043), Vector3(0.16, 0.047, 0.046), Vector3(0.35, 0.049, 0.045), Vector3(0.65, 0.038, 0.036), Vector3(0.86, 0.03, 0.03), Vector3(1, 0.028, 0.028)], skin, "UpperArm" + s)
-	ellipsoid("Hand" + s, Vector3(0.047, 0.044, 0.056), Vector3(0, 0.0, -0.009), navy)
-	ellipsoid("Hand" + s, Vector3(0.019, 0.03, 0.028), Vector3(-side * 0.036, -0.015, -0.018), navy)
-	box("Hand" + s, Vector3(0.045, 0.012, 0.027), Vector3(0, 0.04, -0.008), panel)
+	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.043, 0.046), Vector3(0.16, 0.049, 0.047), Vector3(0.35, 0.049, 0.044), Vector3(0.65, 0.038, 0.035), Vector3(0.86, 0.03, 0.03), Vector3(1, 0.028, 0.028)], skin, "UpperArm" + s)
+	# Ладонь и согнутый большой палец вместо двух шаров. Весь хват жёстко следует Hand.
+	local_loft("Hand" + s, [Vector3(0, -0.035, -0.018), Vector3(0, -0.016, -0.022), Vector3(0, 0.02, -0.012), Vector3(0, 0.038, 0)], [Vector2(0.035, 0.024), Vector2(0.044, 0.042), Vector2(0.043, 0.042), Vector2(0.032, 0.025)], navy, 8)
+	local_loft("Hand" + s, [Vector3(-side * 0.03, -0.025, -0.005), Vector3(-side * 0.046, -0.012, -0.018), Vector3(-side * 0.032, 0.006, -0.036)], [Vector2(0.015, 0.017), Vector2(0.018, 0.019), Vector2(0.012, 0.014)], navy, 8)
+	box("Hand" + s, Vector3(0.053, 0.009, 0.027), Vector3(0, 0.035, -0.008), panel)
+	box("Hand" + s, Vector3(0.038, 0.004, 0.008), Vector3(0, 0.041, -0.007), cream)
 	# v5: велотрусы до трёх четвертей бедра — кромка выше колена, сгиб колена — уже кожа
 	limb("UpperLeg" + s, "LowerLeg" + s, [Vector3(0, 0.077, 0.08), Vector3(0.17, 0.086, 0.088), Vector3(0.4, 0.08, 0.081), Vector3(0.6, 0.073, 0.073), Vector3(0.7, 0.07, 0.07), Vector3(0.704, 0.063, 0.064), Vector3(0.88, 0.052, 0.054), Vector3(1, 0.047, 0.05)], navy, "", true,
 		[navy, navy, navy, panel, navy, skin, skin])
 	# v5: голень открыта, носок над обувью с отворотом
-	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.047, 0.05), Vector3(0.12, 0.049, 0.052), Vector3(0.38, 0.055, 0.059), Vector3(0.7, 0.039, 0.042), Vector3(0.78, 0.035, 0.038), Vector3(0.782, 0.039, 0.042), Vector3(0.8, 0.039, 0.042), Vector3(0.9, 0.031, 0.034), Vector3(1, 0.027, 0.03)], skin, "UpperLeg" + s, false,
+	limb("LowerLeg" + s, "Foot" + s, [Vector3(0, 0.052, 0.055), Vector3(0.12, 0.048, 0.051), Vector3(0.38, 0.058, 0.064), Vector3(0.7, 0.038, 0.042), Vector3(0.78, 0.035, 0.038), Vector3(0.782, 0.039, 0.042), Vector3(0.8, 0.039, 0.042), Vector3(0.9, 0.031, 0.034), Vector3(1, 0.027, 0.03)], skin, "UpperLeg" + s, false,
 		[skin, skin, skin, skin, cream, cream, cream, cream])
 	local_loft("Foot" + s, [Vector3(0, -0.048, -0.035), Vector3(0, -0.033, -0.035)], [Vector2(0.064, 0.124), Vector2(0.065, 0.125)], dark)
 	local_loft("Foot" + s, [Vector3(0, -0.033, -0.035), Vector3(0, -0.005, -0.035), Vector3(0, 0.025, -0.015)], [Vector2(0.065, 0.125), Vector2(0.059, 0.105), Vector2(0.034, 0.055)], cream)
 	box("Foot" + s, Vector3(0.1, 0.014, 0.026), Vector3(0, 0.013, -0.065), panel)
 	box("Foot" + s, Vector3(0.08, 0.012, 0.023), Vector3(0, 0.026, -0.025), navy)
+	box("Foot" + s, Vector3(0.09, 0.025, 0.015), Vector3(0, -0.012, 0.068), panel)
+	box("Foot" + s, Vector3(0.10, 0.018, 0.018), Vector3(0, -0.026, -0.144), dark)
 
 
 ## mats — материал каждого отрезка между сечениями (пусто — весь mat): смена ткани без торцов внутри

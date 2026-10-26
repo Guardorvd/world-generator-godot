@@ -67,14 +67,14 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 
 ## stand (12.3): 1 — привстал над седлом и подался вперёд (подъём, рывок), −1 — привстал на спуске
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
 		return
 	if not left_grip.is_finite() or not right_grip.is_finite() or not motion.is_finite():
 		return
-	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag) or not is_finite(stand):
+	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag) or not is_finite(stand) or not is_finite(head_nod):
 		return
 	_poses.clear()
 	sway = clampf(sway, -0.13, 0.13)
@@ -86,7 +86,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 	# Стоя таз выше и над кареткой (нога внизу почти прямая), плечи ближе к рулю, таз ходит в такт педалям.
 	# Сидя таз держится над седлом; подвеску принимает корпус, а не проваливающийся в седло таз.
 	var hip_shift := motion.x * (0.7 if motion.x > 0.0 else 0.25)
-	var hip := Vector3(motion.y * 0.25 - sway * 0.2 * up, 1.015 - motion.z * 0.15 + up * 0.045 + attack * 0.025, 0.20 + hip_shift - up * 0.14)
+	var hip := Vector3(motion.y * 0.25 - sway * 0.2 * up, 1.015 - motion.z * 0.45 + up * 0.045 + attack * 0.025, 0.20 + hip_shift - up * 0.14)
 	# Подъём таза ограничен длиной обеих ног до педалей, без растягивания голени в нижней точке.
 	for side in [-1.0, 1.0]:
 		var ankle := Vector3(side * 0.14, 0.355 - side * cos(-crank_angle) * 0.17, 0.025 - side * sin(-crank_angle) * 0.17)
@@ -105,7 +105,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			if reach.length() > ARM_LENGTH * 2.0 - 0.006:
 				chest -= reach.normalized() * (reach.length() - (ARM_LENGTH * 2.0 - 0.006))
 	# Взгляд компенсирует склон в пределах движения шеи, сохраняя небольшой наклон по дороге.
-	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75, -0.32, 0.32), clampf(look, -0.5, 0.5), -roll * 0.6 + sway * 0.12))
+	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod, -0.36, 0.36), clampf(look, -0.5, 0.5), -roll * 0.6 + sway * 0.12))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, Basis(Vector3.UP, -sway * 0.3))
 	_aim("Spine", hip, chest, sway * 0.25)

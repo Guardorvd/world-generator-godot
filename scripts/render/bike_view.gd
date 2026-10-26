@@ -34,8 +34,14 @@ const S_SWAY := 17 # мягкое скручивание плеч в такт у
 const S_BREATH := 18 # небольшое движение грудной клетки
 const S_BODY_LOOK := 19 # плечи следуют за взглядом с небольшой задержкой
 const S_STAND := 20 # 12.3: привстал (подъём, рывок) +, «атака» на спуске −
-const STATE_SIZE := 21
+const S_HEAD_NOD := 21
+const S_PACK_PITCH := 22
+const S_PACK_ROLL := 23
+const STATE_SIZE := 24
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
+const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
+const AIR_CROUCH := 0.055
+const LAND_CROUCH := 0.085
 
 # состояние на двух последних тактах (индексы S_*)
 var _prev := PackedFloat64Array()
@@ -51,6 +57,16 @@ var _landing := 0.0
 var _breath_phase := 0.0
 var _effort := 0.0
 var _stand := 0.0
+var _was_airborne := false
+var _takeoff := 0.0
+var _air_pedal_blend := 0.0
+var _air_pedal_goal := PI * 0.5
+var _pack_swing := Vector2.ZERO
+var _pack_velocity := Vector2.ZERO
+var _pack_bag: Node3D
+var _fork_lowers: Array[Node3D] = []
+var _fork_parts: Array[Node3D] = []
+var _fork_rest: Array[Vector3] = []
 var _steering: Node3D
 var _view_ready := false
 # Перья подвески имеют именованные поля вместо позиционных массивов.
@@ -87,13 +103,29 @@ func _ready() -> void:
 	_steering = Node3D.new()
 	add_child(_steering)
 	_steering.position = Vector3(0.0, 0.76, -0.415)
-	for part: String in ["ForkL", "ForkR", "Stem", "Handlebar"]:
+	for part: String in ["ForkL", "ForkR", "Stem", "Handlebar", "ForkCrown", "ForkCrownStem", "ForkArch", "GripL", "GripR", "LeverL", "LeverR", "BrakeClampL", "BrakeClampR", "CableL", "CableR", "CableReturnL", "CableReturnR"]:
+		if not has_node(part):
+			continue
 		get_node(part).reparent(_steering)
 	var front_axle := Vector3(0.0, WHEEL_Y, -BikeRide.HUB) - _steering.position
 	for part: String in ["ForkL", "ForkR"]:
-		_front_struts.append(_strut(_steering.get_node(part) as MeshInstance3D, front_axle))
+		var fork := _steering.get_node(part)
+		if fork.has_node("Lower"):
+			_fork_lowers.append(fork.get_node("Lower"))
+			_fork_parts.append(fork)
+			_fork_rest.append(fork.position)
+		elif fork is MeshInstance3D:
+			_front_struts.append(_strut(fork, front_axle))
+	if _steering.has_node("ForkArch"):
+		_fork_lowers.append(_steering.get_node("ForkArch"))
+	if _steering.has_node("ForkCrown"):
+		_fork_parts.append(_steering.get_node("ForkCrown"))
+		_fork_rest.append(_steering.get_node("ForkCrown").position)
 	for part: String in ["ChainStayL", "ChainStayR", "SeatStayL", "SeatStayR"]:
 		_rear_struts.append(_strut(get_node(part) as MeshInstance3D, Vector3(0.0, WHEEL_Y, BikeRide.HUB)))
+	for part: String in ["ChainTop", "ChainBottom"]:
+		if has_node(part):
+			_rear_struts.append(_strut(get_node(part), Vector3(0.085, WHEEL_Y, BikeRide.HUB)))
 	lamp = Lamp.new()
 	lamp.name = "Lamp"
 	lamp.position = Vector3(0.0, 0.17, -0.1)
@@ -122,6 +154,7 @@ func set_pack(on: bool) -> void:
 		pack.bone_name = "Chest"
 		rider.skeleton.add_child(pack)
 		var bag := preload("res://scripts/render/cargo_bag.gd").build()
+		_pack_bag = bag
 		bag.position = PACK_AT
 		bag.scale = Vector3.ONE * PACK_SCALE
 		pack.add_child(bag)
@@ -152,6 +185,13 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_WHEEL] = b.wheel
 	_cur[S_STEER] = b.steer
 	_cur[S_CRANK] = b.crank
+	# В полёте педали быстро, но непрерывно приходят к ближайшему горизонтальному положению.
+	# Физический crank не меняется: это стойка седока, тягу и частоту усилия не подделываем.
+	if _has_state:
+		if b.airborne and (not _was_airborne or _air_pedal_blend < 0.001):
+			_air_pedal_goal = PI * 0.5 + roundf((b.crank - PI * 0.5) / PI) * PI
+		_air_pedal_blend = lerpf(_air_pedal_blend, 1.0 if b.airborne else 0.0, 1.0 - exp(-dt * 12.0))
+		_cur[S_CRANK] = lerp_angle(b.crank, _air_pedal_goal, _air_pedal_blend)
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_update_rider(b, dt, throttle, boost)
 	_riding = b.riding
@@ -163,26 +203,28 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 
 
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
-func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> void:
+func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void:
 	var continuous := _has_state and _riding and b.riding
 	var acceleration := clampf((b.speed - _last_speed) / maxf(dt, 0.001), -9.0, 7.0) if continuous else 0.0
 	var cadence := absf(angle_difference(_last_crank, b.crank)) / maxf(dt, 0.001) if continuous else 0.0
 	_last_speed = b.speed
 	_last_crank = b.crank
 	var pedal := clampf(cadence / 4.0, 0.0, 1.0) if not b.airborne else 0.0
-	var effort_target := pedal * (1.25 if boost else 1.0)
+	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0
+	var drive := maxf(throttle, 0.0) if not b.airborne else 0.0
+	var load := smoothstep(0.04, 0.25, slope) * drive
+	var effort_target := maxf(pedal * 0.8 + drive * 0.2, load * LOAD_EFFORT) * (1.25 if boost else 1.0)
 	# Усилие набирается и отпускается мягко; отпускание педалей не обрывает дыхание и плечи.
 	var effort_rate := 8.0 if effort_target > _effort else 5.0
 	_effort = lerpf(_effort, effort_target, 1.0 - exp(-dt * effort_rate)) if continuous else 0.0
 	var effort := _effort
-	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0
 	var braking := clampf(b.brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
 	var climb := smoothstep(0.07, 0.16, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(7.0, 11.0, absf(b.speed)))
 	var sprint := smoothstep(1.5, 3.5, acceleration) * (1.0 - smoothstep(6.0, 10.0, absf(b.speed))) if boost else 0.0
 	var descent := smoothstep(0.06, 0.16, -slope) * (1.0 - effort) * smoothstep(4.0, 8.0, absf(b.speed))
-	var stand_target := maxf(climb, sprint) - descent if continuous and not b.airborne else 0.0
+	var stand_target := (maxf(climb, sprint) - descent if not b.airborne else -0.65) if continuous else 0.0
 	_stand = lerpf(_stand, stand_target, 1.0 - exp(-dt * (4.0 if absf(stand_target) > absf(_stand) else 2.5))) if continuous else 0.0
 	var up := maxf(_stand, 0.0)
 	# Передний толчок подаёт плечи назад, задний — вперёд. В воздухе и на месте реакции нет.
@@ -194,7 +236,11 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var inertia_shift := lerpf(-acceleration * 0.007, braking * GameConfig.BIKE_BRAKE_SHIFT, braking)
 	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift, -0.09, 0.13)
 	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
-	_landing *= exp(-dt * 9.0)
+	_takeoff *= exp(-dt * 12.0)
+	if continuous and b.airborne and not _was_airborne and b.vy > 0.0:
+		_takeoff = 1.0
+	_was_airborne = b.airborne
+	_landing *= exp(-dt * 5.5)
 	if continuous and b.land_impact > 0.0:
 		_landing = maxf(_landing, clampf(b.land_impact / 10.0, 0.0, 1.0))
 	# В полёте компактная стойка, при приземлении сгибаем колени и локти.
@@ -204,7 +250,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var rough := clampf((absf(b.squash_fv) + absf(b.squash_rv)) * 0.009, 0.0, 0.022)
 	rough *= smoothstep(0.5, 3.0, absf(b.speed)) if not b.airborne else 0.0
 	# 12.3: тяжёлое нажатие (подъём, рывок) прижимает плечи к рулю
-	var crouch := rough + (0.035 if b.airborne else 0.0) + _landing * 0.055 + braking * 0.025 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
+	var crouch := rough + (AIR_CROUCH + _takeoff * 0.025 if b.airborne else 0.0) + _landing * LAND_CROUCH + braking * 0.025 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.27
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * effort * (0.055 + up * 0.06)
@@ -221,6 +267,18 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	_cur[S_BREATH] = breath
 	_cur[S_BODY_LOOK] = lerpf(_prev[S_BODY_LOOK], look, 1.0 - exp(-dt * 5.0)) if continuous else look
 	_cur[S_STAND] = _stand
+	var head_nod := clampf(-_landing * 0.065 + _takeoff * 0.035 + sin(b.crank * 2.0) * effort * 0.012, -0.08, 0.06)
+	_cur[S_HEAD_NOD] = lerpf(_prev[S_HEAD_NOD], head_nod, 1.0 - exp(-dt * 7.0)) if continuous else 0.0
+	# Только сумка имеет небольшое запаздывание относительно груди, а не весь скелет.
+	var pack_goal := Vector2(clampf(acceleration * 0.007 + _landing * 0.12, -0.08, 0.12), clampf(b.lean * 0.12 + b.slip * 0.2, -0.06, 0.06))
+	if continuous:
+		var ticks := maxi(1, ceili(dt * 120.0))
+		var h := dt / ticks
+		for i in ticks:
+			_pack_velocity += ((pack_goal - _pack_swing) * 85.0 - _pack_velocity * 15.0) * h
+			_pack_swing += _pack_velocity * h
+	_cur[S_PACK_PITCH] = _pack_swing.x
+	_cur[S_PACK_ROLL] = _pack_swing.y
 
 
 ## Перенестись в текущее состояние без перехода (поставили велосипед, сели или слезли)
@@ -233,6 +291,11 @@ func snap(b: BikeRide) -> void:
 	_breath_phase = 0.0
 	_effort = 0.0
 	_stand = 0.0
+	_takeoff = 0.0
+	_air_pedal_blend = 0.0
+	_was_airborne = b.airborne
+	_pack_swing = Vector2.ZERO
+	_pack_velocity = Vector2.ZERO
 	tick(b)
 	for i in STATE_SIZE:
 		_prev[i] = _cur[i]
@@ -262,10 +325,27 @@ func draw(alpha: float) -> void:
 		_stretch(st, _mix[S_SQUASH_F])
 	for st: Strut in _rear_struts:
 		_stretch(st, _mix[S_SQUASH_R])
+	for lower in _fork_lowers:
+		# ForkArch был переподчинён с сохранением мирового положения; его исходная позиция — -pivot.
+		lower.position = Vector3(0, _mix[S_SQUASH_F], 0) if lower.name == "Lower" else -_steering.position + Vector3(0, _mix[S_SQUASH_F], 0)
+	if has_node("RearMechanics"):
+		get_node("RearMechanics").position.y = _mix[S_SQUASH_R]
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW
 	_steering.rotation.y = front_wheel.rotation.y
+	# Рейк не должен отрывать штаны вилки от оси при рулении: сохраняем прежний центр колеса.
+	var axle := Vector3(0, WHEEL_Y, -BikeRide.HUB) - _steering.position
+	var fork_offset := _steering.basis.inverse() * axle - axle
+	for i in _fork_parts.size():
+		_fork_parts[i].position = _fork_rest[i] + fork_offset
+	if _steering.has_node("ForkArch"):
+		_steering.get_node("ForkArch").position += fork_offset
+	if _steering.has_node("ForkCrownStem"):
+		var link := _steering.get_node("ForkCrownStem") as MeshInstance3D
+		var start := Vector3(0, 0.70, -BikeRide.HUB) - _steering.position + fork_offset
+		var along := -start
+		link.transform = Transform3D(Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1, along.length() / (link.mesh as CylinderMesh).height, 1)), start * 0.5)
 	crank.rotation.x = -_mix[S_CRANK]
 	# педали держатся горизонтально
 	pedal_l.rotation.x = _mix[S_CRANK]
@@ -277,7 +357,9 @@ func draw(alpha: float) -> void:
 		var grip_l := _steering.position + _steering.basis * Vector3(-0.24, 0.22, -0.015)
 		var grip_r := _steering.position + _steering.basis * Vector3(0.24, 0.22, -0.015)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
-		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND])
+		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD])
+		if is_instance_valid(_pack_bag):
+			_pack_bag.rotation = Vector3(_mix[S_PACK_PITCH], 0, _mix[S_PACK_ROLL])
 
 
 ## Ход подвески в последнем кадре draw (для камеры, без ступенек 60 Гц)

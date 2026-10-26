@@ -710,21 +710,32 @@ func _slide_keep(dt: float, moved: float, full: float) -> float:
 ## Приземление: подвеска проседает тем сильнее, чем жёстче удар; жёсткий удар гасит скорость,
 ## а слишком жёсткий (с высоты больше 5 м на ровное) сбрасывает седока
 func _land(g: float, heights: Heightfield) -> void:
-	var slope := _slope(heights)
-	# Удар поперёк поверхности: приземляться вдоль спуска мягче, чем в подъём.
-	var impact := maxf(0.0, slope * speed - vy) / sqrt(1.0 + slope * slope)
+	# Центральная разность в мировых X/Z: боком к склону важна траектория, а не курс рамы.
+	var gradient := Vector2(
+		(heights.surface_at(x + HUB, z, g) - heights.surface_at(x - HUB, z, g)) / (2.0 * HUB),
+		(heights.surface_at(x, z + HUB, g) - heights.surface_at(x, z - HUB, g)) / (2.0 * HUB))
+	var normal := Vector3(-gradient.x, 1.0, -gradient.y).normalized()
+	var horizontal := horizontal_velocity()
+	var incoming := Vector3(horizontal.x, vy, horizontal.y)
+	var impact := maxf(0.0, -incoming.dot(normal))
+	var approach_grade := gradient.dot(horizontal.normalized()) if horizontal.length_squared() > 0.0001 else 0.0
 	airborne = false
 	y = g
 	land_impact = maxf(land_impact, impact)
 	squash_fv = clampf(squash_fv + impact * 0.4, -2.0, 4.0)
 	squash_rv = clampf(squash_rv + impact * 0.4, -2.0, 4.0)
 	# В подъём (нос в склон) удар опаснее, чем на ровное: порог падения ниже.
-	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(slope * signf(speed), 0.0, 1.0):
-		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
+	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(approach_grade, 0.0, 1.0):
+		_crash(vy, normal)
 		speed = 0.0
+		lateral_speed = 0.0
+		_water_drift = Vector2.ZERO
 	elif impact > SOFT_IMPACT:
-		speed *= 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)
-	vy = slope * speed
+		var keep := 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)
+		speed *= keep
+		lateral_speed *= keep
+		_water_drift *= keep
+	vy = gradient.dot(horizontal_velocity())
 	_coyote = HOP_COYOTE
 	# Короткие подскоки и заранее нажатый прыжок не блокируют управление.
 	if air_time > 0.2:

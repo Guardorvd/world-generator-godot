@@ -52,7 +52,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 5 and body_mesh != null, "Fifth model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 6 and body_mesh != null, "Sixth model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -85,7 +85,7 @@ func _check_model() -> void:
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
 	check(triangles < 5000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 5000 triangles and 8 material surfaces")
-	print("Cyclist v5 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	print("Cyclist v6 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
 func check_skin_pose() -> void:
@@ -105,6 +105,11 @@ func check_skin_pose() -> void:
 
 func contacts() -> void:
 	check_skin_pose()
+	if bike._fork_lowers.size() >= 2:
+		var axle := Vector3.ZERO
+		for i in 2:
+			axle += bike._fork_lowers[i].global_transform * Vector3(-0.055 if i == 0 else 0.055, 0.34, -0.53) * 0.5
+		check(axle.distance_to(bike.front_wheel.global_position) < 0.001, "Fork axle remains aligned during steering and suspension travel")
 	var neck_length := bone("Head").distance_to(bone("Neck"))
 	check(neck_length > 0.14 and neck_length < 0.18, "Neck remains connected without stretching in every pose")
 	for side in ["L", "R"]:
@@ -258,7 +263,7 @@ func run(finish := true) -> void:
 	state.airborne = true
 	for i in 90:
 		advance()
-	check(absf(bike._cur[BikeView.S_CROUCH] - 0.035) < 0.0001, "Airborne pose ignores suspension vibration")
+	check(bike._cur[BikeView.S_CROUCH] > 0.04 and bike._cur[BikeView.S_CROUCH] < 0.075, "Airborne pose stays compact without suspension vibration")
 	contacts()
 	reset()
 	state.tilt = 0.4
