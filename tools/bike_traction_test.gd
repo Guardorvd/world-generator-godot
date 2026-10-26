@@ -2,7 +2,6 @@ extends "res://tools/cyclist_animation_test.gd"
 ## Один запуск: численные манёвры, регрессии IK и последовательный визуальный просмотр.
 ## godot --path . --script res://tools/bike_traction_test.gd -- --ride-capture
 const Handling = preload("res://tools/bike_handling_test.gd")
-const Water = preload("res://tools/bike_water_test.gd")
 var test_world := Handling.TestWorld.new()
 var test_ground := Handling.TestGround.new(test_world)
 var player := PlayerState.new()
@@ -141,36 +140,11 @@ func batch() -> void:
 		step_ride(b, -1.0, 1.0)
 	check(absf(b.heading) > 0.03 and initial.dot(b.horizontal_velocity().normalized()) > 0.9999, "Airborne frame turns without rotating flight velocity")
 	b.lateral_speed = 0.8
-	b._water_drift = Vector2(0.3, -0.1)
 	var velocity := b.horizontal_velocity()
 	b._crash(-3.0)
-	check(Vector2(b.crash_velocity.x, b.crash_velocity.z).distance_to(velocity) < 0.00001, "Crash inherits lateral inertia and current together")
+	check(Vector2(b.crash_velocity.x, b.crash_velocity.z).distance_to(velocity) < 0.00001, "Crash inherits lateral inertia")
 	b.reset_motion()
 	check(b.horizontal_velocity() == Vector2.ZERO and b.brake_pressure == 0 and b.slip == 0, "Reset clears transient traction state")
-	# Тот же брод и его границы, без генерации мира.
-	var water_ground := Water.TestGround.new()
-	var water_world := Water.TestWorld.new()
-	var water_bike := BikeRide.new()
-	water_bike.speed = 3
-	for i in 60:
-		water_bike.step(player, 0, 0, false, false, DT, water_world, water_ground)
-	check(water_bike.x > 0.05, "Current still moves bike laterally")
-	water_ground.wall = true
-	water_bike.reset_motion()
-	water_bike.x = 0
-	water_bike.z = 0
-	for i in 60:
-		water_bike.step(player, 0, 0, false, false, DT, water_world, water_ground)
-	check(water_bike.x <= 0.15, "Water drift still respects collisions")
-	water_ground.wall = false
-	var flow_results: Array[Vector3] = []
-	for hz in [30, 120]:
-		water_bike = BikeRide.new()
-		water_bike.speed = 3
-		for i in hz:
-			water_bike.step(player, 0, 0, false, false, 1.0 / hz, water_world, water_ground)
-		flow_results.append(Vector3(water_bike.x, water_bike.speed, water_bike.z))
-	check(flow_results[0].distance_to(flow_results[1]) < 0.02, "Current and traction agree at 30/120Hz")
 	# Сохраняем существующие проверки скиннинга, контактов, крайних поз и восстановления.
 	await super.run(false)
 	await riding_preview()
@@ -190,12 +164,11 @@ func landing_checks() -> void:
 			b.speed = -1.5
 			b.lateral_speed = 8.0
 		else:
-			b.lateral_speed = 0.5
-			b._water_drift = Vector2(1.0, 0)
+			b.lateral_speed = 1.5
 		b._land(100.0, ground)
 		results.append(b)
 	check(absf(results[0].land_impact - results[1].land_impact) < 0.0001, "Same landing trajectory has same impact facing straight or sideways")
-	check(results[0].horizontal_velocity().distance_to(results[1].horizontal_velocity()) < 0.0001, "Landing loss preserves trajectory across heading/current decomposition")
+	check(results[0].horizontal_velocity().distance_to(results[1].horizontal_velocity()) < 0.0001, "Landing loss preserves trajectory across heading decomposition")
 	check(results[0].horizontal_velocity().length() < Vector2(1.5, -8).length(), "Hard landing reduces the complete horizontal velocity")
 	var normal := Vector3(0, 1, 0.3).normalized()
 	var horizontal := results[0].horizontal_velocity()
@@ -211,7 +184,6 @@ func landing_checks() -> void:
 	check(cross.land_impact > parallel.land_impact + 1.5, "Cross-slope lateral approach contributes to landing impact")
 	var crash := make_bike(4.0)
 	crash.lateral_speed = 2
-	crash._water_drift = Vector2(0.5, 0.2)
 	crash.vy = -20
 	var before := crash.horizontal_velocity()
 	crash._land(100, ground)

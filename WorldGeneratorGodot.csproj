@@ -8,4 +8,8 @@
     <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
     <RootNamespace>WorldGeneratorGodot</RootNamespace>
   </PropertyGroup>
+  <ItemGroup>
+    <!-- Archived measurement projects are data, not sources of the game. -->
+    <Compile Remove="tools/control/runs/**/*.cs" />
+  </ItemGroup>
 </Project>

@@ -1,6 +1,7 @@
 extends SceneTree
 ## Падение с велосипеда (7.6): godot --headless --path . --script res://tools/bike_crash_test.gd
 ## Потеря равновесия → ragdoll → подъём пешком; лежащая рама, ручная посадка и повторные падения.
+## --flat --cases 0,3,9,13: короткий пакет без генерации — земля, ствол, склон и стена.
 
 const DT := 1.0 / 60.0
 
@@ -60,6 +61,8 @@ var last_ground_hips := Vector3.INF
 var crossed_tree := false
 var pose_matches := true
 var recovery_stable := true
+var selected_cases := PackedInt32Array()
+var peak_spin := 0.0
 
 
 func check(ok: bool, label: String) -> void:
@@ -69,6 +72,10 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	var args := OS.get_cmdline_user_args()
+	if args.has("--cases"):
+		for value in args[args.find("--cases") + 1].split(","):
+			selected_cases.append(int(value))
 	if flat:
 		w = FlatWorld.new()
 		w.W = 64
@@ -95,6 +102,8 @@ func _initialize() -> void:
 		_setup_capture()
 	# Порог падения: ровное приземление с 2 м держится, в лоб в подъём с той же силой — уже нет
 	check(GameConfig.BIKE_CRASH - BikeRide.FACE_CRASH < 9.0 and GameConfig.BIKE_CRASH > 9.0, "в подъём роняет удар слабее, чем на ровном")
+	if not selected_cases.is_empty():
+		case_i = selected_cases[0]
 
 
 func _begin_case() -> void:
@@ -148,6 +157,7 @@ func _begin_case() -> void:
 	if capture:
 		_update_capture_ground()
 	frames = 0
+	peak_spin = 0.0
 	environment_checked = false
 	phases.clear()
 	lowest_head = INF
@@ -181,6 +191,7 @@ func _physics_process(_delta: float) -> bool:
 		var hips: Vector3 = crash.focus(bike) + Vector3(0, 0.5, 0)
 		for bone_name: String in crash._bones:
 			var physical: PhysicalBone3D = crash._bones[bone_name]
+			peak_spin = maxf(peak_spin, physical.angular_velocity.length())
 			var visible := skel.global_transform * skel.get_bone_global_pose(skel.find_bone(bone_name)) * physical.body_offset
 			pose_matches = pose_matches and visible.origin.distance_to(physical.global_position) < 0.005
 		lowest_head = minf(lowest_head, head.y - crash._support_height(head, heights))
@@ -232,6 +243,7 @@ func _finish_case(back: bool) -> void:
 	check(back and seconds < 3.6, "%s: пешее управление через %.2f с" % [name, seconds])
 	check(phases.has(BikeCrash.Phase.BALANCE) and phases.has(BikeCrash.Phase.RAGDOLL) and phases.has(BikeCrash.Phase.RECOVER), "%s: потеря равновесия → ragdoll → подъём" % name)
 	check(finite, "%s: позы конечны" % name)
+	check(peak_spin <= BikeCrash.MAX_BONE_SPIN + 0.001, "%s: нет разгона костей (%.2f рад/с)" % [name, peak_spin])
 	check(pose_matches, "%s: видимые кости совпадают с физическими телами" % name)
 	var head_limit := 1.4 if flat and case_i == 14 else (0.7 if flat and case_i == 4 else 0.45) # голова может лежать на бревне
 	check(lowest_head < head_limit, "%s: тело легло на землю (голова в %.2f м над землёй)" % [name, lowest_head])
@@ -271,6 +283,8 @@ func _finish_case(back: bool) -> void:
 	if flat and case_i == 3:
 		check(not crossed_tree, "при падении таз не прошёл насквозь через ствол")
 	case_i += 1
+	while not selected_cases.is_empty() and case_i < cases.size() and not selected_cases.has(case_i):
+		case_i += 1
 	if case_i >= cases.size():
 		if flat:
 			_check_on_foot()
@@ -332,6 +346,13 @@ func _check_on_foot() -> void:
 	game.bike = b
 	game.camera = Camera3D.new()
 	game.add_child(game.camera)
+	# GameWorld.new() не вызывает start(): зависимости камеры задаём как в игре.
+	game.crash = BikeCrash.new()
+	game.add_child(game.crash)
+	game.bike_view = BikeView.new()
+	game.add_child(game.bike_view)
+	game.camera_controller.settings = game.services.settings
+	game.camera_controller.heights = ground
 	game._prev = Vector3(p.x, p.feet, p.z)
 	game._update_camera(1.0, DT)
 	check(game.camera.position.is_equal_approx(Vector3(p.x, p.feet + GameConfig.EYE, p.z)), "после падения камера от первого лица на месте игрока")

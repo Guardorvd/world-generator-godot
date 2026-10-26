@@ -15,7 +15,14 @@ const GROUND_R := 16    # радиус куска рельефа под паде
 const LAYER_GROUND := 4
 const LAYER_BODY := 8
 const GRAVITY_SCALE := GameConfig.GRAVITY / 9.8
+const MAX_BONE_SPIN := 12.0 # рад/с: ограничение разгона лёгких конечностей решателем суставов
+const RECOVERY_PENETRATION := 0.12 # м: мелкие контакты оставляем решателю, не поднимаем тело каждый такт
 const EnvironmentContacts = preload("res://scripts/render/crash_environment.gd")
+class FallBone extends PhysicalBone3D:
+	func _integrate_forces(state: PhysicsDirectBodyState3D) -> void:
+		# Ограничиваем физическое состояние, а не видимую позу скелета.
+		state.angular_velocity = state.angular_velocity.limit_length(MAX_BONE_SPIN)
+
 enum FallStyle { LANDING, OVER_BARS, SIDE_SLIDE, GLANCING }
 
 enum BodyShape { SPHERE, CAPSULE, SHOE }
@@ -259,7 +266,7 @@ func _build_ragdoll() -> void:
 	_bones.clear()
 	for bone_name: String in BODIES:
 		var spec: Dictionary = BODIES[bone_name]
-		var bone := PhysicalBone3D.new()
+		var bone := FallBone.new()
 		bone.name = bone_name
 		bone.bone_name = bone_name
 		bone.collision_layer = LAYER_BODY
@@ -352,6 +359,7 @@ func _sync_pose() -> Array[Transform3D]:
 ## Страховка редкого пропуска контакта тонкой конечностью или рывка сустава.
 ## Обычное скольжение решает физика; здесь убираем только проникновение под поверхность.
 func _keep_above_ground(heights: Heightfield, dt: float) -> void:
+	var body_lift := 0.0
 	for bone: PhysicalBone3D in _bones.values():
 		var col := bone.get_child(0) as CollisionShape3D
 		var at := bone.global_transform * col.transform
@@ -377,8 +385,12 @@ func _keep_above_ground(heights: Heightfield, dt: float) -> void:
 		if immersion > 0.0:
 			bone.linear_velocity = _water_velocity(bone.linear_velocity, immersion, dt)
 			bone.angular_velocity *= exp(-immersion * dt * 3.0)
-		if penetration > 0.0:
-			bone.global_position.y += penetration
+		body_lift = maxf(body_lift, penetration)
+	if body_lift > RECOVERY_PENETRATION:
+		# Единый перенос сохраняет расстояния между суставами. Независимые
+		# телепорты кистей/ног растягивали связи и накачивали рэгдолл энергией.
+		for bone: PhysicalBone3D in _bones.values():
+			bone.global_position.y += body_lift
 			var velocity := bone.linear_velocity
 			velocity.y = maxf(velocity.y, 0.0)
 			bone.linear_velocity = velocity

@@ -48,7 +48,7 @@ var airborne := false
 var heading := 0.0    # курс, как yaw камеры: 0 — на север (-Z)
 var speed := 0.0      # м/с вдоль курса, назад — меньше нуля
 var acceleration := 0.0 # фактический продольный разгон за последний такт, для ощущения скорости
-var lateral_speed := 0.0 # боковая скорость относительно рамы; течение хранится отдельно
+var lateral_speed := 0.0 # боковая скорость относительно рамы
 var brake_pressure := 0.0 # сглаженное усилие одной кнопки, 0..1
 var brake_deceleration := 0.0 # фактическое замедление от тормозов, м/с² (без склона и качения)
 var front_load := 0.5 # автоматическое распределение: доля нагрузки спереди
@@ -440,7 +440,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 
 
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
-## Отдельного заноса и балансирования нет: поворот всегда идёт в сторону управления.
+## Боковая инерция и торможение делят общий запас сцепления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	steer = move_toward(steer, turn, dt * (7.0 if is_zero_approx(turn) else 5.0))
 	var pace := absf(speed)
@@ -502,7 +502,12 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 		else:
 			var gv := (g - y) / maxf(dt, 0.0001)
 			# ступенька (въезд на настил, шов полотна) — не склон: её подъём не становится скоростью взлёта
-			gv = minf(gv, absf(speed) * 1.2 + 0.5)
+			# При 120 Гц шов даёт вдвое больший скачок (g-y)/dt, чем при 60 Гц.
+			# Ограничиваем подъём уклоном на базе колёс, сохраняя импульс настоящего склона.
+			var gradient := Vector2(
+				(heights.surface_at(x + HUB, z, g) - heights.surface_at(x - HUB, z, g)) / (2.0 * HUB),
+				(heights.surface_at(x, z + HUB, g) - heights.surface_at(x, z - HUB, g)) / (2.0 * HUB))
+			gv = minf(gv, maxf(0.0, gradient.dot(horizontal_velocity())))
 			vy = gv
 			y = g
 
@@ -729,12 +734,10 @@ func _land(g: float, heights: Heightfield) -> void:
 		_crash(vy, normal)
 		speed = 0.0
 		lateral_speed = 0.0
-		_water_drift = Vector2.ZERO
 	elif impact > SOFT_IMPACT:
 		var keep := 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)
 		speed *= keep
 		lateral_speed *= keep
-		_water_drift *= keep
 	vy = gradient.dot(horizontal_velocity())
 	_coyote = HOP_COYOTE
 	# Короткие подскоки и заранее нажатый прыжок не блокируют управление.
