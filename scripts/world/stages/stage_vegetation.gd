@@ -291,7 +291,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				var py := y + rng.next_float()
 				var v := floori(rng.next_float() * 3)
 				var size := rng.next_float()
-				store.add(px, py, Biomes.T_ROCK, v, 0.5 + size * size * 1.1)
+				# Keep RNG consumption unchanged for surrounding trees. Sparse outcrops
+				# follow the geological patches, instead of carpeting every steep face.
+				var keep := 0.18 + 0.42 * _ss(0.1, 0.55, stony[i])
+				if WGRandom.hash2(floori(px * 113), floori(py * 109), 15631) < keep:
+					store.add(px, py, Biomes.T_ROCK, v, 0.5 + size * size * 1.1)
 			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48 and rng.next_float() < 0.12:
 				var px := x + rng.next_float()
 				var py := y + rng.next_float()

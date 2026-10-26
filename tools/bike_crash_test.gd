@@ -63,6 +63,8 @@ var pose_matches := true
 var recovery_stable := true
 var selected_cases := PackedInt32Array()
 var peak_spin := 0.0
+var joint_anchors := {}
+var max_joint_gap := 0.0
 
 
 func check(ok: bool, label: String) -> void:
@@ -158,6 +160,8 @@ func _begin_case() -> void:
 		_update_capture_ground()
 	frames = 0
 	peak_spin = 0.0
+	joint_anchors.clear()
+	max_joint_gap = 0.0
 	environment_checked = false
 	phases.clear()
 	lowest_head = INF
@@ -191,6 +195,15 @@ func _physics_process(_delta: float) -> bool:
 		var hips: Vector3 = crash.focus(bike) + Vector3(0, 0.5, 0)
 		for bone_name: String in crash._bones:
 			var physical: PhysicalBone3D = crash._bones[bone_name]
+			var parent := skel.get_bone_parent(skel.find_bone(bone_name))
+			while parent >= 0 and not crash._bones.has(skel.get_bone_name(parent)):
+				parent = skel.get_bone_parent(parent)
+			if parent >= 0:
+				var parent_body: PhysicalBone3D = crash._bones[skel.get_bone_name(parent)]
+				var anchor := (physical.global_transform * physical.joint_offset).origin
+				if not joint_anchors.has(bone_name):
+					joint_anchors[bone_name] = parent_body.global_transform.affine_inverse() * anchor
+				max_joint_gap = maxf(max_joint_gap, anchor.distance_to(parent_body.global_transform * joint_anchors[bone_name]))
 			peak_spin = maxf(peak_spin, physical.angular_velocity.length())
 			var visible := skel.global_transform * skel.get_bone_global_pose(skel.find_bone(bone_name)) * physical.body_offset
 			pose_matches = pose_matches and visible.origin.distance_to(physical.global_position) < 0.005
@@ -245,6 +258,7 @@ func _finish_case(back: bool) -> void:
 	check(finite, "%s: позы конечны" % name)
 	check(peak_spin <= BikeCrash.MAX_BONE_SPIN + 0.001, "%s: нет разгона костей (%.2f рад/с)" % [name, peak_spin])
 	check(pose_matches, "%s: видимые кости совпадают с физическими телами" % name)
+	check(max_joint_gap < 0.12, "%s: суставы не расходятся (%.3f м)" % [name, max_joint_gap])
 	var head_limit := 1.4 if flat and case_i == 14 else (0.7 if flat and case_i == 4 else 0.45) # голова может лежать на бревне
 	check(lowest_head < head_limit, "%s: тело легло на землю (голова в %.2f м над землёй)" % [name, lowest_head])
 	check(lowest_head > -0.05, "%s: голова не провалилась под поверхность" % name)

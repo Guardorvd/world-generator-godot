@@ -477,6 +477,11 @@ func _build_outer(chunk: Vector2i) -> Dictionary:
 		items.v.append(f.v[o])
 		items.s.append(f.s[o])
 		items.ground.append(ground)
+		if not items.has("normals"):
+			items.normals = PackedVector3Array()
+		var dx: float = corner[1] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[2]
+		var dz: float = corner[2] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[1]
+		items.normals.append(Vector3(-dx, TILE, -dz).normalized())
 	var built := _build_entries(items)
 	built.chunk = chunk
 	built.outer = items
@@ -506,6 +511,13 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 		items.v.append(world.obj_v[o])
 		items.s.append(world.obj_s[o])
 		items.ground.append(heights.ground_at(x, z))
+		if not items.has("normals"):
+			items.normals = PackedVector3Array()
+		var normal := Vector3.UP
+		if kind == Biomes.T_ROCK:
+			normal = Vector3(heights.ground_at(x - 0.5, z) - heights.ground_at(x + 0.5, z), 1.0,
+				heights.ground_at(x, z - 0.5) - heights.ground_at(x, z + 0.5)).normalized()
+		items.normals.append(normal)
 	var built := _build_entries(items)
 	built.chunk = chunk
 	return built
@@ -532,6 +544,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 		groups[model].ground.append(ground)
 	var entries: Array = []
 	for kind: int in groups:
+		var rock := kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK
 		var def: Dictionary = _defs[kind]
 		var group: Dictionary = groups[kind]
 		var count: int = group.ids.size()
@@ -551,13 +564,26 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
 			# Точный повёрнутый AABB вместо большой сферы вокруг всего вида.
 			var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3(s, sy, s)), pos)
+			if rock:
+				var normal: Vector3 = items.normals[o] if items.has("normals") else Vector3.UP
+				var shape := WGRandom.hash2(floori(ox * 127), floori(oy * 131), 15632)
+				# Embed outcrops into the slope; horizontal flat bases looked like floating shelves.
+				xf.basis = Basis(Quaternion(Vector3.UP, normal)) * Basis(Vector3.UP, rot)
+				xf.basis = xf.basis.scaled_local(Vector3(s, sy * lerpf(0.75, 1.25, shape), s * lerpf(0.8, 1.0, shape)))
+				xf.origin.y -= s * 0.16
 			var box: AABB = xf * def.box
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
-				_put_xform(entry.tbuf, n * 12, pos.x, pos.y, pos.z, rot, s, sy)
+				if rock:
+					_put_transform(entry.tbuf, n * 12, xf)
+				else:
+					_put_xform(entry.tbuf, n * 12, pos.x, pos.y, pos.z, rot, s, sy)
 			if entry.has("cbuf"):
 				var buf: PackedFloat32Array = entry.cbuf
-				_put_xform(buf, n * 16, pos.x, pos.y, pos.z, rot, s, sy)
+				if rock:
+					_put_transform(buf, n * 16, xf)
+				else:
+					_put_xform(buf, n * 16, pos.x, pos.y, pos.z, rot, s, sy)
 				var col: Color = def.leaves[v % def.leaves.size()]
 				buf[n * 16 + 12] = col.r
 				buf[n * 16 + 13] = col.g
@@ -640,6 +666,13 @@ func _apply_grass() -> void:
 		entry.mm.buffer = entry.buf
 		entry.mm.custom_aabb = AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
 		entry.mm.visible_instance_count = entry.count
+
+
+static func _put_transform(buf: PackedFloat32Array, o: int, xf: Transform3D) -> void:
+	for row in 3:
+		for column in 3:
+			buf[o + row * 4 + column] = xf.basis[column][row]
+		buf[o + row * 4 + 3] = xf.origin[row]
 
 
 static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: float, rot: float, s: float, sy: float) -> void:

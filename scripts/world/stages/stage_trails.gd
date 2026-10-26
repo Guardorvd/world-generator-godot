@@ -26,6 +26,7 @@ const RISE_LEN := 30        # самый длинный туннель, клет
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
 const BRIDGE_LANDING_GAP := 0.25 # въезд проверяется по всей ширине настила, м
+const BRIDGE_APPROACH := 24 # search both banks before committing a river-following road to a long span
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
 const HUT_CLEAR := 1.5      # дом ближе этого к оси моста или туннеля убирается, клеток
@@ -1026,13 +1027,13 @@ static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedB
 		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray) -> Vector2i:
 	var best := Vector2i(-1, -1)
 	var score := INF
-	for back in range(4):
+	for back in range(BRIDGE_APPROACH + 1):
 		var a := start - back
 		if a < 0 or out.size() <= back or out[-1 - back] != p[a] or wet[a] != 0:
 			break
 		if back > 0 and on_axis[p[a]] != 0:
 			break
-		for b in range(shore, mini(p.size(), mini(shore + 7, a + SPAN))):
+		for b in range(shore, mini(p.size(), mini(shore + BRIDGE_APPROACH + 1, a + SPAN))):
 			if wet[b] != 0:
 				continue
 			var length := Grid.hypot(p[b] % surface.world.W - p[a] % surface.world.W,

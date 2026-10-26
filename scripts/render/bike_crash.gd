@@ -261,6 +261,10 @@ func _begin_ragdoll() -> void:
 ## PhysicalBone3D на костях из BODIES: тело — посередине кости, сустав — в её начале
 func _build_ragdoll() -> void:
 	var skel := _rider.skeleton
+	# Freeze the release pose before adding a modifier or starting physics.
+	var release: Dictionary[String, Transform3D] = {}
+	for bone_name: String in BODIES:
+		release[bone_name] = skel.global_transform * skel.get_bone_global_pose(skel.find_bone(bone_name))
 	_sim = PhysicalBoneSimulator3D.new()
 	skel.add_child(_sim)
 	_bones.clear()
@@ -278,10 +282,6 @@ func _build_ragdoll() -> void:
 		bone.angular_damp = 3.0
 		bone.body_offset = Transform3D(Basis(), Vector3(0, spec.offset, 0))
 		bone.joint_offset = Transform3D(Basis(), Vector3(0, -spec.offset, 0))
-		if spec.swing > 0.0:
-			bone.joint_type = PhysicalBone3D.JOINT_TYPE_CONE
-			bone.set("joint_constraints/swing_span", spec.swing)
-			bone.set("joint_constraints/twist_span", spec.twist)
 		var shape: Shape3D
 		if spec.shape == BodyShape.SPHERE:
 			shape = SphereShape3D.new()
@@ -296,9 +296,21 @@ func _build_ragdoll() -> void:
 		_add_shape(bone, shape, shape_at)
 		_sim.add_child(bone)
 		# тело сразу на месте кости (в начале кадра симулятор ещё не успел бы его поставить)
-		bone.global_transform = skel.global_transform * skel.get_bone_global_pose(skel.find_bone(bone_name)) * bone.body_offset
+		bone.global_transform = release[bone_name] * bone.body_offset
 		_bones[bone_name] = bone
 	_sim.physical_bones_start_simulation()
+	# Starting simulation resets bodies. Restore ALL bodies before creating joints:
+	# the engine records the parent anchor from their current world transforms.
+	for bone_name: String in _bones:
+		var bone := _bones[bone_name]
+		bone.global_transform = release[bone_name] * bone.body_offset
+	for bone_name: String in _bones:
+		var spec: Dictionary = BODIES[bone_name]
+		if spec.swing > 0.0:
+			var bone := _bones[bone_name]
+			bone.joint_type = PhysicalBone3D.JOINT_TYPE_CONE
+			bone.set("joint_constraints/swing_span", spec.swing)
+			bone.set("joint_constraints/twist_span", spec.twist)
 	# Позу переносим в _sync_pose сами: второй проход модификатора в кадре не должен её перезаписывать.
 	_sim.active = false
 

@@ -99,6 +99,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		var node := MeshInstance3D.new()
 		node.mesh = mesh
 		node.material_override = material
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		add_child(node)
 		nodes[key] = node
 		uploaded = true

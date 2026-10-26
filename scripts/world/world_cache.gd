@@ -29,8 +29,8 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 1
-const SCHEMA_TRAILS_VERSION := 1
-const SCHEMA_NATURE_VERSION := 1
+const SCHEMA_TRAILS_VERSION := 2 # wider bridge approach search
+const SCHEMA_NATURE_VERSION := 2 # sparse geological rock outcrops
 const SCHEMA_VIEW_VERSION := 1
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

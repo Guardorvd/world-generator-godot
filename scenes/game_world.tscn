@@ -55,7 +55,10 @@ shadow_bias = 0.04
 shadow_normal_bias = 1.2
 shadow_blur = 1.2
 directional_shadow_blend_splits = true
-directional_shadow_max_distance = 220.0
+directional_shadow_split_1 = 0.04
+directional_shadow_split_2 = 0.13
+directional_shadow_split_3 = 0.35
+directional_shadow_max_distance = 900.0
 
 [node name="Terrain" type="MeshInstance3D" parent="."]
 

@@ -188,8 +188,8 @@ func _add(key: Vector2i, built: Dictionary) -> void:
 		# Радиус загрузки считается до ближайшей точки куска, видимость — с запасом на его половину.
 		mi.visibility_range_end = RADIUS + C * TILE * sqrt(2.0) * 0.5
 		mi.visibility_range_end_margin = RECHECK
-		# далёкий рельеф без теней: каждая тень — ещё по проходу отрисовки на кусок, а вдали их скрывает туман
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		add_child(mi)
 	_nodes[key] = mi
 
