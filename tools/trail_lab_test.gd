@@ -186,6 +186,33 @@ func check_rejected_bakes(routes: Array[TrailDefinition]) -> void:
 	check(not TrailBuilder.bake_elements(unprepared, routes).is_empty(), "missing refinement is a recoverable error")
 
 func check_lab_session(lab: Node) -> void:
+	var detail_key := InputEventKey.new()
+	detail_key.keycode = KEY_F3
+	detail_key.pressed = true
+	lab._unhandled_key_input(detail_key)
+	check(lab.diagnostics.visible, "F3 reveals ride diagnostics")
+	lab._unhandled_key_input(detail_key)
+	check(not lab.diagnostics.visible, "F3 hides ride diagnostics")
+	lab.details_control.pressed.emit()
+	check(lab.diagnostics.visible and lab.diagnostics_visible, "HUD button reveals diagnostics")
+	lab.details_control.pressed.emit()
+	lab.camera_control.pressed.emit()
+	check(lab.overview and "сверху" in lab.camera_control.tooltip_text, "HUD camera button updates its current state")
+	lab.camera_control.pressed.emit()
+	lab.editor.show()
+	lab.editor.close_requested.emit()
+	check(not lab.editor.visible, "editor close button closes settings")
+	lab.editor.show()
+	lab.set_overview(true)
+	lab.editor.camera_button.pressed.emit()
+	check(not lab.overview and "обычная" in lab.editor.camera_button.text, "editor camera button switches to rider view")
+	var camera_key := InputEventKey.new()
+	camera_key.keycode = KEY_V
+	camera_key.pressed = true
+	lab._unhandled_key_input(camera_key)
+	check(lab.overview and "сверху" in lab.editor.camera_button.text, "V switches camera while editor is open")
+	lab.launch_element()
+	check(not lab.overview and not lab.editor.visible, "launch returns to rider view")
 	var source: TrailDefinition = Fixture.definitions()[0]
 	var source_height := source.elements[0].height
 	var before_y: float = lab.heights.ground_at(40, 142)

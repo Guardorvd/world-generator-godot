@@ -13,7 +13,17 @@ var view: BikeView
 var crash := BikeCrash.new()
 var camera := Camera3D.new()
 var telemetry := Label.new()
+var speed_label := Label.new()
+var surface_label := Label.new()
+var stamina_label := Label.new()
+var stamina_bar := ProgressBar.new()
+var camera_control := Button.new()
+var details_control := Button.new()
 var status := Label.new()
+var diagnostics := Label.new()
+var hud_panel := PanelContainer.new()
+var diagnostics_visible := false
+var status_time := 0.0
 var editor := EditorPanel.new()
 var lane := 0
 var element_index := 0
@@ -52,19 +62,64 @@ func _ready() -> void:
 	camera.far = 800.0
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	telemetry.position = Vector2(18, 18)
-	status.position = Vector2(18, 235)
-	status.custom_minimum_size.x = 850
+	hud_panel.position = Vector2(18, 18)
+	hud_panel.theme_type_variation = "HudPanel"
+	canvas.add_child(hud_panel)
+	var hud_margin := MarginContainer.new()
+	for side in ["left", "top", "right", "bottom"]: hud_margin.add_theme_constant_override("margin_" + side, 10)
+	hud_panel.add_child(hud_margin)
+	var hud_box := VBoxContainer.new()
+	hud_box.add_theme_constant_override("separation", 6)
+	hud_margin.add_child(hud_box)
+	telemetry.theme_type_variation = "AccentLabel"
+	telemetry.add_theme_font_size_override("font_size", 14)
+	telemetry.custom_minimum_size.x = 300
+	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	speed_label.add_theme_font_size_override("font_size", 26)
+	surface_label.theme_type_variation = "HintLabel"
+	stamina_label.theme_type_variation = "HintLabel"
+	stamina_label.add_theme_font_size_override("font_size", 12)
+	stamina_bar.show_percentage = false
+	stamina_bar.custom_minimum_size.y = 7
+	diagnostics.add_theme_font_size_override("font_size", 13)
+	diagnostics.visible = false
+	hud_box.add_child(telemetry)
+	var ride_row := HBoxContainer.new()
+	hud_box.add_child(ride_row)
+	ride_row.add_child(speed_label)
+	var ride_info := VBoxContainer.new()
+	ride_info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ride_row.add_child(ride_info)
+	ride_info.add_child(surface_label)
+	ride_info.add_child(stamina_label)
+	ride_info.add_child(stamina_bar)
+	var hud_actions := HBoxContainer.new()
+	hud_box.add_child(hud_actions)
+	var settings_control := Button.new()
+	settings_control.text = "Трасса · F2"
+	settings_control.tooltip_text = "Открыть настройки трассы"
+	settings_control.pressed.connect(func() -> void: set_editor_visible(not editor.visible))
+	hud_actions.add_child(settings_control)
+	camera_control.pressed.connect(func() -> void: set_overview(not overview))
+	hud_actions.add_child(camera_control)
+	details_control.text = "Данные · F3"
+	details_control.pressed.connect(func() -> void: set_diagnostics_visible(not diagnostics_visible))
+	hud_actions.add_child(details_control)
+	hud_box.add_child(diagnostics)
+	status.position = Vector2(18, 110)
+	status.custom_minimum_size.x = 320
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	for label in [telemetry, status]:
+	for label in [telemetry, diagnostics, status]:
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
 		label.add_theme_constant_override("shadow_outline_size", 5)
-		canvas.add_child(label)
+	canvas.add_child(status)
 	canvas.add_child(editor)
 	editor.visible = false
 	editor.course_selected.connect(func(index: int, kind: String) -> void:
 		if rebuild(Fixture.course(index, kind)):
-			overview = true)
+			set_overview(true))
+	editor.camera_toggle_requested.connect(func() -> void: set_overview(not overview))
+	editor.close_requested.connect(func() -> void: set_editor_visible(false))
 	editor.route_selected.connect(select_route)
 	editor.element_selected.connect(func(index: int) -> void:
 		element_index = index
@@ -72,6 +127,7 @@ func _ready() -> void:
 	editor.apply_requested.connect(apply_edit)
 	editor.launch_requested.connect(launch_element)
 	editor.reload_requested.connect(reload_sources)
+	set_overview(false)
 	get_viewport().size_changed.connect(_place_editor)
 	_place_editor()
 	rebuild(_copy_routes(routes))
@@ -190,12 +246,32 @@ func launch_element() -> void:
 		var e := routes[lane].elements[element_index]
 		station = maxf(0.0, e.station - e.length * 0.5 - 12.0)
 	reset_ride(station, editor.numbers.speed.value / 3.6)
+	set_overview(false)
 	editor.hide()
 	get_viewport().gui_release_focus()
 	show_message("Заезд с %.0f км/ч · R — старт трассы" % editor.numbers.speed.value)
 
 func show_message(text: String) -> void:
 	status.text = text
+	status.visible = true
+	status_time = 4.0
+
+func set_overview(enabled: bool) -> void:
+	overview = enabled
+	editor.set_camera_overview(enabled)
+	camera_control.text = "Сверху · V" if enabled else "Камера · V"
+	camera_control.tooltip_text = "Сейчас: обзор сверху. Переключить на вид за велосипедистом" if enabled else "Сейчас: вид за велосипедистом. Переключить на обзор сверху"
+
+func set_editor_visible(enabled: bool) -> void:
+	editor.visible = enabled
+	get_viewport().gui_release_focus()
+
+func set_diagnostics_visible(enabled: bool) -> void:
+	diagnostics_visible = enabled
+	diagnostics.visible = enabled
+	details_control.text = "Скрыть · F3" if enabled else "Данные · F3"
+	hud_panel.reset_size()
+	get_viewport().gui_release_focus()
 
 ## Release ragdoll bodies before the owning menu removes the scene.
 func shutdown() -> void:
@@ -215,14 +291,20 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo: return
 	var key: int = event.physical_keycode if event.physical_keycode != 0 else event.keycode
 	if key == KEY_F2:
-		editor.visible = not editor.visible
-		get_viewport().gui_release_focus()
+		set_editor_visible(not editor.visible)
 	if key == KEY_F5: reload_sources()
+	if key == KEY_F3:
+		set_diagnostics_visible(not diagnostics_visible)
+		get_viewport().set_input_as_handled()
+		return
+	if key == KEY_V:
+		set_overview(not overview)
+		get_viewport().set_input_as_handled()
+		return
 	if heights == null or editor.visible: return
 	if key >= KEY_1 and key < KEY_1 + mini(routes.size(), 9): select_route(key - KEY_1)
 	if key == KEY_R: reset_ride()
 	if key == KEY_G: launch_element()
-	if key == KEY_V: overview = not overview
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
@@ -270,8 +352,11 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 	bike.land_impact = 0.0
 	bike.bottom_out = 0.0
 
-func _process(_dt: float) -> void:
+func _process(dt: float) -> void:
 	if heights == null: return
+	if status_time > 0.0:
+		status_time -= dt
+		if status_time <= 0.0: status.hide()
 	if crash.active(): crash.draw()
 	else: view.draw(Engine.get_physics_interpolation_fraction())
 	var target := Vector3(player.x, player.feet + 1.0, player.z)
@@ -283,5 +368,11 @@ func _process(_dt: float) -> void:
 		camera.look_at(target)
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
-	var escape_hint := "выход" if exit_requested.get_connections().is_empty() else "в меню"
-	telemetry.text = "TRAIL LAB | %s\n1–%d: трасса | R: старт | G: заезд | V: обзор | %s: посадка/сход\nF2: трассы и земляные работы | F5: перечитать файлы | Esc: %s\nW/S: педали/тормоз | A/D: руль | Space: прыжок | Shift: усилие\n%.1f км/ч | %s (%.0f%%) | уклон %.1f%%\nснос %.1f° | расход сцепления %.0f%% | подвеска %.3f / %.3f м\n%s | выносливость %.0f%% | последний удар %.1f м/с" % [routes[lane].title, mini(routes.size(), 9), services.controls.label("interact"), escape_hint, absf(bike.speed) * 3.6, name, contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), controller.stamina.value * 100, last_land_impact]
+	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
+	speed_label.text = "%.0f\nкм/ч" % (absf(bike.speed) * 3.6)
+	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
+	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
+	stamina_bar.value = controller.stamina.value * 100
+	if diagnostics_visible:
+		diagnostics.text = "1–%d трасса  ·  R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали/тормоз  ·  A/D руль  ·  Space прыжок  ·  Shift усилие\nF5 перечитать файлы  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%  ·  снос %.1f°\nСцепление %.0f%%  ·  подвеска %.3f / %.3f м\n%s  ·  последний удар %.1f м/с" % [mini(routes.size(), 9), services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact]
+	status.position.y = hud_panel.position.y + hud_panel.size.y + 10
