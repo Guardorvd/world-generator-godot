@@ -39,7 +39,8 @@ var _ledger := {}
 var _lock := Mutex.new()
 
 
-func _init(w: WorldData) -> void:
+func _init(w: WorldData = null) -> void:
+	if w == null: return
 	W = w.W
 	H = w.H
 	_ring = [compute(w, -1, -1, w.W + 2, 1), compute(w, -1, w.H, w.W + 2, 1),

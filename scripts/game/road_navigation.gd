@@ -5,6 +5,7 @@ const MAX_VISITS := 20000
 const LOCAL_VISITS := 1800
 const CELL := 2.0
 const OFFROAD_COST := 1.5
+var cancelled := false # Cooperative cancellation of superseded background searches.
 var points := {}
 var links := {}
 var levels := {}
@@ -17,6 +18,8 @@ var _world: WorldData
 var _heights: Heightfield
 var _cells := {}
 var _components := {}
+var _collision_cells := {} # chunk -> only building records that can affect its exact collision queries
+const BUILDING_CELL := 64.0
 
 func build(w: WorldData, h: Heightfield = null) -> void:
 	_world = w
@@ -26,14 +29,17 @@ func build(w: WorldData, h: Heightfield = null) -> void:
 	levels.clear()
 	_cells.clear()
 	_components.clear()
+	_collision_cells.clear()
 	var trails := w.trails.duplicate()
 	if w.outer != null:
 		trails.append_array(w.outer.get_ledger().get("trails", []))
 	for trail: Dictionary in trails:
+		if cancelled: return
 		if trail.get("kind", "animal") == "animal": continue
 		var previous := -1
 		var level := INF
 		for p: Dictionary in trail.pts:
+			if cancelled: return
 			var at := Vector2(p.x, p.y) * GameConfig.TILE
 			if not at.is_finite():
 				previous = -1
@@ -102,6 +108,7 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	var approaches := {}
 	var heap: Array[Vector2] = []
 	for id: int in starts.slice(0, 6):
+		if cancelled: return PackedVector2Array()
 		var approach := _connector(from, points[id], feet)
 		if approach.is_empty(): continue
 		if _heights != null and absf(_end_level(approach, feet) - float(levels[id])) > 0.5: continue
@@ -110,7 +117,7 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 		approaches[id] = approach
 		_push(heap, id, cost[id])
 	var visits := 0
-	while not heap.is_empty() and visits < MAX_VISITS:
+	while not cancelled and not heap.is_empty() and visits < MAX_VISITS:
 		var item := _pop(heap)
 		var id := int(item.y)
 		if item.x > float(cost[id]) + 0.001: continue
@@ -128,6 +135,7 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	var best_cost := _length(direct) * OFFROAD_COST if not direct.is_empty() else INF
 	var finish := PackedVector2Array()
 	for id: int in tails.slice(0, 8):
+		if cancelled: return PackedVector2Array()
 		var end := _connector(points[id], to, levels[id])
 		if end.is_empty(): continue
 		var distance: float = cost[id] + _length(end) * OFFROAD_COST
@@ -168,11 +176,12 @@ func _segment(a: Vector2, b: Vector2, feet: float) -> float:
 	var steps := maxi(1, ceili(a.distance_to(b) / 0.5))
 	var last := feet
 	for i in range(0, steps + 1):
+		if cancelled: return INF
 		var at := a.lerp(b, float(i) / steps)
 		if not _heights.known(at.x, at.y) or not _world.accessible(at.x / GameConfig.TILE, at.y / GameConfig.TILE): return INF
 		var y := _heights.surface_at(at.x, at.y, last + 0.1)
 		if not is_finite(y) or absf(y - last) > maxf(0.35, a.distance_to(b) / steps * 1.0): return INF
-		if not PlayerState.is_passable(_world, _heights, at.x, at.y, y, 0.25) or not BikeRecovery.headroom(_heights, at.x, at.y, y): return INF
+		if not _passable(at, y) or not BikeRecovery.headroom(_heights, at.x, at.y, y): return INF
 		last = y
 	return last
 
@@ -190,7 +199,7 @@ func _connector(a: Vector2, b: Vector2, feet: float) -> PackedVector2Array:
 	var heap: Array[Vector2] = []
 	_push(heap, 0, a.distance_to(b))
 	var visits := 0
-	while not heap.is_empty() and visits < LOCAL_VISITS:
+	while not cancelled and not heap.is_empty() and visits < LOCAL_VISITS:
 		var item := _pop(heap)
 		var id := int(item.y)
 		var at := a + Vector2(positions[id]) * CELL
@@ -243,3 +252,19 @@ func _pop(heap: Array[Vector2]) -> Vector2:
 		index = child
 	heap[index] = last
 	return out
+
+## _segment already checks known/accessibility. Keep exact hut/wall/object/water tests, but
+## avoid scanning every settlement in the entire world for each half-metre sample.
+func _passable(at: Vector2, feet: float) -> bool:
+	var key := Vector2i(floori(at.x / BUILDING_CELL), floori(at.y / BUILDING_CELL))
+	var nearby: WorldData = _collision_cells.get(key)
+	if nearby == null:
+		nearby = WorldData.new()
+		var bounds := Rect2(Vector2(key) * BUILDING_CELL, Vector2.ONE * BUILDING_CELL).grow(33.0)
+		for group: Array in [_world.settlements, _world.outer.settlements if _world.outer != null else []]:
+			for settlement: SettlementData in group:
+				if bounds.has_point(Vector2(settlement.x, settlement.y) * GameConfig.TILE): nearby.settlements.append(settlement)
+		for site: SiteData in _world.sites:
+			if bounds.has_point(Vector2(site.x, site.y) * GameConfig.TILE): nearby.sites.append(site)
+		_collision_cells[key] = nearby
+	return PlayerState.is_passable(nearby, _heights, at.x, at.y, feet, 0.25, true) and _heights.depth_at(at.x, at.y, feet) < GameConfig.FORD_DEPTH

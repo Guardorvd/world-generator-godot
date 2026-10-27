@@ -19,6 +19,15 @@ const CORE := Color(1.0, 0.88, 0.55)
 const EDGE := Color(0.95, 0.72, 0.3)
 const WARN := Color(1.0, 0.3, 0.18)
 const WARN_EDGE := Color(0.9, 0.14, 0.08)
+const Snapshot = preload("res://scripts/game/navigation_snapshot.gd")
+var background_search := false # GameWorld enables this; isolated synchronous callers retain their contract.
+var _search_task := -1
+var _search_roads: Roads
+var _search_path := PackedVector2Array()
+var _search_revision := ""
+var _search_serial := 0
+var _serial := 0
+var _request := {}
 var roads: Roads
 var path := PackedVector2Array()
 var _cum := PackedFloat32Array() # длина маршрута от начала до каждой точки, м
@@ -43,6 +52,7 @@ func _network_revision() -> String:
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
+	_stop_search()
 	_world = w
 	_heights = h
 	roads = null
@@ -61,6 +71,9 @@ func setup(w: WorldData, h: Heightfield) -> void:
 
 
 func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
+	_serial += 1
+	_request = {}
+	if _search_roads != null: _search_roads.cancelled = true
 	_goal = goal
 	path.clear()
 	(mesh as ImmediateMesh).clear_surfaces()
@@ -74,7 +87,9 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 		return
 	if roads == null:
 		roads = Roads.new()
-	if _revision != _network_revision():
+		roads._world = _world
+		roads._heights = _heights
+	if not background_search and _revision != _network_revision():
 		roads.build(_world, _heights)
 		_revision = _network_revision()
 	_target = Vector2(goal.x, goal.y) * GameConfig.TILE
@@ -83,8 +98,16 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_rebuild(at, feet)
 
 
-func _rebuild(at: Vector2, feet := INF) -> void:
+func _rebuild(at: Vector2, feet := INF, recheck_graph := false) -> void:
+	if background_search:
+		_request_search(at, feet, recheck_graph)
+		return
+	if recheck_graph: roads.build(_world, _heights)
 	path = roads.route_to(at, _target, feet)
+	_last_here = at
+	_accept_path()
+
+func _accept_path() -> void:
 	status = roads.status
 	(mesh as ImmediateMesh).clear_surfaces()
 	_progress = 0.0
@@ -92,7 +115,6 @@ func _rebuild(at: Vector2, feet := INF) -> void:
 	_flow = 0.0
 	_road_first = roads.road_first
 	_road_last = roads.road_last
-	_last_here = at
 	_cum.resize(path.size())
 	var total := 0.0
 	for i in path.size():
@@ -104,6 +126,7 @@ func _rebuild(at: Vector2, feet := INF) -> void:
 
 
 func update_line(at: Vector3, dt: float, shown: bool) -> void:
+	if background_search: _poll_search(Vector2(at.x, at.z))
 	visible = shown and not _goal.is_empty()
 	if not visible:
 		_last_here = Vector2(at.x, at.z)
@@ -119,13 +142,15 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 	_timer = 0.125 if _wrong > 0.0 else 0.25 # при предупреждении штрихи бегут плавнее
 	var here := Vector2(at.x, at.z)
 	if _revision != _network_revision():
+		if background_search:
+			_request_search(here, at.y)
+			return
 		roads.build(_world, _heights)
 		_revision = _network_revision()
 		_rebuild(here, at.y)
 		return
 	if path.is_empty():
 		if _reroute_timer <= 0:
-			roads.build(_world, _heights)
 			_rebuild(here, at.y)
 		return
 	var segment := -1
@@ -166,12 +191,12 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 			continue
 		var direction := a0.direction_to(path[i])
 		var c0 := maxf(start, base)
-		var c1 := _cum[i]
-		var next_ground := roads._segment(nearest if i == segment else a0, path[i], ground)
+		var c1 := minf(_cum[i], start + REACH)
+		var end := a0 + direction * (c1 - base)
+		var next_ground := roads._segment(nearest if i == segment else a0, end, ground)
 		if next_ground == INF:
 			if _reroute_timer <= 0.0:
-				roads.build(_world, _heights)
-				_rebuild(here, at.y)
+				_rebuild(here, at.y, true)
 			return # не продолжаем рисовать сквозь обновившееся препятствие
 		# короткий подход к дороге (до STEP) — тот же пунктир, чтобы не было стрелки под ногами
 		var on_road := (i > _road_first and i <= _road_last) or (i == _road_first and length < STEP)
@@ -193,6 +218,8 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 
 func can_arrive(at: Vector3) -> bool:
 	if _goal.get("kind") != "marker": return true
+	# HUD only accepts markers within 3m; do not trace kilometres every physics tick.
+	if Vector2(at.x, at.z).distance_squared_to(_target) > 9.0: return false
 	if not _heights.known(_target.x, _target.y): return false
 	var target_y := _heights.surface_at(_target.x, _target.y, INF)
 	return absf(target_y - at.y) < 1.5 and roads != null and roads._segment(Vector2(at.x, at.z), _target, at.y) < INF
@@ -289,3 +316,64 @@ func _ahead(s: float, dist: float) -> Vector2:
 			var t := 0.0 if span <= 0.0 else (target - _cum[i - 1]) / span
 			return path[i - 1].lerp(path[i], t)
 	return path[path.size() - 1]
+
+## Only one worker exists. A newer goal/revision supersedes its result without blocking a frame.
+func _request_search(at: Vector2, feet: float, recheck_graph := false) -> void:
+	var revision := _network_revision()
+	if _search_task != -1 and _search_serial == _serial and _search_revision == revision: return
+	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph}
+	if _search_task != -1:
+		_search_roads.cancelled = true
+		return
+	_start_search()
+
+func _start_search() -> void:
+	var request := _request
+	_request = {}
+	var reuse: bool = roads != null and _revision == request.revision and not request.recheck_graph
+	var h := Snapshot.capture(_heights, not reuse)
+	var search := Roads.new()
+	_search_roads = search
+	_search_revision = request.revision
+	_search_serial = request.serial
+	if reuse:
+		# Graph dictionaries are published once, route_to only reads them.
+		search.points = roads.points
+		search.links = roads.links
+		search.levels = roads.levels
+		search._components = roads._components
+		search._world = h.world
+		search._heights = h
+	status = "Расчёт маршрута…"
+	_search_task = WorkerThreadPool.add_task(func() -> void:
+		if not reuse: search.build(h.world, h)
+		_search_path = search.route_to(request.at, request.target, request.feet) if not search.cancelled else PackedVector2Array(), false, "Навигация")
+
+func _poll_search(here: Vector2) -> void:
+	if _search_task != -1 and WorkerThreadPool.is_task_completed(_search_task):
+		WorkerThreadPool.wait_for_task_completion(_search_task)
+		_search_task = -1
+		if not _search_roads.cancelled and _search_serial == _serial and not _goal.is_empty() and _search_revision == _network_revision():
+			roads = _search_roads
+			# Draw/arrival checks always use the current terrain and obstacles.
+			roads._world = _world
+			roads._heights = _heights
+			path = _search_path
+			_revision = _search_revision
+			_last_here = here
+			_accept_path()
+		_search_roads = null
+		_search_path = PackedVector2Array()
+	if _search_task == -1 and not _request.is_empty(): _start_search()
+
+func _stop_search() -> void:
+	_request = {}
+	if _search_task != -1:
+		_search_roads.cancelled = true
+		WorkerThreadPool.wait_for_task_completion(_search_task)
+		_search_task = -1
+	_search_roads = null
+	_search_path = PackedVector2Array()
+
+func _exit_tree() -> void:
+	_stop_search()

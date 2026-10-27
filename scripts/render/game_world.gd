@@ -339,6 +339,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_opening_welcome()
 	audio.setup(world, heights)
 	navigation_line = NavigationLine.new()
+	navigation_line.background_search = true
 	add_child(navigation_line)
 	navigation_line.setup(world, heights)
 	hud.goal_changed.connect(_navigation_goal)

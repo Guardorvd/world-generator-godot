@@ -37,7 +37,7 @@ static func _validate(w: WorldData, definitions: Array[TrailDefinition], for_bak
 				errors.append("Trail must be appended before baking: " + d.id)
 			else:
 				var record := d.path_record()
-				if existing[d.id].pts != record.pts or existing[d.id].kind != d.kind or existing[d.id].get("surface_override", 0) != d.surface:
+				if existing[d.id].pts != record.pts or existing[d.id].kind != d.kind or existing[d.id].get("surface_override", 0) != d.surface or existing[d.id].get("formation", Vector3.ZERO) != record.formation or existing[d.id].get("closed", false) != d.closed:
 					errors.append("Trail changed after preparing its surface: " + d.id)
 		for p in d.points:
 			var margin := d.width * 0.5 + RoadRefinement.REACH + GameConfig.TILE
@@ -61,7 +61,10 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 			var a: Dictionary = route.pts[i - 1]
 			var b: Dictionary = route.pts[i]
 			roads.append({a = Vector2(a.x, a.y) * GameConfig.TILE, b = Vector2(b.x, b.y) * GameConfig.TILE,
-				half = maxf(a.w, b.w) * GameConfig.TILE * 0.5})
+				id = route.get("trail_id", ""), half = maxf(a.w, b.w) * GameConfig.TILE * 0.5})
+	var profiles := {}
+	for d in definitions:
+		if d.earthwork > 0.0: profiles[d.id] = _profile(h, d)
 	var offsets := {}
 	var staged := {}
 	for key: int in r.patches:
@@ -77,21 +80,42 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 					var offset := 0.0
 					var cell := floori(at.y / GameConfig.TILE) * h.world.W + floori(at.x / GameConfig.TILE)
 					var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, h.world.dist_water[cell])
-					if h.water_level[cell] != -INF: pin = 0.0
+					# Protect the support of wet triangles as well as the wet cell itself.
+					for dz in [-1.0, 0.0, 1.0]:
+						for dx in [-1.0, 0.0, 1.0]:
+							var cx := clampi(floori((at.x + dx * GameConfig.TILE) / GameConfig.TILE), 0, h.world.W - 1)
+							var cz := clampi(floori((at.y + dz * GameConfig.TILE) / GameConfig.TILE), 0, h.world.H - 1)
+							if h.water_level[cz * h.world.W + cx] != -INF: pin = 0.0
 					for s: Dictionary in h.structures:
 						pin = minf(pin, smoothstep(RoadBed.PIN, RoadBed.PIN + RoadBed.PIN_FADE, Grid.segment_dist(at.x, at.y, s.ax, s.az, s.bx, s.bz)))
-					for road: Dictionary in roads:
-						pin = minf(pin, smoothstep(road.half, road.half + RoadRefinement.REACH,
-							Grid.segment_dist(at.x, at.y, road.a.x, road.a.y, road.b.x, road.b.y)))
+					# Resolve overlaps by normalized distance, never add competing route profiles.
+					var winner: TrailDefinition = null
+					var local := Vector3.ZERO
+					var rank := INF
 					for d in definitions:
-						if d.elements.is_empty(): continue
-						var local := d.nearest(at)
-						if local.z >= d.width * 0.5: continue
-						for e in d.elements: offset += e.displacement(local.x, local.y, d.width * 0.5)
+						var near := d.nearest(at)
+						var score := near.z / (d.width * 0.5)
+						if near.z < d.width * 0.5 + RoadRefinement.REACH and score < rank:
+							winner = d
+							local = near
+							rank = score
+					if winner != null:
+						for road: Dictionary in roads:
+							if road.id == winner.id: continue
+							pin = minf(pin, smoothstep(road.half, road.half + RoadRefinement.REACH,
+								Grid.segment_dist(at.x, at.y, road.a.x, road.a.y, road.b.x, road.b.y)))
+						offset = _formation(h, winner, local, at, profiles.get(winner.id, {}))
+						# Explicit features have a compact footprint, so the shoulders stay continuous.
+						for e in winner.elements:
+							offset += e.displacement(local.x, local.y, winner.width * 0.5)
+					if winner != null and winner.earthwork > 0.0: offset *= winner.junction_weight(at, local.x)
 					if not is_finite(offset): return PackedStringArray(["Element produced non-finite terrain displacement"])
-					# A crossing road remains authoritative; earthworks must not raise it.
-					if patch.road[iz * RoadRefinement.STRIDE + ix] != 0: pin = 0.0
-					offsets[vertex] = clampf(offset, -2.0, 2.0) * pin
+					var cap := 0.35 if winner != null and winner.kind == "trail" else 2.0
+					var displacement := clampf(offset, -cap, cap) * pin
+					var base := h.ground_at(at.x, at.y)
+					if displacement < 0.0:
+						displacement = maxf(displacement, minf(0.0, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP - base))
+					offsets[vertex] = displacement
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
 		staged[key] = hs
 	# Publish only after all elements succeeded; a rejected extension cannot leave half a bake.
@@ -99,3 +123,49 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 	r.trail_elements_baked = true
 	r.build_timings.trail_elements_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return PackedStringArray()
+
+## Local cut/fill profile on the existing sparse refinement; no world-wide resampling.
+const FORMATION := {
+	"road": {window = 12.0, power = 1.0, cap = 2.0, bank = 0.08},
+	"trail": {window = 3.0, power = 0.25, cap = 0.35, bank = 0.03},
+	"mountain": {window = 6.0, power = 0.75, cap = 1.4, bank = 0.38},
+}
+
+## Sample once per metre, then interpolate instead of rebuilding the profile at every vertex.
+static func _profile(h: Heightfield, d: TrailDefinition) -> Dictionary:
+	var settings: Dictionary = FORMATION[d.kind]
+	var total := d.route_length()
+	var count := maxi(1, ceili(total / RoadRefinement.STEP))
+	var levels := PackedFloat32Array()
+	var banks := PackedFloat32Array()
+	var points := PackedVector2Array()
+	var tangents := PackedVector2Array()
+	for j in count + 1:
+		var station := total * j / count
+		var window: float = settings.window
+		if not d.closed: window = minf(window, minf(station, total - station))
+		var level := 0.0
+		for i in range(-4, 5):
+			var p := d.point_at(station + window * i / 4.0)
+			level += h.ground_at(p.x, p.y)
+		levels.append(level / 9.0)
+		points.append(d.point_at(station))
+		tangents.append(d.tangent_at(station))
+		banks.append(clampf(d.curvature_at(station) * 9.0, -float(settings.bank), float(settings.bank)) * d.auto_bank)
+	return {levels = levels, banks = banks, points = points, tangents = tangents, total = total}
+
+static func _formation(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, profile: Dictionary) -> float:
+	if d.earthwork <= 0.0: return 0.0
+	var settings: Dictionary = FORMATION[d.kind]
+	var index: float = clampf(local.x / profile.total * (profile.levels.size() - 1), 0.0, profile.levels.size() - 1.0)
+	var j := mini(floori(index), int(profile.levels.size()) - 2)
+	var f := index - j
+	var level := lerpf(profile.levels[j], profile.levels[j + 1], f)
+	var tangent: Vector2 = profile.tangents[j].lerp(profile.tangents[j + 1], f).normalized()
+	var center: Vector2 = profile.points[j].lerp(profile.points[j + 1], f)
+	var across := (at - center).cross(tangent)
+	var bank := lerpf(profile.banks[j], profile.banks[j + 1], f)
+	var target := level + d.elevation_offset + across * bank
+	var fade := 1.0 - smoothstep(d.width * 0.4, d.width * 0.5 + RoadRefinement.REACH, local.z)
+	if not d.closed: fade *= smoothstep(0.0, 12.0, minf(local.x, profile.total - local.x))
+	return clampf(target - h.ground_at(at.x, at.y), -float(settings.cap), float(settings.cap)) * float(settings.power) * d.earthwork * fade

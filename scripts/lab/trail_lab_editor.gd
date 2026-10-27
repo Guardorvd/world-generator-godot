@@ -1,10 +1,13 @@
 extends PanelContainer
 ## Lab-only controls. Emits proposed values; the composition root commits a successful rebuild.
+signal course_selected(index: int, kind: String)
 signal route_selected(index: int)
 signal element_selected(index: int)
 signal apply_requested(values: Dictionary)
 signal launch_requested
 signal reload_requested
+var course_choice := OptionButton.new()
+var kind_choice := OptionButton.new()
 var route_choice := OptionButton.new()
 var element_choice := OptionButton.new()
 var surface_choice := OptionButton.new()
@@ -28,6 +31,14 @@ func _ready() -> void:
 	title.text = "НАСТРОЙКА ТРАССЫ · F2"
 	title.add_theme_font_size_override("font_size", 16)
 	box.add_child(title)
+	for name in ["Исходные элементы", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка"]: course_choice.add_item(name)
+	box.add_child(course_choice)
+	for name in ["Велотрасса", "Природная тропа", "Обычная дорога"]: kind_choice.add_item(name)
+	box.add_child(kind_choice)
+	var load_course := Button.new()
+	load_course.text = "Построить выбранную трассу"
+	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected]))
+	box.add_child(load_course)
 	box.add_child(route_choice)
 	box.add_child(element_choice)
 	for name in ["Авто по местности", "Гравий", "Грунт", "Укатанная земля", "Камень", "Песок", "Лес", "Трава"]:
@@ -40,7 +51,7 @@ func _ready() -> void:
 		choice.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	for spec: Array in [["width", "Ширина, м", 2.0, 20.0, 0.25], ["station", "От начала, м", 0.0, 1000.0, 0.5],
 		["length", "Длина элемента, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05],
-		["bank", "Сторона поворота", -1.0, 1.0, 0.1], ["speed", "Скорость заезда, км/ч", 0.0, 72.0, 1.0]]:
+		["bank", "Сторона поворота", -1.0, 1.0, 0.1], ["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05], ["speed", "Скорость заезда, км/ч", 0.0, 72.0, 1.0]]:
 		var row := HBoxContainer.new()
 		var label := Label.new()
 		label.text = spec[1]
@@ -96,6 +107,7 @@ func present(routes: Array[TrailDefinition], lane: int, element: int) -> void:
 	element_choice.disabled = not has_element
 	profile_choice.disabled = not has_element
 	numbers.width.value = d.width
+	for key in ["earthwork", "elevation_offset", "auto_bank"]: numbers[key].value = d.get(key)
 	surface_choice.select(d.surface)
 	for key in ["station", "length", "height", "bank"]: numbers[key].editable = has_element
 	if has_element:

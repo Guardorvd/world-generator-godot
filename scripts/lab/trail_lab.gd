@@ -62,6 +62,9 @@ func _ready() -> void:
 		canvas.add_child(label)
 	canvas.add_child(editor)
 	editor.visible = false
+	editor.course_selected.connect(func(index: int, kind: String) -> void:
+		if rebuild(Fixture.course(index, kind)):
+			overview = true)
 	editor.route_selected.connect(select_route)
 	editor.element_selected.connect(func(index: int) -> void:
 		element_index = index
@@ -131,6 +134,8 @@ func apply_edit(values: Dictionary) -> bool:
 	var d := candidate[lane]
 	d.width = values.width
 	d.surface = values.surface
+	for key in ["earthwork", "elevation_offset", "auto_bank"]:
+		if values.has(key): d.set(key, values[key])
 	if not d.elements.is_empty():
 		var e := d.elements[element_index]
 		e.profile = int(values.profile) as TrailElement.Profile
@@ -279,4 +284,4 @@ func _process(_dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	var escape_hint := "выход" if exit_requested.get_connections().is_empty() else "в меню"
-	telemetry.text = "TRAIL LAB | %s\n1–%d: трасса | R: старт | G: заезд | V: обзор | %s: посадка/сход\nF2: настройка элементов | F5: перечитать файлы | Esc: %s\nW/S: педали/тормоз | A/D: руль | Space: прыжок | Shift: усилие\n%.1f км/ч | %s (%.0f%%) | уклон %.1f%%\nснос %.1f° | расход сцепления %.0f%% | подвеска %.3f / %.3f м\n%s | выносливость %.0f%% | последний удар %.1f м/с" % [routes[lane].title, mini(routes.size(), 9), services.controls.label("interact"), escape_hint, absf(bike.speed) * 3.6, name, contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), controller.stamina.value * 100, last_land_impact]
+	telemetry.text = "TRAIL LAB | %s\n1–%d: трасса | R: старт | G: заезд | V: обзор | %s: посадка/сход\nF2: трассы и земляные работы | F5: перечитать файлы | Esc: %s\nW/S: педали/тормоз | A/D: руль | Space: прыжок | Shift: усилие\n%.1f км/ч | %s (%.0f%%) | уклон %.1f%%\nснос %.1f° | расход сцепления %.0f%% | подвеска %.3f / %.3f м\n%s | выносливость %.0f%% | последний удар %.1f м/с" % [routes[lane].title, mini(routes.size(), 9), services.controls.label("interact"), escape_hint, absf(bike.speed) * 3.6, name, contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), controller.stamina.value * 100, last_land_impact]
