@@ -72,9 +72,23 @@ func run() -> void:
 	check(not veg._apply_chunk(partial, 1) and veg.veg.size() == 1, "За порцию загружается только один силуэт")
 	veg._pending.append(partial)
 	veg._upload_next()
-	check(veg.veg.size() == 2 and partial.cursor == 2 and veg._pending.size() == 1, "Следующий кадр продолжает тот же чанк")
+	check(veg.veg.size() == 2 and partial.cursor in [1, 2] and veg._pending.size() == 1, "Следующий кадр продолжает тот же чанк в пределах бюджета")
 	veg._clear_pending()
 	check(veg.veg.is_empty() and not veg._loaded.has(chunk), "Отмена не оставляет частичный чанк готовым")
+	partial = veg._build_chunk(chunk)
+	check(not veg._apply_chunk(partial, 1, 1) and partial.cursor == 0 and partial.node_cursor == 1,
+		"Исчерпанный бюджет передаёт один узел и сохраняет позицию внутри группы")
+	var partial_key := Vector3i(chunk.x, chunk.y, partial.entries[0].kind)
+	var first_node: Node = veg.veg[partial_key].nodes[0]
+	while partial.cursor == 0:
+		veg._apply_chunk(partial, 1, 1)
+	check(veg.veg[partial_key].nodes.size() == 6 and veg.veg[partial_key].nodes[0] == first_node,
+		"Продолжение достраивает все LOD ствола и кроны без дублирования")
+	veg._discard_partial(partial)
+	partial = veg._build_chunk(chunk)
+	veg._apply_chunk(partial, 1, 1)
+	veg._discard_partial(partial)
+	check(veg.veg.is_empty() and not veg._loaded.has(chunk), "Отмена первой незавершённой группы освобождает её узлы")
 	partial = veg._build_chunk(chunk)
 	partial.epoch = veg._epoch
 	veg._apply_chunk(partial, 1)

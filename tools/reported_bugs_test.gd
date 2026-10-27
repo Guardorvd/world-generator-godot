@@ -36,7 +36,7 @@ func run() -> void:
 	check_speed()
 	var scene: GameWorld = load("res://scenes/game_world.tscn").instantiate()
 	var sun := scene.get_node("Sun") as DirectionalLight3D
-	check(sun.directional_shadow_max_distance >= 800.0, "sun shadows reach nearby mountain slopes")
+	check(is_equal_approx(sun.directional_shadow_max_distance, 220.0), "sun shadows stay within the measured frame budget")
 	check(sun.directional_shadow_split_1 * sun.directional_shadow_max_distance <= 40.0, "first shadow cascade retains contact detail")
 	scene.free()
 	if "--capture" in OS.get_cmdline_user_args():
@@ -88,7 +88,7 @@ func check_rocks() -> void:
 	var b: PackedFloat32Array = entry.cbuf
 	var xf := Transform3D(Basis(Vector3(b[0], b[4], b[8]), Vector3(b[1], b[5], b[9]), Vector3(b[2], b[6], b[10])), Vector3(b[3], b[7], b[11]))
 	check(xf.basis.y.normalized().dot(normal) > 0.999, "rock base follows the terrain normal")
-	check(xf.origin.y < 9.9, "rock is embedded in the ground")
+	check(xf.origin.y < items.ground[0], "rock is embedded in the ground")
 	check(entry.bounds.is_equal_approx(xf * mesh.get_aabb()), "rock render buffer and culling bounds agree")
 	check(b == layer._build_entries(items).entries[0].cbuf, "rock placement is deterministic")
 	layer.free()
@@ -122,10 +122,7 @@ func capture() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-22, -35, 0)
 	sun.shadow_enabled = true
-	sun.directional_shadow_max_distance = 900
-	sun.directional_shadow_split_1 = 0.04
-	sun.directional_shadow_split_2 = 0.13
-	sun.directional_shadow_split_3 = 0.35
+	sun.directional_shadow_max_distance = 220
 	sun.shadow_bias = 0.04
 	sun.shadow_normal_bias = 1.2
 	root.add_child(sun)

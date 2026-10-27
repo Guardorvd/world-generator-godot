@@ -3,7 +3,7 @@ extends Node3D
 var settings: GameSettings = GameContext.scope.settings
 ## Неподвижные MultiMesh по чанкам, видам и силуэтам, Mesh LOD и точные AABB.
 ## Трава и подлесок готовятся одним снимком; деревья имеют независимую задачу и очередь передачи.
-## Главный поток передаёт одну группу силуэтов за кадр (до шести MultiMesh), а не целый чанк.
+## Главный поток передаёт не больше одной группы за кадр, прерывая её между MultiMesh по бюджету.
 ## С 8.4 чанки — Vector2i(cx, cy) в общих координатах: за краем стартовой области их объекты считает
 ## OuterLand.vegetation тем же кодом, что и на карте (трава и подлесок пока только на карте).
 
@@ -12,6 +12,7 @@ const WATER_MARGIN := 0.3
 const LOAD_MARGIN := 64.0 # запас на фоновую подготовку при движении
 const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём чанк на границе
 const RECHECK := 24.0
+const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолжение группы — в следующих кадрах
 const Understory := preload("res://scripts/render/understory_models.gd")
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -82,6 +83,7 @@ var _detail_seconds := 0.0
 var _detail_started_clock := 1.0
 var _detail_frames := {}
 var _retired: Array = []
+var _appearing: Array = [] # временные материалы только на полсекунды проявления
 var _queued := {}
 var _tree_target := Vector2.INF
 var _pending: Array = [] # готовые чанки, ближайшие в конце
@@ -228,6 +230,8 @@ func _apply_fade() -> void:
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):
 				_fade(mat, tree_r, 0.0)
+			if _defs[kind].has(part + "_small_mat"):
+				_fade(_defs[kind][part + "_small_mat"], minf(tree_r, 70.0), 0.0)
 	for entry: Dictionary in veg.values():
 		for node: MultiMeshInstance3D in entry.nodes:
 			_fade(node.material_override, minf(tree_r, 70.0) if entry.get("small_rocks", false) else tree_r, 0.0)
@@ -742,7 +746,7 @@ func refresh(rect: Rect2i) -> void:
 
 func _upload_next() -> void:
 	var built: Dictionary = _pending.back()
-	if _apply_chunk(built, 1):
+	if _apply_chunk(built, 1, Time.get_ticks_usec() + TREE_UPLOAD_US):
 		_pending.pop_back()
 		_queued.erase(built.chunk)
 
@@ -757,6 +761,8 @@ func _clear_pending() -> void:
 ## Частично переданный чанк нельзя оставить помеченным готовым после переноса или отмены.
 func _discard_partial(built: Dictionary) -> void:
 	var cursor: int = built.get("cursor", 0)
+	if built.get("node_cursor", 0) > 0:
+		cursor += 1
 	if cursor == 0:
 		return
 	var chunk: Vector2i = built.chunk
@@ -769,7 +775,7 @@ func _discard_partial(built: Dictionary) -> void:
 
 
 ## limit = 0 — полный синхронный перенос при появлении игрока; иначе ограниченная порция.
-func _apply_chunk(built: Dictionary, limit := 0) -> bool:
+func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 	var chunk: Vector2i = built.chunk
 	if built.get("epoch", _epoch) < _dirty.get(chunk, -1):
 		_discard_partial(built)
@@ -781,11 +787,16 @@ func _apply_chunk(built: Dictionary, limit := 0) -> bool:
 		world.outer.veg[chunk] = built.outer
 	var first: int = built.get("cursor", 0)
 	var end: int = built.entries.size() if limit == 0 else mini(first + limit, built.entries.size())
+	var uploaded := 0
 	for i in range(first, end):
 		var entry: Dictionary = built.entries[i]
 		var kind: int = entry.kind
 		var def: Dictionary = _defs[kind]
-		entry.nodes = []
+		var resume: int = built.get("node_cursor", 0)
+		if resume == 0:
+			entry.nodes = []
+			veg[Vector3i(chunk.x, chunk.y, kind)] = entry
+		var node_index := 0
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
 				continue
@@ -796,13 +807,17 @@ func _apply_chunk(built: Dictionary, limit := 0) -> bool:
 				# Мелочь не доживает до дальних LOD: один 100-треугольный меш, без теней.
 				levels = [levels[1]]
 			for level in levels.size():
-				# Время проявления принадлежит группе, а не общему материалу всех чанков.
-				var mat: ShaderMaterial = def[part + "_mats"][level].duplicate()
-				if small:
-					mat.set_shader_parameter("lod_level", -1)
-					_fade(mat, minf(tree_r, 70.0), 0.0)
-				mat.set_shader_parameter("stream_birth", stream.clock if limit > 0 else 0.0)
+				if node_index < resume:
+					node_index += 1
+					continue
+				if deadline_usec > 0 and uploaded > 0 and Time.get_ticks_usec() >= deadline_usec:
+					built.cursor = i
+					built.node_cursor = node_index
+					return false
+				var mat := _shared_tree_material(def, part, level, small)
 				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small)
+				if limit > 0:
+					_reveal_node(node, mat)
 				if part == "crown" and not small:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
@@ -821,7 +836,10 @@ func _apply_chunk(built: Dictionary, limit := 0) -> bool:
 				node.visibility_range_end_margin = 16.0
 				entry[part] = mm
 				entry.nodes.append(node)
-		veg[Vector3i(chunk.x, chunk.y, kind)] = entry
+				node_index += 1
+				uploaded += 1
+		built.node_cursor = 0
+		built.cursor = i + 1
 	_loaded[chunk] = true
 	built.cursor = end
 	return end == built.entries.size()
@@ -852,15 +870,49 @@ func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count
 	mm.custom_aabb = frame.bounds
 
 
+func _shared_tree_material(def: Dictionary, part: String, level: int, small: bool) -> ShaderMaterial:
+	if not small:
+		return def[part + "_mats"][level]
+	var key := part + "_small_mat"
+	if not def.has(key):
+		var mat: ShaderMaterial = def[part + "_mats"][0].duplicate()
+		mat.set_shader_parameter("lod_level", -1)
+		_fade(mat, minf(tree_r, 70.0), 0.0)
+		def[key] = mat
+	return def[key]
+
+
+func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:
+	var mat: ShaderMaterial = shared.duplicate()
+	mat.set_shader_parameter("stream_birth", stream.clock)
+	node.material_override = mat
+	_appearing.append({node = node, shared = shared, until = stream.clock + StreamPolicy.FADE_SECONDS})
+
+
 func _retire_nodes(nodes: Array) -> void:
 	for node: MultiMeshInstance3D in nodes:
 		var stamp: float = node.material_override.get_shader_parameter("stream_birth")
 		var alpha := Snapshots.opacity(stamp, stream.clock)
-		node.material_override.set_shader_parameter("stream_birth", -(stream.clock - (1.0 - alpha) * StreamPolicy.FADE_SECONDS))
+		# Зрелый материал общий: уход одного чанка не должен гасить остальные.
+		var mat: ShaderMaterial = node.material_override.duplicate()
+		mat.set_shader_parameter("stream_birth", -(stream.clock - (1.0 - alpha) * StreamPolicy.FADE_SECONDS))
+		node.material_override = mat
+		node.set_meta("stream_retiring", true)
 	_retired.append({until = stream.clock + StreamPolicy.FADE_SECONDS, nodes = nodes})
 
 
 func _clean_retired() -> void:
+	for i in range(_appearing.size() - 1, -1, -1):
+		var entry: Dictionary = _appearing[i]
+		if not is_instance_valid(entry.node):
+			_appearing.remove_at(i)
+			continue
+		var node: MultiMeshInstance3D = entry.node
+		if node.is_queued_for_deletion() or node.get_meta("stream_retiring", false):
+			_appearing.remove_at(i)
+		elif stream.clock >= entry.until:
+			node.material_override = entry.shared
+			_appearing.remove_at(i)
 	for i in range(_retired.size() - 1, -1, -1):
 		if stream.clock >= _retired[i].until:
 			for node: Node in _retired[i].nodes:
