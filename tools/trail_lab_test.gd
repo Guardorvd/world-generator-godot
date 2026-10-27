@@ -200,6 +200,11 @@ func check_lab_session(lab: Node) -> void:
 	check(lab.overview and "сверху" in lab.camera_control.tooltip_text, "HUD camera button updates its current state")
 	lab.camera_control.pressed.emit()
 	lab.editor.show()
+	var section: Dictionary = lab.editor.sections["Параметры элемента"]
+	check(not section.content.visible, "editor groups start collapsed")
+	section.button.button_pressed = true
+	check(section.content.visible, "editor section expands on toggle")
+	section.button.button_pressed = false
 	lab.editor.close_requested.emit()
 	check(not lab.editor.visible, "editor close button closes settings")
 	lab.editor.show()

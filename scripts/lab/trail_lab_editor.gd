@@ -15,6 +15,7 @@ var element_choice := OptionButton.new()
 var surface_choice := OptionButton.new()
 var profile_choice := OptionButton.new()
 var numbers := {}
+var sections := {}
 var scroll := ScrollContainer.new()
 var camera_button := Button.new()
 var _updating := false
@@ -57,60 +58,49 @@ func _ready() -> void:
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", 6)
 	scroll.add_child(box)
-	_add_heading(box, "01  ПОСТРОИТЬ ТРАССУ")
-	for name in ["Исходные элементы", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка"]: course_choice.add_item(name)
-	_add_choice(box, "Форма", course_choice)
-	for name in ["Велотрасса", "Природная тропа", "Обычная дорога"]: kind_choice.add_item(name)
-	_add_choice(box, "Тип", kind_choice)
-	var load_course := Button.new()
-	load_course.text = "Построить выбранную форму"
-	load_course.tooltip_text = "Заменить текущую площадку выбранной формой трассы"
-	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected]))
-	box.add_child(load_course)
-	_add_heading(box, "02  ВЫБРАТЬ И НАСТРОИТЬ")
+	_add_heading(box, "ТЕКУЩАЯ ТРАССА")
 	_add_choice(box, "Трасса", route_choice)
 	_add_choice(box, "Элемент", element_choice)
+	var course_box := _add_section(box, "Построить новую трассу", false)
+	for name in ["Исходные элементы", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка"]: course_choice.add_item(name)
+	_add_choice(course_box, "Форма", course_choice)
+	for name in ["Велотрасса", "Природная тропа", "Обычная дорога"]: kind_choice.add_item(name)
+	_add_choice(course_box, "Тип", kind_choice)
+	var load_course := Button.new()
+	load_course.text = "Построить"
+	load_course.tooltip_text = "Заменить текущую площадку выбранной формой трассы"
+	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected]))
+	course_box.add_child(load_course)
+	var trail_box := _add_section(box, "Трасса и покрытие", false)
 	for name in ["Авто по местности", "Гравий", "Грунт", "Укатанная земля", "Камень", "Песок", "Лес", "Трава"]: surface_choice.add_item(name)
-	_add_choice(box, "Покрытие", surface_choice)
+	_add_choice(trail_box, "Покрытие", surface_choice)
+	_add_number(trail_box, ["width", "Ширина, м", 2.0, 20.0, 0.25])
+	var element_box := _add_section(box, "Параметры элемента", false)
 	for name in ["Роллер", "Стол", "Поворот"]: profile_choice.add_item(name)
-	_add_choice(box, "Профиль элемента", profile_choice)
-	_add_heading(box, "ГЕОМЕТРИЯ")
-	for spec: Array in [["width", "Ширина, м", 2.0, 20.0, 0.25], ["station", "От начала, м", 0.0, 1000.0, 0.5],
-		["length", "Длина элемента, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05],
-		["bank", "Сторона поворота", -1.0, 1.0, 0.1], ["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05], ["speed", "Скорость заезда, км/ч", 0.0, 72.0, 1.0]]:
-		var row := HBoxContainer.new()
-		var label := Label.new()
-		label.text = spec[1]
-		label.add_theme_font_size_override("font_size", 14)
-		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row.add_child(label)
-		var number := SpinBox.new()
-		number.min_value = spec[2]
-		number.max_value = spec[3]
-		number.step = spec[4]
-		number.custom_minimum_size.x = 112
-		if spec[0] == "bank": number.tooltip_text = "Отрицательное значение — одна сторона, положительное — другая"
-		if spec[0] == "earthwork": number.tooltip_text = "Насколько трасса изменяет рельеф: 0 — выключено, 1 — полностью"
-		if spec[0] == "auto_bank": number.tooltip_text = "Сила автоматического наклона трассы на поворотах: от 0 до 1"
-		number.get_line_edit().add_theme_font_size_override("font_size", 14)
-		row.add_child(number)
-		numbers[spec[0]] = number
-		box.add_child(row)
-	numbers.speed.value = 36.0
+	_add_choice(element_box, "Профиль", profile_choice)
+	for spec: Array in [["station", "От начала, м", 0.0, 1000.0, 0.5], ["length", "Длина, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05], ["bank", "Сторона поворота", -1.0, 1.0, 0.1]]:
+		_add_number(element_box, spec)
+	var terrain_box := _add_section(box, "Рельеф и виражи", false)
+	for spec: Array in [["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05]]:
+		_add_number(terrain_box, spec)
+	var source_box := _add_section(box, "Исходные данные", false)
 	var reload_button := Button.new()
 	reload_button.text = "Вернуть данные из файлов  ·  F5"
 	reload_button.tooltip_text = "Отменить правки текущего запуска и перечитать исходные трассы"
 	reload_button.pressed.connect(func() -> void: reload_requested.emit())
-	box.add_child(reload_button)
+	source_box.add_child(reload_button)
 	var note := Label.new()
 	note.text = "Правки действуют только в текущем запуске."
 	note.theme_type_variation = "HintLabel"
 	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	box.add_child(note)
+	source_box.add_child(note)
+	_add_heading(box, "ЗАЕЗД")
+	_add_number(box, ["speed", "Скорость старта, км/ч", 0.0, 72.0, 1.0])
+	numbers.speed.value = 36.0
 	var actions := VBoxContainer.new()
 	layout.add_child(actions)
 	var apply := Button.new()
-	apply.text = "Применить и начать заезд"
+	apply.text = "Применить и заезд"
 	apply.tooltip_text = "Применить параметры и начать проверочный заезд"
 	apply.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	apply.pressed.connect(func() -> void:
@@ -119,7 +109,7 @@ func _ready() -> void:
 		apply_requested.emit(values))
 	actions.add_child(apply)
 	var launch := Button.new()
-	launch.text = "Заезд без применения правок  ·  G"
+	launch.text = "Заезд без правок  ·  G"
 	launch.theme_type_variation = "PrimaryButton"
 	launch.tooltip_text = "Начать заезд перед выбранным элементом без применения новых значений"
 	launch.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -137,6 +127,43 @@ func _add_heading(box: VBoxContainer, text: String) -> void:
 	label.add_theme_font_size_override("font_size", 13)
 	box.add_child(label)
 
+func _add_section(box: VBoxContainer, title: String, expanded: bool) -> VBoxContainer:
+	var button := Button.new()
+	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	button.toggle_mode = true
+	button.button_pressed = expanded
+	button.text = ("▾  " if expanded else "▸  ") + title
+	box.add_child(button)
+	var content := VBoxContainer.new()
+	content.add_theme_constant_override("separation", 5)
+	content.visible = expanded
+	box.add_child(content)
+	sections[title] = {"button": button, "content": content}
+	button.toggled.connect(func(open: bool) -> void:
+		content.visible = open
+		button.text = ("▾  " if open else "▸  ") + title)
+	return content
+
+func _add_number(box: VBoxContainer, spec: Array) -> void:
+	var row := HBoxContainer.new()
+	var label := Label.new()
+	label.text = spec[1]
+	label.add_theme_font_size_override("font_size", 14)
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	row.add_child(label)
+	var number := SpinBox.new()
+	number.min_value = spec[2]
+	number.max_value = spec[3]
+	number.step = spec[4]
+	number.custom_minimum_size.x = 112
+	if spec[0] == "bank": number.tooltip_text = "Отрицательное значение — одна сторона, положительное — другая"
+	if spec[0] == "earthwork": number.tooltip_text = "Насколько трасса изменяет рельеф: 0 — выключено, 1 — полностью"
+	if spec[0] == "auto_bank": number.tooltip_text = "Сила автоматического наклона трассы на поворотах: от 0 до 1"
+	number.get_line_edit().add_theme_font_size_override("font_size", 14)
+	row.add_child(number)
+	numbers[spec[0]] = number
+	box.add_child(row)
+
 func _add_choice(box: VBoxContainer, caption: String, choice: OptionButton) -> void:
 	var label := Label.new()
 	label.text = caption
@@ -144,6 +171,7 @@ func _add_choice(box: VBoxContainer, caption: String, choice: OptionButton) -> v
 	label.add_theme_font_size_override("font_size", 13)
 	box.add_child(label)
 	choice.add_theme_font_size_override("font_size", 14)
+	choice.fit_to_longest_item = false
 	choice.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(choice)

@@ -17,6 +17,7 @@ var speed_label := Label.new()
 var surface_label := Label.new()
 var stamina_label := Label.new()
 var stamina_bar := ProgressBar.new()
+var route_hint := Label.new()
 var camera_control := Button.new()
 var details_control := Button.new()
 var status := Label.new()
@@ -73,7 +74,7 @@ func _ready() -> void:
 	hud_margin.add_child(hud_box)
 	telemetry.theme_type_variation = "AccentLabel"
 	telemetry.add_theme_font_size_override("font_size", 14)
-	telemetry.custom_minimum_size.x = 300
+	telemetry.custom_minimum_size.x = 220
 	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	speed_label.add_theme_font_size_override("font_size", 26)
 	surface_label.theme_type_variation = "HintLabel"
@@ -84,6 +85,9 @@ func _ready() -> void:
 	diagnostics.add_theme_font_size_override("font_size", 13)
 	diagnostics.visible = false
 	hud_box.add_child(telemetry)
+	route_hint.theme_type_variation = "HintLabel"
+	route_hint.add_theme_font_size_override("font_size", 12)
+	hud_box.add_child(route_hint)
 	var ride_row := HBoxContainer.new()
 	hud_box.add_child(ride_row)
 	ride_row.add_child(speed_label)
@@ -96,18 +100,23 @@ func _ready() -> void:
 	var hud_actions := HBoxContainer.new()
 	hud_box.add_child(hud_actions)
 	var settings_control := Button.new()
-	settings_control.text = "Трасса · F2"
+	settings_control.text = "F2  Настройки"
+	settings_control.add_theme_font_size_override("font_size", 12)
 	settings_control.tooltip_text = "Открыть настройки трассы"
 	settings_control.pressed.connect(func() -> void: set_editor_visible(not editor.visible))
 	hud_actions.add_child(settings_control)
 	camera_control.pressed.connect(func() -> void: set_overview(not overview))
+	camera_control.add_theme_font_size_override("font_size", 12)
 	hud_actions.add_child(camera_control)
-	details_control.text = "Данные · F3"
+	var more_actions := HBoxContainer.new()
+	hud_box.add_child(more_actions)
+	details_control.text = "F3  Подробности"
+	details_control.add_theme_font_size_override("font_size", 12)
 	details_control.pressed.connect(func() -> void: set_diagnostics_visible(not diagnostics_visible))
-	hud_actions.add_child(details_control)
+	more_actions.add_child(details_control)
 	hud_box.add_child(diagnostics)
 	status.position = Vector2(18, 110)
-	status.custom_minimum_size.x = 320
+	status.custom_minimum_size.x = 220
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	for label in [telemetry, diagnostics, status]:
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
@@ -134,7 +143,7 @@ func _ready() -> void:
 
 func _place_editor() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
-	editor.size = Vector2(390, maxf(100.0, viewport_size.y - 36))
+	editor.size = Vector2(360, maxf(100.0, viewport_size.y - 36))
 	editor.position = Vector2(maxf(18.0, viewport_size.x - editor.size.x - 18), 18)
 
 func _copy_routes(source: Array[TrailDefinition]) -> Array[TrailDefinition]:
@@ -259,7 +268,7 @@ func show_message(text: String) -> void:
 func set_overview(enabled: bool) -> void:
 	overview = enabled
 	editor.set_camera_overview(enabled)
-	camera_control.text = "Сверху · V" if enabled else "Камера · V"
+	camera_control.text = "V  Сверху" if enabled else "V  Камера"
 	camera_control.tooltip_text = "Сейчас: обзор сверху. Переключить на вид за велосипедистом" if enabled else "Сейчас: вид за велосипедистом. Переключить на обзор сверху"
 
 func set_editor_visible(enabled: bool) -> void:
@@ -269,7 +278,7 @@ func set_editor_visible(enabled: bool) -> void:
 func set_diagnostics_visible(enabled: bool) -> void:
 	diagnostics_visible = enabled
 	diagnostics.visible = enabled
-	details_control.text = "Скрыть · F3" if enabled else "Данные · F3"
+	details_control.text = "F3  Скрыть" if enabled else "F3  Подробности"
 	hud_panel.reset_size()
 	get_viewport().gui_release_focus()
 
@@ -369,10 +378,11 @@ func _process(dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
+	route_hint.text = "Трасса %d / %d  ·  клавиши 1–%d" % [lane + 1, routes.size(), mini(routes.size(), 9)]
 	speed_label.text = "%.0f\nкм/ч" % (absf(bike.speed) * 3.6)
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
-		diagnostics.text = "1–%d трасса  ·  R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали/тормоз  ·  A/D руль  ·  Space прыжок  ·  Shift усилие\nF5 перечитать файлы  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%  ·  снос %.1f°\nСцепление %.0f%%  ·  подвеска %.3f / %.3f м\n%s  ·  последний удар %.1f м/с" % [mini(routes.size(), 9), services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact]
+		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact]
 	status.position.y = hud_panel.position.y + hud_panel.size.y + 10
