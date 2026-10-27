@@ -160,8 +160,8 @@ func _ready() -> void:
 	_brakes.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_brakes.offset_left = 100
 	_brakes.offset_right = 380
-	_brakes.offset_top = -82
-	_brakes.offset_bottom = -24
+	_brakes.offset_top = -94
+	_brakes.offset_bottom = -18
 	_brakes.hide()
 	add_child(_brakes)
 	_apply_reveal()
@@ -1155,4 +1155,3 @@ class StaminaArc extends Control:
 		var mark := Color(1, 1, 1, a) if exhausted or value < Stamina.RECOVERED + 0.1 else Color(1, 1, 1, 0.6 * a)
 		draw_line(c + dir * (R - 6.0), c + dir * (R + 6.0), Color(0, 0, 0, 0.7 * a), 4.0)
 		draw_line(c + dir * (R - 5.0), c + dir * (R + 5.0), mark, 2.0)
-

@@ -101,6 +101,28 @@ func _run() -> void:
 	_check(stamina.value < 0.2 and hud._stamina.warning > 0.05 and hud._vignette.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._stamina.warning)
 	_check(hud._stamina._ghost > stamina.value, "шлейф отстаёт от заливки")
 	await _shot("hud_drain")
+	# Brake gauge: normal braking, danger, and contexts where it must disappear.
+	var bike := BikeRide.new()
+	bike.riding = true
+	bike.speed = 12.0
+	bike.brakes.pressure = 0.75
+	for frame in 30:
+		hud.set_brakes(bike)
+		await process_frame
+	_check(hud._brakes.visible and hud._brakes.pressure > 0.7, "дуга тормоза видна при движении вперёд")
+	await _shot("hud_brake")
+	bike.brakes.risk = 0.8
+	hud.set_brakes(bike)
+	await _shot("hud_brake_warning")
+	bike.airborne = true
+	hud.set_brakes(bike)
+	_check(not hud._brakes.visible, "в полёте индикатор скрыт сразу")
+	bike.airborne = false
+	bike.speed = -2.0
+	for frame in 30:
+		hud.set_brakes(bike)
+		await process_frame
+	_check(not hud._brakes.visible, "задний ход не показывает торможение")
 	# истощение, потом накат: предупреждение гаснет быстро, ореол наката
 	await _tick(stamina, 330, true, 1.0, true)
 	_check(stamina.exhausted, "полоска истощена")
