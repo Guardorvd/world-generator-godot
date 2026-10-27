@@ -119,5 +119,11 @@ func _run() -> void:
 	main._pick_seed("Туман-4821")
 	_check(edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "выбор в списке ставит зерно в поле")
 	await _shot("menu")
+	var panel: Control = main.get_node("UI/Root/Menu/Panel")
+	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню целиком помещается в 1280×720")
+	main.get_node("%InfiniteWarning").show()
+	main.get_node("%WorldStatus").text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
+	await _shot("menu_warning")
+	_check(root.get_visible_rect().encloses(panel.get_global_rect()), "меню с предупреждениями целиком помещается в 1280×720")
 	print("hud_look: %s, снимки в %s" % ["FAIL %d" % failed if failed else "ok", out])
 	quit(1 if failed else 0)

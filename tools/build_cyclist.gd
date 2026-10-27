@@ -1,5 +1,5 @@
 extends SceneTree
-## Модель v6. Пересборка перезаписывает scenes/cyclist.tscn.
+## Модель v7. Пересборка перезаписывает изолированную scenes/cyclist.tscn.
 ## v5: шлем сидит на голове (ниже и плотнее, козырёк короче и под наклоном), из-под шлема видны волосы,
 ## велотрусы выше колена и открытые голени с носками, рукав джерси короче — у локтя видна рука.
 ## Смена ткани на конечности — одна непрерывная поверхность с узким отворотом (кромка), а не отдельные
@@ -17,7 +17,6 @@ var skin := material(Color("dba47d"))
 var cream := material(Color("f0e5cc"))
 var dark := material(Color("17252e"))
 var lens := material(Color("315363"), 0.22)
-var warm := material(Color("9d6753"))
 # Шлем v5: низ оболочки (м над костью головы), её высота и полуоси низа.
 const HELMET_Y := 0.052
 const HELMET_H := 0.112
@@ -35,7 +34,7 @@ func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
 func _init() -> void:
 	rider = CyclistRig.new()
 	rider.name = "Rider"
-	rider.set_meta("model_version", 6)
+	rider.set_meta("model_version", 7)
 	skeleton = Skeleton3D.new()
 	skeleton.name = "Skeleton3D"
 	rider.add_child(skeleton)
@@ -86,7 +85,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v6: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v7: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -95,7 +94,7 @@ func _body() -> void:
 	var chest := Vector3(0, 1.37, -0.08)
 	var rings: Array[Dictionary] = []
 	# Сужение в талии, грудь и линия плеч вместо пересекающихся овалов.
-	for spec: Vector3 in [Vector3(0.06, 0.14, 0.09), Vector3(0.25, 0.137, 0.095), Vector3(0.48, 0.154, 0.106), Vector3(0.72, 0.18, 0.112), Vector3(0.87, 0.196, 0.105), Vector3(0.90, 0.195, 0.104), Vector3(1.02, 0.18, 0.094), Vector3(1.10, 0.12, 0.076), Vector3(1.18, 0.052, 0.048)]:
+	for spec: Vector3 in [Vector3(0.06, 0.14, 0.09), Vector3(0.25, 0.137, 0.095), Vector3(0.48, 0.154, 0.106), Vector3(0.72, 0.18, 0.112), Vector3(0.87, 0.196, 0.105), Vector3(0.90, 0.195, 0.104), Vector3(1.02, 0.18, 0.09), Vector3(1.06, 0.125, 0.065), Vector3(1.12, 0.052, 0.048)]:
 		var t := spec.x
 		var lower := "Hips" if t < 0.5 else "Spine"
 		var upper := "Spine" if t < 0.5 else "Chest"
@@ -109,13 +108,14 @@ func _body() -> void:
 	patch(rings.slice(0, 7), -PI * 0.5, 0.035, dark)
 	patch(rings.slice(4, 6), -PI * 0.5 - 0.42, 0.28, cream)
 	patch(rings.slice(4, 6), PI * 0.5, 0.7, cream)
-	patch(rings.slice(1, 3), PI * 0.5, 0.68, panel)
 	# Крупная кокетка и боковые вставки читаются с игровой камеры, повторяя веса торса.
 	patch(rings.slice(5, 7), PI * 0.5, 0.8, panel)
 	for angle in [0.18, PI - 0.18]:
 		patch(rings.slice(2, 7), angle, 0.10, cream)
-	for angle in [PI * 0.5 - 0.24, PI * 0.5 + 0.24]:
-		patch(rings.slice(1, 3), angle, 0.018, navy)
+	# Три кармана и светоотражающая кромка на спине повторяют деформацию джерси.
+	for angle in [PI * 0.5 - 0.40, PI * 0.5, PI * 0.5 + 0.40]:
+		patch(rings.slice(1, 3), angle, 0.16, panel)
+	patch(rings.slice(3, 4 + 1), PI * 0.5, 0.045, cream)
 
 
 
@@ -129,13 +129,13 @@ func _neck() -> void:
 	var axis := (skull - collar).normalized()
 	var basis := Basis(Quaternion(Vector3.UP, axis))
 	var rings: Array[Dictionary] = []
-	for spec: Array in [[0.0, 0.054, 0.056, "Chest", "Neck", 0.5], [0.3, 0.052, 0.055, "Neck", "", 0.0], [0.6, 0.051, 0.055, "Neck", "Head", 0.3], [0.85, 0.056, 0.062, "Neck", "Head", 0.7], [1.0, 0.058, 0.064, "Head", "", 0.0]]:
+	for spec: Array in [[0.0, 0.054, 0.056, "Chest", "", 0.0], [0.3, 0.052, 0.055, "Chest", "Neck", 0.5], [0.6, 0.051, 0.055, "Neck", "Head", 0.3], [0.85, 0.056, 0.062, "Neck", "Head", 0.7], [1.0, 0.058, 0.064, "Head", "", 0.0]]:
 		rings.append(ring(collar.lerp(skull, spec[0]), basis, spec[1], spec[2], spec[3], spec[4], spec[5]))
 	loft(rings, skin)
 	# Воротник джерси: низкая стойка вокруг шеи закрывает гранёный верх торса
 	var band: Array[Dictionary] = []
-	for spec: Vector3 in [Vector3(-0.012, 0.066, 0.068), Vector3(0.02, 0.061, 0.063), Vector3(0.026, 0.057, 0.059)]:
-		band.append(ring(collar + axis * (spec.x + 0.02), basis, spec.y, spec.z, "Chest", "Neck", 0.3))
+	for spec: Vector3 in [Vector3(-0.008, 0.057, 0.059), Vector3(0.012, 0.058, 0.060), Vector3(0.027, 0.055, 0.058)]:
+		band.append(ring(collar + axis * spec.x, basis, spec.y, spec.z, "Chest", "Neck", clampf(spec.x / 0.09, 0.0, 0.3)))
 	loft(band, panel)
 
 
@@ -158,8 +158,7 @@ func _head() -> void:
 		bar("Head", Vector3(side * 0.1, HELMET_Y + 0.004, 0.062), junction, 0.007, navy)
 		bar("Head", junction, Vector3(side * 0.04, -0.135, -0.055), 0.007, navy)
 	bar("Head", Vector3(-0.008, 0.02, -0.113), Vector3(0.008, 0.02, -0.113), 0.009, dark)
-	local_loft("Head", [Vector3(0, -0.05, -0.105), Vector3(0, -0.031, -0.118), Vector3(0, 0.006, -0.105), Vector3(0, 0.025, -0.095)], [Vector2(0.017, 0.012), Vector2(0.019, 0.024), Vector2(0.012, 0.018), Vector2(0.01, 0.008)], skin)
-	ellipsoid("Head", Vector3(0.022, 0.004, 0.004), Vector3(0, -0.085, -0.088), warm)
+	# Нос скрыт маской: отдельная геометрия проступает сквозь её поверхность при повороте головы.
 	_mask()
 	_hair()
 	var centers: Array[Vector3] = []
@@ -190,7 +189,7 @@ func _mask() -> void:
 			var y := lerpf(-0.132, -0.038 + pow(front, 4.0) * 0.052, float(row) / 4.0)
 			var size := head_size(y)
 			var local := Vector3(cos(angle) * (size.x + 0.008), y,
-				head_z(y) + sin(angle) * (size.y + 0.012) - pow(front, 6.0) * smoothstep(-0.09, -0.035, y) * 0.045)
+				head_z(y) + sin(angle) * (size.y + 0.012) - pow(front, 6.0) * smoothstep(-0.09, -0.035, y) * 0.025)
 			grid.append({position = at * local, bones = skinning.bones, weights = skinning.weights})
 	for row in 4:
 		for col in 8:
@@ -288,7 +287,7 @@ func helmet_strip(x: float, width: float, mat: Material) -> void:
 func _limbs(side: float) -> void:
 	var s := "L" if side < 0 else "R"
 	# v5: рукав до двух третей плеча, кромка тёмная, ниже — рука (одна поверхность)
-	limb("UpperArm" + s, "Forearm" + s, [Vector3(-0.10, 0.043, 0.043), Vector3(0, 0.067, 0.065), Vector3(0.12, 0.073, 0.067), Vector3(0.38, 0.064, 0.058), Vector3(0.58, 0.059, 0.054), Vector3(0.63, 0.058, 0.053), Vector3(0.634, 0.05, 0.047), Vector3(0.84, 0.045, 0.043), Vector3(1, 0.043, 0.046)], teal, "", true,
+	limb("UpperArm" + s, "Forearm" + s, [Vector3(0.0, 0.065, 0.060), Vector3(0.08, 0.067, 0.065), Vector3(0.18, 0.073, 0.067), Vector3(0.38, 0.064, 0.058), Vector3(0.58, 0.059, 0.054), Vector3(0.63, 0.058, 0.053), Vector3(0.634, 0.05, 0.047), Vector3(0.84, 0.045, 0.043), Vector3(1, 0.043, 0.046)], teal, "", true,
 		[teal, teal, teal, teal, panel, panel, skin, skin])
 	limb("Forearm" + s, "Hand" + s, [Vector3(0, 0.043, 0.046), Vector3(0.16, 0.049, 0.047), Vector3(0.35, 0.049, 0.044), Vector3(0.65, 0.038, 0.035), Vector3(0.86, 0.03, 0.03), Vector3(1, 0.028, 0.028)], skin, "UpperArm" + s)
 	# Ладонь и согнутый большой палец вместо двух шаров. Весь хват жёстко следует Hand.
@@ -310,6 +309,22 @@ func _limbs(side: float) -> void:
 	box("Foot" + s, Vector3(0.10, 0.018, 0.018), Vector3(0, -0.026, -0.144), dark)
 
 
+## Первые сечения рукава выходят из груди; отдельной шарообразной крышки нет.
+func _shoulder(side: float) -> Array[Dictionary]:
+	var suffix := "L" if side < 0 else "R"
+	var arm := skeleton.get_bone_global_pose(skeleton.find_bone("UpperArm" + suffix))
+	var rings: Array[Dictionary] = []
+	var across := Basis(Quaternion(Vector3.UP, Vector3(side, 0, 0)))
+	for i in 3:
+		var t := float(i) / 3.0
+		var inner := arm.origin + Vector3(-side * 0.09, -0.045, 0)
+		var outer := arm.origin
+		var basis := across.slerp(arm.basis, t)
+		var radius := lerpf(0.045, 0.065, t)
+		rings.append(ring(inner.lerp(outer, t), basis, radius, radius * 0.92, "Chest", "UpperArm" + suffix, t))
+	return rings
+
+
 ## mats — материал каждого отрезка между сечениями (пусто — весь mat): смена ткани без торцов внутри
 func limb(bone_name: String, next: String, profile: Array, mat: Material, previous := "", blend_end := false, mats: Array = []) -> void:
 	var at := skeleton.get_bone_global_pose(skeleton.find_bone(bone_name))
@@ -328,7 +343,23 @@ func limb(bone_name: String, next: String, profile: Array, mat: Material, previo
 			weight = (spec.x - 0.8) / 0.2 * 0.5
 			basis = at.basis.slerp(end.basis, weight)
 		rings.append(ring(at.origin.lerp(end.origin, spec.x), basis, spec.y, spec.z, bone_name, other, weight))
-	loft(rings, mat, null, mats)
+	# Плечо и рукав — один loft с общими сечениями и нормалями на стыке.
+	var sleeve := bone_name.begins_with("UpperArm")
+	var geometry: Array[Dictionary] = []
+	var segment_mats := mats.duplicate()
+	if sleeve:
+		geometry = _shoulder(-1.0 if bone_name.ends_with("L") else 1.0)
+		for i in geometry.size():
+			segment_mats.push_front(mat)
+	geometry.append_array(rings)
+	loft(geometry, mat, null, segment_mats)
+	# Небольшие светоотражающие детали вплетены в поверхность, поэтому не отделяются при сгибе.
+	if bone_name.begins_with("UpperArm"):
+		var outer := PI if bone_name.ends_with("L") else 0.0
+		patch(rings.slice(3, 5), outer, 0.22, cream)
+	elif bone_name.begins_with("UpperLeg"):
+		var outer := PI if bone_name.ends_with("L") else 0.0
+		patch(rings.slice(2, 4), outer, 0.16, panel)
 
 
 func local_loft(bone_name: String, centers: Array, sizes: Array, mat: Material, sides := 12) -> void:
@@ -371,7 +402,7 @@ func prepare(rings: Array[Dictionary]) -> void:
 		rings[i].delta_z = upper.basis.z * upper.rz - lower.basis.z * lower.rz
 
 
-func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null, mats: Array = [], sides := 12) -> void:
+func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null, mats: Array = [], sides := 12, cap_start := true) -> void:
 	prepare(rings)
 	for i in rings.size() - 1:
 		var lip: bool = rings[i].center.distance_to(rings[i + 1].center) < LIP
@@ -387,6 +418,8 @@ func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null, ma
 			triangle(a, b, c, use_mat)
 			triangle(c, b, d, use_mat)
 	for end in [0, rings.size() - 1]:
+		if end == 0 and not cap_start:
+			continue
 		var center := point(rings[end], 0)
 		center.position = rings[end].center
 		center.erase("normal")

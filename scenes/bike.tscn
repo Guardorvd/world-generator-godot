@@ -887,4 +887,3 @@ mesh = SubResource("CylinderMesh_tmls8")
 
 [node name="Rider" type="Node3D" parent="." unique_id=650242101 instance=ExtResource("2_fdhfo")]
 script = ExtResource("3_bqlqk")
-metadata/model_version = 6

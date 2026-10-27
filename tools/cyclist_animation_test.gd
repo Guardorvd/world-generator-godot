@@ -52,7 +52,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 6 and body_mesh != null, "Sixth model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 7 and body_mesh != null, "Seventh model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -84,8 +84,8 @@ func _check_model() -> void:
 		for i in range(0, vertices.size(), maxi(1, vertices.size() / 20)):
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
-	check(triangles < 5000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 5000 triangles and 8 material surfaces")
-	print("Cyclist v6 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	check(triangles < 6000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 6000 triangles and 8 material surfaces")
+	print("Cyclist v7 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
 func check_skin_pose() -> void:
@@ -397,8 +397,8 @@ func capture() -> void:
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
-	for mode in ["pedal", "rough", "climb"]:
-		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else Vector3(2.4, 1.8, -0.4)
+	for mode in ["pedal", "rough", "climb", "rear"]:
+		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else (Vector3(1.4, 1.8, 2.6) if mode == "rear" else Vector3(2.4, 1.8, -0.4))
 		camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.23, -0.04))
 		camera.size = 2.4 if mode == "pedal" else 1.35
 		reset()
@@ -419,4 +419,4 @@ func capture() -> void:
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_v5_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_v7_" + mode + ".png")

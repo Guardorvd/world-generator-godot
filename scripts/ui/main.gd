@@ -524,6 +524,12 @@ func _on_clear_cache() -> void:
 ## Две колонки меню растут с экраном: шире на широких мониторах, выше — на 4:3 (интерфейс не меньше 1280 × 720)
 func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
+	# Запас включает две строки статуса и предупреждение бесконечной генерации.
+	var compact := vs.y < 900.0
+	var side: VBoxContainer = screens.menu.get_node("Panel/Box/Columns/Side")
+	side.add_theme_constant_override("separation", 4 if compact else 8)
+	(side.get_node("PreviewFrame") as Control).custom_minimum_size.y = 88.0 if compact else 140.0
+	side.get_node("NewWorld/NewBox/SeedHelp").visible = not compact
 	(screens.menu.get_node("Panel") as Control).custom_minimum_size = Vector2(clampf(vs.x * 0.74, 920.0, 1320.0), clampf(vs.y * 0.86, 600.0, 940.0))
 
 
