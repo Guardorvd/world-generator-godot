@@ -25,6 +25,7 @@ static func _place_settlements(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var candidate_seed := WGRandom.derive(w.seed_num, "settlement.candidate")
+	var density_seed := WGRandom.derive(w.seed_num, "settlement.density")
 	var biome := w.biome
 	var river := w.river_cells()
 	var slope := w.slope
@@ -53,7 +54,7 @@ static func _place_settlements(w: WorldData) -> void:
 			var access := _site_access(w, i, wet)
 			if access < 0.35:
 				continue
-			var density_value := _settlement_density(w, x, y)
+			var density_value := patches(x, y, 96.0, density_seed)
 			var score: float = bd.habit + WGRandom.hash2(x, y, candidate_seed) * 0.2 - slope[i] * 0.6
 			score += access * 0.45 + density_value * 0.35
 			if dist_water[i] >= 1.5 and dist_water[i] <= 6.0:
@@ -312,21 +313,10 @@ static func _place_peaks(w: WorldData) -> void:
 	var lake := w.lake
 	var peaks: Array = []
 	var cand: Array = []
-	for y in range(4, H - 4):
-		for x in range(4, W - 4):
-			var i := y * W + x
-			if elev[i] < 0.45 or ocean[i] != 0 or lake[i] != 0:
-				continue
-			var is_max := true
-			for dy in range(-3, 4):
-				for dx in range(-3, 4):
-					if elev[(y + dy) * W + x + dx] > elev[i]:
-						is_max = false
-						break
-				if not is_max:
-					break
-			if is_max:
-				cand.append([elev[i], i])
+	var fast := Grid.fast_grid()
+	var cells: PackedInt32Array = fast.PeakCandidates(W, H, elev, ocean, lake) if fast != null else peak_candidates_reference(W, H, elev, ocean, lake)
+	for i: int in cells:
+		cand.append([elev[i], i])
 	cand.sort_custom(_by_score_desc)
 	var want := clampi(roundi(6.0 * w.scale), 2, 14)
 	for c: Array in cand:
@@ -346,3 +336,24 @@ static func _place_peaks(w: WorldData) -> void:
 			continue
 		peaks.append({x = x, y = y, i = i, elev = c[0], name = w.make_name(Names.PEAK, "peak", floori(x), floori(y))})
 	w.peaks = peaks
+
+
+## Только кандидаты, в исходном порядке; сортировка, разрежение и имена остаются общими.
+static func peak_candidates_reference(W: int, H: int, elev: PackedFloat32Array, ocean: PackedByteArray, lake: PackedByteArray) -> PackedInt32Array:
+	var cells := PackedInt32Array()
+	for y in range(4, H - 4):
+		for x in range(4, W - 4):
+			var i := y * W + x
+			if elev[i] < 0.45 or ocean[i] != 0 or lake[i] != 0:
+				continue
+			var is_max := true
+			for dy in range(-3, 4):
+				for dx in range(-3, 4):
+					if elev[(y + dy) * W + x + dx] > elev[i]:
+						is_max = false
+						break
+				if not is_max:
+					break
+			if is_max:
+				cells.append(i)
+	return cells

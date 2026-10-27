@@ -51,11 +51,17 @@ static func fbm_field(W: int, H: int, noise: Simplex, d: float, oct: int, ox: fl
 
 
 ## То же поле по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за краем карты.
-## Без C# считается в текущем потоке: прямоугольники маленькие и сами считаются в фоновых задачах
-static func fbm_rect(noise: Simplex, x0: int, y0: int, cw: int, ch: int, d: float, oct: int, ox: float = 0.0, oy: float = 0.0) -> PackedFloat64Array:
+## parallel_rows включать только для полей полного плана; чанки уже считаются параллельно снаружи.
+static func fbm_rect(noise: Simplex, x0: int, y0: int, cw: int, ch: int, d: float, oct: int, ox: float = 0.0, oy: float = 0.0, parallel_rows := false) -> PackedFloat64Array:
 	var fast := Grid.fast_grid()
 	if fast != null:
-		return fast.FbmRect(noise.perm, x0, y0, cw, ch, d, oct, ox, oy, false)
+		return fast.FbmRect(noise.perm, x0, y0, cw, ch, d, oct, ox, oy, parallel_rows)
+	if parallel_rows:
+		var out := PackedFloat64Array()
+		for part: PackedFloat64Array in bands(ch, func(a: int, b: int) -> PackedFloat64Array:
+			return fbm_rect(noise, x0, y0 + a, cw, b - a, d, oct, ox, oy)):
+			out.append_array(part)
+		return out
 	var n := noise.clone()
 	var r := PackedFloat64Array()
 	r.resize(cw * ch)

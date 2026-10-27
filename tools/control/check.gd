@@ -15,6 +15,9 @@ extends SceneTree
 ##   --again (снять заново, даже если этот коммит уже снят), --shadows on|off, --scale 0.25..1,
 ##   --lamp on — с 10.4: включить фару велосипеда (для ночных снимков с --hours).
 ##   --draw 0|1|2 — дальность прорисовки растительности (GameSettings.DRAW_LEVELS, по умолчанию как в игре — высокая).
+##   --verify-landmarks — сверить C# связность суши/вершины с GDScript на заготовках и полях этого мира.
+##   --verify-generation — проверить новые поля и коридоры до генерации и на готовом мире.
+##   --verify-fingerprint <файл.json> — сравнить полный fingerprint с предыдущим прогоном.
 ##   --cache — с 10.0: после проверки тот же мир загружается ещё раз из кэша миров (WorldCache, файл во временной
 ##   папке прогона): время загрузки из кэша, размер файла и совпадение мира, рельефа и карты; итог в cache.json.
 ##   С 10.2 ещё третья загрузка: из кэша только география (файлы следующих слоёв удалены), остальное генерируется.
@@ -72,11 +75,23 @@ var done := false
 var cache_check := false   # --cache: ещё одна загрузка того же мира из кэша
 var fresh := {}            # что сравнить после загрузки из кэша: сводка мира, хеши рельефа и карты
 var cache_res := {}        # 10.2: итог загрузки из кэша целиком, пока идёт загрузка с одной географией
+var compute_probe: Object
+var compute_before := {}
 
 
 func _initialize() -> void:
 	t_start = Time.get_ticks_msec()
 	out = Dev.out_dir()
+	if "--verify-generation" in OS.get_cmdline_user_args():
+		Pathfinder.profile_searches = true
+		var preflight := preload("res://tools/generation_field_checks.gd").synthetic()
+		Dev.save_json(out.path_join("field_synthetic.json"), preflight)
+		if not preflight.ok:
+			failed = true
+			done = true
+			quit(1)
+			return
+		compute_probe = load("res://tools/ComputeProbe.cs").new()
 	cfg = Dev.seeds().perf
 	look_s = float(Dev.arg("look", str(cfg.look_s)))
 	road_s = float(Dev.arg("road", str(cfg.road_s)))
@@ -121,6 +136,12 @@ func _cached(id: String, views: Array, fps: bool) -> bool:
 	if c == null or commit == "" or not c.get("worlds", {}).has(id):
 		return false
 	var e: Dictionary = c.worlds[id]
+	if "--verify-generation" in OS.get_cmdline_user_args() or Dev.arg("verify-fingerprint") != "":
+		return false # запрос явной сверки не пропускается из-за кэша отчёта
+	if "--verify-landmarks" in OS.get_cmdline_user_args():
+		var parity: Variant = Dev.load_json(out.path_join("landmark_parity.json"))
+		if not parity is Dictionary or not parity.get("ok", false):
+			return false
 	if e.get("commit", "") != commit or (fps and not e.get("fps", false)):
 		return false
 	for name in views:
@@ -244,6 +265,8 @@ func _process(delta: float) -> bool:
 					GameContext.scope.cache.dir = out.path_join("world_cache")
 					for path in GameContext.scope.cache.paths_for(seed_text, size):
 						DirAccess.remove_absolute(path)
+				if compute_probe != null:
+					compute_before = compute_probe.CaptureMetrics()
 				started = Time.get_ticks_msec()
 				main.start_game(seed_text, size)
 				phase = "loading"
@@ -255,6 +278,12 @@ func _process(delta: float) -> bool:
 					return _finish()
 				return false
 			result.load_s = snappedf((Time.get_ticks_msec() - started) / 1000.0, 0.01)
+			if compute_probe != null:
+				var after: Dictionary = compute_probe.CaptureMetrics()
+				var cpu_ms: float = after.cpu_ms - compute_before.cpu_ms
+				Dev.save_json(out.path_join("compute_resources.json"), {before = compute_before, after = after,
+					cpu_ms = cpu_ms, average_busy_cores = cpu_ms / maxf(1.0, result.load_s * 1000.0),
+					managed_allocated_bytes = int(after.managed_allocated_bytes) - int(compute_before.managed_allocated_bytes)})
 			timing.load = result.load_s
 			load_ms = game.load_timings.duplicate()
 			load_ms.generation_profile = game.world.generation_profile.duplicate()
@@ -270,6 +299,31 @@ func _process(delta: float) -> bool:
 			result.loaded_memory = _memory()
 			var id := Dev.world_id(seed_text, size)
 			var stats := Dev.world_stats(game.world, true)
+			if "--verify-generation" in OS.get_cmdline_user_args():
+				var fields := preload("res://tools/generation_field_checks.gd").real_world(game.world)
+				Dev.save_json(out.path_join("field_parity.json"), fields)
+				failed = not fields.ok or failed
+			var fingerprint_path := Dev.arg("verify-fingerprint")
+			if not fingerprint_path.is_empty():
+				var expected: Variant = Dev.load_json(Dev.abs_dir(fingerprint_path))
+				var actual: Dictionary = JSON.parse_string(JSON.stringify(stats.fingerprint))
+				var differences: Array = []
+				if not expected is Dictionary or expected.is_empty():
+					differences.append("missing reference")
+				else:
+					for key: String in expected:
+						if not actual.has(key) or expected[key] != actual[key]:
+							differences.append(key)
+					if actual.size() != expected.size():
+						differences.append("field count")
+				var fingerprint_check := {ok = differences.is_empty(), differences = differences}
+				print("FULL FINGERPRINT ", JSON.stringify(fingerprint_check))
+				Dev.save_json(out.path_join("fingerprint_parity.json"), fingerprint_check)
+				failed = not fingerprint_check.ok or failed
+			if "--verify-landmarks" in OS.get_cmdline_user_args():
+				var parity := preload("res://tools/landmark_perf_checks.gd").run(game.world)
+				Dev.save_json(out.path_join("landmark_parity.json"), parity)
+				failed = not parity.ok or failed
 			Dev.save_json(out.path_join("fingerprint_%s.json" % id), stats.fingerprint)
 			if cache_check:
 				fresh = _cache_sums(game, stats.fingerprint)
@@ -279,7 +333,11 @@ func _process(delta: float) -> bool:
 				_save(main.hud.map_tex.get_image(), "%s_map" % id, true)
 			if Dev.arg("lamp", "no") != "no":
 				game.bike_view.set_lamp(true)
-			for v: Dictionary in Dev.views(game):
+			var available_views := Dev.views(game)
+			if available_views.is_empty() and not want_views.is_empty():
+				printerr("Не удалось подготовить виды для снимков")
+				failed = true
+			for v: Dictionary in available_views:
 				if v.name in want_views:
 					for h in hours:
 						shots.append({name = v.name, pos = v.pos, target = v.target, hour = h[0], suffix = h[1]})

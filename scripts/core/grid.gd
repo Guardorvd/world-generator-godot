@@ -47,6 +47,14 @@ static func fast_grid() -> Object:
 ## Связность здесь намеренно щедрая: уклон и безопасность самой переправы проверяются позже.
 ## Расстояние Чебышёва соответствует числу восьмисвязных шагов, в которых задан max_span.
 static func bridge_region(w: int, h: int, wet: PackedByteArray, max_span: int) -> PackedByteArray:
+	var fast := fast_grid()
+	if fast != null:
+		return fast.BridgeRegion(w, h, wet, max_span)
+	return bridge_region_reference(w, h, wet, max_span)
+
+
+## Исходный обход: запасной путь без .NET и эталон проверки пакетного метода.
+static func bridge_region_reference(w: int, h: int, wet: PackedByteArray, max_span: int) -> PackedByteArray:
 	var n := w * h
 	var result := PackedByteArray()
 	result.resize(n)

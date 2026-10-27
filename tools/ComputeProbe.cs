@@ -4,6 +4,21 @@ using Godot;
 /// <summary>Замер выделений managed-памяти конструктором вычислительного объекта, без шума и маршалинга.</summary>
 public partial class ComputeProbe : RefCounted
 {
+	/// <summary>Read-only process snapshot; does not force GC. Peak covers the process lifetime.</summary>
+	public Godot.Collections.Dictionary CaptureMetrics()
+	{
+		using var process = System.Diagnostics.Process.GetCurrentProcess();
+		process.Refresh();
+		return new Godot.Collections.Dictionary
+		{
+			["cpu_ms"] = process.TotalProcessorTime.TotalMilliseconds,
+			["working_set_bytes"] = process.WorkingSet64,
+			["peak_working_set_bytes"] = process.PeakWorkingSet64,
+			["managed_allocated_bytes"] = GC.GetTotalAllocatedBytes(false),
+			["logical_processors"] = System.Environment.ProcessorCount
+		};
+	}
+
 	/// <summary>Выделения каждого переключения ширины прохода, без маршалинга входов.</summary>
 	public long[] CorridorBytes(int size, int count)
 	{

@@ -45,6 +45,17 @@ public partial class FastGrid
 	private float[] _corridor = Array.Empty<float>();
 	private bool _hasCorridor;
 	private int _corridorVersion;
+	// Owned scratch buffers, reused across widths. Never write while a prefetch can read them.
+	private float[] _preparedGround = Array.Empty<float>();
+	private float[] _preparedWater = Array.Empty<float>();
+	private byte[] _preparedWet = Array.Empty<byte>();
+	private double _corridorPrepareMs, _corridorMeasureMs;
+	public Godot.Collections.Dictionary CorridorStats() => new()
+	{
+		["prepare_ms"] = _corridorPrepareMs, ["measure_ms"] = _corridorMeasureMs,
+		["input_buffer_bytes"] = (long)_preparedGround.Length * 4 + (long)_preparedWater.Length * 4 + _preparedWet.Length,
+		["cache_buffer_bytes"] = (long)_corridor.Length * 4
+	};
 	private static readonly ParallelOptions CorridorParallel = new()
 	{
 		MaxDegreeOfParallelism = Math.Max(1, System.Environment.ProcessorCount)
@@ -100,6 +111,8 @@ public partial class FastGrid
 	/// <summary>Ширина прохода, копия Pathfinder.set_corridor; считается сразу для всех шагов.</summary>
 	public void SetCorridor(float[] ground, float[] water, byte[] wet, double half)
 	{
+		_corridorPrepareMs = 0.0;
+		_corridorMeasureMs = 0.0;
 		CancelPrefetch();
 		_found.Clear();
 		_corridorVersion++;
@@ -120,8 +133,41 @@ public partial class FastGrid
 		}
 		// Полосы по 32 строки: обратный шаг пишется в соседнюю строку, общие строки полос — только на их краях.
 		// Каждая пара направленных шагов имеет одного писателя; Parallel.For ждёт готовности всех полос.
+		long started = System.Diagnostics.Stopwatch.GetTimestamp();
 		int blocks = (_h + CorridorRows - 1) / CorridorRows;
 		Parallel.For(0, blocks, CorridorParallel, MeasureRows);
+		_corridorMeasureMs = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+	}
+
+	/// <summary>Exact StageTrails._route_surface input conversion, followed by SetCorridor.
+	/// Raw inputs are read-only. Scratch storage belongs to this finder and is never published to callers.</summary>
+	public void SetWorldCorridor(float[] groundMeters, float[] waterMeters, byte[] ocean, byte[] lake,
+		byte[] river, double tile, double half)
+	{
+		int n = checked(_w * _h);
+		if (groundMeters.Length != n || waterMeters.Length != n || ocean.Length != n || lake.Length != n || river.Length != n)
+			throw new ArgumentException("Corridor inputs must match the finder dimensions.");
+		if (!(tile > 0.0) || !double.IsFinite(tile)) throw new ArgumentOutOfRangeException(nameof(tile));
+		CancelPrefetch(); // joins the reader before modifying buffers reused from the previous width
+		long started = System.Diagnostics.Stopwatch.GetTimestamp();
+		if (_preparedGround.Length != n)
+		{
+			_preparedGround = new float[n];
+			_preparedWater = new float[n];
+			_preparedWet = new byte[n];
+		}
+		Parallel.For(0, _h, CorridorParallel, y =>
+		{
+			for (int i = y * _w, end = i + _w; i < end; i++)
+			{
+				_preparedGround[i] = (float)(groundMeters[i] / tile);
+				_preparedWater[i] = (float)((Math.Max(0.0, waterMeters[i]) - 0.1) / tile);
+				_preparedWet[i] = (byte)(ocean[i] != 0 || lake[i] != 0 || river[i] != 0 ? 1 : 0);
+			}
+		});
+		double prepareMs = (System.Diagnostics.Stopwatch.GetTimestamp() - started) * 1000.0 / System.Diagnostics.Stopwatch.Frequency;
+		SetCorridor(_preparedGround, _preparedWater, _preparedWet, half);
+		_corridorPrepareMs = prepareMs;
 	}
 
 	private const int CorridorRows = 32;
@@ -184,7 +230,12 @@ public partial class FastGrid
 					double y = c / _w + Dy[k] * j * 0.25 + ny * (side - 1);
 					double h = CorridorHeight(x, y);
 					int cell = Math.Clamp((int)Math.Floor(y + 0.5), 0, _h - 1) * _w + Math.Clamp((int)Math.Floor(x + 0.5), 0, _w - 1);
-					if (_corridorWater[cell] > h) grade = double.PositiveInfinity;
+					if (_corridorWater[cell] > h)
+					{
+						// Every consumer rejects an infinite grade before reading cross.
+						grade = double.PositiveInfinity;
+						return;
+					}
 					if (j > 0) grade = Math.Max(grade, Math.Abs(h - previous[side]) * 4.0 / Dl[k]);
 					previous[side] = h;
 					if (side == 0) left = h;
@@ -286,6 +337,9 @@ public partial class FastGrid
 		_corridorGround = Array.Empty<float>();
 		_corridorWater = Array.Empty<float>();
 		_corridorWet = Array.Empty<byte>();
+		_preparedGround = Array.Empty<float>();
+		_preparedWater = Array.Empty<float>();
+		_preparedWet = Array.Empty<byte>();
 		_hasCorridor = false;
 	}
 

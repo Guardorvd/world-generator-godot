@@ -282,12 +282,12 @@ static func views(game: GameWorld) -> Array:
 		var look := _at(h, big.x + lean.x * 3.0 - 0.5, big.y + lean.y * 3.0 - 0.5, 2.0)
 		out.append({name = "village", title = "Улица «%s»" % big.name, pos = pos, target = look})
 	# с 9.3: самое значимое место вне поселений, из равных — ближайшее к дому
-	var site := {}
+	var site: SiteData = null
 	var home := Vector2(w.territory_center)
 	for s in w.sites:
-		if site.is_empty() or s.rank > site.rank or s.rank == site.rank and home.distance_to(Vector2(s.x, s.y)) < home.distance_to(Vector2(site.x, site.y)):
+		if site == null or s.rank > site.rank or s.rank == site.rank and home.distance_to(Vector2(s.x, s.y)) < home.distance_to(Vector2(site.x, site.y)):
 			site = s
-	if not site.is_empty():
+	if site != null:
 		var t := Vector3(site.x * TILE, h.ground_at(site.x * TILE, site.y * TILE) + 3.0, site.y * TILE)
 		var kind: String = StageSites.TYPES[site.type].title
 		out.append({name = "site", title = "%s «%s»" % [kind.left(1).to_upper() + kind.substr(1), site.name], pos = _look_from(h, t, 32.0, 10.0, 8.0), target = t})

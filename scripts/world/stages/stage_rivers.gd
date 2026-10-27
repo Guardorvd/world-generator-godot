@@ -30,7 +30,9 @@ static func _pt(w: WorldData, i: int) -> Dictionary:
 
 
 static func run(w: WorldData) -> void:
+	var valley_started := Time.get_ticks_usec()
 	_shape_valleys(w)
+	w.generation_profile.river_valleys_ms = (Time.get_ticks_usec() - valley_started) / 1000.0
 	var N := w.N
 	var ocean := w.ocean
 	var lake := w.lake

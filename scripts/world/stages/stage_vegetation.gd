@@ -91,6 +91,7 @@ static func run(w: WorldData) -> void:
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
 static func fields(w: WorldData) -> Dictionary:
+	var started := Time.get_ticks_usec()
 	var W := w.W
 	var H := w.H
 	var N := w.N
@@ -135,21 +136,28 @@ static func fields(w: WorldData) -> Dictionary:
 				out[(y - y0) * W + x] = Vector2(clampf(0.5 - 0.5 * gy / sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0), 0.0).x
 		return out
 	var light := PackedFloat32Array()
-	for part: PackedFloat32Array in Parallel.bands(H, light_job):
-		light.append_array(part)
-	var age_n := Parallel.fbm_rect(w.noise.forest, 0, 0, W, H, 78.0, 2, 91.0, -47.0) # как в age_at
+	if w.generation.light.size() == N:
+		light = w.generation.light
+	else: # география из дискового кэша не содержит временное поле освещённости
+		for part: PackedFloat32Array in Parallel.bands(H, light_job):
+			light.append_array(part)
+	var noise_started := Time.get_ticks_usec()
+	var age_n := Parallel.fbm_rect(w.noise.forest, 0, 0, W, H, 78.0, 2, 91.0, -47.0, true) # как в age_at
+	var structure := structure_rect(w, 0, 0, W, H, true)
+	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
+	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
-		light = light, age_n = age_n}.merged(structure_rect(w, 0, 0, W, H))
+		light = light, age_n = age_n}.merged(structure)
 
 
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
 ## stand — густой или редкий древостой и его состав (9.2), glade — поляны (9.2). Все — сдвиги одного лесного Simplex
-static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
+static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel_rows := false) -> Dictionary:
 	var n: Simplex = w.noise.forest
-	return {wood = Parallel.fbm_rect(n, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY),
-		stand = Parallel.fbm_rect(n, x0, y0, cw, ch, STAND_SCALE, 2, STAND_OX, STAND_OY),
-		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY)}
+	return {wood = Parallel.fbm_rect(n, x0, y0, cw, ch, WOOD_SCALE, WOOD_OCT, WOOD_OX, WOOD_OY, parallel_rows),
+		stand = Parallel.fbm_rect(n, x0, y0, cw, ch, STAND_SCALE, 2, STAND_OX, STAND_OY, parallel_rows),
+		glade = Parallel.fbm_rect(n, x0, y0, cw, ch, GLADE_SCALE, 2, GLADE_OX, GLADE_OY, parallel_rows)}
 
 
 ## Доля лесов мира по сиду (9.1), -0.36..0.36: одни миры лесистые, другие открытые. Без квот — только сдвиг

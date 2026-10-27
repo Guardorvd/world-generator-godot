@@ -75,6 +75,26 @@ static func latitude(_w: WorldData, y: int) -> float:
 
 
 static func run(w: WorldData) -> void:
+	var temp_n := w.noise_field("temp")
+	var started := Time.get_ticks_usec()
+	var fast := Grid.fast_grid()
+	var fields: Dictionary = fast.ClimateFields(w.W, w.H, w.h, w.ocean, w.lake, w.rain,
+		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, LAT_CELLS, biome_ids()) if fast != null else fields_reference(w, temp_n)
+	w.temp = fields.temp
+	w.moist = fields.moist
+	w.biome = fields.biome
+	w.generation.light = fields.light
+	w.generation_profile.climate_field_ms = (Time.get_ticks_usec() - started) / 1000.0
+
+
+static func biome_ids() -> PackedByteArray:
+	return PackedByteArray([Biomes.DEEP, Biomes.OCEAN, Biomes.SHALLOW, Biomes.LAKE, Biomes.BEACH,
+		Biomes.DESERT, Biomes.SAVANNA, Biomes.STEPPE, Biomes.GRASS, Biomes.FOREST, Biomes.JUNGLE,
+		Biomes.SWAMP, Biomes.TAIGA, Biomes.TUNDRA, Biomes.SNOW, Biomes.ROCK, Biomes.PEAK, Biomes.STONESHORE])
+
+
+## Исходные численные правила. light сохраняет ровно float32-компонент Vector2.
+static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictionary:
 	var W := w.W
 	var H := w.H
 	var N := w.N
@@ -86,22 +106,24 @@ static func run(w: WorldData) -> void:
 	var dist_water := w.dist_water
 	var elev := w.elev
 	var slope := w.slope
-	var temp_n := w.noise_field("temp")
 	var temp := PackedFloat32Array()
 	temp.resize(N)
 	var moist := PackedFloat32Array()
 	moist.resize(N)
 	var biome := PackedByteArray()
 	biome.resize(N)
+	var light := PackedFloat32Array()
+	light.resize(N)
 	for y in H:
 		var lat := latitude(w, y)
 		for x in W:
 			var i := y * W + x
 			var e := elev[i]
+			var conditions := natural_conditions(w, x, y)
+			light[i] = conditions.x
 			var t := clampf(0.16 + lat * 0.86 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)
 			if ocean[i] == 0 and lake[i] == 0:
-				var conditions := natural_conditions(w, x, y)
 				t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)
 				m = soil_moisture(rain[i], dist_water[i], slope[i], t, conditions)
 			temp[i] = t
@@ -119,6 +141,4 @@ static func run(w: WorldData) -> void:
 				if dist_water[i] <= 1.0 and dist_ocean[i] > 2.5 and slope[i] > 0.55 and e < 0.62:
 					b = Biomes.STONESHORE
 			biome[i] = b
-	w.temp = temp
-	w.moist = moist
-	w.biome = biome
+	return {temp = temp, moist = moist, biome = biome, light = light}

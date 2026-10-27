@@ -113,6 +113,24 @@ func set_corridor(ground: PackedFloat32Array, water: PackedFloat32Array, wet: Pa
 	_cross.resize(W * H * 8)
 
 
+## Метровые поля мира: C# переводит их в единицы поиска без прохода GDScript по всей карте.
+## Без .NET остаётся исходное преобразование, включая запись float32 после деления.
+func set_world_corridor(ground_meters: PackedFloat32Array, water_meters: PackedFloat32Array,
+		ocean: PackedByteArray, lake: PackedByteArray, river: PackedByteArray, tile: float, half: float) -> void:
+	if _fast != null:
+		_fast.SetWorldCorridor(ground_meters, water_meters, ocean, lake, river, tile, half)
+		return
+	var ground := ground_meters.duplicate()
+	var water := water_meters.duplicate()
+	var wet := PackedByteArray()
+	wet.resize(W * H)
+	for i in W * H:
+		ground[i] /= tile
+		water[i] = (maxf(0.0, water[i]) - 0.1) / tile
+		wet[i] = int(ocean[i] != 0 or lake[i] != 0 or river[i] != 0)
+	set_corridor(ground, water, wet, half)
+
+
 func _height(x: float, y: float) -> float:
 	x = clampf(x, 0.0, W - 1.001)
 	y = clampf(y, 0.0, H - 1.001)

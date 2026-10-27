@@ -104,6 +104,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# построен без них, чтобы путь был один
 	var changed := r.heights.finish_paths()
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
+	r.timings.path_details = r.heights.path_timings.duplicate(true)
 	t = Time.get_ticks_usec()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)

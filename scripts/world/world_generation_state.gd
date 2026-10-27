@@ -8,6 +8,7 @@ var noise := {}
 var scale := 1.0
 var profile := {}
 var base_heights: Heightfield
+var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
 var _thread: Thread
 var _fields := {}
 
@@ -39,6 +40,7 @@ func clear_fields() -> void:
 		_thread.wait_to_finish()
 		_thread = null
 	_fields.clear()
+	light = PackedFloat32Array()
 
 
 func _notification(what: int) -> void:

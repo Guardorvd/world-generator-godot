@@ -81,10 +81,10 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	_animal_trails(w, finder)
 	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
-	_route_surface(finder, surface, WIDTHS.road)
+	_route_surface(finder, surface, WIDTHS.road, "corridor_road_ms")
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface, step)
-	_route_surface(finder, surface, WIDTHS.mountain)
+	_route_surface(finder, surface, WIDTHS.mountain, "corridor_mountain_ms")
 	step.call(0.74, "Прокладка горных троп")
 	detail_us = Time.get_ticks_usec()
 	_mountain_trails(w, finder, surface)
@@ -96,18 +96,15 @@ static func run(w: WorldData, step: Callable) -> void:
 
 
 ## Поиск видит тот же прорезанный рельеф, что и полотно. Ширина в клетках, высоты / TILE.
-static func _route_surface(finder: Pathfinder, surface: Heightfield, width: float) -> void:
+static func _route_surface(finder: Pathfinder, surface: Heightfield, width: float, profile_key := "") -> void:
+	var started := Time.get_ticks_usec()
 	finder.max_cross_grade = BENCH_CROSS
-	var ground := surface.hv.duplicate()
-	var water := surface.water_level.duplicate()
-	var wet := PackedByteArray()
-	wet.resize(surface.world.N)
-	for i in surface.world.N:
-		ground[i] /= GameConfig.TILE
-		# Запас между выборками: край сухой дороги не должен становиться бродом.
-		water[i] = (maxf(0.0, water[i]) - 0.1) / GameConfig.TILE
-		wet[i] = 1 if _wet(surface.world, i) else 0
-	finder.set_corridor(ground, water, wet, width * 0.5)
+	var w := surface.world
+	finder.set_world_corridor(surface.hv, surface.water_level, w.ocean, w.lake, w.river_cells(), GameConfig.TILE, width * 0.5)
+	if not profile_key.is_empty():
+		surface.world.generation_profile[profile_key] = (Time.get_ticks_usec() - started) / 1000.0
+		if finder.fast() != null:
+			w.generation_profile[profile_key.trim_suffix("_ms") + "_details"] = finder.fast().CorridorStats()
 
 
 ## Река у самого устья в озеро или море (с 2.9): там она глубже брода, путь обходит её выше по течению
@@ -122,11 +119,23 @@ static func _at_mouth(w: WorldData, x: int, y: int) -> bool:
 
 ## Стоимость прохода клетки: биом, крутизна, немного шума, реки дороже (брод), устья и крутые русла непроходимы
 static func _build_cost(w: WorldData) -> void:
+	var cost_n := w.noise_field("cost")
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var biome_cost := PackedFloat64Array()
+		for biome: Dictionary in Biomes.LIST:
+			biome_cost.append(float(biome.get("cost", 2.0)))
+		w.cost = fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n, biome_cost, FORD_SLOPE)
+	else:
+		w.cost = cost_reference(w, cost_n)
+
+
+## Исходный цикл: запасной путь и эталон численных правил.
+static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFloat32Array:
 	var W := w.W
 	var H := w.H
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
-	var cost_n := w.noise_field("cost")
 	var river := w.river_cells()
 	for y: int in H:
 		for x: int in W:
@@ -136,7 +145,7 @@ static func _build_cost(w: WorldData) -> void:
 				continue
 			var bc: float = Biomes.LIST[w.biome[i]].get("cost", 2.0)
 			cost[i] = bc + w.slope[i] * 7.0 + (cost_n[i] * 0.5 + 0.5) * 0.9 + (12.0 if river[i] != 0 else 0.0)
-	w.cost = cost
+	return cost
 
 
 ## Записать найденный путь как тропу
@@ -516,7 +525,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.settlement_expanded = expanded
 	w.generation_profile.main_roads_ms = Time.get_ticks_msec() - started
 	finder.use_corridor = true
-	_route_surface(finder, surface, WIDTHS.trail)
+	_route_surface(finder, surface, WIDTHS.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
 	finder.search_budget = w.N * maxi(1, keep.size())
 	var detail_us := Time.get_ticks_usec()
@@ -1085,8 +1094,12 @@ static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
 			var other := surface.deck_at(x, z, INF)
 			if other > -INF and absf(other - deck) > 0.3 and absf(other - deck) < Heightfield.TUNNEL_HEIGHT:
 				return false
-			if side == 0.0 and (surface.wall_at(x, z, maxf(deck, ground), 0.5) or surface.depth_at(x, z) > 0.3 and ground + surface.depth_at(x, z) > deck - 0.1):
-				return false
+			if side == 0.0:
+				if surface.wall_at(x, z, maxf(deck, ground), 0.5):
+					return false
+				var depth := surface.depth_at(x, z)
+				if depth > 0.3 and ground + depth > deck - 0.1:
+					return false
 	return true
 
 

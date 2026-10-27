@@ -626,6 +626,7 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 func _generate_job(seed_text: String, size: int) -> void:
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
 		_set_progress.call_deferred(p, label))
+	loaded.timings.ready_queued_us = Time.get_ticks_usec()
 	_on_world_ready.call_deferred(loaded)
 
 
@@ -637,6 +638,8 @@ func _set_progress(p: float, label: String) -> void:
 
 
 func _on_world_ready(loaded: WorldLoader) -> void:
+	loaded.timings.ready_queue_ms = (Time.get_ticks_usec() - int(loaded.timings.get("ready_queued_us", Time.get_ticks_usec()))) / 1000.0
+	loaded.timings.erase("ready_queued_us")
 	gen_thread.wait_to_finish()
 	if not _pending_save.is_empty() and not GameWorld.can_restore(_pending_save, loaded.world):
 		busy = false
@@ -645,11 +648,17 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 		return
 	# GameWorld.start идёт в главном потоке: подпись должна успеть показаться до него
 	_set_progress(0.97, "Окружение вокруг игрока")
+	var phase_started := Time.get_ticks_usec()
 	await get_tree().process_frame
+	loaded.timings.ready_frame_wait_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	phase_started = Time.get_ticks_usec()
 	game = GameScene.instantiate()
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
+	loaded.timings.game_scene_create_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	phase_started = Time.get_ticks_usec()
 	game.start(loaded, hud, _pending_save)
+	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	_save_elapsed = 0.0
 	_saved_discoveries = hud.visited.size()
 	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)
@@ -657,8 +666,10 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	hud.set_map_visible(false)
 	_show("")
 	busy = false
+	phase_started = Time.get_ticks_usec()
 	if _pending_save.is_empty():
 		_save_current()
+	loaded.timings.initial_save_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 
 
 func _toggle_pause() -> void:
