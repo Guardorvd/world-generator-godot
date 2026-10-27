@@ -14,6 +14,7 @@ extends Node
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
 const GameScene := preload("res://scenes/game_world.tscn")
+const TrailLabScene := preload("res://scenes/trail_lab.tscn")
 const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
@@ -27,6 +28,7 @@ const CONTROLS := [
 ]
 
 var game: GameWorld
+var trail_lab: Node
 var busy := false
 var gen_thread: Thread
 var bg_thread: Thread
@@ -573,6 +575,26 @@ func _process(delta: float) -> void:
 
 
 # ---------- Старт игры ----------
+
+## Лаборатория — отдельная сцена, без запуска/сохранения выбранного мира.
+func _open_trail_lab() -> void:
+	if busy or game != null or trail_lab != null or not screens.menu.visible:
+		return
+	trail_lab = TrailLabScene.instantiate()
+	trail_lab.exit_requested.connect(_close_trail_lab)
+	hud.visible = false
+	_show("")
+	add_child(trail_lab)
+
+
+func _close_trail_lab() -> void:
+	if trail_lab == null:
+		return
+	trail_lab.shutdown()
+	trail_lab.queue_free()
+	trail_lab = null
+	_show("menu")
+
 
 func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится

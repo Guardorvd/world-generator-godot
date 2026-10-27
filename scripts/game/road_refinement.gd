@@ -18,6 +18,7 @@ static var allow_fast_nearest := true # false — исходный цикл GDSc
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
 var build_timings := {}
+var trail_elements_baked := false # A fresh refinement accepts one authored earthwork pass.
 var _segments := {}
 var _segment_list: Array[Dictionary] = []
 var _structures := {}

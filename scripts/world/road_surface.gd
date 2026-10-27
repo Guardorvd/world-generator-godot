@@ -43,16 +43,32 @@ static func run(w: WorldData) -> void:
 	w.road_surface = PackedByteArray()
 	w.road_surface.resize(w.N)
 	for k: int in w.trails.size():
-		var t: Dictionary = w.trails[k]
-		t.surf = PackedByteArray()
-		if t.kind == "animal":
-			t.surf.resize(t.pts.size())
-			continue
-		var surface_seed := WGRandom.derive(w.seed_num, "surface." + t.kind)
-		for n: int in t.pts.size():
-			var p: Dictionary = t.pts[n]
-			t.surf.append(pick(w, t.kind, p.x, p.y,
-				WGRandom.hash2(floori(p.x / SPAN), floori(p.y / SPAN), surface_seed)))
+		assign_route(w, w.trails[k])
+	rebuild_map(w)
+
+
+## Assign one route without touching its neighbours. Explicit authoring survives run().
+static func assign_route(w: WorldData, t: Dictionary) -> void:
+	t.surf = PackedByteArray()
+	if t.kind == "animal":
+		t.surf.resize(t.pts.size())
+		return
+	var authored: int = t.get("surface_override", NONE)
+	if authored > NONE and authored < LIST.size():
+		t.surf.resize(t.pts.size())
+		t.surf.fill(authored)
+		return
+	var surface_seed := WGRandom.derive(w.seed_num, "surface." + t.kind)
+	for n: int in t.pts.size():
+		var p: Dictionary = t.pts[n]
+		t.surf.append(pick(w, t.kind, p.x, p.y,
+			WGRandom.hash2(floori(p.x / SPAN), floori(p.y / SPAN), surface_seed)))
+
+
+## Rebuild the cell map from assigned point surfaces (also used by authored trails).
+static func rebuild_map(w: WorldData) -> void:
+	w.road_surface.resize(w.N)
+	w.road_surface.fill(NONE)
 	# На пересечении путей одного типа приоритет также не зависит от порядка их загрузки.
 	var routes := w.trails.duplicate()
 	routes.sort_custom(_route_less)

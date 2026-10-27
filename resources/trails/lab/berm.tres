@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="TrailDefinition" load_steps=4 format=3]
+
+[ext_resource type="Script" path="res://scripts/trails/trail_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/trails/trail_element.gd" id="2"]
+
+[sub_resource type="Resource" id="Element0"]
+script = ExtResource("2")
+profile = 2
+station = 78.0
+length = 18.0
+height = 0.6
+
+[resource]
+script = ExtResource("1")
+id = "lab_2"
+title = "Лес / поворот"
+points = PackedVector2Array(144, 220, 144, 180, 149, 150, 156, 130, 149, 100, 144, 40)
+width = 6.0
+surface = 6
+elements = Array[ExtResource("2")]([SubResource("Element0")])
+

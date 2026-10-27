@@ -392,6 +392,14 @@ tooltip_text = "Удалить мир из списков и его сохран
 [node name="Bottom" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
 layout_mode = 2
 
+[node name="TrailLab" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(150, 40)
+layout_mode = 2
+text = "Trail Lab"
+tooltip_text = "Лаборатория велосипедных трасс"
+icon = ExtResource("6_play")
+
 [node name="Settings" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
 custom_minimum_size = Vector2(160, 40)
 layout_mode = 2
@@ -968,5 +976,6 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/Dice" to="." method="_on_dice_pressed"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/Start" to="." method="_on_start"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/TrailLab" to="." method="_open_trail_lab"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Settings" to="." method="_open_settings"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Exit" to="." method="_exit_game"]

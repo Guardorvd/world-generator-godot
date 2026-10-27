@@ -284,18 +284,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		return
 	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
 	var slope := _slope(heights)
-	var surf := RoadSurface.NONE
-	var path_weight := 0.0
-	var across := 0.0
-	if heights.road_refinement != null:
-		var contact := heights.road_refinement.sample(x, z, w.W)
-		if not contact.is_empty():
-			surf = contact.surface
-			path_weight = smoothstep(0.05, 0.9, contact.weight)
-			across = contact.across
-	else:
-		surf = PlayerState.surface(w.tile_info(x / GameConfig.TILE, z / GameConfig.TILE))
-		path_weight = 1.0 if surf != RoadSurface.NONE else 0.0
+	var contact := RideSurface.sample(w, heights, x, z)
+	var surf: int = contact.surface
+	var path_weight: float = contact.weight
+	var across: float = contact.across
 	var on_path := surf != RoadSurface.NONE
 	var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
 	var rough := clampf(1.3 - terrain, 0.15, 1.0)

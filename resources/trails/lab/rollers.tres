@@ -1,0 +1,28 @@
+[gd_resource type="Resource" script_class="TrailDefinition" load_steps=5 format=3]
+
+[ext_resource type="Script" path="res://scripts/trails/trail_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/trails/trail_element.gd" id="2"]
+
+[sub_resource type="Resource" id="Element0"]
+script = ExtResource("2")
+profile = 0
+station = 78.0
+length = 8.0
+height = 1.2
+
+[sub_resource type="Resource" id="Element1"]
+script = ExtResource("2")
+profile = 0
+station = 100.0
+length = 8.0
+height = 1.2
+
+[resource]
+script = ExtResource("1")
+id = "lab_0"
+title = "Грунт / роллеры"
+points = PackedVector2Array(40, 220, 40, 180, 40, 140, 40, 100, 40, 40)
+width = 6.0
+surface = 2
+elements = Array[ExtResource("2")]([SubResource("Element0"), SubResource("Element1")])
+

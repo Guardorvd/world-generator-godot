@@ -1,0 +1,14 @@
+[gd_resource type="Resource" script_class="TrailDefinition" load_steps=3 format=3]
+
+[ext_resource type="Script" path="res://scripts/trails/trail_definition.gd" id="1"]
+[ext_resource type="Script" path="res://scripts/trails/trail_element.gd" id="2"]
+
+[resource]
+script = ExtResource("1")
+id = "lab_3"
+title = "Песок / торможение"
+points = PackedVector2Array(196, 220, 196, 180, 196, 140, 196, 100, 196, 40)
+width = 6.0
+surface = 5
+elements = Array[ExtResource("2")]([])
+
