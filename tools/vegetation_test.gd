@@ -55,17 +55,38 @@ func run() -> void:
 	var h := Heightfield.new(w, false)
 	var defs := Models.tree_defs()
 	var pine: ArrayMesh = defs[Biomes.T_PINE].crown
-	var surface: Dictionary = RenderingServer.mesh_get_surface(pine.get_rid(), 0)
-	var lods: Array = surface.get("lods", [])
-	check(not lods.is_empty(), "Для крон нужны реальные индексные LOD")
+	var lods := ForestModels.lod_meshes(pine)
+	check(lods.size() == 3 and lods[0] == pine, "Кроны хранят три отдельных LOD без дублирования")
 	var fine: PackedInt32Array = pine.surface_get_arrays(0)[Mesh.ARRAY_INDEX]
-	for lod: Dictionary in lods:
-		var count: int = lod.index_data.size() / (2 if int(surface.vertex_count) < 65536 else 4)
+	for level in range(1, lods.size()):
+		var count: int = lods[level].surface_get_arrays(0)[Mesh.ARRAY_INDEX].size()
 		check(count < fine.size() and count % 3 == 0, "LOD должен сокращать треугольники")
 	var veg := VegetationLayer.new()
 	root.add_child(veg)
 	veg.setup(w, h, defs, Models.grass_mesh())
+	# Загрузка ограничена группой силуэтов; отмена освобождает уже переданную часть чанка.
+	var chunk := Vector2i(6, 6)
+	var partial := veg._build_chunk(chunk)
+	partial.epoch = veg._epoch
+	check(partial.entries.size() == ForestModels.VARIANTS, "Фикстура содержит все силуэты в одном чанке")
+	check(not veg._apply_chunk(partial, 1) and veg.veg.size() == 1, "За порцию загружается только один силуэт")
+	veg._pending.append(partial)
+	veg._upload_next()
+	check(veg.veg.size() == 2 and partial.cursor == 2 and veg._pending.size() == 1, "Следующий кадр продолжает тот же чанк")
+	veg._clear_pending()
+	check(veg.veg.is_empty() and not veg._loaded.has(chunk), "Отмена не оставляет частичный чанк готовым")
+	partial = veg._build_chunk(chunk)
+	partial.epoch = veg._epoch
+	veg._apply_chunk(partial, 1)
+	veg._dirty[chunk] = veg._epoch + 1
+	check(veg._apply_chunk(partial, 1) and veg.veg.is_empty(), "Устаревший частичный чанк удаляется при закреплении области")
+	veg._dirty.clear()
+	await process_frame
+	partial = veg._build_chunk(chunk)
+	veg._apply_chunk(partial, 1)
+	veg._pending.append(partial)
 	veg.update(512.0, 512.0, true)
+	check(veg._pending.is_empty(), "Синхронный перенос отменяет частичную передачу перед полной загрузкой")
 	var total := 0
 	var max_batch := 0
 	for entry: Dictionary in veg.veg.values():
@@ -78,6 +99,9 @@ func run() -> void:
 	veg.update(536.0, 512.0, true)
 	check(veg.veg[key].crown == original, "Соседний шаг должен сохранять уже загруженный MultiMesh")
 	for entry: Dictionary in veg.veg.values():
+		for node: MultiMeshInstance3D in entry.nodes:
+			if node.multimesh.use_colors:
+				check(node.multimesh.mesh in ForestModels.lod_meshes(defs[entry.kind].crown), "Узлы крон используют общие LOD-меши")
 		for part in ["trunk", "crown"]:
 			var mm: MultiMesh = entry[part]
 			var buf: PackedFloat32Array = mm.buffer
@@ -98,10 +122,12 @@ func run() -> void:
 	check(waiting > 0, "Готовые чанки должны ожидать передачи")
 	veg.update(536.0, 512.0, false)
 	var kept := veg._pending.size()
+	var queued_chunks: Array = veg._pending.map(func(b: Dictionary) -> Vector2i: return b.chunk)
 	check(veg._task != -1 and kept > 0, "Очередь деревьев не должна задерживать обновление травы")
 	await wait_task(veg)
 	veg.update(536.0, 512.0, false)
-	check(veg._pending.size() == kept, "Обновление травы не должно затирать готовые чанки")
+	for queued_chunk: Vector2i in queued_chunks:
+		check(veg._pending.any(func(b: Dictionary) -> bool: return b.chunk == queued_chunk) or veg._loaded.has(queued_chunk), "Независимая задача травы не должна терять готовые чанки")
 	veg.update(5000.0, 5000.0, false)
 	check(veg.veg.is_empty() and veg._pending.is_empty(), "Результаты прежнего положения не должны появляться после переноса")
 	veg.update(512.0, 512.0, true)
@@ -114,7 +140,7 @@ func run() -> void:
 
 func wait_task(veg: VegetationLayer) -> void:
 	var deadline := Time.get_ticks_msec() + 10000
-	while veg._task != -1 and not WorkerThreadPool.is_task_completed(veg._task):
+	while (veg._task != -1 and not WorkerThreadPool.is_task_completed(veg._task)) or (veg._tree_task != -1 and not WorkerThreadPool.is_task_completed(veg._tree_task)):
 		if Time.get_ticks_msec() > deadline:
 			check(false, "Таймаут фоновой подготовки густого леса")
 			return

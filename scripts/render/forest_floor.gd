@@ -88,7 +88,7 @@ static func _log(moss: bool) -> Mesh:
 		parts.append([_beam(a, a + Vector3(-0.35, 0.18 + n * 0.14, (n - 1) * 0.35), 0.065), BARK])
 	if moss:
 		for n in 4:
-			parts.append([Models._moved(Models._ico(0.33, 0.41, 1.4, 0.17, 0.55), Vector3(-1.4 + n * 0.8, 0, 0)), Color(0.25 + n * 0.015, 0.36, 0.15)])
+			parts.append([Models._moved(Plants._mound(0.33, 0.41, 1.4, 0.17, 0.55), Vector3(-1.4 + n * 0.8, 0, 0)), Color(0.25 + n * 0.015, 0.36, 0.15)])
 	return Plants._colored(parts)
 
 
@@ -129,7 +129,7 @@ static func meshes() -> Array[Mesh]:
 	# Пень: срез светлой древесины, корневые лапы и шапка мха.
 	var stump: Array = [[_beam(Vector3(0, -0.05, 0), Vector3(0.02, 0.45, 0), 0.3), BARK],
 		[_beam(Vector3(0.02, 0.45, 0), Vector3(0.02, 0.47, 0), 0.22), WOOD],
-		[Models._moved(Models._ico(0.2, 0.47, 1.0, 0.25, 0.8), Vector3(-0.06, 0, 0.05)), Color(0.36, 0.5, 0.2)]]
+		[Models._moved(Plants._mound(0.2, 0.47, 1.0, 0.25, 0.8), Vector3(-0.06, 0, 0.05)), Color(0.36, 0.5, 0.2)]]
 	for n in 4:
 		var a := n * TAU / 4.0 + 0.4
 		var f := Vector3(cos(a), 0, sin(a))
@@ -140,7 +140,7 @@ static func meshes() -> Array[Mesh]:
 		var x := -0.8 + n * 0.4
 		var side := 1.0 if n % 2 == 0 else -1.0
 		branch.append([_beam(Vector3(x, 0.05, 0.02), Vector3(x + 0.45, 0.07 + n * 0.015, side * 0.42), 0.022), BARK])
-	branch.append([Models._moved(Models._ico(0.16, 0.05, 1.6, 0.45, 0.4), Vector3(0.95, 0.0, 0.05)), Color(0.42, 0.31, 0.16)])
+	branch.append([Models._moved(Plants._mound(0.16, 0.05, 1.6, 0.45, 0.4), Vector3(0.95, 0.0, 0.05)), Color(0.42, 0.31, 0.16)])
 	return [Plants._leaves(leaves, Color(0.46, 0.35, 0.18)), Plants._leaves(needles, Color(0.4, 0.33, 0.19)),
 		twig, Plants._colored(roots), _log(false), _log(true), Plants._colored(snag), stones.commit(),
 		Plants._colored(stump), Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62), Plants._colored(branch)]

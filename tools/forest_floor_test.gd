@@ -57,7 +57,10 @@ func run() -> void:
 		var entry: Dictionary = veg.understory[kind]
 		counts.append(entry.count)
 		saved.append(entry.buf.duplicate())
-		check(entry.count > 0, "Смешанный лес должен содержать подстилку, корни, ветки, валежник, сухостой и камни: %d" % kind)
+		if kind == Floor.FIRST + Floor.BRANCH:
+			check(entry.count == 0, "Дорожные ветки создаёт RoadObstacles, а не случайная лесная подстилка")
+		else:
+			check(entry.count > 0, "Смешанный лес должен содержать подстилку, корни, ветки, валежник, сухостой и камни: %d" % kind)
 		for n: int in entry.count:
 			var offset := n * VegetationLayer.STRIDE
 			var buf: PackedFloat32Array = entry.buf

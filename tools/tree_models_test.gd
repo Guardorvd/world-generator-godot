@@ -22,12 +22,31 @@ func run() -> void:
 	for i in 5:
 		check(is_equal_approx(grass_uv[i * 3 + 2].y, 1.0) and grass_uv[i * 3].y == 0.0, "Изгиб травы должен затрагивать кончик, а не основание")
 	var defs := Models.tree_defs()
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA]:
+	var total := Vector3i.ZERO
+	var previous_total := Vector3i.ZERO
+	var stored_bytes := 0
+	var previous_bytes := 0
+	var baseline: GDScript
+	var args := OS.get_cmdline_user_args()
+	var baseline_at := args.find("--baseline")
+	if baseline_at >= 0 and baseline_at + 1 < args.size():
+		baseline = load(args[baseline_at + 1])
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
 		var silhouettes := []
 		for variant in ForestModels.VARIANTS:
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]
 			var triangles := 0
+			var cost := _cost(def)
+			total += cost
+			stored_bytes += _stored_bytes(def)
+			check(cost.x > cost.y and cost.y > cost.z, "Каждый следующий LOD дерева должен уменьшать суммарную геометрию")
+			if baseline != null:
+				var previous: Dictionary = baseline.definition(kind, variant)
+				previous_total += _cost(previous)
+				previous_bytes += _stored_bytes(previous)
 			for part in ["trunk", "crown"]:
+				if not def.has(part):
+					continue
 				var mesh: ArrayMesh = def[part]
 				var arrays := mesh.surface_get_arrays(0)
 				var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
@@ -38,30 +57,38 @@ func run() -> void:
 				check(vertices.size() == normals.size() and colors.size() == vertices.size(), "Нужны нормали и окраска всех вершин")
 				for p in vertices:
 					check(p.is_finite(), "Некорректная вершина")
-				var levels: Array = mesh.get_meta("levels")
-				var level_vertices := 0
+				var levels: Array = ForestModels.lod_meshes(mesh)
+				check(levels.size() == 3 and levels[0] == mesh, "Ближний меш используется напрямую, без копии вершин всех LOD")
+				var previous := idx.size()
 				for level_mesh: ArrayMesh in levels:
 					var level_arrays := level_mesh.surface_get_arrays(0)
 					var count: int = level_arrays[Mesh.ARRAY_VERTEX].size()
-					level_vertices += count
+					var index_count: int = level_arrays[Mesh.ARRAY_INDEX].size()
+					check(index_count <= previous and index_count % 3 == 0, "LOD части не должен увеличивать геометрию")
+					previous = index_count
+					var level_normals: PackedVector3Array = level_arrays[Mesh.ARRAY_NORMAL]
+					for n in level_normals:
+						check(n.is_finite() and n.length_squared() > 0.9, "Нормали каждого LOD должны быть конечными и единичными")
 					for vertex_index: int in level_arrays[Mesh.ARRAY_INDEX]:
 						check(vertex_index >= 0 and vertex_index < count, "Индексы LOD должны ссылаться на свои вершины")
-				check(level_vertices == vertices.size(), "Отдельные LOD не должны хранить чужие вершины")
-				var surface := RenderingServer.mesh_get_surface(mesh.get_rid(), 0)
-				var lods: Array = surface.get("lods", [])
-				check(lods.size() == 2, "Нужны три уровня геометрии")
-				var previous := idx.size()
-				for lod: Dictionary in lods:
-					var count: int = lod.index_data.size() / (2 if int(surface.vertex_count) < 65536 else 4)
-					check(count < previous and count % 3 == 0, "LOD должен уменьшать число треугольников")
-					previous = count
+				check(not mesh.has_meta("levels"), "Нет дублирующего набора мешей старого формата")
 			check(triangles < 1200, "Превышен бюджет ближнего дерева")
-			check(def.cutout and def.crown_texture.get_image().has_mipmaps(), "Листва должна иметь вырезанный силуэт и mipmaps")
-			check(not silhouettes.has(def.crown.get_aabb()), "Силуэты вариантов должны отличаться")
-			silhouettes.append(def.crown.get_aabb())
+			if def.has("crown"):
+				check(def.cutout and def.crown_texture.get_image().has_mipmaps(), "Листва должна иметь вырезанный силуэт и mipmaps")
+				check(not silhouettes.has(def.crown.get_aabb()), "Силуэты вариантов должны отличаться")
+				silhouettes.append(def.crown.get_aabb())
 			var repeat := ForestModels.definition(kind, variant)
-			check(repeat.crown.surface_get_arrays(0)[Mesh.ARRAY_VERTEX] == def.crown.surface_get_arrays(0)[Mesh.ARRAY_VERTEX], "Модели должны быть воспроизводимыми")
+			for part in ["trunk", "crown"]:
+				if def.has(part):
+					check(repeat[part].surface_get_arrays(0)[Mesh.ARRAY_VERTEX] == def[part].surface_get_arrays(0)[Mesh.ARRAY_VERTEX], "Модели должны быть воспроизводимыми")
 			print("tree kind=%d variant=%d triangles=%d" % [kind, variant, triangles])
+	print("Total triangles LOD0/1/2: ", total)
+	print("Stored geometry arrays: ", stored_bytes, " bytes")
+	if baseline != null:
+		print("Baseline triangles LOD0/1/2: ", previous_total)
+		print("Baseline stored geometry arrays: ", previous_bytes, " bytes")
+		check(stored_bytes < previous_bytes, "Хранимые массивы геометрии занимают меньше места")
+		check(total.x <= previous_total.x and total.y <= previous_total.y, "Бюджет ближней и средней геометрии не увеличился")
 	print("tree_models_test: %d ошибок" % fails)
 	if DisplayServer.get_name() == "headless" or fails > 0:
 		quit(1 if fails else 0)
@@ -121,3 +148,33 @@ func run() -> void:
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png("res://tools/control/runs/trees65-detail.png")
 	quit()
+
+
+func _cost(definition: Dictionary) -> Vector3i:
+	var cost := Vector3i.ZERO
+	for part in ["trunk", "crown"]:
+		if definition.has(part):
+			var levels: Array = ForestModels.lod_meshes(definition[part])
+			for level in 3:
+				cost[level] += levels[level].surface_get_arrays(0)[Mesh.ARRAY_INDEX].size() / 3
+	return cost
+
+
+## Размер исходных массивов, без текстур и накладных расходов драйвера.
+func _stored_bytes(definition: Dictionary) -> int:
+	var visited := {}
+	var bytes := 0
+	for part in ["trunk", "crown"]:
+		if not definition.has(part):
+			continue
+		var base: Mesh = definition[part]
+		var meshes := ForestModels.lod_meshes(base)
+		meshes.append(base)
+		for mesh: Mesh in meshes:
+			if visited.has(mesh.get_instance_id()):
+				continue
+			visited[mesh.get_instance_id()] = true
+			var arrays := mesh.surface_get_arrays(0)
+			for at in [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL, Mesh.ARRAY_COLOR, Mesh.ARRAY_TEX_UV, Mesh.ARRAY_INDEX]:
+				bytes += arrays[at].to_byte_array().size()
+	return bytes

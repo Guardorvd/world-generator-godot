@@ -190,3 +190,7 @@ veg_center={
 "type": "vec2",
 "value": Vector2(0, 0)
 }
+vegetation_clock={
+"type": "float",
+"value": 1.0
+}

@@ -180,6 +180,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override)
 	stream_coordinator.terrain_update = terrain_stream.update
 	stream_coordinator.vegetation_update = vegetation.update
+	stream_coordinator.vegetation_budgeted = vegetation.update_frame
 	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.
 	loaded.terrain_arrays = []
 	t = _mark("start_material_terrain_setup_ms", t)

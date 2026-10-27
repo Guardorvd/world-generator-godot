@@ -2,8 +2,8 @@ class_name VegetationLayer
 extends Node3D
 var settings: GameSettings = GameContext.scope.settings
 ## Неподвижные MultiMesh по чанкам, видам и силуэтам, Mesh LOD и точные AABB.
-## 6.6+: подлесок и лесная поверхность обновляются вместе с травой в фоне.
-## Главный поток передаёт один чанк за кадр.
+## Трава и подлесок готовятся одним снимком; деревья имеют независимую задачу и очередь передачи.
+## Главный поток передаёт одну группу силуэтов за кадр (до шести MultiMesh), а не целый чанк.
 ## С 8.4 чанки — Vector2i(cx, cy) в общих координатах: за краем стартовой области их объекты считает
 ## OuterLand.vegetation тем же кодом, что и на карте (трава и подлесок пока только на карте).
 
@@ -16,6 +16,8 @@ const Understory := preload("res://scripts/render/understory_models.gd")
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
+const StreamPolicy := preload("res://scripts/render/vegetation_stream_policy.gd")
+const Snapshots := preload("res://scripts/render/vegetation_snapshots.gd")
 const UNDERSTORY_MAX := 2048 # на форму мелкого подлеска, только в радиусе травы
 ## С 9.8+ крупный подлесок (кусты, подрост, молодые деревья, валежник, сухостой, камни) виден дальше травы:
 ## с 9.4 он гуще и на границе GRASS_R (52 м) вырастал прямо перед игроком. Мелкие растения — как прежде.
@@ -70,6 +72,18 @@ var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
 var _task := -1
+var _tree_task := -1
+var stream := StreamPolicy.new()
+var snapshots := Snapshots.new()
+var _fill_lead := Vector2.ZERO # неизменен, пока задача деталей работает
+var _job_lead := Vector2.ZERO
+var _detail_epoch := 0
+var _detail_seconds := 0.0
+var _detail_started_clock := 1.0
+var _detail_frames := {}
+var _retired: Array = []
+var _queued := {}
+var _tree_target := Vector2.INF
 var _pending: Array = [] # готовые чанки, ближайшие в конце
 var _built: Array = []   # пишет задача, читаем после wait_for_task_completion
 var _loaded := {}       # включая пустые чанки
@@ -92,7 +106,8 @@ var bumps := PackedFloat32Array()      # их кочки под колёсом �
 var _bumps_next := PackedFloat32Array()
 var _fill_at := Vector2.ZERO # центр последней раскладки травы и подлеска, м (фоновая задача)
 var draw_level := -1
-var grass_at := Vector2.INF # центр показанной раскладки травы, м (check.gd: насколько она отстаёт)
+var grass_at := Vector2.INF # начало принятой капсулы деталей, м
+var grass_lead := Vector2.ZERO # упреждающий отрезок принятого снимка (не текущей фоновой задачи)
 var fill_capped := 0        # сколько раз раскладка упёрлась в буфер (check.gd)
 var _grass_mat: ShaderMaterial
 var tree_r := GameConfig.TREE_R      # деревья, м
@@ -112,23 +127,29 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var def: Dictionary = defs[kind]
 		var entry := {leaves = def.get("leaves", []), box = AABB()}
 		var first := true
+		var wind: Array = WIND.get(kind % ForestModels.MODEL_STRIDE, CALM)
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
 				continue
 			entry[part] = def[part]
-			var box: AABB = def[part].get_aabb()
-			entry.box = box if first else entry.box.merge(box)
-			first = false
+			for level_mesh: Mesh in ForestModels.lod_meshes(def[part]):
+				var box := level_mesh.get_aabb()
+				entry.box = box if first else entry.box.merge(box)
+				first = false
 			var shader := TRUNK_SHADER if part == "trunk" else (CUTOUT_SHADER if def.get("cutout", false) else SHADER)
-			var mat := _wind_mat(shader, WIND.get(kind % ForestModels.MODEL_STRIDE, CALM), part == "crown")
+			var mat := _wind_mat(shader, wind, part == "crown")
 			if def.has(part + "_texture"):
 				mat.set_shader_parameter("albedo_tex", def[part + "_texture"])
 			if part == "trunk":
 				mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
 				mat.set_shader_parameter("albedo_color", def.bark)
+			if kind % ForestModels.MODEL_STRIDE == Biomes.T_REED:
+				mat.set_shader_parameter("detail_full", 18.0)
+				mat.set_shader_parameter("detail_far", 65.0)
+				mat.set_shader_parameter("detail_keep", 0.6)
 			# 9.9+: у дерева с отдельными уровнями (ForestModels, meta "levels") своя копия материала на уровень.
 			var mats: Array[ShaderMaterial] = [mat]
-			var levels: Array = def[part].get_meta("levels", [])
+			var levels: Array = ForestModels.lod_meshes(def[part])
 			if levels.size() > 1:
 				mats.clear()
 				for level in levels.size():
@@ -136,6 +157,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 					copy.set_shader_parameter("lod_level", level)
 					mats.append(copy)
 			entry[part + "_mats"] = mats
+		# Ветер и более широкие дальние объёмы тоже должны попадать в границы отсечения.
+		entry.box = entry.box.grow(wind[0] * 1.2 + wind[1] * 2.0)
 		# Высота у кроны и ствола общая, иначе листва отрывается от веток.
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in entry.get(part + "_mats", []):
@@ -144,6 +167,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
 	grass_mat.set_shader_parameter("grass_variation", true)
+	grass_mat.set_shader_parameter("stream_instances", true)
 	_set_radii(settings.draw)
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
@@ -153,27 +177,42 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	meshes.append_array(Floor.meshes())
 	for mesh in meshes:
 		var kind := understory.size() - Floor.FIRST
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or understory.size() in [Understory.YOUNG, Understory.YOUNG_PINE]
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or understory.size() in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]
 		# Мох, подстилка, валежник и камни неподвижны.
-		var still := kind >= 0 or understory.size() == Understory.MOSS
-		var mat := _wind_mat(SHADER, CALM if still else PLANT_WIND, true)
+		var still := kind >= 0 or understory.size() in [Understory.MOSS, Understory.MUSHROOM]
+		var wind := CALM if still else _plant_wind(understory.size())
+		var mat := _wind_mat(SHADER, wind, true)
+		mat.set_shader_parameter("stream_instances", true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
+		var blades := understory.size() in [Understory.GRASS, Understory.HIGH_GRASS]
+		mat.set_shader_parameter("grass_variation", blades)
+		if not still and not blades:
+			var woody := Placement.priority(understory.size()) == 1
+			mat.set_shader_parameter("detail_full", 35.0 if woody else 12.0)
+			mat.set_shader_parameter("detail_far", 120.0 if woody else 45.0)
+			mat.set_shader_parameter("detail_keep", 0.5 if woody else 0.6)
 		var far := Placement.priority(understory.size()) < 2
 		var cap := _understory_cap(far)
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
-		node.visibility_range_end = under_r if far else grass_r
-		node.visibility_range_end_margin = 8.0
+		if shadows and kind < 0:
+			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+		# Один MultiMesh покрывает всю раскладку: её центр не является расстоянием до каждого растения.
+		# Дальность и растворение задаёт общий шейдер, AABB оставляем для отсечения по фрустуму.
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb()})
+			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb(),
+			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0)})
 	_grass_mat = grass_mat
 	_apply_fade()
 
 
-## На сколько метров раньше радиуса r гаснет трава или подлесок и на сколько ближе раскладка кладёт пучки
-## с поредением: столько игрок может проехать до того, как новая раскладка покажется (8 м — шаг раскладки,
-## остальное — её время: на радиусе 300 м до 1,5–2 с, замер 9.9+ — отставание до 32 м на 11 м/с). Сверяется в check.gd (grass_lag).
+## Базовый невидимый край раскладки. Дальности не «дышат» от скорости:
+## скоростной запас готовится отдельной капсулой StreamPolicy, этот край страхует её границу.
 static func _ahead(r: float) -> float:
 	return clampf(r * 0.15, 12.0, 45.0)
+
+
+func coverage_lag(point: Vector2) -> float:
+	return INF if grass_at == Vector2.INF else StreamPolicy.distance_to_coverage(point, grass_at, grass_lead)
 
 
 ## Полдиагонали чанка растительности, м
@@ -187,6 +226,9 @@ func _apply_fade() -> void:
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):
 				_fade(mat, tree_r, 0.0)
+	for entry: Dictionary in veg.values():
+		for node: MultiMeshInstance3D in entry.nodes:
+			_fade(node.material_override, tree_r, 0.0)
 	_fade(_grass_mat, grass_r, _ahead(grass_r))
 	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
@@ -241,6 +283,7 @@ func set_draw(level: int) -> bool:
 	if clampi(level, 0, GameSettings.DRAW_LEVELS.size() - 1) == draw_level:
 		return false
 	_finish()
+	snapshots.reset()
 	_set_radii(level)
 	grass.visible_instance_count = 0
 	grass.instance_count = _grass_cap()
@@ -252,7 +295,6 @@ func set_draw(level: int) -> bool:
 		entry.mm.instance_count = entry.cap
 		entry.buf = _buffer(entry.cap, STRIDE)
 		entry.count = 0
-		entry.node.visibility_range_end = under_r if entry.far else grass_r
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
 			if node.get_meta("level", 2) == 2:
@@ -273,6 +315,16 @@ static func _wind_mat(shader: Shader, wind: Array, leaves: bool) -> ShaderMateri
 	mat.set_shader_parameter("ao_low", wind[3])
 	mat.set_shader_parameter("translucency", wind[4] if leaves else 0.0)
 	return mat
+
+
+static func _plant_wind(kind: int) -> Array:
+	if kind in [Understory.GRASS, Understory.HIGH_GRASS]:
+		return [0.13, 0.018, 1.4, 0.85, 0.25]
+	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
+		return [0.08, 0.02, 0.85, 0.8, 0.25]
+	if kind in [Understory.PINE, Understory.YOUNG_PINE]:
+		return [0.045, 0.006, 0.7, 0.8, 0.1]
+	return [0.06, 0.012, 1.15, 0.85, 0.22]
 
 
 static func _buffer(cap: int, stride: int) -> PackedFloat32Array:
@@ -306,66 +358,93 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 
 ## true — в кадре была передача на GPU; дальний рельеф уступает этот кадр.
 ## force используется при появлении/переносе: дождаться фона и показать только нужное место.
-func update(px: float, pz: float, force: bool) -> bool:
+func update_frame(px: float, pz: float, force: bool, allow_upload: bool) -> bool:
+	return update(px, pz, force, -1.0, allow_upload)
+
+
+func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := true) -> bool:
 	var p := Vector2(px, pz)
+	var dt := delta if delta >= 0.0 else get_process_delta_time()
+	stream.sample(p, maxf(dt, 0.000001), force)
+	RenderingServer.global_shader_parameter_set("veg_center", p)
+	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
+	_clean_retired()
 	if world.outer != null:
 		_outer_regions = world.outer.get_ledger().get("regions", {})
-	RenderingServer.global_shader_parameter_set("veg_center", p)
 	if force:
 		_finish()
-		_pending.clear()
+		_clear_pending()
 		_built.clear()
-	elif _task != -1:
-		if WorkerThreadPool.is_task_completed(_task):
-			_finish()
-			if p.distance_to(last_fill) > load_radius:
-				_built.clear()
-				_pending.clear()
-				last_fill = Vector2.INF
-				return false
-			_pending.append_array(_built)
-			_built = []
-			_apply_grass()
-			return true
-		# С 9.8+ раскладка травы и подлеска дольше: готовые чанки деревьев не ждут её конца.
-		if not _pending.is_empty():
-			_apply_chunk(_pending.pop_back())
-			return true
-		return false
-	# Проверяем положение и до передачи очереди: старые результаты переноса не показываем.
-	if force or last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK:
-		last_trees = p
+		snapshots.reset()
+		_fill_lead = Vector2.ZERO
 		_drop(p)
-		_pending = _pending.filter(func(b: Dictionary) -> bool: return _distance(b.chunk, p) <= load_radius)
-	if not force and not _pending.is_empty():
-		if p.distance_to(last_fill) >= 8.0:
-			last_fill = p
-			var none: Array[Vector2i] = []
-			_task = WorkerThreadPool.add_task(_fill.bind(px, pz, none), true, "Трава")
-			return false
-		_apply_chunk(_pending.pop_back())
-		return true
-	if not force and last_fill != Vector2.INF and p.distance_to(last_fill) < 8.0:
-		return false
-	# с 9.0 фон строит сначала чанки по ходу движения (направление — от прошлой раскладки)
-	var ahead := p if force or last_fill == Vector2.INF else p + (p - last_fill).normalized() * load_radius * 0.5
-	last_fill = p
-	var missing := _wanted(p, ahead)
-	if force:
-		_fill(px, pz, missing)
+		last_trees = p
+		last_fill = p
+		_fill(px, pz, _wanted(p))
 		for built: Dictionary in _built:
 			_apply_chunk(built)
 		_built.clear()
-		_apply_grass()
-	else:
-		_task = WorkerThreadPool.add_task(_fill.bind(px, pz, missing), true, "Растительность")
-	return force
-
+		_apply_grass(true)
+		return true
+	var uploaded := false
+	if _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
+		WorkerThreadPool.wait_for_task_completion(_tree_task)
+		_tree_task = -1
+		last_trees = Vector2.INF
+		for built: Dictionary in _built:
+			if _distance(built.chunk, p) <= load_radius + StreamPolicy.MAX_LEAD:
+				_pending.append(built)
+			else:
+				_queued.erase(built.chunk)
+		_built = []
+	if allow_upload and _task != -1 and WorkerThreadPool.is_task_completed(_task):
+		WorkerThreadPool.wait_for_task_completion(_task)
+		_task = -1
+		stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
+		if _detail_epoch == _epoch and p.distance_to(_fill_at) < maxf(grass_r, under_r) + StreamPolicy.MAX_LEAD:
+			_apply_grass()
+			uploaded = true
+		else:
+			last_fill = Vector2.INF
+			_detail_frames.clear()
+	var lead := stream.lead()
+	if last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK:
+		last_trees = p
+		_tree_target = p + lead
+		_drop(p)
+		var kept: Array = []
+		for built: Dictionary in _pending:
+			if _distance(built.chunk, p) <= load_radius + lead.length():
+				kept.append(built)
+			else:
+				_discard_partial(built)
+				_queued.erase(built.chunk)
+		_pending = kept
+		_pending.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return _distance(a.chunk, p) > _distance(b.chunk, p))
+		if _tree_task == -1:
+			var missing := _wanted(p, p + lead)
+			if not missing.is_empty():
+				for chunk in missing:
+					_queued[chunk] = true
+				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
+	if _task == -1 and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
+		last_fill = p
+		_job_lead = lead
+		_reserve_details(lead)
+		_detail_started_clock = stream.clock
+		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock), true, "Трава и подлесок")
+	if allow_upload and not uploaded and not _pending.is_empty():
+		_upload_next()
+		uploaded = true
+	return uploaded
 
 func _finish() -> void:
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
+	if _tree_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_tree_task)
+		_tree_task = -1
 
 
 func _exit_tree() -> void:
@@ -385,10 +464,10 @@ func _on_map(chunk: Vector2i) -> bool:
 func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
 	var side := world.CS * TILE
-	var x0 := floori((p.x - load_radius) / side)
-	var x1 := floori((p.x + load_radius) / side)
-	var y0 := floori((p.y - load_radius) / side)
-	var y1 := floori((p.y + load_radius) / side)
+	var x0 := floori((minf(p.x, ahead.x) - load_radius) / side)
+	var x1 := floori((maxf(p.x, ahead.x) + load_radius) / side)
+	var y0 := floori((minf(p.y, ahead.y) - load_radius) / side)
+	var y1 := floori((maxf(p.y, ahead.y) + load_radius) / side)
 	if world.outer == null: # без местности за краем — только чанки карты
 		x0 = maxi(0, x0)
 		y0 = maxi(0, y0)
@@ -397,7 +476,7 @@ func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 	for cy in range(y0, y1 + 1):
 		for cx in range(x0, x1 + 1):
 			var c := Vector2i(cx, cy)
-			if not _loaded.has(c) and _distance(c, p) <= load_radius:
+			if not _loaded.has(c) and not _queued.has(c) and minf(_distance(c, p), _distance(c, ahead)) <= load_radius:
 				out.append(c)
 	# Фон строит список от дальних к ближним; главный поток берёт с конца.
 	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
@@ -407,26 +486,53 @@ func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 
 func _drop(p: Vector2) -> void:
 	for key: Vector3i in veg.keys():
-		if _distance(Vector2i(key.x, key.y), p) > drop_radius:
+		if _distance(Vector2i(key.x, key.y), p) > drop_radius + stream.lead().length():
 			for node: MultiMeshInstance3D in veg[key].nodes:
 				node.visible = false
 				node.queue_free()
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
-		if _distance(chunk, p) > drop_radius:
+		if _distance(chunk, p) > drop_radius + stream.lead().length():
 			_loaded.erase(chunk)
 			if world.outer != null:
 				world.outer.veg.erase(chunk)
 
 
 func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
+	_fill_trees(missing, _epoch)
+	_fill_details(px, pz, Vector2.ZERO, _epoch, stream.clock, true)
+
+
+func _fill_trees(missing: Array[Vector2i], epoch: int) -> void:
 	_built = []
-	var epoch := _epoch
 	for chunk in missing:
 		var built := _build_chunk(chunk) if _on_map(chunk) else _build_outer(chunk)
 		built.epoch = epoch
 		_built.append(built)
+
+
+func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false) -> void:
+	var started := Time.get_ticks_usec()
+	_fill_lead = lead
+	_detail_epoch = epoch
 	_fill_grass(px, pz)
+	_detail_frames = {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
+	for kind in understory.size():
+		var entry: Dictionary = understory[kind]
+		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
+		_detail_frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate)
+	_detail_seconds = (Time.get_ticks_usec() - started) / 1000000.0
+
+
+func _reserve_details(lead: Vector2) -> void:
+	var cap := ceili(_grass_cap() * StreamPolicy.reserve_factor(grass_r, lead))
+	if grass_buf.size() < cap * STRIDE:
+		grass_buf.resize(cap * STRIDE)
+	for entry: Dictionary in understory:
+		cap = ceili(_understory_cap(entry.far) * StreamPolicy.reserve_factor(under_r if entry.far else grass_r, lead))
+		if entry.cap < cap:
+			entry.cap = cap
+			entry.buf.resize(cap * STRIDE)
 
 
 ## Чанк за краем стартовой области (в фоновой задаче): объекты OuterLand.vegetation, земля под ними — той же
@@ -607,24 +713,59 @@ func refresh(rect: Rect2i) -> void:
 		world.outer.veg.erase(chunk)
 		for key: Vector3i in veg.keys():
 			if key.x == chunk.x and key.y == chunk.y:
-				for node: MultiMeshInstance3D in veg[key].nodes:
-					node.visible = false
-					node.queue_free()
+				_retire_nodes(veg[key].nodes)
 				veg.erase(key)
 	for x in range(floori(float(rect.position.x) / side), floori(float(rect.end.x - 1) / side) + 1):
 		for y in range(floori(float(rect.position.y) / side), floori(float(rect.end.y - 1) / side) + 1):
 			if not _on_map(Vector2i(x, y)):
 				_dirty[Vector2i(x, y)] = _epoch
 	last_fill = Vector2.INF
+	last_trees = Vector2.INF
 
 
-func _apply_chunk(built: Dictionary) -> void:
-	var chunk: Vector2i = built.chunk
-	if _loaded.has(chunk) or built.get("epoch", _epoch) < _dirty.get(chunk, -1):
+func _upload_next() -> void:
+	var built: Dictionary = _pending.back()
+	if _apply_chunk(built, 1):
+		_pending.pop_back()
+		_queued.erase(built.chunk)
+
+
+func _clear_pending() -> void:
+	for built: Dictionary in _pending:
+		_discard_partial(built)
+	_pending.clear()
+	_queued.clear()
+
+
+## Частично переданный чанк нельзя оставить помеченным готовым после переноса или отмены.
+func _discard_partial(built: Dictionary) -> void:
+	var cursor: int = built.get("cursor", 0)
+	if cursor == 0:
 		return
+	var chunk: Vector2i = built.chunk
+	for i in cursor:
+		var key := Vector3i(chunk.x, chunk.y, built.entries[i].kind)
+		if veg.has(key):
+			_retire_nodes(veg[key].nodes)
+			veg.erase(key)
+	_loaded.erase(chunk)
+
+
+## limit = 0 — полный синхронный перенос при появлении игрока; иначе ограниченная порция.
+func _apply_chunk(built: Dictionary, limit := 0) -> bool:
+	var chunk: Vector2i = built.chunk
+	if built.get("epoch", _epoch) < _dirty.get(chunk, -1):
+		_discard_partial(built)
+		last_trees = Vector2.INF
+		return true
+	if _loaded.has(chunk) and not built.has("cursor"):
+		return true
 	if built.has("outer"):
 		world.outer.veg[chunk] = built.outer
-	for entry: Dictionary in built.entries:
+	var first: int = built.get("cursor", 0)
+	var end: int = built.entries.size() if limit == 0 else mini(first + limit, built.entries.size())
+	for i in range(first, end):
+		var entry: Dictionary = built.entries[i]
 		var kind: int = entry.kind
 		var def: Dictionary = _defs[kind]
 		entry.nodes = []
@@ -632,9 +773,14 @@ func _apply_chunk(built: Dictionary) -> void:
 			if not def.has(part):
 				continue
 			var mesh: Mesh = def[part]
-			var levels: Array = mesh.get_meta("levels", [mesh])
+			var levels: Array = ForestModels.lod_meshes(mesh)
 			for level in levels.size():
-				var node := _multimesh(levels[level], def[part + "_mats"][level], entry.count, part == "crown")
+				# Время проявления принадлежит группе, а не общему материалу всех чанков.
+				var mat: ShaderMaterial = def[part + "_mats"][level].duplicate()
+				mat.set_shader_parameter("stream_birth", stream.clock if limit > 0 else 0.0)
+				var node := _multimesh(levels[level], mat, entry.count, part == "crown")
+				if part == "crown":
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
 				mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf
 				mm.custom_aabb = entry.bounds
@@ -653,20 +799,65 @@ func _apply_chunk(built: Dictionary) -> void:
 				entry.nodes.append(node)
 		veg[Vector3i(chunk.x, chunk.y, kind)] = entry
 	_loaded[chunk] = true
+	built.cursor = end
+	return end == built.entries.size()
 
 
-func _apply_grass() -> void:
+func _apply_grass(immediate := false) -> void:
 	grass_at = _fill_at
+	grass_lead = _fill_lead
 	obstacles = _obstacles_next
 	bumps = _bumps_next
 	obstacles_version += 1
-	grass.buffer = grass_buf
-	grass.custom_aabb = _grass_bounds
-	grass.visible_instance_count = _grass_n
-	for entry: Dictionary in understory:
-		entry.mm.buffer = entry.buf
-		entry.mm.custom_aabb = AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
-		entry.mm.visible_instance_count = entry.count
+	_present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
+	for kind in understory.size():
+		var entry: Dictionary = understory[kind]
+		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
+		_present_frame(kind, entry.mm, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, immediate)
+	_detail_frames.clear()
+
+
+func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
+	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate)
+	var data: PackedFloat32Array = frame.buffer
+	var capacity := 64
+	while capacity < frame.count:
+		capacity *= 2
+	data.resize(maxi(capacity, mm.instance_count) * STRIDE)
+	_upload_instances(mm, data, frame.count)
+	mm.custom_aabb = frame.bounds
+
+
+func _retire_nodes(nodes: Array) -> void:
+	for node: MultiMeshInstance3D in nodes:
+		var stamp: float = node.material_override.get_shader_parameter("stream_birth")
+		var alpha := Snapshots.opacity(stamp, stream.clock)
+		node.material_override.set_shader_parameter("stream_birth", -(stream.clock - (1.0 - alpha) * StreamPolicy.FADE_SECONDS))
+	_retired.append({until = stream.clock + StreamPolicy.FADE_SECONDS, nodes = nodes})
+
+
+func _clean_retired() -> void:
+	for i in range(_retired.size() - 1, -1, -1):
+		if stream.clock >= _retired[i].until:
+			for node: Node in _retired[i].nodes:
+				if is_instance_valid(node):
+					node.queue_free()
+			_retired.remove_at(i)
+
+
+## CPU сохраняет максимальную ёмкость для фонового заполнения; GPU получает компактную порцию.
+## Ступени и гистерезис не дают перераспределять память на каждой травинке.
+static func _upload_instances(mm: MultiMesh, buffer: PackedFloat32Array, count: int) -> void:
+	var capacity := 64
+	while capacity < count:
+		capacity *= 2
+	capacity = mini(capacity, buffer.size() / STRIDE)
+	if mm.instance_count < count or mm.instance_count > maxi(64, count * 4):
+		mm.visible_instance_count = 0
+		mm.instance_count = capacity
+	if count > 0:
+		mm.buffer = buffer if mm.instance_count * STRIDE == buffer.size() else buffer.slice(0, mm.instance_count * STRIDE)
+	mm.visible_instance_count = count
 
 
 static func _put_transform(buf: PackedFloat32Array, o: int, xf: Transform3D) -> void:
@@ -697,8 +888,10 @@ func _fill_grass(px: float, pz: float) -> void:
 	var w := world
 	var rT := grass_r / TILE
 	var rF := maxf(grass_r, under_r) / TILE
-	var tx := px / TILE
-	var tz := pz / TILE
+	var origin := Vector2(px, pz)
+	var tip := origin + _fill_lead
+	var scan_low := origin.min(tip) / TILE - Vector2.ONE * rF
+	var scan_high := origin.max(tip) / TILE + Vector2.ONE * rF
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
@@ -708,7 +901,7 @@ func _fill_grass(px: float, pz: float) -> void:
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
 	_bumps_next = PackedFloat32Array()
-	placement.prepare(px, pz, rF * TILE + 12.0)
+	placement.prepare(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, rF * TILE + _fill_lead.length() * 0.5 + 12.0)
 	_understory_sites.clear()
 	# Препятствия на полотне — первыми: обочина, подлесок и трава обходят их, а не наоборот.
 	_fill_road(px, pz)
@@ -717,13 +910,14 @@ func _fill_grass(px: float, pz: float) -> void:
 		entry.low = Vector3.INF
 		entry.high = -Vector3.INF
 	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
-	for j in range(maxi(0, floori(tz - rF)), mini(w.H - 1, floori(tz + rF)) + 1):
-		for i in range(maxi(0, floori(tx - rF)), mini(w.W - 1, floori(tx + rF)) + 1):
+	for j in range(maxi(0, floori(scan_low.y)), mini(w.H - 1, ceili(scan_high.y)) + 1):
+		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
 			if not bd.has("grass") or w.river[k] != 0:
 				continue
-			var d2 := (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2
+			var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, origin, _fill_lead) / TILE
+			var d2 := d * d
 			if d2 > rF * rF:
 				continue
 			if d2 > rT * rT:
@@ -743,11 +937,12 @@ func _fill_grass(px: float, pz: float) -> void:
 	# журнала (_outer_regions, его подменяют целиком в главном потоке), куски OuterLand не читаются
 	var regions := _outer_regions
 	if not regions.is_empty():
-		for j in range(floori(tz - rF), floori(tz + rF) + 1):
-			for i in range(floori(tx - rF), floori(tx + rF) + 1):
+		for j in range(floori(scan_low.y), ceili(scan_high.y) + 1):
+			for i in range(floori(scan_low.x), ceili(scan_high.x) + 1):
 				if i >= 0 and j >= 0 and i < w.W and j < w.H:
 					continue
-				var d2 := (i + 0.5 - tx) ** 2 + (j + 0.5 - tz) ** 2
+				var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, origin, _fill_lead) / TILE
+				var d2 := d * d
 				if d2 > rF * rF:
 					continue
 				var cell := _region_cell(regions, i, j)
@@ -927,7 +1122,7 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
 		var far: bool = understory[kind].far
-		var d := Vector2(x - px, z - pz).length()
+		var d := StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead)
 		if d > (under_r if far else grass_r):
 			continue
 		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
@@ -945,13 +1140,13 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 func _fill_road(px: float, pz: float) -> void:
 	if road == null:
 		return
-	var pairs := road.around(px, pz, maxf(grass_r, under_r))
+	var pairs := road.around(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, maxf(grass_r, under_r) + _fill_lead.length() * 0.5)
 	for p in range(0, pairs.size(), 2):
 		var o := road.pick(heights, _forest_surface, pairs[p], pairs[p + 1])
 		if o.is_empty():
 			continue
 		var kind: int = Floor.FIRST + [Floor.BRANCH, Floor.STONES, Floor.MOSS_LOG if o.moss else Floor.LOG, Floor.BOULDER][o.kind]
-		if Vector2(o.x - px, o.z - pz).length() > (under_r if understory[kind].far else grass_r):
+		if StreamPolicy.distance_to_coverage(Vector2(o.x, o.z), Vector2(px, pz), _fill_lead) > (under_r if understory[kind].far else grass_r):
 			continue
 		_put_understory(kind, o.x, o.z, o.rot, o.scale, 1.0, -1, 0.0, true)
 
@@ -991,12 +1186,15 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		entry.buf[offset + 12 + c] = tint
 	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
 	entry.buf[offset + 16] = rank
-	entry.low = entry.low.min(box.position)
-	entry.high = entry.high.max(box.end)
+	entry.buf[offset + 17] = WGRandom.hash2(floori(x * 13), floori(z * 11), 73)
+	entry.buf[offset + 18] = WGRandom.hash2(floori(x * 7), floori(z * 17), 79)
+	var render_box := box.grow(entry.margin * scale)
+	entry.low = entry.low.min(render_box.position)
+	entry.high = entry.high.max(render_box.end)
 	entry.count += 1
 	if Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))
-	if Vector2(x, z).distance_squared_to(_fill_at) > OBSTACLE_R * OBSTACLE_R:
+	if StreamPolicy.distance_to_coverage(Vector2(x, z), _fill_at, _fill_lead) > OBSTACLE_R:
 		return
 	if floor_kind == Floor.LOG or floor_kind == Floor.MOSS_LOG:
 		# бревно — капсула вдоль ствола (меш: от -2,2 до 2,1 м по X, толщина 0,23 м), верх ~0,45 м
@@ -1036,14 +1234,15 @@ func _filter_grass() -> void:
 func _fill_tree_roots(px: float, pz: float) -> void:
 	var reach := GameConfig.GRASS_R + _ahead(grass_r) # корни гаснут к GRASS_R от игрока, а не от раскладки
 	var r := reach / TILE
-	for cy in range(maxi(0, floori((pz / TILE - r) / world.CS)), mini(world.CH, ceili((pz / TILE + r) / world.CS))):
-		for cx in range(maxi(0, floori((px / TILE - r) / world.CS)), mini(world.CW, ceili((px / TILE + r) / world.CS))):
+	var tip := Vector2(px, pz) + _fill_lead
+	for cy in range(maxi(0, floori((minf(pz, tip.y) / TILE - r) / world.CS)), mini(world.CH, ceili((maxf(pz, tip.y) / TILE + r) / world.CS))):
+		for cx in range(maxi(0, floori((minf(px, tip.x) / TILE - r) / world.CS)), mini(world.CW, ceili((maxf(px, tip.x) / TILE + r) / world.CS))):
 			for o in world.chunks[cy * world.CW + cx]:
 				if not Biomes.is_tree(world.obj_k[o]) or world.obj_s[o] < 0.85:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
-				if Vector2(x - px, z - pz).length_squared() > reach * reach:
+				if StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead) > reach:
 					continue
 				var k := floori(z / TILE) * world.W + floori(x / TILE)
 				if world.slope[k] > 0.9:

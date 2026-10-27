@@ -113,9 +113,11 @@ static func boulder(size: Vector3, seed: int, moss: float, tone := 1.0) -> Array
 static func reeds(seed: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	st.set_uv2(Vector2.ZERO)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed
 	for n in 12:
+		st.set_uv2(Vector2(fposmod(n * 0.754878, 1.0), 0))
 		var a := rng.randf() * TAU
 		var base := Vector3(cos(a), 0, sin(a)) * rng.randf_range(0.0, 0.32)
 		var lean := Vector3(cos(a), 0, sin(a)) * rng.randf_range(0.1, 0.35)
@@ -133,6 +135,7 @@ static func reeds(seed: int) -> ArrayMesh:
 			st.set_normal(normal)
 			st.add_vertex(v[0])
 	# Початки: тонкий стебель и бурая головка — без отдельного материала, цветом вершин
+	st.set_uv2(Vector2.ZERO)
 	for n in 3:
 		var a := n * 2.1 + rng.randf()
 		var foot := Vector3(cos(a), 0, sin(a)) * rng.randf_range(0.05, 0.25)
@@ -157,10 +160,10 @@ static func reeds(seed: int) -> ArrayMesh:
 static func grass_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	st.set_normal(Vector3.UP)
 	for k in 5:
 		var a := k * 2.399
 		var radial := Vector3(cos(a), 0, sin(a))
+		st.set_normal((Vector3.UP + radial * 0.25).normalized())
 		var side := Vector3(-radial.z, 0, radial.x)
 		var foot := radial * (0.025 + 0.018 * (k % 3))
 		var h: float = [0.40, 0.31, 0.47, 0.35, 0.42][k]

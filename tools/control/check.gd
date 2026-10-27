@@ -351,7 +351,7 @@ func _process(delta: float) -> bool:
 				game.outer.update(p.x, p.z, not uploaded)
 			veg_gap.append(_veg_gap(game.vegetation, Vector2(p.x, p.z)))
 			if game.vegetation.grass_at != Vector2.INF:
-				grass_lag.append(Vector2(p.x, p.z).distance_to(game.vegetation.grass_at))
+				grass_lag.append(game.vegetation.coverage_lag(Vector2(p.x, p.z)))
 			grass_allowed = VegetationLayer._ahead(game.vegetation.grass_r)
 			grass_capped = game.vegetation.fill_capped
 			_count(road_ms)
