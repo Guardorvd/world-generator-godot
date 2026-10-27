@@ -48,7 +48,7 @@ func run() -> void:
 	check(h.water_level[127 * w.W + 129] == -INF and h.depth_at(519.0, 510.0) > 0.0, "Тест должен воспроизводить затопленный край соседней клетки")
 	veg._put_understory(Plants.MOSS, 519.0, 510.0, 0.0, 0.7)
 	check(veg.understory[Plants.MOSS].count == 0, "На затопленном краю берега не должен появляться мох")
-	var tree_chunk := (128 / w.CS) * w.CW + 128 / w.CS
+	var tree_chunk := Vector2i(128 / w.CS, 128 / w.CS)
 	w.obj_x[0] = 129.75
 	w.obj_y[0] = 127.5
 	check(veg._build_chunk(tree_chunk).entries.is_empty(), "Дерево на затопленном краю берега не должно попадать в буферы")
@@ -87,8 +87,8 @@ func run() -> void:
 	# Трава тоже должна учитывать крупные детали, даже если её заполнили раньше.
 	veg._grass_n = 3
 	VegetationLayer._put_xform(veg.grass_buf, 0, 490.0, h.ground_at(490.0, 490.0), 490.0, 0.0, 1.0, 1.0)
-	VegetationLayer._put_xform(veg.grass_buf, 16, 480.0, h.ground_at(480.0, 480.0), 480.0, 0.0, 1.0, 1.0)
-	VegetationLayer._put_xform(veg.grass_buf, 32, 514.0, h.ground_at(514.0, 514.0), 514.0, 0.0, 1.0, 1.0)
+	VegetationLayer._put_xform(veg.grass_buf, VegetationLayer.STRIDE, 480.0, h.ground_at(480.0, 480.0), 480.0, 0.0, 1.0, 1.0)
+	VegetationLayer._put_xform(veg.grass_buf, 2 * VegetationLayer.STRIDE, 514.0, h.ground_at(514.0, 514.0), 514.0, 0.0, 1.0, 1.0)
 	veg._filter_grass()
 	check(veg._grass_n == 1 and veg.grass_buf[3] == 480.0, "Трава внутри бревна и существующего куста должна удаляться с сохранением свободной травы")
 	var ridge := Ridge.new(w, false)

@@ -152,23 +152,23 @@ static func reeds(seed: int) -> ArrayMesh:
 	return st.commit()
 
 
-## Пучок травы: пять травинок веером, нормали вверх, чтобы трава освещалась как земля под ней
+## Один общий пучок: пять разных острых листьев, которые расходятся из компактного основания.
+## UV.x — номер листа для небольших отличий между экземплярами в шейдере.
 static func grass_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	st.set_normal(Vector3.UP)
 	for k in 5:
-		var a := (k / 5.0) * PI
-		var cx := cos(a) * 0.05
-		var cz := sin(a) * 0.05
-		var ox := cos(a * 3.1) * 0.16
-		var oz := sin(a * 2.3) * 0.16
-		var h := 0.32 + (k % 3) * 0.08
-		var tx := ox + cos(a + 1.0) * 0.1
-		var tz := oz + sin(a + 1.0) * 0.1
-		# 9.4: у земли темнее, к кончику светлее — пучок мягко вырастает из почвы, без тёмных пиков
-		for v: Vector3 in [Vector3(ox - cx, 0, oz - cz), Vector3(ox + cx, 0, oz + cz), Vector3(tx, h, tz)]:
-			var shade := 0.82 if v.y == 0.0 else 1.0
+		var a := k * 2.399
+		var radial := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-radial.z, 0, radial.x)
+		var foot := radial * (0.025 + 0.018 * (k % 3))
+		var h: float = [0.40, 0.31, 0.47, 0.35, 0.42][k]
+		var width: float = [0.042, 0.033, 0.038, 0.047, 0.031][k]
+		var tip: Vector3 = foot + radial * [0.14, 0.20, 0.09, 0.17, 0.12][k] + Vector3.UP * h
+		for v: Vector3 in [foot - side * width, foot + side * width, tip]:
+			var shade := 0.78 + 0.035 * k if v.y == 0.0 else 0.96 + 0.01 * k
 			st.set_color(Color(shade, shade, shade))
+			st.set_uv(Vector2(float(k) / 5.0, v.y / h))
 			st.add_vertex(v)
 	return st.commit()

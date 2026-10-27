@@ -433,8 +433,12 @@ func _update_selection() -> void:
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
 	var latest := _latest_save(seed_text) if not seed_text.is_empty() else {data = {}}
+	if not seed_text.is_empty() and latest.data.is_empty() and _has_save(seed_text):
+		%WorldStatus.text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
 	%Start.text = "Продолжить путешествие" if not latest.data.is_empty() else "Начать путешествие"
 	_load_manual.disabled = seed_text.is_empty() or Saves.read_slot(seed_text, "manual").data.is_empty()
+	%RestartWorld.disabled = seed_text.is_empty()
+	%DeleteWorld.disabled = seed_text.is_empty()
 	if not latest.data.is_empty():
 		var d: Dictionary = latest.data
 		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s" % [
@@ -452,6 +456,52 @@ func _on_star(seed_text: String) -> void:
 	GameContext.scope.settings.save_settings()
 	if GameContext.scope.cache.enabled:
 		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
+	_show_seed_tab(_seed_tab)
+
+
+func _restart_world() -> void:
+	var seed_text := _chosen_seed()
+	if seed_text.is_empty():
+		return
+	_ask("Создать мир заново?", "Мир «%s» будет сгенерирован заново, путешествие начнётся сначала. Старые сохранения будут перенесены в архив." % seed_text, "Создать заново", true, _do_restart_world.bind(seed_text))
+
+
+func _do_restart_world(seed_text: String) -> void:
+	var err := Saves.archive_seed(seed_text)
+	if err == OK and GameContext.scope.cache.enabled:
+		err = GameContext.scope.cache.remove_seed(seed_text)
+	if err != OK:
+		_message("Не удалось пересоздать мир", error_string(err))
+		_show_seed_tab(_seed_tab)
+		return
+	_previews.erase(seed_text)
+	GameContext.scope.settings.remember_seed(seed_text)
+	GameContext.scope.settings.save_settings()
+	start_game(seed_text)
+
+
+func _delete_world() -> void:
+	var seed_text := _chosen_seed()
+	if seed_text.is_empty():
+		return
+	_ask("Удалить мир?", "Мир «%s» будет удалён из недавних и избранного вместе с текущими сохранениями и готовыми данными. Рекомендованные миры останутся в списке автора." % seed_text, "Удалить", true, _do_delete_world.bind(seed_text))
+
+
+func _do_delete_world(seed_text: String) -> void:
+	var err := Saves.delete_seed(seed_text)
+	if err == OK and GameContext.scope.cache.enabled:
+		err = GameContext.scope.cache.remove_seed(seed_text)
+	if err != OK:
+		_message("Не удалось удалить мир", error_string(err))
+		_show_seed_tab(_seed_tab)
+		return
+	GameContext.scope.settings.recent_seeds.erase(seed_text)
+	GameContext.scope.settings.favorite_seeds.erase(seed_text)
+	if GameContext.scope.settings.last_seed == seed_text:
+		GameContext.scope.settings.last_seed = ""
+	GameContext.scope.settings.save_settings()
+	_previews.erase(seed_text)
+	seed_edit.text = ""
 	_show_seed_tab(_seed_tab)
 
 
@@ -528,7 +578,7 @@ func _on_start() -> void:
 		seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
 	var latest := _latest_save(seed_text)
 	if latest.data.is_empty() and _has_save(seed_text):
-		_message("Не удалось загрузить прогресс", latest.error + " Файлы оставлены без изменений.")
+		_message("Не удалось загрузить прогресс", latest.error + " Используйте «Создать заново»: старые файлы будут сохранены в архиве.")
 		return
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
@@ -585,7 +635,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	if not _pending_save.is_empty() and not GameWorld.can_restore(_pending_save, loaded.world):
 		busy = false
 		_show("menu")
-		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Для нового путешествия выберите другое зерно.")
+		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Нажмите «Создать заново», чтобы пересоздать этот мир и начать новое путешествие.")
 		return
 	# GameWorld.start идёт в главном потоке: подпись должна успеть показаться до него
 	_set_progress(0.97, "Окружение вокруг игрока")
@@ -762,6 +812,8 @@ func _confirm_load(seed_text: String, slot: String) -> void:
 ## Кнопки сохранения стоят в сцене (меню — «Загрузить ручное», пауза — быстрое сохранение и загрузка),
 ## здесь только поведение и подсказки управления паузы
 func _setup_save_controls() -> void:
+	%RestartWorld.pressed.connect(_restart_world)
+	%DeleteWorld.pressed.connect(_delete_world)
 	_load_manual = %LoadManual
 	_load_manual.pressed.connect(func() -> void: _confirm_load(_chosen_seed(), "manual"))
 	_save_status = %SaveStatus

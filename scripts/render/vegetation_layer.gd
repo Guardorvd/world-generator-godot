@@ -143,10 +143,11 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		_defs[kind] = entry
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
+	grass_mat.set_shader_parameter("grass_variation", true)
 	_set_radii(settings.draw)
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
-	_grass_box = grass_mesh.get_aabb()
+	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
 	grass_buf = _buffer(_grass_cap(), STRIDE)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
@@ -829,6 +830,8 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 		buf[n * STRIDE + 14] = tc[2] * v * (1.0 - verge * 0.2)
 		buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
 		buf[n * STRIDE + 16] = rank
+		buf[n * STRIDE + 17] = WGRandom.hash2(i * 13 + m, j, 73)
+		buf[n * STRIDE + 18] = WGRandom.hash2(i, j * 11 + m, 79)
 		n += 1
 	return n
 

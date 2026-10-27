@@ -372,6 +372,23 @@ theme_override_font_sizes/font_size = 15
 text = "Загрузить ручное сохранение"
 icon = ExtResource("8_load")
 
+[node name="WorldActions" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+layout_mode = 2
+
+[node name="RestartWorld" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/WorldActions"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Создать заново"
+tooltip_text = "Пересоздать мир по этому зерну и начать новое путешествие"
+
+[node name="DeleteWorld" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/WorldActions"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Удалить мир"
+tooltip_text = "Удалить мир из списков и его сохранения"
+
 [node name="Bottom" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
 layout_mode = 2
 

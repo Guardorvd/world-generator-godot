@@ -15,8 +15,14 @@ func _initialize() -> void:
 
 
 func run() -> void:
+	var grass_arrays := Models.grass_mesh().surface_get_arrays(0)
+	var grass_vertices: PackedVector3Array = grass_arrays[Mesh.ARRAY_VERTEX]
+	var grass_uv: PackedVector2Array = grass_arrays[Mesh.ARRAY_TEX_UV]
+	check(grass_vertices.size() == 15 and grass_uv.size() == 15, "Трава должна сохранять пять треугольников и данные вариации")
+	for i in 5:
+		check(is_equal_approx(grass_uv[i * 3 + 2].y, 1.0) and grass_uv[i * 3].y == 0.0, "Изгиб травы должен затрагивать кончик, а не основание")
 	var defs := Models.tree_defs()
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA]:
 		var silhouettes := []
 		for variant in ForestModels.VARIANTS:
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]
@@ -32,6 +38,15 @@ func run() -> void:
 				check(vertices.size() == normals.size() and colors.size() == vertices.size(), "Нужны нормали и окраска всех вершин")
 				for p in vertices:
 					check(p.is_finite(), "Некорректная вершина")
+				var levels: Array = mesh.get_meta("levels")
+				var level_vertices := 0
+				for level_mesh: ArrayMesh in levels:
+					var level_arrays := level_mesh.surface_get_arrays(0)
+					var count: int = level_arrays[Mesh.ARRAY_VERTEX].size()
+					level_vertices += count
+					for vertex_index: int in level_arrays[Mesh.ARRAY_INDEX]:
+						check(vertex_index >= 0 and vertex_index < count, "Индексы LOD должны ссылаться на свои вершины")
+				check(level_vertices == vertices.size(), "Отдельные LOD не должны хранить чужие вершины")
 				var surface := RenderingServer.mesh_get_surface(mesh.get_rid(), 0)
 				var lods: Array = surface.get("lods", [])
 				check(lods.size() == 2, "Нужны три уровня геометрии")
@@ -75,12 +90,12 @@ func run() -> void:
 	root.add_child(ground)
 	for row in 3:
 		var kind: int = [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE][row]
-		for variant in 3:
+		for variant in ForestModels.VARIANTS:
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]
 			for part in ["trunk", "crown"]:
 				var node := MeshInstance3D.new()
 				node.mesh = def[part]
-				node.position = Vector3(variant * 7 - 7, 0, row * 10)
+				node.position = Vector3(variant * 7 - 10.5, 0, row * 10)
 				var material := StandardMaterial3D.new()
 				material.vertex_color_use_as_albedo = true
 				material.vertex_color_is_srgb = true
@@ -89,7 +104,7 @@ func run() -> void:
 					material.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 					material.alpha_scissor_threshold = 0.4
 					material.cull_mode = BaseMaterial3D.CULL_DISABLED
-				material.albedo_color = def.leaves[variant] if part == "crown" else Color.WHITE
+				material.albedo_color = def.leaves[variant % def.leaves.size()] if part == "crown" else Color.WHITE
 				node.material_override = material
 				root.add_child(node)
 	var camera := Camera3D.new()

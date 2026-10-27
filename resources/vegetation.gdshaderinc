@@ -29,6 +29,8 @@ global uniform vec2 veg_center;
 // thin_grow — пучки за thin_full крупнее, тоже по нынешнему расстоянию.
 uniform float thin_full = 0.0;
 uniform float thin_grow = 0.0;
+// Только общий меш травы: лёгкий индивидуальный наклон каждого листа.
+uniform bool grass_variation = false;
 // 9.9+: уровень детализации дерева у материала (-1 — без смены уровней; у каждого уровня своя копия материала). Соседние уровни смешиваются той же сеткой
 // порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
 // Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
@@ -49,6 +51,10 @@ varying vec2 v_lod;      // 9.9+: порог пикселя должен быт�
 
 void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
+	if (grass_variation) {
+		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;
+		VERTEX.xz += vec2(cos(seed), sin(seed)) * (0.035 + INSTANCE_CUSTOM.z * 0.065) * UV.y;
+	}
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
 	float dist = distance(origin.xz, veg_center);

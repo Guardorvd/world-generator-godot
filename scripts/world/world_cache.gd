@@ -297,6 +297,20 @@ func keep_only(seeds: Array) -> void:
 			DirAccess.remove_absolute(dir.path_join(f))
 
 
+## Удалить все слои одного мира, включая устаревшие версии.
+func remove_seed(seed_text: String) -> Error:
+	wait_writes()
+	if not DirAccess.dir_exists_absolute(dir):
+		return OK
+	var prefix := _base(seed_text, WorldGenerator.START_SIZE) + "."
+	for file: String in DirAccess.get_files_at(dir):
+		if file.begins_with(prefix):
+			var err := DirAccess.remove_absolute(dir.path_join(file))
+			if err != OK:
+				return err
+	return OK
+
+
 func _write(path: String, key: String, raw: PackedByteArray) -> void:
 	DirAccess.make_dir_recursive_absolute(dir)
 	var packed := raw.compress(FileAccess.COMPRESSION_ZSTD)

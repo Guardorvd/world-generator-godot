@@ -108,3 +108,27 @@ static func seeds() -> Array:
 		if not d.is_empty() and not d.seed in out:
 			out.append(d.seed)
 	return out
+
+## Перемещаем старые слоты в архив, чтобы новый прогресс не перезаписал их.
+static func archive_seed(seed_text: String) -> Error:
+	var stamp := str(Time.get_unix_time_from_system()).replace(".", "_")
+	for slot: String in ["auto", "manual"]:
+		var path := path_for(seed_text, slot)
+		for suffix: String in ["", ".bak"]:
+			var source := path + suffix
+			if FileAccess.file_exists(source):
+				var target := source + ".archive." + stamp
+				var err := DirAccess.rename_absolute(source, target)
+				if err != OK:
+					return err
+	return OK
+
+static func delete_seed(seed_text: String) -> Error:
+	for slot: String in ["auto", "manual"]:
+		var path := path_for(seed_text, slot)
+		for suffix: String in ["", ".bak"]:
+			if FileAccess.file_exists(path + suffix):
+				var err := DirAccess.remove_absolute(path + suffix)
+				if err != OK:
+					return err
+	return OK

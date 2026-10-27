@@ -1,9 +1,9 @@
 class_name ForestModels
 extends RefCounted
 ## Художественные модели умеренного леса. Общие меши, без узлов на каждую ветку.
-## Три заранее построенных силуэта; RNG локальный, генерацию мира не затрагивает.
+## Заранее построенные силуэты; RNG локальный, генерацию мира не затрагивает.
 
-const VARIANTS := 3
+const VARIANTS := 4
 const MODEL_STRIDE := 256
 static var _leaf_texture: Texture2D
 static var _bark_texture: Texture2D
@@ -29,16 +29,22 @@ static func definition(kind: int, variant: int) -> Dictionary:
 	var foliage: Array = []
 	var height := (7.0 if birch else (7.4 if conifer else 6.0)) * (0.94 + variant * 0.06)
 	var radius := 0.14 if birch else (0.23 if conifer else 0.32)
-	var bend := Vector3(rng.randf_range(-0.3, 0.3), 0, rng.randf_range(-0.3, 0.3))
+	# Основание остаётся около коллизии; выше появляется индивидуальный изгиб.
+	var angle := rng.randf() * TAU
+	var bend_dir := Vector3(cos(angle), 0, sin(angle))
+	var bend_amount: float = ([0.15, 0.48, 0.78, 1.05] if not conifer else [0.10, 0.22, 0.38, 0.52])[variant]
+	var bend := bend_dir * bend_amount
+	var sway_dir := Vector3(-bend_dir.z, 0, bend_dir.x) * (0.12 if birch else 0.18) * (0.5 + variant * 0.22)
 	var bark := Color("d5d0bd") if birch else (Color("78604b") if conifer else Color("655441"))
 	# Непрерывный сужающийся ствол, раструб у земли и неровные корневые лапы.
 	var path: Array[Vector3] = []
 	for i in 7:
 		var t := i / 6.0
-		path.append(Vector3(bend.x * t * t + sin(t * 5.0) * 0.07, t * height, bend.z * t * t))
+		path.append(bend * (0.4 * t + 0.8 * t * t) + sway_dir * sin(t * PI) * t + Vector3(0, t * height, 0))
 	branches.append([path, radius, radius * 0.07, bark, birch])
-	for i in (5 if not birch else 3):
-		var a := i * TAU / 5.0 + rng.randf()
+	var root_count := 3 if birch else 5
+	for i in root_count:
+		var a := i * TAU / root_count + rng.randf()
 		var foot := Vector3(cos(a), 0, sin(a)) * radius * rng.randf_range(2.4, 3.8)
 		branches.append([[foot + Vector3(0, -0.04, 0), Vector3(0, radius * 1.9, 0)], radius * 0.22, radius * 0.65, bark, birch])
 	if conifer:
@@ -47,24 +53,28 @@ static func definition(kind: int, variant: int) -> Dictionary:
 			var t := tier / 9.0
 			var y := 1.7 + t * (height - 1.9)
 			var span := (2.05 * pow(1.0 - t, 0.8) + 0.12) * rng.randf_range(0.9, 1.1)
-			for j in (5 if tier < 6 else 4):
-				var a := j * TAU / 5.0 + tier * 2.399 + rng.randf_range(-0.25, 0.25)
+			var branch_count := 5 if tier < 6 else 4
+			for j in branch_count:
+				var a := j * TAU / branch_count + tier * 2.399 + rng.randf_range(-0.25, 0.25)
 				var dir := Vector3(cos(a), 0, sin(a))
-				var start := Vector3(0, y, 0) + bend * t * t
+				var start := _path_at(path, y / height)
 				var end := start + dir * span + Vector3(0, -0.18 + t * 0.35, 0)
-				branches.append([[start, start.lerp(end, 0.5) - Vector3(0, 0.12, 0), end], 0.045 * (1.0 - t) + 0.012, 0.008, bark, false])
+				# Лапа почти прямая: один участок достаточно передаёт её силуэт.
+				branches.append([[start, end], 0.045 * (1.0 - t) + 0.012, 0.008, bark, false])
 				foliage.append([start.lerp(end, 0.72) + Vector3(0, 0.13, 0), Vector3(span * 0.65, 0.25 + (1.0 - t) * 0.2, span * 0.31), -a, rng.randf() * 10.0])
 	else:
 		# Дуб: широкая развилка. Берёза: узкая, ажурная, с поникающими концами.
 		for i in (18 if birch else 22):
 			var t := i / (18.0 if birch else 22.0)
 			var a := i * 2.399 + rng.randf_range(-0.4, 0.4)
-			var spread := (sin(t * PI) * (1.25 if birch else 1.85) + 0.25) * rng.randf_range(0.8, 1.2)
-			var start := Vector3(0, height * (0.38 + t * 0.49), 0) + bend * t
+			var spread: float = (sin(t * PI) * (1.25 if birch else 1.85) + 0.25) * rng.randf_range(0.8, 1.2) * [0.9, 1.0, 1.08, 1.16][variant]
+			var start := _path_at(path, 0.38 + t * 0.49)
 			var dir := Vector3(cos(a), 0, sin(a))
 			var end := start + dir * spread + Vector3(0, 0.55 if birch else 0.7, 0)
 			var middle := start.lerp(end, 0.6) + Vector3(0, 0.3, 0)
-			branches.append([[start, middle, end], (0.055 if birch else 0.105) * (1.0 - t * 0.65), 0.012, bark, birch])
+			# Ветки с ответвлением сохраняют изгиб и место крепления; остальные можно упростить.
+			var branch_path := [start, middle, end] if i % 2 == 0 else [start, end]
+			branches.append([branch_path, (0.055 if birch else 0.105) * (1.0 - t * 0.65), 0.012, bark, birch])
 			var size := Vector3(0.75, 0.65, 0.65) if birch else Vector3(1.0, 0.68, 0.88)
 			foliage.append([end, size * rng.randf_range(0.85, 1.18), a, rng.randf() * 10.0])
 			if i % 2 == 0:
@@ -74,7 +84,8 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		# 9.4: густая середина кроны: без неё сквозь редкие концы ветвей видна тёмная пустота.
 		for i in 6:
 			var a := i * TAU / 6.0 + rng.randf()
-			var p := Vector3(cos(a) * 0.55, height * rng.randf_range(0.62, 0.82), sin(a) * 0.55) + bend * 0.6
+			var crown_t := rng.randf_range(0.62, 0.82)
+			var p := _path_at(path, crown_t) + Vector3(cos(a) * 0.55, 0, sin(a) * 0.55)
 			foliage.append([p, Vector3(0.9, 0.62, 0.8) * (0.85 if birch else 1.05), a, rng.randf() * 10.0])
 	# 9.4: светлее и теплее, стилизованная листва вместо почти чёрной.
 	var colors := [Color("94b85e"), Color("a2bf63"), Color("88ae5a")] if birch else [Color("80ad52"), Color("90b657"), Color("74a350")]
@@ -83,6 +94,13 @@ static func definition(kind: int, variant: int) -> Dictionary:
 	if kind == Biomes.T_SNOWPINE:
 		colors = [Color("b3c7bd"), Color("a1b6aa"), Color("c3d3ca")]
 	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, conifer), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, conifer)}
+
+
+## Та же ломаная ось, что у меша: ветви не отделяются от изогнутого ствола.
+static func _path_at(path: Array[Vector3], t: float) -> Vector3:
+	var at := clampf(t, 0.0, 1.0) * (path.size() - 1)
+	var i := mini(floori(at), path.size() - 2)
+	return path[i].lerp(path[i + 1], at - i)
 
 
 static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool) -> Dictionary:
@@ -155,13 +173,14 @@ static func _jungle(variant: int) -> Dictionary:
 	var bark := Color("5a4026")
 	var height := 7.1 * (0.95 + variant * 0.05)
 	var radius := 0.4
-	var bend := Vector3(rng.randf_range(-0.35, 0.35), 0, rng.randf_range(-0.35, 0.35))
+	var angle := rng.randf() * TAU
+	var bend: Vector3 = Vector3(cos(angle), 0, sin(angle)) * [0.2, 0.45, 0.7, 0.95][variant]
 	var branches: Array = []
 	var foliage: Array = []
 	var path: Array[Vector3] = []
 	for i in 8:
 		var t := i / 7.0
-		path.append(bend * t * t + Vector3(sin(t * 4.0) * 0.06, t * height, 0))
+		path.append(bend * (0.4 * t + 0.8 * t * t) + Vector3(sin(t * 4.0) * 0.06, t * height, 0))
 	branches.append([path, radius, 0.09, bark, false])
 	# Досковидные корни: длинные, низкие, поднимаются по стволу.
 	for i in 6:
@@ -180,7 +199,7 @@ static func _jungle(variant: int) -> Dictionary:
 			var a := j * TAU / n + tier * 1.1 + rng.randf_range(-0.35, 0.35)
 			var dir := Vector3(cos(a), 0, sin(a))
 			var spread: float = spec[2] * rng.randf_range(0.75, 1.2) * (1.0 + 0.25 * maxf(0.0, cos(a - bulge)))
-			var start := Vector3(0, height * t, 0) + bend * t * t
+			var start := _path_at(path, t)
 			var end := start + dir * spread + Vector3(0, rng.randf_range(0.3, 0.75), 0)
 			var middle := start.lerp(end, 0.55) + Vector3(0, 0.22, 0)
 			branches.append([[start, middle, end], 0.11 * (1.0 - t * 0.45), 0.014, bark, false])
@@ -217,13 +236,13 @@ static func _acacia(variant: int) -> Dictionary:
 			var sdir := dir.rotated(Vector3.UP, side * rng.randf_range(0.45, 0.75))
 			var tip := end + sdir * rng.randf_range(0.55, 0.85) + Vector3(0, rng.randf_range(0.15, 0.3), 0)
 			branches.append([[end, tip], 0.07, 0.035, bark, false])
-			foliage.append([tip + Vector3(0, 0.14, 0), Vector3(0.95, 0.5, 0.8) * rng.randf_range(0.9, 1.1), a, rng.randf() * 10.0, Basis(Vector3.UP, -a), 0.08])
+			foliage.append([tip + Vector3(0, 0.14, 0), Vector3(0.95, 0.5, 0.8) * rng.randf_range(0.9, 1.1), a, rng.randf() * 10.0, Basis(Vector3.UP, -a), 0.25])
 			for twig: float in [-0.5, 0.5]:
 				var tdir := sdir.rotated(Vector3.UP, twig + rng.randf_range(-0.2, 0.2))
 				var leaf := tip + tdir * rng.randf_range(0.4, 0.7) + Vector3(0, 0.08, 0)
 				branches.append([[tip, leaf], 0.03, 0.008, bark, false])
 				var tilt := Basis(tdir.cross(Vector3.UP).normalized(), rng.randf_range(0.04, 0.12))
-				foliage.append([leaf + Vector3(0, 0.06, 0), Vector3(0.85, 0.42, 0.7) * rng.randf_range(0.85, 1.1), a, rng.randf() * 10.0, tilt * Basis(Vector3.UP, -a - twig), 0.1])
+				foliage.append([leaf + Vector3(0, 0.06, 0), Vector3(0.85, 0.42, 0.7) * rng.randf_range(0.85, 1.1), a, rng.randf() * 10.0, tilt * Basis(Vector3.UP, -a - twig), 0.25])
 	return _leafy(branches, foliage, [Color8(134, 160, 70), Color8(150, 166, 76), Color8(122, 152, 68)], false)
 
 
@@ -332,6 +351,7 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 	var colors := PackedColorArray()
 	var uvs := PackedVector2Array()
 	var indices: Array[PackedInt32Array] = []
+	var level_arrays: Array = []
 	# 9.4: эллипсоид кроны. Нормали листвы смотрят от его центра: крона освещается как мягкий
 	# цельный объём (приём стилизованных деревьев), а не как стопка плоских веток.
 	var crown := [Vector3.ZERO, Vector3.ONE]
@@ -360,15 +380,23 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 			var spray: Array = foliage[i].duplicate()
 			if level == 2:
 				spray[1] *= 1.12 # Сохраняем заполнение дальней кроны меньшим числом побегов.
+				if conifer:
+					# Без тонких веток дальние лапы должны примыкать к оси, а не висеть отдельно.
+					var center: Vector3 = spray[0]
+					center.x *= 0.82
+					center.z *= 0.82
+					spray[0] = center
+					spray[1] *= 1.12
 			_spray(st, spray, level, conifer, crown)
 		st.index()
 		var arrays := st.commit_to_arrays()
+		level_arrays.append(arrays)
 		var offset := vertices.size()
 		vertices.append_array(arrays[Mesh.ARRAY_VERTEX])
 		normals.append_array(arrays[Mesh.ARRAY_NORMAL])
 		colors.append_array(arrays[Mesh.ARRAY_COLOR])
 		uvs.append_array(arrays[Mesh.ARRAY_TEX_UV])
-		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX].duplicate()
 		for i in idx.size():
 			idx[i] += offset
 		indices.append(idx)
@@ -385,10 +413,9 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 	# а не скачком автоматического LOD (meta "levels").
 	var levels: Array[ArrayMesh] = []
 	for level in 3:
-		var part := arrays.duplicate()
-		part[Mesh.ARRAY_INDEX] = indices[level]
+		# Отдельный LOD хранит только свои вершины, а не общий набор всех трёх уровней.
 		var level_mesh := ArrayMesh.new()
-		level_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, part)
+		level_mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, level_arrays[level])
 		levels.append(level_mesh)
 	mesh.set_meta("levels", levels)
 	return mesh
@@ -442,7 +469,7 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crow
 	var rotation := Basis(Vector3.UP, data[2])
 	var phase: float = data[3]
 	# Пространственные веера с вырезанными листьями вместо гладких оболочек.
-	var planes := 4 if level == 0 else (3 if level == 1 else 2)
+	var planes := 3 if level == 0 else 2
 	if data.size() > 4:
 		_flat_spray(st, data, planes, crown)
 		return
@@ -452,14 +479,19 @@ static func _spray(st: SurfaceTool, data: Array, level: int, conifer: bool, crow
 		var up := Vector3.UP if not conifer else (Vector3.UP * 0.45 + axis * 0.55).normalized()
 		var side := up.cross(axis).normalized()
 		var c := center + Vector3(0, (i - (planes - 1) * 0.5) * size.y * 0.25, 0)
-		var w := maxf(size.x, size.z) * 1.12
+		# Эллиптический побег вместо одинаково круглого силуэта с любого ракурса.
+		var w := sqrt(pow(cos(a) * size.x, 2.0) + pow(sin(a) * size.z, 2.0)) * 1.18
 		var h := size.y * 1.2
 		var points := [c - side * w - up * h, c + side * w - up * h, c + side * w + up * h, c - side * w + up * h]
 		var uv := [Vector2(0, 1), Vector2(1, 1), Vector2(1, 0), Vector2(0, 0)]
 		for index in [0, 1, 2, 0, 2, 3]:
 			st.set_uv(uv[index])
 			var lit := _crown_light(points[index], crown)
-			_vertex(st, points[index], lit[0], lit[1])
+			# Разные ветви слегка различаются по тону, сохраняя объёмное освещение кроны.
+			var shade := 0.94 + 0.09 * (0.5 + 0.5 * sin(phase * 2.1))
+			var color: Color = lit[1] * shade
+			color.a = 1.0
+			_vertex(st, points[index], lit[0], color)
 
 
 ## Побег в собственной рамке data[4]: плоскости вдоль оси X, сложенные веером

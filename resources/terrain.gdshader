@@ -251,11 +251,17 @@ void fragment() {
 		vec2 cells = rp * grain_scale;
 		vec2 scatter = grain_hash(floor(cells));
 		vec2 stone = fract(cells) - (vec2(0.3) + scatter * 0.4);
+		// Не одинаковые круглые точки: у каждого камешка своя вытянутость и поворот.
+		float stone_angle = scatter.y * 6.2831853;
+		mat2 stone_rotation = mat2(vec2(cos(stone_angle), sin(stone_angle)), vec2(-sin(stone_angle), cos(stone_angle)));
+		float stone_aspect = mix(0.65, 1.0, scatter.x);
+		vec2 stone_local = stone_rotation * stone;
+		stone_local.x /= stone_aspect;
 		float radius = 0.10 + scatter.x * 0.13;
 		float grain_aa = max(pixel_m * grain_scale * 0.5, 0.01);
 		float grain_fade = 1.0 - smoothstep(0.25, 0.6, grain_aa);
-		float pebbles = (1.0 - smoothstep(radius - grain_aa, radius + grain_aa, length(stone))) * step(0.25, scatter.y) * grain * grain_fade;
-		float dome = clamp(1.0 - length(stone) / radius, 0.0, 1.0);
+		float pebbles = (1.0 - smoothstep(radius - grain_aa, radius + grain_aa, length(stone_local))) * step(0.25, scatter.y) * grain * grain_fade;
+		float dome = clamp(1.0 - length(stone_local) / radius, 0.0, 1.0);
 		// Редкие крупные камни на гравии и камне, по краям полотна чаще, чем на колее; на обочине — у любого покрытия.
 		vec2 big_cells = rp * 2.9 + vec2(13.1, 7.7);
 		vec2 big_scatter = grain_hash(floor(big_cells));
@@ -290,6 +296,19 @@ void fragment() {
 		// Нерегулярная подстилка и просветы к траве, без одинаковых пар колей на каждом покрытии.
 		float litter = smoothstep(0.38, 0.72, fleck + (fine - 0.5) * 0.3);
 		soil *= 1.0 + (litter - 0.5) * organic * 0.22 * near;
+		if (organic > 0.01 && near > 0.0) {
+			// Редкие обрывки листьев и хвои лежат в материале тропы, а не повторяют шум почвы.
+			vec2 litter_cells = p * 3.2 + vec2(19.7, 8.3);
+			vec2 litter_scatter = grain_hash(floor(litter_cells));
+			vec2 litter_local = fract(litter_cells) - (vec2(0.25) + litter_scatter * 0.5);
+			float litter_angle = litter_scatter.x * 6.2831853;
+			litter_local = mat2(vec2(cos(litter_angle), sin(litter_angle)), vec2(-sin(litter_angle), cos(litter_angle))) * litter_local;
+			float litter_shape = abs(litter_local.x) * 0.8 + abs(litter_local.y) * 2.3;
+			float litter_aa = max(pixel_m * 3.2, 0.015);
+			float leaf = (1.0 - smoothstep(0.12 - litter_aa, 0.12 + litter_aa, litter_shape))
+				* step(0.55, litter_scatter.y) * (1.0 - smoothstep(0.18, 0.55, litter_aa)) * organic * near;
+			soil = mix(soil, dry_litter * mix(0.65, 1.0, litter_scatter.x), leaf * 0.35);
+		}
 		road *= 1.0 - organic * smoothstep(0.55, 0.8, fleck) * 0.25 * near;
 		// Накатанные колеи: местами, с разрывами, плотнее и темнее, мелкий камень с них выбит.
 		// 12.3: там же, где колея RoadBump (её участки), а глубокие колеи на мягком ещё темнее.
@@ -298,6 +317,11 @@ void fragment() {
 			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
 			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
 		soil *= 1.0 - tracks * (0.07 + fine * 0.05 + road_bump_p.z * 2.5);
+		// Разбитая светлая кромка колеи и разная плотность грунта придают дороге глубину.
+		float rut_edge = exp(-pow((abs(UV2.x) - 0.62) / 0.09, 2.0)) * rut_on;
+		soil *= 1.0 + rut_edge * (0.025 + 0.025 * fleck) * (1.0 - organic * 0.5) * near;
+		float compacted = smoothstep(0.38, 0.72, n_mid * 0.65 + fleck * 0.35);
+		soil = mix(soil, soil * vec3(1.035, 1.02, 0.99), compacted * (1.0 - grain * 0.5) * near);
 		// На заросшей колее в колеях проступает земля.
 		road = max(road, tracks * organic * 0.7 * smoothstep(0.0, 0.02, road_bump_p.z));
 		// Ямы: дно темнее и влажнее.
@@ -343,7 +367,8 @@ void fragment() {
 			// Свет следует отдельным зёрнам и камням; на середине полотна нет контуров карты нормалей биома,
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
 			vec3 grit = texture(detail_normal, rp * 1.37).rgb * 2.0 - 1.0;
-			vec2 tilt = stone / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks)
+			vec2 stone_gradient = transpose(stone_rotation) * vec2(stone_local.x / stone_aspect, stone_local.y);
+			vec2 tilt = stone_gradient / radius * pebbles * 0.9 + rock_at / rock_r * big_rocks * 0.6 + grit.xy * (0.25 + grain * 0.35) * (1.0 - tracks)
 				- bump.yz * bump_vis * 2.2 * road; // глубина карты нормалей на полотне ~0,3 (14.5: было 4,0 — узор)
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
 			detail_n = mix(detail_n, road_normal, relief);
