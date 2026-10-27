@@ -56,6 +56,9 @@ varying float v_ao;
 varying float v_cloud;   // 7.9: тень облака на растении (одна на экземпляр)
 varying float v_fade;    // 9.9+: 1 — видно целиком, 0 — растворилось
 varying vec2 v_lod;      // 9.9+: порог пикселя должен быть в [x, y), иначе этот уровень его не рисует
+#ifdef ROCK_DETAIL
+varying vec3 rock_local;
+#endif
 
 void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
@@ -68,6 +71,12 @@ void vertex() {
 	float sheltered = 1.0 - COLOR.a;
 	float dist = distance(origin.xz, veg_center);
 	v_fade = clamp((fade_far - dist) / fade_len, 0.0, 1.0);
+#ifdef ROCK_DETAIL
+	rock_local = VERTEX;
+	float rock_scale = length(MODEL_MATRIX[0].xyz);
+	float rock_far = min(fade_far, mix(55.0, fade_far, smoothstep(0.18, 0.85, rock_scale)));
+	v_fade = clamp((rock_far - dist) / min(fade_len, max(10.0, rock_far * 0.22)), 0.0, 1.0);
+#endif
 	float stamp = stream_instances ? INSTANCE_CUSTOM.w : stream_birth;
 	if (stamp > 0.0) {
 		v_fade *= clamp((vegetation_clock - stamp) / 0.5, 0.0, 1.0);
@@ -150,6 +159,17 @@ void fragment() {
 	}
 	ALBEDO = col * v_cloud;
 	ROUGHNESS = 1.0;
+#ifdef ROCK_DETAIL
+	// Мелкое зерно затухает по производным: не мерцает на дальнем LOD.
+	float footprint = max(length(dFdx(rock_local)), length(dFdy(rock_local)));
+	vec3 grain_cell = floor(rock_local * 145.0);
+	float grain = fract(sin(dot(grain_cell, vec3(127.1, 311.7, 74.7))) * 43758.5453) * 2.0 - 1.0;
+	float strata = sin(dot(rock_local, vec3(2.4, 8.0, 3.7)) + sin(rock_local.x * 5.0) * 0.8 + sin(rock_local.z * 7.0) * 0.5);
+	float vein = (1.0 - smoothstep(0.02, 0.07, abs(strata))) * (1.0 - smoothstep(0.015, 0.06, footprint));
+	ALBEDO *= 0.94 + grain * 0.045 * (1.0 - smoothstep(0.0025, 0.012, footprint));
+	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.12);
+	ROUGHNESS = 0.91;
+#endif
 	AO = v_ao;
 	AO_LIGHT_AFFECT = 0.15;
 	BACKLIGHT = col * translucency;

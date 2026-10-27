@@ -104,6 +104,8 @@ func prepare(px: float, pz: float, radius: float) -> void:
 				var kind := world.obj_k[o]
 				if not Biomes.is_tree(kind) and kind not in [Biomes.T_ROCK, Biomes.T_BUSH, Biomes.T_DEAD, Biomes.T_CACTUS]:
 					continue
+				if kind == Biomes.T_ROCK and not RockModels.has_seat(heights, world.obj_x[o] * TILE, world.obj_y[o] * TILE, world.obj_s[o] * 1.2):
+					continue
 				var r := 0.3 * world.obj_s[o]
 				if kind == Biomes.T_ROCK or kind == Biomes.T_BUSH:
 					r = Biomes.CROWN_RADIUS[kind] * TILE * world.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)

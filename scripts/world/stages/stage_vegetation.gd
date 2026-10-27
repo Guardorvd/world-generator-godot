@@ -279,28 +279,25 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
-					store.add(px, py, kind, v, sc)
-			# камни: на кручах и россыпями там, где местность неровная
-			# 10.4: на кручах валуны тоже пятнами (россыпи), а не ровной сыпью по всему склону;
-			# размеры разные: много мелких, редкие крупные
-			var rocky := 0.06 * (0.12 + 0.88 * _ss(-0.1, 0.45, stony[i])) if sl > 0.7 else 0.0
-			if sl > 0.25 and stony[i] > 0.3:
-				rocky += 0.05 * clampf((stony[i] - 0.3) * 4.0, 0.0, 1.0) * clampf(sl, 0.0, 1.0)
-			if rocky > 0.0 and rng.next_float() < rocky:
-				var px := x + rng.next_float()
-				var py := y + rng.next_float()
-				var v := floori(rng.next_float() * 3)
-				var size := rng.next_float()
-				# Keep RNG consumption unchanged for surrounding trees. Sparse outcrops
-				# follow the geological patches, instead of carpeting every steep face.
-				var keep := 0.18 + 0.42 * _ss(0.1, 0.55, stony[i])
-				if WGRandom.hash2(floori(px * 113), floori(py * 109), 15631) < keep:
-					store.add(px, py, Biomes.T_ROCK, v, 0.5 + size * size * 1.1)
-			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48 and rng.next_float() < 0.12:
-				var px := x + rng.next_float()
-				var py := y + rng.next_float()
-				var v := floori(rng.next_float() * 3)
-				store.add(px, py, Biomes.T_REED, v, 0.8 + rng.next_float() * 0.3)
+					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
+					if kind != Biomes.T_ROCK:
+						store.add(px, py, kind, v, sc)
+			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48:
+				# Старый RNG нужен только камышу. Вдали от воды и на кручах пустую
+				# проверку прежнего слоя камней больше не считаем. При sl < 0.5
+				# прежняя ветка sl > 0.7 недостижима; оставшийся расход чисел тот же.
+				if sl > 0.25 and stony[i] > 0.3:
+					var legacy_chance := 0.05 * clampf((stony[i] - 0.3) * 4.0, 0.0, 1.0) * clampf(sl, 0.0, 1.0)
+					if rng.next_float() < legacy_chance:
+						for unused in 4: rng.next_float()
+				if rng.next_float() < 0.12:
+					var px := x + rng.next_float()
+					var py := y + rng.next_float()
+					var v := floori(rng.next_float() * 3)
+					store.add(px, py, Biomes.T_REED, v, 0.8 + rng.next_float() * 0.3)
+
+
+	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store)
 
 
 ## Свойства биомов в плоских таблицах: в цикле по всем клеткам словари читать дорого

@@ -226,25 +226,26 @@ static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
 
 ## Лес, камни и тростник чанка растительности key (WorldData.CHUNK_SIZE клеток, в общих координатах; для
 ## фоновой задачи). Тот же код, что у стартовой области, без троп и домов. Кроме объектов (x, y в клетках, k, v, s)
-## возвращает высоты h клеток от (x0 - 1, y0 - 1) со стороной side: по ним считается земля под объектами
+## возвращает высоты h и воду клеток от (x0 - 2, y0 - 2) со стороной side: по ним считается опора камней
 static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 	var cs := WorldData.CHUNK_SIZE
 	var x0 := key.x * cs
 	var y0 := key.y * cs
-	var side := cs + 2
-	var f := compute(w, x0 - 1, y0 - 1, side, side)
+	# Две клетки запаса: пятно большого валуна и соседние вершины триангуляции.
+	var side := cs + 4
+	var f := compute(w, x0 - 2, y0 - 2, side, side)
 	var p: Array = WorldData.NOISE_FIELDS.forest
-	f.forest = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, p[0], p[1])
+	f.forest = Parallel.fbm_rect(w.noise.forest, x0 - 2, y0 - 2, side, side, p[0], p[1])
 	p = WorldData.NOISE_FIELDS.cost
-	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 1, y0 - 1, side, side, p[0], p[1])
-	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 1, y0 - 1, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
-	f.merge(StageVegetation.structure_rect(w, x0 - 1, y0 - 1, side, side))
+	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - 2, y0 - 2, side, side, p[0], p[1])
+	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - 2, y0 - 2, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
+	f.merge(StageVegetation.structure_rect(w, x0 - 2, y0 - 2, side, side))
 	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
 	if not f.has("dw"):
 		f.dw = f.dist
 	var store := StageVegetation.ObjStore.new(null)
-	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - 1, y0 - 1, side, null, store)
-	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, x0 = x0 - 1, y0 = y0 - 1, side = side}
+	StageVegetation.place_chunk(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - 2, y0 - 2, side, null, store)
+	return {x = store.x, y = store.y, k = store.k, v = store.v, s = store.s, h = f.h, water = f.get("water", PackedFloat32Array()), x0 = x0 - 2, y0 = y0 - 2, side = side}
 
 
 ## Поля куска key (для фоновой задачи)

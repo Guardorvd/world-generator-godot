@@ -79,6 +79,8 @@ func _add_objects(px: float, pz: float) -> void:
 					continue
 				var base := heights.ground_at(x, z)
 				if kind == Biomes.T_ROCK:
+					if s < 0.42 or not RockModels.has_seat(heights, x, z, s * 1.2):
+						continue
 					s *= 1.2
 					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				elif heights.depth_at(x, z) <= VegetationLayer.WATER_MARGIN:
@@ -103,6 +105,8 @@ func _add_objects(px: float, pz: float) -> void:
 					continue
 				var base: float = items.ground[o]
 				if kind == Biomes.T_ROCK:
+					if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
+						continue
 					s *= 1.2
 					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				else:

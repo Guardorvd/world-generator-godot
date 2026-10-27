@@ -137,6 +137,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 				entry.box = box if first else entry.box.merge(box)
 				first = false
 			var shader := TRUNK_SHADER if part == "trunk" else (CUTOUT_SHADER if def.get("cutout", false) else SHADER)
+			if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK:
+				shader = preload("res://resources/rock.gdshader")
 			var mat := _wind_mat(shader, wind, part == "crown")
 			if def.has(part + "_texture"):
 				mat.set_shader_parameter("albedo_tex", def[part + "_texture"])
@@ -228,7 +230,7 @@ func _apply_fade() -> void:
 				_fade(mat, tree_r, 0.0)
 	for entry: Dictionary in veg.values():
 		for node: MultiMeshInstance3D in entry.nodes:
-			_fade(node.material_override, tree_r, 0.0)
+			_fade(node.material_override, minf(tree_r, 70.0) if entry.get("small_rocks", false) else tree_r, 0.0)
 	_fade(_grass_mat, grass_r, _ahead(grass_r))
 	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
@@ -298,7 +300,7 @@ func set_draw(level: int) -> bool:
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
 			if node.get_meta("level", 2) == 2:
-				node.visibility_range_end = tree_r + _half_chunk()
+				node.visibility_range_end = (minf(tree_r, 70.0) if veg[key].get("small_rocks", false) else tree_r) + _half_chunk()
 	_apply_fade()
 	last_fill = Vector2.INF
 	return true
@@ -540,6 +542,11 @@ func _reserve_details(lead: Vector2) -> void:
 ## Карта OuterLand.chunks здесь не читается: она главного потока.
 func _build_outer(chunk: Vector2i) -> Dictionary:
 	var f := OuterLand.vegetation(world, chunk)
+	return _build_outer_snapshot(chunk, f)
+
+
+func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
+	f.plan_water = heights.water_level
 	var fx: PackedFloat64Array = f.x
 	var fy: PackedFloat64Array = f.y
 	var fk: PackedInt32Array = f.k
@@ -558,6 +565,10 @@ func _build_outer(chunk: Vector2i) -> Dictionary:
 		if not _defs.has(kind):
 			continue
 		var gx := fx[o] - 0.5
+		var rock_probe := Vector4.ZERO
+		if kind == Biomes.T_ROCK:
+			rock_probe = RockModels.seat_snapshot(f, hv, W, H, fx[o] * TILE, fy[o] * TILE, f.s[o] * 1.2)
+			if rock_probe.x == INF: continue
 		var gz := fy[o] - 0.5
 		var i := floori(gx)
 		var j := floori(gz)
@@ -588,7 +599,7 @@ func _build_outer(chunk: Vector2i) -> Dictionary:
 			items.normals = PackedVector3Array()
 		var dx: float = corner[1] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[2]
 		var dz: float = corner[2] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[1]
-		items.normals.append(Vector3(-dx, TILE, -dz).normalized())
+		items.normals.append(Vector3(rock_probe.y, rock_probe.z, rock_probe.w) if kind == Biomes.T_ROCK else Vector3(-dx, TILE, -dz).normalized())
 	var built := _build_entries(items)
 	built.chunk = chunk
 	built.outer = items
@@ -609,6 +620,10 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 			continue
 		var x := ox * TILE
 		var z := oy * TILE
+		var ground := heights.ground_at(x, z)
+		var normal := RockModels.normal_at(heights, x, z) if kind == Biomes.T_ROCK else Vector3.UP
+		if kind == Biomes.T_ROCK and not RockModels.has_seat(heights, x, z, world.obj_s[o] * 1.2, normal, ground):
+			continue
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
@@ -617,13 +632,9 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 		items.k.append(kind)
 		items.v.append(world.obj_v[o])
 		items.s.append(world.obj_s[o])
-		items.ground.append(heights.ground_at(x, z))
+		items.ground.append(ground)
 		if not items.has("normals"):
 			items.normals = PackedVector3Array()
-		var normal := Vector3.UP
-		if kind == Biomes.T_ROCK:
-			normal = Vector3(heights.ground_at(x - 0.5, z) - heights.ground_at(x + 0.5, z), 1.0,
-				heights.ground_at(x, z - 0.5) - heights.ground_at(x, z + 0.5)).normalized()
 		items.normals.append(normal)
 	var built := _build_entries(items)
 	built.chunk = chunk
@@ -637,18 +648,23 @@ func _build_entries(items: Dictionary) -> Dictionary:
 	var ys: PackedFloat64Array = items.y
 	for o in xs.size():
 		var kind: int = items.k[o]
+		if kind == Biomes.T_ROCK and items.has("normals") and not RockModels.supported(items.normals[o]):
+			continue
 		var ox := xs[o]
 		var oy := ys[o]
 		var ground: float = items.ground[o]
 		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
 		var model := kind
 		if _defs.has(kind + ForestModels.MODEL_STRIDE):
-			var variant := mini(ForestModels.VARIANTS - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * ForestModels.VARIANTS))
+			var variants := RockModels.VARIANTS if kind == Biomes.T_ROCK else ForestModels.VARIANTS
+			var variant := mini(variants - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * variants))
 			model += variant * ForestModels.MODEL_STRIDE
 		if not groups.has(model):
-			groups[model] = {ids = [], ground = []}
+			groups[model] = {ids = [], ground = [], max_scale = 0.0}
 		groups[model].ids.append(o)
 		groups[model].ground.append(ground)
+		if kind == Biomes.T_ROCK:
+			groups[model].max_scale = maxf(groups[model].max_scale, items.s[o])
 	var entries: Array = []
 	for kind: int in groups:
 		var rock := kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK
@@ -656,6 +672,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 		var group: Dictionary = groups[kind]
 		var count: int = group.ids.size()
 		var entry := {kind = kind, count = count, bounds = AABB()}
+		entry.small_rocks = rock and group.max_scale < 0.42
 		if def.has("trunk"):
 			entry.tbuf = _buffer(count, 12)
 		if def.has("crown"):
@@ -677,7 +694,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				# Embed outcrops into the slope; horizontal flat bases looked like floating shelves.
 				xf.basis = Basis(Quaternion(Vector3.UP, normal)) * Basis(Vector3.UP, rot)
 				xf.basis = xf.basis.scaled_local(Vector3(s, sy * lerpf(0.75, 1.25, shape), s * lerpf(0.8, 1.0, shape)))
-				xf.origin.y -= s * 0.16
+				xf.origin.y = group.ground[n] - s * 0.08
 			var box: AABB = xf * def.box
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
@@ -774,12 +791,19 @@ func _apply_chunk(built: Dictionary, limit := 0) -> bool:
 				continue
 			var mesh: Mesh = def[part]
 			var levels: Array = ForestModels.lod_meshes(mesh)
+			var small: bool = entry.get("small_rocks", false)
+			if small and levels.size() > 1:
+				# Мелочь не доживает до дальних LOD: один 100-треугольный меш, без теней.
+				levels = [levels[1]]
 			for level in levels.size():
 				# Время проявления принадлежит группе, а не общему материалу всех чанков.
 				var mat: ShaderMaterial = def[part + "_mats"][level].duplicate()
+				if small:
+					mat.set_shader_parameter("lod_level", -1)
+					_fade(mat, minf(tree_r, 70.0), 0.0)
 				mat.set_shader_parameter("stream_birth", stream.clock if limit > 0 else 0.0)
-				var node := _multimesh(levels[level], mat, entry.count, part == "crown")
-				if part == "crown":
+				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small)
+				if part == "crown" and not small:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
 				mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf
@@ -793,7 +817,7 @@ func _apply_chunk(built: Dictionary, limit := 0) -> bool:
 				if level < levels.size() - 1:
 					node.visibility_range_end = LOD_STEPS[level][0] + LOD_STEPS[level][1] * 0.5 + _half_chunk()
 				else:
-					node.visibility_range_end = tree_r + _half_chunk()
+					node.visibility_range_end = (minf(tree_r, 70.0) if small else tree_r) + _half_chunk()
 				node.visibility_range_end_margin = 16.0
 				entry[part] = mm
 				entry.nodes.append(node)

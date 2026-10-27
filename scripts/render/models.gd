@@ -62,12 +62,13 @@ static func tree_defs() -> Dictionary:
 	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
 		for variant in ForestModels.VARIANTS:
 			defs[kind + variant * ForestModels.MODEL_STRIDE] = ForestModels.definition(kind, variant)
-	# 9.4: валуны и камыш вместо сфер и конусов, по три силуэта. Объём валуна прежний (ForestObstacles.ROCK_R).
+	# Камыш — три силуэта, камни — шесть форм с общими LOD.
 	for variant in ForestModels.VARIANTS:
-		defs[Biomes.T_ROCK + variant * ForestModels.MODEL_STRIDE] = {crown = boulder(Vector3(1.3, 0.78, 1.05), 71 + variant * 13, 0.7),
-			leaves = [_c(158, 152, 142), _c(142, 138, 130), _c(168, 160, 146)]}
 		defs[Biomes.T_REED + variant * ForestModels.MODEL_STRIDE] = {crown = reeds(81 + variant * 13),
 			leaves = [_c(196, 214, 150), _c(180, 204, 140), _c(208, 214, 160)]}
+	for variant in RockModels.VARIANTS:
+		defs[Biomes.T_ROCK + variant * ForestModels.MODEL_STRIDE] = {crown = boulder(Vector3(1.3, 0.78, 1.05), 72 + variant, 0.24),
+			leaves = [_c(158, 152, 142), _c(142, 138, 130), _c(168, 160, 146)]}
 	return defs
 
 
@@ -85,28 +86,10 @@ static func _noise3(p: Vector3, seed: int) -> float:
 	return out
 
 
-## 9.4: валун — сфера с крупными мягкими буграми и плоским низом, полуоси size, основание немного в земле.
-## Цвет вершин: камень яркости tone, сверху мох (доля moss). Используют и камни мира, и камни леса.
+## Общая библиотека сколотых камней мира и лесной подстилки, полуоси size.
+## Цвет вершин: камень яркости tone, сверху мох (доля moss).
 static func boulder(size: Vector3, seed: int, moss: float, tone := 1.0) -> ArrayMesh:
-	var sphere := SphereMesh.new()
-	sphere.radial_segments = 11
-	sphere.rings = 6
-	var arrays := sphere.get_mesh_arrays()
-	var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i: int in arrays[Mesh.ARRAY_INDEX]:
-		var d := vertices[i].normalized()
-		var bump := 0.84 + 0.3 * _noise3(d * 1.6, seed) + 0.12 * _noise3(d * 3.4, seed + 1)
-		var p := d * size * bump
-		p.y = maxf(p.y, -size.y * 0.45) + size.y * 0.45
-		var green := smoothstep(0.25, 0.75, d.y + 0.25 * _noise3(d * 2.5, seed + 2)) * moss
-		var stone := (0.88 + 0.12 * _noise3(d * 4.0, seed + 3)) * tone
-		st.set_color(Color(stone, stone, stone).lerp(Color(0.48, 0.62, 0.3), green))
-		st.add_vertex(p - Vector3(0, size.y * 0.13, 0))
-	st.generate_normals()
-	st.index()
-	return _with_lods(st.commit())
+	return RockModels.mesh(size, seed, moss, tone)
 
 
 ## 9.4: куртина камыша: изогнутые листья и несколько початков. Цвет листьев — оттенок экземпляра.
