@@ -396,7 +396,48 @@ func check_survey() -> void:
 	var linked := false
 	for run: Dictionary in finished.exceeded: linked = linked or 0 in (run.elements as Array)
 	check(not design.is_empty() and finished.peak_grade > design.grade_designed + 0.1 and linked and finished.peak_grade_track < finished.peak_grade, "finished profile with a roller differs from the design profile (%.0f%% vs designed %.0f%%) and the excess is tied to the element" % [finished.peak_grade * 100.0, design.get("grade_designed", 0.0) * 100.0])
+	# A short roller (4 m) is a kink the 4 m grade averages out; the local grade keeps it.
+	var kinked := line.duplicate(true) as TrailDefinition
+	kinked.elements.append(TrailElementLibrary.make(TrailElement.Profile.ROLLER, 100.0, 4.0, 0.5))
+	var kinked_routes: Array[TrailDefinition] = [kinked]
+	var kinked_h: Heightfield = Fixture.prepare(kinked_routes).heights
+	var kink := TrailSurvey.measure(kinked_h, kinked)
+	# Rise of both grades over the plain line at the same place: the ground's own slope is taken out.
+	var rise := Vector2() # x — local, y — 4 m
+	var plain_base := 0.0
+	for j in kink.stations.size():
+		if absf(kink.stations[j] - 100.0) > 2.0: continue
+		rise.x = maxf(rise.x, absf(kink.grade_local[j]) - absf(gentle.grade_local[j]))
+		rise.y = maxf(rise.y, absf(kink.grade[j]) - absf(gentle.grade[j]))
+		plain_base = maxf(plain_base, absf(gentle.grade[j]))
+	# A requirement the local kink breaks, but its 4 m average does not.
+	var judged := TrailSurvey.measure(kinked_h, kinked, plain_base + rise.x * 0.75)
+	var flagged := false
+	for run: Dictionary in judged.exceeded: flagged = flagged or 0 in (run.elements as Array)
+	check(rise.x > 0.1 and rise.x > rise.y * 1.5 and not flagged, "short kink adds %.0f%% to the local grade but %.0f%% to the 4 m grade; a 4 m requirement of %.0f%% does not flag it" % [rise.x * 100.0, rise.y * 100.0, (plain_base + rise.x * 0.75) * 100.0])
+	check_ring_seam()
 	report.survey = {line_peak = snappedf(gentle.peak_grade, 0.001), line_intervals_at_8 = steep.exceeded.size(), roller_peak = snappedf(finished.peak_grade, 0.001), roller_track_peak = snappedf(finished.peak_grade_track, 0.001), designed = snappedf(design.get("grade_designed", 0.0), 0.001), survey_ms = snappedf(finished.survey_ms, 0.01)}
+
+## The ring course measured from its own start and from a start moved by 37 points: on the same heightfield the
+## profile is the same at the same places, the 4 m window wraps through the seam, nothing at the seam is unmeasured.
+func check_ring_seam() -> void:
+	var ring: Array[TrailDefinition] = Fixture.course(3)
+	var d := ring[0]
+	var h: Heightfield = Fixture.prepare(ring).heights
+	var moved := d.duplicate(true) as TrailDefinition
+	var pts := PackedVector2Array()
+	for i in d.points.size() - 1: pts.append(d.points[(i + 37) % (d.points.size() - 1)])
+	pts.append(pts[0])
+	moved.points = pts
+	var a := TrailSurvey.measure(h, d, 0.1)
+	var b := TrailSurvey.measure(h, moved, 0.1)
+	var shift := d.route_length() - moved.nearest(d.points[0]).x # station in `a` of the moved start
+	var worst := 0.0
+	for j in b.stations.size():
+		var at := fposmod(b.stations[j] + shift, a.length)
+		var i := clampi(roundi(at / (a.length / (a.stations.size() - 1))), 0, a.stations.size() - 1)
+		worst = maxf(worst, absf(a.grade[i] - b.grade[j]))
+	check(a.closed and a.unmeasured.is_empty() and b.unmeasured.is_empty() and is_finite(a.grade[0]) and absf(a.grade[0] - a.grade[-1]) < 0.001 and worst < 0.02 and absf(a.peak_grade - b.peak_grade) < 0.01, "ring profile is the same from a moved start (worst %.3f, %d / %d intervals), the 4 m window wraps the seam" % [worst, a.exceeded.size(), b.exceeded.size()])
 
 ## Northshore: the survey keeps to the deck (continuous support, as the bike), marks its abrupt end as unmeasured
 ## and changes nothing it reads.
@@ -415,6 +456,11 @@ func check_deck_survey(h: Heightfield, d: TrailDefinition, park: Array[TrailDefi
 	var edge := false
 	for run: Dictionary in survey.unmeasured: edge = edge or (run.reason == "кромка настила" and 3 in (run.elements as Array))
 	check(deck_samples > 4 and on_deck and edge and survey.deck_length > shore.length * 0.8 and survey.errors.is_empty(), "northshore measured on its deck (%.0f m), its end marked unmeasured, not as a grade" % survey.deck_length)
+	# The deck end leaves a gap in the profile: the check is incomplete, with or without excesses found elsewhere.
+	var lenient := TrailSurvey.measure(h, d, 5.0)
+	check(lenient.level() == "incomplete" and not lenient.complete() and lenient.exceeded.is_empty() and "НЕПОЛНАЯ" in lenient.summary(), "incomplete profile without excesses is not reported as within the requirement")
+	var strict := TrailSurvey.measure(h, d, 0.05)
+	check(strict.level() == "exceeded" and not strict.complete() and not strict.exceeded.is_empty() and "НЕПОЛНАЯ" in strict.summary(), "incomplete profile keeps its excesses (%d) and still says it is incomplete" % strict.exceeded.size())
 	var fresh := Fixture.prepare(park)
 	TrailTechnical.build(fresh.heights, park)
 	check(before == [var_to_bytes(h.road_refinement.patches), var_to_bytes(h.hv), var_to_bytes(h.structures)] and survey.support == again.support and var_to_bytes((fresh.heights as Heightfield).road_refinement.patches) == before[0], "survey changes neither the terrain, the decks nor the build result")

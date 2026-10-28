@@ -247,7 +247,7 @@ func _mark_survey() -> void:
 		var survey: TrailSurvey = surveys.get(d.id)
 		if survey == null: continue
 		for run: Dictionary in survey.exceeded:
-			_survey_label(d, run, "Уклон %+.0f%% · %.0f–%.0f м%s" % [run.peak * 100.0, run.from, run.to, " · элемент" if not (run.elements as Array).is_empty() else ""], Color(1.0, 0.35, 0.3))
+			_survey_label(d, run, "Уклон 4 м %+.0f%% · %.0f–%.0f м%s" % [run.peak * 100.0, run.from, run.to, " · элемент" if not (run.elements as Array).is_empty() else ""], Color(1.0, 0.35, 0.3))
 		for run: Dictionary in survey.unmeasured:
 			_survey_label(d, run, "Не измерено: %s · %.0f–%.0f м" % [run.reason, run.from, run.to], Color(1.0, 0.7, 0.25))
 
@@ -256,7 +256,9 @@ func _survey_label(d: TrailDefinition, run: Dictionary, text: String, color: Col
 	var strip := ImmediateMesh.new()
 	strip.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
 	var station: float = run.from - 1.0
-	while station <= run.to + 1.0:
+	# An interval through the seam of a circuit (from > to) continues past the route length; point_at wraps it.
+	var to: float = run.to + (d.route_length() if run.from > run.to else 0.0)
+	while station <= to + 1.0:
 		var p := d.point_at(station)
 		var side := Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * (d.width * 0.5 + 0.4)
 		var y := heights.surface_at(p.x, p.y, INF) + 0.3
@@ -272,7 +274,7 @@ func _survey_label(d: TrailDefinition, run: Dictionary, text: String, color: Col
 	band.mesh = strip
 	band.material_override = material
 	survey_markers.add_child(band)
-	var at := d.point_at((run.from + run.to) * 0.5)
+	var at := d.point_at((run.from + to) * 0.5)
 	var label := Label3D.new()
 	label.text = text
 	label.modulate = color
