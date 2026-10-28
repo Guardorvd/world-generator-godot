@@ -11,6 +11,9 @@ signal camera_toggle_requested
 signal close_requested
 ## Explicit grade requirement for the finished-surface check, %; judged without rebuilding the terrain.
 signal requirement_changed(grade: float)
+## Построить линию по рельефу на сохранённом участке: числа route_* панели (метры участка, %, тыс. раскрытий).
+signal line_requested(values: Dictionary)
+var line_report := Label.new()
 var course_choice := OptionButton.new()
 var kind_choice := OptionButton.new()
 ## Trail profile of TrailComposer (first item: the shape's own elements) and the test ground under the course.
@@ -83,6 +86,36 @@ func _ready() -> void:
 	load_course.tooltip_text = "Заменить текущую площадку выбранной формой трассы"
 	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected], "" if style_choice.selected == 0 else TrailComposer.PROFILES.keys()[style_choice.selected - 1], Fixture.GROUNDS[ground_choice.selected]))
 	course_box.add_child(load_course)
+	var line_box := _add_section(box, "Линия по рельефу (участок мира)", false)
+	var zone := Label.new()
+	zone.theme_type_variation = "HintLabel"
+	zone.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	zone.text = "Координаты — метры сохранённого участка; рабочая зона %s. Поиск идёт по естественной земле в обход воды, мостов и путей; демонстрационная линия не используется." % _work_zone()
+	line_box.add_child(zone)
+	for spec: Array in [["route_start_x", "Старт X, м", 0.0, 400.0, 1.0], ["route_start_z", "Старт Z, м", 0.0, 400.0, 1.0],
+			["route_finish_x", "Финиш X, м", 0.0, 400.0, 1.0], ["route_finish_z", "Финиш Z, м", 0.0, 400.0, 1.0],
+			["route_width", "Ширина, м", 2.0, 8.0, 0.25], ["route_grade", "Предел уклона, %", 3.0, 50.0, 1.0],
+			["route_cut", "Выемка до, м", 0.0, 2.0, 0.1], ["route_fill", "Насыпь до, м", 0.0, 2.0, 0.1],
+			["route_radius", "Радиус поворота от, м", 2.0, 40.0, 0.5], ["route_budget", "Бюджет, тыс. раскрытий", 1.0, 500.0, 1.0]]:
+		_add_number(line_box, spec)
+	var defaults := TrailRouter.DEFAULTS
+	for pair: Array in [["route_start_x", 126.0], ["route_start_z", 246.0], ["route_finish_x", 78.0], ["route_finish_z", 174.0],
+			["route_width", defaults.width], ["route_grade", defaults.grade * 100.0], ["route_cut", defaults.max_cut],
+			["route_fill", defaults.max_fill], ["route_radius", defaults.min_radius], ["route_budget", defaults.budget / 1000.0]]:
+		numbers[pair[0]].value = pair[1]
+	var build_line := Button.new()
+	build_line.text = "Построить линию"
+	build_line.tooltip_text = "Найти линию по местности между стартом и финишем, собрать полотно и проверить готовую поверхность. При отказе остаётся прежняя трасса"
+	build_line.pressed.connect(func() -> void:
+		var values := {}
+		for key: String in numbers:
+			if key.begins_with("route_"): values[key] = numbers[key].value
+		line_requested.emit(values))
+	line_box.add_child(build_line)
+	line_report.theme_type_variation = "HintLabel"
+	line_report.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	line_report.text = "Линия ещё не строилась"
+	line_box.add_child(line_report)
 	var trail_box := _add_section(box, "Трасса и покрытие", false)
 	for name in ["Авто по местности", "Гравий", "Грунт", "Укатанная земля", "Камень", "Песок", "Лес", "Трава"]: surface_choice.add_item(name)
 	_add_choice(trail_box, "Покрытие", surface_choice)
@@ -199,6 +232,14 @@ func _add_choice(box: VBoxContainer, caption: String, choice: OptionButton) -> v
 	choice.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	choice.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_child(choice)
+
+## Рабочая зона сохранённого участка в метрах участка (без отступа под ширину) или «—», если он не открыт.
+func _work_zone() -> String:
+	var site := Fixture.site()
+	if site == null: return "— (участок не открыт)"
+	var lo := Vector2(site.work.position) * GameConfig.TILE
+	var hi := Vector2(site.work.end) * GameConfig.TILE
+	return "X %.0f–%.0f, Z %.0f–%.0f" % [lo.x, hi.x, lo.y, hi.y]
 
 func set_camera_overview(enabled: bool) -> void:
 	camera_button.text = "Камера: обзор сверху · V" if enabled else "Камера: обычная · V"

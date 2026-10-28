@@ -55,6 +55,8 @@ var water := Node3D.new()
 ## Lab decks of elements are drawn by TrailLabProps and are not part of this list.
 var structures := Node3D.new()
 var _look := ""
+## Last run of the line builder (TrailRouter), successful or refused; shown in F3 while its line is on the site.
+var line_result: TrailRouter
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -168,6 +170,7 @@ func _ready() -> void:
 	editor.launch_requested.connect(launch_element)
 	editor.reload_requested.connect(reload_sources)
 	editor.requirement_changed.connect(func(grade: float) -> void: set_grade_requirement(grade / 100.0))
+	editor.line_requested.connect(build_line)
 	editor.numbers.required_grade.value = grade_requirement * 100.0
 	set_overview(false)
 	get_viewport().size_changed.connect(_place_editor)
@@ -186,12 +189,13 @@ func _copy_routes(source: Array[TrailDefinition]) -> Array[TrailDefinition]:
 
 ## Transactional edit: prepare data and mesh first, then replace the live session.
 ## `compose_ms` — time the caller spent composing the elements (-1 — not composed); counted in the total.
-func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0) -> bool:
+## `ready` — a Fixture.prepare result the caller already built for exactly these routes (the line builder): not rebuilt.
+func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {}) -> bool:
 	var started := Time.get_ticks_usec()
 	if candidate.is_empty():
 		show_message("Нужна хотя бы одна трасса")
 		return false
-	var prepared := Fixture.prepare(candidate, true, ground_kind)
+	var prepared := ready if not ready.is_empty() else Fixture.prepare(candidate, true, ground_kind)
 	if not prepared.errors.is_empty():
 		show_message("Правка отклонена: " + "; ".join(prepared.errors))
 		return false
@@ -243,6 +247,73 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0) -> bool:
 	build_timings = timings
 	show_message("Готово за %.0f мс · правки действуют в текущем запуске" % timings.total_ms)
 	return true
+
+## Line builder on the saved site: search over the natural ground, one full build of the chosen candidate
+## (TrailRouter), then the usual transactional replacement with that build. A refusal or an unmet requirement
+## keeps the previous route and scene. `values` — the route_* numbers of the panel.
+func build_line(values: Dictionary) -> bool:
+	var site := Fixture.site()
+	if site == null:
+		show_message("Площадка не открыта: " + Fixture.site_error)
+		return false
+	var request := {start = Vector2(values.route_start_x, values.route_start_z), finish = Vector2(values.route_finish_x, values.route_finish_z),
+		width = values.route_width, grade = values.route_grade / 100.0, max_cut = values.route_cut, max_fill = values.route_fill,
+		min_radius = values.route_radius, budget = int(values.route_budget * 1000.0)}
+	var result := TrailRouter.build(site, request)
+	line_result = result
+	editor.line_report.text = result.summary()
+	if not result.accepted:
+		show_message("Линия не построена, прежняя трасса сохранена: " + result.reason)
+		return false
+	var previous := ground_kind
+	ground_kind = "site"
+	# The finished surface is judged by the line's own requirement; the panel shows it.
+	grade_requirement = request.grade
+	editor.numbers.required_grade.set_value_no_signal(request.grade * 100.0)
+	if not rebuild([result.definition] as Array[TrailDefinition], -1.0, result.prepared):
+		ground_kind = previous
+		return false
+	_draw_line(result)
+	set_overview(true)
+	show_message("Линия построена: %.0f м за %.0f мс (поиск %.0f, сборка %.0f)" % [result.stats.length, result.stats.total_ms, result.stats.search_ms, result.stats.build_ms])
+	return true
+
+## The found line over the finished surface (cyan), its ends and, faint, the straight between them.
+func _draw_line(result: TrailRouter) -> void:
+	var d := result.definition
+	var strip := ImmediateMesh.new()
+	strip.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+	var station := 0.0
+	while station <= d.route_length():
+		var p := d.point_at(station)
+		var side := Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * 0.35
+		var y := heights.surface_at(p.x, p.y, INF) + 0.35
+		strip.surface_add_vertex(Vector3(p.x + side.x, y, p.y + side.y))
+		strip.surface_add_vertex(Vector3(p.x - side.x, y, p.y - side.y))
+		station += 1.0
+	strip.surface_end()
+	_add_strip(strip, Color(0.2, 0.9, 1.0))
+	var straight := ImmediateMesh.new()
+	straight.surface_begin(Mesh.PRIMITIVE_LINE_STRIP)
+	var a: Vector2 = result.request.start
+	var b: Vector2 = result.request.finish
+	for k in 41:
+		var p := a.lerp(b, k / 40.0)
+		straight.surface_add_vertex(Vector3(p.x, maxf(heights.ground_at(p.x, p.y), heights.surface_at(p.x, p.y, INF)) + 0.6, p.y))
+	straight.surface_end()
+	_add_strip(straight, Color(1, 1, 1, 0.6))
+	_label("Старт", a, 4.0)
+	_label("Финиш", b, 4.0)
+
+func _add_strip(mesh: ImmediateMesh, color: Color) -> void:
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.albedo_color = color
+	var node := MeshInstance3D.new()
+	node.mesh = mesh
+	node.material_override = material
+	markers.add_child(node)
 
 ## Terrain material and water of the current ground, rebuilt only when the ground changes. A saved site gets its
 ## piece of the world texture (when the cache had one), the world offset of the shader detail and road bumps, and
@@ -537,6 +608,10 @@ func _shaping_report() -> String:
 	return "Рельеф: выемка %.0f м³ (до %.2f м) · насыпь %.0f м³ (до %.2f м)
 Проект полотна без элементов: уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.cut_m3, stats.max_cut, stats.fill_m3, stats.max_fill, stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
 
+func _line_report() -> String:
+	if line_result == null or routes[lane].id != "site_route": return ""
+	return "\nПостроитель линии:\n" + line_result.summary()
+
 func _survey_report() -> String:
 	var survey: TrailSurvey = surveys.get(routes[lane].id)
 	return survey.summary() if survey != null else "Поверхность: не измерена"
@@ -575,5 +650,5 @@ func _process(dt: float) -> void:
 %s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane]) + "
 " + _shaping_report() + "
 " + _survey_report() + "
-" + _build_report()]
+" + _build_report() + _line_report()]
 	status.position.y = hud_panel.position.y + hud_panel.size.y + 10
