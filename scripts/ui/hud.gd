@@ -286,6 +286,24 @@ func all_places() -> Array:
 	return out
 
 
+## Trail definitions live in the start plan and in the persistent region ledger, even after field eviction.
+func trail_places() -> Array:
+	var plans: Array = [world.trail_plan]
+	if world.outer != null:
+		for entry: Dictionary in world.outer.get_ledger().get("regions", {}).values():
+			plans.append(entry.get("trail_plan", {}))
+	var result := []
+	for plan: Dictionary in plans:
+		if plan.get("state") != "found" or not plan.has("definition"): continue
+		var definition: Dictionary = plan.definition
+		var points: PackedVector2Array = definition.get("points", PackedVector2Array())
+		if points.size() < 2: continue
+		var start := points[0] / TILE
+		result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"),
+			x = start.x, y = start.y, points = points})
+	return result
+
+
 ## Место на открытой территории: туда можно переместиться с карты.
 func in_open_land(p: Dictionary) -> bool:
 	match p.kind:
@@ -907,7 +925,7 @@ class BigMap extends Control:
 		var f := _frame()
 		var best := {}
 		var bd := PICK
-		for pl: Dictionary in hud.all_places():
+		for pl: Dictionary in hud.all_places() + hud.trail_places():
 			if pl.kind != "settlement" and not hud.world.accessible(pl.x, pl.y):
 				continue # за краем открытых земель на карте видны только поселения
 			var d := pos.distance_to(f[0] + Vector2(pl.x, pl.y) * f[2])
@@ -1000,8 +1018,18 @@ class BigMap extends Control:
 			draw_rect(Rect2(Vector2(o.x, a.y), Vector2(a.x - o.x, b.y - a.y)), shade)
 			draw_rect(Rect2(Vector2(b.x, a.y), Vector2(o.x + sz - b.x, b.y - a.y)), shade)
 			draw_rect(Rect2(a, b - a), Hud.GOLD, false, 1.5)
+		# Outline the whole route and mark its start as a selectable destination.
+		for trail: Dictionary in hud.trail_places():
+			var line := PackedVector2Array()
+			for point: Vector2 in trail.points: line.append(o + point / Hud.TILE * k)
+			if line.size() >= 2:
+				draw_polyline(line, Color(0.05, 0.12, 0.10, 0.95), 7.0, true)
+				draw_polyline(line, Color.html("#54e1aa"), 3.0, true)
+			var start := o + Vector2(trail.x, trail.y) * k
+			draw_circle(start, 7.0, Color(0.05, 0.12, 0.10, 0.95))
+			draw_arc(start, 6.0, 0.0, TAU, 24, Color.html("#54e1aa"), 2.5, true)
 		var names: Array[Dictionary] = []
-		for pl: Dictionary in hud.all_places():
+		for pl: Dictionary in hud.all_places() + hud.trail_places():
 			var at := o + Vector2(pl.x, pl.y) * k
 			if not w.accessible(pl.x, pl.y):
 				# Дальние поселения — тусклые точки без подписи: их можно выбрать целью заранее.
@@ -1012,6 +1040,8 @@ class BigMap extends Control:
 				continue
 			var seen: bool = hud.visited.has(pl.key)
 			match pl.kind:
+				"trail":
+					_queue_name(names, pl, at - Vector2(0, 10), Color.html("#9cf5cc"), 13)
 				"settlement":
 					draw_circle(at, 3.5, Color.html("#ffdd55") if seen else Color.WHITE)
 					_queue_name(names, pl, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
@@ -1048,7 +1078,7 @@ class BigMap extends Control:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, 30.0), Color.WHITE, 16)
 		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, size.y - 16.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "ЛКМ — цель или метка · колесо — масштаб · перетаскивание — сдвиг · средняя кнопка — к себе"
+		var tip := "Зелёным — трасса, кольцо — старт · ЛКМ — цель · ПКМ — перемещение · колесо — масштаб · перетаскивание — сдвиг · средняя кнопка — к себе"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
