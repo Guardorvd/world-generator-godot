@@ -100,7 +100,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 					var local := Vector3.ZERO
 					var rank := INF
 					for d in definitions:
-						var near := d.nearest(at)
+						var near := d.nearest(at, d.width * 0.5 + RoadRefinement.REACH)
 						var score := near.z / (d.width * 0.5)
 						if near.z < d.width * 0.5 + RoadRefinement.REACH and score < rank:
 							winner = d

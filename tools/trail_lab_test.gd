@@ -329,8 +329,34 @@ func check_composer() -> void:
 		var cells := Fixture.relief(ground)
 		var top := 0.0
 		for v in cells: top = maxf(top, v)
-		var course := Fixture.course(9, "mountain", "mountain" if ground == "mountain" else "flow", ground)
+		# The leisure profile places no objects: the ride tests the ground and the earthwork, not the line choice.
+		var course := Fixture.course(9, "mountain", "leisure", ground)
 		var prepared := Fixture.prepare(course, true, ground)
 		var fall := Fixture.ground(course[0].points[0], ground) - Fixture.ground(course[0].points[-1], ground)
-		report["relief_" + ground] = [snappedf(top, 0.1), snappedf(fall, 0.1)]
 		check(prepared.errors.is_empty() and fall > (Fixture.GROUND_DROP[ground] as Vector2).x * 0.5, "%s ground from world relief (range %.1f m, route falls %.1f m) prepares a composed route %s" % [ground, top, fall, ", ".join(prepared.errors)])
+		if not prepared.errors.is_empty(): continue
+		var h: Heightfield = prepared.heights
+		var shaping: Dictionary = h.road_refinement.trail_shaping.get(course[0].id, {})
+		var end := ride_route(h, course[0], 15.0 / 3.6)
+		report["relief_" + ground] = {range = snappedf(top, 0.1), fall = snappedf(fall, 0.1), grade_natural = snappedf(shaping.get("grade_natural", 0.0), 0.01), grade_designed = snappedf(shaping.get("grade_designed", 0.0), 0.01), ridden_to = snappedf(end, 0.1)}
+		check(end > course[0].route_length() - 8.0, "bike rides the whole composed route on %s ground (to %.0f of %.0f m)" % [ground, end, course[0].route_length()])
+
+## Centre-line ride holding `target` m/s (pedal below, brake above 1.1×); returns the last station reached.
+func ride_route(h: Heightfield, d: TrailDefinition, target: float) -> float:
+	var b := BikeRide.new()
+	var p := PlayerState.new()
+	var control := BikeController.new()
+	b.x = d.points[0].x
+	b.z = d.points[0].y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(0.0)
+	b.mount(p)
+	b.speed = target
+	var station := 0.0
+	for i in 60 * 150:
+		station = d.nearest(Vector2(b.x, b.z)).x
+		if b.crashed or station > d.route_length() - 8.0: break
+		var ahead := d.point_at(station + maxf(4.0, b.speed * 0.55)) - Vector2(b.x, b.z)
+		var steer := clampf(-wrapf(atan2(-ahead.x, -ahead.y) - b.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		control.ride(1.0 / 60, p, b, h.world, h, 1.0 if b.speed < target else (-0.6 if b.speed > target * 1.1 else 0.0), steer, false, false, false)
+	return station if not b.crashed else -station

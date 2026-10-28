@@ -4,7 +4,10 @@ extends Resource
 @export var id := "trail"
 @export var title := "Trail"
 @export_enum("trail", "mountain", "road") var kind := "mountain"
-@export var points := PackedVector2Array()
+@export var points := PackedVector2Array():
+	set(value):
+		points = value
+		_along = PackedFloat32Array() # the station index is rebuilt on the next query
 @export var width := 4.0
 ## NONE asks RoadSurface to choose from the real biome/slope/seed.
 @export_range(0, 7) var surface := RoadSurface.NONE
@@ -19,14 +22,48 @@ extends Resource
 ## Composition sections from TrailComposer: {from, to, mood, difficulty}. Informational, never baked.
 @export var sections: Array[Dictionary] = []
 
+## Station of every point and a coarse grid of segments (GRID m cells -> indices of the segments ending at
+## those points): point_at is a binary search and nearby queries look at a few segments instead of all.
+const GRID := 8.0
+var _along := PackedFloat32Array()
+var _grid := {}
+
+func _index() -> void:
+	if _along.size() == points.size() and not _along.is_empty(): return
+	_along.resize(points.size())
+	_grid.clear()
+	var sum := 0.0
+	for i in points.size():
+		if i > 0:
+			sum += points[i - 1].distance_to(points[i])
+			var lo := (points[i - 1].min(points[i]) / GRID).floor()
+			var hi := (points[i - 1].max(points[i]) / GRID).floor()
+			for gz in range(int(lo.y), int(hi.y) + 1):
+				for gx in range(int(lo.x), int(hi.x) + 1):
+					var key := Vector2i(gx, gz)
+					if not _grid.has(key): _grid[key] = []
+					(_grid[key] as Array).append(i)
+		_along[i] = sum
+
+## Segments (by end point index) that may come within `reach` of `at`; may repeat.
+func _segments_near(at: Vector2, reach: float) -> Array:
+	_index()
+	var result := []
+	var lo := ((at - Vector2.ONE * reach) / GRID).floor()
+	var hi := ((at + Vector2.ONE * reach) / GRID).floor()
+	for gz in range(int(lo.y), int(hi.y) + 1):
+		for gx in range(int(lo.x), int(hi.x) + 1):
+			var list: Variant = _grid.get(Vector2i(gx, gz))
+			if list != null: result.append_array(list as Array)
+	return result
+
 func shape() -> TrailShaping:
 	return shaping if shaping != null else TrailShaping.preset(kind)
 
 func route_length() -> float:
-	var result := 0.0
-	for i in range(1, points.size()):
-		result += points[i - 1].distance_to(points[i])
-	return result
+	if points.size() < 2: return 0.0
+	_index()
+	return _along[-1]
 
 func validate() -> PackedStringArray:
 	var errors := PackedStringArray()
@@ -89,27 +126,42 @@ func heading_at(station: float) -> float:
 	return atan2(-direction.x, -direction.y)
 
 func point_at(station: float) -> Vector2:
+	_index()
 	var remaining := fposmod(station, route_length()) if closed else maxf(0.0, station)
-	for i in range(1, points.size()):
-		var span := points[i - 1].distance_to(points[i])
-		if remaining <= span: return points[i - 1].lerp(points[i], remaining / span)
-		remaining -= span
-	return points[-1]
+	if points.size() < 2 or remaining >= _along[-1]: return points[-1]
+	var i := maxi(1, _along.bsearch(remaining))
+	var span := _along[i] - _along[i - 1]
+	return points[i - 1].lerp(points[i], (remaining - _along[i - 1]) / span) if span > 0.0 else points[i]
 
-func nearest(at: Vector2) -> Vector3:
+## Station, signed across and distance of the closest route point. With a finite `reach` only segments
+## near `at` are looked at, and a point farther than `reach` gives distance INF.
+func nearest(at: Vector2, reach := INF) -> Vector3:
+	_index()
 	var best := INF
-	var result := Vector3.ZERO # station, signed across, distance
-	var along := 0.0
+	var result := Vector3(0.0, 0.0, INF) # station, signed across, distance
+	if is_finite(reach):
+		for i: int in _segments_near(at, reach):
+			var found := _project(at, i)
+			if found.z < best:
+				best = found.z
+				result = found
+		return result if best <= reach else Vector3(0.0, 0.0, INF)
+	# A rider is almost always close to the route: look nearby first, scan everything only when that fails.
+	result = nearest(at, 16.0)
+	if is_finite(result.z): return result
 	for i in range(1, points.size()):
-		var delta := points[i] - points[i - 1]
-		var span := delta.length()
-		var t := clampf((at - points[i - 1]).dot(delta) / delta.length_squared(), 0.0, 1.0)
-		var offset := at - (points[i - 1] + delta * t)
-		if offset.length_squared() < best:
-			best = offset.length_squared()
-			result = Vector3(along + span * t, offset.cross(delta / span), offset.length())
-		along += span
+		var found := _project(at, i)
+		if found.z < best:
+			best = found.z
+			result = found
 	return result
+
+func _project(at: Vector2, i: int) -> Vector3:
+	var delta := points[i] - points[i - 1]
+	var span := delta.length()
+	var t := clampf((at - points[i - 1]).dot(delta) / delta.length_squared(), 0.0, 1.0)
+	var offset := at - (points[i - 1] + delta * t)
+	return Vector3(_along[i - 1] + span * t, offset.cross(delta / span), offset.length())
 
 ## Smooth frame over metres, independent of input point spacing; wraps at a circuit seam.
 func tangent_at(station: float) -> Vector2:
@@ -120,17 +172,13 @@ func curvature_at(station: float) -> float:
 
 ## A heightfield cannot carry two different decks at a crossing: keep shared junctions grounded.
 func junction_weight(at: Vector2, station: float) -> float:
-	var along := 0.0
 	var weight := 1.0
 	var total := route_length()
-	for i in range(1, points.size()):
-		var delta := points[i] - points[i - 1]
-		var span := delta.length()
-		var t := clampf((at - points[i - 1]).dot(delta) / delta.length_squared(), 0.0, 1.0)
-		var separation := absf(along + span * t - station)
+	# Farther segments give smoothstep 1 and cannot lower the weight.
+	for i: int in _segments_near(at, width * 0.5 + RoadRefinement.REACH):
+		var found := _project(at, i)
+		var separation := absf(found.x - station)
 		if closed: separation = minf(separation, total - separation)
 		if separation > maxf(20.0, width * 3.0):
-			var distance := at.distance_to(points[i - 1] + delta * t)
-			weight = minf(weight, smoothstep(width * 0.5, width * 0.5 + RoadRefinement.REACH, distance))
-		along += span
+			weight = minf(weight, smoothstep(width * 0.5, width * 0.5 + RoadRefinement.REACH, found.z))
 	return weight

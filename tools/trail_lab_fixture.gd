@@ -12,8 +12,8 @@ static func build(routes: Array[TrailDefinition], with_elements := true) -> Heig
 ## Test grounds under a course: "flat" is the lab's own gentle slope; "hills" and "mountain" take a 256 m window
 ## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns).
 const GROUNDS := ["flat", "hills", "mountain"]
-## Wanted drop over the window, m, for the relief grounds.
-const GROUND_DROP := {hills = Vector2(8, 22), mountain = Vector2(28, 60)}
+## Wanted fall from edge to edge of the window, m.
+const GROUND_DROP := {hills = Vector2(14, 30), mountain = Vector2(22, 40)}
 static var _relief := {}
 
 ## Natural ground under the lab, m: what prepare() writes into the world and what the composer reads.
@@ -51,16 +51,20 @@ static func relief(kind: String) -> PackedFloat32Array:
 	for cy in 8:
 		for cx in 8:
 			var lo := INF
+			var hi := -INF
 			var edges := Vector4() # rows z = first, last; columns x = first, last
 			for sj in 6:
 				for si in 6:
 					var sample := StageRelief.raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, cx * 64 + si * 12.6, cy * 64 + sj * 12.6, w.macro_x, w.macro_y, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
 					var m := StageRelief.normalize(sample) * GameConfig.HS
 					lo = minf(lo, m)
+					hi = maxf(hi, m)
 					edges += Vector4(float(sj == 0), float(sj == 5), float(si == 0), float(si == 5)) * m / 6.0
 			var fall_z := absf(edges.y - edges.x)
 			var fall_x := absf(edges.w - edges.z)
-			var score := absf(maxf(fall_z, fall_x) - (want.x + want.y) * 0.5) + (1000.0 if lo < 2.0 else 0.0) # dry land only
+			# A plain slope: relief beyond the edge-to-edge fall (ridges, hollows across the course) counts against it.
+			var fall := maxf(fall_z, fall_x)
+			var score := absf(fall - (want.x + want.y) * 0.5) + (hi - lo - fall) + (1000.0 if lo < 2.0 else 0.0) # dry land only
 			if score < best_score:
 				best_score = score
 				best = Vector2i(cx * 64, cy * 64)
