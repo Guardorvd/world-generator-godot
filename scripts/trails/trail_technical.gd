@@ -3,6 +3,8 @@ extends RefCounted
 ## Objects of technical bike features, laid out deterministically from the element data and the route.
 ## Nothing here moves a bike: small relief goes to ForestObstacles.bumps (the wheel rides over it),
 ## solid objects go to ForestObstacles collision capsules, and props are only for the picture.
+## The one exception is the northshore: its raised decks are bridge-like structures (Heightfield.add_decks),
+## registered by build() on the given heightfield, because only the existing deck support lets a bike ride above the ground.
 ## Every feature keeps clear corridors ("lines") wide enough for the bike, so a harder line is always
 ## a choice and never a trap. Placement uses cells with jitter, never free scattering.
 
@@ -13,10 +15,14 @@ const BUMP_LIMIT := 0.18   # higher than this is an obstacle, not a bump
 const LOG_MAX := 0.4       # a log the rider can hop (RoadObstacles contract)
 const COLLIDE_STRIDE := 7
 const BUMP_STRIDE := 6
+const DECK_PIECE := 2.0    # length of one straight piece of a deck, m
+const DECK_PAD := 0.2      # pieces overlap by this much at inner joints, so a bend leaves no gap between them
+const DECK_RAMP := 0.3     # share of a northshore taken by the rising ramp
 
-## {collide, bumps, props, lines}: lines maps element index -> lateral offsets of the clear lines (route id keyed)
+## {collide, bumps, props, lines, decks}: lines maps element index -> lateral offsets of the clear lines (route id keyed);
+## decks are the northshore pieces, already added to `h`
 static func build(h: Heightfield, routes: Array[TrailDefinition]) -> Dictionary:
-	var set := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}}
+	var set := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}, decks = []}
 	for d in routes:
 		for i in d.elements.size():
 			var e := d.elements[i]
@@ -31,6 +37,8 @@ static func build(h: Heightfield, routes: Array[TrailDefinition]) -> Dictionary:
 				TrailElement.Profile.NARROW: _narrow(h, d, e, rng, set)
 				TrailElement.Profile.LOG: _logs(h, d, e, rng, set)
 				TrailElement.Profile.SLALOM: _slalom(h, d, e, rng, set)
+				TrailElement.Profile.NORTHSHORE: _northshore(h, d, e, d.id + ":" + str(i), set)
+	h.add_decks(set.decks)
 	return set
 
 ## Lateral centres (positive across) of the clean lines through an element.
@@ -40,7 +48,7 @@ static func line_offsets(d: TrailDefinition, e: TrailElement) -> PackedFloat32Ar
 	match e.profile:
 		TrailElement.Profile.NARROW: return PackedFloat32Array([shift])
 		TrailElement.Profile.LOG: return PackedFloat32Array([signf(e.bank if e.bank != 0.0 else 1.0) * (d.width * 0.5 * EDGE - e.gap * 0.5)])
-		TrailElement.Profile.SLALOM: return PackedFloat32Array([0.0])
+		TrailElement.Profile.SLALOM, TrailElement.Profile.NORTHSHORE: return PackedFloat32Array([0.0])
 	match e.lines:
 		1: return PackedFloat32Array([shift])
 		2: return PackedFloat32Array([-0.5 * usable + shift * 0.5, 0.5 * usable + shift * 0.5])
@@ -180,6 +188,42 @@ static func _logs(h: Heightfield, d: TrailDefinition, e: TrailElement, rng: Rand
 		_solid(h, set, a, b, radius, radius * 2.0)
 		var mid := (a + b) * 0.5
 		set.props.append({kind = "log", pos = Vector3(mid.x, h.ground_at(mid.x, mid.y), mid.y), a = a, b = b, radius = radius, seed = rng.randi()})
+
+## A raised boardwalk on the route axis: a ramp rising from the ground over DECK_RAMP of the length, then a level
+## deck `height` above the ground line and an abrupt end (the rider drops off it). The ground is not touched; the
+## deck is a chain of straight pieces that follow the route, registered as structures by build() and drawn from props.
+## Off the side of the deck there is nothing: the bike falls to the ground, as the "planks" bridge style already does.
+static func _northshore(h: Heightfield, d: TrailDefinition, e: TrailElement, key: String, set: Dictionary) -> void:
+	var start := e.station - e.length * 0.5
+	var first := d.point_at(start)
+	var last := d.point_at(start + e.length)
+	var ground_a := h.ground_at(first.x, first.y)
+	var ground_b := h.ground_at(last.x, last.y)
+	var half := minf(e.gap, d.width - 0.5) * 0.5
+	var pieces := maxi(2, ceili(e.length / DECK_PIECE))
+	for k in pieces:
+		var s0 := start + e.length * k / pieces
+		var s1 := start + e.length * (k + 1) / pieces
+		var a := d.point_at(s0)
+		var b := d.point_at(s1)
+		var u := (b - a).normalized()
+		var y0 := _deck_level(s0 - start, e, ground_a, ground_b)
+		var y1 := _deck_level(s1 - start, e, ground_a, ground_b)
+		var slope := (y1 - y0) / maxf(a.distance_to(b), 0.01)
+		var pad_a := DECK_PAD if k > 0 else 0.0
+		var pad_b := DECK_PAD if k < pieces - 1 else 0.0
+		a -= u * pad_a
+		b += u * pad_b
+		y0 -= slope * pad_a
+		y1 += slope * pad_b
+		set.decks.append({key = key + ":" + str(k), half = half, ax = a.x, az = a.y, ay = y0, bx = b.x, bz = b.y, by = y1})
+		set.props.append({kind = "deck", a = Vector3(a.x, y0, a.y), b = Vector3(b.x, y1, b.y), half = half,
+			ground_a = h.ground_at(a.x, a.y), ground_b = h.ground_at(b.x, b.y), odd = k % 2 == 1})
+
+## Deck height at `along` metres from the start: the straight line between the ground at both ends plus the ramp.
+static func _deck_level(along: float, e: TrailElement, ground_a: float, ground_b: float) -> float:
+	var t := along / e.length
+	return lerpf(ground_a, ground_b, t) + e.height * clampf(t / DECK_RAMP, 0.0, 1.0)
 
 ## Each gate is a short wall from just past the axis towards one edge; gates alternate sides, so the clean
 ## line (line_at) has to weave and no straight line stays inside the trail.

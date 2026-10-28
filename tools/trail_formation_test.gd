@@ -139,7 +139,7 @@ func run() -> void:
 		d.width = 5.0
 		d.points = PackedVector2Array([Vector2(128, 224), Vector2(128, 24)])
 		var size := TrailElementLibrary.sized(profile, 0.5)
-		var e := TrailElementLibrary.make(profile, 100.0, size.x * (3 if profile == TrailElement.Profile.WAVES else 1), size.y)
+		var e := TrailElementLibrary.make(profile, 100.0, size.x * (3 if profile == TrailElement.Profile.WAVES or profile == TrailElement.Profile.PUMP else 1), size.y)
 		e.count = 3
 		e.seed = 11
 		d.elements = [e]
@@ -158,7 +158,7 @@ func run() -> void:
 				swing = maxf(swing, absf(e.displacement(d.nearest(p).x, 0.6, 2.5)))
 			check(swing > 0.01 and swing <= 2.0, "%s: reshapes the ground (%.3f m)" % [title, swing])
 			continue
-		check(tech.collide.size() + tech.bumps.size() > 0 and tech.props.size() > 0, "%s: places %d objects" % [title, tech.props.size()])
+		check(tech.collide.size() + tech.bumps.size() + tech.decks.size() > 0 and tech.props.size() > 0, "%s: places %d objects" % [title, tech.props.size()])
 		var offsets: PackedFloat32Array = TrailTechnical.line_offsets(d, e)
 		var clear := true
 		for line in offsets:

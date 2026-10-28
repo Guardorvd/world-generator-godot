@@ -19,8 +19,12 @@ const TITLES := {
 	TrailElement.Profile.NARROW: "Узкий проход",
 	TrailElement.Profile.LOG: "Брёвна",
 	TrailElement.Profile.SLALOM: "Валуны-слалом",
+	TrailElement.Profile.OFF_CAMBER: "Контруклон",
+	TrailElement.Profile.PUMP: "Памп-секция",
+	TrailElement.Profile.DROP: "Дроп",
+	TrailElement.Profile.NORTHSHORE: "Норшор",
 }
-## Typical size at difficulty 0 and 1: length, height. Waves scale length with their count.
+## Typical size at difficulty 0 and 1: length, height. Waves and pump rollers scale length with their count.
 const TECHNICAL := [TrailElement.Profile.RUTS, TrailElement.Profile.RIPPLES, TrailElement.Profile.ROUGH, TrailElement.Profile.ROCK_GARDEN, TrailElement.Profile.ROOTS, TrailElement.Profile.NARROW, TrailElement.Profile.LOG, TrailElement.Profile.SLALOM]
 const RANGE := {
 	TrailElement.Profile.ROLLER: [Vector2(10, 0.3), Vector2(16, 0.9)],
@@ -38,6 +42,11 @@ const RANGE := {
 	TrailElement.Profile.NARROW: [Vector2(8, 0.35), Vector2(12, 0.6)],
 	TrailElement.Profile.LOG: [Vector2(10, 0.22), Vector2(16, 0.38)],
 	TrailElement.Profile.SLALOM: [Vector2(14, 0.35), Vector2(20, 0.55)],
+	# Not in compose(): placed by hand (lab course "Байк-парк") or by a future park generator.
+	TrailElement.Profile.OFF_CAMBER: [Vector2(14, 0.4), Vector2(22, 0.9)],
+	TrailElement.Profile.PUMP: [Vector2(4.8, 0.3), Vector2(5.5, 0.55)], # per crest, like waves
+	TrailElement.Profile.DROP: [Vector2(12, 0.5), Vector2(18, 1.2)],
+	TrailElement.Profile.NORTHSHORE: [Vector2(14, 0.9), Vector2(24, 1.5)], # deck height must stay above Heightfield.STEP
 }
 
 static func make(profile: TrailElement.Profile, station: float, length: float, height: float, bank := 1.0, count := 3, skew := 0.35) -> TrailElement:
@@ -59,7 +68,7 @@ static func titles() -> PackedStringArray:
 	for profile in TrailElement.Profile.values(): result.append(title(profile))
 	return result
 
-## Size of an element for a difficulty in 0..1; waves return per-crest length.
+## Size of an element for a difficulty in 0..1; waves and pump rollers return per-crest length.
 static func sized(profile: TrailElement.Profile, difficulty: float) -> Vector2:
 	var range: Array = RANGE[profile]
 	return (range[0] as Vector2).lerp(range[1], clampf(difficulty, 0.0, 1.0))

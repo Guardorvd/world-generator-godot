@@ -130,6 +130,7 @@ func run() -> void:
 	var repeat := Fixture.build(routes)
 	check(var_to_bytes(repeat.road_refinement.patches) == var_to_bytes(h.road_refinement.patches), "deterministic rebuild with no accumulated earthworks")
 	check_rejected_bakes(routes)
+	check_bike_park()
 	var out := "res://tools/control/runs/trail_lab"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out))
 	report.mesh_error_m = max_error
@@ -185,6 +186,47 @@ func check_rejected_bakes(routes: Array[TrailDefinition]) -> void:
 	check(TrailBuilder.bake_elements(fresh, routes).is_empty(), "valid bake succeeds after a rejected edit")
 	var unprepared := Heightfield.new(fresh.world, false)
 	check(not TrailBuilder.bake_elements(unprepared, routes).is_empty(), "missing refinement is a recoverable error")
+
+## "Байк-парк": pump rollers, drop, table, northshore, off-camber turn. Relief by shape, deck by real support, all by a ride.
+func check_bike_park() -> void:
+	var park := Fixture.course(8)
+	var d := park[0]
+	var prepared := Fixture.prepare(park)
+	check(d.validate().is_empty() and prepared.errors.is_empty(), "bike park course is valid and bakes")
+	var h: Heightfield = prepared.heights
+	TrailTechnical.build(h, park)
+	var drop := d.elements[1]
+	var lip := drop.station - drop.length * 0.5 + drop.length * TrailElement.DROP_LIP
+	check(drop.displacement(lip - 0.2, 0.0, 2.5) > drop.height * 0.95 and absf(drop.displacement(lip + TrailElement.DROP_EDGE + 0.2, 0.0, 2.5)) < 0.01, "drop has a flat lip and lands on the natural ground")
+	var shore := d.elements[3]
+	var mid := d.point_at(shore.station)
+	var side := Vector2(d.tangent_at(shore.station).y, -d.tangent_at(shore.station).x) * 2.0
+	check(h.surface_at(mid.x, mid.y, 100.0) - h.ground_at(mid.x, mid.y) > shore.height - 0.1 and h.surface_at(mid.x + side.x, mid.y + side.y, 100.0) - h.ground_at(mid.x + side.x, mid.y + side.y) < 0.001, "northshore deck carries the bike above the ground and ends at its sides")
+	var camber := d.elements[4]
+	var apex := d.point_at(camber.station)
+	var lateral := Vector2(d.tangent_at(camber.station).y, -d.tangent_at(camber.station).x) * camber.bank * 1.5
+	check(h.ground_at(apex.x - lateral.x, apex.y - lateral.y) - h.ground_at(apex.x + lateral.x, apex.y + lateral.y) > 0.3, "off-camber lowers the outside of the turn")
+	var bike := BikeRide.new()
+	var player := PlayerState.new()
+	var control := BikeController.new()
+	bike.x = d.points[0].x
+	bike.z = d.points[0].y
+	bike.y = h.surface_at(bike.x, bike.z, -INF)
+	bike.heading = d.heading_at(0.0)
+	bike.mount(player)
+	bike.speed = 6.9
+	var station := 0.0
+	var peak_above := 0.0
+	for i in 60 * 60:
+		var here := Vector2(bike.x, bike.z)
+		station = d.nearest(here).x
+		var delta := d.point_at(station + 5.0) - here
+		var steer := clampf(-wrapf(atan2(-delta.x, -delta.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		control.ride(1.0 / 60, player, bike, h.world, h, 0.6 if bike.speed < 6.9 else 0.0, steer, false, false, false)
+		peak_above = maxf(peak_above, bike.y - h.ground_at(bike.x, bike.z))
+		if bike.crashed or station > d.route_length() - 8.0: break
+	check(not bike.crashed and station > d.route_length() - 8.0, "bike rides the whole bike park course")
+	check(peak_above > shore.height * 0.8, "bike rode up onto the northshore deck")
 
 func check_lab_session(lab: Node) -> void:
 	var detail_key := InputEventKey.new()

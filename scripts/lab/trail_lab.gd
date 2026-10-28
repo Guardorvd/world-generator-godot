@@ -32,7 +32,7 @@ var overview := false
 var terrain := MeshInstance3D.new()
 var markers := Node3D.new()
 var props := Node3D.new()
-var technical := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}}
+var technical := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}, decks = []}
 var last_land_impact := 0.0
 var last_bottom_out := 0.0
 var metrics := TrailLabMetrics.new()

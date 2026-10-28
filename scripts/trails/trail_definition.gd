@@ -49,12 +49,15 @@ func validate() -> PackedStringArray:
 		if absf(e.bank) > 1.0: errors.append("Bank must be between -1 and 1")
 		if e.count < 1 or e.count > 12 or e.skew < 0.15 or e.skew > 0.85: errors.append("Element count or skew out of range")
 		elif e.profile == TrailElement.Profile.WAVES and e.length / e.count < RoadRefinement.STEP * 8.0: errors.append("Waves are too short for the heightfield resolution")
+		elif e.profile == TrailElement.Profile.PUMP and e.length / e.count < RoadRefinement.STEP * 4.0: errors.append("Pump rollers are too short for the heightfield resolution")
 		if e.lines < 1 or e.lines > 3 or e.density < 0.05 or e.density > 1.0 or e.gap < 1.0 or e.period < 1.5:
 			errors.append("Technical element parameters out of range")
 		elif e.profile == TrailElement.Profile.NARROW and e.gap > width - 0.5:
 			errors.append("Narrow passage must be narrower than the route")
 		elif e.profile == TrailElement.Profile.LOG and e.gap > width * 0.5 - 0.3:
 			errors.append("Log bypass must fit beside the log")
+		elif e.profile == TrailElement.Profile.NORTHSHORE and e.gap > width - 0.5:
+			errors.append("Northshore deck must be narrower than the route")
 		if not is_finite(e.station) or not is_finite(e.length) or not is_finite(e.height) or not is_finite(e.bank):
 			errors.append("Non-finite element")
 		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > 2.0:

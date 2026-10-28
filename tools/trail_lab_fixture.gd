@@ -50,7 +50,7 @@ static func course(index: int, kind := "mountain") -> Array[TrailDefinition]:
 	if index == 0: return definitions()
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
-	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес"][index]
+	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес", "Байк-парк"][index]
 	d.kind = kind
 	d.width = 6.0 if kind == "road" else (3.0 if kind == "trail" else 5.0)
 	d.surface = RoadSurface.PACKED if kind == "road" else RoadSurface.DIRT
@@ -72,7 +72,42 @@ static func course(index: int, kind := "mountain") -> Array[TrailDefinition]:
 			7: pts.append(Vector2(128 + 28 * sin(a * 2.0), 224 - 192 * t))
 	d.closed = index in [3, 5]
 	if d.closed: pts[-1] = pts[0]
+	if index == 8:
+		pts = park_points()
+		d.auto_bank = 0.0 # the shaper's own superelevation (up to 38 %) would cancel the off-camber turn
 	d.points = pts
 	if index == 6: d.elements = TrailElementLibrary.compose(d, 4242, 0.5)
 	if index == 7: d.elements = TrailElementLibrary.compose(d, 777, 0.5, 0.7, 0.85)
+	if index == 8: d.elements = park_elements(d)
 	return [d]
+
+## Bike park line: a straight with the jump and boardwalk features, then a left turn and a straight.
+static func park_points() -> PackedVector2Array:
+	var pts := PackedVector2Array()
+	var at := Vector2(128, 236)
+	var heading := Vector2(0, -1)
+	for i in 150:
+		pts.append(at)
+		at += heading
+	for i in int(PI * 0.5 * 30.0):
+		pts.append(at)
+		heading = heading.rotated(-1.0 / 30.0)
+		at += heading
+	for i in 58:
+		pts.append(at)
+		at += heading
+	pts.append(at)
+	return pts
+
+## Pump rollers, drop, table, northshore on the straight; off-camber on the outside of the turn.
+static func park_elements(d: TrailDefinition) -> Array[TrailElement]:
+	var T := TrailElement.Profile
+	var result: Array[TrailElement] = []
+	result.append(TrailElementLibrary.make(T.PUMP, 30.0, 25.0, 0.45, 1.0, 5))
+	result.append(TrailElementLibrary.make(T.DROP, 62.0, 14.0, 0.8))
+	result.append(TrailElementLibrary.make(T.TABLETOP, 92.0, 16.0, 0.8))
+	var shore := TrailElementLibrary.make(T.NORTHSHORE, 125.0, 22.0, 1.0)
+	shore.gap = 1.2
+	result.append(shore)
+	result.append(TrailElementLibrary.make(T.OFF_CAMBER, 175.0, 22.0, 0.8, signf(d.curvature_at(175.0))))
+	return result

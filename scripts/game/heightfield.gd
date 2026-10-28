@@ -44,6 +44,7 @@ var structures: Array = []
 var _cells := {}                    # клетка -> номера сооружений, которые её задевают
 var outer_structures: Array = []    # 13.9: мосты закреплённых соседних областей (в конце structures)
 var _outer_cells := {}              # Vector2i клетки за картой -> номера сооружений
+var _deck_keys := {}                # настилы Trail Lab, уже добавленные (add_decks)
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 var path_timings := {}
 var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
@@ -261,6 +262,37 @@ func add_outer_bridges(spans: Array) -> Array:
 		added.append(s)
 	_add_outer(added)
 	return added
+
+
+## Trail Lab: приподнятые настилы (норшор) — мосты без перил: велосипед едет по ним через тот же
+## deck_at / surface_at, а с края падает на землю. Каждый — прямой кусок {key, half, ax, az, ay, bx, bz, by};
+## ключ, который уже добавлен, пропускается. Вызывать после build_structures.
+func add_decks(list: Array) -> void:
+	for d: Dictionary in list:
+		if _deck_keys.has(d.key):
+			continue
+		_deck_keys[d.key] = true
+		var s := _axis_between(Vector2(d.ax, d.az), Vector2(d.bx, d.bz), false)
+		s.half = d.half
+		s.arch = 0.0
+		s.ay = d.ay
+		s.by = d.by
+		s.style = "planks"
+		s.rails = false
+		var k := structures.size()
+		structures.append(s)
+		var r: float = s.half / TILE + 1.0
+		var ax: float = s.ax / TILE
+		var az: float = s.az / TILE
+		var bx: float = s.bx / TILE
+		var bz: float = s.bz / TILE
+		for cz in range(maxi(0, floori(minf(az, bz) - r)), mini(world.H, ceili(maxf(az, bz) + r))):
+			for cx in range(maxi(0, floori(minf(ax, bx) - r)), mini(world.W, ceili(maxf(ax, bx) + r))):
+				if Grid.segment_dist(cx + 0.5, cz + 0.5, ax, az, bx, bz) <= r:
+					var i := cz * world.W + cx
+					if not _cells.has(i):
+						_cells[i] = []
+					_cells[i].append(k)
 
 
 func _add_outer(list: Array) -> void:
