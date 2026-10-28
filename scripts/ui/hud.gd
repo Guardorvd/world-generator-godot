@@ -295,12 +295,13 @@ func trail_places() -> Array:
 	var result := []
 	for plan: Dictionary in plans:
 		if plan.get("state") != "found" or not plan.has("definition"): continue
-		var definition: Dictionary = plan.definition
-		var points: PackedVector2Array = definition.get("points", PackedVector2Array())
-		if points.size() < 2: continue
-		var start := points[0] / TILE
-		result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"),
-			x = start.x, y = start.y, points = points})
+		# велопарк хранит все свои трассы в routes, одиночная трасса — в definition
+		for definition: Dictionary in plan.get("routes", [plan.definition]):
+			var points: PackedVector2Array = definition.get("points", PackedVector2Array())
+			if points.size() < 2: continue
+			var start := points[0] / TILE
+			result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"),
+				x = start.x, y = start.y, points = points})
 	return result
 
 

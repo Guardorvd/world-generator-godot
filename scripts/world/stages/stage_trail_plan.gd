@@ -21,7 +21,7 @@ extends RefCounted
 ## пересоздаёт мир штатно (без пометки skip), а не публикует и не кэширует его как мир без трассы.
 ## Версия 3 (шаг 2, новый принцип): маршрут строится, рельеф готовится под него — без геометрических порогов.
 
-const VERSION := 4
+const VERSION := 5 # 5: велопарк стартовой области (BikePark) вместо одной трассы TrailScout
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 ## Сиды, для которых применение трассы не удалось: мир перегенерируется без неё (WorldLoader, откат).
@@ -44,8 +44,20 @@ static func run(w: WorldData, size: int) -> void:
 	h.finish_paths()
 	var surface_ms := (Time.get_ticks_usec() - started) / 1000.0
 	var area := WorldGenerator.start_rect(w, size)
-	var scout := TrailScout.find(w, h, {area = area})
-	w.trail_plan = from_scout(w, scout, area, surface_ms)
+	# С версии 5 в стартовой области — велопарк (BikePark): простой поиск пустой области и сеть трасс, без TrailScout
+	var park := BikePark.build(w, h, area, ID)
+	var plan := {version = VERSION, state = "none", verdict = "park", reason = park.reason, area = area,
+		stats = park.stats.merged({surface_ms = surface_ms, total_ms = surface_ms + park.stats.find_ms + park.stats.layout_ms}),
+		park = {center = park.center, radius = park.radius, extent = park.extent}}
+	if not park.routes.is_empty():
+		var errors := TrailBuilder.append_routes(w, park.routes) # проверка до изменений: при ошибке мир не тронут
+		if errors.is_empty():
+			plan.state = "found"
+			plan.definition = pack(park.routes[0])
+			plan.routes = park.routes.map(func(d: TrailDefinition) -> Dictionary: return pack(d))
+		else:
+			plan.reason = "парк проложен, но не добавлен в мир: " + "; ".join(errors)
+	w.trail_plan = plan
 
 
 ## The same kit serialization and route admission for start and streamed regions.
@@ -113,7 +125,13 @@ static func apply(h: Heightfield) -> Dictionary:
 		out.errors.append("в плане нет определения трассы: трасса не запекается")
 		return out
 	var definition := unpack(plan.definition)
-	var kit: Array[TrailDefinition] = [unpack(plan.access.inbound), definition, unpack(plan.access.outbound)]
+	var kit: Array[TrailDefinition] = []
+	var main := 0 # номер трассы с элементами, которую при неудаче запекаем без них
+	if plan.has("routes"):
+		for data: Dictionary in plan.routes: kit.append(unpack(data))
+	else:
+		kit.assign([unpack(plan.access.inbound), definition, unpack(plan.access.outbound)])
+		main = 1
 	var listed := {}
 	for route: Dictionary in w.trails:
 		listed[route.get("trail_id", "")] = true
@@ -125,9 +143,11 @@ static func apply(h: Heightfield) -> Dictionary:
 	out.variant = "основной"
 	if not errors.is_empty():
 		out.errors = errors
-		var base := definition.duplicate(true) as TrailDefinition
-		base.elements = [] as Array[TrailElement]
-		kit[1] = base
+		for k in kit.size():
+			if not plan.has("routes") and k != main: continue
+			var base := kit[k].duplicate(true) as TrailDefinition
+			base.elements = [] as Array[TrailElement]
+			kit[k] = base
 		errors = TrailBuilder.bake_elements(h, kit)
 		out.variant = "базовая линия"
 		if not errors.is_empty():

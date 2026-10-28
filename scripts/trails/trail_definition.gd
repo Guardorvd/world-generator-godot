@@ -135,12 +135,33 @@ func point_at(station: float) -> Vector2:
 
 ## Station, signed across and distance of the closest route point. With a finite `reach` only segments
 ## near `at` are looked at, and a point farther than `reach` gives distance INF.
-func nearest(at: Vector2, reach := INF) -> Vector3:
+## Segments that matter to any point closer than `spread` to `at`, without repeats: one query for a group of nearby
+## points (nearest / junction_weight with `among`), the same result as their own queries. Kept: every segment within
+## `keep` of a point (junction_weight needs them all) and those that can still be the nearest one (not farther from `at`
+## than the closest segment plus 2 * spread); none when no segment comes within `reach` of a point.
+func segments_around(at: Vector2, reach: float, spread: float, keep: float) -> PackedInt32Array:
+	_index()
+	var seen := {}
+	var dist := {}
+	var closest := INF
+	for i: int in _segments_near(at, reach + spread):
+		if seen.has(i): continue
+		seen[i] = true
+		dist[i] = _project(at, i).z
+		closest = minf(closest, dist[i])
+	var out := PackedInt32Array()
+	if closest > reach + spread: return out
+	for i: int in dist:
+		if dist[i] <= maxf(closest + 2.0 * spread, keep + spread): out.append(i)
+	out.sort()
+	return out
+
+func nearest(at: Vector2, reach := INF, among := PackedInt32Array()) -> Vector3:
 	_index()
 	var best := INF
 	var result := Vector3(0.0, 0.0, INF) # station, signed across, distance
 	if is_finite(reach):
-		for i: int in _segments_near(at, reach):
+		for i: int in (among if not among.is_empty() else PackedInt32Array(_segments_near(at, reach))):
 			var found := _project(at, i)
 			if found.z < best:
 				best = found.z
@@ -175,11 +196,11 @@ func curvature_at(station: float) -> float:
 	return a.angle_to(b) / 6.0
 
 ## A heightfield cannot carry two different decks at a crossing: keep shared junctions grounded.
-func junction_weight(at: Vector2, station: float) -> float:
+func junction_weight(at: Vector2, station: float, among := PackedInt32Array()) -> float:
 	var weight := 1.0
 	var total := route_length()
 	# Farther segments give smoothstep 1 and cannot lower the weight.
-	for i: int in _segments_near(at, width * 0.5 + RoadRefinement.REACH):
+	for i: int in (among if not among.is_empty() else PackedInt32Array(_segments_near(at, width * 0.5 + RoadRefinement.REACH))):
 		var found := _project(at, i)
 		var separation := absf(found.x - station)
 		if closed: separation = minf(separation, total - separation)

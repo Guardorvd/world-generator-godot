@@ -11,6 +11,8 @@ const ELEMENT_CAP := 2.0
 const ROAD_CELL := 8.0
 ## Overlapping zones of two routes blend over this difference of normalized distance (half widths), not by a seam.
 const BLEND := 1.0
+## Farthest a pinned point can lie from its routes' axes (zone reach), m: structures farther away are not checked.
+const STRUCTURE_REACH := 400.0
 
 static func append_routes(w: WorldData, definitions: Array[TrailDefinition]) -> PackedStringArray:
 	var errors := _validate(w, definitions, false)
@@ -79,9 +81,16 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			shapes[d.id] = d.shape()
 			profiles[d.id] = shapes[d.id].profile(h, d, pin_at)
 			reaches[d.id] = profiles[d.id].reach
+	var profile_ms := (Time.get_ticks_usec() - started) / 1000.0
 	# Cells of the zones: every vertex closer than the reach to a route lies only in such cells.
 	var zone := {}
-	for d in definitions:
+	# Every zone cell lists the routes within reach of any of its vertices (in definition order): a vertex asks only those,
+	# the others are farther than their reach anyway. nearest() is against the whole route: a cell tested from one
+	# station needs no second test.
+	var tested := {}
+	for di in definitions.size():
+		var d := definitions[di]
+		tested.clear()
 		var reach: float = reaches[d.id]
 		var span := reach + GameConfig.TILE
 		var station := 0.0
@@ -91,11 +100,14 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			for cz in range(maxi(0, floori((p.y - span) / GameConfig.TILE - 0.5)), mini(w.H - 1, ceili((p.y + span) / GameConfig.TILE - 0.5))):
 				for cx in range(maxi(0, floori((p.x - span) / GameConfig.TILE - 0.5)), mini(w.W - 1, ceili((p.x + span) / GameConfig.TILE - 0.5))):
 					var key := cz * w.W + cx
-					if zone.has(key): continue
+					if tested.has(key): continue
+					tested[key] = true
 					if is_finite(d.nearest(Vector2(cx + 1.0, cz + 1.0) * GameConfig.TILE, reach + GameConfig.TILE * 0.71).z):
-						zone[key] = true
+						if not zone.has(key): zone[key] = []
+						(zone[key] as Array).append(d)
 			if station >= total: break
 			station += GameConfig.TILE
+	var zone_ms := (Time.get_ticks_usec() - started) / 1000.0 - profile_ms
 	var offsets := {}
 	var staged := {}
 	var added := {}
@@ -111,6 +123,11 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			patch = _ground_patch(h, key)
 			added[key] = patch
 		var hs: PackedFloat32Array = patch.h.duplicate()
+		# one segment query per route for the whole cell (its vertices lie within the half diagonal of the centre)
+		var center := Vector2((key % w.W) + 1.0, (key / w.W) + 1.0) * GameConfig.TILE
+		var among := {}
+		for d: TrailDefinition in zone[key]:
+			among[d] = d.segments_around(center, reaches[d.id], GameConfig.TILE * 0.71, d.width * 0.5 + RoadRefinement.REACH)
 		for iz in RoadRefinement.STRIDE:
 			for ix in RoadRefinement.STRIDE:
 				var gx := (key % w.W) * RoadRefinement.DIV + ix
@@ -124,8 +141,9 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					# blend over BLEND half widths instead of meeting in a seam. Profiles never add up.
 					var best := {rank = INF}
 					var second := {rank = INF}
-					for d in definitions:
-						var near := d.nearest(at, reaches[d.id])
+					for d: TrailDefinition in zone[key]:
+						if (among[d] as PackedInt32Array).is_empty(): continue # no segment within reach of this cell
+						var near := d.nearest(at, reaches[d.id], among[d])
 						if not is_finite(near.z): continue
 						var score := near.z / (d.width * 0.5)
 						var found := {rank = score, d = d, local = near}
@@ -136,9 +154,9 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 							second = found
 					var offset := 0.0
 					if best.has("d"):
-						offset = _route_offset(h, best.d, best.local, at, shapes, profiles)
+						offset = _route_offset(h, best.d, best.local, at, shapes, profiles, among[best.d])
 						if second.has("d"):
-							var other := _route_offset(h, second.d, second.local, at, shapes, profiles)
+							var other := _route_offset(h, second.d, second.local, at, shapes, profiles, among[second.d])
 							var t := smoothstep(0.0, 1.0, (second.rank - best.rank) / BLEND)
 							offset = lerpf((offset + other) * 0.5, offset, t)
 					if not is_finite(offset): return PackedStringArray(["Trail earthworks produced a non-finite terrain displacement"])
@@ -170,6 +188,8 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		r.trail_shaping[id] = record
 	r.build_timings.trail_patches_added = added.size()
 	r.build_timings.trail_zone_patches = zone.size()
+	r.build_timings.trail_profile_ms = profile_ms
+	r.build_timings.trail_zone_ms = zone_ms
 	r.trail_elements_baked = true
 	r.build_timings.trail_elements_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return PackedStringArray()
@@ -201,16 +221,30 @@ static func pins(h: Heightfield, definitions: Array[TrailDefinition]) -> Callabl
 					var key := Vector2i(gx, gz)
 					if not roads.has(key): roads[key] = []
 					(roads[key] as Array).append(road)
+	# Only structures that can reach the routes' zones (exact: a farther one gives smoothstep 1 everywhere they are asked).
+	var box := Rect2(definitions[0].points[0], Vector2.ZERO) if not definitions.is_empty() and not definitions[0].points.is_empty() else Rect2()
+	for d in definitions:
+		for p in d.points: box = box.expand(p)
+	box = box.grow(RoadBed.PIN + RoadBed.PIN_FADE + STRUCTURE_REACH)
+	var structures: Array[Dictionary] = []
+	for s: Dictionary in h.structures:
+		if Rect2(Vector2(s.ax, s.az), Vector2.ZERO).expand(Vector2(s.bx, s.bz)).intersects(box, true): structures.append(s)
+	var wet_cells := {}
 	return func(at: Vector2) -> float:
 		var cell := clampi(floori(at.y / GameConfig.TILE), 0, w.H - 1) * w.W + clampi(floori(at.x / GameConfig.TILE), 0, w.W - 1)
 		var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, w.dist_water[cell])
-		# Protect the support of wet triangles as well as the wet cell itself.
-		for dz in [-1.0, 0.0, 1.0]:
-			for dx in [-1.0, 0.0, 1.0]:
-				var cx := clampi(floori((at.x + dx * GameConfig.TILE) / GameConfig.TILE), 0, w.W - 1)
-				var cz := clampi(floori((at.y + dz * GameConfig.TILE) / GameConfig.TILE), 0, w.H - 1)
-				if h.water_level[cz * w.W + cx] != -INF: return 0.0
-		for s: Dictionary in h.structures:
+		# Protect the support of wet triangles as well as the wet cell itself (the 3 x 3 cells around, once per cell).
+		var wet: Variant = wet_cells.get(cell)
+		if wet == null:
+			wet = false
+			var ax := floori(at.x / GameConfig.TILE)
+			var az := floori(at.y / GameConfig.TILE)
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if h.water_level[clampi(az + dz, 0, w.H - 1) * w.W + clampi(ax + dx, 0, w.W - 1)] != -INF: wet = true
+			wet_cells[cell] = wet
+		if wet: return 0.0
+		for s: Dictionary in structures:
 			pin = minf(pin, smoothstep(RoadBed.PIN, RoadBed.PIN + RoadBed.PIN_FADE, Grid.segment_dist(at.x, at.y, s.ax, s.az, s.bx, s.bz)))
 		for road: Dictionary in roads.get(Vector2i((at / ROAD_CELL).floor()), []):
 			pin = minf(pin, smoothstep(road.half, road.half + RoadRefinement.REACH,
@@ -219,15 +253,16 @@ static func pins(h: Heightfield, definitions: Array[TrailDefinition]) -> Callabl
 
 ## Shaping of route d at a vertex (no depth limit), the explicit elements (capped at ELEMENT_CAP) and the weight of shared
 ## junctions with itself.
-static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, shapes: Dictionary, profiles: Dictionary) -> float:
+static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, shapes: Dictionary, profiles: Dictionary, among := PackedInt32Array()) -> float:
 	var offset := 0.0
 	if d.earthwork > 0.0: offset = (shapes[d.id] as TrailShaping).offset(h, d, local, at, profiles[d.id])
 	# Explicit features have a compact footprint, so the shoulders stay continuous.
 	var features := 0.0
 	for e in d.elements:
-		features += e.displacement(local.x, local.y, d.width * 0.5)
+		if absf(local.x - e.station) < e.length * 0.5: # displacement() is zero outside the element
+			features += e.displacement(local.x, local.y, d.width * 0.5)
 	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP)
-	if d.earthwork > 0.0: offset *= d.junction_weight(at, local.x)
+	if d.earthwork > 0.0: offset *= d.junction_weight(at, local.x, among) # among covers the smaller junction reach too
 	return offset
 
 ## A patch over cell `key` that changes nothing: vertices shared with a neighbouring patch take its values, the rest lie
