@@ -246,6 +246,14 @@ func check_lab_session(lab: Node) -> void:
 	lab.step_simulation(1.0 / 60, 0.0, 0.0, false, false)
 	check(lab.bike.land_impact == 0.0 and lab.bike.bottom_out == 0.0 and lab.last_land_impact == 7.0, "landing events are consumed once and retained only as telemetry")
 	lab.reload_sources()
+	lab.reset_ride(30.0, 9.0)
+	for i in 420: lab.step_simulation(1.0 / 60, 0.7, 0.0, false, false)
+	check(lab.metrics.distance > 5.0 and lab.metrics.top_speed > 5.0 and lab.metrics.element >= 0 and lab.metrics.time > 6.5, "ride metrics collect speed, distance and the crossed element")
+	check("Элемент" in lab.metrics.report(lab.routes[lab.lane]), "metrics report is readable")
+	var cam_to: Vector4 = lab._cam_to
+	lab.step_simulation(1.0 / 60, 0.7, 0.0, false, false)
+	check(lab._cam_from == cam_to, "camera interpolates between consecutive physics ticks")
+	lab.reload_sources()
 	lab.reset_ride(78.0)
 	lab.bike.y += 10.0
 	lab.bike.airborne = true

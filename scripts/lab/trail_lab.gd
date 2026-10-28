@@ -33,6 +33,10 @@ var terrain := MeshInstance3D.new()
 var markers := Node3D.new()
 var last_land_impact := 0.0
 var last_bottom_out := 0.0
+var metrics := TrailLabMetrics.new()
+var _cam_from := Vector4() # x, feet, z, heading on the previous physics tick
+var _cam_to := Vector4()
+var _cam_feet := 0.0
 var _sources: Array[TrailDefinition] = []
 
 func _ready() -> void:
@@ -247,6 +251,10 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	last_bottom_out = 0.0
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 0, true)
 	view.snap(bike)
+	metrics.reset(bike)
+	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
+	_cam_from = _cam_to
+	_cam_feet = player.feet
 
 func launch_element() -> void:
 	if heights == null: return
@@ -340,6 +348,7 @@ func _physics_process(dt: float) -> void:
 ## Same controller/foot lifecycle as GameWorld; callable by the isolated scene regression.
 func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
 	var w := heights.world
+	_cam_from = _cam_to
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 0)
 	if crash.active():
 		controller.recover(dt, player, bike, crash, w, heights)
@@ -355,6 +364,8 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		player.land_impact = 0.0
 	if not crash.active():
 		view.tick(bike, dt, throttle, bike.riding and controller.stamina.can_boost(run, throttle))
+	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
+	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
 	if bike.land_impact > 0.0: last_land_impact = bike.land_impact
 	if bike.bottom_out > 0.0: last_bottom_out = bike.bottom_out
 	# These are one-tick events. Leaving them latched repeats the rider's landing animation.
@@ -366,14 +377,20 @@ func _process(dt: float) -> void:
 	if status_time > 0.0:
 		status_time -= dt
 		if status_time <= 0.0: status.hide()
+	var alpha := Engine.get_physics_interpolation_fraction()
 	if crash.active(): crash.draw()
-	else: view.draw(Engine.get_physics_interpolation_fraction())
-	var target := Vector3(player.x, player.feet + 1.0, player.z)
+	else: view.draw(alpha)
+	# Same interpolation as the bike model: the camera must not step at the physics rate.
+	var at := _cam_from.lerp(_cam_to, alpha)
+	var heading := lerp_angle(_cam_from.w, _cam_to.w, alpha)
+	# Terrain bumps move the feet by whole centimetres per tick; follow them softly.
+	_cam_feet = lerpf(_cam_feet, at.y, 1.0 - exp(-dt * 10.0)) if absf(at.y - _cam_feet) < 3.0 else at.y
+	var target := Vector3(at.x, _cam_feet + 1.0, at.z)
 	if overview:
 		camera.position = Vector3(128, 240, 245)
 		camera.look_at(Vector3(128, 12, 128))
 	else:
-		camera.position = target + Vector3(sin(bike.heading) * 7, 3.5, cos(bike.heading) * 7)
+		camera.position = target + Vector3(sin(heading) * 7, 3.5, cos(heading) * 7)
 		camera.look_at(target)
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
@@ -384,5 +401,6 @@ func _process(dt: float) -> void:
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
-		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact]
+		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
+%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane])]
 	status.position.y = hud_panel.position.y + hud_panel.size.y + 10
