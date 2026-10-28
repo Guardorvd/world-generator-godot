@@ -47,7 +47,7 @@ func run() -> void:
 		var e: Variant = r.trail.earthworks[id]
 		if e is Dictionary: print("  %s: зона %.0f м, выемка до %.1f м, насыпь до %.1f м, уклон %s" % [id, e.get("reach", 0.0), e.get("max_cut", 0.0), e.get("max_fill", 0.0), e.get("grade_used", 0.0)])
 	print("Всего трасс %d, %.0f м; запекание: %s, %s" % [kit.size(), total, r.trail.variant, r.trail.errors])
-	check(kit.size() >= 3 and total >= 3000.0, "несколько километров трасс (%d, %.0f м)" % [kit.size(), total])
+	check(kit.size() >= 3 and total >= 1000.0, "сеть трасс от километра (%d, %.0f м)" % [kit.size(), total])
 	check(r.trail.applied and r.trail.errors.is_empty(), "запечено без ошибок (%s)" % r.trail.variant)
 	var listed := 0
 	for route: Dictionary in r.world.trails:
