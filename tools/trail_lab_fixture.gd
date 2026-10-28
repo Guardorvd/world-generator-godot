@@ -50,7 +50,7 @@ static func course(index: int, kind := "mountain") -> Array[TrailDefinition]:
 	if index == 0: return definitions()
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
-	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка"][index]
+	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса"][index]
 	d.kind = kind
 	d.width = 6.0 if kind == "road" else (3.0 if kind == "trail" else 5.0)
 	d.surface = RoadSurface.PACKED if kind == "road" else RoadSurface.DIRT
@@ -67,7 +67,9 @@ static func course(index: int, kind := "mountain") -> Array[TrailDefinition]:
 			3: pts.append(Vector2(128, 128) + Vector2(sin(a), cos(a)) * 78)
 			4: pts.append(Vector2(128, 128) + Vector2(sin(a * 1.65), cos(a * 1.65)) * lerpf(88, 28, t))
 			5: pts.append(Vector2(128 + 78 * sin(a), 128 + 65 * sin(2 * a)))
+			6: pts.append(Vector2(128 + 40 * sin(a * 2.5), 224 - 192 * t))
 	d.closed = index in [3, 5]
 	if d.closed: pts[-1] = pts[0]
 	d.points = pts
+	if index == 6: d.elements = TrailElementLibrary.compose(d, 4242, 0.5)
 	return [d]

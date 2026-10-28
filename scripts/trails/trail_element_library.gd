@@ -1,0 +1,86 @@
+class_name TrailElementLibrary
+extends RefCounted
+## Catalogue of parametric bike features and a deterministic composer for procedural flow lines.
+## Elements only describe earthwork; the same data feed Trail Lab, the editor and any future generator.
+
+const TITLES := {
+	TrailElement.Profile.ROLLER: "Роллер",
+	TrailElement.Profile.TABLETOP: "Стол",
+	TrailElement.Profile.BERM: "Поворот",
+	TrailElement.Profile.WAVES: "Волны",
+	TrailElement.Profile.DIP: "Впадина",
+	TrailElement.Profile.ROLLOVER: "Смена уклона",
+	TrailElement.Profile.S_BERM: "S-поворот",
+}
+## Typical size at difficulty 0 and 1: length, height. Waves scale length with their count.
+const RANGE := {
+	TrailElement.Profile.ROLLER: [Vector2(10, 0.3), Vector2(16, 0.9)],
+	TrailElement.Profile.TABLETOP: [Vector2(12, 0.4), Vector2(20, 1.0)],
+	TrailElement.Profile.BERM: [Vector2(12, 0.4), Vector2(18, 0.8)],
+	TrailElement.Profile.WAVES: [Vector2(4, 0.15), Vector2(5, 0.35)],
+	TrailElement.Profile.DIP: [Vector2(8, 0.25), Vector2(14, 0.6)],
+	TrailElement.Profile.ROLLOVER: [Vector2(8, 0.3), Vector2(14, 0.7)],
+	TrailElement.Profile.S_BERM: [Vector2(16, 0.4), Vector2(24, 0.8)],
+}
+
+static func make(profile: TrailElement.Profile, station: float, length: float, height: float, bank := 1.0, count := 3, skew := 0.35) -> TrailElement:
+	var e := TrailElement.new()
+	e.profile = profile
+	e.station = station
+	e.length = length
+	e.height = height
+	e.bank = bank
+	e.count = count
+	e.skew = skew
+	return e
+
+static func title(profile: int) -> String:
+	return TITLES.get(profile, "Элемент")
+
+static func titles() -> PackedStringArray:
+	var result := PackedStringArray()
+	for profile in TrailElement.Profile.values(): result.append(title(profile))
+	return result
+
+## Size of an element for a difficulty in 0..1; waves return per-crest length.
+static func sized(profile: TrailElement.Profile, difficulty: float) -> Vector2:
+	var range: Array = RANGE[profile]
+	return (range[0] as Vector2).lerp(range[1], clampf(difficulty, 0.0, 1.0))
+
+## Fills a route with a rhythm of features. Deterministic in (route, seed, difficulty, density);
+## turns get berms on the outside, straights get rollers, waves, dips and tables with a recovery gap.
+static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, density := 0.6) -> Array[TrailElement]:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_value
+	var result: Array[TrailElement] = []
+	var total := d.route_length()
+	var cursor := 22.0
+	var straight := [TrailElement.Profile.ROLLER, TrailElement.Profile.WAVES, TrailElement.Profile.DIP, TrailElement.Profile.ROLLOVER, TrailElement.Profile.TABLETOP]
+	var last := -1
+	while true:
+		var kind: int = straight[rng.randi() % straight.size()]
+		if kind == last: kind = straight[(straight.find(kind) + 1) % straight.size()]
+		var turn := _turn_at(d, cursor, 14.0)
+		var count := 1
+		var length: float
+		var height: float
+		if absf(turn) > 0.012:
+			kind = TrailElement.Profile.BERM
+		var size := sized(kind, difficulty * rng.randf_range(0.7, 1.0))
+		length = size.x
+		height = size.y
+		if kind == TrailElement.Profile.WAVES:
+			count = rng.randi_range(3, 5)
+			length *= count
+		if cursor + length > total - 18.0: break
+		var bank := signf(turn) if kind == TrailElement.Profile.BERM else 1.0
+		result.append(make(kind, cursor + length * 0.5, length, height, bank, count, rng.randf_range(0.28, 0.45)))
+		last = kind
+		cursor += length + rng.randf_range(7.0, 18.0) / maxf(density, 0.2)
+	return result
+
+## Mean signed curvature over a window starting at `from`; the sign says which side is the outside.
+static func _turn_at(d: TrailDefinition, from: float, window: float) -> float:
+	var sum := 0.0
+	for i in 5: sum += d.curvature_at(from + window * i / 4.0)
+	return sum / 5.0

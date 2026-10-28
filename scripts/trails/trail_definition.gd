@@ -47,6 +47,8 @@ func validate() -> PackedStringArray:
 			continue
 		if e.profile < 0 or e.profile >= TrailElement.Profile.size(): errors.append("Unknown element profile")
 		if absf(e.bank) > 1.0: errors.append("Bank must be between -1 and 1")
+		if e.count < 1 or e.count > 12 or e.skew < 0.15 or e.skew > 0.85: errors.append("Element count or skew out of range")
+		elif e.profile == TrailElement.Profile.WAVES and e.length / e.count < RoadRefinement.STEP * 8.0: errors.append("Waves are too short for the heightfield resolution")
 		if not is_finite(e.station) or not is_finite(e.length) or not is_finite(e.height) or not is_finite(e.bank):
 			errors.append("Non-finite element")
 		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > 2.0:

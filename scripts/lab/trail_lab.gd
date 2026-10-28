@@ -177,7 +177,7 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 	for d in routes:
 		_label(d.title, d.points[0], 3.0)
 		for e in d.elements:
-			_label("%s · %.1f м / %.1f м" % [TrailElement.Profile.keys()[e.profile], e.height, e.length], d.point_at(e.station), 1.8)
+			_label("%s · %.1f м / %.1f м" % [TrailElementLibrary.title(e.profile), e.height, e.length], d.point_at(e.station), 1.8)
 	editor.present(routes, lane, element_index)
 	reset_ride()
 	show_message("Готово · правки действуют в текущем запуске")
@@ -215,7 +215,8 @@ func apply_edit(values: Dictionary) -> bool:
 	if not d.elements.is_empty():
 		var e := d.elements[element_index]
 		e.profile = int(values.profile) as TrailElement.Profile
-		for key in ["station", "length", "height", "bank"]: e.set(key, values[key])
+		for key in ["station", "length", "height", "bank", "count", "skew"]:
+			if values.has(key): e.set(key, int(values[key]) if key == "count" else values[key])
 	if not rebuild(candidate): return false
 	launch_element()
 	return true

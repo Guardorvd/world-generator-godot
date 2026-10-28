@@ -88,6 +88,48 @@ func run() -> void:
 		TrailBuilder.bake_elements(h, routes)
 		var cross_after := h.ground_at(outside.x, outside.y) - h.ground_at(inside.x, inside.y)
 		check(cross_after > cross_before + 0.05, "bank raises outside for both route directions")
+	# Element library: every profile is finite, bounded, zero outside its footprint; composer is deterministic and valid.
+	for profile in TrailElement.Profile.values():
+		var e := TrailElementLibrary.make(profile, 50.0, 18.0, 0.6, 1.0, 3, 0.35)
+		var peak := 0.0
+		var finite := true
+		for i in range(-10, 111):
+			for k in range(-6, 7):
+				var v := e.displacement(41.0 + i * 0.2, k * 0.5, 3.0)
+				finite = finite and is_finite(v)
+				peak = maxf(peak, absf(v))
+		check(finite and peak > 0.12 and peak <= 0.61 and e.displacement(40.9, 0.0, 3.0) == 0.0 and e.displacement(59.1, 0.0, 3.0) == 0.0, "library profile %s bounded and compact" % TrailElementLibrary.title(profile))
+	var flow := Fixture.course(6)[0]
+	var again := TrailElementLibrary.compose(flow, 4242, 0.5)
+	check(flow.validate().is_empty() and flow.elements.size() >= 5 and again.size() == flow.elements.size() and again[2].station == flow.elements[2].station, "composer yields a valid deterministic flow line (%d elements)" % flow.elements.size())
+	var flow_world := Fixture.prepare([flow])
+	check(flow_world.errors.is_empty(), "flow line prepares and bakes")
+	if flow_world.errors.is_empty():
+		check(ride_course(flow_world.heights, flow), "bike rides the generated flow line")
+		# Dip and roller must load the suspension; surface reads must stay finite.
+		var h: Heightfield = flow_world.heights
+		var bike := BikeRide.new()
+		var player := PlayerState.new()
+		var control := BikeController.new()
+		var start := flow.elements[0]
+		var at := flow.point_at(maxf(0.0, start.station - start.length * 0.5 - 12.0))
+		bike.x = at.x
+		bike.z = at.y
+		bike.y = h.surface_at(bike.x, bike.z, -INF)
+		bike.heading = flow.heading_at(0.0)
+		bike.mount(player)
+		bike.speed = 10.0
+		var peak_g := 0.0
+		var finite_state := true
+		for i in 420:
+			var before := Vector2(bike.x, bike.z)
+			var target := flow.point_at(flow.nearest(before).x + 5.0) - before
+			var steer := clampf(-wrapf(atan2(-target.x, -target.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+			control.ride(1.0 / 60, player, bike, h.world, h, 0.5, steer, false, false, false)
+			peak_g = maxf(peak_g, absf(bike.vertical_g))
+			finite_state = finite_state and is_finite(bike.y) and is_finite(bike.squash_f) and is_finite(bike.bank_slope)
+			if bike.crashed: break
+		check(finite_state and peak_g > 0.05, "profile load reaches the suspension model (peak %.2f g)" % peak_g)
 	print("formation: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)
 

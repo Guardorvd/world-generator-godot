@@ -38,6 +38,11 @@ const KICK_MAX := 6.0    # больший скачок (ступенька, те
 const PITCH_LOAD := GameConfig.BIKE_PITCH_LOAD
 const BUMP := 0.035      # высота мелких кочек под колесом на бездорожье (rough 1), м
 const REVERSE_HOLD := GameConfig.BIKE_REVERSE_WAIT
+const WHEEL_REACH := 0.16 # колесо — круг: земля меряется ещё на столько впереди и позади точки касания, м
+const PROFILE_SPAN := 1.5 # база, на которой измеряется кривизна профиля (впадина, роллер), м
+const BANK_SPAN := 0.7   # поперечная база, на которой измеряется наклон полотна (вираж), м
+const BANK_ASSIST := 0.7 # какую долю тяжести виража видит сцепление
+const PROFILE_SAG := 0.6 # сжатие подвески на 1 g нагрузки от профиля, доля SAG_MAX
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 
 var x := 0.0          # метры
@@ -90,6 +95,8 @@ enum CrashCause { FALL, COLLISION, BRAKING }
 var crash_cause := CrashCause.FALL
 var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
+var vertical_g := 0.0  # нагрузка профиля земли вдоль пути в g: впадина сжимает (+), гребень разгружает (−)
+var bank_slope := 0.0  # наклон полотна поперёк: рост высоты на метр вправо от курса, сглаженный
 var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
 var bottom_out := 0.0  # 12.7: скорость удара вилки в упор, м/с (для звука; GameWorld сбрасывает)
 var braking := 0.0     # 12.7: резкое торможение на скорости 0..1 (для хруста покрытия)
@@ -174,6 +181,8 @@ func mount(p: PlayerState) -> void:
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
 	acceleration = 0.0
+	vertical_g = 0.0
+	bank_slope = 0.0
 	lateral_speed = 0.0
 	brakes.reset()
 	grip_usage = 0.0
@@ -251,7 +260,33 @@ func _slope(heights: Heightfield) -> float:
 func _contact(px: float, pz: float, heights: Heightfield) -> float:
 	var fx := -sin(heading) * HUB
 	var fz := -cos(heading) * HUB
-	return (heights.surface_at(px + fx, pz + fz, y) + heights.surface_at(px - fx, pz - fz, y)) * 0.5
+	return (_wheel_ground(px + fx, pz + fz, heights) + _wheel_ground(px - fx, pz - fz, heights)) * 0.5
+
+
+## Высота земли под ступицей колеса как круга: ребро ступеньки или резкий гребень поднимают колесо
+## плавно по дуге, а не проваливают в излом метровой сетки. На гладком рельефе равна высоте точки.
+func _wheel_ground(px: float, pz: float, heights: Heightfield) -> float:
+	var best := heights.surface_at(px, pz, y)
+	var dx := -sin(heading) * WHEEL_REACH
+	var dz := -cos(heading) * WHEEL_REACH
+	var arc := sqrt(WHEEL_R * WHEEL_R - WHEEL_REACH * WHEEL_REACH) - WHEEL_R
+	best = maxf(best, heights.surface_at(px + dx, pz + dz, y) + arc)
+	return maxf(best, heights.surface_at(px - dx, pz - dz, y) + arc)
+
+
+## Нагрузка от кривизны профиля вдоль курса и поперечный наклон полотна; оба сглажены от шума сетки.
+func _read_surface(heights: Heightfield, dt: float) -> void:
+	if airborne:
+		vertical_g = lerpf(vertical_g, 0.0, 1.0 - exp(-dt * 8.0))
+		return
+	var ahead := Vector2(-sin(heading), -cos(heading)) * PROFILE_SPAN
+	var g0 := heights.surface_at(x, z, y)
+	var curve := (heights.surface_at(x + ahead.x, z + ahead.y, y) + heights.surface_at(x - ahead.x, z - ahead.y, y) - 2.0 * g0) / (PROFILE_SPAN * PROFILE_SPAN)
+	var goal := clampf(speed * speed * curve / GameConfig.GRAVITY, -1.0, 1.5)
+	vertical_g = lerpf(vertical_g, goal, 1.0 - exp(-dt * 12.0))
+	var right := Vector2(cos(heading), -sin(heading)) * BANK_SPAN
+	var cross := (heights.surface_at(x + right.x, z + right.y, y) - heights.surface_at(x - right.x, z - right.y, y)) / (2.0 * BANK_SPAN)
+	bank_slope = lerpf(bank_slope, clampf(cross, -0.8, 0.8), 1.0 - exp(-dt * 15.0))
 
 
 ## Уходит ли рельеф впереди из-под полёта: летим с нынешней вертикальной скоростью
@@ -313,6 +348,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		speed *= exp(-0.03 * dt)
 		lateral_speed *= exp(-0.03 * dt)
 
+	_read_surface(heights, dt)
 	var free_now := fits(x, z, heading, w, heights)
 	var h0 := heading
 	heading += _step_turn(turn, grip, dt, brake_deceleration / maxf(CORNER_GRIP * grip, 0.1))
@@ -379,7 +415,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
 	_step_wheels(heights, rough, dt, surf, path_weight, slope, across)
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
-	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015), acceleration)
+	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, -1.0, 1.5) * SAG_MAX * PROFILE_SAG, acceleration)
 
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
 	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
@@ -455,6 +491,9 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		# Накопленный снос расширяет дугу до восстановления, вместо бесконечного дрифта.
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
 		corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
+		# Вираж: полотно, поднятое снаружи поворота, прижимает колёса и добавляет сцепления; уклон внутрь отнимает.
+		var assist := clampf(-bank_slope * signf(steer), -0.3, 0.5) * GameConfig.GRAVITY * BANK_ASSIST * smoothstep(2.0, 6.0, pace)
+		corner_grip = maxf(corner_grip + assist * grip, corner_grip * 0.6)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
 		wanted = clampf(wanted, -limit, limit)
@@ -523,8 +562,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		return
 	var fx := -sin(heading) * HUB
 	var fz := -cos(heading) * HUB
-	var gf := heights.surface_at(x + fx, z + fz, y)
-	var gr := heights.surface_at(x - fx, z - fz, y)
+	var gf := _wheel_ground(x + fx, z + fz, heights)
+	var gr := _wheel_ground(x - fx, z - fz, heights)
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var wild := BUMP * rough * (1.0 - path_weight)
 	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx, z + fz, surf, grade, across) * path_weight

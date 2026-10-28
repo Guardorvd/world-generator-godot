@@ -12,6 +12,9 @@ var peak_slip := 0.0
 var peak_grip := 0.0
 var peak_fork := 0.0
 var peak_shock := 0.0
+var peak_load := 0.0 # strongest g-load from the terrain profile (compression > 0)
+var peak_unload := 0.0
+var peak_bank := 0.0
 var bottom_outs := 0
 var worst_landing := 0.0
 var jumps := 0
@@ -59,6 +62,9 @@ func tick(dt: float, bike: BikeRide, route: TrailDefinition) -> void:
 	peak_grip = maxf(peak_grip, bike.grip_usage)
 	peak_fork = maxf(peak_fork, bike.squash_f)
 	peak_shock = maxf(peak_shock, bike.squash_r)
+	peak_load = maxf(peak_load, bike.vertical_g)
+	peak_unload = maxf(peak_unload, -bike.vertical_g)
+	peak_bank = maxf(peak_bank, absf(bike.bank_slope))
 	if bike.bottom_out > 0.0: bottom_outs += 1
 	if bike.land_impact > 0.0:
 		worst_landing = maxf(worst_landing, bike.land_impact)
@@ -113,11 +119,12 @@ func report(route: TrailDefinition) -> String:
 	var lines := PackedStringArray()
 	lines.append("Заезд %.1f с · путь %.0f м · макс. %.0f км/ч" % [time, distance, top_speed * 3.6])
 	lines.append("Пик: снос %.1f° · сцепление %.0f%% · вилка %.3f м · зад %.3f м" % [rad_to_deg(peak_slip), peak_grip * 100.0, peak_fork, peak_shock])
+	lines.append("Нагрузка рельефа: +%.2f g / −%.2f g · наклон полотна до %.0f%%" % [peak_load, peak_unload, peak_bank * 100.0])
 	lines.append("Пробоев подвески %d · худшее приземление %.1f м/с" % [bottom_outs, worst_landing])
 	if jumps > 0 or air_time > 0.0:
 		lines.append("Прыжок: %.2f с · %.1f м · пик %.2f м · взлёт %.0f км/ч · удар %.1f м/с" % [air_time, jump_length, jump_apex, jump_takeoff_speed * 3.6, landing_impact])
 	if element >= 0 and element < route.elements.size():
 		var e := route.elements[element]
-		lines.append("Элемент %d · %s: вход %.0f → выход %.0f км/ч (%+.0f)" % [element + 1, TrailElement.Profile.keys()[e.profile], entry_speed * 3.6, exit_speed * 3.6, (exit_speed - entry_speed) * 3.6])
+		lines.append("Элемент %d · %s: вход %.0f → выход %.0f км/ч (%+.0f)" % [element + 1, TrailElementLibrary.title(e.profile), entry_speed * 3.6, exit_speed * 3.6, (exit_speed - entry_speed) * 3.6])
 		lines.append("  в воздухе %.2f с · сжатие %.3f м · приземление %.1f м/с · %.1f с" % [zone_air, zone_peak_squash, zone_landing, zone_time])
 	return "\n".join(lines)
