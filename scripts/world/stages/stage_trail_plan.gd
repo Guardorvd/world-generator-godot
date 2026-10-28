@@ -16,9 +16,12 @@ extends RefCounted
 ## Повторная загрузка из кэша: w.trail_plan и путь уже в мире — поиска нет, apply() запекает то же определение на свежем
 ## рельефе (земляные работы не копятся: рельеф каждый раз новый, запекается один раз).
 ## Отсутствие места — нормальный результат: статус «none» тоже сохраняется. Версия плана входит в ключ кэша
-## (WorldCache.SCHEMA_TRAILS_VERSION): менять вместе с результатами TrailScout / TrailPicker / TrailRouter / TrailFlow.
+## (WorldCache.SCHEMA_TRAILS_VERSION): менять ОБЕ вместе с результатами TrailScout / Picker / Router / Access / Shaping /
+## Builder / Flow. План другой версии (found или none) — устаревший: apply() возвращает state «stale», и WorldLoader
+## пересоздаёт мир штатно (без пометки skip), а не публикует и не кэширует его как мир без трассы.
+## Версия 3 (шаг 2, новый принцип): маршрут строится, рельеф готовится под него — без геометрических порогов.
 
-const VERSION := 2
+const VERSION := 3
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 ## Сиды, для которых применение трассы не удалось: мир перегенерируется без неё (WorldLoader, откат).
@@ -87,12 +90,16 @@ static func to_world(local: TrailDefinition, site: TrailSite) -> TrailDefinition
 static func apply(h: Heightfield) -> Dictionary:
 	var w := h.world
 	var plan := w.trail_plan
-	var out := {state = str(plan.get("state", "none")), applied = false, variant = "", errors = PackedStringArray(), ms = 0.0}
+	var out := {state = str(plan.get("state", "none")), applied = false, variant = "", errors = PackedStringArray(), ms = 0.0, earthworks = {}}
+	if stale(plan):
+		out.state = "stale"
+		out.errors.append("план трассы версии %d, код — %d: мир нужно подготовить заново" % [int(plan.get("version", 0)), VERSION])
+		return out
 	if out.state != "found":
 		return out
 	var started := Time.get_ticks_usec()
-	if int(plan.get("version", 0)) != VERSION or not plan.has("definition"):
-		out.errors.append("версия плана трассы не совпала с кодом: трасса не запекается")
+	if not plan.has("definition"):
+		out.errors.append("в плане нет определения трассы: трасса не запекается")
 		return out
 	var definition := unpack(plan.definition)
 	var kit: Array[TrailDefinition] = [unpack(plan.access.inbound), definition, unpack(plan.access.outbound)]
@@ -116,8 +123,18 @@ static func apply(h: Heightfield) -> Dictionary:
 			out.errors.append_array(errors)
 			out.variant = ""
 	out.applied = not out.variant.is_empty()
+	if out.applied:
+		for d in kit: out.earthworks[d.id] = h.road_refinement.trail_shaping.get(d.id, {}).duplicate()
+		out.earthworks.patches_added = h.road_refinement.build_timings.get("trail_patches_added", 0)
+		out.earthworks.zone_patches = h.road_refinement.build_timings.get("trail_zone_patches", 0)
 	out.ms = (Time.get_ticks_usec() - started) / 1000.0
 	return out
+
+
+## План сохранён другой версией кода (в том числе пустой — до этапа трассы): его результат не соответствует нынешней
+## генерации, и мир готовится заново.
+static func stale(plan: Dictionary) -> bool:
+	return int(plan.get("version", 0)) != VERSION
 
 
 ## Определение в словарь для кэша (только простые типы).

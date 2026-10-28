@@ -4,7 +4,7 @@ extends SceneTree
 ## directory), then loading the same seed again from the cache. Prints preparation times. Checks: approach, trail and exit
 ## are in the world exactly once, the plan is stored (also "no trail"), the second load does not search again and gives
 ## the same plan, the same paths and the same final ground (no accumulation of earthworks), no forest on the routes, the
-## finished surface meets the requirement, smooth joints, the start is reachable from the home road network and the way
+## finished surface measured whole (grade and earthworks reported against the target — no limits since step 2), smooth joints, the start is reachable from the home road network and the way
 ## back from the finish exists in the existing RoadNavigation graph of the RELOADED world, and one short ride over approach,
 ## trail and exit with the game's own bike controller and forest obstacles without a fall. On the control seed (the
 ## default) finding a trail with access is mandatory.
@@ -13,7 +13,8 @@ extends SceneTree
 ## The cache directory user://trail_world_test_cache is removed at the end. A few minutes.
 const OUT := "res://tools/control/runs/trail_world"
 const CACHE := "user://trail_world_test_cache"
-const GRADE := 0.15
+const GRADE := 0.15 # target grade of the kit (reported, not a limit)
+const Rider = preload("res://tools/trail_access_test.gd") # the same look-ahead rider as the isolated access test
 var failures := 0
 var checks := 0
 
@@ -47,6 +48,7 @@ func run() -> void:
 	print("Новый мир «%s»: загрузка %d мс (генерация %.0f, finish_paths %.0f, запекание комплекта %.0f, всего %.0f); план: %s" % [
 		seed, first_ms, a.timings.get("generate_ms", 0.0), a.timings.finish_paths_ms, a.timings.trail_ms, a.timings.total_ms, plan_a.state])
 	print("Стадия трассы: ", plan_a.get("stats", {}), " · ", plan_a.get("verdict", ""), " ", plan_a.get("reason", ""), " · окна: ", plan_a.get("windows", []))
+	print("Земляные работы комплекта: ", a.trail.get("earthworks", {}))
 	check(plan_a.get("version", 0) == StageTrailPlan.VERSION and plan_a.state in ["found", "none"] and plan_a.has("stats"), "plan stored with a state: %s" % plan_a.state)
 	if not "--seed" in args:
 		check(plan_a.state == "found", "the control seed gets a trail with access (mandatory): %s" % plan_a.get("reason", ""))
@@ -82,8 +84,10 @@ func run() -> void:
 		check(patch_hash(a.heights, kit) == patch_hash(b.heights, kit), "the final ground along approach, trail and exit is the same after reload (no accumulation, no loss)")
 		for part in kit:
 			var s := TrailSurvey.measure(b.heights, part, GRADE)
-			print("Готовая поверхность «%s»: длина %.0f м, уклон до %.1f%%, уровень проверки %s, элементов %d" % [part.id, s.length, s.peak_grade * 100.0, s.level(), part.elements.size()])
-			check(s.level() == "within", "%s: the finished world surface meets the grade requirement" % part.id)
+			var sh: Dictionary = b.trail.get("earthworks", {}).get(part.id, {})
+			print("Готовая поверхность «%s»: длина %.0f м, уклон до %.1f%% (цель %.0f%%), выемка до %.2f м (%.0f м³), насыпь до %.2f м (%.0f м³), зона %.1f м от оси, элементов %d" % [
+				part.id, s.length, s.peak_grade * 100.0, GRADE * 100.0, sh.get("max_cut", 0.0), sh.get("cut_m3", 0.0), sh.get("max_fill", 0.0), sh.get("fill_m3", 0.0), sh.get("reach", 0.0), part.elements.size()])
+			check(s.complete(), "%s: the finished world surface is measured along the whole axis" % part.id)
 			check(trees_on_trail(b.world, part) == 0, "%s: no forest object on the axis (%.1f m half width)" % [part.id, part.width * 0.5])
 		joints(b.heights, kit)
 		ride(b, kit)
@@ -187,10 +191,10 @@ func ride(loaded: WorldLoader, kit: Array[TrailDefinition]) -> void:
 		var near := d.nearest(here)
 		worst = maxf(worst, near.z)
 		if near.x > d.route_length() - 3.0: break
-		var target := d.point_at(near.x + 6.0) - here
+		var target := d.point_at(near.x + Rider.rider_look(d, near.x)) - here
 		var steer := clampf(-wrapf(atan2(-target.x, -target.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		h.obstacles.update(player.x, player.z, PackedFloat32Array(), -1)
-		controller.ride(1.0 / 60.0, player, bike, loaded.world, h, 0.6, steer, false, false, false)
+		controller.ride(1.0 / 60.0, player, bike, loaded.world, h, Rider.rider_pedal(d, near.x, bike.speed), steer, false, false, false)
 		top = maxf(top, absf(bike.speed))
 		ticks += 1
 		if bike.crashed:

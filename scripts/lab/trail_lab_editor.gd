@@ -94,18 +94,17 @@ func _ready() -> void:
 	var zone := Label.new()
 	zone.theme_type_variation = "HintLabel"
 	zone.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	zone.text = "Координаты — метры сохранённого участка; рабочая зона %s. Поиск идёт по естественной земле в обход воды, мостов и путей; демонстрационная линия не используется." % _work_zone()
+	zone.text = "Координаты — метры сохранённого участка; рабочая зона %s. Поиск идёт по естественной земле в обход воды, мостов и путей (уклон — в цене, не предел), рельеф готовится под линию; демонстрационная линия не используется." % _work_zone()
 	line_box.add_child(zone)
 	for spec: Array in [["route_start_x", "Старт X, м", 0.0, 400.0, 1.0], ["route_start_z", "Старт Z, м", 0.0, 400.0, 1.0],
 			["route_finish_x", "Финиш X, м", 0.0, 400.0, 1.0], ["route_finish_z", "Финиш Z, м", 0.0, 400.0, 1.0],
-			["route_width", "Ширина, м", 2.0, 8.0, 0.25], ["route_grade", "Предел уклона, %", 3.0, 50.0, 1.0],
-			["route_cut", "Выемка до, м", 0.0, 2.0, 0.1], ["route_fill", "Насыпь до, м", 0.0, 2.0, 0.1],
-			["route_radius", "Радиус поворота от, м", 2.0, 40.0, 0.5], ["route_budget", "Бюджет, тыс. раскрытий", 1.0, 500.0, 1.0]]:
+			["route_width", "Ширина, м", 2.0, 8.0, 0.25], ["route_grade", "Желаемый уклон, %", 3.0, 50.0, 1.0],
+			["route_radius", "Желаемый радиус, м", 2.0, 40.0, 0.5], ["route_budget", "Бюджет, тыс. раскрытий", 1.0, 500.0, 1.0]]:
 		_add_number(line_box, spec)
 	var defaults := TrailRouter.DEFAULTS
 	for pair: Array in [["route_start_x", 126.0], ["route_start_z", 246.0], ["route_finish_x", 78.0], ["route_finish_z", 174.0],
-			["route_width", defaults.width], ["route_grade", defaults.grade * 100.0], ["route_cut", defaults.max_cut],
-			["route_fill", defaults.max_fill], ["route_radius", defaults.min_radius], ["route_budget", defaults.budget / 1000.0]]:
+			["route_width", defaults.width], ["route_grade", defaults.grade * 100.0],
+			["route_radius", defaults.min_radius], ["route_budget", defaults.budget / 1000.0]]:
 		numbers[pair[0]].value = pair[1]
 	var build_line := Button.new()
 	build_line.text = "Построить линию"
@@ -119,7 +118,7 @@ func _ready() -> void:
 	var auto_note := Label.new()
 	auto_note.theme_type_variation = "HintLabel"
 	auto_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	auto_note.text = "«Найти трассу» сам выбирает старт выше финиша по ширине, уклону, радиусу и земляным работам выше и по длине и перепаду ниже; координаты старта и финиша не используются."
+	auto_note.text = "«Найти трассу» сам выбирает старт выше финиша по длине; уклон, радиус и перепад — цели (рельеф готовится под трассу), не пределы; координаты старта и финиша не используются."
 	line_box.add_child(auto_note)
 	for spec: Array in [["route_length_min", "Длина от, м", 24.0, 400.0, 5.0], ["route_length_max", "Длина до, м", 24.0, 400.0, 5.0],
 			["route_drop", "Перепад вниз от, м", 0.0, 60.0, 0.5]]:

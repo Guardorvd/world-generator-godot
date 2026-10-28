@@ -135,6 +135,17 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.merge(side_ms)
+	# Устаревший план трассы (кэш другой версии кода, «есть» или «нет»): мир не публикуется и не помечается skip — файлы
+	# кэша этого сида удаляются, и мир готовится заново по нынешнему коду (один раз)
+	if r.trail.get("state", "") == "stale":
+		push_warning("Трасса стартовой области: %s" % "; ".join(r.trail.get("errors", PackedStringArray())))
+		if services.cache.enabled:
+			services.cache.wait_writes()
+			services.cache.remove_seed(seed_text)
+		if not retried:
+			return load_world(seed_text, size, on_progress, services, true)
+		r.error = "Не удалось подготовить мир: план трассы стартовой области устарел и после пересоздания."
+		return r
 	# Откат: трасса добавлена в мир, но применить её не удалось — мир с недостроенным путём не публикуется. Кэш мира
 	# удаляется, сид помечается, и мир собирается заново без трассы (повторный вызов, один раз); не вышло и так — отказ.
 	if r.trail.get("state", "none") == "found" and not r.trail.get("applied", false):

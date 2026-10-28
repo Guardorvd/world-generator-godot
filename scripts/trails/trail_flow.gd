@@ -5,10 +5,12 @@ extends RefCounted
 ## this class only reads the accepted line and builds and judges the result.
 ##
 ## 1. Placement reads the finished profile of the accepted tread BEFORE elements (the base TrailSurvey): every element
-##    TrailComposer proposes is checked over its whole length plus APPROACH / EXIT metres — local 4 m grade with the
-##    element's own slope added, turns (straight elements on near-straight line, a berm in one steady turn), the route
-##    ends, neighbouring elements, the earthwork limits of the request and the combined banking of the route's own
-##    superelevation and a berm. A refused element is skipped, never forced in for a count.
+##    TrailComposer proposes is checked over its whole length plus APPROACH / EXIT metres — the base tread under it within
+##    the route's target grade (the element adds only its own profile, judged after the build), turns (straight elements on near-straight line, a berm
+##    in one steady turn), the route ends, neighbouring elements and the combined banking of the route's own
+##    superelevation and a berm. These are rules of the decorative elements only: a refused element is skipped, never
+##    forced in for a count, and the route itself is never refused by them. Elements displace the ground by at most
+##    TrailBuilder.ELEMENT_CAP; the route's own earthworks have no limit.
 ## 2. The base line (axis, requirements, auto_bank) is not changed. The trail with elements is a copy of the base
 ##    definition plus elements, built on a fresh copy of the saved site (TrailSite.prepare) — never over the baked base.
 ## 3. At most two full builds after the base: the main variant and, when it fails, one simplified variant without the
@@ -22,6 +24,7 @@ const STRAIGHT := 1.0 / 40.0   # a roller or a dip only where the line bends les
 const BERM_TURN := 1.0 / 60.0  # a berm only in one turn at least this sharp along its whole length
 const BANK_LIMIT := 0.38       # steepest tread cross slope with a berm: the bike-track preset's own bank_max
 const SAME := 0.02             # outside the elements the final support must equal the base one within this, m
+const OWN_SLACK := 0.02        # on an element the 4 m grade may exceed the base one by the element's own grade plus this
 const BUILDS := 2
 const ALLOWED := [TrailElement.Profile.ROLLER, TrailElement.Profile.DIP, TrailElement.Profile.BERM]
 ## What the element check does not judge.
@@ -166,7 +169,7 @@ func _misfit(e: TrailElement, d: TrailDefinition) -> String:
 	var half := d.width * 0.5
 	var berm := e.profile == TrailElement.Profile.BERM
 	# Turns over the element and its free approach and exit
-	var turn_sign := 0.0
+	var turn_sign := 0.0 # sign of the turn a berm sits in
 	for j in s.stations.size():
 		var at := s.stations[j]
 		if at < a - APPROACH or at > b + EXIT: continue
@@ -180,21 +183,12 @@ func _misfit(e: TrailElement, d: TrailDefinition) -> String:
 	var own := _own_grade(e, half)
 	var cross_add := 0.0
 	if berm: cross_add = absf(e.displacement(e.station, half * TrailSurvey.CROSS_SHARE, half) - e.displacement(e.station, -half * TrailSurvey.CROSS_SHARE, half)) / (2.0 * half * TrailSurvey.CROSS_SHARE)
-	var top := -INF
-	var low := INF
 	for j in s.stations.size():
 		var at := s.stations[j]
 		if at < a - 2.0 or at > b + 2.0: continue
-		if not is_finite(s.grade[j]) or absf(s.grade[j]) + own > r.grade: return "уклон полотна с элементом выше %.0f%%" % (r.grade * 100.0)
-		var p := d.point_at(at)
-		var shaped := s.support[j] - _site.ground_at(p) # displacement of the accepted tread at the axis
-		var lift := e.displacement(at, half * signf(e.bank) if berm else 0.0, half) # a berm is highest at its outer edge
-		top = maxf(top, shaped + absf(s.cross[j]) * half * float(berm) + maxf(0.0, lift))
-		low = minf(low, shaped + minf(0.0, lift))
+		if not is_finite(s.grade[j]) or absf(s.grade[j]) > r.grade: return "уклон полотна под элементом круче цели %.0f%%" % (r.grade * 100.0)
 		if berm and (not is_finite(s.cross[j]) or absf(s.cross[j]) + cross_add > BANK_LIMIT):
 			return "вираж полотна с элементом выше %.0f%% (автовираж трассы уже наклоняет поворот)" % (BANK_LIMIT * 100.0)
-	if top > r.max_fill: return "насыпь с элементом выше %.1f м" % r.max_fill
-	if low < -r.max_cut: return "выемка с элементом глубже %.1f м" % r.max_cut
 	return ""
 
 
@@ -209,7 +203,9 @@ static func _own_grade(e: TrailElement, half: float) -> float:
 	return peak
 
 
-## Checks of the final surface with elements; problems {index (element, -1 — not tied to one), why}.
+## Checks of the final surface with elements; problems {index (element, -1 — not tied to one), why}. The route's own
+## grade and earthworks are facts of the base line (no limits); an element is blamed only for what it adds: a 4 m grade
+## over the target steeper than the base plus its own profile, banking over BANK_LIMIT, a change outside its own reach.
 func _judge(h: Heightfield, d: TrailDefinition, s: TrailSurvey) -> Array[Dictionary]:
 	var problems: Array[Dictionary] = []
 	checks.clear()
@@ -218,28 +214,25 @@ func _judge(h: Heightfield, d: TrailDefinition, s: TrailSurvey) -> Array[Diction
 		problems.append({index = -1, why = "; ".join(s.errors)})
 	if not s.unmeasured.is_empty():
 		problems.append({index = -1, why = "проверка поверхности НЕПОЛНАЯ"})
-	var outside := 0
 	var on := PackedStringArray()
 	for run: Dictionary in s.exceeded:
-		if (run.elements as Array).is_empty():
-			outside += 1
-			problems.append({index = -1, why = "уклон %+.0f%% вне элементов на %.0f–%.0f м" % [run.peak * 100.0, run.from, run.to]})
+		# what the base line already had over the same stretch is the route's own slope, not the element's
+		var base_peak := 0.0
+		for j in base.survey.stations.size():
+			var at := base.survey.stations[j]
+			if at >= run.from - 0.01 and at <= run.to + 0.01 and is_finite(base.survey.grade[j]): base_peak = maxf(base_peak, absf(base.survey.grade[j]))
+		var own := 0.0
+		for i: int in run.elements: own = maxf(own, _own_grade(d.elements[i], d.width * 0.5))
+		if absf(run.peak) <= base_peak + own + OWN_SLACK: continue
 		for i: int in run.elements:
 			on.append("%s %+.0f%%" % [TrailElementLibrary.title(d.elements[i].profile), run.peak * 100.0])
-			problems.append({index = i, why = "уклон %+.0f%% на %.0f–%.0f м" % [run.peak * 100.0, run.from, run.to]})
-	checks.append({name = "Уклон 4 м ≤ %.0f%% вне элементов" % (r.grade * 100.0), state = "ok" if outside == 0 and s.unmeasured.is_empty() else "fail",
-		detail = "вне элементов до %.1f%% (локальный 0,5 м до %.0f%%)" % [s.peak_grade_track * 100.0, s.peak_local_track * 100.0]})
-	checks.append({name = "Уклон 4 м ≤ %.0f%% на элементах" % (r.grade * 100.0), state = "ok" if on.is_empty() else "fail",
-		detail = "вся трасса до %.1f%% (локальный до %.0f%%)%s" % [s.peak_grade * 100.0, s.peak_local * 100.0, "" if on.is_empty() else " · превышения: " + ", ".join(on)]})
+			problems.append({index = i, why = "уклон %+.0f%% на %.0f–%.0f м круче базовой линии с собственным уклоном элемента" % [run.peak * 100.0, run.from, run.to]})
+	checks.append({name = "Элементы добавляют к уклону только свой профиль (цель %.0f%%)" % (r.grade * 100.0), state = "ok" if on.is_empty() else "fail",
+		detail = "вся трасса до %.1f%%, вне элементов до %.1f%% (локальный до %.0f%%)%s" % [s.peak_grade * 100.0, s.peak_grade_track * 100.0, s.peak_local * 100.0, "" if on.is_empty() else " · элементы: " + ", ".join(on)]})
 	var shaping: Dictionary = h.road_refinement.trail_shaping.get(d.id, {})
-	var earth_ok: bool = not shaping.is_empty() and shaping.max_cut <= r.max_cut + 0.01 and shaping.max_fill <= r.max_fill + 0.01
-	if not earth_ok:
-		for i in d.elements.size():
-			var raises := d.elements[i].profile != TrailElement.Profile.DIP
-			if (raises and shaping.get("max_fill", 0.0) > r.max_fill + 0.01) or (not raises and shaping.get("max_cut", 0.0) > r.max_cut + 0.01):
-				problems.append({index = i, why = "земляные работы сверх предела"})
-	checks.append({name = "Выемка ≤ %.1f м, насыпь ≤ %.1f м (с элементами)" % [r.max_cut, r.max_fill], state = "ok" if earth_ok else "fail",
-		detail = "фактически %.2f / %.2f м · объём %.0f / %.0f м³" % [shaping.get("max_cut", 0.0), shaping.get("max_fill", 0.0), shaping.get("cut_m3", 0.0), shaping.get("fill_m3", 0.0)]})
+	checks.append({name = "Земляные работы (с элементами)", state = "ok" if not shaping.is_empty() else "fail",
+		detail = "выемка до %.2f м, насыпь до %.2f м · объём %.0f / %.0f м³" % [shaping.get("max_cut", 0.0), shaping.get("max_fill", 0.0), shaping.get("cut_m3", 0.0), shaping.get("fill_m3", 0.0)]})
+	if shaping.is_empty(): problems.append({index = -1, why = "нет записи о формировании полотна"})
 	# Banking: the route's own superelevation plus a berm must not exceed the limit (or the base where it already did)
 	var bank_peak := 0.0
 	var bank_bad := PackedStringArray()

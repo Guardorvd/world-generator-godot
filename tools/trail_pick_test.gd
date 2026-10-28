@@ -60,12 +60,13 @@ func run() -> void:
 		var drop: float = r.survey.support[0] - r.survey.support[-1]
 		check(length >= picked.request.length_min and length <= picked.request.length_max,
 			"real length on the finished surface %.0f m within %.0f–%.0f m" % [length, picked.request.length_min, picked.request.length_max])
-		check(drop >= picked.request.min_drop and r.survey.support[0] > r.survey.support[-1],
-			"real descent %.1f m ≥ %.1f m: the start is above the finish" % [drop, picked.request.min_drop])
+		check(r.survey.support[0] > r.survey.support[-1],
+			"the start is above the finish: real descent %.1f m (wish from %.1f m, a preference), finished grade up to %.1f%% (target %.0f%%)" % [
+			drop, picked.request.min_drop, r.survey.peak_grade * 100.0, picked.request.grade * 100.0])
 		var states := PackedStringArray()
 		for c: Dictionary in r.checks: states.append(c.state)
-		check(r.accepted and r.survey.level() == "within" and r.definition.elements.is_empty(),
-			"every checked requirement met on the finished surface (%s), no elements" % ", ".join(states))
+		check(r.accepted and r.survey.complete() and r.definition.elements.is_empty(),
+			"ground prepared and every correctness check passed on the finished surface (%s), no elements" % ", ".join(states))
 	# 2. Repeatability; the site suitability data are reused, not prepared again.
 	var again := TrailPicker.find(site)
 	check(picked.accepted and again.accepted and again.start == picked.start and again.finish == picked.finish
@@ -73,10 +74,11 @@ func run() -> void:
 		and again.stats.builds == picked.stats.builds, "same request → same start, finish, line, expansions and builds")
 	check(again.stats.prepare_reused and again.stats.prepare_ms < 5.0, "site suitability data reused: %.1f ms now, %.0f ms when prepared" % [again.stats.prepare_ms, again.stats.prepare_cost_ms])
 	report.again_ms = again.stats.total_ms
-	# 3. Impossible requirements: an honest refusal, nothing relaxed.
-	var steep := TrailPicker.find(site, {min_drop = 40.0})
+	# 3. An impossible request (a trail longer than the site): an honest refusal, nothing built. A descent wish (min_drop)
+	# is a preference now, not a cheap filter, so it no longer serves as the impossible case.
+	var steep := TrailPicker.find(site, {length_min = 600.0, length_max = 700.0})
 	report.impossible = numbers(steep)
-	check(not steep.accepted and steep.reason.contains("отсев") and steep.stats.builds == 0, "descent of 40 m on this site refused: %s" % steep.reason)
+	check(not steep.accepted and steep.reason.contains("отсев") and steep.stats.builds == 0, "a 600–700 m trail on this site refused: %s" % steep.reason)
 	within_budget("impossible", steep)
 	# 4. A tight whole-operation budget is respected (found or refused, never more).
 	var tight := TrailPicker.find(site, {budget = 1500, builds = 1, repairs = 1})
@@ -105,7 +107,8 @@ func run() -> void:
 	report.lab = {total_ms = timings.total_ms, builder_ms = timings.builder_ms, outside_ms = outside_ms, picker_ms = lab.pick_result.stats.total_ms}
 	var kept: Heightfield = lab.heights
 	var refused := values.duplicate()
-	refused.route_drop = 40.0
+	refused.route_length_min = 390.0
+	refused.route_length_max = 400.0
 	lab.editor.find_requested.emit(refused)
 	check(lab.heights == kept and lab.routes[0].points == picked.router.definition.points and lab.editor.line_report.text.contains("Трасса не найдена"),
 		"an impossible request keeps the previous trail; the panel says why")

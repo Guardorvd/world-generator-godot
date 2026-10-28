@@ -6,10 +6,9 @@ extends RefCounted
 ##
 ## 1. Дешёвая оценка — один проход по клеткам области (уклон по рельефу, вода, пути, высота по блокам) в интегральные
 ##    таблицы; окно SIDE × SIDE клеток оценивается за O(1). Подробных данных (метровой сетки, поиска) здесь нет.
-## 2. Запреты окна: вода больше WATER_MAX, пути больше PATH_MAX, поселение рядом, мост или туннель в участке с запасом,
-##    мало клеток с пригодным уклоном, перепад блоков меньше требуемого. Остальное — очки: доля пригодных клеток минус
-##    крутые, вода и пути, небольшая добавка за перепад и за дорогу рядом (предпочтение для будущего доступа; соединений
-##    здесь не строится).
+## 2. Запреты окна — только то, что трасса не может сделать сама: вода больше WATER_MAX, пути больше PATH_MAX, поселение
+##    рядом, мост или туннель в участке с запасом, нет дорожной сети дома (при доступе). Уклон и перепад — не запреты (рельеф
+##    готовится под трассу), а очки: доля пологих клеток минус обрывы, вода и пути, добавки за перепад и за дорогу рядом.
 ## 3. Кандидаты — не больше CANDIDATES окон по очкам, сдвинутых друг от друга хотя бы на полстороны; подробный поиск — только в первых `windows`.
 ## 4. Для каждого: TrailSite.cut → TrailPicker.find. Бюджеты (пары, раскрытия, исправления, сборки, таймаут) общие на всю
 ##    область, вместе с оценкой, вырезкой и элементами: окну достаётся равная доля остатка (время считается после вырезки),
@@ -25,8 +24,8 @@ const CANDIDATES := 12
 const WINDOWS := 3          # окон с подробным поиском
 const WATER_MAX := 0.25
 const PATH_MAX := 0.12
-const USABLE_MIN := 0.5
-const CLIFF := 0.30         # клетка круче — обрыв
+const GENTLE := 1.3         # клетка пологая (очки), если её уклон не круче цели × это
+const CLIFF := 0.30         # клетка круче — обрыв (меньше очков)
 const ROAD_RING := 24       # дорога в этом кольце вокруг окна — предпочтение, клеток
 const SETTLEMENT_CLEAR := 8.0 # поселение ближе к участку с запасом на столько клеток — запрет
 const SEED := 1             # seed композиции TrailFlow
@@ -111,7 +110,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 	var picks: Array[Dictionary] = _spread(found)
 	stats.candidates = picks.size()
 	if picks.is_empty():
-		_refuse("no_window", "в области %s нет окна %d × %d клеток без воды, сооружений, поселений и занятых путей с пригодным уклоном и перепадом: %s" % [
+		_refuse("no_window", "в области %s нет окна %d × %d клеток без воды, сооружений, поселений и занятых путей (с дорожной сетью дома): %s" % [
 			area, _side, _side, _rejections()])
 		return
 	var budget_hit := false
@@ -201,7 +200,7 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 	var gw := grid.size.x
 	var gh := grid.size.y
 	var tile := GameConfig.TILE
-	var cap: float = request.grade * TrailRouter.SEARCH_SLACK
+	var cap: float = request.grade * GENTLE
 	var stride := gw + 1
 	# интегральные таблицы (gw+1) × (gh+1): пригодные по уклону, обрывы, вода, занятые пути
 	var usable := PackedInt32Array()
@@ -275,9 +274,6 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 			if path_f > PATH_MAX:
 				_reject("окно: занято путями")
 				continue
-			if usable_f < USABLE_MIN:
-				_reject("окно: мало клеток с пригодным уклоном")
-				continue
 			if _structures(struct_feet, rect):
 				_reject("окно: мост или туннель в участке с запасом")
 				continue
@@ -285,9 +281,6 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 				_reject("окно: поселение рядом")
 				continue
 			var relief := _relief(block_sum, block_n, bw, local)
-			if relief < request.min_drop:
-				_reject("окно: перепад блоков меньше требуемого")
-				continue
 			var around := rect.grow(ROAD_RING).intersection(grid)
 			var ring := Rect2i(around.position - grid.position, around.size)
 			var road_near := maxf(0.0, _sum(road, stride, ring) - _sum(road, stride, local))
@@ -392,8 +385,8 @@ func summary() -> String:
 	if accepted:
 		lines.append("Трасса найдена в окне %s (клетки), старт (%.0f, %.0f) → финиш (%.0f, %.0f) м мира" % [window, start.x, start.y, finish.x, finish.y])
 		var r := picker.router
-		lines.append("Длина %.0f м · перепад вниз %.1f м · уклон до %.1f%% · элементы: %d (%s)" % [r.stats.length, r.stats.drop,
-			r.stats.peak_grade * 100.0, flow.definition.elements.size(), flow.variant])
+		lines.append("Длина %.0f м · перепад вниз %.1f м · уклон до %.1f%% · выемка до %.2f м, насыпь до %.2f м · элементы: %d (%s)" % [r.stats.length, r.stats.drop,
+			r.stats.peak_grade * 100.0, r.stats.get("max_cut", 0.0), r.stats.get("max_fill", 0.0), flow.definition.elements.size(), flow.variant])
 	else:
 		lines.append("Трасса не найдена (%s): %s" % [VERDICTS.get(verdict, verdict), reason])
 	lines.append("Область %s · клеток оценено %d · окон %d, допущено %d, кандидатов %d, искалось %d (вырезка отклонена %d)" % [

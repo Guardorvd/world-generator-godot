@@ -68,7 +68,7 @@ func run() -> void:
 			tight(h, name)
 		if scout.accepted:
 			var r := scout.picker.router
-			check(r.accepted and r.survey.level() == "within", "%s: the trail meets every checked requirement on the finished surface" % name)
+			check(r.accepted and r.survey.complete(), "%s: ground prepared, every correctness check passed on the finished surface (grade up to %.1f%%, cut %.2f / fill %.2f m)" % [name, r.survey.peak_grade * 100.0, r.stats.get("max_cut", 0.0), r.stats.get("max_fill", 0.0)])
 			check(scout.flow != null and (scout.flow.accepted or scout.flow.variant == "базовая линия"), "%s: elements judged anew (%s)" % [name, scout.flow.variant])
 			var rect := Rect2(Vector2(scout.window.position) * GameConfig.TILE, Vector2(scout.window.size) * GameConfig.TILE)
 			check(rect.has_point(scout.start) and rect.has_point(scout.finish), "%s: start and finish lie inside the chosen window" % name)

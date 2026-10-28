@@ -2,9 +2,14 @@ extends SceneTree
 ## Isolated check of the line builder (TrailRouter) on the saved site: only the site file, no world or generation.
 ##   godot --headless --path . --script res://tools/trail_route_test.gd
 ##   godot --path . --script res://tools/trail_route_test.gd -- --capture   (overview of the found lines)
+## Contract (step 2, new principle): the builder lays the route and the ground is prepared for it. Grade, radius and
+## earthwork depth are reported against their targets, never a reason to refuse; refusals are corridor (water, bridges,
+## paths, zone edge), separation, input and budget only.
 ## Cases: a route found over the natural land and built; a pair whose straight line is unusable and which the builder
-## detours; refusals (separated by water/road, exhausted budget, start in water); repeatability; Trail Lab: the button
-## path, a refusal keeps the previous route, one automatic ride of the built line with the production controller.
+## detours; a line over a ridge whose earthworks are deeper than the old 1.2 m / 1.0 m — prepared by the shared surface
+## builder, continuous at the edge of the widened zone, ridden; refusals (separated by water/road,
+## exhausted budget, start in water); repeatability; Trail Lab: the button path, a refusal keeps the previous route, one
+## automatic ride of the built line with the production controller.
 ## Report: tools/control/runs/trail_route/metrics.json. About 30 s headless on the second PC.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_route"
@@ -12,6 +17,9 @@ const OUT := "res://tools/control/runs/trail_route"
 const NATURAL := [Vector2(126, 222), Vector2(78, 270)]  # west hillside: straight line up to 34 % at 4 m
 const DETOUR := [Vector2(126, 246), Vector2(78, 174)]   # straight line crosses a stream and a 32 % bank
 const SEPARATED := [Vector2(146, 266), Vector2(254, 282)] # across the river and the road
+const RIDGE := [Vector2(108.5, 84.5), Vector2(172.5, 84.5)] # 64 m straight over a ridge 5 m above the chord
+const OLD_CUT := 1.2  # earthwork limits of the previous contract (TrailRouter.DEFAULTS max_cut / max_fill)
+const OLD_FILL := 1.0
 var failures := 0
 var checks := 0
 var report := {}
@@ -41,20 +49,42 @@ func numbers(r: TrailRouter) -> Dictionary:
 		search_ms = r.stats.search_ms, geometry_ms = r.stats.geometry_ms, estimate_ms = r.stats.estimate_ms,
 		build_ms = r.stats.build_ms, total_ms = r.stats.total_ms, notes = Array(r.notes)}
 
-## The accepted line is honest: every check ran and passed, no elements, the corridor and work zone hold.
+## The accepted line is honest: every correctness check ran and passed, no elements, the corridor and work zone hold;
+## grade, radius and earthworks are reported (info), not judged against limits.
 func accepted_line(name: String, r: TrailRouter) -> void:
 	var states := PackedStringArray()
 	for c: Dictionary in r.checks: states.append("%s: %s" % [c.name, c.state])
-	check(r.found and r.accepted and r.checks.size() == 4, "%s: line found over the land, built and every checked requirement met (%s)" % [name, "; ".join(states) if r.reason.is_empty() else r.reason])
+	check(r.found and r.accepted and r.checks.size() == 5, "%s: line found over the land, ground prepared, every correctness check passed (%s)" % [name, "; ".join(states) if r.reason.is_empty() else r.reason])
 	if not r.accepted: return
-	check(r.definition.elements.is_empty() and r.definition.kind == "mountain" and r.survey.level() == "within" and r.survey.complete(),
-		"%s: plain TrailDefinition without elements; finished-surface survey complete and within %.0f%%: peak %.1f%%" % [name, r.request.grade * 100.0, r.survey.peak_grade * 100.0])
+	check(r.definition.elements.is_empty() and r.definition.kind == "mountain" and r.survey.complete(),
+		"%s: plain TrailDefinition without elements; finished-surface survey complete: peak %.1f%% (target %.0f%%), radius from %.1f m (wanted %.0f m)" % [
+		name, r.survey.peak_grade * 100.0, r.request.grade * 100.0, r.stats.min_radius, r.request.min_radius])
 	var bad := 0
 	for p in r.definition.points: bad += int(r.blocked(p) != TrailRouter.Block.FREE)
 	check(bad == 0 and _site.inside_errors([r.definition] as Array[TrailDefinition]).is_empty(), "%s: smoothed corridor clear of water, bridges, paths and the zone edge at all %d points" % [name, r.definition.points.size()])
-	check(r.stats.min_radius >= r.request.min_radius - 0.01, "%s: turn radii from %.1f m (required %.0f m)" % [name, r.stats.min_radius, r.request.min_radius])
+	var gap := edge_gap(r.prepared.heights)
+	check(gap <= _edge_before + 0.001, "%s: no wall at the edge of the prepared zone — boundary vertices next to untouched cells off the old triangles by %.4f m (site before the trail %.4f m)" % [name, gap, _edge_before])
+
+
+## Largest difference between a boundary vertex of a metre patch (next to a cell without a patch) and the coarse
+## triangles the neighbouring cell is drawn and walked on: a wall or a gap at the edge of the prepared zone shows here.
+func edge_gap(h: Heightfield) -> float:
+	var r := h.road_refinement
+	var W := h.world.W
+	var worst := 0.0
+	for key: int in r.patches:
+		var hs: PackedFloat32Array = r.patches[key].h
+		for z in RoadRefinement.STRIDE:
+			for x in RoadRefinement.STRIDE:
+				var open := (x == 0 and not r.patches.has(key - 1)) or (x == RoadRefinement.DIV and not r.patches.has(key + 1)) \
+					or (z == 0 and not r.patches.has(key - W)) or (z == RoadRefinement.DIV and not r.patches.has(key + W))
+				if not open: continue
+				var at := Vector2((key % W) * RoadRefinement.DIV + x, (key / W) * RoadRefinement.DIV + z) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+				worst = maxf(worst, absf(hs[z * RoadRefinement.STRIDE + x] - h.base_ground_at(at.x, at.y)))
+	return worst
 
 var _site: TrailSite
+var _edge_before := 0.0
 
 func run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
@@ -64,6 +94,7 @@ func run() -> void:
 		quit(1)
 		return
 	var file_hash := FileAccess.get_sha256(Fixture.SITE)
+	_edge_before = edge_gap(_site.surface())
 	var demo := _site.demo_route()
 	# 1. A route over the natural land of the site.
 	var natural := TrailRouter.build(_site, request(NATURAL))
@@ -85,6 +116,50 @@ func run() -> void:
 	accepted_line("detour", detour)
 	if detour.accepted:
 		check(detour.stats.length > detour.straight.length * 1.05, "detour: the line goes round (%.0f m against %.0f m straight)" % [detour.stats.length, detour.straight.length])
+	# 3b. Earthworks deeper than the old limits: a straight line over a ridge (5 m above the chord) with a gentle target
+	# grade, built by the same shared surface builder (TrailSite.prepare → TrailBuilder.bake_elements). Before, the profile
+	# was clamped to 1.2 m of cut and the router refused such a line; now the ground is cut to the designed profile, the
+	# zone of influence widens with the depth and new metre patches carry the side slopes out to the ground.
+	var ridge := TrailDefinition.new()
+	ridge.id = "site_route"
+	ridge.kind = "mountain"
+	ridge.width = 3.0
+	ridge.surface = RoadSurface.DIRT
+	ridge.earthwork = 1.0
+	ridge.auto_bank = 1.0
+	ridge.shaping = TrailShaping.preset("mountain")
+	ridge.shaping.grade_limit = 0.06
+	ridge.shaping.strength = 1.0
+	ridge.shaping.end_fade = 4.0
+	var line := PackedVector2Array()
+	for k in 65: line.append(RIDGE[0].lerp(RIDGE[1], k / 64.0))
+	ridge.points = line
+	var built := _site.prepare([ridge] as Array[TrailDefinition])
+	check(built.errors.is_empty(), "ridge: built by the shared surface builder: %s" % "; ".join(built.errors))
+	if built.errors.is_empty():
+		var hr: Heightfield = built.heights
+		var sh: Dictionary = hr.road_refinement.trail_shaping.site_route
+		var survey := TrailSurvey.measure(hr, ridge, 0.06)
+		report.ridge = {earthworks = sh, peak_grade = survey.peak_grade, natural = sh.grade_natural, added = hr.road_refinement.build_timings.get("trail_patches_added", 0)}
+		check(sh.max_cut > OLD_CUT or sh.max_fill > OLD_FILL, "ridge: earthworks over the old limits — cut %.2f m (old %.1f), fill %.2f m (old %.1f), %.0f / %.0f m³" % [
+			sh.max_cut, OLD_CUT, sh.max_fill, OLD_FILL, sh.cut_m3, sh.fill_m3])
+		check(survey.complete() and survey.peak_grade < sh.grade_natural * 0.6, "ridge: the ground is prepared to the profile — finished grade up to %.1f%% against %.1f%% of the natural ground (target 6%%)" % [
+			survey.peak_grade * 100.0, sh.grade_natural * 100.0])
+		check(sh.reach > ridge.width * 0.5 + RoadRefinement.REACH + 1.0 and hr.road_refinement.build_timings.get("trail_patches_added", 0) > 0,
+			"ridge: the prepared zone widens past the old strip (%.1f m from the axis against %.1f m) with %d new metre patches" % [sh.reach,
+			ridge.width * 0.5 + RoadRefinement.REACH, hr.road_refinement.build_timings.get("trail_patches_added", 0)])
+		var gap := edge_gap(hr)
+		check(gap <= _edge_before + 0.001, "ridge: no wall or gap at the edge of the prepared zone (boundary off the old triangles %.4f m, site before %.4f m)" % [gap, _edge_before])
+		# the side slope: no vertex step between neighbouring metre vertices steeper than the side slope can make
+		var steepest := 0.0
+		for key: int in hr.road_refinement.patches:
+			var hs: PackedFloat32Array = hr.road_refinement.patches[key].h
+			for z in RoadRefinement.STRIDE:
+				for x in RoadRefinement.DIV:
+					steepest = maxf(steepest, absf(hs[z * RoadRefinement.STRIDE + x + 1] - hs[z * RoadRefinement.STRIDE + x]) / RoadRefinement.STEP)
+		report.ridge.steepest_step = steepest
+		print("ridge: steepest step between metre vertices %.2f m/m" % steepest)
+		report.ridge.ride = ride_alone(hr, ridge, "ridge")
 	# 4. Refusals with a clear reason.
 	var apart := TrailRouter.build(_site, request(SEPARATED))
 	report.separated = numbers(apart)
@@ -154,3 +229,41 @@ func run() -> void:
 	FileAccess.open(OUT + "/metrics.json", FileAccess.WRITE).store_string(JSON.stringify(report, "\t"))
 	print("trail_route: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)
+
+
+## One ride of a built line with the game's controller on its finished surface (no lab scene), downhill from the start.
+func ride_alone(h: Heightfield, line: TrailDefinition, tag: String) -> Dictionary:
+	var controller := BikeController.new()
+	var player := PlayerState.new()
+	var bike := BikeRide.new()
+	var at := line.point_at(1.0)
+	player.x = at.x
+	player.z = at.y
+	player.feet = h.surface_at(at.x, at.y, -INF)
+	player.on_ground = true
+	bike.x = player.x
+	bike.z = player.z
+	bike.y = player.feet
+	bike.heading = line.heading_at(1.0)
+	bike.mount(player)
+	bike.speed = 3.0
+	var ticks := 0
+	var worst := 0.0
+	var crashed := false
+	while ticks < 60 * 60:
+		var here := Vector2(bike.x, bike.z)
+		var near := line.nearest(here)
+		worst = maxf(worst, near.z)
+		if near.x > line.route_length() - 2.0: break
+		var target := line.point_at(near.x + 6.0) - here
+		var steer := clampf(-wrapf(atan2(-target.x, -target.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		h.obstacles.update(player.x, player.z, PackedFloat32Array(), -1)
+		controller.ride(1.0 / 60.0, player, bike, h.world, h, 0.4, steer, false, false, false)
+		ticks += 1
+		if bike.crashed:
+			crashed = true
+			break
+	var ridden := line.nearest(Vector2(bike.x, bike.z)).x
+	check(ridden > line.route_length() - 3.0 and not crashed, tag + ": one ride over the prepared line with the game's controller: %.0f of %.0f m in %.1f s, off axis up to %.2f m, fall: %s (not a safety guarantee)" % [
+		ridden, line.route_length(), ticks / 60.0, worst, crashed])
+	return {station = ridden, length = line.route_length(), seconds = ticks / 60.0, off_axis = worst, crashed = crashed}

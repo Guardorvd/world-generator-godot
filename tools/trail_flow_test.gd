@@ -9,6 +9,7 @@ extends SceneTree
 ## Report: tools/control/runs/trail_flow/metrics.json. About 30 s headless on the second PC.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_flow"
+const LENGTH_MIN := 90.0
 var failures := 0
 var checks := 0
 var report := {}
@@ -25,8 +26,8 @@ func check(ok: bool, label: String) -> void:
 ## Everything of the base line that the elements must not touch: definition, report and its build.
 func base_bytes(r: TrailRouter) -> PackedByteArray:
 	var d := r.definition
-	return var_to_bytes([d.points, d.elements.size(), d.width, d.auto_bank, d.earthwork, d.shaping.grade_limit, d.shaping.max_cut,
-		d.shaping.max_fill, r.request, r.survey.support, r.survey.peak_grade, r.prepared.heights.road_refinement.patches, r.prepared.heights.hv])
+	return var_to_bytes([d.points, d.elements.size(), d.width, d.auto_bank, d.earthwork, d.shaping.grade_limit, d.shaping.batter,
+		d.shaping.side_follow, r.request, r.survey.support, r.survey.peak_grade, r.prepared.heights.road_refinement.patches, r.prepared.heights.hv])
 
 func elements_of(d: TrailDefinition) -> Array:
 	var out := []
@@ -42,7 +43,9 @@ func run() -> void:
 		return
 	var file_hash := FileAccess.get_sha256(Fixture.SITE)
 	# 1. The base line: found automatically, no coordinates.
-	var picked := TrailPicker.find(site)
+	# from 90 m: the line has room for a calm element (the default range also picks a shorter line that descends at the
+	# target grade almost all the way, where no element fits under the target — a correct «no elements» case)
+	var picked := TrailPicker.find(site, {length_min = LENGTH_MIN})
 	check(picked.accepted, "base line found automatically: %.0f m" % picked.router.stats.get("length", 0.0) if picked.accepted else picked.reason)
 	if not picked.accepted:
 		quit(1)
@@ -64,7 +67,7 @@ func run() -> void:
 	check(allowed, "only small rollers, dips and berms (height ≤ 0.5 m)")
 	var states := PackedStringArray()
 	for c: Dictionary in flow.checks: states.append("%s: %s" % [c.name, c.state])
-	check(flow.checks.size() == 5 and flow.survey.level() == "within" and flow.survey.complete(), "final surface checked anew: %s" % "; ".join(states))
+	check(flow.checks.size() == 4 and flow.survey.complete(), "final surface checked anew (grade %.1f%%, target %.0f%%): %s" % [flow.survey.peak_grade * 100.0, line.request.grade * 100.0, "; ".join(states)])
 	check(flow.stats.builds <= TrailFlow.BUILDS, "extra full builds after the base: %d (limit %d), composition %.1f ms, builds %.0f ms" % [flow.stats.builds, TrailFlow.BUILDS, flow.stats.compose_ms, flow.stats.build_ms])
 	# 3. Repeatability by seed and no accumulated earthworks: a second dressing is built on a fresh site copy again.
 	var again := TrailFlow.dress(site, line, 1)
@@ -105,6 +108,7 @@ func run() -> void:
 		if key.begins_with("route_"): values[key] = lab.editor.numbers[key].value
 	values.route_flow = 1
 	values.route_seed = 1
+	values.route_length_min = LENGTH_MIN
 	var t0 := Time.get_ticks_usec()
 	lab.editor.find_requested.emit(values)
 	var outside_ms := (Time.get_ticks_usec() - t0) / 1000.0

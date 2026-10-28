@@ -8,6 +8,9 @@ extends SceneTree
 ## finished surface, one short ride over the whole kit, connectivity in the existing RoadNavigation graph (start reachable
 ## from the road network, the road network reachable from the finish). Then: impossible access, bounded budget, atomic
 ## rejection of an apply that cannot succeed, and the stored "no trail" result. Report: tools/control/runs/trail_access.
+## Step 2, new principle: grade, radius, turn and earthworks are not limits. sever_sidehill (a side hill near the roads,
+## «no pairs» for both profiles under the old limits) must now get a kit; stale plans of the previous version (found
+## and none) must come back as «stale» (prepared anew by WorldLoader), not applied and not kept as «no trail».
 const OUT := "res://tools/control/runs/trail_access"
 const SITES := ["sever_gentle", "sever_sidehill", "ushchelye_bridge"]
 var failures := 0
@@ -40,6 +43,7 @@ func run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	var report := {runs = []}
 	var first := {}
+	var hard := {}
 	for name: String in SITES:
 		var path := TrailSite.DIR.path_join(name + TrailSite.EXT)
 		var before := FileAccess.get_sha256(path)
@@ -64,13 +68,19 @@ func run() -> void:
 			report.runs.append({run = tag, joins = joins.size(), verdict = p.verdict, found = p.accepted, reason = p.reason, stats = p.stats, rejected = p.rejected})
 			if p.accepted and first.is_empty():
 				first = {site = site, picker = p, gate = gate, name = tag}
+			if p.accepted and name == "sever_sidehill":
+				hard[tag] = {site = site, picker = p, gate = gate, name = tag}
 		check(FileAccess.get_sha256(path) == before, "%s: site file unchanged" % name)
 	check(not first.is_empty(), "at least one site gets a kit with access")
+	check(not hard.is_empty(), "sever_sidehill (refused by the old limits for both profiles) gets a kit: %s" % ", ".join(hard.keys()))
 	if not first.is_empty():
 		kit_checks(first)
 		await apply_checks(first)
+	for tag: String in hard:
+		if tag != first.get("name", ""): kit_checks(hard[tag])
 	refusal_checks()
 	none_roundtrip()
+	stale_plans(first)
 	report.failures = failures
 	report.checks = checks
 	FileAccess.open(OUT + "/metrics.json", FileAccess.WRITE).store_string(JSON.stringify(report, "\t"))
@@ -94,10 +104,15 @@ func kit_checks(first: Dictionary) -> void:
 	check(roads.has(inbound.points[0]) and roads.has(outbound.points[-1]), "%s: the kit starts and ends exactly on vertices of existing roads or trails" % tag)
 	check(inbound.points[-1] == trail.points[0] and outbound.points[0] == trail.points[-1], "%s: the ends meet the trail exactly at its start and finish" % tag)
 	var info: Dictionary = gate.last
-	check(info.inbound.turn <= TrailAccess.ANGLE_MAX and info.outbound.turn <= TrailAccess.ANGLE_MAX and inbound.route_length() <= TrailAccess.LENGTH_MAX
-		and outbound.route_length() <= TrailAccess.LENGTH_MAX, "%s: smooth joints — turns %.0f° / %.0f° (limit %.0f°), approach %.0f m, exit %.0f m" % [
-		tag, info.inbound.turn, info.outbound.turn, TrailAccess.ANGLE_MAX, inbound.route_length(), outbound.route_length()])
 	var h: Heightfield = r.prepared.heights
+	var earth := PackedStringArray()
+	for d: TrailDefinition in [inbound, trail, outbound]:
+		var sh: Dictionary = h.road_refinement.trail_shaping.get(d.id, {})
+		earth.append("%s: уклон до %.0f%%, выемка %.2f / насыпь %.2f м, зона %.1f м" % [d.id, TrailSurvey.measure(h, d).peak_grade * 100.0,
+			sh.get("max_cut", 0.0), sh.get("max_fill", 0.0), sh.get("reach", 0.0)])
+	check(inbound.route_length() <= TrailAccess.LENGTH_MAX and outbound.route_length() <= TrailAccess.LENGTH_MAX,
+		"%s: joints formed by the ground, not refused by angle — turns %.0f° / %.0f°, approach %.0f m, exit %.0f m; %s" % [
+		tag, info.inbound.turn, info.outbound.turn, inbound.route_length(), outbound.route_length(), "; ".join(earth)])
 	var worst := 0.0
 	for pair in [[inbound, trail, true], [trail, outbound, false]]:
 		var a: TrailDefinition = pair[0]
@@ -146,10 +161,10 @@ func ride(h: Heightfield, parts: Array, tag: String) -> void:
 		var near := line.nearest(here)
 		worst = maxf(worst, near.z)
 		if near.x > line.route_length() - 3.0: break
-		var target := line.point_at(near.x + 6.0) - here
+		var target := line.point_at(near.x + rider_look(line, near.x)) - here
 		var steer := clampf(-wrapf(atan2(-target.x, -target.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		h.obstacles.update(player.x, player.z, PackedFloat32Array(), -1)
-		controller.ride(1.0 / 60.0, player, bike, h.world, h, 0.6, steer, false, false, false)
+		controller.ride(1.0 / 60.0, player, bike, h.world, h, rider_pedal(line, near.x, bike.speed), steer, false, false, false)
 		ticks += 1
 		if bike.crashed:
 			crashed = true
@@ -157,6 +172,29 @@ func ride(h: Heightfield, parts: Array, tag: String) -> void:
 	var ridden := line.nearest(Vector2(bike.x, bike.z)).x
 	check(ridden > line.route_length() - 4.0 and not crashed, "%s: one short ride over approach, trail and exit: %.0f of %.0f m in %.1f s, off axis up to %.2f m, fall: %s" % [
 		tag, ridden, line.route_length(), ticks / 60.0, worst, crashed])
+
+
+## A rider who looks ahead: pedals at 60 %, coasts or brakes before a turn tighter than the current speed allows
+## (lateral acceleration up to LATERAL m/s² on the sharpest curvature of the next 4–24 m). Not a safety guarantee.
+const LATERAL := 3.5
+static func rider_pedal(line: TrailDefinition, station: float, speed: float) -> float:
+	var sharpest := 0.0
+	var at := station + 4.0
+	while at <= station + 24.0:
+		sharpest = maxf(sharpest, absf(line.curvature_at(at)))
+		at += 1.0
+	var allowed := clampf(sqrt(LATERAL / maxf(sharpest, 0.0001)), 3.0, 14.0)
+	if speed > allowed + 0.5: return -1.0
+	if speed < 3.0: return 1.0 # slow (a climb out of a turn): full effort
+	return 0.6 if speed < allowed else 0.0
+
+
+## How far ahead the rider aims: 6 m on open line, less in a tight turn (aiming 6 m ahead cuts the inside of a 5 m arc
+## into the bank of the cut).
+static func rider_look(line: TrailDefinition, station: float) -> float:
+	var sharpest := 0.0
+	for k in 7: sharpest = maxf(sharpest, absf(line.curvature_at(station + k)))
+	return clampf(0.6 / maxf(sharpest, 0.0001), 2.5, 6.0)
 
 
 ## Connectivity in the existing navigation graph on the kit world: shared nodes, one component, routes both ways.
@@ -256,6 +294,33 @@ func refusal_checks() -> void:
 	check(tight.stats.expansions <= q.budget and tight.stats.pairs_searched <= q.pairs and tight.stats.builds <= q.builds and tight.stats.repairs <= q.repairs,
 		"a tight budget holds with the approaches counted: expansions %d/%d (access %d), pairs %d/%d, builds %d/%d, verdict %s" % [
 		tight.stats.expansions, q.budget, tight.stats.access_expansions, tight.stats.pairs_searched, q.pairs, tight.stats.builds, q.builds, tight.verdict])
+
+
+## Plans of the previous version (found and none) are stale: apply changes nothing and reports «stale», so WorldLoader
+## prepares the world anew instead of the emergency skip; the cache keys of the places layer changed with the version.
+func stale_plans(first: Dictionary) -> void:
+	var site := TrailSite.open(TrailSite.DIR.path_join("sever_hills" + TrailSite.EXT)).site as TrailSite
+	var h := site.surface()
+	var before := patch_hash(h)
+	var old_none := {version = StageTrailPlan.VERSION - 1, state = "none", verdict = "refused_all", reason = "старые пороги"}
+	h.world.trail_plan = old_none
+	var got := StageTrailPlan.apply(h)
+	check(got.state == "stale" and not got.applied and patch_hash(h) == before and not h.road_refinement.trail_elements_baked,
+		"an old «no trail» plan (version %d) is stale, not published as a world without a trail: %s" % [old_none.version, "; ".join(got.errors)])
+	if not first.is_empty():
+		var r: TrailRouter = first.picker.router
+		var old_found := {version = StageTrailPlan.VERSION - 1, state = "found", definition = StageTrailPlan.pack(r.definition),
+			access = {inbound = StageTrailPlan.pack(r.extras[0]), outbound = StageTrailPlan.pack(r.extras[1])}}
+		h.world.trail_plan = old_found
+		got = StageTrailPlan.apply(h)
+		check(got.state == "stale" and not got.applied and patch_hash(h) == before, "an old «found» plan (version %d) is stale: not baked, ground unchanged, no skip" % old_found.version)
+	h.world.trail_plan = {}
+	var versions := PackedInt32Array([WorldCache.SCHEMA_GEO_VERSION, WorldCache.SCHEMA_TRAILS_VERSION, WorldCache.SCHEMA_NATURE_VERSION, WorldCache.SCHEMA_VIEW_VERSION])
+	var older := versions.duplicate()
+	older[1] -= 1
+	var now := WorldCache.schema_keys(WorldCache.SCHEMA_WORLD_VERSION, versions)
+	var was := WorldCache.schema_keys(WorldCache.SCHEMA_WORLD_VERSION, older)
+	check(now[0] == was[0] and now[1] != was[1] and now[2] != was[2], "the places layer (and nature after it) of the previous trail version is not served from the cache; geo is kept")
 
 
 ## The stored "no trail" result survives the cache's own serialisation unchanged and applies as a no-op.

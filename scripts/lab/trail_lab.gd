@@ -314,8 +314,7 @@ func find_trail(values: Dictionary) -> bool:
 	return true
 
 func _line_requirements(values: Dictionary) -> Dictionary:
-	return {width = values.route_width, grade = values.route_grade / 100.0, max_cut = values.route_cut, max_fill = values.route_fill,
-		min_radius = values.route_radius}
+	return {width = values.route_width, grade = values.route_grade / 100.0, min_radius = values.route_radius}
 
 ## Replace the scene with the builder's own full build (not prepared again). The stage times of that build stay in
 ## the builder's time; the total is measured once, from the press to the ready scene.
@@ -675,8 +674,8 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 func _shaping_report() -> String:
 	var stats: Dictionary = heights.road_refinement.trail_shaping.get(routes[lane].id, {})
 	if stats.is_empty(): return "Рельеф: без земляных работ"
-	return "Рельеф: выемка %.0f м³ (до %.2f м) · насыпь %.0f м³ (до %.2f м)
-Проект полотна без элементов: уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.cut_m3, stats.max_cut, stats.fill_m3, stats.max_fill, stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
+	return "Рельеф: выемка %.0f м³ (до %.2f м) · насыпь %.0f м³ (до %.2f м) · зона %.1f м от оси
+Проект полотна без элементов: уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.get("cut_m3", 0.0), stats.get("max_cut", 0.0), stats.get("fill_m3", 0.0), stats.get("max_fill", 0.0), stats.get("reach", 0.0), stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
 
 func _line_report() -> String:
 	if line_result == null or routes[lane].id != "site_route": return ""
