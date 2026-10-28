@@ -30,7 +30,9 @@ const HOP_BUFFER := 0.22 # 14.1: пробел ждёт касания столь
                          # перед бревном длится 0,2–0,3 с и съедал нажатие, сделанное вовремя
 ## С 7.0 опора — середина между точками касания колёс, отрыв — по форме рельефа впереди.
 const HUB := GameConfig.BIKE_WHEELBASE * 0.5 # оси колёс впереди и позади середины, м
-const LIFT := 0.2        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
+const LIFT := 0.1        # отрыв, только если за LOOK секунд рельеф уйдёт из-под полёта глубже этого, м
+                         # (было 0,2: с кромки стола и гребня роллера велосипед отрывался только к 40 км/ч;
+                         # меньший провал подвеска выбирает сама, она вытягивается на STRETCH_MAX)
 const LOOK: Array[float] = [0.1, 0.2, 0.3]
 const DROP_STEP := 0.12  # земля ушла вниз за один такт больше этого — это край, а не излом: падаем
 ## С 7.1 подвеска у каждого колеса своя: пружина-демпфер от профиля под этим колесом.
@@ -41,7 +43,8 @@ const REVERSE_HOLD := GameConfig.BIKE_REVERSE_WAIT
 const WHEEL_REACH := 0.16 # колесо — круг: земля меряется ещё на столько впереди и позади точки касания, м
 const PROFILE_SPAN := 1.5 # база, на которой измеряется кривизна профиля (впадина, роллер), м
 const BANK_SPAN := 0.7   # поперечная база, на которой измеряется наклон полотна (вираж), м
-const BANK_ASSIST := 0.7 # какую долю тяжести виража видит сцепление
+const BANK_LIMIT := 2.0  # вираж поднимает сцепление не больше чем во столько раз (шина и рама не держат больше)
+const BUMP_DRAG := 1.0   # подвеска забирает у хода энергию подъёма колеса на корень или камень, 1/с
 const PROFILE_SAG := 0.6 # сжатие подвески на 1 g нагрузки от профиля, доля SAG_MAX
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 
@@ -82,6 +85,8 @@ var _g_f := 0.0       # высота земли под колёсами на п�
 var _g_r := 0.0
 var _gv_f := 0.0
 var _gv_r := 0.0
+var _o_f := 0.0       # высота корня или камня под колёсами на прошлом такте
+var _o_r := 0.0
 var _fresh := true    # колёса только встали на землю: прошлых высот нет, толчка не считаем
 var _dist := 0.0      # пройденный путь, для покачивания
 var air_time := 0.0   # сколько секунд в воздухе
@@ -461,7 +466,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		var capacity := CORNER_GRIP * grip
 		# Вираж держит и сам занос, а не только доворот рамы: иначе на вираже рама поворачивала,
 		# а велосипед уходил наружу так же, как на ровном, только с бо́льшим углом сноса.
-		capacity = maxf(capacity + _bank_assist(signf(lateral_speed), absf(speed)) * grip, capacity * 0.6)
+		capacity += _bank_assist(signf(lateral_speed), absf(speed), capacity)
 		var available := sqrt(maxf(0.0, capacity * capacity - brake_deceleration * brake_deceleration))
 		var correction := lateral_speed * (1.0 - exp(-GameConfig.BIKE_SIDE_RESPONSE * dt))
 		correction = clampf(correction, -available * dt, available * dt)
@@ -474,10 +479,15 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 	return lateral
 
 
-## Добавка сцепления от наклона полотна, м/с²: drift — куда велосипед несёт поперёк рамы (+ вправо).
-## Полотно, поднятое в сторону заноса, прижимает колёса; опущенное — отнимает.
-func _bank_assist(drift: float, pace: float) -> float:
-	return clampf(bank_slope * drift, -0.3, 0.5) * GameConfig.GRAVITY * BANK_ASSIST * smoothstep(2.0, 6.0, pace)
+## Добавка к сцеплению flat (м/с²) от наклона полотна: drift — куда велосипед несёт поперёк рамы (+ вправо).
+## Полотно, поднятое в сторону заноса, прижимает колёса; опущенное — отнимает. Как на наклонном вираже:
+## тяжесть сама держит поворот, а прижатые колёса ещё и сильнее цепляются, g·(μ + s) / (1 − μ·s).
+## Раньше бралась только доля тяжести без прижима, и вираж почти не отличался от плоского поворота.
+func _bank_assist(drift: float, pace: float, flat: float) -> float:
+	var s := clampf(bank_slope * drift, -0.8, 0.8)
+	var mu := flat / GameConfig.GRAVITY
+	var banked := GameConfig.GRAVITY * (mu + s) / maxf(1.0 - mu * s, 0.5)
+	return clampf(banked - flat, -flat * 0.4, flat * (BANK_LIMIT - 1.0)) * smoothstep(2.0, 6.0, pace)
 
 
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
@@ -501,8 +511,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
 		corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
 		# Вираж: полотно, поднятое снаружи поворота, прижимает колёса и добавляет сцепления; уклон внутрь отнимает.
-		var assist := _bank_assist(-signf(steer), pace)
-		corner_grip = maxf(corner_grip + assist * grip, corner_grip * 0.6)
+		corner_grip += _bank_assist(-signf(steer), pace, corner_grip)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
 		wanted = clampf(wanted, -limit, limit)
@@ -578,9 +587,13 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx, z + fz, surf, grade, across) * path_weight
 	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx, z - fz, surf, grade, across) * path_weight
 	# 11.6: ветки и камни на полотне (RoadObstacles) — та же кочка, только с места препятствия
+	var of := 0.0
+	var orr := 0.0
 	if heights.obstacles != null:
-		gf += heights.obstacles.bump_at(x + fx, z + fz)
-		gr += heights.obstacles.bump_at(x - fx, z - fz)
+		of = heights.obstacles.bump_at(x + fx, z + fz)
+		orr = heights.obstacles.bump_at(x - fx, z - fz)
+	gf += of
+	gr += orr
 	ground_f = gf - y
 	ground_r = gr - y
 	if _fresh:
@@ -589,7 +602,17 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		_g_r = gr
 		_gv_f = vy
 		_gv_r = vy
+		_o_f = of
+		_o_r = orr
 		return
+	# Колесо, которое взбирается на корень или камень, тормозит велосипед: энергию подъёма забирает
+	# подвеска (как демпфер, ∝ скорости подъёма²). Раньше кочки только качали подвеску, ход не терялся.
+	var rise_f := maxf(0.0, of - _o_f) / maxf(dt, 0.0001)
+	var rise_r := maxf(0.0, orr - _o_r) / maxf(dt, 0.0001)
+	_o_f = of
+	_o_r = orr
+	if rise_f + rise_r > 0.0:
+		speed = signf(speed) * sqrt(maxf(0.0, speed * speed - 2.0 * BUMP_DRAG * (rise_f * rise_f + rise_r * rise_r) * dt))
 	var vf := (gf - _g_f) / maxf(dt, 0.0001)
 	var vr := (gr - _g_r) / maxf(dt, 0.0001)
 	# колесо поднимается вместе с землёй сразу, рама — через пружину: разница и есть сжатие
