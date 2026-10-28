@@ -21,7 +21,7 @@ extends RefCounted
 ## пересоздаёт мир штатно (без пометки skip), а не публикует и не кэширует его как мир без трассы.
 ## Версия 3 (шаг 2, новый принцип): маршрут строится, рельеф готовится под него — без геометрических порогов.
 
-const VERSION := 3
+const VERSION := 4
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 ## Сиды, для которых применение трассы не удалось: мир перегенерируется без неё (WorldLoader, откат).
@@ -45,8 +45,13 @@ static func run(w: WorldData, size: int) -> void:
 	var surface_ms := (Time.get_ticks_usec() - started) / 1000.0
 	var area := WorldGenerator.start_rect(w, size)
 	var scout := TrailScout.find(w, h, {area = area})
+	w.trail_plan = from_scout(w, scout, area, surface_ms)
+
+
+## The same kit serialization and route admission for start and streamed regions.
+static func from_scout(w: WorldData, scout: TrailScout, area: Rect2i, surface_ms: float, prefix := "") -> Dictionary:
 	var plan := {version = VERSION, state = "none", verdict = scout.verdict, reason = scout.reason, area = area,
-		stats = {surface_ms = surface_ms, total_ms = (Time.get_ticks_usec() - started) / 1000.0, scout_ms = scout.stats.total_ms,
+		stats = {surface_ms = surface_ms, total_ms = surface_ms + scout.stats.total_ms, scout_ms = scout.stats.total_ms,
 			eval_ms = scout.stats.eval_ms, cut_ms = scout.stats.cut_ms, picker_ms = scout.stats.picker_ms, flow_ms = scout.stats.flow_ms,
 			expansions = scout.stats.expansions, builds = scout.stats.builds, searched = scout.stats.searched,
 			access_expansions = scout.stats.access_expansions, access_ms = scout.stats.access_ms, nav_ms = scout.stats.nav_ms},
@@ -54,18 +59,24 @@ static func run(w: WorldData, size: int) -> void:
 	if scout.accepted:
 		var kit: Array[TrailDefinition] = []
 		for d in scout.kit:
-			kit.append(to_world(d, scout.site))
+			var part := to_world(d, scout.site)
+			if not prefix.is_empty():
+				part.id = prefix + ["/in", "/trail", "/out"][kit.size()]
+				part.title = "Трасса области" if kit.size() == 1 else part.title
+			kit.append(part)
 		var errors := TrailBuilder.append_routes(w, kit) # проверка до изменений: при ошибке мир не тронут
 		if errors.is_empty():
 			plan.state = "found"
 			plan.reason = ""
 			plan.definition = pack(kit[1])
-			plan.access = {inbound = pack(kit[0]), outbound = pack(kit[2]), info = scout.access.last}
+			plan.access = {inbound = pack(kit[0]), outbound = pack(kit[2]), info = scout.access.last.duplicate(true)}
+			for name: String in ["inbound", "outbound"]:
+				if plan.access.info[name].has("join"): plan.access.info[name].join += scout.site.origin_m()
 			plan.window = scout.window
 			plan.variant = scout.flow.variant
 		else:
 			plan.reason = "трасса найдена, но не добавлена в мир: " + "; ".join(errors)
-	w.trail_plan = plan
+	return plan
 
 
 ## Определение участка (локальные метры) в мировых метрах: сдвиг точек на начало участка. Остальное (станции элементов,

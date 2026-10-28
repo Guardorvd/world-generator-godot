@@ -47,6 +47,7 @@ var stats := {compose_ms = 0.0, build_ms = 0.0, builds = 0, total_ms = 0.0}
 
 var _site: TrailSite
 var _builds := BUILDS
+var _cancel := Callable()
 var _deadline := 0 ## 0 — no time limit
 var _extras: Array[TrailDefinition] = [] ## access routes built together with the line (TrailAccess)
 var _accepted_zones: Array[Vector2] = []
@@ -60,6 +61,7 @@ static func dress(site: TrailSite, line: TrailRouter, seed_value: int, limits :=
 	var started := Time.get_ticks_usec()
 	f._builds = mini(BUILDS, int(limits.get("builds", BUILDS)))
 	f._deadline = int(limits.get("deadline", 0))
+	f._cancel = limits.get("cancel", Callable())
 	f._extras.assign(limits.get("extras", line.extras if line != null else []))
 	f._run(site, line, seed_value)
 	f.stats.total_ms = (Time.get_ticks_usec() - started) / 1000.0
@@ -105,7 +107,7 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 		var started_build := Time.get_ticks_usec()
 		var kit: Array[TrailDefinition] = [d]
 		kit.append_array(_extras)
-		var got := site.prepare(kit)
+		var got := site.prepare(kit, true, {deadline = _deadline if _deadline > 0 else 9223372036854775807, cancel = _cancel})
 		stats.builds += 1
 		var problems: Array[Dictionary] = []
 		var s: TrailSurvey = null
@@ -144,7 +146,7 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 
 
 func _out_of_time() -> bool:
-	return _deadline > 0 and Time.get_ticks_msec() >= _deadline
+	return (_cancel.is_valid() and _cancel.call()) or (_deadline > 0 and Time.get_ticks_msec() >= _deadline)
 
 
 ## TrailComposer asks whether element e fits the accepted line d (its base survey). Reasons of refusals are counted.

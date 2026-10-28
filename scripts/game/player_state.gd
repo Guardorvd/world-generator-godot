@@ -127,7 +127,7 @@ static func terrain_speed(w: WorldData, x: float, z: float, heights: Heightfield
 	if sp == 0.0:
 		sp = 0.4
 	if heights != null and heights.road_refinement != null:
-		var contact := heights.road_refinement.sample(x, z, w.W)
+		var contact := heights.path_contact(x, z)
 		if not contact.is_empty() and contact.surface != RoadSurface.NONE:
 			var path_speed: float = maxf(sp, 1.0 if contact.road else 0.9) * RoadSurface.LIST[contact.surface].speed
 			return lerpf(sp, path_speed, smoothstep(0.05, 0.9, contact.weight))

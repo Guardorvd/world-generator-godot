@@ -120,7 +120,7 @@ func _connect(r: TrailRouter, site: TrailSite, trail: TrailDefinition, entering:
 		var lead: Vector2 = shape.lead
 		var rq := {start = chosen[n] if entering else lead, finish = lead if entering else chosen[n], width = r.request.width,
 			grade = r.request.grade, min_radius = minf(RADIUS, r.request.min_radius),
-			budget = share, repairs = 0, builds = 1, timeout_ms = time_left, joins = [chosen[n]]}
+			budget = share, repairs = 0, builds = 1, timeout_ms = time_left, cancel = r.request.get("cancel", Callable()), joins = [chosen[n]]}
 		var started := Time.get_ticks_usec()
 		var ok := sub.setup(site, rq) and sub.begin() and sub.candidate()
 		stats.expansions += sub.stats.expansions

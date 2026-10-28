@@ -235,12 +235,19 @@ func scene(loaded: WorldLoader, d: TrailDefinition, capture: bool) -> void:
 	main.game = game
 	main.add_child(game)
 	var t0 := Time.get_ticks_msec()
+	if "--regions" in OS.get_cmdline_user_args():
+		GameContext.scope.settings.infinite_world = true
+		RegionStream.root = OUT + "/region_store"
 	game.start(loaded, main.hud)
 	main._show("")
 	game.set_physics_process(false)
 	game.set_process(false)
 	check(game.world == loaded.world and game.heights == loaded.heights, "the game scene is built from the same world and ground (%d ms)" % (Time.get_ticks_msec() - t0))
 	if d != null:
+		game._finish_opening()
+		game.hour = 12.0
+		game.day.apply(12.0, 0.0)
+		main.hud.visible = false
 		var at := d.point_at(d.route_length() * 0.5)
 		game.player.x = at.x
 		game.player.z = at.y
@@ -251,14 +258,172 @@ func scene(loaded: WorldLoader, d: TrailDefinition, capture: bool) -> void:
 		game.bike.heading = d.heading_at(d.route_length() * 0.5)
 		game.yaw = game.bike.heading
 		game.bike.mount(game.player)
-		for tick in 30:
-			game._physics_process(1.0 / 60.0)
-			game._update_camera(1.0, 1.0 / 60.0)
-		check(not game.bike.crashed and game.bike.riding, "the rider stands on the trail in the game scene")
+		game.bike.speed = 0.0
+		for tick in 12: game.bike.step(game.player, 0.0, 0.0, false, false, 1.0 / 60.0, game.world, game.heights)
+		game.player.on_ground = true
+		game._snap()
+		game.bike_view.draw(1.0)
+		game.stream_coordinator.force_terrain(Vector3(at.x, game.player.feet, at.y), GameWorld.NEAR)
+		game.stream_coordinator.force_vegetation(Vector3(at.x, game.player.feet, at.y))
+		game.heights.obstacles.update(at.x, at.y, game.vegetation.obstacles, game.vegetation.obstacles_version, true)
+		game._update_camera(1.0, 0.0)
+		check(not game.opening_active() and game.bike.riding and game._prev.distance_to(Vector3(game.player.x, game.player.feet, game.player.z)) < 0.01, "opening ended, player/bike/camera synchronized and chunks loaded")
 		if capture:
-			await process_frame
-			await RenderingServer.frame_post_draw
-			check(preload("res://tools/shot_util.gd").save_png(root, OUT, "trail"), "frame saved")
+			var kit: Array[TrailDefinition] = [StageTrailPlan.unpack(loaded.world.trail_plan.access.inbound), d, StageTrailPlan.unpack(loaded.world.trail_plan.access.outbound)]
+			var views := {tread = d.route_length() * 0.5, junction = 0.0, exit = d.route_length(), cut = 0.0}
+			var deepest := 0.0
+			for station in ceili(d.route_length()):
+				var pt := d.point_at(station)
+				var depth := game.heights.base_ground_at(pt.x, pt.y) - game.heights.ground_at(pt.x, pt.y)
+				if depth > deepest:
+					deepest = depth
+					views.cut = float(station)
+			print("Scene deepest cut: %.2f m at %.1f m" % [deepest, views.cut])
+			for name: String in views:
+				var pt := d.point_at(views[name])
+				var target := Vector3(pt.x, game.heights.ground_at(pt.x, pt.y) + 0.5, pt.y)
+				var direction := Vector2(sin(d.heading_at(views[name])), cos(d.heading_at(views[name])))
+				var side := direction.orthogonal()
+				if game.heights.ground_at(pt.x + side.x * 15, pt.y + side.y * 15) > game.heights.ground_at(pt.x - side.x * 15, pt.y - side.y * 15): side = -side
+				var offset := Vector3(side.x * 15.0 + direction.x * 9.0, 10.0, side.y * 15.0 + direction.y * 9.0)
+				offset.y = maxf(offset.y, game.heights.ground_at(target.x + offset.x, target.z + offset.z) + 4.0 - target.y)
+				game.camera.look_at_from_position(target + offset, target)
+				game.stream_coordinator.force_terrain(target, GameWorld.NEAR)
+				game.stream_coordinator.force_vegetation(target)
+				for frame in 3: await process_frame
+				await RenderingServer.frame_post_draw
+				check(preload("res://tools/shot_util.gd").save_png(root, OUT, name), "frame saved: " + name)
+		mesh_support(game, d)
+		plant_support(game)
+	if "--regions" in OS.get_cmdline_user_args():
+		game = await regional_scene(game, main, loaded, capture)
 	main._free_game()
 	main.queue_free()
 	await process_frame
+
+
+func mesh_support(game: GameWorld, d: TrailDefinition) -> void:
+	var worst := 0.0
+	var samples := 0
+	for node: MeshInstance3D in game.terrain_stream.nodes.values():
+		var arrays := node.mesh.surface_get_arrays(0)
+		var vertices: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+		for i in range(0, indices.size(), 111):
+			var a := vertices[indices[i]]
+			var b := vertices[indices[i + 1]]
+			var c := vertices[indices[i + 2]]
+			var mid := (a + b + c) / 3.0
+			if d.nearest(Vector2(mid.x, mid.z), 45.0).z == INF: continue
+			worst = maxf(worst, absf(mid.y - game.heights.ground_at(mid.x, mid.z)))
+			samples += 1
+	check(samples > 0 and worst < 0.005, "visible triangles equal wheel/foot/collision ground: %d probes, max %.6f m" % [samples, worst])
+
+func plant_support(game: GameWorld) -> void:
+	var trees := 0
+	var rocks := 0
+	var worst := 0.0
+	for entry: Dictionary in game.vegetation.veg.values():
+		var rock: bool = entry.kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK
+		if not entry.has("tbuf") and not rock: continue
+		var buffer: PackedFloat32Array = entry.cbuf if rock else entry.tbuf
+		for at in range(0, buffer.size(), 16 if rock else 12):
+			var x := buffer[at + 3]
+			var z := buffer[at + 11]
+			var shift := Vector3(buffer[at], buffer[at + 4], buffer[at + 8]).length() * 0.08 if rock else 0.1
+			worst = maxf(worst, absf(buffer[at + 7] + shift - game.heights.ground_at(x, z)))
+			if rock: rocks += 1
+			else: trees += 1
+	check(trees > 0 and worst < 0.005, "displayed tree/rock roots seated on final ground: %d trees, %d rocks, max %.6f m" % [trees, rocks, worst])
+
+func regional_scene(game: GameWorld, main: Node, loaded: WorldLoader, capture: bool) -> GameWorld:
+	var stream := game.regions
+	check(stream != null, "RegionStream connected in the real scene")
+	if stream == null: return game
+	var first := Vector2i(ceili(float(game.world.W) / WorldData.REGION_SIZE), game.world.H / 2 / WorldData.REGION_SIZE)
+	var keys: Array[Vector2i] = [first, first + Vector2i.RIGHT]
+	var frame_max := 0.0
+	var found := 0
+	var searches := TrailScout.runs
+	for key in keys:
+		var at := Vector2(key * WorldData.REGION_SIZE) * GameConfig.TILE + Vector2(-16.0, WorldData.REGION_SIZE * GameConfig.TILE * 0.5)
+		# Walk from the available side towards the next boundary. The queue is fixed to these two regions.
+		var start_x := game.player.x
+		for step in 30:
+			game.player.x = lerpf(start_x, at.x, (step + 1) / 30.0)
+			game.player.z = at.y
+			game.player.feet = game.heights.ground_at(game.player.x, game.player.z)
+			game.bike.x = game.player.x
+			game.bike.z = game.player.z
+			game.bike.y = game.player.feet
+			game._snap()
+			await process_frame
+		var deadline := Time.get_ticks_msec() + 60000
+		while not stream.ledger.get("regions", {}).has(key) and not stream.failed.has(key) and Time.get_ticks_msec() < deadline:
+			var t := Time.get_ticks_usec()
+			stream._checked_at = at
+			if stream._task == -1 and stream._publishing.is_empty(): stream.queue.assign([key])
+			stream.update(at.x, at.y)
+			game.outer.update(at.x, at.y, false)
+			await process_frame
+			frame_max = maxf(frame_max, (Time.get_ticks_usec() - t) / 1000.0)
+		check(stream.ledger.get("regions", {}).has(key), "travel: new region published within bounded wait: %s" % key)
+		if not stream.ledger.get("regions", {}).has(key): continue
+		var entry: Dictionary = stream.ledger.regions[key]
+		var plan: Dictionary = entry.trail_plan
+		print("REGIONAL RESULT ", key, " ", plan.state, "/", plan.verdict, " ", plan.stats)
+		check(plan.version == 1 and plan.state in ["found", "none"], "regional result/version recorded, including none")
+		# A kit cannot affect the shared boundary: its complete zone is strictly inside this region.
+		if plan.state == "found":
+			found += 1
+			var kit: Array[TrailDefinition] = [StageTrailPlan.unpack(plan.access.inbound), StageTrailPlan.unpack(plan.definition), StageTrailPlan.unpack(plan.access.outbound)]
+			ride(loaded, kit)
+			joints(game.heights, kit)
+			var point := kit[1].point_at(kit[1].route_length() * 0.5)
+			game.player.x = point.x
+			game.player.z = point.y
+			game.player.feet = game.heights.ground_at(point.x, point.y)
+			game.bike.x = point.x
+			game.bike.z = point.y
+			game.bike.y = game.player.feet
+			game._snap()
+			game.stream_coordinator.force_vegetation(Vector3(point.x, game.player.feet, point.y))
+			plant_support(game)
+			var target := Vector3(point.x, game.player.feet, point.y)
+			game.camera.look_at_from_position(target + Vector3(15, 15, 20), target)
+			if capture:
+				for frame in 3: await process_frame
+				await RenderingServer.frame_post_draw
+				preload("res://tools/shot_util.gd").save_png(root, OUT, "region_%d_%d" % [key.x, key.y])
+		var before := hash(entry.fields)
+		stream.finish()
+		stream._evict(key)
+		check(not stream.ledger.regions[key].has("fields"), "region unloaded")
+		stream._load_fields(key)
+		game.world.outer.set_ledger(stream.ledger)
+		check(hash(stream.ledger.regions[key].fields) == before, "return restores exact terrain and patches without reapplying earthworks")
+		check(TrailScout.runs <= searches + keys.size(), "no duplicate searches after eviction/return")
+	check(found > 0, "at least one accessible kit in the two fixed new regions")
+	print("Region publication maximum frame interval: %.2f ms; apply max %.2f; GPU max %s" % [frame_max, stream.stats.get("max_publish_ms", 0.0), stream.stats])
+	check(frame_max < 100.0, "publication has no frame stall >= 100 ms (frame intervals, not average FPS)")
+	var searches_before := TrailScout.runs
+	var saved := game.save_state()
+	var Saves := preload("res://scripts/game/save_game.gd")
+	Saves.dir = OUT + "/saves"
+	check(Saves.write_slot(saved) == OK, "game saved in a prepared region")
+	var fields_before := {}
+	for key: Vector2i in stream.ledger.regions: fields_before[key] = hash(stream.ledger.regions[key].fields)
+	game.queue_free()
+	await process_frame
+	main.hud.clear_world()
+	var restored: GameWorld = load("res://scenes/game_world.tscn").instantiate()
+	main.game = restored
+	main.add_child(restored)
+	restored.start(loaded, main.hud, Saves.read_slot(saved.seed).data)
+	restored.set_process(false)
+	restored.set_physics_process(false)
+	var same := TrailScout.runs == searches_before
+	for key: Vector2i in fields_before:
+		same = same and restored.regions.ledger.regions.has(key) and hash(restored.regions.ledger.regions[key].fields) == fields_before[key]
+	check(same, "game load restores regional kits and fields without any new search")
+	return restored

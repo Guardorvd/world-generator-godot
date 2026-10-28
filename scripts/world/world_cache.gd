@@ -29,7 +29,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 1
-const SCHEMA_TRAILS_VERSION := 4 # 4: trail kit built first, ground prepared for it (StageTrailPlan.VERSION 3)
+const SCHEMA_TRAILS_VERSION := 5 # 5: length preference and shared regional kit definitions (StageTrailPlan.VERSION 4)
 const SCHEMA_NATURE_VERSION := 4 # coherent rock deposits, bounded density and climate exclusions
 const SCHEMA_VIEW_VERSION := 1
 ## Картинки мира: имя файла и исходники рисования

@@ -1,0 +1,66 @@
+Godot Engine v4.7.2.stable.mono.official.ed1daf0bf - https://godotengine.org
+Vulkan 1.3.289 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce GTX 1650 SUPER
+
+trail_world: PASS new generation: one automatic search (1 runs)
+Новый мир «Север-1234»: загрузка 87151 мс (генерация 72684, finish_paths 9975, запекание комплекта 530, всего 87151); план: found
+Стадия трассы: { &"surface_ms": 7644.622, &"total_ms": 10505.622, &"scout_ms": 2861.0, &"eval_ms": 803.765, &"cut_ms": 211.88, &"picker_ms": 1318.74, &"flow_ms": 482.817, &"expansions": 3929, &"builds": 2, &"searched": 1, &"access_expansions": 114, &"access_ms": 49.829, &"nav_ms": 42.706 } · found  · окна: [{ &"rect": [P: (468, 492), S: (48, 48)], &"score": 0.78438127040863, &"outcome": "найдена" }]
+Земляные работы комплекта: { "start_trail_in": { &"cut_m3": 0.00033729389842, &"fill_m3": 3.19397699432106, &"max_cut": 0.00029397654354, &"max_fill": 0.19756377700804, &"vertices": 144, &"grade_natural": 0.15949122556428, &"grade_designed": 0.12203652766772, &"grade_used": 0.138, &"bank_peak": 0.00002296864841, &"reach": 4.5, &"deepest": 0.15270328521729 }, "start_trail": { &"cut_m3": 100.494957810921, &"fill_m3": 31.9191921562105, &"max_cut": 1.26572998342818, &"max_fill": 0.67434590455441, &"vertices": 1438, &"grade_natural": 0.24655072471471, &"grade_designed": 0.13799972891854, &"grade_used": 0.138, &"bank_peak": 0.361980676651, &"reach": 4.64276196088167, &"deepest": 1.11818504333496 }, "start_trail_out": { &"cut_m3": 4.87451488334918, &"fill_m3": 11.5279691373766, &"max_cut": 0.38391199614102, &"max_fill": 0.65545273247406, &"vertices": 275, &"grade_natural": 0.13047615017176, &"grade_designed": 0.0627081228628, &"grade_used": 0.13800000541298, &"bank_peak": 0.3210175037384, &"reach": 4.5, &"deepest": 0.317551612854 }, &"patches_added": 3, &"zone_patches": 190 }
+trail_world: PASS plan stored with a state: found
+trail_world: PASS the control seed gets a trail with access (mandatory):
+trail_world: PASS approach, trail and exit are in the world exactly once: 3 route(s)
+Повторная загрузка из кэша: 32970 мс (чтение кэша 460, finish_paths 7363, запекание комплекта 583, всего 32970)
+trail_world: PASS second load: from the cache, no new search
+trail_world: PASS the stored plan (state, kit, statistics) is identical after reload
+trail_world: PASS the same approach, trail and exit paths after reload, not duplicated
+trail_world: PASS second load applied the kit without errors (основной)
+Подход 12 м (поворот в стыке 47°), трасса 155 м, выход 27 м (10°), примыкания (2039.25, 2048.75) и (1884.25, 2104.25)
+trail_world: PASS approach and exit meet the trail exactly at its start and finish
+trail_world: PASS first load applied the kit without errors (основной)
+trail_world: PASS the final ground along approach, trail and exit is the same after reload (no accumulation, no loss)
+Готовая поверхность «start_trail_in»: длина 12 м, уклон до 13.2% (цель 15%), выемка до 0.00 м (0 м³), насыпь до 0.20 м (3 м³), зона 4.5 м от оси, элементов 0
+trail_world: PASS start_trail_in: the finished world surface is measured along the whole axis
+trail_world: PASS start_trail_in: no forest object on the axis (1.5 m half width)
+Готовая поверхность «start_trail»: длина 155 м, уклон до 21.3% (цель 15%), выемка до 1.27 м (100 м³), насыпь до 0.67 м (32 м³), зона 4.6 м от оси, элементов 2
+trail_world: PASS start_trail: the finished world surface is measured along the whole axis
+trail_world: PASS start_trail: no forest object on the axis (1.5 m half width)
+Готовая поверхность «start_trail_out»: длина 27 м, уклон до 6.3% (цель 15%), выемка до 0.38 м (5 м³), насыпь до 0.66 м (12 м³), зона 4.5 м от оси, элементов 0
+trail_world: PASS start_trail_out: the finished world surface is measured along the whole axis
+trail_world: PASS start_trail_out: no forest object on the axis (1.5 m half width)
+trail_world: PASS continuous finished surface across both joints: step up to 0.10 m
+trail_world: PASS one short ride over approach, trail and exit in the real world: 191 of 194 m in 36.8 s, off axis up to 0.75 m, top 12.1 m/s, fall: false (not a safety guarantee)
+trail_world: PASS home network, approach, start, finish and exit are one component of the navigation graph ([273, 273, 273, 273] vs home 273), graph built in 2532 ms
+trail_world: PASS from home to the start and from the finish back home: routes found (51 and 110 points)
+trail_world: PASS the game scene is built from the same world and ground (7191 ms)
+trail_world: PASS opening ended, player/bike/camera synchronized and chunks loaded
+Scene deepest cut: 1.23 m at 87.0 m
+Снимок: res://tools/control/runs/trail_world/tread.png
+trail_world: PASS frame saved: tread
+Снимок: res://tools/control/runs/trail_world/junction.png
+trail_world: PASS frame saved: junction
+Снимок: res://tools/control/runs/trail_world/exit.png
+trail_world: PASS frame saved: exit
+Снимок: res://tools/control/runs/trail_world/cut.png
+trail_world: PASS frame saved: cut
+trail_world: PASS visible triangles equal wheel/foot/collision ground: 389 probes, max 0.000043 m
+trail_world: PASS displayed tree/rock roots seated on final ground: 3277 trees, 0 rocks, max 0.000171 m
+trail_world: PASS RegionStream connected in the real scene
+Region trail (3, 1): none/no_network { &"network_ms": 430, &"total_ms": 430, &"budget_ms": 10000, &"mesh_ms": 2709, &"worker_ms": 3143, &"upload_ms": 20.278, &"max_upload_ms": 0.671, &"publish_ms": 0.792, &"complete_ms": 3818 }
+trail_world: PASS travel: new region published within bounded wait: (3, 1)
+REGIONAL RESULT (3, 1) none/no_network { &"network_ms": 430, &"total_ms": 430, &"budget_ms": 10000, &"mesh_ms": 2709, &"worker_ms": 3143, &"upload_ms": 20.278, &"max_upload_ms": 0.671, &"publish_ms": 0.792, &"complete_ms": 3818 }
+trail_world: PASS regional result/version recorded, including none
+trail_world: PASS region unloaded
+trail_world: PASS return restores exact terrain and patches without reapplying earthworks
+trail_world: PASS no duplicate searches after eviction/return
+Region trail (4, 1): none/no_network { &"network_ms": 61, &"total_ms": 61, &"budget_ms": 10000, &"mesh_ms": 2756, &"worker_ms": 2818, &"upload_ms": 19.428, &"max_upload_ms": 0.572, &"publish_ms": 1.012, &"complete_ms": 3475 }
+trail_world: PASS travel: new region published within bounded wait: (4, 1)
+REGIONAL RESULT (4, 1) none/no_network { &"network_ms": 61, &"total_ms": 61, &"budget_ms": 10000, &"mesh_ms": 2756, &"worker_ms": 2818, &"upload_ms": 19.428, &"max_upload_ms": 0.572, &"publish_ms": 1.012, &"complete_ms": 3475 }
+trail_world: PASS regional result/version recorded, including none
+trail_world: PASS region unloaded
+trail_world: PASS return restores exact terrain and patches without reapplying earthworks
+trail_world: PASS no duplicate searches after eviction/return
+trail_world: FAIL at least one accessible kit in the two fixed new regions
+Region publication maximum frame interval: 1065.77 ms; apply max 1.01; GPU max { &"prepared": 2, &"loaded": 2, &"evicted": 2, &"built": 1, &"hidden": 0, &"apply_ms": 0.718, &"show_ms": 1053.372, &"max_publish_ms": 1.012 }
+trail_world: FAIL publication has no frame stall >= 100 ms (frame intervals, not average FPS)
+trail_world: PASS game saved in a prepared region
+trail_world: PASS game load restores regional kits and fields without any new search
+trail_world: 2 failures / 44 checks

@@ -61,7 +61,7 @@ static func _validate(w: WorldData, definitions: Array[TrailDefinition], for_bak
 ## a cell without one gets a patch whose vertices lie exactly on the old triangles (or equal the neighbouring patch), so
 ## the prepared ground continues past the narrow strip of the path without a wall or a gap at the patch edge. Only the
 ## patches of these zones are visited. Water, bridges and tunnels and the other civil paths stay pinned.
-static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -> PackedStringArray:
+static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], limits := {}) -> PackedStringArray:
 	var r := h.road_refinement
 	if r == null: return PackedStringArray(["finish_paths must run before trail earthworks"])
 	if r.trail_elements_baked: return PackedStringArray(["Earthworks already baked; rebuild a fresh heightfield"])
@@ -103,6 +103,9 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 	var keys := zone.keys()
 	keys.sort()
 	for key: int in keys:
+		var cancel: Callable = limits.get("cancel", Callable())
+		if (cancel.is_valid() and cancel.call()) or Time.get_ticks_msec() >= int(limits.get("deadline", 9223372036854775807)):
+			return PackedStringArray(["бюджет/отмена формирования"])
 		var patch: Dictionary = r.patches.get(key, {})
 		if patch.is_empty():
 			patch = _ground_patch(h, key)

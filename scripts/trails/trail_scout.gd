@@ -7,7 +7,7 @@ extends RefCounted
 ## 1. Дешёвая оценка — один проход по клеткам области (уклон по рельефу, вода, пути, высота по блокам) в интегральные
 ##    таблицы; окно SIDE × SIDE клеток оценивается за O(1). Подробных данных (метровой сетки, поиска) здесь нет.
 ## 2. Запреты окна — только то, что трасса не может сделать сама: вода больше WATER_MAX, пути больше PATH_MAX, поселение
-##    рядом, мост или туннель в участке с запасом, нет дорожной сети дома (при доступе). Уклон и перепад — не запреты (рельеф
+##    рядом, мост или туннель в участке с запасом, нет доступной дорожной сети (при доступе). Уклон и перепад — не запреты (рельеф
 ##    готовится под трассу), а очки: доля пологих клеток минус обрывы, вода и пути, добавки за перепад и за дорогу рядом.
 ## 3. Кандидаты — не больше CANDIDATES окон по очкам, сдвинутых друг от друга хотя бы на полстороны; подробный поиск — только в первых `windows`.
 ## 4. Для каждого: TrailSite.cut → TrailPicker.find. Бюджеты (пары, раскрытия, исправления, сборки, таймаут) общие на всю
@@ -29,7 +29,7 @@ const CLIFF := 0.30         # клетка круче — обрыв (меньш
 const ROAD_RING := 24       # дорога в этом кольце вокруг окна — предпочтение, клеток
 const SETTLEMENT_CLEAR := 8.0 # поселение ближе к участку с запасом на столько клеток — запрет
 const SEED := 1             # seed композиции TrailFlow
-const ROAD_MIN := 6         # доступ: клеток дорожной сети дома внутри окна не меньше (подход строится только в окне)
+const ROAD_MIN := 6         # доступ: клеток доступной дорожной сети внутри окна не меньше (подход строится только в окне)
 const JOIN_EDGE := 3        # точки примыкания не ближе стольких клеток к краю рабочего прямоугольника
 
 const VERDICTS := {found = "трасса найдена", no_window = "места нет: ни одно окно области не прошло дешёвую оценку",
@@ -58,7 +58,7 @@ var kit: Array[TrailDefinition] = [] ## принятый комплект в л�
 var _nav: Object             # RoadNavigation без рельефа: связность дорожной сети
 var _side := SIDE
 var _home := -1              # компонента сети у дома
-var _home_mask := PackedByteArray() # клетки вершин дорожной сети дома (1): доступ строится только к ней
+var _home_mask := PackedByteArray() # клетки вершин доступной дорожной сети (1): доступ строится только к ней
 
 
 static func find(w: WorldData, h: Heightfield, req := {}) -> TrailScout:
@@ -84,7 +84,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 	request.merge(req, true)
 	request.windows = int(request.get("windows", WINDOWS))
 	area = request.get("area", w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H))
-	var deadline := Time.get_ticks_msec() + int(request.timeout_ms)
+	var deadline := mini(Time.get_ticks_msec() + int(request.timeout_ms), int(request.get("deadline", 9223372036854775807)))
 	if h.hv.size() != w.N or h.water_level.size() != w.N or h.road_refinement == null:
 		_refuse("input", "мир не подготовлен: нужна поверхность после finish_paths")
 		return
@@ -98,6 +98,9 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 		_nav.build(w)
 		var home: Variant = PlayerState.home(w)
 		_home = _nav.component_near(Vector2(home.x, home.y) * GameConfig.TILE) if home is SettlementData else -1
+		# Regional requests supply a reachable network anchor; no home settlement is needed.
+		if request.has("network_at"):
+			_home = _nav.component_near(request.network_at)
 		_home_mask.resize(w.N)
 		if _home >= 0:
 			for cell in _nav.component_cells(_home):
@@ -122,7 +125,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 		windows.append(pick)
 		var left: int = int(request.windows) - detailed
 		var expansions_left: int = request.budget - stats.expansions
-		if Time.get_ticks_msec() >= deadline or expansions_left <= 0:
+		if _cancelled() or Time.get_ticks_msec() >= deadline or expansions_left <= 0:
 			pick.outcome = "не искалось: общий бюджет области исчерпан"
 			budget_hit = true
 			continue
@@ -143,7 +146,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 		if _nav != null:
 			var joins := _joins(cand)
 			if joins.is_empty():
-				pick.outcome = "не искалось: нет примыкания к дорожной сети дома"
+				pick.outcome = "не искалось: нет примыкания к доступной дорожной сети"
 				continue
 			var gate := TrailAccess.new()
 			gate.joins = joins
@@ -180,7 +183,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 			budget_hit = true
 	if accepted:
 		started = Time.get_ticks_usec()
-		flow = TrailFlow.dress(site, picker.router, SEED, {builds = request.builds - stats.builds, deadline = deadline})
+		flow = TrailFlow.dress(site, picker.router, SEED, {builds = request.builds - stats.builds, deadline = deadline, cancel = request.get("cancel", Callable())})
 		stats.flow_ms = (Time.get_ticks_usec() - started) / 1000.0
 		stats.builds += flow.stats.builds
 		kit = [] as Array[TrailDefinition]
@@ -224,6 +227,7 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 	var mask := w.path_mask
 	var has_mask := mask.size() == w.N
 	for z in gh:
+		if _cancelled(): return []
 		var row_u := 0
 		var row_c := 0
 		var row_w := 0
@@ -285,7 +289,7 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 			var ring := Rect2i(around.position - grid.position, around.size)
 			var road_near := maxf(0.0, _sum(road, stride, ring) - _sum(road, stride, local))
 			if _nav != null and _sum(road, stride, local) < ROAD_MIN:
-				_reject("окно: в нём нет дороги или тропы дорожной сети дома для подхода")
+				_reject("окно: в нём нет дороги или тропы доступной дорожной сети для подхода")
 				continue
 			var score: float = usable_f - cliff_f - 1.5 * wet_f - 2.0 * path_f + 0.2 * minf(1.0, relief / (3.0 * maxf(request.min_drop, 1.0))) \
 				+ 0.1 * minf(1.0, road_near / 40.0)
@@ -402,3 +406,8 @@ func summary() -> String:
 	if not rejected.is_empty():
 		lines.append("Запрещено окон: " + _rejections())
 	return "\n".join(lines)
+
+
+func _cancelled() -> bool:
+	var cancel: Callable = request.get("cancel", Callable())
+	return cancel.is_valid() and cancel.call()

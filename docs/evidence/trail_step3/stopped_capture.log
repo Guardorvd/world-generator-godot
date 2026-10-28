@@ -1,0 +1,18 @@
+Godot Engine v4.7.2.stable.mono.official.ed1daf0bf - https://godotengine.org
+Vulkan 1.3.289 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce GTX 1650 SUPER
+
+trail_world: PASS MeshBatch cached CPU geometry preserves transformed primitive vertices
+trail_world: PASS deep surface built by production chain
+trail_world: PASS deepest axis cut 4.80 m at 37 m
+trail_world: PASS deep excavation displayed from final triangles
+trail_world: PASS settled bike view matches wheel contact: 0.0007 m
+SCRIPT ERROR: Invalid access to property or key 'box' on a base object of type 'Dictionary'.
+   at: VegetationLayer._build_entries (res://scripts/render/vegetation_layer.gd:711)
+   GDScript backtrace (most recent call first):
+       [0] _build_entries (res://scripts/render/vegetation_layer.gd:711)
+       [1] _build_chunk (res://scripts/render/vegetation_layer.gd:652)
+       [2] run (res://tools/trail_deep_capture.gd:102)
+SCRIPT ERROR: Invalid access to property or key 'entries' on a base object of type 'Dictionary'.
+   at: run (res://tools/trail_deep_capture.gd:103)
+   GDScript backtrace (most recent call first):
+       [0] run (res://tools/trail_deep_capture.gd:103)

@@ -99,7 +99,7 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	site.origin = data.position
 	site.size = data.size
 	site.work = Rect2i(rect.position - data.position, rect.size)
-	site.source = {seed_text = w.seed_text, seed_num = w.seed_num, plan = w.W, size = WorldGenerator.START_SIZE}
+	site.source = {world_origin = w.world_origin, seed_text = w.seed_text, seed_num = w.seed_num, plan = w.W, size = WorldGenerator.START_SIZE}
 	var river := w.river_cells()
 	for name: String in CELL_FIELDS:
 		site.cells[name] = _crop(river if name == "river_area" else w.get(name), w.W, data)
@@ -225,7 +225,7 @@ func world() -> WorldData:
 	w.N = w.W * w.H
 	w.seed_text = source.seed_text
 	w.seed_num = source.seed_num
-	w.world_origin = origin
+	w.world_origin = origin + source.get("world_origin", Vector2i.ZERO)
 	for owner in [w.geology, w.climate, w.civil]:
 		for property: Dictionary in owner.get_property_list():
 			var value: Variant = owner.get(property.name)
@@ -310,7 +310,7 @@ func inside_errors(routes: Array[TrailDefinition]) -> PackedStringArray:
 
 ## Сборка трасс на свежей копии участка; тот же контракт, что у лабораторной Fixture.prepare:
 ## {heights, errors, timings: setup_ms, surface_ms (полотно и сетка новой трассы), earthworks_ms}.
-func prepare(routes: Array[TrailDefinition], with_elements := true) -> Dictionary:
+func prepare(routes: Array[TrailDefinition], with_elements := true, limits := {}) -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var timings := {setup_ms = 0.0, surface_ms = -1.0, earthworks_ms = -1.0}
 	var errors := inside_errors(routes)
@@ -330,7 +330,7 @@ func prepare(routes: Array[TrailDefinition], with_elements := true) -> Dictionar
 	h.road_refinement = _form(h, only)
 	timings.surface_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if with_elements and not routes.is_empty():
-		errors = TrailBuilder.bake_elements(h, routes)
+		errors = TrailBuilder.bake_elements(h, routes, limits)
 		if not errors.is_empty():
 			return {heights = null, errors = errors, timings = timings}
 		timings.earthworks_ms = h.road_refinement.build_timings.trail_elements_ms

@@ -6,6 +6,7 @@ var vegetation_update: Callable
 var vegetation_budgeted: Callable
 var terrain_update: Callable
 var outer_update: Callable
+var region_priority: Callable
 var region_update: Callable
 var region_restore: Callable
 const MAX_REGION_WAIT := 8
@@ -25,7 +26,7 @@ func update(pos: Vector3) -> void:
 	var uploaded := false
 	var region_ticked := false
 	# Длинная очередь леса не должна лишать соседние области возможности начать/закончить подготовку.
-	if _region_wait >= MAX_REGION_WAIT and region_update.is_valid() and vegetation_budgeted.is_valid():
+	if (_region_wait >= MAX_REGION_WAIT or (region_priority.is_valid() and region_priority.call())) and region_update.is_valid() and vegetation_budgeted.is_valid():
 		uploaded = region_update.call(pos.x, pos.z)
 		region_ticked = true
 		_region_wait = 0

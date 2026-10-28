@@ -4,7 +4,7 @@ extends RefCounted
 static func sample(w: WorldData, heights: Heightfield, x: float, z: float) -> Dictionary:
 	var result := {surface = RoadSurface.NONE, weight = 0.0, across = 0.0}
 	if heights.road_refinement != null:
-		var contact := heights.road_refinement.sample(x, z, w.W)
+		var contact := heights.path_contact(x, z)
 		if not contact.is_empty():
 			result.surface = contact.surface
 			result.weight = smoothstep(0.05, 0.9, contact.weight)

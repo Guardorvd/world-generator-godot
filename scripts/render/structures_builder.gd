@@ -7,6 +7,7 @@ extends RefCounted
 
 const TUNNEL_HEIGHT := Heightfield.TUNNEL_HEIGHT
 
+static var _build_lock := Mutex.new()
 static var _boxes := {} # Vector3 (размер) -> BoxMesh
 
 
@@ -29,6 +30,7 @@ static func _post(batch: MeshBatch, at: Vector3, mat: Material) -> void:
 ## Добавляет все мосты и туннели в parent общими мешами по квадратам мира (см. MeshBatch)
 ## only — свой список сооружений (13.9: мосты закреплённой области), иначе все heights.structures
 static func build(parent: Node3D, heights: Heightfield, only: Variant = null) -> void:
+	_build_lock.lock()
 	var batch := MeshBatch.new()
 	var wood := SettlementsBuilder.mat(Color8(0x8a, 0x6a, 0x48))
 	var board := SettlementsBuilder.mat(Color8(0x80, 0x64, 0x47))
@@ -59,6 +61,7 @@ static func build(parent: Node3D, heights: Heightfield, only: Variant = null) ->
 	var mi := batch.build("Structures")
 	if mi != null:
 		parent.add_child(mi)
+	_build_lock.unlock()
 
 
 ## Мост: невысокий деревянный настил, перила и сваи; профиль общий с движением.

@@ -286,7 +286,7 @@ func find_trail(values: Dictionary) -> bool:
 		show_message("Площадка не открыта: " + Fixture.site_error)
 		return false
 	var request := _line_requirements(values)
-	request.merge({length_min = values.route_length_min, length_max = values.route_length_max, min_drop = values.route_drop})
+	request.merge({length_min = values.route_length_min, min_drop = values.route_drop})
 	var picked := TrailPicker.find(site, request)
 	pick_result = picked
 	line_result = picked.router

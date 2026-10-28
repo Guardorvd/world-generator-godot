@@ -1,0 +1,83 @@
+{
+	"checks": 16,
+	"failures": 0,
+	"maximum_frame_ms": 73.8,
+	"regions": [
+		{
+			"region": "(3, 1)",
+			"state": "none",
+			"stats": {
+				"access_expansions": 0,
+				"access_ms": 0.0,
+				"budget_ms": 10000,
+				"builds": 0,
+				"complete_ms": 7488,
+				"cut_ms": 0.0,
+				"decor_ms": 3683,
+				"eval_ms": 82.646,
+				"expansions": 0,
+				"flow_ms": 0.0,
+				"max_upload_ms": 1.133,
+				"nav_ms": 1.452,
+				"network_ms": 41,
+				"picker_ms": 0.0,
+				"publish_ms": 10.486,
+				"scout_ms": 84.182,
+				"searched": 0,
+				"surface_ms": 126.0,
+				"total_ms": 251,
+				"upload_ms": 20.452
+			},
+			"verdict": "no_window"
+		},
+		{
+			"region": "(4, 1)",
+			"state": "none",
+			"stats": {
+				"budget_ms": 10000,
+				"complete_ms": 3555,
+				"decor_ms": 269,
+				"max_upload_ms": 1.275,
+				"network_ms": 2,
+				"publish_ms": 2.374,
+				"total_ms": 2,
+				"upload_ms": 22.089
+			},
+			"verdict": "no_network"
+		},
+		{
+			"region": "(-1, 0)",
+			"state": "found",
+			"stats": {
+				"access_expansions": 72,
+				"access_ms": 26.989,
+				"apply_ms": 15.804,
+				"budget_ms": 10000,
+				"builds": 2,
+				"complete_ms": 5007,
+				"cut_ms": 1.491,
+				"decor_ms": 189,
+				"eval_ms": 84.496,
+				"expansions": 2033,
+				"final_build": {
+					"earthworks_ms": 309.48,
+					"setup_ms": 3.472,
+					"surface_ms": 99.046
+				},
+				"flow_ms": 430.715,
+				"max_upload_ms": 1.318,
+				"nav_ms": 1.581,
+				"network_ms": 18,
+				"picker_ms": 754.614,
+				"publish_ms": 1.312,
+				"scout_ms": 1273.152,
+				"search_ms": 131.461,
+				"searched": 1,
+				"surface_ms": 133.0,
+				"total_ms": 1447,
+				"upload_ms": 19.389
+			},
+			"verdict": "found"
+		}
+	]
+}

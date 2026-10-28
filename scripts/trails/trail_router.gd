@@ -200,7 +200,7 @@ func begin() -> bool:
 func candidate() -> bool:
 	while _attempts > 0:
 		_attempts -= 1
-		if Time.get_ticks_msec() > _deadline:
+		if _cancelled() or Time.get_ticks_msec() > _deadline:
 			_refuse("поиск", "таймаут %.0f с" % (request.timeout_ms / 1000.0))
 			return false
 		var ground := _search_ground()
@@ -252,7 +252,7 @@ func complete() -> bool:
 	var started := Time.get_ticks_usec()
 	var kit: Array[TrailDefinition] = [definition]
 	kit.append_array(extras)
-	prepared = _site.prepare(kit)
+	prepared = _site.prepare(kit, true, {deadline = _deadline, cancel = request.get("cancel", Callable())})
 	stats.builds += 1
 	if not prepared.errors.is_empty():
 		stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
@@ -812,3 +812,8 @@ func summary() -> String:
 	unchecked.append_array(UNCHECKED)
 	lines.append("Не проверяется: " + ", ".join(unchecked))
 	return "\n".join(lines)
+
+
+func _cancelled() -> bool:
+	var cancel: Callable = request.get("cancel", Callable())
+	return cancel.is_valid() and cancel.call()

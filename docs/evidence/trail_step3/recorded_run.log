@@ -1,0 +1,31 @@
+Godot Engine v4.7.2.stable.mono.official.ed1daf0bf - https://godotengine.org
+Vulkan 1.3.289 - Forward+ - Using Device #0: NVIDIA - NVIDIA GeForce GTX 1650 SUPER
+
+Region trail (3, 1): none/no_window { &"surface_ms": 126.0, &"total_ms": 251, &"scout_ms": 84.182, &"eval_ms": 82.646, &"cut_ms": 0.0, &"picker_ms": 0.0, &"flow_ms": 0.0, &"expansions": 0, &"builds": 0, &"searched": 0, &"access_expansions": 0, &"access_ms": 0.0, &"nav_ms": 1.452, &"network_ms": 41, &"budget_ms": 10000, &"decor_ms": 3683, &"upload_ms": 20.452, &"max_upload_ms": 1.133, &"publish_ms": 10.486, &"complete_ms": 7488 }
+RECORDED (3, 1) none/no_window в области [P: (0, 0), S: (256, 256)] нет окна 48 × 48 клеток без воды, сооружений, поселений и занятых путей (с дорожной сетью дома): окно: много воды — 40; окно: поселение рядом — 17; окно: в нём нет дороги или тропы дорожной сети дома для подхода — 7 rejections={ "окно: в нём нет дороги или тропы дорожной сети дома для подхода": 7, "окно: много воды": 40, "окно: поселение рядом": 17 } { &"surface_ms": 126.0, &"total_ms": 251, &"scout_ms": 84.182, &"eval_ms": 82.646, &"cut_ms": 0.0, &"picker_ms": 0.0, &"flow_ms": 0.0, &"expansions": 0, &"builds": 0, &"searched": 0, &"access_expansions": 0, &"access_ms": 0.0, &"nav_ms": 1.452, &"network_ms": 41, &"budget_ms": 10000, &"decor_ms": 3683, &"upload_ms": 20.452, &"max_upload_ms": 1.133, &"publish_ms": 10.486, &"complete_ms": 7488 }
+trail_world: PASS trail leaves the published region boundary unchanged: 0.000002 m
+trail_world: PASS recorded region unload/return: same plan and surface, no search or accumulation
+Region trail (4, 1): none/no_network { &"network_ms": 2, &"total_ms": 2, &"budget_ms": 10000, &"decor_ms": 269, &"upload_ms": 22.089, &"max_upload_ms": 1.275, &"publish_ms": 2.374, &"complete_ms": 3555 }
+RECORDED (4, 1) none/no_network  rejections={  } { &"network_ms": 2, &"total_ms": 2, &"budget_ms": 10000, &"decor_ms": 269, &"upload_ms": 22.089, &"max_upload_ms": 1.275, &"publish_ms": 2.374, &"complete_ms": 3555 }
+trail_world: PASS trail leaves the published region boundary unchanged: 0.000002 m
+trail_world: PASS recorded region unload/return: same plan and surface, no search or accumulation
+Region trail (-1, 0): found/found { &"surface_ms": 133.0, &"total_ms": 1447, &"scout_ms": 1273.152, &"eval_ms": 84.496, &"cut_ms": 1.491, &"picker_ms": 754.614, &"flow_ms": 430.715, &"expansions": 2033, &"builds": 2, &"searched": 1, &"access_expansions": 72, &"access_ms": 26.989, &"nav_ms": 1.581, &"network_ms": 18, &"final_build": { &"setup_ms": 3.472, &"surface_ms": 99.046, &"earthworks_ms": 309.48 }, &"search_ms": 131.461, &"apply_ms": 15.804, &"budget_ms": 10000, &"decor_ms": 189, &"upload_ms": 19.389, &"max_upload_ms": 1.318, &"publish_ms": 1.312, &"complete_ms": 5007 }
+RECORDED (-1, 0) found/found  rejections={ "окно: в нём нет дороги или тропы дорожной сети дома для подхода": 48 } { &"surface_ms": 133.0, &"total_ms": 1447, &"scout_ms": 1273.152, &"eval_ms": 84.496, &"cut_ms": 1.491, &"picker_ms": 754.614, &"flow_ms": 430.715, &"expansions": 2033, &"builds": 2, &"searched": 1, &"access_expansions": 72, &"access_ms": 26.989, &"nav_ms": 1.581, &"network_ms": 18, &"final_build": { &"setup_ms": 3.472, &"surface_ms": 99.046, &"earthworks_ms": 309.48 }, &"search_ms": 131.461, &"apply_ms": 15.804, &"budget_ms": 10000, &"decor_ms": 189, &"upload_ms": 19.389, &"max_upload_ms": 1.318, &"publish_ms": 1.312, &"complete_ms": 5007 }
+trail_world: PASS trail leaves the published region boundary unchanged: 0.000002 m
+trail_world: PASS one short ride over approach, trail and exit in the real world: 185 of 188 m in 33.3 s, off axis up to 0.69 m, top 7.4 m/s, fall: false (not a safety guarantee)
+trail_world: PASS continuous finished surface across both joints: step up to 0.02 m
+trail_world: PASS regional access, trail and exit share the available navigation component: [160, 160, 160, 160]
+trail_world: PASS regional visible mesh equals collision/support: 187 probes 0.000006 m
+trail_world: PASS regional trees and stones seated: 0 / 0; error 0.000000 m
+Снимок: res://tools/control/runs/trail_region_recorded/region_-1_0.png
+trail_world: PASS recorded region unload/return: same plan and surface, no search or accumulation
+trail_world: PASS synthetic control publishes and rides a kit; natural none results remain explicit
+RECORDED maximum preparation/publication frame interval 73.80 ms; show max 9.90 ms
+trail_world: PASS off-thread preparation and staged publication: no frame >= 100 ms
+trail_world: PASS deep cut prepared by the shared builder
+trail_world: PASS deep cut exceeds 4 m without a depth rejection: 4.75 m
+trail_world: PASS deep cut rendered from the accepted surface
+Снимок: res://tools/control/runs/trail_region_recorded/deep_cut.png
+trail_region_recorded: 0 failures / 16 checks
+WARNING: 1 ObjectDB instance was leaked at exit (run with `--verbose` for details).
+   at: cleanup (core/object/object.cpp:2536)

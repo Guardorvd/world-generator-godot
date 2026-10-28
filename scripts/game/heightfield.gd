@@ -706,6 +706,9 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
+	if not raw and world.outer != null:
+		var refined := OuterLand.refined_at(world.outer.get_ledger().get("regions", {}), x, z)
+		if not refined.is_empty(): return refined.h
 	if not raw and road_refinement != null:
 		var local := road_refinement.height_at(x, z, world.W)
 		if local != INF:
@@ -809,3 +812,10 @@ func immersion_at(x: float, z: float, feet: float) -> float:
 	if depth <= 0.0:
 		return 0.0
 	return clampf(ground_at(x, z) + depth - feet, 0.0, depth)
+
+
+func path_contact(x: float, z: float) -> Dictionary:
+	if world.outer != null:
+		var contact := OuterLand.refined_at(world.outer.get_ledger().get("regions", {}), x, z)
+		if not contact.is_empty(): return contact
+	return road_refinement.sample(x, z, world.W) if road_refinement != null else {}

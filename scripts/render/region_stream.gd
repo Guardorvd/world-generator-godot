@@ -23,7 +23,7 @@ const HIDE := OuterTerrain.DROP + 200.0     # м: дальше узлы обла
 const KEEP := 2800.0                        # м: ближе поля клеток в памяти (соседи готовящейся области — ближе)
 const EVICT := 3400.0                       # м: дальше поля клеток выгружаются из памяти
 const RECHECK := 32.0                       # м пути между пересмотром очереди и выгрузки
-const FORMAT := 2                           # 14.4: гуще поселения областей — прежние журналы не читаются
+const FORMAT := 3                           # 14.4: гуще поселения областей — прежние журналы не читаются
 const ROAD_LIFT := 0.05                     # м: полотно над рельефом без мерцания
 const ROAD_COLOR := Color8(0x8e, 0x7d, 0x62)
 const ROAD_STEP := 1.0                      # м: шаг точек ленты вдоль дороги
@@ -59,6 +59,10 @@ var fires: Array = []   # костры поселений показанных �
 var windows: Array = [] # материалы окон, ночью ярче
 var boards: Array = []  # доски маршрутов показанных поселений: {at, place}, как GameWorld._boards
 var queue: Array[Vector2i] = []
+var _cancel := Mutex.new()
+var _cancelled := false
+var _save_task := -1
+var _publishing := {}
 var stats := {prepared = 0, loaded = 0, evicted = 0, built = 0, hidden = 0, apply_ms = 0.0, show_ms = 0.0}
 var _task := -1
 var _out := {}
@@ -86,7 +90,7 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 
 ## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
 static func store_dir(w: WorldData) -> String:
-	var id := "%s|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT]
+	var id := "%s|%d|%d|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]
 	return root.path_join(id.sha256_text().substr(0, 24))
 
 
@@ -123,10 +127,58 @@ func restore(x: float, z: float) -> void:
 ## выгрузить или начать следующую. true — в кадре была заметная работа главного потока.
 func update(x: float, z: float) -> bool:
 	var p := Vector2(x, z)
+	if _task != -1 and _distance(_key, p) > REACH:
+		_cancel.lock()
+		_cancelled = true
+		_cancel.unlock()
+	if not _publishing.is_empty():
+		if _publishing.done.trail.state == "found" and Time.get_ticks_msec() >= _publishing.done.trail_deadline:
+			for node: MeshInstance3D in _publishing.nodes.values():
+				if node != null: node.queue_free()
+			_drop_late_trail(_publishing.done, _key)
+			_publishing.nodes = {}
+			_publishing.pending_keys = _publishing.done.chunks.keys()
+		if _distance(_key, p) > REACH:
+			for node: MeshInstance3D in _publishing.nodes.values():
+				if node != null: node.queue_free()
+			if _publishing.done.has("decor"): _publishing.done.decor.node.free()
+			_publishing = {}
+			_checked_at = Vector2.INF
+			return false
+		if not _publishing.pending_keys.is_empty():
+			var chunk: Vector2i = _publishing.pending_keys.pop_back()
+			var upload_started := Time.get_ticks_usec()
+			_publishing.nodes[chunk] = terrain.stage_chunk(chunk, _publishing.done.chunks[chunk])
+			var elapsed := (Time.get_ticks_usec() - upload_started) / 1000.0
+			var timing: Dictionary = _publishing.done.trail.stats
+			timing.upload_ms = timing.get("upload_ms", 0.0) + elapsed
+			timing.max_upload_ms = maxf(timing.get("max_upload_ms", 0.0), elapsed)
+			return true
+		var pending: Dictionary = _publishing
+		_publishing = {}
+		var publish_started := Time.get_ticks_usec()
+		terrain.publish_chunks(pending.done.chunks, pending.nodes)
+		_apply(_key, pending.done, false)
+		if pending.done.has("decor"): _show(_key, {decor = pending.done.decor})
+		var timing: Dictionary = pending.done.trail.stats
+		timing.publish_ms = (Time.get_ticks_usec() - publish_started) / 1000.0
+		timing.complete_ms = Time.get_ticks_msec() - pending.done.trail_started
+		stats.max_publish_ms = maxf(stats.get("max_publish_ms", 0.0), timing.publish_ms)
+		print("Region trail ", _key, ": ", pending.done.trail.state, "/", pending.done.trail.verdict, " ", timing)
+		_persist(_key)
+		return true
 	if _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
-		_apply(_key, _out.get("r", {}))
+		var result: Dictionary = _out.get("r", {})
+		if result.get("cancelled", false) or _distance(_key, p) > REACH:
+			if result.has("decor"): result.decor.node.free()
+			_checked_at = Vector2.INF
+			return false
+		if result.get("ready", false) and result.has("chunks"):
+			_publishing = {done = result, pending_keys = result.chunks.keys(), nodes = {}}
+		else:
+			_apply(_key, result)
 		return true
 	if _build_task != -1 and WorkerThreadPool.is_task_completed(_build_task):
 		WorkerThreadPool.wait_for_task_completion(_build_task)
@@ -135,6 +187,8 @@ func update(x: float, z: float) -> bool:
 		if entry != null and entry.has("fields") and not _shown.has(_build_key) and _distance(_build_key, p) <= REACH:
 			_show(_build_key, _build_out)
 			return true
+		var unused: Node = _build_out.get("decor", {}).get("node")
+		if is_instance_valid(unused) and unused.get_parent() == null: unused.free()
 	if p.distance_to(_checked_at) > RECHECK:
 		_checked_at = p
 		_plan(p)
@@ -157,29 +211,57 @@ func update(x: float, z: float) -> bool:
 		if d > HIDE and _shown.has(key):
 			_hide(key)
 			return true
-	if _task == -1 and not queue.is_empty():
+	if _task == -1 and not queue.is_empty() and (_save_task == -1 or WorkerThreadPool.is_task_completed(_save_task)):
 		var key: Vector2i = queue.pop_front()
 		if ledger.get("regions", {}).has(key) or failed.has(key) or not _neighbors_ready(key):
 			_checked_at = Vector2.INF # пересмотреть очередь в следующем кадре
 			return false
+		if _save_task != -1:
+			WorkerThreadPool.wait_for_task_completion(_save_task)
+			_save_task = -1
 		_key = key
+		_cancelled = false
 		_out = {}
 		var out := _out
 		# Словари и вложенные массивы принадлежат задаче до wait_for_task_completion.
-		var snapshot: Dictionary = EntityCodec.copy(ledger)
+		var snapshot: Dictionary = ledger.duplicate()
+		snapshot.regions = ledger.get("regions", {}).duplicate()
 		var w := world
-		var dir := store_dir(world)
-		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, dir), false, "Область")
+		var view := preload("res://scripts/game/navigation_snapshot.gd").capture(heights, false)
+		var material := _road_mat
+		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, "", _stopped, terrain, view, material), false, "Область")
 	return false
 
 
+func _stopped() -> bool:
+	_cancel.lock()
+	var value := _cancelled
+	_cancel.unlock()
+	return value
+
 func finish() -> void:
+	_cancel.lock()
+	_cancelled = true
+	_cancel.unlock()
+	if _save_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 	if _build_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_build_task)
 		_build_task = -1
+	for result: Dictionary in [_out.get("r", {}), _build_out]:
+		var node: Node = result.get("decor", {}).get("node")
+		if is_instance_valid(node) and node.get_parent() == null: node.free()
+	if not _publishing.is_empty():
+		for node: Node in _publishing.nodes.values():
+			if is_instance_valid(node): node.queue_free()
+		var node: Node = _publishing.done.get("decor", {}).get("node")
+		if is_instance_valid(node) and node.get_parent() == null: node.free()
+		_publishing = {}
+
 
 
 ## 14.4: меши воды и дорог области — в фоне, по снимку журнала (поля областей там не меняются)
@@ -187,14 +269,13 @@ func _start_build(key: Vector2i) -> void:
 	_build_key = key
 	_build_out = {}
 	var out := _build_out
-	var regions: Dictionary = ledger.regions.duplicate(true)
-	var entry: Dictionary = regions[key]
+	var entry: Dictionary = ledger.regions[key]
 	var w := world
-	var h := heights
+	var view := preload("res://scripts/game/navigation_snapshot.gd").capture(heights, false)
+	var material := _road_mat
 	_build_task = WorkerThreadPool.add_task(func() -> void:
-		out.water = water_arrays(entry)
-		out.roads = road_arrays(w, func(x: float, z: float) -> float: return snapshot_ground(w, h, regions, x, z), entry.decor.trails),
-		false, "Узлы области")
+		out.decor = build_decor(w, view, key, entry, material), false, "Узлы области")
+
 
 
 func _exit_tree() -> void:
@@ -203,7 +284,8 @@ func _exit_tree() -> void:
 
 ## Подготовить, закрепить и записать одну область (в фоне). Река без допустимого русла не принимается:
 ## тогда область готовится без входящих рек, и вода кончается у её границы.
-static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir := "") -> Dictionary:
+static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir := "", stop := Callable(), terrain_source: OuterTerrain = null, view: Heightfield = null, road_material: Material = null) -> Dictionary:
+	if stop.is_valid() and stop.call(): return {cancelled = true}
 	var r := Regions.prepare(w, key, current)
 	var network := Regions.prepare_rivers(r)
 	var batch := Regions.finish_neighbors(w, [r], [network])
@@ -215,8 +297,61 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 		batch = Regions.finish_neighbors(w, [r], [network])
 		if not batch.ready:
 			return {ready = false, reason = batch.reason}
+	if stop.is_valid() and stop.call(): return {cancelled = true}
 	var roads := Regions.prepare_roads(w, [r], batch, current)
 	var done := Regions.commit(current, [r], [network], batch, roads)
+	if stop.is_valid() and stop.call(): return {cancelled = true}
+	if done.ready:
+		var trail_started := Time.get_ticks_msec()
+		var deadline := trail_started + preload("res://scripts/world/region_trails.gd").BUDGET_MS
+		var baseline: Dictionary = done.ledger.duplicate()
+		baseline.regions = done.ledger.regions.duplicate()
+		var base_chunks := {}
+		# Surface and CPU mesh preparation consume the same deadline as search and shaping.
+		if terrain_source != null:
+			var rect := Regions.rect_for(key).grow(1)
+			for cy in range(floori(float(rect.position.y) / OuterLand.C), floori(float(rect.end.y - 1) / OuterLand.C) + 1):
+				for cx in range(floori(float(rect.position.x) / OuterLand.C), floori(float(rect.end.x - 1) / OuterLand.C) + 1):
+					if stop.is_valid() and stop.call(): return {cancelled = true}
+					var chunk := Vector2i(cx, cy)
+					base_chunks[chunk] = terrain_source._build(chunk, baseline)
+		var mesh_ms := Time.get_ticks_msec() - trail_started
+		# Reserve the final second for incremental GPU staging and publication; it is never per attempt.
+		done.trail = Regions.prepare_trails(w, key, done.ledger, stop, maxi(0, deadline - Time.get_ticks_msec() - 2000))
+		if stop.is_valid() and stop.call(): return {cancelled = true}
+		if terrain_source != null:
+			done.chunks = base_chunks.duplicate()
+			if done.trail.state == "found":
+				var zone: Rect2i = done.trail.zone
+				for chunk: Vector2i in base_chunks:
+					if not Rect2i(chunk * OuterLand.C, Vector2i.ONE * OuterLand.C).intersects(zone): continue
+					if stop.is_valid() and stop.call(): return {cancelled = true}
+					done.chunks[chunk] = terrain_source._build(chunk, done.ledger, base_chunks[chunk].fields)
+		if Time.get_ticks_msec() >= deadline - 1000:
+			# Budget expiry is a stored outcome, never a partly installed kit or a fresh search next load.
+			var budget := {version = 1, builder_version = StageTrailPlan.VERSION, state = "none", verdict = "budget", reason = "общий бюджет подготовки области исчерпан", stats = done.trail.stats}
+			done.ledger = baseline
+			done.ledger.regions[key] = baseline.regions[key].duplicate()
+			done.ledger.regions[key].trail_plan = budget
+			done.trail = budget
+			if terrain_source != null: done.chunks = base_chunks
+		if view != null:
+			view.world.outer.set_ledger(done.ledger)
+			var decor_started := Time.get_ticks_msec()
+			done.decor = build_decor(w, view, key, done.ledger.regions[key], road_material)
+			done.trail.stats.decor_ms = Time.get_ticks_msec() - decor_started
+			if stop.is_valid() and stop.call():
+				done.decor.node.free()
+				return {cancelled = true}
+		if done.trail.state == "found":
+			done.fallback_ledger = baseline
+			done.fallback_chunks = base_chunks
+			if Time.get_ticks_msec() >= deadline - 1000: _drop_late_trail(done, key)
+		done.trail.stats.mesh_ms = mesh_ms
+		done.trail.stats.worker_ms = Time.get_ticks_msec() - trail_started
+		done.trail.stats.budget_ms = preload("res://scripts/world/region_trails.gd").BUDGET_MS
+		done.trail_started = trail_started
+		done.trail_deadline = deadline
 	done.dropped_rivers = dropped
 	done.roads = roads
 	if done.ready:
@@ -243,7 +378,7 @@ static func save(dir: String, current: Dictionary, key: Vector2i) -> Error:
 	light.regions = {}
 	for k: Vector2i in current.regions:
 		var e: Dictionary = current.regions[k]
-		light.regions[k] = {rect = e.rect, decor = e.decor, map = e.get("map", PackedByteArray())}
+		light.regions[k] = {rect = e.rect, decor = e.decor, trail_plan = e.get("trail_plan", {}), map = e.get("map", PackedByteArray())}
 	return _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
 
 
@@ -323,7 +458,7 @@ func _evict(key: Vector2i) -> void:
 	stats.evicted += 1
 
 
-func _apply(key: Vector2i, done: Dictionary) -> void:
+func _apply(key: Vector2i, done: Dictionary, persist := true) -> void:
 	var started := Time.get_ticks_usec()
 	if not done.get("ready", false):
 		failed[key] = true
@@ -338,8 +473,9 @@ func _apply(key: Vector2i, done: Dictionary) -> void:
 	ledger = next
 	world.outer.set_ledger(ledger)
 	var rect := Regions.rect_for(key)
-	terrain.refresh(rect.grow(2))
+	if not done.has("chunks"): terrain.refresh(rect.grow(2))
 	vegetation.refresh(rect.grow(2))
+	if persist: _persist(key)
 	stats.prepared += 1
 	stats.apply_ms = maxf(stats.apply_ms, (Time.get_ticks_usec() - started) / 1000.0)
 	_checked_at = Vector2.INF # узлы покажет следующий кадр: принятие и сборка в разных кадрах
@@ -350,27 +486,35 @@ func _apply(key: Vector2i, done: Dictionary) -> void:
 func _show(key: Vector2i, arrays := {}) -> void:
 	var started := Time.get_ticks_usec()
 	var entry: Dictionary = ledger.regions[key]
+	var built: Dictionary = arrays.decor if arrays.has("decor") else build_decor(world, heights, key, entry, _road_mat)
+	if not _bridges.has(key): _bridges[key] = heights.add_outer_bridges(entry.decor.bridges)
+	add_child(built.node)
+	_shown[key] = built
+	stats.built += 1
+	stats.show_ms = maxf(stats.get("show_ms", 0.0), (Time.get_ticks_usec() - started) / 1000.0)
+	_collect()
+
+
+static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, entry: Dictionary, road_material: Material) -> Dictionary:
 	var decor: Dictionary = entry.decor
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
-	add_child(node)
-	var water := WaterBuilder._flat_mesh(arrays.water if arrays.has("water") else water_arrays(entry), WaterBuilder._material(), "Water")
+	var water := WaterBuilder._flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
 	if water != null:
 		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(water)
-	var ribbons: Array = arrays.roads if arrays.has("roads") else _road_arrays(decor.trails)
+	var ribbons: Array = road_arrays(world, func(x: float, z: float) -> float: return heights.ground_at(x, z), decor.trails)
 	if not ribbons.is_empty():
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, ribbons)
 		var mi := MeshInstance3D.new()
 		mi.name = "Roads"
 		mi.mesh = mesh
-		mi.material_override = _road_mat
+		mi.material_override = road_material
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
-	if not _bridges.has(key):
-		_bridges[key] = heights.add_outer_bridges(decor.bridges)
-	StructuresBuilder.build(node, heights, _bridges[key])
+	var bridges := heights.add_outer_bridges(decor.bridges)
+	StructuresBuilder.build(node, heights, bridges)
 	# Тот же сборщик домов, что у плана: временный мир только со списком поселений области.
 	var places := WorldData.new()
 	places.seed_num = world.seed_num ^ (key.x * 73856093) ^ (key.y * 19349663)
@@ -380,10 +524,7 @@ func _show(key: Vector2i, arrays := {}) -> void:
 	for s: SettlementData in decor.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		own.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
-	_shown[key] = {node = node, fires = built.fires, windows = built.windows, boards = own}
-	stats.built += 1
-	stats.show_ms = maxf(stats.get("show_ms", 0.0), (Time.get_ticks_usec() - started) / 1000.0)
-	_collect()
+	return {node = node, fires = built.fires, windows = built.windows, boards = own}
 
 
 func _hide(key: Vector2i) -> void:
@@ -488,6 +629,8 @@ func _road_arrays(trails: Array) -> Array:
 ## за краем — поля закреплённых областей из снимка журнала, той же триангуляцией, что сетка рельефа.
 ## Куски OuterLand не читаются: главный поток в это время их меняет.
 static func snapshot_ground(w: WorldData, heights: Heightfield, regions: Dictionary, x: float, z: float) -> float:
+	var refined := OuterLand.refined_at(regions, x, z)
+	if not refined.is_empty(): return refined.h
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5
 	if fx >= 0.0 and fz >= 0.0 and fx <= w.W - 1.001 and fz <= w.H - 1.001:
@@ -526,6 +669,7 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 	var uv := PackedVector2Array()
 	var idx := PackedInt32Array()
 	for trail: Dictionary in trails:
+		if trail.has("trail_id"): continue # its tread is part of the refined ground mesh
 		var pts: Array = trail.pts
 		var line := PackedVector2Array()
 		var half := PackedFloat32Array()
@@ -591,3 +735,28 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
 	return arrays
+
+
+func publication_pending() -> bool:
+	return not _publishing.is_empty()
+
+func _persist(key: Vector2i) -> void:
+	var accepted := ledger
+	var dir := store_dir(world)
+	_save_task = WorkerThreadPool.add_task(func() -> void:
+		var err := save(dir, accepted, key)
+		if err != OK: push_warning("Region save failed: %s (%d)" % [key, err]), false, "Запись области")
+
+
+static func _drop_late_trail(done: Dictionary, key: Vector2i) -> void:
+	var plan: Dictionary = done.trail.duplicate()
+	plan.state = "none"
+	plan.verdict = "budget"
+	plan.reason = "общий срок подготовки и публикации комплекта исчерпан"
+	for field: String in ["definition", "access", "zone"]: plan.erase(field)
+	done.ledger = done.fallback_ledger
+	done.ledger.regions = done.ledger.regions.duplicate()
+	done.ledger.regions[key] = done.ledger.regions[key].duplicate()
+	done.ledger.regions[key].trail_plan = plan
+	done.chunks = done.fallback_chunks
+	done.trail = plan

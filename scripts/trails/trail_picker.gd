@@ -8,8 +8,8 @@ extends RefCounted
 ## 2. Точки-кандидаты — узлы решётки через SPACING м (пространственно разнесены, не все клетки): свободные от воды,
 ##    сооружений, путей и границы. Уклон земли у точки не отсекает её: рельеф под трассу готовится. Пары отсекаются
 ##    дёшево только технически: финиш выше старта (обратная пара тоже рассматривается), разные области (вода или путь
-##    между ними), прямая длиннее length_max или слишком коротка для length_min.
-## 3. Ранжирование — простое и объяснимое: отклонение ожидаемой длины (прямая × DETOUR) от середины диапазона плюс
+##    между ними), вырожденная или неконечная линия.
+## 3. Ранжирование — простое и объяснимое: недобор желаемого минимума ожидаемой длины (прямая × DETOUR) плюс
 ##    превышение среднего уклона прямой над 80 % цели (там понадобятся обход или земляные работы) плюс недобор перепада
 ##    до min_drop, в долях. Из отсортированных пар берутся не больше `pairs`, отличающиеся от уже взятых хотя бы на
 ##    SPREAD м в сумме по старту и финишу. Уклон, перепад и радиус — предпочтения, не пороги.
@@ -27,7 +27,7 @@ const DETOUR := 1.15        # ожидаемая длина линии — пр�
 const SPREAD := 40.0        # пары отличаются хотя бы на столько (старт + финиш), м
 ## grade, min_radius — цели формирования; min_drop — желаемый перепад (предпочтение в ранжировании).
 const DEFAULTS := {width = 3.0, grade = 0.15, min_radius = 6.0,
-	length_min = 60.0, length_max = 140.0, min_drop = 4.0,
+	length_min = 60.0, min_drop = 4.0,
 	pairs = 6, budget = 60000, repairs = 6, builds = 2, timeout_ms = 30000}
 ## Два заранее заданных класса трасс — одинаковые для любой площадки (поверх DEFAULTS; лимиты общие):
 ## descent — спуск, желательно от 4 м (DEFAULTS), rolling — равнинная, финиш не выше старта, перепад не нужен.
@@ -94,8 +94,8 @@ func _refuse(why: String) -> void:
 func _run(site: TrailSite, req: Dictionary) -> void:
 	request = DEFAULTS.duplicate()
 	request.merge(req, true)
-	if request.length_min < TrailRouter.MIN_SPAN or request.length_max < request.length_min or request.min_drop < 0.0:
-		_refuse("диапазон длины: от %.0f м и не меньше минимума; перепад не отрицательный" % TrailRouter.MIN_SPAN)
+	if not is_finite(float(request.length_min)) or not is_finite(float(request.min_drop)):
+		_refuse("неконечные предпочтения длины/перепада (технический минимум %.0f м)" % TrailRouter.MIN_SPAN)
 		return
 	var deadline := Time.get_ticks_msec() + int(request.timeout_ms)
 	var base := _router_request()
@@ -151,20 +151,22 @@ func _run(site: TrailSite, req: Dictionary) -> void:
 
 func _router_request() -> Dictionary:
 	var out := {}
-	for key: String in ["width", "grade", "min_radius"]: out[key] = request[key]
+	for key: String in ["width", "grade", "min_radius", "cancel"]:
+		if not request.has(key): continue
+		out[key] = request[key]
 	return out
 
 
 ## Одна пара: кандидат → оценка длины → (если остались сборки) доступ и полная сборка → факт. {kind, short, why}
-## Перепад и уклон — в отчёте; отказ только по длине (размер трассы), корректности сборки, доступу и бюджету.
+## Перепад и уклон — в отчёте; отказ только по невырожденности/конечности, корректности сборки, доступу и бюджету.
 func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int, deadline := 0) -> Dictionary:
 	if not r.setup(site, rq) or not r.begin():
 		return {kind = "refused", short = _short(r), why = r.reason}
 	if not r.candidate():
 		return {kind = "refused", short = _short(r), why = r.reason}
 	var e: Dictionary = r.stats.estimate
-	if e.length < request.length_min or e.length > request.length_max:
-		return {kind = "estimate", short = "длина вне диапазона (оценка)", why = "оценка длины %.0f м вне %.0f–%.0f м" % [e.length, request.length_min, request.length_max]}
+	if not is_finite(float(e.length)) or e.length < TrailRouter.MIN_SPAN:
+		return {kind = "estimate", short = "вырожденная длина", why = "неконечная или вырожденная линия"}
 	if builds_left <= 0:
 		return {kind = "budget", short = "лимит полных сборок исчерпан", why = "кандидат прошёл оценку, но полных сборок не осталось (%d)" % request.builds}
 	var access: Variant = request.get("access")
@@ -177,8 +179,8 @@ func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int, dea
 	if not r.complete():
 		return {kind = "built", short = "не прошла проверку готовой поверхности", why = r.reason if not r.reason.is_empty() else r._failed_checks()}
 	var length := r.definition.route_length()
-	if length < request.length_min or length > request.length_max:
-		return {kind = "built", short = "фактическая длина вне диапазона", why = "длина %.0f м вне %.0f–%.0f м" % [length, request.length_min, request.length_max]}
+	if not is_finite(length) or length < TrailRouter.MIN_SPAN:
+		return {kind = "built", short = "вырожденная длина", why = "неконечная или вырожденная линия"}
 	if access != null:
 		var checked: Dictionary = access.verify(r, site)
 		if not checked.ok:
@@ -243,8 +245,7 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 			labels.append(area[probe._free_node(p)])
 	stats.points_kept = points.size()
 	var ranked: Array[Dictionary] = []
-	var reach: float = request.length_max
-	var shortest: float = request.length_min / DETOUR / 1.3 # прямая короче — линия почти наверняка не наберёт длину
+	var shortest: float = TrailRouter.MIN_SPAN # только техническая невырожденность, не желаемая длина
 	for a in points.size():
 		for b in points.size():
 			if a == b: continue
@@ -254,14 +255,14 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 				_reject("пара: финиш выше старта (рассматривается обратная пара)")
 				continue
 			var d := points[a].distance_to(points[b])
-			if d > reach or d < shortest:
+			if not is_finite(d) or d < shortest:
 				_reject("пара: расстояние не подходит к длине")
 				continue
 			if labels[a] < 0 or labels[a] != labels[b]:
 				_reject("пара: разные доступные области")
 				continue
-			var target: float = (request.length_min + request.length_max) * 0.5
-			var score: float = absf(d * DETOUR - target) / target + maxf(0.0, drop / d - 0.8 * request.grade) / request.grade
+			var target: float = maxf(TrailRouter.MIN_SPAN, request.length_min)
+			var score: float = maxf(0.0, target - d * DETOUR) / target + maxf(0.0, drop / d - 0.8 * request.grade) / request.grade
 			if request.min_drop > 0.0: score += maxf(0.0, request.min_drop - drop) / request.min_drop # желаемый перепад
 			if not near.is_empty():
 				# у обоих концов должна быть подходящая точка примыкания (по прямой старт → финиш как направлению трассы)
@@ -303,8 +304,8 @@ func summary() -> String:
 	if accepted:
 		var r := router
 		lines.append("Трасса найдена: старт (%.0f, %.0f) → финиш (%.0f, %.0f)" % [start.x, start.y, finish.x, finish.y])
-		lines.append("Длина %.0f м (нужно %.0f–%.0f) · перепад вниз %.1f м (желательно от %.1f) · уклон до %.1f%% (цель %.0f%%) · радиус от %.1f м" % [
-			r.stats.length, request.length_min, request.length_max, r.stats.drop, request.min_drop, r.stats.peak_grade * 100.0, request.grade * 100.0, r.stats.min_radius])
+		lines.append("Длина %.0f м (желательно от %.0f) · перепад вниз %.1f м (желательно от %.1f) · уклон до %.1f%% (цель %.0f%%) · радиус от %.1f м" % [
+			r.stats.length, request.length_min, r.stats.drop, request.min_drop, r.stats.peak_grade * 100.0, request.grade * 100.0, r.stats.min_radius])
 		lines.append("Земляные работы: выемка до %.2f м (%.0f м³), насыпь до %.2f м (%.0f м³)" % [r.stats.get("max_cut", 0.0), r.stats.cut_m3, r.stats.get("max_fill", 0.0), r.stats.fill_m3])
 		for c: Dictionary in r.checks: lines.append("%s %s · %s" % [TrailRouter.MARKS[c.state], c.name, c.detail])
 	else:

@@ -58,8 +58,8 @@ func run() -> void:
 		var r := picked.router
 		var length := r.definition.route_length()
 		var drop: float = r.survey.support[0] - r.survey.support[-1]
-		check(length >= picked.request.length_min and length <= picked.request.length_max,
-			"real length on the finished surface %.0f m within %.0f–%.0f m" % [length, picked.request.length_min, picked.request.length_max])
+		check(is_finite(length) and length >= TrailRouter.MIN_SPAN,
+			"finite, non-degenerate length %.0f m; desired minimum %.0f is a preference" % [length, picked.request.length_min])
 		check(r.survey.support[0] > r.survey.support[-1],
 			"the start is above the finish: real descent %.1f m (wish from %.1f m, a preference), finished grade up to %.1f%% (target %.0f%%)" % [
 			drop, picked.request.min_drop, r.survey.peak_grade * 100.0, picked.request.grade * 100.0])
@@ -74,11 +74,10 @@ func run() -> void:
 		and again.stats.builds == picked.stats.builds, "same request → same start, finish, line, expansions and builds")
 	check(again.stats.prepare_reused and again.stats.prepare_ms < 5.0, "site suitability data reused: %.1f ms now, %.0f ms when prepared" % [again.stats.prepare_ms, again.stats.prepare_cost_ms])
 	report.again_ms = again.stats.total_ms
-	# 3. An impossible request (a trail longer than the site): an honest refusal, nothing built. A descent wish (min_drop)
-	# is a preference now, not a cheap filter, so it no longer serves as the impossible case.
-	var steep := TrailPicker.find(site, {length_min = 600.0, length_max = 700.0})
+	# 3. Invalid non-finite input is refused before construction; lengths and descent are preferences.
+	var steep := TrailPicker.find(site, {length_min = INF})
 	report.impossible = numbers(steep)
-	check(not steep.accepted and steep.reason.contains("отсев") and steep.stats.builds == 0, "a 600–700 m trail on this site refused: %s" % steep.reason)
+	check(not steep.accepted and steep.verdict == "input" and steep.stats.builds == 0, "non-finite length preference refused: %s" % steep.reason)
 	within_budget("impossible", steep)
 	# 4. A tight whole-operation budget is respected (found or refused, never more).
 	var tight := TrailPicker.find(site, {budget = 1500, builds = 1, repairs = 1})
@@ -107,8 +106,7 @@ func run() -> void:
 	report.lab = {total_ms = timings.total_ms, builder_ms = timings.builder_ms, outside_ms = outside_ms, picker_ms = lab.pick_result.stats.total_ms}
 	var kept: Heightfield = lab.heights
 	var refused := values.duplicate()
-	refused.route_length_min = 390.0
-	refused.route_length_max = 400.0
+	refused.route_width = 0.0
 	lab.editor.find_requested.emit(refused)
 	check(lab.heights == kept and lab.routes[0].points == picked.router.definition.points and lab.editor.line_report.text.contains("Трасса не найдена"),
 		"an impossible request keeps the previous trail; the panel says why")

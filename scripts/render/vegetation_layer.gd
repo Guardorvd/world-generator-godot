@@ -89,6 +89,7 @@ var _tree_target := Vector2.INF
 var _pending: Array = [] # готовые чанки, ближайшие в конце
 var _built: Array = []   # пишет задача, читаем после wait_for_task_completion
 var _loaded := {}       # включая пустые чанки
+var _refresh_details := false
 var _epoch := 0         # 13.9: номер закрепления областей; чанк, посчитанный раньше, устарел
 var _dirty := {}        # чанк за краем -> _epoch, когда его область закрепили
 var _defs := {}         # неизменяемые меши, материалы и локальные AABB
@@ -433,6 +434,9 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				for chunk in missing:
 					_queued[chunk] = true
 				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
+	if _task == -1 and _refresh_details:
+		snapshots.reset()
+		_refresh_details = false
 	if _task == -1 and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
 		last_fill = p
 		_job_lead = lead
@@ -590,6 +594,11 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 			ground = corner[0] + (corner[1] - corner[0]) * tx + (corner[2] - corner[0]) * tz
 		else:
 			ground = corner[3] + (corner[2] - corner[3]) * (1.0 - tx) + (corner[1] - corner[3]) * (1.0 - tz)
+		var refined := OuterLand.refined_at(world.outer.get_ledger().get("regions", {}), fx[o] * TILE, fy[o] * TILE)
+		if not refined.is_empty():
+			ground = refined.h
+			# A rock footprint cannot straddle a newly cut slope; skip it rather than float or bury it.
+			if kind == Biomes.T_ROCK: continue
 		# за краем вода только морская, её уровень 0
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < -WATER_MARGIN:
 			continue
@@ -603,7 +612,7 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 			items.normals = PackedVector3Array()
 		var dx: float = corner[1] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[2]
 		var dz: float = corner[2] - corner[0] if tx + tz <= 1.0 else corner[3] - corner[1]
-		items.normals.append(Vector3(rock_probe.y, rock_probe.z, rock_probe.w) if kind == Biomes.T_ROCK else Vector3(-dx, TILE, -dz).normalized())
+		items.normals.append(Vector3(rock_probe.y, rock_probe.z, rock_probe.w) if kind == Biomes.T_ROCK else (refined.normal if not refined.is_empty() else Vector3(-dx, TILE, -dz).normalized()))
 	var built := _build_entries(items)
 	built.chunk = chunk
 	built.outer = items
@@ -725,6 +734,26 @@ func _build_entries(items: Dictionary) -> Dictionary:
 ## по окончательной географии (вода, дороги, поселения).
 func refresh(rect: Rect2i) -> void:
 	_epoch += 1
+	# Published earthworks cannot leave old trees, rocks or undergrowth floating over the cut.
+	var box := Rect2(Vector2(rect.position) * TILE, Vector2(rect.size) * TILE)
+	var meshes: Array[MultiMesh] = []
+	if grass != null: meshes.append(grass)
+	for e: Dictionary in understory: meshes.append(e.mm)
+	for mm in meshes:
+		var bounds := mm.custom_aabb
+		if not Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z)).intersects(box): continue
+		var buffer := mm.buffer
+		var kept := 0
+		for at in range(0, mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE, STRIDE):
+			if box.has_point(Vector2(buffer[at + 3], buffer[at + 11])): continue
+			for c in STRIDE: buffer[kept * STRIDE + c] = buffer[at + c]
+			kept += 1
+		mm.buffer = buffer
+		mm.visible_instance_count = kept
+	_refresh_details = true
+	obstacles = _without_region(obstacles, 7, box)
+	bumps = _without_region(bumps, 6, box)
+	obstacles_version += 1
 	var side := world.CS
 	for chunk: Vector2i in _loaded.keys():
 		if _on_map(chunk) or not Rect2i(chunk * side, Vector2i.ONE * side).intersects(rect):
@@ -734,7 +763,9 @@ func refresh(rect: Rect2i) -> void:
 		world.outer.veg.erase(chunk)
 		for key: Vector3i in veg.keys():
 			if key.x == chunk.x and key.y == chunk.y:
-				_retire_nodes(veg[key].nodes)
+				for node: MultiMeshInstance3D in veg[key].nodes:
+					node.visible = false
+					node.queue_free()
 				veg.erase(key)
 	for x in range(floori(float(rect.position.x) / side), floori(float(rect.end.x - 1) / side) + 1):
 		for y in range(floori(float(rect.position.y) / side), floori(float(rect.end.y - 1) / side) + 1):
@@ -1325,3 +1356,13 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 					continue
 				var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
 				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(world.obj_s[o] * 0.7, 0.6, 1.3), 1.0, o)
+
+
+static func _without_region(values: PackedFloat32Array, stride: int, box: Rect2) -> PackedFloat32Array:
+	var kept := PackedFloat32Array()
+	for at in range(0, values.size(), stride):
+		var a := Vector2(values[at], values[at + 1])
+		var b := Vector2(values[at + 2], values[at + 3])
+		if box.intersects(Rect2(a.min(b), a.max(b) - a.min(b)).grow(values[at + 4])): continue
+		kept.append_array(values.slice(at, at + stride))
+	return kept

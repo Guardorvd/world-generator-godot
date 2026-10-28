@@ -120,11 +120,10 @@ func _ready() -> void:
 	auto_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	auto_note.text = "«Найти трассу» сам выбирает старт выше финиша по длине; уклон, радиус и перепад — цели (рельеф готовится под трассу), не пределы; координаты старта и финиша не используются."
 	line_box.add_child(auto_note)
-	for spec: Array in [["route_length_min", "Длина от, м", 24.0, 400.0, 5.0], ["route_length_max", "Длина до, м", 24.0, 400.0, 5.0],
+	for spec: Array in [["route_length_min", "Желаемая длина от, м", 0.0, 1000.0, 5.0],
 			["route_drop", "Перепад вниз от, м", 0.0, 60.0, 0.5]]:
 		_add_number(line_box, spec)
 	numbers.route_length_min.value = TrailPicker.DEFAULTS.length_min
-	numbers.route_length_max.value = TrailPicker.DEFAULTS.length_max
 	numbers.route_drop.value = TrailPicker.DEFAULTS.min_drop
 	for name in ["Без элементов", "Спокойный flow (роллер, впадина, поворот)"]: flow_choice.add_item(name)
 	flow_choice.set_item_tooltip(1, "Элементы ставит TrailComposer по профилю принятого полотна; итог собирается заново и проверяется. Не подошли — остаётся базовая линия")

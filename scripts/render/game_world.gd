@@ -364,6 +364,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		stream_coordinator.outer_update = outer.update
 	if regions != null:
 		stream_coordinator.region_update = regions.update
+		stream_coordinator.region_priority = regions.publication_pending
 	stream_coordinator.region_committed.connect(func() -> void:
 		for m: StandardMaterial3D in regions.windows:
 			SettlementsBuilder.set_night(m, _night))

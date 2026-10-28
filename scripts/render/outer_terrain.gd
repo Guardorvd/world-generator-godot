@@ -75,7 +75,7 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 			WorkerThreadPool.wait_for_task_completion(t.id)
 			done = key
 			# При переносе игрока результат старого запроса уже может оказаться слишком далеко.
-			if _center(key).distance_to(Vector2(x, z)) <= DROP:
+			if not _stale.has(key) and _center(key).distance_to(Vector2(x, z)) <= DROP:
 				_add(key, t.out.r)
 			break
 	if done != null:
@@ -172,9 +172,22 @@ func _center(key: Vector2i) -> Vector2:
 
 
 func _add(key: Vector2i, built: Dictionary) -> void:
-	if _nodes.get(key) != null:
-		_nodes[key].queue_free() # 13.9: пересчитанный кусок закреплённой области
-	land.chunks[key] = built.fields
+	var node := stage_chunk(key, built)
+	publish_chunks({key: built}, {key: node})
+
+
+func publish_chunks(chunks: Dictionary, nodes: Dictionary) -> void:
+	for key: Vector2i in chunks:
+		if _nodes.get(key) != null:
+			_nodes[key].visible = false
+			_nodes[key].queue_free()
+		land.chunks[key] = chunks[key].fields
+		_nodes[key] = nodes[key]
+		if nodes[key] != null: nodes[key].visible = true
+		if _tasks.has(key): _stale[key] = true
+
+
+func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
 	var mi: MeshInstance3D = null
 	if not built.arrays.is_empty():
 		var mesh := ArrayMesh.new()
@@ -191,13 +204,18 @@ func _add(key: Vector2i, built: Dictionary) -> void:
 		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		add_child(mi)
-	_nodes[key] = mi
+		mi.visible = false
+	return mi
 
 
 ## Поля куска и его меш (в фоновой задаче). Вершины — центры клеток от первой клетки куска до первой
 ## клетки следующего, поэтому соседние куски и карта смыкаются; квадраты целиком на карте пропускаются
-func _build(key: Vector2i) -> Dictionary:
-	var f := OuterLand.compute_chunk(world, key)
+func _build(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) -> Dictionary:
+	var f: Dictionary = prepared_fields.duplicate() if not prepared_fields.is_empty() else OuterLand.compute_chunk(world, key)
+	var ledger: Dictionary = snapshot if snapshot is Dictionary else world.outer.get_ledger()
+	OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)
+	var regions: Dictionary = ledger.get("regions", {})
+	var refined := false
 	var W := world.W
 	var H := world.H
 	var hv := heights.hv
@@ -248,6 +266,28 @@ func _build(key: Vector2i) -> Dictionary:
 			var i := i0 + a
 			if i >= 0 and j >= 0 and i + 1 <= W - 1 and j + 1 <= H - 1:
 				continue
+			var patch := OuterLand.refined_patch(regions, Vector2i(i, j))
+			if not patch.is_empty():
+				refined = true
+				var first := pos.size()
+				for rz in RoadRefinement.STRIDE:
+					for rx in RoadRefinement.STRIDE:
+						var n := rz * RoadRefinement.STRIDE + rx
+						pos.append(Vector3((a + 0.5 - C * 0.5) * TILE + rx * RoadRefinement.STEP, patch.h[n], (b + 0.5 - C * 0.5) * TILE + rz * RoadRefinement.STEP))
+						var dx: float = patch.h[rz * RoadRefinement.STRIDE + mini(rx + 1, RoadRefinement.DIV)] - patch.h[rz * RoadRefinement.STRIDE + maxi(0, rx - 1)]
+						var dz: float = patch.h[mini(rz + 1, RoadRefinement.DIV) * RoadRefinement.STRIDE + rx] - patch.h[maxi(0, rz - 1) * RoadRefinement.STRIDE + rx]
+						nor.append(Vector3(-dx, 2.0 * RoadRefinement.STEP, -dz).normalized())
+						var tint: Color = col[(b + 1) * S + a + 1]
+						var surface: int = patch.surface[n]
+						if surface > 0:
+							var rgb: Array = RoadSurface.LIST[surface].color
+							tint = tint.lerp(Color8(rgb[0], rgb[1], rgb[2]), patch.color[n].a)
+						vc.append(tint)
+				for rz in RoadRefinement.DIV:
+					for rx in RoadRefinement.DIV:
+						var q := first + rz * RoadRefinement.STRIDE + rx
+						idx.append_array([q, q + 1, q + RoadRefinement.STRIDE, q + 1, q + RoadRefinement.STRIDE + 1, q + RoadRefinement.STRIDE])
+				continue
 			var p := b * V + a
 			# два треугольника квадрата; без временного массива на каждый квадрат
 			idx.append(p)
@@ -265,7 +305,7 @@ func _build(key: Vector2i) -> Dictionary:
 		arrays[Mesh.ARRAY_COLOR] = vc
 		arrays[Mesh.ARRAY_INDEX] = idx
 		# Частично закрытые картой куски сохраняют исходные треугольники и точный край выреза.
-		if not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):
+		if not refined and not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):
 			lods = _lod(pos)
 	return {fields = f, arrays = arrays, lods = lods}
 

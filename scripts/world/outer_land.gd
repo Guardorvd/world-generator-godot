@@ -332,3 +332,37 @@ func info(i: int, j: int) -> Dictionary:
 	var k: int = at[1]
 	return {i = -1, biome = f.biome[k], river = false, path = 0, surface = 0,
 		elev = f.elev[k], temp = f.temp[k], moist = f.moist[k], slope = f.slope[k]}
+
+
+## Shared sparse surface for rendering, wheel/foot support and vegetation snapshots.
+static func refined_patch(regions: Dictionary, cell: Vector2i) -> Dictionary:
+	var key := Vector2i(floori(float(cell.x) / WorldData.REGION_SIZE), floori(float(cell.y) / WorldData.REGION_SIZE))
+	return regions.get(key, {}).get("fields", {}).get("trail_patches", {}).get(cell, {})
+
+static func refined_at(regions: Dictionary, x: float, z: float) -> Dictionary:
+	var f := Vector2(x, z) / GameConfig.TILE - Vector2.ONE * 0.5
+	var cell := Vector2i(f.floor())
+	var patch := refined_patch(regions, cell)
+	if patch.is_empty(): return {}
+	var uv := (f - Vector2(cell)) * RoadRefinement.DIV
+	var ix := mini(RoadRefinement.DIV - 1, floori(uv.x))
+	var iz := mini(RoadRefinement.DIV - 1, floori(uv.y))
+	var tx := uv.x - ix
+	var tz := uv.y - iz
+	var a := iz * RoadRefinement.STRIDE + ix
+	var b := a + 1
+	var c := a + RoadRefinement.STRIDE
+	var wa := 1.0 - tx - tz
+	var wb := tx
+	var wc := tz
+	if tx + tz > 1.0:
+		a = c + 1
+		wa = tx + tz - 1.0
+		wb = 1.0 - tz
+		wc = 1.0 - tx
+	var closest := a if wa >= wb and wa >= wc else (b if wb >= wc else c)
+	return {surface = patch.surface[closest], road = patch.road[closest] != 0, across = patch.uv[a].x * wa + patch.uv[b].x * wb + patch.uv[c].x * wc,
+		h = patch.h[a] * wa + patch.h[b] * wb + patch.h[c] * wc,
+		weight = patch.color[a].a * wa + patch.color[b].a * wb + patch.color[c].a * wc,
+		normal = Vector3(-(patch.h[b] - patch.h[a]) / (1.0 if tx + tz <= 1.0 else -1.0), RoadRefinement.STEP,
+			-(patch.h[c] - patch.h[a]) / (1.0 if tx + tz <= 1.0 else -1.0)).normalized()}
