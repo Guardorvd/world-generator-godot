@@ -168,7 +168,11 @@ func tangent_at(station: float) -> Vector2:
 	return (point_at(station + 2.0) - point_at(station - 2.0)).normalized()
 
 func curvature_at(station: float) -> float:
-	return tangent_at(station - 3.0).angle_to(tangent_at(station + 3.0)) / 6.0
+	var a := tangent_at(station - 3.0)
+	var b := tangent_at(station + 3.0)
+	# Past the end of an open route the tangent is zero: angle_to(0) gives 0 or π by the sign of zero, not a turn.
+	if a == Vector2.ZERO or b == Vector2.ZERO: return 0.0
+	return a.angle_to(b) / 6.0
 
 ## A heightfield cannot carry two different decks at a crossing: keep shared junctions grounded.
 func junction_weight(at: Vector2, station: float) -> float:

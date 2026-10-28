@@ -417,11 +417,12 @@ func _zeros() -> PackedByteArray:
 
 
 ## Запретить узлы у конца, к которым от него земля круче требования (close = false — только посчитать); число
-## оставшихся разрешённых узлов у конца.
+## оставшихся разрешённых соседних узлов: A* выходит из конца только через соседа, поэтому дальние открытые узлы зоны
+## без открытого соседа выхода не дают.
 func _close_steep_end(p: Vector2, close := true) -> int:
 	var open := 0
-	var r := ceili(_end_zone() / GRID)
-	var c := _node_at(p)
+	var r := ceili(_end_zone() / GRID) + 2
+	var c := _free_node(p) # узел, из которого начинает поиск
 	for dz in range(-r, r + 1):
 		for dx in range(-r, r + 1):
 			var x := c % _w + dx
@@ -433,7 +434,7 @@ func _close_steep_end(p: Vector2, close := true) -> int:
 			if d > GRID * 0.75 and _end_grade(p, _node_point(i)) > request.grade * END_SHARE:
 				if close: _cost[i] = INF
 			else:
-				open += int(d > GRID * 0.75)
+				open += int(d > GRID * 0.75 and absi(dx) <= 1 and absi(dz) <= 1)
 	return open
 
 
@@ -477,6 +478,53 @@ func areas() -> PackedInt32Array:
 				queue.append(n)
 		label += 1
 	_prepared.area = area
+	return area
+
+
+## Области, связные по правилу шага Pathfinder при пределе уклона поиска: шаг к соседу (диагональ — через два
+## разрешённых угла, у диагоналей 4 и 7 — через середину) не круче _cap по той же усреднённой земле. Коридор, крен,
+## закрытые концы и бюджет только сужают поиск, поэтому узлы разных областей A* не соединит никогда: это
+## доказательство «нет пути по рельефу» без поиска. Считается раз на площадку, ширину и предел.
+func reach_areas() -> PackedInt32Array:
+	if _prepared.get("reach_cap", -1.0) == _cap: return _prepared.reach
+	var base: PackedFloat32Array = _prepared.cost
+	var g := _search_ground()
+	var area := PackedInt32Array()
+	area.resize(_w * _h)
+	area.fill(-1)
+	var label := 0
+	var queue := PackedInt32Array()
+	for start in _w * _h:
+		if area[start] >= 0 or base[start] == INF: continue
+		queue.clear()
+		queue.append(start)
+		area[start] = label
+		var head := 0
+		while head < queue.size():
+			var c := queue[head]
+			head += 1
+			var cx := c % _w
+			var cz := c / _w
+			for k in 8:
+				var nx := cx + Grid.DX[k]
+				var nz := cz + Grid.DY[k]
+				if nx < 0 or nz < 0 or nx >= _w or nz >= _h: continue
+				var n := nz * _w + nx
+				if area[n] >= 0 or base[n] == INF: continue
+				var grade := absf(g[n] - g[c]) / Grid.DL[k]
+				if k >= 4:
+					var a := cz * _w + nx
+					var b := nz * _w + cx
+					if base[a] == INF or base[b] == INF: continue
+					if k == 4 or k == 7:
+						var mid := (g[a] + g[b]) * 0.5
+						grade = maxf(absf(mid - g[c]), absf(g[n] - mid)) * 2.0 / Grid.DL[k]
+				if grade > _cap + 1e-5: continue
+				area[n] = label
+				queue.append(n)
+		label += 1
+	_prepared.reach = area
+	_prepared.reach_cap = _cap
 	return area
 
 

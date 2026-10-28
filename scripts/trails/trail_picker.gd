@@ -22,10 +22,19 @@ const SPREAD := 40.0        # пары отличаются хотя бы на �
 const DEFAULTS := {width = 3.0, grade = 0.15, max_cut = 1.2, max_fill = 1.0, min_radius = 6.0,
 	length_min = 60.0, length_max = 140.0, min_drop = 4.0,
 	pairs = 6, budget = 60000, repairs = 6, builds = 2, timeout_ms = 30000}
+## Два заранее заданных класса трасс — одинаковые для любой площадки (поверх DEFAULTS; лимиты общие):
+## descent — спуск от 4 м (DEFAULTS), rolling — равнинная, финиш не выше старта, перепад не требуется.
+const PROFILES := {descent = {}, rolling = {min_drop = 0.0}}
+const PROFILE_TITLES := {descent = "спуск", rolling = "равнинная"}
 
 var request := {}
 var accepted := false
 var reason := ""
+## Итог операции: found — трасса построена; no_pairs — ни одна пара не прошла дешёвый отсев (места нет при этих
+## требованиях на решётке точек); refused_all — искались все пары, прошедшие отсев, и все отклонены по требованиям;
+## budget — остановлено лимитом (пары, раскрытия, сборки, исправления, таймаут), пока оставались неиспробованные
+## пары или пара не была проверена до конца: невозможность НЕ доказана.
+var verdict := ""
 var router: TrailRouter      ## линия выбранной пары (accepted) или null
 var start := Vector2.ZERO
 var finish := Vector2.ZERO
@@ -41,7 +50,29 @@ static func find(site: TrailSite, req := {}) -> TrailPicker:
 	var started := Time.get_ticks_usec()
 	p._run(site, req)
 	p.stats.total_ms = (Time.get_ticks_usec() - started) / 1000.0
+	p.verdict = p._verdict()
 	return p
+
+
+## Пояснение к verdict для отчёта.
+const VERDICTS := {found = "трасса найдена", no_pairs = "места нет: ни одна пара не прошла отсев",
+	refused_all = "все пары после отсева испробованы и отклонены по требованиям",
+	budget = "остановлено бюджетом: невозможность не доказана", input = "ошибка запроса или площадки"}
+
+
+func _verdict() -> String:
+	if accepted: return "found"
+	if stats.points == 0: return "input"
+	if stats.pairs_kept == 0: return "no_pairs"
+	# пара, остановленная лимитом (раскрытия, сборки, исправления, таймаут), не проверена до конца
+	for t: Dictionary in tried:
+		if t.outcome == "budget" or (t.outcome == "refused" and _limited(t.reason)): return "budget"
+	if rejected.has("таймаут операции") or rejected.has("общий бюджет раскрытий исчерпан"): return "budget"
+	return "refused_all" if stats.pairs_searched >= stats.pairs_kept else "budget"
+
+
+static func _limited(why: String) -> bool:
+	return why.contains("бюджет") or why.contains("таймаут") or why.contains("исчерпаны попытки") or why.contains("попытки исправления исчерпаны") or why.contains("лимит") or why.contains("сборок")
 
 
 func _reject(why: String) -> void:
@@ -74,11 +105,14 @@ func _run(site: TrailSite, req: Dictionary) -> void:
 	if pairs.is_empty():
 		_refuse("на площадке нет пар старт/финиш, проходящих отсев: %s" % _rejections())
 		return
-	for pair: Dictionary in pairs:
+	for n in pairs.size():
+		var pair: Dictionary = pairs[n]
 		if Time.get_ticks_msec() > deadline:
 			_reject("таймаут операции")
 			break
-		var left := {budget = request.budget - stats.expansions, repairs = request.repairs - stats.repairs, builds = request.builds - stats.builds}
+		# Исправления — равной долей остатка на оставшиеся пары: одна безнадёжная пара не забирает их у остальных
+		var repairs_left: int = request.repairs - stats.repairs
+		var left := {budget = request.budget - stats.expansions, repairs = ceili(float(repairs_left) / (pairs.size() - n)), builds = request.builds - stats.builds}
 		if left.budget <= 0:
 			_reject("общий бюджет раскрытий исчерпан")
 			break
@@ -153,11 +187,13 @@ static func _short(r: TrailRouter) -> String:
 ## Точки решётки и отсев пар; не больше request.pairs пространственно разнесённых пар в порядке ранжирования.
 func _select(probe: TrailRouter) -> Array[Dictionary]:
 	var area := probe.areas()
+	var linked := probe.reach_areas()
 	var lo: Vector2 = probe._lo
 	var hi: Vector2 = probe._hi
 	var points: Array[Vector2] = []
 	var heights := PackedFloat32Array()
 	var labels := PackedInt32Array()
+	var slopes := PackedInt32Array() # область достижимости при пределе уклона поиска (TrailRouter.reach_areas)
 	var count := Vector2i(((hi - lo) / SPACING).floor()) + Vector2i.ONE
 	var shift := (hi - lo - Vector2(count - Vector2i.ONE) * SPACING) * 0.5 # решётка по центру зоны
 	for gz in count.y:
@@ -173,6 +209,7 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 			points.append(p)
 			heights.append(probe.mean_at(p))
 			labels.append(area[probe._free_node(p)])
+			slopes.append(linked[probe._free_node(p)])
 	stats.points_kept = points.size()
 	var ranked: Array[Dictionary] = []
 	var reach: float = request.length_max
@@ -195,6 +232,9 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 			if labels[a] < 0 or labels[a] != labels[b]:
 				_reject("пара: разные доступные области")
 				continue
+			if slopes[a] != slopes[b]:
+				_reject("пара: по рельефу не соединить при пределе уклона поиска")
+				continue
 			var target: float = (request.length_min + request.length_max) * 0.5
 			var score: float = absf(d * DETOUR - target) / target + maxf(0.0, drop / d - 0.8 * request.grade) / request.grade
 			ranked.append({start = points[a], finish = points[b], score = score, straight = d, drop = drop, index = ranked.size()})
@@ -205,7 +245,8 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 		if chosen.size() >= int(request.pairs): break
 		var apart := true
 		for c: Dictionary in chosen:
-			if (pair.start as Vector2).distance_to(c.start) + (pair.finish as Vector2).distance_to(c.finish) < SPREAD: apart = false
+			# та же линия, сдвинутая параллельно: оба конца ближе SPREAD к концам взятой пары
+			if maxf((pair.start as Vector2).distance_to(c.start), (pair.finish as Vector2).distance_to(c.finish)) < SPREAD: apart = false
 		if apart: chosen.append(pair)
 	return chosen
 
@@ -229,7 +270,7 @@ func summary() -> String:
 		lines.append("Земляные работы: выемка %.0f м³, насыпь %.0f м³" % [r.stats.cut_m3, r.stats.fill_m3])
 		for c: Dictionary in r.checks: lines.append("%s %s · %s" % [TrailRouter.MARKS[c.state], c.name, c.detail])
 	else:
-		lines.append("Трасса не найдена: " + reason)
+		lines.append("Трасса не найдена (%s): %s" % [VERDICTS.get(verdict, verdict), reason])
 	lines.append("Точек %d (годных %d) · пар рассмотрено %d, прошло отсев %d, искалось %d из %d" % [
 		stats.points, stats.points_kept, stats.pairs_considered, stats.pairs_kept, stats.pairs_searched, request.get("pairs", 0)])
 	lines.append("Поисков %d · раскрытий %d из %d · исправлений %d из %d · полных сборок %d из %d" % [

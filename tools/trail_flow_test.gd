@@ -79,14 +79,15 @@ func run() -> void:
 	check(base_bytes(line) == before and line.definition.elements.is_empty() and flow.definition != line.definition,
 		"base definition, its report and its build unchanged by the composition")
 	# 4. A line with no room for elements keeps the base line and says why.
-	var short_line := TrailPicker.find(site, {length_min = 24.0, length_max = 45.0, min_drop = 1.0})
-	var empty: TrailFlow = TrailFlow.dress(site, short_line.router, 1) if short_line.accepted else null
+	# The short line runs between two points of the found line (its start and its point at 32 m): ground known passable.
+	var short_line := TrailRouter.build(site, {start = line.definition.points[0], finish = line.definition.point_at(32.0)})
+	var empty: TrailFlow = TrailFlow.dress(site, short_line, 1) if short_line.accepted else null
 	if empty != null:
 		print(empty.summary())
-		report.no_room = {length = short_line.router.stats.length, message = empty.message, builds = empty.stats.builds}
-	check(empty != null and not empty.accepted and empty.variant == "базовая линия" and empty.definition == short_line.router.definition
+		report.no_room = {length = short_line.stats.length, message = empty.message, builds = empty.stats.builds}
+	check(empty != null and not empty.accepted and empty.variant == "базовая линия" and empty.definition == short_line.definition
 		and empty.stats.builds == 0 and empty.message.contains("нет места"), "a short line (%.0f m) gets no elements and keeps its base: %s" % [
-		short_line.router.stats.get("length", 0.0) if short_line.accepted else 0.0, empty.message if empty != null else short_line.reason])
+		short_line.stats.get("length", 0.0), empty.message if empty != null else short_line.reason])
 	# A longer but bendy, steep line: the composer proposes, the real profile refuses, and says why.
 	var bendy := TrailRouter.build(site, {start = Vector2(126, 222), finish = Vector2(78, 270)})
 	var refused: TrailFlow = TrailFlow.dress(site, bendy, 1) if bendy.accepted else null

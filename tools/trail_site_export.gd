@@ -36,6 +36,10 @@ func _init() -> void:
 	var h := Heightfield.new(w) # как WorldLoader: ленты рек, русла, вода, finish_paths
 	print("Готовая поверхность мира (как при загрузке игры): %d мс" % (Time.get_ticks_msec() - started))
 	var margin := int(args.get("margin", "16"))
+	if args.has("scan"):
+		_scan(w, h, int(args.get("side", "64")), margin)
+		quit()
+		return
 	if args.has("refusals") and not _refusals(w, h, margin):
 		printerr("ОШИБКА: проверка отказов не прошла, площадка не записана")
 		quit(1)
@@ -58,12 +62,14 @@ func _init() -> void:
 		schema = [WorldCache.SCHEMA_WORLD_VERSION, WorldCache.SCHEMA_GEO_VERSION, WorldCache.SCHEMA_TRAILS_VERSION,
 			WorldCache.SCHEMA_NATURE_VERSION, WorldCache.SCHEMA_VIEW_VERSION]}
 	site.source.files = before
+	if args.has("note"): site.source.note = str(args.note) # почему выбран участок (набор площадок построителя)
 	var demo: Array = []
 	for pair in str(args.get("demo", "")).split(";", false):
 		var xz := pair.split(",")
 		demo.append(Vector2(float(xz[0]), float(xz[1])))
 	var T := TrailElement.Profile
-	site.demo = {title = "Трасса участка", kind = "mountain", width = 4.0, surface = RoadSurface.DIRT, points = demo,
+	# Без --demo площадка остаётся без демонстрационной трассы (только данные для построителя)
+	site.demo = {} if demo.is_empty() else {title = "Трасса участка", kind = "mountain", width = 4.0, surface = RoadSurface.DIRT, points = demo,
 		elements = [{profile = T.ROLLER, station = 40.0, length = 8.0, height = 0.5}, {profile = T.TABLETOP, station = 85.0, length = 14.0, height = 0.7}]}
 	print("Участок: рабочий %s, запас %d, origin %s, клеток %s; путей %d кусков, сооружений %d, лент рек %d, патчей %d, текстура %s; %d мс" % [
 		rect, margin, site.origin, site.size, site.trails.size(), site.structures.size(), site.ribbons.size(), site.patches.size(),
@@ -196,6 +202,93 @@ func _list(w: WorldData) -> void:
 	rows.sort_custom(func(a: Array, b: Array) -> bool: return a[1].road + a[1].trail > b[1].road + b[1].trail)
 	for row in rows.slice(0, 40):
 		print("блок %s (клетки %s): дорога %d, тропа %d, горная %d; высота %.2f, биом %d, до воды %.0f" % [row[0], row[0] * 32, row[1].road, row[1].trail, row[1].mountain, row[2], row[3], row[4]])
+
+
+## Характеристики местности окон side × side клеток (шаг side/2) в стартовой области с запасом margin — для выбора
+## площадок набора ДО запуска построителя: перепад, уклон клеток (средний, 90-й процентиль, доли круче 15 и 30 %),
+## наклон плоскости окна и неровность вокруг неё (косогор — большой наклон при малой неровности), доли воды и путей,
+## сооружения. Только печать; построитель трасс не вызывается.
+func _scan(w: WorldData, h: Heightfield, side: int, margin: int) -> void:
+	var area := w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H)
+	var tile := GameConfig.TILE
+	var mask := w.path_mask
+	print("окно x,z | перепад м | уклон ср / p90 % | >15 % / >30 % доля | плоскость % / неровность м | вода / пути доля | сооружений")
+	var z0 := area.position.y + margin
+	while z0 + side + margin <= area.end.y:
+		var x0 := area.position.x + margin
+		while x0 + side + margin <= area.end.x:
+			var lo := INF
+			var hi := -INF
+			var slopes := PackedFloat32Array()
+			var wet := 0
+			var paths := 0
+			# плоскость z = a + bx·x + bz·z методом наименьших квадратов (центрированные координаты)
+			var sx := 0.0
+			var sz := 0.0
+			var sxx := 0.0
+			var szz := 0.0
+			var sxz := 0.0
+			var sy := 0.0
+			var sxy := 0.0
+			var szy := 0.0
+			var n := 0
+			for z in range(z0, z0 + side):
+				for x in range(x0, x0 + side):
+					var i := z * w.W + x
+					var y := h.hv[i]
+					lo = minf(lo, y)
+					hi = maxf(hi, y)
+					var gx := (h.hv[i + 1] - h.hv[i - 1]) / (2.0 * tile)
+					var gz := (h.hv[i + w.W] - h.hv[i - w.W]) / (2.0 * tile)
+					slopes.append(sqrt(gx * gx + gz * gz))
+					wet += int(h.water_level[i] != -INF)
+					paths += int(mask.size() == w.N and mask[i] != 0)
+					var u := float(x - x0) * tile
+					var v := float(z - z0) * tile
+					sx += u; sz += v; sxx += u * u; szz += v * v; sxz += u * v; sy += y; sxy += u * y; szy += v * y
+					n += 1
+			var mu := sx / n
+			var mv := sz / n
+			var my := sy / n
+			var cuu := sxx / n - mu * mu
+			var cvv := szz / n - mv * mv
+			var cuv := sxz / n - mu * mv
+			var cuy := sxy / n - mu * my
+			var cvy := szy / n - mv * my
+			var det := cuu * cvv - cuv * cuv
+			var bx := (cuy * cvv - cvy * cuv) / det
+			var bz := (cvy * cuu - cuy * cuv) / det
+			var resid := 0.0
+			for z in range(z0, z0 + side):
+				for x in range(x0, x0 + side):
+					var e := h.hv[z * w.W + x] - (my + bx * (float(x - x0) * tile - mu) + bz * (float(z - z0) * tile - mv))
+					resid += e * e
+			var sorted := slopes.duplicate()
+			sorted.sort()
+			var mean := 0.0
+			var steep := 0
+			var cliff := 0
+			for s in slopes:
+				mean += s
+				steep += int(s > 0.15)
+				cliff += int(s > 0.30)
+			# сооружения, задевающие участок с запасом (как TrailSite.cut); разрезанное границей — участок не вырезать (-1)
+			var box := Rect2(Vector2(x0 - margin, z0 - margin) * tile, Vector2(side + 2 * margin, side + 2 * margin) * tile)
+			var structures := 0
+			for s: Dictionary in h.structures:
+				var r: float = s.half + RoadBed.PIN + RoadBed.PIN_FADE + Heightfield.TUNNEL_WALL + tile
+				var corner := Vector2(minf(s.ax, s.bx), minf(s.az, s.bz)) - Vector2.ONE * r
+				var foot := Rect2(corner, Vector2(maxf(s.ax, s.bx), maxf(s.az, s.bz)) + Vector2.ONE * r - corner)
+				if not foot.intersects(box): continue
+				if not box.encloses(foot):
+					structures = -1
+					break
+				structures += 1
+			print("%d,%d | %.1f | %.1f / %.1f | %.2f / %.2f | %.1f / %.2f | %.3f / %.3f | %d" % [x0, z0, hi - lo,
+				mean / n * 100.0, sorted[int(n * 0.9)] * 100.0, float(steep) / n, float(cliff) / n,
+				Vector2(bx, bz).length() * 100.0, sqrt(resid / n), float(wet) / n, float(paths) / n, structures])
+			x0 += side / 2
+		z0 += side / 2
 
 
 func _args() -> Dictionary:
