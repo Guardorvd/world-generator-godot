@@ -57,6 +57,8 @@ var structures := Node3D.new()
 var _look := ""
 ## Last run of the line builder (TrailRouter), successful or refused; shown in F3 while its line is on the site.
 var line_result: TrailRouter
+## Last automatic choice of the place (TrailPicker); null after a manual line.
+var pick_result: TrailPicker
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -171,6 +173,7 @@ func _ready() -> void:
 	editor.reload_requested.connect(reload_sources)
 	editor.requirement_changed.connect(func(grade: float) -> void: set_grade_requirement(grade / 100.0))
 	editor.line_requested.connect(build_line)
+	editor.find_requested.connect(find_trail)
 	editor.numbers.required_grade.value = grade_requirement * 100.0
 	set_overview(false)
 	get_viewport().size_changed.connect(_place_editor)
@@ -252,31 +255,79 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 ## (TrailRouter), then the usual transactional replacement with that build. A refusal or an unmet requirement
 ## keeps the previous route and scene. `values` — the route_* numbers of the panel.
 func build_line(values: Dictionary) -> bool:
+	var pressed := Time.get_ticks_usec()
 	var site := Fixture.site()
 	if site == null:
 		show_message("Площадка не открыта: " + Fixture.site_error)
 		return false
-	var request := {start = Vector2(values.route_start_x, values.route_start_z), finish = Vector2(values.route_finish_x, values.route_finish_z),
-		width = values.route_width, grade = values.route_grade / 100.0, max_cut = values.route_cut, max_fill = values.route_fill,
-		min_radius = values.route_radius, budget = int(values.route_budget * 1000.0)}
+	var request := _line_requirements(values)
+	request.merge({start = Vector2(values.route_start_x, values.route_start_z), finish = Vector2(values.route_finish_x, values.route_finish_z),
+		budget = int(values.route_budget * 1000.0)})
 	var result := TrailRouter.build(site, request)
 	line_result = result
+	pick_result = null
 	editor.line_report.text = result.summary()
 	if not result.accepted:
 		show_message("Линия не построена, прежняя трасса сохранена: " + result.reason)
 		return false
+	if not _apply_line(result, pressed): return false
+	editor.line_report.text = result.summary() + "\n" + _line_time()
+	show_message("Линия построена: %.0f м · от нажатия до сцены %.0f мс" % [result.stats.length, build_timings.total_ms])
+	return true
+
+## Automatic choice of the place (TrailPicker over the same TrailRouter): the panel's requirements, length range and
+## minimal descent; no coordinates. A refusal keeps the previous route; the requirements are never relaxed.
+func find_trail(values: Dictionary) -> bool:
+	var pressed := Time.get_ticks_usec()
+	var site := Fixture.site()
+	if site == null:
+		show_message("Площадка не открыта: " + Fixture.site_error)
+		return false
+	var request := _line_requirements(values)
+	request.merge({length_min = values.route_length_min, length_max = values.route_length_max, min_drop = values.route_drop})
+	var picked := TrailPicker.find(site, request)
+	pick_result = picked
+	line_result = picked.router
+	editor.line_report.text = picked.summary()
+	if not picked.accepted:
+		show_message("Трасса не найдена, прежняя трасса сохранена")
+		return false
+	if not _apply_line(picked.router, pressed): return false
+	for pair: Array in [["route_start_x", picked.start.x], ["route_start_z", picked.start.y], ["route_finish_x", picked.finish.x], ["route_finish_z", picked.finish.y]]:
+		editor.numbers[pair[0]].set_value_no_signal(pair[1])
+	editor.line_report.text = picked.summary() + "\n" + _line_time()
+	show_message("Трасса найдена: %.0f м, вниз %.1f м · от нажатия до сцены %.0f мс" % [picked.router.stats.length, picked.router.stats.drop, build_timings.total_ms])
+	return true
+
+func _line_requirements(values: Dictionary) -> Dictionary:
+	return {width = values.route_width, grade = values.route_grade / 100.0, max_cut = values.route_cut, max_fill = values.route_fill,
+		min_radius = values.route_radius}
+
+## Replace the scene with the builder's own full build (not prepared again). The stage times of that build stay in
+## the builder's time; the total is measured once, from the press to the ready scene.
+func _apply_line(result: TrailRouter, pressed: int) -> bool:
+	var builder_ms := (Time.get_ticks_usec() - pressed) / 1000.0
 	var previous := ground_kind
 	ground_kind = "site"
 	# The finished surface is judged by the line's own requirement; the panel shows it.
-	grade_requirement = request.grade
-	editor.numbers.required_grade.set_value_no_signal(request.grade * 100.0)
+	grade_requirement = result.request.grade
+	editor.numbers.required_grade.set_value_no_signal(result.request.grade * 100.0)
 	if not rebuild([result.definition] as Array[TrailDefinition], -1.0, result.prepared):
 		ground_kind = previous
 		return false
 	_draw_line(result)
 	set_overview(true)
-	show_message("Линия построена: %.0f м за %.0f мс (поиск %.0f, сборка %.0f)" % [result.stats.length, result.stats.total_ms, result.stats.search_ms, result.stats.build_ms])
+	build_timings.builder_ms = builder_ms
+	build_timings.total_ms = (Time.get_ticks_usec() - pressed) / 1000.0
 	return true
+
+## Time from the press to the ready scene: the builder (search, estimate, full build) plus the scene (mesh, objects,
+## survey, apply), each counted once.
+func _line_time() -> String:
+	if not build_timings.has("builder_ms"): return ""
+	return "От нажатия до готовой сцены %.0f мс: построитель %.0f · сцена %.0f (меш %.0f, анализ %.0f, применение %.0f)" % [
+		build_timings.total_ms, build_timings.builder_ms, build_timings.total_ms - build_timings.builder_ms,
+		build_timings.get("mesh_ms", 0.0), build_timings.get("survey_ms", 0.0), build_timings.get("apply_ms", 0.0)]
 
 ## The found line over the finished surface (cyan), its ends and, faint, the straight between them.
 func _draw_line(result: TrailRouter) -> void:
@@ -610,7 +661,8 @@ func _shaping_report() -> String:
 
 func _line_report() -> String:
 	if line_result == null or routes[lane].id != "site_route": return ""
-	return "\nПостроитель линии:\n" + line_result.summary()
+	if pick_result != null: return "\nАвтовыбор трассы:\n" + pick_result.summary() + "\n" + _line_time()
+	return "\nПостроитель линии:\n" + line_result.summary() + "\n" + _line_time()
 
 func _survey_report() -> String:
 	var survey: TrailSurvey = surveys.get(routes[lane].id)

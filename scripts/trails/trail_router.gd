@@ -20,6 +20,8 @@ extends RefCounted
 ##    поверхности (TrailSurvey). Неполная проверка — не соответствие. Любой отказ — с причиной; вызывающий сохраняет
 ##    прежнюю трассу.
 ## Одинаковые входные данные дают одинаковый результат: случайности нет, порядок обхода фиксирован.
+## Этапы доступны по отдельности (setup → begin → candidate → complete): ими пользуется автоматический выбор места
+## (TrailPicker), который выдаёт каждой паре только остаток общего бюджета.
 
 const GRID := 2.0            # шаг сетки поиска, м
 const SAMPLE := 1.0          # шаг точек готовой линии, м
@@ -54,7 +56,7 @@ var survey: TrailSurvey
 var straight := {}       ## прямая между точками: {ok, length, problems}
 var checks: Array[Dictionary] = [] ## {name, state: ok / fail / incomplete, detail}
 var stats := {expansions = 0, searches = 0, repairs = 0, builds = 0, search_ms = 0.0, geometry_ms = 0.0, estimate_ms = 0.0,
-	build_ms = 0.0, total_ms = 0.0}
+	build_ms = 0.0, total_ms = 0.0, prepare_ms = 0.0, prepare_reused = false, prepare_cost_ms = 0.0}
 var notes := PackedStringArray() ## ход построения: попытки, причины исправлений
 
 var _site: TrailSite
@@ -75,6 +77,13 @@ var _cap := 0.0                     # предел уклона естестве
 var _cross_cap := 0.0
 var _deadline := 0
 var _shape: TrailShaping
+var _s := 0                         # узлы старта и финиша
+var _t := 0
+var _budget := 0                    # остаток раскрытий
+var _attempts := 0                  # остаток попыток поиска (1 + исправления)
+var _shaped := {}                   # геометрия текущего кандидата
+## Данные пригодности последней площадки и ширины: сетка, запреты, высоты, области (см. setup).
+static var _prepared := {}
 
 
 ## Построить линию на площадке. request — DEFAULTS (start, finish — локальные метры площадки).
@@ -93,17 +102,41 @@ func _refuse(where: String, why: String) -> void:
 	notes.append("Отказ (%s): %s" % [where, why])
 
 
+## Ручное построение между двумя точками: подготовка, кандидат, полная сборка; после неудачной сборки — ограниченное
+## исправление и новый кандидат.
 func _run(site: TrailSite, req: Dictionary) -> void:
+	if not setup(site, req) or not begin(): return
+	while true:
+		if not candidate(): return
+		if complete(): return
+		var failed := _failed_checks()
+		if survey.level() == "exceeded" and stats.builds < request.builds and _attempts > 0:
+			var at: Array = []
+			for run: Dictionary in survey.exceeded:
+				for k in 5: at.append(definition.point_at(lerpf(run.from, run.to, k / 4.0)))
+			notes.append("Сборка %d: %s" % [stats.builds, failed])
+			found = false
+			if not _repair(_attempts, at, "проверка", failed): return
+			continue
+		_refuse("проверка", failed)
+		return
+
+
+## Этап 0: требования и данные пригодности площадки (запреты, высоты, области) — общие для любых точек.
+## Данные пригодности считаются один раз на площадку и ширину (static _prepared) и затем переиспользуются:
+## stats.prepare_ms — время, потраченное в этом вызове (0 при повторном использовании), prepare_reused, prepare_cost_ms —
+## сколько их подготовка стоила, когда считалась.
+func setup(site: TrailSite, req: Dictionary) -> bool:
 	request = DEFAULTS.duplicate()
 	request.merge(req, true)
 	_deadline = Time.get_ticks_msec() + int(request.timeout_ms)
 	if site == null:
 		_refuse("входные данные", "площадка не открыта")
-		return
+		return false
 	var bad := _validate_request()
 	if not bad.is_empty():
 		_refuse("входные данные", bad)
-		return
+		return false
 	_site = site
 	_ground_h = site.surface()
 	_half = request.width * 0.5
@@ -115,59 +148,83 @@ func _run(site: TrailSite, req: Dictionary) -> void:
 	_shape.end_fade = 4.0                     # концы линии — заданные точки на естественной земле
 	_cap = request.grade * SEARCH_SLACK
 	_cross_cap = clampf(request.max_cut / maxf(0.1, (1.0 - _shape.side_follow) * _half), 0.3, 1.0)
-	_setup_grid()
+	var started := Time.get_ticks_usec()
+	var key := "%d|%.3f" % [site.get_instance_id(), request.width]
+	stats.prepare_reused = _prepared.get("key", "") == key
+	if not stats.prepare_reused:
+		_setup_grid()
+		_prepared = {key = key, w = _w, h = _h, origin = _origin, lo = _lo, hi = _hi, raw = _raw, mean = _mean, block = _block,
+			cost = _cost.duplicate(), paths = _paths, path_cells = _path_cells, area = PackedInt32Array(), cost_ms = 0.0}
+	else:
+		for name: String in ["w", "h", "origin", "lo", "hi", "raw", "mean", "block", "paths", "path_cells"]: set("_" + name, _prepared[name])
+		_cost = (_prepared.cost as PackedFloat32Array).duplicate() # штрафы и закрытые концы — только этого поиска
+	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
+	if not stats.prepare_reused: _prepared.cost_ms = stats.prepare_ms
+	stats.prepare_cost_ms = _prepared.cost_ms
+	_budget = int(request.budget)
+	_attempts = int(request.repairs) + 1
+	return true
+
+
+## Этап 1: заданные старт и финиш — свободны, не слишком близки, в одной области, с выходом не круче требования.
+func begin() -> bool:
 	for end: Array in [["старт", request.start], ["финиш", request.finish]]:
 		var cause := blocked(end[1])
 		if cause != Block.FREE:
 			_refuse("входные данные", "%s (%.0f, %.0f) — запрещённое место: %s" % [end[0], end[1].x, end[1].y, BLOCK_NAMES[cause]])
-			return
-	var s := _free_node(request.start)
-	var t := _free_node(request.finish)
+			return false
+	_s = _free_node(request.start)
+	_t = _free_node(request.finish)
 	if request.start.distance_to(request.finish) < 4.0 * request.min_radius:
 		_refuse("входные данные", "старт и финиш ближе %.0f м (4 минимальных радиуса)" % (4.0 * request.min_radius))
-		return
+		return false
 	straight = _judge_straight()
 	notes.append("Прямая %.0f м: %s" % [straight.length, "пригодна" if straight.ok else "непригодна — " + "; ".join(straight.problems)])
-	if not _connected(s, t):
+	var area := areas()
+	if area[_s] < 0 or area[_s] != area[_t]:
 		_refuse("поиск", "старт и финиш разделены водой, мостом с защитной зоной или существующим путём: переправы и примыкания в этой версии не строятся")
-		return
+		return false
 	# Концы линии лежат на естественной земле (полотно сходит на нет за end_fade): выходить из точки можно только туда,
 	# где сама земля не круче требования
-	for end: Array in [["старта", request.start, s], ["финиша", request.finish, t]]:
+	for end: Array in [["старта", request.start], ["финиша", request.finish]]:
 		if _close_steep_end(end[1]) == 0:
 			_refuse("входные данные", "у %s (%.0f, %.0f) земля круче %.0f%% во всех направлениях: конец линии не формируется" % [end[0], end[1].x, end[1].y, request.grade * 100.0])
-			return
-	var budget: int = request.budget
-	var attempts: int = request.repairs + 1
-	while attempts > 0:
-		attempts -= 1
+			return false
+	return true
+
+
+## Этап 2: поиск и предварительная оценка без запекания земли. true — кандидат в definition (found), иначе отказ.
+## Тратит раскрытия и попытки исправления из request.budget / request.repairs.
+func candidate() -> bool:
+	while _attempts > 0:
+		_attempts -= 1
 		if Time.get_ticks_msec() > _deadline:
 			_refuse("поиск", "таймаут %.0f с" % (request.timeout_ms / 1000.0))
-			return
+			return false
 		var ground := _search_ground()
 		var finder := Pathfinder.new(_w, _h, ground)
 		finder.set_corridor(ground, _no_water(), _zeros(), _half / GRID)
 		finder.max_cross_grade = _cross_cap
-		finder.search_budget = budget
+		finder.search_budget = _budget
 		var started := Time.get_ticks_usec()
-		var path := finder.find_path(_cost, s, t, CLIMB, _cap)
+		var path := finder.find_path(_cost, _s, _t, CLIMB, _cap)
 		stats.search_ms += (Time.get_ticks_usec() - started) / 1000.0
 		stats.searches += 1
-		stats.expansions += budget - finder.search_budget
-		budget = finder.search_budget
+		stats.expansions += _budget - finder.search_budget
+		_budget = finder.search_budget
 		finder.release()
 		if path.is_empty():
-			if budget == 0:
+			if _budget == 0:
 				_refuse("поиск", "исчерпан бюджет поиска: %d раскрытий" % request.budget)
 			else:
 				_refuse("поиск", "по местности нет пути с уклоном земли до %.0f%% (требование %.0f%% и выемка/насыпь) и поперечным до %.0f%% в обход запретных мест" % [_cap * 100.0, request.grade * 100.0, _cross_cap * 100.0])
-			return
+			return false
 		started = Time.get_ticks_usec()
 		var shaped := _polish(path)
 		stats.geometry_ms += (Time.get_ticks_usec() - started) / 1000.0
 		if shaped.has("error"):
 			notes.append("Поиск %d: %s" % [stats.searches, shaped.error])
-			if not _repair(attempts, [shaped.at], "геометрия", shaped.error): return
+			if not _repair(_attempts, [shaped.at], "геометрия", shaped.error): return false
 			continue
 		var d := _definition(shaped.points)
 		started = Time.get_ticks_usec()
@@ -183,36 +240,33 @@ func _run(site: TrailSite, req: Dictionary) -> void:
 				if where.size() < 3: where.append("%.0f–%.0f м" % [run.from, run.to])
 			var why := "оценка уклона полотна до %.0f%% при требовании %.0f%% на %s из %.0f м (выемки/насыпи не хватает)" % [estimate.peak * 100.0, request.grade * 100.0, ", ".join(where), estimate.length]
 			notes.append("Поиск %d: %s" % [stats.searches, why])
-			if not _repair(attempts, at, "оценка", why): return
+			if not _repair(_attempts, at, "оценка", why): return false
 			continue
 		found = true
 		definition = d
-		if stats.builds >= request.builds:
-			_refuse("сборка", "исчерпан лимит полных сборок (%d)" % request.builds)
-			return
-		started = Time.get_ticks_usec()
-		prepared = _site.prepare([d] as Array[TrailDefinition])
-		stats.builds += 1
-		if not prepared.errors.is_empty():
-			stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
-			_refuse("сборка", "; ".join(prepared.errors))
-			return
-		survey = TrailSurvey.measure(prepared.heights, d, request.grade)
-		stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
-		_judge(shaped)
-		if accepted: return
-		var failed := _failed_checks()
-		if survey.level() == "exceeded" and stats.builds < request.builds and attempts > 0:
-			var at: Array = []
-			for run: Dictionary in survey.exceeded:
-				for k in 5: at.append(d.point_at(lerpf(run.from, run.to, k / 4.0)))
-			notes.append("Сборка %d: %s" % [stats.builds, failed])
-			found = false
-			if not _repair(attempts, at, "проверка", failed): return
-			continue
-		_refuse("проверка", failed)
-		return
+		_shaped = shaped
+		return true
 	_refuse("поиск", "исчерпаны попытки исправления (%d)" % request.repairs)
+	return false
+
+
+## Этап 3: полная сборка кандидата (TrailSite.prepare, не больше request.builds) и проверка готовой поверхности.
+## true — все проверяемые требования выполнены (accepted).
+func complete() -> bool:
+	if stats.builds >= request.builds:
+		_refuse("сборка", "исчерпан лимит полных сборок (%d)" % request.builds)
+		return false
+	var started := Time.get_ticks_usec()
+	prepared = _site.prepare([definition] as Array[TrailDefinition])
+	stats.builds += 1
+	if not prepared.errors.is_empty():
+		stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
+		_refuse("сборка", "; ".join(prepared.errors))
+		return false
+	survey = TrailSurvey.measure(prepared.heights, definition, request.grade)
+	stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
+	_judge(_shaped)
+	return accepted
 
 
 func _validate_request() -> String:
@@ -362,8 +416,9 @@ func _zeros() -> PackedByteArray:
 	return out
 
 
-## Запретить узлы у конца, к которым от него земля круче требования; число оставшихся разрешённых узлов у конца.
-func _close_steep_end(p: Vector2) -> int:
+## Запретить узлы у конца, к которым от него земля круче требования (close = false — только посчитать); число
+## оставшихся разрешённых узлов у конца.
+func _close_steep_end(p: Vector2, close := true) -> int:
 	var open := 0
 	var r := ceili(_end_zone() / GRID)
 	var c := _node_at(p)
@@ -376,7 +431,7 @@ func _close_steep_end(p: Vector2) -> int:
 			var d := _node_point(i).distance_to(p)
 			if d > _end_zone() or _cost[i] == INF: continue
 			if d > GRID * 0.75 and _end_grade(p, _node_point(i)) > request.grade * END_SHARE:
-				_cost[i] = INF
+				if close: _cost[i] = INF
 			else:
 				open += int(d > GRID * 0.75)
 	return open
@@ -390,29 +445,44 @@ func _end_grade(end: Vector2, p: Vector2) -> float:
 	return absf(mean_at(p) - mean_at(end)) / maxf(0.1, end.distance_to(p))
 
 
-## Связность разрешённых узлов (без уклона): отличает «разделены водой/путём» от «слишком круто».
-func _connected(s: int, t: int) -> bool:
-	var seen := PackedByteArray()
-	seen.resize(_w * _h)
-	var queue := PackedInt32Array([s])
-	seen[s] = 1
-	var head := 0
-	while head < queue.size():
-		var c := queue[head]
-		head += 1
-		if c == t: return true
-		var cx := c % _w
-		var cz := c / _w
-		for k in 8:
-			var nx := cx + Grid.DX[k]
-			var nz := cz + Grid.DY[k]
-			if nx < 0 or nz < 0 or nx >= _w or nz >= _h: continue
-			var n := nz * _w + nx
-			if seen[n] != 0 or _cost[n] == INF: continue
-			if k >= 4 and (_cost[cz * _w + nx] == INF or _cost[nz * _w + cx] == INF): continue
-			seen[n] = 1
-			queue.append(n)
-	return false
+## Связные области разрешённых узлов (без уклона): номер области узла, -1 — запрещён. Отличает «разделены водой/путём»
+## от «слишком круто»; считается один раз вместе с данными пригодности.
+func areas() -> PackedInt32Array:
+	var area: PackedInt32Array = _prepared.area
+	if not area.is_empty(): return area
+	var base: PackedFloat32Array = _prepared.cost
+	area.resize(_w * _h)
+	area.fill(-1)
+	var label := 0
+	var queue := PackedInt32Array()
+	for start in _w * _h:
+		if area[start] >= 0 or base[start] == INF: continue
+		queue.clear()
+		queue.append(start)
+		area[start] = label
+		var head := 0
+		while head < queue.size():
+			var c := queue[head]
+			head += 1
+			var cx := c % _w
+			var cz := c / _w
+			for k in 8:
+				var nx := cx + Grid.DX[k]
+				var nz := cz + Grid.DY[k]
+				if nx < 0 or nz < 0 or nx >= _w or nz >= _h: continue
+				var n := nz * _w + nx
+				if area[n] >= 0 or base[n] == INF: continue
+				if k >= 4 and (base[cz * _w + nx] == INF or base[nz * _w + cx] == INF): continue
+				area[n] = label
+				queue.append(n)
+		label += 1
+	_prepared.area = area
+	return area
+
+
+## Сколько узлов у точки p (в зоне конца), к которым земля от неё не круче требования; без изменения стоимости.
+func end_open(p: Vector2) -> int:
+	return _close_steep_end(p, false)
 
 
 ## Штраф стоимости у мест, не прошедших оценку, и следующая попытка; false — попыток не осталось (отказ записан).
@@ -727,6 +797,12 @@ func _failed_checks() -> String:
 	return "; ".join(out)
 
 
+## Подготовка данных пригодности: посчитана сейчас (входит во «всего») или взята из памяти (не входит, указана цена).
+static func prepare_text(s: Dictionary) -> String:
+	if s.get("prepare_reused", false): return "данные площадки из памяти (готовились %.0f мс ранее)" % s.get("prepare_cost_ms", 0.0)
+	return "подготовка площадки %.0f мс" % s.get("prepare_ms", 0.0)
+
+
 ## Отчёт для лаборатории: найден ли путь, выполнены ли требования, что не проверяется, цифры.
 func summary() -> String:
 	var lines := PackedStringArray()
@@ -741,8 +817,8 @@ func summary() -> String:
 		lines.append("Длина %.0f м · перепад %.1f м · набор %.1f / сброс %.1f м · уклон до %.1f%% · земля %.0f / %.0f м³" % [
 			stats.length, stats.drop, stats.climb, stats.descent, stats.peak_grade * 100.0, stats.cut_m3, stats.fill_m3])
 	lines.append("Раскрытий %d из %d · поисков %d · исправлений %d · сборок %d" % [stats.expansions, request.get("budget", 0), stats.searches, stats.repairs, stats.builds])
-	lines.append("Время: поиск %.0f мс · геометрия %.0f · оценка %.0f · полная сборка %.0f · всего %.0f мс" % [
-		stats.search_ms, stats.geometry_ms, stats.estimate_ms, stats.build_ms, stats.total_ms])
+	lines.append("Время: %s · поиск %.0f мс · геометрия %.0f · оценка %.0f · полная сборка %.0f · всего %.0f мс" % [
+		prepare_text(stats), stats.search_ms, stats.geometry_ms, stats.estimate_ms, stats.build_ms, stats.total_ms])
 	var unchecked := PackedStringArray(TrailSurvey.UNCHECKED)
 	unchecked.append_array(UNCHECKED)
 	lines.append("Не проверяется: " + ", ".join(unchecked))

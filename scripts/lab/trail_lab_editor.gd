@@ -13,6 +13,8 @@ signal close_requested
 signal requirement_changed(grade: float)
 ## Построить линию по рельефу на сохранённом участке: числа route_* панели (метры участка, %, тыс. раскрытий).
 signal line_requested(values: Dictionary)
+## Найти место для трассы автоматически: те же числа route_* (координаты не используются).
+signal find_requested(values: Dictionary)
 var line_report := Label.new()
 var course_choice := OptionButton.new()
 var kind_choice := OptionButton.new()
@@ -112,6 +114,26 @@ func _ready() -> void:
 			if key.begins_with("route_"): values[key] = numbers[key].value
 		line_requested.emit(values))
 	line_box.add_child(build_line)
+	var auto_note := Label.new()
+	auto_note.theme_type_variation = "HintLabel"
+	auto_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	auto_note.text = "«Найти трассу» сам выбирает старт выше финиша по ширине, уклону, радиусу и земляным работам выше и по длине и перепаду ниже; координаты старта и финиша не используются."
+	line_box.add_child(auto_note)
+	for spec: Array in [["route_length_min", "Длина от, м", 24.0, 400.0, 5.0], ["route_length_max", "Длина до, м", 24.0, 400.0, 5.0],
+			["route_drop", "Перепад вниз от, м", 0.0, 60.0, 0.5]]:
+		_add_number(line_box, spec)
+	numbers.route_length_min.value = TrailPicker.DEFAULTS.length_min
+	numbers.route_length_max.value = TrailPicker.DEFAULTS.length_max
+	numbers.route_drop.value = TrailPicker.DEFAULTS.min_drop
+	var find_trail := Button.new()
+	find_trail.text = "Найти трассу"
+	find_trail.tooltip_text = "Выбрать старт и финиш на участке, построить одну линию и проверить её. Требования не ослабляются; при отказе остаётся прежняя трасса"
+	find_trail.pressed.connect(func() -> void:
+		var values := {}
+		for key: String in numbers:
+			if key.begins_with("route_"): values[key] = numbers[key].value
+		find_requested.emit(values))
+	line_box.add_child(find_trail)
 	line_report.theme_type_variation = "HintLabel"
 	line_report.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	line_report.text = "Линия ещё не строилась"
