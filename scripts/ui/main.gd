@@ -663,6 +663,11 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	loaded.timings.ready_queue_ms = (Time.get_ticks_usec() - int(loaded.timings.get("ready_queued_us", Time.get_ticks_usec()))) / 1000.0
 	loaded.timings.erase("ready_queued_us")
 	gen_thread.wait_to_finish()
+	if not loaded.error.is_empty():
+		busy = false
+		_show("menu")
+		_message("Мир не подготовлен", loaded.error)
+		return
 	if not _pending_save.is_empty() and not GameWorld.can_restore(_pending_save, loaded.world):
 		busy = false
 		_show("menu")

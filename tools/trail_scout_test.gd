@@ -22,14 +22,14 @@ func _initialize() -> void:
 ## Bounded budgets on the same area: no build left for elements -> the checked base line stays; no time -> nothing
 ## is searched and the result is a budget verdict; both are normal results, and the shared limits are never exceeded.
 func tight(h: Heightfield, name: String) -> void:
-	var one := TrailScout.find(h.world, h, {builds = 1})
+	var one := TrailScout.find(h.world, h, {roads = false, builds = 1})
 	check(one.accepted and one.flow.variant == "базовая линия" and one.flow.stats.builds == 0 and one.stats.builds <= 1,
 		"%s: one shared build — the base line is kept, elements get no build (builds %d, flow builds %d, variant %s)" % [
 		name, one.stats.builds, one.flow.stats.builds if one.flow != null else -1, one.flow.variant if one.flow != null else "-"])
-	var none := TrailScout.find(h.world, h, {timeout_ms = 1})
+	var none := TrailScout.find(h.world, h, {roads = false, timeout_ms = 1})
 	check(not none.accepted and none.verdict == "budget" and none.stats.searched == 0 and none.stats.builds == 0 and none.stats.expansions == 0,
 		"%s: no time left after the cheap evaluation — nothing searched, verdict %s, %.0f ms" % [name, none.verdict, none.stats.total_ms])
-	var few := TrailScout.find(h.world, h, {budget = 50, repairs = 0, pairs = 1})
+	var few := TrailScout.find(h.world, h, {roads = false, budget = 50, repairs = 0, pairs = 1})
 	check(few.stats.expansions <= 50 and few.stats.pairs <= 1 and few.stats.repairs == 0,
 		"%s: small shared limits hold (expansions %d/50, pairs %d/1), verdict %s" % [name, few.stats.expansions, few.stats.pairs, few.verdict])
 
@@ -54,7 +54,7 @@ func run() -> void:
 		var h := source.surface() # готовая поверхность участка (метровая сетка, русла) и её WorldData
 		var w := h.world
 		print("— Область «%s»: %s клеток, пути %d, сооружения %d" % [name, source.size, source.trails.size(), source.structures.size()])
-		var scout := TrailScout.find(w, h)
+		var scout := TrailScout.find(w, h, {roads = false})
 		print(scout.summary())
 		if scout.flow != null: print(scout.flow.summary())
 		var q := scout.request

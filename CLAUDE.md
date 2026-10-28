@@ -52,6 +52,7 @@
 | Автоматический выбор места трассы (`TrailPicker`), кнопка «Найти трассу» | изолированная `trail_pick_test`; при правке этапов `TrailRouter` ещё `trail_route_test` |
 | Автоматический выбор участка в области мира (`TrailScout`) | изолированная `trail_scout_test`; при правке `TrailPicker`/`TrailRouter` ещё их тесты |
 | Подключение трассы к миру (`StageTrailPlan`, запекание в `WorldLoader`, кэш плана) | `trail_world_test -- --scene --capture`: один запуск вместо `check.gd`; перед ним `trail_scout_test` |
+| Доступ трассы к дорогам (`TrailAccess`, примыкания в `TrailRouter`, отбор пар в `TrailPicker`) | изолированная `trail_access_test`; при правке этапов ещё `trail_route_test` и `trail_pick_test` |
 | Элементы на найденной трассе (`TrailFlow`, профиль `calm_flow`) | изолированная `trail_flow_test`; при правке `TrailComposer` ещё `trail_lab_test` |
 | Сохранённая площадка мира в Trail Lab (`TrailSite`), сборка трассы на готовом полотне | изолированная `trail_site_test` (по файлу площадки); экспорт `trail_site_export` — только для новой площадки |
 | Движение в мире, камера, проходы мостов и туннелей (то, чего нет в `trail_lab_test`) | `feel_test` (вместо `check.gd`, без FPS; лимит 5 мин) |

@@ -10,14 +10,14 @@ extends RefCounted
 ##    мало клеток с пригодным уклоном, перепад блоков меньше требуемого. Остальное — очки: доля пригодных клеток минус
 ##    крутые, вода и пути, небольшая добавка за перепад и за дорогу рядом (предпочтение для будущего доступа; соединений
 ##    здесь не строится).
-## 3. Кандидаты — не больше CANDIDATES не пересекающихся окон по очкам; подробный поиск — только в первых `windows`.
+## 3. Кандидаты — не больше CANDIDATES окон по очкам, сдвинутых друг от друга хотя бы на полстороны; подробный поиск — только в первых `windows`.
 ## 4. Для каждого: TrailSite.cut → TrailPicker.find. Бюджеты (пары, раскрытия, исправления, сборки, таймаут) общие на всю
 ##    область, вместе с оценкой, вырезкой и элементами: окну достаётся равная доля остатка (время считается после вырезки),
 ##    сборки — весь остаток. Первая найденная трасса принимается (одна), затем TrailFlow.dress с остатком сборок и времени;
 ##    нет бюджета на элементы — остаётся проверенная базовая линия. Требования и бюджеты не ослабляются; случайности нет.
 ## Отсутствие подходящего места — обычный итог (verdict), а не ошибка.
 
-const SIDE := 48            # рабочий прямоугольник окна, клеток
+const SIDE := 48            # рабочий прямоугольник окна по умолчанию, клеток
 const MARGIN := 12          # запас данных вокруг, клеток (TrailSite.cut)
 const STEP := 24            # шаг окон при оценке, клеток
 const BLOCK := 4            # блок для высоты, клеток
@@ -30,6 +30,8 @@ const CLIFF := 0.30         # клетка круче — обрыв
 const ROAD_RING := 24       # дорога в этом кольце вокруг окна — предпочтение, клеток
 const SETTLEMENT_CLEAR := 8.0 # поселение ближе к участку с запасом на столько клеток — запрет
 const SEED := 1             # seed композиции TrailFlow
+const ROAD_MIN := 6         # доступ: клеток дорожной сети дома внутри окна не меньше (подход строится только в окне)
+const JOIN_EDGE := 3        # точки примыкания не ближе стольких клеток к краю рабочего прямоугольника
 
 const VERDICTS := {found = "трасса найдена", no_window = "места нет: ни одно окно области не прошло дешёвую оценку",
 	refused_all = "испробованные окна отклонены по требованиям", budget = "остановлено бюджетом: невозможность не доказана",
@@ -48,10 +50,16 @@ var flow: TrailFlow
 var start := Vector2.ZERO     ## мировые метры
 var finish := Vector2.ZERO
 var windows: Array[Dictionary] = [] ## кандидаты по очкам: {rect, score, ..., searched, outcome}
-var stats := {cells = 0, windows_total = 0, windows_allowed = 0, candidates = 0, searched = 0, cut_refused = 0,
+var stats := {screened = 0, nav_ms = 0.0, access_expansions = 0, access_ms = 0.0, cells = 0, windows_total = 0, windows_allowed = 0, candidates = 0, searched = 0, cut_refused = 0,
 	pairs = 0, searches = 0, expansions = 0, repairs = 0, builds = 0, eval_ms = 0.0, cut_ms = 0.0, picker_ms = 0.0,
 	flow_ms = 0.0, total_ms = 0.0}
 var rejected := {}            ## причина запрета окна -> число
+var access: TrailAccess      ## доступ принятой трассы (подход и выход): access.last — точки примыкания, повороты, длины
+var kit: Array[TrailDefinition] = [] ## принятый комплект в локальных метрах участка: подход, трасса (с элементами), выход
+var _nav: Object             # RoadNavigation без рельефа: связность дорожной сети
+var _side := SIDE
+var _home := -1              # компонента сети у дома
+var _home_mask := PackedByteArray() # клетки вершин дорожной сети дома (1): доступ строится только к ней
 
 
 static func find(w: WorldData, h: Heightfield, req := {}) -> TrailScout:
@@ -81,24 +89,39 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 	if h.hv.size() != w.N or h.water_level.size() != w.N or h.road_refinement == null:
 		_refuse("input", "мир не подготовлен: нужна поверхность после finish_paths")
 		return
-	if area.size.x < SIDE + 2 * MARGIN + 2 or area.size.y < SIDE + 2 * MARGIN + 2:
+	_side = int(request.get("side", SIDE))
+	if area.size.x < _side + 2 * MARGIN + 2 or area.size.y < _side + 2 * MARGIN + 2:
 		_refuse("input", "область %s меньше окна с запасом" % area)
 		return
+	if request.get("roads", true):
+		var started_nav := Time.get_ticks_usec()
+		_nav = preload("res://scripts/game/road_navigation.gd").new()
+		_nav.build(w)
+		var home: Variant = PlayerState.home(w)
+		_home = _nav.component_near(Vector2(home.x, home.y) * GameConfig.TILE) if home is SettlementData else -1
+		_home_mask.resize(w.N)
+		if _home >= 0:
+			for cell in _nav.component_cells(_home):
+				if cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H:
+					_home_mask[cell.y * w.W + cell.x] = 1
+		stats.nav_ms = (Time.get_ticks_usec() - started_nav) / 1000.0
 	var started := Time.get_ticks_usec()
 	var found := _evaluate(w, h)
 	stats.eval_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var picks: Array[Dictionary] = _spread(found)
 	stats.candidates = picks.size()
-	picks = picks.slice(0, request.windows)
 	if picks.is_empty():
 		_refuse("no_window", "в области %s нет окна %d × %d клеток без воды, сооружений, поселений и занятых путей с пригодным уклоном и перепадом: %s" % [
-			area, SIDE, SIDE, _rejections()])
+			area, _side, _side, _rejections()])
 		return
 	var budget_hit := false
+	var detailed := 0 # окна, в которых действительно искались пары: окно, отсеянное до поиска пар, лимит не тратит
 	for n in picks.size():
 		var pick: Dictionary = picks[n]
+		if detailed >= int(request.windows):
+			break
 		windows.append(pick)
-		var left := picks.size() - n
+		var left: int = int(request.windows) - detailed
 		var expansions_left: int = request.budget - stats.expansions
 		if Time.get_ticks_msec() >= deadline or expansions_left <= 0:
 			pick.outcome = "не искалось: общий бюджет области исчерпан"
@@ -118,20 +141,35 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 			budget_hit = true
 			continue
 		var rq := request.duplicate()
+		if _nav != null:
+			var joins := _joins(cand)
+			if joins.is_empty():
+				pick.outcome = "не искалось: нет примыкания к дорожной сети дома"
+				continue
+			var gate := TrailAccess.new()
+			gate.joins = joins
+			rq.merge({near = joins, access = gate}, true)
 		rq.merge({pairs = ceili(float(request.pairs - stats.pairs) / left), budget = expansions_left / left,
 			repairs = ceili(float(request.repairs - stats.repairs) / left), builds = request.builds - stats.builds,
 			timeout_ms = time_left / left}, true)
-		stats.searched += 1
+		stats.screened += 1
 		var p := TrailPicker.find(cand, rq)
+		if p.stats.pairs_searched > 0:
+			detailed += 1
+			stats.searched += 1
 		pick.outcome = "найдена" if p.accepted else "%s: %s" % [p.verdict, p.reason]
 		pick.verdict = p.verdict
+		pick.tried = p.tried.map(func(t: Dictionary) -> String: return "%s: %s" % [t.outcome, str(t.reason).left(160)])
 		stats.pairs += p.stats.pairs_searched
 		stats.searches += p.stats.searches
 		stats.expansions += p.stats.expansions
 		stats.repairs += p.stats.repairs
 		stats.builds += p.stats.builds
 		stats.picker_ms += p.stats.total_ms
+		stats.access_expansions += p.stats.access_expansions
+		stats.access_ms += p.stats.access_ms
 		if p.accepted:
+			access = rq.get("access")
 			accepted = true
 			window = pick.rect
 			site = cand
@@ -146,9 +184,15 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 		flow = TrailFlow.dress(site, picker.router, SEED, {builds = request.builds - stats.builds, deadline = deadline})
 		stats.flow_ms = (Time.get_ticks_usec() - started) / 1000.0
 		stats.builds += flow.stats.builds
+		kit = [] as Array[TrailDefinition]
+		if access != null:
+			kit.append(picker.router.extras[0])
+		kit.append(flow.definition)
+		if access != null:
+			kit.append(picker.router.extras[1])
 		verdict = "found"
 		return
-	_refuse("budget" if budget_hit else "refused_all", "искалось окон: %d из %d кандидатов" % [stats.searched, stats.candidates])
+	_refuse("budget" if budget_hit else "refused_all", "искалось окон: %d (просмотрено %d из %d кандидатов)" % [stats.searched, stats.screened, stats.candidates])
 
 
 ## Один проход по клеткам области и оценка всех окон. Возвращает разрешённые окна с очками.
@@ -164,10 +208,12 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 	var cliff := PackedInt32Array()
 	var wet := PackedInt32Array()
 	var path := PackedInt32Array()
+	var road := PackedInt32Array() # тропы людей и дороги (path_mask ≥ 2): к ним строится доступ
 	usable.resize(stride * (gh + 1))
 	cliff.resize(stride * (gh + 1))
 	wet.resize(stride * (gh + 1))
 	path.resize(stride * (gh + 1))
+	road.resize(stride * (gh + 1))
 	var bw := ceili(float(gw) / BLOCK)
 	var bh := ceili(float(gh) / BLOCK)
 	var block_sum := PackedFloat32Array()
@@ -183,6 +229,7 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 		var row_c := 0
 		var row_w := 0
 		var row_p := 0
+		var row_r := 0
 		var base := (grid.position.y + z) * w.W + grid.position.x
 		for x in gw:
 			var i := base + x
@@ -193,11 +240,13 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 			row_c += int(slope > CLIFF)
 			row_w += int(water[i] != -INF)
 			row_p += int(has_mask and mask[i] != 0)
+			row_r += int(_home_mask.size() == w.N and _home_mask[i] != 0)
 			var at := (z + 1) * stride + x + 1
 			usable[at] = usable[at - stride] + row_u
 			cliff[at] = cliff[at - stride] + row_c
 			wet[at] = wet[at - stride] + row_w
 			path[at] = path[at - stride] + row_p
+			road[at] = road[at - stride] + row_r
 			var b := (z / BLOCK) * bw + x / BLOCK
 			block_sum[b] += hv[i]
 			block_n[b] += 1
@@ -207,13 +256,13 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 	for s: Dictionary in h.structures:
 		struct_feet.append(TrailSite.structure_foot(s))
 	var settle_box := SETTLEMENT_CLEAR + MARGIN
-	var cells := float(SIDE * SIDE)
+	var cells := float(_side * _side)
 	var z0 := area.position.y + MARGIN
-	while z0 + SIDE + MARGIN <= area.end.y:
+	while z0 + _side + MARGIN <= area.end.y:
 		var x0 := area.position.x + MARGIN
-		while x0 + SIDE + MARGIN <= area.end.x:
+		while x0 + _side + MARGIN <= area.end.x:
 			stats.windows_total += 1
-			var rect := Rect2i(x0, z0, SIDE, SIDE)
+			var rect := Rect2i(x0, z0, _side, _side)
 			x0 += STEP
 			var local := Rect2i(rect.position - grid.position, rect.size)
 			var wet_f := _sum(wet, stride, local) / cells
@@ -241,7 +290,10 @@ func _evaluate(w: WorldData, h: Heightfield) -> Array[Dictionary]:
 				continue
 			var around := rect.grow(ROAD_RING).intersection(grid)
 			var ring := Rect2i(around.position - grid.position, around.size)
-			var road_near := maxf(0.0, _sum(path, stride, ring) - _sum(path, stride, local))
+			var road_near := maxf(0.0, _sum(road, stride, ring) - _sum(road, stride, local))
+			if _nav != null and _sum(road, stride, local) < ROAD_MIN:
+				_reject("окно: в нём нет дороги или тропы дорожной сети дома для подхода")
+				continue
 			var score: float = usable_f - cliff_f - 1.5 * wet_f - 2.0 * path_f + 0.2 * minf(1.0, relief / (3.0 * maxf(request.min_drop, 1.0))) \
 				+ 0.1 * minf(1.0, road_near / 40.0)
 			out.append({rect = rect, score = score, usable = usable_f, cliff = cliff_f, wet = wet_f, path = path_f, relief = relief,
@@ -292,7 +344,22 @@ static func _settlement(w: WorldData, box: Rect2i) -> bool:
 	return false
 
 
-## Не пересекающиеся окна по убыванию очков, не больше CANDIDATES.
+## Точки примыкания участка: вершины дорожной сети, достижимой из дома (компонента _home), внутри рабочей зоны, локальные метры.
+func _joins(cand: TrailSite) -> Array:
+	var out: Array = []
+	if _home < 0:
+		return out
+	var inner := cand.work.grow(-JOIN_EDGE)
+	for t: Dictionary in cand.trails:
+		if not RoadBed.KINDS.has(t.kind):
+			continue
+		for p: Dictionary in t.pts:
+			if inner.has_point(Vector2i(floori(p.x), floori(p.y))) 					and _nav.component_at(Vector2i(floori(p.x) + cand.origin.x, floori(p.y) + cand.origin.y)) == _home:
+				out.append(Vector2(p.x, p.y) * GameConfig.TILE)
+	return out
+
+
+## Окна по убыванию очков, сдвинутые друг от друга хотя бы на полстороны, не больше CANDIDATES.
 func _spread(ranked: Array[Dictionary]) -> Array[Dictionary]:
 	var chosen: Array[Dictionary] = []
 	for c: Dictionary in ranked:
@@ -300,7 +367,9 @@ func _spread(ranked: Array[Dictionary]) -> Array[Dictionary]:
 			break
 		var apart := true
 		for o: Dictionary in chosen:
-			if (c.rect as Rect2i).intersects(o.rect):
+			# окна различаются хотя бы на половину стороны (разные точки старта и финиша, свои точки примыкания)
+			var shift: Vector2i = (c.rect as Rect2i).position - (o.rect as Rect2i).position
+			if maxi(absi(shift.x), absi(shift.y)) < _side / 2:
 				apart = false
 				break
 		if apart:

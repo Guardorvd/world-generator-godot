@@ -1,7 +1,8 @@
 class_name StageTrailPlan
 extends RefCounted
-## Одна автоматическая велотрасса в стартовой области нового мира (шаг 1). Общий механизм тот же, что в лаборатории:
-## TrailScout → TrailPicker → TrailRouter → TrailFlow; второго построителя нет.
+## Одна автоматическая велотрасса в стартовой области нового мира (шаги 1–2): комплект из подхода от дорожной сети,
+## самой трассы и выхода обратно в сеть. Общий механизм тот же, что в лаборатории:
+## TrailScout → TrailPicker → TrailRouter (+ TrailAccess) → TrailFlow; второго построителя и второго графа нет.
 ##
 ## Порядок подготовки мира (единый результат до публикации):
 ## 1. Генерация до мест и путей (StageTrails, StageSites) — слой кэша «places».
@@ -17,15 +18,20 @@ extends RefCounted
 ## Отсутствие места — нормальный результат: статус «none» тоже сохраняется. Версия плана входит в ключ кэша
 ## (WorldCache.SCHEMA_TRAILS_VERSION): менять вместе с результатами TrailScout / TrailPicker / TrailRouter / TrailFlow.
 
-const VERSION := 1
+const VERSION := 2
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
+## Сиды, для которых применение трассы не удалось: мир перегенерируется без неё (WorldLoader, откат).
+static var skip := {}
 
 
 ## Выбрать и добавить трассу. size — сторона стартовой территории в клетках (0 — фон меню, этап пропускается).
 static func run(w: WorldData, size: int) -> void:
 	w.trail_plan = {version = VERSION, state = "none", reason = "этап не запускался"}
 	if size <= 0 or w.base_heights == null:
+		return
+	if skip.has(w.seed_text):
+		w.trail_plan.reason = "применение трассы в этом мире не удалось: мир собран без неё"
 		return
 	var started := Time.get_ticks_usec()
 	# Покрытия путей нужны полотну finish_paths; в генераторе их ставит RoadSurface.run в конце (повторно, тем же
@@ -39,14 +45,19 @@ static func run(w: WorldData, size: int) -> void:
 	var plan := {version = VERSION, state = "none", verdict = scout.verdict, reason = scout.reason, area = area,
 		stats = {surface_ms = surface_ms, total_ms = (Time.get_ticks_usec() - started) / 1000.0, scout_ms = scout.stats.total_ms,
 			eval_ms = scout.stats.eval_ms, cut_ms = scout.stats.cut_ms, picker_ms = scout.stats.picker_ms, flow_ms = scout.stats.flow_ms,
-			expansions = scout.stats.expansions, builds = scout.stats.builds, searched = scout.stats.searched}}
+			expansions = scout.stats.expansions, builds = scout.stats.builds, searched = scout.stats.searched,
+			access_expansions = scout.stats.access_expansions, access_ms = scout.stats.access_ms, nav_ms = scout.stats.nav_ms},
+		windows = scout.windows.map(func(c: Dictionary) -> Dictionary: return {rect = c.rect, score = c.score, outcome = c.outcome})}
 	if scout.accepted:
-		var definition := to_world(scout.flow.definition, scout.site)
-		var errors := TrailBuilder.append_routes(w, [definition] as Array[TrailDefinition])
+		var kit: Array[TrailDefinition] = []
+		for d in scout.kit:
+			kit.append(to_world(d, scout.site))
+		var errors := TrailBuilder.append_routes(w, kit) # проверка до изменений: при ошибке мир не тронут
 		if errors.is_empty():
 			plan.state = "found"
 			plan.reason = ""
-			plan.definition = pack(definition)
+			plan.definition = pack(kit[1])
+			plan.access = {inbound = pack(kit[0]), outbound = pack(kit[2]), info = scout.access.last}
 			plan.window = scout.window
 			plan.variant = scout.flow.variant
 		else:
@@ -59,8 +70,9 @@ static func run(w: WorldData, size: int) -> void:
 ## координатах (world_origin), поэтому поверхность не меняется от переноса.
 static func to_world(local: TrailDefinition, site: TrailSite) -> TrailDefinition:
 	var d := local.duplicate(true) as TrailDefinition
-	d.id = ID
-	d.title = TITLE
+	if d.id == "site_route":
+		d.id = ID
+		d.title = TITLE
 	var shift := site.origin_m()
 	var points := PackedVector2Array()
 	for p in local.points:
@@ -83,19 +95,22 @@ static func apply(h: Heightfield) -> Dictionary:
 		out.errors.append("версия плана трассы не совпала с кодом: трасса не запекается")
 		return out
 	var definition := unpack(plan.definition)
-	var listed := false
+	var kit: Array[TrailDefinition] = [unpack(plan.access.inbound), definition, unpack(plan.access.outbound)]
+	var listed := {}
 	for route: Dictionary in w.trails:
-		listed = listed or route.get("trail_id", "") == definition.id
-	if not listed:
-		out.errors.append("путь трассы не найден в мире: трасса не запекается")
-		return out
-	var errors := TrailBuilder.bake_elements(h, [definition] as Array[TrailDefinition])
+		listed[route.get("trail_id", "")] = true
+	for d in kit:
+		if not listed.has(d.id):
+			out.errors.append("путь «%s» не найден в мире: трасса не запекается" % d.id)
+			return out
+	var errors := TrailBuilder.bake_elements(h, kit)
 	out.variant = "основной"
 	if not errors.is_empty():
 		out.errors = errors
 		var base := definition.duplicate(true) as TrailDefinition
 		base.elements = [] as Array[TrailElement]
-		errors = TrailBuilder.bake_elements(h, [base] as Array[TrailDefinition])
+		kit[1] = base
+		errors = TrailBuilder.bake_elements(h, kit)
 		out.variant = "базовая линия"
 		if not errors.is_empty():
 			out.errors.append_array(errors)

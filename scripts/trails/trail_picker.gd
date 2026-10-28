@@ -13,6 +13,10 @@ extends RefCounted
 ##    не больше `pairs`, отличающиеся от уже взятых хотя бы на SPREAD м в сумме по старту и финишу.
 ## 4. Пары по порядку: TrailRouter.candidate (поиск + оценка без запекания) → оценка длины и перепада → полная сборка
 ##    (TrailRouter.complete) → фактические длина и перепад на готовой поверхности. При первом успехе — стоп.
+## Доступ к дорожной сети (необязательно, шаг 2): request.near — точки примыкания к дороге (локальные метры), request.access —
+## TrailAccess. Точки старта и финиша дальше near_max от ближайшей точки примыкания отсекаются, а ранжирование предпочитает
+## близкие. Для каждой пары, прошедшей оценку, access.plan строит подход к старту и выход от финиша (общий бюджет, одна
+## общая сборка), а после сборки access.verify проверяет стыки; нет доступа — пара отклонена, берётся следующая.
 ## Бюджеты (пары, раскрытия, исправления, полные сборки, таймаут) — на всю операцию: каждой паре выдаётся только
 ## остаток. Требования не ослабляются. Случайности нет: одинаковый запрос даёт одинаковый результат.
 
@@ -41,7 +45,7 @@ var finish := Vector2.ZERO
 var tried: Array[Dictionary] = []   ## пары, которые искались: {start, finish, score, outcome, reason, ...}
 var rejected := {}                  ## причина -> число (отсев точек и пар, исход поиска)
 var stats := {points = 0, points_kept = 0, pairs_considered = 0, pairs_kept = 0, pairs_searched = 0, searches = 0,
-	expansions = 0, repairs = 0, builds = 0, prepare_ms = 0.0, prepare_reused = false, prepare_cost_ms = 0.0,
+	expansions = 0, repairs = 0, builds = 0, access_expansions = 0, access_searches = 0, access_ms = 0.0, prepare_ms = 0.0, prepare_reused = false, prepare_cost_ms = 0.0,
 	select_ms = 0.0, search_ms = 0.0, build_ms = 0.0, total_ms = 0.0}
 
 
@@ -122,7 +126,8 @@ func _run(site: TrailSite, req: Dictionary) -> void:
 		rq.merge({start = pair.start, finish = pair.finish, budget = left.budget, repairs = left.repairs, builds = maxi(1, left.builds),
 			timeout_ms = maxi(1, deadline - Time.get_ticks_msec())}, true)
 		var entry := pair.duplicate()
-		var outcome := _try(r, site, rq, left.builds)
+		var outcome := _try(r, site, rq, left.builds, deadline)
+		_take_access_stats()
 		stats.searches += r.stats.searches
 		stats.expansions += r.stats.expansions
 		stats.repairs += r.stats.repairs
@@ -148,7 +153,7 @@ func _router_request() -> Dictionary:
 
 
 ## Одна пара: кандидат → оценка длины и перепада → (если остались сборки) полная сборка → факт. {kind, short, why}
-func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int) -> Dictionary:
+func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int, deadline := 0) -> Dictionary:
 	if not r.setup(site, rq) or not r.begin():
 		return {kind = "refused", short = _short(r), why = r.reason}
 	if not r.candidate():
@@ -160,6 +165,13 @@ func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int) -> 
 		return {kind = "estimate", short = "перепад меньше требуемого (оценка)", why = "оценка перепада %.1f м < %.1f м" % [e.drop, request.min_drop]}
 	if builds_left <= 0:
 		return {kind = "budget", short = "лимит полных сборок исчерпан", why = "кандидат прошёл оценку, но полных сборок не осталось (%d)" % request.builds}
+	var access: Variant = request.get("access")
+	if access != null:
+		var left := {budget = request.budget - stats.expansions - r.stats.expansions, deadline = deadline}
+		var plan: Dictionary = access.plan(r, site, left)
+		if not plan.ok:
+			return {kind = "access", short = plan.short, why = plan.why}
+		r.extras.assign(plan.extras)
 	if not r.complete():
 		return {kind = "built", short = "не прошла проверку готовой поверхности", why = r.reason if not r.reason.is_empty() else r._failed_checks()}
 	var length := r.definition.route_length()
@@ -168,7 +180,24 @@ func _try(r: TrailRouter, site: TrailSite, rq: Dictionary, builds_left: int) -> 
 		return {kind = "built", short = "фактическая длина вне диапазона", why = "длина %.0f м вне %.0f–%.0f м" % [length, request.length_min, request.length_max]}
 	if drop < request.min_drop:
 		return {kind = "built", short = "фактический перепад меньше требуемого", why = "перепад %.1f м < %.1f м" % [drop, request.min_drop]}
+	if access != null:
+		var checked: Dictionary = access.verify(r, site)
+		if not checked.ok:
+			return {kind = "access", short = checked.short, why = checked.why}
 	return {kind = "ok", short = "", why = ""}
+
+
+## Затраты доступа (его подходы ищут свои построители) — в общую работу операции и отдельной строкой.
+func _take_access_stats() -> void:
+	var access: Variant = request.get("access")
+	if access == null: return
+	var spent: Dictionary = access.take_stats()
+	stats.access_expansions += spent.expansions
+	stats.expansions += spent.expansions
+	stats.access_searches += spent.searches
+	stats.repairs += spent.repairs
+	stats.access_ms += spent.ms
+	stats.search_ms += spent.ms
 
 
 ## Короткая причина отказа построителя для сводки.
@@ -194,6 +223,9 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 	var heights := PackedFloat32Array()
 	var labels := PackedInt32Array()
 	var slopes := PackedInt32Array() # область достижимости при пределе уклона поиска (TrailRouter.reach_areas)
+	var near: Array = request.get("near", [])
+	var near_max: float = request.get("near_max", 90.0)
+	var gap := PackedFloat32Array() # расстояние до ближайшей точки примыкания к дороге (только при доступе)
 	var count := Vector2i(((hi - lo) / SPACING).floor()) + Vector2i.ONE
 	var shift := (hi - lo - Vector2(count - Vector2i.ONE) * SPACING) * 0.5 # решётка по центру зоны
 	for gz in count.y:
@@ -206,7 +238,15 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 			if probe.end_open(p) == 0:
 				_reject("точка: круче предела во все стороны")
 				continue
+			var to_road := 0.0
+			if not near.is_empty():
+				to_road = INF
+				for j: Vector2 in near: to_road = minf(to_road, p.distance_to(j))
+				if to_road > near_max:
+					_reject("точка: далеко от дорожной сети")
+					continue
 			points.append(p)
+			gap.append(to_road)
 			heights.append(probe.mean_at(p))
 			labels.append(area[probe._free_node(p)])
 			slopes.append(linked[probe._free_node(p)])
@@ -237,6 +277,18 @@ func _select(probe: TrailRouter) -> Array[Dictionary]:
 				continue
 			var target: float = (request.length_min + request.length_max) * 0.5
 			var score: float = absf(d * DETOUR - target) / target + maxf(0.0, drop / d - 0.8 * request.grade) / request.grade
+			if not near.is_empty():
+				# у обоих концов должна быть подходящая точка примыкания (по прямой старт → финиш как направлению трассы)
+				var way := (points[b] - points[a]).normalized()
+				var fit_a := INF
+				var fit_b := INF
+				for j: Vector2 in near:
+					fit_a = minf(fit_a, TrailAccess.rank_join(j, points[a], way, true, 4.0 * minf(TrailAccess.RADIUS, request.min_radius) + 2.0))
+					fit_b = minf(fit_b, TrailAccess.rank_join(j, points[b], way, false, 4.0 * minf(TrailAccess.RADIUS, request.min_radius) + 2.0))
+				if not is_finite(fit_a) or not is_finite(fit_b):
+					_reject("пара: у конца нет подходящей точки примыкания к дороге")
+					continue
+				score += 0.8 * (fit_a + fit_b) / near_max # предпочесть пары с короткими и ровными подходами
 			ranked.append({start = points[a], finish = points[b], score = score, straight = d, drop = drop, index = ranked.size()})
 	stats.pairs_kept = ranked.size()
 	ranked.sort_custom(func(x: Dictionary, y: Dictionary) -> bool: return x.score < y.score or (x.score == y.score and x.index < y.index))

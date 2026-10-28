@@ -45,6 +45,7 @@ var stats := {compose_ms = 0.0, build_ms = 0.0, builds = 0, total_ms = 0.0}
 var _site: TrailSite
 var _builds := BUILDS
 var _deadline := 0 ## 0 — no time limit
+var _extras: Array[TrailDefinition] = [] ## access routes built together with the line (TrailAccess)
 var _accepted_zones: Array[Vector2] = []
 
 
@@ -56,6 +57,7 @@ static func dress(site: TrailSite, line: TrailRouter, seed_value: int, limits :=
 	var started := Time.get_ticks_usec()
 	f._builds = mini(BUILDS, int(limits.get("builds", BUILDS)))
 	f._deadline = int(limits.get("deadline", 0))
+	f._extras.assign(limits.get("extras", line.extras if line != null else []))
 	f._run(site, line, seed_value)
 	f.stats.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return f
@@ -77,8 +79,8 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 	if line == null or not line.accepted:
 		message = "нет принятой базовой линии"
 		return
-	if _builds <= 0 or _out_of_time():
-		_keep_base("на элементы не осталось %s общего бюджета: базовая линия" % ("сборок" if _builds <= 0 else "времени"))
+	if _builds <= 0:
+		_keep_base("на элементы не осталось сборок общего бюджета: базовая линия")
 		return
 	var d := line.definition.duplicate(true) as TrailDefinition
 	d.title = line.definition.title + " · спокойный flow"
@@ -93,11 +95,14 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 	d.elements.assign(proposed)
 	d.sections.assign(composed.sections)
 	for build in _builds:
-		if build > 0 and _out_of_time():
-			_keep_base("на упрощённый вариант не осталось времени общего бюджета: базовая линия")
+		# the deadline is checked after the composition and before EVERY full build, the first one included
+		if _out_of_time():
+			_keep_base("на %s вариант не осталось времени общего бюджета: базовая линия" % ("основной" if build == 0 else "упрощённый"))
 			return
 		var started_build := Time.get_ticks_usec()
-		var got := site.prepare([d] as Array[TrailDefinition])
+		var kit: Array[TrailDefinition] = [d]
+		kit.append_array(_extras)
+		var got := site.prepare(kit)
 		stats.builds += 1
 		var problems: Array[Dictionary] = []
 		var s: TrailSurvey = null

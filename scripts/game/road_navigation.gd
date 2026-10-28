@@ -71,6 +71,27 @@ func build(w: WorldData, h: Heightfield = null) -> void:
 					_components[next] = id
 					queue.append(next)
 
+## Компонента связности вершины пути в клетке без учёта высоты (граф построен без рельефа: build(w) без Heightfield)
+## или -1, если вершины пути в этой клетке нет.
+func component_at(cell: Vector2i) -> int:
+	return int(_components.get(_cells.get(Vector3i(cell.x, cell.y, 0), -1), -1))
+
+
+## Компонента ближайшей к точке вершины сети (метры) или -1, если сети нет.
+func component_near(at: Vector2) -> int:
+	var id := nearest(at)
+	return int(_components.get(id, -1)) if id >= 0 else -1
+
+
+## Клетки вершин пути одной компоненты (без учёта высоты).
+func component_cells(comp: int) -> Array[Vector2i]:
+	var out: Array[Vector2i] = []
+	for key: Vector3i in _cells:
+		if int(_components.get(_cells[key], -1)) == comp:
+			out.append(Vector2i(key.x, key.y))
+	return out
+
+
 func nearest(at: Vector2) -> int:
 	var best := -1
 	var distance := INF

@@ -34,6 +34,7 @@ const PENALTY := 8.0         # множитель стоимости клето�
 const PENALTY_REACH := 6.0   # радиус штрафа, м
 const RADIUS_PREFER := 1.5   # желаемый радиус поворота — минимальный × это, если угол позволяет
 const RELAX_LIMIT := 24      # правок тесных углов на одну найденную линию
+const JOIN_CLEAR := 10.0     # подход к дороге: вокруг заданной точки примыкания запрет «существующий путь» снят, м
 const END_SHARE := 0.8      # у концов (полотно там не формируется) земля не круче требования × это
 const DEFAULTS := {start = Vector2.ZERO, finish = Vector2.ZERO, width = 3.0, grade = 0.15, max_cut = 1.2, max_fill = 1.0,
 	min_radius = 6.0, budget = 40000, repairs = 3, builds = 2, timeout_ms = 20000}
@@ -58,6 +59,9 @@ var checks: Array[Dictionary] = [] ## {name, state: ok / fail / incomplete, deta
 var stats := {expansions = 0, searches = 0, repairs = 0, builds = 0, search_ms = 0.0, geometry_ms = 0.0, estimate_ms = 0.0,
 	build_ms = 0.0, total_ms = 0.0, prepare_ms = 0.0, prepare_reused = false, prepare_cost_ms = 0.0}
 var notes := PackedStringArray() ## ход построения: попытки, причины исправлений
+## Определения, которые собираются вместе с этой линией (подходы к дороге): она проверяется на общей поверхности.
+var extras: Array[TrailDefinition] = []
+var _joins: Array = []            # request.joins: точки примыкания к существующему пути (локальные метры)
 
 var _site: TrailSite
 var _ground_h: Heightfield
@@ -163,6 +167,20 @@ func setup(site: TrailSite, req: Dictionary) -> bool:
 	stats.prepare_cost_ms = _prepared.cost_ms
 	_budget = int(request.budget)
 	_attempts = int(request.repairs) + 1
+	# Примыкание к дороге: вокруг точки на оси существующего пути запрет «путь» снимается, чтобы линия дошла до оси
+	# (вода, сооружения и граница остаются запретом); остальные пути запрещены по-прежнему
+	_joins = request.get("joins", [])
+	for join: Vector2 in _joins:
+		var c := _node_at(join)
+		var r := ceili(JOIN_CLEAR / GRID) + 1
+		for dz in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				var x := c % _w + dx
+				var z := c / _w + dz
+				if x < 0 or z < 0 or x >= _w or z >= _h: continue
+				var i := z * _w + x
+				if _block[i] == Block.PATH and _node_point(i).distance_to(join) < JOIN_CLEAR and blocked(_node_point(i)) == Block.FREE:
+					_cost[i] = 1.0
 	return true
 
 
@@ -181,7 +199,7 @@ func begin() -> bool:
 	straight = _judge_straight()
 	notes.append("Прямая %.0f м: %s" % [straight.length, "пригодна" if straight.ok else "непригодна — " + "; ".join(straight.problems)])
 	var area := areas()
-	if area[_s] < 0 or area[_s] != area[_t]:
+	if _joins.is_empty() and (area[_s] < 0 or area[_s] != area[_t]):
 		_refuse("поиск", "старт и финиш разделены водой, мостом с защитной зоной или существующим путём: переправы и примыкания в этой версии не строятся")
 		return false
 	# Концы линии лежат на естественной земле (полотно сходит на нет за end_fade): выходить из точки можно только туда,
@@ -257,7 +275,9 @@ func complete() -> bool:
 		_refuse("сборка", "исчерпан лимит полных сборок (%d)" % request.builds)
 		return false
 	var started := Time.get_ticks_usec()
-	prepared = _site.prepare([definition] as Array[TrailDefinition])
+	var kit: Array[TrailDefinition] = [definition]
+	kit.append_array(extras)
+	prepared = _site.prepare(kit)
 	stats.builds += 1
 	if not prepared.errors.is_empty():
 		stats.build_ms += (Time.get_ticks_usec() - started) / 1000.0
@@ -366,8 +386,16 @@ func blocked(p: Vector2) -> int:
 		if Grid.segment_dist(p.x, p.y, s.ax, s.az, s.bx, s.bz) < s.half + RoadBed.PIN + RoadBed.PIN_FADE + _half: return Block.STRUCTURE
 	for k: int in _path_cells.get(Vector2i((p / 8.0).floor()), []):
 		var seg: Dictionary = _paths[k]
-		if Grid.segment_dist(p.x, p.y, seg.a.x, seg.a.y, seg.b.x, seg.b.y) < seg.reach: return Block.PATH
+		if Grid.segment_dist(p.x, p.y, seg.a.x, seg.a.y, seg.b.x, seg.b.y) < seg.reach:
+			if _near_join(p): break
+			return Block.PATH
 	return Block.FREE
+
+
+func _near_join(p: Vector2) -> bool:
+	for join: Vector2 in _joins:
+		if join.distance_to(p) < JOIN_CLEAR: return true
+	return false
 
 
 ## Земля, усреднённая на 4 м (±2 м по узлам), м: уклон поиска и вытягивания на той же базе, что требование.

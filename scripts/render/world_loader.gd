@@ -17,6 +17,7 @@ var terrain_image: Image
 var forest_surface: Image
 var water_arrays: Array[Array]
 var map_image: Image
+var error := ""            # причина, по которой мир не опубликовать (Main показывает её и возвращается в меню)
 var trail := {}           # итог StageTrailPlan.apply: state (found / none), applied, variant, errors
 var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
@@ -31,7 +32,7 @@ static func px_for(size: int) -> int:
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, retried := false) -> WorldLoader:
 	if services == null:
 		services = GameContext.scope
 	var r := WorldLoader.new()
@@ -134,6 +135,18 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.merge(side_ms)
+	# Откат: трасса добавлена в мир, но применить её не удалось — мир с недостроенным путём не публикуется. Кэш мира
+	# удаляется, сид помечается, и мир собирается заново без трассы (повторный вызов, один раз); не вышло и так — отказ.
+	if r.trail.get("state", "none") == "found" and not r.trail.get("applied", false):
+		push_error("Трасса стартовой области не применена (%s): мир пересобирается без неё" % "; ".join(r.trail.get("errors", PackedStringArray())))
+		if services.cache.enabled:
+			services.cache.wait_writes()
+			services.cache.remove_seed(seed_text)
+		StageTrailPlan.skip[seed_text] = true
+		if not retried:
+			return load_world(seed_text, size, on_progress, services, true)
+		r.error = "Не удалось подготовить мир: трасса стартовой области не применилась. " + "; ".join(r.trail.get("errors", PackedStringArray()))
+		return r
 	if view.is_empty() and services.cache.enabled:
 		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
