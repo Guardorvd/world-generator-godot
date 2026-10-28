@@ -86,9 +86,7 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	var kept: Array[int] = []
 	for k in h.structures.size():
 		var s: Dictionary = h.structures[k]
-		var r: float = s.half + RoadBed.PIN + RoadBed.PIN_FADE + Heightfield.TUNNEL_WALL + TILE
-		var lo := Vector2(minf(s.ax, s.bx), minf(s.az, s.bz)) - Vector2.ONE * r
-		var foot := Rect2(lo, Vector2(maxf(s.ax, s.bx), maxf(s.az, s.bz)) + Vector2.ONE * r - lo)
+		var foot := structure_foot(s)
 		if not foot.intersects(box):
 			continue
 		if not box.encloses(foot):
@@ -144,6 +142,13 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 		site.image = {w = part.get_width(), h = part.get_height(), f = part.get_format(), data = part.get_data()}
 	site._prepare_template()
 	return {site = site, errors = errors}
+
+
+## Прямоугольник сооружения с защитной зоной (мировые метры): участок обязан захватить его целиком или не трогать.
+static func structure_foot(s: Dictionary) -> Rect2:
+	var r: float = s.half + RoadBed.PIN + RoadBed.PIN_FADE + Heightfield.TUNNEL_WALL + TILE
+	var lo := Vector2(minf(s.ax, s.bx), minf(s.az, s.bz)) - Vector2.ONE * r
+	return Rect2(lo, Vector2(maxf(s.ax, s.bx), maxf(s.az, s.bz)) + Vector2.ONE * r - lo)
 
 
 static func _crop(values: Variant, width: int, data: Rect2i) -> Variant:
