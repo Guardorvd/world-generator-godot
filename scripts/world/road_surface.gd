@@ -59,10 +59,11 @@ static func assign_route(w: WorldData, t: Dictionary) -> void:
 		t.surf.fill(authored)
 		return
 	var surface_seed := WGRandom.derive(w.seed_num, "surface." + t.kind)
+	var o := w.world_origin # участки покрытий — в мировых клетках
 	for n: int in t.pts.size():
 		var p: Dictionary = t.pts[n]
 		t.surf.append(pick(w, t.kind, p.x, p.y,
-			WGRandom.hash2(floori(p.x / SPAN), floori(p.y / SPAN), surface_seed)))
+			WGRandom.hash2(floori((p.x + o.x) / SPAN), floori((p.y + o.y) / SPAN), surface_seed)))
 
 
 ## Rebuild the cell map from assigned point surfaces (also used by authored trails).

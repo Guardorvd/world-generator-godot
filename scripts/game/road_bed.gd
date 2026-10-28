@@ -30,8 +30,11 @@ const SHORE := Vector2(1.0, 2.5) # у воды (клеток до неё, w.dist
 
 
 ## Выровнять полотно всех путей мира в heights.hv. Возвращает клетки, высота которых изменилась
-## (для TerrainBuilder.patch). Вызывается один раз, до build_structures
-static func refine(heights: Heightfield) -> PackedInt32Array:
+## (для TerrainBuilder.patch). Вызывается один раз, до build_structures.
+## only — номера путей w.trails (ключи): выровнять только их (Trail Lab: новая трасса на готовом участке, где
+## полотно прежних путей уже в рельефе); frozen — 1 у клеток, которые не меняются (углы готовых метровых патчей).
+## Пусто — все пути, как в игре.
+static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()) -> PackedInt32Array:
 	var w := heights.world
 	var weight := PackedFloat32Array()
 	weight.resize(w.N)
@@ -44,8 +47,13 @@ static func refine(heights: Heightfield) -> PackedInt32Array:
 	slot.resize(w.N)
 	slot.fill(-1)
 	var pin := _pins(w)
-	for t: Dictionary in w.trails:
-		if KINDS.has(t.kind) and t.pts.size() >= 2:
+	if frozen.size() == w.N:
+		for i in w.N:
+			if frozen[i] != 0:
+				pin[i] = 0.0
+	for k in w.trails.size():
+		var t: Dictionary = w.trails[k]
+		if KINDS.has(t.kind) and t.pts.size() >= 2 and (only.is_empty() or only.has(k)):
 			_trail(heights, t.pts, KINDS[t.kind], pin, weight, target, near, slot)
 	var changed := PackedInt32Array()
 	var hv := heights.hv

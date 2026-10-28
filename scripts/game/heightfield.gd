@@ -196,7 +196,6 @@ func finish_paths() -> PackedInt32Array:
 ## Вызывается один раз: из _init или, когда тропы проложены позже рельефа, из WorldLoader.
 ## Возвращает клетки, высота которых изменилась
 func build_structures() -> PackedInt32Array:
-	var W := world.W
 	structures = []
 	_cells = {}
 	var changed := PackedInt32Array()
@@ -224,7 +223,15 @@ func build_structures() -> PackedInt32Array:
 	outer_structures = []
 	_outer_cells = {}
 	_add_outer(outer)
-	# какие клетки задевает каждое сооружение (с запасом на перила и стены)
+	index_structures()
+	return changed
+
+
+## Какие клетки задевает каждое сооружение карты (с запасом на перила и стены). Также для готового списка
+## structures без пересчёта (сохранённый участок Trail Lab)
+func index_structures() -> void:
+	var W := world.W
+	_cells = {}
 	for k in structures.size() - outer_structures.size():
 		var s: Dictionary = structures[k]
 		var r: float = (s.half + TUNNEL_WALL) / TILE + 1.0
@@ -239,7 +246,6 @@ func build_structures() -> PackedInt32Array:
 					if not _cells.has(i):
 						_cells[i] = []
 					_cells[i].append(k)
-	return changed
 
 
 ## 13.9: мосты закреплённых соседних областей: концы {a, b} — центры клеток в мировых клетках.
@@ -596,6 +602,12 @@ func _fit_river_banks() -> void:
 			_fit_banks_of(ribbons[n])
 		return 0
 	Parallel.bands(ribbons.size(), job, 2)
+	index_ribbons()
+
+
+## Индекс клетка -> отрезки лент рек и их точки для C#; также для готовых лент без пересчёта берегов
+## (сохранённый участок Trail Lab). Вызывать один раз на пустом индексе
+func index_ribbons() -> void:
 	for pts: Array in ribbons:
 		# Индекс строится по окончательным берегам, как и видимые треугольники.
 		for k in range(1, pts.size()):

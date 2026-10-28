@@ -17,6 +17,9 @@ uniform vec3 surface_detail[8];
 // 12.3: высота кочек (м), длина волны (м), глубина колеи (м), доля клеток с ямой; трещины — RoadBump.CRACKS.
 uniform vec4 surface_bump[8];
 uniform float surface_crack[8];
+// Сдвиг меша от мировых координат, м: у сохранённого участка Trail Lab (WorldData.world_origin), у мира ноль.
+// Деталь и кочки полотна остаются на своих мировых местах, как у колёс.
+uniform vec2 world_offset = vec2(0.0);
 uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
@@ -132,7 +135,7 @@ void vertex() {
 }
 
 void fragment() {
-	vec2 p = wpos.xz;
+	vec2 p = wpos.xz + world_offset;
 	float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));
 	float n_big = texture(detail_tex, p * (1.0 / 37.0)).r;
 	float n_mid = texture(detail_tex, p * (1.0 / 7.3)).r;

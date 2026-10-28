@@ -1,5 +1,6 @@
 extends PanelContainer
 ## Lab-only controls. Emits proposed values; the composition root commits a successful rebuild.
+const Fixture = preload("res://tools/trail_lab_fixture.gd")
 signal course_selected(index: int, kind: String, style: String, ground: String)
 signal route_selected(index: int)
 signal element_selected(index: int)
@@ -74,12 +75,13 @@ func _ready() -> void:
 	style_choice.add_item("Элементы формы")
 	for name in TrailComposer.titles(): style_choice.add_item(name)
 	_add_choice(course_box, "Профиль трассы", style_choice)
-	for name in ["Плоский", "Холмы (рельеф мира)", "Горы (рельеф мира)"]: ground_choice.add_item(name)
+	for name in ["Плоский", "Холмы (рельеф мира)", "Горы (рельеф мира)", "Участок мира (сохранённый)"]: ground_choice.add_item(name)
+	ground_choice.set_item_tooltip(3, "Готовый участок настоящего мира: дороги, вода, мост. Трасса — своя линия участка, форма не меняется")
 	_add_choice(course_box, "Полигон", ground_choice)
 	var load_course := Button.new()
 	load_course.text = "Построить"
 	load_course.tooltip_text = "Заменить текущую площадку выбранной формой трассы"
-	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected], "" if style_choice.selected == 0 else TrailComposer.PROFILES.keys()[style_choice.selected - 1], ["flat", "hills", "mountain"][ground_choice.selected]))
+	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected], "" if style_choice.selected == 0 else TrailComposer.PROFILES.keys()[style_choice.selected - 1], Fixture.GROUNDS[ground_choice.selected]))
 	course_box.add_child(load_course)
 	var trail_box := _add_section(box, "Трасса и покрытие", false)
 	for name in ["Авто по местности", "Гравий", "Грунт", "Укатанная земля", "Камень", "Песок", "Лес", "Трава"]: surface_choice.add_item(name)

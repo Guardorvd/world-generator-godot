@@ -4,6 +4,8 @@ extends RefCounted
 ## No generator RNG, navigation implementation, mesh builder or physics model of its own.
 ## Largest total displacement of one vertex (shaping plus explicit elements), m.
 const ELEMENT_CAP := 2.0
+## Cell of the road-segment index used by the earthwork bake, m.
+const ROAD_CELL := 8.0
 
 static func append_routes(w: WorldData, definitions: Array[TrailDefinition]) -> PackedStringArray:
 	var errors := _validate(w, definitions, false)
@@ -57,14 +59,24 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 	var errors := _validate(h.world, definitions, true)
 	if not errors.is_empty(): return errors
 	var started := Time.get_ticks_usec()
-	var roads: Array[Dictionary] = []
+	# Road segments by ROAD_CELL cells within their reach: a vertex checks only the roads that can pin it
+	# (a saved world site carries thousands of road segments; the result is the same as checking all of them).
+	var roads := {}
 	for route: Dictionary in h.world.trails:
 		if route.kind != "road": continue
 		for i in range(1, route.pts.size()):
 			var a: Dictionary = route.pts[i - 1]
 			var b: Dictionary = route.pts[i]
-			roads.append({a = Vector2(a.x, a.y) * GameConfig.TILE, b = Vector2(b.x, b.y) * GameConfig.TILE,
-				id = route.get("trail_id", ""), half = maxf(a.w, b.w) * GameConfig.TILE * 0.5})
+			var road := {a = Vector2(a.x, a.y) * GameConfig.TILE, b = Vector2(b.x, b.y) * GameConfig.TILE,
+				id = route.get("trail_id", ""), half = maxf(a.w, b.w) * GameConfig.TILE * 0.5}
+			var reach: float = road.half + RoadRefinement.REACH
+			var lo: Vector2 = ((road.a as Vector2).min(road.b) - Vector2.ONE * reach) / ROAD_CELL
+			var hi: Vector2 = ((road.a as Vector2).max(road.b) + Vector2.ONE * reach) / ROAD_CELL
+			for gz in range(floori(lo.y), floori(hi.y) + 1):
+				for gx in range(floori(lo.x), floori(hi.x) + 1):
+					var key := Vector2i(gx, gz)
+					if not roads.has(key): roads[key] = []
+					(roads[key] as Array).append(road)
 	var profiles := {}
 	var shapes := {}
 	for d in definitions:
@@ -107,7 +119,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 							local = near
 							rank = score
 					if winner != null:
-						for road: Dictionary in roads:
+						for road: Dictionary in roads.get(Vector2i((at / ROAD_CELL).floor()), []):
 							if road.id == winner.id: continue
 							pin = minf(pin, smoothstep(road.half, road.half + RoadRefinement.REACH,
 								Grid.segment_dist(at.x, at.y, road.a.x, road.a.y, road.b.x, road.b.y)))

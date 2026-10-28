@@ -47,8 +47,11 @@ var _cam_from := Vector4() # x, feet, z, heading on the previous physics tick
 var _cam_to := Vector4()
 var _cam_feet := 0.0
 var _sources: Array[TrailDefinition] = []
-## Test ground of the current session (Fixture.GROUNDS): the lab's gentle slope or a window of world relief.
+## Test ground of the current session (Fixture.GROUNDS): the lab's gentle slope, a window of world relief or a saved site.
 var ground_kind := "flat"
+## Water of a saved site (WaterBuilder, as in the game) and the ground whose look (texture, world offset) is applied.
+var water := Node3D.new()
+var _look := ""
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -57,9 +60,7 @@ func _ready() -> void:
 	add_child(markers)
 	add_child(survey_markers)
 	add_child(props)
-	var image := Image.create(64, 64, false, Image.FORMAT_RGB8)
-	image.fill(Color(0.32, 0.42, 0.23))
-	terrain.material_override = services.terrain.material(image)
+	add_child(water)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -30, 0)
 	sun.shadow_enabled = true
@@ -145,6 +146,10 @@ func _ready() -> void:
 		var previous := ground_kind
 		ground_kind = ground
 		var course := Fixture.course(index, kind, style, ground)
+		if course.is_empty() and ground == "site":
+			show_message("Площадка не открыта: " + Fixture.site_error)
+			ground_kind = previous
+			return
 		if rebuild(course, Fixture.compose_ms):
 			set_overview(true)
 		else:
@@ -211,6 +216,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0) -> bool:
 	heights = next_heights
 	routes = candidate
 	technical = next_technical
+	_apply_look()
 	heights.obstacles.set_bumps(technical.bumps, 1)
 	for child in props.get_children(): child.free()
 	TrailLabProps.populate(props, technical.props)
@@ -233,6 +239,31 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0) -> bool:
 	build_timings = timings
 	show_message("Готово за %.0f мс · правки действуют в текущем запуске" % timings.total_ms)
 	return true
+
+## Terrain material and water of the current ground, rebuilt only when the ground changes. A saved site gets its
+## piece of the world texture (when the cache had one), the world offset of the shader detail and road bumps, and
+## the game's water meshes; lab grounds keep the plain green texture and no water.
+func _apply_look() -> void:
+	var site := Fixture.site() if ground_kind == "site" else null
+	var key := "site:" + str(heights.world.world_origin) if site != null else "lab"
+	if key == _look: return
+	_look = key
+	var image := site.base_image() if site != null else null
+	if image == null:
+		image = Image.create(64, 64, false, Image.FORMAT_RGB8)
+		image.fill(Color(0.32, 0.42, 0.23))
+	var material := services.terrain.material(image)
+	material.set_shader_parameter("world_offset", Vector2(heights.world.world_origin) * GameConfig.TILE)
+	terrain.material_override = material
+	for child in water.get_children(): child.free()
+	if site != null:
+		for node in WaterBuilder.build(heights.world, WaterBuilder.prepare(heights.world, heights)): water.add_child(node)
+
+## Overview camera target: the lab's 256 m square, or the middle of a saved site's working rectangle.
+func _overview_target() -> Vector3:
+	if ground_kind != "site" or Fixture.site() == null: return Vector3(128, 12, 128)
+	var c := Vector2(Fixture.site().work.get_center()) * GameConfig.TILE
+	return Vector3(c.x, heights.ground_at(c.x, c.y), c.y)
 
 ## Re-judge the current surface by a new requirement; the terrain is not rebuilt.
 func set_grade_requirement(grade: float) -> void:
@@ -517,8 +548,9 @@ func _process(dt: float) -> void:
 	_cam_feet = lerpf(_cam_feet, at.y, 1.0 - exp(-dt * 10.0)) if absf(at.y - _cam_feet) < 3.0 else at.y
 	var target := Vector3(at.x, _cam_feet + 1.0, at.z)
 	if overview:
-		camera.position = Vector3(128, 240, 245)
-		camera.look_at(Vector3(128, 12, 128))
+		var focus := _overview_target()
+		camera.position = focus + Vector3(0, 228, 117)
+		camera.look_at(focus)
 	else:
 		camera.position = target + Vector3(sin(heading) * 7, 3.5, cos(heading) * 7)
 		camera.look_at(target)

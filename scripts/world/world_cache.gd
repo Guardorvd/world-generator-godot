@@ -220,6 +220,27 @@ func _load(seed_text: String, size: int) -> Dictionary:
 	return {world = w, layers = n, data = data}
 
 
+## Готовый мир только для чтения (сохранённые участки Trail Lab): без генерации и без удаления неподходящих
+## файлов. {world, view — поля картинок или пусто, keys — ключи слоёв, files — пути слоёв} или {error}.
+func read_only(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Dictionary:
+	var data := {}
+	var files: Array[String] = []
+	for k in WorldGenerator.LAYERS.size():
+		var path := path_for(seed_text, size, k)
+		files.append(path)
+		var part: Variant = _read(path, _key(seed_text, size, k)) if FileAccess.file_exists(path) else null
+		if part == null:
+			return {error = "нет подходящего нынешнему коду слоя «%s» мира «%s» в %s" % [_layer_name(k), seed_text, dir]}
+		data.merge(part, true)
+	var w := _restore(data, true)
+	if w == null:
+		return {error = "кэш мира «%s» в %s не читается" % [seed_text, dir]}
+	var view_path := path_for(seed_text, size, WorldGenerator.LAYERS.size())
+	var view: Variant = _read(view_path, _key(seed_text, size, WorldGenerator.LAYERS.size())) if FileAccess.file_exists(view_path) else null
+	files.append(view_path)
+	return {world = w, view = view if view is Dictionary else {}, keys = layer_keys(), files = files}
+
+
 ## Снимок слоя берётся сразу (пока следующий слой мир не тронул): в файл идут поля, которые слой поменял;
 ## сжатие и запись — в фоне. Возвращает снимок всех полей для сравнения со следующим слоем.
 func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dictionary:

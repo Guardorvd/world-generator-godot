@@ -584,8 +584,10 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var gr := _wheel_ground(x - fx, z - fz, heights)
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var wild := BUMP * rough * (1.0 - path_weight)
-	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx, z + fz, surf, grade, across) * path_weight
-	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx, z - fz, surf, grade, across) * path_weight
+	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
+	var o := Vector2(heights.world.world_origin) * GameConfig.TILE
+	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx + o.x, z + fz + o.y, surf, grade, across) * path_weight
+	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx + o.x, z - fz + o.y, surf, grade, across) * path_weight
 	# 11.6: ветки и камни на полотне (RoadObstacles) — та же кочка, только с места препятствия
 	var of := 0.0
 	var orr := 0.0

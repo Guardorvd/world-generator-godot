@@ -10,14 +10,34 @@ static func build(routes: Array[TrailDefinition], with_elements := true) -> Heig
 	return prepare(routes, with_elements).heights as Heightfield
 
 ## Test grounds under a course: "flat" is the lab's own gentle slope; "hills" and "mountain" take a 256 m window
-## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns).
-const GROUNDS := ["flat", "hills", "mountain"]
+## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns);
+## "site" is a saved piece of a real prepared world (TrailSite: roads, water, bridges, surfaces as in the game).
+const GROUNDS := ["flat", "hills", "mountain", "site"]
 ## Wanted fall from edge to edge of the window, m.
 const GROUND_DROP := {hills = Vector2(14, 30), mountain = Vector2(22, 40)}
 static var _relief := {}
+## Saved real-world site of the "site" ground (tools/trail_site_export.gd writes it).
+const SITE := "res://resources/trails/sites/ushchelye_bridge.tsite"
+static var _site: TrailSite
+static var site_error := ""
+## Time of the last site open, ms (-1 — taken from memory).
+static var site_open_ms := -1.0
+
+## The saved site, opened once per run; null with site_error when the file is missing or unreadable.
+static func site() -> TrailSite:
+	site_open_ms = -1.0
+	if _site != null: return _site
+	var started := Time.get_ticks_usec()
+	var got := TrailSite.open(SITE)
+	site_error = got.get("error", "")
+	_site = got.get("site")
+	site_open_ms = (Time.get_ticks_usec() - started) / 1000.0
+	return _site
 
 ## Natural ground under the lab, m: what prepare() writes into the world and what the composer reads.
 static func ground(at: Vector2, kind := "flat", course := true) -> float:
+	if kind == "site":
+		return site().ground_at(at) if site() != null else 0.0
 	if kind == "flat" or not GROUND_DROP.has(kind):
 		var bumps := 3.5 * sin(at.x / 36.0) * sin(at.y / 48.0) + 1.1 * sin(at.y / 9.0) if course else 0.0
 		return 12.0 + at.y * 0.035 + bumps
@@ -97,6 +117,10 @@ static func relief(kind: String) -> PackedFloat32Array:
 static func prepare(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var timings := {setup_ms = 0.0, surface_ms = -1.0, earthworks_ms = -1.0}
+	if kind == "site":
+		# A fresh copy of the saved prepared surface; only the new routes are formed (TrailSite.prepare).
+		if site() == null: return {heights = null, errors = PackedStringArray(["Площадка не открыта: " + site_error]), timings = timings}
+		return _site.prepare(routes, with_elements)
 	var w := WorldData.new()
 	w.W = 64
 	w.H = 64
@@ -138,8 +162,24 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 ## `style` — a TrailComposer profile that replaces the shape's own elements; `ground` — one of GROUNDS.
 ## compose_ms — time of the last call's element composition, -1 when the course was not composed.
 static var compose_ms := -1.0
+## On the saved site every shape is the site's own explicit demo route (its points are tied to that land);
+## `style` composes elements on it over the site's surface, otherwise it keeps the demo elements. Empty — no site.
 static func course(index: int, kind := "mountain", style := "", ground_kind := "flat") -> Array[TrailDefinition]:
 	compose_ms = -1.0
+	if ground_kind == "site":
+		if site() == null: return []
+		var route := _site.demo_route(kind)
+		if not style.is_empty():
+			var started := Time.get_ticks_usec()
+			var profile: Dictionary = TrailComposer.PROFILES[style]
+			route.title += " · " + str(profile.title)
+			route.width = profile.route.width
+			route.auto_bank = profile.route.auto_bank
+			var composed := TrailComposer.compose(route, profile, 4242, func(at: Vector2) -> float: return _site.ground_at(at))
+			route.elements.assign(composed.elements)
+			route.sections.assign(composed.sections)
+			compose_ms = (Time.get_ticks_usec() - started) / 1000.0
+		return [route]
 	if index == 0: return definitions()
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index

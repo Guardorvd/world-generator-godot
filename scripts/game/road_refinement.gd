@@ -30,9 +30,14 @@ var _base_cache := {} # одинаковые метровые выборки у 
 var _points := PackedVector2Array() # точки уникальных вершин, только на время запекания (12.2)
 var _dist_water := PackedFloat32Array() # w.dist_water; у копии потока — своя копия (12.2)
 var _surf: Array = RoadSurface.LIST # у копии потока — своя копия таблицы покрытий (12.2)
+var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум полотна в мировых координатах
+var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
 
 
-static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
+## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
+## участвуют как соседи (ближайший отрезок, развилки). Тогда у патча есть owner: 1 у вершин, где ближе всего
+## путь из only. Trail Lab так добавляет новую трассу к готовому участку; пусто — все пути (игра).
+static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._heights = heights
 	r._height = heights.world.H
@@ -41,12 +46,18 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._noise.frequency = 1.0
 	r._noise.fractal_octaves = 2
 	r._dist_water = heights.world.dist_water
+	r._origin = Vector2(heights.world.world_origin) * TILE
+	r._only = only
 	var started_us := Time.get_ticks_usec()
 	for route in heights.world.trails.size():
 		var t: Dictionary = heights.world.trails[route]
 		if RoadBed.KINDS.has(t.kind):
 			r._index(t, route)
 	r._index_structures()
+	var keys: Array = r._segments.keys()
+	if not only.is_empty():
+		keys = keys.filter(func(key: int) -> bool:
+			return (r._segments[key] as Array).any(func(s: Dictionary) -> bool: return only.has(s.route)))
 	r.build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	started_us = Time.get_ticks_usec()
 	if fit_road:
@@ -58,7 +69,7 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	var nearest := PackedFloat64Array()
 	var fast := Grid.fast_grid() if allow_fast_nearest else null
 	if fast != null:
-		nearest = r._nearest_vertices(cache, fast)
+		nearest = r._nearest_vertices(cache, fast, keys)
 		r.build_timings.nearest_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 		var vertices_us := Time.get_ticks_usec()
 		# С 12.2 уникальные вершины считаются на всех ядрах: каждая зависит только от своей точки
@@ -81,7 +92,7 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 			cache[vk] = done[cache[vk]]
 		r._points = PackedVector2Array()
 		r.build_timings.vertex_math_ms = (Time.get_ticks_usec() - vertices_us) / 1000.0
-	for key: int in r._segments:
+	for key: int in keys:
 		var cx := key % heights.world.W
 		var cz := key / heights.world.W
 		var hs := PackedFloat32Array()
@@ -89,11 +100,14 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 		var uvs := PackedVector2Array()
 		var surfaces := PackedByteArray()
 		var roads := PackedByteArray()
+		var owners := PackedByteArray()
 		hs.resize(STRIDE * STRIDE)
 		colors.resize(STRIDE * STRIDE)
 		uvs.resize(STRIDE * STRIDE)
 		surfaces.resize(STRIDE * STRIDE)
 		roads.resize(STRIDE * STRIDE)
+		if not only.is_empty():
+			owners.resize(STRIDE * STRIDE)
 		for z in STRIDE:
 			for x in STRIDE:
 				var ix := cx * DIV + x
@@ -109,7 +123,11 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 				uvs[idx] = v.uv
 				surfaces[idx] = v.surface
 				roads[idx] = 1 if v.road else 0
+				if not only.is_empty():
+					owners[idx] = 1 if only.has(v.route) else 0
 		r.patches[key] = {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
+		if not only.is_empty():
+			r.patches[key].owner = owners
 	r.build_timings.vertices_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	# После запекания нет ссылок на Heightfield (цикл RefCounted) и временного пространственного индекса.
 	r._heights = null
@@ -118,6 +136,14 @@ static func build(heights: Heightfield, fit_road := true) -> RoadRefinement:
 	r._structures.clear()
 	r._noise = null
 	r._base_cache.clear()
+	return r
+
+
+## Готовые патчи без пересчёта (сохранённый участок Trail Lab): height — число строк клеток мира.
+static func from_patches(ready: Dictionary, height: int) -> RoadRefinement:
+	var r := RoadRefinement.new()
+	r.patches = ready
+	r._height = height
 	return r
 
 
@@ -131,6 +157,7 @@ func _thread_copy() -> RoadRefinement:
 	c._structures = _structures
 	c._noise = _noise.duplicate() # тот же шум (те же свойства), но свой объект
 	c._height = _height
+	c._origin = _origin
 	var h := Heightfield.new()
 	h.world = _heights.world
 	h.hv = _heights.hv.duplicate()
@@ -144,10 +171,10 @@ func _thread_copy() -> RoadRefinement:
 
 ## Один вызов C# для всех уникальных вершин, без межъязыкового вызова на каждую из них.
 ## В cache сначала номера запросов, затем они заменяются готовыми словарями вершин.
-func _nearest_vertices(cache: Dictionary, fast: Object) -> PackedFloat64Array:
+func _nearest_vertices(cache: Dictionary, fast: Object, keys: Array) -> PackedFloat64Array:
 	var w := _heights.world
 	var points := PackedVector2Array()
-	for key: int in _segments:
+	for key: int in keys:
 		var cx := key % w.W
 		var cz := key / w.W
 		for z in STRIDE:
@@ -250,7 +277,7 @@ func _fit_network() -> void:
 	var w := _heights.world
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
-		if t.kind != "road" and t.kind != "trail":
+		if t.kind != "road" and t.kind != "trail" or not (_only.is_empty() or _only.has(route)):
 			continue
 		var points := PackedVector2Array()
 		var along := 0.0
@@ -401,12 +428,12 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 			side = offset.cross(delta.normalized())
 			distance = d
 	if road.is_empty():
-		return {h = base, color = Color(0, 0, 0, 0), uv = Vector2.ZERO, surface = 0, road = false}
+		return {h = base, color = Color(0, 0, 0, 0), uv = Vector2.ZERO, surface = 0, road = false, route = -1}
 	var half: float = road.half
 	var d := distance
-	# Несимметричные края и разная ширина обочины, плавные метровые неровности.
-	var slow := _noise.get_noise_2d(x * 0.13, z * 0.13)
-	var grain := _noise.get_noise_2d(x * 0.8 + 71.0, z * 0.8)
+	# Несимметричные края и разная ширина обочины, плавные метровые неровности (шум — в мировых метрах).
+	var slow := _noise.get_noise_2d((x + _origin.x) * 0.13, (z + _origin.y) * 0.13)
+	var grain := _noise.get_noise_2d((x + _origin.x) * 0.8 + 71.0, (z + _origin.y) * 0.8)
 	var edge := half + slow * 0.24 + grain * 0.10
 	var shoulder := 0.7 + (slow + 1.0) * 0.3
 	var mask := 1.0 - smoothstep(edge * 0.55, edge + shoulder, d)
@@ -470,7 +497,7 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 				h = lerpf(h, shelf, influence * structure_pin * power * bench)
 	if _heights.water_level[i] == -INF and h < base:
 		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
-	return {h = h, color = color, uv = Vector2(side / half, float(surf)), surface = surf, road = road.kind == "road"}
+	return {h = h, color = color, uv = Vector2(side / half, float(surf)), surface = surf, road = road.kind == "road", route = road.route}
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).
