@@ -8,6 +8,8 @@ signal launch_requested
 signal reload_requested
 signal camera_toggle_requested
 signal close_requested
+## Explicit grade requirement for the finished-surface check, %; judged without rebuilding the terrain.
+signal requirement_changed(grade: float)
 var course_choice := OptionButton.new()
 var kind_choice := OptionButton.new()
 ## Trail profile of TrailComposer (first item: the shape's own elements) and the test ground under the course.
@@ -91,6 +93,14 @@ func _ready() -> void:
 	var terrain_box := _add_section(box, "Рельеф и виражи", false)
 	for spec: Array in [["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05], ["grade_limit", "Макс. уклон, %", 2.0, 60.0, 1.0], ["side_follow", "Следование склону", 0.0, 1.0, 0.05], ["bank_max", "Макс. вираж, %", 0.0, 60.0, 1.0], ["batter", "Откос выемок, м/м", 0.2, 4.0, 0.1]]:
 		_add_number(terrain_box, spec)
+	var check_box := _add_section(box, "Требования к трассе", false)
+	_add_number(check_box, ["required_grade", "Предел уклона, %", 0.0, 100.0, 1.0])
+	numbers.required_grade.value_changed.connect(func(value: float) -> void: requirement_changed.emit(value))
+	var check_note := Label.new()
+	check_note.text = "Проверка готовой поверхности; 0 — предел не задан. Прыжки, скорость и безопасность не оцениваются."
+	check_note.theme_type_variation = "HintLabel"
+	check_note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	check_box.add_child(check_note)
 	var source_box := _add_section(box, "Исходные данные", false)
 	var reload_button := Button.new()
 	reload_button.text = "Вернуть данные из файлов  ·  F5"
@@ -167,6 +177,7 @@ func _add_number(box: VBoxContainer, spec: Array) -> void:
 	if spec[0] == "bank": number.tooltip_text = "Отрицательное значение — одна сторона, положительное — другая"
 	if spec[0] == "earthwork": number.tooltip_text = "Насколько трасса изменяет рельеф: 0 — выключено, 1 — полностью"
 	if spec[0] == "grade_limit": number.tooltip_text = "Самый крутой продольный уклон, до которого трасса выравнивает рельеф"
+	if spec[0] == "required_grade": number.tooltip_text = "Требование к готовой поверхности: участки круче отмечаются в обзоре и в F3 (заезд не запрещается)"
 	if spec[0] == "side_follow": number.tooltip_text = "0 — ровная полка в склоне, 1 — полотно повторяет поперечный склон"
 	if spec[0] == "batter": number.tooltip_text = "Крутизна откосов выемки и насыпи рядом с полотном"
 	if spec[0] == "auto_bank": number.tooltip_text = "Сила автоматического наклона трассы на поворотах: от 0 до 1"

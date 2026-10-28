@@ -92,7 +92,11 @@ static func relief(kind: String) -> PackedFloat32Array:
 	return flipped
 
 ## A failed edit leaves the caller's current session untouched.
+## `timings` (ms, disjoint stages): setup — the lab's source world, routes and obstacle grid; surface — Heightfield
+## with the tread and the metre grid (finish_paths); earthworks — TrailBuilder's own trail_elements_ms, -1 when not baked.
 static func prepare(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var timings := {setup_ms = 0.0, surface_ms = -1.0, earthworks_ms = -1.0}
 	var w := WorldData.new()
 	w.W = 64
 	w.H = 64
@@ -116,17 +120,26 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 			w.filled[i] = w.h[i]
 			w.slope[i] = 0.035
 	var errors := TrailBuilder.append_routes(w, routes)
-	if not errors.is_empty(): return {heights = null, errors = errors}
+	timings.setup_ms = (Time.get_ticks_usec() - started) / 1000.0
+	if not errors.is_empty(): return {heights = null, errors = errors, timings = timings}
+	started = Time.get_ticks_usec()
 	var h := Heightfield.new(w)
+	timings.surface_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if with_elements:
 		errors = TrailBuilder.bake_elements(h, routes)
-		if not errors.is_empty(): return {heights = null, errors = errors}
+		if not errors.is_empty(): return {heights = null, errors = errors, timings = timings}
+		timings.earthworks_ms = h.road_refinement.build_timings.trail_elements_ms
+	started = Time.get_ticks_usec()
 	h.obstacles = ForestObstacles.new(w, h)
-	return {heights = h, errors = PackedStringArray()}
+	timings.setup_ms += (Time.get_ticks_usec() - started) / 1000.0
+	return {heights = h, errors = PackedStringArray(), timings = timings}
 
 ## Each course occupies the same lab region; select a course instead of overlapping test lanes.
 ## `style` — a TrailComposer profile that replaces the shape's own elements; `ground` — one of GROUNDS.
+## compose_ms — time of the last call's element composition, -1 when the course was not composed.
+static var compose_ms := -1.0
 static func course(index: int, kind := "mountain", style := "", ground_kind := "flat") -> Array[TrailDefinition]:
+	compose_ms = -1.0
 	if index == 0: return definitions()
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
@@ -158,6 +171,8 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 		pts = park_points()
 		d.auto_bank = 0.0 # the shaper's own superelevation (up to 38 %) would cancel the off-camber turn
 	d.points = pts
+	var started := Time.get_ticks_usec()
+	if index in [6, 7] or (index == 9 and style.is_empty()) or not style.is_empty(): compose_ms = 0.0
 	if index == 6: d.elements = TrailElementLibrary.compose(d, 4242, 0.5)
 	if index == 7: d.elements = TrailElementLibrary.compose(d, 777, 0.5, 0.7, 0.85)
 	if index == 8: d.elements = park_elements(d)
@@ -170,6 +185,7 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 		var composed := TrailComposer.compose(d, profile, 4242 + index, func(at: Vector2) -> float: return ground(at, ground_kind))
 		d.elements.assign(composed.elements)
 		d.sections.assign(composed.sections)
+	if compose_ms == 0.0: compose_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return [d]
 
 ## Bike park line: a straight with the jump and boardwalk features, then a left turn and a straight.

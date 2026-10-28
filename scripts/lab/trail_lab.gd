@@ -31,7 +31,14 @@ var element_index := 0
 var overview := false
 var terrain := MeshInstance3D.new()
 var markers := Node3D.new()
+## Problem intervals of the finished surface (red — over the grade requirement, orange — not measured).
+var survey_markers := Node3D.new()
 var props := Node3D.new()
+## Finished-surface surveys of the current routes by id, and the explicit grade requirement they are judged by, m/m.
+var surveys := {}
+var grade_requirement := 0.2
+## Stage times of the last successful build, ms; -1 — the stage did not run.
+var build_timings := {}
 var technical := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}, decks = []}
 var last_land_impact := 0.0
 var last_bottom_out := 0.0
@@ -48,6 +55,7 @@ func _ready() -> void:
 	_sources.assign(routes)
 	add_child(terrain)
 	add_child(markers)
+	add_child(survey_markers)
 	add_child(props)
 	var image := Image.create(64, 64, false, Image.FORMAT_RGB8)
 	image.fill(Color(0.32, 0.42, 0.23))
@@ -136,7 +144,8 @@ func _ready() -> void:
 	editor.course_selected.connect(func(index: int, kind: String, style: String, ground: String) -> void:
 		var previous := ground_kind
 		ground_kind = ground
-		if rebuild(Fixture.course(index, kind, style, ground)):
+		var course := Fixture.course(index, kind, style, ground)
+		if rebuild(course, Fixture.compose_ms):
 			set_overview(true)
 		else:
 			ground_kind = previous)
@@ -149,6 +158,8 @@ func _ready() -> void:
 	editor.apply_requested.connect(apply_edit)
 	editor.launch_requested.connect(launch_element)
 	editor.reload_requested.connect(reload_sources)
+	editor.requirement_changed.connect(func(grade: float) -> void: set_grade_requirement(grade / 100.0))
+	editor.numbers.required_grade.value = grade_requirement * 100.0
 	set_overview(false)
 	get_viewport().size_changed.connect(_place_editor)
 	_place_editor()
@@ -165,7 +176,9 @@ func _copy_routes(source: Array[TrailDefinition]) -> Array[TrailDefinition]:
 	return copies
 
 ## Transactional edit: prepare data and mesh first, then replace the live session.
-func rebuild(candidate: Array[TrailDefinition]) -> bool:
+## `compose_ms` — time the caller spent composing the elements (-1 — not composed); counted in the total.
+func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0) -> bool:
+	var started := Time.get_ticks_usec()
 	if candidate.is_empty():
 		show_message("Нужна хотя бы одна трасса")
 		return false
@@ -173,10 +186,27 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 	if not prepared.errors.is_empty():
 		show_message("Правка отклонена: " + "; ".join(prepared.errors))
 		return false
+	var timings: Dictionary = prepared.timings.duplicate()
+	timings.compose_ms = compose_ms
 	var next_heights: Heightfield = prepared.heights
+	var stage := Time.get_ticks_usec()
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(next_heights.world, next_heights))
+	timings.mesh_ms = (Time.get_ticks_usec() - stage) / 1000.0
+	stage = Time.get_ticks_usec()
 	var next_technical := TrailTechnical.build(next_heights, candidate)
+	timings.technical_ms = (Time.get_ticks_usec() - stage) / 1000.0
+	# Measured after the earthworks and the decks: the profile the wheel will actually ride.
+	stage = Time.get_ticks_usec()
+	var next_surveys := {}
+	for d in candidate:
+		var survey := TrailSurvey.measure(next_heights, d, grade_requirement)
+		if not survey.errors.is_empty():
+			show_message("Правка отклонена: " + "; ".join(survey.errors))
+			return false
+		next_surveys[d.id] = survey
+	timings.survey_ms = (Time.get_ticks_usec() - stage) / 1000.0
+	stage = Time.get_ticks_usec()
 	crash.abort()
 	heights = next_heights
 	routes = candidate
@@ -194,10 +224,74 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 			_label("Участок · %s · сложность %.2f" % [TrailComposer.MOODS[s.mood].title, s.difficulty], d.point_at(s.from), 4.2)
 		for e in d.elements:
 			_label("%s · %.1f м / %.1f м" % [TrailElementLibrary.title(e.profile), e.height, e.length], d.point_at(e.station), 1.8)
+	surveys = next_surveys
+	_mark_survey()
 	editor.present(routes, lane, element_index)
 	reset_ride()
-	show_message("Готово · правки действуют в текущем запуске")
+	timings.apply_ms = (Time.get_ticks_usec() - stage) / 1000.0
+	timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0 + maxf(0.0, compose_ms)
+	build_timings = timings
+	show_message("Готово за %.0f мс · правки действуют в текущем запуске" % timings.total_ms)
 	return true
+
+## Re-judge the current surface by a new requirement; the terrain is not rebuilt.
+func set_grade_requirement(grade: float) -> void:
+	grade_requirement = maxf(0.0, grade)
+	if heights == null: return
+	for d in routes: surveys[d.id] = TrailSurvey.measure(heights, d, grade_requirement)
+	_mark_survey()
+
+func _mark_survey() -> void:
+	for child in survey_markers.get_children(): child.free()
+	for d in routes:
+		var survey: TrailSurvey = surveys.get(d.id)
+		if survey == null: continue
+		for run: Dictionary in survey.exceeded:
+			_survey_label(d, run, "Уклон %+.0f%% · %.0f–%.0f м%s" % [run.peak * 100.0, run.from, run.to, " · элемент" if not (run.elements as Array).is_empty() else ""], Color(1.0, 0.35, 0.3))
+		for run: Dictionary in survey.unmeasured:
+			_survey_label(d, run, "Не измерено: %s · %.0f–%.0f м" % [run.reason, run.from, run.to], Color(1.0, 0.7, 0.25))
+
+## A coloured strip over the interval (readable from the overview) and a caption above its middle.
+func _survey_label(d: TrailDefinition, run: Dictionary, text: String, color: Color) -> void:
+	var strip := ImmediateMesh.new()
+	strip.surface_begin(Mesh.PRIMITIVE_TRIANGLE_STRIP)
+	var station: float = run.from - 1.0
+	while station <= run.to + 1.0:
+		var p := d.point_at(station)
+		var side := Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * (d.width * 0.5 + 0.4)
+		var y := heights.surface_at(p.x, p.y, INF) + 0.3
+		strip.surface_add_vertex(Vector3(p.x + side.x, y, p.y + side.y))
+		strip.surface_add_vertex(Vector3(p.x - side.x, y, p.y - side.y))
+		station += 1.0
+	strip.surface_end()
+	var material := StandardMaterial3D.new()
+	material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	material.albedo_color = color
+	var band := MeshInstance3D.new()
+	band.mesh = strip
+	band.material_override = material
+	survey_markers.add_child(band)
+	var at := d.point_at((run.from + run.to) * 0.5)
+	var label := Label3D.new()
+	label.text = text
+	label.modulate = color
+	label.outline_size = 8
+	label.font_size = 40
+	label.pixel_size = 0.03
+	label.no_depth_test = true
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.position = Vector3(at.x, heights.surface_at(at.x, at.y, INF) + 4.0, at.y)
+	survey_markers.add_child(label)
+
+## Stage times of the last build: "—" for a stage that did not run.
+func _build_report() -> String:
+	if build_timings.is_empty(): return "Сборка: нет данных"
+	var t := build_timings
+	var ms := func(key: String) -> String: return "—" if t.get(key, -1.0) < 0.0 else "%.0f" % t[key]
+	return "Сборка %s мс: площадка %s · композиция %s · полотно и сетка %s\nземляные элементы %s · объекты и настилы %s · анализ %s · меш %s · сцена %s" % [
+		ms.call("total_ms"), ms.call("setup_ms"), ms.call("compose_ms"), ms.call("surface_ms"),
+		ms.call("earthworks_ms"), ms.call("technical_ms"), ms.call("survey_ms"), ms.call("mesh_ms"), ms.call("apply_ms")]
 
 func _label(text: String, at: Vector2, lift: float) -> void:
 	var label := Label3D.new()
@@ -400,7 +494,11 @@ func _shaping_report() -> String:
 	var stats: Dictionary = heights.road_refinement.trail_shaping.get(routes[lane].id, {})
 	if stats.is_empty(): return "Рельеф: без земляных работ"
 	return "Рельеф: выемка %.0f м³ (до %.2f м) · насыпь %.0f м³ (до %.2f м)
-Уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.cut_m3, stats.max_cut, stats.fill_m3, stats.max_fill, stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
+Проект полотна без элементов: уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.cut_m3, stats.max_cut, stats.fill_m3, stats.max_fill, stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
+
+func _survey_report() -> String:
+	var survey: TrailSurvey = surveys.get(routes[lane].id)
+	return survey.summary() if survey != null else "Поверхность: не измерена"
 
 func _process(dt: float) -> void:
 	if heights == null: return
@@ -433,5 +531,7 @@ func _process(dt: float) -> void:
 	if diagnostics_visible:
 		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
 %s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane]) + "
-" + _shaping_report()]
+" + _shaping_report() + "
+" + _survey_report() + "
+" + _build_report()]
 	status.position.y = hud_panel.position.y + hud_panel.size.y + 10

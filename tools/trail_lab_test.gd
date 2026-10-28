@@ -132,6 +132,7 @@ func run() -> void:
 	check_rejected_bakes(routes)
 	check_bike_park()
 	check_composer()
+	check_survey()
 	var out := "res://tools/control/runs/trail_lab"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out))
 	report.mesh_error_m = max_error
@@ -154,10 +155,13 @@ func run() -> void:
 func capture_lab(lab: Node, out: String) -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out))
 	lab.overview = true
+	# A strict requirement, only for this shot: the overview shows the problem intervals of the finished surface.
+	lab.set_grade_requirement(0.08)
 	await process_frame
 	await process_frame
 	await RenderingServer.frame_post_draw
 	root.get_texture().get_image().save_png(out + "/overview.png")
+	lab.set_grade_requirement(0.2)
 	lab.overview = false
 	await process_frame
 	await RenderingServer.frame_post_draw
@@ -196,6 +200,7 @@ func check_bike_park() -> void:
 	check(d.validate().is_empty() and prepared.errors.is_empty(), "bike park course is valid and bakes")
 	var h: Heightfield = prepared.heights
 	TrailTechnical.build(h, park)
+	check_deck_survey(h, d, park)
 	var drop := d.elements[1]
 	var lip := drop.station - drop.length * 0.5 + drop.length * TrailElement.DROP_LIP
 	check(drop.displacement(lip - 0.2, 0.0, 2.5) > drop.height * 0.95 and absf(drop.displacement(lip + TrailElement.DROP_EDGE + 0.2, 0.0, 2.5)) < 0.01, "drop has a flat lip and lands on the natural ground")
@@ -289,6 +294,7 @@ func check_lab_session(lab: Node) -> void:
 	lab.bike.bottom_out = 2.0
 	lab.step_simulation(1.0 / 60, 0.0, 0.0, false, false)
 	check(lab.bike.land_impact == 0.0 and lab.bike.bottom_out == 0.0 and lab.last_land_impact == 7.0, "landing events are consumed once and retained only as telemetry")
+	check_lab_survey(lab)
 	lab.reload_sources()
 	lab.reset_ride(30.0, 9.0)
 	for i in 420: lab.step_simulation(1.0 / 60, 0.7, 0.0, false, false)
@@ -340,6 +346,78 @@ func check_composer() -> void:
 		var end := ride_route(h, course[0], 15.0 / 3.6)
 		report["relief_" + ground] = {range = snappedf(top, 0.1), fall = snappedf(fall, 0.1), grade_natural = snappedf(shaping.get("grade_natural", 0.0), 0.01), grade_designed = snappedf(shaping.get("grade_designed", 0.0), 0.01), ridden_to = snappedf(end, 0.1)}
 		check(end > course[0].route_length() - 8.0, "bike rides the whole composed route on %s ground (to %.0f of %.0f m)" % [ground, end, course[0].route_length()])
+
+## Lab diagnostics: stage times of a real rebuild, the surface report, a new requirement without a rebuild,
+## the same terrain as a build without the lab, and a composed course that times its composition.
+func check_lab_survey(lab: Node) -> void:
+	check(lab.reload_sources(), "lab rebuilds its own courses")
+	var t: Dictionary = lab.build_timings
+	var stages := ["setup_ms", "surface_ms", "earthworks_ms", "technical_ms", "survey_ms", "mesh_ms", "apply_ms", "total_ms"]
+	var timed := true
+	for key: String in stages: timed = timed and t.get(key, -1.0) >= 0.0
+	check(timed and t.compose_ms < 0.0 and "композиция —" in lab._build_report() and t.total_ms >= t.surface_ms + t.mesh_ms, "build stages are timed, composition shown as not run: " + lab._build_report().replace("\n", " "))
+	report.build_timings = t.duplicate()
+	var text: String = lab._survey_report()
+	check(lab.surveys.size() == lab.routes.size() and "Готовая поверхность" in text and "Не проверяется" in text, "lab shows the finished surface of every course")
+	var current: Heightfield = lab.heights
+	lab.set_grade_requirement(0.01)
+	var survey: TrailSurvey = lab.surveys[lab.routes[lab.lane].id]
+	check(lab.heights == current and survey.level() == "exceeded" and lab.survey_markers.get_child_count() > 0 and "превышений" in lab._survey_report(), "a stricter requirement marks intervals in the overview without rebuilding")
+	lab.set_grade_requirement(0.2)
+	check(var_to_bytes(lab.heights.road_refinement.patches) == var_to_bytes(Fixture.build(Fixture.definitions()).road_refinement.patches), "the lab with its diagnostics builds the same terrain as the plain build")
+	lab.editor.course_selected.emit(9, "mountain", "mixed", "flat")
+	check(lab.build_timings.compose_ms >= 0.0 and lab.surveys.has(lab.routes[0].id), "composed course times its composition (%.1f ms) and is surveyed" % lab.build_timings.compose_ms)
+	report.build_timings_route = lab.build_timings.duplicate()
+	report.route_survey = lab._survey_report()
+
+## TrailSurvey on a straight line over the lab's course ground (grade up to about 16 % along z) and the same line
+## with a roller: requirement, intervals, and the finished profile against the design profile of TrailShaping.
+func check_survey() -> void:
+	var line := TrailDefinition.new()
+	line.id = "course_line" # "course_" ids get the lab's bumpy course ground
+	line.width = 4.0
+	line.surface = RoadSurface.DIRT
+	line.points = PackedVector2Array([Vector2(113, 230), Vector2(113, 30)])
+	var lines: Array[TrailDefinition] = [line]
+	var h: Heightfield = Fixture.prepare(lines).heights
+	var gentle := TrailSurvey.measure(h, line, 0.3)
+	var steep := TrailSurvey.measure(h, line, 0.08)
+	check(gentle.level() == "within" and gentle.peak_grade > 0.05 and gentle.unmeasured.is_empty() and gentle.errors.is_empty(), "simple route stays within its grade requirement (peak %.0f%%)" % (gentle.peak_grade * 100.0))
+	check(steep.level() == "exceeded" and steep.exceeded.size() >= 2 and steep.exceeded.size() * 20 < steep.stations.size(), "steeper than required: %d distance intervals, not a warning per sample" % steep.exceeded.size())
+	var bare := TrailSurvey.measure(h, line)
+	check(bare.level() == "no_requirement" and bare.exceeded.is_empty() and bare.peak_grade == gentle.peak_grade, "without a requirement the grade is only reported")
+	var shaped := line.duplicate(true) as TrailDefinition
+	shaped.earthwork = 1.0
+	shaped.elements.append(TrailElementLibrary.make(TrailElement.Profile.ROLLER, 100.0, 10.0, 1.5))
+	var shaped_routes: Array[TrailDefinition] = [shaped]
+	var built: Heightfield = Fixture.prepare(shaped_routes).heights
+	var design: Dictionary = built.road_refinement.trail_shaping.get(shaped.id, {})
+	var finished := TrailSurvey.measure(built, shaped, design.get("grade_designed", 0.0) + 0.03)
+	var linked := false
+	for run: Dictionary in finished.exceeded: linked = linked or 0 in (run.elements as Array)
+	check(not design.is_empty() and finished.peak_grade > design.grade_designed + 0.1 and linked and finished.peak_grade_track < finished.peak_grade, "finished profile with a roller differs from the design profile (%.0f%% vs designed %.0f%%) and the excess is tied to the element" % [finished.peak_grade * 100.0, design.get("grade_designed", 0.0) * 100.0])
+	report.survey = {line_peak = snappedf(gentle.peak_grade, 0.001), line_intervals_at_8 = steep.exceeded.size(), roller_peak = snappedf(finished.peak_grade, 0.001), roller_track_peak = snappedf(finished.peak_grade_track, 0.001), designed = snappedf(design.get("grade_designed", 0.0), 0.001), survey_ms = snappedf(finished.survey_ms, 0.01)}
+
+## Northshore: the survey keeps to the deck (continuous support, as the bike), marks its abrupt end as unmeasured
+## and changes nothing it reads.
+func check_deck_survey(h: Heightfield, d: TrailDefinition, park: Array[TrailDefinition]) -> void:
+	var before := [var_to_bytes(h.road_refinement.patches), var_to_bytes(h.hv), var_to_bytes(h.structures)]
+	var survey := TrailSurvey.measure(h, d)
+	var again := TrailSurvey.measure(h, d)
+	var shore := d.elements[3]
+	var deck_samples := 0
+	var on_deck := true
+	for j in survey.stations.size():
+		if absf(survey.stations[j] - shore.station) > 2.0: continue
+		var p := d.point_at(survey.stations[j])
+		deck_samples += 1
+		on_deck = on_deck and survey.layers[j] == TrailSurvey.Layer.DECK and absf(survey.support[j] - h.surface_at(p.x, p.y, 100.0)) < 0.001 and survey.support[j] - h.ground_at(p.x, p.y) > shore.height - 0.1
+	var edge := false
+	for run: Dictionary in survey.unmeasured: edge = edge or (run.reason == "кромка настила" and 3 in (run.elements as Array))
+	check(deck_samples > 4 and on_deck and edge and survey.deck_length > shore.length * 0.8 and survey.errors.is_empty(), "northshore measured on its deck (%.0f m), its end marked unmeasured, not as a grade" % survey.deck_length)
+	var fresh := Fixture.prepare(park)
+	TrailTechnical.build(fresh.heights, park)
+	check(before == [var_to_bytes(h.road_refinement.patches), var_to_bytes(h.hv), var_to_bytes(h.structures)] and survey.support == again.support and var_to_bytes((fresh.heights as Heightfield).road_refinement.patches) == before[0], "survey changes neither the terrain, the decks nor the build result")
 
 ## Centre-line ride holding `target` m/s (pedal below, brake above 1.1×); returns the last station reached.
 func ride_route(h: Heightfield, d: TrailDefinition, target: float) -> float:
