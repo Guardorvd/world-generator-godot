@@ -62,7 +62,7 @@ func _ready() -> void:
 	_add_choice(box, "Трасса", route_choice)
 	_add_choice(box, "Элемент", element_choice)
 	var course_box := _add_section(box, "Построить новую трассу", false)
-	for name in ["Исходные элементы", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса"]: course_choice.add_item(name)
+	for name in ["Исходные элементы", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес"]: course_choice.add_item(name)
 	_add_choice(course_box, "Форма", course_choice)
 	for name in ["Велотрасса", "Природная тропа", "Обычная дорога"]: kind_choice.add_item(name)
 	_add_choice(course_box, "Тип", kind_choice)
@@ -78,7 +78,7 @@ func _ready() -> void:
 	var element_box := _add_section(box, "Параметры элемента", false)
 	for name in TrailElementLibrary.titles(): profile_choice.add_item(name)
 	_add_choice(element_box, "Профиль", profile_choice)
-	for spec: Array in [["station", "От начала, м", 0.0, 1000.0, 0.5], ["length", "Длина, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05], ["bank", "Сторона поворота", -1.0, 1.0, 0.1], ["count", "Число волн", 1.0, 12.0, 1.0], ["skew", "Положение гребня", 0.15, 0.85, 0.05]]:
+	for spec: Array in [["station", "От начала, м", 0.0, 1000.0, 0.5], ["length", "Длина, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05], ["bank", "Сторона поворота", -1.0, 1.0, 0.1], ["count", "Число волн / брёвен", 1.0, 12.0, 1.0], ["skew", "Положение гребня", 0.15, 0.85, 0.05], ["period", "Шаг ряби, м", 1.5, 6.0, 0.1], ["density", "Плотность", 0.05, 1.0, 0.05], ["lines", "Число линий", 1.0, 3.0, 1.0], ["gap", "Проход, м", 1.0, 6.0, 0.1], ["seed", "Номер раскладки", 0.0, 9999.0, 1.0]]:
 		_add_number(element_box, spec)
 	var terrain_box := _add_section(box, "Рельеф и виражи", false)
 	for spec: Array in [["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05], ["grade_limit", "Макс. уклон, %", 2.0, 60.0, 1.0], ["side_follow", "Следование склону", 0.0, 1.0, 0.05], ["bank_max", "Макс. вираж, %", 0.0, 60.0, 1.0], ["batter", "Откос выемок, м/м", 0.2, 4.0, 0.1]]:
@@ -203,10 +203,10 @@ func present(routes: Array[TrailDefinition], lane: int, element: int) -> void:
 	numbers.bank_max.value = shape.bank_max * 100.0
 	numbers.batter.value = shape.batter
 	surface_choice.select(d.surface)
-	for key in ["station", "length", "height", "bank", "count", "skew"]: numbers[key].editable = has_element
+	for key in TrailElement.KEYS: numbers[key].editable = has_element
 	if has_element:
 		element_choice.select(element)
 		var e := d.elements[element]
 		profile_choice.select(e.profile)
-		for key in ["station", "length", "height", "bank", "count", "skew"]: numbers[key].value = e.get(key)
+		for key in TrailElement.KEYS: numbers[key].value = e.get(key)
 	_updating = false

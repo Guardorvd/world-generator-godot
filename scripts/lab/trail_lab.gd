@@ -31,6 +31,8 @@ var element_index := 0
 var overview := false
 var terrain := MeshInstance3D.new()
 var markers := Node3D.new()
+var props := Node3D.new()
+var technical := {collide = PackedFloat32Array(), bumps = PackedFloat32Array(), props = [], lines = {}}
 var last_land_impact := 0.0
 var last_bottom_out := 0.0
 var metrics := TrailLabMetrics.new()
@@ -44,6 +46,7 @@ func _ready() -> void:
 	_sources.assign(routes)
 	add_child(terrain)
 	add_child(markers)
+	add_child(props)
 	var image := Image.create(64, 64, false, Image.FORMAT_RGB8)
 	image.fill(Color(0.32, 0.42, 0.23))
 	terrain.material_override = services.terrain.material(image)
@@ -167,9 +170,14 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 	var next_heights: Heightfield = prepared.heights
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(next_heights.world, next_heights))
+	var next_technical := TrailTechnical.build(next_heights, candidate)
 	crash.abort()
 	heights = next_heights
 	routes = candidate
+	technical = next_technical
+	heights.obstacles.set_bumps(technical.bumps, 1)
+	for child in props.get_children(): child.free()
+	TrailLabProps.populate(props, technical.props)
 	terrain.mesh = mesh
 	lane = clampi(lane, 0, routes.size() - 1)
 	element_index = clampi(element_index, 0, maxi(0, routes[lane].elements.size() - 1))
@@ -215,8 +223,8 @@ func apply_edit(values: Dictionary) -> bool:
 	if not d.elements.is_empty():
 		var e := d.elements[element_index]
 		e.profile = int(values.profile) as TrailElement.Profile
-		for key in ["station", "length", "height", "bank", "count", "skew"]:
-			if values.has(key): e.set(key, int(values[key]) if key == "count" else values[key])
+		for key: String in TrailElement.KEYS:
+			if values.has(key): e.set(key, int(values[key]) if key in TrailElement.INTEGER_KEYS else values[key])
 	if not rebuild(candidate): return false
 	launch_element()
 	return true
@@ -257,7 +265,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	bike.speed = speed
 	last_land_impact = 0.0
 	last_bottom_out = 0.0
-	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 0, true)
+	heights.obstacles.update(player.x, player.z, technical.collide, 1, true)
 	view.snap(bike)
 	metrics.reset(bike)
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
@@ -357,7 +365,7 @@ func _physics_process(dt: float) -> void:
 func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
 	var w := heights.world
 	_cam_from = _cam_to
-	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 0)
+	heights.obstacles.update(player.x, player.z, technical.collide, 1)
 	if crash.active():
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:

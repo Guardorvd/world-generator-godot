@@ -11,16 +11,33 @@ const TITLES := {
 	TrailElement.Profile.DIP: "Впадина",
 	TrailElement.Profile.ROLLOVER: "Смена уклона",
 	TrailElement.Profile.S_BERM: "S-поворот",
+	TrailElement.Profile.RUTS: "Колеи",
+	TrailElement.Profile.RIPPLES: "Рябь",
+	TrailElement.Profile.ROUGH: "Неровное полотно",
+	TrailElement.Profile.ROCK_GARDEN: "Каменный сад",
+	TrailElement.Profile.ROOTS: "Корни",
+	TrailElement.Profile.NARROW: "Узкий проход",
+	TrailElement.Profile.LOG: "Брёвна",
+	TrailElement.Profile.SLALOM: "Валуны-слалом",
 }
 ## Typical size at difficulty 0 and 1: length, height. Waves scale length with their count.
+const TECHNICAL := [TrailElement.Profile.RUTS, TrailElement.Profile.RIPPLES, TrailElement.Profile.ROUGH, TrailElement.Profile.ROCK_GARDEN, TrailElement.Profile.ROOTS, TrailElement.Profile.NARROW, TrailElement.Profile.LOG, TrailElement.Profile.SLALOM]
 const RANGE := {
 	TrailElement.Profile.ROLLER: [Vector2(10, 0.3), Vector2(16, 0.9)],
 	TrailElement.Profile.TABLETOP: [Vector2(12, 0.4), Vector2(20, 1.0)],
 	TrailElement.Profile.BERM: [Vector2(12, 0.4), Vector2(18, 0.8)],
-	TrailElement.Profile.WAVES: [Vector2(4, 0.15), Vector2(5, 0.35)],
+	TrailElement.Profile.WAVES: [Vector2(8.5, 0.15), Vector2(10, 0.35)],
 	TrailElement.Profile.DIP: [Vector2(8, 0.25), Vector2(14, 0.6)],
 	TrailElement.Profile.ROLLOVER: [Vector2(8, 0.3), Vector2(14, 0.7)],
 	TrailElement.Profile.S_BERM: [Vector2(16, 0.4), Vector2(24, 0.8)],
+	TrailElement.Profile.RUTS: [Vector2(14, 0.1), Vector2(22, 0.22)],
+	TrailElement.Profile.RIPPLES: [Vector2(10, 0.04), Vector2(16, 0.1)],
+	TrailElement.Profile.ROUGH: [Vector2(10, 0.05), Vector2(18, 0.14)],
+	TrailElement.Profile.ROCK_GARDEN: [Vector2(12, 0.1), Vector2(20, 0.18)],
+	TrailElement.Profile.ROOTS: [Vector2(10, 0.07), Vector2(16, 0.15)],
+	TrailElement.Profile.NARROW: [Vector2(8, 0.35), Vector2(12, 0.6)],
+	TrailElement.Profile.LOG: [Vector2(10, 0.22), Vector2(16, 0.38)],
+	TrailElement.Profile.SLALOM: [Vector2(14, 0.35), Vector2(20, 0.55)],
 }
 
 static func make(profile: TrailElement.Profile, station: float, length: float, height: float, bank := 1.0, count := 3, skew := 0.35) -> TrailElement:
@@ -49,7 +66,7 @@ static func sized(profile: TrailElement.Profile, difficulty: float) -> Vector2:
 
 ## Fills a route with a rhythm of features. Deterministic in (route, seed, difficulty, density);
 ## turns get berms on the outside, straights get rollers, waves, dips and tables with a recovery gap.
-static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, density := 0.6) -> Array[TrailElement]:
+static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, density := 0.6, technical := 0.0) -> Array[TrailElement]:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var result: Array[TrailElement] = []
@@ -57,8 +74,10 @@ static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, dens
 	var cursor := 22.0
 	var straight := [TrailElement.Profile.ROLLER, TrailElement.Profile.WAVES, TrailElement.Profile.DIP, TrailElement.Profile.ROLLOVER, TrailElement.Profile.TABLETOP]
 	var last := -1
+	var placed_object := -100.0 # end of the last object-placing feature: they keep a recovery gap
 	while true:
 		var kind: int = straight[rng.randi() % straight.size()]
+		if rng.randf() < technical: kind = TECHNICAL[rng.randi() % TECHNICAL.size()]
 		if kind == last: kind = straight[(straight.find(kind) + 1) % straight.size()]
 		var turn := _turn_at(d, cursor, 14.0)
 		var count := 1
@@ -74,7 +93,20 @@ static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, dens
 			length *= count
 		if cursor + length > total - 18.0: break
 		var bank := signf(turn) if kind == TrailElement.Profile.BERM else 1.0
-		result.append(make(kind, cursor + length * 0.5, length, height, bank, count, rng.randf_range(0.28, 0.45)))
+		if TrailElement.places_objects(kind) and cursor < placed_object + 5.0:
+			cursor = placed_object + 5.0
+			continue
+		var e := make(kind, cursor + length * 0.5, length, height, bank, count, rng.randf_range(0.28, 0.45))
+		e.seed = rng.randi() % 10000
+		e.density = rng.randf_range(0.35, 0.7)
+		e.lines = rng.randi_range(1, 3) if difficulty < 0.7 else 2
+		e.gap = lerpf(2.0, 1.2, difficulty)
+		if kind == TrailElement.Profile.LOG: e.count = rng.randi_range(1, 3)
+		if kind == TrailElement.Profile.SLALOM: e.count = rng.randi_range(3, 5)
+		if kind == TrailElement.Profile.NARROW: e.gap = clampf(e.gap, 1.0, d.width - 0.6)
+		if kind == TrailElement.Profile.LOG: e.gap = clampf(e.gap, 1.0, d.width * 0.5 - 0.3)
+		result.append(e)
+		if TrailElement.places_objects(kind): placed_object = cursor + length
 		last = kind
 		cursor += length + rng.randf_range(7.0, 18.0) / maxf(density, 0.2)
 	return result

@@ -89,7 +89,7 @@ func run() -> void:
 		var cross_after := h.ground_at(outside.x, outside.y) - h.ground_at(inside.x, inside.y)
 		check(cross_after > cross_before + 0.05, "bank raises outside for both route directions")
 	# Element library: every profile is finite, bounded, zero outside its footprint; composer is deterministic and valid.
-	for profile in TrailElement.Profile.values():
+	for profile in range(TrailElement.Profile.ROCK_GARDEN):
 		var e := TrailElementLibrary.make(profile, 50.0, 18.0, 0.6, 1.0, 3, 0.35)
 		var peak := 0.0
 		var finite := true
@@ -101,7 +101,7 @@ func run() -> void:
 		check(finite and peak > 0.12 and peak <= 0.61 and e.displacement(40.9, 0.0, 3.0) == 0.0 and e.displacement(59.1, 0.0, 3.0) == 0.0, "library profile %s bounded and compact" % TrailElementLibrary.title(profile))
 	var flow := Fixture.course(6)[0]
 	var again := TrailElementLibrary.compose(flow, 4242, 0.5)
-	check(flow.validate().is_empty() and flow.elements.size() >= 5 and again.size() == flow.elements.size() and again[2].station == flow.elements[2].station, "composer yields a valid deterministic flow line (%d elements)" % flow.elements.size())
+	check(flow.validate().is_empty() and flow.elements.size() >= 5 and again.size() == flow.elements.size() and again[2].station == flow.elements[2].station, "composer yields a valid deterministic flow line (%d elements) %s" % [flow.elements.size(), ", ".join(flow.validate())])
 	var flow_world := Fixture.prepare([flow])
 	check(flow_world.errors.is_empty(), "flow line prepares and bakes")
 	if flow_world.errors.is_empty():
@@ -130,6 +130,52 @@ func run() -> void:
 			finite_state = finite_state and is_finite(bike.y) and is_finite(bike.squash_f) and is_finite(bike.bank_slope)
 			if bike.crashed: break
 		check(finite_state and peak_g > 0.05, "profile load reaches the suspension model (peak %.2f g)" % peak_g)
+	# Technical features: terrain ones reshape the ground, object ones keep every clean line passable.
+	for profile in range(TrailElement.Profile.RUTS, TrailElement.Profile.size()):
+		var d := TrailDefinition.new()
+		d.id = "tech"
+		d.width = 5.0
+		d.points = PackedVector2Array([Vector2(128, 224), Vector2(128, 24)])
+		var size := TrailElementLibrary.sized(profile, 0.5)
+		var e := TrailElementLibrary.make(profile, 100.0, size.x * (3 if profile == TrailElement.Profile.WAVES else 1), size.y)
+		e.count = 3
+		e.seed = 11
+		d.elements = [e]
+		var routes: Array[TrailDefinition] = [d]
+		var title := TrailElementLibrary.title(profile)
+		check(d.validate().is_empty(), "%s: parameters valid" % title)
+		var prepared := Fixture.prepare(routes)
+		check(prepared.errors.is_empty(), "%s: bakes" % title)
+		var h: Heightfield = prepared.heights
+		var tech := TrailTechnical.build(h, routes)
+		check(var_to_bytes(tech.collide) == var_to_bytes(TrailTechnical.build(h, routes).collide) and var_to_bytes(tech.bumps) == var_to_bytes(TrailTechnical.build(h, routes).bumps), "%s: layout is deterministic" % title)
+		if not TrailElement.places_objects(profile):
+			var swing := 0.0
+			for i in 40:
+				var p := d.point_at(e.station - e.length * 0.5 + e.length * i / 40.0)
+				swing = maxf(swing, absf(e.displacement(d.nearest(p).x, 0.6, 2.5)))
+			check(swing > 0.01 and swing <= 2.0, "%s: reshapes the ground (%.3f m)" % [title, swing])
+			continue
+		check(tech.collide.size() + tech.bumps.size() > 0 and tech.props.size() > 0, "%s: places %d objects" % [title, tech.props.size()])
+		var offsets: PackedFloat32Array = TrailTechnical.line_offsets(d, e)
+		var clear := true
+		for line in offsets:
+			for i in 60:
+				var station := e.station - e.length * 0.5 + e.length * i / 59.0
+				var at := d.point_at(station) + Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * line
+				for n in range(0, tech.collide.size(), TrailTechnical.COLLIDE_STRIDE):
+					var q := Vector2(tech.collide[n], tech.collide[n + 1])
+					var axis := Vector2(tech.collide[n + 2], tech.collide[n + 3]) - q
+					var closest := q + axis * clampf((at - q).dot(axis) / maxf(axis.length_squared(), 0.0001), 0.0, 1.0)
+					if at.distance_to(closest) < tech.collide[n + 4] + BikeRide.BODY_R: clear = false
+		check(clear, "%s: every clean line stays clear of solid objects" % title)
+		h.obstacles.set_bumps(tech.bumps, 1)
+		for k in offsets.size():
+			var ridden := ride_line(h, d, e, offsets[k], tech.collide)
+			check(ridden.passed and not ridden.crashed, "%s: clean line %d rides through (suspension %.3f)" % [title, k, ridden.squash])
+		if profile == TrailElement.Profile.ROOTS or profile == TrailElement.Profile.ROCK_GARDEN:
+			var rough := ride_line(h, d, e, 0.0, tech.collide)
+			check(rough.squash > 0.01, "%s: crossing the objects shakes the suspension (%.3f)" % [title, rough.squash])
 	print("formation: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)
 
@@ -147,6 +193,24 @@ func capture() -> void:
 		await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png(out + "/course_%d.png" % shape)
+	check(lab.rebuild(Fixture.course(7)), "UI builds the technical course")
+	lab.overview = true
+	await process_frame
+	await process_frame
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(out + "/technical_overview.png")
+	var shown := 0
+	for i in lab.routes[0].elements.size():
+		if not TrailElement.places_objects(lab.routes[0].elements[i].profile): continue
+		lab.element_index = i
+		lab.reset_ride(maxf(0.0, lab.routes[0].elements[i].station - lab.routes[0].elements[i].length * 0.5 - 9.0), 0.0)
+		lab.set_overview(false)
+		for k in 4: await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(out + "/technical_%d_%s.png" % [i, TrailElementLibrary.title(lab.routes[0].elements[i].profile)])
+		shown += 1
+		if shown == 3: break
+	check(shown > 0, "technical close-ups captured")
 	lab.editor.show()
 	await process_frame
 	await process_frame
@@ -178,3 +242,35 @@ func ride_course(h: Heightfield, d: TrailDefinition) -> bool:
 		distance += before.distance_to(Vector2(bike.x, bike.z))
 		if bike.crashed or not is_finite(bike.y): return false
 	return distance > 35 and d.nearest(Vector2(bike.x, bike.z)).z < d.width
+
+## Ride a straight route at 6 m/s holding the lateral offset `line`; passes when the element is behind.
+func ride_line(h: Heightfield, d: TrailDefinition, e: TrailElement, line: float, collide: PackedFloat32Array) -> Dictionary:
+	var player := PlayerState.new()
+	var bike := BikeRide.new()
+	var control := BikeController.new()
+	var from := e.station - e.length * 0.5 - 14.0
+	var at := d.point_at(from) + Vector2(d.tangent_at(from).y, -d.tangent_at(from).x) * line
+	bike.x = at.x
+	bike.z = at.y
+	bike.y = h.surface_at(bike.x, bike.z, -INF)
+	bike.heading = d.heading_at(0.0)
+	bike.mount(player)
+	bike.speed = 6.0
+	var squash := 0.0
+	var passed := false
+	for i in 900:
+		h.obstacles.update(player.x, player.z, collide, 1)
+		var here := Vector2(bike.x, bike.z)
+		var station := d.nearest(here).x
+		var lead := d.point_at(station + 4.0)
+		var t := d.tangent_at(station + 4.0)
+		var goal := lead + Vector2(t.y, -t.x) * line
+		var delta := goal - here
+		var steer := clampf(-wrapf(atan2(-delta.x, -delta.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		control.ride(1.0 / 60, player, bike, h.world, h, 0.5 if bike.speed < 6.0 else 0.0, steer, false, false, false)
+		squash = maxf(squash, maxf(bike.squash_f, bike.squash_r))
+		if bike.crashed: break
+		if station > e.station + e.length * 0.5 + 2.0:
+			passed = true
+			break
+	return {passed = passed, crashed = bike.crashed, squash = squash}

@@ -49,12 +49,26 @@ func validate() -> PackedStringArray:
 		if absf(e.bank) > 1.0: errors.append("Bank must be between -1 and 1")
 		if e.count < 1 or e.count > 12 or e.skew < 0.15 or e.skew > 0.85: errors.append("Element count or skew out of range")
 		elif e.profile == TrailElement.Profile.WAVES and e.length / e.count < RoadRefinement.STEP * 8.0: errors.append("Waves are too short for the heightfield resolution")
+		if e.lines < 1 or e.lines > 3 or e.density < 0.05 or e.density > 1.0 or e.gap < 1.0 or e.period < 1.5:
+			errors.append("Technical element parameters out of range")
+		elif e.profile == TrailElement.Profile.NARROW and e.gap > width - 0.5:
+			errors.append("Narrow passage must be narrower than the route")
+		elif e.profile == TrailElement.Profile.LOG and e.gap > width * 0.5 - 0.3:
+			errors.append("Log bypass must fit beside the log")
 		if not is_finite(e.station) or not is_finite(e.length) or not is_finite(e.height) or not is_finite(e.bank):
 			errors.append("Non-finite element")
 		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > 2.0:
 			errors.append("Element exceeds heightfield resolution/earthwork limits")
 		elif e.station - e.length * 0.5 < 0.0 or e.station + e.length * 0.5 > route_length():
 			errors.append("Element extends beyond route")
+	# Object-placing features never overlap: that is what keeps a line readable instead of cluttered.
+	for i in elements.size():
+		for j in range(i + 1, elements.size()):
+			var a := elements[i]
+			var b := elements[j]
+			if a == null or b == null: continue
+			if TrailElement.places_objects(a.profile) and TrailElement.places_objects(b.profile) and absf(a.station - b.station) < (a.length + b.length) * 0.5 + 4.0:
+				errors.append("Technical features overlap or are closer than four metres")
 	return errors
 
 ## The only conversion between authoring metres and the existing civil path contract.
