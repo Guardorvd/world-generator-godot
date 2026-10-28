@@ -46,6 +46,27 @@ static func line_offsets(d: TrailDefinition, e: TrailElement) -> PackedFloat32Ar
 		2: return PackedFloat32Array([-0.5 * usable + shift * 0.5, 0.5 * usable + shift * 0.5])
 	return PackedFloat32Array([-0.75 * usable, 0.0, 0.75 * usable])
 
+## Lateral offset of clean line `line` at `station`. Constant for every feature except the slalom,
+## whose single line weaves between the gates (`line` is then ignored).
+static func line_at(d: TrailDefinition, e: TrailElement, line: float, station: float) -> float:
+	if e.profile != TrailElement.Profile.SLALOM: return line
+	var count := _gates(e)
+	var spacing := e.length / count
+	var phase := clampf((station - (e.station - e.length * 0.5)) / spacing - 0.5, 0.0, count - 1.0)
+	return -_weave(d, e) * cos(PI * phase)
+
+## Gates stay at least six metres apart, so the weave between them is rideable.
+static func _gates(e: TrailElement) -> int:
+	return clampi(mini(e.count, int(e.length / 6.0)), 2, 8)
+
+## Slalom boulder radius, m.
+static func _gate_radius(e: TrailElement) -> float:
+	return ForestObstacles.ROCK_R * clampf(e.height, 0.3, 0.6) * 0.8
+
+## How far from the axis the slalom line swings to clear each gate.
+static func _weave(d: TrailDefinition, e: TrailElement) -> float:
+	return minf(d.width * 0.5 * EDGE - CORRIDOR, _gate_radius(e) * 0.45 + BikeRide.BODY_R + 0.4)
+
 static func _frame(d: TrailDefinition, station: float) -> Dictionary:
 	var t := d.tangent_at(station)
 	return {p = d.point_at(station), t = t, lat = Vector2(t.y, -t.x)}
@@ -85,7 +106,8 @@ static func _rock_garden(h: Heightfield, d: TrailDefinition, e: TrailElement, rn
 			# Boulders stand near the edges; the middle only gets stones the wheel can climb over.
 			var boulder := absf(across) > half * 0.62 and rng.randf() < 0.28
 			var size := e.height * rng.randf_range(0.6, 1.0)
-			var margin := 0.35 if boulder else 0.1
+			# Boulders keep the handlebar corridor clear; stones only the wheel strip, so the garden stays dense.
+			var margin := 0.35 if boulder else -0.15
 			if _blocked(across, offsets, margin): continue
 			var at := _at(d, along, across)
 			var ground := h.ground_at(at.x, at.y)
@@ -159,12 +181,20 @@ static func _logs(h: Heightfield, d: TrailDefinition, e: TrailElement, rng: Rand
 		var mid := (a + b) * 0.5
 		set.props.append({kind = "log", pos = Vector3(mid.x, h.ground_at(mid.x, mid.y), mid.y), a = a, b = b, radius = radius, seed = rng.randi()})
 
+## Each gate is a short wall from just past the axis towards one edge; gates alternate sides, so the clean
+## line (line_at) has to weave and no straight line stays inside the trail.
 static func _slalom(h: Heightfield, d: TrailDefinition, e: TrailElement, rng: RandomNumberGenerator, set: Dictionary) -> void:
-	var count := clampi(e.count, 2, 8)
+	var count := _gates(e)
 	var scale := clampf(e.height, 0.3, 0.6)
-	var throw := d.width * 0.5 * 0.34
+	var r := _gate_radius(e)
+	var limit := d.width * 0.5 * EDGE
 	for k in count:
 		var along := e.station - e.length * 0.5 + e.length * (k + 0.5) / count
-		var at := _at(d, along, (1.0 if k % 2 == 0 else -1.0) * throw + rng.randf_range(-0.15, 0.15))
-		_solid(h, set, at, at, ForestObstacles.ROCK_R * scale * 0.8, ForestObstacles.ROCK_TOP * scale - 0.1)
-		set.props.append({kind = "boulder", pos = Vector3(at.x, h.ground_at(at.x, at.y), at.y), size = Vector3(1.43, 0.83, 1.1) * scale, seed = rng.randi(), rot = rng.randf() * TAU})
+		var side := 1.0 if k % 2 == 0 else -1.0
+		# Inner boulder covers the axis; the next leaves less than a bike's width between them.
+		var across := r * 0.55 + rng.randf_range(-0.05, 0.05)
+		while across - r < limit:
+			var at := _at(d, along + rng.randf_range(-0.2, 0.2), side * across)
+			_solid(h, set, at, at, r, ForestObstacles.ROCK_TOP * scale - 0.1)
+			set.props.append({kind = "boulder", pos = Vector3(at.x, h.ground_at(at.x, at.y), at.y), size = Vector3(1.43, 0.83, 1.1) * scale, seed = rng.randi(), rot = rng.randf() * TAU})
+			across += 2.0 * r + BikeRide.BODY_R

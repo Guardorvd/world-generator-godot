@@ -459,6 +459,9 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 	var lateral := 0.0
 	if not airborne:
 		var capacity := CORNER_GRIP * grip
+		# Вираж держит и сам занос, а не только доворот рамы: иначе на вираже рама поворачивала,
+		# а велосипед уходил наружу так же, как на ровном, только с бо́льшим углом сноса.
+		capacity = maxf(capacity + _bank_assist(signf(lateral_speed), absf(speed)) * grip, capacity * 0.6)
 		var available := sqrt(maxf(0.0, capacity * capacity - brake_deceleration * brake_deceleration))
 		var correction := lateral_speed * (1.0 - exp(-GameConfig.BIKE_SIDE_RESPONSE * dt))
 		correction = clampf(correction, -available * dt, available * dt)
@@ -469,6 +472,12 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		grip_usage = 0.0
 	slip = atan2(lateral_speed, maxf(absf(speed), 2.0))
 	return lateral
+
+
+## Добавка сцепления от наклона полотна, м/с²: drift — куда велосипед несёт поперёк рамы (+ вправо).
+## Полотно, поднятое в сторону заноса, прижимает колёса; опущенное — отнимает.
+func _bank_assist(drift: float, pace: float) -> float:
+	return clampf(bank_slope * drift, -0.3, 0.5) * GameConfig.GRAVITY * BANK_ASSIST * smoothstep(2.0, 6.0, pace)
 
 
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
@@ -492,7 +501,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
 		corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
 		# Вираж: полотно, поднятое снаружи поворота, прижимает колёса и добавляет сцепления; уклон внутрь отнимает.
-		var assist := clampf(-bank_slope * signf(steer), -0.3, 0.5) * GameConfig.GRAVITY * BANK_ASSIST * smoothstep(2.0, 6.0, pace)
+		var assist := _bank_assist(-signf(steer), pace)
 		corner_grip = maxf(corner_grip + assist * grip, corner_grip * 0.6)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)

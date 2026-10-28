@@ -67,7 +67,9 @@ static func course(index: int, kind := "mountain") -> Array[TrailDefinition]:
 			3: pts.append(Vector2(128, 128) + Vector2(sin(a), cos(a)) * 78)
 			4: pts.append(Vector2(128, 128) + Vector2(sin(a * 1.65), cos(a * 1.65)) * lerpf(88, 28, t))
 			5: pts.append(Vector2(128 + 78 * sin(a), 128 + 65 * sin(2 * a)))
-			6, 7: pts.append(Vector2(128 + 40 * sin(a * 2.5), 224 - 192 * t))
+			# Apex radius 1/(A·k²): flow ≈ 14 m (rideable at speed), technical ≈ 8 m (slower, tighter).
+			6: pts.append(Vector2(128 + 30 * sin(a * 1.5), 224 - 192 * t))
+			7: pts.append(Vector2(128 + 28 * sin(a * 2.0), 224 - 192 * t))
 	d.closed = index in [3, 5]
 	if d.closed: pts[-1] = pts[0]
 	d.points = pts

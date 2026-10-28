@@ -162,7 +162,7 @@ func run() -> void:
 		for line in offsets:
 			for i in 60:
 				var station := e.station - e.length * 0.5 + e.length * i / 59.0
-				var at := d.point_at(station) + Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * line
+				var at := d.point_at(station) + Vector2(d.tangent_at(station).y, -d.tangent_at(station).x) * TrailTechnical.line_at(d, e, line, station)
 				for n in range(0, tech.collide.size(), TrailTechnical.COLLIDE_STRIDE):
 					var q := Vector2(tech.collide[n], tech.collide[n + 1])
 					var axis := Vector2(tech.collide[n + 2], tech.collide[n + 3]) - q
@@ -249,7 +249,7 @@ func ride_line(h: Heightfield, d: TrailDefinition, e: TrailElement, line: float,
 	var bike := BikeRide.new()
 	var control := BikeController.new()
 	var from := e.station - e.length * 0.5 - 14.0
-	var at := d.point_at(from) + Vector2(d.tangent_at(from).y, -d.tangent_at(from).x) * line
+	var at := d.point_at(from) + Vector2(d.tangent_at(from).y, -d.tangent_at(from).x) * TrailTechnical.line_at(d, e, line, from)
 	bike.x = at.x
 	bike.z = at.y
 	bike.y = h.surface_at(bike.x, bike.z, -INF)
@@ -264,7 +264,7 @@ func ride_line(h: Heightfield, d: TrailDefinition, e: TrailElement, line: float,
 		var station := d.nearest(here).x
 		var lead := d.point_at(station + 4.0)
 		var t := d.tangent_at(station + 4.0)
-		var goal := lead + Vector2(t.y, -t.x) * line
+		var goal := lead + Vector2(t.y, -t.x) * TrailTechnical.line_at(d, e, line, station + 4.0)
 		var delta := goal - here
 		var steer := clampf(-wrapf(atan2(-delta.x, -delta.y) - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		control.ride(1.0 / 60, player, bike, h.world, h, 0.5 if bike.speed < 6.0 else 0.0, steer, false, false, false)

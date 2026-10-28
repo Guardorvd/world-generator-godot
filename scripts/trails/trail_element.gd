@@ -30,20 +30,34 @@ const INTEGER_KEYS := ["count", "lines", "seed"]
 static func places_objects(kind: int) -> bool:
 	return kind >= Profile.ROCK_GARDEN
 
+## A berm's raised outside continues past the trail edge and falls back to the ground there (m).
+const BERM_BACK := 2.0
+## Steepest takeoff of a table lip (rise per metre); the face is concave, so the bike leaves the lip at this angle.
+const LIP_MAX := 0.6
+## How far the deck sits below the lip, m (at most half the table height): more than the bike's lift threshold.
+const LIP_STEP := 0.3
+
 func displacement(along: float, across: float, half_width: float) -> float:
 	var t := (along - station) / length + 0.5
-	if t <= 0.0 or t >= 1.0 or absf(across) >= half_width:
+	var berm := profile == Profile.BERM or profile == Profile.S_BERM
+	if t <= 0.0 or t >= 1.0 or absf(across) >= half_width + (BERM_BACK if berm else 0.0):
 		return 0.0
 	var edge := 1.0 - smoothstep(0.55, 1.0, absf(across) / half_width)
 	match profile:
 		Profile.TABLETOP:
-			return height * smoothstep(0.0, 0.3, t) * (1.0 - smoothstep(0.7, 1.0, t)) * edge
+			# Concave face up to a lip, a deck slightly below the lip, then a rounded landing. On the one-metre
+			# relief grid a lip level with the deck rounds over and the bike just rolls onto the table;
+			# the small step behind the lip lets the ground fall away, so the bike pops off it.
+			var face := clampf(height / (LIP_MAX * length) * 2.0, 0.25, 0.35)
+			var rise := pow(clampf(t / face, 0.0, 1.0), 2.0)
+			var deck := 1.0 - minf(LIP_STEP / height, 0.5) * smoothstep(face, face + 1.5 / length, t)
+			return height * rise * deck * (1.0 - smoothstep(0.7, 1.0, t)) * edge
 		Profile.BERM:
-			return height * pow(sin(PI * t), 2.0) * pow(maxf(0.0, across * bank / half_width), 2.0) * edge
+			return height * pow(sin(PI * t), 2.0) * _berm_side(across * bank, half_width)
 		Profile.S_BERM:
 			# Two opposite berms that hand over in the middle: the raised side flips smoothly.
 			var side := sin(TAU * t)
-			return height * pow(sin(PI * t), 2.0) * pow(maxf(0.0, across * bank * signf(side) / half_width), 2.0) * sqrt(absf(side)) * edge
+			return height * pow(sin(PI * t), 2.0) * _berm_side(across * bank * signf(side), half_width) * sqrt(absf(side))
 		Profile.WAVES:
 			# Crests rise from the first trough and fade out; the outer waves are smaller than the middle.
 			return height * pow(sin(PI * count * t), 2.0) * pow(sin(PI * t), 0.6) * edge
@@ -70,6 +84,13 @@ func displacement(along: float, across: float, half_width: float) -> float:
 			var u := pow(t, log(0.5) / log(skew))
 			return height * pow(sin(PI * u), 2.0) * edge
 	return height * pow(sin(PI * t), 2.0) * edge
+
+## Cross-section of a berm, 0..1 along `outward` (across towards the raised side): the riding line is
+## already banked at the centre, the wall rises to the outer edge and falls off behind it.
+static func _berm_side(outward: float, half_width: float) -> float:
+	if outward > half_width:
+		return 1.0 - smoothstep(half_width, half_width + BERM_BACK, outward)
+	return pow(clampf((outward / half_width + 0.35) / 1.35, 0.0, 1.0), 1.5)
 
 ## Smooth value noise in 0..1, deterministic in the element seed.
 func _noise(x: float, z: float) -> float:

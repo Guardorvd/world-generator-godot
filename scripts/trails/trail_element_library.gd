@@ -92,6 +92,18 @@ static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, dens
 			count = rng.randi_range(3, 5)
 			length *= count
 		if cursor + length > total - 18.0: break
+		# Straight-line features must stay straight over their whole length: long waves used to run into the next
+		# turn and throw the bike off the line. Shorten to a roller, or wait until the turn is behind.
+		if kind != TrailElement.Profile.BERM and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > 0.025:
+			if kind == TrailElement.Profile.WAVES or length > 12.0:
+				kind = TrailElement.Profile.ROLLER
+				size = sized(kind, difficulty * rng.randf_range(0.7, 1.0))
+				length = size.x
+				height = size.y
+				count = 1
+			if _sharpest(d, cursor, length) > 0.025:
+				cursor += 4.0
+				continue
 		var bank := signf(turn) if kind == TrailElement.Profile.BERM else 1.0
 		if TrailElement.places_objects(kind) and cursor < placed_object + 5.0:
 			cursor = placed_object + 5.0
@@ -110,6 +122,15 @@ static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, dens
 		last = kind
 		cursor += length + rng.randf_range(7.0, 18.0) / maxf(density, 0.2)
 	return result
+
+## Strongest curvature (1/m) anywhere over `span` metres from `from`.
+static func _sharpest(d: TrailDefinition, from: float, span: float) -> float:
+	var peak := 0.0
+	var at := from
+	while at <= from + span:
+		peak = maxf(peak, absf(d.curvature_at(at)))
+		at += 2.0
+	return peak
 
 ## Mean signed curvature over a window starting at `from`; the sign says which side is the outside.
 static func _turn_at(d: TrailDefinition, from: float, window: float) -> float:
