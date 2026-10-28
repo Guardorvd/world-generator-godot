@@ -13,7 +13,12 @@ extends Resource
 @export_range(-2.0, 2.0) var elevation_offset := 0.0
 @export_range(0.0, 1.0) var auto_bank := 0.0
 @export var closed := false
+## Optional override of the per-kind terrain shaping preset.
+@export var shaping: TrailShaping
 @export var elements: Array[TrailElement] = []
+
+func shape() -> TrailShaping:
+	return shaping if shaping != null else TrailShaping.preset(kind)
 
 func route_length() -> float:
 	var result := 0.0
@@ -31,6 +36,7 @@ func validate() -> PackedStringArray:
 	if not is_finite(earthwork) or earthwork < 0.0 or earthwork > 1.0: errors.append("Invalid earthwork strength")
 	if not is_finite(elevation_offset) or absf(elevation_offset) > 2.0: errors.append("Invalid elevation offset")
 	if not is_finite(auto_bank) or auto_bank < 0.0 or auto_bank > 1.0: errors.append("Invalid automatic banking")
+	if shaping != null: errors.append_array(shaping.validate())
 	if closed and (points.size() < 4 or points[0].distance_to(points[-1]) > 0.01): errors.append("Closed route must repeat its first point")
 	for i in points.size():
 		if not points[i].is_finite(): errors.append("Non-finite route point")

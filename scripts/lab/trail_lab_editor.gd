@@ -81,7 +81,7 @@ func _ready() -> void:
 	for spec: Array in [["station", "От начала, м", 0.0, 1000.0, 0.5], ["length", "Длина, м", 4.0, 100.0, 0.5], ["height", "Высота, м", 0.0, 2.0, 0.05], ["bank", "Сторона поворота", -1.0, 1.0, 0.1]]:
 		_add_number(element_box, spec)
 	var terrain_box := _add_section(box, "Рельеф и виражи", false)
-	for spec: Array in [["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05]]:
+	for spec: Array in [["earthwork", "Земляные работы", 0.0, 1.0, 0.05], ["elevation_offset", "Выемка / насыпь, м", -2.0, 2.0, 0.1], ["auto_bank", "Автовираж", 0.0, 1.0, 0.05], ["grade_limit", "Макс. уклон, %", 2.0, 60.0, 1.0], ["side_follow", "Следование склону", 0.0, 1.0, 0.05], ["bank_max", "Макс. вираж, %", 0.0, 60.0, 1.0], ["batter", "Откос выемок, м/м", 0.2, 4.0, 0.1]]:
 		_add_number(terrain_box, spec)
 	var source_box := _add_section(box, "Исходные данные", false)
 	var reload_button := Button.new()
@@ -158,6 +158,9 @@ func _add_number(box: VBoxContainer, spec: Array) -> void:
 	number.custom_minimum_size.x = 112
 	if spec[0] == "bank": number.tooltip_text = "Отрицательное значение — одна сторона, положительное — другая"
 	if spec[0] == "earthwork": number.tooltip_text = "Насколько трасса изменяет рельеф: 0 — выключено, 1 — полностью"
+	if spec[0] == "grade_limit": number.tooltip_text = "Самый крутой продольный уклон, до которого трасса выравнивает рельеф"
+	if spec[0] == "side_follow": number.tooltip_text = "0 — ровная полка в склоне, 1 — полотно повторяет поперечный склон"
+	if spec[0] == "batter": number.tooltip_text = "Крутизна откосов выемки и насыпи рядом с полотном"
 	if spec[0] == "auto_bank": number.tooltip_text = "Сила автоматического наклона трассы на поворотах: от 0 до 1"
 	number.get_line_edit().add_theme_font_size_override("font_size", 14)
 	row.add_child(number)
@@ -194,6 +197,11 @@ func present(routes: Array[TrailDefinition], lane: int, element: int) -> void:
 	profile_choice.disabled = not has_element
 	numbers.width.value = d.width
 	for key in ["earthwork", "elevation_offset", "auto_bank"]: numbers[key].value = d.get(key)
+	var shape := d.shape()
+	numbers.grade_limit.value = shape.grade_limit * 100.0
+	numbers.side_follow.value = shape.side_follow
+	numbers.bank_max.value = shape.bank_max * 100.0
+	numbers.batter.value = shape.batter
 	surface_choice.select(d.surface)
 	for key in ["station", "length", "height", "bank"]: numbers[key].editable = has_element
 	if has_element:

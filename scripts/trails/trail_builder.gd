@@ -2,6 +2,9 @@ class_name TrailBuilder
 extends RefCounted
 ## Adapter to existing civil paths. Call on private preparation data before nature/finish_paths.
 ## No generator RNG, navigation implementation, mesh builder or physics model of its own.
+## Largest total displacement of one vertex (shaping plus explicit elements), m.
+const ELEMENT_CAP := 2.0
+
 static func append_routes(w: WorldData, definitions: Array[TrailDefinition]) -> PackedStringArray:
 	var errors := _validate(w, definitions, false)
 	if not errors.is_empty(): return errors
@@ -63,10 +66,14 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 			roads.append({a = Vector2(a.x, a.y) * GameConfig.TILE, b = Vector2(b.x, b.y) * GameConfig.TILE,
 				id = route.get("trail_id", ""), half = maxf(a.w, b.w) * GameConfig.TILE * 0.5})
 	var profiles := {}
+	var shapes := {}
 	for d in definitions:
-		if d.earthwork > 0.0: profiles[d.id] = _profile(h, d)
+		if d.earthwork > 0.0:
+			shapes[d.id] = d.shape()
+			profiles[d.id] = shapes[d.id].profile(h, d)
 	var offsets := {}
 	var staged := {}
+	var stats := {}
 	for key: int in r.patches:
 		var patch: Dictionary = r.patches[key]
 		var hs: PackedFloat32Array = patch.h.duplicate()
@@ -104,68 +111,35 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition]) -
 							if road.id == winner.id: continue
 							pin = minf(pin, smoothstep(road.half, road.half + RoadRefinement.REACH,
 								Grid.segment_dist(at.x, at.y, road.a.x, road.a.y, road.b.x, road.b.y)))
-						offset = _formation(h, winner, local, at, profiles.get(winner.id, {}))
+						if winner.earthwork > 0.0: offset = shapes[winner.id].offset(h, winner, local, at, profiles[winner.id])
 						# Explicit features have a compact footprint, so the shoulders stay continuous.
 						for e in winner.elements:
 							offset += e.displacement(local.x, local.y, winner.width * 0.5)
 					if winner != null and winner.earthwork > 0.0: offset *= winner.junction_weight(at, local.x)
 					if not is_finite(offset): return PackedStringArray(["Element produced non-finite terrain displacement"])
-					var cap := 0.35 if winner != null and winner.kind == "trail" else 2.0
-					var displacement := clampf(offset, -cap, cap) * pin
+					var displacement := clampf(offset, -ELEMENT_CAP, ELEMENT_CAP) * pin
 					var base := h.ground_at(at.x, at.y)
 					if displacement < 0.0:
 						displacement = maxf(displacement, minf(0.0, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP - base))
 					offsets[vertex] = displacement
+					if winner != null and winner.earthwork > 0.0:
+						var record: Dictionary = stats.get(winner.id, {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0})
+						var volume := displacement * RoadRefinement.STEP * RoadRefinement.STEP
+						record.cut_m3 += maxf(0.0, -volume)
+						record.fill_m3 += maxf(0.0, volume)
+						record.max_cut = maxf(record.max_cut, -displacement)
+						record.max_fill = maxf(record.max_fill, displacement)
+						record.vertices += 1
+						stats[winner.id] = record
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
 		staged[key] = hs
 	# Publish only after all elements succeeded; a rejected extension cannot leave half a bake.
 	for key: int in staged: r.patches[key].h = staged[key]
+	for id: String in profiles:
+		var record: Dictionary = stats.get(id, {})
+		var p: Dictionary = profiles[id]
+		record.merge({grade_natural = p.grade_natural, grade_designed = p.grade_designed, bank_peak = p.bank_peak}, true)
+		r.trail_shaping[id] = record
 	r.trail_elements_baked = true
 	r.build_timings.trail_elements_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return PackedStringArray()
-
-## Local cut/fill profile on the existing sparse refinement; no world-wide resampling.
-const FORMATION := {
-	"road": {window = 12.0, power = 1.0, cap = 2.0, bank = 0.08},
-	"trail": {window = 3.0, power = 0.25, cap = 0.35, bank = 0.03},
-	"mountain": {window = 6.0, power = 0.75, cap = 1.4, bank = 0.38},
-}
-
-## Sample once per metre, then interpolate instead of rebuilding the profile at every vertex.
-static func _profile(h: Heightfield, d: TrailDefinition) -> Dictionary:
-	var settings: Dictionary = FORMATION[d.kind]
-	var total := d.route_length()
-	var count := maxi(1, ceili(total / RoadRefinement.STEP))
-	var levels := PackedFloat32Array()
-	var banks := PackedFloat32Array()
-	var points := PackedVector2Array()
-	var tangents := PackedVector2Array()
-	for j in count + 1:
-		var station := total * j / count
-		var window: float = settings.window
-		if not d.closed: window = minf(window, minf(station, total - station))
-		var level := 0.0
-		for i in range(-4, 5):
-			var p := d.point_at(station + window * i / 4.0)
-			level += h.ground_at(p.x, p.y)
-		levels.append(level / 9.0)
-		points.append(d.point_at(station))
-		tangents.append(d.tangent_at(station))
-		banks.append(clampf(d.curvature_at(station) * 9.0, -float(settings.bank), float(settings.bank)) * d.auto_bank)
-	return {levels = levels, banks = banks, points = points, tangents = tangents, total = total}
-
-static func _formation(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, profile: Dictionary) -> float:
-	if d.earthwork <= 0.0: return 0.0
-	var settings: Dictionary = FORMATION[d.kind]
-	var index: float = clampf(local.x / profile.total * (profile.levels.size() - 1), 0.0, profile.levels.size() - 1.0)
-	var j := mini(floori(index), int(profile.levels.size()) - 2)
-	var f := index - j
-	var level := lerpf(profile.levels[j], profile.levels[j + 1], f)
-	var tangent: Vector2 = profile.tangents[j].lerp(profile.tangents[j + 1], f).normalized()
-	var center: Vector2 = profile.points[j].lerp(profile.points[j + 1], f)
-	var across := (at - center).cross(tangent)
-	var bank := lerpf(profile.banks[j], profile.banks[j + 1], f)
-	var target := level + d.elevation_offset + across * bank
-	var fade := 1.0 - smoothstep(d.width * 0.4, d.width * 0.5 + RoadRefinement.REACH, local.z)
-	if not d.closed: fade *= smoothstep(0.0, 12.0, minf(local.x, profile.total - local.x))
-	return clampf(target - h.ground_at(at.x, at.y), -float(settings.cap), float(settings.cap)) * float(settings.power) * d.earthwork * fade

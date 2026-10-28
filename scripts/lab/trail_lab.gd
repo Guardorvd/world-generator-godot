@@ -205,6 +205,13 @@ func apply_edit(values: Dictionary) -> bool:
 	d.surface = values.surface
 	for key in ["earthwork", "elevation_offset", "auto_bank"]:
 		if values.has(key): d.set(key, values[key])
+	if values.has("grade_limit"):
+		var shape := d.shape()
+		shape.grade_limit = values.grade_limit / 100.0
+		shape.side_follow = values.side_follow
+		shape.bank_max = values.bank_max / 100.0
+		shape.batter = values.batter
+		d.shaping = shape
 	if not d.elements.is_empty():
 		var e := d.elements[element_index]
 		e.profile = int(values.profile) as TrailElement.Profile
@@ -372,6 +379,12 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 	bike.land_impact = 0.0
 	bike.bottom_out = 0.0
 
+func _shaping_report() -> String:
+	var stats: Dictionary = heights.road_refinement.trail_shaping.get(routes[lane].id, {})
+	if stats.is_empty(): return "Рельеф: без земляных работ"
+	return "Рельеф: выемка %.0f м³ (до %.2f м) · насыпь %.0f м³ (до %.2f м)
+Уклон %.0f%% → %.0f%% · вираж до %.0f%%" % [stats.cut_m3, stats.max_cut, stats.fill_m3, stats.max_fill, stats.grade_natural * 100.0, stats.grade_designed * 100.0, stats.bank_peak * 100.0]
+
 func _process(dt: float) -> void:
 	if heights == null: return
 	if status_time > 0.0:
@@ -402,5 +415,6 @@ func _process(dt: float) -> void:
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
 		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
-%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane])]
+%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane]) + "
+" + _shaping_report()]
 	status.position.y = hud_panel.position.y + hud_panel.size.y + 10

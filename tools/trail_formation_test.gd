@@ -35,6 +35,10 @@ func run() -> void:
 				var p := d.point_at(d.route_length() * (i + 0.5) / 40.0)
 				change = maxf(change, absf(h.ground_at(p.x, p.y) - before[i]))
 			check(change > 0.005 and change <= 2.001, "bounded real cut/fill %.3f" % change)
+			var stat: Dictionary = h.road_refinement.trail_shaping.get(d.id, {})
+			var limit := d.shape().grade_limit
+			check(not stat.is_empty() and stat.cut_m3 + stat.fill_m3 > 0.0, "shaping reports cut/fill volumes")
+			check(stat.grade_designed <= maxf(limit * 1.2, stat.grade_natural * 0.9) and stat.max_cut <= d.shape().max_cut + 0.001 and stat.max_fill <= d.shape().max_fill + 0.001, "%s grade %.0f%%→%.0f%% within limit" % [kind, stat.grade_natural * 100, stat.grade_designed * 100])
 			check(h.hv == base and h.water_level == water, "coarse geography and water unchanged")
 			check(h.road_refinement.patches.size() < (h.world.W - 1) * (h.world.H - 1) / 2, "sparse local detail")
 			var arrays := TerrainBuilder.build_arrays(h.world, h)
