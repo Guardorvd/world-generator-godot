@@ -9,6 +9,7 @@ extends SceneTree
 ## Report: tools/control/runs/trail_scout/metrics.json
 const OUT := "res://tools/control/runs/trail_scout"
 const AREAS := ["sever_gentle", "sever_hills", "sever_steep"]
+const MUST_FIND := "sever_hills" # an area where a trail is mandatory: failing to find it is a failure of the mechanism
 var failures := 0
 var checks := 0
 
@@ -16,6 +17,21 @@ var checks := 0
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 240)
 	run.call_deferred()
+
+
+## Bounded budgets on the same area: no build left for elements -> the checked base line stays; no time -> nothing
+## is searched and the result is a budget verdict; both are normal results, and the shared limits are never exceeded.
+func tight(h: Heightfield, name: String) -> void:
+	var one := TrailScout.find(h.world, h, {builds = 1})
+	check(one.accepted and one.flow.variant == "базовая линия" and one.flow.stats.builds == 0 and one.stats.builds <= 1,
+		"%s: one shared build — the base line is kept, elements get no build (builds %d, flow builds %d, variant %s)" % [
+		name, one.stats.builds, one.flow.stats.builds if one.flow != null else -1, one.flow.variant if one.flow != null else "-"])
+	var none := TrailScout.find(h.world, h, {timeout_ms = 1})
+	check(not none.accepted and none.verdict == "budget" and none.stats.searched == 0 and none.stats.builds == 0 and none.stats.expansions == 0,
+		"%s: no time left after the cheap evaluation — nothing searched, verdict %s, %.0f ms" % [name, none.verdict, none.stats.total_ms])
+	var few := TrailScout.find(h.world, h, {budget = 50, repairs = 0, pairs = 1})
+	check(few.stats.expansions <= 50 and few.stats.pairs <= 1 and few.stats.repairs == 0,
+		"%s: small shared limits hold (expansions %d/50, pairs %d/1), verdict %s" % [name, few.stats.expansions, few.stats.pairs, few.verdict])
 
 
 func check(ok: bool, label: String) -> void:
@@ -43,10 +59,13 @@ func run() -> void:
 		if scout.flow != null: print(scout.flow.summary())
 		var q := scout.request
 		check(scout.verdict in ["found", "no_window", "refused_all", "budget"], "%s: normal result %s" % [name, scout.verdict])
-		check(scout.stats.searched <= q.windows and scout.stats.pairs <= q.pairs and scout.stats.expansions <= q.budget 			and scout.stats.repairs <= q.repairs and scout.stats.builds <= q.builds + TrailFlow.BUILDS,
+		check(scout.stats.searched <= q.windows and scout.stats.pairs <= q.pairs and scout.stats.expansions <= q.budget 			and scout.stats.repairs <= q.repairs and scout.stats.builds <= q.builds,
 			"%s: one shared budget — windows %d/%d, pairs %d/%d, expansions %d/%d, repairs %d/%d, builds %d/%d, %.1f s" % [name, scout.stats.searched, q.windows,
 			scout.stats.pairs, q.pairs, scout.stats.expansions, q.budget, scout.stats.repairs, q.repairs, scout.stats.builds,
-			q.builds + TrailFlow.BUILDS, scout.stats.total_ms / 1000.0])
+			q.builds, scout.stats.total_ms / 1000.0])
+		if name == MUST_FIND:
+			check(scout.accepted, "%s: a trail is found (mandatory): %s" % [name, scout.reason])
+			tight(h, name)
 		if scout.accepted:
 			var r := scout.picker.router
 			check(r.accepted and r.survey.level() == "within", "%s: the trail meets every checked requirement on the finished surface" % name)

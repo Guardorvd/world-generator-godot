@@ -43,13 +43,19 @@ var checks: Array[Dictionary] = []     ## of the final surface with elements
 var stats := {compose_ms = 0.0, build_ms = 0.0, builds = 0, total_ms = 0.0}
 
 var _site: TrailSite
+var _builds := BUILDS
+var _deadline := 0 ## 0 — no time limit
 var _accepted_zones: Array[Vector2] = []
 
 
 ## Elements on an accepted base line. The base router, its definition and its build are not changed.
-static func dress(site: TrailSite, line: TrailRouter, seed_value: int) -> TrailFlow:
+## limits (the rest of a shared budget): builds — full builds left (default BUILDS), deadline — Time.get_ticks_msec() limit
+## (default none). Without a build or time for the elements the checked base line stays.
+static func dress(site: TrailSite, line: TrailRouter, seed_value: int, limits := {}) -> TrailFlow:
 	var f := TrailFlow.new()
 	var started := Time.get_ticks_usec()
+	f._builds = mini(BUILDS, int(limits.get("builds", BUILDS)))
+	f._deadline = int(limits.get("deadline", 0))
 	f._run(site, line, seed_value)
 	f.stats.total_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return f
@@ -71,6 +77,9 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 	if line == null or not line.accepted:
 		message = "нет принятой базовой линии"
 		return
+	if _builds <= 0 or _out_of_time():
+		_keep_base("на элементы не осталось %s общего бюджета: базовая линия" % ("сборок" if _builds <= 0 else "времени"))
+		return
 	var d := line.definition.duplicate(true) as TrailDefinition
 	d.title = line.definition.title + " · спокойный flow"
 	var started := Time.get_ticks_usec()
@@ -83,7 +92,10 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 		return
 	d.elements.assign(proposed)
 	d.sections.assign(composed.sections)
-	for build in BUILDS:
+	for build in _builds:
+		if build > 0 and _out_of_time():
+			_keep_base("на упрощённый вариант не осталось времени общего бюджета: базовая линия")
+			return
 		var started_build := Time.get_ticks_usec()
 		var got := site.prepare([d] as Array[TrailDefinition])
 		stats.builds += 1
@@ -108,7 +120,7 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 		for p: Dictionary in problems:
 			if p.index >= 0: blamed[p.index] = p.why
 			else: loose.append(p.why)
-		if not loose.is_empty() or blamed.is_empty() or build == BUILDS - 1:
+		if not loose.is_empty() or blamed.is_empty() or build == _builds - 1:
 			var all := loose.duplicate()
 			for i: int in blamed: all.append("%s на %.0f м: %s" % [TrailElementLibrary.title(d.elements[i].profile), d.elements[i].station, blamed[i]])
 			_keep_base("вариант с элементами не прошёл проверку (%s): %s" % ["упрощённый" if build > 0 else "основной", "; ".join(all)])
@@ -121,6 +133,10 @@ func _run(site: TrailSite, line: TrailRouter, seed_value: int) -> void:
 			_keep_base("после удаления проблемных элементов не осталось ни одного")
 			return
 		d.elements = kept
+
+
+func _out_of_time() -> bool:
+	return _deadline > 0 and Time.get_ticks_msec() >= _deadline
 
 
 ## TrailComposer asks whether element e fits the accepted line d (its base survey). Reasons of refusals are counted.

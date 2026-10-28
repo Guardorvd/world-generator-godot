@@ -12,8 +12,9 @@ extends RefCounted
 ##    здесь не строится).
 ## 3. Кандидаты — не больше CANDIDATES не пересекающихся окон по очкам; подробный поиск — только в первых `windows`.
 ## 4. Для каждого: TrailSite.cut → TrailPicker.find. Бюджеты (пары, раскрытия, исправления, сборки, таймаут) общие на всю
-##    область: окну достаётся равная доля остатка, сборки — весь остаток. Первая найденная трасса принимается (одна),
-##    затем TrailFlow.dress. Требования и бюджеты не ослабляются; случайности нет.
+##    область, вместе с оценкой, вырезкой и элементами: окну достаётся равная доля остатка (время считается после вырезки),
+##    сборки — весь остаток. Первая найденная трасса принимается (одна), затем TrailFlow.dress с остатком сборок и времени;
+##    нет бюджета на элементы — остаётся проверенная базовая линия. Требования и бюджеты не ослабляются; случайности нет.
 ## Отсутствие подходящего места — обычный итог (verdict), а не ошибка.
 
 const SIDE := 48            # рабочий прямоугольник окна, клеток
@@ -34,6 +35,7 @@ const VERDICTS := {found = "трасса найдена", no_window = "мест�
 	refused_all = "испробованные окна отклонены по требованиям", budget = "остановлено бюджетом: невозможность не доказана",
 	input = "ошибка запроса или области"}
 
+static var runs := 0     ## сколько раз выполнялся поиск в этом процессе (проверка: повторная загрузка не ищет заново)
 var request := {}
 var accepted := false
 var verdict := ""
@@ -53,6 +55,7 @@ var rejected := {}            ## причина запрета окна -> чи�
 
 
 static func find(w: WorldData, h: Heightfield, req := {}) -> TrailScout:
+	runs += 1
 	var s := TrailScout.new()
 	var started := Time.get_ticks_usec()
 	s._run(w, h, req)
@@ -73,7 +76,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 	request = TrailPicker.DEFAULTS.duplicate()
 	request.merge(req, true)
 	request.windows = int(request.get("windows", WINDOWS))
-	area = w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H)
+	area = request.get("area", w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H))
 	var deadline := Time.get_ticks_msec() + int(request.timeout_ms)
 	if h.hv.size() != w.N or h.water_level.size() != w.N or h.road_refinement == null:
 		_refuse("input", "мир не подготовлен: нужна поверхность после finish_paths")
@@ -96,9 +99,8 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 		var pick: Dictionary = picks[n]
 		windows.append(pick)
 		var left := picks.size() - n
-		var time_left := deadline - Time.get_ticks_msec()
 		var expansions_left: int = request.budget - stats.expansions
-		if time_left <= 0 or expansions_left <= 0:
+		if Time.get_ticks_msec() >= deadline or expansions_left <= 0:
 			pick.outcome = "не искалось: общий бюджет области исчерпан"
 			budget_hit = true
 			continue
@@ -110,6 +112,11 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 			pick.outcome = "участок не вырезан: " + "; ".join(cut.errors)
 			continue
 		var cand: TrailSite = cut.site
+		var time_left := deadline - Time.get_ticks_msec() # после вырезки: она тоже тратит общее время
+		if time_left <= 0:
+			pick.outcome = "не искалось: время области вышло на вырезке"
+			budget_hit = true
+			continue
 		var rq := request.duplicate()
 		rq.merge({pairs = ceili(float(request.pairs - stats.pairs) / left), budget = expansions_left / left,
 			repairs = ceili(float(request.repairs - stats.repairs) / left), builds = request.builds - stats.builds,
@@ -136,7 +143,7 @@ func _run(w: WorldData, h: Heightfield, req: Dictionary) -> void:
 			budget_hit = true
 	if accepted:
 		started = Time.get_ticks_usec()
-		flow = TrailFlow.dress(site, picker.router, SEED)
+		flow = TrailFlow.dress(site, picker.router, SEED, {builds = request.builds - stats.builds, deadline = deadline})
 		stats.flow_ms = (Time.get_ticks_usec() - started) / 1000.0
 		stats.builds += flow.stats.builds
 		verdict = "found"

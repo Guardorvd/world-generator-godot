@@ -17,6 +17,7 @@ var terrain_image: Image
 var forest_surface: Image
 var water_arrays: Array[Array]
 var map_image: Image
+var trail := {}           # итог StageTrailPlan.apply: state (found / none), applied, variant, errors
 var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
 var timings := {}
@@ -105,6 +106,13 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var changed := r.heights.finish_paths()
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
+	# Автоматическая трасса стартовой области (StageTrailPlan): формирование и элементы запекаются на свежем рельефе
+	# до меша, столкновений и карты, поэтому весь мир видит один окончательный результат
+	t = Time.get_ticks_usec()
+	r.trail = StageTrailPlan.apply(r.heights)
+	r.timings.trail_ms = (Time.get_ticks_usec() - t) / 1000.0
+	for message: String in r.trail.errors:
+		push_warning("Трасса стартовой области: " + message)
 	t = Time.get_ticks_usec()
 	if changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)

@@ -45,14 +45,26 @@ const LAYERS := ["geo", "places", "nature"]
 ## on_layer(w, k) — после каждого слоя k, пока следующий его не тронул.
 static func generate_layers(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
 		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
-	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer)
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, size)
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
-	var home: Variant = PlayerState.home(w)
-	w.territory_center = Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
+	w.territory_center = start_center(w)
 	w.expand_territory(size)
 	if on_layer.is_valid():
 		on_layer.call(w, LAYERS.size() - 1)
 	return w
+
+
+## Центр стартовой территории: дом игрока (поселение), иначе середина плана.
+static func start_center(w: WorldData) -> Vector2i:
+	var home: Variant = PlayerState.home(w)
+	return Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
+
+
+## Стартовая область, которую откроет expand_territory(size) на пустом окне; нужна до конца генерации (StageTrailPlan).
+static func start_rect(w: WorldData, size: int) -> Rect2i:
+	var side := clampi(size, 1, mini(w.W, w.H))
+	var center := start_center(w)
+	return Rect2i(Vector2i(clampi(center.x - side / 2, 0, w.W - side), clampi(center.y - side / 2, 0, w.H - side)), Vector2i(side, side))
 
 
 ## Только декоративный фон меню; не игровой мир и не источник соседних областей.
@@ -102,7 +114,7 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 
 
 static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), size := 0) -> WorldData:
 	var w := from
 	if start == 0:
 		w = _geography(seed_text, side, on_progress)
@@ -125,6 +137,8 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		StageTrails.run(w, step)
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
+		# Одна автоматическая трасса стартовой области — до растительности, чтобы лес и покрытия видели её полотно
+		StageTrailPlan.run(w, size)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)

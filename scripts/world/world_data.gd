@@ -456,6 +456,11 @@ var trails: Array:
 		return civil.trails
 	set(value):
 		civil.trails = value
+var trail_plan: Dictionary:
+	get:
+		return civil.trail_plan
+	set(value):
+		civil.trail_plan = value
 var road_surface: PackedByteArray:
 	get:
 		return civil.road_surface.data
