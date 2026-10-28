@@ -131,6 +131,7 @@ func run() -> void:
 	check(var_to_bytes(repeat.road_refinement.patches) == var_to_bytes(h.road_refinement.patches), "deterministic rebuild with no accumulated earthworks")
 	check_rejected_bakes(routes)
 	check_bike_park()
+	check_composer()
 	var out := "res://tools/control/runs/trail_lab"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out))
 	report.mesh_error_m = max_error
@@ -312,3 +313,24 @@ func check_lab_session(lab: Node) -> void:
 	lab.reset_ride()
 	await process_frame
 	check(not lab.crash.active() and lab.bike.riding and lab.view.rider.is_inside_tree(), "reset after a fall restores the real rider and bike")
+
+## TrailComposer: every profile yields a valid, deterministic, sectioned route; world-relief grounds prepare.
+func check_composer() -> void:
+	var start := Time.get_ticks_usec()
+	var counts := {}
+	for style: String in TrailComposer.PROFILES:
+		var d: TrailDefinition = Fixture.course(9, "mountain", style)[0]
+		var again: TrailDefinition = Fixture.course(9, "mountain", style)[0]
+		counts[style] = [d.elements.size(), d.sections.size()]
+		check(d.validate().is_empty() and d.elements.size() >= 3 and d.sections.size() >= 3 and again.elements.size() == d.elements.size() and again.elements[1].station == d.elements[1].station, "profile %s composes a valid deterministic route (%d elements, %d sections) %s" % [style, d.elements.size(), d.sections.size(), ", ".join(d.validate())])
+	report.composer_ms = (Time.get_ticks_usec() - start) / 1000.0 / 12.0
+	report.composer_counts = counts
+	for ground: String in ["hills", "mountain"]:
+		var cells := Fixture.relief(ground)
+		var top := 0.0
+		for v in cells: top = maxf(top, v)
+		var course := Fixture.course(9, "mountain", "mountain" if ground == "mountain" else "flow", ground)
+		var prepared := Fixture.prepare(course, true, ground)
+		var fall := Fixture.ground(course[0].points[0], ground) - Fixture.ground(course[0].points[-1], ground)
+		report["relief_" + ground] = [snappedf(top, 0.1), snappedf(fall, 0.1)]
+		check(prepared.errors.is_empty() and fall > (Fixture.GROUND_DROP[ground] as Vector2).x * 0.5, "%s ground from world relief (range %.1f m, route falls %.1f m) prepares a composed route %s" % [ground, top, fall, ", ".join(prepared.errors)])

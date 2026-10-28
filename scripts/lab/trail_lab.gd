@@ -40,6 +40,8 @@ var _cam_from := Vector4() # x, feet, z, heading on the previous physics tick
 var _cam_to := Vector4()
 var _cam_feet := 0.0
 var _sources: Array[TrailDefinition] = []
+## Test ground of the current session (Fixture.GROUNDS): the lab's gentle slope or a window of world relief.
+var ground_kind := "flat"
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -131,9 +133,13 @@ func _ready() -> void:
 	canvas.add_child(status)
 	canvas.add_child(editor)
 	editor.visible = false
-	editor.course_selected.connect(func(index: int, kind: String) -> void:
-		if rebuild(Fixture.course(index, kind)):
-			set_overview(true))
+	editor.course_selected.connect(func(index: int, kind: String, style: String, ground: String) -> void:
+		var previous := ground_kind
+		ground_kind = ground
+		if rebuild(Fixture.course(index, kind, style, ground)):
+			set_overview(true)
+		else:
+			ground_kind = previous)
 	editor.camera_toggle_requested.connect(func() -> void: set_overview(not overview))
 	editor.close_requested.connect(func() -> void: set_editor_visible(false))
 	editor.route_selected.connect(select_route)
@@ -163,7 +169,7 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 	if candidate.is_empty():
 		show_message("Нужна хотя бы одна трасса")
 		return false
-	var prepared := Fixture.prepare(candidate)
+	var prepared := Fixture.prepare(candidate, true, ground_kind)
 	if not prepared.errors.is_empty():
 		show_message("Правка отклонена: " + "; ".join(prepared.errors))
 		return false
@@ -184,6 +190,8 @@ func rebuild(candidate: Array[TrailDefinition]) -> bool:
 	for child in markers.get_children(): child.free()
 	for d in routes:
 		_label(d.title, d.points[0], 3.0)
+		for s: Dictionary in d.sections:
+			_label("Участок · %s · сложность %.2f" % [TrailComposer.MOODS[s.mood].title, s.difficulty], d.point_at(s.from), 4.2)
 		for e in d.elements:
 			_label("%s · %.1f м / %.1f м" % [TrailElementLibrary.title(e.profile), e.height, e.length], d.point_at(e.station), 1.8)
 	editor.present(routes, lane, element_index)

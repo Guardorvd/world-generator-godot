@@ -16,6 +16,8 @@ extends Resource
 ## Optional override of the per-kind terrain shaping preset.
 @export var shaping: TrailShaping
 @export var elements: Array[TrailElement] = []
+## Composition sections from TrailComposer: {from, to, mood, difficulty}. Informational, never baked.
+@export var sections: Array[Dictionary] = []
 
 func shape() -> TrailShaping:
 	return shaping if shaping != null else TrailShaping.preset(kind)

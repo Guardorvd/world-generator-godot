@@ -42,7 +42,7 @@ const RANGE := {
 	TrailElement.Profile.NARROW: [Vector2(8, 0.35), Vector2(12, 0.6)],
 	TrailElement.Profile.LOG: [Vector2(10, 0.22), Vector2(16, 0.38)],
 	TrailElement.Profile.SLALOM: [Vector2(14, 0.35), Vector2(20, 0.55)],
-	# Not in compose(): placed by hand (lab course "Байк-парк") or by a future park generator.
+	# Bike-park features: by hand (lab course "Байк-парк") or through TrailComposer moods (pump, drop, off-camber).
 	TrailElement.Profile.OFF_CAMBER: [Vector2(14, 0.4), Vector2(22, 0.9)],
 	TrailElement.Profile.PUMP: [Vector2(4.8, 0.3), Vector2(5.5, 0.55)], # per crest, like waves
 	TrailElement.Profile.DROP: [Vector2(12, 0.5), Vector2(18, 1.2)],
@@ -73,76 +73,10 @@ static func sized(profile: TrailElement.Profile, difficulty: float) -> Vector2:
 	var range: Array = RANGE[profile]
 	return (range[0] as Vector2).lerp(range[1], clampf(difficulty, 0.0, 1.0))
 
-## Fills a route with a rhythm of features. Deterministic in (route, seed, difficulty, density);
-## turns get berms on the outside, straights get rollers, waves, dips and tables with a recovery gap.
+## Legacy entry point over TrailComposer: one flow/technical mix at a fixed difficulty.
 static func compose(d: TrailDefinition, seed_value: int, difficulty := 0.5, density := 0.6, technical := 0.0) -> Array[TrailElement]:
-	var rng := RandomNumberGenerator.new()
-	rng.seed = seed_value
+	var profile := {difficulty = Vector2(difficulty, difficulty), density = density, section = Vector2(80, 130),
+		moods = {flow = 3.0 * (1.0 - technical) + 0.01, jump = 1.0 - technical, tech = 4.0 * technical}}
 	var result: Array[TrailElement] = []
-	var total := d.route_length()
-	var cursor := 22.0
-	var straight := [TrailElement.Profile.ROLLER, TrailElement.Profile.WAVES, TrailElement.Profile.DIP, TrailElement.Profile.ROLLOVER, TrailElement.Profile.TABLETOP]
-	var last := -1
-	var placed_object := -100.0 # end of the last object-placing feature: they keep a recovery gap
-	while true:
-		var kind: int = straight[rng.randi() % straight.size()]
-		if rng.randf() < technical: kind = TECHNICAL[rng.randi() % TECHNICAL.size()]
-		if kind == last: kind = straight[(straight.find(kind) + 1) % straight.size()]
-		var turn := _turn_at(d, cursor, 14.0)
-		var count := 1
-		var length: float
-		var height: float
-		if absf(turn) > 0.012:
-			kind = TrailElement.Profile.BERM
-		var size := sized(kind, difficulty * rng.randf_range(0.7, 1.0))
-		length = size.x
-		height = size.y
-		if kind == TrailElement.Profile.WAVES:
-			count = rng.randi_range(3, 5)
-			length *= count
-		if cursor + length > total - 18.0: break
-		# Straight-line features must stay straight over their whole length: long waves used to run into the next
-		# turn and throw the bike off the line. Shorten to a roller, or wait until the turn is behind.
-		if kind != TrailElement.Profile.BERM and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > 0.025:
-			if kind == TrailElement.Profile.WAVES or length > 12.0:
-				kind = TrailElement.Profile.ROLLER
-				size = sized(kind, difficulty * rng.randf_range(0.7, 1.0))
-				length = size.x
-				height = size.y
-				count = 1
-			if _sharpest(d, cursor, length) > 0.025:
-				cursor += 4.0
-				continue
-		var bank := signf(turn) if kind == TrailElement.Profile.BERM else 1.0
-		if TrailElement.places_objects(kind) and cursor < placed_object + 5.0:
-			cursor = placed_object + 5.0
-			continue
-		var e := make(kind, cursor + length * 0.5, length, height, bank, count, rng.randf_range(0.28, 0.45))
-		e.seed = rng.randi() % 10000
-		e.density = rng.randf_range(0.35, 0.7)
-		e.lines = rng.randi_range(1, 3) if difficulty < 0.7 else 2
-		e.gap = lerpf(2.0, 1.2, difficulty)
-		if kind == TrailElement.Profile.LOG: e.count = rng.randi_range(1, 3)
-		if kind == TrailElement.Profile.SLALOM: e.count = rng.randi_range(3, 5)
-		if kind == TrailElement.Profile.NARROW: e.gap = clampf(e.gap, 1.0, d.width - 0.6)
-		if kind == TrailElement.Profile.LOG: e.gap = clampf(e.gap, 1.0, d.width * 0.5 - 0.3)
-		result.append(e)
-		if TrailElement.places_objects(kind): placed_object = cursor + length
-		last = kind
-		cursor += length + rng.randf_range(7.0, 18.0) / maxf(density, 0.2)
+	result.assign(TrailComposer.compose(d, profile, seed_value).elements)
 	return result
-
-## Strongest curvature (1/m) anywhere over `span` metres from `from`.
-static func _sharpest(d: TrailDefinition, from: float, span: float) -> float:
-	var peak := 0.0
-	var at := from
-	while at <= from + span:
-		peak = maxf(peak, absf(d.curvature_at(at)))
-		at += 2.0
-	return peak
-
-## Mean signed curvature over a window starting at `from`; the sign says which side is the outside.
-static func _turn_at(d: TrailDefinition, from: float, window: float) -> float:
-	var sum := 0.0
-	for i in 5: sum += d.curvature_at(from + window * i / 4.0)
-	return sum / 5.0
