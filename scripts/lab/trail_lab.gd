@@ -59,6 +59,8 @@ var _look := ""
 var line_result: TrailRouter
 ## Last automatic choice of the place (TrailPicker); null after a manual line.
 var pick_result: TrailPicker
+## Elements on the found line (TrailFlow) of the last «Найти трассу» in the flow mode; null otherwise.
+var flow_result: TrailFlow
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -288,15 +290,27 @@ func find_trail(values: Dictionary) -> bool:
 	var picked := TrailPicker.find(site, request)
 	pick_result = picked
 	line_result = picked.router
+	flow_result = null
 	editor.line_report.text = picked.summary()
 	if not picked.accepted:
 		show_message("Трасса не найдена, прежняя трасса сохранена")
 		return false
-	if not _apply_line(picked.router, pressed): return false
+	# Elements on the accepted line: placed by TrailComposer, built on a fresh copy of the site (TrailFlow).
+	var d := picked.router.definition
+	var ready: Dictionary = picked.router.prepared
+	var compose_ms := -1.0
+	if int(values.get("route_flow", 0)) == 1:
+		flow_result = TrailFlow.dress(site, picked.router, int(values.get("route_seed", 1)))
+		d = flow_result.definition
+		ready = flow_result.prepared
+		compose_ms = flow_result.stats.compose_ms
+	if not _apply_line(picked.router, pressed, d, ready, compose_ms): return false
 	for pair: Array in [["route_start_x", picked.start.x], ["route_start_z", picked.start.y], ["route_finish_x", picked.finish.x], ["route_finish_z", picked.finish.y]]:
 		editor.numbers[pair[0]].set_value_no_signal(pair[1])
-	editor.line_report.text = picked.summary() + "\n" + _line_time()
-	show_message("Трасса найдена: %.0f м, вниз %.1f м · от нажатия до сцены %.0f мс" % [picked.router.stats.length, picked.router.stats.drop, build_timings.total_ms])
+	editor.line_report.text = picked.summary() + ("\n" + flow_result.summary() if flow_result != null else "") + "\n" + _line_time()
+	var elements := " · элементов %d" % d.elements.size() if flow_result != null else ""
+	show_message("Трасса найдена: %.0f м, вниз %.1f м%s · от нажатия до сцены %.0f мс" % [picked.router.stats.length, picked.router.stats.drop, elements, build_timings.total_ms])
+	if flow_result != null and not flow_result.accepted: show_message("Элементы не поставлены, оставлена базовая линия: " + flow_result.message)
 	return true
 
 func _line_requirements(values: Dictionary) -> Dictionary:
@@ -305,14 +319,15 @@ func _line_requirements(values: Dictionary) -> Dictionary:
 
 ## Replace the scene with the builder's own full build (not prepared again). The stage times of that build stay in
 ## the builder's time; the total is measured once, from the press to the ready scene.
-func _apply_line(result: TrailRouter, pressed: int) -> bool:
+## `d` / `ready` — the trail with elements and its build (TrailFlow), when it differs from the builder's base line.
+func _apply_line(result: TrailRouter, pressed: int, d: TrailDefinition = null, ready := {}, compose_ms := -1.0) -> bool:
 	var builder_ms := (Time.get_ticks_usec() - pressed) / 1000.0
 	var previous := ground_kind
 	ground_kind = "site"
 	# The finished surface is judged by the line's own requirement; the panel shows it.
 	grade_requirement = result.request.grade
 	editor.numbers.required_grade.set_value_no_signal(result.request.grade * 100.0)
-	if not rebuild([result.definition] as Array[TrailDefinition], -1.0, result.prepared):
+	if not rebuild([d if d != null else result.definition] as Array[TrailDefinition], compose_ms, ready if not ready.is_empty() else result.prepared):
 		ground_kind = previous
 		return false
 	_draw_line(result)
@@ -364,6 +379,8 @@ func _add_strip(mesh: ImmediateMesh, color: Color) -> void:
 	var node := MeshInstance3D.new()
 	node.mesh = mesh
 	node.material_override = material
+	node.visible = overview
+	node.add_to_group("trail_lab_line") # shown only in the overview: from the rider's view it would hide the tread
 	markers.add_child(node)
 
 ## Terrain material and water of the current ground, rebuilt only when the ground changes. A saved site gets its
@@ -557,6 +574,8 @@ func show_message(text: String) -> void:
 func set_overview(enabled: bool) -> void:
 	overview = enabled
 	editor.set_camera_overview(enabled)
+	for node in markers.get_children():
+		if node.is_in_group("trail_lab_line"): node.visible = enabled
 	camera_control.text = "V  Сверху" if enabled else "V  Камера"
 	camera_control.tooltip_text = "Сейчас: обзор сверху. Переключить на вид за велосипедистом" if enabled else "Сейчас: вид за велосипедистом. Переключить на обзор сверху"
 
@@ -661,7 +680,7 @@ func _shaping_report() -> String:
 
 func _line_report() -> String:
 	if line_result == null or routes[lane].id != "site_route": return ""
-	if pick_result != null: return "\nАвтовыбор трассы:\n" + pick_result.summary() + "\n" + _line_time()
+	if pick_result != null: return "\nАвтовыбор трассы:\n" + pick_result.summary() + ("\n" + flow_result.summary() if flow_result != null else "") + "\n" + _line_time()
 	return "\nПостроитель линии:\n" + line_result.summary() + "\n" + _line_time()
 
 func _survey_report() -> String:

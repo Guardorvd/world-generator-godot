@@ -15,6 +15,8 @@ const MOODS := {
 	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
 	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
 	rest = {title = "Отдых", elements = {T.RIPPLES: 1, T.DIP: 1, T.ROLLOVER: 1}, turns = [], gap = 2.2, slope = -1.0, ease = 0.5, calm = true},
+	# First elements on a line found over real terrain: only small earthworks, wide spacing.
+	calm = {title = "Спокойный поток", elements = {T.ROLLER: 2, T.DIP: 1}, turns = [T.BERM], gap = 1.6, slope = 0.0, ease = 1.0, calm = true},
 }
 ## Trail profiles. `difficulty` — band over the route arc; `section` — section length range, m;
 ## `route` — settings the lab applies to the definition (width, auto_bank).
@@ -25,6 +27,7 @@ const PROFILES := {
 	mountain = {title = "Горная", difficulty = Vector2(0.45, 0.9), density = 0.65, section = Vector2(70, 120), moods = {tech = 3, jump = 1, flow = 1, rest = 1}, route = {width = 4.0, auto_bank = 0.2}},
 	leisure = {title = "Прогулочная", difficulty = Vector2(0.1, 0.3), density = 0.35, section = Vector2(100, 160), moods = {rest = 3, flow = 1}, route = {width = 4.0, auto_bank = 0.5}},
 	mixed = {title = "Смешанная", difficulty = Vector2(0.3, 0.8), density = 0.65, section = Vector2(60, 110), moods = {flow = 2, jump = 1, tech = 2, forest = 2, rest = 1}, route = {width = 5.0, auto_bank = 0.6}},
+	calm_flow = {title = "Спокойный flow", difficulty = Vector2(0.0, 0.2), density = 0.5, section = Vector2(60, 120), moods = {calm = 1}, route = {width = 3.0, auto_bank = 1.0}},
 }
 const LEAD_IN := 22.0
 const RUN_OUT := 18.0
@@ -40,7 +43,9 @@ static func titles() -> PackedStringArray:
 
 ## Elements and sections for a route. `ground(Vector2) -> float` (natural terrain, m) is optional: without it
 ## the route is treated as level. Sections are {from, to, mood, difficulty}.
-static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, ground := Callable()) -> Dictionary:
+## `fits(element) -> bool` is optional: the caller's check of a proposed element against the real line (its finished
+## profile before elements); a refused element is skipped like one that does not fit the section.
+static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, ground := Callable(), fits := Callable()) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
 	var elements: Array[TrailElement] = []
@@ -74,6 +79,9 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 				continue
 			if TrailElement.places_objects(e.profile) and cursor < placed_object + 5.0:
 				cursor = placed_object + 5.0
+				continue
+			if fits.is_valid() and not fits.call(e):
+				cursor += 4.0
 				continue
 			elements.append(e)
 			last = e.profile

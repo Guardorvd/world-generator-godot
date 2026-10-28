@@ -49,6 +49,7 @@
 | Велосипедные трассы, элементы, физика велосипеда на трассе | изолированная `trail_lab_test` (`-- --ui-only`, `-- --capture` по нужде); `feel_test` не нужен |
 | Построитель линии по рельефу (`TrailRouter`), его кнопка в Trail Lab | изолированная `trail_route_test` (`-- --capture` по нужде) |
 | Автоматический выбор места трассы (`TrailPicker`), кнопка «Найти трассу» | изолированная `trail_pick_test`; при правке этапов `TrailRouter` ещё `trail_route_test` |
+| Элементы на найденной трассе (`TrailFlow`, профиль `calm_flow`) | изолированная `trail_flow_test`; при правке `TrailComposer` ещё `trail_lab_test` |
 | Сохранённая площадка мира в Trail Lab (`TrailSite`), сборка трассы на готовом полотне | изолированная `trail_site_test` (по файлу площадки); экспорт `trail_site_export` — только для новой площадки |
 | Движение в мире, камера, проходы мостов и туннелей (то, чего нет в `trail_lab_test`) | `feel_test` (вместо `check.gd`, без FPS; лимит 5 мин) |
 | Столкновения | `forest_collision_test` |

@@ -16,6 +16,8 @@ signal line_requested(values: Dictionary)
 ## Найти место для трассы автоматически: те же числа route_* (координаты не используются).
 signal find_requested(values: Dictionary)
 var line_report := Label.new()
+## «Найти трассу»: без элементов / спокойный flow (TrailFlow over TrailComposer).
+var flow_choice := OptionButton.new()
 var course_choice := OptionButton.new()
 var kind_choice := OptionButton.new()
 ## Trail profile of TrailComposer (first item: the shape's own elements) and the test ground under the course.
@@ -125,6 +127,11 @@ func _ready() -> void:
 	numbers.route_length_min.value = TrailPicker.DEFAULTS.length_min
 	numbers.route_length_max.value = TrailPicker.DEFAULTS.length_max
 	numbers.route_drop.value = TrailPicker.DEFAULTS.min_drop
+	for name in ["Без элементов", "Спокойный flow (роллер, впадина, поворот)"]: flow_choice.add_item(name)
+	flow_choice.set_item_tooltip(1, "Элементы ставит TrailComposer по профилю принятого полотна; итог собирается заново и проверяется. Не подошли — остаётся базовая линия")
+	_add_choice(line_box, "Элементы на найденной трассе", flow_choice)
+	_add_number(line_box, ["route_seed", "Seed композиции", 0.0, 9999.0, 1.0])
+	numbers.route_seed.value = 1.0
 	var find_trail := Button.new()
 	find_trail.text = "Найти трассу"
 	find_trail.tooltip_text = "Выбрать старт и финиш на участке, построить одну линию и проверить её. Требования не ослабляются; при отказе остаётся прежняя трасса"
@@ -132,6 +139,7 @@ func _ready() -> void:
 		var values := {}
 		for key: String in numbers:
 			if key.begins_with("route_"): values[key] = numbers[key].value
+		values.route_flow = flow_choice.selected
 		find_requested.emit(values))
 	line_box.add_child(find_trail)
 	line_report.theme_type_variation = "HintLabel"
