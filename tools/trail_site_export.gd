@@ -36,8 +36,10 @@ func _init() -> void:
 	var h := Heightfield.new(w) # как WorldLoader: ленты рек, русла, вода, finish_paths
 	print("Готовая поверхность мира (как при загрузке игры): %d мс" % (Time.get_ticks_msec() - started))
 	var margin := int(args.get("margin", "16"))
-	if args.has("refusals"):
-		_refusals(w, h, margin)
+	if args.has("refusals") and not _refusals(w, h, margin):
+		printerr("ОШИБКА: проверка отказов не прошла, площадка не записана")
+		quit(1)
+		return
 	if not args.has("rect"):
 		printerr("Нужен --rect x,z,сторона")
 		quit(1)
@@ -70,7 +72,9 @@ func _init() -> void:
 	site.record_reference(h)
 	print("Выборки источника: %d точек (у путей %d), %d мс" % [site.reference.x.size(), Array(site.reference.near_road).count(1), Time.get_ticks_msec() - started])
 	var direct := site.prepare([] as Array[TrailDefinition])
-	_report("Участок в памяти против источника", site.compare(direct.heights))
+	if not _verified("Участок в памяти против источника", site.compare(direct.heights)):
+		quit(1)
+		return
 	var demo_route := site.demo_route()
 	var demo_errors := site.inside_errors([demo_route] as Array[TrailDefinition])
 	var wet := 0.0
@@ -80,30 +84,58 @@ func _init() -> void:
 		roads += int(direct.heights.road_refinement.sample(p.x, p.y, site.size.x).get("weight", 0.0) > 0.3)
 	print("Демонстрационная трасса: %.0f м, %s; глубина воды на оси до %.2f м, точек на полотне путей %d" % [
 		demo_route.route_length(), "в рабочей зоне" if demo_errors.is_empty() else "; ".join(demo_errors), wet, roads])
-	var path := TrailSite.DIR.path_join(str(args.get("name", "site_%d_%d" % [rect.position.x, rect.position.y])) + TrailSite.EXT)
-	started = Time.get_ticks_msec()
-	var err := site.save(path)
-	if err != OK:
-		printerr("Не записан ", path, ": ", error_string(err))
+	if not demo_errors.is_empty():
+		printerr("ОШИБКА: демонстрационная трасса вне рабочей зоны, площадка не записана")
 		quit(1)
 		return
-	print("Записан %s: %.2f МБ, %d мс" % [path, FileAccess.get_size(path) / 1048576.0, Time.get_ticks_msec() - started])
+	# Новый файл пишется рядом и заменяет прежний только после проверки: пригодная площадка не теряется.
+	var path := TrailSite.DIR.path_join(str(args.get("name", "site_%d_%d" % [rect.position.x, rect.position.y])) + TrailSite.EXT)
+	var candidate := path + ".candidate"
 	started = Time.get_ticks_msec()
-	var opened := TrailSite.open(path)
+	var err := site.save(candidate)
+	if err != OK:
+		printerr("ОШИБКА: не записан ", candidate, ": ", error_string(err))
+		quit(1)
+		return
+	print("Записан на проверку %s: %.2f МБ, %d мс" % [candidate, FileAccess.get_size(candidate) / 1048576.0, Time.get_ticks_msec() - started])
+	started = Time.get_ticks_msec()
+	var opened := TrailSite.open(candidate)
 	if opened.has("error"):
-		printerr("Не открылся: ", opened.error)
+		printerr("ОШИБКА: записанная площадка не открылась: ", opened.error)
+		DirAccess.remove_absolute(candidate)
 		quit(1)
 		return
 	print("Открыт заново: %d мс" % (Time.get_ticks_msec() - started))
-	_report("Открытый файл против источника", (opened.site as TrailSite).compare((opened.site as TrailSite).prepare([] as Array[TrailDefinition]).heights))
+	var reopened: TrailSite = opened.site
 	var after := _hashes(got.files)
-	print("Файлы кэша мира не изменились: %s" % ("да" if after == before else "НЕТ"))
-	quit(0 if after == before else 1)
+	var ok := _verified("Открытый файл против источника", reopened.compare(reopened.prepare([] as Array[TrailDefinition]).heights))
+	if after != before:
+		printerr("ОШИБКА: файлы кэша мира изменились во время экспорта")
+		ok = false
+	if not ok:
+		DirAccess.remove_absolute(candidate)
+		printerr("Площадка не записана; прежний файл %s оставлен как был" % path)
+		quit(1)
+		return
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(path)
+	err = DirAccess.rename_absolute(candidate, path)
+	if err != OK:
+		printerr("ОШИБКА: не удалось заменить ", path, ": ", error_string(err))
+		quit(1)
+		return
+	print("Площадка проверена и записана: %s. Файлы кэша мира не изменились." % path)
+	quit(0)
 
 
-func _report(title: String, c: Dictionary) -> void:
+## Сверка с источником по единым допускам TrailSite.TOLERANCE; превышение — ошибка экспорта.
+func _verified(title: String, c: Dictionary) -> bool:
 	print("%s: %d точек (у путей %d); земля %.6f м, опора %.6f м, вода %.6f м, вес полотна %.6f, поперёк %.6f, кочка %.6f м; покрытие колеса не совпало %d (у путей %d), покрытие клетки %d" % [
 		title, c.points, c.road_points, c.ground, c.support, c.depth, c.weight, c.across, c.bump, c.surface_mismatch, c.road_mismatch, c.cell_mismatch])
+	var problems := TrailSite.mismatch(c)
+	if not problems.is_empty():
+		printerr("ОШИБКА: %s — превышены допуски: %s" % [title, "; ".join(problems)])
+	return problems.is_empty()
 
 
 func _hashes(files: Array) -> Dictionary:
@@ -113,19 +145,27 @@ func _hashes(files: Array) -> Dictionary:
 	return out
 
 
-## Отказы на том же мире: граница за стартовой областью и участок, граница которого режет мост.
-func _refusals(w: WorldData, h: Heightfield, margin: int) -> void:
-	var area := w.available_rect
+## Отказы на том же мире: граница за стартовой областью и участок, граница которого режет мост. Принятый участок
+## или отказ не по той причине — false (ошибка экспорта); нет моста для проверки — тоже false: отказ не проверен.
+func _refusals(w: WorldData, h: Heightfield, margin: int) -> bool:
+	var area := w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H)
 	var outside := TrailSite.cut(w, h, Rect2i(area.end - Vector2i(20, 20), Vector2i(32, 32)), margin)
-	print("Отказ 1 (граница): ", "; ".join(outside.get("errors", PackedStringArray(["НЕТ ОТКАЗА"]))))
+	var ok := _refused("Отказ 1 (граница)", outside, "неподдерживаемая граница")
 	for b: BridgeData in w.bridges:
 		var m := (Vector2i(b.a % w.W, b.a / w.W) + Vector2i(b.b % w.W, b.b / w.W)) / 2
 		var rect := Rect2i(m.x + margin, m.y - 16, 32, 32)
 		if area.encloses(rect.grow(margin)):
-			var cut := TrailSite.cut(w, h, rect, margin)
-			print("Отказ 2 (мост у клетки %s): " % m, "; ".join(cut.get("errors", PackedStringArray(["НЕТ ОТКАЗА"]))))
-			return
-	print("Отказ 2: нет моста в стартовой области для проверки")
+			return _refused("Отказ 2 (мост у клетки %s)" % m, TrailSite.cut(w, h, rect, margin), "неполное сооружение") and ok
+	printerr("Отказ 2: нет моста в стартовой области — отказ не проверен")
+	return false
+
+
+func _refused(title: String, cut: Dictionary, reason: String) -> bool:
+	var errors: PackedStringArray = cut.get("errors", PackedStringArray())
+	var ok := cut.get("site") == null and not errors.is_empty() and Array(errors).any(func(e: String) -> bool: return e.begins_with(reason))
+	if ok: print(title, ": ", "; ".join(errors))
+	else: printerr("ОШИБКА: %s — ожидался отказ «%s», получено: %s" % [title, reason, "; ".join(errors) if not errors.is_empty() else "участок принят"])
+	return ok
 
 
 ## Сводка стартовой области для выбора участка вручную: мосты, туннели, поселения, плотность путей по блокам 32 клетки.

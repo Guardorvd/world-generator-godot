@@ -504,6 +504,24 @@ func compare(h: Heightfield, ref: Dictionary = reference) -> Dictionary:
 	return out
 
 
+## Допуски сравнения с источником (единые для экспорта и tools/trail_site_test.gd): высоты и вода, м; вес полотна
+## и поперечная координата — доли; кочка, м. Покрытия колеса и клетки должны совпасть точно.
+const TOLERANCE := {ground = 1e-4, support = 1e-4, depth = 1e-3, weight = 1e-4, across = 1e-4, bump = 1e-5}
+
+
+## Превышения допусков в результате compare(): пусто — площадка воспроизводит источник.
+static func mismatch(c: Dictionary) -> PackedStringArray:
+	var out := PackedStringArray()
+	for key: String in TOLERANCE:
+		if not (c[key] <= TOLERANCE[key]):
+			out.append("%s расходится на %.6f (допуск %.6f)" % [key, c[key], TOLERANCE[key]])
+	if c.surface_mismatch != 0 or c.cell_mismatch != 0:
+		out.append("покрытие колеса не совпало в %d точках, покрытие клетки — в %d" % [c.surface_mismatch, c.cell_mismatch])
+	if c.points == 0:
+		out.append("нет точек сравнения")
+	return out
+
+
 ## Выборки источника по probe_points: h — исходный мир (мировые метры, сдвиг ноль).
 func record_reference(h: Heightfield) -> void:
 	var pts := probe_points()

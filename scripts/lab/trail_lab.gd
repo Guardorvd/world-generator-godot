@@ -51,6 +51,9 @@ var _sources: Array[TrailDefinition] = []
 var ground_kind := "flat"
 ## Water of a saved site (WaterBuilder, as in the game) and the ground whose look (texture, world offset) is applied.
 var water := Node3D.new()
+## Bridges and tunnels of a saved site (StructuresBuilder over the same Heightfield.structures the wheels ride).
+## Lab decks of elements are drawn by TrailLabProps and are not part of this list.
+var structures := Node3D.new()
 var _look := ""
 
 func _ready() -> void:
@@ -61,6 +64,7 @@ func _ready() -> void:
 	add_child(survey_markers)
 	add_child(props)
 	add_child(water)
+	add_child(structures)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -30, 0)
 	sun.shadow_enabled = true
@@ -256,8 +260,12 @@ func _apply_look() -> void:
 	material.set_shader_parameter("world_offset", Vector2(heights.world.world_origin) * GameConfig.TILE)
 	terrain.material_override = material
 	for child in water.get_children(): child.free()
+	for child in structures.get_children(): child.free()
 	if site != null:
 		for node in WaterBuilder.build(heights.world, WaterBuilder.prepare(heights.world, heights)): water.add_child(node)
+		# The site's own bridges and tunnels: the first entries of the list, before the decks of lab elements.
+		# Built once per site: their levels are saved and their approaches are pinned against trail earthworks.
+		StructuresBuilder.build(structures, heights, heights.structures.slice(0, site.structures.size()))
 
 ## Overview camera target: the lab's 256 m square, or the middle of a saved site's working rectangle.
 func _overview_target() -> Vector3:

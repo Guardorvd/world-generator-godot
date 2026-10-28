@@ -25,9 +25,202 @@ func fingerprint(h: Heightfield) -> PackedByteArray:
 func source_fingerprint(site: TrailSite) -> PackedByteArray:
 	return var_to_bytes([site.hv, site.patches, site.cells, site.trails, site.structures, site.ribbons])
 
+## The export's own tolerances (TrailSite.TOLERANCE): one rule for both.
 func compared(c: Dictionary) -> bool:
-	return c.ground < 1e-4 and c.support < 1e-4 and c.depth < 1e-3 and c.weight < 1e-4 and c.across < 1e-4 and c.bump < 1e-5 \
-		and c.surface_mismatch == 0 and c.cell_mismatch == 0
+	return TrailSite.mismatch(c).is_empty()
+
+## A straight 60 m test route through `center` along `along`, with a roller across `center` (station 30) and one
+## 18 m before it: the first one is where the protected surface is, the second shows the earthworks do work.
+func cross_route(id: String, center: Vector2, along: Vector2) -> TrailDefinition:
+	var d := TrailDefinition.new()
+	d.id = id
+	d.kind = "mountain"
+	d.width = 4.0
+	d.surface = RoadSurface.DIRT
+	d.earthwork = 1.0
+	d.auto_bank = 1.0
+	var pts := PackedVector2Array()
+	for k in 61: pts.append(center + along.normalized() * (k - 30.0))
+	d.points = pts
+	var T := TrailElement.Profile
+	d.elements.assign([TrailElementLibrary.make(T.ROLLER, 12.0, 8.0, 0.5), TrailElementLibrary.make(T.ROLLER, 30.0, 8.0, 0.5)])
+	return d
+
+## Height, support and wheel contact at a point: the properties the protected surface must keep.
+func contact_at(h: Heightfield, p: Vector2) -> PackedFloat32Array:
+	var c := RideSurface.sample(h.world, h, p.x, p.y)
+	return PackedFloat32Array([h.ground_at(p.x, p.y), h.surface_at(p.x, p.y, INF), c.surface, c.weight, c.across])
+
+func worst_difference(a: PackedFloat32Array, b: PackedFloat32Array) -> float:
+	var worst := 0.0
+	for k in a.size(): worst = maxf(worst, absf(a[k] - b[k]))
+	return worst
+
+## The metre-grid vertex at or below-left of p (vertices lie at TILE/2 + k·STEP).
+func vertex_grid(p: Vector2) -> Vector2:
+	var o := Vector2.ONE * GameConfig.TILE * 0.5
+	return ((p - o) / RoadRefinement.STEP).floor() * RoadRefinement.STEP + o
+
+## Distance from p to the polyline of a site path (local metres).
+func path_distance(t: Dictionary, p: Vector2) -> float:
+	var best := INF
+	for n in range(1, t.pts.size()):
+		best = minf(best, Grid.segment_dist(p.x, p.y, t.pts[n - 1].x * GameConfig.TILE, t.pts[n - 1].y * GameConfig.TILE, t.pts[n].x * GameConfig.TILE, t.pts[n].y * GameConfig.TILE))
+	return best
+
+## A new trail crossing the existing road: inside the road's tread the earthworks change nothing (heights, support,
+## contact equal with and without elements), on the road axis outside the trail's reach the source surface stays,
+## the off-road roller lifts the ground, and the mesh agrees with the support.
+func check_road_crossing(site: TrailSite, bare: Heightfield) -> void:
+	var work := Rect2(Vector2(site.work.position) * GameConfig.TILE, Vector2(site.work.size) * GameConfig.TILE).grow(-40.0)
+	var road: Dictionary = {}
+	var center := Vector2.ZERO
+	var along := Vector2.ZERO
+	var half := 0.0
+	for t: Dictionary in site.trails:
+		if t.kind != "road": continue
+		for n in range(1, t.pts.size() - 1):
+			var a := Vector2(t.pts[n - 1].x, t.pts[n - 1].y) * GameConfig.TILE
+			var b := Vector2(t.pts[n + 1].x, t.pts[n + 1].y) * GameConfig.TILE
+			var mid := Vector2(t.pts[n].x, t.pts[n].y) * GameConfig.TILE
+			var normal := Vector2(-(b - a).y, (b - a).x).normalized()
+			# The whole test route away from water and the shore pin: otherwise the bank, not the road, stops the earthworks.
+			var dry := true
+			for k in range(-30, 31, 2):
+				var q := mid + normal * k
+				var cell := floori(q.y / GameConfig.TILE) * bare.world.W + floori(q.x / GameConfig.TILE)
+				dry = dry and work.has_point(q) and bare.depth_at(q.x, q.y) == 0.0 and bare.world.dist_water[cell] >= RoadBed.SHORE.y + 1.0
+			var far_from_bridge := site.structures.all(func(s: Dictionary) -> bool: return Grid.segment_dist(mid.x, mid.y, s.ax, s.az, s.bx, s.bz) > 30.0)
+			if dry and far_from_bridge and a.distance_to(b) > 0.5:
+				road = t
+				center = mid
+				along = Vector2(-(b - a).y, (b - a).x)
+				half = float(t.pts[n].w) * GameConfig.TILE * 0.5
+				break
+		if not road.is_empty(): break
+	check(not road.is_empty(), "the site has a dry road inside the working rectangle for the crossing case")
+	if road.is_empty(): return
+	var d := cross_route("cross_road", center, along)
+	var shaped := site.prepare([d] as Array[TrailDefinition], true)
+	var formed := site.prepare([cross_route("cross_road", center, along)] as Array[TrailDefinition], false)
+	check(shaped.errors.is_empty() and formed.errors.is_empty(), "crossing route builds: %s" % "; ".join(shaped.errors + formed.errors))
+	if not shaped.errors.is_empty() or not formed.errors.is_empty(): return
+	var h: Heightfield = shaped.heights
+	var tread := 0.0
+	var tread_points := 0
+	var axis := 0.0
+	var axis_points := 0
+	var taken := 0
+	# Protection is per vertex of the metre grid (a point between a pinned and a free vertex interpolates both):
+	# the tread is checked at the vertices themselves, the road axis densely.
+	var corner := vertex_grid(center - Vector2.ONE * 20.0)
+	for iz in 41:
+		for ix in 41:
+			var v := corner + Vector2(ix, iz) * RoadRefinement.STEP
+			if path_distance(road, v) <= half:
+				var got := contact_at(h, v)
+				tread = maxf(tread, worst_difference(got, contact_at(formed.heights, v)))
+				tread_points += 1
+				taken += int(got[2] == d.surface)
+	var p := center - Vector2.ONE * 20.0
+	while p.y <= center.y + 20.0:
+		p.x = center.x - 20.0
+		while p.x <= center.x + 20.0:
+			if path_distance(road, p) < 0.25 and d.nearest(p, 20.0).z > d.width * 0.5 + RoadRefinement.REACH + 1.0:
+				axis = maxf(axis, worst_difference(contact_at(h, p), contact_at(bare, p)))
+				axis_points += 1
+			p.x += 0.25
+		p.y += 0.25
+	report.road_crossing = {tread_points = tread_points, tread_difference = tread, axis_points = axis_points, axis_difference = axis, trail_surface_in_tread = taken}
+	check(tread_points > 40 and tread < 1e-5, "earthworks leave the crossed road's tread as formed: %d grid vertices, largest change %.6f (height, support, surface, weight, across)" % [tread_points, tread])
+	check(axis_points > 20 and axis < 1e-5, "road axis beyond the trail's reach keeps the source surface and contact: %d points, %.6f" % [axis_points, axis])
+	var off_road := d.point_at(12.0)
+	var lift: float = h.ground_at(off_road.x, off_road.y) - formed.heights.ground_at(off_road.x, off_road.y)
+	check(lift > 0.25, "the roller away from the road is baked: +%.2f m" % lift)
+	var error := mesh_error(h)
+	check(error < 1e-4, "mesh agrees with the support after earthworks at the crossing: %.7f m" % error)
+
+## A new trail across the approach to a bridge, 3 m beyond its end, with a roller there: within the structure pin
+## (RoadBed.PIN of the axis) heights and support equal the source, the deck stays as it was, the mesh agrees.
+func check_bridge_approach(site: TrailSite, bare: Heightfield) -> void:
+	var work := Rect2(Vector2(site.work.position) * GameConfig.TILE, Vector2(site.work.size) * GameConfig.TILE).grow(-32.0)
+	var bridge: Dictionary = {}
+	var end := Vector2.ZERO
+	for s: Dictionary in site.structures:
+		if s.tunnel: continue
+		for e: Array in [[Vector2(s.ax, s.az), -1.0], [Vector2(s.bx, s.bz), 1.0]]:
+			var at: Vector2 = e[0] + Vector2(s.ux, s.uz) * e[1] * 3.0
+			if work.has_point(at):
+				bridge = s
+				end = at
+				break
+		if not bridge.is_empty(): break
+	check(not bridge.is_empty(), "the site has a bridge inside the working rectangle for the approach case")
+	if bridge.is_empty(): return
+	var d := cross_route("bridge_approach", end, Vector2(-bridge.uz, bridge.ux))
+	var built := site.prepare([d] as Array[TrailDefinition])
+	var formed := site.prepare([cross_route("bridge_approach", end, Vector2(-bridge.uz, bridge.ux))] as Array[TrailDefinition], false)
+	check(built.errors.is_empty() and formed.errors.is_empty(), "approach route builds: %s" % "; ".join(built.errors + formed.errors))
+	if not built.errors.is_empty() or not formed.errors.is_empty(): return
+	var h: Heightfield = built.heights
+	# (a) Earthworks: every metre-grid vertex within RoadBed.PIN of the axis is exactly as without the elements.
+	var pinned := 0.0
+	var pinned_points := 0
+	var corner := vertex_grid(end - Vector2.ONE * 20.0)
+	for iz in 41:
+		for ix in 41:
+			var v := corner + Vector2(ix, iz) * RoadRefinement.STEP
+			if Grid.segment_dist(v.x, v.y, bridge.ax, bridge.az, bridge.bx, bridge.bz) < RoadBed.PIN:
+				pinned = maxf(pinned, worst_difference(contact_at(h, v), contact_at(formed.heights, v)))
+				pinned_points += 1
+	# (b) The deck and its approach on the axis line (the ends and 3 m beyond them, where the deck meets the ground)
+	# keep the source heights and support.
+	var deck := 0.0
+	for k in ceili(bridge.len * 2.0) + 13:
+		var q := Vector2(bridge.ax, bridge.az) + Vector2(bridge.ux, bridge.uz) * (k * 0.5 - 3.0)
+		deck = maxf(deck, maxf(absf(h.surface_at(q.x, q.y, INF) - bare.surface_at(q.x, q.y, INF)), absf(h.ground_at(q.x, q.y) - bare.ground_at(q.x, q.y))))
+	var ends := maxf(absf(h.ground_at(bridge.ax, bridge.az) - bridge.ay), absf(h.ground_at(bridge.bx, bridge.bz) - bridge.by))
+	report.bridge_approach = {pinned_vertices = pinned_points, pinned_difference = pinned, axis_difference = deck, ends_to_deck = ends}
+	check(pinned_points > 40 and pinned < 1e-5, "earthworks leave the bridge approach (within %.0f m of the axis) as formed: %d grid vertices, %.6f (height, support, contact)" % [RoadBed.PIN, pinned_points, pinned])
+	check(deck < 1e-5 and ends < 0.01, "deck, its ends and the approach on the axis keep the source support: %.6f m, ends to deck %.4f m" % [deck, ends])
+	var error := mesh_error(h)
+	check(error < 1e-4, "mesh agrees with the support after earthworks at the bridge approach: %.7f m" % error)
+
+## Triangles of the lab's structure meshes: the highest one over each point of the bridge axis must be the deck
+## the wheels stand on (Heightfield.deck_at). Returns {points, worst}.
+func visible_deck(lab: Node, h: Heightfield, count: int) -> Dictionary:
+	var tris := PackedVector3Array()
+	for mi in lab.structures.find_children("*", "MeshInstance3D", true, false):
+		var mesh: Mesh = (mi as MeshInstance3D).mesh
+		for surface in mesh.get_surface_count():
+			var arrays := mesh.surface_get_arrays(surface)
+			var v: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+			var idx: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+			if idx.is_empty():
+				tris.append_array(v)
+			else:
+				for i in idx: tris.append(v[i])
+	var worst := 0.0
+	var points := 0
+	for s: Dictionary in h.structures.slice(0, count):
+		if s.tunnel: continue
+		for k in range(1, floori(s.len * 2.0)):
+			var q := Vector2(s.ax, s.az) + Vector2(s.ux, s.uz) * k * 0.5
+			var top := -INF
+			for i in range(0, tris.size(), 3):
+				var y := _triangle_y(tris[i], tris[i + 1], tris[i + 2], q)
+				top = maxf(top, y)
+			worst = maxf(worst, absf(top - h.deck_at(q.x, q.y, INF)))
+			points += 1
+	return {points = points, worst = worst}
+
+static func _triangle_y(a: Vector3, b: Vector3, c: Vector3, p: Vector2) -> float:
+	var den := (b.z - c.z) * (a.x - c.x) + (c.x - b.x) * (a.z - c.z)
+	if absf(den) < 1e-9: return -INF
+	var u := ((b.z - c.z) * (p.x - c.x) + (c.x - b.x) * (p.y - c.z)) / den
+	var v := ((c.z - a.z) * (p.x - c.x) + (a.x - c.x) * (p.y - c.z)) / den
+	if u < -1e-4 or v < -1e-4 or u + v > 1.0001: return -INF
+	return u * a.y + v * b.y + (1.0 - u - v) * c.y
 
 ## Every mesh triangle centre on the support the wheels use: patches stitched without cracks.
 func mesh_error(h: Heightfield) -> float:
@@ -114,6 +307,8 @@ func run() -> void:
 		if h.road_refinement.patches[key].h != site.patches[key].h: crossing += 1
 	check(crossing < site.patches.size() / 4, "only patches the new trail reaches change: %d of %d saved" % [crossing, site.patches.size()])
 	report.changed_saved_patches = crossing
+	check_road_crossing(site, bare.heights)
+	check_bridge_approach(site, bare.heights)
 	# 4. World anchoring: the trail's tread noise and road bumps use world metres, not site metres.
 	var shifted := site.world()
 	shifted.world_origin = Vector2i.ZERO
@@ -153,6 +348,11 @@ func run() -> void:
 	check(lab.ground_kind == "site" and lab.routes[0].id == "site_demo" and lab.heights.world.world_origin == site.origin,
 		"Trail Lab opens the saved site with its demo route: %.0f ms" % lab.build_timings.get("total_ms", -1.0))
 	report.lab_site_build = lab.build_timings.duplicate()
+	var built_structures: Array[Node] = lab.structures.get_children()
+	var seen := visible_deck(lab, lab.heights, site.structures.size())
+	report.visible_deck = seen
+	check(built_structures.size() == 1 and seen.points > 10 and seen.worst < 0.02,
+		"site bridges are drawn by StructuresBuilder and the visible deck is the wheel support: %d points, %.4f m" % [seen.points, seen.worst])
 	lab.reset_ride(0.0, 8.0)
 	var start := Vector2(lab.bike.x, lab.bike.z)
 	var d: TrailDefinition = lab.routes[0]
@@ -181,6 +381,8 @@ func run() -> void:
 	check(edited and lab.heights != kept and RideSurface.sample(lab.heights.world, lab.heights, d.points[10].x, d.points[10].y).surface == RoadSurface.FOREST,
 		"an edit rebuilds the site route on a fresh copy: %.0f ms" % lab.build_timings.get("total_ms", -1.0))
 	report.lab_edit_build = lab.build_timings.duplicate()
+	check(is_instance_valid(built_structures[0]) and lab.structures.get_children() == built_structures,
+		"an edit of the route keeps the built site structures")
 	check(source_fingerprint(site) == before and FileAccess.get_sha256(Fixture.SITE) == file_hash, "site file and data unchanged after the lab session")
 	if "--capture" in OS.get_cmdline_user_args():
 		lab.set_overview(true)
@@ -192,6 +394,19 @@ func run() -> void:
 		for i in 3: await process_frame
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png(OUT + "/rider.png")
+		# Close view of the site bridge from its upstream side, a little above the deck.
+		var s: Dictionary = lab.heights.structures[0]
+		var mid := Vector3((s.ax + s.bx) * 0.5, (s.ay + s.by) * 0.5, (s.az + s.bz) * 0.5)
+		lab.set_process(false)
+		lab.camera.position = mid + Vector3(s.uz, 0, -s.ux) * 14.0 + Vector3(s.ux, 0, s.uz) * 6.0 + Vector3(0, 4.0, 0)
+		lab.camera.look_at(mid)
+		for i in 3: await process_frame
+		await RenderingServer.frame_post_draw
+		root.get_texture().get_image().save_png(OUT + "/bridge.png")
+		lab.set_process(true)
+	lab.editor.course_selected.emit(0, "mountain", "", "flat")
+	check(lab.ground_kind == "flat" and lab.structures.get_child_count() == 0 and lab.water.get_child_count() == 0,
+		"switching to a lab ground removes the site's structures and water")
 	lab.queue_free()
 	await process_frame
 	report.failures = failures
