@@ -474,6 +474,7 @@ func _raster_check() -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120 if "--quick" in OS.get_cmdline_user_args() else 600)
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
 	_technical_check()

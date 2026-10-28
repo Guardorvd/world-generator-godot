@@ -9,6 +9,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var costs := PackedFloat32Array()
 	costs.resize(64)
 	costs.fill(1.0)

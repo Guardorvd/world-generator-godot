@@ -188,6 +188,7 @@ func _placement() -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	_tiers()
 	_placement()
 	print("Итого: ", "всё прошло" if fails == 0 else "%d не прошло" % fails)

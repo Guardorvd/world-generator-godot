@@ -40,6 +40,7 @@ func descending(points: Array) -> bool:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	Grid.allow_fast = false
 	var r := fixture()
 	var before := var_to_bytes(r)

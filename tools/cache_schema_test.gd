@@ -8,6 +8,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var versions := PackedInt32Array([WorldCache.SCHEMA_GEO_VERSION, WorldCache.SCHEMA_TRAILS_VERSION,
 		WorldCache.SCHEMA_NATURE_VERSION, WorldCache.SCHEMA_VIEW_VERSION])
 	var base := WorldCache.schema_keys(WorldCache.SCHEMA_WORLD_VERSION, versions)

@@ -54,6 +54,7 @@ func budget_check(fast: bool) -> void:
 	check(not finder.find_path(cost, 0, 24 * 16 - 1).is_empty(), "новый поиск после ограничения работает")
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	budget_check(true)
 	budget_check(false)
 	Grid.allow_fast = true

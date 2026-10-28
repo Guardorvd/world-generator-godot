@@ -27,6 +27,7 @@ class PreviewGround extends Heightfield:
 		return true
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

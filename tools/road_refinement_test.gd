@@ -28,6 +28,7 @@ func _loading() -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	_ride()
 	if OS.get_cmdline_user_args().has("--ride-only"):
 		quit(1 if fails else 0)

@@ -8,6 +8,7 @@ var title: Label
 var out := "res://.godot/understory_review"
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	run.call_deferred()
 
 func run() -> void:

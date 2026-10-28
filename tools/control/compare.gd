@@ -17,6 +17,7 @@ var notes: PackedStringArray = []   # что заметно изменилось
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	var base := Dev.arg("base", Dev.latest_baseline())
 	var fresh := Dev.arg("new", Dev.RUNS.path_join(Dev.version()))
 	base = Dev.abs_dir(base)

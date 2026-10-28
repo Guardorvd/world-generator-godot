@@ -27,6 +27,7 @@ func check(ok: bool, label: String) -> void:
 	fails += int(not ok)
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	_run.call_deferred()
 
 func walking(h: Heightfield, w: WorldData) -> float:

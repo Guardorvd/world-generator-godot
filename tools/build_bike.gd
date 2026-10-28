@@ -106,6 +106,7 @@ func saddle() -> void:
 		tube(bike, "SaddleRail", Vector3(side * 0.035, 0.88, 0.12), Vector3(side * 0.035, 0.89, 0.28), 0.007, alloy)
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	bike.name = "Bike"
 	wheel("RearWheel", 0.53)
 	wheel("FrontWheel", -0.53)

@@ -12,6 +12,7 @@ var camera: Camera3D
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	var args := OS.get_cmdline_user_args()
 	out = _arg(args, "--out", OS.get_user_data_dir().path_join("lamp_look"))
 	tag = _arg(args, "--tag", "")

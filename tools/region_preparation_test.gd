@@ -50,6 +50,7 @@ func same_overlap(a: Dictionary, b: Dictionary) -> bool:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	var w := fixture()
 	var before := var_to_bytes([w.h, w.filled, w.biome, w.river_exits])

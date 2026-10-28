@@ -4,6 +4,7 @@ const Snapshots := preload("res://scripts/render/vegetation_snapshots.gd")
 var fails := 0
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

@@ -19,6 +19,7 @@ func _check(ok: bool, what: String) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var args := OS.get_cmdline_user_args()
 	var count := 6
 	var size := 512

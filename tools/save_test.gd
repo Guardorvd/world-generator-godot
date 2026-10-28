@@ -11,6 +11,7 @@ func check(ok: bool, label: String) -> void:
 		failed += 1
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300 if "--integration" in OS.get_cmdline_user_args() else 120)
 	call_deferred("run")
 
 func run() -> void:

@@ -10,6 +10,7 @@ func check(ok: bool, label: String) -> void:
 		printerr(label)
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var w := WorldGenerator.generate("Ущелье", 512)
 	var h := Heightfield.new(w)
 	w.outer = OuterLand.new(w)

@@ -17,6 +17,7 @@ class LandingGround extends Heightfield:
 		return 0.0
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	batch.call_deferred()
 
 func make_bike(pace := 12.0) -> BikeRide:

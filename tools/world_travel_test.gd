@@ -136,6 +136,7 @@ func lone_shore() -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	if OS.get_cmdline_user_args().has("--generated"):
 		# Полный конвейер на небольшом тестовом плане, без четырёх дорогих миров 768².

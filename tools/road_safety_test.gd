@@ -6,6 +6,7 @@ const SEEDS := ["Север-1234", "Туман-4821", "Ущелье", "Янта�
 var fails := 0
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 600)
 	var args := OS.get_cmdline_user_args()
 	Grid.allow_fast = not args.has("--gdscript")
 	_route_grade_check()

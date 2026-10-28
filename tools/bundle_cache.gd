@@ -5,6 +5,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/bundle_cache.gd
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 600)
 	var out := WorldCache.BUNDLED
 	DirAccess.make_dir_recursive_absolute(out)
 	for f in DirAccess.get_files_at(out):

@@ -103,6 +103,7 @@ func _settlements() -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 900 if "--worlds" in OS.get_cmdline_user_args() else 300)
 	_regions()
 	_settlements()
 	_nearest_water()

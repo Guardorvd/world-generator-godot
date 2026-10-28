@@ -5,6 +5,7 @@ const Floor := preload("res://scripts/render/forest_floor.gd")
 var fails := 0
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

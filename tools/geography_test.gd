@@ -421,6 +421,7 @@ func _vegetation_check(w: WorldData) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300 if ("--quick" in OS.get_cmdline_user_args() or "--seed" in OS.get_cmdline_user_args()) else 900)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	_traversal_check()
 	_geography_check()

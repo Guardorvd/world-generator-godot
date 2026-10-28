@@ -19,7 +19,9 @@ var origin := Vector3.ZERO
 var mode := "normal"
 var started := 0
 var costs := {}
-func _initialize() -> void: setup.call_deferred()
+func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
+	setup.call_deferred()
 func setup() -> void:
 	mode = Dev.arg("mode", "normal")
 	main = load("res://scenes/main.tscn").instantiate()

@@ -7,6 +7,7 @@ var camera: Camera3D
 var out := "res://.godot/vegetation_fade"
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

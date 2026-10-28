@@ -19,6 +19,7 @@ var at := Vector2.ZERO  # где игрок, клетки
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	var args := OS.get_cmdline_user_args()
 	var i := args.find("--out")
 	out = args[i + 1] if i >= 0 and i + 1 < args.size() else OS.get_user_data_dir().path_join("quest_look")

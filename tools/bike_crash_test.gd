@@ -74,6 +74,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90 if "--flat" in OS.get_cmdline_user_args() else 300)
 	var args := OS.get_cmdline_user_args()
 	if args.has("--cases"):
 		for value in args[args.find("--cases") + 1].split(","):

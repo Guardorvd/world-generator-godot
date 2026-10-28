@@ -42,6 +42,7 @@ func _rest_time(foot: bool) -> float:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var cruise := GameConfig.BIKE_SPEED
 	var cases := [
 		["Shift по ровному", true, cruise * 1.3, 0.0, 22.5],

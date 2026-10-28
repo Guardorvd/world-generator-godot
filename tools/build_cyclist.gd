@@ -32,6 +32,7 @@ func material(color: Color, roughness := 0.85) -> StandardMaterial3D:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	rider = CyclistRig.new()
 	rider.name = "Rider"
 	rider.set_meta("model_version", 7)

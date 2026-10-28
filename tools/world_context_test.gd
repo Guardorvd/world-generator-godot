@@ -9,6 +9,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	var w := WorldData.new()
 	w.W = 3
 	w.H = 2

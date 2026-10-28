@@ -11,6 +11,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = false
 	var w := WorldData.new()
 	w.W = 9

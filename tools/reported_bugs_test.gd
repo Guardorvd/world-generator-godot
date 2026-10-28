@@ -28,6 +28,7 @@ func check(ok: bool, label: String) -> void:
 	fails += int(not ok)
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	run.call_deferred()
 
 func run() -> void:

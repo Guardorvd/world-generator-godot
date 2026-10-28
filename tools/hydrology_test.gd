@@ -91,6 +91,7 @@ func short_junction() -> void:
 	check(joins == 3, "Все три участка сходятся в одной точке")
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	short_junction()
 	for seed_text in ["Север-1234", "Туман-4821", "Ущелье", "Янтарь-5150"]:

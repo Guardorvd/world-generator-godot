@@ -43,6 +43,7 @@ func _print_table(total: int) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	Pathfinder.profile_searches = true
 	var args := OS.get_cmdline_user_args()

@@ -11,6 +11,7 @@ class ConstantNoise extends Simplex:
 		return 0.5
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var zero := ConstantNoise.new()
 	var cont := ConstantNoise.new()
 	var ridge := ConstantNoise.new()

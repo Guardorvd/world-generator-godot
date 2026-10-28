@@ -22,6 +22,7 @@ class AudioGround extends Heightfield:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 240)
 	_run.call_deferred()
 
 

@@ -19,6 +19,7 @@ var results := {}
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	call_deferred("setup")
 
 

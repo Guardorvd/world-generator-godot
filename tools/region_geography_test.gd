@@ -82,6 +82,7 @@ func synthetic_routes() -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	noise_compatibility()
 	synthetic_routes()

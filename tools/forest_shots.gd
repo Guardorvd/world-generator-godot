@@ -3,6 +3,7 @@ extends "res://tools/control/shots.gd"
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 420)
 	super._initialize()
 	worlds = [["Туман-4821", 256]]
 

@@ -6,6 +6,7 @@ var failed := false
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var args := OS.get_cmdline_user_args()
 	var seed_text := args[0] if args.size() > 0 else "Север-1234"
 	var size := int(args[1]) if args.size() > 1 else 256

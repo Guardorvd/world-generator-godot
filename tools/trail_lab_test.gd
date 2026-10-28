@@ -10,6 +10,7 @@ class BrokenElement extends TrailElement:
 		return NAN
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

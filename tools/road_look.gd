@@ -33,6 +33,7 @@ func _arg(name: String, fallback: String) -> String:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	out = _arg("out", OS.get_user_data_dir().path_join("road_look"))
 	DirAccess.make_dir_recursive_absolute(out)
 	shader_path = _arg("shader", "")

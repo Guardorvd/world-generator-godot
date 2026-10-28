@@ -21,6 +21,7 @@ var done := false
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 900)
 	out = Dev.out_dir()
 	worlds = Dev.seeds().views
 	main = load("res://scenes/main.tscn").instantiate()

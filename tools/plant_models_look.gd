@@ -6,6 +6,7 @@ var stand: Node3D
 var lod := -1
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	call_deferred("run")
 
 func run() -> void:

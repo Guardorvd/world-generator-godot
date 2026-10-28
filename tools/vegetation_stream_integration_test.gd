@@ -18,6 +18,7 @@ class ProbeLayer extends VegetationLayer:
 		super._apply_grass(immediate)
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	run.call_deferred()
 
 func check(ok: bool, label: String) -> void:

@@ -7,6 +7,7 @@ func check(ok: bool, label: String) -> void:
 	failures += int(not ok)
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	var first := ServiceScope.new()
 	var second := ServiceScope.new()
 	first.settings.mouse = 2.5

@@ -37,6 +37,7 @@ var done := false
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 900)
 	out = Dev.out_dir()
 	cfg = Dev.seeds().perf
 	size = int(Dev.arg("size", "0"))

@@ -64,6 +64,7 @@ func ride(g: TestGround, x: float, pace: float, seconds: float, hop_at := -1.0) 
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 240)
 	# Пешком: в лоб ствол держит, чуть сбоку — обходится по касательной, не застревая
 	var g := flat()
 	var p := walk(g, 0.0, 4.0)

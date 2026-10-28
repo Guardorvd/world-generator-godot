@@ -3,6 +3,7 @@ extends SceneTree
 ## Низкое солнце и точечный свет выявляют круглые блики без генерации мира.
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	_run.call_deferred()
 
 func _run() -> void:

@@ -4,6 +4,7 @@ var fails := 0
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var w := WorldData.new()
 	w.W = 73
 	w.H = 69

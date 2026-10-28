@@ -85,6 +85,7 @@ static func fingerprint(w: WorldData) -> Dictionary:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 600)
 	var print_only := OS.get_cmdline_user_args().has("--print")
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	var ref: Variant = {}

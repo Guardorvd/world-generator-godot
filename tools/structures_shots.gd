@@ -16,6 +16,7 @@ var done := false
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 420)
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 

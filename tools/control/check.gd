@@ -79,7 +79,16 @@ var compute_probe: Object
 var compute_before := {}
 
 
+# Быстрая на этом ПК идёт около 4 мин; часы и кэш добавляют загрузки и снимки, глубокая — несколько процессов.
+func _watchdog_limit() -> float:
+	var args := OS.get_cmdline_user_args()
+	if "--deep" in args:
+		return 2400.0
+	return 600.0 if ("--hours" in args or "--cache" in args) else 420.0
+
+
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, _watchdog_limit())
 	t_start = Time.get_ticks_msec()
 	out = Dev.out_dir()
 	if "--verify-generation" in OS.get_cmdline_user_args():

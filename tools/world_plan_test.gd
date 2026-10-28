@@ -22,6 +22,7 @@ static func geography(w: WorldData) -> int:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	# Вложенность даже у края общего плана, и отрицательные мировые адреса областей.
 	for center in [Vector2i(0, 0), Vector2i(767, 767), Vector2i(411, 27)]:
 		var stub := WorldData.new()

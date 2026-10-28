@@ -19,7 +19,21 @@ var mem: Array = []             # [статическая память МБ, о�
 var fails := 0
 
 
+# По умолчанию (4 мира 512) около 10 мин, --size 256 --worlds 3 в несколько раз меньше.
+func _watchdog_limit() -> float:
+	var args := OS.get_cmdline_user_args()
+	var n := worlds
+	var s := size
+	for a in args.size() - 1:
+		if args[a] == "--size":
+			s = int(args[a + 1])
+		elif args[a] == "--worlds":
+			n = int(args[a + 1])
+	return 60.0 + n * (200.0 if s >= 512 else 90.0)
+
+
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, _watchdog_limit())
 	_check_base_ownership()
 	var args := OS.get_cmdline_user_args()
 	for a in args.size() - 1:

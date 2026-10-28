@@ -29,6 +29,7 @@ var walked := 0
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var args := OS.get_cmdline_user_args()
 	for a in args.size() - 1:
 		if args[a] == "--fps":

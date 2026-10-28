@@ -12,6 +12,7 @@ func check(ok: bool, what: String) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var flat := _compare(_world("flat"), "ровная земля", true)
 	var bank := _compare(_world("bank"), "косой склон", true)
 	var bumps := _compare(_world("bumps"), "короткий подъём и впадина", true)

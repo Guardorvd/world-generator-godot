@@ -1,6 +1,7 @@
 extends SceneTree
 ## Boundary/negative coordinates, shared vertices, empty and optional attributes.
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var a: Array = []
 	a.resize(Mesh.ARRAY_MAX)
 	a[Mesh.ARRAY_VERTEX] = PackedVector3Array([

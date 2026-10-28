@@ -7,6 +7,7 @@ class MenuWithoutBackground extends "res://scripts/ui/main.gd":
 var failures := 0
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	run.call_deferred()
 
 func check(ok: bool, message: String) -> void:

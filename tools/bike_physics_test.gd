@@ -16,6 +16,7 @@ func ride(initial: float, throttle: float, slope: float, seconds: float, boost :
 	return b
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	var climb := ride(2.0, 1.0, 0.35, 2.0)
 	var climb_push := ride(2.0, 1.0, 0.35, 2.0, true)
 	check(climb_push.speed > climb.speed + 0.7, "Shift ощутимо помогает дожать крутой подъём")

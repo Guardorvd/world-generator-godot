@@ -11,6 +11,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	# Частный размер допустим только у этого стенда, не для соседних игровых областей.
 	var w := WorldGenerator._geography("Север-1234", 96)

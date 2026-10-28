@@ -21,6 +21,7 @@ func _check(ok: bool, what: String) -> void:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90 if "--downhill" in OS.get_cmdline_user_args() else 300)
 	if "--downhill" in OS.get_cmdline_user_args():
 		_downhill_test.call_deferred()
 		return

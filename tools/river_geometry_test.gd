@@ -83,6 +83,7 @@ func synthetic() -> void:
 	check(shoal > 0.05, "На внутреннем берегу изгиба есть отмель")
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
 	synthetic()
 	if OS.get_cmdline_user_args().has("--synthetic-only"):

@@ -5,6 +5,7 @@ func check(ok: bool, label: String) -> void:
 		push_error(label)
 		fails += 1
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	run.call_deferred()
 func run() -> void:
 	var bike: BikeView = load("res://scenes/bike.tscn").instantiate()

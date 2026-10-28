@@ -57,6 +57,7 @@ func corner(pace: float, surface: int, hz := 60) -> BikeRide:
 	return b
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	# 7.3+: каменистый участок на скорости расходует сцепление сверх свойств покрытия.
 	w.surface = RoadSurface.STONE
 	var rocks := bike(16.0)

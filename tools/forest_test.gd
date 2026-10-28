@@ -39,6 +39,7 @@ func fixture() -> WorldData:
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = false
 	var w := fixture()
 	var frozen := var_to_bytes(EntityCodec.encode([w.h, w.elev, w.temp, w.moist, w.biome, w.river, w.path_mask, w.settlements]))

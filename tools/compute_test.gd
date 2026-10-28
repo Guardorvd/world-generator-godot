@@ -5,6 +5,7 @@ var fails := 0
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	# Самый первый доступ к мосту одновременно из воркеров, до прогрева другими тестами.
 	var cold_results: Array = []
 	cold_results.resize(32)

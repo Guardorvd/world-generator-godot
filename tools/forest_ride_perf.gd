@@ -19,6 +19,7 @@ var last := Vector2()
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
 

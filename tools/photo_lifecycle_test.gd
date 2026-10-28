@@ -15,6 +15,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	call_deferred("run")
 
 

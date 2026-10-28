@@ -11,6 +11,7 @@ func _check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	if "--navigation" in OS.get_cmdline_user_args():
 		_navigation_test.call_deferred()
 		return

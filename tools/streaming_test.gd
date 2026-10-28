@@ -11,6 +11,7 @@ var fails := 0
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
 	call_deferred("_run")
 
 

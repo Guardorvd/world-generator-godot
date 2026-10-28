@@ -2,7 +2,9 @@ extends SceneTree
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 var failures := 0
 var checks := 0
-func _initialize() -> void: run.call_deferred()
+func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
+	run.call_deferred()
 func check(ok: bool, message: String) -> void:
 	checks += 1
 	print("formation: ", "PASS " if ok else "FAIL ", message)

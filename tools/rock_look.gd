@@ -7,6 +7,7 @@ var baseline := ""
 var metrics := {}
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 180)
 	var args := OS.get_cmdline_user_args()
 	var at := args.find("--out")
 	if at >= 0 and at + 1 < args.size(): out = args[at + 1]

@@ -20,6 +20,7 @@ var out := ""
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	out = Dev.out_dir()
 	view = int(Dev.arg("view", "0"))
 	main = load("res://scenes/main.tscn").instantiate()

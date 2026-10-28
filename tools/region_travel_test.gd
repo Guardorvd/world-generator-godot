@@ -24,6 +24,7 @@ func check(ok: bool, label: String) -> void:
 
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 240)
 	# Ошибка в сопрограмме иначе оставит процесс ждать вечно.
 	create_timer(TIMEOUT_MS / 1000.0 + 120.0).timeout.connect(func() -> void:
 		printerr("region_travel_test: превышено время")

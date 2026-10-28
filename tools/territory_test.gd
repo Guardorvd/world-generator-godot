@@ -49,6 +49,7 @@ static func sub(big: Dictionary, bx: int, by: int, bw: int, x0: int, y0: int, cw
 
 
 func _init() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 300)
 	var w := WorldGenerator.generate("Север-1234", 256)
 	w.outer = OuterLand.new(w)
 	var C := OuterLand.C
