@@ -35,11 +35,26 @@ const BUMP_STRIDE := 6
 var bumps := PackedFloat32Array()
 var _bump_grid := {}
 var _bump_version := -1
+## Объекты технических элементов трасс (TrailTechnical.build): постоянный слой, который обновления подлеска
+## не заменяют, а дополняют. Препятствия — в формате STRIDE, кочки — BUMP_STRIDE.
+var _trail_solids := PackedFloat32Array()
+var _trail_bumps := PackedFloat32Array()
+var _veg_bumps := PackedFloat32Array()
 
 
 func _init(w: WorldData, h: Heightfield) -> void:
 	world = w
 	_heights = weakref(h)
+	if not h.trail_technical.is_empty():
+		set_trail(h.trail_technical.collide, h.trail_technical.bumps)
+
+
+## Постоянный слой объектов трассы; следующий update пересоберёт препятствия с ним.
+func set_trail(solids: PackedFloat32Array, trail_bumps: PackedFloat32Array) -> void:
+	_trail_solids = solids
+	_trail_bumps = trail_bumps
+	_version = -2
+	_index_bumps()
 
 
 ## Каждый такт: пересобрать, если игрок отошёл или подлесок обновился. details — валежник из
@@ -55,6 +70,9 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 	for n in range(0, details.size(), STRIDE):
 		if Vector2(details[n], details[n + 1]).distance_to(_center) < REACH:
 			_add(details[n], details[n + 1], details[n + 2], details[n + 3], details[n + 4], details[n + 5], details[n + 6])
+	for n in range(0, _trail_solids.size(), STRIDE):
+		if Vector2(_trail_solids[n], _trail_solids[n + 1]).distance_to(_center) < REACH:
+			_add(_trail_solids[n], _trail_solids[n + 1], _trail_solids[n + 2], _trail_solids[n + 3], _trail_solids[n + 4], _trail_solids[n + 5], _trail_solids[n + 6])
 
 
 ## Деревья, валуны, сухие деревья и кактусы мира — те же, что рисует VegetationLayer
@@ -184,6 +202,13 @@ func set_bumps(list: PackedFloat32Array, version: int) -> void:
 	if version == _bump_version:
 		return
 	_bump_version = version
+	_veg_bumps = list
+	_index_bumps()
+
+
+## Кочки подлеска вместе с кочками трассы, в сетке
+func _index_bumps() -> void:
+	var list := _veg_bumps if _trail_bumps.is_empty() else _trail_bumps + _veg_bumps
 	bumps = list
 	_bump_grid.clear()
 	for at in range(0, list.size(), BUMP_STRIDE):

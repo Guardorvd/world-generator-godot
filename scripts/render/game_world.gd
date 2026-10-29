@@ -239,6 +239,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	$Settlements.add_child(fire_light)
 	t = _mark("start_settlements_ms", t)
 	StructuresBuilder.build($Structures, heights)
+	TrailLabProps.populate($Structures, heights.trail_technical.get("props", []))
 	t = _mark("start_structures_ms", t)
 	load_timings.start_scene_ms = (t - scene_started) / 1000.0
 

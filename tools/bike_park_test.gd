@@ -2,8 +2,11 @@ extends SceneTree
 ## Велопарк стартовой области (BikePark через StageTrailPlan) в настоящем мире: одна новая генерация через WorldLoader
 ## (кэш выключен), сводка парка, проверки (парк найден, трассы в мире, запеклись без ошибок, длина) и картинка сверху
 ## tools/control/runs/bike_park/<сид>.png (рельеф и трассы парка, 2 м на пиксель).
+## `-- --cache` — кэш во временной папке и вторая загрузка из него: объекты технических элементов (TrailTechnical)
+## те же, что на холодной загрузке, и обновление подлеска в ForestObstacles их не стирает.
 ##   godot --headless --path . --script res://tools/bike_park_test.gd -- --seed Полынь-1312
 const OUT := "res://tools/control/runs/bike_park"
+const CACHE := "user://bike_park_test_cache"
 var failures := 0
 
 
@@ -21,6 +24,12 @@ func run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	var args := OS.get_cmdline_user_args()
 	var seed: String = args[args.find("--seed") + 1] if "--seed" in args else "Полынь-1312"
+	var cached := "--cache" in args
+	var cache := GameContext.scope.cache
+	if cached:
+		cache.dir = CACHE
+		cache.enabled = true
+		cache.remove_seed(seed)
 	var t0 := Time.get_ticks_msec()
 	var r := WorldLoader.load_world(seed, WorldGenerator.START_SIZE)
 	print("Мир «%s»: %d мс (finish_paths %.0f, запекание парка %.0f)" % [seed, Time.get_ticks_msec() - t0, r.timings.get("finish_paths_ms", 0.0), r.timings.get("trail_ms", 0.0)])
@@ -53,9 +62,44 @@ func run() -> void:
 	for route: Dictionary in r.world.trails:
 		if str(route.get("trail_id", "")).begins_with(StageTrailPlan.ID + "/"): listed += 1
 	check(listed == kit.size(), "все трассы в мире ровно по разу (%d)" % listed)
+	print("Объекты трассы: ", r.trail.get("technical", {}))
+	check(r.trail.has("technical") and r.heights.trail_technical.props.size() == r.trail.technical.props, "объекты технических элементов собраны")
+	obstacles(r.heights)
+	if cached:
+		cache.wait_writes()
+		t0 = Time.get_ticks_msec()
+		var b := WorldLoader.load_world(seed, WorldGenerator.START_SIZE)
+		print("Из кэша: %d мс, объекты трассы: %s" % [Time.get_ticks_msec() - t0, b.trail.get("technical", {})])
+		check(b.from_cache and b.surface_hit, "вторая загрузка — из кэша поверхности")
+		var ta: Dictionary = r.heights.trail_technical
+		var tb: Dictionary = b.heights.trail_technical
+		check(not tb.is_empty() and tb.collide == ta.collide and tb.bumps == ta.bumps and var_to_str(tb.props) == var_to_str(ta.props), "из кэша — тот же комплект объектов трассы")
+		var decks := 0
+		for s: Dictionary in b.heights.structures: decks += int(s.get("deck", false))
+		check(decks == ta.decks.size(), "настилы не задвоились при загрузке из кэша (%d)" % decks)
+		cache.wait_writes()
+		cache.remove_seed(seed)
+		cache.enabled = false
 	picture(r.heights, plan.park, kit, OUT + "/" + seed + ".png")
 	print("bike_park: ", failures, " failures")
 	quit(1 if failures else 0)
+
+
+## Слой трассы в ForestObstacles: препятствие держит, кочка поднимает колесо — и после обновления подлеска тоже.
+func obstacles(h: Heightfield) -> void:
+	var t: Dictionary = h.trail_technical
+	var fo := ForestObstacles.new(h.world, h)
+	var veg_bump := PackedFloat32Array([-1000.0, -1000.0, -1000.0, -1000.0, 0.3, 0.1])
+	for version in [1, 2]:
+		fo.set_bumps(veg_bump if version == 2 else PackedFloat32Array(), version)
+		if t.collide.size() > 0:
+			var x: float = t.collide[0]
+			var z: float = t.collide[1]
+			fo.update(x, z, PackedFloat32Array(), version, true)
+			check(fo.hits(x, z, t.collide[5], 0.3), "препятствие трассы держит (обновление подлеска %d)" % version)
+		if t.bumps.size() > 0:
+			fo.update(t.bumps[0], t.bumps[1], PackedFloat32Array(), version, true)
+			check(fo.bump_at(t.bumps[0], t.bumps[1]) > 0.0, "кочка трассы поднимает колесо (обновление подлеска %d)" % version)
 
 
 func picture(h: Heightfield, park: Dictionary, kit: Array[TrailDefinition], path: String) -> void:

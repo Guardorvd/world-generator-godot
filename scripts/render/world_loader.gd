@@ -150,6 +150,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# до меша, столкновений и карты, поэтому весь мир видит один окончательный результат
 	t = Time.get_ticks_usec()
 	if not r.surface_hit: r.trail = StageTrailPlan.apply(r.heights)
+	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.trail_ms = (Time.get_ticks_usec() - t) / 1000.0
 	for message: String in r.trail.errors:
 		push_warning("Трасса стартовой области: " + message)

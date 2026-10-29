@@ -41,6 +41,8 @@ static func build(parent: Node3D, heights: Heightfield, only: Variant = null) ->
 	var slab_dark := SettlementsBuilder.mat(Color8(0x86, 0x80, 0x76))
 	var plank_light := SettlementsBuilder.mat(Color8(0x9a, 0x7a, 0x55))
 	for s: Dictionary in (heights.structures if only == null else only):
+		if s.get("deck", false):
+			continue # настил трассы: его рисует TrailLabProps вместе с остальными объектами трассы
 		if s.tunnel:
 			var a := Vector3(s.ax, s.ay, s.az)
 			var b := Vector3(s.bx, s.by, s.bz)

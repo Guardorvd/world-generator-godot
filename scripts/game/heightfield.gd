@@ -48,6 +48,7 @@ var _deck_keys := {}                # настилы Trail Lab, уже доба�
 var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
 var path_timings := {}
 var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
+var trail_technical := {}           # объекты технических элементов трасс (TrailTechnical.build): StageTrailPlan, Trail Lab
 ## 9.7: отрезки лент для C# (FastGrid.Water.cs): по 12 чисел (a.left, a.right, b.left, b.right) и пары клетка — отрезок
 var _seg_pts := PackedFloat32Array()
 var _pair_cells := PackedInt32Array()
@@ -293,6 +294,7 @@ func add_decks(list: Array) -> void:
 		s.by = d.by
 		s.style = "planks"
 		s.rails = false
+		s.deck = true # рисует TrailLabProps, не StructuresBuilder
 		var k := structures.size()
 		structures.append(s)
 		var r: float = s.half / TILE + 1.0

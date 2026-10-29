@@ -128,14 +128,8 @@ static func apply(h: Heightfield) -> Dictionary:
 	if not plan.has("definition"):
 		out.errors.append("в плане нет определения трассы: трасса не запекается")
 		return out
-	var definition := unpack(plan.definition)
-	var kit: Array[TrailDefinition] = []
-	var main := 0 # номер трассы с элементами, которую при неудаче запекаем без них
-	if plan.has("routes"):
-		for data: Dictionary in plan.routes: kit.append(unpack(data))
-	else:
-		kit.assign([unpack(plan.access.inbound), definition, unpack(plan.access.outbound)])
-		main = 1
+	var kit := _kit(plan)
+	var main := 0 if plan.has("routes") else 1 # номер трассы с элементами, которую при неудаче запекаем без них
 	var listed := {}
 	for route: Dictionary in w.trails:
 		listed[route.get("trail_id", "")] = true
@@ -159,11 +153,45 @@ static func apply(h: Heightfield) -> Dictionary:
 			out.variant = ""
 	out.applied = not out.variant.is_empty()
 	if out.applied:
+		_build_technical(h, kit, out)
 		for d in kit: out.earthworks[d.id] = h.road_refinement.trail_shaping.get(d.id, {}).duplicate()
 		out.earthworks.patches_added = h.road_refinement.build_timings.get("trail_patches_added", 0)
 		out.earthworks.zone_patches = h.road_refinement.build_timings.get("trail_zone_patches", 0)
 	out.ms = (Time.get_ticks_usec() - started) / 1000.0
 	return out
+
+
+## Загрузка из кэша (поверхность уже запечена): собрать те же объекты трассы, что apply() на холодной загрузке, —
+## тем же кодом на том же рельефе. Настилы уже в сохранённых сооружениях: add_decks их пропускает.
+static func restore_technical(h: Heightfield, report: Dictionary) -> void:
+	var plan := h.world.trail_plan
+	if not report.get("applied", false) or stale(plan) or not plan.has("definition"):
+		return
+	var kit := _kit(plan)
+	if report.get("variant", "") != "основной":
+		for k in kit.size():
+			if not plan.has("routes") and k != 1: continue
+			kit[k].elements = [] as Array[TrailElement]
+	_build_technical(h, kit, report)
+
+
+## Камни, корни, брёвна, слалом и настилы технических элементов (как в Trail Lab): в h.trail_technical, его берёт
+## ForestObstacles (препятствия и кочки) и GameWorld (изображение). Число объектов — в отчёт.
+static func _build_technical(h: Heightfield, kit: Array[TrailDefinition], out: Dictionary) -> void:
+	var started := Time.get_ticks_usec()
+	h.trail_technical = TrailTechnical.build(h, kit)
+	out.technical = {solids = h.trail_technical.collide.size() / ForestObstacles.STRIDE,
+		bumps = h.trail_technical.bumps.size() / ForestObstacles.BUMP_STRIDE, props = h.trail_technical.props.size(),
+		decks = h.trail_technical.decks.size(), ms = (Time.get_ticks_usec() - started) / 1000.0}
+
+
+static func _kit(plan: Dictionary) -> Array[TrailDefinition]:
+	var kit: Array[TrailDefinition] = []
+	if plan.has("routes"):
+		for data: Dictionary in plan.routes: kit.append(unpack(data))
+	else:
+		kit.assign([unpack(plan.access.inbound), unpack(plan.definition), unpack(plan.access.outbound)])
+	return kit
 
 
 ## План сохранён другой версией кода (в том числе пустой — до этапа трассы): его результат не соответствует нынешней

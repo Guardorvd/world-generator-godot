@@ -230,7 +230,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	routes = candidate
 	technical = next_technical
 	_apply_look()
-	heights.obstacles.set_bumps(technical.bumps, 1)
+	heights.obstacles.set_trail(technical.collide, technical.bumps)
 	for child in props.get_children(): child.free()
 	TrailLabProps.populate(props, technical.props)
 	terrain.mesh = mesh
@@ -546,7 +546,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	bike.speed = speed
 	last_land_impact = 0.0
 	last_bottom_out = 0.0
-	heights.obstacles.update(player.x, player.z, technical.collide, 1, true)
+	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 1, true)
 	view.snap(bike)
 	metrics.reset(bike)
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
@@ -648,7 +648,7 @@ func _physics_process(dt: float) -> void:
 func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
 	var w := heights.world
 	_cam_from = _cam_to
-	heights.obstacles.update(player.x, player.z, technical.collide, 1)
+	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 1)
 	if crash.active():
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:
