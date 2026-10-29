@@ -651,8 +651,19 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 func _generate_job(seed_text: String, size: int, start_at := Vector2.INF) -> void:
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
 		_set_progress.call_deferred(p, label), null, false, start_at)
+	if loaded == null:
+		# ошибка скрипта оборвала загрузку: вернуть меню, а не держать экран загрузки вечно
+		_on_world_failed.call_deferred()
+		return
 	loaded.timings.ready_queued_us = Time.get_ticks_usec()
 	_on_world_ready.call_deferred(loaded)
+
+
+func _on_world_failed() -> void:
+	gen_thread.wait_to_finish()
+	busy = false
+	_show("menu")
+	_message("Мир не подготовлен", "Генерация прервалась с ошибкой. Подробности в журнале godot.log.")
 
 
 func _set_progress(p: float, label: String) -> void:

@@ -35,7 +35,11 @@ static func fast_grid() -> Object:
 		if ClassDB.class_exists("CSharpScript") and ResourceLoader.exists(FAST_GRID_SCRIPT):
 			var script: Script = load(FAST_GRID_SCRIPT)
 			if script != null and script.can_instantiate():
-				_fast_script = script
+				if _fast_build_stale():
+					# старая сборка не знает новых методов или ждёт другие массивы: генерация упадёт посреди этапа
+					push_error("FastGrid (C#) собран раньше правки .cs: расчёты идут на GDScript, соберите проект (dotnet build)")
+				else:
+					_fast_script = script
 		if _fast_script == null and ClassDB.class_exists("CSharpScript"):
 			# сборка .NET, но C# не собран: всё пойдёт на GDScript во много раз медленнее — сказать об этом
 			push_warning("FastGrid (C#) недоступен, расчёты идут на GDScript: соберите проект (dotnet build)")
@@ -43,6 +47,22 @@ static func fast_grid() -> Object:
 	var ready_script := _fast_script
 	_fast_lock.unlock()
 	return ready_script.new() if ready_script != null else null
+
+
+## Запуск из папки проекта: сборка C# старше исходников .cs (ветку обновили, а проект не пересобрали).
+## В экспортированной игре исходников нет, проверка не нужна.
+static func _fast_build_stale() -> bool:
+	if OS.has_feature("template"):
+		return false
+	var dll := ProjectSettings.globalize_path("res://.godot/mono/temp/bin/Debug/%s.dll" % ProjectSettings.get_setting("dotnet/project/assembly_name", "WorldGeneratorGodot"))
+	if not FileAccess.file_exists(dll):
+		return false
+	var built := FileAccess.get_modified_time(dll)
+	var dir := FAST_GRID_SCRIPT.get_base_dir()
+	for name in DirAccess.get_files_at(dir):
+		if name.ends_with(".cs") and FileAccess.get_modified_time(dir.path_join(name)) > built:
+			return true
+	return false
 
 
 ## Крупнейшая область суши с учётом возможных коротких переправ. Вода дальше половины
