@@ -28,6 +28,9 @@ var _expanded := 0
 var _budget_stops := 0
 var _no_path := 0
 var _skipped := 0
+var _reach_calls := 0
+var _reach_rejects := 0
+var _reach_visited := 0
 
 var W := 0
 var H := 0
@@ -361,6 +364,78 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	return path
 
 
+## Шаг 0–2 ревью дорожной сети 29.10: «невозможно» отдельно от «кончился запас». false — только если find_path
+## с теми же входами (heights, links, use_corridor, max_cross_grade) точно не найдёт пути: s и t в разных
+## областях, связанных разрешёнными шагами. Поиск в ширину без стоимостей попеременно от обоих концов —
+## меньшая область исчерпывается первой; запас раскрытий не тратится. Шаг разрешён, если поиск разрешил бы
+## его в любую сторону, поэтому ложного «нельзя» не бывает. Копия FastGrid.Reach.
+@warning_ignore("integer_division")
+func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> bool:
+	if _fast != null:
+		return _fast.Reach(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
+	_reach_calls += 1
+	if s == t:
+		return true
+	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
+	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
+	var mark := {s: 0, t: 1}
+	var queues: Array[PackedInt32Array] = [PackedInt32Array([s]), PackedInt32Array([t])]
+	var heads := [0, 0]
+	while heads[0] < queues[0].size() and heads[1] < queues[1].size():
+		var side := 0 if queues[0].size() - heads[0] <= queues[1].size() - heads[1] else 1
+		var q: PackedInt32Array = queues[side]
+		var end := q.size()
+		for head in range(heads[side], end):
+			var c := q[head]
+			_reach_visited += 1
+			var cx := c % W
+			var cy := c / W
+			for k in 8:
+				var nx := cx + Grid.DX[k]
+				var ny := cy + Grid.DY[k]
+				if nx < 0 or ny < 0 or nx >= W or ny >= H:
+					continue
+				var n := ny * W + nx
+				var m: int = mark.get(n, -1)
+				# Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
+				if m == side or n != s and cost[n] == INF:
+					continue
+				if not _step_allowed(cost, terrain, max_grade, c, k) and not _step_allowed(cost, terrain, max_grade, n, opposite[k]):
+					continue
+				if m == 1 - side:
+					return true
+				mark[n] = side
+				q.append(n)
+		heads[side] = end
+		queues[side] = q
+	_reach_rejects += 1
+	return false
+
+
+## Разрешил бы find_path шаг c → c + (DX[k], DY[k]) (без учёта стоимости): те же проверки в том же порядке.
+func _step_allowed(cost: PackedFloat32Array, terrain: bool, max_grade: float, c: int, k: int) -> bool:
+	var n := c + Grid.DY[k] * W + Grid.DX[k]
+	if cost[n] == INF:
+		return false
+	var linked := not links.is_empty() and (links[c] & (1 << k)) != 0
+	if k >= 4 and not linked and (cost[c + Grid.DX[k]] == INF or cost[c + Grid.DY[k] * W] == INF):
+		return false
+	if not terrain:
+		return true
+	var grade := absf(heights[n] - heights[c]) / Grid.DL[k]
+	if (k == 4 or k == 7) and not linked:
+		var mid := (float(heights[c + Grid.DX[k]]) + heights[c + Grid.DY[k] * W]) * 0.5
+		grade = maxf(absf(mid - heights[c]), absf(heights[n] - mid)) * 2.0 / Grid.DL[k]
+	var cross_grade := 0.0
+	if use_corridor and not _ground.is_empty() and not linked:
+		_measure_corridor(c, k)
+		grade = maxf(grade, _corridor[c * 8 + k])
+		cross_grade = _cross[c * 8 + k]
+		if grade == INF:
+			return false
+	return not (grade > max_grade or cross_grade > max_cross_grade)
+
+
 ## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
 ## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
@@ -386,7 +461,7 @@ func release() -> void:
 func search_stats() -> Dictionary:
 	if _fast == null:
 		return {calls = _calls, expanded = _expanded, budget_stops = _budget_stops + _skipped, no_path = _no_path,
-			skipped = _skipped}
+			skipped = _skipped, reach_calls = _reach_calls, reach_rejects = _reach_rejects, reach_visited = _reach_visited}
 	# Раскрытия, исходы и судьба фонового поиска считаются всегда: они нужны отчёту подготовки,
 	# а не только bench.gd. calls/native_ms/call_ms — только с profile_searches.
 	var stats: Dictionary = _fast.SearchStats()

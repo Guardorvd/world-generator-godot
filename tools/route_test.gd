@@ -473,6 +473,56 @@ func _raster_check() -> void:
 		"разметка обрезается границами карты и пропускает нулевые сегменты")
 
 
+## Ревью дорожной сети 29.10: can_reach отвечает «нельзя» только там, где find_path тоже не находит пути,
+## и одинаково в C# и GDScript (стена, щель, стена круче предела, диагональ мимо угла, готовый настил).
+func _reach_check() -> void:
+	const S := 24
+	var cases := {}
+	for name: String in ["wall", "gap", "steep", "corner", "deck"]:
+		var heights := PackedFloat32Array()
+		heights.resize(S * S)
+		var cost := PackedFloat32Array()
+		cost.resize(S * S)
+		cost.fill(1.0)
+		var links := PackedByteArray()
+		for y in S:
+			var x := 12
+			match name:
+				"wall", "gap":
+					if name == "wall" or y != 17: cost[y * S + x] = INF
+				"steep":
+					for k in range(x, S): heights[y * S + k] = 6.0
+				"corner":
+					# Стена с разрывом по диагонали: углы шага закрыты, путь не проходит.
+					cost[y * S + (x if y < 10 else x + 1)] = INF
+				"deck":
+					cost[y * S + x] = INF
+		if name == "deck":
+			links.resize(S * S)
+			links[5 * S + 11] |= 1 << 0
+			links[5 * S + 13] |= 1 << 1
+			cost[5 * S + 12] = 1.0
+			for y in S:
+				if y != 5: cost[y * S + 12] = INF
+		cases[name] = [cost, heights, links]
+	var expect := {wall = false, gap = true, steep = false, corner = false, deck = true}
+	var answers := {}
+	for fast: bool in ([true, false] if Grid.allow_fast else [false]):
+		var allow := Grid.allow_fast
+		Grid.allow_fast = fast
+		for name: String in cases:
+			var finder := Pathfinder.new(S, S, cases[name][1])
+			finder.links = cases[name][2]
+			var s := 5 * S + 2
+			var t := 20 * S + 21
+			var reach := finder.can_reach(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+			var found := not finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty()
+			_check(reach == expect[name] and (reach or not found), "can_reach %s: %s, путь найден: %s" % [name, reach, found])
+			if answers.has(name): _check(answers[name] == reach, "can_reach %s: C# и GDScript совпадают" % name)
+			answers[name] = reach
+		Grid.allow_fast = allow
+
+
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120 if "--quick" in OS.get_cmdline_user_args() else 600)
 	var args := OS.get_cmdline_user_args()
@@ -481,6 +531,7 @@ func _init() -> void:
 	_raster_check()
 	_terrain_check()
 	_surface_check()
+	_reach_check()
 	_ravine_landing_check()
 	_corridor_check()
 	_rollback_check()

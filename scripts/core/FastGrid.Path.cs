@@ -42,8 +42,14 @@ public partial class FastGrid
 		["prefetch_expanded"] = Interlocked.Read(ref _prefetchExpanded), ["prefetch_cancelled"] = _prefetchCancelled,
 		["prefetch_unused"] = _prefetchUnused,
 		["prefetch_wait_ms"] = _prefetchWaitTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency,
-		["budget_stops"] = _budgetStops, ["no_path"] = _noPath
+		["budget_stops"] = _budgetStops, ["no_path"] = _noPath,
+		["reach_calls"] = _reachCalls, ["reach_rejects"] = _reachRejects, ["reach_visited"] = _reachVisited
 	};
+	private long _reachCalls, _reachRejects, _reachVisited;
+	private int[] _reachMark = Array.Empty<int>();
+	private int[] _reachQueueA = Array.Empty<int>();
+	private int[] _reachQueueB = Array.Empty<int>();
+	private int _reachGen;
 
 	// Ширина прохода: [(c * 8 + k) * 2] — продольный уклон шага, [+1] — поперечный крен.
 	private float[] _corridorGround = Array.Empty<float>();
@@ -343,10 +349,124 @@ public partial class FastGrid
 		_pendingQuery = null;
 	}
 
+	/// <summary>Копия Pathfinder.can_reach: false, только если FindPath с этими входами точно не найдёт пути
+	/// (s и t в разных областях, связанных разрешёнными шагами). Без стоимостей и кучи: поиск в ширину
+	/// попеременно от обоих концов; меньшая область исчерпывается первой. Запас раскрытий не тратит.
+	/// Шаг считается разрешённым, если поиск разрешил бы его в любую сторону, — ответ «нельзя» не бывает ложным.</summary>
+	public bool Reach(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade)
+	{
+		_reachCalls++;
+		if (s == t)
+			return true;
+		int n = _w * _h;
+		if (_reachMark.Length != n)
+		{
+			_reachMark = new int[n];
+			_reachQueueA = new int[n];
+			_reachQueueB = new int[n];
+			_reachGen = 0;
+		}
+		if (_reachGen > int.MaxValue / 2 - 2)
+		{
+			Array.Clear(_reachMark);
+			_reachGen = 0;
+		}
+		_reachGen++;
+		int markA = _reachGen * 2, markB = _reachGen * 2 + 1;
+		bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
+		bool corridor = useCorridor && _hasCorridor;
+		bool hasLinks = links.Length > 0;
+		var mark = _reachMark;
+		int[] qa = _reachQueueA, qb = _reachQueueB;
+		int headA = 0, tailA = 0, headB = 0, tailB = 0;
+		mark[s] = markA;
+		qa[tailA++] = s;
+		mark[t] = markB;
+		qb[tailB++] = t;
+		long visited = 0;
+		bool found = false;
+		// Слой за слоем у той стороны, чья очередь короче: пустая очередь — её область исчерпана.
+		while (headA < tailA && headB < tailB && !found)
+		{
+			bool fromA = tailA - headA <= tailB - headB;
+			int[] q = fromA ? qa : qb;
+			int own = fromA ? markA : markB, other = fromA ? markB : markA;
+			int head = fromA ? headA : headB, tail = fromA ? tailA : tailB;
+			int end = tail;
+			for (; head < end && !found; head++)
+			{
+				int c = q[head];
+				visited++;
+				int cx = c % _w, cy = c / _w;
+				for (int k = 0; k < 8; k++)
+				{
+					int nx = cx + Dx[k], ny = cy + Dy[k];
+					if (nx < 0 || ny < 0 || nx >= _w || ny >= _h)
+						continue;
+					int nb = c + _off[k];
+					int m = mark[nb];
+					// Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
+					if (m == own || nb != s && double.IsPositiveInfinity(cost[nb]))
+						continue;
+					if (!StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, c, k) &&
+						!StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, nb, Opposite[k]))
+						continue;
+					if (m == other)
+					{
+						found = true;
+						break;
+					}
+					mark[nb] = own;
+					q[tail++] = nb;
+				}
+			}
+			if (fromA) { headA = head; tailA = tail; }
+			else { headB = head; tailB = tail; }
+		}
+		_reachVisited += visited;
+		if (!found)
+			_reachRejects++;
+		return found;
+	}
+
+	/// <summary>Разрешил бы Search.Run шаг c → c + _off[k] (без учёта стоимости): те же проверки в том же порядке.</summary>
+	[MethodImpl(MethodImplOptions.AggressiveInlining)]
+	private bool StepAllowed(float[] cost, float[] hs, byte[] links, bool hasLinks, bool terrain, bool corridor,
+		double maxGrade, double maxCrossGrade, int c, int k)
+	{
+		int n = c + _off[k];
+		if (double.IsPositiveInfinity(cost[n]))
+			return false;
+		bool linked = hasLinks && (links[c] & (1 << k)) != 0;
+		if (k >= 4 && !linked && (double.IsPositiveInfinity(cost[c + Dx[k]]) || double.IsPositiveInfinity(cost[c + Dy[k] * _w])))
+			return false;
+		if (!terrain)
+			return true;
+		double grade = Math.Abs((double)hs[n] - hs[c]) / Dl[k];
+		if ((k == 4 || k == 7) && !linked)
+		{
+			double mid = ((double)hs[c + Dx[k]] + hs[c + Dy[k] * _w]) * 0.5;
+			grade = Math.Max(Math.Abs(mid - hs[c]), Math.Abs(hs[n] - mid)) * 2.0 / Dl[k];
+		}
+		double crossGrade = 0.0;
+		if (corridor && !linked)
+		{
+			int e = c * 16 + k * 2;
+			grade = Math.Max(grade, _corridor[e]);
+			crossGrade = _corridor[e + 1];
+			if (double.IsPositiveInfinity(grade))
+				return false;
+		}
+		return !(grade > maxGrade || crossGrade > maxCrossGrade);
+	}
+
 	/// <summary>Отпустить буферы и кэш поиска после этапа троп, вернуть полосу в пул без принудительной сборки GC.</summary>
 	public void Release()
 	{
 		CancelPrefetch();
+		_reachMark = Array.Empty<int>();
+		_reachQueueA = Array.Empty<int>();
+		_reachQueueB = Array.Empty<int>();
 		_found.Clear();
 		_main = null;
 		_spare = null;
