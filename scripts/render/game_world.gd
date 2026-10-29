@@ -242,6 +242,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		player.x = saved.player.x
 		player.z = saved.player.z
 		player.feet = saved.player.feet
+		# Стволы и валуны вокруг сохранённого места — до проверки: иначе можно появиться внутри дерева
+		heights.obstacles = ForestObstacles.new(world, heights)
+		heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 		if not safe_position(player.x, player.z, player.feet):
 			player = PlayerState.spawn(world, heights)
 		else:
@@ -272,7 +275,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
 		if regions != null:
 			regions.terrain = outer
-	heights.obstacles = ForestObstacles.new(world, heights)
+	if heights.obstacles == null:
+		heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	if not saved.is_empty():
@@ -293,6 +297,16 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	hud.set_world(world, loaded.map_image)
 	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+	# Валежник и камни появились только сейчас: велосипед, поставленный раньше, может стоять в бревне
+	if not bike.fits(bike.x, bike.z, bike.heading, world, heights):
+		var moved := BikeRide.park_near(player, yaw, world, heights)
+		if moved.fits(moved.x, moved.z, moved.heading, world, heights):
+			bike.x = moved.x
+			bike.z = moved.z
+			bike.y = moved.y
+			bike.heading = moved.heading
+			_snap()
+			bike_view.draw(1.0)
 	# Посадка из сохранения проходит те же проверки после появления локальных препятствий.
 	if not saved.is_empty() and saved.bike.riding and bike.prepare_mount(player, world, heights):
 		bike.mount(player)
