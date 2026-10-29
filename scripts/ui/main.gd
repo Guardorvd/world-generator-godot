@@ -734,6 +734,7 @@ func _free_game() -> void:
 		game.queue_free()
 		game = null
 	hud.clear_world()
+	TrailRouter.release()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 

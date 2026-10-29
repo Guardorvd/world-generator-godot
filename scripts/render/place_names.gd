@@ -98,7 +98,12 @@ func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false, k
 		_select(camera, visited, known)
 	for item: Dictionary in _items:
 		var label: Label3D = item.label
+		# погасшая подпись, которой не нужно появляться: всё уже выключено на прошлом кадре
+		if item.alpha == 0.0 and (hidden or item.want == 0.0) and not label.visible:
+			continue
 		item.alpha = 0.0 if hidden else lerpf(item.alpha, item.want, Util.damp(10.0, dt))
+		if item.want == 0.0 and item.alpha <= 0.01:
+			item.alpha = 0.0 # хвост затухания невидим (visible выключается с 0.01): дальше подпись не трогаем
 		label.visible = item.alpha > 0.01
 		var selected: bool = label.get_meta("place_id") == _goal_id
 		var color: Color = Color(1.0, 0.88, 0.50) if selected else item.color

@@ -96,6 +96,11 @@ var _shaped := {}                   # геометрия текущего кан
 static var _prepared := {}
 
 
+## Отпустить данные последней площадки (выход из мира): иначе они живут до следующего построения
+static func release() -> void:
+	_prepared = {}
+
+
 ## Построить линию на площадке. request — DEFAULTS (start, finish — локальные метры площадки).
 static func build(site: TrailSite, req := {}) -> TrailRouter:
 	var r := TrailRouter.new()
