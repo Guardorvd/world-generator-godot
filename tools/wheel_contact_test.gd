@@ -1,0 +1,147 @@
+extends SceneTree
+## Модель двух контактов колёс (BikeRide.contact_model) на одной секции Trail Lab, без мира: роллер, контруклон, корни.
+## Каждый заезд — тот же старт и тот же ввод в прежней модели и в новой; проверки сравнительные:
+## тормоз на гребне держит хуже, чем в ложбине; контруклон сносит вниз; корень то прижимает, то разгружает колесо.
+##   godot --headless --path . --script res://tools/wheel_contact_test.gd
+const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const ROLLER := 40.0
+const CAMBER := 100.0
+const ROOTS := 150.0
+var failures := 0
+var checks := 0
+
+
+func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 120)
+	run.call_deferred()
+
+
+func check(ok: bool, label: String) -> void:
+	checks += 1
+	print("wheel_contact: ", "PASS " if ok else "FAIL ", label)
+	if not ok: failures += 1
+
+
+func section() -> TrailDefinition:
+	var d := TrailDefinition.new()
+	d.id = "contact_section"
+	d.title = "Два контакта"
+	d.points = PackedVector2Array([Vector2(40, 220), Vector2(40, 30)])
+	d.width = 3.0
+	d.surface = RoadSurface.PACKED
+	var list: Array[TrailElement] = []
+	for spec: Array in [[TrailElement.Profile.ROLLER, ROLLER, 9.0, 1.0, 1.0, 0.5], [TrailElement.Profile.OFF_CAMBER, CAMBER, 24.0, 0.9, 1.0, 0.5],
+			[TrailElement.Profile.ROOTS, ROOTS, 14.0, 0.14, 1.0, 0.9]]:
+		var e := TrailElement.new()
+		e.profile = spec[0]
+		e.station = spec[1]
+		e.length = spec[2]
+		e.height = spec[3]
+		e.bank = spec[4]
+		e.density = spec[5]
+		e.lines = 1
+		list.append(e)
+	d.elements = list
+	return d
+
+
+## Заезд с station `from` на скорости `speed` до station `to`. brake — [от, до] станции полного тормоза;
+## follow — рулить к оси (иначе руль прямо). Возвращает скорость на входе и выходе из окна тормоза, снос от оси и нагрузки.
+func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: float, to: float, speed: float, brake := Vector2(-1, -1), follow := false, zone := Vector2(-1, -1), trace := false) -> Dictionary:
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	b.contact_model = contact
+	var at := d.point_at(from)
+	b.x = at.x
+	b.z = at.y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(from)
+	b.mount(p)
+	b.speed = speed
+	var control := BikeController.new()
+	var out := {brake_in = -1.0, brake_out = -1.0, brake_time = 0.0, brake_air = 0, brake_load = 0.0, offset = 0.0, min_load_f = INF, max_load_f = 0.0, air = 0, crashed = false, peak_use_r = 0.0}
+	for tick in hz * 30:
+		var station := d.nearest(Vector2(b.x, b.z)).x
+		if station >= to: break
+		var braking := station >= brake.x and station <= brake.y
+		if braking:
+			if out.brake_in < 0.0: out.brake_in = b.speed
+			out.brake_out = b.speed
+			out.brake_time += 1.0 / hz
+			out.brake_air += int(b.airborne)
+			out.brake_load += (b.load_f + b.load_r) / hz
+		var steer := 0.0
+		if follow:
+			var target := d.point_at(station + 6.0)
+			var delta := target - Vector2(b.x, b.z)
+			steer = clampf(-wrapf(atan2(-delta.x, -delta.y) - b.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		control.ride(1.0 / hz, p, b, h.world, h, -1.0 if braking else 0.0, steer, false, false, false)
+		if trace and station >= brake.x - 3.0 and station <= brake.y + 1.0:
+			print("  %.2f м: v %.2f · g %+.2f · нагрузка %.2f / %.2f · тормоз %.2f · %s" % [station, b.speed, b.vertical_g, b.load_f, b.load_r, b.brake_deceleration, "полёт" if b.airborne else "земля"])
+		if b.crashed:
+			out.crashed = true
+			break
+		if station >= zone.x and station <= zone.y:
+			out.offset = maxf(out.offset, absf(d.nearest(Vector2(b.x, b.z)).y))
+			out.air += int(b.airborne)
+			out.peak_use_r = maxf(out.peak_use_r, b.use_r)
+			if not b.airborne:
+				out.min_load_f = minf(out.min_load_f, b.load_f)
+				out.max_load_f = maxf(out.max_load_f, b.load_f)
+	out.decel = (out.brake_in - out.brake_out) / maxf(out.brake_time, 0.001)
+	out.brake_load /= maxf(out.brake_time, 0.001)
+	return out
+
+
+func run() -> void:
+	var d := section()
+	var kit: Array[TrailDefinition] = [d]
+	var prepared := Fixture.prepare(kit)
+	check(prepared.errors.is_empty(), "секция собрана: %s" % "; ".join(prepared.errors))
+	if not prepared.errors.is_empty():
+		quit(1)
+		return
+	var h: Heightfield = prepared.heights
+	var technical := TrailTechnical.build(h, kit)
+	h.obstacles.set_trail(technical.collide, technical.bumps)
+	var profile := PackedStringArray()
+	for s: float in [ROLLER - 8.0, ROLLER - 6.0, ROLLER - 4.0, ROLLER, ROLLER + 4.0]:
+		var q := d.point_at(s)
+		profile.append("%.0f м: %.2f" % [s, h.ground_at(q.x, q.y)])
+	print("Профиль роллера: ", ", ".join(profile))
+	# 1. Тормоз: на гребне колёса разгружены — замедление ниже, чем в ложбине перед роллером, где они прижаты.
+	var crest := Vector2(ROLLER - 1.0, ROLLER + 1.0)
+	var trough := Vector2(ROLLER - 5.5, ROLLER - 3.5)
+	var result := {}
+	for hz in [60, 120]:
+		for name: String in ["crest", "trough"]:
+			for contact in [false, true]:
+				var r := ride(h, d, contact, hz, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest if name == "crest" else trough)
+				result["%s_%s_%d" % [name, "new" if contact else "old", hz]] = r
+	if "--trace" in OS.get_cmdline_user_args():
+		ride(h, d, true, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, crest, false, Vector2(-1, -1), true)
+	for hz in [60, 120]:
+		var crest_ratio: float = result["crest_new_%d" % hz].decel / maxf(result["crest_old_%d" % hz].decel, 0.01)
+		var trough_ratio: float = result["trough_new_%d" % hz].decel / maxf(result["trough_old_%d" % hz].decel, 0.01)
+		print("%d Гц: замедление на гребне %.2f → %.2f м/с² (×%.2f, нагрузка %.2f, в воздухе %d), в ложбине %.2f → %.2f м/с² (×%.2f, нагрузка %.2f)" % [hz,
+			result["crest_old_%d" % hz].decel, result["crest_new_%d" % hz].decel, crest_ratio, result["crest_new_%d" % hz].brake_load, result["crest_new_%d" % hz].brake_air,
+			result["trough_old_%d" % hz].decel, result["trough_new_%d" % hz].decel, trough_ratio, result["trough_new_%d" % hz].brake_load])
+		check(crest_ratio < 0.95 and trough_ratio > crest_ratio + 0.1, "%d Гц: тормоз на гребне держит хуже, чем в ложбине" % hz)
+	check(absf(result.crest_new_60.decel - result.crest_new_120.decel) < 0.6, "гребень: 60 и 120 Гц совпадают (%.2f / %.2f)" % [result.crest_new_60.decel, result.crest_new_120.decel])
+	# 2. Контруклон: тяжесть поперёк тянет вниз; тормоз отнимает запас у заднего колеса и сносит сильнее.
+	var zone := Vector2(CAMBER - 12.0, CAMBER + 12.0)
+	var old_coast := ride(h, d, false, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
+	var new_coast := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
+	var new_brake := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(CAMBER - 4.0, CAMBER + 2.0), true, zone)
+	print("Контруклон: снос от оси %.2f м (прежняя) / %.2f м (два контакта) / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%" % [
+		old_coast.offset, new_coast.offset, new_brake.offset, new_coast.peak_use_r * 100.0, new_brake.peak_use_r * 100.0])
+	check(new_coast.offset > old_coast.offset + 0.05, "контруклон сносит вниз в модели двух контактов")
+	check(new_brake.offset > new_coast.offset + 0.3, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
+	check(not new_coast.crashed and not new_brake.crashed, "контруклон проезжается без падения")
+	# 3. Корни: удар прижимает переднее колесо, отскок его разгружает.
+	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
+	print("Корни: нагрузка переднего колеса %.2f … %.2f доли веса (стоя 0,5)" % [roots.min_load_f, roots.max_load_f])
+	check(technical.bumps.size() > 0, "корни разложены (%d)" % (technical.bumps.size() / ForestObstacles.BUMP_STRIDE))
+	check(roots.max_load_f > 0.65 and roots.min_load_f < 0.35, "корень меняет нагрузку переднего колеса в обе стороны")
+	print("wheel_contact: ", failures, " failures / ", checks, " checks")
+	quit(1 if failures else 0)

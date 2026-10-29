@@ -9,6 +9,7 @@ var services := ServiceScope.new()
 var player := PlayerState.new()
 var bike := BikeRide.new()
 var controller := BikeController.new()
+var contact_model := true # прототип двух контактов колёс (BikeRide.contact_model); F6 — сравнить с прежней моделью
 var view: BikeView
 var crash := BikeCrash.new()
 var camera := Camera3D.new()
@@ -532,6 +533,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	controller.message.connect(show_message)
 	player = PlayerState.new()
 	bike = BikeRide.new()
+	bike.contact_model = contact_model
 	var d := routes[lane]
 	var at := d.point_at(station)
 	player.x = at.x
@@ -609,6 +611,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == KEY_F2:
 		set_editor_visible(not editor.visible)
 	if key == KEY_F5: reload_sources()
+	if key == KEY_F6:
+		contact_model = not contact_model
+		bike.contact_model = contact_model
+		show_message("Модель контактов колёс: " + ("два контакта" if contact_model else "прежняя"))
 	if key == KEY_F3:
 		set_diagnostics_visible(not diagnostics_visible)
 		get_viewport().set_input_as_handled()
@@ -621,6 +627,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key >= KEY_1 and key < KEY_1 + mini(routes.size(), 9): select_route(key - KEY_1)
 	if key == KEY_R: reset_ride()
 	if key == KEY_G: launch_element()
+
+## Колёса по отдельности: нагрузка (доли веса) и использованный запас сцепления
+func _contact_report() -> String:
+	if not bike.contact_model:
+		return "Контакты: прежняя модель (F6)"
+	return "Перед: нагрузка %.2f · сцепление %.0f%%%s  ·  зад: %.2f · %.0f%%%s  (F6)" % [bike.load_f, bike.use_f * 100,
+		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
@@ -717,7 +730,8 @@ func _process(dt: float) -> void:
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
 		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
-%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, metrics.report(routes[lane]) + "
+%s
+%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, _contact_report(), metrics.report(routes[lane]) + "
 " + _shaping_report() + "
 " + _survey_report() + "
 " + _build_report() + _line_report()]

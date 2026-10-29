@@ -18,6 +18,14 @@ var peak_bank := 0.0
 var bottom_outs := 0
 var worst_landing := 0.0
 var jumps := 0
+var peak_use_f := 0.0 # пик использованного запаса сцепления колеса
+var peak_use_r := 0.0
+var unloaded_f := 0.0 # сколько секунд колесо было на земле без нагрузки (разгружено)
+var unloaded_r := 0.0
+## по такту: время, нагрузка и запас переднего и заднего колеса, ход подвески — последовательность причин, а не только пики
+var trace := PackedFloat32Array()
+const TRACE_STRIDE := 7
+const TRACE_MAX := 3600 # тактов в записи (минута при 60 Гц)
 
 # last jump
 var air_time := 0.0
@@ -46,6 +54,7 @@ func reset(bike: BikeRide) -> void:
 		if p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and p.type in [TYPE_FLOAT, TYPE_INT]:
 			set(p.name, type_convert(0, p.type))
 	element = -1
+	trace.clear()
 	_inside = false
 	_was_air = false
 	_prev_xz = Vector2(bike.x, bike.z)
@@ -66,6 +75,12 @@ func tick(dt: float, bike: BikeRide, route: TrailDefinition) -> void:
 	peak_unload = maxf(peak_unload, -bike.vertical_g)
 	peak_bank = maxf(peak_bank, absf(bike.bank_slope))
 	if bike.bottom_out > 0.0: bottom_outs += 1
+	peak_use_f = maxf(peak_use_f, bike.use_f)
+	peak_use_r = maxf(peak_use_r, bike.use_r)
+	if not bike.airborne and not bike.contact_f(): unloaded_f += dt
+	if not bike.airborne and not bike.contact_r(): unloaded_r += dt
+	if trace.size() < TRACE_MAX * TRACE_STRIDE:
+		trace.append_array(PackedFloat32Array([time, bike.load_f, bike.load_r, bike.use_f, bike.use_r, bike.squash_f, bike.squash_r]))
 	if bike.land_impact > 0.0:
 		worst_landing = maxf(worst_landing, bike.land_impact)
 		landing_impact = bike.land_impact
@@ -120,6 +135,7 @@ func report(route: TrailDefinition) -> String:
 	lines.append("Заезд %.1f с · путь %.0f м · макс. %.0f км/ч" % [time, distance, top_speed * 3.6])
 	lines.append("Пик: снос %.1f° · сцепление %.0f%% · вилка %.3f м · зад %.3f м" % [rad_to_deg(peak_slip), peak_grip * 100.0, peak_fork, peak_shock])
 	lines.append("Нагрузка рельефа: +%.2f g / −%.2f g · наклон полотна до %.0f%%" % [peak_load, peak_unload, peak_bank * 100.0])
+	lines.append("Колёса: пик сцепления %.0f%% / %.0f%% · без нагрузки %.2f / %.2f с" % [peak_use_f * 100.0, peak_use_r * 100.0, unloaded_f, unloaded_r])
 	lines.append("Пробоев подвески %d · худшее приземление %.1f м/с" % [bottom_outs, worst_landing])
 	if jumps > 0 or air_time > 0.0:
 		lines.append("Прыжок: %.2f с · %.1f м · пик %.2f м · взлёт %.0f км/ч · удар %.1f м/с" % [air_time, jump_length, jump_apex, jump_takeoff_speed * 3.6, landing_impact])
