@@ -902,6 +902,11 @@ static func _nearest_path(w: WorldData, target: int, radius: int) -> int:
 ## Сеть уже нарисованных путей людей: реальный обход учитывает развилки вне поселений.
 static func _network_cost(w: WorldData) -> PackedFloat32Array:
 	var part_us := Time.get_ticks_usec()
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var quick: PackedFloat32Array = fast.MaskCost(w.path_mask, 2) # тот же цикл на C# (шаг 5 ревью)
+		_part("network_cost", part_us)
+		return quick
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
 	for i in w.N:
@@ -975,6 +980,11 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 ## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в AVOID_MUL раз дороже
 static func _avoiding(w: WorldData, near: PackedByteArray) -> PackedFloat32Array:
 	var part_us := Time.get_ticks_usec()
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var quick: PackedFloat32Array = fast.ScaledCost(w.cost, near, AVOID_MUL) # тот же цикл на C# (шаг 5 ревью)
+		_part("avoiding", part_us)
+		return quick
 	var c := w.cost.duplicate()
 	for i: int in w.N:
 		if near[i] != 0 and c[i] != INF:
@@ -1273,15 +1283,44 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 ## why (необязательно) получает число отвергнутых пар по причинам _bridge_problem и "dry" (не над водой).
 static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedByteArray,
 		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray, why: Variant = null) -> Vector2i:
-	var best := Vector2i(-1, -1)
-	var score := INF
-	var probe: Object = surface.fast_water()
+	var starts := PackedInt32Array()
 	for back in range(BRIDGE_APPROACH + 1):
 		var a := start - back
 		if a < 0 or out.size() <= back or out[-1 - back] != p[a] or wet[a] != 0:
 			break
 		if back > 0 and on_axis[p[a]] != 0:
 			break
+		starts.append(a)
+	# Шаг 5 ревью (замер на стенде): из 8 тыс. пар 7,2 тыс. отвергают концы (перепад, въезд) — несколько точек,
+	# а проверка воды под пролётом шла первой и стоила 5,4 из 8 с. Порядок проверок — от дешёвых: концы, вода,
+	# пролёт; все проверки — чистые функции, поэтому ответ тот же. С рельефом генерации концы и вода для всех пар
+	# считаются на C# (FastGrid.BridgeCandidates — копии), пролёт с чужими настилами и стенами — здесь,
+	# от коротких пар к длинным: первая годная — та же самая короткая, что выбирал полный перебор.
+	var probe: Object = surface.fast_water()
+	if probe != null:
+		var found: PackedInt32Array = probe.BridgeCandidates(p, starts, shore, SPAN, BRIDGE_APPROACH, wet, surface.world.W,
+			GameConfig.TILE, GRADE * HEIGHT_SCALE, BRIDGE_LANDING_GAP, Heightfield.BRIDGE_HALF)
+		if why is Dictionary:
+			for k in 4:
+				if found[k] > 0: why[["grade", "landing_water", "landing_gap", "dry"][k]] = found[k]
+		var order: Array = []
+		for k in range(4, found.size(), 2):
+			var a := found[k]
+			var b := found[k + 1]
+			order.append([Grid.hypot(p[b] % surface.world.W - p[a] % surface.world.W, p[b] / surface.world.W - p[a] / surface.world.W), k, a, b])
+		order.sort_custom(func(x: Array, y: Array) -> bool: return x[0] < y[0] or x[0] == y[0] and x[1] < y[1])
+		for pair: Array in order:
+			var s := _bridge_axis(surface, p[pair[2]], p[pair[3]])
+			# Земля и вода пролёта — сначала на C# (с запасом на последний знак): явно негодный пролёт отвергается там.
+			var problem := "ground" if not probe.BridgeSpanGround(s.ax, s.az, s.ay, s.bx, s.bz, s.by, s.ux, s.uz, s.len, s.half,
+				s.arch, Heightfield.BRIDGE_SECTION) else _bridge_span(surface, s)
+			if problem.is_empty():
+				return Vector2i(pair[2], pair[3])
+			if why is Dictionary: why[problem] = int(why.get(problem, 0)) + 1
+		return Vector2i(-1, -1)
+	var best := Vector2i(-1, -1)
+	var score := INF
+	for a: int in starts:
 		for b in range(shore, mini(p.size(), mini(shore + BRIDGE_APPROACH + 1, a + SPAN))):
 			if wet[b] != 0:
 				continue
@@ -1289,21 +1328,8 @@ static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedB
 				p[b] / surface.world.W - p[a] / surface.world.W)
 			if length >= score:
 				continue
-			# Шаг 5 ревью (замер на стенде): из 8 тыс. пар 7,2 тыс. отвергают концы (перепад, въезд) — несколько
-			# точек, а проверка воды под пролётом шла первой и стоила 5,4 из 8 с. Условия те же, порядок —
-			# от дешёвых: ответ (и выбранный мост) не меняется, все проверки — чистые функции.
-			# С рельефом генерации концы и вода под осью проверяются на C# (FastGrid.BridgeEnds, CrossesWater —
-			# копии, те же числа); пролёт с чужими настилами и стенами — здесь.
 			var problem := "same"
-			if p[a] != p[b] and probe != null:
-				var s := surface._axis(p[a], p[b], false)
-				problem = ["", "grade", "landing_water", "landing_gap"][probe.BridgeEnds(s.ax, s.az, s.bx, s.bz, s.ux, s.uz, s.len, s.half,
-					GRADE * HEIGHT_SCALE * s.len, BRIDGE_LANDING_GAP)]
-				if problem.is_empty():
-					s.ay = surface.ground_at(s.ax, s.az)
-					s.by = surface.ground_at(s.bx, s.bz)
-					problem = "dry" if not probe.CrossesWater(s.ax, s.az, s.ux, s.uz, s.len) else _bridge_span(surface, s)
-			elif p[a] != p[b]:
+			if p[a] != p[b]:
 				var s := _bridge_axis(surface, p[a], p[b])
 				problem = _bridge_ends(surface, s)
 				if problem.is_empty():

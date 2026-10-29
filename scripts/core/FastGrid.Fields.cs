@@ -2,6 +2,25 @@ using System;
 
 public partial class FastGrid
 {
+	/// <summary>Копия StageTrails._network_cost: 1 там, где mask ≥ min, иначе +∞.</summary>
+	public float[] MaskCost(byte[] mask, int min)
+	{
+		var cost = new float[mask.Length];
+		for (int i = 0; i < mask.Length; i++)
+			cost[i] = mask[i] >= min ? 1f : float.PositiveInfinity;
+		return cost;
+	}
+
+	/// <summary>Копия StageTrails._avoiding: копия cost, в которой проходимые клетки near дороже в mul раз.</summary>
+	public float[] ScaledCost(float[] cost, byte[] near, double mul)
+	{
+		var outCost = (float[])cost.Clone();
+		for (int i = 0; i < outCost.Length; i++)
+			if (near[i] != 0 && !float.IsPositiveInfinity(outCost[i]))
+				outCost[i] = (float)(outCost[i] * mul);
+		return outCost;
+	}
+
 	/// <summary>StageTrails._build_cost: one interop call, double arithmetic, float32 result.</summary>
 	public float[] PathCost(int w, int h, byte[] ocean, byte[] lake, byte[] river,
 		float[] slope, byte[] biome, double[] noise, double[] biomeCost, double fordSlope)

@@ -206,6 +206,89 @@ public partial class FastGrid
 		return false;
 	}
 
+	private const double SpanMargin = 1e-6;
+
+	/// <summary>Часть StageTrails._bridge_span без сооружений: земля в пролёте не выше настила + 0,3 м и вода под осью
+	/// не выше настила − 0,1 м. Настил — копия Heightfield.level (дуга arch по секциям section). false — пролёт
+	/// точно не годится; true — пролёт проверяет GDScript целиком. Запас SpanMargin: спорная граница (последний знак sin)
+	/// не отвергается здесь, её решает GDScript, поэтому выбранный мост тот же.</summary>
+	public bool BridgeSpanGround(double ax, double az, double ay, double bx, double bz, double by, double ux, double uz,
+		double len, double half, double arch, double section)
+	{
+		int last = (int)Math.Ceiling(len) + 2;
+		for (int k = -2; k <= last; k++)
+		{
+			double t = Math.Clamp((double)k, -2.0, len + 2.0);
+			double deck = Level(ay, by, len, arch, section, t);
+			for (int s = -1; s <= 1; s++)
+			{
+				double side = s;
+				double x = ax + ux * t - uz * side * (half + 0.8);
+				double z = az + uz * t + ux * side * (half + 0.8);
+				double ground = Ground(x, z);
+				if (t > 1.0 && t < len - 1.0 && ground > deck + 0.3 + SpanMargin)
+					return false;
+				if (s == 0)
+				{
+					double depth = Depth(x, z);
+					if (depth > 0.3 + SpanMargin && ground + depth > deck - 0.1 + SpanMargin)
+						return false;
+				}
+			}
+		}
+		return true;
+	}
+
+	/// <summary>Копия Heightfield.level для моста: прямая между концами и дуга по секциям.</summary>
+	private static double Level(double ay, double by, double len, double arch, double section, double t)
+	{
+		double u = Math.Clamp(t / len, 0.0, 1.0);
+		double straight = ay + (by - ay) * u;
+		if (arch == 0.0)
+			return straight;
+		int count = Math.Max(1, (int)Math.Ceiling(len / section));
+		double part = Math.Min(u * count, count - 1.0);
+		int k = (int)Math.Floor(part);
+		double blend = u * count - k;
+		double a = Math.Sin(Math.PI * k / count), b = Math.Sin(Math.PI * (k + 1) / count);
+		return straight + arch * (a + (b - a) * blend);
+	}
+
+	/// <summary>Перебор пар берегов StageTrails._bridge_site на C#: для каждого a из aIdx (в этом порядке) и b от shore
+	/// до min(n, shore + approach + 1, a + span) − 1, кроме мокрых b и одинаковых клеток, — те же оси, что
+	/// Heightfield._axis (центры клеток × tile), BridgeEnds и CrossesWater. Возвращает
+	/// [перепад, въезд над водой, въезд не на уровне, не над водой, затем пары a, b, прошедшие обе проверки — в порядке перебора].</summary>
+	public int[] BridgeCandidates(int[] cells, int[] aIdx, int shore, int span, int approach, byte[] wet, int w,
+		double tile, double gradeScale, double landingGap, double half)
+	{
+		var outList = new System.Collections.Generic.List<int> { 0, 0, 0, 0 };
+		int n = cells.Length;
+		foreach (int a in aIdx)
+		{
+			int end = Math.Min(n, Math.Min(shore + approach + 1, a + span));
+			double ax = (cells[a] % w + 0.5) * tile, az = (cells[a] / w + 0.5) * tile;
+			for (int b = shore; b < end; b++)
+			{
+				if (wet[b] != 0 || cells[b] == cells[a])
+					continue;
+				double bx = (cells[b] % w + 0.5) * tile, bz = (cells[b] / w + 0.5) * tile;
+				double len = Math.Max(Math.Sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az)), 0.01);
+				double ux = (bx - ax) / len, uz = (bz - az) / len;
+				int code = BridgeEnds(ax, az, bx, bz, ux, uz, len, half, gradeScale * len, landingGap);
+				if (code == 0 && !CrossesWater(ax, az, ux, uz, len))
+					code = 4;
+				if (code != 0)
+				{
+					outList[code - 1]++;
+					continue;
+				}
+				outList.Add(a);
+				outList.Add(b);
+			}
+		}
+		return outList.ToArray();
+	}
+
 	/// <summary>Копия поиска в StageTrails._mountain_trails: первая клетка с mask ≥ 2 и проходимой стоимостью,
 	/// ближайшая к (px, py) по центрам клеток; [клетка, расстояние] или [-1, INF].</summary>
 	public double[] NearestPath(byte[] mask, float[] cost, int w, double px, double py)
