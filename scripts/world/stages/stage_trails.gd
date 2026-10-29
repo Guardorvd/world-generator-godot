@@ -430,6 +430,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	budgets.fill(w.N * 2)
 	var granted := budgets.duplicate() # выданный запас, с пополнением: раскрыто = выдано − осталось
 	var tried := {}
+	var priorities := {} # a * n + b -> _direction_cost
 	var paths: Array = []
 	var connected := 0
 	# С 9.8 сетей может быть несколько: большая река без места для моста делила мир, и все поселения
@@ -453,7 +454,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 				if joined[a] == 0 or network[a] != current or tried.has(_key(a, b)):
 					continue
 				var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
-				var priority := _direction_cost(w, st[a], st[b])
+				# Рельеф и вода на этом этапе не меняются: оценка ориентированной пары (a → b) одна
+				# на весь перебор. Не симметрична — пробы округляются от своего конца.
+				var direction := a * n + b
+				if not priorities.has(direction): priorities[direction] = _direction_cost(w, st[a], st[b])
+				var priority: float = priorities[direction]
 				if best.is_empty() or priority < best[3]:
 					best = [a, b, distance, priority]
 		if best.is_empty():
@@ -690,11 +695,16 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	var all_paths: Array = []
 	for e in paths:
 		all_paths.append(e[2])
+	# Коридор зависит только от списка путей: пересчёт лишь после новой тропы.
+	var corr := PackedByteArray()
+	var corr_paths := -1
 	for index in st.size():
 		var s: SettlementData = st[index]
 		if step.is_valid():
 			step.call(0.72 + 0.02 * index / maxi(1, st.size()), "Тропы к берегам: %d/%d" % [index + 1, st.size()])
-		var corr := _corridor(w, all_paths)
+		if corr_paths != all_paths.size():
+			corr = _corridor(w, all_paths)
+			corr_paths = all_paths.size()
 		var t := _shore(w, s.i, corr)
 		if t >= 0:
 			# Ответвление от общей сети: не строим отдельный длинный подход от каждого дома.

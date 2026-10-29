@@ -33,7 +33,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		return p.y < q.y or p.y == q.y and p.x < q.x)
 	var fields := {}
 	for name: String in regions[0].fields:
-		var values: Variant = regions[0].fields[name].duplicate()
+		var values: Variant = regions[0].fields[name].slice(0, 0) # пустой массив того же типа, без копии поля
 		values.resize(bounds.get_area())
 		values.fill(0)
 		fields[name] = values

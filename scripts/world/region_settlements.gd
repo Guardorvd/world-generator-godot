@@ -27,6 +27,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 	wet.resize(w.N)
 	for i in w.N: wet[i] = int(w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0)
 	var seed := WGRandom.derive(source.seed_num, "settlement.candidate")
+	var density_seed := WGRandom.derive(source.seed_num, "settlement.density") # как density_at, один раз
 	# Закреплённые места (стартовый план и журнал) не двигаются, новые держатся от них на полусумме spacing.
 	var pinned: Array = []
 	pinned.append_array(source.settlements)
@@ -54,7 +55,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 					if winners.has(other): above.append(winners[other])
 				elif can_settle(other):
 					above.append([window(other), widest(source.seed_num, other)])
-		var candidates: Array = []
+		var best: Array = []
 		for y in range(search.position.y, search.end.y, 2):
 			for x in range(search.position.x, search.end.x, 2):
 				var i := (y - origin.y) * w.W + x - origin.x
@@ -62,7 +63,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 				if region.fields.fixed[i] != 0 or wet[i] != 0 or not bd.has("habit") or w.slope[i] > 0.6: continue
 				var access := StageLandmarks._site_access(w, i, wet)
 				if access < 0.35: continue
-				var density := density_at(source.seed_num, x, y)
+				var density := StageLandmarks.patches(x, y, 96.0, density_seed)
 				var spacing := 96.0 * lerpf(1.35, 0.7, density)
 				var at := Vector2(x + 0.5, y + 0.5)
 				var close := false
@@ -83,10 +84,11 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 				if dw >= 1.5 and dw <= 6.0: score += 0.6
 				elif dw > 16.0: score -= minf(0.6, (dw - 16.0) / 40.0)
 				if dw < 1.5: score -= 0.4
-				candidates.append([score, i, access, density, spacing])
-		if candidates.is_empty(): continue
-		candidates.sort_custom(StageLandmarks._by_score_desc)
-		var c: Array = candidates[0]
+				# Нужен только победитель: линейный максимум с тем же правилом равенства, что у
+				# StageLandmarks._by_score_desc (при равной оценке — меньший индекс; он встречается раньше).
+				if best.is_empty() or score > best[0]: best = [score, i, access, density, spacing]
+		if best.is_empty(): continue
+		var c: Array = best
 		var i: int = c[1]
 		var x: int = i % w.W + origin.x
 		var y: int = i / w.W + origin.y
