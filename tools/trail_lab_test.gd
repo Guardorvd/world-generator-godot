@@ -141,6 +141,17 @@ func run() -> void:
 	root.add_child(lab)
 	lab.set_physics_process(false)
 	await check_lab_session(lab)
+	# Готовые трассы: каждая строится в лаборатории (одна на экране), прежняя остаётся при отказе
+	var built := PackedStringArray()
+	var started := Time.get_ticks_usec()
+	for i in TrailLabCatalog.LIST.size():
+		var ok: bool = lab.select_preset(i)
+		var length := 0.0
+		for d: TrailDefinition in lab.routes: length += d.route_length()
+		built.append("%d: %.0f м, элементов %d" % [i + 1, length, lab.routes[0].elements.size()])
+		check(ok and lab.preset == i and not lab.routes.is_empty(), "preset %d «%s» builds in the lab" % [i + 1, TrailLabCatalog.LIST[i].title])
+	print("Готовые трассы (%.1f с): %s" % [(Time.get_ticks_usec() - started) / 1e6, " · ".join(built)])
+	lab.select_preset(0)
 	if "--capture" in OS.get_cmdline_user_args():
 		await capture_lab(lab, out)
 	lab.queue_free()
@@ -172,6 +183,7 @@ func capture_lab(lab: Node, out: String) -> void:
 	await RenderingServer.frame_post_draw
 	var viewport_rect := Rect2(Vector2.ZERO, Vector2(root.size))
 	check(viewport_rect.encloses(lab.editor.get_global_rect()), "editor fits the 1280x720 viewport")
+	check(viewport_rect.encloses(lab.preset_panel.get_global_rect()), "preset tiles fit the 1280x720 viewport")
 	var visible_inputs := true
 	for number: SpinBox in lab.editor.numbers.values():
 		visible_inputs = visible_inputs and number.get_global_rect().end.x <= viewport_rect.end.x

@@ -27,6 +27,11 @@ var hud_panel := PanelContainer.new()
 var diagnostics_visible := false
 var status_time := 0.0
 var editor := EditorPanel.new()
+## Готовые трассы (TrailLabCatalog): плитки внизу экрана, PageUp/PageDown — соседняя
+var preset := 0
+var preset_panel := PanelContainer.new()
+var preset_label := Label.new()
+var preset_buttons: Array[Button] = []
 var lane := 0
 var element_index := 0
 var overview := false
@@ -151,6 +156,7 @@ func _ready() -> void:
 		label.add_theme_color_override("font_shadow_color", Color.BLACK)
 		label.add_theme_constant_override("shadow_outline_size", 5)
 	canvas.add_child(status)
+	_build_presets(canvas)
 	canvas.add_child(editor)
 	editor.visible = false
 	editor.course_selected.connect(func(index: int, kind: String, style: String, ground: String) -> void:
@@ -183,8 +189,66 @@ func _ready() -> void:
 	_place_editor()
 	rebuild(_copy_routes(routes))
 
+## Плитки готовых трасс: номер на плитке, название — в подсказке и над плитками
+func _build_presets(canvas: CanvasLayer) -> void:
+	preset_panel.theme_type_variation = "HudPanel"
+	preset_panel.resized.connect(_place_presets)
+	canvas.add_child(preset_panel)
+	var margin := MarginContainer.new()
+	for side in ["left", "top", "right", "bottom"]: margin.add_theme_constant_override("margin_" + side, 8)
+	preset_panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 6)
+	margin.add_child(box)
+	preset_label.theme_type_variation = "HintLabel"
+	preset_label.add_theme_font_size_override("font_size", 13)
+	box.add_child(preset_label)
+	var tiles := HFlowContainer.new()
+	tiles.add_theme_constant_override("h_separation", 4)
+	tiles.add_theme_constant_override("v_separation", 4)
+	box.add_child(tiles)
+	var group := ButtonGroup.new()
+	for i in TrailLabCatalog.LIST.size():
+		var tile := Button.new()
+		tile.text = str(i + 1)
+		tile.toggle_mode = true
+		tile.button_group = group
+		tile.focus_mode = Control.FOCUS_NONE
+		tile.custom_minimum_size = Vector2(34, 30)
+		tile.add_theme_font_size_override("font_size", 13)
+		tile.tooltip_text = TrailLabCatalog.LIST[i].title
+		tile.pressed.connect(select_preset.bind(i))
+		tiles.add_child(tile)
+		preset_buttons.append(tile)
+	_mark_preset()
+
+## Плитки прижаты к низу экрана: высота известна только после переноса плиток по ширине
+func _place_presets() -> void:
+	var viewport_size := get_viewport().get_visible_rect().size
+	preset_panel.position = Vector2(18, viewport_size.y - preset_panel.size.y - 18)
+
+func _mark_preset() -> void:
+	for i in preset_buttons.size(): preset_buttons[i].set_pressed_no_signal(i == preset)
+	preset_label.text = "Трасса %d / %d · %s  ·  PgUp/PgDn" % [preset + 1, TrailLabCatalog.LIST.size(), TrailLabCatalog.LIST[preset].title]
+
+## Построить готовую трассу номер index вместо текущей (тем же путём, что «Построить» в F2); при отказе остаётся прежняя
+func select_preset(index: int) -> bool:
+	index = posmod(index, TrailLabCatalog.LIST.size())
+	var previous := ground_kind
+	ground_kind = TrailLabCatalog.LIST[index].ground
+	var kit := TrailLabCatalog.routes(index, Fixture)
+	if kit.is_empty() or not rebuild(kit, Fixture.compose_ms):
+		ground_kind = previous
+		_mark_preset()
+		return false
+	preset = index
+	_mark_preset()
+	return true
+
 func _place_editor() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
+	preset_panel.size = Vector2(minf(viewport_size.x - 36.0, 800.0), 0)
+	_place_presets()
 	editor.size = Vector2(360, maxf(100.0, viewport_size.y - 36))
 	editor.position = Vector2(maxf(18.0, viewport_size.x - editor.size.x - 18), 18)
 
@@ -626,6 +690,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if heights == null or editor.visible: return
 	if key >= KEY_1 and key < KEY_1 + mini(routes.size(), 9): select_route(key - KEY_1)
 	if key == KEY_R: reset_ride()
+	if key == KEY_PAGEUP: select_preset(preset - 1)
+	if key == KEY_PAGEDOWN: select_preset(preset + 1)
 	if key == KEY_G: launch_element()
 
 ## Колёса по отдельности: нагрузка (доли веса) и использованный запас сцепления
