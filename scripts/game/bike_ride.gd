@@ -100,6 +100,17 @@ const PULL_DEPTH := 0.45     # доля веса, которая уходит с
 const PULL_RISE := 0.12      # с до пика
 const PULL_TIME := 0.45      # с до возврата
 const BACK_SHIFT := 0.2      # доля веса назад, пока клавиша удерживается после рывка
+const PULL_PITCH := 0.25     # рад наклона рамы носом вверх на всю долю снятого веса: рывок видно
+const YAW_DROP := 8.0        # рад/с²: так быстро гаснет поворот, когда переднее колесо теряет запас
+## Нагрузка колеса — через податливость шины (TIRE_COMPLY): пятно контакта не теряет и не набирает вес мгновенно.
+## Без этого ограничение силы шины нагрузкой ловило каждый провал хода пружины и занижало запас в среднем на 17–20 %.
+const TIRE_COMPLY := 0.03    # с
+## Занос: рама сама доворачивает к направлению движения (переднее колесо уходит в занос, седок ловит), а снос больше
+## SLIDE_CRASH на скорости — падение набок. Велосипед не катится боком.
+const ALIGN_SLIP := 0.3      # рад: меньший снос — обычный поворот
+const ALIGN_RATE := 3.0      # рад/с: наибольшая скорость доворота рамы к движению
+const SLIDE_CRASH := 1.05    # рад (60°)
+const SLIDE_CRASH_SPEED := 4.0 # м/с
 const TIRE_RELAX := 0.8      # м пути
 const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на большой скорости
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
@@ -476,6 +487,12 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	if free_now and not fits(x, z, heading, w, heights):
 		heading = h0
 		_yaw_rate = 0.0
+	if contact_model and not airborne:
+		heading += _align(dt)
+		if absf(slip) > SLIDE_CRASH and Vector2(speed, lateral_speed).length() > SLIDE_CRASH_SPEED:
+			var side := Vector2(cos(heading), -sin(heading)) * signf(lateral_speed)
+			_crash(vy, Vector3(-side.x, 0.4, -side.y), CrashCause.FALL)
+			return
 	var lateral := _step_traction(h0, grip, dt)
 
 	var x0 := x
@@ -540,7 +557,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
 	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
-	var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB)
+	var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB) + unweight * PULL_PITCH
 	if airborne:
 		tilt_goal = clampf(atan2(vy, maxf(absf(speed), AIR_TILT_SPEED)), -AIR_TILT_MAX, AIR_TILT_MAX)
 		if speed < 0.0:
@@ -631,13 +648,22 @@ func _bank_assist(drift: float, pace: float, flat: float) -> float:
 	return clampf(banked - flat, -flat * 0.4, flat * (BANK_LIMIT - 1.0)) * smoothstep(2.0, 6.0, pace)
 
 
+## Модель двух контактов: снос больше ALIGN_SLIP доворачивает раму к направлению движения (на шаге dt, рад).
+## Курс уменьшается — поворот вправо (как у _step_turn), а снос вправо (lateral_speed > 0) — движение правее рамы.
+func _align(dt: float) -> float:
+	var excess := absf(slip) - ALIGN_SLIP
+	if excess <= 0.0 or absf(speed) < 0.5:
+		return 0.0
+	return -signf(slip) * minf(excess, ALIGN_RATE * dt)
+
+
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Боковая инерция и торможение делят общий запас сцепления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	steer = move_toward(steer, turn, dt * (STEER_CENTER if is_zero_approx(turn) else STEER_RATE))
 	var pace := absf(speed)
 	# На малой скорости манёвр лёгкий; на большой у перекладки появляется вес.
-	var response := lerpf(TURN_RESPONSE_SLOW, TURN_RESPONSE_FAST, smoothstep(TURN_PACE_LOW, TURN_PACE_HIGH, pace)) * grip
+	var response := lerpf(TURN_RESPONSE_SLOW, TURN_RESPONSE_FAST, smoothstep(TURN_PACE_LOW, TURN_PACE_HIGH, pace)) * (1.0 if contact_model else grip)
 	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
 	var wanted := -steer * rate * (1.0 if speed >= 0.0 else -1.0)
 	var limit := rate
@@ -668,7 +694,12 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		speed = move_toward(speed, 0.0, excess * 0.08 * dt)
 	_yaw_rate = move_toward(_yaw_rate, wanted, response * dt)
 	# Остаточная инерция не вращает стоящий велосипед и не превышает сцепление.
-	_yaw_rate = clampf(_yaw_rate, -limit, limit)
+	if contact_model and not airborne and pace > 1.0:
+		# у рамы с седоком есть инерция: когда запас переднего колеса падает (гребень, рывок на себя), поворот гаснет
+		# за доли секунды, а не обрывается в такт — избыток уходит в снос
+		_yaw_rate = move_toward(_yaw_rate, clampf(_yaw_rate, -limit, limit), YAW_DROP * dt)
+	else:
+		_yaw_rate = clampf(_yaw_rate, -limit, limit)
 	return _yaw_rate * dt
 
 
@@ -894,12 +925,15 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var share := clampf(brakes.front_load, 0.0, 1.0)
 	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * CONTACT_DAMP * squash_fv) / GameConfig.GRAVITY
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
-	load_f = clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
-	load_r = clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
+	var raw_f := clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
+	var raw_r := clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
 	# седок переносит вес назад: сколько снято с переднего колеса, столько легло на заднее
-	var moved := minf(unweight * normal, load_f)
-	load_f -= moved
-	load_r = minf(load_r + moved, LOAD_MAX)
+	var moved := minf(unweight * normal, raw_f)
+	raw_f -= moved
+	raw_r = minf(raw_r + moved, LOAD_MAX)
+	var kc := 1.0 - exp(-dt / TIRE_COMPLY)
+	load_f = lerpf(load_f, raw_f, kc)
+	load_r = lerpf(load_r, raw_r, kc)
 	var k := 1.0 - exp(-dt / maxf(TIRE_RELAX_MIN, TIRE_RELAX / maxf(absf(speed), 0.5)))
 	# сила шины набирается по пути, но не больше того, что колесо сейчас несёт: разгруженное колесо силы не даёт
 	tire_f = minf(lerpf(tire_f, load_f, k), load_f)
