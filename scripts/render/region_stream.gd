@@ -741,6 +741,10 @@ func publication_pending() -> bool:
 	return not _publishing.is_empty()
 
 func _persist(key: Vector2i) -> void:
+	# одна запись журнала за раз: обе пишут ledger.bin через один и тот же .tmp
+	if _save_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_save_task)
+		_save_task = -1
 	var accepted := ledger
 	var dir := store_dir(world)
 	_save_task = WorkerThreadPool.add_task(func() -> void:
