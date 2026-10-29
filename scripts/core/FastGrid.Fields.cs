@@ -2,6 +2,15 @@ using System;
 
 public partial class FastGrid
 {
+	/// <summary>Копия высот поиска в StageTrails.run: 0 у моря, уровень озера (filled × scale), иначе hv / tile.</summary>
+	public float[] RouteHeights(byte[] ocean, byte[] lake, float[] filled, float[] hv, double scale, double tile)
+	{
+		var heights = new float[hv.Length];
+		for (int i = 0; i < hv.Length; i++)
+			heights[i] = ocean[i] != 0 ? 0f : (float)(lake[i] != 0 ? filled[i] * scale : hv[i] / tile);
+		return heights;
+	}
+
 	/// <summary>Копия StageTrails._network_cost: 1 там, где mask ≥ min, иначе +∞.</summary>
 	public float[] MaskCost(byte[] mask, int min)
 	{

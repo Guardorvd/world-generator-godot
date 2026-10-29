@@ -50,8 +50,8 @@ func _initialize() -> void:
 	StageTrails.run(w, func(_p: float, _label: String) -> void: pass)
 	var trails_ms := Time.get_ticks_msec() - started
 	var profile := {}
-	for key: String in KEYS:
-		if w.generation_profile.has(key): profile[key] = w.generation_profile[key]
+	for key: String in w.generation_profile:
+		if key in KEYS or key.begins_with("mountain_"): profile[key] = w.generation_profile[key]
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
 	print("PROFILE ", JSON.stringify(profile))
 	for link: Array in w.generation_profile.get("road_links", []):

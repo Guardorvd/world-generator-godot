@@ -88,9 +88,13 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	var heights := PackedFloat32Array()
 	heights.resize(w.N)
-	for i in w.N:
-		# По воде ищется мост, поэтому учитывается уровень воды, а не морское дно.
-		heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
+	var fast := Grid.fast_grid()
+	if fast != null:
+		heights = fast.RouteHeights(w.ocean, w.lake, w.filled, surface.hv, HEIGHT_SCALE, GameConfig.TILE) # тот же цикл на C#
+	else:
+		for i in w.N:
+			# По воде ищется мост, поэтому учитывается уровень воды, а не морское дно.
+			heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	w.generation_profile.finder_setup_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()
@@ -440,10 +444,14 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var state := {detour = w.seed_num % 2 == 1, on_axis = PackedByteArray(), surface = surface}
 	state.on_axis.resize(w.N)
 	finder.links.resize(w.N)
+	var setup_us := Time.get_ticks_usec()
 	var reach := _bridge_reach(w)
+	var cost := w.cost
 	for i in w.N:
-		if _wet(w, i) and w.cost[i] == INF:
+		# Сначала дешёвое условие: результат тот же.
+		if cost[i] == INF and _wet(w, i):
 			road_cost[i] = BRIDGE_COST if reach[i] <= BRIDGE_REACH else INF
+	_part("roads_setup", setup_us)
 	var joined := PackedByteArray()
 	joined.resize(n)
 	var tries := PackedInt32Array()
@@ -606,8 +614,11 @@ const BRIDGE_REACH := SPAN * 0.5 * Grid.SQRT2
 static func _bridge_reach(w: WorldData) -> PackedFloat32Array:
 	var dry := PackedByteArray()
 	dry.resize(w.N)
+	var river := w.river_cells()
+	var ocean := w.ocean
+	var lake := w.lake
 	for i in w.N:
-		dry[i] = 0 if _wet(w, i) else 1
+		dry[i] = 0 if ocean[i] != 0 or lake[i] != 0 or river[i] != 0 else 1 # то же, что _wet
 	return Grid.distance_field(w.W, w.H, dry)
 
 
@@ -1714,12 +1725,18 @@ static func _unsafe_fords(w: WorldData, surface: Heightfield, on_axis: PackedByt
 			cells.append(i)
 	var probe: Object = surface.fast_water() if surface != null else null
 	var deep := {}
+	var sure := {}
 	if probe != null:
 		for i: int in probe.DeepFords(cells, GameConfig.FORD_DEPTH - 0.15 - 0.000001):
 			deep[i] = true
+		# Шаг 5 ревью: вода глубже порога с запасом в клетке без сооружений — тот же ответ, что у полной проверки
+		# (depth_at с ногами отличается только на настилах), без девяти вызовов depth_at в GDScript.
+		for i: int in probe.DeepFords(PackedInt32Array(deep.keys()), GameConfig.FORD_DEPTH - 0.15 + 0.000001):
+			sure[i] = true
 	var out := PackedInt32Array()
 	for i in cells:
-		if w.slope[i] > FORD_SLOPE or (probe == null or deep.has(i)) and _unsafe_ford(w, surface, i):
+		if w.slope[i] > FORD_SLOPE or sure.has(i) and not surface._cells.has(i) \
+				or (probe == null or deep.has(i)) and _unsafe_ford(w, surface, i):
 			out.append(i)
 	return out
 
