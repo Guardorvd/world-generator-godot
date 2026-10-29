@@ -36,6 +36,9 @@ static func fast_grid() -> Object:
 			var script: Script = load(FAST_GRID_SCRIPT)
 			if script != null and script.can_instantiate():
 				_fast_script = script
+		if _fast_script == null and ClassDB.class_exists("CSharpScript"):
+			# сборка .NET, но C# не собран: всё пойдёт на GDScript во много раз медленнее — сказать об этом
+			push_warning("FastGrid (C#) недоступен, расчёты идут на GDScript: соберите проект (dotnet build)")
 		_fast_checked = true
 	var ready_script := _fast_script
 	_fast_lock.unlock()

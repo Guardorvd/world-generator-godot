@@ -297,6 +297,8 @@ func install_bundled() -> void:
 		var out := FileAccess.open(to, FileAccess.WRITE)
 		if out != null and not bytes.is_empty():
 			out.store_buffer(bytes)
+		else:
+			push_warning("Встроенный кэш мира не скопирован: %s" % to)
 
 
 func _cache_header_key(path: String) -> String:
@@ -338,6 +340,7 @@ func _write(path: String, key: String, raw: PackedByteArray) -> void:
 	var tmp := path + ".tmp"
 	var f := FileAccess.open(tmp, FileAccess.WRITE)
 	if f == null:
+		push_warning("Кэш мира не записан (%s): %s" % [error_string(FileAccess.get_open_error()), path])
 		return
 	f.store_buffer(MAGIC.to_ascii_buffer())
 	f.store_32(FORMAT)
@@ -353,6 +356,7 @@ func _write(path: String, key: String, raw: PackedByteArray) -> void:
 			DirAccess.remove_absolute(path)
 		ok = DirAccess.rename_absolute(tmp, path) == OK
 	if not ok:
+		push_warning("Кэш мира не записан: %s" % path)
 		DirAccess.remove_absolute(tmp)
 
 

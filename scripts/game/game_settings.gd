@@ -62,7 +62,10 @@ var infinite_world := false
 
 func load_settings() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(settings_path) != OK:
+	var err := cfg.load(settings_path)
+	if err != OK:
+		if FileAccess.file_exists(settings_path):
+			push_warning("Настройки не прочитаны (%s), взяты значения по умолчанию: %s" % [error_string(err), settings_path])
 		return
 	_apply_config(cfg)
 
@@ -195,7 +198,10 @@ func save_settings() -> Error:
 	cfg.set_value("world", "recent", Array(recent_seeds))
 	cfg.set_value("world", "favorites", Array(favorite_seeds))
 	cfg.set_value("world", "infinite", infinite_world)
-	return cfg.save(settings_path)
+	var err := cfg.save(settings_path)
+	if err != OK:
+		push_warning("Настройки не записаны (%s): %s" % [error_string(err), settings_path])
+	return err
 
 
 ## Полноэкранный режим или окно
