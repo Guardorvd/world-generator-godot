@@ -30,11 +30,19 @@ public partial class FastGrid
 	public long HeightsVersion { get; set; }
 	public long LinksVersion { get; set; }
 	private long _searchCount, _expandedCount, _searchTicks, _cacheHits, _prefetchHits, _prefetchCount;
+	// P0 аудита 29.10: работа фонового поиска считается отдельно (и отменённая), ожидание его результата,
+	// исходы поиска: исчерпан запас — не то же, что доказанное отсутствие пути.
+	private long _prefetchExpanded, _prefetchCancelled, _prefetchUnused, _prefetchWaitTicks, _budgetStops, _noPath;
+	private bool _lastStopped;
 	public Godot.Collections.Dictionary SearchStats() => new()
 	{
 		["calls"] = _searchCount, ["expanded"] = _expandedCount,
 		["native_ms"] = _searchTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency,
-		["cache_hits"] = _cacheHits, ["prefetches"] = _prefetchCount, ["prefetch_hits"] = _prefetchHits
+		["cache_hits"] = _cacheHits, ["prefetches"] = _prefetchCount, ["prefetch_hits"] = _prefetchHits,
+		["prefetch_expanded"] = Interlocked.Read(ref _prefetchExpanded), ["prefetch_cancelled"] = _prefetchCancelled,
+		["prefetch_unused"] = _prefetchUnused,
+		["prefetch_wait_ms"] = _prefetchWaitTicks * 1000.0 / System.Diagnostics.Stopwatch.Frequency,
+		["budget_stops"] = _budgetStops, ["no_path"] = _noPath
 	};
 
 	// Ширина прохода: [(c * 8 + k) * 2] — продольный уклон шага, [+1] — поперечный крен.
@@ -261,9 +269,12 @@ public partial class FastGrid
 		var q = MakeQuery(cost, s, t, heights, climb, maxGrade, links, useCorridor, maxCrossGrade);
 		int budget = SearchBudget;
 		int[] path = null;
+		_lastStopped = false;
 		if (_pending != null && _pendingQuery.Same(q))
 		{
+			long waited = System.Diagnostics.Stopwatch.GetTimestamp();
 			var found = _pending.Result;
+			_prefetchWaitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - waited;
 			_pending = null;
 			_pendingQuery = null;
 			if (found != null)
@@ -286,6 +297,11 @@ public partial class FastGrid
 			_expandedCount += found.Expanded;
 			Remember(found);
 			path = Resolve(found, budget);
+		}
+		if (path.Length == 0)
+		{
+			if (_lastStopped) _budgetStops++;
+			else _noPath++;
 		}
 		if (ProfileSearches)
 		{
@@ -320,6 +336,9 @@ public partial class FastGrid
 			return;
 		_cancel = true;
 		_pending.Wait();
+		// Раскрытия фонового поиска уже учтены в Run; здесь — был ли он закончен впустую или прерван.
+		if (_pending.Result == null) _prefetchCancelled++;
+		else _prefetchUnused++;
 		_pending = null;
 		_pendingQuery = null;
 	}
@@ -367,6 +386,7 @@ public partial class FastGrid
 			if (budget < 0 || budget > found.Budget)
 				return null;
 			SearchBudget = 0;
+			_lastStopped = true;
 			return Array.Empty<int>();
 		}
 		if (budget < 0)
@@ -374,6 +394,7 @@ public partial class FastGrid
 		if (found.Expanded > budget)
 		{
 			SearchBudget = 0;
+			_lastStopped = true;
 			return Array.Empty<int>();
 		}
 		SearchBudget = budget - found.Expanded;
@@ -462,11 +483,15 @@ public partial class FastGrid
 					{
 						found.Expanded = expanded;
 						found.Stopped = true;
+						if (cancellable) Interlocked.Add(ref grid._prefetchExpanded, expanded);
 						return found;
 					}
 					expanded++;
 					if (cancellable && (expanded & 1023) == 0 && grid._cancel)
+					{
+						Interlocked.Add(ref grid._prefetchExpanded, expanded);
 						return null;
+					}
 					nc->Mark = doneMark;
 					int cx = c % W, cy = c / W;
 					double gc = nc->G;
@@ -532,6 +557,7 @@ public partial class FastGrid
 					}
 				}
 				found.Expanded = expanded;
+				if (cancellable) Interlocked.Add(ref grid._prefetchExpanded, expanded);
 				if (nodes[t].Mark != seenMark && nodes[t].Mark != doneMark)
 					return found;
 				int len = 0;

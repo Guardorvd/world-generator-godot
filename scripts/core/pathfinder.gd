@@ -18,6 +18,13 @@ const HEAP_START_CAP := 1 << 16
 ## Дополнительные счётчики только для tools/bench.gd; в игре выключены.
 static var profile_searches := false
 var _search_us := 0
+## Счётчики как у FastGrid.SearchStats (для GDScript-поиска): раскрытия, исчерпанный запас и доказанное
+## отсутствие пути — разные исходы. _skipped — отказ без поиска при нулевом запасе (обе реализации).
+var _calls := 0
+var _expanded := 0
+var _budget_stops := 0
+var _no_path := 0
+var _skipped := 0
 
 var W := 0
 var H := 0
@@ -186,6 +193,7 @@ func _measure_corridor(c: int, k: int) -> void:
 @warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> PackedInt32Array:
 	if search_budget == 0:
+		_skipped += 1
 		return PackedInt32Array()
 	if _fast != null:
 		_search_versions(cost_version)
@@ -225,6 +233,8 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	ids[0] = s
 	keys[0] = 0.0
 	var hn := 1
+	var expanded := 0
+	_calls += 1
 	while hn > 0:
 		# извлечь минимум из кучи
 		var c := ids[0]
@@ -254,9 +264,12 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		if search_budget == 0:
 			heap_ids = ids
 			heap_keys = keys
+			_expanded += expanded
+			_budget_stops += 1
 			return PackedInt32Array()
 		if search_budget > 0:
 			search_budget -= 1
+		expanded += 1
 		done[c] = gn
 		var cx := c % W
 		var cy := c / W
@@ -332,8 +345,10 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 				keys[i] = key
 	heap_ids = ids
 	heap_keys = keys
+	_expanded += expanded
 	var path := PackedInt32Array()
 	if seen[t] != gn:
+		_no_path += 1
 		return path
 	var c := t
 	while c != -1:
@@ -363,9 +378,19 @@ func release() -> void:
 		_fast.Release()
 
 
+## expanded — раскрытия основного поиска; prefetch_expanded — фонового (в том числе отменённого и ненужного).
+## budget_stops — запас кончился (путь мог существовать), no_path — поиск доказал, что пути нет.
 func search_stats() -> Dictionary:
-	if not profile_searches or _fast == null:
-		return {}
+	if _fast == null:
+		return {calls = _calls, expanded = _expanded, budget_stops = _budget_stops + _skipped, no_path = _no_path,
+			skipped = _skipped}
+	if not profile_searches:
+		# Исходы считаются всегда: они нужны отчёту подготовки областей, а не только bench.gd.
+		var outcome: Dictionary = _fast.SearchStats()
+		return {expanded = outcome.expanded, prefetch_expanded = outcome.prefetch_expanded,
+			budget_stops = int(outcome.budget_stops) + _skipped, no_path = outcome.no_path, skipped = _skipped}
 	var stats: Dictionary = _fast.SearchStats()
 	stats.call_ms = _search_us / 1000.0
+	stats.budget_stops = int(stats.budget_stops) + _skipped
+	stats.skipped = _skipped
 	return stats

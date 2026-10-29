@@ -62,7 +62,10 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		settlements.append_array(batch.settlements[n].duplicate(true))
 	settlements.sort_custom(func(a: SettlementData, b: SettlementData) -> bool: return a.id < b.id)
 	var merged := {rect = bounds, sample_rect = bounds, fields = fields}
+	var started := Time.get_ticks_usec()
 	var w := Places.local_world(source, merged, surface)
+	var profile := {geography_ms = (Time.get_ticks_usec() - started) / 1000.0}
+	started = Time.get_ticks_usec()
 	w.path_mask = fields.path.duplicate()
 	# Проходимо: свои клетки группы и сухая земля плана в полосе подхода, кроме домов и сооружений.
 	var blocked := _old_places(source, bounds)
@@ -152,10 +155,19 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			if cell < 0 or not _build(w, finder, state, open, nodes[from].i, cell): continue
 			edge_of[cell] = Vector2(cell % w.W, cell / w.W) + Vector2.ONE * 0.5 + Vector2(d) * 0.5
 			exits.append({cell = cell, dx = d.x, dy = d.y, node = from})
+	profile.merge(finder.search_stats())
 	finder.release()
+	profile.roads_ms = (Time.get_ticks_usec() - started) / 1000.0
+	profile.checkpoints = state.get("checkpoints", 0)
+	profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
+	profile.restores = state.get("restores", 0)
+	started = Time.get_ticks_usec()
 	# Повторить штатную расстановку вдоль получившихся улиц; входные дома не меняются.
 	StageLandmarks.lay_out(w)
+	profile.homes_laid = StageLandmarks.count_homes(w.settlements)
 	StageTrails._clear_huts(w)
+	profile.homes_kept = StageLandmarks.count_homes(w.settlements)
+	profile.layout_ms = (Time.get_ticks_usec() - started) / 1000.0
 	RoadSurface.run(w)
 	# Сети: связанная со старыми дорогами — PLAN, иначе наименьшая метка своих узлов.
 	var labels := {}
@@ -226,7 +238,8 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		trails = w.trails, bridges = bridges, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
 		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
 		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome,
-		slope = w.slope, dw = w.dist_water, dist_path = Grid.distance_field(w.W, w.H, path_src), village = village}
+		slope = w.slope, dw = w.dist_water, dist_path = Grid.distance_field(w.W, w.H, path_src), village = village,
+		profile = profile} # время и счётчики работы; при сравнении результатов не учитывать
 
 
 ## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.

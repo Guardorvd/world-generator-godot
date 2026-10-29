@@ -12,7 +12,10 @@ const MARGIN := 8 # весь дом и хозяйственный пояс ос�
 static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) -> Dictionary:
 	if not surface.get("ready", false):
 		return {ready = false, reason = "water_not_ready", settlements = []}
+	var started := Time.get_ticks_usec()
 	var w := local_world(source, region, surface)
+	var profile := {geography_ms = (Time.get_ticks_usec() - started) / 1000.0}
+	started = Time.get_ticks_usec()
 	var rect: Rect2i = region.rect
 	var origin: Vector2i = region.sample_rect.position
 	var inside := rect.grow(-MARGIN)
@@ -66,7 +69,12 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) 
 				name = source.make_name(Names.SETTLEMENT, "settlement", x, y), huts = []}))
 	# Тот же подбор домов, проверки девяти точек фундамента и хозяйственные постройки.
 	# Пока нет дорог, используется существующее кольцо вокруг площади.
+	profile.select_ms = (Time.get_ticks_usec() - started) / 1000.0
+	started = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
+	profile.layout_ms = (Time.get_ticks_usec() - started) / 1000.0
+	profile.places = w.settlements.size()
+	profile.homes = StageLandmarks.count_homes(w.settlements)
 	var out: Array = []
 	for settlement: SettlementData in w.settlements:
 		if settlement.huts.is_empty(): continue
@@ -80,7 +88,8 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary) 
 			hut.x += origin.x
 			hut.y += origin.y
 		out.append(s)
-	return {ready = true, reason = "", settlements = out}
+	profile.kept = out.size()
+	return {ready = true, reason = "", settlements = out, profile = profile}
 
 
 ## Те же пятна плотности, что у стартового плана (StageLandmarks.patches верна и к западу/северу от нуля).

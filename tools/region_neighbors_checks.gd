@@ -11,6 +11,14 @@ func check(ok: bool, label: String) -> void:
 	fails += int(not ok)
 
 
+## Результат без времени и счётчиков работы: они законно разные у одинаковых результатов.
+func result_bytes(result: Dictionary) -> PackedByteArray:
+	var copy := result.duplicate()
+	copy.erase("profile")
+	copy.erase("settlement_profiles")
+	return var_to_bytes(EntityCodec.encode(copy))
+
+
 func plain(rect: Rect2i) -> Dictionary:
 	var sample := rect.grow(2)
 	var f := {}
@@ -100,7 +108,10 @@ func run() -> int:
 		check(roads.ready and roads.connections.size() == all.size() - 1 and not roads.trails.is_empty(),
 			"13.5: поселения соседних областей соединены без лишних дорог")
 		var reverse_roads := Regions.prepare_roads(source, [right, left], q)
-		check(var_to_bytes(EntityCodec.encode(roads)) == var_to_bytes(EntityCodec.encode(reverse_roads)) and before_roads == var_to_bytes(EntityCodec.encode(p)),
+		print("ROADS PROFILE ", JSON.stringify(roads.profile), " PLACES ", JSON.stringify(p.settlement_profiles))
+		check(roads.profile.homes_kept > 0 and roads.profile.has("budget_stops") and roads.profile.has("expanded"),
+			"P0: дороги отчитываются о раскрытиях, исходах поиска и числе домов")
+		check(result_bytes(roads) == result_bytes(reverse_roads) and before_roads == var_to_bytes(EntityCodec.encode(p)),
 			"13.5: дороги независимы от порядка соседей и не меняют входные данные")
 		var houses_clear := true
 		for settlement: SettlementData in roads.settlements:
@@ -141,7 +152,7 @@ func run() -> int:
 		mirrored.surfaces.reverse()
 		mirrored.settlements.reverse()
 		var reversed_bridge := Regions.prepare_roads(source, [right, left], mirrored)
-		check(var_to_bytes(EntityCodec.encode(crossed)) == var_to_bytes(EntityCodec.encode(reversed_bridge)) and var_to_bytes(EntityCodec.encode(divided)) == before_bridge,
+		check(result_bytes(crossed) == result_bytes(reversed_bridge) and var_to_bytes(EntityCodec.encode(divided)) == before_bridge,
 			"13.6: мосты детерминированы и не меняют принятую воду")
 		var shores: bool = not crossed.bridges.is_empty()
 		for bridge: Dictionary in crossed.bridges:

@@ -428,6 +428,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var budgets := PackedInt32Array()
 	budgets.resize(n)
 	budgets.fill(w.N * 2)
+	var granted := budgets.duplicate() # выданный запас, с пополнением: раскрыто = выдано − осталось
 	var tried := {}
 	var paths: Array = []
 	var connected := 0
@@ -473,6 +474,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 					tries[b] = 0
 					if not refreshed:
 						budgets[b] += w.N
+						granted[b] += w.N
 			refreshed = true
 			continue
 		var a: int = best[0]
@@ -519,9 +521,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.settlement_candidates = n
 	w.generation_profile.settlement_attempts = tried.size()
 	w.generation_profile.settlement_rejected = n - keep.size()
+	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
+	# фактическая работа основного и фонового поиска — в search_stats.
 	var expanded := 0
-	for budget in budgets:
-		expanded += w.N * 2 - budget
+	for k in n:
+		expanded += granted[k] - budgets[k]
 	w.generation_profile.settlement_expanded = expanded
 	w.generation_profile.main_roads_ms = Time.get_ticks_msec() - started
 	finder.use_corridor = true
@@ -541,8 +545,13 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if not b.connections.has(a.i): b.connections.append(a.i)
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
+	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
 	_clear_huts(w)
+	w.generation_profile.homes_kept = StageLandmarks.count_homes(w.settlements)
 	w.generation_profile.layout_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	w.generation_profile.checkpoints = state.get("checkpoints", 0)
+	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
+	w.generation_profile.restores = state.get("restores", 0)
 
 
 ## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
@@ -860,9 +869,14 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
 static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary) -> Dictionary:
 	var surface: Heightfield = state.get("surface")
-	return {bridges = w.bridges.duplicate(), tunnels = w.tunnels.duplicate(), mask = w.path_mask.duplicate(),
+	var checkpoint := {bridges = w.bridges.duplicate(), tunnels = w.tunnels.duplicate(), mask = w.path_mask.duplicate(),
 		heights = finder.heights.duplicate(), links = finder.links.duplicate(), on_axis = state.on_axis.duplicate(),
 		detour = state.detour, hv = surface.hv.duplicate() if surface != null else PackedFloat32Array()}
+	# Число и объём снимков (P0 аудита 29.10): основа решения о журнале изменений вместо копий.
+	state.checkpoints = int(state.get("checkpoints", 0)) + 1
+	state.checkpoint_bytes = int(state.get("checkpoint_bytes", 0)) + checkpoint.mask.size() + checkpoint.links.size() \
+		+ checkpoint.on_axis.size() + (checkpoint.heights.size() + checkpoint.hv.size()) * 4
+	return checkpoint
 
 
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int = 0) -> PackedInt32Array:
@@ -881,6 +895,7 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 			finder.links = PackedByteArray()
 		return
 	var checkpoint: Dictionary = ctx.checkpoint
+	state.restores = int(state.get("restores", 0)) + 1
 	w.bridges = checkpoint.bridges.duplicate()
 	w.tunnels = checkpoint.tunnels.duplicate()
 	w.path_mask = checkpoint.mask.duplicate()

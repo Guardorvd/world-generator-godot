@@ -213,6 +213,23 @@ static func lay_out(w: WorldData) -> void:
 		s.huts = huts
 
 
+## Жилые дома (без сараев и колодца): непустой huts ещё не значит, что в поселении можно жить.
+const HOMES := ["house", "chalet", "tall"] # как SettlementsBuilder.HOMES
+
+
+static func homes_of(s: SettlementData) -> int:
+	var count := 0
+	for hut: HutData in s.huts:
+		if hut.t in HOMES: count += 1
+	return count
+
+
+static func count_homes(settlements: Array) -> int:
+	var count := 0
+	for s: SettlementData in settlements: count += homes_of(s)
+	return count
+
+
 ## Вид жилого дома: в горах и лесу — больше шале, у посёлка у площади — высокие дома
 static func _house_kind(s: SettlementData, from_plaza: float, r: float) -> String:
 	var character: String = s.character
