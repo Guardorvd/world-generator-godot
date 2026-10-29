@@ -52,6 +52,10 @@ func _initialize() -> void:
 	print("PROFILE ", JSON.stringify(profile))
 	for link: Array in w.generation_profile.get("road_links", []):
 		print("  связь %d→%d, %d клеток: запас %d, %s" % link)
+	for why: Dictionary in w.generation_profile.get("site_failures", []):
+		var at: Array = why.at
+		print("  переправа (%d,%d)→(%d,%d), воды по пути %d: %s" % [at[0] % w.W, at[0] / w.W, at[1] % w.W, at[1] / w.W, at[2],
+			JSON.stringify(why).replace("\"at\":[%d,%d,%d]" % at, "")])
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))

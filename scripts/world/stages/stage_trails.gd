@@ -418,9 +418,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var state := {detour = w.seed_num % 2 == 1, on_axis = PackedByteArray(), surface = surface}
 	state.on_axis.resize(w.N)
 	finder.links.resize(w.N)
+	var reach := _bridge_reach(w)
 	for i in w.N:
 		if _wet(w, i) and w.cost[i] == INF:
-			road_cost[i] = BRIDGE_COST
+			road_cost[i] = BRIDGE_COST if reach[i] <= BRIDGE_REACH else INF
 	var joined := PackedByteArray()
 	joined.resize(n)
 	var tries := PackedInt32Array()
@@ -529,7 +530,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.road_failures = failures
 	w.generation_profile.road_links = link_log
 	w.generation_profile.road_windows = state.get("windows", {}).duplicate() # уровень окна найденных путей
-	w.generation_profile.no_bridge_cells = state.get("no_bridge", {}).size()	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
+	w.generation_profile.no_bridge_cells = state.get("no_bridge", {}).size()
+	w.generation_profile.site_failures = state.get("site_failures", []).duplicate()	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
 	# фактическая работа основного и фонового поиска — в search_stats.
 	var expanded := 0
 	for k in n:
@@ -562,6 +564,23 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.checkpoints = state.get("checkpoints", 0)
 	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	w.generation_profile.restores = state.get("restores", 0)
+
+
+## Ревью дорожной сети 29.10, шаг 1 (поиск не одобряет то, что построитель не сделает): мост охватывает не больше
+## SPAN шагов пути, поэтому любая клетка под ним не дальше SPAN / 2 шагов (по Чебышёву) от сухого берега.
+## Восьмисвязное расстояние Grid.distance_field не больше √2 Чебышёва: вода дальше BRIDGE_REACH от суши
+## не перекрывается никаким мостом — для дорог она непроходима, а не дорогая. Ни один возможный мост не теряется.
+## Раньше поиск вёл дороги через залив шириной 60–110 клеток, и мост там отвергался после каждого A*.
+const BRIDGE_REACH := SPAN * 0.5 * Grid.SQRT2
+
+
+## Расстояние от каждой клетки до ближайшей сухой (не _wet), клетки.
+static func _bridge_reach(w: WorldData) -> PackedFloat32Array:
+	var dry := PackedByteArray()
+	dry.resize(w.N)
+	for i in w.N:
+		dry[i] = 0 if _wet(w, i) else 1
+	return Grid.distance_field(w.W, w.H, dry)
 
 
 ## Корень группы связанных мест (меньший номер — корень, не зависит от порядка связей).
@@ -1075,12 +1094,17 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				var shore := j
 				# Короткая переправа между устойчивыми берегами; не вытягиваем мост
 				# вдоль дороги до случайной далёкой клетки с подходящей высотой.
-				var site := _bridge_site(state.surface, p, wet, i, shore, out, state.on_axis)
+				var why := {}
+				var site := _bridge_site(state.surface, p, wet, i, shore, out, state.on_axis, why)
 				j = site.y
 				if site.x >= 0:
 					out.resize(out.size() - (i - site.x))
 					i = site.x
 				if j < 0:
+					# Отчёт неудачных переправ: где (клетки берегов пути), ширина воды по пути и причины пар.
+					why.at = [p[i], p[shore], shore - i - 1]
+					state.site_failures = state.get("site_failures", [])
+					state.site_failures.append(why)
 					# Ревью дорожной сети 29.10, шаг 3: переправа — место с известным статусом. Вода, где мост не нашёл
 					# места, закрыта до конца этапа (state.no_bridge) — та же, что закрывает объезд ниже. Следующие
 					# связи её не ищут заново (_known_crossings). Поиск соседнего места на той же воде проверен
@@ -1197,8 +1221,9 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 
 ## Ищем ближайшую пару берегов, а не первый подходящий дальний конец.
 ## Не меняем уже принятую ось или путь до текущего подхода.
+## why (необязательно) получает число отвергнутых пар по причинам _bridge_problem и "dry" (не над водой).
 static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedByteArray,
-		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray) -> Vector2i:
+		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray, why: Variant = null) -> Vector2i:
 	var best := Vector2i(-1, -1)
 	var score := INF
 	for back in range(BRIDGE_APPROACH + 1):
@@ -1212,7 +1237,11 @@ static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedB
 				continue
 			var length := Grid.hypot(p[b] % surface.world.W - p[a] % surface.world.W,
 				p[b] / surface.world.W - p[a] / surface.world.W)
-			if length >= score or not _crosses_water(surface, p[a], p[b]) or not _bridge_clear(surface, p[a], p[b]):
+			if length >= score:
+				continue
+			var problem := "dry" if not _crosses_water(surface, p[a], p[b]) else _bridge_problem(surface, p[a], p[b])
+			if not problem.is_empty():
+				if why is Dictionary: why[problem] = int(why.get(problem, 0)) + 1
 				continue
 			best = Vector2i(a, b)
 			score = length
@@ -1230,13 +1259,20 @@ static func _crosses_water(surface: Heightfield, a: int, b: int) -> bool:
 
 ## Тот же настил, что в игре: пологий, выше воды и земли, с доступными подходами.
 static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
+	return _bridge_problem(surface, a, b).is_empty()
+
+
+## Почему настил a–b не встаёт ("" — встаёт): same, grade (перепад концов), landing (край въезда над водой
+## или не на уровне настила), ground (земля выше настила в пролёте), deck (чужой настил рядом),
+## wall (стена на оси), water (вода выше настила). Причины нужны отчёту неудачных переправ (шаг 3 ревью).
+static func _bridge_problem(surface: Heightfield, a: int, b: int) -> String:
 	if a == b:
-		return false
+		return "same"
 	var s := surface._axis(a, b, false)
 	s.ay = surface.ground_at(s.ax, s.az)
 	s.by = surface.ground_at(s.bx, s.bz)
 	if absf(s.by - s.ay) > GRADE * HEIGHT_SCALE * s.len:
-		return false
+		return "grade"
 	# Концы моста не должны попадать на узкий мыс: проверяем сушу под обоими краями
 	# настила. Иначе центр касается берега, а большая часть въезда нависает над водой.
 	for end in 2:
@@ -1246,7 +1282,7 @@ static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
 			var x: float = s.ax + s.ux * t - s.uz * side * s.half
 			var z: float = s.az + s.uz * t + s.ux * side * s.half
 			if surface.depth_at(x, z) > 0.3 or absf(surface.ground_at(x, z) - deck) > BRIDGE_LANDING_GAP:
-				return false
+				return "landing"
 	for k in range(-2, ceili(s.len) + 3):
 		var t := clampf(float(k), -2.0, s.len + 2.0)
 		var deck := surface.level(s, t)
@@ -1255,17 +1291,17 @@ static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
 			var z: float = s.az + s.uz * t + s.ux * side * (s.half + 0.8)
 			var ground := surface.ground_at(x, z)
 			if t > 1.0 and t < s.len - 1.0 and ground > deck + 0.3:
-				return false
+				return "ground"
 			var other := surface.deck_at(x, z, INF)
 			if other > -INF and absf(other - deck) > 0.3 and absf(other - deck) < Heightfield.TUNNEL_HEIGHT:
-				return false
+				return "deck"
 			if side == 0.0:
 				if surface.wall_at(x, z, maxf(deck, ground), 0.5):
-					return false
+					return "wall"
 				var depth := surface.depth_at(x, z)
 				if depth > 0.3 and ground + depth > deck - 0.1:
-					return false
-	return true
+					return "water"
+	return ""
 
 
 ## Путь p без возвратов на шаг назад (A, B, A -> A): они остаются, когда вход уже построенного моста

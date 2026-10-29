@@ -85,6 +85,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	open.resize(w.N)
 	var targets := PackedInt32Array()
 	w.cost.resize(w.N)
+	var span_reach := StageTrails._bridge_reach(w) # вода дальше любого возможного моста — непроходима
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
 		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
@@ -93,7 +94,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		elif plan.has_point(cell) and not wet and blocked[i] == 0:
 			open[i] = 1
 			if w.path_mask[i] >= 2: targets.append(i)
-		w.cost[i] = INF if open[i] == 0 else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
+		w.cost[i] = INF if open[i] == 0 or wet and span_reach[i] > StageTrails.BRIDGE_REACH else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
 	# Узлы: поселения, приходящие выходы закреплённых дорог, старая сеть плана.
 	var nodes: Array = []
 	for place: SettlementData in settlements:
