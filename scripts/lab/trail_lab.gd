@@ -632,8 +632,8 @@ func _unhandled_key_input(event: InputEvent) -> void:
 func _contact_report() -> String:
 	if not bike.contact_model:
 		return "Контакты: прежняя модель (F6)"
-	return "Перед: нагрузка %.2f · сцепление %.0f%%%s  ·  зад: %.2f · %.0f%%%s  (F6)" % [bike.load_f, bike.use_f * 100,
-		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
+	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s  (F6)" % [bike.load_f, bike.tire_f, bike.use_f * 100,
+		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):

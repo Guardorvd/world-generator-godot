@@ -47,7 +47,7 @@ func section() -> TrailDefinition:
 
 ## Заезд с station `from` на скорости `speed` до station `to`. brake — [от, до] станции полного тормоза;
 ## follow — рулить к оси (иначе руль прямо). Возвращает скорость на входе и выходе из окна тормоза, снос от оси и нагрузки.
-func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: float, to: float, speed: float, brake := Vector2(-1, -1), follow := false, zone := Vector2(-1, -1), trace := false) -> Dictionary:
+func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: float, to: float, speed: float, brake := Vector2(-1, -1), follow := false, zone := Vector2(-1, -1), trace := false, turn := Vector2(-1, -1)) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
 	b.contact_model = contact
@@ -59,7 +59,8 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 	b.mount(p)
 	b.speed = speed
 	var control := BikeController.new()
-	var out := {brake_in = -1.0, brake_out = -1.0, brake_time = 0.0, brake_air = 0, brake_load = 0.0, offset = 0.0, min_load_f = INF, max_load_f = 0.0, air = 0, crashed = false, peak_use_r = 0.0}
+	var out := {brake_in = -1.0, brake_out = -1.0, brake_time = 0.0, brake_air = 0, brake_load = 0.0, offset = 0.0, min_load_f = INF, max_load_f = 0.0, air = 0, crashed = false, peak_use_r = 0.0, bank = 0.0, yaw = 0.0, yaw_time = 0.0}
+	var prev_heading := b.heading
 	for tick in hz * 30:
 		var station := d.nearest(Vector2(b.x, b.z)).x
 		if station >= to: break
@@ -75,7 +76,13 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 			var target := d.point_at(station + 6.0)
 			var delta := target - Vector2(b.x, b.z)
 			steer = clampf(-wrapf(atan2(-delta.x, -delta.y) - b.heading, -PI, PI) * 2.0, -1.0, 1.0)
+		var turning := station >= turn.x and station <= turn.y
+		if turning: steer = 1.0
 		control.ride(1.0 / hz, p, b, h.world, h, -1.0 if braking else 0.0, steer, false, false, false)
+		if turning:
+			out.yaw += absf(wrapf(b.heading - prev_heading, -PI, PI))
+			out.yaw_time += 1.0 / hz
+		prev_heading = b.heading
 		if trace and station >= brake.x - 3.0 and station <= brake.y + 1.0:
 			print("  %.2f м: v %.2f · g %+.2f · нагрузка %.2f / %.2f · тормоз %.2f · %s" % [station, b.speed, b.vertical_g, b.load_f, b.load_r, b.brake_deceleration, "полёт" if b.airborne else "земля"])
 		if b.crashed:
@@ -85,11 +92,13 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 			out.offset = maxf(out.offset, absf(d.nearest(Vector2(b.x, b.z)).y))
 			out.air += int(b.airborne)
 			out.peak_use_r = maxf(out.peak_use_r, b.use_r)
+			out.bank = maxf(out.bank, absf(b.bank_slope))
 			if not b.airborne:
 				out.min_load_f = minf(out.min_load_f, b.load_f)
 				out.max_load_f = maxf(out.max_load_f, b.load_f)
 	out.decel = (out.brake_in - out.brake_out) / maxf(out.brake_time, 0.001)
 	out.brake_load /= maxf(out.brake_time, 0.001)
+	out.yaw /= maxf(out.yaw_time, 0.001)
 	return out
 
 
@@ -128,13 +137,22 @@ func run() -> void:
 			result["trough_old_%d" % hz].decel, result["trough_new_%d" % hz].decel, trough_ratio, result["trough_new_%d" % hz].brake_load])
 		check(crest_ratio < 0.95 and trough_ratio > crest_ratio + 0.1, "%d Гц: тормоз на гребне держит хуже, чем в ложбине" % hz)
 	check(absf(result.crest_new_60.decel - result.crest_new_120.decel) < 0.6, "гребень: 60 и 120 Гц совпадают (%.2f / %.2f)" % [result.crest_new_60.decel, result.crest_new_120.decel])
+	# 1б. Поворот: на гребне переднее колесо разгружено — велосипед поворачивает слабее, чем в ложбине.
+	var turns := {}
+	for name: String in ["crest", "trough"]:
+		for contact in [false, true]:
+			turns["%s_%s" % [name, "new" if contact else "old"]] = ride(h, d, contact, 60, ROLLER - 16.0, ROLLER + 10.0, 9.0, Vector2(-1, -1), false, Vector2(-1, -1), false, crest if name == "crest" else trough).yaw
+	var crest_turn: float = turns.crest_new / maxf(turns.crest_old, 0.001)
+	var trough_turn: float = turns.trough_new / maxf(turns.trough_old, 0.001)
+	print("Поворот: на гребне %.2f → %.2f рад/с (×%.2f), в ложбине %.2f → %.2f рад/с (×%.2f)" % [turns.crest_old, turns.crest_new, crest_turn, turns.trough_old, turns.trough_new, trough_turn])
+	check(crest_turn < 0.95 and trough_turn > crest_turn + 0.05, "на гребне поворот слабее, чем в ложбине")
 	# 2. Контруклон: тяжесть поперёк тянет вниз; тормоз отнимает запас у заднего колеса и сносит сильнее.
 	var zone := Vector2(CAMBER - 12.0, CAMBER + 12.0)
 	var old_coast := ride(h, d, false, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
 	var new_coast := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(-1, -1), true, zone)
 	var new_brake := ride(h, d, true, 60, CAMBER - 22.0, CAMBER + 14.0, 8.0, Vector2(CAMBER - 4.0, CAMBER + 2.0), true, zone)
-	print("Контруклон: снос от оси %.2f м (прежняя) / %.2f м (два контакта) / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%" % [
-		old_coast.offset, new_coast.offset, new_brake.offset, new_coast.peak_use_r * 100.0, new_brake.peak_use_r * 100.0])
+	print("Контруклон: снос от оси %.2f м (прежняя) / %.2f м (два контакта) / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%; поперечный уклон до %.0f%%" % [
+		old_coast.offset, new_coast.offset, new_brake.offset, new_coast.peak_use_r * 100.0, new_brake.peak_use_r * 100.0, new_coast.bank * 100.0])
 	check(new_coast.offset > old_coast.offset + 0.05, "контруклон сносит вниз в модели двух контактов")
 	check(new_brake.offset > new_coast.offset + 0.3, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
 	check(not new_coast.crashed and not new_brake.crashed, "контруклон проезжается без падения")

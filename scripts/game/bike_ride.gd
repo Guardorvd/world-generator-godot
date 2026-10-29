@@ -83,6 +83,13 @@ const CONTACT_SPRING := 0.5  # доля силы пружины колеса в 
 const LOAD_MAX := 3.0        # нагрузка колеса не больше этого, доли веса
 const CONTACT_MIN := 0.02    # легче этого колесо не держит (разгружено, оторвалось)
 const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) седок стоит и тяжесть поперёк не тянет велосипед вбок
+## Шина набирает силу не мгновенно, а за путь (длина релаксации): скачки нагрузки от каждой кочки сглаживаются,
+## а гребень роллера или ложбина, длинные по сравнению с ней, меняют запас сцепления полностью.
+const TIRE_RELAX := 0.8      # м пути
+const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на большой скорости
+## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
+## а длинный гребень или контруклон всё так же отнимают его.
+const SIDE_RELAX := 0.2      # с
 
 var x := 0.0          # метры
 var z := 0.0
@@ -107,6 +114,10 @@ var _corner_demand := 0.0
 var contact_model := false # прототип двух контактов (CONTACT_*)
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
+var tire_f := 0.5     # нагрузка, которую «чувствует» шина (сглажена по пути, TIRE_RELAX): от неё запас сцепления
+var tire_r := 0.5
+var side_f := 0.5     # нагрузка для бокового запаса (tire_* с инерцией SIDE_RELAX)
+var side_r := 0.5
 var use_f := 0.0      # использованный запас сцепления колеса (тормоз и поворот), 0..1; 1 — колесо скользит
 var use_r := 0.0
 var _rest_f := 0.0    # цель пружин на прошлом такте: отклонение от неё — сила подвески сверх равновесия
@@ -262,6 +273,10 @@ func reset_motion() -> void:
 	bottom_out = 0.0
 	load_f = 0.5
 	load_r = 0.5
+	tire_f = 0.5
+	tire_r = 0.5
+	side_f = 0.5
+	side_r = 0.5
 	use_f = 0.0
 	use_r = 0.0
 	_rest_f = 0.0
@@ -470,7 +485,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	_step_wheels(heights, rough, dt, surf, path_weight, slope, across)
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
-	_step_contacts(slope)
+	_step_contacts(slope, dt)
 
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
 	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
@@ -517,8 +532,8 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		# со сносом из своего запаса; стоящий седок упирается ногой.
 		var s := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 		lateral_speed -= GameConfig.GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) * dt
-		var cap_f := CORNER_GRIP * grip * load_f
-		var cap_r := CORNER_GRIP * grip * load_r
+		var cap_f := CORNER_GRIP * grip * side_f
+		var cap_r := CORNER_GRIP * grip * side_r
 		var free_f := sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
 		var free_r := sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force))
 		var correction := lateral_speed * Util.damp(GameConfig.BIKE_SIDE_RESPONSE, dt)
@@ -578,7 +593,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		var corner_grip := CORNER_GRIP * grip * sqrt(maxf(0.0, 1.0 - brake * brake))
 		if contact_model:
 			# Поворачивает переднее колесо: его свободный от тормоза запас держит половину боковой силы
-			var cap_f := CORNER_GRIP * grip * load_f
+			var cap_f := CORNER_GRIP * grip * side_f
 			corner_grip = 2.0 * sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
 		# Накопленный снос расширяет дугу до восстановления, вместо бесконечного дрифта.
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
@@ -748,10 +763,14 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## Нагрузка колёс после подвески (модель двух контактов): вес по нормали с кривизной профиля (vertical_g),
 ## перенос между осями от тормоза, уклона и корпуса (Brakes.front_load) и сила пружины сверх равновесия —
 ## удар о корень прижимает колесо, отскок разгружает. В полёте нагрузки нет.
-func _step_contacts(grade: float) -> void:
+func _step_contacts(grade: float, dt: float) -> void:
 	if airborne:
 		load_f = 0.0
 		load_r = 0.0
+		tire_f = 0.0
+		tire_r = 0.0
+		side_f = 0.0
+		side_r = 0.0
 		return
 	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g)
 	var share := clampf(brakes.front_load, 0.0, 1.0)
@@ -759,6 +778,12 @@ func _step_contacts(grade: float) -> void:
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * squash_rv) / GameConfig.GRAVITY
 	load_f = clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	load_r = clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
+	var k := 1.0 - exp(-dt / maxf(TIRE_RELAX_MIN, TIRE_RELAX / maxf(absf(speed), 0.5)))
+	tire_f = lerpf(tire_f, load_f, k)
+	tire_r = lerpf(tire_r, load_r, k)
+	var ks := 1.0 - exp(-dt / SIDE_RELAX)
+	side_f = lerpf(side_f, tire_f, ks)
+	side_r = lerpf(side_r, tire_r, ks)
 
 
 ## Колесо держит: стоит на земле и нагружено
@@ -774,7 +799,7 @@ func contact_r() -> bool:
 func _load_scale(grade: float) -> float:
 	if not contact_model:
 		return 1.0
-	return clampf((load_f + load_r) * sqrt(1.0 + grade * grade), 0.0, LOAD_MAX)
+	return clampf((tire_f + tire_r) * sqrt(1.0 + grade * grade), 0.0, LOAD_MAX)
 
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
