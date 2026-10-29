@@ -99,6 +99,21 @@ func run() -> int:
 	check(valid, "мировые адреса, расстояния между соседями и дома внутри области")
 	var q := Regions.finish_neighbors(source, [right, left], [no_water, no_water])
 	check(var_to_bytes(EntityCodec.encode(p.settlements[0])) == var_to_bytes(EntityCodec.encode(q.settlements[1])), "поселения не зависят от порядка подготовки")
+	var alone := Regions.finish_neighbors(source, [left], [no_water])
+	check(var_to_bytes(EntityCodec.encode(alone.settlements[0])) == var_to_bytes(EntityCodec.encode(p.settlements[0])),
+		"P0: поселения области не зависят от состава группы (сосед не загружен)")
+	# Окончательный угол каждой постройки проходит ту же проверку фундамента, что и место.
+	var local := Places.local_world(source, left, p.surfaces[0])
+	var ground := Heightfield.base_of(local)
+	var origin: Vector2i = left.sample_rect.position
+	var footing := true
+	for s: SettlementData in p.settlements[0]:
+		for hut: HutData in s.huts:
+			footing = footing and StageLandmarks._fits(local, ground, local.river_cells(), Vector2(hut.x - origin.x, hut.y - origin.y), hut.a, hut.t)
+	check(footing, "P0: окончательный поворот домов проходит проверку фундамента")
+	var pinned_ledger := {settlements = EntityCodec.encode(all)}
+	check(Places.prepare(source, left, p.surfaces[0], pinned_ledger).settlements.is_empty(),
+		"P0: поселения журнала закреплены и исключают новые рядом")
 	if not OS.get_cmdline_user_args().has("--water-only"):
 		# Дороги ищутся как в игре, через C# (без сборки .NET — тот же поиск на GDScript); с 13.8 выходов больше.
 		var gdscript_only := not Grid.allow_fast

@@ -288,13 +288,13 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 	if stop.is_valid() and stop.call(): return {cancelled = true}
 	var r := Regions.prepare(w, key, current)
 	var network := Regions.prepare_rivers(r)
-	var batch := Regions.finish_neighbors(w, [r], [network])
+	var batch := Regions.finish_neighbors(w, [r], [network], current)
 	var dropped := 0
 	if not batch.ready:
 		dropped = r.river_inputs.size()
 		r.river_inputs = []
 		network = Regions.prepare_rivers(r)
-		batch = Regions.finish_neighbors(w, [r], [network])
+		batch = Regions.finish_neighbors(w, [r], [network], current)
 		if not batch.ready:
 			return {ready = false, reason = batch.reason}
 	if stop.is_valid() and stop.call(): return {cancelled = true}

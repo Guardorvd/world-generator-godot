@@ -177,7 +177,13 @@ static func lay_out(w: WorldData) -> void:
 			var kind := _house_kind(s, r - plaza, rng.next_float())
 			if _crowded(huts, p, 1.95) or not _fits(w, ground, river, p, sl.w, kind):
 				continue
-			huts.append(HutData.new(p.x, p.y, floori(rng.next_float() * 4), kind, sl.w + (rng.next_float() - 0.5) * 0.12))
+			var variant := floori(rng.next_float() * 4)
+			# Небольшой разворот проверяется тем же фундаментом; не встаёт — дом остаётся на проверенном угле.
+			# Порядок чисел rng прежний: соседние дома и сараи не сдвигаются.
+			var angle := sl.w + (rng.next_float() - 0.5) * 0.12
+			if not _fits(w, ground, river, p, angle, kind):
+				angle = sl.w
+			huts.append(HutData.new(p.x, p.y, variant, kind, angle))
 			placed += 1
 		# Хозяйственный пояс: за частью домов, дальше от улицы — сарай, сеновал или поленница
 		var character: String = s.character
