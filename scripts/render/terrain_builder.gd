@@ -206,19 +206,8 @@ func outer_material() -> ShaderMaterial:
 
 func _detail_material() -> ShaderMaterial:
 	if _detail.is_empty():
-		# бесшовный шум один раз за запуск игры; не зависит от сида, это фактура, а не мир
-		var noise := FastNoiseLite.new()
-		noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
-		noise.frequency = 0.035
-		noise.fractal_octaves = 4
-		noise.seed = 2025
-		var img := noise.get_seamless_image(DETAIL_SIZE, DETAIL_SIZE)
-		var nrm := img.duplicate() as Image
-		nrm.convert(Image.FORMAT_RGBA8)
-		nrm.bump_map_to_normal_map(6.0)
-		img.generate_mipmaps()
-		nrm.generate_mipmaps()
-		_detail = [ImageTexture.create_from_image(img), ImageTexture.create_from_image(nrm)]
+		var catalog := preload("res://scripts/render/asset_catalog.gd").get_catalog()
+		_detail.assign([catalog.textures[3], catalog.textures[4]])
 	var mat := ShaderMaterial.new()
 	mat.shader = SHADER
 	mat.set_shader_parameter("detail_tex", _detail[0])

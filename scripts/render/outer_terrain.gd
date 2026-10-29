@@ -29,6 +29,9 @@ var _redo: Array[Vector2i] = []   # 13.9: загруженные куски за
 var _stale := {}                  # куски, чей расчёт начат до закрепления: после него пересчитать снова
 ## по куску на два ядра: главному потоку и растительности остаются свои
 var _task_limit := clampi(OS.get_processor_count() / 2, 1, TASKS)
+var _cpu := preload("res://scripts/core/byte_lru.gd").new()
+var _cpu_lock := Mutex.new()
+var _cpu_epoch := 0
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
@@ -117,6 +120,11 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 ## 13.9: область rect (клетки) закреплена — её куски пересчитываются. Старый кусок остаётся,
 ## пока новый не готов: земля под игроком не пропадает.
 func refresh(rect: Rect2i) -> void:
+	# A changed shore/normal affects the halo too; conservatively invalidate retired CPU chunks.
+	_cpu_lock.lock()
+	_cpu_epoch += 1
+	_cpu.clear()
+	_cpu_lock.unlock()
 	for key: Vector2i in _nodes.keys() + _tasks.keys():
 		if not Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)).intersects(rect):
 			continue
@@ -211,6 +219,20 @@ func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
 ## Поля куска и его меш (в фоновой задаче). Вершины — центры клеток от первой клетки куска до первой
 ## клетки следующего, поэтому соседние куски и карта смыкаются; квадраты целиком на карте пропускаются
 func _build(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) -> Dictionary:
+	if snapshot != null or not prepared_fields.is_empty(): return _compute(key, snapshot, prepared_fields)
+	_cpu_lock.lock()
+	var cached: Variant = _cpu.get_value(key)
+	var epoch := _cpu_epoch
+	_cpu_lock.unlock()
+	if cached != null: return cached
+	var built := _compute(key)
+	_cpu_lock.lock()
+	if epoch == _cpu_epoch: _cpu.put(key, built)
+	_cpu_lock.unlock()
+	return built
+
+
+func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) -> Dictionary:
 	var f: Dictionary = prepared_fields.duplicate() if not prepared_fields.is_empty() else OuterLand.compute_chunk(world, key)
 	var ledger: Dictionary = snapshot if snapshot is Dictionary else world.outer.get_ledger()
 	OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)

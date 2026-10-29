@@ -21,6 +21,10 @@ const DEADWOOD := [0.7, 1.5, 0.9, 1.1]   # множитель валежника
 
 
 static func meshes() -> Array[Mesh]:
+	return preload("res://scripts/render/asset_catalog.gd").get_catalog().understory.duplicate()
+
+
+static func build_meshes() -> Array[Mesh]:
 	var green := Color(0.3, 0.47, 0.23)
 	var bark := Color(0.35, 0.25, 0.14)
 	var parts: Array = []

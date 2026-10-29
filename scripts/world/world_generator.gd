@@ -139,7 +139,8 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	else:
 		# 10.2: география из кэша. Общий базовый рельеф строится заново (тот же, см. Heightfield.base_of),
 		# поля шума — из сида
-		w.base_heights = Heightfield.new(w, false)
+		if w.base_heights == null:
+			w.base_heights = Heightfield.new(w, false)
 		w.start_noise_fields()
 	if after_climate.is_valid():
 		after_climate.call(w)

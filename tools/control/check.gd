@@ -272,8 +272,7 @@ func _process(delta: float) -> bool:
 					# первая загрузка генерирует мир и пишет его в чистый кэш прогона
 					GameContext.scope.cache.enabled = true
 					GameContext.scope.cache.dir = out.path_join("world_cache")
-					for path in GameContext.scope.cache.paths_for(seed_text, size):
-						DirAccess.remove_absolute(path)
+					GameContext.scope.cache.invalidate_from(seed_text, size, 0)
 				if compute_probe != null:
 					compute_before = compute_probe.CaptureMetrics()
 				started = Time.get_ticks_msec()
@@ -295,7 +294,7 @@ func _process(delta: float) -> bool:
 					managed_allocated_bytes = int(after.managed_allocated_bytes) - int(compute_before.managed_allocated_bytes)})
 			timing.load = result.load_s
 			load_ms = game.load_timings.duplicate()
-			load_ms.generation_profile = game.world.generation_profile.duplicate()
+			load_ms["stored_generation_profile" if game.load_timings.get("profile_origin") == "stored_generation" else "generation_profile"] = game.world.generation_profile.duplicate()
 			game.paused = true
 			main.hud.visible = false
 			# 11.4: окно проверки может терять фокус — игра тогда ставит паузу и меню закрывает снимки
@@ -447,8 +446,10 @@ func _process_cache(game: GameWorld) -> bool:
 	var layers: int = game.load_timings.get("cache_layers", 0) + game.load_timings.get("cache_view", 0)
 	if cache_res.is_empty():
 		var mb := 0.0
-		for path in paths:
-			mb += FileAccess.get_size(path) / 1048576.0
+		var cache := GameContext.scope.cache
+		for file: String in DirAccess.get_files_at(cache.dir):
+			if file.begins_with(cache._base(seed_text, size) + "."):
+				mb += FileAccess.get_size(cache.dir.path_join(file)) / 1048576.0
 		cache_res = {from_cache = layers == paths.size(), load_s = load_s, fresh_load_s = timing.get("load", 0.0),
 			file_mb = snappedf(mb, 0.1), save_wait_s = timing.get("cache_save_wait", 0.0),
 			same = same, load_ms = game.load_timings.duplicate()}
@@ -456,8 +457,7 @@ func _process_cache(game: GameWorld) -> bool:
 			load_s, cache_res.fresh_load_s, cache_res.file_mb, same])
 		if cache_res.from_cache and not same.values().has(false):
 			# 10.2: третья загрузка — из кэша только география, места и природа генерируются заново
-			for k in range(1, paths.size()):
-				DirAccess.remove_absolute(paths[k])
+			GameContext.scope.cache.invalidate_from(seed_text, size, 1)
 			main._back_to_menu()
 			started = Time.get_ticks_msec()
 			main.start_game(seed_text, size)

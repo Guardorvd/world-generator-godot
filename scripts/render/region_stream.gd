@@ -1,5 +1,6 @@
 class_name RegionStream
 extends Node3D
+signal storage_failed(message: String)
 var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## 13.9: соседние области в игре. Ближайшая к игроку неготовая область за краем плана готовится
 ## в задаче WorkerThreadPool (по одной): заготовка, реки, поселения, дороги, закрепление в журнале.
@@ -48,6 +49,17 @@ void fragment() {
 }
 """
 static var root := "user://regions"         # тесты подменяют
+const Files := preload("res://scripts/core/cache_file.gd")
+const FIELD_CACHE_BYTES := 64 * 1024 * 1024
+static var _store_lock := Mutex.new()
+var _field_task := -1
+var _field_key := Vector2i.ZERO
+var _field_out := {}
+var field_errors := {} # pinned corruption is visible once; never regenerate it silently
+var _field_cache := {}
+var _field_bytes := 0
+var storage_error := ""
+var _ledger_failed := false
 
 var world: WorldData
 var heights: Heightfield
@@ -90,17 +102,27 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 
 ## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
 static func store_dir(w: WorldData) -> String:
-	var id := "%s|%d|%d|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]
-	return root.path_join(id.sha256_text().substr(0, 24))
+	if w.region_basis_id.is_empty():
+		# Explicit fingerprint v1: UTF-8 header, IEEE float32 height bytes, byte path mask.
+		var ctx := HashingContext.new()
+		ctx.start(HashingContext.HASH_SHA256)
+		ctx.update(("region-basis-v1|%s|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).to_utf8_buffer())
+		ctx.update(w.h.to_byte_array())
+		ctx.update(w.path_mask)
+		w.region_basis_id = ctx.finish().hex_encode().left(24)
+	if w.region_store_leaf.is_empty():
+		# Retain access to existing pinned journals; upgrade their writes in place.
+		var legacy := ("%s|%d|%d|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).sha256_text().left(24)
+		w.region_store_leaf = legacy if FileAccess.file_exists(root.path_join(legacy).path_join("ledger.bin")) or FileAccess.file_exists(root.path_join(legacy).path_join("ledger.bin.bak")) else w.region_basis_id
+	return root.path_join(w.region_store_leaf)
 
 
 ## Сохранённый журнал мира без полей клеток или {} (места и задания читают его и до игры)
 static func read_ledger(w: WorldData) -> Dictionary:
 	var path := store_dir(w).path_join("ledger.bin")
-	if not FileAccess.file_exists(path):
-		return {}
-	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
-	var saved: Variant = f.get_var() if f != null else null
+	if not FileAccess.file_exists(path) and not FileAccess.file_exists(path + ".bak"): return {}
+	var saved: Variant = _read(path, func(value: Dictionary) -> bool:
+		return value.get("format") == FORMAT and value.get("ledger") is Dictionary and value.ledger.get("regions") is Dictionary)
 	if not saved is Dictionary or saved.get("format") != FORMAT:
 		push_warning("Журнал областей не прочитан: %s" % path)
 		return {}
@@ -116,6 +138,10 @@ static func read_ledger(w: WorldData) -> Dictionary:
 func restore(x: float, z: float) -> void:
 	ledger = read_ledger(world)
 	if ledger.is_empty():
+		var path := store_dir(world).path_join("ledger.bin")
+		if FileAccess.file_exists(path) or FileAccess.file_exists(path + ".bak"):
+			_ledger_failed = true
+			_storage_failure("Не удалось прочитать журнал закреплённых областей. Подготовка новых областей остановлена.")
 		return
 	for key: Vector2i in ledger.regions:
 		if _distance(key, Vector2(x, z)) <= KEEP:
@@ -126,7 +152,20 @@ func restore(x: float, z: float) -> void:
 ## Каждый кадр: забрать готовую область, затем одно действие — показать, убрать, подгрузить,
 ## выгрузить или начать следующую. true — в кадре была заметная работа главного потока.
 func update(x: float, z: float) -> bool:
+	if _ledger_failed: return false
 	var p := Vector2(x, z)
+	if _field_task != -1 and WorkerThreadPool.is_task_completed(_field_task):
+		WorkerThreadPool.wait_for_task_completion(_field_task)
+		_field_task = -1
+		if not _field_out.get("fields", {}).is_empty():
+			_publish_fields(_field_key, _field_out.fields)
+			var rect: Rect2i = ledger.regions[_field_key].rect.grow(2)
+			terrain.refresh(rect)
+			vegetation.refresh(rect)
+		else:
+			field_errors[_field_key] = "сохранённая область повреждена или недоступна"
+			_storage_failure("Поля закреплённой области %s не прочитаны; область сохранена для восстановления." % _field_key)
+		return true
 	if _task != -1 and _distance(_key, p) > REACH:
 		_cancel.lock()
 		_cancelled = true
@@ -195,12 +234,9 @@ func update(x: float, z: float) -> bool:
 	for key: Vector2i in ledger.get("regions", {}):
 		var d := _distance(key, p)
 		var entry: Dictionary = ledger.regions[key]
-		if d <= KEEP and not entry.has("fields"):
-			_load_fields(key)
-			world.outer.set_ledger(ledger)
-			terrain.refresh(entry.rect.grow(2))
-			vegetation.refresh(entry.rect.grow(2))
-			return true
+		if d <= KEEP and not entry.has("fields") and not field_errors.has(key):
+			if _field_task == -1: _request_fields(key)
+			continue
 		if d > EVICT and entry.has("fields"):
 			_evict(key)
 			return false
@@ -233,6 +269,12 @@ func update(x: float, z: float) -> bool:
 	return false
 
 
+func _storage_failure(message: String) -> void:
+	storage_error = message
+	push_warning(message)
+	storage_failed.emit(message)
+
+
 func _stopped() -> bool:
 	_cancel.lock()
 	var value := _cancelled
@@ -240,6 +282,9 @@ func _stopped() -> bool:
 	return value
 
 func finish() -> void:
+	if _field_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_field_task)
+		_field_task = -1
 	_cancel.lock()
 	_cancelled = true
 	_cancel.unlock()
@@ -367,30 +412,79 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 
 ## Поля области — в свой файл, журнал без полей — в ledger.bin; запись через временный файл.
 static func save(dir: String, current: Dictionary, key: Vector2i) -> Error:
+	_store_lock.lock()
+	var result := _save_generation(dir, current, key)
+	_store_lock.unlock()
+	return result
+
+
+static func _save_generation(dir: String, current: Dictionary, key: Vector2i) -> Error:
 	var err := DirAccess.make_dir_recursive_absolute(dir)
 	if err != OK:
 		return err
-	var entry: Dictionary = current.regions[key]
-	err = _write(dir.path_join("%d_%d.region" % [key.x, key.y]), {format = FORMAT, rect = entry.rect, fields = entry.fields})
-	if err != OK:
-		return err
+	var previous: Variant = _read(dir.path_join("ledger.bin"))
+	var old_regions: Dictionary = previous.get("ledger", {}).get("regions", {}) if previous is Dictionary else {}
 	var light := current.duplicate()
 	light.regions = {}
 	for k: Vector2i in current.regions:
 		var e: Dictionary = current.regions[k]
 		light.regions[k] = {rect = e.rect, decor = e.decor, trail_plan = e.get("trail_plan", {}), map = e.get("map", PackedByteArray())}
+		var ref: Dictionary = old_regions.get(k, e)
+		if k == key or not ref.has("field_file"):
+			if e.has("fields"):
+				var data: Variant = EntityCodec.encode({format = FORMAT, rect = e.rect, fields = e.fields})
+				var bytes := _pack(data)
+				var digest := Util.sha256(bytes).hex_encode()
+				var name := "%d_%d.%s.region" % [k.x, k.y, digest]
+				if not FileAccess.file_exists(dir.path_join(name)):
+					err = Files.replace(dir.path_join(name), bytes)
+					if err != OK: return err
+				# Verify every block before publishing a ledger referencing it.
+				if Util.sha256(FileAccess.get_file_as_bytes(dir.path_join(name))).hex_encode() != digest: return ERR_FILE_CORRUPT
+				ref = {field_file = name, field_sha = digest}
+			else:
+				# A legacy unloaded region keeps its old immutable address until loaded/saved.
+				ref = {field_file = "%d_%d.region" % [k.x, k.y], field_sha = ""}
+		light.regions[k].field_file = ref.field_file
+		light.regions[k].field_sha = ref.get("field_sha", "")
 	return _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
 
 
 static func _write(path: String, value: Variant) -> Error:
-	var f := FileAccess.open_compressed(path + ".tmp", FileAccess.WRITE, FileAccess.COMPRESSION_ZSTD)
-	if f == null:
-		return FileAccess.get_open_error()
-	f.store_var(EntityCodec.encode(value))
-	f.close()
-	if FileAccess.file_exists(path):
-		DirAccess.remove_absolute(path)
-	return DirAccess.rename_absolute(path + ".tmp", path)
+	var preserve := FileAccess.file_exists(path) and _read_one(path) == null
+	return Files.replace(path, _pack(EntityCodec.encode(value)), preserve)
+
+
+static func _pack(value: Variant) -> PackedByteArray:
+	var raw := var_to_bytes(value)
+	var packed := raw.compress(FileAccess.COMPRESSION_ZSTD)
+	return "RGC1".to_ascii_buffer() + var_to_bytes({storage = 1, size = raw.size(), sha = Util.sha256(packed), packed = packed})
+
+
+static func _read(path: String, validator := Callable()) -> Variant:
+	for suffix: String in ["", ".bak"]:
+		var data: Variant = _read_one(path + suffix)
+		if data is Dictionary and (not validator.is_valid() or validator.call(data)): return data
+	return null
+
+
+static func _read_one(path: String) -> Variant:
+	if not FileAccess.file_exists(path): return null
+	var bytes := FileAccess.get_file_as_bytes(path)
+	if bytes.size() < 4: return null
+	var magic := bytes.slice(0, 4).get_string_from_ascii()
+	if magic == "GCPF":
+		var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
+		var legacy: Variant = f.get_var(false) if f != null else null
+		return legacy if legacy is Dictionary else null
+	if magic != "RGC1": return null
+	var envelope: Variant = bytes_to_var(bytes.slice(4))
+	if not envelope is Dictionary or envelope.get("storage") != 1 or not envelope.get("packed") is PackedByteArray or not envelope.get("size") is int: return null
+	if envelope.size <= 0 or envelope.size > (1 << 30) or Util.sha256(envelope.packed) != envelope.get("sha"): return null
+	var raw: PackedByteArray = envelope.packed.decompress(envelope.size, FileAccess.COMPRESSION_ZSTD)
+	if raw.size() != envelope.size: return null
+	var data: Variant = bytes_to_var(raw)
+	return data if data is Dictionary else null
 
 
 ## Очередь: ближайшие неготовые области за краем плана ближе REACH, не больше QUEUE
@@ -433,22 +527,70 @@ func _distance(key: Vector2i, p: Vector2) -> float:
 
 
 func _load_fields(key: Vector2i) -> void:
-	var path := store_dir(world).path_join("%d_%d.region" % [key.x, key.y])
-	var f := FileAccess.open_compressed(path, FileAccess.READ, FileAccess.COMPRESSION_ZSTD)
-	var saved: Variant = f.get_var() if f != null else null
-	if not saved is Dictionary or saved.get("format") != FORMAT:
-		push_warning("Поля области %s не прочитаны" % key)
+	var fields := _read_fields(store_dir(world), key, ledger.regions[key])
+	if fields.is_empty():
+		field_errors[key] = "сохранённая область повреждена или недоступна"
+		_storage_failure("Поля закреплённой области %s не прочитаны; область сохранена для восстановления." % key)
+	else: _publish_fields(key, fields)
+
+
+static func _read_fields(dir: String, key: Vector2i, entry: Dictionary) -> Dictionary:
+	var name: String = entry.get("field_file", "%d_%d.region" % [key.x, key.y])
+	if name != name.get_file(): return {}
+	var path := dir.path_join(name)
+	var digest: String = entry.get("field_sha", "")
+	var saved: Variant = null
+	if digest.is_empty():
+		saved = _read(path)
+	else:
+		for suffix: String in ["", ".bak"]:
+			if not FileAccess.file_exists(path + suffix): continue
+			if Util.sha256(FileAccess.get_file_as_bytes(path + suffix)).hex_encode() != digest: continue
+			saved = _read_one(path + suffix)
+			if saved != null: break
+	if not saved is Dictionary or saved.get("format") != FORMAT or saved.get("rect") != entry.rect or not saved.get("fields") is Dictionary: return {}
+	var n: int = entry.rect.size.x * entry.rect.size.y
+	for field: String in ["h", "water_level", "biome"]:
+		if not saved.fields.has(field) or saved.fields[field].size() != n: return {}
+	return saved.fields
+
+
+func _request_fields(key: Vector2i) -> void:
+	_field_key = key
+	_field_out = {}
+	var out := _field_out
+	if _field_cache.has(key):
+		out.fields = _field_cache[key].fields
+		_field_bytes -= _field_cache[key].bytes
+		_field_cache.erase(key)
+		_field_task = WorkerThreadPool.add_task(func() -> void: pass, false)
 		return
+	var dir := store_dir(world)
+	var entry: Dictionary = ledger.regions[key]
+	_field_task = WorkerThreadPool.add_task(func() -> void: out.fields = _read_fields(dir, key, entry), false, "Чтение области")
+
+
+func _publish_fields(key: Vector2i, fields: Dictionary) -> void:
 	ledger = ledger.duplicate()
 	ledger.regions = ledger.regions.duplicate()
 	var entry: Dictionary = ledger.regions[key].duplicate()
-	entry.fields = saved.fields
+	entry.fields = fields
 	ledger.regions[key] = entry
+	world.outer.set_ledger(ledger)
 	stats.loaded += 1
 
 
 ## Поля далёкой области остаются только в файле; запись журнала (rect, decor) — в памяти
 func _evict(key: Vector2i) -> void:
+	var fields: Dictionary = ledger.regions[key].fields
+	var bytes := preload("res://scripts/core/byte_lru.gd").size_of(fields)
+	if bytes <= FIELD_CACHE_BYTES:
+		while _field_bytes + bytes > FIELD_CACHE_BYTES and not _field_cache.is_empty():
+			var oldest: Vector2i = _field_cache.keys()[0]
+			_field_bytes -= _field_cache[oldest].bytes
+			_field_cache.erase(oldest)
+		_field_cache[key] = {fields = fields, bytes = bytes}
+		_field_bytes += bytes
 	ledger = ledger.duplicate()
 	ledger.regions = ledger.regions.duplicate()
 	var entry: Dictionary = ledger.regions[key].duplicate()

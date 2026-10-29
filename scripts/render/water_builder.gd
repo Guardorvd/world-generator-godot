@@ -21,6 +21,18 @@ static func prepare(w: WorldData, heights: Heightfield) -> Array[Array]:
 	return [_lake_arrays(w, heights), _river_arrays(heights.ribbons, heights)]
 
 
+## Preserve existing triangles and all flow/shore attributes; index non-indexed ribbons first.
+static func partition_arrays(arrays: Array) -> Dictionary:
+	if arrays.is_empty(): return {}
+	var indexed := arrays.duplicate()
+	if indexed[Mesh.ARRAY_INDEX] == null:
+		var ids := PackedInt32Array()
+		ids.resize(indexed[Mesh.ARRAY_VERTEX].size())
+		for k in ids.size(): ids[k] = k
+		indexed[Mesh.ARRAY_INDEX] = ids
+	return PlanTerrain.partition(indexed)
+
+
 ## Создание узлов из готовых массивов — в главном потоке.
 static func build(w: WorldData, prepared: Array[Array]) -> Array[MeshInstance3D]:
 	var out: Array[MeshInstance3D] = []

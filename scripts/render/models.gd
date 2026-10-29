@@ -43,6 +43,10 @@ static func _c(r: int, g: int, b: int) -> Color:
 
 
 static func tree_defs() -> Dictionary:
+	return preload("res://scripts/render/asset_catalog.gd").get_catalog().trees.duplicate(true)
+
+
+static func build_tree_defs() -> Dictionary:
 	var defs := {
 		Biomes.T_CACTUS: {trunk = merge([_cyl(0.28, 0.32, 2.6, 7), _moved(_cyl(0.18, 0.18, 0.9, 6), Vector3(0.5, 1.0, 0)), _moved(_cyl(0.18, 0.18, 0.8, 6), Vector3(-0.5, 1.3, 0))]), bark = _c(79, 138, 60)},
 	}
@@ -128,6 +132,10 @@ static func reeds(seed: int) -> ArrayMesh:
 ## Один общий пучок: пять разных острых листьев, которые расходятся из компактного основания.
 ## UV.x — номер листа для небольших отличий между экземплярами в шейдере.
 static func grass_mesh() -> ArrayMesh:
+	return preload("res://scripts/render/asset_catalog.gd").get_catalog().grass
+
+
+static func build_grass_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for k in 5:

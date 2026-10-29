@@ -78,6 +78,7 @@ var _night := -1.0
 var outer: OuterTerrain   # рельеф за краем стартовой области
 var regions: RegionStream # 13.9: подготовленные соседние области за краем плана
 var terrain_stream: PlanTerrain
+var _water_streams: Array[PlanTerrain] = []
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
 var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
 var yaw: float:
@@ -177,17 +178,28 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)
-	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override)
+	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights)
 	stream_coordinator.terrain_update = terrain_stream.update
 	stream_coordinator.vegetation_update = vegetation.update
 	stream_coordinator.vegetation_budgeted = vegetation.update_frame
 	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.
 	loaded.terrain_arrays = []
 	t = _mark("start_material_terrain_setup_ms", t)
-	for node: Node in WaterBuilder.build(world, loaded.water_arrays):
+	var streamed_water := loaded.water_chunks.size() == 2
+	for node: Node in WaterBuilder.build(world, [[], []] if streamed_water else loaded.water_arrays):
 		$Water.add_child(node)
 		if node.name == "Ocean":
 			_ocean = node
+	if streamed_water:
+		for layer in 2:
+			var water_stream := PlanTerrain.new()
+			water_stream.water_layer = layer
+			water_stream.cache_size = loaded.cache_size
+			water_stream.setup(loaded.water_chunks[layer], WaterBuilder._material(false, layer == 1), services.cache, world, heights)
+			$Water.add_child(water_stream)
+			_water_streams.append(water_stream)
+		stream_coordinator.water_update = _update_water
+		loaded.water_arrays.clear()
 	water_effects = WaterEffects.new()
 	water_effects.setup($Water)
 	$Water.add_child(water_effects)
@@ -231,6 +243,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		regions.name = "Regions"
 		add_child(regions)
 		regions.setup(world, heights, null, vegetation)
+		regions.storage_failed.connect(hud.toast_now)
 		stream_coordinator.region_restore = regions.restore
 		if saved.is_empty():
 			stream_coordinator.restore_regions(Vector3(world.W * TILE * 0.5, 0.0, world.H * TILE * 0.5))
@@ -401,6 +414,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_trauma = 0.0)
 	capture_mouse()
 	_mark("start_rest_ms", t)
+
+
+func _update_water(x: float, z: float, force := false, allow_apply := true, near := PlanTerrain.RADIUS) -> bool:
+	var uploaded := false
+	for stream in _water_streams:
+		uploaded = stream.update(x, z, force, allow_apply and not uploaded, near) or uploaded
+	return uploaded
 
 
 func _photo_capturing(on: bool) -> void:

@@ -93,6 +93,10 @@ static func _log(moss: bool) -> Mesh:
 
 
 static func meshes() -> Array[Mesh]:
+	return preload("res://scripts/render/asset_catalog.gd").get_catalog().floor_meshes.duplicate()
+
+
+static func build_meshes() -> Array[Mesh]:
 	var leaves: Array = []
 	var needles: Array = []
 	# Несколько приподнятых листьев и иголок поверх шейдерной подстилки.

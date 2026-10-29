@@ -45,6 +45,9 @@ var seed_num := 0
 ## Trail Lab (TrailSite) — его угол в плане: по ней шумы полотна, участки покрытий и кочки берутся в мировых
 ## координатах и не меняются от переноса участка. В кэш не входит.
 var world_origin := Vector2i.ZERO
+## Computed once after canonical paths are final; never serialized as generation fields.
+var region_basis_id := ""
+var region_store_leaf := ""
 
 ## 8.5: W/H — неизменный общий план, доступная территория — вложенное окно в нём.
 ## Координаты всегда мировые: при расширении нет ни сдвига, ни пересчёта массивов.

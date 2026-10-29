@@ -1,9 +1,8 @@
 class_name WorldCache
 extends RefCounted
 ## Кэш готовых миров (с 10.0): данные генерации (WorldData) в файлах на диске игрока.
-## Генерация — самая долгая часть загрузки (46 из 62 с у мира 768), а остальное — рельеф, меш, текстуры —
-## считается из готовых данных за секунды и в кэш не кладётся: так файл в несколько раз меньше.
-## Мир не меняется: в файле ровно то, что вернул генератор, а шумы пересоздаются из сида.
+## Канонические слои отделены от базовой/окончательной поверхности и CPU-чанков отображения.
+## Повреждение производного блока не удаляет канонический мир или прогресс игрока.
 ##
 ## С 10.2 кэш по слоям генерации (WorldGenerator.LAYERS): география, места и пути, природа — по файлу на слой.
 ## Ключ слоя — явная версия его схемы/результата генерации и ключ прошлого слоя, а не версия игры:
@@ -51,6 +50,13 @@ const BUNDLED := "res://resources/world_cache"
 var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
+const Files := preload("res://scripts/core/cache_file.gd")
+const SURFACE_VERSION := 2 # terrain and water chunks are immutable lazy blocks
+const BASE_VERSION := 1
+var io_timings := {}
+var _io_lock := Mutex.new()
+var _write_lock := Mutex.new()
+var _enqueue_lock := Mutex.new()
 
 
 ## Ключи схем одинаковы в редакторе, PCK, Debug/Release и на всех платформах.
@@ -101,6 +107,87 @@ func paths_for(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Arra
 	return out
 
 
+func artifact_path(seed_text: String, size: int, artifact: String) -> String:
+	return dir.path_join("%s.%s%s" % [_base(seed_text, size), artifact, EXT])
+
+
+func artifact_key(seed_text: String, size: int, artifact: String) -> String:
+	var layer := 0 if artifact == "base" else 2
+	var version := BASE_VERSION if artifact == "base" else SURFACE_VERSION
+	return "%s|%s|%d|%d|%d|%d" % [_key(seed_text, size, layer), artifact, version, StageTrailPlan.VERSION if layer == 2 else 0, RoadRefinement.DIV, PlanTerrain.CELLS]
+
+
+## Artifact passport without decompressing payloads. Sizes include the retained recovery generation.
+func describe_artifacts(seed_text: String, size: int) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	for k in WorldGenerator.LAYERS.size() + 1:
+		out.append({id = _layer_name(k), owner = "WorldGenerator" if k < 3 else "MapBaker/ForestFloor",
+			path = path_for(seed_text, size, k), key = _key(seed_text, size, k), stage = "canonical" if k < 3 else "view"})
+	for artifact: String in ["base", "surface"]:
+		out.append({id = artifact, owner = "WorldLoader/Heightfield", path = artifact_path(seed_text, size, artifact),
+			key = artifact_key(seed_text, size, artifact), stage = artifact, version = BASE_VERSION if artifact == "base" else SURFACE_VERSION})
+	for item: Dictionary in out:
+		item.bytes = FileAccess.get_size(item.path) if FileAccess.file_exists(item.path) else 0
+		item.backup_bytes = FileAccess.get_size(item.path + ".bak") if FileAccess.file_exists(item.path + ".bak") else 0
+		item.header_matches = _cache_header_key(item.path) == item.key or _cache_header_key(item.path + ".bak") == item.key
+	return out
+
+
+func load_artifact(seed_text: String, size: int, artifact: String) -> Dictionary:
+	var data: Variant = _read(artifact_path(seed_text, size, artifact), artifact_key(seed_text, size, artifact))
+	return data if data is Dictionary else {}
+
+
+func save_artifact(seed_text: String, size: int, artifact: String, data: Dictionary) -> void:
+	_queue_write(artifact_path(seed_text, size, artifact), artifact_key(seed_text, size, artifact), data)
+
+
+## Immutable chunk blocks first, the small surface manifest last. No monolithic terrain bytes.
+func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictionary, water_chunks: Array = [{}, {}]) -> void:
+	var snapshot := data.duplicate(true)
+	var pieces := chunks.duplicate(true)
+	var key := artifact_key(seed_text, size, "surface")
+	var path := artifact_path(seed_text, size, "surface")
+	var generation := "%d_%d" % [Time.get_ticks_usec(), get_instance_id()]
+	var water := water_chunks.duplicate(true)
+	_queue_job(func() -> void:
+		snapshot.chunks = {}
+		snapshot.water_chunks = [{}, {}]
+		for group in 3:
+			var source: Dictionary = pieces if group == 0 else water[group - 1]
+			var refs: Dictionary = snapshot.chunks if group == 0 else snapshot.water_chunks[group - 1]
+			for at: Vector2i in source:
+				var name := "%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]
+				var chunk_key := "%s|%d|%d|%d" % [key, group, at.x, at.y]
+				if _write(dir.path_join(name), chunk_key, var_to_bytes({arrays = source[at]})) != OK: return
+				refs[at] = {file = name, key = chunk_key}
+		_write(path, key, var_to_bytes(snapshot)))
+
+
+## Only dependencies downstream of the failed canonical layer. Player saves/regions are untouched.
+func invalidate_from(seed_text: String, size: int, layer: int) -> void:
+	wait_writes()
+	for k in range(layer, WorldGenerator.LAYERS.size() + 1):
+		Files.remove(path_for(seed_text, size, k))
+	Files.remove(artifact_path(seed_text, size, "surface"))
+	if layer == 0: Files.remove(artifact_path(seed_text, size, "base"))
+
+
+func take_io_timings() -> Dictionary:
+	_io_lock.lock()
+	var result := io_timings.duplicate(true)
+	io_timings.clear()
+	_io_lock.unlock()
+	return result
+
+
+func _measure(name: String, since: int, bytes := 0) -> void:
+	_io_lock.lock()
+	io_timings[name + "_ms"] = io_timings.get(name + "_ms", 0.0) + (Time.get_ticks_usec() - since) / 1000.0
+	io_timings[name + "_bytes"] = io_timings.get(name + "_bytes", 0) + bytes
+	_io_lock.unlock()
+
+
 ## Превью карты мира для меню или null. Остаётся и после обновлений: мир от зерна почти не меняется.
 func preview(seed_text: String) -> Image:
 	var path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
@@ -111,9 +198,8 @@ func preview(seed_text: String) -> Image:
 ## без картинок, на 1 больше — всё (читаются только заголовки)
 func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZE) -> int:
 	for k in WorldGenerator.LAYERS.size() + 1:
-		var f := FileAccess.open(path_for(seed_text, size, k), FileAccess.READ)
-		if f == null or f.get_length() < 64 or f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT \
-				or f.get_pascal_string() != _key(seed_text, size, k):
+		var path := path_for(seed_text, size, k)
+		if _cache_header_key(path) != _key(seed_text, size, k) and _cache_header_key(path + ".bak") != _key(seed_text, size, k):
 			return k
 	return WorldGenerator.LAYERS.size() + 1
 
@@ -138,8 +224,6 @@ func usage() -> Dictionary:
 func load_view(seed_text: String, size: int) -> Dictionary:
 	var layer := WorldGenerator.LAYERS.size()
 	var path := path_for(seed_text, size, layer)
-	if not FileAccess.file_exists(path):
-		return {}
 	var data: Variant = _read(path, _key(seed_text, size, layer))
 	var out := {}
 	if data != null:
@@ -151,8 +235,6 @@ func load_view(seed_text: String, size: int) -> Dictionary:
 				out.clear()
 				break
 			out[name] = Image.create_from_data(d.w, d.h, false, d.f, d.data)
-	if out.is_empty():
-		DirAccess.remove_absolute(path)
 	return out
 
 
@@ -162,20 +244,14 @@ func save_view(seed_text: String, size: int, images: Dictionary) -> void:
 	for name: String in VIEW_IMAGES:
 		var img: Image = images[name]
 		data[name] = {w = img.get_width(), h = img.get_height(), f = img.get_format(), data = img.get_data()}
-	var raw := var_to_bytes(data)
 	var layer := WorldGenerator.LAYERS.size()
 	var path := path_for(seed_text, size, layer)
 	var key := _key(seed_text, size, layer)
 	var small: Image = (images.map as Image).duplicate()
 	var preview_path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
-	var job := func() -> void:
-		_write(path, key, raw)
+	_queue_write(path, key, data, func() -> void:
 		small.resize(PREVIEW_SIZE, PREVIEW_SIZE, Image.INTERPOLATE_BILINEAR)
-		small.save_png(preview_path)
-	var task := WorkerThreadPool.add_task(job, false, "Кэш мира")
-	_lock.lock()
-	_writes.append(task)
-	_lock.unlock()
+		Files.replace(preview_path, small.save_png_to_buffer()))
 
 
 ## Мир с кэшем: подходящие слои читаются, с первого неподходящего генерация продолжается обычным путём,
@@ -184,13 +260,27 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 		after_climate: Callable = Callable()) -> Dictionary:
 	var got := _load(seed_text, size)
 	var n: int = got.layers
+	# Validate the plan before starting expensive preparation, even when schema keys match.
+	if n >= 2 and StageTrailPlan.stale(got.world.trail_plan):
+		invalidate_from(seed_text, size, 1)
+		got = _load(seed_text, size)
+		n = got.layers
 	if n == WorldGenerator.LAYERS.size():
 		return {world = got.world, layers = n}
 	# Снимок для сравнения — отдельная копия: мир из кэша держит те же массивы и словари, и следующий слой,
 	# меняя их на месте (тропы получают покрытие), менял бы и снимок. Тогда изменения не попадали в файл
 	# слоя, и при следующем запуске дороги грузились без покрытия (исправлено в 12.2)
 	var state := {prev = got.data.duplicate(true)}
-	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, after_climate, got.world, n,
+	var prepare_base := func(cur: WorldData) -> void:
+		if cur.base_heights != null:
+			save_artifact(seed_text, size, "base", preload("res://scripts/game/surface_snapshot.gd").capture(cur.base_heights, "base"))
+		if after_climate.is_valid(): after_climate.call(cur)
+	var base: Heightfield = null
+	if n > 0:
+		base = preload("res://scripts/game/surface_snapshot.gd").restore(got.world, load_artifact(seed_text, size, "base"), "base")
+		got.world.base_heights = base
+	if n > 0: got.world.generation_profile = {} # report only stages actually generated on this load
+	var w := WorldGenerator.generate_layers(seed_text, size, on_progress, prepare_base, got.world, n,
 		func(cur: WorldData, k: int) -> void:
 			state.prev = _save_layer(cur, size, k, state.prev))
 	return {world = w, layers = n}
@@ -200,23 +290,25 @@ func generate(seed_text: String, size: int, on_progress: Callable = Callable(),
 func _load(seed_text: String, size: int) -> Dictionary:
 	var data := {}
 	var n := 0
+	var w: WorldData
 	for k in WorldGenerator.LAYERS.size():
 		var path := path_for(seed_text, size, k)
-		if not FileAccess.file_exists(path):
-			break
 		var part: Variant = _read(path, _key(seed_text, size, k))
 		if part == null:
-			# старый (другой код этапов) или битый файл: слой и следующие будут перезаписаны
-			DirAccess.remove_absolute(path)
 			break
-		data.merge(part, true)
+		var candidate := data.merged(part, true)
+		var restored_at := Time.get_ticks_usec()
+		var next := _restore(candidate, k == WorldGenerator.LAYERS.size() - 1)
+		_measure("restore", restored_at)
+		if next == null:
+			var backup: Variant = _read_file(path + ".bak", _key(seed_text, size, k))
+			if backup == null: break
+			candidate = data.merged(backup, true)
+			next = _restore(candidate, k == WorldGenerator.LAYERS.size() - 1)
+			if next == null: break
+		w = next
+		data = candidate
 		n = k + 1
-	var w := _restore(data, n == WorldGenerator.LAYERS.size()) if n > 0 else null
-	if n > 0 and w == null:
-		push_warning("Кэш мира %s не подошёл, мир будет создан заново" % seed_text)
-		for path in paths_for(seed_text, size):
-			DirAccess.remove_absolute(path)
-		return {world = null, layers = 0, data = {}}
 	return {world = w, layers = n, data = data}
 
 
@@ -228,7 +320,7 @@ func read_only(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Dict
 	for k in WorldGenerator.LAYERS.size():
 		var path := path_for(seed_text, size, k)
 		files.append(path)
-		var part: Variant = _read(path, _key(seed_text, size, k)) if FileAccess.file_exists(path) else null
+		var part: Variant = _read(path, _key(seed_text, size, k))
 		if part == null:
 			return {error = "нет подходящего нынешнему коду слоя «%s» мира «%s» в %s" % [_layer_name(k), seed_text, dir]}
 		data.merge(part, true)
@@ -244,9 +336,18 @@ func read_only(seed_text: String, size: int = WorldGenerator.START_SIZE) -> Dict
 ## Снимок слоя берётся сразу (пока следующий слой мир не тронул): в файл идут поля, которые слой поменял;
 ## сжатие и запись — в фоне. Возвращает снимок всех полей для сравнения со следующим слоем.
 func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dictionary:
-	var snap := {}
+	var started := Time.get_ticks_usec()
+	var snap := prev.duplicate()
 	var part := {}
-	for name: String in WorldData.CACHE_FIELDS:
+	# Include nested mutations: settlement huts in places, trail surfaces in nature.
+	var fields: Array = WorldData.CACHE_FIELDS
+	if layer == 1:
+		fields = WorldData.Civil.CACHE_FIELDS + ["peaks", "generation_profile"]
+	elif layer == 2:
+		fields = ["territory_center", "available_rect", "territory_revision", "generation_profile",
+			"obj_x", "obj_y", "obj_k", "obj_v", "obj_s", "chunks", "CS", "CW", "CH", "obj_count",
+			"lakes", "lake_id", "trails", "road_surface"]
+	for name: String in fields:
 		var v: Variant = EntityCodec.encode(w.get(name))
 		# массивы и словари следующие слои меняют на месте; Packed*Array копируются при записи сами
 		if v is Array or v is Dictionary:
@@ -254,17 +355,44 @@ func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dicti
 		snap[name] = v
 		if not prev.has(name) or typeof(prev[name]) != typeof(v) or prev[name] != v:
 			part[name] = v
-	var raw := var_to_bytes(part)
 	var path := path_for(w.seed_text, size, layer)
 	var key := _key(w.seed_text, size, layer)
-	var task := WorkerThreadPool.add_task(func() -> void: _write(path, key, raw), false, "Кэш мира")
-	_lock.lock()
-	_writes.append(task)
-	_lock.unlock()
+	_measure("snapshot", started)
+	_queue_write(path, key, part)
 	return snap
 
 
+## One immutable snapshot in flight. Request order is also publication order for repeated keys.
+func _queue_write(path: String, key: String, data: Dictionary, after := Callable()) -> void:
+	var snapshot := data.duplicate(true)
+	_queue_job(func() -> void:
+		var started := Time.get_ticks_usec()
+		var raw := var_to_bytes(snapshot)
+		_measure("serialize", started, raw.size())
+		_write(path, key, raw)
+		if after.is_valid(): after.call())
+
+
+func _queue_job(job: Callable) -> void:
+	_enqueue_lock.lock()
+	_join_writes()
+	var task := WorkerThreadPool.add_task(func() -> void:
+		_write_lock.lock()
+		job.call()
+		_write_lock.unlock(), false, "Кэш мира")
+	_lock.lock()
+	_writes.append(task)
+	_lock.unlock()
+	_enqueue_lock.unlock()
+
+
 func wait_writes() -> void:
+	_enqueue_lock.lock()
+	_join_writes()
+	_enqueue_lock.unlock()
+
+
+func _join_writes() -> void:
 	_lock.lock()
 	var tasks := _writes.duplicate()
 	_writes.clear()
@@ -276,29 +404,74 @@ func wait_writes() -> void:
 ## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE); пустой seeds — очистить всё
 ## 14.5: скопировать миры из проекта (BUNDLED) в кэш игрока, если там их ещё нет или они другие.
 ## Подходит ли файл к нынешнему коду, решает обычная проверка ключа при чтении: устаревший перегенерируется.
-func install_bundled() -> void:
-	if not DirAccess.dir_exists_absolute(BUNDLED):
-		return
-	DirAccess.make_dir_recursive_absolute(dir)
-	for f in DirAccess.get_files_at(BUNDLED):
-		if not f.ends_with(EXT) and not f.ends_with(".preview"):
-			continue
-		var to := dir.path_join(f.trim_suffix(".preview") + PREVIEW if f.ends_with(".preview") else f)
-		var src := BUNDLED.path_join(f)
-		if FileAccess.file_exists(to):
-			if f.ends_with(EXT):
-				# Новые ключи имеют ту же длину: совпадение размера не означает ту же схему.
-				var bundled_key := _cache_header_key(src)
-				if not bundled_key.is_empty() and _cache_header_key(to) == bundled_key:
-					continue
-			elif FileAccess.get_size(to) == FileAccess.get_size(src):
-				continue
+func install_bundled(source := BUNDLED) -> void:
+	var manifest: Variant = JSON.parse_string(FileAccess.get_file_as_string(source.path_join("manifest.json"))) if FileAccess.file_exists(source.path_join("manifest.json")) else null
+	if not manifest is Dictionary or manifest.get("format") != FORMAT: return
+	for entry: Dictionary in manifest.get("files", []):
+		var name: String = entry.get("name", "")
+		if name != name.get_file() or name.is_empty(): continue
+		var src := source.path_join(name)
+		var to := dir.path_join(name)
+		var layer := int(entry.get("layer", -1))
+		if layer < 0 or layer > WorldGenerator.LAYERS.size(): continue
+		var seed_text: String = entry.get("seed", "")
+		var size := int(entry.get("size", 0))
+		var key := _key(seed_text, size, layer)
+		if entry.get("key") != key or name != path_for(seed_text, size, layer).get_file(): continue
+		if _read(to, key) != null: continue
 		var bytes := FileAccess.get_file_as_bytes(src)
-		var out := FileAccess.open(to, FileAccess.WRITE)
-		if out != null and not bytes.is_empty():
-			out.store_buffer(bytes)
-		else:
-			push_warning("Встроенный кэш мира не скопирован: %s" % to)
+		if Util.sha256(bytes).hex_encode() != entry.get("sha256", "") or _read(src, key) == null: continue
+		Files.replace(to, bytes)
+	# Derived surfaces are optional. Publish their manifest only after every referenced block is valid.
+	for entry: Dictionary in manifest.get("artifacts", []):
+		var artifact: String = entry.get("artifact", "")
+		if artifact not in ["base", "surface"]: continue
+		var seed_text: String = entry.get("seed", "")
+		var size := int(entry.get("size", 0))
+		var path := artifact_path(seed_text, size, artifact)
+		var key := artifact_key(seed_text, size, artifact)
+		if entry.get("key") != key or entry.get("name") != path.get_file() or _read(path, key) != null: continue
+		var src := source.path_join(path.get_file())
+		var bytes := FileAccess.get_file_as_bytes(src)
+		if Util.sha256(bytes).hex_encode() != entry.get("sha256"): continue
+		var data: Variant = _read(src, key)
+		if data == null: continue
+		if artifact == "surface" and not _install_chunks(source, data, key): continue
+		Files.replace(path, bytes)
+	# Previews have their own digest, and never replace a valid user preview.
+	for entry: Dictionary in manifest.get("previews", []):
+		var name: String = entry.get("name", "")
+		if name != name.get_file() or not name.ends_with(".preview"): continue
+		var to := dir.path_join(name + ".png")
+		if not preview_file(to).is_empty(): continue
+		var bytes := FileAccess.get_file_as_bytes(source.path_join(name))
+		if Util.sha256(bytes).hex_encode() == entry.get("sha256", "") and not preview_file(source.path_join(name)).is_empty():
+			Files.replace(to, bytes)
+
+
+func _install_chunks(source: String, data: Dictionary, key: String) -> bool:
+	if not data.get("chunks") is Dictionary or not data.get("water_chunks") is Array or data.water_chunks.size() != 2: return false
+	var groups: Array = [data.chunks] + data.water_chunks
+	for group in groups.size():
+		if not groups[group] is Dictionary: return false
+		for at: Variant in groups[group]:
+			var ref: Variant = groups[group][at]
+			if not at is Vector2i or not ref is Dictionary or not ref.get("file") is String: return false
+			var chunk_key := "%s|%d|%d|%d" % [key, group, at.x, at.y]
+			if ref.get("key") != chunk_key or ref.file != ref.file.get_file(): return false
+			var to := dir.path_join(ref.file)
+			if _read(to, chunk_key) != null: continue
+			var path := source.path_join(ref.file)
+			if _read(path, chunk_key) == null: return false
+			if Files.replace(to, FileAccess.get_file_as_bytes(path)) != OK: return false
+	return true
+
+
+func preview_file(path: String) -> PackedByteArray:
+	if not FileAccess.file_exists(path): return PackedByteArray()
+	var bytes := FileAccess.get_file_as_bytes(path)
+	var img := Image.new()
+	return bytes if img.load_png_from_buffer(bytes) == OK and img.get_width() == PREVIEW_SIZE and img.get_height() == PREVIEW_SIZE else PackedByteArray()
 
 
 func _cache_header_key(path: String) -> String:
@@ -334,34 +507,36 @@ func remove_seed(seed_text: String) -> Error:
 	return OK
 
 
-func _write(path: String, key: String, raw: PackedByteArray) -> void:
-	DirAccess.make_dir_recursive_absolute(dir)
+func _write(path: String, key: String, raw: PackedByteArray) -> Error:
+	var started := Time.get_ticks_usec()
 	var packed := raw.compress(FileAccess.COMPRESSION_ZSTD)
-	var tmp := path + ".tmp"
-	var f := FileAccess.open(tmp, FileAccess.WRITE)
-	if f == null:
-		push_warning("Кэш мира не записан (%s): %s" % [error_string(FileAccess.get_open_error()), path])
-		return
-	f.store_buffer(MAGIC.to_ascii_buffer())
-	f.store_32(FORMAT)
-	f.store_pascal_string(key)
-	f.store_64(raw.size())
-	f.store_64(packed.size())
-	f.store_buffer(Util.sha256(packed))
-	f.store_buffer(packed)
-	var ok := f.get_error() == OK
-	f.close()
-	if ok and FileAccess.get_size(tmp) > 0:
-		if FileAccess.file_exists(path):
-			DirAccess.remove_absolute(path)
-		ok = DirAccess.rename_absolute(tmp, path) == OK
-	if not ok:
-		push_warning("Кэш мира не записан: %s" % path)
-		DirAccess.remove_absolute(tmp)
+	_measure("compress", started, packed.size())
+	var stream := StreamPeerBuffer.new()
+	stream.put_data(MAGIC.to_ascii_buffer())
+	stream.put_u32(FORMAT)
+	stream.put_utf8_string(key)
+	stream.put_u64(raw.size())
+	stream.put_u64(packed.size())
+	stream.put_data(Util.sha256(packed))
+	stream.put_data(packed)
+	started = Time.get_ticks_usec()
+	var preserve := FileAccess.file_exists(path) and _read_file(path, key) == null
+	var err := Files.replace(path, stream.data_array, preserve)
+	_measure("write", started, stream.data_array.size())
+	if err != OK: push_warning("Кэш мира не записан: %s (%s)" % [path, error_string(err)])
+	return err
 
 
 ## Поля слоя из файла или null
 func _read(path: String, key: String) -> Variant:
+	for suffix in ["", ".bak"]:
+		var result: Variant = _read_file(path + suffix, key)
+		if result != null: return result
+	return null
+
+
+func _read_file(path: String, key: String) -> Variant:
+	var started := Time.get_ticks_usec()
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null or f.get_length() < 64:
 		return null
@@ -374,12 +549,17 @@ func _read(path: String, key: String) -> Variant:
 		return null
 	var packed := f.get_buffer(packed_size)
 	f.close()
+	_measure("read", started, packed.size())
 	if packed.size() != packed_size or Util.sha256(packed) != expected:
 		return null
+	started = Time.get_ticks_usec()
 	var raw := packed.decompress(raw_size, FileAccess.COMPRESSION_ZSTD)
+	_measure("decompress", started, raw.size())
 	if raw.size() != raw_size:
 		return null
+	started = Time.get_ticks_usec()
 	var data: Variant = bytes_to_var(raw)
+	_measure("decode", started)
 	return data if data is Dictionary else null
 
 
@@ -419,3 +599,4 @@ func reset() -> void:
 	enabled = false
 	dir = "user://world_cache"
 	_layer_keys.clear()
+	take_io_timings()

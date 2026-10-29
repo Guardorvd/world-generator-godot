@@ -8,6 +8,7 @@ const MODEL_STRIDE := 256
 static var _leaf_texture: Texture2D
 static var _bark_texture: Texture2D
 static var _needle_texture: Texture2D
+static var baking := false # authoring tool only
 
 
 static func definition(kind: int, variant: int) -> Dictionary:
@@ -350,6 +351,8 @@ static func _dead(variant: int) -> Dictionary:
 ## Маленькие общие бесшовные текстуры: прожилки листьев и продольная кора.
 ## Создаются один раз; в кадре работают штатные материалы без процедурного шейдера.
 static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
+	if not baking:
+		return preload("res://scripts/render/asset_catalog.gd").get_catalog().textures[2 if needles else (1 if leaves else 0)]
 	var cached := _needle_texture if needles else (_leaf_texture if leaves else _bark_texture)
 	if cached != null:
 		return cached

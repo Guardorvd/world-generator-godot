@@ -16,6 +16,17 @@ var nodes := {}
 var pending: Array[Vector2i] = []
 var material: Material
 var checked_at := Vector2.INF
+var _cache: WorldCache
+var _world: WorldData
+var _heights: Heightfield
+var _cpu := preload("res://scripts/core/byte_lru.gd").new()
+var _read_task := -1
+var _read_key := Vector2i.ZERO
+var _read_out := {}
+var water_layer := -1
+var cache_size := 0
+var _uncached_key: Variant = null
+var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
 
 
 ## Один проход по готовым треугольникам в потоке WorldLoader. Никакой новой триангуляции:
@@ -62,9 +73,33 @@ static func partition_reference(arrays: Array) -> Dictionary:
 	return out
 
 
-func setup(prepared: Dictionary, mat: Material) -> void:
+func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null) -> void:
 	chunks = prepared
 	material = mat
+	_cache = cache
+	_world = w
+	_heights = h
+
+
+func _read_arrays(key: Vector2i) -> Array:
+	var ref: Dictionary = chunks[key]
+	var data: Variant = _cache._read(_cache.dir.path_join(ref.file), ref.key)
+	if data is Dictionary and preload("res://scripts/game/surface_snapshot.gd").mesh_valid(data.get("arrays"), false):
+		return data.arrays
+	var arrays := WorldLoader.rebuild_chunk(key, _world, _heights) if water_layer < 0 else WorldLoader.rebuild_water_chunk(key, water_layer, _world, _cache, cache_size)
+	_cache._write(_cache.dir.path_join(ref.file), ref.key, var_to_bytes({arrays = arrays}))
+	return arrays
+
+
+func _arrays(key: Vector2i) -> Variant:
+	if _uncached_key == key: return _uncached_arrays
+	return chunks[key] if chunks[key] is Array else _cpu.get_value(key)
+
+
+func _exit_tree() -> void:
+	if _read_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_read_task)
+		_read_task = -1
 
 
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
@@ -76,6 +111,13 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
+	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
+		WorkerThreadPool.wait_for_task_completion(_read_task)
+		_read_task = -1
+		if not _cpu.put(_read_key, _read_out.arrays):
+			_uncached_key = _read_key
+			_uncached_arrays = _read_out.arrays
+		_read_out = {}
 	if force or p.distance_to(checked_at) >= RECHECK:
 		# последние RECHECK метров пути задают направление: очередь берёт сначала части впереди
 		var ahead := p if force or checked_at == Vector2.INF else p + (p - checked_at).normalized() * AHEAD
@@ -93,14 +135,30 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 			return distance_to_chunk(a, p) + distance_to_chunk(a, ahead) > distance_to_chunk(b, p) + distance_to_chunk(b, ahead))
 	var uploaded := false
 	while not pending.is_empty() and (force and distance_to_chunk(pending.back(), p) <= near or allow_apply and not uploaded):
-		var key: Vector2i = pending.pop_back()
+		var key: Vector2i = pending.back()
+		var arrays: Variant = _arrays(key)
+		if arrays == null:
+			if force:
+				arrays = _read_arrays(key)
+				_cpu.put(key, arrays)
+			else:
+				if _read_task == -1:
+					_read_key = key
+					_read_out = {}
+					var out := _read_out
+					_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
+				break
+		pending.pop_back()
 		var mesh := ArrayMesh.new()
-		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, chunks[key])
+		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var node := MeshInstance3D.new()
 		node.mesh = mesh
 		node.material_override = material
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(node)
 		nodes[key] = node
+		if _uncached_key == key:
+			_uncached_key = null
+			_uncached_arrays = []
 		uploaded = true
 	return uploaded

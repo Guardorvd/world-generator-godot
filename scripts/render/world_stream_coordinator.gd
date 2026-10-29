@@ -5,6 +5,7 @@ signal region_committed
 var vegetation_update: Callable
 var vegetation_budgeted: Callable
 var terrain_update: Callable
+var water_update: Callable
 var outer_update: Callable
 var region_priority: Callable
 var region_update: Callable
@@ -18,6 +19,7 @@ func restore_regions(pos: Vector3) -> void:
 
 func force_terrain(pos: Vector3, radius: float) -> void:
 	terrain_update.call(pos.x, pos.z, true, true, radius)
+	if water_update.is_valid(): water_update.call(pos.x, pos.z, true, true, radius)
 
 func force_vegetation(pos: Vector3) -> void:
 	vegetation_update.call(pos.x, pos.z, true)
@@ -37,6 +39,7 @@ func update(pos: Vector3) -> void:
 	else:
 		uploaded = vegetation_update.call(pos.x, pos.z, false)
 	uploaded = terrain_update.call(pos.x, pos.z, false, not uploaded) or uploaded
+	if water_update.is_valid(): uploaded = water_update.call(pos.x, pos.z, false, not uploaded) or uploaded
 	if outer_update.is_valid():
 		outer_update.call(pos.x, pos.z, not uploaded)
 	if not region_ticked:
