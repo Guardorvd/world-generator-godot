@@ -177,6 +177,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	profile.restores = state.get("restores", 0)
 	profile.failures = state.failures
+	profile.windows = state.get("windows", {})
 	started = Time.get_ticks_usec()
 	# Единственная расстановка домов (площадки пришли без них) — вдоль получившихся улиц.
 	StageLandmarks.lay_out(w)

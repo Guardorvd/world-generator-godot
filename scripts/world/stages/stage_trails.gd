@@ -433,6 +433,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var priorities := {} # a * n + b -> _direction_cost
 	var paths: Array = []
 	var failures := {} # причина -> число отвергнутых связей (_count_failure)
+	var link_log: Array = []
 	var connected := 0
 	# С 9.8 сетей может быть несколько: большая река без места для моста делила мир, и все поселения
 	# за ней пропадали (на контрольном мире оставалось 2 из 11). Когда текущая сеть больше не растёт,
@@ -491,6 +492,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d/%d" % [connected - 1, maxi(0, n - 1), tries[b], SETTLEMENT_NEIGHBORS])
 		finder.search_budget = budgets[b]
 		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
+		# Каждая попытка: пара, прямое расстояние, списанный запас и исход (стенд road_plan_test).
+		link_log.append([a, b, roundi(best[2]), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", "")])
 		budgets[b] = finder.search_budget
 		finder.search_budget = -1
 		if q.is_empty():
@@ -529,7 +532,9 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.settlement_attempts = tried.size()
 	w.generation_profile.settlement_rejected = n - keep.size()
 	w.generation_profile.road_failures = failures
-	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
+	w.generation_profile.road_links = link_log
+	w.generation_profile.road_windows = state.get("windows", {}).duplicate() # уровень окна найденных путей
+	w.generation_profile.no_bridge_cells = state.get("no_bridge", {}).size()	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
 	# фактическая работа основного и фонового поиска — в search_stats.
 	var expanded := 0
 	for k in n:
@@ -588,9 +593,45 @@ static func _direction_cost(w: WorldData, a: SettlementData, b: SettlementData) 
 	return distance * (1.0 + obstacle / SAMPLES) / (0.75 + importance * 0.5)
 
 
+## Ревью дорожной сети 29.10, шаг 2: связь ищется сначала в окне вокруг концов, при неудаче окно расширяется.
+## Окно — прямоугольник концов с полем не меньше WINDOW_MARGIN клеток и WINDOW_SHARE прямого расстояния,
+## затем вдвое шире, затем вся карта. Путь в окне —
+## лучший внутри окна: длинный обход за его краем найдётся только на следующем уровне.
+const WINDOW_MARGIN := 32
+const WINDOW_SHARE := 0.5
+
+
+static func _windows(finder: Pathfinder, a: int, b: int) -> Array[Rect2i]:
+	var pa := Vector2i(a % finder.W, a / finder.W)
+	var pb := Vector2i(b % finder.W, b / finder.W)
+	var box := Rect2i(Vector2i(mini(pa.x, pb.x), mini(pa.y, pb.y)), (pa - pb).abs() + Vector2i.ONE)
+	var full := Rect2i(0, 0, finder.W, finder.H)
+	var margin := maxi(WINDOW_MARGIN, ceili(Vector2(pa - pb).length() * WINDOW_SHARE))
+	var out: Array[Rect2i] = []
+	for level in 2:
+		var rect := box.grow(margin).intersection(full)
+		if rect == full:
+			break
+		out.append(rect)
+		margin *= 2
+	out.append(Rect2i())
+	return out
+
+
 static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
 		a: int, b: int, state: Dictionary) -> PackedInt32Array:
+	finder.window = Rect2i()
+	var q := _connect_in_windows(w, finder, cost, a, b, state)
+	finder.window = Rect2i()
+	return q
+
+
+static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array,
+		a: int, b: int, state: Dictionary) -> PackedInt32Array:
 	var attempts: Array = []
+	var source := cost
+	cost = _known_crossings(source, state)
+	var known: int = state.get("no_bridge", {}).size()
 	# Стоимость не меняется внутри попытки связи: её правит _add_trail после возврата.
 	# Следующая связь получает новый номер, в том числе после изменения стоимости.
 	var cost_version := finder.next_cost_version()
@@ -602,12 +643,34 @@ static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFl
 		state.failure = "unreachable"
 		return PackedInt32Array()
 	var limits: Array = [ROAD_GRADE, ROAD_LIMIT] if finder.can_reach(cost, a, b, ROAD_CLIMB, ROAD_GRADE) else [ROAD_LIMIT]
+	var windows := _windows(finder, a, b)
 	# С 9.9 запасной поиск (ROAD_LIMIT) идёт в фоне, пока проверяется первый путь: после неудачи
-	# состояние восстановлено, и он с теми же входами. Совпадение входов проверяет сам поиск.
+	# состояние восстановлено, и он с теми же входами. Совпадение входов (и окна) проверяет сам поиск.
 	if limits.size() > 1:
+		finder.window = windows[0]
 		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version)
 	for limit: float in limits:
-		var p := _road_path(finder, cost, a, b, true, limit, cost_version)
+		# Первый предел закрыл переправу: второй ищется уже без неё (новый снимок стоимости, фоновый поиск не подходит).
+		if state.get("no_bridge", {}).size() != known:
+			known = state.no_bridge.size()
+			cost = _known_crossings(source, state)
+			cost_version = finder.next_cost_version()
+			finder.window = Rect2i()
+			if not finder.can_reach(cost, a, b, ROAD_CLIMB, limit):
+				continue # причина — прошлая неудача переправы
+		var p := PackedInt32Array()
+		for level in windows.size():
+			# can_reach в окне не проверяется: неудачный поиск в окне стоит не больше его площади, как и обход.
+			finder.window = windows[level]
+			p = _road_path(finder, cost, a, b, true, limit, cost_version)
+			if not p.is_empty():
+				var key := "%d" % level if windows[level].has_area() else "full"
+				state.windows = state.get("windows", {})
+				state.windows[key] = int(state.windows.get(key, 0)) + 1
+				break
+			if finder.search_budget == 0:
+				break
+		# Объезды моста ищутся в том же окне, что и найденный путь.
 		if p.is_empty():
 			state.failure = "budget" if finder.search_budget == 0 else "no_path"
 			continue
@@ -626,6 +689,22 @@ static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFl
 	finder.cancel_prefetch()
 	finder.use_corridor = true
 	return PackedInt32Array()
+
+
+## Ревью дорожной сети 29.10, шаг 3: переправы — места с известным статусом. Вода, где мост уже не нашёл
+## места (state.no_bridge), закрыта для поиска следующих связей этапа: они не открывают ту же переправу заново,
+## а идут к другой или сразу отвергаются can_reach. Оси построенных мостов не закрываются. Стоимость этапа
+## (road_cost) не меняется — закрытие только в копии для поиска этой связи.
+static func _known_crossings(cost: PackedFloat32Array, state: Dictionary) -> PackedFloat32Array:
+	var banned: Dictionary = state.get("no_bridge", {})
+	if banned.is_empty():
+		return cost
+	var out := cost.duplicate()
+	var axis: PackedByteArray = state.get("on_axis", PackedByteArray())
+	for i: int in banned:
+		if axis.is_empty() or axis[i] == 0:
+			out[i] = INF
+	return out
 
 
 ## Счётчик причин отказа связей (ревью дорожной сети 29.10, шаг 0): unreachable — пути нет при любом
@@ -1000,16 +1079,27 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					out.resize(out.size() - (i - site.x))
 					i = site.x
 				if j < 0:
+					# Ревью дорожной сети 29.10, шаг 3: переправа — место с известным статусом. Вода, где мост не нашёл
+					# места, закрыта до конца этапа (state.no_bridge) — та же, что закрывает объезд ниже. Следующие
+					# связи её не ищут заново (_known_crossings). Поиск соседнего места на той же воде проверен
+					# на стенде road_plan_test и отклонён: найденные пары берегов не принимались _bridge_site
+					# из-за подхода пути, а широкое закрытие воды обрывало удачные связи.
+					var closed := {}
+					for k in range(i + 1, shore):
+						for y in range(maxi(0, ys[k] - 3), mini(w.H, ys[k] + 4)):
+							for x in range(maxi(0, xs[k] - 3), mini(W, xs[k] + 4)):
+								if _wet(w, y * W + x):
+									closed[y * W + x] = true
+					var banned: Dictionary = state.get("no_bridge", {})
+					banned.merge(closed)
+					state.no_bridge = banned
 					# Последняя неудача уже исчерпала запас объездов: ещё один A* не используется.
 					if retries >= BRIDGE_RETRIES:
 						state.failure = "bridge_site"
 						return PackedInt32Array()
 					var bypass := cost.duplicate()
-					for k in range(i + 1, shore):
-						for y in range(maxi(0, ys[k] - 3), mini(w.H, ys[k] + 4)):
-							for x in range(maxi(0, xs[k] - 3), mini(W, xs[k] + 4)):
-								if _wet(w, y * W + x):
-									bypass[y * W + x] = INF
+					for c: int in closed:
+						bypass[c] = INF
 					# Новый переход ищется от начала связи: фиксированный крутой берег
 					# не должен заставлять объезд карабкаться вверх сразу от воды.
 					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor) if road else _land_path(finder, bypass, p[0], p[-1], TRAIL_CLIMB)
