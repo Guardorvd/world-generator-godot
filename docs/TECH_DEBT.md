@@ -34,3 +34,9 @@
 14. **Папка `scripts/render/unused_water_massive_forest`** — отложенные модели деревьев, сейчас не подключены. Нужно решить, подключать их или удалить.
 15. **Подписи клавиш в подсказках** (`Controls.label`) считаются каждый кадр, около 5 вызовов. Кэшировать по режиму (клавиатура/геймпад) со сбросом при переназначении клавиш.
 16. **`lifecycle_test` не перезапускался** после правки утечки (`TrailRouter.release`) — при следующей проверке памяти прогнать `lifecycle_test -- --size 256 --worlds 3`.
+
+## Порядок запуска
+
+17. **Игрок и велосипед ставятся до препятствий.** В `GameWorld.start` сначала `PlayerState.spawn` и `safe_position` (позиция из сохранения), потом `ForestObstacles.new`, потом `BikeRide.park_near`, и только потом `force_vegetation` раскладывает валежник. Исправление: создать `heights.obstacles` и первый `update` до спавна, а велосипед перепроверить (`fits`) после `force_vegetation`. Это меняет место появления (редко, только у деревьев), поэтому проверка — `feel_test` или один запуск мира с загрузкой сохранения рядом с деревом.
+18. **Кольца классов.** `WorldData` ↔ `Heightfield` (`base_heights` внутри данных мира) — вынести рельеф генератора в состояние генерации (`WorldGenerationState`), тогда обнулять его вручную не нужно. `RegionStream` ↔ `VegetationLayer` — растительности нужна только функция `snapshot_ground`: передать её как `Callable` или вынести в `OuterLand`. Мелкие пары (`BikeRide` ↔ `BikeRecovery`, `StageLandmarks` ↔ `StageSites`, `TrailDefinition` ↔ `TrailShaping`, `WorldGenerator` ↔ `StageTrailPlan`) — общие константы и помощники вынести в нижний модуль.
+19. **`RegionStream.setup` с `terrain = null`.** `OuterTerrain` создаётся позже и присваивается отдельно. Лучше создавать `OuterTerrain` до `RegionStream` и передавать его в `setup`. Порядок тогда не будет держаться на том, что `restore` не трогает рельеф.

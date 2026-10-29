@@ -86,6 +86,36 @@
 - `LAKE_DROP` и `WATER_MARGIN` перенесены в `GameConfig`: `Heightfield` и `ForestObstacles` (слой `game`) больше не берут их из `WaterBuilder` и `VegetationLayer` (`render`). Значения те же, в `render` остались ссылки на них.
 - Остальное — в [TECH_DEBT.md](TECH_DEBT.md).
 
+## 8. Порядок запуска систем
+
+### Цепочка запуска
+
+1. **Меню** (`Main._ready`, главный поток): `GameContext.scope` создаётся при первом обращении (лениво, тоже в главном потоке) → `settings.load_settings` → окно и громкость → `cache.enabled` (только когда `main.tscn` — главная сцена). Автозагрузок (autoload) нет.
+2. **Загрузка** (`Main.start_game` → поток `gen_thread` → `WorldLoader.load_world`):
+   - `WorldGenerator`: география (рельеф, вода, климат) → `after_climate` запускает в отдельном потоке `WorldLoader._prepare` (краска, высоты, меши) на `w.base_heights` → поселения → дороги и тропы (`StageTrails`) → места → план трасс (`StageTrailPlan`) → растительность → озёра → покрытие дорог → `base_heights = null`. Из кэша: слои читаются, `_prepare` стартует после чтения.
+   - Ожидание `_prepare`, затем карта и текстура рельефа — задачами `WorkerThreadPool`.
+   - `Heightfield.finish_paths` (полотно, мосты, туннели) → `StageTrailPlan.apply` (запекание трассы) → поправка мешей рельефа → нарезка на куски → ожидание всех задач → запись кэша.
+3. **Мир** (`Main._on_world_ready`, главный поток, после `gen_thread.wait_to_finish`): проверка сохранения (`GameWorld.can_restore`) → кадр ожидания → `add_child(game)` → `GameWorld.start` в том же вызове (ввод и кадры между ними не проходят; `_process`/`_physics_process` защищены `player == null`).
+4. **`GameWorld.start`**: сигналы HUD → модели деревьев → материал и куски рельефа (`PlanTerrain`) → вода → `VegetationLayer.setup` → поселения, подписи, фотоаппарат, огни → мосты и туннели → точка вступления → `RegionStream` (если бесконечный мир) и чтение журнала областей → **игрок** (`PlayerState.spawn`, позиция из сохранения через `safe_position`) → рельеф вокруг игрока → `OuterTerrain` → **препятствия леса** (`ForestObstacles.new` + `update`) → **велосипед** (`BikeRide.park_near`) → вид велосипеда, падение → `Hud.set_world` → растительность вокруг игрока (`force_vegetation`) → второе `obstacles.update` (теперь с валежником) → посадка на велосипед из сохранения или вступления → свет, небо, звук.
+5. **Каждый кадр**: `_physics_process` (такт 60 Гц: игрок, велосипед, время) → `_process` (камера, HUD, `WorldStreamCoordinator.update`: растительность → рельеф → области, по одной заметной работе за кадр).
+
+### Готовность данных в момент обращения
+
+- **Игрок ставится раньше препятствий леса.** `PlayerState.spawn` и проверка позиции из сохранения (`safe_position` → `is_passable`) идут, когда `heights.obstacles` ещё `null`. Деревья и валуны не учитываются, поэтому из сохранения можно появиться внутри ствола. → [TECH_DEBT](TECH_DEBT.md), п. 17.
+- **Велосипед ставится до раскладки валежника.** `BikeRide.park_near` проверяет деревья (`ForestObstacles.new` уже есть), а бревна и мелкие камни `VegetationLayer` появляются только после `force_vegetation`, и место велосипеда потом не перепроверяется. → п. 17.
+- `RegionStream.setup` получает `terrain = null`, а `OuterTerrain` присваивается позже. До первого кадра `terrain` не используется (`restore` читает только журнал), так что ошибки нет, но порядок держится на этом совпадении.
+- Поток `_prepare` читает `w.base_heights` одновременно с этапами троп. По правилу 2.0 он не читает того, что они пишут; проверка — хеши `check.gd`.
+- `VegetationLayer` в потоке читает снимок журнала областей (`_outer_regions`, его целиком заменяет главный поток) — безопасно.
+
+### Кольцевые зависимости
+
+- **Кольца при загрузке скриптов (`preload`) нет** (68 связей, проверено обходом графа). Статические инициализаторы (`StageVegetation._TABLES`, мьютексы) ни от кого, кроме `Biomes`, не зависят.
+- **Кольца по именам классов** есть: GDScript разрешает их без порядка запуска, и система не ждёт другую при старте. Это связанность, а не тупик запуска. Крупные компоненты:
+  - мир и рельеф (21 класс): `WorldData` ↔ `Heightfield` (`WorldData.base_heights`), `WorldData` ↔ `OuterLand`, `WorldData` ↔ `StageTrails`, `Heightfield` ↔ `RoadBed`/`RoadRefinement`/`StageRivers`/`StageTrails`/`ForestObstacles`, `StageLandmarks` ↔ `StageSites`, `Models` ↔ `RockModels`, `RockScatter` ↔ `StageVegetation`;
+  - загрузка и сцена (24 класса): `WorldGenerator` ↔ `StageTrailPlan` (план зовёт `WorldGenerator.start_rect`), `RegionStream` ↔ `VegetationLayer`, через `GameContext`/`ServiceScope`/`WorldCache` к `main` и `GameWorld`;
+  - малые пары: `BikeRide` ↔ `BikeRecovery`, `TrailDefinition` ↔ `TrailShaping`, `TrailComposer` ↔ `TrailElementLibrary`, `EntityCodec` ↔ `EntityRecord`.
+- **Опасные из них** — те, где кольцо проходит через данные, а не через статические функции: `WorldData` ↔ `Heightfield` (рельеф генератора хранится внутри данных мира и строится из них; `base_heights` обнуляется в конце генерации, иначе это был бы цикл RefCounted и утечка) и `RegionStream` ↔ `VegetationLayer` (ссылки в обе стороны в рантайме). Остальные пары — вызовы статических помощников и констант; их можно разорвать переносом помощника в общий модуль. → п. 18.
+
 ## 7. Что не проверялось
 
 - Запусков не было (кроме `--check-only` и короткого запуска после правки `_persist`); гонки найдены чтением кода.
