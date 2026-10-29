@@ -557,7 +557,7 @@ func save(path: String) -> Error:
 	f.store_32(FORMAT)
 	f.store_64(raw.size())
 	f.store_64(packed.size())
-	f.store_buffer(_hash(packed))
+	f.store_buffer(Util.sha256(packed))
 	f.store_buffer(packed)
 	var err := f.get_error()
 	f.close()
@@ -567,13 +567,6 @@ func save(path: String) -> Error:
 	if FileAccess.file_exists(path):
 		DirAccess.remove_absolute(path)
 	return DirAccess.rename_absolute(tmp, path)
-
-
-static func _hash(bytes: PackedByteArray) -> PackedByteArray:
-	var ctx := HashingContext.new()
-	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(bytes)
-	return ctx.finish()
 
 
 ## Открыть площадку: {site} или {error} (нет файла, чужой или битый файл, другая версия формата или единиц).
@@ -592,7 +585,7 @@ static func open(path: String) -> Dictionary:
 	if packed_size <= 0 or packed_size != f.get_length() - f.get_position() or raw_size <= 0 or raw_size > (1 << 30):
 		return {error = "площадка повреждена (размеры): " + path}
 	var packed := f.get_buffer(packed_size)
-	if _hash(packed) != expected:
+	if Util.sha256(packed) != expected:
 		return {error = "площадка повреждена (хеш не совпал): " + path}
 	var raw := packed.decompress(raw_size, FileAccess.COMPRESSION_ZSTD)
 	var data: Variant = bytes_to_var(raw) if raw.size() == raw_size else null

@@ -235,7 +235,7 @@ func ask_travel(place: Dictionary) -> void:
 	_travel_dialog = dialog
 	dialog.title = "Переместиться?"
 	dialog.dialog_text = "В «%s», %s отсюда. Велосипед будет рядом." % [place.name,
-		_fmt_dist(Grid.hypot(place.x * TILE - px, place.y * TILE - pz))]
+		Util.distance_text(Grid.hypot(place.x * TILE - px, place.y * TILE - pz))]
 	dialog.dialog_autowrap = true
 	dialog.ok_button_text = "Переместиться"
 	dialog.cancel_button_text = "Остаться"
@@ -715,18 +715,11 @@ func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 			nearest = s
 	var text := "%s\nВысота: %d м · %s%d°C" % [where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c]
 	if goal.is_empty() and nearest != null:
-		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, _fmt_dist(nd)]
+		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, Util.distance_text(nd)]
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же
 	if info.text != text:
 		info.text = text
 	update_tracker()
-
-
-## Расстояние в метрах или километрах
-static func _fmt_dist(m: float) -> String:
-	if m < 1000.0:
-		return "%d м" % roundi(m)
-	return "%.1f км" % (m / 1000.0)
 
 
 static func draw_arrow(c: CanvasItem, pos: Vector2, size: float, look_yaw: float) -> void:
@@ -838,7 +831,7 @@ class Compass extends Control:
 
 	## Расстояние до места под его меткой
 	func _distance(font: Font, x: float, place: Dictionary, color: Color) -> void:
-		var dist := Hud._fmt_dist(Grid.hypot(place.x * Hud.TILE - hud.px, place.y * Hud.TILE - hud.pz))
+		var dist := Util.distance_text(Grid.hypot(place.x * Hud.TILE - hud.px, place.y * Hud.TILE - hud.pz))
 		var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
 		var dat := Vector2(clampf(x - dw / 2.0, 0.0, size.x - dw), size.y + 13.0)
 		draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.9))
@@ -1082,7 +1075,7 @@ class BigMap extends Control:
 		var tip := "Зелёным — трасса, кольцо — старт · ЛКМ — цель · ПКМ — перемещение · колесо — масштаб · перетаскивание — сдвиг · средняя кнопка — к себе"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
-			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Hud._fmt_dist(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
+			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Util.distance_text(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
 			tip += "ПКМ — переместиться сюда" if hud.in_open_land(hover) else "земли откроются по пути"
 			draw_arc(o + Vector2(hover.x, hover.y) * k, 10.0, 0.0, TAU, 24, Color.WHITE, 2.0)
 		Hud.draw_label(self, tip, Vector2(cw / 2.0, size.y - 38.0), Color(1, 1, 1, 0.85), 15)
@@ -1135,7 +1128,7 @@ class StaminaArc extends Control:
 		_t += dt
 		var active := st == Stamina.State.DRAIN or st == Stamina.State.COAST or st == Stamina.State.REST or v < 0.999
 		_alpha = move_toward(_alpha, 1.0 if allowed and active else 0.0, dt * (4.0 if allowed and active else 1.5))
-		_ghost = v if v >= _ghost else lerpf(_ghost, v, 1.0 - exp(-dt * GHOST_LAG))
+		_ghost = v if v >= _ghost else lerpf(_ghost, v, Util.damp(GHOST_LAG, dt))
 		var low := 1.0 - smoothstep(0.05, LOW, v) if v < LOW or tired else 0.0
 		# предупреждение нарастает мягко при трате и гаснет быстро, как только силы пошли в плюс
 		var warn_goal := low if st == Stamina.State.DRAIN and allowed else 0.0

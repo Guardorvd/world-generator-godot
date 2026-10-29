@@ -2,6 +2,38 @@ class_name PlayerCameraController
 extends RefCounted
 ## Camera state belongs to one player; no references to GameWorld or UI nodes.
 const CAM_STEPS := 15
+## Настройки камеры (скорости сглаживания — 1/с, через Util.damp; расстояния — м).
+const RIDE_HEIGHT := 1.4        # камера на велосипеде смотрит на точку выше колёс на столько
+const RIDE_HEIGHT_RESPONSE := 10.0 # и следит за её высотой так быстро
+const RIDE_HEIGHT_LAG := 2.0    # дальше этого по высоте не отстаёт
+const RIDE_SQUASH := 0.25       # доля хода подвески, которую повторяет камера
+const RUSH_DIST := 0.7          # на полной скорости камера отходит дальше на столько
+const RUSH_RESPONSE := 2.5      # как быстро нарастает ощущение скорости
+const CAM_MIN_DIST := 1.2       # ближе к седоку камера не подходит, даже у стены
+const CAM_STEP := 0.3           # шаг проверки препятствий между седоком и камерой
+const CAM_RETURN := 3.0         # как быстро камера отходит обратно после стены
+const CAM_GROUND_GAP := 0.4     # камера не ниже земли плюс это
+const CAM_CEILING_GAP := 0.3    # и не выше потолка (туннель) минус это
+const LEAD_ANGLE := 8.5         # доворот внутрь поворота при полном руле, градусы
+const LEAD_SLIP := 0.25         # и доля угла сноса
+const LEAD_RESPONSE := 4.0
+const FOV_RESPONSE := 4.0       # смена угла обзора
+const FOV_RESPONSE_PHOTO := 9.0 # и в видоискателе
+const BOB_RESPONSE := 8.0       # нарастание и затихание покачивания шага
+const BOB_AMP := 0.05           # покачивание шага, м
+const BOB_PHOTO := 0.3          # доля покачивания в видоискателе
+const FOLLOW_START := 0.6      # через столько секунд после мыши камера начинает следовать за курсом
+const FOLLOW_FULL := 1.6       # и через столько следует полностью
+const FOLLOW_RATE := 2.0        # скорость следования за курсом при полном следовании
+const FOLLOW_PITCH := -0.3      # наклон камеры за велосипедом, рад
+const FOLLOW_SLOPE := 0.3       # доля наклона рамы, которую повторяет камера
+const FOLLOW_SLOPE_MAX := 0.12
+const DIP_SPRING := 120.0       # пружина проседания при приземлении, 1/с²
+const DIP_DAMP := 18.0          # её затухание, 1/с
+const DIP_MIN := -0.6           # пределы проседания, м
+const DIP_MAX := 0.2
+const TRAUMA_GAIN := 0.08       # тряска на 1 м/с удара сверх мягкого
+const TRAUMA_DECAY := 1.6       # затухание тряски, доля в секунду
 var settings: GameSettings
 var heights: Heightfield
 var yaw := 0.0       # смотрим на север, на костёр
@@ -43,15 +75,15 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	# 12.7: на скорости камера заглядывает внутрь поворота, куда повёрнут руль; мышь её не трогает
 	var lead_goal := 0.0
 	if riding and not crash_active and not _opening:
-		lead_goal = (-bike.steer * deg_to_rad(8.5) - bike.slip * 0.25) * smoothstep(3.0, 12.0, bike.speed) * auto_follow(time)
-	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(4.0, dt))
+		lead_goal = (-bike.steer * deg_to_rad(LEAD_ANGLE) - bike.slip * LEAD_SLIP) * smoothstep(3.0, 12.0, bike.speed) * auto_follow(time)
+	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(LEAD_RESPONSE, dt))
 	if riding:
 		view_yaw += _cam_lead
 	var rush_goal := 0.0
 	if riding and not crash_active and not _opening:
 		rush_goal = smoothstep(7.0, 20.0, absf(bike.speed))
 		rush_goal += smoothstep(1.0, 5.0, bike.acceleration) * smoothstep(8.0, 18.0, absf(bike.speed)) * 0.2
-	_speed_rush = lerpf(_speed_rush, minf(rush_goal, 1.0), _smooth(2.5, dt))
+	_speed_rush = lerpf(_speed_rush, minf(rush_goal, 1.0), _smooth(RUSH_RESPONSE, dt))
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := settings.fov
 	if riding:
@@ -60,62 +92,62 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	if photo_active:
 		fov_goal = photo_fov
-	camera.fov = lerpf(camera.fov, fov_goal, _smooth(9.0 if photo_active else 4.0, dt))
+	camera.fov = lerpf(camera.fov, fov_goal, _smooth(FOV_RESPONSE_PHOTO if photo_active else FOV_RESPONSE, dt))
 	var shake := _trauma * _trauma if settings.head_bob else 0.0
 	var t := lerpf(_prev_time, time, alpha)
 	var jolt := Vector3(sin(t * 41.0), sin(t * 37.0 + 1.7), sin(t * 29.0 + 3.1)) * shake
 	var dip := lerpf(_prev_dip, _dip, alpha) if settings.head_bob else 0.0
 	if riding:
 		# от третьего лица: камера сзади на луче взгляда; если между ней и седоком склон — подходит ближе
-		var suspension := -view_squash * 0.25 if settings.head_bob else 0.0
-		_cam_y = lerpf(_cam_y, pos.y + 1.4 + suspension, _smooth(10.0, dt))
-		if absf(_cam_y - pos.y - 1.4) > 2.0:
-			_cam_y = pos.y + 1.4 + clampf(_cam_y - pos.y - 1.4, -2.0, 2.0)
+		var suspension := -view_squash * RIDE_SQUASH if settings.head_bob else 0.0
+		_cam_y = lerpf(_cam_y, pos.y + RIDE_HEIGHT + suspension, _smooth(RIDE_HEIGHT_RESPONSE, dt))
+		if absf(_cam_y - pos.y - RIDE_HEIGHT) > RIDE_HEIGHT_LAG:
+			_cam_y = pos.y + RIDE_HEIGHT + clampf(_cam_y - pos.y - RIDE_HEIGHT, -RIDE_HEIGHT_LAG, RIDE_HEIGHT_LAG)
 		var target := Vector3(pos.x, _cam_y + dip, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
-		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * 0.7
+		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * RUSH_DIST
 		var dist := desired_dist
-		var steps := maxi(CAM_STEPS, ceili(desired_dist / 0.3))
+		var steps := maxi(CAM_STEPS, ceili(desired_dist / CAM_STEP))
 		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть
 		for k in range(1, steps + 1):
 			var p := target - dir * (desired_dist * k / steps)
 			if _cam_blocked(p, pos.y):
-				dist = maxf(1.2, desired_dist * (k - 1) / steps)
+				dist = maxf(CAM_MIN_DIST, desired_dist * (k - 1) / steps)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
-		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(3.0, dt))
+		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(CAM_RETURN, dt))
 		var cam := target - dir * _cam_dist + jolt * 0.12
 		# не ниже земли и настила моста, под которым камера окажется в стене или в воздухе
-		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + 0.4)
+		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + CAM_GROUND_GAP)
 		# в туннеле — не выше свода
-		cam.y = minf(cam.y, heights.ceiling_at(cam.x, cam.z, pos.y) - 0.3)
+		cam.y = minf(cam.y, heights.ceiling_at(cam.x, cam.z, pos.y) - CAM_CEILING_GAP)
 		camera.look_at_from_position(cam, target, Vector3.UP)
 		return
-	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and settings.head_bob else 0.0, _smooth(8.0, dt))
+	_bob_amp = lerpf(_bob_amp, 1.0 if _moving and player.on_ground and settings.head_bob else 0.0, _smooth(BOB_RESPONSE, dt))
 	var stride := clampf(player.ground_speed() / GameConfig.WALK, 0.0, 1.6)
-	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * 0.05 * stride * _bob_amp * (0.3 if photo_active else 1.0)
+	var bob := sin(lerpf(_prev_bob, player.bob, alpha)) * BOB_AMP * stride * _bob_amp * (BOB_PHOTO if photo_active else 1.0)
 	camera.position = Vector3(pos.x, pos.y + GameConfig.EYE + bob + dip, pos.z)
 	camera.rotation = Vector3(view_pitch + jolt.x * 0.03, view_yaw + jolt.y * 0.02, jolt.z * 0.03)
 
 
 
 func auto_follow(time: float) -> float:
-	return smoothstep(0.6, 1.6, time - _looked_at)
+	return smoothstep(FOLLOW_START, FOLLOW_FULL, time - _looked_at)
 
 func shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
-		_trauma = minf(1.0, _trauma + (impact - soft) * 0.08)
+		_trauma = minf(1.0, _trauma + (impact - soft) * TRAUMA_GAIN)
 
 func follow_bike(bike: BikeRide, heading_delta: float, time: float, dt: float) -> void:
 	yaw += heading_delta
 	var follow := auto_follow(time)
 	if absf(bike.speed) > 1.0 and follow > 0.0:
-		yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * 2.0 * follow))
-		var slope_pitch := 0.0 if bike.airborne else clampf(bike.tilt * 0.3, -0.12, 0.12)
-		pitch = lerpf(pitch, -0.3 + slope_pitch, 1.0 - exp(-dt * 2.0 * follow))
+		yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * FOLLOW_RATE * follow))
+		var slope_pitch := 0.0 if bike.airborne else clampf(bike.tilt * FOLLOW_SLOPE, -FOLLOW_SLOPE_MAX, FOLLOW_SLOPE_MAX)
+		pitch = lerpf(pitch, FOLLOW_PITCH + slope_pitch, 1.0 - exp(-dt * FOLLOW_RATE * follow))
 
 static func _smooth(rate: float, dt: float) -> float:
-	return 1.0 - exp(-rate * dt)
+	return Util.damp(rate, dt)
 
 func store_previous(player: PlayerState, time: float) -> void:
 	_prev = Vector3(player.x, player.feet, player.z)
@@ -124,6 +156,6 @@ func store_previous(player: PlayerState, time: float) -> void:
 	_prev_time = time
 
 func tick_effects(dt: float) -> void:
-	_dip_v += (-120.0 * _dip - 18.0 * _dip_v) * dt
-	_dip = clampf(_dip + _dip_v * dt, -0.6, 0.2)
-	_trauma = maxf(0.0, _trauma - dt * 1.6)
+	_dip_v += (-DIP_SPRING * _dip - DIP_DAMP * _dip_v) * dt
+	_dip = clampf(_dip + _dip_v * dt, DIP_MIN, DIP_MAX)
+	_trauma = maxf(0.0, _trauma - dt * TRAUMA_DECAY)

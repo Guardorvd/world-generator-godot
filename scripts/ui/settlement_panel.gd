@@ -185,7 +185,7 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
 		take.custom_minimum_size = Vector2(96, 30)
 		take.tooltip_text = "Взять задание: %s" % kind.title.to_lower()
-		var length := Hud._fmt_dist(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
+		var length := Util.distance_text(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
 		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)
 		_label(q.text, 13, card, MUTED, CARD_W)
 
@@ -223,7 +223,7 @@ func _routes_page(page: VBoxContainer, settlement: Variant, world: WorldData, pl
 	var here := WorldData.place_id("settlement", settlement.x, settlement.y)
 	var routes: Array = []
 	for r: Dictionary in world.routes(here):
-		routes.append(_target(world.place(r.to if r.from == here else r.from)))
+		routes.append(InteractionService.target(world.place(r.to if r.from == here else r.from)))
 	var nearby: Array = []
 	for place: Dictionary in places:
 		if place.kind in ["peak", "lake"] or place.kind == "site" and place.src.rank >= 2:
@@ -245,16 +245,10 @@ func _routes_page(page: VBoxContainer, settlement: Variant, world: WorldData, pl
 	var far := world.far_destination(here)
 	if not far.is_empty() and not routes.any(func(p: Dictionary) -> bool: return p.key == far.id):
 		_label("Дальний путь", 15, page)
-		_destination(_target(far), center, page)
+		_destination(InteractionService.target(far), center, page)
 
 
 ## Место индекса как цель HUD: ключ цели и visited — его id.
-static func _target(place: Dictionary) -> Dictionary:
-	var out := place.duplicate()
-	out.key = place.id
-	return out
-
-
 func _destination(place: Dictionary, center: Vector2, page: VBoxContainer) -> void:
-	var length := Hud._fmt_dist(center.distance_to(Vector2(place.x, place.y)) * GameConfig.TILE)
+	var length := Util.distance_text(center.distance_to(Vector2(place.x, place.y)) * GameConfig.TILE)
 	_button("%s · %s" % [place.name, length], func() -> void: destination_selected.emit(place), page)

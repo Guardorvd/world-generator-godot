@@ -33,7 +33,7 @@ func _initialize() -> void:
 	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2}]
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
-			places.append(SettlementPanel._target(world.place(WorldData.place_id(kind, src.x, src.y))))
+			places.append(InteractionService.target(world.place(WorldData.place_id(kind, src.x, src.y))))
 	_run()
 
 

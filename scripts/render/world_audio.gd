@@ -209,7 +209,7 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 	var rush := clampf(v / GameConfig.BIKE_SPEED, 0.0, 1.3)
 	# Покрытие меняет плотность и тембр шин, поворот чуть усиливает их шорох.
 	var corner := clampf(absf(bike_lean) / 0.28, 0.0, 1.0)
-	var near := 1.0 - exp(-8.0 * dt)
+	var near := Util.damp(8.0, dt)
 	_goal[_roll] = clampf(rush * (0.55 + _roll_rough * 0.45 + corner * 0.12), 0.0, 1.0) if rolling else 0.0
 	_roll.pitch_scale = lerpf(_roll.pitch_scale, (0.7 + 0.45 * rush) * _roll_pitch, near)
 	# Покрытие: песчинки гуще на гравии и камне, реже на земле; на скорости гуще и выше.
@@ -240,7 +240,7 @@ func update(pos: Vector3, bike_speed: float, rolling: bool, dt: float, bike_lean
 				contact_player.play()
 	else:
 		_contact_dist = 0.0
-	var a := 1.0 - exp(-SMOOTH * dt)
+	var a := Util.damp(SMOOTH, dt)
 	for p: AudioStreamPlayer in _goal:
 		# уровень хранится отдельно: из volume_db тихий звук читался как «молчит» и не мог разгореться.
 		# Звуки велосипеда идут за ним сразу (затихают, как только колёса оторвались), фон — плавно.

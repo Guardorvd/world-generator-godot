@@ -698,7 +698,7 @@ func _process(dt: float) -> void:
 	var at := _cam_from.lerp(_cam_to, alpha)
 	var heading := lerp_angle(_cam_from.w, _cam_to.w, alpha)
 	# Terrain bumps move the feet by whole centimetres per tick; follow them softly.
-	_cam_feet = lerpf(_cam_feet, at.y, 1.0 - exp(-dt * 10.0)) if absf(at.y - _cam_feet) < 3.0 else at.y
+	_cam_feet = lerpf(_cam_feet, at.y, Util.damp(10.0, dt)) if absf(at.y - _cam_feet) < 3.0 else at.y
 	var target := Vector3(at.x, _cam_feet + 1.0, at.z)
 	if overview:
 		var focus := _overview_target()

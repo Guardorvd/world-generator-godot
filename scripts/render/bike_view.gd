@@ -205,7 +205,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	if _has_state:
 		if b.airborne and (not _was_airborne or _air_pedal_blend < 0.001):
 			_air_pedal_goal = PI * 0.5 + roundf((b.crank - PI * 0.5) / PI) * PI
-		_air_pedal_blend = lerpf(_air_pedal_blend, 1.0 if b.airborne else 0.0, 1.0 - exp(-dt * 12.0))
+		_air_pedal_blend = lerpf(_air_pedal_blend, 1.0 if b.airborne else 0.0, Util.damp(12.0, dt))
 		_cur[S_CRANK] = lerp_angle(b.crank, _air_pedal_goal, _air_pedal_blend)
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_update_rider(b, dt, throttle, boost)
@@ -231,7 +231,7 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	var effort_target := maxf(pedal * 0.8 + drive * 0.2, load * LOAD_EFFORT) * (1.25 if boost else 1.0)
 	# Усилие набирается и отпускается мягко; отпускание педалей не обрывает дыхание и плечи.
 	var effort_rate := 8.0 if effort_target > _effort else 5.0
-	_effort = lerpf(_effort, effort_target, 1.0 - exp(-dt * effort_rate)) if continuous else 0.0
+	_effort = lerpf(_effort, effort_target, Util.damp(effort_rate, dt)) if continuous else 0.0
 	var effort := _effort
 	var braking := clampf(b.brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
@@ -272,18 +272,18 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	# Дыхание идёт только по времени физики, без зависимости от FPS или случайного дрожания.
 	_breath_phase = fmod(_breath_phase + dt * (1.7 + effort * 0.9), TAU) if continuous else 0.0
 	var breath := sin(_breath_phase) * (0.002 + effort * 0.001) if b.riding else 0.0
-	var blend := 1.0 - exp(-maxf(dt, 0.0) * 10.0)
+	var blend := Util.damp(10.0, maxf(dt, 0.0))
 	_cur[S_SHIFT] = lerpf(_prev[S_SHIFT], shift, blend) if continuous else shift
 	_cur[S_SIDE] = lerpf(_prev[S_SIDE], side, blend) if continuous else side
 	_cur[S_CROUCH] = lerpf(_prev[S_CROUCH], crouch, blend) if continuous else crouch
-	var look_blend := 1.0 - exp(-dt * 14.0)
+	var look_blend := Util.damp(14.0, dt)
 	_cur[S_LOOK] = lerpf(_prev[S_LOOK], look, look_blend) if continuous else look
 	_cur[S_SWAY] = lerpf(_prev[S_SWAY], sway, blend) if continuous else sway
 	_cur[S_BREATH] = breath
-	_cur[S_BODY_LOOK] = lerpf(_prev[S_BODY_LOOK], look, 1.0 - exp(-dt * 5.0)) if continuous else look
+	_cur[S_BODY_LOOK] = lerpf(_prev[S_BODY_LOOK], look, Util.damp(5.0, dt)) if continuous else look
 	_cur[S_STAND] = _stand
 	var head_nod := clampf(-_landing * 0.065 + _takeoff * 0.035 + sin(b.crank * 2.0) * effort * 0.012, -0.08, 0.06)
-	_cur[S_HEAD_NOD] = lerpf(_prev[S_HEAD_NOD], head_nod, 1.0 - exp(-dt * 7.0)) if continuous else 0.0
+	_cur[S_HEAD_NOD] = lerpf(_prev[S_HEAD_NOD], head_nod, Util.damp(7.0, dt)) if continuous else 0.0
 	# Только сумка имеет небольшое запаздывание относительно груди, а не весь скелет.
 	var pack_goal := Vector2(clampf(acceleration * 0.007 + _landing * 0.12, -0.08, 0.12), clampf(b.lean * 0.12 + b.slip * 0.2, -0.06, 0.06))
 	if continuous:

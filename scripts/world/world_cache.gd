@@ -344,7 +344,7 @@ func _write(path: String, key: String, raw: PackedByteArray) -> void:
 	f.store_pascal_string(key)
 	f.store_64(raw.size())
 	f.store_64(packed.size())
-	f.store_buffer(_hash(packed))
+	f.store_buffer(Util.sha256(packed))
 	f.store_buffer(packed)
 	var ok := f.get_error() == OK
 	f.close()
@@ -354,13 +354,6 @@ func _write(path: String, key: String, raw: PackedByteArray) -> void:
 		ok = DirAccess.rename_absolute(tmp, path) == OK
 	if not ok:
 		DirAccess.remove_absolute(tmp)
-
-
-func _hash(bytes: PackedByteArray) -> PackedByteArray:
-	var ctx := HashingContext.new()
-	ctx.start(HashingContext.HASH_SHA256)
-	ctx.update(bytes)
-	return ctx.finish()
 
 
 ## Поля слоя из файла или null
@@ -377,7 +370,7 @@ func _read(path: String, key: String) -> Variant:
 		return null
 	var packed := f.get_buffer(packed_size)
 	f.close()
-	if packed.size() != packed_size or _hash(packed) != expected:
+	if packed.size() != packed_size or Util.sha256(packed) != expected:
 		return null
 	var raw := packed.decompress(raw_size, FileAccess.COMPRESSION_ZSTD)
 	if raw.size() != raw_size:

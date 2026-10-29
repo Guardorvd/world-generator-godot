@@ -148,7 +148,7 @@ func update(camera: Camera3D, dt: float) -> void:
 	_preview = maxf(0.0, _preview - dt)
 	if active:
 		_aim(camera, dt)
-	_focus = lerpf(_focus, 30.0 if not target.is_empty() else 44.0, 1.0 - exp(-dt * 12.0))
+	_focus = lerpf(_focus, 30.0 if not target.is_empty() else 44.0, Util.damp(12.0, dt))
 	_name_a = move_toward(_name_a, 1.0 if not named.is_empty() else 0.0, dt / (0.25 if not named.is_empty() else 0.2))
 	if not named.is_empty():
 		_shown = named
@@ -351,10 +351,10 @@ func _draw_view(c: Control) -> void:
 			c.draw_set_transform(at, 0.0, Vector2(sc, sc))
 			var a := ne * e
 			_text(c, font, _shown.name, Vector2(0.0, -30.0), 26, Color(1.0, 0.97, 0.88, a), 0.5)
-			_text(c, font, "%s · %s" % [_shown.kind, _distance(_name_dist)], Vector2(0.0, -10.0), 15, Color(1, 1, 1, 0.75 * a), 0.5)
+			_text(c, font, "%s · %s" % [_shown.kind, Util.distance_text(_name_dist)], Vector2(0.0, -10.0), 15, Color(1, 1, 1, 0.75 * a), 0.5)
 			if _shown.id == wanted:
 				var close := maxf(0.0, _name_dist - _shown.radius) <= wanted_reach
-				_text(c, font, "Снимок для задания · ЛКМ" if close else "Для задания — подойдите ближе %s" % _distance(wanted_reach),
+				_text(c, font, "Снимок для задания · ЛКМ" if close else "Для задания — подойдите ближе %s" % Util.distance_text(wanted_reach),
 					Vector2(0.0, -58.0), 15, Color(GREEN if close else AMBER, a), 0.5)
 			c.draw_colored_polygon(PackedVector2Array([Vector2(-5, -1), Vector2(5, -1), Vector2(0, 5)]), Color(1, 1, 1, 0.8 * a))
 			c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
@@ -393,7 +393,7 @@ func _draw_bike(c: Control, font: Font, a: float) -> void:
 		tri.append(tri[0])
 		c.draw_polyline(tri, Color(1, 1, 1, 0.9 * a), 1.5)
 	var below := 22.0 if p.y < _view.size.y * 0.8 else -14.0
-	_text(c, font, "Велосипед · %s" % _distance(_bike_dist), p + Vector2(0.0, below), 13, Color(0.85, 0.93, 1.0, 0.9 * a), 0.5)
+	_text(c, font, "Велосипед · %s" % Util.distance_text(_bike_dist), p + Vector2(0.0, below), 13, Color(0.85, 0.93, 1.0, 0.9 * a), 0.5)
 
 
 ## Уголки рамки rect длиной arm
@@ -412,10 +412,6 @@ static func _text(c: Control, font: Font, text: String, at: Vector2, size: int, 
 	if outline:
 		c.draw_string_outline(font, p, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, 5, Color(0, 0, 0, 0.6 * color.a))
 	c.draw_string(font, p, text, HORIZONTAL_ALIGNMENT_LEFT, -1, size, color)
-
-
-static func _distance(m: float) -> String:
-	return "%d м" % roundi(m) if m < 1000.0 else "%.1f км" % (m / 1000.0)
 
 
 ## Звук затвора: два коротких щелчка (шум с тоном), без файлов

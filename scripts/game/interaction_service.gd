@@ -12,10 +12,10 @@ var world: WorldData
 var all_places: Callable
 var visited: Dictionary
 var completion_color := Color(1.0, 0.82, 0.32)
-var distance_text: Callable = func(m: float) -> String:
-	return "%d м" % roundi(m) if m < 1000.0 else "%.1f км" % (m / 1000.0)
+var distance_text: Callable = Util.distance_text
 
-static func _target(place: Dictionary) -> Dictionary:
+## Место как цель задания: копия с ключом key = id
+static func target(place: Dictionary) -> Dictionary:
 	var out := place.duplicate()
 	out.key = place.id
 	return out
@@ -57,12 +57,12 @@ static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
 
 
 func offers(village: Variant) -> Array:
-	var here := _target(world.place(WorldData.place_id("settlement", village.x, village.y)))
+	var here := target(world.place(WorldData.place_id("settlement", village.x, village.y)))
 	var neighbors: Array = []
 	for r: Dictionary in world.routes(here.id):
-		neighbors.append(_target(world.place(r.to if r.from == here.id else r.from)))
+		neighbors.append(target(world.place(r.to if r.from == here.id else r.from)))
 	var far := world.far_destination(here.id)
-	return quests.offers(here, all_places.call(), neighbors, {} if far.is_empty() else _target(far), visited, world.seed_num)
+	return quests.offers(here, all_places.call(), neighbors, {} if far.is_empty() else target(far), visited, world.seed_num)
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)

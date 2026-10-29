@@ -11,7 +11,7 @@ func _ready() -> void:
 
 func update_effect(amount: float, dt: float) -> void:
 	var was_visible := strength > 0.005
-	strength = lerpf(strength, clampf(amount, 0.0, 1.0), 1.0 - exp(-dt * 4.0))
+	strength = lerpf(strength, clampf(amount, 0.0, 1.0), Util.damp(4.0, dt))
 	clock += dt * lerpf(0.35, 1.05, strength)
 	if was_visible or strength > 0.005:
 		queue_redraw()

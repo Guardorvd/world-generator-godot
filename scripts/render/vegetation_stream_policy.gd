@@ -15,7 +15,7 @@ func sample(position: Vector2, dt: float, reset := false) -> void:
 		velocity = Vector2.ZERO
 	else:
 		var target := ((position - previous) / dt).limit_length(MAX_SPEED)
-		velocity = velocity.lerp(target, 1.0 - exp(-dt * 8.0))
+		velocity = velocity.lerp(target, Util.damp(8.0, dt))
 		if target.length_squared() > velocity.length_squared():
 			velocity = target
 	previous = position

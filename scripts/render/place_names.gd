@@ -98,7 +98,7 @@ func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false, k
 		_select(camera, visited, known)
 	for item: Dictionary in _items:
 		var label: Label3D = item.label
-		item.alpha = 0.0 if hidden else lerpf(item.alpha, item.want, 1.0 - exp(-dt * 10.0))
+		item.alpha = 0.0 if hidden else lerpf(item.alpha, item.want, Util.damp(10.0, dt))
 		label.visible = item.alpha > 0.01
 		var selected: bool = label.get_meta("place_id") == _goal_id
 		var color: Color = Color(1.0, 0.88, 0.50) if selected else item.color

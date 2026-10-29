@@ -47,6 +47,36 @@ const BANK_LIMIT := 2.0  # вираж поднимает сцепление не
 const BUMP_DRAG := 1.0   # подвеска забирает у хода энергию подъёма колеса на корень или камень, 1/с
 const PROFILE_SAG := 0.6 # сжатие подвески на 1 g нагрузки от профиля, доля SAG_MAX
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
+## Скорости сглаживания (1/с, через Util.damp) и пределы, раньше записанные прямо в формулах.
+const SUB_HZ := 120.0          # частота подшагов движения и подвески, Гц
+const G_RESPONSE := 12.0       # нагрузка профиля (vertical_g) следует за землёй
+const G_RELAX_AIR := 8.0       # и спадает к нулю в полёте
+const G_MIN := -1.0            # пределы нагрузки профиля, g
+const G_MAX := 1.5
+const BANK_RESPONSE := 15.0    # наклон полотна поперёк (bank_slope)
+const BANK_SLOPE_MAX := 0.8    # учитываемый наклон виража, м на м
+const COAST_DECAY := 0.03      # потеря скорости накатом без педалей и тормоза, 1/с
+const TILT_RESPONSE := 25.0    # наклон рамы вдоль склона на земле
+const TILT_RESPONSE_AIR := 5.0 # и в полёте
+const AIR_TILT_MAX := 0.55     # наклон рамы по траектории полёта, рад
+const AIR_TILT_SPEED := 4.0    # ниже этой скорости (м/с) наклон в полёте считается от неё
+const LEAN_RESPONSE := 9.0     # крен в повороте на земле
+const LEAN_RESPONSE_AIR := 2.5 # и в полёте (возвращается к нулю)
+const LEAN_SHARE := 0.5        # крен — такая доля угла от боковой силы
+const LEAN_MAX := 0.28         # наибольший видимый крен, рад
+const STEER_RATE := 5.0        # скорость поворота руля, доля хода в секунду
+const STEER_CENTER := 7.0      # и возврата руля в середину, когда его отпустили
+const TURN_RESPONSE_SLOW := 10.0 # отклик курса на руль на малой скорости
+const TURN_RESPONSE_FAST := 4.5  # и на большой (TURN_PACE_HIGH)
+const TURN_PACE_LOW := 3.0     # между этими скоростями, м/с, отклик плавно меняется
+const TURN_PACE_HIGH := 16.0
+const HOP_CARRY := 3.0         # к прыжку добавляется не больше этой вертикальной скорости, м/с
+const HOP_PRELOAD := 0.9       # толчок подвески вверх при прыжке, м/с
+const HOP_WAIT := 0.08         # после приземления без нажатого пробела прыжок доступен через столько, с
+const HOP_WAIT_AIR := 0.2      # если в воздухе были дольше этого, с
+const LANDING_KICK := 0.4      # доля скорости удара, которая уходит в сжатие подвески
+const SQUASH_V_MIN := -2.0     # пределы скорости хода подвески, м/с
+const SQUASH_V_MAX := 4.0
 
 var x := 0.0          # метры
 var z := 0.0
@@ -282,16 +312,16 @@ func _wheel_ground(px: float, pz: float, heights: Heightfield) -> float:
 ## Нагрузка от кривизны профиля вдоль курса и поперечный наклон полотна; оба сглажены от шума сетки.
 func _read_surface(heights: Heightfield, dt: float) -> void:
 	if airborne:
-		vertical_g = lerpf(vertical_g, 0.0, 1.0 - exp(-dt * 8.0))
+		vertical_g = lerpf(vertical_g, 0.0, Util.damp(G_RELAX_AIR, dt))
 		return
 	var ahead := Vector2(-sin(heading), -cos(heading)) * PROFILE_SPAN
 	var g0 := heights.surface_at(x, z, y)
 	var curve := (heights.surface_at(x + ahead.x, z + ahead.y, y) + heights.surface_at(x - ahead.x, z - ahead.y, y) - 2.0 * g0) / (PROFILE_SPAN * PROFILE_SPAN)
-	var goal := clampf(speed * speed * curve / GameConfig.GRAVITY, -1.0, 1.5)
-	vertical_g = lerpf(vertical_g, goal, 1.0 - exp(-dt * 12.0))
+	var goal := clampf(speed * speed * curve / GameConfig.GRAVITY, G_MIN, G_MAX)
+	vertical_g = lerpf(vertical_g, goal, Util.damp(G_RESPONSE, dt))
 	var right := Vector2(cos(heading), -sin(heading)) * BANK_SPAN
 	var cross := (heights.surface_at(x + right.x, z + right.y, y) - heights.surface_at(x - right.x, z - right.y, y)) / (2.0 * BANK_SPAN)
-	bank_slope = lerpf(bank_slope, clampf(cross, -0.8, 0.8), 1.0 - exp(-dt * 15.0))
+	bank_slope = lerpf(bank_slope, clampf(cross, -BANK_SLOPE_MAX, BANK_SLOPE_MAX), Util.damp(BANK_RESPONSE, dt))
 
 
 ## Уходит ли рельеф впереди из-под полёта: летим с нынешней вертикальной скоростью
@@ -313,8 +343,8 @@ func _lifts(heights: Heightfield) -> bool:
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	# Один и тот же короткий шаг при 30/60/120 Гц; hop передаётся только первому подшагу.
 	# Существующие рельеф, вода и подвеска остаются в том же цикле, без новой вертикальной модели.
-	if dt > 1.0 / 120.0 + 0.000001:
-		var ticks := ceili(dt * 120.0)
+	if dt > 1.0 / SUB_HZ + 0.000001:
+		var ticks := ceili(dt * SUB_HZ)
 		for i in ticks:
 			step(p, throttle, turn, boost, hop and i == 0, dt / ticks, w, heights)
 			if crashed:
@@ -350,8 +380,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		_brake_hold = 0.0
 		brakes.step(dt, 0.0, speed, slope, grip, 0.0, false)
 		braking = 0.0
-		speed *= exp(-0.03 * dt)
-		lateral_speed *= exp(-0.03 * dt)
+		speed *= exp(-COAST_DECAY * dt)
+		lateral_speed *= exp(-COAST_DECAY * dt)
 
 	_read_surface(heights, dt)
 	var free_now := fits(x, z, heading, w, heights)
@@ -420,20 +450,20 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
 	_step_wheels(heights, rough, dt, surf, path_weight, slope, across)
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
-	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, -1.0, 1.5) * SAG_MAX * PROFILE_SAG, acceleration)
+	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
 
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
 	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
 	var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB)
 	if airborne:
-		tilt_goal = clampf(atan2(vy, maxf(absf(speed), 4.0)), -0.55, 0.55)
+		tilt_goal = clampf(atan2(vy, maxf(absf(speed), AIR_TILT_SPEED)), -AIR_TILT_MAX, AIR_TILT_MAX)
 		if speed < 0.0:
 			tilt_goal = -tilt_goal
-	tilt = lerpf(tilt, tilt_goal, 1.0 - exp(-dt * (5.0 if airborne else 25.0)))
+	tilt = lerpf(tilt, tilt_goal, Util.damp(TILT_RESPONSE_AIR if airborne else TILT_RESPONSE, dt))
 	# Крен от реального поворота, а не от кнопки: на месте не заваливаемся.
 	# Умеренный визуальный крен (до 16°), без изменения радиуса поворота и сцепления.
-	var lean_goal := 0.0 if airborne else clampf(atan(lateral / GameConfig.GRAVITY) * 0.5, -0.28, 0.28)
-	lean = lerpf(lean, lean_goal, 1.0 - exp(-dt * (2.5 if airborne else 9.0)))
+	var lean_goal := 0.0 if airborne else clampf(atan(lateral / GameConfig.GRAVITY) * LEAN_SHARE, -LEAN_MAX, LEAN_MAX)
+	lean = lerpf(lean, lean_goal, Util.damp(LEAN_RESPONSE_AIR if airborne else LEAN_RESPONSE, dt))
 
 	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность
 	wheel = fmod(wheel + speed * dt / WHEEL_R, TAU)
@@ -468,7 +498,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		# а велосипед уходил наружу так же, как на ровном, только с бо́льшим углом сноса.
 		capacity += _bank_assist(signf(lateral_speed), absf(speed), capacity)
 		var available := sqrt(maxf(0.0, capacity * capacity - brake_deceleration * brake_deceleration))
-		var correction := lateral_speed * (1.0 - exp(-GameConfig.BIKE_SIDE_RESPONSE * dt))
+		var correction := lateral_speed * Util.damp(GameConfig.BIKE_SIDE_RESPONSE, dt)
 		correction = clampf(correction, -available * dt, available * dt)
 		lateral_speed -= correction
 		lateral = correction / dt
@@ -484,7 +514,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 ## тяжесть сама держит поворот, а прижатые колёса ещё и сильнее цепляются, g·(μ + s) / (1 − μ·s).
 ## Раньше бралась только доля тяжести без прижима, и вираж почти не отличался от плоского поворота.
 func _bank_assist(drift: float, pace: float, flat: float) -> float:
-	var s := clampf(bank_slope * drift, -0.8, 0.8)
+	var s := clampf(bank_slope * drift, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 	var mu := flat / GameConfig.GRAVITY
 	var banked := GameConfig.GRAVITY * (mu + s) / maxf(1.0 - mu * s, 0.5)
 	return clampf(banked - flat, -flat * 0.4, flat * (BANK_LIMIT - 1.0)) * smoothstep(2.0, 6.0, pace)
@@ -493,10 +523,10 @@ func _bank_assist(drift: float, pace: float, flat: float) -> float:
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Боковая инерция и торможение делят общий запас сцепления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
-	steer = move_toward(steer, turn, dt * (7.0 if is_zero_approx(turn) else 5.0))
+	steer = move_toward(steer, turn, dt * (STEER_CENTER if is_zero_approx(turn) else STEER_RATE))
 	var pace := absf(speed)
 	# На малой скорости манёвр лёгкий; на большой у перекладки появляется вес.
-	var response := lerpf(10.0, 4.5, smoothstep(3.0, 16.0, pace)) * grip
+	var response := lerpf(TURN_RESPONSE_SLOW, TURN_RESPONSE_FAST, smoothstep(TURN_PACE_LOW, TURN_PACE_HIGH, pace)) * grip
 	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
 	var wanted := -steer * rate * (1.0 if speed >= 0.0 else -1.0)
 	var limit := rate
@@ -534,9 +564,9 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 		airborne = true
 		air_time = 0.0
 		# Наследуем подъём, но крутой излом не превращается в катапульту.
-		vy = clampf(vy, 0.0, 3.0) + GameConfig.BIKE_HOP
-		squash_fv -= 0.9
-		squash_rv -= 0.9
+		vy = clampf(vy, 0.0, HOP_CARRY) + GameConfig.BIKE_HOP
+		squash_fv -= HOP_PRELOAD
+		squash_rv -= HOP_PRELOAD
 	if airborne:
 		air_time += dt
 		y += (vy - GameConfig.GRAVITY * dt * 0.5) * dt
@@ -637,7 +667,7 @@ static func _bump(d: float) -> float:
 func _step_suspension(dt: float, load := 0.0, acceleration := 0.0) -> void:
 	var target := -0.035 if airborne else load
 	var shift := 0.0 if airborne else acceleration * PITCH_LOAD
-	var ticks := maxi(1, ceili(dt * 120.0))
+	var ticks := maxi(1, ceili(dt * SUB_HZ))
 	var h := dt / ticks
 	var f := Vector2(squash_f, squash_fv)
 	var r := Vector2(squash_r, squash_rv)
@@ -668,8 +698,8 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
 ## speed — скорость по горизонтали, поэтому проекция тяжести — slope / (1 + slope²).
 func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0) -> void:
-	if dt > 1.0 / 120.0 + 0.000001:
-		var ticks := ceili(dt * 120.0)
+	if dt > 1.0 / SUB_HZ + 0.000001:
+		var ticks := ceili(dt * SUB_HZ)
 		for i in ticks:
 			_step_speed(throttle, boost, slope, terrain, dt / ticks, grip, technical)
 		return
@@ -777,8 +807,8 @@ func _land(g: float, heights: Heightfield) -> void:
 	airborne = false
 	y = g
 	land_impact = maxf(land_impact, impact)
-	squash_fv = clampf(squash_fv + impact * 0.4, -2.0, 4.0)
-	squash_rv = clampf(squash_rv + impact * 0.4, -2.0, 4.0)
+	squash_fv = clampf(squash_fv + impact * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
+	squash_rv = clampf(squash_rv + impact * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
 	# В подъём (нос в склон) удар опаснее, чем на ровное: порог падения ниже.
 	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(approach_grade, 0.0, 1.0):
 		_crash(vy, normal)
@@ -791,6 +821,6 @@ func _land(g: float, heights: Heightfield) -> void:
 	vy = gradient.dot(horizontal_velocity())
 	_coyote = HOP_COYOTE
 	# Короткие подскоки и заранее нажатый прыжок не блокируют управление.
-	if air_time > 0.2:
-		_hop_wait = 0.0 if _hop_buf > 0.0 else 0.08
+	if air_time > HOP_WAIT_AIR:
+		_hop_wait = 0.0 if _hop_buf > 0.0 else HOP_WAIT
 	air_time = 0.0
