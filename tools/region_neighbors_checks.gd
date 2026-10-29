@@ -180,6 +180,8 @@ func run() -> int:
 			print("FALLBACK %s: %s roads_ms %.0f expanded %d prefetch %d hits %d wait_ms %.1f | %s roads_ms %.0f expanded %d prefetch %d" % [case[0],
 				"eager" if eager else "lazy", was.roads_ms, was.expanded, was.prefetch_expanded, was.get("prefetch_hits", 0), was.get("prefetch_wait_ms", 0.0),
 				"lazy" if eager else "eager", now.roads_ms, now.expanded, now.prefetch_expanded])
+			print("  отказы %s, reach %d/%d посещено %d, снимков %d (%.1f МБ), откатов %d" % [JSON.stringify(was.get("failures", {})),
+				was.get("reach_rejects", 0), was.get("reach_calls", 0), was.get("reach_visited", 0), was.checkpoints, was.checkpoint_mb, was.restores])
 			check(result_bytes(other) == result_bytes(case[2]), "P2: дороги одинаковы с фоновым и ленивым запасным поиском (%s)" % case[0])
 		# 13.8: выходы на свободные стороны остаются, но связи через реку и мосты — нет.
 		# 14.4: поселений в области больше — связи внутри одного берега остаются, через реку — нет.

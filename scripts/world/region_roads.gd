@@ -122,7 +122,9 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		for b in range(a + 1, nodes.size()):
 			if nodes[a].net != "" and nodes[a].net == nodes[b].net: _join(groups, a, b)
 	var ground := RegionalGround.new(w, surface.water_level)
-	var state := {detour = false, on_axis = PackedByteArray(), surface = ground}
+	# tunnels = false: области не умеют сохранять и воспроизводить туннели, поэтому хребет только
+	# обходится — это известно до сооружений (ревью дорожной сети 29.10, шаг 1).
+	var state := {detour = false, tunnels = false, on_axis = PackedByteArray(), surface = ground, failures = {}}
 	state.on_axis.resize(w.N)
 	var heights := ground.hv.duplicate()
 	for i in heights.size():
@@ -174,6 +176,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	profile.checkpoints = state.get("checkpoints", 0)
 	profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	profile.restores = state.get("restores", 0)
+	profile.failures = state.failures
 	started = Time.get_ticks_usec()
 	# Единственная расстановка домов (площадки пришли без них) — вдоль получившихся улиц.
 	StageLandmarks.lay_out(w)
@@ -264,15 +267,24 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 
 
 ## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.
+## Причина каждого отказа — в state.failures (StageTrails._count_failure).
 static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: PackedByteArray, a: int, b: int) -> bool:
-	if a < 0 or b < 0 or a == b or w.cost[a] == INF or w.cost[b] == INF: return false
+	if a < 0 or b < 0 or a == b or w.cost[a] == INF or w.cost[b] == INF:
+		state.failure = "endpoint"
+		StageTrails._count_failure(state.failures, state)
+		return false
 	var checkpoint := StageTrails._make_checkpoint(w, finder, state)
 	var ctx := {checkpoint = checkpoint, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
 	var path := StageTrails._connect_settlement(w, finder, w.cost, a, b, state)
-	if path.size() < 2: return false
-	# Туннели требуют отдельной подготовки рельефа; этот этап допускает только мосты.
+	if path.size() < 2:
+		StageTrails._count_failure(state.failures, state)
+		return false
+	# Защита: state.tunnels = false не даёт поиску строить туннели (они обходятся или связь отвергается раньше).
 	if not w.tunnels.is_empty():
+		push_error("RegionRoads: туннель при запрете туннелей")
 		StageTrails._restore_structures(w, finder, state, ctx)
+		state.failure = "tunnel"
+		StageTrails._count_failure(state.failures, state)
 		return false
 	var old_cost := w.cost.duplicate()
 	StageTrails._add_trail(w, path, "road", PackedFloat32Array(), state.on_axis, state.surface)
@@ -280,6 +292,8 @@ static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: Pa
 		w.trails.pop_back()
 		w.cost = old_cost
 		StageTrails._restore_structures(w, finder, state, ctx)
+		state.failure = "corridor"
+		StageTrails._count_failure(state.failures, state)
 		return false
 	return true
 

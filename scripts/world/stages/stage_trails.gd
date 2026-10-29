@@ -432,6 +432,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var tried := {}
 	var priorities := {} # a * n + b -> _direction_cost
 	var paths: Array = []
+	var failures := {} # причина -> число отвергнутых связей (_count_failure)
 	var connected := 0
 	# С 9.8 сетей может быть несколько: большая река без места для моста делила мир, и все поселения
 	# за ней пропадали (на контрольном мире оставалось 2 из 11). Когда текущая сеть больше не растёт,
@@ -493,6 +494,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		budgets[b] = finder.search_budget
 		finder.search_budget = -1
 		if q.is_empty():
+			_count_failure(failures, state)
 			continue
 		surface.build_structures()
 		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
@@ -526,6 +528,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.settlement_candidates = n
 	w.generation_profile.settlement_attempts = tried.size()
 	w.generation_profile.settlement_rejected = n - keep.size()
+	w.generation_profile.road_failures = failures
 	# Списано с запасов поселений (в том числе готовыми результатами кэша и фонового поиска);
 	# фактическая работа основного и фонового поиска — в search_stats.
 	var expanded := 0
@@ -591,22 +594,49 @@ static func _connect_settlement(w: WorldData, finder: Pathfinder, cost: PackedFl
 	# Стоимость не меняется внутри попытки связи: её правит _add_trail после возврата.
 	# Следующая связь получает новый номер, в том числе после изменения стоимости.
 	var cost_version := finder.next_cost_version()
+	finder.use_corridor = true
+	# Ревью дорожной сети 29.10: связь, которой нет даже при ROAD_LIMIT, отвергается без A*. Раньше такой
+	# поиск обходил всю доступную область и тратил запас места, и следующие пары того же места
+	# останавливались по запасу. Причина отказа — в state.failure (_count_failure).
+	if not finder.can_reach(cost, a, b, ROAD_CLIMB, ROAD_LIMIT):
+		state.failure = "unreachable"
+		return PackedInt32Array()
+	var limits: Array = [ROAD_GRADE, ROAD_LIMIT] if finder.can_reach(cost, a, b, ROAD_CLIMB, ROAD_GRADE) else [ROAD_LIMIT]
 	# С 9.9 запасной поиск (ROAD_LIMIT) идёт в фоне, пока проверяется первый путь: после неудачи
 	# состояние восстановлено, и он с теми же входами. Совпадение входов проверяет сам поиск.
-	finder.use_corridor = true
-	finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version)
-	for limit: float in [ROAD_GRADE, ROAD_LIMIT]:
+	if limits.size() > 1:
+		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version)
+	for limit: float in limits:
 		var p := _road_path(finder, cost, a, b, true, limit, cost_version)
 		if p.is_empty():
+			state.failure = "budget" if finder.search_budget == 0 else "no_path"
 			continue
+		var previous_failure: String = state.get("failure", "")
+		state.failure = ""
 		var q := _try_road_structures(w, p, finder, cost, state, attempts)
 		if not q.is_empty():
 			finder.cancel_prefetch()
 			finder.use_corridor = true
 			return q
+		# Та же ось уже отвергнута первой попыткой: причина — её.
+		if state.failure == "repeat" and not previous_failure.is_empty():
+			state.failure = previous_failure
+		elif state.failure.is_empty():
+			state.failure = "structures"
 	finder.cancel_prefetch()
 	finder.use_corridor = true
 	return PackedInt32Array()
+
+
+## Счётчик причин отказа связей (ревью дорожной сети 29.10, шаг 0): unreachable — пути нет при любом
+## допустимом уклоне (доказано без A*), no_path — A* исчерпал область, budget — кончился запас (путь мог быть),
+## repeat — запасной поиск вернул уже отвергнутую ось, bridge_site — нет места для моста после объездов,
+## tunnel — туннель не поддерживается и обхода нет, corridor — лента не легла на проходимые клетки.
+static func _count_failure(failures: Dictionary, state: Dictionary) -> void:
+	var reason: String = state.get("failure", "")
+	if reason.is_empty(): reason = "unknown"
+	failures[reason] = int(failures.get(reason, 0)) + 1
+	state.failure = ""
 
 
 ## После неудачи _structures полностью восстанавливает состояние. Запасной поиск может
@@ -616,6 +646,7 @@ static func _try_road_structures(w: WorldData, path: PackedInt32Array, finder: P
 		cost: PackedFloat32Array, state: Dictionary, attempts: Array) -> PackedInt32Array:
 	for previous: Array in attempts:
 		if previous[1] == finder.use_corridor and previous[0] == path:
+			state.failure = "repeat"
 			return PackedInt32Array()
 	attempts.append([path, finder.use_corridor])
 	return _structures(w, path, true, finder, cost, state)
@@ -971,6 +1002,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				if j < 0:
 					# Последняя неудача уже исчерпала запас объездов: ещё один A* не используется.
 					if retries >= BRIDGE_RETRIES:
+						state.failure = "bridge_site"
 						return PackedInt32Array()
 					var bypass := cost.duplicate()
 					for k in range(i + 1, shore):
@@ -984,6 +1016,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					if not q.is_empty():
 						_restore_structures(w, finder, state, ctx)
 						return _structures(w, q, road, finder, bypass, state, retries + 1)
+					state.failure = "budget" if finder.search_budget == 0 else "bridge_site"
 					return PackedInt32Array()
 		elif hp[i + 1] > hp[i] and ahead_max[i] >= hp[i] + RISE:
 			j = _span_end(hp, wet, xs, ys, i)
@@ -1012,6 +1045,19 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				ends = []
 				to_a = PackedInt32Array()
 				from_b = PackedInt32Array()
+		# Возможности дороги известны до сооружений (ревью дорожной сети 29.10, шаг 1): где туннели не
+		# умеют сохранять и воспроизводить (области за краем плана), хребет только обходится. Без обхода
+		# связь отвергается здесь, а не после целого пути с туннелем. Обход ничего не меняет — снимок не нужен.
+		if kind == "tunnel" and ends.is_empty() and not state.get("tunnels", true):
+			# Обход дороги — с пределами дороги: построитель не выравнивает подъём круче ROAD_LIMIT.
+			var around := _detour(w, finder, cost, a, b, ROAD_CLIMB if road else TRAIL_CLIMB, ROAD_LIMIT if road else TRAIL_GRADE)
+			if around.is_empty():
+				state.failure = "budget" if finder.search_budget == 0 else "tunnel"
+				return PackedInt32Array()
+			for k in range(1, around.size()):
+				out.append(around[k])
+			i = j
+			continue
 		# Повторно используемый мост тоже записывает on_axis, heights и links ниже.
 		if ctx.checkpoint == null:
 			ctx.checkpoint = _make_checkpoint(w, finder, state)
@@ -1176,7 +1222,8 @@ static func _key_cell(p: PackedInt32Array, hp: PackedFloat32Array, wet: PackedBy
 
 ## Обход горы от a до b вместо туннеля: путь в окрестности отрезка a–b, не выше входов больше чем
 ## на 0.7 RISE (около 18 м), без воды и не длиннее DETOUR прямых расстояний; пустой, если такого нет
-static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int) -> PackedInt32Array:
+static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int,
+		climb := TRAIL_CLIMB, limit := TRAIL_GRADE) -> PackedInt32Array:
 	var W := w.W
 	var ax := a % W
 	var ay := a / W
@@ -1193,7 +1240,7 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 			var k := y * W + x
 			if w.h[k] <= top and not _wet(w, k):
 				c[k] = cost[k]
-	var q := _land_path(finder, c, a, b, TRAIL_CLIMB)
+	var q := _land_path(finder, c, a, b, climb, limit)
 	if q.size() > d * DETOUR:
 		return PackedInt32Array()
 	return q
