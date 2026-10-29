@@ -62,6 +62,8 @@ static func random_seed() -> String:
 
 
 func _ready() -> void:
+	if OS.get_cmdline_user_args().has("--resource-report"):
+		GameContext.scope.resource_profile = preload("res://scripts/core/resource_profile.gd").new()
 	GameContext.scope.settings.load_settings()
 	GameContext.scope.settings.apply_window()
 	GameContext.scope.settings.apply_volume()
@@ -642,12 +644,13 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	%Title.text = "Мир «%s»" % seed_text
 	_show("loading")
 	gen_thread = Thread.new()
-	gen_thread.start(_generate_job.bind(seed_text, size))
+	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
+	gen_thread.start(_generate_job.bind(seed_text, size, start_at))
 
 
-func _generate_job(seed_text: String, size: int) -> void:
+func _generate_job(seed_text: String, size: int, start_at := Vector2.INF) -> void:
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
-		_set_progress.call_deferred(p, label))
+		_set_progress.call_deferred(p, label), null, false, start_at)
 	loaded.timings.ready_queued_us = Time.get_ticks_usec()
 	_on_world_ready.call_deferred(loaded)
 
@@ -730,6 +733,7 @@ func _resume() -> void:
 ## наверх нет (рельеф за краем знает только размер карты), поэтому он освобождается сам целиком.
 ## Проверка: tools/lifecycle_test.gd
 func _free_game() -> void:
+	if GameContext.scope.resource_profile != null: GameContext.scope.resource_profile.save()
 	if game != null:
 		game.queue_free()
 		game = null

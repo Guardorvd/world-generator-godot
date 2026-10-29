@@ -56,8 +56,10 @@ var _field_task := -1
 var _field_key := Vector2i.ZERO
 var _field_out := {}
 var field_errors := {} # pinned corruption is visible once; never regenerate it silently
-var _field_cache := {}
-var _field_bytes := 0
+var _field_cache := preload("res://scripts/core/byte_lru.gd").new()
+var _field_bytes: int:
+	get: return _field_cache.bytes
+var cpu_budget: RefCounted
 var storage_error := ""
 var _ledger_failed := false
 
@@ -89,6 +91,7 @@ var _build_out := {}
 
 
 func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) -> void:
+	_field_cache.budget = cpu_budget
 	world = w
 	heights = h
 	terrain = t
@@ -559,9 +562,9 @@ func _request_fields(key: Vector2i) -> void:
 	_field_key = key
 	_field_out = {}
 	var out := _field_out
-	if _field_cache.has(key):
-		out.fields = _field_cache[key].fields
-		_field_bytes -= _field_cache[key].bytes
+	var cached: Variant = _field_cache.get_value(key)
+	if cached != null:
+		out.fields = cached
 		_field_cache.erase(key)
 		_field_task = WorkerThreadPool.add_task(func() -> void: pass, false)
 		return
@@ -583,14 +586,8 @@ func _publish_fields(key: Vector2i, fields: Dictionary) -> void:
 ## Поля далёкой области остаются только в файле; запись журнала (rect, decor) — в памяти
 func _evict(key: Vector2i) -> void:
 	var fields: Dictionary = ledger.regions[key].fields
-	var bytes := preload("res://scripts/core/byte_lru.gd").size_of(fields)
-	if bytes <= FIELD_CACHE_BYTES:
-		while _field_bytes + bytes > FIELD_CACHE_BYTES and not _field_cache.is_empty():
-			var oldest: Vector2i = _field_cache.keys()[0]
-			_field_bytes -= _field_cache[oldest].bytes
-			_field_cache.erase(oldest)
-		_field_cache[key] = {fields = fields, bytes = bytes}
-		_field_bytes += bytes
+	_field_cache.limit = FIELD_CACHE_BYTES
+	_field_cache.put(key, fields)
 	ledger = ledger.duplicate()
 	ledger.regions = ledger.regions.duplicate()
 	var entry: Dictionary = ledger.regions[key].duplicate()

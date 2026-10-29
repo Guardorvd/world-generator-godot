@@ -57,6 +57,18 @@ var io_timings := {}
 var _io_lock := Mutex.new()
 var _write_lock := Mutex.new()
 var _enqueue_lock := Mutex.new()
+const WRITE_QUEUE_BYTES := 96 * 1024 * 1024
+const WRITE_QUEUE_JOBS := 4
+var _jobs: Array[Dictionary] = []
+var _writer_active := false
+var _pending_bytes := 0
+var _pending_jobs := 0
+var _write_room := Semaphore.new()
+var queue_stats := {wait_ms = 0.0, peak_bytes = 0, peak_jobs = 0, oversized_jobs = 0}
+var cpu_budget: RefCounted
+static var _file_pins := {}
+static var _pin_lock := Mutex.new()
+var _root_memo := {} # bounded validated manifest signatures -> referenced filenames, no physics arrays
 
 
 ## Ключи схем одинаковы в редакторе, PCK, Debug/Release и на всех платформах.
@@ -143,13 +155,20 @@ func save_artifact(seed_text: String, size: int, artifact: String, data: Diction
 
 
 ## Immutable chunk blocks first, the small surface manifest last. No monolithic terrain bytes.
-func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictionary, water_chunks: Array = [{}, {}]) -> void:
+func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictionary, water_chunks: Array = [{}, {}]) -> Dictionary:
 	var snapshot := data.duplicate(true)
 	var pieces := chunks.duplicate(true)
 	var key := artifact_key(seed_text, size, "surface")
 	var path := artifact_path(seed_text, size, "surface")
 	var generation := "%d_%d" % [Time.get_ticks_usec(), get_instance_id()]
 	var water := water_chunks.duplicate(true)
+	var ticket := {result = {}}
+	var writing: Array[String] = []
+	for group in 3:
+		var source: Dictionary = pieces if group == 0 else water[group - 1]
+		for at: Vector2i in source:
+			writing.append(dir.path_join("%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]))
+	pin_files(writing)
 	_queue_job(func() -> void:
 		snapshot.chunks = {}
 		snapshot.water_chunks = [{}, {}]
@@ -159,9 +178,85 @@ func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictio
 			for at: Vector2i in source:
 				var name := "%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]
 				var chunk_key := "%s|%d|%d|%d" % [key, group, at.x, at.y]
-				if _write(dir.path_join(name), chunk_key, var_to_bytes({arrays = source[at]})) != OK: return
-				refs[at] = {file = name, key = chunk_key}
-		_write(path, key, var_to_bytes(snapshot)))
+				if _write(dir.path_join(name), chunk_key, var_to_bytes({arrays = source[at]})) != OK:
+					unpin_files(writing)
+					return
+				refs[at] = {file = name, key = chunk_key, bytes = preload("res://scripts/core/byte_lru.gd").size_of(source[at])}
+		if _write(path, key, var_to_bytes(snapshot)) == OK:
+			ticket.result = snapshot
+			_pin_lock.lock()
+			_memo_roots(_manifest_signature(path), snapshot)
+			_pin_lock.unlock()
+		unpin_files(writing)
+		collect_chunks(seed_text, size),
+		preload("res://scripts/core/byte_lru.gd").size_of([snapshot, pieces, water]))
+	return ticket
+
+
+static func _absolute(path: String) -> String:
+	var result := ProjectSettings.globalize_path(path).simplify_path()
+	return result.to_lower() if OS.get_name() == "Windows" else result
+
+static func pin_files(paths: Array[String]) -> void:
+	_pin_lock.lock()
+	for path: String in paths:
+		var key := _absolute(path)
+		_file_pins[key] = _file_pins.get(key, 0) + 1
+	_pin_lock.unlock()
+
+static func unpin_files(paths: Array[String]) -> void:
+	_pin_lock.lock()
+	for path: String in paths:
+		var key := _absolute(path)
+		if not _file_pins.has(key): continue
+		_file_pins[key] -= 1
+		if _file_pins[key] <= 0: _file_pins.erase(key)
+	_pin_lock.unlock()
+
+func collect_chunks(seed_text: String, size: int) -> int:
+	_pin_lock.lock()
+	var keep := {}
+	var path := artifact_path(seed_text, size, "surface")
+	for suffix: String in ["", ".bak"]:
+		var signature := _manifest_signature(path + suffix)
+		if signature.is_empty(): continue
+		if not _root_memo.has(signature):
+			var data: Variant = _read_file(path + suffix, _cache_header_key(path + suffix))
+			if not data is Dictionary: continue
+			_memo_roots(signature, data)
+		keep.merge(_root_memo[signature])
+	var removed := 0
+	var seen := {}
+	for entry: String in DirAccess.get_files_at(dir):
+		var file := entry.trim_suffix(".bak").trim_suffix(".tmp")
+		if seen.has(file): continue
+		seen[file] = true
+		if not file.begins_with(_base(seed_text, size) + ".") or not file.ends_with(".chunk" + EXT): continue
+		if keep.has(file) or _file_pins.has(_absolute(dir.path_join(file))): continue
+		if Files.remove(dir.path_join(file)) == OK: removed += 1
+	_pin_lock.unlock()
+	return removed
+
+func _manifest_signature(path: String) -> String:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null or file.get_length() < 64: return ""
+	if file.get_buffer(4).get_string_from_ascii() != MAGIC or file.get_32() != FORMAT: return ""
+	var key := file.get_pascal_string()
+	var raw := file.get_64()
+	var packed := file.get_64()
+	return "%s|%d|%d|%s" % [key, raw, packed, file.get_buffer(32).hex_encode()]
+
+func _memo_roots(signature: String, data: Dictionary) -> void:
+	var names := {}
+	for group: Variant in [data.get("chunks", {})] + data.get("water_chunks", []):
+		if not group is Dictionary: continue
+		for ref: Variant in group.values():
+			if ref is Dictionary and ref.get("file") is String: names[ref.file] = true
+	_root_memo[signature] = names
+	while _root_memo.size() > 4: _root_memo.erase(_root_memo.keys()[0])
+
+func request_collection(seed_text: String, size: int) -> void:
+	_queue_job(func() -> void: collect_chunks(seed_text, size))
 
 
 ## Only dependencies downstream of the failed canonical layer. Player saves/regions are untouched.
@@ -362,7 +457,7 @@ func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dicti
 	return snap
 
 
-## One immutable snapshot in flight. Request order is also publication order for repeated keys.
+## FIFO writer; backpressure only when the byte/job budget is full, not at every submission.
 func _queue_write(path: String, key: String, data: Dictionary, after := Callable()) -> void:
 	var snapshot := data.duplicate(true)
 	_queue_job(func() -> void:
@@ -370,20 +465,50 @@ func _queue_write(path: String, key: String, data: Dictionary, after := Callable
 		var raw := var_to_bytes(snapshot)
 		_measure("serialize", started, raw.size())
 		_write(path, key, raw)
-		if after.is_valid(): after.call())
+		if after.is_valid(): after.call(), preload("res://scripts/core/byte_lru.gd").size_of(snapshot))
 
 
-func _queue_job(job: Callable) -> void:
+func _queue_job(job: Callable, bytes := 0) -> void:
 	_enqueue_lock.lock()
-	_join_writes()
-	var task := WorkerThreadPool.add_task(func() -> void:
-		_write_lock.lock()
-		job.call()
-		_write_lock.unlock(), false, "Кэш мира")
-	_lock.lock()
-	_writes.append(task)
+	var started := Time.get_ticks_usec()
+	while true:
+		_lock.lock()
+		if _pending_jobs == 0 or (_pending_jobs < WRITE_QUEUE_JOBS and _pending_bytes + bytes <= WRITE_QUEUE_BYTES): break
+		_lock.unlock()
+		_write_room.wait()
+	queue_stats.wait_ms += (Time.get_ticks_usec() - started) / 1000.0
+	_pending_jobs += 1
+	_pending_bytes += bytes
+	queue_stats.peak_jobs = maxi(queue_stats.peak_jobs, _pending_jobs)
+	queue_stats.peak_bytes = maxi(queue_stats.peak_bytes, _pending_bytes)
+	queue_stats.oversized_jobs += int(bytes > WRITE_QUEUE_BYTES)
+	if cpu_budget != null: cpu_budget.reserve(bytes)
+	_jobs.append({call = job, bytes = bytes})
+	if not _writer_active:
+		_writer_active = true
+		_writes.append(WorkerThreadPool.add_task(_drain_jobs, false, "Запись кэша"))
 	_lock.unlock()
 	_enqueue_lock.unlock()
+
+
+func _drain_jobs() -> void:
+	while true:
+		_lock.lock()
+		if _jobs.is_empty():
+			_writer_active = false
+			_lock.unlock()
+			return
+		var next: Dictionary = _jobs.pop_front()
+		_lock.unlock()
+		next.call.call()
+		var bytes: int = next.bytes
+		next.clear() # release immutable source containers before returning the reservation
+		_lock.lock()
+		_pending_jobs -= 1
+		_pending_bytes -= bytes
+		if cpu_budget != null: cpu_budget.release(bytes)
+		_lock.unlock()
+		_write_room.post()
 
 
 func wait_writes() -> void:

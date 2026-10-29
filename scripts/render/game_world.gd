@@ -79,6 +79,10 @@ var outer: OuterTerrain   # рельеф за краем стартовой об
 var regions: RegionStream # 13.9: подготовленные соседние области за краем плана
 var terrain_stream: PlanTerrain
 var _water_streams: Array[PlanTerrain] = []
+var chunk_source: RefCounted
+var _travel_task := -1
+var _water_turn := 0
+var _resource_before := {}
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
 var _ocean: Node3D        # плоскость моря: ездит за игроком, чтобы море не кончалось
 var yaw: float:
@@ -157,6 +161,12 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	services = service_scope if service_scope != null else loaded.service_scope
 	if services == null:
 		services = GameContext.scope
+	if services.resource_profile != null:
+		_resource_before = services.resource_profile.stamp()
+		if DisplayServer.get_name() != "headless": RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
+	if loaded.service_scope == null: loaded.service_scope = services
+	if loaded.chunk_source == null: loaded.prepare_streaming()
+	chunk_source = loaded.chunk_source
 	camera_controller.settings = services.settings
 	camera_controller.heights = loaded.heights
 	var t := Time.get_ticks_usec()
@@ -178,7 +188,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)
-	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights)
+	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source)
 	stream_coordinator.terrain_update = terrain_stream.update
 	stream_coordinator.vegetation_update = vegetation.update
 	stream_coordinator.vegetation_budgeted = vegetation.update_frame
@@ -186,7 +196,10 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	loaded.terrain_arrays = []
 	t = _mark("start_material_terrain_setup_ms", t)
 	var streamed_water := loaded.water_chunks.size() == 2
-	for node: Node in WaterBuilder.build(world, [[], []] if streamed_water else loaded.water_arrays):
+	var prepared_water: Array[Array] = []
+	if streamed_water: prepared_water.assign([[], []])
+	else: prepared_water = loaded.water_arrays
+	for node: Node in WaterBuilder.build(world, prepared_water):
 		$Water.add_child(node)
 		if node.name == "Ocean":
 			_ocean = node
@@ -195,7 +208,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			var water_stream := PlanTerrain.new()
 			water_stream.water_layer = layer
 			water_stream.cache_size = loaded.cache_size
-			water_stream.setup(loaded.water_chunks[layer], WaterBuilder._material(false, layer == 1), services.cache, world, heights)
+			water_stream.setup(loaded.water_chunks[layer], WaterBuilder._material(false, layer == 1), services.cache, world, heights, chunk_source)
 			$Water.add_child(water_stream)
 			_water_streams.append(water_stream)
 		stream_coordinator.water_update = _update_water
@@ -232,13 +245,14 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	var spawn_started := Time.get_ticks_usec()
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
-	var opening_spot := OpeningRoute.choose(world, heights, rng) if saved.is_empty() else {}
+	var opening_spot := (loaded.opening_spot if loaded.opening_prepared else OpeningRoute.choose(world, heights, rng)) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
 	# 14.4+: соседние области — только с бесконечной генерацией (галочка в меню); без неё граница
 	# стартовой области закрыта: незакреплённая земля за краем недоступна (WorldData.accessible)
 	if world.outer != null and services.settings.infinite_world:
 		# 13.9+: закреплённые области мира — до игрока: сохранённое место может лежать в них.
 		regions = RegionStream.new()
+		regions.cpu_budget = services.cpu_budget
 		regions.terrain_builder = services.terrain
 		regions.name = "Regions"
 		add_child(regions)
@@ -274,12 +288,14 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		# 11.6: вступительный проезд по дороге не упирается в бревно
 		vegetation.road.clear.append(Vector2(player.x, player.z))
 	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
+	if chunk_source != null: chunk_source.finish_startup()
 	t = _mark("start_terrain_ms", t)
 	if saved.is_empty() and opening_spot.is_empty() and world.settlements.size() > 0:
 		# лицом к костру
 		var s: Variant = PlayerState.home(world)
 		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
 	outer = OuterTerrain.new()
+	outer.cpu_budget = services.cpu_budget
 	outer.terrain_builder = services.terrain
 	outer.name = "OuterTerrain"
 	add_child(outer)
@@ -414,12 +430,17 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_trauma = 0.0)
 	capture_mouse()
 	_mark("start_rest_ms", t)
+	if services.resource_profile != null:
+		services.resource_profile.phase("scene_start", _resource_before, services, load_timings.duplicate(true))
+		services.resource_profile.save()
 
 
 func _update_water(x: float, z: float, force := false, allow_apply := true, near := PlanTerrain.RADIUS) -> bool:
 	var uploaded := false
-	for stream in _water_streams:
+	for offset in _water_streams.size():
+		var stream := _water_streams[(_water_turn + offset) % _water_streams.size()]
 		uploaded = stream.update(x, z, force, allow_apply and not uploaded, near) or uploaded
+	_water_turn += 1
 	return uploaded
 
 
@@ -429,6 +450,10 @@ func _photo_capturing(on: bool) -> void:
 
 
 func _exit_tree() -> void:
+	if _travel_task != -1:
+		WorkerThreadPool.wait_for_task_completion(_travel_task)
+		_travel_task = -1
+	if chunk_source != null: chunk_source.close()
 	# Hud переживает игру; удалить только обработчики этой сцены, включая панель поселения.
 	if is_instance_valid(hud):
 		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to]]
@@ -665,8 +690,21 @@ func travel_to(place: Dictionary) -> void:
 	crash.abort()
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
-	player = PlayerState.arrive(world, heights, place)
+	var arriving := PlayerState.arrive(world, heights, place)
+	if chunk_source != null:
+		set_paused(true)
+		var source := chunk_source
+		var at := Vector2(arriving.x, arriving.z)
+		_travel_task = WorkerThreadPool.add_task(func() -> void:
+			source.finish()
+			source.prewarm([at], NEAR), true, "Место прибытия")
+		while not WorkerThreadPool.is_task_completed(_travel_task): await get_tree().process_frame
+		WorkerThreadPool.wait_for_task_completion(_travel_task)
+		_travel_task = -1
+		set_paused(false)
+	player = arriving
 	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
+	if chunk_source != null: chunk_source.finish_startup()
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 	if place.kind != "peak":
 		# лицом к костру или к середине озера
@@ -996,6 +1034,7 @@ func _light_night(pos: Vector3, t: float) -> void:
 func _process(delta: float) -> void:
 	if player == null:
 		return
+	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
 	hud.lock_hint.visible = not paused and not _settlement_open() and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if paused:
 		return

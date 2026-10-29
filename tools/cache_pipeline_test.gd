@@ -75,7 +75,7 @@ func run() -> void:
 	var base := Heightfield.new(h.world, false)
 	check(Surface.restore(h.world, Surface.capture(base, "base"), "base") != null, "base surface restores independently from roads")
 	var arrays := TerrainBuilder.build_arrays(h.world, h)
-	TerrainBuilder.refine_arrays(arrays, h.world, h)
+	# build_arrays already applies refinement when the supplied surface is final.
 	var pieces := PlanTerrain.partition(arrays)
 	var water := WaterBuilder.prepare(h.world, h)
 	var water_pieces := [WaterBuilder.partition_arrays(water[0]), WaterBuilder.partition_arrays(water[1])]
@@ -109,6 +109,9 @@ func run() -> void:
 	await _test_regions()
 	_test_world(cache)
 	cache.wait_writes()
+	await finish_suite(cache)
+
+func finish_suite(_cache: WorldCache) -> void:
 	print("cache_pipeline: ", checks, " checks, failures=", fails)
 	quit(1 if fails else 0)
 

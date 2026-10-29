@@ -26,6 +26,10 @@ var from_cache := false   # мир взят из WorldCache (10.0) целико�
 var timings := {}
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
 var surface_hit := false
+var chunk_source: RefCounted
+var opening_spot := {}
+var opening_prepared := false
+var startup_at := Vector2.INF
 
 
 ## Пикселей текстуры рельефа на клетку. В JS-версии 8 / 6 / 4, здесь меньше: в GDScript запекание
@@ -36,7 +40,7 @@ static func px_for(size: int) -> int:
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, retried := false) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, retried := false, start_at := Vector2.INF) -> WorldLoader:
 	if services == null:
 		services = GameContext.scope
 	var r := WorldLoader.new()
@@ -45,6 +49,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var px := px_for(WorldGenerator.PLAN_SIZE) # одинаковая детализация одного мира при любом окне
 	var side := Thread.new()
 	var started := Time.get_ticks_usec()
+	var profile_before: Dictionary = services.resource_profile.stamp() if services.resource_profile != null else {}
 	if services.cache.enabled:
 		services.cache.wait_writes()
 		r.timings.previous_write_wait_ms = (Time.get_ticks_usec() - started) / 1000.0
@@ -180,7 +185,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 			services.cache.wait_writes()
 			services.cache.invalidate_from(seed_text, size, 1)
 		if not retried:
-			return load_world(seed_text, size, on_progress, services, true)
+			return load_world(seed_text, size, on_progress, services, true, start_at)
 		r.error = "Не удалось подготовить мир: план трассы стартовой области устарел и после пересоздания."
 		return r
 	# Откат: трасса добавлена в мир, но применить её не удалось — мир с недостроенным путём не публикуется. Кэш мира
@@ -192,17 +197,53 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 			services.cache.invalidate_from(seed_text, size, 1)
 		StageTrailPlan.skip[seed_text] = true
 		if not retried:
-			return load_world(seed_text, size, on_progress, services, true)
+			return load_world(seed_text, size, on_progress, services, true, start_at)
 		r.error = "Не удалось подготовить мир: трасса стартовой области не применилась. " + "; ".join(r.trail.get("errors", PackedStringArray()))
 		return r
 	if view.is_empty() and services.cache.enabled:
 		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	if services.cache.enabled and not r.surface_hit:
-		services.cache.save_surface(seed_text, size, {heights = Surface.capture(r.heights, "final"), trail = r.trail}, r.terrain_chunks, r.water_chunks)
+		var ticket := services.cache.save_surface(seed_text, size, {heights = Surface.capture(r.heights, "final"), trail = r.trail}, r.terrain_chunks, r.water_chunks)
+		var wait_started := Time.get_ticks_usec()
+		services.cache.wait_writes() # publishing file references now requires this result
+		r.timings.surface_write_wait_ms = (Time.get_ticks_usec() - wait_started) / 1000.0
+		if not ticket.result.is_empty():
+			r.terrain_chunks = ticket.result.chunks
+			r.water_chunks.assign(ticket.result.water_chunks)
+	if services.cache.enabled: r.prepare_streaming(start_at)
 	r.timings.cache_io = services.cache.take_io_timings()
 	r.timings.profile_origin = "stored_generation" if r.from_cache else "current_generation"
 	r.timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0
+	if services.resource_profile != null:
+		var kind := "same_process_reentry" if services.loaded_worlds > 0 else "disk_load"
+		if not r.from_cache: kind = "partial_generation" if r.timings.get("cache_layers", 0) > 0 else "cold_generation"
+		services.resource_profile.phase(kind, profile_before, services, r.timings.duplicate(true))
+	services.loaded_worlds += 1
 	return r
+
+
+func prepare_streaming(start_at := Vector2.INF) -> void:
+	if chunk_source != null: return
+	var t := Time.get_ticks_usec()
+	var home := PlayerState.spawn(world, heights)
+	var points: Array[Vector2] = [Vector2(home.x, home.z)]
+	opening_prepared = true
+	if start_at.is_finite():
+		points.push_front(start_at)
+	else:
+		var rng := RandomNumberGenerator.new()
+		rng.randomize()
+		opening_spot = preload("res://scripts/game/opening_route.gd").choose(world, heights, rng)
+		if not opening_spot.is_empty(): points.push_front(Vector2(opening_spot.position.x, opening_spot.position.z))
+	startup_at = points[0]
+	if water_chunks.is_empty():
+		for arrays: Array in water_arrays: water_chunks.append(WaterBuilder.partition_arrays(arrays))
+	if water_chunks.size() != 2: water_chunks.assign([{}, {}])
+	chunk_source = preload("res://scripts/render/chunk_source.gd").new()
+	chunk_source.setup(service_scope.cache, world, heights, cache_size, [terrain_chunks, water_chunks[0], water_chunks[1]], service_scope.cpu_budget)
+	chunk_source.prewarm(points, PlanTerrain.RADIUS / 2.0)
+	water_arrays.assign([[], []])
+	timings.startup_prefetch_ms = (Time.get_ticks_usec() - t) / 1000.0
 
 
 ## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
@@ -239,12 +280,10 @@ func _paint(w: WorldData, px: int) -> Array:
 
 ## Damaged derivative chunk: recover from the restored physics surface, never regenerate the world.
 static func rebuild_chunk(key: Vector2i, w: WorldData, h: Heightfield) -> Array:
-	var arrays := TerrainBuilder.build_arrays(w, h)
-	TerrainBuilder.refine_arrays(arrays, w, h)
-	return PlanTerrain.partition(arrays).get(key, [])
+	return TerrainBuilder.build_chunk(w, h, key)
 
 
 static func rebuild_water_chunk(key: Vector2i, layer: int, w: WorldData, cache: WorldCache, size: int) -> Array:
 	var base := Surface.restore(w, cache.load_artifact(w.seed_text, size, "base"), "base")
 	if base == null: base = Heightfield.new(w, false)
-	return WaterBuilder.partition_arrays(WaterBuilder.prepare(w, base)[layer]).get(key, [])
+	return WaterBuilder.build_chunk(w, base, key, layer)

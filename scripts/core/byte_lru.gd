@@ -1,10 +1,15 @@
 extends RefCounted
 ## Insertion order is recency; only immutable CPU data, never nodes/native resources.
 var limit := 64 * 1024 * 1024
-var bytes := 0
+var _bytes := 0
+var budget: RefCounted
+var bytes: int:
+	get: return budget.owner_bytes(_owner_id) if budget != null else _bytes
 var entries := {}
+var _owner_id := get_instance_id()
 
 func get_value(key: Variant) -> Variant:
+	if budget != null: return budget.get_value(_owner_id, key)
 	if not entries.has(key): return null
 	var entry: Dictionary = entries[key]
 	entries.erase(key)
@@ -12,22 +17,32 @@ func get_value(key: Variant) -> Variant:
 	return entry.value
 
 func put(key: Variant, value: Variant) -> bool:
+	if budget != null: return budget.put(_owner_id, key, value, size_of(value), limit)
 	erase(key)
 	var n := size_of(value)
 	if n > limit: return false
 	while bytes + n > limit and not entries.is_empty(): erase(entries.keys()[0])
 	entries[key] = {value = value, bytes = n}
-	bytes += n
+	_bytes += n
 	return true
 
 func erase(key: Variant) -> void:
+	if budget != null:
+		budget.erase(_owner_id, key)
+		return
 	if not entries.has(key): return
-	bytes -= entries[key].bytes
+	_bytes -= entries[key].bytes
 	entries.erase(key)
 
 func clear() -> void:
+	if budget != null:
+		budget.clear_owner(_owner_id)
+		return
 	entries.clear()
-	bytes = 0
+	_bytes = 0
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_PREDELETE and budget != null: budget.clear_owner(_owner_id)
 
 static func size_of(value: Variant) -> int:
 	match typeof(value):

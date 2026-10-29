@@ -22,32 +22,36 @@ static func _normal(hv: PackedFloat32Array, W: int, H: int, i: int, j: int) -> V
 
 
 ## Только CPU-массивы: подготовка в фоне, загрузка на GPU — в GameWorld.start.
-static func build_arrays(w: WorldData, heights: Heightfield) -> Array:
+static func build_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) -> Array:
 	var W := w.W
 	var H := w.H
 	var hv := heights.hv
 	if W < 2 or H < 2:
 		return []
+	var area := Rect2i(0, 0, W - 1, H - 1) if not cells.has_area() else cells.intersection(Rect2i(0, 0, W - 1, H - 1))
+	if not area.has_area(): return []
+	var columns := area.size.x + 1
+	var rows := area.size.y + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
 	var uv := PackedVector2Array()
-	pos.resize(w.N)
-	nor.resize(w.N)
-	uv.resize(w.N)
-	for j in H:
-		for i in W:
-			var k := j * W + i
-			pos[k] = Vector3((i + 0.5) * TILE, hv[k], (j + 0.5) * TILE)
+	pos.resize(columns * rows)
+	nor.resize(pos.size())
+	uv.resize(pos.size())
+	for j in range(area.position.y, area.end.y + 1):
+		for i in range(area.position.x, area.end.x + 1):
+			var k := (j - area.position.y) * columns + i - area.position.x
+			pos[k] = Vector3((i + 0.5) * TILE, hv[j * W + i], (j + 0.5) * TILE)
 			uv[k] = Vector2((i + 0.5) / W, (j + 0.5) / H)
 			nor[k] = _normal(hv, W, H, i, j)
 	var idx := PackedInt32Array()
-	idx.resize((W - 1) * (H - 1) * 6)
+	idx.resize(area.get_area() * 6)
 	var p := 0
-	for j in H - 1:
-		for i in W - 1:
-			var a := j * W + i
+	for j in area.size.y:
+		for i in area.size.x:
+			var a := j * columns + i
 			var b := a + 1
-			var c := a + W
+			var c := a + columns
 			var d := c + 1
 			idx[p] = a
 			idx[p + 1] = b
@@ -63,8 +67,14 @@ static func build_arrays(w: WorldData, heights: Heightfield) -> Array:
 	arrays[Mesh.ARRAY_TEX_UV] = uv
 	arrays[Mesh.ARRAY_INDEX] = idx
 	if heights.road_refinement != null:
-		refine_arrays(arrays, w, heights)
+		refine_arrays(arrays, w, heights, area)
 	return arrays
+
+
+## One requested chunk plus a cell halo. Global normals, patch ordering and UVs are unchanged.
+static func build_chunk(w: WorldData, heights: Heightfield, key: Vector2i) -> Array:
+	var area := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS).grow(1)
+	return PlanTerrain.partition(build_arrays(w, heights, area)).get(key, [])
 
 
 ## Поправить высоты меша в клетках changed (и нормали вокруг них) по heights.hv
@@ -93,10 +103,14 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 
 
 ## Заменить только квадраты у путей сеткой 1 м. Это часть земли, отдельной накладной ленты нет.
-static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> void:
+static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cells := Rect2i()) -> void:
 	var refinement := heights.road_refinement
 	if arrays.is_empty() or refinement == null:
 		return
+	var area := Rect2i(0, 0, w.W - 1, w.H - 1) if not cells.has_area() else cells
+	var patches := {}
+	for key: int in refinement.patches:
+		if area.has_point(Vector2i(key % w.W, key / w.W)): patches[key] = refinement.patches[key]
 	var pos: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
 	var nor: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
 	var uv: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV]
@@ -108,19 +122,19 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 	var idx := PackedInt32Array()
 	var old: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 	# Число индексов известно заранее: каждый дорожный квадрат заменяется DIV² квадратами.
-	idx.resize(old.size() + refinement.patches.size() * (RoadRefinement.DIV * RoadRefinement.DIV - 1) * 6)
+	idx.resize(old.size() + patches.size() * (RoadRefinement.DIV * RoadRefinement.DIV - 1) * 6)
 	var write := 0
 	var vertex_ids := {} # общие метровые вершины соседних патчей не дублируются
-	for j in w.H - 1:
-		for i in w.W - 1:
+	for j in range(area.position.y, area.end.y):
+		for i in range(area.position.x, area.end.x):
 			if not refinement.patches.has(j * w.W + i):
-				var at := (j * (w.W - 1) + i) * 6
+				var at := ((j - area.position.y) * area.size.x + i - area.position.x) * 6
 				for k in 6:
 					idx[write] = old[at + k]
 					write += 1
 	var grid := PackedInt32Array()
 	grid.resize(RoadRefinement.STRIDE * RoadRefinement.STRIDE)
-	for key: int in refinement.patches:
+	for key: int in patches:
 		var p: Dictionary = refinement.patches[key]
 		var cx := key % w.W
 		var cz := key / w.W
@@ -146,7 +160,7 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield) -> 
 				else:
 					normal = _local_normal(heights, px, pz)
 				if x % RoadRefinement.DIV == 0 and z % RoadRefinement.DIV == 0:
-					id = (cz + z / RoadRefinement.DIV) * w.W + cx + x / RoadRefinement.DIV
+					id = (cz + z / RoadRefinement.DIV - area.position.y) * (area.size.x + 1) + cx + x / RoadRefinement.DIV - area.position.x
 					pos[id].y = p.h[n]
 					nor[id] = normal
 					colors[id] = p.color[n]

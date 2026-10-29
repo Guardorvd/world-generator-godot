@@ -27,6 +27,7 @@ var water_layer := -1
 var cache_size := 0
 var _uncached_key: Variant = null
 var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
+var source: RefCounted
 
 
 ## Один проход по готовым треугольникам в потоке WorldLoader. Никакой новой триангуляции:
@@ -73,15 +74,17 @@ static func partition_reference(arrays: Array) -> Dictionary:
 	return out
 
 
-func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null) -> void:
+func setup(prepared: Dictionary, mat: Material, cache: WorldCache = null, w: WorldData = null, h: Heightfield = null, shared_source: RefCounted = null) -> void:
 	chunks = prepared
 	material = mat
 	_cache = cache
 	_world = w
 	_heights = h
+	source = shared_source
 
 
 func _read_arrays(key: Vector2i) -> Array:
+	if source != null: return source.read(water_layer, key)
 	var ref: Dictionary = chunks[key]
 	var data: Variant = _cache._read(_cache.dir.path_join(ref.file), ref.key)
 	if data is Dictionary and preload("res://scripts/game/surface_snapshot.gd").mesh_valid(data.get("arrays"), false):
@@ -92,6 +95,7 @@ func _read_arrays(key: Vector2i) -> Array:
 
 
 func _arrays(key: Vector2i) -> Variant:
+	if source != null: return source.ready(water_layer, key)
 	if _uncached_key == key: return _uncached_arrays
 	return chunks[key] if chunks[key] is Array else _cpu.get_value(key)
 
@@ -111,6 +115,7 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
+	if source != null: source.poll()
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -134,11 +139,18 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		pending.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
 			return distance_to_chunk(a, p) + distance_to_chunk(a, ahead) > distance_to_chunk(b, p) + distance_to_chunk(b, ahead))
 	var uploaded := false
+	if source != null:
+		for offset in mini(3, pending.size()):
+			var at: Vector2i = pending[pending.size() - 1 - offset]
+			source.request(water_layer, at, distance_to_chunk(at, p))
 	while not pending.is_empty() and (force and distance_to_chunk(pending.back(), p) <= near or allow_apply and not uploaded):
 		var key: Vector2i = pending.back()
 		var arrays: Variant = _arrays(key)
 		if arrays == null:
-			if force:
+			if source != null:
+				source.request(water_layer, key, distance_to_chunk(key, p))
+				break
+			elif force:
 				arrays = _read_arrays(key)
 				_cpu.put(key, arrays)
 			else:
@@ -149,6 +161,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 					_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
 				break
 		pending.pop_back()
+		var started := Time.get_ticks_usec()
 		var mesh := ArrayMesh.new()
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var node := MeshInstance3D.new()
@@ -157,6 +170,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(node)
 		nodes[key] = node
+		if source != null: source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
 		if _uncached_key == key:
 			_uncached_key = null
 			_uncached_arrays = []

@@ -21,7 +21,8 @@ static func _replace(path: String, bytes: PackedByteArray, preserve_backup: bool
 	err = f.get_error()
 	f.close()
 	if err != OK: return err
-	if FileAccess.get_file_as_bytes(tmp) != bytes: return ERR_FILE_CORRUPT
+	# Bounded verification buffer instead of another complete file-sized allocation.
+	if digest_file(tmp) != Util.sha256(bytes): return ERR_FILE_CORRUPT
 	# A missing primary means an earlier rotation was interrupted: preserve its backup.
 	if FileAccess.file_exists(path) and preserve_backup:
 		err = DirAccess.remove_absolute(path) # known invalid primary; keep the readable backup
@@ -33,6 +34,17 @@ static func _replace(path: String, bytes: PackedByteArray, preserve_backup: bool
 		err = DirAccess.rename_absolute(path, path + ".bak")
 		if err != OK: return err
 	return DirAccess.rename_absolute(tmp, path)
+
+static func digest_file(path: String) -> PackedByteArray:
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null: return PackedByteArray()
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	while file.get_position() < file.get_length():
+		var bytes := file.get_buffer(mini(256 * 1024, file.get_length() - file.get_position()))
+		if bytes.is_empty(): return PackedByteArray()
+		ctx.update(bytes)
+	return ctx.finish()
 
 static func remove(path: String) -> Error:
 	var result := OK

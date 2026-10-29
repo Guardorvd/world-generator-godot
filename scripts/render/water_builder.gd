@@ -87,15 +87,16 @@ static func flat_mesh(arrays: Array, mat: Material, node_name: String) -> MeshIn
 
 ## Режем плоскость озера по той же диагонали и высотам, что у земли.
 ## LAKE_DROP убирает наложение на заполненные впадины у берега.
-static func _lake_arrays(w: WorldData, heights: Heightfield) -> Array:
+static func _lake_arrays(w: WorldData, heights: Heightfield, cells := Rect2i()) -> Array:
 	var W := w.W
 	var H := w.H
 	var pos := PackedVector3Array()
 	var idx := PackedInt32Array()
 	var lake := w.lake
 	var filled := w.filled
-	for j in H - 1:
-		for i in W - 1:
+	var area := Rect2i(0, 0, W - 1, H - 1) if not cells.has_area() else cells.intersection(Rect2i(0, 0, W - 1, H - 1))
+	for j in range(area.position.y, area.end.y):
+		for i in range(area.position.x, area.end.x):
 			var a := j * W + i
 			if lake[a] == 0 and lake[a + 1] == 0 and lake[a + W] == 0 and lake[a + W + 1] == 0:
 				continue
@@ -131,7 +132,7 @@ static func _clip_lake(tri: Array, level: float, pos: PackedVector3Array, idx: P
 
 
 ## Реки: ленты вдоль средних линий из Heightfield.ribbons
-static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
+static func _river_arrays(ribbons: Array, heights: Heightfield = null, region := Rect2()) -> Array:
 	var pos := PackedVector3Array()
 	var flow := PackedVector2Array()
 	var normals := PackedVector3Array()
@@ -156,6 +157,13 @@ static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 			conditions.append(Color(motion.z, motion.w, 0.0, 1.0))
 		# Берега уже посчитаны Heightfield: геометрия и проверка глубины совпадают.
 		for k in n - 1:
+			if region.has_area():
+				var lo := Vector2(INF, INF)
+				var hi := -lo
+				for v: Vector3 in [pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].right]:
+					lo = lo.min(Vector2(v.x, v.z))
+					hi = hi.max(Vector2(v.x, v.z))
+				if not region.intersects(Rect2(lo, hi - lo).grow(0.001)): continue
 			pos.append_array([pts[k].left, pts[k].right, pts[k + 1].left, pts[k + 1].left, pts[k].right, pts[k + 1].right])
 			for v in [k, k, k + 1, k + 1, k, k + 1]:
 				flow.append(directions[v])
@@ -177,3 +185,10 @@ static func _river_arrays(ribbons: Array, heights: Heightfield = null) -> Array:
 		arrays[Mesh.ARRAY_TEX_UV2] = banks
 		arrays[Mesh.ARRAY_COLOR] = character
 	return arrays
+
+
+static func build_chunk(w: WorldData, heights: Heightfield, key: Vector2i, layer: int) -> Array:
+	var cells := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS)
+	var bounds := Rect2(Vector2(cells.position) * TILE + Vector2.ONE * TILE * 0.5, Vector2(cells.size) * TILE)
+	var arrays := _lake_arrays(w, heights, cells.grow(1)) if layer == 0 else _river_arrays(heights.ribbons, heights, bounds)
+	return partition_arrays(arrays).get(key, [])

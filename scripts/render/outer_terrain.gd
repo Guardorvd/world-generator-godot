@@ -32,9 +32,11 @@ var _task_limit := clampi(OS.get_processor_count() / 2, 1, TASKS)
 var _cpu := preload("res://scripts/core/byte_lru.gd").new()
 var _cpu_lock := Mutex.new()
 var _cpu_epoch := 0
+var cpu_budget: RefCounted
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
+	_cpu.budget = cpu_budget
 	world = w
 	heights = h
 	land = w.outer
