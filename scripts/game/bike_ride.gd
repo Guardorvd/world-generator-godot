@@ -85,6 +85,10 @@ const CONTACT_MIN := 0.02    # легче этого колесо не держ�
 const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) седок стоит и тяжесть поперёк не тянет велосипед вбок
 ## Шина набирает силу не мгновенно, а за путь (длина релаксации): скачки нагрузки от каждой кочки сглаживаются,
 ## а гребень роллера или ложбина, длинные по сравнению с ней, меняют запас сцепления полностью.
+## Колесо и препятствие: удар о кромку отнимает у колеса скорость по углу встречи (1 − cos), торможение рамы —
+## по доле массы на этом колесе (нагрузка шины). Переднее колесо, остановленное резче ENDO_DV, бросает седока через руль.
+const IMPACT_ANGLE := 0.12   # рад: плавнее этого подъём опоры — накат, а не удар
+const ENDO_DV := 5.0         # м/с: такая потеря скорости переднего колеса (при обычной нагрузке) — полёт через руль
 const TIRE_RELAX := 0.8      # м пути
 const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на большой скорости
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
@@ -122,6 +126,8 @@ var use_f := 0.0      # использованный запас сцеплени
 var use_r := 0.0
 var _rest_f := 0.0    # цель пружин на прошлом такте: отклонение от неё — сила подвески сверх равновесия
 var _rest_r := 0.0
+var _on_f := false       # колесо стоит на препятствии (удар о кромку уже засчитан)
+var _on_r := false
 var riding := false
 var lean := 0.0       # крен в повороте, радианы
 var tilt := 0.0       # наклон вдоль склона или полёта, радианы
@@ -150,7 +156,7 @@ var _yaw_rate := 0.0   # фактическая угловая скорость 
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
 var crashed := false  # седок упал: жёстко приземлился или врезался в стену (GameWorld покажет падение и сбросит флаг)
-enum CrashCause { FALL, COLLISION, BRAKING }
+enum CrashCause { FALL, COLLISION, BRAKING, OBSTACLE }
 var crash_cause := CrashCause.FALL
 var crash_normal := Vector3.UP # наружу от препятствия или опоры
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
@@ -281,6 +287,8 @@ func reset_motion() -> void:
 	use_r = 0.0
 	_rest_f = 0.0
 	_rest_r = 0.0
+	_on_f = false
+	_on_r = false
 
 
 ## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
@@ -321,6 +329,16 @@ func grade(heights: Heightfield) -> float:
 func _slope(heights: Heightfield) -> float:
 	var fx := -sin(heading) * HUB
 	var fz := -cos(heading) * HUB
+	if contact_model:
+		# по опорам колёс: на бревне и валуне тоже подъём, который надо одолеть
+		return (_wheel_ground(x + fx, z + fz, heights) - _wheel_ground(x - fx, z - fz, heights)) / (2.0 * HUB)
+	return _ground_slope(heights)
+
+
+## Уклон самой земли вдоль курса, без препятствий
+func _ground_slope(heights: Heightfield) -> float:
+	var fx := -sin(heading) * HUB
+	var fz := -cos(heading) * HUB
 	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) / (2.0 * HUB)
 
 
@@ -340,7 +358,15 @@ func _wheel_ground(px: float, pz: float, heights: Heightfield) -> float:
 	var dz := -cos(heading) * WHEEL_REACH
 	var arc := sqrt(WHEEL_R * WHEEL_R - WHEEL_REACH * WHEEL_REACH) - WHEEL_R
 	best = maxf(best, heights.surface_at(px + dx, pz + dz, y) + arc)
-	return maxf(best, heights.surface_at(px - dx, pz - dz, y) + arc)
+	best = maxf(best, heights.surface_at(px - dx, pz - dz, y) + arc)
+	if contact_model and heights.obstacles != null:
+		best = maxf(best, heights.obstacles.wheel_support(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX))
+	return best
+
+
+## Низкие препятствия встречает колесо, а не рама (модель двух контактов)
+func _climb() -> float:
+	return ForestObstacles.CLIMB_MAX if contact_model else 0.0
 
 
 ## Нагрузка от кривизны профиля вдоль курса и поперечный наклон полотна; оба сглажены от шума сетки.
@@ -440,14 +466,14 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		var free := func(px: float, pz: float) -> bool:
 			if free_now:
 				return fits(px, pz, hd, w, heights)
-			if PlayerState.is_passable(w, heights, px, pz, y):
+			if PlayerState.is_passable(w, heights, px, pz, y, 0.0, false, _climb()):
 				return true
 			# 11.7: после прыжка середина внутри валуна или бревна: наружу выехать можно, иначе застрял бы
 			# (прыжок ниже верха валуна), а вглубь и в сторону — нет
 			if heights.obstacles == null or not w.accessible(px / GameConfig.TILE, pz / GameConfig.TILE) or not heights.known(px, pz) \
 					or heights.depth_at(px, pz, y) >= GameConfig.FORD_DEPTH:
 				return false
-			return heights.obstacles.normal(x, z, y, 0.0).dot(Vector2(px - x, pz - z)) > 0.0
+			return heights.obstacles.normal(x, z, y, 0.0, _climb()).dot(Vector2(px - x, pz - z)) > 0.0
 		# 7.7: вдоль ствола и бревна велосипед скользит по касательной
 		var around := Callable()
 		if heights.obstacles != null:
@@ -466,7 +492,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			var ahead := wanted.normalized() * maxf(PlayerState.PIECE * 0.5, minf(full - moved, PlayerState.PIECE) + 0.01)
 			var solid := false
 			for axle: float in [-AXLE, 0.0, AXLE]:
-				if not PlayerState.is_passable(w, heights, x + ahead.x - sin(heading) * axle, z + ahead.z - cos(heading) * axle, y, BODY_R, true):
+				if not PlayerState.is_passable(w, heights, x + ahead.x - sin(heading) * axle, z + ahead.z - cos(heading) * axle, y, BODY_R, true, _climb()):
 					solid = true
 					break
 			# Удар о предмет опасен и в прыжке; вода и граница открытой земли не являются стеной.
@@ -675,6 +701,11 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var fz := -cos(heading) * HUB
 	var gf := _wheel_ground(x + fx, z + fz, heights)
 	var gr := _wheel_ground(x - fx, z - fz, heights)
+	if contact_model and heights.obstacles != null:
+		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _on_f or _fresh, tire_f, true)
+		if crashed:
+			return
+		_on_r = _wheel_hit(heights, x - fx, z - fz, gr, _on_r or _fresh, tire_r, false)
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var wild := BUMP * rough * (1.0 - path_weight)
 	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
@@ -717,6 +748,35 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	_g_r = gr
 	_gv_f = vf
 	_gv_r = vr
+
+
+## Колесо и препятствие: в такт, когда колесо встало на препятствие, удар о кромку отнимает у колеса скорость
+## 1 − cos(угла встречи) — угол дуги колеса над кромкой в точке первого касания (ForestObstacles.wheel_onset), за вычетом
+## уклона земли; раму тормозит на долю массы этого колеса (нагрузка шины). Угол берётся из геометрии, а не из шага
+## движения, поэтому не зависит от скорости и частоты тактов. Дальше колесо поднимается по дуге, подъём тормозит
+## тяжестью (_slope по опорам колёс). Переднее колесо, потерявшее больше ENDO_DV (лёгкое — меньше), бросает седока
+## через руль. Возвращает: стоит ли колесо на препятствии.
+func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, was_on: bool, load: float, front: bool) -> bool:
+	var ground := heights.surface_at(px, pz, y)
+	if support <= ground + 0.005:
+		return false
+	if was_on:
+		return true
+	var angle := heights.obstacles.wheel_onset(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, ground) - atan(maxf(0.0, _ground_slope(heights) * signf(speed)))
+	if angle < IMPACT_ANGLE:
+		return true
+	var dv := absf(speed) * (1.0 - cos(minf(angle, PI * 0.5)))
+	var share := clampf(load, 0.05, 1.0)
+	if front and dv * share / 0.5 > ENDO_DV:
+		_crash(vy, Vector3(-sin(heading), 0.6, -cos(heading)), CrashCause.OBSTACLE)
+		return true
+	speed = signf(speed) * maxf(0.0, absf(speed) - dv * share)
+	if front:
+		squash_fv += dv * 0.3
+		land_impact = maxf(land_impact, dv)
+	else:
+		squash_rv += dv * 0.3
+	return true
 
 
 ## Кочка под колесом на отметке пути d, 0..1
@@ -877,7 +937,7 @@ func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void
 ## с серединой в (px, pz) и курсом hd; ноль, если не задевает
 func obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> Vector2:
 	for side: float in [1.0, 0.0, -1.0]:
-		var n := heights.obstacles.normal(px - sin(hd) * AXLE * side, pz - cos(hd) * AXLE * side, y, BODY_R)
+		var n := heights.obstacles.normal(px - sin(hd) * AXLE * side, pz - cos(hd) * AXLE * side, y, BODY_R, _climb())
 		if n != Vector2.ZERO:
 			return n
 	return Vector2.ZERO
@@ -887,9 +947,10 @@ func obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> V
 func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -> bool:
 	var fx := -sin(hd) * AXLE
 	var fz := -cos(hd) * AXLE
-	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R)
-		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R)
-		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R))
+	var climb := _climb()
+	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb)
+		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb)
+		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb))
 
 
 ## Доля скорости, которая остаётся после касания стены: moved — путь, который всё же прошли, full — весь путь за кадр

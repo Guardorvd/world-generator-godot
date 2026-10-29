@@ -158,7 +158,8 @@ static func surface(info: Dictionary) -> int:
 ## на мосту (тогда вода под ним не мешает) и упирается ли в перила моста или стену туннеля.
 ## Дома, стены и (с 7.7) крупные стволы, валуны и валежник держат тело на расстоянии r,
 ## вода и край известной земли проверяются по центру. objects_only — только твёрдые объекты, для причины удара.
-static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false) -> bool:
+## climb — велосипед модели двух контактов: низкие препятствия встречает колесо (ForestObstacles.hits)
+static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false, climb := 0.0) -> bool:
 	if not objects_only and (not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z)):
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
@@ -179,7 +180,7 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 				return false
 	if heights.wall_at(x, z, feet, r):
 		return false
-	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r):
+	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r, climb):
 		return false
 	return objects_only or heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
 

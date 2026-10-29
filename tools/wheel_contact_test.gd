@@ -7,6 +7,7 @@ const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const ROLLER := 40.0
 const CAMBER := 100.0
 const ROOTS := 150.0
+const LOG := 70.0
 var failures := 0
 var checks := 0
 
@@ -102,6 +103,34 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 	return out
 
 
+## Накатом к бревну на станции LOG: проехал / встал / через руль (OBSTACLE) / упал иначе
+func over_log(h: Heightfield, d: TrailDefinition, contact: bool, speed: float) -> Dictionary:
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	b.contact_model = contact
+	var at := d.point_at(LOG - 10.0)
+	b.x = at.x
+	b.z = at.y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(LOG - 10.0)
+	b.mount(p)
+	b.speed = speed
+	var control := BikeController.new()
+	var before := speed
+	var still := 0.0
+	for tick in 60 * 10:
+		var station := d.nearest(Vector2(b.x, b.z)).x
+		var hold := clampf((speed - b.speed) * 0.8, 0.0, 1.0) if station < LOG - 3.0 else 0.0
+		if station < LOG - 1.5: before = b.speed
+		control.ride(1.0 / 60.0, p, b, h.world, h, hold, 0.0, false, false, false)
+		if b.crashed:
+			return {result = "через руль" if b.crash_cause == BikeRide.CrashCause.OBSTACLE else "упал", before = before, after = b.speed}
+		if station > LOG + 2.0: return {result = "проехал", before = before, after = b.speed}
+		still = still + 1.0 / 60.0 if absf(b.speed) < 0.1 else 0.0
+		if still > 1.0: return {result = "встал", before = before, after = 0.0}
+	return {result = "не доехал", before = before, after = b.speed}
+
+
 func run() -> void:
 	var d := section()
 	var kit: Array[TrailDefinition] = [d]
@@ -161,5 +190,30 @@ func run() -> void:
 	print("Корни: нагрузка переднего колеса %.2f … %.2f доли веса (стоя 0,5)" % [roots.min_load_f, roots.max_load_f])
 	check(technical.bumps.size() > 0, "корни разложены (%d)" % (technical.bumps.size() / ForestObstacles.BUMP_STRIDE))
 	check(roots.max_load_f > 0.65 and roots.min_load_f < 0.35, "корень меняет нагрузку переднего колеса в обе стороны")
+	# 4. Бревно поперёк: в прежней модели — стена; в новой колесо встречает кромку: медленно встаёт, средне
+	# переваливает с потерей скорости, быстро — полёт через руль. Низкое бревно проезжается на любой скорости.
+	for tall: float in [0.1, 0.4]:
+		var at := d.point_at(LOG)
+		var base := h.ground_at(at.x, at.y)
+		var log := PackedFloat32Array([at.x - 2.0, at.y, at.x + 2.0, at.y, tall * 0.5, base, base + tall])
+		h.obstacles.set_trail(technical.collide + log, technical.bumps)
+		h.obstacles.update(at.x, at.y, PackedFloat32Array(), 1, true)
+		var line := PackedStringArray()
+		for speed: float in [2.5, 5.0, 10.0]:
+			for contact in [false, true]:
+				var r := over_log(h, d, contact, speed)
+				line.append("%s %.0f м/с: %s %.1f→%.1f" % ["новая" if contact else "старая", speed, r.result, r.before, r.after])
+				if not contact:
+					check(r.result != "проехал", "%.1f м, %.0f м/с, прежняя модель: бревно — стена" % [tall, speed])
+				elif tall < 0.2:
+					check(r.result == "проехал" and r.after > r.before * 0.6, "%.1f м, %.0f м/с: низкое бревно проезжается, теряя меньше 40%% скорости" % [tall, speed])
+				elif speed < 3.0:
+					check(r.result == "встал", "%.1f м, %.0f м/с накатом: колесо упирается, велосипед встаёт без падения" % [tall, speed])
+				elif speed < 6.0:
+					check(r.result == "проехал" and r.after < r.before * 0.75, "%.1f м, %.0f м/с: переваливает с заметной потерей скорости" % [tall, speed])
+				else:
+					check(r.result == "через руль", "%.1f м, %.0f м/с: полёт через руль" % [tall, speed])
+		print("Бревно %.1f м: %s" % [tall, " · ".join(line)])
+	h.obstacles.set_trail(technical.collide, technical.bumps)
 	print("wheel_contact: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)

@@ -132,7 +132,7 @@ func start(view: BikeView, b: BikeRide, velocity: Vector3, heights: Heightfield)
 			_side = signf(away)
 	else:
 		style = FallStyle.SIDE_SLIDE if absf(b.lean) > 0.15 else FallStyle.LANDING
-	if b.crash_cause == BikeRide.CrashCause.BRAKING:
+	if b.crash_cause == BikeRide.CrashCause.BRAKING or b.crash_cause == BikeRide.CrashCause.OBSTACLE:
 		style = FallStyle.OVER_BARS
 		_tumble = 1.0
 		_severity = smoothstep(6.0, 20.0, velocity.length())

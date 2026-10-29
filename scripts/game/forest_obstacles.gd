@@ -20,6 +20,9 @@ const TRUNK := {
 }
 const ROCK_R := 1.15    # валун: сфера 1,1 м, сплюснутая до 1,43 × 0,83 × 1,1, при масштабе 1
 const ROCK_TOP := 1.07
+## Модель двух контактов: препятствие не выше этого (бревно, невысокий валун) встречает колесо, а не раму —
+## колесо накатывается на его скруглённую кромку (wheel_support); выше — стена, как прежде, м
+const CLIMB_MAX := 0.45
 
 var world: WorldData
 ## Хозяин — Heightfield.obstacles. Сильная ссылка замкнула бы цикл RefCounted, и мир не освобождался бы
@@ -144,14 +147,15 @@ func _add(ax: float, az: float, bx: float, bz: float, r: float, base: float, top
 
 
 ## Задевает ли тело радиуса r в (x, z) с ногами на высоте feet какое-нибудь препятствие
-func hits(x: float, z: float, feet: float, r: float) -> bool:
-	return _nearest(x, z, feet, r) >= 0
+## climb > 0: препятствия не выше climb (от основания до верха) не держат — их встречает колесо (wheel_support)
+func hits(x: float, z: float, feet: float, r: float, climb := 0.0) -> bool:
+	return _nearest(x, z, feet, r, climb) >= 0
 
 
 ## Нормаль от препятствия, которое задевает тело (наружу, длина 1), или ноль, если не задевает.
 ## По ней тело скользит вдоль ствола и бревна, а велосипед понимает, ударился ли в лоб.
-func normal(x: float, z: float, feet: float, r: float) -> Vector2:
-	var at := _nearest(x, z, feet, r)
+func normal(x: float, z: float, feet: float, r: float, climb := 0.0) -> Vector2:
+	var at := _nearest(x, z, feet, r, climb)
 	if at < 0:
 		return Vector2.ZERO
 	var c := _closest(at, x, z)
@@ -162,7 +166,7 @@ func normal(x: float, z: float, feet: float, r: float) -> Vector2:
 
 
 ## Номер самого глубоко задетого препятствия или -1
-func _nearest(x: float, z: float, feet: float, r: float) -> int:
+func _nearest(x: float, z: float, feet: float, r: float, climb := 0.0) -> int:
 	if data.is_empty():
 		return -1
 	var best := -1
@@ -173,13 +177,74 @@ func _nearest(x: float, z: float, feet: float, r: float) -> int:
 			if list == null:
 				continue
 			for at: int in list:
-				if feet >= data[at + 6]:
+				if feet >= data[at + 6] or data[at + 6] - data[at + 5] <= climb:
 					continue
 				var reach := data[at + 4] + r
 				var gap := reach - Vector2(x, z).distance_to(_closest(at, x, z))
 				if gap > depth:
 					depth = gap
 					best = at
+	return best
+
+
+## Высота нижней точки колеса радиуса wheel_r, стоящего над (x, z) на низких препятствиях (не выше climb), или -INF.
+## Сечение препятствия — скруглённый брус: плоский верх и кромки радиусом ρ = половина высоты (у бревна — круг).
+## Опора — точная огибающая круга колеса над кругом кромки: колесо встречает кромку раньше, чем стоит над ней,
+## и поднимается по дуге; чем выше кромка относительно колеса, тем круче дуга в начале.
+func wheel_support(x: float, z: float, wheel_r: float, climb: float) -> float:
+	var best := -INF
+	if data.is_empty():
+		return best
+	var seen := {}
+	for cy in range(floori((z - wheel_r) / CELL), floori((z + wheel_r) / CELL) + 1):
+		for cx in range(floori((x - wheel_r) / CELL), floori((x + wheel_r) / CELL) + 1):
+			var list: Variant = _grid.get(Vector2i(cx, cy))
+			if list == null:
+				continue
+			for at: int in list:
+				if seen.has(at):
+					continue
+				seen[at] = true
+				var top := data[at + 6]
+				var tall := top - data[at + 5]
+				if tall <= 0.0 or tall > climb:
+					continue
+				var rho := minf(tall * 0.5, data[at + 4])
+				var edge := maxf(0.0, Vector2(x, z).distance_to(_closest(at, x, z)) - (data[at + 4] - rho))
+				var reach := wheel_r + rho
+				if edge >= reach:
+					continue
+				best = maxf(best, top - rho + sqrt(reach * reach - edge * edge) - wheel_r)
+	return best
+
+
+## Угол встречи колеса с кромкой низкого препятствия под (x, z), рад (0 — нет): наклон дуги колеса над кругом кромки
+## в точке первого касания, когда колесо ещё стоит на земле высотой ground. 10 см — около 42°, 40 см — около 75°.
+func wheel_onset(x: float, z: float, wheel_r: float, climb: float, ground: float) -> float:
+	var best := 0.0
+	var top_support := -INF
+	for cy in range(floori((z - wheel_r) / CELL), floori((z + wheel_r) / CELL) + 1):
+		for cx in range(floori((x - wheel_r) / CELL), floori((x + wheel_r) / CELL) + 1):
+			var list: Variant = _grid.get(Vector2i(cx, cy))
+			if list == null:
+				continue
+			for at: int in list:
+				var top := data[at + 6]
+				var tall := top - data[at + 5]
+				if tall <= 0.0 or tall > climb:
+					continue
+				var rho := minf(tall * 0.5, data[at + 4])
+				var edge := maxf(0.0, Vector2(x, z).distance_to(_closest(at, x, z)) - (data[at + 4] - rho))
+				var reach := wheel_r + rho
+				if edge >= reach:
+					continue
+				var support := top - rho + sqrt(reach * reach - edge * edge) - wheel_r
+				if support <= top_support:
+					continue
+				top_support = support
+				# высота центра колеса над центром кромки в момент касания земли и горизонтальное расстояние до него
+				var c := ground + wheel_r - (top - rho)
+				best = atan2(sqrt(maxf(0.0, reach * reach - c * c)), c) if c > 0.0 else PI * 0.5
 	return best
 
 
