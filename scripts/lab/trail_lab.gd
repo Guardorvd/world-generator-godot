@@ -9,6 +9,9 @@ var services := ServiceScope.new()
 var player := PlayerState.new()
 var bike := BikeRide.new()
 var controller := BikeController.new()
+## разгрузка переднего колеса от сценария, а не от клавиши Q (замеры)
+var body_back := false
+var body_back_forced := false
 var contact_model := true # прототип двух контактов колёс (BikeRide.contact_model); F6 — сравнить с прежней моделью
 var view: BikeView
 var crash := BikeCrash.new()
@@ -731,8 +734,11 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 	if crash.active():
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:
+		# Q — разгрузить переднее колесо (рывок руля на себя; удержание — вес назад), прототип работы телом
+		bike.body_back = body_back if body_back_forced else Input.is_physical_key_pressed(KEY_Q)
 		throttle = controller.ride(dt, player, bike, w, heights, throttle, turn, run, jump, false)
 		if bike.crashed:
+			metrics.crash(bike)
 			view.tick(bike, dt, throttle)
 			view.draw(1.0)
 			controller.begin_crash(view, bike, crash, heights)
@@ -795,7 +801,7 @@ func _process(dt: float) -> void:
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
-		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
+		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие  ·  Q разгрузить перед\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
 %s
 %s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, _contact_report(), metrics.report(routes[lane]) + "
 " + _shaping_report() + "

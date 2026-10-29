@@ -92,6 +92,14 @@ const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) сед
 ## по доле массы на этом колесе (нагрузка шины). Переднее колесо, остановленное резче ENDO_DV, бросает седока через руль.
 const IMPACT_ANGLE := 0.12   # рад: плавнее этого подъём опоры — накат, а не удар
 const ENDO_DV := 5.0         # м/с: такая потеря скорости переднего колеса (при обычной нагрузке) — полёт через руль
+## Разгрузка переднего колеса (работа телом, прототип): нажатие body_back — рывок руля на себя, нагрузка переходит
+## с переднего колеса на заднее на короткое время (пик через PULL_RISE, к PULL_TIME — снова обычная). Вовремя —
+## колесо легко встречает кромку; рано — к препятствию оно снова нагружено. Удержание — вес назад постоянно, но слабее
+## (BACK_SHIFT): переднее колесо хуже держит поворот. Новый рывок — только после отпускания.
+const PULL_DEPTH := 0.45     # доля веса, которая уходит с переднего колеса на пике рывка
+const PULL_RISE := 0.12      # с до пика
+const PULL_TIME := 0.45      # с до возврата
+const BACK_SHIFT := 0.2      # доля веса назад, пока клавиша удерживается после рывка
 const TIRE_RELAX := 0.8      # м пути
 const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на большой скорости
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
@@ -118,6 +126,10 @@ var front_load: float:
 var grip_usage := 0.0 # фактически использованный общий запас, 0..1
 var slip := 0.0 # подписанный угол сноса, радианы
 var _corner_demand := 0.0
+var body_back := false # седок тянет руль на себя (вход, модель двух контактов)
+var unweight := 0.0    # доля веса, снятая с переднего колеса сейчас
+var _pull_t := -1.0    # с от начала рывка (-1 — нет)
+var _back_was := false
 var contact_model := false # прототип двух контактов (CONTACT_*)
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
@@ -134,6 +146,7 @@ var _rest_r := 0.0
 var _on_f := -1          # препятствие, на котором стоит колесо (ForestObstacles.wheel_contact id; -1 — на земле)
 var _on_r := -1
 var impacts := Vector2i() # сколько раз колесо встретило кромку препятствия (перед, зад), для замеров
+var hit_dv := Vector2()   # потеря скорости рамы при последней встрече переднего и заднего колеса с кромкой, м/с
 var _sup_f := 0.0        # опора колеса на прошлом такте: от этой высоты колесо встречает следующую кромку
 var _sup_r := 0.0
 var riding := false
@@ -285,6 +298,10 @@ func reset_motion() -> void:
 	crashed = false
 	land_impact = 0.0
 	bottom_out = 0.0
+	body_back = false
+	unweight = 0.0
+	_pull_t = -1.0
+	_back_was = false
 	load_f = 0.5
 	load_r = 0.5
 	tire_f = 0.5
@@ -801,6 +818,8 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	speed = signf(speed) * maxf(0.0, absf(speed) - along)
 	lateral_speed -= dv.dot(side)
 	var kick := dv.length() / share * 0.3
+	if front: hit_dv.x = dv.length()
+	else: hit_dv.y = dv.length()
 	if front:
 		squash_fv += kick
 		land_impact = maxf(land_impact, dv.length() / share)
@@ -854,6 +873,15 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## перенос между осями от тормоза, уклона и корпуса (Brakes.front_load) и сила пружины сверх равновесия —
 ## удар о корень прижимает колесо, отскок разгружает. В полёте нагрузки нет.
 func _step_contacts(grade: float, dt: float) -> void:
+	if body_back and not _back_was:
+		_pull_t = 0.0
+	_back_was = body_back
+	var pull := 0.0
+	if _pull_t >= 0.0:
+		_pull_t += dt
+		pull = smoothstep(0.0, PULL_RISE, _pull_t) * (1.0 - smoothstep(PULL_RISE + 0.08, PULL_TIME, _pull_t))
+		if _pull_t > PULL_TIME: _pull_t = -1.0
+	unweight = maxf(PULL_DEPTH * pull, BACK_SHIFT if body_back else 0.0) if contact_model else 0.0
 	if airborne:
 		load_f = 0.0
 		load_r = 0.0
@@ -868,6 +896,10 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
 	load_f = clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	load_r = clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
+	# седок переносит вес назад: сколько снято с переднего колеса, столько легло на заднее
+	var moved := minf(unweight * normal, load_f)
+	load_f -= moved
+	load_r = minf(load_r + moved, LOAD_MAX)
 	var k := 1.0 - exp(-dt / maxf(TIRE_RELAX_MIN, TIRE_RELAX / maxf(absf(speed), 0.5)))
 	# сила шины набирается по пути, но не больше того, что колесо сейчас несёт: разгруженное колесо силы не даёт
 	tire_f = minf(lerpf(tire_f, load_f, k), load_f)

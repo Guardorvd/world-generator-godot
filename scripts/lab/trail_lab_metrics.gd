@@ -22,6 +22,9 @@ var peak_use_f := 0.0 # пик использованного запаса сц�
 var peak_use_r := 0.0
 var unloaded_f := 0.0 # сколько секунд колесо было на земле без нагрузки (разгружено)
 var unloaded_r := 0.0
+## падение: время, причина, скорость, нагрузки колёс в этот такт (crash_at < 0 — не было)
+var crash_at := -1.0
+var crash_info := ""
 ## по такту: время, нагрузка и запас переднего и заднего колеса, ход подвески — последовательность причин, а не только пики
 var trace := PackedFloat32Array()
 const TRACE_STRIDE := 7
@@ -54,6 +57,8 @@ func reset(bike: BikeRide) -> void:
 		if p.usage & PROPERTY_USAGE_SCRIPT_VARIABLE and p.type in [TYPE_FLOAT, TYPE_INT]:
 			set(p.name, type_convert(0, p.type))
 	element = -1
+	crash_at = -1.0
+	crash_info = ""
 	trace.clear()
 	_inside = false
 	_was_air = false
@@ -129,12 +134,20 @@ func _track_element(dt: float, bike: BikeRide, route: TrailDefinition, ms: float
 		zone_peak_squash = maxf(zone_peak_squash, maxf(bike.squash_f, bike.squash_r))
 		if bike.airborne: zone_air += dt
 
+## Падение в этот такт: записать до сброса (сбор метрик на время падения останавливается)
+func crash(bike: BikeRide) -> void:
+	crash_at = time
+	crash_info = "%s · %.0f км/ч · нагрузка %.2f / %.2f · снято с переднего %.2f" % [BikeRide.CrashCause.keys()[bike.crash_cause],
+		absf(bike.speed) * 3.6, bike.load_f, bike.load_r, bike.unweight]
+
 ## Speeds are stored in m/s and shown in km/h.
 func report(route: TrailDefinition) -> String:
 	var lines := PackedStringArray()
 	lines.append("Заезд %.1f с · путь %.0f м · макс. %.0f км/ч" % [time, distance, top_speed * 3.6])
 	lines.append("Пик: снос %.1f° · сцепление %.0f%% · вилка %.3f м · зад %.3f м" % [rad_to_deg(peak_slip), peak_grip * 100.0, peak_fork, peak_shock])
 	lines.append("Нагрузка рельефа: +%.2f g / −%.2f g · наклон полотна до %.0f%%" % [peak_load, peak_unload, peak_bank * 100.0])
+	if crash_at >= 0.0:
+		lines.append("Падение на %.1f с: %s" % [crash_at, crash_info])
 	lines.append("Колёса: пик сцепления %.0f%% / %.0f%% · без нагрузки %.2f / %.2f с" % [peak_use_f * 100.0, peak_use_r * 100.0, unloaded_f, unloaded_r])
 	lines.append("Пробоев подвески %d · худшее приземление %.1f м/с" % [bottom_outs, worst_landing])
 	if jumps > 0 or air_time > 0.0:
