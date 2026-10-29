@@ -435,68 +435,60 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var failures := {} # причина -> число отвергнутых связей (_count_failure)
 	var link_log: Array = []
 	var connected := 0
-	# С 9.8 сетей может быть несколько: большая река без места для моста делила мир, и все поселения
-	# за ней пропадали (на контрольном мире оставалось 2 из 11). Когда текущая сеть больше не растёт,
-	# следующее по значимости поселение начинает свою. Связи ищутся только с текущей сетью.
-	# Неудачи у непроходимой реки съедают весь запас A* места, поэтому с новой сетью оставшиеся
-	# получают ещё один запас w.N — один раз за генерацию: худший случай в 1,5 раза дольше прежнего.
-	var network := PackedInt32Array()
-	network.resize(n)
-	var refreshed := false
-	var current := 0
-	if n > 0:
-		joined[0] = 1
-		connected = 1
-	while connected < n:
-		var best: Array = []
+	# Ревью дорожной сети 29.10, шаг 3: каркас сети — дерево по оценке направлений (Краскал), а не рост
+	# одной сети от первого места. Пары идут от дешёвых к дорогим; пара внутри уже связанной группы
+	# пропускается. Так сначала строятся местные связи, а переправа между группами пробуется не больше
+	# SETTLEMENT_NEIGHBORS раз на пару групп. Раньше (с 9.8) первая сеть по очереди пробовала всех за большой
+	# рекой (на Север-1234 16 дальних попыток по 0,5–1 млн раскрытий), и группы за ней уже не соединялись.
+	# Запас A* — у места-цели, как раньше (2N); каждая связь пробуется один раз.
+	var groups: Array = range(n)
+	var candidates: Array = []
+	for a in n:
 		for b in n:
-			if joined[b] != 0 or tries[b] >= SETTLEMENT_NEIGHBORS or budgets[b] == 0:
+			if a == b:
 				continue
-			for a in n:
-				if joined[a] == 0 or network[a] != current or tried.has(_key(a, b)):
-					continue
-				var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
-				# Рельеф и вода на этом этапе не меняются: оценка ориентированной пары (a → b) одна
-				# на весь перебор. Не симметрична — пробы округляются от своего конца.
-				var direction := a * n + b
-				if not priorities.has(direction): priorities[direction] = _direction_cost(w, st[a], st[b])
-				var priority: float = priorities[direction]
-				if best.is_empty() or priority < best[3]:
-					best = [a, b, distance, priority]
-		if best.is_empty():
-			# Одно оставшееся место сети не образует.
-			var root := -1
-			for b in n:
-				if joined[b] == 0:
-					root = b
-					break
-			if connected > n - 2:
-				break
-			current += 1
-			network[root] = current
-			joined[root] = 1
-			connected += 1
-			for b in n:
-				if joined[b] == 0:
-					tries[b] = 0
-					if not refreshed:
-						budgets[b] += w.N
-						granted[b] += w.N
-			refreshed = true
+			# Рельеф и вода на этом этапе не меняются: оценка ориентированной пары (a → b) одна
+			# на весь перебор. Не симметрична — пробы округляются от своего конца; берётся лучшее направление.
+			var priority := _direction_cost(w, st[a], st[b])
+			priorities[a * n + b] = priority
+	for a in n:
+		for b in range(a + 1, n):
+			var forward: float = priorities[a * n + b]
+			var backward: float = priorities[b * n + a]
+			if forward <= backward: candidates.append([a, b, forward])
+			else: candidates.append([b, a, backward])
+	candidates.sort_custom(func(p: Array, q: Array) -> bool:
+		return p[2] < q[2] or p[2] == q[2] and (mini(p[0], p[1]) < mini(q[0], q[1]) or mini(p[0], p[1]) == mini(q[0], q[1]) and maxi(p[0], p[1]) < maxi(q[0], q[1])))
+	var pair_tries := {} # группа × группа -> неудачных попыток
+	var attempts := 0
+	if n > 0:
+		connected = 1
+	for candidate: Array in candidates:
+		if connected >= n or attempts >= n * SETTLEMENT_NEIGHBORS:
+			break
+		var a: int = candidate[0]
+		var b: int = candidate[1]
+		var ra := _group(groups, a)
+		var rb := _group(groups, b)
+		if ra == rb or budgets[b] == 0:
 			continue
-		var a: int = best[0]
-		var b: int = best[1]
+		var pair_key := mini(ra, rb) * n + maxi(ra, rb)
+		if int(pair_tries.get(pair_key, 0)) >= SETTLEMENT_NEIGHBORS:
+			continue
+		attempts += 1
 		tried[_key(a, b)] = true
 		tries[b] += 1
+		var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
 		if step.is_valid():
-			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d/%d" % [connected - 1, maxi(0, n - 1), tries[b], SETTLEMENT_NEIGHBORS])
+			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d" % [connected - 1, maxi(0, n - 1), attempts])
 		finder.search_budget = budgets[b]
 		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
 		# Каждая попытка: пара, прямое расстояние, списанный запас и исход (стенд road_plan_test).
-		link_log.append([a, b, roundi(best[2]), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", "")])
+		link_log.append([a, b, roundi(distance), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", "")])
 		budgets[b] = finder.search_budget
 		finder.search_budget = -1
 		if q.is_empty():
+			pair_tries[pair_key] = int(pair_tries.get(pair_key, 0)) + 1
 			_count_failure(failures, state)
 			continue
 		surface.build_structures()
@@ -504,10 +496,13 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
 		var kind := "road" if main_road(st[a], st[b]) else "trail"
 		_add_trail(w, q, kind, road_cost, state.on_axis, surface)
-		paths.append([a, b, q, true, best[2]])
+		paths.append([a, b, q, true, distance])
+		joined[a] = 1
 		joined[b] = 1
-		network[b] = current
+		groups[maxi(ra, rb)] = mini(ra, rb)
 		connected += 1
+	if n > 0:
+		joined[0] = 1
 	# Только подтверждённые поселения попадают на карту, в растительность и постройки:
 	# у каждого есть дорога к соседу. Первое (самое удобное) место остаётся всегда, как раньше;
 	# начало новой сети, к которому никто не подъехал, — нет.
@@ -567,6 +562,13 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.checkpoints = state.get("checkpoints", 0)
 	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	w.generation_profile.restores = state.get("restores", 0)
+
+
+## Корень группы связанных мест (меньший номер — корень, не зависит от порядка связей).
+static func _group(groups: Array, k: int) -> int:
+	while groups[k] != k:
+		k = groups[k]
+	return k
 
 
 ## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
