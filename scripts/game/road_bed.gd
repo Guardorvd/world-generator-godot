@@ -62,7 +62,7 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 			continue
 		var h := lerpf(hv[i], target[i], weight[i])
 		if h < hv[i]:
-			h = maxf(h, minf(hv[i], _wet_near(heights, i) + WATER_GAP))
+			h = maxf(h, minf(hv[i], wet_near(heights, i) + WATER_GAP))
 		if absf(h - hv[i]) > 0.005:
 			hv[i] = h
 			changed.append(i)
@@ -90,7 +90,7 @@ static func _pins(w: WorldData) -> PackedFloat32Array:
 
 
 ## Наибольший уровень воды в соседних клетках (или -INF)
-static func _wet_near(heights: Heightfield, i: int) -> float:
+static func wet_near(heights: Heightfield, i: int) -> float:
 	var W := heights.world.W
 	var H := heights.world.H
 	var cx := i % W

@@ -8,7 +8,7 @@ extends RefCounted
 ## the check incomplete. Problems are kept as distance intervals, not as one warning per sample. No UI, no scene access.
 
 const SAMPLE := 0.5        # spacing of samples along the centre line, m
-const GRADE_BASE := 4.0    # averaged grade = rise over this run; TrailShaping._peak_grade uses the same 4 m
+const GRADE_BASE := 4.0    # averaged grade = rise over this run; TrailShaping.peak_grade uses the same 4 m
 const CROSS_SHARE := 0.8   # cross slope between points at this share of the half width
 const LAYER_JUMP := 0.1    # a change of support (ground <-> deck) by more than this is an edge, not a slope, m
 const MERGE := 2.0         # problem runs closer than this form one interval, m

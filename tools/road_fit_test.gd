@@ -121,7 +121,7 @@ func _shore_invariants() -> void:
 				if h.water_level[cell] != -INF:
 					check(absf(value - base) < 0.001, "полка изменила дно озера")
 				elif value < base:
-					check(value >= minf(base, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "полка затопила сухой берег")
+					check(value >= minf(base, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "полка затопила сухой берег")
 	check(changed > 1.2 and changed <= RoadRefinement.BENCH_LIMIT + 0.001, "полка не использовала ограниченную выемку в склоне")
 
 

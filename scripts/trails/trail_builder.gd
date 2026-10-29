@@ -163,7 +163,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					var displacement := offset * pin
 					var base := h.ground_at(at.x, at.y)
 					if displacement < 0.0:
-						displacement = maxf(displacement, minf(0.0, RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP - base))
+						displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP - base))
 					offsets[vertex] = displacement
 					if best.has("d") and (best.d as TrailDefinition).earthwork > 0.0:
 						var id: String = best.d.id

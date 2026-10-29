@@ -417,7 +417,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		# 7.7: вдоль ствола и бревна велосипед скользит по касательной
 		var around := Callable()
 		if heights.obstacles != null:
-			around = func(px: float, pz: float) -> Vector2: return _obstacle_normal(px, pz, hd, heights)
+			around = func(px: float, pz: float) -> Vector2: return obstacle_normal(px, pz, hd, heights)
 		var to := PlayerState.slide(free, x, z, dx, dz, around)
 		x = to[0]
 		z = to[1]
@@ -768,7 +768,7 @@ func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void
 
 ## Нормаль препятствия леса (ствол, валун, бревно), которое задевает один из трёх кругов велосипеда
 ## с серединой в (px, pz) и курсом hd; ноль, если не задевает
-func _obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> Vector2:
+func obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> Vector2:
 	for side: float in [1.0, 0.0, -1.0]:
 		var n := heights.obstacles.normal(px - sin(hd) * AXLE * side, pz - cos(hd) * AXLE * side, y, BODY_R)
 		if n != Vector2.ZERO:

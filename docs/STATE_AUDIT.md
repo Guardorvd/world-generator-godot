@@ -79,9 +79,12 @@
 
 Предложение без переделки поведения: те функции, которыми пользуются снаружи, переименовать в публичные (без `_`) и описать как часть интерфейса модуля. Тогда правка «внутренней» функции будет видна как правка интерфейса. Начать с `StructuresBuilder` (падение), `RoadNavigation` (линия навигации) и `NavigationSnapshot`.
 
-## 6. Что исправлено сейчас
+## 6. Что исправлено
 
 - `RegionStream._persist` ждёт предыдущую запись журнала: две записи `ledger.bin` больше не могут идти одновременно через один `.tmp`.
+- Функции, которые вызывают другие модули, стали публичными (имя без `_`): `StructuresBuilder.bridge/stone_bridge/planks/tunnel`, `SettlementsBuilder.footing`, `WaterBuilder.flat_mesh`, `BikeRide.obstacle_normal`, `RoadBed.wet_near`, `TrailShaping.peak_grade`. Поведение то же; правка их теперь видна как правка интерфейса.
+- `LAKE_DROP` и `WATER_MARGIN` перенесены в `GameConfig`: `Heightfield` и `ForestObstacles` (слой `game`) больше не берут их из `WaterBuilder` и `VegetationLayer` (`render`). Значения те же, в `render` остались ссылки на них.
+- Остальное — в [TECH_DEBT.md](TECH_DEBT.md).
 
 ## 7. Что не проверялось
 

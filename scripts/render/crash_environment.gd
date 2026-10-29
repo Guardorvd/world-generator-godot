@@ -42,13 +42,13 @@ static func build(body: StaticBody3D, heights: Heightfield, radius: float) -> vo
 			if a.distance_to(b) < 0.01:
 				continue
 			var up := Vector3.UP if absf((b - a).normalized().y) < 0.99 else Vector3.BACK
-			StructuresBuilder._tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, null, null)
+			StructuresBuilder.tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, null, null)
 		elif s.style == "stone":
-			StructuresBuilder._stone_bridge(batch, heights, s, null, null, null)
+			StructuresBuilder.stone_bridge(batch, heights, s, null, null, null)
 		elif s.style == "planks":
-			StructuresBuilder._planks(batch, heights, s, null, null, null)
+			StructuresBuilder.planks(batch, heights, s, null, null, null)
 		else:
-			StructuresBuilder._bridge(batch, heights, s, null, null, null)
+			StructuresBuilder.bridge(batch, heights, s, null, null, null)
 	for settlement: SettlementData in heights.world.settlements:
 		for hut: HutData in settlement.huts:
 			_hut(batch, heights, hut, PlayerState.hut_angle(settlement, hut))
@@ -63,7 +63,7 @@ static func _hut(batch: Contacts, heights: Heightfield, hut: HutData, angle: flo
 	var at := Transform3D(Basis(Vector3.UP, angle), Vector3(hut.x * GameConfig.TILE, 0, hut.y * GameConfig.TILE))
 	if Vector2(at.origin.x - batch.body.global_position.x, at.origin.z - batch.body.global_position.z).length() > batch.radius + half.length():
 		return
-	var foot := SettlementsBuilder._footing(heights, at, half)
+	var foot := SettlementsBuilder.footing(heights, at, half)
 	at.origin.y = foot.y
 	var height := 2.0
 	if SettlementsBuilder.HOUSE_FORM.has(kind):

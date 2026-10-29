@@ -83,7 +83,7 @@ func _add_objects(px: float, pz: float) -> void:
 						continue
 					s *= 1.2
 					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
-				elif heights.depth_at(x, z) <= VegetationLayer.WATER_MARGIN:
+				elif heights.depth_at(x, z) <= GameConfig.WATER_MARGIN:
 					_add(x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
 	if world.outer == null:
 		return

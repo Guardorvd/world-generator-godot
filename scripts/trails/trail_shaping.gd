@@ -164,7 +164,7 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 	reach = minf(reach, half + REACH_LIMIT)
 	return {levels = levels, banks = banks, cross = follow, sides = sides, points = points, tangents = tangents, total = total,
 		reach = reach, grade_used = grade, deepest = deepest,
-		grade_natural = _peak_grade(ground, step), grade_designed = _peak_grade(levels, step), bank_peak = peak_bank}
+		grade_natural = peak_grade(ground, step), grade_designed = peak_grade(levels, step), bank_peak = peak_bank}
 
 ## Displacement of the existing surface at `at` (positive — embankment, negative — excavation). No depth limit: the
 ## designed surface is reached; past `p.reach` nothing changes, and the last FADE share of the zone blends into the
@@ -233,7 +233,7 @@ static func _limit_grade(levels: PackedFloat32Array, step: float, closed: bool, 
 		levels[a] = clampf(levels[a], levels[b] - rise, levels[b] + rise)
 	if closed: levels[n - 1] = levels[0]
 
-static func _peak_grade(values: PackedFloat32Array, step: float) -> float:
+static func peak_grade(values: PackedFloat32Array, step: float) -> float:
 	var peak := 0.0
 	for j in range(0, values.size() - 4):
 		peak = maxf(peak, absf(values[j + 4] - values[j]) / (4.0 * step))

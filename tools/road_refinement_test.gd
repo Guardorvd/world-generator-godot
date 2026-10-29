@@ -69,7 +69,7 @@ func _init() -> void:
 					if h.water_level[cell] != -INF:
 						check(diff < 0.001, "изменена вода")
 					elif value < h.base_ground_at(px, pz):
-						check(value >= minf(h.base_ground_at(px, pz), RoadBed._wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "срез сухого берега затопил полотно")
+						check(value >= minf(h.base_ground_at(px, pz), RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "срез сухого берега затопил полотно")
 					biggest = maxf(biggest, diff)
 					var on_boundary := (x == 0 and not r.patches.has(key - 1)) or (x == RoadRefinement.DIV and not r.patches.has(key + 1)) or (z == 0 and not r.patches.has(key - w.W)) or (z == RoadRefinement.DIV and not r.patches.has(key + w.W))
 					if on_boundary:

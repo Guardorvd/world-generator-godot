@@ -49,13 +49,13 @@ static func build(parent: Node3D, heights: Heightfield, only: Variant = null) ->
 			# система координат в начале оси, -Z смотрит вдоль неё (с уклоном), X — вбок.
 			# Почти вертикальная ось (крутой въезд) — сверяем с мировым Z, иначе Up даёт вырожденный базис
 			var up := Vector3.UP if absf((b - a).normalized().y) < 0.99 else Vector3.BACK
-			_tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, stone, portal)
+			tunnel(batch, Transform3D(Basis.looking_at(b - a, up), a), s.half, a.distance_to(b), -a.distance_to(b) * 0.5, stone, portal)
 		elif s.style == "stone":
-			_stone_bridge(batch, heights, s, slab, slab_dark, portal)
+			stone_bridge(batch, heights, s, slab, slab_dark, portal)
 		elif s.style == "planks":
-			_planks(batch, heights, s, plank_light, board, rail)
+			planks(batch, heights, s, plank_light, board, rail)
 		else:
-			_bridge(batch, heights, s, wood, rail, board)
+			bridge(batch, heights, s, wood, rail, board)
 	# у каждого моста свои длины пролётов: кэш нужен только на время сборки, иначе он растёт от мира к миру
 	_boxes.clear()
 	var mi := batch.build("Structures")
@@ -65,7 +65,7 @@ static func build(parent: Node3D, heights: Heightfield, only: Variant = null) ->
 
 
 ## Мост: невысокий деревянный настил, перила и сваи; профиль общий с движением.
-static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: Material, rail: Material, board: Material) -> void:
+static func bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: Material, rail: Material, board: Material) -> void:
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	var side := Vector3(s.uz, 0, -s.ux) * (half + 0.1)
@@ -102,7 +102,7 @@ static func _bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood:
 
 
 ## Каменный мостик: плиты настила, низкий парапет и устои до дна у обоих берегов и под серединой.
-static func _stone_bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, slab: Material, dark: Material, block: Material) -> void:
+static func stone_bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, slab: Material, dark: Material, block: Material) -> void:
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	for k in n:
@@ -134,7 +134,7 @@ static func _stone_bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary,
 
 
 ## Переправа тропы: три доски вдоль с щелями на поперечинах, без перил, у концов колышки.
-static func _planks(batch: MeshBatch, heights: Heightfield, s: Dictionary, light: Material, board: Material, dark: Material) -> void:
+static func planks(batch: MeshBatch, heights: Heightfield, s: Dictionary, light: Material, board: Material, dark: Material) -> void:
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	var width := half * 2.0 / 3.0
@@ -176,7 +176,7 @@ static func _deck(batch: MeshBatch, a: Vector3, b: Vector3, half: float, mat: Ma
 	_box(batch, Transform3D(basis, (a + b) * 0.5), Vector3(half * 2.0, 0.24, length), Vector3(0, -0.12, 0), mat)
 
 
-static func _tunnel(batch: MeshBatch, at: Transform3D, half: float, length: float, mid: float, stone: Material, portal: Material) -> void:
+static func tunnel(batch: MeshBatch, at: Transform3D, half: float, length: float, mid: float, stone: Material, portal: Material) -> void:
 	var h := TUNNEL_HEIGHT
 	for side: float in [-1.0, 1.0]:
 		_box(batch, at, Vector3(1.0, h + 1.0, length), Vector3(side * (half + 0.5), h * 0.5 - 0.5, mid), stone)

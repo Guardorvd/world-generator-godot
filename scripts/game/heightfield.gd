@@ -144,7 +144,7 @@ func fast_water() -> Object:
 		_fast_water = Grid.fast_grid()
 		if _fast_water == null:
 			return null
-		_fast_water.SetWater(world.W, world.H, TILE, HS, WaterBuilder.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
+		_fast_water.SetWater(world.W, world.H, TILE, HS, GameConfig.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
 			world.lake, world.filled)
 	_fast_water.SetGround(hv)
 	return _fast_water
@@ -169,7 +169,7 @@ func complete_water() -> void:
 			# Для коридора A* и закрепления берегов — верхняя оценка по ленте.
 			# В точке depth_at проверяет её фактические треугольники.
 			var level := river_level((i % W + 0.5) * TILE, (i / W + 0.5) * TILE)
-			water_level[i] = maxf(level, w.filled[i] * HS - WaterBuilder.LAKE_DROP) if w.river[i] != 0 else level
+			water_level[i] = maxf(level, w.filled[i] * HS - GameConfig.LAKE_DROP) if w.river[i] != 0 else level
 	for cell: int in _river_cells:
 		if w.ocean[cell] != 0 or w.lake[cell] != 0:
 			continue
@@ -482,7 +482,7 @@ func _river_ribbons() -> Array:
 		for p: Dictionary in r:
 			var x: float = p.x * TILE
 			var z: float = p.y * TILE
-			pts.append({x = x, z = z, w = StageRivers.half_width(p.w), y = maxf(0.0, p.e * HS - WaterBuilder.LAKE_DROP),
+			pts.append({x = x, z = z, w = StageRivers.half_width(p.w), y = maxf(0.0, p.e * HS - GameConfig.LAKE_DROP),
 				depth = clampf(0.3 + p.w * 0.6, 0.45, 1.2)})
 		for k in range(1, pts.size()):
 			pts[k].y = minf(pts[k].y, pts[k - 1].y)
@@ -681,14 +681,14 @@ func lake_level(x: float, z: float) -> float:
 	var top := -INF
 	# четыре соседние клетки без нового массива на вызов: функция в самом частом пути проверки воды
 	if world.lake[a] != 0:
-		top = world.filled[a] * HS - WaterBuilder.LAKE_DROP
+		top = world.filled[a] * HS - GameConfig.LAKE_DROP
 	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, world.filled[a + 1] * HS - GameConfig.LAKE_DROP)
 	a += world.W
 	if world.lake[a] != 0:
-		top = maxf(top, world.filled[a] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, world.filled[a] * HS - GameConfig.LAKE_DROP)
 	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - WaterBuilder.LAKE_DROP)
+		top = maxf(top, world.filled[a + 1] * HS - GameConfig.LAKE_DROP)
 	return top
 
 

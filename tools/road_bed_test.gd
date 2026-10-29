@@ -100,7 +100,7 @@ func _invariants(w: WorldData, before: Heightfield, after: Heightfield) -> void:
 			far += 1
 		elif absf(d) > allowed[i] + 0.01:
 			big += 1
-		if d < 0.0 and after.hv[i] < RoadBed._wet_near(after, i) + RoadBed.WATER_GAP - 0.01 and after.hv[i] < before.hv[i]:
+		if d < 0.0 and after.hv[i] < RoadBed.wet_near(after, i) + RoadBed.WATER_GAP - 0.01 and after.hv[i] < before.hv[i]:
 			flooded += 1
 	_check(far == 0, "клетки вдали от путей изменены: %d" % far)
 	_check(big == 0, "подсыпка или срез больше предела: %d" % big)

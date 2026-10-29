@@ -134,7 +134,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			var kind: String = EntityCodec.value(hut, "t", "house")
 			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
 			# Пол выше верхнего угла; каменный цоколь закрывает перепад до нижнего.
-			var foot := _footing(heights, at, PlayerState.SITE_HALF[kind])
+			var foot := footing(heights, at, PlayerState.SITE_HALF[kind])
 			at.origin.y = foot.y
 			if kind in HOMES:
 				_house(batch, at, foot.y - foot.x, hut.v, house, kind, EntityCodec.value(s, "style", hut.v))
@@ -344,7 +344,7 @@ static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: S
 
 
 ## Нижний и верхний угол земли под постройкой half (м), повёрнутой как at: Vector2(низ, верх)
-static func _footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vector2:
+static func footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vector2:
 	var low := INF
 	var high := -INF
 	for c: Vector2 in [Vector2(-1, -1), Vector2(1, -1), Vector2(-1, 1), Vector2(1, 1)]:
@@ -379,7 +379,7 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 		for u: HutData in s.huts:
 			var v: int = u.v
 			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(u.x * TILE, 0, u.y * TILE))
-			var foot := _footing(heights, at, PlayerState.SITE_HALF[u.t])
+			var foot := footing(heights, at, PlayerState.SITE_HALF[u.t])
 			var low := foot.x
 			var high := foot.y
 			# Жилые постройки стоят на цоколе по верхнему углу, камни и руины уходят в землю.

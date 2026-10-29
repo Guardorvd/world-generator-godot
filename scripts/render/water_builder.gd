@@ -4,7 +4,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
-const LAKE_DROP := 0.1   # м, см. _lake_arrays
+const LAKE_DROP := GameConfig.LAKE_DROP # м, см. _lake_arrays
 const SHADER := preload("res://resources/water.gdshader")
 
 
@@ -34,10 +34,10 @@ static func build(w: WorldData, prepared: Array[Array]) -> Array[MeshInstance3D]
 	ocean.mesh = plane
 	ocean.position = Vector3(w.W * TILE / 2.0, 0.0, w.H * TILE / 2.0)
 	out.append(ocean)
-	var lakes := _flat_mesh(prepared[0], water_mat, "Lakes")
+	var lakes := flat_mesh(prepared[0], water_mat, "Lakes")
 	if lakes:
 		out.append(lakes)
-	var rivers := _flat_mesh(prepared[1], _material(false, true), "Rivers")
+	var rivers := flat_mesh(prepared[1], _material(false, true), "Rivers")
 	if rivers:
 		out.append(rivers)
 	# полупрозрачная вода тень не отбрасывает: иначе дно и берег под ней темнели бы целиком (с 2.6)
@@ -61,7 +61,7 @@ static func _arrays(pos: PackedVector3Array, idx: PackedInt32Array = PackedInt32
 	return arrays
 
 
-static func _flat_mesh(arrays: Array, mat: Material, node_name: String) -> MeshInstance3D:
+static func flat_mesh(arrays: Array, mat: Material, node_name: String) -> MeshInstance3D:
 	if arrays.is_empty():
 		return null
 	var mesh := ArrayMesh.new()

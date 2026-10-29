@@ -396,7 +396,7 @@ func _base_at(x: float, z: float) -> float:
 
 ## Без кэша (с 12.2): вершины считаются в нескольких потоках, а это всего восемь чтений
 func _wet_near(i: int) -> float:
-	return RoadBed._wet_near(_heights, i)
+	return RoadBed.wet_near(_heights, i)
 
 
 func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := -1) -> Dictionary:

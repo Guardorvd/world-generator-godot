@@ -168,7 +168,7 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			var free := func(px: float, pz: float) -> bool: return b.fits(px, pz, b.heading, w, heights)
 			var around := Callable()
 			if heights.obstacles != null:
-				around = func(px: float, pz: float) -> Vector2: return b._obstacle_normal(px, pz, b.heading, heights)
+				around = func(px: float, pz: float) -> Vector2: return b.obstacle_normal(px, pz, b.heading, heights)
 			var to := PlayerState.slide(free, before.x, before.z, delta.x, delta.z, around)
 			var at := Vector3(to[0], _start.origin.y, to[1])
 			_release_velocity.x = (at.x - before.x) / maxf(dt, 0.001)

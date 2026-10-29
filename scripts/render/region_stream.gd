@@ -499,7 +499,7 @@ static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, e
 	var decor: Dictionary = entry.decor
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
-	var water := WaterBuilder._flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
+	var water := WaterBuilder.flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
 	if water != null:
 		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(water)

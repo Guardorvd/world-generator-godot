@@ -8,7 +8,7 @@ var settings: GameSettings = GameContext.scope.settings
 ## OuterLand.vegetation тем же кодом, что и на карте (трава и подлесок пока только на карте).
 
 const TILE := GameConfig.TILE
-const WATER_MARGIN := 0.3
+const WATER_MARGIN := GameConfig.WATER_MARGIN
 const LOAD_MARGIN := 64.0 # запас на фоновую подготовку при движении
 const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём чанк на границе
 const RECHECK := 24.0
