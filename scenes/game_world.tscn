@@ -1,21 +1,11 @@
-[gd_scene load_steps=7 format=3]
+[gd_scene load_steps=5 format=3]
 
 [ext_resource type="Script" uid="uid://bxcji3c8xl0f2" path="res://scripts/render/game_world.gd" id="1_game"]
 [ext_resource type="Script" uid="uid://b4aj4h2c4oin6" path="res://scripts/render/vegetation_layer.gd" id="2_veg"]
 [ext_resource type="Script" path="res://scripts/render/world_audio.gd" id="3_audio"]
 
-[sub_resource type="ProceduralSkyMaterial" id="sky_mat"]
-sky_top_color = Color(0.32, 0.52, 0.82, 1)
-sky_horizon_color = Color(0.62, 0.74, 0.88, 1)
-ground_bottom_color = Color(0.62, 0.74, 0.88, 1)
-ground_horizon_color = Color(0.62, 0.74, 0.88, 1)
-
-[sub_resource type="Sky" id="sky"]
-sky_material = SubResource("sky_mat")
-
 [sub_resource type="Environment" id="env"]
 background_mode = 2
-sky = SubResource("sky")
 ambient_light_source = 3
 ambient_light_color = Color(0.62, 0.72, 0.9, 1)
 ambient_light_sky_contribution = 0.6
