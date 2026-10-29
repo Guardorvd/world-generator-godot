@@ -89,9 +89,9 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	_mountain_trails(w, finder, surface)
 	w.generation_profile.mountain_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
-	if Pathfinder.profile_searches:
-		w.generation_profile.merge(finder.search_stats())
-		w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	# Исходы и раскрытия считаются всегда (дёшево); время вызовов и кэш — только с profile_searches.
+	w.generation_profile.merge(finder.search_stats())
+	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	finder.release()
 
 
@@ -533,6 +533,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		expanded += granted[k] - budgets[k]
 	w.generation_profile.settlement_expanded = expanded
 	w.generation_profile.main_roads_ms = Time.get_ticks_msec() - started
+	# Нарастающий итог после основных связей: с ним сравнивается политика запасного поиска (prefetch).
+	w.generation_profile.main_roads_search = finder.search_stats()
 	finder.use_corridor = true
 	_route_surface(finder, surface, WIDTHS.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
