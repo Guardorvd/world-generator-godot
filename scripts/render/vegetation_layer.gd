@@ -13,6 +13,8 @@ const LOAD_MARGIN := 64.0 # запас на фоновую подготовку 
 const DROP_MARGIN := 96.0 # гистерезис: не пересоздаём чанк на границе
 const RECHECK := 24.0
 const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолжение группы — в следующих кадрах
+const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
+const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const Understory := preload("res://scripts/render/understory_models.gd")
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -83,6 +85,10 @@ var _detail_started_clock := 1.0
 var _detail_frames := {}
 var _retired: Array = []
 var _appearing: Array = [] # временные материалы только на полсекунды проявления
+var _reveal_mats := {} # общий материал -> его копия проявления этого кадра (у всех узлов кадра одно время)
+var _reveal_clock := -1.0
+var _trash: Array[Node] = [] # скрытые узлы, удаляются по FREE_US за кадр
+var _present: Array[int] = [] # группы готового снимка (-1 — трава), ещё не переданные на GPU
 var _queued := {}
 var _tree_target := Vector2.INF
 var _pending: Array = [] # готовые чанки, ближайшие в конце
@@ -375,10 +381,12 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	RenderingServer.global_shader_parameter_set("veg_center", p)
 	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
 	_clean_retired()
+	_free_trash(0 if force else FREE_US)
 	if world.outer != null:
 		_outer_regions = world.outer.get_ledger().get("regions", {})
 	if force:
 		_finish()
+		_present.clear()
 		_clear_pending()
 		_built.clear()
 		snapshots.reset()
@@ -408,11 +416,13 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_task = -1
 		stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
 		if _detail_epoch == _epoch and p.distance_to(_fill_at) < maxf(grass_r, under_r) + StreamPolicy.MAX_LEAD:
-			_apply_grass()
-			uploaded = true
+			_begin_present()
 		else:
 			last_fill = Vector2.INF
 			_detail_frames.clear()
+	if allow_upload and not _present.is_empty():
+		_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US)
+		uploaded = true
 	var lead := stream.lead()
 	if last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK:
 		last_trees = p
@@ -432,13 +442,13 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				for chunk in missing:
 					_queued[chunk] = true
 				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
-	if _task == -1 and _refresh_details:
+	if _task == -1 and _present.is_empty() and _refresh_details:
 		snapshots.reset()
 		_refresh_details = false
-	if _task == -1 and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
+	# Новый снимок — только когда прежний передан целиком: задача пишет те же буферы.
+	if _task == -1 and _present.is_empty() and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
 		last_fill = p
 		_job_lead = lead
-		_reserve_details(lead)
 		_detail_started_clock = stream.clock
 		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock), true, "Трава и подлесок")
 	if allow_upload and not uploaded and not _pending.is_empty():
@@ -520,8 +530,7 @@ func _drop(p: Vector2) -> void:
 			far[chunk] = _distance(chunk, p) > limit
 		if far[chunk]:
 			for node: MultiMeshInstance3D in veg[key].nodes:
-				node.visible = false
-				node.queue_free()
+				_trash_node(node)
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
 		if far[chunk] if far.has(chunk) else _distance(chunk, p) > limit:
@@ -566,17 +575,40 @@ func _fill_trees(missing: Array[Vector2i], epoch: int) -> void:
 		_built.append(built)
 
 
+## Всё, что зависит только от раскладки, — здесь, в задаче: рост буферов, отметки появления и ёмкость под GPU.
+## Главному потоку остаётся передать готовый буфер. Отметки ставятся по часам на конец задачи
+## (часы идут с реальным временем); снимок показывается через кадр-другой — доля от полусекундного проявления.
 func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false) -> void:
 	var started := Time.get_ticks_usec()
 	_fill_lead = lead
 	_detail_epoch = epoch
+	_reserve_details(lead)
 	_fill_grass(px, pz)
-	_detail_frames = {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
+	var frames := {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
-		_detail_frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate)
+		frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate)
+	var now := clock + (Time.get_ticks_usec() - started) / 1000000.0
+	for group: int in frames:
+		snapshots.stamp(frames[group], now)
+		_fit_capacity(frames[group], grass if group < 0 else understory[group].mm)
+	_detail_frames = frames
 	_detail_seconds = (Time.get_ticks_usec() - started) / 1000000.0
+
+
+## Ёмкость MultiMesh, которую выберет _upload_instances (ступени и гистерезис те же); буфер дополняется
+## до неё заранее, чтобы при передаче не было ни resize, ни slice. MultiMesh в это время не меняется.
+static func _fit_capacity(frame: Dictionary, mm: MultiMesh) -> void:
+	var count: int = frame.count
+	var capacity := 64
+	while capacity < count:
+		capacity *= 2
+	var keep := mm.instance_count >= count and mm.instance_count <= maxi(64, count * 4)
+	var data: PackedFloat32Array = frame.buffer
+	data.resize((mm.instance_count if keep else capacity) * STRIDE)
+	frame.buffer = data
+	frame.fitted = true
 
 
 func _reserve_details(lead: Vector2) -> void:
@@ -779,6 +811,8 @@ func _build_entries(items: Dictionary) -> Dictionary:
 ## по окончательной географии (вода, дороги, поселения).
 func refresh(rect: Rect2i) -> void:
 	_epoch += 1
+	if not _present.is_empty():
+		_present_next(0) # фильтр ниже должен видеть весь снимок
 	# Published earthworks cannot leave old trees, rocks or undergrowth floating over the cut.
 	var box := Rect2(Vector2(rect.position) * TILE, Vector2(rect.size) * TILE)
 	var meshes: Array[MultiMesh] = []
@@ -809,8 +843,7 @@ func refresh(rect: Rect2i) -> void:
 		for key: Vector3i in veg.keys():
 			if key.x == chunk.x and key.y == chunk.y:
 				for node: MultiMeshInstance3D in veg[key].nodes:
-					node.visible = false
-					node.queue_free()
+					_trash_node(node)
 				veg.erase(key)
 	for x in range(floori(float(rect.position.x) / side), floori(float(rect.end.x - 1) / side) + 1):
 		for y in range(floori(float(rect.position.y) / side), floori(float(rect.end.y - 1) / side) + 1):
@@ -922,27 +955,55 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 
 
 func _apply_grass(immediate := false) -> void:
+	_present.clear()
+	_accept_details()
+	_present_group(-1, immediate)
+	for kind in understory.size():
+		_present_group(kind, immediate)
+	_detail_frames.clear()
+
+
+## Снимок принят: препятствия сразу, трава и формы подлеска — по группам в пределах бюджета кадра (_present_next).
+func _begin_present() -> void:
+	_accept_details()
+	_present.clear()
+	_present.append(-1)
+	for kind in understory.size():
+		_present.append(kind)
+
+
+func _accept_details() -> void:
 	grass_at = _fill_at
 	grass_lead = _fill_lead
 	obstacles = _obstacles_next
 	bumps = _bumps_next
 	obstacles_version += 1
-	_present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
-	for kind in understory.size():
-		var entry: Dictionary = understory[kind]
-		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
-		_present_frame(kind, entry.mm, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, immediate)
-	_detail_frames.clear()
+
+
+## deadline_usec = 0 — передать всё оставшееся сразу.
+func _present_next(deadline_usec: int) -> void:
+	var done := 0
+	while not _present.is_empty() and (deadline_usec == 0 or done == 0 or Time.get_ticks_usec() < deadline_usec):
+		_present_group(_present.pop_front(), false)
+		done += 1
+	if _present.is_empty():
+		_detail_frames.clear()
+
+
+func _present_group(group: int, immediate: bool) -> void:
+	if group < 0:
+		_present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
+		return
+	var entry: Dictionary = understory[group]
+	var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
+	_present_frame(group, entry.mm, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, immediate)
 
 
 func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
 	var frame := snapshots.commit(group, _detail_frames[group], stream.clock) if _detail_frames.has(group) else snapshots.merge(group, source, count, bounds, radius, stream.clock, immediate)
-	var data: PackedFloat32Array = frame.buffer
-	var capacity := 64
-	while capacity < frame.count:
-		capacity *= 2
-	data.resize(maxi(capacity, mm.instance_count) * STRIDE)
-	_upload_instances(mm, data, frame.count)
+	if not frame.has("fitted"):
+		_fit_capacity(frame, mm)
+	_upload_instances(mm, frame.buffer, frame.count)
 	mm.custom_aabb = frame.bounds
 
 
@@ -959,8 +1020,16 @@ func _shared_tree_material(def: Dictionary, part: String, level: int, small: boo
 
 
 func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:
-	var mat: ShaderMaterial = shared.duplicate()
-	mat.set_shader_parameter("stream_birth", stream.clock)
+	# Узлы, появившиеся в одном кадре, получают одно время рождения — значит, и одну копию материала.
+	if _reveal_clock != stream.clock:
+		_reveal_clock = stream.clock
+		_reveal_mats.clear()
+	var id := shared.get_instance_id()
+	if not _reveal_mats.has(id):
+		var copy: ShaderMaterial = shared.duplicate()
+		copy.set_shader_parameter("stream_birth", stream.clock)
+		_reveal_mats[id] = copy
+	var mat: ShaderMaterial = _reveal_mats[id]
 	node.material_override = mat
 	_appearing.append({node = node, shared = shared, until = stream.clock + StreamPolicy.FADE_SECONDS})
 
@@ -993,8 +1062,26 @@ func _clean_retired() -> void:
 		if stream.clock >= _retired[i].until:
 			for node: Node in _retired[i].nodes:
 				if is_instance_valid(node):
-					node.queue_free()
+					_trash_node(node)
 			_retired.remove_at(i)
+
+
+## Узел больше не нужен: скрыть сразу, удалить позже по бюджету. queue_free удалял весь ряд чанков
+## (на 45 м/с — тысячи MultiMesh) в конце одного кадра.
+func _trash_node(node: Node) -> void:
+	node.visible = false
+	_trash.append(node)
+
+
+## budget_us = 0 — удалить всё.
+func _free_trash(budget_us: int) -> void:
+	var until := Time.get_ticks_usec() + budget_us
+	var freed := 0
+	while not _trash.is_empty() and (budget_us == 0 or freed < 8 or Time.get_ticks_usec() < until):
+		var node: Node = _trash.pop_back()
+		if is_instance_valid(node):
+			node.free()
+		freed += 1
 
 
 ## CPU сохраняет максимальную ёмкость для фонового заполнения; GPU получает компактную порцию.

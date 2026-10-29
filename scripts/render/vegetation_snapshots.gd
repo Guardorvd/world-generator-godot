@@ -4,6 +4,7 @@ extends RefCounted
 const STRIDE := 20
 const DURATION := 0.5
 var displayed := {}
+var shown := {} # число показанных строк: буфер в displayed может быть дополнен до ёмкости MultiMesh
 var deadlines := {}
 
 static func opacity(stamp: float, now: float) -> float:
@@ -16,6 +17,7 @@ static func key(buffer: PackedFloat32Array, at: int) -> Vector2:
 
 func reset() -> void:
 	displayed.clear()
+	shown.clear()
 	deadlines.clear()
 
 func cleanup_due(now: float) -> bool:
@@ -31,11 +33,12 @@ func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, rad
 ## Подготовка выполняется фоновым потоком. История неизменна до завершения задачи.
 func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false) -> Dictionary:
 	var previous: PackedFloat32Array = displayed.get(group, PackedFloat32Array())
+	var rows: int = shown.get(group, previous.size() / STRIDE)
 	var changes := PackedFloat64Array()
 	var deadline := 0.0
 	var old := {}
 	if not immediate:
-		for at in range(0, previous.size(), STRIDE):
+		for at in range(0, rows * STRIDE, STRIDE):
 			old[key(previous, at)] = at
 	var result := source.slice(0, count * STRIDE)
 	for at in range(0, result.size(), STRIDE):
@@ -73,8 +76,9 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 	return {buffer = result, count = result.size() / STRIDE, bounds = box if have_bounds else AABB(), changes = changes, deadline = deadline}
 
 
-## На главном потоке остаются только отметки времени изменившихся растений, без построения словарей.
-func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
+## Отметки времени изменившихся растений. Фоновая подгрузка ставит их в задаче (now — часы на её конец),
+## тогда commit на главном потоке только запоминает показанный снимок.
+func stamp(frame: Dictionary, now: float) -> void:
 	var result: PackedFloat32Array = frame.buffer
 	var changes: PackedFloat64Array = frame.changes
 	var deadline: float = frame.deadline
@@ -86,6 +90,14 @@ func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
 		if mode < 0:
 			deadline = maxf(deadline, -result[at + 19] + DURATION)
 	frame.buffer = result
-	displayed[group] = result
-	deadlines[group] = deadline
+	frame.deadline = deadline
+	frame.stamped = true
+
+
+func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
+	if not frame.get("stamped", false):
+		stamp(frame, now)
+	displayed[group] = frame.buffer
+	shown[group] = frame.count
+	deadlines[group] = frame.deadline
 	return frame

@@ -28,6 +28,7 @@ var cache_size := 0
 var _uncached_key: Variant = null
 var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
 var source: RefCounted
+static var _recheck_frame := -1 # рельеф и два слоя воды пересчитывают очередь в разных кадрах
 
 
 ## Один проход по готовым треугольникам в потоке WorldLoader. Никакой новой триангуляции:
@@ -123,7 +124,11 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 			_uncached_key = _read_key
 			_uncached_arrays = _read_out.arrays
 		_read_out = {}
-	if force or p.distance_to(checked_at) >= RECHECK:
+	var due := force or p.distance_to(checked_at) >= RECHECK
+	if due and not force and _recheck_frame == Engine.get_process_frames() and p.distance_to(checked_at) < RECHECK * 2.0:
+		due = false # в этом кадре очередь уже пересчитал другой слой; отложить на кадр
+	if due:
+		if not force: _recheck_frame = Engine.get_process_frames()
 		# последние RECHECK метров пути задают направление: очередь берёт сначала части впереди
 		var ahead := p if force or checked_at == Vector2.INF else p + (p - checked_at).normalized() * AHEAD
 		checked_at = p
@@ -132,12 +137,17 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 				nodes[key].visible = false
 				nodes[key].queue_free()
 				nodes.erase(key)
-		pending.clear()
+		# Ключ сортировки — один раз на часть (раньше четыре расстояния в каждом сравнении); порядок тот же.
+		var keyed: Array = []
 		for key: Vector2i in chunks:
-			if not nodes.has(key) and distance_to_chunk(key, p) <= RADIUS:
-				pending.append(key)
-		pending.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-			return distance_to_chunk(a, p) + distance_to_chunk(a, ahead) > distance_to_chunk(b, p) + distance_to_chunk(b, ahead))
+			if not nodes.has(key):
+				var near_d := distance_to_chunk(key, p)
+				if near_d <= RADIUS:
+					keyed.append([near_d + distance_to_chunk(key, ahead), key])
+		keyed.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+		pending.clear()
+		for item: Array in keyed:
+			pending.append(item[1])
 	var uploaded := false
 	if source != null:
 		for offset in mini(3, pending.size()):
