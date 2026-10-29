@@ -12,6 +12,14 @@ const APPROACH := 64 # клеток: глубина подхода к старо
 const EXIT_MARGIN := 12 # выход не ставится у угла области
 const PLAN := "plan" # метка сети, связанной со старыми дорогами плана
 const SIDES := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
+## P2 аудита 29.10, замер на стенде соседей (две области 256, два запуска с обратным порядком политик):
+## когда связи удаются с первой попытки, фоновый запасной поиск (prefetch) делает столько же раскрытий,
+## сколько основной, и ни разу не нужен (83 579 + 83 579 против 83 579). У реки без моста он нужен 4 раза,
+## но всего раскрытий 630 тыс. против 537 тыс. у ленивого. Время в обоих случаях в пределах разброса:
+## второй прогон пары медленнее первого при любой политике (5,95/7,09 с и 5,69/6,23 с). Области готовятся
+## в фоне во время игры, поэтому важнее процессор: запасной поиск здесь ленивый. Стартовый план (загрузка
+## на переднем плане) не меняется. Пути и остаток запаса одинаковы (стенд сравнивает побайтно).
+static var eager_fallback := false
 
 
 static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger := {}) -> Dictionary:
@@ -122,6 +130,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		if StageTrails._wet(w, i): heights[i] = maxf(heights[i], ground.water_level[i])
 		heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
+	finder.eager_fallback = eager_fallback
 	StageTrails._route_surface(finder, ground, StageTrails.WIDTHS.road)
 	# Один суммарный бюджет на группу, включая неудачные направления.
 	finder.search_budget = w.N * 4

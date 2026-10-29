@@ -2,6 +2,7 @@ extends RefCounted
 const Regions := preload("res://scripts/world/region_preparation.gd")
 const Batch := preload("res://scripts/world/region_water_batch.gd")
 const Places := preload("res://scripts/world/region_settlements.gd")
+const RoadPolicy := preload("res://scripts/world/region_roads.gd")
 var fails := 0
 var completed := false
 
@@ -168,6 +169,18 @@ func run() -> int:
 					divided.surfaces[n].river[i] = 1
 					divided.surfaces[n].water_level[i] = 0.16
 		var broken := Regions.prepare_roads(source, [left, right], divided)
+		# P2: политика запасного поиска не меняет дороги; было (prefetch) / стало (ленивый) на тех же входах.
+		for case: Array in [["связанные", p, roads], ["через реку", divided, broken]]:
+			var eager: bool = RoadPolicy.eager_fallback
+			RoadPolicy.eager_fallback = not eager
+			var other := Regions.prepare_roads(source, [left, right], case[1])
+			RoadPolicy.eager_fallback = eager
+			var was: Dictionary = case[2].profile
+			var now: Dictionary = other.profile
+			print("FALLBACK %s: %s roads_ms %.0f expanded %d prefetch %d hits %d wait_ms %.1f | %s roads_ms %.0f expanded %d prefetch %d" % [case[0],
+				"eager" if eager else "lazy", was.roads_ms, was.expanded, was.prefetch_expanded, was.get("prefetch_hits", 0), was.get("prefetch_wait_ms", 0.0),
+				"lazy" if eager else "eager", now.roads_ms, now.expanded, now.prefetch_expanded])
+			check(result_bytes(other) == result_bytes(case[2]), "P2: дороги одинаковы с фоновым и ленивым запасным поиском (%s)" % case[0])
 		# 13.8: выходы на свободные стороны остаются, но связи через реку и мосты — нет.
 		# 14.4: поселений в области больше — связи внутри одного берега остаются, через реку — нет.
 		var side_of := {}

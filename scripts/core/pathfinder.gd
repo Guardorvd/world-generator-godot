@@ -18,6 +18,9 @@ const HEAP_START_CAP := 1 << 16
 ## Дополнительные счётчики только для tools/bench.gd; в игре выключены.
 static var profile_searches := false
 var _search_us := 0
+## Политика запасного поиска (P2 аудита 29.10): true — prefetch в фоне сразу (как с 9.9), false — запасной
+## поиск только когда он понадобился (ленивый). Пути и остаток запаса одинаковы; разные CPU и задержка.
+var eager_fallback := true
 ## Счётчики как у FastGrid.SearchStats (для GDScript-поиска): раскрытия, исчерпанный запас и доказанное
 ## отсутствие пути — разные исходы. _skipped — отказ без поиска при нулевом запасе (обе реализации).
 var _calls := 0
@@ -362,7 +365,7 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
 ## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
 func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> void:
-	if _fast != null and search_budget != 0:
+	if eager_fallback and _fast != null and search_budget != 0:
 		_search_versions(cost_version)
 		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
 
@@ -384,13 +387,14 @@ func search_stats() -> Dictionary:
 	if _fast == null:
 		return {calls = _calls, expanded = _expanded, budget_stops = _budget_stops + _skipped, no_path = _no_path,
 			skipped = _skipped}
-	if not profile_searches:
-		# Исходы считаются всегда: они нужны отчёту подготовки областей, а не только bench.gd.
-		var outcome: Dictionary = _fast.SearchStats()
-		return {expanded = outcome.expanded, prefetch_expanded = outcome.prefetch_expanded,
-			budget_stops = int(outcome.budget_stops) + _skipped, no_path = outcome.no_path, skipped = _skipped}
+	# Раскрытия, исходы и судьба фонового поиска считаются всегда: они нужны отчёту подготовки,
+	# а не только bench.gd. calls/native_ms/call_ms — только с profile_searches.
 	var stats: Dictionary = _fast.SearchStats()
-	stats.call_ms = _search_us / 1000.0
+	if not profile_searches:
+		stats.erase("calls")
+		stats.erase("native_ms")
+	else:
+		stats.call_ms = _search_us / 1000.0
 	stats.budget_stops = int(stats.budget_stops) + _skipped
 	stats.skipped = _skipped
 	return stats
