@@ -47,7 +47,8 @@ static func run(w: WorldData, size: int) -> void:
 	# С версии 5 в стартовой области — велопарк (BikePark): простой поиск пустой области и сеть трасс, без TrailScout
 	var park := BikePark.build(w, h, area, ID)
 	var plan := {version = VERSION, state = "none", verdict = "park", reason = park.reason, area = area,
-		stats = park.stats.merged({surface_ms = surface_ms, total_ms = surface_ms + park.stats.find_ms + park.stats.layout_ms}),
+		stats = park.stats.merged({surface_ms = surface_ms, total_ms = surface_ms + park.stats.find_ms + park.stats.layout_ms,
+			surface_parts = h.path_timings.duplicate()}),
 		park = {center = park.center, radius = park.radius, extent = park.extent}}
 	if not park.routes.is_empty():
 		var errors := TrailBuilder.append_routes(w, park.routes) # проверка до изменений: при ошибке мир не тронут

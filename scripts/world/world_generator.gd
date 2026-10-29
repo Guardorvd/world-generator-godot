@@ -97,20 +97,36 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 			on_progress.call(p, label)
 
 	step.call(StageRelief.PROGRESS, StageRelief.LABEL)
+	var t := Time.get_ticks_usec()
 	StageRelief.run(w)
 	w.start_noise_fields()
+	t = _stage_time(w, "relief", t)
 	step.call(StageOcean.PROGRESS, StageOcean.LABEL)
 	StageOcean.run(w)
+	t = _stage_time(w, "ocean", t)
 	step.call(StageHydrology.PROGRESS, StageHydrology.LABEL)
 	StageHydrology.run(w)
+	t = _stage_time(w, "hydrology", t)
 	step.call(StageRivers.PROGRESS, StageRivers.LABEL)
 	StageRivers.run(w)
+	t = _stage_time(w, "rivers", t)
 	step.call(StageGeography.PROGRESS, StageGeography.LABEL)
 	# Последняя граница изменений географии: общие поля нужны всем зависимым системам.
 	StageGeography.run(w)
+	t = _stage_time(w, "geography", t)
 	step.call(StageClimate.PROGRESS, StageClimate.LABEL)
 	StageClimate.run(w)
+	_stage_time(w, "climate", t)
 	return w
+
+
+## Время этапа в generation_profile.stages_ms (мс); возвращает новую отметку. Для отчёта загрузки и стендов.
+static func _stage_time(w: WorldData, stage: String, since_us: int) -> int:
+	var now := Time.get_ticks_usec()
+	if not w.generation_profile.has("stages_ms"):
+		w.generation_profile.stages_ms = {}
+	w.generation_profile.stages_ms[stage] = (now - since_us) / 1000.0
+	return now
 
 
 static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
@@ -132,20 +148,29 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			on_progress.call(p, label)
 	if start <= 1:
 		step.call(StageLandmarks.PROGRESS, StageLandmarks.LABEL)
+		var t := Time.get_ticks_usec()
 		StageLandmarks.run(w)
+		t = _stage_time(w, "landmarks", t)
 		step.call(StageTrails.PROGRESS, StageTrails.LABEL)
 		StageTrails.run(w, step)
+		t = _stage_time(w, "trails", t)
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
+		t = _stage_time(w, "sites", t)
 		# Одна автоматическая трасса стартовой области — до растительности, чтобы лес и покрытия видели её полотно
 		StageTrailPlan.run(w, size)
+		_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
+	var later := Time.get_ticks_usec()
 	StageVegetation.run(w)
+	later = _stage_time(w, "vegetation", later)
 	StageLakes.run(w)
+	later = _stage_time(w, "lakes", later)
 	# слой полотна поверх готовых путей: покрытие, без rng и без изменения маршрутов
 	RoadSurface.run(w)
+	_stage_time(w, "road_surface", later)
 	w.clear_noise_fields()
 	w.base_heights = null
 	step.call(0.86, "Отрисовка ландшафта")

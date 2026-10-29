@@ -23,6 +23,20 @@ func _initialize() -> void:
 	var seed_text := _arg(args, "--seed", "Север-1234")
 	# --profile: время поиска A* в каждой попытке и всего (FastGrid считает вызовы; на мир не влияет).
 	Pathfinder.profile_searches = "--profile" in args
+	# --stages: вся генерация мира без сцены и загрузчика — время каждого этапа (generation_profile.stages_ms).
+	if "--stages" in args:
+		var t0 := Time.get_ticks_msec()
+		var full := WorldGenerator.generate(seed_text, SIZE)
+		print("генерация %d мс" % (Time.get_ticks_msec() - t0))
+		print("STAGES ", JSON.stringify(full.generation_profile.get("stages_ms", {})))
+		var parts := {}
+		for key: String in full.generation_profile:
+			var value: Variant = full.generation_profile[key]
+			if key.ends_with("_ms") and (value is float or value is int) and float(value) >= 200.0: parts[key] = value
+		print("PARTS ", JSON.stringify(parts))
+		print("TRAIL PLAN ", JSON.stringify(full.trail_plan.get("stats", {})))
+		quit(0)
+		return
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -37,6 +51,20 @@ func _initialize() -> void:
 	if int(got.layers) < 1:
 		print("ОШИБКА: слой географии не прочитан")
 		quit(1)
+		return
+	# --geo-check: география заново нынешним кодом и сверка с сохранённой (прошлой версии) по полям слоя.
+	if "--geo-check" in args:
+		var t0 := Time.get_ticks_msec()
+		var fresh := WorldGenerator._geography(seed_text, WorldGenerator.PLAN_SIZE)
+		print("география %d мс, этапы %s" % [Time.get_ticks_msec() - t0, JSON.stringify(fresh.generation_profile.get("stages_ms", {}))])
+		var old: WorldData = got.world
+		var differ := []
+		for name: String in WorldCache.PER_CELL + ["down", "order", "watershed"]:
+			var a: Variant = fresh.get(name)
+			var b: Variant = old.get(name)
+			if a != null and b != null and typeof(a) == typeof(b) and a != b: differ.append(name)
+		print("география %s %s" % ["та же" if differ.is_empty() else "другая:", str(differ)])
+		quit(0 if differ.is_empty() else 1)
 		return
 	var w: WorldData = got.world
 	# Как WorldGenerator._generate_plan с start = 1: базовый рельеф и поля шума из сида.

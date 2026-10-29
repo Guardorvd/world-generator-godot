@@ -2,6 +2,42 @@ using System;
 
 public partial class FastGrid
 {
+	/// <summary>Копия выбора стока в StageHydrology.run: у каждой клетки суши с выходом — самый крутой спуск по длине
+	/// ребра к соседу с меньшим рангом заполнения (rank — место в order). Клетки решают независимо: тот же результат,
+	/// что подряд в GDScript; арифметика — double от float, как там.</summary>
+	public int[] SteepestDown(float[] filled, byte[] ocean, byte[] lake, int[] down, int[] order, int orderN, int w, int h)
+	{
+		int n = filled.Length;
+		var rank = new int[n];
+		for (int k = 0; k < orderN; k++)
+			rank[order[k]] = k;
+		var outDown = (int[])down.Clone();
+		RunRows(h, true, y =>
+		{
+			for (int x = 0; x < w; x++)
+			{
+				int i = y * w + x;
+				if (ocean[i] != 0 || lake[i] != 0 || down[i] < 0)
+					continue;
+				double best = 0.0;
+				for (int k = 0; k < 8; k++)
+				{
+					int nx = x + Dx[k], ny = y + Dy[k];
+					if (nx < 0 || ny < 0 || nx >= w || ny >= h)
+						continue;
+					int c = ny * w + nx;
+					double drop = ((double)filled[i] - filled[c]) / Dl[k];
+					if (rank[c] < rank[i] && drop > best)
+					{
+						best = drop;
+						outDown[i] = c;
+					}
+				}
+			}
+		});
+		return outDown;
+	}
+
 	/// <summary>Копия высот поиска в StageTrails.run: 0 у моря, уровень озера (filled × scale), иначе hv / tile.</summary>
 	public float[] RouteHeights(byte[] ocean, byte[] lake, float[] filled, float[] hv, double scale, double tile)
 	{

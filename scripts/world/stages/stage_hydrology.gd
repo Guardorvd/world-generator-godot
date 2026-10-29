@@ -100,11 +100,15 @@ static func run(w: WorldData, again := false) -> void:
 	# Flood даёт безопасный выход из впадин; на склонах выбираем самый крутой
 	# спуск по длине ребра, а не первого соседа, обнаруженного кучей.
 	# Ранг сохраняет порядок накопления и исключает циклы на плоских участках.
+	if fast != null:
+		# Тот же выбор на C# (FastGrid.SteepestDown): восемь соседей на клетку в GDScript — основная часть этапа.
+		down = fast.SteepestDown(filled, ocean, lake, down, order, order_n, W, H)
 	var rank := PackedInt32Array()
-	rank.resize(N)
-	for k in order_n:
-		rank[order[k]] = k
-	for i in N:
+	if fast == null:
+		rank.resize(N)
+		for k in order_n:
+			rank[order[k]] = k
+	for i in (N if fast == null else 0):
 		if ocean[i] != 0 or lake[i] != 0 or down[i] < 0:
 			continue
 		var best := 0.0
