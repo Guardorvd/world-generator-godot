@@ -84,19 +84,18 @@ func run() -> int:
 	var right := plain(Rect2i(256, 0, 256, 256))
 	var no_water := {rivers = [], outlets = [], unresolved = []}
 	var p := Regions.finish_neighbors(source, [left, right], [no_water, no_water])
-	check(p.ready and not p.settlements[0].is_empty() and not p.settlements[1].is_empty(), "пригодные соседи получают поселения с домами")
+	check(p.ready and not p.settlements[0].is_empty() and not p.settlements[1].is_empty(), "пригодные соседи получают площадки поселений")
 	var valid := true
 	var seen := {}
 	var all: Array = p.settlements[0] + p.settlements[1]
 	for s: SettlementData in all:
-		valid = valid and not seen.has(s.id) and not s.has("i") and not s.huts.is_empty()
+		# P1: до дорог — только площадка; дома ставит prepare_roads один раз.
+		valid = valid and not seen.has(s.id) and not s.has("i") and s.huts.is_empty()
 		seen[s.id] = true
 		for other: SettlementData in all:
 			if s.id != other.id:
 				valid = valid and Vector2(s.x, s.y).distance_to(Vector2(other.x, other.y)) >= (s.spacing + other.spacing) * 0.5
-		for hut: HutData in s.huts:
-			valid = valid and Rect2i(s.region * 256, Vector2i(256, 256)).has_point(Vector2i(floori(hut.x), floori(hut.y)))
-	check(valid, "мировые адреса, расстояния между соседями и дома внутри области")
+	check(valid, "мировые адреса, расстояния между соседями, площадки без домов")
 	var q := Regions.finish_neighbors(source, [right, left], [no_water, no_water])
 	check(var_to_bytes(EntityCodec.encode(p.settlements[0])) == var_to_bytes(EntityCodec.encode(q.settlements[1])), "поселения не зависят от порядка подготовки")
 	var alone := Regions.finish_neighbors(source, [left], [no_water])
@@ -111,15 +110,25 @@ func run() -> int:
 		check(with_shared.profile.geography_reused and result_bytes(with_shared) == result_bytes(Regions.prepare_roads(source, [left], recomputed)),
 			"P1: дороги одиночной области берут готовую географию её поселений, результат тот же")
 		Grid.allow_fast = not gdscript_search
-	# Окончательный угол каждой постройки проходит ту же проверку фундамента, что и место.
+	# Окончательный угол каждой постройки проходит ту же проверку фундамента, что и место;
+	# у каждой площадки встаёт минимум жилых домов своего типа.
 	var local := Places.local_world(source, left, p.surfaces[0])
-	var ground := Heightfield.base_of(local)
 	var origin: Vector2i = left.sample_rect.position
-	var footing := true
-	for s: SettlementData in p.settlements[0]:
+	for site: SettlementData in p.settlements[0]:
+		var s: SettlementData = site.duplicate(true)
+		s.x -= origin.x
+		s.y -= origin.y
+		local.settlements.append(s)
+	StageLandmarks.lay_out(local)
+	var ground := Heightfield.base_of(local)
+	var footing := not local.settlements.is_empty()
+	var enough := true
+	for s: SettlementData in local.settlements:
+		enough = enough and StageLandmarks.homes_of(s) >= Places.min_homes(s)
 		for hut: HutData in s.huts:
-			footing = footing and StageLandmarks._fits(local, ground, local.river_cells(), Vector2(hut.x - origin.x, hut.y - origin.y), hut.a, hut.t)
+			footing = footing and StageLandmarks._fits(local, ground, local.river_cells(), Vector2(hut.x, hut.y), hut.a, hut.t)
 	check(footing, "P0: окончательный поворот домов проходит проверку фундамента")
+	check(enough, "P1: на каждой площадке встаёт минимум жилых домов её типа")
 	var pinned_ledger := {settlements = EntityCodec.encode(all)}
 	check(Places.prepare(source, left, p.surfaces[0], pinned_ledger).settlements.is_empty(),
 		"P0: поселения журнала закреплены и исключают новые рядом")
@@ -143,6 +152,12 @@ func run() -> int:
 				var i: int = (floori(hut.y) - roads.sample_rect.position.y) * roads.sample_rect.size.x + floori(hut.x) - roads.sample_rect.position.x
 				houses_clear = houses_clear and roads.path_mask[i] < 2
 		check(houses_clear, "13.5: дома перестроены вдоль улиц, полотно свободно")
+		var settled: bool = not roads.settlements.is_empty()
+		for settlement: SettlementData in roads.settlements:
+			settled = settled and StageLandmarks.homes_of(settlement) >= Places.min_homes(settlement)
+			for hut: HutData in settlement.huts:
+				settled = settled and Rect2i(settlement.region * 256, Vector2i(256, 256)).has_point(Vector2i(floori(hut.x), floori(hut.y)))
+		check(settled and roads.underfilled.is_empty(), "P1: дома поставлены один раз после дорог, минимум жилых, все в своей области")
 		var divided: Dictionary = p.duplicate(true)
 		for n in 2:
 			var region: Dictionary = [left, right][n]

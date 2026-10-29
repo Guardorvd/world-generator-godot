@@ -166,7 +166,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	profile.restores = state.get("restores", 0)
 	started = Time.get_ticks_usec()
-	# Повторить штатную расстановку вдоль получившихся улиц; входные дома не меняются.
+	# Единственная расстановка домов (площадки пришли без них) — вдоль получившихся улиц.
 	StageLandmarks.lay_out(w)
 	profile.homes_laid = StageLandmarks.count_homes(w.settlements)
 	StageTrails._clear_huts(w)
@@ -194,9 +194,17 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		for y in range(maxi(0, ceili(s.y - reach)), mini(w.H - 1, floori(s.y + reach)) + 1):
 			for x in range(maxi(0, ceili(s.x - reach)), mini(w.W - 1, floori(s.x + reach)) + 1):
 				village[y * w.W + x] = 1
+	# P1 аудита 29.10: дома ставятся один раз, здесь. Площадка, где после дорог и мостов не осталось
+	# минимума жилых домов, не публикуется пустой деревней: она в underfilled, дороги к ней — просто дороги.
+	var underfilled: Array = []
+	for s: SettlementData in w.settlements:
+		if StageLandmarks.homes_of(s) < Places.min_homes(s): underfilled.append(s.id)
+	profile.underfilled = underfilled.size()
+	edges = edges.filter(func(e: Dictionary) -> bool: return not underfilled.has(e.from) and not underfilled.has(e.to))
 	var out_places: Array = []
 	for k in w.settlements.size():
 		var s: SettlementData = w.settlements[k]
+		if underfilled.has(s.id): continue
 		s.x += bounds.position.x
 		s.y += bounds.position.y
 		s.i = -1
@@ -239,7 +247,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	var components := {}
 	for k in nodes.size(): components[_root(groups, k)] = true
 	return {ready = components.size() <= 1, reason = "" if components.size() <= 1 else "disconnected_routes",
-		trails = w.trails, bridges = bridges, settlements = out_places, connections = edges, components = components.size(), attempts = attempts,
+		trails = w.trails, bridges = bridges, settlements = out_places, underfilled = underfilled, connections = edges, components = components.size(), attempts = attempts,
 		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
 		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome,
 		slope = w.slope, dw = w.dist_water, dist_path = Grid.distance_field(w.W, w.H, path_src), village = village,

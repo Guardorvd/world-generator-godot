@@ -8,6 +8,16 @@ extends RefCounted
 const CELL := 128
 const SEARCH := 24
 const MARGIN := 8 # весь дом и хозяйственный пояс остаются в своей области
+## P1 аудита 29.10: до дорог хранится площадка, а не дома. Резерв — несколько разнесённых мест окна;
+## принимается первое, у которого встаёт минимум жилых домов (только кольцо у площади, без улиц).
+## Окончательные дома ставит один раз RegionRoads после дорог.
+const RESERVE := 4
+const RESERVE_GAP := 12.0 # клеток между местами резерва: запасное — другая площадка, а не сосед лучшей
+const MIN_HOMES := {village = 3, town = 5}
+
+
+static func min_homes(s: SettlementData) -> int:
+	return MIN_HOMES.town if s.town else MIN_HOMES.village
 
 
 ## P0 аудита 29.10: квадрат 128 при окне ±24 сам по себе не держит spacing (до 129,6) между соседними
@@ -42,6 +52,10 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 	by_priority.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return outranks(source.seed_num, a, b))
 	var winners := {} # квадрат -> [x, y, spacing] в мировых клетках
 	var chosen := {} # квадрат -> SettlementData
+	var ground := Heightfield.base_of(w)
+	var river := w.river_cells()
+	profile.capacity_checks = 0
+	profile.underfilled_sites = 0
 	for cell: Vector2i in by_priority:
 		var search := window(cell)
 		# Соседи выше рангом: свои — по фактическому месту, чужой области — по всему окну с наибольшим spacing.
@@ -55,7 +69,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 					if winners.has(other): above.append(winners[other])
 				elif can_settle(other):
 					above.append([window(other), widest(source.seed_num, other)])
-		var best: Array = []
+		var candidates: Array = []
 		for y in range(search.position.y, search.end.y, 2):
 			for x in range(search.position.x, search.end.x, 2):
 				var i := (y - origin.y) * w.W + x - origin.x
@@ -84,49 +98,60 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 				if dw >= 1.5 and dw <= 6.0: score += 0.6
 				elif dw > 16.0: score -= minf(0.6, (dw - 16.0) / 40.0)
 				if dw < 1.5: score -= 0.4
-				# Нужен только победитель: линейный максимум с тем же правилом равенства, что у
-				# StageLandmarks._by_score_desc (при равной оценке — меньший индекс; он встречается раньше).
-				if best.is_empty() or score > best[0]: best = [score, i, access, density, spacing]
-		if best.is_empty(): continue
-		var c: Array = best
-		var i: int = c[1]
-		var x: int = i % w.W + origin.x
-		var y: int = i / w.W + origin.y
-		winners[cell] = [x + 0.5, y + 0.5, c[4]]
-		var importance := clampf(float(w.biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3
-			+ (0.12 if w.dist_water[i] < 6.0 else 0.0), 0.0, 1.0)
-		var rng := WGRandom.at(source.seed_num, "settlement.huts", x, y)
-		var town := importance >= 0.8 # постоянный порог вместо ранга по ещё неизвестному миру
-		chosen[cell] = SettlementData.from_dict({x = x - origin.x + 0.5, y = y - origin.y + 0.5, i = i,
-			spacing = c[4], importance = importance, town = town,
-			homes = (8 if town else 4) + roundi(importance * 3.0) + floori(rng.next_float() * 3),
-			style = floori(rng.next_float() * 4), character = StageLandmarks._character(w, i, town),
-			name = source.make_name(Names.SETTLEMENT, "settlement", x, y), huts = []})
+				candidates.append([score, i, access, density, spacing])
+		# Резерв: лучшие разнесённые места окна; порядок и равенства — как у StageLandmarks._by_score_desc.
+		var reserve: Array = []
+		while reserve.size() < RESERVE:
+			var best: Array = []
+			for c: Array in candidates:
+				if not best.is_empty() and c[0] <= best[0]: continue # при равенстве — раньше встреченный, меньший индекс
+				var apart := true
+				for r: Array in reserve:
+					if Vector2(c[1] % w.W - r[1] % w.W, c[1] / w.W - r[1] / w.W).length() < RESERVE_GAP:
+						apart = false
+						break
+				if apart: best = c
+			if best.is_empty(): break
+			reserve.append(best)
+		for c: Array in reserve:
+			var site := _site(source, w, origin, c)
+			profile.capacity_checks += 1
+			if StageLandmarks.capacity(w, ground, river, site) < min_homes(site):
+				profile.underfilled_sites += 1
+				continue
+			winners[cell] = [site.x + origin.x, site.y + origin.y, site.spacing]
+			chosen[cell] = site
+			break
 	for cell: Vector2i in cells:
 		if chosen.has(cell): w.settlements.append(chosen[cell])
-	# Тот же подбор домов, проверки девяти точек фундамента и хозяйственные постройки.
-	# Пока нет дорог, используется существующее кольцо вокруг площади.
 	profile.select_ms = (Time.get_ticks_usec() - started) / 1000.0
-	started = Time.get_ticks_usec()
-	StageLandmarks.lay_out(w)
-	profile.layout_ms = (Time.get_ticks_usec() - started) / 1000.0
 	profile.places = w.settlements.size()
-	profile.homes = StageLandmarks.count_homes(w.settlements)
 	var out: Array = []
 	for settlement: SettlementData in w.settlements:
-		if settlement.huts.is_empty(): continue
 		var s: SettlementData = settlement.duplicate(true)
 		s.x += origin.x
 		s.y += origin.y
 		s.i = -1 # локальный индекс не является адресом в стартовом плане
 		s.id = WorldData.place_id("settlement", s.x, s.y)
 		s.region = source.region_at(Vector2i(floori(s.x), floori(s.y)))
-		for hut: HutData in s.huts:
-			hut.x += origin.x
-			hut.y += origin.y
 		out.append(s)
-	profile.kept = out.size()
 	return {ready = true, reason = "", settlements = out, profile = profile, geography = geography_of(w, region)}
+
+
+## Площадка из кандидата [score, i, access, density, spacing] в локальных клетках w; дома не ставятся.
+static func _site(source: WorldData, w: WorldData, origin: Vector2i, c: Array) -> SettlementData:
+	var i: int = c[1]
+	var x: int = i % w.W + origin.x
+	var y: int = i / w.W + origin.y
+	var importance := clampf(float(w.biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3
+		+ (0.12 if w.dist_water[i] < 6.0 else 0.0), 0.0, 1.0)
+	var rng := WGRandom.at(source.seed_num, "settlement.huts", x, y)
+	var town := importance >= 0.8 # постоянный порог вместо ранга по ещё неизвестному миру
+	return SettlementData.from_dict({x = x - origin.x + 0.5, y = y - origin.y + 0.5, i = i,
+		spacing = c[4], importance = importance, town = town,
+		homes = (8 if town else 4) + roundi(importance * 3.0) + floori(rng.next_float() * 3),
+		style = floori(rng.next_float() * 4), character = StageLandmarks._character(w, i, town),
+		name = source.make_name(Names.SETTLEMENT, "settlement", x, y), huts = []})
 
 
 ## Окно поиска мирового квадрата cell.
