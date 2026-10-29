@@ -48,6 +48,14 @@ var links := PackedByteArray():
 		links = value
 		_links_version += 1
 var use_corridor := true # проверять ширину прохода
+## Ревью дорожной сети 29.10, шаг 2: find_path, prefetch и can_reach не выходят из этого прямоугольника клеток.
+## Пустой — вся карта (по умолчанию). Путь внутри окна — лучший внутри окна, а не на всей карте.
+var window := Rect2i():
+	set(value):
+		window = value
+		if _fast != null:
+			if value.has_area(): _fast.SetWindow(value.position.x, value.position.y, value.end.x, value.end.y)
+			else: _fast.SetWindow(0, 0, W, H)
 var max_cross_grade := INF # предел земляных работ поперёк прохода
 ## Общий остаток раскрытий для нескольких поисков: -1 без ограничения, 0 — отказаться.
 ## Позволяет проверять кандидат поселения без полного перебора карты по каждому соседу.
@@ -195,6 +203,13 @@ func _measure_corridor(c: int, k: int) -> void:
 	_cross[n * 8 + opposite[k]] = cross_grade
 
 
+## Границы окна поиска: [x0, y0, x1, y1), без окна — вся карта.
+func _bounds() -> PackedInt32Array:
+	if not window.has_area():
+		return PackedInt32Array([0, 0, W, H])
+	return PackedInt32Array([maxi(0, window.position.x), maxi(0, window.position.y), mini(W, window.end.x), mini(H, window.end.y)])
+
+
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> PackedInt32Array:
@@ -212,7 +227,6 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		return path
 	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
 	var W := self.W
-	var H := self.H
 	var heights := self.heights
 	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
 	var g := self.g
@@ -227,8 +241,11 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	var OFF := PackedInt32Array()
 	for k in 8:
 		OFF.append(DY[k] * W + DX[k])
-	var W1 := W - 1
-	var H1 := H - 1
+	var bounds := _bounds()
+	var X0 := bounds[0]
+	var Y0 := bounds[1]
+	var X1 := bounds[2]
+	var Y1 := bounds[3]
 	gen += 1
 	var gn := gen
 	var tx := t % W
@@ -282,12 +299,12 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		var gc := g[c]
 		var cc := cost[c]
 		# у клеток не на краю все 8 соседей внутри карты: проверка границ не нужна
-		var inner := cx > 0 and cy > 0 and cx < W1 and cy < H1
+		var inner := cx > X0 and cy > Y0 and cx < X1 - 1 and cy < Y1 - 1
 		for k in 8:
 			var nx := cx + DX[k]
 			var ny := cy + DY[k]
 			var n := c + OFF[k]
-			if not inner and (nx < 0 or ny < 0 or nx >= W or ny >= H):
+			if not inner and (nx < X0 or ny < Y0 or nx >= X1 or ny >= Y1):
 				continue
 			var cn := cost[n]
 			if cn == INF or done[n] == gn:
@@ -367,8 +384,8 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 ## Шаг 0–2 ревью дорожной сети 29.10: «невозможно» отдельно от «кончился запас». false — только если find_path
 ## с теми же входами (heights, links, use_corridor, max_cross_grade) точно не найдёт пути: s и t в разных
 ## областях, связанных разрешёнными шагами. Поиск в ширину без стоимостей попеременно от обоих концов —
-## меньшая область исчерпывается первой; запас раскрытий не тратится. Шаг разрешён, если поиск разрешил бы
-## его в любую сторону, поэтому ложного «нельзя» не бывает. Копия FastGrid.Reach.
+## меньшая область исчерпывается первой; запас раскрытий не тратится. От s идут шаги поиска, от t — они же
+## в обратную сторону: ответ точный. Копия FastGrid.Reach.
 @warning_ignore("integer_division")
 func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> bool:
 	if _fast != null:
@@ -378,6 +395,7 @@ func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		return true
 	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
 	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
+	var bounds := _bounds()
 	var mark := {s: 0, t: 1}
 	var queues: Array[PackedInt32Array] = [PackedInt32Array([s]), PackedInt32Array([t])]
 	var heads := [0, 0]
@@ -393,14 +411,15 @@ func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 			for k in 8:
 				var nx := cx + Grid.DX[k]
 				var ny := cy + Grid.DY[k]
-				if nx < 0 or ny < 0 or nx >= W or ny >= H:
+				if nx < bounds[0] or ny < bounds[1] or nx >= bounds[2] or ny >= bounds[3]:
 					continue
 				var n := ny * W + nx
 				var m: int = mark.get(n, -1)
 				# Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
 				if m == side or n != s and cost[n] == INF:
 					continue
-				if not _step_allowed(cost, terrain, max_grade, c, k) and not _step_allowed(cost, terrain, max_grade, n, opposite[k]):
+				# От s — шаги поиска вперёд, от t — те же шаги в обратную сторону (n → c).
+				if not (_step_allowed(cost, terrain, max_grade, c, k) if side == 0 else _step_allowed(cost, terrain, max_grade, n, opposite[k])):
 					continue
 				if m == 1 - side:
 					return true

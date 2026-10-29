@@ -520,6 +520,19 @@ func _reach_check() -> void:
 			_check(reach == expect[name] and (reach or not found), "can_reach %s: %s, путь найден: %s" % [name, reach, found])
 			if answers.has(name): _check(answers[name] == reach, "can_reach %s: C# и GDScript совпадают" % name)
 			answers[name] = reach
+			if name == "gap":
+				# Окно без щели: пути в нём нет; окно со щелью — тот же путь, что без окна.
+				var whole := finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+				finder.window = Rect2i(0, 0, S, 16)
+				var shut := not finder.can_reach(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) \
+					and finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty()
+				_check(shut, "окно без щели: пути нет (%s)" % ("C#" if fast else "GDScript"))
+				finder.window = Rect2i(0, 0, S, 22)
+				var inside := finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+				var within := not inside.is_empty()
+				for i in inside: within = within and i / S < 22
+				_check(within and inside == whole, "окно со щелью: путь внутри окна, как без окна (%s)" % ("C#" if fast else "GDScript"))
+				finder.window = Rect2i()
 		Grid.allow_fast = allow
 
 

@@ -91,11 +91,13 @@ public partial class FastGrid
 		public long CostVersion, HeightsVersion, LinksVersion;
 		public double Climb, MaxGrade, MaxCross;
 		public bool UseCorridor;
+		public int X0, Y0, X1, Y1; // окно поиска: клетки x0 <= x < x1, y0 <= y < y1
 
 		public bool Same(Query o) =>
 			CostVersion >= 0 && CostVersion == o.CostVersion &&
 			HeightsVersion == o.HeightsVersion && LinksVersion == o.LinksVersion &&
 			S == o.S && T == o.T && Version == o.Version && UseCorridor == o.UseCorridor &&
+			X0 == o.X0 && Y0 == o.Y0 && X1 == o.X1 && Y1 == o.Y1 &&
 			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross);
 	}
 
@@ -265,8 +267,21 @@ public partial class FastGrid
 		{
 			Cost = cost, S = s, T = t, Heights = heights, Climb = climb, MaxGrade = maxGrade, Links = links,
 			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Version = _corridorVersion,
-			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion
+			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion,
+			X0 = _winX0, Y0 = _winY0, X1 = Math.Min(_winX1, _w), Y1 = Math.Min(_winY1, _h)
 		};
+
+	// Ревью дорожной сети 29.10, шаг 2: поиск и Reach не выходят из окна. По умолчанию окно — вся карта.
+	private int _winX0, _winY0, _winX1 = int.MaxValue, _winY1 = int.MaxValue;
+
+	/// <summary>Окно следующих FindPath, Prefetch и Reach: клетки x0 <= x < x1, y0 <= y < y1 (копия Pathfinder.window).</summary>
+	public void SetWindow(int x0, int y0, int x1, int y1)
+	{
+		_winX0 = Math.Max(0, x0);
+		_winY0 = Math.Max(0, y0);
+		_winX1 = x1;
+		_winY1 = y1;
+	}
 
 	/// <summary>Путь от клетки s до клетки t по стоимости cost или пустой массив. Копия Pathfinder.find_path.</summary>
 	public int[] FindPath(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade)
@@ -352,7 +367,7 @@ public partial class FastGrid
 	/// <summary>Копия Pathfinder.can_reach: false, только если FindPath с этими входами точно не найдёт пути
 	/// (s и t в разных областях, связанных разрешёнными шагами). Без стоимостей и кучи: поиск в ширину
 	/// попеременно от обоих концов; меньшая область исчерпывается первой. Запас раскрытий не тратит.
-	/// Шаг считается разрешённым, если поиск разрешил бы его в любую сторону, — ответ «нельзя» не бывает ложным.</summary>
+	/// От s идут шаги поиска, от t — они же в обратную сторону, так что ответ точный, без допущения симметрии шагов.</summary>
 	public bool Reach(float[] cost, int s, int t, float[] heights, double climb, double maxGrade, byte[] links, bool useCorridor, double maxCrossGrade)
 	{
 		_reachCalls++;
@@ -385,6 +400,7 @@ public partial class FastGrid
 		qb[tailB++] = t;
 		long visited = 0;
 		bool found = false;
+		int x0 = _winX0, y0 = _winY0, x1 = Math.Min(_winX1, _w), y1 = Math.Min(_winY1, _h);
 		// Слой за слоем у той стороны, чья очередь короче: пустая очередь — её область исчерпана.
 		while (headA < tailA && headB < tailB && !found)
 		{
@@ -401,15 +417,16 @@ public partial class FastGrid
 				for (int k = 0; k < 8; k++)
 				{
 					int nx = cx + Dx[k], ny = cy + Dy[k];
-					if (nx < 0 || ny < 0 || nx >= _w || ny >= _h)
+					if (nx < x0 || ny < y0 || nx >= x1 || ny >= y1)
 						continue;
 					int nb = c + _off[k];
 					int m = mark[nb];
 					// Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
 					if (m == own || nb != s && double.IsPositiveInfinity(cost[nb]))
 						continue;
-					if (!StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, c, k) &&
-						!StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, nb, Opposite[k]))
+					// От s — шаги поиска вперёд, от t — те же шаги в обратную сторону (nb → c).
+					if (fromA ? !StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, c, k)
+						: !StepAllowed(cost, heights, links, hasLinks, terrain, corridor, maxGrade, maxCrossGrade, nb, Opposite[k]))
 						continue;
 					if (m == other)
 					{
@@ -561,7 +578,8 @@ public partial class FastGrid
 			bool terrain = heights.Length > 0 && (climb > 0.0 || maxGrade < double.PositiveInfinity);
 			bool corridor = q.UseCorridor && grid._hasCorridor;
 			bool hasLinks = q.Links.Length > 0;
-			int W = grid._w, H = grid._h, W1 = W - 1, H1 = H - 1;
+			int W = grid._w;
+			int X0 = q.X0, Y0 = q.Y0, X1 = q.X1, Y1 = q.Y1, XI = X1 - 1, YI = Y1 - 1;
 			int gn = ++_gen;
 			int seenMark = gn * 2, doneMark = gn * 2 + 1;
 			int tx = t % W, ty = t / W;
@@ -616,13 +634,13 @@ public partial class FastGrid
 					int cx = c % W, cy = c / W;
 					double gc = nc->G;
 					double cc = costs[c];
-					bool inner = cx > 0 && cy > 0 && cx < W1 && cy < H1;
+					bool inner = cx > X0 && cy > Y0 && cx < XI && cy < YI;
 					int linkBits = hasLinks ? links[c] : 0;
 					float* ce = corr + c * 16;
 					for (int k = 0; k < 8; k++)
 					{
 						int nx = cx + dxs[k], ny = cy + dys[k];
-						if (!inner && (nx < 0 || ny < 0 || nx >= W || ny >= H))
+						if (!inner && (nx < X0 || ny < Y0 || nx >= X1 || ny >= Y1))
 							continue;
 						int n = c + off[k];
 						double cn = costs[n];
