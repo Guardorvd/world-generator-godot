@@ -74,9 +74,14 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 		var h := w.h[i]
 		hv_raw[i] = (maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5) if w.ocean[i] != 0 else h * HS
 		hv[i] = hv_raw[i]
+	var t := Time.get_ticks_usec()
 	# Сначала полный профиль дна/берега, затем защита непрерывного стрежня.
 	ribbons = _river_ribbons()
+	path_timings.ribbons_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	_carve_rivers()
+	path_timings.carve_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	for pts: Array in ribbons:
 		for p: Dictionary in pts:
 			var fx := clampf(p.x / TILE - 0.5, 0.0, W - 1.001)
@@ -95,7 +100,10 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 				# выравнивание всех вершин в одну отметку стирало отмели.
 				for k: int in tri:
 					hv[k] -= cut
+	path_timings.bed_cut_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
 	_fit_river_banks()
+	path_timings.banks_ms = (Time.get_ticks_usec() - t) / 1000.0
 	if rivers_only:
 		return
 	complete_water()
@@ -601,6 +609,20 @@ func _fit_river_banks() -> void:
 		for n in range(r0, r1):
 			_fit_banks_of(ribbons[n])
 		return 0
+	# Без OuterLand и полотна дорог (генерация) ground_at и lake_level — только чтение hv, lake, filled:
+	# поток держит свои ссылки на массивы и не трогает общий Heightfield/WorldData в цикле
+	# (иначе счётчики ссылок общих объектов сводили все потоки к скорости одного: 14 с на 768).
+	if world.outer == null and road_refinement == null:
+		var w := world
+		var shared := [hv, w.lake, w.filled, w.W, w.H, ribbons]
+		job = func(r0: int, r1: int) -> int:
+			var heights: PackedFloat32Array = shared[0]
+			var lake: PackedByteArray = shared[1]
+			var filled: PackedFloat32Array = shared[2]
+			var list: Array = shared[5]
+			for n in range(r0, r1):
+				_fit_banks_local(list[n], heights, lake, filled, shared[3], shared[4])
+			return 0
 	Parallel.bands(ribbons.size(), job, 2)
 	index_ribbons()
 
@@ -653,6 +675,63 @@ func _fit_banks_of(pts: Array) -> void:
 				if reach >= limit:
 					reach = p.w
 			var bank := Vector3(p.x + normal.x * side * reach, p.y, p.z + normal.y * side * reach)
+			if side > 0.0:
+				p.left = bank
+			else:
+				p.right = bank
+
+
+## То же, что _fit_banks_of, когда ground_at = base_ground_at на карте и OuterLand нет:
+## те же формулы над переданными массивами (статическая, без обращений к self и world в цикле).
+static func _fit_banks_local(pts: Array, heights: PackedFloat32Array, lake: PackedByteArray, filled: PackedFloat32Array,
+		W: int, H: int) -> void:
+	var drop := GameConfig.LAKE_DROP
+	for p: Dictionary in pts:
+		var normal := Vector2(p.left.x - p.x, p.left.z - p.z).normalized()
+		var px: float = p.x
+		var pz: float = p.z
+		var py: float = p.y
+		# lake_level(p.x, p.z)
+		var level := -INF
+		var cx := floori(px / TILE - 0.5)
+		var cy := floori(pz / TILE - 0.5)
+		if not (cx < 0 or cy < 0 or cx >= W - 1 or cy >= H - 1):
+			var a := cy * W + cx
+			if lake[a] != 0:
+				level = filled[a] * HS - drop
+			if lake[a + 1] != 0:
+				level = maxf(level, filled[a + 1] * HS - drop)
+			a += W
+			if lake[a] != 0:
+				level = maxf(level, filled[a] * HS - drop)
+			if lake[a + 1] != 0:
+				level = maxf(level, filled[a + 1] * HS - drop)
+		for side in [1.0, -1.0]:
+			var reach: float = p.w
+			if py > maxf(0.0, level) + 0.001:
+				reach = 0.0
+				var limit: float = p.w + TILE
+				while reach < limit:
+					reach += 0.5
+					var q: Vector2 = Vector2(px, pz) + normal * side * reach
+					# base_ground_at(q.x, q.y) без OuterLand: клетка зажата в карту
+					var fx := clampf(q.x / TILE - 0.5, 0.0, W - 1.001)
+					var fz := clampf(q.y / TILE - 0.5, 0.0, H - 1.001)
+					var i := floori(fx)
+					var j := floori(fz)
+					var o := j * W + i
+					var ha := heights[o]
+					var hb := heights[o + 1]
+					var hc := heights[o + W]
+					var hd := heights[o + W + 1]
+					var tx := fx - i
+					var tz := fz - j
+					var g := ha + (hb - ha) * tx + (hc - ha) * tz if tx + tz <= 1.0 else hd + (hc - hd) * (1.0 - tx) + (hb - hd) * (1.0 - tz)
+					if g >= py + 0.02:
+						break
+				if reach >= limit:
+					reach = p.w
+			var bank := Vector3(px + normal.x * side * reach, py, pz + normal.y * side * reach)
 			if side > 0.0:
 				p.left = bank
 			else:

@@ -33,6 +33,7 @@ static func run(w: WorldData) -> void:
 	var valley_started := Time.get_ticks_usec()
 	_shape_valleys(w)
 	w.generation_profile.river_valleys_ms = (Time.get_ticks_usec() - valley_started) / 1000.0
+	var lines_started := Time.get_ticks_usec()
 	var N := w.N
 	var ocean := w.ocean
 	var lake := w.lake
@@ -95,6 +96,8 @@ static func run(w: WorldData) -> void:
 		if pts.size() >= 2:
 			rivers.append(Grid.chaikin(pts, 2))
 	w.rivers = rivers
+	w.generation_profile.river_lines_ms = (Time.get_ticks_usec() - lines_started) / 1000.0
+	var surface_started := Time.get_ticks_usec()
 	# Консервативный коридор ленты для дорог, домов и растительности.
 	# Не меняем гидрологическую сеть: acc/down по-прежнему относятся к river.
 	w.river_area = river.duplicate()
@@ -105,8 +108,13 @@ static func run(w: WorldData) -> void:
 		w.river_area[cell] = 1
 	# Дальше рельеф, вода и реки не меняются: этот же рельеф (с уровнями воды по готовому коридору)
 	# служит базой загрузчику, дорогам и планировке домов (с 9.7), а не строится каждым заново
+	var water_started := Time.get_ticks_usec()
 	surface.complete_water()
 	w.base_heights = surface
+	w.generation_profile.river_surface_ms = (water_started - surface_started) / 1000.0
+	w.generation_profile.river_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
+	for key: String in surface.path_timings:
+		w.generation_profile["river_" + key] = surface.path_timings[key]
 
 
 ## Один проход вместо эрозии. Вода в руслах опускается от устья вверх,
