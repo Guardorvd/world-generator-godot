@@ -126,7 +126,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 			hut.y += origin.y
 		out.append(s)
 	profile.kept = out.size()
-	return {ready = true, reason = "", settlements = out, profile = profile}
+	return {ready = true, reason = "", settlements = out, profile = profile, geography = geography_of(w, region)}
 
 
 ## Окно поиска мирового квадрата cell.
@@ -174,8 +174,15 @@ static func density_at(seed_num: int, x: int, y: int) -> float:
 	return StageLandmarks.patches(x, y, 96.0, WGRandom.derive(seed_num, "settlement.density"))
 
 
+## Производные поля того же домена (sample_rect) из той же согласованной воды. Владелец — пакет
+## подготовки (finish_neighbors): поля не меняются, дороги той же области берут их вместо пересчёта.
+static func geography_of(w: WorldData, region: Dictionary) -> Dictionary:
+	return {rect = region.sample_rect, dist_water = w.dist_water, elev = w.elev, slope = w.slope, biome = w.biome}
+
+
 ## Адаптер к существующим правилам домов: координаты в нём локальные, география — готовая.
-static func local_world(source: WorldData, region: Dictionary, surface: Dictionary) -> WorldData:
+## geography — результат geography_of для ТОГО ЖЕ прямоугольника, полей и поверхности; иначе пересчёт.
+static func local_world(source: WorldData, region: Dictionary, surface: Dictionary, geography := {}) -> WorldData:
 	var w := WorldData.new()
 	w.W = region.sample_rect.size.x
 	w.H = region.sample_rect.size.y
@@ -192,6 +199,13 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 		if surface.river[i] != 0: w.filled[i] = surface.water_level[i]
 	w.dist_ocean = region.fields.dist.duplicate()
 	w.path_mask.resize(w.N)
+	if geography.get("rect") == region.sample_rect:
+		# Массивы общие (копия при записи): изменения дорог не трогают поля пакета.
+		w.dist_water = geography.dist_water
+		w.elev = geography.elev
+		w.slope = geography.slope
+		w.biome = geography.biome
+		return w
 	w.biome = region.fields.biome.duplicate()
 	StageGeography.run(w) # новые уклоны и расстояния до воды после земляных работ
 	for i in w.N:

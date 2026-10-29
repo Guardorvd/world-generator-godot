@@ -63,8 +63,12 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	settlements.sort_custom(func(a: SettlementData, b: SettlementData) -> bool: return a.id < b.id)
 	var merged := {rect = bounds, sample_rect = bounds, fields = fields}
 	var started := Time.get_ticks_usec()
-	var w := Places.local_world(source, merged, surface)
-	var profile := {geography_ms = (Time.get_ticks_usec() - started) / 1000.0}
+	# P1 аудита 29.10: одиночная область без полосы плана — тот же домен, поля и вода, что у её поселений;
+	# география берётся из пакета. Иначе (группа, подход к плану) расстояния до воды на объединении
+	# другие, и она считается заново.
+	var geography: Dictionary = batch.geographies[0] if regions.size() == 1 and batch.get("geographies", []).size() == 1 else {}
+	var w := Places.local_world(source, merged, surface, geography)
+	var profile := {geography_ms = (Time.get_ticks_usec() - started) / 1000.0, geography_reused = geography.get("rect") == bounds}
 	started = Time.get_ticks_usec()
 	w.path_mask = fields.path.duplicate()
 	# Проходимо: свои клетки группы и сухая земля плана в полосе подхода, кроме домов и сооружений.

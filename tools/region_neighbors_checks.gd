@@ -102,6 +102,15 @@ func run() -> int:
 	var alone := Regions.finish_neighbors(source, [left], [no_water])
 	check(var_to_bytes(EntityCodec.encode(alone.settlements[0])) == var_to_bytes(EntityCodec.encode(p.settlements[0])),
 		"P0: поселения области не зависят от состава группы (сосед не загружен)")
+	if not OS.get_cmdline_user_args().has("--water-only"):
+		var gdscript_search := not Grid.allow_fast
+		Grid.allow_fast = true
+		var with_shared := Regions.prepare_roads(source, [left], alone)
+		var recomputed: Dictionary = alone.duplicate()
+		recomputed.erase("geographies")
+		check(with_shared.profile.geography_reused and result_bytes(with_shared) == result_bytes(Regions.prepare_roads(source, [left], recomputed)),
+			"P1: дороги одиночной области берут готовую географию её поселений, результат тот же")
+		Grid.allow_fast = not gdscript_search
 	# Окончательный угол каждой постройки проходит ту же проверку фундамента, что и место.
 	var local := Places.local_world(source, left, p.surfaces[0])
 	var ground := Heightfield.base_of(local)

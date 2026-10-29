@@ -41,11 +41,13 @@ static func finish_neighbors(source: WorldData, regions: Array, networks: Array,
 	var batch := WaterBatch.finish(regions, networks)
 	batch.settlements = []
 	batch.settlement_profiles = [] # время и число мест/домов по областям; в сравнения результата не входит
+	batch.geographies = [] # уклоны, расстояния до воды и биомы областей; живут, пока жив пакет
 	if not batch.ready: return batch
 	for i in regions.size():
 		var places := Settlements.prepare(source, regions[i], batch.surfaces[i], ledger)
 		batch.settlements.append(places.settlements)
 		batch.settlement_profiles.append(places.get("profile", {}))
+		batch.geographies.append(places.get("geography", {}))
 	return batch
 
 
