@@ -12,13 +12,17 @@ const SIZE := 512
 const DIR := "user://road_plan_test"
 const KEYS := ["stage_ms", "main_roads_ms", "secondary_roads_ms", "mountain_trails_ms", "settlement_attempts",
 	"settlement_rejected", "road_failures", "expanded", "prefetch_expanded", "budget_stops", "no_path", "skipped",
-	"reach_calls", "reach_rejects", "reach_visited", "checkpoints", "checkpoint_mb", "restores", "road_windows", "no_bridge_cells"]
+	"reach_calls", "reach_rejects", "reach_visited", "checkpoints", "checkpoint_mb", "restores", "road_windows", "no_bridge_cells", "cost_ms", "route_heightfield_ms", "finder_setup_ms",
+	"animal_trails_ms", "corridor_road_ms", "corridor_trail_ms", "corridor_mountain_ms", "layout_ms", "native_ms", "call_ms", "calls",
+	"parts_ms"]
 
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)
 	var args := OS.get_cmdline_user_args()
 	var seed_text := _arg(args, "--seed", "Север-1234")
+	# --profile: время поиска A* в каждой попытке и всего (FastGrid считает вызовы; на мир не влияет).
+	Pathfinder.profile_searches = "--profile" in args
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -51,7 +55,7 @@ func _initialize() -> void:
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
 	print("PROFILE ", JSON.stringify(profile))
 	for link: Array in w.generation_profile.get("road_links", []):
-		print("  связь %d→%d, %d клеток: запас %d, %s" % link)
+		print("  связь %d→%d, %d клеток: запас %d, %s, %.0f мс (поиск %.0f)" % link)
 	for why: Dictionary in w.generation_profile.get("site_failures", []):
 		var at: Array = why.at
 		print("  переправа (%d,%d)→(%d,%d), воды по пути %d: %s" % [at[0] % w.W, at[0] / w.W, at[1] % w.W, at[1] / w.W, at[2],

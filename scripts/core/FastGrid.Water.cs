@@ -169,6 +169,43 @@ public partial class FastGrid
 		return true;
 	}
 
+	/// <summary>Копия StageTrails._bridge_ends (ревью дорожной сети 29.10, шаг 5): концы настила на оси (ax, az) → (bx, bz)
+	/// длиной len и направлением (ux, uz), полуширина half. 0 — годятся, 1 — перепад концов больше maxRise,
+	/// 2 — край въезда над водой глубже 0,3 м, 3 — край въезда дальше landingGap от конца настила.</summary>
+	public int BridgeEnds(double ax, double az, double bx, double bz, double ux, double uz, double len, double half,
+		double maxRise, double landingGap)
+	{
+		double ay = Ground(ax, az), by = Ground(bx, bz);
+		if (Math.Abs(by - ay) > maxRise)
+			return 1;
+		for (int end = 0; end < 2; end++)
+		{
+			double t = end == 0 ? 0.0 : len;
+			double deck = end == 0 ? ay : by;
+			for (int s = -1; s <= 1; s++)
+			{
+				double side = s;
+				double x = ax + ux * t - uz * side * half;
+				double z = az + uz * t + ux * side * half;
+				if (Depth(x, z) > 0.3)
+					return 2;
+				if (Math.Abs(Ground(x, z) - deck) > landingGap)
+					return 3;
+			}
+		}
+		return 0;
+	}
+
+	/// <summary>Копия StageTrails._crosses_water: вода глубже 0,3 м хотя бы в одной целой точке оси (1..ceil(len) − 1 м).</summary>
+	public bool CrossesWater(double ax, double az, double ux, double uz, double len)
+	{
+		int n = (int)Math.Ceiling(len);
+		for (int k = 1; k < n; k++)
+			if (Depth(ax + ux * k, az + uz * k) > 0.3)
+				return true;
+		return false;
+	}
+
 	/// <summary>Копия поиска в StageTrails._mountain_trails: первая клетка с mask ≥ 2 и проходимой стоимостью,
 	/// ближайшая к (px, py) по центрам клеток; [клетка, расстояние] или [-1, INF].</summary>
 	public double[] NearestPath(byte[] mask, float[] cost, int w, double px, double py)

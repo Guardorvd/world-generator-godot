@@ -65,7 +65,17 @@ const MOUNTAIN_GRADE := 0.55
 const BENCH_CROSS := 0.65 # полка не должна превращаться в стену у поворота или берега
 
 
+## Время частей этапа, мс (ревью дорожной сети 29.10, шаг 5: где тратится время). Заполняется всегда, дёшево;
+## run сбрасывает его и кладёт в generation_profile.parts_ms.
+static var parts := {}
+
+
+static func _part(key: String, since_us: int) -> void:
+	parts[key] = float(parts.get(key, 0.0)) + (Time.get_ticks_usec() - since_us) / 1000.0
+
+
 static func run(w: WorldData, step: Callable) -> void:
+	parts = {}
 	var started_us := Time.get_ticks_usec()
 	_build_cost(w)
 	var detail_us := Time.get_ticks_usec()
@@ -97,6 +107,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	# Исходы и раскрытия считаются всегда (дёшево); время вызовов и кэш — только с profile_searches.
 	w.generation_profile.merge(finder.search_stats())
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	w.generation_profile.parts_ms = parts.duplicate()
 	finder.release()
 
 
@@ -160,6 +171,7 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 ## path_mask (скорость, деревья) отмечается по нарисованной линии (Grid.stamp_path), а дешевле становятся клетки пути
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
 		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null) -> void:
+	var part_us := Time.get_ticks_usec()
 	path = _explicit(w, path, on_axis)
 	var W := w.W
 	var H := w.H
@@ -224,10 +236,15 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			if both and road_cost[n] != INF:
 				road_cost[n] = minf(road_cost[n], maxf(0.5, road_cost[n] * 0.9))
 	w.cost = cost
+	var protect_us := Time.get_ticks_usec()
 	_protect_structures(w, road_cost)
+	_part("protect_structures", protect_us)
+	var line_us := Time.get_ticks_usec()
 	var line := _road_line(w, pts, on_axis, surface, kind) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
+	_part("road_line", line_us)
 	Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
 	w.trails.append({kind = kind, pts = line})
+	_part("add_trail", part_us)
 
 
 ## Скругляем только безопасные углы. У сооружений сохраняем точный вход на ось;
@@ -488,16 +505,22 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if step.is_valid():
 			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d" % [connected - 1, maxi(0, n - 1), attempts])
 		finder.search_budget = budgets[b]
+		var attempt_us := Time.get_ticks_usec()
+		var search_ms: float = finder.search_stats().get("call_ms", 0.0)
 		var q := _connect_settlement(w, finder, road_cost, st[a].i, st[b].i, state)
-		# Каждая попытка: пара, прямое расстояние, списанный запас и исход (стенд road_plan_test).
-		link_log.append([a, b, roundi(distance), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", "")])
+		# Каждая попытка: пара, прямое расстояние, списанный запас, исход, время попытки и поиска в ней, мс
+		# (поиск — только с Pathfinder.profile_searches; стенд road_plan_test).
+		link_log.append([a, b, roundi(distance), budgets[b] - finder.search_budget, "ok" if not q.is_empty() else state.get("failure", ""),
+			(Time.get_ticks_usec() - attempt_us) / 1000.0, float(finder.search_stats().get("call_ms", 0.0)) - search_ms])
 		budgets[b] = finder.search_budget
 		finder.search_budget = -1
 		if q.is_empty():
 			pair_tries[pair_key] = int(pair_tries.get(pair_key, 0)) + 1
 			_count_failure(failures, state)
 			continue
+		var build_us := Time.get_ticks_usec()
 		surface.build_structures()
+		_part("build_structures", build_us)
 		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
 		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
 		var kind := "road" if main_road(st[a], st[b]) else "trail"
@@ -843,7 +866,9 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if corr_paths != all_paths.size():
 			corr = _corridor(w, all_paths)
 			corr_paths = all_paths.size()
+		var shore_us := Time.get_ticks_usec()
 		var t := _shore(w, s.i, corr)
+		_part("shore", shore_us)
 		if t >= 0:
 			# Ответвление от общей сети: не строим отдельный длинный подход от каждого дома.
 			var source := _nearest_path(w, t, SHORE_MAX)
@@ -876,10 +901,12 @@ static func _nearest_path(w: WorldData, target: int, radius: int) -> int:
 
 ## Сеть уже нарисованных путей людей: реальный обход учитывает развилки вне поселений.
 static func _network_cost(w: WorldData) -> PackedFloat32Array:
+	var part_us := Time.get_ticks_usec()
 	var cost := PackedFloat32Array()
 	cost.resize(w.N)
 	for i in w.N:
 		cost[i] = 1.0 if w.path_mask[i] >= 2 else INF
+	_part("network_cost", part_us)
 	return cost
 
 
@@ -947,15 +974,18 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 
 ## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в AVOID_MUL раз дороже
 static func _avoiding(w: WorldData, near: PackedByteArray) -> PackedFloat32Array:
+	var part_us := Time.get_ticks_usec()
 	var c := w.cost.duplicate()
 	for i: int in w.N:
 		if near[i] != 0 and c[i] != INF:
 			c[i] *= AVOID_MUL
+	_part("avoiding", part_us)
 	return c
 
 
 ## Клетки ближе AVOID_R к путям avoid (квадрат вокруг каждой клетки пути)
 static func _corridor(w: WorldData, avoid: Array) -> PackedByteArray:
+	var part_us := Time.get_ticks_usec()
 	var W := w.W
 	var near := PackedByteArray()
 	near.resize(w.N)
@@ -966,6 +996,7 @@ static func _corridor(w: WorldData, avoid: Array) -> PackedByteArray:
 			for y in range(maxi(0, cy - AVOID_R), mini(w.H, cy + AVOID_R + 1)):
 				for x in range(maxi(0, cx - AVOID_R), mini(W, cx + AVOID_R + 1)):
 					near[y * W + x] = 1
+	_part("corridor", part_us)
 	return near
 
 
@@ -1016,6 +1047,7 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
 static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary) -> Dictionary:
+	var part_us := Time.get_ticks_usec()
 	var surface: Heightfield = state.get("surface")
 	var checkpoint := {bridges = w.bridges.duplicate(), tunnels = w.tunnels.duplicate(), mask = w.path_mask.duplicate(),
 		heights = finder.heights.duplicate(), links = finder.links.duplicate(), on_axis = state.on_axis.duplicate(),
@@ -1024,15 +1056,19 @@ static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary
 	state.checkpoints = int(state.get("checkpoints", 0)) + 1
 	state.checkpoint_bytes = int(state.get("checkpoint_bytes", 0)) + checkpoint.mask.size() + checkpoint.links.size() \
 		+ checkpoint.on_axis.size() + (checkpoint.heights.size() + checkpoint.hv.size()) * 4
+	_part("checkpoint", part_us)
 	return checkpoint
 
 
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int = 0) -> PackedInt32Array:
+	var part_us := Time.get_ticks_usec()
 	# Неудачная связь не оставляет за собой мосты, выемки и разрешённые шаги по их осям.
 	var ctx := {checkpoint = null, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
 	var result := _build_structures(w, p, road, finder, cost, state, retries, ctx)
 	if result.is_empty():
 		_restore_structures(w, finder, state, ctx)
+	if retries == 0:
+		_part("structures", part_us)
 	return result
 
 
@@ -1042,6 +1078,7 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 		if ctx.initial_links_empty:
 			finder.links = PackedByteArray()
 		return
+	var part_us := Time.get_ticks_usec()
 	var checkpoint: Dictionary = ctx.checkpoint
 	state.restores = int(state.get("restores", 0)) + 1
 	w.bridges = checkpoint.bridges.duplicate()
@@ -1053,7 +1090,10 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 	state.detour = ctx.initial_detour
 	if state.has("surface"):
 		state.surface.hv = checkpoint.hv.duplicate()
+		var build_us := Time.get_ticks_usec()
 		state.surface.build_structures()
+		_part("build_structures", build_us)
+	_part("restore", part_us)
 
 
 static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int, ctx: Dictionary) -> PackedInt32Array:
@@ -1100,7 +1140,9 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				# Короткая переправа между устойчивыми берегами; не вытягиваем мост
 				# вдоль дороги до случайной далёкой клетки с подходящей высотой.
 				var why := {}
+				var site_us := Time.get_ticks_usec()
 				var site := _bridge_site(state.surface, p, wet, i, shore, out, state.on_axis, why)
+				_part("bridge_site", site_us)
 				j = site.y
 				if site.x >= 0:
 					out.resize(out.size() - (i - site.x))
@@ -1196,7 +1238,9 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 			list.append(TunnelData.new(a, b) if kind == "tunnel" else BridgeData.new(a, b))
 			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)
 			if state.has("surface"):
+				var build_us := Time.get_ticks_usec()
 				state.surface.build_structures()
+				_part("build_structures", build_us)
 			ends = [a, b]
 		# дорога, слившаяся с прежней, проходит по уже построенному
 		out.append_array(to_a)
@@ -1231,6 +1275,7 @@ static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedB
 		start: int, shore: int, out: PackedInt32Array, on_axis: PackedByteArray, why: Variant = null) -> Vector2i:
 	var best := Vector2i(-1, -1)
 	var score := INF
+	var probe: Object = surface.fast_water()
 	for back in range(BRIDGE_APPROACH + 1):
 		var a := start - back
 		if a < 0 or out.size() <= back or out[-1 - back] != p[a] or wet[a] != 0:
@@ -1244,7 +1289,25 @@ static func _bridge_site(surface: Heightfield, p: PackedInt32Array, wet: PackedB
 				p[b] / surface.world.W - p[a] / surface.world.W)
 			if length >= score:
 				continue
-			var problem := "dry" if not _crosses_water(surface, p[a], p[b]) else _bridge_problem(surface, p[a], p[b])
+			# Шаг 5 ревью (замер на стенде): из 8 тыс. пар 7,2 тыс. отвергают концы (перепад, въезд) — несколько
+			# точек, а проверка воды под пролётом шла первой и стоила 5,4 из 8 с. Условия те же, порядок —
+			# от дешёвых: ответ (и выбранный мост) не меняется, все проверки — чистые функции.
+			# С рельефом генерации концы и вода под осью проверяются на C# (FastGrid.BridgeEnds, CrossesWater —
+			# копии, те же числа); пролёт с чужими настилами и стенами — здесь.
+			var problem := "same"
+			if p[a] != p[b] and probe != null:
+				var s := surface._axis(p[a], p[b], false)
+				problem = ["", "grade", "landing_water", "landing_gap"][probe.BridgeEnds(s.ax, s.az, s.bx, s.bz, s.ux, s.uz, s.len, s.half,
+					GRADE * HEIGHT_SCALE * s.len, BRIDGE_LANDING_GAP)]
+				if problem.is_empty():
+					s.ay = surface.ground_at(s.ax, s.az)
+					s.by = surface.ground_at(s.bx, s.bz)
+					problem = "dry" if not probe.CrossesWater(s.ax, s.az, s.ux, s.uz, s.len) else _bridge_span(surface, s)
+			elif p[a] != p[b]:
+				var s := _bridge_axis(surface, p[a], p[b])
+				problem = _bridge_ends(surface, s)
+				if problem.is_empty():
+					problem = "dry" if not _crosses_water(surface, p[a], p[b]) else _bridge_span(surface, s)
 			if not problem.is_empty():
 				if why is Dictionary: why[problem] = int(why.get(problem, 0)) + 1
 				continue
@@ -1273,9 +1336,21 @@ static func _bridge_clear(surface: Heightfield, a: int, b: int) -> bool:
 static func _bridge_problem(surface: Heightfield, a: int, b: int) -> String:
 	if a == b:
 		return "same"
+	var s := _bridge_axis(surface, a, b)
+	var problem := _bridge_ends(surface, s)
+	return problem if not problem.is_empty() else _bridge_span(surface, s)
+
+
+## Ось настила a–b с высотами концов (земля у концов).
+static func _bridge_axis(surface: Heightfield, a: int, b: int) -> Dictionary:
 	var s := surface._axis(a, b, false)
 	s.ay = surface.ground_at(s.ax, s.az)
 	s.by = surface.ground_at(s.bx, s.bz)
+	return s
+
+
+## Концы настила: перепад и въезды (несколько точек — дешёвая часть _bridge_problem).
+static func _bridge_ends(surface: Heightfield, s: Dictionary) -> String:
 	if absf(s.by - s.ay) > GRADE * HEIGHT_SCALE * s.len:
 		return "grade"
 	# Концы моста не должны попадать на узкий мыс: проверяем сушу под обоими краями
@@ -1291,6 +1366,11 @@ static func _bridge_problem(surface: Heightfield, a: int, b: int) -> String:
 			var gap := absf(surface.ground_at(x, z) - deck)
 			if gap > BRIDGE_LANDING_GAP:
 				return "landing_gap_%s" % ("0.5" if gap <= 0.5 else ("1" if gap <= 1.0 else ("2" if gap <= 2.0 else "more")))
+	return ""
+
+
+## Пролёт: земля, чужие настилы, стены и вода вдоль оси (дорогая часть _bridge_problem).
+static func _bridge_span(surface: Heightfield, s: Dictionary) -> String:
 	for k in range(-2, ceili(s.len) + 3):
 		var t := clampf(float(k), -2.0, s.len + 2.0)
 		var deck := surface.level(s, t)
