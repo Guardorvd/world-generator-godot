@@ -530,9 +530,32 @@ func _drop(p: Vector2) -> void:
 				world.outer.veg.erase(chunk)
 
 
+## Синхронное заполнение при появлении: трава и подлесок — в задаче пула, деревья кусков карты — группой задач,
+## куски за краем — здесь (OuterLand.vegetation в одном потоке). Те же функции, что у фоновой подгрузки,
+## поэтому результат тот же; _built — в порядке missing.
 func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
-	_fill_trees(missing, _epoch)
-	_fill_details(px, pz, Vector2.ZERO, _epoch, stream.clock, true)
+	var details := WorkerThreadPool.add_task(_fill_details.bind(px, pz, Vector2.ZERO, _epoch, stream.clock, true), true, "Трава и подлесок")
+	var results: Array = []
+	results.resize(missing.size())
+	var inner: Array[int] = []
+	for i in missing.size():
+		if _on_map(missing[i]):
+			inner.append(i)
+	var lock := Mutex.new()
+	var trees := WorkerThreadPool.add_group_task(func(j: int) -> void:
+		var built := _build_chunk(missing[inner[j]])
+		lock.lock()
+		results[inner[j]] = built
+		lock.unlock(), inner.size(), -1, true, "Деревья")
+	for i in missing.size():
+		if not _on_map(missing[i]):
+			results[i] = _build_outer(missing[i])
+	WorkerThreadPool.wait_for_group_task_completion(trees)
+	WorkerThreadPool.wait_for_task_completion(details)
+	_built = []
+	for built: Dictionary in results:
+		built.epoch = _epoch
+		_built.append(built)
 
 
 func _fill_trees(missing: Array[Vector2i], epoch: int) -> void:
