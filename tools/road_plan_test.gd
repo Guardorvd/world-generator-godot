@@ -56,6 +56,30 @@ func _initialize() -> void:
 		var at: Array = why.at
 		print("  переправа (%d,%d)→(%d,%d), воды по пути %d: %s" % [at[0] % w.W, at[0] / w.W, at[1] % w.W, at[1] / w.W, at[2],
 			JSON.stringify(why).replace("\"at\":[%d,%d,%d]" % at, "")])
+	# Готовая поверхность, как в игре (полотно, сооружения с площадками въездов, метровая сетка дорог):
+	# въезд каждого моста по ширине настила на уровне его конца и не над водой (как road_safety_test).
+	started = Time.get_ticks_msec()
+	RoadSurface.run(w)
+	var final := Heightfield.new(w)
+	var max_gap := 0.0
+	var wet := 0
+	var worst := []
+	for s: Dictionary in final.structures:
+		if s.tunnel:
+			continue
+		for end in 2:
+			var t: float = 0.0 if end == 0 else s.len
+			var deck: float = s.ay if end == 0 else s.by
+			for side in [-1.0, 0.0, 1.0]:
+				var x: float = s.ax + s.ux * t - s.uz * side * s.half
+				var z: float = s.az + s.uz * t + s.ux * side * s.half
+				var gap := absf(final.ground_at(x, z) - deck)
+				if gap > StageTrails.BRIDGE_LANDING_GAP + 0.01:
+					worst.append("(%d,%d) %.2f м" % [floori(x / GameConfig.TILE), floori(z / GameConfig.TILE), gap])
+				max_gap = maxf(max_gap, gap)
+				wet += 1 if final.depth_at(x, z) > 0.3 else 0
+	print("въезды мостов в игре: наибольший перепад %.2f м, над водой %d, выше %.2f м: %d %s (%d мс)" % [max_gap, wet,
+		StageTrails.BRIDGE_LANDING_GAP, worst.size(), str(worst.slice(0, 8)), Time.get_ticks_msec() - started])
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))

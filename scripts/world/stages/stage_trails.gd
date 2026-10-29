@@ -25,7 +25,12 @@ const RISE := 0.1           # хребет выше этого (около 26 м
 const RISE_LEN := 30        # самый длинный туннель, клеток
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
 const GRADE := 0.0018       # наибольший уклон моста и туннеля на клетку (около 12 %)
-const BRIDGE_LANDING_GAP := 0.25 # въезд проверяется по всей ширине настила, м
+## Въезд проверяется по всей ширине настила, м. Ревью дорожной сети 29.10, шаг 7: на Север-1234 почти все
+## отказы мостов — въезд в 0,25–1 м от конца настила. Площадки въезда (выравнивание земли у концов в
+## Heightfield.build_structures) проверены на стенде road_plan_test и отложены: в игре земля у концов другая
+## (RoadBed идёт до сооружений), часть площадок там невыполнима, и у 2–3 мостов край въезда оставался
+## на 0,3 м от настила. Нужен готовый проект работ, сохранённый в данных моста, а не пересчёт при загрузке.
+const BRIDGE_LANDING_GAP := 0.25
 const BRIDGE_APPROACH := 24 # search both banks before committing a river-following road to a long span
 const TUNNEL_R := 2.3       # клетки ближе этого к оси туннеля — его выемка (без деревьев)
 const BRIDGE_R := 0.8       # клетки ближе этого к оси моста — дорога
@@ -1281,8 +1286,11 @@ static func _bridge_problem(surface: Heightfield, a: int, b: int) -> String:
 		for side in [-1.0, 0.0, 1.0]:
 			var x: float = s.ax + s.ux * t - s.uz * side * s.half
 			var z: float = s.az + s.uz * t + s.ux * side * s.half
-			if surface.depth_at(x, z) > 0.3 or absf(surface.ground_at(x, z) - deck) > BRIDGE_LANDING_GAP:
-				return "landing"
+			if surface.depth_at(x, z) > 0.3:
+				return "landing_water"
+			var gap := absf(surface.ground_at(x, z) - deck)
+			if gap > BRIDGE_LANDING_GAP:
+				return "landing_gap_%s" % ("0.5" if gap <= 0.5 else ("1" if gap <= 1.0 else ("2" if gap <= 2.0 else "more")))
 	for k in range(-2, ceili(s.len) + 3):
 		var t := clampf(float(k), -2.0, s.len + 2.0)
 		var deck := surface.level(s, t)
