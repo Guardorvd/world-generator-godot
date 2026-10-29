@@ -425,8 +425,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			else:
 				_discard_partial(built)
 				_queued.erase(built.chunk)
-		_pending = kept
-		_pending.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return _distance(a.chunk, p) > _distance(b.chunk, p))
+		_pending = _by_distance(kept, p)
 		if _tree_task == -1:
 			var missing := _wanted(p, p + lead)
 			if not missing.is_empty():
@@ -488,20 +487,44 @@ func _wanted(p: Vector2, ahead: Vector2 = p) -> Array[Vector2i]:
 			if not _loaded.has(c) and not _queued.has(c) and minf(_distance(c, p), _distance(c, ahead)) <= load_radius:
 				out.append(c)
 	# Фон строит список от дальних к ближним; главный поток берёт с конца.
-	out.sort_custom(func(a: Vector2i, b: Vector2i) -> bool:
-		return _distance(a, p) + _distance(a, ahead) > _distance(b, p) + _distance(b, ahead))
+	# Ключ сортировки считается один раз на чанк (раньше — в каждом сравнении); сравнения те же, порядок тот же.
+	var keyed: Array = []
+	for c in out:
+		keyed.append([_distance(c, p) + _distance(c, ahead), c])
+	keyed.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+	var sorted: Array[Vector2i] = []
+	for item: Array in keyed:
+		sorted.append(item[1])
+	return sorted
+
+
+## Готовые чанки от дальних к ближним (главный поток берёт с конца); расстояние — один раз на чанк
+func _by_distance(list: Array, p: Vector2) -> Array:
+	var keyed: Array = []
+	for built: Dictionary in list:
+		keyed.append([_distance(built.chunk, p), built])
+	keyed.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])
+	var out: Array = []
+	for item: Array in keyed:
+		out.append(item[1])
 	return out
 
 
 func _drop(p: Vector2) -> void:
+	# Дальность считается один раз на чанк, а не на каждый вид в нём (в езде это было ~6 мс на проверку)
+	var limit := drop_radius + stream.lead().length()
+	var far := {}
 	for key: Vector3i in veg.keys():
-		if _distance(Vector2i(key.x, key.y), p) > drop_radius + stream.lead().length():
+		var chunk := Vector2i(key.x, key.y)
+		if not far.has(chunk):
+			far[chunk] = _distance(chunk, p) > limit
+		if far[chunk]:
 			for node: MultiMeshInstance3D in veg[key].nodes:
 				node.visible = false
 				node.queue_free()
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
-		if _distance(chunk, p) > drop_radius + stream.lead().length():
+		if far[chunk] if far.has(chunk) else _distance(chunk, p) > limit:
 			_loaded.erase(chunk)
 			if world.outer != null:
 				world.outer.veg.erase(chunk)
