@@ -218,10 +218,13 @@ func wheel_support(x: float, z: float, wheel_r: float, climb: float) -> float:
 	return best
 
 
-## Угол встречи колеса с кромкой низкого препятствия под (x, z), рад (0 — нет): наклон дуги колеса над кругом кромки
-## в точке первого касания, когда колесо ещё стоит на земле высотой ground. 10 см — около 42°, 40 см — около 75°.
-func wheel_onset(x: float, z: float, wheel_r: float, climb: float, ground: float) -> float:
-	var best := 0.0
+## Встреча колеса с низким препятствием под (x, z) — тем, что сейчас выше всех держит колесо:
+## {id — постоянный номер препятствия (по его оси, не меняется при пересборке), angle — угол встречи, рад: наклон дуги
+## колеса над кругом кромки в точке первого касания, когда колесо ещё стоит на высоте ground (10 см — около 42°,
+## 40 см — около 75°), normal — направление от препятствия к колесу по горизонтали (ноль — колесо над осью)}.
+## Пусто, если колесо не на препятствии.
+func wheel_contact(x: float, z: float, wheel_r: float, climb: float, ground: float) -> Dictionary:
+	var best := {}
 	var top_support := -INF
 	for cy in range(floori((z - wheel_r) / CELL), floori((z + wheel_r) / CELL) + 1):
 		for cx in range(floori((x - wheel_r) / CELL), floori((x + wheel_r) / CELL) + 1):
@@ -234,7 +237,9 @@ func wheel_onset(x: float, z: float, wheel_r: float, climb: float, ground: float
 				if tall <= 0.0 or tall > climb:
 					continue
 				var rho := minf(tall * 0.5, data[at + 4])
-				var edge := maxf(0.0, Vector2(x, z).distance_to(_closest(at, x, z)) - (data[at + 4] - rho))
+				var axis := _closest(at, x, z)
+				var away := Vector2(x, z) - axis
+				var edge := maxf(0.0, away.length() - (data[at + 4] - rho))
 				var reach := wheel_r + rho
 				if edge >= reach:
 					continue
@@ -242,9 +247,11 @@ func wheel_onset(x: float, z: float, wheel_r: float, climb: float, ground: float
 				if support <= top_support:
 					continue
 				top_support = support
-				# высота центра колеса над центром кромки в момент касания земли и горизонтальное расстояние до него
+				# высота центра колеса над центром кромки в момент касания и горизонтальное расстояние до него
 				var c := ground + wheel_r - (top - rho)
-				best = atan2(sqrt(maxf(0.0, reach * reach - c * c)), c) if c > 0.0 else PI * 0.5
+				best = {id = hash(Vector4i(roundi(data[at] * 100.0), roundi(data[at + 1] * 100.0), roundi(data[at + 2] * 100.0), roundi(data[at + 3] * 100.0))),
+					angle = atan2(sqrt(maxf(0.0, reach * reach - c * c)), c) if c > 0.0 else PI * 0.5,
+					normal = away.normalized() if away.length_squared() > 1e-8 else Vector2.ZERO}
 	return best
 
 

@@ -44,7 +44,9 @@ func reset() -> void:
 	_overload_time = 0.0
 	tipped = false
 
-func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true) -> void:
+## loads — нагрузки шин переднего и заднего колеса (BikeRide, модель двух контактов), доли веса; тогда запас каждого
+## колеса — от его нагрузки, а не от front_load. Отрицательные — прежняя модель.
+func step(dt: float, command: float, speed: float, grade: float, grip: float, corner: float, grounded := true, loads := Vector2(-1.0, -1.0)) -> void:
 	if dt <= 0.0 or not is_finite(dt): return
 	command = clampf(command, 0.0, 1.0) if grounded else 0.0
 	var previous := pressure
@@ -62,17 +64,22 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	var capacity := GameConfig.BIKE_GRIP * maxf(grip, 0.0) / sqrt(1.0 + grade * grade)
 	var reserve := capacity * GameConfig.BIKE_CORNER_RESERVE * clampf(corner, 0.0, 1.0)
 	var available := sqrt(maxf(0.0, capacity * capacity - reserve * reserve))
+	# запас на долю веса: нагрузки шин уже включают косинус уклона
+	var per_load := available * sqrt(1.0 + grade * grade)
 	var shift := brace * GameConfig.BIKE_BRAKE_SHIFT - _surge * 0.18
 	var demand := GameConfig.BIKE_BRAKE * pressure
 	# Two bounded iterations resolve force/load coupling without an allocation or solver.
 	for i in 2:
 		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
 		var front_share := clampf(front_load, 0.65, 1.0)
-		front_force = minf(demand * front_share, available * clampf(front_load, 0.0, 1.0))
-		rear_force = minf(demand * (1.0 - front_share), available * clampf(1.0 - front_load, 0.0, 1.0))
+		var cap_f := per_load * loads.x if loads.x >= 0.0 else available * clampf(front_load, 0.0, 1.0)
+		var cap_r := per_load * loads.y if loads.y >= 0.0 else available * clampf(1.0 - front_load, 0.0, 1.0)
+		front_force = minf(demand * front_share, cap_f)
+		rear_force = minf(demand * (1.0 - front_share), cap_r)
 		deceleration = minf(front_force + rear_force, maxf(speed, 0.0) / dt) if grounded and speed > 0.05 else 0.0
 	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
-	grip_used = clampf(deceleration / maxf(available, 0.001), 0.0, 1.0)
+	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available
+	grip_used = clampf(deceleration / maxf(total, 0.001), 0.0, 1.0)
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
 	var overload := front_load - 1.0 - BALANCE_MARGIN
 	var danger := grounded and speed > MIN_TIP_SPEED and command > HARD_BRAKE and pressure > HARD_BRAKE and overload > 0.0

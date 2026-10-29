@@ -80,6 +80,9 @@ const SQUASH_V_MAX := 4.0
 ## Модель двух контактов (прототип, шаг 2; включает Trail Lab, в игре пока выключена): у каждого колеса своя нагрузка,
 ## от неё — запас сцепления для тормоза и поворота; поперечный уклон тянет вниз тяжестью, а не правит запас.
 const CONTACT_SPRING := 0.5  # доля силы пружины колеса в его нагрузке: каждая подвеска держит половину массы
+## Нагрузка колеса — от хода пружины, без скорости хода: скачки скорости хода — толчки подвески для картинки (кочки,
+## швы сетки), а не силы, и шум от них дёргал запас сцепления на пределе поворота
+const CONTACT_DAMP := 0.0
 const LOAD_MAX := 3.0        # нагрузка колеса не больше этого, доли веса
 const CONTACT_MIN := 0.02    # легче этого колесо не держит (разгружено, оторвалось)
 const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) седок стоит и тяжесть поперёк не тянет велосипед вбок
@@ -122,12 +125,17 @@ var tire_f := 0.5     # нагрузка, которую «чувствует» 
 var tire_r := 0.5
 var side_f := 0.5     # нагрузка для бокового запаса (tire_* с инерцией SIDE_RELAX)
 var side_r := 0.5
+var force_f := Vector2() # фактически приложенная сила колеса на массу велосипеда, м/с²: x — тормоз, y — поперёк
+var force_r := Vector2()
 var use_f := 0.0      # использованный запас сцепления колеса (тормоз и поворот), 0..1; 1 — колесо скользит
 var use_r := 0.0
 var _rest_f := 0.0    # цель пружин на прошлом такте: отклонение от неё — сила подвески сверх равновесия
 var _rest_r := 0.0
-var _on_f := false       # колесо стоит на препятствии (удар о кромку уже засчитан)
-var _on_r := false
+var _on_f := -1          # препятствие, на котором стоит колесо (ForestObstacles.wheel_contact id; -1 — на земле)
+var _on_r := -1
+var impacts := Vector2i() # сколько раз колесо встретило кромку препятствия (перед, зад), для замеров
+var _sup_f := 0.0        # опора колеса на прошлом такте: от этой высоты колесо встречает следующую кромку
+var _sup_r := 0.0
 var riding := false
 var lean := 0.0       # крен в повороте, радианы
 var tilt := 0.0       # наклон вдоль склона или полёта, радианы
@@ -287,8 +295,8 @@ func reset_motion() -> void:
 	use_r = 0.0
 	_rest_f = 0.0
 	_rest_r = 0.0
-	_on_f = false
-	_on_r = false
+	_on_f = -1
+	_on_r = -1
 
 
 ## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
@@ -562,13 +570,17 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		var cap_r := CORNER_GRIP * grip * side_r
 		var free_f := sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
 		var free_r := sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force))
-		var correction := lateral_speed * Util.damp(GameConfig.BIKE_SIDE_RESPONSE, dt)
-		correction = clampf(correction, -(free_f + free_r) * dt, (free_f + free_r) * dt)
-		lateral_speed -= correction
-		lateral = correction / dt
-		# Боковую силу колёса делят поровну (середина массы посередине базы)
-		use_f = clampf(Vector2(brakes.front_force, lateral * 0.5).length() / maxf(cap_f, 0.01), 0.0, 1.0)
-		use_r = clampf(Vector2(brakes.rear_force, lateral * 0.5).length() / maxf(cap_r, 0.01), 0.0, 1.0)
+		# Нужная боковая сила делится поровну (середина массы посередине базы); колесо даёт не больше своего свободного
+		# запаса, и недостачу одного другое не покрывает — велосипед сносит
+		var need := lateral_speed * Util.damp(GameConfig.BIKE_SIDE_RESPONSE, dt) / dt
+		var side_force_f := clampf(need * 0.5, -free_f, free_f)
+		var side_force_r := clampf(need * 0.5, -free_r, free_r)
+		lateral = side_force_f + side_force_r
+		lateral_speed -= lateral * dt
+		force_f = Vector2(brakes.front_force, side_force_f)
+		force_r = Vector2(brakes.rear_force, side_force_r)
+		use_f = clampf(force_f.length() / maxf(cap_f, 0.01), 0.0, 1.0) if cap_f > 0.001 else (1.0 if absf(need) > 0.01 else 0.0)
+		use_r = clampf(force_r.length() / maxf(cap_r, 0.01), 0.0, 1.0) if cap_r > 0.001 else (1.0 if absf(need) > 0.01 else 0.0)
 		grip_usage = clampf(Vector2(brake_deceleration, lateral).length() / maxf(cap_f + cap_r, 0.1), 0.0, 1.0)
 	elif not airborne:
 		var capacity := CORNER_GRIP * grip
@@ -585,6 +597,8 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		grip_usage = 0.0
 		use_f = 0.0
 		use_r = 0.0
+		force_f = Vector2()
+		force_r = Vector2()
 	slip = atan2(lateral_speed, maxf(absf(speed), 2.0))
 	return lateral
 
@@ -702,10 +716,12 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var gf := _wheel_ground(x + fx, z + fz, heights)
 	var gr := _wheel_ground(x - fx, z - fz, heights)
 	if contact_model and heights.obstacles != null:
-		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _on_f or _fresh, tire_f, true)
+		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _sup_f, _on_f, tire_f, true)
 		if crashed:
 			return
-		_on_r = _wheel_hit(heights, x - fx, z - fz, gr, _on_r or _fresh, tire_r, false)
+		_on_r = _wheel_hit(heights, x - fx, z - fz, gr, _sup_r, _on_r, tire_r, false)
+	_sup_f = gf
+	_sup_r = gr
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var wild := BUMP * rough * (1.0 - path_weight)
 	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
@@ -750,33 +766,47 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	_gv_r = vr
 
 
-## Колесо и препятствие: в такт, когда колесо встало на препятствие, удар о кромку отнимает у колеса скорость
-## 1 − cos(угла встречи) — угол дуги колеса над кромкой в точке первого касания (ForestObstacles.wheel_onset), за вычетом
-## уклона земли; раму тормозит на долю массы этого колеса (нагрузка шины). Угол берётся из геометрии, а не из шага
-## движения, поэтому не зависит от скорости и частоты тактов. Дальше колесо поднимается по дуге, подъём тормозит
-## тяжестью (_slope по опорам колёс). Переднее колесо, потерявшее больше ENDO_DV (лёгкое — меньше), бросает седока
-## через руль. Возвращает: стоит ли колесо на препятствии.
-func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, was_on: bool, load: float, front: bool) -> bool:
+## Колесо и препятствие: в такт, когда колесо встало на новое препятствие (другой id — и соседний камень без
+## промежутка), удар о кромку отнимает у колеса скорость, с которой оно шло на препятствие (проекция скорости на
+## направление к нему: косой заход бьёт слабее и сдвигает вдоль бревна), 1 − cos(угла встречи) — угол дуги колеса над
+## кромкой в точке касания (ForestObstacles.wheel_contact) от высоты, на которой колесо ехало, за вычетом уклона
+## земли. Раму тормозит на долю массы этого колеса (нагрузка шины). Угол — из геометрии, не из шага движения: не
+## зависит от скорости и частоты тактов. Переднее колесо, потерявшее вдоль рамы больше ENDO_DV (лёгкое — меньше),
+## бросает седока через руль. Возвращает id препятствия под колесом (-1 — на земле).
+func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, before: float, on_id: int, load: float, front: bool) -> int:
 	var ground := heights.surface_at(px, pz, y)
 	if support <= ground + 0.005:
-		return false
-	if was_on:
-		return true
-	var angle := heights.obstacles.wheel_onset(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, ground) - atan(maxf(0.0, _ground_slope(heights) * signf(speed)))
+		return -1
+	var hit := heights.obstacles.wheel_contact(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, minf(before, support) if on_id >= 0 else ground)
+	if hit.is_empty():
+		return -1
+	if hit.id == on_id or _fresh:
+		return hit.id # то же препятствие, или колесо опустилось на него сверху (приземление)
+	var angle: float = hit.angle - atan(maxf(0.0, _ground_slope(heights) * signf(speed)))
 	if angle < IMPACT_ANGLE:
-		return true
-	var dv := absf(speed) * (1.0 - cos(minf(angle, PI * 0.5)))
+		return hit.id
+	if front: impacts.x += 1
+	else: impacts.y += 1
+	var velocity := horizontal_velocity()
+	var into: Vector2 = -hit.normal if hit.normal != Vector2.ZERO else velocity.normalized()
+	var approach := maxf(0.0, velocity.dot(into))
 	var share := clampf(load, 0.05, 1.0)
-	if front and dv * share / 0.5 > ENDO_DV:
+	var dv := into * approach * (1.0 - cos(minf(angle, PI * 0.5))) * share
+	var forward := Vector2(-sin(heading), -cos(heading))
+	var side := Vector2(-forward.y, forward.x)
+	if front and dv.dot(forward) / 0.5 > ENDO_DV:
 		_crash(vy, Vector3(-sin(heading), 0.6, -cos(heading)), CrashCause.OBSTACLE)
-		return true
-	speed = signf(speed) * maxf(0.0, absf(speed) - dv * share)
+		return hit.id
+	var along := dv.dot(forward)
+	speed = signf(speed) * maxf(0.0, absf(speed) - along)
+	lateral_speed -= dv.dot(side)
+	var kick := dv.length() / share * 0.3
 	if front:
-		squash_fv += dv * 0.3
-		land_impact = maxf(land_impact, dv)
+		squash_fv += kick
+		land_impact = maxf(land_impact, dv.length() / share)
 	else:
-		squash_rv += dv * 0.3
-	return true
+		squash_rv += kick
+	return hit.id
 
 
 ## Кочка под колесом на отметке пути d, 0..1
@@ -834,16 +864,17 @@ func _step_contacts(grade: float, dt: float) -> void:
 		return
 	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g)
 	var share := clampf(brakes.front_load, 0.0, 1.0)
-	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * squash_fv) / GameConfig.GRAVITY
-	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * squash_rv) / GameConfig.GRAVITY
+	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * CONTACT_DAMP * squash_fv) / GameConfig.GRAVITY
+	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
 	load_f = clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	load_r = clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
 	var k := 1.0 - exp(-dt / maxf(TIRE_RELAX_MIN, TIRE_RELAX / maxf(absf(speed), 0.5)))
-	tire_f = lerpf(tire_f, load_f, k)
-	tire_r = lerpf(tire_r, load_r, k)
+	# сила шины набирается по пути, но не больше того, что колесо сейчас несёт: разгруженное колесо силы не даёт
+	tire_f = minf(lerpf(tire_f, load_f, k), load_f)
+	tire_r = minf(lerpf(tire_r, load_r, k), load_r)
 	var ks := 1.0 - exp(-dt / SIDE_RELAX)
-	side_f = lerpf(side_f, tire_f, ks)
-	side_r = lerpf(side_r, tire_r, ks)
+	side_f = minf(lerpf(side_f, tire_f, ks), tire_f)
+	side_r = minf(lerpf(side_r, tire_r, ks), tire_r)
 
 
 ## Колесо держит: стоит на земле и нагружено
@@ -853,13 +884,6 @@ func contact_f() -> bool:
 
 func contact_r() -> bool:
 	return not airborne and load_r > CONTACT_MIN
-
-
-## Во сколько раз нагрузка колёс больше веса на этом уклоне: тормоз в ложбине держит лучше, на гребне — хуже
-func _load_scale(grade: float) -> float:
-	if not contact_model:
-		return 1.0
-	return clampf((tire_f + tire_r) * sqrt(1.0 + grade * grade), 0.0, LOAD_MAX)
 
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
@@ -875,7 +899,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
-	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip * _load_scale(slope), _corner_demand)
+	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, Vector2(tire_f, tire_r) if contact_model else Vector2(-1.0, -1.0))
 	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle <= -GameConfig.BIKE_REVERSE_INPUT and absf(speed) < 0.05:

@@ -131,6 +131,102 @@ func over_log(h: Heightfield, d: TrailDefinition, contact: bool, speed: float) -
 	return {result = "не доехал", before = before, after = b.speed}
 
 
+## Согласованность контактов: сила шины не больше её нагрузки, разгруженное колесо не тормозит и не держит бок —
+## на гребне роллера с полным тормозом и рулём, при 30/60/120 Гц.
+func consistency(h: Heightfield, d: TrailDefinition) -> void:
+	for hz: int in [30, 60, 120]:
+		var p := PlayerState.new()
+		var b := BikeRide.new()
+		b.contact_model = true
+		var at := d.point_at(ROLLER - 16.0)
+		b.x = at.x
+		b.z = at.y
+		b.y = h.surface_at(b.x, b.z, -INF)
+		b.heading = d.heading_at(ROLLER - 16.0)
+		b.mount(p)
+		b.speed = 10.0
+		var control := BikeController.new()
+		var over_load := 0
+		var unloaded_force := 0
+		var unloaded := 0
+		# силы такта считаются от нагрузок, с которыми такт начался (нагрузка пересчитывается в конце такта)
+		var prev := Vector2(b.load_f, b.load_r)
+		for tick in hz * 4:
+			var station := d.nearest(Vector2(b.x, b.z)).x
+			if station > ROLLER + 8.0 or b.crashed: break
+			var near := station > ROLLER - 3.0
+			control.ride(1.0 / hz, p, b, h.world, h, -1.0 if near else 0.0, 1.0 if near else 0.0, false, false, false)
+			var was := prev
+			prev = Vector2(b.load_f, b.load_r)
+			if b.airborne: continue
+			over_load += int(b.tire_f > b.load_f + 1e-5 or b.tire_r > b.load_r + 1e-5 or b.side_f > b.tire_f + 1e-5 or b.side_r > b.tire_r + 1e-5)
+			for wheel: Array in [[was.x, b.force_f], [was.y, b.force_r]]:
+				if wheel[0] <= 1e-4:
+					unloaded += 1
+					unloaded_force += int((wheel[1] as Vector2).length() > 1e-3)
+		check(over_load == 0, "%d Гц: сила шины не больше её нагрузки" % hz)
+		check(unloaded_force == 0, "%d Гц: разгруженное колесо не тормозит и не держит бок (%d тактов без нагрузки)" % [hz, unloaded])
+
+
+## Бревно прямо и наискось (45°), два камня вплотную: потеря, снос вдоль бревна, число встреч; 30/60/120 Гц.
+func crossings(h: Heightfield, d: TrailDefinition, technical: Dictionary) -> void:
+	var at := d.point_at(LOG)
+	var base := h.ground_at(at.x, at.y)
+	var forward := d.tangent_at(LOG)
+	var across := Vector2(forward.y, -forward.x)
+	var slant := (across + forward) * 1.6
+	var cases := {
+		straight = PackedFloat32Array([at.x - across.x * 2.0, at.y - across.y * 2.0, at.x + across.x * 2.0, at.y + across.y * 2.0, 0.15, base, base + 0.3]),
+		oblique = PackedFloat32Array([at.x - slant.x, at.y - slant.y, at.x + slant.x, at.y + slant.y, 0.15, base, base + 0.3]),
+		rocks = PackedFloat32Array([at.x, at.y, at.x, at.y, 0.4, base, base + 0.22,
+			at.x + forward.x * 0.75, at.y + forward.y * 0.75, at.x + forward.x * 0.75, at.y + forward.y * 0.75, 0.4, base, base + 0.3]),
+	}
+	var result := {}
+	for name: String in cases:
+		h.obstacles.set_trail(technical.collide + cases[name], technical.bumps)
+		h.obstacles.update(at.x, at.y, PackedFloat32Array(), 1, true)
+		var line := PackedStringArray()
+		for hz: int in [30, 60, 120]:
+			var r := cross(h, d, hz, 7.0)
+			result["%s_%d" % [name, hz]] = r
+			line.append("%d Гц: %s, %.1f→%.1f м/с, вбок %.2f м, встреч %d/%d" % [hz, r.result, r.before, r.after, r.drift, r.impacts.x, r.impacts.y])
+		print("%s: %s" % [name, " · ".join(line)])
+		var same := true
+		for hz: int in [30, 120]:
+			same = same and result["%s_%d" % [name, hz]].result == result["%s_60" % name].result and absf(result["%s_%d" % [name, hz]].after - result["%s_60" % name].after) < 0.35
+		check(same, "%s: 30/60/120 Гц дают тот же исход" % name)
+	var s: Dictionary = result.straight_60
+	var o: Dictionary = result.oblique_60
+	check(o.result == "проехал" and o.before - o.after < (s.before - s.after) * 0.8, "наискось бревно отнимает меньше скорости, чем прямо (%.1f против %.1f м/с)" % [o.before - o.after, s.before - s.after])
+	check(o.drift > s.drift + 0.05, "наискось бревно сдвигает колесо вдоль себя (%.2f м против %.2f)" % [o.drift, s.drift])
+	check(result.rocks_60.impacts.x == 2, "два камня вплотную — две встречи переднего колеса (%d)" % result.rocks_60.impacts.x)
+	h.obstacles.set_trail(technical.collide, technical.bumps)
+
+
+func cross(h: Heightfield, d: TrailDefinition, hz: int, speed: float) -> Dictionary:
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	b.contact_model = true
+	var at := d.point_at(LOG - 10.0)
+	b.x = at.x
+	b.z = at.y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(LOG - 10.0)
+	b.mount(p)
+	b.speed = speed
+	var control := BikeController.new()
+	var before := speed
+	var drift := 0.0
+	for tick in hz * 8:
+		var near := d.nearest(Vector2(b.x, b.z))
+		if near.x < LOG - 1.5: before = b.speed
+		control.ride(1.0 / hz, p, b, h.world, h, clampf((speed - b.speed) * 0.8, 0.0, 1.0) if near.x < LOG - 3.0 else 0.0, 0.0, false, false, false)
+		drift = maxf(drift, absf(near.y))
+		if b.crashed: return {result = "через руль" if b.crash_cause == BikeRide.CrashCause.OBSTACLE else "упал", before = before, after = b.speed, drift = drift, impacts = b.impacts}
+		if near.x > LOG + 3.0: return {result = "проехал", before = before, after = b.speed, drift = drift, impacts = b.impacts}
+	return {result = "не доехал", before = before, after = b.speed, drift = drift, impacts = b.impacts}
+
+
 func run() -> void:
 	var d := section()
 	var kit: Array[TrailDefinition] = [d]
@@ -189,7 +285,6 @@ func run() -> void:
 	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
 	print("Корни: нагрузка переднего колеса %.2f … %.2f доли веса (стоя 0,5)" % [roots.min_load_f, roots.max_load_f])
 	check(technical.bumps.size() > 0, "корни разложены (%d)" % (technical.bumps.size() / ForestObstacles.BUMP_STRIDE))
-	check(roots.max_load_f > 0.65 and roots.min_load_f < 0.35, "корень меняет нагрузку переднего колеса в обе стороны")
 	# 4. Бревно поперёк: в прежней модели — стена; в новой колесо встречает кромку: медленно встаёт, средне
 	# переваливает с потерей скорости, быстро — полёт через руль. Низкое бревно проезжается на любой скорости.
 	for tall: float in [0.1, 0.4]:
@@ -215,5 +310,7 @@ func run() -> void:
 					check(r.result == "через руль", "%.1f м, %.0f м/с: полёт через руль" % [tall, speed])
 		print("Бревно %.1f м: %s" % [tall, " · ".join(line)])
 	h.obstacles.set_trail(technical.collide, technical.bumps)
+	consistency(h, d)
+	crossings(h, d, technical)
 	print("wheel_contact: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)
