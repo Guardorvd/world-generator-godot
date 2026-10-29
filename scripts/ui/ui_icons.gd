@@ -3,7 +3,6 @@ extends RefCounted
 ## Белые, чтобы цвет задавала тема (icon_*_color у кнопок) или modulate у TextureRect.
 ## Вместо текстовых символов (🎲, ☆, ◎…): шрифт рисует их по-разному, а часть — цветными emoji.
 
-const DICE := preload("res://resources/icons/dice.svg")
 const STAR := preload("res://resources/icons/star.svg")
 const STAR_FILLED := preload("res://resources/icons/star_filled.svg")
 const CHECK := preload("res://resources/icons/check.svg")
@@ -11,7 +10,6 @@ const PLAY := preload("res://resources/icons/play.svg")
 const SAVE := preload("res://resources/icons/save.svg")
 const LOAD := preload("res://resources/icons/load.svg")
 const GEAR := preload("res://resources/icons/gear.svg")
-const HOME := preload("res://resources/icons/home.svg")
 const EXIT := preload("res://resources/icons/exit.svg")
 ## Виды заданий (Quests.KINDS)
 const QUESTS := {

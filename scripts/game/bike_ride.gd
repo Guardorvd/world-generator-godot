@@ -746,15 +746,6 @@ func _obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> 
 	return Vector2.ZERO
 
 
-## Скорость удара в препятствие леса поперёк его поверхности, м/с: в лоб — вся скорость, вскользь — малая доля
-func _tree_impact(heights: Heightfield) -> float:
-	if heights.obstacles == null:
-		return 0.0
-	var v := horizontal_velocity()
-	var ahead := v.normalized() * PlayerState.PIECE * 0.5
-	return -v.dot(_obstacle_normal(x + ahead.x, z + ahead.y, heading, heights))
-
-
 ## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны
 func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -> bool:
 	var fx := -sin(hd) * AXLE

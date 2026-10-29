@@ -60,7 +60,6 @@ const WIND := {
 	Biomes.T_DEAD: [0.04, 0.0, 0.8, 0.8, 0.0],
 }
 const GRASS_WIND := [0.09, 0.02, 1.6, 0.85, 0.3]
-const PLANT_WIND := [0.05, 0.02, 1.2, 0.85, 0.25]
 
 var world: WorldData
 var heights: Heightfield

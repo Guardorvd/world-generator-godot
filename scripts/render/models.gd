@@ -15,19 +15,6 @@ static func _cyl(rt: float, rb: float, h: float, seg: int = 8) -> Array:
 	return [m, Transform3D(Basis(), Vector3(0, h / 2.0, 0))]
 
 
-static func _ico(r: float, y: float, sx: float = 1.0, sy: float = 1.0, sz: float = 1.0) -> Array:
-	var m := SphereMesh.new()
-	m.radius = r
-	m.height = r * 2.0
-	m.radial_segments = 10
-	m.rings = 5
-	return [m, Transform3D(Basis().scaled(Vector3(sx, sy, sz)), Vector3(0, y, 0))]
-
-
-static func _cone(r: float, h: float, y: float, seg: int = 10) -> Array:
-	return _moved(_cyl(0.0, r, h, seg), Vector3(0, y, 0))
-
-
 ## Сдвинуть часть модели
 static func _moved(part: Array, offset: Vector3) -> Array:
 	var t: Transform3D = part[1]

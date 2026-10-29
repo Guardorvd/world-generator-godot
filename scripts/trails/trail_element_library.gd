@@ -25,7 +25,6 @@ const TITLES := {
 	TrailElement.Profile.NORTHSHORE: "Норшор",
 }
 ## Typical size at difficulty 0 and 1: length, height. Waves and pump rollers scale length with their count.
-const TECHNICAL := [TrailElement.Profile.RUTS, TrailElement.Profile.RIPPLES, TrailElement.Profile.ROUGH, TrailElement.Profile.ROCK_GARDEN, TrailElement.Profile.ROOTS, TrailElement.Profile.NARROW, TrailElement.Profile.LOG, TrailElement.Profile.SLALOM]
 const RANGE := {
 	TrailElement.Profile.ROLLER: [Vector2(10, 0.3), Vector2(16, 0.9)],
 	TrailElement.Profile.TABLETOP: [Vector2(12, 0.4), Vector2(20, 1.0)],

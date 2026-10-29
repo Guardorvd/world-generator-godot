@@ -1095,10 +1095,6 @@ func _draw_opening(alpha: float) -> void:
 
 
 ## Тряска камеры после приземления сильнее soft (м/с)
-## Насколько камера на велосипеде сама следует за курсом: 0 сразу после мыши или стика, 1 — через 1,6 с
-func _auto_follow() -> float:
-	return camera_controller.auto_follow(time)
-
 func _shake_on_landing(impact: float, soft: float) -> void:
 	camera_controller.shake_on_landing(impact, soft)
 
