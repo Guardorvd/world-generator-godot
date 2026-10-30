@@ -99,6 +99,61 @@ func run() -> void:
 	for i in 30: tick(legs, 0.0, false, 60, 0.0)
 	check(pushed > 0.05 and rpm_low > 55.0 and rpm_high < 115.0 and jerk < 0.6 and legs.crank == c1,
 		"T4 каденс: нажатие на старте %.2f рад, %.0f–%.0f об/мин до %.1f м/с, скачок %.2f рад/с за такт, накатом стоят" % [pushed, rpm_low, rpm_high, top_speed, jerk])
+	# T5: один тормоз — монотонное дозирование, разгруженное колесо отдаёт долю другому, без скачка при возврате
+	var levels_brake: Array[float] = []
+	for command: float in [0.25, 0.5, 0.75, 1.0]:
+		var b := bike(10.0)
+		for i in 30: tick(b, 0.0, false, 60, -command)
+		levels_brake.append(b.brake_force.x + b.brake_force.y)
+	check(levels_brake[0] < levels_brake[1] and levels_brake[1] < levels_brake[2] and levels_brake[2] < levels_brake[3],
+		"T5 дозирование 25/50/75/100%%: %.2f / %.2f / %.2f / %.2f м/с²" % levels_brake)
+	var nose_up := bike(8.0)
+	var before_return := 0.0
+	var dip := INF
+	for i in 60:
+		if i < 30:
+			nose_up.lift_f = 0.15
+			nose_up.lift_fv = 0.0
+		tick(nose_up, 0.0, false, 60, -1.0)
+		var total := nose_up.brake_force.x + nose_up.brake_force.y
+		if i == 25: check(nose_up.brake_force.x < 0.01 and nose_up.brake_force.y > 3.3, "T5 переднее поднято: перед %.2f, зад %.2f м/с² (было не больше 3,15)" % [nose_up.brake_force.x, nose_up.brake_force.y])
+		if i == 29: before_return = total
+		if i >= 30: dip = minf(dip, total)
+	check(dip > before_return * 0.6 and not nose_up.crashed, "T5 возврат переднего колеса: тормоз %.2f → не ниже %.2f м/с²" % [before_return, dip])
+	for pace: float in [6.0, 12.0, 18.0]:
+		var full_stop := bike(pace)
+		var half_stop := bike(pace)
+		var tf := 0
+		var th := 0
+		while full_stop.speed > 0.05 and tf < 600:
+			tick(full_stop, 0.0, false, 60, -1.0)
+			tf += 1
+		while half_stop.speed > 0.05 and th < 900:
+			tick(half_stop, 0.0, false, 60, -0.5)
+			th += 1
+		print("T5 остановка с %.0f м/с: полный %.2f с, %.1f м; половина %.2f с, %.1f м" % [pace, tf / 60.0, -full_stop.z, th / 60.0, -half_stop.z])
+		check(not full_stop.crashed and tf < th, "T5 полный тормоз с %.0f м/с останавливает без падения и быстрее половинного" % pace)
+	# T6: тормоз, держащий скорость на спуске, сжимает вилку; потеря хода в подъём без тормоза — нет
+	ground.gradient = Vector2(0, 0.12)
+	var held := bike(6.0)
+	var dive_held := 0.0
+	for i in 180:
+		tick(held, 0.0, false, 60, -clampf((held.speed - 6.0) * 2.0 + 0.3, 0.0, 1.0))
+		if i > 120: dive_held = maxf(dive_held, held.squash_f - held.squash_r)
+	ground.gradient = Vector2(0, -0.15)
+	var uphill := bike(8.0)
+	var dive_up := 0.0
+	for i in 60:
+		tick(uphill, 0.0, false, 60)
+		if i > 30: dive_up = maxf(dive_up, uphill.squash_f - uphill.squash_r)
+	ground.gradient = Vector2.ZERO
+	var level := bike(8.0)
+	var dive_flat := 0.0
+	for i in 60:
+		tick(level, 0.0, false, 60)
+		if i > 30: dive_flat = maxf(dive_flat, level.squash_f - level.squash_r)
+	check(absf(held.feel_acceleration) < 0.5 and dive_held > dive_flat + 0.01 and dive_up < dive_flat + (dive_held - dive_flat) * 0.4,
+		"T6 вилка (перед минус зад): спуск под тормозом %.3f м (ускорение %.2f), подъём накатом %.3f, ровное %.3f" % [dive_held, held.feel_acceleration, dive_up, dive_flat])
 	# T1: силы объясняют изменение скорости — педали, накат, тормоз на ровном и на спуске
 	for case: Array in [[1.0, 0.0, 5.0], [0.0, 0.0, 8.0], [-1.0, 0.0, 8.0], [-0.5, 0.1, 6.0], [1.0, -0.12, 3.0]]:
 		ground.gradient = Vector2(0, case[1])

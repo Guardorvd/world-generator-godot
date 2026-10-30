@@ -12,6 +12,7 @@ const MIN_TIP_SPEED := 14.0
 const BALANCE_MARGIN := 0.22
 const OVERLOAD_GRACE := 1.0
 const HARD_BRAKE := 0.85
+const SHARE_LIMIT := 0.9 # долю другого колеса седок добирает до этой доли его запаса
 
 var pressure := 0.0
 var deceleration := 0.0
@@ -74,9 +75,19 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		var front_share := clampf(front_load, 0.65, 1.0)
 		var cap_f := per_load * loads.x if loads.x >= 0.0 else available * clampf(front_load, 0.0, 1.0)
 		var cap_r := per_load * loads.y if loads.y >= 0.0 else available * clampf(1.0 - front_load, 0.0, 1.0)
-		front_force = minf(demand * front_share, cap_f)
-		rear_force = minf(demand * (1.0 - front_share), cap_r)
+		# Седок распределяет один тормоз: что не держит одно колесо (разгружено, скользит), берёт другое,
+		# но не до самого предела — остаётся резерв для курса.
+		var want_f := demand * front_share
+		var want_r := demand - want_f
+		front_force = minf(want_f, cap_f)
+		rear_force = minf(want_r, cap_r)
+		var spare_r := maxf(0.0, cap_r * SHARE_LIMIT - rear_force)
+		var spare_f := maxf(0.0, cap_f * SHARE_LIMIT - front_force)
+		var moved_r := minf(want_f - front_force, spare_r)
+		front_force += minf(want_r - rear_force, spare_f)
+		rear_force += moved_r
 		deceleration = minf(front_force + rear_force, maxf(speed, 0.0) / dt) if grounded and speed > 0.05 else 0.0
+	_match_forces()
 	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
 	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available
 	grip_used = clampf(deceleration / maxf(total, 0.001), 0.0, 1.0)
@@ -100,3 +111,18 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		_pitch_rate = 0.0
 	risk = clampf(maxf(_overload_time / OVERLOAD_GRACE * 0.8, lift / TIP_ANGLE), 0.0, 1.0) if danger else 0.0
 	tipped = danger and lift >= TIP_ANGLE
+
+
+## Итоговый тормоз ограничен (остановка, сопротивление уже гасит ход): силы колёс уменьшаются в той же доле,
+## чтобы они описывали фактически приложенный импульс.
+func limit(total: float) -> void:
+	deceleration = maxf(0.0, total)
+	_match_forces()
+
+
+func _match_forces() -> void:
+	var sum := front_force + rear_force
+	if sum > deceleration + 0.000001:
+		var k := deceleration / sum
+		front_force *= k
+		rear_force *= k

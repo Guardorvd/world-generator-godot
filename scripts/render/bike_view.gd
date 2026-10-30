@@ -252,7 +252,11 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	# Под нагрузкой подаёмся вперёд; при торможении и спуске уходим назад.
 	# 12.3: заметнее — разгон, подъём и тормоз двигают корпус до 9 см (было 5,5).
 	# Тормоз заменяет обычную инерционную компенсацию, а не складывается с ней.
-	var inertia_shift := lerpf(-acceleration * 0.007, b.brakes.brace * GameConfig.BIKE_BRAKE_SHIFT, braking)
+	# Инерцию сначала принимают руки и ноги — по силе в пятнах контакта (тяга, тормоз), а не по итоговому изменению
+	# скорости: тормоз, держащий скорость на спуске, виден, а потеря хода в подъём не выглядит торможением.
+	# Затем таз компенсирует перенос (brace, с запаздыванием).
+	var contact := clampf(b.contact_acceleration, -9.0, 7.0) if continuous and not b.airborne else 0.0
+	var inertia_shift := lerpf(-contact * 0.007, b.brakes.brace * GameConfig.BIKE_BRAKE_SHIFT, braking)
 	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift, -0.09, 0.13)
 	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
 	_takeoff *= exp(-dt * 12.0)

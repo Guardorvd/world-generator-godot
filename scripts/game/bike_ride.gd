@@ -126,6 +126,7 @@ const YAW_DROP := 8.0        # рад/с²: так быстро гаснет п�
 ## Нагрузка колеса — через податливость шины (TIRE_COMPLY): пятно контакта не теряет и не набирает вес мгновенно.
 ## Без этого ограничение силы шины нагрузкой ловило каждый провал хода пружины и занижало запас в среднем на 17–20 %.
 const TIRE_COMPLY := 0.03    # с
+const PITCH_TRANSFER := 0.14 # с: перенос нагрузки между осями следует за тормозом и подъёмом колеса
 ## Занос: рама сама доворачивает к направлению движения (переднее колесо уходит в занос, седок ловит), а снос больше
 ## SLIDE_CRASH на скорости — падение набок. Велосипед не катится боком.
 const ALIGN_SLIP := 0.3      # рад: меньший снос — обычный поворот
@@ -221,10 +222,11 @@ var side_f := 0.5     # нагрузка для бокового запаса (t
 var side_r := 0.5
 var slick_f := 1.0    # доля сцепления колеса на скользком (корень, камень), 1 — земля
 var slick_r := 1.0
-var force_f := Vector2() # фактически приложенная сила колеса на массу велосипеда, м/с²: x — тормоз, y — поперёк
+var force_f := Vector2() # фактически приложенная сила колеса на массу велосипеда, м/с²: x — тормоз (у заднего минус тяга), y — поперёк
 var force_r := Vector2()
 var use_f := 0.0      # использованный запас сцепления колеса (тормоз и поворот), 0..1; 1 — колесо скользит
 var use_r := 0.0
+var _share := 0.5     # доля нагрузки на переднем колесе после переноса (PITCH_TRANSFER)
 var _rest_f := 0.0    # цель пружин на прошлом такте: отклонение от неё — сила подвески сверх равновесия
 var _rest_r := 0.0
 var _on_f := -1          # препятствие, на котором стоит колесо (ForestObstacles.wheel_contact id; -1 — на земле)
@@ -374,6 +376,7 @@ func reset_motion() -> void:
 	crash_normal = Vector3.UP
 	crash_velocity = Vector3()
 	_sub.fill(0.0)
+	_share = 0.5
 	effort = 0.0
 	gear = GEAR_MIN
 	drive_request = 0.0
@@ -651,6 +654,9 @@ var pump_force := 0.0      # помощь автопампа
 var grade_now := 0.0       # геометрический уклон земли вдоль курса (без подвески и тела), м на м
 var feel_acceleration := 0.0 # продольное ускорение по мировой скорости за внешний шаг: перепроекция рамы его не даёт
 var tick_time := 0.0       # длительность последнего внешнего шага, с
+## Продольная сила в пятнах контакта за внешний шаг (тяга минус тормоз): перенос нагрузки, которую принимает тело
+var contact_acceleration: float:
+	get: return drive_force - brake_force.x - brake_force.y
 
 
 func _end_tick(sums: PackedFloat32Array, done: float, start: Vector2) -> void:
@@ -709,7 +715,7 @@ func _substep(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bo
 		_sync(p)
 		return
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
-	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
+	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, _sub[T_DRIVE] - _sub[T_BRAKE_F] - _sub[T_BRAKE_R])
 	_step_contacts(f.slope, dt)
 	_step_pose(throttle, lateral, dt)
 	_sync(p)
@@ -934,7 +940,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		lateral = side_force_f + side_force_r
 		lateral_speed -= lateral * dt
 		force_f = Vector2(brakes.front_force, side_force_f)
-		force_r = Vector2(brakes.rear_force, side_force_r)
+		force_r = Vector2(_rear_long(), side_force_r)
 		use_f = clampf(force_f.length() / maxf(cap_f, 0.01), 0.0, 1.0) if cap_f > 0.001 else (1.0 if absf(need) > 0.01 else 0.0)
 		use_r = clampf(force_r.length() / maxf(cap_r, 0.01), 0.0, 1.0) if cap_r > 0.001 else (1.0 if absf(need) > 0.01 else 0.0)
 		grip_usage = clampf(Vector2(brake_deceleration, lateral).length() / maxf(cap_f + cap_r, 0.1), 0.0, 1.0)
@@ -959,12 +965,17 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 	return lateral
 
 
-## Один запас для запроса руля и удержания траектории; тормоз уже занял свою часть.
+## Продольная сила заднего колеса в этом подшаге: тормоз минус реализованная тяга педалей (один круг сцепления).
+func _rear_long() -> float:
+	return brakes.rear_force - _sub[T_DRIVE]
+
+
+## Один запас для запроса руля и удержания траектории; тормоз и тяга уже заняли свою часть.
 func _side_caps(grip: float) -> Vector2:
 	var cap_f := CORNER_GRIP * RIDER_GRIP * grip * side_f * slick_f if contact_f() else 0.0
 	var cap_r := CORNER_GRIP * RIDER_GRIP * grip * side_r * slick_r if contact_r() else 0.0
 	return Vector2(sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force)),
-		sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force)))
+		sqrt(maxf(0.0, cap_r * cap_r - _rear_long() * _rear_long())))
 
 
 ## Добавка к сцеплению flat (м/с²) от наклона полотна: drift — куда велосипед несёт поперёк рамы (+ вправо).
@@ -1250,7 +1261,9 @@ static func _bump(d: float) -> float:
 
 
 ## Две пружины-демпфера, вилка и задний ход. Короткие подшаги не дают раскачки от длинного такта.
-## load — сжатие от поворота, acceleration — разгон (+) и торможение (-), м/с².
+## load — сжатие от поворота, acceleration — продольная сила в пятнах контакта (тяга минус тормоз), м/с²: перенос
+## нагрузки между осями. Не итоговое изменение скорости: тормоз, держащий скорость на спуске, всё так же сжимает
+## вилку, а потеря хода в подъём без тормоза её не сжимает (тяжесть приложена к центру масс, не к колёсам).
 func _step_suspension(dt: float, load := 0.0, acceleration := 0.0) -> void:
 	var target := -0.035 if airborne else load
 	var shift := 0.0 if airborne else acceleration * PITCH_LOAD
@@ -1335,7 +1348,12 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var bank := clampf(bank_slope * signf(_yaw_rate), -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 	var press := absf(speed * _yaw_rate) / GameConfig.GRAVITY * bank / sqrt(1.0 + bank * bank)
 	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g + press + pump_load)
-	var share := clampf(brakes.front_load, 0.0, 1.0)
+	# Перенос нагрузки между осями идёт через наклон рамы и ход вилки, а не мгновенно: доля переднего следует
+	# за распределением тормоза с PITCH_TRANSFER. Пока колесо поднято, вся нагрузка на другом — вернувшееся
+	# колесо принимает её постепенно, и тормоз не проваливается, пока шина набирает силу.
+	var share_goal := 0.0 if lift_f > 0.0 else (1.0 if lift_r > 0.0 else clampf(brakes.front_load, 0.0, 1.0))
+	_share = lerpf(_share, share_goal, 1.0 - exp(-dt / PITCH_TRANSFER)) if contact_model else share_goal
+	var share := _share
 	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * CONTACT_DAMP * squash_fv) / GameConfig.GRAVITY
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
 	var raw_f := clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
@@ -1457,12 +1475,12 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	if reversing:
 		# Медленный манёвр назад остаётся предсказуемым и на склоне.
 		speed = move_toward(speed, -GameConfig.BIKE_REVERSE * absf(throttle), GameConfig.BIKE_ACCEL * dt)
-		brakes.deceleration = 0.0
+		brakes.limit(0.0)
 		return
 	# Автобаланс и статический тормоз: не сползаем, пока игрок обдумывает задний ход.
 	if throttle < 0.0 and absf(speed) < 0.05:
 		speed = 0.0
-		brakes.deceleration = 0.0
+		brakes.limit(0.0)
 		return
 	if speed < 0.0:
 		var stop := GameConfig.BIKE_ACCEL if throttle > 0.0 else rolling + drag * speed * speed
@@ -1498,12 +1516,10 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		var force := brakes.deceleration
 		var before_brake := maxf(0.0, speed + (drive + gravity) * dt)
 		speed = move_toward(before_brake, 0.0, (force + resistance) * dt)
-		brakes.deceleration = minf(force, maxf(0.0, before_brake / dt - resistance))
+		brakes.limit(minf(force, maxf(0.0, before_brake / dt - resistance)))
 		braking = clampf(brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) * smoothstep(0.3, 3.0, before_brake)
-		# у самой остановки итоговый тормоз меньше запрошенного: силы колёс — в той же доле
-		var share := brakes.deceleration / maxf(brakes.front_force + brakes.rear_force, 0.000001)
-		_sub[T_BRAKE_F] = brakes.front_force * share
-		_sub[T_BRAKE_R] = brakes.rear_force * share
+		_sub[T_BRAKE_F] = brakes.front_force
+		_sub[T_BRAKE_R] = brakes.rear_force
 	else:
 		speed += (drive + gravity) * dt
 		speed = move_toward(speed, 0.0, resistance * dt)
