@@ -77,7 +77,7 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, style: Array, sim: 
 			while next_obstacle < obstacles.size() and obstacles[next_obstacle] < station + BikeRide.HUB: next_obstacle += 1
 			if next_obstacle < obstacles.size() and pressed < 0.0:
 				var to_contact := (obstacles[next_obstacle] - 0.5 - station - BikeRide.HUB) / maxf(absf(b.speed), 0.5)
-				if to_contact <= BikeRide.PULL_RISE:
+				if to_contact <= BikeRide.BODY_LEAD:
 					pressed = t
 					s.pulls += 1
 			if pressed >= 0.0:

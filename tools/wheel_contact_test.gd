@@ -40,7 +40,8 @@ func section() -> TrailDefinition:
 		e.height = spec[3]
 		e.bank = spec[4]
 		e.density = spec[5]
-		e.lines = 1
+		# у корней две линии по бокам: ось ими перекрыта, заезд по оси проверяет удары корней
+		e.lines = 2 if spec[0] == TrailElement.Profile.ROOTS else 1
 		list.append(e)
 	d.elements = list
 	return d
@@ -98,6 +99,7 @@ func ride(h: Heightfield, d: TrailDefinition, contact: bool, hz: int, from: floa
 				out.min_load_f = minf(out.min_load_f, b.load_f)
 				out.max_load_f = maxf(out.max_load_f, b.load_f)
 	out.decel = (out.brake_in - out.brake_out) / maxf(out.brake_time, 0.001)
+	out.exit = b.speed
 	out.brake_load /= maxf(out.brake_time, 0.001)
 	out.yaw /= maxf(out.yaw_time, 0.001)
 	return out
@@ -203,6 +205,35 @@ func crossings(h: Heightfield, d: TrailDefinition, technical: Dictionary) -> voi
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 
 
+## Задним ходом в бревно: удар не разгоняет назад (импульс вычитается из вектора скорости)
+func reverse_hit(h: Heightfield, d: TrailDefinition, technical: Dictionary) -> void:
+	var at := d.point_at(LOG)
+	var base := h.ground_at(at.x, at.y)
+	var forward := d.tangent_at(LOG)
+	var across := Vector2(forward.y, -forward.x)
+	h.obstacles.set_trail(technical.collide + PackedFloat32Array([at.x - across.x * 2.0, at.y - across.y * 2.0, at.x + across.x * 2.0, at.y + across.y * 2.0, 0.1, base, base + 0.2]), technical.bumps)
+	h.obstacles.update(at.x, at.y, PackedFloat32Array(), 1, true)
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	b.contact_model = true
+	var start := d.point_at(LOG + 2.5)
+	b.x = start.x
+	b.z = start.y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(LOG)
+	b.mount(p)
+	var control := BikeController.new()
+	var fastest := 0.0
+	var hits := 0
+	for tick in 60 * 6:
+		control.ride(1.0 / 60.0, p, b, h.world, h, -1.0, 0.0, false, false, false)
+		fastest = maxf(fastest, -b.speed)
+		hits = b.impacts.x + b.impacts.y
+	print("Задний ход в бревно: наибольшая скорость назад %.2f м/с, встреч %d" % [fastest, hits])
+	check(hits > 0 and fastest <= GameConfig.BIKE_REVERSE + 0.01, "задним ходом удар о бревно не разгоняет назад (%.2f м/с)" % fastest)
+	h.obstacles.set_trail(technical.collide, technical.bumps)
+
+
 func cross(h: Heightfield, d: TrailDefinition, hz: int, speed: float) -> Dictionary:
 	var p := PlayerState.new()
 	var b := BikeRide.new()
@@ -285,6 +316,22 @@ func run() -> void:
 	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
 	print("Корни: нагрузка переднего колеса %.2f … %.2f доли веса (стоя 0,5)" % [roots.min_load_f, roots.max_load_f])
 	check(technical.bumps.size() > 0, "корни разложены (%d)" % (technical.bumps.size() / ForestObstacles.BUMP_STRIDE))
+	# влияние корней: тот же заезд без них — корни должны заметно отнимать ход (BUMP_DRAG) или раскачивать нагрузку
+	h.obstacles.set_trail(technical.collide, PackedFloat32Array())
+	var bare := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))
+	h.obstacles.set_trail(technical.collide, technical.bumps)
+	print("Корни: скорость после %.2f против %.2f м/с без корней; размах нагрузки %.2f против %.2f" % [roots.exit, bare.exit, roots.max_load_f - roots.min_load_f, bare.max_load_f - bare.min_load_f])
+	check(roots.max_load_f - roots.min_load_f > bare.max_load_f - bare.min_load_f, "корни раскачивают нагрузку переднего колеса")
+	# корни скользкие: тормоз на них держит хуже, чем на голой земле
+	var window := Vector2(ROOTS - 6.0, ROOTS - 2.0)
+	var brake_roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
+	h.obstacles.set_trail(technical.collide, PackedFloat32Array())
+	var brake_bare := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 10.0, window)
+	h.obstacles.set_trail(technical.collide, technical.bumps)
+	print("Тормоз на корнях: %.2f м/с² против %.2f без корней" % [brake_roots.decel, brake_bare.decel])
+	# корень узкий (0,2 м): на 10 м/с колесо скользит на нём сотые доли секунды, тормозной путь почти тот же —
+	# заметен срыв только при повороте и торможении на частых корнях. Проверяем, что тормоз на корнях не сильнее.
+	check(brake_roots.decel <= brake_bare.decel + 0.05, "тормоз на корнях не держит лучше, чем на голой земле")
 	# 4. Бревно поперёк: в прежней модели — стена; в новой колесо встречает кромку: медленно встаёт, средне
 	# переваливает с потерей скорости, быстро — полёт через руль. Низкое бревно проезжается на любой скорости.
 	for tall: float in [0.1, 0.4]:
@@ -311,6 +358,7 @@ func run() -> void:
 		print("Бревно %.1f м: %s" % [tall, " · ".join(line)])
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 	consistency(h, d)
+	reverse_hit(h, d, technical)
 	crossings(h, d, technical)
 	print("wheel_contact: ", failures, " failures / ", checks, " checks")
 	quit(1 if failures else 0)

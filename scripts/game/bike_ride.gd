@@ -92,14 +92,17 @@ const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) сед
 ## по доле массы на этом колесе (нагрузка шины). Переднее колесо, остановленное резче ENDO_DV, бросает седока через руль.
 const IMPACT_ANGLE := 0.12   # рад: плавнее этого подъём опоры — накат, а не удар
 const ENDO_DV := 5.0         # м/с: такая потеря скорости переднего колеса (при обычной нагрузке) — полёт через руль
-## Разгрузка переднего колеса (работа телом, прототип): нажатие body_back — рывок руля на себя, нагрузка переходит
-## с переднего колеса на заднее на короткое время (пик через PULL_RISE, к PULL_TIME — снова обычная). Вовремя —
-## колесо легко встречает кромку; рано — к препятствию оно снова нагружено. Удержание — вес назад постоянно, но слабее
-## (BACK_SHIFT): переднее колесо хуже держит поворот. Новый рывок — только после отпускания.
-const PULL_DEPTH := 0.45     # доля веса, которая уходит с переднего колеса на пике рывка
-const PULL_RISE := 0.12      # с до пика
-const PULL_TIME := 0.45      # с до возврата
-const BACK_SHIFT := 0.2      # доля веса назад, пока клавиша удерживается после рывка
+## Тело седока (модель двух контактов): положение вперёд/назад body_x от −1 (вперёд) до 1 (назад), движется к цели
+## (body_back / body_forward) с ограниченными скоростью и ходом. Положение переносит часть веса (BODY_HOLD на весь
+## ход: назад — легче переднее колесо, хуже его поворот), а само движение — рывок (BODY_PUSH на единицу скорости):
+## быстро назад — переднее колесо лёгкое, пока тело движется; быстро вперёд — лёгкое заднее. Импульс длится, пока
+## тело в движении, поэтому окно — доли секунды и нужно попасть в момент; дёрганье туда-сюда даёт ещё и обратные рывки.
+const BODY_K := 160.0        # 1/с²: тяга тела к цели
+const BODY_D := 25.0         # 1/с: демпфирование (около критического)
+const BODY_RATE := 4.0       # ход в секунду: быстрее тело не движется
+const BODY_HOLD := 0.12      # доля веса на весь ход положения
+const BODY_PUSH := 0.11      # доля веса на единицу скорости тела (на BODY_RATE — 0,44)
+const BODY_LEAD := 0.1       # с от нажатия до пика рывка (для сценариев замеров)
 const PULL_PITCH := 0.25     # рад наклона рамы носом вверх на всю долю снятого веса: рывок видно
 const YAW_DROP := 8.0        # рад/с²: так быстро гаснет поворот, когда переднее колесо теряет запас
 ## Нагрузка колеса — через податливость шины (TIRE_COMPLY): пятно контакта не теряет и не набирает вес мгновенно.
@@ -111,6 +114,10 @@ const ALIGN_SLIP := 0.3      # рад: меньший снос — обычны�
 const ALIGN_RATE := 3.0      # рад/с: наибольшая скорость доворота рамы к движению
 const SLIDE_CRASH := 1.05    # рад (60°)
 const SLIDE_CRASH_SPEED := 4.0 # м/с
+## Корни и мелкие камни (кочки ForestObstacles.bump_at) скользкие: пока колесо на них, его запас сцепления меньше.
+## Проезд поперёк накатом их почти не замечает; тормоз или руль на корнях срывают колесо.
+const ROOT_GRIP := 0.45
+const SLICK_BUMP := 0.015    # м: выше этого колесо стоит на корне, а не на земле
 const TIRE_RELAX := 0.8      # м пути
 const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на большой скорости
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
@@ -137,10 +144,11 @@ var front_load: float:
 var grip_usage := 0.0 # фактически использованный общий запас, 0..1
 var slip := 0.0 # подписанный угол сноса, радианы
 var _corner_demand := 0.0
-var body_back := false # седок тянет руль на себя (вход, модель двух контактов)
-var unweight := 0.0    # доля веса, снятая с переднего колеса сейчас
-var _pull_t := -1.0    # с от начала рывка (-1 — нет)
-var _back_was := false
+var body_back := false    # вход: тело назад (руль на себя)
+var body_forward := false # вход: тело вперёд (на руль)
+var body_x := 0.0         # положение тела: + назад, − вперёд
+var body_v := 0.0
+var unweight := 0.0       # доля веса, снятая с переднего колеса на заднее сейчас (меньше нуля — с заднего на переднее)
 var contact_model := false # прототип двух контактов (CONTACT_*)
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
@@ -148,6 +156,8 @@ var tire_f := 0.5     # нагрузка, которую «чувствует» 
 var tire_r := 0.5
 var side_f := 0.5     # нагрузка для бокового запаса (tire_* с инерцией SIDE_RELAX)
 var side_r := 0.5
+var slick_f := 1.0    # доля сцепления колеса на скользком (корень, камень), 1 — земля
+var slick_r := 1.0
 var force_f := Vector2() # фактически приложенная сила колеса на массу велосипеда, м/с²: x — тормоз, y — поперёк
 var force_r := Vector2()
 var use_f := 0.0      # использованный запас сцепления колеса (тормоз и поворот), 0..1; 1 — колесо скользит
@@ -310,9 +320,10 @@ func reset_motion() -> void:
 	land_impact = 0.0
 	bottom_out = 0.0
 	body_back = false
+	body_forward = false
+	body_x = 0.0
+	body_v = 0.0
 	unweight = 0.0
-	_pull_t = -1.0
-	_back_was = false
 	load_f = 0.5
 	load_r = 0.5
 	tire_f = 0.5
@@ -600,8 +611,8 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		# со сносом из своего запаса; стоящий седок упирается ногой.
 		var s := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 		lateral_speed -= GameConfig.GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) * dt
-		var cap_f := CORNER_GRIP * grip * side_f
-		var cap_r := CORNER_GRIP * grip * side_r
+		var cap_f := CORNER_GRIP * grip * side_f * slick_f
+		var cap_r := CORNER_GRIP * grip * side_r * slick_r
 		var free_f := sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
 		var free_r := sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force))
 		# Нужная боковая сила делится поровну (середина массы посередине базы); колесо даёт не больше своего свободного
@@ -676,7 +687,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		var corner_grip := CORNER_GRIP * grip * sqrt(maxf(0.0, 1.0 - brake * brake))
 		if contact_model:
 			# Поворачивает переднее колесо: его свободный от тормоза запас держит половину боковой силы
-			var cap_f := CORNER_GRIP * grip * side_f
+			var cap_f := CORNER_GRIP * grip * side_f * slick_f
 			corner_grip = 2.0 * sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
 		# Накопленный снос расширяет дугу до восстановления, вместо бесконечного дрифта.
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
@@ -784,6 +795,9 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		orr = heights.obstacles.bump_at(x - fx, z - fz)
 	gf += of
 	gr += orr
+	# колесо на корне или камне скользкое: держит хуже, тормоз и поворот на нём — риск
+	slick_f = ROOT_GRIP if contact_model and of > SLICK_BUMP else 1.0
+	slick_r = ROOT_GRIP if contact_model and orr > SLICK_BUMP else 1.0
 	ground_f = gf - y
 	ground_r = gr - y
 	if _fresh:
@@ -845,9 +859,11 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	if front and dv.dot(forward) / 0.5 > ENDO_DV:
 		_crash(vy, Vector3(-sin(heading), 0.6, -cos(heading)), CrashCause.OBSTACLE)
 		return hit.id
-	var along := dv.dot(forward)
-	speed = signf(speed) * maxf(0.0, absf(speed) - along)
-	lateral_speed -= dv.dot(side)
+	# импульс вычитается из вектора скорости (и при заднем ходе), но не разворачивает движение через препятствие
+	var after := velocity - dv
+	if after.dot(into) < 0.0: after -= into * after.dot(into)
+	speed = after.dot(forward)
+	lateral_speed = after.dot(side)
 	var kick := dv.length() / share * 0.3
 	if front: hit_dv.x = dv.length()
 	else: hit_dv.y = dv.length()
@@ -904,15 +920,13 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## перенос между осями от тормоза, уклона и корпуса (Brakes.front_load) и сила пружины сверх равновесия —
 ## удар о корень прижимает колесо, отскок разгружает. В полёте нагрузки нет.
 func _step_contacts(grade: float, dt: float) -> void:
-	if body_back and not _back_was:
-		_pull_t = 0.0
-	_back_was = body_back
-	var pull := 0.0
-	if _pull_t >= 0.0:
-		_pull_t += dt
-		pull = smoothstep(0.0, PULL_RISE, _pull_t) * (1.0 - smoothstep(PULL_RISE + 0.08, PULL_TIME, _pull_t))
-		if _pull_t > PULL_TIME: _pull_t = -1.0
-	unweight = maxf(PULL_DEPTH * pull, BACK_SHIFT if body_back else 0.0) if contact_model else 0.0
+	var target := (1.0 if body_back else 0.0) - (1.0 if body_forward else 0.0)
+	body_v = clampf(body_v + (BODY_K * (target - body_x) - BODY_D * body_v) * dt, -BODY_RATE, BODY_RATE)
+	body_x += body_v * dt
+	if absf(body_x) > 1.0:
+		body_x = signf(body_x)
+		body_v = 0.0
+	unweight = (BODY_HOLD * body_x + BODY_PUSH * body_v) if contact_model else 0.0
 	if airborne:
 		load_f = 0.0
 		load_r = 0.0
@@ -931,9 +945,9 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
 	var raw_f := clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	var raw_r := clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
-	# седок переносит вес назад: сколько снято с переднего колеса, столько легло на заднее
-	var moved := minf(unweight * normal, raw_f)
-	raw_f -= moved
+	# седок переносит вес: сколько снято с одного колеса, столько легло на другое
+	var moved := clampf(unweight * normal, -raw_r, raw_f)
+	raw_f = minf(raw_f - moved, LOAD_MAX)
 	raw_r = minf(raw_r + moved, LOAD_MAX)
 	var kc := 1.0 - exp(-dt / TIRE_COMPLY)
 	load_f = lerpf(load_f, raw_f, kc)
@@ -969,7 +983,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
-	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, Vector2(tire_f, tire_r) if contact_model else Vector2(-1.0, -1.0))
+	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, Vector2(tire_f * slick_f, tire_r * slick_r) if contact_model else Vector2(-1.0, -1.0))
 	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle <= -GameConfig.BIKE_REVERSE_INPUT and absf(speed) < 0.05:
