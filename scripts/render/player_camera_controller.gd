@@ -14,6 +14,10 @@ const CAM_STEP := 0.3           # шаг проверки препятствий
 const CAM_RETURN := 3.0         # как быстро камера отходит обратно после стены
 const CAM_GROUND_GAP := 0.4     # камера не ниже земли плюс это
 const CAM_CEILING_GAP := 0.3    # и не выше потолка (туннель) минус это
+const BRAKE_RESPONSE := 6.0     # 30.10: торможение видно: камера подходит, опускается и сужает обзор
+const BRAKE_DIST := 1.1         # м ближе при полном торможении
+const BRAKE_DIP := 0.3          # м ниже
+const BRAKE_FOV := 6.0          # градусов уже
 const LEAD_ANGLE := 8.5         # доворот внутрь поворота при полном руле, градусы
 const LEAD_SLIP := 0.25         # и доля угла сноса
 const LEAD_RESPONSE := 4.0
@@ -47,6 +51,7 @@ var _dip_v := 0.0
 var _trauma := 0.0      # тряска камеры 0..1 после жёстких приземлений, затухает сама
 var _cam_lead := 0.0    # 12.7: доворот камеры внутрь поворота, рад (только пока мышь не трогали)
 var _speed_rush := 0.0
+var _brake_feel := 0.0  # 30.10: торможение 0..1 по фактическому замедлению тормозом (не подъёму): камера ближе, ниже и уже (нос «клюёт»)
 var _prev := Vector3()  # игрок (x, ноги, z) на предпоследнем такте: кадр показывает его между тактами
 var _prev_bob := 0.0
 var _prev_dip := 0.0    # проседание и время на предпоследнем такте: кадр показывает их между тактами
@@ -84,10 +89,12 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		rush_goal = smoothstep(7.0, 20.0, absf(bike.speed))
 		rush_goal += smoothstep(1.0, 5.0, bike.feel_acceleration) * smoothstep(8.0, 18.0, absf(bike.speed)) * 0.2
 	_speed_rush = lerpf(_speed_rush, minf(rush_goal, 1.0), _smooth(RUSH_RESPONSE, dt))
+	var brake_goal := clampf(bike.brake_deceleration / 7.0, 0.0, 1.0) * smoothstep(1.0, 4.0, absf(bike.speed)) if riding and not crash_active and not _opening else 0.0
+	_brake_feel = lerpf(_brake_feel, brake_goal, _smooth(BRAKE_RESPONSE, dt))
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := settings.fov
 	if riding:
-		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3)
+		fov_goal += GameConfig.BIKE_FOV * clampf((absf(bike.speed) - 2.0) / (GameConfig.BIKE_SPEED - 2.0), 0.0, 1.3) - BRAKE_FOV * _brake_feel
 	else:
 		fov_goal += GameConfig.RUN_FOV * clampf((player.ground_speed() - GameConfig.WALK * 1.1) / (GameConfig.WALK * 0.6), 0.0, 1.0)
 	if photo_active:
@@ -103,9 +110,9 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		_cam_y = lerpf(_cam_y, pos.y + RIDE_HEIGHT + suspension, _smooth(RIDE_HEIGHT_RESPONSE, dt))
 		if absf(_cam_y - pos.y - RIDE_HEIGHT) > RIDE_HEIGHT_LAG:
 			_cam_y = pos.y + RIDE_HEIGHT + clampf(_cam_y - pos.y - RIDE_HEIGHT, -RIDE_HEIGHT_LAG, RIDE_HEIGHT_LAG)
-		var target := Vector3(pos.x, _cam_y + dip, pos.z)
+		var target := Vector3(pos.x, _cam_y + dip - BRAKE_DIP * _brake_feel, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
-		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * RUSH_DIST
+		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * RUSH_DIST - BRAKE_DIST * _brake_feel
 		var dist := desired_dist
 		var steps := maxi(CAM_STEPS, ceili(desired_dist / CAM_STEP))
 		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть

@@ -55,6 +55,12 @@ var metrics := TrailLabMetrics.new()
 var _cam_from := Vector4() # x, feet, z, heading on the previous physics tick
 var _cam_to := Vector4()
 var _cam_feet := 0.0
+## 30.10: камера показывает торможение и поворот: при торможении подходит ближе, ниже и сужает обзор (нос «клюёт»),
+## при разгоне отходит; на скорости заглядывает внутрь поворота по рулю, как камера игры (LEAD_ANGLE)
+var _cam_surge := 0.0
+var _cam_brake := 0.0
+var _cam_lead := 0.0
+var _cam_fov := -1.0
 var _sources: Array[TrailDefinition] = []
 ## Test ground of the current session (Fixture.GROUNDS): the lab's gentle slope, a window of world relief or a saved site.
 var ground_kind := "flat"
@@ -853,9 +859,21 @@ func _process(dt: float) -> void:
 		# farther above a larger square (the main polygon) so the whole course is in view
 		camera.position = focus + Vector3(0, 228, 117) * maxf(1.0, heights.world.W / 64.0 * 1.05)
 		camera.look_at(focus)
+		if _cam_fov >= 0.0: camera.fov = _cam_fov
 	else:
-		camera.position = target + Vector3(sin(heading) * 7, 3.5, cos(heading) * 7)
-		camera.look_at(target)
+		var riding := bike.riding and not crash.active()
+		_cam_surge = lerpf(_cam_surge, clampf(bike.feel_acceleration, -9.0, 5.0) if riding else 0.0, Util.damp(5.0, dt))
+		_cam_brake = lerpf(_cam_brake, bike.brake_deceleration if riding else 0.0, Util.damp(6.0, dt))
+		var brake := clampf(_cam_brake / 7.0, 0.0, 1.0)
+		var push := clampf(_cam_surge / 4.0, 0.0, 1.0)
+		_cam_lead = lerpf(_cam_lead, -bike.steer * deg_to_rad(PlayerCameraController.LEAD_ANGLE) * smoothstep(3.0, 12.0, absf(bike.speed)) if riding else 0.0, Util.damp(4.0, dt))
+		var look := heading + _cam_lead
+		var back := 7.0 - 1.6 * brake + 0.8 * push
+		var ahead := Vector3(-sin(heading), 0.0, -cos(heading)) * 1.2 * brake
+		camera.position = target + Vector3(sin(look) * back, 3.5 - 0.6 * brake, cos(look) * back)
+		camera.look_at(target + ahead - Vector3(0.0, 0.35 * brake, 0.0))
+		if _cam_fov < 0.0: _cam_fov = camera.fov
+		camera.fov = _cam_fov - 6.0 * brake + 3.0 * push
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
