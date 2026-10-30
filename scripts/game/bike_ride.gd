@@ -101,8 +101,22 @@ const BODY_K := 160.0        # 1/с²: тяга тела к цели
 const BODY_D := 25.0         # 1/с: демпфирование (около критического)
 const BODY_RATE := 4.0       # ход в секунду: быстрее тело не движется
 const BODY_HOLD := 0.12      # доля веса на весь ход положения
-const BODY_PUSH := 0.11      # доля веса на единицу скорости тела (на BODY_RATE — 0,44)
+const BODY_PUSH := 0.15      # доля веса на единицу скорости тела (на BODY_RATE — 0,6)
 const BODY_LEAD := 0.1       # с от нажатия до пика рывка (для сценариев замеров)
+## Подъём колеса: рывок тела сильнее веса, который несёт колесо, отрывает его от земли (lift_f / lift_r, м над опорой).
+## Пока колесо в воздухе, весь вес на другом, а о препятствие оно не бьётся, если поднято выше него. Оба колеса в
+## воздухе — банни-хоп: велосипед летит с их средней скоростью подъёма. Q, затем вовремя E — переднее, потом заднее.
+const LIFT_GAIN_F := 14.0    # ускорение подъёма переднего колеса на долю веса сверх его нагрузки, g (руль на себя)
+const LIFT_GAIN_R := 3.0     # заднего (ноги подтягивают раму); вниз оба падают с g
+## Банни-хоп: заднее колесо оторвалось, пока переднее в воздухе. Скорость вверх — от толчка ногами (HOP_POP) тем
+## больше, чем выше уже поднято переднее (на HOP_FRONT — полный), плюс часть скорости подъёма переднего.
+const HOP_POP := 2.6         # м/с
+const HOP_FRONT := 0.25      # м
+const LIFT_MAX := 0.6        # м
+## Пробел в модели двух контактов — тот же Q→E сам, с одной и той же задержкой, не лучшей: ручной выше
+const AUTO_BACK := 0.13      # с тела назад (раньше лучшего момента: прыжок ниже ручного)
+const AUTO_FORWARD := 0.2    # с тела вперёд после этого
+const AUTO_STRENGTH := 1.0   # доля хода тела
 const PULL_PITCH := 0.25     # рад наклона рамы носом вверх на всю долю снятого веса: рывок видно
 const YAW_DROP := 8.0        # рад/с²: так быстро гаснет поворот, когда переднее колесо теряет запас
 ## Нагрузка колеса — через податливость шины (TIRE_COMPLY): пятно контакта не теряет и не набирает вес мгновенно.
@@ -149,6 +163,13 @@ var body_forward := false # вход: тело вперёд (на руль)
 var body_x := 0.0         # положение тела: + назад, − вперёд
 var body_v := 0.0
 var unweight := 0.0       # доля веса, снятая с переднего колеса на заднее сейчас (меньше нуля — с заднего на переднее)
+var lift_f := 0.0         # переднее колесо над опорой, м (0 — на земле)
+var lift_fv := 0.0
+var lift_r := 0.0
+var lift_rv := 0.0
+var hop_height := 0.0     # высота последнего банни-хопа от точки отрыва, м (для замеров и метрик)
+var _hop_from := 0.0
+var _auto_hop := -1.0     # с от начала автоматического Q→E (пробел), -1 — нет
 var contact_model := false # прототип двух контактов (CONTACT_*)
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
@@ -324,6 +345,11 @@ func reset_motion() -> void:
 	body_x = 0.0
 	body_v = 0.0
 	unweight = 0.0
+	lift_f = 0.0
+	lift_fv = 0.0
+	lift_r = 0.0
+	lift_rv = 0.0
+	_auto_hop = -1.0
 	load_f = 0.5
 	load_r = 0.5
 	tire_f = 0.5
@@ -720,7 +746,12 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 	_hop_wait = maxf(0.0, _hop_wait - dt)
 	_hop_buf = HOP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
 	_coyote = maxf(0.0, _coyote - dt) if airborne else HOP_COYOTE
-	if _hop_buf > 0.0 and _hop_wait <= 0.0 and (not airborne or _coyote > 0.0):
+	if contact_model:
+		# пробел — тот же Q→E телом (банни-хоп), а не готовая добавка скорости вверх
+		if _hop_buf > 0.0 and _hop_wait <= 0.0 and not airborne and _auto_hop < 0.0:
+			_hop_buf = 0.0
+			_auto_hop = 0.0
+	elif _hop_buf > 0.0 and _hop_wait <= 0.0 and (not airborne or _coyote > 0.0):
 		_hop_buf = 0.0
 		_coyote = 0.0
 		airborne = true
@@ -775,10 +806,20 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var gf := _wheel_ground(x + fx, z + fz, heights)
 	var gr := _wheel_ground(x - fx, z - fz, heights)
 	if contact_model and heights.obstacles != null:
-		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _sup_f, _on_f, tire_f, true)
+		var clear_f := lift_f > 0.0 and gf <= heights.surface_at(x + fx, z + fz, y) + lift_f + 0.01
+		var clear_r := lift_r > 0.0 and gr <= heights.surface_at(x - fx, z - fz, y) + lift_r + 0.01
+		var was_f := _on_f
+		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _sup_f, _on_f, tire_f, true, clear_f)
 		if crashed:
 			return
-		_on_r = _wheel_hit(heights, x - fx, z - fz, gr, _sup_r, _on_r, tire_r, false)
+		if lift_f > 0.0 and not clear_f and _on_f != was_f:
+			lift_f = 0.0 # поднято ниже препятствия — колесо встретило кромку
+			lift_fv = 0.0
+		var was_r := _on_r
+		_on_r = _wheel_hit(heights, x - fx, z - fz, gr, _sup_r, _on_r, tire_r, false, clear_r)
+		if lift_r > 0.0 and not clear_r and _on_r != was_r:
+			lift_r = 0.0
+			lift_rv = 0.0
 	_sup_f = gf
 	_sup_r = gr
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
@@ -798,8 +839,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	# колесо на корне или камне скользкое: держит хуже, тормоз и поворот на нём — риск
 	slick_f = ROOT_GRIP if contact_model and of > SLICK_BUMP else 1.0
 	slick_r = ROOT_GRIP if contact_model and orr > SLICK_BUMP else 1.0
-	ground_f = gf - y
-	ground_r = gr - y
+	ground_f = gf - y + lift_f
+	ground_r = gr - y + lift_r
 	if _fresh:
 		_fresh = false
 		_g_f = gf
@@ -835,15 +876,15 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 ## земли. Раму тормозит на долю массы этого колеса (нагрузка шины). Угол — из геометрии, не из шага движения: не
 ## зависит от скорости и частоты тактов. Переднее колесо, потерявшее вдоль рамы больше ENDO_DV (лёгкое — меньше),
 ## бросает седока через руль. Возвращает id препятствия под колесом (-1 — на земле).
-func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, before: float, on_id: int, load: float, front: bool) -> int:
+func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, before: float, on_id: int, load: float, front: bool, clear := false) -> int:
 	var ground := heights.surface_at(px, pz, y)
 	if support <= ground + 0.005:
 		return -1
 	var hit := heights.obstacles.wheel_contact(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, minf(before, support) if on_id >= 0 else ground)
 	if hit.is_empty():
 		return -1
-	if hit.id == on_id or _fresh:
-		return hit.id # то же препятствие, или колесо опустилось на него сверху (приземление)
+	if hit.id == on_id or _fresh or clear:
+		return hit.id # то же препятствие, колесо опустилось на него сверху (приземление) или прошло над ним поднятым
 	var angle: float = hit.angle - atan(maxf(0.0, _ground_slope(heights) * signf(speed)))
 	if angle < IMPACT_ANGLE:
 		return hit.id
@@ -921,6 +962,10 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## удар о корень прижимает колесо, отскок разгружает. В полёте нагрузки нет.
 func _step_contacts(grade: float, dt: float) -> void:
 	var target := (1.0 if body_back else 0.0) - (1.0 if body_forward else 0.0)
+	if _auto_hop >= 0.0:
+		_auto_hop += dt
+		target = AUTO_STRENGTH if _auto_hop < AUTO_BACK else (-AUTO_STRENGTH if _auto_hop < AUTO_BACK + AUTO_FORWARD else 0.0)
+		if _auto_hop > AUTO_BACK + AUTO_FORWARD + 0.2: _auto_hop = -1.0
 	body_v = clampf(body_v + (BODY_K * (target - body_x) - BODY_D * body_v) * dt, -BODY_RATE, BODY_RATE)
 	body_x += body_v * dt
 	if absf(body_x) > 1.0:
@@ -934,6 +979,11 @@ func _step_contacts(grade: float, dt: float) -> void:
 		tire_r = 0.0
 		side_f = 0.0
 		side_r = 0.0
+		lift_f = 0.0
+		lift_fv = 0.0
+		lift_r = 0.0
+		lift_rv = 0.0
+		hop_height = maxf(hop_height, y - _hop_from)
 		return
 	# Вираж прижимает: в повороте по наклонному полотну часть центростремительного ускорения давит в склон,
 	# a·sinθ (контруклон — наоборот, разгружает). Тяжесть вдоль склона учтена в _step_turn и _step_traction.
@@ -945,10 +995,21 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
 	var raw_f := clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	var raw_r := clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
-	# седок переносит вес: сколько снято с одного колеса, столько легло на другое
-	var moved := clampf(unweight * normal, -raw_r, raw_f)
-	raw_f = minf(raw_f - moved, LOAD_MAX)
-	raw_r = minf(raw_r + moved, LOAD_MAX)
+	if contact_model:
+		_step_lift(share * normal, (1.0 - share) * normal, unweight * normal, dt)
+		if airborne:
+			return
+	if lift_f > 0.0:
+		raw_r = minf(raw_r + raw_f, LOAD_MAX)
+		raw_f = 0.0
+	elif lift_r > 0.0:
+		raw_f = minf(raw_f + raw_r, LOAD_MAX)
+		raw_r = 0.0
+	else:
+		# седок переносит вес: сколько снято с одного колеса, столько легло на другое
+		var moved := clampf(unweight * normal, -raw_r, raw_f)
+		raw_f = minf(raw_f - moved, LOAD_MAX)
+		raw_r = minf(raw_r + moved, LOAD_MAX)
 	var kc := 1.0 - exp(-dt / TIRE_COMPLY)
 	load_f = lerpf(load_f, raw_f, kc)
 	load_r = lerpf(load_r, raw_r, kc)
@@ -959,6 +1020,47 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var ks := 1.0 - exp(-dt / SIDE_RELAX)
 	side_f = minf(lerpf(side_f, tire_f, ks), tire_f)
 	side_r = minf(lerpf(side_r, tire_r, ks), tire_r)
+
+
+## Подъём колёс рывком тела: pull — доля веса, которую тело снимает с переднего колеса (меньше нуля — с заднего),
+## weight_f / weight_r — веса, которые колёса несут. Сверх веса колесо идёт вверх, иначе опускается обратно.
+## Оба колеса в воздухе — банни-хоп: велосипед отрывается со средней скоростью подъёма колёс.
+func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> void:
+	var g := GameConfig.GRAVITY
+	# рывок поднимает колесо, пока сильнее его веса; дальше оно летит и падает обратно с ускорением свободного падения
+	if pull > weight_f: lift_fv += (pull - weight_f) * g * LIFT_GAIN_F * dt
+	elif lift_f > 0.0: lift_fv -= g * dt
+	if -pull > weight_r: lift_rv += (-pull - weight_r) * g * LIFT_GAIN_R * dt
+	elif lift_r > 0.0: lift_rv -= g * dt
+	lift_f += lift_fv * dt
+	lift_r += lift_rv * dt
+	if lift_f <= 0.0:
+		if lift_fv < -0.5: squash_fv += -lift_fv * 0.4 # колесо опустилось — подвеска принимает
+		lift_f = 0.0
+		lift_fv = maxf(lift_fv, 0.0) if pull > weight_f else 0.0
+	if lift_r <= 0.0:
+		if lift_rv < -0.5: squash_rv += -lift_rv * 0.4
+		lift_r = 0.0
+		lift_rv = maxf(lift_rv, 0.0) if -pull > weight_r else 0.0
+	if lift_f >= LIFT_MAX:
+		lift_f = LIFT_MAX
+		lift_fv = minf(lift_fv, 0.0)
+	if lift_r >= LIFT_MAX:
+		lift_r = LIFT_MAX
+		lift_rv = minf(lift_rv, 0.0)
+	if lift_f > 0.0 and lift_r > 0.0:
+		# банни-хоп: рама в воздухе на средней высоте колёс
+		airborne = true
+		air_time = 0.0
+		_coyote = 0.0
+		_hop_from = y
+		hop_height = 0.0
+		y += (lift_f + lift_r) * 0.5
+		vy = maxf(vy, 0.0) + maxf(0.0, lift_fv) * 0.5 + HOP_POP * clampf(lift_f / HOP_FRONT, 0.0, 1.0)
+		lift_f = 0.0
+		lift_fv = 0.0
+		lift_r = 0.0
+		lift_rv = 0.0
 
 
 ## Колесо держит: стоит на земле и нагружено

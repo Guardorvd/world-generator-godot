@@ -12,8 +12,10 @@ const OUT := "res://tools/control/runs/wheel_unweight"
 const LOG := 30.0      # станция препятствия, м
 const TURN := 40.0     # начало поворота, м
 const RADIUS := 8.0
-const MANNERS := ["пассивно", "только переднее", "оба колеса", "второе поздно", "частые нажатия", "вес назад"]
-const COLORS := [Color(0.9, 0.9, 0.9), Color(1.0, 0.75, 0.2), Color(0.3, 0.9, 0.4), Color(0.9, 0.3, 0.3), Color(0.7, 0.4, 0.9), Color(0.4, 0.6, 1.0)]
+const MANNERS := ["пассивно", "только переднее", "оба колеса", "второе поздно", "частые нажатия", "вес назад", "банни-хоп"]
+const COLORS := [Color(0.9, 0.9, 0.9), Color(1.0, 0.75, 0.2), Color(0.3, 0.9, 0.4), Color(0.9, 0.3, 0.3), Color(0.7, 0.4, 0.9), Color(0.4, 0.6, 1.0), Color(0.3, 0.9, 0.9)]
+const HOP_E := 0.2     # с: банни-хоп — E через столько после Q
+const HOP_TAKEOFF := 0.45 # с: Q за столько до касания переднего колеса, чтобы взлететь до препятствия
 const LATE := 0.15     # с: «второе поздно» — тело вперёд на столько позже касания заднего колеса
 const SPAM := 0.35     # с: период частых нажатий
 var failures := 0
@@ -80,6 +82,10 @@ static func body_input(manner: int, t: float, t_front: float, t_rear: float, shi
 			return Vector2i(int(back), int(fwd and not back))
 		4: return Vector2i(int(fposmod(t, SPAM) < 0.1), 0)
 		5: return Vector2i(1, 0)
+		6:
+			var q := t >= t_front - HOP_TAKEOFF + shift and t < t_front - HOP_TAKEOFF + HOP_E + shift
+			var e := t >= t_front - HOP_TAKEOFF + HOP_E + shift and t < t_front - HOP_TAKEOFF + HOP_E + 0.2 + shift
+			return Vector2i(int(q), int(e))
 	return Vector2i(0, 0)
 
 
@@ -193,6 +199,74 @@ func line(name: String, speed: float, r: Dictionary) -> String:
 		name, speed, MANNERS[r.manner], r.result, r.before, r.after, r.hit, r.hit_r, r.off, r.turn_off, r.exit]
 
 
+## Банни-хоп на ровном подходе (до бревна): Q в момент 0, E через delay (меньше нуля — без E; NAN — без Q, только E;
+## «пробел» — space). Возвращает наибольший подъём переднего колеса, высоту прыжка и был ли полёт.
+func hop(h: Heightfield, d: TrailDefinition, delay: float, space := false, hz := 60) -> Dictionary:
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	b.contact_model = true
+	var start := d.point_at(4.0)
+	b.x = start.x
+	b.z = start.y
+	b.y = h.surface_at(b.x, b.z, -INF)
+	b.heading = d.heading_at(4.0)
+	b.mount(p)
+	b.speed = 6.0
+	var control := BikeController.new()
+	var lift := 0.0
+	var lift_r := 0.0
+	var flew := false
+	var t := 0.0
+	var dt := 1.0 / hz
+	while t < 2.0:
+		var q := not is_nan(delay) and t >= 0.3 and t < 0.3 + 0.2
+		var e := delay >= 0.0 and t >= 0.3 + (0.0 if is_nan(delay) else delay) and t < 0.3 + (0.0 if is_nan(delay) else delay) + 0.2
+		if is_nan(delay): e = t >= 0.3 and t < 0.5
+		b.body_back = q and not e
+		b.body_forward = e
+		control.ride(dt, p, b, h.world, h, clampf((6.0 - b.speed) * 0.8, 0.0, 1.0), 0.0, false, space and t >= 0.3 and t < 0.3 + dt * 1.5, false)
+		t += dt
+		if OS.get_cmdline_user_args().has("--hop-trace") and t > 0.25 and t < 0.9 and int(t * hz) % 2 == 0:
+			print("  H %.2f с Q%d E%d тело %+.2f (%+.1f) снято %+.2f · колёса %.2f / %.2f · нагрузка %.2f / %.2f%s" % [t, int(b.body_back), int(b.body_forward), b.body_x, b.body_v, b.unweight, b.lift_f, b.lift_r, b.load_f, b.load_r, " ПОЛЁТ" if b.airborne else ""])
+		lift = maxf(lift, b.lift_f)
+		lift_r = maxf(lift_r, b.lift_r)
+		flew = flew or b.airborne
+	return {lift = lift, lift_r = lift_r, flew = flew, height = b.hop_height if flew else 0.0}
+
+
+func hops(h: Heightfield, d: TrailDefinition) -> void:
+	if OS.get_cmdline_user_args().has("--hop-trace"):
+		print("— только Q"); hop(h, d, -1.0)
+		print("— только E"); hop(h, d, NAN)
+		print("— Q→E 0,15"); hop(h, d, 0.15)
+		return
+	var only_q := hop(h, d, -1.0)
+	var only_e := hop(h, d, NAN)
+	print("Только Q: переднее колесо до %.2f м, полёт %s · только E: заднее до %.2f м, полёт %s" % [only_q.lift, only_q.flew, only_e.lift_r, only_e.flew])
+	check(only_q.lift > 0.1 and not only_q.flew, "Q отрывает переднее колесо (%.2f м), велосипед не взлетает" % only_q.lift)
+	check(not only_e.flew, "только E — без прыжка")
+	var best := 0.0
+	var window := PackedStringArray()
+	var flying := 0
+	for delay: float in [0.0, 0.05, 0.1, 0.15, 0.2, 0.25, 0.3, 0.4, 0.5]:
+		var r := hop(h, d, delay)
+		window.append("%.2f с: %s" % [delay, "%.2f м" % r.height if r.flew else "нет"])
+		best = maxf(best, r.height)
+		flying += int(r.flew)
+	print("Q→E, задержка E: ", " · ".join(window))
+	var space := hop(h, d, -1.0, true)
+	print("Пробел: прыжок %s %.2f м (лучший ручной %.2f м)" % [space.flew, space.height, best])
+	check(best > 0.2, "вовремя Q→E — банни-хоп выше 0,2 м (%.2f)" % best)
+	check(flying > 0 and flying < 9, "прыжок получается не при любой задержке E (%d из 9)" % flying)
+	check(space.flew and space.height < best and space.height > 0.05, "пробел — прыжок слабее лучшего ручного (%.2f против %.2f м)" % [space.height, best])
+	var same := true
+	for hz: int in [30, 120]:
+		var r := hop(h, d, 0.15, false, hz)
+		var base := hop(h, d, 0.15)
+		same = same and r.flew == base.flew and absf(r.height - base.height) < 0.06
+	check(same, "банни-хоп одинаков при 30/60/120 Гц")
+
+
 func run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	var d := section()
@@ -227,10 +301,17 @@ func run() -> void:
 		var spam: Dictionary = all["%s_8_4" % kind]
 		check(passive.result == "проехал" and both.result == "проехал", "%s, 8 м/с: пассивно и оба колеса — проезд внутри полотна (%s, %s)" % [name, passive.result, both.result])
 		check(front.hit < passive.hit * 0.5 and front.hit_r > passive.hit_r, "%s, 8 м/с: только переднее — удар переднего %.1f против %.1f, заднего сильнее (%.1f против %.1f)" % [name, front.hit, passive.hit, front.hit_r, passive.hit_r])
-		check(both.hit + both.hit_r < (passive.hit + passive.hit_r) * 0.7 and both.after > passive.after + 0.3,
-			"%s, 8 м/с: оба колеса — суммарный удар %.1f против %.1f, скорость после %.1f против %.1f м/с" % [name, both.hit + both.hit_r, passive.hit + passive.hit_r, both.after, passive.after])
-		check(late.after < both.after - 0.2, "%s, 8 м/с: второе поздно — хуже правильной последовательности (%.1f против %.1f м/с)" % [name, late.after, both.after])
-		check(spam.after <= both.after - 0.2, "%s, 8 м/с: частые нажатия не лучше техники (%.1f против %.1f м/с)" % [name, spam.after, both.after])
+		var hop: Dictionary = all["%s_8_6" % kind]
+		if kind == "log":
+			check(both.hit + both.hit_r < (passive.hit + passive.hit_r) * 0.7 and both.after > passive.after + 0.3,
+				"%s, 8 м/с: оба колеса — суммарный удар %.1f против %.1f, скорость после %.1f против %.1f м/с" % [name, both.hit + both.hit_r, passive.hit + passive.hit_r, both.after, passive.after])
+		else:
+			# два камня подряд: заднее колесо встречает оба, разгрузка по очереди не помогает — нужен прыжок
+			print("камни: разгрузка по очереди %.1f м/с против %.1f пассивно (заднее бьётся о оба камня)" % [both.after, passive.after])
+		check(hop.result == "проехал" and hop.hit + hop.hit_r < 0.05 and hop.after > passive.after + 1.0,
+			"%s, 8 м/с: банни-хоп — без ударов, скорость после %.1f против %.1f м/с" % [name, hop.after, passive.after])
+		if kind == "log": check(late.after < both.after - 0.2, "%s, 8 м/с: второе поздно — хуже правильной последовательности (%.1f против %.1f м/с)" % [name, late.after, both.after])
+		check(spam.result != "проехал" or spam.after <= hop.after - 0.2, "%s, 8 м/с: частые нажатия не лучше техники (%s, %.1f против %.1f м/с)" % [name, spam.result, spam.after, hop.after])
 	check(all.log_10_0.result == "через руль" and all.log_10_2.result == "проехал", "бревно, 10 м/с: пассивно — через руль, оба колеса — проезд (%s)" % all.log_10_2.result)
 	check(all.log_10_5.turn_off > all.log_10_2.turn_off + 0.15, "бревно, 10 м/с: вес назад постоянно — следующий поворот хуже (с оси %.2f против %.2f м)" % [all.log_10_5.turn_off, all.log_10_2.turn_off])
 	# окно: ошибка тайминга обоих действий
@@ -246,6 +327,7 @@ func run() -> void:
 		if absf(shift) <= 0.05: inside += int(gain > 0.3)
 	print("Окно тайминга (оба колеса, бревно 8 м/с): ", " · ".join(window))
 	check(inside == 3, "ошибка тайминга до ±0,05 с ещё даёт выигрыш скорости")
+	hops(h, d)
 	# частота тактов
 	var same := true
 	var hz_line := PackedStringArray()
