@@ -40,6 +40,12 @@ func run() -> void:
 	for e in d.elements:
 		if absf(e.station - at) < 30.0:
 			print("ELEMENT %s s %.1f len %.1f h %.2f count %d" % [TrailElement.Profile.keys()[e.profile], e.station, e.length, e.height, e.count])
+	if "--start" in args:
+		# Старт с места, как R в лаборатории: полный газ 4 с, состояние каждые 0,25 с — что держит велосипед
+		for station in Array(args[args.find("--start") + 1].split(",")).map(func(s: String) -> float: return float(s)):
+			start_probe(station)
+		quit(0)
+		return
 	var sharpest := 0.0
 	for e in d.elements:
 		if e.profile == TrailElement.Profile.BERM and absf(d.curvature_at(e.station)) > sharpest and e.station > 80.0:
@@ -56,6 +62,28 @@ func run() -> void:
 			probe_hit({name = "q_arc_%.1f" % hold, from = corner - 24.0, to = at + 10.0, speed = 13.0, pedal = true, q_at = corner - 6.0, q_hold = hold})
 	print("STAND COMPLETE %.1f s" % ((Time.get_ticks_msec() - started) / 1000.0))
 	quit(0)
+
+func start_probe(station: float) -> void:
+	var p := PlayerState.new()
+	var b := BikeRide.new()
+	var at := d.point_at(station)
+	b.x = at.x
+	b.z = at.y
+	b.y = h.surface_at(at.x, at.y, -INF)
+	b.heading = d.heading_at(station)
+	b.mount(p)
+	var control := BikeController.new()
+	h.obstacles.update(b.x, b.z, PackedFloat32Array(), 1, true)
+	var start := Vector2(b.x, b.z)
+	print("START s %.1f: fits %s, grade %+.3f, surface %.2f, obstacles near %d" % [station, b.fits(b.x, b.z, b.heading, h.world, h), b.grade(h), b.y, h.obstacles.data.size() / ForestObstacles.STRIDE])
+	for i in 240:
+		h.obstacles.update(b.x, b.z, PackedFloat32Array(), 1)
+		control.ride(DT, p, b, h.world, h, 1.0, 0.0, false, false, false)
+		if i % 15 == 14 or b.crashed:
+			print("  t %.2f v %.2f moved %.2f effort %.2f drive %.2f/%.2f slope %+.2f roll %.2f rough %.2f brake %.2f air %d fits %s on %d/%d tire %.2f/%.2f crashed %s" % [
+				(i + 1) * DT, b.speed, start.distance_to(Vector2(b.x, b.z)), b.effort, b.drive_request, b.drive_force, b.slope_force, b.roll_loss, b.rough_loss,
+				b.brake_pressure, int(b.airborne), b.fits(b.x, b.z, b.heading, h.world, h), b._on_f, b._on_r, b.tire_f, b.tire_r, b.crashed])
+		if b.crashed: break
 
 func probe_hit(spec: Dictionary) -> void:
 	var p := PlayerState.new()

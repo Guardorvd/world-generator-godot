@@ -48,6 +48,8 @@ func ride(profile: Callable, enabled := true, pace := 8.0, seconds := 4.0, hz :=
 		b.body_back = action == "manual" and t >= 0.8 and t < 1.0
 		b.body_forward = action == "manual" and t >= 1.0 and t < 1.2
 		b.step(p, -0.6 if action == "brake" and t >= 0.8 else 0.0, 0.0, false, action == "space" and i == roundi(0.8 * hz), 1.0 / hz, world, ground)
+		if "--air-trace" in OS.get_cmdline_user_args() and absf(pace - 14.0) < 0.1 and enabled and t < 1.2:
+			print("  14 t %.3f s %.2f y-ground %+.3f vy %+.2f air %d active %.2f reach %.2f absorb %.2f wave %+.2f wait %.2f" % [t, -b.z, b.y - ground.ground_at(0, b.z), b.vy, int(b.airborne), b.pump_active, b._pump_reach, b._pump_absorb_v, b.pump_wave, b._pump_wait])
 		out.air += 1.0 / hz if b.airborne else 0.0
 		out.motion = maxf(out.motion, absf(b.pump_motion))
 		out.accel = maxf(out.accel, b.pump_accel)
@@ -80,6 +82,12 @@ func run() -> void:
 	var a := ride(waves, true, 8.0, 5.0, 30)
 	var b := ride(waves, true, 8.0, 5.0, 120)
 	check(absf(a.speed - b.speed) < 0.03 and absf(a.bike.z - b.bike.z) < 0.05, "30/120 Гц совпадают")
+	# Отрывы на волнах по скорости (замер для настройки, не проверка): автопамп и без него
+	for wave_profile: Array in [[waves, "6 м × 0,5 м"], [func(s: float) -> float: return 0.25 * (1.0 - cos(s * TAU / 5.2)), "5,2 м × 0,5 м"]]:
+		var line := PackedStringArray()
+		for pace: float in [8.0, 10.0, 12.0, 14.0, 16.0]:
+			line.append("%d м/с %.2f/%.2f" % [pace, ride(wave_profile[0], true, pace, 3.0).air, ride(wave_profile[0], false, pace, 3.0).air])
+		print("AIR %s, с в воздухе за 3 с (автопамп/без): %s" % [wave_profile[1], " · ".join(line)])
 	var high := ride(waves, true, 16.0, 2.0)
 	check(high.accel < 0.00001, "на большой скорости автопамп не добавляет тягу")
 	var tiny := ride(func(s: float) -> float: return 0.003 * sin(s * 5.0))
@@ -117,7 +125,7 @@ func run() -> void:
 		rider.body_forward = false
 		for i in 6: rider.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
 		if action in ["jump", "brake"]:
-			check(rider.pump_accel == 0.0 and rider._pump_reach == 0.0, "пауза после ручного действия: " + action)
+			check(rider.pump_accel == 0.0, "пауза толчка после ручного действия: " + action)
 		var resumed := false
 		for i in 120:
 			rider.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)

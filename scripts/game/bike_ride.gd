@@ -157,7 +157,8 @@ const HOP_ARM_HEIGHT := 0.015 # Q должен действительно под
 const HOP_LINK := 0.3         # окно E после подъёма, с
 ## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
 ## Отдельно от Q/E: не поднимает колёса и не готовит баннихоп. Ограничен ходом тела и скоростью.
-const PUMP_REACH := 0.12      # м дополнительного хода тела для поглощения маленького гребня
+const PUMP_ABSORB_V := 2.0    # м/с вертикальной скорости, которую ноги и руки гасят на гребне волны
+const PUMP_REACH := 0.22      # м хода тела, которым седок поглощает гребень волны (было 0,12 и только до 14 м/с)
 const PUMP_ACCEL := 3.0       # м/с² на единицу обратного уклона волны
 const PUMP_TOP := 14.0        # м/с: выше этого помощь ходу плавно исчезает
 const PUMP_PAUSE := 0.25      # с после ручного действия/приземления до возврата автоматики
@@ -165,6 +166,7 @@ const PUMP_STEER_LIMIT := 0.25 # с такого руля автоматичес
 ## 30.10: ручной памп — рывок тела на волне (Q поглощает подъём, E продавливает обратный склон), см. _step_pump.
 const PUMP_BODY := 0.3        # доля веса, которую тело на полной скорости хода добавляет к опоре или снимает с неё
 const PUMP_BODY_ACCEL := 2.5  # м/с²: предел разгона и торможения от ручного пампа
+const PUMP_KINK := 0.55      # 1/м: резче этого излом профиля — ступень или кромка, а не волна
 const PUMP_HOLD := 0.3       # с: столько велосипед считается «на волне» после последнего заметного изгиба профиля
 const PUMP_WAVE_PRESS := 0.06 # уклон волны: от подъёма до гребня (выше −половины этого) Q на волне — поглощение
 const START_PACE := 3.0       # м/с: до этой скорости тяга педалей не ограничена запасом заднего колеса (помощь старта)
@@ -188,6 +190,7 @@ var pump_wave := 0.0         # местный уклон волны под ве�
 var pump_active := 0.0       # 0..1: велосипед на волне, где работает памп (0 — ровно, ровный склон, отрыв)
 var pump_body := 0.0         # доля веса, которую тело сейчас добавляет к опоре (+, E) или снимает с неё (−, Q)
 var _pump_reach := 0.0
+var _pump_absorb_v := 0.0   # вертикальная скорость, которую седок сейчас гасит на гребне, м/с
 var _pump_wait := 0.0
 
 var x := 0.0          # метры
@@ -416,6 +419,7 @@ func reset_motion() -> void:
 	pump_active = 0.0
 	pump_body = 0.0
 	_pump_reach = 0.0
+	_pump_absorb_v = 0.0
 	_pump_wait = PUMP_PAUSE
 	acceleration = 0.0
 	vertical_g = 0.0
@@ -584,8 +588,11 @@ func _lifts(heights: Heightfield) -> bool:
 	var velocity := horizontal_velocity()
 	var fx := velocity.x
 	var fz := velocity.y
+	# 30.10: на волне седок гасит ногами часть вертикальной скорости, набранной на подъёме гребня (PUMP_ABSORB_V):
+	# без этого на 12+ м/с каждый подъём волны 5–6 м выбрасывал велосипед в полёт
+	var lift_v := vy - _pump_absorb_v
 	for t: float in LOOK:
-		var fly := y + vy * t - GameConfig.GRAVITY * t * t * 0.5
+		var fly := y + lift_v * t - GameConfig.GRAVITY * t * t * 0.5
 		if fly - _contact(x + fx * t, z + fz * t, heights) > LIFT + _pump_reach:
 			return true
 	return false
@@ -597,9 +604,11 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 	pump_accel = 0.0
 	pump_load = 0.0
 	_pump_reach = 0.0
+	_pump_absorb_v = 0.0
 	pump_wave = 0.0
 	var held := pump_active
-	pump_active = 0.0
+	# короткий отрыв не стирает «на волне»: посадка на следующий подъём тоже поглощается
+	pump_active = held * exp(-dt / PUMP_HOLD)
 	pump_body = 0.0
 	_pump_wait = maxf(0.0, _pump_wait - dt)
 	# 30.10: ручная работа телом больше не выключает памп — она и есть памп (ниже). Автоматика уступает ей место
@@ -608,13 +617,16 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 	var body_work := clampf(absf(body_x) / 0.3 + absf(body_v) / 1.2, 0.0, 1.0)
 	if blocked or airborne or _fresh:
 		_pump_wait = PUMP_PAUSE
-	var ready := pump_enabled and riding and not crashed and not airborne and not blocked and _pump_wait <= 0.0
+	# пауза после приземления и ручного действия — только для толчка автоматики: гребень сразу после посадки тоже
+	# поглощается, иначе на скорости велосипед не возвращался на волны до конца серии
+	var ready := pump_enabled and riding and not crashed and not airborne and not blocked
 	ready = ready and speed > 2.0 and _on_f < 0 and _on_r < 0
 	ready = ready and heights.immersion_at(x, z, y) < 0.03
 	var motion := 0.0
 	if ready:
 		var direction := horizontal_velocity().normalized()
-		var span := clampf(absf(speed) * 0.12, 0.8, 1.6)
+		# 30.10: не длиннее 1 м — раньше до 1,6 м, и на 12+ м/с волна 5–6 м уже выглядела ступенькой: памп выключался
+		var span := clampf(absf(speed) * 0.12, 0.8, 1.0)
 		var levels := PackedFloat32Array()
 		var clear := true
 		for i in range(-2, 3):
@@ -629,7 +641,7 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 			for i in 4:
 				var grade := (levels[i + 1] - levels[i]) / span
 				# Ступень/стена/гэп и очень крутой кикер остаются штатными препятствиями и вылетами.
-				if absf(grade) > 0.65 or (i > 0 and absf(grade - previous) > 0.3): clear = false
+				if absf(grade) > 0.65 or (i > 0 and absf(grade - previous) > PUMP_KINK * span): clear = false
 				previous = grade
 		if clear:
 			var local_grade := (levels[3] - levels[1]) / (2.0 * span)
@@ -644,12 +656,18 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 			pump_active = maxf(activity, held * exp(-dt / PUMP_HOLD)) * smoothstep(2.0, 5.0, speed)
 			# Автоматика — спокойный седок: слегка сгибается на гребне и давит на обратный склон. Уступает
 			# ручной работе телом и заметному рулю плавно, без паузы возврата.
-			var auto := (1.0 - body_work) * (1.0 - smoothstep(PUMP_STEER_LIMIT, 0.8, absf(turn))) * (1.0 if lift_f <= 0.0 and lift_r <= 0.0 else 0.0)
+			var auto := (1.0 if _pump_wait <= 0.0 else 0.0) * (1.0 - body_work) * (1.0 - smoothstep(PUMP_STEER_LIMIT, 0.8, absf(turn))) * (1.0 if lift_f <= 0.0 and lift_r <= 0.0 else 0.0)
 			motion = clampf(wave * 1.8 - hollow * 3.0, -1.0, 1.0) * activity * auto
 			var pace := 1.0 - smoothstep(PUMP_TOP - 4.0, PUMP_TOP, speed)
 			pump_accel = minf(1.0, maxf(0.0, -wave) * PUMP_ACCEL) * activity * pace * auto
 			pump_load = clampf(-wave * 0.65, -0.12, 0.2) * activity * auto
-			_pump_reach = PUMP_REACH * activity * pace * auto
+			# 30.10: гребень поглощают ноги и руки на любой скорости (раньше ход тела исчезал к 14 м/с, и с 12 м/с велосипед
+			# летел с каждой волны 5–6 м); исчезает только толчок автоматики, ход тела остаётся и при ручной работе
+			# гасим только волну — впереди или под нами гребень, за которым спуск; кромка кикера перед ровным столом
+			# подбрасывает, как прежде
+			var backside := smoothstep(0.03, 0.12, maxf(levels[2], levels[3]) - levels[4])
+			_pump_reach = PUMP_REACH * pump_active * backside
+			_pump_absorb_v = PUMP_ABSORB_V * pump_active * backside
 			# Ручной памп — один закон для обеих фаз: сколько веса тело добавило к опоре (E — продавить, рывок вперёд-
 			# вниз) или сняло с неё (Q — поглотить, рывок назад-вверх), столько этой нагрузки работает на уклоне волны,
 			# a = −g · Δнагрузки · уклон. Продавить обратный склон или поглотить подъём — разгон; наоборот — торможение.
@@ -659,6 +677,7 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 			pump_load += pump_body * pump_active
 			pump_accel += clampf(-GameConfig.GRAVITY * pump_body * local_grade, -PUMP_BODY_ACCEL, PUMP_BODY_ACCEL) * pump_active * manual_pace
 			_pump_reach += PUMP_REACH * 1.5 * maxf(0.0, -pump_body / PUMP_BODY) * pump_active
+			_pump_absorb_v += PUMP_ABSORB_V * 0.5 * maxf(0.0, -pump_body / PUMP_BODY) * pump_active
 	pump_motion = lerpf(pump_motion, motion, Util.damp(12.0, dt))
 
 
@@ -1408,6 +1427,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 		pump_accel = 0.0
 		pump_load = 0.0
 		_pump_reach = 0.0
+		_pump_absorb_v = 0.0
 		load_f = 0.0
 		load_r = 0.0
 		tire_f = 0.0
