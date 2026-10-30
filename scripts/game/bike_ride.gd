@@ -55,7 +55,6 @@ const G_MIN := -1.0            # пределы нагрузки профиля,
 const G_MAX := 1.5
 const BANK_RESPONSE := 15.0    # наклон полотна поперёк (bank_slope)
 const BANK_SLOPE_MAX := 0.8    # учитываемый наклон виража, м на м
-const COAST_DECAY := 0.03      # потеря скорости накатом без педалей и тормоза, 1/с
 const TILT_RESPONSE := 25.0    # наклон рамы вдоль склона на земле
 const TILT_RESPONSE_AIR := 5.0 # и в полёте
 const AIR_TILT_MAX := 0.55     # наклон рамы по траектории полёта, рад
@@ -153,8 +152,18 @@ const PUMP_TOP := 14.0        # м/с: выше этого помощь ходу
 const PUMP_PAUSE := 0.25      # с после ручного действия/приземления до возврата автоматики
 const PUMP_STEER_LIMIT := 0.25 # заметное подруливание уже имеет приоритет над автоматическим толчком
 const START_PACE := 3.0       # м/с: до этой скорости тяга педалей не ограничена запасом заднего колеса (помощь старта)
+## Усилие седока на педалях — общее состояние тяги и позы: набирается быстро, но не мгновенно (около 95 % за 0,24 с),
+## без мёртвой задержки, и спадает при отпускании без длинной скрытой тяги.
+const EFFORT_RISE := 0.08     # с
+const EFFORT_FALL := 0.05     # с
+## Воздух — один закон на земле и в полёте (доля прежнего BIKE_DRAG); остальное от квадрата скорости на земле —
+## потери шины и подвески на скорости. Сумма на земле прежняя.
+const AIR_DRAG := 0.0035      # 1/м
+const SPEED_LOSS := GameConfig.BIKE_DRAG - AIR_DRAG
 
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
+var effort := 0.0           # усилие седока на педалях 0..1: от него тяга и поза (BikeView)
+var effort_ramp := true     # false — прежняя мгновенная тяга, для сравнительных прогонов
 var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
 var pump_load := 0.0         # добавка нагрузки, доля веса
 var pump_accel := 0.0        # помощь ходу на обратной стороне волны, м/с²
@@ -359,6 +368,7 @@ func reset_motion() -> void:
 	crash_normal = Vector3.UP
 	crash_velocity = Vector3()
 	_sub.fill(0.0)
+	effort = 0.0
 	drive_request = 0.0
 	drive_force = 0.0
 	brake_force = Vector2()
@@ -704,7 +714,9 @@ class Footing:
 	var surf := RoadSurface.NONE
 	var path_weight := 0.0
 	var across := 0.0
-	var terrain := 1.0
+	var terrain := 1.0   # общая скорость передвижения по покрытию (PlayerState.terrain_speed), как у пешехода
+	var pace := 1.0      # велосипед: доля крейсерской скорости, к которой тянут педали
+	var rolling := 1.0   # велосипед: лёгкость качения (сопротивление BIKE_ROLL / rolling)
 	var rough := 0.0
 	var grip := 0.85
 	var technical := 0.0
@@ -720,6 +732,9 @@ func _read_footing(turn: float, w: WorldData, heights: Heightfield) -> Footing:
 	f.path_weight = contact.weight
 	f.across = contact.across
 	f.terrain = maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
+	# Параметры велосипеда отдельно от пешей скорости: пока те же числа, настраиваются здесь независимо.
+	f.pace = f.terrain
+	f.rolling = f.terrain
 	f.rough = clampf(1.3 - f.terrain, 0.15, 1.0)
 	if f.surf != RoadSurface.NONE:
 		f.grip = lerpf(f.grip, RoadSurface.LIST[f.surf].grip, f.path_weight)
@@ -739,18 +754,29 @@ func _step_longitudinal(f: Footing, throttle: float, turn: float, boost: bool, h
 		vy = _ground_slope(heights) * speed
 	_step_pump(dt, throttle, turn, hop, heights)
 	if not airborne:
-		var terrain := f.terrain * lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
-		_step_speed(throttle, boost, f.slope, terrain, dt, f.grip, f.technical)
+		var water := lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
+		_step_speed(throttle, boost, f.slope, f.pace * water, dt, f.grip, f.technical, f.rolling * water)
 		if brakes.tipped:
 			_crash(vy, Vector3.UP, CrashCause.BRAKING)
 	else:
-		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
+		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход; ноги перестают давить.
+		_step_effort(0.0, dt)
 		_brake_hold = 0.0
 		brakes.step(dt, 0.0, speed, f.slope, f.grip, 0.0, false)
 		braking = 0.0
-		_sub[T_AIR] = speed * (1.0 - exp(-COAST_DECAY * dt)) / dt
-		speed *= exp(-COAST_DECAY * dt)
-		lateral_speed *= exp(-COAST_DECAY * dt)
+		# Тот же воздух, что на земле, по полной горизонтальной скорости: отрыв не меняет закон сопротивления.
+		var v := Vector2(speed, lateral_speed)
+		var keep := 1.0 / (1.0 + AIR_DRAG * v.length() * dt)
+		_sub[T_AIR] = speed * (1.0 - keep) / dt
+		speed *= keep
+		lateral_speed *= keep
+
+
+func _step_effort(want: float, dt: float) -> void:
+	if not effort_ramp:
+		effort = want
+		return
+	effort = lerpf(effort, want, 1.0 - exp(-dt / (EFFORT_RISE if want > effort else EFFORT_FALL)))
 
 
 ## Курс и боковая сила: руль и доворот из заноса в пределах габарита, затем перепроекция скорости и снос.
@@ -1393,14 +1419,17 @@ func contact_r() -> bool:
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
 ## speed — скорость по горизонтали, поэтому проекция тяжести — slope / (1 + slope²).
-func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0) -> void:
+## terrain — доля крейсерской скорости (цель педалей), roll_terrain — лёгкость качения (меньше нуля — та же terrain).
+## Сила ног — от усилия седока (effort), а не прямо от ввода: тяга нарастает вместе с позой.
+func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt: float, grip := 1.0, technical := 0.0, roll_terrain := -1.0) -> void:
 	if dt > 1.0 / SUB_HZ + 0.000001:
 		var ticks := ceili(dt * SUB_HZ)
 		for i in ticks:
-			_step_speed(throttle, boost, slope, terrain, dt / ticks, grip, technical)
+			_step_speed(throttle, boost, slope, terrain, dt / ticks, grip, technical, roll_terrain)
 		return
+	_step_effort(maxf(throttle, 0.0), dt)
 	var top := GameConfig.BIKE_SPEED * terrain
-	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
+	var rolling := GameConfig.BIKE_ROLL / maxf(terrain if roll_terrain < 0.0 else roll_terrain, 0.25)
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope) + pump_accel
@@ -1435,21 +1464,21 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		# Уверенный старт и плавное ослабление тяги; скорость спуска не срезается до top.
 		var push := GameConfig.BIKE_ACCEL * 1.75
 		var taper := maxf(0.1, push / (rolling + drag * top * top) - 1.0)
-		drive = push / (1.0 + taper * ratio * ratio) * throttle
+		drive = push / (1.0 + taper * ratio * ratio) * effort
 		# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
 		if boost:
-			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * throttle * grip
+			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * effort * grip
 		request = drive
 		if contact_model:
 			drive = _rear_drive(drive, grip)
 	# Кочки съедают ход только при быстром проезде. На длинном спуске воздух мягко
 	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
-	var rough_loss_now := technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
-	var resistance := rolling + drag * speed * speed + rough_loss_now
+	var rough_loss_now := SPEED_LOSS * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
+	var resistance := rolling + AIR_DRAG * speed * speed + rough_loss_now
 	_sub[T_DRIVE_REQUEST] = request
 	_sub[T_DRIVE] = drive
 	_sub[T_ROLL] = rolling
-	_sub[T_AIR] = drag * speed * speed
+	_sub[T_AIR] = AIR_DRAG * speed * speed
 	_sub[T_ROUGH] = rough_loss_now
 	_sub[T_SLOPE] = gravity - pump_accel
 	_sub[T_PUMP] = pump_accel

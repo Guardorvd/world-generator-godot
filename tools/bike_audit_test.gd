@@ -137,6 +137,8 @@ func run() -> void:
 	var grounded := bike(6.0)
 	var rear_up := bike(6.0)
 	rear_up.lift_r = 0.2
+	grounded.effort = 1.0
+	rear_up.effort = 1.0
 	grounded._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	rear_up._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	check(grounded.speed > 6.0 and rear_up.speed < 6.0, "A3 газ с поднятым задним: на земле %.4f, поднято %.4f м/с" % [grounded.speed, rear_up.speed])
@@ -144,11 +146,15 @@ func run() -> void:
 	var slick := bike(8.0)
 	slick.slick_r = BikeRide.ROOT_GRIP
 	var full := bike(8.0)
+	slick.effort = 1.0
+	full.effort = 1.0
 	slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	full._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	var start_slick := bike(0.5)
 	start_slick.slick_r = BikeRide.ROOT_GRIP
 	var start := bike(0.5)
+	start_slick.effort = 1.0
+	start.effort = 1.0
 	start_slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	start._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
 	check(slick.speed < full.speed and is_equal_approx(start_slick.speed, start.speed),
@@ -214,5 +220,5 @@ func run() -> void:
 	var passing := bike(6.0)
 	for i in 120:
 		passing.step(p, 0.5, 0.0, false, false, 1.0 / 120.0, w, high)
-	check(passing.z < -6.0 and not passing.crashed, "A2 проезд под сводом выше габарита: z=%.2f" % passing.z)
+	check(passing.z < -5.5 and not passing.crashed, "A2 проезд под сводом выше габарита: z=%.2f" % passing.z)
 	super.run()
