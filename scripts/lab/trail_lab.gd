@@ -268,10 +268,13 @@ func _mark_preset() -> void:
 func select_preset(index: int) -> bool:
 	index = posmod(index, TrailLabCatalog.LIST.size())
 	var previous := ground_kind
+	var previous_preset := preset
+	preset = index
 	ground_kind = TrailLabCatalog.LIST[index].ground
 	var kit := TrailLabCatalog.routes(index, Fixture)
 	if kit.is_empty() or not rebuild(kit, Fixture.compose_ms):
 		ground_kind = previous
+		preset = previous_preset
 		_mark_preset()
 		return false
 	preset = index
@@ -875,6 +878,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
 	recorder.tick(self, dt, throttle, turn, run, jump)
+	bike.landing_info = {}
 	if bike.land_impact > 0.0: last_land_impact = bike.land_impact
 	if bike.bottom_out > 0.0: last_bottom_out = bike.bottom_out
 	# These are one-tick events. Leaving them latched repeats the rider's landing animation.

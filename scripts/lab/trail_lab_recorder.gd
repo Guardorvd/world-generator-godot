@@ -4,11 +4,11 @@ extends RefCounted
 ## что нажато (сырые клавиши и то, что дошло до физики), состояние, силы, колёса, подвеска, покрытие, падения.
 ## Сессия — все поездки подряд (R, смена трассы — только отметка «новая поездка»), пока не нажато «Сохранить запись»
 ## (кнопка в панели или F9): только тогда файлы попадают в проект, после сохранения начинается новая сессия.
-##   ride_logs/<дата>/ride_<время начала>_p<трасса>.csv          — такт за тактом (60 Гц), колонки — в .header.json
-##   ride_logs/<дата>/ride_<время начала>_p<трасса>.events.txt   — события: падения, удары колёс, отрывы и приземления,
+##   ride_logs/<дата>/ride_<время начала>_p<трасса>/ride.csv          — такт за тактом (60 Гц), колонки — в .header.json
+##   ride_logs/<дата>/ride_<время начала>_p<трасса>/ride.events.txt   — события: падения, удары колёс, отрывы и приземления,
 ##                                                                 тормоз, остановка с газом, элементы, клавиши, F3/F2/V, поездки
-##   ride_logs/<дата>/ride_<время начала>_p<трасса>.header.json  — версия кода, трасса и её элементы, настройки, константы физики
-##   ride_logs/<дата>/ride_<время начала>_p<трасса>.summary.txt  — краткая сводка сессии
+##   ride_logs/<дата>/ride_<время начала>_p<трасса>/ride.header.json  — версия кода, трасса и её элементы, настройки, константы физики
+##   ride_logs/<дата>/ride_<время начала>_p<трасса>/ride.summary.txt  — краткая сводка сессии
 ## До сохранения запись идёт во временные файлы user://ride_log_unsaved (не в проекте): закрыли игру без «Сохранить» —
 ## в проект ничего не попало, временные файлы пережили сбой, но следующая сессия их перезапишет.
 ## Пустые сессии (ничего не нажато, велосипед не ехал) не пишутся. В headless (тесты) запись выключена:
@@ -47,14 +47,17 @@ var _stuck := 0.0
 var _stuck_reported := false
 var _event_counts := {}
 var _event_lines := PackedStringArray() # первые события для сводки
-static var _git := ""
+var _git := ""
+var _last_hit_tick := -1
+var _previous_station := -1.0
+var _route_snapshots: Array = []
 
 
 func _init() -> void:
 	var rows := [
 		["t", "f3"], ["ride", "i"], ["ride_t", "f3"], ["tick", "i"], ["wall_ms", "f1"], ["fps", "i"],
 		["x", "f3"], ["y", "f3"], ["z", "f3"], ["heading_deg", "f2"], ["station", "f2"], ["lateral", "f3"], ["line_err_deg", "f2"],
-		["on_route", "i"], ["element", "i"], ["player_x", "f3"], ["player_z", "f3"],
+		["nearest_valid", "i"], ["station_jump", "i"], ["on_route", "i"], ["element", "i"], ["player_x", "f3"], ["player_z", "f3"],
 		["riding", "i"], ["airborne", "i"], ["crashed", "i"], ["crash_phase", "i"], ["fallen", "i"], ["state", "s"],
 		["in_fwd", "f2"], ["in_steer", "f2"], ["in_jump", "i"], ["in_run", "i"], ["in_q", "i"], ["in_e", "i"], ["in_pump", "i"],
 		["in_interact", "i"], ["in_lmb", "i"], ["in_rmb", "i"],
@@ -91,6 +94,9 @@ func begin(lab, reason: String) -> void:
 	_stuck = 0.0
 	_stuck_reported = false
 	_prev = {}
+	_previous_station = -1.0
+	_last_hit_tick = -1
+	_route_snapshots.append(_snapshot(lab))
 	_preset = lab.preset
 	var near: Vector3 = lab.routes[lab.lane].nearest(Vector2(lab.bike.x, lab.bike.z))
 	var info := {n = _ride, t = _t, tick = _ticks, reason = reason, preset = lab.preset + 1, route = lab.routes[lab.lane].title,
@@ -102,6 +108,8 @@ func begin(lab, reason: String) -> void:
 
 func _start_session() -> void:
 	_session = true
+	_route_snapshots = []
+	_git = ""
 	_t = 0.0
 	_ride = 0
 	_ride_t = 0.0
@@ -118,7 +126,7 @@ func _start_session() -> void:
 		jumps = 0, crashes = 0, stuck = 0.0, surfaces = {}, peak_slip = 0.0, peak_grip = 0.0, peak_decel = 0.0,
 		min_fps = 1000, slow_ticks = 0, last = Vector2.ZERO}
 	_prev = {}
-	_stamp = {}
+	_stamp = Time.get_datetime_dict_from_system()
 
 
 ## Есть ли что сохранять: файл создан (в сессии что-то началось)
@@ -162,21 +170,24 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 	var route: TrailDefinition = lab.routes[lab.lane]
 	var here := Vector2(bike.x, bike.z)
 	var near: Vector3 = route.nearest(here)
-	var on_route := is_finite(near.z)
+	var nearest_valid := is_finite(near.z)
+	var on_route := nearest_valid and near.z <= route.width * 0.5
+	var station_jump := _previous_station >= 0.0 and nearest_valid and absf(near.x - _previous_station) > maxf(10.0, absf(bike.speed) * dt * 4.0)
+	_previous_station = near.x if nearest_valid else -1.0
 	var contact := RideSurface.sample(lab.heights.world, lab.heights, bike.x, bike.z)
 	var surface := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	var phase: int = lab.crash.phase if lab.crash.active() else -1
 	var state := "ПАДЕНИЕ" if lab.crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ")
 	var yaw = lab.get("_cam_yaw")
 	var pitch = lab.get("_cam_pitch")
-	var line_err := rad_to_deg(wrapf(bike.heading - route.heading_at(near.x), -PI, PI)) if on_route else 0.0
+	var line_err := rad_to_deg(wrapf(bike.heading - route.heading_at(near.x), -PI, PI)) if nearest_valid else 0.0
 	var autopilot: String = lab.autopilot.style if lab.autopilot != null else ""
 	var pumped = bike.get("pump_pressed")
 	var values := [
 		_t, _ride, _ride_t, _ticks, wall_ms, Engine.get_frames_per_second(),
-		bike.x, bike.y, bike.z, rad_to_deg(bike.heading), near.x if on_route else -1.0, near.y if on_route else 0.0, line_err,
-		int(on_route), lab.metrics.element, lab.player.x, lab.player.z,
-		int(bike.riding), int(bike.airborne), int(bike.crashed), phase, int(bike.fallen), state,
+		bike.x, bike.y, bike.z, rad_to_deg(bike.heading), near.x if nearest_valid else -1.0, near.y if nearest_valid else 0.0, line_err,
+		int(nearest_valid), int(station_jump), int(on_route), lab.metrics.element, lab.player.x, lab.player.z,
+		int(bike.riding), int(bike.airborne), int(bike.crashed or lab.crash.active()), phase, int(bike.fallen), state,
 		raw.fwd, raw.steer, int(raw.jump), int(raw.run), int(raw.q), int(raw.e), int(raw.pump), int(raw.interact), int(raw.lmb), int(raw.rmb),
 		throttle, turn, int(run), int(jump), autopilot,
 		int(lab.diagnostics_visible), int(lab.editor.visible), int(lab.overview), rad_to_deg(yaw) if yaw != null else 0.0, rad_to_deg(pitch) if pitch != null else 0.0,
@@ -207,7 +218,8 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 	else:
 		_pending.append(line)
 		if _pending.size() > PENDING_MAX: _pending.remove_at(0)
-	_track(lab, bike, route, near, on_route, surface, raw, throttle, turn, jump, wall_ms, state)
+	if station_jump: _event("station jump", {station = near.x, x = bike.x, z = bike.z})
+	_track(lab, bike, route, near, nearest_valid, surface, raw, throttle, turn, jump, wall_ms, state, dt)
 
 
 ## Сырой ввод игрока: клавиши, оси и кнопки мыши в этот такт
@@ -225,7 +237,7 @@ func _raw_input() -> Dictionary:
 
 
 ## Статистика и события по смене состояния
-func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route: bool, surface: String, raw: Dictionary, throttle: float, turn: float, jump: bool, wall_ms: float, state: String) -> void:
+func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route: bool, surface: String, raw: Dictionary, throttle: float, turn: float, jump: bool, wall_ms: float, state: String, dt: float) -> void:
 	var here := Vector2(bike.x, bike.z)
 	_stats.distance += _stats.last.distance_to(here)
 	_stats.last = here
@@ -235,7 +247,6 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 	_stats.peak_decel = maxf(_stats.peak_decel, bike.brake_deceleration)
 	# первые 2 с поездки FPS ещё помнит пересборку трассы (R, смена трассы)
 	if _ride_t > 2.0: _stats.min_fps = mini(_stats.min_fps, int(Engine.get_frames_per_second()))
-	var dt := 1.0 / 60.0
 	if bike.airborne: _stats.air += dt
 	if raw.fwd > 0.1: _stats.fwd += dt
 	if raw.fwd < -0.1: _stats.back += dt
@@ -259,16 +270,20 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 	if changed.call("riding", bike.riding): _event("посадка" if bike.riding else "сход с велосипеда", _where(bike, station))
 	if changed.call("air", bike.airborne):
 		if bike.airborne: _event("отрыв", _where(bike, station).merged({vy = bike.vy, speed = bike.speed, hop = bike._hop_used}))
-		else: _event("приземление", _where(bike, station).merged({impact = bike.land_impact, speed = bike.speed, air = bike.air_time, hop_height = bike.hop_height}))
+		elif bike.landing_info.is_empty(): _event("ground contact", _where(bike, station))
+	if not bike.landing_info.is_empty():
+		_event("приземление", _where(bike, station).merged(bike.landing_info))
+	if bike.wheel_impact != Vector2.ZERO: _last_hit_tick = _ticks
 	var crashing: bool = lab.crash.active() or bike.crashed
 	if changed.call("crash", crashing):
 		if crashing:
 			_stats.crashes += 1
 			_event("ПАДЕНИЕ", _where(bike, station).merged({cause = BikeRide.CrashCause.keys()[bike.crash_cause], speed = bike.crash_velocity.length(),
-				normal = bike.crash_normal, info = lab.metrics.crash_info, load_f = bike.load_f, load_r = bike.load_r, last_hit = bike.last_hit}))
+				normal = bike.crash_normal, info = lab.metrics.crash_info, snapshot = bike.crash_info, last_hit = bike.last_hit, last_hit_tick = _last_hit_tick, last_hit_age_ticks = _ticks - _last_hit_tick if _last_hit_tick >= 0 else -1}))
 		else:
 			_event("падение закончено", _where(bike, station))
 	if bike.wheel_impact != Vector2.ZERO:
+		_last_hit_tick = _ticks
 		_event("удар колеса о кромку", _where(bike, station).merged({front = bike.wheel_impact.x, rear = bike.wheel_impact.y, last_hit = bike.last_hit}))
 	if bike.bottom_out > 0.0: _event("пробой подвески", _where(bike, station).merged({speed = bike.bottom_out}))
 	if changed.call("brake", bike.brake_pressure > 0.1):
@@ -339,8 +354,6 @@ func _open(lab) -> void:
 		_events = null
 		enabled = false
 		return
-	_stamp = Time.get_datetime_dict_from_system()
-	_preset = lab.preset
 	_file.store_line(",".join(_columns))
 	for line in _pending: _file.store_line(line)
 	_pending.clear()
@@ -350,7 +363,7 @@ func _open(lab) -> void:
 	_events.flush()
 
 
-## «Сохранить запись»: временные файлы уходят в проект (ride_logs/<дата>/), рядом — заголовок и сводка.
+## «Сохранить запись»: временные файлы уходят в проект (ride_logs/<дата>/<сессия>/), рядом — заголовок и сводка.
 ## Возвращает путь без расширения или "", если сохранять нечего. После сохранения начинается новая сессия.
 func save(lab, reason := "кнопка «Сохранить запись»") -> String:
 	if not has_data(): return ""
@@ -368,25 +381,38 @@ func save(lab, reason := "кнопка «Сохранить запись»") -> 
 	if not FileAccess.file_exists(ignore):
 		var marker := FileAccess.open(ignore, FileAccess.WRITE)
 		if marker != null: marker.close()
-	var base := "%s/ride_%02d-%02d-%02d_p%d" % [folder, _stamp.hour, _stamp.minute, _stamp.second, _preset + 1]
+	var stem := "ride_%02d-%02d-%02d_p%d" % [_stamp.hour, _stamp.minute, _stamp.second, _preset + 1]
+	var session_folder := folder + "/" + stem
 	var n := 2
-	while FileAccess.file_exists(base + ".csv"):
-		base = "%s/ride_%02d-%02d-%02d_p%d_%d" % [folder, _stamp.hour, _stamp.minute, _stamp.second, _preset + 1, n]
+	while DirAccess.dir_exists_absolute(ProjectSettings.globalize_path(session_folder)) or FileAccess.file_exists(session_folder):
+		session_folder = folder + "/" + stem + "_%d" % n
 		n += 1
+	if DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(session_folder)) != OK:
+		push_warning("Trail Lab: не удалось создать папку записи " + session_folder)
+		_resume_files()
+		return ""
+	var base := session_folder + "/ride"
 	var copied := DirAccess.copy_absolute(ProjectSettings.globalize_path(temp_root + "/unsaved.csv"), ProjectSettings.globalize_path(base + ".csv")) == OK \
 		and DirAccess.copy_absolute(ProjectSettings.globalize_path(temp_root + "/unsaved.events.txt"), ProjectSettings.globalize_path(base + ".events.txt")) == OK
 	if not copied:
 		push_warning("Trail Lab: не удалось сохранить запись в " + base)
+		_resume_files()
 		return ""
 	path = base
 	var header := FileAccess.open(base + ".header.json", FileAccess.WRITE)
 	if header != null:
 		header.store_string(JSON.stringify(_header(lab), "\t"))
 		header.close()
+	if header == null:
+		_resume_files()
+		return ""
 	var summary := FileAccess.open(base + ".summary.txt", FileAccess.WRITE)
 	if summary != null:
 		summary.store_string(_summary(lab, reason))
 		summary.close()
+	if summary == null:
+		_resume_files()
+		return ""
 	_session = false
 	return base
 
@@ -409,9 +435,10 @@ func _header(lab) -> Dictionary:
 	for e in route.elements:
 		elements.append({station = snappedf(e.station, 0.1), length = snappedf(e.length, 0.1), profile = TrailElementLibrary.title(e.profile), height = snappedf(e.height, 0.01), count = e.count})
 	var settings = lab.services.settings
-	var now := Time.get_datetime_dict_from_system()
+	var now := _stamp if not _stamp.is_empty() else Time.get_datetime_dict_from_system()
 	return {
-		format = 1,
+		format = 2,
+		route_snapshots = _route_snapshots,
 		started = "%04d-%02d-%02d %02d:%02d:%02d (время компьютера)" % [now.year, now.month, now.day, now.hour, now.minute, now.second],
 		rides = _round(_rides),
 		session_seconds = snappedf(_t, 0.01),
@@ -421,9 +448,9 @@ func _header(lab) -> Dictionary:
 			width = route.width, ground = lab.ground_kind, elements = elements},
 		contact_model = lab.contact_model,
 		settings = {fov = settings.fov, mouse = settings.mouse, invert_y = settings.invert_y, head_bob = settings.head_bob},
-		rate_hz = 60,
+		rate_hz = Engine.physics_ticks_per_second,
 		columns = Array(_columns),
-		units = "м, м/с, м/с², секунды, градусы; нагрузки — доли веса; lateral — отступ от оси трассы, + вправо по ходу; station — метры вдоль трассы (-1: вне трассы)",
+		units = "м, м/с, м/с², секунды, градусы; нагрузки — доли веса; lateral — отступ от оси трассы, + вправо по ходу; station — метры вдоль трассы (-1: нет ближайшего сегмента); on_route — внутри ширины полотна; station_jump — смена ближайшей ветви",
 		bike_constants = _constants(BikeRide),
 		brake_constants = _constants(preload("res://scripts/game/bike_brakes.gd")),
 		game_config = _constants(GameConfig),
@@ -489,3 +516,26 @@ func _summary(lab, reason: String) -> String:
 	lines.append("")
 	lines.append("Колонки CSV и константы физики — в .header.json. Станция — метры вдоль трассы, lateral — отступ от оси (+ вправо).")
 	return "\n".join(lines) + "\n"
+
+
+func _resume_files() -> void:
+	_file = FileAccess.open(temp_root + "/unsaved.csv", FileAccess.READ_WRITE)
+	_events = FileAccess.open(temp_root + "/unsaved.events.txt", FileAccess.READ_WRITE)
+	if _file != null: _file.seek_end()
+	if _events != null: _events.seek_end()
+	# Never truncate unsaved data if reopening fails.
+	if _file == null or _events == null: enabled = false
+
+func _snapshot(lab) -> Dictionary:
+	var route: TrailDefinition = lab.routes[lab.lane]
+	var elements := []
+	for e in route.elements:
+		var entry := {profile = e.profile}
+		for key in TrailElement.KEYS: entry[key] = e.get(key)
+		elements.append(entry)
+	var points := []
+	for point in route.points: points.append([point.x, point.y])
+	return {ride = _ride, preset = lab.preset + 1, id = route.id, title = route.title,
+		ground = lab.ground_kind, width = route.width, points = points, elements = elements,
+		contact_model = lab.contact_model, code = _code_version(),
+		settings = {fov = lab.services.settings.fov, mouse = lab.services.settings.mouse, invert_y = lab.services.settings.invert_y}}

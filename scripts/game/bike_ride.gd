@@ -251,6 +251,8 @@ var _on_f := -1          # препятствие, на котором стои�
 var _on_r := -1
 var impacts := Vector2i() # сколько раз колесо встретило кромку препятствия (перед, зад), для замеров
 var hit_dv := Vector2()   # потеря скорости рамы при последней встрече переднего и заднего колеса с кромкой, м/с
+var landing_info := {} # snapshot before landing resets velocities and flight time
+var crash_info := {} # snapshot at the first crash substep
 var last_hit := {}        # подробности последней встречи с кромкой (угол, подход, доля нагрузки, доля порога), для стендов
 var _sup_f := 0.0        # опора колеса на прошлом такте: от этой высоты колесо встречает следующую кромку
 var _sup_r := 0.0
@@ -378,6 +380,8 @@ func mount(p: PlayerState) -> void:
 ## замеров (impacts, hop_height) остаётся: её сбрасывает reset_stats(). Положение и визуальные углы колёс
 ## и педалей (wheel, crank) тоже остаются.
 func reset_motion() -> void:
+	landing_info = {}
+	crash_info = {}
 	slick_f = 1.0
 	slick_r = 1.0
 	force_f = Vector2()
@@ -694,6 +698,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	# Один и тот же короткий шаг при 30/60/120 Гц; hop передаётся только первому подшагу.
 	# Существующие рельеф, вода и подвеска остаются в том же цикле, без новой вертикальной модели.
 	# Упавший велосипед ждёт BikeController (ragdoll); новых импульсов и событий у него нет.
+	landing_info = {}
 	if dt <= 0.0 or crashed:
 		return
 	var ticks := ceili(dt * SUB_HZ) if dt > 1.0 / SUB_HZ + 0.000001 else 1
@@ -1658,6 +1663,7 @@ func _rear_drive(wanted: float, grip: float) -> float:
 func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void:
 	if crashed:
 		return
+	crash_info = {speed = speed, lateral_speed = lateral_speed, vy = v_up, load_f = load_f, load_r = load_r, unweight = unweight}
 	crashed = true
 	crash_cause = cause
 	crash_normal = normal.normalized() if normal.length_squared() > 0.000001 else Vector3.UP
@@ -1716,6 +1722,7 @@ func _land(g: float, heights: Heightfield) -> void:
 	var incoming := Vector3(horizontal.x, vy, horizontal.y)
 	var impact := maxf(0.0, -incoming.dot(normal))
 	var approach_grade := gradient.dot(horizontal.normalized()) if horizontal.length_squared() > 0.0001 else 0.0
+	landing_info = {air = air_time, impact = impact, speed = speed, vy = vy, hop = _hop_used, hop_height = hop_height if _hop_used else 0.0}
 	airborne = false
 	y = g
 	# Седок автоматически принимает умеренную посадку ногами. Сильный удар
