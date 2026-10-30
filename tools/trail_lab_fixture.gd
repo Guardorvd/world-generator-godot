@@ -12,7 +12,9 @@ static func build(routes: Array[TrailDefinition], with_elements := true) -> Heig
 ## Test grounds under a course: "flat" is the lab's own gentle slope; "hills" and "mountain" take a 256 m window
 ## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns);
 ## "site" is a saved piece of a real prepared world (TrailSite: roads, water, bridges, surfaces as in the game).
-const GROUNDS := ["flat", "hills", "mountain", "site"]
+const GROUNDS := ["flat", "hills", "mountain", "site", "polygon"]
+## "polygon" — the main polygon's own 512 m land (a slope with hills and a ravine) under its own course (scripts/lab/trail_lab_polygon.gd).
+const Polygon = preload("res://scripts/lab/trail_lab_polygon.gd")
 ## Wanted fall from edge to edge of the window, m.
 const GROUND_DROP := {hills = Vector2(14, 30), mountain = Vector2(22, 40)}
 static var _relief := {}
@@ -38,6 +40,7 @@ static func site() -> TrailSite:
 static func ground(at: Vector2, kind := "flat", course := true) -> float:
 	if kind == "site":
 		return site().ground_at(at) if site() != null else 0.0
+	if kind == "polygon": return Polygon.ground(at)
 	if kind == "flat" or not GROUND_DROP.has(kind):
 		var bumps := 3.5 * sin(at.x / 36.0) * sin(at.y / 48.0) + 1.1 * sin(at.y / 9.0) if course else 0.0
 		return 12.0 + at.y * 0.035 + bumps
@@ -122,8 +125,8 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		if site() == null: return {heights = null, errors = PackedStringArray(["Площадка не открыта: " + site_error]), timings = timings}
 		return _site.prepare(routes, with_elements)
 	var w := WorldData.new()
-	w.W = 64
-	w.H = 64
+	w.W = Polygon.CELLS if kind == "polygon" else 64
+	w.H = w.W
 	w.N = w.W * w.H
 	w.seed_num = 17027
 	w.seed_text = "Trail Lab"
@@ -181,6 +184,9 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 			compose_ms = (Time.get_ticks_usec() - started) / 1000.0
 		return [route]
 	if index == 0: return definitions()
+	if index == 10:
+		var own: Array[TrailDefinition] = [Polygon.route()]
+		return own
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
 	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес", "Байк-парк", "Маршрут"][index]

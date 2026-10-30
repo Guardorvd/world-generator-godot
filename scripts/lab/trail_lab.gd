@@ -473,9 +473,11 @@ func _apply_look() -> void:
 		# Built once per site: their levels are saved and their approaches are pinned against trail earthworks.
 		StructuresBuilder.build(structures, heights, heights.structures.slice(0, site.structures.size()))
 
-## Overview camera target: the lab's 256 m square, or the middle of a saved site's working rectangle.
+## Overview camera target: the middle of the lab's square (256 m, the main polygon 512 m), or of a saved site's working rectangle.
 func _overview_target() -> Vector3:
-	if ground_kind != "site" or Fixture.site() == null: return Vector3(128, 12, 128)
+	if ground_kind != "site" or Fixture.site() == null:
+		var half := heights.world.W * GameConfig.TILE * 0.5
+		return Vector3(half, heights.ground_at(half, half) if ground_kind == "polygon" else 12.0, half)
 	var c := Vector2(Fixture.site().work.get_center()) * GameConfig.TILE
 	return Vector3(c.x, heights.ground_at(c.x, c.y), c.y)
 
@@ -788,7 +790,8 @@ func _process(dt: float) -> void:
 	var target := Vector3(at.x, _cam_feet + 1.0, at.z)
 	if overview:
 		var focus := _overview_target()
-		camera.position = focus + Vector3(0, 228, 117)
+		# farther above a larger square (the main polygon) so the whole course is in view
+		camera.position = focus + Vector3(0, 228, 117) * maxf(1.0, heights.world.W / 64.0 * 0.85)
 		camera.look_at(focus)
 	else:
 		camera.position = target + Vector3(sin(heading) * 7, 3.5, cos(heading) * 7)
