@@ -30,16 +30,16 @@ func span(from: float, to: float, throttle: float, ramp := true, limit := 30.0) 
 	return Vector2(-1.0, -1.0)
 
 func run() -> void:
-	# T2: усилие нарастает быстро и без мёртвой задержки, отпускание не оставляет тяги
+	# T2: усилие нарастает плавно (30.10), без мёртвой задержки, отпускание не оставляет тяги
 	var pedal := bike(0.0)
 	tick(pedal, 0.0, false, 60, 1.0)
 	var first_tick := pedal.speed
 	for i in 5: tick(pedal, 0.0, false, 60, 1.0)
 	var at_100ms := pedal.effort
 	for i in 54: tick(pedal, 0.0, false, 60, 1.0)
-	for i in 9: tick(pedal, 0.0, false, 60, 0.0)
-	check(first_tick > 0.0 and at_100ms > 0.6 and at_100ms < 0.85 and pedal.effort < 0.06 and pedal.drive_force < 0.05,
-		"T2 усилие: первый такт %.3f м/с, за 0,1 с %.2f, через 0,15 с после отпускания %.3f (тяга %.3f)" % [first_tick, at_100ms, pedal.effort, pedal.drive_force])
+	for i in 18: tick(pedal, 0.0, false, 60, 0.0)
+	check(first_tick > 0.0 and at_100ms > 0.35 and at_100ms < 0.6 and pedal.effort < 0.06 and pedal.drive_force < 0.05,
+		"T2 усилие: первый такт %.3f м/с, за 0,1 с %.2f, через 0,3 с после отпускания %.3f (тяга %.3f)" % [first_tick, at_100ms, pedal.effort, pedal.drive_force])
 	var levels := []
 	for level: float in [0.25, 0.5, 1.0]:
 		var b := bike(0.0)
@@ -51,7 +51,7 @@ func run() -> void:
 	var s05_old := span(0.0, 5.0, 1.0, false)
 	var s510 := span(5.0, 10.0, 1.0)
 	print("T2 разгон 0→5 м/с: %.2f с (мгновенная тяга %.2f с); 5→10: %.2f с" % [s05.x, s05_old.x, s510.x])
-	check(s05.x > s05_old.x and s05.x < s05_old.x + 0.2, "T2 старт мягче, но без заметной задержки: +%.2f с" % (s05.x - s05_old.x))
+	check(s05.x > s05_old.x and s05.x < s05_old.x + 0.45, "T2 старт мягче, но без заметной задержки: +%.2f с" % (s05.x - s05_old.x))
 	# T3: накат — тот же воздух на земле и в полёте, пассивный накат по ровному не создаёт скорость
 	var rolling := bike(12.0)
 	tick(rolling, 0.0, false, 60)
