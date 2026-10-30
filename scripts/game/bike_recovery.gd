@@ -56,8 +56,10 @@ static func roof(h: Heightfield, x: float, z: float, feet: float) -> float:
 		if along < 0.0 or along > s.len or side > s.half:
 			continue
 		var deck := h.level(s, along)
-		# Запас включает балки деревянного и нижнюю плиту каменного моста.
-		if feet < deck - 0.05:
+		# Запас включает балки деревянного и нижнюю плиту каменного моста. Настил, на который можно въехать
+		# (surface_at ставит на него ноги не ниже STEP), — опора, а не перекрытие: так колесо у начала настила
+		# северного шора не упирается в него головой седока.
+		if feet < deck - Heightfield.STEP:
 			top = minf(top, deck - (0.7 if s.style == "stone" else (0.24 if s.style == "planks" else 0.5)))
 	return top
 
