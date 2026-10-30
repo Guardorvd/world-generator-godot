@@ -106,7 +106,7 @@ const BODY_LEAD := 0.1       # с от нажатия до пика рывка (
 ## Подъём колеса: рывок тела сильнее веса, который несёт колесо, отрывает его от земли (lift_f / lift_r, м над опорой).
 ## Пока колесо в воздухе, весь вес на другом, а о препятствие оно не бьётся, если поднято выше него. Оба колеса в
 ## воздухе — банни-хоп. Q поднимает переднее, затем E в пределах HOP_LINK подтягивает заднее.
-const LIFT_GAIN_F := 14.0    # ускорение подъёма переднего колеса на долю веса сверх его нагрузки, g (руль на себя)
+const LIFT_GAIN_F := 5.0    # ускорение подъёма переднего колеса на долю веса сверх его нагрузки, g (руль на себя)
 const LIFT_GAIN_R := 3.0     # заднего (ноги подтягивают раму); вниз оба падают с g
 ## Банни-хоп: заднее колесо оторвалось, пока переднее в воздухе. Скорость вверх — от толчка ногами (HOP_POP) тем
 ## больше, чем выше уже поднято переднее (на HOP_FRONT — полный), плюс часть скорости подъёма переднего.
@@ -849,7 +849,9 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 ## уходит вниз быстрее, чем позволяет тяжесть на этой скорости (гребень, трамплин).
 func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	_hop_wait = maxf(0.0, _hop_wait - dt)
-	_hop_buf = HOP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
+	# На коротком естественном отрыве ранний Space не должен ждать далёкую посадку.
+	var accept_hop := hop and (not airborne or _coyote > 0.0 or (vy < 0.0 and y - g < 0.2))
+	_hop_buf = HOP_BUFFER if accept_hop else maxf(0.0, _hop_buf - dt)
 	_coyote = maxf(0.0, _coyote - dt) if airborne else HOP_COYOTE
 	if contact_model:
 		# На земле пробел запускает тот же Q→E телом.
@@ -1112,7 +1114,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 		lift_fv = 0.0
 		lift_r = 0.0
 		lift_rv = 0.0
-		hop_height = maxf(hop_height, y - _hop_from)
+		if _hop_used: hop_height = maxf(hop_height, y - _hop_from)
 		return
 	# Вираж прижимает: в повороте по наклонному полотну часть центростремительного ускорения давит в склон,
 	# a·sinθ (контруклон — наоборот, разгружает). Тяжесть вдоль склона учтена в _step_turn и _step_traction.
@@ -1159,7 +1161,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> void:
 	var g := GameConfig.GRAVITY
 	# рывок поднимает колесо, пока сильнее его веса; дальше оно летит и падает обратно с ускорением свободного падения
-	if pull > weight_f: lift_fv += (pull - weight_f) * g * LIFT_GAIN_F * dt
+	if pull > weight_f: lift_fv = minf(1.5, lift_fv + (pull - weight_f) * g * LIFT_GAIN_F * dt)
 	elif lift_f > 0.0: lift_fv -= g * dt
 	if -pull > weight_r: lift_rv += (-pull - weight_r) * g * LIFT_GAIN_R * dt
 	elif lift_r > 0.0: lift_rv -= g * dt
@@ -1173,8 +1175,11 @@ func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> voi
 		if lift_rv < -0.5: squash_rv += -lift_rv * 0.4
 		lift_r = 0.0
 		lift_rv = maxf(lift_rv, 0.0) if -pull > weight_r else 0.0
-	if lift_f >= LIFT_MAX:
-		lift_f = LIFT_MAX
+	# На скорости в дуге седок ограничивает ручной подъём, сохраняя запас для Q→E.
+	var turning := smoothstep(0.15, 0.45, absf(steer)) * smoothstep(6.0, 12.0, absf(speed))
+	var front_limit := lerpf(LIFT_MAX, 0.10, turning)
+	if lift_f >= front_limit:
+		lift_f = front_limit
 		lift_fv = minf(lift_fv, 0.0)
 	if lift_r >= LIFT_MAX:
 		lift_r = LIFT_MAX
@@ -1189,9 +1194,10 @@ func _takeoff_hop() -> void:
 	_hop_from = y
 	hop_height = 0.0
 	var quality := clampf(_hop_front / HOP_FRONT, 0.0, 1.0)
-	y += (lift_f + lift_r) * 0.5
+	y += minf((lift_f + lift_r) * 0.5, 0.12 if vy > 0.5 else LIFT_MAX)
 	# Сохраняем движение вдоль спуска: прыжок считается относительно полотна, без катапульты вниз по склону.
-	vy = minf(vy, HOP_CARRY) + HOP_POP * lerpf(0.8, 1.0, quality) + maxf(0.0, _hop_front_v) * 0.35
+	var carry := lerpf(HOP_CARRY, HOP_CARRY * 0.5, smoothstep(0.1, 0.5, absf(vertical_g)))
+	vy = minf(vy, carry) + HOP_POP * lerpf(0.8, 1.0, quality) + maxf(0.0, _hop_front_v) * 0.35
 	lift_f = 0.0
 	lift_fv = 0.0
 	lift_r = 0.0
@@ -1322,16 +1328,20 @@ func _land(g: float, heights: Heightfield) -> void:
 	var approach_grade := gradient.dot(horizontal.normalized()) if horizontal.length_squared() > 0.0001 else 0.0
 	airborne = false
 	y = g
-	land_impact = maxf(land_impact, impact)
-	squash_fv = clampf(squash_fv + impact * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
-	squash_rv = clampf(squash_rv + impact * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
+	# Седок автоматически принимает умеренную посадку ногами. Сильный удар
+	# проверяется по исходной скорости: помощь не спасает от опасного недолёта.
+	var absorbed := minf(1.2, impact * 0.18) * (1.0 - smoothstep(9.0, 13.0, impact))
+	var felt := impact - absorbed
+	land_impact = maxf(land_impact, felt)
+	squash_fv = clampf(squash_fv + felt * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
+	squash_rv = clampf(squash_rv + felt * LANDING_KICK, SQUASH_V_MIN, SQUASH_V_MAX)
 	# В подъём (нос в склон) удар опаснее, чем на ровное: порог падения ниже.
 	if impact > GameConfig.BIKE_CRASH - FACE_CRASH * clampf(approach_grade, 0.0, 1.0):
 		_crash(vy, normal)
 		speed = 0.0
 		lateral_speed = 0.0
-	elif impact > SOFT_IMPACT:
-		var keep := 1.0 - clampf((impact - SOFT_IMPACT) * 0.05, 0.0, 0.5)
+	elif felt > SOFT_IMPACT:
+		var keep := 1.0 - clampf((felt - SOFT_IMPACT) * 0.05, 0.0, 0.5)
 		speed *= keep
 		lateral_speed *= keep
 	vy = gradient.dot(horizontal_velocity())
