@@ -197,6 +197,7 @@ var front_load: float:
 var grip_usage := 0.0 # фактически использованный общий запас, 0..1
 var slip := 0.0 # подписанный угол сноса, радианы
 var _corner_demand := 0.0
+var _side_use := 0.0   # доля бокового запаса шин, занятая на прошлом подшаге (модель двух контактов)
 var body_back := false    # вход: тело назад (руль на себя)
 var body_forward := false # вход: тело вперёд (на руль)
 var body_x := 0.0         # положение тела: + назад, − вперёд
@@ -378,6 +379,7 @@ func reset_motion() -> void:
 	crash_normal = Vector3.UP
 	crash_velocity = Vector3()
 	_sub.fill(0.0)
+	_side_use = 0.0
 	_reverse_armed = true
 	_share = 0.5
 	effort = 0.0
@@ -741,7 +743,10 @@ class Footing:
 
 func _read_footing(turn: float, w: WorldData, heights: Heightfield) -> Footing:
 	var f := Footing.new()
-	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
+	# Резерв поворота в тормозе — по фактическому положению руля (оно догоняет ввод с той же скоростью, что и курс)
+	# и по боковой силе, которую шины держат сейчас: на выходе из дуги руль уже прямо, а снос ещё гасится.
+	# Раньше — по сырому вводу: на входе резерв появлялся раньше поворота, на выходе исчезал раньше сноса.
+	_corner_demand = maxf(absf(steer) * smoothstep(3.0, 10.0, absf(speed)), _side_use)
 	f.slope = _slope(heights)
 	_sub[T_GRADE] = _ground_slope(heights)
 	var contact := RideSurface.sample(w, heights, x, z)
@@ -942,6 +947,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		var side_force_f := clampf(need * free_f / total, -free_f, free_f)
 		var side_force_r := clampf(need * free_r / total, -free_r, free_r)
 		lateral = side_force_f + side_force_r
+		_side_use = clampf(absf(lateral) / maxf(cap_f + cap_r, 0.1), 0.0, 1.0)
 		lateral_speed -= lateral * dt
 		force_f = Vector2(brakes.front_force, side_force_f)
 		force_r = Vector2(_rear_long(), side_force_r)
@@ -961,6 +967,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		grip_usage = clampf(Vector2(brake_deceleration, lateral).length() / maxf(capacity, 0.1), 0.0, 1.0)
 	else:
 		grip_usage = 0.0
+		_side_use = 0.0
 		use_f = 0.0
 		use_r = 0.0
 		force_f = Vector2()
