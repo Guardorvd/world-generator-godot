@@ -53,6 +53,8 @@ var _db := {}               # петля -> наибольшая громкос�
 var _fire: AudioStreamPlayer3D
 var _bird: AudioStreamPlayer3D
 var _land: AudioStreamPlayer
+var _bottom: AudioStreamPlayer # пробой подвески — свой голос: приземление его не глушит
+var _knock: AudioStreamPlayer  # удар колеса о кромку
 var _steps := {}            # поверхность -> AudioStreamPlayer
 var _goal := {}             # петля -> громкость, к которой она стремится, 0..1
 var _level := {}            # петля -> текущая громкость 0..1
@@ -102,6 +104,13 @@ func _ready() -> void:
 	_land = AudioStreamPlayer.new()
 	_land.stream = _random(["land"], 1.1, 1.0)
 	add_child(_land)
+	_bottom = AudioStreamPlayer.new()
+	_bottom.stream = _random(["land"], 1.08, 1.0)
+	add_child(_bottom)
+	_knock = AudioStreamPlayer.new()
+	_knock.stream = _random(["land"], 1.12, 2.0)
+	_knock.max_polyphony = 2
+	add_child(_knock)
 
 
 func _loop(file: String, db: float) -> AudioStreamPlayer:
@@ -151,11 +160,19 @@ func tick(player: PlayerState, riding: bool) -> void:
 
 ## 12.7: пробой вилки (удар в упор со скоростью impact, м/с) — короткий глухой стук выше и тише приземления
 func bottom_out(impact: float) -> void:
-	if _land.playing and _land.get_playback_position() < 0.15:
+	_bottom.volume_db = DB_LAND - 14.0 + clampf((impact - 0.8) / 2.0, 0.0, 1.0) * 6.0
+	_bottom.pitch_scale = 1.7
+	_bottom.play()
+
+
+## Удар колеса о кромку (корень, камень, бревно) со скоростью impact, м/с: короткий стук обода и шины, звонче
+## у переднего колеса, глуше у заднего (под ним рама и седок); тихие касания не звучат.
+func wheel_knock(impact: float, front: bool) -> void:
+	if impact < 0.4:
 		return
-	_land.volume_db = DB_LAND - 14.0 + clampf((impact - 0.8) / 2.0, 0.0, 1.0) * 6.0
-	_land.pitch_scale = 1.7
-	_land.play()
+	_knock.volume_db = DB_LAND - 18.0 + clampf(impact / 5.0, 0.0, 1.0) * 12.0
+	_knock.pitch_scale = 1.35 if front else 1.1
+	_knock.play()
 
 
 ## Приземление с ударом impact (м/с): мягкий удар и шаг по той поверхности, куда пришли ноги

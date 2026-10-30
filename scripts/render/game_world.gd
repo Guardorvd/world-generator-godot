@@ -1405,11 +1405,10 @@ func _bike_impacts() -> void:
 		strong = clampf((land - 4.0) / 8.0, 0.0, 1.0)
 	var knock := maxf(wheel.x, wheel.y)
 	if knock > 0.0:
-		var hit := clampf(knock / 6.0, 0.0, 1.0)
+		var hit := clampf(knock / 3.0, 0.0, 1.0)
 		dip = maxf(dip, 0.15 + hit * 0.35)
 		trauma += 0.04 + hit * 0.1
-		if land <= 0.0:
-			audio.land(bike.x, bike.z, bike.y, minf(knock, 6.0))
+		audio.wheel_knock(knock, wheel.x >= wheel.y)
 		weak = maxf(weak, (0.25 + hit * 0.35) if wheel.x >= wheel.y else 0.1)
 		strong = maxf(strong, (0.2 + hit * 0.4) if wheel.y > wheel.x else 0.1)
 	if bike.bottom_out > 0.0:
