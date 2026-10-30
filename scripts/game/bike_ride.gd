@@ -615,7 +615,12 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		heading = h0
 		_yaw_rate = 0.0
 	if contact_model and not airborne:
+		# Доворот из заноса проходит ту же проверку габарита, что и руль: у стены рама остаётся на принятом курсе,
+		# а снос гасит боковая сила. Скорость перепроецируется ниже от h0 на итоговый курс.
+		var turned := heading
 		heading += _align(dt)
+		if free_now and not fits(x, z, heading, w, heights):
+			heading = turned
 		if absf(slip) > SLIDE_CRASH and Vector2(speed, lateral_speed).length() > SLIDE_CRASH_SPEED:
 			var side := Vector2(cos(heading), -sin(heading)) * signf(lateral_speed)
 			_crash(vy, Vector3(-side.x, 0.4, -side.y), CrashCause.FALL)
