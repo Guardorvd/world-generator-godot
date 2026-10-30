@@ -303,6 +303,15 @@ func run(finish := true) -> void:
 		road_positions.append(bone("Head").z)
 		contacts()
 	check(road_positions[0] > road_positions[1] + 0.01, "Front and rear bumps shift weight in opposite directions")
+	var pump_heads: Array[Vector3] = []
+	for motion: float in [1.0, -1.0]:
+		reset()
+		state.pump_motion = motion
+		for i in 30:
+			advance()
+			contacts()
+		pump_heads.append(bone("Head"))
+	check(pump_heads[1].y > pump_heads[0].y + 0.06, "Pump body compresses/extends while hands and feet keep contact")
 	# Extreme combined inputs through a full pedal revolution, including angle wrap.
 	for sign_value in [-1.0, 1.0]:
 		reset()
@@ -398,13 +407,14 @@ func capture() -> void:
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
-	for mode in ["pedal", "rough", "climb", "rear"]:
+	for mode in ["pedal", "rough", "climb", "rear", "pump_compress", "pump_extend"]:
 		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else (Vector3(1.4, 1.8, 2.6) if mode == "rear" else Vector3(2.4, 1.8, -0.4))
 		camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.23, -0.04))
 		camera.size = 2.4 if mode == "pedal" else 1.35
 		reset()
 		state.crank = 0.4
 		state.speed = 12
+		state.pump_motion = 1.0 if mode == "pump_compress" else (-1.0 if mode == "pump_extend" else 0.0)
 		state.steer = 0.45 if mode == "rough" else 0.0
 		state.lean = -0.2 if mode == "rough" else 0.0
 		state.squash = 0.08 if mode == "rough" else 0.0

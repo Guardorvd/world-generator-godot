@@ -81,6 +81,19 @@ func hop_ride(grade: float, delay: float, hz := 60, auto := false, overlap := fa
 	return {bike = b, takeoffs = takeoffs, clearance = clearance, nose = nose, popped = popped}
 
 func run() -> void:
+	check(BikeRide.new().contact_model, "игра создаёт велосипед с новой моделью контактов по умолчанию")
+	var controls := Controls.new()
+	var input_bike := bike()
+	Input.action_press("bike_back")
+	controls.read_bike_body(input_bike)
+	check(input_bike.body_back and not input_bike.body_forward, "общий ввод Q начинает ручную разгрузку")
+	Input.action_press("bike_forward")
+	controls.read_bike_body(input_bike)
+	check(input_bike.body_forward, "E доступна при удерживаемой Q")
+	controls.read_bike_body(input_bike, false)
+	check(not input_bike.body_back and not input_bike.body_forward, "карта/вступление/блокировка снимают ручной ввод")
+	Input.action_release("bike_back")
+	Input.action_release("bike_forward")
 	for pace: float in [6.0, 10.0, 14.0, 18.0]:
 		var r := corner(pace)
 		print("TURN %.0f m/s: yaw %.2f, entry %.3f, slip %.2f°, speed %.2f" % [pace, r.heading, r.entry, r.slip, r.bike.speed])

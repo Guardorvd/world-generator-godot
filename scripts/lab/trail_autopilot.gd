@@ -50,9 +50,14 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 	var here := Vector2(bike.x, bike.z)
 	# Ближайшая точка оси только рядом с прежней: на пересечении трассы с собой не перескочить на другой проход.
 	var near := d.nearest(here, 12.0)
+	if d.closed and station > length - 12.0 and is_finite(near.z) and near.x < 12.0:
+		# Продолжить следующий круг без переноса велосипеда или сброса его скорости.
+		station = near.x
+		_hopped.clear()
 	if is_finite(near.z) and near.x > station - 10.0 and near.x < station + 30.0: station = maxf(station, near.x)
 	var speed := absf(bike.speed)
 	var ahead := station + maxf(4.0, speed * 0.55)
+	if d.closed: ahead = fposmod(ahead, length)
 	var aim := d.point_at(minf(ahead, length))
 	var offset := _line(d, ahead, spec)
 	if offset != 0.0:
@@ -69,7 +74,7 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 	else:
 		var k_at := 0.0
 		while k_at <= LOOK:
-			var s := minf(station + k_at, length)
+			var s := fposmod(station + k_at, length) if d.closed else minf(station + k_at, length)
 			var k := absf(d.curvature_at(s))
 			if k > 0.0001:
 				var grip: float = spec.lateral * (BERM_GRIP if _on(d, s, TrailElement.Profile.BERM) else 1.0)

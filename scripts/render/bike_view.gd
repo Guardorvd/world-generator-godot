@@ -240,6 +240,8 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	var sprint := smoothstep(1.5, 3.5, acceleration) * (1.0 - smoothstep(6.0, 10.0, absf(b.speed))) if boost else 0.0
 	var descent := smoothstep(0.06, 0.16, -slope) * (1.0 - effort) * smoothstep(4.0, 8.0, absf(b.speed))
 	var stand_target := (maxf(climb, sprint) - descent if not b.airborne else -0.65) if continuous else 0.0
+	if not b.airborne and b.riding and absf(b.pump_motion) > 0.01:
+		stand_target = minf(stand_target, -absf(b.pump_motion) * 0.5)
 	_stand = lerpf(_stand, stand_target, 1.0 - exp(-dt * (4.0 if absf(stand_target) > absf(_stand) else 2.5))) if continuous else 0.0
 	var up := maxf(_stand, 0.0)
 	# Передний толчок подаёт плечи назад, задний — вперёд. В воздухе и на месте реакции нет.
@@ -266,6 +268,7 @@ func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void
 	rough *= smoothstep(0.5, 3.0, absf(b.speed)) if not b.airborne else 0.0
 	# 12.3: тяжёлое нажатие (подъём, рывок) прижимает плечи к рулю
 	var crouch := rough + (AIR_CROUCH + _takeoff * 0.025 if b.airborne else 0.0) + _landing * LAND_CROUCH + braking * 0.025 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
+	crouch += b.pump_motion * 0.065 if not b.airborne else 0.0
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.27
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * effort * (0.055 + up * 0.06)

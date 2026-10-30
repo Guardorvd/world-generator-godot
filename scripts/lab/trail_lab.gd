@@ -12,7 +12,7 @@ var controller := BikeController.new()
 ## разгрузка переднего колеса от сценария, а не от клавиши Q (замеры)
 var body_back := false
 var body_back_forced := false
-var contact_model := true # прототип двух контактов колёс (BikeRide.contact_model); F6 — сравнить с прежней моделью
+var contact_model := bike.contact_model # общая игровая модель; F6 — сравнить с прежней
 var view: BikeView
 var crash := BikeCrash.new()
 var camera := Camera3D.new()
@@ -496,7 +496,7 @@ func _apply_look() -> void:
 func _overview_target() -> Vector3:
 	if ground_kind != "site" or Fixture.site() == null:
 		var half := heights.world.W * GameConfig.TILE * 0.5
-		return Vector3(half, heights.ground_at(half, half) if ground_kind == "polygon" else 12.0, half)
+		return Vector3(half, heights.ground_at(half, half), half)
 	var c := Vector2(Fixture.site().work.get_center()) * GameConfig.TILE
 	return Vector3(c.x, heights.ground_at(c.x, c.y), c.y)
 
@@ -664,6 +664,8 @@ func show_message(text: String) -> void:
 
 func set_overview(enabled: bool) -> void:
 	overview = enabled
+	markers.visible = overview or diagnostics_visible
+	survey_markers.visible = overview or diagnostics_visible
 	editor.set_camera_overview(enabled)
 	for node in markers.get_children():
 		if node.is_in_group("trail_lab_line"): node.visible = enabled
@@ -677,6 +679,8 @@ func set_editor_visible(enabled: bool) -> void:
 func set_diagnostics_visible(enabled: bool) -> void:
 	diagnostics_visible = enabled
 	diagnostics.visible = enabled
+	markers.visible = overview or diagnostics_visible
+	survey_markers.visible = overview or diagnostics_visible
 	details_control.text = "F3  Скрыть" if enabled else "F3  Подробности"
 	hud_panel.reset_size()
 	get_viewport().gui_release_focus()
@@ -786,8 +790,10 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:
 		# Q — тело назад (рывок разгружает переднее колесо), E — вперёд (заднее); отпустить — нейтраль
-		bike.body_back = body_back if body_back_forced else Input.is_physical_key_pressed(KEY_Q)
-		bike.body_forward = false if body_back_forced else Input.is_physical_key_pressed(KEY_E)
+		services.controls.read_bike_body(bike, not editor.visible)
+		if body_back_forced:
+			bike.body_back = body_back
+			bike.body_forward = false
 		throttle = controller.ride(dt, player, bike, w, heights, throttle, turn, run, jump, false)
 		if bike.crashed:
 			metrics.crash(bike)
@@ -841,7 +847,7 @@ func _process(dt: float) -> void:
 	if overview:
 		var focus := _overview_target()
 		# farther above a larger square (the main polygon) so the whole course is in view
-		camera.position = focus + Vector3(0, 228, 117) * maxf(1.0, heights.world.W / 64.0 * 0.85)
+		camera.position = focus + Vector3(0, 228, 117) * maxf(1.0, heights.world.W / 64.0 * 1.05)
 		camera.look_at(focus)
 	else:
 		camera.position = target + Vector3(sin(heading) * 7, 3.5, cos(heading) * 7)

@@ -575,7 +575,7 @@ func look(dx: float, dy: float) -> void:
 	_looked_at = time
 
 
-## Сесть на велосипед, если он рядом, или слезть с него (E, с 10.1; до этого F)
+## Сесть на велосипед, если он рядом, или слезть с него (действие interact, по умолчанию F).
 func toggle_bike() -> void:
 	if _opening or crash.active():
 		return
@@ -885,7 +885,7 @@ func _notification(what: int) -> void:
 	# окно потеряло фокус: кнопки мыши и клавиш движения могли отпуститься без нас,
 	# иначе игрок продолжит идти или тянуть взгляд после возвращения
 	_dragging = false
-	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
+	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump", "bike_back", "bike_forward"]:
 		Input.action_release(action)
 	# пауза, как при выходе из захвата мыши в браузере
 	if not paused and player != null:
@@ -935,6 +935,7 @@ func _physics_process(dt: float) -> void:
 		crashed = bike_controller.recover(dt, player, bike, crash, world, heights)
 	elif bike.riding:
 		var h0 := bike.heading
+		services.controls.read_bike_body(bike, not _opening and not show_map and time >= _rescue_input_until)
 		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run"), jump, _opening)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
@@ -1210,7 +1211,9 @@ func _update_hints() -> void:
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
 	# внизу (видно с зажатым Tab) — главное для того, чем игрок занят
 	if bike.riding:
-		hud.set_hints([[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]], near)
+		var hints := [[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]]
+		if not services.controls.joypad: hints.insert(2, [k.call("bike_back") + " → " + k.call("bike_forward"), "Баннихоп"])
+		hud.set_hints(hints, near)
 		return
 	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"
 	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near)
@@ -1275,7 +1278,7 @@ func _open_settlement(village: Variant = {}) -> void:
 			hud.toast("Остановитесь у костра, чтобы прочитать указатель")
 			return
 		toggle_bike()
-	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump"]:
+	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump", "bike_back", "bike_forward"]:
 		Input.action_release(action)
 	player.vx = 0.0
 	player.vz = 0.0

@@ -77,7 +77,7 @@ const HOP_WAIT_AIR := 0.2      # если в воздухе были дольш�
 const LANDING_KICK := 0.4      # доля скорости удара, которая уходит в сжатие подвески
 const SQUASH_V_MIN := -2.0     # пределы скорости хода подвески, м/с
 const SQUASH_V_MAX := 4.0
-## Модель двух контактов (прототип, шаг 2; включает Trail Lab, в игре пока выключена): у каждого колеса своя нагрузка,
+## Общая модель двух контактов: у каждого колеса своя нагрузка,
 ## от неё — запас сцепления для тормоза и поворота; поперечный уклон тянет вниз тяжестью, а не правит запас.
 const CONTACT_SPRING := 0.5  # доля силы пружины колеса в его нагрузке: каждая подвеска держит половину массы
 ## Нагрузка колеса — от хода пружины, без скорости хода: скачки скорости хода — толчки подвески для картинки (кочки,
@@ -145,6 +145,20 @@ const RIDER_STEER := 1.35
 const RIDER_TURN_RESPONSE := 6.0
 const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
 const HOP_LINK := 0.3         # окно E после подъёма, с
+## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
+## Отдельно от Q/E: не поднимает колёса и не готовит баннихоп. Ограничен ходом тела и скоростью.
+const PUMP_REACH := 0.12      # м дополнительного хода тела для поглощения маленького гребня
+const PUMP_ACCEL := 3.0       # м/с² на единицу обратного уклона волны
+const PUMP_TOP := 14.0        # м/с: выше этого помощь ходу плавно исчезает
+const PUMP_PAUSE := 0.25      # с после ручного действия/приземления до возврата автоматики
+const PUMP_STEER_LIMIT := 0.25 # заметное подруливание уже имеет приоритет над автоматическим толчком
+
+var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
+var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
+var pump_load := 0.0         # добавка нагрузки, доля веса
+var pump_accel := 0.0        # помощь ходу на обратной стороне волны, м/с²
+var _pump_reach := 0.0
+var _pump_wait := 0.0
 
 var x := 0.0          # метры
 var z := 0.0
@@ -182,7 +196,7 @@ var _hop_link := 0.0
 var _hop_front := 0.0
 var _hop_front_v := 0.0
 var _hop_used := false
-var contact_model := false # прототип двух контактов (CONTACT_*)
+var contact_model := true # общая модель игры и Trail Lab; false оставлен для сравнительных проб
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
 var tire_f := 0.5     # нагрузка, которую «чувствует» шина (сглажена по пути, TIRE_RELAX): от неё запас сцепления
@@ -320,6 +334,11 @@ func mount(p: PlayerState) -> void:
 
 ## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
 func reset_motion() -> void:
+	pump_motion = 0.0
+	pump_load = 0.0
+	pump_accel = 0.0
+	_pump_reach = 0.0
+	_pump_wait = PUMP_PAUSE
 	acceleration = 0.0
 	vertical_g = 0.0
 	bank_slope = 0.0
@@ -481,9 +500,58 @@ func _lifts(heights: Heightfield) -> bool:
 	var fz := velocity.y
 	for t: float in LOOK:
 		var fly := y + vy * t - GameConfig.GRAVITY * t * t * 0.5
-		if fly - _contact(x + fx * t, z + fz * t, heights) > LIFT:
+		if fly - _contact(x + fx * t, z + fz * t, heights) > LIFT + _pump_reach:
 			return true
 	return false
+
+
+## Короткий профиль по направлению движения. Длинный уклон вычитается: ровная гора не становится пампом.
+## Вызывается до сил/вертикали, поэтому ручной ввод выключает помощь в том же подшаге.
+func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Heightfield) -> void:
+	pump_accel = 0.0
+	pump_load = 0.0
+	_pump_reach = 0.0
+	_pump_wait = maxf(0.0, _pump_wait - dt)
+	var manual := hop or body_back or body_forward or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_link > 0.0 or _hop_used
+	manual = manual or absf(body_x) > 0.12 or absf(body_v) > 0.4 or throttle < -0.05 or brake_pressure > 0.1
+	manual = manual or absf(turn) > PUMP_STEER_LIMIT or absf(slip) > 0.12
+	if manual or airborne or _fresh:
+		_pump_wait = PUMP_PAUSE
+	var ready := pump_enabled and riding and not crashed and not airborne and not manual and _pump_wait <= 0.0
+	ready = ready and speed > 2.0 and lift_f <= 0.0 and lift_r <= 0.0 and _on_f < 0 and _on_r < 0
+	ready = ready and heights.immersion_at(x, z, y) < 0.03
+	var motion := 0.0
+	if ready:
+		var direction := horizontal_velocity().normalized()
+		var span := clampf(absf(speed) * 0.12, 0.8, 1.6)
+		var levels := PackedFloat32Array()
+		var clear := true
+		for i in range(-2, 3):
+			var at := Vector2(x, z) + direction * span * i
+			# Одна и та же доступная земля: не качаемся через край настила, неизвестную область или воду.
+			if not heights.known(at.x, at.y) or is_finite(heights.deck_at(at.x, at.y, INF)) or heights.immersion_at(at.x, at.y, y) > 0.03:
+				clear = false
+				break
+			levels.append(heights.surface_at(at.x, at.y, y))
+		if clear:
+			var previous := 0.0
+			for i in 4:
+				var grade := (levels[i + 1] - levels[i]) / span
+				# Ступень/стена/гэп и очень крутой кикер остаются штатными препятствиями и вылетами.
+				if absf(grade) > 0.65 or (i > 0 and absf(grade - previous) > 0.3): clear = false
+				previous = grade
+		if clear:
+			var local_grade := (levels[3] - levels[1]) / (2.0 * span)
+			var long_grade := (levels[4] - levels[0]) / (4.0 * span)
+			var wave := local_grade - long_grade
+			var hollow := (levels[1] + levels[3]) * 0.5 - levels[2]
+			var activity := smoothstep(0.01, 0.07, absf(hollow)) * smoothstep(2.0, 5.0, speed)
+			motion = clampf(wave * 1.8 - hollow * 3.0, -1.0, 1.0) * activity
+			var pace := 1.0 - smoothstep(PUMP_TOP - 4.0, PUMP_TOP, speed)
+			pump_accel = minf(1.0, maxf(0.0, -wave) * PUMP_ACCEL) * activity * pace
+			pump_load = clampf(-wave * 0.65, -0.12, 0.2) * activity
+			_pump_reach = PUMP_REACH * activity * pace
+	pump_motion = lerpf(pump_motion, motion, Util.damp(12.0, dt))
 
 
 ## Шаг езды за dt секунд (в игре — один такт физики, 1/60 с). throttle — газ (+) и тормоз (-),
@@ -523,6 +591,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	if _fresh and not airborne:
 		y = _contact(x, z, heights)
 		vy = _ground_slope(heights) * speed
+	_step_pump(dt, throttle, turn, hop, heights)
 	if not airborne:
 		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
 		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
@@ -1030,6 +1099,9 @@ func _step_contacts(grade: float, dt: float) -> void:
 		if target < 0.0 and body_v < -1.2 and _hop_link > 0.0 and (not airborne or _coyote > 0.0):
 			_takeoff_hop()
 	if airborne:
+		pump_accel = 0.0
+		pump_load = 0.0
+		_pump_reach = 0.0
 		load_f = 0.0
 		load_r = 0.0
 		tire_f = 0.0
@@ -1046,7 +1118,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 	# a·sinθ (контруклон — наоборот, разгружает). Тяжесть вдоль склона учтена в _step_turn и _step_traction.
 	var bank := clampf(bank_slope * signf(_yaw_rate), -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 	var press := absf(speed * _yaw_rate) / GameConfig.GRAVITY * bank / sqrt(1.0 + bank * bank)
-	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g + press)
+	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g + press + pump_load)
 	var share := clampf(brakes.front_load, 0.0, 1.0)
 	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * CONTACT_DAMP * squash_fv) / GameConfig.GRAVITY
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
@@ -1149,7 +1221,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	var rolling := GameConfig.BIKE_ROLL / maxf(terrain, 0.25)
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
-	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
+	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope) + pump_accel
 	var loads := Vector2(tire_f * slick_f if contact_f() else 0.0, tire_r * slick_r if contact_r() else 0.0)
 	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, loads if contact_model else Vector2(-1.0, -1.0))
 	braking = 0.0

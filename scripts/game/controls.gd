@@ -86,3 +86,9 @@ func look_delta(dt: float) -> Vector2:
 func reset() -> void:
 	joypad = false
 	device = 0
+
+
+## Один ввод тела в игре и лаборатории; заблокированное управление всегда снимает прошлое удержание.
+func read_bike_body(bike: BikeRide, enabled := true) -> void:
+	bike.body_back = enabled and bike.riding and Input.is_action_pressed("bike_back")
+	bike.body_forward = enabled and bike.riding and Input.is_action_pressed("bike_forward")

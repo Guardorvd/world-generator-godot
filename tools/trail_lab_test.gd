@@ -252,8 +252,10 @@ func check_lab_session(lab: Node) -> void:
 	detail_key.pressed = true
 	lab._unhandled_key_input(detail_key)
 	check(lab.diagnostics.visible, "F3 reveals ride diagnostics")
+	check(lab.markers.visible and lab.survey_markers.visible, "F3 reveals track annotations")
 	lab._unhandled_key_input(detail_key)
 	check(not lab.diagnostics.visible, "F3 hides ride diagnostics")
+	check(not lab.markers.visible and not lab.survey_markers.visible, "normal riding hides survey paint and element labels")
 	lab.details_control.pressed.emit()
 	check(lab.diagnostics.visible and lab.diagnostics_visible, "HUD button reveals diagnostics")
 	lab.details_control.pressed.emit()

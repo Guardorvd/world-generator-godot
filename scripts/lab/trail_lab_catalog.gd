@@ -23,6 +23,8 @@ const LIST := [
 	{title = "Маршрут · узкая техническая · горы", shape = 9, kind = "trail", style = "technical", ground = "mountain"},
 	# Главный полигон (30.10): своя местность 512 м, 1,9 км, элементы расставлены по участкам вручную, прыжок над оврагом
 	{title = "Главный полигон · flow через овраг", shape = 10, kind = "mountain", style = "", ground = "polygon"},
+	{title = "Даунхилл · Хребет и папоротники", shape = 11, kind = "mountain", style = "", ground = "downhill"},
+	{title = "Кросс-кантри · Два холма", shape = 12, kind = "trail", style = "", ground = "xc"},
 ]
 
 
@@ -36,7 +38,7 @@ static func routes(index: int, fixture: Script) -> Array[TrailDefinition]:
 		var copy := d.duplicate(true) as TrailDefinition
 		if spec.shape != 0: copy.title = spec.title
 		# у полигонов и байк-парка элементы расставлены вручную; на остальных — виражи в тугих поворотах
-		if spec.shape not in [0, 8, 10]:
+		if spec.shape not in [0, 8, 10, 11, 12]:
 			brake_zones(copy)
 			add_berms(copy)
 		kit.append(copy)
