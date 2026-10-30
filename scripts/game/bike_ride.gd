@@ -568,7 +568,8 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			if crashed:
 				break
 		return
-	if dt <= 0.0:
+	# Упавший велосипед ждёт BikeController (ragdoll); новых импульсов и событий у него нет.
+	if dt <= 0.0 or crashed:
 		return
 	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
 	var slope := _slope(heights)
@@ -598,6 +599,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
 		if brakes.tipped:
 			_crash(vy, Vector3.UP, CrashCause.BRAKING)
+			_sync(p)
 			return
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
@@ -625,6 +627,7 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		if absf(slip) > SLIDE_CRASH and Vector2(speed, lateral_speed).length() > SLIDE_CRASH_SPEED:
 			var side := Vector2(cos(heading), -sin(heading)) * signf(lateral_speed)
 			_crash(vy, Vector3(-side.x, 0.4, -side.y), CrashCause.FALL)
+			_sync(p)
 			return
 	var lateral := _step_traction(h0, grip, dt)
 
@@ -677,13 +680,24 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			speed *= keep
 			lateral_speed *= keep
 	_dist += Grid.hypot(x - x0, z - z0)
+	# Падение завершает подшаг: первое событие сохраняет причину и скорость удара, а посадка,
+	# отложенный прыжок, колёса и подвеска после него уже не считаются.
+	if crashed:
+		_sync(p)
+		return
 
 	_step_vertical(_contact(x, z, heights), hop, dt, heights)
 	# Непрерывный крутой склон раньше подменял падение покадровой привязкой к земле.
 	# Даже медленный съезд по почти отвесной стене теперь теряет равновесие и запускает ragdoll.
-	if not airborne and absf(speed) > 0.25 and slope * signf(speed) < -CLIFF_GRADE:
+	if not crashed and not airborne and absf(speed) > 0.25 and slope * signf(speed) < -CLIFF_GRADE:
 		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
+	if crashed:
+		_sync(p)
+		return
 	_step_wheels(heights, rough, dt, surf, path_weight, slope, across)
+	if crashed:
+		_sync(p)
+		return
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
 	_step_contacts(slope, dt)
@@ -706,6 +720,11 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	# педали крутятся, только пока их жмут на земле: накатом и в полёте свободный ход
 	if throttle > 0.0 and speed > 0.3 and not airborne:
 		crank = fmod(crank + speed * dt / WHEEL_R / GEAR, TAU)
+	_sync(p)
+
+
+## Игрока везёт велосипед: положение и опора — отсюда, в конце подшага или при падении.
+func _sync(p: PlayerState) -> void:
 	p.x = x
 	p.z = z
 	p.feet = y
@@ -1320,7 +1339,10 @@ func _rear_drive(wanted: float, grip: float) -> float:
 
 
 ## Седок падает: запомнить, с какой скоростью летел велосипед
+## Первое событие падения в подшаге главное: следующие не переписывают причину, нормаль и скорость удара.
 func _crash(v_up: float, normal := Vector3.UP, cause := CrashCause.FALL) -> void:
+	if crashed:
+		return
 	crashed = true
 	crash_cause = cause
 	crash_normal = normal.normalized() if normal.length_squared() > 0.000001 else Vector3.UP

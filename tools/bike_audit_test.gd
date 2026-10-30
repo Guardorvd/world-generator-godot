@@ -16,6 +16,11 @@ class NarrowSlotBike extends BikeRide:
 	func fits(_px: float, _pz: float, hd: float, _w: WorldData, _h: Heightfield) -> bool:
 		return hd > low and hd < high
 
+## Стена (как перила моста) севернее z = -1.
+class WallGround extends TestGround:
+	func wall_at(_x: float, pz: float, _feet: float, r: float = 0.0) -> bool:
+		return pz - r < -1.0
+
 ## Один корень высотой height поперёк пути на z = -2; других препятствий нет.
 class RootBump extends ForestObstacles:
 	var height := 0.05
@@ -121,6 +126,24 @@ func run() -> void:
 	check(absf(lifted.speed - plain.speed) < 0.001 and not lifted.slick and lifted.kick <= plain.kick + 0.001,
 		"B2 колёса выше корня: %.4f = %.4f, скользко %s, толчок %.3f" % [lifted.speed, plain.speed, lifted.slick, lifted.kick])
 	check(grazing.speed < plain.speed - 0.001 and grazing.slick, "B2 колёса ниже вершины корня: %.3f, скользко %s" % [grazing.speed, grazing.slick])
+	# B1: удар в стену и жёсткая посадка в одном подшаге — одно событие (первое), игрок на месте велосипеда
+	var wall := WallGround.new(w)
+	var both := bike(14.0)
+	both.z = -1.0 + BikeRide.AXLE + BikeRide.BODY_R + 0.05
+	both.airborne = true
+	both.y = 100.01
+	both.vy = -20.0
+	both.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, wall)
+	check(both.crashed and both.crash_cause == BikeRide.CrashCause.COLLISION and both.crash_normal.z > 0.9 and both.crash_velocity.y < -19.0 and p.z == both.z,
+		"B1 стена + посадка: причина %s, нормаль %s, vy %.1f" % [BikeRide.CrashCause.keys()[both.crash_cause], both.crash_normal, both.crash_velocity.y])
+	# удар с нажатым пробелом: подготовка прыжка после падения не начинается, следующий шаг ничего не двигает
+	var hopping := bike(14.0)
+	hopping.z = both.z
+	hopping.step(p, 0.0, 0.0, false, true, 1.0 / 120.0, w, wall)
+	var at := Vector3(hopping.x, hopping.y, hopping.z)
+	hopping.step(p, 1.0, 0.0, false, true, 1.0 / 120.0, w, wall)
+	check(hopping.crashed and hopping.crash_cause == BikeRide.CrashCause.COLLISION and hopping._auto_hop < 0.0 and hopping._hop_buf == 0.0 \
+		and Vector3(hopping.x, hopping.y, hopping.z) == at and p.z == hopping.z, "B1 стена + пробел: прыжок не готовится, после падения шаг не двигает")
 	# A2: прыжок под сводом не поднимает габарит седока выше свода (с места и на ходу, 60 и 144 Гц)
 	var roof := LowRoof.new(w)
 	for hz: int in [60, 144]:
