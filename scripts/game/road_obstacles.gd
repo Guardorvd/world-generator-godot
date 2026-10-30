@@ -65,6 +65,10 @@ static func _point(t: Dictionary, n: int) -> Vector2:
 ## rot — поворот вокруг вертикали, как у подлеска (локальная X — вдоль бревна и ветки).
 func pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var t: Dictionary = world.trails[route]
+	# Authored routes own their obstacles through TrailTechnical. Streaming decoration must not
+	# insert random logs into a designed line, takeoff or landing on any authored route.
+	if t.has("trail_id"):
+		return {}
 	if n < 3 or n > t.pts.size() - 3:
 		return {}
 	var roll := _roll(route, n, 0)

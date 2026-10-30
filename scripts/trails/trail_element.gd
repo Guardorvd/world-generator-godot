@@ -41,6 +41,7 @@ const SIDEHILL := 0.5
 const DROP_RAMP := 0.45
 const DROP_LIP := 0.62
 const DROP_EDGE := 1.5
+const JUMP_SHOULDER := 1.0 # full takeoff profile across the riding width; fade outside the track
 ## Steepest takeoff of a table lip (rise per metre); the face is concave, so the bike leaves the lip at this angle.
 const LIP_MAX := 0.6
 ## How far the deck sits below the lip, m (at most half the table height): more than the bike's lift threshold.
@@ -49,10 +50,11 @@ const LIP_STEP := 0.3
 func displacement(along: float, across: float, half_width: float) -> float:
 	var t := (along - station) / length + 0.5
 	var berm := profile == Profile.BERM or profile == Profile.S_BERM
-	var back := BERM_BACK if berm else (BERM_BACK + SIDEHILL if profile == Profile.OFF_CAMBER else 0.0)
+	var jump := profile == Profile.ROLLER or profile == Profile.TABLETOP
+	var back := JUMP_SHOULDER if jump else (BERM_BACK if berm else (BERM_BACK + SIDEHILL if profile == Profile.OFF_CAMBER else 0.0))
 	if t <= 0.0 or t >= 1.0 or absf(across) >= half_width + back:
 		return 0.0
-	var edge := 1.0 - smoothstep(0.55, 1.0, absf(across) / half_width)
+	var edge := 1.0 - smoothstep(half_width, half_width + JUMP_SHOULDER, absf(across)) if jump else 1.0 - smoothstep(0.55, 1.0, absf(across) / half_width)
 	match profile:
 		Profile.TABLETOP:
 			# Concave face up to a lip, a deck slightly below the lip, then a rounded landing. On the one-metre
