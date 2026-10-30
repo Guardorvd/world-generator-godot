@@ -154,6 +154,24 @@ func run() -> void:
 		if i > 30: dive_flat = maxf(dive_flat, level.squash_f - level.squash_r)
 	check(absf(held.feel_acceleration) < 0.5 and dive_held > dive_flat + 0.01 and dive_up < dive_flat + (dive_held - dive_flat) * 0.4,
 		"T6 вилка (перед минус зад): спуск под тормозом %.3f м (ускорение %.2f), подъём накатом %.3f, ровное %.3f" % [dive_held, held.feel_acceleration, dive_up, dive_flat])
+	# T7: тормоз, зажатый на ходу, заканчивается стоянкой; повторное нажатие у остановки — задний ход
+	var stopping := bike(8.0)
+	for i in 240: tick(stopping, 0.0, false, 60, -1.0)
+	var parked := stopping.speed
+	for i in 3: tick(stopping, 0.0, false, 60, 0.0)
+	for i in 60: tick(stopping, 0.0, false, 60, -1.0)
+	check(parked == 0.0 and stopping.speed < -1.0, "T7 удержание после остановки: %.2f м/с через 3 с; повторное нажатие — %.2f м/с" % [parked, stopping.speed])
+	# T7: граница опасной скорости плавная — 13,9 и 14,1 м/с дают почти одинаковую перегрузку
+	var risks: Array[float] = []
+	for pace: float in [13.9, 14.1]:
+		var brakes = preload("res://scripts/game/bike_brakes.gd").new()
+		for i in 120: brakes.step(1.0 / 60.0, 1.0, pace, -0.35, 1.0, 0.0)
+		risks.append(brakes.risk)
+	check(absf(risks[0] - risks[1]) < 0.2, "T7 предупреждение у порога скорости: риск %.2f и %.2f" % risks)
+	# T7: уверенный тормоз в пределах сцепления не звучит как юз
+	var confident := bike(8.0)
+	for i in 20: tick(confident, 0.0, false, 60, -0.6)
+	check(confident.brakes.skid < 0.05 and confident.braking > 0.2, "T7 звук: тормоз %.2f при насыщении %.2f" % [confident.braking, confident.brakes.skid])
 	# T1: силы объясняют изменение скорости — педали, накат, тормоз на ровном и на спуске
 	for case: Array in [[1.0, 0.0, 5.0], [0.0, 0.0, 8.0], [-1.0, 0.0, 8.0], [-0.5, 0.1, 6.0], [1.0, -0.12, 3.0]]:
 		ground.gradient = Vector2(0, case[1])

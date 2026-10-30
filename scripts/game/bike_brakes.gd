@@ -92,10 +92,12 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available
 	grip_used = clampf(deceleration / maxf(total, 0.001), 0.0, 1.0)
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
-	var overload := front_load - 1.0 - BALANCE_MARGIN
-	var danger := grounded and speed > MIN_TIP_SPEED and command > HARD_BRAKE and pressure > HARD_BRAKE and overload > 0.0
+	# Пороги скорости и силы нажатия — плавные: у их границы перегрузка нарастает постепенно, а не включается сразу.
+	var near := smoothstep(MIN_TIP_SPEED - 2.0, MIN_TIP_SPEED + 2.0, speed) * smoothstep(HARD_BRAKE - 0.1, HARD_BRAKE + 0.05, minf(command, pressure))
+	var overload := (front_load - 1.0 - BALANCE_MARGIN) * near
+	var danger := grounded and overload > 0.0
 	if danger:
-		_overload_time += dt
+		_overload_time += dt * near
 		if _overload_time <= OVERLOAD_GRACE:
 			# Small visual warning first; no hidden angular momentum during the grace period.
 			lift = move_toward(lift, 0.04 * _overload_time / OVERLOAD_GRACE, dt * 0.08)

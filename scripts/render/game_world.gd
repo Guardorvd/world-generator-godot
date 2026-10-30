@@ -1084,7 +1084,7 @@ func _process(delta: float) -> void:
 	if regions != null:
 		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
 	_light_night(pos, fire_time)
-	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, maxf(bike.braking, smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65) if bike.riding else 0.0)
+	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta
 	if info_timer <= 0.0:
@@ -1390,3 +1390,9 @@ func _update_camera(alpha: float, dt: float) -> void:
 	camera_controller.update(alpha, dt, player, bike, camera, time, _opening, _moving,
 		crash.active(), photo != null and photo.active,
 		photo.fov(services.settings.fov) if photo != null else services.settings.fov, bike_view.view_squash())
+
+
+## Хруст покрытия под тормозом: уверенное торможение в пределах сцепления слышно мягко, насыщение шин (тормоз
+## просит больше, чем держат колёса) и снос — как юз. Нажатая кнопка сама по себе блокировку не изображает.
+func _bike_skid_sound() -> float:
+	return maxf(bike.braking * (0.3 + 0.7 * bike.brakes.skid), smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65)
