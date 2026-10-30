@@ -27,6 +27,7 @@ var details_control := Button.new()
 var save_control := Button.new() # «Сохранить запись»: сессия тестов попадает в ride_logs/ только по нажатию
 var status := Label.new()
 var diagnostics := Label.new()
+var diagnostics_scroll := ScrollContainer.new()
 var hud_panel := PanelContainer.new()
 var diagnostics_visible := false
 var status_time := 0.0
@@ -35,7 +36,7 @@ var editor := EditorPanel.new()
 var preset := 0
 var preset_panel := PanelContainer.new()
 var preset_label := Label.new()
-var preset_buttons: Array[Button] = []
+var preset_select := OptionButton.new()
 var lane := 0
 var element_index := 0
 var overview := false
@@ -56,11 +57,11 @@ var metrics := TrailLabMetrics.new()
 var _cam_from := Vector4() # x, feet, z, heading on the previous physics tick
 var _cam_to := Vector4()
 var _cam_feet := 0.0
-## 30.10: камера показывает торможение и поворот: при торможении подходит ближе, ниже и сужает обзор (нос «клюёт»),
-## при разгоне отходит; на скорости заглядывает внутрь поворота по рулю, как камера игры (LEAD_ANGLE)
+## Свободный угол обзора; расстояние и FOV мягко передают ускорение и торможение.
 var _cam_surge := 0.0
 var _cam_brake := 0.0
-var _cam_lead := 0.0
+var _cam_yaw := 0.0
+var _cam_pitch := -0.464
 var _cam_fov := -1.0
 var _sources: Array[TrailDefinition] = []
 ## Test ground of the current session (Fixture.GROUNDS): the lab's gentle slope, a window of world relief or a saved site.
@@ -115,30 +116,35 @@ func _ready() -> void:
 	camera.far = 800.0
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
-	hud_panel.position = Vector2(18, 18)
+	hud_panel.position = Vector2(12, 12)
 	hud_panel.theme_type_variation = "HudPanel"
 	canvas.add_child(hud_panel)
 	var hud_margin := MarginContainer.new()
-	for side in ["left", "top", "right", "bottom"]: hud_margin.add_theme_constant_override("margin_" + side, 10)
+	for side in ["left", "top", "right", "bottom"]: hud_margin.add_theme_constant_override("margin_" + side, 8)
 	hud_panel.add_child(hud_margin)
 	var hud_box := VBoxContainer.new()
-	hud_box.add_theme_constant_override("separation", 6)
+	hud_box.add_theme_constant_override("separation", 3)
 	hud_margin.add_child(hud_box)
 	telemetry.theme_type_variation = "AccentLabel"
 	telemetry.add_theme_font_size_override("font_size", 14)
-	telemetry.custom_minimum_size.x = 220
-	telemetry.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	speed_label.add_theme_font_size_override("font_size", 26)
+	telemetry.custom_minimum_size.x = 240
+	telemetry.clip_text = true
+	speed_label.add_theme_font_size_override("font_size", 21)
 	surface_label.theme_type_variation = "HintLabel"
 	stamina_label.theme_type_variation = "HintLabel"
 	stamina_label.add_theme_font_size_override("font_size", 12)
 	stamina_bar.show_percentage = false
 	stamina_bar.custom_minimum_size.y = 7
 	diagnostics.add_theme_font_size_override("font_size", 13)
+	diagnostics.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	diagnostics.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	diagnostics.visible = false
+	diagnostics_scroll.custom_minimum_size = Vector2(280, 220)
+	diagnostics_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	diagnostics_scroll.visible = false
 	hud_box.add_child(telemetry)
 	route_hint.theme_type_variation = "HintLabel"
-	route_hint.add_theme_font_size_override("font_size", 12)
+	route_hint.add_theme_font_size_override("font_size", 11)
 	hud_box.add_child(route_hint)
 	var ride_row := HBoxContainer.new()
 	hud_box.add_child(ride_row)
@@ -152,7 +158,7 @@ func _ready() -> void:
 	var hud_actions := HBoxContainer.new()
 	hud_box.add_child(hud_actions)
 	var settings_control := Button.new()
-	settings_control.text = "F2  Настройки"
+	settings_control.text = "F2  Трасса"
 	settings_control.add_theme_font_size_override("font_size", 12)
 	settings_control.tooltip_text = "Открыть настройки трассы"
 	settings_control.pressed.connect(func() -> void: set_editor_visible(not editor.visible))
@@ -160,17 +166,16 @@ func _ready() -> void:
 	camera_control.pressed.connect(func() -> void: set_overview(not overview))
 	camera_control.add_theme_font_size_override("font_size", 12)
 	hud_actions.add_child(camera_control)
-	var more_actions := HBoxContainer.new()
-	hud_box.add_child(more_actions)
-	details_control.text = "F3  Подробности"
+	details_control.text = "F3  Инфо"
 	details_control.add_theme_font_size_override("font_size", 12)
 	details_control.pressed.connect(func() -> void: set_diagnostics_visible(not diagnostics_visible))
-	more_actions.add_child(details_control)
+	hud_actions.add_child(details_control)
 	save_control.add_theme_font_size_override("font_size", 12)
 	save_control.focus_mode = Control.FOCUS_NONE # пробел (прыжок) не нажимает кнопку
 	save_control.pressed.connect(save_ride_log)
-	more_actions.add_child(save_control)
-	hud_box.add_child(diagnostics)
+	hud_box.add_child(save_control)
+	hud_box.add_child(diagnostics_scroll)
+	diagnostics_scroll.add_child(diagnostics)
 	status.position = Vector2(18, 110)
 	status.custom_minimum_size.x = 220
 	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -211,7 +216,7 @@ func _ready() -> void:
 	_place_editor()
 	rebuild(_copy_routes(routes))
 
-## Плитки готовых трасс: номер на плитке, название — в подсказке и над плитками
+## Компактный выбор трассы; PageUp/PageDown работают также во время заезда.
 func _build_presets(canvas: CanvasLayer) -> void:
 	preset_panel.theme_type_variation = "HudPanel"
 	preset_panel.resized.connect(_place_presets)
@@ -220,38 +225,44 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	for side in ["left", "top", "right", "bottom"]: margin.add_theme_constant_override("margin_" + side, 8)
 	preset_panel.add_child(margin)
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 6)
+	box.add_theme_constant_override("separation", 3)
 	margin.add_child(box)
 	preset_label.theme_type_variation = "HintLabel"
-	preset_label.add_theme_font_size_override("font_size", 13)
+	preset_label.add_theme_font_size_override("font_size", 12)
 	box.add_child(preset_label)
-	var tiles := HFlowContainer.new()
-	tiles.add_theme_constant_override("h_separation", 4)
-	tiles.add_theme_constant_override("v_separation", 4)
-	box.add_child(tiles)
-	var group := ButtonGroup.new()
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	box.add_child(row)
+	var previous := Button.new()
+	previous.text = "‹"
+	previous.tooltip_text = "Предыдущая трасса · PageUp"
+	previous.pressed.connect(func() -> void: select_preset(preset - 1))
+	row.add_child(previous)
+	preset_select.fit_to_longest_item = false
+	preset_select.clip_text = true
+	preset_select.custom_minimum_size.x = 220
+	preset_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	preset_select.add_theme_font_size_override("font_size", 12)
+	preset_select.tooltip_text = "Выбрать трассу · F2 или V для курсора"
 	for i in TrailLabCatalog.LIST.size():
-		var tile := Button.new()
-		tile.text = str(i + 1)
-		tile.toggle_mode = true
-		tile.button_group = group
-		tile.focus_mode = Control.FOCUS_NONE
-		tile.custom_minimum_size = Vector2(34, 30)
-		tile.add_theme_font_size_override("font_size", 13)
-		tile.tooltip_text = TrailLabCatalog.LIST[i].title
-		tile.pressed.connect(select_preset.bind(i))
-		tiles.add_child(tile)
-		preset_buttons.append(tile)
+		preset_select.add_item("%d · %s" % [i + 1, TrailLabCatalog.LIST[i].title], i)
+	preset_select.item_selected.connect(func(index: int) -> void: select_preset(index))
+	row.add_child(preset_select)
+	var next := Button.new()
+	next.text = "›"
+	next.tooltip_text = "Следующая трасса · PageDown"
+	next.pressed.connect(func() -> void: select_preset(preset + 1))
+	row.add_child(next)
 	_mark_preset()
 
-## Плитки прижаты к низу экрана: высота известна только после переноса плиток по ширине
 func _place_presets() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
-	preset_panel.position = Vector2(18, viewport_size.y - preset_panel.size.y - 18)
+	preset_panel.position = Vector2(12, maxf(12.0, viewport_size.y - preset_panel.size.y - 12))
 
 func _mark_preset() -> void:
-	for i in preset_buttons.size(): preset_buttons[i].set_pressed_no_signal(i == preset)
-	preset_label.text = "Трасса %d / %d · %s  ·  PgUp/PgDn" % [preset + 1, TrailLabCatalog.LIST.size(), TrailLabCatalog.LIST[preset].title]
+	preset_select.select(preset)
+	preset_label.text = "ТРАССА  %d / %d   ·   PgUp / PgDn" % [preset + 1, TrailLabCatalog.LIST.size()]
+	preset_select.tooltip_text = TrailLabCatalog.LIST[preset].title + "\nF2 или V — курсор"
 
 ## Построить готовую трассу номер index вместо текущей (тем же путём, что «Построить» в F2); при отказе остаётся прежняя
 func select_preset(index: int) -> bool:
@@ -269,7 +280,7 @@ func select_preset(index: int) -> bool:
 
 func _place_editor() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
-	preset_panel.size = Vector2(minf(viewport_size.x - 36.0, 800.0), 0)
+	preset_panel.size = Vector2(minf(viewport_size.x - 24.0, 320.0), 0)
 	_place_presets()
 	editor.size = Vector2(360, maxf(100.0, viewport_size.y - 36))
 	editor.position = Vector2(maxf(18.0, viewport_size.x - editor.size.x - 18), 18)
@@ -659,6 +670,9 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	_cam_from = _cam_to
 	_cam_feet = player.feet
+	_cam_yaw = bike.heading
+	_cam_pitch = -0.464
+	services.controls.reset()
 
 func launch_element() -> void:
 	if heights == null: return
@@ -668,7 +682,7 @@ func launch_element() -> void:
 		station = maxf(0.0, e.station - e.length * 0.5 - 12.0)
 	reset_ride(station, editor.numbers.speed.value / 3.6)
 	set_overview(false)
-	editor.hide()
+	set_editor_visible(false)
 	get_viewport().gui_release_focus()
 	show_message("Заезд с %.0f км/ч · R — старт трассы" % editor.numbers.speed.value)
 
@@ -679,6 +693,7 @@ func show_message(text: String) -> void:
 
 func set_overview(enabled: bool) -> void:
 	overview = enabled
+	_sync_mouse()
 	markers.visible = overview or diagnostics_visible
 	survey_markers.visible = overview or diagnostics_visible
 	editor.set_camera_overview(enabled)
@@ -689,14 +704,16 @@ func set_overview(enabled: bool) -> void:
 
 func set_editor_visible(enabled: bool) -> void:
 	editor.visible = enabled
+	_sync_mouse()
 	get_viewport().gui_release_focus()
 
 func set_diagnostics_visible(enabled: bool) -> void:
 	diagnostics_visible = enabled
+	diagnostics_scroll.visible = enabled
 	diagnostics.visible = enabled
 	markers.visible = overview or diagnostics_visible
 	survey_markers.visible = overview or diagnostics_visible
-	details_control.text = "F3  Скрыть" if enabled else "F3  Подробности"
+	details_control.text = "F3  Скрыть" if enabled else "F3  Инфо"
 	hud_panel.reset_size()
 	get_viewport().gui_release_focus()
 
@@ -759,17 +776,28 @@ func _contact_report() -> String:
 	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s  (F6)" % [bike.load_f, bike.tire_f, bike.use_f * 100,
 		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
+func _sync_mouse() -> void:
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if overview or editor.visible else Input.MOUSE_MODE_CAPTURED
+
 func _exit_tree() -> void:
 	recorder.close() # несохранённое остаётся только во временной папке user://ride_log_unsaved
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _input(event: InputEvent) -> void:
-	services.controls.note(event) # клавиатура или геймпад: от этого частичный руль с клавиш (Controls.bike_steer)
+	services.controls.note(event)
 	recorder.note_input(event)
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not overview and not editor.visible:
+		_orbit_camera(event.relative)
+
+func _orbit_camera(delta: Vector2) -> void:
+	var k := GameConfig.MOUSE * services.settings.mouse
+	_cam_yaw -= delta.x * k
+	_cam_pitch = clampf(_cam_pitch - delta.y * k * (-1.0 if services.settings.invert_y else 1.0), -1.2, 0.35)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
 		if editor.visible:
-			editor.hide()
+			set_editor_visible(false)
 			get_viewport().gui_release_focus()
 		else:
 			_request_exit()
@@ -802,7 +830,7 @@ func _forest_version() -> int:
 
 func _physics_process(dt: float) -> void:
 	if heights == null: return
-	var input_allowed := not editor.visible
+	var input_allowed := not editor.visible and not overview
 	var throttle := Input.get_axis("move_back", "move_forward") if input_allowed else 0.0
 	var turn := services.controls.bike_steer(Input.get_axis("move_left", "move_right") if input_allowed else 0.0, dt, bike.speed if bike != null else 0.0)
 	var jump := input_allowed and Input.is_action_just_pressed("jump")
@@ -824,7 +852,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:
 		# Q — тело назад (рывок разгружает переднее колесо), E — вперёд (заднее); отпустить — нейтраль
-		services.controls.read_bike_body(bike, not editor.visible)
+		services.controls.read_bike_body(bike, not editor.visible and not overview)
 		if body_back_forced:
 			bike.body_back = body_back
 			bike.body_forward = false
@@ -867,6 +895,8 @@ func _survey_report() -> String:
 
 func _process(dt: float) -> void:
 	if heights == null: return
+	if not overview and not editor.visible:
+		_orbit_camera(services.controls.look_delta(dt))
 	if status_time > 0.0:
 		status_time -= dt
 		if status_time <= 0.0: status.hide()
@@ -876,7 +906,6 @@ func _process(dt: float) -> void:
 	else: view.draw(alpha)
 	# Same interpolation as the bike model: the camera must not step at the physics rate.
 	var at := _cam_from.lerp(_cam_to, alpha)
-	var heading := lerp_angle(_cam_from.w, _cam_to.w, alpha)
 	# Terrain bumps move the feet by whole centimetres per tick; follow them softly.
 	_cam_feet = lerpf(_cam_feet, at.y, Util.damp(10.0, dt)) if absf(at.y - _cam_feet) < 3.0 else at.y
 	var target := Vector3(at.x, _cam_feet + 1.0, at.z)
@@ -892,24 +921,23 @@ func _process(dt: float) -> void:
 		_cam_brake = lerpf(_cam_brake, bike.brake_deceleration if riding else 0.0, Util.damp(6.0, dt))
 		var brake := clampf(_cam_brake / 7.0, 0.0, 1.0)
 		var push := clampf(_cam_surge / 4.0, 0.0, 1.0)
-		_cam_lead = lerpf(_cam_lead, -bike.steer * deg_to_rad(PlayerCameraController.LEAD_ANGLE) * smoothstep(3.0, 12.0, absf(bike.speed)) if riding else 0.0, Util.damp(4.0, dt))
-		var look := heading + _cam_lead
 		var back := 7.0 - 1.6 * brake + 0.8 * push
-		var ahead := Vector3(-sin(heading), 0.0, -cos(heading)) * 1.2 * brake
-		camera.position = target + Vector3(sin(look) * back, 3.5 - 0.6 * brake, cos(look) * back)
-		camera.look_at(target + ahead - Vector3(0.0, 0.35 * brake, 0.0))
+		var direction := Vector3(-sin(_cam_yaw) * cos(_cam_pitch), sin(_cam_pitch), -cos(_cam_yaw) * cos(_cam_pitch))
+		var cam := target - direction * back / cos(0.464)
+		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + 0.4)
+		camera.position = cam
+		camera.look_at(target)
 		if _cam_fov < 0.0: _cam_fov = camera.fov
 		camera.fov = _cam_fov - 6.0 * brake + 3.0 * push
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
-	route_hint.text = "Трасса %d / %d  ·  клавиши 1–%d\nSpace — прыжок" % [lane + 1, routes.size(), mini(routes.size(), 9)]
+	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп"
 	if bike.contact_model:
-		route_hint.text += "  ·  Q → E — баннихоп"
 		route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
 	else:
 		route_hint.tooltip_text = ""
-	speed_label.text = "%.0f\nкм/ч" % (absf(bike.speed) * 3.6)
+	speed_label.text = "%.0f км/ч  " % (absf(bike.speed) * 3.6)
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100

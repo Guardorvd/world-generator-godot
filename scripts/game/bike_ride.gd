@@ -179,6 +179,7 @@ const EFFORT_FALL := 0.1      # с (было 0,05)
 const AIR_DRAG := 0.0035      # 1/м
 const SPEED_LOSS := GameConfig.BIKE_DRAG - AIR_DRAG
 
+var pump_pressed := false  # удержание ЛКМ; без него нет сил или поглощения пампа
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
 var effort := 0.0           # усилие седока на педалях 0..1: от него тяга и поза (BikeView)
 var effort_ramp := true     # false — прежняя мгновенная тяга, для сравнительных прогонов
@@ -416,6 +417,7 @@ func reset_motion() -> void:
 	pump_load = 0.0
 	pump_accel = 0.0
 	pump_wave = 0.0
+	pump_pressed = false
 	pump_active = 0.0
 	pump_body = 0.0
 	_pump_reach = 0.0
@@ -611,6 +613,10 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 	pump_active = held * exp(-dt / PUMP_HOLD)
 	pump_body = 0.0
 	_pump_wait = maxf(0.0, _pump_wait - dt)
+	if not pump_pressed or not pump_enabled:
+		pump_active = 0.0
+		pump_motion = lerpf(pump_motion, 0.0, Util.damp(12.0, dt))
+		return
 	# 30.10: ручная работа телом больше не выключает памп — она и есть памп (ниже). Автоматика уступает ей место
 	# плавно; целиком памп снимают только прыжок, тормоз, занос и отрыв.
 	var blocked := hop or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_used or throttle < -0.05 or brake_pressure > 0.1 or absf(slip) > 0.12

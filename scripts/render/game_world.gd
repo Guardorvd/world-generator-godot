@@ -1201,7 +1201,9 @@ func _update_hints() -> void:
 	# внизу (видно с зажатым Tab) — главное для того, чем игрок занят
 	if bike.riding:
 		var hints := [[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]]
-		if not services.controls.joypad: hints.insert(2, [k.call("bike_back") + " → " + k.call("bike_forward"), "Баннихоп"])
+		if not services.controls.joypad:
+			hints.insert(2, [k.call("bike_back") + " → " + k.call("bike_forward"), "Баннихоп"])
+			hints.insert(3, [k.call("bike_pump"), "Памп (держать)"])
 		hud.set_hints(hints, near)
 		return
 	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"

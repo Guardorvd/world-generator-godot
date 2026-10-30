@@ -77,13 +77,6 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	# поворот, который сделал сам такт, доворачивается плавно; мышь уже учтена в yaw и pitch
 	var view_yaw := yaw - _tick_yaw * (1.0 - alpha)
 	var view_pitch := pitch - _tick_pitch * (1.0 - alpha)
-	# 12.7: на скорости камера заглядывает внутрь поворота, куда повёрнут руль; мышь её не трогает
-	var lead_goal := 0.0
-	if riding and not crash_active and not _opening:
-		lead_goal = (-bike.steer * deg_to_rad(LEAD_ANGLE) - bike.slip * LEAD_SLIP) * smoothstep(3.0, 12.0, bike.speed) * auto_follow(time)
-	_cam_lead = lerpf(_cam_lead, lead_goal, _smooth(LEAD_RESPONSE, dt))
-	if riding:
-		view_yaw += _cam_lead
 	var rush_goal := 0.0
 	if riding and not crash_active and not _opening:
 		rush_goal = smoothstep(7.0, 20.0, absf(bike.speed))
@@ -145,13 +138,9 @@ func shake_on_landing(impact: float, soft: float) -> void:
 	if impact > soft:
 		_trauma = minf(1.0, _trauma + (impact - soft) * TRAUMA_GAIN)
 
-func follow_bike(bike: BikeRide, heading_delta: float, time: float, dt: float) -> void:
-	yaw += heading_delta
-	var follow := auto_follow(time)
-	if absf(bike.speed) > 1.0 and follow > 0.0:
-		yaw = lerp_angle(yaw, bike.heading, 1.0 - exp(-dt * FOLLOW_RATE * follow))
-		var slope_pitch := 0.0 if bike.airborne else clampf(bike.tilt * FOLLOW_SLOPE, -FOLLOW_SLOPE_MAX, FOLLOW_SLOPE_MAX)
-		pitch = lerpf(pitch, FOLLOW_PITCH + slope_pitch, 1.0 - exp(-dt * FOLLOW_RATE * follow))
+## Угол обзора задаётся мышью; поворот велосипеда его не изменяет.
+func follow_bike(_bike: BikeRide, _heading_delta: float, _time: float, _dt: float) -> void:
+	pass
 
 static func _smooth(rate: float, dt: float) -> float:
 	return Util.damp(rate, dt)

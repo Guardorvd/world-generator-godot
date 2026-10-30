@@ -36,6 +36,7 @@ func bike(enabled := true, pace := 8.0, contact := true) -> BikeRide:
 	b.y = ground.surface_at(0.0, 0.0, -INF)
 	b.mount(PlayerState.new())
 	b.speed = pace
+	b.pump_pressed = true # сценарии механики при удержании ЛКМ
 	return b
 
 func ride(profile: Callable, enabled := true, pace := 8.0, seconds := 4.0, hz := 60, contact := true, action := "") -> Dictionary:

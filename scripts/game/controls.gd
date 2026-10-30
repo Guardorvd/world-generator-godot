@@ -64,6 +64,8 @@ func label(action: StringName) -> String:
 	for event in InputMap.action_get_events(action):
 		if joypad and event is InputEventJoypadButton:
 			return button(event.button_index)
+		if not joypad and event is InputEventMouseButton:
+			return {MOUSE_BUTTON_LEFT: "ЛКМ", MOUSE_BUTTON_RIGHT: "ПКМ"}.get(event.button_index, "Мышь")
 		if not joypad and event is InputEventKey:
 			var code: Key = event.physical_keycode if event.physical_keycode != KEY_NONE else event.keycode
 			return {KEY_SPACE: "Пробел", KEY_ESCAPE: "Esc"}.get(code, OS.get_keycode_string(code))
@@ -86,32 +88,42 @@ func look_delta(dt: float) -> Vector2:
 func reset() -> void:
 	joypad = false
 	device = 0
+	_key_steer = 0.0
+	_key_direction = 0.0
+	_key_hold = 0.0
 
 
-## 30.10: руль велосипеда с клавиатуры — частичная команда. Клавиша даёт сразу долю хода (TAP), а полный — только
-## если её держат RAMP секунд: короткое нажатие — подправить линию, удержание — дуга до предела сцепления.
-## Шагом и медленно (до 4 м/с) мягко, на скорости (от 12 м/с) быстро: там полный руль — уже предел шин, а не
-## резкий поворот. Стик геймпада и автопилот (не ±1/0) идут как есть. Возврат к середине — в BikeRide (STEER_CENTER).
-const KEY_STEER_TAP := Vector2(0.3, 0.5)    # медленно, быстро
-const KEY_STEER_RAMP := Vector2(0.55, 0.2)  # с от первого касания до полного хода
+## Плавная команда с клавиатуры: короткое нажатие правит линию, удержание усиливает дугу.
+## Смена направления проходит через нейтраль; отпускание быстрее набора, чтобы не мешать выходу.
+const KEY_STEER_TAP := 0.16
+const KEY_STEER_RAMP := 0.65
+const KEY_STEER_RESPONSE := 6.0
+const KEY_STEER_RELEASE := 9.0
 var _key_steer := 0.0
+var _key_direction := 0.0
+var _key_hold := 0.0
 
-func bike_steer(raw: float, dt: float, pace := 0.0) -> float:
+func bike_steer(raw: float, dt: float, _pace := 0.0) -> float:
 	var digital := is_zero_approx(raw) or is_equal_approx(absf(raw), 1.0)
 	if joypad or not digital:
 		_key_steer = raw
+		_key_direction = 0.0
+		_key_hold = 0.0
 		return raw
-	var fast := smoothstep(4.0, 12.0, absf(pace))
-	if is_zero_approx(raw):
-		_key_steer = 0.0
-	elif signf(raw) != signf(_key_steer) or is_zero_approx(_key_steer):
-		_key_steer = raw * lerpf(KEY_STEER_TAP.x, KEY_STEER_TAP.y, fast)
-	else:
-		_key_steer = move_toward(_key_steer, raw, dt / lerpf(KEY_STEER_RAMP.x, KEY_STEER_RAMP.y, fast))
+	if raw != _key_direction:
+		_key_hold = 0.0
+		_key_direction = raw
+	elif not is_zero_approx(raw):
+		_key_hold += dt
+	var strength := lerpf(KEY_STEER_TAP, 1.0, smoothstep(0.0, KEY_STEER_RAMP, _key_hold))
+	var target := raw * strength
+	var rate := KEY_STEER_RELEASE if is_zero_approx(raw) else KEY_STEER_RESPONSE
+	_key_steer = lerpf(_key_steer, target, Util.damp(rate, dt))
 	return _key_steer
 
 
 ## Один ввод тела в игре и лаборатории; заблокированное управление всегда снимает прошлое удержание.
 func read_bike_body(bike: BikeRide, enabled := true) -> void:
+	bike.pump_pressed = enabled and bike.riding and Input.is_action_pressed("bike_pump")
 	bike.body_back = enabled and bike.riding and Input.is_action_pressed("bike_back")
 	bike.body_forward = enabled and bike.riding and Input.is_action_pressed("bike_forward")
