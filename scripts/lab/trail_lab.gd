@@ -777,7 +777,8 @@ func _contact_report() -> String:
 		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
 func _sync_mouse() -> void:
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if overview or editor.visible else Input.MOUSE_MODE_CAPTURED
+	# 30.10: мышь всегда свободна — ею пользуются для интерфейса; камеру вращает ПКМ (держать) или правый стик
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func _exit_tree() -> void:
 	recorder.close() # несохранённое остаётся только во временной папке user://ride_log_unsaved
@@ -786,7 +787,7 @@ func _exit_tree() -> void:
 func _input(event: InputEvent) -> void:
 	services.controls.note(event)
 	recorder.note_input(event)
-	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not overview and not editor.visible:
+	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0 and not overview and not editor.visible:
 		_orbit_camera(event.relative)
 
 func _orbit_camera(delta: Vector2) -> void:
@@ -932,7 +933,7 @@ func _process(dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
-	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп"
+	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп  ·  ПКМ камера"
 	if bike.contact_model:
 		route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
 	else:
