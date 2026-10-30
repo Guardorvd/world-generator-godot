@@ -146,6 +146,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 			w.elev[i] = w.h[i]
 			w.filled[i] = w.h[i]
 			w.slope[i] = 0.035
+	if kind == "polygon": Polygon.forest(w, routes) # the polygon's forest up to the trail edges
 	var errors := TrailBuilder.append_routes(w, routes)
 	timings.setup_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if not errors.is_empty(): return {heights = null, errors = errors, timings = timings}

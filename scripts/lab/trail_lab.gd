@@ -70,6 +70,11 @@ var line_result: TrailRouter
 var pick_result: TrailPicker
 ## Elements on the found line (TrailFlow) of the last «Найти трассу» in the flow mode; null otherwise.
 var flow_result: TrailFlow
+## Лес вокруг трассы (главный полигон): тот же VegetationLayer, что в игре, над объектами мира лаборатории; null — леса нет.
+var vegetation: VegetationLayer
+## Автопилот (P — по кругу: выкл, осторожно, flow, на пределе): ведёт велосипед тем же вводом, что игрок.
+const Autopilot = preload("res://scripts/lab/trail_autopilot.gd")
+var autopilot: RefCounted
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -302,6 +307,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	for child in props.get_children(): child.free()
 	TrailLabProps.populate(props, technical.props)
 	terrain.mesh = mesh
+	_plant_forest()
 	lane = clampi(lane, 0, routes.size() - 1)
 	element_index = clampi(element_index, 0, maxi(0, routes[lane].elements.size() - 1))
 	for child in markers.get_children(): child.free()
@@ -320,6 +326,19 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	build_timings = timings
 	show_message("Готово за %.0f мс · правки действуют в текущем запуске" % timings.total_ms)
 	return true
+
+## Лес мира лаборатории (объекты StageVegetation, их кладёт Fixture.prepare для главного полигона) рисует свой
+## VegetationLayer; без объектов прежний слой убирается.
+func _plant_forest() -> void:
+	if vegetation != null:
+		vegetation.queue_free()
+		vegetation = null
+	if heights.world.obj_count == 0: return
+	vegetation = VegetationLayer.new()
+	vegetation.settings = services.settings
+	add_child(vegetation)
+	vegetation.setup(heights.world, heights, Models.tree_defs(), Models.grass_mesh())
+	vegetation.update(player.x, player.z, true)
 
 ## Line builder on the saved site: search over the natural ground, one full build of the chosen candidate
 ## (TrailRouter), then the usual transactional replacement with that build. A refusal or an unmet requirement
@@ -617,7 +636,9 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	bike.speed = speed
 	last_land_impact = 0.0
 	last_bottom_out = 0.0
-	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 1, true)
+	if vegetation != null: vegetation.update(player.x, player.z, true)
+	heights.obstacles.update(player.x, player.z, _forest_obstacles(), _forest_version(), true)
+	if autopilot != null: autopilot.reset(d, heights, station)
 	view.snap(bike)
 	metrics.reset(bike)
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
@@ -698,6 +719,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == KEY_PAGEUP: select_preset(preset - 1)
 	if key == KEY_PAGEDOWN: select_preset(preset + 1)
 	if key == KEY_G: launch_element()
+	if key == KEY_P: _cycle_autopilot()
 
 ## Колёса по отдельности: нагрузка (доли веса) и использованный запас сцепления
 func _contact_report() -> String:
@@ -719,6 +741,27 @@ func _unhandled_input(event: InputEvent) -> void:
 		controller.toggle_mount(player, bike, heights.world, heights)
 		view.snap(bike)
 
+## P: выкл → осторожно → flow → на пределе → выкл. Автопилот подхватывает с текущего места трассы.
+func _cycle_autopilot() -> void:
+	var next := 0 if autopilot == null else Autopilot.ORDER.find(autopilot.style) + 1
+	if next >= Autopilot.ORDER.size():
+		autopilot = null
+		show_message("Автопилот выключен · P — снова")
+		return
+	if autopilot == null:
+		autopilot = Autopilot.new()
+		var near := routes[lane].nearest(Vector2(bike.x, bike.z))
+		autopilot.reset(routes[lane], heights, near.x if is_finite(near.z) else 0.0)
+	autopilot.style = Autopilot.ORDER[next]
+	if not bike.riding and not crash.active(): controller.toggle_mount(player, bike, heights.world, heights)
+	show_message("Автопилот: %s · P — следующая манера, R — со старта" % autopilot.title())
+
+func _forest_obstacles() -> PackedFloat32Array:
+	return vegetation.obstacles if vegetation != null else PackedFloat32Array()
+
+func _forest_version() -> int:
+	return vegetation.obstacles_version if vegetation != null else 1
+
 func _physics_process(dt: float) -> void:
 	if heights == null: return
 	var input_allowed := not editor.visible
@@ -726,13 +769,19 @@ func _physics_process(dt: float) -> void:
 	var turn := Input.get_axis("move_left", "move_right") if input_allowed else 0.0
 	var jump := input_allowed and Input.is_action_just_pressed("jump")
 	var run := input_allowed and Input.is_action_pressed("run")
+	if autopilot != null and bike.riding and not crash.active():
+		var input: Dictionary = autopilot.drive(bike, routes[lane])
+		throttle = input.throttle
+		turn = input.turn
+		run = input.run
+		jump = input.jump
 	step_simulation(dt, throttle, turn, run, jump)
 
 ## Same controller/foot lifecycle as GameWorld; callable by the isolated scene regression.
 func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
 	var w := heights.world
 	_cam_from = _cam_to
-	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), 1)
+	heights.obstacles.update(player.x, player.z, _forest_obstacles(), _forest_version())
 	if crash.active():
 		controller.recover(dt, player, bike, crash, w, heights)
 	elif bike.riding:
@@ -779,6 +828,7 @@ func _process(dt: float) -> void:
 	if status_time > 0.0:
 		status_time -= dt
 		if status_time <= 0.0: status.hide()
+	if vegetation != null: vegetation.update(player.x, player.z, false)
 	var alpha := Engine.get_physics_interpolation_fraction()
 	if crash.active(): crash.draw()
 	else: view.draw(alpha)
@@ -810,7 +860,7 @@ func _process(dt: float) -> void:
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100
 	if diagnostics_visible:
-		diagnostics.text = "R старт  ·  G заезд  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие  ·  Q тело назад  ·  E вперёд\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
+		diagnostics.text = "R старт  ·  G заезд  ·  P автопилот  ·  %s посадка/сход\nW/S педали и тормоз  ·  A/D руль\nSpace прыжок  ·  Shift усилие  ·  Q тело назад  ·  E вперёд\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
 %s
 %s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, _contact_report(), metrics.report(routes[lane]) + "
 " + _shaping_report() + "
