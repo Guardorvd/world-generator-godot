@@ -56,6 +56,9 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	brace = lerpf(brace, pressure, 1.0 - exp(-dt / RIDER_RESPONSE))
 	_surge *= exp(-dt / SURGE_DECAY)
 	_surge = maxf(_surge, maxf(0.0, pressure - previous) / dt * 0.12 * smoothstep(8.0, 18.0, speed))
+	# Перенос нагрузки зависит от самого торможения: начинаем с прошлого подшага и сходимся за три итерации
+	# с усреднением (без него итерация по силе и нагрузке колеблется, а с одним задним колесом — заметно).
+	var guess := deceleration if grounded and command > 0.0 else 0.0
 	front_force = 0.0
 	rear_force = 0.0
 	deceleration = 0.0
@@ -69,12 +72,14 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	var per_load := available * sqrt(1.0 + grade * grade)
 	var shift := brace * GameConfig.BIKE_BRAKE_SHIFT - _surge * 0.18
 	var demand := GameConfig.BIKE_BRAKE * pressure
-	# Two bounded iterations resolve force/load coupling without an allocation or solver.
-	for i in 2:
-		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
+	for i in 3:
+		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (guess / normal_g - grade) - shift / WHEELBASE
 		var front_share := clampf(front_load, 0.65, 1.0)
 		var cap_f := per_load * loads.x if loads.x >= 0.0 else available * clampf(front_load, 0.0, 1.0)
-		var cap_r := per_load * loads.y if loads.y >= 0.0 else available * clampf(1.0 - front_load, 0.0, 1.0)
+		# Тормозной перенос разгружает заднее колесо сразу, даже если переднее ещё в воздухе: момент торможения
+		# опускает нос, а не держится поднятым. Иначе заднее тормозило бы под полным весом, и при возврате
+		# переднего тормоз проваливался, пока его шина набирает силу.
+		var cap_r := per_load * minf(loads.y, clampf(1.0 - front_load, 0.0, 1.0) / sqrt(1.0 + grade * grade)) if loads.y >= 0.0 else available * clampf(1.0 - front_load, 0.0, 1.0)
 		# Седок распределяет один тормоз: что не держит одно колесо (разгружено, скользит), берёт другое,
 		# но не до самого предела — остаётся резерв для курса.
 		var want_f := demand * front_share
@@ -87,6 +92,7 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		front_force += minf(want_r - rear_force, spare_f)
 		rear_force += moved_r
 		deceleration = minf(front_force + rear_force, maxf(speed, 0.0) / dt) if grounded and speed > 0.05 else 0.0
+		guess = (guess + deceleration) * 0.5
 	_match_forces()
 	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
 	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available

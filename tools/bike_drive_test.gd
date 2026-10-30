@@ -116,10 +116,11 @@ func run() -> void:
 			nose_up.lift_fv = 0.0
 		tick(nose_up, 0.0, false, 60, -1.0)
 		var total := nose_up.brake_force.x + nose_up.brake_force.y
-		if i == 25: check(nose_up.brake_force.x < 0.01 and nose_up.brake_force.y > 3.3, "T5 переднее поднято: перед %.2f, зад %.2f м/с² (было не больше 3,15)" % [nose_up.brake_force.x, nose_up.brake_force.y])
+		if i == 25: check(nose_up.brake_force.x < 0.01 and nose_up.brake_force.y > 3.0, "T5 переднее поднято: перед %.2f, зад %.2f м/с² (в пределах переноса нагрузки)" % [nose_up.brake_force.x, nose_up.brake_force.y])
 		if i == 29: before_return = total
 		if i >= 30: dip = minf(dip, total)
-	check(dip > before_return * 0.6 and not nose_up.crashed, "T5 возврат переднего колеса: тормоз %.2f → не ниже %.2f м/с²" % [before_return, dip])
+	var after_return := nose_up.brake_force.x + nose_up.brake_force.y
+	check(dip >= before_return - 0.05 and after_return > before_return + 2.0 and not nose_up.crashed, "T5 возврат переднего колеса: тормоз %.2f, не ниже %.2f, затем %.2f м/с² — без провала" % [before_return, dip, after_return])
 	for pace: float in [6.0, 12.0, 18.0]:
 		var full_stop := bike(pace)
 		var half_stop := bike(pace)
