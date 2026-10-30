@@ -921,7 +921,11 @@ func _step_contacts(grade: float, dt: float) -> void:
 		side_f = 0.0
 		side_r = 0.0
 		return
-	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g)
+	# Вираж прижимает: в повороте по наклонному полотну часть центростремительного ускорения давит в склон,
+	# a·sinθ (контруклон — наоборот, разгружает). Тяжесть вдоль склона учтена в _step_turn и _step_traction.
+	var bank := clampf(bank_slope * signf(_yaw_rate), -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
+	var press := absf(speed * _yaw_rate) / GameConfig.GRAVITY * bank / sqrt(1.0 + bank * bank)
+	var normal := maxf(0.0, 1.0 / sqrt(1.0 + grade * grade) + vertical_g + press)
 	var share := clampf(brakes.front_load, 0.0, 1.0)
 	var spring_f := (SPRING_K * (squash_f - _rest_f) + SPRING_DAMP * CONTACT_DAMP * squash_fv) / GameConfig.GRAVITY
 	var spring_r := (SPRING_K * (squash_r - _rest_r) + SPRING_DAMP * CONTACT_DAMP * squash_rv) / GameConfig.GRAVITY
