@@ -600,23 +600,82 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	# Упавший велосипед ждёт BikeController (ragdoll); новых импульсов и событий у него нет.
 	if dt <= 0.0 or crashed:
 		return
-	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
-	var slope := _slope(heights)
-	var contact := RideSurface.sample(w, heights, x, z)
-	var surf: int = contact.surface
-	var path_weight: float = contact.weight
-	var across: float = contact.across
-	var on_path := surf != RoadSurface.NONE
-	var terrain := maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
-	var rough := clampf(1.3 - terrain, 0.15, 1.0)
-	var grip := 0.85
-	if on_path:
-		grip = lerpf(grip, RoadSurface.LIST[surf].grip, path_weight)
-		rough = lerpf(rough, RoadSurface.LIST[surf].rough, path_weight)
-	# На корнях и камнях медленный проезд точный; быстрый требует более широкой дуги.
-	var technical := smoothstep(0.25, 0.8, rough) * smoothstep(6.0, 15.0, absf(speed))
-	grip *= 1.0 - technical * 0.2
+	# Порядок подшага и возраст данных (контракт; переставлять фазы нельзя — от него зависят задержки):
+	# 1. покрытие читается один раз в начале (Footing);
+	# 2. продольная сила: педали и тормоз берут нагрузки, скользкость и боковую силу шин с прошлого подшага;
+	# 3. курс и боковая сила: руль, доворот из заноса, снос — запас шин тоже с прошлого подшага;
+	# 4. перемещение со столкновениями; 5. вертикаль: опора, прыжок, полёт, свод;
+	# 6. колёса на опоре: кромки, кочки, скользкость — для следующего подшага;
+	# 7. подвеска и нагрузки колёс, тело седока и Q/E — для следующего подшага; 8. поза рамы для вида.
+	# Любое падение завершает подшаг сразу (_sync) и сохраняет первое событие.
+	var f := _read_footing(turn, w, heights)
 	var speed0 := speed
+	_step_longitudinal(f, throttle, turn, boost, hop, dt, heights)
+	if crashed:
+		_sync(p)
+		return
+	_read_surface(heights, dt)
+	var free_now := fits(x, z, heading, w, heights)
+	var lateral := _step_heading(f, free_now, turn, dt, w, heights)
+	if crashed:
+		_sync(p)
+		return
+	_step_move(free_now, dt, w, heights)
+	if crashed:
+		_sync(p)
+		return
+	_step_vertical(_contact(x, z, heights), hop, dt, heights)
+	# Непрерывный крутой склон раньше подменял падение покадровой привязкой к земле.
+	# Даже медленный съезд по почти отвесной стене теперь теряет равновесие и запускает ragdoll.
+	if not crashed and not airborne and absf(speed) > 0.25 and f.slope * signf(speed) < -CLIFF_GRADE:
+		_crash(vy, Vector3(sin(heading) * f.slope, 1.0, cos(heading) * f.slope).normalized())
+	if crashed:
+		_sync(p)
+		return
+	_step_wheels(heights, f.rough, dt, f.surf, f.path_weight, f.slope, f.across)
+	if crashed:
+		_sync(p)
+		return
+	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
+	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
+	_step_contacts(f.slope, dt)
+	_step_pose(throttle, lateral, dt)
+	_sync(p)
+
+
+## Покрытие под велосипедом на один подшаг: уклон по опорам колёс, путь, сцепление и неровность.
+class Footing:
+	var slope := 0.0
+	var surf := RoadSurface.NONE
+	var path_weight := 0.0
+	var across := 0.0
+	var terrain := 1.0
+	var rough := 0.0
+	var grip := 0.85
+	var technical := 0.0
+
+
+func _read_footing(turn: float, w: WorldData, heights: Heightfield) -> Footing:
+	var f := Footing.new()
+	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
+	f.slope = _slope(heights)
+	var contact := RideSurface.sample(w, heights, x, z)
+	f.surf = contact.surface
+	f.path_weight = contact.weight
+	f.across = contact.across
+	f.terrain = maxf(0.15, PlayerState.terrain_speed(w, x, z, heights))
+	f.rough = clampf(1.3 - f.terrain, 0.15, 1.0)
+	if f.surf != RoadSurface.NONE:
+		f.grip = lerpf(f.grip, RoadSurface.LIST[f.surf].grip, f.path_weight)
+		f.rough = lerpf(f.rough, RoadSurface.LIST[f.surf].rough, f.path_weight)
+	# На корнях и камнях медленный проезд точный; быстрый требует более широкой дуги.
+	f.technical = smoothstep(0.25, 0.8, f.rough) * smoothstep(6.0, 15.0, absf(speed))
+	f.grip *= 1.0 - f.technical * 0.2
+	return f
+
+
+## Продольное движение подшага: педали, тормоз и автопамп на земле, накат в воздухе. Может уронить (перелёт).
+func _step_longitudinal(f: Footing, throttle: float, turn: float, boost: bool, hop: bool, dt: float, heights: Heightfield) -> void:
 	# При постановке на склон велосипед уже движется вдоль опоры. vy=0 здесь создавал
 	# ложный отрыв на спуске ещё до Q, после чего подготовка баннихопа пропадала.
 	if _fresh and not airborne:
@@ -624,22 +683,23 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		vy = _ground_slope(heights) * speed
 	_step_pump(dt, throttle, turn, hop, heights)
 	if not airborne:
-		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
-		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
+		var terrain := f.terrain * lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
+		_step_speed(throttle, boost, f.slope, terrain, dt, f.grip, f.technical)
 		if brakes.tipped:
 			_crash(vy, Vector3.UP, CrashCause.BRAKING)
-			_sync(p)
-			return
 	else:
 		# В воздухе педали и тормоз не меняют скорость и не готовят задний ход.
 		_brake_hold = 0.0
-		brakes.step(dt, 0.0, speed, slope, grip, 0.0, false)
+		brakes.step(dt, 0.0, speed, f.slope, f.grip, 0.0, false)
 		braking = 0.0
 		speed *= exp(-COAST_DECAY * dt)
 		lateral_speed *= exp(-COAST_DECAY * dt)
 
-	_read_surface(heights, dt)
-	var free_now := fits(x, z, heading, w, heights)
+
+## Курс и боковая сила: руль и доворот из заноса в пределах габарита, затем перепроекция скорости и снос.
+## Возвращает боковое ускорение (для крена и подвески). Большой снос на скорости роняет набок.
+func _step_heading(f: Footing, free_now: bool, turn: float, dt: float, w: WorldData, heights: Heightfield) -> float:
+	var grip := f.grip
 	var h0 := heading
 	heading += _step_turn(turn, grip, dt, brake_deceleration / maxf(CORNER_GRIP * grip, 0.1))
 	# Вплотную к стене колесо не поворачивается в неё, накопленного рывка тоже нет.
@@ -656,10 +716,13 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 		if absf(slip) > SLIDE_CRASH and Vector2(speed, lateral_speed).length() > SLIDE_CRASH_SPEED:
 			var side := Vector2(cos(heading), -sin(heading)) * signf(lateral_speed)
 			_crash(vy, Vector3(-side.x, 0.4, -side.y), CrashCause.FALL)
-			_sync(p)
-			return
-	var lateral := _step_traction(h0, grip, dt)
+			return 0.0
+	return _step_traction(h0, grip, dt)
 
+
+## Перемещение подшага со столкновениями: скольжение вдоль стен и препятствий, потеря скорости, удар в лоб.
+## free_now — велосипед до шага помещался; иначе выехать можно, проверяется середина.
+func _step_move(free_now: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	var x0 := x
 	var z0 := z
 	var velocity := horizontal_velocity()
@@ -709,28 +772,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 			speed *= keep
 			lateral_speed *= keep
 	_dist += Grid.hypot(x - x0, z - z0)
-	# Падение завершает подшаг: первое событие сохраняет причину и скорость удара, а посадка,
-	# отложенный прыжок, колёса и подвеска после него уже не считаются.
-	if crashed:
-		_sync(p)
-		return
 
-	_step_vertical(_contact(x, z, heights), hop, dt, heights)
-	# Непрерывный крутой склон раньше подменял падение покадровой привязкой к земле.
-	# Даже медленный съезд по почти отвесной стене теперь теряет равновесие и запускает ragdoll.
-	if not crashed and not airborne and absf(speed) > 0.25 and slope * signf(speed) < -CLIFF_GRADE:
-		_crash(vy, Vector3(sin(heading) * slope, 1.0, cos(heading) * slope).normalized())
-	if crashed:
-		_sync(p)
-		return
-	_step_wheels(heights, rough, dt, surf, path_weight, slope, across)
-	if crashed:
-		_sync(p)
-		return
-	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
-	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, acceleration)
-	_step_contacts(slope, dt)
 
+## Поза рамы для вида: наклон по подвескам или траектории, крен от поворота, углы колёс и педалей.
+func _step_pose(throttle: float, lateral: float, dt: float) -> void:
 	# Рама лежит на концах подвесок: колёса на точках касания, рама — выше на свой ход у каждого.
 	# Разгон и торможение наклоняют её через подвеску (PITCH_LOAD), отдельного покачивания нет.
 	var tilt_goal := atan2((ground_f - squash_f) - (ground_r - squash_r), 2.0 * HUB) + unweight * PULL_PITCH
@@ -749,7 +794,6 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	# педали крутятся, только пока их жмут на земле: накатом и в полёте свободный ход
 	if throttle > 0.0 and speed > 0.3 and not airborne:
 		crank = fmod(crank + speed * dt / WHEEL_R / GEAR, TAU)
-	_sync(p)
 
 
 ## Игрока везёт велосипед: положение и опора — отсюда, в конце подшага или при падении.
