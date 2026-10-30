@@ -333,8 +333,31 @@ func mount(p: PlayerState) -> void:
 	p.feet = y
 
 
-## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение.
+## Обнулить движение, подвеску и отложенный ввод, не меняя местоположение: новая поездка, посадка, восстановление.
+## Сбрасывается всё временное состояние, от которого зависят следующие подшаги и телеметрия, — контакт колёс
+## (скользкость, силы, опоры), последнее событие падения, путь для фазы кочек. Накопительная статистика
+## замеров (impacts, hop_height) остаётся: её сбрасывает reset_stats(). Положение и визуальные углы колёс
+## и педалей (wheel, crank) тоже остаются.
 func reset_motion() -> void:
+	slick_f = 1.0
+	slick_r = 1.0
+	force_f = Vector2()
+	force_r = Vector2()
+	hit_dv = Vector2()
+	_sup_f = 0.0
+	_sup_r = 0.0
+	_g_f = 0.0
+	_g_r = 0.0
+	_gv_f = 0.0
+	_gv_r = 0.0
+	_o_f = 0.0
+	_o_r = 0.0
+	_hop_from = 0.0
+	_dist = 0.0
+	tilt = 0.0
+	crash_cause = CrashCause.FALL
+	crash_normal = Vector3.UP
+	crash_velocity = Vector3()
 	pump_motion = 0.0
 	pump_load = 0.0
 	pump_accel = 0.0
@@ -398,6 +421,12 @@ func reset_motion() -> void:
 	_rest_r = 0.0
 	_on_f = -1
 	_on_r = -1
+
+
+## Накопительная статистика замеров: встречи колёс с кромками и высота последнего банни-хопа.
+func reset_stats() -> void:
+	impacts = Vector2i()
+	hop_height = 0.0
 
 
 ## Слезть: велосипед остаётся на месте, игрок встаёт слева от него. В полёте слезть нельзя.
@@ -1390,10 +1419,12 @@ func _slide_keep(dt: float, moved: float, full: float) -> float:
 ## Приземление: подвеска проседает тем сильнее, чем жёстче удар; жёсткий удар гасит скорость,
 ## а слишком жёсткий (с высоты больше 5 м на ровное) сбрасывает седока
 func _land(g: float, heights: Heightfield) -> void:
-	# Центральная разность в мировых X/Z: боком к склону важна траектория, а не курс рамы.
-	var gradient := Vector2(
-		(heights.surface_at(x + HUB, z, g) - heights.surface_at(x - HUB, z, g)) / (2.0 * HUB),
-		(heights.surface_at(x, z + HUB, g) - heights.surface_at(x, z - HUB, g)) / (2.0 * HUB))
+	# Нормаль — от той же опоры, что и высота g: вдоль рамы по опорам колёс (бревно, камень, настил),
+	# поперёк по земле. Вектор в мировых X/Z: боком к склону важна траектория, а не курс рамы.
+	var forward := Vector2(-sin(heading), -cos(heading))
+	var right := Vector2(-forward.y, forward.x)
+	var gradient := forward * _slope(heights) + right * (heights.surface_at(x + right.x * HUB, z + right.y * HUB, g)
+		- heights.surface_at(x - right.x * HUB, z - right.y * HUB, g)) / (2.0 * HUB)
 	var normal := Vector3(-gradient.x, 1.0, -gradient.y).normalized()
 	var horizontal := horizontal_velocity()
 	var incoming := Vector3(horizontal.x, vy, horizontal.y)

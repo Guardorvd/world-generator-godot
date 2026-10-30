@@ -35,6 +35,21 @@ class RootBump extends ForestObstacles:
 	func wheel_contact(_x: float, _z: float, _wheel_r: float, _climb: float, _ground: float) -> Dictionary:
 		return {}
 
+## Бревно с плоским верхом 0,3 м поперёк пути на z = -1 (ширина 0,6 м), без корня.
+class LogTop extends RootBump:
+	func wheel_support(_x: float, pz: float, _wheel_r: float, _climb: float) -> float:
+		return 100.3 if absf(pz + 1.0) < 0.3 else -INF
+
+func root_ground() -> TestGround:
+	var rooty := TestGround.new(w)
+	rooty.obstacles = RootBump.new(w, rooty)
+	return rooty
+
+## Состояние, от которого зависят следующие подшаги и телеметрия
+func snapshot(b: BikeRide) -> Array:
+	return [b.x, b.z, b.y, b.vy, b.heading, b.speed, b.lateral_speed, b.slick_f, b.slick_r, b.force_f, b.force_r,
+		b.load_f, b.load_r, b.tire_f, b.tire_r, b.squash_f, b.squash_r, b.tilt, b.lean, b.hit_dv, b.crash_cause, b.crash_velocity]
+
 ## Проезд накатом 6 м/с через корень с колёсами, удерживаемыми на высоте lift (-1 — корня нет).
 func over_root(lift: float) -> Dictionary:
 	var rooty := TestGround.new(w)
@@ -85,11 +100,39 @@ func run() -> void:
 	for i in 12:
 		corner.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, ground)
 	check(corner.heading > 0.05 and corner.fits(corner.x, corner.z, corner.heading, w, ground), "A1 угол: доворот в открытую сторону %.3f" % corner.heading)
-	var reused := bike()
-	reused.slick_r = BikeRide.ROOT_GRIP
-	reused.force_r = Vector2(2.0, 3.0)
-	reused.reset_motion()
-	print("AUDIT reset: slick_r=%.3f force_r=%s" % [reused.slick_r, reused.force_r])
+	# A4: велосипед после езды по корням с тормозом в дуге и свежий на одном старте едут одинаково
+	var rooty := root_ground()
+	var used := bike(9.0)
+	for i in 90:
+		used.step(p, -0.6, 0.8, false, false, 1.0 / 120.0, w, rooty)
+	var used_slick := used.slick_f < 1.0 or used.slick_r < 1.0 or used.force_f != Vector2()
+	var fresh := bike(0.0)
+	var runs: Array = []
+	for b: BikeRide in [fresh, used]:
+		b.x = 0.0
+		b.z = 0.0
+		b.y = 100.0
+		b.heading = 0.0
+		b.mount(p)
+		b.speed = 8.0
+		for i in 60:
+			b.step(p, 0.5, 0.3, false, false, 1.0 / 120.0, w, rooty)
+			if i == 0: runs.append(snapshot(b))
+		runs.append(snapshot(b))
+	check(used_slick and runs[0] == runs[2] and runs[1] == runs[3], "A4 сброс: первый подшаг и 0,5 с после посадки совпадают у свежего и ездившего")
+	# B3: посадка передним колесом на бревно — вертикальная скорость после посадки по уклону той же опоры
+	var logged := TestGround.new(w)
+	logged.obstacles = LogTop.new(w, logged)
+	var lander := bike(5.0)
+	lander.z = -1.0 + BikeRide.HUB
+	var g := lander._contact(lander.x, lander.z, logged)
+	lander.airborne = true
+	lander.y = g
+	lander.vy = -3.0
+	lander._land(g, logged)
+	var along := lander._slope(logged)
+	check(along > 0.2 and absf(lander.vy - along * lander.speed) < 0.001 and not lander.crashed,
+		"B3 посадка на кромку бревна: уклон опоры %.3f, vy после %.3f" % [along, lander.vy])
 	# A3: педали тянут только через заднее колесо на земле
 	var grounded := bike(6.0)
 	var rear_up := bike(6.0)
