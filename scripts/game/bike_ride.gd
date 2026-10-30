@@ -270,7 +270,8 @@ var crash_normal := Vector3.UP # наружу от препятствия или
 var crash_velocity := Vector3() # скорость велосипеда перед падением, м/с (для ragdoll)
 var vertical_g := 0.0  # нагрузка профиля земли вдоль пути в g: впадина сжимает (+), гребень разгружает (−)
 var bank_slope := 0.0  # наклон полотна поперёк: рост высоты на метр вправо от курса, сглаженный
-var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры)
+var land_impact := 0.0 # сила последнего приземления, м/с (для тряски камеры); только приземления
+var wheel_impact := Vector2() # удар переднего и заднего колеса о кромку за такт, м/с скорости колеса (GameWorld сбрасывает)
 var bottom_out := 0.0  # 12.7: скорость удара вилки в упор, м/с (для звука; GameWorld сбрасывает)
 var braking := 0.0     # 12.7: резкое торможение на скорости 0..1 (для хруста покрытия)
 var fallen := false # рама остаётся в физической позе до ручной посадки
@@ -427,6 +428,7 @@ func reset_motion() -> void:
 	airborne = false
 	crashed = false
 	land_impact = 0.0
+	wheel_impact = Vector2()
 	bottom_out = 0.0
 	body_back = false
 	body_forward = false
@@ -1248,9 +1250,11 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	var kick := dv.length() / share * 0.3
 	if front: hit_dv.x = dv.length()
 	else: hit_dv.y = dv.length()
+	# событие удара колеса — отдельно от приземления и пробоя: у переднего и заднего своя реакция
+	if front: wheel_impact.x = maxf(wheel_impact.x, dv.length() / share)
+	else: wheel_impact.y = maxf(wheel_impact.y, dv.length() / share)
 	if front:
 		squash_fv += kick
-		land_impact = maxf(land_impact, dv.length() / share)
 	else:
 		squash_rv += kick
 	return hit.id

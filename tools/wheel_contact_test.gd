@@ -312,7 +312,9 @@ func run() -> void:
 	print("Контруклон: снос от оси %.2f м (прежняя) / %.2f м (два контакта) / %.2f м с тормозом; заднее колесо до %.0f%% / %.0f%%; поперечный уклон до %.0f%%" % [
 		old_coast.offset, new_coast.offset, new_brake.offset, new_coast.peak_use_r * 100.0, new_brake.peak_use_r * 100.0, new_coast.bank * 100.0])
 	check(new_coast.offset > old_coast.offset + 0.05, "контруклон сносит вниз в модели двух контактов")
-	check(new_brake.offset > new_coast.offset + 0.3, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
+	# Полный тормоз останавливает велосипед в зоне; до 30.10 удержание у остановки включало задний ход, и откат
+	# назад давал «снос» 3 м. Теперь стоянка, поэтому проверяется сам расход запаса заднего колеса и снос не меньше.
+	check(new_brake.peak_use_r > new_coast.peak_use_r + 0.2 and new_brake.offset >= new_coast.offset, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
 	check(not new_coast.crashed and not new_brake.crashed, "контруклон проезжается без падения")
 	# 3. Корни: удар прижимает переднее колесо, отскок его разгружает.
 	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))

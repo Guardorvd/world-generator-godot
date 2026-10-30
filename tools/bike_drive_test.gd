@@ -3,6 +3,13 @@ extends "res://tools/bike_audit_test.gd"
 ## замеры для сравнения ощущений. Затем инварианты аудита и прежний набор управляемости.
 ## -- --measure: печатать таблицы замеров (разгон, накат, тормоз) без проверок.
 
+## Бревно с кромкой поперёк пути на z от -1,3 до -1,0: колесо встречает его ударом
+class EdgeLog extends RootBump:
+	func wheel_support(_x: float, pz: float, _wheel_r: float, _climb: float) -> float:
+		return 100.15 if pz > -1.3 and pz < -1.0 else -INF
+	func wheel_contact(_x: float, pz: float, _wheel_r: float, _climb: float, _ground: float) -> Dictionary:
+		return {id = 1, angle = 0.6, normal = Vector2(0, 1)} if pz > -1.3 and pz < -1.0 else {}
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
 	run.call_deferred()
@@ -173,6 +180,27 @@ func run() -> void:
 	var confident := bike(8.0)
 	for i in 20: tick(confident, 0.0, false, 60, -0.6)
 	check(confident.brakes.skid < 0.05 and confident.braking > 0.2, "T7 звук: тормоз %.2f при насыщении %.2f" % [confident.braking, confident.brakes.skid])
+	# Удары — раздельные события: колесо о кромку не выдаёт себя за приземление, приземление — за удар колеса
+	var edged := TestGround.new(w)
+	var root := EdgeLog.new(w, edged)
+	root.height = 0.0
+	edged.obstacles = root
+	var striker := bike(5.0)
+	var wheel_hits := Vector2()
+	var landed := 0.0
+	for i in 60:
+		striker.step(p, 0.0, 0.0, false, false, 1.0 / 60.0, w, edged)
+		wheel_hits = Vector2(maxf(wheel_hits.x, striker.wheel_impact.x), maxf(wheel_hits.y, striker.wheel_impact.y))
+		landed = maxf(landed, striker.land_impact)
+		striker.wheel_impact = Vector2()
+		striker.land_impact = 0.0
+	var dropped := bike(5.0)
+	dropped.airborne = true
+	dropped.y = 101.0
+	dropped.vy = -4.0
+	for i in 30: tick(dropped, 0.0, false, 60)
+	check(wheel_hits.x > 0.5 and wheel_hits.y > 0.5 and landed == 0.0 and dropped.land_impact > 0.0 and dropped.wheel_impact == Vector2(),
+		"удары раздельно: кромка перед %.2f, зад %.2f м/с, приземлений %.2f; посадка %.2f без удара колеса" % [wheel_hits.x, wheel_hits.y, landed, dropped.land_impact])
 	# T1: силы объясняют изменение скорости — педали, накат, тормоз на ровном и на спуске
 	for case: Array in [[1.0, 0.0, 5.0], [0.0, 0.0, 8.0], [-1.0, 0.0, 8.0], [-0.5, 0.1, 6.0], [1.0, -0.12, 3.0]]:
 		ground.gradient = Vector2(0, case[1])

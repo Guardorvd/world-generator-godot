@@ -812,6 +812,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 	if bike.bottom_out > 0.0: last_bottom_out = bike.bottom_out
 	# These are one-tick events. Leaving them latched repeats the rider's landing animation.
 	bike.land_impact = 0.0
+	bike.wheel_impact = Vector2()
 	bike.bottom_out = 0.0
 
 func _shaping_report() -> String:

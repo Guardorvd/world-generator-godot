@@ -51,8 +51,10 @@ func ride(h: Heightfield, contact: bool, speed: float, throttle: float) -> Dicti
 		# держать скорость подъезда до препятствия, дальше — заданный ввод
 		var t := throttle if b.z < AT + 3.0 else clampf((speed - b.speed) * 0.8, 0.0, 1.0)
 		control.ride(dt, p, b, h.world, h, t, 0.0, false, false, false)
-		impact = maxf(impact, b.land_impact)
+		# удар колеса о кромку — отдельное событие (wheel_impact), приземление после подскока — land_impact
+		impact = maxf(impact, maxf(b.land_impact, maxf(b.wheel_impact.x, b.wheel_impact.y)))
 		b.land_impact = 0.0
+		b.wheel_impact = Vector2()
 		if b.crashed:
 			return {result = "падение (%s)" % BikeRide.CrashCause.keys()[b.crash_cause], before = before, after = b.speed, impact = impact}
 		if b.z < AT - 2.0:

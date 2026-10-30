@@ -940,20 +940,7 @@ func _physics_process(dt: float) -> void:
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
 		camera_controller.follow_bike(bike, bike.heading - h0, time, dt)
-		_shake_on_landing(bike.land_impact, 6.0)
-		if bike.land_impact > 0.0:
-			if services.settings.head_bob:
-				_dip_v -= clampf(bike.land_impact - 2.5, 0.0, 8.0) * 0.12
-			audio.land(bike.x, bike.z, bike.y, bike.land_impact)
-			services.controls.rumble(clampf(bike.land_impact / 10.0, 0.0, 0.6), clampf((bike.land_impact - 4.0) / 8.0, 0.0, 1.0), 0.15)
-		elif bike.bottom_out > 0.0:
-			audio.bottom_out(bike.bottom_out)
-			# 14.1: пробой вилки — удар рамы: камера проседает и вздрагивает, геймпад отдаёт тяжёлым мотором
-			var hit := clampf(bike.bottom_out - BikeRide.BOTTOM_OUT, 0.0, 3.0)
-			if services.settings.head_bob:
-				_dip_v -= 0.4 + hit * 0.35
-			_trauma = minf(1.0, _trauma + 0.12 + hit * 0.08)
-			services.controls.rumble(0.3, 0.45 + hit * 0.15, 0.1)
+		_bike_impacts()
 		crashed = bike.crashed
 		if crashed:
 			_crash()
@@ -977,6 +964,7 @@ func _physics_process(dt: float) -> void:
 	if not crash.active():
 		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.can_boost(Input.is_action_pressed("run"), fw))
 	bike.land_impact = 0.0
+	bike.wheel_impact = Vector2()
 	bike.bottom_out = 0.0
 	audio.tick(player, bike.riding)
 	if crashed:
@@ -1396,3 +1384,44 @@ func _update_camera(alpha: float, dt: float) -> void:
 ## просит больше, чем держат колёса) и снос — как юз. Нажатая кнопка сама по себе блокировку не изображает.
 func _bike_skid_sound() -> float:
 	return maxf(bike.braking * (0.3 + 0.7 * bike.brakes.skid), smoothstep(0.04, 0.18, absf(bike.slip)) * 0.65)
+
+
+## Удары велосипеда за такт — три отдельных события, ни одно не подавляет другое:
+## приземление (вся рама, тряска и проседание камеры), удар колеса о кромку (короткий стук; переднее отдаёт в руль —
+## лёгкий мотор геймпада, заднее в раму — тяжёлый) и пробой подвески (удар в упор). Проседание камеры — по самому
+## сильному из них, а не сумма: одно падение рамы не считается трижды.
+func _bike_impacts() -> void:
+	var land := bike.land_impact
+	var wheel := bike.wheel_impact
+	var dip := 0.0
+	var trauma := 0.0
+	var weak := 0.0
+	var strong := 0.0
+	_shake_on_landing(land, 6.0)
+	if land > 0.0:
+		dip = clampf(land - 2.5, 0.0, 8.0) * 0.12
+		audio.land(bike.x, bike.z, bike.y, land)
+		weak = clampf(land / 10.0, 0.0, 0.6)
+		strong = clampf((land - 4.0) / 8.0, 0.0, 1.0)
+	var knock := maxf(wheel.x, wheel.y)
+	if knock > 0.0:
+		var hit := clampf(knock / 6.0, 0.0, 1.0)
+		dip = maxf(dip, 0.15 + hit * 0.35)
+		trauma += 0.04 + hit * 0.1
+		if land <= 0.0:
+			audio.land(bike.x, bike.z, bike.y, minf(knock, 6.0))
+		weak = maxf(weak, (0.25 + hit * 0.35) if wheel.x >= wheel.y else 0.1)
+		strong = maxf(strong, (0.2 + hit * 0.4) if wheel.y > wheel.x else 0.1)
+	if bike.bottom_out > 0.0:
+		audio.bottom_out(bike.bottom_out)
+		# 14.1: пробой вилки — удар рамы: камера проседает и вздрагивает, геймпад отдаёт тяжёлым мотором
+		var hit := clampf(bike.bottom_out - BikeRide.BOTTOM_OUT, 0.0, 3.0)
+		dip = maxf(dip, 0.4 + hit * 0.35)
+		trauma += 0.12 + hit * 0.08
+		weak = maxf(weak, 0.3)
+		strong = maxf(strong, 0.45 + hit * 0.15)
+	if services.settings.head_bob:
+		_dip_v -= dip
+	_trauma = minf(1.0, _trauma + trauma)
+	if weak > 0.0 or strong > 0.0:
+		services.controls.rumble(weak, strong, 0.15 if land > 0.0 else 0.1)
