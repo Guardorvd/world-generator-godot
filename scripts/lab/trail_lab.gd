@@ -777,8 +777,11 @@ func _contact_report() -> String:
 		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
 func _sync_mouse() -> void:
-	# 30.10: мышь всегда свободна — ею пользуются для интерфейса; камеру вращает ПКМ (держать) или правый стик
-	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	# 30.10: движение мыши вращает камеру; зажатый Alt (и панель F2, вид сверху) отпускает курсор для интерфейса,
+	# камера при этом стоит. Проверяется каждый кадр (_process).
+	var free := overview or editor.visible or Input.is_key_pressed(KEY_ALT)
+	var want := Input.MOUSE_MODE_VISIBLE if free else Input.MOUSE_MODE_CAPTURED
+	if Input.mouse_mode != want: Input.mouse_mode = want
 
 func _exit_tree() -> void:
 	recorder.close() # несохранённое остаётся только во временной папке user://ride_log_unsaved
@@ -787,7 +790,7 @@ func _exit_tree() -> void:
 func _input(event: InputEvent) -> void:
 	services.controls.note(event)
 	recorder.note_input(event)
-	if event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_RIGHT) != 0 and not overview and not editor.visible:
+	if event is InputEventMouseMotion and Input.mouse_mode == Input.MOUSE_MODE_CAPTURED and not overview and not editor.visible:
 		_orbit_camera(event.relative)
 
 func _orbit_camera(delta: Vector2) -> void:
@@ -896,6 +899,7 @@ func _survey_report() -> String:
 
 func _process(dt: float) -> void:
 	if heights == null: return
+	_sync_mouse()
 	if not overview and not editor.visible:
 		_orbit_camera(services.controls.look_delta(dt))
 	if status_time > 0.0:
@@ -933,7 +937,7 @@ func _process(dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
-	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп  ·  ПКМ камера"
+	route_hint.text = "Space прыжок  ·  ЛКМ памп  ·  Q→E хоп  ·  Alt курсор"
 	if bike.contact_model:
 		route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
 	else:

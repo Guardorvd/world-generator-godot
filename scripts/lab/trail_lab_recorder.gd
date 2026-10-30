@@ -87,6 +87,7 @@ func begin(lab, reason: String) -> void:
 	if not _session: _start_session()
 	_ride += 1
 	_ride_t = 0.0
+	_last_wall = 0 # пересборка трассы перед поездкой — не долгий кадр езды
 	_stuck = 0.0
 	_stuck_reported = false
 	_prev = {}
@@ -146,6 +147,10 @@ func note_input(event: InputEvent) -> void:
 func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
 	if not enabled or lab.bike == null: return
 	if not _session: begin(lab, "сессия началась без R")
+	# номер трассы известен только после пересборки: уточняем в первом такте поездки
+	if _ride_t == 0.0 and not _rides.is_empty():
+		_rides[-1].preset = lab.preset + 1
+		_rides[-1].route = lab.routes[lab.lane].title
 	var bike: BikeRide = lab.bike
 	var now := Time.get_ticks_usec()
 	var wall_ms := (now - _last_wall) / 1000.0 if _last_wall > 0 else dt * 1000.0
@@ -228,7 +233,8 @@ func _track(lab, bike: BikeRide, route: TrailDefinition, near: Vector3, on_route
 	_stats.peak_slip = maxf(_stats.peak_slip, absf(bike.slip))
 	_stats.peak_grip = maxf(_stats.peak_grip, bike.grip_usage)
 	_stats.peak_decel = maxf(_stats.peak_decel, bike.brake_deceleration)
-	if _ticks > 30: _stats.min_fps = mini(_stats.min_fps, int(Engine.get_frames_per_second()))
+	# первые 2 с поездки FPS ещё помнит пересборку трассы (R, смена трассы)
+	if _ride_t > 2.0: _stats.min_fps = mini(_stats.min_fps, int(Engine.get_frames_per_second()))
 	var dt := 1.0 / 60.0
 	if bike.airborne: _stats.air += dt
 	if raw.fwd > 0.1: _stats.fwd += dt
