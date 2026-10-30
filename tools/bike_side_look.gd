@@ -5,7 +5,6 @@ extends "res://tools/bike_drive_test.gd"
 ##   godot --path . --script res://tools/bike_side_look.gd -- [--out <папка>]
 
 const HZ := 60
-const MOMENTS := ["старт 0,1 с", "педали", "накат", "удар передним", "удар задним", "Q: нос вверх", "прыжок", "посадка", "тормоз 0,3 с"]
 
 var out := ""
 var view: Node3D
@@ -89,11 +88,13 @@ func look() -> void:
 	var hit_r := false
 	var hop_at := -1
 	var nose := false
+	var pushed := false
 	var flew := false
 	var landed := false
 	var brake_at := -1
 	var pending := -1 # снимок через 5 тактов после события: седок успевает ответить
 	var poses: Array[String] = []
+	var pending_label := ""
 	for tick_i in HZ * 9:
 		var t := float(tick_i) / HZ
 		var throttle := 1.0 if t < 1.6 else 0.0
@@ -106,32 +107,37 @@ func look() -> void:
 		b.step(p, throttle, 0.0, false, false, 1.0 / HZ, w, edged)
 		view.tick(b, 1.0 / HZ, throttle, false)
 		view.draw(1.0)
-		var shot := tick_i == 6 or tick_i == 70 or tick_i == 120
-		var event := false
+		var label := "старт 0,1 с" if tick_i == 6 else ("педали" if tick_i == 70 else "")
+		var event := ""
 		if b.wheel_impact.x > 0.0 and not hit_f:
 			hit_f = true
-			event = true
+			event = "удар передним"
 		elif b.wheel_impact.y > 0.0 and not hit_r:
 			hit_r = true
-			event = true
+			event = "удар задним"
 		if hop_at >= 0 and not nose and b.lift_f > 0.1:
 			nose = true
-			shot = true
-		if b.airborne and not flew and b.vy < 0.3 and b.vy > -0.3:
+			label = "Q: нос вверх"
+		if nose and not pushed and b.body_x < -0.2:
+			pushed = true
+			label = "E: тело вперёд"
+		if b.airborne and not flew and b.vy < 0.3:
 			flew = true
-			shot = true
-		if flew and not landed and b.land_impact > 0.0:
+			label = "прыжок: вершина"
+		if flew and not landed and not b.airborne:
 			landed = true
-			event = true
+			event = "посадка"
 		if brake_at >= 0 and tick_i - brake_at == 18:
-			shot = true
+			label = "тормоз 0,3 с"
 		b.land_impact = 0.0
 		b.wheel_impact = Vector2()
 		b.bottom_out = 0.0
-		if event: pending = tick_i + 5
-		if tick_i == pending: shot = true
-		if shot and frames.size() < MOMENTS.size():
-			poses.append("%s: сдвиг %.3f, присед %.3f, руль %.2f" % [MOMENTS[frames.size()], view._cur[BikeView.S_SHIFT], view._cur[BikeView.S_CROUCH], view._cur[BikeView.S_STEER]])
+		if event != "":
+			pending = tick_i + 5
+			pending_label = event
+		if tick_i == pending: label = pending_label
+		if label != "" and frames.size() < 9:
+			poses.append("%s: сдвиг %.3f, присед %.3f, руль %.2f" % [label, view._cur[BikeView.S_SHIFT], view._cur[BikeView.S_CROUCH], view._cur[BikeView.S_STEER]])
 			await _frame(b)
 		else:
 			await process_frame
@@ -141,5 +147,5 @@ func look() -> void:
 		sheet.blit_rect(frames[i], Rect2i(0, 0, 480, 270), Vector2i((i % 3) * 480, (i / 3) * 270))
 	sheet.save_png(out.path_join("side_sheet.png"))
 	for line in poses: print("  ", line)
-	print("bike_side_look: %d снимков из %d (%s) → %s; упал %s" % [frames.size(), MOMENTS.size(), ", ".join(MOMENTS.slice(0, frames.size())), out, b.crashed])
+	print("bike_side_look: %d снимков → %s; упал %s" % [frames.size(), out, b.crashed])
 	quit(0)

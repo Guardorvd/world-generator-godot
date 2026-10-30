@@ -272,7 +272,10 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 			_recoil = 1.0 if sin((b.x + b.z) * 3.1) >= 0.0 else -1.0
 		_hit_f = maxf(_hit_f, clampf(b.wheel_impact.x / 1.5, 0.0, 1.0))
 		_hit_r = maxf(_hit_r, clampf(b.wheel_impact.y / 1.5, 0.0, 1.0))
-	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift + _hit_f * 0.035 - _hit_r * 0.015, -0.09, 0.13)
+	# Q/E — то же положение тела, что в физике (body_x: + назад): назад — таз к заднему колесу, руки выпрямлены и тянут
+	# руль; вперёд — плечи над рулём, ноги подтягивают раму. Без своего сглаживания: окно рывка — доли секунды.
+	var body := clampf(b.body_x, -1.0, 1.0) if continuous else 0.0
+	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift + _hit_f * 0.035 - _hit_r * 0.015 + body * 0.1, -0.1, 0.14)
 	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
 	_takeoff *= exp(-dt * 12.0)
 	if continuous and b.airborne and not _was_airborne and b.vy > 0.0:
@@ -290,7 +293,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	# 12.3: тяжёлое нажатие (подъём, рывок) прижимает плечи к рулю
 	var crouch := rough + (AIR_CROUCH + _takeoff * 0.025 if b.airborne else 0.0) + _landing * LAND_CROUCH + braking * 0.04 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
 	crouch += b.pump_motion * 0.065 if not b.airborne else 0.0
-	crouch += _hit_f * 0.045 + _hit_r * 0.035
+	crouch += _hit_f * 0.045 + _hit_r * 0.035 + maxf(body, 0.0) * 0.04
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.27
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * effort * (0.055 + up * 0.06)
@@ -306,7 +309,8 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	_cur[S_SWAY] = lerpf(_prev[S_SWAY], sway, blend) if continuous else sway
 	_cur[S_BREATH] = breath
 	_cur[S_BODY_LOOK] = lerpf(_prev[S_BODY_LOOK], look, Util.damp(5.0, dt)) if continuous else look
-	_cur[S_STAND] = _stand
+	# назад — таз ниже седла сзади («атака»), вперёд — привстал над рамой
+	_cur[S_STAND] = clampf(_stand - body * 0.55, -1.0, 1.0)
 	var head_nod := clampf(-_landing * 0.065 + _takeoff * 0.035 + sin(b.crank * 2.0) * effort * 0.012, -0.08, 0.06)
 	_cur[S_HEAD_NOD] = lerpf(_prev[S_HEAD_NOD], head_nod, Util.damp(7.0, dt)) if continuous else 0.0
 	# Только сумка имеет небольшое запаздывание относительно груди, а не весь скелет.
