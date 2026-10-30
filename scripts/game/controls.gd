@@ -88,6 +88,27 @@ func reset() -> void:
 	device = 0
 
 
+## 30.10: руль велосипеда с клавиатуры — частичная команда. Клавиша даёт сразу KEY_STEER_TAP хода, а полный — только
+## если её держат KEY_STEER_RAMP секунд: короткое нажатие — подправить линию, удержание — дуга до предела сцепления.
+## Стик геймпада и автопилот (не ±1/0) идут как есть. Возврат руля к середине — в BikeRide (STEER_CENTER).
+const KEY_STEER_TAP := 0.35
+const KEY_STEER_RAMP := 0.45 # с от первого касания до полного хода
+var _key_steer := 0.0
+
+func bike_steer(raw: float, dt: float) -> float:
+	var digital := is_zero_approx(raw) or is_equal_approx(absf(raw), 1.0)
+	if joypad or not digital:
+		_key_steer = raw
+		return raw
+	if is_zero_approx(raw):
+		_key_steer = 0.0
+	elif signf(raw) != signf(_key_steer) or is_zero_approx(_key_steer):
+		_key_steer = raw * KEY_STEER_TAP
+	else:
+		_key_steer = move_toward(_key_steer, raw, (1.0 - KEY_STEER_TAP) / KEY_STEER_RAMP * dt)
+	return _key_steer
+
+
 ## Один ввод тела в игре и лаборатории; заблокированное управление всегда снимает прошлое удержание.
 func read_bike_body(bike: BikeRide, enabled := true) -> void:
 	bike.body_back = enabled and bike.riding and Input.is_action_pressed("bike_back")

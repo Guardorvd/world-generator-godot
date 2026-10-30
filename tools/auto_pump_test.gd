@@ -91,28 +91,49 @@ func run() -> void:
 		var on := ride(profile)
 		var off := ride(profile, false)
 		check(absf(on.air - off.air) < 0.08 and absf(on.height - off.height) < 0.1, "трамплин, край и ступень сохраняют штатный отрыв/столкновение")
+	# 30.10: ручной Q→E на волне при опущенном переднем — памп, а не прыжок; ручной прыжок проверяется на ровном
 	for action: String in ["manual", "space"]:
-		var on := ride(waves, true, 8.0, 2.0, 60, true, action)
+		var on := ride(flat if action == "manual" else waves, true, 8.0, 2.0, 60, true, action)
 		check(on.popped and on.height > 0.1, "ручное действие перехватывает памп: " + action)
-	# Direct same-substep override after active pumping; only pose may return smoothly.
+	# 30.10: прыжок и тормоз снимают памп в том же подшаге и с паузой; Q/E — сами работа пампа (знак нагрузки по
+	# направлению рывка), руль — автоматика плавно уступает ему, без выключения.
 	ground.profile = waves
 	for action: String in ["Q", "E", "jump", "brake", "steer"]:
 		var rider := bike()
 		var player := PlayerState.new()
 		for i in 40: rider.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
+		var before := rider.pump_accel + absf(rider.pump_load)
 		rider.body_back = action == "Q"
 		rider.body_forward = action == "E"
-		rider.step(player, -1.0 if action == "brake" else 0.0, 0.4 if action == "steer" else 0.0, false, action == "jump", 1.0 / 120, world, ground)
-		check(rider.pump_accel == 0.0 and rider.pump_load == 0.0 and rider._pump_reach == 0.0, "мгновенный приоритет " + action)
+		for i in (6 if action in ["Q", "E"] else 1):
+			rider.step(player, -1.0 if action == "brake" else 0.0, 0.6 if action == "steer" else 0.0, false, action == "jump" and i == 0, 1.0 / 120, world, ground)
+		if action in ["jump", "brake"]:
+			check(rider.pump_accel == 0.0 and rider.pump_load == 0.0 and rider._pump_reach == 0.0, "мгновенный приоритет " + action)
+		elif action == "steer":
+			check(rider.pump_accel + absf(rider.pump_load) < before or before < 0.0001, "руль: автоматика уступает плавно, не выключаясь")
+		else:
+			check(signf(rider.pump_body) == (-1.0 if action == "Q" else 1.0), "%s — ручной памп: тело %s опору (%.3f)" % [action, "разгружает" if action == "Q" else "нагружает", rider.pump_body])
 		rider.body_back = false
 		rider.body_forward = false
 		for i in 6: rider.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
-		check(rider.pump_accel == 0.0 and rider._pump_reach == 0.0, "пауза после ручного действия: " + action)
+		if action in ["jump", "brake"]:
+			check(rider.pump_accel == 0.0 and rider._pump_reach == 0.0, "пауза после ручного действия: " + action)
 		var resumed := false
 		for i in 120:
 			rider.step(player, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
 			resumed = resumed or rider.pump_accel > 0.0001
 		check(resumed and not rider.crashed, "плавный возврат автоматики: " + action)
+	# Ручной памп по фазе волны: Q на подъёме гребня (поглотить), E на обратном склоне (продавить). Вовремя — быстрее
+	# автоматики и без пампа; не вовремя сила пампа тормозит (итог скорости тогда решают отрывы, его не сравниваем).
+	for profile: Callable in [waves, func(s: float) -> float: return 0.27 * (1.0 - cos(s * TAU / 5.2))]:
+		var timed := pumped(profile, 1.0)
+		var wrong := pumped(profile, -1.0)
+		var auto := ride(profile, true, 8.0, 5.0)
+		var none := ride(profile, false, 8.0, 5.0)
+		print("MANUAL PUMP: вовремя %.2f, не вовремя %.2f, автомат %.2f, без пампа %.2f м/с; помощь пампа %+.2f / %+.2f м/с; отрыв %.2f / без пампа %.2f с, прыжков %d" % [timed.speed, wrong.speed, auto.speed, none.speed, timed.work, wrong.work, timed.air, none.air, int(timed.popped)])
+		check(timed.speed > maxf(auto.speed, none.speed) + 0.3 and timed.work > 0.3 and wrong.work < 0.0 and not timed.popped and not timed.bike.crashed,
+			"ручной памп вовремя разгоняет сильнее автоматики, не вовремя его сила тормозит; без баннихопа")
+
 	ground.profile = waves
 	var flying := bike()
 	flying.airborne = true
@@ -133,3 +154,24 @@ func run() -> void:
 	check(repeat.bike.pump_motion == 0.0 and repeat.bike.pump_accel == 0.0 and repeat.bike._pump_reach == 0.0, "сброс очищает автоматику")
 	print("auto_pump: %d failures / %d checks" % [failures, checks])
 	quit(1 if failures else 0)
+
+## 5 с по волнам с ручным пампом: phase 1 — Q на подъёме и E на спуске, −1 — наоборот.
+func pumped(profile: Callable, phase: float) -> Dictionary:
+	ground.profile = profile
+	var b := bike(true, 8.0)
+	var p := PlayerState.new()
+	var out := {air = 0.0, speed = 8.0, popped = false, bike = b, work = 0.0}
+	for i in 300:
+		var wave := b.pump_wave * phase
+		b.body_back = wave > 0.02
+		b.body_forward = wave < -0.02
+		b.step(p, 0.0, 0.0, false, false, 1.0 / 60, world, ground)
+		if "--trace" in OS.get_cmdline_user_args() and i % 3 == 0:
+			print("  %s t %.2f s %.2f v %.2f wave %+.3f body %+.2f/%+.2f press %+.2f accel %+.2f lift %.2f/%.2f air %d" % [
+				"вовремя" if phase > 0.0 else "не вовремя", i / 60.0, -b.z, b.speed, b.pump_wave, b.body_x, b.body_v, b.pump_body, b.pump_accel, b.lift_f, b.lift_r, int(b.airborne)])
+		out.air += 1.0 / 60 if b.airborne else 0.0
+		out.work += b.pump_accel / 60
+		out.popped = out.popped or b._hop_used
+		if b.crashed: break
+	out.speed = b.speed
+	return out

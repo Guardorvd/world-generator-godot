@@ -96,6 +96,7 @@ const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) сед
 ## по доле массы на этом колесе (нагрузка шины). Переднее колесо, остановленное резче ENDO_DV, бросает седока через руль.
 const IMPACT_ANGLE := 0.12   # рад: плавнее этого подъём опоры — накат, а не удар
 const ENDO_DV := 5.0         # м/с: такая потеря скорости переднего колеса (при обычной нагрузке) — полёт через руль
+const EDGE_SOAK := 0.75      # наибольшая доля удара о кромку, которую принимает оставшийся ход подвески (не раму)
 ## Тело седока (модель двух контактов): положение вперёд/назад body_x от −1 (вперёд) до 1 (назад), движется к цели
 ## (body_back / body_forward) с ограниченными скоростью и ходом. Положение переносит часть веса (BODY_HOLD на весь
 ## ход: назад — легче переднее колесо, хуже его поворот), а само движение — рывок (BODY_PUSH на единицу скорости):
@@ -114,9 +115,12 @@ const LIFT_GAIN_F := 5.0    # ускорение подъёма переднег
 const LIFT_GAIN_R := 3.0     # заднего (ноги подтягивают раму); вниз оба падают с g
 ## Банни-хоп: заднее колесо оторвалось, пока переднее в воздухе. Скорость вверх — от толчка ногами (HOP_POP) тем
 ## больше, чем выше уже поднято переднее (на HOP_FRONT — полный), плюс часть скорости подъёма переднего.
-const HOP_POP := 2.6         # м/с
+const HOP_POP := 3.1         # м/с (30.10: было 2,6 — около 21 см толчка при игровой тяжести 16 м/с², теперь около 30 см)
 const HOP_FRONT := 0.16      # м: полный толчок без необходимости ловить пик переднего колеса до кадра
 const LIFT_MAX := 0.6        # м
+const LIFT_RATE_F := 1.9     # м/с: быстрее рывок не поднимает переднее (30.10: было 1,5 — Q выглядел вялым)
+const LIFT_TURN_MAX := 0.10  # м: в быстрой дуге переднее поднимается не выше (без предела Q в дуге №17 уводил на 9 м;
+                             # 0,14 проверяли 30.10 — Q 0,2 с в дуге №17 уводит дальше: 2,1 м против 1,5)
 ## Пробел в модели двух контактов — автоматический Q→E с умеренной подготовкой: точный ручной выше.
 const AUTO_BACK := 0.13      # с тела назад (раньше лучшего момента: прыжок ниже ручного)
 const AUTO_FORWARD := 0.2    # с тела вперёд после этого
@@ -148,6 +152,7 @@ const TURN_RESERVE := 0.88
 const SIDE_RESPONSE := 30.0
 const RIDER_STEER := 1.35
 const RIDER_TURN_RESPONSE := 6.0
+const TURN_SCALE_RELAX := 0.35 # с: за столько полный руль следует за изменением доступной дуги (волны, вираж)
 const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
 const HOP_LINK := 0.3         # окно E после подъёма, с
 ## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
@@ -156,7 +161,12 @@ const PUMP_REACH := 0.12      # м дополнительного хода те�
 const PUMP_ACCEL := 3.0       # м/с² на единицу обратного уклона волны
 const PUMP_TOP := 14.0        # м/с: выше этого помощь ходу плавно исчезает
 const PUMP_PAUSE := 0.25      # с после ручного действия/приземления до возврата автоматики
-const PUMP_STEER_LIMIT := 0.25 # заметное подруливание уже имеет приоритет над автоматическим толчком
+const PUMP_STEER_LIMIT := 0.25 # с такого руля автоматический толчок плавно уступает повороту (до нуля к 0,8)
+## 30.10: ручной памп — рывок тела на волне (Q поглощает подъём, E продавливает обратный склон), см. _step_pump.
+const PUMP_BODY := 0.3        # доля веса, которую тело на полной скорости хода добавляет к опоре или снимает с неё
+const PUMP_BODY_ACCEL := 2.5  # м/с²: предел разгона и торможения от ручного пампа
+const PUMP_HOLD := 0.3       # с: столько велосипед считается «на волне» после последнего заметного изгиба профиля
+const PUMP_WAVE_PRESS := 0.06 # уклон волны: от подъёма до гребня (выше −половины этого) Q на волне — поглощение
 const START_PACE := 3.0       # м/с: до этой скорости тяга педалей не ограничена запасом заднего колеса (помощь старта)
 ## Усилие седока на педалях — общее состояние тяги и позы: набирается быстро, но не мгновенно (около 95 % за 0,24 с),
 ## без мёртвой задержки, и спадает при отпускании без длинной скрытой тяги.
@@ -173,7 +183,10 @@ var effort_ramp := true     # false — прежняя мгновенная тя
 var gear := GEAR_MIN        # виртуальная передача: оборотов колеса на оборот педалей (только каденс и вид, не тяга)
 var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
 var pump_load := 0.0         # добавка нагрузки, доля веса
-var pump_accel := 0.0        # помощь ходу на обратной стороне волны, м/с²
+var pump_accel := 0.0        # помощь ходу на обратной стороне волны, м/с² (с ручным пампом — и торможение при ошибке)
+var pump_wave := 0.0         # местный уклон волны под велосипедом по ходу (больше нуля — подъём на гребень)
+var pump_active := 0.0       # 0..1: велосипед на волне, где работает памп (0 — ровно, ровный склон, отрыв)
+var pump_body := 0.0         # доля веса, которую тело сейчас добавляет к опоре (+, E) или снимает с неё (−, Q)
 var _pump_reach := 0.0
 var _pump_wait := 0.0
 
@@ -234,6 +247,7 @@ var _on_f := -1          # препятствие, на котором стои�
 var _on_r := -1
 var impacts := Vector2i() # сколько раз колесо встретило кромку препятствия (перед, зад), для замеров
 var hit_dv := Vector2()   # потеря скорости рамы при последней встрече переднего и заднего колеса с кромкой, м/с
+var last_hit := {}        # подробности последней встречи с кромкой (угол, подход, доля нагрузки, доля порога), для стендов
 var _sup_f := 0.0        # опора колеса на прошлом такте: от этой высоты колесо встречает следующую кромку
 var _sup_r := 0.0
 var riding := false
@@ -261,6 +275,7 @@ var air_time := 0.0   # сколько секунд в воздухе
 var _hop_wait := 0.0  # после приземления прыжок доступен не сразу
 var _hop_buf := 0.0   # пробел, нажатый чуть раньше, чем прыжок стал доступен
 var _yaw_rate := 0.0   # фактическая угловая скорость поворота, рад/с
+var _turn_scale := -1.0 # сглаженная наибольшая доступная угловая скорость: полный руль, рад/с (-1 — ещё не мерили)
 var _coyote := 0.0     # запас прыжка после схода с края
 var _brake_hold := 0.0 # сколько секунд держат тормоз у остановки
 var _reverse_armed := true # тормоз отпускали после движения вперёд: удержание у остановки включит задний ход
@@ -397,6 +412,9 @@ func reset_motion() -> void:
 	pump_motion = 0.0
 	pump_load = 0.0
 	pump_accel = 0.0
+	pump_wave = 0.0
+	pump_active = 0.0
+	pump_body = 0.0
 	_pump_reach = 0.0
 	_pump_wait = PUMP_PAUSE
 	acceleration = 0.0
@@ -423,6 +441,7 @@ func reset_motion() -> void:
 	_hop_buf = 0.0
 	_brake_hold = 0.0
 	_yaw_rate = 0.0
+	_turn_scale = -1.0
 	_coyote = 0.0
 	vy = 0.0
 	air_time = 0.0
@@ -578,14 +597,19 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 	pump_accel = 0.0
 	pump_load = 0.0
 	_pump_reach = 0.0
+	pump_wave = 0.0
+	var held := pump_active
+	pump_active = 0.0
+	pump_body = 0.0
 	_pump_wait = maxf(0.0, _pump_wait - dt)
-	var manual := hop or body_back or body_forward or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_link > 0.0 or _hop_used
-	manual = manual or absf(body_x) > 0.12 or absf(body_v) > 0.4 or throttle < -0.05 or brake_pressure > 0.1
-	manual = manual or absf(turn) > PUMP_STEER_LIMIT or absf(slip) > 0.12
-	if manual or airborne or _fresh:
+	# 30.10: ручная работа телом больше не выключает памп — она и есть памп (ниже). Автоматика уступает ей место
+	# плавно; целиком памп снимают только прыжок, тормоз, занос и отрыв.
+	var blocked := hop or _auto_hop >= 0.0 or _hop_buf > 0.0 or _hop_used or throttle < -0.05 or brake_pressure > 0.1 or absf(slip) > 0.12
+	var body_work := clampf(absf(body_x) / 0.3 + absf(body_v) / 1.2, 0.0, 1.0)
+	if blocked or airborne or _fresh:
 		_pump_wait = PUMP_PAUSE
-	var ready := pump_enabled and riding and not crashed and not airborne and not manual and _pump_wait <= 0.0
-	ready = ready and speed > 2.0 and lift_f <= 0.0 and lift_r <= 0.0 and _on_f < 0 and _on_r < 0
+	var ready := pump_enabled and riding and not crashed and not airborne and not blocked and _pump_wait <= 0.0
+	ready = ready and speed > 2.0 and _on_f < 0 and _on_r < 0
 	ready = ready and heights.immersion_at(x, z, y) < 0.03
 	var motion := 0.0
 	if ready:
@@ -613,11 +637,28 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 			var wave := local_grade - long_grade
 			var hollow := (levels[1] + levels[3]) * 0.5 - levels[2]
 			var activity := smoothstep(0.01, 0.07, absf(hollow)) * smoothstep(2.0, 5.0, speed)
-			motion = clampf(wave * 1.8 - hollow * 3.0, -1.0, 1.0) * activity
+			# для ручного пампа — настоящий местный уклон: на ровной горе нажатие и возврат тела взаимно гасятся
+			pump_wave = local_grade
+			# кривизна (hollow) проходит через ноль на середине склона волны, где уклон наибольший: «на волне» держится
+			# PUMP_HOLD секунд после последнего заметного изгиба, а не мигает дважды за волну
+			pump_active = maxf(activity, held * exp(-dt / PUMP_HOLD)) * smoothstep(2.0, 5.0, speed)
+			# Автоматика — спокойный седок: слегка сгибается на гребне и давит на обратный склон. Уступает
+			# ручной работе телом и заметному рулю плавно, без паузы возврата.
+			var auto := (1.0 - body_work) * (1.0 - smoothstep(PUMP_STEER_LIMIT, 0.8, absf(turn))) * (1.0 if lift_f <= 0.0 and lift_r <= 0.0 else 0.0)
+			motion = clampf(wave * 1.8 - hollow * 3.0, -1.0, 1.0) * activity * auto
 			var pace := 1.0 - smoothstep(PUMP_TOP - 4.0, PUMP_TOP, speed)
-			pump_accel = minf(1.0, maxf(0.0, -wave) * PUMP_ACCEL) * activity * pace
-			pump_load = clampf(-wave * 0.65, -0.12, 0.2) * activity
-			_pump_reach = PUMP_REACH * activity * pace
+			pump_accel = minf(1.0, maxf(0.0, -wave) * PUMP_ACCEL) * activity * pace * auto
+			pump_load = clampf(-wave * 0.65, -0.12, 0.2) * activity * auto
+			_pump_reach = PUMP_REACH * activity * pace * auto
+			# Ручной памп — один закон для обеих фаз: сколько веса тело добавило к опоре (E — продавить, рывок вперёд-
+			# вниз) или сняло с неё (Q — поглотить, рывок назад-вверх), столько этой нагрузки работает на уклоне волны,
+			# a = −g · Δнагрузки · уклон. Продавить обратный склон или поглотить подъём — разгон; наоборот — торможение.
+			# Поглощение ещё и держит колёса на гребне (ход тела), продавливание прижимает их к земле.
+			pump_body = clampf(-body_v / BODY_RATE, -1.0, 1.0) * PUMP_BODY
+			var manual_pace := 1.0 - smoothstep(PUMP_TOP, PUMP_TOP + 6.0, speed)
+			pump_load += pump_body * pump_active
+			pump_accel += clampf(-GameConfig.GRAVITY * pump_body * local_grade, -PUMP_BODY_ACCEL, PUMP_BODY_ACCEL) * pump_active * manual_pace
+			_pump_reach += PUMP_REACH * 1.5 * maxf(0.0, -pump_body / PUMP_BODY) * pump_active
 	pump_motion = lerpf(pump_motion, motion, Util.damp(12.0, dt))
 
 
@@ -1045,6 +1086,14 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 			corner_grip += _bank_assist(-signf(steer), pace, corner_grip)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
+		if contact_model:
+			# 30.10: руль задаёт долю доступной дуги, а не долю геометрического хода. Раньше на скорости уже треть
+			# руля упиралась в сцепление: команда быстро становилась предельной, а дуга менялась с нагрузкой колеса на
+			# каждой волне. Теперь полный руль — самая крутая дуга, которую шины держат в среднем за TURN_SCALE_RELAX,
+			# часть руля — такая же часть её; короткая разгрузка (гребень, Q) по-прежнему режет поворот пределом limit.
+			if _turn_scale < 0.0: _turn_scale = limit
+			_turn_scale = lerpf(_turn_scale, limit, 1.0 - exp(-dt / TURN_SCALE_RELAX))
+			wanted = -steer * minf(rate, _turn_scale) * (1.0 if speed >= 0.0 else -1.0)
 		wanted = clampf(wanted, -limit, limit)
 		# Потеря хода — от настоящей перегрузки шины, а не просто от удержания клавиши на скорости.
 		if not contact_model:
@@ -1243,9 +1292,20 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	var into: Vector2 = -hit.normal if hit.normal != Vector2.ZERO else velocity.normalized()
 	var approach := maxf(0.0, velocity.dot(into))
 	var share := clampf(load, 0.05, 1.0)
-	var dv := into * approach * (1.0 - cos(minf(angle, PI * 0.5))) * share
+	var strike := into * approach * (1.0 - cos(minf(angle, PI * 0.5))) * share
+	# 30.10: подвеска колеса принимает подъём на кромку своим оставшимся ходом — раму тормозит только часть удара,
+	# которую ход не вместил. Раньше колесо било как жёсткое: потеря рамы росла со скоростью без предела, и бревно
+	# 22 см на №17 бросало через руль с 13,5 м/с накатом.
+	# Ход вмещает невысокую кромку почти целиком; у кромки выше хода его доля быстро падает (бревно 40 см на скорости
+	# по-прежнему бросает через руль). Подвеска ходит в плоскости рамы: снос вдоль косого бревна она не гасит.
+	var travel := clampf(SAG_MAX - (squash_f if front else squash_r), 0.0, SAG_MAX + STRETCH_MAX)
+	var soak := EDGE_SOAK * pow(minf(1.0, travel / maxf(float(hit.get("rise", 0.0)), 0.02)), 1.5)
 	var forward := Vector2(-sin(heading), -cos(heading))
 	var side := Vector2(-forward.y, forward.x)
+	var dv := strike - forward * strike.dot(forward) * soak
+	# Диагностика последней встречи с кромкой (стенды): что именно ударило и насколько близко к порогу
+	last_hit = {front = front, angle = angle, approach = approach, share = share, dv = dv.length(), soak = soak, rise = hit.get("rise", 0.0),
+		endo = dv.dot(forward) / 0.5 / ENDO_DV, ground = ground, support = support, vy = vy, lift = lift_f if front else lift_r}
 	if front and dv.dot(forward) / 0.5 > ENDO_DV:
 		_crash(vy, Vector3(-sin(heading), 0.6, -cos(heading)), CrashCause.OBSTACLE)
 		return hit.id
@@ -1254,12 +1314,13 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	if after.dot(into) < 0.0: after -= into * after.dot(into)
 	speed = after.dot(forward)
 	lateral_speed = after.dot(side)
-	var kick := dv.length() / share * 0.3
+	# принятая ходом часть удара сжимает подвеску сильнее: быстрый наезд на кромку бьёт вилку в упор (стук пробоя)
+	var kick := strike.length() / share * (0.3 + 0.4 * soak)
 	if front: hit_dv.x = dv.length()
 	else: hit_dv.y = dv.length()
 	# событие удара колеса — отдельно от приземления и пробоя: у переднего и заднего своя реакция
-	if front: wheel_impact.x = maxf(wheel_impact.x, dv.length() / share)
-	else: wheel_impact.y = maxf(wheel_impact.y, dv.length() / share)
+	if front: wheel_impact.x = maxf(wheel_impact.x, strike.length() / share)
+	else: wheel_impact.y = maxf(wheel_impact.y, strike.length() / share)
 	if front:
 		squash_fv += kick
 	else:
@@ -1338,7 +1399,10 @@ func _step_contacts(grade: float, dt: float) -> void:
 			_hop_front = maxf(_hop_front, lift_f)
 			_hop_front_v = maxf(_hop_front_v, lift_fv)
 		# Сохраняем подготовку на коротком отрыве у гребня. В затяжном полёте второго прыжка нет.
-		if target < 0.0 and body_v < -1.2 and _hop_link > 0.0 and (not airborne or _coyote > 0.0):
+		# 30.10: на волне E после Q, когда переднее уже опустилось на обратный склон, — продавливание пампа, а не
+		# подтягивание заднего: прыжок с волны — только пока переднее ещё в воздухе.
+		var pressing := not airborne and lift_f <= 0.0 and pump_active > 0.15
+		if target < 0.0 and body_v < -1.2 and _hop_link > 0.0 and (not airborne or _coyote > 0.0) and not pressing:
 			_takeoff_hop()
 	if airborne:
 		pump_accel = 0.0
@@ -1405,10 +1469,16 @@ func _step_contacts(grade: float, dt: float) -> void:
 ## Последовательность Q→E собирается в _step_contacts; сам подъём одного колеса не запускает прыжок.
 func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> void:
 	var g := GameConfig.GRAVITY
+	# 30.10: на подъёме волны и на гребне Q — поглощение: руки сгибаются навстречу земле, переднее не отрывается (памп,
+	# а не подготовка прыжка). На обратном склоне и ровном Q поднимает переднее, как прежде; пробел (авто Q→E) — всегда.
+	if _auto_hop < 0.0 and pull > 0.0:
+		pull *= 1.0 - minf(1.0, pump_active * 2.0) * smoothstep(-PUMP_WAVE_PRESS * 0.5, PUMP_WAVE_PRESS * 0.5, pump_wave)
 	# рывок поднимает колесо, пока сильнее его веса; дальше оно летит и падает обратно с ускорением свободного падения
-	if pull > weight_f: lift_fv = minf(1.5, lift_fv + (pull - weight_f) * g * LIFT_GAIN_F * dt)
+	if pull > weight_f: lift_fv = minf(LIFT_RATE_F, lift_fv + (pull - weight_f) * g * LIFT_GAIN_F * dt)
 	elif lift_f > 0.0: lift_fv -= g * dt
-	if -pull > weight_r: lift_rv += (-pull - weight_r) * g * LIFT_GAIN_R * dt
+	# на волне рывок вперёд при опущенном переднем продавливает велосипед (памп), а не отрывает заднее
+	var rear_gain := LIFT_GAIN_R * (1.0 - minf(1.0, pump_active * 2.0) if lift_f <= 0.0 else 1.0)
+	if -pull > weight_r and rear_gain > 0.0: lift_rv += (-pull - weight_r) * g * rear_gain * dt
 	elif lift_r > 0.0: lift_rv -= g * dt
 	lift_f += lift_fv * dt
 	lift_r += lift_rv * dt
@@ -1422,7 +1492,7 @@ func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> voi
 		lift_rv = maxf(lift_rv, 0.0) if -pull > weight_r else 0.0
 	# На скорости в дуге седок ограничивает ручной подъём, сохраняя запас для Q→E.
 	var turning := smoothstep(0.15, 0.45, absf(steer)) * smoothstep(6.0, 12.0, absf(speed))
-	var front_limit := lerpf(LIFT_MAX, 0.10, turning)
+	var front_limit := lerpf(LIFT_MAX, LIFT_TURN_MAX, turning)
 	if lift_f >= front_limit:
 		lift_f = front_limit
 		lift_fv = minf(lift_fv, 0.0)

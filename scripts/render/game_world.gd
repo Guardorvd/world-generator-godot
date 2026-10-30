@@ -911,6 +911,7 @@ func _physics_process(dt: float) -> void:
 		hour = fposmod(hour + dt * 24.0 / (services.settings.day_minutes * 60.0), 24.0)
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
+	if bike.riding: st = services.controls.bike_steer(st, dt)
 	# «только что нажат» в такте физики срабатывает ровно в одном такте, даже если за кадр их несколько
 	var jump := Input.is_action_just_pressed("jump")
 	if _opening:

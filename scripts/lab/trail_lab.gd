@@ -732,6 +732,9 @@ func _contact_report() -> String:
 	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s  (F6)" % [bike.load_f, bike.tire_f, bike.use_f * 100,
 		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
+func _input(event: InputEvent) -> void:
+	services.controls.note(event) # клавиатура или геймпад: от этого частичный руль с клавиш (Controls.bike_steer)
+
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
 		if editor.visible:
@@ -770,7 +773,7 @@ func _physics_process(dt: float) -> void:
 	if heights == null: return
 	var input_allowed := not editor.visible
 	var throttle := Input.get_axis("move_back", "move_forward") if input_allowed else 0.0
-	var turn := Input.get_axis("move_left", "move_right") if input_allowed else 0.0
+	var turn := services.controls.bike_steer(Input.get_axis("move_left", "move_right") if input_allowed else 0.0, dt)
 	var jump := input_allowed and Input.is_action_just_pressed("jump")
 	var run := input_allowed and Input.is_action_pressed("run")
 	if autopilot != null and bike.riding and not crash.active():

@@ -275,7 +275,8 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	# Q/E — то же положение тела, что в физике (body_x: + назад): назад — таз к заднему колесу, руки выпрямлены и тянут
 	# руль; вперёд — плечи над рулём, ноги подтягивают раму. Без своего сглаживания: окно рывка — доли секунды.
 	var body := clampf(b.body_x, -1.0, 1.0) if continuous else 0.0
-	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift + _hit_f * 0.035 - _hit_r * 0.015 + body * 0.1, -0.1, 0.14)
+	# 30.10: ход тела заметнее (было body · 0,1 в пределах −0,1…0,14): Q и E читаются на фоне реакций подвески
+	var shift := clampf(inertia_shift - slope * 0.16 - effort * 0.015 + road_shift + _hit_f * 0.035 - _hit_r * 0.015 + body * 0.17, -0.17, 0.2)
 	var side := clampf(-b.lean * 0.12 - b.slip * 0.10 + sin(b.crank) * effort * (0.012 + up * 0.02), -0.065, 0.065)
 	_takeoff *= exp(-dt * 12.0)
 	if continuous and b.airborne and not _was_airborne and b.vy > 0.0:
@@ -293,7 +294,11 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	# 12.3: тяжёлое нажатие (подъём, рывок) прижимает плечи к рулю
 	var crouch := rough + (AIR_CROUCH + _takeoff * 0.025 if b.airborne else 0.0) + _landing * LAND_CROUCH + braking * 0.04 + pedal_bob + effort * smoothstep(0.0, 0.12, slope) * 0.02
 	crouch += b.pump_motion * 0.065 if not b.airborne else 0.0
-	crouch += _hit_f * 0.045 + _hit_r * 0.035 + maxf(body, 0.0) * 0.04
+	crouch += _hit_f * 0.045 + _hit_r * 0.035 + maxf(body, 0.0) * 0.07
+	# ручной памп: поглощение (Q на волне) сгибает руки и ноги, продавливание (E) выпрямляет их в велосипед;
+	# подтягивание заднего в банни-хопе — колени к рулю сразу после отрыва
+	crouch -= b.pump_body * 0.15 if not b.airborne else 0.0
+	crouch += _takeoff * 0.04 if b._hop_used else 0.0
 	var look := -b.steer * smoothstep(0.2, 3.0, absf(b.speed)) * 0.27
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * effort * (0.055 + up * 0.06)

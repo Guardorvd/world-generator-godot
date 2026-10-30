@@ -221,7 +221,8 @@ func wheel_support(x: float, z: float, wheel_r: float, climb: float) -> float:
 ## Встреча колеса с низким препятствием под (x, z) — тем, что сейчас выше всех держит колесо:
 ## {id — постоянный номер препятствия (по его оси, не меняется при пересборке), angle — угол встречи, рад: наклон дуги
 ## колеса над кругом кромки в точке первого касания, когда колесо ещё стоит на высоте ground (10 см — около 42°,
-## 40 см — около 75°), normal — направление от препятствия к колесу по горизонтали (ноль — колесо над осью)}.
+## 40 см — около 75°), rise — высота кромки над этой высотой, normal — направление от препятствия к колесу по горизонтали
+## (ноль — колесо над осью)}.
 ## Пусто, если колесо не на препятствии.
 func wheel_contact(x: float, z: float, wheel_r: float, climb: float, ground: float) -> Dictionary:
 	var best := {}
@@ -251,6 +252,7 @@ func wheel_contact(x: float, z: float, wheel_r: float, climb: float, ground: flo
 				var c := ground + wheel_r - (top - rho)
 				best = {id = hash(Vector4i(roundi(data[at] * 100.0), roundi(data[at + 1] * 100.0), roundi(data[at + 2] * 100.0), roundi(data[at + 3] * 100.0))),
 					angle = atan2(sqrt(maxf(0.0, reach * reach - c * c)), c) if c > 0.0 else PI * 0.5,
+					rise = maxf(0.0, top - ground),
 					normal = away.normalized() if away.length_squared() > 1e-8 else Vector2.ZERO}
 	return best
 
