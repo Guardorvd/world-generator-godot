@@ -55,9 +55,9 @@ func run() -> void:
 		var first := controls.bike_steer(1.0, 1.0 / 60, pace)
 		var held := first
 		for i in 60: held = controls.bike_steer(1.0, 1.0 / 60, pace)
-		check(first > 0.0 and first < 0.05 and held > 0.9, "мягкое начало и полный поворот при удержании на %.0f м/с" % pace)
+		check(first > 0.0 and first < 0.08 and held > 0.9, "мягкое начало и полный поворот при удержании на %.0f м/с" % pace)
 		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
-		check(reverse > 0.0 and held - reverse < 0.15, "перекладка не меняет знак рывком")
+		check(reverse > 0.0 and held - reverse < 0.3, "перекладка не меняет знак рывком")
 		for i in 60: reverse = controls.bike_steer(-1.0, 1.0 / 60, pace)
 		check(reverse < -0.9, "противоположная дуга доступна")
 		for i in 30: reverse = controls.bike_steer(0.0, 1.0 / 60, pace)
@@ -79,6 +79,24 @@ func run() -> void:
 		for i in 60:
 			rider.step(player, 0.0, controls.bike_steer(1.0, 1.0 / 60, pace), false, false, 1.0 / 60, world, flat)
 		check(absf(rider.heading) > 0.15 and not rider.crashed, "реальный поворот доступен на %.0f м/с" % pace)
+	controls.reset()
+	var early := 0.0
+	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
+	check(early > 0.18 and early < 0.4, "prompt correction in 100 ms, without full-lock steering")
+	var pose := BikeRide.new()
+	pose.speed = 12.0
+	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
+	check(rad_to_deg(pose.lean) > 25.0 and rad_to_deg(pose.lean) < 35.0, "visible equilibrium lean in a fast corner")
+	pose.bank_slope = 0.3
+	for i in 120: pose._step_pose(0.0, 5.0, 1.0 / 60)
+	check(rad_to_deg(pose.lean) > 28.0, "berm contribution is visible in lean")
+	var cross_gravity := GameConfig.GRAVITY * 0.3 / sqrt(1.0 + 0.3 * 0.3)
+	for i in 120: pose._step_pose(0.0, -cross_gravity, 1.0 / 60)
+	check(absf(pose.lean) < 0.01, "straight traverse stays upright")
+	pose.airborne = true
+	pose.lean = 0.6
+	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
+	check(absf(pose.lean) < 0.01, "lean relaxes smoothly in flight")
 	var camera := PlayerCameraController.new()
 	camera.yaw = 0.7
 	camera.pitch = -0.4

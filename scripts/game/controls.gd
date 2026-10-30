@@ -95,10 +95,10 @@ func reset() -> void:
 
 ## Плавная команда с клавиатуры: короткое нажатие правит линию, удержание усиливает дугу.
 ## Смена направления проходит через нейтраль; отпускание быстрее набора, чтобы не мешать выходу.
-const KEY_STEER_TAP := 0.16
-const KEY_STEER_RAMP := 0.4      # 30.10: было 0,65 — в записи заезда руль при удержании клавиши в среднем 40 %,
-const KEY_STEER_RESPONSE := 8.0   # перекладка до половины хода 0,5 с (было 6); мягкое начало и плавная перекладка те же
-const KEY_STEER_RELEASE := 9.0
+const KEY_STEER_TAP := 0.22
+const KEY_STEER_RAMP := 0.55 # curvature builds gradually while the initial correction arrives promptly
+const KEY_STEER_RESPONSE := 18.0
+const KEY_STEER_RELEASE := 14.0
 var _key_steer := 0.0
 var _key_direction := 0.0
 var _key_hold := 0.0
@@ -117,7 +117,8 @@ func bike_steer(raw: float, dt: float, _pace := 0.0) -> float:
 		_key_hold += dt
 	var strength := lerpf(KEY_STEER_TAP, 1.0, smoothstep(0.0, KEY_STEER_RAMP, _key_hold))
 	var target := raw * strength
-	var rate := KEY_STEER_RELEASE if is_zero_approx(raw) else KEY_STEER_RESPONSE
+	var reversing := raw * _key_steer < 0.0
+	var rate := KEY_STEER_RELEASE if is_zero_approx(raw) or reversing else KEY_STEER_RESPONSE
 	_key_steer = lerpf(_key_steer, target, Util.damp(rate, dt))
 	return _key_steer
 
