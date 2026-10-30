@@ -796,7 +796,12 @@ func _process(dt: float) -> void:
 	var contact := RideSurface.sample(heights.world, heights, bike.x, bike.z)
 	var name := "вне трассы" if contact.surface == 0 else str(RoadSurface.LIST[contact.surface].name)
 	telemetry.text = "TRAIL LAB  /  " + routes[lane].title
-	route_hint.text = "Трасса %d / %d  ·  клавиши 1–%d" % [lane + 1, routes.size(), mini(routes.size(), 9)]
+	route_hint.text = "Трасса %d / %d  ·  клавиши 1–%d\nSpace — прыжок" % [lane + 1, routes.size(), mini(routes.size(), 9)]
+	if bike.contact_model:
+		route_hint.text += "  ·  Q → E — баннихоп"
+		route_hint.tooltip_text = "Потяните Q, затем через 0,1–0,3 с нажмите E. Точная подготовка даёт более высокий прыжок."
+	else:
+		route_hint.tooltip_text = ""
 	speed_label.text = "%.0f\nкм/ч" % (absf(bike.speed) * 3.6)
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)

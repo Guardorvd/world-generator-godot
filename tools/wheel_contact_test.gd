@@ -151,21 +151,23 @@ func consistency(h: Heightfield, d: TrailDefinition) -> void:
 		var over_load := 0
 		var unloaded_force := 0
 		var unloaded := 0
-		# силы такта считаются от нагрузок, с которыми такт начался (нагрузка пересчитывается в конце такта)
-		var prev := Vector2(b.load_f, b.load_r)
+		# Сила хранится от последнего подшага. При 30 Гц колесо может восстановить контакт
+		# внутри кадра: сравнивать эту силу с нагрузкой НАЧАЛА всего кадра неверно.
+		# Здесь проверяем каждый подшаг; заезды выше и crossings проверяют полный шаг 30/60/120 Гц.
+		var substeps := maxi(1, ceili(BikeRide.SUB_HZ / hz))
 		for tick in hz * 4:
 			var station := d.nearest(Vector2(b.x, b.z)).x
 			if station > ROLLER + 8.0 or b.crashed: break
 			var near := station > ROLLER - 3.0
-			control.ride(1.0 / hz, p, b, h.world, h, -1.0 if near else 0.0, 1.0 if near else 0.0, false, false, false)
-			var was := prev
-			prev = Vector2(b.load_f, b.load_r)
-			if b.airborne: continue
-			over_load += int(b.tire_f > b.load_f + 1e-5 or b.tire_r > b.load_r + 1e-5 or b.side_f > b.tire_f + 1e-5 or b.side_r > b.tire_r + 1e-5)
-			for wheel: Array in [[was.x, b.force_f], [was.y, b.force_r]]:
-				if wheel[0] <= 1e-4:
-					unloaded += 1
-					unloaded_force += int((wheel[1] as Vector2).length() > 1e-3)
+			for substep in substeps:
+				var was := Vector2(b.load_f, b.load_r)
+				control.ride(1.0 / hz / substeps, p, b, h.world, h, -1.0 if near else 0.0, 1.0 if near else 0.0, false, false, false)
+				if b.airborne: continue
+				over_load += int(b.tire_f > b.load_f + 1e-5 or b.tire_r > b.load_r + 1e-5 or b.side_f > b.tire_f + 1e-5 or b.side_r > b.tire_r + 1e-5)
+				for wheel: Array in [[was.x, b.force_f], [was.y, b.force_r]]:
+					if wheel[0] <= 1e-4:
+						unloaded += 1
+						unloaded_force += int((wheel[1] as Vector2).length() > 1e-3)
 		check(over_load == 0, "%d Гц: сила шины не больше её нагрузки" % hz)
 		check(unloaded_force == 0, "%d Гц: разгруженное колесо не тормозит и не держит бок (%d тактов без нагрузки)" % [hz, unloaded])
 

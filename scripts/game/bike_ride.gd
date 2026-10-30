@@ -105,15 +105,15 @@ const BODY_PUSH := 0.15      # доля веса на единицу скоро�
 const BODY_LEAD := 0.1       # с от нажатия до пика рывка (для сценариев замеров)
 ## Подъём колеса: рывок тела сильнее веса, который несёт колесо, отрывает его от земли (lift_f / lift_r, м над опорой).
 ## Пока колесо в воздухе, весь вес на другом, а о препятствие оно не бьётся, если поднято выше него. Оба колеса в
-## воздухе — банни-хоп: велосипед летит с их средней скоростью подъёма. Q, затем вовремя E — переднее, потом заднее.
+## воздухе — банни-хоп. Q поднимает переднее, затем E в пределах HOP_LINK подтягивает заднее.
 const LIFT_GAIN_F := 14.0    # ускорение подъёма переднего колеса на долю веса сверх его нагрузки, g (руль на себя)
 const LIFT_GAIN_R := 3.0     # заднего (ноги подтягивают раму); вниз оба падают с g
 ## Банни-хоп: заднее колесо оторвалось, пока переднее в воздухе. Скорость вверх — от толчка ногами (HOP_POP) тем
 ## больше, чем выше уже поднято переднее (на HOP_FRONT — полный), плюс часть скорости подъёма переднего.
 const HOP_POP := 2.6         # м/с
-const HOP_FRONT := 0.25      # м
+const HOP_FRONT := 0.16      # м: полный толчок без необходимости ловить пик переднего колеса до кадра
 const LIFT_MAX := 0.6        # м
-## Пробел в модели двух контактов — тот же Q→E сам, с одной и той же задержкой, не лучшей: ручной выше
+## Пробел в модели двух контактов — автоматический Q→E с умеренной подготовкой: точный ручной выше.
 const AUTO_BACK := 0.13      # с тела назад (раньше лучшего момента: прыжок ниже ручного)
 const AUTO_FORWARD := 0.2    # с тела вперёд после этого
 const AUTO_STRENGTH := 1.0   # доля хода тела
@@ -137,6 +137,14 @@ const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на бол
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
 ## а длинный гребень или контруклон всё так же отнимают его.
 const SIDE_RELAX := 0.2      # с
+## Помощь баланса в лабораторной модели: запас на обычную дугу и на исправление ошибки.
+const RIDER_GRIP := 1.6
+const TURN_RESERVE := 0.88
+const SIDE_RESPONSE := 30.0
+const RIDER_STEER := 1.35
+const RIDER_TURN_RESPONSE := 6.0
+const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
+const HOP_LINK := 0.3         # окно E после подъёма, с
 
 var x := 0.0          # метры
 var z := 0.0
@@ -170,6 +178,10 @@ var lift_rv := 0.0
 var hop_height := 0.0     # высота последнего банни-хопа от точки отрыва, м (для замеров и метрик)
 var _hop_from := 0.0
 var _auto_hop := -1.0     # с от начала автоматического Q→E (пробел), -1 — нет
+var _hop_link := 0.0
+var _hop_front := 0.0
+var _hop_front_v := 0.0
+var _hop_used := false
 var contact_model := false # прототип двух контактов (CONTACT_*)
 var load_f := 0.5     # нагрузка переднего колеса, доли веса велосипеда с седоком (на ровном стоя — 0,5)
 var load_r := 0.5
@@ -350,6 +362,10 @@ func reset_motion() -> void:
 	lift_r = 0.0
 	lift_rv = 0.0
 	_auto_hop = -1.0
+	_hop_link = 0.0
+	_hop_front = 0.0
+	_hop_front_v = 0.0
+	_hop_used = false
 	load_f = 0.5
 	load_r = 0.5
 	tire_f = 0.5
@@ -502,6 +518,11 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var technical := smoothstep(0.25, 0.8, rough) * smoothstep(6.0, 15.0, absf(speed))
 	grip *= 1.0 - technical * 0.2
 	var speed0 := speed
+	# При постановке на склон велосипед уже движется вдоль опоры. vy=0 здесь создавал
+	# ложный отрыв на спуске ещё до Q, после чего подготовка баннихопа пропадала.
+	if _fresh and not airborne:
+		y = _contact(x, z, heights)
+		vy = _ground_slope(heights) * speed
 	if not airborne:
 		terrain *= lerpf(1.0, 0.4, smoothstep(0.05, 0.8, heights.immersion_at(x, z, y)))
 		_step_speed(throttle, boost, slope, terrain, dt, grip, technical)
@@ -637,15 +658,17 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		# со сносом из своего запаса; стоящий седок упирается ногой.
 		var s := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 		lateral_speed -= GameConfig.GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) * dt
-		var cap_f := CORNER_GRIP * grip * side_f * slick_f
-		var cap_r := CORNER_GRIP * grip * side_r * slick_r
-		var free_f := sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
-		var free_r := sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force))
-		# Нужная боковая сила делится поровну (середина массы посередине базы); колесо даёт не больше своего свободного
-		# запаса, и недостачу одного другое не покрывает — велосипед сносит
-		var need := lateral_speed * Util.damp(GameConfig.BIKE_SIDE_RESPONSE, dt) / dt
-		var side_force_f := clampf(need * 0.5, -free_f, free_f)
-		var side_force_r := clampf(need * 0.5, -free_r, free_r)
+		var caps := _side_caps(grip)
+		var cap_f := CORNER_GRIP * RIDER_GRIP * grip * side_f * slick_f
+		var cap_r := CORNER_GRIP * RIDER_GRIP * grip * side_r * slick_r
+		var free_f := caps.x
+		var free_r := caps.y
+		# Седок балансирует нагрузку: второе колесо использует свободный запас первого.
+		# Руль ограничен теми же силами с резервом, поэтому обычная дуга не порождает вечный снос.
+		var need := lateral_speed * Util.damp(SIDE_RESPONSE, dt) / dt
+		var total := maxf(free_f + free_r, 0.0001)
+		var side_force_f := clampf(need * free_f / total, -free_f, free_f)
+		var side_force_r := clampf(need * free_r / total, -free_r, free_r)
 		lateral = side_force_f + side_force_r
 		lateral_speed -= lateral * dt
 		force_f = Vector2(brakes.front_force, side_force_f)
@@ -674,6 +697,14 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 	return lateral
 
 
+## Один запас для запроса руля и удержания траектории; тормоз уже занял свою часть.
+func _side_caps(grip: float) -> Vector2:
+	var cap_f := CORNER_GRIP * RIDER_GRIP * grip * side_f * slick_f if contact_f() else 0.0
+	var cap_r := CORNER_GRIP * RIDER_GRIP * grip * side_r * slick_r if contact_r() else 0.0
+	return Vector2(sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force)),
+		sqrt(maxf(0.0, cap_r * cap_r - brakes.rear_force * brakes.rear_force)))
+
+
 ## Добавка к сцеплению flat (м/с²) от наклона полотна: drift — куда велосипед несёт поперёк рамы (+ вправо).
 ## Полотно, поднятое в сторону заноса, прижимает колёса; опущенное — отнимает. Как на наклонном вираже:
 ## тяжесть сама держит поворот, а прижатые колёса ещё и сильнее цепляются, g·(μ + s) / (1 − μ·s).
@@ -697,10 +728,12 @@ func _align(dt: float) -> float:
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Боковая инерция и торможение делят общий запас сцепления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
-	steer = move_toward(steer, turn, dt * (STEER_CENTER if is_zero_approx(turn) else STEER_RATE))
+	steer = move_toward(steer, turn, dt * (STEER_CENTER if is_zero_approx(turn) else STEER_RATE) * (RIDER_STEER if contact_model else 1.0))
 	var pace := absf(speed)
 	# На малой скорости манёвр лёгкий; на большой у перекладки появляется вес.
 	var response := lerpf(TURN_RESPONSE_SLOW, TURN_RESPONSE_FAST, smoothstep(TURN_PACE_LOW, TURN_PACE_HIGH, pace)) * (1.0 if contact_model else grip)
+	if contact_model:
+		response = maxf(response, RIDER_TURN_RESPONSE)
 	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
 	var wanted := -steer * rate * (1.0 if speed >= 0.0 else -1.0)
 	var limit := rate
@@ -712,12 +745,13 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		# Торможение расходует часть сцепления: дуга шире, но управление сохраняется.
 		var corner_grip := CORNER_GRIP * grip * sqrt(maxf(0.0, 1.0 - brake * brake))
 		if contact_model:
-			# Поворачивает переднее колесо: его свободный от тормоза запас держит половину боковой силы
-			var cap_f := CORNER_GRIP * grip * side_f * slick_f
-			corner_grip = 2.0 * sqrt(maxf(0.0, cap_f * cap_f - brakes.front_force * brakes.front_force))
+			var caps := _side_caps(grip)
+			# Переднее по-прежнему задаёт курс, но рама не требует больше, чем держат обе шины.
+			corner_grip = minf(2.0 * caps.x, caps.x + caps.y) * TURN_RESERVE
 		# Накопленный снос расширяет дугу до восстановления, вместо бесконечного дрифта.
 		var slip_yaw := lerpf(GameConfig.BIKE_SLIP_YAW, 0.92, smoothstep(0.04, GameConfig.BIKE_SLIP_RECOVER, absf(slip)))
-		corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
+		if not contact_model:
+			corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
 		# Вираж: полотно, поднятое снаружи поворота, прижимает колёса и добавляет сцепления; уклон внутрь отнимает.
 		if contact_model:
 			# Вираж — тяжестью: полотно, поднятое снаружи поворота, тянет внутрь; контруклон тянет наружу
@@ -728,7 +762,9 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
 		wanted = clampf(wanted, -limit, limit)
-		speed = move_toward(speed, 0.0, excess * 0.08 * dt)
+		# Потеря хода — от настоящей перегрузки шины, а не просто от удержания клавиши на скорости.
+		if not contact_model:
+			speed = move_toward(speed, 0.0, excess * 0.08 * dt)
 	_yaw_rate = move_toward(_yaw_rate, wanted, response * dt)
 	# Остаточная инерция не вращает стоящий велосипед и не превышает сцепление.
 	if contact_model and not airborne and pace > 1.0:
@@ -747,10 +783,16 @@ func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> voi
 	_hop_buf = HOP_BUFFER if hop else maxf(0.0, _hop_buf - dt)
 	_coyote = maxf(0.0, _coyote - dt) if airborne else HOP_COYOTE
 	if contact_model:
-		# пробел — тот же Q→E телом (банни-хоп), а не готовая добавка скорости вверх
+		# На земле пробел запускает тот же Q→E телом.
 		if _hop_buf > 0.0 and _hop_wait <= 0.0 and not airborne and _auto_hop < 0.0:
 			_hop_buf = 0.0
 			_auto_hop = 0.0
+		elif _hop_buf > 0.0 and _coyote > 0.0 and _auto_hop < 0.0 and not _hop_used:
+			# Малый запас после кромки: игрок нажал вовремя, хотя колёса уже потеряли опору.
+			_hop_buf = 0.0
+			_hop_front = HOP_FRONT * 0.5
+			_hop_front_v = 0.0
+			_takeoff_hop()
 	elif _hop_buf > 0.0 and _hop_wait <= 0.0 and (not airborne or _coyote > 0.0):
 		_hop_buf = 0.0
 		_coyote = 0.0
@@ -961,7 +1003,8 @@ static func _spring(s: Vector2, target: float, h: float) -> Vector2:
 ## перенос между осями от тормоза, уклона и корпуса (Brakes.front_load) и сила пружины сверх равновесия —
 ## удар о корень прижимает колесо, отскок разгружает. В полёте нагрузки нет.
 func _step_contacts(grade: float, dt: float) -> void:
-	var target := (1.0 if body_back else 0.0) - (1.0 if body_forward else 0.0)
+	# E завершает движение даже если Q ещё не успели отпустить.
+	var target := -1.0 if body_forward else (1.0 if body_back else 0.0)
 	if _auto_hop >= 0.0:
 		_auto_hop += dt
 		target = AUTO_STRENGTH if _auto_hop < AUTO_BACK else (-AUTO_STRENGTH if _auto_hop < AUTO_BACK + AUTO_FORWARD else 0.0)
@@ -972,6 +1015,20 @@ func _step_contacts(grade: float, dt: float) -> void:
 		body_x = signf(body_x)
 		body_v = 0.0
 	unweight = (BODY_HOLD * body_x + BODY_PUSH * body_v) if contact_model else 0.0
+	_hop_link = maxf(0.0, _hop_link - dt)
+	if absf(body_x) < 0.2 and absf(body_v) < 0.8 and is_zero_approx(target):
+		_hop_used = false
+	if contact_model and not _hop_used:
+		if not airborne and lift_f >= HOP_ARM_HEIGHT and target > 0.0:
+			if _hop_link <= 0.0:
+				_hop_front = 0.0
+				_hop_front_v = 0.0
+			_hop_link = HOP_LINK
+			_hop_front = maxf(_hop_front, lift_f)
+			_hop_front_v = maxf(_hop_front_v, lift_fv)
+		# Сохраняем подготовку на коротком отрыве у гребня. В затяжном полёте второго прыжка нет.
+		if target < 0.0 and body_v < -1.2 and _hop_link > 0.0 and (not airborne or _coyote > 0.0):
+			_takeoff_hop()
 	if airborne:
 		load_f = 0.0
 		load_r = 0.0
@@ -996,7 +1053,9 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var raw_f := clampf(share * normal + CONTACT_SPRING * spring_f, 0.0, LOAD_MAX)
 	var raw_r := clampf((1.0 - share) * normal + CONTACT_SPRING * spring_r, 0.0, LOAD_MAX)
 	if contact_model:
-		_step_lift(share * normal, (1.0 - share) * normal, unweight * normal, dt)
+		# Седок компенсирует перенос веса, готовя рывок: одинаковый Q/E работает и вверх, и вниз.
+		# Это помощь только подъёму; настоящие нагрузки тормоза и шин остаются выше.
+		_step_lift(normal * 0.5, normal * 0.5, unweight * normal, dt)
 		if airborne:
 			return
 	if lift_f > 0.0:
@@ -1024,7 +1083,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 
 ## Подъём колёс рывком тела: pull — доля веса, которую тело снимает с переднего колеса (меньше нуля — с заднего),
 ## weight_f / weight_r — веса, которые колёса несут. Сверх веса колесо идёт вверх, иначе опускается обратно.
-## Оба колеса в воздухе — банни-хоп: велосипед отрывается со средней скоростью подъёма колёс.
+## Последовательность Q→E собирается в _step_contacts; сам подъём одного колеса не запускает прыжок.
 func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> void:
 	var g := GameConfig.GRAVITY
 	# рывок поднимает колесо, пока сильнее его веса; дальше оно летит и падает обратно с ускорением свободного падения
@@ -1048,28 +1107,34 @@ func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> voi
 	if lift_r >= LIFT_MAX:
 		lift_r = LIFT_MAX
 		lift_rv = minf(lift_rv, 0.0)
-	if lift_f > 0.0 and lift_r > 0.0:
-		# банни-хоп: рама в воздухе на средней высоте колёс
-		airborne = true
-		air_time = 0.0
-		_coyote = 0.0
-		_hop_from = y
-		hop_height = 0.0
-		y += (lift_f + lift_r) * 0.5
-		vy = maxf(vy, 0.0) + maxf(0.0, lift_fv) * 0.5 + HOP_POP * clampf(lift_f / HOP_FRONT, 0.0, 1.0)
-		lift_f = 0.0
-		lift_fv = 0.0
-		lift_r = 0.0
-		lift_rv = 0.0
+
+
+## Q поднял переднее, E подтягивает заднее. Высота зависит от подготовки, окно не требует точности до кадра.
+func _takeoff_hop() -> void:
+	airborne = true
+	air_time = 0.0
+	_coyote = 0.0
+	_hop_from = y
+	hop_height = 0.0
+	var quality := clampf(_hop_front / HOP_FRONT, 0.0, 1.0)
+	y += (lift_f + lift_r) * 0.5
+	# Сохраняем движение вдоль спуска: прыжок считается относительно полотна, без катапульты вниз по склону.
+	vy = minf(vy, HOP_CARRY) + HOP_POP * lerpf(0.8, 1.0, quality) + maxf(0.0, _hop_front_v) * 0.35
+	lift_f = 0.0
+	lift_fv = 0.0
+	lift_r = 0.0
+	lift_rv = 0.0
+	_hop_link = 0.0
+	_hop_used = true
 
 
 ## Колесо держит: стоит на земле и нагружено
 func contact_f() -> bool:
-	return not airborne and load_f > CONTACT_MIN
+	return not airborne and lift_f <= 0.0 and load_f > CONTACT_MIN
 
 
 func contact_r() -> bool:
-	return not airborne and load_r > CONTACT_MIN
+	return not airborne and lift_r <= 0.0 and load_r > CONTACT_MIN
 
 
 ## Продольное движение: тяга педалей, склон, качение и сопротивление на скорости.
@@ -1085,7 +1150,8 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	# Воздух не становится плотнее над камнями или травой; покрытие влияет на качение.
 	var drag := GameConfig.BIKE_DRAG
 	var gravity := -SLOPE_GRAVITY * slope / (1.0 + slope * slope)
-	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, Vector2(tire_f * slick_f, tire_r * slick_r) if contact_model else Vector2(-1.0, -1.0))
+	var loads := Vector2(tire_f * slick_f if contact_f() else 0.0, tire_r * slick_r if contact_r() else 0.0)
+	brakes.step(dt, maxf(0.0, -throttle), speed, slope, grip, _corner_demand, true, loads if contact_model else Vector2(-1.0, -1.0))
 	braking = 0.0
 	# Пауза заднего хода отсчитывается у остановки, а не во время торможения с разгона.
 	if throttle <= -GameConfig.BIKE_REVERSE_INPUT and absf(speed) < 0.05:

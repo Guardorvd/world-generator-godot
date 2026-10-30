@@ -313,7 +313,18 @@ func run() -> void:
 		if kind == "log": check(late.after < both.after - 0.2, "%s, 8 м/с: второе поздно — хуже правильной последовательности (%.1f против %.1f м/с)" % [name, late.after, both.after])
 		check(spam.result != "проехал" or spam.after <= hop.after - 0.2, "%s, 8 м/с: частые нажатия не лучше техники (%s, %.1f против %.1f м/с)" % [name, spam.result, spam.after, hop.after])
 	check(all.log_10_0.result == "через руль" and all.log_10_2.result == "проехал", "бревно, 10 м/с: пассивно — через руль, оба колеса — проезд (%s)" % all.log_10_2.result)
-	check(all.log_10_5.turn_off > all.log_10_2.turn_off + 0.15, "бревно, 10 м/с: вес назад постоянно — следующий поворот хуже (с оси %.2f против %.2f м)" % [all.log_10_5.turn_off, all.log_10_2.turn_off])
+	# Помощь баланса не обязана наказывать удержание Q сходом с полотна. Проверяем сам
+	# перенос веса на реальном проезде: передняя шина несёт меньше, чем после возврата в нейтраль.
+	var held_front := Vector2.ZERO
+	var neutral_front := Vector2.ZERO
+	for row: Vector4 in all.log_10_5.series:
+		if row.x > TURN and row.x < TURN + PI * 0.5 * RADIUS: held_front += Vector2(row.z, 1.0)
+	for row: Vector4 in all.log_10_2.series:
+		if row.x > TURN and row.x < TURN + PI * 0.5 * RADIUS: neutral_front += Vector2(row.z, 1.0)
+	var held_load := held_front.x / maxf(held_front.y, 1.0)
+	var neutral_load := neutral_front.x / maxf(neutral_front.y, 1.0)
+	check(held_front.y > 0.0 and neutral_front.y > 0.0 and held_load < neutral_load - 0.03,
+		"бревно, 10 м/с: вес назад разгружает переднюю шину в следующем повороте (%.2f против %.2f)" % [held_load, neutral_load])
 	# окно: ошибка тайминга обоих действий
 	h.obstacles.set_trail(obstacle(h, d, "log"), PackedFloat32Array())
 	h.obstacles.update(d.point_at(LOG).x, d.point_at(LOG).y, PackedFloat32Array(), 1, true)
