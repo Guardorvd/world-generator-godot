@@ -16,6 +16,40 @@ class NarrowSlotBike extends BikeRide:
 	func fits(_px: float, _pz: float, hd: float, _w: WorldData, _h: Heightfield) -> bool:
 		return hd > low and hd < high
 
+## Один корень высотой height поперёк пути на z = -2; других препятствий нет.
+class RootBump extends ForestObstacles:
+	var height := 0.05
+	func bump_at(_x: float, pz: float) -> float:
+		return height if absf(pz + 2.0) < 0.15 else 0.0
+	func hits(_x: float, _z: float, _feet: float, _r: float, _climb := 0.0) -> bool:
+		return false
+	func normal(_x: float, _z: float, _feet: float, _r: float, _climb := 0.0) -> Vector2:
+		return Vector2.ZERO
+	func wheel_support(_x: float, _z: float, _wheel_r: float, _climb: float) -> float:
+		return -INF
+	func wheel_contact(_x: float, _z: float, _wheel_r: float, _climb: float, _ground: float) -> Dictionary:
+		return {}
+
+## Проезд накатом 6 м/с через корень с колёсами, удерживаемыми на высоте lift (-1 — корня нет).
+func over_root(lift: float) -> Dictionary:
+	var rooty := TestGround.new(w)
+	var root := RootBump.new(w, rooty)
+	root.height = 0.05 if lift >= 0.0 else 0.0
+	rooty.obstacles = root
+	var b := bike(6.0)
+	var slick := false
+	var kick := 0.0
+	for i in 60:
+		if lift > 0.0:
+			b.lift_f = lift
+			b.lift_r = lift
+			b.lift_fv = 0.0
+			b.lift_rv = 0.0
+		b.step(p, 0.0, 0.0, false, false, 1.0 / 120.0, w, rooty)
+		slick = slick or b.slick_f < 1.0 or b.slick_r < 1.0
+		kick = maxf(kick, maxf(absf(b.squash_fv), absf(b.squash_rv)))
+	return {speed = b.speed, slick = slick, kick = kick, z = b.z}
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 60)
 	run.call_deferred()
@@ -51,12 +85,42 @@ func run() -> void:
 	reused.force_r = Vector2(2.0, 3.0)
 	reused.reset_motion()
 	print("AUDIT reset: slick_r=%.3f force_r=%s" % [reused.slick_r, reused.force_r])
+	# A3: педали тянут только через заднее колесо на земле
 	var grounded := bike(6.0)
 	var rear_up := bike(6.0)
 	rear_up.lift_r = 0.2
 	grounded._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	rear_up._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
-	print("AUDIT drive: rear_contact=%s grounded_v=%.6f rear_up_v=%.6f" % [rear_up.contact_r(), grounded.speed, rear_up.speed])
+	check(grounded.speed > 6.0 and rear_up.speed < 6.0, "A3 газ с поднятым задним: на земле %.4f, поднято %.4f м/с" % [grounded.speed, rear_up.speed])
+	# скользкое заднее на ходу тянет в пределах запаса, у старта — помощь в полную силу
+	var slick := bike(8.0)
+	slick.slick_r = BikeRide.ROOT_GRIP
+	var full := bike(8.0)
+	slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
+	full._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
+	var start_slick := bike(0.5)
+	start_slick.slick_r = BikeRide.ROOT_GRIP
+	var start := bike(0.5)
+	start_slick._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
+	start._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0, 0.5)
+	check(slick.speed < full.speed and is_equal_approx(start_slick.speed, start.speed),
+		"A3 тяга по запасу: на корне %.4f < %.4f; старт на корне %.4f = %.4f" % [slick.speed, full.speed, start_slick.speed, start.speed])
+	# обычный старт и подъём 15 % с газом
+	ground.gradient = Vector2(0, -0.15)
+	var climb := bike(0.0)
+	for i in 240:
+		tick(climb, 0.0, false, 60, 1.0)
+	ground.gradient = Vector2.ZERO
+	check(climb.speed > 3.0 and -climb.z > 15.0, "A3 подъём 15%% с места за 4 с: %.2f м/с, %.1f м" % [climb.speed, -climb.z])
+	# B2: поднятое выше корня колесо его не чувствует; ниже вершины — чувствует
+	var plain := over_root(-1.0)
+	var rolled := over_root(0.0)
+	var lifted := over_root(0.2)
+	var grazing := over_root(0.03)
+	check(rolled.z < -2.5 and rolled.speed < plain.speed - 0.01 and rolled.slick, "B2 корень на земле: %.3f против %.3f без корня, скользко %s" % [rolled.speed, plain.speed, rolled.slick])
+	check(absf(lifted.speed - plain.speed) < 0.001 and not lifted.slick and lifted.kick <= plain.kick + 0.001,
+		"B2 колёса выше корня: %.4f = %.4f, скользко %s, толчок %.3f" % [lifted.speed, plain.speed, lifted.slick, lifted.kick])
+	check(grazing.speed < plain.speed - 0.001 and grazing.slick, "B2 колёса ниже вершины корня: %.3f, скользко %s" % [grazing.speed, grazing.slick])
 	# A2: прыжок под сводом не поднимает габарит седока выше свода (с места и на ходу, 60 и 144 Гц)
 	var roof := LowRoof.new(w)
 	for hz: int in [60, 144]:

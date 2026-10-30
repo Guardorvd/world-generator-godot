@@ -152,6 +152,7 @@ const PUMP_ACCEL := 3.0       # м/с² на единицу обратного �
 const PUMP_TOP := 14.0        # м/с: выше этого помощь ходу плавно исчезает
 const PUMP_PAUSE := 0.25      # с после ручного действия/приземления до возврата автоматики
 const PUMP_STEER_LIMIT := 0.25 # заметное подруливание уже имеет приоритет над автоматическим толчком
+const START_PACE := 3.0       # м/с: до этой скорости тяга педалей не ограничена запасом заднего колеса (помощь старта)
 
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
 var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
@@ -956,21 +957,30 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var wild := BUMP * rough * (1.0 - path_weight)
 	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
 	var o := Vector2(heights.world.world_origin) * GameConfig.TILE
-	gf += wild * _bump(_dist + HUB) + RoadBump.height(x + fx + o.x, z + fz + o.y, surf, grade, across) * path_weight
-	gr += wild * _bump(_dist - HUB) + RoadBump.height(x - fx + o.x, z - fz + o.y, surf, grade, across) * path_weight
+	var bump_f := wild * _bump(_dist + HUB) + RoadBump.height(x + fx + o.x, z + fz + o.y, surf, grade, across) * path_weight
+	var bump_r := wild * _bump(_dist - HUB) + RoadBump.height(x - fx + o.x, z - fz + o.y, surf, grade, across) * path_weight
 	# 11.6: ветки и камни на полотне (RoadObstacles) — та же кочка, только с места препятствия
 	var of := 0.0
 	var orr := 0.0
 	if heights.obstacles != null:
 		of = heights.obstacles.bump_at(x + fx, z + fz)
 		orr = heights.obstacles.bump_at(x - fx, z - fz)
-	gf += of
-	gr += orr
+	bump_f += of
+	bump_r += orr
+	# Поднятое колесо касается кочки, только если она выше подъёма: удар, сопротивление, скользкость
+	# и толчок подвески — от той части кочки, что выше колеса. Колесо видно на подъёме или на кочке.
+	var touch_f := lift_f <= 0.0 or bump_f > lift_f
+	var touch_r := lift_r <= 0.0 or bump_r > lift_r
+	# (колея RoadBump бывает ниже нуля: колесо на земле повторяет её, как прежде)
+	var feel_f := bump_f if lift_f <= 0.0 else maxf(0.0, bump_f - lift_f)
+	var feel_r := bump_r if lift_r <= 0.0 else maxf(0.0, bump_r - lift_r)
+	ground_f = gf + lift_f + feel_f - y
+	ground_r = gr + lift_r + feel_r - y
+	gf += feel_f
+	gr += feel_r
 	# колесо на корне или камне скользкое: держит хуже, тормоз и поворот на нём — риск
-	slick_f = ROOT_GRIP if contact_model and of > SLICK_BUMP else 1.0
-	slick_r = ROOT_GRIP if contact_model and orr > SLICK_BUMP else 1.0
-	ground_f = gf - y + lift_f
-	ground_r = gr - y + lift_r
+	slick_f = ROOT_GRIP if contact_model and touch_f and of > SLICK_BUMP else 1.0
+	slick_r = ROOT_GRIP if contact_model and touch_r and orr > SLICK_BUMP else 1.0
 	if _fresh:
 		_fresh = false
 		_g_f = gf
@@ -982,8 +992,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		return
 	# Колесо, которое взбирается на корень или камень, тормозит велосипед: энергию подъёма забирает
 	# подвеска (как демпфер, ∝ скорости подъёма²). Раньше кочки только качали подвеску, ход не терялся.
-	var rise_f := maxf(0.0, of - _o_f) / maxf(dt, 0.0001)
-	var rise_r := maxf(0.0, orr - _o_r) / maxf(dt, 0.0001)
+	var rise_f := maxf(0.0, of - _o_f) / maxf(dt, 0.0001) if touch_f else 0.0
+	var rise_r := maxf(0.0, orr - _o_r) / maxf(dt, 0.0001) if touch_r else 0.0
 	_o_f = of
 	_o_r = orr
 	if rise_f + rise_r > 0.0:
@@ -1279,6 +1289,8 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
 		if boost:
 			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * throttle * grip
+		if contact_model:
+			drive = _rear_drive(drive, grip)
 	# Кочки съедают ход только при быстром проезде. На длинном спуске воздух мягко
 	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
 	var resistance := rolling + drag * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
@@ -1293,6 +1305,18 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		speed = move_toward(speed, 0.0, resistance * dt)
 		# Не заставляем новичка балансировать и ловить самопроизвольный откат в подъём.
 		speed = maxf(0.0, speed)
+
+
+## Реализованная тяга педалей (модель двух контактов): только через заднее колесо на земле и в пределах его запаса
+## сцепления, оставшегося после боковой силы (она с прошлого подшага: _step_traction идёт после скорости).
+## Помощь старта явная: до START_PACE седок толкается в полную силу педалей и на рыхлом или корнях.
+func _rear_drive(wanted: float, grip: float) -> float:
+	if wanted <= 0.0 or not contact_r():
+		return 0.0
+	var cap := CORNER_GRIP * RIDER_GRIP * grip * tire_r * slick_r
+	var free := sqrt(maxf(0.0, cap * cap - force_r.y * force_r.y))
+	var start := wanted * (1.0 - smoothstep(START_PACE * 0.5, START_PACE, speed))
+	return minf(wanted, maxf(free, start))
 
 
 ## Седок падает: запомнить, с какой скоростью летел велосипед
