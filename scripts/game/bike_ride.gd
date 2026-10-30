@@ -358,6 +358,17 @@ func reset_motion() -> void:
 	crash_cause = CrashCause.FALL
 	crash_normal = Vector3.UP
 	crash_velocity = Vector3()
+	_sub.fill(0.0)
+	drive_request = 0.0
+	drive_force = 0.0
+	brake_force = Vector2()
+	roll_loss = 0.0
+	air_loss = 0.0
+	rough_loss = 0.0
+	slope_force = 0.0
+	pump_force = 0.0
+	grade_now = 0.0
+	feel_acceleration = 0.0
 	pump_motion = 0.0
 	pump_load = 0.0
 	pump_accel = 0.0
@@ -590,16 +601,60 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
 	# Один и тот же короткий шаг при 30/60/120 Гц; hop передаётся только первому подшагу.
 	# Существующие рельеф, вода и подвеска остаются в том же цикле, без новой вертикальной модели.
-	if dt > 1.0 / SUB_HZ + 0.000001:
-		var ticks := ceili(dt * SUB_HZ)
-		for i in ticks:
-			step(p, throttle, turn, boost, hop and i == 0, dt / ticks, w, heights)
-			if crashed:
-				break
-		return
 	# Упавший велосипед ждёт BikeController (ragdoll); новых импульсов и событий у него нет.
 	if dt <= 0.0 or crashed:
 		return
+	var ticks := ceili(dt * SUB_HZ) if dt > 1.0 / SUB_HZ + 0.000001 else 1
+	var start := horizontal_velocity()
+	var sums := PackedFloat32Array()
+	sums.resize(TELEMETRY)
+	var done := 0.0
+	for i in ticks:
+		_substep(p, throttle, turn, boost, hop and i == 0, dt / ticks, w, heights)
+		done += dt / ticks
+		for k in TELEMETRY:
+			sums[k] += _sub[k] * dt / ticks
+		if crashed:
+			break
+	_end_tick(sums, done, start)
+
+
+## Силы и сигналы за последний внешний шаг (средние по подшагам), м/с² на массу велосипеда с седоком.
+## Дают седоку, камере и звуку одни и те же данные за тот же интервал, а не значение последнего подшага.
+enum { T_DRIVE_REQUEST, T_DRIVE, T_BRAKE_F, T_BRAKE_R, T_ROLL, T_AIR, T_ROUGH, T_SLOPE, T_PUMP, T_GRADE, TELEMETRY }
+var _sub := PackedFloat32Array([0, 0, 0, 0, 0, 0, 0, 0, 0, 0])
+var drive_request := 0.0   # запрос педалей до ограничения контактом и сцеплением
+var drive_force := 0.0     # реализованная тяга заднего колеса
+var brake_force := Vector2() # фактически приложенный тормоз переднего и заднего колеса
+var roll_loss := 0.0       # качение по покрытию
+var air_loss := 0.0        # воздух (на земле и в полёте один закон)
+var rough_loss := 0.0      # неровности и потери на большой скорости
+var slope_force := 0.0     # тяжесть вдоль пути: больше нуля — разгоняет
+var pump_force := 0.0      # помощь автопампа
+var grade_now := 0.0       # геометрический уклон земли вдоль курса (без подвески и тела), м на м
+var feel_acceleration := 0.0 # продольное ускорение по мировой скорости за внешний шаг: перепроекция рамы его не даёт
+var tick_time := 0.0       # длительность последнего внешнего шага, с
+
+
+func _end_tick(sums: PackedFloat32Array, done: float, start: Vector2) -> void:
+	tick_time = done
+	var inv := 1.0 / maxf(done, 0.000001)
+	drive_request = sums[T_DRIVE_REQUEST] * inv
+	drive_force = sums[T_DRIVE] * inv
+	brake_force = Vector2(sums[T_BRAKE_F], sums[T_BRAKE_R]) * inv
+	roll_loss = sums[T_ROLL] * inv
+	air_loss = sums[T_AIR] * inv
+	rough_loss = sums[T_ROUGH] * inv
+	slope_force = sums[T_SLOPE] * inv
+	pump_force = sums[T_PUMP] * inv
+	grade_now = sums[T_GRADE] * inv
+	var forward := Vector2(-sin(heading), -cos(heading))
+	feel_acceleration = (horizontal_velocity() - start).dot(forward) * inv
+
+
+## Подшаг езды; step() делит внешний шаг на них и собирает сигналы.
+func _substep(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, dt: float, w: WorldData, heights: Heightfield) -> void:
+	_sub.fill(0.0)
 	# Порядок подшага и возраст данных (контракт; переставлять фазы нельзя — от него зависят задержки):
 	# 1. покрытие читается один раз в начале (Footing);
 	# 2. продольная сила: педали и тормоз берут нагрузки, скользкость и боковую силу шин с прошлого подшага;
@@ -659,6 +714,7 @@ func _read_footing(turn: float, w: WorldData, heights: Heightfield) -> Footing:
 	var f := Footing.new()
 	_corner_demand = absf(turn) * smoothstep(3.0, 10.0, absf(speed))
 	f.slope = _slope(heights)
+	_sub[T_GRADE] = _ground_slope(heights)
 	var contact := RideSurface.sample(w, heights, x, z)
 	f.surf = contact.surface
 	f.path_weight = contact.weight
@@ -692,6 +748,7 @@ func _step_longitudinal(f: Footing, throttle: float, turn: float, boost: bool, h
 		_brake_hold = 0.0
 		brakes.step(dt, 0.0, speed, f.slope, f.grip, 0.0, false)
 		braking = 0.0
+		_sub[T_AIR] = speed * (1.0 - exp(-COAST_DECAY * dt)) / dt
 		speed *= exp(-COAST_DECAY * dt)
 		lateral_speed *= exp(-COAST_DECAY * dt)
 
@@ -1371,6 +1428,7 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		speed = move_toward(speed, 0.0, stop * dt)
 		return
 	var drive := 0.0
+	var request := 0.0
 	if throttle > 0.0:
 		top *= (GameConfig.BIKE_BOOST if boost else 1.0) * throttle
 		var ratio := maxf(speed, 0.0) / maxf(top, 0.1)
@@ -1381,17 +1439,30 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 		# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
 		if boost:
 			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * throttle * grip
+		request = drive
 		if contact_model:
 			drive = _rear_drive(drive, grip)
 	# Кочки съедают ход только при быстром проезде. На длинном спуске воздух мягко
 	# сдерживает разгон выше 18 м/с, не обрезая накопленную скорость на пороге.
-	var resistance := rolling + drag * speed * speed + technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
+	var rough_loss_now := technical * 0.8 + 0.04 * pow(maxf(speed - 18.0, 0.0), 2.0)
+	var resistance := rolling + drag * speed * speed + rough_loss_now
+	_sub[T_DRIVE_REQUEST] = request
+	_sub[T_DRIVE] = drive
+	_sub[T_ROLL] = rolling
+	_sub[T_AIR] = drag * speed * speed
+	_sub[T_ROUGH] = rough_loss_now
+	_sub[T_SLOPE] = gravity - pump_accel
+	_sub[T_PUMP] = pump_accel
 	if brake_pressure > 0.001:
 		var force := brakes.deceleration
 		var before_brake := maxf(0.0, speed + (drive + gravity) * dt)
 		speed = move_toward(before_brake, 0.0, (force + resistance) * dt)
 		brakes.deceleration = minf(force, maxf(0.0, before_brake / dt - resistance))
 		braking = clampf(brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) * smoothstep(0.3, 3.0, before_brake)
+		# у самой остановки итоговый тормоз меньше запрошенного: силы колёс — в той же доле
+		var share := brakes.deceleration / maxf(brakes.front_force + brakes.rear_force, 0.000001)
+		_sub[T_BRAKE_F] = brakes.front_force * share
+		_sub[T_BRAKE_R] = brakes.rear_force * share
 	else:
 		speed += (drive + gravity) * dt
 		speed = move_toward(speed, 0.0, resistance * dt)

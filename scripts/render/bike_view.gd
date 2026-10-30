@@ -52,7 +52,6 @@ var _riding := false
 var _fallen := false
 var _fallen_transform := Transform3D.IDENTITY
 var _has_state := false
-var _last_speed := 0.0
 var _last_crank := 0.0
 var _landing := 0.0
 var _breath_phase := 0.0
@@ -220,9 +219,9 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
 func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void:
 	var continuous := _has_state and _riding and b.riding
-	var acceleration := clampf((b.speed - _last_speed) / maxf(dt, 0.001), -9.0, 7.0) if continuous else 0.0
+	# продольное ускорение по мировой скорости за тот же такт, что и у камеры (BikeRide.feel_acceleration)
+	var acceleration := clampf(b.feel_acceleration, -9.0, 7.0) if continuous else 0.0
 	var cadence := absf(angle_difference(_last_crank, b.crank)) / maxf(dt, 0.001) if continuous else 0.0
-	_last_speed = b.speed
 	_last_crank = b.crank
 	var pedal := clampf(cadence / 4.0, 0.0, 1.0) if not b.airborne else 0.0
 	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0

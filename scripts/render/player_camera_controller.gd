@@ -82,7 +82,7 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 	var rush_goal := 0.0
 	if riding and not crash_active and not _opening:
 		rush_goal = smoothstep(7.0, 20.0, absf(bike.speed))
-		rush_goal += smoothstep(1.0, 5.0, bike.acceleration) * smoothstep(8.0, 18.0, absf(bike.speed)) * 0.2
+		rush_goal += smoothstep(1.0, 5.0, bike.feel_acceleration) * smoothstep(8.0, 18.0, absf(bike.speed)) * 0.2
 	_speed_rush = lerpf(_speed_rush, minf(rush_goal, 1.0), _smooth(RUSH_RESPONSE, dt))
 	# на скорости обзор чуть шире: на бегу немного, на велосипеде сильнее
 	var fov_goal := settings.fov
