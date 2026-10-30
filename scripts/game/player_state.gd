@@ -243,7 +243,9 @@ static func _tangent(around: Callable, px: float, pz: float, sx: float, sz: floa
 	var into := d.dot(nrm)
 	if nrm == Vector2.ZERO or into >= 0.0:
 		return Vector2.ZERO
-	var t := d - nrm * into
+	# 30.10: плюс половина вдавливания наружу — у круглого ствола касательная из точки, уже задевшей его, снова
+	# задевает: велосипед вскользь у ствола вставал как в стену и падал (удар считался по всей скорости)
+	var t := d - nrm * into * 1.5
 	return t if t.length_squared() > 1e-10 else Vector2.ZERO
 
 

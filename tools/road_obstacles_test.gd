@@ -47,7 +47,7 @@ func flat() -> TestGround:
 
 
 ## Едем на север (−Z) от z = 0 со скоростью pace; препятствие на z = −10. Возвращает [велосипед, наибольший ход вилки]
-func ride(g: TestGround, x: float, pace: float, seconds: float, hop_at := -1.0) -> Array:
+func ride(g: TestGround, x: float, pace: float, seconds: float, hop_at := -1.0, pedal := true) -> Array:
 	var b := BikeRide.new()
 	b.x = x
 	b.y = 100.0
@@ -57,7 +57,7 @@ func ride(g: TestGround, x: float, pace: float, seconds: float, hop_at := -1.0) 
 	var t := 0.0
 	var squeeze := 0.0
 	while t < seconds and not b.crashed:
-		b.step(p, 1.0 if pace < 9.0 else 0.0, 0.0, false, hop_at >= 0.0 and absf(t - hop_at) < DT * 0.5, DT, g.world, g)
+		b.step(p, clampf((pace - b.speed) * 2.0, 0.0, 1.0) if pace < 9.0 and pedal else 0.0, 0.0, false, hop_at >= 0.0 and absf(t - hop_at) < DT * 0.5, DT, g.world, g)
 		squeeze = maxf(squeeze, b.squash_f)
 		t += DT
 	return [b, squeeze]
@@ -89,8 +89,9 @@ func _tiers() -> void:
 		var g := flat()
 		g.obstacles._add(-2.1 * s, -10.0, 2.1 * s, -10.0, 0.2 * s, 100.0, 100.0 + 0.42 * s)
 		return g
-	var r: Array = ride(log_ground.call(), 0.0, 5.0, 4.0)
-	check(not r[0].crashed and r[0].z > -10.0, "бревно на 5 м/с без прыжка: остановка (z %.2f)" % r[0].z)
+	# (30.10: на 5 м/с бревно переваливается с потерей скорости, как в wheel_contact_test; встаёт — накатом на 3 м/с)
+	var r: Array = ride(log_ground.call(), 0.0, 3.0, 6.0, -1.0, false)
+	check(not r[0].crashed and r[0].z > -10.0, "бревно на 3 м/с накатом без прыжка: остановка (z %.2f%s)" % [r[0].z, (", упал: " + BikeRide.CrashCause.keys()[r[0].crash_cause]) if r[0].crashed else ""])
 	r = ride(log_ground.call(), 0.0, 12.0, 2.0)
 	check(r[0].crashed, "бревно на 12 м/с без прыжка: падение")
 	check(jumpable(log_ground, 8.0), "бревно на 8 м/с перепрыгивается")
@@ -109,7 +110,22 @@ func _tiers() -> void:
 	var trunk := flat()
 	trunk.obstacles._add(0.0, -10.0, 0.0, -10.0, 0.3, 100.0, INF)
 	r = ride(trunk, 0.5, 12.0, 2.0)
-	check(not r[0].crashed and r[0].z < -14.0, "ствол вскользь на 12 м/с: проскользнул без падения")
+	check(not r[0].crashed and r[0].z < -14.0, "ствол вскользь на 12 м/с: проскользнул без падения%s" % ((" (упал: %s, z %.2f)" % [BikeRide.CrashCause.keys()[r[0].crash_cause], r[0].z]) if r[0].crashed else ""))
+	# 30.10: после падения на бревне седок встаёт за ним, велосипед лежит перед ним — сесть можно (бревно
+	# перешагивается и переносится через него, а не стена для посадки)
+	for side: float in [1.0, -1.0]:
+		var g: TestGround = log_ground.call()
+		var b := BikeRide.new()
+		b.x = 0.0
+		b.z = -10.0 + 0.9 * side
+		b.y = 100.0
+		b.fallen = true
+		var p := PlayerState.new()
+		p.x = 0.4
+		p.z = -10.0 - 1.4 * side
+		p.feet = 100.0
+		p.on_ground = true
+		check(b.prepare_mount(p, g.world, g), "сесть на велосипед через бревно (%s)" % ("велосипед перед бревном" if side > 0.0 else "за бревном"))
 
 
 ## Искусственная тропа: прямая на север через участок 256 × 256 клеток, полог cover, каменистость rocky

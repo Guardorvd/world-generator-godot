@@ -73,7 +73,9 @@ static func clear_path(w: WorldData, h: Heightfield, from: Vector3, to: Vector3,
 		var y := h.surface_at(p.x, p.z, previous + 0.1)
 		if not is_finite(y) or absf(y - previous) > 0.3 or absf(y - from.y) > 0.6:
 			return false
-		if not PlayerState.is_passable(w, h, p.x, p.z, y, BikeRide.BODY_R, objects_only):
+		# 30.10: низкое препятствие (бревно, пень, камень до ForestObstacles.CLIMB_MAX) перешагивают и переносят через
+		# него велосипед; раньше после падения на бревне поперёк дороги сесть было нельзя, если седок встал за ним
+		if not PlayerState.is_passable(w, h, p.x, p.z, y, BikeRide.BODY_R, objects_only, ForestObstacles.CLIMB_MAX):
 			return false
 		previous = y
 	return absf(previous - to.y) < 0.3

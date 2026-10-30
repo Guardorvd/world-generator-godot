@@ -773,7 +773,7 @@ func _physics_process(dt: float) -> void:
 	if heights == null: return
 	var input_allowed := not editor.visible
 	var throttle := Input.get_axis("move_back", "move_forward") if input_allowed else 0.0
-	var turn := services.controls.bike_steer(Input.get_axis("move_left", "move_right") if input_allowed else 0.0, dt)
+	var turn := services.controls.bike_steer(Input.get_axis("move_left", "move_right") if input_allowed else 0.0, dt, bike.speed if bike != null else 0.0)
 	var jump := input_allowed and Input.is_action_just_pressed("jump")
 	var run := input_allowed and Input.is_action_pressed("run")
 	if autopilot != null and bike.riding and not crash.active():
