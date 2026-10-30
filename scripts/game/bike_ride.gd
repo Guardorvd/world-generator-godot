@@ -853,6 +853,18 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 ## Опора держит мелкие неровности и изломы; отрыв — только с края или когда рельеф впереди
 ## уходит вниз быстрее, чем позволяет тяжесть на этой скорости (гребень, трамплин).
 func _step_vertical(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
+	# Перекрытие ищется от высоты до шага: подъём сквозь настил не переносит седока на мост.
+	var feet0 := y
+	_step_height(g, hop, dt, heights)
+	if airborne:
+		var top := _roof_over(x, z, heading, feet0, heights) - BikeRecovery.CLEARANCE
+		if y > top:
+			# Седок упёрся в свод: подъём гаснет, дальше обычное падение до опоры.
+			y = maxf(top, g)
+			vy = minf(vy, 0.0)
+
+
+func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 	_hop_wait = maxf(0.0, _hop_wait - dt)
 	# На коротком естественном отрыве ранний Space не должен ждать далёкую посадку.
 	var accept_hop := hop and (not airborne or _coyote > 0.0 or (vy < 0.0 and y - g < 0.2))
@@ -1309,7 +1321,17 @@ func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -
 	var climb := _climb()
 	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb)
 		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb)
-		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb))
+		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb)
+		and _roof_over(px, pz, hd, y, heights) >= y + BikeRecovery.CLEARANCE)
+
+
+## Самое низкое перекрытие над рамой (середина и оси) для ног на высоте feet: свод туннеля или низ моста.
+## Габарит седока — BikeRecovery.CLEARANCE, тот же, что при посадке и восстановлении.
+func _roof_over(px: float, pz: float, hd: float, feet: float, heights: Heightfield) -> float:
+	var fx := -sin(hd) * AXLE
+	var fz := -cos(hd) * AXLE
+	return minf(BikeRecovery.roof(heights, px, pz, feet),
+		minf(BikeRecovery.roof(heights, px + fx, pz + fz, feet), BikeRecovery.roof(heights, px - fx, pz - fz, feet)))
 
 
 ## Доля скорости, которая остаётся после касания стены: moved — путь, который всё же прошли, full — весь путь за кадр

@@ -39,8 +39,12 @@ static func placement(w: WorldData, h: Heightfield, at: Vector3, heading: float,
 
 
 static func headroom(h: Heightfield, x: float, z: float, feet: float) -> bool:
-	if h.ceiling_at(x, z, feet) < feet + CLEARANCE:
-		return false
+	return roof(h, x, z, feet) >= feet + CLEARANCE
+
+
+## Нижняя граница перекрытия над ногами на высоте feet: свод туннеля или низ моста; INF, если его нет.
+static func roof(h: Heightfield, x: float, z: float, feet: float) -> float:
+	var top := h.ceiling_at(x, z, feet)
 	# ceiling_at описывает свод туннеля, но не нижнюю сторону моста.
 	var cells: Variant = h._cell_list(x, z)
 	for index: int in cells if cells != null else []:
@@ -53,10 +57,9 @@ static func headroom(h: Heightfield, x: float, z: float, feet: float) -> bool:
 			continue
 		var deck := h.level(s, along)
 		# Запас включает балки деревянного и нижнюю плиту каменного моста.
-		var underside := deck - (0.7 if s.style == "stone" else (0.24 if s.style == "planks" else 0.5))
-		if feet < deck - 0.05 and feet + CLEARANCE > underside:
-			return false
-	return true
+		if feet < deck - 0.05:
+			top = minf(top, deck - (0.7 if s.style == "stone" else (0.24 if s.style == "planks" else 0.5)))
+	return top
 
 
 ## Прямой путь: посадка не должна срезать стену/угол, обрыв или перепад этажей.

@@ -2,9 +2,12 @@ extends "res://tools/bike_friendly_test.gd"
 ## Инварианты на стыках физики велосипеда (аудит 30.10.2026), затем прежний набор управляемости.
 ## Без генерации мира: ограничители подменяют только нужную проверку (габарит, свод).
 
+## Свод на высоте top над землёй 100 м севернее from (курс 0 едет на −Z).
 class LowRoof extends TestGround:
-	func ceiling_at(_x: float, _z: float, _feet: float) -> float:
-		return 101.9
+	var top := 101.9
+	var from := INF
+	func ceiling_at(_x: float, pz: float, _feet: float) -> float:
+		return top if pz < from else INF
 
 ## Курс допустим только в полосе [low, high]: узкий коридор (обе стороны) или угол (одна).
 class NarrowSlotBike extends BikeRide:
@@ -54,11 +57,32 @@ func run() -> void:
 	grounded._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	rear_up._step_speed(1.0, false, 0.0, 1.0, 1.0 / 120.0)
 	print("AUDIT drive: rear_contact=%s grounded_v=%.6f rear_up_v=%.6f" % [rear_up.contact_r(), grounded.speed, rear_up.speed])
+	# A2: прыжок под сводом не поднимает габарит седока выше свода (с места и на ходу, 60 и 144 Гц)
 	var roof := LowRoof.new(w)
-	var jumping := bike(0.0)
-	var peak := jumping.y
+	for hz: int in [60, 144]:
+		for pace: float in [0.0, 6.0]:
+			var jumping := bike(pace)
+			var peak := jumping.y
+			var lowest := jumping.y
+			for i in hz * 2:
+				jumping.step(p, 0.0, 0.0, false, i == 0, 1.0 / hz, w, roof)
+				peak = maxf(peak, jumping.y)
+				lowest = minf(lowest, jumping.y)
+			check(peak + BikeRecovery.CLEARANCE <= roof.top + 0.0001 and lowest >= 100.0 - 0.0001 and not jumping.crashed and not jumping.airborne,
+				"A2 прыжок под сводом %.0f м/с %d Гц: верх %.3f при своде %.3f" % [pace, hz, peak + BikeRecovery.CLEARANCE, roof.top])
+	# въезд под свод ниже габарита: велосипед останавливается у кромки, не въезжает и не падает
+	var low := LowRoof.new(w)
+	low.top = 101.5
+	low.from = -3.0
+	var entering := bike(6.0)
 	for i in 120:
-		jumping.step(p, 0.0, 0.0, false, i == 0, 1.0 / 120.0, w, roof)
-		peak = maxf(peak, jumping.y)
-	print("AUDIT ceiling: roof=101.9 peak_feet=%.6f required_top=%.6f crashed=%s" % [peak, peak + BikeRecovery.CLEARANCE, jumping.crashed])
+		entering.step(p, 0.5, 0.0, false, false, 1.0 / 120.0, w, low)
+	check(entering.z > -3.0 and not entering.crashed and absf(entering.y - 100.0) < 0.001, "A2 въезд под низкий свод: остановка у кромки z=%.2f" % entering.z)
+	# свод выше габарита: проезд свободный
+	var high := LowRoof.new(w)
+	high.from = -3.0
+	var passing := bike(6.0)
+	for i in 120:
+		passing.step(p, 0.5, 0.0, false, false, 1.0 / 120.0, w, high)
+	check(passing.z < -6.0 and not passing.crashed, "A2 проезд под сводом выше габарита: z=%.2f" % passing.z)
 	super.run()
