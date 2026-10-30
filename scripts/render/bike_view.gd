@@ -217,20 +217,23 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 
 
 ## Реакции считаются только на тактах физики; draw лишь интерполирует готовую позу.
-func _update_rider(b: BikeRide, dt: float, throttle: float, boost: bool) -> void:
+func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> void:
 	var continuous := _has_state and _riding and b.riding
 	# продольное ускорение по мировой скорости за тот же такт, что и у камеры (BikeRide.feel_acceleration)
 	var acceleration := clampf(b.feel_acceleration, -9.0, 7.0) if continuous else 0.0
-	var cadence := absf(angle_difference(_last_crank, b.crank)) / maxf(dt, 0.001) if continuous else 0.0
 	_last_crank = b.crank
-	var pedal := clampf(cadence / 4.0, 0.0, 1.0) if not b.airborne else 0.0
-	var slope := clampf(b.tilt, -0.5, 0.5) if not b.airborne else 0.0
-	var drive := maxf(throttle, 0.0) if not b.airborne else 0.0
+	# Уклон земли, а не наклон рамы: подвеска и движение тела не выдают себя за подъём.
+	var slope := clampf(b.grade_now, -0.5, 0.5) if not b.airborne else 0.0
+	# Усилие — то же состояние, что даёт тягу (BikeRide.effort), тяжесть — реализованная тяга и подъём.
+	var drive := b.effort if not b.airborne else 0.0
+	var work := clampf(b.drive_force / (GameConfig.BIKE_ACCEL * 1.75), 0.0, 1.0)
 	var load := smoothstep(0.04, 0.25, slope) * drive
-	var effort_target := maxf(pedal * 0.8 + drive * 0.2, load * LOAD_EFFORT) * (1.25 if boost else 1.0)
-	# Усилие набирается и отпускается мягко; отпускание педалей не обрывает дыхание и плечи.
-	var effort_rate := 8.0 if effort_target > _effort else 5.0
-	_effort = lerpf(_effort, effort_target, Util.damp(effort_rate, dt)) if continuous else 0.0
+	var effort_target := maxf(drive * 0.6 + work * 0.4, load * LOAD_EFFORT) * (1.25 if boost else 1.0)
+	# Набирается вместе с тягой, без своего запаздывания; отпускание педалей не обрывает дыхание и плечи.
+	if effort_target > _effort:
+		_effort = effort_target if continuous else 0.0
+	else:
+		_effort = lerpf(_effort, effort_target, Util.damp(5.0, dt)) if continuous else 0.0
 	var effort := _effort
 	var braking := clampf(b.brake_deceleration / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;

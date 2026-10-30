@@ -8,7 +8,12 @@ extends RefCounted
 ## переднее колесо не въезжает в дом и не высовывается за перила.
 
 const WHEEL_R := 0.34   # радиус колеса, м
-const GEAR := 2.8       # оборотов колеса на один оборот педалей
+const GEAR_MIN := 1.4   # самая лёгкая передача виртуального переключателя
+const GEAR_MAX := 5.0   # и самая тяжёлая: на 20 м/с — около 110 об/мин, дальше ноги не учащаются бесконтрольно
+const CADENCE_LOW := 6.3  # рад/с педалей (60 об/мин) на малой скорости
+const CADENCE_HIGH := 9.4 # рад/с (90 об/мин) в крейсерском темпе
+const GEAR_RESPONSE := 2.5 # 1/с: передача меняется плавно
+const START_CRANK := 2.5  # рад/с педалей на полном усилии с места: нажатие видно до того, как велосипед поехал
 const WALL_LOSS := 6.0  # 1/с: как быстро удар в стену в лоб гасит скорость (при скольжении вдоль стены почти не гасит)
 const BODY_R := 0.3     # радиус кругов, которыми велосипед задевает препятствия, м (руль шириной 0,6 м)
 const AXLE := 0.57      # круги колёс — на столько впереди и позади середины, м: вместе с BODY_R до края колеса (0,53 + 0,34)
@@ -164,6 +169,7 @@ const SPEED_LOSS := GameConfig.BIKE_DRAG - AIR_DRAG
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
 var effort := 0.0           # усилие седока на педалях 0..1: от него тяга и поза (BikeView)
 var effort_ramp := true     # false — прежняя мгновенная тяга, для сравнительных прогонов
+var gear := GEAR_MIN        # виртуальная передача: оборотов колеса на оборот педалей (только каденс и вид, не тяга)
 var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
 var pump_load := 0.0         # добавка нагрузки, доля веса
 var pump_accel := 0.0        # помощь ходу на обратной стороне волны, м/с²
@@ -369,6 +375,7 @@ func reset_motion() -> void:
 	crash_velocity = Vector3()
 	_sub.fill(0.0)
 	effort = 0.0
+	gear = GEAR_MIN
 	drive_request = 0.0
 	drive_force = 0.0
 	brake_force = Vector2()
@@ -874,9 +881,14 @@ func _step_pose(throttle: float, lateral: float, dt: float) -> void:
 
 	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность
 	wheel = fmod(wheel + speed * dt / WHEEL_R, TAU)
-	# педали крутятся, только пока их жмут на земле: накатом и в полёте свободный ход
-	if throttle > 0.0 and speed > 0.3 and not airborne:
-		crank = fmod(crank + speed * dt / WHEEL_R / GEAR, TAU)
+	# Виртуальная автоматическая передача: каденс растёт с темпом от 60 до 90 об/мин, а не вместе со скоростью
+	# через одну передачу. Подбирается плавно и накатом, чтобы повторный газ начинался с подходящей передачи.
+	var wheel_rate := maxf(speed, 0.0) / WHEEL_R
+	var wanted_gear := clampf(wheel_rate / lerpf(CADENCE_LOW, CADENCE_HIGH, smoothstep(2.0, 9.0, speed)), GEAR_MIN, GEAR_MAX)
+	gear = lerpf(gear, wanted_gear, Util.damp(GEAR_RESPONSE, dt))
+	# педали крутятся, только пока их жмут на земле: накатом и в полёте свободный ход; на старте видно нажатие
+	if throttle > 0.0 and not airborne and (speed > 0.3 or effort > 0.05):
+		crank = fmod(crank + maxf(wheel_rate / gear, effort * START_CRANK) * dt, TAU)
 
 
 ## Игрока везёт велосипед: положение и опора — отсюда, в конце подшага или при падении.

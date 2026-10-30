@@ -43,10 +43,20 @@ func reset() -> void:
 	state = BikeRide.new()
 	state.riding = true
 	state.speed = 6
+	_speed_before = state.speed
 	bike.snap(state)
 	bike.draw(1)
 
+var _speed_before := 0.0
+
+## Вид читает сигналы, которые считает BikeRide.step (усилие, реализованная тяга, уклон земли, ускорение
+## за такт); здесь состояние задано вручную, поэтому они выводятся из него так же, как в физике.
 func advance(throttle := 0.0, boost := false, dt := DT) -> void:
+	state.feel_acceleration = (state.speed - _speed_before) / dt
+	_speed_before = state.speed
+	state.grade_now = state.tilt
+	state._step_effort(maxf(throttle, 0.0) if not state.airborne else 0.0, dt)
+	state.drive_force = GameConfig.BIKE_ACCEL * 1.75 * state.effort * 0.5
 	bike.tick(state, dt, throttle, boost)
 	bike.draw(1)
 	state.land_impact = 0

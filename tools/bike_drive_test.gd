@@ -72,6 +72,33 @@ func run() -> void:
 		for i in 300: tick(down, 0.0, false, 60)
 		print("T3 спуск %d%% накатом с 5 м/с: через 5 с %.1f м/с" % [roundi(grade * 100), down.speed])
 	ground.gradient = Vector2.ZERO
+	# T4: каденс от виртуальной передачи — видимое нажатие на старте, 55–110 об/мин в езде, без скачков и накатом стоят
+	var legs := bike(0.0)
+	var pushed := 0.0
+	for i in 12:
+		var c0 := legs.crank
+		tick(legs, 0.0, false, 60, 1.0)
+		pushed += absf(angle_difference(c0, legs.crank))
+	ground.gradient = Vector2(0, 0.08)
+	var rpm_low := INF
+	var rpm_high := 0.0
+	var jerk := 0.0
+	var last_rate := -1.0
+	for i in 600:
+		var c0 := legs.crank
+		tick(legs, 0.0, false, 60, 1.0)
+		var rate := absf(angle_difference(c0, legs.crank)) * 60.0
+		if legs.speed > 4.0:
+			rpm_low = minf(rpm_low, rate * 60.0 / TAU)
+			rpm_high = maxf(rpm_high, rate * 60.0 / TAU)
+		if last_rate >= 0.0: jerk = maxf(jerk, absf(rate - last_rate))
+		last_rate = rate
+	ground.gradient = Vector2.ZERO
+	var top_speed := legs.speed
+	var c1 := legs.crank
+	for i in 30: tick(legs, 0.0, false, 60, 0.0)
+	check(pushed > 0.05 and rpm_low > 55.0 and rpm_high < 115.0 and jerk < 0.6 and legs.crank == c1,
+		"T4 каденс: нажатие на старте %.2f рад, %.0f–%.0f об/мин до %.1f м/с, скачок %.2f рад/с за такт, накатом стоят" % [pushed, rpm_low, rpm_high, top_speed, jerk])
 	# T1: силы объясняют изменение скорости — педали, накат, тормоз на ровном и на спуске
 	for case: Array in [[1.0, 0.0, 5.0], [0.0, 0.0, 8.0], [-1.0, 0.0, 8.0], [-0.5, 0.1, 6.0], [1.0, -0.12, 3.0]]:
 		ground.gradient = Vector2(0, case[1])
