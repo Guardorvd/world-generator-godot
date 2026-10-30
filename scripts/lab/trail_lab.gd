@@ -24,6 +24,7 @@ var stamina_bar := ProgressBar.new()
 var route_hint := Label.new()
 var camera_control := Button.new()
 var details_control := Button.new()
+var save_control := Button.new() # «Сохранить запись»: сессия тестов попадает в ride_logs/ только по нажатию
 var status := Label.new()
 var diagnostics := Label.new()
 var hud_panel := PanelContainer.new()
@@ -81,6 +82,9 @@ var vegetation: VegetationLayer
 ## Автопилот (P — по кругу: выкл, осторожно, flow, на пределе): ведёт велосипед тем же вводом, что игрок.
 const Autopilot = preload("res://scripts/lab/trail_autopilot.gd")
 var autopilot: RefCounted
+## Запись заезда в ride_logs/<дата>/ (всё из F3, ввод, положение, события): scripts/lab/trail_lab_recorder.gd
+const Recorder = preload("res://scripts/lab/trail_lab_recorder.gd")
+var recorder := Recorder.new()
 
 func _ready() -> void:
 	if routes.is_empty(): routes = Fixture.definitions()
@@ -162,6 +166,10 @@ func _ready() -> void:
 	details_control.add_theme_font_size_override("font_size", 12)
 	details_control.pressed.connect(func() -> void: set_diagnostics_visible(not diagnostics_visible))
 	more_actions.add_child(details_control)
+	save_control.add_theme_font_size_override("font_size", 12)
+	save_control.focus_mode = Control.FOCUS_NONE # пробел (прыжок) не нажимает кнопку
+	save_control.pressed.connect(save_ride_log)
+	more_actions.add_child(save_control)
 	hud_box.add_child(diagnostics)
 	status.position = Vector2(18, 110)
 	status.custom_minimum_size.x = 220
@@ -647,6 +655,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	if autopilot != null: autopilot.reset(d, heights, station)
 	view.snap(bike)
 	metrics.reset(bike)
+	recorder.begin(self, "R/смена трассы: станция %.0f, скорость %.1f м/с" % [station, speed])
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	_cam_from = _cam_to
 	_cam_feet = player.feet
@@ -719,6 +728,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		set_diagnostics_visible(not diagnostics_visible)
 		get_viewport().set_input_as_handled()
 		return
+	if key == KEY_F9:
+		save_ride_log()
+		get_viewport().set_input_as_handled()
+		return
 	if key == KEY_V:
 		set_overview(not overview)
 		get_viewport().set_input_as_handled()
@@ -731,6 +744,14 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == KEY_G: launch_element()
 	if key == KEY_P: _cycle_autopilot()
 
+## Сохранить запись сессии тестов в ride_logs/<дата>/ (кнопка и F9)
+func save_ride_log() -> void:
+	var saved: String = recorder.save(self)
+	if saved.is_empty():
+		show_message("Нечего сохранять: запись начинается с первого нажатия или движения" if recorder.enabled else "Запись выключена")
+		return
+	show_message("Запись сохранена: %s" % saved.trim_prefix("res://"))
+
 ## Колёса по отдельности: нагрузка (доли веса) и использованный запас сцепления
 func _contact_report() -> String:
 	if not bike.contact_model:
@@ -738,8 +759,12 @@ func _contact_report() -> String:
 	return "Перед: нагрузка %.2f (шина %.2f) · сцепление %.0f%%%s  ·  зад: %.2f (%.2f) · %.0f%%%s  (F6)" % [bike.load_f, bike.tire_f, bike.use_f * 100,
 		"" if bike.contact_f() else " · НЕТ КОНТАКТА", bike.load_r, bike.tire_r, bike.use_r * 100, "" if bike.contact_r() else " · НЕТ КОНТАКТА"]
 
+func _exit_tree() -> void:
+	recorder.close() # несохранённое остаётся только во временной папке user://ride_log_unsaved
+
 func _input(event: InputEvent) -> void:
 	services.controls.note(event) # клавиатура или геймпад: от этого частичный руль с клавиш (Controls.bike_steer)
+	recorder.note_input(event)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel"):
@@ -817,6 +842,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		view.tick(bike, dt, throttle, bike.riding and controller.stamina.can_boost(run, throttle))
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
+	recorder.tick(self, dt, throttle, turn, run, jump)
 	if bike.land_impact > 0.0: last_land_impact = bike.land_impact
 	if bike.bottom_out > 0.0: last_bottom_out = bike.bottom_out
 	# These are one-tick events. Leaving them latched repeats the rider's landing animation.
@@ -887,6 +913,9 @@ func _process(dt: float) -> void:
 	surface_label.text = name + ("  ·  ПАДЕНИЕ" if crash.active() else ("  ·  ПОЛЁТ" if bike.airborne else ""))
 	stamina_label.text = "Выносливость  %.0f%%" % (controller.stamina.value * 100)
 	stamina_bar.value = controller.stamina.value * 100
+	save_control.disabled = not recorder.has_data()
+	save_control.text = ("F9  Сохранить запись (%.0f с)" % recorder.seconds()) if recorder.has_data() else "F9  Сохранить запись"
+	save_control.tooltip_text = "Записывает всю сессию (все поездки с R): ввод, положение, данные F3, события. В проект сохраняется только по нажатию"
 	if diagnostics_visible:
 		diagnostics.text = "R старт  ·  G заезд  ·  P автопилот  ·  %s посадка/сход\nW/S педали и тормоз (стоя: отпустить и держать S — назад)  ·  A/D руль\nSpace прыжок  ·  Shift усилие  ·  Q тело назад  ·  E вперёд\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
 %s

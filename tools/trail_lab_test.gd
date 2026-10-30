@@ -333,6 +333,65 @@ func check_lab_session(lab: Node) -> void:
 	lab.reset_ride()
 	await process_frame
 	check(not lab.crash.active() and lab.bike.riding and lab.view.rider.is_inside_tree(), "reset after a fall restores the real rider and bike")
+	await check_recorder(lab)
+
+## Запись сессии: до «Сохранить» в проект ничего не попадает; после — csv, события, заголовок и сводка; пишется во временную папку
+func check_recorder(lab: Node) -> void:
+	var folder := "res://tools/control/runs/ride_log_test"
+	var absolute := ProjectSettings.globalize_path(folder)
+	wipe(absolute)
+	lab.recorder.enabled = true
+	lab.recorder.root = folder + "/project"
+	lab.recorder.temp_root = folder + "/temp"
+	lab.reset_ride(30.0, 0.0)
+	for i in 60:
+		lab.bike.speed = 0.0 # на уклоне велосипед сам покатился бы: ждём стоя
+		lab.step_simulation(1.0 / 60, 0.0, 0.0, false, false)
+	check(not lab.recorder.has_data() and not FileAccess.file_exists(folder + "/temp/unsaved.csv"), "recorder writes nothing while nothing has happened")
+	# первая поездка: газ и руль, падение с высоты; вторая (R): ещё немного езды
+	for i in 90: lab.step_simulation(1.0 / 60, 1.0, 0.4 if i > 30 else 0.0, false, false)
+	check(lab.recorder.has_data() and FileAccess.file_exists(folder + "/temp/unsaved.csv"), "recorder starts on the first activity, into the temporary files")
+	lab.bike.y += 12.0
+	lab.bike.airborne = true
+	lab.bike.vy = -4.0
+	for i in 600:
+		await physics_frame
+		lab.step_simulation(1.0 / 60, 0.0, 0.0, false, false)
+		if lab.crash.active(): break
+	for i in 30: lab.step_simulation(1.0 / 60, 0.0, 0.0, false, false)
+	lab.reset_ride(60.0, 4.0)
+	for i in 60: lab.step_simulation(1.0 / 60, 1.0, -0.3, false, false)
+	check(not DirAccess.dir_exists_absolute(absolute + "/project"), "nothing reaches the project before «Save»")
+	var base: String = lab.recorder.save(lab)
+	check(base != "" and FileAccess.file_exists(base + ".csv") and FileAccess.file_exists(base + ".events.txt") and FileAccess.file_exists(base + ".header.json") and FileAccess.file_exists(base + ".summary.txt"), "«Save» writes csv, events, header and summary into the project")
+	check(not lab.recorder.has_data() and lab.recorder.save(lab) == "", "after «Save» the session is empty: a second press has nothing to save")
+	var csv := FileAccess.get_file_as_string(base + ".csv").split("\n", false)
+	var head := csv[0].split(",")
+	var header: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(base + ".header.json"))
+	check(csv.size() > 150 and head.size() > 100 and csv[1].split(",").size() == head.size() and csv[csv.size() - 1].split(",").size() == head.size(), "every csv row has one value per column (%d rows, %d columns)" % [csv.size() - 1, head.size()])
+	check(header.columns.size() == head.size() and header.bike_constants.has("SUB_HZ") and header.route.elements.size() > 0 and header.code.has("commit") and header.rides.size() == 2, "header lists the columns, physics constants, route elements, code version and both rides")
+	var events := FileAccess.get_file_as_string(base + ".events.txt")
+	check("ПАДЕНИЕ" in events and "отрыв" in events and "НОВАЯ ПОЕЗДКА" in events and "СОХРАНЕНО" in events, "events name the take-off, the fall, the new ride and the save")
+	var summary := FileAccess.get_file_as_string(base + ".summary.txt")
+	check("Ввод (время удержания" in summary and "падений 1" in summary and "поездка 2" in summary and "F3 на конец заезда" in summary, "summary states the input, the falls, the rides and the F3 report")
+	var ride_col := head.find("ride")
+	var station_col := head.find("station")
+	var row := csv[100].split(",")
+	check(ride_col >= 0 and int(csv[csv.size() - 1].split(",")[ride_col]) == 2 and float(row[station_col]) > 29.0, "rows carry the ride number and the station along the route")
+	lab.step_simulation(1.0 / 60, 1.0, 0.0, false, false)
+	check(lab.recorder.has_data(), "a new session starts right after «Save»")
+	lab.recorder.close()
+	lab.recorder.enabled = DisplayServer.get_name() != "headless"
+	lab.recorder.root = lab.Recorder.ROOT
+	lab.recorder.temp_root = lab.Recorder.TEMP
+	if "--keep-ride-log" not in OS.get_cmdline_user_args(): wipe(absolute) # образец записи: -- --keep-ride-log
+
+## Удалить папку со всем содержимым (временные записи теста)
+func wipe(absolute: String) -> void:
+	if not DirAccess.dir_exists_absolute(absolute): return
+	for name in DirAccess.get_files_at(absolute): DirAccess.remove_absolute(absolute.path_join(name))
+	for name in DirAccess.get_directories_at(absolute): wipe(absolute.path_join(name))
+	DirAccess.remove_absolute(absolute)
 
 ## TrailComposer: every profile yields a valid, deterministic, sectioned route; world-relief grounds prepare.
 func check_composer() -> void:
