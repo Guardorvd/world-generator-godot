@@ -207,7 +207,9 @@ static func _line() -> Dictionary:
 ## Извилины длинных прямых: амплитуда, м, по номеру опорной точки, с которой начинается прямая. Волна около 70 м,
 ## на концах прямой смещение и его наклон нулевые — дуги опорных точек не ломаются. Без извилин: разгон к оврагу (11),
 ## прямые моста (21) и выемки (24); у пересечений (calm) прямая тоже остаётся прямой.
-const MEANDER := {0: 4.0, 1: 4.0, 2: 3.5, 3: 4.0, 6: 4.5, 12: 3.0, 13: 4.0, 16: 4.0, 19: 3.0, 20: 4.0, 25: 5.0, 27: 3.5}
+## 31.10: извилины в полтора раза сильнее (радиус около 20 м): прямая без дела — не трасса; гэпы и столы на них —
+## трансферы с доворотом в воздухе.
+const MEANDER := {0: 6.0, 1: 6.0, 2: 5.5, 3: 6.0, 6: 6.5, 7: 5.0, 12: 4.5, 13: 6.0, 16: 5.5, 19: 4.0, 20: 5.5, 25: 7.0, 27: 5.0}
 const WAVE := 70.0
 const CALM := 22.0
 
@@ -265,26 +267,41 @@ static func elements(d: TrailDefinition, corners: PackedFloat32Array, arcs: Pack
 		list.append(e)
 		return e
 
-	# — Разгон по верхней полке: линия из двух столов по нарастающей, памп-дублы, большой стол и первый дроп перед
-	# шпилькой (между дропом и виражом 40 м — тормозить есть где)
-	put.call(T.TABLETOP, between.call(0, 0.35), 14.0, 0.7)
-	put.call(T.TABLETOP, between.call(0, 0.68), 16.0, 0.9)
+	# гэп: кикер, открытый разрыв gap до приземления и длинный спуск (TrailElement.GAP)
+	var jump := func(station: float, length: float, height: float, gap: float) -> void:
+		(put.call(T.GAP, station, length, height) as TrailElement).gap = gap
+	# памп: count волн по period метров; длина волны под скорость участка — на гребне колёса остаются на земле
+	var pump := func(station: float, count: int, period: float, height: float) -> void:
+		put.call(T.PUMP, station, count * period, height, count)
+
+	# 31.10, по заездам (tools/trail_air_stats.gd): столы 0,7–1,1 м поднимали седока на 0,1–0,4 м, пампы по 5–6 м
+	# подбрасывали на каждом гребне, а настоящий полёт был один — над оврагом. Теперь: линии из гэпов и высоких
+	# столов с ритмом, пампы под скорость участка (волна 10–11 м), гэп на изгибе — трансфер с доворотом в воздухе.
+	# — Разгон по верхней полке: памп набирает скорость со старта, первый стол
+	pump.call(between.call(0, 0.4), 3, 10.0, 0.55)
+	put.call(T.TABLETOP, between.call(0, 0.82), 22.0, 1.5)
 	berm.call(1, 0.5)
-	put.call(T.PUMP, between.call(1, 0.5), 18.0, 0.55, 3)
+	# линия прыжков: гэп — стол — гэп побольше, приземление одного в 10 м от кикера следующего
+	jump.call(c.call(1) + 28.0, 18.0, 1.4, 3.5)
+	put.call(T.TABLETOP, c.call(1) + 58.0, 22.0, 1.7)
+	jump.call(c.call(1) + 86.0, 20.0, 1.5, 4.0)
 	berm.call(2, 0.6)
-	put.call(T.TABLETOP, between.call(2, 0.5), 18.0, 1.1)
+	pump.call(c.call(2) + 31.0, 4, 11.0, 0.6)
+	put.call(T.TABLETOP, c.call(2) + 74.0, 24.0, 1.9)
 	berm.call(3, 0.6)
-	put.call(T.DROP, between.call(3, 0.42), 12.0, 0.8)
+	jump.call(c.call(3) + 25.0, 20.0, 1.5, 4.0)
+	put.call(T.DROP, c.call(3) + 50.0, 14.0, 1.2)
 	berm.call(4, 1.1)
 	berm.call(5, 1.3)
-	# — Ритм: памп после шпильки возвращает скорость, двойной стол, ступенька вниз, корни на выходе из дуги
-	put.call(T.PUMP, between.call(5, 0.3), 22.0, 0.45, 4)
-	put.call(T.TABLETOP, between.call(5, 0.62), 16.0, 0.9)
-	put.call(T.TABLETOP, between.call(5, 0.82), 16.0, 1.0)
+	# — Ритм: памп после шпильки возвращает скорость, стол, двойной гэп, корни на выходе из дуги; каменный сад перед шпилькой
+	pump.call(c.call(5) + 26.0, 3, 10.0, 0.55)
+	put.call(T.TABLETOP, c.call(5) + 59.0, 22.0, 1.6)
 	berm.call(6, 0.6)
-	put.call(T.ROLLOVER, between.call(6, 0.35), 14.0, 0.9, 3, 0.25)
-	put.call(T.ROOTS, between.call(6, 0.62), 12.0, 0.1)
+	jump.call(c.call(6) + 24.0, 18.0, 1.4, 3.5)
+	jump.call(c.call(6) + 50.0, 18.0, 1.4, 4.0)
+	put.call(T.ROOTS, c.call(6) + 84.0, 12.0, 0.1)
 	berm.call(7, 0.6)
+	put.call(T.ROCK_GARDEN, c.call(7) + 27.0, 16.0, 0.14)
 	# шпилька влево ниже и мягче первой; за ней — норшор-«нитка» на ровном: узкий настил с ровным сходом
 	berm.call(8, 0.9)
 	berm.call(9, 1.1)
@@ -299,27 +316,30 @@ static func elements(d: TrailDefinition, corners: PackedFloat32Array, arcs: Pack
 	var gap := _cross(d, corners[11], corners[12], _ravine().axis)
 	put.call(T.ROLLER, gap - 2.1, 13.0, 2.0)
 	put.call(T.DIP, gap + 10.0, 16.0, 1.5)
-	# — Приземление и контур: вираж сразу после посадки, памп на почти ровной полке, контруклон в пологой дуге, стол
+	# — Приземление и контур: вираж сразу после посадки, памп на почти ровной полке, контруклон в пологой дуге, гэп
 	berm.call(12, 1.0)
-	put.call(T.PUMP, between.call(12, 0.55), 24.0, 0.45, 5)
+	pump.call(c.call(12) + 32.0, 3, 11.0, 0.6)
 	list.append(TrailElementLibrary.make(T.OFF_CAMBER, c.call(13), 20.0, 0.5, signf(d.curvature_at(c.call(13)))))
-	put.call(T.TABLETOP, between.call(13, 0.55), 18.0, 1.0)
+	jump.call(c.call(13) + 32.0, 20.0, 1.5, 4.0)
 	berm.call(14, 1.1)
 	berm.call(15, 1.0)
 	# — Овраг: после шпильки, пока скорость невысокая, — колеи, поваленное дерево поперёк русла (объезд у стенки
-	# или прыжок) и камни; под местом прыжка полотно чистое, дальше впадины русла — памп
+	# или прыжок) и камни; под местом прыжка полотно чистое, дальше впадины русла — памп и стол на выходе
 	put.call(T.RUTS, c.call(16) - 34.0, 16.0, 0.15)
 	put.call(T.LOG, c.call(16) - 12.0, 8.0, 0.3, 1)
 	put.call(T.ROCK_GARDEN, between.call(16, 0.12), 16.0, 0.14)
-	put.call(T.PUMP, between.call(16, 0.72), 24.0, 0.5, 4)
+	pump.call(between.call(16, 0.68), 4, 10.0, 0.55)
+	put.call(T.TABLETOP, between.call(16, 0.88), 22.0, 1.5)
 	berm.call(17, 0.7)
 	(put.call(T.NARROW, between.call(17, 0.4), 10.0, 0.45) as TrailElement).gap = 2.0
 	berm.call(18, 0.8)
 	berm.call(19, 0.9)
-	# — Полка: памп на въезде, деревянный мост над выемкой, петля на трёх виражах влево; нижний проход ныряет
-	# в выемку под мост (полотно чистое) и уходит с полки крутым спуском прямо в вираж. Дроп на краю полки убран:
-	# на пределе седок улетал с него в вираж (удар 12 м/с при пороге падения 13).
-	put.call(T.PUMP, between.call(19, 0.55), 18.0, 0.5, 3)
+	# — Полка: памп на въезде, на изгибе — гэп-трансфер, деревянный мост над выемкой, петля на трёх виражах влево;
+	# нижний проход ныряет в выемку под мост (полотно чистое) и уходит с полки крутым спуском прямо в вираж.
+	pump.call(between.call(19, 0.5), 3, 10.0, 0.55)
+	berm.call(20, 0.7)
+	put.call(T.TABLETOP, c.call(20) + 30.0, 22.0, 1.6)
+	jump.call(c.call(20) + 58.0, 18.0, 1.4, 3.5)
 	var bridge := _cross(d, corners[21], corners[22], _cut().axis)
 	var deck := put.call(T.NORTHSHORE, bridge + 2.0, 26.0, 1.0) as TrailElement
 	deck.gap = 2.4
@@ -327,14 +347,14 @@ static func elements(d: TrailDefinition, corners: PackedFloat32Array, arcs: Pack
 	berm.call(23, 1.1)
 	berm.call(24, 0.9)
 	berm.call(25, 1.0)
-	# — Финал: стол и памп на прямой, деревянный кикер (норшор с обрывом), ступенька вниз и финишный стол
-	put.call(T.TABLETOP, between.call(25, 0.3), 18.0, 1.1)
-	put.call(T.PUMP, between.call(25, 0.66), 18.0, 0.55, 3)
+	# — Финал: гэп и памп на прямой, деревянный кикер (норшор с обрывом), финишная линия — гэп и большой стол
+	jump.call(c.call(25) + 30.0, 20.0, 1.5, 4.0)
+	pump.call(c.call(25) + 60.0, 3, 10.5, 0.6)
 	berm.call(26, 1.1)
 	(put.call(T.NORTHSHORE, between.call(26, 0.42), 12.0, 1.0) as TrailElement).gap = 1.8
 	berm.call(27, 0.8)
-	put.call(T.ROLLOVER, between.call(27, 0.3), 14.0, 0.9, 3, 0.25)
-	put.call(T.TABLETOP, between.call(27, 0.66), 18.0, 1.2)
+	jump.call(c.call(27) + 33.0, 20.0, 1.5, 4.0)
+	put.call(T.TABLETOP, c.call(27) + 58.0, 22.0, 1.7)
 	list.sort_custom(func(a: TrailElement, b: TrailElement) -> bool: return a.station < b.station)
 	return list
 

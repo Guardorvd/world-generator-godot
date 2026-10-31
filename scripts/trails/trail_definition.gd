@@ -97,6 +97,8 @@ func validate() -> PackedStringArray:
 			errors.append("Log bypass must fit beside the log")
 		elif e.profile == TrailElement.Profile.NORTHSHORE and e.gap > width - 0.5:
 			errors.append("Northshore deck must be narrower than the route")
+		elif e.profile == TrailElement.Profile.GAP and e.length < e.gap_min_length():
+			errors.append("Gap does not fit its kicker, gap and landing")
 		if not is_finite(e.station) or not is_finite(e.length) or not is_finite(e.height) or not is_finite(e.bank):
 			errors.append("Non-finite element")
 		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > 2.0:

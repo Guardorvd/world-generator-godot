@@ -69,8 +69,17 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 	var commit := false
 	for g in gaps:
 		if station > g - COMMIT and station < g + 2.0: commit = true
+	# гэп (31.10): за COMMIT до кромки — скорость, с которой приземление приходится на спуск, а не в разрыв
+	var gap_speed := 0.0
+	for e in d.elements:
+		if e.profile != TrailElement.Profile.GAP: continue
+		var lip := e.station - e.length * 0.5 + e.gap_lip()
+		if station > lip - COMMIT and station < lip: gap_speed = e.gap_speed()
 	if commit:
 		want = COMMIT_SPEED
+	elif gap_speed > 0.0:
+		want = gap_speed
+		commit = true
 	else:
 		var k_at := 0.0
 		while k_at <= LOOK:
@@ -84,7 +93,7 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 				want = minf(want, sqrt(spec.tech * spec.tech + 2.0 * BRAKE * k_at))
 			k_at += 2.0
 	var throttle := clampf((want - speed) * 0.6, -1.0, 1.0)
-	if throttle < 0.0 and speed - want < 0.7: throttle = 0.0
+	if throttle < 0.0 and speed - want < (0.3 if gap_speed > 0.0 else 0.7): throttle = 0.0
 	# прыжок через бревно: нажать за время подготовки до него (брёвна серии — как в TrailTechnical._logs)
 	var jump := false
 	for i in d.elements.size():

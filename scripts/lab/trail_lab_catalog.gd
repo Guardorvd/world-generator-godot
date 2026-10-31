@@ -53,7 +53,7 @@ const HAIRPIN := 8.0
 const BRAKE_ZONE := 15.0
 static func brake_zones(d: TrailDefinition) -> void:
 	var T := TrailElement.Profile
-	var airy := [T.ROLLER, T.TABLETOP, T.WAVES, T.DIP, T.ROLLOVER, T.DROP, T.PUMP, T.RIPPLES]
+	var airy := [T.ROLLER, T.TABLETOP, T.WAVES, T.DIP, T.ROLLOVER, T.DROP, T.PUMP, T.RIPPLES, T.GAP]
 	var length := d.route_length()
 	var keep: Array[TrailElement] = []
 	for e in d.elements:

@@ -23,6 +23,7 @@ const TITLES := {
 	TrailElement.Profile.PUMP: "Памп-секция",
 	TrailElement.Profile.DROP: "Дроп",
 	TrailElement.Profile.NORTHSHORE: "Норшор",
+	TrailElement.Profile.GAP: "Гэп",
 }
 ## Typical size at difficulty 0 and 1: length, height. Waves and pump rollers scale length with their count.
 const RANGE := {
@@ -46,6 +47,7 @@ const RANGE := {
 	TrailElement.Profile.PUMP: [Vector2(4.8, 0.3), Vector2(5.5, 0.55)], # per crest, like waves
 	TrailElement.Profile.DROP: [Vector2(12, 0.5), Vector2(18, 1.2)],
 	TrailElement.Profile.NORTHSHORE: [Vector2(14, 0.9), Vector2(24, 1.5)], # deck height must stay above Heightfield.STEP
+	TrailElement.Profile.GAP: [Vector2(14, 1.0), Vector2(22, 1.8)], # gap (lip to landing) — the element's `gap`
 }
 
 static func make(profile: TrailElement.Profile, station: float, length: float, height: float, bank := 1.0, count := 3, skew := 0.35) -> TrailElement:

@@ -16,6 +16,8 @@ const XC := [
 	Vector3(294, 55, 45), Vector3(150, 110, 0),
 ]
 static var _lines := {}
+## Извилины прямых, м (31.10): прямая без дела — не трасса.
+const MEANDER := {downhill = 6.0, xc = 5.0}
 
 static func ground(at: Vector2, kind: String) -> float:
 	if kind == "downhill":
@@ -61,8 +63,14 @@ static func line(kind: String) -> Dictionary:
 			a = p - u * t
 		var from := pts[-1]
 		var n := maxi(1, ceili(from.distance_to(a) / 2.0))
+		# 31.10: прямые с извилинами, как у полигона (Polygon._straight): на концах смещение и его наклон нулевые
+		var span := from.distance_to(a)
+		var side := (a - from).normalized().orthogonal() if span > 0.01 else Vector2.ZERO
+		var waves := maxf(1.0, roundf(span / Polygon.WAVE * 2.0))
+		var amp: float = MEANDER[kind] * clampf((span - 45.0) / 45.0, 0.0, 1.0)
 		for k in range(1, n + 1):
-			var q := from.lerp(a, float(k) / n)
+			var f := float(k) / n
+			var q := from.lerp(a, f) + side * amp * sin(PI * waves * f) * pow(sin(PI * f), 2.0)
 			length += pts[-1].distance_to(q)
 			pts.append(q)
 		var arc := absf(turn) * radius
@@ -112,34 +120,68 @@ static func elements(d: TrailDefinition, form: Dictionary, kind: String) -> Arra
 	for i in range(1, c.size() - 1):
 		var span := arcs[i] + 10.0
 		list.append(TrailElementLibrary.make(T.BERM, c[i], span, 0.65 if kind == "downhill" else 0.35, signf(d.curvature_at(c[i]))))
+	# 31.10 (по tools/trail_air_stats.gd): на «осторожно» трассы проезжались вовсе без отрыва колёс, на flow — 0,4–1 с
+	# в воздухе за заезд. Теперь линии гэпов и высоких столов на прямых, пампы с волной под скорость участка
+	# (на гребне колёса на земле). Элементы — только между виражами: at — станция от середины поворота k.
+	var at := func(profile: int, k: int, offset: float, span: float, height: float, count := 3) -> TrailElement:
+		var e := TrailElementLibrary.make(profile, c[k] + offset, span, height, 1.0, count)
+		e.seed = 1600 + k * 17 + profile
+		list.append(e)
+		return e
+	var jump := func(k: int, offset: float, span: float, height: float, gap: float) -> void:
+		(at.call(T.GAP, k, offset, span, height) as TrailElement).gap = gap
+	var pump := func(k: int, offset: float, count: int, period: float, height: float) -> void:
+		at.call(T.PUMP, k, offset, count * period, height, count)
 	if kind == "downhill":
-		# Верх: невысокий учебный стол, разгон и длинный каменный траверс с двумя чистыми линиями.
-		put.call(T.TABLETOP, 0, 0.45, 18.0, 0.65)
+		# Верх: памп со старта и первый гэп; стол, каменный траверс с двумя чистыми линиями, гэп побольше.
+		pump.call(0, 30.0, 3, 10.0, 0.55)
+		jump.call(0, 70.0, 18.0, 1.4, 3.5)
+		at.call(T.TABLETOP, 1, 30.0, 22.0, 1.6)
 		put.call(T.ROCK_GARDEN, 1, 0.5, 24.0, 0.16)
-		put.call(T.PUMP, 2, 0.5, 30.0, 0.4, 3)
-		# Центральная чаша: длинная обратная сторона гребня, стол и ритм из трёх волн.
+		jump.call(1, 110.0, 20.0, 1.5, 4.0)
+		pump.call(2, 36.0, 3, 11.0, 0.6)
+		at.call(T.TABLETOP, 2, 71.0, 22.0, 1.8)
+		# Центральная чаша: длинная обратная сторона гребня, затем линия гэп — стол — гэп.
 		var crest := put.call(T.ROLLOVER, 3, 0.5, 20.0, 0.85) as TrailElement
 		crest.skew = 0.28
-		put.call(T.TABLETOP, 4, 0.5, 22.0, 1.0)
-		put.call(T.WAVES, 5, 0.5, 36.0, 0.4, 3)
-		# Лес: корни на прямой, затем просторный пролёт и памп к выходу.
+		jump.call(4, 30.0, 18.0, 1.4, 3.5)
+		at.call(T.TABLETOP, 4, 60.0, 22.0, 1.7)
+		jump.call(4, 92.0, 20.0, 1.5, 4.0)
+		pump.call(5, 37.0, 3, 11.0, 0.6)
+		jump.call(5, 70.0, 20.0, 1.5, 4.0)
+		# Лес: корни на прямой, затем большой стол и двойной гэп, памп к выходу.
 		put.call(T.ROOTS, 6, 0.5, 20.0, 0.1)
-		put.call(T.TABLETOP, 7, 0.5, 24.0, 1.1)
-		put.call(T.PUMP, 8, 0.5, 30.0, 0.45, 3)
-		put.call(T.ROLLOVER, 9, 0.5, 22.0, 0.75)
-		put.call(T.TABLETOP, 10, 0.38, 24.0, 0.9)
+		at.call(T.TABLETOP, 7, 35.0, 24.0, 1.9)
+		jump.call(7, 70.0, 18.0, 1.4, 3.5)
+		jump.call(7, 100.0, 20.0, 1.5, 4.0)
+		pump.call(8, 40.0, 3, 11.0, 0.6)
+		var drop := at.call(T.ROLLOVER, 9, 65.0, 22.0, 0.75) as TrailElement
+		drop.skew = 0.35
+		at.call(T.DROP, 9, 95.0, 14.0, 1.2)
+		# Финальная прямая: гэп — стол — гэп и памп до финиша.
+		jump.call(10, 40.0, 18.0, 1.4, 3.5)
+		at.call(T.TABLETOP, 10, 70.0, 22.0, 1.7)
+		jump.call(10, 102.0, 20.0, 1.5, 4.0)
+		pump.call(10, 140.0, 3, 11.0, 0.6)
 	else:
-		# Подъём: выбор чистой линии через корни. Верхняя петля — отдых и небольшой стол на спуске.
+		# Подъём: выбор чистой линии через корни и камни. Верх — стол и первый гэп на спуске.
 		put.call(T.ROOTS, 1, 0.5, 16.0, 0.08)
 		put.call(T.ROCK_GARDEN, 3, 0.45, 14.0, 0.1)
-		put.call(T.TABLETOP, 5, 0.5, 18.0, 0.55)
-		put.call(T.PUMP, 6, 0.5, 24.0, 0.3, 3)
+		at.call(T.TABLETOP, 4, 46.0, 20.0, 1.4)
+		pump.call(5, 56.0, 3, 8.5, 0.5)
+		at.call(T.TABLETOP, 6, 30.0, 20.0, 1.2)
+		pump.call(6, 58.0, 3, 8.5, 0.5)
 		# Седловина: бревно можно перепрыгнуть или спокойно объехать по краю.
 		var log := put.call(T.LOG, 7, 0.5, 6.0, 0.22, 1) as TrailElement
 		log.gap = 1.4
+		at.call(T.TABLETOP, 8, 45.0, 20.0, 1.3)
 		put.call(T.ROOTS, 9, 0.5, 14.0, 0.08)
-		put.call(T.WAVES, 10, 0.5, 32.0, 0.25, 3)
-		put.call(T.PUMP, 11, 0.5, 28.0, 0.32, 3)
-		put.call(T.TABLETOP, 12, 0.5, 18.0, 0.45)
+		pump.call(10, 53.0, 3, 10.0, 0.55)
+		# Спуск к старту: гэп и стол, памп, стол и финальный гэп перед ровной зоной старта.
+		jump.call(11, 42.0, 18.0, 1.4, 3.5)
+		at.call(T.TABLETOP, 11, 72.0, 22.0, 1.5)
+		pump.call(12, 47.0, 3, 10.0, 0.55)
+		at.call(T.TABLETOP, 12, 87.0, 22.0, 1.6)
+		jump.call(12, 119.0, 18.0, 1.4, 3.5)
 	list.sort_custom(func(a: TrailElement, b: TrailElement) -> bool: return a.station < b.station)
 	return list

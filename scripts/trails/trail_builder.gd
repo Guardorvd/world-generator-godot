@@ -109,7 +109,9 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			station += GameConfig.TILE
 	var zone_ms := (Time.get_ticks_usec() - started) / 1000.0 - profile_ms
 	var offsets := {}
+	var shades := {}
 	var staged := {}
+	var staged_colors := {}
 	var added := {}
 	var stats := {}
 	var keys := zone.keys()
@@ -123,6 +125,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			patch = _ground_patch(h, key)
 			added[key] = patch
 		var hs: PackedFloat32Array = patch.h.duplicate()
+		var colors: PackedColorArray = patch.color.duplicate()
 		# one segment query per route for the whole cell (its vertices lie within the half diagonal of the centre)
 		var center := Vector2((key % w.W) + 1.0, (key / w.W) + 1.0) * GameConfig.TILE
 		var among := {}
@@ -165,6 +168,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					if displacement < 0.0:
 						displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP - base))
 					offsets[vertex] = displacement
+					if best.has("d"): shades[vertex] = _feature_shade(best.d, best.local) * pin
 					if best.has("d") and (best.d as TrailDefinition).earthwork > 0.0:
 						var id: String = best.d.id
 						var record: Dictionary = stats.get(id, {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0})
@@ -176,10 +180,18 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 						record.vertices += 1
 						stats[id] = record
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
+				var shade: float = shades.get(vertex, 0.0)
+				if shade != 0.0:
+					var c := colors[iz * RoadRefinement.STRIDE + ix]
+					var k := 1.0 + shade * c.a
+					colors[iz * RoadRefinement.STRIDE + ix] = Color(c.r * k, c.g * k, c.b * k, c.a)
 		staged[key] = hs
+		staged_colors[key] = colors
 	# Publish only after every vertex succeeded; a rejected extension cannot leave half a bake.
 	for key: int in added: r.patches[key] = added[key]
-	for key: int in staged: r.patches[key].h = staged[key]
+	for key: int in staged:
+		r.patches[key].h = staged[key]
+		r.patches[key].color = staged_colors[key]
 	for id: String in profiles:
 		var record: Dictionary = stats.get(id, {})
 		var p: Dictionary = profiles[id]
@@ -264,6 +276,19 @@ static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at
 	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP)
 	if d.earthwork > 0.0: offset *= d.junction_weight(at, local.x, among) # among covers the smaller junction reach too
 	return offset
+
+## Readable features (31.10): the tread of a raised feature is lighter (dry, packed by tyres), a dug one darker (damp),
+## so pump rollers, tables and gaps read from a distance instead of blending into the trail. Brightness change, -1..1.
+const SHADE_UP := 0.28
+const SHADE_DOWN := 0.22
+static func _feature_shade(d: TrailDefinition, local: Vector3) -> float:
+	var features := 0.0
+	for e in d.elements:
+		if absf(local.x - e.station) < e.length * 0.5 and not TrailElement.places_objects(e.profile) \
+				and e.profile not in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM, TrailElement.Profile.OFF_CAMBER]:
+			features += e.displacement(local.x, local.y, d.width * 0.5)
+	if features >= 0.0: return SHADE_UP * smoothstep(0.1, 0.9, features)
+	return -SHADE_DOWN * smoothstep(0.05, 0.5, -features)
 
 ## A patch over cell `key` that changes nothing: vertices shared with a neighbouring patch take its values, the rest lie
 ## exactly on the coarse triangles (the patch splits a square along the same diagonal as the coarse grid).
