@@ -66,8 +66,12 @@ const AIR_TILT_MAX := 0.55     # наклон рамы по траектории
 const AIR_TILT_SPEED := 4.0    # ниже этой скорости (м/с) наклон в полёте считается от неё
 const LEAN_RESPONSE := 9.0     # крен в повороте на земле
 const LEAN_RESPONSE_AIR := 2.5 # и в полёте (возвращается к нулю)
-const LEAN_SHARE := 1.0        # full equilibrium angle from the actual lateral acceleration
-const LEAN_MAX := 0.85         # visible lean limited to about 49 degrees
+const LEAN_SHARE := 1.0        # на вираже и контруклоне — полный равновесный угол от бокового ускорения
+const LEAN_MAX := 0.85         # там же не больше ~49°
+const LEAN_SHARE_FLAT := 0.5   # 31.10: на ровном полотне — половина: обычный поворот на дороге заваливал набок
+const LEAN_MAX_FLAT := 0.4     # и не больше ~23°
+const LEAN_BANK_FROM := 0.05   # поперечный уклон полотна (м на м), с которого крен растёт к полному
+const LEAN_BANK_FULL := 0.2    # и с которого он полный
 const STEER_RATE := 3.8        # скорость поворота руля, доля хода в секунду (30.10: было 5 — руль дёргался)
 const STEER_CENTER := 5.0      # и возврата руля в середину, когда его отпустили (было 7)
 const TURN_RESPONSE_SLOW := 10.0 # отклик курса на руль на малой скорости
@@ -961,12 +965,14 @@ func _step_pose(throttle: float, lateral: float, dt: float) -> void:
 			tilt_goal = -tilt_goal
 	tilt = lerpf(tilt, tilt_goal, Util.damp(TILT_RESPONSE_AIR if airborne else TILT_RESPONSE, dt))
 	# Крен от реального поворота, а не от кнопки: на месте не заваливаемся.
-	# Умеренный визуальный крен (до 16°), без изменения радиуса поворота и сцепления.
-	# Tire force alone understates cornering on a berm: include gravity along its cross-slope.
-	# On a straight traverse the two cancel, so the rider stays upright.
+	# Шин мало для крена на вираже: к ним добавлена тяжесть поперёк полотна; на прямом траверсе они гасят друг друга.
+	# На наклонном полотне (вираж, контруклон) крен полный — склон рядом, и угол читается; на ровной дороге
+	# тот же угол выглядел завалом, поэтому там он вдвое меньше и ограничен.
 	var cross := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
 	var bank_accel := GameConfig.GRAVITY * cross / sqrt(1.0 + cross * cross) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) if contact_model else 0.0
-	var lean_goal := 0.0 if airborne else clampf(atan((lateral + bank_accel) / GameConfig.GRAVITY) * LEAN_SHARE, -LEAN_MAX, LEAN_MAX)
+	var banked := smoothstep(LEAN_BANK_FROM, LEAN_BANK_FULL, absf(cross))
+	var lean_max := lerpf(LEAN_MAX_FLAT, LEAN_MAX, banked)
+	var lean_goal := 0.0 if airborne else clampf(atan((lateral + bank_accel) / GameConfig.GRAVITY) * lerpf(LEAN_SHARE_FLAT, LEAN_SHARE, banked), -lean_max, lean_max)
 	lean = lerpf(lean, lean_goal, Util.damp(LEAN_RESPONSE_AIR if airborne else LEAN_RESPONSE, dt))
 
 	# углы держим в пределах оборота, чтобы за долгую езду они не теряли точность

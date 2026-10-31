@@ -122,7 +122,7 @@ func _init() -> void:
 	var loose := corner(16.0, RoadSurface.SAND)
 	check(tight.heading < fast.heading and fast.heading < 0.0, "на скорости дуга шире, направление предсказуемо")
 	check(absf(loose.heading) < absf(fast.heading), "песок расширяет дугу по сравнению с плотной землёй")
-	check(fast.lean < -0.15 and absf(fast.lean) <= 0.28, "скоростной поворот даёт умеренный крен до 16°")
+	check(fast.lean < -0.15 and absf(fast.lean) <= BikeRide.LEAN_MAX_FLAT + 0.001, "скоростной поворот на ровном даёт сдержанный крен до 23°")
 	check(fast.speed < bike(16.0).speed and fast.speed > 12.0, "резкий поворот плавно теряет часть скорости")
 	w.surface = RoadSurface.PACKED
 	var straight := bike(16.0)
