@@ -12,12 +12,14 @@ static func build(routes: Array[TrailDefinition], with_elements := true) -> Heig
 ## Test grounds under a course: "flat" is the lab's own gentle slope; "hills" and "mountain" take a 256 m window
 ## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns);
 ## "site" is a saved piece of a real prepared world (TrailSite: roads, water, bridges, surfaces as in the game).
-const GROUNDS := ["flat", "hills", "mountain", "site", "polygon", "downhill", "xc", "epic"]
+const GROUNDS := ["flat", "hills", "mountain", "site", "polygon", "downhill", "xc", "epic", "summit"]
 const Adventures = preload("res://scripts/lab/trail_lab_adventures.gd")
 ## "polygon" — the main polygon's own 512 m land (a slope with hills and a ravine) under its own course (scripts/lab/trail_lab_polygon.gd).
 const Polygon = preload("res://scripts/lab/trail_lab_polygon.gd")
 ## "epic" — the mountain of course 18 «Большой спуск» (scripts/lab/trail_lab_epic.gd).
 const Epic = preload("res://scripts/lab/trail_lab_epic.gd")
+## "summit" — the mountain of course 19 (scripts/lab/trail_lab_summit.gd): a downhill and a cross-country lane.
+const Summit = preload("res://scripts/lab/trail_lab_summit.gd")
 ## Wanted fall from edge to edge of the window, m.
 const GROUND_DROP := {hills = Vector2(14, 30), mountain = Vector2(22, 40)}
 static var _relief := {}
@@ -45,6 +47,7 @@ static func ground(at: Vector2, kind := "flat", course := true) -> float:
 		return site().ground_at(at) if site() != null else 0.0
 	if kind == "polygon": return Polygon.ground(at)
 	if kind == "epic": return Epic.ground(at)
+	if kind == "summit": return Summit.ground(at)
 	if kind in ["downhill", "xc"]: return Adventures.ground(at, kind)
 	if kind == "flat" or not GROUND_DROP.has(kind):
 		var bumps := 3.5 * sin(at.x / 36.0) * sin(at.y / 48.0) + 1.1 * sin(at.y / 9.0) if course else 0.0
@@ -130,7 +133,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		if site() == null: return {heights = null, errors = PackedStringArray(["Площадка не открыта: " + site_error]), timings = timings}
 		return _site.prepare(routes, with_elements)
 	var w := WorldData.new()
-	w.W = Polygon.CELLS if kind in ["polygon", "downhill", "xc", "epic"] else 64
+	w.W = Polygon.CELLS if kind in ["polygon", "downhill", "xc", "epic", "summit"] else 64
 	w.H = w.W
 	w.N = w.W * w.H
 	w.seed_num = 17027
@@ -154,6 +157,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 	if kind == "polygon": Polygon.forest(w, routes) # the polygon's forest up to the trail edges
 	if kind in ["downhill", "xc"]: Adventures.forest(w, routes, kind)
 	if kind == "epic": Epic.forest(w, routes)
+	if kind == "summit": Summit.forest(w, routes)
 	var errors := TrailBuilder.append_routes(w, routes)
 	timings.setup_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if not errors.is_empty(): return {heights = null, errors = errors, timings = timings}
@@ -197,6 +201,7 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 		return own
 	if index in [11, 12]: return [Adventures.route("downhill" if index == 11 else "xc")]
 	if index == 13: return [Epic.route()]
+	if index == 14: return Summit.routes()
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
 	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес", "Байк-парк", "Маршрут"][index]

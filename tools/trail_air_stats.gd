@@ -28,7 +28,6 @@ func run() -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_path))
 	for number: int in presets:
 		var kit := TrailLabCatalog.routes(number - 1, Fixture)
-		d = kit[0]
 		var prepared := Fixture.prepare(kit, true, TrailLabCatalog.LIST[number - 1].ground)
 		if not prepared.errors.is_empty():
 			print("BUILD FAILED ", number, " ", prepared.errors)
@@ -36,8 +35,15 @@ func run() -> void:
 		h = prepared.heights
 		var technical := TrailTechnical.build(h, kit)
 		h.obstacles.set_trail(technical.collide, technical.bumps)
+		for lane in kit.size(): ride_lane(number, kit[lane], styles)
+	print("\nвремя замера %.0f с" % ((Time.get_ticks_msec() - started) / 1000.0))
+	quit()
+
+func ride_lane(number: int, route: TrailDefinition, styles: Array) -> void:
+		d = route
 		var length := d.route_length()
-		print("\n=== №%d %s · %.0f м · элементов %d" % [number, d.title, length, d.elements.size()])
+		var survey := TrailSurvey.measure(h, d, 0.3)
+		print("\n=== №%d %s · %.0f м · элементов %d · %s" % [number, d.title, length, d.elements.size(), survey.summary()])
 		for style: String in styles:
 			var from := 2.0
 			var time := 0.0
@@ -47,7 +53,7 @@ func run() -> void:
 			var top := 0.0
 			while from < length - 10.0:
 				result.runs.clear()
-				add_run({name = "%d_%s" % [number, style], style = style, mode = "pilot", from = from, to = length - 3.0,
+				add_run({name = "%d_%s_%s" % [number, d.id, style], style = style, mode = "pilot", from = from, to = length - 3.0,
 					speed = 4.0 if from < 3.0 else 8.0, max_time = 420.0, hz = 60})
 				var r: Dictionary = result.runs[0]
 				time += r.time
@@ -66,5 +72,3 @@ func run() -> void:
 			for f: Dictionary in flights:
 				print("    %-22s с %6.1f м · взлёт %4.1f м/с · %.2f с · выше взлёта %.2f м · просвет %.2f м · %4.1f м · удар %.1f" % [
 					element_at(f.from), f.from, f.takeoff_speed, f.duration, f.rise, f.clearance, f.to - f.from, f.impact])
-	print("\nвремя замера %.0f с" % ((Time.get_ticks_msec() - started) / 1000.0))
-	quit()

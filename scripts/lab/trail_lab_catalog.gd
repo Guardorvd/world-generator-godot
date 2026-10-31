@@ -27,6 +27,8 @@ const LIST := [
 	{title = "Кросс-кантри · Два холма", shape = 12, kind = "trail", style = "", ground = "xc"},
 	# Большой спуск (30.10): своя гора 512 м, ~3,2 км в пять глав — гребень, опушка, ущелье, терраса, долина
 	{title = "Большой спуск · гребень, ущелье, терраса, долина", shape = 13, kind = "mountain", style = "", ground = "epic"},
+	# Гора (31.10): две полосы на одной горе — даунхилл (1) и кросс-кантри (2), линии проложены по рельефу
+	{title = "Гора · даунхилл и кросс-кантри", shape = 14, kind = "mountain", style = "", ground = "summit"},
 ]
 
 
@@ -36,11 +38,13 @@ static func routes(index: int, fixture: Script) -> Array[TrailDefinition]:
 	var spec: Dictionary = LIST[index]
 	var kit: Array[TrailDefinition] = []
 	# копии: полосы полигона — загруженные ресурсы, правка в лаборатории не должна менять их
-	for d: TrailDefinition in fixture.course(spec.shape, spec.kind, spec.style, spec.ground):
+	var source: Array = fixture.course(spec.shape, spec.kind, spec.style, spec.ground)
+	for d: TrailDefinition in source:
 		var copy := d.duplicate(true) as TrailDefinition
-		if spec.shape != 0: copy.title = spec.title
+		# у нескольких полос на одной местности (Гора, Долина) — своё название у каждой
+		if spec.shape != 0: copy.title = spec.title if source.size() == 1 else spec.title.get_slice(" · ", 0) + " · " + d.title
 		# у полигонов и байк-парка элементы расставлены вручную; на остальных — виражи в тугих поворотах
-		if spec.shape not in [0, 8, 10, 11, 12, 13]:
+		if spec.shape not in [0, 8, 10, 11, 12, 13, 14, 15]:
 			brake_zones(copy)
 			add_berms(copy)
 		kit.append(copy)

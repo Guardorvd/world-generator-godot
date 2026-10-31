@@ -24,10 +24,12 @@ var style := "flow"
 var station := 0.0
 var gaps := PackedFloat32Array()
 var _hopped := {}
+var _heights: Heightfield
 
 ## Начать с места station; разрывы трассы находятся один раз по готовой поверхности.
 func reset(d: TrailDefinition, h: Heightfield, at_station: float) -> void:
 	station = at_station
+	_heights = h
 	_hopped.clear()
 	gaps.clear()
 	var s := 1.0
@@ -81,16 +83,24 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 		want = gap_speed
 		commit = true
 	else:
+		# 31.10: на спуске тяжесть съедает часть тормоза — тормозной путь длиннее (на 30 % уклона вдвое и больше);
+		# раньше пилот рассчитывал его как на ровном и влетал в разворот на крутом спуске
+		var brake := BRAKE
+		if _heights != null:
+			var here_y := _heights.surface_at(here.x, here.y, INF)
+			var ahead_at := d.point_at(fposmod(station + 12.0, length) if d.closed else minf(station + 12.0, length))
+			var fall := (here_y - _heights.surface_at(ahead_at.x, ahead_at.y, INF)) / 12.0
+			brake = maxf(1.5, BRAKE - GameConfig.GRAVITY * maxf(0.0, fall) * 0.8)
 		var k_at := 0.0
 		while k_at <= LOOK:
 			var s := fposmod(station + k_at, length) if d.closed else minf(station + k_at, length)
 			var k := absf(d.curvature_at(s))
 			if k > 0.0001:
 				var grip: float = spec.lateral * (BERM_GRIP if _on(d, s, TrailElement.Profile.BERM) else 1.0)
-				want = minf(want, sqrt(grip / k + 2.0 * BRAKE * k_at))
+				want = minf(want, sqrt(grip / k + 2.0 * brake * k_at))
 			var tech := _technical(d, s)
 			if tech != null and tech.profile not in spec.hop and is_finite(spec.tech):
-				want = minf(want, sqrt(spec.tech * spec.tech + 2.0 * BRAKE * k_at))
+				want = minf(want, sqrt(spec.tech * spec.tech + 2.0 * brake * k_at))
 			k_at += 2.0
 	var throttle := clampf((want - speed) * 0.6, -1.0, 1.0)
 	if throttle < 0.0 and speed - want < (0.3 if gap_speed > 0.0 else 0.7): throttle = 0.0
