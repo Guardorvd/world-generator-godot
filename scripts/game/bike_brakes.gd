@@ -1,6 +1,6 @@
 extends RefCounted
 ## One combined brake. Forces are per unit mass (m/s²); no scene dependencies.
-## Load transfer: N_front / N = 0.5 + h/L * (a/g_normal - grade) - rider_shift/L.
+## Load transfer: N_front / N = 0.5 + h/L * (a/g_normal - grade) - rider_shift/L; uphill grade counts at CLIMB_TRANSFER.
 const WHEELBASE := GameConfig.BIKE_WHEELBASE
 const COM_HEIGHT := 1.1
 const RIDER_RESPONSE := 0.55
@@ -13,6 +13,10 @@ const BALANCE_MARGIN := 0.22
 const OVERLOAD_GRACE := 1.0
 const HARD_BRAKE := 0.85
 const SHARE_LIMIT := 0.9 # долю другого колеса седок добирает до этой доли его запаса
+## 31.10: на подъёме седок подаётся грудью к рулю и прижимает переднее колесо: уклон переносит на заднее только
+## эту долю. Раньше переносил полностью (h/L ≈ 1,04 на единицу уклона): на 30 % на переднем оставалось 19 % веса,
+## а поворот считается по переднему — на крутом подъёме руль почти не поворачивал. Спуск не меняется.
+const CLIMB_TRANSFER := 0.45
 
 var pressure := 0.0
 var deceleration := 0.0
@@ -71,9 +75,10 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	# запас на долю веса: нагрузки шин уже включают косинус уклона
 	var per_load := available * sqrt(1.0 + grade * grade)
 	var shift := brace * GameConfig.BIKE_BRAKE_SHIFT - _surge * 0.18
+	var lean_grade := grade * CLIMB_TRANSFER if grade > 0.0 else grade
 	var demand := GameConfig.BIKE_BRAKE * pressure
 	for i in 3:
-		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (guess / normal_g - grade) - shift / WHEELBASE
+		front_load = 0.5 + COM_HEIGHT / WHEELBASE * (guess / normal_g - lean_grade) - shift / WHEELBASE
 		var front_share := clampf(front_load, 0.65, 1.0)
 		var cap_f := per_load * loads.x if loads.x >= 0.0 else available * clampf(front_load, 0.0, 1.0)
 		# Тормозной перенос разгружает заднее колесо сразу, даже если переднее ещё в воздухе: момент торможения
@@ -94,7 +99,7 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		deceleration = minf(front_force + rear_force, maxf(speed, 0.0) / dt) if grounded and speed > 0.05 else 0.0
 		guess = (guess + deceleration) * 0.5
 	_match_forces()
-	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - grade) - shift / WHEELBASE
+	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - lean_grade) - shift / WHEELBASE
 	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available
 	grip_used = clampf(deceleration / maxf(total, 0.001), 0.0, 1.0)
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
