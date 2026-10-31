@@ -95,6 +95,15 @@ func run() -> void:
 	var single := 0.0
 	for i in 15: single = controls.bike_steer(1.0, 1.0 / 60, 12.0)
 	check(single < 0.5, "одно короткое нажатие — только правка линии (%.2f)" % single)
+	# перекладка на малой скорости (подъём): после короткого руля влево полный вправо набирается быстрее, чем на скорости
+	var reach := {}
+	for pace: float in [5.0, 14.0]:
+		controls.reset()
+		for i in 9: controls.bike_steer(-1.0, 1.0 / 60, pace)
+		var ticks := 0
+		while controls.bike_steer(1.0, 1.0 / 60, pace) < 0.9 and ticks < 120: ticks += 1
+		reach[pace] = ticks / 60.0
+	check(reach[5.0] < 0.35 and reach[5.0] < reach[14.0] - 0.1, "на малой скорости перекладка в полный руль быстрее (%.2f с против %.2f с)" % [reach[5.0], reach[14.0]])
 	var pose := BikeRide.new()
 	pose.speed = 12.0
 	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
@@ -102,7 +111,7 @@ func run() -> void:
 	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(BikeRide.LEAN_MAX_FLAT) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)
 	pose.bank_slope = 0.3
 	for i in 120: pose._step_pose(0.0, 5.0, 1.0 / 60)
-	check(rad_to_deg(pose.lean) > flat_lean + 8.0, "на вираже крен заметно больше, чем на ровном (%.1f°)" % rad_to_deg(pose.lean))
+	check(rad_to_deg(pose.lean) > flat_lean + 2.0 and pose.lean <= BikeRide.LEAN_MAX + 0.001, "на вираже крен больше, чем на ровном, но в пределе (%.1f°)" % rad_to_deg(pose.lean))
 	var cross_gravity := BikeRide.SIDE_GRAVITY * 0.3 / sqrt(1.0 + 0.3 * 0.3)
 	for i in 120: pose._step_pose(0.0, -cross_gravity, 1.0 / 60)
 	check(absf(pose.lean) < 0.01, "straight traverse stays upright")

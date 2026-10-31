@@ -100,6 +100,10 @@ func reset() -> void:
 ## нажатия по 0,25 с держали руль не выше 0,44). Крупная дуга отпускается чуть мягче мелкой правки.
 const KEY_STEER_TAP := 0.22
 const KEY_STEER_RAMP := 0.55 # curvature builds gradually while the initial correction arrives promptly
+## 31.10: на малой скорости (подъём, серпантин) полный руль набирается быстрее: там нужен крутой поворот сразу,
+## а 0,55 с до полного руля — 3 м по прежней линии. Между этими скоростями, м/с, — от KEY_STEER_RAMP_SLOW к RAMP.
+const KEY_STEER_RAMP_SLOW := 0.22
+const KEY_STEER_RAMP_PACE := Vector2(4.0, 14.0)
 const KEY_STEER_RESPONSE := 18.0
 const KEY_STEER_RELEASE := 14.0
 const KEY_STEER_ARC_RELEASE := 6.0 # отпускание заложенной дуги (руль больше половины)
@@ -108,7 +112,7 @@ var _key_steer := 0.0
 var _key_direction := 0.0
 var _key_hold := 0.0
 
-func bike_steer(raw: float, dt: float, _pace := 0.0) -> float:
+func bike_steer(raw: float, dt: float, pace := 0.0) -> float:
 	var digital := is_zero_approx(raw) or is_equal_approx(absf(raw), 1.0)
 	if joypad or not digital:
 		_key_steer = raw
@@ -122,7 +126,8 @@ func bike_steer(raw: float, dt: float, _pace := 0.0) -> float:
 		_key_direction = raw
 	else:
 		_key_hold += dt
-	var strength := lerpf(KEY_STEER_TAP, 1.0, smoothstep(0.0, KEY_STEER_RAMP, _key_hold))
+	var ramp := lerpf(KEY_STEER_RAMP_SLOW, KEY_STEER_RAMP, smoothstep(KEY_STEER_RAMP_PACE.x, KEY_STEER_RAMP_PACE.y, absf(pace)))
+	var strength := lerpf(KEY_STEER_TAP, 1.0, smoothstep(0.0, ramp, _key_hold))
 	var target := raw * strength
 	var reversing := raw * _key_steer < 0.0
 	var rate := KEY_STEER_RESPONSE
