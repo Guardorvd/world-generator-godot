@@ -374,6 +374,10 @@ func check_recorder(lab: Node) -> void:
 	check("ПАДЕНИЕ" in events and "отрыв" in events and "НОВАЯ ПОЕЗДКА" in events and "СОХРАНЕНО" in events, "events name the take-off, the fall, the new ride and the save")
 	var summary := FileAccess.get_file_as_string(base + ".summary.txt")
 	check("Ввод (время удержания" in summary and "падений 1" in summary and "поездка 2" in summary and "F3 на конец заезда" in summary, "summary states the input, the falls, the rides and the F3 report")
+	# 31.10: разбор по участкам — ожидания в заголовке, итоги в сводке, колонки участка и линии в CSV
+	check(header.has("features") and (header.features as Array).size() > 0 and (header.features[0] as Dictionary).has("from") and "Участки трассы" in summary,
+		"header lists the expected features (%d), summary has the feature table" % (header.features as Array).size() if header.has("features") else 0)
+	check(head.has("feature") and head.has("line_off") and head.has("route_r") and head.has("path_r"), "csv carries the feature, line offset and both radii")
 	var ride_col := head.find("ride")
 	var station_col := head.find("station")
 	var row := csv[100].split(",")
@@ -389,7 +393,10 @@ func check_recorder(lab: Node) -> void:
 ## Удалить папку со всем содержимым (временные записи теста)
 func wipe(absolute: String) -> void:
 	if not DirAccess.dir_exists_absolute(absolute): return
-	for name in DirAccess.get_files_at(absolute): DirAccess.remove_absolute(absolute.path_join(name))
+	# со скрытыми (.gdignore записи): иначе папка остаётся, и следующий запуск видит «записано до сохранения»
+	var dir := DirAccess.open(absolute)
+	dir.include_hidden = true
+	for name in dir.get_files(): DirAccess.remove_absolute(absolute.path_join(name))
 	for name in DirAccess.get_directories_at(absolute): wipe(absolute.path_join(name))
 	DirAccess.remove_absolute(absolute)
 

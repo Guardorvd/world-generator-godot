@@ -183,6 +183,8 @@ func ride(spec: Dictionary) -> Dictionary:
 		if is_finite(nearest.z): station = maxf(station, nearest.x)
 		var off := absf(nearest.y) if is_finite(nearest.z) else 80.0
 		var clearance := b.y - h.surface_at(b.x, b.z, b.y)
+		# 31.10: наблюдатель такта (разбор по участкам trail_ride_analysis.gd в tools/trail_air_stats.gd)
+		if spec.has("watch"): (spec.watch as Callable).call(b, nearest.x if is_finite(nearest.z) else -1.0, nearest.y if is_finite(nearest.z) else 0.0, dt, t)
 		var hits := b.impacts.x + b.impacts.y - before_hits
 		r.distance += before.distance_to(Vector2(b.x, b.z))
 		r.top = maxf(r.top, b.horizontal_velocity().length())

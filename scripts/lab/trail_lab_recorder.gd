@@ -51,6 +51,10 @@ var _git := ""
 var _last_hit_tick := -1
 var _previous_station := -1.0
 var _route_snapshots: Array = []
+## 31.10: разбор по участкам — ожидания по элементам и поворотам и итог каждого проезда (trail_ride_analysis.gd)
+const Analysis = preload("res://scripts/lab/trail_ride_analysis.gd")
+var analysis := Analysis.new()
+var _tables := PackedStringArray()   # таблицы участков законченных поездок для сводки
 
 
 func _init() -> void:
@@ -76,6 +80,9 @@ func _init() -> void:
 		["squash_f", "f4"], ["squash_r", "f4"], ["squash_fv", "f3"], ["squash_rv", "f3"], ["bottom_out", "f3"], ["land_impact", "f3"],
 		["wheel_impact_f", "f3"], ["wheel_impact_r", "f3"], ["hit_dv_f", "f3"], ["hit_dv_r", "f3"], ["impacts_f", "i"], ["impacts_r", "i"],
 		["surface", "s"], ["surface_weight", "f2"], ["surface_across", "f2"], ["stamina", "f3"], ["exhausted", "i"],
+		# 31.10: участок разбора (номер в header.features, 0 — вне участков), ожидаемая линия и отклонение от неё,
+		# радиус оси трассы и радиус, который проезжает велосипед (скорость / рыскание); 999 — прямо
+		["feature", "i"], ["line_target", "f2"], ["line_off", "f2"], ["route_r", "f1"], ["path_r", "f1"],
 	]
 	var parts := PackedStringArray()
 	for row: Array in rows:
@@ -96,6 +103,8 @@ func begin(lab, reason: String) -> void:
 	_prev = {}
 	_previous_station = -1.0
 	_last_hit_tick = -1
+	_close_analysis(_ride - 1)
+	analysis.prepare(lab.routes[lab.lane])
 	_route_snapshots.append(_snapshot(lab))
 	_preset = lab.preset
 	var near: Vector3 = lab.routes[lab.lane].nearest(Vector2(lab.bike.x, lab.bike.z))
@@ -109,6 +118,8 @@ func begin(lab, reason: String) -> void:
 func _start_session() -> void:
 	_session = true
 	_route_snapshots = []
+	_tables = PackedStringArray()
+	analysis.passes.clear()
 	_git = ""
 	_t = 0.0
 	_ride = 0
@@ -183,6 +194,10 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 	var line_err := rad_to_deg(wrapf(bike.heading - route.heading_at(near.x), -PI, PI)) if nearest_valid else 0.0
 	var autopilot: String = lab.autopilot.style if lab.autopilot != null else ""
 	var pumped = bike.get("pump_pressed")
+	var feature := analysis.feature_at(near.x) if nearest_valid else -1
+	var target := analysis.line_target(near.x) if nearest_valid else 0.0
+	var route_k := absf(route.curvature_at(near.x)) if nearest_valid else 0.0
+	var path_k := absf(bike._yaw_rate) / maxf(absf(bike.speed), 0.5)
 	var values := [
 		_t, _ride, _ride_t, _ticks, wall_ms, Engine.get_frames_per_second(),
 		bike.x, bike.y, bike.z, rad_to_deg(bike.heading), near.x if nearest_valid else -1.0, near.y if nearest_valid else 0.0, line_err,
@@ -204,6 +219,7 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 		bike.squash_f, bike.squash_r, bike.squash_fv, bike.squash_rv, bike.bottom_out, bike.land_impact,
 		bike.wheel_impact.x, bike.wheel_impact.y, bike.hit_dv.x, bike.hit_dv.y, bike.impacts.x, bike.impacts.y,
 		surface, contact.weight, contact.across, lab.controller.stamina.value, int(lab.controller.stamina.exhausted),
+		feature + 1, target, (near.y - target) if nearest_valid else 0.0, minf(999.0, 1.0 / maxf(route_k, 0.0001)), minf(999.0, 1.0 / maxf(path_k, 0.0001)),
 	]
 	if _ticks == 1 and values.size() != _columns.size():
 		push_error("Trail Lab recorder: %d значений на %d колонок" % [values.size(), _columns.size()])
@@ -219,6 +235,9 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 		_pending.append(line)
 		if _pending.size() > PENDING_MAX: _pending.remove_at(0)
 	if station_jump: _event("station jump", {station = near.x, x = bike.x, z = bike.z})
+	var crashing: bool = lab.crash.active() or bike.crashed
+	var passed := analysis.tick(bike, near.x if nearest_valid else -1.0, near.y if nearest_valid else 0.0, dt, _t, crashing)
+	if not passed.is_empty(): _event("участок", passed)
 	_track(lab, bike, route, near, nearest_valid, surface, raw, throttle, turn, jump, wall_ms, state, dt)
 
 
@@ -322,7 +341,7 @@ func _event(kind: String, data: Dictionary) -> void:
 	var line := "t=%.2f тик=%d %s %s" % [_t, _ticks, kind, JSON.stringify(_round(data))]
 	_event_counts[kind] = _event_counts.get(kind, 0) + 1
 	# клавиши и мелкие события не раздувают сводку
-	if kind not in ["клавиша", "мышь", "геймпад", "удар колеса о кромку", "тормоз", "тормоз отпущен", "долгий кадр"] and _event_lines.size() < 80:
+	if kind not in ["клавиша", "мышь", "геймпад", "удар колеса о кромку", "тормоз", "тормоз отпущен", "долгий кадр", "участок"] and _event_lines.size() < 80:
 		_event_lines.append(line)
 	if _events != null:
 		_events.store_line(line)
@@ -363,10 +382,20 @@ func _open(lab) -> void:
 	_events.flush()
 
 
+## Закончить разбор поездки: последний участок — в события, таблица — в сводку
+func _close_analysis(ride: int) -> void:
+	var last := analysis.finish()
+	if not last.is_empty(): _event("участок", last)
+	if not analysis.passes.is_empty() and analysis.route != null:
+		_tables.append("Поездка %d · %s:" % [ride, analysis.route.title])
+		_tables.append_array(analysis.table())
+	analysis.passes.clear()
+
 ## «Сохранить запись»: временные файлы уходят в проект (ride_logs/<дата>/<сессия>/), рядом — заголовок и сводка.
 ## Возвращает путь без расширения или "", если сохранять нечего. После сохранения начинается новая сессия.
 func save(lab, reason := "кнопка «Сохранить запись»") -> String:
 	if not has_data(): return ""
+	_close_analysis(_ride)
 	_event("СОХРАНЕНО", {reason = reason})
 	_file.flush()
 	_file.close()
@@ -451,6 +480,8 @@ func _header(lab) -> Dictionary:
 		rate_hz = Engine.physics_ticks_per_second,
 		columns = Array(_columns),
 		units = "м, м/с, м/с², секунды, градусы; нагрузки — доли веса; lateral — отступ от оси трассы, + вправо по ходу; station — метры вдоль трассы (-1: нет ближайшего сегмента); on_route — внутри ширины полотна; station_jump — смена ближайшей ветви",
+		features = analysis.features,
+		features_note = "Ожидания по участкам (оценки по геометрии и стенду tools/trail_gap_stand.gd): lip — кромка, land_from/land_to — зона приземления, ideal_land — лучшее место, speed_lo/hi — скорость входа, radius/turn_speed — тугой радиус оси и рабочая скорость, lines — чистые линии техники (отступ от оси, + вправо), deck_half — полуширина настила",
 		bike_constants = _constants(BikeRide),
 		brake_constants = _constants(preload("res://scripts/game/bike_brakes.gd")),
 		game_config = _constants(GameConfig),
@@ -511,6 +542,10 @@ func _summary(lab, reason: String) -> String:
 	lines.append("Ключевые события (полный список — .events.txt):")
 	lines.append_array(_event_lines)
 	lines.append("")
+	lines.append("Участки трассы — ожидание и проезды (каждый проезд — событие «участок» в .events.txt, ожидания — features")
+	lines.append("в .header.json; в CSV: feature, line_target, line_off, route_r, path_r):")
+	lines.append_array(_tables if not _tables.is_empty() else PackedStringArray(["  нет законченных участков"]))
+	lines.append("")
 	lines.append("F3 на конец заезда:")
 	lines.append(lab.metrics.report(route))
 	lines.append("")
@@ -536,6 +571,6 @@ func _snapshot(lab) -> Dictionary:
 	var points := []
 	for point in route.points: points.append([point.x, point.y])
 	return {ride = _ride, preset = lab.preset + 1, id = route.id, title = route.title,
-		ground = lab.ground_kind, width = route.width, points = points, elements = elements,
+		ground = lab.ground_kind, width = route.width, points = points, elements = elements, features = analysis.features.duplicate(true),
 		contact_model = lab.contact_model, code = _code_version(),
 		settings = {fov = lab.services.settings.fov, mouse = lab.services.settings.mouse, invert_y = lab.services.settings.invert_y}}

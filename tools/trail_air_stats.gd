@@ -4,6 +4,9 @@ extends "res://tools/trail_polygon_audit.gd"
 ## взлёта, просвет над землёй, удар; по трассе — время в воздухе, число прыжков, падения. Только замеры.
 ##   godot --headless --path . --script res://tools/trail_air_stats.gd -- --presets 15,18 [--styles flow]
 const MIN_AIR := 0.15
+## Разбор по участкам (31.10): тот же, что у записи заезда в Trail Lab; JSON — user://trail_air_stats/<трасса>_<полоса>_<манера>.analysis.json
+const Analysis = preload("res://scripts/lab/trail_ride_analysis.gd")
+var table := false
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 900)
@@ -23,6 +26,7 @@ func run() -> void:
 	var presets := [15, 16, 17, 18]
 	if "--presets" in args: presets = Array(args[args.find("--presets") + 1].split(",")).map(func(s: String) -> int: return int(s))
 	var styles: Array = Pilot.ORDER
+	table = "--table" in args
 	if "--styles" in args: styles = Array(args[args.find("--styles") + 1].split(","))
 	out_path = "user://trail_air_stats"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_path))
@@ -54,10 +58,16 @@ func ride_lane(number: int, route: TrailDefinition, styles: Array) -> void:
 			var crashes: Array = []
 			var flights: Array = []
 			var top := 0.0
+			var analysis := Analysis.new()
+			analysis.prepare(d)
+			var clock := [0.0]
+			var watch := func(b: BikeRide, station: float, lateral: float, dt: float, _t: float) -> void:
+				clock[0] += dt
+				analysis.tick(b, station, lateral, dt, clock[0], b.crashed)
 			while from < length - 10.0:
 				result.runs.clear()
 				add_run({name = "%d_%s_%s" % [number, d.id, style], style = style, mode = "pilot", from = from, to = length - 3.0,
-					speed = 4.0 if from < 3.0 else 8.0, max_time = 420.0, hz = 60})
+					speed = 4.0 if from < 3.0 else 8.0, max_time = 420.0, hz = 60, watch = watch})
 				var r: Dictionary = result.runs[0]
 				time += r.time
 				air += r.air_time
@@ -72,6 +82,15 @@ func ride_lane(number: int, route: TrailDefinition, styles: Array) -> void:
 					crashes.append("%s у %.0f м" % [r.status, r.station])
 					from = r.station + 8.0
 			print("— %s: %.1f с · в воздухе %.1f с · прыжков %d · макс %.0f км/ч · падений %d %s" % [style, time, air, flights.size(), top * 3.6, crashes.size(), crashes])
+			analysis.finish()
+			var clean := analysis.passes.filter(func(p: Dictionary) -> bool: return p.verdict == "чисто").size()
+			print("    участков %d, проездов %d, чисто %d" % [analysis.features.size(), analysis.passes.size(), clean])
+			for p: Dictionary in analysis.passes:
+				if p.verdict != "чисто" and not table: print("      %2d %s %.0f м: вход %.1f м/с · %s" % [p.n, p.title, p.entry_station, p.entry_speed, p.verdict])
+			if table:
+				for line in analysis.table(): print("    " + line)
+			var json := FileAccess.open(out_path + "/%d_%s_%s.analysis.json" % [number, d.id, style], FileAccess.WRITE)
+			if json != null: json.store_string(JSON.stringify({route = d.title, style = style, features = analysis.features, passes = analysis.passes}, "\t"))
 			for f: Dictionary in flights:
 				print("    %-22s с %6.1f м · взлёт %4.1f м/с · %.2f с · выше взлёта %.2f м · просвет %.2f м · %4.1f м · удар %.1f" % [
 					element_at(f.from), f.from, f.takeoff_speed, f.duration, f.rise, f.clearance, f.to - f.from, f.impact])

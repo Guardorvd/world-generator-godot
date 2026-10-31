@@ -764,6 +764,13 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if key == KEY_G: launch_element()
 	if key == KEY_P: _cycle_autopilot()
 
+## F3: участок впереди с ожиданиями (точка и скорость входа, кромка, приземление, радиус) и итог прошлого — из записи
+func _live_analysis() -> String:
+	if not recorder.enabled or bike == null: return ""
+	var near := routes[lane].nearest(Vector2(bike.x, bike.z))
+	var text: String = recorder.analysis.live(near.x if is_finite(near.z) else -1.0, bike.horizontal_velocity().length())
+	return "" if text.is_empty() else "\n" + text
+
 ## Сохранить запись сессии тестов в ride_logs/<дата>/ (кнопка и F9)
 func save_ride_log() -> void:
 	var saved: String = recorder.save(self)
@@ -956,7 +963,7 @@ func _process(dt: float) -> void:
 	if diagnostics_visible:
 		diagnostics.text = "R старт  ·  G заезд  ·  P автопилот  ·  %s посадка/сход\nW/S педали и тормоз (стоя: отпустить и держать S — назад)  ·  A/D руль\nSpace прыжок  ·  Shift усилие  ·  Q тело назад  ·  E вперёд\nF5 перечитать  ·  Esc назад\nПокрытие %.0f%%  ·  уклон %.1f%%\nСнос %.1f°  ·  сцепление %.0f%%\nПодвеска %.3f / %.3f м\n%s  ·  удар %.1f м/с
 %s
-%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, _contact_report(), metrics.report(routes[lane]) + "
+%s" % [services.controls.label("interact"), contact.weight * 100, bike.grade(heights) * 100, rad_to_deg(bike.slip), bike.grip_usage * 100, bike.squash_f, bike.squash_r, "ПАДЕНИЕ" if crash.active() else ("ПОЛЁТ" if bike.airborne else "ЗЕМЛЯ"), last_land_impact, _contact_report(), metrics.report(routes[lane]) + _live_analysis() + "
 " + _shaping_report() + "
 " + _survey_report() + "
 " + _build_report() + _line_report()]
