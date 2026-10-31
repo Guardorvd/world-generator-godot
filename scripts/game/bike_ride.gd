@@ -165,6 +165,12 @@ const RIDER_STEER := 1.35
 const RIDER_TURN_RESPONSE := 8.0 # 30.10: было 6 — на скорости поворот набирался вяло
 const TURN_SCALE_RELAX := 0.35 # с: за столько полный руль следует за изменением доступной дуги (волны, вираж)
 const TURN_SCALE_RISE := 0.1   # с: а возвращается быстрее, когда запас вернулся (после гребня или приземления)
+## 31.10: руль на скорости. Полный руль раньше давал предел шин (на 13 м/с радиус 9 м, около 1 g): в любой поворот
+## можно было влететь и вывернуть без тормоза. Теперь доля дуги от руля нелинейная — малый руль работает как прежде
+## (правка линии), полный руль между ARC_PACE (м/с) плавно ограничен ARC_SHARE предела. Тормоз снимает ограничение:
+## оттормозиться и заложить — тугой поворот снова доступен (и на малой скорости он доступен всегда).
+const ARC_SHARE := 0.68
+const ARC_PACE := Vector2(6.0, 13.0)
 const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
 const HOP_LINK := 0.3         # окно E после подъёма, с
 ## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
@@ -1143,7 +1149,11 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 			# часть руля — такая же часть её; короткая разгрузка (гребень, Q) по-прежнему режет поворот пределом limit.
 			if _turn_scale < 0.0: _turn_scale = limit
 			_turn_scale = lerpf(_turn_scale, limit, 1.0 - exp(-dt / (TURN_SCALE_RISE if limit > _turn_scale else TURN_SCALE_RELAX)))
-			wanted = -steer * minf(rate, _turn_scale) * (1.0 if speed >= 0.0 else -1.0)
+			var arc := lerpf(1.0, ARC_SHARE, smoothstep(ARC_PACE.x, ARC_PACE.y, pace))
+			arc = lerpf(arc, 1.0, smoothstep(0.15, 0.6, brakes.pressure))
+			# s · (1 − (1 − arc) · s²): у малого руля доля почти полная, у полного — arc
+			var command := steer * (1.0 - (1.0 - arc) * steer * steer)
+			wanted = -command * minf(rate, _turn_scale) * (1.0 if speed >= 0.0 else -1.0)
 		wanted = clampf(wanted, -limit, limit)
 		# Потеря хода — от настоящей перегрузки шины, а не просто от удержания клавиши на скорости.
 		if not contact_model:

@@ -20,6 +20,9 @@ const GAP_DROP := 2.5      # поверхность падает больше э
 const COMMIT := 40.0       # за столько метров до разрыва — полный газ и без тормоза, м
 const COMMIT_SPEED := 16.0 # скорость, к которой разгоняется перед разрывом, м/с
 const BRIDGE := 11.0       # скорость на мосту-настиле, м/с
+## 31.10: полный руль на скорости даёт не весь запас шин, а BikeRide.ARC_SHARE (тугой поворот — после торможения):
+## пилот рассчитывает скорость в поворот не больше чем на столько бокового ускорения, м/с²
+const TURN_CAP := 9.5
 
 var style := "flow"
 var station := 0.0
@@ -101,7 +104,7 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 			var s := fposmod(station + k_at, length) if d.closed else minf(station + k_at, length)
 			var k := absf(d.curvature_at(s))
 			if k > 0.0001:
-				var grip: float = spec.lateral * (BERM_GRIP if _on(d, s, TrailElement.Profile.BERM) else 1.0)
+				var grip: float = minf(TURN_CAP, spec.lateral * (BERM_GRIP if _on(d, s, TrailElement.Profile.BERM) else 1.0))
 				want = minf(want, sqrt(grip / k + 2.0 * brake * k_at))
 			var tech := _technical(d, s)
 			if tech != null and tech.profile not in spec.hop and is_finite(spec.tech):

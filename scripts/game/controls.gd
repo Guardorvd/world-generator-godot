@@ -91,6 +91,7 @@ func reset() -> void:
 	_key_steer = 0.0
 	_key_direction = 0.0
 	_key_hold = 0.0
+	_brake_hold = 0.0
 
 
 ## Плавная команда с клавиатуры: короткое нажатие правит линию, удержание усиливает дугу.
@@ -98,19 +99,33 @@ func reset() -> void:
 ## 31.10: дугу можно вести и частыми нажатиями: набранное удержание забывается за KEY_HOLD_FORGET, а не сразу,
 ## и повторное нажатие в ту же сторону продолжает дугу (раньше каждое начиналось заново с KEY_STEER_TAP и
 ## нажатия по 0,25 с держали руль не выше 0,44). Крупная дуга отпускается чуть мягче мелкой правки.
-const KEY_STEER_TAP := 0.22
+## 31.10: короткое нажатие сильнее и быстрее (было 0,22 и 18/с): на 13 м/с нажатие 0,1 с доворачивало на 2°.
+const KEY_STEER_TAP := 0.45
 const KEY_STEER_RAMP := 0.55 # curvature builds gradually while the initial correction arrives promptly
 ## 31.10: на малой скорости (подъём, серпантин) полный руль набирается быстрее: там нужен крутой поворот сразу,
 ## а 0,55 с до полного руля — 3 м по прежней линии. Между этими скоростями, м/с, — от KEY_STEER_RAMP_SLOW к RAMP.
 const KEY_STEER_RAMP_SLOW := 0.22
 const KEY_STEER_RAMP_PACE := Vector2(4.0, 14.0)
-const KEY_STEER_RESPONSE := 18.0
+const KEY_STEER_RESPONSE := 26.0
 const KEY_STEER_RELEASE := 14.0
 const KEY_STEER_ARC_RELEASE := 6.0 # отпускание заложенной дуги (руль больше половины)
 const KEY_HOLD_FORGET := 1.0 # секунд удержания забывается за секунду без нажатия
 var _key_steer := 0.0
 var _key_direction := 0.0
 var _key_hold := 0.0
+## 31.10: тормоз с клавиатуры ступенями — нажатие подтормаживает (BRAKE_TAP), удержание за BRAKE_RAMP доводит до
+## полного. Раньше любое нажатие S было полным тормозом: 0,15 с снимали 3 м/с, подтормозить перед поворотом было нечем.
+const BRAKE_TAP := 0.35
+const BRAKE_RAMP := 0.45
+var _brake_hold := 0.0
+
+## Газ/тормоз велосипеда: газ проходит как есть, тормоз с клавиатуры набирается удержанием; аналоговый — как есть.
+func bike_brake(raw: float, dt: float) -> float:
+	if raw >= 0.0 or joypad or not is_equal_approx(raw, -1.0):
+		_brake_hold = 0.0
+		return raw
+	_brake_hold += dt
+	return -lerpf(BRAKE_TAP, 1.0, smoothstep(0.0, BRAKE_RAMP, _brake_hold))
 
 func bike_steer(raw: float, dt: float, pace := 0.0) -> float:
 	var digital := is_zero_approx(raw) or is_equal_approx(absf(raw), 1.0)
