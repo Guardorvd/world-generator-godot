@@ -83,14 +83,27 @@ func run() -> void:
 	var early := 0.0
 	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
 	check(early > 0.18 and early < 0.4, "prompt correction in 100 ms, without full-lock steering")
+	# частые нажатия в одну сторону (0,25 с нажато, 0,12 с отпущено) ведут дугу, а не начинают её заново
+	controls.reset()
+	var pulsed := 0.0
+	for tap in 4:
+		for i in 15: pulsed = controls.bike_steer(1.0, 1.0 / 60, 12.0)
+		if tap < 3:
+			for i in 7: controls.bike_steer(0.0, 1.0 / 60, 12.0)
+	check(pulsed > 0.85, "частые нажатия собирают дугу (%.2f)" % pulsed)
+	controls.reset()
+	var single := 0.0
+	for i in 15: single = controls.bike_steer(1.0, 1.0 / 60, 12.0)
+	check(single < 0.5, "одно короткое нажатие — только правка линии (%.2f)" % single)
 	var pose := BikeRide.new()
 	pose.speed = 12.0
 	for i in 120: pose._step_pose(0.0, 9.0, 1.0 / 60)
-	check(rad_to_deg(pose.lean) > 25.0 and rad_to_deg(pose.lean) < 35.0, "visible equilibrium lean in a fast corner")
+	var flat_lean := rad_to_deg(pose.lean)
+	check(flat_lean > 12.0 and flat_lean <= rad_to_deg(BikeRide.LEAN_MAX_FLAT) + 0.1, "сдержанный крен в быстром повороте на ровном (%.1f°)" % flat_lean)
 	pose.bank_slope = 0.3
 	for i in 120: pose._step_pose(0.0, 5.0, 1.0 / 60)
-	check(rad_to_deg(pose.lean) > 28.0, "berm contribution is visible in lean")
-	var cross_gravity := GameConfig.GRAVITY * 0.3 / sqrt(1.0 + 0.3 * 0.3)
+	check(rad_to_deg(pose.lean) > flat_lean + 8.0, "на вираже крен заметно больше, чем на ровном (%.1f°)" % rad_to_deg(pose.lean))
+	var cross_gravity := BikeRide.SIDE_GRAVITY * 0.3 / sqrt(1.0 + 0.3 * 0.3)
 	for i in 120: pose._step_pose(0.0, -cross_gravity, 1.0 / 60)
 	check(absf(pose.lean) < 0.01, "straight traverse stays upright")
 	pose.airborne = true

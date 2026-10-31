@@ -150,6 +150,13 @@ const TIRE_RELAX_MIN := 0.05 # с: не быстрее этого и на бол
 ## Боковой запас ещё и с инерцией рамы и седока: поворот не дрожит от каждой кочки на пределе сцепления,
 ## а длинный гребень или контруклон всё так же отнимают его.
 const SIDE_RELAX := 0.2      # с
+## 31.10: после касания земли (прыжок или отрыв на миллисекунды) шина держит по нагрузке сразу: в полёте запас
+## обнулялся и набирался заново через TIRE_RELAX и SIDE_RELAX — по записи заездов руль почти не работал 0,5–1 с
+## после каждого приземления, велосипед уходил по прежней траектории.
+const LANDING_GRIP := 0.12   # с: столько после касания запас идёт вслед за нагрузкой без задержек
+## Тяжесть поперёк полотна — как настоящая, а не игровая GRAVITY (16): та ускоряет прыжки, а на поперечном
+## уклоне тянула вбок в 1,6 раза сильнее, и поворот в сторону подъёма склона почти пропадал.
+const SIDE_GRAVITY := 10.0   # м/с²
 ## Помощь баланса в лабораторной модели: запас на обычную дугу и на исправление ошибки.
 const RIDER_GRIP := 1.6
 const TURN_RESERVE := 0.97 # 30.10: было 0,88 — руль на скорости оставлял лишний запас; дуга круче, снос не растёт
@@ -157,6 +164,7 @@ const SIDE_RESPONSE := 30.0
 const RIDER_STEER := 1.35
 const RIDER_TURN_RESPONSE := 8.0 # 30.10: было 6 — на скорости поворот набирался вяло
 const TURN_SCALE_RELAX := 0.35 # с: за столько полный руль следует за изменением доступной дуги (волны, вираж)
+const TURN_SCALE_RISE := 0.1   # с: а возвращается быстрее, когда запас вернулся (после гребня или приземления)
 const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
 const HOP_LINK := 0.3         # окно E после подъёма, с
 ## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
@@ -249,6 +257,7 @@ var force_r := Vector2()
 var use_f := 0.0      # использованный запас сцепления колеса (тормоз и поворот), 0..1; 1 — колесо скользит
 var use_r := 0.0
 var _share := 0.5     # доля нагрузки на переднем колесе после переноса (PITCH_TRANSFER)
+var _landing_grip := 0.0 # сколько ещё запас шин идёт вслед за нагрузкой после касания (LANDING_GRIP), с
 var _rest_f := 0.0    # цель пружин на прошлом такте: отклонение от неё — сила подвески сверх равновесия
 var _rest_r := 0.0
 var _on_f := -1          # препятствие, на котором стоит колесо (ForestObstacles.wheel_contact id; -1 — на земле)
@@ -485,6 +494,7 @@ func reset_motion() -> void:
 	tire_r = 0.5
 	side_f = 0.5
 	side_r = 0.5
+	_landing_grip = 0.0
 	use_f = 0.0
 	use_r = 0.0
 	_rest_f = 0.0
@@ -969,7 +979,7 @@ func _step_pose(throttle: float, lateral: float, dt: float) -> void:
 	# На наклонном полотне (вираж, контруклон) крен полный — склон рядом, и угол читается; на ровной дороге
 	# тот же угол выглядел завалом, поэтому там он вдвое меньше и ограничен.
 	var cross := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
-	var bank_accel := GameConfig.GRAVITY * cross / sqrt(1.0 + cross * cross) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) if contact_model else 0.0
+	var bank_accel := SIDE_GRAVITY * cross / sqrt(1.0 + cross * cross) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) if contact_model else 0.0
 	var banked := smoothstep(LEAN_BANK_FROM, LEAN_BANK_FULL, absf(cross))
 	var lean_max := lerpf(LEAN_MAX_FLAT, LEAN_MAX, banked)
 	var lean_goal := 0.0 if airborne else clampf(atan((lateral + bank_accel) / GameConfig.GRAVITY) * lerpf(LEAN_SHARE_FLAT, LEAN_SHARE, banked), -lean_max, lean_max)
@@ -1015,7 +1025,7 @@ func _step_traction(old_heading: float, grip: float, dt: float) -> float:
 		# Тяжесть поперёк полотна: на контруклоне тянет вниз, на вираже — внутрь поворота. Шины держат её вместе
 		# со сносом из своего запаса; стоящий седок упирается ногой.
 		var s := clampf(bank_slope, -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
-		lateral_speed -= GameConfig.GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) * dt
+		lateral_speed -= SIDE_GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(SIDE_HOLD_SPEED * 0.5, SIDE_HOLD_SPEED * 2.0, absf(speed)) * dt
 		var caps := _side_caps(grip)
 		var cap_f := CORNER_GRIP * RIDER_GRIP * grip * side_f * slick_f
 		var cap_r := CORNER_GRIP * RIDER_GRIP * grip * side_r * slick_r
@@ -1121,7 +1131,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		if contact_model:
 			# Вираж — тяжестью: полотно, поднятое снаружи поворота, тянет внутрь; контруклон тянет наружу
 			var s := clampf(bank_slope * -signf(steer), -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
-			corner_grip = maxf(0.0, corner_grip + GameConfig.GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(2.0, 6.0, pace))
+			corner_grip = maxf(0.0, corner_grip + SIDE_GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(2.0, 6.0, pace))
 		else:
 			corner_grip += _bank_assist(-signf(steer), pace, corner_grip)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
@@ -1132,7 +1142,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 			# каждой волне. Теперь полный руль — самая крутая дуга, которую шины держат в среднем за TURN_SCALE_RELAX,
 			# часть руля — такая же часть её; короткая разгрузка (гребень, Q) по-прежнему режет поворот пределом limit.
 			if _turn_scale < 0.0: _turn_scale = limit
-			_turn_scale = lerpf(_turn_scale, limit, 1.0 - exp(-dt / TURN_SCALE_RELAX))
+			_turn_scale = lerpf(_turn_scale, limit, 1.0 - exp(-dt / (TURN_SCALE_RISE if limit > _turn_scale else TURN_SCALE_RELAX)))
 			wanted = -steer * minf(rate, _turn_scale) * (1.0 if speed >= 0.0 else -1.0)
 		wanted = clampf(wanted, -limit, limit)
 		# Потеря хода — от настоящей перегрузки шины, а не просто от удержания клавиши на скорости.
@@ -1455,6 +1465,7 @@ func _step_contacts(grade: float, dt: float) -> void:
 		tire_r = 0.0
 		side_f = 0.0
 		side_r = 0.0
+		_landing_grip = LANDING_GRIP
 		lift_f = 0.0
 		lift_fv = 0.0
 		lift_r = 0.0
@@ -1503,6 +1514,13 @@ func _step_contacts(grade: float, dt: float) -> void:
 	var ks := 1.0 - exp(-dt / SIDE_RELAX)
 	side_f = minf(lerpf(side_f, tire_f, ks), tire_f)
 	side_r = minf(lerpf(side_r, tire_r, ks), tire_r)
+	if _landing_grip > 0.0:
+		# колесо встало на землю: шину прижало, она держит столько, сколько несёт (нагрузка — через TIRE_COMPLY)
+		_landing_grip = maxf(0.0, _landing_grip - dt)
+		tire_f = load_f
+		tire_r = load_r
+		side_f = load_f
+		side_r = load_r
 
 
 ## Подъём колёс рывком тела: pull — доля веса, которую тело снимает с переднего колеса (меньше нуля — с заднего),
