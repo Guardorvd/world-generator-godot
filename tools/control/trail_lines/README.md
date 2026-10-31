@@ -10,3 +10,6 @@
   полос, пишет `m19_lines.json` и карту `m19b.png`; точки переносятся в константы `scripts/lab/trail_lab_summit.gd`.
 
 Нужны numpy и matplotlib: `python3 summit_lines.py`.
+- `valley_ground.py`, `valley_lines.py`, `valley_export.py` — то же для долины (трасса 20): гравийная петля и МТБ,
+  которую поиск отталкивает от грэвела, кроме двух переездов по мостам; `valley_export.py` пишет точки и станции
+  пересечений (`CROSSINGS`, мост и броды через русло) для `scripts/lab/trail_lab_valley.gd`.

@@ -221,9 +221,13 @@ static func _northshore(h: Heightfield, d: TrailDefinition, e: TrailElement, key
 			ground_a = h.ground_at(a.x, a.y), ground_b = h.ground_at(b.x, b.y), odd = k % 2 == 1})
 
 ## Deck height at `along` metres from the start: the straight line between the ground at both ends plus the ramp.
+## 31.10: skew above 0.5 makes the northshore a bridge — it also ramps down to the ground over the last DECK_RAMP
+## instead of ending in a drop (the default skew 0.35 keeps every existing deck a kicker or a ledge).
 static func _deck_level(along: float, e: TrailElement, ground_a: float, ground_b: float) -> float:
 	var t := along / e.length
-	return lerpf(ground_a, ground_b, t) + e.height * clampf(t / DECK_RAMP, 0.0, 1.0)
+	var rise := clampf(t / DECK_RAMP, 0.0, 1.0)
+	if e.skew > 0.5: rise = minf(rise, clampf((1.0 - t) / DECK_RAMP, 0.0, 1.0))
+	return lerpf(ground_a, ground_b, t) + e.height * rise
 
 ## Each gate is a short wall from just past the axis towards one edge; gates alternate sides, so the clean
 ## line (line_at) has to weave and no straight line stays inside the trail.

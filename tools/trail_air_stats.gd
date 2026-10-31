@@ -27,6 +27,9 @@ func run() -> void:
 	out_path = "user://trail_air_stats"
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out_path))
 	for number: int in presets:
+		if number < 1 or number > TrailLabCatalog.LIST.size():
+			print("нет такой трассы: ", number)
+			continue
 		var kit := TrailLabCatalog.routes(number - 1, Fixture)
 		var prepared := Fixture.prepare(kit, true, TrailLabCatalog.LIST[number - 1].ground)
 		if not prepared.errors.is_empty():

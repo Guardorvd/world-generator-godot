@@ -44,7 +44,9 @@ def route(ground,vias,gmin,gmax,cross_w=0.6,turn_w=6.0,hairpin=25.0,eps=2.5,rmin
         seg,d0=astar(H,gx,gz,n,a,b,gmin,gmax,cross_w,turn_w,hairpin,avoid,d0)
         pts+= seg if not pts else seg[1:]
     pts[0]=vias[0]; pts[-1]=vias[-1]
-    return resample(chaikin(rdp(pts,eps),5),2.0)
+    m=len(pts)//2
+    simple=rdp(pts[:m+1],eps)[:-1]+rdp(pts[m:],eps)
+    return resample(chaikin(simple,5),2.0)
 def radius_at(p,i,k=2):
     a=np.array(p[i-k]);b=np.array(p[i]);c=np.array(p[i+k])
     ab=b-a;bc=c-b

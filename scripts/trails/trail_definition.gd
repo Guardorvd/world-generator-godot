@@ -101,7 +101,8 @@ func validate() -> PackedStringArray:
 			errors.append("Gap does not fit its kicker, gap and landing")
 		if not is_finite(e.station) or not is_finite(e.length) or not is_finite(e.height) or not is_finite(e.bank):
 			errors.append("Non-finite element")
-		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > 2.0:
+		# настил норшора — сооружение, не земляные работы: мост над дорогой выше 2 м (31.10)
+		elif e.length < RoadRefinement.STEP * 4.0 or e.height < 0.0 or e.height > (3.5 if e.profile == TrailElement.Profile.NORTHSHORE else 2.0):
 			errors.append("Element exceeds heightfield resolution/earthwork limits")
 		elif e.station - e.length * 0.5 < 0.0 or e.station + e.length * 0.5 > route_length():
 			errors.append("Element extends beyond route")

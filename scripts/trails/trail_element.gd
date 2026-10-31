@@ -18,6 +18,7 @@ const INTEGER_KEYS := ["count", "lines", "seed"]
 ## WAVES / PUMP: number of crests inside `length`.
 @export_range(1, 12) var count := 3
 ## ROLLOVER / TABLETOP: where the crest sits along the element (0.5 is symmetric; lower — steeper face, longer back).
+## NORTHSHORE: above 0.5 — a bridge that ramps down at its far end too (TrailTechnical._deck_level).
 @export_range(0.15, 0.85) var skew := 0.35
 ## Technical features: share of free cells that get an object (rocks, roots).
 @export_range(0.05, 1.0) var density := 0.5

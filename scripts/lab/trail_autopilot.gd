@@ -19,6 +19,7 @@ const BERM_GRIP := 1.5     # на вираже боковой запас бол�
 const GAP_DROP := 2.5      # поверхность падает больше этого за 3 м — разрыв, м
 const COMMIT := 40.0       # за столько метров до разрыва — полный газ и без тормоза, м
 const COMMIT_SPEED := 16.0 # скорость, к которой разгоняется перед разрывом, м/с
+const BRIDGE := 11.0       # скорость на мосту-настиле, м/с
 
 var style := "flow"
 var station := 0.0
@@ -59,6 +60,10 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 	if is_finite(near.z) and near.x > station - 10.0 and near.x < station + 30.0: station = maxf(station, near.x)
 	var speed := absf(bike.speed)
 	var ahead := station + maxf(4.0, speed * 0.55)
+	# перед мостом-настилом (31.10) — точнее по оси: смотрит ближе, чтобы выровняться до пандуса, а не упереться в боковину
+	for e in d.elements:
+		if e.profile == TrailElement.Profile.NORTHSHORE and e.skew > 0.5 and station > e.station - e.length * 0.5 - 25.0 and station < e.station + e.length * 0.5:
+			ahead = station + maxf(3.0, speed * 0.3)
 	if d.closed: ahead = fposmod(ahead, length)
 	var aim := d.point_at(minf(ahead, length))
 	var offset := _line(d, ahead, spec)
@@ -101,6 +106,10 @@ func drive(bike: BikeRide, d: TrailDefinition) -> Dictionary:
 			var tech := _technical(d, s)
 			if tech != null and tech.profile not in spec.hop and is_finite(spec.tech):
 				want = minf(want, sqrt(spec.tech * spec.tech + 2.0 * brake * k_at))
+			# мост-настил (31.10): узкий и с пандусами — на нём не быстрее BRIDGE в любой манере
+			for e in d.elements:
+				if e.profile == TrailElement.Profile.NORTHSHORE and e.skew > 0.5 and s > e.station - e.length * 0.5 - 2.0 and s < e.station + e.length * 0.5:
+					want = minf(want, sqrt(BRIDGE * BRIDGE + 2.0 * brake * k_at))
 			k_at += 2.0
 	var throttle := clampf((want - speed) * 0.6, -1.0, 1.0)
 	if throttle < 0.0 and speed - want < (0.3 if gap_speed > 0.0 else 0.7): throttle = 0.0
