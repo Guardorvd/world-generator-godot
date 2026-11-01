@@ -335,9 +335,12 @@ static func tech_speed(e: TrailElement, d: TrailDefinition = null, level := 1) -
 		# линия −w·cos(π·фаза): наибольшая кривизна w·(π/шаг)²
 		var k := maxf(0.001, weave * pow(PI / spacing, 2.0))
 		return minf(limit + 2.0, sqrt(LAT_MAX * 0.8 * BikeRide.ROOT_GRIP / k))
+	# бревно на оси: на 12,6 м/с — через руль (заезд 01.11); объезд узкий, не все его берут
+	if e.profile == T.LOG: limit = minf(limit, LOG_SPEED)
 	var radius := tightest(d, e.station - e.length * 0.5, e.station + e.length * 0.5)
 	if is_finite(radius): limit = minf(limit, sqrt(LAT_MAX * float(LEVELS[level].lat) * BikeRide.ROOT_GRIP * radius))
 	return limit
+const LOG_SPEED := 9.0
 
 ## Высота камней или корней под уровень (доля диапазона уровня), м.
 static func tech_height(kind: int, level: int) -> float:
@@ -520,7 +523,9 @@ static func line_heights(d: TrailDefinition, ground := Callable()) -> PackedFloa
 	return smooth
 
 ## Профиль скорости по готовой высоте оси (line_heights); caps — {станция: предел скорости} (техника и т. п.).
-static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, caps := {}) -> PackedFloat32Array:
+## braking = false — «как едут» (01.11, заезды по генератору: тормоз 10 % времени, в поворотах — в 29–47 % проездов):
+## без торможения заранее, поворот срезает скорость только в нём самом, после него — снова разгон.
+static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, caps := {}, braking := true) -> PackedFloat32Array:
 	var n := y.size()
 	var v := PackedFloat32Array()
 	v.resize(n)
@@ -544,8 +549,9 @@ static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, 
 		var a := -G * grade / sqrt(1.0 + grade * grade) - ROLL - DRAG * u * u
 		if u < CRUISE: a += PEDAL * (1.0 - u / CRUISE)
 		v[i] = minf(sqrt(maxf(1.0, u * u + 2.0 * a)), cap[i])
-	for i in range(n - 2, -1, -1):
-		v[i] = minf(v[i], sqrt(v[i + 1] * v[i + 1] + 2.0 * BRAKE))
+	if braking:
+		for i in range(n - 2, -1, -1):
+			v[i] = minf(v[i], sqrt(v[i + 1] * v[i + 1] + 2.0 * BRAKE))
 	return v
 
 ## Уклон, под который считается элемент с началом на station: средний по земле на 20 м вперёд, через 0,02 (ключ кэша).

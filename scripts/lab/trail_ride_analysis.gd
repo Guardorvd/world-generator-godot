@@ -10,6 +10,8 @@ const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 
 ## Участок кончается через столько метров после элемента: туда же приходятся приземления.
 const TAIL := 8.0
+## Ближе к краю полотна, м: дуга шире оси — уже ошибка.
+const EDGE_MARGIN := 0.4
 ## Перед элементом: вход считается отсюда (скорость и линия на входе), м.
 const LEAD := 6.0
 ## Поворот оси туже этого радиуса без своего элемента — отдельный участок «поворот», м.
@@ -280,7 +282,9 @@ func _verdict(f: Dictionary, p: Dictionary) -> String:
 				if not speed_note.is_empty(): notes.append(speed_note)
 			else: p.landed_in_zone = true
 	if f.has("mean_radius") and p.has("driven_radius") and f.kind in ["turn", "terrain"]:
-		if p.driven_radius > f.mean_radius * 1.3 + 2.0 or p.max_lateral > route.width * 0.45:
+		# 01.11: срезать поворот внутри полотна — нормально (раньше «шире оси» было в 70 % проездов и на верной скорости);
+		# ошибка — только если дуга шире и седок у края полотна
+		if p.driven_radius > f.mean_radius * 1.3 + 2.0 and p.max_lateral > route.width * 0.5 - EDGE_MARGIN:
 			notes.append("дуга шире оси: %.0f м при среднем радиусе %.0f м (тугой %.0f), вынос до %.1f м" % [p.driven_radius, f.mean_radius, f.radius, p.max_lateral])
 	if f.kind == "rhythm":
 		var hops := 0

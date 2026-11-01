@@ -59,7 +59,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var band0: Vector2 = profile.difficulty
 		var mid := clampi(int((band0.x + band0.y) * 0.5 * 4.0), 0, 3)
 		var heights := TrailStandards.line_heights(d, ground)
-		std = {heights = heights, level = mid, caps = {}, speeds = TrailStandards.profile_from(d, heights, mid), ground = ground, last_end = 0.0, placed = 0, refused = {}}
+		std = {heights = heights, level = mid, caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), ground = ground, last_end = 0.0, placed = 0, refused = {}}
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -104,10 +104,12 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 			if TrailElement.places_objects(e.profile): placed_object = finish
 			cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
 		cursor = maxf(cursor, end)
+	if not std.is_empty(): _berm_turns(d, elements, std)
 	var result := {elements = elements, sections = sections}
 	if not std.is_empty():
 		result.speeds = std.speeds
 		result.refused = std.refused
+		result.berms = std.get("berms", 0)
 	return result
 
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
@@ -200,6 +202,11 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	if key.has(kind):
 		for k: String in ([key[kind]] + (["table", "roller"] if kind in [T.GAP, T.TABLETOP] else (["roller"] if kind == T.DROP else []))):
 			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade)
+			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
+			if not s.is_empty() and s.has("speed_lo") and (v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5):
+				var why := "прыжок: скорость вне окна"
+				std.refused[why] = int(std.refused.get(why, 0)) + 1
+				continue
 			if not s.is_empty(): return s
 		std.refused[TrailElementLibrary.title(kind)] = int(std.refused.get(TrailElementLibrary.title(kind), 0)) + 1
 		return {}
@@ -209,21 +216,94 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 			return {profile = kind, length = snappedf(step * count, 0.1), height = size.y, count = count}
 		T.BERM, T.OFF_CAMBER, T.S_BERM:
 			var radius := TrailStandards.tightest(d, cursor, cursor + size.x)
+			# контруклон отнимает сцепление: только где медленно, иначе обычный вираж (01.11: на 15 м/с — вылеты)
+			if kind == T.OFF_CAMBER and v > OFF_CAMBER_SPEED: kind = T.BERM
 			var h := TrailStandards.berm_height(v, radius, level, d.width) if is_finite(radius) else size.y
-			return {profile = kind, length = size.x, height = clampf(h if is_finite(h) else 1.2, 0.3, 1.2) if kind != T.OFF_CAMBER else size.y}
+			return {profile = kind, length = size.x, height = clampf(h if is_finite(h) else 1.2, 0.3, 1.2) if kind != T.OFF_CAMBER else minf(size.y, 0.5)}
 	if TrailElement.places_objects(kind) or kind in [T.ROUGH, T.RUTS]:
 		var limit: float = TrailStandards.TECH_SPEED[level]
+		if kind == T.LOG: limit = minf(limit, TrailStandards.LOG_SPEED)
+		# 01.11: только где седок и без торможения не быстрее стандарта — заранее не тормозят (бревно на 12,6 м/с
+		# после поворота уронило через руль)
 		if v > limit + 0.5:
-			# место для торможения: от конца прошлого элемента до начала техники
-			if cursor - float(std.last_end) < TrailStandards.brake_distance(v, limit) + 4.0:
-				std.refused["техника: нет места затормозить"] = int(std.refused.get("техника: нет места затормозить", 0)) + 1
-				return {}
-			std.caps[int(cursor)] = limit
-			std.speeds = TrailStandards.profile_from(d, std.heights, std.level, std.caps)
+			var why := "техника: здесь быстрее %.0f м/с" % limit
+			std.refused[why] = int(std.refused.get(why, 0)) + 1
+			return {}
 		var h := size.y
 		if TrailStandards.TECH_HEIGHTS.has(kind): h = TrailStandards.tech_height(kind, level)
 		return {profile = kind, length = size.x, height = h}
 	return {profile = kind, length = size.x, height = size.y, count = count}
+
+## Контруклон под стандартами — только медленнее этого, м/с.
+const OFF_CAMBER_SPEED := 9.0
+## Поворот оси туже этого радиуса проверяется на вираж, м.
+const BERM_CHECK := 40.0
+
+## Виражи в поворотах без своего элемента, которые на скорости седока («как едут») не пройти без наклона: высота —
+## TrailStandards.berm_height под скорость и радиус (01.11: на сгенерированных трассах 2/3 поворотов R ≈ 10 м были без
+## виража, вылеты наружу и падение с откоса). Не пересекаются с другими элементами.
+static func _berm_turns(d: TrailDefinition, elements: Array[TrailElement], std: Dictionary) -> void:
+	var length := d.route_length()
+	var speeds: PackedFloat32Array = std.speeds
+	var shape := d.shape()
+	var added := 0
+	var at := 4.0
+	while at < length - 4.0:
+		if absf(d.curvature_at(at)) < 1.0 / BERM_CHECK:
+			at += 1.0
+			continue
+		var sign := signf(d.curvature_at(at))
+		var from := at
+		while at < length - 4.0 and absf(d.curvature_at(at)) >= 0.7 / BERM_CHECK and signf(d.curvature_at(at)) == sign: at += 1.0
+		var radius := TrailStandards.tightest(d, from, at)
+		# скорость на подходе: внутри поворота профиль уже срезан до его предела
+		var v := 0.0
+		for k in range(maxi(0, int(from) - 8), mini(speeds.size(), int(from) + 1)): v = maxf(v, speeds[k])
+		var route_bank := minf(absf(d.curvature_at((from + at) * 0.5)) * shape.bank_gain, shape.bank_max) * d.auto_bank
+		var level := int(std.level)
+		if not is_finite(radius) or v <= TrailStandards.turn_speed(radius, route_bank, float(TrailStandards.LEVELS[level].lat)) + 0.5:
+			at += 2.0
+			continue
+		# длинный поворот — вираж 30 м на самом тугом месте
+		var tight := from
+		for k in range(int(from), int(at) + 1):
+			if absf(d.curvature_at(k)) > absf(d.curvature_at(tight)): tight = k
+		var lo := maxf(2.0, from - 3.0)
+		var hi := minf(length - 2.0, at + 3.0)
+		if hi - lo > 34.0:
+			lo = maxf(2.0, tight - 15.0)
+			hi = minf(length - 2.0, tight + 15.0)
+		if hi - lo < 10.0:
+			at += 2.0
+			continue
+		# поворот принадлежит виражу: виражи составителя здесь сливаются в один, прочие элементы (кроме прыжков —
+		# их в поворотах нет) уступают место; прыжок в повороте — вираж не ставится
+		var merged: Array[TrailElement] = []
+		var jump := false
+		for e in elements:
+			var e_lo := e.station - e.length * 0.5
+			var e_hi := e.station + e.length * 0.5
+			if e_hi < lo - 2.0 or e_lo > hi + 2.0: continue
+			if e.profile in [T.TABLETOP, T.GAP, T.DROP]: jump = true
+			elif e.profile == T.BERM and signf(e.bank) == sign:
+				merged.append(e)
+				lo = minf(lo, e_lo)
+				hi = maxf(hi, e_hi)
+			else:
+				merged.append(e)
+		if jump:
+			std.refused["вираж: в повороте прыжок"] = int(std.refused.get("вираж: в повороте прыжок", 0)) + 1
+		else:
+			var h := TrailStandards.berm_height(v, radius, level, d.width)
+			for e in merged:
+				if e.profile == T.BERM: h = maxf(h, e.height)
+				elements.erase(e)
+			hi = minf(hi, lo + 40.0)
+			elements.append(TrailElementLibrary.make(T.BERM, (lo + hi) * 0.5, hi - lo, clampf(h if is_finite(h) else 1.2, 0.4, 1.2), sign))
+			added += 1
+		at += 2.0
+	elements.sort_custom(func(a: TrailElement, b: TrailElement) -> bool: return a.station < b.station)
+	std.berms = added
 
 static func _weighted(weights: Dictionary, rng: RandomNumberGenerator) -> int:
 	var sum := 0.0
