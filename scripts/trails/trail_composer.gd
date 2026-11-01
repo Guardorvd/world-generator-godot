@@ -1,5 +1,6 @@
 class_name TrailComposer
 extends RefCounted
+const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 ## One composer for every kind of bike line. A route is cut into sections; each section gets a mood
 ## (flow, jumps, technical, forest, rest) and a difficulty, then is filled with library elements.
 ## Trail profiles are data only: mood weights, a difficulty band, density and section length.

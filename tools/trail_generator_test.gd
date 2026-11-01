@@ -1,4 +1,7 @@
 extends SceneTree
+const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
+const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
+const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 ## Генераторы Trail Lab (01.11): местность (TrailLabTerrain) и трасса по ней (TrailLabBuilder) без мира игры.
 ## По каждому характеру местности и стилю трассы: время генерации, длина, перепад, уклон, элементы, отказы
 ## стандартов; сборка тем же путём, что в лаборатории (Fixture.prepare с «generated»), и проверка готовой поверхности

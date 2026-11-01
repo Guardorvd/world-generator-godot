@@ -1,4 +1,6 @@
 extends RefCounted
+const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
+const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 ## Запись сессии тестов в Trail Lab (30.10.2026): с первого нажатия каждый такт физики пишется всё, что видно в F3 и
 ## что нужно, чтобы понять заезд, не видя его: где велосипед (координаты, станция и отступ от оси трассы, элемент),
 ## что нажато (сырые клавиши и то, что дошло до физики), состояние, силы, колёса, подвеска, покрытие, падения.

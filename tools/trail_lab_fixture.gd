@@ -1,4 +1,6 @@
 extends RefCounted
+const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
+const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 ## Only lab fixtures live here. All construction, contacts and motion use production code.
 static func definitions() -> Array[TrailDefinition]:
 	var result: Array[TrailDefinition] = []

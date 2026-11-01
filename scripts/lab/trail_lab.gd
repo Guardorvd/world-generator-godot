@@ -1,4 +1,6 @@
 extends Node3D
+const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
+const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 ## Developer composition root: production terrain, controller, view and crash lifecycle.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const EditorPanel = preload("res://scripts/lab/trail_lab_editor.gd")
