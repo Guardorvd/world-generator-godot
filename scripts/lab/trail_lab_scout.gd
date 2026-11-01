@@ -11,7 +11,8 @@ const MAX_SITES := 8
 const STRIDE := 24          # шаг окон-кандидатов, клеток
 const SAMPLE := 4           # шаг выборки внутри окна, клеток
 const INNER := 0.12         # отступ внутренней части окна от края (доля): там вода не допускается
-const FALL := Vector2(25.0, 220.0) # годный перепад внутренней части, м
+const FALL := Vector2(8.0, 220.0) # годный перепад внутренней части, м (v4: пологие места — под байк-парки)
+const STYLE_MAX := 3 # одного стиля — не больше стольких мест
 const STEEP := 0.7          # круче (м на м между выборками) — круча
 const SPREAD := 0.75        # центры мест не ближе этой доли окна
 const WATER_MAX := 0.12     # больше воды во внутренней части — место не годится (реки трасса обходит)
@@ -63,6 +64,17 @@ static func find(seed_value: int) -> Array[Dictionary]:
 		var s := sites[i]
 		s.n = i + 1
 		s.style = _style(s, rng)
+		# разнообразие: стиль, которого уже STYLE_MAX, — другой подходящий
+		var used := 0
+		for k in i:
+			if sites[k].style == s.style: used += 1
+		var guard := 0
+		while used >= STYLE_MAX and guard < 8:
+			guard += 1
+			s.style = _style(s, rng)
+			used = 0
+			for k in i:
+				if sites[k].style == s.style: used += 1
 		s.trail_seed = rng.randi_range(1, 99999)
 	stats = {looked = looked, fit = found.size(), sites = sites.size(), refused = refused, ms = (Time.get_ticks_usec() - started) / 1000.0}
 	if sites.is_empty(): stats.reason = "мест не нашлось (%s)" % [refused]
@@ -110,7 +122,8 @@ static func _measure(h: PackedFloat32Array, wet: PackedByteArray, n: int, x0: in
 	elif steep_share > 0.25: r.reason = "кручи"
 	if not r.reason.is_empty(): return r
 	# лучше: перепад 60–140 м, уклон 8–25 %, мало круч и воды у края
-	var score := 1.0 - absf(fall - 100.0) / 120.0 - absf(slope - 0.16) * 2.0 - steep_share * 2.0 - water_share * 3.0 - edge_water * 0.002
+	# пологое — тоже годное место (под байк-парк): оценка не наказывает малый перепад, только кручи и воду
+	var score := 1.0 - (absf(fall - 110.0) / 120.0 if fall >= 50.0 else 0.4)  - absf(slope - 0.16) * 2.0 - steep_share * 2.0 - water_share * 3.0 - edge_water * 0.002
 	r.merge({fall = snappedf(fall, 0.1), slope = snappedf(slope, 0.001), steep = snappedf(steep_share, 0.01), water = snappedf(water_share, 0.01), score = score})
 	return r
 
@@ -119,4 +132,6 @@ static func _style(s: Dictionary, rng: RandomNumberGenerator) -> String:
 	var fall: float = s.fall
 	if fall > 120.0: return ["downhill", "enduro"][rng.randi() % 2]
 	if fall > 60.0: return ["enduro", "flow", "downhill", "tech"][rng.randi() % 4]
-	return ["flow", "tech", "flow"][rng.randi() % 3]
+	# пологое место — байк-парк: змейка с разворотами и элементами подряд (иначе на равнине трасса скучная)
+	if fall < 50.0: return ["park", "park", "flow"][rng.randi() % 3]
+	return ["flow", "tech", "park"][rng.randi() % 3]

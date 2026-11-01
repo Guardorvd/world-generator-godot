@@ -30,8 +30,19 @@ const STYLES := {
 	downhill = {title = "Даунхилл", grade = -0.14, length = 800.0, width = 4.0, profile = "mountain", wander = 0.05, cruise = 14.0, lat = 0.7},
 	enduro = {title = "Эндуро", grade = -0.10, length = 1300.0, width = 3.5, profile = "mixed", wander = 0.08, cruise = 12.0, lat = 0.6},
 	tech = {title = "Техничная", grade = -0.09, length = 900.0, width = 3.5, profile = "technical", wander = 0.09, cruise = 10.0, lat = 0.55},
+	# v4: пологое место — байк-парк: змейка параллельных прямых с разворотами на 180°, элементы подряд
+	park = {title = "Байк-парк", grade = -0.02, length = 900.0, width = 4.0, profile = "flow", wander = 0.0, cruise = 13.0, lat = 0.7},
 }
-const ORDER := ["flow", "downhill", "enduro", "tech"]
+const ORDER := ["flow", "downhill", "enduro", "tech", "park"]
+## Байк-парк: прямые (длина, м), их число, шаг между ними (м; разворот — полукруг радиуса шага/2).
+const PARK_LANE := Vector2(90.0, 130.0) # длиннее — к середине прямой разгон до скорости столов (от 12 м/с)
+const PARK_LANES := Vector2i(4, 7)
+const PARK_STEP := 17.0
+## Канавы вдоль трассы (v4): параллельный канал у края полотна — плохо подрулил, свалился.
+const DITCH_OFFSET := 2.0    # от края полотна до оси канавы, м
+const DITCH_DEPTH := 1.0
+const DITCH_LENGTH := Vector2(20.0, 40.0)
+const DITCH_CHANCE := 0.45   # доля прямых, у которых есть канава (у байк-парка — вдвое чаще)
 ## v3: петля над собой и овражки.
 const LOOP_R := 16.0         # радиус петли, м (вираж на круге ставит составитель)
 const LOOP_LEAD := 16.0      # прямая до X и от X до начала круга, м (равна радиусу: круг на 270° выводит на X)
@@ -42,7 +53,7 @@ const RAVINE_SMOOTH := 1.2   # земля у овражка не дальше о
 const GRADE_LIMIT_MAX := 0.32 # целевой уклон выравнивания сгенерированной трассы не круче
 const RAVINE_DEPTH := 1.8    # глубина овражка, м
 const RAVINE_SPAN := 12.0    # овражек тянется в стороны от оси, м
-const RAVINE_EVERY := 220.0  # в среднем один овражек на столько метров
+const RAVINE_EVERY := 150.0  # в среднем один овражек на столько метров (v4: было 220)
 const RAVINE_GAP := 90.0     # и не ближе друг к другу
 const RAVINE_STRAIGHT := 35.0 # овражек — где ось на ±16 м не туже этого радиуса
 const WANDER_V3 := 0.6       # v3: извилистость меньше — больше прямых под прыжки
@@ -97,7 +108,10 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var goal := Vector2.ZERO
 	var best_score := -INF
 	var tries := 0
-	for k in 10:
+	if style == "park":
+		pts = _park_points(ground, inside, size, rng)
+		best_score = INF
+	for k in (0 if style == "park" else 10):
 		tries += 1
 		var s0: Vector3 = upper[rng.randi() % upper.size()]
 		var start := Vector2(s0.x, s0.y)
@@ -138,15 +152,21 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	# v3: прыжковые участки вдвое чаще, элементы чуть плотнее
 	var moods: Dictionary = profile.moods
 	moods.jump = float(moods.get("jump", 0.0)) * 2.0 + 2.0
-	profile.density = minf(1.0, float(profile.density) + 0.1)
+	profile.density = minf(1.0, float(profile.density) + 0.2) # v4: было +0,1
+	if style == "park":
+		# байк-парк: только прыжки и поток, короткие участки, элементы почти подряд
+		profile.moods = {jump = 5.0, flow = 4.0}
+		profile.density = 1.0
+		profile.section = Vector2(40.0, 70.0)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
 	# v3: петля и овражки — элементы, пролёты и врезки; составитель ставит своё вокруг них
-	var features := {elements = [] as Array[TrailElement], spans = PackedVector3Array(), cuts = [], reserved = [] as Array[Vector2], loop = false, ravines = 0, gaps = 0, decks = 0}
+	var features := {elements = [] as Array[TrailElement], spans = PackedVector3Array(), cuts = [], reserved = [] as Array[Vector2], loop = false, ravines = 0, gaps = 0, decks = 0, ditches = 0}
 	var stage := Time.get_ticks_usec()
 	if carve.is_valid():
 		_plan_loop(d, ground, level, features)
 		_plan_ravines(d, ground, level, features, rng)
+		_plan_ditches(d, features, rng, DITCH_CHANCE * (2.0 if style == "park" else 1.0))
 		cuts = features.cuts
 		carve.call(cuts)
 	d.open_spans = features.spans
@@ -199,7 +219,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),
 		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries,
 		walk_ms = snappedf(walk_ms, 1.0), features_ms = snappedf(features_ms, 1.0), compose_ms = snappedf(compose_ms, 1.0),
-		loop = features.loop, ravines = features.ravines, gaps = features.gaps, decks = features.decks,
+		loop = features.loop, ravines = features.ravines, ditches = features.ditches, gaps = features.gaps, decks = features.decks,
 		jumps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.TABLETOP, TrailElement.Profile.GAP, TrailElement.Profile.DROP]).size()}
 	return [d]
 
@@ -210,6 +230,7 @@ static func label() -> String:
 	var extra := PackedStringArray()
 	if stats.get("loop", false): extra.append("петля над собой")
 	if int(stats.get("ravines", 0)) > 0: extra.append("овражков %d" % stats.ravines)
+	if int(stats.get("ditches", 0)) > 0: extra.append("канав %d" % stats.ditches)
 	return "%s · сид %d · %.0f м, %+.0f м (%.1f %%) · элементов %d (прыжков %d, виражей %d)%s · до %.0f м/с" % [stats.title, seed, stats.length, -stats.drop, -stats.grade,
 		stats.elements, stats.get("jumps", 0), stats.berms, (" · " + ", ".join(extra)) if not extra.is_empty() else "", stats.speed_top]
 
@@ -413,7 +434,7 @@ static func _plan_loop(d: TrailDefinition, ground: Callable, level: int, f: Dict
 		f.gaps += 1
 	else:
 		e = TrailElementLibrary.make(TrailElement.Profile.NORTHSHORE, up, 24.0, LOOP_DECK, 1.0, 3, 0.75)
-		e.gap = minf(2.6, d.width - 0.6)
+		e.gap = minf(3.2, d.width - 0.4) # v4: было 2,6 — съезжали с настила петли
 		f.decks += 1
 	f.elements.append(e)
 	f.reserved.append(Vector2(e.station - e.length * 0.5, e.station + e.length * 0.5))
@@ -438,6 +459,67 @@ static func _steepest(d: TrailDefinition, ground: Callable) -> float:
 		worst = maxf(worst, absf(float(ground.call(d.point_at(s + 4.0))) - float(ground.call(d.point_at(s - 4.0)))) / 8.0)
 		s += 4.0
 	return worst
+
+## v4: змейка байк-парка — PARK_LANES прямых длиной PARK_LANE вдоль горизонталей поля, через PARK_STEP, соединённых
+## полукругами (разворот на 180°). Центр — по сиду во внутренней части; не помещается — меньше прямых или короче.
+static func _park_points(ground: Callable, inside: Callable, size: float, rng: RandomNumberGenerator) -> PackedVector2Array:
+	for attempt in 12:
+		var c := Vector2(rng.randf_range(0.3, 0.7), rng.randf_range(0.3, 0.7)) * size
+		var gx := float(ground.call(c + Vector2(20, 0))) - float(ground.call(c - Vector2(20, 0)))
+		var gz := float(ground.call(c + Vector2(0, 20))) - float(ground.call(c - Vector2(0, 20)))
+		var down := -Vector2(gx, gz).normalized() if Vector2(gx, gz).length() > 0.4 else Vector2.from_angle(rng.randf() * TAU)
+		var along := down.orthogonal() # прямые — вдоль горизонтали, от прямой к прямой — вниз
+		var lanes := rng.randi_range(PARK_LANES.x, PARK_LANES.y) - attempt / 4
+		var lane := rng.randf_range(PARK_LANE.x, PARK_LANE.y) * (1.0 - 0.1 * (attempt % 4))
+		var r := PARK_STEP * 0.5
+		var start := c - along * lane * 0.5 - down * PARK_STEP * (lanes - 1) * 0.5
+		var pts := PackedVector2Array([start])
+		var p := start
+		var dir := along
+		for i in lanes:
+			var n := int(lane / 2.0)
+			for k in n:
+				p += dir * 2.0
+				pts.append(p)
+			if i == lanes - 1: break
+			# полукруг к следующей прямой (вниз по склону)
+			var center := p + down * r
+			var a0 := (p - center).angle()
+			var turn := signf(dir.cross(down)) # в сторону «вниз»
+			var steps := int(PI * r / 2.0)
+			for k in range(1, steps + 1):
+				pts.append(center + Vector2.from_angle(a0 + turn * PI * k / steps) * r)
+			p = pts[-1]
+			dir = -dir
+		var ok := true
+		for q in pts:
+			if not inside.call(q):
+				ok = false
+				break
+		if ok and pts.size() > 40: return pts
+	return PackedVector2Array()
+
+## v4: канавы вдоль прямых участков — у края полотна с одной стороны, глубина DITCH_DEPTH, на концах сходят на нет.
+static func _plan_ditches(d: TrailDefinition, f: Dictionary, rng: RandomNumberGenerator, chance: float) -> void:
+	var length := d.route_length()
+	var s := 30.0
+	while s < length - 50.0:
+		var span := rng.randf_range(DITCH_LENGTH.x, DITCH_LENGTH.y)
+		if TrailStandards.tightest(d, s, s + span) < 60.0 or rng.randf() > chance:
+			s += 12.0
+			continue
+		var side := 1.0 if rng.randf() < 0.5 else -1.0
+		var offset := d.width * 0.5 + DITCH_OFFSET
+		var pts := PackedVector2Array()
+		var depth := PackedFloat32Array()
+		var t := s
+		while t <= s + span:
+			pts.append(d.point_at(t) + d.tangent_at(t).orthogonal() * side * offset)
+			depth.append(DITCH_DEPTH * smoothstep(0.0, 6.0, t - s) * smoothstep(0.0, 6.0, s + span - t))
+			t += 4.0
+		f.cuts.append({points = pts, depth = depth, half = 0.5, wall = 0.8})
+		f.ditches += 1
+		s += span + 30.0
 
 ## Наибольшее отклонение земли под осью от прямой между концами [from, to], м.
 static func _relief(d: TrailDefinition, ground: Callable, from: float, to: float) -> float:
@@ -482,7 +564,7 @@ static func _self_crossing(d: TrailDefinition) -> Vector2:
 static func _plan_ravines(d: TrailDefinition, ground: Callable, level: int, f: Dictionary, rng: RandomNumberGenerator) -> void:
 	var length := d.route_length()
 	var v := TrailStandards.profile_from(d, TrailStandards.line_heights(d, ground), level, {}, false)
-	var want := clampi(int(length / RAVINE_EVERY), 1, 5)
+	var want := clampi(int(length / RAVINE_EVERY), 1, 6)
 	var last := -INF
 	var s := 60.0 + rng.randf() * 40.0
 	while s < length - 50.0 and f.ravines < want:

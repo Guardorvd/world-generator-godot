@@ -48,7 +48,7 @@ const DRAG := GameConfig.BIKE_DRAG
 ## «Средний седок» в профиле скорости: педали до крейсерской на ровном, комфортное торможение (не полный тормоз 9).
 ## Крейсерская — между обычной (11) и с Shift (14,3): в заездах 31.10 Shift держали 40–76 % времени, медиана скорости
 ## отрыва на прыжках ~14 м/с (разбор Хайку). Уточнять по новым записям.
-const CRUISE := 13.0
+const CRUISE := 14.5 # 01.11 v4: было 13 — на сгенерированных трассах приезжали на 12,6–15,6 там, где ждали 10–11 (Shift ~50 % времени)
 const PEDAL := GameConfig.BIKE_ACCEL
 const BRAKE := 5.0
 ## Модель прыжка повторяет BikeRide: шаг сетки рельефа (м) и база колёс (оси впереди и позади середины, м).
@@ -216,9 +216,15 @@ static func window(e: TrailElement, d: TrailDefinition = null, grade := 0.0, lev
 					var a := fly(e, ideal - 1.0, grade)
 					var b := fly(e, ideal + 1.0, grade)
 					var per: float = (float(b.land) - float(a.land)) / 2.0 if a.flew and b.flew else 0.0
+					# на 1 м/с медленнее идеала не взлетает (низкий стол) — наклон по одной стороне, нижний край — у идеала
+					if not a.flew and b.flew: per = float(b.land) - z.y
 					if per > 0.2:
-						own.speed_lo = snappedf(ideal + (z.x - z.y) / per, 0.1)
+						own.speed_lo = snappedf(maxf(ideal + (z.x - z.y) / per, ideal - 0.5 if not a.flew else 0.0), 0.1)
 						own.speed_hi = snappedf(ideal + (z.z - z.y) / per, 0.1)
+					else:
+						# место приземления почти не зависит от скорости (или рядом не взлетает) — осторожное окно ±1 м/с
+						own.speed_lo = snappedf(ideal - 1.0, 0.1)
+						own.speed_hi = snappedf(ideal + 1.0, 0.1)
 				elif is_finite(ideal):
 					own.speed_hi = 3.0 # долетает и шагом: зона приземления всегда позади
 				if _windows.size() > 2000: _windows.clear()
@@ -337,10 +343,18 @@ static func tech_speed(e: TrailElement, d: TrailDefinition = null, level := 1) -
 		return minf(limit + 2.0, sqrt(LAT_MAX * 0.8 * BikeRide.ROOT_GRIP / k))
 	# бревно на оси: на 12,6 м/с — через руль (заезд 01.11); объезд узкий, не все его берут
 	if e.profile == T.LOG: limit = minf(limit, LOG_SPEED)
+	# узкий проход: стенки по краям, промах курса — удар в стенку и через руль (заезды 01.11: 6,6–10 м/с после виража)
+	if e.profile == T.NARROW: limit = minf(limit, NARROW_SPEED)
 	var radius := tightest(d, e.station - e.length * 0.5, e.station + e.length * 0.5)
 	if is_finite(radius): limit = minf(limit, sqrt(LAT_MAX * float(LEVELS[level].lat) * BikeRide.ROOT_GRIP * radius))
 	return limit
 const LOG_SPEED := 9.0
+const NARROW_SPEED := 7.5
+## Гэп: приземление длиннее минимального на столько, м (v4: быстрее расчёта — всё равно на спуск, а не на ровное).
+const GAP_RUNOUT := 8.0
+## Стол: длина не меньше этой доли высоты — тогда кромка не круче LIP_MAX (v4: стол 9 × 1,8 м со стенкой 40° на
+## 15,6 м/с выбрасывал на 6 м вверх и ронял).
+const TABLE_MIN_RATIO := 9.6
 
 ## Высота камней или корней под уровень (доля диапазона уровня), м.
 static func tech_height(kind: int, level: int) -> float:
@@ -376,7 +390,10 @@ static func _spec(kind: String, v: float, level: int, grade: float) -> Dictionar
 			var h := lerpf(HEIGHTS[T.TABLETOP].x, HEIGHTS[T.TABLETOP].y, share)
 			while h >= TABLE_LOW:
 				var length := _solve_length(T.TABLETOP, h, v, grade, 7.0, 36.0)
-				if length > 0.0: return _with_window({kind = kind, profile = T.TABLETOP, length = length, height = snappedf(h, 0.05), v = v, level = level}, grade)
+				if length > 0.0:
+					var table := _with_window({kind = kind, profile = T.TABLETOP, length = length, height = snappedf(h, 0.05), v = v, level = level}, grade)
+					# у края окна модель ошибается: скорость, под которую стол строится, — внутри его окна
+					if v >= float(table.get("speed_lo", 0.0)) + 0.2 and v <= float(table.get("speed_hi", INF)): return table
 				h -= 0.2 # 01.11: было 0,1 — невозможный стол перебирал до 450 полётов (1,4 с на каждую скорость)
 			return {}
 		"gap":
@@ -385,7 +402,7 @@ static func _spec(kind: String, v: float, level: int, grade: float) -> Dictionar
 			if gap < 0.0: return {}
 			var probe := TrailElementLibrary.make(T.GAP, 0.0, 30.0, h)
 			probe.gap = gap
-			var length := ceilf(probe.gap_min_length() + 2.0)
+			var length := ceilf(probe.gap_min_length() + GAP_RUNOUT)
 			return _with_window({kind = kind, profile = T.GAP, length = length, height = h, gap = gap, v = v, level = level}, grade)
 		"roller":
 			# роллер перекатывается на скорости v (без отрыва) с запасом 10 %: длина по кривизне гребня
@@ -460,6 +477,7 @@ static func _with_window(s: Dictionary, grade: float) -> Dictionary:
 ## Длина стола высоты h, при которой скорость v приземляет на идеал: длины перебираются через 1 м от lo, первая смена
 ## «перелёт → недолёт» уточняется бисекцией; −1 — такой длины нет (не взлетает или недолёт и на самом коротком).
 static func _solve_length(kind: int, h: float, v: float, grade: float, lo: float, hi: float) -> float:
+	if kind == T.TABLETOP: lo = maxf(lo, ceilf(h * TABLE_MIN_RATIO))
 	var e := TrailElementLibrary.make(kind, 0.0, lo, h)
 	var miss := func(length: float) -> float:
 		e.length = length
@@ -495,7 +513,7 @@ static func _solve_gap(h: float, v: float, grade: float) -> float:
 	var hi := 6.0
 	var miss := func(gap: float) -> float:
 		e.gap = gap
-		e.length = ceilf(e.gap_min_length() + 2.0)
+		e.length = ceilf(e.gap_min_length() + GAP_RUNOUT)
 		e.station = e.length * 0.5
 		var f := fly(e, v, grade)
 		return (f.land - landing(e).y) if f.flew else -99.0

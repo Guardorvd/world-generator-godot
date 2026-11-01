@@ -190,6 +190,10 @@ func tick(bike: BikeRide, station: float, lateral: float, dt: float, t: float, c
 			takeoff_speed = _r(_air_v), impact = _r(bike.land_impact)}
 		_air_from = -1.0
 	var index := feature_at(station)
+	# v4: в полёте с прыжка участок прыжка не закрывается — далёкое приземление (за его хвостом) засчитывается ему,
+	# а не следующему участку (на столе 9 × 1,8 м полёт 1,6 с значился «без отрыва»)
+	if index != _current and bike.airborne and _current >= 0 and str(features[_current].kind) in ["jump", "roller", "deck"]:
+		index = _current
 	if index != _current:
 		done = _close()
 		_current = index

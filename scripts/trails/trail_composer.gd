@@ -11,7 +11,7 @@ const T := TrailElement.Profile
 ## `gap` scales the spacing; `slope` > 0 prefers descents, < 0 climbs; `ease` scales the difficulty;
 ## `calm` — the section lets the rider recover after a hard one.
 const MOODS := {
-	flow = {title = "Поток", elements = {T.ROLLER: 3, T.WAVES: 2, T.ROLLOVER: 2, T.DIP: 1, T.PUMP: 1}, turns = [T.BERM], gap = 1.0, slope = 1.0, ease = 1.0},
+	flow = {title = "Поток", elements = {T.ROLLER: 3, T.WAVES: 2, T.ROLLOVER: 2, T.DIP: 1, T.PUMP: 1}, std_elements = {T.ROLLER: 2, T.TABLETOP: 2, T.PUMP: 2, T.WAVES: 1, T.DROP: 1}, turns = [T.BERM], gap = 1.0, slope = 1.0, ease = 1.0},
 	# std_elements — веса с расчётными стандартами (гэп ставится только по стандарту: без него размер не согласован со скоростью)
 	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, std_elements = {T.TABLETOP: 4, T.ROLLER: 1, T.DROP: 2, T.GAP: 2}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
 	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
@@ -162,13 +162,21 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		length = sized.length
 		count = int(sized.get("count", count))
 		gap = float(sized.get("gap", -1.0))
-	if cursor + length > end:
+	# стандарты: границы участков условные — прыжок может зайти за конец участка на OVERRUN м (столы и гэпы длинные)
+	if cursor + length > end + (OVERRUN if not std.is_empty() else 0.0) or cursor + length > d.route_length() - RUN_OUT:
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: не помещается в участок")
 		return null
 	var bends := kind == T.BERM or kind == T.OFF_CAMBER
 	# Straight features stay straight over their whole length; long ones shrink to a roller first.
 	# стандарты: стол, гэп и дроп — и на пологой дуге (R ≥ 1/JUMP_BEND: боковая перегрузка на их скорости в пределах)
 	var straight := JUMP_BEND if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] else 0.025
+	# прыжок на дуге — только если её проходят на скорости седока без виража (иначе вираж туда уже не встанет)
+	if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] and _sharpest(d, cursor, length) > 0.025:
+		var speeds: PackedFloat32Array = std.speeds
+		var v := speeds[clampi(int(cursor), 0, speeds.size() - 1)]
+		if v > TrailStandards.turn_speed(1.0 / _sharpest(d, cursor, length), 0.0, 0.8) - 0.5:
+			_refuse(std, "прыжок: дуга быстрая для прыжка")
+			return null
 	if not bends and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > straight:
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: дуга туже R 25 м")
 		if length <= 12.0: return null
@@ -206,7 +214,10 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	var grade := TrailStandards.element_grade(d, std.ground, cursor)
 	var key := {T.TABLETOP: "table", T.GAP: "gap", T.DROP: "drop", T.ROLLER: "roller", T.PUMP: "pump"}
 	if key.has(kind):
-		for k: String in ([key[kind]] + (["table", "roller"] if kind in [T.GAP, T.TABLETOP] else (["roller"] if kind == T.DROP else []))):
+		# не получился на этой скорости — следующий по списку: стол ниже 12 м/с не взлетает, дроп — с 5 м/с (v4: дроп
+		# раньше роллера — на змейке байк-парка после разворотов столы иначе становились роллерами)
+		var chain := {T.GAP: ["table", "drop", "roller"], T.TABLETOP: ["drop", "roller"], T.DROP: ["roller"]}
+		for k: String in ([key[kind]] + (chain.get(kind, []) as Array)):
 			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade)
 			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
 			if not s.is_empty() and s.has("speed_lo") and (v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5):
@@ -229,6 +240,12 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	if TrailElement.places_objects(kind) or kind in [T.ROUGH, T.RUTS]:
 		var limit: float = TrailStandards.TECH_SPEED[level]
 		if kind == T.LOG: limit = minf(limit, TrailStandards.LOG_SPEED)
+		if kind == T.NARROW:
+			limit = minf(limit, TrailStandards.NARROW_SPEED)
+			# v4: к узкому проходу — прямой подход (после виража курс сбит — удар в стенку)
+			if TrailStandards.tightest(d, cursor - 15.0, cursor + size.x) < 40.0:
+				_refuse(std, "узкий проход: нет прямого подхода")
+				return {}
 		# 01.11: только где седок и без торможения не быстрее стандарта — заранее не тормозят (бревно на 12,6 м/с
 		# после поворота уронило через руль)
 		if v > limit + 0.5:
@@ -240,6 +257,7 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		return {profile = kind, length = size.x, height = h}
 	return {profile = kind, length = size.x, height = size.y, count = count}
 
+const OVERRUN := 25.0
 static func _refuse(std: Dictionary, why: String) -> void:
 	std.refused[why] = int(std.refused.get(why, 0)) + 1
 
@@ -274,7 +292,13 @@ static func _berm_turns(d: TrailDefinition, elements: Array[TrailElement], std: 
 		for k in range(maxi(0, int(from) - 8), mini(speeds.size(), int(from) + 1)): v = maxf(v, speeds[k])
 		var route_bank := minf(absf(d.curvature_at((from + at) * 0.5)) * shape.bank_gain, shape.bank_max) * d.auto_bank
 		var level := int(std.level)
-		if not is_finite(radius) or v <= TrailStandards.turn_speed(radius, route_bank, float(TrailStandards.LEVELS[level].lat)) + 0.5:
+		var needs := is_finite(radius) and v > TrailStandards.turn_speed(radius, route_bank, float(TrailStandards.LEVELS[level].lat)) + 0.5
+		# v4: вираж, который уже стоит в повороте, закрывает его целиком (выносило за его концом в 4 м)
+		var partial := false
+		for e in elements:
+			if e.profile == T.BERM and e.station + e.length * 0.5 > from - 2.0 and e.station - e.length * 0.5 < at + 2.0 and \
+					(e.station - e.length * 0.5 > from - 1.0 or e.station + e.length * 0.5 < at + 1.0): partial = true
+		if not needs and not partial:
 			at += 2.0
 			continue
 		# длинный поворот — вираж 30 м на самом тугом месте
@@ -302,8 +326,10 @@ static func _berm_turns(d: TrailDefinition, elements: Array[TrailElement], std: 
 				merged.append(e)
 				lo = minf(lo, e_lo)
 				hi = maxf(hi, e_hi)
+			elif needs:
+				merged.append(e) # быстрый поворот принадлежит виражу
 			else:
-				merged.append(e)
+				jump = true # только продлить вираж — соседний элемент не трогаем, вираж остаётся как есть
 		if jump:
 			std.refused["вираж: в повороте прыжок"] = int(std.refused.get("вираж: в повороте прыжок", 0)) + 1
 		else:
