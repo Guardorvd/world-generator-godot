@@ -1,6 +1,8 @@
 extends Node3D
 const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
 const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
+const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
+const TrailLabScout := preload("res://scripts/lab/trail_lab_scout.gd")
 ## Developer composition root: production terrain, controller, view and crash lifecycle.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const EditorPanel = preload("res://scripts/lab/trail_lab_editor.gd")
@@ -40,6 +42,10 @@ var preset_panel := PanelContainer.new()
 var preset_label := Label.new()
 var preset_select := OptionButton.new()
 var generator_label := Label.new() # сиды и итог генераторов, когда выбрана сгенерированная трасса
+var site_row := HBoxContainer.new()  # v3: места большого мира
+var site_select := OptionButton.new()
+var _world_thread: Thread
+var _world_started := 0
 var lane := 0
 var element_index := 0
 var overview := false
@@ -262,10 +268,10 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	box.add_child(gen_row)
 	var dice := Button.new()
 	dice.icon = _dice_icon()
-	dice.text = "Случайная трасса"
+	dice.text = "Новый мир"
 	dice.add_theme_font_size_override("font_size", 12)
 	dice.focus_mode = Control.FOCUS_NONE
-	dice.tooltip_text = "Новая местность и трасса по ней · F7\nРазмеры элементов — по расчётным стандартам под скорость в каждом месте"
+	dice.tooltip_text = "Новый мир размером с карту игры, поиск мест под трассы и трассы на них · F7\nРазмеры элементов — по расчётным стандартам под скорость в каждом месте"
 	dice.pressed.connect(func() -> void: generate_random(true))
 	gen_row.add_child(dice)
 	var again := Button.new()
@@ -273,9 +279,33 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	again.text = "Другая линия"
 	again.add_theme_font_size_override("font_size", 12)
 	again.focus_mode = Control.FOCUS_NONE
-	again.tooltip_text = "Новая трасса на той же местности · F8"
+	again.tooltip_text = "Другая трасса на этом месте · F8"
 	again.pressed.connect(func() -> void: generate_random(false))
 	gen_row.add_child(again)
+	# v3: места большого мира — список с переключением (‹ › или [ ]): выбор строит окно места и ставит на старт
+	site_row.add_theme_constant_override("separation", 4)
+	site_row.visible = false
+	box.add_child(site_row)
+	var site_prev := Button.new()
+	site_prev.text = "‹"
+	site_prev.focus_mode = Control.FOCUS_NONE
+	site_prev.tooltip_text = "Предыдущее место · ["
+	site_prev.pressed.connect(func() -> void: select_site(Sites.current - 1))
+	site_row.add_child(site_prev)
+	site_select.fit_to_longest_item = false
+	site_select.clip_text = true
+	site_select.custom_minimum_size.x = 220
+	site_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	site_select.add_theme_font_size_override("font_size", 12)
+	site_select.tooltip_text = "Места трасс в мире · [ ]"
+	site_select.item_selected.connect(func(index: int) -> void: select_site(index))
+	site_row.add_child(site_select)
+	var site_next := Button.new()
+	site_next.text = "›"
+	site_next.focus_mode = Control.FOCUS_NONE
+	site_next.tooltip_text = "Следующее место · ]"
+	site_next.pressed.connect(func() -> void: select_site(Sites.current + 1))
+	site_row.add_child(site_next)
 	generator_label.theme_type_variation = "HintLabel"
 	generator_label.add_theme_font_size_override("font_size", 11)
 	generator_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -289,6 +319,13 @@ func _build_presets(canvas: CanvasLayer) -> void:
 func generate_random(new_terrain: bool) -> bool:
 	var rng := RandomNumberGenerator.new()
 	rng.randomize()
+	# v3: новый мир — в фоне (география игры целиком), трассы мест — по выбору; другая линия — на текущем месте
+	if new_terrain:
+		return generate_world(rng.randi_range(1, 99999))
+	if Sites.active():
+		var ok := Sites.reroll(Sites.current, rng.randi_range(1, 99999))
+		_fill_sites()
+		return _show_site(ok)
 	if new_terrain or TrailLabTerrain.cells.is_empty():
 		TrailLabTerrain.seed = rng.randi_range(1, 99999)
 		TrailLabTerrain.kind = TrailLabTerrain.ORDER[rng.randi() % TrailLabTerrain.ORDER.size()]
@@ -300,6 +337,54 @@ func generate_random(new_terrain: bool) -> bool:
 	var ok := select_preset(index)
 	if not ok and not TrailLabBuilder.stats.get("reason", "").is_empty(): show_message(str(TrailLabBuilder.stats.reason))
 	return ok
+
+## v3: мир размером с карту игры и места трасс — в фоновом потоке (лаборатория остаётся живой); по готовности —
+## список мест и первое место. Повторное нажатие во время генерации ничего не делает.
+func generate_world(seed_value: int) -> bool:
+	if _world_thread != null: return false
+	show_message("Мир %d: география как в игре и поиск мест…" % seed_value)
+	generator_label.visible = true
+	generator_label.text = "Генерирую мир %d…" % seed_value
+	_world_started = Time.get_ticks_msec()
+	_world_thread = Thread.new()
+	_world_thread.start(func() -> int: return Sites.generate_world(seed_value))
+	return true
+
+func _poll_world() -> void:
+	if _world_thread == null or _world_thread.is_alive(): return
+	var count: int = _world_thread.wait_to_finish()
+	_world_thread = null
+	var seconds := (Time.get_ticks_msec() - _world_started) / 1000.0
+	if count == 0:
+		show_message("Мир готов за %.0f с, но мест под трассы нет: %s" % [seconds, TrailLabScout.stats.get("reason", "")])
+		generator_label.text = "Мест не нашлось — F7, другой мир"
+		return
+	show_message("Мир готов за %.0f с · мест под трассы: %d" % [seconds, count])
+	select_site(0)
+
+## Место i большого мира: окно земли, трасса места (строится при первом выборе) и старт на ней.
+func select_site(i: int) -> bool:
+	if Sites.sites.is_empty() or _world_thread != null: return false
+	i = posmod(i, Sites.sites.size())
+	var ok := Sites.select(i)
+	_fill_sites()
+	return _show_site(ok)
+
+func _show_site(ok: bool) -> bool:
+	if not ok:
+		show_message("Трасса места не проложилась: " + str(TrailLabBuilder.stats.get("reason", "")))
+		return false
+	var index := -1
+	for k in TrailLabCatalog.LIST.size():
+		if TrailLabCatalog.LIST[k].ground == "generated": index = k
+	lane = 0
+	return select_preset(index)
+
+func _fill_sites() -> void:
+	site_select.clear()
+	for k in Sites.sites.size(): site_select.add_item(Sites.title(k), k)
+	if Sites.current >= 0: site_select.select(Sites.current)
+	site_row.visible = not Sites.sites.is_empty()
 
 ## Значок кубика 16×16: светлая грань с пятью точками.
 static func _dice_icon() -> ImageTexture:
@@ -336,8 +421,10 @@ func _mark_preset() -> void:
 	preset_select.select(preset)
 	preset_label.text = "ТРАССА  %d / %d   ·   PgUp / PgDn" % [preset + 1, TrailLabCatalog.LIST.size()]
 	preset_select.tooltip_text = TrailLabCatalog.LIST[preset].title + "\nF2 или V — курсор"
-	generator_label.visible = TrailLabCatalog.LIST[preset].ground == "generated"
-	if generator_label.visible: generator_label.text = "%s\n%s" % [TrailLabTerrain.label(), TrailLabBuilder.label()]
+	generator_label.visible = TrailLabCatalog.LIST[preset].ground == "generated" or _world_thread != null
+	if generator_label.visible and _world_thread == null:
+		generator_label.text = Sites.label() if Sites.active() else "%s\n%s" % [TrailLabTerrain.label(), TrailLabBuilder.label()]
+	site_row.visible = not Sites.sites.is_empty() and TrailLabCatalog.LIST[preset].ground == "generated"
 
 ## Построить готовую трассу номер index вместо текущей (тем же путём, что «Построить» в F2); при отказе остаётся прежняя
 func select_preset(index: int) -> bool:
@@ -797,6 +884,10 @@ func set_diagnostics_visible(enabled: bool) -> void:
 
 ## Release ragdoll bodies before the owning menu removes the scene.
 func shutdown() -> void:
+	# фоновая генерация мира: дождаться (поток пишет только свои поля и скоро закончит)
+	if _world_thread != null:
+		_world_thread.wait_to_finish()
+		_world_thread = null
 	set_process(false)
 	set_physics_process(false)
 	crash.abort()
@@ -821,6 +912,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		show_message("Модель контактов колёс: " + ("два контакта" if contact_model else "прежняя"))
 	if key == KEY_F3:
 		set_diagnostics_visible(not diagnostics_visible)
+		get_viewport().set_input_as_handled()
+		return
+	if (key == KEY_BRACKETLEFT or key == KEY_BRACKETRIGHT) and Sites.active():
+		select_site(Sites.current + (1 if key == KEY_BRACKETRIGHT else -1))
 		get_viewport().set_input_as_handled()
 		return
 	if key == KEY_F7 or key == KEY_F8:
@@ -988,6 +1083,7 @@ func _survey_report() -> String:
 	return survey.summary() if survey != null else "Поверхность: не измерена"
 
 func _process(dt: float) -> void:
+	_poll_world()
 	if heights == null: return
 	_sync_mouse()
 	if not overview and not editor.visible:

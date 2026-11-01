@@ -9,7 +9,11 @@ extends RefCounted
 ##     ними, доля strength; у «плато» — всегда, у прочих — иногда и слабее;
 ##  3. овраги и гребни (GULLY) — по ребристому шуму: V-образные ложбины глубиной depth; у «хребтов» — всегда;
 ##  4. сила форм, шаг уступов и глубина — случайные в пределах характера: два сида одного характера разные.
-## Позже сюда же — окно настоящего мира игры (область вокруг игрока), чтобы трассы искались там.
+## v3 (01.11): мир размером с игровой план (WorldGenerator.PLAN_SIZE × PLAN_SIZE клеток по 4 м, ~3 км) той же природной
+## географией, что игра (WorldGenerator.geography: рельеф, море, реки, климат; без поселений и дорог) — generate_world.
+## Поисковик (TrailLabScout) ищет на нём места под трассы; лаборатория строит окно CELLS × CELLS вокруг выбранного
+## места (use_window). В окне генератор трасс может врезать в землю небольшие овражки и выемки (apply_cuts) — под гэпы,
+## мостки и нижний проход петли.
 
 const CELLS := 128                      ## клеток на сторону (как у главного полигона): 512 м
 const SIZE := CELLS * GameConfig.TILE   ## м
@@ -33,12 +37,25 @@ static var kind := "mountain"
 static var cells := PackedFloat32Array()
 static var info := {}  ## {fall, window, title, forms}: что выбрано
 static var _key := ""
+## v3: мир и окно. world_h — высота клеток мира, м; world_wet — море и озёра с отступом в клетку (русла рек — нет).
+static var world_seed := 0
+static var world_size := 0
+static var world_h := PackedFloat32Array()
+static var world_wet := PackedByteArray()
+static var world_info := {}
+static var origin := Vector2i.ZERO ## угол окна в клетках мира (v3)
+static var window_mode := false
+static var _base_cells := PackedFloat32Array() ## окно до врезок
+static var _wet_cells := PackedByteArray()
+static var cuts: Array = [] ## врезки окна: {points, depth (по точкам), half — полудно, wall — заложение стенок}
 
 
 ## Сгенерировать местность для (seed_value, kind_name); повторный вызов с теми же значениями — из памяти.
 static func generate(seed_value: int, kind_name: String) -> void:
 	var key := "%d|%s" % [seed_value, kind_name]
 	if key == _key and not cells.is_empty(): return
+	window_mode = false
+	cuts = []
 	var started := Time.get_ticks_usec()
 	seed = seed_value
 	kind = kind_name if KINDS.has(kind_name) else "mountain"
@@ -136,12 +153,148 @@ static func generate(seed_value: int, kind_name: String) -> void:
 		high = maxf(high, v)
 	for i in out.size(): out[i] = out[i] - low + BASE
 	cells = out
+	_base_cells = out.duplicate()
 	_key = key
 	info = {fall = snappedf(high - low, 0.1), window = best, title = spec.title, forms = forms, turns = turns, mirror = mirror,
 		candidates = good.size(), ms = (Time.get_ticks_usec() - started) / 1000.0}
 
 ## Доля шага уступа, на которой поднимается его стенка (остальное — полка).
 const RISER := 0.35
+
+## v3: мир размером с план игры по сиду (долго: география игры целиком; можно в потоке — пишет только свои поля).
+static func generate_world(seed_value: int) -> void:
+	if seed_value == world_seed and not world_h.is_empty(): return
+	var started := Time.get_ticks_usec()
+	if _load_world(seed_value):
+		world_info = {ms = (Time.get_ticks_usec() - started) / 1000.0, cached = true}
+		return
+	var w := WorldGenerator.geography("Trail Lab #%d" % seed_value)
+	var h := PackedFloat32Array()
+	h.resize(w.N)
+	var wet := PackedByteArray()
+	wet.resize(w.N)
+	var ocean := w.ocean
+	var lake := w.lake
+	var source := w.h
+	for i in w.N:
+		h[i] = source[i] * GameConfig.HS
+		# море и озёра; русла рек — врезанные в рельеф ложбины (в лаборатории вода не рисуется), их трасса пересекает
+		if ocean[i] != 0 or lake[i] != 0 or source[i] <= 0.0: wet[i] = 1
+	# отступ в клетку от воды
+	var grown := wet.duplicate()
+	for z in range(1, w.H - 1):
+		for x in range(1, w.W - 1):
+			var i := z * w.W + x
+			if wet[i] == 0 and (wet[i - 1] != 0 or wet[i + 1] != 0 or wet[i - w.W] != 0 or wet[i + w.W] != 0): grown[i] = 1
+	world_h = h
+	world_wet = grown
+	world_size = w.W
+	world_seed = seed_value
+	world_info = {ms = (Time.get_ticks_usec() - started) / 1000.0, stages = w.generation_profile.get("stages_ms", {})}
+	_save_world()
+
+## Кэш мира на диске по сиду: высоты и вода (повторный выбор того же мира — без географии). Версия формата — в имени.
+const CACHE := "user://trail_lab_worlds/v2_%d.bin"
+static func _save_world() -> void:
+	DirAccess.make_dir_recursive_absolute("user://trail_lab_worlds")
+	var f := FileAccess.open(CACHE % world_seed, FileAccess.WRITE)
+	if f == null: return
+	f.store_32(world_size)
+	f.store_buffer(world_h.to_byte_array())
+	f.store_buffer(world_wet)
+	f.close()
+
+static func _load_world(seed_value: int) -> bool:
+	if not FileAccess.file_exists(CACHE % seed_value): return false
+	var f := FileAccess.open(CACHE % seed_value, FileAccess.READ)
+	if f == null: return false
+	var n := f.get_32()
+	if n != WorldGenerator.PLAN_SIZE:
+		f.close()
+		return false
+	var h := f.get_buffer(n * n * 4).to_float32_array()
+	var wet := f.get_buffer(n * n)
+	f.close()
+	if h.size() != n * n or wet.size() != n * n: return false
+	world_h = h
+	world_wet = wet
+	world_size = n
+	world_seed = seed_value
+	return true
+
+## v3: окно CELLS × CELLS с углом at (клетки мира) — земля лаборатории. Врезки сбрасываются.
+static func use_window(at: Vector2i) -> void:
+	origin = Vector2i(clampi(at.x, 0, world_size - CELLS), clampi(at.y, 0, world_size - CELLS))
+	var out := PackedFloat32Array()
+	out.resize(CELLS * CELLS)
+	var wet := PackedByteArray()
+	wet.resize(CELLS * CELLS)
+	var low := INF
+	var high := -INF
+	for z in CELLS:
+		for x in CELLS:
+			var i := (origin.y + z) * world_size + origin.x + x
+			out[z * CELLS + x] = world_h[i]
+			wet[z * CELLS + x] = world_wet[i]
+			low = minf(low, world_h[i])
+			high = maxf(high, world_h[i])
+	for i in out.size(): out[i] = out[i] - low + BASE
+	_base_cells = out
+	_wet_cells = wet
+	cells = out.duplicate()
+	cuts = []
+	window_mode = true
+	seed = world_seed
+	_key = "window|%d|%d|%d" % [world_seed, origin.x, origin.y]
+	info = {fall = snappedf(high - low, 0.1), title = "Мир", forms = PackedStringArray(["окно %d, %d" % [origin.x, origin.y]])}
+
+## Вода в окне (v3): точка у воды — сюда трасса не идёт (в лаборатории вода не рисуется).
+static func wet_at(at: Vector2) -> bool:
+	if not window_mode: return false
+	var x := clampi(floori(at.x / GameConfig.TILE), 0, CELLS - 1)
+	var z := clampi(floori(at.y / GameConfig.TILE), 0, CELLS - 1)
+	return _wet_cells[z * CELLS + x] != 0
+
+## Врезки в землю окна (v3): каждая — ось points (м окна), глубина у каждой точки depth, полудно half, заложение стенок
+## wall (м по горизонтали на метр глубины). Земля опускается до дна у оси и стенками к краям; врезки не складываются —
+## берётся самая глубокая. Применяются к окну заново (прежние врезки снимаются).
+static func apply_cuts(list: Array) -> void:
+	cuts = list
+	var out := _base_cells.duplicate() if not _base_cells.is_empty() else cells.duplicate()
+	if out.is_empty(): return
+	var dig := PackedFloat32Array()
+	dig.resize(out.size())
+	for c: Dictionary in list:
+		var pts: PackedVector2Array = c.points
+		var depths: PackedFloat32Array = c.depth
+		var deepest := 0.0
+		for v in depths: deepest = maxf(deepest, v)
+		var far := float(c.half) + deepest * float(c.wall) + GameConfig.TILE
+		var lo := Vector2(INF, INF)
+		var hi := -lo
+		for q in pts:
+			lo = lo.min(q)
+			hi = hi.max(q)
+		var x0 := clampi(floori((lo.x - far) / GameConfig.TILE), 0, CELLS - 1)
+		var x1 := clampi(ceili((hi.x + far) / GameConfig.TILE), 0, CELLS - 1)
+		var z0 := clampi(floori((lo.y - far) / GameConfig.TILE), 0, CELLS - 1)
+		var z1 := clampi(ceili((hi.y + far) / GameConfig.TILE), 0, CELLS - 1)
+		for z in range(z0, z1 + 1):
+			for x in range(x0, x1 + 1):
+				var at := Vector2(x + 0.5, z + 0.5) * GameConfig.TILE
+				for k in range(1, pts.size()):
+					var a := pts[k - 1]
+					var ab := pts[k] - a
+					var t := clampf((at - a).dot(ab) / maxf(ab.length_squared(), 0.0001), 0.0, 1.0)
+					var depth := lerpf(depths[k - 1], depths[k], t)
+					if depth <= 0.0: continue
+					var dist := at.distance_to(a + ab * t)
+					var reach := float(c.half) + depth * float(c.wall) + GameConfig.TILE * 0.5
+					if dist >= reach: continue
+					var i := z * CELLS + x
+					dig[i] = maxf(dig[i], depth * (1.0 - smoothstep(float(c.half), reach, dist)))
+	for i in out.size(): out[i] -= dig[i]
+	cells = out
 
 ## Высота земли, м (билинейно по центрам клеток, как прочие земли Fixture).
 static func ground(at: Vector2) -> float:

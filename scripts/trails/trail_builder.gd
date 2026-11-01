@@ -273,7 +273,9 @@ static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at
 	for e in d.elements:
 		if absf(local.x - e.station) < e.length * 0.5: # displacement() is zero outside the element
 			features += e.displacement(local.x, local.y, d.width * 0.5)
-	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP)
+	# открытый пролёт (генератор v3): элементы не насыпаются, полотно опускается на глубину овражка от своего уровня
+	var open := d.open_at(local.x) if not d.open_spans.is_empty() else Vector2.ZERO
+	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP) * (1.0 - open.x) - open.y * open.x
 	if d.earthwork > 0.0: offset *= d.junction_weight(at, local.x, among) # among covers the smaller junction reach too
 	return offset
 

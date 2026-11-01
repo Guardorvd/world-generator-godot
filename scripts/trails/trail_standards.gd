@@ -377,7 +377,7 @@ static func _spec(kind: String, v: float, level: int, grade: float) -> Dictionar
 			while h >= TABLE_LOW:
 				var length := _solve_length(T.TABLETOP, h, v, grade, 7.0, 36.0)
 				if length > 0.0: return _with_window({kind = kind, profile = T.TABLETOP, length = length, height = snappedf(h, 0.05), v = v, level = level}, grade)
-				h -= 0.1
+				h -= 0.2 # 01.11: было 0,1 — невозможный стол перебирал до 450 полётов (1,4 с на каждую скорость)
 			return {}
 		"gap":
 			var h := lerpf(HEIGHTS[T.GAP].x, HEIGHTS[T.GAP].y, share)
@@ -468,8 +468,13 @@ static func _solve_length(kind: int, h: float, v: float, grade: float, lo: float
 		return (f.land - landing(e).y) if f.flew else NAN
 	var prev := NAN
 	var at := lo
+	var flew := 0
 	while at <= hi:
 		var m: float = miss.call(at)
+		if not is_nan(m): flew += 1
+		# за первые 6 м не взлетел ни разу, или первый же полёт — недолёт: длиннее не поможет
+		if is_nan(m) and flew == 0 and at - lo >= 6.0: return -1.0
+		if not is_nan(m) and m < 0.0 and is_nan(prev) and flew == 1: return -1.0
 		if not is_nan(prev) and not is_nan(m) and prev >= 0.0 and m < 0.0:
 			var a := at - 1.0
 			var b := at

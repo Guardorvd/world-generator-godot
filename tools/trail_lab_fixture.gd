@@ -1,6 +1,7 @@
 extends RefCounted
 const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
 const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
+const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
 ## Only lab fixtures live here. All construction, contacts and motion use production code.
 static func definitions() -> Array[TrailDefinition]:
 	var result: Array[TrailDefinition] = []
@@ -215,6 +216,10 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 	if index == 14: return Summit.routes()
 	if index == 15: return Valley.routes()
 	if index == 16:
+		# v3: место большого мира (TrailLabSites: окно земли с врезками и трасса места)
+		if Sites.active():
+			compose_ms = 0.0
+			return Sites.routes()
 		# генераторы лаборатории: местность (сид и характер TrailLabTerrain) и трасса по ней (сид и стиль TrailLabBuilder)
 		TrailLabTerrain.generate(TrailLabTerrain.seed, TrailLabTerrain.kind)
 		var started := Time.get_ticks_usec()

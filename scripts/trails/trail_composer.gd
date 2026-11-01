@@ -13,7 +13,7 @@ const T := TrailElement.Profile
 const MOODS := {
 	flow = {title = "Поток", elements = {T.ROLLER: 3, T.WAVES: 2, T.ROLLOVER: 2, T.DIP: 1, T.PUMP: 1}, turns = [T.BERM], gap = 1.0, slope = 1.0, ease = 1.0},
 	# std_elements — веса с расчётными стандартами (гэп ставится только по стандарту: без него размер не согласован со скоростью)
-	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, std_elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1, T.GAP: 1}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
+	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, std_elements = {T.TABLETOP: 4, T.ROLLER: 1, T.DROP: 2, T.GAP: 2}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
 	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
 	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
 	rest = {title = "Отдых", elements = {T.RIPPLES: 1, T.DIP: 1, T.ROLLOVER: 1}, turns = [], gap = 2.2, slope = -1.0, ease = 0.5, calm = true},
@@ -137,7 +137,8 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: float, difficulty: float, last: int, rng: RandomNumberGenerator, std := {}) -> TrailElement:
 	var turn := _turn_at(d, cursor, 14.0)
 	var kind: int
-	if absf(turn) > 0.012:
+	# поворот — туже R 83 м; под стандартами — туже R 33 м: пологая дуга сгенерированной линии годится под прыжок
+	if absf(turn) > (0.012 if std.is_empty() else TURN_STD):
 		var turns: Array = m.turns
 		if turns.is_empty(): return null
 		kind = turns[rng.randi() % turns.size()]
@@ -161,10 +162,15 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		length = sized.length
 		count = int(sized.get("count", count))
 		gap = float(sized.get("gap", -1.0))
-	if cursor + length > end: return null
+	if cursor + length > end:
+		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: не помещается в участок")
+		return null
 	var bends := kind == T.BERM or kind == T.OFF_CAMBER
 	# Straight features stay straight over their whole length; long ones shrink to a roller first.
-	if not bends and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > 0.025:
+	# стандарты: стол, гэп и дроп — и на пологой дуге (R ≥ 1/JUMP_BEND: боковая перегрузка на их скорости в пределах)
+	var straight := JUMP_BEND if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] else 0.025
+	if not bends and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > straight:
+		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: дуга туже R 25 м")
 		if length <= 12.0: return null
 		kind = T.ROLLER
 		size = TrailElementLibrary.sized(kind, difficulty * rng.randf_range(0.7, 1.0))
@@ -234,6 +240,13 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		return {profile = kind, length = size.x, height = h}
 	return {profile = kind, length = size.x, height = size.y, count = count}
 
+static func _refuse(std: Dictionary, why: String) -> void:
+	std.refused[why] = int(std.refused.get(why, 0)) + 1
+
+## Под стандартами место — поворот (вираж), если средняя кривизна туже этого (1/м, R 33 м).
+const TURN_STD := 0.03
+## Под стандартами прыжок ставится на дуге не туже этого (1/м, R 25 м).
+const JUMP_BEND := 0.04
 ## Контруклон под стандартами — только медленнее этого, м/с.
 const OFF_CAMBER_SPEED := 9.0
 ## Поворот оси туже этого радиуса проверяется на вираж, м.

@@ -21,6 +21,18 @@ extends Resource
 @export var elements: Array[TrailElement] = []
 ## Composition sections from TrailComposer: {from, to, mood, difficulty}. Informational, never baked.
 @export var sections: Array[Dictionary] = []
+## Открытые пролёты (01.11, генератор трасс v3): станции [x, y] и глубина z — там элементы не насыпаются, а полотно
+## опускается на z от своего уровня: под гэпом или мостком — овражек, а не насыпь. Глубина — от уровня трассы, не от
+## исходной земли: на крутом склоне трасса идёт по насыпи, и открытая природная земля была бы пропастью.
+@export var open_spans := PackedVector3Array()
+const OPEN_EDGE := 0.6
+
+## Доля открытого пролёта на станции (0 — вне, 1 — внутри; у краёв — переход OPEN_EDGE м) и его глубина.
+func open_at(station: float) -> Vector2:
+	for span in open_spans:
+		var inside := minf(station - span.x, span.y - station)
+		if inside > -OPEN_EDGE: return Vector2(smoothstep(-OPEN_EDGE, 0.0, inside), span.z)
+	return Vector2.ZERO
 
 ## Station of every point and a coarse grid of segments (GRID m cells -> indices of the segments ending at
 ## those points): point_at is a binary search and nearby queries look at a few segments instead of all.
