@@ -23,11 +23,11 @@ func run() -> void:
 	var hud := lab.hud_panel.get_global_rect()
 	var presets := lab.preset_panel.get_global_rect()
 	var ok := screen.encloses(hud) and screen.encloses(presets) and not hud.intersects(presets)
-	ok = ok and hud.size.x < 400 and presets.size.x < 400 and presets.size.y < 130
+	ok = ok and hud.size.x < 400 and presets.size.x < 400 and presets.size.y < 150 # 01.11: строка генераторов (кубик, «Другая линия»)
 	ok = ok and lab.preset_select.item_count == TrailLabCatalog.LIST.size()
 	lab.preset = 17
 	lab._mark_preset()
-	ok = ok and lab.preset_select.selected == 17 and lab.preset_label.text.contains("18 / 18")
+	ok = ok and lab.preset_select.selected == 17 and lab.preset_label.text.contains("18 / %d" % TrailLabCatalog.LIST.size())
 	print("lab_layout: ", "PASS" if ok else "FAIL", " hud=", hud, " presets=", presets, " choices=", lab.preset_select.item_count)
 	if "--capture" in OS.get_cmdline_user_args():
 		await RenderingServer.frame_post_draw

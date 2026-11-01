@@ -180,6 +180,26 @@ func nearest(at: Vector2, reach := INF, among := PackedInt32Array()) -> Vector3:
 			result = found
 	return result
 
+## Ближайшая точка оси, но только на участке трассы в пределах span от прошлой станции previous (по ходу и назад; у
+## кольца через шов): над пересечением ветвей станция не перескакивает на другую ветвь, пока седок в полёте над ней
+## (разбор заездов 31.10: на №18 прыжок с 1218 м «приземлялся» на 2123 м). Ничего ближе reach на этом участке — обычный
+## nearest (седок действительно уехал: сброс, перенос, другая ветвь по земле). previous < 0 — обычный nearest.
+func nearest_along(at: Vector2, previous: float, span: float, reach := 16.0) -> Vector3:
+	if previous < 0.0: return nearest(at)
+	_index()
+	var total := route_length()
+	var best := INF
+	var result := Vector3(0.0, 0.0, INF)
+	for i: int in _segments_near(at, reach):
+		var found := _project(at, i)
+		var gap := absf(found.x - previous)
+		if closed: gap = minf(gap, total - gap)
+		if gap > span: continue
+		if found.z < best:
+			best = found.z
+			result = found
+	return result if best <= reach else nearest(at)
+
 func _project(at: Vector2, i: int) -> Vector3:
 	var delta := points[i] - points[i - 1]
 	var span := delta.length()

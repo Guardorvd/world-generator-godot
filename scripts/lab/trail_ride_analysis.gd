@@ -13,12 +13,8 @@ const TAIL := 8.0
 const LEAD := 6.0
 ## Поворот оси туже этого радиуса без своего элемента — отдельный участок «поворот», м.
 const TURN_R := 40.0
-## Оценка бокового ускорения на ровном для «рабочей скорости поворота», м/с²; вираж прибавляет BERM_GAIN, контруклон отнимает.
-const LAT := 9.0
-const BERM_GAIN := 1.35
-const OFF_CAMBER_LOSS := 0.75
-## Техника: скорость, выше которой седок теряет чистую линию (как у манеры flow автопилота), м/с.
-const TECH_SPEED := 9.5
+## «Рабочая скорость поворота» — TrailStandards.turn_speed на 0,8 предельной перегрузки с наклоном полотна;
+## техника — TrailStandards.tech_speed уровня участка; памп — TrailStandards.pump_speed (01.11, вместо LAT 9 м/с² и 9,5 м/с).
 
 const T := TrailElement.Profile
 const JUMPS := [T.GAP, T.TABLETOP, T.ROLLER, T.DROP]
@@ -56,21 +52,16 @@ func prepare(d: TrailDefinition) -> void:
 		covered.append(Vector2(from, to))
 		var f := {n = features.size() + 1, element = i, kind = _kind(e), title = TrailElementLibrary.title(e.profile), from = _r(from), to = _r(to),
 			height = _r(e.height), length = _r(e.length)}
+		# 01.11: окна прыжков — из TrailStandards (точка на профиле по физике BikeRide, сверено стендом
+		# tools/trail_standards_stand.gd), а не прежние формулы на глаз: столы прежних пропорций, например, не долетали
+		# до спуска ни на какой скорости, а окно обещало 10–15 м/с
+		var level := _level(d, e.station)
 		match e.profile:
-			T.GAP:
-				var lip := from + e.gap_lip()
-				var gs := e.gap_speed()
-				f.merge({lip = _r(lip), land_from = _r(lip + e.gap), land_to = _r(to - 1.0), ideal_land = _r(lip + e.gap + 2.5),
-					speed_lo = _r(gs - 1.5), speed_hi = _r(gs + 2.5), gap = _r(e.gap)})
-			T.TABLETOP:
-				var face := clampf(e.height / (TrailElement.LIP_MAX * e.length) * 2.0, 0.25, 0.35)
-				f.merge({lip = _r(from + face * e.length), land_from = _r(from + 0.7 * e.length), land_to = _r(to + 2.0),
-					ideal_land = _r(from + 0.78 * e.length), speed_lo = _r(8.5 + 1.5 * e.height), speed_hi = _r(13.0 + 1.5 * e.height)})
-			T.ROLLER:
-				f.merge({lip = _r(e.station), land_from = _r(e.station), land_to = _r(to + 3.0), ideal_land = _r(to - e.length * 0.2)})
-			T.DROP:
-				var edge := from + e.length * TrailElement.DROP_LIP + TrailElement.DROP_EDGE * 0.5
-				f.merge({lip = _r(edge), land_from = _r(edge), land_to = _r(to + 4.0), ideal_land = _r(edge + 3.0), speed_lo = 4.0})
+			T.GAP, T.TABLETOP, T.DROP, T.ROLLER:
+				var w := TrailStandards.window(e, d, 0.0, level)
+				for key in ["lip", "land_from", "ideal_land", "land_to", "speed_lo", "speed_ideal", "speed_hi", "roll_speed"]:
+					if w.has(key): f[key] = _r(float(w[key]))
+				if e.profile == T.GAP: f.gap = _r(e.gap)
 			T.NORTHSHORE:
 				f.merge({deck_half = _r(e.gap * 0.5), bridge = e.skew > 0.5})
 				if e.skew <= 0.5: f.merge({lip = _r(to), land_from = _r(to), land_to = _r(to + 5.0), ideal_land = _r(to + 2.0)})
@@ -82,7 +73,8 @@ func prepare(d: TrailDefinition) -> void:
 			f.crests = crests
 		if f.kind == "tech":
 			f.lines = Array(TrailTechnical.line_offsets(d, e)).map(func(v: float) -> float: return _r(v))
-			f.speed_hi = TECH_SPEED
+			f.speed_hi = _r(TrailStandards.tech_speed(e, d, level))
+		if e.profile in RHYTHM: f.speed_hi = _r(TrailStandards.pump_speed(e))
 		features.append(f)
 	# повороты оси без своего элемента
 	var length := d.route_length()
@@ -115,7 +107,6 @@ func _turn(d: TrailDefinition, from: float, to: float, profile: int) -> Dictiona
 		s += 1.0
 	if peak < 1.0 / 200.0: return {}
 	var radius := 1.0 / peak
-	var gain := BERM_GAIN if profile in [T.BERM, T.S_BERM] else (OFF_CAMBER_LOSS if profile == T.OFF_CAMBER else 1.0)
 	# средний радиус оси на участке: длина на поворот курса — с ним сравнивается проеханный радиус
 	var turned := 0.0
 	s = from
@@ -123,9 +114,24 @@ func _turn(d: TrailDefinition, from: float, to: float, profile: int) -> Dictiona
 		turned += absf(wrapf(d.heading_at(minf(s + 1.0, to)) - d.heading_at(s), -PI, PI))
 		s += 1.0
 	return {radius = _r(radius), mean_radius = _r((to - from) / maxf(turned, 0.001)), turn_deg = _r(rad_to_deg(turned)),
-		side = "влево" if side > 0.0 else "вправо", turn_speed = _r(sqrt(LAT * gain * radius))}
+		side = "влево" if side > 0.0 else "вправо", turn_speed = _r(TrailStandards.turn_speed(radius, _bank(d, from, to, profile), 0.8))}
+
+## Наклон полотна в повороте: свой вираж или контруклон элемента и наклон самой трассы (TrailShaping).
+func _bank(d: TrailDefinition, from: float, to: float, profile: int) -> float:
+	for e in d.elements:
+		if e.profile == profile and absf(e.station - (from + to) * 0.5) < e.length * 0.5 + 1.0: return TrailStandards.bank_of(e, d)
+	var shape := d.shape()
+	return minf(absf(d.curvature_at((from + to) * 0.5)) * shape.bank_gain, shape.bank_max) * d.auto_bank
+
+## Уровень трассы на станции (TrailStandards.LEVELS): по сложности участка составителя, без участков — красная.
+static func _level(d: TrailDefinition, station: float) -> int:
+	for s: Dictionary in d.sections:
+		if station >= float(s.from) and station <= float(s.to): return clampi(int(float(s.difficulty) * 4.0), 0, 3)
+	return 2
 
 static func _kind(e: TrailElement) -> String:
+	# 01.11: роллер — не прыжок, его перекатывают (стенд: без отрыва до 17 м/с); «без отрыва» на нём не ошибка
+	if e.profile == T.ROLLER: return "roller"
 	if e.profile in JUMPS or (e.profile == T.NORTHSHORE and e.skew <= 0.5): return "jump"
 	if e.profile == T.NORTHSHORE: return "deck"
 	if e.profile in TURNS: return "turn"
@@ -250,7 +256,7 @@ func _verdict(f: Dictionary, p: Dictionary) -> String:
 	if p.crashed: notes.append("ПАДЕНИЕ %s у %.0f м" % [p.crash_cause, p.crash_at])
 	var speed_note := ""
 	if f.has("speed_lo") and p.entry_speed < f.speed_lo: speed_note = "медленно на входе (%.1f м/с при %.1f–%.1f)" % [p.entry_speed, f.speed_lo, f.get("speed_hi", INF)]
-	elif f.has("speed_hi") and p.entry_speed > f.speed_hi + (1.5 if f.kind == "tech" else 0.0):
+	elif f.has("speed_hi") and p.entry_speed > f.speed_hi + (1.0 if f.kind in ["tech", "rhythm"] else 0.0):
 		speed_note = "быстро на входе (%.1f м/с при %s%.1f)" % [p.entry_speed, ("%.1f–" % f.speed_lo) if f.has("speed_lo") else "до ", f.speed_hi]
 	# у прыжка скорость — только объяснение промаха: попал в зону — скорость была рабочей
 	if not speed_note.is_empty() and f.kind != "jump": notes.append(speed_note)

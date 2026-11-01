@@ -49,6 +49,8 @@
 | Подвеска, кочки полотна, ощущение езды без мира | изолированный `feel_test -- --downhill` (+ `road_look.gd` для вида кочек) |
 | Модель седока, его анимации | `cyclist_animation_test -- --capture` |
 | Велосипедные трассы, элементы, физика велосипеда на трассе | изолированная `trail_lab_test` (`-- --ui-only`, `-- --capture` по нужде); `feel_test` не нужен |
+| Расчётные стандарты элементов (`TrailStandards`), их размеры в составителе | изолированная `trail_standards_stand.gd -- --check` (+ `--only <вид>`) |
+| Генераторы Trail Lab (`TrailLabTerrain`, `TrailLabBuilder`), кнопки «Случайная трасса» / «Другая линия» | изолированная `trail_generator_test.gd` (`-- --quick` при отладке) |
 | Модель двух контактов колёс (`BikeRide.contact_model`: нагрузка и сцепление колёс) | изолированная `wheel_contact_test` (прежняя и новая модель на одной секции, секунды; `-- --trace` — такты у гребня) + `trail_lab_test` |
 | Построитель линии по рельефу (`TrailRouter`), его кнопка в Trail Lab | изолированная `trail_route_test` (`-- --capture` по нужде) |
 | Автоматический выбор места трассы (`TrailPicker`), кнопка «Найти трассу» | изолированная `trail_pick_test`; при правке этапов `TrailRouter` ещё `trail_route_test` |

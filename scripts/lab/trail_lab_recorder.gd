@@ -180,7 +180,8 @@ func tick(lab, dt: float, throttle: float, turn: float, run: bool, jump: bool) -
 	var raw := _raw_input()
 	var route: TrailDefinition = lab.routes[lab.lane]
 	var here := Vector2(bike.x, bike.z)
-	var near: Vector3 = route.nearest(here)
+	# 01.11: станция — по ходу от прошлой (над пересечением ветвей не перескакивает на другую ветвь в полёте)
+	var near: Vector3 = route.nearest_along(here, _previous_station, maxf(12.0, absf(bike.speed) * dt * 4.0 + 8.0))
 	var nearest_valid := is_finite(near.z)
 	var on_route := nearest_valid and near.z <= route.width * 0.5
 	var station_jump := _previous_station >= 0.0 and nearest_valid and absf(near.x - _previous_station) > maxf(10.0, absf(bike.speed) * dt * 4.0)
@@ -474,14 +475,14 @@ func _header(lab) -> Dictionary:
 		code = _code_version(),
 		godot = Engine.get_version_info().string,
 		route = {preset = lab.preset + 1, lane = lab.lane, id = route.id, title = route.title, length = snappedf(route.route_length(), 0.1),
-			width = route.width, ground = lab.ground_kind, elements = elements},
+			width = route.width, ground = lab.ground_kind, elements = elements, generator = _generator(lab)},
 		contact_model = lab.contact_model,
 		settings = {fov = settings.fov, mouse = settings.mouse, invert_y = settings.invert_y, head_bob = settings.head_bob},
 		rate_hz = Engine.physics_ticks_per_second,
 		columns = Array(_columns),
 		units = "м, м/с, м/с², секунды, градусы; нагрузки — доли веса; lateral — отступ от оси трассы, + вправо по ходу; station — метры вдоль трассы (-1: нет ближайшего сегмента); on_route — внутри ширины полотна; station_jump — смена ближайшей ветви",
 		features = analysis.features,
-		features_note = "Ожидания по участкам (оценки по геометрии и стенду tools/trail_gap_stand.gd): lip — кромка, land_from/land_to — зона приземления, ideal_land — лучшее место, speed_lo/hi — скорость входа, radius/turn_speed — тугой радиус оси и рабочая скорость, lines — чистые линии техники (отступ от оси, + вправо), deck_half — полуширина настила",
+		features_note = "Ожидания по участкам (TrailStandards: модель точки на профиле по физике BikeRide, стенд tools/trail_standards_stand.gd): lip — кромка, land_from/land_to — зона приземления, ideal_land — лучшее место, speed_lo/hi — скорость входа, radius/turn_speed — тугой радиус оси и рабочая скорость, lines — чистые линии техники (отступ от оси, + вправо), deck_half — полуширина настила",
 		bike_constants = _constants(BikeRide),
 		brake_constants = _constants(preload("res://scripts/game/bike_brakes.gd")),
 		game_config = _constants(GameConfig),
@@ -524,6 +525,9 @@ func _summary(lab, reason: String) -> String:
 	lines.append("Сессия: поездок %d · сохранена: %s · последняя трасса %d «%s»" % [_ride, reason, lab.preset + 1, route.title])
 	for ride: Dictionary in _rides:
 		lines.append("  поездка %d: с %.1f с · трасса %d «%s» · старт станция %.0f, %.1f м/с · %s" % [ride.n, ride.t, ride.preset, ride.route, ride.station, ride.speed, ride.reason])
+	var gen := _generator(lab)
+	if not gen.is_empty():
+		lines.append("Генератор: местность %s (%s, сид %d) · трасса %s (%s, сид %d)" % [gen.terrain, gen.terrain_kind, gen.terrain_seed, gen.trail, gen.trail_style, gen.trail_seed])
 	lines.append("Код: %s%s" % [code.commit, " (+%d изменённых файлов без коммита)" % code.uncommitted_files.size() if not code.uncommitted_files.is_empty() else ""])
 	lines.append("Длительность %.1f с · %d тактов · путь %.0f м · макс. скорость %.1f м/с (%.0f км/ч)" % [_t, _ticks, _stats.distance, _stats.top, _stats.top * 3.6])
 	lines.append("Ввод (время удержания, с): вперёд %.1f · назад/тормоз %.1f · влево %.1f · вправо %.1f · Q %.1f · E %.1f · памп (ЛКМ) %.1f · Shift %.1f · прыжков (пробел) %d" % [
@@ -561,6 +565,12 @@ func _resume_files() -> void:
 	# Never truncate unsaved data if reopening fails.
 	if _file == null or _events == null: enabled = false
 
+## Сиды генераторов лаборатории (01.11): по ним сгенерированная трасса повторяется точно; пусто — трасса не из генератора.
+static func _generator(lab) -> Dictionary:
+	if lab.ground_kind != "generated": return {}
+	return {terrain_seed = TrailLabTerrain.seed, terrain_kind = TrailLabTerrain.kind, trail_seed = TrailLabBuilder.seed,
+		trail_style = TrailLabBuilder.style, terrain = TrailLabTerrain.label(), trail = TrailLabBuilder.label()}
+
 func _snapshot(lab) -> Dictionary:
 	var route: TrailDefinition = lab.routes[lab.lane]
 	var elements := []
@@ -571,6 +581,6 @@ func _snapshot(lab) -> Dictionary:
 	var points := []
 	for point in route.points: points.append([point.x, point.y])
 	return {ride = _ride, preset = lab.preset + 1, id = route.id, title = route.title,
-		ground = lab.ground_kind, width = route.width, points = points, elements = elements, features = analysis.features.duplicate(true),
+		ground = lab.ground_kind, generator = _generator(lab), width = route.width, points = points, elements = elements, features = analysis.features.duplicate(true),
 		contact_model = lab.contact_model, code = _code_version(),
 		settings = {fov = lab.services.settings.fov, mouse = lab.services.settings.mouse, invert_y = lab.services.settings.invert_y}}

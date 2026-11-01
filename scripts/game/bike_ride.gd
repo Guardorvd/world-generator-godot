@@ -50,6 +50,9 @@ const PROFILE_SPAN := 1.5 # база, на которой измеряется �
 const BANK_SPAN := 0.7   # поперечная база, на которой измеряется наклон полотна (вираж), м
 const BANK_LIMIT := 2.0  # вираж поднимает сцепление не больше чем во столько раз (шина и рама не держат больше)
 const BUMP_DRAG := 1.0   # подвеска забирает у хода энергию подъёма колеса на корень или камень, 1/с
+const ROCK_PROBE := 0.12   # м: поперечная база, на которой меряется наклон камня под колесом
+const ROCK_DEFLECT := 0.18 # доля толчка вверх на склоне камня, уходящая в боковую скорость
+const ROCK_STEER := 0.5    # и в поворот курса от переднего колеса (рад на м/с толчка, делённого на скорость)
 const PROFILE_SAG := 0.6 # сжатие подвески на 1 g нагрузки от профиля, доля SAG_MAX
 const BOTTOM_OUT := 0.8  # вилка ударилась в упор SAG_MAX быстрее этого (м/с) — стук пробоя
 ## Скорости сглаживания (1/с, через Util.damp) и пределы, раньше записанные прямо в формулах.
@@ -1321,6 +1324,22 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	# колесо поднимается вместе с землёй сразу, рама — через пружину: разница и есть сжатие
 	squash_fv += clampf(vf - _gv_f, -KICK_MAX, KICK_MAX)
 	squash_rv += clampf(vr - _gv_r, -KICK_MAX, KICK_MAX)
+	# 01.11: камень или корень, на который колесо взбирается боком, толкает его в сторону от своей вершины: опора
+	# наклонена, и часть толчка вверх уходит вбок. Переднее колесо ещё и выбивает руль (курс). Толчок растёт со
+	# скоростью (подъём колеса быстрее), скользкий камень держит хуже — на скорости через сад линию уже не удержать.
+	# Раньше камни до 18 см на прямой не делали ничего, кроме качания подвески (стенд tools/trail_standards_stand.gd).
+	if contact_model and heights.obstacles != null and (of > SLICK_BUMP or orr > SLICK_BUMP):
+		var right := Vector2(cos(heading), -sin(heading)) * ROCK_PROBE
+		var push := 0.0
+		if touch_f and of > SLICK_BUMP:
+			var side_f := (heights.obstacles.bump_at(x + fx + right.x, z + fz + right.y) - heights.obstacles.bump_at(x + fx - right.x, z + fz - right.y)) / (2.0 * ROCK_PROBE)
+			var up_f := clampf(vf - _gv_f, 0.0, KICK_MAX)
+			push += side_f * up_f
+			heading += side_f * up_f * ROCK_STEER / maxf(absf(speed), 3.0) * signf(speed)
+		if touch_r and orr > SLICK_BUMP:
+			var side_r := (heights.obstacles.bump_at(x - fx + right.x, z - fz + right.y) - heights.obstacles.bump_at(x - fx - right.x, z - fz - right.y)) / (2.0 * ROCK_PROBE)
+			push += side_r * clampf(vr - _gv_r, 0.0, KICK_MAX)
+		lateral_speed -= push * ROCK_DEFLECT
 	_g_f = gf
 	_g_r = gr
 	_gv_f = vf

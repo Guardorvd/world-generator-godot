@@ -11,7 +11,8 @@ const T := TrailElement.Profile
 ## `calm` — the section lets the rider recover after a hard one.
 const MOODS := {
 	flow = {title = "Поток", elements = {T.ROLLER: 3, T.WAVES: 2, T.ROLLOVER: 2, T.DIP: 1, T.PUMP: 1}, turns = [T.BERM], gap = 1.0, slope = 1.0, ease = 1.0},
-	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
+	# std_elements — веса с расчётными стандартами (гэп ставится только по стандарту: без него размер не согласован со скоростью)
+	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, std_elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1, T.GAP: 1}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
 	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
 	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
 	rest = {title = "Отдых", elements = {T.RIPPLES: 1, T.DIP: 1, T.ROLLOVER: 1}, turns = [], gap = 2.2, slope = -1.0, ease = 0.5, calm = true},
@@ -45,9 +46,19 @@ static func titles() -> PackedStringArray:
 ## the route is treated as level. Sections are {from, to, mood, difficulty}.
 ## `fits(element) -> bool` is optional: the caller's check of a proposed element against the real line (its finished
 ## profile before elements); a refused element is skipped like one that does not fit the section.
+## `profile.standards` (01.11): элементы по расчётным стандартам TrailStandards — размер каждого под скорость седока
+## в этом месте (профиль скорости по земле и поворотам) и уровень участка; техника — только где скорость не выше
+## стандарта уровня или перед ней есть место затормозить. Без ключа — прежние размеры TrailElementLibrary.RANGE
+## (так ставит, например, велопарк мира: его трассы запекаются в мир, и мир не меняется).
 static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, ground := Callable(), fits := Callable()) -> Dictionary:
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_value
+	var std := {}
+	if profile.get("standards", false):
+		var band0: Vector2 = profile.difficulty
+		var mid := clampi(int((band0.x + band0.y) * 0.5 * 4.0), 0, 3)
+		var heights := TrailStandards.line_heights(d, ground)
+		std = {heights = heights, level = mid, caps = {}, speeds = TrailStandards.profile_from(d, heights, mid), ground = ground, last_end = 0.0, placed = 0, refused = {}}
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -73,7 +84,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		sections.append({from = cursor, to = end, mood = mood, difficulty = snappedf(difficulty, 0.01)})
 		var last := -1
 		while cursor < end:
-			var e := _element(d, m, cursor, end, difficulty, last, rng)
+			var e := _element(d, m, cursor, end, difficulty, last, rng, std)
 			if e == null:
 				cursor += 4.0
 				continue
@@ -86,10 +97,17 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 			elements.append(e)
 			last = e.profile
 			var finish := e.station + e.length * 0.5
+			if not std.is_empty():
+				std.last_end = finish
+				std.placed += 1
 			if TrailElement.places_objects(e.profile): placed_object = finish
 			cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
 		cursor = maxf(cursor, end)
-	return {elements = elements, sections = sections}
+	var result := {elements = elements, sections = sections}
+	if not std.is_empty():
+		result.speeds = std.speeds
+		result.refused = std.refused
+	return result
 
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
 ## makes a calm one likelier; the terrain grade favours moods that suit it.
@@ -113,7 +131,7 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 	return keys[-1]
 
 ## One element at `cursor` or null when nothing fits here (the caller moves on).
-static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: float, difficulty: float, last: int, rng: RandomNumberGenerator) -> TrailElement:
+static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: float, difficulty: float, last: int, rng: RandomNumberGenerator, std := {}) -> TrailElement:
 	var turn := _turn_at(d, cursor, 14.0)
 	var kind: int
 	if absf(turn) > 0.012:
@@ -121,15 +139,25 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		if turns.is_empty(): return null
 		kind = turns[rng.randi() % turns.size()]
 	else:
-		kind = _weighted(m.elements, rng)
-		if kind == last: kind = _weighted(m.elements, rng)
+		var weights: Dictionary = m.elements if std.is_empty() else m.get("std_elements", m.elements)
+		kind = _weighted(weights, rng)
+		if kind == last: kind = _weighted(weights, rng)
 		if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
 	var size := TrailElementLibrary.sized(kind, difficulty * rng.randf_range(0.7, 1.0))
 	var count := 1
 	var length := size.x
+	var gap := -1.0
 	if kind == T.WAVES or kind == T.PUMP:
 		count = rng.randi_range(3, 5)
 		length *= count
+	if not std.is_empty():
+		var sized := _standard(d, kind, cursor, end, difficulty, std, count, size)
+		if sized.is_empty(): return null
+		kind = sized.profile
+		size = Vector2(sized.length, sized.height)
+		length = sized.length
+		count = int(sized.get("count", count))
+		gap = float(sized.get("gap", -1.0))
 	if cursor + length > end: return null
 	var bends := kind == T.BERM or kind == T.OFF_CAMBER
 	# Straight features stay straight over their whole length; long ones shrink to a roller first.
@@ -137,20 +165,64 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		if length <= 12.0: return null
 		kind = T.ROLLER
 		size = TrailElementLibrary.sized(kind, difficulty * rng.randf_range(0.7, 1.0))
+		if not std.is_empty():
+			var roller := _standard(d, T.ROLLER, cursor, end, difficulty, std, 1, size)
+			if roller.is_empty(): return null
+			size = Vector2(roller.length, roller.height)
 		length = size.x
 		count = 1
+		gap = -1.0
 		if _sharpest(d, cursor, length) > 0.025: return null
 	var e := TrailElementLibrary.make(kind, cursor + length * 0.5, length, size.y, signf(turn) if bends else 1.0, count, rng.randf_range(0.28, 0.45))
 	e.seed = rng.randi() % 10000
 	e.density = rng.randf_range(0.35, 0.7)
 	e.lines = rng.randi_range(1, 3) if difficulty < 0.7 else 2
-	e.gap = lerpf(2.0, 1.2, difficulty)
+	e.gap = lerpf(2.0, 1.2, difficulty) if gap < 0.0 else gap
 	if kind == T.LOG:
 		e.count = rng.randi_range(1, 3)
 		e.gap = clampf(e.gap, 1.0, d.width * 0.5 - 0.3)
 	if kind == T.SLALOM: e.count = rng.randi_range(3, 5)
 	if kind == T.NARROW: e.gap = clampf(e.gap, 1.0, d.width - 0.6)
 	return e
+
+## Размеры элемента kind у cursor по TrailStandards: скорость седока в этом месте, уровень по сложности участка.
+## Прыжок, который на этой скорости не получается (гэп ниже красной, стол без длины), становится столом или роллером;
+## техника при скорости выше стандарта уровня ставится, только если до неё есть место для торможения после прошлого
+## элемента — тогда в профиль скорости добавляется предел, и дальше элементы считаются уже с торможением.
+## Пусто — здесь ничего не ставить (причина в std.refused).
+static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, difficulty: float, std: Dictionary, count: int, size: Vector2) -> Dictionary:
+	var level := clampi(int(difficulty * 4.0), 0, 3)
+	var speeds: PackedFloat32Array = std.speeds
+	var v := speeds[clampi(int(cursor), 0, speeds.size() - 1)]
+	var grade := TrailStandards.element_grade(d, std.ground, cursor)
+	var key := {T.TABLETOP: "table", T.GAP: "gap", T.DROP: "drop", T.ROLLER: "roller", T.PUMP: "pump"}
+	if key.has(kind):
+		for k: String in ([key[kind]] + (["table", "roller"] if kind in [T.GAP, T.TABLETOP] else (["roller"] if kind == T.DROP else []))):
+			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade)
+			if not s.is_empty(): return s
+		std.refused[TrailElementLibrary.title(kind)] = int(std.refused.get(TrailElementLibrary.title(kind), 0)) + 1
+		return {}
+	match kind:
+		T.WAVES:
+			var step := clampf(TrailStandards.pump_step(v, size.y), RoadRefinement.STEP * 8.5, 12.0) # волна короче 8 шагов сетки не держится
+			return {profile = kind, length = snappedf(step * count, 0.1), height = size.y, count = count}
+		T.BERM, T.OFF_CAMBER, T.S_BERM:
+			var radius := TrailStandards.tightest(d, cursor, cursor + size.x)
+			var h := TrailStandards.berm_height(v, radius, level, d.width) if is_finite(radius) else size.y
+			return {profile = kind, length = size.x, height = clampf(h if is_finite(h) else 1.2, 0.3, 1.2) if kind != T.OFF_CAMBER else size.y}
+	if TrailElement.places_objects(kind) or kind in [T.ROUGH, T.RUTS]:
+		var limit: float = TrailStandards.TECH_SPEED[level]
+		if v > limit + 0.5:
+			# место для торможения: от конца прошлого элемента до начала техники
+			if cursor - float(std.last_end) < TrailStandards.brake_distance(v, limit) + 4.0:
+				std.refused["техника: нет места затормозить"] = int(std.refused.get("техника: нет места затормозить", 0)) + 1
+				return {}
+			std.caps[int(cursor)] = limit
+			std.speeds = TrailStandards.profile_from(d, std.heights, std.level, std.caps)
+		var h := size.y
+		if TrailStandards.TECH_HEIGHTS.has(kind): h = TrailStandards.tech_height(kind, level)
+		return {profile = kind, length = size.x, height = h}
+	return {profile = kind, length = size.x, height = size.y, count = count}
 
 static func _weighted(weights: Dictionary, rng: RandomNumberGenerator) -> int:
 	var sum := 0.0

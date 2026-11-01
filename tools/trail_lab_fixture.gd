@@ -12,7 +12,9 @@ static func build(routes: Array[TrailDefinition], with_elements := true) -> Heig
 ## Test grounds under a course: "flat" is the lab's own gentle slope; "hills" and "mountain" take a 256 m window
 ## of the world generator's relief (StageRelief noise, normalisation and micro relief; no rivers, roads or towns);
 ## "site" is a saved piece of a real prepared world (TrailSite: roads, water, bridges, surfaces as in the game).
-const GROUNDS := ["flat", "hills", "mountain", "site", "polygon", "downhill", "xc", "epic", "summit", "valley"]
+## "generated" — местность генератора лаборатории (scripts/lab/trail_lab_terrain.gd) под трассой генератора трасс
+## (scripts/lab/trail_lab_builder.gd), 01.11.
+const GROUNDS := ["flat", "hills", "mountain", "site", "polygon", "downhill", "xc", "epic", "summit", "valley", "generated"]
 const Adventures = preload("res://scripts/lab/trail_lab_adventures.gd")
 ## "polygon" — the main polygon's own 512 m land (a slope with hills and a ravine) under its own course (scripts/lab/trail_lab_polygon.gd).
 const Polygon = preload("res://scripts/lab/trail_lab_polygon.gd")
@@ -51,6 +53,7 @@ static func ground(at: Vector2, kind := "flat", course := true) -> float:
 	if kind == "epic": return Epic.ground(at)
 	if kind == "summit": return Summit.ground(at)
 	if kind == "valley": return Valley.ground(at)
+	if kind == "generated": return TrailLabTerrain.ground(at)
 	if kind in ["downhill", "xc"]: return Adventures.ground(at, kind)
 	if kind == "flat" or not GROUND_DROP.has(kind):
 		var bumps := 3.5 * sin(at.x / 36.0) * sin(at.y / 48.0) + 1.1 * sin(at.y / 9.0) if course else 0.0
@@ -136,7 +139,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		if site() == null: return {heights = null, errors = PackedStringArray(["Площадка не открыта: " + site_error]), timings = timings}
 		return _site.prepare(routes, with_elements)
 	var w := WorldData.new()
-	w.W = Polygon.CELLS if kind in ["polygon", "downhill", "xc", "epic", "summit", "valley"] else 64
+	w.W = Polygon.CELLS if kind in ["polygon", "downhill", "xc", "epic", "summit", "valley", "generated"] else 64
 	w.H = w.W
 	w.N = w.W * w.H
 	w.seed_num = 17027
@@ -162,6 +165,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 	if kind == "epic": Epic.forest(w, routes)
 	if kind == "summit": Summit.forest(w, routes)
 	if kind == "valley": Valley.forest(w, routes)
+	if kind == "generated": Polygon.forest(w, routes)
 	var errors := TrailBuilder.append_routes(w, routes)
 	timings.setup_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if not errors.is_empty(): return {heights = null, errors = errors, timings = timings}
@@ -190,7 +194,8 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 		var route := _site.demo_route(kind)
 		if not style.is_empty():
 			var started := Time.get_ticks_usec()
-			var profile: Dictionary = TrailComposer.PROFILES[style]
+			var profile: Dictionary = (TrailComposer.PROFILES[style] as Dictionary).duplicate(true)
+			profile.standards = true # 01.11: элементы по расчётным стандартам (TrailStandards)
 			route.title += " · " + str(profile.title)
 			route.width = profile.route.width
 			route.auto_bank = profile.route.auto_bank
@@ -207,6 +212,13 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 	if index == 13: return [Epic.route()]
 	if index == 14: return Summit.routes()
 	if index == 15: return Valley.routes()
+	if index == 16:
+		# генераторы лаборатории: местность (сид и характер TrailLabTerrain) и трасса по ней (сид и стиль TrailLabBuilder)
+		TrailLabTerrain.generate(TrailLabTerrain.seed, TrailLabTerrain.kind)
+		var started := Time.get_ticks_usec()
+		var made := TrailLabBuilder.build(TrailLabTerrain.ground, TrailLabTerrain.SIZE, TrailLabBuilder.seed, TrailLabBuilder.style)
+		compose_ms = (Time.get_ticks_usec() - started) / 1000.0
+		return made
 	var d := TrailDefinition.new()
 	d.id = "course_%d" % index
 	d.title = ["", "S-повороты", "Серпантин", "Кольцо", "Спираль", "Восьмёрка", "Flow-трасса", "Технический лес", "Байк-парк", "Маршрут"][index]
@@ -244,7 +256,8 @@ static func course(index: int, kind := "mountain", style := "", ground_kind := "
 	if index == 8: d.elements = park_elements(d)
 	if index == 9 and style.is_empty(): style = "mixed"
 	if not style.is_empty():
-		var profile: Dictionary = TrailComposer.PROFILES[style]
+		var profile: Dictionary = (TrailComposer.PROFILES[style] as Dictionary).duplicate(true)
+		profile.standards = true # 01.11: элементы по расчётным стандартам (TrailStandards)
 		d.title += " · " + str(profile.title)
 		d.width = profile.route.width
 		d.auto_bank = profile.route.auto_bank

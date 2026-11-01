@@ -37,6 +37,7 @@ var preset := 0
 var preset_panel := PanelContainer.new()
 var preset_label := Label.new()
 var preset_select := OptionButton.new()
+var generator_label := Label.new() # сиды и итог генераторов, когда выбрана сгенерированная трасса
 var lane := 0
 var element_index := 0
 var overview := false
@@ -253,7 +254,77 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	next.tooltip_text = "Следующая трасса · PageDown"
 	next.pressed.connect(func() -> void: select_preset(preset + 1))
 	row.add_child(next)
+	# 01.11: генераторы — случайная местность и трасса по ней (кубик, F7) и новая трасса на той же местности (F8)
+	var gen_row := HBoxContainer.new()
+	gen_row.add_theme_constant_override("separation", 4)
+	box.add_child(gen_row)
+	var dice := Button.new()
+	dice.icon = _dice_icon()
+	dice.text = "Случайная трасса"
+	dice.add_theme_font_size_override("font_size", 12)
+	dice.focus_mode = Control.FOCUS_NONE
+	dice.tooltip_text = "Новая местность и трасса по ней · F7\nРазмеры элементов — по расчётным стандартам под скорость в каждом месте"
+	dice.pressed.connect(func() -> void: generate_random(true))
+	gen_row.add_child(dice)
+	var again := Button.new()
+	again.icon = _again_icon()
+	again.text = "Другая линия"
+	again.add_theme_font_size_override("font_size", 12)
+	again.focus_mode = Control.FOCUS_NONE
+	again.tooltip_text = "Новая трасса на той же местности · F8"
+	again.pressed.connect(func() -> void: generate_random(false))
+	gen_row.add_child(again)
+	generator_label.theme_type_variation = "HintLabel"
+	generator_label.add_theme_font_size_override("font_size", 11)
+	generator_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	generator_label.custom_minimum_size.x = 280
+	generator_label.visible = false
+	box.add_child(generator_label)
 	_mark_preset()
+
+## Генераторы лаборатории: new_terrain — новая местность (сид и характер), иначе прежняя; трасса — новый сид и стиль.
+## Строится тем же путём, что готовая трасса (select_preset): при отказе остаётся прежняя.
+func generate_random(new_terrain: bool) -> bool:
+	var rng := RandomNumberGenerator.new()
+	rng.randomize()
+	if new_terrain or TrailLabTerrain.cells.is_empty():
+		TrailLabTerrain.seed = rng.randi_range(1, 99999)
+		TrailLabTerrain.kind = TrailLabTerrain.ORDER[rng.randi() % TrailLabTerrain.ORDER.size()]
+	TrailLabBuilder.seed = rng.randi_range(1, 99999)
+	TrailLabBuilder.style = TrailLabBuilder.ORDER[rng.randi() % TrailLabBuilder.ORDER.size()]
+	var index := -1
+	for i in TrailLabCatalog.LIST.size():
+		if TrailLabCatalog.LIST[i].ground == "generated": index = i
+	var ok := select_preset(index)
+	if not ok and not TrailLabBuilder.stats.get("reason", "").is_empty(): show_message(str(TrailLabBuilder.stats.reason))
+	return ok
+
+## Значок кубика 16×16: светлая грань с пятью точками.
+static func _dice_icon() -> ImageTexture:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	for y in range(1, 15):
+		for x in range(1, 15):
+			var corner := (x < 3 or x > 12) and (y < 3 or y > 12) and Vector2(x, y).distance_to(Vector2(clampi(x, 3, 12), clampi(y, 3, 12))) > 2.0
+			if not corner: img.set_pixel(x, y, Color(0.93, 0.93, 0.9))
+	for c: Vector2i in [Vector2i(4, 4), Vector2i(11, 4), Vector2i(7, 7), Vector2i(4, 11), Vector2i(11, 11)]:
+		for oy in range(0, 2):
+			for ox in range(0, 2): img.set_pixel(c.x + ox, c.y + oy, Color(0.15, 0.17, 0.2))
+	return ImageTexture.create_from_image(img)
+
+## Значок «ещё раз» 16×16: дуга со стрелкой.
+static func _again_icon() -> ImageTexture:
+	var img := Image.create(16, 16, false, Image.FORMAT_RGBA8)
+	img.fill(Color(0, 0, 0, 0))
+	var ink := Color(0.93, 0.93, 0.9)
+	for k in 64:
+		var a := lerpf(0.5, TAU - 0.3, k / 63.0)
+		var p := Vector2(7.5, 8.0) + Vector2(cos(a), sin(a)) * 5.5
+		img.set_pixel(clampi(roundi(p.x), 0, 15), clampi(roundi(p.y), 0, 15), ink)
+		img.set_pixel(clampi(roundi(p.x + 0.5), 0, 15), clampi(roundi(p.y), 0, 15), ink)
+	for t: Vector2i in [Vector2i(12, 2), Vector2i(13, 3), Vector2i(14, 4), Vector2i(12, 3), Vector2i(12, 4), Vector2i(13, 4), Vector2i(11, 4), Vector2i(10, 4)]:
+		img.set_pixel(t.x, t.y, ink)
+	return ImageTexture.create_from_image(img)
 
 func _place_presets() -> void:
 	var viewport_size := get_viewport().get_visible_rect().size
@@ -263,6 +334,8 @@ func _mark_preset() -> void:
 	preset_select.select(preset)
 	preset_label.text = "ТРАССА  %d / %d   ·   PgUp / PgDn" % [preset + 1, TrailLabCatalog.LIST.size()]
 	preset_select.tooltip_text = TrailLabCatalog.LIST[preset].title + "\nF2 или V — курсор"
+	generator_label.visible = TrailLabCatalog.LIST[preset].ground == "generated"
+	if generator_label.visible: generator_label.text = "%s\n%s" % [TrailLabTerrain.label(), TrailLabBuilder.label()]
 
 ## Построить готовую трассу номер index вместо текущей (тем же путём, что «Построить» в F2); при отказе остаётся прежняя
 func select_preset(index: int) -> bool:
@@ -748,6 +821,10 @@ func _unhandled_key_input(event: InputEvent) -> void:
 		set_diagnostics_visible(not diagnostics_visible)
 		get_viewport().set_input_as_handled()
 		return
+	if key == KEY_F7 or key == KEY_F8:
+		generate_random(key == KEY_F7)
+		get_viewport().set_input_as_handled()
+		return
 	if key == KEY_F9:
 		save_ride_log()
 		get_viewport().set_input_as_handled()
@@ -767,7 +844,7 @@ func _unhandled_key_input(event: InputEvent) -> void:
 ## F3: участок впереди с ожиданиями (точка и скорость входа, кромка, приземление, радиус) и итог прошлого — из записи
 func _live_analysis() -> String:
 	if not recorder.enabled or bike == null: return ""
-	var near := routes[lane].nearest(Vector2(bike.x, bike.z))
+	var near := routes[lane].nearest_along(Vector2(bike.x, bike.z), recorder._previous_station, 20.0)
 	var text: String = recorder.analysis.live(near.x if is_finite(near.z) else -1.0, bike.horizontal_velocity().length())
 	return "" if text.is_empty() else "\n" + text
 

@@ -31,6 +31,9 @@ const LIST := [
 	{title = "Гора · даунхилл и кросс-кантри", shape = 14, kind = "mountain", style = "", ground = "summit"},
 	# Долина (31.10): гравийная петля (1) и МТБ-синглтрек (2), который дважды проходит над ней по мостам
 	{title = "Долина · грэвел и МТБ", shape = 15, kind = "mountain", style = "", ground = "valley"},
+	# Генераторы (01.11): местность по сиду (TrailLabTerrain) и трасса по ней (TrailLabBuilder) — кнопки «Местность» и
+	# «Трасса» под выбором трассы (F7 / F8)
+	{title = "Генератор · местность и трасса", shape = 16, kind = "mountain", style = "", ground = "generated"},
 ]
 
 
@@ -44,9 +47,10 @@ static func routes(index: int, fixture: Script) -> Array[TrailDefinition]:
 	for d: TrailDefinition in source:
 		var copy := d.duplicate(true) as TrailDefinition
 		# у нескольких полос на одной местности (Гора, Долина) — своё название у каждой
-		if spec.shape != 0: copy.title = spec.title if source.size() == 1 else spec.title.get_slice(" · ", 0) + " · " + d.title
+		# у сгенерированной трассы — своё название (стиль и сид)
+		if spec.shape not in [0, 16]: copy.title = spec.title if source.size() == 1 else spec.title.get_slice(" · ", 0) + " · " + d.title
 		# у полигонов и байк-парка элементы расставлены вручную; на остальных — виражи в тугих поворотах
-		if spec.shape not in [0, 8, 10, 11, 12, 13, 14, 15]:
+		if spec.shape not in [0, 8, 10, 11, 12, 13, 14, 15, 16]:
 			brake_zones(copy)
 			add_berms(copy)
 		kit.append(copy)
