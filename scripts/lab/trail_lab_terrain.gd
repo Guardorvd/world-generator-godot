@@ -42,11 +42,13 @@ static var world_seed := 0
 static var world_size := 0
 static var world_h := PackedFloat32Array()
 static var world_wet := PackedByteArray()
+static var world_rivers := PackedByteArray()
 static var world_info := {}
 static var origin := Vector2i.ZERO ## угол окна в клетках мира (v3)
 static var window_mode := false
 static var _base_cells := PackedFloat32Array() ## окно до врезок
 static var _wet_cells := PackedByteArray()
+static var _river_cells := PackedByteArray()
 static var cuts: Array = [] ## врезки окна: {points, depth (по точкам), half — полудно, wall — заложение стенок}
 
 
@@ -164,10 +166,16 @@ const RISER := 0.35
 ## v3: мир размером с план игры по сиду (долго: география игры целиком; можно в потоке — пишет только свои поля).
 static func generate_world(seed_value: int) -> void:
 	if seed_value == world_seed and not world_h.is_empty(): return
+	publish_world(prepare_world(seed_value))
+
+## Worker-safe: returns owned data and never publishes into the active lab session.
+static func prepare_world(seed_value: int, existing := {}) -> Dictionary:
 	var started := Time.get_ticks_usec()
-	if _load_world(seed_value):
-		world_info = {ms = (Time.get_ticks_usec() - started) / 1000.0, cached = true}
-		return
+	if existing.get("seed", -1) == seed_value and not existing.get("heights", PackedFloat32Array()).is_empty(): return existing.duplicate(true)
+	var cached := _read_world(seed_value)
+	if not cached.is_empty():
+		cached.info = {ms = (Time.get_ticks_usec() - started) / 1000.0, cached = true}
+		return cached
 	var w := WorldGenerator.geography("Trail Lab #%d" % seed_value)
 	var h := PackedFloat32Array()
 	h.resize(w.N)
@@ -186,15 +194,24 @@ static func generate_world(seed_value: int) -> void:
 		for x in range(1, w.W - 1):
 			var i := z * w.W + x
 			if wet[i] == 0 and (wet[i - 1] != 0 or wet[i + 1] != 0 or wet[i - w.W] != 0 or wet[i + w.W] != 0): grown[i] = 1
-	world_h = h
-	world_wet = grown
-	world_size = w.W
-	world_seed = seed_value
-	world_info = {ms = (Time.get_ticks_usec() - started) / 1000.0, stages = w.generation_profile.get("stages_ms", {})}
-	_save_world()
+	return {heights = h, water = grown, rivers = w.river_cells().duplicate(), size = w.W, seed = seed_value,
+		info = {ms = (Time.get_ticks_usec() - started) / 1000.0, stages = w.generation_profile.get("stages_ms", {})}}
+
+static func world_snapshot() -> Dictionary:
+	return {heights = world_h.duplicate(), water = world_wet.duplicate(), rivers = world_rivers.duplicate(), size = world_size, seed = world_seed, info = world_info.duplicate(true)}
+
+static func publish_world(data: Dictionary) -> void:
+	world_h = data.heights.duplicate()
+	world_wet = data.water.duplicate()
+	world_rivers = data.get("rivers", PackedByteArray()).duplicate()
+	world_rivers.resize(world_h.size())
+	world_size = data.size
+	world_seed = data.seed
+	world_info = data.get("info", {}).duplicate(true)
+	if not world_info.get("cached", false): _save_world()
 
 ## Кэш мира на диске по сиду: высоты и вода (повторный выбор того же мира — без географии). Версия формата — в имени.
-const CACHE := "user://trail_lab_worlds/v2_%d.bin"
+const CACHE := "user://trail_lab_worlds/v3_%d.bin" # v2 did not retain rivers; never import it as game water data
 static func _save_world() -> void:
 	DirAccess.make_dir_recursive_absolute("user://trail_lab_worlds")
 	var f := FileAccess.open(CACHE % world_seed, FileAccess.WRITE)
@@ -202,25 +219,29 @@ static func _save_world() -> void:
 	f.store_32(world_size)
 	f.store_buffer(world_h.to_byte_array())
 	f.store_buffer(world_wet)
+	f.store_buffer(world_rivers)
 	f.close()
 
 static func _load_world(seed_value: int) -> bool:
-	if not FileAccess.file_exists(CACHE % seed_value): return false
+	var data := _read_world(seed_value)
+	if data.is_empty(): return false
+	publish_world(data)
+	return true
+
+static func _read_world(seed_value: int) -> Dictionary:
+	if not FileAccess.file_exists(CACHE % seed_value): return {}
 	var f := FileAccess.open(CACHE % seed_value, FileAccess.READ)
-	if f == null: return false
+	if f == null: return {}
 	var n := f.get_32()
 	if n != WorldGenerator.PLAN_SIZE:
 		f.close()
-		return false
+		return {}
 	var h := f.get_buffer(n * n * 4).to_float32_array()
 	var wet := f.get_buffer(n * n)
+	var rivers := f.get_buffer(n * n)
 	f.close()
-	if h.size() != n * n or wet.size() != n * n: return false
-	world_h = h
-	world_wet = wet
-	world_size = n
-	world_seed = seed_value
-	return true
+	if h.size() != n * n or wet.size() != n * n or rivers.size() != n * n: return {}
+	return {heights = h, water = wet, rivers = rivers, size = n, seed = seed_value, info = {cached = true}}
 
 ## v3: окно CELLS × CELLS с углом at (клетки мира) — земля лаборатории. Врезки сбрасываются.
 static func use_window(at: Vector2i) -> void:
@@ -229,6 +250,8 @@ static func use_window(at: Vector2i) -> void:
 	out.resize(CELLS * CELLS)
 	var wet := PackedByteArray()
 	wet.resize(CELLS * CELLS)
+	var rivers := PackedByteArray()
+	rivers.resize(CELLS * CELLS)
 	var low := INF
 	var high := -INF
 	for z in CELLS:
@@ -236,11 +259,13 @@ static func use_window(at: Vector2i) -> void:
 			var i := (origin.y + z) * world_size + origin.x + x
 			out[z * CELLS + x] = world_h[i]
 			wet[z * CELLS + x] = world_wet[i]
+			if world_rivers.size() == world_h.size(): rivers[z * CELLS + x] = world_rivers[i]
 			low = minf(low, world_h[i])
 			high = maxf(high, world_h[i])
 	for i in out.size(): out[i] = out[i] - low + BASE
 	_base_cells = out
 	_wet_cells = wet
+	_river_cells = rivers
 	cells = out.duplicate()
 	cuts = []
 	window_mode = true

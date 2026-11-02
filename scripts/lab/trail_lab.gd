@@ -3,6 +3,12 @@ const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
 const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
 const TrailLabScout := preload("res://scripts/lab/trail_lab_scout.gd")
+const Project := preload("res://scripts/lab/trail_lab_project.gd")
+const ProjectPanel := preload("res://scripts/lab/trail_lab_project_panel.gd")
+var project_panel := ProjectPanel.new()
+var draft_project: Project
+var active_project: Project
+var variants := {}
 ## Developer composition root: production terrain, controller, view and crash lifecycle.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
 const EditorPanel = preload("res://scripts/lab/trail_lab_editor.gd")
@@ -45,6 +51,8 @@ var generator_label := Label.new() # сиды и итог генераторов
 var site_row := HBoxContainer.new()  # v3: места большого мира
 var site_select := OptionButton.new()
 var _world_thread: Thread
+var _world_job: RefCounted
+var _world_request := 0
 var _world_started := 0
 var lane := 0
 var element_index := 0
@@ -193,6 +201,11 @@ func _ready() -> void:
 		label.add_theme_constant_override("shadow_outline_size", 5)
 	canvas.add_child(status)
 	_build_presets(canvas)
+	add_child(project_panel)
+	project_panel.preview_requested.connect(preview_site)
+	project_panel.build_requested.connect(build_draft_project)
+	project_panel.save_requested.connect(save_project_slot)
+	project_panel.restore_requested.connect(restore_project_slot)
 	canvas.add_child(editor)
 	editor.visible = false
 	editor.course_selected.connect(func(index: int, kind: String, style: String, ground: String) -> void:
@@ -283,6 +296,10 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	again.tooltip_text = "Другая трасса на этом месте · F8"
 	again.pressed.connect(func() -> void: generate_random(false))
 	gen_row.add_child(again)
+	var projects_button := Button.new()
+	projects_button.text = "Карта · А/Б"
+	projects_button.pressed.connect(show_projects)
+	gen_row.add_child(projects_button)
 	# v3: места большого мира — список с переключением (‹ › или [ ]): выбор строит окно места и ставит на старт
 	site_row.add_theme_constant_override("separation", 4)
 	site_row.visible = false
@@ -326,7 +343,8 @@ func generate_random(new_terrain: bool) -> bool:
 	if Sites.active():
 		var ok := Sites.reroll(Sites.current, rng.randi_range(1, 99999))
 		_fill_sites()
-		return _show_site(ok)
+		if ok: draft_project = Sites.project(); show_projects()
+		return ok
 	if new_terrain or TrailLabTerrain.cells.is_empty():
 		TrailLabTerrain.seed = rng.randi_range(1, 99999)
 		TrailLabTerrain.kind = TrailLabTerrain.ORDER[rng.randi() % TrailLabTerrain.ORDER.size()]
@@ -346,21 +364,34 @@ func generate_world(seed_value: int) -> bool:
 	generator_label.visible = true
 	generator_label.text = "Генерирую мир %d…" % seed_value
 	_world_started = Time.get_ticks_msec()
+	_world_request += 1
+	_world_job = Sites.WorldJob.new(_world_request, seed_value, TrailLabTerrain.world_snapshot())
 	_world_thread = Thread.new()
-	_world_thread.start(func() -> int: return Sites.generate_world(seed_value))
+	var error := _world_thread.start(_world_job.run)
+	if error != OK:
+		_world_thread = null
+		_world_job = null
+		show_message("Не удалось запустить задачу мира")
+		return false
 	return true
 
 func _poll_world() -> void:
 	if _world_thread == null or _world_thread.is_alive(): return
-	var count: int = _world_thread.wait_to_finish()
+	var result = _world_thread.wait_to_finish()
 	_world_thread = null
+	_world_job = null
+	if not result is Dictionary:
+		show_message("Задача мира завершилась без результата")
+		return
+	if not Sites.publish_world(result, _world_request): return
+	var count := Sites.sites.size()
 	var seconds := (Time.get_ticks_msec() - _world_started) / 1000.0
 	if count == 0:
 		show_message("Мир готов за %.0f с, но мест под трассы нет: %s" % [seconds, TrailLabScout.stats.get("reason", "")])
 		generator_label.text = "Мест не нашлось — F7, другой мир"
 		return
 	show_message("Мир готов за %.0f с · мест под трассы: %d" % [seconds, count])
-	select_site(0)
+	preview_site(0)
 
 ## Место i большого мира: окно земли, трасса места (строится при первом выборе) и старт на ней.
 func select_site(i: int) -> bool:
@@ -374,11 +405,77 @@ func _show_site(ok: bool) -> bool:
 	if not ok:
 		show_message("Трасса места не проложилась: " + str(TrailLabBuilder.stats.get("reason", "")))
 		return false
+	draft_project = Sites.project()
 	var index := -1
 	for k in TrailLabCatalog.LIST.size():
 		if TrailLabCatalog.LIST[k].ground == "generated": index = k
 	lane = 0
 	return select_preset(index)
+
+func preview_site(index: int) -> bool:
+	if _world_thread != null or index < 0 or index >= Sites.sites.size(): return false
+	var ok := Sites.select(index)
+	draft_project = Sites.project()
+	_fill_sites()
+	show_projects()
+	return ok
+
+func show_projects() -> void:
+	for slot in ["A", "B"]:
+		var path := "user://trail_lab_variants/%s.tres" % slot
+		if not variants.has(slot) and FileAccess.file_exists(path):
+			var opened := Project.open(path)
+			if opened.has("project"): variants[slot] = opened.project
+	project_panel.map.set_world(TrailLabTerrain.world_snapshot(), Sites.sites)
+	project_panel.map.selected = Sites.current
+	_refresh_projects()
+	project_panel.popup_centered(Vector2i(mini(780, int(get_viewport().get_visible_rect().size.x) - 32), mini(640, int(get_viewport().get_visible_rect().size.y) - 32)))
+
+func _refresh_projects() -> void:
+	project_panel.map.slot_a = variants.get("A")
+	project_panel.map.slot_b = variants.get("B")
+	project_panel.map.queue_redraw()
+	if draft_project != null:
+		var m := Project.metrics(draft_project)
+		project_panel.description.text = "%s · сид %d · %.0f м · элементов %d · %s" % [m.title, m.seed, m.length, m.elements, "полотно проверено" if m.accepted else "проект без проверки полотна"]
+		if draft_project.source.river_policy == draft_project.source.RiverPolicy.LAB_DRY_CHANNELS: project_panel.description.text += " · сухие русла (Trail Lab)"
+	var compared := Project.compare(variants.get("A"), variants.get("B"))
+	project_panel.comparison.text = "Сохраните удачные варианты А и Б после проверки полотна. Файлы переживают перезапуск."
+	if not compared.has("error"):
+		project_panel.comparison.text = "А (голубой): %.0f м, %d эл. · Б (розовый): %.0f м, %d эл. · Б−А: %+.0f м, %+d эл., выемка %+.0f м³, насыпь %+.0f м³ · %s" % [compared.a.length, compared.a.elements, compared.b.length, compared.b.elements, compared.delta_length, compared.delta_elements, compared.delta_cut_m3, compared.delta_fill_m3, "одни входные данные" if compared.same_source else "разные входные данные"]
+	project_panel.timings.text = "География %.0f мс · поиск %.0f мс · проект %.0f мс · сцена %.0f мс" % [Sites.world_timings.get("geography_ms", 0), Sites.world_timings.get("search_ms", 0), draft_project.timings.get("project_ms", 0) if draft_project != null else 0, build_timings.get("total_ms", 0)]
+
+func build_draft_project() -> bool:
+	if draft_project == null: return false
+	var source = draft_project.source.duplicate(true)
+	source.apply_cuts(draft_project.cuts)
+	var candidate := draft_project.copy_routes()
+	var previous := ground_kind
+	ground_kind = "generated"
+	var ready := Fixture.prepare(candidate, true, "generated", source)
+	var ok := rebuild(candidate, -1, ready)
+	if not ok: ground_kind = previous
+	_refresh_projects()
+	return ok
+
+func save_project_slot(slot: String) -> bool:
+	if slot not in ["A", "B"] or active_project == null or not active_project.accepted:
+		show_message("Сначала постройте и проверьте удачный проект")
+		return false
+	DirAccess.make_dir_recursive_absolute("user://trail_lab_variants")
+	var saved := active_project.detached() as Project
+	if saved.save_to("user://trail_lab_variants/%s.tres" % slot) != OK:
+		show_message("Не удалось сохранить вариант " + slot)
+		return false
+	variants[slot] = saved
+	_refresh_projects()
+	show_message("Вариант %s сохранён" % slot)
+	return true
+
+func restore_project_slot(slot: String) -> bool:
+	if not variants.has(slot): show_message("Вариант %s ещё не сохранён" % slot); return false
+	draft_project = variants[slot].detached() as Project
+	return build_draft_project()
 
 func _fill_sites() -> void:
 	site_select.clear()
@@ -481,12 +578,12 @@ func _copy_routes(source: Array[TrailDefinition]) -> Array[TrailDefinition]:
 ## Transactional edit: prepare data and mesh first, then replace the live session.
 ## `compose_ms` — time the caller spent composing the elements (-1 — not composed); counted in the total.
 ## `ready` — a Fixture.prepare result the caller already built for exactly these routes (the line builder): not rebuilt.
-func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {}) -> bool:
+func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {}, input_source = null) -> bool:
 	var started := Time.get_ticks_usec()
 	if candidate.is_empty():
 		show_message("Нужна хотя бы одна трасса")
 		return false
-	var prepared := ready if not ready.is_empty() else Fixture.prepare(candidate, true, ground_kind)
+	var prepared := ready if not ready.is_empty() else Fixture.prepare(candidate, true, ground_kind, input_source)
 	if Sites.active(): _fill_sites()
 	if not prepared.errors.is_empty():
 		show_message("Правка отклонена: " + "; ".join(prepared.errors))
@@ -500,7 +597,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	timings.mesh_ms = (Time.get_ticks_usec() - stage) / 1000.0
 	stage = Time.get_ticks_usec()
 	var next_technical: Dictionary = prepared.technical if prepared.has("technical") else TrailTechnical.build(next_heights, candidate)
-	timings.technical_ms = (Time.get_ticks_usec() - stage) / 1000.0
+	timings.technical_ms = float(timings.get("technical_ms", 0.0)) + (Time.get_ticks_usec() - stage) / 1000.0
 	# Measured after the earthworks and the decks: the profile the wheel will actually ride.
 	stage = Time.get_ticks_usec()
 	var next_surveys := {}
@@ -536,8 +633,28 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	editor.present(routes, lane, element_index)
 	reset_ride()
 	timings.apply_ms = (Time.get_ticks_usec() - stage) / 1000.0
-	timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0 + maxf(0.0, compose_ms)
+	timings.total_ms = (Time.get_ticks_usec() - started) / 1000.0 + maxf(0.0, compose_ms) + (float(prepared.timings.get("prepare_total_ms", 0)) if not ready.is_empty() else 0.0)
 	build_timings = timings
+	if prepared.get("source") != null:
+		var template: Project
+		if draft_project != null and not draft_project.routes.is_empty() and draft_project.routes[0].id == candidate[0].id: template = draft_project
+		elif active_project != null and not active_project.routes.is_empty() and active_project.routes[0].id == candidate[0].id: template = active_project
+		var project := Project.new() if template == null else template.detached() as Project
+		if template == null:
+			project.title = candidate[0].title
+			project.seed = TrailLabBuilder.seed
+			project.style = TrailLabBuilder.style
+			project.settings = {difficulty = TrailLabBuilder.stats.get("difficulty", 0.5), modification = TrailLabBuilder.stats.get("modification", 0.5)}
+			project.cuts = TrailLabBuilder.cuts.duplicate(true)
+		project.source = prepared.source.duplicate(true)
+		project.source_hash = project.source.fingerprint()
+		project.routes = _copy_routes(candidate)
+		project.accepted = true
+		project.timings.merge(timings, true)
+		project.report = TrailLabBuilder.stats.duplicate(true)
+		active_project = project
+		draft_project = project.detached() as Project
+		_refresh_projects()
 	show_message("Готово за %.0f мс · правки действуют в текущем запуске" % timings.total_ms)
 	return true
 
@@ -771,9 +888,9 @@ func _build_report() -> String:
 	if build_timings.is_empty(): return "Сборка: нет данных"
 	var t := build_timings
 	var ms := func(key: String) -> String: return "—" if t.get(key, -1.0) < 0.0 else "%.0f" % t[key]
-	return "Сборка %s мс: площадка %s · композиция %s · полотно и сетка %s\nземляные элементы %s · объекты и настилы %s · анализ %s · меш %s · сцена %s" % [
+	return "Сборка %s мс: площадка %s · композиция %s · полотно и сетка %s\nземляные элементы %s · объекты и настилы %s · анализ %s · меш %s · сцена %s\nпроезд %s · ограничения %s" % [
 		ms.call("total_ms"), ms.call("setup_ms"), ms.call("compose_ms"), ms.call("surface_ms"),
-		ms.call("earthworks_ms"), ms.call("technical_ms"), ms.call("survey_ms"), ms.call("mesh_ms"), ms.call("apply_ms")]
+		ms.call("earthworks_ms"), ms.call("technical_ms"), ms.call("survey_ms"), ms.call("mesh_ms"), ms.call("apply_ms"), ms.call("validation_ms"), ms.call("constraints_ms")]
 
 func _label(text: String, at: Vector2, lift: float) -> void:
 	var label := Label3D.new()
@@ -809,7 +926,7 @@ func apply_edit(values: Dictionary) -> bool:
 		e.profile = int(values.profile) as TrailElement.Profile
 		for key: String in TrailElement.KEYS:
 			if values.has(key): e.set(key, int(values[key]) if key in TrailElement.INTEGER_KEYS else values[key])
-	if not rebuild(candidate): return false
+	if not rebuild(candidate, -1, {}, _active_input()): return false
 	launch_element()
 	return true
 
@@ -826,7 +943,13 @@ func reload_sources() -> bool:
 			show_message("Не удалось перечитать " + source.resource_path)
 			return false
 		candidate.append(loaded.duplicate(true) as TrailDefinition)
-	return rebuild(candidate)
+	return rebuild(candidate, -1, {}, _active_input())
+
+func _active_input():
+	if active_project == null: return null
+	var input = active_project.source.duplicate(true)
+	input.apply_cuts(active_project.cuts)
+	return input
 
 func reset_ride(station := 0.0, speed := 0.0) -> void:
 	if heights == null: return
@@ -908,10 +1031,13 @@ func set_diagnostics_visible(enabled: bool) -> void:
 
 ## Release ragdoll bodies before the owning menu removes the scene.
 func shutdown() -> void:
+	_world_request += 1
 	# фоновая генерация мира: дождаться (поток пишет только свои поля и скоро закончит)
 	if _world_thread != null:
 		_world_thread.wait_to_finish()
 		_world_thread = null
+	_world_job = null
+	project_panel.hide()
 	set_process(false)
 	set_physics_process(false)
 	crash.abort()

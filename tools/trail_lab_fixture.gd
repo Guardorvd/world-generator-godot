@@ -135,27 +135,43 @@ static func relief(kind: String) -> PackedFloat32Array:
 ## `timings` (ms, disjoint stages): setup — the lab's source world, routes and obstacle grid; surface — Heightfield
 ## with the tread and the metre grid (finish_paths); earthworks — TrailBuilder's own trail_elements_ms, -1 when not baked.
 const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
+const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
+const InputAdapter := preload("res://scripts/lab/trail_lab_input.gd")
 
-static func prepare(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
+static func prepare(routes: Array[TrailDefinition], with_elements := true, kind := "flat", source: GenerationInput = null) -> Dictionary:
+	var prepare_started := Time.get_ticks_usec()
 	# Only generated Lab lines are acceptance-gated. Authored test stands remain available for diagnosis.
 	var generated := with_elements and not routes.is_empty() and routes[0].id.contains("generated_")
-	if not generated: return _prepare_once(routes, with_elements, kind)
+	if not generated: return _prepare_once(routes, with_elements, kind, source)
+	if source == null and kind == "generated":
+		source = Sites.source_for(routes)
+		if source == null: source = InputAdapter.snapshot()
+	if source != null and not source.validate().is_empty(): return {heights = null, errors = source.validate(), timings = {}}
+	var cumulative := {setup_ms = 0.0, surface_ms = 0.0, earthworks_ms = 0.0, technical_ms = 0.0, validation_ms = 0.0, constraints_ms = 0.0}
 	var repairs := []
 	var repaired := {}
 	for attempt in Validation.MAX_REPAIRS + 1:
-		var result := _prepare_once(routes, with_elements, kind)
+		var result := _prepare_once(routes, with_elements, kind, source)
+		for key in ["setup_ms", "surface_ms", "earthworks_ms"]: cumulative[key] += maxf(0, float(result.timings.get(key, 0.0)))
 		if not result.errors.is_empty():
 			TrailLabBuilder.stats.accepted = false
 			TrailLabBuilder.stats.reason = "; ".join(result.errors)
 			Sites.publish_validation(routes, TrailLabBuilder.stats)
 			return result
+		var stage := Time.get_ticks_usec()
 		var technical := TrailTechnical.build(result.heights, routes)
+		cumulative.technical_ms += (Time.get_ticks_usec() - stage) / 1000.0
+		stage = Time.get_ticks_usec()
 		var reports := {}
 		var errors := PackedStringArray()
+		if source != null:
+			var audit_started := Time.get_ticks_usec()
+			errors.append_array(source.audit_earthworks(result.heights))
+			cumulative.constraints_ms += (Time.get_ticks_usec() - audit_started) / 1000.0
 		var changed := false
 		for d in routes:
 			var allowed := func(p: Vector2) -> bool:
-				return p.x > TrailLabBuilder.MARGIN and p.y > TrailLabBuilder.MARGIN and p.x < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and p.y < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and not TrailLabTerrain.wet_at(p)
+				return p.x > TrailLabBuilder.MARGIN and p.y > TrailLabBuilder.MARGIN and p.x < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and p.y < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and not (source.blocked(p) if source != null else TrailLabTerrain.wet_at(p))
 			var report := Validation.measure(result.heights, d, allowed)
 			reports[d.id] = report
 			if not report.accepted and attempt < Validation.MAX_REPAIRS and not changed:
@@ -164,7 +180,11 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 					repairs.append(fix)
 					changed = true
 			errors.append_array(report.errors)
+		cumulative.validation_ms += (Time.get_ticks_usec() - stage) / 1000.0
 		if changed: continue # Every repair gets a new bake and ALL scenarios are checked again.
+		result.timings = cumulative
+		result.timings.build_attempts = attempt + 1
+		result.source = source
 		result.validation = reports
 		result.repairs = repairs
 		result.technical = technical
@@ -172,6 +192,8 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		TrailLabBuilder.stats.accepted = errors.is_empty()
 		TrailLabBuilder.stats.repairs = repairs
 		TrailLabBuilder.stats.validation = reports
+		TrailLabBuilder.stats.earthworks = result.heights.road_refinement.trail_shaping.duplicate(true)
+		if source != null: TrailLabBuilder.stats.source_hash = source.fingerprint()
 		var final_route := routes[0]
 		TrailLabBuilder.stats.elements = final_route.elements.size()
 		TrailLabBuilder.stats.berms = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size()
@@ -193,10 +215,11 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 			TrailLabBuilder.speeds = PackedFloat32Array()
 			result.heights = null
 		Sites.publish_validation(routes, TrailLabBuilder.stats)
+		result.timings.prepare_total_ms = (Time.get_ticks_usec() - prepare_started) / 1000.0
 		return result
 	return {heights = null, errors = PackedStringArray(["исчерпан бюджет исправлений"]), timings = {}}
 
-static func _prepare_once(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
+static func _prepare_once(routes: Array[TrailDefinition], with_elements := true, kind := "flat", source: GenerationInput = null) -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var timings := {setup_ms = 0.0, surface_ms = -1.0, earthworks_ms = -1.0}
 	if kind == "site":
@@ -221,7 +244,7 @@ static func _prepare_once(routes: Array[TrailDefinition], with_elements := true,
 		for x in w.W:
 			var i := z * w.W + x
 			var at := Vector2(x + 0.5, z + 0.5) * GameConfig.TILE
-			w.h[i] = ground(at, kind, routes.size() == 1 and routes[0].id.begins_with("course_")) / GameConfig.HS
+			w.h[i] = (source.ground(at) if source != null else ground(at, kind, routes.size() == 1 and routes[0].id.begins_with("course_"))) / GameConfig.HS
 			w.elev[i] = w.h[i]
 			w.filled[i] = w.h[i]
 			w.slope[i] = 0.035

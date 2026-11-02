@@ -38,8 +38,7 @@ func lab_check(seed: int) -> void:
 		frames += 1
 	check(lab._world_thread == null, "мир готов в фоне (%d кадров)" % frames)
 	check(lab.site_select.item_count == Sites.sites.size() and lab.site_row.visible, "список мест: %d" % lab.site_select.item_count)
-	var first_accepted: bool = Sites._built.has(0) and Sites._built[0].stats.get("accepted", false)
-	check((not lab.routes.is_empty() and str(lab.routes[0].id).begins_with("site1_")) if first_accepted else not Sites._built[0].stats.get("reason", "").is_empty(), "место 1: принята проверенная трасса или показана причина отказа")
+	check(lab.draft_project != null and lab.project_panel.visible and not str(lab.routes[0].id).begins_with("site1_"), "мир открывает лёгкий проект и карту, сцена строится отдельной командой")
 	if Sites.sites.size() > 1:
 		var before: String = lab.routes[0].id
 		var selected: bool = lab.select_site(1)

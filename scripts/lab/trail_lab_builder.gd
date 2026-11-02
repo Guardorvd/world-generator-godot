@@ -2,6 +2,7 @@ extends RefCounted
 const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
 const Composition := preload("res://scripts/lab/trail_lab_composition.gd")
+const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
 ## Trail Lab only: bounded terrain routes, independent style/difficulty/construction settings,
 ## planned approach/feature/recovery chains and optional engineered crossings.
 ## Deterministic in terrain, seed and settings. Final acceptance belongs to Fixture.prepare.
@@ -64,19 +65,62 @@ static var cuts: Array = []                ## врезки последней т
 ## avoid(Vector2) -> bool — необязательно: куда линии нельзя (вода окна мира); carve(Array) — необязательно: применить
 ## врезки к земле (после неё ground уже врезанная); без carve овражков и петли нет.
 static func build(ground: Callable, size: float, seed_value: int, style_name: String, avoid := Callable(), carve := Callable(), options := {}) -> Array[TrailDefinition]:
+	var settings := {difficulty = difficulty, modification = modification, mandatory_gaps = mandatory_gaps, park_layout = park_layout}
+	settings.merge(options, true)
+	var result := _build_core(ground, size, seed_value, style_name, avoid, carve, settings)
+	result.style = style_name
+	publish_project(result)
+	var routes: Array[TrailDefinition] = []
+	routes.assign(result.routes)
+	return routes
+
+## Data-only job; never writes the legacy facade or active terrain. Scene construction stays on the main thread.
+static func build_project(input: GenerationInput, seed_value: int, style_name: String, options := {}) -> Dictionary:
+	var errors := input.validate()
+	if not STYLES.has(style_name): errors.append("неизвестный характер трассы")
+	if not errors.is_empty(): return _project_result([], {accepted = false, reason = "; ".join(errors)}, [], PackedFloat32Array(), seed_value)
+	var settings: Dictionary = options.duplicate(true)
+	if float(settings.get("modification", 0.5)) > float(input.earthwork_limits.modification):
+		return _project_result([], {accepted = false, reason = "превышен предел изменения рельефа"}, [], PackedFloat32Array(), seed_value)
+	var context := input.duplicate(true) as GenerationInput
+	var result := _build_core(context.ground, minf(context.size.x, context.size.y) * context.cell_size, seed_value, style_name, context.blocked, context.apply_cuts, settings)
+	if not context.cut_errors.is_empty():
+		result.routes = []
+		result.stats = {accepted = false, reason = "; ".join(context.cut_errors)}
+	for d: TrailDefinition in result.routes:
+		for e in d.elements:
+			if not TrailElement.places_objects(e.profile) and e.height > float(input.earthwork_limits.max_fill):
+				result.routes = []
+				result.stats = {accepted = false, reason = "элемент превышает max_fill"}
+				break
+	result.source_hash = input.fingerprint()
+	result.style = style_name
+	return result
+
+static func publish_project(result: Dictionary) -> void:
+	stats = result.stats.duplicate(true)
+	cuts = result.cuts.duplicate(true)
+	speeds = result.speeds.duplicate()
+	seed = result.seed
+	style = result.get("style", style)
+
+static func _project_result(routes: Array, report: Dictionary, excavations: Array, velocity: PackedFloat32Array, seed_value: int) -> Dictionary:
+	return {routes = routes, stats = report, cuts = excavations, speeds = velocity, seed = seed_value}
+
+static func _build_core(ground: Callable, size: float, seed_value: int, style_name: String, avoid := Callable(), carve := Callable(), options := {}) -> Dictionary:
 	var started := Time.get_ticks_usec()
-	seed = seed_value
-	style = style_name if STYLES.has(style_name) else "flow"
+	var seed := seed_value
+	var style := style_name if STYLES.has(style_name) else "flow"
 	var st: Dictionary = STYLES[style].duplicate(true)
-	var skill := clampf(float(options.get("difficulty", difficulty)), 0.0, 0.99)
-	var shaping_amount := clampf(float(options.get("modification", modification)), 0.0, 1.0)
-	var gaps_ok := Composition.gap_allowed(style, skill, shaping_amount, bool(options.get("mandatory_gaps", mandatory_gaps)))
+	var skill := clampf(float(options.get("difficulty", 0.5)), 0.0, 0.99)
+	var shaping_amount := clampf(float(options.get("modification", 0.5)), 0.0, 1.0)
+	var gaps_ok := Composition.gap_allowed(style, skill, shaping_amount, bool(options.get("mandatory_gaps", false)))
 	st.cruise *= lerpf(0.8, 1.15, skill)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("trail_lab_builder|%d|%s" % [seed, style])
-	stats = {}
-	speeds = PackedFloat32Array()
-	cuts = []
+	var stats := {}
+	var speeds := PackedFloat32Array()
+	var cuts: Array = []
 	var bounds: Rect2 = options.get("bounds", Rect2(Vector2.ZERO, Vector2.ONE * size))
 	var inside := func(p: Vector2) -> bool:
 		return p.x > MARGIN and p.y > MARGIN and p.x < size - MARGIN and p.y < size - MARGIN and bounds.grow(-4.0).has_point(p) and not (avoid.is_valid() and avoid.call(p))
@@ -95,7 +139,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		at += 16.0
 	if cells.size() < 8:
 		stats = {accepted = false, reason = "слишком мало сухого места в границах участка"}
-		return []
+		return _project_result([], stats, cuts, speeds, seed)
 	cells.sort_custom(func(a: Vector3, b: Vector3) -> bool: return a.z > b.z)
 	var lo_h := cells[-1].z
 	var hi_h := cells[0].z
@@ -118,7 +162,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var best_score := -INF
 	var tries := 0
 	var walk_refused := 0
-	var layout: String = options.get("park_layout", park_layout)
+	var layout: String = options.get("park_layout", "auto")
 	if layout not in PARK_LAYOUTS: layout = PARK_LAYOUTS[posmod(seed, PARK_LAYOUTS.size())]
 	if style == "park":
 		pts = _park_points(ground, walk_inside, size, rng, layout, bounds)
@@ -154,7 +198,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var walk_ms := (Time.get_ticks_usec() - started) / 1000.0
 	if pts.size() < 40:
 		stats = {accepted = false, reason = "линия не проложилась: места хватило на %.0f м" % (pts.size() * STEP)}
-		return []
+		return _project_result([], stats, cuts, speeds, seed)
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
 	var d := TrailDefinition.new()
 	d.id = "generated_%s_%d" % [style, seed]
@@ -169,7 +213,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var footprint_errors := Validation.footprint(d, inside)
 	if not footprint_errors.is_empty():
 		stats = {accepted = false, reason = "; ".join(footprint_errors)}
-		return []
+		return _project_result([], stats, cuts, speeds, seed)
 	# v3: целевой уклон выравнивания — по самой крутой части самой линии (не ниже пресета): иначе после крутого спуска
 	# полотно держит 16 % и уходит в насыпь до 10 м — под пролётом и в узле петли это яма, а не овражек
 	var shaping := TrailShaping.preset(d.kind)
@@ -222,7 +266,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		stats = {reason = "определение трассы: " + "; ".join(errors), accepted = false}
 		cuts = []
 		if carve.is_valid(): carve.call(cuts)
-		return []
+		return _project_result([], stats, cuts, speeds, seed)
 	var length := d.route_length()
 	var drop := float(ground.call(line[0])) - float(ground.call(line[-1]))
 	speeds = TrailStandards.profile_from(d, TrailStandards.line_heights(d, ground), level, {}, false)
@@ -250,7 +294,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		gaps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.GAP).size(),
 		decks = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.NORTHSHORE).size(),
 		jumps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.TABLETOP, TrailElement.Profile.GAP, TrailElement.Profile.DROP]).size()}
-	return [d]
+	return _project_result([d], stats, cuts, speeds, seed)
 
 ## Строка для подписи: стиль, сид, длина, перепад, элементы.
 static func label() -> String:

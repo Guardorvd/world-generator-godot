@@ -1,0 +1,63 @@
+{
+  "date": "2026-11-02",
+  "engine": "Godot 4.7.2",
+  "baseline_commit": "48f5953",
+  "seed": 7,
+  "warm_cache": true,
+  "notes": "Single-run timings; cold geography is excluded from the speed comparison. Exact candidate equality checked against the baseline implementation.",
+  "baseline_pipeline": {
+    "world_ms": 13725.131,
+    "search_ms": 13718.707,
+    "project_ms": 1530.919,
+    "preparation_ms": 1572.88,
+    "mesh_ms": 144.387,
+    "preparation": {
+      "earthworks_ms": 741.205,
+      "setup_ms": 313.21,
+      "surface_ms": 379.421
+    }
+  },
+  "data_project_pipeline": {
+    "world_ms": 7414.746,
+    "search_ms": 7378.131,
+    "project_ms": 1653.839,
+    "preparation_ms": 1530.806,
+    "mesh_ms": 170.156,
+    "preparation": {
+      "build_attempts": 1,
+      "earthworks_ms": 738.085,
+      "prepare_total_ms": 1529.201,
+      "setup_ms": 285.596,
+      "surface_ms": 366.717,
+      "technical_ms": 0.014,
+      "validation_ms": 136.247
+    }
+  },
+  "equivalence": {
+    "after_ms": 7604.33,
+    "before_ms": 15463.821,
+    "count": 171,
+    "same_candidates": true,
+    "search": {
+      "budget": 576,
+      "budget_exhausted": true,
+      "confirmed": 393,
+      "dedup_ms": 120.033,
+      "dry_cache_cells": 199345,
+      "duplicates": 222,
+      "fit": 1897,
+      "looked": 2377,
+      "measure_ms": 133.675,
+      "ms": 7577.74,
+      "probe_ms": 7310.767,
+      "probed": 576,
+      "refused": {
+        "вода": 460,
+        "кручи": 20,
+        "пробная прокладка не связала участок": 183
+      },
+      "segment_cache_edges": 62802,
+      "sites": 171
+    }
+  }
+}
