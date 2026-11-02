@@ -38,6 +38,8 @@ static var cells := PackedFloat32Array()
 static var info := {}  ## {fall, window, title, forms}: что выбрано
 static var _key := ""
 ## v3: мир и окно. world_h — высота клеток мира, м; world_wet — море и озёра с отступом в клетку (русла рек — нет).
+static var world_input: Resource
+static var window_input: Resource
 static var world_seed := 0
 static var world_size := 0
 static var world_h := PackedFloat32Array()
@@ -198,9 +200,10 @@ static func prepare_world(seed_value: int, existing := {}) -> Dictionary:
 		info = {ms = (Time.get_ticks_usec() - started) / 1000.0, stages = w.generation_profile.get("stages_ms", {})}}
 
 static func world_snapshot() -> Dictionary:
-	return {heights = world_h.duplicate(), water = world_wet.duplicate(), rivers = world_rivers.duplicate(), size = world_size, seed = world_seed, info = world_info.duplicate(true)}
+	return {input = world_input, heights = world_h.duplicate(), water = world_wet.duplicate(), rivers = world_rivers.duplicate(), size = world_size, seed = world_seed, info = world_info.duplicate(true)}
 
 static func publish_world(data: Dictionary) -> void:
+	world_input = data.get("input")
 	world_h = data.heights.duplicate()
 	world_wet = data.water.duplicate()
 	world_rivers = data.get("rivers", PackedByteArray()).duplicate()
@@ -208,7 +211,7 @@ static func publish_world(data: Dictionary) -> void:
 	world_size = data.size
 	world_seed = data.seed
 	world_info = data.get("info", {}).duplicate(true)
-	if not world_info.get("cached", false): _save_world()
+	if world_input == null and not world_info.get("cached", false): _save_world()
 
 ## Кэш мира на диске по сиду: высоты и вода (повторный выбор того же мира — без географии). Версия формата — в имени.
 const CACHE := "user://trail_lab_worlds/v3_%d.bin" # v2 did not retain rivers; never import it as game water data
@@ -262,7 +265,11 @@ static func use_window(at: Vector2i) -> void:
 			if world_rivers.size() == world_h.size(): rivers[z * CELLS + x] = world_rivers[i]
 			low = minf(low, world_h[i])
 			high = maxf(high, world_h[i])
-	for i in out.size(): out[i] = out[i] - low + BASE
+	window_input = null
+	if world_input != null:
+		window_input = preload("res://scripts/lab/trail_lab_game_source.gd").window(world_input, origin, CELLS)
+	else:
+		for i in out.size(): out[i] = out[i] - low + BASE
 	_base_cells = out
 	_wet_cells = wet
 	_river_cells = rivers

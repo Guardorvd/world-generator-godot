@@ -12,6 +12,7 @@ var world_size := 0
 var world_seed := 0
 var world_h := PackedFloat32Array()
 var world_wet := PackedByteArray()
+var generation_input: Resource
 var dry_cache := {}
 var segment_cache := {}
 
@@ -20,6 +21,8 @@ func _init(snapshot := {}) -> void:
 	world_seed = snapshot.get("seed", 0)
 	world_h = snapshot.get("heights", PackedFloat32Array()).duplicate()
 	world_wet = snapshot.get("water", PackedByteArray()).duplicate()
+	if snapshot.get("input") != null:
+		generation_input = preload("res://scripts/lab/trail_lab_game_input.gd").indexed_copy(snapshot.input)
 
 var sites: Array[Dictionary] = []
 var stats := {}
@@ -227,6 +230,9 @@ func _dry(p: Vector2i) -> bool:
 	for offset in [Vector2i.ZERO, Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var q: Vector2i = p + offset
 		if q.x < 0 or q.y < 0 or q.x >= n or q.y >= n or world_wet[q.y * n + q.x] != 0:
+			dry_cache[key] = false
+			return false
+		if generation_input != null and generation_input.blocked(Vector2(q) * GameConfig.TILE):
 			dry_cache[key] = false
 			return false
 	dry_cache[key] = true

@@ -1,0 +1,3442 @@
+{
+  "policy": "strict game water; max cut/fill 2 m",
+  "sample": "equally spaced indices in deterministic scout order; one default project per site; no rerolls",
+  "schema": 2,
+  "seeds": [
+    "7",
+    "111",
+    "ushchelye"
+  ],
+  "site_limit": 4,
+  "worlds": [
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999002400597679,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.21285996921506,
+                "grade": 0.204847619798481,
+                "suitable": false
+              },
+              "finish_distance": 0.350677490234375,
+              "fragment": false,
+              "kind": "full",
+              "length": 342.713375806808,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999978296543,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.206274703687086,
+                "grade": 0.228281893818348,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 347.78170633316,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999428482866065,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.232028330052344,
+                "grade": 0.187246490015241,
+                "suitable": false
+              },
+              "finish_distance": 0.201408594846725,
+              "fragment": false,
+              "kind": "full",
+              "length": 338.689212024212,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.412433580011111,
+                "grade": 0.128884882286002,
+                "suitable": false
+              },
+              "finish_distance": 129.098297119141,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.550576448441,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.3809775889349,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.394503580972469,
+                "grade": 0.119374976065653,
+                "suitable": false
+              },
+              "finish_distance": 129.169998168945,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.546753883362,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5220724885166,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.391809585700685,
+                "grade": 0.119469608442766,
+                "suitable": false
+              },
+              "finish_distance": 129.18830871582,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.547677159309,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5401145574651,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.388332261847154,
+                "grade": 0.117406441055209,
+                "suitable": false
+              },
+              "finish_distance": 129.460098266602,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.542701244354,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5847744226012,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.388332261847154,
+                "grade": 0.117406441055209,
+                "suitable": false
+              },
+              "finish_distance": 129.460098266602,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.542701244354,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5847744226012,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.388332261847154,
+                "grade": 0.117406441055209,
+                "suitable": false
+              },
+              "finish_distance": 129.460098266602,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.542701244354,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5847744226012,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.2,
+              "corridor_progress": 0.129802657627379,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.388332261847154,
+                "grade": 0.117406441055209,
+                "suitable": false
+              },
+              "finish_distance": 129.460098266602,
+              "fragment": true,
+              "kind": "full",
+              "length": 275.542701244354,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 96.5847744226012,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 0,
+          "line_score": {},
+          "project_ms": 1824.555,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000001245517,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.616506576538086,
+                "grade": 0.037962277730306,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 285.079004406929,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 106.828510284424,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 28.8499755859375,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000001245517,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.613718412088929,
+                "grade": 0.0970413907052716,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 299.891180157661,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 106.828510284424,
+                "turns": 12,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 1.06156921386719,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999978788842931,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.615238697093446,
+                "grade": 0.0218353480862182,
+                "suitable": false
+              },
+              "finish_distance": 0.00652214605361223,
+              "fragment": false,
+              "kind": "full",
+              "length": 292.203858733177,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 106.828368344955,
+                "turns": 11,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.192307692307692,
+              "corridor_progress": 0.106846551726607,
+              "finish_area": {
+                "clear": false,
+                "cross": 1.35053289451753,
+                "grade": 0.190942096116487,
+                "suitable": false
+              },
+              "finish_distance": 201.883102416992,
+              "fragment": true,
+              "kind": "full",
+              "length": 155.716698050499,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 24.3936351740849,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 15,
+          "line_score": {},
+          "project_ms": 420.129,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 3,
+          "completion": {
+            "backward_m": 0.0,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.999999992232511,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.0235829761022615,
+              "grade": 0.0175659428993337,
+              "suitable": true
+            },
+            "finish_distance": 0.0,
+            "fragment": false,
+            "kind": "full",
+            "length": 357.134807944298,
+            "reached_finish": true,
+            "reasons": [],
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.258064516129032,
+              "corridor_progress": 0.0868778969611839,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.451117771837744,
+                "grade": 0.0417935900550219,
+                "suitable": false
+              },
+              "finish_distance": 317.887847900391,
+              "fragment": true,
+              "kind": "full",
+              "length": 71.8143707513809,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 9.62436553812586,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 30,
+          "line_score": {
+            "corridor": 0.997208129719861,
+            "descent": 0.505528599023819,
+            "earthworks": 0.347778729584527,
+            "element_space": 0.0,
+            "endpoints": 0.765814166261418,
+            "length": 0.446418509930372,
+            "rhythm": 0.477745526830602,
+            "total": 0.524881033743024
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 8.769,
+            "earthworks_ms": 1291.259,
+            "prepare_total_ms": 1998.653,
+            "setup_ms": 312.957,
+            "surface_ms": 293.153,
+            "technical_ms": 0.172,
+            "validation_ms": 94.211
+          },
+          "project_ms": 729.634,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (182.0, 323.0): +2.11 м",
+            "calm · 46.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 47.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000002622529,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.253561458969671,
+                "grade": 0.46075369369161,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 360.962081074715,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000002622529,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.224450360195078,
+                "grade": 0.480998246883852,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 367.1784542799,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999479884220779,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.276637048962584,
+                "grade": 0.43996861806833,
+                "suitable": false
+              },
+              "finish_distance": 0.189597353339195,
+              "fragment": false,
+              "kind": "full",
+              "length": 355.293229937553,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.23379516601563,
+              "complete": false,
+              "corridor_coverage": 0.516129032258065,
+              "corridor_progress": 0.4062014073154,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.355087241092406,
+                "grade": 0.032108062657547,
+                "suitable": false
+              },
+              "finish_distance": 266.5927734375,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.402621388435,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 27.7402337423118,
+                "turns": 9,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 45,
+          "line_score": {},
+          "project_ms": 1287.82,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        }
+      ],
+      "candidates_found": 60,
+      "game_stages_ms": {
+        "climate": 2065.746,
+        "geography": 995.211,
+        "hydrology": 13997.592,
+        "lakes": 46.552,
+        "landmarks": 2714.438,
+        "ocean": 1030.012,
+        "relief": 13392.011,
+        "rivers": 6013.308,
+        "road_surface": 254.662,
+        "sites": 1645.849,
+        "trail_plan": 3195.546,
+        "trails": 174146.465,
+        "vegetation": 4710.154
+      },
+      "handled_rejections": 4,
+      "projects_built": 1,
+      "refusal_categories": {
+        "earthwork_limit": 1,
+        "ride_or_surface_validation": 1,
+        "route_completion_or_finish": 3
+      },
+      "refusals": {
+        "calm · 46.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 47.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "готовое полотно превышает предел выемки/насыпи у (182.0, 323.0): +2.11 м": 1,
+        "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0": 3
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 121,
+        "dedup_ms": 30.557,
+        "dry_cache_cells": 86109,
+        "duplicates": 61,
+        "fit": 578,
+        "looked": 2377,
+        "measure_ms": 65.464,
+        "ms": 5777.958,
+        "probe_ms": 5676.38,
+        "probed": 576,
+        "refused": {
+          "вода": 1673,
+          "кручи": 126,
+          "пробная прокладка не связала участок": 455
+        },
+        "segment_cache_edges": 24691,
+        "sites": 60
+      },
+      "search_ms": 6484.568,
+      "seed": "7",
+      "source_cached": true,
+      "source_hash": "b5d5b68d234b5a8b0f365360cf89cd72dece61dcc0b2be92980a78af8fe47954",
+      "source_ms": 246950.668,
+      "source_open_ms": 24.753,
+      "terrain": {
+        "existing_paths": 91,
+        "forbidden_cells": 19862,
+        "max_height": 214.369537353516,
+        "min_height": -37.9148216247559,
+        "river_cells": 31947,
+        "water_cells": 270077
+      },
+      "trails_accepted": 0,
+      "unexplained_failures": 0
+    },
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 3,
+          "completion": {
+            "backward_m": 0.0,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.999394241798891,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.0549393300170777,
+              "grade": 0.02934695124956,
+              "suitable": true
+            },
+            "finish_distance": 0.16728201508522,
+            "fragment": false,
+            "kind": "full",
+            "length": 267.893953800201,
+            "reached_finish": true,
+            "reasons": [],
+            "standalone": {
+              "drop": 79.5501597615512,
+              "turns": 5,
+              "useful": true
+            },
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.284495164145817,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.363976636988809,
+                "grade": 0.866143849896616,
+                "suitable": false
+              },
+              "finish_distance": 185.799072265625,
+              "fragment": true,
+              "kind": "full",
+              "length": 243.541929841042,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.5724223424913,
+                "turns": 6,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.284495164145817,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.363976636988809,
+                "grade": 0.866143849896616,
+                "suitable": false
+              },
+              "finish_distance": 185.799072265625,
+              "fragment": true,
+              "kind": "full",
+              "length": 243.541929841042,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.5724223424913,
+                "turns": 6,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.286492003749323,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.300461784114304,
+                "grade": 0.879149215218301,
+                "suitable": false
+              },
+              "finish_distance": 186.158248901367,
+              "fragment": true,
+              "kind": "full",
+              "length": 243.518226742744,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.2385220023571,
+                "turns": 6,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.286492003749323,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.289854014030425,
+                "grade": 0.901680279656527,
+                "suitable": false
+              },
+              "finish_distance": 187.157012939453,
+              "fragment": true,
+              "kind": "full",
+              "length": 243.483966231346,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 62.4362989543297,
+                "turns": 6,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.286492003749323,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.473763945767132,
+                "grade": 0.797351251950507,
+                "suitable": false
+              },
+              "finish_distance": 186.300567626953,
+              "fragment": true,
+              "kind": "full",
+              "length": 243.572235226631,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.1896746657731,
+                "turns": 6,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.285738216137513,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.353258016519248,
+                "grade": 0.0263937851317072,
+                "suitable": false
+              },
+              "finish_distance": 215.065322875977,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.624911427498,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.1269203824049,
+                "turns": 4,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.416666666666667,
+              "corridor_progress": 0.284495164145817,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.342221477396379,
+                "grade": 0.0548303490310597,
+                "suitable": false
+              },
+              "finish_distance": 219.757415771484,
+              "fragment": true,
+              "kind": "full",
+              "length": 235.609538674355,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 47.4147915441135,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 0,
+          "line_score": {
+            "corridor": 0.998107448227975,
+            "descent": 0.710269283585278,
+            "earthworks": 0.05170433727538,
+            "element_space": 0.0,
+            "endpoints": 0.350265462335113,
+            "length": 0.334867442250252,
+            "rhythm": 0.741222741021575,
+            "total": 0.493322163950191
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 14.547,
+            "earthworks_ms": 1171.303,
+            "prepare_total_ms": 1856.792,
+            "setup_ms": 321.237,
+            "surface_ms": 279.032,
+            "technical_ms": 0.014,
+            "validation_ms": 78.707
+          },
+          "project_ms": 931.509,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (270.0, 315.0): +2.17 м",
+            "calm · 113.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 114.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 114.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.0000000235963,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.0201078999865179,
+                "grade": 0.161488787604867,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 396.943125247955,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.0000000235963,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.0327996445582054,
+                "grade": 0.154803499367517,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 393.469396233559,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.0000000235963,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.00916970199937673,
+                "grade": 0.16780162444896,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 401.002099394798,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.617647058823529,
+              "corridor_progress": 0.343018985405592,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.314512675196359,
+                "grade": 0.0245974450423698,
+                "suitable": false
+              },
+              "finish_distance": 99.4999237060547,
+              "fragment": true,
+              "kind": "full",
+              "length": 367.224881291389,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.955739260904246,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.241390912825914,
+                "grade": 0.0106154966315444,
+                "suitable": false
+              },
+              "finish_distance": 27.2409114837646,
+              "fragment": true,
+              "kind": "full",
+              "length": 394.904473543167,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.955739260904246,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.303748638480708,
+                "grade": 0.00557863566321733,
+                "suitable": false
+              },
+              "finish_distance": 26.0459537506104,
+              "fragment": true,
+              "kind": "full",
+              "length": 391.015222549438,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.955739260904246,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.129208503355686,
+                "grade": 0.108509277506073,
+                "suitable": false
+              },
+              "finish_distance": 28.0567436218262,
+              "fragment": true,
+              "kind": "full",
+              "length": 410.805734574795,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.68467712402344,
+              "complete": false,
+              "corridor_coverage": 0.382352941176471,
+              "corridor_progress": 0.280668810975396,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0546342884287393,
+                "grade": 0.0788734263545242,
+                "suitable": false
+              },
+              "finish_distance": 265.617950439453,
+              "fragment": true,
+              "kind": "full",
+              "length": 311.068832874298,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.282501220703125,
+              "complete": false,
+              "corridor_coverage": 0.558823529411765,
+              "corridor_progress": 0.454530476903475,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.153899885212821,
+                "grade": 0.161546830079412,
+                "suitable": false
+              },
+              "finish_distance": 244.710433959961,
+              "fragment": true,
+              "kind": "full",
+              "length": 255.337763905525,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 38.2990073076217,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.823529411764706,
+              "corridor_progress": 0.389579122249765,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0477608493872847,
+                "grade": 0.00914194204324303,
+                "suitable": false
+              },
+              "finish_distance": 31.2810134887695,
+              "fragment": true,
+              "kind": "full",
+              "length": 462.779734551907,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 14,
+          "line_score": {},
+          "project_ms": 6193.566,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000002400268,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.106203766488761,
+                "grade": 0.402689946605885,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 432.491118907928,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 23.6281471252441,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000002400268,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.0825751556039904,
+                "grade": 0.411209910376783,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 450.027186095715,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 4.82046508789063,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 1.00000002400268,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.129537882563454,
+                "grade": 0.39333840413201,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 430.134330034256,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.79755953453423,
+                "grade": 0.186045793440523,
+                "suitable": false
+              },
+              "finish_distance": 345.684295654297,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.706698775291,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2804967805278,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.79755953453423,
+                "grade": 0.186045793440523,
+                "suitable": false
+              },
+              "finish_distance": 345.684295654297,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.706698775291,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2804967805278,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.79755953453423,
+                "grade": 0.186045793440523,
+                "suitable": false
+              },
+              "finish_distance": 345.684295654297,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.706698775291,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2804967805278,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.79755953453423,
+                "grade": 0.186045793440523,
+                "suitable": false
+              },
+              "finish_distance": 345.684295654297,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.706698775291,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2804967805278,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.79755953453423,
+                "grade": 0.186045793440523,
+                "suitable": false
+              },
+              "finish_distance": 345.684295654297,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.706698775291,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2804967805278,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.796524626864993,
+                "grade": 0.183223851546548,
+                "suitable": false
+              },
+              "finish_distance": 345.779724121094,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.708238959312,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2398121897131,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.35,
+              "corridor_progress": 0.0671163697578628,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.796524626864993,
+                "grade": 0.183223851546548,
+                "suitable": false
+              },
+              "finish_distance": 345.779724121094,
+              "fragment": true,
+              "kind": "full",
+              "length": 183.708238959312,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 33.2398121897131,
+                "turns": 7,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 28,
+          "line_score": {},
+          "project_ms": 507.454,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 3,
+          "completion": {
+            "backward_m": 0.0,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.999559866098143,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.0111863221730649,
+              "grade": 0.115867573150657,
+              "suitable": true
+            },
+            "finish_distance": 0.302074164152145,
+            "fragment": false,
+            "kind": "full",
+            "length": 681.862174034119,
+            "reached_finish": true,
+            "reasons": [],
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0405401177946866,
+                "grade": 0.00403881191717422,
+                "suitable": false
+              },
+              "finish_distance": 551.850158691406,
+              "fragment": true,
+              "kind": "full",
+              "length": 163.234201073647,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 29.4299315970875,
+                "turns": 5,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.137931034482759,
+              "corridor_progress": 0.0883789742511754,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.0457082870909491,
+                "grade": 0.331387603186461,
+                "suitable": false
+              },
+              "finish_distance": 517.703796386719,
+              "fragment": true,
+              "kind": "full",
+              "length": 127.832491278648,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката",
+                "слишком короткий самостоятельный маршрут"
+              ],
+              "standalone": {
+                "drop": 27.1463717602874,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 42,
+          "line_score": {
+            "corridor": 0.922033342641277,
+            "descent": 0.524675509888246,
+            "earthworks": 0.609118397717008,
+            "element_space": 0.0977714414025326,
+            "endpoints": 0.51740831235846,
+            "length": 0.619874703667381,
+            "rhythm": 0.806446081478394,
+            "total": 0.626163236929871
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 2.721,
+            "earthworks_ms": 1058.982,
+            "prepare_total_ms": 2173.036,
+            "setup_ms": 322.244,
+            "surface_ms": 480.118,
+            "technical_ms": 0.016,
+            "validation_ms": 169.158
+          },
+          "project_ms": 4017.06,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (62.0, 110.0): +2.36 м"
+          ],
+          "walk_reasons": {}
+        }
+      ],
+      "candidates_found": 56,
+      "game_stages_ms": {
+        "climate": 1948.008,
+        "geography": 960.957,
+        "hydrology": 12605.196,
+        "lakes": 24.689,
+        "landmarks": 3021.652,
+        "ocean": 760.77,
+        "relief": 12477.761,
+        "rivers": 7342.068,
+        "road_surface": 560.175,
+        "sites": 2083.638,
+        "trail_plan": 3516.509,
+        "trails": 217299.803,
+        "vegetation": 5641.121
+      },
+      "handled_rejections": 4,
+      "projects_built": 2,
+      "refusal_categories": {
+        "earthwork_limit": 2,
+        "ride_or_surface_validation": 1,
+        "route_completion_or_finish": 2
+      },
+      "refusals": {
+        "calm · 113.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 114.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 114.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "готовое полотно превышает предел выемки/насыпи у (270.0, 315.0): +2.17 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (62.0, 110.0): +2.36 м": 1,
+        "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0": 2
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 161,
+        "dedup_ms": 40.877,
+        "dry_cache_cells": 95949,
+        "duplicates": 105,
+        "fit": 991,
+        "looked": 2377,
+        "measure_ms": 99.217,
+        "ms": 5995.976,
+        "probe_ms": 5844.221,
+        "probed": 576,
+        "refused": {
+          "вода": 1313,
+          "кручи": 73,
+          "пробная прокладка не связала участок": 415
+        },
+        "segment_cache_edges": 27051,
+        "sites": 56
+      },
+      "search_ms": 6776.121,
+      "seed": "111",
+      "source_cached": true,
+      "source_hash": "4db9b4e71bf31f8645868949dc326bea94ef56927566bcb3ce428c92fc269a4e",
+      "source_ms": 300536.336,
+      "source_open_ms": 24.027,
+      "terrain": {
+        "existing_paths": 100,
+        "forbidden_cells": 25205,
+        "max_height": 208.822555541992,
+        "min_height": -44.6882019042969,
+        "river_cells": 45672,
+        "water_cells": 190527
+      },
+      "trails_accepted": 0,
+      "unexplained_failures": 0
+    },
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 1,
+          "completion": {
+            "backward_m": 58.4240417480469,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.998434569030697,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.102891739079496,
+              "grade": 0.017847037621929,
+              "suitable": true
+            },
+            "finish_distance": 0.0,
+            "fragment": false,
+            "kind": "full",
+            "length": 471.185340106487,
+            "reached_finish": true,
+            "reasons": [],
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.997392224577197,
+                "grade": 0.276781835995886,
+                "suitable": false
+              },
+              "finish_distance": 349.261383056641,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931537747383,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7955010394944,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.997392224577197,
+                "grade": 0.276781835995886,
+                "suitable": false
+              },
+              "finish_distance": 349.261383056641,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931537747383,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7955010394944,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.997392224577197,
+                "grade": 0.276781835995886,
+                "suitable": false
+              },
+              "finish_distance": 349.261383056641,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931537747383,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7955010394944,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.99797511522047,
+                "grade": 0.277142146068703,
+                "suitable": false
+              },
+              "finish_distance": 349.25634765625,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931746125221,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7900048326555,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.99797511522047,
+                "grade": 0.277142146068703,
+                "suitable": false
+              },
+              "finish_distance": 349.25634765625,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931746125221,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7900048326555,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.99797511522047,
+                "grade": 0.277142146068703,
+                "suitable": false
+              },
+              "finish_distance": 349.25634765625,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931746125221,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7900048326555,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 2.17314910888672,
+              "complete": false,
+              "corridor_coverage": 0.181818181818182,
+              "corridor_progress": 0.067811430589714,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.99797511522047,
+                "grade": 0.277142146068703,
+                "suitable": false
+              },
+              "finish_distance": 349.25634765625,
+              "fragment": true,
+              "kind": "full",
+              "length": 203.931746125221,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 49.7900048326555,
+                "turns": 1,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 157.873710632324,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.998493749412728,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.105889339814894,
+                "grade": 0.0191493057015274,
+                "suitable": true
+              },
+              "finish_distance": 0.0,
+              "fragment": true,
+              "kind": "full",
+              "length": 491.223807573318,
+              "reached_finish": true,
+              "reasons": [
+                "нет последовательного продвижения по коридору"
+              ],
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 146.703582763672,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.997968626062465,
+              "finish_area": {
+                "clear": true,
+                "cross": 0.0996593870513607,
+                "grade": 0.0204053448226963,
+                "suitable": true
+              },
+              "finish_distance": 0.0,
+              "fragment": true,
+              "kind": "full",
+              "length": 505.296846747398,
+              "reached_finish": true,
+              "reasons": [
+                "нет последовательного продвижения по коридору"
+              ],
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "index": 0,
+          "line_score": {
+            "corridor": 0.997619429140399,
+            "descent": 0.939293827329363,
+            "earthworks": 0.0,
+            "element_space": 0.320703864181764,
+            "endpoints": 0.157603195964128,
+            "length": 0.588981675133109,
+            "rhythm": 0.515556830415701,
+            "total": 0.540058025374355
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 3.537,
+            "earthworks_ms": 3574.578,
+            "prepare_total_ms": 4472.188,
+            "setup_ms": 314.771,
+            "surface_ms": 357.12,
+            "technical_ms": 0.02,
+            "validation_ms": 102.271
+          },
+          "project_ms": 906.189,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (34.0, 239.0): +2.09 м",
+            "calm · 41.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "calm · 450.0 м · полотно: остановка на подъёме готового полотна",
+            "normal · 41.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 450.0 м · полотно: остановка на подъёме готового полотна",
+            "normal · 258.0 м · элемент 6: жёсткое приземление на готовом полотне",
+            "fast · 25.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 450.0 м · полотно: остановка на подъёме готового полотна",
+            "fast · 258.0 м · элемент 6: жёсткое приземление на готовом полотне"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": false,
+          "completed_candidates": 0,
+          "completion": {},
+          "finish_refused": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.172162771224976,
+                "grade": 0.523284514745077,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 279.068077683449,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.7532339096069,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.222223705334727,
+                "grade": 0.503582811464488,
+                "suitable": false
+              },
+              "finish_distance": 0.0,
+              "fragment": false,
+              "kind": "full",
+              "length": 279.569740653038,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.7532339096069,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999632350267576,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.119698256081392,
+                "grade": 0.538756209124889,
+                "suitable": false
+              },
+              "finish_distance": 0.103698469698429,
+              "fragment": false,
+              "kind": "full",
+              "length": 279.549252033234,
+              "reached_finish": true,
+              "reasons": [
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 63.6905965112601,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "corridor_fit"
+            }
+          ],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.717292859837471,
+                "grade": 0.168288051176205,
+                "suitable": false
+              },
+              "finish_distance": 32.6362762451172,
+              "fragment": true,
+              "kind": "full",
+              "length": 327.548889040947,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.620686983413179,
+                "grade": 0.456754385451253,
+                "suitable": false
+              },
+              "finish_distance": 33.9349784851074,
+              "fragment": true,
+              "kind": "full",
+              "length": 343.511538863182,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.723313818627503,
+                "grade": 0.316574493735364,
+                "suitable": false
+              },
+              "finish_distance": 33.3591461181641,
+              "fragment": true,
+              "kind": "full",
+              "length": 347.482429742813,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.723313818627503,
+                "grade": 0.316574493735364,
+                "suitable": false
+              },
+              "finish_distance": 33.3591461181641,
+              "fragment": true,
+              "kind": "full",
+              "length": 347.482429742813,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.730724751984781,
+                "grade": 0.149340725269212,
+                "suitable": false
+              },
+              "finish_distance": 34.3587074279785,
+              "fragment": true,
+              "kind": "full",
+              "length": 331.539872169495,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.666854372266243,
+                "grade": 0.364963466898189,
+                "suitable": false
+              },
+              "finish_distance": 34.6076889038086,
+              "fragment": true,
+              "kind": "full",
+              "length": 347.484816551209,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 1.0,
+              "corridor_progress": 0.999999993209904,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.605592576192976,
+                "grade": 0.462364116767276,
+                "suitable": false
+              },
+              "finish_distance": 34.2510795593262,
+              "fragment": true,
+              "kind": "full",
+              "length": 347.463464617729,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 11,
+          "line_score": {},
+          "project_ms": 979.042,
+          "reasons": [
+            "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 3,
+          "completion": {
+            "backward_m": 0.44635009765625,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.999999971480342,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.130180197291338,
+              "grade": 0.0898199753792142,
+              "suitable": true
+            },
+            "finish_distance": 0.0,
+            "fragment": false,
+            "kind": "full",
+            "length": 318.140846729279,
+            "reached_finish": true,
+            "reasons": [],
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.40086683959089,
+                "grade": 0.062452481254392,
+                "suitable": false
+              },
+              "finish_distance": 156.125015258789,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.75674533844,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.9274215949117,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.40086683959089,
+                "grade": 0.062452481254392,
+                "suitable": false
+              },
+              "finish_distance": 156.125015258789,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.75674533844,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.9274215949117,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.416967747813032,
+                "grade": 0.0409914564079372,
+                "suitable": false
+              },
+              "finish_distance": 156.941207885742,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.754871368408,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.5422669998952,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.416967747813032,
+                "grade": 0.0409914564079372,
+                "suitable": false
+              },
+              "finish_distance": 156.941207885742,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.754871368408,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.5422669998952,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.40086683959089,
+                "grade": 0.062452481254392,
+                "suitable": false
+              },
+              "finish_distance": 156.125015258789,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.75674533844,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.9274215949117,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.40086683959089,
+                "grade": 0.062452481254392,
+                "suitable": false
+              },
+              "finish_distance": 156.125015258789,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.75674533844,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.9274215949117,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.0,
+              "complete": false,
+              "corridor_coverage": 0.714285714285714,
+              "corridor_progress": 0.0924493126816556,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.40086683959089,
+                "grade": 0.062452481254392,
+                "suitable": false
+              },
+              "finish_distance": 156.125015258789,
+              "fragment": true,
+              "kind": "full",
+              "length": 179.75674533844,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 68.9274215949117,
+                "turns": 8,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 23,
+          "line_score": {
+            "corridor": 0.928535926342156,
+            "descent": 0.748030526297433,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.00751965536673327,
+            "length": 0.397676058411598,
+            "rhythm": 0.820171639674871,
+            "total": 0.470928052547297
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 2.963,
+            "earthworks_ms": 2233.035,
+            "prepare_total_ms": 3071.185,
+            "setup_ms": 303.925,
+            "surface_ms": 238.066,
+            "technical_ms": 0.016,
+            "validation_ms": 173.321
+          },
+          "project_ms": 1795.695,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (179.0, 258.0): +2.12 м",
+            "calm · 50.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 50.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 50.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "base_surface": {},
+          "built": true,
+          "completed_candidates": 3,
+          "completion": {
+            "backward_m": 0.0,
+            "complete": true,
+            "corridor_coverage": 1.0,
+            "corridor_progress": 0.999426246796179,
+            "finish_area": {
+              "clear": true,
+              "cross": 0.0459665514881635,
+              "grade": 0.0229983453106494,
+              "suitable": true
+            },
+            "finish_distance": 0.265304565429688,
+            "fragment": false,
+            "kind": "full",
+            "length": 429.314636707306,
+            "reached_finish": true,
+            "reasons": [],
+            "stop_reason": "corridor_fit"
+          },
+          "finish_refused": [],
+          "fragments": [
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.332056144681701,
+                "grade": 0.316483221865686,
+                "suitable": false
+              },
+              "finish_distance": 228.764938354492,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.496222376823,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4713392080739,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            },
+            {
+              "backward_m": 0.325439453125,
+              "complete": false,
+              "corridor_coverage": 0.641025641025641,
+              "corridor_progress": 0.354422822191662,
+              "finish_area": {
+                "clear": false,
+                "cross": 0.28568860048108,
+                "grade": 0.310874679513897,
+                "suitable": false
+              },
+              "finish_distance": 228.620971679688,
+              "fragment": true,
+              "kind": "full",
+              "length": 223.495361685753,
+              "reached_finish": false,
+              "reasons": [
+                "финиш не достигнут",
+                "нет последовательного продвижения по коридору",
+                "финиш без безопасного места остановки и выката"
+              ],
+              "standalone": {
+                "drop": 77.4640577196842,
+                "turns": 3,
+                "useful": true
+              },
+              "stop_reason": "blocked_or_self_approach"
+            }
+          ],
+          "index": 35,
+          "line_score": {
+            "corridor": 0.997214954417871,
+            "descent": 0.829627723838127,
+            "earthworks": 0.0,
+            "element_space": 0.207048314533195,
+            "endpoints": 0.00542376457082883,
+            "length": 0.536643295884132,
+            "rhythm": 0.594515355198545,
+            "total": 0.505263400827028
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 5.715,
+            "earthworks_ms": 3806.555,
+            "prepare_total_ms": 4602.681,
+            "setup_ms": 343.491,
+            "surface_ms": 309.146,
+            "technical_ms": 0.022,
+            "validation_ms": 126.194
+          },
+          "project_ms": 808.279,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (240.0, 290.0): +2.53 м",
+            "calm · 22.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 22.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 22.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        }
+      ],
+      "candidates_found": 47,
+      "game_stages_ms": {
+        "climate": 2147.732,
+        "geography": 1002.628,
+        "hydrology": 12215.771,
+        "lakes": 58.286,
+        "landmarks": 3147.979,
+        "ocean": 359.033,
+        "relief": 14198.021,
+        "rivers": 8853.179,
+        "road_surface": 185.463,
+        "sites": 1878.121,
+        "trail_plan": 2790.262,
+        "trails": 196272.509,
+        "vegetation": 4773.119
+      },
+      "handled_rejections": 4,
+      "projects_built": 3,
+      "refusal_categories": {
+        "earthwork_limit": 3,
+        "ride_or_surface_validation": 3,
+        "route_completion_or_finish": 1
+      },
+      "refusals": {
+        "calm · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "calm · 41.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "calm · 450.0 м · полотно: остановка на подъёме готового полотна": 1,
+        "calm · 50.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 25.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 258.0 м · элемент 6: жёсткое приземление на готовом полотне": 1,
+        "fast · 450.0 м · полотно: остановка на подъёме готового полотна": 1,
+        "fast · 50.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 258.0 м · элемент 6: жёсткое приземление на готовом полотне": 1,
+        "normal · 41.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 450.0 м · полотно: остановка на подъёме готового полотна": 1,
+        "normal · 50.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "готовое полотно превышает предел выемки/насыпи у (179.0, 258.0): +2.12 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (240.0, 290.0): +2.53 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (34.0, 239.0): +2.09 м": 1,
+        "нет законченного маршрута: фрагментов 7, завершённых кандидатов 0, отказов полотна 0": 1
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 98,
+        "dedup_ms": 22.308,
+        "dry_cache_cells": 103720,
+        "duplicates": 51,
+        "fit": 1219,
+        "looked": 2377,
+        "measure_ms": 133.955,
+        "ms": 5377.832,
+        "probe_ms": 5209.608,
+        "probed": 576,
+        "refused": {
+          "вода": 760,
+          "кручи": 398,
+          "пробная прокладка не связала участок": 478
+        },
+        "segment_cache_edges": 28247,
+        "sites": 47
+      },
+      "search_ms": 6111.635,
+      "seed": "ushchelye",
+      "source_cached": true,
+      "source_hash": "c869752806119d7c99854de4d5df618759dbbdf56ed07671580d6e0119dddd4e",
+      "source_ms": 280364.378,
+      "source_open_ms": 25.432,
+      "terrain": {
+        "existing_paths": 88,
+        "forbidden_cells": 21319,
+        "max_height": 275.605651855469,
+        "min_height": -33.176643371582,
+        "river_cells": 55488,
+        "water_cells": 83794
+      },
+      "trails_accepted": 0,
+      "unexplained_failures": 0
+    }
+  ]
+}

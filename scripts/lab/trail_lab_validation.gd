@@ -5,6 +5,7 @@ const S := preload("res://scripts/trails/trail_standards.gd")
 const T := TrailElement.Profile
 const SCENARIOS := {calm = 0.8, normal = 1.0, fast = 1.15}
 const MAX_REPAIRS := 2
+const FAST_AVERAGE := 12.0 # m/s, explicit performance target; never an acceptance requirement
 
 static func footprint(d: TrailDefinition, allowed: Callable) -> PackedStringArray:
 	var errors := PackedStringArray()
@@ -25,7 +26,8 @@ static func footprint(d: TrailDefinition, allowed: Callable) -> PackedStringArra
 static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -> Dictionary:
 	var errors := d.validate()
 	errors.append_array(footprint(d, allowed))
-	var report := {accepted = false, errors = errors, issues = [], scenarios = {}, model = "final tread point model"}
+	var report := {accepted = false, errors = errors, issues = [], scenarios = {}, model = "final tread point model",
+		assessments = {safety = false, jump_intent = false, fast_pass = false}}
 	if not errors.is_empty(): return report
 	var survey := TrailSurvey.measure(h, d)
 	errors.append_array(survey.errors)
@@ -106,20 +108,23 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var to := e.station + e.length * 0.5
 			var v := speeds[clampi(floori(from), 0, n - 1)]
 			var w: Dictionary = windows[ei]
+			var rollable := _rollable_table(d, e)
 			if from < recovery: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление")
 			if w.has("speed_lo") and v < float(w.speed_lo) - 0.5:
-				_issue(report, scenario, ei, from, "скорость ниже окна %.1f < %.1f" % [v, w.speed_lo])
+				_issue(report, scenario, ei, from, "скорость ниже окна %.1f < %.1f" % [v, w.speed_lo], "jump_intent" if rollable else "safety")
 			if w.has("speed_hi") and v > float(w.speed_hi) + 0.5: _issue(report, scenario, ei, from, "скорость выше окна")
 			if e.profile in [T.GAP, T.TABLETOP, T.DROP]:
 				var land_to: float = w.get("land_to", to)
 				var flight: Dictionary = flights.get(ei, {flew = false})
 				if flight.get("unresolved", false): _issue(report, scenario, ei, from, "приземление не подтверждено в пределах расчёта")
 				if flight.flew:
-					if float(flight.land) < float(w.land_from) - 0.5 or float(flight.land) > land_to + 0.5:
-						_issue(report, scenario, ei, from, "приземление вне зоны на готовом полотне (%.1f м)" % flight.land)
+					if float(flight.land) < float(w.land_from) - 0.5:
+						_issue(report, scenario, ei, from, "приземление раньше задуманной зоны (%.1f м)" % flight.land, "jump_intent" if rollable else "safety")
+					if float(flight.land) > land_to + 0.5:
+						_issue(report, scenario, ei, from, "приземление за зоной на готовом полотне (%.1f м)" % flight.land)
 					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне")
 					land_to = maxf(land_to, float(flight.land))
-				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления")
+				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rollable else "safety")
 				var approach := S.tightest(d, maxf(0.0, from - 8.0), float(w.get("lip", from)))
 				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + 5.0))
 				if minf(approach, landing) < maxf(15.0, v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))):
@@ -128,13 +133,25 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 				recovery = land_to + maxf(5.0, v * 0.7)
 			elif TrailElement.places_objects(e.profile):
 				recovery = to + maxf(4.0, v * 0.5)
-		report.scenarios[scenario] = {speeds = speeds, top = Array(speeds).max(), windows = windows, flights = flights}
+		var seconds := 0.0
+		for speed in speeds: seconds += 1.0 / maxf(0.1, speed)
+		report.scenarios[scenario] = {speeds = speeds, top = Array(speeds).max(), windows = windows, flights = flights, seconds = seconds}
 	for issue: Dictionary in report.issues:
+		if issue.assessment != "safety": continue
 		var source := "полотно" if int(issue.element) < 0 else "элемент %d" % (int(issue.element) + 1)
 		errors.append("%s · %.1f м · %s: %s" % [issue.scenario, issue.station, source, issue.reason])
 	report.errors = errors
 	report.accepted = errors.is_empty()
+	report.assessments = {safety = report.accepted,
+		jump_intent = not report.issues.any(func(issue: Dictionary) -> bool: return issue.assessment == "jump_intent" or issue.element >= 0),
+		fast_pass = not report.issues.any(func(issue: Dictionary) -> bool: return issue.scenario == "fast" and issue.assessment == "safety") and report.scenarios.fast.seconds <= d.route_length() / FAST_AVERAGE}
 	return report
+
+static func _rollable_table(d: TrailDefinition, e: TrailElement) -> bool:
+	if e.profile != T.TABLETOP: return false
+	for span in d.open_spans:
+		if span.y >= e.station - e.length * 0.5 and span.x <= e.station + e.length * 0.5: return false
+	return true
 
 static func _level(d: TrailDefinition, station: float) -> int:
 	for section: Dictionary in d.sections:
@@ -185,11 +202,11 @@ static func fly_surface(y: PackedFloat32Array, start: float, entry: float, end: 
 			air = 0.0
 	return {flew = false, unresolved = airborne, land = s, impact = 0.0, exit_speed = v}
 
-static func _issue(report: Dictionary, scenario: String, element: int, station: float, reason: String) -> void:
+static func _issue(report: Dictionary, scenario: String, element: int, station: float, reason: String, assessment := "safety") -> void:
 	# One diagnostic per element/reason/scenario; avoid metre-by-metre walls of text.
 	for issue: Dictionary in report.issues:
 		if issue.scenario == scenario and issue.element == element and issue.reason == reason: return
-	report.issues.append({scenario = scenario, element = element, station = station, reason = reason})
+	report.issues.append({scenario = scenario, element = element, station = station, reason = reason, assessment = assessment})
 
 ## A local repair never removes features or changes a cut/open span. Rebuild from fresh source afterwards.
 static func repair(d: TrailDefinition, report: Dictionary, repaired: Dictionary) -> Dictionary:

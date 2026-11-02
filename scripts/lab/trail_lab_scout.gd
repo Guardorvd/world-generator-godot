@@ -12,7 +12,7 @@ static var sites: Array[Dictionary] = []
 static var stats := {}
 
 static func snapshot() -> Dictionary:
-	return {size = Terrain.world_size, seed = Terrain.world_seed, heights = Terrain.world_h, water = Terrain.world_wet}
+	return {input = Terrain.world_input, size = Terrain.world_size, seed = Terrain.world_seed, heights = Terrain.world_h, water = Terrain.world_wet}
 
 static func find(seed_value: int) -> Array[Dictionary]:
 	var job := Job.new(snapshot())

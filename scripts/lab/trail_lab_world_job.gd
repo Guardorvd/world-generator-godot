@@ -12,7 +12,17 @@ func _init(id: int, seed_value: int, snapshot := {}) -> void:
 
 func run() -> Dictionary:
 	var started := Time.get_ticks_usec()
-	var terrain := Terrain.prepare_world(seed, source)
+	var terrain: Dictionary
+	if source.has("game_seed") or source.has("snapshot_path"):
+		var adapter := preload("res://scripts/lab/trail_lab_game_source.gd")
+		var input
+		if source.has("snapshot_path"):
+			var opened := adapter.open(source.snapshot_path)
+			if opened.has("error"): return {request_id = request_id, error = opened.error}
+			input = opened.input
+		else: input = adapter.generate(source.game_seed)
+		terrain = adapter.terrain(input, source.get("dry_channels", false))
+	else: terrain = Terrain.prepare_world(seed, source)
 	var geography_ms := (Time.get_ticks_usec() - started) / 1000.0
 	var scout := ScoutJob.new(terrain)
 	var sites := scout.find(seed)

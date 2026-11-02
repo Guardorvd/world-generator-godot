@@ -25,6 +25,12 @@ func set_world(snapshot: Dictionary, places: Array) -> void:
 			var t := inverse_lerp(low, maxf(low + 1.0, high), float(snapshot.heights[i]))
 			var color := Color(0.12, 0.22, 0.16).lerp(Color(0.75, 0.73, 0.57), t)
 			if snapshot.water[i] != 0: color = Color(0.12, 0.32, 0.55)
+			var input = snapshot.get("input")
+			if input != null:
+				# The scout's blocked mask also contains infrastructure; it is not all water.
+				color = Color(0.12, 0.22, 0.16).lerp(Color(0.75, 0.73, 0.57), t)
+				if input.forbidden[i] != 0: color = Color(0.52, 0.32, 0.20)
+				if input.water[i] != 0 or input.rivers[i] != 0: color = Color(0.12, 0.32, 0.55)
 			image.set_pixel(x, z, color)
 	texture = ImageTexture.create_from_image(image)
 	queue_redraw()

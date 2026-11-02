@@ -182,6 +182,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 			errors.append_array(report.errors)
 		cumulative.validation_ms += (Time.get_ticks_usec() - stage) / 1000.0
 		if changed: continue # Every repair gets a new bake and ALL scenarios are checked again.
+		errors.append_array(Sites.final_conflicts(routes))
 		result.timings = cumulative
 		result.timings.build_attempts = attempt + 1
 		result.source = source

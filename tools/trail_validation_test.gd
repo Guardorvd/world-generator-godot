@@ -44,6 +44,13 @@ func run() -> void:
 	check(report.accepted, "continuous straight is accepted: %s" % report.errors)
 	check(report.scenarios.size() == 3, "all three ride scenarios evaluated")
 	check(report.scenarios.calm.top < report.scenarios.fast.top, "calm and fast are distinct")
+	var table := TrailElementLibrary.make(TrailElement.Profile.TABLETOP, 60, 18, 0.35)
+	d.elements = [table]
+	check(V._rollable_table(d, table), "continuous table has a safe roll option")
+	d.open_spans = PackedVector3Array([Vector3(58, 62, 2)])
+	check(not V._rollable_table(d, table), "table over an open span cannot bypass jump safety")
+	d.open_spans = PackedVector3Array()
+	d.elements = []
 	var blocked := V.measure(h, d, func(p: Vector2) -> bool: return p.y > 100)
 	check(not blocked.accepted and not blocked.errors.is_empty(), "final surface forbidden zone rejects with reason")
 	# The same incoming speed, but different FINISHED landing height.

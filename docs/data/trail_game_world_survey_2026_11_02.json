@@ -1,0 +1,538 @@
+{
+  "policy": "strict game water; max cut/fill 2 m",
+  "sample": "equally spaced indices in deterministic scout order; one default project per site; no rerolls",
+  "schema": 2,
+  "seeds": [
+    "7",
+    "111",
+    "ushchelye"
+  ],
+  "site_limit": 4,
+  "worlds": [
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "built": false,
+          "index": 0,
+          "line_score": {},
+          "project_ms": 3533.094,
+          "reasons": [
+            "линия не проложилась: проба до 280 м, отказов полотна 10"
+          ],
+          "walk_reasons": {
+            "запрещённая зона/край полотна у 230.5 м": 10
+          }
+        },
+        {
+          "accepted": true,
+          "built": true,
+          "elements": 1,
+          "index": 15,
+          "length": 155.716705322266,
+          "line_score": {
+            "corridor": 0.00309869494437676,
+            "descent": 0.21780031405433,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.0650238548368602,
+            "length": 0.194645872563124,
+            "rhythm": 0.0,
+            "total": 0.0631010246724435
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 33.493,
+            "earthworks_ms": 277.636,
+            "prepare_total_ms": 853.149,
+            "setup_ms": 358.228,
+            "surface_ms": 140.496,
+            "technical_ms": 0.01,
+            "validation_ms": 74.231
+          },
+          "project_ms": 2191.958,
+          "reasons": [],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": false,
+          "index": 30,
+          "line_score": {},
+          "project_ms": 880.247,
+          "reasons": [
+            "линия не проложилась: проба до 76 м, отказов полотна 0"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": true,
+          "index": 45,
+          "line_score": {
+            "corridor": 0.526699276656551,
+            "descent": 0.247680658413498,
+            "earthworks": 0.180412112713164,
+            "element_space": 0.0,
+            "endpoints": 0.723372515021815,
+            "length": 0.294253276735544,
+            "rhythm": 0.0,
+            "total": 0.268877797854468
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 1.442,
+            "earthworks_ms": 321.87,
+            "prepare_total_ms": 928.081,
+            "setup_ms": 312.772,
+            "surface_ms": 197.575,
+            "technical_ms": 0.126,
+            "validation_ms": 90.99
+          },
+          "project_ms": 2336.809,
+          "reasons": [
+            "земляные работы затронули воду, запрет или существующий путь у (395.0, 276.0)"
+          ],
+          "walk_reasons": {}
+        }
+      ],
+      "candidates_found": 60,
+      "game_stages_ms": {
+        "climate": 2065.746,
+        "geography": 995.211,
+        "hydrology": 13997.592,
+        "lakes": 46.552,
+        "landmarks": 2714.438,
+        "ocean": 1030.012,
+        "relief": 13392.011,
+        "rivers": 6013.308,
+        "road_surface": 254.662,
+        "sites": 1645.849,
+        "trail_plan": 3195.546,
+        "trails": 174146.465,
+        "vegetation": 4710.154
+      },
+      "handled_rejections": 3,
+      "projects_built": 2,
+      "refusal_categories": {
+        "line_geometry_or_footprint": 2,
+        "protected_earthworks": 1
+      },
+      "refusals": {
+        "земляные работы затронули воду, запрет или существующий путь у (395.0, 276.0)": 1,
+        "линия не проложилась: проба до 280 м, отказов полотна 10": 1,
+        "линия не проложилась: проба до 76 м, отказов полотна 0": 1
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 121,
+        "dedup_ms": 30.624,
+        "dry_cache_cells": 86109,
+        "duplicates": 61,
+        "fit": 578,
+        "looked": 2377,
+        "measure_ms": 87.002,
+        "ms": 5275.175,
+        "probe_ms": 5150.459,
+        "probed": 576,
+        "refused": {
+          "вода": 1673,
+          "кручи": 126,
+          "пробная прокладка не связала участок": 455
+        },
+        "segment_cache_edges": 24691,
+        "sites": 60
+      },
+      "search_ms": 6049.436,
+      "seed": "7",
+      "source_cached": true,
+      "source_hash": "b5d5b68d234b5a8b0f365360cf89cd72dece61dcc0b2be92980a78af8fe47954",
+      "source_ms": 246950.668,
+      "source_open_ms": 40.032,
+      "terrain": {
+        "existing_paths": 91,
+        "forbidden_cells": 19862,
+        "max_height": 214.369537353516,
+        "min_height": -37.9148216247559,
+        "river_cells": 31947,
+        "water_cells": 270077
+      },
+      "trails_accepted": 1,
+      "unexplained_failures": 0
+    },
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "built": true,
+          "index": 0,
+          "line_score": {
+            "corridor": 0.0846929828129424,
+            "descent": 0.423346353072442,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.539455578598965,
+            "length": 0.294511923342943,
+            "rhythm": 0.0,
+            "total": 0.15801851295407
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 16.081,
+            "earthworks_ms": 529.724,
+            "prepare_total_ms": 1113.07,
+            "setup_ms": 302.246,
+            "surface_ms": 191.896,
+            "technical_ms": 0.011,
+            "validation_ms": 84.61
+          },
+          "project_ms": 1808.703,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (362.0, 370.0): +2.09 м"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": true,
+          "index": 14,
+          "line_score": {
+            "corridor": 0.833467641001174,
+            "descent": 0.641410603455275,
+            "earthworks": 0.535270099695967,
+            "element_space": 0.0,
+            "endpoints": 0.521164856165735,
+            "length": 0.35169404333288,
+            "rhythm": 0.0,
+            "total": 0.427270251992742
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 47.277,
+            "earthworks_ms": 1008.79,
+            "prepare_total_ms": 2083.282,
+            "setup_ms": 332.121,
+            "surface_ms": 304.236,
+            "technical_ms": 0.015,
+            "validation_ms": 431.603
+          },
+          "project_ms": 11045.385,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (362.0, 334.0): +2.36 м"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": true,
+          "built": true,
+          "elements": 1,
+          "index": 28,
+          "length": 183.708236694336,
+          "line_score": {
+            "corridor": 0.199841307779269,
+            "descent": 0.296784037408153,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.268268729549358,
+            "length": 0.229635298699141,
+            "rhythm": 0.0,
+            "total": 0.133785492200643
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 34.27,
+            "earthworks_ms": 290.893,
+            "prepare_total_ms": 829.168,
+            "setup_ms": 289.219,
+            "surface_ms": 179.815,
+            "technical_ms": 0.014,
+            "validation_ms": 66.256
+          },
+          "project_ms": 845.199,
+          "reasons": [],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": false,
+          "index": 42,
+          "line_score": {},
+          "project_ms": 578.282,
+          "reasons": [
+            "линия не проложилась: проба до 168 м, отказов полотна 1"
+          ],
+          "walk_reasons": {
+            "запрещённая зона/край полотна у 137.0 м": 1
+          }
+        }
+      ],
+      "candidates_found": 56,
+      "game_stages_ms": {
+        "climate": 1948.008,
+        "geography": 960.957,
+        "hydrology": 12605.196,
+        "lakes": 24.689,
+        "landmarks": 3021.652,
+        "ocean": 760.77,
+        "relief": 12477.761,
+        "rivers": 7342.068,
+        "road_surface": 560.175,
+        "sites": 2083.638,
+        "trail_plan": 3516.509,
+        "trails": 217299.803,
+        "vegetation": 5641.121
+      },
+      "handled_rejections": 3,
+      "projects_built": 3,
+      "refusal_categories": {
+        "earthwork_limit": 2,
+        "line_geometry_or_footprint": 1
+      },
+      "refusals": {
+        "готовое полотно превышает предел выемки/насыпи у (362.0, 334.0): +2.36 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (362.0, 370.0): +2.09 м": 1,
+        "линия не проложилась: проба до 168 м, отказов полотна 1": 1
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 161,
+        "dedup_ms": 38.717,
+        "dry_cache_cells": 95949,
+        "duplicates": 105,
+        "fit": 991,
+        "looked": 2377,
+        "measure_ms": 101.22,
+        "ms": 5494.816,
+        "probe_ms": 5347.253,
+        "probed": 576,
+        "refused": {
+          "вода": 1313,
+          "кручи": 73,
+          "пробная прокладка не связала участок": 415
+        },
+        "segment_cache_edges": 27051,
+        "sites": 56
+      },
+      "search_ms": 6216.934,
+      "seed": "111",
+      "source_cached": true,
+      "source_hash": "4db9b4e71bf31f8645868949dc326bea94ef56927566bcb3ce428c92fc269a4e",
+      "source_ms": 300536.336,
+      "source_open_ms": 24.968,
+      "terrain": {
+        "existing_paths": 100,
+        "forbidden_cells": 25205,
+        "max_height": 208.822555541992,
+        "min_height": -44.6882019042969,
+        "river_cells": 45672,
+        "water_cells": 190527
+      },
+      "trails_accepted": 1,
+      "unexplained_failures": 0
+    },
+    {
+      "attempts": [
+        {
+          "accepted": false,
+          "built": true,
+          "index": 0,
+          "line_score": {
+            "corridor": 0.0514424157314917,
+            "descent": 0.444602687852629,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.248748608169259,
+            "length": 0.254914422184229,
+            "rhythm": 0.0289180706732072,
+            "total": 0.128953893199344
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 5.322,
+            "earthworks_ms": 684.591,
+            "prepare_total_ms": 1270.531,
+            "setup_ms": 354.071,
+            "surface_ms": 171.728,
+            "technical_ms": 0.015,
+            "validation_ms": 54.458
+          },
+          "project_ms": 840.176,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (36.0, 222.0): +2.06 м"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": true,
+          "index": 11,
+          "line_score": {
+            "corridor": 0.831052152917405,
+            "descent": 0.490949792140262,
+            "earthworks": 0.407222132648641,
+            "element_space": 0.0,
+            "endpoints": 0.500929222131993,
+            "length": 0.359515613019466,
+            "rhythm": 0.0,
+            "total": 0.387876782717769
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 24.17,
+            "earthworks_ms": 416.244,
+            "prepare_total_ms": 1517.979,
+            "setup_ms": 466.737,
+            "surface_ms": 386.18,
+            "technical_ms": 0.425,
+            "validation_ms": 143.946
+          },
+          "project_ms": 2771.043,
+          "reasons": [
+            "земляные работы затронули воду, запрет или существующий путь у (228.0, 246.0)"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": true,
+          "index": 23,
+          "line_score": {
+            "corridor": 0.799962062514185,
+            "descent": 0.611984526784779,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.205755441660127,
+            "length": 0.22469358921051,
+            "rhythm": 0.351052854182934,
+            "total": 0.342010421992772
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 2.926,
+            "earthworks_ms": 527.115,
+            "prepare_total_ms": 1261.588,
+            "setup_ms": 369.657,
+            "surface_ms": 162.359,
+            "technical_ms": 0.014,
+            "validation_ms": 118.999
+          },
+          "project_ms": 2208.804,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (157.0, 262.0): -2.26 м",
+            "calm · 71.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 72.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 73.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        },
+        {
+          "accepted": false,
+          "built": true,
+          "index": 35,
+          "line_score": {
+            "corridor": 0.914785228087475,
+            "descent": 0.691708385786374,
+            "earthworks": 0.0,
+            "element_space": 0.0,
+            "endpoints": 0.0,
+            "length": 0.279370277971029,
+            "rhythm": 0.0,
+            "total": 0.310661296387225
+          },
+          "preparation": {
+            "build_attempts": 1,
+            "constraints_ms": 2.439,
+            "earthworks_ms": 2480.134,
+            "prepare_total_ms": 3200.721,
+            "setup_ms": 314.119,
+            "surface_ms": 181.241,
+            "technical_ms": 0.017,
+            "validation_ms": 135.984
+          },
+          "project_ms": 2689.472,
+          "reasons": [
+            "готовое полотно превышает предел выемки/насыпи у (267.0, 326.0): -2.11 м",
+            "calm · 22.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "normal · 22.0 м · полотно: не хватает торможения перед поворотом/элементом",
+            "fast · 22.0 м · полотно: не хватает торможения перед поворотом/элементом"
+          ],
+          "walk_reasons": {}
+        }
+      ],
+      "candidates_found": 47,
+      "game_stages_ms": {
+        "climate": 2147.732,
+        "geography": 1002.628,
+        "hydrology": 12215.771,
+        "lakes": 58.286,
+        "landmarks": 3147.979,
+        "ocean": 359.033,
+        "relief": 14198.021,
+        "rivers": 8853.179,
+        "road_surface": 185.463,
+        "sites": 1878.121,
+        "trail_plan": 2790.262,
+        "trails": 196272.509,
+        "vegetation": 4773.119
+      },
+      "handled_rejections": 4,
+      "projects_built": 4,
+      "refusal_categories": {
+        "earthwork_limit": 3,
+        "protected_earthworks": 1,
+        "ride_or_surface_validation": 2
+      },
+      "refusals": {
+        "calm · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "calm · 71.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "fast · 73.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 22.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "normal · 72.0 м · полотно: не хватает торможения перед поворотом/элементом": 1,
+        "готовое полотно превышает предел выемки/насыпи у (157.0, 262.0): -2.26 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (267.0, 326.0): -2.11 м": 1,
+        "готовое полотно превышает предел выемки/насыпи у (36.0, 222.0): +2.06 м": 1,
+        "земляные работы затронули воду, запрет или существующий путь у (228.0, 246.0)": 1
+      },
+      "search": {
+        "budget": 576,
+        "budget_exhausted": true,
+        "confirmed": 98,
+        "dedup_ms": 23.299,
+        "dry_cache_cells": 103720,
+        "duplicates": 51,
+        "fit": 1219,
+        "looked": 2377,
+        "measure_ms": 111.003,
+        "ms": 5197.078,
+        "probe_ms": 5050.018,
+        "probed": 576,
+        "refused": {
+          "вода": 760,
+          "кручи": 398,
+          "пробная прокладка не связала участок": 478
+        },
+        "segment_cache_edges": 28247,
+        "sites": 47
+      },
+      "search_ms": 5909.2,
+      "seed": "ushchelye",
+      "source_cached": true,
+      "source_hash": "c869752806119d7c99854de4d5df618759dbbdf56ed07671580d6e0119dddd4e",
+      "source_ms": 280364.378,
+      "source_open_ms": 23.569,
+      "terrain": {
+        "existing_paths": 88,
+        "forbidden_cells": 21319,
+        "max_height": 275.605651855469,
+        "min_height": -33.176643371582,
+        "river_cells": 55488,
+        "water_cells": 83794
+      },
+      "trails_accepted": 0,
+      "unexplained_failures": 0
+    }
+  ]
+}

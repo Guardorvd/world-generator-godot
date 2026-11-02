@@ -2,6 +2,7 @@ extends RefCounted
 const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
 const Terrain := preload("res://scripts/lab/trail_lab_terrain.gd")
 static func snapshot() -> GenerationInput:
+	if Terrain.window_mode and Terrain.window_input != null: return Terrain.window_input.duplicate(true)
 	var input := GenerationInput.new()
 	input.size = Vector2i(Terrain.CELLS, Terrain.CELLS)
 	input.heights = (Terrain._base_cells if not Terrain._base_cells.is_empty() else Terrain.cells).duplicate()

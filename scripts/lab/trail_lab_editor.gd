@@ -28,6 +28,7 @@ var ground_choice := OptionButton.new()
 var generator_style := OptionButton.new()
 var generator_layout := OptionButton.new()
 var generator_gaps := CheckBox.new()
+var generator_short := CheckBox.new()
 var route_choice := OptionButton.new()
 var element_choice := OptionButton.new()
 var surface_choice := OptionButton.new()
@@ -107,11 +108,14 @@ func _ready() -> void:
 	generator_gaps.text = "Разрешить обязательные гэпы"
 	generator_gaps.tooltip_text = "Только для подходящего характера, сложности от 70 % и изменения рельефа от 65 %; каждый гэп проверяется"
 	generation_box.add_child(generator_gaps)
+	generator_short.text = "Самостоятельная короткая трасса (выбрать финиш заранее)"
+	generator_short.tooltip_text = "Для места с пробным коридором: отдельный финиш, место остановки, выкат и проверка ценности маршрута"
+	generation_box.add_child(generator_short)
 	var generate_button := Button.new()
 	generate_button.text = "Построить с этими настройками"
 	generate_button.pressed.connect(func() -> void:
 		generator_requested.emit({style = Generator.ORDER[generator_style.selected], difficulty = numbers.gen_difficulty.value / 100.0, modification = numbers.gen_modification.value / 100.0,
-			park_layout = (["auto"] + Generator.PARK_LAYOUTS)[generator_layout.selected], mandatory_gaps = generator_gaps.button_pressed}))
+			park_layout = (["auto"] + Generator.PARK_LAYOUTS)[generator_layout.selected], mandatory_gaps = generator_gaps.button_pressed, short_route = generator_short.button_pressed}))
 	generation_box.add_child(generate_button)
 	var line_box := _add_section(box, "Линия по рельефу (участок мира)", false)
 	var zone := Label.new()
@@ -330,4 +334,5 @@ func set_generator_site(styles: Array, selected: String, settings: Dictionary) -
 	numbers.gen_difficulty.value = float(settings.get("difficulty", 0.5)) * 100.0
 	numbers.gen_modification.value = float(settings.get("modification", 0.5)) * 100.0
 	generator_gaps.button_pressed = settings.get("mandatory_gaps", false)
+	generator_short.button_pressed = settings.get("short_route", false)
 	generator_layout.select(maxi(0, (["auto"] + Generator.PARK_LAYOUTS).find(settings.get("park_layout", "auto"))))

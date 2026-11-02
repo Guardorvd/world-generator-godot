@@ -206,6 +206,7 @@ func _ready() -> void:
 	project_panel.build_requested.connect(build_draft_project)
 	project_panel.save_requested.connect(save_project_slot)
 	project_panel.restore_requested.connect(restore_project_slot)
+	project_panel.world_requested.connect(open_game_world)
 	canvas.add_child(editor)
 	editor.visible = false
 	editor.course_selected.connect(func(index: int, kind: String, style: String, ground: String) -> void:
@@ -358,14 +359,30 @@ func generate_random(new_terrain: bool) -> bool:
 
 ## v3: мир размером с карту игры и места трасс — в фоновом потоке (лаборатория остаётся живой); по готовности —
 ## список мест и первое место. Повторное нажатие во время генерации ничего не делает.
-func generate_world(seed_value: int) -> bool:
+func open_game_world(source: Dictionary) -> bool:
+	if source.has("save_snapshot"):
+		if TrailLabTerrain.world_input == null or str(source.save_snapshot).is_empty():
+			show_message("Откройте игровой мир и укажите путь .res для снимка")
+			return false
+		var error := ResourceSaver.save(TrailLabTerrain.world_input, source.save_snapshot)
+		show_message("Снимок сохранён" if error == OK else "Не удалось сохранить снимок: %s" % error)
+		return error == OK
+	return generate_world(0, source)
+
+func generate_world(seed_value: int, source := {}) -> bool:
 	if _world_thread != null: return false
 	show_message("Мир %d: география как в игре и поиск мест…" % seed_value)
 	generator_label.visible = true
 	generator_label.text = "Генерирую мир %d…" % seed_value
+	if source.has("game_seed"):
+		generator_label.text = "Игровой мир «%s»: подготовка и поиск…" % source.game_seed
+		show_message(generator_label.text)
+	elif source.has("snapshot_path"):
+		generator_label.text = "Открываю снимок мира и ищу места…"
+		show_message(generator_label.text)
 	_world_started = Time.get_ticks_msec()
 	_world_request += 1
-	_world_job = Sites.WorldJob.new(_world_request, seed_value, TrailLabTerrain.world_snapshot())
+	_world_job = Sites.WorldJob.new(_world_request, seed_value, source if not source.is_empty() else TrailLabTerrain.world_snapshot())
 	_world_thread = Thread.new()
 	var error := _world_thread.start(_world_job.run)
 	if error != OK:
@@ -382,6 +399,9 @@ func _poll_world() -> void:
 	_world_job = null
 	if not result is Dictionary:
 		show_message("Задача мира завершилась без результата")
+		return
+	if result.has("error"):
+		show_message(str(result.error))
 		return
 	if not Sites.publish_world(result, _world_request): return
 	var count := Sites.sites.size()
@@ -437,8 +457,17 @@ func _refresh_projects() -> void:
 	project_panel.map.queue_redraw()
 	if draft_project != null:
 		var m := Project.metrics(draft_project)
-		project_panel.description.text = "%s · сид %d · %.0f м · элементов %d · %s" % [m.title, m.seed, m.length, m.elements, "полотно проверено" if m.accepted else "проект без проверки полотна"]
+		var project_status := "полотно проверено" if m.accepted else "проект без проверки полотна"
+		if not m.accepted and draft_project.report.get("base_surface", {}).get("accepted", false): project_status = "базовое полотно проверено; итоговая сцена ещё не проверена"
+		if not m.accepted and draft_project.report.has("reason"): project_status = "отклонён: " + str(draft_project.report.reason)
+		project_panel.description.text = "%s · сид %d · %.0f м · элементов %d · %s" % [m.title, m.seed, m.length, m.elements, project_status]
 		if draft_project.source.river_policy == draft_project.source.RiverPolicy.LAB_DRY_CHANNELS: project_panel.description.text += " · сухие русла (Trail Lab)"
+		var validation: Dictionary = draft_project.report.get("validation", {})
+		if not validation.is_empty():
+			var assessments: Dictionary = validation.values()[0].get("assessments", {})
+			if not assessments.is_empty():
+				var jump_result := "не предусмотрены" if int(draft_project.report.get("jumps", 0)) == 0 else ("да" if assessments.jump_intent else "не подтверждены")
+				project_panel.description.text += "\nРасчёт: безопасность %s · задуманные прыжки %s · быстро (≥12 м/с в среднем) %s" % ["да" if assessments.safety else "нет", jump_result, "да" if assessments.fast_pass else "не подтверждено"]
 	var compared := Project.compare(variants.get("A"), variants.get("B"))
 	project_panel.comparison.text = "Сохраните удачные варианты А и Б после проверки полотна. Файлы переживают перезапуск."
 	if not compared.has("error"):
@@ -497,6 +526,9 @@ func configure_generator(settings: Dictionary) -> bool:
 		site.settings = settings.duplicate(true)
 		Sites._built.erase(Sites.current)
 		return select_site(Sites.current)
+	if settings.get("short_route", false):
+		show_message("Короткий маршрут требует выбранного места с пробным коридором")
+		return false
 	TrailLabBuilder.style = settings.style
 	TrailLabBuilder.difficulty = settings.difficulty
 	TrailLabBuilder.modification = settings.modification

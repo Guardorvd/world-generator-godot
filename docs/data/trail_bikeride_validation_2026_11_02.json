@@ -1,0 +1,513 @@
+{
+  "cases": [
+    {
+      "name": "straight",
+      "rides": [
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00321197509765625,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.031784057617,
+          "status": "finished",
+          "target_speed": 4.0,
+          "time": 44.0666666666667
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00171661376953125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.028656005859,
+          "status": "finished",
+          "target_speed": 10.0,
+          "time": 18.9333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": true,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00141143798828125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.207901000977,
+          "status": "finished",
+          "target_speed": 16.0,
+          "time": 12.0333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00177764892578125,
+          "policy": "validator normal braking profile",
+          "safe_pass": true,
+          "station": 177.155548095703,
+          "status": "finished",
+          "target_speed": 0.0,
+          "time": 18.0166666666667
+        }
+      ],
+      "validator": {
+        "accepted": true,
+        "assessments": {
+          "fast_pass": false,
+          "jump_intent": true,
+          "safety": true
+        },
+        "issues": []
+      }
+    },
+    {
+      "name": "rollable_table",
+      "rides": [
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00321197509765625,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.004318237305,
+          "status": "finished",
+          "target_speed": 4.0,
+          "time": 44.1833333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00171661376953125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.110717773438,
+          "status": "finished",
+          "target_speed": 10.0,
+          "time": 18.9333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": true,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00145721435546875,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.195007324219,
+          "status": "finished",
+          "target_speed": 16.0,
+          "time": 12.0333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00177764892578125,
+          "policy": "validator normal braking profile",
+          "safe_pass": true,
+          "station": 177.136688232422,
+          "status": "finished",
+          "target_speed": 0.0,
+          "time": 18.0166666666667
+        }
+      ],
+      "validator": {
+        "accepted": true,
+        "assessments": {
+          "fast_pass": false,
+          "jump_intent": false,
+          "safety": true
+        },
+        "issues": [
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "calm",
+            "station": 46.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "normal",
+            "station": 46.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "fast",
+            "station": 46.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "table_jump",
+      "rides": [
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00321197509765625,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.037704467773,
+          "status": "finished",
+          "target_speed": 4.0,
+          "time": 44.3166666666667
+        },
+        {
+          "air_time": 0.383333333333333,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [
+            {
+              "impact": 2.28256341457367,
+              "station": 63.568603515625
+            }
+          ],
+          "max_impact": 2.28256341457367,
+          "max_offset": 0.00171661376953125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.058624267578,
+          "status": "finished",
+          "target_speed": 10.0,
+          "time": 18.9166666666667
+        },
+        {
+          "air_time": 0.700000000000001,
+          "fast_pass": true,
+          "jump_intent": true,
+          "landings": [
+            {
+              "impact": 2.86783695220947,
+              "station": 70.2763061523438
+            }
+          ],
+          "max_impact": 2.86783695220947,
+          "max_offset": 0.00146484375,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.151702880859,
+          "status": "finished",
+          "target_speed": 16.0,
+          "time": 12.1333333333333
+        },
+        {
+          "air_time": 0.416666666666667,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [
+            {
+              "impact": 2.84722504615784,
+              "station": 64.2154235839844
+            }
+          ],
+          "max_impact": 2.84722504615784,
+          "max_offset": 0.00177764892578125,
+          "policy": "validator normal braking profile",
+          "safe_pass": true,
+          "station": 177.007949829102,
+          "status": "finished",
+          "target_speed": 0.0,
+          "time": 18.1
+        }
+      ],
+      "validator": {
+        "accepted": true,
+        "assessments": {
+          "fast_pass": false,
+          "jump_intent": false,
+          "safety": true
+        },
+        "issues": [
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "скорость ниже окна 9.9 < 14.5",
+            "scenario": "calm",
+            "station": 57.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "приземление раньше задуманной зоны (63.9 м)",
+            "scenario": "calm",
+            "station": 57.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "скорость ниже окна 11.2 < 14.5",
+            "scenario": "normal",
+            "station": 57.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "приземление раньше задуманной зоны (65.6 м)",
+            "scenario": "normal",
+            "station": 57.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "скорость ниже окна 12.0 < 14.5",
+            "scenario": "fast",
+            "station": 57.0
+          },
+          {
+            "assessment": "jump_intent",
+            "element": 0,
+            "reason": "приземление раньше задуманной зоны (66.7 м)",
+            "scenario": "fast",
+            "station": 57.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "gap_short_runin",
+      "rides": [
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00321197509765625,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.065734863281,
+          "status": "finished",
+          "target_speed": 4.0,
+          "time": 44.6666666666667
+        },
+        {
+          "air_time": 0.65,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [
+            {
+              "impact": 5.08899221420288,
+              "station": 9.48554992675781
+            },
+            {
+              "impact": 0.0,
+              "station": 13.0133819580078
+            }
+          ],
+          "max_impact": 5.08899221420288,
+          "max_offset": 0.00403594970703125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.132308959961,
+          "status": "finished",
+          "target_speed": 10.0,
+          "time": 19.05
+        },
+        {
+          "air_time": 0.833333333333334,
+          "fast_pass": true,
+          "jump_intent": true,
+          "landings": [
+            {
+              "impact": 3.62531345367432,
+              "station": 16.4355773925781
+            }
+          ],
+          "max_impact": 3.62531345367432,
+          "max_offset": 0.00385284423828125,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 177.107818603516,
+          "status": "finished",
+          "target_speed": 16.0,
+          "time": 12.0666666666667
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.00119781494140625,
+          "policy": "validator normal braking profile",
+          "safe_pass": false,
+          "station": 4.15464782714844,
+          "status": "timeout",
+          "target_speed": 0.0,
+          "time": 120.0
+        }
+      ],
+      "validator": {
+        "accepted": false,
+        "assessments": {
+          "fast_pass": false,
+          "jump_intent": false,
+          "safety": false
+        },
+        "issues": [
+          {
+            "assessment": "safety",
+            "element": -1,
+            "reason": "остановка на подъёме готового полотна",
+            "scenario": "calm",
+            "station": 5.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "скорость ниже окна 3.9 < 13.3",
+            "scenario": "calm",
+            "station": 1.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "calm",
+            "station": 1.0
+          },
+          {
+            "assessment": "safety",
+            "element": -1,
+            "reason": "остановка на подъёме готового полотна",
+            "scenario": "normal",
+            "station": 5.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "скорость ниже окна 4.0 < 13.3",
+            "scenario": "normal",
+            "station": 1.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "normal",
+            "station": 1.0
+          },
+          {
+            "assessment": "safety",
+            "element": -1,
+            "reason": "остановка на подъёме готового полотна",
+            "scenario": "fast",
+            "station": 5.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "скорость ниже окна 4.0 < 13.3",
+            "scenario": "fast",
+            "station": 1.0
+          },
+          {
+            "assessment": "safety",
+            "element": 0,
+            "reason": "прыжок без подтверждённого отрыва и приземления",
+            "scenario": "fast",
+            "station": 1.0
+          }
+        ]
+      }
+    },
+    {
+      "name": "sharp_turn",
+      "rides": [
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.851417541503906,
+          "policy": "constant speed stress",
+          "safe_pass": true,
+          "station": 167.040756225586,
+          "status": "finished",
+          "target_speed": 4.0,
+          "time": 43.8333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 2.55523681640625,
+          "policy": "constant speed stress",
+          "safe_pass": false,
+          "station": 83.2270431518555,
+          "status": "left_tread",
+          "target_speed": 10.0,
+          "time": 8.81666666666667
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 2.56291198730469,
+          "policy": "constant speed stress",
+          "safe_pass": false,
+          "station": 81.9419021606445,
+          "status": "left_tread",
+          "target_speed": 16.0,
+          "time": 5.48333333333333
+        },
+        {
+          "air_time": 0.0,
+          "fast_pass": false,
+          "jump_intent": false,
+          "landings": [],
+          "max_impact": 0.0,
+          "max_offset": 0.907562255859375,
+          "policy": "validator normal braking profile",
+          "safe_pass": true,
+          "station": 167.122711181641,
+          "status": "finished",
+          "target_speed": 0.0,
+          "time": 19.7
+        }
+      ],
+      "validator": {
+        "accepted": true,
+        "assessments": {
+          "fast_pass": false,
+          "jump_intent": true,
+          "safety": true
+        },
+        "issues": []
+      }
+    }
+  ],
+  "model": "production BikeRide + BikeController, contact_model=true, dt=1/60, no resets"
+}

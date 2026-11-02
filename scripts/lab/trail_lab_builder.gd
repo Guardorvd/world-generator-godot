@@ -3,6 +3,8 @@ const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
 const Composition := preload("res://scripts/lab/trail_lab_composition.gd")
 const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
+const RouteContract := preload("res://scripts/lab/trail_lab_route_contract.gd")
+const BaseSurface := preload("res://scripts/lab/trail_lab_base_surface.gd")
 ## Trail Lab only: bounded terrain routes, independent style/difficulty/construction settings,
 ## planned approach/feature/recovery chains and optional engineered crossings.
 ## Deterministic in terrain, seed and settings. Final acceptance belongs to Fixture.prepare.
@@ -15,7 +17,7 @@ const LOOK := 20.0
 const SEP := 14.0        # своя линия не ближе этого (кроме последних OWN_SKIP м)
 const OWN_SKIP := 40.0
 const CLIFF := 0.5       # круче (м на м) наружный откос поворота — штраф
-const GOAL_REACH := 20.0 # ближе к цели — финиш, м
+const GOAL_REACH := RouteContract.FINISH_RADIUS
 const CLIMB_MAX := 0.08  # круче подъём на шаге — почти запрет (на стенке уступа седок встаёт)
 ## Стили: целевой уклон (спуск — отрицательный), длина, ширина, извилистость, крейсерская
 ## скорость и доля перегрузки в поворотах (под неё — радиус линии).
@@ -83,6 +85,7 @@ static func build_project(input: GenerationInput, seed_value: int, style_name: S
 	if float(settings.get("modification", 0.5)) > float(input.earthwork_limits.modification):
 		return _project_result([], {accepted = false, reason = "превышен предел изменения рельефа"}, [], PackedFloat32Array(), seed_value)
 	var context := input.duplicate(true) as GenerationInput
+	settings._source = context
 	var result := _build_core(context.ground, minf(context.size.x, context.size.y) * context.cell_size, seed_value, style_name, context.blocked, context.apply_cuts, settings)
 	if not context.cut_errors.is_empty():
 		result.routes = []
@@ -149,6 +152,13 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	# рисунок линии — по сиду
 	var shape := {pull = rng.randf_range(0.15, 0.6), wander = float(st.wander) * rng.randf_range(0.6, 1.5) * (WANDER_V3 if carve.is_valid() else 1.0),
 		period = Vector2(rng.randf_range(30.0, 70.0), rng.randf_range(12.0, 26.0)), phase = Vector2(rng.randf() * TAU, rng.randf() * TAU)}
+	shape.route_hint = options.get("route_hint", PackedVector2Array())
+	var finish_plan := {}
+	if shape.route_hint.size() > 1:
+		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)))
+		if finish_plan.has("error"):
+			return _project_result([], {accepted = false, reason = finish_plan.error, finish_plan = finish_plan, fragments = []}, [], speeds, seed)
+		shape.route_hint = finish_plan.hint
 	var upper := cells.slice(0, maxi(1, cells.size() / 5))
 	var lower := cells.slice(cells.size() * 2 / 3)
 	# своя четверть поля для старта по сиду (среди верхних 40 %): иначе спуски сходятся в одну ложбину
@@ -160,14 +170,29 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var pts := PackedVector2Array()
 	var goal := Vector2.ZERO
 	var best_score := -INF
+	var best_components := {}
+	var completion := {}
+	var fragments := []
+	var finish_refused := []
+	var completed_candidates := 0
 	var tries := 0
 	var walk_refused := 0
+	var longest_trial := 0.0
+	var walk_reasons := {}
 	var layout: String = options.get("park_layout", "auto")
 	if layout not in PARK_LAYOUTS: layout = PARK_LAYOUTS[posmod(seed, PARK_LAYOUTS.size())]
-	if style == "park":
+	var guided: bool = shape.route_hint.size() > 1
+	if style == "park" and not guided:
 		pts = _park_points(ground, walk_inside, size, rng, layout, bounds)
+		if pts.size() > 1:
+			goal = pts[-1]
+			completion = RouteContract.measure(pts, PackedVector2Array(), goal, "layout_complete", ground, inside, st.width)
+			if not completion.complete:
+				if completion.fragment: fragments.append(completion)
+				else: finish_refused.append(completion)
+				pts = PackedVector2Array()
 		best_score = INF
-	for k in (0 if style == "park" else 10):
+	for k in (0 if style == "park" and not guided else 10):
 		tries += 1
 		var s0: Vector3 = upper[rng.randi() % upper.size()]
 		var start := Vector2(s0.x, s0.y)
@@ -176,28 +201,57 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			if Vector2(g0.x, g0.y).distance_to(start) >= size * 0.45: break
 			g0 = lower[rng.randi() % lower.size()]
 		var target := Vector2(g0.x, g0.y)
-		var hint: PackedVector2Array = options.get("route_hint", PackedVector2Array())
-		if k == 0 and hint.size() > 1:
+		var hint: PackedVector2Array = shape.route_hint
+		if hint.size() > 1:
 			start = hint[0]
 			target = hint[-1]
-		var line := _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
+		var attempt_shape := shape.duplicate(true)
+		attempt_shape.phase += Vector2(0.71, 1.13) * k
+		attempt_shape.pull *= 1.0 + 0.08 * k
+		var line: PackedVector2Array
+		if guided and k >= 7:
+			line = _corridor_line(hint, [0.0, 8.0, -8.0][k - 7])
+			attempt_shape.trace = {goal = target, reason = "corridor_fit", method = "whole_corridor"}
+		else:
+			line = _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, attempt_shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
 		if line.size() < 2: continue
+		longest_trial = maxf(longest_trial, line.size() * STEP)
 		var trial := TrailDefinition.new()
 		trial.width = st.width
 		trial.points = _resample(_smooth(_smooth(line)), 2.0)
-		if not Validation.footprint(trial, inside).is_empty():
-			walk_refused += 1
+		var trace: Dictionary = attempt_shape.get("trace", {})
+		var chosen_finish: Vector2 = finish_plan.get("finish", trace.get("goal", target))
+		var finished := RouteContract.measure(trial.points, hint, chosen_finish, trace.get("reason", "unknown_stop"), ground, inside, st.width, finish_plan.get("kind", "full"))
+		if not finished.complete:
+			if finished.fragment: fragments.append(finished)
+			else: finish_refused.append(finished)
 			continue
-		# лучшая попытка — по длине и спуску вместе (v2: v1 брала самую длинную, и линия могла уйти по горизонтали)
-		var score := _score(line, ground, float(st.length), grade)
+		completed_candidates += 1
+		var trial_errors := Validation.footprint(trial, inside)
+		if not trial_errors.is_empty():
+			walk_refused += 1
+			for reason in trial_errors: walk_reasons[reason] = int(walk_reasons.get(reason, 0)) + 1
+			continue
+		var components := score_components(trial.points, ground, float(st.length), grade)
+		if guided:
+			var deviation := 0.0
+			for p in trial.points: deviation += float(hint_guide(hint, p).distance)
+			components.corridor = clampf(1.0 - deviation / maxf(1, trial.points.size()) / 64.0, 0, 1)
+			components.total = components.total * 0.8 + components.corridor * 0.2
+		var score: float = components.total
 		if score > best_score:
 			best_score = score
+			best_components = components
+			completion = finished
 			pts = line
-			goal = target
-		if best_score > 1.5: break
+			goal = chosen_finish
+		if best_score > 0.92: break
 	var walk_ms := (Time.get_ticks_usec() - started) / 1000.0
-	if pts.size() < 40:
-		stats = {accepted = false, reason = "линия не проложилась: места хватило на %.0f м" % (pts.size() * STEP)}
+	if pts.size() < 2:
+		var reason := "нет законченного маршрута: фрагментов %d, отказов финиша %d, завершённых кандидатов %d, отказов полотна %d" % [fragments.size(), finish_refused.size(), completed_candidates, walk_refused]
+		if not finish_refused.is_empty(): reason += "; " + "; ".join(finish_refused[0].reasons)
+		stats = {accepted = false, reason = reason,
+			fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, finish_plan = finish_plan, walk_refused = walk_refused, walk_reasons = walk_reasons}
 		return _project_result([], stats, cuts, speeds, seed)
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
 	var d := TrailDefinition.new()
@@ -219,6 +273,24 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var shaping := TrailShaping.preset(d.kind)
 	shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, shaping.grade_limit, GRADE_LIMIT_MAX)
 	d.shaping = shaping
+	var base_surface := {}
+	var composing_ground := ground
+	if options.has("_source"):
+		var base_started := Time.get_ticks_usec()
+		var check_route := func(candidate: TrailDefinition) -> PackedStringArray:
+			var errors := Validation.footprint(candidate, inside)
+			var final_contract := RouteContract.measure(candidate.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+			for reason: String in final_contract.reasons: errors.append(reason)
+			return errors
+		base_surface = BaseSurface.fit(options._source, d, check_route)
+		var base_heights: Heightfield = base_surface.get("_heights")
+		base_surface.erase("_heights")
+		base_surface.total_ms = (Time.get_ticks_usec() - base_started) / 1000.0
+		if not base_surface.accepted:
+			return _project_result([], {accepted = false, reason = "базовое полотно: " + base_surface.get("reason", "не принято"), base_surface = base_surface,
+				line_score = best_components, completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, composition_started = false}, [], speeds, seed)
+		completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+		composing_ground = func(p: Vector2) -> float: return base_heights.ground_at(p.x, p.y)
 	var profile := Composition.profile_for(style, skill, shaping_amount)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
@@ -240,8 +312,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	stage = Time.get_ticks_usec()
 	var sequence := {recovery = 0.0, chains = [], refused = {}}
 	var fits := func(e: TrailElement) -> bool:
-		return free.call(e) and Composition.fits(d, e, ground, sequence, gaps_ok, shaping_amount)
-	var composed := TrailComposer.compose(d, profile, seed * 7919 + 13, ground, fits)
+		return free.call(e) and Composition.fits(d, e, composing_ground, sequence, gaps_ok, shaping_amount)
+	var composed := TrailComposer.compose(d, profile, seed * 7919 + 13, composing_ground, fits)
 	var compose_ms := (Time.get_ticks_usec() - stage) / 1000.0
 	var own: Array[TrailElement] = []
 	for e: TrailElement in composed.elements:
@@ -284,6 +356,9 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		s += 2.0
 	radii.sort()
 	stats = {length = snappedf(length, 1.0), drop = snappedf(drop, 0.1), grade = snappedf(-drop / maxf(length, 1.0) * 100.0, 0.1),
+		base_surface = base_surface, composition_started = true,
+		completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates,
+		line_score = best_components,
 		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, ground), sequence_refused = sequence.refused,
 		elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
@@ -311,13 +386,81 @@ static func label() -> String:
 		"полотно проверено" if stats.get("accepted", false) else "проверка полотна ожидается"]
 
 
-## Оценка линии: доля нужной длины (до 1) плюс доля ожидаемого спуска (до 1); подъём в итоге — минус.
+## Compatibility entry point for the bounded line-quality score.
 static func _score(line: PackedVector2Array, ground: Callable, length: float, grade: float) -> float:
-	if line.size() < 2: return -INF
-	var run := line.size() * STEP
+	return float(score_components(line, ground, length, grade).total)
+
+## Six bounded terms. This ranks candidates; hard constraints still gate the finished tread.
+static func score_components(line: PackedVector2Array, ground: Callable, length: float, grade: float) -> Dictionary:
+	if line.size() < 3: return {total = -INF}
+	var run := 0.0
+	var straight := 0.0
+	var opportunities := 0.0
+	var turns := 0
+	var previous_sign := 0.0
+	var sharp := 0.0
+	var work := 0.0
+	for k in range(1, line.size()):
+		var delta := line[k] - line[k - 1]
+		var span := delta.length()
+		if span < 0.01: continue
+		run += span
+		var slope := (float(ground.call(line[k])) - float(ground.call(line[k - 1]))) / span
+		var side := delta.orthogonal().normalized() * 2.0
+		var cross := absf(float(ground.call(line[k] + side)) - float(ground.call(line[k] - side))) / 4.0
+		work += span * (maxf(0.0, cross - 0.12) + maxf(0.0, absf(slope) - 0.16))
+		var bend := delta.angle_to(line[k - 1] - line[maxi(0, k - 2)]) if k > 1 else 0.0
+		var curvature := absf(bend) / span
+		sharp += span * clampf((curvature - 1.0 / 25.0) * 25.0, 0, 1)
+		if curvature < 1.0 / 60.0 and slope < 0.03 and slope > -0.18:
+			straight += span
+		else:
+			if straight >= 25.0: opportunities += straight
+			straight = 0.0
+		if absf(bend) > 0.006:
+			if previous_sign != 0 and signf(bend) != previous_sign: turns += 1
+			previous_sign = signf(bend)
+	if straight >= 25.0: opportunities += straight
 	var drop := float(ground.call(line[0])) - float(ground.call(line[-1]))
-	# спуск — относительно ожидаемого на всю длину стиля: короткая крутая линия не выигрывает у полной
-	return minf(run / length, 1.0) + clampf(drop / maxf(1.0, length * -grade), -1.0, 1.0)
+	var endpoint_grade := 0.0
+	for pair in [[0, mini(6, line.size() - 1)], [maxi(0, line.size() - 7), line.size() - 1]]:
+		endpoint_grade += absf(float(ground.call(line[pair[0]])) - float(ground.call(line[pair[1]]))) / maxf(1, line[pair[0]].distance_to(line[pair[1]]))
+	var result := {length = clampf(run / length, 0, 1), descent = clampf(drop / maxf(1, length * -grade), 0, 1),
+		rhythm = clampf(1.0 - absf(turns / maxf(1.0, run / 100.0) - 1.5) / 3.0 - sharp / maxf(1, run), 0, 1),
+		element_space = clampf(opportunities / maxf(1, run) / 0.45, 0, 1), earthworks = clampf(1.0 - work / maxf(1, run) / 0.3, 0, 1),
+		endpoints = clampf(1.0 - endpoint_grade / 0.4, 0, 1)}
+	result.total = result.length * 0.20 + result.descent * 0.15 + result.rhythm * 0.20 + result.element_space * 0.15 + result.earthworks * 0.20 + result.endpoints * 0.10
+	return result
+
+## Nearest position plus 32 m lookahead uses every segment of the scout corridor.
+## Distance only adds a soft cost: geometry and protected zones can move the line away.
+static func hint_guide(hint: PackedVector2Array, p: Vector2) -> Dictionary:
+	var best := INF
+	var index := 1
+	var progress := 0.0
+	for k in range(1, hint.size()):
+		var ab := hint[k] - hint[k - 1]
+		var t := clampf((p - hint[k - 1]).dot(ab) / maxf(0.001, ab.length_squared()), 0, 1)
+		var distance := p.distance_squared_to(hint[k - 1] + ab * t)
+		if distance < best: best = distance; index = k; progress = t
+	var aim := hint[index - 1].lerp(hint[index], progress)
+	var remaining := 32.0
+	for k in range(index, hint.size()):
+		var span := aim.distance_to(hint[k])
+		if span >= remaining: aim = aim.move_toward(hint[k], remaining); break
+		remaining -= span
+		aim = hint[k]
+	return {aim = aim, distance = sqrt(best)}
+
+static func _corridor_line(hint: PackedVector2Array, offset: float) -> PackedVector2Array:
+	var d := TrailDefinition.new()
+	d.points = hint
+	var points := PackedVector2Array()
+	var count := maxi(1, ceili(d.route_length() / 8))
+	for i in count + 1:
+		var s := d.route_length() * i / count
+		points.append(d.point_at(s) + d.tangent_at(s).orthogonal() * offset * sin(PI * i / count))
+	return _resample(_smooth(_smooth(points)), STEP)
 
 ## Ходок. heading — начальный курс (NAN — на цель); prior — уже проложенные точки (своя линия до петли: от них тоже
 ## держится SEP); s0 и v0 — пройденное и скорость на старте. Возвращает точки от start.
@@ -407,9 +550,13 @@ static func _loop_points(ground: Callable, inside: Callable, a: PackedVector2Arr
 
 static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vector2, length: float, grade: float, shape: Dictionary, st: Dictionary, rng: RandomNumberGenerator, lower: Array = [],
 		heading := NAN, prior := PackedVector2Array(), s0 := 0.0, v0 := 3.0) -> PackedVector2Array:
+	var trace := {reason = "length_budget", goal = goal}
+	shape.trace = trace
 	var pts := PackedVector2Array([start])
 	var p := start
 	var a := (goal - start).angle() if is_nan(heading) else heading
+	var hint: PackedVector2Array = shape.get("route_hint", PackedVector2Array())
+	if hint.size() > 1 and is_nan(heading): a = (hint_guide(hint, start).aim - start).angle()
 	var s := s0
 	var ph: Vector2 = shape.phase
 	var period: Vector2 = shape.period
@@ -429,16 +576,24 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 	while s < length:
 		if p.distance_to(goal) < GOAL_REACH:
 			# у цели линия кончается; рано (крутой стиль быстро сходит вниз) — новая цель, самая дальняя из низких
-			if s >= length * 0.6 or lower.is_empty() or s0 > 0.0: break
+			if hint.size() > 1 or s >= length * 0.6 or lower.is_empty() or s0 > 0.0:
+				trace.reason = "reached_finish"
+				break
 			var far := goal
 			for c: Vector3 in lower:
 				if Vector2(c.x, c.y).distance_to(p) > far.distance_to(p): far = Vector2(c.x, c.y)
-			if far.distance_to(p) < GOAL_REACH * 2.0: break
+			if far.distance_to(p) < GOAL_REACH * 2.0:
+				trace.reason = "reached_finish"
+				break
 			goal = far
+			trace.goal = goal
 		# поворот за шаг — не круче радиуса, который седок держит на этой скорости
 		var max_turn := STEP / maxf(MIN_RADIUS, v * v / accel)
 		var want := (wander * sin(s / period.x + ph.x) + wander * 0.6 * sin(s / period.y + ph.y)) * STEP
 		want += clampf(Vector2.from_angle(a).angle_to(goal - p), -1.0, 1.0) * float(shape.pull) * max_turn
+		if hint.size() > 1:
+			var guide := hint_guide(hint, p)
+			want += clampf(Vector2.from_angle(a).angle_to(guide.aim - p), -1.0, 1.0) * max_turn * 0.65
 		var best := INF
 		var best_o := 0.0
 		var best_g := 0.0
@@ -455,6 +610,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			var cross := absf(float(ground.call(next + side * 2.0)) - float(ground.call(next - side * 2.0))) / 4.0
 			# уклон к цели стиля (подъём — дорого), поперечный склон, плавность и «волна» изгибов
 			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0 + maxf(0.0, cross - 0.25) * 8.0 + absf(o - want) * 1.5
+			if hint.size() > 1: cost += minf(float(hint_guide(hint, next).distance) / 32.0, 4.0) * 2.0
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
 			# обрыв снаружи поворота: вылет наружу — вниз по откосу (падение 01.11 с 30 м)
@@ -476,7 +632,9 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 		if best == INF:
 			# упёрлись: следующий шаг — веером разворота; не нашлось и его — линия кончилась
 			stuck += 1
-			if stuck > 1: break
+			if stuck > 1:
+				trace.reason = "blocked_or_self_approach"
+				break
 			continue
 		if stuck > 0: v = minf(v, sqrt(accel * HAIRPIN)) # разворот: седок тормозит до разворотной скорости
 		stuck = 0
@@ -490,6 +648,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 		s += STEP
 		pts.append(p)
 		_mark(grid, p, pts.size() - 1)
+	if p.distance_to(goal) <= GOAL_REACH: trace.reason = "reached_finish"
 	return pts
 
 ## v3: петля над собой на готовой линии — пересечение двух её участков (станции далеко друг от друга). Верхний проход —

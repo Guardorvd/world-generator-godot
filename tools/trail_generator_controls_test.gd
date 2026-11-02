@@ -17,9 +17,11 @@ func run() -> void:
 	check(editor.generator_style.selected == 3 and editor.generator_style.is_item_disabled(4) and not editor.generator_style.is_item_disabled(2), "site suggests supported styles and disables unsupported ones")
 	check(editor.numbers.gen_difficulty.value == 35 and editor.numbers.gen_modification.value == 80 and editor.generator_layout.selected == 2, "site restores independent settings")
 	editor.generator_requested.connect(func(settings: Dictionary) -> void: emitted = settings)
+	editor.generator_short.button_pressed = true
 	for node in editor.find_children("*", "Button", true, false):
 		if node.text == "Построить с этими настройками": node.pressed.emit()
 	check(emitted.get("style") == "tech" and is_equal_approx(emitted.get("difficulty", 0.0), 0.35) and is_equal_approx(emitted.get("modification", 0.0), 0.8) and emitted.get("park_layout") == "horseshoe", "build action emits style, difficulty, modification and layout independently")
+	check(emitted.get("short_route", false), "short route is an explicit generator request")
 	editor.queue_free()
 	await process_frame
 	print("RESULT: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))

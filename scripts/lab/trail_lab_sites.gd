@@ -27,7 +27,7 @@ static func generate_world(seed_value: int) -> int:
 	return sites.size()
 
 static func publish_world(result: Dictionary, expected_id: int) -> bool:
-	if result.get("request_id", -1) != expected_id: return false
+	if result.get("request_id", -1) != expected_id or result.has("error"): return false
 	TrailLabTerrain.publish_world(result.terrain)
 	sites.assign(result.sites.duplicate(true))
 	TrailLabScout.sites = sites.duplicate(true)
@@ -112,6 +112,37 @@ static func routes() -> Array[TrailDefinition]:
 	for d: TrailDefinition in _built[current].routes: out.append(d.duplicate(true) as TrailDefinition)
 	return out
 
+## Probes only avoid wasting search effort. Publication compares the finished world-space lines.
+static func final_relation(a: PackedVector2Array, b: PackedVector2Array) -> Dictionary:
+	var overlap := TrailLabScout.overlap(TrailLabScout.corridor(a), TrailLabScout.corridor(b))
+	var crossings := 0
+	for i in range(1, a.size()):
+		var box := Rect2(a[i - 1], a[i] - a[i - 1]).abs().grow(0.01)
+		for j in range(1, b.size()):
+			if not box.intersects(Rect2(b[j - 1], b[j] - b[j - 1]).abs().grow(0.01), true): continue
+			if Geometry2D.segment_intersects_segment(a[i - 1], a[i], b[j - 1], b[j]) != null: crossings += 1
+	return {overlap = overlap, crossings = crossings, duplicate = overlap >= TrailLabScout.OVERLAP}
+
+static func final_conflicts(checked: Array[TrailDefinition]) -> PackedStringArray:
+	var errors := PackedStringArray()
+	if not active() or not _built.has(current) or checked.is_empty(): return errors
+	var cached: Array = _built[current].routes
+	if cached.is_empty() or cached[0].id != checked[0].id: return errors
+	var offset := Vector2(sites[current].origin) * GameConfig.TILE
+	for index: int in _built:
+		if index == current or not _built[index].project.accepted: continue
+		var other_offset := Vector2(sites[index].origin) * GameConfig.TILE
+		for route in checked:
+			var points := PackedVector2Array()
+			for p in route.points: points.append(p + offset)
+			for other in _built[index].routes:
+				var other_points := PackedVector2Array()
+				for p in other.points: other_points.append(p + other_offset)
+				var relation := final_relation(points, other_points)
+				if relation.duplicate: errors.append("готовая линия повторяет трассу места %d (%.0f%% коридора)" % [index + 1, relation.overlap * 100])
+				elif relation.crossings > 0: errors.append("готовая линия пересекает трассу места %d без проекта развязки" % [index + 1])
+	return errors
+
 ## Final preparation can repair a feature or reject the line: keep the site's cached report honest.
 static func publish_validation(checked: Array[TrailDefinition], final_stats: Dictionary) -> void:
 	if not active() or not _built.has(current) or checked.is_empty(): return
@@ -147,5 +178,5 @@ static func title(i: int) -> String:
 ## Итог текущего места для подписи под списком.
 static func label() -> String:
 	if not active(): return ""
-	return "Мир %d · мест %d · место %d · участок %.0f×%.0f м\n%s" % [world_seed, sites.size(), current + 1, sites[current].bounds.size.x, sites[current].bounds.size.y,
+	return "Мир %s · мест %d · место %d · участок %.0f×%.0f м\n%s" % [str(TrailLabTerrain.world_info.get("game_seed", world_seed)), sites.size(), current + 1, sites[current].bounds.size.x, sites[current].bounds.size.y,
 		str(_built[current].label) if _built.has(current) else ""]
