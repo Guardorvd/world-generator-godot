@@ -98,6 +98,18 @@ func _check_model() -> void:
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
 	check(triangles < 6000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 6000 triangles and 8 material surfaces")
+	var clearcoat_count := 0
+	var rim_count := 0
+	var roughness_values := {}
+	for surface in body_mesh.mesh.get_surface_count():
+		var mat := body_mesh.mesh.surface_get_material(surface) as StandardMaterial3D
+		if mat != null:
+			if mat.clearcoat_enabled:
+				clearcoat_count += 1
+			if mat.rim_enabled:
+				rim_count += 1
+			roughness_values[snappedf(mat.roughness, 0.01)] = true
+	check(clearcoat_count >= 2 and rim_count >= 3 and roughness_values.size() >= 6, "Materials distinguish fabric, skin, helmet shell, lens and shoes")
 	print("Cyclist v7 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
@@ -127,9 +139,16 @@ func contacts() -> void:
 	check(neck_length > 0.14 and neck_length < 0.18, "Neck remains connected without stretching in every pose")
 	for side in ["L", "R"]:
 		var pedal: Node3D = bike.pedal_l if side == "L" else bike.pedal_r
-		check(bone("Foot" + side).distance_to(bike.to_local(pedal.global_position) + Vector3(0, 0.055, 0.025)) < 0.001, "Foot contact")
+		var sk := bike.rider.skeleton
+		var foot_pose := sk.get_bone_global_pose(sk.find_bone("Foot" + side))
+		check((foot_pose * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(pedal.global_position)) < 0.001, "Foot contact")
 		var grip := bike._steering.position + bike._steering.basis * Vector3(-0.24 if side == "L" else 0.24, 0.22, -0.015)
 		check(bone("Hand" + side).distance_to(grip) < 0.001, "Hand contact")
+		var upper_arm := sk.get_bone_global_pose(sk.find_bone("UpperArm" + side)).basis
+		var forearm := sk.get_bone_global_pose(sk.find_bone("Forearm" + side)).basis
+		var upper_leg := sk.get_bone_global_pose(sk.find_bone("UpperLeg" + side)).basis
+		var lower_leg := sk.get_bone_global_pose(sk.find_bone("LowerLeg" + side)).basis
+		check(upper_arm.x.dot(forearm.x) > 0.999 and upper_leg.x.dot(lower_leg.x) > 0.999, "Elbow and knee hinges remain twist-free")
 		for pair in [["UpperArm", "Forearm", 0.31], ["Forearm", "Hand", 0.31], ["UpperLeg", "LowerLeg", 0.43], ["LowerLeg", "Foot", 0.43]]:
 			check(absf(bone(pair[0] + side).distance_to(bone(pair[1] + side)) - pair[2]) < 0.001, "Limb reach: " + pair[0])
 
@@ -199,19 +218,39 @@ func run(finish := true) -> void:
 		state.crank += 6 * DT
 		advance(1)
 		contacts()
-	check(bike._cur[BikeView.S_STAND] > 0.6 and bone("Hips").y > 1.0, "Steep climb under load: out of the saddle")
+	check(bike._cur[BikeView.S_STAND] > 0.6 and bone("Hips").y > 1.0 and bone("Hips").z < 0.14, "Steep climb under load: out of the saddle and over the crank")
 	reset()
 	state.tilt = -0.25
 	state.speed = 10
 	for i in 90:
 		advance()
 		contacts()
-	check(bike._cur[BikeView.S_STAND] < -0.5 and bone("Hips").y > 0.98, "Fast descent: hips off the saddle")
+	check(bike._cur[BikeView.S_STAND] < -0.5 and bone("Hips").y > 0.98 and bone("Hips").z > 0.20, "Fast descent: hips off and behind the saddle")
 	reset()
-	for i in 90:
-		state.crank += 6 * DT
+	var foot_pitch_min := INF
+	var foot_pitch_max := -INF
+	var ankle_z_min := INF
+	var ankle_z_max := -INF
+	var knee_top_x := 0.0
+	var knee_power_x := 0.0
+	for i in 120:
+		state.crank = TAU * float(i % 60) / 60.0
 		advance(1)
-	check(absf(bike._cur[BikeView.S_STAND]) < 0.05, "Flat pedalling stays seated")
+		if i >= 60:
+			var sk_step := bike.rider.skeleton
+			var foot_l := sk_step.get_bone_global_pose(sk_step.find_bone("FootL"))
+			var pedal_l_local := bike.to_local(bike.pedal_l.global_position)
+			foot_pitch_min = minf(foot_pitch_min, foot_l.basis.get_euler().x)
+			foot_pitch_max = maxf(foot_pitch_max, foot_l.basis.get_euler().x)
+			ankle_z_min = minf(ankle_z_min, foot_l.origin.z - pedal_l_local.z)
+			ankle_z_max = maxf(ankle_z_max, foot_l.origin.z - pedal_l_local.z)
+			if i % 60 == 0:
+				knee_top_x = absf(bone("LowerLegL").x)
+			elif i % 60 == 15:
+				knee_power_x = absf(bone("LowerLegL").x)
+	check(absf(bike._cur[BikeView.S_STAND]) < 0.05 and bone("Hips").y > 1.005, "Flat pedalling stays seated on the saddle")
+	check(foot_pitch_max - foot_pitch_min > 0.12 and ankle_z_max - ankle_z_min > 0.006, "Ankle flexes and pivots around the pedal contact point")
+	check(knee_power_x < knee_top_x - 0.008, "Knee tracks closer to frame during downward power stroke")
 	reset()
 	state.steer = 1
 	state.lean = -0.28
@@ -219,17 +258,53 @@ func run(finish := true) -> void:
 		advance()
 	check(bone("Head").x > 0.025, "Balance into turn")
 	check(bike.rider.skeleton.get_bone_global_pose(5).basis.get_euler().y < -0.15, "Look into turn")
+	var sk_turn := bike.rider.skeleton
+	var head_world_up := (bike.global_basis * sk_turn.get_bone_global_pose(sk_turn.find_bone("Head")).basis).y
+	check(bone("Chest").x > bone("Hips").x + 0.015 and absf(head_world_up.x) < absf(bike.global_basis.y.x) * 0.55, "Turn separates bike lean and upper-body posture")
+	var foot_l_turn := sk_turn.get_bone_global_pose(sk_turn.find_bone("FootL"))
+	var foot_r_turn := sk_turn.get_bone_global_pose(sk_turn.find_bone("FootR"))
+	check(bone("FootL").y < bone("FootR").y - 0.10 and foot_l_turn.basis.get_euler().x > foot_r_turn.basis.get_euler().x + 0.08 and absf(bone("LowerLegL").x) < absf(bone("LowerLegR").x) - 0.015, "Outer leg drops heel, lowers pedal and presses knee toward frame in turn")
 	reset()
-	state.airborne = true
-	for i in 30:
+	state._yaw_rate = -1.2
+	state.slip = 0.18
+	for i in 20:
 		advance()
-	check(bone("Head").y < neutral.y - 0.03, "Airborne tuck")
+	check(bike._cur[BikeView.S_LOOK] < -0.12, "Gaze anticipates direction of motion from yaw rate and slip")
+	# Пять читаемых фаз прыжка: подготовка → отрыв → полёт → приземление → восстановление.
+	reset()
+	state._hop_buf = 0.15
+	state.body_back = true
+	for i in 12:
+		advance()
+	var prep_head_y := bone("Head").y
+	var prep_crouch := bike._cur[BikeView.S_CROUCH]
+	check(prep_head_y < neutral.y - 0.015 and prep_crouch > 0.025, "Jump phase 1 (preparation): preload compression before takeoff")
+	state._hop_buf = 0.0
+	state.body_back = false
+	state.airborne = true
+	state.vy = 4.0
+	for i in 3:
+		advance()
+	var takeoff_head_y := bone("Head").y
+	var takeoff_crouch := bike._cur[BikeView.S_CROUCH]
+	for i in 27:
+		state.vy = move_toward(state.vy, -2.0, 6.0 * DT)
+		advance()
+	var flight_head_y := bone("Head").y
+	check(takeoff_crouch < prep_crouch and takeoff_head_y > flight_head_y + 0.012, "Jump phase 2 (takeoff): body extends upward before settling into flight tuck")
+	check(flight_head_y < neutral.y - 0.03, "Airborne tuck")
 	state.airborne = false
+	state.vy = 0.0
 	state.land_impact = 9
 	for i in 5:
 		advance()
-	check(bone("Head").y < neutral.y - 0.025, "Landing absorption")
-	for i in 120:
+	var land_head_y := bone("Head").y
+	check(land_head_y < neutral.y - 0.025 and land_head_y < flight_head_y, "Landing absorption")
+	for i in 20:
+		advance()
+	var recovery_head_y := bone("Head").y
+	check(recovery_head_y > land_head_y + 0.02 and bike._recovery > 0.1, "Jump phase 5 (recovery): controlled push-up from landing compression")
+	for i in 100:
 		advance()
 	check(bone("Head").distance_to(neutral) < 0.004, "Landing settles within resting breath amplitude")
 	# 10.6: плечи работают в такт усилию и затихают на накате.
@@ -261,6 +336,25 @@ func run(finish := true) -> void:
 		breath_max = maxf(breath_max, bone("Neck").y)
 		contacts()
 	check(breath_max - breath_min > 0.003, "Resting rider breathes subtly")
+	var rest_breath_span := breath_max - breath_min
+	reset()
+	bike.set_pack(true)
+	state.tilt = 0.18
+	for i in 120:
+		state.crank += 6.0 * DT
+		advance(1.0, true)
+	var loaded_pack_swing := absf(bike._cur[BikeView.S_PACK_PITCH]) + absf(bike._cur[BikeView.S_PACK_ROLL])
+	state.speed = 0.0
+	state.tilt = 0.0
+	var fatigued_min := INF
+	var fatigued_max := -INF
+	for i in 120:
+		advance(0.0)
+		fatigued_min = minf(fatigued_min, bone("Neck").y)
+		fatigued_max = maxf(fatigued_max, bone("Neck").y)
+	check(fatigued_max - fatigued_min > rest_breath_span * 1.25, "Breathing deepens and accelerates after heavy exertion")
+	check(loaded_pack_swing > 0.015 and absf(bike._cur[BikeView.S_PACK_PITCH]) + absf(bike._cur[BikeView.S_PACK_ROLL]) < 0.001, "Equipment responds to load and settles without constant oscillation")
+	bike.set_pack(false)
 	reset()
 	state.squash_fv = 2
 	state.squash_rv = -1
@@ -324,6 +418,45 @@ func run(finish := true) -> void:
 			contacts()
 		pump_heads.append(bone("Head"))
 	check(pump_heads[1].y > pump_heads[0].y + 0.06, "Pump body compresses/extends while hands and feet keep contact")
+	# Последовательная реакция на удар (руки/ноги → корпус → голова) без резинового раскачивания.
+	reset()
+	state.wheel_impact = Vector2(1.5, 0.0)
+	var limb_peak_tick := -1
+	var torso_peak_tick := -1
+	var head_peak_tick := -1
+	var max_limb := 0.0
+	var max_torso := 0.0
+	var max_head := 0.0
+	var head_reversals := 0
+	var prev_head_nod := 0.0
+	for i in 45:
+		advance()
+		state.wheel_impact = Vector2.ZERO
+		if bike._cur[BikeView.S_FRONT_LOAD] > max_limb:
+			max_limb = bike._cur[BikeView.S_FRONT_LOAD]
+			limb_peak_tick = i
+		if bike._cur[BikeView.S_CROUCH] > max_torso:
+			max_torso = bike._cur[BikeView.S_CROUCH]
+			torso_peak_tick = i
+		var nod := -bike._cur[BikeView.S_HEAD_NOD]
+		if nod > max_head:
+			max_head = nod
+			head_peak_tick = i
+		if i > 1 and nod * prev_head_nod < -0.00001:
+			head_reversals += 1
+		prev_head_nod = nod
+	check(limb_peak_tick >= 0 and limb_peak_tick < torso_peak_tick and torso_peak_tick < head_peak_tick, "Sequential front impact response: arms -> torso -> head")
+	check(head_reversals == 0, "Critically damped impact response has no rubbery oscillation")
+	# Приоритет торможения подавляет раскачку педалирования при одновременных сигналах.
+	reset()
+	state.crank = PI * 0.5
+	for i in 30:
+		advance(1.0)
+	var pedal_sway := absf(bike._cur[BikeView.S_SWAY])
+	for i in 20:
+		state.speed = maxf(1.0, state.speed - 6.0 * DT)
+		advance(-1.0)
+	check(absf(bike._cur[BikeView.S_SWAY]) < pedal_sway * 0.35, "Braking priority suppresses pedalling sway")
 	# Extreme combined inputs through a full pedal revolution, including angle wrap.
 	for sign_value in [-1.0, 1.0]:
 		reset()
@@ -419,17 +552,24 @@ func capture() -> void:
 	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	environment.environment.ambient_light_color = Color.WHITE
 	environment.environment.ambient_light_energy = 0.6
-	for mode in ["pedal", "rough", "climb", "rear", "pump_compress", "pump_extend"]:
-		camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else (Vector3(1.4, 1.8, 2.6) if mode == "rear" else Vector3(2.4, 1.8, -0.4))
-		camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.23, -0.04))
-		camera.size = 2.4 if mode == "pedal" else 1.35
+	for mode in ["game", "pedal", "rough", "climb", "rear", "crouch", "pump_compress", "pump_extend"]:
+		if mode == "game":
+			camera.projection = Camera3D.PROJECTION_PERSPECTIVE
+			camera.fov = 68.0
+			camera.position = Vector3(0.0, 2.25, 2.85)
+			camera.look_at(Vector3(0.0, 1.15, -0.25))
+		else:
+			camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+			camera.position = Vector3(2.8, 1.9, -2.8) if mode == "pedal" else (Vector3(1.4, 1.8, 2.6) if mode == "rear" else Vector3(2.4, 1.8, -0.4))
+			camera.look_at(Vector3(0, 0.9, 0) if mode == "pedal" else Vector3(0, 1.18, -0.04))
+			camera.size = 2.4 if mode == "pedal" else 1.45
 		reset()
 		state.crank = 0.4
-		state.speed = 12
+		state.speed = 18.0 if mode == "crouch" else 12.0
 		state.pump_motion = 1.0 if mode == "pump_compress" else (-1.0 if mode == "pump_extend" else 0.0)
 		state.steer = 0.45 if mode == "rough" else 0.0
 		state.lean = -0.2 if mode == "rough" else 0.0
-		state.squash = 0.08 if mode == "rough" else 0.0
+		state.squash = 0.08 if mode == "rough" else (0.14 if mode == "crouch" else 0.0)
 		state.squash_f = 0.12 if mode == "rough" else 0.0
 		state.squash_fv = 2.0 if mode == "rough" else 0.0
 		state.squash_rv = -1.0 if mode == "rough" else 0.0

@@ -27,8 +27,8 @@ func run() -> void:
 			bike.draw(1)
 			for side in ["L", "R"]:
 				var pedal: Node3D = bike.pedal_l if side == "L" else bike.pedal_r
-				var foot := sk.get_bone_global_pose(sk.find_bone("Foot" + side)).origin
-				check(foot.distance_to(bike.to_local(pedal.global_position) + Vector3(0, 0.055, 0.025)) < 0.001, "Foot stays on pedal")
+				var foot_pose := sk.get_bone_global_pose(sk.find_bone("Foot" + side))
+				check((foot_pose * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(pedal.global_position)) < 0.001, "Foot stays on pedal")
 				var hand := sk.get_bone_global_pose(sk.find_bone("Hand" + side)).origin
 				var grip := bike._steering.position + bike._steering.basis * Vector3(-0.24 if side == "L" else 0.24, 0.22, -0.015)
 				check(hand.distance_to(grip) < 0.001, "Hand stays on grip")
