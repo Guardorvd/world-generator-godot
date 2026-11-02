@@ -54,7 +54,11 @@ static func reroll(i: int, seed_value: int) -> bool:
 
 static func _build(i: int, trail_seed: int) -> void:
 	var site := sites[i]
-	var routes := TrailLabBuilder.build(TrailLabTerrain.ground, TrailLabTerrain.SIZE, trail_seed, site.style, TrailLabTerrain.wet_at, TrailLabTerrain.apply_cuts)
+	var hint := PackedVector2Array()
+	for p: Vector2 in site.probe.points: hint.append(p - Vector2(site.origin) * GameConfig.TILE)
+	var options: Dictionary = site.settings.duplicate(true)
+	options.merge({bounds = site.bounds, route_hint = hint})
+	var routes := TrailLabBuilder.build(TrailLabTerrain.ground, TrailLabTerrain.SIZE, trail_seed, site.style, TrailLabTerrain.wet_at, TrailLabTerrain.apply_cuts, options)
 	for d in routes:
 		d.id = "site%d_%s" % [i + 1, d.id]
 		d.title = "%d · %s" % [i + 1, d.title]
@@ -90,10 +94,12 @@ static func title(i: int) -> String:
 		if st.get("loop", false): extra.append("петля")
 		if int(st.get("ravines", 0)) > 0: extra.append("овражков %d" % st.ravines)
 		return "%d · %s · %.0f м, %+.0f м · прыжков %d%s" % [i + 1, style_title, st.length, -float(st.drop), st.get("jumps", 0), (" · " + ", ".join(extra)) if not extra.is_empty() else ""]
-	return "%d · %s · перепад %.0f м" % [i + 1, style_title, site.fall]
+	var alternatives := PackedStringArray()
+	for key: String in site.styles: alternatives.append(TrailLabBuilder.STYLES[key].title)
+	return "%d · %s · %.0f×%.0f м · перепад %.0f м · проба %.0f м · %s" % [i + 1, style_title, site.bounds.size.x, site.bounds.size.y, site.fall, site.probe.length, ", ".join(alternatives)]
 
 ## Итог текущего места для подписи под списком.
 static func label() -> String:
 	if not active(): return ""
-	return "Мир %d · мест %d · место %d (клетки %d, %d)\n%s" % [world_seed, sites.size(), current + 1, sites[current].origin.x, sites[current].origin.y,
+	return "Мир %d · мест %d · место %d · участок %.0f×%.0f м\n%s" % [world_seed, sites.size(), current + 1, sites[current].bounds.size.x, sites[current].bounds.size.y,
 		str(_built[current].label) if _built.has(current) else ""]

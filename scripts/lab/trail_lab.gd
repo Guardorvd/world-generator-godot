@@ -214,6 +214,7 @@ func _ready() -> void:
 		element_index = index
 		editor.present(routes, lane, element_index))
 	editor.apply_requested.connect(apply_edit)
+	editor.generator_requested.connect(configure_generator)
 	editor.launch_requested.connect(launch_element)
 	editor.reload_requested.connect(reload_sources)
 	editor.requirement_changed.connect(func(grade: float) -> void: set_grade_requirement(grade / 100.0))
@@ -330,7 +331,6 @@ func generate_random(new_terrain: bool) -> bool:
 		TrailLabTerrain.seed = rng.randi_range(1, 99999)
 		TrailLabTerrain.kind = TrailLabTerrain.ORDER[rng.randi() % TrailLabTerrain.ORDER.size()]
 	TrailLabBuilder.seed = rng.randi_range(1, 99999)
-	TrailLabBuilder.style = TrailLabBuilder.ORDER[rng.randi() % TrailLabBuilder.ORDER.size()]
 	var index := -1
 	for i in TrailLabCatalog.LIST.size():
 		if TrailLabCatalog.LIST[i].ground == "generated": index = i
@@ -385,6 +385,29 @@ func _fill_sites() -> void:
 	for k in Sites.sites.size(): site_select.add_item(Sites.title(k), k)
 	if Sites.current >= 0: site_select.select(Sites.current)
 	site_row.visible = not Sites.sites.is_empty()
+	if Sites.active():
+		var site: Dictionary = Sites.sites[Sites.current]
+		editor.set_generator_site(site.styles, site.style, site.settings)
+
+func configure_generator(settings: Dictionary) -> bool:
+	if _world_thread != null: return false
+	if Sites.active():
+		var site: Dictionary = Sites.sites[Sites.current]
+		if settings.style not in site.styles:
+			show_message("Этот характер не подтверждён пробной прокладкой участка")
+			return false
+		site.style = settings.style
+		site.settings = settings.duplicate(true)
+		Sites._built.erase(Sites.current)
+		return select_site(Sites.current)
+	TrailLabBuilder.style = settings.style
+	TrailLabBuilder.difficulty = settings.difficulty
+	TrailLabBuilder.modification = settings.modification
+	TrailLabBuilder.mandatory_gaps = settings.mandatory_gaps
+	TrailLabBuilder.park_layout = settings.park_layout
+	for i in TrailLabCatalog.LIST.size():
+		if TrailLabCatalog.LIST[i].ground == "generated": return select_preset(i)
+	return false
 
 ## Значок кубика 16×16: светлая грань с пятью точками.
 static func _dice_icon() -> ImageTexture:

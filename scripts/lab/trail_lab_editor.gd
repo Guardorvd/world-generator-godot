@@ -1,6 +1,8 @@
 extends PanelContainer
 ## Lab-only controls. Emits proposed values; the composition root commits a successful rebuild.
 const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Generator := preload("res://scripts/lab/trail_lab_builder.gd")
+signal generator_requested(settings: Dictionary)
 signal course_selected(index: int, kind: String, style: String, ground: String)
 signal route_selected(index: int)
 signal element_selected(index: int)
@@ -23,6 +25,9 @@ var kind_choice := OptionButton.new()
 ## Trail profile of TrailComposer (first item: the shape's own elements) and the test ground under the course.
 var style_choice := OptionButton.new()
 var ground_choice := OptionButton.new()
+var generator_style := OptionButton.new()
+var generator_layout := OptionButton.new()
+var generator_gaps := CheckBox.new()
 var route_choice := OptionButton.new()
 var element_choice := OptionButton.new()
 var surface_choice := OptionButton.new()
@@ -90,6 +95,24 @@ func _ready() -> void:
 	load_course.tooltip_text = "Заменить текущую площадку выбранной формой трассы"
 	load_course.pressed.connect(func() -> void: course_selected.emit(course_choice.selected, ["mountain", "trail", "road"][kind_choice.selected], "" if style_choice.selected == 0 else TrailComposer.PROFILES.keys()[style_choice.selected - 1], Fixture.GROUNDS[ground_choice.selected]))
 	course_box.add_child(load_course)
+	var generation_box := _add_section(box, "Генератор Trail Lab", false)
+	for key: String in Generator.ORDER: generator_style.add_item(Generator.STYLES[key].title)
+	_add_choice(generation_box, "Характер трассы", generator_style)
+	_add_number(generation_box, ["gen_difficulty", "Сложность, %", 0.0, 99.0, 1.0])
+	_add_number(generation_box, ["gen_modification", "Изменение рельефа, %", 0.0, 100.0, 1.0])
+	numbers.gen_difficulty.value = 50
+	numbers.gen_modification.value = 50
+	for name in ["По сиду", "Серпантин", "Подкова", "Овал"]: generator_layout.add_item(name)
+	_add_choice(generation_box, "Планировка байк-парка", generator_layout)
+	generator_gaps.text = "Разрешить обязательные гэпы"
+	generator_gaps.tooltip_text = "Только для подходящего характера, сложности от 70 % и изменения рельефа от 65 %; каждый гэп проверяется"
+	generation_box.add_child(generator_gaps)
+	var generate_button := Button.new()
+	generate_button.text = "Построить с этими настройками"
+	generate_button.pressed.connect(func() -> void:
+		generator_requested.emit({style = Generator.ORDER[generator_style.selected], difficulty = numbers.gen_difficulty.value / 100.0, modification = numbers.gen_modification.value / 100.0,
+			park_layout = (["auto"] + Generator.PARK_LAYOUTS)[generator_layout.selected], mandatory_gaps = generator_gaps.button_pressed}))
+	generation_box.add_child(generate_button)
 	var line_box := _add_section(box, "Линия по рельефу (участок мира)", false)
 	var zone := Label.new()
 	zone.theme_type_variation = "HintLabel"
@@ -300,3 +323,11 @@ func present(routes: Array[TrailDefinition], lane: int, element: int) -> void:
 		profile_choice.select(e.profile)
 		for key in TrailElement.KEYS: numbers[key].value = e.get(key)
 	_updating = false
+
+func set_generator_site(styles: Array, selected: String, settings: Dictionary) -> void:
+	for i in Generator.ORDER.size(): generator_style.set_item_disabled(i, not styles.is_empty() and Generator.ORDER[i] not in styles)
+	generator_style.select(maxi(0, Generator.ORDER.find(selected)))
+	numbers.gen_difficulty.value = float(settings.get("difficulty", 0.5)) * 100.0
+	numbers.gen_modification.value = float(settings.get("modification", 0.5)) * 100.0
+	generator_gaps.button_pressed = settings.get("mandatory_gaps", false)
+	generator_layout.select(maxi(0, (["auto"] + Generator.PARK_LAYOUTS).find(settings.get("park_layout", "auto"))))

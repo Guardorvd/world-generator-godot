@@ -45,6 +45,8 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 		caps.resize(n)
 		caps.fill(17.0 * factor)
 		for i in n:
+			var level: Dictionary = S.LEVELS[_level(d, i)]
+			caps[i] = float(level.top) * factor
 			var k := d.curvature_at(i)
 			if absf(k) < 0.004: continue
 			var p := d.point_at(i)
@@ -53,7 +55,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var bank := (h.ground_at(p.x + side.x, p.y + side.y) - h.ground_at(p.x - side.x, p.y - side.y)) * signf(k)
 			var sample := clampi(roundi(float(i) / d.route_length() * (survey.layers.size() - 1)), 0, survey.layers.size() - 1)
 			if survey.layers[sample] == TrailSurvey.Layer.DECK: bank = 0.0
-			caps[i] = minf(caps[i], S.turn_speed(1.0 / absf(k), bank, 0.7) * minf(factor, 1.0))
+			caps[i] = minf(caps[i], S.turn_speed(1.0 / absf(k), bank, float(level.lat)) * minf(factor, 1.0))
 		var windows := {}
 		for ei in d.elements.size():
 			var e := d.elements[ei]
@@ -61,7 +63,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var to := e.station + e.length * 0.5
 			# Endpoint grade excludes the feature's own rise; heights come from the baked surface.
 			var grade := (y[mini(n - 1, ceili(to))] - y[maxi(0, floori(from))]) / e.length
-			var w := S.window(e, d, grade, 2)
+			var w := S.window(e, d, grade, _level(d, e.station))
 			windows[ei] = w
 			if w.has("speed_hi"):
 				var last := int(from) if e.profile in [T.TABLETOP, T.GAP] else ceili(to)
@@ -104,7 +106,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var to := e.station + e.length * 0.5
 			var v := speeds[clampi(floori(from), 0, n - 1)]
 			var w: Dictionary = windows[ei]
-			if from < recovery and e.profile not in [T.BERM, T.S_BERM]: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление")
+			if from < recovery: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление")
 			if w.has("speed_lo") and v < float(w.speed_lo) - 0.5:
 				_issue(report, scenario, ei, from, "скорость ниже окна %.1f < %.1f" % [v, w.speed_lo])
 			if w.has("speed_hi") and v > float(w.speed_hi) + 0.5: _issue(report, scenario, ei, from, "скорость выше окна")
@@ -115,12 +117,12 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 				if flight.flew:
 					if float(flight.land) < float(w.land_from) - 0.5 or float(flight.land) > land_to + 0.5:
 						_issue(report, scenario, ei, from, "приземление вне зоны на готовом полотне (%.1f м)" % flight.land)
-					if float(flight.impact) > float(S.LEVELS[2].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне")
+					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне")
 					land_to = maxf(land_to, float(flight.land))
 				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления")
 				var approach := S.tightest(d, maxf(0.0, from - 8.0), float(w.get("lip", from)))
 				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + 5.0))
-				if minf(approach, landing) < maxf(15.0, v * v / (S.LAT_MAX * 0.7)):
+				if minf(approach, landing) < maxf(15.0, v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))):
 					_issue(report, scenario, ei, from, "поворот на подходе или приземлении")
 				if land_to + 5.0 > d.route_length(): _issue(report, scenario, ei, from, "нет выката после приземления")
 				recovery = land_to + maxf(5.0, v * 0.7)
@@ -133,6 +135,11 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 	report.errors = errors
 	report.accepted = errors.is_empty()
 	return report
+
+static func _level(d: TrailDefinition, station: float) -> int:
+	for section: Dictionary in d.sections:
+		if station >= float(section.from) and station <= float(section.to): return clampi(int(float(section.difficulty) * 4.0), 0, 3)
+	return 2
 
 static func _height(y: PackedFloat32Array, s: float) -> float:
 	var at := clampf(s, 0.0, y.size() - 1.0)

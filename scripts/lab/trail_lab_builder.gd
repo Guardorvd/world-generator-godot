@@ -1,18 +1,10 @@
 extends RefCounted
 const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
-## Trail Lab, генератор трассы, v3 (01.11). По любой земле (Callable) в квадрате size × size м прокладывает одну
-## линию сверху вниз и ставит на неё элементы составителем с расчётными стандартами (TrailComposer + TrailStandards).
-## v2 (по заездам 01.11): ходок знает скорость (радиус не туже v²/a), старт и цель по сиду, виражи на быстрых поворотах.
-## v3 — многоуровневость и «земляные» элементы, которые меняют землю (carve — врезки TrailLabTerrain.apply_cuts):
-##  1. Петля над собой: в середине линии — прямая через точку X, круг R LOOP_R на 270° и снова через X поперёк; верхний
-##     проход — мосток (норшор-мост) или гэп над нижним, нижний ныряет в выемку LOOP_CUT м под ним (как на полигоне).
-##     Сторона петли — та, где выход ведёт вниз по склону; нет места — петли нет.
-##  2. Овражки: на прямых, где позволяет скорость, поперёк трассы врезается небольшой овражек (глубина RAVINE_DEPTH), и
-##     через него — гэп по стандарту (разрыв под скорость седока) или, если гэп здесь не по уровню или скорости, мосток.
-##     Под пролётом полотно не насыпается (TrailDefinition.open_spans): внизу остаётся сам овражек, а не дорога.
-##  3. Прыжков больше: у составителя вдвое чаще участки «прыжки», чуть плотнее элементы.
-## Детерминирован по (земля, seed, стиль).
+const Composition := preload("res://scripts/lab/trail_lab_composition.gd")
+## Trail Lab only: bounded terrain routes, independent style/difficulty/construction settings,
+## planned approach/feature/recovery chains and optional engineered crossings.
+## Deterministic in terrain, seed and settings. Final acceptance belongs to Fixture.prepare.
 
 const MARGIN := 28.0
 const STEP := 4.0
@@ -24,26 +16,23 @@ const OWN_SKIP := 40.0
 const CLIFF := 0.5       # круче (м на м) наружный откос поворота — штраф
 const GOAL_REACH := 20.0 # ближе к цели — финиш, м
 const CLIMB_MAX := 0.08  # круче подъём на шаге — почти запрет (на стенке уступа седок встаёт)
-## Стили: целевой уклон (спуск — отрицательный), длина, ширина, профиль составителя, извилистость, крейсерская
+## Стили: целевой уклон (спуск — отрицательный), длина, ширина, извилистость, крейсерская
 ## скорость и доля перегрузки в поворотах (под неё — радиус линии).
 const STYLES := {
-	flow = {title = "Flow", grade = -0.07, length = 1100.0, width = 4.5, profile = "flow", wander = 0.06, cruise = 13.0, lat = 0.6},
-	downhill = {title = "Даунхилл", grade = -0.14, length = 800.0, width = 4.0, profile = "mountain", wander = 0.05, cruise = 14.0, lat = 0.7},
-	enduro = {title = "Эндуро", grade = -0.10, length = 1300.0, width = 3.5, profile = "mixed", wander = 0.08, cruise = 12.0, lat = 0.6},
-	tech = {title = "Техничная", grade = -0.09, length = 900.0, width = 3.5, profile = "technical", wander = 0.09, cruise = 10.0, lat = 0.55},
-	# v4: пологое место — байк-парк: змейка параллельных прямых с разворотами на 180°, элементы подряд
-	park = {title = "Байк-парк", grade = -0.02, length = 900.0, width = 4.0, profile = "flow", wander = 0.0, cruise = 13.0, lat = 0.7},
+	flow = {title = "Flow", grade = -0.07, length = 1100.0, width = 4.5, wander = 0.06, cruise = 13.0, lat = 0.6},
+	downhill = {title = "Даунхилл", grade = -0.14, length = 800.0, width = 4.0, wander = 0.05, cruise = 14.0, lat = 0.7},
+	enduro = {title = "Эндуро", grade = -0.10, length = 1300.0, width = 3.5, wander = 0.08, cruise = 12.0, lat = 0.6},
+	tech = {title = "Техничная", grade = -0.09, length = 900.0, width = 3.5, wander = 0.09, cruise = 10.0, lat = 0.55},
+	# Park character; layout is selected independently below.
+	park = {title = "Байк-парк", grade = -0.02, length = 900.0, width = 4.0, wander = 0.0, cruise = 13.0, lat = 0.7},
 }
 const ORDER := ["flow", "downhill", "enduro", "tech", "park"]
 ## Байк-парк: прямые (длина, м), их число, шаг между ними (м; разворот — полукруг радиуса шага/2).
 const PARK_LANE := Vector2(90.0, 130.0) # длиннее — к середине прямой разгон до скорости столов (от 12 м/с)
 const PARK_LANES := Vector2i(4, 7)
-const PARK_STEP := 17.0
-## Канавы вдоль трассы (v4): параллельный канал у края полотна — плохо подрулил, свалился.
+## Drainage: offset from the tread and useful channel length.
 const DITCH_OFFSET := 2.0    # от края полотна до оси канавы, м
-const DITCH_DEPTH := 1.0
 const DITCH_LENGTH := Vector2(20.0, 40.0)
-const DITCH_CHANCE := 0.45   # доля прямых, у которых есть канава (у байк-парка — вдвое чаще)
 ## v3: петля над собой и овражки.
 const LOOP_R := 16.0         # радиус петли, м (вираж на круге ставит составитель)
 const LOOP_LEAD := 16.0      # прямая до X и от X до начала круга, м (равна радиусу: круг на 270° выводит на X)
@@ -61,6 +50,11 @@ const WANDER_V3 := 0.6       # v3: извилистость меньше — б�
 
 static var seed := 1
 static var style := "flow"
+static var difficulty := 0.5
+static var modification := 0.5
+static var mandatory_gaps := false
+static var park_layout := "auto"
+const PARK_LAYOUTS := ["serpentine", "horseshoe", "oval"]
 static var stats := {}
 static var speeds := PackedFloat32Array() ## профиль скорости «как едут», по которому ставились элементы
 static var cuts: Array = []                ## врезки последней трассы (TrailLabTerrain.apply_cuts)
@@ -69,18 +63,23 @@ static var cuts: Array = []                ## врезки последней т
 ## Трасса по земле ground на поле size × size м. Пусто — линия не проложилась (stats.reason).
 ## avoid(Vector2) -> bool — необязательно: куда линии нельзя (вода окна мира); carve(Array) — необязательно: применить
 ## врезки к земле (после неё ground уже врезанная); без carve овражков и петли нет.
-static func build(ground: Callable, size: float, seed_value: int, style_name: String, avoid := Callable(), carve := Callable()) -> Array[TrailDefinition]:
+static func build(ground: Callable, size: float, seed_value: int, style_name: String, avoid := Callable(), carve := Callable(), options := {}) -> Array[TrailDefinition]:
 	var started := Time.get_ticks_usec()
 	seed = seed_value
 	style = style_name if STYLES.has(style_name) else "flow"
-	var st: Dictionary = STYLES[style]
+	var st: Dictionary = STYLES[style].duplicate(true)
+	var skill := clampf(float(options.get("difficulty", difficulty)), 0.0, 0.99)
+	var shaping_amount := clampf(float(options.get("modification", modification)), 0.0, 1.0)
+	var gaps_ok := Composition.gap_allowed(style, skill, shaping_amount, bool(options.get("mandatory_gaps", mandatory_gaps)))
+	st.cruise *= lerpf(0.8, 1.15, skill)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("trail_lab_builder|%d|%s" % [seed, style])
 	stats = {}
 	speeds = PackedFloat32Array()
 	cuts = []
+	var bounds: Rect2 = options.get("bounds", Rect2(Vector2.ZERO, Vector2.ONE * size))
 	var inside := func(p: Vector2) -> bool:
-		return p.x > MARGIN and p.y > MARGIN and p.x < size - MARGIN and p.y < size - MARGIN and not (avoid.is_valid() and avoid.call(p))
+		return p.x > MARGIN and p.y > MARGIN and p.x < size - MARGIN and p.y < size - MARGIN and bounds.grow(-4.0).has_point(p) and not (avoid.is_valid() and avoid.call(p))
 	var walk_inside := func(p: Vector2) -> bool:
 		var half: float = st.width * 0.5
 		for offset in [Vector2.ZERO, Vector2(half, 0), Vector2(-half, 0), Vector2(0, half), Vector2(0, -half)]:
@@ -91,9 +90,12 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	while at < size - MARGIN:
 		var bt := MARGIN + 8.0
 		while bt < size - MARGIN:
-			cells.append(Vector3(at, bt, float(ground.call(Vector2(at, bt)))))
+			if walk_inside.call(Vector2(at, bt)): cells.append(Vector3(at, bt, float(ground.call(Vector2(at, bt)))))
 			bt += 16.0
 		at += 16.0
+	if cells.size() < 8:
+		stats = {accepted = false, reason = "слишком мало сухого места в границах участка"}
+		return []
 	cells.sort_custom(func(a: Vector3, b: Vector3) -> bool: return a.z > b.z)
 	var lo_h := cells[-1].z
 	var hi_h := cells[0].z
@@ -115,8 +117,11 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var goal := Vector2.ZERO
 	var best_score := -INF
 	var tries := 0
+	var walk_refused := 0
+	var layout: String = options.get("park_layout", park_layout)
+	if layout not in PARK_LAYOUTS: layout = PARK_LAYOUTS[posmod(seed, PARK_LAYOUTS.size())]
 	if style == "park":
-		pts = _park_points(ground, walk_inside, size, rng)
+		pts = _park_points(ground, walk_inside, size, rng, layout, bounds)
 		best_score = INF
 	for k in (0 if style == "park" else 10):
 		tries += 1
@@ -127,7 +132,18 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 			if Vector2(g0.x, g0.y).distance_to(start) >= size * 0.45: break
 			g0 = lower[rng.randi() % lower.size()]
 		var target := Vector2(g0.x, g0.y)
-		var line := _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, shape, st, rng, lower, carve.is_valid())
+		var hint: PackedVector2Array = options.get("route_hint", PackedVector2Array())
+		if k == 0 and hint.size() > 1:
+			start = hint[0]
+			target = hint[-1]
+		var line := _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
+		if line.size() < 2: continue
+		var trial := TrailDefinition.new()
+		trial.width = st.width
+		trial.points = _resample(_smooth(_smooth(line)), 2.0)
+		if not Validation.footprint(trial, inside).is_empty():
+			walk_refused += 1
+			continue
 		# лучшая попытка — по длине и спуску вместе (v2: v1 брала самую длинную, и линия могла уйти по горизонтали)
 		var score := _score(line, ground, float(st.length), grade)
 		if score > best_score:
@@ -146,9 +162,10 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	d.kind = "mountain"
 	d.width = st.width
 	d.surface = RoadSurface.DIRT
-	d.earthwork = 1.0
-	d.auto_bank = 1.0
+	d.earthwork = shaping_amount
+	d.auto_bank = lerpf(0.2, 1.0, shaping_amount)
 	d.points = line
+	d.closed = line[0].distance_to(line[-1]) < 0.01
 	var footprint_errors := Validation.footprint(d, inside)
 	if not footprint_errors.is_empty():
 		stats = {accepted = false, reason = "; ".join(footprint_errors)}
@@ -158,26 +175,15 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var shaping := TrailShaping.preset(d.kind)
 	shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, shaping.grade_limit, GRADE_LIMIT_MAX)
 	d.shaping = shaping
-	var profile: Dictionary = (TrailComposer.PROFILES[st.profile] as Dictionary).duplicate(true)
-	profile.standards = true
-	# v3: прыжковые участки вдвое чаще, элементы чуть плотнее
-	var moods: Dictionary = profile.moods
-	moods.jump = float(moods.get("jump", 0.0)) * 2.0 + 2.0
-	profile.density = minf(1.0, float(profile.density) + 0.2) # v4: было +0,1
-	if style == "park":
-		# байк-парк: только прыжки и поток, короткие участки, элементы почти подряд
-		profile.moods = {jump = 5.0, flow = 4.0}
-		profile.density = 1.0
-		profile.section = Vector2(40.0, 70.0)
+	var profile := Composition.profile_for(style, skill, shaping_amount)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
 	# v3: петля и овражки — элементы, пролёты и врезки; составитель ставит своё вокруг них
 	var features := {elements = [] as Array[TrailElement], spans = PackedVector3Array(), cuts = [], reserved = [] as Array[Vector2], loop = false, ravines = 0, gaps = 0, decks = 0, ditches = 0}
 	var stage := Time.get_ticks_usec()
-	if carve.is_valid():
-		_plan_loop(d, ground, level, features)
-		_plan_ravines(d, ground, level, features, rng)
-		_plan_ditches(d, features, rng, DITCH_CHANCE * (2.0 if style == "park" else 1.0))
+	if carve.is_valid() and shaping_amount >= 0.65:
+		if style == "park" and shaping_amount >= 0.8: _plan_loop(d, ground, level, features, gaps_ok)
+		if gaps_ok: _plan_ravines(d, ground, level, features, rng)
 		cuts = features.cuts
 		carve.call(cuts)
 	d.open_spans = features.spans
@@ -188,15 +194,29 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		return true
 	var features_ms := (Time.get_ticks_usec() - stage) / 1000.0
 	stage = Time.get_ticks_usec()
-	var composed := TrailComposer.compose(d, profile, seed * 7919 + 13, ground, free)
+	var sequence := {recovery = 0.0, chains = [], refused = {}}
+	var fits := func(e: TrailElement) -> bool:
+		return free.call(e) and Composition.fits(d, e, ground, sequence, gaps_ok, shaping_amount)
+	var composed := TrailComposer.compose(d, profile, seed * 7919 + 13, ground, fits)
 	var compose_ms := (Time.get_ticks_usec() - stage) / 1000.0
 	var own: Array[TrailElement] = []
-	own.assign((composed.elements as Array).filter(func(e: TrailElement) -> bool: return free.call(e))) # и виражи составителя
+	for e: TrailElement in composed.elements:
+		if not free.call(e): continue
+		# Auto-berms are proposals from the shared composer too; natural mode never bakes them.
+		if not TrailElement.places_objects(e.profile) and (shaping_amount <= 0.001 or (shaping_amount < 0.3 and e.height > 0.1 + shaping_amount * 0.5)):
+			var why := "автовираж требует большего изменения рельефа"
+			sequence.refused[why] = int(sequence.refused.get(why, 0)) + 1
+			continue
+		own.append(e)
 	var all: Array[TrailElement] = own.duplicate()
 	all.append_array(features.elements)
 	all.sort_custom(func(x: TrailElement, y: TrailElement) -> bool: return x.station < y.station)
 	d.elements.assign(all)
 	d.sections.assign(composed.sections)
+	if carve.is_valid() and shaping_amount >= 0.6 and style in ["flow", "park", "enduro"]:
+		_plan_ditches(d, ground, features, rng, 0.25)
+		cuts = features.cuts
+		carve.call(cuts)
 	var errors := d.validate()
 	if not errors.is_empty():
 		stats = {reason = "определение трассы: " + "; ".join(errors), accepted = false}
@@ -220,10 +240,11 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		s += 2.0
 	radii.sort()
 	stats = {length = snappedf(length, 1.0), drop = snappedf(drop, 0.1), grade = snappedf(-drop / maxf(length, 1.0) * 100.0, 0.1),
-		accepted = false, definition_valid = true, elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
+		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, ground), sequence_refused = sequence.refused,
+		elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),
-		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries,
+		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries, walk_refused = walk_refused,
 		walk_ms = snappedf(walk_ms, 1.0), features_ms = snappedf(features_ms, 1.0), compose_ms = snappedf(compose_ms, 1.0),
 		loop = features.loop, ravines = d.open_spans.size(), ditches = features.ditches,
 		gaps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.GAP).size(),
@@ -239,6 +260,8 @@ static func label() -> String:
 	if stats.get("loop", false): extra.append("петля над собой")
 	if int(stats.get("ravines", 0)) > 0: extra.append("овражков %d" % stats.ravines)
 	if int(stats.get("ditches", 0)) > 0: extra.append("канав %d" % stats.ditches)
+	if stats.get("layout", "terrain") != "terrain": extra.append({serpentine = "серпантин", horseshoe = "подкова", oval = "овал"}.get(stats.layout, stats.layout))
+	extra.append("сложность %.0f%%, изменение рельефа %.0f%%" % [float(stats.get("difficulty", 0.5)) * 100.0, float(stats.get("modification", 0.5)) * 100.0])
 	return "%s · сид %d · %.0f м, %+.0f м (%.1f %%) · элементов %d (прыжков %d, виражей %d)%s · до %.0f м/с · %s" % [stats.title, seed, stats.length, -stats.drop, -stats.grade,
 		stats.elements, stats.get("jumps", 0), stats.berms, (" · " + ", ".join(extra)) if not extra.is_empty() else "", stats.speed_top,
 		"полотно проверено" if stats.get("accepted", false) else "проверка полотна ожидается"]
@@ -427,7 +450,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 
 ## v3: петля над собой на готовой линии — пересечение двух её участков (станции далеко друг от друга). Верхний проход —
 ## гэп по стандарту, если на его скорости разрыв перекрывает нижнюю трассу, иначе мосток; нижний — в выемке LOOP_CUT.
-static func _plan_loop(d: TrailDefinition, ground: Callable, level: int, f: Dictionary) -> void:
+static func _plan_loop(d: TrailDefinition, ground: Callable, level: int, f: Dictionary, allow_gaps := false) -> void:
 	var cross := _self_crossing(d)
 	if cross == Vector2.ZERO: return
 	var up := cross.x
@@ -436,7 +459,7 @@ static func _plan_loop(d: TrailDefinition, ground: Callable, level: int, f: Dict
 	var speed := v[clampi(int(up) - 12, 0, v.size() - 1)]
 	var e: TrailElement = null
 	var gap := TrailStandards.spec("gap", snappedf(speed, 0.5), level, TrailStandards.element_grade(d, ground, up - 12.0))
-	if not gap.is_empty() and float(gap.gap) >= d.width + 1.5 and speed >= float(gap.get("speed_lo", 0.0)) - 0.5 and speed <= float(gap.get("speed_hi", INF)) + 0.5:
+	if allow_gaps and not gap.is_empty() and float(gap.gap) >= d.width + 1.5 and speed >= float(gap.get("speed_lo", 0.0)) - 0.5 and speed <= float(gap.get("speed_hi", INF)) + 0.5:
 		e = TrailStandards.element(gap, 0.0)
 		var start := up - (e.gap_lip() + e.gap * 0.5)
 		e.station = start + e.length * 0.5
@@ -469,19 +492,20 @@ static func _steepest(d: TrailDefinition, ground: Callable) -> float:
 		s += 4.0
 	return worst
 
-## v4: змейка байк-парка — PARK_LANES прямых длиной PARK_LANE вдоль горизонталей поля, через PARK_STEP, соединённых
-## полукругами (разворот на 180°). Центр — по сиду во внутренней части; не помещается — меньше прямых или короче.
-static func _park_points(ground: Callable, inside: Callable, size: float, rng: RandomNumberGenerator) -> PackedVector2Array:
+## Three park layouts: contour serpentine, broad horseshoe and closed oval. Fit the chosen region without scaling terrain.
+static func _park_points(ground: Callable, inside: Callable, size: float, rng: RandomNumberGenerator, layout := "serpentine", bounds := Rect2()) -> PackedVector2Array:
+	if not bounds.has_area(): bounds = Rect2(Vector2.ZERO, Vector2.ONE * size)
 	for attempt in 12:
-		var c := Vector2(rng.randf_range(0.3, 0.7), rng.randf_range(0.3, 0.7)) * size
+		var c := bounds.get_center() + Vector2(rng.randf_range(-0.12, 0.12), rng.randf_range(-0.12, 0.12)) * bounds.size
 		var gx := float(ground.call(c + Vector2(20, 0))) - float(ground.call(c - Vector2(20, 0)))
 		var gz := float(ground.call(c + Vector2(0, 20))) - float(ground.call(c - Vector2(0, 20)))
 		var down := -Vector2(gx, gz).normalized() if Vector2(gx, gz).length() > 0.4 else Vector2.from_angle(rng.randf() * TAU)
 		var along := down.orthogonal() # прямые — вдоль горизонтали, от прямой к прямой — вниз
-		var lanes := rng.randi_range(PARK_LANES.x, PARK_LANES.y) - attempt / 4
-		var lane := rng.randf_range(PARK_LANE.x, PARK_LANE.y) * (1.0 - 0.1 * (attempt % 4))
-		var r := PARK_STEP * 0.5
-		var start := c - along * lane * 0.5 - down * PARK_STEP * (lanes - 1) * 0.5
+		var lanes := maxi(3, rng.randi_range(PARK_LANES.x, PARK_LANES.y) - attempt / 4) if layout == "serpentine" else 2
+		var lane := rng.randf_range(PARK_LANE.x, PARK_LANE.y) if layout == "serpentine" else rng.randf_range(140.0, 220.0)
+		lane = minf(lane, minf(bounds.size.x, bounds.size.y) * 0.65) * (1.0 - 0.05 * attempt)
+		var r := rng.randf_range(9.0, 14.0) if layout == "serpentine" else rng.randf_range(24.0, 38.0)
+		var start := c - along * lane * 0.5 - down * 2.0 * r * (lanes - 1) * 0.5
 		var pts := PackedVector2Array([start])
 		var p := start
 		var dir := along
@@ -500,6 +524,13 @@ static func _park_points(ground: Callable, inside: Callable, size: float, rng: R
 				pts.append(center + Vector2.from_angle(a0 + turn * PI * k / steps) * r)
 			p = pts[-1]
 			dir = -dir
+		if layout == "oval":
+			var center := p - down * r
+			var a0 := (p - center).angle()
+			var turn := signf(dir.cross(-down))
+			var steps := int(PI * r / 2.0)
+			for k in range(1, steps + 1): pts.append(center + Vector2.from_angle(a0 + turn * PI * k / steps) * r)
+			pts[-1] = start
 		var ok := true
 		for q in pts:
 			if not inside.call(q):
@@ -508,8 +539,8 @@ static func _park_points(ground: Callable, inside: Callable, size: float, rng: R
 		if ok and pts.size() > 40: return pts
 	return PackedVector2Array()
 
-## v4: канавы вдоль прямых участков — у края полотна с одной стороны, глубина DITCH_DEPTH, на концах сходят на нет.
-static func _plan_ditches(d: TrailDefinition, f: Dictionary, rng: RandomNumberGenerator, chance: float) -> void:
+## Drainage on the uphill side of an unobstructed sloping straight, with a downhill outlet.
+static func _plan_ditches(d: TrailDefinition, ground: Callable, f: Dictionary, rng: RandomNumberGenerator, chance: float) -> void:
 	var length := d.route_length()
 	var s := 30.0
 	while s < length - 50.0:
@@ -517,14 +548,25 @@ static func _plan_ditches(d: TrailDefinition, f: Dictionary, rng: RandomNumberGe
 		if TrailStandards.tightest(d, s, s + span) < 60.0 or rng.randf() > chance:
 			s += 12.0
 			continue
-		var side := 1.0 if rng.randf() < 0.5 else -1.0
+		var clear := true
+		for e in d.elements:
+			if e.station + e.length * 0.5 + 12.0 > s and e.station - e.length * 0.5 - 12.0 < s + span: clear = false
+		var grade := TrailStandards.grade_of(d, ground, s, s + span)
+		var at := d.point_at(s + span * 0.5)
+		var across := d.tangent_at(s + span * 0.5).orthogonal()
+		var cross := (float(ground.call(at + across * 4.0)) - float(ground.call(at - across * 4.0))) / 8.0
+		# Drainage on the uphill side, with a downhill outlet; never a random punishment at a landing.
+		if not clear or grade > -0.015 or grade < -0.15 or absf(cross) < 0.04 or absf(cross) > 0.35:
+			s += 12.0
+			continue
+		var side := signf(cross)
 		var offset := d.width * 0.5 + DITCH_OFFSET
 		var pts := PackedVector2Array()
 		var depth := PackedFloat32Array()
 		var t := s
 		while t <= s + span:
 			pts.append(d.point_at(t) + d.tangent_at(t).orthogonal() * side * offset)
-			depth.append(DITCH_DEPTH * smoothstep(0.0, 6.0, t - s) * smoothstep(0.0, 6.0, s + span - t))
+			depth.append(0.35 * smoothstep(0.0, 6.0, t - s) * smoothstep(0.0, 6.0, s + span - t))
 			t += 4.0
 		f.cuts.append({points = pts, depth = depth, half = 0.5, wall = 0.8})
 		f.ditches += 1

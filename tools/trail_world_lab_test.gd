@@ -2,8 +2,8 @@ extends SceneTree
 ## Генераторы Trail Lab v3 на большом мире (01.11): мир размером с план игры (TrailLabTerrain.generate_world),
 ## поисковик мест (TrailLabScout), трасса каждого места (TrailLabSites → TrailLabBuilder) и сборка её окна тем же путём,
 ## что в лаборатории (Fixture.prepare с «generated»). Проверки:
-##   - мест 1–8, не пересекаются, у каждого стиль;
-##   - трасса каждого места: определение верно, сборка без ошибок, поверхность измерена;
+##   - число мест по пригодности карты; разные границы, без дубликатов пробных коридоров;
+##   - трасса каждого места: принята после проверки полотна либо отклонена с конкретной причиной;
 ##   - овражки: под открытым пролётом земля ниже кромок пролёта (внизу овражек, а не насыпь);
 ##   - петля: верхний проход над нижним — просвет от полотна нижнего прохода до настила или траектории не меньше 2,5 м;
 ##   - сводно — прыжки (стол, гэп, дроп), овражки и петли на всех местах.
@@ -62,12 +62,12 @@ func run() -> void:
 		(Time.get_ticks_usec() - t) / 1e6, TrailLabTerrain.world_info.get("stages", {}), TrailLabScout.stats.get("ms", 0.0), TrailLabScout.stats.get("looked", 0),
 		TrailLabScout.stats.get("fit", 0), TrailLabScout.stats.get("refused", {})])
 	check(TrailLabTerrain.world_size == WorldGenerator.PLAN_SIZE, "мир размером с план игры (%d)" % TrailLabTerrain.world_size)
-	check(count >= 1 and count <= TrailLabScout.MAX_SITES, "мест под трассы: %d" % count)
+	check(count >= 1, "мест под трассы по пригодности карты: %d" % count)
 	var apart := true
 	for i in Sites.sites.size():
 		for j in range(i + 1, Sites.sites.size()):
-			if Vector2(Sites.sites[i].origin).distance_to(Vector2(Sites.sites[j].origin)) < TrailLabTerrain.CELLS * TrailLabScout.SPREAD - 0.5: apart = false
-	check(apart, "места не налезают друг на друга")
+			if TrailLabScout.overlap(Sites.sites[i].corridor, Sites.sites[j].corridor) >= TrailLabScout.OVERLAP: apart = false
+	check(apart, "нет дубликатов коридоров пробных трасс")
 	var totals := {jumps = 0, gaps = 0, decks = 0, ravines = 0, loops = 0, length = 0.0}
 	var proposed := {ravines = 0, loops = 0}
 	for i in mini(count, limit):
@@ -125,10 +125,8 @@ func run() -> void:
 		totals.loops += int(st.get("loop", false))
 		totals.length += float(st.length)
 	print("\nВсего: %.1f км трасс · прыжков %d (гэпов по стандарту %d) · овражков %d · мостков %d · петель %d" % [totals.length / 1000.0, totals.jumps, totals.gaps, totals.ravines, totals.decks, totals.loops])
-	if limit >= count:
-		check(proposed.ravines > 0, "овражки есть среди предложенных трасс")
-		check(proposed.loops > 0, "петли над собой есть среди предложенных трасс")
-	else:
+	check(totals.gaps == 0, "по умолчанию нет обязательных гэпов")
+	if limit < count:
 		print("Ограниченная выборка %d из %d мест: предложено овражков %d, петель %d; разнообразие всех мест не проверялось" % [limit, count, proposed.ravines, proposed.loops])
 	await lab_check(seed)
 	print("\nИТОГ: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))

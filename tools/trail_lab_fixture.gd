@@ -179,6 +179,7 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		TrailLabBuilder.stats.decks = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.NORTHSHORE).size()
 		TrailLabBuilder.stats.ravines = final_route.open_spans.size()
 		TrailLabBuilder.stats.jumps = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.GAP, TrailElement.Profile.TABLETOP, TrailElement.Profile.DROP]).size()
+		TrailLabBuilder.stats.chains = TrailLabBuilder.Composition.describe(final_route, func(p: Vector2) -> float: return result.heights.ground_at(p.x, p.y))
 		if errors.is_empty():
 			TrailLabBuilder.stats.erase("reason")
 			TrailLabBuilder.speeds = reports[routes[0].id].scenarios.normal.speeds
