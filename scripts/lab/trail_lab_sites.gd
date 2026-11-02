@@ -36,6 +36,13 @@ static func select(i: int) -> bool:
 	TrailLabTerrain.use_window(site.origin)
 	if not _built.has(i): _build(i, int(site.trail_seed))
 	TrailLabTerrain.apply_cuts(_built[i].cuts)
+	TrailLabBuilder.stats = _built[i].stats.duplicate(true)
+	TrailLabBuilder.seed = int(_built[i].seed)
+	TrailLabBuilder.style = site.style
+	TrailLabBuilder.speeds = PackedFloat32Array()
+	if TrailLabBuilder.stats.get("accepted", false):
+		var checked: Dictionary = TrailLabBuilder.stats.get("validation", {})
+		if not checked.is_empty(): TrailLabBuilder.speeds = checked.values()[0].scenarios.normal.speeds
 	return not (_built[i].routes as Array).is_empty()
 
 ## Другая трасса на месте i: новый сид, тот же стиль.
@@ -59,6 +66,18 @@ static func routes() -> Array[TrailDefinition]:
 	if not _built.has(current): return out
 	for d: TrailDefinition in _built[current].routes: out.append(d.duplicate(true) as TrailDefinition)
 	return out
+
+## Final preparation can repair a feature or reject the line: keep the site's cached report honest.
+static func publish_validation(checked: Array[TrailDefinition], final_stats: Dictionary) -> void:
+	if not active() or not _built.has(current) or checked.is_empty(): return
+	var cached: Array = _built[current].routes
+	if cached.is_empty() or cached[0].id != checked[0].id: return
+	_built[current].stats = final_stats.duplicate(true)
+	_built[current].label = TrailLabBuilder.label()
+	if final_stats.get("accepted", false):
+		var copies: Array[TrailDefinition] = []
+		for d in checked: copies.append(d.duplicate(true) as TrailDefinition)
+		_built[current].routes = copies
 
 ## Подпись места i для списка: номер, стиль, перепад; у построенного — длина и особенности.
 static func title(i: int) -> String:

@@ -106,7 +106,7 @@ func begin(lab, reason: String) -> void:
 	_previous_station = -1.0
 	_last_hit_tick = -1
 	_close_analysis(_ride - 1)
-	analysis.prepare(lab.routes[lab.lane])
+	analysis.prepare(lab.routes[lab.lane], func(at: Vector2) -> float: return lab.heights.ground_at(at.x, at.y))
 	_route_snapshots.append(_snapshot(lab))
 	_preset = lab.preset
 	var near: Vector3 = lab.routes[lab.lane].nearest(Vector2(lab.bike.x, lab.bike.z))

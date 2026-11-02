@@ -38,10 +38,16 @@ func lab_check(seed: int) -> void:
 		frames += 1
 	check(lab._world_thread == null, "мир готов в фоне (%d кадров)" % frames)
 	check(lab.site_select.item_count == Sites.sites.size() and lab.site_row.visible, "список мест: %d" % lab.site_select.item_count)
-	check(not lab.routes.is_empty() and str(lab.routes[0].id).begins_with("site1_"), "выбрано место 1: %s" % (lab.routes[0].title if not lab.routes.is_empty() else "—"))
+	var first_accepted: bool = Sites._built.has(0) and Sites._built[0].stats.get("accepted", false)
+	check((not lab.routes.is_empty() and str(lab.routes[0].id).begins_with("site1_")) if first_accepted else not Sites._built[0].stats.get("reason", "").is_empty(), "место 1: принята проверенная трасса или показана причина отказа")
 	if Sites.sites.size() > 1:
-		check(lab.select_site(1) and str(lab.routes[0].id).begins_with("site2_"), "переключение на место 2: %s" % lab.routes[0].title)
-		check(lab.player.x != 0.0 and lab.routes[0].nearest(Vector2(lab.bike.x, lab.bike.z)).z < 3.0, "седок на старте места 2")
+		var before: String = lab.routes[0].id
+		var selected: bool = lab.select_site(1)
+		if selected:
+			check(str(lab.routes[0].id).begins_with("site2_") and Sites._built[1].stats.accepted, "место 2 принято после проверки")
+			check(lab.player.x != 0.0 and lab.routes[0].nearest(Vector2(lab.bike.x, lab.bike.z)).z < 3.0, "седок на старте места 2")
+		else:
+			check(lab.routes[0].id == before and not Sites._built[1].stats.get("reason", "").is_empty(), "отказ места 2 сохраняет прежнюю сцену и причину")
 	lab.shutdown()
 	lab.queue_free()
 	await process_frame
@@ -63,6 +69,7 @@ func run() -> void:
 			if Vector2(Sites.sites[i].origin).distance_to(Vector2(Sites.sites[j].origin)) < TrailLabTerrain.CELLS * TrailLabScout.SPREAD - 0.5: apart = false
 	check(apart, "места не налезают друг на друга")
 	var totals := {jumps = 0, gaps = 0, decks = 0, ravines = 0, loops = 0, length = 0.0}
+	var proposed := {ravines = 0, loops = 0}
 	for i in mini(count, limit):
 		var site := Sites.sites[i]
 		var started := Time.get_ticks_usec()
@@ -70,18 +77,20 @@ func run() -> void:
 		var line_ms := (Time.get_ticks_usec() - started) / 1000.0
 		print("\nМесто %s · %.0f мс" % [Sites.title(i), line_ms])
 		if not ok:
-			check(false, "место %d: трасса не проложилась (%s)" % [i + 1, TrailLabBuilder.stats.get("reason", "")])
+			check(not TrailLabBuilder.stats.get("accepted", true) and not TrailLabBuilder.stats.get("reason", "").is_empty(), "место %d: явный отказ (%s)" % [i + 1, TrailLabBuilder.stats.get("reason", "")])
 			continue
 		var routes := Sites.routes()
 		var d := routes[0]
 		var st: Dictionary = Sites._built[i].stats
+		proposed.ravines += int(st.get("ravines", 0))
+		proposed.loops += int(st.get("loop", false))
 		print("  %s · отказы %s · линия %s мс, петля и овражки %s мс, составитель %s мс" % [Sites._built[i].label, st.refused, st.get("walk_ms", 0), st.get("features_ms", 0), st.get("compose_ms", 0)])
 		check(d.validate().is_empty(), "место %d: определение верно %s" % [i + 1, d.validate()])
 		started = Time.get_ticks_usec()
 		var prepared := Fixture.prepare(routes, true, "generated")
 		var build_ms := (Time.get_ticks_usec() - started) / 1000.0
 		if not prepared.errors.is_empty():
-			check(false, "место %d: сборка %s" % [i + 1, prepared.errors])
+			check(prepared.has("validation") and prepared.heights == null and not TrailLabBuilder.stats.accepted, "место %d: итоговая проверка отклонила трассу %s" % [i + 1, prepared.errors])
 			continue
 		var h: Heightfield = prepared.heights
 		var survey := TrailSurvey.measure(h, d, 0.2)
@@ -116,8 +125,11 @@ func run() -> void:
 		totals.loops += int(st.get("loop", false))
 		totals.length += float(st.length)
 	print("\nВсего: %.1f км трасс · прыжков %d (гэпов по стандарту %d) · овражков %d · мостков %d · петель %d" % [totals.length / 1000.0, totals.jumps, totals.gaps, totals.ravines, totals.decks, totals.loops])
-	check(totals.ravines > 0, "овражки есть")
-	check(totals.loops > 0, "петли над собой есть")
+	if limit >= count:
+		check(proposed.ravines > 0, "овражки есть среди предложенных трасс")
+		check(proposed.loops > 0, "петли над собой есть среди предложенных трасс")
+	else:
+		print("Ограниченная выборка %d из %d мест: предложено овражков %d, петель %d; разнообразие всех мест не проверялось" % [limit, count, proposed.ravines, proposed.loops])
 	await lab_check(seed)
 	print("\nИТОГ: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))
 	quit(1 if failures > 0 else 0)

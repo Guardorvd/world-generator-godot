@@ -134,7 +134,68 @@ static func relief(kind: String) -> PackedFloat32Array:
 ## A failed edit leaves the caller's current session untouched.
 ## `timings` (ms, disjoint stages): setup — the lab's source world, routes and obstacle grid; surface — Heightfield
 ## with the tread and the metre grid (finish_paths); earthworks — TrailBuilder's own trail_elements_ms, -1 when not baked.
+const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
+
 static func prepare(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
+	# Only generated Lab lines are acceptance-gated. Authored test stands remain available for diagnosis.
+	var generated := with_elements and not routes.is_empty() and routes[0].id.contains("generated_")
+	if not generated: return _prepare_once(routes, with_elements, kind)
+	var repairs := []
+	var repaired := {}
+	for attempt in Validation.MAX_REPAIRS + 1:
+		var result := _prepare_once(routes, with_elements, kind)
+		if not result.errors.is_empty():
+			TrailLabBuilder.stats.accepted = false
+			TrailLabBuilder.stats.reason = "; ".join(result.errors)
+			Sites.publish_validation(routes, TrailLabBuilder.stats)
+			return result
+		var technical := TrailTechnical.build(result.heights, routes)
+		var reports := {}
+		var errors := PackedStringArray()
+		var changed := false
+		for d in routes:
+			var allowed := func(p: Vector2) -> bool:
+				return p.x > TrailLabBuilder.MARGIN and p.y > TrailLabBuilder.MARGIN and p.x < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and p.y < TrailLabTerrain.SIZE - TrailLabBuilder.MARGIN and not TrailLabTerrain.wet_at(p)
+			var report := Validation.measure(result.heights, d, allowed)
+			reports[d.id] = report
+			if not report.accepted and attempt < Validation.MAX_REPAIRS and not changed:
+				var fix := Validation.repair(d, report, repaired)
+				if not fix.is_empty():
+					repairs.append(fix)
+					changed = true
+			errors.append_array(report.errors)
+		if changed: continue # Every repair gets a new bake and ALL scenarios are checked again.
+		result.validation = reports
+		result.repairs = repairs
+		result.technical = technical
+		result.errors = errors
+		TrailLabBuilder.stats.accepted = errors.is_empty()
+		TrailLabBuilder.stats.repairs = repairs
+		TrailLabBuilder.stats.validation = reports
+		var final_route := routes[0]
+		TrailLabBuilder.stats.elements = final_route.elements.size()
+		TrailLabBuilder.stats.berms = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size()
+		TrailLabBuilder.stats.gaps = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.GAP).size()
+		TrailLabBuilder.stats.decks = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.NORTHSHORE).size()
+		TrailLabBuilder.stats.ravines = final_route.open_spans.size()
+		TrailLabBuilder.stats.jumps = final_route.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.GAP, TrailElement.Profile.TABLETOP, TrailElement.Profile.DROP]).size()
+		if errors.is_empty():
+			TrailLabBuilder.stats.erase("reason")
+			TrailLabBuilder.speeds = reports[routes[0].id].scenarios.normal.speeds
+			var final_speeds := TrailLabBuilder.speeds
+			TrailLabBuilder.stats.speed_top = Array(final_speeds).max()
+			var sum := 0.0
+			for v in final_speeds: sum += v
+			TrailLabBuilder.stats.speed_mean = sum / final_speeds.size()
+		else:
+			TrailLabBuilder.stats.reason = "готовая трасса отклонена: " + "; ".join(errors)
+			TrailLabBuilder.speeds = PackedFloat32Array()
+			result.heights = null
+		Sites.publish_validation(routes, TrailLabBuilder.stats)
+		return result
+	return {heights = null, errors = PackedStringArray(["исчерпан бюджет исправлений"]), timings = {}}
+
+static func _prepare_once(routes: Array[TrailDefinition], with_elements := true, kind := "flat") -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var timings := {setup_ms = 0.0, surface_ms = -1.0, earthworks_ms = -1.0}
 	if kind == "site":

@@ -421,10 +421,10 @@ func _mark_preset() -> void:
 	preset_select.select(preset)
 	preset_label.text = "ТРАССА  %d / %d   ·   PgUp / PgDn" % [preset + 1, TrailLabCatalog.LIST.size()]
 	preset_select.tooltip_text = TrailLabCatalog.LIST[preset].title + "\nF2 или V — курсор"
-	generator_label.visible = TrailLabCatalog.LIST[preset].ground == "generated" or _world_thread != null
+	generator_label.visible = TrailLabCatalog.LIST[preset].ground == "generated" or _world_thread != null or Sites.active()
 	if generator_label.visible and _world_thread == null:
 		generator_label.text = Sites.label() if Sites.active() else "%s\n%s" % [TrailLabTerrain.label(), TrailLabBuilder.label()]
-	site_row.visible = not Sites.sites.is_empty() and TrailLabCatalog.LIST[preset].ground == "generated"
+	site_row.visible = not Sites.sites.is_empty()
 
 ## Построить готовую трассу номер index вместо текущей (тем же путём, что «Построить» в F2); при отказе остаётся прежняя
 func select_preset(index: int) -> bool:
@@ -464,6 +464,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 		show_message("Нужна хотя бы одна трасса")
 		return false
 	var prepared := ready if not ready.is_empty() else Fixture.prepare(candidate, true, ground_kind)
+	if Sites.active(): _fill_sites()
 	if not prepared.errors.is_empty():
 		show_message("Правка отклонена: " + "; ".join(prepared.errors))
 		return false
@@ -475,7 +476,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {})
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(next_heights.world, next_heights))
 	timings.mesh_ms = (Time.get_ticks_usec() - stage) / 1000.0
 	stage = Time.get_ticks_usec()
-	var next_technical := TrailTechnical.build(next_heights, candidate)
+	var next_technical: Dictionary = prepared.technical if prepared.has("technical") else TrailTechnical.build(next_heights, candidate)
 	timings.technical_ms = (Time.get_ticks_usec() - stage) / 1000.0
 	# Measured after the earthworks and the decks: the profile the wheel will actually ride.
 	stage = Time.get_ticks_usec()

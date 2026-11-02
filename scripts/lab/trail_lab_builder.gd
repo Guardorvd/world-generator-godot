@@ -1,5 +1,6 @@
 extends RefCounted
 const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
+const Validation := preload("res://scripts/lab/trail_lab_validation.gd")
 ## Trail Lab, генератор трассы, v3 (01.11). По любой земле (Callable) в квадрате size × size м прокладывает одну
 ## линию сверху вниз и ставит на неё элементы составителем с расчётными стандартами (TrailComposer + TrailStandards).
 ## v2 (по заездам 01.11): ходок знает скорость (радиус не туже v²/a), старт и цель по сиду, виражи на быстрых поворотах.
@@ -76,9 +77,15 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("trail_lab_builder|%d|%s" % [seed, style])
 	stats = {}
+	speeds = PackedFloat32Array()
 	cuts = []
 	var inside := func(p: Vector2) -> bool:
 		return p.x > MARGIN and p.y > MARGIN and p.x < size - MARGIN and p.y < size - MARGIN and not (avoid.is_valid() and avoid.call(p))
+	var walk_inside := func(p: Vector2) -> bool:
+		var half: float = st.width * 0.5
+		for offset in [Vector2.ZERO, Vector2(half, 0), Vector2(-half, 0), Vector2(0, half), Vector2(0, -half)]:
+			if not inside.call(p + offset): return false
+		return true
 	var cells: Array[Vector3] = []
 	var at := MARGIN + 8.0
 	while at < size - MARGIN:
@@ -109,7 +116,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	var best_score := -INF
 	var tries := 0
 	if style == "park":
-		pts = _park_points(ground, inside, size, rng)
+		pts = _park_points(ground, walk_inside, size, rng)
 		best_score = INF
 	for k in (0 if style == "park" else 10):
 		tries += 1
@@ -120,7 +127,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 			if Vector2(g0.x, g0.y).distance_to(start) >= size * 0.45: break
 			g0 = lower[rng.randi() % lower.size()]
 		var target := Vector2(g0.x, g0.y)
-		var line := _walk_with_loop(ground, inside, start, target, float(st.length), grade, shape, st, rng, lower, carve.is_valid())
+		var line := _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, shape, st, rng, lower, carve.is_valid())
 		# лучшая попытка — по длине и спуску вместе (v2: v1 брала самую длинную, и линия могла уйти по горизонтали)
 		var score := _score(line, ground, float(st.length), grade)
 		if score > best_score:
@@ -130,7 +137,7 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		if best_score > 1.5: break
 	var walk_ms := (Time.get_ticks_usec() - started) / 1000.0
 	if pts.size() < 40:
-		stats = {reason = "линия не проложилась: места хватило на %.0f м" % (pts.size() * STEP)}
+		stats = {accepted = false, reason = "линия не проложилась: места хватило на %.0f м" % (pts.size() * STEP)}
 		return []
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
 	var d := TrailDefinition.new()
@@ -142,6 +149,10 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	d.earthwork = 1.0
 	d.auto_bank = 1.0
 	d.points = line
+	var footprint_errors := Validation.footprint(d, inside)
+	if not footprint_errors.is_empty():
+		stats = {accepted = false, reason = "; ".join(footprint_errors)}
+		return []
 	# v3: целевой уклон выравнивания — по самой крутой части самой линии (не ниже пресета): иначе после крутого спуска
 	# полотно держит 16 % и уходит в насыпь до 10 м — под пролётом и в узле петли это яма, а не овражек
 	var shaping := TrailShaping.preset(d.kind)
@@ -186,20 +197,15 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 	all.sort_custom(func(x: TrailElement, y: TrailElement) -> bool: return x.station < y.station)
 	d.elements.assign(all)
 	d.sections.assign(composed.sections)
-	if not d.validate().is_empty():
-		# виражи составителя не прошли проверку определения — без них (элементы составителя проверены сами)
-		d.elements.assign(d.elements.filter(func(e: TrailElement) -> bool: return e.profile != TrailElement.Profile.BERM or e in features.elements))
-	if not d.validate().is_empty():
-		# и элементы v3 тоже — тогда без врезок
-		d.elements.assign(own.filter(func(e: TrailElement) -> bool: return e.profile != TrailElement.Profile.BERM))
-		d.open_spans = PackedVector3Array()
-		features.loop = false
-		features.ravines = 0
+	var errors := d.validate()
+	if not errors.is_empty():
+		stats = {reason = "определение трассы: " + "; ".join(errors), accepted = false}
 		cuts = []
 		if carve.is_valid(): carve.call(cuts)
+		return []
 	var length := d.route_length()
 	var drop := float(ground.call(line[0])) - float(ground.call(line[-1]))
-	speeds = composed.get("speeds", PackedFloat32Array())
+	speeds = TrailStandards.profile_from(d, TrailStandards.line_heights(d, ground), level, {}, false)
 	var top := 0.0
 	var mean := 0.0
 	for v in speeds:
@@ -214,12 +220,14 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 		s += 2.0
 	radii.sort()
 	stats = {length = snappedf(length, 1.0), drop = snappedf(drop, 0.1), grade = snappedf(-drop / maxf(length, 1.0) * 100.0, 0.1),
-		elements = d.elements.size(), refused = composed.get("refused", {}), berms = composed.get("berms", 0), speed_top = snappedf(top, 0.1),
+		accepted = false, definition_valid = true, elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),
 		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries,
 		walk_ms = snappedf(walk_ms, 1.0), features_ms = snappedf(features_ms, 1.0), compose_ms = snappedf(compose_ms, 1.0),
-		loop = features.loop, ravines = features.ravines, ditches = features.ditches, gaps = features.gaps, decks = features.decks,
+		loop = features.loop, ravines = d.open_spans.size(), ditches = features.ditches,
+		gaps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.GAP).size(),
+		decks = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.NORTHSHORE).size(),
 		jumps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.TABLETOP, TrailElement.Profile.GAP, TrailElement.Profile.DROP]).size()}
 	return [d]
 
@@ -231,8 +239,9 @@ static func label() -> String:
 	if stats.get("loop", false): extra.append("петля над собой")
 	if int(stats.get("ravines", 0)) > 0: extra.append("овражков %d" % stats.ravines)
 	if int(stats.get("ditches", 0)) > 0: extra.append("канав %d" % stats.ditches)
-	return "%s · сид %d · %.0f м, %+.0f м (%.1f %%) · элементов %d (прыжков %d, виражей %d)%s · до %.0f м/с" % [stats.title, seed, stats.length, -stats.drop, -stats.grade,
-		stats.elements, stats.get("jumps", 0), stats.berms, (" · " + ", ".join(extra)) if not extra.is_empty() else "", stats.speed_top]
+	return "%s · сид %d · %.0f м, %+.0f м (%.1f %%) · элементов %d (прыжков %d, виражей %d)%s · до %.0f м/с · %s" % [stats.title, seed, stats.length, -stats.drop, -stats.grade,
+		stats.elements, stats.get("jumps", 0), stats.berms, (" · " + ", ".join(extra)) if not extra.is_empty() else "", stats.speed_top,
+		"полотно проверено" if stats.get("accepted", false) else "проверка полотна ожидается"]
 
 
 ## Оценка линии: доля нужной длины (до 1) плюс доля ожидаемого спуска (до 1); подъём в итоге — минус.
@@ -427,14 +436,14 @@ static func _plan_loop(d: TrailDefinition, ground: Callable, level: int, f: Dict
 	var speed := v[clampi(int(up) - 12, 0, v.size() - 1)]
 	var e: TrailElement = null
 	var gap := TrailStandards.spec("gap", snappedf(speed, 0.5), level, TrailStandards.element_grade(d, ground, up - 12.0))
-	if not gap.is_empty() and float(gap.gap) >= d.width + 1.5 and speed >= float(gap.get("speed_lo", 0.0)) - 0.5:
+	if not gap.is_empty() and float(gap.gap) >= d.width + 1.5 and speed >= float(gap.get("speed_lo", 0.0)) - 0.5 and speed <= float(gap.get("speed_hi", INF)) + 0.5:
 		e = TrailStandards.element(gap, 0.0)
 		var start := up - (e.gap_lip() + e.gap * 0.5)
 		e.station = start + e.length * 0.5
 		f.gaps += 1
 	else:
 		e = TrailElementLibrary.make(TrailElement.Profile.NORTHSHORE, up, 24.0, LOOP_DECK, 1.0, 3, 0.75)
-		e.gap = minf(3.2, d.width - 0.4) # v4: было 2,6 — съезжали с настила петли
+		e.gap = minf(3.2, d.width - 0.5) # same clearance as TrailDefinition.validate
 		f.decks += 1
 	f.elements.append(e)
 	f.reserved.append(Vector2(e.station - e.length * 0.5, e.station + e.length * 0.5))

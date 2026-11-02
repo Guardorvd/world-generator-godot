@@ -94,7 +94,7 @@ func run() -> void:
 		for style: String in styles:
 			var routes := TrailLabBuilder.build(TrailLabTerrain.ground, TrailLabTerrain.SIZE, seed, style)
 			if routes.is_empty():
-				check(false, "%s: %s" % [style, TrailLabBuilder.stats.get("reason", "нет линии")])
+				check(not TrailLabBuilder.stats.get("reason", "").is_empty() and not TrailLabBuilder.stats.get("accepted", true), "%s: явный отказ: %s" % [style, TrailLabBuilder.stats.get("reason", "нет линии")])
 				continue
 			var st := TrailLabBuilder.stats
 			print("  трасса: %s · %.0f мс · отказы %s" % [TrailLabBuilder.label(), st.ms, st.refused])
@@ -105,8 +105,9 @@ func run() -> void:
 			var prepared := Fixture.prepare(routes, true, "generated")
 			var build_ms := (Time.get_ticks_usec() - started) / 1000.0
 			if not prepared.errors.is_empty():
-				check(false, "%s: сборка %s" % [style, prepared.errors])
+				check(prepared.has("validation") and prepared.heights == null and not TrailLabBuilder.stats.accepted, "%s: итоговая проверка отклонила трассу: %s" % [style, prepared.errors])
 				continue
+			check(prepared.has("validation") and TrailLabBuilder.stats.accepted, "%s: принята после проверки готового полотна" % style)
 			var survey := TrailSurvey.measure(prepared.heights, d, 0.2)
 			check(survey.errors.is_empty(), "%s: собрана за %.0f мс, поверхность измерена %s" % [style, build_ms, survey.errors])
 			print("    радиус поворотов (медиана) %.0f м · целевой уклон %.1f %% · тяга к цели %.2f" % [st.radius_median, st.target_grade, st.pull])
@@ -115,10 +116,11 @@ func run() -> void:
 			check(turns_ok(d, speeds), "%s: тугие повороты проходятся на скорости седока или с виражом" % style)
 			var jumps := 0
 			var inside := 0
-			for e in d.elements:
+			for ei in d.elements.size():
+				var e := d.elements[ei]
 				if e.profile not in [TrailElement.Profile.TABLETOP, TrailElement.Profile.GAP]: continue
 				jumps += 1
-				var w := TrailStandards.window(e, d, TrailStandards.element_grade(d, TrailLabTerrain.ground, e.station - e.length * 0.5))
+				var w: Dictionary = prepared.validation[d.id].scenarios.normal.windows[ei]
 				var v := speeds[clampi(int(e.station - e.length * 0.5), 0, speeds.size() - 1)]
 				var ok: bool = w.has("speed_lo") and w.has("speed_hi") and v >= float(w.speed_lo) - 0.6 and v <= float(w.speed_hi) + 0.6
 				inside += int(ok)

@@ -39,7 +39,7 @@ var _air_v := 0.0
 
 
 ## Ожидания по участкам трассы route. Технические линии — TrailTechnical.line_offsets (чистые проезды объектов).
-func prepare(d: TrailDefinition) -> void:
+func prepare(d: TrailDefinition, ground := Callable()) -> void:
 	route = d
 	features.clear()
 	passes.clear()
@@ -61,7 +61,7 @@ func prepare(d: TrailDefinition) -> void:
 		var level := _level(d, e.station)
 		match e.profile:
 			T.GAP, T.TABLETOP, T.DROP, T.ROLLER:
-				var w := TrailStandards.window(e, d, 0.0, level)
+				var w := TrailStandards.window(e, d, TrailStandards.grade_of(d, ground, from, to), level)
 				for key in ["lip", "land_from", "ideal_land", "land_to", "speed_lo", "speed_ideal", "speed_hi", "roll_speed"]:
 					if w.has(key): f[key] = _r(float(w[key]))
 				if e.profile == T.GAP: f.gap = _r(e.gap)
