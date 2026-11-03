@@ -164,9 +164,13 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		stage = Time.get_ticks_usec()
 		var reports := {}
 		var errors := PackedStringArray()
+		var earthwork_audit := {}
 		if source != null:
 			var audit_started := Time.get_ticks_usec()
-			errors.append_array(source.audit_earthworks(result.heights))
+			if routes.size() == 1:
+				earthwork_audit = preload("res://scripts/lab/trail_lab_base_surface.gd").audit(source, result.heights, routes[0])
+				for reason: String in earthwork_audit.errors: errors.append(reason.replace("базовое полотно", "готовое полотно").replace("базового полотна", "готового полотна"))
+			else: errors.append_array(source.audit_earthworks(result.heights))
 			cumulative.constraints_ms += (Time.get_ticks_usec() - audit_started) / 1000.0
 		var changed := false
 		for d in routes:
@@ -190,9 +194,11 @@ static func prepare(routes: Array[TrailDefinition], with_elements := true, kind 
 		result.repairs = repairs
 		result.technical = technical
 		result.errors = errors
+		result.earthwork_audit = earthwork_audit
 		TrailLabBuilder.stats.accepted = errors.is_empty()
 		TrailLabBuilder.stats.repairs = repairs
 		TrailLabBuilder.stats.validation = reports
+		TrailLabBuilder.stats.earthwork_audit = earthwork_audit
 		TrailLabBuilder.stats.earthworks = result.heights.road_refinement.trail_shaping.duplicate(true)
 		if source != null: TrailLabBuilder.stats.source_hash = source.fingerprint()
 		var final_route := routes[0]

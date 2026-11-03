@@ -5,6 +5,8 @@ const Composition := preload("res://scripts/lab/trail_lab_composition.gd")
 const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
 const RouteContract := preload("res://scripts/lab/trail_lab_route_contract.gd")
 const BaseSurface := preload("res://scripts/lab/trail_lab_base_surface.gd")
+const ElementFit := preload("res://scripts/lab/trail_lab_element_fit.gd")
+const BrakingRepair := preload("res://scripts/lab/trail_lab_braking_repair.gd")
 ## Trail Lab only: bounded terrain routes, independent style/difficulty/construction settings,
 ## planned approach/feature/recovery chains and optional engineered crossings.
 ## Deterministic in terrain, seed and settings. Final acceptance belongs to Fixture.prepare.
@@ -339,6 +341,26 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		cuts = []
 		if carve.is_valid(): carve.call(cuts)
 		return _project_result([], stats, cuts, speeds, seed)
+	var element_fit := {}
+	if options.has("_source") and not options.get("_diagnostic_raw_proposals", false):
+		var fitting_started := Time.get_ticks_usec()
+		element_fit = ElementFit.fit(options._source, d, options)
+		# Diagnose the bare tread before touching feature recovery. A refused base gets a bounded
+		# geometry solve; its existing proposals are remapped and fitted again on the new surface.
+		if not element_fit.get("base", {}).get("ride", {}).get("accepted", false):
+			var braking := BrakingRepair.solve(options._source, d, options)
+			base_surface.braking_repair = braking
+			if braking.accepted and braking.get("changed", false):
+				element_fit = braking.elements
+				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+				var repaired_base := d.duplicate(true) as TrailDefinition
+				repaired_base.elements.clear()
+				var rebaked := BaseSurface.bake(options._source, repaired_base)
+				if not rebaked.errors.is_empty(): return _project_result([], {accepted = false, reason = "; ".join(rebaked.errors)}, [], speeds, seed)
+				var repaired_heights: Heightfield = rebaked.heights
+				composing_ground = func(p: Vector2) -> float: return repaired_heights.ground_at(p.x, p.y)
+		element_fit.total_ms = (Time.get_ticks_usec() - fitting_started) / 1000.0
+		base_surface.ride = element_fit.get("base", {}).get("ride", {})
 	var length := d.route_length()
 	var drop := float(ground.call(line[0])) - float(ground.call(line[-1]))
 	speeds = TrailStandards.profile_from(d, TrailStandards.line_heights(d, ground), level, {}, false)
@@ -356,10 +378,11 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		s += 2.0
 	radii.sort()
 	stats = {length = snappedf(length, 1.0), drop = snappedf(drop, 0.1), grade = snappedf(-drop / maxf(length, 1.0) * 100.0, 0.1),
+		element_fit = element_fit,
 		base_surface = base_surface, composition_started = true,
 		completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates,
 		line_score = best_components,
-		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, ground), sequence_refused = sequence.refused,
+		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, composing_ground), sequence_refused = sequence.refused,
 		elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),

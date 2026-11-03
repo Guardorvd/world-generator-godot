@@ -5,6 +5,12 @@ const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
 const TrailLabScout := preload("res://scripts/lab/trail_lab_scout.gd")
 const Project := preload("res://scripts/lab/trail_lab_project.gd")
 const ProjectPanel := preload("res://scripts/lab/trail_lab_project_panel.gd")
+const Trial := preload("res://scripts/lab/trail_lab_trial.gd")
+const TrialHud := preload("res://scripts/lab/trail_lab_trial_hud.gd")
+var trial: RefCounted
+var trial_hud := TrialHud.new()
+var trial_visuals := Node3D.new()
+const GAME_EXAMPLE := "res://resources/trails/lab/game_example_111_44101.tres"
 var project_panel := ProjectPanel.new()
 var draft_project: Project
 var active_project: Project
@@ -113,6 +119,7 @@ func _ready() -> void:
 	add_child(props)
 	add_child(water)
 	add_child(structures)
+	add_child(trial_visuals)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -30, 0)
 	sun.shadow_enabled = true
@@ -133,6 +140,10 @@ func _ready() -> void:
 	camera.far = 800.0
 	var canvas := CanvasLayer.new()
 	add_child(canvas)
+	canvas.add_child(trial_hud)
+	trial_hud.hide()
+	trial_hud.retry_requested.connect(func() -> void: reset_ride())
+	trial_hud.exit_requested.connect(close_game_example)
 	hud_panel.position = Vector2(12, 12)
 	hud_panel.theme_type_variation = "HudPanel"
 	canvas.add_child(hud_panel)
@@ -301,6 +312,14 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	projects_button.text = "Карта · А/Б"
 	projects_button.pressed.connect(show_projects)
 	gen_row.add_child(projects_button)
+	var game_button := Button.new()
+	game_button.text = "Игровой пример · F10"
+	game_button.pressed.connect(open_game_example)
+	box.add_child(game_button)
+	var slope_button := Button.new()
+	slope_button.text = "Игровой пример · Мир 7"
+	slope_button.pressed.connect(func() -> void: open_game_example("res://resources/trails/lab/game_example_7_9066.tres"))
+	box.add_child(slope_button)
 	# v3: места большого мира — список с переключением (‹ › или [ ]): выбор строит окно места и ставит на старт
 	site_row.add_theme_constant_override("separation", 4)
 	site_row.visible = false
@@ -476,6 +495,13 @@ func _refresh_projects() -> void:
 
 func build_draft_project() -> bool:
 	if draft_project == null: return false
+	var report := draft_project.report.duplicate(true)
+	var first := draft_project.routes[0]
+	var drop := draft_project.source.ground(first.points[0]) - draft_project.source.ground(first.points[-1])
+	report.merge({title = TrailLabBuilder.STYLES.get(draft_project.style, {title = draft_project.title}).title,
+		length = first.route_length(), drop = drop, grade = -drop / maxf(1, first.route_length()) * 100,
+		elements = first.elements.size()}, true)
+	TrailLabBuilder.publish_project({stats = report, cuts = draft_project.cuts, speeds = PackedFloat32Array(), seed = draft_project.seed, style = draft_project.style})
 	var source = draft_project.source.duplicate(true)
 	source.apply_cuts(draft_project.cuts)
 	var candidate := draft_project.copy_routes()
@@ -486,6 +512,40 @@ func build_draft_project() -> bool:
 	if not ok: ground_kind = previous
 	_refresh_projects()
 	return ok
+
+func open_game_example(path := GAME_EXAMPLE) -> bool:
+	if _world_thread != null: return false
+	var opened := Project.open(path)
+	if not opened.has("project"):
+		show_message(opened.get("error", "Игровой пример не найден")); return false
+	close_game_example()
+	draft_project = opened.project
+	Sites.current = -1
+	if not build_draft_project(): return false
+	var location := Trial.safe_spawn(heights, routes[0], active_project.source)
+	if not location.accepted: show_message(location.reason); return false
+	trial = Trial.new()
+	trial.configure(routes[0], location)
+	trial.title = active_project.title
+	if not active_project.report.get("fast_pass_confirmed", true): trial.pace_note = "Проверен осторожный темп · скоростной проезд не подтверждён"
+	preload("res://scripts/lab/trail_lab_trial_visuals.gd").build(trial_visuals, heights, routes[0], location, active_project.source)
+	set_editor_visible(false)
+	set_overview(false)
+	project_panel.hide()
+	trial_hud.show()
+	hud_panel.hide(); preset_panel.hide(); markers.hide(); survey_markers.hide()
+	reset_ride()
+	status.hide()
+	generator_label.hide()
+	return true
+
+func close_game_example() -> void:
+	trial = null
+	trial_hud.hide()
+	hud_panel.show(); preset_panel.show()
+	markers.visible = overview or diagnostics_visible
+	survey_markers.visible = overview or diagnostics_visible
+	for child in trial_visuals.get_children(): child.free()
 
 func save_project_slot(slot: String) -> bool:
 	if slot not in ["A", "B"] or active_project == null or not active_project.accepted:
@@ -641,6 +701,7 @@ func rebuild(candidate: Array[TrailDefinition], compose_ms := -1.0, ready := {},
 		next_surveys[d.id] = survey
 	timings.survey_ms = (Time.get_ticks_usec() - stage) / 1000.0
 	stage = Time.get_ticks_usec()
+	if trial != null: close_game_example()
 	crash.abort()
 	heights = next_heights
 	routes = candidate
@@ -990,6 +1051,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	controller.message.connect(show_message)
 	player = PlayerState.new()
 	bike = BikeRide.new()
+	if trial != null: contact_model = bike.contact_model
 	bike.contact_model = contact_model
 	var d := routes[lane]
 	var at := d.point_at(station)
@@ -1003,6 +1065,13 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	bike.heading = d.heading_at(station)
 	bike.mount(player)
 	bike.speed = speed
+	if trial != null:
+		if station == 0.0 and speed == 0.0:
+			trial.retry()
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
+			player.x = trial.spawn.position.x; player.z = trial.spawn.position.y; player.feet = trial.spawn.height
+			bike.x = player.x; bike.z = player.z; bike.y = player.feet; bike.heading = trial.spawn.heading
+		else: trial.fail("Тренировочный запуск вне старта")
 	last_land_impact = 0.0
 	last_bottom_out = 0.0
 	if vegetation != null: vegetation.update(player.x, player.z, true)
@@ -1017,6 +1086,10 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	_cam_yaw = bike.heading
 	_cam_pitch = -0.464
 	services.controls.reset()
+	if trial != null:
+		if autopilot != null: trial.assisted = true
+		trial_hud.present(trial)
+		_sync_mouse()
 
 func launch_element() -> void:
 	if heights == null: return
@@ -1085,10 +1158,15 @@ func _request_exit() -> void:
 func _unhandled_key_input(event: InputEvent) -> void:
 	if not event is InputEventKey or not event.pressed or event.echo: return
 	var key: int = event.physical_keycode if event.physical_keycode != 0 else event.keycode
+	if key == KEY_F10:
+		open_game_example()
+		get_viewport().set_input_as_handled()
+		return
 	if key == KEY_F2:
 		set_editor_visible(not editor.visible)
 	if key == KEY_F5: reload_sources()
 	if key == KEY_F6:
+		if trial != null: trial.fail("Модель управления изменена во время заезда")
 		contact_model = not contact_model
 		bike.contact_model = contact_model
 		show_message("Модель контактов колёс: " + ("два контакта" if contact_model else "прежняя"))
@@ -1145,7 +1223,8 @@ func _contact_report() -> String:
 func _sync_mouse() -> void:
 	# 30.10: движение мыши вращает камеру; зажатый Alt (и панель F2, вид сверху) отпускает курсор для интерфейса,
 	# камера при этом стоит. Проверяется каждый кадр (_process).
-	var free := overview or editor.visible or Input.is_key_pressed(KEY_ALT)
+	var trial_menu: bool = trial != null and trial.phase in [Trial.Phase.READY, Trial.Phase.FINISHED, Trial.Phase.FAILED]
+	var free: bool = overview or editor.visible or Input.is_key_pressed(KEY_ALT) or trial_menu
 	var want := Input.MOUSE_MODE_VISIBLE if free else Input.MOUSE_MODE_CAPTURED
 	if Input.mouse_mode != want: Input.mouse_mode = want
 
@@ -1215,6 +1294,13 @@ func _physics_process(dt: float) -> void:
 
 ## Same controller/foot lifecycle as GameWorld; callable by the isolated scene regression.
 func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: bool) -> void:
+	if trial != null:
+		if editor.visible or overview: return
+		if autopilot != null: trial.assisted = true
+		if trial.phase == Trial.Phase.READY:
+			if throttle > 0.1: trial.begin()
+			else: trial_hud.present(trial); return
+		if trial.phase in [Trial.Phase.FINISHED, Trial.Phase.FAILED]: trial_hud.present(trial); return
 	var w := heights.world
 	_cam_from = _cam_to
 	heights.obstacles.update(player.x, player.z, _forest_obstacles(), _forest_version())
@@ -1240,6 +1326,10 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		view.tick(bike, dt, throttle, bike.riding and controller.stamina.can_boost(run, throttle))
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
+	if trial != null:
+		trial.tick(dt, Vector2(bike.x, bike.z), bike.crashed or crash.active(), bike.riding)
+		trial_hud.present(trial)
+		if trial.phase in [Trial.Phase.FINISHED, Trial.Phase.FAILED]: Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	recorder.tick(self, dt, throttle, turn, run, jump)
 	bike.landing_info = {}
 	if bike.land_impact > 0.0: last_land_impact = bike.land_impact
