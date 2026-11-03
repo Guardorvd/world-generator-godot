@@ -308,18 +308,20 @@ func _build_presets(canvas: CanvasLayer) -> void:
 	again.tooltip_text = "Другая трасса на этом месте · F8"
 	again.pressed.connect(func() -> void: generate_random(false))
 	gen_row.add_child(again)
-	var projects_button := Button.new()
-	projects_button.text = "Карта · А/Б"
-	projects_button.pressed.connect(show_projects)
-	gen_row.add_child(projects_button)
-	var game_button := Button.new()
-	game_button.text = "Игровой пример · F10"
-	game_button.pressed.connect(open_game_example)
-	box.add_child(game_button)
-	var slope_button := Button.new()
-	slope_button.text = "Игровой пример · Мир 7"
-	slope_button.pressed.connect(func() -> void: open_game_example("res://resources/trails/lab/game_example_7_9066.tres"))
-	box.add_child(slope_button)
+	var examples := MenuButton.new()
+	examples.text = "Ещё ▾"
+	examples.add_theme_font_size_override("font_size", 12)
+	examples.focus_mode = Control.FOCUS_NONE
+	examples.tooltip_text = "Карта мест, варианты А/Б и игровые примеры"
+	examples.get_popup().add_item("Карта мест · А/Б", 0)
+	examples.get_popup().add_separator()
+	examples.get_popup().add_item("Игровой пример: мир 111 · F10", 1)
+	examples.get_popup().add_item("Игровой пример: мир 7", 2)
+	examples.get_popup().id_pressed.connect(func(id: int) -> void:
+		if id == 0: show_projects()
+		elif id == 1: open_game_example()
+		elif id == 2: open_game_example("res://resources/trails/lab/game_example_7_9066.tres"))
+	gen_row.add_child(examples)
 	# v3: места большого мира — список с переключением (‹ › или [ ]): выбор строит окно места и ставит на старт
 	site_row.add_theme_constant_override("separation", 4)
 	site_row.visible = false
@@ -495,7 +497,7 @@ func show_projects() -> void:
 	project_panel.map.set_world(TrailLabTerrain.world_snapshot(), Sites.sites)
 	project_panel.map.selected = Sites.current
 	_refresh_projects()
-	project_panel.popup_centered(Vector2i(mini(780, int(get_viewport().get_visible_rect().size.x) - 32), mini(640, int(get_viewport().get_visible_rect().size.y) - 32)))
+	project_panel.popup_centered(Vector2i(mini(680, int(get_viewport().get_visible_rect().size.x) - 32), mini(600, int(get_viewport().get_visible_rect().size.y) - 32)))
 
 func _refresh_projects() -> void:
 	project_panel.map.slot_a = variants.get("A")

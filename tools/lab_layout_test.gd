@@ -1,7 +1,7 @@
 extends SceneTree
 
 class LabUI extends "res://scripts/lab/trail_lab.gd":
-	func rebuild(_candidate: Array[TrailDefinition], _compose_ms := -1.0, _ready := {}) -> bool:
+	func rebuild(_candidate: Array[TrailDefinition], _compose_ms := -1.0, _ready := {}, _source = null) -> bool:
 		return true
 
 func _initialize() -> void:
