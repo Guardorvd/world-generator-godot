@@ -1,67 +1,52 @@
 class_name StageTrailPlan
 extends RefCounted
-## Одна автоматическая велотрасса в стартовой области нового мира (шаги 1–2): комплект из подхода от дорожной сети,
-## самой трассы и выхода обратно в сеть. Общий механизм тот же, что в лаборатории:
-## TrailScout → TrailPicker → TrailRouter (+ TrailAccess) → TrailFlow; второго построителя и второго графа нет.
-##
-## Порядок подготовки мира (единый результат до публикации):
-## 1. Генерация до мест и путей (StageTrails, StageSites) — слой кэша «places».
-## 2. ЭТОТ ЭТАП: на закрытой копии общего рельефа делается finish_paths (поверхность без новой трассы), по ней TrailScout
-##    выбирает участок и строит трассу в локальных метрах участка. Определение переносится в мировые метры
-##    (точки + начало участка), добавляется как обычный путь (TrailBuilder.append_routes: w.trails, path_mask, покрытия) и
-##    сохраняется в w.trail_plan вместе со статусом «есть» / «нет». Копия рельефа выбрасывается.
-## 3. Растительность и озёра (дальше по generate_layers) видят путь трассы в path_mask, как любую тропу.
-## 4. Загрузка (WorldLoader): общий finish_paths уже прокладывает полотно всех путей, включая трассу; сразу после него
-##    apply() запекает формирование и элементы (TrailBuilder.bake_elements) — до меша, столкновений и карты.
-## Повторная загрузка из кэша: w.trail_plan и путь уже в мире — поиска нет, apply() запекает то же определение на свежем
-## рельефе (земляные работы не копятся: рельеф каждый раз новый, запекается один раз).
-## Отсутствие места — нормальный результат: статус «none» тоже сохраняется. Версия плана входит в ключ кэша
-## (WorldCache.SCHEMA_TRAILS_VERSION): менять ОБЕ вместе с результатами TrailScout / Picker / Router / Access / Shaping /
-## Builder / Flow. План другой версии (found или none) — устаревший: apply() возвращает state «stale», и WorldLoader
-## пересоздаёт мир штатно (без пометки skip), а не публикует и не кэширует его как мир без трассы.
-## Версия 3 (шаг 2, новый принцип): маршрут строится, рельеф готовится под него — без геометрических порогов.
-
-const VERSION := 6 # 6: парк прокладывается без полотна путей; 5: велопарк стартовой области (BikePark) вместо одной трассы TrailScout
+## Prepared-world trail network. The shared search/layout and TrailSite preparation are also used by Trail Lab.
+## Discovery runs once; accepted metre patches are handed to WorldLoader and its normal surface cache.
+const NETWORK_SCRIPT := "res://scripts/trails/trail_world_network.gd"
+const VERSION := 7
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
-## Сиды, для которых применение трассы не удалось: мир перегенерируется без неё (WorldLoader, откат).
-static var skip := {}
 
-
-## Выбрать и добавить трассу. size — сторона стартовой территории в клетках (0 — фон меню, этап пропускается).
 static func run(w: WorldData, size: int) -> void:
 	w.trail_plan = {version = VERSION, state = "none", reason = "этап не запускался"}
-	if size <= 0 or w.base_heights == null:
-		return
-	if skip.has(w.seed_text):
-		w.trail_plan.reason = "применение трассы в этом мире не удалось: мир собран без неё"
-		return
-	var started := Time.get_ticks_usec()
-	# Покрытия путей нужны полотну finish_paths; в генераторе их ставит RoadSurface.run в конце (повторно, тем же
-	# результатом: покрытие от биома, уклона и сида, не от растительности)
+	if size <= 0 or w.base_heights == null: return
 	RoadSurface.run(w)
-	var h := w.base_heights.copy() # закрытая копия: общий рельеф генератора не трогаем
-	# С версии 6 (29.10) без полотна путей (finish_paths: RoadBed и метровая сетка по всей карте, ~8 с): парк ищет
-	# место без дорог, полотно меняло рельеф только у троп, которые он пересекает. Нужны лишь мосты и туннели
-	# (занятые места). Землю под трассами парка всё равно готовит загрузчик (общий finish_paths, затем apply).
-	h.build_structures()
-	var surface_ms := (Time.get_ticks_usec() - started) / 1000.0
-	var area := WorldGenerator.start_rect(w, size)
-	# С версии 5 в стартовой области — велопарк (BikePark): простой поиск пустой области и сеть трасс, без TrailScout
-	var park := BikePark.build(w, h, area, ID)
-	var plan := {version = VERSION, state = "none", verdict = "park", reason = park.reason, area = area,
-		stats = park.stats.merged({surface_ms = surface_ms, total_ms = surface_ms + park.stats.find_ms + park.stats.layout_ms,
-			surface_parts = h.path_timings.duplicate()}),
-		park = {center = park.center, radius = park.radius, extent = park.extent}}
-	if not park.routes.is_empty():
-		var errors := TrailBuilder.append_routes(w, park.routes) # проверка до изменений: при ошибке мир не тронут
-		if errors.is_empty():
-			plan.state = "found"
-			plan.definition = pack(park.routes[0])
-			plan.routes = park.routes.map(func(d: TrailDefinition) -> Dictionary: return pack(d))
-		else:
-			plan.reason = "парк проложен, но не добавлен в мир: " + "; ".join(errors)
-	w.trail_plan = plan
+	var h := w.base_heights.copy()
+	h.finish_paths()
+	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, WorldGenerator.start_rect(w, size))
+	w.trail_plan.version = VERSION
+	# Generation-only handoff, never part of the canonical cache fields; avoid a WorldData reference cycle.
+	h.weaken_world()
+	w.generation.trail_surface = h
+
+## Prepare once on cold generation, or replay saved definitions if only the derived surface is missing.
+## Legacy regional kits retain their existing application contract.
+static func prepare(h: Heightfield) -> Dictionary:
+	var w := h.world
+	var plan := w.trail_plan
+	if plan.get("mode", "") != "terrain_network" or stale(plan):
+		h.finish_paths()
+		return apply(h)
+	var started := Time.get_ticks_usec()
+	var errors := PackedStringArray()
+	if w.generation.trail_surface != null:
+		var ready: Heightfield = w.generation.trail_surface
+		copy_surface(h, ready)
+		w.generation.trail_surface = null
+	else:
+		errors = load(NETWORK_SCRIPT).restore(h, plan)
+	var out := {state = plan.state, applied = plan.state == "found" and errors.is_empty(), variant = "основной",
+		errors = errors, ms = 0.0, earthworks = {}}
+	if out.applied:
+		_build_technical(h, _kit(plan), out)
+		out.earthworks = h.road_refinement.trail_shaping.duplicate(true)
+	out.ms = (Time.get_ticks_usec() - started) / 1000.0
+	return out
+
+static func copy_surface(h: Heightfield, ready: Heightfield) -> void:
+	for field in ["hv", "hv_raw", "water_level", "ribbons", "_river_cells", "_seg_pts", "_pair_cells", "_pair_segs",
+		"structures", "_cells", "_deck_keys", "road_refinement", "path_timings"]:
+		h.set(field, ready.get(field))
 
 
 ## The same kit serialization and route admission for start and streamed regions.
@@ -115,6 +100,11 @@ static func to_world(local: TrailDefinition, site: TrailSite) -> TrailDefinition
 ## {state, applied, variant, errors, ms}. Мир не остаётся частично изменённым: bake_elements публикует результат
 ## целиком или не меняет ничего. Если версия с элементами не принимается — запекается базовая линия без элементов.
 static func apply(h: Heightfield) -> Dictionary:
+	if h.world.trail_plan.get("mode", "") == "terrain_network" and not stale(h.world.trail_plan):
+		# Compatibility for tools that already called finish_paths. The loader calls prepare directly.
+		if h.world.generation.trail_surface == null and h.road_refinement != null:
+			copy_surface(h, Heightfield.base_of(h.world))
+		return prepare(h)
 	var w := h.world
 	var plan := w.trail_plan
 	var out := {state = str(plan.get("state", "none")), applied = false, variant = "", errors = PackedStringArray(), ms = 0.0, earthworks = {}}
@@ -195,7 +185,7 @@ static func _kit(plan: Dictionary) -> Array[TrailDefinition]:
 
 
 ## План сохранён другой версией кода (в том числе пустой — до этапа трассы): его результат не соответствует нынешней
-## генерации, и мир готовится заново.
+## генерации: кэш пересчитывает зависимые слои, сохраняя географию.
 static func stale(plan: Dictionary) -> bool:
 	return int(plan.get("version", 0)) != VERSION
 
@@ -207,7 +197,8 @@ static func pack(d: TrailDefinition) -> Dictionary:
 		elements.append(_fields(e))
 	return {id = d.id, title = d.title, kind = d.kind, points = d.points, width = d.width, surface = d.surface,
 		earthwork = d.earthwork, elevation_offset = d.elevation_offset, auto_bank = d.auto_bank, closed = d.closed,
-		shaping = _fields(d.shaping) if d.shaping != null else {}, elements = elements}
+		shaping = _fields(d.shaping) if d.shaping != null else {}, elements = elements,
+		sections = d.sections.duplicate(true), open_spans = d.open_spans}
 
 
 static func unpack(data: Dictionary) -> TrailDefinition:
@@ -223,6 +214,8 @@ static func unpack(data: Dictionary) -> TrailDefinition:
 		_assign(e, fields)
 		list.append(e)
 	d.elements = list
+	d.sections.assign(data.get("sections", []))
+	d.open_spans = data.get("open_spans", PackedVector3Array())
 	return d
 
 

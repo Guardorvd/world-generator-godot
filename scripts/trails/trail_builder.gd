@@ -14,7 +14,7 @@ const BLEND := 1.0
 ## Farthest a pinned point can lie from its routes' axes (zone reach), m: structures farther away are not checked.
 const STRUCTURE_REACH := 400.0
 
-static func append_routes(w: WorldData, definitions: Array[TrailDefinition]) -> PackedStringArray:
+static func append_routes(w: WorldData, definitions: Array[TrailDefinition], rebuild_map := true) -> PackedStringArray:
 	var errors := _validate(w, definitions, false)
 	if not errors.is_empty(): return errors
 	for route: Dictionary in w.trails:
@@ -25,7 +25,7 @@ static func append_routes(w: WorldData, definitions: Array[TrailDefinition]) -> 
 		w.trails.append(route)
 		Grid.stamp_path(w.path_mask, w.W, w.H, route.pts, 3 if d.kind == "road" else 2,
 			maxf(0.0, d.width / GameConfig.TILE * 0.5 - Grid.PATH_IN))
-	RoadSurface.rebuild_map(w)
+	if rebuild_map: RoadSurface.rebuild_map(w)
 	return errors
 
 static func _validate(w: WorldData, definitions: Array[TrailDefinition], for_bake: bool) -> PackedStringArray:

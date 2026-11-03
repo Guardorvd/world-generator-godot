@@ -40,7 +40,7 @@ static func px_for(size: int) -> int:
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, retried := false, start_at := Vector2.INF) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, _retried := false, start_at := Vector2.INF) -> WorldLoader:
 	if services == null:
 		services = GameContext.scope
 	var r := WorldLoader.new()
@@ -143,15 +143,16 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
-	var changed := PackedInt32Array() if r.surface_hit else r.heights.finish_paths()
+	var before := r.heights.hv
+	var changed := PackedInt32Array()
+	if not r.surface_hit:
+		r.trail = StageTrailPlan.prepare(r.heights)
+		for i in r.world.N:
+			if before[i] != r.heights.hv[i]: changed.append(i)
+	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
-	# Автоматическая трасса стартовой области (StageTrailPlan): формирование и элементы запекаются на свежем рельефе
-	# до меша, столкновений и карты, поэтому весь мир видит один окончательный результат
-	t = Time.get_ticks_usec()
-	if not r.surface_hit: r.trail = StageTrailPlan.apply(r.heights)
-	else: StageTrailPlan.restore_technical(r.heights, r.trail)
-	r.timings.trail_ms = (Time.get_ticks_usec() - t) / 1000.0
+	r.timings.trail_ms = r.trail.get("ms", 0.0)
 	for message: String in r.trail.errors:
 		push_warning("Трасса стартовой области: " + message)
 	t = Time.get_ticks_usec()
@@ -178,28 +179,13 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.merge(side_ms)
-	# Устаревший план трассы (кэш другой версии кода, «есть» или «нет»): мир не публикуется и не помечается skip — файлы
-	# кэша этого сида удаляются, и мир готовится заново по нынешнему коду (один раз)
-	if r.trail.get("state", "") == "stale":
-		push_warning("Трасса стартовой области: %s" % "; ".join(r.trail.get("errors", PackedStringArray())))
-		if services.cache.enabled:
-			services.cache.wait_writes()
-			services.cache.invalidate_from(seed_text, size, 1)
-		if not retried:
-			return load_world(seed_text, size, on_progress, services, true, start_at)
-		r.error = "Не удалось подготовить мир: план трассы стартовой области устарел и после пересоздания."
+	# Cache generation checks the version before expensive preparation. A broken saved definition is a
+	# loading error, never a reason to discard the world, silently remove trails or regenerate its geography.
+	if r.trail.get("state", "") == "stale" or (not r.trail.get("applied", false) and not r.trail.get("errors", PackedStringArray()).is_empty()):
+		r.error = "Не удалось восстановить трассы: " + "; ".join(r.trail.get("errors", PackedStringArray()))
 		return r
-	# Откат: трасса добавлена в мир, но применить её не удалось — мир с недостроенным путём не публикуется. Кэш мира
-	# удаляется, сид помечается, и мир собирается заново без трассы (повторный вызов, один раз); не вышло и так — отказ.
 	if r.trail.get("state", "none") == "found" and not r.trail.get("applied", false):
-		push_error("Трасса стартовой области не применена (%s): мир пересобирается без неё" % "; ".join(r.trail.get("errors", PackedStringArray())))
-		if services.cache.enabled:
-			services.cache.wait_writes()
-			services.cache.invalidate_from(seed_text, size, 1)
-		StageTrailPlan.skip[seed_text] = true
-		if not retried:
-			return load_world(seed_text, size, on_progress, services, true, start_at)
-		r.error = "Не удалось подготовить мир: трасса стартовой области не применилась. " + "; ".join(r.trail.get("errors", PackedStringArray()))
+		r.error = "Не удалось восстановить готовую поверхность трасс."
 		return r
 	if view.is_empty() and services.cache.enabled:
 		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})

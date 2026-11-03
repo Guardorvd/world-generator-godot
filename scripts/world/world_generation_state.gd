@@ -8,6 +8,7 @@ var noise := {}
 var scale := 1.0
 var profile := {}
 var base_heights: Heightfield
+var trail_surface: Heightfield # accepted preparation; consumed by WorldLoader, never serialized
 var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
 var _thread: Thread
 var _fields := {}

@@ -158,7 +158,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
 		t = _stage_time(w, "sites", t)
-		# Одна автоматическая трасса стартовой области — до растительности, чтобы лес и покрытия видели её полотно
+		# Принятая сеть трасс — до растительности, чтобы окружение видело готовые пути
 		StageTrailPlan.run(w, size)
 		_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
@@ -170,7 +170,8 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	StageLakes.run(w)
 	later = _stage_time(w, "lakes", later)
 	# слой полотна поверх готовых путей: покрытие, без rng и без изменения маршрутов
-	RoadSurface.run(w)
+	# The network stage has already assigned all routes and published the surface map.
+	if w.trail_plan.get("mode", "") != "terrain_network": RoadSurface.run(w)
 	_stage_time(w, "road_surface", later)
 	w.clear_noise_fields()
 	w.base_heights = null

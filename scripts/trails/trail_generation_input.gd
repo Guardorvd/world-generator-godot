@@ -130,7 +130,7 @@ func audit_earthworks(h: Heightfield) -> PackedStringArray:
 				if absf(delta) > 0.05 and blocked(at): return PackedStringArray(["земляные работы затронули воду, запрет или существующий путь у %s" % at])
 	return errors
 
-static func from_world(w: WorldData):
+static func from_world(w: WorldData, surface: Heightfield = null):
 	var result = load("res://scripts/trails/trail_generation_input.gd").new()
 	result.size = Vector2i(w.W, w.H)
 	result.cell_size = GameConfig.TILE
@@ -139,8 +139,17 @@ static func from_world(w: WorldData):
 	result.rivers = w.river_cells().duplicate()
 	result.forbidden.resize(w.N)
 	for i in w.N:
-		result.heights[i] = w.h[i] * GameConfig.HS
+		result.heights[i] = surface.ground_at((i % w.W + 0.5) * GameConfig.TILE, (i / w.W + 0.5) * GameConfig.TILE) if surface != null else w.h[i] * GameConfig.HS
 		result.water[i] = int(w.ocean[i] != 0 or w.lake[i] != 0 or w.h[i] <= 0.0)
+	for group in [w.settlements, w.sites]:
+		for place in group:
+			for hut in place.huts: result.protect(Vector2(hut.x, hut.y), 3)
+	for group in [w.bridges, w.tunnels]:
+		for structure in group:
+			var a := Vector2(structure.a % w.W, structure.a / w.W)
+			var b := Vector2(structure.b % w.W, structure.b / w.W)
+			var steps := maxi(1, ceili(a.distance_to(b)))
+			for k in steps + 1: result.protect(a.lerp(b, float(k) / steps), 3)
 	for route: Dictionary in w.trails:
 		var pts := PackedVector2Array()
 		var half := 0.0
@@ -150,3 +159,43 @@ static func from_world(w: WorldData):
 		result.existing_paths.append({points = pts, half_width = half})
 	result.provenance = {source = "WorldData", seed = w.seed_num, river_policy = "strict"}
 	return result
+
+func protect(at: Vector2, radius: int) -> void:
+	for z in range(maxi(0, floori(at.y) - radius), mini(size.y, ceili(at.y) + radius + 1)):
+		for x in range(maxi(0, floori(at.x) - radius), mini(size.x, ceili(at.x) + radius + 1)):
+			forbidden[z * size.x + x] = 1
+
+## Data window in local metres, retaining exact nearby path segments and source policy.
+func window(corner: Vector2i, side: Vector2i):
+	var out = load("res://scripts/trails/trail_indexed_input.gd").new()
+	out.size = side
+	out.cell_size = cell_size
+	for key in ["heights", "water", "rivers", "forbidden"]:
+		var values = get(key)
+		var cropped = values.duplicate()
+		cropped.resize(side.x * side.y)
+		for z in side.y:
+			for x in side.x: cropped[z * side.x + x] = values[(corner.y + z) * size.x + corner.x + x]
+		out.set(key, cropped)
+	var offset := Vector2(corner) * cell_size
+	var box := Rect2(offset, Vector2(side) * cell_size).grow(32.0)
+	for path in existing_paths:
+		var points: PackedVector2Array = path.points
+		var half := float(path.get("half_width", 2.0))
+		var local := PackedVector2Array()
+		for k in range(1, points.size()):
+			var segment := Rect2(points[k - 1], points[k] - points[k - 1]).abs().grow(half + 2.0)
+			if box.intersects(segment, true):
+				if local.is_empty(): local.append(points[k - 1] - offset)
+				local.append(points[k] - offset)
+			elif not local.is_empty():
+				out.existing_paths.append({points = local, half_width = half})
+				local = PackedVector2Array()
+		if not local.is_empty(): out.existing_paths.append({points = local, half_width = half})
+	out.earthwork_limits = earthwork_limits.duplicate(true)
+	out.river_policy = river_policy
+	out.provenance = provenance.duplicate(true)
+	out.provenance.world_origin = corner
+	out.provenance.origin = corner
+	out.provenance.world_seed = hash(provenance.get("game_seed", "snapshot"))
+	return out
