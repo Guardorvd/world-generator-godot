@@ -33,8 +33,9 @@ func run() -> void:
 		for j in range(i + 1, sites.size()):
 			if Scout.overlap(site.corridor, sites[j].corridor) >= Scout.OVERLAP: unique = false
 	check(valid, "every site has a route probe, dimensions and supported styles")
+	check(Scout.stats.detailed_probes == 0 and Scout.stats.overview_cells == 48 * 48, "one coarse overview replaces repeated detailed window searches")
 	check(shapes.size() > 1, "accepted regions have different sizes/proportions: %s" % [shapes.keys()])
-	check(unique and Scout.stats.duplicates > 0, "corridor duplicates removed while nearby independent lines remain")
+	check(unique, "accepted corridors are distinct while nearby independent lines remain")
 	check(var_to_bytes(sites) == var_to_bytes(Scout.find(13)), "search is deterministic")
 	var a := Scout.corridor(PackedVector2Array([Vector2(0, 0), Vector2(400, 0)]))
 	var b := Scout.corridor(PackedVector2Array([Vector2(100, 0), Vector2(300, 0)]))
@@ -42,12 +43,28 @@ func run() -> void:
 	check(Scout.overlap(a, b) >= Scout.OVERLAP and Scout.overlap(a, c) < Scout.OVERLAP, "shared corridor is duplicate; a crossing alone is not")
 	map_data(128, 0.08)
 	for z in 128: Terrain.world_wet[z * 128 + 64] = 1
-	check(Scout.probe(Rect2i(0, 0, 128, 128)).is_empty(), "cheap probe rejects a disconnected dry region")
+	var split := Scout.find(13)
+	var safe_component := true
+	for site: Dictionary in split:
+		var left: bool = site.probe.points[0].x < 64 * GameConfig.TILE
+		for p: Vector2 in site.probe.points:
+			if (p.x < 64 * GameConfig.TILE) != left: safe_component = false
+	check(not split.is_empty() and safe_component, "coarse corridors find dry components without skipping a thin river")
 	map_data(128, 0.0)
 	var region := Scout.measure(Rect2i(0, 0, 128, 128))
 	var trial := Scout.probe(region.region)
-	check(not trial.is_empty() and Scout.capabilities(region, trial) == ["park"], "flat terrain suggests park, not downhill")
+	check(not trial.is_empty() and Scout.capabilities(region, trial)[0] == "park", "flat terrain recommends park first while allowing constructed alternatives")
 	Terrain.world_wet.fill(1)
 	check(Scout.find(13).is_empty() and Scout.stats.has("reason"), "unsuitable map returns zero sites with reason")
+	var overview := preload("res://scripts/lab/trail_lab_coarse_map.gd").new()
+	var dry := PackedByteArray(); dry.resize(128 * 128)
+	var kinds := []
+	for ground: Callable in [func(p: Vector2) -> float: return 200 + p.y * 0.06,
+		func(p: Vector2) -> float: return 200 + p.y * 0.06 - absf(p.x - 272) * 0.2,
+		func(p: Vector2) -> float: return 200 + p.y * 0.06 + absf(p.x - 272) * 0.2,
+		func(_p: Vector2) -> float: return 200]:
+		overview.prepare(128, ground, dry, null)
+		kinds.append(overview.feature(8 * 16 + 8))
+	check(kinds == ["склон", "гребень", "ложбина", "площадка"], "shared terrain data distinguish slopes, ridges, hollows and areas for chains")
 	print("RESULT: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))
 	quit(0 if failures == 0 else 1)

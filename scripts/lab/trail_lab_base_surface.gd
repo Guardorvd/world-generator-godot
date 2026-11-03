@@ -29,10 +29,12 @@ static func bake(input: GI, route: TrailDefinition) -> Dictionary:
 
 ## Audit the ENTIRE modified metre grid, including side slopes beyond the tread.
 ## Group every violating vertex into route intervals; never stop at the first bad vertex.
-static func audit(input: GI, h: Heightfield, route: TrailDefinition) -> Dictionary:
+static func audit(input: GI, h: Heightfield, route: TrailDefinition, reference: Heightfield = null) -> Dictionary:
 	var bins := {}
 	var seen := {}
 	var report := {accepted = true, bad_vertices = 0, protected_vertices = 0, max_cut = 0.0, max_fill = 0.0, intervals = [], errors = []}
+	report.new_bad_vertices = 0; report.inherited_bad_vertices = 0; report.max_element_delta = 0.0
+	report.comparison_available = reference != null
 	for key: int in h.road_refinement.patches:
 		var patch: Dictionary = h.road_refinement.patches[key]
 		for z in RoadRefinement.STRIDE:
@@ -42,19 +44,37 @@ static func audit(input: GI, h: Heightfield, route: TrailDefinition) -> Dictiona
 				seen[vertex] = true
 				var at := Vector2(vertex) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
 				var delta: float = patch.h[z * RoadRefinement.STRIDE + x] - input.natural_ground(at)
+				var base_delta := reference.ground_at(at.x, at.y) - input.natural_ground(at) if reference != null else 0.0
+				var contribution := delta - base_delta if reference != null else 0.0
+				report.max_element_delta = maxf(report.max_element_delta, absf(contribution))
 				report.max_cut = maxf(report.max_cut, -delta); report.max_fill = maxf(report.max_fill, delta)
 				var protected_area: bool = absf(delta) > 0.05 and input.blocked(at)
-				var excessive: bool = delta < -float(input.earthwork_limits.max_cut) - 0.05 or delta > float(input.earthwork_limits.max_fill) + 0.05
+				var excessive: bool = not input.earthwork_limits.get("unlimited", false) and (delta < -float(input.earthwork_limits.max_cut) - 0.05 or delta > float(input.earthwork_limits.max_fill) + 0.05)
 				if not protected_area and not excessive: continue
+				var inherited: bool = reference != null and ((not input.earthwork_limits.get("unlimited", false) and (base_delta < -float(input.earthwork_limits.max_cut) - 0.05 or base_delta > float(input.earthwork_limits.max_fill) + 0.05)) or (absf(base_delta) > 0.05 and input.blocked(at)))
+				if inherited: report.inherited_bad_vertices += 1
+				else: report.new_bad_vertices += 1
 				report.bad_vertices += 1
 				if protected_area: report.protected_vertices += 1
 				var station := route.nearest(at).x
 				var bin := floori(station / 8)
-				if not bins.has(bin): bins[bin] = {from = maxf(0, station - 4), to = minf(route.route_length(), station + 4), protected_area = false, witness = at, count = 0, depth = 0.0}
+				if not bins.has(bin): bins[bin] = {from = maxf(0, station - 4), to = minf(route.route_length(), station + 4), protected_area = false, witness = at, count = 0, depth = 0.0,
+					max_cut = 0.0, max_fill = 0.0, max_excess = 0.0, worst_station = station, worst_at = at, max_element_delta = 0.0, inherited = 0, new_vertices = 0, stations = [], reasons = []}
 				var record: Dictionary = bins[bin]
 				record.from = minf(record.from, maxf(0, station - 4)); record.to = maxf(record.to, minf(route.route_length(), station + 4))
 				record.count += 1
 				record.depth = maxf(record.depth, absf(delta))
+				record.max_cut = maxf(record.max_cut, -delta); record.max_fill = maxf(record.max_fill, delta)
+				var depth_excess := 0.0 if input.earthwork_limits.get("unlimited", false) else maxf(-delta - float(input.earthwork_limits.max_cut), delta - float(input.earthwork_limits.max_fill))
+				var excess := maxf(depth_excess, absf(delta) - 0.05 if protected_area else 0.0)
+				if excess > record.max_excess: record.max_excess = excess; record.worst_station = station; record.worst_at = at
+				record.max_element_delta = maxf(record.max_element_delta, absf(contribution))
+				if inherited: record.inherited += 1
+				else: record.new_vertices += 1
+				var metre := roundi(station)
+				if metre not in record.stations: record.stations.append(metre)
+				var reason := "protected_area" if protected_area else ("cut_limit" if delta < 0 else "fill_limit")
+				if reason not in record.reasons: record.reasons.append(reason)
 				if protected_area: record.protected_area = true; record.witness = at
 	var keys := bins.keys(); keys.sort()
 	for key in keys:
@@ -62,10 +82,18 @@ static func audit(input: GI, h: Heightfield, route: TrailDefinition) -> Dictiona
 		if not report.intervals.is_empty() and record.from <= report.intervals[-1].to + 8:
 			var last: Dictionary = report.intervals[-1]
 			last.to = record.to; last.count += record.count; last.depth = maxf(last.depth, record.depth)
+			if record.max_excess > last.max_excess: last.worst_station = record.worst_station; last.worst_at = record.worst_at
+			for field in ["max_cut", "max_fill", "max_excess", "max_element_delta"]: last[field] = maxf(last[field], record[field])
+			last.inherited += record.inherited; last.new_vertices += record.new_vertices
+			for station in record.stations:
+				if station not in last.stations: last.stations.append(station)
+			for reason in record.reasons:
+				if reason not in last.reasons: last.reasons.append(reason)
 			if record.protected_area: last.protected_area = true; last.witness = record.witness
 		else: report.intervals.append(record.duplicate(true))
+	for interval: Dictionary in report.intervals: interval.stations.sort()
 	report.accepted = report.bad_vertices == 0
-	if report.max_cut > float(input.earthwork_limits.max_cut) + 0.05 or report.max_fill > float(input.earthwork_limits.max_fill) + 0.05: report.errors.append("базовое полотно превышает предел выемки/насыпи")
+	if not input.earthwork_limits.get("unlimited", false) and (report.max_cut > float(input.earthwork_limits.max_cut) + 0.05 or report.max_fill > float(input.earthwork_limits.max_fill) + 0.05): report.errors.append("базовое полотно превышает предел выемки/насыпи")
 	if report.protected_vertices > 0: report.errors.append("откосы базового полотна затрагивают защищённую область")
 	return report
 
@@ -108,6 +136,24 @@ static func move_intervals(input: GI, route: TrailDefinition, intervals: Array) 
 	var count := maxi(1, ceili(route.route_length() / 2.0))
 	for i in count + 1: original.append(route.point_at(route.route_length() * i / count))
 	var points := original.duplicate()
+	var directions := []
+	for interval: Dictionary in intervals:
+		var direction := 0.0
+		if interval.protected_area:
+			var near := route.nearest(interval.witness)
+			direction = -signf(near.y)
+		else:
+			var best := INF
+			for side_value: float in [-1.0, 1.0]:
+				var cost := 0.0
+				for s in range(floori(interval.from), ceili(interval.to) + 1, 8):
+					var side := route.tangent_at(s).orthogonal()
+					var at := route.point_at(s) + side * 4 * side_value
+					cost += absf(input.ground(at + side * 3) - input.ground(at - side * 3))
+					if input.blocked(at): cost += 1000
+				if cost < best: best = cost; direction = side_value
+		directions.append(direction)
+	var offsets := PackedFloat32Array()
 	var along := 0.0
 	var changed := false
 	for i in points.size():
@@ -115,20 +161,24 @@ static func move_intervals(input: GI, route: TrailDefinition, intervals: Array) 
 		var p := original[i]
 		var side := route.tangent_at(along).orthogonal()
 		var offset := 0.0
-		for interval: Dictionary in intervals:
+		for k in intervals.size():
+			var interval: Dictionary = intervals[k]
 			var weight := smoothstep(interval.from - 16, interval.from, along) * (1.0 - smoothstep(interval.to, interval.to + 16, along))
 			weight *= smoothstep(0, 20, minf(along, route.route_length() - along))
 			if weight <= 0: continue
-			var direction := -signf((Vector2(interval.witness) - p).dot(side)) if interval.protected_area else 0.0
-			if direction == 0:
-				# Shift towards the locally gentler cross slope, never lower a water/infrastructure guard.
-				var best := INF
-				for sign_value: float in [-1.0, 1.0]:
-					var at := p + side * 4 * sign_value
-					var cross := absf(input.ground(at + side * 3) - input.ground(at - side * 3))
-					if not input.blocked(at) and cross < best: best = cross; direction = sign_value
+			var direction: float = directions[k]
 			if absf(weight * 4) > absf(offset): offset = weight * 4 * direction
-		points[i] += side * offset
+		offsets.append(offset)
+	# A repair has one lateral direction per interval, not a sign flip at every terrain sample.
+	# Smooth the displacement field; per-point sign choices previously introduced metre-scale zigzags.
+	for i in points.size():
+		var offset := 0.0
+		var n := 0
+		for j in range(maxi(0, i - 3), mini(points.size(), i + 4)): offset += offsets[j]; n += 1
+		offset /= maxi(1, n)
+		var s := route.route_length() * i / count
+		offset *= smoothstep(0, 12, minf(s, route.route_length() - s))
+		points[i] += route.tangent_at(s).orthogonal() * offset
 		changed = changed or absf(offset) > 0.01
 	if changed: route.points = points
 	return changed

@@ -59,7 +59,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var band0: Vector2 = profile.difficulty
 		var mid := clampi(int((band0.x + band0.y) * 0.5 * 4.0), 0, 3)
 		var heights := TrailStandards.line_heights(d, ground)
-		std = {heights = heights, level = mid, caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), ground = ground, last_end = 0.0, placed = 0, refused = {}}
+		std = {heights = heights, level = mid, adaptive = profile.get("adaptive", false), caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), ground = ground, last_end = 0.0, placed = 0, refused = {}}
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -135,6 +135,7 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 
 ## One element at `cursor` or null when nothing fits here (the caller moves on).
 static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: float, difficulty: float, last: int, rng: RandomNumberGenerator, std := {}) -> TrailElement:
+	var adaptive: bool = std.get("adaptive", false)
 	var turn := _turn_at(d, cursor, 14.0)
 	var kind: int
 	# поворот — туже R 83 м; под стандартами — туже R 33 м: пологая дуга сгенерированной линии годится под прыжок
@@ -163,7 +164,7 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		count = int(sized.get("count", count))
 		gap = float(sized.get("gap", -1.0))
 	# стандарты: границы участков условные — прыжок может зайти за конец участка на OVERRUN м (столы и гэпы длинные)
-	if cursor + length > end + (OVERRUN if not std.is_empty() else 0.0) or cursor + length > d.route_length() - RUN_OUT:
+	if not adaptive and (cursor + length > end + (OVERRUN if not std.is_empty() else 0.0) or cursor + length > d.route_length() - RUN_OUT):
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: не помещается в участок")
 		return null
 	var bends := kind == T.BERM or kind == T.OFF_CAMBER
@@ -171,13 +172,13 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 	# стандарты: стол, гэп и дроп — и на пологой дуге (R ≥ 1/JUMP_BEND: боковая перегрузка на их скорости в пределах)
 	var straight := JUMP_BEND if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] else 0.025
 	# прыжок на дуге — только если её проходят на скорости седока без виража (иначе вираж туда уже не встанет)
-	if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] and _sharpest(d, cursor, length) > 0.025:
+	if not adaptive and not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] and _sharpest(d, cursor, length) > 0.025:
 		var speeds: PackedFloat32Array = std.speeds
 		var v := speeds[clampi(int(cursor), 0, speeds.size() - 1)]
 		if v > TrailStandards.turn_speed(1.0 / _sharpest(d, cursor, length), 0.0, 0.8) - 0.5:
 			_refuse(std, "прыжок: дуга быстрая для прыжка")
 			return null
-	if not bends and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > straight:
+	if not adaptive and not bends and not TrailElement.places_objects(kind) and _sharpest(d, cursor, length) > straight:
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: дуга туже R 25 м")
 		if length <= 12.0: return null
 		kind = T.ROLLER
@@ -191,6 +192,12 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		gap = -1.0
 		if _sharpest(d, cursor, length) > 0.025: return null
 	var e := TrailElementLibrary.make(kind, cursor + length * 0.5, length, size.y, signf(turn) if bends else 1.0, count, rng.randf_range(0.28, 0.45))
+	if adaptive and cursor + length > d.route_length():
+		var available := d.route_length() - cursor
+		if available < RoadRefinement.STEP * 4 or kind == T.GAP: return null
+		e.height *= pow(available / e.length, 2)
+		e.length = available; e.station = cursor + available * 0.5
+		if kind in [T.PUMP, T.WAVES]: e.count = maxi(1, mini(e.count, floori(available / (RoadRefinement.STEP * (8 if kind == T.WAVES else 4)))))
 	e.seed = rng.randi() % 10000
 	e.density = rng.randf_range(0.35, 0.7)
 	e.lines = rng.randi_range(1, 3) if difficulty < 0.7 else 2
@@ -218,13 +225,15 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		# раньше роллера — на змейке байк-парка после разворотов столы иначе становились роллерами)
 		var chain := {T.GAP: ["table", "drop", "roller"], T.TABLETOP: ["drop", "roller"], T.DROP: ["roller"]}
 		for k: String in ([key[kind]] + (chain.get(kind, []) as Array)):
-			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade)
+			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade, not std.get("adaptive", false))
 			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
 			if not s.is_empty() and s.has("speed_lo") and (v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5):
 				var why := "прыжок: скорость вне окна"
 				std.refused[why] = int(std.refused.get(why, 0)) + 1
 				continue
-			if not s.is_empty(): return s
+			if not s.is_empty():
+				if std.get("adaptive", false) and k in ["table", "gap", "drop"] and float(s.length) > d.route_length() - cursor: continue
+				return s
 		std.refused[TrailElementLibrary.title(kind)] = int(std.refused.get(TrailElementLibrary.title(kind), 0)) + 1
 		return {}
 	match kind:
@@ -243,12 +252,12 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		if kind == T.NARROW:
 			limit = minf(limit, TrailStandards.NARROW_SPEED)
 			# v4: к узкому проходу — прямой подход (после виража курс сбит — удар в стенку)
-			if TrailStandards.tightest(d, cursor - 15.0, cursor + size.x) < 40.0:
+			if not std.get("adaptive", false) and TrailStandards.tightest(d, cursor - 15.0, cursor + size.x) < 40.0:
 				_refuse(std, "узкий проход: нет прямого подхода")
 				return {}
 		# 01.11: только где седок и без торможения не быстрее стандарта — заранее не тормозят (бревно на 12,6 м/с
 		# после поворота уронило через руль)
-		if v > limit + 0.5:
+		if not std.get("adaptive", false) and v > limit + 0.5:
 			var why := "техника: здесь быстрее %.0f м/с" % limit
 			std.refused[why] = int(std.refused.get(why, 0)) + 1
 			return {}

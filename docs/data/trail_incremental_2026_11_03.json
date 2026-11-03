@@ -1,0 +1,484 @@
+{
+  "construction": [
+    {
+      "after": {
+        "accepted": true,
+        "built": true,
+        "elements": 8.0,
+        "errors": [],
+        "length": 344.909759521484,
+        "method": "corridor",
+        "physical": true,
+        "preparation_ms": 4819.909,
+        "project_ms": 59133.669,
+        "reason": "",
+        "ride": {
+          "max_offset": 1.20713198184967,
+          "station": 344.909759521484,
+          "status": "finished",
+          "time": 38.5333333333333
+        },
+        "selection_attempts": [
+          {
+            "accepted": true,
+            "method": "corridor",
+            "ms": 59131.483,
+            "offset": 0.0,
+            "reason": "",
+            "walk_calls": 0.0
+          }
+        ],
+        "source_unchanged": true,
+        "tries": 1.0,
+        "walk_ms": 40.0
+      },
+      "before": {
+        "accepted": true,
+        "built": true,
+        "elements": 8.0,
+        "errors": [],
+        "length": 344.909759521484,
+        "method": "walk_then_corridor",
+        "physical": true,
+        "preparation_ms": 5298.881,
+        "project_ms": 65543.733,
+        "reason": "",
+        "ride": {
+          "max_offset": 1.20713198184967,
+          "station": 344.909759521484,
+          "status": "finished",
+          "time": 38.5333333333333
+        },
+        "selection_attempts": [],
+        "source_unchanged": true,
+        "tries": 10.0,
+        "walk_ms": 690.0
+      },
+      "case": "7_30",
+      "source_hash": "1c4a036fcc1302c50ef762582f7a5460686a577ca406872e8b2a9adfb403a073"
+    },
+    {
+      "after": {
+        "accepted": true,
+        "built": true,
+        "elements": 4.0,
+        "errors": [],
+        "length": 265.184448242188,
+        "method": "corridor",
+        "physical": true,
+        "preparation_ms": 1685.524,
+        "project_ms": 43448.195,
+        "reason": "",
+        "ride": {
+          "max_offset": 0.504701375961304,
+          "station": 265.184478759766,
+          "status": "finished",
+          "time": 28.25
+        },
+        "selection_attempts": [
+          {
+            "accepted": false,
+            "method": "corridor",
+            "ms": 19930.132,
+            "offset": 0.0,
+            "reason": "сначала требуется исправление голой базы",
+            "walk_calls": 0.0
+          },
+          {
+            "accepted": true,
+            "method": "corridor",
+            "ms": 23516.316,
+            "offset": 8.0,
+            "reason": "",
+            "walk_calls": 0.0
+          }
+        ],
+        "source_unchanged": true,
+        "tries": 1.0,
+        "walk_ms": 32.0
+      },
+      "before": {
+        "accepted": false,
+        "built": true,
+        "elements": 5.0,
+        "errors": [
+          "calm · 80.0 м · полотно: не хватает торможения перед поворотом/элементом",
+          "normal · 81.0 м · полотно: не хватает торможения перед поворотом/элементом",
+          "fast · 81.0 м · полотно: не хватает торможения перед поворотом/элементом"
+        ],
+        "length": 274.544281005859,
+        "method": "walk_then_corridor",
+        "physical": false,
+        "preparation_ms": 1688.026,
+        "project_ms": 21829.555,
+        "reason": "",
+        "selection_attempts": [],
+        "source_unchanged": true,
+        "tries": 10.0,
+        "walk_ms": 724.0
+      },
+      "case": "111_0",
+      "source_hash": "5ef9ec63ec37e0645c64bd52023f7169556a71580955db6778101651ffb27671"
+    },
+    {
+      "after": {
+        "accepted": true,
+        "built": true,
+        "elements": 14.0,
+        "errors": [],
+        "length": 681.862182617188,
+        "method": "corridor",
+        "physical": true,
+        "preparation_ms": 3856.742,
+        "project_ms": 60435.562,
+        "reason": "",
+        "ride": {
+          "max_offset": 0.490574538707733,
+          "station": 681.862182617188,
+          "status": "finished",
+          "time": 81.0833333333333
+        },
+        "selection_attempts": [
+          {
+            "accepted": false,
+            "method": "corridor",
+            "ms": 36.27,
+            "offset": 0.0,
+            "reason": "нет законченного маршрута: фрагментов 0, отказов финиша 0, завершённых кандидатов 1, отказов полотна 1",
+            "walk_calls": 0.0
+          },
+          {
+            "accepted": true,
+            "method": "corridor",
+            "ms": 60397.917,
+            "offset": 8.0,
+            "reason": "",
+            "walk_calls": 0.0
+          }
+        ],
+        "source_unchanged": true,
+        "tries": 1.0,
+        "walk_ms": 47.0
+      },
+      "before": {
+        "accepted": true,
+        "built": true,
+        "elements": 14.0,
+        "errors": [],
+        "length": 681.862182617188,
+        "method": "walk_then_corridor",
+        "physical": true,
+        "preparation_ms": 3700.82,
+        "project_ms": 61732.169,
+        "reason": "",
+        "ride": {
+          "max_offset": 0.490574538707733,
+          "station": 681.862182617188,
+          "status": "finished",
+          "time": 81.0833333333333
+        },
+        "selection_attempts": [],
+        "source_unchanged": true,
+        "tries": 10.0,
+        "walk_ms": 603.0
+      },
+      "case": "111_42",
+      "source_hash": "5f4439400c3457679a88f47d2be1106d4cfb28b26b82698c9e43f1bb94b952e6"
+    }
+  ],
+  "fresh": [
+    {
+      "accepted": true,
+      "builder": [
+        {
+          "accepted": true,
+          "method": "corridor",
+          "ms": 35362.417,
+          "offset": 0.0,
+          "reason": "",
+          "walk_calls": 0.0
+        }
+      ],
+      "index": 0,
+      "old_builder_control": {
+        "accepted": false,
+        "errors": [
+          "calm · 17.0 м · полотно: не хватает торможения перед поворотом/элементом",
+          "normal · 19.0 м · полотно: не хватает торможения перед поворотом/элементом",
+          "fast · 19.0 м · полотно: не хватает торможения перед поворотом/элементом"
+        ],
+        "physical": false,
+        "project_ms": 46438.581,
+        "reason": ""
+      },
+      "physical": false,
+      "project_ms": 35438.78,
+      "proposed": 82.0,
+      "reasons": [],
+      "ride": {
+        "max_offset": 2.00915694236755,
+        "station": 53.3216209411621,
+        "status": "left_tread"
+      },
+      "seed": "7"
+    },
+    {
+      "accepted": true,
+      "builder": [
+        {
+          "accepted": true,
+          "method": "corridor",
+          "ms": 6541.369,
+          "offset": 0.0,
+          "reason": "",
+          "walk_calls": 0.0
+        }
+      ],
+      "index": 0,
+      "physical": true,
+      "project_ms": 6585.972,
+      "proposed": 103.0,
+      "reasons": [],
+      "ride": {
+        "max_offset": 0.526889085769653,
+        "station": 197.537796020508,
+        "status": "finished"
+      },
+      "seed": "111"
+    },
+    {
+      "accepted": false,
+      "builder": [
+        {
+          "accepted": false,
+          "method": "corridor",
+          "ms": 30558.541,
+          "offset": 0.0,
+          "reason": "базовое полотно: откосы базового полотна затрагивают защищённую область",
+          "walk_calls": 0.0
+        },
+        {
+          "accepted": false,
+          "method": "corridor",
+          "ms": 29646.198,
+          "offset": 8.0,
+          "reason": "базовое полотно: откосы базового полотна затрагивают защищённую область",
+          "walk_calls": 0.0
+        },
+        {
+          "accepted": false,
+          "method": "corridor",
+          "ms": 27369.124,
+          "offset": -8.0,
+          "reason": "базовое полотно: откосы базового полотна затрагивают защищённую область",
+          "walk_calls": 0.0
+        }
+      ],
+      "index": 0,
+      "physical": false,
+      "project_ms": 87607.919,
+      "proposed": 125.0,
+      "reasons": [
+        "базовое полотно: откосы базового полотна затрагивают защищённую область"
+      ],
+      "seed": "ushchelye"
+    }
+  ],
+  "protocol": "Six preselected game snapshots; three frozen game corridors, same source/seed/settings before and after; no rerolls",
+  "reference_commit": "d9a6e4e",
+  "schema": 1.0,
+  "scope": "Search latency starts with a prepared terrain snapshot. Three paired frozen corridors plus first proposals on three fresh catalogues. Fixed cases, no rerolls.",
+  "search": [
+    {
+      "features": {
+        "гребень": 50,
+        "ложбина": 13,
+        "площадка": 5,
+        "склон": 14
+      },
+      "proposals": 82.0,
+      "published": 82.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": false,
+        "confirmed": 273.0,
+        "detailed_probes": 0.0,
+        "duplicates": 191.0,
+        "first_proposal_ms": 327.047,
+        "fit": 273.0,
+        "looked": 566.0,
+        "measure_ms": 322.203,
+        "ms": 490.527,
+        "overview_cells": 9216.0,
+        "overview_ms": 322.203,
+        "probe_ms": 168.324,
+        "probed": 566.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 293.0
+        },
+        "sites": 82.0
+      },
+      "seed": "7",
+      "terrain_hash": "75503c24a162139db9094633ee17e6ad4b29ee6f67c369e5235bca2be88b0918"
+    },
+    {
+      "features": {
+        "гребень": 59,
+        "ложбина": 23,
+        "площадка": 5,
+        "склон": 16
+      },
+      "proposals": 103.0,
+      "published": 103.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": true,
+        "confirmed": 247.0,
+        "detailed_probes": 0.0,
+        "duplicates": 144.0,
+        "first_proposal_ms": 360.806,
+        "fit": 247.0,
+        "looked": 690.0,
+        "measure_ms": 355.398,
+        "ms": 477.439,
+        "overview_cells": 9216.0,
+        "overview_ms": 355.398,
+        "probe_ms": 122.041,
+        "probed": 576.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 329.0
+        },
+        "sites": 103.0
+      },
+      "seed": "111",
+      "terrain_hash": "10a6d91f705faf347dfc81dd32b0f2d87e83f1b8568e686321d92f1aebbe1688"
+    },
+    {
+      "features": {
+        "гребень": 89,
+        "ложбина": 28,
+        "склон": 8
+      },
+      "proposals": 125.0,
+      "published": 125.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": true,
+        "confirmed": 352.0,
+        "detailed_probes": 0.0,
+        "duplicates": 227.0,
+        "first_proposal_ms": 268.509,
+        "fit": 352.0,
+        "looked": 983.0,
+        "measure_ms": 259.739,
+        "ms": 465.897,
+        "overview_cells": 9216.0,
+        "overview_ms": 259.739,
+        "probe_ms": 206.158,
+        "probed": 576.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 224.0
+        },
+        "sites": 125.0
+      },
+      "seed": "ushchelye",
+      "terrain_hash": "d3ec21d1272f7f16e6872a8227003f5b78028919dfe3734b28d11500f7b7bb75"
+    },
+    {
+      "features": {
+        "гребень": 64,
+        "ложбина": 27,
+        "площадка": 4,
+        "склон": 12
+      },
+      "proposals": 107.0,
+      "published": 107.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": true,
+        "confirmed": 301.0,
+        "detailed_probes": 0.0,
+        "duplicates": 194.0,
+        "first_proposal_ms": 329.945,
+        "fit": 301.0,
+        "looked": 849.0,
+        "measure_ms": 310.748,
+        "ms": 516.254,
+        "overview_cells": 9216.0,
+        "overview_ms": 310.748,
+        "probe_ms": 205.506,
+        "probed": 576.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 275.0
+        },
+        "sites": 107.0
+      },
+      "seed": "2026",
+      "terrain_hash": "eed9736ed519ed69de8e506f4675e2101569cac46a7ede5f82b6004e011fc692"
+    },
+    {
+      "features": {
+        "гребень": 58,
+        "ложбина": 25,
+        "площадка": 9,
+        "склон": 9
+      },
+      "proposals": 101.0,
+      "published": 101.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": true,
+        "confirmed": 279.0,
+        "detailed_probes": 0.0,
+        "duplicates": 178.0,
+        "first_proposal_ms": 243.559,
+        "fit": 279.0,
+        "looked": 700.0,
+        "measure_ms": 234.519,
+        "ms": 382.581,
+        "overview_cells": 9216.0,
+        "overview_ms": 234.519,
+        "probe_ms": 148.062,
+        "probed": 576.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 297.0
+        },
+        "sites": 101.0
+      },
+      "seed": "31415",
+      "terrain_hash": "3e834ddbd3bc4fef9e489c87a887ae7882f9aefc7f4c15b3389727c751bdd277"
+    },
+    {
+      "features": {
+        "гребень": 52,
+        "ложбина": 20,
+        "площадка": 4,
+        "склон": 18
+      },
+      "proposals": 94.0,
+      "published": 94.0,
+      "search": {
+        "budget": 576.0,
+        "budget_exhausted": true,
+        "confirmed": 263.0,
+        "detailed_probes": 0.0,
+        "duplicates": 169.0,
+        "first_proposal_ms": 225.28,
+        "fit": 263.0,
+        "looked": 639.0,
+        "measure_ms": 220.67,
+        "ms": 354.037,
+        "overview_cells": 9216.0,
+        "overview_ms": 220.67,
+        "probe_ms": 133.367,
+        "probed": 576.0,
+        "refused": {
+          "нет протяжённого свободного коридора": 313.0
+        },
+        "sites": 94.0
+      },
+      "seed": "taiga",
+      "terrain_hash": "5862ebf44062345d847be5b3a0f3ebd83c98f24468b46bc5cffa3616f4e581a3"
+    }
+  ]
+}

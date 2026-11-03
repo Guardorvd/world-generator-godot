@@ -88,9 +88,9 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var a := -S.G * (y[i] - y[i - 1]) - S.ROLL - S.DRAG * v * v
 			if v < S.CRUISE * factor: a += S.PEDAL * (1.0 - v / (S.CRUISE * factor))
 			var possible := sqrt(maxf(0.0, v * v + 2.0 * a))
-			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна")
+			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна", "safety", {actual = possible, limit = 0.5, deviation = 0.5 - possible})
 			var minimum := sqrt(maxf(0.0, v * v + 2.0 * (a - S.BRAKE)))
-			if minimum > caps[i] + 0.5: _issue(report, scenario, -1, i, "не хватает торможения перед поворотом/элементом")
+			if minimum > caps[i] + 0.5: _issue(report, scenario, -1, i, "не хватает торможения перед поворотом/элементом", "safety", {actual = minimum, limit = caps[i] + 0.5, deviation = minimum - caps[i] - 0.5})
 			speeds[i] = minf(possible, caps[i])
 			if starts.has(i):
 				var ei: int = starts[i]
@@ -109,30 +109,32 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var v := speeds[clampi(floori(from), 0, n - 1)]
 			var w: Dictionary = windows[ei]
 			var rollable := _rollable_table(d, e)
-			if from < recovery: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление")
+			if from < recovery: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление", "safety", {actual = from, limit = recovery, deviation = recovery - from})
 			if w.has("speed_lo") and v < float(w.speed_lo) - 0.5:
-				_issue(report, scenario, ei, from, "скорость ниже окна %.1f < %.1f" % [v, w.speed_lo], "jump_intent" if rollable else "safety")
-			if w.has("speed_hi") and v > float(w.speed_hi) + 0.5: _issue(report, scenario, ei, from, "скорость выше окна")
+				_issue(report, scenario, ei, from, "скорость ниже окна", "jump_intent" if rollable else "safety", {actual = v, limit = float(w.speed_lo) - 0.5, deviation = float(w.speed_lo) - 0.5 - v})
+			if w.has("speed_hi") and v > float(w.speed_hi) + 0.5: _issue(report, scenario, ei, from, "скорость выше окна", "safety", {actual = v, limit = float(w.speed_hi) + 0.5, deviation = v - float(w.speed_hi) - 0.5})
 			if e.profile in [T.GAP, T.TABLETOP, T.DROP]:
 				var land_to: float = w.get("land_to", to)
 				var flight: Dictionary = flights.get(ei, {flew = false})
 				if flight.get("unresolved", false): _issue(report, scenario, ei, from, "приземление не подтверждено в пределах расчёта")
 				if flight.flew:
 					if float(flight.land) < float(w.land_from) - 0.5:
-						_issue(report, scenario, ei, from, "приземление раньше задуманной зоны (%.1f м)" % flight.land, "jump_intent" if rollable else "safety")
+						_issue(report, scenario, ei, from, "приземление раньше задуманной зоны", "jump_intent" if rollable else "safety", {actual = float(flight.land), limit = float(w.land_from) - 0.5, deviation = float(w.land_from) - 0.5 - float(flight.land)})
 					if float(flight.land) > land_to + 0.5:
-						_issue(report, scenario, ei, from, "приземление за зоной на готовом полотне (%.1f м)" % flight.land)
-					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне")
+						_issue(report, scenario, ei, from, "приземление за зоной на готовом полотне", "safety", {actual = float(flight.land), limit = land_to + 0.5, deviation = float(flight.land) - land_to - 0.5})
+					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне", "safety", {actual = float(flight.impact), limit = float(S.LEVELS[_level(d, e.station)].impact), deviation = float(flight.impact) - float(S.LEVELS[_level(d, e.station)].impact)})
 					land_to = maxf(land_to, float(flight.land))
 				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rollable else "safety")
-				var approach := S.tightest(d, maxf(0.0, from - 8.0), float(w.get("lip", from)))
-				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + 5.0))
-				if minf(approach, landing) < maxf(15.0, v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))):
-					_issue(report, scenario, ei, from, "поворот на подходе или приземлении")
-				if land_to + 5.0 > d.route_length(): _issue(report, scenario, ei, from, "нет выката после приземления")
-				recovery = land_to + maxf(5.0, v * 0.7)
+				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(BikeRide.LOOK[-1])), float(w.get("lip", from)))
+				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + S.recovery_distance(v, true)))
+				var required_radius := v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))
+				if minf(approach, landing) < required_radius:
+					_issue(report, scenario, ei, from, "поворот на подходе или приземлении", "safety", {actual = minf(approach, landing), limit = required_radius, deviation = required_radius - minf(approach, landing)})
+				var clearance := S.recovery_distance(v, true)
+				if land_to + clearance > d.route_length(): _issue(report, scenario, ei, from, "нет выката после приземления", "safety", {actual = d.route_length() - land_to, limit = clearance, deviation = land_to + clearance - d.route_length()})
+				recovery = land_to + clearance
 			elif TrailElement.places_objects(e.profile):
-				recovery = to + maxf(4.0, v * 0.5)
+				recovery = to + S.recovery_distance(v, false)
 		var seconds := 0.0
 		for speed in speeds: seconds += 1.0 / maxf(0.1, speed)
 		report.scenarios[scenario] = {speeds = speeds, top = Array(speeds).max(), windows = windows, flights = flights, seconds = seconds}
@@ -202,11 +204,17 @@ static func fly_surface(y: PackedFloat32Array, start: float, entry: float, end: 
 			air = 0.0
 	return {flew = false, unresolved = airborne, land = s, impact = 0.0, exit_speed = v}
 
-static func _issue(report: Dictionary, scenario: String, element: int, station: float, reason: String, assessment := "safety") -> void:
-	# One diagnostic per element/reason/scenario; avoid metre-by-metre walls of text.
+static func _issue(report: Dictionary, scenario: String, element: int, station: float, reason: String, assessment := "safety", metrics := {}) -> void:
+	# A concise headline plus EVERY violating station and numeric peak; never discard later violations.
 	for issue: Dictionary in report.issues:
-		if issue.scenario == scenario and issue.element == element and issue.reason == reason: return
-	report.issues.append({scenario = scenario, element = element, station = station, reason = reason, assessment = assessment})
+		if issue.scenario != scenario or issue.element != element or issue.reason != reason: continue
+		issue.to = maxf(issue.to, station)
+		issue.samples.append({station = station, metrics = metrics.duplicate(true)})
+		if float(metrics.get("deviation", 0)) > issue.max_deviation:
+			issue.max_deviation = metrics.deviation; issue.worst_station = station
+		return
+	report.issues.append({scenario = scenario, element = element, station = station, to = station, worst_station = station,
+		reason = reason, assessment = assessment, max_deviation = float(metrics.get("deviation", 0)), samples = [{station = station, metrics = metrics.duplicate(true)}]})
 
 ## A local repair never removes features or changes a cut/open span. Rebuild from fresh source afterwards.
 static func repair(d: TrailDefinition, report: Dictionary, repaired: Dictionary) -> Dictionary:

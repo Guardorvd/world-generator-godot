@@ -70,7 +70,7 @@ func apply_cuts(cuts: Array) -> void:
 		var depths: PackedFloat32Array = cut.depth
 		if pts.size() != depths.size() or pts.size() < 2: cut_errors.append("неполная врезка"); return
 		for i in depths:
-			if not is_finite(i) or i < 0 or i > float(earthwork_limits.max_cut): cut_errors.append("врезка превышает max_cut или имеет неверную глубину"); return
+			if not is_finite(i) or i < 0 or (not earthwork_limits.get("unlimited", false) and i > float(earthwork_limits.max_cut)): cut_errors.append("врезка превышает max_cut или имеет неверную глубину"); return
 		var deepest := 0.0
 		for depth in depths: deepest = maxf(deepest, depth)
 		if pts.is_empty(): continue
@@ -125,7 +125,7 @@ func audit_earthworks(h: Heightfield) -> PackedStringArray:
 				seen[vertex] = true
 				var at := Vector2(vertex) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
 				var delta: float = patch.h[z * RoadRefinement.STRIDE + x] - natural_ground(at)
-				if delta < -float(earthwork_limits.max_cut) - 0.05 or delta > float(earthwork_limits.max_fill) + 0.05:
+				if not earthwork_limits.get("unlimited", false) and (delta < -float(earthwork_limits.max_cut) - 0.05 or delta > float(earthwork_limits.max_fill) + 0.05):
 					return PackedStringArray(["готовое полотно превышает предел выемки/насыпи у %s: %+.2f м" % [at, delta]])
 				if absf(delta) > 0.05 and blocked(at): return PackedStringArray(["земляные работы затронули воду, запрет или существующий путь у %s" % at])
 	return errors

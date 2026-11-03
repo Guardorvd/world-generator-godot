@@ -15,7 +15,7 @@ var timings := Label.new()
 
 func _ready() -> void:
 	title = "Места и варианты А/Б"
-	size = Vector2i(780, 640)
+	size = Vector2i(680, 600)
 	close_requested.connect(hide)
 	var margin := MarginContainer.new()
 	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -27,8 +27,19 @@ func _ready() -> void:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(box)
+	var source_toggle := Button.new()
+	source_toggle.text = "Источник мира  ▸"
+	source_toggle.toggle_mode = true
+	source_toggle.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	box.add_child(source_toggle)
+	var source_box := VBoxContainer.new()
+	source_box.visible = false
+	box.add_child(source_box)
+	source_toggle.toggled.connect(func(open: bool) -> void:
+		source_box.visible = open
+		source_toggle.text = "Источник мира  ▾" if open else "Источник мира  ▸")
 	var source_row := HBoxContainer.new()
-	box.add_child(source_row)
+	source_box.add_child(source_row)
 	game_seed.placeholder_text = "Игровой сид (точная строка)"
 	game_seed.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	source_row.add_child(game_seed)
@@ -38,7 +49,7 @@ func _ready() -> void:
 		if not game_seed.text.is_empty(): world_requested.emit({game_seed = game_seed.text, dry_channels = dry_channels.button_pressed}))
 	source_row.add_child(open_seed)
 	var snapshot_row := HBoxContainer.new()
-	box.add_child(snapshot_row)
+	source_box.add_child(snapshot_row)
 	snapshot_path.placeholder_text = "Путь к снимку мира (.res/.tres)"
 	snapshot_path.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	snapshot_row.add_child(snapshot_path)
@@ -52,18 +63,20 @@ func _ready() -> void:
 	save_snapshot.pressed.connect(func() -> void: world_requested.emit({save_snapshot = snapshot_path.text}))
 	snapshot_row.add_child(save_snapshot)
 	dry_channels.text = "Эксперимент: сухие русла (выключено для игровых условий)"
-	box.add_child(dry_channels)
+	source_box.add_child(dry_channels)
+	description.theme_type_variation = "HintLabel"
 	description.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	description.text = "Выберите место на карте. Просмотр проекта не строит сцену."
 	box.add_child(description)
-	map.custom_minimum_size = Vector2(500, 350)
+	map.custom_minimum_size = Vector2(240, 220)
 	map.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(map)
 	map.site_clicked.connect(func(index: int) -> void: preview_requested.emit(index))
 	var actions := HBoxContainer.new()
 	box.add_child(actions)
 	var build := Button.new()
-	build.text = "Построить сцену проекта"
+	build.text = "Построить"
+	build.tooltip_text = "Построить сцену выбранного проекта"
 	build.pressed.connect(func() -> void: build_requested.emit())
 	actions.add_child(build)
 	for slot in ["A", "B"]:
@@ -76,7 +89,9 @@ func _ready() -> void:
 		restore.text = "Открыть " + slot
 		restore.pressed.connect(func() -> void: restore_requested.emit(slot))
 		actions.add_child(restore)
+	comparison.theme_type_variation = "HintLabel"
 	comparison.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(comparison)
+	timings.theme_type_variation = "HintLabel"
 	timings.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	box.add_child(timings)

@@ -13,6 +13,7 @@ const WorldJob := preload("res://scripts/lab/trail_lab_world_job.gd")
 const InputAdapter := preload("res://scripts/lab/trail_lab_input.gd")
 const Project := preload("res://scripts/lab/trail_lab_project.gd")
 static var world_timings := {}
+static var published_request := -1
 
 static var world_seed := 0
 static var sites: Array[Dictionary] = []
@@ -28,6 +29,7 @@ static func generate_world(seed_value: int) -> int:
 
 static func publish_world(result: Dictionary, expected_id: int) -> bool:
 	if result.get("request_id", -1) != expected_id or result.has("error"): return false
+	published_request = expected_id
 	TrailLabTerrain.publish_world(result.terrain)
 	sites.assign(result.sites.duplicate(true))
 	TrailLabScout.sites = sites.duplicate(true)
@@ -36,6 +38,13 @@ static func publish_world(result: Dictionary, expected_id: int) -> bool:
 	world_seed = result.terrain.seed
 	_built = {}
 	current = 0 if not sites.is_empty() else -1
+	return true
+
+static func append_sites(places: Array, request_id: int) -> bool:
+	if request_id != published_request: return false
+	for site: Dictionary in places: sites.append(site.duplicate(true))
+	TrailLabScout.sites = sites.duplicate(true)
+	if current < 0 and not sites.is_empty(): current = 0
 	return true
 
 static func active() -> bool:
@@ -173,7 +182,7 @@ static func title(i: int) -> String:
 		return "%d · %s · %.0f м, %+.0f м · прыжков %d%s" % [i + 1, style_title, st.length, -float(st.drop), st.get("jumps", 0), (" · " + ", ".join(extra)) if not extra.is_empty() else ""]
 	var alternatives := PackedStringArray()
 	for key: String in site.styles: alternatives.append(TrailLabBuilder.STYLES[key].title)
-	return "%d · %s · %.0f×%.0f м · перепад %.0f м · проба %.0f м · %s" % [i + 1, style_title, site.bounds.size.x, site.bounds.size.y, site.fall, site.probe.length, ", ".join(alternatives)]
+	return "%d · %s · %s · %.0f×%.0f м · перепад %.0f м · проба %.0f м · %s" % [i + 1, site.get("feature", "участок"), style_title, site.bounds.size.x, site.bounds.size.y, site.fall, site.probe.length, ", ".join(alternatives)]
 
 ## Итог текущего места для подписи под списком.
 static func label() -> String:

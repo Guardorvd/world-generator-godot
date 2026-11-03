@@ -16,9 +16,13 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, budget_ms := BUDGE
 	var input = GI.from_world(w, h)
 	input.earthwork_limits = EARTHWORKS.duplicate()
 	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
-		{area = area.grow(-MARGIN), deadline = started + budget_ms / 3, finish_areas = true})
+		{area = area.grow(-MARGIN), deadline = started + budget_ms / 3})
 	surveys += 1
 	var candidates := search.find(w.seed_num)
+	# Reuse the overview's construction estimate: spend the game budget on the
+	# cheapest promising corridors first, without a second survey or a route quota.
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		return float(a.probe.build_cost) < float(b.probe.build_cost) if a.probe.build_cost != b.probe.build_cost else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, attempted = 0, accepted = 0, rejected = {}, budget_ms = budget_ms}}
 	for candidate in candidates:

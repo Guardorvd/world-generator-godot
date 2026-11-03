@@ -1,0 +1,75 @@
+{
+  "accepted": true,
+  "examples": [
+    {
+      "attempts": 2,
+      "path": "res://resources/trails/lab/game_example_111_44101.tres",
+      "results": [
+        {
+          "assisted": true,
+          "attempt": 1,
+          "best": -1.0,
+          "finished": true,
+          "gates": 35,
+          "progress": 681.862182617188,
+          "seconds": 80.7999999999967
+        },
+        {
+          "assisted": true,
+          "attempt": 2,
+          "best": -1.0,
+          "finished": true,
+          "gates": 35,
+          "progress": 681.862182617188,
+          "seconds": 80.7999999999967
+        }
+      ],
+      "source_hash": "6ec287432473ab9903361432715a173cf26b00f77d0417835659b9e413587cf6",
+      "spawn": {
+        "accepted": true,
+        "cross": 0.0271542287310922,
+        "distance": 8.0,
+        "grade": 0.0143901621088531,
+        "heading": -1.53417849012853,
+        "height": 46.8866273305321,
+        "lateral": 0.0,
+        "position": "(24.00536, 128.2929)"
+      }
+    },
+    {
+      "attempts": 2,
+      "path": "res://resources/trails/lab/game_example_7_9066.tres",
+      "results": [
+        {
+          "assisted": true,
+          "attempt": 1,
+          "best": -1.0,
+          "finished": true,
+          "gates": 18,
+          "progress": 347.849395751953,
+          "seconds": 42.2999999999989
+        },
+        {
+          "assisted": true,
+          "attempt": 2,
+          "best": -1.0,
+          "finished": true,
+          "gates": 18,
+          "progress": 347.849395751953,
+          "seconds": 42.2999999999989
+        }
+      ],
+      "source_hash": "a02f34c8f96e3b164e95af44c1b8b9d99c4c91635f331eac7419ee9f2d1f0588",
+      "spawn": {
+        "accepted": true,
+        "cross": 0.184307737064046,
+        "distance": 2.0,
+        "grade": 0.143168625358385,
+        "heading": -2.67794504458899,
+        "height": 67.6208648681641,
+        "lateral": -1.0,
+        "position": "(159.0, 286.0)"
+      }
+    }
+  ]
+}

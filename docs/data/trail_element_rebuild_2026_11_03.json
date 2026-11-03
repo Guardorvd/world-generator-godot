@@ -1,0 +1,25 @@
+{
+  "accepted": true,
+  "base_ride": true,
+  "earthwork_audit": {
+    "accepted": true,
+    "bad_vertices": 0,
+    "comparison_available": false,
+    "errors": [],
+    "inherited_bad_vertices": 0,
+    "intervals": [],
+    "max_cut": 0.990013122558594,
+    "max_element_delta": 0.0,
+    "max_fill": 1.90562725067139,
+    "new_bad_vertices": 0,
+    "protected_vertices": 0
+  },
+  "elements": 14,
+  "errors": [],
+  "same_geometry": true,
+  "same_source": true,
+  "seed": "111",
+  "site_index": 42,
+  "source_hash": "6ec287432473ab9903361432715a173cf26b00f77d0417835659b9e413587cf6",
+  "trail_seed": 44101
+}

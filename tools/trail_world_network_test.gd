@@ -88,6 +88,23 @@ func run() -> void:
 	print("trail_world_network: ", failures, " failures")
 	quit(1 if failures else 0)
 
+## Explicit test-fixture import: old schema keys are accepted ONLY here, not by the game cache.
+## Prefer the saved pre-network places backup; nature's path records must not reintroduce old trails.
+func fixture_world(cache: WorldCache, seed: String) -> WorldData:
+	var data := {}
+	for layer in WorldGenerator.LAYERS.size():
+		var path := cache.path_for(seed, WorldGenerator.START_SIZE, layer)
+		if layer == 1 and FileAccess.file_exists(path + ".bak"):
+			var backup: Variant = cache._read(path + ".bak", cache._cache_header_key(path + ".bak"))
+			if backup is Dictionary and backup.get("trail_plan", {}).get("routes", []).is_empty(): path += ".bak"
+		var part: Variant = cache._read(path, cache._cache_header_key(path))
+		if not part is Dictionary: return null
+		if layer == 2:
+			part.erase("trails")
+			part.erase("road_surface")
+		data.merge(part, true)
+	return cache._restore(data, true)
+
 func game_world() -> void:
 	var seed := "Север-1234"
 	var cache := GameContext.scope.cache
@@ -100,10 +117,9 @@ func game_world() -> void:
 	var reference: Heightfield
 	if existing:
 		# Reuse the first run's complete world. No calls to WorldGenerator on this path.
-		var saved := cache.read_only(seed, WorldGenerator.START_SIZE)
-		check(saved.has("world"), "existing real-world fixture is available")
-		if not saved.has("world"): return
-		var w: WorldData = saved.world
+		var w := fixture_world(cache, seed)
+		check(w != null, "existing real-world fixture is available")
+		if w == null: return
 		check(w.trail_plan.get("routes", []).is_empty(), "fixture has no previously admitted network")
 		if not w.trail_plan.get("routes", []).is_empty(): return
 		reference = Snapshot.restore(w, cache.load_artifact(seed, WorldGenerator.START_SIZE, "base"), "base")
@@ -169,6 +185,9 @@ func game_world() -> void:
 		game.player.x = at.x; game.player.z = at.y
 		game.player.feet = c.heights.surface_at(at.x, at.y, -INF)
 		game.player.on_ground = true
+		game.stream_coordinator.force_terrain(Vector3(at.x, game.player.feet, at.y), GameWorld.NEAR)
+		game.stream_coordinator.force_vegetation(Vector3(at.x, game.player.feet, at.y))
+		game.heights.obstacles.update(at.x, at.y, game.vegetation.obstacles, game.vegetation.obstacles_version, true)
 		game.bike.x = at.x; game.bike.z = at.y; game.bike.y = game.player.feet
 		game.bike.heading = d.heading_at(2.0)
 		game.bike.mount(game.player)

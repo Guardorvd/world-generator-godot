@@ -1,0 +1,34 @@
+{
+  "schema": 1,
+  "date": "2026-11-03",
+  "branch": "technical",
+  "baseline_commit": "eb97a30",
+  "seeds": [
+    "7",
+    "111",
+    "ushchelye",
+    "2026",
+    "31415",
+    "taiga"
+  ],
+  "selection": "Seeds fixed before looking at results. Six equally spaced indices floor(k*N/min(6,N)) in each deterministic proposal list. Lists may change with the algorithm; this is a map-level survey, not paired site matching. No rerolls.",
+  "generation_count": "All scout proposals under a map-area work budget, no target count. Six is a measurement sample, not a generated-trail quota.",
+  "settings": {
+    "difficulty": 0.5,
+    "modification": 0.5,
+    "mandatory_gaps": false,
+    "park_layout": "auto"
+  },
+  "physics": {
+    "engine": "Godot 4.7.2 stable win64",
+    "motion": "BikeRide + BikeController",
+    "policy": "careful autopilot",
+    "frequency_hz": 60,
+    "max_simulated_seconds": 240,
+    "teleports": 0
+  },
+  "source": "Complete production worlds at WorldGenerator.PLAN_SIZE with unchanged heights, water, rivers and infrastructure. Baseline inherits the old 2 m cap; final automatic Lab construction has no depth cap and ranks earthwork cost. Terrain fingerprints exclude policy, project source fingerprints include it.",
+  "timing": "Separate source_open_ms (observed load/generation), source_ms and game_stages_ms (original snapshot generation provenance), search_ms, project_ms with walk/base/composition/feature fitting, preparation, physical probe, total, first_built/first_ready/first_physical. Background processes overlapped; timings are observations, not an isolated benchmark. Compare first_ready_ms-source_open_ms for pipeline time on initially uncached worlds.",
+  "scope": "Trail Labs only; shared input supports an explicit unlimited flag, absent in the main game. No game integration.",
+  "design": "A shared allowed footprint and actual terrain interpolation. Slope, width, construction cost and character rank choices rather than prohibit them. Automatic construction uses ordinary shaping without the old 2 m cap or its natural-grade-following override. Character is evaluated with composition, not required from a bare flat line. No separate endpoint solver."
+}

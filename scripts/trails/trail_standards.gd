@@ -365,6 +365,10 @@ static func tech_height(kind: int, level: int) -> float:
 static func brake_distance(v_from: float, v_to: float) -> float:
 	return maxf(0.0, v_from * v_from - v_to * v_to) / (2.0 * BRAKE)
 
+## Recovery is travel during rider response plus wheelbase clearance, not a fixed gap in metres.
+static func recovery_distance(speed: float, jump: bool) -> float:
+	return HUB + speed * (0.7 if jump else 0.5)
+
 
 ## — Стандарт элемента под скорость и уровень —
 
@@ -372,8 +376,8 @@ static func brake_distance(v_from: float, v_to: float) -> float:
 ## Пусто — на этой скорости и уровне элемент не ставится (why_not). Ключи: profile, length, height, gap, count, radius,
 ## v, level, и окно (speed_lo / speed_hi / ideal).
 static var _specs := {}
-static func spec(kind: String, v: float, level: int, grade := 0.0) -> Dictionary:
-	if not why_not(kind, v, level).is_empty(): return {}
+static func spec(kind: String, v: float, level: int, grade := 0.0, preference_limits := true) -> Dictionary:
+	if preference_limits and not why_not(kind, v, level).is_empty(): return {}
 	var key := "%s|%d|%.1f|%.2f" % [kind, level, v, grade]
 	if not _specs.has(key):
 		if _specs.size() > 2000: _specs.clear()

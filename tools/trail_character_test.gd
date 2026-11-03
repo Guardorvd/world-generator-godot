@@ -35,7 +35,7 @@ func run() -> void:
 	var natural := B.build(ground, 512, 8, "park", Callable(), Callable(), {difficulty = 0.85, modification = 0.0, park_layout = "horseshoe"})
 	check(not natural.is_empty() and natural[0].earthwork == 0 and natural[0].elements.all(func(e: TrailElement) -> bool: return TrailElement.places_objects(e.profile)) and B.cuts.is_empty(), "zero modification never creates earthworks, jumps or cuts")
 	var light := B.build(ground, 512, 8, "park", Callable(), Callable(), {difficulty = 0.85, modification = 0.15, park_layout = "horseshoe"})
-	check(not light.is_empty() and light[0].elements.all(func(e: TrailElement) -> bool: return TrailElement.places_objects(e.profile) or e.height <= 0.175), "light construction does not hide tall artificial features")
+	check(not light.is_empty() and light[0].earthwork == 0.15, "light construction controls shaping strength without an unrelated element-height ban")
 	check(C.profile_for("tech", 0.5, 0.5).difficulty == C.profile_for("park", 0.5, 0.5).difficulty, "style does not silently choose difficulty")
 	var counts := {}
 	for style: String in B.ORDER:
@@ -46,7 +46,7 @@ func run() -> void:
 		check(proposed.elements.all(func(e: TrailElement) -> bool: return e.profile != T.GAP), "%s: no mandatory gaps without opt-in" % style)
 	print("Jump counts by style: ", counts)
 	check(counts.tech == 0 and counts.park > counts.tech and counts.flow > counts.tech, "technical and park characters produce different element families")
-	check(not C.gap_allowed("enduro", 0.9, 1, true) and not C.gap_allowed("park", 0.4, 1, true) and not C.gap_allowed("park", 0.9, 0.2, true) and C.gap_allowed("park", 0.9, 0.9, true), "mandatory gaps require explicit request, suitable style, skill and construction")
+	check(C.gap_allowed("enduro", 0.2, 0.15, true) and not C.gap_allowed("park", 0.9, 1, false) and not C.gap_allowed("park", 0.9, 0, true), "gap opt-in is independent of style and percentages; explicit zero construction remains respected")
 	var d := straight()
 	var state := {recovery = 0.0, refused = {}, chains = []}
 	var jump := TrailElementLibrary.make(T.TABLETOP, 100, 16, 1.0)

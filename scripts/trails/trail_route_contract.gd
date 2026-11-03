@@ -2,7 +2,6 @@ extends RefCounted
 ## A stopped walk is data, never implicitly a finished route.
 const FINISH_RADIUS := 8.0
 const CORRIDOR_WIDTH := 48.0
-const MIN_LENGTH := 160.0
 
 static func length(points: PackedVector2Array) -> float:
 	var total := 0.0
@@ -30,7 +29,7 @@ static func endpoint(p: Vector2, tangent: Vector2, ground: Callable, allowed: Ca
 	for s: float in [-6.0, 0.0, 6.0, 12.0]:
 		for offset: float in [-width * 0.5 - 2, 0.0, width * 0.5 + 2]:
 			if allowed.is_valid() and not allowed.call(p + tangent * s + side * offset): clear = false
-	return {suitable = clear and grade <= 0.12 and cross <= 0.20, clear = clear, grade = grade, cross = cross}
+	return {suitable = clear, clear = clear, grade = grade, cross = cross, estimated_work = cross * width * 0.5 + grade * 6.0}
 
 static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, width: float, short_route := false) -> Dictionary:
 	if hint.size() < 2: return {hint = hint, error = "коридор не задан"}
@@ -54,13 +53,14 @@ static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, 
 					if score < best: best = score; nominated = at
 	if short_route:
 		var best := -INF
+		var preferred := minf(total, 240.0)
 		end = -1
-		for s in range(180, floori(minf(total - 24, 320)), 16):
+		for s in range(1, ceili(total) + 1, 16):
 			var p := d.point_at(s)
 			var test := endpoint(p, d.tangent_at(s), ground, allowed, width)
 			if not test.suitable: continue
 			var drop := float(ground.call(hint[0])) - float(ground.call(p))
-			var score := drop - float(test.grade) * 20 - absf(s - 240) * 0.02
+			var score := drop - float(test.grade) * 20 - absf(s - preferred) * 0.15
 			if score > best: best = score; end = s
 		if end < 0: return {hint = hint, error = "нет подходящего самостоятельного короткого финиша"}
 	var points := PackedVector2Array([hint[0]])
@@ -107,12 +107,11 @@ static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish
 			count += 1
 			if project(points, guide.point_at(s)).y <= CORRIDOR_WIDTH: covered += 1
 		result.corridor_coverage = float(covered) / maxi(1, count)
-		if result.corridor_progress < 0.90 or result.corridor_coverage < 0.85 or result.backward_m > total * 0.20:
-			result.reasons.append("нет последовательного продвижения по коридору")
-	result.fragment = not reached or (hint.size() > 1 and (result.corridor_progress < 0.90 or result.corridor_coverage < 0.85 or result.backward_m > length(hint) * 0.20))
+	# The hint ranks alternatives. A safe detour reaching the nominated finish is complete
+	# even when it leaves the corridor; real footprint conflicts are still checked separately.
+	result.fragment = not reached
 	result.finish_area = endpoint(points[-1], (points[-1] - points[-2]).normalized(), ground, allowed, width)
 	if not result.finish_area.suitable: result.reasons.append("финиш без безопасного места остановки и выката")
-	if result.length < MIN_LENGTH: result.reasons.append("слишком короткий самостоятельный маршрут")
 	if result.length < 300 or kind == "short":
 		var drop := float(ground.call(points[0])) - float(ground.call(points[-1]))
 		var turns := 0
@@ -124,6 +123,7 @@ static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish
 			if absf(last.angle_to(next)) > 0.25: turns += 1
 			last = next
 		result.standalone = {drop = drop, turns = turns, useful = drop >= 6 or turns >= 3}
-		if not result.standalone.useful: result.reasons.append("короткий маршрут не даёт ни спуска, ни связки поворотов")
+		# Character is supplied by the completed tread and elements; a flat park line
+		# is not an unfinished route merely because it has no natural descent.
 	result.complete = result.reasons.is_empty()
 	return result

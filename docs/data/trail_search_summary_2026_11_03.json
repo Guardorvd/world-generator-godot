@@ -1,0 +1,208 @@
+{
+  "schema": 1,
+  "before": {
+    "proposed": 331,
+    "tested": 36,
+    "complete_lines": 78,
+    "built": 15,
+    "accepted": 12,
+    "physical": 9,
+    "physical_refusals": {
+      "left_tread": 3
+    },
+    "styles": {
+      "downhill": 4,
+      "flow": 5,
+      "park": 1,
+      "tech": 2
+    },
+    "median_length": 308.15107727050747,
+    "median_elements": 6,
+    "median_project_ms": 10525.678,
+    "max_project_ms": 170736.599,
+    "median_prepare_ms": 1402.5,
+    "rescued": [],
+    "refusals": {
+      "ride_or_surface_validation": 3,
+      "route_completion_or_finish": 8,
+      "base_surface_or_repair": 13
+    }
+  },
+  "after": {
+    "proposed": 753,
+    "tested": 36,
+    "complete_lines": 106,
+    "built": 27,
+    "accepted": 20,
+    "physical": 20,
+    "physical_refusals": {},
+    "styles": {
+      "tech": 1,
+      "flow": 8,
+      "downhill": 8,
+      "park": 3
+    },
+    "median_length": 231.1869430541995,
+    "median_elements": 5,
+    "median_project_ms": 19065.9355,
+    "max_project_ms": 74077.434,
+    "median_prepare_ms": 1636.303,
+    "rescued": [],
+    "refusals": {
+      "base_surface_or_repair": 9,
+      "ride_or_surface_validation": 7
+    }
+  },
+  "worlds": [
+    {
+      "seed": "7",
+      "before": {
+        "proposed": 60,
+        "built": 3,
+        "accepted": 2,
+        "physical": 2,
+        "search_ms": 5851.888,
+        "source_open_ms": 23.342,
+        "source_provenance_ms": 246950.668,
+        "first_ready_ms": 123550.011,
+        "first_ready_pipeline_ms": 123526.669
+      },
+      "after": {
+        "proposed": 116,
+        "built": 5,
+        "accepted": 4,
+        "physical": 4,
+        "search_ms": 25561.34,
+        "source_open_ms": 22.84,
+        "source_provenance_ms": 246950.668,
+        "first_ready_ms": 34026.235,
+        "first_ready_pipeline_ms": 34003.395000000004
+      }
+    },
+    {
+      "seed": "111",
+      "before": {
+        "proposed": 56,
+        "built": 2,
+        "accepted": 2,
+        "physical": 2,
+        "search_ms": 6275.857,
+        "source_open_ms": 47.26,
+        "source_provenance_ms": 300536.336,
+        "first_ready_ms": 35658.725,
+        "first_ready_pipeline_ms": 35611.465
+      },
+      "after": {
+        "proposed": 121,
+        "built": 3,
+        "accepted": 3,
+        "physical": 3,
+        "search_ms": 30234.193,
+        "source_open_ms": 23.746,
+        "source_provenance_ms": 300536.336,
+        "first_ready_ms": 36932.657,
+        "first_ready_pipeline_ms": 36908.911
+      }
+    },
+    {
+      "seed": "ushchelye",
+      "before": {
+        "proposed": 47,
+        "built": 2,
+        "accepted": 1,
+        "physical": 1,
+        "search_ms": 6191.876,
+        "source_open_ms": 50.817,
+        "source_provenance_ms": 280364.378,
+        "first_ready_ms": 180913.928,
+        "first_ready_pipeline_ms": 180863.111
+      },
+      "after": {
+        "proposed": 138,
+        "built": 4,
+        "accepted": 2,
+        "physical": 2,
+        "search_ms": 32759.097,
+        "source_open_ms": 31.72,
+        "source_provenance_ms": 280364.378,
+        "first_ready_ms": 58347.972,
+        "first_ready_pipeline_ms": 58316.252
+      }
+    },
+    {
+      "seed": "2026",
+      "before": {
+        "proposed": 56,
+        "built": 3,
+        "accepted": 2,
+        "physical": 0,
+        "search_ms": 8421.959,
+        "source_open_ms": 32.685,
+        "source_provenance_ms": 472065.219,
+        "first_ready_ms": 26589.986,
+        "first_ready_pipeline_ms": 26557.301
+      },
+      "after": {
+        "proposed": 130,
+        "built": 3,
+        "accepted": 3,
+        "physical": 3,
+        "search_ms": 31238.65,
+        "source_open_ms": 35.956,
+        "source_provenance_ms": 472065.219,
+        "first_ready_ms": 39773.464,
+        "first_ready_pipeline_ms": 39737.508
+      }
+    },
+    {
+      "seed": "31415",
+      "before": {
+        "proposed": 58,
+        "built": 3,
+        "accepted": 3,
+        "physical": 2,
+        "search_ms": 8185.161,
+        "source_open_ms": 346564.58,
+        "source_provenance_ms": 346254.969,
+        "first_ready_ms": 406655.294,
+        "first_ready_pipeline_ms": 60090.71399999998
+      },
+      "after": {
+        "proposed": 125,
+        "built": 6,
+        "accepted": 4,
+        "physical": 4,
+        "search_ms": 32218.402,
+        "source_open_ms": 36.794,
+        "source_provenance_ms": 346254.969,
+        "first_ready_ms": 43002.148,
+        "first_ready_pipeline_ms": 42965.354
+      }
+    },
+    {
+      "seed": "taiga",
+      "before": {
+        "proposed": 54,
+        "built": 2,
+        "accepted": 2,
+        "physical": 2,
+        "search_ms": 8160.637,
+        "source_open_ms": 291675.975,
+        "source_provenance_ms": 291413.249,
+        "first_ready_ms": 346286.308,
+        "first_ready_pipeline_ms": 54610.33300000004
+      },
+      "after": {
+        "proposed": 123,
+        "built": 6,
+        "accepted": 4,
+        "physical": 4,
+        "search_ms": 30644.014,
+        "source_open_ms": 45.868,
+        "source_provenance_ms": 291413.249,
+        "first_ready_ms": 41635.511,
+        "first_ready_pipeline_ms": 41589.643
+      }
+    }
+  ]
+}
