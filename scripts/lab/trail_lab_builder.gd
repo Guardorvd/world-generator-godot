@@ -94,7 +94,7 @@ static func build_project(input: GenerationInput, seed_value: int, style_name: S
 		result.stats = {accepted = false, reason = "; ".join(context.cut_errors)}
 	for d: TrailDefinition in result.routes:
 		for e in d.elements:
-			if not TrailElement.places_objects(e.profile) and e.height > float(input.earthwork_limits.max_fill):
+			if not TrailElement.places_objects(e.profile) and not input.earthwork_limits.get("unlimited", false) and e.height > float(input.earthwork_limits.max_fill):
 				result.routes = []
 				result.stats = {accepted = false, reason = "элемент превышает max_fill"}
 				break
@@ -177,6 +177,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var fragments := []
 	var finish_refused := []
 	var completed_candidates := 0
+	var promising: Array[Dictionary] = []
 	var tries := 0
 	var walk_refused := 0
 	var longest_trial := 0.0
@@ -241,13 +242,16 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			components.corridor = clampf(1.0 - deviation / maxf(1, trial.points.size()) / 64.0, 0, 1)
 			components.total = components.total * 0.8 + components.corridor * 0.2
 		var score: float = components.total
+		promising.append({points = line, score = components, completion = finished, goal = chosen_finish})
+		promising.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.score.total > b.score.total)
+		if promising.size() > 3: promising.resize(3)
 		if score > best_score:
 			best_score = score
 			best_components = components
 			completion = finished
 			pts = line
 			goal = chosen_finish
-		if best_score > 0.92: break
+		if best_score > 0.92 and promising.size() >= 3: break
 	var walk_ms := (Time.get_ticks_usec() - started) / 1000.0
 	if pts.size() < 2:
 		var reason := "нет законченного маршрута: фрагментов %d, отказов финиша %d, завершённых кандидатов %d, отказов полотна %d" % [fragments.size(), finish_refused.size(), completed_candidates, walk_refused]
@@ -255,6 +259,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		stats = {accepted = false, reason = reason,
 			fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, finish_plan = finish_plan, walk_refused = walk_refused, walk_reasons = walk_reasons}
 		return _project_result([], stats, cuts, speeds, seed)
+	if promising.is_empty(): promising.append({points = pts, score = best_components, completion = completion, goal = goal})
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
 	var d := TrailDefinition.new()
 	d.id = "generated_%s_%d" % [style, seed]
@@ -273,26 +278,48 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	# v3: целевой уклон выравнивания — по самой крутой части самой линии (не ниже пресета): иначе после крутого спуска
 	# полотно держит 16 % и уходит в насыпь до 10 м — под пролётом и в узле петли это яма, а не овражек
 	var shaping := TrailShaping.preset(d.kind)
-	shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, shaping.grade_limit, GRADE_LIMIT_MAX)
+	var limited_earthworks: bool = not options.has("_source") or not options._source.earthwork_limits.get("unlimited", false)
+	if limited_earthworks: shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, shaping.grade_limit, GRADE_LIMIT_MAX)
 	d.shaping = shaping
 	var base_surface := {}
 	var composing_ground := ground
+	var base_attempts := []
 	if options.has("_source"):
 		var base_started := Time.get_ticks_usec()
-		var check_route := func(candidate: TrailDefinition) -> PackedStringArray:
-			var errors := Validation.footprint(candidate, inside)
-			var final_contract := RouteContract.measure(candidate.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
-			for reason: String in final_contract.reasons: errors.append(reason)
-			return errors
-		base_surface = BaseSurface.fit(options._source, d, check_route)
-		var base_heights: Heightfield = base_surface.get("_heights")
-		base_surface.erase("_heights")
+		# At most three fits (each already has a bounded repair budget), shared by all lines.
+		# No rerolls or renewed walk budgets when the first tread fails.
+		var template := d.duplicate(true) as TrailDefinition
+		for candidate: Dictionary in promising:
+			d = template.duplicate(true) as TrailDefinition
+			d.points = _resample(_smooth(_smooth(candidate.points)), 2.0)
+			d.closed = d.points[0].distance_to(d.points[-1]) < 0.01
+			d.shaping = TrailShaping.preset(d.kind)
+			if limited_earthworks: d.shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, d.shaping.grade_limit, GRADE_LIMIT_MAX)
+			goal = candidate.goal
+			completion = candidate.completion
+			best_components = candidate.score
+			var check_route := func(route: TrailDefinition) -> PackedStringArray:
+				var errors := Validation.footprint(route, inside)
+				var final_contract := RouteContract.measure(route.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+				for reason: String in final_contract.reasons: errors.append(reason)
+				return errors
+			var fit_started := Time.get_ticks_usec()
+			base_surface = BaseSurface.fit(options._source, d, check_route)
+			var base_heights: Heightfield = base_surface.get("_heights")
+			base_surface.erase("_heights")
+			base_attempts.append({rank = base_attempts.size(), score = best_components, accepted = base_surface.accepted,
+				reason = base_surface.get("reason", ""), ms = (Time.get_ticks_usec() - fit_started) / 1000.0,
+				report = base_surface.duplicate(true)})
+			if not base_surface.accepted: continue
+			composing_ground = func(p: Vector2) -> float: return base_heights.ground_at(p.x, p.y)
+			completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind)
+			line = d.points
+			break
 		base_surface.total_ms = (Time.get_ticks_usec() - base_started) / 1000.0
 		if not base_surface.accepted:
 			return _project_result([], {accepted = false, reason = "базовое полотно: " + base_surface.get("reason", "не принято"), base_surface = base_surface,
+				base_attempts = base_attempts, retained_lines = promising.size(), walk_ms = walk_ms, ms = (Time.get_ticks_usec() - started) / 1000.0,
 				line_score = best_components, completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, composition_started = false}, [], speeds, seed)
-		completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
-		composing_ground = func(p: Vector2) -> float: return base_heights.ground_at(p.x, p.y)
 	var profile := Composition.profile_for(style, skill, shaping_amount)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
@@ -344,6 +371,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var element_fit := {}
 	if options.has("_source") and not options.get("_diagnostic_raw_proposals", false):
 		var fitting_started := Time.get_ticks_usec()
+		options._require_safe_base = true
+		if not options.has("element_bake_budget"): options.element_bake_budget = 24
 		element_fit = ElementFit.fit(options._source, d, options)
 		# Diagnose the bare tread before touching feature recovery. A refused base gets a bounded
 		# geometry solve; its existing proposals are remapped and fitted again on the new surface.
@@ -359,6 +388,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				if not rebaked.errors.is_empty(): return _project_result([], {accepted = false, reason = "; ".join(rebaked.errors)}, [], speeds, seed)
 				var repaired_heights: Heightfield = rebaked.heights
 				composing_ground = func(p: Vector2) -> float: return repaired_heights.ground_at(p.x, p.y)
+				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind)
+				line = d.points
 		element_fit.total_ms = (Time.get_ticks_usec() - fitting_started) / 1000.0
 		base_surface.ride = element_fit.get("base", {}).get("ride", {})
 	var length := d.route_length()
@@ -379,7 +410,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	radii.sort()
 	stats = {length = snappedf(length, 1.0), drop = snappedf(drop, 0.1), grade = snappedf(-drop / maxf(length, 1.0) * 100.0, 0.1),
 		element_fit = element_fit,
-		base_surface = base_surface, composition_started = true,
+		base_surface = base_surface, base_attempts = base_attempts, retained_lines = promising.size(), composition_started = true,
 		completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates,
 		line_score = best_components,
 		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, composing_ground), sequence_refused = sequence.refused,

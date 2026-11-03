@@ -49,9 +49,9 @@ static func audit(input: GI, h: Heightfield, route: TrailDefinition, reference: 
 				report.max_element_delta = maxf(report.max_element_delta, absf(contribution))
 				report.max_cut = maxf(report.max_cut, -delta); report.max_fill = maxf(report.max_fill, delta)
 				var protected_area: bool = absf(delta) > 0.05 and input.blocked(at)
-				var excessive: bool = delta < -float(input.earthwork_limits.max_cut) - 0.05 or delta > float(input.earthwork_limits.max_fill) + 0.05
+				var excessive: bool = not input.earthwork_limits.get("unlimited", false) and (delta < -float(input.earthwork_limits.max_cut) - 0.05 or delta > float(input.earthwork_limits.max_fill) + 0.05)
 				if not protected_area and not excessive: continue
-				var inherited: bool = reference != null and (base_delta < -float(input.earthwork_limits.max_cut) - 0.05 or base_delta > float(input.earthwork_limits.max_fill) + 0.05 or (absf(base_delta) > 0.05 and input.blocked(at)))
+				var inherited: bool = reference != null and ((not input.earthwork_limits.get("unlimited", false) and (base_delta < -float(input.earthwork_limits.max_cut) - 0.05 or base_delta > float(input.earthwork_limits.max_fill) + 0.05)) or (absf(base_delta) > 0.05 and input.blocked(at)))
 				if inherited: report.inherited_bad_vertices += 1
 				else: report.new_bad_vertices += 1
 				report.bad_vertices += 1
@@ -65,7 +65,8 @@ static func audit(input: GI, h: Heightfield, route: TrailDefinition, reference: 
 				record.count += 1
 				record.depth = maxf(record.depth, absf(delta))
 				record.max_cut = maxf(record.max_cut, -delta); record.max_fill = maxf(record.max_fill, delta)
-				var excess := maxf(maxf(-delta - float(input.earthwork_limits.max_cut), delta - float(input.earthwork_limits.max_fill)), absf(delta) - 0.05 if protected_area else 0.0)
+				var depth_excess := 0.0 if input.earthwork_limits.get("unlimited", false) else maxf(-delta - float(input.earthwork_limits.max_cut), delta - float(input.earthwork_limits.max_fill))
+				var excess := maxf(depth_excess, absf(delta) - 0.05 if protected_area else 0.0)
 				if excess > record.max_excess: record.max_excess = excess; record.worst_station = station; record.worst_at = at
 				record.max_element_delta = maxf(record.max_element_delta, absf(contribution))
 				if inherited: record.inherited += 1
@@ -92,7 +93,7 @@ static func audit(input: GI, h: Heightfield, route: TrailDefinition, reference: 
 		else: report.intervals.append(record.duplicate(true))
 	for interval: Dictionary in report.intervals: interval.stations.sort()
 	report.accepted = report.bad_vertices == 0
-	if report.max_cut > float(input.earthwork_limits.max_cut) + 0.05 or report.max_fill > float(input.earthwork_limits.max_fill) + 0.05: report.errors.append("базовое полотно превышает предел выемки/насыпи")
+	if not input.earthwork_limits.get("unlimited", false) and (report.max_cut > float(input.earthwork_limits.max_cut) + 0.05 or report.max_fill > float(input.earthwork_limits.max_fill) + 0.05): report.errors.append("базовое полотно превышает предел выемки/насыпи")
 	if report.protected_vertices > 0: report.errors.append("откосы базового полотна затрагивают защищённую область")
 	return report
 

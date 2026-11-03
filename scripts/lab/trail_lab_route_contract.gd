@@ -30,7 +30,7 @@ static func endpoint(p: Vector2, tangent: Vector2, ground: Callable, allowed: Ca
 	for s: float in [-6.0, 0.0, 6.0, 12.0]:
 		for offset: float in [-width * 0.5 - 2, 0.0, width * 0.5 + 2]:
 			if allowed.is_valid() and not allowed.call(p + tangent * s + side * offset): clear = false
-	return {suitable = clear and grade <= 0.12 and cross <= 0.20, clear = clear, grade = grade, cross = cross}
+	return {suitable = clear, clear = clear, grade = grade, cross = cross, estimated_work = cross * width * 0.5 + grade * 6.0}
 
 static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, width: float, short_route := false) -> Dictionary:
 	if hint.size() < 2: return {hint = hint, error = "коридор не задан"}
@@ -124,6 +124,7 @@ static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish
 			if absf(last.angle_to(next)) > 0.25: turns += 1
 			last = next
 		result.standalone = {drop = drop, turns = turns, useful = drop >= 6 or turns >= 3}
-		if not result.standalone.useful: result.reasons.append("короткий маршрут не даёт ни спуска, ни связки поворотов")
+		# Character is supplied by the completed tread and elements; a flat park line
+		# is not an unfinished route merely because it has no natural descent.
 	result.complete = result.reasons.is_empty()
 	return result

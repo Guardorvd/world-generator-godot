@@ -58,15 +58,20 @@ static func support_check(route: TrailDefinition, e: TrailElement, evaluation: D
 	return {checked_without_element = true, from = from, to = to, safe_without = issues.is_empty(), issues = issues}
 
 static func fit(input: GI, route: TrailDefinition, settings := {}) -> Dictionary:
+	var budget := clampi(int(settings.get("element_bake_budget", MAX_BAKES)), 2, MAX_BAKES)
 	var proposals: Array[TrailElement] = []
 	for e in route.elements: proposals.append(e.duplicate(true) as TrailElement)
 	var bare := route.duplicate(true) as TrailDefinition
 	bare.elements.clear()
 	var base := A.evaluate(input, bare)
-	var report := {accepted = false, base = A.without_runtime(base), decisions = [], bake_count = 1, budget = MAX_BAKES,
+	var report := {accepted = false, base = A.without_runtime(base), decisions = [], bake_count = 1, budget = budget,
 		max_variants = MAX_VARIANTS, proposed = proposals.size(), kept = 0, declined = 0, unresolved_support = []}
 	if not base.has("_heights"):
 		report.reason = "база не собралась"; return report
+	if settings.get("_require_safe_base", false) and not base.accepted:
+		report.reason = "сначала требуется исправление голой базы"
+		report.base_refused_before_features = true
+		return report
 	var current := base
 	var working := bare.duplicate(true) as TrailDefinition
 	var ground := func(p: Vector2) -> float: return (base._heights as Heightfield).ground_at(p.x, p.y)
@@ -84,7 +89,7 @@ static func fit(input: GI, route: TrailDefinition, settings := {}) -> Dictionary
 		var best_risk := INF
 		var trials := variants(e)
 		for variant in trials:
-			if report.bake_count >= MAX_BAKES - 1: break
+			if report.bake_count >= budget - 1: break
 			var candidate := working.duplicate(true) as TrailDefinition
 			candidate.elements.append(variant)
 			candidate.elements.sort_custom(func(a: TrailElement, b: TrailElement) -> bool: return a.station < b.station)

@@ -28,7 +28,7 @@ func _initialize() -> void:
 	check(short_report.complete and short_report.standalone.useful, "planned short route has stopping area, runout and its own descent")
 	var flat := func(_p: Vector2) -> float: return 20
 	var empty_value := C.measure(short_line, plan.hint, plan.finish, "reached_finish", flat, allowed, 4, "short")
-	check(not empty_value.complete and not empty_value.fragment, "finished but uninteresting short straight is a value refusal, not a fragment")
+	check(empty_value.complete and not empty_value.standalone.useful, "flat line completion is independent of character added by composition")
 	var unsafe := C.measure(full, hint, hint[-1], "reached_finish", ground, func(p: Vector2) -> bool: return p.y > 48, 4)
 	check(not unsafe.complete and not unsafe.fragment, "arrival without stopping runout is a finish refusal")
 	quit(1 if failures else 0)

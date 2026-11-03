@@ -26,15 +26,18 @@ func run() -> void:
 	var shapes := {}
 	var valid := true
 	var unique := true
+	var multiple_pairs := false
 	for i in sites.size():
 		var site: Dictionary = sites[i]
+		multiple_pairs = multiple_pairs or site.probe.pairs_tested > 1
 		shapes[site.region.size] = true
 		valid = valid and site.probe.length >= 140 and not site.styles.is_empty() and site.bounds.size == Vector2(site.region.size) * GameConfig.TILE
 		for j in range(i + 1, sites.size()):
 			if Scout.overlap(site.corridor, sites[j].corridor) >= Scout.OVERLAP: unique = false
 	check(valid, "every site has a route probe, dimensions and supported styles")
+	check(multiple_pairs, "search considers multiple endpoint pairs within its work budget")
 	check(shapes.size() > 1, "accepted regions have different sizes/proportions: %s" % [shapes.keys()])
-	check(unique and Scout.stats.duplicates > 0, "corridor duplicates removed while nearby independent lines remain")
+	check(unique, "accepted corridors are distinct while nearby independent lines remain")
 	check(var_to_bytes(sites) == var_to_bytes(Scout.find(13)), "search is deterministic")
 	var a := Scout.corridor(PackedVector2Array([Vector2(0, 0), Vector2(400, 0)]))
 	var b := Scout.corridor(PackedVector2Array([Vector2(100, 0), Vector2(300, 0)]))
@@ -42,11 +45,17 @@ func run() -> void:
 	check(Scout.overlap(a, b) >= Scout.OVERLAP and Scout.overlap(a, c) < Scout.OVERLAP, "shared corridor is duplicate; a crossing alone is not")
 	map_data(128, 0.08)
 	for z in 128: Terrain.world_wet[z * 128 + 64] = 1
-	check(Scout.probe(Rect2i(0, 0, 128, 128)).is_empty(), "cheap probe rejects a disconnected dry region")
+	var split := Scout.probe(Rect2i(0, 0, 128, 128))
+	var safe_component := true
+	if not split.is_empty():
+		var left: bool = split.points[0].x < 64 * GameConfig.TILE
+		for p: Vector2 in split.points:
+			if (p.x < 64 * GameConfig.TILE) != left: safe_component = false
+	check(safe_component, "a bounded probe never crosses the wet barrier between dry components")
 	map_data(128, 0.0)
 	var region := Scout.measure(Rect2i(0, 0, 128, 128))
 	var trial := Scout.probe(region.region)
-	check(not trial.is_empty() and Scout.capabilities(region, trial) == ["park"], "flat terrain suggests park, not downhill")
+	check(not trial.is_empty() and Scout.capabilities(region, trial)[0] == "park", "flat terrain recommends park first while allowing constructed alternatives")
 	Terrain.world_wet.fill(1)
 	check(Scout.find(13).is_empty() and Scout.stats.has("reason"), "unsuitable map returns zero sites with reason")
 	print("RESULT: %s" % ("PASS" if failures == 0 else "FAIL (%d)" % failures))

@@ -13,15 +13,16 @@ func _initialize() -> void:
 
 func run() -> void:
 	var args := OS.get_cmdline_user_args()
-	var seeds := ["7", "111", "ushchelye"]
+	var seeds := ["7", "111", "ushchelye", "2026", "31415", "taiga"]
 	if "--seed" in args: seeds = [args[args.find("--seed") + 1]]
-	var limit := 4
+	var limit := 6
 	if "--sites" in args: limit = int(args[args.find("--sites") + 1])
-	var output := {schema = 3, seeds = seeds, site_limit = limit, worlds = [], policy = "strict game water; max cut/fill 2 m", sample = "equally spaced indices in deterministic scout order; one default project per site; no rerolls"}
+	var output := {schema = 5, seeds = seeds, site_limit = limit, worlds = [], policy = "strict game water; earthwork cost ranked without a fixed depth cap", sample = "equally spaced indices in deterministic scout order; one default project per site; no rerolls"}
 	for seed_text: String in seeds:
 		var cache := "res://.godot/trail_game_%s.res" % seed_text
 		var input
-		var source_started := Time.get_ticks_usec()
+		var world_started := Time.get_ticks_usec()
+		var source_started := world_started
 		var cached := FileAccess.file_exists(cache)
 		if FileAccess.file_exists(cache): input = Source.open(cache).get("input")
 		if input == null:
@@ -33,18 +34,27 @@ func run() -> void:
 		var terrain := Source.terrain(input)
 		var scout := preload("res://scripts/lab/trail_lab_scout_job.gd").new(terrain)
 		var sites := scout.find(terrain.seed)
+		print("SEARCH ", seed_text, " ms=", scout.stats.ms, " proposed=", sites.size())
 		Sites.publish_world({request_id = 0, terrain = terrain, sites = sites, scout = scout.stats, timings = {}}, 0)
-		var world := {seed = seed_text, source_hash = terrain.input.fingerprint(), source_ms = input.provenance.get("source_ms", 0),
+		var world := {seed = seed_text, source_hash = terrain.input.fingerprint(), terrain_hash = Source.geometry_fingerprint(input), source_ms = input.provenance.get("source_ms", 0),
 			source_cached = cached, source_open_ms = source_open_ms,
 			game_stages_ms = input.provenance.get("stages_ms", {}), terrain = describe(input),
 			search = scout.stats, search_ms = (Time.get_ticks_usec() - t) / 1000.0, candidates_found = sites.size(),
-			projects_built = 0, trails_accepted = 0, handled_rejections = 0, unexplained_failures = 0, refusal_categories = {}, refusals = {}, attempts = []}
+			projects_built = 0, trails_accepted = 0, physically_completed = 0, first_built_ms = null, first_ready_ms = null, first_physical_ms = null, handled_rejections = 0, unexplained_failures = 0, refusal_categories = {}, refusals = {}, attempts = []}
 		# Spread across the ranked list rather than testing only the easiest first entries.
-		for k in mini(limit, sites.size()):
-			var i := k * sites.size() / mini(limit, sites.size())
+		var sample_count := sites.size() if limit < 0 else mini(limit, sites.size())
+		for k in sample_count:
+			var i := k * sites.size() / sample_count
 			t = Time.get_ticks_usec()
+			print("BUILD ", seed_text, " index=", i)
 			var built := Sites.select(i)
 			var attempt := {index = i, project_ms = (Time.get_ticks_usec() - t) / 1000.0, built = built, accepted = false}
+			attempt.style = sites[i].style
+			attempt.trail_seed = sites[i].trail_seed
+			attempt.settings = sites[i].settings.duplicate(true)
+			attempt.probe = sites[i].probe.duplicate(true)
+			attempt.region = str(sites[i].region)
+			attempt.builder = Sites._built[i].stats.duplicate(true)
 			attempt.line_score = Sites._built[i].stats.get("line_score", {})
 			attempt.walk_reasons = Sites._built[i].stats.get("walk_reasons", {})
 			attempt.completion = Sites._built[i].stats.get("completion", {})
@@ -56,6 +66,7 @@ func run() -> void:
 			attempt.composition_started = Sites._built[i].stats.get("composition_started", false)
 			if built:
 				world.projects_built += 1
+				if world.first_built_ms == null: world.first_built_ms = (Time.get_ticks_usec() - world_started) / 1000.0
 				# Recheck the no-element route through the final fixture, with the published site ID.
 				# This detects divergence between the preflight and the actual scene construction.
 				if attempt.base_surface.get("accepted", false) and Sites.project().cuts.is_empty():
@@ -66,10 +77,21 @@ func run() -> void:
 						attempt.base_replay = preload("res://scripts/lab/trail_lab_base_surface.gd").audit(Sites.project().source, replay.heights, bare[0])
 						if not attempt.base_replay.accepted: failed = true
 					else: attempt.base_replay = {accepted = false, errors = Array(replay.errors)}; failed = true
+				var preparation_started := Time.get_ticks_usec()
 				var prepared := F.prepare(Sites.routes(), true, "generated")
+				attempt.preparation_ms = (Time.get_ticks_usec() - preparation_started) / 1000.0
 				attempt.preparation = prepared.timings
 				attempt.accepted = prepared.errors.is_empty() and prepared.heights != null
 				attempt.reasons = Array(prepared.errors)
+				if attempt.accepted:
+					if world.first_ready_ms == null: world.first_ready_ms = (Time.get_ticks_usec() - world_started) / 1000.0
+					prepared.heights.obstacles.set_trail(prepared.technical.collide, prepared.technical.bumps)
+					var ride_started := Time.get_ticks_usec()
+					attempt.ride = preload("res://scripts/lab/trail_lab_ride_probe.gd").run(prepared.heights, Sites.routes()[0], {from = 0.0, speed = 0.0, policy = "careful"})
+					attempt.ride_ms = (Time.get_ticks_usec() - ride_started) / 1000.0
+					if attempt.ride.completed:
+						world.physically_completed += 1
+						if world.first_physical_ms == null: world.first_physical_ms = (Time.get_ticks_usec() - world_started) / 1000.0
 			else: attempt.reasons = [Sites._built[i].stats.get("reason", "")]
 			if attempt.accepted:
 				world.trails_accepted += 1
@@ -99,12 +121,19 @@ func run() -> void:
 				if attempt.base_surface.accepted:
 					world.base_passed += 1
 					world.base_repaired += int(not attempt.base_surface.repairs.is_empty())
+		world.total_ms = (Time.get_ticks_usec() - world_started) / 1000.0
+		world.sites_tested = world.attempts.size()
 		output.worlds.append(world)
-		print("WORLD ", seed_text, " candidates=", sites.size(), " built=", world.projects_built, " accepted=", world.trails_accepted, " rejections=", world.handled_rejections)
-	var path := "res://docs/data/trail_route_earthworks_2026_11_02.json"
+		var checkpoint := args[args.find("--output") + 1] if "--output" in args else "res://.godot/trail_survey_checkpoint.json"
+		var checkpoint_file := FileAccess.open(checkpoint, FileAccess.WRITE)
+		checkpoint_file.store_string(JSON.stringify(output, "  "))
+		checkpoint_file.close()
+		print("WORLD ", seed_text, " candidates=", sites.size(), " built=", world.projects_built, " accepted=", world.trails_accepted, " physical=", world.physically_completed, " rejections=", world.handled_rejections)
+	var path := "res://docs/data/trail_search_after_2026_11_03.json"
 	if "--output" in args: path = args[args.find("--output") + 1]
 	var file := FileAccess.open(path, FileAccess.WRITE)
 	file.store_string(JSON.stringify(output, "  "))
+	file.close()
 	quit(1 if failed else 0)
 
 func category(reason: String) -> String:
