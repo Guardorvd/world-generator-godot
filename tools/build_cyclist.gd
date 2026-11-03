@@ -130,27 +130,34 @@ func _body() -> void:
 	# Единая поверхность таза и торса с отворотом джерси на поясе (LIP): велотрусы и джерси
 	# делят веса Hips/Spine и не прорезают друг друга в глубокой посадке.
 	# В местах сгиба (пояс спереди, переход к плечам) заложены умеренные складки, а на пояснице и лопатках — натяжение ткани.
+	# Последний элемент — доля веса ключицы на боках грудной клетки (t = 0.72..1.04), чтобы грудь и плечевой пояс
+	# тянулись за рукой вместе с рукавом и не расходились в подмышке.
+	var clav_l := skeleton.find_bone("ClavicleL")
+	var clav_r := skeleton.find_bone("ClavicleR")
 	var torso_specs: Array[Array] = [
-		[0.06, 0.148, 0.099, 0.002, 0.0, Vector3(0.025, 0.010, -0.002)],
-		[0.15, 0.141, 0.095, 0.004, 0.0, Vector3(-0.032, 0.012, 0.002)],
-		[0.25, 0.140, 0.097, 0.006, 0.0, Vector3(0.028, -0.008, -0.002)],
-		[0.36, 0.147, 0.102, 0.007, 0.0, Vector3(-0.024, 0.010, 0.001)],
-		[0.48, 0.156, 0.108, 0.008, 0.0, Vector3(0.018, 0.014, -0.001)],
-		[0.72, 0.182, 0.113, 0.004, 0.0, Vector3(-0.014, 0.018, 0.0)],
-		[0.87, 0.196, 0.105, 0.0, 0.0, Vector3(-0.018, 0.015, 0.001)],
-		[0.91, 0.194, 0.102, -0.001, 0.08, Vector3.ZERO],
-		[0.99, 0.172, 0.088, -0.004, 0.32, Vector3.ZERO],
-		[1.04, 0.118, 0.066, -0.006, 0.68, Vector3.ZERO],
-		[1.09, 0.055, 0.056, -0.006, 1.0, Vector3.ZERO],
+		[0.06, 0.148, 0.099, 0.002, 0.0, Vector3(0.025, 0.010, -0.002), 0.0],
+		[0.15, 0.141, 0.095, 0.004, 0.0, Vector3(-0.032, 0.012, 0.002), 0.0],
+		[0.25, 0.140, 0.097, 0.006, 0.0, Vector3(0.028, -0.008, -0.002), 0.0],
+		[0.36, 0.147, 0.102, 0.007, 0.0, Vector3(-0.024, 0.010, 0.001), 0.0],
+		[0.48, 0.156, 0.108, 0.008, 0.0, Vector3(0.018, 0.014, -0.001), 0.0],
+		[0.72, 0.184, 0.114, 0.004, 0.0, Vector3(-0.014, 0.018, 0.0), 0.18],
+		[0.87, 0.200, 0.107, 0.0, 0.0, Vector3(-0.018, 0.015, 0.001), 0.36],
+		[0.91, 0.198, 0.104, -0.001, 0.08, Vector3.ZERO, 0.42],
+		[0.99, 0.174, 0.089, -0.004, 0.32, Vector3.ZERO, 0.22],
+		[1.04, 0.118, 0.066, -0.006, 0.68, Vector3.ZERO, 0.0],
+		[1.09, 0.055, 0.056, -0.006, 1.0, Vector3.ZERO, 0.0],
 	]
 	for spec: Array in torso_specs:
 		var t: float = spec[0]
 		var lower := "Hips" if t < 0.5 else "Spine"
-		var upper := "Spine" if t < 0.5 else "Chest"
-		var weight := clampf(t * 2.0 if t < 0.5 else (t - 0.5) * 2.0, 0.0, 1.0)
+		var upper := "Chest" if t >= 0.7 else ("Spine" if t < 0.5 else "Chest")
+		var weight := 1.0 if t >= 0.7 else clampf(t * 2.0 if t < 0.5 else (t - 0.5) * 5.0, 0.0, 1.0)
 		var ring_basis := Basis.IDENTITY.slerp(neck_basis, float(spec[4]))
 		var center := collar if float(spec[4]) >= 0.99 else hip.lerp(chest, t) + Vector3(0.0, 0.0, float(spec[3]))
-		rings.append(ring(center, ring_basis, spec[1], spec[2], lower, upper, weight, Vector2.ZERO, Vector2.ZERO, spec[5] as Vector3))
+		var r := ring(center, ring_basis, spec[1], spec[2], lower, upper, weight, Vector2.ZERO, Vector2.ZERO, spec[5] as Vector3)
+		if float(spec[6]) > 0.0:
+			r.extra = {pos = clav_r, neg = clav_l, amount = float(spec[6]), power = 2.0}
+		rings.append(r)
 	loft(rings, teal, panel, [navy, navy, navy])
 	var jersey := rings.slice(3)
 	patch(jersey.slice(9, 11), PI * 0.5, PI, panel)
@@ -357,6 +364,7 @@ func _limbs(side: float) -> void:
 
 
 const DOWN_BASIS := Basis(Vector3.RIGHT, Vector3.DOWN, Vector3.FORWARD)
+const ARM_SIDES := 12
 
 
 ## Единая непрерывная поверхность руки: переход грудь–плечо, дельта, бицепс/трицепс,
@@ -366,33 +374,42 @@ func _arm(side: float) -> void:
 	var arm := skeleton.get_bone_global_pose(skeleton.find_bone("UpperArm" + s))
 	var forearm := skeleton.get_bone_global_pose(skeleton.find_bone("Forearm" + s))
 	var hand := skeleton.get_bone_global_pose(skeleton.find_bone("Hand" + s))
-	var root_a := Basis(arm.basis.z, -side * 0.36) * arm.basis
-	var root_b := Basis(arm.basis.z, -side * 0.18) * arm.basis
+	# Рукав выходит из грудной клетки и плавно переходит в руку: первые два сечения сидят внутри
+	# верхней части торса (с весами Chest → Clavicle), затем через сустав — в плечевую кость,
+	# с расширением по грудной/широчайшей мышцам в подмышке и сглаженной дельтой сверху.
+	var root_a := Basis(arm.basis.z, -side * 0.42) * arm.basis
+	var root_b := Basis(arm.basis.z, -side * 0.24) * arm.basis
+	var root_c := Basis(arm.basis.z, -side * 0.10) * arm.basis
 	var rings: Array[Dictionary] = [
-		ring(arm.origin + Vector3(-side * 0.080, -0.025, 0.006), root_a, 0.046, 0.050, "Chest", "Clavicle" + s, 0.0),
-		ring(arm.origin + Vector3(-side * 0.038, -0.020, 0.003), root_b, 0.056, 0.058, "Chest", "Clavicle" + s, 0.60, Vector2.ZERO, Vector2.ZERO, Vector3(-0.028, 0.016, 0.002)),
-		ring(arm.origin + Vector3(-side * 0.004, -0.016, 0.0), arm.basis, 0.062, 0.061, "Clavicle" + s, "UpperArm" + s, 0.65, Vector2.ZERO, Vector2.ZERO, Vector3(0.022, 0.018, -0.002)),
-		ring(arm.origin.lerp(forearm.origin, 0.13) + Vector3(0.0, -0.006, 0.0), arm.basis, 0.066, 0.063, "UpperArm" + s, "Clavicle" + s, 0.08, Vector2.ZERO, Vector2.ZERO, Vector3(-0.025, 0.014, 0.002)),
+		ring(arm.origin + Vector3(-side * 0.092, -0.024, 0.008), root_a, 0.052, 0.068, "Chest", "Clavicle" + s, 0.15, Vector2(0.0, 0.004)),
+		ring(arm.origin + Vector3(-side * 0.052, -0.020, 0.005), root_b, 0.060, 0.072, "Chest", "Clavicle" + s, 0.55, Vector2(0.0, 0.004), Vector2.ZERO, Vector3(-0.020, 0.014, 0.002)),
+		ring(arm.origin + Vector3(-side * 0.018, -0.016, 0.002), root_c, 0.063, 0.068, "Clavicle" + s, "UpperArm" + s, 0.38, Vector2(0.0, 0.002), Vector2.ZERO, Vector3(0.018, 0.016, -0.002)),
+		ring(arm.origin.lerp(forearm.origin, 0.08) + Vector3(-side * 0.003, -0.008, 0.0), arm.basis, 0.065, 0.065, "Clavicle" + s, "UpperArm" + s, 0.78, Vector2.ZERO, Vector2.ZERO, Vector3(-0.018, 0.014, 0.001)),
+		ring(arm.origin.lerp(forearm.origin, 0.17) + Vector3(0.0, -0.003, 0.0), arm.basis, 0.065, 0.063, "UpperArm" + s, "Clavicle" + s, 0.08, Vector2(side * 0.001, 0.0), Vector2.ZERO, Vector3(0.016, 0.012, -0.001)),
+	]
+	var root_count := rings.size()
+	rings.append_array([
 		ring(arm.origin.lerp(forearm.origin, 0.26), arm.basis, 0.064, 0.062, "UpperArm" + s, "", 0.0, Vector2(side * 0.002, 0.0), Vector2.ZERO, Vector3(0.020, 0.010, -0.001)),
 		ring(arm.origin.lerp(forearm.origin, 0.42), arm.basis, 0.059, 0.059, "UpperArm" + s, "", 0.0, Vector2(side * 0.001, 0.001), Vector2.ZERO, Vector3(-0.016, 0.008, 0.001)),
 		ring(arm.origin.lerp(forearm.origin, 0.58), arm.basis, 0.055, 0.056, "UpperArm" + s, "", 0.0, Vector2(0.0, 0.001), Vector2.ZERO, Vector3(0.014, 0.006, 0.0)),
 		ring(arm.origin.lerp(forearm.origin, 0.63), arm.basis, 0.054, 0.055, "UpperArm" + s, "", 0.0, Vector2(0.0, 0.001)),
 		ring(arm.origin.lerp(forearm.origin, 0.634), arm.basis, 0.047, 0.049, "UpperArm" + s, "", 0.0, Vector2(0.0, 0.001)),
-		ring(arm.origin.lerp(forearm.origin, 0.82), arm.basis.slerp(forearm.basis, 0.14), 0.044, 0.046, "UpperArm" + s, "Forearm" + s, 0.14, Vector2(0.0, -0.001)),
-		ring(arm.origin.lerp(forearm.origin, 0.93), arm.basis.slerp(forearm.basis, 0.34), 0.046, 0.048, "UpperArm" + s, "Forearm" + s, 0.34, Vector2(side * 0.002, -0.003)),
-		ring(forearm.origin, arm.basis.slerp(forearm.basis, 0.50), 0.047, 0.050, "UpperArm" + s, "Forearm" + s, 0.50, Vector2(side * 0.002, -0.005)),
-		ring(forearm.origin.lerp(hand.origin, 0.08), forearm.basis.slerp(arm.basis, 0.30), 0.048, 0.049, "Forearm" + s, "UpperArm" + s, 0.30, Vector2(side * 0.002, -0.003)),
-		ring(forearm.origin.lerp(hand.origin, 0.20), forearm.basis.slerp(arm.basis, 0.08), 0.050, 0.048, "Forearm" + s, "UpperArm" + s, 0.08, Vector2(side * 0.003, 0.001)),
+	])
+	rings.append_array(bend_rings(forearm.origin, arm.basis, forearm.basis, 0.036, Vector2(0.045, 0.047), Vector2(0.049, 0.048), "UpperArm" + s, "Forearm" + s, 0.065, 0.15))
+	rings.append_array([
 		ring(forearm.origin.lerp(hand.origin, 0.38), forearm.basis, 0.046, 0.044, "Forearm" + s, "", 0.0, Vector2(side * 0.002, 0.001)),
 		ring(forearm.origin.lerp(hand.origin, 0.64), forearm.basis, 0.038, 0.035, "Forearm" + s),
 		ring(forearm.origin.lerp(hand.origin, 0.85), forearm.basis, 0.032, 0.029, "Forearm" + s),
 		ring(hand.origin, forearm.basis, 0.030, 0.026, "Forearm" + s),
-	]
-	var mats := [teal, teal, teal, teal, teal, teal, panel, panel, skin, skin, skin, skin, skin, skin, skin, skin, skin]
-	loft(rings, skin, null, mats)
+	])
+	var mats := []
+	for i in root_count + 2:
+		mats.append(teal)
+	mats.append_array([panel, panel])
+	loft(rings, skin, null, mats, ARM_SIDES, false)
 	var outer := PI if side < 0 else 0.0
 	var inner := 0.0 if side < 0 else PI
-	patch(rings.slice(4, 7), outer, 0.22, cream)
+	patch(rings.slice(root_count, root_count + 3), outer, 0.22, cream)
 	# Складка рукава у переднего края подмышечной впадины.
 	patch(rings.slice(2, 4), inner - side * 0.45, 0.16, panel)
 
@@ -413,11 +430,9 @@ func _leg(side: float) -> void:
 		ring(thigh.origin.lerp(calf.origin, 0.67), thigh.basis, 0.069, 0.072, "UpperLeg" + s, "", 0.0, Vector2(side * 0.001, 0.003)),
 		ring(thigh.origin.lerp(calf.origin, 0.70), thigh.basis, 0.068, 0.070, "UpperLeg" + s, "", 0.0, Vector2(side * 0.001, 0.003)),
 		ring(thigh.origin.lerp(calf.origin, 0.704), thigh.basis, 0.061, 0.064, "UpperLeg" + s, "", 0.0, Vector2(side * 0.001, 0.003)),
-		ring(thigh.origin.lerp(calf.origin, 0.84), thigh.basis.slerp(calf.basis, 0.16), 0.054, 0.057, "UpperLeg" + s, "LowerLeg" + s, 0.16, Vector2(side * 0.001, 0.002)),
-		ring(thigh.origin.lerp(calf.origin, 0.93), thigh.basis.slerp(calf.basis, 0.34), 0.052, 0.055, "UpperLeg" + s, "LowerLeg" + s, 0.34, Vector2(side * 0.001, 0.003)),
-		ring(calf.origin, thigh.basis.slerp(calf.basis, 0.50), 0.051, 0.053, "UpperLeg" + s, "LowerLeg" + s, 0.50, Vector2(side * 0.001, -0.003)),
-		ring(calf.origin.lerp(foot.origin, 0.07), calf.basis.slerp(thigh.basis, 0.30), 0.050, 0.052, "LowerLeg" + s, "UpperLeg" + s, 0.30, Vector2(0.0, 0.002)),
-		ring(calf.origin.lerp(foot.origin, 0.14), calf.basis.slerp(thigh.basis, 0.10), 0.048, 0.051, "LowerLeg" + s, "UpperLeg" + s, 0.10, Vector2(0.0, -0.001)),
+	]
+	rings.append_array(bend_rings(calf.origin, thigh.basis, calf.basis, 0.046, Vector2(0.056, 0.059), Vector2(0.050, 0.053), "UpperLeg" + s, "LowerLeg" + s, 0.070, 0.13))
+	rings.append_array([
 		ring(calf.origin.lerp(foot.origin, 0.25), calf.basis, 0.058, 0.065, "LowerLeg" + s, "", 0.0, Vector2(side * 0.003, -0.009)),
 		ring(calf.origin.lerp(foot.origin, 0.36), calf.basis, 0.061, 0.069, "LowerLeg" + s, "", 0.0, Vector2(side * 0.003, -0.012)),
 		ring(calf.origin.lerp(foot.origin, 0.48), calf.basis, 0.053, 0.060, "LowerLeg" + s, "", 0.0, Vector2(side * 0.002, -0.008)),
@@ -427,13 +442,53 @@ func _leg(side: float) -> void:
 		ring(calf.origin.lerp(foot.origin, 0.79), calf.basis, 0.040, 0.044, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(calf.origin.lerp(foot.origin, 0.89), calf.basis, 0.034, 0.039, "LowerLeg" + s, "", 0.0, Vector2(0.0, -0.002)),
 		ring(foot.origin, calf.basis.slerp(foot.basis, 0.35), 0.036, 0.040, "LowerLeg" + s, "Foot" + s, 0.35, Vector2(0.0, -0.002)),
-	]
-	var mats := [navy, navy, navy, navy, panel, navy, navy, skin, skin, skin, skin, skin, skin, skin, skin, skin, skin, cream, cream, cream, cream]
+	])
+	# Сегменты: шорты до кромки (7), кожа через колено и икру, носок от своей кромки до щиколотки (4).
+	var mats := [navy, navy, navy, navy, panel, navy, navy]
+	for i in rings.size() - 1 - mats.size() - 4:
+		mats.append(skin)
+	mats.append_array([cream, cream, cream, cream])
 	loft(rings, skin, null, mats)
 	var outer := PI if side < 0 else 0.0
 	patch(rings.slice(3, 5), outer, 0.16, panel)
 	# Складка натяжения велотрусов в паховом сгибе спереди.
 	patch(rings.slice(1, 3), -PI * 0.5, 0.22, panel)
+
+
+## Сгиб локтя/колена. Ось конечности в зоне сустава идёт по дуге, касательной к обеим костям на расстоянии
+## `tangent` от центра сустава; сечения веером поворачиваются вместе с ней (радиус дуги ≈ радиусу сечения,
+## поэтому изнутри получается мягкая складка, а снаружи — округлый контур вместо угла двух цилиндров).
+## Веса идут по smoothstep вдоль всей дуги и прилегающих прямых участков (spread), так что дополнительный
+## сгиб в позе расходится по нескольким сечениям. Снаружи — выпуклость (локтевой отросток / надколенник).
+func bend_rings(joint: Vector3, b1: Basis, b2: Basis, tangent: float, r1: Vector2, r2: Vector2, bone1: String, bone2: String, spread: float, bulge: float, fan := 5, straight: Array = [0.018, 0.04]) -> Array[Dictionary]:
+	var d1 := b1.y
+	var d2 := b2.y
+	var theta := d1.angle_to(d2)
+	var inside := (d2 - d1 * d1.dot(d2)).normalized()
+	var radius := tangent / tan(theta * 0.5)
+	var arc := radius * theta
+	var pivot := joint - d1 * tangent + inside * radius
+	var inside_local := b1.transposed() * inside
+	var outer_angle := atan2(-inside_local.z, -inside_local.x)
+	var half := arc * 0.5 + spread
+	var items: Array[Array] = []
+	for i in range(straight.size() - 1, -1, -1):
+		items.append([joint - d1 * (tangent + float(straight[i])), b1, -(arc * 0.5 + float(straight[i]))])
+	for i in fan:
+		var f := float(i) / float(fan - 1)
+		var bf := b1.slerp(b2, f).orthonormalized()
+		items.append([pivot - (bf * inside_local) * radius, bf, (f - 0.5) * arc])
+	for e in straight:
+		items.append([joint + d2 * (tangent + float(e)), b2, arc * 0.5 + float(e)])
+	var result: Array[Dictionary] = []
+	for item in items:
+		var s: float = item[2]
+		var w := smoothstep(-half, half, s)
+		var size := r1.lerp(r2, w)
+		var r := ring(item[0], item[1], size.x, size.y, bone1, bone2, w)
+		r.bulge = Vector2(outer_angle, bulge * exp(-pow(s / (arc * 0.5 + 0.012), 2.0)))
+		result.append(r)
+	return result
 
 
 func local_loft(bone_name: String, centers: Array, sizes: Array, mat: Material, sides := 12) -> void:
@@ -453,17 +508,30 @@ func ring(center: Vector3, basis: Basis, rx: float, rz: float, bone_name: String
 
 func point(r: Dictionary, angle: float) -> Dictionary:
 	var weights: PackedFloat32Array = r.weights
+	var bones: PackedInt32Array = r.bones
 	var bias: Vector2 = r.get("bias", Vector2.ZERO)
 	if bias != Vector2.ZERO and r.bone_index != r.other_index:
 		var w := clampf(float(r.weight) + bias.x * cos(angle) + bias.y * sin(angle), 0.0, 1.0)
 		weights = PackedFloat32Array([1.0 - w, w, 0.0, 0.0])
+	# Третья кость по бокам сечения (ключицы на плечевом поясе торса): x > 0 — правая, x < 0 — левая.
+	var extra: Dictionary = r.get("extra", {})
+	if not extra.is_empty():
+		var c := cos(angle)
+		var we: float = float(extra.amount) * pow(absf(c), float(extra.power))
+		if we > 0.0001:
+			bones = PackedInt32Array([bones[0], bones[1], int(extra.pos) if c > 0.0 else int(extra.neg), 0])
+			weights = PackedFloat32Array([weights[0] * (1.0 - we), weights[1] * (1.0 - we), we, 0.0])
 	var fold: Vector3 = r.get("fold", Vector3.ZERO)
 	var front := maxf(0.0, -sin(angle))
 	var back := maxf(0.0, sin(angle))
 	var scale := 1.0 + fold.x * front * front * cos(angle * 2.0) + fold.y * (back * back + 0.35 * cos(angle) * cos(angle))
+	# Выпуклость с одной стороны сечения: локтевой отросток, надколенник, дельта (x — угол стороны, y — величина).
+	var bulge: Vector2 = r.get("bulge", Vector2.ZERO)
+	if bulge.y != 0.0:
+		scale += bulge.y * pow(maxf(0.0, cos(angle - bulge.x)), 3.0)
 	var axial_shift := fold.z * front * front
 	var local := Vector3(cos(angle) * r.rx * scale, axial_shift, sin(angle) * r.rz * scale)
-	var result := {position = r.center + r.basis * local, bones = r.bones, weights = weights}
+	var result := {position = r.center + r.basis * local, bones = bones, weights = weights}
 	if r.has("delta_center"):
 		var axial: Vector3 = r.delta_center + cos(angle) * r.delta_x + sin(angle) * r.delta_z
 		var around: Vector3 = r.basis * Vector3(-sin(angle) * r.rx * scale, 0, cos(angle) * r.rz * scale)
@@ -490,6 +558,8 @@ func prepare(rings: Array[Dictionary]) -> void:
 
 func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null, mats: Array = [], sides := 12, cap_start := true) -> void:
 	prepare(rings)
+	for r in rings:
+		r.sides = sides # вставки (patch) делятся по тем же граням
 	for i in rings.size() - 1:
 		var lip: bool = rings[i].center.distance_to(rings[i + 1].center) < LIP
 		for j in sides:
@@ -520,9 +590,10 @@ func loft(rings: Array[Dictionary], mat: Material, side_mat: Material = null, ma
 
 func patch(rings: Array[Dictionary], angle: float, half_width: float, mat: Material) -> void:
 	var angles: Array[float] = [angle - half_width]
+	var step := TAU / int(rings[0].get("sides", 12))
 	# Разбиваем вставку точно по граням тела, иначе широкая хорда провалится внутрь торса.
-	for sector in range(floori((angle - half_width) / (TAU / 12.0)) + 1, ceili((angle + half_width) / (TAU / 12.0))):
-		angles.append(sector * TAU / 12.0)
+	for sector in range(floori((angle - half_width) / step) + 1, ceili((angle + half_width) / step)):
+		angles.append(sector * step)
 	angles.append(angle + half_width)
 	for i in rings.size() - 1:
 		for j in angles.size() - 1:
@@ -535,14 +606,36 @@ func patch(rings: Array[Dictionary], angle: float, half_width: float, mat: Mater
 
 
 func surface_point(r: Dictionary, angle: float) -> Dictionary:
-	var section := angle / (TAU / 12.0)
+	var step := TAU / int(r.get("sides", 12))
+	var section := angle / step
 	var lower := floorf(section)
-	var a := point(r, lower * TAU / 12.0)
-	var b := point(r, (lower + 1.0) * TAU / 12.0)
-	var position: Vector3 = a.position.lerp(b.position, section - lower)
+	var f := section - lower
+	var a := point(r, lower * step)
+	var b := point(r, (lower + 1.0) * step)
+	var position: Vector3 = a.position.lerp(b.position, f)
 	a.position = r.center + (position - r.center) * 1.012
 	if a.has("normal") and b.has("normal"):
-		a.normal = (a.normal as Vector3).lerp(b.normal, section - lower).normalized()
+		a.normal = (a.normal as Vector3).lerp(b.normal, f).normalized()
+	# Веса вставки — как у грани под ней (линейно между вершинами), иначе на сгибе она отстаёт от ткани.
+	var mixed := {}
+	for pair: Array in [[a, 1.0 - f], [b, f]]:
+		var v: Dictionary = pair[0]
+		for k in 4:
+			var bone_index: int = v.bones[k]
+			mixed[bone_index] = float(mixed.get(bone_index, 0.0)) + float(v.weights[k]) * float(pair[1])
+	var keys := mixed.keys()
+	keys.sort_custom(func(x, y): return mixed[x] > mixed[y])
+	var bones := PackedInt32Array([0, 0, 0, 0])
+	var weights := PackedFloat32Array([0.0, 0.0, 0.0, 0.0])
+	var total := 0.0
+	for k in mini(4, keys.size()):
+		bones[k] = keys[k]
+		weights[k] = mixed[keys[k]]
+		total += weights[k]
+	for k in 4:
+		weights[k] /= maxf(total, 0.0001)
+	a.bones = bones
+	a.weights = weights
 	return a
 
 
