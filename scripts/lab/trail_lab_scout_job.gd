@@ -31,104 +31,60 @@ func _init(snapshot := {}) -> void:
 var sites: Array[Dictionary] = []
 var stats := {}
 
-func find(seed_value: int) -> Array[Dictionary]:
+func find(seed_value: int, publish := Callable(), cancelled := Callable()) -> Array[Dictionary]:
 	var started := Time.get_ticks_usec()
-	dry_cache.clear()
-	segment_cache.clear()
-	tread_cache.clear()
-	endpoint_cache.clear()
 	sites = []
-	var n := world_size
-	stats = {looked = 0, fit = 0, probed = 0, confirmed = 0, duplicates = 0, refused = {}}
-	if n <= 0 or world_h.size() != n * n or world_wet.size() != n * n:
+	stats = {looked = 0, fit = 0, probed = 0, confirmed = 0, duplicates = 0, refused = {}, first_proposal_ms = null}
+	if world_size <= 0 or world_h.size() != world_size * world_size or world_wet.size() != world_h.size():
 		stats.reason = "мир не создан или повреждён"
 		return sites
-	var candidates: Array[Dictionary] = []
-	for shape: Vector2i in SHAPES:
-		for z in range(0, n - shape.y + 1, STRIDE):
-			for x in range(0, n - shape.x + 1, STRIDE):
-				stats.looked += 1
-				var c := measure(Rect2i(Vector2i(x, z), shape))
-				if not c.reason.is_empty():
-					_refuse(c.reason)
-					continue
-				c.score += float(posmod(hash([seed_value, x, z, shape]), 1000)) * 0.00001
-				c.trail_seed = posmod(hash([seed_value, x, z, shape, "line"]), 99999) + 1
-				candidates.append(c)
-	stats.fit = candidates.size()
-	stats.measure_ms = (Time.get_ticks_usec() - started) / 1000.0
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.score > b.score)
-	# Share probe effort across scales; large windows must not consume the whole search budget.
-	var groups := {}
-	var longest := 0
-	for c in candidates:
-		var shape: Vector2i = c.region.size
-		if not groups.has(shape): groups[shape] = []
-		groups[shape].append(c)
-		longest = maxi(longest, groups[shape].size())
-	candidates = []
-	for rank in longest:
-		for shape: Vector2i in SHAPES:
-			if groups.has(shape) and rank < groups[shape].size(): candidates.append(groups[shape][rank])
-	# Work budget scales with the map, not the number of accepted sites. No target site count.
-	var budget := maxi(64, n * n / (STRIDE * STRIDE))
+	var atlas := preload("res://scripts/lab/trail_lab_coarse_map.gd").new()
+	atlas.prepare(world_size, _ground, world_wet, generation_input)
+	stats.overview_ms = (Time.get_ticks_usec() - started) / 1000.0
+	stats.overview_cells = atlas.heights.size()
+	var anchors := atlas.anchors(seed_value)
+	stats.looked = anchors.size()
+	var budget := maxi(64, world_size * world_size / (STRIDE * STRIDE))
 	var occupied := {}
-	var probe_us := 0
-	var dedup_us := 0
-	for c in candidates:
-		if stats.probed >= budget: break
+	for anchor: int in anchors:
+		if stats.probed >= budget or (cancelled.is_valid() and cancelled.call()): break
 		stats.probed += 1
-		var stage := Time.get_ticks_usec()
-		var trial := probe(c.region)
-		probe_us += Time.get_ticks_usec() - stage
-		if trial.is_empty():
-			_refuse("пробная прокладка не связала участок")
+		var c := atlas.trace(anchor, seed_value)
+		if c.is_empty():
+			_refuse("нет протяжённого свободного коридора")
 			continue
-		stats.confirmed += 1
-		stage = Time.get_ticks_usec()
-		var cells := corridor(trial.points)
+		stats.fit += 1; stats.confirmed += 1
+		var cells := corridor(c.probe.points)
 		var nearby := {}
 		for key in cells:
 			for index: int in occupied.get(key, []): nearby[index] = true
 		var duplicate := false
 		for index: int in nearby:
-			if overlap(cells, sites[index].corridor) >= OVERLAP:
-				duplicate = true
-				break
+			if overlap(cells, sites[index].corridor) >= OVERLAP: duplicate = true; break
 		if duplicate:
-			dedup_us += Time.get_ticks_usec() - stage
 			stats.duplicates += 1
 			continue
-		var styles := capabilities(c, trial)
-		c.merge({probe = trial, corridor = cells, styles = styles, style = styles[0], n = sites.size() + 1,
+		var styles := capabilities(c, c.probe)
+		c.merge({corridor = cells, styles = styles, style = styles[0], n = sites.size() + 1,
+			trail_seed = posmod(hash([seed_value, anchor, c.feature]), 99999) + 1,
 			settings = {difficulty = 0.5, modification = 0.5, mandatory_gaps = false, park_layout = "auto"}})
-		var canvas := Vector2i(clampi(c.region.get_center().x - Terrain.CELLS / 2, 0, maxi(0, n - Terrain.CELLS)), clampi(c.region.get_center().y - Terrain.CELLS / 2, 0, maxi(0, n - Terrain.CELLS)))
-		c.origin = canvas
-		c.bounds = Rect2(Vector2(c.region.position - canvas) * GameConfig.TILE, Vector2(c.region.size) * GameConfig.TILE)
+		var n := world_size
+		c.origin = Vector2i(clampi(c.region.get_center().x - Terrain.CELLS / 2, 0, maxi(0, n - Terrain.CELLS)), clampi(c.region.get_center().y - Terrain.CELLS / 2, 0, maxi(0, n - Terrain.CELLS)))
+		c.bounds = Rect2(Vector2(c.region.position - c.origin) * GameConfig.TILE, Vector2(c.region.size) * GameConfig.TILE)
 		var index := sites.size()
 		sites.append(c)
 		for key in cells:
 			if not occupied.has(key): occupied[key] = []
 			occupied[key].append(index)
-		dedup_us += Time.get_ticks_usec() - stage
-	# Offer cheap, buildable corridors first. Region relief alone previously put the
-	# most expensive mountain windows ahead of naturally suitable stopping areas.
-	sites.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		var ac := construction_cost(a.probe)
-		var bc := construction_cost(b.probe)
-		return ac < bc if ac != bc else a.n < b.n)
-	for i in sites.size(): sites[i].n = i + 1
-	stats.sites = sites.size()
-	stats.budget = budget
-	stats.budget_exhausted = stats.probed < candidates.size() and stats.probed >= budget
+		if stats.first_proposal_ms == null: stats.first_proposal_ms = (Time.get_ticks_usec() - started) / 1000.0
+		if publish.is_valid(): publish.call(c)
+	stats.sites = sites.size(); stats.budget = budget
+	stats.budget_exhausted = stats.probed < anchors.size() and stats.probed >= budget
 	stats.ms = (Time.get_ticks_usec() - started) / 1000.0
-	stats.probe_ms = probe_us / 1000.0
-	stats.dedup_ms = dedup_us / 1000.0
-	stats.dry_cache_cells = dry_cache.size()
-	stats.segment_cache_edges = segment_cache.size()
-	stats.tread_cache_edges = tread_cache.size()
-	stats.endpoint_cache_areas = endpoint_cache.size()
-	if sites.is_empty(): stats.reason = "подтверждённых мест не найдено: %s" % stats.refused
+	stats.probe_ms = stats.ms - stats.overview_ms
+	stats.measure_ms = stats.overview_ms
+	stats.detailed_probes = 0
+	if sites.is_empty(): stats.reason = "свободных коридоров не найдено"
 	return sites
 
 func construction_cost(trial: Dictionary) -> float:

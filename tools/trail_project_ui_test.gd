@@ -28,7 +28,7 @@ func run() -> void:
 	var before = lab.heights
 	check(lab.generate_world(91), "background world job starts")
 	while lab._world_thread != null: await process_frame
-	check(lab.draft_project != null and lab.heights == before, "job remains alive after launch returns and publishes only data")
+	check(not Sites.sites.is_empty() and lab.draft_project == null and lab.heights == before, "catalogue publication leaves construction for the chosen place")
 	check(lab.preview_site(0) and lab.draft_project != null and lab.heights == before, "map preview prepares a project without replacing the scene")
 	var project := P.new()
 	project.source = input

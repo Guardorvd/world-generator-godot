@@ -412,7 +412,23 @@ func generate_world(seed_value: int, source := {}) -> bool:
 	return true
 
 func _poll_world() -> void:
-	if _world_thread == null or _world_thread.is_alive(): return
+	if _world_thread == null: return
+	var additions := []
+	for update: Dictionary in _world_job.take_updates():
+		if update.request_id != _world_request: continue
+		if update.has("terrain"):
+			Sites.publish_world({request_id = _world_request, terrain = update.terrain, sites = [], scout = {}, timings = {}}, _world_request)
+			draft_project = null
+			project_panel.description.text = "Ищу выразительные места…"
+			show_projects()
+		elif update.has("site"): additions.append(update.site)
+	if not additions.is_empty() and Sites.append_sites(additions, _world_request):
+		_fill_sites()
+		project_panel.map.sites = Sites.sites.duplicate(true)
+		project_panel.map.queue_redraw()
+		generator_label.text = "Найдено мест: %d · поиск продолжается · можно выбирать" % Sites.sites.size()
+		if draft_project == null: project_panel.description.text = "Найдено мест: %d. Выберите коридор на карте — поиск продолжится." % Sites.sites.size()
+	if _world_thread.is_alive(): return
 	var result = _world_thread.wait_to_finish()
 	_world_thread = null
 	_world_job = null
@@ -422,19 +438,30 @@ func _poll_world() -> void:
 	if result.has("error"):
 		show_message(str(result.error))
 		return
-	if not Sites.publish_world(result, _world_request): return
+	if Sites.published_request != _world_request:
+		if not Sites.publish_world(result, _world_request): return
+	else:
+		Sites.append_sites(result.sites.slice(Sites.sites.size()), _world_request)
+		TrailLabScout.stats = result.scout.duplicate(true)
+		Sites.world_timings = result.timings.duplicate(true)
+	_fill_sites()
+	project_panel.map.sites = Sites.sites.duplicate(true)
+	project_panel.map.queue_redraw()
 	var count := Sites.sites.size()
 	var seconds := (Time.get_ticks_msec() - _world_started) / 1000.0
 	if count == 0:
 		show_message("Мир готов за %.0f с, но мест под трассы нет: %s" % [seconds, TrailLabScout.stats.get("reason", "")])
 		generator_label.text = "Мест не нашлось — F7, другой мир"
+		project_panel.description.text = "Свободных коридоров не найдено."
 		return
 	show_message("Мир готов за %.0f с · мест под трассы: %d" % [seconds, count])
-	preview_site(0)
+	generator_label.text = "Мест: %d · выберите коридор на карте" % count
+	if draft_project == null: project_panel.description.text = "Найдено мест: %d. Выберите коридор на карте." % count
+	_refresh_projects()
 
 ## Место i большого мира: окно земли, трасса места (строится при первом выборе) и старт на ней.
 func select_site(i: int) -> bool:
-	if Sites.sites.is_empty() or _world_thread != null: return false
+	if Sites.sites.is_empty() or (_world_thread != null and Sites.published_request != _world_request): return false
 	i = posmod(i, Sites.sites.size())
 	var ok := Sites.select(i)
 	_fill_sites()
@@ -452,7 +479,7 @@ func _show_site(ok: bool) -> bool:
 	return select_preset(index)
 
 func preview_site(index: int) -> bool:
-	if _world_thread != null or index < 0 or index >= Sites.sites.size(): return false
+	if (_world_thread != null and Sites.published_request != _world_request) or index < 0 or index >= Sites.sites.size(): return false
 	var ok := Sites.select(index)
 	draft_project = Sites.project()
 	_fill_sites()
@@ -494,7 +521,7 @@ func _refresh_projects() -> void:
 	project_panel.timings.text = "География %.0f мс · поиск %.0f мс · проект %.0f мс · сцена %.0f мс" % [Sites.world_timings.get("geography_ms", 0), Sites.world_timings.get("search_ms", 0), draft_project.timings.get("project_ms", 0) if draft_project != null else 0, build_timings.get("total_ms", 0)]
 
 func build_draft_project() -> bool:
-	if draft_project == null: return false
+	if draft_project == null or draft_project.routes.is_empty(): return false
 	var report := draft_project.report.duplicate(true)
 	var first := draft_project.routes[0]
 	var drop := draft_project.source.ground(first.points[0]) - draft_project.source.ground(first.points[-1])
@@ -1139,6 +1166,7 @@ func shutdown() -> void:
 	_world_request += 1
 	# фоновая генерация мира: дождаться (поток пишет только свои поля и скоро закончит)
 	if _world_thread != null:
+		_world_job.cancel()
 		_world_thread.wait_to_finish()
 		_world_thread = null
 	_world_job = null

@@ -80,26 +80,49 @@ static func build(ground: Callable, size: float, seed_value: int, style_name: St
 
 ## Data-only job; never writes the legacy facade or active terrain. Scene construction stays on the main thread.
 static func build_project(input: GenerationInput, seed_value: int, style_name: String, options := {}) -> Dictionary:
+	var started := Time.get_ticks_usec()
 	var errors := input.validate()
 	if not STYLES.has(style_name): errors.append("неизвестный характер трассы")
 	if not errors.is_empty(): return _project_result([], {accepted = false, reason = "; ".join(errors)}, [], PackedFloat32Array(), seed_value)
 	var settings: Dictionary = options.duplicate(true)
 	if float(settings.get("modification", 0.5)) > float(input.earthwork_limits.modification):
 		return _project_result([], {accepted = false, reason = "превышен предел изменения рельефа"}, [], PackedFloat32Array(), seed_value)
-	var context := input.duplicate(true) as GenerationInput
-	settings._source = context
-	var result := _build_core(context.ground, minf(context.size.x, context.size.y) * context.cell_size, seed_value, style_name, context.blocked, context.apply_cuts, settings)
+	var result := {}
+	var context: GenerationInput
+	var selection_attempts := []
+	settings._base_budget = {remaining = 3}
+	var guided: bool = settings.get("route_hint", PackedVector2Array()).size() > 1
+	for variant in (4 if guided else 1):
+		if settings._base_budget.remaining <= 0: break
+		context = input.duplicate(true) as GenerationInput
+		settings._source = context
+		settings._corridor_variant = variant
+		var attempt_started := Time.get_ticks_usec()
+		result = _build_core(context.ground, minf(context.size.x, context.size.y) * context.cell_size, seed_value, style_name, context.blocked, context.apply_cuts, settings)
+		var fit: Dictionary = result.stats.get("element_fit", {})
+		var ready: bool = not result.routes.is_empty() and (fit.is_empty() or fit.get("accepted", false)) and context.cut_errors.is_empty()
+		selection_attempts.append({method = "walk" if variant == 3 or not guided else "corridor", offset = [0.0, 8.0, -8.0, 0.0][variant],
+			accepted = ready, reason = result.stats.get("reason", fit.get("reason", "")), ms = (Time.get_ticks_usec() - attempt_started) / 1000.0,
+			walk_calls = result.stats.get("walk_calls", 0)})
+		if ready: break
+	result.stats.selection_attempts = selection_attempts
+	result.stats.primary_method = "corridor" if guided else "walk"
+	result.stats.fallbacks = selection_attempts.size() - 1
+	result.stats.base_fit_calls = 3 - int(settings._base_budget.remaining)
 	if not context.cut_errors.is_empty():
 		result.routes = []
-		result.stats = {accepted = false, reason = "; ".join(context.cut_errors)}
+		result.stats.accepted = false
+		result.stats.reason = "; ".join(context.cut_errors)
 	for d: TrailDefinition in result.routes:
 		for e in d.elements:
 			if not TrailElement.places_objects(e.profile) and not input.earthwork_limits.get("unlimited", false) and e.height > float(input.earthwork_limits.max_fill):
 				result.routes = []
-				result.stats = {accepted = false, reason = "элемент превышает max_fill"}
+				result.stats.accepted = false
+				result.stats.reason = "элемент превышает max_fill"
 				break
 	result.source_hash = input.fingerprint()
 	result.style = style_name
+	result.stats.ms = (Time.get_ticks_usec() - started) / 1000.0
 	return result
 
 static func publish_project(result: Dictionary) -> void:
@@ -135,16 +158,19 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			if not inside.call(p + offset): return false
 		return true
 	var cells: Array[Vector3] = []
-	var at := MARGIN + 8.0
-	while at < size - MARGIN:
-		var bt := MARGIN + 8.0
-		while bt < size - MARGIN:
-			if walk_inside.call(Vector2(at, bt)): cells.append(Vector3(at, bt, float(ground.call(Vector2(at, bt)))))
-			bt += 16.0
-		at += 16.0
-	if cells.size() < 8:
-		stats = {accepted = false, reason = "слишком мало сухого места в границах участка"}
-		return _project_result([], stats, cuts, speeds, seed)
+	var nominated: PackedVector2Array = options.get("route_hint", PackedVector2Array())
+	if nominated.size() > 1:
+		for p in nominated: cells.append(Vector3(p.x, p.y, float(ground.call(p))))
+	else:
+		var at := MARGIN + 8.0
+		while at < size - MARGIN:
+			var bt := MARGIN + 8.0
+			while bt < size - MARGIN:
+				if walk_inside.call(Vector2(at, bt)): cells.append(Vector3(at, bt, float(ground.call(Vector2(at, bt)))))
+				bt += 16.0
+			at += 16.0
+	if cells.size() < (2 if nominated.size() > 1 else 8):
+		return _project_result([], {accepted = false, reason = "слишком мало сухого места в границах участка"}, cuts, speeds, seed)
 	cells.sort_custom(func(a: Vector3, b: Vector3) -> bool: return a.z > b.z)
 	var lo_h := cells[-1].z
 	var hi_h := cells[0].z
@@ -179,6 +205,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var completed_candidates := 0
 	var promising: Array[Dictionary] = []
 	var tries := 0
+	var walk_calls := 0
 	var walk_refused := 0
 	var longest_trial := 0.0
 	var walk_reasons := {}
@@ -195,7 +222,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				else: finish_refused.append(completion)
 				pts = PackedVector2Array()
 		best_score = INF
-	for k in (0 if style == "park" and not guided else 10):
+	var corridor_variant: int = options.get("_corridor_variant", 0)
+	for k in (0 if style == "park" and not guided else ((1 if corridor_variant < 3 else 3) if guided else 10)):
 		tries += 1
 		var s0: Vector3 = upper[rng.randi() % upper.size()]
 		var start := Vector2(s0.x, s0.y)
@@ -212,10 +240,11 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		attempt_shape.phase += Vector2(0.71, 1.13) * k
 		attempt_shape.pull *= 1.0 + 0.08 * k
 		var line: PackedVector2Array
-		if guided and k >= 7:
-			line = _corridor_line(hint, [0.0, 8.0, -8.0][k - 7])
+		if guided and corridor_variant < 3:
+			line = _corridor_line(hint, [0.0, 8.0, -8.0][corridor_variant])
 			attempt_shape.trace = {goal = target, reason = "corridor_fit", method = "whole_corridor"}
 		else:
+			walk_calls += 1
 			line = _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, attempt_shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
 		if line.size() < 2: continue
 		longest_trial = maxf(longest_trial, line.size() * STEP)
@@ -251,13 +280,14 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			completion = finished
 			pts = line
 			goal = chosen_finish
+		if guided and corridor_variant < 3: break
 		if best_score > 0.92 and promising.size() >= 3: break
 	var walk_ms := (Time.get_ticks_usec() - started) / 1000.0
 	if pts.size() < 2:
 		var reason := "нет законченного маршрута: фрагментов %d, отказов финиша %d, завершённых кандидатов %d, отказов полотна %d" % [fragments.size(), finish_refused.size(), completed_candidates, walk_refused]
 		if not finish_refused.is_empty(): reason += "; " + "; ".join(finish_refused[0].reasons)
 		stats = {accepted = false, reason = reason,
-			fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, finish_plan = finish_plan, walk_refused = walk_refused, walk_reasons = walk_reasons}
+			fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, finish_plan = finish_plan, walk_refused = walk_refused, walk_reasons = walk_reasons, walk_calls = walk_calls}
 		return _project_result([], stats, cuts, speeds, seed)
 	if promising.is_empty(): promising.append({points = pts, score = best_components, completion = completion, goal = goal})
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
@@ -289,7 +319,9 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		# At most three fits (each already has a bounded repair budget), shared by all lines.
 		# No rerolls or renewed walk budgets when the first tread fails.
 		var template := d.duplicate(true) as TrailDefinition
+		var base_budget: Dictionary = options.get("_base_budget", {remaining = 3})
 		for candidate: Dictionary in promising:
+			if base_budget.remaining <= 0: break
 			d = template.duplicate(true) as TrailDefinition
 			d.points = _resample(_smooth(_smooth(candidate.points)), 2.0)
 			d.closed = d.points[0].distance_to(d.points[-1]) < 0.01
@@ -304,6 +336,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				for reason: String in final_contract.reasons: errors.append(reason)
 				return errors
 			var fit_started := Time.get_ticks_usec()
+			base_budget.remaining -= 1
 			base_surface = BaseSurface.fit(options._source, d, check_route)
 			var base_heights: Heightfield = base_surface.get("_heights")
 			base_surface.erase("_heights")
@@ -318,7 +351,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		base_surface.total_ms = (Time.get_ticks_usec() - base_started) / 1000.0
 		if not base_surface.accepted:
 			return _project_result([], {accepted = false, reason = "базовое полотно: " + base_surface.get("reason", "не принято"), base_surface = base_surface,
-				base_attempts = base_attempts, retained_lines = promising.size(), walk_ms = walk_ms, ms = (Time.get_ticks_usec() - started) / 1000.0,
+				base_attempts = base_attempts, retained_lines = promising.size(), walk_ms = walk_ms, walk_calls = walk_calls, ms = (Time.get_ticks_usec() - started) / 1000.0,
 				line_score = best_components, completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, composition_started = false}, [], speeds, seed)
 	var profile := Composition.profile_for(style, skill, shaping_amount)
 	var band: Vector2 = profile.difficulty
@@ -417,7 +450,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),
-		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries, walk_refused = walk_refused,
+		ms = (Time.get_ticks_usec() - started) / 1000.0, title = st.title, tries = tries, walk_refused = walk_refused, walk_calls = walk_calls,
 		walk_ms = snappedf(walk_ms, 1.0), features_ms = snappedf(features_ms, 1.0), compose_ms = snappedf(compose_ms, 1.0),
 		loop = features.loop, ravines = d.open_spans.size(), ditches = features.ditches,
 		gaps = d.elements.filter(func(e: TrailElement) -> bool: return e.profile == TrailElement.Profile.GAP).size(),
