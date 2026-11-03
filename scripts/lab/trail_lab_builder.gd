@@ -45,7 +45,6 @@ const LOOP_CUT := 2.4        # выемка нижнего прохода под
 const LOOP_DECK := 1.2
 const LOOP_RELIEF := 5.0     # перепад земли под петлёй не больше, м
 const RAVINE_SMOOTH := 1.2   # земля у овражка не дальше от прямой, м
-const GRADE_LIMIT_MAX := 0.32 # целевой уклон выравнивания сгенерированной трассы не круче
 const RAVINE_DEPTH := 1.8    # глубина овражка, м
 const RAVINE_SPAN := 12.0    # овражек тянется в стороны от оси, м
 const RAVINE_EVERY := 150.0  # в среднем один овражек на столько метров (v4: было 220)
@@ -113,13 +112,8 @@ static func build_project(input: GenerationInput, seed_value: int, style_name: S
 		result.routes = []
 		result.stats.accepted = false
 		result.stats.reason = "; ".join(context.cut_errors)
-	for d: TrailDefinition in result.routes:
-		for e in d.elements:
-			if not TrailElement.places_objects(e.profile) and not input.earthwork_limits.get("unlimited", false) and e.height > float(input.earthwork_limits.max_fill):
-				result.routes = []
-				result.stats.accepted = false
-				result.stats.reason = "элемент превышает max_fill"
-				break
+	# Element height is not fill depth (decks add no soil, dips excavate).
+	# ElementFit audits the actual combined surface against the source limits.
 	result.source_hash = input.fingerprint()
 	result.style = style_name
 	result.stats.ms = (Time.get_ticks_usec() - started) / 1000.0
@@ -151,7 +145,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var cuts: Array = []
 	var bounds: Rect2 = options.get("bounds", Rect2(Vector2.ZERO, Vector2.ONE * size))
 	var inside := func(p: Vector2) -> bool:
-		return p.x > MARGIN and p.y > MARGIN and p.x < size - MARGIN and p.y < size - MARGIN and bounds.grow(-4.0).has_point(p) and not (avoid.is_valid() and avoid.call(p))
+		return p.x >= 0 and p.y >= 0 and p.x < size and p.y < size and bounds.has_point(p) and not (avoid.is_valid() and avoid.call(p))
 	var walk_inside := func(p: Vector2) -> bool:
 		var half: float = st.width * 0.5
 		for offset in [Vector2.ZERO, Vector2(half, 0), Vector2(-half, 0), Vector2(0, half), Vector2(0, -half)]:
@@ -309,7 +303,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	# полотно держит 16 % и уходит в насыпь до 10 м — под пролётом и в узле петли это яма, а не овражек
 	var shaping := TrailShaping.preset(d.kind)
 	var limited_earthworks: bool = not options.has("_source") or not options._source.earthwork_limits.get("unlimited", false)
-	if limited_earthworks: shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, shaping.grade_limit, GRADE_LIMIT_MAX)
+	if limited_earthworks: shaping.grade_limit = maxf(_steepest(d, ground) * 1.1, shaping.grade_limit)
 	d.shaping = shaping
 	var base_surface := {}
 	var composing_ground := ground
@@ -326,7 +320,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			d.points = _resample(_smooth(_smooth(candidate.points)), 2.0)
 			d.closed = d.points[0].distance_to(d.points[-1]) < 0.01
 			d.shaping = TrailShaping.preset(d.kind)
-			if limited_earthworks: d.shaping.grade_limit = clampf(_steepest(d, ground) * 1.1, d.shaping.grade_limit, GRADE_LIMIT_MAX)
+			if limited_earthworks: d.shaping.grade_limit = maxf(_steepest(d, ground) * 1.1, d.shaping.grade_limit)
 			goal = candidate.goal
 			completion = candidate.completion
 			best_components = candidate.score
@@ -368,7 +362,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var reserved: Array[Vector2] = features.reserved
 	var free := func(e: TrailElement) -> bool:
 		for r in reserved:
-			if e.station + e.length * 0.5 > r.x - 6.0 and e.station - e.length * 0.5 < r.y + 6.0: return false
+			# Reserve the actual engineered crossing, not an extra six metres on either side.
+			if e.station + e.length * 0.5 > r.x and e.station - e.length * 0.5 < r.y: return false
 		return true
 	var features_ms := (Time.get_ticks_usec() - stage) / 1000.0
 	stage = Time.get_ticks_usec()
@@ -381,7 +376,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	for e: TrailElement in composed.elements:
 		if not free.call(e): continue
 		# Auto-berms are proposals from the shared composer too; natural mode never bakes them.
-		if not TrailElement.places_objects(e.profile) and (shaping_amount <= 0.001 or (shaping_amount < 0.3 and e.height > 0.1 + shaping_amount * 0.5)):
+		if not TrailElement.places_objects(e.profile) and shaping_amount <= 0.001:
 			var why := "автовираж требует большего изменения рельефа"
 			sequence.refused[why] = int(sequence.refused.get(why, 0)) + 1
 			continue
@@ -405,7 +400,6 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	if options.has("_source") and not options.get("_diagnostic_raw_proposals", false):
 		var fitting_started := Time.get_ticks_usec()
 		options._require_safe_base = true
-		if not options.has("element_bake_budget"): options.element_bake_budget = 24
 		element_fit = ElementFit.fit(options._source, d, options)
 		# Diagnose the bare tread before touching feature recovery. A refused base gets a bounded
 		# geometry solve; its existing proposals are remapped and fitted again on the new surface.
@@ -425,6 +419,10 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				line = d.points
 		element_fit.total_ms = (Time.get_ticks_usec() - fitting_started) / 1000.0
 		base_surface.ride = element_fit.get("base", {}).get("ride", {})
+		if not element_fit.get("accepted", false):
+			return _project_result([], {accepted = false, reason = element_fit.get("reason", "подбор элементов не принят"),
+				element_fit = element_fit, base_surface = base_surface, completion = completion,
+				ms = (Time.get_ticks_usec() - started) / 1000.0}, cuts, speeds, seed)
 	var length := d.route_length()
 	var drop := float(ground.call(line[0])) - float(ground.call(line[-1]))
 	speeds = TrailStandards.profile_from(d, TrailStandards.line_heights(d, ground), level, {}, false)

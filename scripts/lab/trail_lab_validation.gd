@@ -125,15 +125,16 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне", "safety", {actual = float(flight.impact), limit = float(S.LEVELS[_level(d, e.station)].impact), deviation = float(flight.impact) - float(S.LEVELS[_level(d, e.station)].impact)})
 					land_to = maxf(land_to, float(flight.land))
 				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rollable else "safety")
-				var approach := S.tightest(d, maxf(0.0, from - 8.0), float(w.get("lip", from)))
-				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + 5.0))
-				var required_radius := maxf(15.0, v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat)))
+				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(BikeRide.LOOK[-1])), float(w.get("lip", from)))
+				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + S.recovery_distance(v, true)))
+				var required_radius := v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))
 				if minf(approach, landing) < required_radius:
 					_issue(report, scenario, ei, from, "поворот на подходе или приземлении", "safety", {actual = minf(approach, landing), limit = required_radius, deviation = required_radius - minf(approach, landing)})
-				if land_to + 5.0 > d.route_length(): _issue(report, scenario, ei, from, "нет выката после приземления", "safety", {actual = d.route_length() - land_to, limit = 5.0, deviation = land_to + 5.0 - d.route_length()})
-				recovery = land_to + maxf(5.0, v * 0.7)
+				var clearance := S.recovery_distance(v, true)
+				if land_to + clearance > d.route_length(): _issue(report, scenario, ei, from, "нет выката после приземления", "safety", {actual = d.route_length() - land_to, limit = clearance, deviation = land_to + clearance - d.route_length()})
+				recovery = land_to + clearance
 			elif TrailElement.places_objects(e.profile):
-				recovery = to + maxf(4.0, v * 0.5)
+				recovery = to + S.recovery_distance(v, false)
 		var seconds := 0.0
 		for speed in speeds: seconds += 1.0 / maxf(0.1, speed)
 		report.scenarios[scenario] = {speeds = speeds, top = Array(speeds).max(), windows = windows, flights = flights, seconds = seconds}

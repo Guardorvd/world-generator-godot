@@ -115,7 +115,6 @@ func trace(start: int, seed_value: int) -> Dictionary:
 		visited[p] = true; path.append(point(p)); bounds = bounds.expand(point(p))
 	if path.size() < 2: return {}
 	var length := preload("res://scripts/lab/trail_lab_route_contract.gd").length(path)
-	if length < preload("res://scripts/lab/trail_lab_route_contract.gd").MIN_LENGTH: return {}
 	var lo := Vector2i((bounds.position / GameConfig.TILE).floor()) - Vector2i.ONE * 8
 	var hi := Vector2i((bounds.end / GameConfig.TILE).ceil()) + Vector2i.ONE * 8
 	lo = lo.max(Vector2i.ZERO); hi = hi.min(Vector2i.ONE * world_size)

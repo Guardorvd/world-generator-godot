@@ -170,7 +170,7 @@ func probe(region: Rect2i) -> Dictionary:
 			return Vector2(a - start).length() + (float(nodes[start]) - float(nodes[a])) * 0.4 > Vector2(b - start).length() + (float(nodes[start]) - float(nodes[b])) * 0.4)
 		var selected: Array[Vector2i] = []
 		for goal: Vector2i in goals.slice(0, 32):
-			if Vector2(goal - start).length() * GameConfig.TILE < Contract.MIN_LENGTH: continue
+			if goal == start: continue
 			var tangent := Vector2(goal - start).normalized()
 			if not _endpoint(start, tangent, region).suitable or not _endpoint(goal, tangent, region).suitable: continue
 			var separate := true
@@ -233,7 +233,6 @@ func _probe_pair(nodes: Dictionary, start: Vector2i, goal: Vector2i, budget: int
 				var b := Vector2i((path[k] / GameConfig.TILE).round())
 				peak = maxf(peak, absf(float(nodes[a]) - float(nodes[b])) / span)
 				if k < 2 or absf((path[k] - path[k - 1]).angle_to(path[k - 1] - path[k - 2])) < 0.15: straight += span
-			if length < Contract.MIN_LENGTH: return {expanded = expansions}
 			return {points = path, length = length, drop = float(nodes[start]) - float(nodes[goal]), peak_grade = peak, straight_share = straight / length, expanded = expansions, build_cost = float(cost[goal]) / length}
 		for dz in range(-1, 2):
 			for dx in range(-1, 2):
