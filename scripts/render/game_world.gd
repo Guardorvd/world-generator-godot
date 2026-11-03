@@ -398,7 +398,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		hud.visited = saved.visited.duplicate()
 		quests.restore_state(saved.quest, places)
 		_quest_changed()
-		hud.set_goal(places.get(saved.goal, {}))
+		hud.restore_goal(saved.goal)
 	photo.photo_taken.connect(_quest_photo)
 	photo.wanted_reach = Quests.SHOT_REACH
 	for s: SettlementData in world.settlements:
@@ -707,9 +707,7 @@ func travel_to(place: Dictionary) -> void:
 	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
 	if chunk_source != null: chunk_source.finish_startup()
 	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
-	if place.kind != "peak":
-		# лицом к костру или к середине озера
-		yaw = atan2(player.x - place.x * TILE, player.z - place.y * TILE)
+	yaw = PlayerState.arrival_heading(place, Vector2(player.x, player.z), yaw)
 	pitch = -0.05
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	_dip = 0.0

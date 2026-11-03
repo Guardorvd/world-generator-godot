@@ -81,8 +81,19 @@ static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> Playe
 	return p
 
 
-## Быстрое перемещение (с 2.8): к костру поселения, на свободное место рядом с вершиной или (с 2.9)
-## на берег озера. place — место из Hud.places(): {kind, x, y, src, ...}, x и y в клетках
+## At a trail start face its direction; peaks retain the view, other places face their centre.
+static func arrival_heading(place: Dictionary, at: Vector2, current: float) -> float:
+	if place.kind == "trail":
+		var points: PackedVector2Array = place.get("points", PackedVector2Array())
+		for i in range(1, points.size()):
+			var forward := points[i] - points[0]
+			if forward.length_squared() > 0.0001: return atan2(-forward.x, -forward.y)
+		return current
+	if place.kind == "peak": return current
+	return atan2(at.x - place.x * TILE, at.y - place.y * TILE)
+
+
+## Быстрое перемещение: к костру, вершине, берегу или старту трассы; x и y места — в клетках.
 static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> PlayerState:
 	if place.kind == "settlement":
 		return spawn(w, heights, place.src)

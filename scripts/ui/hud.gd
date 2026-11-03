@@ -332,6 +332,16 @@ func set_goal(place: Dictionary) -> void:
 		big_map.queue_redraw()
 
 
+## Trail starts are map destinations too, but do not belong to the quest-place catalogue.
+func restore_goal(key: String) -> void:
+	if not key.is_empty():
+		for place: Dictionary in all_places() + trail_places():
+			if place.key == key:
+				set_goal(place)
+				return
+	set_goal({})
+
+
 ## Игрок в (x, z) метрах: если он дошёл до цели, цель снимается и возвращается текст сообщения
 func check_goal(x: float, z: float) -> String:
 	if goal.is_empty() or not at_place(goal, x, z):
@@ -346,7 +356,7 @@ func check_goal(x: float, z: float) -> String:
 func at_place(place: Dictionary, x: float, z: float) -> bool:
 	if place.kind == "lake":
 		return world.lake_within(x / TILE, z / TILE, PlayerState.LAKE_REACH, place.src.i)
-	if place.kind == "marker":
+	if place.kind in ["marker", "trail"]:
 		return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < 0.75
 	return Grid.hypot(place.x - x / TILE, place.y - z / TILE) < (2.5 if place.kind in ["peak", "marker"] else (4.0 if place.kind == "site" else 6.0))
 
