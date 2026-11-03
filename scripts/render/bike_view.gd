@@ -41,7 +41,10 @@ const S_BRAKE := 24
 const S_EFFORT := 25
 const S_FRONT_LOAD := 26 # мгновенный приём переднего удара руками
 const S_REAR_LOAD := 27  # мгновенный приём заднего удара и посадки ногами и тазом
-const STATE_SIZE := 28
+const S_HEAT_F := 28     # нагрев переднего тормозного диска (0..1)
+const S_HEAT_R := 29     # нагрев заднего тормозного диска (0..1)
+const S_SHUDDER := 30    # мелкая дрожь вилки и руля при торможении на грани юза
+const STATE_SIZE := 31
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
 const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
 const AIR_CROUCH := 0.055
@@ -98,6 +101,11 @@ class Strut:
 
 var _front_struts: Array[Strut] = []
 var _rear_struts: Array[Strut] = []
+var _rotor_mat_f: ShaderMaterial
+var _rotor_mat_r: ShaderMaterial
+var _heat_f := 0.0
+var _heat_r := 0.0
+var _shudder_phase := 0.0
 var lamp: Lamp
 
 @onready var rider: CyclistRig = get_node_or_null("Rider") as CyclistRig
@@ -151,6 +159,19 @@ func _ready() -> void:
 	for part: String in ["ChainTop", "ChainBottom"]:
 		if has_node(part):
 			_rear_struts.append(_strut(get_node(part), Vector3(0.085, WHEEL_Y, BikeRide.HUB)))
+	var rotor_shader := preload("res://resources/brake_rotor.gdshader")
+	var f_rotor := front_wheel.get_node_or_null("BrakeRotor") as MeshInstance3D
+	if f_rotor != null:
+		_rotor_mat_f = ShaderMaterial.new()
+		_rotor_mat_f.shader = rotor_shader
+		_rotor_mat_f.set_shader_parameter("caliper_angle", 2.35)
+		f_rotor.material_override = _rotor_mat_f
+	var r_rotor := rear_wheel.get_node_or_null("BrakeRotor") as MeshInstance3D
+	if r_rotor != null:
+		_rotor_mat_r = ShaderMaterial.new()
+		_rotor_mat_r.shader = rotor_shader
+		_rotor_mat_r.set_shader_parameter("caliper_angle", 0.78)
+		r_rotor.material_override = _rotor_mat_r
 	lamp = Lamp.new()
 	lamp.name = "Lamp"
 	lamp.position = Vector3(0.0, 0.17, -0.1)
@@ -236,6 +257,19 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_update_rider(b, dt, throttle, boost)
 	# Отдача руля от удара переднего колеса — только вид: руль дёргается в сторону, курс не меняется.
 	_cur[S_STEER] += _hit_f * 0.15 * _recoil
+	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
+	var spd := absf(b.speed)
+	var cool := (0.22 + 0.032 * spd) * dt
+	var wf := maxf(b.brake_force.x, b.brakes.front_force) * spd if (b.riding and not b.airborne and b.contact_f()) else 0.0
+	var wr := maxf(b.brake_force.y, b.brakes.rear_force) * spd if (b.riding and not b.airborne and b.contact_r()) else 0.0
+	_heat_f = clampf(_heat_f + (wf * 0.0085 + b.brakes.risk * 0.16) * dt - cool * (0.40 + 0.60 * _heat_f), 0.0, 1.0)
+	_heat_r = clampf(_heat_r + (wr * 0.0075 + b.brakes.risk * 0.12) * dt - cool * (0.40 + 0.60 * _heat_r), 0.0, 1.0)
+	_cur[S_HEAT_F] = _heat_f
+	_cur[S_HEAT_R] = _heat_r
+	# Мелкая высокочастотная вибрация вилки и ручек тормоза при насыщении сцепления (skid)
+	_shudder_phase = fmod(_shudder_phase + dt * (42.0 + spd * 3.5), TAU)
+	var shudder_amp := clampf(b.brakes.skid * 0.8 + maxf(0.0, b.use_f - 0.78) * 1.6, 0.0, 1.0) * _cur[S_BRAKE] * smoothstep(0.6, 2.5, spd)
+	_cur[S_SHUDDER] = sin(_shudder_phase) * shudder_amp
 	_riding = b.riding
 	_fallen = b.fallen
 	_fallen_transform = b.fallen_transform
@@ -462,6 +496,9 @@ func snap(b: BikeRide) -> void:
 	_head_nod_vel = 0.0
 	_torso_shock = 0.0
 	_torso_shock_vel = 0.0
+	_heat_f = 0.0
+	_heat_r = 0.0
+	_shudder_phase = 0.0
 	tick(b)
 	for i in STATE_SIZE:
 		_prev[i] = _cur[i]
@@ -498,9 +535,16 @@ func draw(alpha: float) -> void:
 		get_node("RearMechanics").position.y = _mix[S_SQUASH_R]
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	front_wheel.rotation.x = -_mix[S_WHEEL]
-	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW
+	front_wheel.rotation.y = -_mix[S_STEER] * STEER_VIEW + _mix[S_SHUDDER] * 0.014
+	if _rotor_mat_f != null:
+		_rotor_mat_f.set_shader_parameter("heat", _mix[S_HEAT_F])
+		_rotor_mat_f.set_shader_parameter("wheel_angle", _mix[S_WHEEL])
+	if _rotor_mat_r != null:
+		_rotor_mat_r.set_shader_parameter("heat", _mix[S_HEAT_R])
+		_rotor_mat_r.set_shader_parameter("wheel_angle", _mix[S_WHEEL])
 	for i in _levers.size():
-		_levers[i].transform = _lever_rest[i] * Transform3D(Basis(Vector3.UP, _mix[S_BRAKE] * (0.28 if i == 0 else -0.28)), Vector3.ZERO)
+		var lever_pull := clampf(_mix[S_BRAKE] + _mix[S_SHUDDER] * 0.06, 0.0, 1.1)
+		_levers[i].transform = _lever_rest[i] * Transform3D(Basis(Vector3.UP, lever_pull * (0.28 if i == 0 else -0.28)), Vector3.ZERO)
 	_steering.rotation.y = front_wheel.rotation.y
 	# Рейк не должен отрывать штаны вилки от оси при рулении: сохраняем прежний центр колеса.
 	var axle := Vector3(0, WHEEL_Y, -BikeRide.HUB) - _steering.position

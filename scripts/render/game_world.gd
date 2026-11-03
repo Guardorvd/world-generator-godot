@@ -71,6 +71,7 @@ var crash: BikeCrash     # падение с велосипеда: ragdoll и п
 var stamina: Stamina:
 	get: return bike_controller.stamina # 14.0: выносливость седока — ускорение с Shift тратит, накат и шаг восстанавливают
 var water_effects: WaterEffects
+var brake_effects: BrakeEffects
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
 var fire_light: OmniLight3D     # один свет на весь мир: ночью у ближайшего костра
@@ -318,6 +319,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			bike.heading = b.heading
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
+	brake_effects = BrakeEffects.new()
+	brake_effects.name = "BrakeEffects"
+	add_child(brake_effects)
 	crash = BikeCrash.new()
 	crash.name = "BikeCrash"
 	add_child(crash)
@@ -959,6 +963,8 @@ func _physics_process(dt: float) -> void:
 			player.land_impact = 0.0
 	_tick_yaw = yaw - yaw0
 	water_effects.tick(dt, player, bike, _prev, heights)
+	if brake_effects != null:
+		brake_effects.tick(dt, bike, world, heights)
 	_tick_pitch = pitch - pitch0
 	# пружина проседания и затухающая тряска камеры
 	camera_controller.tick_effects(dt)
@@ -990,6 +996,8 @@ func _snap() -> void:
 	_store_prev()
 	if water_effects != null:
 		water_effects.clear()
+	if brake_effects != null:
+		brake_effects.clear()
 	_tick_yaw = 0.0
 	_tick_pitch = 0.0
 	bike_view.snap(bike)

@@ -30,6 +30,7 @@ var body_back := false
 var body_back_forced := false
 var contact_model := bike.contact_model # общая игровая модель; F6 — сравнить с прежней
 var view: BikeView
+var brake_effects := BrakeEffects.new()
 var crash := BikeCrash.new()
 var camera := Camera3D.new()
 var telemetry := Label.new()
@@ -134,6 +135,7 @@ func _ready() -> void:
 	add_child(environment)
 	view = preload("res://scenes/bike.tscn").instantiate() as BikeView
 	add_child(view)
+	add_child(brake_effects)
 	add_child(crash)
 	add_child(camera)
 	camera.current = true
@@ -1107,6 +1109,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	heights.obstacles.update(player.x, player.z, _forest_obstacles(), _forest_version(), true)
 	if autopilot != null: autopilot.reset(d, heights, station)
 	view.snap(bike)
+	brake_effects.clear()
 	metrics.reset(bike)
 	recorder.begin(self, "R/смена трассы: станция %.0f, скорость %.1f м/с" % [station, speed])
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
@@ -1354,6 +1357,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		player.land_impact = 0.0
 	if not crash.active():
 		view.tick(bike, dt, throttle, bike.riding and controller.stamina.can_boost(run, throttle))
+		brake_effects.tick(dt, bike, w, heights)
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])
 	if trial != null:
