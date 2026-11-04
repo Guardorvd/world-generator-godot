@@ -7,6 +7,7 @@ const Validation := preload("res://scripts/trails/trail_validation.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
+const EASED_DEPTH := 4.0      # линия упёрлась в предел земляных работ: уровень полотна не дальше этого от земли, м
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
 ## Коридоры сети: извилистые линии через весь мир, в обе стороны от начальной клетки, с разворотами.
 const CORRIDOR := {box = 3072.0, two_way = true, pad = 0, steps = 160, edge = 80.0}
@@ -124,6 +125,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 				route_length = 0.0
 				route_index += 1
 				title = "Маршрут %d" % route_index
+				difficulty = DIFFICULTY[route_index % DIFFICULTY.size()]
 			continue
 		fails = 0
 		leg_index += 1
@@ -295,9 +297,9 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		if not prepared.errors.is_empty():
 			reason = prepared.errors[0]
 			if reason == "превышен игровой предел земляных работ" and not eased:
-				# Сама линия годится, просто склон круче проектного уклона: полотно идёт по склону, без выемки и насыпи.
+				# Сама линия годится, просто склон круче проектного уклона: полотно держится ближе к земле, круче цели только там, где это нужно.
 				eased = true
-				d.shaping.grade_limit = maxf(d.shaping.grade_limit, Layout._steepest(d, func(p: Vector2) -> float: return site.ground_at(p)) * 1.1)
+				d.shaping.depth_cap = EASED_DEPTH
 				plan.stats.eased = int(plan.stats.get("eased", 0)) + 1
 				continue
 			if limits.has("failed_at"): bad = d.nearest(limits.failed_at).x

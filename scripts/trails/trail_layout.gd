@@ -53,6 +53,8 @@ const OPEN_FINISH_MIN := 120.0 # ходок игры не отступает к�
 const WALK_ENOUGH := 200.0  # такой длины линии ходока достаточно, м: подгонка к коридору чаще падает на приёмке
 const SOFT_COST := 6.0       # шаг по дороге или броду
 const CROSSING_CLEAR := 12.0 # столько метров у переезда и брода без элементов
+const STEEP := 0.3          # круче этого спуск на шаге ходок игры обходит траверсом
+const STEEP_COST := 150.0
 const HINT_WEIGHT := 2.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
@@ -207,7 +209,9 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var shape := {pull = rng.randf_range(0.15, 0.6), wander = float(st.wander) * rng.randf_range(0.6, 1.5) * (WANDER_V3 if carve.is_valid() else 1.0),
 		period = Vector2(rng.randf_range(30.0, 70.0), rng.randf_range(12.0, 26.0)), phase = Vector2(rng.randf() * TAU, rng.randf() * TAU)}
 	shape.route_hint = options.get("route_hint", PackedVector2Array())
-	if options.get("open_finish", false): shape.hint_weight = HINT_WEIGHT
+	if options.get("open_finish", false):
+		shape.hint_weight = HINT_WEIGHT
+		shape.steep_cost = true
 	shape.soft = options.get("soft", Callable())
 	var finish_plan := {}
 	if shape.route_hint.size() > 1:
@@ -706,6 +710,8 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 	var v := v0
 	var bend := 0.0
 	var stuck := 0
+	var on_steep := false
+	var steep_cost: bool = shape.get("steep_cost", false)
 	var grid := {}
 	# прежние точки: номер по расстоянию от их конца в шагах (отрицательный) — последние OWN_SKIP м не мешают продолжению
 	var back := 0.0
@@ -738,7 +744,8 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 		var best_o := 0.0
 		var best_g := 0.0
 		# обычный веер; упёрлись — второй, разворотом радиуса HAIRPIN (с шагом вперёд, без излома на месте)
-		var fan := max_turn if stuck == 0 else STEP / HAIRPIN
+		# на круче (ходок игры) веер шире: линия уходит траверсом, а не падает по склону
+		var fan := max_turn if stuck == 0 and not on_steep else STEP / HAIRPIN
 		for k in 13:
 			var o := -fan + fan * k / 6.0
 			var dir := Vector2.from_angle(a + o)
@@ -756,6 +763,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			if soft.is_valid() and soft.call(next): cost += SOFT_COST
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
+			if steep_cost: cost += maxf(0.0, -g - STEEP) * STEEP_COST
 			# обрыв снаружи поворота: вылет наружу — вниз по откосу (падение 01.11 с 30 м)
 			if absf(o) > max_turn * 0.3:
 				var outer := side * (-signf(o))
@@ -783,6 +791,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 		stuck = 0
 		a += best_o
 		bend = best_o
+		on_steep = steep_cost and best_g < -STEEP
 		# скорость «как едут»: тяжесть на уклоне, качение, воздух, педали до крейсерской
 		var acc: float = -TrailStandards.G * best_g / sqrt(1.0 + best_g * best_g) - TrailStandards.ROLL - TrailStandards.DRAG * v * v
 		if v < cruise: acc += TrailStandards.PEDAL * (1.0 - v / cruise)

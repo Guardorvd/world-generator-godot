@@ -193,7 +193,7 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		if _sharpest(d, cursor, length) > 0.025: return null
 	var e := TrailElementLibrary.make(kind, cursor + length * 0.5, length, size.y, signf(turn) if bends else 1.0, count, rng.randf_range(0.28, 0.45))
 	if adaptive and cursor + length > d.route_length():
-		var available := d.route_length() - cursor
+		var available := d.route_length() - cursor - 0.05 # запас: перенос линии в мировые float32 чуть меняет её длину
 		if available < RoadRefinement.STEP * 4 or kind == T.GAP: return null
 		e.height *= pow(available / e.length, 2)
 		e.length = available; e.station = cursor + available * 0.5

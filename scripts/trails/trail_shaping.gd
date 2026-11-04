@@ -17,6 +17,7 @@ extends Resource
 @export_range(0.0, 0.2) var crown := 0.0 ## rise of the tread centre over its edges, m
 @export_range(0.2, 4.0) var batter := 0.7 ## slope of cut and fill sides, m/m
 @export_range(0.0, 40.0) var end_fade := 12.0 ## distance over which the cross section of an open route levels out at its ends, m
+@export_range(0.0, 20.0) var depth_cap := 0.0 ## 0 — no limit; else the level stays this close to the ground: only the stretches that need it go steeper than the target, m
 
 ## Side slopes are at least this much steeper than the natural cross slope, m/m: otherwise a cut into a slope steeper
 ## than `batter` would never meet the ground.
@@ -33,6 +34,8 @@ const REACH_SPREAD := 4.0
 ## A place of the route where less than this share of the earthworks may act (TrailBuilder.pins) is an anchor of the
 ## design profile: the level stays on the ground there.
 const ANCHOR := 0.5
+## Rounds of adding anchors where the level leaves depth_cap.
+const CAP_PASSES := 6
 
 static func preset(kind: String) -> TrailShaping:
 	var s := TrailShaping.new()
@@ -71,7 +74,7 @@ static func preset(kind: String) -> TrailShaping:
 
 func validate() -> PackedStringArray:
 	var errors := PackedStringArray()
-	for key in ["grade_limit", "level_window", "strength", "side_follow", "bank_max", "bank_gain", "bank_ramp", "crown", "batter", "end_fade"]:
+	for key in ["grade_limit", "level_window", "strength", "side_follow", "bank_max", "bank_gain", "bank_ramp", "crown", "batter", "end_fade", "depth_cap"]:
 		if not is_finite(get(key)): errors.append("Non-finite shaping value: " + key)
 	if grade_limit <= 0.0 or batter <= 0.0 or level_window <= 0.0: errors.append("Shaping grade, window and batter must be positive")
 	return errors
@@ -113,35 +116,57 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 		var anchors := PackedInt32Array()
 		for j in count + 1:
 			if j == 0 or j == count or (pin_at.is_valid() and float(pin_at.call(points[j])) < ANCHOR): anchors.append(j)
-		# rise allowed per step: the target, more only between anchors that need it
-		var rise := PackedFloat32Array()
-		rise.resize(count)
-		rise.fill(grade_limit * step)
-		for k in range(1, anchors.size()):
-			var a := anchors[k - 1]
-			var c := anchors[k]
-			var need := absf(ground[c] - ground[a]) / (c - a) * (1.0001 if c == a + 1 else 1.02)
-			for m in range(a, c): rise[m] = maxf(rise[m], need)
-		for m in count: grade = maxf(grade, rise[m] / step)
-		# every level within reach of every anchor, so the grade passes below never move the anchors
-		var upper := PackedFloat32Array()
-		var lower := PackedFloat32Array()
-		upper.resize(count + 1)
-		lower.resize(count + 1)
-		upper.fill(INF)
-		lower.fill(-INF)
-		for j in anchors:
-			upper[j] = ground[j]
-			lower[j] = ground[j]
-		for j in range(1, count + 1):
-			upper[j] = minf(upper[j], upper[j - 1] + rise[j - 1])
-			lower[j] = maxf(lower[j], lower[j - 1] - rise[j - 1])
-		for j in range(count - 1, -1, -1):
-			upper[j] = minf(upper[j], upper[j + 1] + rise[j])
-			lower[j] = maxf(lower[j], lower[j + 1] - rise[j])
-		for j in count + 1: levels[j] = clampf(levels[j], lower[j], upper[j])
-		for j in range(1, count + 1): levels[j] = clampf(levels[j], levels[j - 1] - rise[j - 1], levels[j - 1] + rise[j - 1])
-		for j in range(count - 1, -1, -1): levels[j] = clampf(levels[j], levels[j + 1] - rise[j], levels[j + 1] + rise[j])
+		var heights := ground.duplicate() # the level of each anchor: the ground, or depth_cap from it
+		var target := levels
+		for pass_index in CAP_PASSES if depth_cap > 0.0 else 1:
+			levels = target.duplicate()
+			# rise allowed per step: the target, more only between anchors that need it
+			var rise := PackedFloat32Array()
+			rise.resize(count)
+			rise.fill(grade_limit * step)
+			for k in range(1, anchors.size()):
+				var a := anchors[k - 1]
+				var c := anchors[k]
+				var need := absf(heights[c] - heights[a]) / (c - a) * (1.0001 if c == a + 1 else 1.02)
+				for m in range(a, c): rise[m] = maxf(rise[m], need)
+			grade = grade_limit
+			for m in count: grade = maxf(grade, rise[m] / step)
+			# every level within reach of every anchor, so the grade passes below never move the anchors
+			var upper := PackedFloat32Array()
+			var lower := PackedFloat32Array()
+			upper.resize(count + 1)
+			lower.resize(count + 1)
+			upper.fill(INF)
+			lower.fill(-INF)
+			for j in anchors:
+				upper[j] = heights[j]
+				lower[j] = heights[j]
+			for j in range(1, count + 1):
+				upper[j] = minf(upper[j], upper[j - 1] + rise[j - 1])
+				lower[j] = maxf(lower[j], lower[j - 1] - rise[j - 1])
+			for j in range(count - 1, -1, -1):
+				upper[j] = minf(upper[j], upper[j + 1] + rise[j])
+				lower[j] = maxf(lower[j], lower[j + 1] - rise[j])
+			for j in count + 1: levels[j] = clampf(levels[j], lower[j], upper[j])
+			for j in range(1, count + 1): levels[j] = clampf(levels[j], levels[j - 1] - rise[j - 1], levels[j - 1] + rise[j - 1])
+			for j in range(count - 1, -1, -1): levels[j] = clampf(levels[j], levels[j + 1] - rise[j], levels[j + 1] + rise[j])
+			if depth_cap <= 0.0: break
+			# The deepest place of each stretch past the cap becomes an anchor at the cap.
+			var added := false
+			var at := 0
+			while at <= count:
+				if absf(levels[at] - ground[at]) <= depth_cap:
+					at += 1
+					continue
+				var worst := at
+				while at <= count and absf(levels[at] - ground[at]) > depth_cap:
+					if absf(levels[at] - ground[at]) > absf(levels[worst] - ground[worst]): worst = at
+					at += 1
+				heights[worst] = ground[worst] + clampf(levels[worst] - ground[worst], -depth_cap, depth_cap)
+				anchors.append(worst)
+				added = true
+			if not added: break
+			anchors.sort()
 	levels = _smooth(levels, maxi(1, window / 3), d.closed)
 	var banks := PackedFloat32Array()
 	for j in count + 1:
