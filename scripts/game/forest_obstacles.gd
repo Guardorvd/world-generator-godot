@@ -71,10 +71,10 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 	_grid.clear()
 	_add_objects(px, pz)
 	for n in range(0, details.size(), STRIDE):
-		if Vector2(details[n], details[n + 1]).distance_to(_center) < REACH:
+		if _on_axis(details, n, px, pz).distance_to(_center) < REACH:
 			_add(details[n], details[n + 1], details[n + 2], details[n + 3], details[n + 4], details[n + 5], details[n + 6])
 	for n in range(0, _trail_solids.size(), STRIDE):
-		if Vector2(_trail_solids[n], _trail_solids[n + 1]).distance_to(_center) < REACH:
+		if _on_axis(_trail_solids, n, px, pz).distance_to(_center) < REACH:
 			_add(_trail_solids[n], _trail_solids[n + 1], _trail_solids[n + 2], _trail_solids[n + 3], _trail_solids[n + 4], _trail_solids[n + 5], _trail_solids[n + 6])
 
 

@@ -3,6 +3,7 @@ extends RefCounted
 ## Writers serialize replacement, flush and verify before rotating the previous file.
 ## This is recovery after interruption, not a claim of power-loss atomicity/fsync.
 static var _mutex := Mutex.new()
+static var _swap := Mutex.new()
 
 static func replace(path: String, bytes: PackedByteArray, preserve_backup := false) -> Error:
 	_mutex.lock()
@@ -23,6 +24,22 @@ static func _replace(path: String, bytes: PackedByteArray, preserve_backup: bool
 	if err != OK: return err
 	# Bounded verification buffer instead of another complete file-sized allocation.
 	if digest_file(tmp) != Util.sha256(bytes): return ERR_FILE_CORRUPT
+	# Readers hold the same lock while the file is open: on Windows a rename over an open file fails,
+	# and a reader between the two renames would see no primary and fall to a stale backup.
+	_swap.lock()
+	err = _rotate(path, tmp, preserve_backup)
+	_swap.unlock()
+	return err
+
+## Hold while a cache file is open for reading (open to close), so rotation never overlaps it.
+static func lock_read() -> void:
+	_swap.lock()
+
+static func unlock_read() -> void:
+	_swap.unlock()
+
+static func _rotate(path: String, tmp: String, preserve_backup: bool) -> Error:
+	var err := OK
 	# A missing primary means an earlier rotation was interrupted: preserve its backup.
 	if FileAccess.file_exists(path) and preserve_backup:
 		err = DirAccess.remove_absolute(path) # known invalid primary; keep the readable backup

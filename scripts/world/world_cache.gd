@@ -685,18 +685,25 @@ func _read(path: String, key: String) -> Variant:
 
 func _read_file(path: String, key: String) -> Variant:
 	var started := Time.get_ticks_usec()
+	Files.lock_read()
 	var f := FileAccess.open(path, FileAccess.READ)
 	if f == null or f.get_length() < 64:
+		Files.unlock_read()
 		return null
 	if f.get_buffer(4).get_string_from_ascii() != MAGIC or f.get_32() != FORMAT or f.get_pascal_string() != key:
+		f.close()
+		Files.unlock_read()
 		return null
 	var raw_size := f.get_64()
 	var packed_size := f.get_64()
 	var expected := f.get_buffer(32)
 	if packed_size <= 0 or packed_size != f.get_length() - f.get_position() or raw_size <= 0 or raw_size > (1 << 31):
+		f.close()
+		Files.unlock_read()
 		return null
 	var packed := f.get_buffer(packed_size)
 	f.close()
+	Files.unlock_read()
 	_measure("read", started, packed.size())
 	if packed.size() != packed_size or Util.sha256(packed) != expected:
 		return null
