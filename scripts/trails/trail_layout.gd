@@ -48,6 +48,10 @@ const RAVINE_EVERY := 150.0  # в среднем один овражек на с
 const RAVINE_GAP := 90.0     # и не ближе друг к другу
 const RAVINE_STRAIGHT := 35.0 # овражек — где ось на ±16 м не туже этого радиуса
 const WANDER_V3 := 0.6       # v3: извилистость меньше — больше прямых под прыжки
+const WALK_MARGIN := 1.5     # ходок игры держится дальше от запретных клеток, м
+const OPEN_FINISH_MIN := 120.0 # ходок игры не отступает короче этого, м
+const WALK_ENOUGH := 200.0  # такой длины линии ходока достаточно, м: подгонка к коридору чаще падает на приёмке
+const HINT_WEIGHT := 4.0     # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
 static var style := "flow"
@@ -83,6 +87,21 @@ static func generate(ground: Callable, extent: Vector2, seed_value: int, style_n
 	# Source cut/fill limits are checked on the prepared surface. They do not require
 	# the designed riding grade to inherit the steepest natural metre of this corridor.
 	settings.use_designed_grade = true
+	if settings.get("walk", false):
+		# Ходок по коридору (как в лаборатории): держит уклон стиля траверсом, виляет и обходит воду. Ходок жадный и может
+		# упереться раньше конца коридора — тогда берётся более длинная из его линии и точной подгонки к коридору.
+		# Цена — только выборки земли, без формирования.
+		var corridor_length := RouteContract.length(settings.route_hint)
+		var walked := settings.duplicate()
+		walked._corridor_variant = 3
+		walked.geometry_attempts = 2
+		walked.walk_length = corridor_length * 1.8
+		walked.open_finish = true
+		var result := _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), walked)
+		var walked_length: float = result.stats.get("length", 0.0)
+		if not result.routes.is_empty() and walked_length >= WALK_ENOUGH: return result
+		var fitted := _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), settings)
+		return result if float(fitted.stats.get("length", 0.0)) <= walked_length else fitted
 	return _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), settings)
 
 ## Data-only job; never writes the legacy facade or active terrain. Scene construction stays on the main thread.
@@ -157,7 +176,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var inside := func(p: Vector2) -> bool:
 		return p.x >= 0 and p.y >= 0 and p.x < extent.x and p.y < extent.y and bounds.has_point(p) and not (avoid.is_valid() and avoid.call(p))
 	var walk_inside := func(p: Vector2) -> bool:
-		var half: float = st.width * 0.5
+		# open_finish (ходок игры): запас ходку, чтобы сглаженная линия не легла полотном на запретную клетку
+		var half: float = st.width * 0.5 + (WALK_MARGIN if options.get("open_finish", false) else 0.0)
 		for offset in [Vector2.ZERO, Vector2(half, 0), Vector2(-half, 0), Vector2(0, half), Vector2(0, -half)]:
 			if not inside.call(p + offset): return false
 		return true
@@ -185,6 +205,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var shape := {pull = rng.randf_range(0.15, 0.6), wander = float(st.wander) * rng.randf_range(0.6, 1.5) * (WANDER_V3 if carve.is_valid() else 1.0),
 		period = Vector2(rng.randf_range(30.0, 70.0), rng.randf_range(12.0, 26.0)), phase = Vector2(rng.randf() * TAU, rng.randf() * TAU)}
 	shape.route_hint = options.get("route_hint", PackedVector2Array())
+	if options.get("open_finish", false): shape.hint_weight = HINT_WEIGHT
 	var finish_plan := {}
 	if shape.route_hint.size() > 1:
 		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)))
@@ -244,12 +265,15 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		attempt_shape.phase += Vector2(0.71, 1.13) * k
 		attempt_shape.pull *= 1.0 + 0.08 * k
 		var line: PackedVector2Array
-		if guided and corridor_variant < 3:
+		if guided and options.get("exact_line", false):
+			line = hint
+			attempt_shape.trace = {goal = target, reason = "corridor_fit", method = "exact_line"}
+		elif guided and corridor_variant < 3:
 			line = _corridor_line(hint, [0.0, 8.0, -8.0][corridor_variant])
 			attempt_shape.trace = {goal = target, reason = "corridor_fit", method = "whole_corridor"}
 		else:
 			walk_calls += 1
-			line = _walk_with_loop(ground, walk_inside, start, target, float(st.length), grade, attempt_shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
+			line = _walk_with_loop(ground, walk_inside, start, target, maxf(float(st.length), float(options.get("walk_length", 0.0))), grade, attempt_shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
 		if line.size() < 2: continue
 		longest_trial = maxf(longest_trial, line.size() * STEP)
 		var trial := TrailDefinition.new()
@@ -257,6 +281,14 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		trial.points = _resample(_smooth(_smooth(line)), 2.0)
 		var trace: Dictionary = attempt_shape.get("trace", {})
 		var chosen_finish: Vector2 = finish_plan.get("finish", trace.get("goal", target))
+		if options.get("open_finish", false) and trace.get("reason", "") != "reached_finish":
+			# Ходок игры не дошёл до точки коридора: линия кончается там, где есть место остановки и выката, а не обязана
+			# прийти именно туда. Без такого места — отступ назад по своей линии.
+			while line.size() * STEP >= OPEN_FINISH_MIN and not RouteContract.endpoint(trial.points[-1], (trial.points[-1] - trial.points[-2]).normalized(), ground, inside, st.width).suitable:
+				line = line.slice(0, line.size() - 3)
+				trial.points = _resample(_smooth(_smooth(line)), 2.0)
+			chosen_finish = trial.points[-1]
+			trace.reason = "layout_complete"
 		var finished := RouteContract.measure(trial.points, hint, chosen_finish, trace.get("reason", "unknown_stop"), ground, inside, st.width, finish_plan.get("kind", "full"))
 		if not finished.complete:
 			if finished.fragment: fragments.append(finished)
@@ -705,7 +737,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			var cross := absf(float(ground.call(next + side * 2.0)) - float(ground.call(next - side * 2.0))) / 4.0
 			# уклон к цели стиля (подъём — дорого), поперечный склон, плавность и «волна» изгибов
 			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0 + maxf(0.0, cross - 0.25) * 8.0 + absf(o - want) * 1.5
-			if hint.size() > 1: cost += minf(float(hint_guide(hint, next).distance) / 32.0, 4.0) * 2.0
+			if hint.size() > 1: cost += minf(float(hint_guide(hint, next).distance) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
 			# обрыв снаружи поворота: вылет наружу — вниз по откосу (падение 01.11 с 30 м)

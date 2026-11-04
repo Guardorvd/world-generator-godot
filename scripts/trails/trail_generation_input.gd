@@ -130,7 +130,8 @@ func audit_earthworks(h: Heightfield) -> PackedStringArray:
 				if absf(delta) > 0.05 and blocked(at): return PackedStringArray(["земляные работы затронули воду, запрет или существующий путь у %s" % at])
 	return errors
 
-static func from_world(w: WorldData, surface: Heightfield = null):
+## crossable — виды путей, которые не мешают новой линии (звериные тропы не формируют полотна).
+static func from_world(w: WorldData, surface: Heightfield = null, crossable: Array[String] = []):
 	var result = load("res://scripts/trails/trail_generation_input.gd").new()
 	result.size = Vector2i(w.W, w.H)
 	result.cell_size = GameConfig.TILE
@@ -165,6 +166,7 @@ static func from_world(w: WorldData, surface: Heightfield = null):
 			var steps := maxi(1, ceili(a.distance_to(b)))
 			for k in steps + 1: result.protect(a.lerp(b, float(k) / steps), 3)
 	for route: Dictionary in w.trails:
+		if route.kind in crossable: continue
 		var pts := PackedVector2Array()
 		var half := 0.0
 		for p: Dictionary in route.pts:

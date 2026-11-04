@@ -58,8 +58,11 @@ func run() -> void:
 	check(plan.state == "found", "completed routes are playable on the prepared synthetic world")
 	check(plan.stats.accepted == plan.entries.size() and plan.routes.size() == plan.entries.size(), "only admitted routes are published")
 	check(Lab.seed == facade_seed, "game generation does not mutate the lab facade")
-	check(plan.stats.attempted <= plan.stats.survey.sites, "each proposed site is attempted once")
-	check(plan.stats.attempted == plan.stats.survey.sites, "every deterministic proposal completes without a wall-clock cutoff")
+	check(plan.stats.attempted <= plan.stats.survey.sites + plan.stats.park.lines, "each proposed site is attempted once")
+	check(plan.stats.work_m <= Network.WORK_LIMIT + 3000.0 * Network.ADMIT_PASSES, "work is bounded by metres, not by a wall clock")
+	var shortest := INF
+	for entry: Dictionary in plan.entries: shortest = minf(shortest, entry.length)
+	print("ROUTES ", plan.entries.size(), " total ", roundi(plan.stats.length_m), " m, shortest ", roundi(shortest), " m, ", plan.stats.total_ms, " ms")
 	var repeated := synthetic()
 	var repeated_surface := repeated.base_heights.copy()
 	repeated_surface.finish_paths()

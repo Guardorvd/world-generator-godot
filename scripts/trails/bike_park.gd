@@ -1,6 +1,6 @@
 class_name BikePark
 extends RefCounted
-## Legacy layout retained for isolated fixtures. Main-game preparation uses trail_world_network.gd.
+## Прокладка линий трейл-парка: trail_world_network.gd берёт их как кандидатов, принимает и запекает как все трассы.
 ## Велопарк стартовой области: простой дешёвый поиск самой большой пустой области (без дорог, поселений, воды и
 ## сооружений) и прокладка в ней сети длинных извилистых трасс с разворотами и элементами. Без перебора участков и
 ## без построителя линии по рельефу: линии ведёт простой «ходок», рельеф под них готовит общее формирование
@@ -79,7 +79,7 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 	var d := PackedFloat32Array()
 	d.resize(gw * gh)
 	d.fill(1e9)
-	# занято: дороги (path_mask 3; тропы и звериные тропы пересекать можно), море, озёра и настоящие реки (ручьи — нет)
+	# занято: дороги и тропы (path_mask от 2; звериные тропы пересекать можно), море, озёра и настоящие реки (ручьи — нет)
 	var mask := w.path_mask
 	var has_mask := mask.size() == w.N
 	var ocean := w.ocean
@@ -98,7 +98,7 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 			for oz in STRIDE:
 				for ox in STRIDE:
 					var i := (cz + oz) * w.W + cx + ox
-					if (has_mask and mask[i] >= 3) or ocean[i] != 0 or lake[i] != 0 or (river[i] != 0 and acc[i] >= WorldData.RIVER_ACC): busy = true
+					if (has_mask and mask[i] >= 2) or ocean[i] != 0 or lake[i] != 0 or (river[i] != 0 and acc[i] >= WorldData.RIVER_ACC): busy = true
 					var sx := (hv[mini(i + 1, w.N - 1)] - hv[maxi(i - 1, 0)]) / (2.0 * GameConfig.TILE)
 					var sz := (hv[mini(i + w.W, w.N - 1)] - hv[maxi(i - w.W, 0)]) / (2.0 * GameConfig.TILE)
 					if sx * sx + sz * sz > STEEP_LAND * STEEP_LAND: busy = true

@@ -55,7 +55,7 @@
 | Построитель линии по рельефу (`TrailRouter`), его кнопка в Trail Lab | изолированная `trail_route_test` (`-- --capture` по нужде) |
 | Автоматический выбор места трассы (`TrailPicker`), кнопка «Найти трассу» | изолированная `trail_pick_test`; при правке этапов `TrailRouter` ещё `trail_route_test` |
 | Автоматический выбор участка в области мира (`TrailScout`) | изолированная `trail_scout_test`; при правке `TrailPicker`/`TrailRouter` ещё их тесты |
-| Велопарк стартовой области (`BikePark`: поиск пустой области, прокладка сети) | изолированная `bike_park_look.gd` (прокладка на синтетических холмах); в мире — один `bike_park_test.gd -- --seed Полынь-1312` (лимит 420 с) |
+| Трейл-парк (`BikePark`: поиск пустой области, прокладка линий; в игре они кандидаты сети) | изолированная `bike_park_look.gd` (прокладка на синтетических холмах); в мире — один `trail_world_network_test -- --game` |
 | Сеть трасс в основном мире (`StageTrailPlan`, передача поверхности в `WorldLoader`, кэш) | изолированный `trail_world_network_test`; при изменении загрузчика/кэша/сцены — один `trail_world_network_test -- --game` вместо `check.gd`. Старый `trail_world_test` проверяет прежний комплект из трёх путей и новой сети не соответствует |
 | Доступ трассы к дорогам (`TrailAccess`, примыкания в `TrailRouter`, отбор пар в `TrailPicker`) | изолированная `trail_access_test`; при правке этапов ещё `trail_route_test` и `trail_pick_test` |
 | Элементы на найденной трассе (`TrailFlow`, профиль `calm_flow`) | изолированная `trail_flow_test`; при правке `TrailComposer` ещё `trail_lab_test` |

@@ -193,8 +193,10 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					var n := iz * RoadRefinement.STRIDE + ix
 					var delta: float = hs[n] - (source_vertices[n] if not source_vertices.is_empty() else earthwork_source.ground_at(at.x, at.y))
 					if delta < -float(earthwork_input.earthwork_limits.max_cut) - 0.05 or delta > float(earthwork_input.earthwork_limits.max_fill) + 0.05:
+						limits.failed_at = at
 						return PackedStringArray(["превышен игровой предел земляных работ"])
 					if absf(delta) > 0.05 and earthwork_input.blocked(at):
+						limits.failed_at = at
 						return PackedStringArray(["земляные работы затрагивают воду, инфраструктуру или готовый путь"])
 				var shade: float = shades.get(vertex, 0.0)
 				if shade != 0.0:

@@ -42,7 +42,7 @@ func find(seed_value: int, publish := Callable(), cancelled := Callable()) -> Ar
 		stats.reason = "мир не создан или повреждён"
 		return sites
 	var atlas := preload("res://scripts/trails/trail_coarse_map.gd").new()
-	atlas.prepare(world_size, _ground, world_wet, generation_input)
+	atlas.prepare(world_size, _ground, world_wet, generation_input, options.get("corridor", {}).get("mark_paths", false))
 	stats.overview_ms = (Time.get_ticks_usec() - started) / 1000.0
 	stats.overview_cells = atlas.heights.size()
 	var anchors := atlas.anchors(seed_value)
@@ -54,7 +54,7 @@ func find(seed_value: int, publish := Callable(), cancelled := Callable()) -> Ar
 	for anchor: int in anchors:
 		if stats.probed >= budget or _stopped(cancelled): break
 		stats.probed += 1
-		var c := atlas.trace(anchor, seed_value)
+		var c := atlas.trace(anchor, seed_value, options.get("corridor", {}))
 		if c.is_empty():
 			_refuse("нет протяжённого свободного коридора")
 			continue

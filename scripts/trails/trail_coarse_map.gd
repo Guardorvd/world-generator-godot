@@ -10,7 +10,9 @@ var clearance := PackedInt32Array()
 var forms := PackedFloat32Array()
 var world_size := 0
 
-func prepare(n: int, ground: Callable, wet: PackedByteArray, input) -> void:
+## mark_paths — клетки, через которые идут существующие пути, заняты целиком: иначе коридор их пересекает, а линия по
+## нему упирается в запрет посреди пути.
+func prepare(n: int, ground: Callable, wet: PackedByteArray, input, mark_paths := false) -> void:
 	world_size = n
 	size = ceili(float(n) / STEP)
 	var count := size * size
@@ -22,6 +24,13 @@ func prepare(n: int, ground: Callable, wet: PackedByteArray, input) -> void:
 			var cell := z * n + x
 			var protected_cell: bool = input != null and (input.forbidden[cell] != 0 or (input.river_policy == GenerationInput.RiverPolicy.STRICT and input.rivers[cell] != 0))
 			if wet[cell] != 0 or protected_cell: free[(z / STEP) * size + x / STEP] = 0
+	if mark_paths and input != null:
+		var span_m := STEP * GameConfig.TILE
+		for route: Dictionary in input.existing_paths:
+			var pts: PackedVector2Array = route.points
+			for k in pts.size():
+				var c := Vector2i((pts[k] / span_m).floor()).clamp(Vector2i.ZERO, Vector2i.ONE * (size - 1))
+				free[c.y * size + c.x] = 0
 	var queue: Array[int] = []
 	for z in size:
 		for x in size:
@@ -76,34 +85,66 @@ func anchors(seed_value: int) -> Array[int]:
 		return sa > sb if sa != sb else posmod(hash([seed_value, a]), 999983) < posmod(hash([seed_value, b]), 999983))
 	return result
 
-func trace(start: int, seed_value: int) -> Dictionary:
+## limits: box — сторона квадрата коридора, м; two_way — вести и вверх от начальной клетки (клетка посреди склона
+## иначе даёт только нижнюю половину своего коридора). Без limits — прежние 448 м и только вниз.
+func trace(start: int, seed_value: int, limits := {}) -> Dictionary:
 	var kind := feature(start)
-	var path := PackedVector2Array([point(start)])
-	var visited := {start: true}
-	var p := start
 	var heading := -gradients[start].normalized()
 	if heading.is_zero_approx(): heading = Vector2.from_angle(float(posmod(hash([seed_value, start]), 6283)) / 1000)
-	var bounds := Rect2(path[0], Vector2.ZERO)
-	var work := 0.0
-	var peak := 0.0
-	var slope := 0.0
-	var gentle := 0
+	var run := {path = PackedVector2Array([point(start)]), visited = {start: 0}, counter = 0, spaced = limits.get("two_way", false), bounds = Rect2(point(start), Vector2.ZERO), box = float(limits.get("box", 448.0)),
+		work = 0.0, peak = 0.0, slope = 0.0, gentle = 0, end = start}
+	_extend(run, start, heading, 1.0, kind)
+	var last: int = run.end
+	var first := start
+	if limits.get("two_way", false):
+		var tail: PackedVector2Array = run.path
+		run.path = PackedVector2Array([point(start)])
+		_extend(run, start, -heading, -1.0, kind)
+		first = run.end
+		var line: PackedVector2Array = run.path
+		line.reverse()
+		line.append_array(tail.slice(1))
+		run.path = line
+	var path: PackedVector2Array = run.path
+	if path.size() < 2: return {}
+	var bounds: Rect2 = run.bounds
+	var length := preload("res://scripts/trails/trail_route_contract.gd").length(path)
+	var pad := int(limits.get("pad", 8)) # запас рабочей области вокруг коридора, клеток: ходку есть где вилять
+	var lo := Vector2i((bounds.position / GameConfig.TILE).floor()) - Vector2i.ONE * pad
+	var hi := Vector2i((bounds.end / GameConfig.TILE).ceil()) + Vector2i.ONE * pad
+	lo = lo.max(Vector2i.ZERO); hi = hi.min(Vector2i.ONE * world_size)
+	var region_size := (hi - lo).max(Vector2i.ONE * 64).min(Vector2i.ONE * (ceili(float(run.box) / GameConfig.TILE) + pad * 2))
+	lo = lo.min(Vector2i.ONE * world_size - region_size)
+	var drop := heights[first] - heights[last]
+	return {region = Rect2i(lo, region_size), feature = kind, fall = drop, slope = float(run.slope) / (path.size() - 1), gentle = float(run.gentle) / (path.size() - 1), water = 0.0,
+		probe = {points = path, length = length, drop = drop, peak_grade = run.peak, straight_share = path[0].distance_to(path[-1]) / length, build_cost = float(run.work) / length, expanded = path.size(), method = "coarse_corridor"}}
+
+## Клетка q рядом с уже пройденной, кроме последних: коридор не сворачивается клубком, в котором линии негде проехать.
+func _crowded(run: Dictionary, q: int, p: int) -> bool:
+	for n in neighbours(q):
+		if n == p or not run.visited.has(n): continue
+		if int(run.visited[n]) < int(run.visited[p]) - 1 or int(run.visited[n]) > int(run.visited[p]): return true
+	return false
+
+## Рост коридора от клетки p. Уклон считается по ходу седока: down = 1 — шаг идёт вниз по трассе, -1 — вверх, к её началу.
+func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: String) -> void:
 	for step in 24:
 		var best := -1
 		var best_cost := INF
 		for q in neighbours(p):
-			if not free[q] or visited.has(q): continue
+			if not free[q] or run.visited.has(q): continue
+			if run.spaced and _crowded(run, q, p): continue
 			var at := point(q)
 			if at.x < 36 or at.y < 36 or at.x > world_size * GameConfig.TILE - 36 or at.y > world_size * GameConfig.TILE - 36: continue
-			var next_bounds := bounds.expand(at)
-			if maxf(next_bounds.size.x, next_bounds.size.y) > 448: continue
+			var next_bounds: Rect2 = run.bounds.expand(at)
+			if maxf(next_bounds.size.x, next_bounds.size.y) > run.box: continue
 			var delta := at - point(p)
 			var direction := delta.normalized()
 			if direction.dot(heading) < 0: continue
 			# A diagonal cannot skip through a blocked corner.
 			if q % size != p % size and q / size != p / size:
 				if not free[(p / size) * size + q % size] or not free[(q / size) * size + p % size]: continue
-			var grade := (heights[q] - heights[p]) / delta.length()
+			var grade := (heights[q] - heights[p]) / delta.length() * down
 			var cross := absf(gradients[q].dot(direction.orthogonal()))
 			var cost := absf(grade + 0.07) * 2 + maxf(grade, 0) * 8 + cross * 2 + (1 - direction.dot(heading)) * 0.5 + 0.3 / (clearance[q] + 1)
 			if kind == "гребень": cost += forms[q] * 0.05
@@ -111,17 +152,10 @@ func trace(start: int, seed_value: int) -> Dictionary:
 			if cost < best_cost: best_cost = cost; best = q
 		if best < 0: break
 		var delta := point(best) - point(p)
-		peak = maxf(peak, absf(heights[best] - heights[p]) / delta.length())
-		work += best_cost * delta.length()
-		slope += gradients[best].length(); gentle += int(gradients[best].length() < 0.10)
+		run.peak = maxf(run.peak, absf(heights[best] - heights[p]) / delta.length())
+		run.work += best_cost * delta.length()
+		run.slope += gradients[best].length(); run.gentle += int(gradients[best].length() < 0.10)
 		heading = delta.normalized(); p = best
-		visited[p] = true; path.append(point(p)); bounds = bounds.expand(point(p))
-	if path.size() < 2: return {}
-	var length := preload("res://scripts/trails/trail_route_contract.gd").length(path)
-	var lo := Vector2i((bounds.position / GameConfig.TILE).floor()) - Vector2i.ONE * 8
-	var hi := Vector2i((bounds.end / GameConfig.TILE).ceil()) + Vector2i.ONE * 8
-	lo = lo.max(Vector2i.ZERO); hi = hi.min(Vector2i.ONE * world_size)
-	var region_size := (hi - lo).max(Vector2i.ONE * 64).min(Vector2i.ONE * 128)
-	lo = lo.min(Vector2i.ONE * world_size - region_size)
-	return {region = Rect2i(lo, region_size), feature = kind, fall = heights[start] - heights[p], slope = slope / (path.size() - 1), gentle = float(gentle) / (path.size() - 1), water = 0.0,
-		probe = {points = path, length = length, drop = heights[start] - heights[p], peak_grade = peak, straight_share = path[0].distance_to(path[-1]) / length, build_cost = work / length, expanded = path.size(), method = "coarse_corridor"}}
+		run.counter += 1
+		run.visited[p] = run.counter; run.path.append(point(p)); run.bounds = run.bounds.expand(point(p))
+	run.end = p
