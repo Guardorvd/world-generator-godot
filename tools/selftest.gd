@@ -3,8 +3,8 @@ extends SceneTree
 ## Хеши массивов мира (FNV-1a по байтам, как в JS-версии) сравниваются с эталоном
 ## tools/selftest_reference.json. До версии 1.7 эталон был снят с JS-версии 1.2; с 1.8 генерация
 ## намеренно другая; текущий эталон обновлён для лесов 6.3, с 4.3 в нём ещё покрытие путей и игровой
-## рельеф с полотном (road_surface, road_bed). Ещё проверяется, что по дорогам
-## и тропам из любого поселения можно дойти до любого другого. Запуск из папки проекта:
+## рельеф с полотном (road_surface, road_bed). Проверяются взаимность и физическая
+## связность объявленных связей; с 9.8 отдельные дорожные сети допустимы. Запуск из папки проекта:
 ##   godot --headless --script res://tools/selftest.gd
 ## С ключом -- --print печатает свежие хеши вместо сравнения (так обновляется эталон).
 ## С ключом -- --gdscript проверяет генерацию без C# (FastGrid.cs), как в обычной сборке Godot.
@@ -45,6 +45,42 @@ static func settlements_connected(w: WorldData) -> bool:
 	for s in w.settlements:
 		if seen[s.i] == 0:
 			return false
+	return true
+
+
+## Since 9.8 separate safe networks are intentional. Every advertised connection
+## must still be reciprocal, refer to a live settlement and have a physical path.
+static func settlement_network_valid(w: WorldData) -> bool:
+	var by_cell := {}
+	for s: SettlementData in w.settlements:
+		if s.i < 0 or s.i >= w.N or by_cell.has(s.i): return false
+		by_cell[s.i] = s
+	var components := PackedInt32Array()
+	components.resize(w.N)
+	var component := 0
+	for s: SettlementData in w.settlements:
+		if components[s.i] != 0: continue
+		component += 1
+		var queue := PackedInt32Array([s.i])
+		components[s.i] = component
+		var head := 0
+		while head < queue.size():
+			var c := queue[head]
+			head += 1
+			for k in 8:
+				var x: int = c % w.W + Grid.DX[k]
+				var y: int = c / w.W + Grid.DY[k]
+				if x < 0 or y < 0 or x >= w.W or y >= w.H: continue
+				var next := y * w.W + x
+				if components[next] == 0 and w.path_mask[next] >= 2:
+					components[next] = component
+					queue.append(next)
+	for index in w.settlements.size():
+		var s: SettlementData = w.settlements[index]
+		if index > 0 and s.connections.is_empty(): return false
+		for other: int in s.connections:
+			if other == s.i or not by_cell.has(other): return false
+			if not by_cell[other].connections.has(s.i) or components[s.i] != components[other]: return false
 	return true
 
 
@@ -105,15 +141,15 @@ func _init() -> void:
 		fresh[key] = fp
 		if print_only:
 			# Новый эталон принимаем только после проверки связности, как и обычный прогон.
-			if not settlements_connected(w):
+			if not settlement_network_valid(w):
 				fails += 1
-				printerr("%s — поселения не связаны" % key)
+				printerr("%s — неверные связи поселений" % key)
 			print("Посчитан %s (%d мс)" % [key, Time.get_ticks_msec() - t0])
 			continue
 		var want: Dictionary = ref.get(key, {})
 		var bad := PackedStringArray()
-		if not settlements_connected(w):
-			bad.append("связь поселений по дорогам и тропам")
+		if not settlement_network_valid(w):
+			bad.append("корректность связей поселений по дорогам и тропам")
 		if want.is_empty():
 			bad.append("нет случая в эталоне (запустите с -- --print)")
 		else:

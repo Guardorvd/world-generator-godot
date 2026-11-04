@@ -14,6 +14,7 @@ const FIT_LIMIT := 1.2   # обычное уточнение относител�
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
 static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
+static var restrict_local_index := true # reference switch for exact local-build comparisons
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
@@ -32,6 +33,8 @@ var _dist_water := PackedFloat32Array() # w.dist_water; у копии поток
 var _surf: Array = RoadSurface.LIST # у копии потока — своя копия таблицы покрытий (12.2)
 var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум полотна в мировых координатах
 var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
+var _wanted := {} # exact patch keys of the new routes; old neighbours are indexed only here
+var _wanted_box := Rect2()
 
 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
@@ -49,6 +52,27 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._origin = Vector2(heights.world.world_origin) * TILE
 	r._only = only
 	var started_us := Time.get_ticks_usec()
+	if not only.is_empty() and restrict_local_index:
+		# Determine the exact output cells before indexing neighbours. Preserve the
+		# original route/segment order in the final index, including nearest ties.
+		for route: int in only:
+			r._index(heights.world.trails[route], route)
+		for key: int in r._segments:
+			r._wanted[key] = true
+			var point := Vector2(key % heights.world.W + 1, key / heights.world.W + 1) * TILE
+			if r._wanted.size() == 1: r._wanted_box = Rect2(point, Vector2.ZERO)
+			else: r._wanted_box = r._wanted_box.expand(point)
+		r._wanted_box = r._wanted_box.grow(TILE)
+		# A patch's last row/column is sampled through the adjacent cell's index.
+		for key: int in r._wanted.keys():
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					var x := key % heights.world.W + dx
+					var z := key / heights.world.W + dz
+					if x >= 0 and z >= 0 and x < heights.world.W and z < heights.world.H:
+						r._wanted[z * heights.world.W + x] = true
+		r._segments.clear()
+		r._segment_list.clear()
 	for route in heights.world.trails.size():
 		var t: Dictionary = heights.world.trails[route]
 		if RoadBed.KINDS.has(t.kind):
@@ -132,6 +156,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	# После запекания нет ссылок на Heightfield (цикл RefCounted) и временного пространственного индекса.
 	r._heights = null
 	r._segments.clear()
+	r._wanted.clear()
 	r._segment_list.clear()
 	r._structures.clear()
 	r._noise = null
@@ -224,6 +249,17 @@ func _index_structures() -> void:
 func _index(t: Dictionary, route: int) -> void:
 	var w := _heights.world
 	var pts: Array = t.pts
+	var needed := PackedByteArray()
+	if not _wanted.is_empty():
+		needed.resize(pts.size())
+		for n in range(1, pts.size()):
+			var a := Vector2(pts[n - 1].x, pts[n - 1].y) * TILE
+			var b := Vector2(pts[n].x, pts[n].y) * TILE
+			var reach := (float(pts[n - 1].w) + float(pts[n].w)) * TILE * 0.25 + REACH + TILE
+			if Rect2(a, b - a).abs().grow(reach).intersects(_wanted_box, true):
+				needed[n - 1] = 1
+				needed[n] = 1
+		if not needed.has(1): return
 	var profile := PackedFloat32Array()
 	# У троп сохраняем естественные перегибы; поперечная полка считается отдельно.
 	var smoothing := 0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0)
@@ -231,10 +267,19 @@ func _index(t: Dictionary, route: int) -> void:
 	var base_heights := PackedFloat64Array()
 	if smoothing > 0.0:
 		base_heights.resize(pts.size())
+		var samples := needed.duplicate()
+		if not needed.is_empty():
+			for n in pts.size():
+				if needed[n] != 0:
+					for j in range(maxi(0, n - 3), mini(pts.size(), n + 4)): samples[j] = 1
 		for n in pts.size():
+			if not samples.is_empty() and samples[n] == 0: continue
 			base_heights[n] = _heights.base_ground_at(pts[n].x * TILE, pts[n].y * TILE)
 	# Короткое симметричное окно по уже выровненному полотну; концы развилок закреплены.
 	for n in pts.size():
+		if not needed.is_empty() and needed[n] == 0:
+			profile.append(0.0)
+			continue
 		var p := Vector2(pts[n].x, pts[n].y) * TILE
 		var h := _heights.base_ground_at(p.x, p.y)
 		var sum_h := h
@@ -251,21 +296,27 @@ func _index(t: Dictionary, route: int) -> void:
 		var b := Vector2(pts[n].x, pts[n].y) * TILE
 		if a.distance_squared_to(b) < 0.0001:
 			continue
+		if not needed.is_empty() and (needed[n - 1] == 0 or needed[n] == 0):
+			along += a.distance_to(b)
+			continue
 		var half := (float(pts[n - 1].w) + float(pts[n].w)) * TILE * 0.25
 		var surf: int = t.surf[n - 1]
 		var next_surf: int = t.surf[n]
 		var s := {a = a, delta = b - a, len2 = a.distance_squared_to(b), half = half,
 			ha = profile[n - 1], hb = profile[n], surf = surf, next = next_surf, kind = t.kind, route = route, along = along}
-		s.id = _segment_list.size()
-		_segment_list.append(s)
+		s.id = -1
 		along += a.distance_to(b)
 		var reach := half + REACH + TILE
 		for z in range(maxi(0, floori((minf(a.y, b.y) - reach) / TILE - 0.5)), mini(w.H - 1, ceili((maxf(a.y, b.y) + reach) / TILE - 0.5))):
 			for x in range(maxi(0, floori((minf(a.x, b.x) - reach) / TILE - 0.5)), mini(w.W - 1, ceili((maxf(a.x, b.x) + reach) / TILE - 0.5))):
+				var key := z * w.W + x
+				if not _wanted.is_empty() and not _wanted.has(key): continue
 				var center := Vector2(x + 1.0, z + 1.0) * TILE
 				if Grid.segment_dist(center.x, center.y, a.x, a.y, b.x, b.y) > half + REACH + TILE * 0.71:
 					continue
-				var key := z * w.W + x
+				if s.id < 0:
+					s.id = _segment_list.size()
+					_segment_list.append(s)
 				if not _segments.has(key):
 					_segments[key] = []
 				_segments[key].append(s)

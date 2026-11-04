@@ -14,7 +14,7 @@ func _init() -> void:
 	var w := WorldGenerator.generate("Ущелье", 512)
 	var h := Heightfield.new(w)
 	w.outer = OuterLand.new(w)
-	check(SelfTest.settlements_connected(w), "Поселения потеряли связь")
+	check(SelfTest.settlement_network_valid(w), "Некорректная связь поселений")
 	var passed := 0
 	var seen := {}
 	for b: BridgeData in w.bridges:

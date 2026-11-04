@@ -6,40 +6,58 @@ const Layout := preload("res://scripts/trails/trail_layout.gd")
 const Validation := preload("res://scripts/trails/trail_validation.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const MARGIN := 12
-const BUDGET_MS := 30000
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 static var surveys := 0
 
-static func build(w: WorldData, h: Heightfield, area: Rect2i, budget_ms := BUDGET_MS) -> Dictionary:
+static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> Dictionary:
 	var started := Time.get_ticks_msec()
-	var deadline := started + budget_ms
 	var input = GI.from_world(w, h)
+	var input_ms := Time.get_ticks_msec() - started
 	input.earthwork_limits = EARTHWORKS.duplicate()
 	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
-		{area = area.grow(-MARGIN), deadline = started + budget_ms / 3})
+		{area = area.grow(-MARGIN), probe_budget = int(options.get("probe_budget", maxi(64, w.N / (Search.STRIDE * Search.STRIDE))))})
 	surveys += 1
 	var candidates := search.find(w.seed_num)
-	# Reuse the overview's construction estimate: spend the game budget on the
-	# cheapest promising corridors first, without a second survey or a route quota.
+	# Deterministic work bounds live in survey/layout. Finish every proposed site;
+	# elapsed time is diagnostic and must never choose the canonical world.
 	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.probe.build_cost) < float(b.probe.build_cost) if a.probe.build_cost != b.probe.build_cost else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
-		area = area, stats = {survey = search.stats, attempted = 0, accepted = 0, rejected = {}, budget_ms = budget_ms}}
+		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}}}
 	for candidate in candidates:
-		if Time.get_ticks_msec() >= deadline: break
 		plan.stats.attempted += 1
+		var progress: Callable = options.get("on_progress", Callable())
+		if progress.is_valid():
+			progress.call(0.79 + 0.05 * plan.stats.attempted / maxi(1, candidates.size()),
+				"Велосипедные трассы: %d/%d · принято %d" % [plan.stats.attempted, candidates.size(), plan.stats.accepted])
+		var phase := Time.get_ticks_usec()
 		var context := context_rect(h, candidate.region)
 		var cut := TrailSite.cut(w, h, context, MARGIN)
+		_time(plan, "cut", phase)
 		if not cut.errors.is_empty():
 			_refuse(plan, "участок: " + cut.errors[0]); continue
 		var site: TrailSite = cut.site
+		phase = Time.get_ticks_usec()
 		var local_input = input.window(site.origin, site.size)
+		_time(plan, "window", phase)
+		# The candidate's source and exclusions are immutable throughout layout and
+		# validation. Repeated endpoint/footprint queries reuse exact point results.
+		var ground_samples := {}
+		var blocked_samples := {}
+		var ground := func(p: Vector2) -> float:
+			if not ground_samples.has(p): ground_samples[p] = site.ground_at(p)
+			return ground_samples[p]
+		var blocked := func(p: Vector2) -> bool:
+			if not blocked_samples.has(p): blocked_samples[p] = local_input.blocked(p)
+			return blocked_samples[p]
+		phase = Time.get_ticks_usec()
 		var hint := PackedVector2Array()
 		for p: Vector2 in candidate.probe.points: hint.append(p - site.origin_m())
 		var style: String = candidate.styles[posmod(candidate.trail_seed, candidate.styles.size())]
-		var result := Layout.generate(site.ground_at, Vector2(site.size) * GameConfig.TILE, candidate.trail_seed, style,
-			local_input.blocked, {bounds = Rect2(Vector2(candidate.region.position - site.origin) * GameConfig.TILE, Vector2(candidate.region.size) * GameConfig.TILE),
+		var result := Layout.generate(ground, Vector2(site.size) * GameConfig.TILE, candidate.trail_seed, style,
+			blocked, {bounds = Rect2(Vector2(candidate.region.position - site.origin) * GameConfig.TILE, Vector2(candidate.region.size) * GameConfig.TILE),
 				route_hint = hint, difficulty = 0.35, modification = 0.5})
+		_time(plan, "layout", phase)
 		if result.routes.is_empty():
 			_refuse(plan, result.stats.get("reason", "линия не построена")); continue
 		var routes: Array[TrailDefinition] = []
@@ -54,18 +72,27 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, budget_ms := BUDGE
 		for p in canonical.points: local_points.append(p - site.origin_m())
 		d.points = local_points
 		# The world accepts the finished route once. Lab-only base repairs are never called here.
-		var prepared := site.prepare(routes, true, {deadline = deadline})
+		phase = Time.get_ticks_usec()
+		var limits := {earthwork_source = site.surface(), earthwork_input = local_input} if options.get("early_audit", true) else {}
+		var prepared := site.prepare(routes, true, limits)
+		_time(plan, "prepare", phase)
+		for key: String in prepared.timings:
+			plan.stats.phases_ms["prepare_" + key] = float(plan.stats.phases_ms.get("prepare_" + key, 0.0)) + maxf(0, prepared.timings[key])
 		if not prepared.errors.is_empty():
 			_refuse(plan, prepared.errors[0]); continue
+		phase = Time.get_ticks_usec()
 		var earth := audit(site, prepared.heights, local_input)
+		_time(plan, "audit", phase)
 		if not earth.is_empty():
 			_refuse(plan, earth[0]); continue
-		var checked := Validation.measure(prepared.heights, d, func(p: Vector2) -> bool: return not local_input.blocked(p))
+		phase = Time.get_ticks_usec()
+		var checked := Validation.measure(prepared.heights, d, func(p: Vector2) -> bool: return not blocked.call(p))
+		_time(plan, "validation", phase)
 		if not checked.accepted:
 			_refuse(plan, checked.errors[0]); continue
 		var final_ground := func(p: Vector2) -> float: return prepared.heights.ground_at(p.x, p.y)
 		var finish := preload("res://scripts/trails/trail_route_contract.gd").endpoint(d.points[-1], d.tangent_at(d.route_length()),
-			final_ground, func(p: Vector2) -> bool: return not local_input.blocked(p), d.width)
+			final_ground, func(p: Vector2) -> bool: return not blocked.call(p), d.width)
 		if not finish.suitable:
 			_refuse(plan, "нет выката на готовом полотне"); continue
 		var global := StageTrailPlan.to_world(d, site)
@@ -87,6 +114,9 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, budget_ms := BUDGE
 	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < candidates.size()
 	plan.stats.total_ms = Time.get_ticks_msec() - started
 	return plan
+
+static func _time(plan: Dictionary, key: String, since: int) -> void:
+	plan.stats.phases_ms[key] = float(plan.stats.phases_ms.get(key, 0.0)) + (Time.get_ticks_usec() - since) / 1000.0
 
 static func _refuse(plan: Dictionary, reason: String) -> void:
 	plan.stats.rejected[reason] = int(plan.stats.rejected.get(reason, 0)) + 1
@@ -110,10 +140,17 @@ static func context_rect(h: Heightfield, work: Rect2i) -> Rect2i:
 static func audit(site: TrailSite, h: Heightfield, input: GI) -> PackedStringArray:
 	for key: int in h.road_refinement.patches:
 		var patch: Dictionary = h.road_refinement.patches[key]
+		var previous: PackedFloat32Array = site.patches[key].h if site.patches.has(key) else PackedFloat32Array()
+		# Prepared source patches are immutable. An unchanged patch has exactly zero
+		# earthworks; don't resample every old road for every proposed new trail.
+		if not previous.is_empty() and patch.h == previous: continue
 		for z in RoadRefinement.STRIDE:
 			for x in RoadRefinement.STRIDE:
 				var at := Vector2((key % h.world.W) * RoadRefinement.DIV + x, (key / h.world.W) * RoadRefinement.DIV + z) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
-				var delta: float = patch.h[z * RoadRefinement.STRIDE + x] - site.ground_at(at)
+				# A cropped edge can sample a different neighbouring/coarse triangle.
+				# Compare saved vertices directly wherever source patches already exist.
+				var n := z * RoadRefinement.STRIDE + x
+				var delta: float = patch.h[n] - (previous[n] if not previous.is_empty() else site.ground_at(at))
 				if not is_finite(delta): return PackedStringArray(["неконечная высота готового полотна"])
 				if delta < -float(input.earthwork_limits.max_cut) - 0.05 or delta > float(input.earthwork_limits.max_fill) + 0.05:
 					return PackedStringArray(["превышен игровой предел земляных работ"])

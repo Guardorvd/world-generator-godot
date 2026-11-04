@@ -133,7 +133,8 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 		var cx := key % w.W - data.position.x
 		var cz := key / w.W - data.position.y
 		if cx >= 0 and cz >= 0 and cx <= data.size.x - 2 and cz <= data.size.y - 2:
-			site.patches[cz * data.size.x + cx] = (h.road_refinement.patches[key] as Dictionary).duplicate()
+			# Immutable source: preparation replaces changed patch dictionaries on write.
+			site.patches[cz * data.size.x + cx] = h.road_refinement.patches[key]
 	var terrain: Variant = view.get("terrain")
 	if terrain is Dictionary and terrain.w % w.W == 0:
 		var px: int = terrain.w / w.W
@@ -343,9 +344,7 @@ func prepare(routes: Array[TrailDefinition], with_elements := true, limits := {}
 ## Метровая сетка: копия готовых патчей + патчи новых путей. В вершинах новых патчей, где ближе всего прежний путь
 ## или пути нет, остаётся готовая вершина участка: полотно существующих путей не формируется второй раз.
 func _form(h: Heightfield, only: Dictionary) -> RoadRefinement:
-	var ready := {}
-	for key: int in patches:
-		ready[key] = (patches[key] as Dictionary).duplicate() # массивы копируются при записи
+	var ready := patches.duplicate() # unchanged patch dictionaries remain read-only
 	if only.is_empty():
 		return RoadRefinement.from_patches(ready, size.y)
 	var t := Time.get_ticks_usec()

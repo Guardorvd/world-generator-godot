@@ -159,7 +159,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		StageSites.run(w)
 		t = _stage_time(w, "sites", t)
 		# Принятая сеть трасс — до растительности, чтобы окружение видело готовые пути
-		StageTrailPlan.run(w, size)
+		StageTrailPlan.run(w, size, step)
 		_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)

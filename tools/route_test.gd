@@ -554,7 +554,7 @@ func _init() -> void:
 		for seed_text in SEEDS:
 			var t0 := Time.get_ticks_msec()
 			var w := WorldGenerator.generate(seed_text, 512)
-			_check(SelfTest.settlements_connected(w), "%s: все %d поселений связаны (%d мс)" % [seed_text, w.settlements.size(), Time.get_ticks_msec() - t0])
+			_check(SelfTest.settlement_network_valid(w), "%s: связи %d поселений корректны (%d мс)" % [seed_text, w.settlements.size(), Time.get_ticks_msec() - t0])
 			var valid := true
 			var kinds := {}
 			var mountain_forks := 0

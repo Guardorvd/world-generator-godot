@@ -71,6 +71,8 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	if not errors.is_empty(): return errors
 	var started := Time.get_ticks_usec()
 	var w := h.world
+	var earthwork_source: Heightfield = limits.get("earthwork_source")
+	var earthwork_input: Resource = limits.get("earthwork_input")
 	var pin_at := pins(h, definitions)
 	var profiles := {}
 	var shapes := {}
@@ -126,6 +128,9 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			added[key] = patch
 		var hs: PackedFloat32Array = patch.h.duplicate()
 		var colors: PackedColorArray = patch.color.duplicate()
+		var source_vertices := PackedFloat32Array()
+		if earthwork_source != null and earthwork_source.road_refinement.patches.has(key):
+			source_vertices = earthwork_source.road_refinement.patches[key].h
 		# one segment query per route for the whole cell (its vertices lie within the half diagonal of the centre)
 		var center := Vector2((key % w.W) + 1.0, (key / w.W) + 1.0) * GameConfig.TILE
 		var among := {}
@@ -180,6 +185,17 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 						record.vertices += 1
 						stats[id] = record
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
+				# Reject on the actual rounded final vertex, before spending the rest of
+				# the bake on a doomed proposal. The normal final audit still covers the
+				# entire surface, including base formation outside this zone.
+				if earthwork_source != null and earthwork_input != null:
+					var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+					var n := iz * RoadRefinement.STRIDE + ix
+					var delta: float = hs[n] - (source_vertices[n] if not source_vertices.is_empty() else earthwork_source.ground_at(at.x, at.y))
+					if delta < -float(earthwork_input.earthwork_limits.max_cut) - 0.05 or delta > float(earthwork_input.earthwork_limits.max_fill) + 0.05:
+						return PackedStringArray(["превышен игровой предел земляных работ"])
+					if absf(delta) > 0.05 and earthwork_input.blocked(at):
+						return PackedStringArray(["земляные работы затрагивают воду, инфраструктуру или готовый путь"])
 				var shade: float = shades.get(vertex, 0.0)
 				if shade != 0.0:
 					var c := colors[iz * RoadRefinement.STRIDE + ix]
@@ -190,8 +206,10 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	# Publish only after every vertex succeeded; a rejected extension cannot leave half a bake.
 	for key: int in added: r.patches[key] = added[key]
 	for key: int in staged:
-		r.patches[key].h = staged[key]
-		r.patches[key].color = staged_colors[key]
+		var patch: Dictionary = r.patches[key].duplicate()
+		patch.h = staged[key]
+		patch.color = staged_colors[key]
+		r.patches[key] = patch
 	for id: String in profiles:
 		var record: Dictionary = stats.get(id, {})
 		var p: Dictionary = profiles[id]

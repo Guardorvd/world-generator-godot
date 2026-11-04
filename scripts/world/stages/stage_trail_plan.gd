@@ -3,17 +3,21 @@ extends RefCounted
 ## Prepared-world trail network. The shared search/layout and TrailSite preparation are also used by Trail Lab.
 ## Discovery runs once; accepted metre patches are handed to WorldLoader and its normal surface cache.
 const NETWORK_SCRIPT := "res://scripts/trails/trail_world_network.gd"
-const VERSION := 8
+const VERSION := 9
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 
-static func run(w: WorldData, size: int) -> void:
+static func run(w: WorldData, size: int, on_progress := Callable()) -> void:
 	w.trail_plan = {version = VERSION, state = "none", reason = "этап не запускался"}
 	if size <= 0 or w.base_heights == null: return
+	if on_progress.is_valid(): on_progress.call(0.79, "Подготовка поверхности велосипедных трасс")
+	var started := Time.get_ticks_msec()
 	RoadSurface.run(w)
 	var h := w.base_heights.copy()
 	h.finish_paths()
-	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, WorldGenerator.start_rect(w, size))
+	var surface_ms := Time.get_ticks_msec() - started
+	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, WorldGenerator.start_rect(w, size), {on_progress = on_progress})
+	w.trail_plan.stats.base_surface_ms = surface_ms
 	w.trail_plan.version = VERSION
 	# Generation-only handoff, never part of the canonical cache fields; avoid a WorldData reference cycle.
 	h.weaken_world()

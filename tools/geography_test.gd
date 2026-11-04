@@ -75,7 +75,7 @@ func _world_check(w: WorldData) -> void:
 	_check(wet_huts == 0, "%s: дома на суше (%d)" % [w.seed_text, wet_huts])
 	_check(bad_climate == 0, "%s: конечные и допустимые значения климата/уклона (%d)" % [w.seed_text, bad_climate])
 	_check(bad_biomes == 0, "%s: биомы согласованы с сушей и озёрами (%d)" % [w.seed_text, bad_biomes])
-	_check(SelfTest.settlements_connected(w), "%s: поселения связаны" % w.seed_text)
+	_check(SelfTest.settlement_network_valid(w), "%s: связи поселений корректны" % w.seed_text)
 
 
 func _stats(w: WorldData) -> Dictionary:

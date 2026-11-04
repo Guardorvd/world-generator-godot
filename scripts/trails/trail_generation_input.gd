@@ -134,12 +134,26 @@ static func from_world(w: WorldData, surface: Heightfield = null):
 	var result = load("res://scripts/trails/trail_generation_input.gd").new()
 	result.size = Vector2i(w.W, w.H)
 	result.cell_size = GameConfig.TILE
+	result.heights = surface.hv.duplicate() if surface != null and w.outer == null else PackedFloat32Array()
 	result.heights.resize(w.N)
+	if surface != null and w.outer == null:
+		# At cell centres ground_at is exactly the coarse vertex, or vertex zero
+		# of its metre patch. Keep the original clamped sampling at the far edges.
+		if surface.road_refinement != null:
+			for key: int in surface.road_refinement.patches:
+				result.heights[key] = surface.road_refinement.patches[key].h[0]
+		for z in w.H:
+			result.heights[z * w.W + w.W - 1] = surface.ground_at((w.W - 0.5) * GameConfig.TILE, (z + 0.5) * GameConfig.TILE)
+		for x in w.W - 1:
+			result.heights[(w.H - 1) * w.W + x] = surface.ground_at((x + 0.5) * GameConfig.TILE, (w.H - 0.5) * GameConfig.TILE)
 	result.water.resize(w.N)
 	result.rivers = w.river_cells().duplicate()
 	result.forbidden.resize(w.N)
 	for i in w.N:
-		result.heights[i] = surface.ground_at((i % w.W + 0.5) * GameConfig.TILE, (i / w.W + 0.5) * GameConfig.TILE) if surface != null else w.h[i] * GameConfig.HS
+		if surface == null:
+			result.heights[i] = w.h[i] * GameConfig.HS
+		elif w.outer != null:
+			result.heights[i] = surface.ground_at((i % w.W + 0.5) * GameConfig.TILE, (i / w.W + 0.5) * GameConfig.TILE)
 		result.water[i] = int(w.ocean[i] != 0 or w.lake[i] != 0 or w.h[i] <= 0.0)
 	for group in [w.settlements, w.sites]:
 		for place in group:
@@ -172,10 +186,11 @@ func window(corner: Vector2i, side: Vector2i):
 	out.cell_size = cell_size
 	for key in ["heights", "water", "rivers", "forbidden"]:
 		var values = get(key)
-		var cropped = values.duplicate()
-		cropped.resize(side.x * side.y)
+		# Allocate only the requested window, never a temporary full-world copy.
+		var cropped = values.slice(0, 0)
 		for z in side.y:
-			for x in side.x: cropped[z * side.x + x] = values[(corner.y + z) * size.x + corner.x + x]
+			var first := (corner.y + z) * size.x + corner.x
+			cropped.append_array(values.slice(first, first + side.x))
 		out.set(key, cropped)
 	var offset := Vector2(corner) * cell_size
 	var box := Rect2(offset, Vector2(side) * cell_size).grow(32.0)

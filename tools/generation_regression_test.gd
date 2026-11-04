@@ -112,7 +112,7 @@ func _init() -> void:
 		for c in [["Заря-4787", 768], ["Север-1234", 768], ["Туман-4821", 768], ["Янтарь-5150", 512]]:
 			var start := Time.get_ticks_msec()
 			var w := WorldGenerator.generate(c[0], c[1])
-			_check(SelfTest.settlements_connected(w), "%s@%d: все %d поселений связаны" % [c[0], c[1], w.settlements.size()])
+			_check(SelfTest.settlement_network_valid(w), "%s@%d: связи %d поселений корректны" % [c[0], c[1], w.settlements.size()])
 			print("PROFILE ", JSON.stringify({seed = c[0], size = c[1], ms = Time.get_ticks_msec() - start, roads = w.generation_profile}))
 	print("Регрессия генерации: ошибок %d" % fails)
 	quit(1 if fails else 0)

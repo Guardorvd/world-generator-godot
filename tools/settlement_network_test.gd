@@ -71,7 +71,8 @@ func _init() -> void:
 	var start := Time.get_ticks_msec()
 	StageTrails._settlement_trails(w, finder, surface)
 	print("NETWORK ", JSON.stringify({ms = Time.get_ticks_msec() - start, settlements = w.settlements.size(), connected = Check.settlements_connected(w), searches = finder.search_stats(), network = w.generation_profile}))
-	check(w.settlements.size() == 4 and Check.settlements_connected(w), "остаются четыре связанных поселения, непригодный берег не заселяется")
+	check(w.settlements.size() == 8 and not Check.settlements_connected(w) and Check.settlement_network_valid(w),
+		"два безопасных берега сохраняют свои поселения и локальные сети: контракт 9.8")
 	check(w.bridges.is_empty(), "небезопасный мост не создаётся даже ради полной численности")
 	check(w.generation_profile.settlement_attempts <= 7 * StageTrails.SETTLEMENT_NEIGHBORS,
 		"число соседей ограничено линейно числом кандидатов")
@@ -80,8 +81,30 @@ func _init() -> void:
 	var valid := true
 	for s in w.settlements:
 		for other in s.connections:
-			valid = valid and w.settlements.any(func(t: Dictionary) -> bool: return t.i == other and t.connections.has(s.i))
+			valid = valid and w.settlements.any(func(t: SettlementData) -> bool: return t.i == other and t.connections.has(s.i))
 	check(valid, "доски маршрутов ссылаются только на существующие взаимные связи")
+	# Put the same graph in distinct map regions, so far_destination is exercised
+	# with nonempty answers rather than only one-region empty results.
+	var destinations := WorldData.new()
+	for s: SettlementData in w.settlements:
+		var copy := SettlementData.from_dict(s.to_dict())
+		copy.x *= 16
+		copy.y *= 16
+		destinations.settlements.append(copy)
+	var far_count := 0
+	for s: SettlementData in destinations.settlements:
+		var far := destinations.far_destination(WorldData.place_id("settlement", s.x, s.y))
+		far_count += int(not far.is_empty())
+		check(far.is_empty() or (far.x < 56 * 16) == (s.x < 56 * 16), "дальний путь остаётся в достижимой сети")
+	check(far_count == w.settlements.size(), "обе сети действительно предлагают дальние цели")
+	var first: SettlementData = w.settlements[0]
+	var saved := first.connections.duplicate()
+	first.connections.append(w.settlements[4].i)
+	check(not Check.settlement_network_valid(w), "проверка отвергает выдуманную связь через непроходимый пролив")
+	w.settlements[4].connections.append(first.i)
+	check(not Check.settlement_network_valid(w), "взаимная запись без физического пути тоже отвергается")
+	w.settlements[4].connections.erase(first.i)
+	first.connections = saved
 	var counts := {}
 	for seed_num in range(8):
 		var sample := world()
