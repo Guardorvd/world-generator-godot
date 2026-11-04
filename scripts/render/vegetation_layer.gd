@@ -16,6 +16,7 @@ const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолж�
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
+const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
@@ -965,7 +966,10 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small, false, true)
 				if limit > 0:
 					_reveal_node(node, mat)
-				if part == "crown" and not small:
+				if level >= FAR_LOD_NO_SHADOW:
+					# Дальний LOD лежит за плавным краем теней солнца: теневой проход его не рисует.
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				elif part == "crown" and not small:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
 				mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf

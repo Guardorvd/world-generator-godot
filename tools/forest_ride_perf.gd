@@ -12,6 +12,8 @@ var phase := "menu"
 var t := 0.0
 var last_us := 0
 var ms := PackedFloat32Array()
+var draws := PackedFloat32Array()
+var prims := PackedFloat32Array()
 var path := 0.0
 var crashes := 0
 var blocked := 0.0
@@ -51,6 +53,8 @@ func _process(delta: float) -> bool:
 			var now := Time.get_ticks_usec()
 			if t > 1.5:
 				ms.append((now - last_us) / 1000.0)
+				draws.append(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME))
+				prims.append(Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME))
 			last_us = now
 			var p := Vector2(game.player.x, game.player.z)
 			var d := p.distance_to(last)
@@ -120,3 +124,18 @@ func _report(game: GameWorld) -> void:
 	var avg := sum / maxi(1, ms.size())
 	var low1: float = sorted[mini(sorted.size() - 1, int(sorted.size() * 0.99))]
 	print("FPS %.0f, 1%% худших кадров %.1f мс, худший %.1f мс; путь %.0f м, падений %d" % [1000.0 / avg, low1, sorted[sorted.size() - 1], path, crashes])
+	var dsum := 0.0
+	var psum := 0.0
+	for v in draws:
+		dsum += v
+	for v in prims:
+		psum += v
+	print("Вызовов отрисовки в среднем %.0f, треугольников %.0f тыс." % [dsum / maxi(1, draws.size()), psum / maxi(1, prims.size()) / 1000.0])
+	var st: Dictionary = game.vegetation.phase_stats
+	for i in st.names.size():
+		print("  фаза %s: максимум %.2f мс" % [st.names[i], st.max_us[i] / 1000.0])
+	var over := 0
+	for v in ms:
+		if v > 16.7:
+			over += 1
+	print("кадров > 16.7 мс: %d из %d" % [over, ms.size()])
