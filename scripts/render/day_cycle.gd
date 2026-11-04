@@ -169,8 +169,9 @@ func apply(hour: float, time: float) -> void:
 	# При скользящем свете завышенное смещение особенно заметно на земле:
 	# деревья и камни кажутся парящими, особенно при низком разрешении карты теней.
 	light.shadow_normal_bias = lerpf(SHADOW_NORMAL_LOW, SHADOW_NORMAL_HIGH, smoothstep(0.1, 0.45, src.y))
-	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут)
-	var cover: float = s[11] + 0.12 * sin(time / 67.0) + 0.06 * sin(time / 23.0 + 1.0)
+	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
+	var seed_phase := float(posmod(world_seed, 997)) * 0.13
+	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
 	RenderingServer.global_shader_parameter_set("cloud_shadow",
 		Vector4(CLOUD_WIND.x * time, CLOUD_WIND.y * time, CLOUD_SHADOW * sunlight, cover))
 	sky_mat.set_shader_parameter("zenith_color", s[1])
@@ -183,6 +184,7 @@ func apply(hour: float, time: float) -> void:
 	sky_mat.set_shader_parameter("cloud_color", s[10])
 	sky_mat.set_shader_parameter("cloud_time", time)
 	sky_mat.set_shader_parameter("cloud_cover", cover)
+	sky_mat.set_shader_parameter("cloud_seed", seed_phase)
 	sky_mat.set_shader_parameter("star_rot", _clock / 24.0 * TAU)
 	sky_mat.set_shader_parameter("moon_phase", events.phase)
 	# редкие явления видны только ночью и в глубоких сумерках
