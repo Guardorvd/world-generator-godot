@@ -18,6 +18,27 @@ class MemorySource extends "res://scripts/render/chunk_source.gd":
 		stats.reads += 1
 		return groups[layer + 1][key]
 
+class PublicationTerrain extends OuterTerrain:
+	var staged: Array[Vector2i] = []
+	func stage_chunk(key: Vector2i, _built: Dictionary) -> MeshInstance3D:
+		staged.append(key)
+		var node := MeshInstance3D.new()
+		add_child(node)
+		node.visible = false
+		return node
+
+class PublicationPlants extends VegetationLayer:
+	func refresh(_rect: Rect2i) -> void: pass
+
+class PublicationStream extends RegionStream:
+	var saved := {}
+	var shown_revision := 0
+	func _persist(_key: Vector2i) -> void:
+		saved = ledger.duplicate(true)
+	func _show(_key: Vector2i, arrays := {}) -> void:
+		shown_revision = arrays.decor.revision
+		add_child(arrays.decor.node)
+
 var failures := 0
 var checks := 0
 func _initialize() -> void:
@@ -31,10 +52,14 @@ func check(ok: bool, message: String) -> void:
 
 func run() -> void:
 	_test_search_snapshots()
+	_test_join_cache_boundary()
 	await _test_outer_publication()
 	_test_frame_budget()
 	_test_read_queue()
 	_test_prewarm_pressure()
+	_test_delayed_region(false)
+	_test_delayed_region(true)
+	_test_departed_region()
 	print("main_game_polish: ", checks, " checks, ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -55,6 +80,64 @@ func _test_search_snapshots() -> void:
 	check(a.areas() == area_a and b.areas() == area_b, "очистка общего кэша не ломает активный поиск")
 	check(a.setup(site, {width = 4.0}) and a.areas().size() == 49 and same.areas() == area_b,
 		"повторная настройка экземпляра не изменяет опубликованные снимки")
+	TrailRouter.release()
+
+func _road_site(cause := TrailRouter.Block.PATH) -> TrailSite:
+	var w := WorldData.new()
+	w.W = 32; w.H = 32; w.N = w.W * w.H
+	var distance := PackedFloat32Array()
+	distance.resize(w.N)
+	distance.fill(0.0 if cause == TrailRouter.Block.WATER else 100.0)
+	w.dist_water = distance
+	var h := Heightfield.new()
+	h.world = w
+	h.hv.resize(w.N)
+	h.hv.fill(100)
+	h.hv_raw = h.hv
+	h.water_level.resize(w.N)
+	h.water_level.fill(-INF)
+	if cause == TrailRouter.Block.WATER: h.water_level[16 * w.W + 16] = 100
+	var site := TrailSite.new()
+	site.work = Rect2i(0, 0, w.W, w.H)
+	site._template = h
+	site.trails = [{kind = "road", pts = [{x = 16.0, y = 2.0, w = 1.0}, {x = 16.0, y = 30.0, w = 1.0}]}]
+	if cause == TrailRouter.Block.STRUCTURE:
+		site.structures = [{ax = 64.0, az = 48.0, bx = 64.0, bz = 80.0, half = 2.0}]
+	return site
+
+func _test_join_cache_boundary() -> void:
+	TrailRouter.release()
+	var site := _road_site()
+	var join := Vector2(64, 64)
+	var reused := TrailRouter.new()
+	check(reused.setup(site, {width = 3.0, joins = [join]}) and reused.blocked(join) == TrailRouter.Block.FREE,
+		"явное примыкание разрешает подойти к дороге")
+	check(reused.setup(site, {width = 4.0}), "смена ширины готовит новую базовую сетку")
+	var warm := TrailRouter.new()
+	check(warm.setup(site, {width = 4.0}) and warm.stats.prepare_reused, "следующий поиск использует общий кэш площадки")
+	var center := warm._node_at(join)
+	check(warm._block[center] == TrailRouter.Block.PATH and warm._cost[center] == INF,
+		"прошлое примыкание не открывает дорогу в общем кэше")
+	var areas := warm.areas()
+	var left := areas[warm._node_at(Vector2(40, 64))]
+	var right := areas[warm._node_at(Vector2(88, 64))]
+	check(left >= 0 and right >= 0 and left != right, "разрешение прошлого запроса не соединяет области по разные стороны дороги")
+	TrailRouter.release()
+	var cold := TrailRouter.new()
+	cold.setup(site, {width = 4.0})
+	check(warm._cost == cold._cost and warm._block == cold._block and areas == cold.areas(),
+		"холодный и тёплый поиск видят одинаковые препятствия независимо от истории запросов")
+	var joining := TrailRouter.new()
+	joining.setup(site, {width = 4.0, joins = [join]})
+	var plain := TrailRouter.new()
+	plain.setup(site, {width = 4.0})
+	check(joining._cost[center] == 1.0 and plain._cost[center] == INF,
+		"разрешение примыкания меняет только стоимость своего поиска")
+	for cause: int in [TrailRouter.Block.WATER, TrailRouter.Block.STRUCTURE]:
+		var protected := TrailRouter.new()
+		protected.setup(_road_site(cause), {joins = [join]})
+		check(protected.blocked(join) == cause and protected._cost[protected._node_at(join)] == INF,
+			"примыкание не отменяет защиту: %s" % TrailRouter.BLOCK_NAMES[cause])
 	TrailRouter.release()
 
 func _queue_result(terrain: OuterTerrain, key: Vector2i, built: Dictionary) -> void:
@@ -154,3 +237,54 @@ func _test_prewarm_pressure() -> void:
 		"повторные и пустые точки прогрева не дублируют чтения и память")
 	source.close()
 	check(budget.snapshot().reserved_bytes == 0, "закреплённые блоки освобождаются даже при тесном бюджете")
+
+func _publication_fixture(expired: bool) -> PublicationStream:
+	var stream := PublicationStream.new()
+	stream.world = WorldData.new()
+	stream.world.outer = OuterLand.new()
+	var terrain := PublicationTerrain.new()
+	terrain.land = stream.world.outer
+	stream.add_child(terrain)
+	stream.terrain = terrain
+	stream.vegetation = PublicationPlants.new()
+	stream.add_child(stream.vegetation)
+	stream.ledger = {regions = {}, settlements = []}
+	stream._key = Vector2i.ZERO
+	var plan := {state = "found", verdict = "accepted", stats = {}, definition = {id = "prepared_route"}}
+	var accepted := {regions = {Vector2i.ZERO: {rect = Rect2i(0, 0, 2, 2), fields = {revision = 2}, trail_plan = plan}}, settlements = []}
+	var baseline := accepted.duplicate(true)
+	baseline.regions[Vector2i.ZERO].fields.revision = 1
+	var chunks := {Vector2i.ZERO: {fields = {revision = 2}}, Vector2i.ONE: {fields = {revision = 2}}}
+	var fallback := chunks.duplicate(true)
+	for key: Vector2i in fallback: fallback[key].fields.revision = 1
+	# Старые метаданные с истёкшим сроком воспроизводят паузу без реального ожидания.
+	var done := {ready = true, trail = plan, ledger = accepted, chunks = chunks,
+		decor = {node = Node3D.new(), revision = 2}, fallback_ledger = baseline, fallback_chunks = fallback,
+		trail_started = Time.get_ticks_msec() - 20000, trail_deadline = 0 if expired else Time.get_ticks_msec() + 100000}
+	stream._publishing = {done = done, pending_keys = chunks.keys(), nodes = {}}
+	return stream
+
+func _test_delayed_region(expire_during_upload: bool) -> void:
+	var stream := _publication_fixture(not expire_during_upload)
+	var terrain: PublicationTerrain = stream.terrain
+	stream.update(0, 0)
+	check(stream.ledger.regions.is_empty() and stream.saved.is_empty(), "частичная загрузка мешей не публикует область")
+	if expire_during_upload: stream._publishing.done.trail_deadline = 0
+	for tick in 4:
+		if stream._publishing.is_empty(): break
+		stream.update(0, 0)
+	var entry: Dictionary = stream.ledger.regions[Vector2i.ZERO]
+	check(entry.trail_plan.state == "found" and entry.fields.revision == 2,
+		"готовая трасса сохраняется после ожидания %s" % ("между загрузками мешей" if expire_during_upload else "до первой загрузки"))
+	check(terrain.staged.size() == 2 and terrain.land.chunks[Vector2i.ZERO].revision == 2,
+		"готовые меши не удаляются и не загружаются повторно из-за прошедшего времени")
+	check(stream.shown_revision == entry.fields.revision and stream.saved.regions[Vector2i.ZERO].trail_plan.state == "found",
+		"декор, поверхность и сохраняемый результат остаются согласованными")
+	stream.free()
+
+func _test_departed_region() -> void:
+	var stream := _publication_fixture(true)
+	stream.update(RegionStream.REACH * 10, 0)
+	check(stream._publishing.is_empty() and stream.ledger.regions.is_empty() and stream.saved.is_empty(),
+		"уход игрока по-прежнему отменяет публикацию ненужной области")
+	stream.free()

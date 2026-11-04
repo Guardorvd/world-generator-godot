@@ -336,8 +336,15 @@ func set_goal(place: Dictionary) -> void:
 		big_map.queue_redraw()
 
 
-## Trail starts are map destinations too, but do not belong to the quest-place catalogue.
-func restore_goal(key: String) -> void:
+static func marker_goal(at: Vector2) -> Dictionary:
+	return {key = "marker", kind = "marker", name = "Метка", x = at.x, y = at.y}
+
+
+## Именованные места восстанавливаются по каталогу, свободная метка — по координатам в клетках.
+func restore_goal(key: String, marker_position := Vector2.INF) -> void:
+	if key == "marker":
+		set_goal(marker_goal(marker_position) if marker_position.is_finite() else {})
+		return
 	if not key.is_empty():
 		for place: Dictionary in all_places() + trail_places():
 			if place.key == key:
@@ -990,7 +997,7 @@ class BigMap extends Control:
 				var frame := _frame()
 				var cell: Vector2 = (event.position - frame[0]) / float(frame[2])
 				var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
-				hud.set_goal({} if same else {key = "marker", kind = "marker", name = "Метка", x = cell.x, y = cell.y})
+				hud.set_goal({} if same else Hud.marker_goal(cell))
 			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
 				hud.ask_travel(pl)
 			accept_event()

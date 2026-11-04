@@ -192,12 +192,8 @@ func update(x: float, z: float) -> bool:
 		_cancelled = true
 		_cancel.unlock()
 	if not _publishing.is_empty():
-		if _publishing.done.trail.state == "found" and Time.get_ticks_msec() >= _publishing.done.trail_deadline:
-			for node: MeshInstance3D in _publishing.nodes.values():
-				if node != null: node.queue_free()
-			_drop_late_trail(_publishing.done, _key)
-			_publishing.nodes = {}
-			_publishing.pending_keys = _publishing.done.chunks.keys()
+		# Результат подготовки уже окончательный. Пауза и очередь GPU не меняют
+		# его содержимое; готовые части остаются скрыты до общей публикации.
 		if _distance(_key, p) > REACH:
 			for node: MeshInstance3D in _publishing.nodes.values():
 				if node != null: node.queue_free()
@@ -382,7 +378,7 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 					var chunk := Vector2i(cx, cy)
 					base_chunks[chunk] = terrain_source._build(chunk, baseline)
 		var mesh_ms := Time.get_ticks_msec() - trail_started
-		# Reserve the final second for incremental GPU staging and publication; it is never per attempt.
+		# Общий остаток на поиск; последние две секунды оставлены на окончательные CPU-меши и декор.
 		done.trail = Regions.prepare_trails(w, key, done.ledger, stop, maxi(0, deadline - Time.get_ticks_msec() - 2000))
 		if stop.is_valid() and stop.call(): return {cancelled = true}
 		if terrain_source != null:
@@ -409,15 +405,10 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 			if stop.is_valid() and stop.call():
 				done.decor.node.free()
 				return {cancelled = true}
-		if done.trail.state == "found":
-			done.fallback_ledger = baseline
-			done.fallback_chunks = base_chunks
-			if Time.get_ticks_msec() >= deadline - 1000: _drop_late_trail(done, key)
 		done.trail.stats.mesh_ms = mesh_ms
 		done.trail.stats.worker_ms = Time.get_ticks_msec() - trail_started
 		done.trail.stats.budget_ms = preload("res://scripts/world/region_trails.gd").BUDGET_MS
 		done.trail_started = trail_started
-		done.trail_deadline = deadline
 	done.dropped_rivers = dropped
 	done.roads = roads
 	if done.ready:
@@ -920,17 +911,3 @@ func _persist(key: Vector2i) -> void:
 	_save_task = WorkerThreadPool.add_task(func() -> void:
 		var err := save(dir, accepted, key)
 		if err != OK: push_warning("Region save failed: %s (%d)" % [key, err]), false, "Запись области")
-
-
-static func _drop_late_trail(done: Dictionary, key: Vector2i) -> void:
-	var plan: Dictionary = done.trail.duplicate()
-	plan.state = "none"
-	plan.verdict = "budget"
-	plan.reason = "общий срок подготовки и публикации комплекта исчерпан"
-	for field: String in ["definition", "access", "zone"]: plan.erase(field)
-	done.ledger = done.fallback_ledger
-	done.ledger.regions = done.ledger.regions.duplicate()
-	done.ledger.regions[key] = done.ledger.regions[key].duplicate()
-	done.ledger.regions[key].trail_plan = plan
-	done.chunks = done.fallback_chunks
-	done.trail = plan

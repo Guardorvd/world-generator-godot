@@ -51,6 +51,10 @@ static func valid(d: Dictionary) -> bool:
 		return false
 	if d.has("lamp") and not d.lamp is bool:
 		return false
+	# Необязательное поле сохраняет совместимость с прежними файлами формата 1.
+	if d.has("goal_marker"):
+		if d.goal != "marker" or not d.goal_marker is Vector2 or not d.goal_marker.is_finite():
+			return false
 	for key: Variant in d.visited:
 		if not key is String or d.visited[key] != true:
 			return false

@@ -356,12 +356,19 @@ func scene_checks(services: ServiceScope, full: Dictionary, terrain: Dictionary,
 	var spawn := PlayerState.spawn(loaded.world, loaded.heights)
 	var saved := {player = {x = spawn.x, z = spawn.z, feet = spawn.feet, yaw = 0.0, pitch = 0.0, hour = 9.0},
 		bike = {x = spawn.x, z = spawn.z, y = spawn.feet, heading = 0.0, riding = false}, visited = {},
-		quest = preload("res://scripts/game/quests.gd").new().save_state(), goal = ""}
+		quest = preload("res://scripts/game/quests.gd").new().save_state(), goal = "marker", goal_marker = Vector2(73.25, 72.5)}
 	var reads: int = loaded.chunk_source.stats.reads
 	var game: GameWorld = load("res://scenes/game_world.tscn").instantiate()
 	root.add_child(game)
 	game.start(loaded, hud, saved, services)
 	game.set_paused(true)
+	check(hud.goal.get("kind") == "marker" and Vector2(hud.goal.get("x", 0), hud.goal.get("y", 0)) == saved.goal_marker,
+		"real world startup restores a free map target with its saved coordinates")
+	hud.set_goal({key = "marker", kind = "marker", name = "Метка", x = 74.5, y = 72.25})
+	var marker_state := game.save_state()
+	check(marker_state.goal == "marker" and marker_state.get("goal_marker") == Vector2(74.5, 72.25),
+		"saving the real game keeps free-target coordinates instead of only the generic marker ID")
+	hud.set_goal({})
 	check(game.chunk_source.stats.reads == reads and game.terrain_stream.nodes.size() == terrain.size(), "real scene start creates nodes/uploads without synchronous disk reads or repairs")
 	check(game.chunk_source.stats.upload_bytes > 0, "source records publication bytes and elapsed upload time")
 	await _test_travel_pause(game)

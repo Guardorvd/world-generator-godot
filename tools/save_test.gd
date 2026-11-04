@@ -61,6 +61,7 @@ func run() -> void:
 	bad = state.duplicate(true)
 	bad.quest.active.step = 999
 	check(Saves.write_slot(bad) == ERR_INVALID_DATA, "invalid quest step rejected")
+	_test_marker_save(state)
 	var main: Node = load("res://scenes/main.tscn").instantiate()
 	main.set_script(null)
 	root.add_child(main)
@@ -100,6 +101,28 @@ func run() -> void:
 	DirAccess.remove_absolute(Saves.dir)
 	print("SAVE TEST failures: ", failed)
 	quit(1 if failed else 0)
+
+func _test_marker_save(state: Dictionary) -> void:
+	var marker := state.duplicate(true)
+	marker.goal = "marker"
+	marker.goal_marker = Vector2(-32.5, 412.25) # клеточные координаты, в том числе вне стартового плана
+	check(Saves.write_slot(marker, "manual") == OK, "free map target writes through the existing save container")
+	var loaded: Dictionary = Saves.read_slot(marker.seed, "manual").data
+	var hud := Hud.new()
+	hud.restore_goal(loaded.goal, loaded.get("goal_marker", Vector2.INF))
+	check(hud.goal == Hud.marker_goal(marker.goal_marker), "free map target restores its exact coordinates after a disk round trip")
+	hud.restore_goal("marker")
+	check(hud.goal.is_empty(), "legacy marker without stored coordinates clears without inventing a destination")
+	hud.restore_goal("")
+	check(hud.goal.is_empty() and Saves.valid(state), "empty goal and legacy named-place save remain valid")
+	for invalid: Variant in [Vector2(NAN, 1), Vector2(1, INF), "32,64"]:
+		var bad := marker.duplicate(true)
+		bad.goal_marker = invalid
+		check(Saves.write_slot(bad, "manual") == ERR_INVALID_DATA, "invalid map-target coordinates are rejected: %s" % str(invalid))
+	var orphan := state.duplicate(true)
+	orphan.goal_marker = marker.goal_marker
+	check(not Saves.valid(orphan), "coordinates cannot silently attach to a different named target")
+	hud.free()
 
 func integration(main: Node) -> void:
 	print("Integration: generating one world")

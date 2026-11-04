@@ -103,7 +103,6 @@ func run() -> void:
 			out.decor = RegionStream.build_decor(w, view, key, source.regions[key], material)
 			out.trail.stats.decor_ms = Time.get_ticks_msec() - t
 			out.trail_started = started
-			out.trail_deadline = started + RegionalTrails.BUDGET_MS
 			out.ready = true)
 		while not WorkerThreadPool.is_task_completed(task):
 			var t := Time.get_ticks_usec()

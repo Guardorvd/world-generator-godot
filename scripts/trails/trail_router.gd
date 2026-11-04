@@ -292,7 +292,7 @@ func _validate_request() -> String:
 	return ""
 
 
-## Сетка узлов через GRID м по рабочему прямоугольнику; запреты — по точному blocked() в узле.
+## Общая сетка площадки: только геометрия, без разрешений примыкания отдельного запроса.
 func _setup_grid() -> void:
 	var work := _site.work
 	_origin = Vector2(work.position) * GameConfig.TILE
@@ -326,7 +326,7 @@ func _setup_grid() -> void:
 			var i := z * _w + x
 			var p := _node_point(i)
 			_raw[i] = _ground_h.ground_at(p.x, p.y)
-			_block[i] = blocked(p)
+			_block[i] = _base_blocked(p)
 			_cost[i] = 1.0 if _block[i] == Block.FREE else INF
 	_average_ground()
 
@@ -359,6 +359,13 @@ func _free_node(p: Vector2) -> int:
 ## Почему ось трассы не может пройти через точку p (локальные метры): граница, вода, сооружение, путь или FREE.
 ## Полотно (полуширина) и защитные зоны учитываются здесь, поэтому достаточно проверять ось.
 func blocked(p: Vector2) -> int:
+	var cause := _base_blocked(p)
+	return Block.FREE if cause == Block.PATH and _near_join(p) else cause
+
+
+## Базовые препятствия площадки. Этот расчёт не читает состояние примыканий запроса:
+## его результат безопасно хранить в общем кэше и использовать после других поисков.
+func _base_blocked(p: Vector2) -> int:
 	if p.x < _lo.x or p.y < _lo.y or p.x > _hi.x or p.y > _hi.y: return Block.BOUNDS
 	var w := _ground_h.world
 	var tile := GameConfig.TILE
@@ -378,7 +385,6 @@ func blocked(p: Vector2) -> int:
 	for k: int in _path_cells.get(Vector2i((p / 8.0).floor()), []):
 		var seg: Dictionary = _paths[k]
 		if Grid.segment_dist(p.x, p.y, seg.a.x, seg.a.y, seg.b.x, seg.b.y) < seg.reach:
-			if _near_join(p): break
 			return Block.PATH
 	return Block.FREE
 

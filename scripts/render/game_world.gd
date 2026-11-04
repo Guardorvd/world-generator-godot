@@ -402,7 +402,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		hud.visited = saved.visited.duplicate()
 		quests.restore_state(saved.quest, places)
 		_quest_changed()
-		hud.restore_goal(saved.goal)
+		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)
 	photo.wanted_reach = Quests.SHOT_REACH
 	for s: SettlementData in world.settlements:
@@ -516,12 +516,16 @@ static func can_restore(saved: Dictionary, w: WorldData, settings: GameSettings 
 
 
 func save_state() -> Dictionary:
-	return {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
+	var state := {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		goal = hud.goal.get("key", ""),
 		lamp = bike_view.lamp_on(),
 		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour},
 		bike = {x = bike.x, z = bike.z, y = bike.y, heading = bike.heading, riding = bike.riding}}
+	# ID свободной метки общий: её положение отсутствует в каталоге мест мира.
+	if hud.goal.get("kind") == "marker":
+		state.goal_marker = Vector2(hud.goal.x, hud.goal.y)
+	return state
 
 
 ## Время шага запуска в load_timings (мс); возвращает новую отметку
