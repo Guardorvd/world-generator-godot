@@ -153,9 +153,14 @@ func fast_water() -> Object:
 		_fast_water = Grid.fast_grid()
 		if _fast_water == null:
 			return null
-		_fast_water.SetWater(world.W, world.H, TILE, HS, GameConfig.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
-			world.lake, world.filled)
-	_fast_water.SetGround(hv)
+		if not _fast_water.SetWater(world.W, world.H, TILE, HS, GameConfig.LAKE_DROP, _seg_pts, _pair_cells, _pair_segs,
+				world.lake, world.filled):
+			push_error("FastGrid water input: " + _fast_water.WaterSetupError())
+			_fast_water = null
+			return null
+	if not _fast_water.SetGround(hv):
+		push_error("FastGrid ground input: " + _fast_water.WaterSetupError())
+		return null
 	return _fast_water
 
 

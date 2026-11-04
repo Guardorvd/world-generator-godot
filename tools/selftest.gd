@@ -4,7 +4,7 @@ extends SceneTree
 ## tools/selftest_reference.json. До версии 1.7 эталон был снят с JS-версии 1.2; с 1.8 генерация
 ## намеренно другая; текущий эталон обновлён для лесов 6.3, с 4.3 в нём ещё покрытие путей и игровой
 ## рельеф с полотном (road_surface, road_bed). Проверяются взаимность и физическая
-## связность объявленных связей; с 9.8 отдельные дорожные сети допустимы. Запуск из папки проекта:
+## связность объявленных связей и доступность всех итоговых поселений. Запуск из папки проекта:
 ##   godot --headless --script res://tools/selftest.gd
 ## С ключом -- --print печатает свежие хеши вместо сравнения (так обновляется эталон).
 ## С ключом -- --gdscript проверяет генерацию без C# (FastGrid.cs), как в обычной сборке Godot.
@@ -48,9 +48,10 @@ static func settlements_connected(w: WorldData) -> bool:
 	return true
 
 
-## Since 9.8 separate safe networks are intentional. Every advertised connection
-## must still be reciprocal, refer to a live settlement and have a physical path.
+## Every published village must be reachable in the confirmed connection graph.
+## Disconnected roads may remain, but cannot advertise unreachable villages.
 static func settlement_network_valid(w: WorldData) -> bool:
+	if w.settlements.is_empty(): return true
 	var by_cell := {}
 	for s: SettlementData in w.settlements:
 		if s.i < 0 or s.i >= w.N or by_cell.has(s.i): return false
@@ -81,7 +82,15 @@ static func settlement_network_valid(w: WorldData) -> bool:
 		for other: int in s.connections:
 			if other == s.i or not by_cell.has(other): return false
 			if not by_cell[other].connections.has(s.i) or components[s.i] != components[other]: return false
-	return true
+	var reached := {w.settlements[0].i: true}
+	var graph_queue: Array[int] = [w.settlements[0].i]
+	while not graph_queue.is_empty():
+		var cell: int = graph_queue.pop_back()
+		for other: int in by_cell[cell].connections:
+			if not reached.has(other):
+				reached[other] = true
+				graph_queue.append(other)
+	return reached.size() == w.settlements.size() and settlements_connected(w)
 
 
 static func fingerprint(w: WorldData) -> Dictionary:

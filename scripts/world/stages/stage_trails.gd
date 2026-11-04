@@ -584,6 +584,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	_second_ways(w, finder, paths, road_cost, state, step)
 	w.generation_profile.secondary_roads_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	finder.search_budget = -1
+	# DSU describes only the primary skeleton. Secondary ways may join its
+	# components: decide publication on the final confirmed connections,
+	# after all those opportunities, without deleting any safe road or structure.
+	_retain_connected_settlements(w, paths)
+	w.generation_profile.settlement_rejected = n - w.settlements.size()
 	for s: SettlementData in w.settlements:
 		s.connections = []
 	for e: Array in paths:
@@ -600,6 +605,32 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.checkpoints = state.get("checkpoints", 0)
 	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
 	w.generation_profile.restores = state.get("restores", 0)
+
+
+## Keep the starting settlement and villages reached by confirmed primary OR
+## secondary paths. A 2D mask contact alone cannot prove access at an overpass.
+static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
+	if w.settlements.is_empty(): return
+	var groups: Array = range(w.settlements.size())
+	for edge: Array in paths:
+		var a := _group(groups, edge[0])
+		var b := _group(groups, edge[1])
+		groups[maxi(a, b)] = mini(a, b)
+	var root := _group(groups, 0)
+	var keep: Array[SettlementData] = []
+	var remap := {}
+	for index in w.settlements.size():
+		if _group(groups, index) == root:
+			remap[index] = keep.size()
+			keep.append(w.settlements[index])
+	var kept_paths: Array = []
+	for edge: Array in paths:
+		if remap.has(edge[0]) and remap.has(edge[1]):
+			edge[0] = remap[edge[0]]
+			edge[1] = remap[edge[1]]
+			kept_paths.append(edge)
+	paths.assign(kept_paths)
+	w.settlements = keep
 
 
 ## Ревью дорожной сети 29.10, шаг 1 (поиск не одобряет то, что построитель не сделает): мост охватывает не больше

@@ -52,14 +52,37 @@ func budget_check(fast: bool) -> void:
 	check(finder.find_path(cost, 0, 1).is_empty(), "бюджет не возобновляется при следующем соседе")
 	finder.search_budget = -1
 	check(not finder.find_path(cost, 0, 24 * 16 - 1).is_empty(), "новый поиск после ограничения работает")
+	finder.release()
+
+
+func component_checks() -> void:
+	var w := world()
+	var original := w.settlements.duplicate()
+	w.path_mask.fill(3) # A projected mask alone must not turn separate edges into a connection.
+	var paths: Array = [[4, 6, PackedInt32Array(), true, 1.0], [0, 2, PackedInt32Array(), true, 1.0],
+		[2, 6, PackedInt32Array(), false, 1.0]]
+	var before := var_to_bytes([w.h, w.trails, w.bridges, w.tunnels, w.path_mask])
+	StageTrails._retain_connected_settlements(w, paths)
+	check(w.settlements == [original[0], original[2], original[4], original[6]], "вторичная тропа сохраняет обе группы, изолированные кандидаты исключаются")
+	check(paths.map(func(e: Array) -> Vector2i: return Vector2i(e[0], e[1])) == [Vector2i(2, 3), Vector2i(0, 1), Vector2i(1, 3)], "индексы всех сохранённых основных и вторичных связей перенумерованы")
+	check(before == var_to_bytes([w.h, w.trails, w.bridges, w.tunnels, w.path_mask]), "отбор поселений не удаляет маршруты, сооружения или географию")
+	var groups: Array = [0, 0, 1, 2, 4, 4]
+	check(StageTrails._group(groups, 3) == 0 and StageTrails._group(groups, 5) == 4, "DSU находит корни через цепочки родителей и различает компоненты")
+	var isolated := world()
+	var only: SettlementData = isolated.settlements[0]
+	var disconnected: Array = [[2, 4, PackedInt32Array(), true, 1.0], [4, 6, PackedInt32Array(), false, 1.0]]
+	StageTrails._retain_connected_settlements(isolated, disconnected)
+	check(isolated.settlements == [only] and disconnected.is_empty(), "изолированное стартовое поселение не объявляет доступными чужие группы")
 
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
 	budget_check(true)
 	budget_check(false)
+	component_checks()
 	Grid.allow_fast = true
 	Pathfinder.profile_searches = true
 	var w := world()
+	var unreachable: SettlementData = w.settlements[4]
 	var surface := Heightfield.new(w, false)
 	var heights := surface.hv.duplicate()
 	for i in w.N: heights[i] /= GameConfig.TILE
@@ -71,8 +94,8 @@ func _init() -> void:
 	var start := Time.get_ticks_msec()
 	StageTrails._settlement_trails(w, finder, surface)
 	print("NETWORK ", JSON.stringify({ms = Time.get_ticks_msec() - start, settlements = w.settlements.size(), connected = Check.settlements_connected(w), searches = finder.search_stats(), network = w.generation_profile}))
-	check(w.settlements.size() == 8 and not Check.settlements_connected(w) and Check.settlement_network_valid(w),
-		"два безопасных берега сохраняют свои поселения и локальные сети: контракт 9.8")
+	check(w.settlements.size() == 4 and Check.settlements_connected(w) and Check.settlement_network_valid(w),
+		"итоговые поселения доступны от старта, непроходимый берег не объявляется доступным")
 	check(w.bridges.is_empty(), "небезопасный мост не создаётся даже ради полной численности")
 	check(w.generation_profile.settlement_attempts <= 7 * StageTrails.SETTLEMENT_NEIGHBORS,
 		"число соседей ограничено линейно числом кандидатов")
@@ -96,15 +119,18 @@ func _init() -> void:
 		var far := destinations.far_destination(WorldData.place_id("settlement", s.x, s.y))
 		far_count += int(not far.is_empty())
 		check(far.is_empty() or (far.x < 56 * 16) == (s.x < 56 * 16), "дальний путь остаётся в достижимой сети")
-	check(far_count == w.settlements.size(), "обе сети действительно предлагают дальние цели")
+	check(far_count == w.settlements.size(), "достижимая сеть действительно предлагает дальние цели")
 	var first: SettlementData = w.settlements[0]
 	var saved := first.connections.duplicate()
-	first.connections.append(w.settlements[4].i)
+	first.connections.append(unreachable.i)
 	check(not Check.settlement_network_valid(w), "проверка отвергает выдуманную связь через непроходимый пролив")
-	w.settlements[4].connections.append(first.i)
+	unreachable.connections.append(first.i)
+	w.settlements.append(unreachable)
 	check(not Check.settlement_network_valid(w), "взаимная запись без физического пути тоже отвергается")
-	w.settlements[4].connections.erase(first.i)
+	w.settlements.pop_back()
+	unreachable.connections.erase(first.i)
 	first.connections = saved
+	finder.release()
 	var counts := {}
 	for seed_num in range(8):
 		var sample := world()

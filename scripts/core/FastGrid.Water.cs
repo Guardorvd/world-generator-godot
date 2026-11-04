@@ -17,10 +17,35 @@ public partial class FastGrid
 	private int[] _cellSeg = Array.Empty<int>();
 	private byte[] _lake = Array.Empty<byte>();
 	private float[] _filled = Array.Empty<float>();
+	private bool _waterValid, _groundValid;
+	private string _waterError = "Water and ground have not been configured";
+
+	public bool WaterReady() => _waterValid && _groundValid;
+	public string WaterSetupError() => _waterError;
+	private bool WaterFailure(string reason) { _waterError = reason; return false; }
+	private bool RequireWater() => WaterReady() || WaterFailure("Complete SetWater and SetGround successfully before querying the surface");
+	private static bool Finite(double a, double b) => double.IsFinite(a) && double.IsFinite(b);
 
 	/// <summary>Ленты рек по клеткам: пары (клетка, отрезок) в любом порядке, как Heightfield._river_cells.</summary>
-	public void SetWater(int w, int h, double tile, double hs, double lakeDrop, float[] segPts, int[] pairCells, int[] pairSegs, byte[] lake, float[] filled)
+	public bool SetWater(int w, int h, double tile, double hs, double lakeDrop, float[] segPts, int[] pairCells, int[] pairSegs, byte[] lake, float[] filled)
 	{
+		// A failed replacement must never expose an earlier world's surface.
+		_waterValid = _groundValid = false;
+		_surfHv = Array.Empty<float>();
+		long count = (long)w * h;
+		if (w < 2 || h < 2 || count >= int.MaxValue || !Finite(tile, hs) || tile <= 0 || hs <= 0 || !Finite(tile * w, tile * h) || !double.IsFinite(lakeDrop) || lakeDrop < 0)
+			return WaterFailure("Invalid water grid dimensions or scale");
+		if (segPts == null || pairCells == null || pairSegs == null || lake == null || filled == null || lake.Length != count || filled.Length != count)
+			return WaterFailure("Missing or incomplete water arrays");
+		if (segPts.Length % 12 != 0 || pairCells.Length != pairSegs.Length)
+			return WaterFailure("Incomplete river segment or mismatched river index pairs");
+		foreach (float value in segPts)
+			if (!float.IsFinite(value)) return WaterFailure("Non-finite river vertex");
+		foreach (float value in filled)
+			if (!float.IsFinite(value)) return WaterFailure("Non-finite filled height");
+		for (int k = 0; k < pairCells.Length; k++)
+			if ((uint)pairCells[k] >= (uint)count || (uint)pairSegs[k] >= (uint)(segPts.Length / 12))
+				return WaterFailure("River index references a cell or segment outside the configured arrays");
 		_sw = w;
 		_sh = h;
 		_tile = tile;
@@ -38,10 +63,24 @@ public partial class FastGrid
 		var fill = (int[])_cellStart.Clone();
 		for (int k = 0; k < pairCells.Length; k++)
 			_cellSeg[fill[pairCells[k]]++] = pairSegs[k];
+		_waterValid = true;
+		_waterError = "";
+		return true;
 	}
 
 	/// <summary>Высоты hv: рельеф меняется после выемок туннелей, поэтому передаётся перед каждым использованием.</summary>
-	public void SetGround(float[] hv) => _surfHv = hv;
+	public bool SetGround(float[] hv)
+	{
+		_groundValid = false;
+		if (!_waterValid || hv == null || hv.Length != (long)_sw * _sh)
+			return WaterFailure("Ground requires a configured water grid and exactly W*H heights");
+		foreach (float value in hv)
+			if (!float.IsFinite(value)) return WaterFailure("Non-finite ground height");
+		_surfHv = hv;
+		_groundValid = true;
+		_waterError = "";
+		return true;
+	}
 
 	private double Ground(double x, double z)
 	{
@@ -117,6 +156,12 @@ public partial class FastGrid
 	/// без учёта мостов (с мостами глубина только меньше): кандидаты для полной проверки.</summary>
 	public int[] DeepFords(int[] cells, double limit)
 	{
+		if (!RequireWater()) return Array.Empty<int>();
+		if (cells == null || !double.IsFinite(limit) || limit < 0)
+		{ WaterFailure("Invalid ford cells or depth limit"); return Array.Empty<int>(); }
+		foreach (int cell in cells)
+			if ((uint)cell >= (uint)(_sw * _sh))
+			{ WaterFailure("Ford cell outside the water grid"); return Array.Empty<int>(); }
 		var outCells = new System.Collections.Generic.List<int>();
 		ReadOnlySpan<double> offsets = stackalloc double[] { -0.4, 0.0, 0.4 };
 		foreach (int i in cells)
@@ -135,8 +180,13 @@ public partial class FastGrid
 	/// не уходит в воду глубже 0,3 м и не круче maxGrade вдоль и maxCross поперёк.</summary>
 	public bool RoadSegment(double ax, double ay, double bx, double by, double aw, double maxGrade, double maxCross)
 	{
+		if (!RequireWater()) return false;
+		if (!Finite(ax, ay) || !Finite(bx, by) || !Finite(aw, maxGrade) || !double.IsFinite(maxCross) || aw < 0 || maxGrade < 0 || maxCross < 0)
+			return WaterFailure("Invalid road segment coordinates or limits");
 		double dx = bx - ax, dy = by - ay;
 		double length = Math.Sqrt(dx * dx + dy * dy);
+		if (!double.IsFinite(length) || length > (double)_sw + _sh || length / 0.1 >= int.MaxValue)
+			return WaterFailure("Road segment exceeds supported sampling range");
 		if (length < 0.00001)
 			return true;
 		int steps = Math.Max(1, (int)Math.Ceiling(length / 0.1));
@@ -151,6 +201,7 @@ public partial class FastGrid
 				double t = (double)k / steps;
 				double x = (ax + dx * t + nx * side) * _tile;
 				double z = (ay + dy * t + ny * side) * _tile;
+				if (!Finite(x, z)) return WaterFailure("Road sampling coordinates overflow");
 				double h = Ground(x, z);
 				if (Depth(x, z) > 0.3 || k > 0 && Math.Abs(h - previous) > maxGrade * length * _tile / steps + 0.00001)
 					return false;
@@ -162,6 +213,8 @@ public partial class FastGrid
 			double t = (double)k / steps;
 			double x = (ax + dx * t) * _tile;
 			double z = (ay + dy * t) * _tile;
+			if (!Finite(x + nx * _tile, z + ny * _tile) || !Finite(x - nx * _tile, z - ny * _tile))
+				return WaterFailure("Road cross-slope sampling coordinates overflow");
 			double across = Math.Abs(Ground(x + nx * _tile, z + ny * _tile) - Ground(x - nx * _tile, z - ny * _tile));
 			if (across > maxCross * aw * _tile + 0.00001)
 				return false;
@@ -175,6 +228,9 @@ public partial class FastGrid
 	public int BridgeEnds(double ax, double az, double bx, double bz, double ux, double uz, double len, double half,
 		double maxRise, double landingGap)
 	{
+		if (!RequireWater()) return -1;
+		if (!Finite(ax, az) || !Finite(bx, bz) || !Finite(ux, uz) || !Finite(len, half) || !Finite(maxRise, landingGap) || len < 0 || half < 0 || maxRise < 0 || landingGap < 0)
+		{ WaterFailure("Invalid bridge ends or landing limits"); return -1; }
 		double ay = Ground(ax, az), by = Ground(bx, bz);
 		if (Math.Abs(by - ay) > maxRise)
 			return 1;
@@ -187,6 +243,7 @@ public partial class FastGrid
 				double side = s;
 				double x = ax + ux * t - uz * side * half;
 				double z = az + uz * t + ux * side * half;
+				if (!Finite(x, z)) { WaterFailure("Bridge landing sampling coordinates overflow"); return -1; }
 				if (Depth(x, z) > 0.3)
 					return 2;
 				if (Math.Abs(Ground(x, z) - deck) > landingGap)
@@ -199,10 +256,16 @@ public partial class FastGrid
 	/// <summary>Копия StageTrails._crosses_water: вода глубже 0,3 м хотя бы в одной целой точке оси (1..ceil(len) − 1 м).</summary>
 	public bool CrossesWater(double ax, double az, double ux, double uz, double len)
 	{
+		if (!RequireWater()) return false;
+		if (!Finite(ax, az) || !Finite(ux, uz) || !double.IsFinite(len) || len < 0 || len > ((double)_sw + _sh) * _tile || len >= int.MaxValue)
+			return WaterFailure("Invalid bridge water-crossing axis");
 		int n = (int)Math.Ceiling(len);
 		for (int k = 1; k < n; k++)
+		{
+			if (!Finite(ax + ux * k, az + uz * k)) return WaterFailure("Water-crossing sampling coordinates overflow");
 			if (Depth(ax + ux * k, az + uz * k) > 0.3)
 				return true;
+		}
 		return false;
 	}
 
@@ -215,6 +278,9 @@ public partial class FastGrid
 	public bool BridgeSpanGround(double ax, double az, double ay, double bx, double bz, double by, double ux, double uz,
 		double len, double half, double arch, double section)
 	{
+		if (!RequireWater()) return false;
+		if (!Finite(ax, az) || !Finite(ay, bx) || !Finite(bz, by) || !Finite(ux, uz) || !Finite(len, half) || !Finite(arch, section) || len <= 0 || len > ((double)_sw + _sh) * _tile || len >= int.MaxValue - 3 || half < 0 || section <= 0 || len / section >= int.MaxValue)
+			return WaterFailure("Invalid bridge span or section length");
 		int last = (int)Math.Ceiling(len) + 2;
 		for (int k = -2; k <= last; k++)
 		{
@@ -225,6 +291,7 @@ public partial class FastGrid
 				double side = s;
 				double x = ax + ux * t - uz * side * (half + 0.8);
 				double z = az + uz * t + ux * side * (half + 0.8);
+				if (!Finite(x, z) || !double.IsFinite(deck)) return WaterFailure("Bridge span sampling coordinates overflow");
 				double ground = Ground(x, z);
 				if (t > 1.0 && t < len - 1.0 && ground > deck + 0.3 + SpanMargin)
 					return false;
@@ -262,10 +329,19 @@ public partial class FastGrid
 		double tile, double gradeScale, double landingGap, double half)
 	{
 		var outList = new System.Collections.Generic.List<int> { 0, 0, 0, 0 };
+		if (!RequireWater()) return outList.ToArray();
+		if (cells == null || aIdx == null || wet == null || cells.Length != wet.Length || w != _sw || tile != _tile || shore < 0 || shore > cells.Length || span <= 0 || approach < 0 || !Finite(gradeScale, landingGap) || !double.IsFinite(half) || gradeScale < 0 || landingGap < 0 || half < 0)
+		{ WaterFailure("Invalid bridge candidate arrays, grid or limits"); return outList.ToArray(); }
+		foreach (int cell in cells)
+			if ((uint)cell >= (uint)(_sw * _sh))
+			{ WaterFailure("Bridge candidate cell outside the water grid"); return outList.ToArray(); }
+		foreach (int a in aIdx)
+			if ((uint)a >= (uint)cells.Length)
+			{ WaterFailure("Bridge candidate start outside the path"); return outList.ToArray(); }
 		int n = cells.Length;
 		foreach (int a in aIdx)
 		{
-			int end = Math.Min(n, Math.Min(shore + approach + 1, a + span));
+			int end = (int)Math.Min(n, Math.Min((long)shore + approach + 1, (long)a + span));
 			double ax = (cells[a] % w + 0.5) * tile, az = (cells[a] / w + 0.5) * tile;
 			for (int b = shore; b < end; b++)
 			{
@@ -275,6 +351,7 @@ public partial class FastGrid
 				double len = Math.Max(Math.Sqrt((bx - ax) * (bx - ax) + (bz - az) * (bz - az)), 0.01);
 				double ux = (bx - ax) / len, uz = (bz - az) / len;
 				int code = BridgeEnds(ax, az, bx, bz, ux, uz, len, half, gradeScale * len, landingGap);
+				if (code < 0) return new int[] { 0, 0, 0, 0 };
 				if (code == 0 && !CrossesWater(ax, az, ux, uz, len))
 					code = 4;
 				if (code != 0)
@@ -293,6 +370,8 @@ public partial class FastGrid
 	/// ближайшая к (px, py) по центрам клеток; [клетка, расстояние] или [-1, INF].</summary>
 	public double[] NearestPath(byte[] mask, float[] cost, int w, double px, double py)
 	{
+		if (mask == null || cost == null || w <= 0 || mask.Length != cost.Length || mask.Length % w != 0 || !Finite(px, py))
+		{ WaterFailure("Invalid nearest-path grid or arrays"); return new double[] { -1, double.PositiveInfinity }; }
 		int best = -1;
 		double bd = double.PositiveInfinity;
 		for (int i = 0; i < mask.Length; i++)
