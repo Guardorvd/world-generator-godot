@@ -20,6 +20,8 @@ extends Resource
 	set(value):
 		closed = value
 		_curvature.clear()
+## Speed the rider arrives with at the start, m/s: a leg of a long route continues the previous one.
+@export var start_speed := 3.0
 ## Optional override of the per-kind terrain shaping preset.
 @export var shaping: TrailShaping
 @export var elements: Array[TrailElement] = []

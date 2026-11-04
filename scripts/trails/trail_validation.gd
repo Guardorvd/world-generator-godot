@@ -78,7 +78,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 			caps[i] = minf(caps[i], sqrt(caps[i + 1] * caps[i + 1] + 2.0 * braking))
 		var speeds := PackedFloat32Array()
 		speeds.resize(n)
-		speeds[0] = minf(3.0, caps[0])
+		speeds[0] = minf(maxf(3.0, d.start_speed * factor), caps[0])
 		var flights := {}
 		var starts := {}
 		for ei in d.elements.size():

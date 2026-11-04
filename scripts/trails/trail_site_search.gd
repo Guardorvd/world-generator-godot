@@ -98,9 +98,6 @@ func find(seed_value: int, publish := Callable(), cancelled := Callable()) -> Ar
 func _stopped(cancelled: Callable) -> bool:
 	return Time.get_ticks_msec() >= int(options.get("deadline", 9223372036854775807)) or (cancelled.is_valid() and cancelled.call())
 
-func construction_cost(trial: Dictionary) -> float:
-	return float(trial.build_cost) + 0.25 * (float(trial.start_area.get("estimated_work", 0)) + float(trial.finish_area.get("estimated_work", 0)))
-
 func _refuse(reason: String) -> void:
 	stats.refused[reason] = int(stats.refused.get(reason, 0)) + 1
 

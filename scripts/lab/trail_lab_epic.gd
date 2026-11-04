@@ -78,12 +78,6 @@ static func _base(at: Vector2) -> float:
 
 ## Ровная полка разгона перед ущельем: на склоне 24 % передняя половина роллера только выравнивала бы спуск и не
 ## подбрасывала; с полки кикер даёт настоящий взлёт, а дальний край ущелья ниже — прыжок со ступенькой вниз.
-const RUNWAY := Rect2(210, 354, 48, 44)
-const RUNWAY_FADE := 16.0
-static func _shelf(at: Vector2, rect: Rect2, fade: float, ground_y: float) -> float:
-	var outside := Vector2(maxf(maxf(rect.position.x - at.x, at.x - rect.end.x), 0.0),
-		maxf(maxf(rect.position.y - at.y, at.y - rect.end.y), 0.0)).length()
-	return lerpf(_slope(rect.get_center()), ground_y, smoothstep(0.0, fade, outside))
 
 ## Ступень за ущельем: дальний (нижний) край у места прыжка ниже природного склона на LANDING_STEP — с кикера
 ## перелёт приходит на спуск, а не в стенку. Без неё на 16 м/с не хватало около метра высоты.

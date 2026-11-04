@@ -344,10 +344,13 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	d.auto_bank = lerpf(0.2, 1.0, shaping_amount)
 	d.points = line
 	d.closed = line[0].distance_to(line[-1]) < 0.01
-	var footprint_errors := Validation.footprint(d, inside)
-	if not footprint_errors.is_empty():
-		stats = {accepted = false, reason = "; ".join(footprint_errors)}
-		return _project_result([], stats, cuts, speeds, seed)
+	d.start_speed = float(options.get("start_speed", 3.0))
+	# Линия ходока уже проверена как trial; готовая линия парка — ещё нет.
+	if not guided and style == "park":
+		var footprint_errors := Validation.footprint(d, inside)
+		if not footprint_errors.is_empty():
+			stats = {accepted = false, reason = "; ".join(footprint_errors)}
+			return _project_result([], stats, cuts, speeds, seed)
 	# v3: целевой уклон выравнивания — по самой крутой части самой линии (не ниже пресета): иначе после крутого спуска
 	# полотно держит 16 % и уходит в насыпь до 10 м — под пролётом и в узле петли это яма, а не овражек
 	var shaping := TrailShaping.preset(d.kind)
@@ -503,7 +506,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		base_surface = base_surface, base_attempts = base_attempts, retained_lines = promising.size(), composition_started = true,
 		completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates,
 		line_score = best_components,
-		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", chains = Composition.describe(d, composing_ground), sequence_refused = sequence.refused,
+		accepted = false, definition_valid = true, difficulty = skill, modification = shaping_amount, mandatory_gaps = gaps_ok, layout = layout if style == "park" else "terrain", sequence_refused = sequence.refused,
 		elements = d.elements.size(), refused = composed.get("refused", {}), berms = d.elements.filter(func(e: TrailElement) -> bool: return e.profile in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM]).size(), speed_top = snappedf(top, 0.1),
 		speed_mean = snappedf(mean, 0.1), radius_median = snappedf(float(radii[radii.size() / 2]) if not radii.is_empty() else 0.0, 0.1),
 		start = line[0], goal = goal, target_grade = snappedf(grade * 100.0, 0.1), pull = snappedf(shape.pull, 0.01),
@@ -595,6 +598,23 @@ static func hint_guide(hint: PackedVector2Array, p: Vector2) -> Dictionary:
 		remaining -= span
 		aim = hint[k]
 	return {aim = aim, distance = sqrt(best)}
+
+static func _hint_segments(hint: PackedVector2Array, p: Vector2, reach: float) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var limit := reach * reach
+	for k in range(1, hint.size()):
+		var ab := hint[k] - hint[k - 1]
+		var t := clampf((p - hint[k - 1]).dot(ab) / maxf(0.001, ab.length_squared()), 0, 1)
+		if p.distance_squared_to(hint[k - 1] + ab * t) <= limit: out.append(k)
+	return out
+
+static func _hint_distance(hint: PackedVector2Array, p: Vector2, segments: PackedInt32Array) -> float:
+	var best := INF
+	for k in segments:
+		var ab := hint[k] - hint[k - 1]
+		var t := clampf((p - hint[k - 1]).dot(ab) / maxf(0.001, ab.length_squared()), 0, 1)
+		best = minf(best, p.distance_squared_to(hint[k - 1] + ab * t))
+	return sqrt(best)
 
 static func _corridor_line(hint: PackedVector2Array, offset: float) -> PackedVector2Array:
 	var d := TrailDefinition.new()
@@ -711,6 +731,7 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 	var bend := 0.0
 	var stuck := 0
 	var on_steep := false
+	var hint_near := PackedInt32Array()
 	var steep_cost: bool = shape.get("steep_cost", false)
 	var grid := {}
 	# прежние точки: номер по расстоянию от их конца в шагах (отрицательный) — последние OWN_SKIP м не мешают продолжению
@@ -735,11 +756,14 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			trace.goal = goal
 		# поворот за шаг — не круче радиуса, который седок держит на этой скорости
 		var max_turn := STEP / maxf(MIN_RADIUS, v * v / accel)
+		var here_y := float(ground.call(p))
 		var want := (wander * sin(s / period.x + ph.x) + wander * 0.6 * sin(s / period.y + ph.y)) * STEP
 		want += clampf(Vector2.from_angle(a).angle_to(goal - p), -1.0, 1.0) * float(shape.pull) * max_turn
 		if hint.size() > 1:
 			var guide := hint_guide(hint, p)
 			want += clampf(Vector2.from_angle(a).angle_to(guide.aim - p), -1.0, 1.0) * max_turn * 0.65
+			# Шаг уходит не дальше STEP: ближайший отрезок для него — из тех, что не дальше ближайшего к p на 2 STEP.
+			hint_near = _hint_segments(hint, p, float(guide.distance) + 2.0 * STEP)
 		var best := INF
 		var best_o := 0.0
 		var best_g := 0.0
@@ -752,12 +776,12 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			var next := p + dir * STEP
 			if not inside.call(next) or _near_own(grid, pts.size(), next): continue
 			var here := float(ground.call(next))
-			var g := (here - float(ground.call(p))) / STEP
+			var g := (here - here_y) / STEP
 			var side := Vector2(-dir.y, dir.x)
 			var cross := absf(float(ground.call(next + side * 2.0)) - float(ground.call(next - side * 2.0))) / 4.0
 			# уклон к цели стиля (подъём — дорого), поперечный склон, плавность и «волна» изгибов
 			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0 + maxf(0.0, cross - 0.25) * 8.0 + absf(o - want) * 1.5
-			if hint.size() > 1: cost += minf(float(hint_guide(hint, next).distance) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
+			if hint.size() > 1: cost += minf(_hint_distance(hint, next, hint_near) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
 			# Дорогу или брод пересекает коротко, а не идёт вдоль
 			var soft: Callable = shape.get("soft", Callable())
 			if soft.is_valid() and soft.call(next): cost += SOFT_COST

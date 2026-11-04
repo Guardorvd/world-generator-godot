@@ -97,6 +97,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		if patch.is_empty():
 			patch = _ground_patch(h, key)
 			added[key] = patch
+		var touched := false
 		var hs: PackedFloat32Array = patch.h.duplicate()
 		var colors: PackedColorArray = patch.color.duplicate()
 		var source_vertices := PackedFloat32Array()
@@ -171,6 +172,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 							record.max_cut = maxf(record.max_cut, -displacement)
 							record.max_fill = maxf(record.max_fill, displacement)
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
+				if offsets[vertex] != 0.0: touched = true
 				# Reject on the actual rounded final vertex, before spending the rest of
 				# the bake on a doomed proposal. The normal final audit still covers the
 				# entire surface, including base formation outside this zone.
@@ -186,9 +188,14 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 						return PackedStringArray(["земляные работы затрагивают воду, инфраструктуру или готовый путь"])
 				var shade: float = shades.get(vertex, 0.0)
 				if shade != 0.0:
+					touched = true
 					var c := colors[iz * RoadRefinement.STRIDE + ix]
 					var k := 1.0 + shade * c.a
 					colors[iz * RoadRefinement.STRIDE + ix] = Color(c.r * k, c.g * k, c.b * k, c.a)
+		# The zone only reached this cell, nothing changed: the old ground stays, no metre patch to mesh and store.
+		if not touched and added.has(key) and _on_ground(h, key, hs):
+			added.erase(key)
+			continue
 		staged[key] = hs
 		staged_colors[key] = colors
 	# Publish only after every vertex succeeded; a rejected extension cannot leave half a bake.
@@ -203,10 +210,12 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		r.patches[key] = patch
 	if not again.is_empty():
 		for key: int in zone:
-			if not again.cells.has(key): r.patches[key] = again.baked[key]
+			if again.cells.has(key): continue
+			if again.baked[key] == null: r.patches.erase(key)
+			else: r.patches[key] = again.baked[key]
 	if limits.get("keep_bake", false):
 		var baked := {}
-		for key: int in zone: baked[key] = r.patches[key]
+		for key: int in zone: baked[key] = r.patches.get(key)
 		limits.bake = {plan = plan, before = before, baked = baked, stats = stats}
 	for id: String in profiles:
 		var record: Dictionary = stats.get(id, {})
@@ -368,6 +377,14 @@ static func _feature_shade(d: TrailDefinition, local: Vector3) -> float:
 			features += e.displacement(local.x, local.y, d.width * 0.5)
 	if features >= 0.0: return SHADE_UP * smoothstep(0.1, 0.9, features)
 	return -SHADE_DOWN * smoothstep(0.05, 0.5, -features)
+
+## Do the vertices of a patch over cell `key` lie on the coarse ground, to the precision of the stored heights?
+static func _on_ground(h: Heightfield, key: int, hs: PackedFloat32Array) -> bool:
+	for iz in RoadRefinement.STRIDE:
+		for ix in RoadRefinement.STRIDE:
+			var at := Vector2((key % h.world.W) * RoadRefinement.DIV + ix, (key / h.world.W) * RoadRefinement.DIV + iz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+			if absf(hs[iz * RoadRefinement.STRIDE + ix] - h.base_ground_at(at.x, at.y)) > 0.001: return false
+	return true
 
 ## A patch over cell `key` that changes nothing: vertices shared with a neighbouring patch take its values, the rest lie
 ## exactly on the coarse triangles (the patch splits a square along the same diagonal as the coarse grid).

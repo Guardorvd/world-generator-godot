@@ -225,12 +225,6 @@ static func _save_world() -> void:
 	f.store_buffer(world_rivers)
 	f.close()
 
-static func _load_world(seed_value: int) -> bool:
-	var data := _read_world(seed_value)
-	if data.is_empty(): return false
-	publish_world(data)
-	return true
-
 static func _read_world(seed_value: int) -> Dictionary:
 	if not FileAccess.file_exists(CACHE % seed_value): return {}
 	var f := FileAccess.open(CACHE % seed_value, FileAccess.READ)

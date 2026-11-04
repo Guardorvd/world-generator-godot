@@ -55,7 +55,6 @@ const BRAKE := 5.0
 const GRID_STEP := 1.0
 const HUB := BikeRide.HUB
 ## Тело гасит гребень пампа: столько вертикальной скорости (BikeRide.PUMP_ABSORB_V), м/с, и хода (PUMP_REACH), м.
-const ABSORB_V := BikeRide.PUMP_ABSORB_V
 const ABSORB_REACH := BikeRide.PUMP_REACH
 ## Высоты камней и корней по уровню (от зелёной к чёрной), м.
 const TECH_HEIGHTS := {T.ROCK_GARDEN: Vector2(0.08, 0.18), T.ROOTS: Vector2(0.06, 0.15), T.ROUGH: Vector2(0.05, 0.14), T.RUTS: Vector2(0.08, 0.22)}
@@ -66,9 +65,6 @@ const TECH_HEIGHTS := {T.ROCK_GARDEN: Vector2(0.08, 0.18), T.ROOTS: Vector2(0.06
 ## Высота оси трассы над исходной землёй на расстоянии s от начала элемента, как её видит колесо: профиль элемента
 ## в узлах метровой сетки рельефа с линейной интерполяцией между ними (сетка скругляет кромки), плюс уклон grade
 ## (отрицательный — спуск).
-static func profile_at(e: TrailElement, s: float, grade := 0.0) -> float:
-	return _lerp_nodes(nodes(e), s) + grade * s
-
 ## Профиль элемента в узлах сетки от −NODE_LEAD м до length + NODE_TAIL м (кэш по размерам элемента).
 const NODE_LEAD := 8
 const NODE_TAIL := 20
@@ -574,7 +570,7 @@ static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, 
 		var at := clampi(station, 0, n - 1)
 		cap[at] = minf(cap[at], float(caps[station]))
 	if n == 0: return v
-	v[0] = 3.0
+	v[0] = minf(d.start_speed, maxf(3.0, cap[0]))
 	for i in range(1, n):
 		var grade := y[i] - y[i - 1]
 		var u := v[i - 1]
