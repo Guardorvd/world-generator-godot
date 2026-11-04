@@ -65,7 +65,7 @@ static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> Playe
 			var a := k * PI / 4.0
 			var x := fx + sin(a) * SPAWN_DIST
 			var z := fz + cos(a) * SPAWN_DIST
-			if heights.depth_at(x, z) >= GameConfig.FORD_DEPTH:
+			if not _spawn_safe(w, heights, x, z):
 				continue
 			var clear := INF
 			for u in s.huts:
@@ -76,9 +76,37 @@ static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> Playe
 				p.z = z
 		if best < 0.0:
 			p.x = fx
-			p.z = fz + SPAWN_DIST
+			p.z = fz
+	if not _spawn_safe(w, heights, p.x, p.z):
+		var safe := _spawn_fallback(w, heights, Vector2(p.x, p.z))
+		if not safe.is_finite(): return null
+		p.x = safe.x
+		p.z = safe.y
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
+
+
+static func _spawn_safe(w: WorldData, heights: Heightfield, x: float, z: float) -> bool:
+	if not w.accessible(x / TILE, z / TILE, BODY_R / TILE) or not heights.known(x, z): return false
+	var feet := heights.ground_at(x, z)
+	return is_finite(feet) and heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH \
+		and is_passable(w, heights, x, z, feet, BODY_R)
+
+
+## Rare fallback: nearby rings first, then known cell centres. Never return an unchecked point.
+static func _spawn_fallback(w: WorldData, heights: Heightfield, center: Vector2) -> Vector2:
+	for ring in range(1, 40):
+		var radius := ring * 1.5
+		for k in ring * 6:
+			var at := center + Vector2(sin(k * TAU / (ring * 6)), cos(k * TAU / (ring * 6))) * radius
+			if _spawn_safe(w, heights, at.x, at.y): return at
+	var rect := Rect2i(0, 0, w.W, w.H)
+	if w.available_rect.has_area(): rect = rect.intersection(w.available_rect)
+	for z in range(rect.position.y, rect.end.y):
+		for x in range(rect.position.x, rect.end.x):
+			var at := Vector2(x + 0.5, z + 0.5) * TILE
+			if _spawn_safe(w, heights, at.x, at.y): return at
+	return Vector2.INF
 
 
 ## At a trail start face its direction; peaks retain the view, other places face their centre.
@@ -123,7 +151,7 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 				break
 		if found:
 			break
-	if not found and not w.accessible(p.x / TILE, p.z / TILE, BODY_R / TILE):
+	if not found:
 		return spawn(w, heights)
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
@@ -238,10 +266,8 @@ static func slide(free: Callable, x: float, z: float, dx: float, dz: float, arou
 			z += t.y
 		elif sx != 0.0 and free.call(x + sx, z):
 			x += sx
-			sz = 0.0
 		elif sz != 0.0 and free.call(x, z + sz):
 			z += sz
-			sx = 0.0
 		else:
 			break
 	return PackedFloat64Array([x, z])

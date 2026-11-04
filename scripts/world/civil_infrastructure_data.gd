@@ -7,11 +7,13 @@ var layout: GridBuffer.Layout
 var cost: GridBuffer.Float32
 var path_mask: GridBuffer.Byte
 var road_surface: GridBuffer.Byte
+## Полная сеть путей для движения, карты и покрытий. Велотрассы входят сюда как path_record() с trail_id.
 var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]
 var bridges: Array[BridgeData] = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
 var tunnels: Array[TunnelData] = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array[SettlementData] = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]
-var trail_plan := {}           # результат автоматического выбора трассы стартовой области (StageTrailPlan): {state, reason, definition, ...}
+## Определения велотрасс, элементы и данные восстановления поверхности; геометрия сверяется с trails при загрузке.
+var trail_plan := {}           # StageTrailPlan: {state, reason, definition, routes, entries, ...}
 var sites: Array[SiteData] = []         # места вне поселений (с 9.3) [{x, y, i, type, rank, name, clear, huts: [{x, y, v, t, a}]}], см. StageSites
 
 

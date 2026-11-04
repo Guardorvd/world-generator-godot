@@ -33,6 +33,7 @@ var _cpu := preload("res://scripts/core/byte_lru.gd").new()
 var _cpu_lock := Mutex.new()
 var _cpu_epoch := 0
 var cpu_budget: RefCounted
+var frame_budget: RefCounted
 
 
 func setup(w: WorldData, h: Heightfield) -> void:
@@ -78,7 +79,7 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 	var completed := {}
 	for key: Vector2i in _tasks:
 		var t: Dictionary = _tasks[key]
-		if allow_apply and WorkerThreadPool.is_task_completed(t.id):
+		if allow_apply and (frame_budget == null or frame_budget.allows_work()) and WorkerThreadPool.is_task_completed(t.id):
 			WorkerThreadPool.wait_for_task_completion(t.id)
 			done = key
 			# При переносе игрока результат старого запроса уже может оказаться слишком далеко.

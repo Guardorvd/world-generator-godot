@@ -4,6 +4,20 @@ using Godot;
 
 public partial class FastGrid
 {
+	/// <summary>Timestamp only changed vegetation rows at their actual publication time.</summary>
+	public Godot.Collections.Dictionary StampVegetation(float[] buffer, double[] changes, double deadline, double now, double duration)
+	{
+		for (int i = 0; i < changes.Length; i += 3)
+		{
+			int at = (int)changes[i] + 19;
+			double mode = changes[i + 1], old = changes[i + 2];
+			double alpha = old == 0.0 ? 1.0 : Math.Clamp(old > 0.0 ? (now - old) / duration : 1.0 - (now + old) / duration, 0.0, 1.0);
+			buffer[at] = (float)(mode == 2.0 ? now : mode == 1.0 ? now - alpha * duration : -(now - (1.0 - alpha) * duration));
+			if (mode < 0.0) deadline = Math.Max(deadline, -(double)buffer[at] + duration);
+		}
+		return new Godot.Collections.Dictionary { ["buffer"] = buffer, ["deadline"] = deadline };
+	}
+
 	// Copy attributes in original triangle/vertex encounter order. No retriangulation
 	// or arithmetic on attributes: the streamed surface remains byte-identical.
 	public Godot.Collections.Dictionary PartitionTerrain(Godot.Collections.Array arrays, double tile, int cells)

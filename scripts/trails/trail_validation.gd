@@ -74,7 +74,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 				for i in range(maxi(0, floori(from)), mini(n - 1, last) + 1): caps[i] = minf(caps[i], float(w.speed_hi))
 		# Backward braking envelope includes gravity on the actual grade.
 		for i in range(n - 2, -1, -1):
-			var braking := maxf(0.1, S.BRAKE + S.G * (y[i + 1] - y[i]))
+			var braking := maxf(0.1, S.BRAKE - _slope_acceleration(y[i + 1] - y[i]))
 			caps[i] = minf(caps[i], sqrt(caps[i + 1] * caps[i + 1] + 2.0 * braking))
 		var speeds := PackedFloat32Array()
 		speeds.resize(n)
@@ -87,7 +87,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 		var i := 1
 		while i < n:
 			var v := speeds[i - 1]
-			var a := -S.G * (y[i] - y[i - 1]) - S.ROLL - S.DRAG * v * v
+			var a := _slope_acceleration(y[i] - y[i - 1]) - S.ROLL - S.DRAG * v * v
 			if v < S.CRUISE * factor: a += S.PEDAL * (1.0 - v / (S.CRUISE * factor))
 			var possible := sqrt(maxf(0.0, v * v + 2.0 * a))
 			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна", "effort" if climb_ok else "safety", {actual = possible, limit = 0.5, deviation = 0.5 - possible})
@@ -161,6 +161,11 @@ static func _level(d: TrailDefinition, station: float) -> int:
 	for section: Dictionary in d.sections:
 		if station >= float(section.from) and station <= float(section.to): return clampi(int(float(section.difficulty) * 4.0), 0, 3)
 	return 2
+
+## Match TrailStandards and fly_surface: gravity along the tread is bounded by G.
+static func _slope_acceleration(grade: float) -> float:
+	return -S.G * grade / sqrt(1.0 + grade * grade)
+
 
 static func _height(y: PackedFloat32Array, s: float) -> float:
 	var at := clampf(s, 0.0, y.size() - 1.0)

@@ -49,6 +49,7 @@ void fragment() {
 }
 """
 static var root := "user://regions"         # тесты подменяют
+var generation_enabled := true # Existing regions still stream when new generation is disabled.
 const Files := preload("res://scripts/core/cache_file.gd")
 const FIELD_CACHE_BYTES := 64 * 1024 * 1024
 static var _store_lock := Mutex.new()
@@ -245,7 +246,7 @@ func update(x: float, z: float) -> bool:
 			return true
 		var unused: Node = _build_out.get("decor", {}).get("node")
 		if is_instance_valid(unused) and unused.get_parent() == null: unused.free()
-	if p.distance_to(_checked_at) > RECHECK:
+	if generation_enabled and p.distance_to(_checked_at) > RECHECK:
 		_checked_at = p
 		_plan(p)
 	for key: Vector2i in ledger.get("regions", {}):
@@ -264,7 +265,7 @@ func update(x: float, z: float) -> bool:
 		if d > HIDE and _shown.has(key):
 			_hide(key)
 			return true
-	if _task == -1 and not queue.is_empty() and (_save_task == -1 or WorkerThreadPool.is_task_completed(_save_task)):
+	if generation_enabled and _task == -1 and not queue.is_empty() and (_save_task == -1 or WorkerThreadPool.is_task_completed(_save_task)):
 		var key: Vector2i = queue.pop_front()
 		if ledger.get("regions", {}).has(key) or failed.has(key) or not _neighbors_ready(key):
 			_checked_at = Vector2.INF # пересмотреть очередь в следующем кадре
@@ -906,7 +907,9 @@ func _persist(key: Vector2i) -> void:
 	if _save_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_save_task)
 		_save_task = -1
-	var accepted := ledger
+	# Encode entity records before copying: duplicate(true) alone keeps RefCounted objects.
+	# The worker owns containers AND packed buffers, independent of publication/eviction.
+	var accepted: Dictionary = EntityCodec.encode(ledger).duplicate(true)
 	var dir := store_dir(world)
 	_save_task = WorkerThreadPool.add_task(func() -> void:
 		var err := save(dir, accepted, key)

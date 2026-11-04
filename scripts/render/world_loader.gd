@@ -24,9 +24,11 @@ var trail := {}           # итог StageTrailPlan.apply: state (found / none),
 var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
 ## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
 var timings := {}
+var _prepare_times := {} # One worker writes; the owner merges only after joining it.
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
 var surface_hit := false
 var chunk_source: RefCounted
+var _pending_chunk_refs: Array = []
 var opening_spot := {}
 var opening_prepared := false
 var startup_at := Vector2.INF
@@ -103,7 +105,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# Состав леса известен после генерации; параллельная заливка его не читает (с 10.0 — пока она идёт).
 	# С 12.2 подстилка и картинки считаются в задачах пула рядом с полотном путей: они читают только
 	# мир (объекты, тропы, реки), а полотно меняет только рельеф. Время каждой задачи пишется после ожидания
-	var side_ms := {}
+	var forest_times := {}
+	var map_times := {}
+	var texture_times := {}
 	var forest_task := -1
 	if not view.is_empty():
 		r.forest_surface = view.forest
@@ -111,13 +115,19 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		var forest_job := func() -> void:
 			var t0 := Time.get_ticks_usec()
 			r.forest_surface = preload("res://scripts/render/forest_floor.gd").surface_image(r.world)
-			side_ms.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
+			forest_times.forest_surface_ms = (Time.get_ticks_usec() - t0) / 1000.0
 		forest_task = WorkerThreadPool.add_task(forest_job, true, "Подстилка леса")
 	# Обычно поток уже запущен генератором на этапе климата; если нет, готовим рельеф прямо здесь
 	if on_progress.is_valid():
 		on_progress.call(0.88, "Рельеф, вода и заливка")
 	var waited := Time.get_ticks_usec()
 	var painted: Array = side.wait_to_finish() if side.is_started() else ([] if r.surface_hit else r._prepare(r.world, px))
+	r.timings.merge(r._prepare_times)
+	var plan_errors := StageTrailPlan.consistency_errors(r.world)
+	if not plan_errors.is_empty():
+		if forest_task >= 0: WorkerThreadPool.wait_for_task_completion(forest_task)
+		r.error = "Несогласованные данные трасс: " + "; ".join(plan_errors)
+		return r
 	r.timings["cache_read_ms" if r.from_cache else "generate_ms"] = (generated - started) / 1000.0
 	r.timings.prepare_wait_ms = (Time.get_ticks_usec() - waited) / 1000.0
 	var image_tasks: Array[int] = []
@@ -132,18 +142,18 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		var map_job := func() -> void:
 			var t0 := Time.get_ticks_usec()
 			r.map_image = MapBaker.finish(r.world, 2, map_bytes)[0]
-			side_ms.map_ms = (Time.get_ticks_usec() - t0) / 1000.0
+			map_times.map_ms = (Time.get_ticks_usec() - t0) / 1000.0
 		var texture_job := func() -> void:
 			var t0 := Time.get_ticks_usec()
 			r.terrain_image = MapBaker.finish(r.world, px, tex_bytes, false)[0]
-			side_ms.terrain_image_ms = (Time.get_ticks_usec() - t0) / 1000.0
+			texture_times.terrain_image_ms = (Time.get_ticks_usec() - t0) / 1000.0
 		image_tasks.append(WorkerThreadPool.add_task(map_job, true, "Карта"))
 		image_tasks.append(WorkerThreadPool.add_task(texture_job, true, "Текстура рельефа"))
 	t = Time.get_ticks_usec()
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
-	var before := r.heights.hv
+	var before := r.heights.hv.duplicate() if not r.surface_hit else PackedFloat32Array() # finish_paths may edit in place.
 	var changed := PackedInt32Array()
 	if not r.surface_hit:
 		r.trail = StageTrailPlan.prepare(r.heights)
@@ -178,7 +188,7 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	for task in image_tasks:
 		WorkerThreadPool.wait_for_task_completion(task)
 	r.timings.overlays_wait_ms = (Time.get_ticks_usec() - t) / 1000.0
-	r.timings.merge(side_ms)
+	for measured: Dictionary in [forest_times, map_times, texture_times]: r.timings.merge(measured)
 	# Cache generation checks the version before expensive preparation. A broken saved definition is a
 	# loading error, never a reason to discard the world, silently remove trails or regenerate its geography.
 	if r.trail.get("state", "") == "stale" or (not r.trail.get("applied", false) and not r.trail.get("errors", PackedStringArray()).is_empty()):
@@ -190,13 +200,11 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	if view.is_empty() and services.cache.enabled:
 		services.cache.save_view(seed_text, size, {terrain = r.terrain_image, map = r.map_image, forest = r.forest_surface})
 	if services.cache.enabled and not r.surface_hit:
-		var ticket := services.cache.save_surface(seed_text, size, {heights = Surface.capture(r.heights, "final"), trail = r.trail}, r.terrain_chunks, r.water_chunks)
-		var wait_started := Time.get_ticks_usec()
-		services.cache.wait_writes() # publishing file references now requires this result
-		r.timings.surface_write_wait_ms = (Time.get_ticks_usec() - wait_started) / 1000.0
-		if not ticket.result.is_empty():
-			r.terrain_chunks = ticket.result.chunks
-			r.water_chunks.assign(ticket.result.water_chunks)
+		var planned := {}
+		var queued_at := Time.get_ticks_usec()
+		services.cache.save_surface(seed_text, size, {heights = Surface.capture(r.heights, "final"), trail = r.trail}, r.terrain_chunks, r.water_chunks, planned)
+		r._pending_chunk_refs = [planned.chunks, planned.water_chunks[0], planned.water_chunks[1]]
+		r.timings.surface_write_queue_ms = (Time.get_ticks_usec() - queued_at) / 1000.0
 	if services.cache.enabled: r.prepare_streaming(start_at)
 	r.timings.cache_io = services.cache.take_io_timings()
 	r.timings.profile_origin = "stored_generation" if r.from_cache else "current_generation"
@@ -213,6 +221,9 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 	if chunk_source != null: return
 	var t := Time.get_ticks_usec()
 	var home := PlayerState.spawn(world, heights)
+	if home == null:
+		error = "В подготовленном мире не найдено безопасное место появления."
+		return
 	var points: Array[Vector2] = [Vector2(home.x, home.z)]
 	opening_prepared = true
 	if start_at.is_finite():
@@ -228,6 +239,9 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 	if water_chunks.size() != 2: water_chunks.assign([{}, {}])
 	chunk_source = preload("res://scripts/render/chunk_source.gd").new()
 	chunk_source.setup(service_scope.cache, world, heights, cache_size, [terrain_chunks, water_chunks[0], water_chunks[1]], service_scope.cpu_budget)
+	if not _pending_chunk_refs.is_empty():
+		chunk_source.set_persisted_refs(_pending_chunk_refs)
+		_pending_chunk_refs = []
 	chunk_source.prewarm(points, PlanTerrain.RADIUS / 2.0)
 	water_arrays.assign([[], []])
 	timings.startup_prefetch_ms = (Time.get_ticks_usec() - t) / 1000.0
@@ -242,18 +256,18 @@ func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) ->
 	var painted := []
 	if paint:
 		painted = _paint(w, px)
-		timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
+		_prepare_times.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	heights = base.copy() if base != null else Heightfield.new(w, false)
-	timings.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
+	_prepare_times.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
 	if base == null and service_scope != null and service_scope.cache.enabled:
 		service_scope.cache.save_artifact(w.seed_text, cache_size, "base", Surface.capture(heights, "base"))
 	t = Time.get_ticks_usec()
 	terrain_arrays = TerrainBuilder.build_arrays(w, heights)
-	timings.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+	_prepare_times.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	water_arrays = WaterBuilder.prepare(w, heights)
-	timings.prepare_water_ms = (Time.get_ticks_usec() - t) / 1000.0
+	_prepare_times.prepare_water_ms = (Time.get_ticks_usec() - t) / 1000.0
 	return painted
 
 

@@ -1,5 +1,6 @@
 class_name Heightfield
 extends RefCounted
+static var allow_fast_water_levels := true
 ## Рельеф и вода в метрах: высоты в центрах клеток, русла рек, уровень воды. Копия js/game/heightfield.js.
 ## Чистые данные и математика: по ним строятся меши и считается движение игрока.
 ## С 4.4 ground_at также читает локальную метровую сетку дорог RoadRefinement.
@@ -172,6 +173,13 @@ func complete_water() -> void:
 	var W := w.W
 	if water_level.size() == N:
 		return
+	if allow_fast_water_levels:
+		var fast := fast_water()
+		if fast != null:
+			var levels: PackedFloat32Array = fast.CompleteWaterLevels(w.ocean, w.river, w.river_cells(), HS)
+			if levels.size() == N:
+				water_level = levels
+				return
 	water_level.resize(N)
 	water_level.fill(-INF)
 	var rc := w.river_cells()

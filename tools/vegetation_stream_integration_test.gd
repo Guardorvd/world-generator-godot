@@ -11,11 +11,11 @@ class ProbeLayer extends VegetationLayer:
 		if hold and not immediate:
 			gate.wait()
 		super._fill_details(px, pz, lead, epoch, clock, immediate)
-	func _apply_grass(immediate := false) -> void:
-		if not immediate and _detail_epoch != _epoch:
-			invalid_commits += 1
-		commits += 1
-		super._apply_grass(immediate)
+	func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
+		super._present_frame(group, mm, source, count, bounds, radius, immediate)
+		if group < 0:
+			if not immediate and _detail_epoch != _epoch: invalid_commits += 1
+			commits += 1
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)
@@ -79,8 +79,19 @@ func run() -> void:
 	check(furthest > 632 + veg.grass_r + 20, "The real worker fills the forward corridor beyond the current grass circle")
 	veg.update(632, 512, false, 1.0 / 60.0)
 	check(veg.commits == previous_commits and veg.invalid_commits == 0, "Region changes reject obsolete detail results")
+	# Refresh resets display history. Wait for the first valid asynchronous publication,
+	# rather than assuming the cancelled snapshot left a displayed grass group behind.
+	for i in 240:
+		await process_frame
+		veg.update(632, 512, false, 1.0 / 60.0)
+		if veg.snapshots.displayed.has(-1) and veg.commits > previous_commits: break
+	check(veg.snapshots.displayed.has(-1), "A valid replacement snapshot publishes after stale results are rejected")
+	if not veg.snapshots.displayed.has(-1):
+		veg.free()
+		quit(1)
+		return
 	var route_start := veg.commits
-	var previous: PackedFloat32Array = veg.snapshots.displayed[-1]
+	var previous: PackedFloat32Array = veg.snapshots.displayed[-1].slice(0, veg.snapshots.shown[-1] * 20)
 	var continuity := true
 	for i in 90:
 		await process_frame
@@ -90,7 +101,7 @@ func run() -> void:
 			var old := {}
 			for at in range(0, previous.size(), 20):
 				old[veg.Snapshots.key(previous, at)] = previous[at + 19]
-			var current: PackedFloat32Array = veg.snapshots.displayed[-1]
+			var current: PackedFloat32Array = veg.snapshots.displayed[-1].slice(0, veg.snapshots.shown[-1] * 20)
 			for at in range(0, current.size(), 20):
 				var id := veg.Snapshots.key(current, at)
 				var alpha := veg.Snapshots.opacity(current[at + 19], veg.stream.clock)

@@ -277,8 +277,8 @@ static func bake_without(h: Heightfield, d: TrailDefinition, removed: Array[Trai
 		var station := maxf(0.0, e.station - e.length * 0.5 - RoadRefinement.STEP)
 		while station <= e.station + e.length * 0.5 + RoadRefinement.STEP:
 			var p := d.point_at(station)
-			for cz in range(floori((p.y - span) / GameConfig.TILE - 0.5), ceili((p.y + span) / GameConfig.TILE - 0.5)):
-				for cx in range(floori((p.x - span) / GameConfig.TILE - 0.5), ceili((p.x + span) / GameConfig.TILE - 0.5)):
+			for cz in range(maxi(0, floori((p.y - span) / GameConfig.TILE - 0.5)), mini(h.world.H - 1, ceili((p.y + span) / GameConfig.TILE - 0.5))):
+				for cx in range(maxi(0, floori((p.x - span) / GameConfig.TILE - 0.5)), mini(h.world.W - 1, ceili((p.x + span) / GameConfig.TILE - 0.5))):
 					var key := cz * h.world.W + cx
 					if zone.has(key) and p.distance_squared_to(Vector2(cx + 1.0, cz + 1.0) * GameConfig.TILE) <= span * span: cells[key] = true
 			station += RoadRefinement.STEP

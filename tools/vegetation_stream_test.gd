@@ -52,11 +52,24 @@ func run() -> void:
 	check(not history.cleanup_due(11), "Cleanup does not schedule endless stationary rebuilds")
 	var prepared := history.prepare(0, rows([20, 30, 40]), 3, bounds, 1, 11)
 	check(history.displayed[0].size() == 40, "Worker preparation does not publish a partial snapshot")
+	history.stamp(prepared, 11.5)
 	frame = history.commit(0, prepared, 13)
 	check(Snapshots.opacity(stamp(frame, 40), 13) == 0.0, "Late completion starts fading at upload, not at task launch")
 	frame = history.merge(0, rows([]), 0, AABB(), 1, 14)
 	frame = history.merge(0, rows([]), 0, AABB(), 1, 15)
 	check(frame.count == 0, "Empty snapshots eventually release all retained plants")
+	var stamped := []
+	for fast in [false, true]:
+		Snapshots.allow_fast_stamps = fast
+		var probe := Snapshots.new()
+		probe.merge(0, rows([10, 20]), 2, bounds, 1, 10, true)
+		var pending := probe.prepare(0, rows([20, 30]), 2, bounds, 1, 10)
+		probe.stamp(pending, 10.1)
+		var published := probe.commit(0, pending, 10.3)
+		stamped.append(published.buffer)
+		check(Snapshots.opacity(stamp(published, 30), 10.3) < 0.00001, "Pre-stamped worker results begin fading at actual publication")
+	check(stamped[0] == stamped[1], "Native timestamp batch exactly matches the GDScript reference")
+	Snapshots.allow_fast_stamps = true
 	for speed in [0.0, 11.0, 25.0, 45.0, 65.0, 90.0]:
 		var policy := Policy.new()
 		policy.record_latency(1.8)

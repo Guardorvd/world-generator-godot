@@ -167,6 +167,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		if DisplayServer.get_name() != "headless": RenderingServer.viewport_set_measure_render_time(get_viewport().get_viewport_rid(), true)
 	if loaded.service_scope == null: loaded.service_scope = services
 	if loaded.chunk_source == null: loaded.prepare_streaming()
+	if not loaded.error.is_empty(): return
 	chunk_source = loaded.chunk_source
 	camera_controller.settings = services.settings
 	camera_controller.heights = loaded.heights
@@ -191,6 +192,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	$Terrain.add_child(terrain_stream)
 	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source)
 	stream_coordinator.terrain_update = terrain_stream.update
+	terrain_stream.frame_budget = stream_coordinator.frame_budget
+	vegetation.frame_budget = stream_coordinator.frame_budget
 	stream_coordinator.vegetation_update = vegetation.update
 	stream_coordinator.vegetation_budgeted = vegetation.update_frame
 	# Чанки уже содержат все треугольники. Монолит больше не нужен ни CPU, ни GPU.
@@ -208,6 +211,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		for layer in 2:
 			var water_stream := PlanTerrain.new()
 			water_stream.water_layer = layer
+			water_stream.frame_budget = stream_coordinator.frame_budget
 			water_stream.cache_size = loaded.cache_size
 			water_stream.setup(loaded.water_chunks[layer], WaterBuilder._material(false, layer == 1), services.cache, world, heights, chunk_source)
 			$Water.add_child(water_stream)
@@ -249,11 +253,11 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	rng.randomize()
 	var opening_spot := (loaded.opening_spot if loaded.opening_prepared else OpeningRoute.choose(world, heights, rng)) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
-	# 14.4+: соседние области — только с бесконечной генерацией (галочка в меню); без неё граница
-	# стартовой области закрыта: незакреплённая земля за краем недоступна (WorldData.accessible)
-	if world.outer != null and services.settings.infinite_world:
+	# Restore pinned regions even when generation of new regions is disabled.
+	if world.outer != null and (services.settings.infinite_world or not world.outer.get_ledger().is_empty()):
 		# 13.9+: закреплённые области мира — до игрока: сохранённое место может лежать в них.
 		regions = RegionStream.new()
+		regions.generation_enabled = services.settings.infinite_world
 		regions.cpu_budget = services.cpu_budget
 		regions.terrain_builder = services.terrain
 		regions.name = "Regions"
@@ -266,6 +270,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		else:
 			stream_coordinator.restore_regions(Vector3(saved.player.x, 0.0, saved.player.z))
 	player = PlayerState.spawn(world, heights)
+	if player == null:
+		loaded.error = "В подготовленном мире не найдено безопасное место появления."
+		return
 	if not saved.is_empty():
 		world.expand_territory(world.W)
 		player.x = saved.player.x
@@ -276,6 +283,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
 		if not safe_position(player.x, player.z, player.feet):
 			player = PlayerState.spawn(world, heights)
+			if player == null:
+				loaded.error = "Не найдено безопасное место для восстановления игрока."
+				return
 		else:
 			player.feet = heights.surface_at(player.x, player.z, player.feet)
 		yaw = saved.player.yaw
@@ -409,6 +419,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
 	if world.outer != null and outer != null:
+		outer.frame_budget = stream_coordinator.frame_budget
 		stream_coordinator.outer_update = outer.update
 	if regions != null:
 		stream_coordinator.region_update = regions.update
@@ -490,13 +501,11 @@ static func save_signature(w: WorldData) -> String:
 	return var_to_bytes(rows).hex_encode().sha256_text()
 
 
-static func can_restore(saved: Dictionary, w: WorldData, settings: GameSettings = null) -> bool:
-	if settings == null:
-		settings = GameContext.scope.settings
+static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings = null) -> bool:
 	if saved.signature != save_signature(w):
 		return false
 	# 13.9+final: места и задания соседних областей — из их журнала на диске
-	if w.outer != null and w.outer.get_ledger().is_empty() and settings.infinite_world:
+	if w.outer != null and w.outer.get_ledger().is_empty():
 		w.outer.set_ledger(RegionStream.read_ledger(w))
 	var places := {}
 	for kind: String in WorldData.PLACE_KINDS:
@@ -708,6 +717,9 @@ func travel_to(place: Dictionary) -> void:
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	var arriving := PlayerState.arrive(world, heights, place)
+	if arriving == null:
+		hud.toast_now("Рядом с местом прибытия не найдено безопасной точки")
+		return
 	if chunk_source != null:
 		services.controls.release_motion()
 		services.controls.read_bike_body(bike, false)

@@ -1,0 +1,1380 @@
+{
+  "date": "2026-11-04",
+  "description": "Single-run control measurements, not a cross-world speed guarantee; CPU preparation overlaps workers.",
+  "cpu_before": {
+    "version": "14.10",
+    "seed": "Север-1234",
+    "size": 256,
+    "backend": "fast",
+    "total_ms": 72720,
+    "stages": [
+      [
+        "Формирование континентов",
+        825
+      ],
+      [
+        "Наполнение океанов",
+        503
+      ],
+      [
+        "Течение рек",
+        1218
+      ],
+      [
+        "Русла рек и озёра",
+        6915
+      ],
+      [
+        "Высоты, уклоны и берега",
+        418
+      ],
+      [
+        "Климат и биомы",
+        40
+      ],
+      [
+        "Основание поселений",
+        1792
+      ],
+      [
+        "Прокладка звериных троп",
+        669
+      ],
+      [
+        "Прокладка троп между поселениями",
+        812
+      ],
+      [
+        "Дороги между поселениями",
+        5388
+      ],
+      [
+        "Дополнительные тропы",
+        1533
+      ],
+      [
+        "Обходные тропы",
+        171
+      ],
+      [
+        "Тропы к берегам",
+        1104
+      ],
+      [
+        "Прокладка горных троп",
+        1276
+      ],
+      [
+        "Старые места и хутора",
+        1155
+      ],
+      [
+        "Подготовка поверхности велосипедных трасс",
+        15809
+      ],
+      [
+        "Велосипедные маршруты",
+        24501
+      ],
+      [
+        "Леса, кустарники и камни",
+        2461
+      ],
+      [
+        "Отрисовка ландшафта",
+        0
+      ],
+      [
+        "Рельеф, вода и заливка",
+        6125
+      ],
+      [
+        "Текстура рельефа и карта",
+        0
+      ]
+    ],
+    "timings": {
+      "prepare_paint_ms": 7417.647,
+      "prepare_heights_ms": 0.056,
+      "prepare_mesh_ms": 768.678,
+      "prepare_water_ms": 3587.876,
+      "generate_ms": 66595.253,
+      "prepare_wait_ms": 10.031,
+      "finish_paths_ms": 131.504,
+      "path_details": {
+        "road_bed_ms": 1169.057,
+        "structures_ms": 15.541,
+        "index_ms": 1362.546,
+        "fit_network_ms": 346.911,
+        "nearest_ms": 952.049,
+        "vertex_math_ms": 3923.284,
+        "vertices_ms": 5394.983
+      },
+      "trail_ms": 6.811,
+      "patch_refine_mesh_ms": 5033.015,
+      "partition_ms": 467.727,
+      "outer_ms": 482.413,
+      "overlays_wait_ms": 0.018,
+      "forest_surface_ms": 5139.96,
+      "map_ms": 2352.604,
+      "terrain_image_ms": 1356.982,
+      "cache_io": {},
+      "profile_origin": "current_generation",
+      "total_ms": 72720.077
+    },
+    "path_timings": {
+      "road_bed_ms": 1169.057,
+      "structures_ms": 15.541,
+      "index_ms": 1362.546,
+      "fit_network_ms": 346.911,
+      "nearest_ms": 952.049,
+      "vertex_math_ms": 3923.284,
+      "vertices_ms": 5394.983
+    },
+    "searches": {
+      "stages_ms": {
+        "relief": 824.758,
+        "ocean": 503.917,
+        "hydrology": 1217.117,
+        "rivers": 6915.261,
+        "geography": 417.911,
+        "climate": 40.519,
+        "landmarks": 1791.118,
+        "trails": 10953.019,
+        "sites": 1155.725,
+        "trail_plan": 40309.679,
+        "vegetation": 2423.616,
+        "lakes": 36.28,
+        "road_surface": 0.018
+      },
+      "river_valleys_ms": 1935.664,
+      "river_lines_ms": 443.489,
+      "river_surface_ms": 2953.075,
+      "river_water_ms": 1582.822,
+      "river_ribbons_ms": 529.941,
+      "river_carve_ms": 671.496,
+      "river_bed_cut_ms": 410.911,
+      "river_banks_ms": 740.326,
+      "climate_field_ms": 40.477,
+      "cost_ms": 14.654,
+      "route_heightfield_ms": 0.113,
+      "finder_setup_ms": 7.102,
+      "animal_trails_ms": 424.355,
+      "corridor_road_ms": 222.156,
+      "corridor_road_details": {
+        "prepare_ms": 19.5098,
+        "measure_ms": 197.7644,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "settlement_candidates": 11,
+      "settlement_attempts": 16,
+      "settlement_rejected": 9,
+      "road_failures": {
+        "bridge_site": 6,
+        "unreachable": 2
+      },
+      "road_links": [
+        [
+          8,
+          1,
+          81,
+          5639,
+          "ok",
+          42.768,
+          3.79300000000001
+        ],
+        [
+          8,
+          3,
+          85,
+          10062,
+          "ok",
+          48.472,
+          5.14099999999999
+        ],
+        [
+          10,
+          1,
+          150,
+          15604,
+          "ok",
+          70.444,
+          7.50700000000001
+        ],
+        [
+          6,
+          0,
+          169,
+          26292,
+          "ok",
+          79.121,
+          11.836
+        ],
+        [
+          8,
+          7,
+          160,
+          23405,
+          "ok",
+          93.96,
+          10.953
+        ],
+        [
+          3,
+          5,
+          119,
+          76895,
+          "ok",
+          211.917,
+          41.825
+        ],
+        [
+          10,
+          9,
+          142,
+          24092,
+          "ok",
+          90.084,
+          11.243
+        ],
+        [
+          4,
+          5,
+          160,
+          34092,
+          "bridge_site",
+          131.77,
+          24.903
+        ],
+        [
+          4,
+          1,
+          205,
+          71659,
+          "bridge_site",
+          140.522,
+          42.817
+        ],
+        [
+          4,
+          3,
+          267,
+          42892,
+          "bridge_site",
+          118.621,
+          22.776
+        ],
+        [
+          7,
+          2,
+          215,
+          81950,
+          "ok",
+          452.937,
+          66.191
+        ],
+        [
+          6,
+          7,
+          234,
+          765947,
+          "bridge_site",
+          1516.463,
+          312.013
+        ],
+        [
+          8,
+          6,
+          382,
+          623608,
+          "bridge_site",
+          468.814,
+          195.504
+        ],
+        [
+          6,
+          10,
+          306,
+          632696,
+          "bridge_site",
+          729.108,
+          194.457
+        ],
+        [
+          4,
+          6,
+          611,
+          0,
+          "unreachable",
+          19.706,
+          0.0
+        ],
+        [
+          4,
+          0,
+          666,
+          0,
+          "unreachable",
+          18.738,
+          0.0
+        ]
+      ],
+      "road_windows": {
+        "0": 15,
+        "1": 3
+      },
+      "no_bridge_cells": 4240,
+      "site_failures": [
+        {
+          "landing_gap": 21,
+          "deck": 4,
+          "at": [
+            274006,
+            274772,
+            1
+          ]
+        },
+        {
+          "landing_gap": 279,
+          "at": [
+            310920,
+            318623,
+            29
+          ]
+        },
+        {
+          "grade": 250,
+          "at": [
+            366243,
+            365475,
+            1
+          ]
+        },
+        {
+          "grade": 225,
+          "at": [
+            443019,
+            443790,
+            7
+          ]
+        },
+        {
+          "grade": 490,
+          "landing_gap": 131,
+          "ground": 4,
+          "at": [
+            386214,
+            384674,
+            3
+          ]
+        },
+        {
+          "landing_gap": 13,
+          "deck": 3,
+          "wall": 8,
+          "ground": 1,
+          "at": [
+            295431,
+            297740,
+            4
+          ]
+        },
+        {
+          "landing_gap": 17,
+          "at": [
+            349722,
+            374333,
+            34
+          ]
+        },
+        {
+          "at": [
+            339717,
+            379716,
+            62
+          ]
+        },
+        {
+          "at": [
+            342017,
+            389701,
+            68
+          ]
+        },
+        {
+          "landing_gap": 25,
+          "at": [
+            343548,
+            354311,
+            13
+          ]
+        },
+        {
+          "at": [
+            343542,
+            392772,
+            82
+          ]
+        },
+        {
+          "at": [
+            348910,
+            396609,
+            82
+          ]
+        },
+        {
+          "landing_gap": 38,
+          "at": [
+            394307,
+            398144,
+            9
+          ]
+        },
+        {
+          "at": [
+            400446,
+            348907,
+            87
+          ]
+        },
+        {
+          "landing_gap": 22,
+          "ground": 3,
+          "at": [
+            313888,
+            310819,
+            3
+          ]
+        },
+        {
+          "landing_gap": 532,
+          "ground": 18,
+          "at": [
+            91185,
+            93490,
+            2
+          ]
+        },
+        {
+          "landing_water": 8,
+          "landing_gap": 201,
+          "at": [
+            88128,
+            91199,
+            3
+          ]
+        },
+        {
+          "grade": 12,
+          "landing_gap": 333,
+          "ground": 5,
+          "at": [
+            216853,
+            216864,
+            13
+          ]
+        }
+      ],
+      "settlement_expanded": 2434833,
+      "main_roads_ms": 6096,
+      "main_roads_search": {
+        "calls": 110,
+        "expanded": 2497761,
+        "native_ms": 905.0436,
+        "cache_hits": 0,
+        "prefetches": 10,
+        "prefetch_hits": 0,
+        "prefetch_expanded": 363401,
+        "prefetch_cancelled": 2,
+        "prefetch_unused": 8,
+        "prefetch_wait_ms": 0.0,
+        "budget_stops": 0,
+        "no_path": 10,
+        "reach_calls": 34,
+        "reach_rejects": 6,
+        "reach_visited": 2207241,
+        "call_ms": 1105.929,
+        "skipped": 0
+      },
+      "corridor_trail_ms": 102.147,
+      "corridor_trail_details": {
+        "prepare_ms": 3.8818,
+        "measure_ms": 95.8461,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "secondary_roads_ms": 2691.737,
+      "homes_laid": 19,
+      "homes_kept": 19,
+      "layout_ms": 18.008,
+      "checkpoints": 28,
+      "checkpoint_mb": 173.25,
+      "restores": 30,
+      "corridor_mountain_ms": 99.762,
+      "corridor_mountain_details": {
+        "prepare_ms": 0.5972,
+        "measure_ms": 98.2425,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "mountain_fords_ms": 208.362,
+      "mountain_nearest_ms": 13.826,
+      "mountain_search_ms": 473.676,
+      "mountain_add_ms": 577.743,
+      "mountain_trails_ms": 1273.671,
+      "calls": 159,
+      "expanded": 5844059,
+      "native_ms": 2032.1082,
+      "cache_hits": 0,
+      "prefetches": 10,
+      "prefetch_hits": 0,
+      "prefetch_expanded": 363401,
+      "prefetch_cancelled": 2,
+      "prefetch_unused": 8,
+      "prefetch_wait_ms": 0.0,
+      "budget_stops": 0,
+      "no_path": 15,
+      "reach_calls": 34,
+      "reach_rejects": 6,
+      "reach_visited": 2207241,
+      "call_ms": 2275.279,
+      "skipped": 0,
+      "stage_ms": 10951.675,
+      "parts_ms": {
+        "protect_structures": 724.219,
+        "road_line": 920.958,
+        "add_trail": 1942.642,
+        "roads_setup": 790.883,
+        "structures": 4195.461,
+        "build_structures": 2119.538,
+        "bridge_site": 1041.218,
+        "checkpoint": 0.71,
+        "restore": 639.976,
+        "network_cost": 4.246,
+        "corridor": 37.294,
+        "avoiding": 21.838,
+        "shore": 727.39
+      },
+      "forest_noise_ms": 25.284,
+      "forest_fields_ms": 301.933
+    }
+  },
+  "cpu_after": {
+    "version": "14.10",
+    "seed": "Север-1234",
+    "size": 256,
+    "backend": "fast",
+    "total_ms": 64902,
+    "stages": [
+      [
+        "Формирование континентов",
+        827
+      ],
+      [
+        "Наполнение океанов",
+        503
+      ],
+      [
+        "Течение рек",
+        1259
+      ],
+      [
+        "Русла рек и озёра",
+        5481
+      ],
+      [
+        "Высоты, уклоны и берега",
+        420
+      ],
+      [
+        "Климат и биомы",
+        48
+      ],
+      [
+        "Основание поселений",
+        1814
+      ],
+      [
+        "Прокладка звериных троп",
+        657
+      ],
+      [
+        "Прокладка троп между поселениями",
+        879
+      ],
+      [
+        "Дороги между поселениями",
+        5206
+      ],
+      [
+        "Дополнительные тропы",
+        1634
+      ],
+      [
+        "Обходные тропы",
+        175
+      ],
+      [
+        "Тропы к берегам",
+        1120
+      ],
+      [
+        "Прокладка горных троп",
+        1293
+      ],
+      [
+        "Старые места и хутора",
+        1171
+      ],
+      [
+        "Подготовка поверхности велосипедных трасс",
+        11884
+      ],
+      [
+        "Велосипедные маршруты",
+        22283
+      ],
+      [
+        "Леса, кустарники и камни",
+        2275
+      ],
+      [
+        "Отрисовка ландшафта",
+        0
+      ],
+      [
+        "Рельеф, вода и заливка",
+        5968
+      ],
+      [
+        "Текстура рельефа и карта",
+        0
+      ]
+    ],
+    "timings": {
+      "prepare_paint_ms": 7259.27,
+      "prepare_heights_ms": 0.049,
+      "prepare_mesh_ms": 791.193,
+      "prepare_water_ms": 3706.425,
+      "generate_ms": 58933.118,
+      "prepare_wait_ms": 9.314,
+      "finish_paths_ms": 118.96,
+      "path_details": {
+        "road_bed_ms": 1169.47,
+        "structures_ms": 15.67,
+        "index_ms": 1367.753,
+        "fit_network_ms": 345.741,
+        "nearest_ms": 950.456,
+        "vertex_math_ms": 405.149,
+        "vertices_ms": 1587.851
+      },
+      "trail_ms": 6.338,
+      "patch_refine_mesh_ms": 4922.942,
+      "partition_ms": 451.463,
+      "outer_ms": 465.413,
+      "overlays_wait_ms": 0.016,
+      "forest_surface_ms": 4979.701,
+      "map_ms": 2325.46,
+      "terrain_image_ms": 1297.926,
+      "cache_io": {},
+      "profile_origin": "current_generation",
+      "total_ms": 64901.322
+    },
+    "path_timings": {
+      "road_bed_ms": 1169.47,
+      "structures_ms": 15.67,
+      "index_ms": 1367.753,
+      "fit_network_ms": 345.741,
+      "nearest_ms": 950.456,
+      "vertex_math_ms": 405.149,
+      "vertices_ms": 1587.851
+    },
+    "searches": {
+      "stages_ms": {
+        "relief": 826.625,
+        "ocean": 503.347,
+        "hydrology": 1258.895,
+        "rivers": 5481.2,
+        "geography": 419.811,
+        "climate": 47.98,
+        "landmarks": 1813.393,
+        "trails": 10964.207,
+        "sites": 1171.565,
+        "trail_plan": 34166.244,
+        "vegetation": 2236.409,
+        "lakes": 37.459,
+        "road_surface": 0.018
+      },
+      "river_valleys_ms": 1982.367,
+      "river_lines_ms": 448.47,
+      "river_surface_ms": 3014.676,
+      "river_water_ms": 35.486,
+      "river_ribbons_ms": 559.734,
+      "river_carve_ms": 684.837,
+      "river_bed_cut_ms": 421.483,
+      "river_banks_ms": 737.073,
+      "climate_field_ms": 47.935,
+      "cost_ms": 15.13,
+      "route_heightfield_ms": 0.117,
+      "finder_setup_ms": 6.601,
+      "animal_trails_ms": 354.185,
+      "corridor_road_ms": 280.281,
+      "corridor_road_details": {
+        "prepare_ms": 22.745,
+        "measure_ms": 251.4381,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "settlement_candidates": 11,
+      "settlement_attempts": 16,
+      "settlement_rejected": 9,
+      "road_failures": {
+        "bridge_site": 6,
+        "unreachable": 2
+      },
+      "road_links": [
+        [
+          8,
+          1,
+          81,
+          5639,
+          "ok",
+          50.776,
+          3.76799999999999
+        ],
+        [
+          8,
+          3,
+          85,
+          10062,
+          "ok",
+          62.769,
+          5.16600000000003
+        ],
+        [
+          10,
+          1,
+          150,
+          15604,
+          "ok",
+          41.761,
+          7.351
+        ],
+        [
+          6,
+          0,
+          169,
+          26292,
+          "ok",
+          75.472,
+          11.34
+        ],
+        [
+          8,
+          7,
+          160,
+          23405,
+          "ok",
+          81.257,
+          11.991
+        ],
+        [
+          3,
+          5,
+          119,
+          76895,
+          "ok",
+          204.798,
+          52.268
+        ],
+        [
+          10,
+          9,
+          142,
+          24092,
+          "ok",
+          88.414,
+          11.343
+        ],
+        [
+          4,
+          5,
+          160,
+          34092,
+          "bridge_site",
+          116.19,
+          28.202
+        ],
+        [
+          4,
+          1,
+          205,
+          71659,
+          "bridge_site",
+          147.997,
+          40.912
+        ],
+        [
+          4,
+          3,
+          267,
+          42892,
+          "bridge_site",
+          109.959,
+          23.04
+        ],
+        [
+          7,
+          2,
+          215,
+          81950,
+          "ok",
+          395.662,
+          51.38
+        ],
+        [
+          6,
+          7,
+          234,
+          765947,
+          "bridge_site",
+          1494.604,
+          327.551
+        ],
+        [
+          8,
+          6,
+          382,
+          623608,
+          "bridge_site",
+          439.996,
+          192.488
+        ],
+        [
+          6,
+          10,
+          306,
+          632696,
+          "bridge_site",
+          731.315,
+          194.439
+        ],
+        [
+          4,
+          6,
+          611,
+          0,
+          "unreachable",
+          19.732,
+          0.0
+        ],
+        [
+          4,
+          0,
+          666,
+          0,
+          "unreachable",
+          18.519,
+          0.0
+        ]
+      ],
+      "road_windows": {
+        "0": 15,
+        "1": 3
+      },
+      "no_bridge_cells": 4240,
+      "site_failures": [
+        {
+          "landing_gap": 21,
+          "deck": 4,
+          "at": [
+            274006,
+            274772,
+            1
+          ]
+        },
+        {
+          "landing_gap": 279,
+          "at": [
+            310920,
+            318623,
+            29
+          ]
+        },
+        {
+          "grade": 250,
+          "at": [
+            366243,
+            365475,
+            1
+          ]
+        },
+        {
+          "grade": 225,
+          "at": [
+            443019,
+            443790,
+            7
+          ]
+        },
+        {
+          "grade": 490,
+          "landing_gap": 131,
+          "ground": 4,
+          "at": [
+            386214,
+            384674,
+            3
+          ]
+        },
+        {
+          "landing_gap": 13,
+          "deck": 3,
+          "wall": 8,
+          "ground": 1,
+          "at": [
+            295431,
+            297740,
+            4
+          ]
+        },
+        {
+          "landing_gap": 17,
+          "at": [
+            349722,
+            374333,
+            34
+          ]
+        },
+        {
+          "at": [
+            339717,
+            379716,
+            62
+          ]
+        },
+        {
+          "at": [
+            342017,
+            389701,
+            68
+          ]
+        },
+        {
+          "landing_gap": 25,
+          "at": [
+            343548,
+            354311,
+            13
+          ]
+        },
+        {
+          "at": [
+            343542,
+            392772,
+            82
+          ]
+        },
+        {
+          "at": [
+            348910,
+            396609,
+            82
+          ]
+        },
+        {
+          "landing_gap": 38,
+          "at": [
+            394307,
+            398144,
+            9
+          ]
+        },
+        {
+          "at": [
+            400446,
+            348907,
+            87
+          ]
+        },
+        {
+          "landing_gap": 22,
+          "ground": 3,
+          "at": [
+            313888,
+            310819,
+            3
+          ]
+        },
+        {
+          "landing_gap": 532,
+          "ground": 18,
+          "at": [
+            91185,
+            93490,
+            2
+          ]
+        },
+        {
+          "landing_water": 8,
+          "landing_gap": 201,
+          "at": [
+            88128,
+            91199,
+            3
+          ]
+        },
+        {
+          "grade": 12,
+          "landing_gap": 333,
+          "ground": 5,
+          "at": [
+            216853,
+            216864,
+            13
+          ]
+        }
+      ],
+      "settlement_expanded": 2434833,
+      "main_roads_ms": 5979,
+      "main_roads_search": {
+        "calls": 110,
+        "expanded": 2497761,
+        "native_ms": 923.8686,
+        "cache_hits": 0,
+        "prefetches": 10,
+        "prefetch_hits": 0,
+        "prefetch_expanded": 380352,
+        "prefetch_cancelled": 0,
+        "prefetch_unused": 10,
+        "prefetch_wait_ms": 0.0,
+        "budget_stops": 0,
+        "no_path": 10,
+        "reach_calls": 34,
+        "reach_rejects": 6,
+        "reach_visited": 2207241,
+        "call_ms": 1087.248,
+        "skipped": 0
+      },
+      "corridor_trail_ms": 103.709,
+      "corridor_trail_details": {
+        "prepare_ms": 4.1885,
+        "measure_ms": 98.6221,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "secondary_roads_ms": 2810.229,
+      "homes_laid": 19,
+      "homes_kept": 19,
+      "layout_ms": 20.856,
+      "checkpoints": 28,
+      "checkpoint_mb": 173.25,
+      "restores": 30,
+      "corridor_mountain_ms": 99.067,
+      "corridor_mountain_details": {
+        "prepare_ms": 0.5142,
+        "measure_ms": 97.4495,
+        "input_buffer_bytes": 5308416,
+        "cache_buffer_bytes": 67108864
+      },
+      "mountain_fords_ms": 170.132,
+      "mountain_nearest_ms": 15.575,
+      "mountain_search_ms": 485.515,
+      "mountain_add_ms": 620.681,
+      "mountain_trails_ms": 1291.971,
+      "calls": 159,
+      "expanded": 5844059,
+      "native_ms": 2098.8484,
+      "cache_hits": 0,
+      "prefetches": 10,
+      "prefetch_hits": 0,
+      "prefetch_expanded": 380352,
+      "prefetch_cancelled": 0,
+      "prefetch_unused": 10,
+      "prefetch_wait_ms": 0.0,
+      "budget_stops": 0,
+      "no_path": 15,
+      "reach_calls": 34,
+      "reach_rejects": 6,
+      "reach_visited": 2207241,
+      "call_ms": 2312.303,
+      "skipped": 0,
+      "stage_ms": 10962.938,
+      "parts_ms": {
+        "protect_structures": 716.631,
+        "road_line": 938.048,
+        "add_trail": 1978.566,
+        "roads_setup": 847.253,
+        "structures": 4234.916,
+        "build_structures": 2072.495,
+        "bridge_site": 1043.137,
+        "checkpoint": 0.719,
+        "restore": 626.118,
+        "network_cost": 4.605,
+        "corridor": 38.309,
+        "avoiding": 22.258,
+        "shore": 736.777
+      },
+      "forest_noise_ms": 27.284,
+      "forest_fields_ms": 293.396
+    },
+    "trail_network": {
+      "survey": {
+        "looked": 999,
+        "fit": 21,
+        "probed": 64,
+        "confirmed": 21,
+        "duplicates": 13,
+        "refused": {
+          "коридор выходит за подготовленную область": 43
+        },
+        "first_proposal_ms": 427.819,
+        "overview_ms": 398.255,
+        "overview_cells": 9216,
+        "sites": 8,
+        "budget": 64,
+        "budget_exhausted": true,
+        "ms": 525.985,
+        "probe_ms": 127.73,
+        "measure_ms": 398.255,
+        "detailed_probes": 0
+      },
+      "input_ms": 2726,
+      "phases_ms": {
+        "cut": 1202.266,
+        "window": 80.086,
+        "layout": 7321.541,
+        "layout_walk_ms": 3124.0,
+        "layout_compose_ms": 2740.0,
+        "prepare": 10931.474,
+        "prepare_setup_ms": 256.702,
+        "prepare_surface_ms": 1928.059,
+        "prepare_earthworks_ms": 7986.129,
+        "prepare_earthworks_profile_ms": 536.155,
+        "prepare_earthworks_zone_ms": 128.49,
+        "audit": 36.034,
+        "validation": 2101.694
+      },
+      "attempted": 11,
+      "accepted": 13,
+      "rejected": {
+        "нет законченного маршрута: фрагментов 0, отказов финиша 0, завершённых кандидатов 1, отказов полотна 1": 1,
+        "непроходимый старт коридора": 2,
+        "превышен игровой предел земляных работ": 2,
+        "нет законченного маршрута: фрагментов 0, отказов финиша 2, завершённых кандидатов 0, отказов полотна 0; финиш без безопасного места остановки и выката": 2
+      },
+      "work_m": 6227.79944444818,
+      "length_m": 5602.34107971191,
+      "legs": 13,
+      "corridors": [
+        1013,
+        682,
+        629,
+        592,
+        507,
+        411,
+        309,
+        301
+      ],
+      "routes_m": [
+        833,
+        182,
+        818,
+        214,
+        839,
+        484,
+        407,
+        335,
+        293
+      ],
+      "park": {
+        "ms": 3444,
+        "lines": 3
+      },
+      "elements_dropped": 14,
+      "pruned_starts": 2,
+      "lines_cut": 1,
+      "budget_exhausted": true,
+      "total_ms": 28978,
+      "base_surface_ms": 4768
+    }
+  },
+  "fingerprint_reference": {
+    "h": 1274234213,
+    "filled": 3779997545,
+    "elev": 2342140531,
+    "acc": 3152342849,
+    "slope": 3011227988,
+    "temp": 3975288039,
+    "moist": 2721914776,
+    "dist_ocean": 2684764100,
+    "dist_water": 2117763273,
+    "ocean": 7098119,
+    "lake": 1486065090,
+    "river": 849891561,
+    "biome": 1138037457,
+    "path_mask": 1821678371,
+    "road_surface": 2676788701,
+    "river_area": 442351020,
+    "river_geometry": 2192664650,
+    "river_exits": 2250448444,
+    "watershed": 4201733470,
+    "road_bed": 1045631654,
+    "seed_num": 3093347586,
+    "obj_count": 38530,
+    "objects": 3035910409,
+    "rivers": 1163,
+    "trails": 108,
+    "settlements": 1656360817,
+    "sites": 861910408,
+    "travel_geometry": 462520186,
+    "bridges": 18,
+    "tunnels": 0,
+    "names": "Яричи,Яснец,Туманный шпиль,Седой клык,Грозовой утёс,Грозовой шпиль,Ледяной гребень,Грозовой клык,Волчий гребень,Северный шпиль,Ледяной клык,Грозовой гребень,Каменный гребень,Туманный шпиль,Туманный гребень,Острый клык",
+    "lakes": "Каменное озеро 1531 53,101; Круглое озеро 1360 253,182; Ясное озеро 1142 471,671; Ясное озеро 772 113,178; Ясное озеро 320 503,618"
+  },
+  "fingerprint_match_fields": 32,
+  "fingerprint_evidence": "Final bench log: Fingerprint parity: true (32 fields)",
+  "render_final": {
+    "machine": {
+      "gpu": "NVIDIA GeForce GTX 1650 SUPER",
+      "cpu": "AMD Ryzen 7 2700 Eight-Core Processor",
+      "threads": 16,
+      "os": "Windows",
+      "dotnet": true
+    },
+    "result": {
+      "render": {
+        "method": "forward_plus",
+        "viewport": "(1280, 720)",
+        "scale": 1.0,
+        "shadows": true,
+        "msaa": 2
+      },
+      "menu_memory": {
+        "rss_mb": 567.9,
+        "peak_rss_mb": 567.9,
+        "static_mb": 120.3,
+        "video_mb": 30.7,
+        "texture_mb": 6.6,
+        "buffer_mb": 4.4,
+        "objects": 2735,
+        "nodes": 302
+      },
+      "load_s": 74.74,
+      "loaded_memory": {
+        "rss_mb": 1605.6,
+        "peak_rss_mb": 1747.1,
+        "static_mb": 657.0,
+        "video_mb": 363.7,
+        "texture_mb": 182.3,
+        "buffer_mb": 130.1,
+        "objects": 19368,
+        "nodes": 8272
+      },
+      "look": {
+        "fps": 189.5,
+        "low1": 137.8,
+        "p95_ms": 6.93599987030029,
+        "p99_ms": 7.25500011444092,
+        "over_16_7": 0,
+        "over_33_3": 0,
+        "max_ms": 8.0,
+        "frames": 1516
+      },
+      "road": {
+        "fps": 178.0,
+        "low1": 100.1,
+        "p95_ms": 7.89699983596802,
+        "p99_ms": 9.98900032043457,
+        "over_16_7": 1,
+        "over_33_3": 0,
+        "max_ms": 26.4,
+        "frames": 1781
+      },
+      "road_stream_cpu": {
+        "fps": 720.5,
+        "low1": 291.4,
+        "p95_ms": 2.13800001144409,
+        "p99_ms": 3.43199992179871,
+        "over_16_7": 1,
+        "over_33_3": 0,
+        "max_ms": 20.4,
+        "frames": 1781
+      },
+      "cumulative_publication": {
+        "frames": 1782,
+        "elapsed_us": 2464394,
+        "max_us": 20399,
+        "over_budget": 41,
+        "grants": [
+          1604,
+          92,
+          86
+        ],
+        "group_names": [
+          "vegetation",
+          "terrain",
+          "water",
+          "outer",
+          "regions"
+        ],
+        "group_total_us": [
+          2259832,
+          91672,
+          72272,
+          18666,
+          0
+        ],
+        "group_max_us": [
+          18023,
+          1817,
+          872,
+          207,
+          0
+        ]
+      },
+      "cumulative_chunks": {
+        "reads": 119,
+        "repairs": 0,
+        "pending_hits": 0,
+        "rebuilt_cells": 0,
+        "read_ms": 0.178,
+        "upload_bytes": 94051384,
+        "upload_ms": 141.691,
+        "max_upload_ms": 2.703,
+        "peak_reads": 0,
+        "queued": 0,
+        "active": 0,
+        "startup_bytes": 0
+      },
+      "draw_calls": 1126,
+      "primitives": 1938901,
+      "memory": {
+        "rss_mb": 1690.8,
+        "peak_rss_mb": 1747.1,
+        "static_mb": 713.8,
+        "video_mb": 319.4,
+        "texture_mb": 182.3,
+        "buffer_mb": 85.5,
+        "objects": 18737,
+        "nodes": 7849
+      }
+    }
+  },
+  "render_scope": "10 seconds camera flight along a road through real stream coordinator; excludes BikeRide physics.",
+  "tests": {
+    "optimization_contract_test": 11,
+    "cold_cache_async_test": 4,
+    "main_game_polish_test": 38,
+    "resource_pipeline_test": 90,
+    "road_native_test": "PASS: exact channels, scalar and SIMD",
+    "water_native_test": "PASS: seven exact fields",
+    "vegetation_stream_test": "PASS",
+    "vegetation_stream_integration_test": "PASS",
+    "trail_world_network_test": "PASS",
+    "dotnet_build_no_restore": "PASS; NU1900 vulnerability endpoint unavailable"
+  }
+}

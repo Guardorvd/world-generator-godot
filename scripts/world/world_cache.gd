@@ -63,6 +63,7 @@ var _jobs: Array[Dictionary] = []
 var _writer_active := false
 var _pending_bytes := 0
 var _pending_jobs := 0
+var _writing_chunks := {} # immutable buffers already reserved by the FIFO job, keyed by future filename
 var _write_room := Semaphore.new()
 var queue_stats := {wait_ms = 0.0, peak_bytes = 0, peak_jobs = 0, oversized_jobs = 0}
 var cpu_budget: RefCounted
@@ -155,7 +156,7 @@ func save_artifact(seed_text: String, size: int, artifact: String, data: Diction
 
 
 ## Immutable chunk blocks first, the small surface manifest last. No monolithic terrain bytes.
-func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictionary, water_chunks: Array = [{}, {}]) -> Dictionary:
+func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictionary, water_chunks: Array = [{}, {}], planned_refs := {}) -> Dictionary:
 	var snapshot := data.duplicate(true)
 	var pieces := chunks.duplicate(true)
 	var key := artifact_key(seed_text, size, "surface")
@@ -164,24 +165,35 @@ func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictio
 	var water := water_chunks.duplicate(true)
 	var ticket := {result = {}}
 	var writing: Array[String] = []
+	snapshot.chunks = {}
+	snapshot.water_chunks = [{}, {}]
 	for group in 3:
 		var source: Dictionary = pieces if group == 0 else water[group - 1]
+		var refs: Dictionary = snapshot.chunks if group == 0 else snapshot.water_chunks[group - 1]
 		for at: Vector2i in source:
-			writing.append(dir.path_join("%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]))
+			var name := "%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]
+			writing.append(dir.path_join(name))
+			refs[at] = {file = name, key = "%s|%d|%d|%d" % [key, group, at.x, at.y], bytes = preload("res://scripts/core/byte_lru.gd").size_of(source[at])}
+			_lock.lock()
+			_writing_chunks[name] = source[at]
+			_lock.unlock()
+	# Publish immutable addresses before dispatch. The manifest still commits only after all blocks.
+	planned_refs.chunks = snapshot.chunks
+	planned_refs.water_chunks = snapshot.water_chunks
 	pin_files(writing)
 	_queue_job(func() -> void:
-		snapshot.chunks = {}
-		snapshot.water_chunks = [{}, {}]
 		for group in 3:
 			var source: Dictionary = pieces if group == 0 else water[group - 1]
-			var refs: Dictionary = snapshot.chunks if group == 0 else snapshot.water_chunks[group - 1]
 			for at: Vector2i in source:
 				var name := "%s.%s.%d.%d_%d.chunk%s" % [_base(seed_text, size), generation, group, at.x, at.y, EXT]
 				var chunk_key := "%s|%d|%d|%d" % [key, group, at.x, at.y]
 				if _write(dir.path_join(name), chunk_key, var_to_bytes({arrays = source[at]})) != OK:
+					_forget_writing_chunks(writing)
 					unpin_files(writing)
 					return
-				refs[at] = {file = name, key = chunk_key, bytes = preload("res://scripts/core/byte_lru.gd").size_of(source[at])}
+				_lock.lock()
+				_writing_chunks.erase(name) # file is atomically readable before RAM handoff retires
+				_lock.unlock()
 		if _write(path, key, var_to_bytes(snapshot)) == OK:
 			ticket.result = snapshot
 			_pin_lock.lock()
@@ -191,6 +203,17 @@ func save_surface(seed_text: String, size: int, data: Dictionary, chunks: Dictio
 		collect_chunks(seed_text, size),
 		preload("res://scripts/core/byte_lru.gd").size_of([snapshot, pieces, water]))
 	return ticket
+
+func writing_chunk(file: String) -> Variant:
+	_lock.lock()
+	var arrays: Variant = _writing_chunks.get(file)
+	_lock.unlock()
+	return arrays
+
+func _forget_writing_chunks(paths: Array[String]) -> void:
+	_lock.lock()
+	for path: String in paths: _writing_chunks.erase(path.get_file())
+	_lock.unlock()
 
 
 static func _absolute(path: String) -> String:

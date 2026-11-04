@@ -6,6 +6,7 @@ const DURATION := 0.5
 var displayed := {}
 var shown := {} # число показанных строк: буфер в displayed может быть дополнен до ёмкости MultiMesh
 var deadlines := {}
+static var allow_fast_stamps := true
 
 static func opacity(stamp: float, now: float) -> float:
 	if stamp == 0.0:
@@ -73,15 +74,26 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 		var outgoing := AABB(center - Vector3.ONE * margin, Vector3.ONE * margin * 2.0)
 		box = box.merge(outgoing) if have_bounds else outgoing
 		have_bounds = true
-	return {buffer = result, count = result.size() / STRIDE, bounds = box if have_bounds else AABB(), changes = changes, deadline = deadline}
+	return {buffer = result, count = result.size() / STRIDE, bounds = box if have_bounds else AABB(), changes = changes, deadline = deadline, base_deadline = deadline}
 
 
-## Отметки времени изменившихся растений. Фоновая подгрузка ставит их в задаче (now — часы на её конец),
-## тогда commit на главном потоке только запоминает показанный снимок.
+## Background timestamps are provisional; commit corrects changed rows to their actual upload time.
 func stamp(frame: Dictionary, now: float) -> void:
 	var result: PackedFloat32Array = frame.buffer
 	var changes: PackedFloat64Array = frame.changes
-	var deadline: float = frame.deadline
+	var deadline: float = frame.get("base_deadline", frame.deadline)
+	if changes.is_empty():
+		frame.stamped = true
+		frame.stamped_at = now
+		return
+	var fast := Grid.fast_grid() if allow_fast_stamps else null
+	if fast != null:
+		var stamped: Dictionary = fast.StampVegetation(result, changes, deadline, now, DURATION)
+		frame.buffer = stamped.buffer
+		frame.deadline = stamped.deadline
+		frame.stamped = true
+		frame.stamped_at = now
+		return
 	for i in range(0, changes.size(), 3):
 		var at := int(changes[i])
 		var mode := changes[i + 1]
@@ -92,10 +104,13 @@ func stamp(frame: Dictionary, now: float) -> void:
 	frame.buffer = result
 	frame.deadline = deadline
 	frame.stamped = true
+	frame.stamped_at = now
 
 
 func commit(group: int, frame: Dictionary, now: float) -> Dictionary:
-	if not frame.get("stamped", false):
+	# Background completion is only an estimate; a delayed group starts/reverses its
+	# fade when actually uploaded. The native batch keeps this correction off the GDScript hot loop.
+	if frame.get("stamped_at", -INF) != now:
 		stamp(frame, now)
 	displayed[group] = frame.buffer
 	shown[group] = frame.count

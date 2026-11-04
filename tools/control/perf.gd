@@ -8,6 +8,7 @@ extends SceneTree
 ## Один размер (так скрипт запускает сам себя для каждого размера; нужно окно):
 ##   godot --path . --script res://tools/control/perf.gd -- --size 512 [--out <папка>]
 ## Для сравнения графики: --shadows on|off (по умолчанию on), --scale 0.25..1 (по умолчанию 1).
+## --road-warmup on: прогреть начало дороги как при прибытии; исключить скачок от спавна из замера езды.
 
 const Dev := preload("res://tools/control/control.gd")
 const LOAD_TIMEOUT_MS := 300000
@@ -29,6 +30,9 @@ var road: PackedVector3Array = []
 var road_len: PackedFloat32Array = []
 var look_ms := PackedFloat32Array()   # время кадров осмотра, мс
 var road_ms := PackedFloat32Array()   # время кадров пролёта по дороге, мс
+var road_stream_ms := PackedFloat32Array()
+var road_spikes: Array = []
+var road_last_position := Vector3.INF
 var draw_calls := 0.0
 var primitives := 0.0
 var counted := 0
@@ -125,6 +129,9 @@ static func _frame_stats(ms: PackedFloat32Array) -> Dictionary:
 	sorted.sort()
 	var p99 := sorted[mini(sorted.size() - 1, int(sorted.size() * 0.99))]
 	return {fps = snappedf(1000.0 * ms.size() / sum, 0.1), low1 = snappedf(1000.0 / p99, 0.1),
+		p95_ms = sorted[mini(sorted.size() - 1, int(sorted.size() * 0.95))], p99_ms = p99,
+		over_16_7 = Array(ms).filter(func(v: float) -> bool: return v > 16.7).size(),
+		over_33_3 = Array(ms).filter(func(v: float) -> bool: return v > 33.3).size(),
 		max_ms = snappedf(sorted[sorted.size() - 1], 0.1), frames = ms.size()}
 
 
@@ -150,6 +157,13 @@ func _finish(ok: bool) -> bool:
 	if ok:
 		result.look = _frame_stats(look_ms)
 		result.road = _frame_stats(road_ms)
+		result.road_stream_cpu = _frame_stats(road_stream_ms)
+		result.cumulative_publication = main.game.stream_coordinator.stats.duplicate(true)
+		result.vegetation_nodes = main.game.vegetation.node_stats.duplicate()
+		result.vegetation_nodes.pool_size = main.game.vegetation._tree_pool.size()
+		result.vegetation_phases = main.game.vegetation.phase_stats.duplicate(true)
+		result.road_spikes = road_spikes
+		if main.game.chunk_source != null: result.cumulative_chunks = main.game.chunk_source.snapshot()
 		result.draw_calls = roundi(draw_calls / maxi(1, counted))
 		result.primitives = roundi(primitives / maxi(1, counted))
 		result.memory = _memory()
@@ -215,6 +229,22 @@ func _process(delta: float) -> bool:
 				if t >= float(cfg.look_s):
 					phase = "road"
 					t = 0.0
+					if Dev.arg("road-warmup", "off") == "on":
+						var at := _road_at(0.0)
+						at.y = game.heights.surface_at(at.x, at.z, INF) + GameConfig.EYE
+						game.stream_coordinator.force_terrain(at, PlanTerrain.RADIUS / 2.0)
+						game.stream_coordinator.force_vegetation(at)
+						game.camera.position = at
+						road_last_position = at
+						result.road_warmup = true
+						phase = "road_warmup"
+		"road_warmup":
+			t += delta
+			game.stream_coordinator.update(road_last_position)
+			if t >= WARMUP_S:
+				phase = "road"
+				t = 0.0
+				last_us = Time.get_ticks_usec()
 		"road":
 			t += delta
 			_advance_day(game, delta)
@@ -226,12 +256,16 @@ func _process(delta: float) -> bool:
 			ahead.y = hf.ground_at(ahead.x, ahead.z) + GameConfig.EYE
 			if p.distance_to(ahead) > 0.5:
 				game.camera.look_at_from_position(p, ahead, Vector3.UP)
-			var uploaded := game.vegetation.update(p.x, p.z, false)
-			uploaded = game.terrain_stream.update(p.x, p.z, false, not uploaded) or uploaded
-			# рельеф за краем карты подгружается по ходу, как в игре
-			if game.world.outer != null:
-				game.outer.update(p.x, p.z, not uploaded)
+			# Use the actual fair publication scheduler, including water and its frame budget.
+			var stream_started := Time.get_ticks_usec()
+			game.stream_coordinator.update(p)
+			road_stream_ms.append((Time.get_ticks_usec() - stream_started) / 1000.0)
 			_count("road")
+			if road_spikes.size() < 32 and (road_ms[-1] > 16.7 or road_stream_ms[-1] > 8.0):
+				road_spikes.append({frame = road_ms.size(), frame_ms = road_ms[-1], stream_ms = road_stream_ms[-1],
+					jump_m = p.distance_to(spawn if road_last_position == Vector3.INF else road_last_position),
+					groups_us = game.stream_coordinator.stats.group_last_us.duplicate(), vegetation_us = game.vegetation.phase_stats.last_us.duplicate()})
+			road_last_position = p
 			if t >= float(cfg.road_s):
 				return _finish(true)
 	return false

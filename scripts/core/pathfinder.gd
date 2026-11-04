@@ -396,6 +396,10 @@ func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
 	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
 	var bounds := _bounds()
+	# A* permits an out-of-window start, but every destination must be inside.
+	if t % W < bounds[0] or t / W < bounds[1] or t % W >= bounds[2] or t / W >= bounds[3] or cost[t] == INF:
+		_reach_rejects += 1
+		return false
 	var mark := {s: 0, t: 1}
 	var queues: Array[PackedInt32Array] = [PackedInt32Array([s]), PackedInt32Array([t])]
 	var heads := [0, 0]
@@ -411,9 +415,11 @@ func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 			for k in 8:
 				var nx := cx + Grid.DX[k]
 				var ny := cy + Grid.DY[k]
-				if nx < bounds[0] or ny < bounds[1] or nx >= bounds[2] or ny >= bounds[3]:
+				if nx < 0 or ny < 0 or nx >= W or ny >= H:
 					continue
 				var n := ny * W + nx
+				if (side == 0 or n != s) and (nx < bounds[0] or ny < bounds[1] or nx >= bounds[2] or ny >= bounds[3]):
+					continue
 				var m: int = mark.get(n, -1)
 				# Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
 				if m == side or n != s and cost[n] == INF:

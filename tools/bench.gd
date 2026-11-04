@@ -76,6 +76,7 @@ func _init() -> void:
 			backend = "fast" if Grid.fast_grid() != null else "gdscript",
 			total_ms = total, stages = _rows, timings = loaded.timings,
 			path_timings = loaded.heights.path_timings, searches = loaded.world.generation_profile,
+			trail_network = loaded.world.trail_plan.get("stats", {}),
 		})
 	if args.has("--verify-partition"):
 		var reference := PlanTerrain.partition_reference(loaded.terrain_arrays)

@@ -373,6 +373,13 @@ public partial class FastGrid
 		_reachCalls++;
 		if (s == t)
 			return true;
+		// Only the start may lie outside the destination window (as in Search.Run).
+		int x0 = _winX0, y0 = _winY0, x1 = Math.Min(_winX1, _w), y1 = Math.Min(_winY1, _h);
+		if (t % _w < x0 || t / _w < y0 || t % _w >= x1 || t / _w >= y1 || float.IsPositiveInfinity(cost[t]))
+		{
+			_reachRejects++;
+			return false;
+		}
 		int n = _w * _h;
 		if (_reachMark.Length != n)
 		{
@@ -400,7 +407,6 @@ public partial class FastGrid
 		qb[tailB++] = t;
 		long visited = 0;
 		bool found = false;
-		int x0 = _winX0, y0 = _winY0, x1 = Math.Min(_winX1, _w), y1 = Math.Min(_winY1, _h);
 		// Слой за слоем у той стороны, чья очередь короче: пустая очередь — её область исчерпана.
 		while (headA < tailA && headB < tailB && !found)
 		{
@@ -417,9 +423,11 @@ public partial class FastGrid
 				for (int k = 0; k < 8; k++)
 				{
 					int nx = cx + Dx[k], ny = cy + Dy[k];
-					if (nx < x0 || ny < y0 || nx >= x1 || ny >= y1)
+					if (nx < 0 || ny < 0 || nx >= _w || ny >= _h)
 						continue;
 					int nb = c + _off[k];
+					if ((fromA || nb != s) && (nx < x0 || ny < y0 || nx >= x1 || ny >= y1))
+						continue;
 					int m = mark[nb];
 					// Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
 					if (m == own || nb != s && double.IsPositiveInfinity(cost[nb]))

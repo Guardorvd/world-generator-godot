@@ -28,6 +28,7 @@ var cache_size := 0
 var _uncached_key: Variant = null
 var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
 var source: RefCounted
+var frame_budget: RefCounted
 static var _recheck_frame := -1 # рельеф и два слоя воды пересчитывают очередь в разных кадрах
 
 
@@ -116,7 +117,6 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
-	if source != null: source.poll()
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -150,10 +150,14 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 			pending.append(item[1])
 	var uploaded := false
 	if source != null:
+		if due: source.retain_layer(water_layer, pending)
 		for offset in mini(3, pending.size()):
 			var at: Vector2i = pending[pending.size() - 1 - offset]
-			source.request(water_layer, at, distance_to_chunk(at, p))
+			# Preserve the consumer's order, including look-ahead and equal-distance ties.
+			source.request(water_layer, at, distance_to_chunk(at, p) + offset * (RADIUS + SIDE))
+		source.poll()
 	while not pending.is_empty() and (force and distance_to_chunk(pending.back(), p) <= near or allow_apply and not uploaded):
+		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		var key: Vector2i = pending.back()
 		var arrays: Variant = _arrays(key)
 		if arrays == null:
@@ -170,6 +174,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 					var out := _read_out
 					_read_task = WorkerThreadPool.add_task(func() -> void: out.arrays = _read_arrays(key), false, "Чанк рельефа")
 				break
+		if not force and frame_budget != null and not frame_budget.allows_work(): break
 		pending.pop_back()
 		var started := Time.get_ticks_usec()
 		var mesh := ArrayMesh.new()

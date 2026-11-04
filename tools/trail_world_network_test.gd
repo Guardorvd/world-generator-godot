@@ -69,7 +69,8 @@ func run() -> void:
 	repeated_surface.finish_paths()
 	var repeated_plan := Network.build(repeated, repeated_surface, Rect2i(0, 0, w.W, w.H), small)
 	check(plan.routes == repeated_plan.routes and same_surface(base, repeated_surface), "repeat generation preserves definitions and every surface channel")
-	if FileAccess.file_exists("res://.godot/network_before.gd"):
+	# An optional archived implementation is a manual benchmark, not a default test dependency.
+	if "--compare-before" in OS.get_cmdline_user_args() and FileAccess.file_exists("res://.godot/network_before.gd"):
 		var before_world := synthetic()
 		var before_surface := before_world.base_heights.copy()
 		before_surface.finish_paths()

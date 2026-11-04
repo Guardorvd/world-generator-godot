@@ -700,6 +700,13 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	loaded.timings.game_scene_create_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
 	game.start(loaded, hud, _pending_save)
+	if not loaded.error.is_empty():
+		game.queue_free()
+		game = null
+		busy = false
+		_show("menu")
+		_message("Мир не подготовлен", loaded.error)
+		return
 	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	_save_elapsed = 0.0
 	_saved_discoveries = hud.visited.size()

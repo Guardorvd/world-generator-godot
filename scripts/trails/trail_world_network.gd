@@ -53,7 +53,7 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		return float(a.probe.length) > float(b.probe.length) if a.probe.length != b.probe.length else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
-	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), progress = options.get("on_progress", Callable())}
+	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable())}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
@@ -167,6 +167,13 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	if region.size.x < 16 or region.size.y < 16:
 		_refuse(plan, "участок за краем области")
 		return null
+	# Every layout alternative preserves the nominated start. A blocked/out-of-bounds
+	# start cannot pass final footprint validation; reject before the expensive site cut.
+	# Do not prune a blocked middle/end: the walker can detour or finish a shorter safe leg.
+	if is_leg and ctx.get("early_pruning", true) and _start_blocked(ctx.input, region, world_hint[0]):
+		plan.stats.pruned_starts = int(plan.stats.get("pruned_starts", 0)) + 1
+		_refuse(plan, "непроходимый старт коридора")
+		return null
 	var phase := Time.get_ticks_usec()
 	var context := context_rect(h, region)
 	var cut := TrailSite.cut(w, h, context, MARGIN)
@@ -219,6 +226,9 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	plan.stats.legs += 1
 	plan.stats.length_m += global.route_length()
 	return global
+
+static func _start_blocked(input: GI, region: Rect2i, start: Vector2) -> bool:
+	return input.blocked(start) or not Rect2(Vector2(region.position) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE).has_point(start)
 
 ## Клетки русел, где брода нет: глубже порога брода или круто. Тот же ответ, что у StageTrails._unsafe_fords, на готовом рельефе.
 static func _deep_rivers(w: WorldData, h: Heightfield, rivers: PackedByteArray) -> PackedByteArray:
@@ -430,15 +440,25 @@ static func publish(h: Heightfield, site: TrailSite, local: Heightfield) -> void
 
 ## A missing derived surface replays saved definitions, never discovery or the world generator.
 static func restore(h: Heightfield, plan: Dictionary) -> PackedStringArray:
-	var w := h.world
-	var original: Array = w.trails
+	var errors := StageTrailPlan.consistency_errors(h.world)
+	if not errors.is_empty(): return errors
+	# Maps and other derivatives may read the canonical world concurrently. Replay only
+	# changes a private civil network; large immutable geography arrays stay shared.
+	var source := h.world
+	var w := WorldData.new()
+	for field: String in WorldData.CACHE_FIELDS: w.set(field, source.get(field))
+	w.world_origin = source.world_origin
+	w.outer = source.outer
+	w.path_mask = source.path_mask.duplicate()
+	w.road_surface = source.road_surface.duplicate()
 	var ids := {}
 	for record: Dictionary in plan.routes: ids[record.id] = true
-	w.trails = original.filter(func(route: Dictionary) -> bool: return not ids.has(route.get("trail_id", "")))
-	h.finish_paths()
-	var errors := PackedStringArray()
+	w.trails = source.trails.filter(func(route: Dictionary) -> bool: return not ids.has(route.get("trail_id", ""))).duplicate(true)
+	var replay := h.copy()
+	replay.world = w
+	replay.finish_paths()
 	for entry: Dictionary in plan.entries:
-		var cut := TrailSite.cut(w, h, entry.rect, MARGIN)
+		var cut := TrailSite.cut(w, replay, entry.rect, MARGIN)
 		if not cut.errors.is_empty(): errors = cut.errors; break
 		var site: TrailSite = cut.site
 		var global := StageTrailPlan.unpack(entry.route)
@@ -450,7 +470,6 @@ static func restore(h: Heightfield, plan: Dictionary) -> PackedStringArray:
 		if not prepared.errors.is_empty(): errors = prepared.errors; break
 		errors = TrailBuilder.append_routes(w, [global], false)
 		if not errors.is_empty(): break
-		publish(h, site, prepared.heights)
-	w.trails = original
-	RoadSurface.rebuild_map(w)
+		publish(replay, site, prepared.heights)
+	if errors.is_empty(): StageTrailPlan.copy_surface(h, replay)
 	return errors

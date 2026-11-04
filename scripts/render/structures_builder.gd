@@ -68,6 +68,7 @@ static func build(parent: Node3D, heights: Heightfield, only: Variant = null) ->
 
 ## Мост: невысокий деревянный настил, перила и сваи; профиль общий с движением.
 static func bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: Material, rail: Material, board: Material) -> void:
+	if s.len < 0.01 or Vector2(s.ux, s.uz).is_zero_approx(): return
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	var side := Vector3(s.uz, 0, -s.ux) * (half + 0.1)
@@ -105,6 +106,7 @@ static func bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, wood: 
 
 ## Каменный мостик: плиты настила, низкий парапет и устои до дна у обоих берегов и под серединой.
 static func stone_bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, slab: Material, dark: Material, block: Material) -> void:
+	if s.len < 0.01 or Vector2(s.ux, s.uz).is_zero_approx(): return
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	for k in n:
@@ -137,6 +139,7 @@ static func stone_bridge(batch: MeshBatch, heights: Heightfield, s: Dictionary, 
 
 ## Переправа тропы: три доски вдоль с щелями на поперечинах, без перил, у концов колышки.
 static func planks(batch: MeshBatch, heights: Heightfield, s: Dictionary, light: Material, board: Material, dark: Material) -> void:
+	if s.len < 0.01 or Vector2(s.ux, s.uz).is_zero_approx(): return
 	var half: float = s.half
 	var n := maxi(1, ceili(s.len / Heightfield.BRIDGE_SECTION))
 	var width := half * 2.0 / 3.0
@@ -171,9 +174,10 @@ static func planks(batch: MeshBatch, heights: Heightfield, s: Dictionary, light:
 
 ## Верх точно совпадает с level(), толщина откладывается вертикально.
 static func _deck(batch: MeshBatch, a: Vector3, b: Vector3, half: float, mat: Material) -> void:
+	var length := Vector2(b.x - a.x, b.z - a.z).length()
+	if length < 0.01: return # A vertical or coincident span has no deck plane.
 	var forward := (b - a).normalized()
 	var side := Vector3(-forward.z, 0, forward.x).normalized()
-	var length := Vector2(b.x - a.x, b.z - a.z).length()
 	var basis := Basis(side, Vector3.UP, -(b - a) / length)
 	_box(batch, Transform3D(basis, (a + b) * 0.5), Vector3(half * 2.0, 0.24, length), Vector3(0, -0.12, 0), mat)
 

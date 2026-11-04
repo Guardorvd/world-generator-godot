@@ -15,11 +15,15 @@ var _active := {}
 var _reserved := 0
 var _startup := {}
 var _startup_bytes := 0
+var _wanted := {}
+var _handoff := {} # At most MAX_ACTIVE uncached results awaiting upload, never startup pins.
+var _handoff_bytes := 0
 var _pins: Array[String] = []
+var _persisted_refs: Array = []
 var _base: Heightfield
 var _base_lock := Mutex.new()
 var _stats_lock := Mutex.new()
-var stats := {reads = 0, repairs = 0, rebuilt_cells = 0, read_ms = 0.0, upload_bytes = 0, upload_ms = 0.0, max_upload_ms = 0.0, peak_reads = 0}
+var stats := {reads = 0, repairs = 0, pending_hits = 0, rebuilt_cells = 0, read_ms = 0.0, upload_bytes = 0, upload_ms = 0.0, max_upload_ms = 0.0, peak_reads = 0}
 var closed := false
 
 func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, prepared: Array, budget: RefCounted) -> void:
@@ -38,17 +42,50 @@ func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, pre
 func _id(layer: int, key: Vector2i) -> Vector3i:
 	return Vector3i(key.x, key.y, layer + 1)
 
+## Cold startup consumes prepared RAM immediately while the FIFO writer persists far blocks.
+func set_persisted_refs(refs: Array) -> void:
+	_persisted_refs = refs
+	var paths: Array[String] = []
+	for group: Dictionary in refs:
+		for ref: Dictionary in group.values(): paths.append(cache.dir.path_join(ref.file))
+	WorldCache.pin_files(paths)
+	_pins.append_array(paths)
+
 func ready(layer: int, key: Vector2i) -> Variant:
 	var id := _id(layer, key)
+	if _handoff.has(id): return _handoff[id]
 	return _startup[id] if _startup.has(id) else _cpu.get_value(id)
+
+## Each layer replaces its pending demand before polling, including after turns/teleports.
+func retain_layer(layer: int, keys: Array[Vector2i]) -> void:
+	var wanted := {}
+	for key in keys:
+		var id := _id(layer, key)
+		wanted[id] = _wanted.get(id, INF)
+	for id: Vector3i in _wanted.keys():
+		if id.z == layer + 1 and not wanted.has(id): _wanted.erase(id)
+	_wanted.merge(wanted)
+	_queue = _queue.filter(func(item: Dictionary) -> bool: return _wanted.has(item.id))
+	for id: Vector3i in _handoff.keys():
+		if not _wanted.has(id): _release_handoff(id)
+
+func _release_handoff(id: Vector3i) -> void:
+	if not _handoff.has(id): return
+	var bytes := LRU.size_of(_handoff[id])
+	_handoff.erase(id)
+	_handoff_bytes -= bytes
+	if _cpu.budget != null: _cpu.budget.release(bytes)
 
 func read(layer: int, key: Vector2i) -> Array:
 	var started := Time.get_ticks_usec()
 	var ref: Variant = groups[layer + 1][key]
 	var arrays: Array = []
 	var repaired := false
+	var pending: Variant = cache.writing_chunk(ref.get("file", "")) if ref is Dictionary else null
 	if ref is Array:
 		arrays = ref
+	elif pending is Array:
+		arrays = pending # Avoid a rebuild/competing repair write while cold persistence is in flight.
 	else:
 		var data: Variant = cache._read(cache.dir.path_join(ref.file), ref.key) if ref.get("file", "") != "" else null
 		if data is Dictionary and preload("res://scripts/game/surface_snapshot.gd").mesh_valid(data.get("arrays"), false):
@@ -68,6 +105,7 @@ func read(layer: int, key: Vector2i) -> Array:
 	_stats_lock.lock()
 	stats.reads += 1
 	stats.repairs += int(repaired)
+	stats.pending_hits += int(pending is Array)
 	if repaired: stats.rebuilt_cells += mini(world.N, (PlanTerrain.CELLS + 2) * (PlanTerrain.CELLS + 2))
 	stats.read_ms += (Time.get_ticks_usec() - started) / 1000.0
 	_stats_lock.unlock()
@@ -108,6 +146,8 @@ static func _distance(key: Vector2i, point: Vector2) -> float:
 
 func uploaded(layer: int, key: Vector2i, arrays: Array, elapsed: float) -> void:
 	var id := _id(layer, key)
+	_release_handoff(id)
+	_wanted.erase(id)
 	var bytes := LRU.size_of(arrays)
 	if _startup.has(id):
 		_startup.erase(id)
@@ -127,6 +167,8 @@ func snapshot() -> Dictionary:
 	result.queued = _queue.size()
 	result.active = _active.size()
 	result.startup_bytes = _startup_bytes
+	result.handoff_bytes = _handoff_bytes
+	result.handoff_count = _handoff.size()
 	return result
 
 func finish_startup() -> void:
@@ -143,12 +185,14 @@ func finish_startup() -> void:
 			var arrays: Variant = groups[group][key]
 			if not arrays is Array: continue
 			_cpu.put(_id(group - 1, key), arrays)
-			groups[group][key] = {file = "", key = "", bytes = LRU.size_of(arrays)}
+			groups[group][key] = _persisted_refs[group][key] if not _persisted_refs.is_empty() else {file = "", key = "", bytes = LRU.size_of(arrays)}
+	_persisted_refs = []
 
 func request(layer: int, key: Vector2i, priority: float) -> void:
 	if closed: return
 	var id := _id(layer, key)
-	if _startup.has(id) or _cpu.get_value(id) != null or _active.has(id): return
+	_wanted[id] = priority
+	if _startup.has(id) or _handoff.has(id) or _cpu.get_value(id) != null or _active.has(id): return
 	var queued := false
 	for item: Dictionary in _queue:
 		if item.id == id:
@@ -169,10 +213,20 @@ func poll() -> void:
 		WorkerThreadPool.wait_for_task_completion(item.task)
 		_reserved -= item.bytes
 		if _cpu.budget != null: _cpu.budget.release(item.bytes)
-		if not _cpu.put(id, item.out.arrays):
-			_pin(id, item.out.arrays)
+		if _wanted.has(id) and not _cpu.put(id, item.out.arrays):
+			var bytes := LRU.size_of(item.out.arrays)
+			_handoff[id] = item.out.arrays
+			_handoff_bytes += bytes
+			if _cpu.budget != null: _cpu.budget.reserve(bytes)
 		_active.erase(id)
-	while _active.size() < MAX_ACTIVE and not _queue.is_empty():
+	# A turn can make the queue head more urgent than both held oversized results.
+	# Retaining those forever would block the read needed by PlanTerrain.pending.back().
+	if _active.size() + _handoff.size() >= MAX_ACTIVE and not _handoff.is_empty() and not _queue.is_empty():
+		var farthest: Vector3i = _handoff.keys()[0]
+		for id: Vector3i in _handoff:
+			if _wanted.get(id, INF) > _wanted.get(farthest, INF): farthest = id
+		if _queue[0].priority < _wanted.get(farthest, INF): _release_handoff(farthest)
+	while _active.size() + _handoff.size() < MAX_ACTIVE and not _queue.is_empty():
 		var item: Dictionary = _queue[0]
 		if _reserved + item.bytes > READ_BYTES and not _active.is_empty(): break
 		_queue.pop_front()
@@ -188,11 +242,13 @@ func poll() -> void:
 
 func finish() -> void:
 	_queue.clear()
+	_wanted.clear()
 	for item: Dictionary in _active.values():
 		WorkerThreadPool.wait_for_task_completion(item.task)
 		if _cpu.budget != null: _cpu.budget.release(item.bytes)
 	_active.clear()
 	_reserved = 0
+	for id: Vector3i in _handoff.keys(): _release_handoff(id)
 
 func close() -> void:
 	if closed: return
@@ -213,7 +269,7 @@ func _release_pins() -> void:
 func _notification(what: int) -> void:
 	# A RefCounted script cannot call an instance method on itself at zero references.
 	if what != NOTIFICATION_PREDELETE: return
-	if not closed and _cpu.budget != null: _cpu.budget.release(_startup_bytes)
+	if not closed and _cpu.budget != null: _cpu.budget.release(_startup_bytes + _handoff_bytes)
 	if not _pins.is_empty():
 		WorldCache.unpin_files(_pins)
 		cache.request_collection(world.seed_text, size)

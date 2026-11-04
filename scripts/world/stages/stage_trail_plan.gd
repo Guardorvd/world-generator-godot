@@ -28,6 +28,9 @@ static func run(w: WorldData, size: int, on_progress := Callable()) -> void:
 static func prepare(h: Heightfield) -> Dictionary:
 	var w := h.world
 	var plan := w.trail_plan
+	var consistency := consistency_errors(w)
+	if not consistency.is_empty():
+		return {state = str(plan.get("state", "none")), applied = false, variant = "", errors = consistency, ms = 0.0, earthworks = {}}
 	if plan.get("mode", "") != "terrain_network" or stale(plan):
 		h.finish_paths()
 		return apply(h)
@@ -186,6 +189,58 @@ static func _kit(plan: Dictionary) -> Array[TrailDefinition]:
 	else:
 		kit.assign([unpack(plan.access.inbound), unpack(plan.definition), unpack(plan.access.outbound)])
 	return kit
+
+
+## trails is the complete civil path network; the plan adds authoring data for its bicycle subset.
+## Check their shared geometry before using either the cold handoff or a cached surface.
+static func consistency_errors(w: WorldData) -> PackedStringArray:
+	var plan := w.trail_plan
+	var errors := PackedStringArray()
+	if plan.get("state") != "found" or stale(plan): return errors
+	var definitions: Variant = plan.get("routes")
+	if definitions == null:
+		var access: Dictionary = plan.get("access", {})
+		definitions = [access.get("inbound"), plan.get("definition"), access.get("outbound")]
+	if not definitions is Array or definitions.is_empty():
+		return PackedStringArray(["В плане нет определений принятых трасс"])
+	var ids := {}
+	var routes := {}
+	for route: Dictionary in w.trails:
+		var id: String = route.get("trail_id", "")
+		if id.is_empty(): continue
+		if routes.has(id): errors.append("Повтор пути в сети: " + id)
+		routes[id] = route
+	var defaults := pack(TrailDefinition.new())
+	for data: Variant in definitions:
+		if not data is Dictionary: return PackedStringArray(["Повреждено определение трассы в плане"])
+		# Required fields used by unpack; optional fields retain their legacy defaults.
+		for field: String in ["id", "title", "kind", "points", "width", "surface", "earthwork", "elevation_offset", "auto_bank", "closed", "shaping", "elements"]:
+			var value: Variant = data.get(field)
+			var expected := typeof(defaults[field])
+			if typeof(value) != expected and not (expected == TYPE_FLOAT and (value is int or value is float)):
+				return PackedStringArray(["Повреждено поле определения трассы: " + field])
+		if ids.has(data.id): errors.append("Повтор трассы в плане: " + str(data.id))
+		ids[data.id] = true
+		var d := unpack(data)
+		errors.append_array(d.validate())
+		if not routes.has(d.id):
+			errors.append("Трасса плана отсутствует в сети: " + d.id)
+			continue
+		var expected := d.path_record()
+		var actual: Dictionary = routes[d.id]
+		for field: String in ["kind", "pts", "surface_override", "formation", "closed"]:
+			if actual.get(field, false if field == "closed" else null) != expected[field]:
+				errors.append("Трасса плана расходится с сетью (%s): %s" % [field, d.id])
+	if plan.get("mode") == "terrain_network":
+		var entries: Variant = plan.get("entries")
+		if not entries is Array or entries.size() != definitions.size():
+			errors.append("Число участков поверхности не совпадает с числом трасс")
+		else:
+			for i in entries.size():
+				if not entries[i] is Dictionary or not entries[i].get("rect") is Rect2i or entries[i].get("route") != definitions[i]:
+					errors.append("Участок поверхности расходится с определением трассы: %d" % i)
+		if plan.get("definition") != definitions[0]: errors.append("Главная трасса расходится со списком трасс")
+	return errors
 
 
 ## План сохранён другой версией кода (в том числе пустой — до этапа трассы): его результат не соответствует нынешней

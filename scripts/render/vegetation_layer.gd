@@ -15,6 +15,8 @@ const RECHECK := 24.0
 const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолжение группы — в следующих кадрах
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
+const TREE_NODES_PER_SLICE := 4
+const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -88,6 +90,18 @@ var _appearing: Array = [] # временные материалы только 
 var _reveal_mats := {} # общий материал -> его копия проявления этого кадра (у всех узлов кадра одно время)
 var _reveal_clock := -1.0
 var _trash: Array[Node] = [] # скрытые узлы, удаляются по FREE_US за кадр
+var _tree_pool: Array[MultiMeshInstance3D] = []
+var frame_budget: RefCounted
+var node_stats := {created = 0, reused = 0, pooled = 0}
+var phase_stats := {names = ["cleanup", "tree_poll", "details", "tree_queue", "detail_schedule", "tree_upload"],
+	last_us = [0, 0, 0, 0, 0, 0], max_us = [0, 0, 0, 0, 0, 0]}
+
+func _record_phase(index: int, began: int) -> int:
+	var now := Time.get_ticks_usec()
+	var elapsed := now - began
+	phase_stats.last_us[index] = elapsed
+	phase_stats.max_us[index] = maxi(phase_stats.max_us[index], elapsed)
+	return now
 var _present: Array[int] = [] # группы готового снимка (-1 — трава), ещё не переданные на GPU
 var _queued := {}
 var _tree_target := Vector2.INF
@@ -350,21 +364,33 @@ static func _radius(mesh: Mesh) -> float:
 	return box.position.length() + box.size.length()
 
 
-func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bool = true, custom: bool = false) -> MultiMeshInstance3D:
-	var mm := MultiMesh.new()
+func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bool = true, custom: bool = false, tree := false) -> MultiMeshInstance3D:
+	var node: MultiMeshInstance3D
+	if tree and not _tree_pool.is_empty():
+		node = _tree_pool.pop_back()
+		node_stats.reused += 1
+	else:
+		node = MultiMeshInstance3D.new()
+		node.multimesh = MultiMesh.new()
+		if tree: node_stats.created += 1
+	var mm := node.multimesh
 	mm.transform_format = MultiMesh.TRANSFORM_3D
 	mm.use_colors = colors
 	mm.use_custom_data = custom
 	mm.mesh = mesh
 	mm.instance_count = count
 	mm.visible_instance_count = 0
-	var node := MultiMeshInstance3D.new()
-	node.multimesh = mm
 	node.material_override = mat
 	node.lod_bias = 0.6
-	if not shadows:
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(node)
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadows else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.visibility_range_begin = 0.0
+	node.visibility_range_end = 0.0
+	node.visibility_range_end_margin = 0.0
+	if node.has_meta("stream_retiring"): node.remove_meta("stream_retiring")
+	if node.has_meta("level"): node.remove_meta("level")
+	if tree: node.set_meta("stream_tree", true)
+	if node.get_parent() == null: add_child(node)
+	node.visible = true
 	return node
 
 
@@ -375,15 +401,20 @@ func update_frame(px: float, pz: float, force: bool, allow_upload: bool) -> bool
 
 
 func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := true) -> bool:
+	var phase_started := Time.get_ticks_usec()
+	phase_stats.last_us.fill(0)
 	var p := Vector2(px, pz)
 	var dt := delta if delta >= 0.0 else get_process_delta_time()
 	stream.sample(p, maxf(dt, 0.000001), force)
 	RenderingServer.global_shader_parameter_set("veg_center", p)
 	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
 	_clean_retired()
-	_free_trash(0 if force else FREE_US)
+	if force or frame_budget == null or frame_budget.allows_work():
+		var free_us := FREE_US if frame_budget == null else maxi(1, frame_budget.deadline(FREE_US) - Time.get_ticks_usec())
+		_free_trash(0 if force else free_us)
 	if world.outer != null:
 		_outer_regions = world.outer.get_ledger().get("regions", {})
+	phase_started = _record_phase(0, phase_started)
 	if force:
 		_finish()
 		_present.clear()
@@ -401,7 +432,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_apply_grass(true)
 		return true
 	var uploaded := false
-	if _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
+	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1
 		last_trees = Vector2.INF
@@ -411,7 +442,8 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			else:
 				_queued.erase(built.chunk)
 		_built = []
-	if allow_upload and _task != -1 and WorkerThreadPool.is_task_completed(_task):
+	phase_started = _record_phase(1, phase_started)
+	if allow_upload and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
@@ -421,10 +453,12 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			last_fill = Vector2.INF
 			_detail_frames.clear()
 	if allow_upload and not _present.is_empty():
-		_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US)
-		uploaded = true
+		if frame_budget == null or frame_budget.allows_work():
+			_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US if frame_budget == null else frame_budget.deadline(DETAIL_UPLOAD_US))
+			uploaded = true
+	phase_started = _record_phase(2, phase_started)
 	var lead := stream.lead()
-	if last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK:
+	if (frame_budget == null or frame_budget.allows_work()) and (last_trees == Vector2.INF or p.distance_to(last_trees) >= RECHECK or (p + lead).distance_to(_tree_target) >= RECHECK):
 		last_trees = p
 		_tree_target = p + lead
 		_drop(p)
@@ -442,18 +476,21 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				for chunk in missing:
 					_queued[chunk] = true
 				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
+	phase_started = _record_phase(3, phase_started)
 	if _task == -1 and _present.is_empty() and _refresh_details:
 		snapshots.reset()
 		_refresh_details = false
 	# Новый снимок — только когда прежний передан целиком: задача пишет те же буферы.
-	if _task == -1 and _present.is_empty() and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
+	if (frame_budget == null or frame_budget.allows_work()) and _task == -1 and _present.is_empty() and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
 		last_fill = p
 		_job_lead = lead
 		_detail_started_clock = stream.clock
 		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock), true, "Трава и подлесок")
-	if allow_upload and not uploaded and not _pending.is_empty():
+	phase_started = _record_phase(4, phase_started)
+	if allow_upload and not uploaded and not _pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		_upload_next()
 		uploaded = true
+	_record_phase(5, phase_started)
 	return uploaded
 
 func _finish() -> void:
@@ -575,9 +612,8 @@ func _fill_trees(missing: Array[Vector2i], epoch: int) -> void:
 		_built.append(built)
 
 
-## Всё, что зависит только от раскладки, — здесь, в задаче: рост буферов, отметки появления и ёмкость под GPU.
-## Главному потоку остаётся передать готовый буфер. Отметки ставятся по часам на конец задачи
-## (часы идут с реальным временем); снимок показывается через кадр-другой — доля от полусекундного проявления.
+## Раскладка и ёмкость GPU-буферов готовятся в задаче. Отметки появления предварительные:
+## перед публикацией короткий нативный проход привязывает их к фактическому времени передачи.
 func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false) -> void:
 	var started := Time.get_ticks_usec()
 	_fill_lead = lead
@@ -855,7 +891,7 @@ func refresh(rect: Rect2i) -> void:
 
 func _upload_next() -> void:
 	var built: Dictionary = _pending.back()
-	if _apply_chunk(built, 1, Time.get_ticks_usec() + TREE_UPLOAD_US):
+	if _apply_chunk(built, 1, Time.get_ticks_usec() + TREE_UPLOAD_US if frame_budget == null else frame_budget.deadline(TREE_UPLOAD_US)):
 		_pending.pop_back()
 		_queued.erase(built.chunk)
 
@@ -892,6 +928,8 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 		return true
 	if _loaded.has(chunk) and not built.has("cursor"):
 		return true
+	if limit > 0 and deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec:
+		return false
 	if built.has("outer"):
 		world.outer.veg[chunk] = built.outer
 	var first: int = built.get("cursor", 0)
@@ -919,12 +957,12 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				if node_index < resume:
 					node_index += 1
 					continue
-				if deadline_usec > 0 and uploaded > 0 and Time.get_ticks_usec() >= deadline_usec:
+				if limit > 0 and (uploaded >= TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):
 					built.cursor = i
 					built.node_cursor = node_index
 					return false
 				var mat := _shared_tree_material(def, part, level, small)
-				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small)
+				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small, false, true)
 				if limit > 0:
 					_reveal_node(node, mat)
 				if part == "crown" and not small:
@@ -982,10 +1020,8 @@ func _accept_details() -> void:
 
 ## deadline_usec = 0 — передать всё оставшееся сразу.
 func _present_next(deadline_usec: int) -> void:
-	var done := 0
-	while not _present.is_empty() and (deadline_usec == 0 or done == 0 or Time.get_ticks_usec() < deadline_usec):
+	while not _present.is_empty() and (deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec):
 		_present_group(_present.pop_front(), false)
-		done += 1
 	if _present.is_empty():
 		_detail_frames.clear()
 
@@ -1048,6 +1084,7 @@ func _retire_nodes(nodes: Array) -> void:
 
 func _clean_retired() -> void:
 	for i in range(_appearing.size() - 1, -1, -1):
+		if frame_budget != null and not frame_budget.allows_work(): break
 		var entry: Dictionary = _appearing[i]
 		if not is_instance_valid(entry.node):
 			_appearing.remove_at(i)
@@ -1059,10 +1096,18 @@ func _clean_retired() -> void:
 			node.material_override = entry.shared
 			_appearing.remove_at(i)
 	for i in range(_retired.size() - 1, -1, -1):
+		if frame_budget != null and not frame_budget.allows_work(): break
 		if stream.clock >= _retired[i].until:
-			for node: Node in _retired[i].nodes:
+			var entry: Dictionary = _retired[i]
+			var cursor: int = entry.get("cursor", 0)
+			while cursor < entry.nodes.size():
+				if frame_budget != null and not frame_budget.allows_work():
+					entry.cursor = cursor
+					return
+				var node: Node = entry.nodes[cursor]
 				if is_instance_valid(node):
 					_trash_node(node)
+				cursor += 1
 			_retired.remove_at(i)
 
 
@@ -1070,6 +1115,7 @@ func _clean_retired() -> void:
 ## (на 45 м/с — тысячи MultiMesh) в конце одного кадра.
 func _trash_node(node: Node) -> void:
 	node.visible = false
+	node.set_meta("stream_retiring", true)
 	_trash.append(node)
 
 
@@ -1077,10 +1123,18 @@ func _trash_node(node: Node) -> void:
 func _free_trash(budget_us: int) -> void:
 	var until := Time.get_ticks_usec() + budget_us
 	var freed := 0
-	while not _trash.is_empty() and (budget_us == 0 or freed < 8 or Time.get_ticks_usec() < until):
+	while not _trash.is_empty() and (budget_us == 0 or freed < 1 or Time.get_ticks_usec() < until):
 		var node: Node = _trash.pop_back()
 		if is_instance_valid(node):
-			node.free()
+			if budget_us > 0 and node is MultiMeshInstance3D and node.get_meta("stream_tree", false) and _tree_pool.size() < TREE_POOL_LIMIT:
+				# Keep the scene/render instance, release all per-chunk GPU data.
+				node.multimesh.instance_count = 0
+				node.multimesh.mesh = null
+				node.material_override = null
+				_tree_pool.append(node)
+				node_stats.pooled += 1
+			else:
+				node.free()
 		freed += 1
 
 

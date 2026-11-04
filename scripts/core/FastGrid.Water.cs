@@ -9,6 +9,35 @@ using Godot;
 /// </summary>
 public partial class FastGrid
 {
+	public float[] CompleteWaterLevels(byte[] ocean, byte[] river, byte[] riverCells, double heightScale)
+	{
+		if (!RequireWater()) return Array.Empty<float>();
+		if (ocean.Length != _sw * _sh || river.Length != ocean.Length || riverCells.Length != ocean.Length)
+		{
+			WaterFailure("Invalid complete-water masks");
+			return Array.Empty<float>();
+		}
+		var levels = new float[_sw * _sh];
+		for (int i = 0; i < levels.Length; i++)
+		{
+			if (ocean[i] != 0) { levels[i] = 0; continue; }
+			if (_lake[i] != 0) { levels[i] = (float)(_filled[i] * heightScale); continue; }
+			double level = double.NegativeInfinity;
+			if (riverCells[i] != 0)
+			{
+				level = RiverLevel((i % _sw + 0.5) * _tile, (i / _sw + 0.5) * _tile);
+				if (river[i] != 0) level = Math.Max(level, _filled[i] * heightScale - _lakeDrop);
+			}
+			levels[i] = (float)level;
+			for (int j = _cellStart[i]; j < _cellStart[i + 1]; j++)
+			{
+				int at = _cellSeg[j] * 12;
+				levels[i] = Math.Max(levels[i], Math.Max(_segPts[at + 1], _segPts[at + 7]));
+			}
+		}
+		return levels;
+	}
+
 	private int _sw, _sh;
 	private double _tile, _hs, _lakeDrop;
 	private float[] _surfHv = Array.Empty<float>();

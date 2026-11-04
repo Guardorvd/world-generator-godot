@@ -14,6 +14,8 @@ const FIT_LIMIT := 1.2   # обычное уточнение относител�
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
 static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
+static var allow_fast_vertices := true # reference switch for complete vertex-channel parity
+static var road_simd := true
 static var restrict_local_index := true # reference switch for exact local-build comparisons
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
@@ -91,6 +93,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	var cache := {}
 	var fine_width := heights.world.W * DIV
 	var nearest := PackedFloat64Array()
+	var native := {}
 	var fast := Grid.fast_grid() if allow_fast_nearest else null
 	if fast != null:
 		nearest = r._nearest_vertices(cache, fast, keys)
@@ -98,24 +101,28 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		var vertices_us := Time.get_ticks_usec()
 		# С 12.2 уникальные вершины считаются на всех ядрах: каждая зависит только от своей точки
 		# и уже готовых данных (рельеф, отрезки, профили), результат тот же, что подряд
-		var points := r._points
-		var job := func(a: int, b: int) -> Array:
-			var own := r._thread_copy()
-			var out := []
-			for n in range(a, b):
-				out.append(own._vertex(points[n].x, points[n].y, nearest, n * 4))
-			return out
-		# по куску на ядро, но не больше 8: у каждого куска свои копии массивов рельефа (около 10 МБ на мир 512),
-		# на 32-поточном процессоре они заняли бы лишнюю память при почти том же времени
-		var pieces := clampi(OS.get_processor_count(), 1, 8)
-		var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(pieces)))
-		var done: Array = []
-		for part: Array in parts:
-			done.append_array(part)
-		for vk: int in cache:
-			cache[vk] = done[cache[vk]]
+		if allow_fast_vertices and heights.world.outer == null:
+			native = r._native_vertices(fast, nearest)
+		else:
+			var points := r._points
+			var job := func(a: int, b: int) -> Array:
+				var own := r._thread_copy()
+				var out := []
+				for n in range(a, b): out.append(own._vertex(points[n].x, points[n].y, nearest, n * 4))
+				return out
+			var pieces := clampi(OS.get_processor_count(), 1, 8)
+			var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(pieces)))
+			var done: Array = []
+			for part: Array in parts: done.append_array(part)
+			for vk: int in cache: cache[vk] = done[cache[vk]]
 		r._points = PackedVector2Array()
 		r.build_timings.vertex_math_ms = (Time.get_ticks_usec() - vertices_us) / 1000.0
+	var native_h: PackedFloat32Array = native.get("h", PackedFloat32Array())
+	var native_color: PackedColorArray = native.get("color", PackedColorArray())
+	var native_uv: PackedVector2Array = native.get("uv", PackedVector2Array())
+	var native_surface: PackedByteArray = native.get("surface", PackedByteArray())
+	var native_road: PackedByteArray = native.get("road", PackedByteArray())
+	var native_route: PackedInt32Array = native.get("route", PackedInt32Array())
 	for key: int in keys:
 		var cx := key % heights.world.W
 		var cz := key / heights.world.W
@@ -137,11 +144,17 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 				var ix := cx * DIV + x
 				var iz := cz * DIV + z
 				var vk := iz * fine_width + ix
+				var idx := z * STRIDE + x
+				if not native.is_empty():
+					var request: int = cache[vk]
+					hs[idx] = native_h[request]; colors[idx] = native_color[request]; uvs[idx] = native_uv[request]
+					surfaces[idx] = native_surface[request]; roads[idx] = native_road[request]
+					if not only.is_empty(): owners[idx] = 1 if only.has(native_route[request]) else 0
+					continue
 				if not cache.has(vk) or cache[vk] is int:
 					var at: int = cache[vk] * 4 if cache.has(vk) else -1
 					cache[vk] = r._vertex((ix * STEP) + TILE * 0.5, (iz * STEP) + TILE * 0.5, nearest, at)
 				var v: Dictionary = cache[vk]
-				var idx := z * STRIDE + x
 				hs[idx] = v.h
 				colors[idx] = v.color
 				uvs[idx] = v.uv
@@ -234,6 +247,34 @@ func _nearest_vertices(cache: Dictionary, fast: Object, keys: Array) -> PackedFl
 
 
 ## Вершине нужны только близкие сооружения, а не перебор всех мостов мира.
+func _native_vertices(fast: Object, nearest: PackedFloat64Array) -> Dictionary:
+	var segments := PackedFloat64Array()
+	var fits := PackedFloat64Array()
+	var offsets := {}
+	for route: int in fit_routes:
+		var fit: Dictionary = fit_routes[route]
+		offsets[route] = Vector2i(fits.size(), fit.profile.size())
+		for j in fit.profile.size(): fits.append_array(PackedFloat64Array([fit.profile[j], fit.strength[j], fit.limit[j]]))
+	for s: Dictionary in _segment_list:
+		var fit: Vector2i = offsets.get(s.route, Vector2i.ZERO)
+		segments.append_array(PackedFloat64Array([s.a.x, s.a.y, s.delta.x, s.delta.y, s.len2, s.half,
+			1 if s.kind == "road" else 0, s.surf, s.next, s.ha, s.hb, s.along, s.route, fit.x, fit.y]))
+	var starts := PackedInt32Array()
+	starts.resize(_heights.world.N + 1)
+	var axes := PackedFloat64Array()
+	if not _structures.is_empty():
+		for key in _heights.world.N:
+			starts[key] = axes.size() / 4
+			for s: Dictionary in _structures.get(key, []): axes.append_array(PackedFloat64Array([s.ax, s.az, s.bx, s.bz]))
+		starts[_heights.world.N] = axes.size() / 4
+	var surfaces := PackedFloat64Array()
+	for s: Dictionary in _surf:
+		var color: Array = s.get("color", [0, 0, 0])
+		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
+	return fast.RoadVertices(_points, nearest, _heights.world.W, _height, TILE, _heights.hv, _heights.water_level,
+		_dist_water, _noise, _origin, segments, fits, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd)
+
+
 func _index_structures() -> void:
 	var w := _heights.world
 	var reach := RoadBed.PIN + RoadBed.PIN_FADE
