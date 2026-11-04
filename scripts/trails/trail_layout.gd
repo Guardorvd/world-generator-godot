@@ -55,6 +55,8 @@ const SOFT_COST := 6.0       # шаг по дороге или броду
 const CROSSING_CLEAR := 12.0 # столько метров у переезда и брода без элементов
 const STEEP := 0.3          # круче этого спуск на шаге ходок игры обходит траверсом
 const STEEP_COST := 150.0
+const WALL_RISE := 8.0      # подъём на 16 м линии, который не взять с разгона (седок берёт около 5 м)
+const WALL := 0.4           # круче этого подъём на шаге: на такую стенку седок не заезжает
 const HINT_WEIGHT := 2.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
@@ -811,6 +813,14 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 				trace.reason = "blocked_or_self_approach"
 				break
 			continue
+		# Стенка по обычному вееру (ходок игры): тот же шаг ещё раз широким веером, линия обходит её
+		if steep_cost and stuck == 0 and best_g > WALL:
+			stuck = 1
+			continue
+		# Обхода нет: линия кончается перед стенкой, седок на неё не заедет
+		if steep_cost and best_g > WALL and pts.size() > 4 and float(ground.call(p + Vector2.from_angle(a + best_o) * STEP)) - float(ground.call(pts[-4])) > WALL_RISE:
+			trace.reason = "blocked_or_self_approach"
+			break
 		if stuck > 0: v = minf(v, sqrt(accel * HAIRPIN)) # разворот: седок тормозит до разворотной скорости
 		stuck = 0
 		a += best_o

@@ -83,7 +83,8 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: int, route_index: int) -> int:
 	var plan: Dictionary = ctx.plan
 	var guide := TrailDefinition.new()
-	guide.points = corridor
+	guide.points = _downhill(ctx.input, corridor)
+	corridor = guide.points
 	var total := guide.route_length()
 	var cursor := 0.0
 	var start := corridor[0]
@@ -137,6 +138,21 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		cursor += maxf(MIN_LEG, RouteContract.project(hint, end).x)
 	if route_length > 0.0: plan.stats.routes_m.append(roundi(route_length))
 	return route_index
+
+## Коридор в ту сторону, где у него больше спуска, чем подъёма: маршрут едут ради спуска.
+static func _downhill(input: GI, corridor: PackedVector2Array) -> PackedVector2Array:
+	var rise := 0.0
+	var drop := 0.0
+	var previous := input.natural_ground(corridor[0])
+	for k in range(1, corridor.size()):
+		var y := input.natural_ground(corridor[k])
+		rise += maxf(0.0, y - previous)
+		drop += maxf(0.0, previous - y)
+		previous = y
+	if rise <= drop: return corridor
+	var reversed := corridor.duplicate()
+	reversed.reverse()
+	return reversed
 
 ## Один участок (или линия парка): вырезка, линия, сборка, проверка, публикация. Принятое определение в мировых метрах или null.
 static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i, style: String, title: String, seed_value: int, difficulty: float, is_leg: bool) -> TrailDefinition:
