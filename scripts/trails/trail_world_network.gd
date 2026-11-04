@@ -8,14 +8,21 @@ const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
-## Коридоры сети: в обе стороны от начальной клетки, через полкарты: квадрат 1600 м, рабочая область с запасом.
-const CORRIDOR := {box = 1600.0, two_way = true, pad = 24, steps = 64}
+## Коридоры сети: извилистые линии через весь мир, в обе стороны от начальной клетки, с разворотами.
+const CORRIDOR := {box = 3072.0, two_way = true, pad = 0, steps = 160, edge = 80.0}
 const CROSSABLE: Array[String] = ["animal"]
+const PROBES := 64            # проб обзора
 ## Границы сети — работа, а не время: сборка стоит примерно пропорционально метрам линии.
-const ROUTE_TARGET := 10      # трасс достаточно
-const LENGTH_TARGET := 14000.0 # суммарной длины достаточно, м
-const WORK_LIMIT := 20000.0   # всего собранных метров, с отказами и повторами
-const MIN_LINE := 200.0       # короче только когда длинных не вышло вовсе, м
+const LENGTH_TARGET := 12000.0 # суммарной длины достаточно, м
+const WORK_LIMIT := 18000.0   # всего собранных метров, с отказами и повторами
+const ROUTE_MAX := 14000.0    # один маршрут не длиннее, м
+const LEG := 700.0            # участок маршрута вдоль коридора, м
+const LEG_PAD := 24           # запас рабочей области участка вокруг коридора, клеток: ходку есть где вилять
+const LEG_LEAD := 24.0        # начало участка продолжает курс прошлого, м
+const LEG_CLEAR := 40.0       # у стыков участков нет элементов: скорость на стыке не рассчитана, м
+const LEG_SKIP := 160.0       # шаг вперёд по коридору, когда место не проходится, м
+const MIN_LEG := 80.0         # участок короче не нужен, м
+const MIN_LINE := 200.0       # линия парка короче не нужна, м
 const TRIM := 30.0            # запас от плохого места при обрезке линии, м
 const WORK_EDGE := 12.0       # линия не ближе к краю рабочей зоны участка (TrailSite.inside_errors), м
 const ADMIT_PASSES := 3
@@ -36,100 +43,169 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	input.rivers = _deep_rivers(w, h, fords)
 	var input_ms := Time.get_ticks_msec() - started
 	input.earthwork_limits = EARTHWORKS.duplicate()
+	var budget := int(options.get("probe_budget", PROBES))
 	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
-		{area = area.grow(-MARGIN), probe_budget = int(options.get("probe_budget", maxi(64, w.N / (Search.STRIDE * Search.STRIDE)))), corridor = CORRIDOR})
+		{area = area.grow(-MARGIN), probe_budget = budget, corridor = CORRIDOR})
 	surveys += 1
-	var candidates := search.find(w.seed_num)
-	# Длинные — первыми: короткая линия, принятая раньше, перегородила бы длинную. Границы работы — метры и числа,
-	# не время: секундомер только для диагностики и не выбирает канонический мир.
-	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+	var corridors := search.find(w.seed_num)
+	# Длинные — первыми. Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.probe.length) > float(b.probe.length) if a.probe.length != b.probe.length else a.trail_seed < b.trail_seed)
+	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
+		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
+	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), progress = options.get("on_progress", Callable())}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
-	if int(options.get("probe_budget", 1)) > 0: park = _park_candidates(w, h, area.grow(-MARGIN))
-	candidates = park + candidates
-	var park_ms := Time.get_ticks_msec() - park_started
-	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
-		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0}}
-	plan.stats.park = {ms = park_ms, lines = park.size()}
-	var style_uses := {}
-	for candidate in candidates:
-		if plan.stats.accepted >= ROUTE_TARGET or plan.stats.length_m >= LENGTH_TARGET or plan.stats.work_m >= WORK_LIMIT: break
-		if float(candidate.probe.length) < MIN_LINE and plan.stats.accepted > 0: break
+	if budget > 0: park = _park_candidates(w, h, ctx.area)
+	plan.stats.park = {ms = Time.get_ticks_msec() - park_started, lines = park.size()}
+	for candidate: Dictionary in park:
 		plan.stats.attempted += 1
-		var progress: Callable = options.get("on_progress", Callable())
-		if progress.is_valid():
-			progress.call(0.79 + 0.05 * plan.stats.attempted / maxi(1, candidates.size()),
-				"Велосипедные трассы: %d/%d · принято %d" % [plan.stats.attempted, candidates.size(), plan.stats.accepted])
-		var phase := Time.get_ticks_usec()
-		var context := context_rect(h, candidate.region)
-		var cut := TrailSite.cut(w, h, context, MARGIN)
-		_time(plan, "cut", phase)
-		if not cut.errors.is_empty():
-			_refuse(plan, "участок: " + cut.errors[0]); continue
-		var site: TrailSite = cut.site
-		phase = Time.get_ticks_usec()
-		var local_input = input.window(site.origin, site.size)
-		_time(plan, "window", phase)
-		# The candidate's source and exclusions are immutable throughout layout and
-		# validation. Repeated endpoint/footprint queries reuse exact point results.
-		var ground_samples := {}
-		var blocked_samples := {}
-		var ground := func(p: Vector2) -> float:
-			if not ground_samples.has(p): ground_samples[p] = site.ground_at(p)
-			return ground_samples[p]
-		var blocked := func(p: Vector2) -> bool:
-			if not blocked_samples.has(p): blocked_samples[p] = local_input.blocked(p)
-			return blocked_samples[p]
-		phase = Time.get_ticks_usec()
-		var hint := PackedVector2Array()
-		for p: Vector2 in candidate.probe.points: hint.append(p - site.origin_m())
-		# Характер — самый редкий среди подходящих рельефу (они в начале списка); сложность и работа с землёй — от него.
-		var style: String = candidate.styles[0]
-		for name: String in candidate.styles:
-			if int(style_uses.get(name, 0)) < int(style_uses.get(style, 0)): style = name
-		var settings := {bounds = Rect2(Vector2(candidate.region.position - site.origin) * GameConfig.TILE, Vector2(candidate.region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-			difficulty = DIFFICULTY[plan.stats.accepted % DIFFICULTY.size()], modification = MODIFICATION[style],
-			soft = func(p: Vector2) -> bool:
-				var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
-				return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
-		var line := func(route_hint: PackedVector2Array, walk: bool) -> Dictionary:
-			var options_line := settings.duplicate()
-			options_line.route_hint = route_hint
-			options_line.walk = walk
-			options_line.exact_line = not walk
-			return Layout.generate(ground, Vector2(site.size) * GameConfig.TILE, candidate.trail_seed, style, blocked, options_line)
-		var result: Dictionary = line.call(hint, not candidate.get("exact", false))
-		_time(plan, "layout", phase)
-		if result.routes.is_empty():
-			_refuse(plan, result.stats.get("reason", "линия не построена")); continue
-		var title: String = candidate.get("title", "%s · %d" % [Layout.STYLES[style].title, plan.entries.size() + 1])
-		# Пока коридоры длинные, короткий обрывок ходока — не трасса; в мире без длинных мест годится и короткая.
-		var admitted := _admit(plan, site, result.routes[0], title, line, blocked, local_input, options.get("early_audit", true), MIN_LINE if float(candidate.probe.length) >= MIN_LINE else 0.0)
-		if admitted.is_empty(): continue
-		var d: TrailDefinition = admitted.d
-		var prepared: Dictionary = admitted.prepared
-		var global := StageTrailPlan.to_world(d, site)
-		var errors := TrailBuilder.append_routes(w, [global], false)
-		if not errors.is_empty():
-			_refuse(plan, errors[0]); continue
-		publish(h, site, prepared.heights)
-		# Reserve only an accepted line, not its search rectangle or a failed proposal.
-		input.existing_paths.append({points = global.points, half_width = global.width * 0.5})
-		plan.routes.append(StageTrailPlan.pack(global))
-		plan.entries.append({rect = context, style = style, route = StageTrailPlan.pack(global),
-			length = global.route_length(), elements = global.elements.size(), earthworks = h.road_refinement.trail_shaping[global.id]})
-		plan.stats.accepted += 1
-		plan.stats.length_m += global.route_length()
-		style_uses[style] = int(style_uses.get(style, 0)) + 1
+		_leg(ctx, candidate.probe.points, candidate.region, "park", candidate.title, candidate.trail_seed, DIFFICULTY[plan.stats.accepted % DIFFICULTY.size()], true, false, MIN_LINE)
+	var route_index := 0
+	for corridor: Dictionary in corridors:
+		if plan.stats.length_m >= ctx.length_target or plan.stats.work_m >= ctx.work_limit: break
+		plan.stats.attempted += 1
+		plan.stats.corridors.append(roundi(corridor.probe.length))
+		route_index = _route(ctx, corridor.probe.points, corridor.trail_seed, route_index)
 	if not plan.routes.is_empty():
 		RoadSurface.rebuild_map(w)
 		plan.state = "found"
 		plan.reason = ""
 		plan.definition = plan.routes[0]
-	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < candidates.size()
+	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < corridors.size() + park.size()
 	plan.stats.total_ms = Time.get_ticks_msec() - started
 	return plan
+
+## Маршрут вдоль общего коридора: участок за участком. Принятый участок остаётся в мире, следующий начинается с его конца
+## и его курсом; рельеф на стыке держится как у пересечения путей. Плохое место стоит только последнего участка: от него
+## остаётся годное начало. Участок совсем не вышел — другая попытка, затем пропуск места и новый маршрут дальше по коридору.
+## Цена растёт с длиной, а не с квадратом отказов. Возвращает номер последнего маршрута.
+static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: int, route_index: int) -> int:
+	var plan: Dictionary = ctx.plan
+	var guide := TrailDefinition.new()
+	guide.points = corridor
+	var total := guide.route_length()
+	var cursor := 0.0
+	var start := corridor[0]
+	var tangent := Vector2.ZERO
+	var fails := 0
+	var leg_index := 0
+	var route_length := 0.0
+	route_index += 1
+	var title := "Маршрут %d" % route_index
+	var difficulty: float = DIFFICULTY[route_index % DIFFICULTY.size()]
+	while cursor < total - MIN_LEG and plan.stats.work_m < ctx.work_limit and plan.stats.length_m < ctx.length_target:
+		if route_length >= ROUTE_MAX: break
+		var hint := PackedVector2Array([start])
+		if tangent != Vector2.ZERO: hint.append(start + tangent * LEG_LEAD)
+		var s := cursor + LEG_LEAD
+		var last := minf(total, cursor + LEG)
+		while s < last:
+			hint.append(guide.point_at(s))
+			s += 16.0
+		hint.append(guide.point_at(last))
+		var box := Rect2(hint[0], Vector2.ZERO)
+		for p in hint: box = box.expand(p)
+		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
+		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
+		var style: String = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
+		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, false, true, MIN_LEG)
+		if global == null:
+			fails += 1
+			if fails < 2: continue
+			# Место не проходится: пропустить его; если до него уже есть маршрут, дальше идёт новый.
+			fails = 0
+			cursor += LEG_SKIP
+			if cursor >= total: break
+			start = guide.point_at(cursor)
+			tangent = Vector2.ZERO
+			if route_length > 0.0:
+				plan.stats.routes_m.append(roundi(route_length))
+				route_length = 0.0
+				route_index += 1
+				title = "Маршрут %d" % route_index
+			continue
+		fails = 0
+		leg_index += 1
+		route_length += global.route_length()
+		var end: Vector2 = global.points[-1]
+		start = end
+		tangent = (global.points[-1] - global.points[-2]).normalized()
+		# Вперёд по коридору на столько, сколько участок прошёл вдоль своей части.
+		cursor += maxf(MIN_LEG, RouteContract.project(hint, end).x)
+	if route_length > 0.0: plan.stats.routes_m.append(roundi(route_length))
+	return route_index
+
+## Один участок (или линия парка): вырезка, линия, сборка, проверка, публикация. Принятое определение в мировых метрах или null.
+static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i, style: String, title: String, seed_value: int, difficulty: float, exact: bool, prefix_only: bool, min_line: float) -> TrailDefinition:
+	var w: WorldData = ctx.w
+	var h: Heightfield = ctx.h
+	var plan: Dictionary = ctx.plan
+	var fords: PackedByteArray = ctx.fords
+	var progress: Callable = ctx.progress
+	if progress.is_valid():
+		progress.call(0.79 + 0.05 * minf(1.0, plan.stats.length_m / float(ctx.length_target)), "Велосипедные маршруты: %.1f км" % (plan.stats.length_m / 1000.0))
+	region = region.intersection(ctx.area)
+	if region.size.x < 16 or region.size.y < 16:
+		_refuse(plan, "участок за краем области")
+		return null
+	var phase := Time.get_ticks_usec()
+	var context := context_rect(h, region)
+	var cut := TrailSite.cut(w, h, context, MARGIN)
+	_time(plan, "cut", phase)
+	if not cut.errors.is_empty():
+		_refuse(plan, "участок: " + cut.errors[0])
+		return null
+	var site: TrailSite = cut.site
+	phase = Time.get_ticks_usec()
+	var local_input = ctx.input.window(site.origin, site.size)
+	_time(plan, "window", phase)
+	# The candidate's source and exclusions are immutable throughout layout and
+	# validation. Repeated endpoint/footprint queries reuse exact point results.
+	var ground_samples := {}
+	var blocked_samples := {}
+	var ground := func(p: Vector2) -> float:
+		if not ground_samples.has(p): ground_samples[p] = site.ground_at(p)
+		return ground_samples[p]
+	var blocked := func(p: Vector2) -> bool:
+		if not blocked_samples.has(p): blocked_samples[p] = local_input.blocked(p)
+		return blocked_samples[p]
+	phase = Time.get_ticks_usec()
+	var hint := PackedVector2Array()
+	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
+	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
+		difficulty = difficulty, modification = MODIFICATION[style], clear_ends = LEG_CLEAR if prefix_only else 0.0,
+		soft = func(p: Vector2) -> bool:
+			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
+			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
+	var line := func(route_hint: PackedVector2Array, walk: bool) -> Dictionary:
+		var options_line := settings.duplicate()
+		options_line.route_hint = route_hint
+		options_line.walk = walk
+		options_line.exact_line = not walk
+		return Layout.generate(ground, Vector2(site.size) * GameConfig.TILE, seed_value, style, blocked, options_line)
+	var result: Dictionary = line.call(hint, not exact)
+	_time(plan, "layout", phase)
+	if result.routes.is_empty():
+		_refuse(plan, result.stats.get("reason", "линия не построена"))
+		return null
+	var admitted := _admit(plan, site, result.routes[0], title, line, blocked, local_input, ctx.early_audit, min_line, prefix_only)
+	if admitted.is_empty(): return null
+	var d: TrailDefinition = admitted.d
+	var global := StageTrailPlan.to_world(d, site)
+	var errors := TrailBuilder.append_routes(w, [global], false)
+	if not errors.is_empty():
+		_refuse(plan, errors[0])
+		return null
+	publish(h, site, admitted.prepared.heights)
+	ctx.input.existing_paths.append({points = global.points, half_width = global.width * 0.5})
+	plan.routes.append(StageTrailPlan.pack(global))
+	plan.entries.append({rect = context, style = style, route = StageTrailPlan.pack(global),
+		length = global.route_length(), elements = global.elements.size(), earthworks = h.road_refinement.trail_shaping[global.id]})
+	plan.stats.accepted += 1
+	plan.stats.legs += 1
+	plan.stats.length_m += global.route_length()
+	return global
 
 ## Клетки русел, где брода нет: глубже порога брода или круто. Тот же ответ, что у StageTrails._unsafe_fords, на готовом рельефе.
 static func _deep_rivers(w: WorldData, h: Heightfield, rivers: PackedByteArray) -> PackedByteArray:
@@ -179,7 +255,7 @@ static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Arra
 ## Сборка и проверка одной линии. Один плохой участок не выбрасывает всю длинную линию: элемент, не прошедший проверку,
 ## снимается, а по месту, где не годится само полотно, линия обрезается до большего годного куска. Не больше ADMIT_PASSES
 ## сборок на кандидата. {d, prepared} или пусто (причина — в статистике). Лабораторный ремонт основания здесь не вызывается.
-static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, title: String, line: Callable, blocked: Callable, local_input: GI, early_audit: bool, min_line := 0.0) -> Dictionary:
+static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, title: String, line: Callable, blocked: Callable, local_input: GI, early_audit: bool, min_line := 0.0, prefix_only := false) -> Dictionary:
 	var d := first
 	# Заранее: сборка короткой линии, которую всё равно не возьмём, не нужна.
 	if d.route_length() < min_line:
@@ -187,6 +263,7 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		return {}
 	var allowed := func(p: Vector2) -> bool: return not blocked.call(p)
 	var reason := ""
+	var eased := false
 	for pass_index in ADMIT_PASSES:
 		d.id = "world_trail_%d" % plan.entries.size()
 		d.title = title
@@ -201,12 +278,18 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		var routes: Array[TrailDefinition] = [d]
 		var prepared := site.prepare(routes, true, limits)
 		_time(plan, "prepare", phase)
-		plan.stats.work_m += d.route_length()
+		plan.stats.work_m += d.route_length() * (0.3 if not prepared.errors.is_empty() else 1.0) # отказ при запекании прерывает работу рано
 		for key: String in prepared.timings:
 			plan.stats.phases_ms["prepare_" + key] = float(plan.stats.phases_ms.get("prepare_" + key, 0.0)) + maxf(0, prepared.timings[key])
 		var bad := INF # станция, где не годится само полотно
 		if not prepared.errors.is_empty():
 			reason = prepared.errors[0]
+			if reason == "превышен игровой предел земляных работ" and not eased:
+				# Сама линия годится, просто склон круче проектного уклона: полотно идёт по склону, без выемки и насыпи.
+				eased = true
+				d.shaping.grade_limit = maxf(d.shaping.grade_limit, Layout._steepest(d, func(p: Vector2) -> float: return site.ground_at(p)) * 1.1)
+				plan.stats.eased = int(plan.stats.get("eased", 0)) + 1
+				continue
 			if limits.has("failed_at"): bad = d.nearest(limits.failed_at).x
 		else:
 			phase = Time.get_ticks_usec()
@@ -247,7 +330,7 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 					plan.stats.elements_dropped = int(plan.stats.get("elements_dropped", 0)) + drop.size()
 					continue
 		if not is_finite(bad): break
-		var piece := _piece(d, bad)
+		var piece := _piece(d, bad, min_line, prefix_only)
 		if piece.size() < 2: break
 		var result: Dictionary = line.call(piece, false)
 		if result.routes.is_empty():
@@ -258,12 +341,12 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 	_refuse(plan, reason)
 	return {}
 
-## Больший кусок линии по одну сторону от плохой станции; короче MIN_LINE — пусто.
-static func _piece(d: TrailDefinition, bad: float) -> PackedVector2Array:
+## Годный кусок линии по одну сторону от плохой станции: начало (участок маршрута) или больший; короче min_line — пусто.
+static func _piece(d: TrailDefinition, bad: float, min_line: float, prefix_only: bool) -> PackedVector2Array:
 	var total := d.route_length()
 	var before := bad - TRIM
-	var after := total - bad - TRIM
-	if maxf(before, after) < MIN_LINE: return PackedVector2Array()
+	var after := -INF if prefix_only else total - bad - TRIM
+	if maxf(before, after) < maxf(min_line, 16.0): return PackedVector2Array()
 	var from := 0.0 if before >= after else bad + TRIM
 	var to := bad - TRIM if before >= after else total
 	var out := PackedVector2Array()

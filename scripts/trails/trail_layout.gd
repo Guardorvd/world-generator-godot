@@ -53,7 +53,7 @@ const OPEN_FINISH_MIN := 120.0 # ходок игры не отступает к�
 const WALK_ENOUGH := 200.0  # такой длины линии ходока достаточно, м: подгонка к коридору чаще падает на приёмке
 const SOFT_COST := 6.0       # шаг по дороге или броду
 const CROSSING_CLEAR := 12.0 # столько метров у переезда и брода без элементов
-const HINT_WEIGHT := 4.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
+const HINT_WEIGHT := 2.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
 static var style := "flow"
@@ -284,8 +284,8 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		trial.points = _resample(_smooth(_smooth(line)), 2.0)
 		var trace: Dictionary = attempt_shape.get("trace", {})
 		var chosen_finish: Vector2 = finish_plan.get("finish", trace.get("goal", target))
-		if options.get("open_finish", false) and trace.get("reason", "") != "reached_finish":
-			# Ходок игры не дошёл до точки коридора: линия кончается там, где есть место остановки и выката, а не обязана
+		if options.get("open_finish", false):
+			# Ходок игры: линия кончается там, где есть место остановки и выката, а не обязана
 			# прийти именно туда. Без такого места — отступ назад по своей линии.
 			while line.size() * STEP >= OPEN_FINISH_MIN and not RouteContract.endpoint(trial.points[-1], (trial.points[-1] - trial.points[-2]).normalized(), ground, inside, st.width).suitable:
 				line = line.slice(0, line.size() - 3)
@@ -405,6 +405,10 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		carve.call(cuts)
 	d.open_spans = features.spans
 	var reserved: Array[Vector2] = features.reserved
+	var clear_ends := float(options.get("clear_ends", 0.0))
+	if clear_ends > 0.0:
+		reserved.append(Vector2(-INF, clear_ends))
+		reserved.append(Vector2(d.route_length() - clear_ends, INF))
 	var soft_at: Callable = options.get("soft", Callable())
 	if soft_at.is_valid():
 		var along := 0.0

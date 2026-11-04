@@ -82,7 +82,7 @@ func trace(start: int, seed_value: int, limits := {}) -> Dictionary:
 	var kind := feature(start)
 	var heading := -gradients[start].normalized()
 	if heading.is_zero_approx(): heading = Vector2.from_angle(float(posmod(hash([seed_value, start]), 6283)) / 1000)
-	var run := {path = PackedVector2Array([point(start)]), visited = {start: 0}, counter = 0, steps = int(limits.get("steps", 24)), spaced = limits.get("two_way", false), bounds = Rect2(point(start), Vector2.ZERO), box = float(limits.get("box", 448.0)),
+	var run := {path = PackedVector2Array([point(start)]), visited = {start: 0}, counter = 0, edge = float(limits.get("edge", 36.0)), steps = int(limits.get("steps", 24)), spaced = limits.get("two_way", false), bounds = Rect2(point(start), Vector2.ZERO), box = float(limits.get("box", 448.0)),
 		work = 0.0, peak = 0.0, slope = 0.0, gentle = 0, end = start}
 	_extend(run, start, heading, 1.0, kind)
 	var last: int = run.end
@@ -126,7 +126,7 @@ func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: Strin
 			if not free[q] or run.visited.has(q): continue
 			if run.spaced and _crowded(run, q, p): continue
 			var at := point(q)
-			if at.x < 36 or at.y < 36 or at.x > world_size * GameConfig.TILE - 36 or at.y > world_size * GameConfig.TILE - 36: continue
+			if at.x < run.edge or at.y < run.edge or at.x > world_size * GameConfig.TILE - run.edge or at.y > world_size * GameConfig.TILE - run.edge: continue
 			var next_bounds: Rect2 = run.bounds.expand(at)
 			if maxf(next_bounds.size.x, next_bounds.size.y) > run.box: continue
 			var delta := at - point(p)
@@ -137,7 +137,8 @@ func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: Strin
 				if not free[(p / size) * size + q % size] or not free[(q / size) * size + p % size]: continue
 			var grade := (heights[q] - heights[p]) / delta.length() * down
 			var cross := absf(gradients[q].dot(direction.orthogonal()))
-			var cost := absf(grade + 0.07) * 2 + maxf(grade, 0) * 8 + cross * 2 + (1 - direction.dot(heading)) * 0.5 + 0.3 / (clearance[q] + 1)
+			# Длинный коридор идёт траверсом и зигзагами, а не в лоб по склону: так у линии мало земляных работ.
+			var cost := absf(grade + 0.07) * (8.0 if run.spaced else 2.0) + maxf(grade, 0) * 8 + cross * (0.5 if run.spaced else 2.0) + (1 - direction.dot(heading)) * 0.5 + 0.3 / (clearance[q] + 1)
 			if kind == "гребень": cost += forms[q] * 0.05
 			elif kind == "ложбина": cost -= forms[q] * 0.05
 			if cost < best_cost: best_cost = cost; best = q

@@ -299,6 +299,10 @@ func trail_places() -> Array:
 		for definition: Dictionary in plan.get("routes", [plan.definition]):
 			var points: PackedVector2Array = definition.get("points", PackedVector2Array())
 			if points.size() < 2: continue
+			# Участки одного маршрута — одно место: старт первого, линия всех
+			if not result.is_empty() and result[-1].name == definition.get("title", "Велотрасса"):
+				result[-1].points = result[-1].points + points
+				continue
 			var start := points[0] / TILE
 			result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"),
 				x = start.x, y = start.y, points = points})
