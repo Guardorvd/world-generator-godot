@@ -186,6 +186,8 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		return Layout.generate(ground, Vector2(site.size) * GameConfig.TILE, seed_value, style, blocked, options_line)
 	var result: Dictionary = line.call(hint, not exact)
 	_time(plan, "layout", phase)
+	for key: String in ["walk_ms", "compose_ms"]:
+		plan.stats.phases_ms["layout_" + key] = float(plan.stats.phases_ms.get("layout_" + key, 0.0)) + float(result.stats.get(key, 0.0))
 	if result.routes.is_empty():
 		_refuse(plan, result.stats.get("reason", "линия не построена"))
 		return null
@@ -264,6 +266,9 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 	var allowed := func(p: Vector2) -> bool: return not blocked.call(p)
 	var reason := ""
 	var eased := false
+	var limits := {}
+	var prepared := {}
+	var removed: Array[TrailElement] = [] # только что снятые элементы: сборка пересчитывается только под ними
 	for pass_index in ADMIT_PASSES:
 		d.id = "world_trail_%d" % plan.entries.size()
 		d.title = title
@@ -272,13 +277,18 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		var canonical := StageTrailPlan.to_world(d, site)
 		var local_points := PackedVector2Array()
 		for p in canonical.points: local_points.append(p - site.origin_m())
+		var same_line := local_points == d.points
 		d.points = local_points
 		var phase := Time.get_ticks_usec()
-		var limits := {earthwork_source = site.surface(), earthwork_input = local_input} if early_audit else {}
-		var routes: Array[TrailDefinition] = [d]
-		var prepared := site.prepare(routes, true, limits)
+		if not removed.is_empty() and same_line:
+			prepared = site.rebake(prepared, d, removed, limits)
+		else:
+			limits = {keep_bake = true, earthwork_source = site.surface(), earthwork_input = local_input} if early_audit else {keep_bake = true}
+			var routes: Array[TrailDefinition] = [d]
+			prepared = site.prepare(routes, true, limits)
+		removed = []
 		_time(plan, "prepare", phase)
-		plan.stats.work_m += d.route_length() * (0.3 if not prepared.errors.is_empty() else 1.0) # отказ при запекании прерывает работу рано
+		plan.stats.work_m += d.route_length() * (0.3 if not prepared.errors.is_empty() else float(limits.get("again_share", 1.0))) # отказ при запекании прерывает работу рано
 		for key: String in prepared.timings:
 			plan.stats.phases_ms["prepare_" + key] = float(plan.stats.phases_ms.get("prepare_" + key, 0.0)) + maxf(0, prepared.timings[key])
 		var bad := INF # станция, где не годится само полотно
@@ -293,7 +303,7 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 			if limits.has("failed_at"): bad = d.nearest(limits.failed_at).x
 		else:
 			phase = Time.get_ticks_usec()
-			var earth := audit(site, prepared.heights, local_input)
+			var earth := audit(site, prepared.heights, local_input, limits.get("checked", {}))
 			_time(plan, "audit", phase)
 			if not earth.is_empty():
 				_refuse(plan, earth[0])
@@ -325,7 +335,8 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 				if not drop.is_empty():
 					var kept: Array[TrailElement] = []
 					for k in d.elements.size():
-						if not drop.has(k): kept.append(d.elements[k])
+						if drop.has(k): removed.append(d.elements[k])
+						else: kept.append(d.elements[k])
 					d.elements = kept
 					plan.stats.elements_dropped = int(plan.stats.get("elements_dropped", 0)) + drop.size()
 					continue
@@ -379,8 +390,10 @@ static func context_rect(h: Heightfield, work: Rect2i) -> Rect2i:
 
 ## Compare actual metre vertices against the prepared source, including side slopes.
 ## There is no universal 2 m laboratory limit, and protection is never relaxed.
-static func audit(site: TrailSite, h: Heightfield, input: GI) -> PackedStringArray:
+## Patches in `checked` already passed the same comparison vertex by vertex during the bake.
+static func audit(site: TrailSite, h: Heightfield, input: GI, checked := {}) -> PackedStringArray:
 	for key: int in h.road_refinement.patches:
+		if checked.has(key): continue
 		var patch: Dictionary = h.road_refinement.patches[key]
 		var previous: PackedFloat32Array = site.patches[key].h if site.patches.has(key) else PackedFloat32Array()
 		# Prepared source patches are immutable. An unchanged patch has exactly zero

@@ -111,8 +111,9 @@ static func lip(e: TrailElement) -> float:
 ## точкой отрыва), takeoff_speed, impact (удар по нормали к земле касания, м/с); flew = false — не оторвался.
 static func fly(e: TrailElement, v: float, grade := 0.0) -> Dictionary:
 	var dt := 1.0 / BikeRide.SUB_HZ
+	var n := nodes(e) # один поиск на полёт: тысячи выборок профиля в нём идут по этому массиву
 	var s := -4.0
-	var y := contact_at(e, s, grade)
+	var y := _contact(n, s) + grade * s
 	var speed := v
 	var end := e.length + 14.0
 	var guard := 0
@@ -120,31 +121,35 @@ static func fly(e: TrailElement, v: float, grade := 0.0) -> Dictionary:
 		guard += 1
 		if guard > 20000: break # защита: столько шагов — уже не прыжок (трасса длиннее 200 м)
 		# вертикальная скорость рамы — подъём опоры, не больше уклона на базе колёс (BikeRide._step_height)
-		var hub := (profile_at(e, s + HUB, grade) - profile_at(e, s - HUB, grade)) / (2.0 * HUB)
-		var own := (contact_at(e, s + 0.05, grade) - contact_at(e, s - 0.05, grade)) / 0.1
+		var hub := (_lerp_nodes(n, s + HUB) - _lerp_nodes(n, s - HUB)) / (2.0 * HUB) + grade
+		var own := (_contact(n, s + 0.05) - _contact(n, s - 0.05)) / 0.1 + grade
 		var slope := minf(own, maxf(0.0, hub)) if own > 0.0 else own
 		var vy := slope * speed
 		var lifted := false
 		for look: float in BikeRide.LOOK:
 			var up := y + vy * look - G * look * look * 0.5
-			if up - contact_at(e, s + speed * look, grade) > BikeRide.LIFT:
+			var ahead := s + speed * look
+			if up - (_contact(n, ahead) + grade * ahead) > BikeRide.LIFT:
 				lifted = true
 				break
 		if lifted:
-			var f := _flight(e, s, y, speed, vy, grade, dt)
+			var f := _flight(n, s, y, speed, vy, grade, dt)
 			if f.flew or f.land >= end: return f
 			# короткий отскок (меньше 0,12 с) — не полёт: дальше по земле с места касания
 			s = f.land
-			y = contact_at(e, s, grade)
+			y = _contact(n, s) + grade * s
 			continue
 		var a := -G * hub / sqrt(1.0 + hub * hub) - ROLL - DRAG * speed * speed
 		speed += a * dt
 		if speed < 0.5: return {flew = false, stalled = true, takeoff = s, land = s, air = 0.0, apex = 0.0, takeoff_speed = 0.0, impact = 0.0}
 		s += speed * dt
-		y = contact_at(e, s, grade)
+		y = _contact(n, s) + grade * s
 	return {flew = false, stalled = false, takeoff = -1.0, land = -1.0, air = 0.0, apex = 0.0, takeoff_speed = speed, impact = 0.0}
 
-static func _flight(e: TrailElement, s: float, y: float, speed: float, vy: float, grade: float, dt: float) -> Dictionary:
+static func _contact(n: PackedFloat32Array, s: float) -> float:
+	return (_lerp_nodes(n, s + HUB) + _lerp_nodes(n, s - HUB)) * 0.5
+
+static func _flight(n: PackedFloat32Array, s: float, y: float, speed: float, vy: float, grade: float, dt: float) -> Dictionary:
 	var start := s
 	var start_y := y
 	var vx := speed / sqrt(1.0 + pow(vy / maxf(speed, 0.1), 2.0))
@@ -156,9 +161,9 @@ static func _flight(e: TrailElement, s: float, y: float, speed: float, vy: float
 		vy -= G * dt
 		t += dt
 		apex = maxf(apex, y - start_y)
-		var ground := contact_at(e, s, grade)
+		var ground := _contact(n, s) + grade * s
 		if y <= ground:
-			var gs := (profile_at(e, s + HUB, grade) - profile_at(e, s - HUB, grade)) / (2.0 * HUB)
+			var gs := (_lerp_nodes(n, s + HUB) - _lerp_nodes(n, s - HUB)) / (2.0 * HUB) + grade
 			var impact := absf(vy - gs * vx) / sqrt(1.0 + gs * gs)
 			return {flew = t >= 0.12, stalled = false, takeoff = start, land = s, air = t, apex = apex, takeoff_speed = vx, impact = impact}
 	return {flew = true, stalled = false, takeoff = start, land = s, air = t, apex = apex, takeoff_speed = vx, impact = 99.0}

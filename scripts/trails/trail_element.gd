@@ -44,6 +44,8 @@ const DROP_RAMP := 0.45
 const DROP_LIP := 0.62
 const DROP_EDGE := 1.5
 const JUMP_SHOULDER := 1.0 # full takeoff profile across the riding width; fade outside the track
+## No element changes the ground farther than this past the tread edge, m.
+const FOOTPRINT := BERM_BACK + SIDEHILL
 ## Steepest takeoff of a table lip (rise per metre); the face is concave, so the bike leaves the lip at this angle.
 const LIP_MAX := 0.6
 ## How far the deck sits below the lip, m (at most half the table height): more than the bike's lift threshold.

@@ -127,8 +127,10 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 		if Rect2(near).grow(12).has_point(Vector2(v.x, v.y)):
 			site.settlements.append(Vector2(v.x, v.y) - Vector2(data.position))
 	var reach := Rect2(o, Vector2(data.size) * TILE).grow(TILE * 2.0)
-	for pts: Array in h.ribbons:
-		site.ribbons.append_array(_clip_ribbon(pts, reach, o))
+	var boxes := h.ribbon_boxes()
+	for k in h.ribbons.size():
+		if boxes[k].grow(TILE).intersects(reach):
+			site.ribbons.append_array(_clip_ribbon(h.ribbons[k], reach, o))
 	for key: int in h.road_refinement.patches:
 		var cx := key % w.W - data.position.x
 		var cz := key / w.W - data.position.y
@@ -335,9 +337,22 @@ func prepare(routes: Array[TrailDefinition], with_elements := true, limits := {}
 		if not errors.is_empty():
 			return {heights = null, errors = errors, timings = timings}
 		timings.earthworks_ms = h.road_refinement.build_timings.trail_elements_ms
+		timings.earthworks_profile_ms = h.road_refinement.build_timings.trail_profile_ms
+		timings.earthworks_zone_ms = h.road_refinement.build_timings.trail_zone_ms
 	started = Time.get_ticks_usec()
 	h.obstacles = ForestObstacles.new(w, h)
 	timings.setup_ms += (Time.get_ticks_usec() - started) / 1000.0
+	return {heights = h, errors = PackedStringArray(), timings = timings}
+
+
+## Та же трасса после снятия элементов: готовая сборка prepare (с limits.keep_bake) пересчитывается только под ними.
+func rebake(prepared: Dictionary, d: TrailDefinition, removed: Array[TrailElement], limits: Dictionary) -> Dictionary:
+	var timings := {setup_ms = 0.0, surface_ms = 0.0, earthworks_ms = -1.0}
+	var h: Heightfield = prepared.heights
+	var errors := TrailBuilder.bake_without(h, d, removed, limits)
+	if not errors.is_empty():
+		return {heights = null, errors = errors, timings = timings}
+	timings.earthworks_ms = h.road_refinement.build_timings.trail_elements_ms
 	return {heights = h, errors = PackedStringArray(), timings = timings}
 
 

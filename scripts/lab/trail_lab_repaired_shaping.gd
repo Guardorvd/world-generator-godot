@@ -11,6 +11,9 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 		result.original_profile = result.duplicate(true)
 		result.repair_profile = repair_shape.profile(h, d, pin_at)
 		result.reach = maxf(result.reach, result.repair_profile.reach)
+		var wider := PackedFloat32Array()
+		for j in result.reaches.size(): wider.append(maxf(result.reaches[j], result.repair_profile.reaches[j]))
+		result.reaches = wider
 	return result
 
 func offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, p: Dictionary) -> float:

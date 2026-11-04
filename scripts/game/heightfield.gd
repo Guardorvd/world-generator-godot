@@ -37,6 +37,7 @@ var hv_raw := PackedFloat32Array()  # высоты как в генератор�
 var water_level := PackedFloat32Array() # уровень воды в клетке (или -INF, если воды нет)
 var ribbons: Array = []             # средние линии рек: массивы точек {x, z, w — полуширина, y — уровень воды}
 var _river_cells := {}             # клетка -> сегменты ленты; одни треугольники для воды и depth_at
+var _ribbon_boxes: Array[Rect2] = []
 ## мосты и туннели: {tunnel, ax, az, ay, bx, bz, by — концы оси в метрах (y — настил или пол), half, len, ux, uz — направление;
 ## у мостов ещё style: "wood" | "stone" | "planks" и rails — есть ли перила, в которые упираются}.
 ## Концы настила и пола вровень с землёй, чтобы на них въезжать без ступеньки
@@ -632,6 +633,21 @@ func _fit_river_banks() -> void:
 			return 0
 	Parallel.bands(ribbons.size(), job, 2)
 	index_ribbons()
+
+
+## Прямоугольник берегов каждой ленты (метры): вырезка участка не перебирает точки далёких рек.
+func ribbon_boxes() -> Array[Rect2]:
+	if _ribbon_boxes.size() == ribbons.size(): return _ribbon_boxes
+	_ribbon_boxes.clear()
+	for pts: Array in ribbons:
+		var lo := Vector2(INF, INF)
+		var hi := Vector2(-INF, -INF)
+		for p: Dictionary in pts:
+			for v: Vector3 in [p.left, p.right]:
+				lo = lo.min(Vector2(v.x, v.z))
+				hi = hi.max(Vector2(v.x, v.z))
+		_ribbon_boxes.append(Rect2(lo, hi - lo))
+	return _ribbon_boxes
 
 
 ## Индекс клетка -> отрезки лент рек и их точки для C#; также для готовых лент без пересчёта берегов

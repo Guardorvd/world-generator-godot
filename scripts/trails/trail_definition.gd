@@ -8,6 +8,7 @@ extends Resource
 	set(value):
 		points = value
 		_along = PackedFloat32Array() # the station index is rebuilt on the next query
+		_curvature.clear()
 @export var width := 4.0
 ## NONE asks RoadSurface to choose from the real biome/slope/seed.
 @export_range(0, 7) var surface := RoadSurface.NONE
@@ -15,7 +16,10 @@ extends Resource
 @export_range(0.0, 1.0) var earthwork := 0.0
 @export_range(-2.0, 2.0) var elevation_offset := 0.0
 @export_range(0.0, 1.0) var auto_bank := 0.0
-@export var closed := false
+@export var closed := false:
+	set(value):
+		closed = value
+		_curvature.clear()
 ## Optional override of the per-kind terrain shaping preset.
 @export var shaping: TrailShaping
 @export var elements: Array[TrailElement] = []
@@ -39,6 +43,7 @@ func open_at(station: float) -> Vector2:
 const GRID := 8.0
 var _along := PackedFloat32Array()
 var _grid := {}
+var _curvature := {} # station -> curvature_at: composition and checks ask about the same metres many times
 
 func _index() -> void:
 	if _along.size() == points.size() and not _along.is_empty(): return
@@ -151,10 +156,11 @@ func point_at(station: float) -> Vector2:
 ## Station, signed across and distance of the closest route point. With a finite `reach` only segments
 ## near `at` are looked at, and a point farther than `reach` gives distance INF.
 ## Segments that matter to any point closer than `spread` to `at`, without repeats: one query for a group of nearby
-## points (nearest / junction_weight with `among`), the same result as their own queries. Kept: every segment within
-## `keep` of a point (junction_weight needs them all) and those that can still be the nearest one (not farther from `at`
-## than the closest segment plus 2 * spread); none when no segment comes within `reach` of a point.
-func segments_around(at: Vector2, reach: float, spread: float, keep: float) -> PackedInt32Array:
+## points (nearest with `among`), the same result as their own queries. Kept: those that can still be the nearest one
+## (not farther from `at` than the closest segment plus 2 * spread); none when no segment comes within `reach` of a point.
+## `joints`: the segments within `keep` of a point when the route comes back to itself there (junction_weight needs them
+## all); empty when they are one stretch of the route: the weight is 1 for all these points.
+func segments_around(at: Vector2, reach: float, spread: float, keep: float) -> Dictionary:
 	_index()
 	var seen := {}
 	var dist := {}
@@ -165,23 +171,40 @@ func segments_around(at: Vector2, reach: float, spread: float, keep: float) -> P
 		dist[i] = _project(at, i).z
 		closest = minf(closest, dist[i])
 	var out := PackedInt32Array()
-	if closest > reach + spread: return out
+	var joints := PackedInt32Array()
+	if closest > reach + spread: return {among = out, joints = joints}
+	var first := INF
+	var last := -INF
 	for i: int in dist:
-		if dist[i] <= maxf(closest + 2.0 * spread, keep + spread): out.append(i)
+		if dist[i] <= closest + 2.0 * spread: out.append(i)
+		if dist[i] <= keep + spread:
+			joints.append(i)
+			first = minf(first, _along[i - 1])
+			last = maxf(last, _along[i])
 	out.sort()
-	return out
+	if last - first <= junction_gap(): joints.clear()
+	joints.sort()
+	return {among = out, joints = joints}
 
 func nearest(at: Vector2, reach := INF, among := PackedInt32Array()) -> Vector3:
 	_index()
 	var best := INF
 	var result := Vector3(0.0, 0.0, INF) # station, signed across, distance
 	if is_finite(reach):
+		# The closest segment first, by squared distance; only it is projected in full.
+		var pts := points
+		var closest := -1
 		for i: int in (among if not among.is_empty() else PackedInt32Array(_segments_near(at, reach))):
-			var found := _project(at, i)
-			if found.z < best:
-				best = found.z
-				result = found
-		return result if best <= reach else Vector3(0.0, 0.0, INF)
+			var a := pts[i - 1]
+			var delta := pts[i] - a
+			var offset := at - (a + delta * clampf((at - a).dot(delta) / delta.length_squared(), 0.0, 1.0))
+			var distance := offset.length_squared()
+			if distance < best:
+				best = distance
+				closest = i
+		if closest < 0: return result
+		result = _project(at, closest)
+		return result if result.z <= reach else Vector3(0.0, 0.0, INF)
 	# A rider is almost always close to the route: look nearby first, scan everything only when that fails.
 	result = nearest(at, 16.0)
 	if is_finite(result.z): return result
@@ -224,11 +247,18 @@ func tangent_at(station: float) -> Vector2:
 	return (point_at(station + 2.0) - point_at(station - 2.0)).normalized()
 
 func curvature_at(station: float) -> float:
+	var known: Variant = _curvature.get(station)
+	if known != null: return known
 	var a := tangent_at(station - 3.0)
 	var b := tangent_at(station + 3.0)
 	# Past the end of an open route the tangent is zero: angle_to(0) gives 0 or π by the sign of zero, not a turn.
-	if a == Vector2.ZERO or b == Vector2.ZERO: return 0.0
-	return a.angle_to(b) / 6.0
+	var value := 0.0 if a == Vector2.ZERO or b == Vector2.ZERO else a.angle_to(b) / 6.0
+	_curvature[station] = value
+	return value
+
+## Parts of the route closer along it than this are one stretch, not a crossing, m.
+func junction_gap() -> float:
+	return maxf(20.0, width * 3.0)
 
 ## A heightfield cannot carry two different decks at a crossing: keep shared junctions grounded.
 func junction_weight(at: Vector2, station: float, among := PackedInt32Array()) -> float:
@@ -239,6 +269,6 @@ func junction_weight(at: Vector2, station: float, among := PackedInt32Array()) -
 		var found := _project(at, i)
 		var separation := absf(found.x - station)
 		if closed: separation = minf(separation, total - separation)
-		if separation > maxf(20.0, width * 3.0):
+		if separation > junction_gap():
 			weight = minf(weight, smoothstep(width * 0.5, width * 0.5 + RoadRefinement.REACH, found.z))
 	return weight

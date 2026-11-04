@@ -71,52 +71,23 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	if not errors.is_empty(): return errors
 	var started := Time.get_ticks_usec()
 	var w := h.world
+	var again: Dictionary = limits.get("again", {}) # bake_without: only these cells are computed, the rest stays as baked
 	var earthwork_source: Heightfield = limits.get("earthwork_source")
 	var earthwork_input: Resource = limits.get("earthwork_input")
-	var pin_at := pins(h, definitions)
-	var profiles := {}
-	var shapes := {}
-	var reaches := {}
-	for d in definitions:
-		reaches[d.id] = d.width * 0.5 + RoadRefinement.REACH
-		if d.earthwork > 0.0:
-			shapes[d.id] = d.shape()
-			profiles[d.id] = shapes[d.id].profile(h, d, pin_at)
-			reaches[d.id] = profiles[d.id].reach
-	var profile_ms := (Time.get_ticks_usec() - started) / 1000.0
-	# Cells of the zones: every vertex closer than the reach to a route lies only in such cells.
-	var zone := {}
-	# Every zone cell lists the routes within reach of any of its vertices (in definition order): a vertex asks only those,
-	# the others are farther than their reach anyway. nearest() is against the whole route: a cell tested from one
-	# station needs no second test.
-	var tested := {}
-	for di in definitions.size():
-		var d := definitions[di]
-		tested.clear()
-		var reach: float = reaches[d.id]
-		var span := reach + GameConfig.TILE
-		var station := 0.0
-		var total := d.route_length()
-		while true:
-			var p := d.point_at(minf(station, total))
-			for cz in range(maxi(0, floori((p.y - span) / GameConfig.TILE - 0.5)), mini(w.H - 1, ceili((p.y + span) / GameConfig.TILE - 0.5))):
-				for cx in range(maxi(0, floori((p.x - span) / GameConfig.TILE - 0.5)), mini(w.W - 1, ceili((p.x + span) / GameConfig.TILE - 0.5))):
-					var key := cz * w.W + cx
-					if tested.has(key): continue
-					tested[key] = true
-					if is_finite(d.nearest(Vector2(cx + 1.0, cz + 1.0) * GameConfig.TILE, reach + GameConfig.TILE * 0.71).z):
-						if not zone.has(key): zone[key] = []
-						(zone[key] as Array).append(d)
-			if station >= total: break
-			station += GameConfig.TILE
-	var zone_ms := (Time.get_ticks_usec() - started) / 1000.0 - profile_ms
+	var max_cut := -float(earthwork_input.earthwork_limits.max_cut) - 0.05 if earthwork_input != null else -INF
+	var max_fill := float(earthwork_input.earthwork_limits.max_fill) + 0.05 if earthwork_input != null else INF
+	var plan: Dictionary = again.plan if not again.is_empty() else _bake_plan(h, definitions)
+	var pin_at: Callable = plan.pin_at
+	var profiles: Dictionary = plan.profiles
+	var shapes: Dictionary = plan.shapes
+	var zone: Dictionary = plan.zone
 	var offsets := {}
 	var shades := {}
 	var staged := {}
 	var staged_colors := {}
 	var added := {}
-	var stats := {}
-	var keys := zone.keys()
+	var stats: Dictionary = again.get("stats", {}) # measured on the first bake: a removed element changes them little
+	var keys: Array = again.cells.keys() if not again.is_empty() else zone.keys()
 	keys.sort()
 	for key: int in keys:
 		var cancel: Callable = limits.get("cancel", Callable())
@@ -134,8 +105,11 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		# one segment query per route for the whole cell (its vertices lie within the half diagonal of the centre)
 		var center := Vector2((key % w.W) + 1.0, (key / w.W) + 1.0) * GameConfig.TILE
 		var among := {}
+		var joints := {}
 		for d: TrailDefinition in zone[key]:
-			among[d] = d.segments_around(center, reaches[d.id], GameConfig.TILE * 0.71, d.width * 0.5 + RoadRefinement.REACH)
+			var around := d.segments_around(center, zone[key][d], GameConfig.TILE * 0.71, d.width * 0.5 + RoadRefinement.REACH)
+			among[d] = around.among
+			joints[d] = around.joints
 		for iz in RoadRefinement.STRIDE:
 			for ix in RoadRefinement.STRIDE:
 				var gx := (key % w.W) * RoadRefinement.DIV + ix
@@ -143,47 +117,59 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 				var vertex := Vector2i(gx, gz)
 				if not offsets.has(vertex):
 					var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
-					var cell := clampi(floori(at.y / GameConfig.TILE), 0, w.H - 1) * w.W + clampi(floori(at.x / GameConfig.TILE), 0, w.W - 1)
-					var pin: float = pin_at.call(at)
 					# The nearest route by normalized distance shapes the vertex; where two zones overlap, the two nearest
 					# blend over BLEND half widths instead of meeting in a seam. Profiles never add up.
-					var best := {rank = INF}
-					var second := {rank = INF}
+					var best: TrailDefinition = null
+					var best_rank := INF
+					var best_local := Vector3.ZERO
+					var second: TrailDefinition = null
+					var second_rank := INF
+					var second_local := Vector3.ZERO
 					for d: TrailDefinition in zone[key]:
 						if (among[d] as PackedInt32Array).is_empty(): continue # no segment within reach of this cell
-						var near := d.nearest(at, reaches[d.id], among[d])
+						var near := d.nearest(at, zone[key][d], among[d])
 						if not is_finite(near.z): continue
+						if profiles.has(d.id) and near.z > TrailShaping.reach_at(profiles[d.id], near.x): continue
 						var score := near.z / (d.width * 0.5)
-						var found := {rank = score, d = d, local = near}
-						if score < best.rank:
+						if score < best_rank:
 							second = best
-							best = found
-						elif score < second.rank:
-							second = found
+							second_rank = best_rank
+							second_local = best_local
+							best = d
+							best_rank = score
+							best_local = near
+						elif score < second_rank:
+							second = d
+							second_rank = score
+							second_local = near
 					var offset := 0.0
-					if best.has("d"):
-						offset = _route_offset(h, best.d, best.local, at, shapes, profiles, among[best.d])
-						if second.has("d"):
-							var other := _route_offset(h, second.d, second.local, at, shapes, profiles, among[second.d])
-							var t := smoothstep(0.0, 1.0, (second.rank - best.rank) / BLEND)
+					if best != null:
+						offset = _route_offset(h, best, best_local, at, shapes, profiles, joints[best])
+						if second != null:
+							var other := _route_offset(h, second, second_local, at, shapes, profiles, joints[second])
+							var t := smoothstep(0.0, 1.0, (second_rank - best_rank) / BLEND)
 							offset = lerpf((offset + other) * 0.5, offset, t)
 					if not is_finite(offset): return PackedStringArray(["Trail earthworks produced a non-finite terrain displacement"])
+					var tint := _feature_shade(best, best_local) if best != null else 0.0
+					# Past the run-out of the side slopes nothing changes: neither pins nor water matter.
+					var pin: float = pin_at.call(at) if offset != 0.0 or tint != 0.0 else 1.0
 					var displacement := offset * pin
-					var base := h.ground_at(at.x, at.y)
 					if displacement < 0.0:
-						displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP - base))
+						var cell := clampi(floori(at.y / GameConfig.TILE), 0, w.H - 1) * w.W + clampi(floori(at.x / GameConfig.TILE), 0, w.W - 1)
+						displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP - h.ground_at(at.x, at.y)))
 					offsets[vertex] = displacement
-					if best.has("d"): shades[vertex] = _feature_shade(best.d, best.local) * pin
-					if best.has("d") and (best.d as TrailDefinition).earthwork > 0.0:
-						var id: String = best.d.id
-						var record: Dictionary = stats.get(id, {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0})
-						var volume := displacement * RoadRefinement.STEP * RoadRefinement.STEP
-						record.cut_m3 += maxf(0.0, -volume)
-						record.fill_m3 += maxf(0.0, volume)
-						record.max_cut = maxf(record.max_cut, -displacement)
-						record.max_fill = maxf(record.max_fill, displacement)
+					if tint != 0.0: shades[vertex] = tint * pin
+					if again.is_empty() and best != null and best.earthwork > 0.0:
+						var id: String = best.id
+						if not stats.has(id): stats[id] = {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0}
+						var record: Dictionary = stats[id]
 						record.vertices += 1
-						stats[id] = record
+						if displacement != 0.0:
+							var volume := displacement * RoadRefinement.STEP * RoadRefinement.STEP
+							record.cut_m3 += maxf(0.0, -volume)
+							record.fill_m3 += maxf(0.0, volume)
+							record.max_cut = maxf(record.max_cut, -displacement)
+							record.max_fill = maxf(record.max_fill, displacement)
 				hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
 				# Reject on the actual rounded final vertex, before spending the rest of
 				# the bake on a doomed proposal. The normal final audit still covers the
@@ -192,7 +178,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
 					var n := iz * RoadRefinement.STRIDE + ix
 					var delta: float = hs[n] - (source_vertices[n] if not source_vertices.is_empty() else earthwork_source.ground_at(at.x, at.y))
-					if delta < -float(earthwork_input.earthwork_limits.max_cut) - 0.05 or delta > float(earthwork_input.earthwork_limits.max_fill) + 0.05:
+					if delta < max_cut or delta > max_fill:
 						limits.failed_at = at
 						return PackedStringArray(["превышен игровой предел земляных работ"])
 					if absf(delta) > 0.05 and earthwork_input.blocked(at):
@@ -206,12 +192,22 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		staged[key] = hs
 		staged_colors[key] = colors
 	# Publish only after every vertex succeeded; a rejected extension cannot leave half a bake.
+	var before: Dictionary = again.get("before", {})
+	if limits.get("keep_bake", false) and again.is_empty():
+		for key: int in zone: before[key] = r.patches.get(key)
 	for key: int in added: r.patches[key] = added[key]
 	for key: int in staged:
 		var patch: Dictionary = r.patches[key].duplicate()
 		patch.h = staged[key]
 		patch.color = staged_colors[key]
 		r.patches[key] = patch
+	if not again.is_empty():
+		for key: int in zone:
+			if not again.cells.has(key): r.patches[key] = again.baked[key]
+	if limits.get("keep_bake", false):
+		var baked := {}
+		for key: int in zone: baked[key] = r.patches[key]
+		limits.bake = {plan = plan, before = before, baked = baked, stats = stats}
 	for id: String in profiles:
 		var record: Dictionary = stats.get(id, {})
 		var p: Dictionary = profiles[id]
@@ -220,11 +216,70 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 		r.trail_shaping[id] = record
 	r.build_timings.trail_patches_added = added.size()
 	r.build_timings.trail_zone_patches = zone.size()
-	r.build_timings.trail_profile_ms = profile_ms
-	r.build_timings.trail_zone_ms = zone_ms
+	r.build_timings.trail_profile_ms = 0.0 if not again.is_empty() else plan.profile_ms
+	r.build_timings.trail_zone_ms = 0.0 if not again.is_empty() else plan.zone_ms
 	r.trail_elements_baked = true
 	r.build_timings.trail_elements_ms = (Time.get_ticks_usec() - started) / 1000.0
+	if earthwork_source != null and earthwork_input != null: limits.checked = zone # every vertex of these patches passed the limits above
 	return PackedStringArray()
+
+## What a bake of these routes needs once: pins, design profiles and the cells of their zones.
+static func _bake_plan(h: Heightfield, definitions: Array[TrailDefinition]) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	var w := h.world
+	var pin_at := pins(h, definitions)
+	var profiles := {}
+	var shapes := {}
+	for d in definitions:
+		if d.earthwork > 0.0:
+			shapes[d.id] = d.shape()
+			profiles[d.id] = shapes[d.id].profile(h, d, pin_at)
+	var profile_ms := (Time.get_ticks_usec() - started) / 1000.0
+	# Cells of the zones: every vertex closer than the reach of its station lies only in such cells (a cell's vertices are
+	# within its half diagonal of the centre; TILE leaves room for the metre between stations). Every zone cell maps the
+	# routes that can reach it (in definition order) to their widest reach there: a vertex asks only those.
+	var zone := {}
+	for d in definitions:
+		var plain := d.earthwork <= 0.0
+		var stations := ceili(d.route_length() / RoadRefinement.STEP) if plain else (profiles[d.id].points as PackedVector2Array).size() - 1
+		for j in stations + 1:
+			var p: Vector2 = d.point_at(j * RoadRefinement.STEP) if plain else profiles[d.id].points[j]
+			var reach: float = d.width * 0.5 + RoadRefinement.REACH if plain else profiles[d.id].reaches[j]
+			var span := reach + GameConfig.TILE
+			var limit := span * span
+			for cz in range(maxi(0, floori((p.y - span) / GameConfig.TILE - 0.5)), mini(w.H - 1, ceili((p.y + span) / GameConfig.TILE - 0.5))):
+				for cx in range(maxi(0, floori((p.x - span) / GameConfig.TILE - 0.5)), mini(w.W - 1, ceili((p.x + span) / GameConfig.TILE - 0.5))):
+					if p.distance_squared_to(Vector2(cx + 1.0, cz + 1.0) * GameConfig.TILE) > limit: continue
+					var key := cz * w.W + cx
+					if not zone.has(key): zone[key] = {}
+					if reach > float(zone[key].get(d, 0.0)): zone[key][d] = reach
+	return {pin_at = pin_at, profiles = profiles, shapes = shapes, zone = zone, profile_ms = profile_ms, zone_ms = (Time.get_ticks_usec() - started) / 1000.0 - profile_ms}
+
+## The route d after bake_elements with limits.keep_bake, with emoved elements already taken out of it: nothing else
+## about the route changed, so only the cells under these elements are computed again; the result is the same as a new bake.
+## Share of the zone recomputed goes to limits.again_share.
+static func bake_without(h: Heightfield, d: TrailDefinition, removed: Array[TrailElement], limits: Dictionary) -> PackedStringArray:
+	var r := h.road_refinement
+	var bake: Dictionary = limits.bake
+	var zone: Dictionary = bake.plan.zone
+	var cells := {}
+	var span := d.width * 0.5 + TrailElement.FOOTPRINT + GameConfig.TILE
+	for e in removed:
+		var station := maxf(0.0, e.station - e.length * 0.5 - RoadRefinement.STEP)
+		while station <= e.station + e.length * 0.5 + RoadRefinement.STEP:
+			var p := d.point_at(station)
+			for cz in range(floori((p.y - span) / GameConfig.TILE - 0.5), ceili((p.y + span) / GameConfig.TILE - 0.5)):
+				for cx in range(floori((p.x - span) / GameConfig.TILE - 0.5), ceili((p.x + span) / GameConfig.TILE - 0.5)):
+					var key := cz * h.world.W + cx
+					if zone.has(key) and p.distance_squared_to(Vector2(cx + 1.0, cz + 1.0) * GameConfig.TILE) <= span * span: cells[key] = true
+			station += RoadRefinement.STEP
+	for key: int in bake.before:
+		if bake.before[key] == null: r.patches.erase(key)
+		else: r.patches[key] = bake.before[key]
+	r.trail_elements_baked = false
+	limits.again = {plan = bake.plan, cells = cells, before = bake.before, baked = bake.baked, stats = bake.stats}
+	limits.again_share = float(cells.size()) / maxi(1, zone.size())
+	return bake_elements(h, [d] as Array[TrailDefinition], limits)
 
 ## How much of the earthworks may change the ground at a point (1 — all, 0 — nothing): water and the support of wet
 ## triangles, the shore zone, bridges and tunnels with their protected ends, and the other civil paths (all but the
@@ -284,19 +339,20 @@ static func pins(h: Heightfield, definitions: Array[TrailDefinition]) -> Callabl
 		return pin
 
 ## Shaping of route d at a vertex (no depth limit), the explicit elements (capped at ELEMENT_CAP) and the weight of shared
-## junctions with itself.
-static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, shapes: Dictionary, profiles: Dictionary, among := PackedInt32Array()) -> float:
+## junctions with itself (`joints`: empty — no such place near this vertex).
+static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, shapes: Dictionary, profiles: Dictionary, joints: PackedInt32Array) -> float:
 	var offset := 0.0
 	if d.earthwork > 0.0: offset = (shapes[d.id] as TrailShaping).offset(h, d, local, at, profiles[d.id])
 	# Explicit features have a compact footprint, so the shoulders stay continuous.
 	var features := 0.0
-	for e in d.elements:
-		if absf(local.x - e.station) < e.length * 0.5: # displacement() is zero outside the element
-			features += e.displacement(local.x, local.y, d.width * 0.5)
+	if absf(local.y) < d.width * 0.5 + TrailElement.FOOTPRINT:
+		for e in d.elements:
+			if absf(local.x - e.station) < e.length * 0.5: # displacement() is zero outside the element
+				features += e.displacement(local.x, local.y, d.width * 0.5)
 	# открытый пролёт (генератор v3): элементы не насыпаются, полотно опускается на глубину овражка от своего уровня
 	var open := d.open_at(local.x) if not d.open_spans.is_empty() else Vector2.ZERO
 	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP) * (1.0 - open.x) - open.y * open.x
-	if d.earthwork > 0.0: offset *= d.junction_weight(at, local.x, among) # among covers the smaller junction reach too
+	if d.earthwork > 0.0 and not joints.is_empty(): offset *= d.junction_weight(at, local.x, joints)
 	return offset
 
 ## Readable features (31.10): the tread of a raised feature is lighter (dry, packed by tyres), a dug one darker (damp),
@@ -305,6 +361,7 @@ const SHADE_UP := 0.28
 const SHADE_DOWN := 0.22
 static func _feature_shade(d: TrailDefinition, local: Vector3) -> float:
 	var features := 0.0
+	if absf(local.y) >= d.width * 0.5 + TrailElement.FOOTPRINT: return 0.0
 	for e in d.elements:
 		if absf(local.x - e.station) < e.length * 0.5 and not TrailElement.places_objects(e.profile) \
 				and e.profile not in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM, TrailElement.Profile.OFF_CAMBER]:

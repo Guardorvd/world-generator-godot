@@ -28,6 +28,8 @@ const FADE := 0.15
 ## Technical bound of the zone of influence past the tread edge, m (number of metre patches and bake time). Past the
 ## run-out the surface still blends continuously into the ground, only steeper.
 const REACH_LIMIT := 40.0
+## The zone at a station is as wide as the widest within this distance along the route, m: it changes smoothly.
+const REACH_SPREAD := 4.0
 ## A place of the route where less than this share of the earthworks may act (TrailBuilder.pins) is an anchor of the
 ## design profile: the level stays on the ground there.
 const ANCHOR := 0.5
@@ -149,22 +151,51 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 	var peak_bank := 0.0
 	for b in banks: peak_bank = maxf(peak_bank, absf(b))
 	# Side slopes: at least `batter` and steeper than the natural cross slope by SIDE_GAIN, so they meet the ground;
-	# the zone of influence is as wide as the deepest edge needs.
+	# the zone of influence at each station is as wide as its own slopes need: the bake visits only these vertices.
 	var sides := PackedFloat32Array()
-	var reach := half + RoadRefinement.REACH
+	var runs := PackedFloat32Array()
 	var deepest := 0.0
 	for j in count + 1:
-		var c := absf(follow[j])
-		var side := maxf(batter, c + SIDE_GAIN)
+		var side := maxf(batter, absf(follow[j]) + SIDE_GAIN)
 		sides.append(side)
 		var slope := clampf(side_follow * follow[j] + banks[j], -0.6, 0.6)
-		var axis := absf(levels[j] + d.elevation_offset - ground[j])
-		deepest = maxf(deepest, axis)
-		reach = maxf(reach, half + (axis + absf(slope - follow[j]) * half) / (side - c) + SIDE_MARGIN)
-	reach = minf(reach, half + REACH_LIMIT)
+		if not d.closed and end_fade > 0.0: slope *= smoothstep(0.0, end_fade, minf(step * j, total - step * j))
+		var level := levels[j] + d.elevation_offset
+		deepest = maxf(deepest, absf(level - ground[j]))
+		var lateral := Vector2(tangents[j].y, -tangents[j].x)
+		# Ground steeper than the side slope never meets it: past the planned run-out (the depth at the axis over the slope
+		# difference, with room for uneven ground) the surface blends into the ground instead of cutting on up the hill.
+		var limit := 2.0 * (absf(level - ground[j]) + absf(slope - follow[j]) * half) / (side - absf(follow[j]))
+		runs.append(maxf(_run_out(h, points[j], lateral, half, level + slope * half, side, limit), _run_out(h, points[j], -lateral, half, level - slope * half, side, limit)))
+	var reaches := PackedFloat32Array()
+	reaches.resize(count + 1)
+	var reach := 0.0
+	var spread := ceili(REACH_SPREAD / step)
+	for j in count + 1:
+		var run := 0.0
+		for k in range(j - spread, j + spread + 1):
+			run = maxf(run, runs[posmod(k, count) if d.closed else clampi(k, 0, count)])
+		reaches[j] = minf(half + maxf(RoadRefinement.REACH, run * (1.0 + FADE * 1.2) + SIDE_MARGIN), half + REACH_LIMIT)
+		reach = maxf(reach, reaches[j])
 	return {levels = levels, banks = banks, cross = follow, sides = sides, points = points, tangents = tangents, total = total,
-		reach = reach, grade_used = grade, deepest = deepest,
+		reach = reach, reaches = reaches, grade_used = grade, deepest = deepest,
 		grade_natural = peak_grade(ground, step), grade_designed = peak_grade(levels, step), bank_peak = peak_bank}
+
+## Distance past the tread edge at which the side slope from `edge` meets the real ground, walking over that ground, m.
+static func _run_out(h: Heightfield, center: Vector2, lateral: Vector2, half: float, edge: float, side: float, limit: float) -> float:
+	var run := 0.0
+	while run < limit:
+		var q := center + lateral * (half + run)
+		if absf(h.ground_at(q.x, q.y) - edge) <= run * side: return run
+		run += RoadRefinement.STEP
+	return limit
+
+## Zone of influence of the route at a station, m.
+static func reach_at(p: Dictionary, station: float) -> float:
+	var last: int = p.reaches.size() - 1
+	var index: float = clampf(station / p.total * last, 0.0, float(last))
+	var j := mini(floori(index), last - 1)
+	return lerpf(p.reaches[j], p.reaches[j + 1], index - j)
 
 ## Displacement of the existing surface at `at` (positive — embankment, negative — excavation). No depth limit: the
 ## designed surface is reached; past `p.reach` nothing changes, and the last FADE share of the zone blends into the
@@ -195,8 +226,8 @@ func offset(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, p: 
 		var run := local.z - half
 		var side: float = lerpf(p.sides[j], p.sides[j + 1], f)
 		surface = clampf(ground, edge - run * side, edge + run * side)
-	var reach: float = p.reach
-	var fade := 1.0 - smoothstep(reach - maxf(1.2, (reach - half) * FADE), reach, local.z)
+	var reach: float = lerpf(p.reaches[j], p.reaches[j + 1], f)
+	var fade :=1.0 - smoothstep(reach - maxf(1.2, (reach - half) * FADE), reach, local.z)
 	return (surface - ground) * strength * d.earthwork * fade
 
 ## Moving average; open routes keep their ends and shrink the window towards them.
