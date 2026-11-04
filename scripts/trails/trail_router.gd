@@ -94,11 +94,15 @@ var _attempts := 0                  # остаток попыток поиска
 var _shaped := {}                   # геометрия текущего кандидата
 ## Данные пригодности последней площадки и ширины: сетка, запреты, высоты, области (см. setup).
 static var _prepared := {}
+static var _prepared_lock := Mutex.new()
+var _prepared_grid := {} # снимок этого поиска; общий кэш заменяется целиком, опубликованные данные не меняются
 
 
 ## Отпустить данные последней площадки (выход из мира): иначе они живут до следующего построения
 static func release() -> void:
+	_prepared_lock.lock()
 	_prepared = {}
+	_prepared_lock.unlock()
 
 
 ## Построить линию на площадке. request — DEFAULTS (start, finish — локальные метры площадки).
@@ -147,17 +151,24 @@ func setup(site: TrailSite, req: Dictionary) -> bool:
 	_shape.end_fade = 4.0                     # концы линии — заданные точки на естественной земле
 	var started := Time.get_ticks_usec()
 	var key := "%d|%.3f" % [site.get_instance_id(), request.width]
-	stats.prepare_reused = _prepared.get("key", "") == key
+	_prepared_lock.lock()
+	_prepared_grid = _prepared
+	_prepared_lock.unlock()
+	stats.prepare_reused = _prepared_grid.get("key", "") == key
 	if not stats.prepare_reused:
 		_setup_grid()
-		_prepared = {key = key, w = _w, h = _h, origin = _origin, lo = _lo, hi = _hi, raw = _raw, mean = _mean, block = _block,
+		_prepared_grid = {key = key, w = _w, h = _h, origin = _origin, lo = _lo, hi = _hi, raw = _raw, mean = _mean, block = _block,
 			cost = _cost.duplicate(), paths = _paths, path_cells = _path_cells, area = PackedInt32Array(), cost_ms = 0.0}
 	else:
-		for name: String in ["w", "h", "origin", "lo", "hi", "raw", "mean", "block", "paths", "path_cells"]: set("_" + name, _prepared[name])
-		_cost = (_prepared.cost as PackedFloat32Array).duplicate() # штрафы и закрытые концы — только этого поиска
+		for name: String in ["w", "h", "origin", "lo", "hi", "raw", "mean", "block", "paths", "path_cells"]: set("_" + name, _prepared_grid[name])
+		_cost = (_prepared_grid.cost as PackedFloat32Array).duplicate() # штрафы и закрытые концы — только этого поиска
 	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
-	if not stats.prepare_reused: _prepared.cost_ms = stats.prepare_ms
-	stats.prepare_cost_ms = _prepared.cost_ms
+	if not stats.prepare_reused:
+		_prepared_grid.cost_ms = stats.prepare_ms
+		_prepared_lock.lock()
+		_prepared = _prepared_grid
+		_prepared_lock.unlock()
+	stats.prepare_cost_ms = _prepared_grid.cost_ms
 	_budget = int(request.budget)
 	_attempts = int(request.repairs) + 1
 	# Примыкание к дороге: вокруг точки на оси существующего пути запрет «путь» снимается, чтобы линия дошла до оси
@@ -290,8 +301,9 @@ func _setup_grid() -> void:
 	var margin := _half + RoadRefinement.REACH + GameConfig.TILE # как TrailSite.inside_errors
 	_lo = _origin + Vector2.ONE * (margin + 0.01)
 	_hi = Vector2(work.end) * GameConfig.TILE - Vector2.ONE * (margin + 0.01)
-	_paths.clear()
-	_path_cells.clear()
+	# Прежние массивы могут ещё читаться другим поиском из опубликованного снимка.
+	_paths = []
+	_path_cells = {}
 	for t: Dictionary in _site.trails:
 		for n in range(1, t.pts.size()):
 			var a := Vector2(t.pts[n - 1].x, t.pts[n - 1].y) * GameConfig.TILE
@@ -426,9 +438,9 @@ func _zeros() -> PackedByteArray:
 ## Связные области разрешённых узлов (без уклона): номер области узла, -1 — запрещён. Отличает «разделены водой/путём»
 ## от «слишком круто»; считается один раз вместе с данными пригодности.
 func areas() -> PackedInt32Array:
-	var area: PackedInt32Array = _prepared.area
+	var area: PackedInt32Array = _prepared_grid.area
 	if not area.is_empty(): return area
-	var base: PackedFloat32Array = _prepared.cost
+	var base: PackedFloat32Array = _prepared_grid.cost
 	area.resize(_w * _h)
 	area.fill(-1)
 	var label := 0
@@ -454,7 +466,13 @@ func areas() -> PackedInt32Array:
 				area[n] = label
 				queue.append(n)
 		label += 1
-	_prepared.area = area
+	# Ленивый результат публикуется новым словарём: читающие прежний снимок его не меняют.
+	_prepared_grid = _prepared_grid.duplicate()
+	_prepared_grid.area = area
+	_prepared_lock.lock()
+	if _prepared.get("key", "") == _prepared_grid.key:
+		_prepared = _prepared_grid
+	_prepared_lock.unlock()
 	return area
 
 

@@ -71,9 +71,11 @@ func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 
 
 ## Каждый кадр: забрать готовые куски, выгрузить дальние, запустить расчёт ближайших недостающих
-func update(x: float, z: float, allow_apply: bool = true) -> void:
+func update(x: float, z: float, allow_apply: bool = true) -> bool:
+	var applied := false
 	# Не более одного готового куска за кадр, без временного массива ключей каждый кадр.
 	var done: Variant = null
+	var completed := {}
 	for key: Vector2i in _tasks:
 		var t: Dictionary = _tasks[key]
 		if allow_apply and WorkerThreadPool.is_task_completed(t.id):
@@ -81,10 +83,15 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 			done = key
 			# При переносе игрока результат старого запроса уже может оказаться слишком далеко.
 			if not _stale.has(key) and _center(key).distance_to(Vector2(x, z)) <= DROP:
-				_add(key, t.out.r)
+				completed = t.out.r
 			break
 	if done != null:
 		_tasks.erase(done)
+		# Публикация инвалидирует незавершённые задачи этой клетки. Свою уже забрали:
+		# иначе готовый кусок помечает сам себя устаревшим и пересобирается бесконечно.
+		if not completed.is_empty():
+			_add(done, completed)
+			applied = true
 		if _stale.has(done):
 			_stale.erase(done)
 			if _nodes.has(done):
@@ -117,6 +124,7 @@ func update(x: float, z: float, allow_apply: bool = true) -> void:
 		# низкий приоритет: растительность и кадр важнее дальнего рельефа
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
+	return applied
 
 
 ## 13.9: область rect (клетки) закреплена — её куски пересчитываются. Старый кусок остаётся,

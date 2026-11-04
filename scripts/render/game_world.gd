@@ -546,6 +546,8 @@ func capture_mouse() -> void:
 
 func set_paused(p: bool) -> void:
 	if p:
+		services.controls.release_motion()
+		if bike != null: services.controls.read_bike_body(bike, false)
 		_cancel_bike_placement()
 		_set_photo(false)
 	paused = p
@@ -561,7 +563,7 @@ func set_paused(p: bool) -> void:
 		_apply_shadows() # тени меняются в настройках на паузе
 		if vegetation.set_draw(services.settings.draw): # и дальность прорисовки (с 9.8+)
 			stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
-	audio.set_paused(p)
+	audio.set_paused(p or travel_active())
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»
 	_dragging = false
 	if p or show_map:
@@ -587,6 +589,8 @@ func toggle_bike() -> void:
 
 
 func _bike_mount_changed(riding: bool) -> void:
+	services.controls.reset_motion()
+	services.controls.read_bike_body(bike, false)
 	if riding:
 		_cam_y = player.feet + 1.4
 		_cam_dist = GameConfig.BIKE_CAM
@@ -664,7 +668,7 @@ func _occluded(from: Vector3, to: Vector3) -> bool:
 
 
 func toggle_map() -> void:
-	if _opening:
+	if _opening or travel_active():
 		return
 	_cancel_bike_placement()
 	_set_photo(false)
@@ -672,7 +676,7 @@ func toggle_map() -> void:
 	show_map = not show_map
 	hud.set_map_visible(show_map)
 	# на карте курсор нужен, чтобы выбрать место; закрыли — снова осматриваемся мышью
-	if show_map:
+	if show_map or paused:
 		_dragging = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 	else:
@@ -681,8 +685,12 @@ func toggle_map() -> void:
 
 ## Быстрое перемещение в любое место с карты (Hud.places; с 3.0.2 и туда, где игрок ещё не был): к костру поселения,
 ## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
+func travel_active() -> bool:
+	return _travel_task != -1
+
+
 func travel_to(place: Dictionary) -> void:
-	if _opening or paused or player == null or not world.accessible(place.x, place.y):
+	if _opening or paused or travel_active() or player == null or not world.accessible(place.x, place.y):
 		return
 	if bike.riding and bike.airborne:
 		return
@@ -697,16 +705,20 @@ func travel_to(place: Dictionary) -> void:
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	var arriving := PlayerState.arrive(world, heights, place)
 	if chunk_source != null:
-		set_paused(true)
+		services.controls.release_motion()
+		services.controls.read_bike_body(bike, false)
+		_dragging = false
+		audio.set_paused(true)
 		var source := chunk_source
 		var at := Vector2(arriving.x, arriving.z)
 		_travel_task = WorkerThreadPool.add_task(func() -> void:
 			source.finish()
 			source.prewarm([at], NEAR), true, "Место прибытия")
-		while not WorkerThreadPool.is_task_completed(_travel_task): await get_tree().process_frame
+		while not WorkerThreadPool.is_task_completed(_travel_task):
+			await get_tree().process_frame
+			if not is_inside_tree() or is_queued_for_deletion(): return
 		WorkerThreadPool.wait_for_task_completion(_travel_task)
 		_travel_task = -1
-		set_paused(false)
 	player = arriving
 	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
 	if chunk_source != null: chunk_source.finish_startup()
@@ -724,6 +736,7 @@ func travel_to(place: Dictionary) -> void:
 	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	if show_map:
 		toggle_map()
+	audio.set_paused(paused)
 	hud.toast_now("Вы переместились: «%s»" % place.name)
 
 
@@ -813,7 +826,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if event.is_action_pressed("pause"):
 		# Esc сначала закрывает большую карту и убирает фотоаппарат, потом ставит паузу
-		if show_map and not paused:
+		if show_map and not paused and not travel_active():
 			toggle_map()
 		elif photo != null and photo.active and not paused:
 			_set_photo(false)
@@ -822,7 +835,7 @@ func _unhandled_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 		return
 	# до start() узлы игрока и велосипеда ещё не созданы
-	if paused or player == null:
+	if paused or travel_active() or player == null:
 		return
 	if _opening:
 		if event.is_action_pressed("jump"):
@@ -887,8 +900,8 @@ func _notification(what: int) -> void:
 	# окно потеряло фокус: кнопки мыши и клавиш движения могли отпуститься без нас,
 	# иначе игрок продолжит идти или тянуть взгляд после возвращения
 	_dragging = false
-	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump", "bike_back", "bike_forward"]:
-		Input.action_release(action)
+	services.controls.release_motion()
+	if bike != null: services.controls.read_bike_body(bike, false)
 	# пауза, как при выходе из захвата мыши в браузере
 	if not paused and player != null:
 		pause_requested.emit()
@@ -899,7 +912,7 @@ func _notification(what: int) -> void:
 ## При FPS ниже 60 за кадр проходит несколько тактов, ниже 7,5 (8 тактов за кадр) игра замедляется,
 ## чтобы не захлебнуться
 func _physics_process(dt: float) -> void:
-	if player == null or paused or _settlement_open():
+	if player == null or paused or travel_active() or _settlement_open():
 		return
 	if _placing_bike():
 		_store_prev()
@@ -1031,7 +1044,7 @@ func _light_night(pos: Vector3, t: float) -> void:
 
 
 func _process(delta: float) -> void:
-	if player == null:
+	if player == null or travel_active():
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
 	hud.lock_hint.visible = not paused and not _settlement_open() and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
@@ -1277,8 +1290,8 @@ func _open_settlement(village: Variant = {}) -> void:
 			hud.toast("Остановитесь у костра, чтобы прочитать указатель")
 			return
 		toggle_bike()
-	for action: String in ["move_forward", "move_back", "move_left", "move_right", "run", "jump", "bike_back", "bike_forward"]:
-		Input.action_release(action)
+	services.controls.release_motion()
+	services.controls.read_bike_body(bike, false)
 	player.vx = 0.0
 	player.vz = 0.0
 	_snap()

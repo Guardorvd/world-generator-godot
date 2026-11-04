@@ -125,7 +125,7 @@ static func read_ledger(w: WorldData) -> Dictionary:
 	var path := store_dir(w).path_join("ledger.bin")
 	if not FileAccess.file_exists(path) and not FileAccess.file_exists(path + ".bak"): return {}
 	var saved: Variant = _read(path, func(value: Dictionary) -> bool:
-		return value.get("format") == FORMAT and value.get("ledger") is Dictionary and value.ledger.get("regions") is Dictionary)
+		return _valid_ledger(value))
 	if not saved is Dictionary or saved.get("format") != FORMAT:
 		push_warning("Журнал областей не прочитан: %s" % path)
 		return {}
@@ -135,6 +135,24 @@ static func read_ledger(w: WorldData) -> Dictionary:
 		if entry.has("decor"):
 			entry.decor.settlements = EntityCodec.settlements(entry.decor.get("settlements", []))
 	return result
+
+
+static func _valid_ledger(value: Dictionary) -> bool:
+	if value.get("format") != FORMAT or not value.get("ledger") is Dictionary: return false
+	var current: Dictionary = value.ledger
+	if not current.get("regions") is Dictionary or not current.get("settlements", []) is Array: return false
+	for key: Variant in current.regions:
+		var entry: Variant = current.regions[key]
+		if not key is Vector2i or not entry is Dictionary or not entry.get("rect") is Rect2i or not entry.rect.has_area(): return false
+		if not entry.get("decor") is Dictionary: return false
+		for field: String in ["settlements", "bridges", "trails"]:
+			if not entry.decor.get(field) is Array: return false
+		if entry.decor.has("tunnels") and not entry.decor.tunnels is Array: return false
+		for field: String in ["field_file", "field_sha"]:
+			if entry.has(field) and not entry[field] is String: return false
+		if entry.has("trail_plan") and not entry.trail_plan is Dictionary: return false
+		if entry.has("map") and not entry.map is PackedByteArray: return false
+	return true
 
 
 ## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
@@ -538,24 +556,37 @@ func _load_fields(key: Vector2i) -> void:
 
 
 static func _read_fields(dir: String, key: Vector2i, entry: Dictionary) -> Dictionary:
+	if not entry.get("rect") is Rect2i or not entry.rect.has_area(): return {}
+	if not entry.get("field_file", "") is String or not entry.get("field_sha", "") is String: return {}
 	var name: String = entry.get("field_file", "%d_%d.region" % [key.x, key.y])
 	if name != name.get_file(): return {}
 	var path := dir.path_join(name)
 	var digest: String = entry.get("field_sha", "")
-	var saved: Variant = null
-	if digest.is_empty():
-		saved = _read(path)
-	else:
-		for suffix: String in ["", ".bak"]:
+	for suffix: String in ["", ".bak"]:
+		if not digest.is_empty():
 			if not FileAccess.file_exists(path + suffix): continue
 			if Util.sha256(FileAccess.get_file_as_bytes(path + suffix)).hex_encode() != digest: continue
-			saved = _read_one(path + suffix)
-			if saved != null: break
-	if not saved is Dictionary or saved.get("format") != FORMAT or saved.get("rect") != entry.rect or not saved.get("fields") is Dictionary: return {}
-	var n: int = entry.rect.size.x * entry.rect.size.y
-	for field: String in ["h", "water_level", "biome"]:
-		if not saved.fields.has(field) or saved.fields[field].size() != n: return {}
-	return saved.fields
+		var saved: Variant = _read_one(path + suffix)
+		if _valid_fields(saved, entry.rect): return saved.fields
+	return {}
+
+
+## Проверка содержимого нужна и после контрольной суммы: старые записи могут быть
+## корректным контейнером с неполными полями. Такой primary не скрывает исправный backup.
+static func _valid_fields(saved: Variant, rect: Rect2i) -> bool:
+	if not saved is Dictionary or saved.get("format") != FORMAT or saved.get("rect") != rect or not saved.get("fields") is Dictionary: return false
+	var fields: Dictionary = saved.fields
+	var n := rect.get_area()
+	for field: String in ["h", "water_level", "dist", "slope", "dw", "dist_path"]:
+		if not fields.get(field) is PackedFloat32Array or fields[field].size() != n: return false
+	for field: String in ["biome", "river", "ocean", "lake", "path", "village"]:
+		if not fields.get(field) is PackedByteArray or fields[field].size() != n: return false
+	for i in n:
+		if not is_finite(fields.h[i]): return false
+		var water: float = fields.water_level[i]
+		if not is_finite(water) and water != -INF: return false
+		if fields.biome[i] >= Biomes.LIST.size(): return false
+	return true
 
 
 func _request_fields(key: Vector2i) -> void:

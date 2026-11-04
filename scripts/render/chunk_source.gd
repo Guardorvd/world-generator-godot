@@ -75,19 +75,32 @@ func read(layer: int, key: Vector2i) -> Array:
 
 ## Executed by WorldLoader/travel worker before scene publication; these arrays are pinned until upload.
 func prewarm(points: Array, radius: float) -> void:
+	var missing: Array[Vector3i] = []
 	for group in groups.size():
-		var keys: Array = groups[group].keys()
-		keys.sort_custom(func(a: Vector2i, b: Vector2i) -> bool: return _distance(a, points[0]) < _distance(b, points[0]))
-		for key: Vector2i in keys:
+		for key: Vector2i in groups[group]:
 			var needed := false
-			for p: Vector2 in points: needed = needed or _distance(key, p) <= radius
+			for p: Vector2 in points:
+				if _distance(key, p) <= radius:
+					needed = true
+					break
 			var id := _id(group - 1, key)
 			if not needed or _startup.has(id): continue
-			var arrays := read(group - 1, key)
-			var bytes := LRU.size_of(arrays)
-			_startup[id] = arrays
-			_startup_bytes += bytes
-			if _cpu.budget != null: _cpu.budget.reserve(bytes)
+			# Сначала закрепить ВСЕ попадания в RAM: чтение отсутствующего блока может
+			# вытеснить нужную воду/землю из другого слоя до её очереди.
+			var cached: Variant = _cpu.get_value(id)
+			if cached == null:
+				missing.append(id)
+			else:
+				_cpu.erase(id)
+				_pin(id, cached)
+	for id: Vector3i in missing:
+		_pin(id, read(id.z - 1, Vector2i(id.x, id.y)))
+
+func _pin(id: Vector3i, arrays: Array) -> void:
+	var bytes := LRU.size_of(arrays)
+	_startup[id] = arrays
+	_startup_bytes += bytes
+	if _cpu.budget != null: _cpu.budget.reserve(bytes)
 
 static func _distance(key: Vector2i, point: Vector2) -> float:
 	var corner := Vector2(key) * PlanTerrain.SIDE + Vector2.ONE * GameConfig.TILE * 0.5
@@ -136,13 +149,16 @@ func request(layer: int, key: Vector2i, priority: float) -> void:
 	if closed: return
 	var id := _id(layer, key)
 	if _startup.has(id) or _cpu.get_value(id) != null or _active.has(id): return
+	var queued := false
 	for item: Dictionary in _queue:
 		if item.id == id:
 			item.priority = priority
-			return
-	var ref: Variant = groups[layer + 1][key]
-	var bytes: int = ref.get("bytes", 8 * 1024 * 1024) if ref is Dictionary else LRU.size_of(ref)
-	_queue.append({id = id, layer = layer, key = key, bytes = bytes, priority = priority})
+			queued = true
+			break
+	if not queued:
+		var ref: Variant = groups[layer + 1][key]
+		var bytes: int = ref.get("bytes", 8 * 1024 * 1024) if ref is Dictionary else LRU.size_of(ref)
+		_queue.append({id = id, layer = layer, key = key, bytes = bytes, priority = priority})
 	_queue.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.priority < b.priority)
 	if _queue.size() > MAX_QUEUED: _queue.pop_back()
 
@@ -154,10 +170,7 @@ func poll() -> void:
 		_reserved -= item.bytes
 		if _cpu.budget != null: _cpu.budget.release(item.bytes)
 		if not _cpu.put(id, item.out.arrays):
-			_startup[id] = item.out.arrays
-			var bytes := LRU.size_of(item.out.arrays)
-			_startup_bytes += bytes
-			if _cpu.budget != null: _cpu.budget.reserve(bytes)
+			_pin(id, item.out.arrays)
 		_active.erase(id)
 	while _active.size() < MAX_ACTIVE and not _queue.is_empty():
 		var item: Dictionary = _queue[0]

@@ -6,6 +6,14 @@ var profile: RefCounted
 var began := {}
 var measurements := {}
 
+class TravelSource extends RefCounted:
+	var gate := Semaphore.new()
+	var closed := false
+	func finish() -> void: pass
+	func prewarm(_points: Array, _radius: float) -> void: gate.wait()
+	func finish_startup() -> void: pass
+	func close() -> void: closed = true
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 180)
 	profile = PROFILE.new()
@@ -120,6 +128,34 @@ func _test_budget() -> void:
 	b = null
 	a = null
 	check(budget.snapshot().retained_bytes == 0, "cache destruction releases its namespace")
+	# Проверяем итоговые суммы после замены, отказа, вытеснения и удаления другого владельца.
+	budget.limit = 100
+	budget.put(1, "a", null, 30, 80)
+	budget.put(1, "b", null, 30, 80)
+	budget.put(2, "x", null, 20, 80)
+	budget.put(1, "a", null, 10, 80)
+	check(budget.owner_bytes(1) == 40 and budget.owner_bytes(2) == 20, "owner byte totals remain exact after replacing an existing entry")
+	check(not budget.put(1, "a", null, 90, 80) and budget.owner_bytes(1) == 30, "rejected replacement releases the previous entry without stale accounting")
+	budget.put(1, "c", null, 70, 80)
+	check(budget.owner_bytes(1) == 70 and budget.owner_bytes(2) == 20, "per-owner eviction preserves other owners' byte totals")
+	budget.reserve(40)
+	check(budget.owner_bytes(1) == 0 and budget.owner_bytes(2) == 0 and budget.snapshot().retained_bytes == 0,
+		"global trimming updates every evicted owner's byte total")
+	budget.release(40)
+	budget.put(1, "a", null, 30, 80)
+	budget.put(2, "x", null, 20, 80)
+	budget.clear_owner(1)
+	budget.erase(2, "x")
+	check(budget.owner_bytes(1) == 0 and budget.owner_bytes(2) == 0 and budget.snapshot().retained_bytes == 0,
+		"explicit owner cleanup and erase release all byte totals")
+	budget.limit = 200
+	for key in ["a", "b", "c"]: budget.put(1, key, null, 20, 80)
+	budget.put(2, "x", null, 10, 80)
+	budget.put(1, "d", null, 70, 80)
+	check(budget.owner_bytes(1) == 70 and budget.owner_bytes(2) == 10,
+		"batch eviction visits one owner's oldest entries without evicting the other owner")
+	budget.clear_owner(1)
+	budget.clear_owner(2)
 
 func _test_fairness() -> void:
 	var scheduler := WorldStreamCoordinator.new()
@@ -304,7 +340,7 @@ func scene_checks(services: ServiceScope, full: Dictionary, terrain: Dictionary,
 		bad.store_buffer(PackedByteArray([0, 1, 2, 3]))
 		bad.close()
 	services.resource_profile = profile
-	var loaded := WorldLoader.load_world(full.world.seed_text, 144, Callable(), services, false, Vector2(288, 288))
+	var loaded := WorldLoader.load_world(full.world.seed_text, 144, Callable(), services, Vector2(288, 288))
 	check(loaded.surface_hit and loaded.trail.applied and loaded.chunk_source.stats.repairs == 2, "surface-hit loader repairs terrain and water before scene publication")
 	var same := true
 	for key: Vector2i in terrain: same = same and loaded.chunk_source.ready(-1, key) == terrain[key]
@@ -328,6 +364,7 @@ func scene_checks(services: ServiceScope, full: Dictionary, terrain: Dictionary,
 	game.set_paused(true)
 	check(game.chunk_source.stats.reads == reads and game.terrain_stream.nodes.size() == terrain.size(), "real scene start creates nodes/uploads without synchronous disk reads or repairs")
 	check(game.chunk_source.stats.upload_bytes > 0, "source records publication bytes and elapsed upload time")
+	await _test_travel_pause(game)
 	if DisplayServer.get_name() != "headless":
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
 		Engine.max_fps = 0
@@ -340,13 +377,62 @@ func scene_checks(services: ServiceScope, full: Dictionary, terrain: Dictionary,
 		await RenderingServer.frame_post_draw
 		root.get_texture().get_image().save_png("res://.godot/resource_pipeline_scene.png")
 	var stamp: Dictionary = profile.stamp()
-	game.free()
+	await _test_exit_during_travel(game)
 	hud.free()
 	loaded = null
 	await process_frame
 	await process_frame
 	profile.phase("scene_release", stamp, services)
-	var again := WorldLoader.load_world(full.world.seed_text, 144, Callable(), services, false, Vector2(288, 288))
+	var again := WorldLoader.load_world(full.world.seed_text, 144, Callable(), services, Vector2(288, 288))
 	check(again.surface_hit and again.chunk_source.stats.repairs == 0, "same-process reentry reads repaired immutable blocks without rebuilding")
 	again.chunk_source.close()
 	again = null
+
+func _test_travel_pause(game: GameWorld) -> void:
+	game.set_process(false)
+	game.set_physics_process(false)
+	game.set_paused(false)
+	game.toggle_map()
+	var source: RefCounted = game.chunk_source
+	var delayed := TravelSource.new()
+	game.chunk_source = delayed
+	var origin := Vector2(game.player.x, game.player.z)
+	var target := {kind = "peak", name = "Travel regression", x = (origin.x + 4.0) / GameConfig.TILE, y = origin.y / GameConfig.TILE}
+	var time_before := game.time
+	game.travel_to(target)
+	check(game.travel_active() and not game.paused, "travel waiting is independent of the user's pause state")
+	var task := game._travel_task
+	game.travel_to(target)
+	check(game._travel_task == task, "a repeated destination cannot start a second travel worker")
+	game.set_paused(false)
+	game._physics_process(1.0 / 60)
+	game._process(1.0 / 60)
+	check(game.time == time_before and Vector2(game.player.x, game.player.z) == origin,
+		"resuming the menu cannot resume simulation while the travel worker is using shared chunk data")
+	game.set_paused(true)
+	delayed.gate.post()
+	while game.travel_active(): await process_frame
+	check(game.paused and Vector2(game.player.x, game.player.z) != origin,
+		"arrival completes while preserving a pause requested during prefetch")
+	check(not game.show_map and Input.mouse_mode == Input.MOUSE_MODE_VISIBLE,
+		"arrival cannot recapture the cursor from the pause menu")
+	game.chunk_source = source
+	game.set_process(true)
+	game.set_physics_process(true)
+
+func _test_exit_during_travel(game: GameWorld) -> void:
+	game.set_process(false)
+	game.set_physics_process(false)
+	game.set_paused(false)
+	var source: RefCounted = game.chunk_source
+	var delayed := TravelSource.new()
+	game.chunk_source = delayed
+	var target := {kind = "peak", name = "Exit regression", x = game.player.x / GameConfig.TILE, y = game.player.z / GameConfig.TILE}
+	game.travel_to(target)
+	check(game.travel_active(), "exit regression starts with a pending travel task")
+	game.queue_free()
+	delayed.gate.post()
+	await process_frame
+	await process_frame
+	check(not is_instance_valid(game) and delayed.closed, "closing the world joins travel and closes its source without resuming arrival")
+	source.close()

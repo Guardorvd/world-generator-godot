@@ -106,6 +106,7 @@ func run() -> void:
 	lru.get_value("a")
 	lru.put("c", PackedByteArray([1, 2, 3, 4, 5, 6, 7, 8, 9]))
 	check(lru.get_value("b") == null and lru.get_value("a") != null and lru.bytes <= lru.limit, "byte LRU respects recency and memory budget")
+	_test_chunk_revisit(cache, h, saved)
 	await _test_regions()
 	_test_world(cache)
 	cache.wait_writes()
@@ -115,11 +116,33 @@ func finish_suite(_cache: WorldCache) -> void:
 	print("cache_pipeline: ", checks, " checks, failures=", fails)
 	quit(1 if fails else 0)
 
+func _test_chunk_revisit(cache: WorldCache, h: Heightfield, saved: Dictionary) -> void:
+	var source := preload("res://scripts/render/chunk_source.gd").new()
+	var budget := preload("res://scripts/core/cpu_cache_budget.gd").new()
+	source.setup(cache, h.world, h, 64, [saved.chunks] + saved.water_chunks, budget)
+	var key: Vector2i = saved.chunks.keys()[0]
+	var points := [Vector2(key) * PlanTerrain.SIDE + Vector2.ONE * (GameConfig.TILE * 0.5 + 1.0)]
+	source.prewarm(points, 0.0)
+	var reads: int = source.stats.reads
+	var pinned: int = budget.snapshot().reserved_bytes
+	var expected: Array = source.ready(-1, key)
+	source.finish_startup()
+	source.prewarm(points, 0.0)
+	check(source.stats.reads == reads and source.ready(-1, key) == expected, "revisiting prewarmed chunks uses RAM without disk reads or decompression")
+	check(pinned > 0 and budget.snapshot().reserved_bytes == pinned and budget.snapshot().retained_bytes == 0,
+		"prewarm transfers cached blocks to pinned storage without double memory accounting")
+	source.close()
+	check(budget.snapshot().reserved_bytes == 0 and budget.snapshot().retained_bytes == 0, "closing prewarmed chunks releases every memory reservation")
+
 func _test_regions() -> void:
 	var dir := ROOT.path_join("regions")
 	var key := Vector2i(3, 0)
 	var rect := Rect2i(key * 2, Vector2i(2, 2))
 	var fields := {h = PackedFloat32Array([1, 2, 3, 4]), water_level = PackedFloat32Array([-INF, -INF, -INF, -INF]), biome = PackedByteArray([1, 1, 1, 1])}
+	for name in ["dist", "slope", "dw", "dist_path"]:
+		fields[name] = PackedFloat32Array([0, 0, 0, 0])
+	for name in ["river", "ocean", "lake", "path", "village"]:
+		fields[name] = PackedByteArray([0, 0, 0, 0])
 	var current := {regions = {key: {rect = rect, fields = fields, decor = {settlements = [], bridges = [], trails = []}}}, settlements = []}
 	check(RegionStream.save(dir, current, key) == OK, "region generation commits")
 	var previous: Dictionary = RegionStream._read(dir.path_join("ledger.bin"))
@@ -175,11 +198,56 @@ func _test_regions() -> void:
 	corrupt.close()
 	check(RegionStream._read_fields(dir, key, ref).h[0] == 9.0, "region block backup is validated against the ledger digest when primary is corrupt")
 	Files.replace(block, good_bytes, true)
+	_test_region_validation(rect, fields, key)
 	streaming.finish()
 	streaming.free()
 	test_terrain.free()
 	test_plants.free()
 	RegionStream.root = old_root
+
+func _test_region_validation(rect: Rect2i, fields: Dictionary, key: Vector2i) -> void:
+	var dir := ROOT.path_join("validation_regions")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var good := {format = RegionStream.FORMAT, rect = rect, fields = fields}
+	var bad := good.duplicate(true)
+	bad.fields.h = 42
+	var path := dir.path_join("legacy.region")
+	RegionStream._write(path, good)
+	RegionStream._write(path, bad)
+	var entry := {rect = rect, field_file = "legacy.region"}
+	check(RegionStream._read_fields(dir, key, entry) == fields,
+		"legacy region with a malformed field falls back to valid backup instead of aborting loading")
+	bad = good.duplicate(true)
+	bad.fields.h[0] = NAN
+	RegionStream._write(dir.path_join("nan.region"), bad)
+	entry = {rect = rect, field_file = "nan.region", field_sha = Util.sha256(FileAccess.get_file_as_bytes(dir.path_join("nan.region"))).hex_encode()}
+	check(RegionStream._read_fields(dir, key, entry).is_empty(), "matching checksum cannot admit non-finite terrain heights")
+	bad = good.duplicate(true)
+	bad.fields.water_level[0] = INF
+	check(not RegionStream._valid_fields(bad, rect), "positive infinite water level is rejected")
+	bad = good.duplicate(true)
+	bad.fields.biome[0] = 255
+	check(not RegionStream._valid_fields(bad, rect), "unknown biome cannot reach terrain and movement lookups")
+	bad = good.duplicate(true)
+	bad.fields.river = PackedByteArray([0])
+	check(not RegionStream._valid_fields(bad, rect), "truncated river field is rejected before publication")
+	bad = good.duplicate(true)
+	bad.fields.erase("lake")
+	check(not RegionStream._valid_fields(bad, rect), "missing water mask cannot reach physical water queries")
+	var ledger := {format = RegionStream.FORMAT, ledger = {regions = {key: {rect = rect, decor = {settlements = [], bridges = [], trails = []}}}, settlements = []}}
+	var incomplete := ledger.duplicate(true)
+	incomplete.ledger.regions[key].decor.erase("bridges")
+	check(not RegionStream._valid_ledger(incomplete), "missing bridge list is rejected before scene construction")
+	RegionStream._write(dir.path_join("ledger.bin"), ledger)
+	var malformed := ledger.duplicate(true)
+	malformed.ledger.regions[key] = 42
+	RegionStream._write(dir.path_join("ledger.bin"), malformed)
+	var w := WorldData.new()
+	w.region_store_leaf = "validation_regions"
+	w.region_basis_id = "validation_regions"
+	var restored := RegionStream.read_ledger(w)
+	check(restored.get("regions", {}).get(key, {}).get("rect") == rect,
+		"malformed ledger entry does not hide a valid backup or abort world restore")
 
 func _test_world(cache: WorldCache) -> void:
 	var w := WorldData.new()

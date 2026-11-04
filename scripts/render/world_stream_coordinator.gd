@@ -32,7 +32,7 @@ func update(pos: Vector3) -> void:
 	var uploaded := false
 	var region_ticked := false
 	# Длинная очередь леса не должна лишать соседние области возможности начать/закончить подготовку.
-	if (_region_wait >= MAX_REGION_WAIT or (region_priority.is_valid() and region_priority.call())) and region_update.is_valid() and vegetation_budgeted.is_valid():
+	if (_region_wait >= MAX_REGION_WAIT or (region_priority.is_valid() and region_priority.call())) and region_update.is_valid():
 		uploaded = region_update.call(pos.x, pos.z)
 		region_ticked = true
 		_region_wait = 0
@@ -52,7 +52,7 @@ func update(pos: Vector3) -> void:
 		uploaded = changed or uploaded
 	_turn = (_turn + 1) % 3
 	if outer_update.is_valid():
-		outer_update.call(pos.x, pos.z, not uploaded and Time.get_ticks_usec() - started < publication_budget_us)
+		uploaded = bool(outer_update.call(pos.x, pos.z, not uploaded and Time.get_ticks_usec() - started < publication_budget_us)) or uploaded
 	if not region_ticked:
 		if not uploaded and region_update.is_valid() and Time.get_ticks_usec() - started < publication_budget_us:
 			_region_wait = 0

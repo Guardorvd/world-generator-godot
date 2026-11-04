@@ -40,7 +40,7 @@ static func px_for(size: int) -> int:
 
 ## Загрузка мира; on_progress(p 0..1, подпись) — необязательно, вызывается из потока загрузки.
 ## Доли прогресса только растут: этапы генерации идут по порядку, а хвост загрузки продолжает с 0.88.
-static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, _retried := false, start_at := Vector2.INF) -> WorldLoader:
+static func load_world(seed_text: String, size: int, on_progress: Callable = Callable(), services: ServiceScope = null, start_at := Vector2.INF) -> WorldLoader:
 	if services == null:
 		services = GameContext.scope
 	var r := WorldLoader.new()
@@ -241,9 +241,7 @@ func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) ->
 	var t := Time.get_ticks_usec()
 	var painted := []
 	if paint:
-		painted.append(MapBaker.paint(w, px, true, px == 2))
-		if px != 2:
-			painted.append(MapBaker.paint(w, 2, false, true))
+		painted = _paint(w, px)
 		timings.prepare_paint_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	heights = base.copy() if base != null else Heightfield.new(w, false)

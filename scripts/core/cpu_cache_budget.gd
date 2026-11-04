@@ -4,6 +4,7 @@ var limit := 192 * 1024 * 1024
 var _reserved := 0
 var _bytes := 0
 var _entries := {}
+var _owner_sizes := {}
 var _lock := Mutex.new()
 var _hits := 0
 var _misses := 0
@@ -30,13 +31,14 @@ func put(owner: int, key: Variant, value: Variant, bytes: int, owner_limit: int)
 	_erase(id)
 	var accepted := bytes <= owner_limit and bytes <= maxi(0, limit - _reserved)
 	if accepted:
-		while _owner_bytes(owner) + bytes > owner_limit:
-			for old: Array in _entries:
-				if old[0] == owner:
-					_erase(old)
-					break
+		if _owner_bytes(owner) + bytes > owner_limit:
+			for old: Array in _entries.keys():
+				if old[0] != owner: continue
+				_erase(old)
+				if _owner_bytes(owner) + bytes <= owner_limit: break
 		_entries[id] = {value = value, bytes = bytes}
 		_bytes += bytes
+		_owner_sizes[owner] = _owner_bytes(owner) + bytes
 		_trim()
 		_peak = maxi(_peak, _bytes)
 	_lock.unlock()
@@ -60,10 +62,7 @@ func owner_bytes(owner: int) -> int:
 	return result
 
 func _owner_bytes(owner: int) -> int:
-	var n := 0
-	for id: Array in _entries:
-		if id[0] == owner: n += _entries[id].bytes
-	return n
+	return _owner_sizes.get(owner, 0)
 
 func reserve(bytes: int) -> void:
 	_lock.lock()
@@ -85,11 +84,20 @@ func snapshot() -> Dictionary:
 	return result
 
 func _trim() -> void:
-	while _bytes > maxi(0, limit - _reserved) and not _entries.is_empty():
-		_erase(_entries.keys()[0])
+	var available := maxi(0, limit - _reserved)
+	if _bytes <= available: return
+	# Один снимок ключей на всё вытеснение, а не новый массив на каждый удалённый блок.
+	for id: Array in _entries.keys():
+		_erase(id)
 		_evictions += 1
+		if _bytes <= available: break
 
 func _erase(id: Array) -> void:
 	if _entries.has(id):
-		_bytes -= _entries[id].bytes
+		var bytes: int = _entries[id].bytes
+		_bytes -= bytes
+		var owner: int = id[0]
+		var left := _owner_bytes(owner) - bytes
+		if left > 0: _owner_sizes[owner] = left
+		else: _owner_sizes.erase(owner)
 		_entries.erase(id)

@@ -1117,7 +1117,7 @@ func reset_ride(station := 0.0, speed := 0.0) -> void:
 	_cam_feet = player.feet
 	_cam_yaw = bike.heading
 	_cam_pitch = -0.464
-	services.controls.reset()
+	services.controls.reset_motion()
 	if trial != null:
 		if autopilot != null: trial.assisted = true
 		trial_hud.present(trial)
@@ -1265,6 +1265,11 @@ func _exit_tree() -> void:
 	recorder.close() # несохранённое остаётся только во временной папке user://ride_log_unsaved
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT and is_inside_tree():
+		services.controls.release_motion()
+		if bike != null: services.controls.read_bike_body(bike, false)
+
 func _input(event: InputEvent) -> void:
 	services.controls.note(event)
 	recorder.note_input(event)
@@ -1287,6 +1292,8 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 	if heights != null and not editor.visible and event.is_action_pressed("interact") and not crash.active():
 		controller.toggle_mount(player, bike, heights.world, heights)
+		services.controls.reset_motion()
+		services.controls.read_bike_body(bike, false)
 		view.snap(bike)
 
 ## P: выкл → осторожно → flow → на пределе → выкл. Автопилот подхватывает с текущего места трассы.
@@ -1313,11 +1320,16 @@ func _forest_version() -> int:
 func _physics_process(dt: float) -> void:
 	if heights == null: return
 	var input_allowed := not editor.visible and not overview
-	var throttle := services.controls.bike_brake(Input.get_axis("move_back", "move_forward") if input_allowed else 0.0, dt)
-	var turn := services.controls.bike_steer(Input.get_axis("move_left", "move_right") if input_allowed else 0.0, dt, bike.speed if bike != null else 0.0)
+	var throttle := Input.get_axis("move_back", "move_forward") if input_allowed else 0.0
+	var turn := Input.get_axis("move_left", "move_right") if input_allowed else 0.0
+	if input_allowed and bike != null and bike.riding and not crash.active():
+		throttle = services.controls.bike_brake(throttle, dt)
+		turn = services.controls.bike_steer(turn, dt, bike.speed)
+	else:
+		services.controls.reset_motion()
 	var jump := input_allowed and Input.is_action_just_pressed("jump")
 	var run := input_allowed and Input.is_action_pressed("run")
-	if autopilot != null and bike.riding and not crash.active():
+	if input_allowed and autopilot != null and bike.riding and not crash.active():
 		var input: Dictionary = autopilot.drive(bike, routes[lane])
 		throttle = input.throttle
 		turn = input.turn

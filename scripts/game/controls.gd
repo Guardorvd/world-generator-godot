@@ -88,10 +88,23 @@ func look_delta(dt: float) -> Vector2:
 func reset() -> void:
 	joypad = false
 	device = 0
+	reset_motion()
+
+
+## Снять накопленный руль/тормоз при смене режима, сохранив устройство и его подсказки.
+func reset_motion() -> void:
 	_key_steer = 0.0
 	_key_direction = 0.0
 	_key_hold = 0.0
 	_brake_hold = 0.0
+
+
+## Окно или меню забрали управление: отпускание могло не дойти до игры.
+func release_motion() -> void:
+	for action: StringName in [&"move_forward", &"move_back", &"move_left", &"move_right", &"run", &"jump",
+			&"bike_pump", &"bike_back", &"bike_forward", &"look_left", &"look_right", &"look_up", &"look_down"]:
+		Input.action_release(action)
+	reset_motion()
 
 
 ## Плавная команда с клавиатуры: короткое нажатие правит линию, удержание усиливает дугу.
