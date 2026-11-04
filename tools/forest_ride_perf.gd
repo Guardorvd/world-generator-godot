@@ -130,6 +130,13 @@ func _report(game: GameWorld) -> void:
 		dsum += v
 	for v in prims:
 		psum += v
+	var rebuild := PackedFloat32Array()
+	for k in 20:
+		var t0 := Time.get_ticks_usec()
+		game.heights.obstacles.update(game.player.x, game.player.z, game.vegetation.obstacles, game.vegetation.obstacles_version, true)
+		rebuild.append((Time.get_ticks_usec() - t0) / 1000.0)
+	rebuild.sort()
+	print("Пересборка препятствий леса: медиана %.2f мс, худшая %.2f мс (%d препятствий)" % [rebuild[10], rebuild[19], game.heights.obstacles.data.size() / ForestObstacles.STRIDE])
 	print("Вызовов отрисовки в среднем %.0f, треугольников %.0f тыс." % [dsum / maxi(1, draws.size()), psum / maxi(1, prims.size()) / 1000.0])
 	var st: Dictionary = game.vegetation.phase_stats
 	for i in st.names.size():

@@ -25,6 +25,7 @@ const PLUME_COUNT := 96
 const TRACK_POINTS := 96     # кольцевой буфер точек следа на каждое колесо (2 колеса = до 192 точек)
 const TRACK_LIFETIME := 4.5  # секунд до полного исчезновения следа
 const TRACK_FADE := 0.6      # общая прозрачность следов (1 = как раньше)
+const MESH_STEP := 1.0 / 30.0 # ленту следа пересобираем не чаще: сотни вершин через GDScript на каждом такте дороги
 const EFFECT_SCALE := 0.6    # общая сила частиц и пыли торможения (1 = как раньше)
 const TRACK_STEP := 0.20     # шаг записи новых точек следа, м
 
@@ -173,6 +174,7 @@ var _t_total_dist := [0.0, 0.0]
 var _emit_accum_d := [0.0, 0.0]
 var _emit_accum_p := [0.0, 0.0]
 var _spark_accum := [0.0, 0.0]
+var _mesh_wait := 0.0
 var _prev_bike_pos := Vector3.INF
 var _rng := RandomNumberGenerator.new()
 var _ready_done := false
@@ -680,11 +682,16 @@ func _step_tracks(dt: float) -> void:
 		if _t_count[w] >= 2:
 			has_segments = true
 
-	_track_mesh.clear_surfaces()
 	if not has_segments:
+		_track_mesh.clear_surfaces()
 		_track_node.visible = false
+		_mesh_wait = 0.0
 		return
-
+	_mesh_wait += dt
+	if _mesh_wait < MESH_STEP and _track_node.visible:
+		return
+	_mesh_wait = 0.0
+	_track_mesh.clear_surfaces()
 	_track_node.visible = true
 	_track_mesh.surface_begin(Mesh.PRIMITIVE_TRIANGLES)
 	for w in 2:

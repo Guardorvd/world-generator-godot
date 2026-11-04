@@ -11,6 +11,8 @@ const RUSH_DIST := 0.7          # на полной скорости камер�
 const RUSH_RESPONSE := 2.5      # как быстро нарастает ощущение скорости
 const CAM_MIN_DIST := 1.2       # ближе к седоку камера не подходит, даже у стены
 const CAM_STEP := 0.3           # шаг проверки препятствий между седоком и камерой
+const CAM_CLOSE := 22.0        # как быстро камера подходит ближе при небольшом препятствии
+const CAM_SNAP := 0.45          # а если надо подойти ближе, чем на столько, — сразу (стена)
 const CAM_RETURN := 3.0         # как быстро камера отходит обратно после стены
 const CAM_GROUND_GAP := 0.4     # камера не ниже земли плюс это
 const CAM_CEILING_GAP := 0.3    # и не выше потолка (туннель) минус это
@@ -115,7 +117,13 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 				dist = maxf(CAM_MIN_DIST, desired_dist * (k - 1) / steps)
 				break
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
-		_cam_dist = dist if dist < _cam_dist else lerpf(_cam_dist, dist, _smooth(CAM_RETURN, dt))
+		# малое сближение (бугор, куст у луча) — быстро, но плавно: камера не дёргается; у стены — сразу
+		if dist >= _cam_dist:
+			_cam_dist = lerpf(_cam_dist, dist, _smooth(CAM_RETURN, dt))
+		elif _cam_dist - dist > CAM_SNAP:
+			_cam_dist = dist
+		else:
+			_cam_dist = lerpf(_cam_dist, dist, _smooth(CAM_CLOSE, dt))
 		var cam := target - dir * _cam_dist + jolt * 0.12
 		# не ниже земли и настила моста, под которым камера окажется в стене или в воздухе
 		cam.y = maxf(cam.y, heights.surface_at(cam.x, cam.z, cam.y) + CAM_GROUND_GAP)
