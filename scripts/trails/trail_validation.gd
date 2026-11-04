@@ -23,7 +23,9 @@ static func footprint(d: TrailDefinition, allowed: Callable) -> PackedStringArra
 		s = minf(s + 0.5, d.route_length()) if s < d.route_length() else s + 1.0
 	return errors
 
-static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -> Dictionary:
+## climb_ok — подъём и быстрый спуск самого полотна не отказ, а усилие и мастерство: на длинном маршруте мира седок крутит,
+## идёт пешком или сбрасывает скорость заранее. Настоящая опасность — элементы и земля — остаётся отказом.
+static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), climb_ok := false) -> Dictionary:
 	var errors := d.validate()
 	errors.append_array(footprint(d, allowed))
 	var report := {accepted = false, errors = errors, issues = [], scenarios = {}, model = "final tread point model",
@@ -88,9 +90,9 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable()) -
 			var a := -S.G * (y[i] - y[i - 1]) - S.ROLL - S.DRAG * v * v
 			if v < S.CRUISE * factor: a += S.PEDAL * (1.0 - v / (S.CRUISE * factor))
 			var possible := sqrt(maxf(0.0, v * v + 2.0 * a))
-			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна", "safety", {actual = possible, limit = 0.5, deviation = 0.5 - possible})
+			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна", "effort" if climb_ok else "safety", {actual = possible, limit = 0.5, deviation = 0.5 - possible})
 			var minimum := sqrt(maxf(0.0, v * v + 2.0 * (a - S.BRAKE)))
-			if minimum > caps[i] + 0.5: _issue(report, scenario, -1, i, "не хватает торможения перед поворотом/элементом", "safety", {actual = minimum, limit = caps[i] + 0.5, deviation = minimum - caps[i] - 0.5})
+			if minimum > caps[i] + 0.5: _issue(report, scenario, -1, i, "не хватает торможения перед поворотом/элементом", "effort" if climb_ok else "safety", {actual = minimum, limit = caps[i] + 0.5, deviation = minimum - caps[i] - 0.5})
 			speeds[i] = minf(possible, caps[i])
 			if starts.has(i):
 				var ei: int = starts[i]

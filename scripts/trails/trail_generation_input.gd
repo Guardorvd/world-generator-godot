@@ -13,6 +13,8 @@ enum RiverPolicy { STRICT, LAB_DRY_CHANNELS }
 @export var earthwork_limits := {max_cut = 2.0, max_fill = 2.0, modification = 1.0}
 @export var river_policy: RiverPolicy = RiverPolicy.STRICT
 @export var provenance := {}
+## Пути не запрет: новая линия пересекает их в одном уровне (полотно у пути не меняется: TrailBuilder.pins), near_path — мягкая цена.
+@export var paths_soft := false
 var _working := PackedFloat32Array()
 var cut_errors := PackedStringArray()
 
@@ -56,6 +58,9 @@ func blocked(at: Vector2) -> bool:
 	if p.x < 0 or p.y < 0 or p.x >= size.x or p.y >= size.y: return true
 	var i := p.y * size.x + p.x
 	if water[i] != 0 or forbidden[i] != 0 or (river_policy == RiverPolicy.STRICT and rivers[i] != 0): return true
+	return not paths_soft and near_path(at)
+
+func near_path(at: Vector2) -> bool:
 	for path in existing_paths:
 		var pts: PackedVector2Array = path.points
 		for k in range(1, pts.size()):
@@ -211,6 +216,7 @@ func window(corner: Vector2i, side: Vector2i):
 		if not local.is_empty(): out.existing_paths.append({points = local, half_width = half})
 	out.earthwork_limits = earthwork_limits.duplicate(true)
 	out.river_policy = river_policy
+	out.paths_soft = paths_soft
 	out.provenance = provenance.duplicate(true)
 	out.provenance.world_origin = corner
 	out.provenance.origin = corner

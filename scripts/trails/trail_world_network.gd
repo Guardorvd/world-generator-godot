@@ -8,18 +8,18 @@ const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
-## Коридоры сети: в обе стороны от начальной клетки, квадрат 704 м (участок до 192 клеток).
-const CORRIDOR := {box = 704.0, two_way = true, pad = 24, mark_paths = true}
+## Коридоры сети: в обе стороны от начальной клетки, через полкарты: квадрат 1600 м, рабочая область с запасом.
+const CORRIDOR := {box = 1600.0, two_way = true, pad = 24, steps = 64}
 const CROSSABLE: Array[String] = ["animal"]
 ## Границы сети — работа, а не время: сборка стоит примерно пропорционально метрам линии.
 const ROUTE_TARGET := 10      # трасс достаточно
-const LENGTH_TARGET := 9000.0 # суммарной длины достаточно, м
-const WORK_LIMIT := 16000.0   # всего собранных метров, с отказами и повторами
+const LENGTH_TARGET := 14000.0 # суммарной длины достаточно, м
+const WORK_LIMIT := 20000.0   # всего собранных метров, с отказами и повторами
 const MIN_LINE := 200.0       # короче только когда длинных не вышло вовсе, м
 const TRIM := 30.0            # запас от плохого места при обрезке линии, м
 const WORK_EDGE := 12.0       # линия не ближе к краю рабочей зоны участка (TrailSite.inside_errors), м
 const ADMIT_PASSES := 3
-const PARK_LINES := 4         # столько самых длинных линий трейл-парка
+const PARK_LINES := 3         # столько самых длинных линий трейл-парка
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
 const PARK_END := 14.0        # концы линии парка отступают от родительской, м
 const DIFFICULTY := [0.25, 0.4, 0.55]
@@ -29,6 +29,11 @@ static var surveys := 0
 static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> Dictionary:
 	var started := Time.get_ticks_msec()
 	var input = GI.from_world(w, h, CROSSABLE)
+	# Запрет только там, где пройти нельзя: глубокая вода, дома, сооружения. Дороги и тропы пересекаются в одном уровне,
+	# мелкие русла — бродом, как у дорог (StageTrails._unsafe_fords, GameConfig.FORD_DEPTH).
+	input.paths_soft = true
+	var fords: PackedByteArray = input.rivers
+	input.rivers = _deep_rivers(w, h, fords)
 	var input_ms := Time.get_ticks_msec() - started
 	input.earthwork_limits = EARTHWORKS.duplicate()
 	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
@@ -84,7 +89,10 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		for name: String in candidate.styles:
 			if int(style_uses.get(name, 0)) < int(style_uses.get(style, 0)): style = name
 		var settings := {bounds = Rect2(Vector2(candidate.region.position - site.origin) * GameConfig.TILE, Vector2(candidate.region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-			difficulty = DIFFICULTY[plan.stats.accepted % DIFFICULTY.size()], modification = MODIFICATION[style]}
+			difficulty = DIFFICULTY[plan.stats.accepted % DIFFICULTY.size()], modification = MODIFICATION[style],
+			soft = func(p: Vector2) -> bool:
+				var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
+				return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
 		var line := func(route_hint: PackedVector2Array, walk: bool) -> Dictionary:
 			var options_line := settings.duplicate()
 			options_line.route_hint = route_hint
@@ -123,6 +131,28 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	plan.stats.total_ms = Time.get_ticks_msec() - started
 	return plan
 
+## Клетки русел, где брода нет: глубже порога брода или круто. Тот же ответ, что у StageTrails._unsafe_fords, на готовом рельефе.
+static func _deep_rivers(w: WorldData, h: Heightfield, rivers: PackedByteArray) -> PackedByteArray:
+	var deep := PackedByteArray()
+	deep.resize(w.N)
+	var cells := PackedInt32Array()
+	for i in w.N:
+		if rivers[i] != 0:
+			cells.append(i)
+			if w.slope[i] > StageTrails.FORD_SLOPE: deep[i] = 1
+	for i in cells:
+		if h.depth_at((i % w.W + 0.5) * GameConfig.TILE, (i / w.W + 0.5) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15: deep[i] = 1
+	return deep
+
+## Первая станция, где линия заходит глубже брода (узкое русло между центрами клеток), или INF.
+static func _too_deep(h: Heightfield, d: TrailDefinition) -> float:
+	var s := 0.0
+	while s < d.route_length():
+		var p := d.point_at(s)
+		if h.depth_at(p.x, p.y, INF) >= GameConfig.FORD_DEPTH: return s
+		s += 2.0
+	return INF
+
 ## Трейл-парк: линии BikePark в самой большой свободной области как готовые кандидаты сети. Только прокладка и кандидаты:
 ## элементы, формирование и приёмка — общие. Концы отступают от родительской линии: сеть держит пути раздельно.
 static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Array[Dictionary]:
@@ -157,7 +187,6 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		return {}
 	var allowed := func(p: Vector2) -> bool: return not blocked.call(p)
 	var reason := ""
-	var was_cut := false # обрезка — одна на кандидата: второе плохое место значит, что линия плоха вся
 	for pass_index in ADMIT_PASSES:
 		d.id = "world_trail_%d" % plan.entries.size()
 		d.title = title
@@ -187,12 +216,16 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 				_refuse(plan, earth[0])
 				return {}
 			phase = Time.get_ticks_usec()
-			var checked := Validation.measure(prepared.heights, d, allowed)
+			var checked := Validation.measure(prepared.heights, d, allowed, true)
 			_time(plan, "validation", phase)
 			if checked.accepted and d.route_length() < min_line:
 				_refuse(plan, "линия короче нужного")
 				return {}
-			if checked.accepted:
+			var deep_at := _too_deep(prepared.heights, d)
+			if is_finite(deep_at):
+				reason = "линия заходит глубже брода"
+				bad = deep_at
+			elif checked.accepted:
 				var final_ground := func(p: Vector2) -> float: return prepared.heights.ground_at(p.x, p.y)
 				var finish := RouteContract.endpoint(d.points[-1], d.tangent_at(d.route_length()), final_ground, allowed, d.width)
 				if finish.suitable: return {d = d, prepared = prepared}
@@ -213,8 +246,7 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 					d.elements = kept
 					plan.stats.elements_dropped = int(plan.stats.get("elements_dropped", 0)) + drop.size()
 					continue
-		if not is_finite(bad) or was_cut: break
-		was_cut = true
+		if not is_finite(bad): break
 		var piece := _piece(d, bad)
 		if piece.size() < 2: break
 		var result: Dictionary = line.call(piece, false)

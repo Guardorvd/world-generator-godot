@@ -10,9 +10,7 @@ var clearance := PackedInt32Array()
 var forms := PackedFloat32Array()
 var world_size := 0
 
-## mark_paths — клетки, через которые идут существующие пути, заняты целиком: иначе коридор их пересекает, а линия по
-## нему упирается в запрет посреди пути.
-func prepare(n: int, ground: Callable, wet: PackedByteArray, input, mark_paths := false) -> void:
+func prepare(n: int, ground: Callable, wet: PackedByteArray, input) -> void:
 	world_size = n
 	size = ceili(float(n) / STEP)
 	var count := size * size
@@ -24,13 +22,6 @@ func prepare(n: int, ground: Callable, wet: PackedByteArray, input, mark_paths :
 			var cell := z * n + x
 			var protected_cell: bool = input != null and (input.forbidden[cell] != 0 or (input.river_policy == GenerationInput.RiverPolicy.STRICT and input.rivers[cell] != 0))
 			if wet[cell] != 0 or protected_cell: free[(z / STEP) * size + x / STEP] = 0
-	if mark_paths and input != null:
-		var span_m := STEP * GameConfig.TILE
-		for route: Dictionary in input.existing_paths:
-			var pts: PackedVector2Array = route.points
-			for k in pts.size():
-				var c := Vector2i((pts[k] / span_m).floor()).clamp(Vector2i.ZERO, Vector2i.ONE * (size - 1))
-				free[c.y * size + c.x] = 0
 	var queue: Array[int] = []
 	for z in size:
 		for x in size:
@@ -91,7 +82,7 @@ func trace(start: int, seed_value: int, limits := {}) -> Dictionary:
 	var kind := feature(start)
 	var heading := -gradients[start].normalized()
 	if heading.is_zero_approx(): heading = Vector2.from_angle(float(posmod(hash([seed_value, start]), 6283)) / 1000)
-	var run := {path = PackedVector2Array([point(start)]), visited = {start: 0}, counter = 0, spaced = limits.get("two_way", false), bounds = Rect2(point(start), Vector2.ZERO), box = float(limits.get("box", 448.0)),
+	var run := {path = PackedVector2Array([point(start)]), visited = {start: 0}, counter = 0, steps = int(limits.get("steps", 24)), spaced = limits.get("two_way", false), bounds = Rect2(point(start), Vector2.ZERO), box = float(limits.get("box", 448.0)),
 		work = 0.0, peak = 0.0, slope = 0.0, gentle = 0, end = start}
 	_extend(run, start, heading, 1.0, kind)
 	var last: int = run.end
@@ -128,7 +119,7 @@ func _crowded(run: Dictionary, q: int, p: int) -> bool:
 
 ## Рост коридора от клетки p. Уклон считается по ходу седока: down = 1 — шаг идёт вниз по трассе, -1 — вверх, к её началу.
 func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: String) -> void:
-	for step in 24:
+	for step in int(run.steps):
 		var best := -1
 		var best_cost := INF
 		for q in neighbours(p):

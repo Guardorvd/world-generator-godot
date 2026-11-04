@@ -6,7 +6,7 @@ const INDEX_CELL := 32.0
 
 static func indexed_copy(source):
 	var out = load("res://scripts/trails/trail_indexed_input.gd").new()
-	for key in ["size", "cell_size", "origin", "heights", "water", "rivers", "forbidden", "existing_paths", "river_policy", "earthwork_limits", "provenance"]:
+	for key in ["size", "cell_size", "origin", "heights", "water", "rivers", "forbidden", "existing_paths", "river_policy", "earthwork_limits", "provenance", "paths_soft"]:
 		out.set(key, source.get(key))
 	return out
 
@@ -15,6 +15,9 @@ func blocked(at: Vector2) -> bool:
 	if p.x < 0 or p.y < 0 or p.x >= size.x or p.y >= size.y: return true
 	var i := p.y * size.x + p.x
 	if water[i] != 0 or forbidden[i] != 0 or (river_policy == RiverPolicy.STRICT and rivers[i] != 0): return true
+	return not paths_soft and near_path(at)
+
+func near_path(at: Vector2) -> bool:
 	if not _indexed:
 		_segments.clear()
 		for path in existing_paths:

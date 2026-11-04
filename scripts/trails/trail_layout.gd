@@ -51,7 +51,9 @@ const WANDER_V3 := 0.6       # v3: извилистость меньше — б�
 const WALK_MARGIN := 1.5     # ходок игры держится дальше от запретных клеток, м
 const OPEN_FINISH_MIN := 120.0 # ходок игры не отступает короче этого, м
 const WALK_ENOUGH := 200.0  # такой длины линии ходока достаточно, м: подгонка к коридору чаще падает на приёмке
-const HINT_WEIGHT := 4.0     # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
+const SOFT_COST := 6.0       # шаг по дороге или броду
+const CROSSING_CLEAR := 12.0 # столько метров у переезда и брода без элементов
+const HINT_WEIGHT := 4.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
 static var style := "flow"
@@ -206,6 +208,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		period = Vector2(rng.randf_range(30.0, 70.0), rng.randf_range(12.0, 26.0)), phase = Vector2(rng.randf() * TAU, rng.randf() * TAU)}
 	shape.route_hint = options.get("route_hint", PackedVector2Array())
 	if options.get("open_finish", false): shape.hint_weight = HINT_WEIGHT
+	shape.soft = options.get("soft", Callable())
 	var finish_plan := {}
 	if shape.route_hint.size() > 1:
 		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)))
@@ -402,6 +405,12 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		carve.call(cuts)
 	d.open_spans = features.spans
 	var reserved: Array[Vector2] = features.reserved
+	var soft_at: Callable = options.get("soft", Callable())
+	if soft_at.is_valid():
+		var along := 0.0
+		while along < d.route_length():
+			if soft_at.call(d.point_at(along)): reserved.append(Vector2(along - CROSSING_CLEAR, along + CROSSING_CLEAR))
+			along += 4.0
 	var free := func(e: TrailElement) -> bool:
 		for r in reserved:
 			# Reserve the actual engineered crossing, not an extra six metres on either side.
@@ -738,6 +747,9 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			# уклон к цели стиля (подъём — дорого), поперечный склон, плавность и «волна» изгибов
 			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0 + maxf(0.0, cross - 0.25) * 8.0 + absf(o - want) * 1.5
 			if hint.size() > 1: cost += minf(float(hint_guide(hint, next).distance) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
+			# Дорогу или брод пересекает коротко, а не идёт вдоль
+			var soft: Callable = shape.get("soft", Callable())
+			if soft.is_valid() and soft.call(next): cost += SOFT_COST
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
 			# обрыв снаружи поворота: вылет наружу — вниз по откосу (падение 01.11 с 30 м)
