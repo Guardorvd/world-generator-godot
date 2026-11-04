@@ -23,7 +23,9 @@ const SURF_WATER := 10
 const DEBRIS_COUNT := 192
 const PLUME_COUNT := 96
 const TRACK_POINTS := 96     # кольцевой буфер точек следа на каждое колесо (2 колеса = до 192 точек)
-const TRACK_LIFETIME := 7.0  # секунд до полного исчезновения следа
+const TRACK_LIFETIME := 4.5  # секунд до полного исчезновения следа
+const TRACK_FADE := 0.6      # общая прозрачность следов (1 = как раньше)
+const EFFECT_SCALE := 0.6    # общая сила частиц и пыли торможения (1 = как раньше)
 const TRACK_STEP := 0.20     # шаг записи новых точек следа, м
 
 # Палитра следов, пыли и частиц по видам покрытия:
@@ -378,7 +380,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 			0.0, 1.0
 		) * smoothstep(0.45, 2.2, speed)
 
-		if intensity < 0.08:
+		if intensity < 0.12:
 			_t_WasActive[wheel_idx] = false
 			continue
 
@@ -396,10 +398,12 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		else:
 			side_vec = w_right
 		# 1. Запись ленты следа / борозды на земле (на воде след не остаётся, кроме мокрого берега)
-		if surf_kind != SURF_WATER and intensity > 0.14:
+		if surf_kind != SURF_WATER and intensity > 0.2:
 			# В заносе след расширяется поперечным скольжением протектора
 			var track_w: float = float(pal.width) * (1.0 + 0.45 * clampf(drift_ratio + skid_ratio * 0.5, 0.0, 1.0))
-			_record_track(wheel_idx, contact_pos + n_up * 0.022, side_vec, track_w, intensity, surf_kind, pal.track)
+			var track_col: Color = pal.track
+			track_col.a *= TRACK_FADE
+			_record_track(wheel_idx, contact_pos + n_up * 0.022, side_vec, track_w * 0.85, intensity, surf_kind, track_col)
 		else:
 			_t_WasActive[wheel_idx] = false
 
@@ -409,7 +413,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 		var spray_dir := (-tangent_fwd * move_sign * (1.2 + speed * 0.32 * (0.5 + 0.7 * brake_ratio)) + side_vec * side_throw)
 
 		# 2. Выброс твёрдых частиц (гравий, комья, песок, хвоя/листья, трава, снег, капли)
-		var debris_rate := intensity * (28.0 + 62.0 * clampf(skid_ratio + drift_ratio * 0.7 + loose_bonus, 0.0, 1.2))
+		var debris_rate := EFFECT_SCALE * intensity * (28.0 + 62.0 * clampf(skid_ratio + drift_ratio * 0.7 + loose_bonus, 0.0, 1.2))
 		if surf_kind == SURF_WOOD:
 			debris_rate *= 0.25 # на деревянном настиле почти нет камней, только мелкая щепа/пыль
 		_emit_accum_d[wheel_idx] += debris_rate * dt
@@ -436,7 +440,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 			_spawn_debris(spark_origin, n_up, spray_dir * 1.15, side_vec, speed, clampf(intensity + rotor_heat * 0.5, 0.4, 1.0), pal, true)
 
 		# 4. Клубы пыли, дыма резины, снежной пудры или водяного тумана
-		var plume_rate := intensity * (12.0 + 26.0 * clampf(skid_ratio + drift_ratio * 0.6 + loose_bonus, 0.0, 1.2))
+		var plume_rate := EFFECT_SCALE * intensity * (12.0 + 26.0 * clampf(skid_ratio + drift_ratio * 0.6 + loose_bonus, 0.0, 1.2))
 		_emit_accum_p[wheel_idx] += plume_rate * dt
 		var p_spawns := mini(3, int(_emit_accum_p[wheel_idx]))
 		_emit_accum_p[wheel_idx] -= float(p_spawns)
