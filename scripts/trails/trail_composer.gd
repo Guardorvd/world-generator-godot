@@ -67,7 +67,6 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		std.rhythm = profile.get("rhythm", false)
 		std.carry = 1.0
 		std.streak = 0
-		std.beats = []
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -160,7 +159,7 @@ const CARRY := {T.PUMP: 1.06, T.WAVES: 1.03, T.ROLLER: 0.98, T.ROLLOVER: 0.98, T
 ## Между элементами — столько секунд свободной трассы (на скорости выхода): после прыжка больше, у сложной трассы короче.
 const BEAT_JUMP := Vector2(1.3, 0.85)
 const BEAT_FLOW := Vector2(1.0, 0.6)
-## Столько элементов подряд без передышки; потом свободная трасса не короче BREATH секунд (и минимум в метрах).
+## Столько элементов подряд без передышки (лёгкая трасса, сложная); потом свободная трасса не короче BREATH секунд.
 const STREAK := Vector2i(5, 3)
 const BREATH := 2.0
 
@@ -195,7 +194,6 @@ static func _beat(e: TrailElement, finish: float, m: Dictionary, difficulty: flo
 		std.streak = 0
 	var clear := clampf(v * seconds, 6.0, 40.0)
 	std.carry = lerpf(carry, 1.0, clampf(clear / 60.0, 0.0, 1.0))
-	std.beats.append(snappedf(seconds, 0.01))
 	return clear
 
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
@@ -338,7 +336,11 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 			if k == "drop" and std.get("rhythm", false) and int(std.get("last_kind", -1)) == T.DROP: continue
 			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade, not std.get("adaptive", false))
 			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
-			if not s.is_empty() and s.has("speed_lo") and (v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5):
+			# в игре проверка полотна гоняет седока в трёх сценариях (спокойный 0,8, обычный, быстрый 1,15 скорости): прыжок,
+			# которому быстрый перелетает зону, а спокойный (кроме стола, который перекатывают) не долетает, она снимет
+			var calm_v := v * CALM_SPEED if std.get("adaptive", false) and k != "table" else v
+			var fast_v := v * FAST_SPEED if std.get("adaptive", false) else v
+			if not s.is_empty() and s.has("speed_lo") and (calm_v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5 or fast_v > float(s.get("speed_hi", INF)) + 0.5):
 				var why := "прыжок: скорость вне окна"
 				std.refused[why] = int(std.refused.get(why, 0)) + 1
 				continue
@@ -379,6 +381,9 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	return {profile = kind, length = size.x, height = size.y, count = count}
 
 const OVERRUN := 25.0
+## Сценарии скорости проверки полотна (TrailValidation.SCENARIOS): спокойный и быстрый седок.
+const CALM_SPEED := 0.8
+const FAST_SPEED := 1.15
 static func _refuse(std: Dictionary, why: String) -> void:
 	std.refused[why] = int(std.refused.get(why, 0)) + 1
 
