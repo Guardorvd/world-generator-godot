@@ -94,6 +94,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	guide.points = _downhill(ctx.input, corridor)
 	corridor = guide.points
 	var total := guide.route_length()
+	ctx.peak = _peak(ctx.input, corridor)
 	var cursor := 0.0
 	var start := corridor[0]
 	var tangent := Vector2.ZERO
@@ -118,6 +119,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
 		# Вид участка — по тому, что даёт его местность; вида, которого в сети уже много, берётся реже.
+		ctx.arc = Vector2(cursor / total, last / total) # доля маршрута, которую займёт участок: замысел один на весь маршрут
 		var style := Potential.choose(ctx.input, hint, ctx.styles)
 		if style.is_empty(): style = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
 		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, true)
@@ -148,6 +150,26 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		cursor += maxf(MIN_LEG, RouteContract.project(hint, end).x)
 	if route_length > 0.0: plan.stats.routes_m.append(roundi(route_length))
 	return route_index
+
+## Место пика маршрута (доля длины): середина 150 м с самым большим спуском вдоль коридора, не раньше трети и не позже
+## 85 %. Начало маршрута разгоняет, после пика он идёт на спад. Коридор уже идёт вниз.
+static func _peak(input: GI, corridor: PackedVector2Array) -> float:
+	var guide := TrailDefinition.new()
+	guide.points = corridor
+	var total := guide.route_length()
+	if total < 400.0: return 0.75
+	var best := 0.0
+	var at := 0.5
+	var s := 0.0
+	while s + 150.0 <= total:
+		var a := guide.point_at(s)
+		var b := guide.point_at(s + 150.0)
+		var drop := input.natural_ground(a) - input.natural_ground(b)
+		if drop > best:
+			best = drop
+			at = (s + 75.0) / total
+		s += 30.0
+	return clampf(at, 0.33, 0.85)
 
 ## Коридор в ту сторону, где у него больше спуска, чем подъёма: маршрут едут ради спуска.
 static func _downhill(input: GI, corridor: PackedVector2Array) -> PackedVector2Array:
@@ -201,7 +223,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		soft = func(p: Vector2) -> bool:
 			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
 			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}

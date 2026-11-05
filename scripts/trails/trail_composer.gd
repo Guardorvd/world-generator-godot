@@ -73,13 +73,21 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var span := rng.randf_range(profile.section.x, profile.section.y)
 		var end := minf(cursor + span, total - RUN_OUT)
 		if total - RUN_OUT - end < profile.section.x * 0.5: end = total - RUN_OUT # no stub section at the end
-		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng)
+		# A leg of a longer route (`profile.arc` — its share of the whole): the route has one plan, not one per leg.
+		var share: Vector2 = profile.get("arc", Vector2(0.0, 1.0))
+		var whole := share != Vector2(0.0, 1.0)
+		var last_section := whole and share.y >= 0.999 and end >= total - RUN_OUT - 0.01
+		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section)
 		if mood != "" and next != mood: cursor += TRANSITION
 		mood = next
 		var m: Dictionary = MOODS[mood]
-		# Difficulty arc: warm-up, peak near three quarters of the route, a softer finish.
+		# Difficulty arc: warm-up, peak near three quarters of the route (or where the terrain peaks), a softer finish.
 		var t := (cursor + end) * 0.5 / total
 		var arc := smoothstep(0.0, 0.3, t) * (1.0 - 0.45 * smoothstep(0.8, 1.0, t))
+		if whole:
+			var peak: float = profile.get("peak", 0.75)
+			t = lerpf(share.x, share.y, t)
+			arc = smoothstep(0.0, peak, t) * (1.0 - 0.45 * smoothstep(peak, 1.0, t))
 		var difficulty := lerpf(band.x, band.y, arc) * float(m.ease)
 		hard = difficulty > (band.x + band.y) * 0.5 and not m.get("calm", false)
 		sections.append({from = cursor, to = end, mood = mood, difficulty = snappedf(difficulty, 0.01)})
@@ -114,7 +122,9 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
 ## makes a calm one likelier; the terrain grade favours moods that suit it.
-static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade: float, rng: RandomNumberGenerator) -> String:
+## `t` — place in a whole route (-1: none): an easy start, tech and jumps in the middle, a calm finish (`finish`: the last
+## section of the route takes a calm mood when the profile has one).
+static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade: float, rng: RandomNumberGenerator, t := -1.0, finish := false) -> String:
 	var keys: Array = weights.keys()
 	var sum := 0.0
 	var scaled := []
@@ -123,6 +133,13 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 		var w := float(weights[key])
 		if key == previous and keys.size() > 1: w *= 0.15
 		if hard and m.get("calm", false): w *= 3.0
+		if t >= 0.0:
+			var calm: bool = m.get("calm", false) or key == "flow"
+			var intense := key == "tech" or key == "jump"
+			if t < 0.15: w *= 2.0 if calm else (0.6 if intense else 1.0)
+			elif t > 0.45 and t < 0.85 and intense: w *= 1.5
+			if finish and m.get("calm", false): w *= 6.0
+			elif t > 0.9 and m.get("calm", false): w *= 2.5
 		# Descent is negative grade: slope > 0 likes it, slope < 0 likes climbs. ±8 % doubles or halves.
 		w *= pow(2.0, clampf(-grade / 0.08, -1.0, 1.0) * float(m.slope))
 		scaled.append(w)

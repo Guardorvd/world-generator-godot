@@ -400,6 +400,10 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				base_attempts = base_attempts, retained_lines = promising.size(), walk_ms = walk_ms, walk_calls = walk_calls, ms = (Time.get_ticks_usec() - started) / 1000.0,
 				line_score = best_components, completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, composition_started = false}, [], speeds, seed)
 	var profile := Composition.profile_for(style, skill, shaping_amount)
+	# Участок длинного маршрута знает свою долю маршрута и место его пика: замысел один на всю поездку.
+	if options.has("arc"):
+		profile.arc = options.arc
+		profile.peak = options.get("peak", 0.75)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
 	# v3: петля и овражки — элементы, пролёты и врезки; составитель ставит своё вокруг них
