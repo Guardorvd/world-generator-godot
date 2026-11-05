@@ -30,6 +30,8 @@ const ADMIT_PASSES := 3
 const ALTERNATIVES := 2       # вторых линий в сети не больше этого
 const ALT_SHIFT := 40.0       # вариант уходит от основной линии в сторону не дальше, м
 const ALT_MIN_LENGTH := 400.0 # вариант берёт участки не короче этого, м
+const VARIANT_ELEMENTS := 3   # у варианта не меньше стольких элементов
+const VARIANT_APART := 12.0   # и в среднем он не ближе этого к основной линии, м
 const END_MARGIN := 60.0       # последний участок маршрута кончается не ближе этого к концу коридора, м
 const PARK_LINES := 3         # столько самых длинных линий трейл-парка
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
@@ -55,10 +57,13 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	var corridors := search.find(w.seed_num)
 	# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
 	# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	var mean_work := 0.0
+	for c: Dictionary in corridors: mean_work += float(c.probe.build_cost)
+	mean_work = maxf(0.001, mean_work / maxi(1, corridors.size()))
 	for c: Dictionary in corridors:
 		c.probe.points = _downhill(input, c.probe.points)
 		c.potential = Potential.assess(input, c.probe.points)
-		c.rank = Potential.rank(c.potential, float(c.probe.length))
+		c.rank = Potential.rank(c.potential, float(c.probe.length), float(c.probe.build_cost) / mean_work)
 	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
@@ -200,9 +205,11 @@ static func _alternatives(ctx: Dictionary) -> void:
 		ctx.arc = leg.arc
 		ctx.peak = leg.peak
 		ctx.width = main.width
+		ctx.reference = main
 		plan.stats.attempted += 1
 		var alternative := _leg(ctx, hint, Rect2i(lo, hi - lo), pick.style, leg.title + " · вариант", plan.stats.accepted * 31 + 7, leg.difficulty, true)
 		if alternative != null: made += 1
+	ctx.erase("reference")
 	plan.stats.alternatives = made
 
 ## Подсказка `line`, выгнутая в сторону на `shift` м посередине и сходящаяся с ней в концах. Сторона — та, где земля у
@@ -314,6 +321,10 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	ctx.start_speed = admitted.exit_speed
 	var d: TrailDefinition = admitted.d
 	var global := StageTrailPlan.to_world(d, site)
+	var variant_error := _variant_error(ctx, d, global)
+	if not variant_error.is_empty():
+		_refuse(plan, variant_error)
+		return null
 	var errors := TrailBuilder.append_routes(w, [global], false)
 	if not errors.is_empty():
 		_refuse(plan, errors[0])
@@ -328,6 +339,22 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	plan.stats.length_m += global.route_length()
 	ctx.styles[style] = float(ctx.styles.get(style, 0.0)) + global.route_length()
 	return global
+
+## Вариант (ctx.reference — основная линия) принимается, если у него есть содержание и он заметно отличается от основной.
+## Обычные участки (reference нет) не проверяются.
+static func _variant_error(ctx: Dictionary, d: TrailDefinition, global: TrailDefinition) -> String:
+	var reference: TrailDefinition = ctx.get("reference")
+	if reference == null: return ""
+	if d.elements.size() < VARIANT_ELEMENTS: return "вариант без содержания"
+	var apart := 0.0
+	var count := 0
+	var s := 0.0
+	while s < global.route_length():
+		apart += reference.nearest(global.point_at(s)).z
+		count += 1
+		s += 8.0
+	if count == 0 or apart / count < VARIANT_APART: return "вариант сливается с основной линией"
+	return ""
 
 static func _start_blocked(input: GI, region: Rect2i, start: Vector2) -> bool:
 	return input.blocked(start) or not Rect2(Vector2(region.position) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE).has_point(start)
