@@ -67,11 +67,38 @@ func setup() -> void:
 	camera.far = 500
 	root.add_child(camera)
 	camera.current = true
+	if "--obstacles" in OS.get_cmdline_user_args():
+		_obstacle_cost(h)
+		return
 	EYE = float(Dev.arg("eye", "32"))
 	last_us = Time.get_ticks_usec()
 	results.objects = world.obj_count
 	results.layer = layer.resource_path
 	results.renderer = RenderingServer.get_current_rendering_method()
+
+
+## Цена пересборки препятствий леса (она идёт в такте физики): update с принудительной пересборкой в 24 местах.
+func _obstacle_cost(h: Heightfield) -> void:
+	h.obstacles = ForestObstacles.new(world, h)
+	var times := PackedFloat32Array()
+	for i in 24:
+		var t0 := Time.get_ticks_usec()
+		h.obstacles.update(100.0 + i * 31.0, 200.0 + i * 17.0, veg.obstacles, veg.obstacles_version, true)
+		times.append((Time.get_ticks_usec() - t0) / 1000.0)
+	times.sort()
+	print("obstacles rebuild: median %.2f ms, worst %.2f ms, count %d" % [times[12], times[23], h.obstacles.data.size() / ForestObstacles.STRIDE])
+	# фоновая сборка: вызов в такте физики не ждёт, результат тот же, что у синхронной на том же месте
+	var at := Vector2(700.0, 500.0)
+	h.obstacles.update(at.x, at.y, veg.obstacles, 0, true)
+	var same := h.obstacles.data.duplicate()
+	h.obstacles.update(300.0, 300.0, veg.obstacles, 0, true)
+	h.obstacles.async_rebuild = true
+	var t0 := Time.get_ticks_usec()
+	h.obstacles.update(at.x, at.y, veg.obstacles, 1)
+	var call_ms := (Time.get_ticks_usec() - t0) / 1000.0
+	h.obstacles.finish()
+	print("obstacles async: call %.3f ms, same result %s" % [call_ms, h.obstacles.data == same])
+	quit()
 
 
 func _forest(density: float) -> WorldData:
@@ -104,7 +131,13 @@ func _process(delta: float) -> bool:
 	var cpu := RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
 	camera.look_at_from_position(Vector3(512, EYE, z), Vector3(512, EYE - 12.0, z + 80), Vector3.UP)
 	var t0 := Time.get_ticks_usec()
+	if "--budget" in OS.get_cmdline_user_args():
+		if veg.frame_budget == null:
+			veg.frame_budget = preload("res://scripts/render/stream_frame_budget.gd").new()
+		veg.frame_budget.deadline_usec = t0 + 2500
 	veg.update(512.0, z, false)
+	if veg.frame_budget != null:
+		veg.frame_budget.deadline_usec = 0
 	if Dev.arg("hide") != "":
 		for i in Dev.arg("hide").split(","):
 			veg.understory[int(i)].mm.visible_instance_count = 0
@@ -144,6 +177,7 @@ func _process(delta: float) -> bool:
 		results.still = stats()
 		results.nodes = _node_stats()
 		phase = 1
+		veg.phase_stats.max_us.fill(0)
 		frames.clear()
 		submit.clear()
 		gpus.clear()
@@ -171,7 +205,8 @@ func stats() -> Dictionary:
 	for ms in f:
 		sum += ms
 	return {fps = 1000.0 * f.size() / maxf(sum, 0.001), p99_ms = f[int(f.size() * 0.99)],
-		submit_p99_ms = u[int(u.size() * 0.99)], submit_max_ms = u[-1],
+		submit_p99_ms = u[int(u.size() * 0.99)], submit_max_ms = u[-1], worst_ms = Array(f.slice(maxi(0, f.size() - 5))),
+		phase_max_us = veg.phase_stats.max_us.duplicate(),
 		primitives = primitives / f.size(), gpu_ms = _mean(gpus), cpu_ms = _mean(cpus), draw_calls = calls / f.size(), batches = veg.veg.size()}
 
 

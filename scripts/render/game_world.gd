@@ -319,6 +319,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	if heights.obstacles == null:
 		heights.obstacles = ForestObstacles.new(world, heights)
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+	heights.obstacles.async_rebuild = true # дальше препятствия леса пересобираются в фоне, а не в такте физики
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	if not saved.is_empty():
 		var b: Dictionary = saved.bike
@@ -466,6 +467,8 @@ func _photo_capturing(on: bool) -> void:
 
 
 func _exit_tree() -> void:
+	if heights != null and heights.obstacles != null:
+		heights.obstacles.finish()
 	if _travel_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_travel_task)
 		_travel_task = -1

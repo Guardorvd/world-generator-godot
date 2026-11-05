@@ -32,6 +32,11 @@ var data := PackedFloat32Array()  # препятствия подряд по STR
 var _grid := {}                   # Vector2i(клетка) -> PackedInt32Array номеров (начало записи в data)
 var _center := Vector2.INF
 var _version := -1
+## Пересборка в фоне вместо такта физики; включает игра (GameWorld), тесты собирают синхронно
+var async_rebuild := false
+var _task := -1
+var _job := {}
+var _generation := 0 # растёт со сменой постоянного слоя: собранное до неё устарело
 ## 11.6: мелочь на полотне (ветки, россыпь камней) не держит, а поднимает колесо: отрезки a–b с радиусом
 ## и высотой (RoadObstacles.bump), подряд по BUMP_STRIDE. Кладёт VegetationLayer.bumps уже в радиусе столкновений.
 const BUMP_STRIDE := 6
@@ -56,30 +61,84 @@ func _init(w: WorldData, h: Heightfield) -> void:
 func set_trail(solids: PackedFloat32Array, trail_bumps: PackedFloat32Array) -> void:
 	_trail_solids = solids
 	_trail_bumps = trail_bumps
+	_generation += 1
 	_version = -2
 	_index_bumps()
 
 
 ## Каждый такт: пересобрать, если игрок отошёл или подлесок обновился. details — валежник из
 ## VegetationLayer.obstacles (тот же формат), version — его счётчик обновлений.
+## С async_rebuild пересборка (около 5 мс, до 10) идёт в фоне, а до её окончания действуют прежние препятствия:
+## игрок уходит от места сборки на REBUILD, а собранное покрывает REACH, запас хватает на десятки миллисекунд.
+## force всегда собирает сразу (появление, перенос).
 func update(px: float, pz: float, details: PackedFloat32Array, version: int, force := false) -> void:
+	if _task != -1:
+		if not force and not WorkerThreadPool.is_task_completed(_task):
+			return
+		finish()
 	if not force and version == _version and Vector2(px, pz).distance_to(_center) < REBUILD:
 		return
 	_center = Vector2(px, pz)
 	_version = version
-	data.clear()
-	_grid.clear()
-	_add_objects(px, pz)
+	var job := {px = px, pz = pz, details = details, trail = _trail_solids, outer = _outer_snapshot(px, pz), generation = _generation}
+	if async_rebuild and not force:
+		_job = job
+		_task = WorkerThreadPool.add_task(_run_job.bind(job), true, "Препятствия леса")
+		return
+	_run_job(job)
+	_adopt(job)
+
+
+## Дожидается фоновой пересборки и принимает её, если с запуска не сменился постоянный слой
+func finish() -> void:
+	if _task == -1:
+		return
+	WorkerThreadPool.wait_for_task_completion(_task)
+	_task = -1
+	if _job.generation == _generation:
+		_adopt(_job)
+	_job = {}
+
+
+func _adopt(job: Dictionary) -> void:
+	data = job.data
+	_grid = job.grid
+
+
+func _run_job(job: Dictionary) -> void:
+	var out := {data = PackedFloat32Array(), grid = {}}
+	var px: float = job.px
+	var pz: float = job.pz
+	var details: PackedFloat32Array = job.details
+	var trail: PackedFloat32Array = job.trail
+	var center := Vector2(px, pz)
+	_add_objects(out, px, pz, job.outer)
 	for n in range(0, details.size(), STRIDE):
-		if _on_axis(details, n, px, pz).distance_to(_center) < REACH:
-			_add(details[n], details[n + 1], details[n + 2], details[n + 3], details[n + 4], details[n + 5], details[n + 6])
-	for n in range(0, _trail_solids.size(), STRIDE):
-		if _on_axis(_trail_solids, n, px, pz).distance_to(_center) < REACH:
-			_add(_trail_solids[n], _trail_solids[n + 1], _trail_solids[n + 2], _trail_solids[n + 3], _trail_solids[n + 4], _trail_solids[n + 5], _trail_solids[n + 6])
+		if _on_axis(details, n, px, pz).distance_to(center) < REACH:
+			_put(out, details[n], details[n + 1], details[n + 2], details[n + 3], details[n + 4], details[n + 5], details[n + 6])
+	for n in range(0, trail.size(), STRIDE):
+		if _on_axis(trail, n, px, pz).distance_to(center) < REACH:
+			_put(out, trail[n], trail[n + 1], trail[n + 2], trail[n + 3], trail[n + 4], trail[n + 5], trail[n + 6])
+	job.data = out.data
+	job.grid = out.grid
+
+
+## Готовые куски за краем карты вокруг игрока: словарь VegetationLayer меняет главный поток, фон читает только копию ссылок
+func _outer_snapshot(px: float, pz: float) -> Dictionary:
+	var out := {}
+	if world.outer == null:
+		return out
+	var side := world.CS * TILE
+	for cy in range(floori((pz - REACH) / side), floori((pz + REACH) / side) + 1):
+		for cx in range(floori((px - REACH) / side), floori((px + REACH) / side) + 1):
+			var items: Variant = world.outer.veg.get(Vector2i(cx, cy))
+			if items != null:
+				out[Vector2i(cx, cy)] = items
+	return out
 
 
 ## Деревья, валуны, сухие деревья и кактусы мира — те же, что рисует VegetationLayer
-func _add_objects(px: float, pz: float) -> void:
+func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> void:
 	var heights: Heightfield = _heights.get_ref()
 	if heights == null:
 		return
@@ -103,47 +162,50 @@ func _add_objects(px: float, pz: float) -> void:
 					if s < 0.42 or not RockModels.has_seat(heights, x, z, s * 1.2):
 						continue
 					s *= 1.2
-					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
+					_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				elif heights.depth_at(x, z) <= GameConfig.WATER_MARGIN:
-					_add(x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
-	if world.outer == null:
-		return
+					_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
 	# 8.4: за краем карты — объекты, которые VegetationLayer уже разложил (OuterLand.veg, с высотой земли)
-	for cy in range(floori((pz - REACH) / side), floori((pz + REACH) / side) + 1):
-		for cx in range(floori((px - REACH) / side), floori((px + REACH) / side) + 1):
-			var items: Variant = world.outer.veg.get(Vector2i(cx, cy))
-			if items == null:
+	for chunk: Vector2i in outer:
+		var items: Dictionary = outer[chunk]
+		var xs: PackedFloat64Array = items.x
+		for o in xs.size():
+			var kind: int = items.k[o]
+			var s: float = items.s[o]
+			if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or s < MIN_SCALE):
 				continue
-			var xs: PackedFloat64Array = items.x
-			for o in xs.size():
-				var kind: int = items.k[o]
-				var s: float = items.s[o]
-				if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or s < MIN_SCALE):
+			var x: float = xs[o] * TILE
+			var z: float = items.y[o] * TILE
+			if absf(x - px) > REACH or absf(z - pz) > REACH:
+				continue
+			var base: float = items.ground[o]
+			if kind == Biomes.T_ROCK:
+				if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
 					continue
-				var x: float = xs[o] * TILE
-				var z: float = items.y[o] * TILE
-				if absf(x - px) > REACH or absf(z - pz) > REACH:
-					continue
-				var base: float = items.ground[o]
-				if kind == Biomes.T_ROCK:
-					if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
-						continue
-					s *= 1.2
-					_add(x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
-				else:
-					_add(x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+				s *= 1.2
+				_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
+			else:
+				_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
 
 
 ## Отрезок a–b толщиной r (у круга a = b), от основания base до верха top
 func _add(ax: float, az: float, bx: float, bz: float, r: float, base: float, top: float) -> void:
-	var at := data.size()
-	data.append_array([ax, az, bx, bz, r, base, top])
+	var out := {data = data, grid = _grid}
+	_put(out, ax, az, bx, bz, r, base, top)
+	data = out.data
+
+
+## То же в буфер сборки out {data, grid}: фоновая пересборка не трогает живые данные
+static func _put(out: Dictionary, ax: float, az: float, bx: float, bz: float, r: float, base: float, top: float) -> void:
+	var grid: Dictionary = out.grid
+	var at: int = out.data.size()
+	out.data.append_array(PackedFloat32Array([ax, az, bx, bz, r, base, top]))
 	for cy in range(floori((minf(az, bz) - r) / CELL), floori((maxf(az, bz) + r) / CELL) + 1):
 		for cx in range(floori((minf(ax, bx) - r) / CELL), floori((maxf(ax, bx) + r) / CELL) + 1):
 			var key := Vector2i(cx, cy)
-			var list: PackedInt32Array = _grid.get(key, PackedInt32Array())
+			var list: PackedInt32Array = grid.get(key, PackedInt32Array())
 			list.append(at)
-			_grid[key] = list
+			grid[key] = list
 
 
 ## Задевает ли тело радиуса r в (x, z) с ногами на высоте feet какое-нибудь препятствие
