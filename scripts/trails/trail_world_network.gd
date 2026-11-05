@@ -5,6 +5,7 @@ const Search := preload("res://scripts/trails/trail_site_search.gd")
 const Layout := preload("res://scripts/trails/trail_layout.gd")
 const Validation := preload("res://scripts/trails/trail_validation.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")
+const Potential := preload("res://scripts/trails/trail_potential.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const DESIGN_DEPTH := 4.0     # уровень полотна не дальше этого от земли, м: с виражами, откосами и элементами это в пределах EARTHWORKS
@@ -45,15 +46,24 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	input.earthwork_limits = EARTHWORKS.duplicate()
 	var budget := int(options.get("probe_budget", PROBES))
 	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
-		{area = area.grow(-MARGIN), probe_budget = budget, corridor = CORRIDOR})
+		{area = area.grow(-MARGIN), probe_budget = budget, corridor = CORRIDOR, rideable = true})
 	surveys += 1
 	var corridors := search.find(w.seed_num)
-	# Длинные — первыми. Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
+	# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	var plan_potentials := PackedStringArray()
+	for c: Dictionary in corridors:
+		c.probe.points = _downhill(input, c.probe.points)
+		c.potential = Potential.assess(input, c.probe.points)
+		c.rank = Potential.rank(c.potential, float(c.probe.length))
+		if not c.potential.is_empty():
+			var s: Dictionary = c.potential.score
+			plan_potentials.append("%d м %s сп.%.0f%% неров.%.2f бок.%.2f вид %.2f | f%.2f d%.2f e%.2f t%.2f" % [c.probe.length, c.potential.best, c.potential.grade * 100.0, c.potential.rough, c.potential.side, c.potential.view, s.flow, s.downhill, s.enduro, s.tech])
 	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return float(a.probe.length) > float(b.probe.length) if a.probe.length != b.probe.length else a.trail_seed < b.trail_seed)
+		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
-	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable())}
+	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
@@ -73,6 +83,9 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		plan.reason = ""
 		plan.definition = plan.routes[0]
 	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < corridors.size() + park.size()
+	for style: String in ctx.styles: ctx.styles[style] = roundi(ctx.styles[style])
+	plan.stats.styles = ctx.styles
+	plan.stats.potentials = plan_potentials
 	plan.stats.total_ms = Time.get_ticks_msec() - started
 	return plan
 
@@ -109,7 +122,9 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		for p in hint: box = box.expand(p)
 		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
-		var style: String = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
+		# Вид участка — по тому, что даёт его местность; вида, которого в сети уже много, берётся реже.
+		var style := Potential.choose(ctx.input, hint, ctx.styles)
+		if style.is_empty(): style = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
 		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, true)
 		if global == null:
 			fails += 1
@@ -225,6 +240,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	plan.stats.accepted += 1
 	plan.stats.legs += 1
 	plan.stats.length_m += global.route_length()
+	ctx.styles[style] = float(ctx.styles.get(style, 0.0)) + global.route_length()
 	return global
 
 static func _start_blocked(input: GI, region: Rect2i, start: Vector2) -> bool:

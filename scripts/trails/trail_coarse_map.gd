@@ -63,16 +63,22 @@ func feature(i: int) -> String:
 	if forms[i] > 1.0: return "ложбина"
 	return "склон"
 
-func anchors(seed_value: int) -> Array[int]:
+## rideable — вместо «чем круче, тем лучше» предпочитать склон, на котором можно ехать (около 6–20 %), и место повыше
+## своих соседей (гребень, плечо холма): оттуда линия идёт вниз и открывается вид.
+func anchors(seed_value: int, rideable := false) -> Array[int]:
 	var result: Array[int] = []
 	# A single spatial pass, not five sets of overlapping rectangular windows.
 	for z in range(1, size - 1, 2):
 		for x in range(1, size - 1, 2):
 			var i := z * size + x
 			if free[i]: result.append(i)
+	var rank := func(a: int) -> float:
+		var g := gradients[a].length()
+		if not rideable: return minf(clearance[a], 4) + minf(absf(forms[a]), 8) * 0.25 + minf(g, 0.3)
+		return minf(clearance[a], 4) + minf(absf(forms[a]), 8) * 0.25 + 1.5 * clampf(1.0 - absf(g - 0.12) / 0.12, 0.0, 1.0) - 0.15 * clampf(forms[a], 0.0, 8.0)
 	result.sort_custom(func(a: int, b: int) -> bool:
-		var sa := minf(clearance[a], 4) + minf(absf(forms[a]), 8) * 0.25 + minf(gradients[a].length(), 0.3)
-		var sb := minf(clearance[b], 4) + minf(absf(forms[b]), 8) * 0.25 + minf(gradients[b].length(), 0.3)
+		var sa: float = rank.call(a)
+		var sb: float = rank.call(b)
 		return sa > sb if sa != sb else posmod(hash([seed_value, a]), 999983) < posmod(hash([seed_value, b]), 999983))
 	return result
 
