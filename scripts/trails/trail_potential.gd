@@ -98,7 +98,7 @@ static func alternative(a: Dictionary, style: String) -> Dictionary:
 ## (предел земляных работ — главная причина обрывов).
 static func rank(a: Dictionary, length: float, work_ratio := 1.0) -> float:
 	if a.is_empty(): return 0.0
-	return (float(a.value) + 0.25 * float(a.view)) * (0.4 + 0.6 * minf(1.0, length / 3000.0)) * clampf(1.0 - 0.3 * (work_ratio - 1.0), 0.7, 1.2)
+	return (float(a.value) + 0.25 * float(a.view)) * (0.15 + 0.85 * minf(1.0, length / 2500.0)) * clampf(1.0 - 0.3 * (work_ratio - 1.0), 0.7, 1.2)
 
 static func _wet(input, at: Vector2) -> bool:
 	var p := Vector2i((at - input.origin) / input.cell_size)
