@@ -20,6 +20,7 @@ var calls := 0.0
 var phase := 0
 var EYE := 32.0
 var shot_done := false
+var lod_shadow_done := false
 var results := {}
 
 
@@ -98,7 +99,7 @@ func _process(delta: float) -> bool:
 	if camera == null:
 		return false
 	elapsed += delta
-	var z := 340.0 + maxf(0.0, elapsed - 5.0) * 16.0
+	var z := 340.0 + maxf(0.0, elapsed - 5.0) * float(Dev.arg("speed", "16"))
 	var gpu := RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid())
 	var cpu := RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
 	camera.look_at_from_position(Vector3(512, EYE, z), Vector3(512, EYE - 12.0, z + 80), Vector3.UP)
@@ -107,11 +108,18 @@ func _process(delta: float) -> bool:
 	if Dev.arg("hide") != "":
 		for i in Dev.arg("hide").split(","):
 			veg.understory[int(i)].mm.visible_instance_count = 0
-	if Dev.arg("hidelod") != "":
+	if Dev.arg("hidelod") != "" and elapsed > 3.0 and not lod_shadow_done:
 		for key: Vector3i in veg.veg:
 			for node: MultiMeshInstance3D in veg.veg[key].nodes:
 				if node.get_meta("level", -1) == int(Dev.arg("hidelod")):
 					node.visible = false
+	if Dev.arg("noshadowlod") != "" and elapsed > 3.0 and not lod_shadow_done:
+		for key: Vector3i in veg.veg:
+			for node: MultiMeshInstance3D in veg.veg[key].nodes:
+				if node.get_meta("level", -1) == int(Dev.arg("noshadowlod")):
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	if elapsed > 3.0:
+		lod_shadow_done = true
 	if Dev.arg("nograss") != "":
 		veg.grass.visible_instance_count = 0
 	if "--nodetails" in OS.get_cmdline_user_args():

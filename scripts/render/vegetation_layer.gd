@@ -1040,6 +1040,20 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				elif part == "trunk" and level >= 1:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # тень тонкого ствола за 60 м не видна
+				elif part == "trunk" and not small and levels.size() > 2:
+					# 15.0: тень ближнего ствола считает дальний меш (в 10-15 раз меньше треугольников): ствол сам
+					# рисуется ближним мешом, а в каждый из каскадов теней попадал бы ещё раз.
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+					var caster := _multimesh(levels[levels.size() - 1], mat, entry.count, false, true, false, true)
+					caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+					if limit > 0:
+						_reveal_node(caster, mat)
+					caster.multimesh.buffer = entry.tbuf
+					caster.multimesh.custom_aabb = entry.bounds
+					caster.multimesh.visible_instance_count = entry.count
+					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
+					caster.visibility_range_end_margin = 16.0
+					entry.nodes.append(caster)
 				elif part == "crown" and not small:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
