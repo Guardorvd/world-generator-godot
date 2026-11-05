@@ -407,7 +407,9 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	if options.has("arc"):
 		profile.arc = options.arc
 		profile.peak = options.get("peak", 0.75)
-	if profile.get("terrain", false): profile.natural = ground # природная земля (composing_ground — уже полотно трассы)
+	if profile.get("terrain", false):
+		profile.natural = ground
+		if options.get("cover", Callable()).is_valid(): profile.cover = options.cover # лесистость мира (если есть): настроение участков # природная земля (composing_ground — уже полотно трассы)
 	var band: Vector2 = profile.difficulty
 	var level := clampi(int((band.x + band.y) * 0.5 * 4.0), 0, 3)
 	# v3: петля и овражки — элементы, пролёты и врезки; составитель ставит своё вокруг них

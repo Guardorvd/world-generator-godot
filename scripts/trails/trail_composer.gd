@@ -18,6 +18,8 @@ const MOODS := {
 	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, std_elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1, T.NORTHSHORE: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
 	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, std_elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1, T.NORTHSHORE: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
 	rest = {title = "Отдых", elements = {T.RIPPLES: 1, T.DIP: 1, T.ROLLOVER: 1}, turns = [], gap = 2.2, slope = -1.0, ease = 0.5, calm = true},
+	# Накат: участок без элементов — полотно и вид; ставится по лесистости и неровности (поляна, гладкий холм), не больше трети маршрута.
+	cruise = {title = "Накат", elements = {}, turns = [], gap = 1.0, slope = 0.0, ease = 0.4, calm = true, free = true},
 	# First elements on a line found over real terrain: only small earthworks, wide spacing.
 	calm = {title = "Спокойный поток", elements = {T.ROLLER: 2, T.DIP: 1}, turns = [T.BERM], gap = 1.6, slope = 0.0, ease = 1.0, calm = true},
 }
@@ -72,8 +74,9 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 	# боковой уклон, шпильки; настроение участка и элементы подбираются под них (см. _terrain_scan)
 	var terrain := {}
 	if profile.get("terrain", false) and not std.is_empty():
-		terrain = _terrain_scan(d, profile.get("natural", ground))
+		terrain = _terrain_scan(d, profile.get("natural", ground), profile.get("cover", Callable()))
 	var ledge_at := 0 # следующий по линии уступ из terrain.ledges
+	var cruised := 0.0 # сколько метров уже отдано накату
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -92,9 +95,11 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var whole := share != Vector2(0.0, 1.0)
 		var last_section := whole and share.y >= 0.999 and end >= total - RUN_OUT - 0.01
 		var feat := _section_features(terrain, cursor, end)
+		if not feat.is_empty(): feat.cruised = cruised / maxf(cursor, 1.0)
 		if not std.is_empty(): std.feat = feat
 		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section, feat)
 		if mood != "" and next != mood: cursor += TRANSITION
+		if MOODS[next].get("free", false): cruised += end - cursor
 		mood = next
 		var m: Dictionary = MOODS[mood]
 		# Difficulty arc: warm-up, peak near three quarters of the route (or where the terrain peaks), a softer finish.
@@ -110,7 +115,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var last := -1
 		# фраза переходит в соседний участок flow/прыжков (граница участков условна); перед отдыхом и техникой — сбрасывается
 		if std.get("rhythm", false) and not PHRASES.has(mood): std.phrase.clear()
-		while cursor < end:
+		while cursor < end and not m.get("free", false):
 			# Фраза: на flow и прыжках элементы идут связкой (разгон → прыжки → накат), а не по одному
 			if std.get("rhythm", false) and std.phrase.is_empty() and PHRASES.has(mood):
 				std.phrase = _pick_phrase(mood, difficulty, rng)
@@ -291,7 +296,7 @@ const SHARP_R := 25.0
 
 ## Рельеф вдоль линии по природной земле: высоты, боковой уклон (по ±3 м поперёк), крутые повороты (R < SHARP_R, станциями
 ## через 2 м) и станции уступов. Шаг 2 м; пусто — линия короче 12 м.
-static func _terrain_scan(d: TrailDefinition, natural: Callable) -> Dictionary:
+static func _terrain_scan(d: TrailDefinition, natural: Callable, cover := Callable()) -> Dictionary:
 	var n := int(d.route_length() / 2.0) + 1
 	if n < 6: return {}
 	var h := PackedFloat32Array()
@@ -308,6 +313,16 @@ static func _terrain_scan(d: TrailDefinition, natural: Callable) -> Dictionary:
 		h[i] = float(natural.call(p))
 		side[i] = absf(float(natural.call(p + o)) - float(natural.call(p - o))) / 6.0
 		sharp[i] = 1.0 if absf(d.curvature_at(s)) >= 1.0 / SHARP_R else 0.0
+	# лесистость и поляна (StageVegetation.cover_at) через 8 м; без неё wood = -1 (неизвестно)
+	var wood := PackedFloat32Array()
+	var glade := PackedFloat32Array()
+	if cover.is_valid():
+		wood.resize(n / 4 + 1)
+		glade.resize(n / 4 + 1)
+		for k in wood.size():
+			var c: Vector2 = cover.call(d.point_at(minf(k * 8.0, d.route_length())))
+			wood[k] = c.x
+			glade[k] = c.y
 	var span := int(LEDGE_SPAN / 2.0)
 	var need := maxf(LEDGE_DROP, (h[0] - h[n - 1]) / float(n - 1) * LEDGE_SPAN * 0.5 * 2.5)
 	var ledges := []
@@ -328,7 +343,7 @@ static func _terrain_scan(d: TrailDefinition, natural: Callable) -> Dictionary:
 	for k in range(1, n - 1): rough_sum += absf(h[k - 1] - 2.0 * h[k] + h[k + 1])
 	var side_sum := 0.0
 	for k in n: side_sum += side[k]
-	return {h = h, side = side, sharp = sharp, ledges = ledges,
+	return {h = h, side = side, sharp = sharp, ledges = ledges, wood = wood, glade = glade,
 		rough_norm = maxf(ROUGH_MIN, 2.0 * rough_sum / float(n - 2)), side_norm = maxf(SIDE_MIN, 2.0 * side_sum / float(n))}
 
 ## Признаки участка [from, to]: rough, side, turn — 0..1, ledges — число уступов. Пусто, если рельефа нет.
@@ -345,10 +360,22 @@ static func _section_features(terrain: Dictionary, from: float, to: float) -> Di
 		side += float(terrain.side[i])
 		sharp += float(terrain.sharp[i])
 	var count := float(b - a + 1)
+	var wood := -1.0
+	var glade := 0.0
+	var tree_cover: PackedFloat32Array = terrain.wood
+	if not tree_cover.is_empty():
+		var ka := clampi(int(from / 8.0), 0, tree_cover.size() - 1)
+		var kb := clampi(int(to / 8.0), ka, tree_cover.size() - 1)
+		wood = 0.0
+		for k in range(ka, kb + 1):
+			wood += tree_cover[k]
+			glade += float(terrain.glade[k])
+		wood /= float(kb - ka + 1)
+		glade /= float(kb - ka + 1)
 	var ledges := 0
 	for l: float in terrain.ledges:
 		if l >= from and l <= to: ledges += 1
-	return {rough = clampf(rough / count / float(terrain.rough_norm), 0.0, 1.0), side = clampf(side / count / float(terrain.side_norm), 0.0, 1.0), turn = sharp / count, ledges = ledges}
+	return {rough = clampf(rough / count / float(terrain.rough_norm), 0.0, 1.0), side = clampf(side / count / float(terrain.side_norm), 0.0, 1.0), turn = sharp / count, ledges = ledges, wood = wood, glade = glade}
 
 ## Множитель веса настроения по рельефу участка: неровная, боковая или извилистая земля — техника, уступы — прыжки и перепады,
 ## гладкий склон — поток; прыжки не любят боковой уклон и шпильки.
@@ -357,13 +384,27 @@ static func _terrain_mood(key: String, feat: Dictionary) -> float:
 	var side: float = feat.side
 	var turn: float = feat.turn
 	var rich := rough + side
+	var wood: float = feat.wood
+	var weight := 1.0
+	if wood >= 0.0:
+		# лесистость: сомкнутый лес — лесная техника, открытые склоны — поток и накат, поляна — выдох; прыжкам нужен простор
+		match key:
+			"forest": weight = 0.3 + 2.2 * wood
+			"flow": weight = 0.6 + 0.8 * (1.0 - wood)
+			"jump": weight = 1.0 - 0.8 * wood
+			"tech": weight = 1.0 - 0.3 * wood
+			"rest": weight = 1.0 + 1.5 * float(feat.glade)
+			"cruise": weight = (0.4 + 1.6 * (1.0 - wood) + 1.5 * float(feat.glade)) * (1.0 - 0.6 * rough)
+	elif key == "cruise":
+		weight = 1.0 - 0.6 * rough # без данных о лесе накат — на гладкой земле
+	if key == "cruise": weight *= clampf(1.0 - float(feat.get("cruised", 0.0)) / 0.3, 0.1, 1.0) # не больше трети маршрута
 	match key:
-		"tech": return 1.0 + 1.5 * rough + 1.0 * side + 1.5 * turn
-		"forest": return 1.0 + 0.5 * rough + 0.5 * turn
-		"jump": return (1.0 + 0.7 * minf(int(feat.ledges), 3)) * (1.0 - 0.6 * side) * (1.0 - 0.7 * minf(turn * 3.0, 1.0))
-		"flow": return 1.0 + 0.5 * (1.0 - minf(rich, 1.0)) * (1.0 - minf(turn * 3.0, 1.0))
-		"rest": return 1.0 + 0.5 * maxf(rich - 1.0, 0.0) # природный участок сам держит внимание: после него выдох
-	return 1.0
+		"tech": return weight * (1.0 + 1.5 * rough + 1.0 * side + 1.5 * turn)
+		"forest": return weight * (1.0 + 0.5 * rough + 0.5 * turn)
+		"jump": return weight * (1.0 + 0.7 * minf(int(feat.ledges), 3)) * (1.0 - 0.6 * side) * (1.0 - 0.7 * minf(turn * 3.0, 1.0))
+		"flow": return weight * (1.0 + 0.5 * (1.0 - minf(rich, 1.0)) * (1.0 - minf(turn * 3.0, 1.0)))
+		"rest": return weight * (1.0 + 0.5 * maxf(rich - 1.0, 0.0)) # природный участок сам держит внимание: после него выдох
+	return weight
 
 ## Веса видов в участке по рельефу: каменный сад и неровность там, где рельеф неровный; узкий проход — на боковом уклоне;
 ## столы и дропы — не на боковом уклоне.

@@ -5,7 +5,7 @@ const T := TrailElement.Profile
 const CHARACTER := {
 	flow = {moods = {flow = 6, rest = 2, jump = 1}, density = 0.65},
 	downhill = {moods = {tech = 3, jump = 2, forest = 1, rest = 1}, density = 0.65},
-	enduro = {moods = {forest = 4, tech = 2, rest = 2, flow = 1}, density = 0.5},
+	enduro = {moods = {forest = 4, tech = 2, rest = 2, flow = 1, cruise = 2}, density = 0.5},
 	tech = {moods = {tech = 5, forest = 2, rest = 2}, density = 0.6},
 	park = {moods = {flow = 4, jump = 3, rest = 1}, density = 0.8},
 }

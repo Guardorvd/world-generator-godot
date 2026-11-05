@@ -307,6 +307,8 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
 		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		# лесистость и поляны под линией (StageVegetation.cover_at): горные и природные характеры меняют по ним настроение участков
+		cover = func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE) + site.origin.x, floori(p.y / GameConfig.TILE) + site.origin.y),
 		soft = func(p: Vector2) -> bool:
 			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
 			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
