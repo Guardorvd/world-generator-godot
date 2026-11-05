@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 1
+const VERSION := 2
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}
@@ -8,6 +8,7 @@ const PATH := "res://resources/catalog/standard.res"
 @export var understory: Array[Mesh] = []
 @export var floor_meshes: Array[Mesh] = []
 @export var textures: Array[Texture2D] = [] # bark, leaf, needle, ground detail, ground normal
+@export var far_forms: Dictionary = {} # номер формы подлеска (Floor.FIRST + вид) -> упрощённый меш для дальнего подлеска
 @export var levels: Dictionary = {} # explicit model/part -> all LOD resources
 static var _catalog: Resource
 

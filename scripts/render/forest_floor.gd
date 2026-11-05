@@ -67,9 +67,9 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 	])
 
 
-static func _beam(a: Vector3, b: Vector3, radius: float) -> Array:
+static func _beam(a: Vector3, b: Vector3, radius: float, sides := 6) -> Array:
 	var delta := b - a
-	var part := Models._cyl(radius * 0.7, radius, delta.length(), 6)
+	var part := Models._cyl(radius * 0.7, radius, delta.length(), sides)
 	return [part[0], Transform3D(Basis(Quaternion(Vector3.UP, delta.normalized())), a) * part[1]]
 
 
@@ -94,6 +94,23 @@ static func _log(moss: bool) -> Mesh:
 
 static func meshes() -> Array[Mesh]:
 	return preload("res://scripts/render/asset_catalog.gd").get_catalog().floor_meshes.duplicate()
+
+
+## 15.0: упрощённые корни и камни для дальнего подлеска, ключ - номер формы Floor.FIRST + вид.
+static func build_far_meshes() -> Dictionary:
+	var roots: Array = []
+	for n in 5:
+		var a := n * TAU / 5.0 + 0.3
+		var f := Vector3(cos(a), 0, sin(a))
+		roots.append([_beam(f * 0.08 + Vector3.UP * 0.22, f * 1.0, 0.09, 4), BARK])
+	var stones := SurfaceTool.new()
+	for n in 5:
+		var a := n * 2.4
+		var r := 0.18 + (n % 3) * 0.09
+		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * r, 300 + n, 0.35, 0.5)
+		var far: Mesh = stone.get_meta("lod_meshes")[1]
+		stones.append_from(far, 0, Transform3D(Basis(), Vector3(cos(a) * 0.45, 0.0, sin(a) * 0.45)))
+	return {ROOTS: Plants._colored(roots), STONES: stones.commit()}
 
 
 static func build_meshes() -> Array[Mesh]:

@@ -104,6 +104,15 @@ func _process(delta: float) -> bool:
 	camera.look_at_from_position(Vector3(512, EYE, z), Vector3(512, EYE - 12.0, z + 80), Vector3.UP)
 	var t0 := Time.get_ticks_usec()
 	veg.update(512.0, z, false)
+	if Dev.arg("hide") != "":
+		for i in Dev.arg("hide").split(","):
+			veg.understory[int(i)].mm.visible_instance_count = 0
+	if Dev.arg("nograss") != "":
+		veg.grass.visible_instance_count = 0
+	if "--nodetails" in OS.get_cmdline_user_args():
+		veg.grass.visible_instance_count = 0
+		for e: Dictionary in veg.understory:
+			e.mm.visible_instance_count = 0
 	var upload_ms := (Time.get_ticks_usec() - t0) / 1000.0
 	var now := Time.get_ticks_usec()
 	if elapsed > 2.0:
@@ -172,6 +181,9 @@ func _node_stats() -> Dictionary:
 	out.grass = veg.grass.visible_instance_count
 	var under := []
 	for e: Dictionary in veg.understory:
-		under.append(e.count)
+		var m: Mesh = e.mm.mesh
+		var a := m.surface_get_arrays(0)
+		var tris: int = (a[Mesh.ARRAY_INDEX].size() if a[Mesh.ARRAY_INDEX] != null else a[Mesh.ARRAY_VERTEX].size()) / 3
+		under.append("%d x %d = %d (cap %d, shadow %d)" % [e.count, tris, e.count * tris, e.cap, e.node.cast_shadow])
 	out.understory = under
 	return out

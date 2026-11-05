@@ -99,6 +99,32 @@ static func build_meshes() -> Array[Mesh]:
 	return [fern, moss, _colored(mushrooms), herb, tall_grass, bush, sapling, pine, _colored(flowers), high_grass, young, young_pine]
 
 
+## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
+## Тот же силуэт и цвет, втрое меньше мелких треугольников.
+static func build_far_meshes() -> Dictionary:
+	var green := Color(0.3, 0.47, 0.23)
+	var parts: Array = []
+	var stalks: Array = []
+	for arm in 6:
+		var a := arm * TAU / 6.0
+		var forward := Vector3(cos(a), 0, sin(a))
+		var side := Vector3(-sin(a), 0, cos(a))
+		for t: float in [0.4, 0.75]:
+			var p := _fern_point(t, forward)
+			for sign_side: float in [-1.0, 1.0]:
+				var tip := p + side * sign_side * (1.0 - t) * 0.38 + forward * 0.13
+				parts.append([p - forward * 0.13, tip, p + forward * 0.13])
+		for segment in 2:
+			var start := _fern_point(segment / 2.0, forward)
+			var end := _fern_point((segment + 1) / 2.0, forward)
+			stalks.append([start - side * 0.012, start + side * 0.012, end + side * 0.008, end - side * 0.008])
+	var persistent_from := parts.size()
+	parts.append_array(stalks)
+	var fern := _leaves(parts, green, persistent_from)
+	var moss := _colored([[_mound(0.58, 0.07, 1.0, 0.18, 0.85), Color(0.38, 0.52, 0.21)]])
+	return {FERN: fern, MOSS: moss}
+
+
 ## Маленькие объёмы не требуют сферы на сотню треугольников.
 static func _mound(r: float, y: float, sx := 1.0, sy := 1.0, sz := 1.0) -> Array:
 	var mesh := SphereMesh.new()

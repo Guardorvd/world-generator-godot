@@ -8,6 +8,12 @@ func _initialize() -> void:
 	catalog.grass = Models.build_grass_mesh()
 	catalog.understory = preload("res://scripts/render/understory_models.gd").build_meshes()
 	catalog.floor_meshes = preload("res://scripts/render/forest_floor.gd").build_meshes()
+	var Plants := preload("res://scripts/render/understory_models.gd")
+	var Floor := preload("res://scripts/render/forest_floor.gd")
+	for k: int in Plants.build_far_meshes():
+		catalog.far_forms[k] = Plants.build_far_meshes()[k]
+	for k: int in Floor.build_far_meshes():
+		catalog.far_forms[Floor.FIRST + k] = Floor.build_far_meshes()[k]
 	for id: int in catalog.trees:
 		for part: String in ["trunk", "crown"]:
 			if catalog.trees[id].has(part):
@@ -43,6 +49,8 @@ func _initialize() -> void:
 			ok = ok and same_mesh(before[k], after[k])
 	for pair: Array in [[catalog.grass, restored.grass]]:
 		ok = ok and same_mesh(pair[0], pair[1])
+	for k: int in catalog.far_forms:
+		ok = ok and same_mesh(catalog.far_forms[k], restored.far_forms[k])
 	for group: String in ["understory", "floor_meshes"]:
 		for k in catalog.get(group).size():
 			ok = ok and same_mesh(catalog.get(group)[k], restored.get(group)[k])

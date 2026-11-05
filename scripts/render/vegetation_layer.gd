@@ -17,6 +17,7 @@ const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска го�
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
 const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE] # виды без ствола на дальнем уровне
+const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
@@ -118,6 +119,7 @@ var _grass_n := 0
 var _grass_bounds := AABB()
 var _grass_margin := 0.0
 var _grass_box := AABB()
+var _far_of := {} # номер формы подлеска -> номер её упрощённой формы (отдельная группа)
 var understory: Array = [] # те же фоновые буферы и цикл обновления, что у травы
 var _forest_surface: Image
 var placement: Placement
@@ -201,23 +203,32 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	grass_buf = _buffer(_grass_cap(), STRIDE)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
-	for mesh in meshes:
-		var kind := understory.size() - Floor.FIRST
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or understory.size() in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]
+	var specs: Array = []
+	for form in meshes.size():
+		specs.append([meshes[form], form])
+	var far_forms: Dictionary = preload("res://scripts/render/asset_catalog.gd").get_catalog().far_forms
+	for form: int in far_forms:
+		_far_of[form] = specs.size()
+		specs.append([far_forms[form], form])
+	for spec: Array in specs:
+		var mesh: Mesh = spec[0]
+		var base: int = spec[1]
+		var kind := base - Floor.FIRST
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]
 		# Мох, подстилка, валежник и камни неподвижны.
-		var still := kind >= 0 or understory.size() in [Understory.MOSS, Understory.MUSHROOM]
-		var wind := CALM if still else _plant_wind(understory.size())
+		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM]
+		var wind := CALM if still else _plant_wind(base)
 		var mat := _wind_mat(SHADER, wind, true)
 		mat.set_shader_parameter("stream_instances", true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
-		var blades := understory.size() in [Understory.GRASS, Understory.HIGH_GRASS]
+		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS]
 		mat.set_shader_parameter("grass_variation", blades)
 		if not still and not blades:
-			var woody := Placement.priority(understory.size()) == 1
+			var woody := Placement.priority(base) == 1
 			mat.set_shader_parameter("detail_full", 35.0 if woody else 12.0)
 			mat.set_shader_parameter("detail_far", 120.0 if woody else 45.0)
 			mat.set_shader_parameter("detail_keep", 0.5 if woody else 0.6)
-		var far := Placement.priority(understory.size()) < 2
+		var far := Placement.priority(base) < 2
 		var cap := _understory_cap(far)
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		if shadows and kind < 0:
@@ -225,7 +236,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		# Один MultiMesh покрывает всю раскладку: её центр не является расстоянием до каждого растения.
 		# Дальность и растворение задаёт общий шейдер, AABB оставляем для отсечения по фрустуму.
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = mesh.get_aabb(),
+			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), base = base,
 			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0)})
 	_grass_mat = grass_mat
 	_apply_fade()
@@ -263,7 +274,7 @@ func _apply_fade() -> void:
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var radius := under_r if entry.far else grass_r
-		if kind == Floor.FIRST + Floor.ROOTS:
+		if entry.base == Floor.FIRST + Floor.ROOTS:
 			# Корни раскладываются только у больших деревьев до GRASS_R (+ запас), без поредения.
 			radius = GameConfig.GRASS_R
 		_fade(entry.node.material_override, radius, _ahead(radius))
@@ -1456,6 +1467,9 @@ func _fill_road(px: float, pz: float) -> void:
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло
 func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false) -> void:
 	var entry: Dictionary = understory[kind]
+	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
+	if _far_of.has(kind) and Vector2(x, z).distance_squared_to(_fill_at) > FAR_FORM_R * FAR_FORM_R:
+		entry = understory[_far_of[kind]]
 	if entry.count >= entry.cap:
 		fill_capped += 1
 		return
