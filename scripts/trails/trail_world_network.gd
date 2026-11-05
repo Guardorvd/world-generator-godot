@@ -354,6 +354,10 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		return Layout.generate(ground, Vector2(site.size) * GameConfig.TILE, seed_value, style, blocked, options_line)
 	var result: Dictionary = line.call(hint, is_leg)
 	_time(plan, "layout", phase)
+	_count(plan, "layout", "calls")
+	if result.stats.has("fit_ms"):
+		_count(plan, "layout", "fitted")
+		plan.stats.phases_ms.layout_fit_ms = float(plan.stats.phases_ms.get("layout_fit_ms", 0.0)) + float(result.stats.fit_ms)
 	for key: String in ["walk_ms", "compose_ms"]:
 		plan.stats.phases_ms["layout_" + key] = float(plan.stats.phases_ms.get("layout_" + key, 0.0)) + float(result.stats.get(key, 0.0))
 	# Почему составитель и правила места отказали элементам: сводка по всей сети (диагностика, мира не касается).
@@ -495,16 +499,21 @@ static func _admit(ctx: Dictionary, site: TrailSite, first: TrailDefinition, tit
 		# Проект полотна, до сборки: линия, которую профиль не может положить мягче допустимого, не собирается. Сначала на
 		# поверхности участка (дёшево), затем на готовом полотне самого пути (оно чуть другое) — до земляных работ.
 		if full:
+			var pins_started := Time.get_ticks_usec()
 			pins = pins if pins.is_valid() else TrailBuilder.pins(site.surface(), [reach_box] as Array[TrailDefinition])
+			_time(plan, "pins", pins_started)
 			steep = TrailBuilder.design(site.surface(), d, float(work.grade), pins)
 			_time(plan, "design", phase)
+			_count(plan, "admit", "design")
 			if steep.grade <= 1.0: steep = {}
+			else: _count(plan, "admit", "steep_before_prepare")
 		if steep.is_empty():
 			phase = Time.get_ticks_usec()
 			if not full:
 				prepared = site.rebake(prepared, d, removed, limits)
 			else:
 				builds += 1
+				_count(plan, "admit", "prepare")
 				limits = {keep_bake = true, earthwork_source = site.surface(), earthwork_input = local_input} if early_audit else {keep_bake = true}
 				limits.guard = func(prepared_heights: Heightfield) -> PackedStringArray:
 					var design := TrailBuilder.design(prepared_heights, d, float(work.grade))
@@ -514,6 +523,7 @@ static func _admit(ctx: Dictionary, site: TrailSite, first: TrailDefinition, tit
 				var routes: Array[TrailDefinition] = [d]
 				prepared = site.prepare(routes, true, limits)
 				if limits.has("steep"):
+					_count(plan, "admit", "steep_after_surface")
 					steep = limits.steep
 					builds -= 1 # отказ до запекания почти ничего не стоит; число таких отказов ограничено REPLANS и обрезкой
 			removed = []

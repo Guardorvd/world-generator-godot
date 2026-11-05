@@ -15,7 +15,11 @@ const BLEND := 1.0
 const STRUCTURE_REACH := 400.0
 ## Cells of a bake whose vertices are evaluated together on the worker threads, and vertices per thread task.
 const BATCH_CELLS := 256
-const EVAL_BAND := 24
+## Вершин в одной задаче расчёта смещений. Общие объекты (маршруты, профили, поверхность) делят счётчики ссылок, и в потоках
+## GDScript от них замедляется: мелкие задачи (24) не давали ускорения, крупные (около 1000) — около трети времени запекания.
+const EVAL_BAND_MIN := 400
+const EVAL_BAND_MAX := 1500
+const EVAL_BANDS := 12
 
 static func append_routes(w: WorldData, definitions: Array[TrailDefinition], rebuild_map := true) -> PackedStringArray:
 	var errors := _validate(w, definitions, false)
@@ -233,6 +237,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 ## near it and the junctions). Reads the ground as it is and changes nothing, so any order and thread give the same numbers;
 ## the result is in the order of the vertices. `bad` marks a non-finite offset, `shade` is the tint of a raised or dug feature.
 static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array, qslot: PackedInt32Array, slots: Array[Dictionary], profiles: Dictionary, shapes: Dictionary, spans: Dictionary, pin_at: Callable) -> Dictionary:
+	var band_size := clampi(qx.size() / EVAL_BANDS, EVAL_BAND_MIN, EVAL_BAND_MAX)
 	var w := h.world
 	var cells_x := w.W
 	var cells_z := w.H
@@ -241,6 +246,7 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 		var shades := PackedFloat64Array()
 		var bad := PackedByteArray()
 		var bests: Array = []
+		var scratch := PackedFloat64Array([0.0, 0.0]) # смещение и оттенок одного вершины: общий расчёт элементов
 		for n in range(from, to):
 			var at := Vector2(qx[n], qz[n]) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
 			var slot: Dictionary = slots[qslot[n]]
@@ -273,8 +279,11 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 					second_rank = score
 					second_local = near
 			var offset := 0.0
+			var tint := 0.0
 			if best != null:
-				offset = _route_offset(h, best, best_local, at, shapes, profiles, joints[best], spans[best.id])
+				_route_offset_shade(h, best, best_local, at, shapes, profiles, joints[best], spans[best.id], scratch)
+				offset = scratch[0]
+				tint = scratch[1]
 				if second != null:
 					var other := _route_offset(h, second, second_local, at, shapes, profiles, joints[second], spans[second.id])
 					var t := smoothstep(0.0, 1.0, (second_rank - best_rank) / BLEND)
@@ -285,7 +294,6 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 				bad.append(1)
 				bests.append(null)
 				continue
-			var tint := _feature_shade(best, best_local, spans[best.id]) if best != null else 0.0
 			# Past the run-out of the side slopes nothing changes: neither pins nor water matter.
 			var pin: float = pin_at.call(at) if offset != 0.0 or tint != 0.0 else 1.0
 			var displacement := offset * pin
@@ -296,7 +304,7 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 			shades.append(tint * pin)
 			bad.append(0)
 			bests.append(best)
-		return {displacement = displacements, shade = shades, bad = bad, best = bests}, EVAL_BAND)
+		return {displacement = displacements, shade = shades, bad = bad, best = bests}, band_size)
 	var displacement := PackedFloat64Array()
 	var shade := PackedFloat64Array()
 	var bad := PackedByteArray()
@@ -476,6 +484,31 @@ static func _route_offset(h: Heightfield, d: TrailDefinition, local: Vector3, at
 	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP) * (1.0 - open.x) - open.y * open.x
 	if d.earthwork > 0.0 and not joints.is_empty(): offset *= d.junction_weight(at, local.x, joints)
 	return offset
+
+## То же, что _route_offset, и в том же проходе по элементам — оттенок вершины (_feature_shade): displacement каждого элемента
+## считается один раз. out[0] — смещение, out[1] — оттенок; суммы идут в том же порядке, поэтому числа те же.
+static func _route_offset_shade(h: Heightfield, d: TrailDefinition, local: Vector3, at: Vector2, shapes: Dictionary, profiles: Dictionary, joints: PackedInt32Array, span: Dictionary, out: PackedFloat64Array) -> void:
+	var offset := 0.0
+	if d.earthwork > 0.0: offset = (shapes[d.id] as TrailShaping).offset(h, d, local, at, profiles[d.id])
+	var features := 0.0
+	var lit := 0.0
+	var tint := 0.0
+	if absf(local.y) < d.width * 0.5 + TrailElement.FOOTPRINT:
+		var stations: PackedFloat64Array = span.station
+		var halves: PackedFloat64Array = span.half
+		for k in stations.size():
+			if absf(local.x - stations[k]) < halves[k]:
+				var e: TrailElement = d.elements[k]
+				var value := e.displacement(local.x, local.y, d.width * 0.5)
+				features += value
+				if not TrailElement.places_objects(e.profile) 						and e.profile not in [TrailElement.Profile.BERM, TrailElement.Profile.S_BERM, TrailElement.Profile.OFF_CAMBER]:
+					lit += value
+		tint = SHADE_UP * smoothstep(0.1, 0.9, lit) if lit >= 0.0 else -SHADE_DOWN * smoothstep(0.05, 0.5, -lit)
+	var open := d.open_at(local.x) if not d.open_spans.is_empty() else Vector2.ZERO
+	offset += clampf(features, -ELEMENT_CAP, ELEMENT_CAP) * (1.0 - open.x) - open.y * open.x
+	if d.earthwork > 0.0 and not joints.is_empty(): offset *= d.junction_weight(at, local.x, joints)
+	out[0] = offset
+	out[1] = tint
 
 ## Where each element acts along its route (station and half length), in element order: a vertex compares two numbers
 ## per element instead of reading the element's properties.

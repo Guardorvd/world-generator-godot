@@ -107,9 +107,11 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	site.hv_raw = _crop(h.hv_raw, w.W, data)
 	site.water_level = _crop(h.water_level, w.W, data)
 	var near := Rect2(Vector2(data.position - Vector2i(4, 4)), Vector2(data.size + Vector2i(8, 8)))
+	var bounds := _trail_bounds(w)
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
-		if RoadBed.KINDS.has(t.kind):
+		# путь, чей охват не задевает участок, кусков не даёт (ни одной точки внутри near): точки не перебираются
+		if RoadBed.KINDS.has(t.kind) and (bounds[route] as Rect2).intersects(near, true):
 			site.trails.append_array(_clip_route(t, route, near, data.position))
 	var bridge_count := w.bridges.size()
 	for k in kept:
@@ -160,6 +162,35 @@ static func _crop(values: Variant, width: int, data: Rect2i) -> Variant:
 		out.append_array(values.slice(z * width + data.position.x, z * width + data.end.x))
 	return out
 
+
+## Охват (клетки) каждого пути мира: по нему вырезка участка пропускает далёкие пути, не перебирая их точки (на сотнях путей
+## по тысяче точек это больше всего времени вырезки). Хранится по миру и дописывается, когда пути добавляются; запись
+## пересчитывается, если у пути стало другое число точек.
+static var _bounds_cache := {}
+static func _trail_bounds(w: WorldData) -> Array:
+	var key := w.get_instance_id()
+	var entry: Dictionary = _bounds_cache.get(key, {})
+	var rects: Array = entry.get("rects", [])
+	var sizes: PackedInt32Array = entry.get("sizes", PackedInt32Array())
+	var ends: PackedFloat64Array = entry.get("ends", PackedFloat64Array()) # первая и последняя точка: узнаёт чужой мир с тем же номером объекта
+	rects.resize(w.trails.size())
+	sizes.resize(w.trails.size())
+	ends.resize(w.trails.size() * 4)
+	for route in w.trails.size():
+		var pts: Array = (w.trails[route] as Dictionary).pts
+		var first: Dictionary = pts[0] if not pts.is_empty() else {x = 0.0, y = 0.0}
+		var last: Dictionary = pts[-1] if not pts.is_empty() else {x = 0.0, y = 0.0}
+		if rects[route] != null and sizes[route] == pts.size() and ends[route * 4] == first.x and ends[route * 4 + 1] == first.y 				and ends[route * 4 + 2] == last.x and ends[route * 4 + 3] == last.y: continue
+		var box := Rect2(Vector2(first.x, first.y), Vector2.ZERO)
+		for p: Dictionary in pts: box = box.expand(Vector2(p.x, p.y))
+		rects[route] = box
+		sizes[route] = pts.size()
+		ends[route * 4] = first.x
+		ends[route * 4 + 1] = first.y
+		ends[route * 4 + 2] = last.x
+		ends[route * 4 + 3] = last.y
+	_bounds_cache[key] = {rects = rects, sizes = sizes, ends = ends}
+	return rects
 
 ## Куски пути с точками в near (клетки): с одной точкой до и после, чтобы разметка и соседство не обрывались.
 static func _clip_route(t: Dictionary, route: int, near: Rect2, corner: Vector2i) -> Array:

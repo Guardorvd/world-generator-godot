@@ -102,11 +102,17 @@ static func generate(ground: Callable, extent: Vector2, seed_value: int, style_n
 		walked.geometry_attempts = 2
 		walked.walk_length = corridor_length * 1.8
 		walked.open_finish = true
+		var started := Time.get_ticks_usec()
 		var result := _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), walked)
 		var walked_length: float = result.stats.get("length", 0.0)
 		if not result.routes.is_empty() and walked_length >= WALK_ENOUGH: return result
+		var fit_started := Time.get_ticks_usec()
 		var fitted := _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), settings)
-		return result if float(fitted.stats.get("length", 0.0)) <= walked_length else fitted
+		var chosen: Dictionary = result if float(fitted.stats.get("length", 0.0)) <= walked_length else fitted
+		# диагностика: сколько стоила вторая сборка (подгонка к коридору) и сколько всего ушло на вызов
+		chosen.stats.fit_ms = (Time.get_ticks_usec() - fit_started) / 1000.0
+		chosen.stats.generate_ms = (Time.get_ticks_usec() - started) / 1000.0
+		return chosen
 	return _build_core(ground, minf(extent.x, extent.y), seed_value, style_name, avoid, Callable(), settings)
 
 ## Data-only job; never writes the legacy facade or active terrain. Scene construction stays on the main thread.
