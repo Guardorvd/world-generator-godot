@@ -107,6 +107,11 @@ func _process(delta: float) -> bool:
 	if Dev.arg("hide") != "":
 		for i in Dev.arg("hide").split(","):
 			veg.understory[int(i)].mm.visible_instance_count = 0
+	if Dev.arg("hidelod") != "":
+		for key: Vector3i in veg.veg:
+			for node: MultiMeshInstance3D in veg.veg[key].nodes:
+				if node.get_meta("level", -1) == int(Dev.arg("hidelod")):
+					node.visible = false
 	if Dev.arg("nograss") != "":
 		veg.grass.visible_instance_count = 0
 	if "--nodetails" in OS.get_cmdline_user_args():

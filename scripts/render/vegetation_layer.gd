@@ -18,6 +18,10 @@ const FREE_US := 800 # удаление ушедших узлов за кадр:
 const TREE_NODES_PER_SLICE := 4
 const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE] # виды без ствола на дальнем уровне
 const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
+## 15.0: на самом дальнем уровне все силуэты вида одного чанка рисуются одним узлом с мешом первого силуэта
+## (высота выровнена по ряду Y): у дерева за 160 м силуэт различим меньше, чем стоит лишний draw call.
+## Цвет и поворот у экземпляров свои. Ключ такой записи в veg - вид + FAR_KEY.
+const FAR_KEY := 1 << 20
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
@@ -853,7 +857,52 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				buf[n * 16 + 14] = col.b
 				buf[n * 16 + 15] = 1.0
 		entries.append(entry)
+	_merge_far_variants(entries)
 	return {entries = entries}
+
+
+## Записи силуэтов одного вида чанка -> одна запись дальнего уровня (см. FAR_KEY). Вызывается и в фоне.
+func _merge_far_variants(entries: Array) -> void:
+	var groups := {}
+	for entry: Dictionary in entries:
+		var base: int = entry.kind % ForestModels.MODEL_STRIDE
+		if base == Biomes.T_ROCK or base == Biomes.T_REED or not _defs.has(base + ForestModels.MODEL_STRIDE) or entry.get("small_rocks", false):
+			continue
+		if not _defs.has(base) or ForestModels.lod_meshes(_defs[base].get("crown", _defs[base].get("trunk"))).size() < 3:
+			continue
+		if not groups.has(base):
+			groups[base] = []
+		groups[base].append(entry)
+	for base: int in groups:
+		var list: Array = groups[base]
+		if list.size() < 2:
+			continue
+		var def: Dictionary = _defs[base]
+		var merged := {kind = base, key_kind = base + FAR_KEY, count = 0, far_only = true, bounds = AABB()}
+		var trunk := def.has("trunk") and not FAR_TRUNKLESS.has(base)
+		var crown := def.has("crown")
+		var tbuf := PackedFloat32Array()
+		var cbuf := PackedFloat32Array()
+		for entry: Dictionary in list:
+			var ratio: float = _defs[entry.kind].box.end.y / maxf(def.box.end.y, 0.01)
+			if trunk and entry.has("tbuf"):
+				var t: PackedFloat32Array = entry.tbuf.duplicate()
+				for at in range(5, t.size(), 12):
+					t[at] *= ratio
+				tbuf.append_array(t)
+			if crown and entry.has("cbuf"):
+				var c: PackedFloat32Array = entry.cbuf.duplicate()
+				for at in range(5, c.size(), 16):
+					c[at] *= ratio
+				cbuf.append_array(c)
+			merged.bounds = entry.bounds if merged.count == 0 else merged.bounds.merge(entry.bounds)
+			merged.count += entry.count
+			entry.merged_far = true
+		if trunk:
+			merged.tbuf = tbuf
+		if crown:
+			merged.cbuf = cbuf
+		entries.append(merged)
 
 
 ## 13.9: область rect (клетки) закреплена: её чанки за краем убираются и строятся заново
@@ -925,7 +974,7 @@ func _discard_partial(built: Dictionary) -> void:
 		return
 	var chunk: Vector2i = built.chunk
 	for i in cursor:
-		var key := Vector3i(chunk.x, chunk.y, built.entries[i].kind)
+		var key := Vector3i(chunk.x, chunk.y, built.entries[i].get("key_kind", built.entries[i].kind))
 		if veg.has(key):
 			_retire_nodes(veg[key].nodes)
 			veg.erase(key)
@@ -955,7 +1004,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 		var resume: int = built.get("node_cursor", 0)
 		if resume == 0:
 			entry.nodes = []
-			veg[Vector3i(chunk.x, chunk.y, kind)] = entry
+			veg[Vector3i(chunk.x, chunk.y, entry.get("key_kind", kind))] = entry
 		var node_index := 0
 		for part in ["trunk", "crown"]:
 			if not def.has(part):
@@ -968,6 +1017,10 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				levels = [levels[1]]
 			for level in levels.size():
 				if node_index < resume:
+					node_index += 1
+					continue
+				# 15.0: сгруппированный дальний уровень рисует запись FAR_KEY, у силуэтов его нет
+				if levels.size() > 1 and (entry.get("far_only", false) != (level == levels.size() - 1)) and (entry.get("far_only", false) or entry.get("merged_far", false)):
 					node_index += 1
 					continue
 				# 15.0: за 160 м ствол леса тоньше пикселя и скрыт кроной: его узел (draw call на каждый чанк и силуэт) не нужен.
@@ -985,6 +1038,8 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				if level >= FAR_LOD_NO_SHADOW:
 					# Дальний LOD лежит за плавным краем теней солнца: теневой проход его не рисует.
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+				elif part == "trunk" and level >= 1:
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # тень тонкого ствола за 60 м не видна
 				elif part == "crown" and not small:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
