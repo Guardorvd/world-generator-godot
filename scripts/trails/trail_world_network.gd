@@ -27,6 +27,7 @@ const MIN_LINE := 200.0       # линия парка короче не нужн
 const TRIM := 30.0            # запас от плохого места при обрезке линии, м
 const WORK_EDGE := 12.0       # линия не ближе к краю рабочей зоны участка (TrailSite.inside_errors), м
 const ADMIT_PASSES := 3
+const END_MARGIN := 60.0       # последний участок маршрута кончается не ближе этого к концу коридора, м
 const PARK_LINES := 3         # столько самых длинных линий трейл-парка
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
 const PARK_END := 14.0        # концы линии парка отступают от родительской, м
@@ -109,7 +110,10 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		var hint := PackedVector2Array([start])
 		if tangent != Vector2.ZERO: hint.append(start + tangent * LEG_LEAD)
 		var s := cursor + LEG_LEAD
-		var last := minf(total, cursor + LEG)
+		# Коридор кончается там, где что-то мешает (вода, край области, круча): последний участок цели не берёт самый конец,
+		# а кончается раньше, где есть выкат.
+		var reach := total - END_MARGIN if total - cursor > MIN_LEG + END_MARGIN else total
+		var last := minf(reach, cursor + LEG)
 		while s < last:
 			hint.append(guide.point_at(s))
 			s += 16.0
@@ -119,7 +123,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
 		# Вид участка — по тому, что даёт его местность; вида, которого в сети уже много, берётся реже.
-		ctx.arc = Vector2(cursor / total, last / total) # доля маршрута, которую займёт участок: замысел один на весь маршрут
+		ctx.arc = Vector2(cursor / total, 1.0 if last >= reach else last / total) # доля маршрута, которую займёт участок: замысел один на весь маршрут
 		var style := Potential.choose(ctx.input, hint, ctx.styles)
 		if style.is_empty(): style = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
 		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, true)
