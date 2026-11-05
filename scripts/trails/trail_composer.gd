@@ -68,6 +68,12 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		std.carry = 1.0
 		std.streak = 0
 		std.phrase = [] # оставшиеся виды текущей фразы (PHRASES), по порядку
+	# Горные характеры (`profile.terrain`): рельеф вдоль линии по природной земле (`profile.natural`) — уступы, неровность,
+	# боковой уклон, шпильки; настроение участка и элементы подбираются под них (см. _terrain_scan)
+	var terrain := {}
+	if profile.get("terrain", false) and not std.is_empty():
+		terrain = _terrain_scan(d, profile.get("natural", ground))
+	var ledge_at := 0 # следующий по линии уступ из terrain.ledges
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -85,7 +91,9 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var share: Vector2 = profile.get("arc", Vector2(0.0, 1.0))
 		var whole := share != Vector2(0.0, 1.0)
 		var last_section := whole and share.y >= 0.999 and end >= total - RUN_OUT - 0.01
-		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section)
+		var feat := _section_features(terrain, cursor, end)
+		if not std.is_empty(): std.feat = feat
+		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section, feat)
 		if mood != "" and next != mood: cursor += TRANSITION
 		mood = next
 		var m: Dictionary = MOODS[mood]
@@ -106,6 +114,18 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 			# Фраза: на flow и прыжках элементы идут связкой (разгон → прыжки → накат), а не по одному
 			if std.get("rhythm", false) and std.phrase.is_empty() and PHRASES.has(mood):
 				std.phrase = _pick_phrase(mood, difficulty, rng)
+			# Природный уступ впереди: дроп встаёт на него (там земля уже падает), а не на случайное место
+			std.erase("force")
+			std.erase("ledge")
+			if not terrain.is_empty():
+				var ledges: Array = terrain.ledges
+				while ledge_at < ledges.size() and float(ledges[ledge_at]) < cursor + 4.0: ledge_at += 1
+				if ledge_at < ledges.size() and float(ledges[ledge_at]) < minf(cursor + LEDGE_REACH, end + OVERRUN) and not m.get("calm", false) and mood != "rest":
+					# два дропа подряд — однообразие: после дропа каждый второй уступ остаётся природным
+					if not (last == T.DROP and rng.randf() < 0.5):
+						std.force = T.DROP
+						std.ledge = float(ledges[ledge_at])
+					ledge_at += 1
 			var e := _element(d, m, cursor, end, difficulty, last, rng, std)
 			if std.get("rhythm", false):
 				# Ритм: не подошёл элемент — на том же месте пробуется малый универсальный (FALLBACK), а не сдвиг на 4 м,
@@ -141,7 +161,12 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 				# вираж в повороте фразу не двигает; любой другой элемент (в том числе запасной) закрывает её очередной шаг
 				if not std.phrase.is_empty() and e.profile not in [T.BERM, T.S_BERM, T.OFF_CAMBER]: std.phrase.pop_front()
 				cursor = finish + _beat(e, finish, m, difficulty, density, std, rng)
-			else: cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
+			else:
+				cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) * (1.0 + float(feat.get("rough", 0.0))) / maxf(density, 0.2) # где рельеф сам неровный, подготовленные элементы реже
+				# следующий уступ не пропускается ради случайного интервала: курсор встаёт перед ним (дроп начнётся у уступа)
+				if not terrain.is_empty() and ledge_at < terrain.ledges.size():
+					var next_ledge: float = terrain.ledges[ledge_at]
+					if cursor > next_ledge - 12.0 and next_ledge - APPROACH - 4.0 > finish + 4.0 and next_ledge < end + OVERRUN: cursor = next_ledge - APPROACH - 4.0
 		cursor = maxf(cursor, end)
 	if not std.is_empty(): _berm_turns(d, elements, std)
 	var result := {elements = elements, sections = sections}
@@ -251,11 +276,114 @@ static func _beat(e: TrailElement, finish: float, m: Dictionary, difficulty: flo
 	std.carry = lerpf(carry, 1.0, clampf(clear / 60.0, 0.0, 1.0))
 	return clear
 
+## — Рельеф горных характеров —
+## Уступ: земля падает не меньше LEDGE_DROP (и втрое быстрее среднего спуска линии) на LEDGE_SPAN м линии; уступы реже LEDGE_EVERY м.
+const LEDGE_DROP := 0.7
+const LEDGE_SPAN := 6.0
+const LEDGE_EVERY := 25.0
+## Дроп ставится на уступ, который не дальше этого впереди курсора, м.
+const LEDGE_REACH := 30.0
+## Неровность (вторая разность высот на шаге 2 м) и боковой уклон участка меряются относительно всей линии: участок со средним
+## признаком даёт 0,5, вдвое богаче среднего — 1. Нижние пороги нормы (м, м/м) — на гладкой земле слабый шум не считается рельефом.
+const ROUGH_MIN := 0.03
+const SIDE_MIN := 0.05
+const SHARP_R := 25.0
+
+## Рельеф вдоль линии по природной земле: высоты, боковой уклон (по ±3 м поперёк), крутые повороты (R < SHARP_R, станциями
+## через 2 м) и станции уступов. Шаг 2 м; пусто — линия короче 12 м.
+static func _terrain_scan(d: TrailDefinition, natural: Callable) -> Dictionary:
+	var n := int(d.route_length() / 2.0) + 1
+	if n < 6: return {}
+	var h := PackedFloat32Array()
+	var side := PackedFloat32Array()
+	var sharp := PackedFloat32Array()
+	h.resize(n)
+	side.resize(n)
+	sharp.resize(n)
+	for i in n:
+		var s := i * 2.0
+		var p := d.point_at(s)
+		var t := d.tangent_at(s)
+		var o := Vector2(-t.y, t.x) * 3.0
+		h[i] = float(natural.call(p))
+		side[i] = absf(float(natural.call(p + o)) - float(natural.call(p - o))) / 6.0
+		sharp[i] = 1.0 if absf(d.curvature_at(s)) >= 1.0 / SHARP_R else 0.0
+	var span := int(LEDGE_SPAN / 2.0)
+	var need := maxf(LEDGE_DROP, (h[0] - h[n - 1]) / float(n - 1) * LEDGE_SPAN * 0.5 * 2.5)
+	var ledges := []
+	var i := 0
+	while i < n - span:
+		if h[i] - h[i + span] >= need:
+			var best := i
+			var best_drop := h[i] - h[i + span]
+			for j in range(i + 1, mini(n - span, i + 6)):
+				if h[j] - h[j + span] > best_drop:
+					best_drop = h[j] - h[j + span]
+					best = j
+			ledges.append((best + span * 0.5) * 2.0)
+			i = best + int(LEDGE_EVERY / 2.0)
+		else:
+			i += 1
+	var rough_sum := 0.0
+	for k in range(1, n - 1): rough_sum += absf(h[k - 1] - 2.0 * h[k] + h[k + 1])
+	var side_sum := 0.0
+	for k in n: side_sum += side[k]
+	return {h = h, side = side, sharp = sharp, ledges = ledges,
+		rough_norm = maxf(ROUGH_MIN, 2.0 * rough_sum / float(n - 2)), side_norm = maxf(SIDE_MIN, 2.0 * side_sum / float(n))}
+
+## Признаки участка [from, to]: rough, side, turn — 0..1, ledges — число уступов. Пусто, если рельефа нет.
+static func _section_features(terrain: Dictionary, from: float, to: float) -> Dictionary:
+	if terrain.is_empty(): return {}
+	var h: PackedFloat32Array = terrain.h
+	var a := clampi(int(from / 2.0) + 1, 1, h.size() - 2)
+	var b := clampi(int(to / 2.0), a, h.size() - 2)
+	var rough := 0.0
+	var side := 0.0
+	var sharp := 0.0
+	for i in range(a, b + 1):
+		rough += absf(h[i - 1] - 2.0 * h[i] + h[i + 1])
+		side += float(terrain.side[i])
+		sharp += float(terrain.sharp[i])
+	var count := float(b - a + 1)
+	var ledges := 0
+	for l: float in terrain.ledges:
+		if l >= from and l <= to: ledges += 1
+	return {rough = clampf(rough / count / float(terrain.rough_norm), 0.0, 1.0), side = clampf(side / count / float(terrain.side_norm), 0.0, 1.0), turn = sharp / count, ledges = ledges}
+
+## Множитель веса настроения по рельефу участка: неровная, боковая или извилистая земля — техника, уступы — прыжки и перепады,
+## гладкий склон — поток; прыжки не любят боковой уклон и шпильки.
+static func _terrain_mood(key: String, feat: Dictionary) -> float:
+	var rough: float = feat.rough
+	var side: float = feat.side
+	var turn: float = feat.turn
+	var rich := rough + side
+	match key:
+		"tech": return 1.0 + 1.5 * rough + 1.0 * side + 1.5 * turn
+		"forest": return 1.0 + 0.5 * rough + 0.5 * turn
+		"jump": return (1.0 + 0.7 * minf(int(feat.ledges), 3)) * (1.0 - 0.6 * side) * (1.0 - 0.7 * minf(turn * 3.0, 1.0))
+		"flow": return 1.0 + 0.5 * (1.0 - minf(rich, 1.0)) * (1.0 - minf(turn * 3.0, 1.0))
+		"rest": return 1.0 + 0.5 * maxf(rich - 1.0, 0.0) # природный участок сам держит внимание: после него выдох
+	return 1.0
+
+## Веса видов в участке по рельефу: каменный сад и неровность там, где рельеф неровный; узкий проход — на боковом уклоне;
+## столы и дропы — не на боковом уклоне.
+static func _terrain_weights(weights: Dictionary, feat: Dictionary) -> Dictionary:
+	if feat.is_empty(): return weights
+	var out := {}
+	for kind: int in weights:
+		var w := float(weights[kind])
+		match kind:
+			T.ROCK_GARDEN, T.ROUGH: w *= 1.0 + 2.0 * float(feat.rough)
+			T.NARROW, T.LOG: w *= 1.0 + 1.0 * float(feat.side)
+			T.TABLETOP, T.DROP, T.GAP: w *= 1.0 - 0.7 * float(feat.side)
+		out[kind] = w
+	return out
+
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
 ## makes a calm one likelier; the terrain grade favours moods that suit it.
 ## `t` — place in a whole route (-1: none): an easy start, tech and jumps in the middle, a calm finish (`finish`: the last
 ## section of the route takes a calm mood when the profile has one).
-static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade: float, rng: RandomNumberGenerator, t := -1.0, finish := false) -> String:
+static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade: float, rng: RandomNumberGenerator, t := -1.0, finish := false, feat := {}) -> String:
 	var keys: Array = weights.keys()
 	var sum := 0.0
 	var scaled := []
@@ -273,6 +401,7 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 			elif t > 0.9 and m.get("calm", false): w *= 2.5
 		# Descent is negative grade: slope > 0 likes it, slope < 0 likes climbs. ±8 % doubles or halves.
 		w *= pow(2.0, clampf(-grade / 0.08, -1.0, 1.0) * float(m.slope))
+		if not feat.is_empty(): w *= _terrain_mood(key, feat)
 		scaled.append(w)
 		sum += w
 	var roll := rng.randf() * sum
@@ -304,8 +433,10 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 			elif std.get("rhythm", false):
 				var phrase: Array = std.phrase
 				weights = {phrase[0]: 1.0} if not phrase.is_empty() else _follow(weights, last, difficulty)
+			weights = _terrain_weights(weights, std.get("feat", {}))
 			kind = _weighted(weights, rng)
 			if kind == last: kind = _weighted(weights, rng)
+			if int(std.get("force", -1)) >= 0: kind = std.force
 			if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
 	var size := TrailElementLibrary.sized(kind, difficulty * rng.randf_range(0.7, 1.0))
 	var count := 1
@@ -323,6 +454,10 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		length = sized.length
 		count = int(sized.get("count", count))
 		gap = float(sized.get("gap", -1.0))
+		if int(std.get("force", -1)) >= 0:
+			# на уступе — только дроп; не получился на этой скорости (стал роллером) — уступ остаётся природным
+			if kind != std.force: return null
+			cursor = maxf(cursor, float(std.ledge) - length * 0.5)
 	# стандарты: границы участков условные — прыжок может зайти за конец участка на OVERRUN м (столы и гэпы длинные)
 	if not adaptive and (cursor + length > end + (OVERRUN if not std.is_empty() else 0.0) or cursor + length > d.route_length() - RUN_OUT):
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: не помещается в участок")

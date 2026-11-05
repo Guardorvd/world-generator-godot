@@ -21,6 +21,8 @@ static func profile_for(style: String, difficulty: float, modification: float) -
 	p.adaptive = true
 	# Подготовленные трассы (парк, flow) — ритмичный заезд: связки и интервал во времени (TrailComposer.FOLLOW, _beat).
 	p.rhythm = style == "park" or style == "flow"
+	# Горные характеры читают природный рельеф (уступы, неровность, боковой уклон, шпильки): TrailComposer._terrain_scan
+	p.terrain = style in ["downhill", "enduro", "tech"]
 	# Construction amount biases proposals continuously; only explicit zero disables earthworks.
 	p.density *= lerpf(0.65, 1.0, modification)
 	return p
