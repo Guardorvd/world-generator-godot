@@ -14,8 +14,9 @@ const MOODS := {
 	flow = {title = "Поток", elements = {T.ROLLER: 3, T.WAVES: 2, T.ROLLOVER: 2, T.DIP: 1, T.PUMP: 1}, std_elements = {T.ROLLER: 2, T.TABLETOP: 2, T.PUMP: 2, T.WAVES: 1, T.DROP: 1}, turns = [T.BERM], gap = 1.0, slope = 1.0, ease = 1.0},
 	# std_elements — веса с расчётными стандартами (гэп ставится только по стандарту: без него размер не согласован со скоростью)
 	jump = {title = "Прыжки", elements = {T.TABLETOP: 3, T.ROLLER: 2, T.DROP: 1}, std_elements = {T.TABLETOP: 4, T.ROLLER: 1, T.DROP: 2, T.GAP: 2}, turns = [T.BERM], gap = 1.3, slope = 0.6, ease = 1.0},
-	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
-	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
+	# std_elements техники и леса — ещё мост-настил (норшор): библиотека его знает, а составитель по стандартам не ставил
+	tech = {title = "Техника", elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1}, std_elements = {T.ROCK_GARDEN: 3, T.ROOTS: 2, T.SLALOM: 2, T.NARROW: 1, T.LOG: 1, T.ROUGH: 1, T.NORTHSHORE: 1}, turns = [T.BERM, T.OFF_CAMBER], gap = 0.8, slope = 0.0, ease = 1.0},
+	forest = {title = "Лес", elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1}, std_elements = {T.ROOTS: 3, T.RUTS: 2, T.ROUGH: 2, T.LOG: 1, T.NARROW: 1, T.ROLLER: 1, T.DIP: 1, T.NORTHSHORE: 1}, turns = [], gap = 0.9, slope = 0.0, ease = 0.9},
 	rest = {title = "Отдых", elements = {T.RIPPLES: 1, T.DIP: 1, T.ROLLOVER: 1}, turns = [], gap = 2.2, slope = -1.0, ease = 0.5, calm = true},
 	# First elements on a line found over real terrain: only small earthworks, wide spacing.
 	calm = {title = "Спокойный поток", elements = {T.ROLLER: 2, T.DIP: 1}, turns = [T.BERM], gap = 1.6, slope = 0.0, ease = 1.0, calm = true},
@@ -155,16 +156,23 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 	var adaptive: bool = std.get("adaptive", false)
 	var turn := _turn_at(d, cursor, 14.0)
 	var kind: int
+	var s_side := 0.0
 	# поворот — туже R 83 м; под стандартами — туже R 33 м: пологая дуга сгенерированной линии годится под прыжок
 	if absf(turn) > (0.012 if std.is_empty() else TURN_STD):
 		var turns: Array = m.turns
 		if turns.is_empty(): return null
 		kind = turns[rng.randi() % turns.size()]
 	else:
-		var weights: Dictionary = m.elements if std.is_empty() else m.get("std_elements", m.elements)
-		kind = _weighted(weights, rng)
-		if kind == last: kind = _weighted(weights, rng)
-		if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
+		# S-поворот: два изгиба подряд в разные стороны (средняя кривизна на 14 м около нуля, поэтому «прямая» он не годится
+		# ни под прыжок, ни под роллер); только под стандартами и там, где настроение допускает виражи
+		if not std.is_empty() and T.BERM in m.turns: s_side = _s_bend(d, cursor, S_BEND_SPAN)
+		if s_side != 0.0:
+			kind = T.S_BERM
+		else:
+			var weights: Dictionary = m.elements if std.is_empty() else m.get("std_elements", m.elements)
+			kind = _weighted(weights, rng)
+			if kind == last: kind = _weighted(weights, rng)
+			if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
 	var size := TrailElementLibrary.sized(kind, difficulty * rng.randf_range(0.7, 1.0))
 	var count := 1
 	var length := size.x
@@ -184,7 +192,7 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 	if not adaptive and (cursor + length > end + (OVERRUN if not std.is_empty() else 0.0) or cursor + length > d.route_length() - RUN_OUT):
 		if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP]: _refuse(std, "прыжок: не помещается в участок")
 		return null
-	var bends := kind == T.BERM or kind == T.OFF_CAMBER
+	var bends := kind == T.BERM or kind == T.OFF_CAMBER or kind == T.S_BERM
 	# Straight features stay straight over their whole length; long ones shrink to a roller first.
 	# стандарты: стол, гэп и дроп — и на пологой дуге (R ≥ 1/JUMP_BEND: боковая перегрузка на их скорости в пределах)
 	var straight := JUMP_BEND if not std.is_empty() and kind in [T.TABLETOP, T.GAP, T.DROP] else 0.025
@@ -208,10 +216,10 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		count = 1
 		gap = -1.0
 		if _sharpest(d, cursor, length) > 0.025: return null
-	var e := TrailElementLibrary.make(kind, cursor + length * 0.5, length, size.y, signf(turn) if bends else 1.0, count, rng.randf_range(0.28, 0.45))
+	var e := TrailElementLibrary.make(kind, cursor + length * 0.5, length, size.y, s_side if kind == T.S_BERM else (signf(turn) if bends else 1.0), count, rng.randf_range(0.28, 0.45))
 	if adaptive and cursor + length > d.route_length():
 		var available := d.route_length() - cursor - 0.05 # запас: перенос линии в мировые float32 чуть меняет её длину
-		if available < RoadRefinement.STEP * 4 or kind == T.GAP: return null
+		if available < RoadRefinement.STEP * 4 or kind == T.GAP or kind == T.NORTHSHORE: return null
 		e.height *= pow(available / e.length, 2)
 		e.length = available; e.station = cursor + available * 0.5
 		if kind in [T.PUMP, T.WAVES]: e.count = maxi(1, mini(e.count, floori(available / (RoadRefinement.STEP * (8 if kind == T.WAVES else 4)))))
@@ -224,6 +232,10 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		e.gap = clampf(e.gap, 1.0, d.width * 0.5 - 0.3)
 	if kind == T.SLALOM: e.count = rng.randi_range(3, 5)
 	if kind == T.NARROW: e.gap = clampf(e.gap, 1.0, d.width - 0.6)
+	if kind == T.NORTHSHORE:
+		# настил — мост, не уступ: он выходит на землю в конце (skew > 0.5), а не обрывается; ширина настила — e.gap
+		e.skew = 0.75
+		e.gap = clampf(e.gap, 1.2, d.width - 0.6)
 	return e
 
 ## Размеры элемента kind у cursor по TrailStandards: скорость седока в этом месте, уровень по сложности участка.
@@ -266,6 +278,7 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	if TrailElement.places_objects(kind) or kind in [T.ROUGH, T.RUTS]:
 		var limit: float = TrailStandards.TECH_SPEED[level]
 		if kind == T.LOG: limit = minf(limit, TrailStandards.LOG_SPEED)
+		if kind == T.NORTHSHORE: limit = minf(limit, TrailStandards.DECK_SPEED)
 		if kind == T.NARROW:
 			limit = minf(limit, TrailStandards.NARROW_SPEED)
 			# v4: к узкому проходу — прямой подход (после виража курс сбит — удар в стенку)
@@ -392,6 +405,24 @@ static func _sharpest(d: TrailDefinition, from: float, span: float) -> float:
 		peak = maxf(peak, absf(d.curvature_at(at)))
 		at += 2.0
 	return peak
+
+## S-поворот на `span` м от `from`: кривизна заметна в обе стороны (R ≤ S_BEND_R) и знак меняется один раз. Знак первого
+## изгиба (как у виража: в какую сторону первый поворот) или 0 — S-поворота здесь нет.
+const S_BEND_SPAN := 20.0
+const S_BEND_R := 60.0
+static func _s_bend(d: TrailDefinition, from: float, span: float) -> float:
+	if from + span > d.route_length(): return 0.0
+	var first := 0.0
+	var second := false
+	var at := 0.0
+	while at <= span:
+		var k := d.curvature_at(from + at)
+		if absf(k) >= 1.0 / S_BEND_R:
+			if first == 0.0: first = signf(k)
+			elif signf(k) != first: second = true
+			elif second: return 0.0 # снова в первую сторону: не S, а змейка
+		at += 2.0
+	return first if second else 0.0
 
 ## Mean signed curvature over a window starting at `from`; the sign says which side is the outside.
 static func _turn_at(d: TrailDefinition, from: float, window: float) -> float:

@@ -245,6 +245,8 @@ static func window(e: TrailElement, d: TrailDefinition = null, grade := 0.0, lev
 			r = {speed_hi = snappedf(pump_speed(e), 0.1)}
 		T.ROCK_GARDEN, T.ROOTS, T.ROUGH, T.RUTS, T.SLALOM, T.NARROW, T.LOG:
 			r = {speed_hi = snappedf(tech_speed(e, d, level), 0.1)}
+		T.NORTHSHORE:
+			if e.gap < DECK_NARROW: r = {speed_hi = snappedf(tech_speed(e, d, level), 0.1)}
 		T.BERM, T.S_BERM, T.OFF_CAMBER:
 			if d != null:
 				var radius := tightest(d, from, from + e.length)
@@ -346,11 +348,16 @@ static func tech_speed(e: TrailElement, d: TrailDefinition = null, level := 1) -
 	if e.profile == T.LOG: limit = minf(limit, LOG_SPEED)
 	# узкий проход: стенки по краям, промах курса — удар в стенку и через руль (заезды 01.11: 6,6–10 м/с после виража)
 	if e.profile == T.NARROW: limit = minf(limit, NARROW_SPEED)
+	if e.profile == T.NORTHSHORE: limit = minf(limit, DECK_SPEED)
 	var radius := tightest(d, e.station - e.length * 0.5, e.station + e.length * 0.5)
 	if is_finite(radius): limit = minf(limit, sqrt(LAT_MAX * float(LEVELS[level].lat) * BikeRide.ROOT_GRIP * radius))
 	return limit
 const LOG_SPEED := 9.0
 const NARROW_SPEED := 7.5
+## Настил (норшор) уже DECK_NARROW м — узкая доска: сорваться с неё легко, скорость на ней не выше DECK_SPEED, м/с.
+## Широкий мост (лабораторные овраги и долины) скорость не ограничивает.
+const DECK_SPEED := 9.0
+const DECK_NARROW := 2.2
 ## Гэп: приземление длиннее минимального на столько, м (v4: быстрее расчёта — всё равно на спуск, а не на ровное).
 const GAP_RUNOUT := 8.0
 ## Стол: длина не меньше этой доли высоты — тогда кромка не круче LIP_MAX (v4: стол 9 × 1,8 м со стенкой 40° на

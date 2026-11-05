@@ -306,7 +306,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		soft = func(p: Vector2) -> bool:
 			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
 			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
@@ -329,9 +329,15 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	_time(plan, "layout", phase)
 	for key: String in ["walk_ms", "compose_ms"]:
 		plan.stats.phases_ms["layout_" + key] = float(plan.stats.phases_ms.get("layout_" + key, 0.0)) + float(result.stats.get(key, 0.0))
+	# Почему составитель и правила места отказали элементам: сводка по всей сети (диагностика, мира не касается).
+	for key: String in ["refused", "sequence_refused"]:
+		var why_counts: Dictionary = plan.stats.get("element_refusals", {})
+		for why: String in result.stats.get(key, {}): why_counts[why] = int(why_counts.get(why, 0)) + int(result.stats[key][why])
+		plan.stats.element_refusals = why_counts
 	if result.routes.is_empty():
 		_refuse(plan, result.stats.get("reason", "линия не построена"))
 		return null
+	for e: TrailElement in result.routes[0].elements: _count(plan, "proposed", TrailElementLibrary.title(e.profile))
 	var replan := func() -> Dictionary: return line.call(hint, is_leg)
 	var admitted := _admit(ctx, site, result.routes[0], title, line, replan if is_leg else Callable(), walls, blocked, local_input, WORK[style], MIN_LEG if is_leg else MIN_LINE, is_leg)
 	if admitted.is_empty(): return null
@@ -531,13 +537,15 @@ static func _admit(ctx: Dictionary, site: TrailSite, first: TrailDefinition, tit
 				var drop := {}
 				for issue: Dictionary in checked.issues:
 					if issue.assessment != "safety": continue
-					if int(issue.element) >= 0: drop[int(issue.element)] = true
+					if int(issue.element) >= 0: drop[int(issue.element)] = issue.reason
 					elif not is_finite(bad): bad = issue.worst_station
 				if checked.issues.is_empty() and reason.contains(" у "): bad = reason.get_slice(" у ", 1).to_float()
 				if not drop.is_empty():
 					var kept: Array[TrailElement] = []
 					for k in d.elements.size():
-						if drop.has(k): removed.append(d.elements[k])
+						if drop.has(k):
+							removed.append(d.elements[k])
+							_count(plan, "dropped", "%s: %s" % [TrailElementLibrary.title(d.elements[k].profile), drop[k]])
 						else: kept.append(d.elements[k])
 					d.elements = kept
 					plan.stats.elements_dropped = int(plan.stats.get("elements_dropped", 0)) + drop.size()
@@ -572,6 +580,12 @@ static func _piece(d: TrailDefinition, bad: float, min_line: float, prefix_only:
 
 static func _time(plan: Dictionary, key: String, since: int) -> void:
 	plan.stats.phases_ms[key] = float(plan.stats.phases_ms.get(key, 0.0)) + (Time.get_ticks_usec() - since) / 1000.0
+
+## Счётчик в plan.stats (диагностика): сколько элементов какого вида предложено составителем и снято проверкой.
+static func _count(plan: Dictionary, group: String, key: String) -> void:
+	var counts: Dictionary = plan.stats.get(group, {})
+	counts[key] = int(counts.get(key, 0)) + 1
+	plan.stats[group] = counts
 
 static func _refuse(plan: Dictionary, reason: String) -> void:
 	plan.stats.rejected[reason] = int(plan.stats.rejected.get(reason, 0)) + 1

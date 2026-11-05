@@ -3,7 +3,7 @@ extends RefCounted
 ## Prepared-world trail network. The shared search/layout and TrailSite preparation are also used by Trail Lab.
 ## Discovery runs once; accepted metre patches are handed to WorldLoader and its normal surface cache.
 const NETWORK_SCRIPT := "res://scripts/trails/trail_world_network.gd"
-const VERSION := 17
+const VERSION := 18
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 

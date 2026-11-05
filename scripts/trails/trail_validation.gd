@@ -111,6 +111,7 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 			var v := speeds[clampi(floori(from), 0, n - 1)]
 			var w: Dictionary = windows[ei]
 			var rollable := _rollable_table(d, e)
+			var rolls_off := _rolls_off(d, e)
 			if from < recovery: _issue(report, scenario, ei, from, "предыдущий элемент не оставляет места на восстановление", "safety", {actual = from, limit = recovery, deviation = recovery - from})
 			if w.has("speed_lo") and v < float(w.speed_lo) - 0.5:
 				_issue(report, scenario, ei, from, "скорость ниже окна", "jump_intent" if rollable else "safety", {actual = v, limit = float(w.speed_lo) - 0.5, deviation = float(w.speed_lo) - 0.5 - v})
@@ -121,12 +122,12 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 				if flight.get("unresolved", false): _issue(report, scenario, ei, from, "приземление не подтверждено в пределах расчёта")
 				if flight.flew:
 					if float(flight.land) < float(w.land_from) - 0.5:
-						_issue(report, scenario, ei, from, "приземление раньше задуманной зоны", "jump_intent" if rollable else "safety", {actual = float(flight.land), limit = float(w.land_from) - 0.5, deviation = float(w.land_from) - 0.5 - float(flight.land)})
+						_issue(report, scenario, ei, from, "приземление раньше задуманной зоны", "jump_intent" if rolls_off else "safety", {actual = float(flight.land), limit = float(w.land_from) - 0.5, deviation = float(w.land_from) - 0.5 - float(flight.land)})
 					if float(flight.land) > land_to + 0.5:
 						_issue(report, scenario, ei, from, "приземление за зоной на готовом полотне", "safety", {actual = float(flight.land), limit = land_to + 0.5, deviation = float(flight.land) - land_to - 0.5})
 					if float(flight.impact) > float(S.LEVELS[_level(d, e.station)].impact): _issue(report, scenario, ei, from, "жёсткое приземление на готовом полотне", "safety", {actual = float(flight.impact), limit = float(S.LEVELS[_level(d, e.station)].impact), deviation = float(flight.impact) - float(S.LEVELS[_level(d, e.station)].impact)})
 					land_to = maxf(land_to, float(flight.land))
-				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rollable else "safety")
+				else: _issue(report, scenario, ei, from, "прыжок без подтверждённого отрыва и приземления", "jump_intent" if rolls_off else "safety")
 				var approach := S.tightest(d, maxf(0.0, from - S.HUB - v * float(BikeRide.LOOK[-1])), float(w.get("lip", from)))
 				var landing := S.tightest(d, float(w.get("land_from", from)), minf(d.route_length(), land_to + S.recovery_distance(v, true)))
 				var required_radius := v * v / (S.LAT_MAX * float(S.LEVELS[_level(d, e.station)].lat))
@@ -150,6 +151,13 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 		jump_intent = not report.issues.any(func(issue: Dictionary) -> bool: return issue.assessment == "jump_intent" or issue.element >= 0),
 		fast_pass = not report.issues.any(func(issue: Dictionary) -> bool: return issue.scenario == "fast" and issue.assessment == "safety") and report.scenarios.fast.seconds <= d.route_length() / FAST_AVERAGE}
 	return report
+
+## A feature whose flight need not be confirmed: a solid table the rider may roll, or a drop. A drop is a short step down
+## (the standard height keeps its impact under the level limit): when the bike stays on the surface it simply rolls off,
+## so only a missing or early flight is tolerated; a speed below the window (the rear wheel catches the lip) is not.
+## A gap is never rolled: it stays a jump.
+static func _rolls_off(d: TrailDefinition, e: TrailElement) -> bool:
+	return e.profile == T.DROP or _rollable_table(d, e)
 
 static func _rollable_table(d: TrailDefinition, e: TrailElement) -> bool:
 	if e.profile != T.TABLETOP: return false
