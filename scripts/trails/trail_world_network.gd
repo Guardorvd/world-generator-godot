@@ -9,6 +9,13 @@ const Potential := preload("res://scripts/trails/trail_potential.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const DESIGN_DEPTH := 4.0     # уровень полотна не дальше этого от земли, м: с виражами, откосами и элементами это в пределах EARTHWORKS
+## Работы по виду: глубина (насколько полотно может уйти от земли) и самый крутой проектный уклон на 6 м. Круче этого место не
+## строят, а обходят: ходок не идёт туда, где проект не может положить полотно мягче.
+const WORK := {
+	park = {depth = 4.0, grade = 0.22}, flow = {depth = 4.0, grade = 0.22}, downhill = {depth = 4.0, grade = 0.32},
+	enduro = {depth = 4.0, grade = 0.34}, tech = {depth = 4.0, grade = 0.38}}
+const REPLANS := 1            # столько раз линию прокладывают заново в обход крутых мест, прежде чем резать
+const WALL_R := 9.0           # крутое место закрыто ходоку в таком радиусе, м
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
 ## Коридоры сети: извилистые линии через весь мир, в обе стороны от начальной клетки, с разворотами.
 const CORRIDOR := {box = 3072.0, two_way = true, pad = 0, steps = 160, edge = 80.0}
@@ -68,7 +75,7 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
-	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0}
+	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0, walls = []}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
@@ -303,6 +310,15 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		soft = func(p: Vector2) -> bool:
 			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
 			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}
+	# Места, где проект не уложил бы полотно мягко (ctx.walls, мировые метры): ходок их обходит, как запретные клетки.
+	var walls: Array[Vector2] = []
+	var near := Rect2(site.origin_m(), Vector2(site.size) * GameConfig.TILE).grow(WALL_R)
+	for c: Vector2 in ctx.walls:
+		if near.has_point(c): walls.append(c - site.origin_m())
+	settings.wall = func(p: Vector2) -> bool:
+		for c: Vector2 in walls:
+			if p.distance_squared_to(c) < WALL_R * WALL_R: return true
+		return false
 	var line := func(route_hint: PackedVector2Array, walk: bool) -> Dictionary:
 		var options_line := settings.duplicate()
 		options_line.route_hint = route_hint
@@ -316,7 +332,8 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	if result.routes.is_empty():
 		_refuse(plan, result.stats.get("reason", "линия не построена"))
 		return null
-	var admitted := _admit(plan, site, result.routes[0], title, line, blocked, local_input, ctx.early_audit, MIN_LEG if is_leg else MIN_LINE, is_leg)
+	var replan := func() -> Dictionary: return line.call(hint, is_leg)
+	var admitted := _admit(ctx, site, result.routes[0], title, line, replan if is_leg else Callable(), walls, blocked, local_input, WORK[style], MIN_LEG if is_leg else MIN_LINE, is_leg)
 	if admitted.is_empty(): return null
 	ctx.start_speed = admitted.exit_speed
 	var d: TrailDefinition = admitted.d
@@ -407,7 +424,13 @@ static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Arra
 ## Сборка и проверка одной линии. Один плохой участок не выбрасывает всю длинную линию: элемент, не прошедший проверку,
 ## снимается, а по месту, где не годится само полотно, линия обрезается до большего годного куска. Не больше ADMIT_PASSES
 ## сборок на кандидата. {d, prepared} или пусто (причина — в статистике). Лабораторный ремонт основания здесь не вызывается.
-static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, title: String, line: Callable, blocked: Callable, local_input: GI, early_audit: bool, min_line := 0.0, prefix_only := false) -> Dictionary:
+static func _admit(ctx: Dictionary, site: TrailSite, first: TrailDefinition, title: String, line: Callable, replan: Callable, walls: Array[Vector2], blocked: Callable, local_input: GI, work: Dictionary, min_line := 0.0, prefix_only := false) -> Dictionary:
+	var plan: Dictionary = ctx.plan
+	var early_audit: bool = ctx.early_audit
+	var replans := 0
+	var pins := Callable() # закрепления участка: для всех линий участка одни, считаются один раз
+	var reach_box := TrailDefinition.new()
+	reach_box.points = PackedVector2Array([Vector2.ZERO, Vector2(site.size) * GameConfig.TILE])
 	var d := first
 	var allowed := func(p: Vector2) -> bool: return not blocked.call(p)
 	var reason := ""
@@ -422,7 +445,7 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 			return {}
 		# Полотно строится по проекту, в пределах земляных работ: половина работ оставляла стенки, а без предела сборка отказывала.
 		d.earthwork = 1.0
-		d.shaping.depth_cap = DESIGN_DEPTH
+		d.shaping.depth_cap = float(work.depth)
 		d.id = "world_trail_%d" % plan.entries.size()
 		d.title = title
 		# The saved world-space float32 line is canonical. Bake its roundtrip, so replay cannot
@@ -433,20 +456,54 @@ static func _admit(plan: Dictionary, site: TrailSite, first: TrailDefinition, ti
 		var same_line := local_points == d.points
 		d.points = local_points
 		var phase := Time.get_ticks_usec()
-		if not removed.is_empty() and same_line:
-			prepared = site.rebake(prepared, d, removed, limits)
-		else:
-			builds += 1
-			limits = {keep_bake = true, earthwork_source = site.surface(), earthwork_input = local_input} if early_audit else {keep_bake = true}
-			var routes: Array[TrailDefinition] = [d]
-			prepared = site.prepare(routes, true, limits)
-		removed = []
-		_time(plan, "prepare", phase)
-		plan.stats.work_m += d.route_length() * (0.3 if not prepared.errors.is_empty() else float(limits.get("again_share", 1.0))) # отказ при запекании прерывает работу рано
-		for key: String in prepared.timings:
-			plan.stats.phases_ms["prepare_" + key] = float(plan.stats.phases_ms.get("prepare_" + key, 0.0)) + maxf(0, prepared.timings[key])
 		var bad := INF # станция, где не годится само полотно
-		if not prepared.errors.is_empty():
+		var steep := {} # проект полотна круче допустимого: {at, over}
+		var full := removed.is_empty() or not same_line
+		# Проект полотна, до сборки: линия, которую профиль не может положить мягче допустимого, не собирается. Сначала на
+		# поверхности участка (дёшево), затем на готовом полотне самого пути (оно чуть другое) — до земляных работ.
+		if full:
+			pins = pins if pins.is_valid() else TrailBuilder.pins(site.surface(), [reach_box] as Array[TrailDefinition])
+			steep = TrailBuilder.design(site.surface(), d, float(work.grade), pins)
+			_time(plan, "design", phase)
+			if steep.grade <= 1.0: steep = {}
+		if steep.is_empty():
+			phase = Time.get_ticks_usec()
+			if not full:
+				prepared = site.rebake(prepared, d, removed, limits)
+			else:
+				builds += 1
+				limits = {keep_bake = true, earthwork_source = site.surface(), earthwork_input = local_input} if early_audit else {keep_bake = true}
+				limits.guard = func(prepared_heights: Heightfield) -> PackedStringArray:
+					var design := TrailBuilder.design(prepared_heights, d, float(work.grade))
+					if design.grade <= 1.0: return PackedStringArray()
+					limits.steep = design
+					return PackedStringArray(["проектный уклон выше допустимого"])
+				var routes: Array[TrailDefinition] = [d]
+				prepared = site.prepare(routes, true, limits)
+				if limits.has("steep"):
+					steep = limits.steep
+					builds -= 1 # отказ до запекания почти ничего не стоит; число таких отказов ограничено REPLANS и обрезкой
+			removed = []
+			_time(plan, "prepare", phase)
+			plan.stats.work_m += d.route_length() * (0.1 if not steep.is_empty() else 0.3 if not prepared.errors.is_empty() else float(limits.get("again_share", 1.0))) # отказ при запекании прерывает работу рано
+			for key: String in prepared.timings:
+				plan.stats.phases_ms["prepare_" + key] = float(plan.stats.phases_ms.get("prepare_" + key, 0.0)) + maxf(0, prepared.timings[key])
+		if not steep.is_empty():
+			plan.stats.steep = int(plan.stats.get("steep", 0)) + 1
+			reason = "проектный уклон выше допустимого"
+			if replan.is_valid() and replans < REPLANS:
+				replans += 1
+				for c: Vector2 in steep.over:
+					walls.append(c)
+					ctx.walls.append(c + site.origin_m())
+				plan.stats.replans = int(plan.stats.get("replans", 0)) + 1
+				var again: Dictionary = replan.call()
+				if not again.routes.is_empty():
+					d = again.routes[0]
+					removed = []
+					continue
+			bad = steep.at
+		elif not prepared.errors.is_empty():
 			reason = prepared.errors[0]
 			if limits.has("failed_at"): bad = d.nearest(limits.failed_at).x
 		else:

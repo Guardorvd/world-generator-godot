@@ -110,6 +110,7 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 	var window := maxi(1, roundi(level_window / step))
 	var levels := _smooth(ground, window, d.closed)
 	var grade := grade_limit
+	var used_at := 0.0
 	if d.closed:
 		_limit_grade(levels, step, true, grade)
 	else:
@@ -130,7 +131,10 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 				var need := absf(heights[c] - heights[a]) / (c - a) * (1.0001 if c == a + 1 else 1.02)
 				for m in range(a, c): rise[m] = maxf(rise[m], need)
 			grade = grade_limit
-			for m in count: grade = maxf(grade, rise[m] / step)
+			for m in count:
+				if rise[m] / step > grade:
+					grade = rise[m] / step
+					used_at = step * m
 			# every level within reach of every anchor, so the grade passes below never move the anchors
 			var upper := PackedFloat32Array()
 			var lower := PackedFloat32Array()
@@ -203,7 +207,7 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 		reaches[j] = minf(half + maxf(RoadRefinement.REACH, run * (1.0 + FADE * 1.2) + SIDE_MARGIN), half + REACH_LIMIT)
 		reach = maxf(reach, reaches[j])
 	return {levels = levels, banks = banks, cross = follow, sides = sides, points = points, tangents = tangents, total = total,
-		reach = reach, reaches = reaches, grade_used = grade, deepest = deepest,
+		reach = reach, reaches = reaches, grade_used = grade, used_at = used_at, deepest = deepest,
 		grade_natural = peak_grade(ground, step), grade_designed = peak_grade(levels, step), bank_peak = peak_bank}
 
 ## Distance past the tread edge at which the side slope from `edge` meets the real ground, walking over that ground, m.

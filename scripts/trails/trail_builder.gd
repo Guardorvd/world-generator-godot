@@ -217,7 +217,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	for id: String in profiles:
 		var record: Dictionary = stats.get(id, {})
 		var p: Dictionary = profiles[id]
-		record.merge({grade_natural = p.grade_natural, grade_designed = p.grade_designed, grade_used = p.grade_used,
+		record.merge({grade_natural = p.grade_natural, grade_designed = p.grade_designed, grade_used = p.grade_used, used_at = p.used_at,
 			bank_peak = p.bank_peak, reach = p.reach, deepest = p.deepest}, true)
 		r.trail_shaping[id] = record
 	r.build_timings.trail_patches_added = added.size()
@@ -339,6 +339,46 @@ static func _bake_plan(h: Heightfield, definitions: Array[TrailDefinition]) -> D
 					if not zone.has(key): zone[key] = {}
 					if reach > float(zone[key].get(d, 0.0)): zone[key][d] = reach
 	return {pin_at = pin_at, profiles = profiles, shapes = shapes, zone = zone, profile_ms = profile_ms, zone_ms = (Time.get_ticks_usec() - started) / 1000.0 - profile_ms}
+
+## The designed grade of route d on the ground of `h` before any bake: the same profile the bake uses (anchors, depth cap), so
+## the answer is what the finished tread will get, at the cost of one profile instead of a bake. A slope counts over two
+## bases: DESIGN_SPAN m against `limit`, and the short DESIGN_STEP m (a step in the tread, say where the route climbs out of
+## another path's cut) against `limit` times STEP_GAIN. `grade` is the worst of them as a multiple of its limit, `at` its
+## station; `over` are points (not closer than DESIGN_SPAN m to each other) of the stretches past a limit.
+const DESIGN_SPAN := 6.0
+const DESIGN_STEP := 2.0
+const STEP_GAIN := 1.6
+const ANCHOR_GAIN := 2.0
+static func design(h: Heightfield, d: TrailDefinition, limit: float, pin_at := Callable()) -> Dictionary:
+	var p: Dictionary = d.shape().profile(h, d, pin_at if pin_at.is_valid() else pins(h, [d] as Array[TrailDefinition]))
+	var levels: PackedFloat32Array = p.levels
+	var count := levels.size() - 1
+	var step: float = p.total / count
+	var long := maxi(1, roundi(DESIGN_SPAN / step))
+	var short := maxi(1, roundi(DESIGN_STEP / step))
+	var worst := 0.0
+	var worst_at := 0.0
+	var over := PackedVector2Array()
+	var last := -INF
+	for j in range(0, count):
+		var k := mini(count, j + long)
+		var m := mini(count, j + short)
+		var ratio := maxf(absf(levels[k] - levels[j]) / maxf(1, k - j) / step / limit, absf(levels[m] - levels[j]) / maxf(1, m - j) / step / (limit * STEP_GAIN))
+		var station := (j + (k - j) * 0.5) * step
+		if ratio > worst:
+			worst = ratio
+			worst_at = station
+		if ratio > 1.0 and station - last >= DESIGN_SPAN:
+			over.append(p.points[(j + k) / 2])
+			last = station
+	# The steepest rise the anchors force on one step (places the earthworks may not change: water, other paths, the route ends):
+	# the tread is smoothed to a gentle design level there, but its vertices at the anchors stay on the ground.
+	var forced: float = float(p.grade_used) / (limit * ANCHOR_GAIN)
+	if forced > 1.0 and forced > worst:
+		worst = forced
+		worst_at = p.used_at
+		over.append(d.point_at(p.used_at))
+	return {grade = worst, at = worst_at, over = over, used = p.grade_used, used_at = p.used_at, deepest = p.deepest}
 
 ## The route d after bake_elements with limits.keep_bake, with removed elements already taken out of it: nothing else
 ## about the route changed, so only the cells under these elements are computed again; the result is the same as a new bake.

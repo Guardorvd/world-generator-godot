@@ -55,6 +55,7 @@ const SOFT_COST := 6.0       # шаг по дороге или броду
 const CROSSING_CLEAR := 12.0 # столько метров у переезда и брода без элементов
 const STEEP := 0.3          # круче этого склон на шаге ходок игры обходит траверсом
 const STEEP_COST := 150.0
+const WALL_COST := 60.0     # шаг в место, закрытое проверкой проекта (TrailWorldNetwork): дороже любого уклона, но не запрет
 const HINT_WEIGHT := 2.0    # ходок игры сильнее держится коридора: вдали от него он заходит в тупики между ручьями
 
 static var seed := 1
@@ -214,6 +215,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		shape.hint_weight = HINT_WEIGHT
 		shape.steep_cost = true
 	shape.soft = options.get("soft", Callable())
+	shape.wall = options.get("wall", Callable())
 	var finish_plan := {}
 	if shape.route_hint.size() > 1:
 		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)))
@@ -796,6 +798,9 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			# Дорогу или брод пересекает коротко, а не идёт вдоль
 			var soft: Callable = shape.get("soft", Callable())
 			if soft.is_valid() and soft.call(next): cost += SOFT_COST
+			# место, где проект не уложил бы полотно мягко: дорого, а не запрещено (нет обхода — линию отрежет проверка проекта)
+			var wall: Callable = shape.get("wall", Callable())
+			if wall.is_valid() and wall.call(next): cost += WALL_COST
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
 			if steep_cost: cost += maxf(0.0, -g - STEEP) * STEEP_COST
@@ -812,6 +817,9 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 				var ahead := p + dir * (STEP + look * j / 4.0)
 				if not inside.call(ahead) or _near_own(grid, pts.size(), ahead):
 					cost += 30.0 / j - (1.0 if signf(o) == signf(bend) else 0.0)
+					break
+				if wall.is_valid() and wall.call(ahead):
+					cost += WALL_COST / j
 					break
 			if cost < best:
 				best = cost

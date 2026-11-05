@@ -333,6 +333,12 @@ func prepare(routes: Array[TrailDefinition], with_elements := true, limits := {}
 	h.road_refinement = _form(h, only)
 	timings.surface_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if with_elements and not routes.is_empty():
+		# limits.guard: проверка на готовом полотне до земляных работ (ground под путём уже его собственный); отказ — без запекания
+		var guard: Callable = limits.get("guard", Callable())
+		if guard.is_valid():
+			errors = guard.call(h)
+			if not errors.is_empty():
+				return {heights = null, errors = errors, timings = timings}
 		errors = TrailBuilder.bake_elements(h, routes, limits)
 		if not errors.is_empty():
 			return {heights = null, errors = errors, timings = timings}
