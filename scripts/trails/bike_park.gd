@@ -88,6 +88,10 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 	var river := w.river
 	var acc := w.acc
 	var hv := _h.hv
+	var slope := PackedFloat32Array() # крутизна и высота клеток сетки поиска: для оценки, годится ли место под парк
+	var height := PackedFloat32Array()
+	slope.resize(gw * gh)
+	height.resize(gw * gh)
 	for gz in gh:
 		for gx in gw:
 			if gx == 0 or gz == 0 or gx == gw - 1 or gz == gh - 1:
@@ -96,6 +100,7 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 			var cx := rect.position.x + gx * STRIDE
 			var cz := rect.position.y + gz * STRIDE
 			var busy := false
+			var steepness := 0.0
 			for oz in STRIDE:
 				for ox in STRIDE:
 					var i := (cz + oz) * w.W + cx + ox
@@ -103,6 +108,9 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 					var sx := (hv[mini(i + 1, w.N - 1)] - hv[maxi(i - 1, 0)]) / (2.0 * GameConfig.TILE)
 					var sz := (hv[mini(i + w.W, w.N - 1)] - hv[maxi(i - w.W, 0)]) / (2.0 * GameConfig.TILE)
 					if sx * sx + sz * sz > STEEP_LAND * STEEP_LAND: busy = true
+					steepness += sqrt(sx * sx + sz * sz)
+			slope[gz * gw + gx] = steepness / (STRIDE * STRIDE)
+			height[gz * gw + gx] = hv[cz * w.W + cx]
 			if busy: d[gz * gw + gx] = 0.0
 	var discs: Array[Vector3] = []
 	for v: SettlementData in w.settlements:
@@ -130,12 +138,65 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 			var i := gz * gw + gx
 			d[i] = minf(d[i], minf(minf(d[i + 1] + 1.0, d[i + gw] + 1.0), minf(d[i + gw + 1] + diag, d[i + gw - 1] + diag)))
 			if d[i] > d[best]: best = i
+	best = _best_site(d, slope, height, gw, gh, best)
 	center = (Vector2(rect.position) + Vector2(best % gw, best / gw) * STRIDE + Vector2.ONE * STRIDE * 0.5) * GameConfig.TILE
 	radius = minf(R_MAX, d[best] * STRIDE * GameConfig.TILE - MARGIN)
 	_field = d
 	_rect = rect
 	_gw = gw
 	_gh = gh
+
+
+## Место парка: не просто самая большая пустая область, а та, где есть чем кататься. Парку нужна просторная площадка
+## (расстояние до занятого), склон около 4–20 % вокруг (на ровном нечего строить, на крутом линии уходят в глубокие
+## насыпи) и перепад высот, из которого получаются развороты, прыжки и вид. Оценка по окну вокруг клетки; места с радиусом
+## меньше R_MIN не берутся, нет ни одного — прежний выбор (самая просторная область).
+func _best_site(d: PackedFloat32Array, slope: PackedFloat32Array, height: PackedFloat32Array, gw: int, gh: int, fallback: int) -> int:
+	const WINDOW := 14 # половина окна, клеток сетки поиска (около 110 м)
+	var stride := gw + 1
+	var sum_slope := PackedFloat64Array()
+	var sum_h := PackedFloat64Array()
+	var sum_h2 := PackedFloat64Array()
+	sum_slope.resize(stride * (gh + 1))
+	sum_h.resize(stride * (gh + 1))
+	sum_h2.resize(stride * (gh + 1))
+	for gz in gh:
+		var row_s := 0.0
+		var row_h := 0.0
+		var row_h2 := 0.0
+		for gx in gw:
+			var k := gz * gw + gx
+			row_s += slope[k]
+			row_h += height[k]
+			row_h2 += height[k] * height[k]
+			var up := gz * stride + gx + 1
+			var at := (gz + 1) * stride + gx + 1
+			sum_slope[at] = sum_slope[up] + row_s
+			sum_h[at] = sum_h[up] + row_h
+			sum_h2[at] = sum_h2[up] + row_h2
+	var best := fallback
+	var best_score := -INF
+	var min_d := (R_MIN + MARGIN) / (STRIDE * GameConfig.TILE)
+	for gz in range(1, gh - 1):
+		for gx in range(1, gw - 1):
+			var room := d[gz * gw + gx]
+			if room < min_d: continue
+			var x0 := maxi(0, gx - WINDOW)
+			var z0 := maxi(0, gz - WINDOW)
+			var x1 := mini(gw, gx + WINDOW + 1)
+			var z1 := mini(gh, gz + WINDOW + 1)
+			var count := float((x1 - x0) * (z1 - z0))
+			var s := (sum_slope[z1 * stride + x1] - sum_slope[z0 * stride + x1] - sum_slope[z1 * stride + x0] + sum_slope[z0 * stride + x0]) / count
+			var m := (sum_h[z1 * stride + x1] - sum_h[z0 * stride + x1] - sum_h[z1 * stride + x0] + sum_h[z0 * stride + x0]) / count
+			var m2 := (sum_h2[z1 * stride + x1] - sum_h2[z0 * stride + x1] - sum_h2[z1 * stride + x0] + sum_h2[z0 * stride + x0]) / count
+			var relief := sqrt(maxf(0.0, m2 - m * m))
+			var fit := clampf(1.0 - absf(s - 0.11) / 0.09, 0.0, 1.0)
+			var size := minf(room * STRIDE * GameConfig.TILE - MARGIN, R_MAX) / R_MAX
+			var score := size + 0.8 * fit + 0.3 * clampf(relief / 12.0, 0.0, 1.0)
+			if score > best_score:
+				best_score = score
+				best = gz * gw + gx
+	return best
 
 
 func _ground(p: Vector2) -> float:
