@@ -61,7 +61,7 @@ static func assess(input, line: PackedVector2Array) -> Dictionary:
 		enduro = _fit(down, 0.01, 0.05, 0.12) * (0.5 + 0.5 * clampf(side / 0.3, 0.0, 1.0)) * clampf(length / 900.0, 0.4, 1.0) * uphill,
 		tech = (0.1 + 0.5 * clampf((rough - 1.5) / 3.0, 0.0, 1.0) + 0.3 * clampf(steep_share * 3.0, 0.0, 1.0) + 0.4 * clampf(side / 0.5, 0.0, 1.0)) * maxf(0.3, _fit(down, -0.02, 0.07, 0.24)),
 	}
-	score.tech *= 0.8 # техничная по умолчанию годится везде, но отдельным видом её берём там, где она заметно лучше\n	for name: String in STYLES: score[name] = minf(1.0, score[name])
+	score.tech *= 0.8 # техничная по умолчанию годится везде, но отдельным видом её берём там, где она заметно лучше
 	var best := "tech"
 	for name: String in STYLES:
 		if score[name] > score[best]: best = name
