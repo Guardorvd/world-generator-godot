@@ -32,16 +32,16 @@ static func project(points: PackedVector2Array, p: Vector2) -> Vector2:
 		along += ab.length()
 	return Vector2(station, best)
 
-## `strict` (последний участок маршрута): финиш — ещё и выкат RUNOUT м без обрыва и стены, без крутого бокового уклона и без
+## `strict` (0 — как раньше; 1 — выкат и боковой уклон, любой участок маршрута: он может оказаться последним; 2 — ещё и поворот на подходе, последний участок): финиш — ещё и выкат RUNOUT м без обрыва и стены, без крутого бокового уклона и без
 ## поворота на подходе (`trail` — конец линии): иначе трасса кончается разворотом или на краю. Промежуточный участок длинного
 ## маршрута продолжается дальше и проверяется как раньше.
-static func endpoint(p: Vector2, tangent: Vector2, ground: Callable, allowed: Callable, width: float, trail := PackedVector2Array(), strict := false) -> Dictionary:
+static func endpoint(p: Vector2, tangent: Vector2, ground: Callable, allowed: Callable, width: float, trail := PackedVector2Array(), strict := 0) -> Dictionary:
 	var grade := absf(float(ground.call(p + tangent * 6)) - float(ground.call(p - tangent * 6))) / 12.0
 	var side := tangent.orthogonal()
 	var cross := absf(float(ground.call(p + side * width * 0.5)) - float(ground.call(p - side * width * 0.5))) / width
 	var clear := true
 	# Clear stopping apron, including a 12 m runout beyond the chosen finish.
-	for s: float in ([-6.0, 0.0, 6.0, 12.0, 18.0, RUNOUT] if strict else [-6.0, 0.0, 6.0, 12.0]):
+	for s: float in ([-6.0, 0.0, 6.0, 12.0, 18.0, RUNOUT] if strict > 0 else [-6.0, 0.0, 6.0, 12.0]):
 		for offset: float in [-width * 0.5 - 2, 0.0, width * 0.5 + 2]:
 			if allowed.is_valid() and not allowed.call(p + tangent * s + side * offset): clear = false
 	var descent := float(ground.call(p)) - float(ground.call(p + tangent * RUNOUT))
@@ -55,7 +55,7 @@ static func endpoint(p: Vector2, tangent: Vector2, ground: Callable, allowed: Ca
 			back = trail[i - 1]
 			if along >= RUNOUT: break
 		if back.distance_to(p) > 1.0: turn = absf(tangent.angle_to((p - back).normalized()))
-	var ok := clear and (not strict or (runout_ok and turn <= FINISH_TURN and cross <= FINISH_CROSS))
+	var ok := clear and (strict == 0 or (runout_ok and cross <= FINISH_CROSS and (strict < 2 or turn <= FINISH_TURN)))
 	return {suitable = ok, clear = clear, grade = grade, cross = cross, runout_ok = runout_ok, runout_descent = descent, turn = turn,
 		estimated_work = cross * width * 0.5 + grade * 6.0}
 
@@ -84,7 +84,7 @@ static func trim_start(points: PackedVector2Array, ground: Callable, allowed: Ca
 			return points.slice(i)
 	return PackedVector2Array()
 
-static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, width: float, short_route := false, strict := false) -> Dictionary:
+static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, width: float, short_route := false, strict := 0) -> Dictionary:
 	if hint.size() < 2: return {hint = hint, error = "коридор не задан"}
 	var d := TrailDefinition.new()
 	d.points = hint
@@ -110,7 +110,7 @@ static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, 
 		end = -1
 		for s in range(1, ceili(total) + 1, 16):
 			var p := d.point_at(s)
-			var test := endpoint(p, d.tangent_at(s), ground, allowed, width, PackedVector2Array(), true)
+			var test := endpoint(p, d.tangent_at(s), ground, allowed, width, PackedVector2Array(), 2)
 			if not test.suitable: continue
 			var drop := float(ground.call(hint[0])) - float(ground.call(p))
 			var score := drop - float(test.grade) * 20 - absf(s - preferred) * 0.15
@@ -128,7 +128,7 @@ static func plan(hint: PackedVector2Array, ground: Callable, allowed: Callable, 
 		original_finish = hint[-1], planned_length = length(points), selected_before_walk = true,
 		finish_area = endpoint(points[-1], (points[-1] - points[-2]).normalized(), ground, allowed, width, PackedVector2Array(), strict)}
 
-static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish: Vector2, stop: String, ground: Callable, allowed: Callable, width: float, kind := "full", strict := false) -> Dictionary:
+static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish: Vector2, stop: String, ground: Callable, allowed: Callable, width: float, kind := "full", strict := 0) -> Dictionary:
 	var result := {complete = false, fragment = true, kind = kind, stop_reason = stop, length = length(points),
 		finish_distance = INF, corridor_progress = 0.0, corridor_coverage = 0.0, backward_m = 0.0, reasons = []}
 	if points.size() < 2: result.reasons.append("пустой фрагмент"); return result
@@ -166,9 +166,9 @@ static func measure(points: PackedVector2Array, hint: PackedVector2Array, finish
 	result.finish_area = endpoint(points[-1], (points[-1] - points[-2]).normalized(), ground, allowed, width, points, strict)
 	if not result.finish_area.suitable:
 		var why := "финиш без безопасного места остановки и выката"
-		if strict and result.finish_area.clear:
+		if strict > 0 and result.finish_area.clear:
 			if not result.finish_area.runout_ok: why += " (выкат: обрыв или стена)"
-			elif float(result.finish_area.turn) > FINISH_TURN: why += " (трасса кончается поворотом)"
+			elif strict > 1 and float(result.finish_area.turn) > FINISH_TURN: why += " (трасса кончается поворотом)"
 			else: why += " (боковой уклон)"
 		result.reasons.append(why)
 	if result.length < 300 or kind == "short":

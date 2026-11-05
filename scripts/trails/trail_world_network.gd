@@ -66,18 +66,20 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	var corridors := search.find(w.seed_num)
 	# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
 	# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	# лес и поляны мира (StageVegetation.cover_at) участвуют в оценке потенциала: лесные траверсы, открытые мягкие склоны
+	var cover := func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE), floori(p.y / GameConfig.TILE))
 	var mean_work := 0.0
 	for c: Dictionary in corridors: mean_work += float(c.probe.build_cost)
 	mean_work = maxf(0.001, mean_work / maxi(1, corridors.size()))
 	for c: Dictionary in corridors:
 		c.probe.points = _downhill(input, c.probe.points)
-		c.potential = Potential.assess(input, c.probe.points)
+		c.potential = Potential.assess(input, c.probe.points, cover)
 		c.rank = Potential.rank(c.potential, float(c.probe.length), float(c.probe.build_cost) / mean_work)
 	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
-	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0, walls = []}
+	var ctx := {w = w, h = h, input = input, cover = cover, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0, walls = []}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
@@ -118,6 +120,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	var start := guide.point_at(cursor)
 	var tangent := Vector2.ZERO
 	var fails := 0
+	var skips := 0 # сколько мест подряд пропущено: каждый следующий пропуск дальше
 	var leg_index := 0
 	var route_length := 0.0
 	var previous := "" # вид прошлого участка: соседние участки сохраняют характер
@@ -135,7 +138,9 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		# Коридор кончается там, где что-то мешает (вода, край области, круча): последний участок цели не берёт самый конец,
 		# а кончается раньше, где есть выкат.
 		var reach := total - END_MARGIN if total - cursor > MIN_LEG + END_MARGIN else total
-		var last := minf(reach, cursor + LEG)
+		# Трудное место: после первой неудачи участок короче, чтобы закончить маршрут до него хорошим выкатом, а не терять всё
+		var leg_len := LEG if fails < 2 else (LEG * 0.45 if fails == 2 else MIN_LEG * 1.6)
+		var last := minf(reach, cursor + leg_len)
 		while s < last:
 			hint.append(guide.point_at(s))
 			s += 16.0
@@ -146,17 +151,18 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
 		# Вид участка — по тому, что даёт его местность; вида, которого в сети уже много, берётся реже.
 		ctx.arc = Vector2(cursor / total, 1.0 if last >= reach else last / total) # доля маршрута, которую займёт участок: замысел один на весь маршрут
-		var assessed := Potential.assess(ctx.input, hint)
+		var assessed := Potential.assess(ctx.input, hint, ctx.cover)
 		var style := Potential.choose(assessed, ctx.styles, previous)
 		if style.is_empty(): style = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
 		var entry_speed: float = ctx.start_speed
 		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, true)
 		if global == null:
 			fails += 1
-			if fails < 2: continue
+			if fails < 4: continue
 			# Место не проходится: пропустить его; если до него уже есть маршрут, дальше идёт новый.
 			fails = 0
-			cursor += LEG_SKIP
+			skips += 1
+			cursor += LEG_SKIP * minf(skips, 3.0)
 			if cursor >= total: break
 			cursor = _pick_start(ctx.input, guide, cursor)
 			start = guide.point_at(cursor)
@@ -173,6 +179,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 				difficulty = DIFFICULTY[route_index % DIFFICULTY.size()]
 			continue
 		fails = 0
+		skips = 0
 		leg_index += 1
 		previous = style
 		ctx.width = global.width # весь маршрут одной ширины: переход между участками без ступеньки
