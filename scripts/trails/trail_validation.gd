@@ -5,6 +5,7 @@ const S := preload("res://scripts/trails/trail_standards.gd")
 const T := TrailElement.Profile
 const SCENARIOS := {calm = 0.8, normal = 1.0, fast = 1.15}
 const MAX_REPAIRS := 2
+const RUN_UP := 100.0 # m before a jump where every rider is taken to boost (Shift) speed: pedalling to S.CRUISE
 const FAST_AVERAGE := 12.0 # m/s, explicit performance target; never an acceptance requirement
 
 static func footprint(d: TrailDefinition, allowed: Callable) -> PackedStringArray:
@@ -43,6 +44,12 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 		var at := minf(float(i), d.route_length()) / d.route_length() * (survey.support.size() - 1)
 		var j := mini(int(at), survey.support.size() - 2)
 		y[i] = lerpf(survey.support[j], survey.support[j + 1], at - j)
+	var boost := PackedByteArray()
+	boost.resize(n)
+	for e: TrailElement in d.elements:
+		if e.profile not in [T.GAP, T.TABLETOP, T.DROP]: continue
+		# от начала разбега до конца элемента: за ним седок успевает сбросить скорость обычным торможением
+		for i in range(maxi(0, floori(e.station - e.length * 0.5 - RUN_UP)), mini(n, floori(e.station + e.length * 0.5) + 1)): boost[i] = 1
 	for scenario: String in SCENARIOS:
 		var factor: float = SCENARIOS[scenario]
 		var caps := PackedFloat32Array()
@@ -51,6 +58,8 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 		for i in n:
 			var level: Dictionary = S.LEVELS[_level(d, i)]
 			caps[i] = float(level.top) * factor
+			# Разбег перед прыжком: седок давит Shift и едет быстрее комфортной скорости уровня и обычной крейсерской
+			if boost[i] != 0: caps[i] = maxf(caps[i], S.CRUISE * maxf(factor, 1.0))
 			var k := d.curvature_at(i)
 			if absf(k) < 0.004: continue
 			var p := d.point_at(i)
@@ -69,6 +78,10 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 			var grade := (y[mini(n - 1, ceili(to))] - y[maxi(0, floori(from))]) / e.length
 			var w := S.window(e, d, grade, _level(d, e.station))
 			windows[ei] = w
+			if e.profile in [T.GAP, T.TABLETOP, T.DROP]:
+				# поворот на подходе или в приземлении: седок заранее тормозит до скорости, которую держит этот радиус
+				var turn_cap := S.jump_turn_cap(d, from, float(w.get("land_to", to)), _level(d, e.station))
+				if is_finite(turn_cap): caps[clampi(floori(from), 0, n - 1)] = minf(caps[clampi(floori(from), 0, n - 1)], turn_cap)
 			if w.has("speed_hi"):
 				var last := int(from) if e.profile in [T.TABLETOP, T.GAP] else ceili(to)
 				for i in range(maxi(0, floori(from)), mini(n - 1, last) + 1): caps[i] = minf(caps[i], float(w.speed_hi))
@@ -88,7 +101,8 @@ static func measure(h: Heightfield, d: TrailDefinition, allowed := Callable(), c
 		while i < n:
 			var v := speeds[i - 1]
 			var a := _slope_acceleration(y[i] - y[i - 1]) - S.ROLL - S.DRAG * v * v
-			if v < S.CRUISE * factor: a += S.PEDAL * (1.0 - v / (S.CRUISE * factor))
+			if boost[i] != 0: a += S.boost_drive(v / maxf(factor, 1.0))
+			elif v < S.CRUISE * factor: a += S.PEDAL * (1.0 - v / (S.CRUISE * factor))
 			var possible := sqrt(maxf(0.0, v * v + 2.0 * a))
 			if possible < 0.5: _issue(report, scenario, -1, i, "остановка на подъёме готового полотна", "effort" if climb_ok else "safety", {actual = possible, limit = 0.5, deviation = 0.5 - possible})
 			var minimum := sqrt(maxf(0.0, v * v + 2.0 * (a - S.BRAKE)))

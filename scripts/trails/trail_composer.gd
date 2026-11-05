@@ -60,7 +60,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var band0: Vector2 = profile.difficulty
 		var mid := clampi(int((band0.x + band0.y) * 0.5 * 4.0), 0, 3)
 		var heights := TrailStandards.line_heights(d, ground)
-		std = {heights = heights, level = mid, adaptive = profile.get("adaptive", false), caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), ground = ground, last_end = 0.0, placed = 0, refused = {}}
+		std = {heights = heights, level = mid, adaptive = profile.get("adaptive", false), caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), speeds_boost = TrailStandards.profile_from(d, heights, mid, {}, false, true), ground = ground, last_end = 0.0, placed = 0, refused = {}}
 		# Ритм (подготовленные трассы): связки по таблице FOLLOW и интервал между элементами во времени, а не в метрах;
 		# carry — доля скорости профиля после прошлых элементов (памп разгоняет, вираж и роллер чуть тормозят), streak —
 		# сколько элементов подряд без передышки.
@@ -334,13 +334,22 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		for k: String in ([key[kind]] + (chain.get(kind, []) as Array)):
 			# ритм: два дропа подряд не ставятся (стол на малой скорости становится дропом, но не серией дропов)
 			if k == "drop" and std.get("rhythm", false) and int(std.get("last_kind", -1)) == T.DROP: continue
-			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade, not std.get("adaptive", false))
-			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
-			# в игре проверка полотна гоняет седока в трёх сценариях (спокойный 0,8, обычный, быстрый 1,15 скорости): прыжок,
-			# которому быстрый перелетает зону, а спокойный (кроме стола, который перекатывают) не долетает, она снимет
-			var calm_v := v * CALM_SPEED if std.get("adaptive", false) and k != "table" else v
-			var fast_v := v * FAST_SPEED if std.get("adaptive", false) else v
-			if not s.is_empty() and s.has("speed_lo") and (calm_v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5 or fast_v > float(s.get("speed_hi", INF)) + 0.5):
+			# Перед прыжком седок разгоняется с Shift (проверка полотна даёт всем сценариям разбег RUN_UP): скорость входа —
+			# по профилю с разгоном, а не по комфортной скорости уровня
+			var vk := v
+			var turn_cap := INF
+			if std.get("adaptive", false) and k in ["table", "gap", "drop"]:
+				var boosted: PackedFloat32Array = std.speeds_boost
+				vk = maxf(v, boosted[clampi(int(cursor), 0, boosted.size() - 1)] * float(std.get("carry", 1.0)))
+				# поворот на подходе или в приземлении: проверка полотна тормозит седока до скорости, которую держит этот радиус
+				# (TrailValidation.jump_turn_cap), прыжок считается на неё
+				turn_cap = TrailStandards.jump_turn_cap(d, cursor, cursor + JUMP_SPAN, level)
+				vk = minf(vk, turn_cap)
+			var s := TrailStandards.spec(k, snappedf(vk, 0.5), level, grade, not std.get("adaptive", false))
+			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне; в игре и если
+			# быстрый сценарий проверки (FAST_SPEED) перелетит зону приземления
+			var fast_v := minf(vk * FAST_SPEED, turn_cap) if std.get("adaptive", false) else vk
+			if not s.is_empty() and s.has("speed_lo") and (vk < float(s.speed_lo) - 0.5 or vk > float(s.get("speed_hi", INF)) + 0.5 or fast_v > float(s.get("speed_hi", INF)) + 0.5):
 				var why := "прыжок: скорость вне окна"
 				std.refused[why] = int(std.refused.get(why, 0)) + 1
 				continue
@@ -381,8 +390,9 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 	return {profile = kind, length = size.x, height = size.y, count = count}
 
 const OVERRUN := 25.0
-## Сценарии скорости проверки полотна (TrailValidation.SCENARIOS): спокойный и быстрый седок.
-const CALM_SPEED := 0.8
+## Примерная длина прыжка с приземлением для оценки поворота на нём (размер известен только после стандарта), м.
+const JUMP_SPAN := 24.0
+## Быстрый сценарий проверки полотна (TrailValidation.SCENARIOS.fast).
 const FAST_SPEED := 1.15
 static func _refuse(std: Dictionary, why: String) -> void:
 	std.refused[why] = int(std.refused.get(why, 0)) + 1
