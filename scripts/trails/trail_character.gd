@@ -19,6 +19,8 @@ static func profile_for(style: String, difficulty: float, modification: float) -
 	p.difficulty = Vector2(maxf(0.0, difficulty - 0.12), minf(0.99, difficulty + 0.12))
 	p.standards = true
 	p.adaptive = true
+	# Подготовленные трассы (парк, flow) — ритмичный заезд: связки и интервал во времени (TrailComposer.FOLLOW, _beat).
+	p.rhythm = style == "park" or style == "flow"
 	# Construction amount biases proposals continuously; only explicit zero disables earthworks.
 	p.density *= lerpf(0.65, 1.0, modification)
 	return p

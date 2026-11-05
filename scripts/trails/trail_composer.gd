@@ -61,6 +61,13 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var mid := clampi(int((band0.x + band0.y) * 0.5 * 4.0), 0, 3)
 		var heights := TrailStandards.line_heights(d, ground)
 		std = {heights = heights, level = mid, adaptive = profile.get("adaptive", false), caps = {}, speeds = TrailStandards.profile_from(d, heights, mid, {}, false), ground = ground, last_end = 0.0, placed = 0, refused = {}}
+		# Ритм (подготовленные трассы): связки по таблице FOLLOW и интервал между элементами во времени, а не в метрах;
+		# carry — доля скорости профиля после прошлых элементов (памп разгоняет, вираж и роллер чуть тормозят), streak —
+		# сколько элементов подряд без передышки.
+		std.rhythm = profile.get("rhythm", false)
+		std.carry = 1.0
+		std.streak = 0
+		std.beats = []
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -95,15 +102,28 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var last := -1
 		while cursor < end:
 			var e := _element(d, m, cursor, end, difficulty, last, rng, std)
-			if e == null:
-				cursor += 4.0
-				continue
-			if TrailElement.places_objects(e.profile) and cursor < placed_object + 5.0:
-				cursor = placed_object + 5.0
-				continue
-			if fits.is_valid() and not fits.call(e):
-				cursor += 4.0
-				continue
+			if std.get("rhythm", false):
+				# Ритм: не подошёл элемент — на том же месте пробуется малый универсальный (FALLBACK), а не сдвиг на 4 м,
+				# иначе удар приходится на случайное место и такт сбивается
+				var fit := _admit(e, cursor, placed_object, fits)
+				if not fit:
+					std.fallback = true
+					e = _element(d, m, cursor, end, difficulty, last, rng, std)
+					std.fallback = false
+					fit = _admit(e, cursor, placed_object, fits)
+				if not fit:
+					cursor += 4.0
+					continue
+			else:
+				if e == null:
+					cursor += 4.0
+					continue
+				if TrailElement.places_objects(e.profile) and cursor < placed_object + 5.0:
+					cursor = placed_object + 5.0
+					continue
+				if fits.is_valid() and not fits.call(e):
+					cursor += 4.0
+					continue
 			elements.append(e)
 			last = e.profile
 			var finish := e.station + e.length * 0.5
@@ -111,7 +131,8 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 				std.last_end = finish
 				std.placed += 1
 			if TrailElement.places_objects(e.profile): placed_object = finish
-			cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
+			if std.get("rhythm", false): cursor = finish + _beat(e, finish, m, difficulty, density, std, rng)
+			else: cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
 		cursor = maxf(cursor, end)
 	if not std.is_empty(): _berm_turns(d, elements, std)
 	var result := {elements = elements, sections = sections}
@@ -120,6 +141,62 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		result.refused = std.refused
 		result.berms = std.get("berms", 0)
 	return result
+
+## — Ритм подготовленной трассы —
+## Как следующий элемент подходит к прошлому: множитель веса (последний вид → следующий). Столы идут линией, за приземлением —
+## накат, памп и волны разгоняют перед столом, дроп и гэп закрываются роллером или пампом; повтор того же вида реже.
+const FOLLOW := {
+	T.TABLETOP: {T.TABLETOP: 1.6, T.PUMP: 1.5, T.ROLLER: 1.3, T.WAVES: 1.2, T.DROP: 0.5, T.GAP: 0.6},
+	T.GAP: {T.ROLLER: 1.6, T.PUMP: 1.6, T.WAVES: 1.3, T.TABLETOP: 0.4, T.DROP: 0.4, T.GAP: 0.1},
+	T.DROP: {T.ROLLER: 1.5, T.PUMP: 1.5, T.WAVES: 1.2, T.TABLETOP: 1.0, T.DROP: 0.3, T.GAP: 0.5},
+	T.PUMP: {T.TABLETOP: 1.8, T.DROP: 1.3, T.GAP: 1.3, T.ROLLER: 1.0, T.PUMP: 0.5, T.WAVES: 0.5},
+	T.WAVES: {T.TABLETOP: 1.8, T.DROP: 1.3, T.GAP: 1.3, T.ROLLER: 1.0, T.PUMP: 0.6, T.WAVES: 0.4},
+	T.ROLLER: {T.TABLETOP: 1.5, T.PUMP: 1.5, T.WAVES: 1.2, T.DROP: 1.2, T.ROLLER: 0.7},
+	T.BERM: {T.TABLETOP: 1.4, T.ROLLER: 1.3, T.PUMP: 1.3, T.GAP: 1.2},
+	T.S_BERM: {T.TABLETOP: 1.4, T.ROLLER: 1.3, T.PUMP: 1.3},
+}
+## Что элемент делает со скоростью седока на выходе (доля скорости профиля): памп разгоняет, роллер, вираж и рябь тормозят.
+const CARRY := {T.PUMP: 1.06, T.WAVES: 1.03, T.ROLLER: 0.98, T.ROLLOVER: 0.98, T.DIP: 0.99, T.BERM: 0.97, T.S_BERM: 0.96, T.RIPPLES: 0.97, T.OFF_CAMBER: 0.96}
+## Между элементами — столько секунд свободной трассы (на скорости выхода): после прыжка больше, у сложной трассы короче.
+const BEAT_JUMP := Vector2(1.3, 0.85)
+const BEAT_FLOW := Vector2(1.0, 0.6)
+## Столько элементов подряд без передышки; потом свободная трасса не короче BREATH секунд (и минимум в метрах).
+const STREAK := Vector2i(5, 3)
+const BREATH := 2.0
+
+## Малые элементы, которые встают почти на любой линии: запасной выбор, когда выбранный не подошёл.
+const FALLBACK := {T.ROLLER: 3, T.PUMP: 2, T.WAVES: 1}
+
+## Элемент e годится в cursor: он есть, не вплотную к прошлому элементу с объектами, и его принимает проверка места.
+static func _admit(e: TrailElement, cursor: float, placed_object: float, fits: Callable) -> bool:
+	if e == null: return false
+	if TrailElement.places_objects(e.profile) and cursor < placed_object + 5.0: return false
+	return not fits.is_valid() or fits.call(e)
+
+## Веса видов после `last`: FOLLOW в степени 0,5 + сложность (на лёгкой трассе связки мягче, на сложной — выраженнее).
+static func _follow(weights: Dictionary, last: int, difficulty: float) -> Dictionary:
+	if not FOLLOW.has(last): return weights
+	var out := {}
+	for kind: int in weights: out[kind] = float(weights[kind]) * pow(float(FOLLOW[last].get(kind, 1.0)), 0.5 + difficulty)
+	return out
+
+## Свободная трасса после элемента e (метры) по скорости на выходе; обновляет carry и streak.
+static func _beat(e: TrailElement, finish: float, m: Dictionary, difficulty: float, density: float, std: Dictionary, rng: RandomNumberGenerator) -> float:
+	var speeds: PackedFloat32Array = std.speeds
+	var carry := clampf(float(std.carry) * float(CARRY.get(e.profile, 1.0)), 0.8, 1.15)
+	var v := float(speeds[clampi(int(finish), 0, speeds.size() - 1)]) * carry
+	var jump := e.profile in [T.TABLETOP, T.GAP, T.DROP]
+	var beat := BEAT_JUMP if jump else BEAT_FLOW
+	var seconds := lerpf(beat.x, beat.y, clampf(difficulty, 0.0, 1.0)) * float(m.gap) * rng.randf_range(0.85, 1.15) / clampf(density / 0.7, 0.7, 1.3)
+	std.streak = int(std.streak) + 1
+	if m.get("calm", false): std.streak = 0
+	if int(std.streak) >= int(lerpf(STREAK.x, STREAK.y, clampf(difficulty, 0.0, 1.0))):
+		seconds = maxf(seconds, BREATH)
+		std.streak = 0
+	var clear := clampf(v * seconds, 6.0, 40.0)
+	std.carry = lerpf(carry, 1.0, clampf(clear / 60.0, 0.0, 1.0))
+	std.beats.append(snappedf(seconds, 0.01))
+	return clear
 
 ## Weighted mood choice: never the same mood twice in a row when there is another; a hard section
 ## makes a calm one likelier; the terrain grade favours moods that suit it.
@@ -170,6 +247,8 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 			kind = T.S_BERM
 		else:
 			var weights: Dictionary = m.elements if std.is_empty() else m.get("std_elements", m.elements)
+			if std.get("fallback", false): weights = FALLBACK
+			elif std.get("rhythm", false): weights = _follow(weights, last, difficulty)
 			kind = _weighted(weights, rng)
 			if kind == last: kind = _weighted(weights, rng)
 			if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
@@ -181,6 +260,7 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		count = rng.randi_range(3, 5)
 		length *= count
 	if not std.is_empty():
+		std.last_kind = last
 		var sized := _standard(d, kind, cursor, end, difficulty, std, count, size)
 		if sized.is_empty(): return null
 		kind = sized.profile
@@ -246,7 +326,7 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, difficulty: float, std: Dictionary, count: int, size: Vector2) -> Dictionary:
 	var level := clampi(int(difficulty * 4.0), 0, 3)
 	var speeds: PackedFloat32Array = std.speeds
-	var v := speeds[clampi(int(cursor), 0, speeds.size() - 1)]
+	var v := speeds[clampi(int(cursor), 0, speeds.size() - 1)] * float(std.get("carry", 1.0))
 	var grade := TrailStandards.element_grade(d, std.ground, cursor)
 	var key := {T.TABLETOP: "table", T.GAP: "gap", T.DROP: "drop", T.ROLLER: "roller", T.PUMP: "pump"}
 	if key.has(kind):
@@ -254,6 +334,8 @@ static func _standard(d: TrailDefinition, kind: int, cursor: float, end: float, 
 		# раньше роллера — на змейке байк-парка после разворотов столы иначе становились роллерами)
 		var chain := {T.GAP: ["table", "drop", "roller"], T.TABLETOP: ["drop", "roller"], T.DROP: ["roller"]}
 		for k: String in ([key[kind]] + (chain.get(kind, []) as Array)):
+			# ритм: два дропа подряд не ставятся (стол на малой скорости становится дропом, но не серией дропов)
+			if k == "drop" and std.get("rhythm", false) and int(std.get("last_kind", -1)) == T.DROP: continue
 			var s := TrailStandards.spec(k, snappedf(v, 0.5), level, grade, not std.get("adaptive", false))
 			# на краях модели подбор длины и окно скорости расходятся: прыжок — только если седок в его окне
 			if not s.is_empty() and s.has("speed_lo") and (v < float(s.speed_lo) - 0.5 or v > float(s.get("speed_hi", INF)) + 0.5):
