@@ -75,6 +75,8 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 	var terrain := {}
 	if profile.get("terrain", false) and not std.is_empty():
 		terrain = _terrain_scan(d, profile.get("natural", ground), profile.get("cover", Callable()))
+	var persona: Dictionary = profile.get("persona", {}) # характер маршрута: веса настроений, чуткость к рельефу, наклон фраз
+	var mood_weights: Dictionary = _persona_moods(profile.moods, persona)
 	var ledge_at := 0 # следующий по линии уступ из terrain.ledges
 	var cruised := 0.0 # сколько метров уже отдано накату
 	var elements: Array[TrailElement] = []
@@ -95,9 +97,11 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		var whole := share != Vector2(0.0, 1.0)
 		var last_section := whole and share.y >= 0.999 and end >= total - RUN_OUT - 0.01
 		var feat := _section_features(terrain, cursor, end)
-		if not feat.is_empty(): feat.cruised = cruised / maxf(cursor, 1.0)
+		if not feat.is_empty():
+			feat.cruised = cruised / maxf(cursor, 1.0)
+			feat.gain = float(persona.get("gain", 1.0))
 		if not std.is_empty(): std.feat = feat
-		var next := _pick_mood(profile.moods, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section, feat)
+		var next := _pick_mood(mood_weights, mood, hard, _grade(d, ground, cursor, end), rng, lerpf(share.x, share.y, (cursor + end) * 0.5 / total) if whole else -1.0, last_section, feat)
 		if mood != "" and next != mood: cursor += TRANSITION
 		if MOODS[next].get("free", false): cruised += end - cursor
 		mood = next
@@ -118,7 +122,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		while cursor < end and not m.get("free", false):
 			# Фраза: на flow и прыжках элементы идут связкой (разгон → прыжки → накат), а не по одному
 			if std.get("rhythm", false) and std.phrase.is_empty() and PHRASES.has(mood):
-				std.phrase = _pick_phrase(mood, difficulty, rng)
+				std.phrase = _pick_phrase(mood, clampf(difficulty + float(persona.get("tilt", 0.0)), 0.0, 1.0), rng)
 			# Природный уступ впереди: дроп встаёт на него (там земля уже падает), а не на случайное место
 			std.erase("force")
 			std.erase("ledge")
@@ -281,6 +285,17 @@ static func _beat(e: TrailElement, finish: float, m: Dictionary, difficulty: flo
 	std.carry = lerpf(carry, 1.0, clampf(clear / 60.0, 0.0, 1.0))
 	return clear
 
+## Веса настроений трассы с поправкой её характера: каждое настроение у каждой трассы чуть больше или меньше любимо (0,65–1,55),
+## набор настроений типа тот же.
+static func _persona_moods(weights: Dictionary, persona: Dictionary) -> Dictionary:
+	if persona.is_empty(): return weights
+	var out := {}
+	for key: String in weights:
+		var rng := RandomNumberGenerator.new()
+		rng.seed = hash("%d|%s" % [int(persona.seed), key])
+		out[key] = float(weights[key]) * rng.randf_range(0.65, 1.55)
+	return out
+
 ## — Рельеф горных характеров —
 ## Уступ: земля падает не меньше LEDGE_DROP (и втрое быстрее среднего спуска линии) на LEDGE_SPAN м линии; уступы реже LEDGE_EVERY м.
 const LEDGE_DROP := 0.7
@@ -442,7 +457,7 @@ static func _pick_mood(weights: Dictionary, previous: String, hard: bool, grade:
 			elif t > 0.9 and m.get("calm", false): w *= 2.5
 		# Descent is negative grade: slope > 0 likes it, slope < 0 likes climbs. ±8 % doubles or halves.
 		w *= pow(2.0, clampf(-grade / 0.08, -1.0, 1.0) * float(m.slope))
-		if not feat.is_empty(): w *= _terrain_mood(key, feat)
+		if not feat.is_empty(): w *= pow(maxf(_terrain_mood(key, feat), 0.01), float(feat.get("gain", 1.0)))
 		scaled.append(w)
 		sum += w
 	var roll := rng.randf() * sum

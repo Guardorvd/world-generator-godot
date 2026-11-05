@@ -170,8 +170,12 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	if float(options.get("width", 0.0)) > 0.0: st.width = float(options.width) # участок длинного маршрута продолжает его ширину
 	var skill := clampf(float(options.get("difficulty", 0.5)), 0.0, 0.99)
 	var shaping_amount := clampf(float(options.get("modification", 0.5)), 0.0, 1.0)
+	var persona: Dictionary = options.get("persona", {}) # характер маршрута (Composition.persona): темп, извилистость, насыщенность
+	if not persona.is_empty(): skill = clampf(skill + float(persona.shift), 0.05, 0.95)
 	var gaps_ok := Composition.gap_allowed(style, skill, shaping_amount, bool(options.get("mandatory_gaps", false)))
-	st.cruise *= lerpf(0.8, 1.15, skill)
+	# Последний участок маршрута (или отдельная трасса) кончается выкатом; промежуточный продолжается и проверяется мягче
+	var last_leg: bool = (options.get("arc", Vector2(0.0, 1.0)) as Vector2).y >= 0.999 and style != "park" and bool(options.get("strict_finish", false)) # строгий финиш — у маршрута игры (не у варианта)
+	st.cruise *= lerpf(0.8, 1.15, skill) * float(persona.get("tempo", 1.0))
 	var rng := RandomNumberGenerator.new()
 	rng.seed = hash("trail_lab_builder|%d|%s" % [seed, style])
 	var stats := {}
@@ -208,7 +212,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var field_grade := (hi_h - lo_h) / (size * 0.7)
 	var grade := clampf(float(st.grade), -maxf(0.03, field_grade * 0.9), -0.025)
 	# рисунок линии — по сиду
-	var shape := {pull = rng.randf_range(0.15, 0.6), wander = float(st.wander) * rng.randf_range(0.6, 1.5) * (WANDER_V3 if carve.is_valid() else 1.0),
+	var shape := {pull = rng.randf_range(0.15, 0.6), wander = float(st.wander) * rng.randf_range(0.6, 1.5) * (WANDER_V3 if carve.is_valid() else 1.0) * float(persona.get("wander", 1.0)),
 		period = Vector2(rng.randf_range(30.0, 70.0), rng.randf_range(12.0, 26.0)), phase = Vector2(rng.randf() * TAU, rng.randf() * TAU)}
 	shape.route_hint = options.get("route_hint", PackedVector2Array())
 	if options.get("open_finish", false):
@@ -218,7 +222,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	shape.wall = options.get("wall", Callable())
 	var finish_plan := {}
 	if shape.route_hint.size() > 1:
-		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)))
+		finish_plan = RouteContract.plan(shape.route_hint, ground, inside, st.width, bool(options.get("short_route", false)), last_leg)
 		if finish_plan.has("error"):
 			return _project_result([], {accepted = false, reason = finish_plan.error, finish_plan = finish_plan, fragments = []}, [], speeds, seed)
 		shape.route_hint = finish_plan.hint
@@ -251,7 +255,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		pts = _park_points(ground, walk_inside, size, rng, layout, bounds)
 		if pts.size() > 1:
 			goal = pts[-1]
-			completion = RouteContract.measure(pts, PackedVector2Array(), goal, "layout_complete", ground, inside, st.width)
+			completion = RouteContract.measure(pts, PackedVector2Array(), goal, "layout_complete", ground, inside, st.width, "full", last_leg)
 			if not completion.complete:
 				if completion.fragment: fragments.append(completion)
 				else: finish_refused.append(completion)
@@ -285,6 +289,14 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			walk_calls += 1
 			line = _walk_with_loop(ground, walk_inside, start, target, maxf(float(st.length), float(options.get("walk_length", 0.0))), grade, attempt_shape, st, rng, lower, carve.is_valid() and shaping_amount >= 0.8 and skill >= 0.5 and style == "park")
 		if line.size() < 2: continue
+		# Старт в удобном месте: ровная свободная площадка, не крутой спуск. Подсказанный старт (участок, соединение) не трогается.
+		if not options.get("keep_start", false):
+			var trimmed := RouteContract.trim_start(line, ground, walk_inside, st.width)
+			if trimmed.size() < 2:
+				walk_refused += 1
+				walk_reasons["старт без удобной площадки"] = int(walk_reasons.get("старт без удобной площадки", 0)) + 1
+				continue
+			line = trimmed
 		longest_trial = maxf(longest_trial, line.size() * STEP)
 		var trial := TrailDefinition.new()
 		trial.width = st.width
@@ -294,12 +306,22 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 		if options.get("open_finish", false):
 			# Ходок игры: линия кончается там, где есть место остановки и выката, а не обязана
 			# прийти именно туда. Без такого места — отступ назад по своей линии.
-			while line.size() * STEP >= OPEN_FINISH_MIN and not RouteContract.endpoint(trial.points[-1], (trial.points[-1] - trial.points[-2]).normalized(), ground, inside, st.width).suitable:
+			while line.size() * STEP >= OPEN_FINISH_MIN and not RouteContract.endpoint(trial.points[-1], (trial.points[-1] - trial.points[-2]).normalized(), ground, inside, st.width, trial.points, last_leg).suitable:
 				line = line.slice(0, line.size() - 3)
 				trial.points = _resample(_smooth(_smooth(line)), 2.0)
 			chosen_finish = trial.points[-1]
 			trace.reason = "layout_complete"
-		var finished := RouteContract.measure(trial.points, hint, chosen_finish, trace.get("reason", "unknown_stop"), ground, inside, st.width, finish_plan.get("kind", "full"))
+		elif last_leg and guided:
+			# Подгонка к коридору (ходок не прошёл): конец коридора без выката не годится — линия отступает назад по себе
+			var retreated := false
+			while trial.points.size() * 2.0 >= OPEN_FINISH_MIN and not RouteContract.endpoint(trial.points[-1], (trial.points[-1] - trial.points[-2]).normalized(), ground, inside, st.width, trial.points, true).suitable:
+				trial.points = trial.points.slice(0, trial.points.size() - 6)
+				retreated = true
+			if retreated:
+				line = trial.points.duplicate()
+				chosen_finish = trial.points[-1]
+				trace.reason = "layout_complete"
+		var finished := RouteContract.measure(trial.points, hint, chosen_finish, trace.get("reason", "unknown_stop"), ground, inside, st.width, finish_plan.get("kind", "full"), last_leg)
 		if not finished.complete:
 			if finished.fragment: fragments.append(finished)
 			else: finish_refused.append(finished)
@@ -339,7 +361,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var line := _resample(_smooth(_smooth(pts)), 2.0)
 	var d := TrailDefinition.new()
 	d.id = "generated_%s_%d" % [style, seed]
-	d.title = "%s · сид %d" % [st.title, seed]
+	d.title = ("%s · %s · сид %d" % [st.title, persona.name, seed]) if not persona.is_empty() else ("%s · сид %d" % [st.title, seed])
 	d.kind = "mountain"
 	d.width = st.width
 	d.surface = RoadSurface.DIRT
@@ -381,7 +403,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			best_components = candidate.score
 			var check_route := func(route: TrailDefinition) -> PackedStringArray:
 				var errors := Validation.footprint(route, inside)
-				var final_contract := RouteContract.measure(route.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+				var final_contract := RouteContract.measure(route.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind, last_leg)
 				for reason: String in final_contract.reasons: errors.append(reason)
 				return errors
 			var fit_started := Time.get_ticks_usec()
@@ -394,7 +416,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				report = base_surface.duplicate(true)})
 			if not base_surface.accepted: continue
 			composing_ground = func(p: Vector2) -> float: return base_heights.ground_at(p.x, p.y)
-			completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind)
+			completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind, last_leg)
 			line = d.points
 			break
 		base_surface.total_ms = (Time.get_ticks_usec() - base_started) / 1000.0
@@ -403,6 +425,9 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 				base_attempts = base_attempts, retained_lines = promising.size(), walk_ms = walk_ms, walk_calls = walk_calls, ms = (Time.get_ticks_usec() - started) / 1000.0,
 				line_score = best_components, completion = completion, finish_plan = finish_plan, fragments = fragments, finish_refused = finish_refused, completed_candidates = completed_candidates, composition_started = false}, [], speeds, seed)
 	var profile := Composition.profile_for(style, skill, shaping_amount)
+	if not persona.is_empty():
+		profile.persona = persona
+		profile.density *= float(persona.density)
 	# Участок длинного маршрута знает свою долю маршрута и место его пика: замысел один на всю поездку.
 	if options.has("arc"):
 		profile.arc = options.arc
@@ -480,14 +505,14 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 			base_surface.braking_repair = braking
 			if braking.accepted and braking.get("changed", false):
 				element_fit = braking.elements
-				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind)
+				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, ground, inside, st.width, completion.kind, last_leg)
 				var repaired_base := d.duplicate(true) as TrailDefinition
 				repaired_base.elements.clear()
 				var rebaked: Dictionary = load("res://scripts/lab/trail_lab_base_surface.gd").bake(options._source, repaired_base)
 				if not rebaked.errors.is_empty(): return _project_result([], {accepted = false, reason = "; ".join(rebaked.errors)}, [], speeds, seed)
 				var repaired_heights: Heightfield = rebaked.heights
 				composing_ground = func(p: Vector2) -> float: return repaired_heights.ground_at(p.x, p.y)
-				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind)
+				completion = RouteContract.measure(d.points, shape.route_hint, goal, completion.stop_reason, composing_ground, inside, st.width, completion.kind, last_leg)
 				line = d.points
 		element_fit.total_ms = (Time.get_ticks_usec() - fitting_started) / 1000.0
 		base_surface.ride = element_fit.get("base", {}).get("ride", {})

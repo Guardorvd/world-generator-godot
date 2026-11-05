@@ -6,6 +6,8 @@ const Layout := preload("res://scripts/trails/trail_layout.gd")
 const Validation := preload("res://scripts/trails/trail_validation.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const Potential := preload("res://scripts/trails/trail_potential.gd")
+const Character := preload("res://scripts/trails/trail_character.gd")
+const Contract := preload("res://scripts/trails/trail_route_contract.gd")
 const MARGIN := 12
 const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const DESIGN_DEPTH := 4.0     # уровень полотна не дальше этого от земли, м: с виражами, откосами и элементами это в пределах EARTHWORKS
@@ -112,8 +114,8 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	corridor = guide.points
 	var total := guide.route_length()
 	ctx.peak = _peak(ctx.input, corridor)
-	var cursor := 0.0
-	var start := corridor[0]
+	var cursor := _pick_start(ctx.input, guide, 0.0)
+	var start := guide.point_at(cursor)
 	var tangent := Vector2.ZERO
 	var fails := 0
 	var leg_index := 0
@@ -122,6 +124,8 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	ctx.start_speed = 3.0
 	ctx.width = 0.0
 	route_index += 1
+	# Характер маршрута (темп, извилистость, насыщенность, смещение сложности): свой у каждого, одинаковый на всех его участках
+	ctx.persona = Character.persona(hash([ctx.w.seed_num, route_index, seed_value]))
 	var title := "Маршрут %d" % route_index
 	var difficulty: float = DIFFICULTY[route_index % DIFFICULTY.size()]
 	while cursor < total - MIN_LEG and plan.stats.work_m < ctx.work_limit and plan.stats.length_m < ctx.length_target:
@@ -154,6 +158,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 			fails = 0
 			cursor += LEG_SKIP
 			if cursor >= total: break
+			cursor = _pick_start(ctx.input, guide, cursor)
 			start = guide.point_at(cursor)
 			tangent = Vector2.ZERO
 			ctx.start_speed = 3.0
@@ -163,6 +168,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 				plan.stats.routes_m.append(roundi(route_length))
 				route_length = 0.0
 				route_index += 1
+				ctx.persona = Character.persona(hash([ctx.w.seed_num, route_index, seed_value]))
 				title = "Маршрут %d" % route_index
 				difficulty = DIFFICULTY[route_index % DIFFICULTY.size()]
 			continue
@@ -254,6 +260,18 @@ static func _peak(input: GI, corridor: PackedVector2Array) -> float:
 		s += 30.0
 	return clampf(at, 0.33, 0.85)
 
+## Старт маршрута: ближайшая к `cursor` точка коридора (в пределах START_SEARCH м вперёд), где есть удобная площадка —
+## свободное место позади и впереди, ровный спуск, без бокового уклона. Нет такой — прежняя точка.
+const START_SEARCH := 56.0
+static func _pick_start(input: GI, guide: TrailDefinition, cursor: float) -> float:
+	var ground := func(p: Vector2) -> float: return input.natural_ground(p)
+	var free := func(p: Vector2) -> bool: return not input.blocked(p)
+	var s := cursor
+	while s <= minf(cursor + START_SEARCH, guide.route_length() - MIN_LEG):
+		if Contract.start_area(guide.point_at(s), guide.tangent_at(s), ground, free, 4.0).suitable: return s
+		s += 8.0
+	return cursor
+
 ## Коридор в ту сторону, где у него больше спуска, чем подъёма: маршрут едут ради спуска.
 static func _downhill(input: GI, corridor: PackedVector2Array) -> PackedVector2Array:
 	var rise := 0.0
@@ -306,7 +324,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, keep_start = true, strict_finish = ctx.get("reference") == null, persona = ctx.get("persona", Character.persona(seed_value)), width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		# лесистость и поляны под линией (StageVegetation.cover_at): горные и природные характеры меняют по ним настроение участков
 		cover = func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE) + site.origin.x, floori(p.y / GameConfig.TILE) + site.origin.y),
 		soft = func(p: Vector2) -> bool:

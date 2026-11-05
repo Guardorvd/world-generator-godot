@@ -27,6 +27,23 @@ static func profile_for(style: String, difficulty: float, modification: float) -
 	p.density *= lerpf(0.65, 1.0, modification)
 	return p
 
+## Характер одной трассы (темп, извилистость, насыщенность, смещение сложности, чуткость к рельефу, наклон фраз) по сиду: две трассы
+## одного типа едут по-разному, но состав настроений и размеры элементов остаются своими у типа. Границы узкие — тип узнаётся.
+static func persona(seed_value: int) -> Dictionary:
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash("persona|%d" % seed_value)
+	var p := {seed = rng.randi(), tempo = rng.randf_range(0.88, 1.14), wander = rng.randf_range(0.7, 1.45), density = rng.randf_range(0.75, 1.3),
+		shift = rng.randf_range(-0.1, 0.1), gain = rng.randf_range(0.6, 1.6), tilt = rng.randf_range(-0.2, 0.2)}
+	var words := PackedStringArray()
+	words.append("быстрая" if p.tempo > 1.06 else ("неспешная" if p.tempo < 0.94 else "ровная"))
+	if p.density > 1.12: words.append("насыщенная")
+	elif p.density < 0.88: words.append("просторная")
+	if p.wander > 1.2: words.append("извилистая")
+	elif p.wander < 0.85: words.append("прямая")
+	if p.gain > 1.3: words.append("по рельефу")
+	p.name = ", ".join(words)
+	return p
+
 static func gap_allowed(_style: String, _difficulty: float, modification: float, requested: bool) -> bool:
 	# Opt-in is a rider choice. Style and difficulty select sizes, not permission to build.
 	return requested and modification > 0.0
