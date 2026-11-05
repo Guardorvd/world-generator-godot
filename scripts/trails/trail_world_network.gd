@@ -12,8 +12,8 @@ const DESIGN_DEPTH := 4.0     # уровень полотна не дальше 
 ## Работы по виду: глубина (насколько полотно может уйти от земли) и самый крутой проектный уклон на 6 м. Круче этого место не
 ## строят, а обходят: ходок не идёт туда, где проект не может положить полотно мягче.
 const WORK := {
-	park = {depth = 4.0, grade = 0.22}, flow = {depth = 4.0, grade = 0.22}, downhill = {depth = 4.0, grade = 0.32},
-	enduro = {depth = 4.0, grade = 0.34}, tech = {depth = 4.0, grade = 0.38}}
+	park = {depth = 4.5, grade = 0.22}, flow = {depth = 4.5, grade = 0.22}, downhill = {depth = 4.0, grade = 0.32},
+	enduro = {depth = 3.5, grade = 0.34}, tech = {depth = 3.0, grade = 0.38}}
 const REPLANS := 1            # столько раз линию прокладывают заново в обход крутых мест, прежде чем резать
 const WALL_R := 9.0           # крутое место закрыто ходоку в таком радиусе, м
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
