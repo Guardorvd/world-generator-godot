@@ -187,6 +187,8 @@ func _process(delta: float) -> bool:
 	if elapsed < 12.0:
 		return false
 	results.moving = stats()
+	results.node_stats = veg.node_stats
+	results.trash_left = veg._trash.size()
 	print(JSON.stringify(results))
 	var path := Dev.arg("out")
 	if path != "":
