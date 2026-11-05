@@ -51,14 +51,10 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	var corridors := search.find(w.seed_num)
 	# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
 	# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
-	var plan_potentials := PackedStringArray()
 	for c: Dictionary in corridors:
 		c.probe.points = _downhill(input, c.probe.points)
 		c.potential = Potential.assess(input, c.probe.points)
 		c.rank = Potential.rank(c.potential, float(c.probe.length))
-		if not c.potential.is_empty():
-			var s: Dictionary = c.potential.score
-			plan_potentials.append("%d м %s сп.%.0f%% неров.%.2f бок.%.2f вид %.2f | f%.2f d%.2f e%.2f t%.2f" % [c.probe.length, c.potential.best, c.potential.grade * 100.0, c.potential.rough, c.potential.side, c.potential.view, s.flow, s.downhill, s.enduro, s.tech])
 	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
 		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
@@ -85,7 +81,6 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < corridors.size() + park.size()
 	for style: String in ctx.styles: ctx.styles[style] = roundi(ctx.styles[style])
 	plan.stats.styles = ctx.styles
-	plan.stats.potentials = plan_potentials
 	plan.stats.total_ms = Time.get_ticks_msec() - started
 	return plan
 
