@@ -27,6 +27,9 @@ const MIN_LINE := 200.0       # линия парка короче не нужн
 const TRIM := 30.0            # запас от плохого места при обрезке линии, м
 const WORK_EDGE := 12.0       # линия не ближе к краю рабочей зоны участка (TrailSite.inside_errors), м
 const ADMIT_PASSES := 3
+const ALTERNATIVES := 2       # вторых линий в сети не больше этого
+const ALT_SHIFT := 40.0       # вариант уходит от основной линии в сторону не дальше, м
+const ALT_MIN_LENGTH := 400.0 # вариант берёт участки не короче этого, м
 const END_MARGIN := 60.0       # последний участок маршрута кончается не ближе этого к концу коридора, м
 const PARK_LINES := 3         # столько самых длинных линий трейл-парка
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
@@ -60,7 +63,7 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
 		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
-	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}}
+	var ctx := {w = w, h = h, input = input, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
@@ -74,6 +77,7 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		plan.stats.attempted += 1
 		plan.stats.corridors.append(roundi(corridor.probe.length))
 		route_index = _route(ctx, corridor.probe.points, corridor.trail_seed, route_index)
+	_alternatives(ctx)
 	if not plan.routes.is_empty():
 		RoadSurface.rebuild_map(w)
 		plan.state = "found"
@@ -102,7 +106,9 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	var fails := 0
 	var leg_index := 0
 	var route_length := 0.0
+	var previous := "" # вид прошлого участка: соседние участки сохраняют характер
 	ctx.start_speed = 3.0
+	ctx.width = 0.0
 	route_index += 1
 	var title := "Маршрут %d" % route_index
 	var difficulty: float = DIFFICULTY[route_index % DIFFICULTY.size()]
@@ -124,8 +130,10 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
 		# Вид участка — по тому, что даёт его местность; вида, которого в сети уже много, берётся реже.
 		ctx.arc = Vector2(cursor / total, 1.0 if last >= reach else last / total) # доля маршрута, которую займёт участок: замысел один на весь маршрут
-		var style := Potential.choose(ctx.input, hint, ctx.styles)
+		var assessed := Potential.assess(ctx.input, hint)
+		var style := Potential.choose(assessed, ctx.styles, previous)
 		if style.is_empty(): style = Layout.ORDER[(route_index + leg_index) % Layout.ORDER.size()]
+		var entry_speed: float = ctx.start_speed
 		var global := _leg(ctx, hint, Rect2i(lo, hi - lo), style, title, seed_value + leg_index * 7 + fails * 131, difficulty, true)
 		if global == null:
 			fails += 1
@@ -137,6 +145,8 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 			start = guide.point_at(cursor)
 			tangent = Vector2.ZERO
 			ctx.start_speed = 3.0
+			previous = ""
+			ctx.width = 0.0
 			if route_length > 0.0:
 				plan.stats.routes_m.append(roundi(route_length))
 				route_length = 0.0
@@ -146,6 +156,9 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 			continue
 		fails = 0
 		leg_index += 1
+		previous = style
+		ctx.width = global.width # весь маршрут одной ширины: переход между участками без ступеньки
+		ctx.legs.append({hint = hint, global = global, style = style, assessed = assessed, arc = ctx.arc, peak = ctx.peak, speed = entry_speed, title = title, difficulty = difficulty})
 		route_length += global.route_length()
 		var end: Vector2 = global.points[-1]
 		start = end
@@ -154,6 +167,58 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		cursor += maxf(MIN_LEG, RouteContract.project(hint, end).x)
 	if route_length > 0.0: plan.stats.routes_m.append(roundi(route_length))
 	return route_index
+
+## Вторые линии там, где местность даёт две интересные: на участке принятого маршрута, у которого другой вид почти так же
+## хорош, прокладывается вариант другого вида. Он начинается и кончается в тех же точках, а посередине уходит в сторону на
+## ALT_SHIFT м: ответвление, которое возвращается на маршрут (соединение в обоих концах, у стыков элементов нет).
+## Не больше ALTERNATIVES, лучшие места первыми; вариант, который не прошёл, просто не строится.
+static func _alternatives(ctx: Dictionary) -> void:
+	var plan: Dictionary = ctx.plan
+	var picks: Array[Dictionary] = []
+	for leg: Dictionary in ctx.legs:
+		if leg.global.route_length() < ALT_MIN_LENGTH: continue
+		var alt := Potential.alternative(leg.assessed, leg.style)
+		if not alt.is_empty(): picks.append({leg = leg, style = alt.style, value = alt.value})
+	picks.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.value > b.value)
+	var made := 0
+	for pick: Dictionary in picks:
+		if made >= ALTERNATIVES or plan.stats.work_m >= ctx.work_limit: break
+		var leg: Dictionary = pick.leg
+		var main: TrailDefinition = leg.global
+		var line := PackedVector2Array()
+		var s := 0.0
+		while s < main.route_length():
+			line.append(main.point_at(s))
+			s += 16.0
+		line.append(main.points[-1])
+		var hint := _around(ctx.input, line, ALT_SHIFT)
+		var box := Rect2(hint[0], Vector2.ZERO)
+		for p in hint: box = box.expand(p)
+		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
+		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
+		ctx.start_speed = leg.speed
+		ctx.arc = leg.arc
+		ctx.peak = leg.peak
+		ctx.width = main.width
+		plan.stats.attempted += 1
+		var alternative := _leg(ctx, hint, Rect2i(lo, hi - lo), pick.style, leg.title + " · вариант", plan.stats.accepted * 31 + 7, leg.difficulty, true)
+		if alternative != null: made += 1
+	plan.stats.alternatives = made
+
+## Подсказка `line`, выгнутая в сторону на `shift` м посередине и сходящаяся с ней в концах. Сторона — та, где земля у
+## середины ближе по высоте к самой линии (меньше подъёма).
+static func _around(input: GI, line: PackedVector2Array, shift: float) -> PackedVector2Array:
+	var n := line.size()
+	if n < 5: return line
+	var mid := line[n / 2]
+	var side := (line[n / 2 + 1] - line[n / 2 - 1]).normalized().orthogonal()
+	var y := input.natural_ground(mid)
+	var sign := 1.0 if absf(input.natural_ground(mid + side * shift) - y) <= absf(input.natural_ground(mid - side * shift) - y) else -1.0
+	var out := line.duplicate()
+	for k in range(2, n - 1):
+		var across := (line[k + 1] - line[k - 1]).normalized().orthogonal()
+		out[k] = line[k] + across * shift * sign * sin(PI * k / (n - 1))
+	return out
 
 ## Место пика маршрута (доля длины): середина 150 м с самым большим спуском вдоль коридора, не раньше трети и не позже
 ## 85 %. Начало маршрута разгоняет, после пика он идёт на спад. Коридор уже идёт вниз.
@@ -227,7 +292,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		soft = func(p: Vector2) -> bool:
 			var cell := Vector2i((p / GameConfig.TILE).floor()) + site.origin
 			return (cell.x >= 0 and cell.y >= 0 and cell.x < w.W and cell.y < w.H and fords[cell.y * w.W + cell.x] != 0) or local_input.near_path(p)}

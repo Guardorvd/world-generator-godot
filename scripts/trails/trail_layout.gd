@@ -166,6 +166,7 @@ static func _build_core(ground: Callable, size: float, seed_value: int, style_na
 	var seed := seed_value
 	var style := style_name if STYLES.has(style_name) else "flow"
 	var st: Dictionary = STYLES[style].duplicate(true)
+	if float(options.get("width", 0.0)) > 0.0: st.width = float(options.width) # участок длинного маршрута продолжает его ширину
 	var skill := clampf(float(options.get("difficulty", 0.5)), 0.0, 0.99)
 	var shaping_amount := clampf(float(options.get("modification", 0.5)), 0.0, 1.0)
 	var gaps_ok := Composition.gap_allowed(style, skill, shaping_amount, bool(options.get("mandatory_gaps", false)))

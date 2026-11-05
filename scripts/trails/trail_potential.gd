@@ -6,6 +6,9 @@ const SAMPLE := 16.0
 const SIDE := 10.0       # половина поперечной выборки склона, м
 const VIEW_RING := 120.0 # радиус, по которому высота линии сравнивается с окружением, м
 const STYLES := ["flow", "downhill", "enduro", "tech"]
+const STICK := 1.3        # прежний вид участка держится, пока другой не лучше его в столько раз
+const ALT_MIN := 0.4        # вторая линия на месте: оценка второго вида не ниже этого
+const ALT_SHARE := 0.75     # и не ниже этой доли оценки основного
 const SHARE_M := 1500.0  # столько метров вида в сети уменьшают его оценку вдвое
 
 static func _fit(x: float, low: float, target: float, high: float) -> float:
@@ -65,20 +68,31 @@ static func assess(input, line: PackedVector2Array) -> Dictionary:
 	return {score = score, best = best, value = score[best], drop = drop, grade = down, rough = rough, side = side,
 		view = clampf(view / maxi(1, looked) / 30.0, 0.0, 1.0) * 0.7 + clampf(watery / maxf(1.0, looked * 6.0) * 4.0, 0.0, 1.0) * 0.3}
 
-## Вид для участка: лучший по оценке местности, а вида, которого в сети уже много (share: вид -> метры), — реже.
+## Вид для участка по оценке его местности `a` (assess). Начало маршрута: лучший вид, а вида, которого в сети уже много
+## (share: вид -> метры), реже. Продолжение (previous — вид прошлого участка): прежний вид держится, пока другой не лучше
+## него заметно — так соседние участки одного маршрута сохраняют характер, а меняют его там, где местность другая.
 ## Пустая строка — оценить нельзя, звать прежний круговой порядок.
-static func choose(input, line: PackedVector2Array, share: Dictionary) -> String:
-	var a := assess(input, line)
+static func choose(a: Dictionary, share: Dictionary, previous := "") -> String:
 	if a.is_empty(): return ""
 	var best := ""
 	var best_value := -1.0
 	for name: String in STYLES:
-		var value: float = a.score[name] / (1.0 + float(share.get(name, 0.0)) / SHARE_M)
+		var value: float = a.score[name]
+		if previous.is_empty(): value /= 1.0 + float(share.get(name, 0.0)) / SHARE_M
+		elif name == previous: value *= STICK
 		if value > best_value:
 			best_value = value
 			best = name
 	return best
 
+## Лучший вид, кроме `style`, если он почти так же хорош: место, где есть вторая интересная линия. {style, value} или {}.
+static func alternative(a: Dictionary, style: String) -> Dictionary:
+	if a.is_empty(): return {}
+	var best := ""
+	for name: String in STYLES:
+		if name != style and (best.is_empty() or a.score[name] > a.score[best]): best = name
+	if best.is_empty() or float(a.score[best]) < ALT_MIN or float(a.score[best]) < ALT_SHARE * float(a.score[style]): return {}
+	return {style = best, value = a.score[best]}
 ## Насколько место стоит трассы: лучший вид, вид с него и длина (длинное предпочтительнее, но не любой ценой).
 static func rank(a: Dictionary, length: float) -> float:
 	if a.is_empty(): return 0.0
