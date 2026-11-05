@@ -414,12 +414,14 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 		var vertex_count := 0
 		for branch: Array in branches:
 			# Первая ветвь (ствол, у куста главный стебель) остаётся на всех уровнях: поверхность не пустеет.
-			if level == 2 and branch[1] < 0.06 and branch != branches[0]:
+			if level == 2 and branch[1] < 0.1 and branch != branches[0]:
 				continue # Тонкие веточки уже меньше пикселя; силуэт остаётся в листве.
-			if level == 1 and branch[1] < 0.035 and branch != branches[0]:
+			if level == 1 and branch[1] < 0.08 and branch != branches[0]:
 				continue
-			vertex_count += _tube(st, branch, (6 - level) if branch[1] > 0.12 else 3, level, vertex_count)
-		for spray: Array in (_far_foliage(foliage) if level == 2 else foliage):
+			vertex_count += _tube(st, branch, [6, 4, 3][level] if branch[1] > 0.12 else 3, level, vertex_count)
+		# 15.0: на 160+ м крона - десяток крупных карточек (было ~25): мелкие вырезные карточки там меньше пикселя,
+		# а их наложение друг на друга стоило больше всего GPU. Уровень 1 тоже объединяет ближайшие побеги.
+		for spray: Array in (_far_foliage(_far_foliage(foliage)) if level == 2 else (_far_foliage(foliage) if level == 1 else foliage)):
 			_spray(st, spray, level, conifer, crown)
 		st.index()
 		levels.append(st.commit())
@@ -490,6 +492,14 @@ static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first
 	# Только конечные веточки можно выпрямлять: несущие развилки сохраняют точки крепления.
 	if level > 0 and data.size() > 5 and data[5]:
 		path = [path[0], path[-1]]
+	# 15.0: на дальнем уровне сечений вдвое меньше (силуэт ствола тот же, концы сохраняются).
+	if level == 2 and path.size() > 4:
+		var coarse: Array = []
+		for i in range(0, path.size(), 2):
+			coarse.append(path[i])
+		if (path.size() - 1) % 2 != 0:
+			coarse.append(path[-1])
+		path = coarse
 	# Каждое сечение вычисляется один раз, а соседние грани используют общие индексы.
 	for ring in path.size():
 		var direction: Vector3 = (path[mini(ring + 1, path.size() - 1)] - path[maxi(ring - 1, 0)]).normalized()

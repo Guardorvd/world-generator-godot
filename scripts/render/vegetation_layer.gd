@@ -16,6 +16,7 @@ const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолж�
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
+const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE] # виды без ствола на дальнем уровне
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
@@ -956,6 +957,10 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				levels = [levels[1]]
 			for level in levels.size():
 				if node_index < resume:
+					node_index += 1
+					continue
+				# 15.0: за 160 м ствол леса тоньше пикселя и скрыт кроной: его узел (draw call на каждый чанк и силуэт) не нужен.
+				if part == "trunk" and level == 2 and not small and def.has("crown") and FAR_TRUNKLESS.has(kind % ForestModels.MODEL_STRIDE):
 					node_index += 1
 					continue
 				if limit > 0 and (uploaded >= TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):

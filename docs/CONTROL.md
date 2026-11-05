@@ -321,7 +321,7 @@ godot --headless --path . --script res://tools/control/check.gd -- --deep
 
 Не запускать без прямой просьбы пользователя.
 
-- **Замеры и разовые исследования:** `bench`, `audit_perf`, `fps_test`, `forest_ride_perf`, `road_perf`, `streaming_perf`, `vegetation_perf`, `control/outer_perf`, `runtime_stutter_probe`, `runtime_fps_diagnosis`.
+- **Замеры и разовые исследования:** `bench`, `audit_perf`, `fps_test`, `forest_ride_perf`, `road_perf`, `streaming_perf`, `vegetation_perf`, `forest_scene_perf` (изолированный смешанный лес 1 км, без генерации мира: FPS, GPU/CPU мс, draw calls; `-- --eye 45 --shot файл.png`), `control/outer_perf`, `runtime_stutter_probe`, `runtime_fps_diagnosis`.
 - **Старые снимки и длинные прогоны:** `smoke_test`, `structures_shots`, `water_shots`, `forest_shots`, `forest_floor_shots`, `selftest` (хеши даёт `check.gd`), `geography_test` без `--quick`, `generation_regression_test -- --worlds`, `route_test` без `--quick`, `road_safety_test`, `lifecycle_test` с настройками по умолчанию, `control/shots`, `control/perf`, `control/compare` (см. ниже).
 - **Не тесты, а сборщики:** `build_bike`, `build_cyclist`, `bundle_cache` — запускать только когда нужно пересобрать их результат.
 - Скрипты в `tools/control/runs/` — черновики прошлых исследований, не проверки.
