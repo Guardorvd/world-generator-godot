@@ -240,6 +240,7 @@ static func _deep_rivers(w: WorldData, h: Heightfield, rivers: PackedByteArray) 
 			cells.append(i)
 			if w.slope[i] > StageTrails.FORD_SLOPE: deep[i] = 1
 	for i in cells:
+		if deep[i] != 0: continue # already too steep for a ford: depth cannot change the answer
 		if h.depth_at((i % w.W + 0.5) * GameConfig.TILE, (i / w.W + 0.5) * GameConfig.TILE, INF) > GameConfig.FORD_DEPTH - 0.15: deep[i] = 1
 	return deep
 

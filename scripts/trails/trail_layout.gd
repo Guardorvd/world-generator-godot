@@ -778,21 +778,29 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			var here := float(ground.call(next))
 			var g := (here - here_y) / STEP
 			var side := Vector2(-dir.y, dir.x)
-			var cross := absf(float(ground.call(next + side * 2.0)) - float(ground.call(next - side * 2.0))) / 4.0
 			# уклон к цели стиля (подъём — дорого), поперечный склон, плавность и «волна» изгибов
-			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0 + maxf(0.0, cross - 0.25) * 8.0 + absf(o - want) * 1.5
+			var cost := absf(g - grade) * 60.0 + maxf(0.0, g) * 80.0
+			if cost >= best: continue
+			var cross := absf(float(ground.call(next + side * 2.0)) - float(ground.call(next - side * 2.0))) / 4.0
+			cost += maxf(0.0, cross - 0.25) * 8.0
+			cost += absf(o - want) * 1.5
+			# Дальше к цене только добавляется: ход, который уже не лучше найденного, дорогих расчётов не стоит
+			if cost >= best: continue
 			if hint.size() > 1: cost += minf(_hint_distance(hint, next, hint_near) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
+			if cost >= best: continue
 			# Дорогу или брод пересекает коротко, а не идёт вдоль
 			var soft: Callable = shape.get("soft", Callable())
 			if soft.is_valid() and soft.call(next): cost += SOFT_COST
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0
 			if steep_cost: cost += maxf(0.0, -g - STEEP) * STEEP_COST
+			if cost >= best: continue
 			# обрыв снаружи поворота: вылет наружу — вниз по откосу (падение 01.11 с 30 м)
 			if absf(o) > max_turn * 0.3:
 				var outer := side * (-signf(o))
 				var fall := (here - float(ground.call(next + outer * 5.0))) / 5.0
 				cost += maxf(0.0, fall - CLIFF) * 12.0
+				if cost >= best: continue
 			# взгляд вперёд — не короче тормозного пути до разворотной скорости: тупик виден заранее
 			var look := maxf(LOOK, (v * v - accel * HAIRPIN) / (2.0 * TrailStandards.BRAKE))
 			for j in range(1, 5):

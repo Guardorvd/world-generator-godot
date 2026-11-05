@@ -47,6 +47,7 @@ var stats := {find_ms = 0.0, layout_ms = 0.0, length = 0.0, attempts = 0, stops 
 var _h: Heightfield
 var _rng := RandomNumberGenerator.new()
 var _occ := {}
+var _wet := {} # клетка -> у неё или рядом вода / край карты (_inside спрашивает одни и те же клетки много раз)
 var _field := PackedFloat32Array() # расстояние до занятого, шагов сетки поиска
 var _rect := Rect2i()
 var _gw := 0
@@ -230,13 +231,15 @@ func _walk(start: Vector2, heading: float, length: float, route: int, seek: bool
 			want = clampf(Vector2.from_angle(a).angle_to(target - p), -max_turn, max_turn)
 		var best := INF
 		var best_o := 0.0
+		var here_y := _ground(p)
 		for k in 11:
 			var o := -max_turn + max_turn * 0.2 * k
 			var dir := Vector2.from_angle(a + o)
 			var next := p + dir * STEP
-			if not _free(next, route, s, start, target): continue
-			var g := (_ground(next) - _ground(p)) / STEP
+			var g := (_ground(next) - here_y) / STEP
 			var cost := absf(o - want) + maxf(0.0, absf(g) - GRADE) * 40.0 + absf(g + 0.04) * 2.0
+			# взгляд вперёд только добавляет к цене: ход, который уже не лучше найденного, дальше не проверяется
+			if cost >= best or not _free(next, route, s, start, target): continue
 			for j in range(1, 5):
 				if not _free(p + dir * (STEP + LOOK * j / 4.0), route, s, start, target):
 					cost += 40.0 / j - (1.0 if signf(o) == signf(bend) else 0.0)
@@ -275,10 +278,15 @@ func _inside(p: Vector2) -> bool:
 	if _inside_fn.is_valid(): return _inside_fn.call(p)
 	# воду (и ручьи) линии пока обходят: у воды рельеф не формируется, и переход через ручей выходит крутым
 	var cell := Vector2i((p / GameConfig.TILE).floor())
-	for oz in range(-1, 2):
-		for ox in range(-1, 2):
-			var q := cell + Vector2i(ox, oz)
-			if q.x < 0 or q.y < 0 or q.x >= _h.world.W or q.y >= _h.world.H or _h.water_level[q.y * _h.world.W + q.x] != -INF: return false
+	var wet: Variant = _wet.get(cell)
+	if wet == null:
+		wet = false
+		for oz in range(-1, 2):
+			for ox in range(-1, 2):
+				var q := cell + Vector2i(ox, oz)
+				if q.x < 0 or q.y < 0 or q.x >= _h.world.W or q.y >= _h.world.H or _h.water_level[q.y * _h.world.W + q.x] != -INF: wet = true
+		_wet[cell] = wet
+	if wet: return false
 	if p.distance_to(center) > R_MAX: return false
 	var c := Vector2i(((p / GameConfig.TILE - Vector2(_rect.position)) / STRIDE).floor())
 	if c.x < 0 or c.y < 0 or c.x >= _gw or c.y >= _gh: return false
