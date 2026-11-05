@@ -67,6 +67,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		std.rhythm = profile.get("rhythm", false)
 		std.carry = 1.0
 		std.streak = 0
+		std.phrase = [] # оставшиеся виды текущей фразы (PHRASES), по порядку
 	var elements: Array[TrailElement] = []
 	var sections: Array[Dictionary] = []
 	var total := d.route_length()
@@ -99,7 +100,12 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 		hard = difficulty > (band.x + band.y) * 0.5 and not m.get("calm", false)
 		sections.append({from = cursor, to = end, mood = mood, difficulty = snappedf(difficulty, 0.01)})
 		var last := -1
+		# фраза переходит в соседний участок flow/прыжков (граница участков условна); перед отдыхом и техникой — сбрасывается
+		if std.get("rhythm", false) and not PHRASES.has(mood): std.phrase.clear()
 		while cursor < end:
+			# Фраза: на flow и прыжках элементы идут связкой (разгон → прыжки → накат), а не по одному
+			if std.get("rhythm", false) and std.phrase.is_empty() and PHRASES.has(mood):
+				std.phrase = _pick_phrase(mood, difficulty, rng)
 			var e := _element(d, m, cursor, end, difficulty, last, rng, std)
 			if std.get("rhythm", false):
 				# Ритм: не подошёл элемент — на том же месте пробуется малый универсальный (FALLBACK), а не сдвиг на 4 м,
@@ -111,6 +117,7 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 					std.fallback = false
 					fit = _admit(e, cursor, placed_object, fits)
 				if not fit:
+					std.phrase.clear() # место не подошло — фраза сорвана, следующая начнётся заново
 					cursor += 4.0
 					continue
 			else:
@@ -130,7 +137,10 @@ static func compose(d: TrailDefinition, profile: Dictionary, seed_value: int, gr
 				std.last_end = finish
 				std.placed += 1
 			if TrailElement.places_objects(e.profile): placed_object = finish
-			if std.get("rhythm", false): cursor = finish + _beat(e, finish, m, difficulty, density, std, rng)
+			if std.get("rhythm", false):
+				# вираж в повороте фразу не двигает; любой другой элемент (в том числе запасной) закрывает её очередной шаг
+				if not std.phrase.is_empty() and e.profile not in [T.BERM, T.S_BERM, T.OFF_CAMBER]: std.phrase.pop_front()
+				cursor = finish + _beat(e, finish, m, difficulty, density, std, rng)
 			else: cursor = finish + rng.randf_range(7.0, 18.0) * float(m.gap) / maxf(density, 0.2)
 		cursor = maxf(cursor, end)
 	if not std.is_empty(): _berm_turns(d, elements, std)
@@ -159,8 +169,47 @@ const CARRY := {T.PUMP: 1.06, T.WAVES: 1.03, T.ROLLER: 0.98, T.ROLLOVER: 0.98, T
 ## Между элементами — столько секунд свободной трассы (на скорости выхода): после прыжка больше, у сложной трассы короче.
 const BEAT_JUMP := Vector2(1.3, 0.85)
 const BEAT_FLOW := Vector2(1.0, 0.6)
-## Столько элементов подряд без передышки (лёгкая трасса, сложная); потом свободная трасса не короче BREATH секунд.
-const STREAK := Vector2i(5, 3)
+## Столько фраз подряд без передышки (лёгкая трасса, сложная); потом свободная трасса не короче BREATH секунд.
+const STREAK := Vector2i(3, 2)
+## Время пути между элементами внутри фразы, с: после прыжка (лёгкая, сложная трасса) и после малого элемента.
+const LINK_JUMP := Vector2(1.1, 0.75)
+const LINK_FLOW := 0.5
+
+## Фразы — осмысленные связки: разгон (памп, волны) → прыжки → накат/приземление. Сложность рождается из связки
+## (серия столов, дроп-перепад, гэп после разгона), а не из случайного препятствия. `level` — сложность, под которую
+## фраза подходит; `kinds` — виды по порядку. Не подошёл элемент — вместо него малый запасной, фраза идёт дальше.
+const PHRASES := {
+	flow = [
+		{level = 0.15, kinds = [T.ROLLER, T.ROLLER, T.PUMP]},
+		{level = 0.3, kinds = [T.PUMP, T.TABLETOP, T.ROLLER]},
+		{level = 0.4, kinds = [T.WAVES, T.TABLETOP]},
+		{level = 0.55, kinds = [T.PUMP, T.TABLETOP, T.TABLETOP, T.ROLLER]},
+		{level = 0.65, kinds = [T.ROLLER, T.DROP, T.PUMP]},
+		{level = 0.8, kinds = [T.WAVES, T.TABLETOP, T.TABLETOP, T.DROP, T.ROLLER]},
+	],
+	jump = [
+		{level = 0.3, kinds = [T.PUMP, T.TABLETOP, T.TABLETOP]},
+		{level = 0.5, kinds = [T.PUMP, T.TABLETOP, T.DROP, T.ROLLER]},
+		{level = 0.7, kinds = [T.PUMP, T.TABLETOP, T.TABLETOP, T.TABLETOP]},
+		{level = 0.8, kinds = [T.WAVES, T.TABLETOP, T.GAP, T.ROLLER]},
+		{level = 0.9, kinds = [T.PUMP, T.TABLETOP, T.TABLETOP, T.GAP, T.ROLLER]},
+	],
+}
+
+## Фраза настроения под сложность участка: чем ближе level, тем вероятнее.
+static func _pick_phrase(mood: String, difficulty: float, rng: RandomNumberGenerator) -> Array:
+	var list: Array = PHRASES[mood]
+	var weights := []
+	var sum := 0.0
+	for p: Dictionary in list:
+		var w := exp(-absf(difficulty - float(p.level)) * 5.0)
+		weights.append(w)
+		sum += w
+	var roll := rng.randf() * sum
+	for i in list.size():
+		roll -= weights[i]
+		if roll <= 0.0: return (list[i].kinds as Array).duplicate()
+	return (list[-1].kinds as Array).duplicate()
 const BREATH := 2.0
 
 ## Малые элементы, которые встают почти на любой линии: запасной выбор, когда выбранный не подошёл.
@@ -186,12 +235,18 @@ static func _beat(e: TrailElement, finish: float, m: Dictionary, difficulty: flo
 	var v := float(speeds[clampi(int(finish), 0, speeds.size() - 1)]) * carry
 	var jump := e.profile in [T.TABLETOP, T.GAP, T.DROP]
 	var beat := BEAT_JUMP if jump else BEAT_FLOW
-	var seconds := lerpf(beat.x, beat.y, clampf(difficulty, 0.0, 1.0)) * float(m.gap) * rng.randf_range(0.85, 1.15) / clampf(density / 0.7, 0.7, 1.3)
-	std.streak = int(std.streak) + 1
-	if m.get("calm", false): std.streak = 0
-	if int(std.streak) >= int(lerpf(STREAK.x, STREAK.y, clampf(difficulty, 0.0, 1.0))):
-		seconds = maxf(seconds, BREATH)
-		std.streak = 0
+	var seconds: float
+	if not std.phrase.is_empty():
+		# внутри фразы такт ровный (без разброса): столы одной серии стоят через одинаковое время пути
+		seconds = lerpf(LINK_JUMP.x, LINK_JUMP.y, clampf(difficulty, 0.0, 1.0)) if jump else LINK_FLOW
+	else:
+		seconds = lerpf(beat.x, beat.y, clampf(difficulty, 0.0, 1.0)) * float(m.gap) * rng.randf_range(0.85, 1.15) / clampf(density / 0.7, 0.7, 1.3)
+		# конец фразы: считаются фразы, а не элементы; после серии фраз — передышка
+		std.streak = int(std.streak) + 1
+		if m.get("calm", false): std.streak = 0
+		if int(std.streak) >= int(lerpf(STREAK.x, STREAK.y, clampf(difficulty, 0.0, 1.0))):
+			seconds = maxf(seconds, BREATH)
+			std.streak = 0
 	var clear := clampf(v * seconds, 6.0, 40.0)
 	std.carry = lerpf(carry, 1.0, clampf(clear / 60.0, 0.0, 1.0))
 	return clear
@@ -246,7 +301,9 @@ static func _element(d: TrailDefinition, m: Dictionary, cursor: float, end: floa
 		else:
 			var weights: Dictionary = m.elements if std.is_empty() else m.get("std_elements", m.elements)
 			if std.get("fallback", false): weights = FALLBACK
-			elif std.get("rhythm", false): weights = _follow(weights, last, difficulty)
+			elif std.get("rhythm", false):
+				var phrase: Array = std.phrase
+				weights = {phrase[0]: 1.0} if not phrase.is_empty() else _follow(weights, last, difficulty)
 			kind = _weighted(weights, rng)
 			if kind == last: kind = _weighted(weights, rng)
 			if kind == T.TABLETOP or kind == T.DROP: cursor += APPROACH
