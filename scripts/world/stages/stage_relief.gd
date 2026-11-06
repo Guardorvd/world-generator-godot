@@ -265,7 +265,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	t = clampf((hill.fbm(X / MASSIF + 25.1, Y / MASSIF - 71.3, 2) + UPLAND_SHIFT) / 0.4, 0.0, 1.0)
 	var up := t * t * (3.0 - 2.0 * t)
 	# С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня
-	sharp *= 1.0 - up
+	sharp = (0.25 + 0.75 * sharp) * (1.0 - up)
 	var asym := 1.0 + (ASYM - 1.0) * sharp
 	# С 3.1 мелкая складчатость зависит и от формы массива: у сглаженных гор главный гребень
 	# цельный, у острых остаются скалистые детали. Возвышенности по-прежнему теряют большую их часть
@@ -278,9 +278,6 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	r = minf(r * (1.0 + 0.35 * hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PEAK_CAP)
-	# Отроги: мелкие гребни на склонах (на гребне и у подножия их нет)
-	var sp := ridge.ridged(X / 70.0 - 57.1, Y / 70.0 + 11.9, 2)
-	r = maxf(0.0, r + sp * sp * maxf(0.0, r * (1.0 - r)) * 0.55 * fine)
 	# С 3.5 у сглаженных массивов середина склона образует широкое пологое плечо.
 	# Два плавных края ограничивают его одним поясом; долины и вершины сохраняются.
 	t = clampf((r - 0.25) / 0.15, 0.0, 1.0)
@@ -293,10 +290,12 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var amp := 0.6 + 0.55 * t * t * (3.0 - 2.0 * t)
 	var m := (q + (r * r - q) * sharp) * amp
 	m += (r * UPLAND_AMP - m) * up
-	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) + m * CREST_SHARE
+	# Connected valleys cut the foundation too; uplands retain their broad base.
+	var foundation := 1.0 - 0.35 * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
+	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) * foundation + m * CREST_SHARE
 	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
 	if m > PEAK_KNEE:
-		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / PEAK_SOFT)
+		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / (PEAK_SOFT + 0.65 * sharp))
 	return m
 
 
@@ -319,7 +318,8 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		# от n = 0, то есть отвесную ступеньку вдоль гребня даже при плавном шуме
 		if o == 0:
 			n *= asym if n > 0.0 else 1.0 / asym
-		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
+		var rounding := CREST_ROUND * (1.0 - 0.7 * fine)
+		var e := sqrt(n * n + rounding * rounding)
 		var val := maxf(0.0, 1.0 - e)
 		val *= val
 		val *= wt
@@ -331,7 +331,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		# Медленная продольная линия задаёт извилистую долину. Поперечное поле расширяет её
 		# в котловины; их дно меняет высоту плавно, а не становится горизонтальной ступенью.
 		var course := ridge.noise(along / INNER_ALONG + 18.7, across / INNER_ACROSS - 37.1)
-		var side := ridge.noise(along / 180.0 - 51.3, across / 320.0 + 24.8)
+		var side := ridge.noise(along / (180.0 - 132.0 * fine) - 51.3, across / (320.0 - 150.0 * fine) + 24.8)
 		var t := clampf((side + 0.2) / 0.6, 0.0, 1.0)
 		var opening := t * t * (3.0 - 2.0 * t)
 		# У скалистых гор долины уже и глубже, у сглаженных — широкие и неглубокие.
@@ -342,5 +342,10 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		t = clampf(1.0 - absf(side) / 0.2, 0.0, 1.0)
 		var branch := t * t * (3.0 - 2.0 * t)
 		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
-		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
+		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * (SIDE_CUT + 0.18 * fine) * interior
+		# A shoulder follows the same ribs, with its level varying along the valley.
+		# Broad transitions leave traversable shelves, never a quantized terrace.
+		var shelf_level := 0.36 + 0.12 * opening
+		var shelf := smoothstep(shelf_level - 0.12, shelf_level, s) * (1.0 - smoothstep(shelf_level, shelf_level + 0.12, s))
+		s += (shelf_level - s) * shelf * 0.35 * fine * interior * (1.0 - 0.8 * valley)
 	return s
