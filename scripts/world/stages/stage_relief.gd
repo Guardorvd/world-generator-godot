@@ -187,10 +187,15 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 		h += foothills * (FOOTHILL_LIFT + 0.08 * rolling) * mountain_height
 	# Мелкие холмы затухают внутри массива, оставляя место широким склонам и плечам.
 	h += hills * HILL_AMP * (0.3 + land) * (PLAIN_HILLS + (1.0 - PLAIN_HILLS) * rough) * (1.0 - mask * 0.85)
+	# Reuse the existing 20–160 m hill octaves and broad dry valley field.
+	# Low amplitude, no extra noise calls; protect shore connections and massifs.
+	var calm := (1.0 - rough) * (1.0 - mask) * (1.0 - mask) * (1.0 - foothills)
+	var shore_fade := smoothstep(0.015, 0.08, h - SEA_RAW)
+	h += (hills * 0.025 - valley * 0.008) * calm * shore_fade
 	# То же поле понижений, что ослабляет предгорный подъём.
 	h -= valley * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
-		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / mountain_scale, (y + wy * MOUNTAIN_WARP) / mountain_scale) * mask * MOUNTAIN_AMP * mountain_height
+		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / mountain_scale, (y + wy * MOUNTAIN_WARP) / mountain_scale, inland) * mask * MOUNTAIN_AMP * mountain_height
 	return h
 
 
@@ -254,7 +259,7 @@ const PEAK_KNEE := 0.36
 const PEAK_SOFT := 0.25
 
 
-static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float:
+static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: float = 1.0) -> float:
 	var s := clampf(ridge.fbm(X / MASSIF + 31.4, Y / MASSIF - 17.2, 2) * 3.0 + 1.5, 0.0, 2.999)
 	var k := int(s)
 	var t := clampf((s - k - 0.3) / 0.4, 0.0, 1.0)
@@ -290,8 +295,8 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float) -> float
 	var amp := 0.6 + 0.55 * t * t * (3.0 - 2.0 * t)
 	var m := (q + (r * r - q) * sharp) * amp
 	m += (r * UPLAND_AMP - m) * up
-	# Connected valleys cut the foundation too; uplands retain their broad base.
-	var foundation := 1.0 - 0.35 * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
+	# Incise inland foundations only: lowering coastal saddles can flood dry road links.
+	var foundation := 1.0 - 0.35 * inland * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
 	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) * foundation + m * CREST_SHARE
 	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
 	if m > PEAK_KNEE:

@@ -375,9 +375,13 @@ public partial class FastGrid : RefCounted
 					h += foothills * (FoothillLift + 0.08 * rolling) * mountainHeight;
 				}
 				h += hills * HillAmp * (0.3 + land) * (PlainHills + (1.0 - PlainHills) * rough) * (1.0 - m * 0.85);
-				h -= valley * ValleyDepth * rough * inland;
+				double calm = (1.0 - rough) * (1.0 - m) * (1.0 - m) * (1.0 - foothills);
+			 double shoreT = Clamp01(((h - SeaRaw) - 0.015) / (0.08 - 0.015));
+			 double shoreFade = shoreT * shoreT * (3.0 - 2.0 * shoreT);
+			 h += (hills * 0.025 - valley * 0.008) * calm * shoreFade;
+			 h -= valley * ValleyDepth * rough * inland;
 				if (m > 0.0)
-					h += Mountain(ridge, hill, (x + wx * MountainWarp) / mountainScale, (y + wy * MountainWarp) / mountainScale) * m * MountainAmp * mountainHeight;
+					h += Mountain(ridge, hill, (x + wx * MountainWarp) / mountainScale, (y + wy * MountainWarp) / mountainScale, inland) * m * MountainAmp * mountainHeight;
 				outH[j * W + i] = (float)h;
 			}
 		}
@@ -427,7 +431,7 @@ public partial class FastGrid : RefCounted
 	private const double PeakSoft = 0.25;
 
 	/// <summary>Копия StageRelief.mountain.</summary>
-	private static double Mountain(int[] ridge, int[] hill, double X, double Y)
+	private static double Mountain(int[] ridge, int[] hill, double X, double Y, double inland)
 	{
 		double s = Fbm(ridge, X / Massif + 31.4, Y / Massif - 17.2, 2) * 3.0 + 1.5;
 		s = s < 0.0 ? 0.0 : (s > 2.999 ? 2.999 : s);
@@ -460,7 +464,7 @@ public partial class FastGrid : RefCounted
 		double m = (q + (r * r - q) * sharp) * amp;
 		m += (r * UplandAmp - m) * up;
 		double foundationT = Clamp01((r - 0.12) / (0.65 - 0.12));
-		double foundation = 1.0 - 0.35 * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
+		double foundation = 1.0 - 0.35 * inland * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
 		m = MassifBase * amp * (1.0 - (1.0 - UplandAmp) * up) * foundation + m * CrestShare;
 		if (m > PeakKnee)
 			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / (PeakSoft + 0.65 * sharp));
