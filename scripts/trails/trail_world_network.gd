@@ -13,9 +13,16 @@ const EARTHWORKS := {max_cut = 8.0, max_fill = 6.0, modification = 1.0}
 const DESIGN_DEPTH := 4.0     # уровень полотна не дальше этого от земли, м: с виражами, откосами и элементами это в пределах EARTHWORKS
 ## Работы по виду: глубина (насколько полотно может уйти от земли) и самый крутой проектный уклон на 6 м. Круче этого место не
 ## строят, а обходят: ходок не идёт туда, где проект не может положить полотно мягче.
+## Баланс линии и земли: подготовленные трассы (парк, флоу) формируются полностью — виражи, насыпи, выемки; лесные и горные
+## маршруты держатся за исходный склон: полотно ближе к земле (глубина, доля проектного изменения `strength`), наклоняется вместе с
+## боковым склоном (`side_follow`), короче окно выравнивания (`window`), круче откосы (`batter`), слабее вираж (`bank`).
+## Это цели формирования, а не отказы: линия не бракуется за то, что земля осталась круче проекта.
 const WORK := {
-	park = {depth = 4.5, grade = 0.22}, flow = {depth = 4.5, grade = 0.22}, downhill = {depth = 4.0, grade = 0.32},
-	enduro = {depth = 3.5, grade = 0.34}, tech = {depth = 3.0, grade = 0.38}}
+	park = {depth = 4.5, grade = 0.22}, flow = {depth = 4.5, grade = 0.22},
+	downhill = {depth = 2.6, grade = 0.32, shape = {strength = 0.7, side_follow = 0.6, level_window = 5.0, batter = 0.9, bank_max = 0.28, grade_limit = 0.2}},
+	enduro = {depth = 2.0, grade = 0.34, shape = {strength = 0.6, side_follow = 0.75, level_window = 4.0, batter = 1.0, bank_max = 0.22, grade_limit = 0.24}},
+	tech = {depth = 1.6, grade = 0.38, shape = {strength = 0.5, side_follow = 0.85, level_window = 3.0, batter = 1.1, bank_max = 0.15, grade_limit = 0.3}},
+	link = {depth = 1.6, grade = 0.34, shape = {strength = 0.5, side_follow = 0.85, level_window = 3.0, batter = 1.1, bank_max = 0.15, grade_limit = 0.3}}}
 const REPLANS := 1            # столько раз линию прокладывают заново в обход крутых мест, прежде чем резать
 const WALL_R := 9.0           # крутое место закрыто ходоку в таком радиусе, м
 const RouteContract := preload("res://scripts/trails/trail_route_contract.gd")
@@ -42,12 +49,15 @@ const ALT_MIN_LENGTH := 400.0 # вариант берёт участки не к
 const VARIANT_ELEMENTS := 3   # у варианта не меньше стольких элементов
 const VARIANT_APART := 12.0   # и в среднем он не ближе этого к основной линии, м
 const END_MARGIN := 60.0       # последний участок маршрута кончается не ближе этого к концу коридора, м
-const PARK_LINES := 3         # столько самых длинных линий трейл-парка
+const PARK_LINES := 7         # не больше стольких самых длинных линий трейл-парка
+const PARK_QUALITY := 1.0     # площадка хуже этой оценки (BikePark.quality) парка не получает: нет склона, простора или перепада
+const PARK_GAIN := 6.0        # линий на единицу оценки сверх PARK_QUALITY (две в худшем случае): хорошая площадка — больше линий
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
 const PARK_END := 14.0        # концы линии парка отступают от родительской, м
 const DIFFICULTY := [0.25, 0.4, 0.55]
 const MODIFICATION := {flow = 0.7, park = 0.7, downhill = 0.6, enduro = 0.5, tech = 0.4}
 static var surveys := 0
+static var park_quality := 0.0 # оценка площадки последнего парка (диагностика: stats.park.quality)
 
 static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> Dictionary:
 	var started := Time.get_ticks_msec()
@@ -83,17 +93,30 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
 	if budget > 0: park = _park_candidates(w, h, ctx.area)
-	plan.stats.park = {ms = Time.get_ticks_msec() - park_started, lines = park.size()}
+	plan.stats.park = {ms = Time.get_ticks_msec() - park_started, lines = park.size(), quality = snappedf(park_quality, 0.01)}
+	# Парк — сеть: подъезд от ближайшего пути к магистрали (самой длинной линии) и выезд с конца каждой линии к другим линиям
+	# или дорогам, чтобы после спуска можно было ехать дальше и вернуться к началу.
+	var park_index := 0
 	for candidate: Dictionary in park:
 		plan.stats.attempted += 1
-		_leg(ctx, candidate.points, candidate.region, "park", candidate.title, candidate.trail_seed, DIFFICULTY[plan.stats.accepted % DIFFICULTY.size()], false)
+		ctx.route = -100 - park_index
+		var line := _leg(ctx, candidate.points, candidate.region, candidate.style, candidate.title, candidate.trail_seed, candidate.difficulty, false)
+		if line != null:
+			ctx.width = line.width
+			var tail := (line.points[-1] - line.points[-2]).normalized()
+			if park_index == 0: _entry(ctx, line.points[0], ctx.route, line.title, candidate.difficulty, candidate.trail_seed + 97)
+			_exit(ctx, line.points[-1], tail, ctx.route, line.title, candidate.difficulty, candidate.trail_seed + 191)
+		park_index += 1
+	ctx.erase("route")
 	var route_index := 0
 	for corridor: Dictionary in corridors:
 		if plan.stats.length_m >= ctx.length_target or plan.stats.work_m >= ctx.work_limit: break
 		plan.stats.attempted += 1
 		plan.stats.corridors.append(roundi(corridor.probe.length))
 		route_index = _route(ctx, corridor.probe.points, corridor.trail_seed, route_index)
+	ctx.erase("route")
 	_alternatives(ctx)
+	if not plan.routes.is_empty(): _districts(ctx)
 	if not plan.routes.is_empty():
 		RoadSurface.rebuild_map(w)
 		plan.state = "found"
@@ -127,10 +150,18 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 	ctx.start_speed = 3.0
 	ctx.width = 0.0
 	route_index += 1
+	ctx.route = route_index
 	# Характер маршрута (темп, извилистость, насыщенность, смещение сложности): свой у каждого, одинаковый на всех его участках
 	ctx.persona = Character.persona(hash([ctx.w.seed_num, route_index, seed_value]))
 	var title := "Маршрут %d" % route_index
 	var difficulty: float = DIFFICULTY[route_index % DIFFICULTY.size()]
+	var entry := _entry(ctx, start, route_index, title, difficulty, seed_value + 97)
+	if entry != null:
+		start = entry.points[-1]
+		tangent = (entry.points[-1] - entry.points[-2]).normalized()
+		route_length += entry.route_length()
+		ctx.width = entry.width
+		previous = "flow"
 	while cursor < total - MIN_LEG and plan.stats.work_m < ctx.work_limit and plan.stats.length_m < ctx.length_target:
 		var hint := PackedVector2Array([start])
 		if tangent != Vector2.ZERO: hint.append(start + tangent * LEG_LEAD)
@@ -162,6 +193,7 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 			# Место не проходится: пропустить его; если до него уже есть маршрут, дальше идёт новый.
 			fails = 0
 			skips += 1
+			if route_length > 0.0: route_length += _exit(ctx, start, tangent, route_index, title, difficulty, seed_value + 191)
 			cursor += LEG_SKIP * minf(skips, 3.0)
 			if cursor >= total: break
 			cursor = _pick_start(ctx.input, guide, cursor)
@@ -177,6 +209,14 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 				ctx.persona = Character.persona(hash([ctx.w.seed_num, route_index, seed_value]))
 				title = "Маршрут %d" % route_index
 				difficulty = DIFFICULTY[route_index % DIFFICULTY.size()]
+				ctx.route = route_index
+				var reentry := _entry(ctx, start, route_index, title, difficulty, seed_value + 97 + route_index)
+				if reentry != null:
+					start = reentry.points[-1]
+					tangent = (reentry.points[-1] - reentry.points[-2]).normalized()
+					route_length += reentry.route_length()
+					ctx.width = reentry.width
+					previous = "flow"
 			continue
 		fails = 0
 		skips = 0
@@ -190,8 +230,200 @@ static func _route(ctx: Dictionary, corridor: PackedVector2Array, seed_value: in
 		tangent = (global.points[-1] - global.points[-2]).normalized()
 		# Вперёд по коридору на столько, сколько участок прошёл вдоль своей части.
 		cursor += maxf(MIN_LEG, RouteContract.project(hint, end).x)
-	if route_length > 0.0: plan.stats.routes_m.append(roundi(route_length))
+	if route_length > 0.0:
+		route_length += _exit(ctx, start, tangent, route_index, title, difficulty, seed_value + 191)
+		plan.stats.routes_m.append(roundi(route_length))
 	return route_index
+
+## Связи маршрута с сетью. Маршрут не висит в лесу: его начало подходит к дороге или к другому маршруту (подъезд), его конец
+## выходит к ним (выезд), и после спуска можно ехать дальше. Это обычные участки того же маршрута (общее название, тот же
+## построитель и приёмка), но спокойные: стиль flow, земля почти не меняется (WORK.link), конец не требует выката — он
+## стыкуется. Ближайшая цель — любой существующий путь мира (дорога, тропа, принятый маршрут), кроме своего маршрута, не дальше
+## LINK_MAX; ближе LINK_MIN маршрут и так касается пути. Не вышло построить — маршрут остаётся как был.
+const LINK_MAX := 420.0       # дальше цель связи не ищется, м
+const LINK_MIN := 60.0        # ближе цель — маршрут уже у пути, связь не нужна, м
+const LINK_WALL := 0.5        # по прямой круче этого уклона на 12 м — не связь, м/м
+const LINK_LEG := 40.0        # связь короче этого не берётся, м
+const LINK_OVER := 6.0        # линия выхода заходит за ось цели, чтобы пересечь её, а не остановиться рядом, м
+
+## Ближайшая достижимая точка существующего пути (кроме маршрута `route`) к `from`: {point, distance} или пусто. Путь, к которому
+## по прямой лежит вода или стена, пропускается: связь на него не построить, а неудачная попытка стоит секунд.
+static func _link_target(ctx: Dictionary, from: Vector2, route: int) -> Dictionary:
+	var candidates: Array[Dictionary] = []
+	for path: Dictionary in ctx.input.existing_paths:
+		if int(path.get("route", -2)) == route: continue
+		var pts: PackedVector2Array = path.points
+		var best := LINK_MAX
+		var found := Vector2.INF
+		for k in range(1, pts.size()):
+			var a := pts[k - 1]
+			var delta := pts[k] - a
+			var q := a + delta * clampf((from - a).dot(delta) / maxf(0.001, delta.length_squared()), 0.0, 1.0)
+			var distance := from.distance_to(q)
+			if distance < best:
+				best = distance
+				found = q
+		if found != Vector2.INF: candidates.append({point = found, distance = best})
+	candidates.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.distance < b.distance)
+	for candidate: Dictionary in candidates:
+		if float(candidate.distance) < LINK_MIN or _link_clear(ctx.input, from, candidate.point): return candidate
+	return {}
+
+## По прямой от `from` к `to` нет воды и запретных клеток (не больше одной точки через 12 м) и нет стены круче LINK_WALL.
+static func _link_clear(input: GI, from: Vector2, to: Vector2) -> bool:
+	var steps := maxi(2, ceili(from.distance_to(to) / 12.0))
+	var bad := 0
+	var previous := input.natural_ground(from)
+	for k in range(1, steps + 1):
+		var p := from.lerp(to, float(k) / steps)
+		var y := input.natural_ground(p)
+		if input.blocked(p) or absf(y - previous) / 12.0 > LINK_WALL: bad += 1
+		previous = y
+	return bad <= 1
+
+## Линия связи по подсказке `hint` (мировые метры): участок маршрута со своей областью, как у обычного участка.
+static func _link(ctx: Dictionary, hint: PackedVector2Array, title: String, difficulty: float, seed_value: int) -> TrailDefinition:
+	var box := Rect2(hint[0], Vector2.ZERO)
+	for p in hint: box = box.expand(p)
+	var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * LEG_PAD
+	var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * LEG_PAD
+	var saved_arc = ctx.get("arc")
+	ctx.link = true
+	ctx.min_leg = LINK_LEG
+	ctx.arc = Vector2(0.0, 1.0)
+	var result := _leg(ctx, hint, Rect2i(lo, hi - lo), "flow", title, seed_value, minf(difficulty, 0.3), true)
+	ctx.erase("link")
+	ctx.erase("min_leg")
+	if saved_arc != null: ctx.arc = saved_arc
+	return result
+
+## Выезд: от конца `from` (курс `tangent`) к ближайшему пути. Добавленная длина, м (0 — связи нет).
+static func _exit(ctx: Dictionary, from: Vector2, tangent: Vector2, route: int, title: String, difficulty: float, seed_value: int) -> float:
+	if tangent == Vector2.ZERO: return 0.0
+	var target := _link_target(ctx, from, route)
+	if target.is_empty() or float(target.distance) < LINK_MIN: return 0.0
+	var aim: Vector2 = target.point - from
+	var direction := aim.normalized()
+	var hint := PackedVector2Array([from, from + tangent * LEG_LEAD])
+	var s := LEG_LEAD
+	while s < aim.length() - 8.0:
+		hint.append(from + direction * s)
+		s += 16.0
+	hint.append(target.point + direction * LINK_OVER)
+	var link := _link(ctx, hint, title, difficulty, seed_value)
+	_count(ctx.plan, "links", "exit" if link != null else "exit_failed")
+	return link.route_length() if link != null else 0.0
+
+## Подъезд: от ближайшего пути к началу маршрута `start`. Определение связи (конец у `start`) или null.
+static func _entry(ctx: Dictionary, start: Vector2, route: int, title: String, difficulty: float, seed_value: int) -> TrailDefinition:
+	var target := _link_target(ctx, start, route)
+	if target.is_empty() or float(target.distance) < LINK_MIN: return null
+	var from: Vector2 = target.point
+	var aim := start - from
+	var direction := aim.normalized()
+	var hint := PackedVector2Array([from, from + direction * LEG_LEAD])
+	var s := LEG_LEAD + 16.0
+	while s < aim.length() - 8.0:
+		hint.append(from + direction * s)
+		s += 16.0
+	hint.append(start)
+	ctx.start_speed = 3.0
+	var link := _link(ctx, hint, title, difficulty, seed_value)
+	_count(ctx.plan, "links", "entry" if link != null else "entry_failed")
+	return link
+
+## Районы. Маршруты, которые касаются друг друга (конец одного у линии другого) или начинаются рядом, образуют район; он
+## называется по ближайшему названному месту мира, и название стоит перед названием каждого его маршрута: на карте видно, где
+## район, какие в нём маршруты и откуда въезд. plan.districts: {name, routes (названия), length, center, entry (мировые метры)}.
+const DISTRICT_TOUCH := 40.0   # конец маршрута у линии другого не дальше этого — они связаны, м
+const DISTRICT_NEAR := 260.0   # концы двух маршрутов не дальше этого — один район, м
+const DISTRICT_NAME_R := 2500.0 # названное место дальше этого районного имени не даёт, м
+static func _districts(ctx: Dictionary) -> void:
+	var plan: Dictionary = ctx.plan
+	var groups: Array[Dictionary] = []
+	var by_base := {}
+	for r: Dictionary in plan.routes:
+		var base := String(r.title).get_slice(" · вариант", 0)
+		if not by_base.has(base):
+			by_base[base] = groups.size()
+			groups.append({base = base, points = PackedVector2Array(), ends = PackedVector2Array(), length = 0.0, first = r.points[0]})
+		var group: Dictionary = groups[by_base[base]]
+		var pts: PackedVector2Array = r.points
+		group.points = group.points + pts
+		group.ends = group.ends + PackedVector2Array([pts[0], pts[-1]])
+		group.length += _polyline_length(pts)
+	var parent := PackedInt32Array()
+	for i in groups.size(): parent.append(i)
+	for a in groups.size():
+		for b in range(a + 1, groups.size()):
+			if _joined(groups[a], groups[b]): _union(parent, a, b)
+	var members := {}
+	for i in groups.size():
+		var root := _find(parent, i)
+		if not members.has(root): members[root] = []
+		(members[root] as Array).append(i)
+	var places: Array = (ctx.w._places().places as Dictionary).values()
+	var districts: Array[Dictionary] = []
+	var names_used := {}
+	for root: int in members:
+		var center := Vector2.ZERO
+		var count := 0
+		var length := 0.0
+		var titles: Array[String] = []
+		var entry := Vector2.INF
+		for i: int in members[root]:
+			var group: Dictionary = groups[i]
+			for p: Vector2 in group.ends:
+				center += p
+				count += 1
+			length += group.length
+			titles.append(group.base)
+			if entry == Vector2.INF: entry = group.first
+		center /= maxi(1, count)
+		var best := DISTRICT_NAME_R
+		var name := ""
+		for place: Dictionary in places:
+			if String(place.name).is_empty(): continue
+			var distance := (Vector2(place.x, place.y) * GameConfig.TILE).distance_to(center)
+			if distance < best:
+				best = distance
+				name = String(place.name)
+		var label := "Район «%s»" % name if not name.is_empty() else "Район %d" % (districts.size() + 1)
+		if names_used.has(label): label += " %d" % (int(names_used[label]) + 1)
+		names_used[label] = int(names_used.get(label, 0)) + 1
+		districts.append({name = label, routes = titles, length = length, center = center, entry = entry})
+	# название района — перед названием каждого его маршрута (в плане и в записях)
+	var rename := {}
+	for district: Dictionary in districts:
+		for base: String in district.routes: rename[base] = "%s · %s" % [district.name, base]
+	for list: Array in [plan.routes, plan.entries.map(func(e: Dictionary) -> Dictionary: return e.route)]:
+		for r: Dictionary in list:
+			var base := String(r.title).get_slice(" · вариант", 0)
+			if rename.has(base): r.title = String(rename[base]) + String(r.title).substr(base.length())
+	plan.districts = districts
+
+static func _polyline_length(pts: PackedVector2Array) -> float:
+	var total := 0.0
+	for k in range(1, pts.size()): total += pts[k - 1].distance_to(pts[k])
+	return total
+
+static func _joined(a: Dictionary, b: Dictionary) -> bool:
+	for end: Vector2 in a.ends:
+		for other: Vector2 in b.ends:
+			if end.distance_to(other) <= DISTRICT_NEAR: return true
+		for p: Vector2 in b.points:
+			if end.distance_to(p) <= DISTRICT_TOUCH: return true
+	for end: Vector2 in b.ends:
+		for p: Vector2 in a.points:
+			if end.distance_to(p) <= DISTRICT_TOUCH: return true
+	return false
+
+static func _find(parent: PackedInt32Array, i: int) -> int:
+	while parent[i] != i: i = parent[i]
+	return i
+
+static func _union(parent: PackedInt32Array, a: int, b: int) -> void:
+	parent[_find(parent, b)] = _find(parent, a)
 
 ## Вторые линии там, где местность даёт две интересные: на участке принятого маршрута, у которого другой вид почти так же
 ## хорош, прокладывается вариант другого вида. Он начинается и кончается в тех же точках, а посередине уходит в сторону на
@@ -332,7 +564,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, keep_start = true, strict_finish = ctx.get("reference") == null, persona = ctx.get("persona", Character.persona(seed_value)), width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, keep_start = true, strict_finish = ctx.get("reference") == null and not ctx.get("link", false), persona = ctx.get("persona", Character.persona(seed_value)), width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		# лесистость и поляны под линией (StageVegetation.cover_at): горные и природные характеры меняют по ним настроение участков
 		cover = func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE) + site.origin.x, floori(p.y / GameConfig.TILE) + site.origin.y),
 		soft = func(p: Vector2) -> bool:
@@ -371,7 +603,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		return null
 	for e: TrailElement in result.routes[0].elements: _count(plan, "proposed", TrailElementLibrary.title(e.profile))
 	var replan := func() -> Dictionary: return line.call(hint, is_leg)
-	var admitted := _admit(ctx, site, result.routes[0], title, line, replan if is_leg else Callable(), walls, blocked, local_input, WORK[style], MIN_LEG if is_leg else MIN_LINE, is_leg)
+	var admitted := _admit(ctx, site, result.routes[0], title, line, replan if is_leg else Callable(), walls, blocked, local_input, WORK["link" if ctx.get("link", false) else style], float(ctx.get("min_leg", MIN_LEG)) if is_leg else MIN_LINE, is_leg)
 	if admitted.is_empty(): return null
 	ctx.start_speed = admitted.exit_speed
 	var d: TrailDefinition = admitted.d
@@ -385,7 +617,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		_refuse(plan, errors[0])
 		return null
 	publish(h, site, admitted.prepared.heights)
-	ctx.input.existing_paths.append({points = global.points, half_width = global.width * 0.5})
+	ctx.input.existing_paths.append({points = global.points, half_width = global.width * 0.5, route = ctx.get("route", -1)})
 	plan.routes.append(StageTrailPlan.pack(global))
 	plan.entries.append({rect = context, style = style, route = StageTrailPlan.pack(global),
 		length = global.route_length(), elements = global.elements.size(), earthworks = h.road_refinement.trail_shaping[global.id]})
@@ -442,11 +674,28 @@ static func _too_deep(h: Heightfield, d: TrailDefinition) -> float:
 static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Array[Dictionary]:
 	var out: Array[Dictionary] = []
 	var park := BikePark.build(w, h, rect, "park")
+	park_quality = park.quality
+	# Парк строится там, где площадка этого стоит: чем лучше склон, простор и перепад высот, тем больше линий; плохой площадке
+	# парка нет (раньше в каждом мире строились одни и те же три линии).
+	if park.routes.is_empty() or park.quality < PARK_QUALITY: return out
+	var wanted := clampi(roundi(2.0 + (park.quality - PARK_QUALITY) * PARK_GAIN), 2, PARK_LINES)
 	var lines := park.routes.duplicate()
 	lines.sort_custom(func(a: TrailDefinition, b: TrailDefinition) -> bool: return a.route_length() > b.route_length())
-	for d: TrailDefinition in lines.slice(0, PARK_LINES):
+	var picked: Array[TrailDefinition] = []
+	for d: TrailDefinition in lines:
+		if d.route_length() - PARK_END * 2.0 >= PARK_MIN: picked.append(d)
+		if picked.size() >= wanted: break
+	# Сложность по крутизне линии: самая пологая треть — лёгкая, круче — средняя и сложная
+	var steepness: Array[float] = []
+	for d: TrailDefinition in picked:
+		steepness.append(absf(h.ground_at(d.points[0].x, d.points[0].y) - h.ground_at(d.points[-1].x, d.points[-1].y)) / maxf(1.0, d.route_length()))
+	var order := range(picked.size())
+	order.sort_custom(func(a: int, b: int) -> bool: return steepness[a] < steepness[b])
+	var tier := {}
+	for rank in order.size(): tier[order[rank]] = mini(2, rank * 3 / order.size())
+	for index in picked.size():
+		var d: TrailDefinition = picked[index]
 		var total := d.route_length()
-		if total - PARK_END * 2.0 < PARK_MIN: continue
 		var points := PackedVector2Array()
 		var s := PARK_END
 		while s < total - PARK_END:
@@ -456,7 +705,8 @@ static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Arra
 		for p in points: box = box.expand(p)
 		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * 8
 		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * 8
-		out.append({region = Rect2i(lo, hi - lo).intersection(rect), title = d.title, trail_seed = posmod(hash([w.seed_num, d.id]), 99999) + 1, points = points})
+		out.append({region = Rect2i(lo, hi - lo).intersection(rect), title = d.title, trail_seed = posmod(hash([w.seed_num, d.id]), 99999) + 1, points = points,
+			difficulty = DIFFICULTY[tier[index]], style = "park"})
 	return out
 
 ## Сборка и проверка одной линии. Один плохой участок не выбрасывает всю длинную линию: элемент, не прошедший проверку,
@@ -484,6 +734,7 @@ static func _admit(ctx: Dictionary, site: TrailSite, first: TrailDefinition, tit
 		# Полотно строится по проекту, в пределах земляных работ: половина работ оставляла стенки, а без предела сборка отказывала.
 		d.earthwork = 1.0
 		d.shaping.depth_cap = float(work.depth)
+		for key: String in work.get("shape", {}): d.shaping.set(key, work.shape[key])
 		d.id = "world_trail_%d" % plan.entries.size()
 		d.title = title
 		# The saved world-space float32 line is canonical. Bake its roundtrip, so replay cannot

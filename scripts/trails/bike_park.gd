@@ -38,6 +38,7 @@ const PROFILES := ["flow", "mountain", "mixed", "technical", "flow", "forest"]
 const NAMES := ["Магистраль", "Горная", "Смешанная", "Техничная", "Флоу", "Лесная"]
 
 var center := Vector2.ZERO   ## м
+var quality := 0.0           ## оценка площадки: простор + подходящий склон + перепад высот (до ~2,1); 0 — выбора не было
 var radius := 0.0            ## м, до ближайшего занятого места от центра
 var extent := 0.0            ## м, самая дальняя точка трасс от центра
 var routes: Array[TrailDefinition] = []
@@ -196,6 +197,7 @@ func _best_site(d: PackedFloat32Array, slope: PackedFloat32Array, height: Packed
 			if score > best_score:
 				best_score = score
 				best = gz * gw + gx
+	quality = maxf(0.0, best_score)
 	return best
 
 
