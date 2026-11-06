@@ -133,71 +133,46 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 					qslot.append(slots.size())
 			slots.append({zone = zone[key], among = among, joints = joints})
 		var evaluated := _evaluate(h, qx, qz, qslot, slots, profiles, shapes, spans, pin_at)
+		# What a cell gets from the evaluated vertices depends on nothing the other cells do (patches are published at the end),
+		# so the cells of the batch are prepared in parallel; the results are then taken one by one in the same order as before:
+		# the first failure, its place, the staged patches and the statistics are the same.
+		var cells := _bake_cells(h, keys, first, last, queued, evaluated, offsets, shades, earthwork_source, earthwork_input, max_cut, max_fill)
 		for index in range(first, last):
-			var key: int = keys[index]
 			if (cancel.is_valid() and cancel.call()) or Time.get_ticks_msec() >= deadline:
 				return PackedStringArray(["бюджет/отмена формирования"])
-			var patch: Dictionary = r.patches.get(key, {})
-			if patch.is_empty():
-				patch = _ground_patch(h, key)
-				added[key] = patch
-			var touched := false
-			var hs: PackedFloat32Array = patch.h.duplicate()
-			var colors: PackedColorArray = patch.color.duplicate()
-			var source_vertices := PackedFloat32Array()
-			if earthwork_source != null and earthwork_source.road_refinement.patches.has(key):
-				source_vertices = earthwork_source.road_refinement.patches[key].h
-			for iz in RoadRefinement.STRIDE:
-				for ix in RoadRefinement.STRIDE:
-					var gx := (key % w.W) * RoadRefinement.DIV + ix
-					var gz := (key / w.W) * RoadRefinement.DIV + iz
-					var vertex := Vector2i(gx, gz)
-					if not offsets.has(vertex):
-						var n: int = queued[vertex]
-						if evaluated.bad[n] != 0: return PackedStringArray(["Trail earthworks produced a non-finite terrain displacement"])
-						var displacement: float = evaluated.displacement[n]
-						offsets[vertex] = displacement
-						var shade_value: float = evaluated.shade[n]
-						if shade_value != 0.0: shades[vertex] = shade_value
-						var best: TrailDefinition = evaluated.best[n]
-						if again.is_empty() and best != null and best.earthwork > 0.0:
-							var id: String = best.id
-							if not stats.has(id): stats[id] = {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0}
-							var record: Dictionary = stats[id]
-							record.vertices += 1
-							if displacement != 0.0:
-								var volume := displacement * RoadRefinement.STEP * RoadRefinement.STEP
-								record.cut_m3 += maxf(0.0, -volume)
-								record.fill_m3 += maxf(0.0, volume)
-								record.max_cut = maxf(record.max_cut, -displacement)
-								record.max_fill = maxf(record.max_fill, displacement)
-					hs[iz * RoadRefinement.STRIDE + ix] += offsets[vertex]
-					if offsets[vertex] != 0.0: touched = true
-					# Reject on the actual rounded final vertex, before spending the rest of
-					# the bake on a doomed proposal. The normal final audit still covers the
-					# entire surface, including base formation outside this zone.
-					if earthwork_source != null and earthwork_input != null:
-						var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
-						var n := iz * RoadRefinement.STRIDE + ix
-						var delta: float = hs[n] - (source_vertices[n] if not source_vertices.is_empty() else earthwork_source.ground_at(at.x, at.y))
-						if delta < max_cut or delta > max_fill:
-							limits.failed_at = at
-							return PackedStringArray(["превышен игровой предел земляных работ"])
-						if absf(delta) > 0.05 and earthwork_input.blocked(at):
-							limits.failed_at = at
-							return PackedStringArray(["земляные работы затрагивают воду, инфраструктуру или готовый путь"])
-					var shade: float = shades.get(vertex, 0.0)
-					if shade != 0.0:
-						touched = true
-						var c := colors[iz * RoadRefinement.STRIDE + ix]
-						var k := 1.0 + shade * c.a
-						colors[iz * RoadRefinement.STRIDE + ix] = Color(c.r * k, c.g * k, c.b * k, c.a)
-			# The zone only reached this cell, nothing changed: the old ground stays, no metre patch to mesh and store.
-			if not touched and added.has(key) and _on_ground(h, key, hs):
-				added.erase(key)
-				continue
-			staged[key] = hs
-			staged_colors[key] = colors
+			var cell: Dictionary = cells[index - first]
+			match int(cell.fail):
+				1: return PackedStringArray(["Trail earthworks produced a non-finite terrain displacement"])
+				2:
+					limits.failed_at = cell.at
+					return PackedStringArray(["превышен игровой предел земляных работ"])
+				3:
+					limits.failed_at = cell.at
+					return PackedStringArray(["земляные работы затрагивают воду, инфраструктуру или готовый путь"])
+			if cell.skip: continue # the zone only reached this cell, nothing changed: the old ground stays, no metre patch to mesh and store
+			var key: int = keys[index]
+			if cell.has("patch"): added[key] = cell.patch
+			staged[key] = cell.h
+			staged_colors[key] = cell.color
+		# the vertices met for the first time, in the order they were queued
+		for n in qx.size():
+			var vertex := Vector2i(qx[n], qz[n])
+			var displacement: float = evaluated.displacement[n]
+			offsets[vertex] = displacement
+			var shade_value: float = evaluated.shade[n]
+			if shade_value != 0.0: shades[vertex] = shade_value
+			var best: TrailDefinition = evaluated.best[n]
+			if again.is_empty() and best != null and best.earthwork > 0.0:
+				var id: String = best.id
+				if not stats.has(id): stats[id] = {cut_m3 = 0.0, fill_m3 = 0.0, max_cut = 0.0, max_fill = 0.0, vertices = 0}
+				var record: Dictionary = stats[id]
+				record.vertices += 1
+				if displacement != 0.0:
+					var volume := displacement * RoadRefinement.STEP * RoadRefinement.STEP
+					record.cut_m3 += maxf(0.0, -volume)
+					record.fill_m3 += maxf(0.0, volume)
+					record.max_cut = maxf(record.max_cut, -displacement)
+					record.max_fill = maxf(record.max_fill, displacement)
 		first = last
 	# Publish only after every vertex succeeded; a rejected extension cannot leave half a bake.
 	var before: Dictionary = again.get("before", {})
@@ -233,6 +208,185 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	if earthwork_source != null and earthwork_input != null: limits.checked = zone # every vertex of these patches passed the limits above
 	return PackedStringArray()
 
+## The cells keys[first..last) of a bake as the main loop needs them, prepared on the worker threads: for each the new heights and
+## colours of its patch (a ground patch where it has none), `skip` when nothing changed, or `fail` (1 a non-finite offset, 2 past
+## the earthwork limit, 3 on water, infrastructure or a finished path) with its place `at`. A cell reads only the ground as it was
+## before the bake and the evaluated vertices, so any order and thread give the same cells.
+static func _bake_cells(h: Heightfield, keys: Array, first: int, last: int, queued: Dictionary, evaluated: Dictionary, offsets: Dictionary, shades: Dictionary, source: Heightfield, input: Resource, max_cut: float, max_fill: float) -> Array:
+	var patches: Dictionary = h.road_refinement.patches
+	var limits_on := source != null and input != null
+	var source_patches := {}
+	var source_rows := 0
+	var source_fast := false
+	if limits_on:
+		source_fast = source.world.outer == null
+		if source.road_refinement != null:
+			source_patches = source.road_refinement.patches
+			source_rows = source.road_refinement._height
+	var parts := Parallel.bands(last - first, func(from: int, to: int) -> Array:
+		# captured variables are copied into locals once: a captured name is re-read (and its reference count touched) on every use
+		var l_h := h
+		var l_hv := h.hv
+		var l_patches := patches
+		var l_keys := keys
+		var l_queued := queued
+		var l_disp: PackedFloat64Array = evaluated.displacement
+		var l_shade: PackedFloat64Array = evaluated.shade
+		var l_bad: PackedByteArray = evaluated.bad
+		var l_offsets := offsets
+		var l_shades := shades
+		var l_source := source
+		var l_source_hv := source.hv if limits_on else PackedFloat32Array()
+		var l_source_patches := source_patches
+		var l_input := input
+		var out := []
+		for index in range(from, to):
+			out.append(_bake_cell(l_keys[first + index], l_h, l_hv, l_patches, l_queued, l_disp, l_shade, l_bad, l_offsets, l_shades,
+				l_source if limits_on else null, l_source_hv, l_source_patches, source_rows, source_fast, l_input, max_cut, max_fill))
+		return out, 8)
+	var cells := []
+	for part: Array in parts: cells.append_array(part)
+	return cells
+
+static func _bake_cell(key: int, h: Heightfield, hv: PackedFloat32Array, patches: Dictionary, queued: Dictionary, disp_all: PackedFloat64Array, shade_all: PackedFloat64Array, bad_all: PackedByteArray, offsets: Dictionary, shades: Dictionary, source: Heightfield, source_hv: PackedFloat32Array, source_patches: Dictionary, source_rows: int, source_fast: bool, input: Resource, max_cut: float, max_fill: float) -> Dictionary:
+	var w := h.world
+	var columns := w.W
+	var rows := w.H
+	var cx := key % columns
+	var cz := key / columns
+	var found: Variant = patches.get(key)
+	var patch: Dictionary = found if found != null else _ground_patch_fast(h, hv, patches, columns, rows, cx, cz)
+	var hs: PackedFloat32Array = patch.h.duplicate()
+	var colors: PackedColorArray = patch.color.duplicate()
+	var limits_on := source != null and input != null
+	var source_vertices := PackedFloat32Array()
+	if source != null and source_patches.has(key): source_vertices = source_patches[key].h
+	var touched := false
+	for iz in RoadRefinement.STRIDE:
+		for ix in RoadRefinement.STRIDE:
+			var gx := cx * RoadRefinement.DIV + ix
+			var gz := cz * RoadRefinement.DIV + iz
+			var vertex := Vector2i(gx, gz)
+			var offset: float
+			var shade: float
+			var known: Variant = offsets.get(vertex)
+			if known == null:
+				var n: int = queued[vertex]
+				if bad_all[n] != 0: return {fail = 1}
+				offset = disp_all[n]
+				shade = shade_all[n]
+			else:
+				offset = known
+				shade = shades.get(vertex, 0.0)
+			var k := iz * RoadRefinement.STRIDE + ix
+			hs[k] += offset
+			if offset != 0.0: touched = true
+			# Reject on the actual rounded final vertex, before spending the rest of
+			# the bake on a doomed proposal. The normal final audit still covers the
+			# entire surface, including base formation outside this zone.
+			if limits_on:
+				var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+				var delta: float = hs[k] - (source_vertices[k] if not source_vertices.is_empty() else _source_ground(source, source_hv, source_patches, source_rows, source_fast, columns, rows, at.x, at.y))
+				if delta < max_cut or delta > max_fill: return {fail = 2, at = at}
+				if absf(delta) > 0.05 and input.blocked(at): return {fail = 3, at = at}
+			if shade != 0.0:
+				touched = true
+				var c := colors[k]
+				var tint := 1.0 + shade * c.a
+				colors[k] = Color(c.r * tint, c.g * tint, c.b * tint, c.a)
+	if not touched and found == null and _on_ground_fast(h, hv, columns, rows, cx, cz, hs):
+		return {fail = 0, skip = true}
+	var result := {fail = 0, skip = false, h = hs, color = colors}
+	if found == null: result.patch = patch
+	return result
+
+## Heightfield.base_ground_at on the map (the same arithmetic), the method itself past its edge.
+static func _base_height(h: Heightfield, hv: PackedFloat32Array, columns: int, rows: int, x: float, z: float) -> float:
+	var fx := x / GameConfig.TILE - 0.5
+	var fz := z / GameConfig.TILE - 0.5
+	if fx < 0.0 or fz < 0.0 or fx > columns - 1.001 or fz > rows - 1.001: return h.base_ground_at(x, z)
+	var i := floori(fx)
+	var j := floori(fz)
+	var a := hv[j * columns + i]
+	var b := hv[j * columns + i + 1]
+	var c := hv[(j + 1) * columns + i]
+	var d := hv[(j + 1) * columns + i + 1]
+	var tx := fx - i
+	var tz := fz - j
+	if tx + tz <= 1.0: return a + (b - a) * tx + (c - a) * tz
+	return d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz)
+
+## Heightfield.ground_at of the site surface: the metre patch under the point, else the coarse ground. Another world with an outer
+## land (the game itself) asks the method.
+static func _source_ground(source: Heightfield, source_hv: PackedFloat32Array, patches: Dictionary, patch_rows: int, fast: bool, columns: int, rows: int, x: float, z: float) -> float:
+	if not fast: return source.ground_at(x, z)
+	var fx := x / GameConfig.TILE - 0.5
+	var fz := z / GameConfig.TILE - 0.5
+	if not (fx < 0.0 or fz < 0.0 or fx >= columns - 1 or fz >= patch_rows - 1):
+		var patch: Variant = patches.get(floori(fz) * columns + floori(fx))
+		if patch != null:
+			var sx := (fx - floorf(fx)) * RoadRefinement.DIV
+			var sz := (fz - floorf(fz)) * RoadRefinement.DIV
+			var ix := mini(RoadRefinement.DIV - 1, floori(sx))
+			var iz := mini(RoadRefinement.DIV - 1, floori(sz))
+			var tx := sx - ix
+			var tz := sz - iz
+			var a := iz * RoadRefinement.STRIDE + ix
+			var hs: PackedFloat32Array = patch.h
+			if tx + tz <= 1.0: return hs[a] + (hs[a + 1] - hs[a]) * tx + (hs[a + RoadRefinement.STRIDE] - hs[a]) * tz
+			var d := a + RoadRefinement.STRIDE + 1
+			return hs[d] + (hs[a + RoadRefinement.STRIDE] - hs[d]) * (1.0 - tx) + (hs[a + 1] - hs[d]) * (1.0 - tz)
+	return _base_height(source, source_hv, columns, rows, x, z)
+
+static func _on_ground_fast(h: Heightfield, hv: PackedFloat32Array, columns: int, rows: int, cx: int, cz: int, hs: PackedFloat32Array) -> bool:
+	for iz in RoadRefinement.STRIDE:
+		for ix in RoadRefinement.STRIDE:
+			var at := Vector2(cx * RoadRefinement.DIV + ix, cz * RoadRefinement.DIV + iz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+			if absf(hs[iz * RoadRefinement.STRIDE + ix] - _base_height(h, hv, columns, rows, at.x, at.y)) > 0.001: return false
+	return true
+
+## _ground_patch without the Heightfield, RoadRefinement and WorldData objects in the loops (the threads share them).
+static func _ground_patch_fast(h: Heightfield, hv: PackedFloat32Array, patches: Dictionary, columns: int, rows: int, cx: int, cz: int) -> Dictionary:
+	var n := RoadRefinement.STRIDE * RoadRefinement.STRIDE
+	var hs := PackedFloat32Array()
+	hs.resize(n)
+	var colors := PackedColorArray()
+	colors.resize(n)
+	colors.fill(Color(0, 0, 0, 0))
+	var uvs := PackedVector2Array()
+	uvs.resize(n)
+	var surfaces := PackedByteArray()
+	surfaces.resize(n)
+	var roads := PackedByteArray()
+	roads.resize(n)
+	for iz in RoadRefinement.STRIDE:
+		for ix in RoadRefinement.STRIDE:
+			var gx := cx * RoadRefinement.DIV + ix
+			var gz := cz * RoadRefinement.DIV + iz
+			var at := Vector2(gx, gz) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+			var value := _base_height(h, hv, columns, rows, at.x, at.y)
+			var k := iz * RoadRefinement.STRIDE + ix
+			# the same metre vertex in a neighbouring patch (patch keys are cells; a vertex on an edge or corner is shared)
+			for dz in 2:
+				for dx in 2:
+					var qz: int = gz / RoadRefinement.DIV - dz
+					var qx: int = gx / RoadRefinement.DIV - dx
+					var lx: int = gx - qx * RoadRefinement.DIV
+					var lz: int = gz - qz * RoadRefinement.DIV
+					if qx < 0 or qz < 0 or lx > RoadRefinement.DIV or lz > RoadRefinement.DIV: continue
+					if qx == cx and qz == cz: continue # this very cell has no patch: that is why it is made
+					var found: Variant = patches.get(qz * columns + qx)
+					if found == null: continue
+					var q: Dictionary = found
+					var m := lz * RoadRefinement.STRIDE + lx
+					value = q.h[m]
+					colors[k] = q.color[m]
+					uvs[k] = q.uv[m]
+					surfaces[k] = q.surface[m]
+					roads[k] = q.road[m]
+			hs[k] = value
+	return {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
+
 ## The displacement of vertices (qx, qz) of the metre grid: `slot` of each is the cell that met it first (its routes, the segments
 ## near it and the junctions). Reads the ground as it is and changes nothing, so any order and thread give the same numbers;
 ## the result is in the order of the vertices. `bad` marks a non-finite offset, `shade` is the tint of a raised or dug feature.
@@ -246,10 +400,20 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 		var shades := PackedFloat64Array()
 		var bad := PackedByteArray()
 		var bests: Array = []
+		# captured variables are copied into locals once: a captured name is re-read (and its reference count touched) on every use
+		var l_h := h
+		var l_qx := qx
+		var l_qz := qz
+		var l_qslot := qslot
+		var l_slots := slots
+		var l_profiles := profiles
+		var l_shapes := shapes
+		var l_spans := spans
+		var l_pin_at := pin_at
 		var scratch := PackedFloat64Array([0.0, 0.0]) # смещение и оттенок одного вершины: общий расчёт элементов
 		for n in range(from, to):
-			var at := Vector2(qx[n], qz[n]) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
-			var slot: Dictionary = slots[qslot[n]]
+			var at := Vector2(l_qx[n], l_qz[n]) * RoadRefinement.STEP + Vector2.ONE * GameConfig.TILE * 0.5
+			var slot: Dictionary = l_slots[l_qslot[n]]
 			var zone: Dictionary = slot.zone
 			var among: Dictionary = slot.among
 			var joints: Dictionary = slot.joints
@@ -265,7 +429,7 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 				if (among[d] as PackedInt32Array).is_empty(): continue # no segment within reach of this cell
 				var near := d.nearest(at, zone[d], among[d])
 				if not is_finite(near.z): continue
-				if profiles.has(d.id) and near.z > TrailShaping.reach_at(profiles[d.id], near.x): continue
+				if l_profiles.has(d.id) and near.z > TrailShaping.reach_at(l_profiles[d.id], near.x): continue
 				var score := near.z / (d.width * 0.5)
 				if score < best_rank:
 					second = best
@@ -281,11 +445,11 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 			var offset := 0.0
 			var tint := 0.0
 			if best != null:
-				_route_offset_shade(h, best, best_local, at, shapes, profiles, joints[best], spans[best.id], scratch)
+				_route_offset_shade(l_h, best, best_local, at, l_shapes, l_profiles, joints[best], l_spans[best.id], scratch)
 				offset = scratch[0]
 				tint = scratch[1]
 				if second != null:
-					var other := _route_offset(h, second, second_local, at, shapes, profiles, joints[second], spans[second.id])
+					var other := _route_offset(l_h, second, second_local, at, l_shapes, l_profiles, joints[second], l_spans[second.id])
 					var t := smoothstep(0.0, 1.0, (second_rank - best_rank) / BLEND)
 					offset = lerpf((offset + other) * 0.5, offset, t)
 			if not is_finite(offset):
@@ -295,11 +459,11 @@ static func _evaluate(h: Heightfield, qx: PackedInt32Array, qz: PackedInt32Array
 				bests.append(null)
 				continue
 			# Past the run-out of the side slopes nothing changes: neither pins nor water matter.
-			var pin: float = pin_at.call(at) if offset != 0.0 or tint != 0.0 else 1.0
+			var pin: float = l_pin_at.call(at) if offset != 0.0 or tint != 0.0 else 1.0
 			var displacement := offset * pin
 			if displacement < 0.0:
 				var cell := clampi(floori(at.y / GameConfig.TILE), 0, cells_z - 1) * cells_x + clampi(floori(at.x / GameConfig.TILE), 0, cells_x - 1)
-				displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP - h.ground_at(at.x, at.y)))
+				displacement = maxf(displacement, minf(0.0, RoadBed.wet_near(l_h, cell) + RoadBed.WATER_GAP - l_h.ground_at(at.x, at.y)))
 			displacements.append(displacement)
 			shades.append(tint * pin)
 			bad.append(0)

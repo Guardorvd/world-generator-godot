@@ -777,6 +777,8 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 	var on_steep := false
 	var hint_near := PackedInt32Array()
 	var steep_cost: bool = shape.get("steep_cost", false)
+	var soft: Callable = shape.get("soft", Callable())
+	var wall: Callable = shape.get("wall", Callable())
 	var grid := {}
 	# прежние точки: номер по расстоянию от их конца в шагах (отрицательный) — последние OWN_SKIP м не мешают продолжению
 	var back := 0.0
@@ -833,10 +835,8 @@ static func _walk(ground: Callable, inside: Callable, start: Vector2, goal: Vect
 			if hint.size() > 1: cost += minf(_hint_distance(hint, next, hint_near) / 32.0, 4.0) * 2.0 * float(shape.get("hint_weight", 1.0))
 			if cost >= best: continue
 			# Дорогу или брод пересекает коротко, а не идёт вдоль
-			var soft: Callable = shape.get("soft", Callable())
 			if soft.is_valid() and soft.call(next): cost += SOFT_COST
 			# место, где проект не уложил бы полотно мягко: дорого, а не запрещено (нет обхода — линию отрежет проверка проекта)
-			var wall: Callable = shape.get("wall", Callable())
 			if wall.is_valid() and wall.call(next): cost += WALL_COST
 			# стенка уступа или крутой подъём — седок встанет: только если другого хода нет
 			if g > CLIMB_MAX: cost += 200.0

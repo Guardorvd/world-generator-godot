@@ -133,12 +133,20 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	for k in h.ribbons.size():
 		if boxes[k].grow(TILE).intersects(reach):
 			site.ribbons.append_array(_clip_ribbon(h.ribbons[k], reach, o))
-	for key: int in h.road_refinement.patches:
-		var cx := key % w.W - data.position.x
-		var cz := key / w.W - data.position.y
-		if cx >= 0 and cz >= 0 and cx <= data.size.x - 2 and cz <= data.size.y - 2:
-			# Immutable source: preparation replaces changed patch dictionaries on write.
-			site.patches[cz * data.size.x + cx] = h.road_refinement.patches[key]
+	var world_patches: Dictionary = h.road_refinement.patches
+	if world_patches.size() > (data.size.x - 1) * (data.size.y - 1):
+		# the world has more metre patches than the site has cells: ask for the cells instead of walking all patches
+		for cz in range(0, data.size.y - 1):
+			for cx in range(0, data.size.x - 1):
+				var found: Variant = world_patches.get((cz + data.position.y) * w.W + cx + data.position.x)
+				if found != null: site.patches[cz * data.size.x + cx] = found
+	else:
+		for key: int in world_patches:
+			var cx := key % w.W - data.position.x
+			var cz := key / w.W - data.position.y
+			if cx >= 0 and cz >= 0 and cx <= data.size.x - 2 and cz <= data.size.y - 2:
+				# Immutable source: preparation replaces changed patch dictionaries on write.
+				site.patches[cz * data.size.x + cx] = world_patches[key]
 	var terrain: Variant = view.get("terrain")
 	if terrain is Dictionary and terrain.w % w.W == 0:
 		var px: int = terrain.w / w.W

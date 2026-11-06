@@ -49,7 +49,7 @@ func run() -> void:
 	print("REFERENCE " if reference else "OPTIMIZED ", JSON.stringify(plan.stats))
 	var result_path := "res://.godot/trail_network_cost_reference.bin"
 	var snapshot := preload("res://scripts/game/surface_snapshot.gd")
-	if reference:
+	if reference or "--save" in OS.get_cmdline_user_args():
 		FileAccess.open(result_path, FileAccess.WRITE).store_var({routes = plan.routes, surface = snapshot.capture(h, "final")})
 	elif FileAccess.file_exists(result_path):
 		var saved: Dictionary = FileAccess.open(result_path, FileAccess.READ).get_var()

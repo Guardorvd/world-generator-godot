@@ -816,13 +816,45 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
-	if not raw and world.outer != null:
-		var refined := OuterLand.refined_at(world.outer.get_ledger().get("regions", {}), x, z)
+	var w := world
+	if not raw and w.outer != null:
+		var refined := OuterLand.refined_at(w.outer.get_ledger().get("regions", {}), x, z)
 		if not refined.is_empty(): return refined.h
+	var W := w.W
+	var fx := x / TILE - 0.5
+	var fz := z / TILE - 0.5
+	# The two lookups below are RoadRefinement.height_at and the in-map branch of base_ground_at, written out: this is
+	# the most called function of the trail pipeline and of the ride (a call level less each).
 	if not raw and road_refinement != null:
-		var local := road_refinement.height_at(x, z, world.W)
-		if local != INF:
-			return local
+		var r := road_refinement
+		if not (fx < 0.0 or fz < 0.0 or fx >= W - 1 or fz >= r._height - 1):
+			var patch: Variant = r.patches.get(floori(fz) * W + floori(fx))
+			if patch != null:
+				var sx := (fx - floorf(fx)) * RoadRefinement.DIV
+				var sz := (fz - floorf(fz)) * RoadRefinement.DIV
+				var ix := mini(RoadRefinement.DIV - 1, floori(sx))
+				var iz := mini(RoadRefinement.DIV - 1, floori(sz))
+				var tx := sx - ix
+				var tz := sz - iz
+				var a := iz * RoadRefinement.STRIDE + ix
+				var hs: PackedFloat32Array = patch.h
+				if tx + tz <= 1.0:
+					return hs[a] + (hs[a + 1] - hs[a]) * tx + (hs[a + RoadRefinement.STRIDE] - hs[a]) * tz
+				var d := a + RoadRefinement.STRIDE + 1
+				return hs[d] + (hs[a + RoadRefinement.STRIDE] - hs[d]) * (1.0 - tx) + (hs[a + 1] - hs[d]) * (1.0 - tz)
+	if fx >= 0.0 and fz >= 0.0 and fx <= W - 1.001 and fz <= w.H - 1.001:
+		var arr := hv_raw if raw else hv
+		var i := floori(fx)
+		var j := floori(fz)
+		var ha := arr[j * W + i]
+		var hb := arr[j * W + i + 1]
+		var hc := arr[(j + 1) * W + i]
+		var hd := arr[(j + 1) * W + i + 1]
+		var u := fx - i
+		var v := fz - j
+		if u + v <= 1.0:
+			return ha + (hb - ha) * u + (hc - ha) * v
+		return hd + (hc - hd) * (1.0 - u) + (hb - hd) * (1.0 - v)
 	return base_ground_at(x, z, raw)
 
 
