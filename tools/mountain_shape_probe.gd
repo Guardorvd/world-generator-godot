@@ -4,7 +4,7 @@ extends SceneTree
 ## Запуск: godot --headless --path . --script res://tools/mountain_shape_probe.gd [-- --out файл.json]
 ## Для «было/стало» сохраняется JSON; старый файл подставляется через --base.
 const STEP := 8 # клеток обзора: 8 × 4 м = 32 м
-const SEEDS := ["Север-1234", "Ущелье", "Туман-4821"]
+const SEEDS := ["Север-1234", "Ущелье", "Туман-4821", "Вальхейм 3"]
 const Coarse := preload("res://scripts/trails/trail_coarse_map.gd")
 
 
@@ -13,6 +13,7 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var rows := {}
 	for seed_text: String in SEEDS:
+		var label := seed_text.replace(" ", "_")
 		var w := WorldData.new()
 		w.W = 768; w.H = 768; w.N = 768 * 768
 		w.seed_text = seed_text
@@ -33,7 +34,7 @@ func _initialize() -> void:
 			row.ride_64m_no_micro = smooth.ride_64m
 		row["relief_ms"] = ms
 		rows[seed_text] = row
-		print(seed_text, " ", JSON.stringify(row))
+		print(label, " ", JSON.stringify(row))
 	var base_i := args.find("--base")
 	if base_i >= 0 and base_i + 1 < args.size():
 		var base: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(args[base_i + 1]))
@@ -136,8 +137,19 @@ func measure(w: WorldData) -> Dictionary:
 	for r: float in runs:
 		long_runs += int(r >= 400.0)
 	grads.sort()
+	# Крутизна по соседним клеткам 4 м: стены и конусы, которые сетка 32 м не видит
+	var fine := PackedFloat32Array()
+	for y in range(1, n - 1, 2):
+		for x in range(1, n - 1, 2):
+			var i := y * n + x
+			if w.h[i] < 0.2: continue
+			fine.append(Vector2(w.h[i + 1] - w.h[i - 1], w.h[i + n] - w.h[i - n]).length() * GameConfig.HS / (2.0 * GameConfig.TILE))
+	fine.sort()
+	var walls := 0
+	for g4 in fine: walls += int(g4 > 1.0)
 	var q := func(f: float) -> float: return snappedf(grads[int(grads.size() * f)] * 100.0, 1.0) if grads.size() > 0 else 0.0
 	return {
+		fine_p90 = snappedf(fine[int(fine.size() * 0.9)] * 100.0, 1.0) if fine.size() > 0 else 0.0, fine_p99 = snappedf(fine[int(fine.size() * 0.99)] * 100.0, 1.0) if fine.size() > 0 else 0.0, walls_pct = snappedf(100.0 * walls / maxi(fine.size(), 1), 0.1),
 		mountain_cells = mount, upland_pct = snappedf(100.0 * upland / maxi(mount, 1), 0.1), rocky_pct = snappedf(100.0 * rocky / maxi(mount, 1), 0.1), slope_p25 = q.call(0.25), slope_p50 = q.call(0.5), slope_p75 = q.call(0.75),
 		peaks = peaks.size(), saddles = saddles,
 		flat_pct = snappedf(100.0 * flat / maxi(mount, 1), 0.1),

@@ -32,6 +32,11 @@ const HILL_AMP := 0.07
 const FOOTHILLS := 0.35
 ## Широкое основание предгорий (с 3.6), до нормировки высоты. Прорезается общими долинами.
 const FOOTHILL_LIFT := 0.18
+## Высота гор на единицу ширины гребней не больше этого (с GEO 7): крутизна массива ~ высота / ширина, поэтому у высоких
+## и узких сочетаний сида гребни, долины и вершины шире (область гор та же). Сиды с пологими горами не меняются
+const HEIGHT_PER_WIDTH := 0.7
+## Доля мелких октав основания вглубь суши (с GEO 7), у берега 1
+const INLAND_DETAIL := 0.35
 ## Ширина подъёма от равнины к горам (в долях шума гор)
 const MASK_EDGE := 0.9
 ## Небольшие долины: масштаб шума в клетках, ширина (в долях шума) и глубина
@@ -147,7 +152,25 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var mountain_field := mask_n.fbm(X / (MASSIF * mountain_scale) + 7.0, Y / (MASSIF * mountain_scale) - 3.0, 2) + mountain_bias
 	var t := clampf(mountain_field / MASK_EDGE, 0.0, 1.0)
 	var core := t * t * (3.0 - 2.0 * t)
-	var c := _continental(cont, X / 240.0, Y / 240.0, 1.0 - 0.85 * core)
+	# Шесть октав континентального основания (масштаб 240); detail ослабляет четыре мелкие внутри гор
+	var cx := X / 240.0
+	var cy := Y / 240.0
+	var low := 0.0
+	var high := 0.0
+	var amp := 1.0
+	var fr := 1.0
+	var norm := 0.0
+	for o in 6:
+		if o < 2:
+			low += amp * cont.noise(cx * fr, cy * fr)
+		else:
+			high += amp * cont.noise(cx * fr, cy * fr)
+		norm += amp
+		amp *= 0.5
+		fr *= 2.0
+	var detail := 1.0 - 0.85 * core
+	var c := (low + high * detail) / norm
+	var fine_c := high * detail / norm
 	var macro := cont.fbm((X + mx) / MACRO + 91.7, (Y + my) / MACRO - 43.1, 2)
 	var base := c + minf(macro * MACRO_AMP, MACRO_LIFT) + LAND_BIAS
 	# smoothstep развёрнут на месте (см. Parallel)
@@ -177,12 +200,16 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	rough = maxf(rough, t * t * (3.0 - 2.0 * t))
 	rough += (1.0 - rough) * foothills
 	# Суша на равнинах ниже и положе: высота над морем сжата до PLAIN_LIFT. Берега от этого не сдвигаются
-	var h := base * 0.55
+	# С GEO 7 вглубь суши мелкие октавы основания слабее (до INLAND_DETAIL): каждая добавляла столько же
+	# уклона, сколько крупная, и склоны на масштабе 30–60 м были смяты до 100–150 %. Берег (inland = 0) прежний
+	var h := (base - fine_c * (1.0 - INLAND_DETAIL) * inland) * 0.55
 	if h > SEA_RAW:
 		h = SEA_RAW + (h - SEA_RAW) * (PLAIN_LIFT + (1.0 - PLAIN_LIFT) * rough)
 	var hills := hill.fbm(X / 40.0, Y / 40.0, 4)
 	if foothills > 0.0:
-		var rolling := hill.fbm(X / (100.0 * mountain_scale) + 32.4, Y / (100.0 * mountain_scale) - 18.6, 2)
+		# Холмы предгорий шире вместе с гребнями (с GEO 7)
+		var foot_scale := 100.0 * maxf(mountain_scale, mountain_height / HEIGHT_PER_WIDTH)
+		var rolling := hill.fbm(X / foot_scale + 32.4, Y / foot_scale - 18.6, 2)
 		hills += (rolling - hills) * foothills
 		h += foothills * (FOOTHILL_LIFT + 0.08 * rolling) * mountain_height
 	# Мелкие холмы затухают внутри массива, оставляя место широким склонам и плечам.
@@ -195,23 +222,11 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	# То же поле понижений, что ослабляет предгорный подъём.
 	h -= valley * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
-		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / mountain_scale, (y + wy * MOUNTAIN_WARP) / mountain_scale, inland) * mask * MOUNTAIN_AMP * mountain_height
+		var wide := mountain_scale * maxf(1.0, mountain_height / (mountain_scale * HEIGHT_PER_WIDTH))
+		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, inland) * mask * MOUNTAIN_AMP * mountain_height
 	return h
 
 
-## Шесть октав континентального основания; detail ослабляет четыре мелкие.
-## Нормировка прежняя: крупные формы не усиливаются, новых отсчётов шума нет.
-static func _continental(cont: Simplex, x: float, y: float, detail: float) -> float:
-	var a := 1.0
-	var f := 1.0
-	var s := 0.0
-	var n := 0.0
-	for o in 6:
-		s += a * cont.noise(x * f, y * f) * (detail if o >= 2 else 1.0)
-		n += a
-		a *= 0.5
-		f *= 2.0
-	return s / n
 
 
 ## Горы (с 1.9.7). Как и весь рельеф, функция мировых координат, поэтому за краем карты горы продолжаются.
@@ -243,7 +258,7 @@ const ASYM := 1.8
 ## Предел гребня с вершиной (без вершин гребень до 1)
 const PEAK_CAP := 1.05
 ## Скругление главного гребня (в долях шума): без него гребень — острый излом, а вершины — иглы
-const CREST_ROUND := 0.12
+const CREST_ROUND := 0.2
 ## Доля шума формы, с которой массив считается острым; с 3.2 острые массивы реже
 const SHARP_SHIFT := 0.28
 ## Возвышенности (с 3.0): медленный шум масштаба MASSIF превращает часть массивов в холмистые

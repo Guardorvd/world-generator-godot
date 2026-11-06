@@ -316,6 +316,8 @@ public partial class FastGrid : RefCounted
 	private const double PlainLift = 0.3;
 	private const double PlainHills = 0.15;
 	private const double HillAmp = 0.07;
+	private const double InlandDetail = 0.35;
+	private const double HeightPerWidth = 0.7;
 	private const double Foothills = 0.35;
 	private const double FoothillLift = 0.18; // StageRelief.FOOTHILL_LIFT (с 3.6)
 	private const double MaskEdge = 0.9;
@@ -344,7 +346,20 @@ public partial class FastGrid : RefCounted
 				double mountainField = Fbm(mask, X / (Massif * mountainScale) + 7.0, Y / (Massif * mountainScale) - 3.0, 2) + mountainBias;
 				double t = Clamp01(mountainField / MaskEdge);
 				double core = t * t * (3.0 - 2.0 * t);
-				double c = Continental(cont, X / 240.0, Y / 240.0, 1.0 - 0.85 * core);
+				double cx = X / 240.0, cy = Y / 240.0, low = 0.0, high = 0.0, amp = 1.0, fr = 1.0, norm = 0.0;
+				for (int o = 0; o < 6; o++)
+				{
+					if (o < 2)
+						low += amp * Noise(cont, cx * fr, cy * fr);
+					else
+						high += amp * Noise(cont, cx * fr, cy * fr);
+					norm += amp;
+					amp *= 0.5;
+					fr *= 2.0;
+				}
+				double detail = 1.0 - 0.85 * core;
+				double c = (low + high * detail) / norm;
+				double fineC = high * detail / norm;
 				double macro = Fbm(cont, (X + mx) / Macro + 91.7, (Y + my) / Macro - 43.1, 2);
 				double lift = macro * MacroAmp;
 				double bas = c + (lift < MacroLift ? lift : MacroLift) + LandBias;
@@ -364,13 +379,15 @@ public partial class FastGrid : RefCounted
 				m *= rough + (1.0 - rough) * m * m;
 				rough = Math.Max(rough, t * t * (3.0 - 2.0 * t));
 				rough += (1.0 - rough) * foothills;
-				double h = bas * 0.55;
+				// С GEO 7 мелкие октавы основания вглубь суши слабее; берег прежний.
+				double h = (bas - fineC * (1.0 - InlandDetail) * inland) * 0.55;
 				if (h > SeaRaw)
 					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
 				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
 				if (foothills > 0.0)
 				{
-					double rolling = Fbm(hill, X / (100.0 * mountainScale) + 32.4, Y / (100.0 * mountainScale) - 18.6, 2);
+					double footScale = 100.0 * Math.Max(mountainScale, mountainHeight / HeightPerWidth);
+					double rolling = Fbm(hill, X / footScale + 32.4, Y / footScale - 18.6, 2);
 					hills += (rolling - hills) * foothills;
 					h += foothills * (FoothillLift + 0.08 * rolling) * mountainHeight;
 				}
@@ -381,7 +398,10 @@ public partial class FastGrid : RefCounted
 			 h += (hills * 0.025 - valley * 0.008) * calm * shoreFade;
 			 h -= valley * ValleyDepth * rough * inland;
 				if (m > 0.0)
-					h += Mountain(ridge, hill, (x + wx * MountainWarp) / mountainScale, (y + wy * MountainWarp) / mountainScale, inland) * m * MountainAmp * mountainHeight;
+				{
+					double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
+					h += Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland) * m * MountainAmp * mountainHeight;
+				}
 				outH[j * W + i] = (float)h;
 			}
 		}
@@ -389,19 +409,6 @@ public partial class FastGrid : RefCounted
 		return outH;
 	}
 
-	/// <summary>Копия StageRelief._continental: прежние шесть октав, без усиления крупных форм.</summary>
-	private static double Continental(int[] pm, double x, double y, double detail)
-	{
-		double a = 1.0, f = 1.0, s = 0.0, n = 0.0;
-		for (int o = 0; o < 6; o++)
-		{
-			s += a * Noise(pm, x * f, y * f) * (o >= 2 ? detail : 1.0);
-			n += a;
-			a *= 0.5;
-			f *= 2.0;
-		}
-		return s / n;
-	}
 
 	/// <summary>Горы: копия StageRelief.MASSIF, MOUNTAIN_AMP, MOUNTAIN_WARP, RIDGE_ALONG, RIDGE_ACROSS, DIR_C, DIR_S, ASYM, PEAK_CAP, CREST_ROUND.</summary>
 	private const double Massif = 650.0;
@@ -421,7 +428,7 @@ public partial class FastGrid : RefCounted
 	private static readonly double[] DirS = { 0.0, 0.8660254037844386, 0.8660254037844386 };
 	private const double Asym = 1.8;
 	private const double PeakCap = 1.05;
-	private const double CrestRound = 0.12;
+	private const double CrestRound = 0.2;
 	/// <summary>Острые массивы, возвышенности и мягкий предел вершин (с 3.0): копия StageRelief.SHARP_SHIFT, UPLAND_SHIFT, UPLAND_AMP, UPLAND_SMOOTH, PEAK_KNEE, PEAK_SOFT.</summary>
 	private const double SharpShift = 0.28;
 	private const double UplandShift = 0.24;

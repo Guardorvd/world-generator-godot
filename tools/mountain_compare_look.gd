@@ -3,7 +3,7 @@ extends SceneTree
 ## StageRelief (коммиты через git show, считаются в GDScript) и текущий код. Одинаковые камеры и косой свет.
 ## godot --path . --script res://tools/mountain_compare_look.gd -- [--seed Ущелье] [--versions 064dd48,HEAD]
 const OUT := "res://.godot/mountain_compare"
-const SIDE := 256
+var SIDE := 256
 var cam: Camera3D
 var node: MeshInstance3D
 
@@ -42,6 +42,8 @@ func mesh(h: PackedFloat32Array) -> ArrayMesh:
 func run() -> void:
 	DirAccess.make_dir_recursive_absolute(OUT)
 	var seed_text := arg("--seed", "Ущелье")
+	SIDE = int(arg("--side", "256"))
+	var tag := arg("--tag", "")
 	var w := WorldData.new()
 	w.W = 768; w.H = 768; w.N = 768 * 768
 	w.seed_text = seed_text
@@ -55,7 +57,8 @@ func run() -> void:
 	var x0 := clampi(top % 768 - SIDE / 2, 0, 768 - SIDE)
 	var y0 := clampi(top / 768 - SIDE / 2, 0, 768 - SIDE)
 	var fields := {}
-	for version: String in arg("--versions", "064dd48,HEAD").split(","):
+	for version: String in arg("--versions", "064dd48,HEAD").split(",", false):
+		if version == "-": continue
 		var out: Array = []
 		OS.execute("git", ["show", version + ":scripts/world/stages/stage_relief.gd"], out)
 		var text := str(out[0]).replace("class_name StageRelief", "").replace("var fast := Grid.fast_grid()", "var fast: Object = null")
@@ -65,6 +68,16 @@ func run() -> void:
 		fields[version] = relief(load(path), w, x0, y0)
 		print("FIELD ", version)
 	fields["new"] = relief(StageRelief, w, x0, y0)
+	if "--full" in OS.get_cmdline_user_args():
+		# Мир как в игре: после рек и долин (WorldGenerator._geography), поверхность Heightfield в центрах клеток
+		var full := WorldGenerator._geography(seed_text, 768)
+		var surface := Heightfield.new(full, false)
+		var g := PackedFloat32Array()
+		g.resize(SIDE * SIDE)
+		for j in SIDE:
+			for i in SIDE:
+				g[j * SIDE + i] = surface.ground_at((x0 + i + 0.5) * GameConfig.TILE, (y0 + j + 0.5) * GameConfig.TILE)
+		fields["game"] = g
 	root.size = Vector2i(1280, 720)
 	var scene := Node3D.new()
 	root.add_child(scene)
@@ -102,9 +115,11 @@ func run() -> void:
 	var foot := Vector2(target.x, target.z) + Vector2(-1, 1).normalized() * 380.0
 	var near := Vector3(foot.x, ground.call(foot.x, foot.y) + 1.8, foot.y)
 	var views := {
-		overview = [target + Vector3(-560, 330, 560), target],
-		side = [target + Vector3(620, 120, 160), target],
+		overview = [target + Vector3(-560, 330, 560) * SIDE / 256.0, target],
+		side = [target + Vector3(620, 120, 160) * SIDE / 256.0, target],
 		player = [near, Vector3(target.x, peak * 0.85, target.z)],
+		far_n = [target + Vector3(0, 60 - peak * 0.5, -1.0) * Vector3(1, 1, SIDE * 1.6), Vector3(target.x, peak * 0.55, target.z)],
+		far_e = [target + Vector3(SIDE * 1.6, 60 - peak * 0.5, 0), Vector3(target.x, peak * 0.55, target.z)],
 	}
 	for version: String in fields:
 		var h: PackedFloat32Array = fields[version]
@@ -114,7 +129,7 @@ func run() -> void:
 			cam.look_at_from_position(eye, views[view][1], Vector3.UP)
 			for k in 4: await process_frame
 			await RenderingServer.frame_post_draw
-			var file := OUT.path_join("%s_%s_%s.png" % [seed_text, view, version])
+			var file := OUT.path_join("%s_%s_%s%s.png" % [seed_text, view, version, tag])
 			root.get_texture().get_image().save_png(file)
 			print("SHOT ", file)
 	quit()
