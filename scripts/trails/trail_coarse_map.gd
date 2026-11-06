@@ -1,6 +1,10 @@
 extends RefCounted
 ## Shared read-only overview for the entire search. No per-window graphs or terrain bakes.
 const STEP := 8
+## Уточнение в горах: шаг точек уклона и формы, м, и уклон обзора, с которого оно начинается и полностью действует
+const LOCAL := 16.0
+const MOUNTAIN_FROM := 0.15
+const MOUNTAIN_FULL := 0.30
 const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
 var size := 0
 var heights := PackedFloat32Array()
@@ -41,8 +45,22 @@ func prepare(n: int, ground: Callable, wet: PackedByteArray, input) -> void:
 	for z in range(1, size - 1):
 		for x in range(1, size - 1):
 			var i := z * size + x
-			gradients[i] = Vector2(heights[i + 1] - heights[i - 1], heights[i + size] - heights[i - size]) / (2 * span)
-			forms[i] = (heights[i - 1] + heights[i + 1] + heights[i - size] + heights[i + size]) * 0.25 - heights[i]
+			var g := Vector2(heights[i + 1] - heights[i - 1], heights[i + size] - heights[i - size]) / (2 * span)
+			var form := (heights[i - 1] + heights[i + 1] + heights[i - size] + heights[i + size]) * 0.25 - heights[i]
+			# В горах окно 64 м усредняет полки, рёбра и ложбины в один средний склон. Там, где склон обзора
+			# круче MOUNTAIN_FROM, уклон и форма плавно переходят к точкам через LOCAL; узлы и их шаг прежние.
+			var w := smoothstep(MOUNTAIN_FROM, MOUNTAIN_FULL, g.length())
+			if w > 0.0:
+				var p := point(i)
+				var west: float = ground.call(p - Vector2(LOCAL, 0))
+				var east: float = ground.call(p + Vector2(LOCAL, 0))
+				var north: float = ground.call(p - Vector2(0, LOCAL))
+				var south: float = ground.call(p + Vector2(0, LOCAL))
+				g = g.lerp(Vector2(east - west, south - north) / (2 * LOCAL), w)
+				# Рёбра и ложбины около 32 м окно 64 м пропускает целиком: их кривизна добавляется к крупной форме.
+				form += ((west + east + north + south) * 0.25 - heights[i]) * w
+			gradients[i] = g
+			forms[i] = form
 
 func point(i: int) -> Vector2:
 	return Vector2(mini(world_size - 1, (i % size) * STEP + STEP / 2), mini(world_size - 1, (i / size) * STEP + STEP / 2)) * GameConfig.TILE

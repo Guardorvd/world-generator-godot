@@ -5,6 +5,7 @@ extends SceneTree
 ## Для «было/стало» сохраняется JSON; старый файл подставляется через --base.
 const STEP := 8 # клеток обзора: 8 × 4 м = 32 м
 const SEEDS := ["Север-1234", "Ущелье", "Туман-4821"]
+const Coarse := preload("res://scripts/trails/trail_coarse_map.gd")
 
 
 func _initialize() -> void:
@@ -22,6 +23,14 @@ func _initialize() -> void:
 		StageRelief.run(w)
 		var ms := Time.get_ticks_msec() - t
 		var row := measure(w)
+		row.merge(overview(w))
+		if "--no-micro" in args:
+			var raw := StageRelief.raw_rect(w, 0, 0, w.W, w.H, true)
+			for k in w.N: raw[k] = StageRelief.normalize(raw[k])
+			w.h = raw
+			var smooth := overview(w)
+			row.ride_now_no_micro = smooth.ride_now
+			row.ride_64m_no_micro = smooth.ride_64m
 		row["relief_ms"] = ms
 		rows[seed_text] = row
 		print(seed_text, " ", JSON.stringify(row))
@@ -137,3 +146,40 @@ func measure(w: WorldData) -> Dictionary:
 		descents_400m = long_runs,
 		descent_p75_m = runs[int(runs.size() * 0.75)] if runs.size() > 0 else 0.0,
 	}
+
+
+## Что различает TrailCoarseMap в горных узлах (уклон обзора от 15 %): прежнее окно 64 м и итог карты.
+func overview(w: WorldData) -> Dictionary:
+	var n := w.W
+	var wet := PackedByteArray()
+	wet.resize(w.N)
+	var ground := func(p: Vector2) -> float:
+		var c := Vector2i((p / GameConfig.TILE).round()).clamp(Vector2i.ZERO, Vector2i.ONE * (n - 1))
+		return w.h[c.y * n + c.x] * GameConfig.HS
+	var map := Coarse.new()
+	var t := Time.get_ticks_usec()
+	map.prepare(n, ground, wet, null)
+	var ms := (Time.get_ticks_usec() - t) / 1000.0
+	var s := map.size
+	var span := Coarse.STEP * GameConfig.TILE
+	var nodes := 0
+	var old_kinds := {}
+	var new_kinds := {}
+	var old_ride := 0
+	var new_ride := 0
+	for z in range(1, s - 1):
+		for x in range(1, s - 1):
+			var i := z * s + x
+			var hs := map.heights
+			var g := Vector2(hs[i + 1] - hs[i - 1], hs[i + s] - hs[i - s]) / (2 * span)
+			if g.length() < Coarse.MOUNTAIN_FROM:
+				continue
+			nodes += 1
+			var form := (hs[i - 1] + hs[i + 1] + hs[i - s] + hs[i + s]) * 0.25 - hs[i]
+			var kind := "площадка" if g.length() < 0.04 else ("гребень" if form < -1.0 else ("ложбина" if form > 1.0 else "склон"))
+			old_kinds[kind] = old_kinds.get(kind, 0) + 1
+			new_kinds[map.feature(i)] = new_kinds.get(map.feature(i), 0) + 1
+			old_ride += int(g.length() >= 0.06 and g.length() <= 0.20)
+			var ng := map.gradients[i].length()
+			new_ride += int(ng >= 0.06 and ng <= 0.20)
+	return {coarse_ms = snappedf(ms, 1.0), steep_nodes = nodes, kinds_64m = old_kinds, kinds_now = new_kinds, ride_64m = old_ride, ride_now = new_ride}
