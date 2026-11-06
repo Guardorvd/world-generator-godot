@@ -56,6 +56,8 @@ func run() -> void:
 	print("мир ", w.W, "x", w.H, ", путей ", w.trails.size(), ", мостов ", w.bridges.size(), ", туннелей ", w.tunnels.size())
 	if wanted("bed"):
 		verify_bed(base)
+	if wanted("rivers"):
+		verify_rivers(w)
 	var refine_base: Heightfield = null
 	if wanted("refine") or wanted("fit"):
 		refine_base = prepared_for_refinement(base)
@@ -74,6 +76,50 @@ func prepared_for_refinement(base: Heightfield) -> Heightfield:
 	RoadBed.allow_fast = true
 	h.build_structures()
 	return h
+
+
+## Реки (StageRivers): долины и рельеф с руслами. Любое согласованное состояние мира годится: сверяются два пути
+## на одних данных, а не «до» и «после» этапа.
+func verify_rivers(w: WorldData) -> void:
+	var h0 := w.h.duplicate()
+	var f0 := w.filled.duplicate()
+	var t := Time.get_ticks_usec()
+	StageRivers.allow_fast = false
+	StageRivers._shape_valleys(w)
+	var slow_ms := (Time.get_ticks_usec() - t) / 1000.0
+	var slow_h := w.h.duplicate()
+	var slow_f := w.filled.duplicate()
+	w.h = h0.duplicate()
+	w.filled = f0.duplicate()
+	t = Time.get_ticks_usec()
+	StageRivers.allow_fast = true
+	StageRivers._shape_valleys(w)
+	var fast_ms := (Time.get_ticks_usec() - t) / 1000.0
+	print("долины рек: GDScript %.0f мс, C# %.0f мс" % [slow_ms, fast_ms])
+	check(slow_h.to_byte_array() == w.h.to_byte_array(), "долины рек: h совпадает побайтно")
+	check(slow_f.to_byte_array() == w.filled.to_byte_array(), "долины рек: filled совпадает побайтно")
+	w.h = h0
+	w.filled = f0
+	t = Time.get_ticks_usec()
+	Heightfield.allow_fast_river_surface = false
+	var slow_surface := Heightfield.new(w, false, true)
+	slow_surface.complete_water()
+	var slow_surface_ms := (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
+	Heightfield.allow_fast_river_surface = true
+	var fast_surface := Heightfield.new(w, false, true)
+	fast_surface.complete_water()
+	var fast_surface_ms := (Time.get_ticks_usec() - t) / 1000.0
+	print("поверхность рек (рельеф с руслами + вода): GDScript %.0f мс, C# %.0f мс" % [slow_surface_ms, fast_surface_ms])
+	print("  GDScript: ", JSON.stringify(slow_surface.path_timings))
+	print("  C#:       ", JSON.stringify(fast_surface.path_timings))
+	check(slow_surface.hv_raw.to_byte_array() == fast_surface.hv_raw.to_byte_array(), "поверхность рек: hv_raw совпадает побайтно")
+	check(slow_surface.hv.to_byte_array() == fast_surface.hv.to_byte_array(), "поверхность рек: hv совпадает побайтно")
+	check(var_to_bytes(slow_surface.ribbons) == var_to_bytes(fast_surface.ribbons), "поверхность рек: ленты (с берегами) совпадают побайтно")
+	check(slow_surface._seg_pts.to_byte_array() == fast_surface._seg_pts.to_byte_array()
+		and slow_surface._pair_cells == fast_surface._pair_cells and slow_surface._pair_segs == fast_surface._pair_segs,
+		"поверхность рек: индекс лент совпадает")
+	check(slow_surface.water_level.to_byte_array() == fast_surface.water_level.to_byte_array(), "поверхность рек: water_level совпадает побайтно")
 
 
 func verify_bed(base: Heightfield) -> void:

@@ -6,6 +6,7 @@ extends RefCounted
 const PROGRESS := 0.3
 const LABEL := "Русла рек и озёра"
 const WIDTH_ACC := 70.0  # сток, от которого считается ширина (прежний порог реки: с 2.9 реки реже, но не уже)
+static var allow_fast := true # false — долины рек на GDScript (эталон для tools/dod_verify.gd)
 
 
 static func _width_of(w: WorldData, i: int) -> float:
@@ -121,6 +122,15 @@ static func run(w: WorldData) -> void:
 ## затем склоны долины подрезаются к этому профилю. Исходные склоны задают
 ## узкую V-долину в горах и широкую пойму на равнине. Поверхность воды не ниже моря.
 static func _shape_valleys(w: WorldData) -> void:
+	if allow_fast:
+		var fast := Grid.fast_grid()
+		if fast != null:
+			# С 14.11 (DOD): весь проход одним вызовом C# (FastGrid.RiverValleys); GDScript ниже — эталон для сверки
+			var out: Dictionary = fast.RiverValleys(w.W, w.H, w.h, w.filled, w.order, w.order_n, w.river, w.ocean, w.lake,
+				w.acc, w.down, WorldData.RIVER_ACC, StageHydrology.SHORE_LIFT)
+			w.h = out.h
+			w.filled = out.filled
+			return
 	var original := w.h.duplicate()
 	for k in w.order_n:
 		var i := w.order[k]

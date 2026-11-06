@@ -1,6 +1,7 @@
 class_name Heightfield
 extends RefCounted
 static var allow_fast_water_levels := true
+static var allow_fast_river_surface := true # false — русла и берега на GDScript (эталон для tools/dod_verify.gd)
 ## Рельеф и вода в метрах: высоты в центрах клеток, русла рек, уровень воды. Копия js/game/heightfield.js.
 ## Чистые данные и математика: по ним строятся меши и считается движение игрока.
 ## С 4.4 ground_at также читает локальную метровую сетку дорог RoadRefinement.
@@ -71,6 +72,16 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	var N := w.N
 	var W := w.W
 	var H := w.H
+	if allow_fast_river_surface and w.outer == null:
+		var native := Grid.fast_grid()
+		if native != null:
+			_river_surface_native(native)
+			if rivers_only:
+				return
+			complete_water()
+			if with_structures:
+				finish_paths()
+			return
 	hv.resize(N)
 	hv_raw.resize(N)
 	for i in N:
@@ -112,6 +123,55 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	complete_water()
 	if with_structures:
 		finish_paths()
+
+
+## С 14.11 (DOD): высоты, русла, срез дна и берега лент одним вызовом C# (FastGrid.RiverSurface); словари точек лент
+## и индекс клетка -> отрезки остаются в GDScript. Результат тот же, что у кода в _init выше (он остаётся эталоном).
+func _river_surface_native(fast: Object) -> void:
+	var w := world
+	var t := Time.get_ticks_usec()
+	ribbons = _river_ribbons()
+	path_timings.ribbons_ms = (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
+	var starts := PackedInt32Array()
+	var xs := PackedFloat64Array()
+	var zs := PackedFloat64Array()
+	var ws := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var depths := PackedFloat64Array()
+	var bends := PackedFloat64Array()
+	var left_x := PackedFloat64Array()
+	var left_z := PackedFloat64Array()
+	for pts: Array in ribbons:
+		starts.append(xs.size())
+		for p: Dictionary in pts:
+			xs.append(p.x)
+			zs.append(p.z)
+			ws.append(p.w)
+			ys.append(p.y)
+			depths.append(p.depth)
+			bends.append(p.bend)
+			var edge: Vector3 = p.left
+			left_x.append(edge.x)
+			left_z.append(edge.z)
+	starts.append(xs.size())
+	var out: Dictionary = fast.RiverSurface(w.W, w.H, TILE, HS, GameConfig.OCEAN_DEPTH, GameConfig.LAKE_DROP, w.h, w.ocean, w.lake,
+		w.filled, starts, xs, zs, ws, ys, depths, bends, left_x, left_z)
+	hv_raw = out.hv_raw
+	hv = out.hv
+	var left: PackedFloat32Array = out.left
+	var right: PackedFloat32Array = out.right
+	var at := 0
+	for pts: Array in ribbons:
+		for p: Dictionary in pts:
+			p.left = Vector3(left[at * 3], left[at * 3 + 1], left[at * 3 + 2])
+			p.right = Vector3(right[at * 3], right[at * 3 + 1], right[at * 3 + 2])
+			at += 1
+	path_timings.carve_ms = (Time.get_ticks_usec() - t) / 1000.0
+	path_timings.bed_cut_ms = 0.0 # внутри carve_ms
+	t = Time.get_ticks_usec()
+	index_ribbons()
+	path_timings.banks_ms = (Time.get_ticks_usec() - t) / 1000.0
 
 
 ## Базовый рельеф мира без путей и сооружений (9.7): копия общего из StageRivers, пока идёт генерация,
