@@ -125,7 +125,7 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 		finish_paths()
 
 
-## С 14.11 (DOD): высоты, русла, срез дна и берега лент одним вызовом C# (FastGrid.RiverSurface); словари точек лент
+## DOD (ноябрь 2026): высоты, русла, срез дна и берега лент одним вызовом C# (FastGrid.RiverSurface); словари точек лент
 ## и индекс клетка -> отрезки остаются в GDScript. Результат тот же, что у кода в _init выше (он остаётся эталоном).
 func _river_surface_native(fast: Object) -> void:
 	var w := world

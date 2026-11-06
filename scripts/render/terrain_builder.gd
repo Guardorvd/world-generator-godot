@@ -103,7 +103,7 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 	arrays[Mesh.ARRAY_NORMAL] = nor
 
 
-## С 14.11 (DOD): весь проход одним вызовом C# (FastGrid.RefineTerrain), патчи — столбцами. Результат тот же, что у
+## DOD (ноябрь 2026): весь проход одним вызовом C# (FastGrid.RefineTerrain), патчи — столбцами. Результат тот же, что у
 ## цикла в refine_arrays ниже (он остаётся эталоном для tools/dod_verify.gd).
 static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i) -> void:
 	var keys := PackedInt32Array()

@@ -74,7 +74,7 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 	return changed
 
 
-## С 14.11 (DOD): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
+## DOD (ноябрь 2026): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
 ## GDScript-пути ниже (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
 static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> PackedInt32Array:
 	var w := heights.world

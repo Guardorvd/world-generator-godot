@@ -125,7 +125,7 @@ static func _shape_valleys(w: WorldData) -> void:
 	if allow_fast:
 		var fast := Grid.fast_grid()
 		if fast != null:
-			# С 14.11 (DOD): весь проход одним вызовом C# (FastGrid.RiverValleys); GDScript ниже — эталон для сверки
+			# DOD (ноябрь 2026): весь проход одним вызовом C# (FastGrid.RiverValleys); GDScript ниже — эталон для сверки
 			var out: Dictionary = fast.RiverValleys(w.W, w.H, w.h, w.filled, w.order, w.order_n, w.river, w.ocean, w.lake,
 				w.acc, w.down, WorldData.RIVER_ACC, StageHydrology.SHORE_LIFT)
 			w.h = out.h

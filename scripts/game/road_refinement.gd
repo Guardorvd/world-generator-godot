@@ -39,7 +39,7 @@ var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум п�
 var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
 var _wanted := {} # exact patch keys of the new routes; old neighbours are indexed only here
 var _wanted_box := Rect2()
-# Быстрый путь (14.11, DOD): отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex вместо словарей
+# Быстрый путь (DOD, ноябрь 2026): отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex вместо словарей
 var _cs_starts := PackedInt32Array() # CSR по клеткам мира: _cs_ids[_cs_starts[k] .. _cs_starts[k + 1]) — отрезки клетки k
 var _cs_ids := PackedInt32Array()
 var _sg_a := PackedVector2Array()
