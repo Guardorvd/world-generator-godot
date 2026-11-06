@@ -270,7 +270,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	t = clampf((hill.fbm(X / MASSIF + 25.1, Y / MASSIF - 71.3, 2) + UPLAND_SHIFT) / 0.4, 0.0, 1.0)
 	var up := t * t * (3.0 - 2.0 * t)
 	# С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня
-	sharp = (0.25 + 0.75 * sharp) * (1.0 - up)
+	sharp *= 1.0 - up
 	var asym := 1.0 + (ASYM - 1.0) * sharp
 	# С 3.1 мелкая складчатость зависит и от формы массива: у сглаженных гор главный гребень
 	# цельный, у острых остаются скалистые детали. Возвышенности по-прежнему теряют большую их часть
@@ -282,13 +282,16 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
-	r = minf(r * (1.0 + 0.35 * hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PEAK_CAP)
+	var pk := hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2)
+	r = minf(r * (1.0 + 0.35 * pk * r), PEAK_CAP)
 	# С 3.5 у сглаженных массивов середина склона образует широкое пологое плечо.
 	# Два плавных края ограничивают его одним поясом; долины и вершины сохраняются.
+	# С GEO 6 плечо есть и у гор (слабее): склон идёт ярусами — предгорье, плечо, вершина.
+	# Его высота плавно меняется вдоль хребта вместе с полем вершин и седловин.
 	t = clampf((r - 0.25) / 0.15, 0.0, 1.0)
 	var shoulder := t * t * (3.0 - 2.0 * t)
 	t = clampf((0.7 - r) / 0.15, 0.0, 1.0)
-	r += (0.475 - r) * shoulder * t * t * (3.0 - 2.0 * t) * 0.45 * up
+	r += (0.475 + 0.08 * pk * (1.0 - up) - r) * shoulder * t * t * (3.0 - 2.0 * t) * (0.45 * up + 0.2 * (1.0 - up))
 	# Острые горы — узкие гребни (r^2), сглаженные — широкие (r^1.5)
 	var q := sqrt(r) * r
 	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) + 0.3) / 0.6, 0.0, 1.0)
@@ -296,11 +299,11 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	var m := (q + (r * r - q) * sharp) * amp
 	m += (r * UPLAND_AMP - m) * up
 	# Incise inland foundations only: lowering coastal saddles can flood dry road links.
-	var foundation := 1.0 - 0.35 * inland * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
+	var foundation := 1.0 - 0.2 * inland * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
 	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) * foundation + m * CREST_SHARE
 	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
 	if m > PEAK_KNEE:
-		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / (PEAK_SOFT + 0.65 * sharp))
+		m = PEAK_KNEE + (m - PEAK_KNEE) / (1.0 + (m - PEAK_KNEE) / PEAK_SOFT)
 	return m
 
 
@@ -323,8 +326,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		# от n = 0, то есть отвесную ступеньку вдоль гребня даже при плавном шуме
 		if o == 0:
 			n *= asym if n > 0.0 else 1.0 / asym
-		var rounding := CREST_ROUND * (1.0 - 0.7 * fine)
-		var e := sqrt(n * n + rounding * rounding)
+		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
 		var val := maxf(0.0, 1.0 - e)
 		val *= val
 		val *= wt
@@ -336,7 +338,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		# Медленная продольная линия задаёт извилистую долину. Поперечное поле расширяет её
 		# в котловины; их дно меняет высоту плавно, а не становится горизонтальной ступенью.
 		var course := ridge.noise(along / INNER_ALONG + 18.7, across / INNER_ACROSS - 37.1)
-		var side := ridge.noise(along / (180.0 - 132.0 * fine) - 51.3, across / (320.0 - 150.0 * fine) + 24.8)
+		var side := ridge.noise(along / 180.0 - 51.3, across / 320.0 + 24.8)
 		var t := clampf((side + 0.2) / 0.6, 0.0, 1.0)
 		var opening := t * t * (3.0 - 2.0 * t)
 		# У скалистых гор долины уже и глубже, у сглаженных — широкие и неглубокие.
@@ -347,7 +349,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		t = clampf(1.0 - absf(side) / 0.2, 0.0, 1.0)
 		var branch := t * t * (3.0 - 2.0 * t)
 		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
-		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * (SIDE_CUT + 0.18 * fine) * interior
+		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
 		# A shoulder follows the same ribs, with its level varying along the valley.
 		# Broad transitions leave traversable shelves, never a quantized terrace.
 		var shelf_level := 0.36 + 0.12 * opening

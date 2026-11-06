@@ -13,7 +13,10 @@ func run() -> void:
 	var f:=FileAccess.open("res://.godot/gameplay_old_relief.gd",FileAccess.WRITE)
 	f.store_string(text);f.close();Old=load("res://.godot/gameplay_old_relief.gd")
 	var rows: Array=[]
-	for seed_text: String in ["Ущелье","Север-1234"]:
+	var args:=OS.get_cmdline_user_args()
+	var seeds:=["Ущелье","Север-1234"]
+	if "--seed" in args:seeds=[args[args.find("--seed")+1]]
+	for seed_text: String in seeds:
 		for version: String in (["after"] if "--after-only" in OS.get_cmdline_user_args() else ["before","after"]):
 			print("BEGIN ",seed_text," ",version)
 			var w: WorldData
@@ -35,6 +38,8 @@ func run() -> void:
 				var length:=preload("res://tools/control/control.gd").path_length(route.pts)*GameConfig.TILE
 				row.roads[route.kind]=row.roads.get(route.kind,0.0)+length
 			row.road_profile=w.generation_profile.duplicate(true)
+			if "--roads-only" in args:
+				rows.append(row);print("CASE ",JSON.stringify(row));w.base_heights=null;continue
 			StageSites.run(w);RoadSurface.run(w)
 			var h:=w.base_heights.copy();h.finish_paths()
 			var plan:=Network.build(w,h,QuickTrails.area(Rect2i(0,0,768,768)),QuickTrails.options())

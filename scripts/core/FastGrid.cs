@@ -443,7 +443,7 @@ public partial class FastGrid : RefCounted
 		t = Clamp01((Fbm(hill, X / Massif + 25.1, Y / Massif - 71.3, 2) + UplandShift) / 0.4);
 		double up = t * t * (3.0 - 2.0 * t);
 		// С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня.
-		sharp = (0.25 + 0.75 * sharp) * (1.0 - up);
+		sharp *= 1.0 - up;
 		double asym = 1.0 + (Asym - 1.0) * sharp;
 		// С 3.1 мелкие детали сильнее у острых массивов; главный гребень шире и цельнее.
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
@@ -452,22 +452,23 @@ public partial class FastGrid : RefCounted
 			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f);
 		if (f > 0.0)
 			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f;
-		r = Math.Min(r * (1.0 + 0.35 * Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2) * r), PeakCap);
-		// С 3.5 пологое плечо сглаженного массива, с плавным входом и выходом.
+		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
+		r = Math.Min(r * (1.0 + 0.35 * pk * r), PeakCap);
+		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.
 		t = Clamp01((r - 0.25) / 0.15);
 		double shoulder = t * t * (3.0 - 2.0 * t);
 		t = Clamp01((0.7 - r) / 0.15);
-		r += (0.475 - r) * shoulder * t * t * (3.0 - 2.0 * t) * 0.45 * up;
+		r += (0.475 + 0.08 * pk * (1.0 - up) - r) * shoulder * t * t * (3.0 - 2.0 * t) * (0.45 * up + 0.2 * (1.0 - up));
 		double q = Math.Sqrt(r) * r;
 		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
 		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
 		double m = (q + (r * r - q) * sharp) * amp;
 		m += (r * UplandAmp - m) * up;
 		double foundationT = Clamp01((r - 0.12) / (0.65 - 0.12));
-		double foundation = 1.0 - 0.35 * inland * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
+		double foundation = 1.0 - 0.2 * inland * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
 		m = MassifBase * amp * (1.0 - (1.0 - UplandAmp) * up) * foundation + m * CrestShare;
 		if (m > PeakKnee)
-			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / (PeakSoft + 0.65 * sharp));
+			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / PeakSoft);
 		return m;
 	}
 
@@ -484,8 +485,7 @@ public partial class FastGrid : RefCounted
 			double n = Noise(pm, u * fq, v * fq);
 			if (o == 0)
 				n *= n > 0.0 ? asym : 1.0 / asym;
-			double rounding = CrestRound * (1.0 - 0.7 * fine);
-			double e = Math.Sqrt(n * n + rounding * rounding);
+			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
 			double val = Math.Max(0.0, 1.0 - e);
 			val *= val;
 			val *= wt;
@@ -498,7 +498,7 @@ public partial class FastGrid : RefCounted
 		{
 			// Продольная долина, широкие котловины и впадающие сбоку ложбины.
 			double course = Noise(pm, along / InnerAlong + 18.7, across / InnerAcross - 37.1);
-			double side = Noise(pm, along / (180.0 - 132.0 * fine) - 51.3, across / (320.0 - 150.0 * fine) + 24.8);
+			double side = Noise(pm, along / 180.0 - 51.3, across / 320.0 + 24.8);
 			double t = Clamp01((side + 0.2) / 0.6);
 			double opening = t * t * (3.0 - 2.0 * t);
 			t = Clamp01(1.0 - Math.Abs(course) / ((0.24 + 0.32 * opening) * (1.4 - 0.7 * interior)));
@@ -507,7 +507,7 @@ public partial class FastGrid : RefCounted
 			t = Clamp01(1.0 - Math.Abs(side) / 0.2);
 			double branch = t * t * (3.0 - 2.0 * t);
 			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
-			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * (SideCut + 0.18 * fine) * interior;
+			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SideCut * interior;
 			double shelfLevel = 0.36 + 0.12 * opening;
 			double shelfIn = Clamp01((s - (shelfLevel - 0.12)) / (shelfLevel - (shelfLevel - 0.12)));
 			double shelfOut = Clamp01((s - shelfLevel) / ((shelfLevel + 0.12) - shelfLevel));
