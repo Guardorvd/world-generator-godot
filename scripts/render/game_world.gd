@@ -94,6 +94,7 @@ var pitch: float:
 	set(value): camera_controller.pitch = value
 var time := 0.0
 var hour := 9.0          # час суток в мире, 0..24
+var _hour_goal := NAN    # плавный довод часа при перемотке клавишей T, без рывка света и облаков
 var day: DayCycle
 var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
 var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board", place}
@@ -884,8 +885,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("flashlight"):
 		toggle_flashlight()
 	elif event.is_action_pressed("time_skip"):
-		hour = fposmod(hour + (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0), 24.0)
-		hud.toast_now("Время %s" % DayCycle.clock(hour))
+		var base_h := hour if is_nan(_hour_goal) else _hour_goal
+		_hour_goal = fposmod(base_h + (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0), 24.0)
+		hud.toast_now("Время %s" % DayCycle.clock(_hour_goal))
 	elif event.is_action_pressed("interact") and not show_map:
 		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
@@ -943,7 +945,17 @@ func _physics_process(dt: float) -> void:
 	var pitch0 := pitch
 	time += dt
 	if services.settings.day_minutes > 0.0:
-		hour = fposmod(hour + dt * 24.0 / (services.settings.day_minutes * 60.0), 24.0)
+		var dh := dt * 24.0 / (services.settings.day_minutes * 60.0)
+		hour = fposmod(hour + dh, 24.0)
+		if not is_nan(_hour_goal):
+			_hour_goal = fposmod(_hour_goal + dh, 24.0)
+	if not is_nan(_hour_goal):
+		var diff := wrapf(_hour_goal - hour, -12.0, 12.0)
+		if absf(diff) < 0.002:
+			hour = _hour_goal
+			_hour_goal = NAN
+		else:
+			hour = fposmod(hour + diff * Util.damp(9.0, dt), 24.0)
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	if bike.riding:

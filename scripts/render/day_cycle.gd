@@ -88,20 +88,59 @@ static func clock(hour: float) -> String:
 	return "%02d:%02d" % [m / 60, m % 60]
 
 
-## Ключевое состояние в час hour: смесь двух соседних ключей
+## Ключевое состояние в час hour: гладкая кубическая интерполяция (C¹) между ключами без остановок на узлах
 static func state(hour: float) -> Array:
 	hour = fposmod(hour, 24.0)
+	var n := KEYS.size()
 	var i := 0
-	while i < KEYS.size() - 2 and KEYS[i + 1][0] <= hour:
+	while i < n - 2 and KEYS[i + 1][0] <= hour:
 		i += 1
 	var a: Array = KEYS[i]
 	var b: Array = KEYS[i + 1]
-	var t := smoothstep(0.0, 1.0, (hour - a[0]) / (b[0] - a[0]))
-	var out := []
-	for k: int in a.size():
+	var prev: Array = KEYS[i - 1 if i > 0 else n - 2]
+	var next: Array = KEYS[i + 2 if i + 2 < n else 1]
+	var dt := float(b[0] - a[0])
+	var dt_prev := float(a[0] - prev[0]) if i > 0 else float(24.0 - prev[0])
+	var dt_next := float(next[0] - b[0]) if i + 2 < n else float(next[0])
+	var u := clampf((hour - float(a[0])) / dt, 0.0, 1.0)
+	var u2 := u * u
+	var u3 := u2 * u
+	var h00 := 2.0 * u3 - 3.0 * u2 + 1.0
+	var h10 := u3 - 2.0 * u2 + u
+	var h01 := -2.0 * u3 + 3.0 * u2
+	var h11 := u3 - u2
+	var w_a := dt / (dt_prev + dt)
+	var w_b := dt / (dt + dt_next)
+	var out := [hour]
+	for k in range(1, a.size()):
+		var vp: Variant = prev[k]
 		var va: Variant = a[k]
 		var vb: Variant = b[k]
-		out.append(lerp(va, vb, t))
+		var vn: Variant = next[k]
+		if va is Color:
+			var cp: Color = vp
+			var ca: Color = va
+			var cb: Color = vb
+			var cn: Color = vn
+			var ma := (cb - cp) * w_a
+			var mb := (cn - ca) * w_b
+			var c := ca * h00 + ma * h10 + cb * h01 + mb * h11
+			var min_r := minf(ca.r, cb.r)
+			var max_r := maxf(ca.r, cb.r)
+			var min_g := minf(ca.g, cb.g)
+			var max_g := maxf(ca.g, cb.g)
+			var min_b := minf(ca.b, cb.b)
+			var max_b := maxf(ca.b, cb.b)
+			out.append(Color(clampf(c.r, min_r, max_r), clampf(c.g, min_g, max_g), clampf(c.b, min_b, max_b), 1.0))
+		else:
+			var fp := float(vp)
+			var fa := float(va)
+			var fb := float(vb)
+			var fn := float(vn)
+			var ma := (fb - fp) * w_a
+			var mb := (fn - fa) * w_b
+			var v := fa * h00 + ma * h10 + fb * h01 + mb * h11
+			out.append(clampf(v, minf(fa, fb), maxf(fa, fb)))
 	return out
 
 
@@ -172,6 +211,12 @@ func apply(hour: float, time: float) -> void:
 	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
 	var seed_phase := float(posmod(world_seed, 997)) * 0.13
 	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
+	# свет через облака: чем гуще облачность, тем мягче и слабее прямое солнце, тем больше рассеянного света неба
+	var overcast := smoothstep(0.25, 0.6, cover) * clampf(sunlight, 0.0, 1.0)
+	if sun.y > 0.0:
+		light.light_energy *= lerpf(1.0, 0.7, overcast)
+	env.ambient_light_energy = s[6] * lerpf(1.0, 1.18, overcast)
+	light.shadow_opacity = s[14] * lerpf(1.0, 0.7, overcast)
 	RenderingServer.global_shader_parameter_set("cloud_shadow",
 		Vector4(CLOUD_WIND.x * time, CLOUD_WIND.y * time, CLOUD_SHADOW * sunlight, cover))
 	sky_mat.set_shader_parameter("zenith_color", s[1])

@@ -148,7 +148,9 @@ float cumulus_density(vec2 p, float h, float cov, float morph, out float out_tow
 
 	// Вертикальный профиль: ровная плоская подошва конденсации внизу и куполообразные вершины вверху
 	float bottom_flat = smoothstep(0.0, 0.14, h);
-	float top_round = smoothstep(out_tower, out_tower * 0.20, h);
+	// Каждый клуб поднимает свою шапку выше соседних: пышные округлые купола вместо плоских пятен
+	float dome_h = out_tower * (0.62 + 0.62 * puff_main * (0.6 + 0.4 * puff_mid));
+	float top_round = smoothstep(dome_h, dome_h * 0.20, h);
 	float vert_profile = bottom_flat * top_round;
 
 	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
@@ -159,8 +161,8 @@ float cumulus_density(vec2 p, float h, float cov, float morph, out float out_tow
 	// Формируем плотное ядро облака и скульптурно вырезаем кудрявые купола по краям и на шапках
 	float combined = base_island * 0.68 + cauli * 0.32;
 	float core = clamp((combined - edge) / max(1.0 - edge, 0.18), 0.0, 1.0);
-	float erosion = (1.0 - cauli) * (0.28 + 0.25 * h) * (1.0 - core * 0.65);
-	float dens = clamp((core - erosion) * 1.55, 0.0, 1.0) * vert_profile;
+	float erosion = (1.0 - cauli) * (0.22 + 0.22 * h) * (1.0 - core * 0.75);
+	float dens = clamp((core - erosion) * 1.95, 0.0, 1.0) * vert_profile;
 
 	// Лёгкие рваные клочья (fractus) у самой подошвы крупных облаков
 	float fractus = smoothstep(0.66, 0.88, puff_fine) * smoothstep(edge - 0.05, edge + 0.03, base_island)
@@ -379,8 +381,9 @@ void sky() {
 					float sh_c = 0.5;
 					float sh_h = clamp(lh + light_vert, 0.05, 0.98);
 					float sh_dens = cumulus_density(p_step + light_horiz, sh_h, cloud_cover, morph, dummy_t, sh_c);
-					float sh_dens2 = cumulus_density(p_step + light_horiz * 2.2, clamp(sh_h + light_vert, 0.05, 0.99), cloud_cover, morph, dummy_t, sh_c);
-					float opt_depth = sh_dens * 2.6 + sh_dens2 * 1.7;
+					// Вторая выборка тени заменена оценкой: втрое меньше обращений к плотности на пиксель
+					float sh_dens2 = sh_dens * 0.62;
+					float opt_depth = sh_dens * 3.0 + sh_dens2 * 1.7;
 
 					// Локальный градиент сферических клубов к солнцу + окклюзия в ложбинках между шапками
 					float puff_slope = clamp((cauli_rel - sh_c) * 3.4 + 0.52, 0.0, 1.0);
@@ -424,6 +427,18 @@ void sky() {
 				c_final = mix(c_final, haze_tint, horizon_haze * 0.58);
 				// Облака сильнее гасят точечные звёзды позади себя
 				col = mix(col, c_final, smoothstep(0.0, 0.92, cloud_alpha));
+			}
+			// Лучи света сквозь просветы в облаках (crepuscular rays): веера из-за краёв облаков у солнца или луны
+			if (active_dot > 0.55 && cloud_cover > 0.12) {
+				vec3 ru = normalize(cross(active_dir, vec3(0.0, 1.0, 0.0)) + vec3(1e-4));
+				vec3 rv = cross(ru, active_dir);
+				float ang = atan(dot(d, rv), dot(d, ru));
+				float streaks = noise(vec2(ang * 11.0, cloud_time * 0.015 + cloud_seed)) * 0.6
+					+ noise(vec2(ang * 27.0 + 5.0, -cloud_time * 0.011)) * 0.4;
+				float shaft = smoothstep(0.42, 0.85, streaks) * pow(active_dot, 5.0) * trans;
+				float low_boost = 1.0 + low_sun * 1.2;
+				float lit_time = max(above, night * 0.3);
+				col += active_light_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * 0.22 * fade;
 			}
 		}
 	} else if (d.y > 0.02) {
