@@ -39,6 +39,15 @@ var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум п�
 var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
 var _wanted := {} # exact patch keys of the new routes; old neighbours are indexed only here
 var _wanted_box := Rect2()
+# Быстрый путь (14.11, DOD): отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex вместо словарей
+var _cs_starts := PackedInt32Array() # CSR по клеткам мира: _cs_ids[_cs_starts[k] .. _cs_starts[k + 1]) — отрезки клетки k
+var _cs_ids := PackedInt32Array()
+var _sg_a := PackedVector2Array()
+var _sg_delta := PackedVector2Array()
+var _sg_len2 := PackedFloat64Array()
+var _sg_half := PackedFloat64Array()
+var _sg_route := PackedInt32Array()
+var _sg_along := PackedFloat64Array()
 
 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
@@ -56,6 +65,10 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._origin = Vector2(heights.world.world_origin) * TILE
 	r._only = only
 	var started_us := Time.get_ticks_usec()
+	if allow_fast_index and allow_fast_patches and allow_fast_nearest and allow_fast_vertices and only.is_empty() and heights.world.outer == null:
+		var whole := Grid.fast_grid()
+		if whole != null:
+			return r._build_native(whole, fit_road)
 	if not only.is_empty() and restrict_local_index:
 		# Determine the exact output cells before indexing neighbours. Preserve the
 		# original route/segment order in the final index, including nearest ties.
@@ -177,6 +190,102 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._noise = null
 	r._base_cache.clear()
 	return r
+
+
+## Весь этап двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): отрезки и вершины столбцами, без
+## словарей на отрезок и на вершину. Результат тот же, что у пути в build ниже (он остаётся эталоном для
+## tools/dod_verify.gd). Только для всей сети (only пусто) и без земли за краем карты.
+func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
+	var w := _heights.world
+	var started_us := Time.get_ticks_usec()
+	var ids := PackedInt32Array()
+	var smoothing := PackedFloat64Array()
+	var is_road := PackedByteArray()
+	var starts := PackedInt32Array()
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var ws := PackedFloat64Array()
+	var surf := PackedInt32Array()
+	for route in w.trails.size():
+		var t: Dictionary = w.trails[route]
+		if not RoadBed.KINDS.has(t.kind):
+			continue
+		ids.append(route)
+		is_road.append(1 if t.kind == "road" else 0)
+		smoothing.append(0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0))
+		starts.append(xs.size())
+		var line: Array = t.pts
+		var covering: Variant = t.surf
+		for n in line.size():
+			var p: Dictionary = line[n]
+			xs.append(p.x)
+			ys.append(p.y)
+			ws.append(p.w)
+			surf.append(covering[n])
+	starts.append(xs.size())
+	var index: Dictionary = fast.RoadIndex(w.W, w.H, TILE, REACH, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids)
+	_cs_starts = index.starts
+	_cs_ids = index.candidates
+	_sg_a = index.a
+	_sg_delta = index.delta
+	_sg_len2 = index.len2
+	_sg_half = index.half
+	_sg_route = index.route
+	_sg_along = index.along
+	_index_structures()
+	build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	started_us = Time.get_ticks_usec()
+	if fit_road:
+		_fit_network()
+	build_timings.fit_network_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	started_us = Time.get_ticks_usec()
+	var fits := PackedFloat64Array()
+	var fit_start := PackedInt32Array()
+	var fit_count := PackedInt32Array()
+	fit_start.resize(w.trails.size())
+	fit_count.resize(w.trails.size())
+	for route: int in fit_routes:
+		var fit: Dictionary = fit_routes[route]
+		fit_start[route] = fits.size()
+		fit_count[route] = fit.profile.size()
+		for j in fit.profile.size():
+			fits.append(fit.profile[j])
+			fits.append(fit.strength[j])
+			fits.append(fit.limit[j])
+	var axes := PackedFloat64Array()
+	for s: Dictionary in _heights.structures:
+		axes.append(s.ax)
+		axes.append(s.az)
+		axes.append(s.bx)
+		axes.append(s.bz)
+	var surfaces := PackedFloat64Array()
+	for s: Dictionary in _surf:
+		var color: Array = s.get("color", [0, 0, 0])
+		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
+	var out: Dictionary = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
+		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
+		surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes, RoadBed.STEEP.x, RoadBed.STEEP.y,
+		RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, REACH)
+	patches = out.patches
+	build_timings.native_points_ms = out.ms_points
+	build_timings.native_vertices_ms = out.ms_vertices
+	build_timings.native_assemble_ms = out.ms_assemble
+	build_timings.nearest_ms = 0.0
+	build_timings.vertex_math_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	build_timings.vertices_ms = build_timings.vertex_math_ms
+	_heights = null
+	_segments.clear()
+	_structures.clear()
+	_noise = null
+	_cs_starts = PackedInt32Array()
+	_cs_ids = PackedInt32Array()
+	_sg_a = PackedVector2Array()
+	_sg_delta = PackedVector2Array()
+	_sg_len2 = PackedFloat64Array()
+	_sg_half = PackedFloat64Array()
+	_sg_route = PackedInt32Array()
+	_sg_along = PackedFloat64Array()
+	return self
 
 
 ## Готовые патчи без пересчёта (сохранённый участок Trail Lab): height — число строк клеток мира.
@@ -469,15 +578,32 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 	for s: Dictionary in _structures.get(key, []):
 		if Grid.segment_dist(p.x, p.y, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN + RoadBed.PIN_FADE:
 			return false
-	for s: Dictionary in _segments.get(key, []):
-		var b: Vector2 = s.a + s.delta
-		var crossing: bool = s.route != route and absf(tangent.dot(s.delta.normalized())) < 0.9
-		var hairpin := false
-		if s.route == route and absf(s.along - along) > 20.0:
-			var u := clampf((p - s.a).dot(s.delta) / s.len2, 0.0, 1.0)
-			hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
-		if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y) < s.half + REACH + 0.5:
-			return false
+	if not _cs_starts.is_empty():
+		# Быстрый путь: те же отрезки клетки столбцами (FastGrid.RoadIndex), те же вычисления
+		if key >= 0 and key < w.N:
+			for k in range(_cs_starts[key], _cs_starts[key + 1]):
+				var id := _cs_ids[k]
+				var a := _sg_a[id]
+				var delta := _sg_delta[id]
+				var b := a + delta
+				var seg_route := _sg_route[id]
+				var crossing: bool = seg_route != route and absf(tangent.dot(delta.normalized())) < 0.9
+				var hairpin := false
+				if seg_route == route and absf(_sg_along[id] - along) > 20.0:
+					var u := clampf((p - a).dot(delta) / _sg_len2[id], 0.0, 1.0)
+					hairpin = absf(_sg_along[id] + u * sqrt(_sg_len2[id]) - along) > 20.0
+				if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y) < _sg_half[id] + REACH + 0.5:
+					return false
+	else:
+		for s: Dictionary in _segments.get(key, []):
+			var b: Vector2 = s.a + s.delta
+			var crossing: bool = s.route != route and absf(tangent.dot(s.delta.normalized())) < 0.9
+			var hairpin := false
+			if s.route == route and absf(s.along - along) > 20.0:
+				var u := clampf((p - s.a).dot(s.delta) / s.len2, 0.0, 1.0)
+				hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
+			if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y) < s.half + REACH + 0.5:
+				return false
 	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
 			return false
@@ -680,3 +806,4 @@ func sample(x: float, z: float, width: int) -> Dictionary:
 	return {h = hs[a] * wa + hs[b] * wb + hs[c] * wc,
 		weight = colors[a].a * wa + colors[b].a * wb + colors[c].a * wc, surface = p.surface[closest], road = p.road[closest] != 0,
 		across = uvs[a].x * wa + uvs[b].x * wb + uvs[c].x * wc}
+

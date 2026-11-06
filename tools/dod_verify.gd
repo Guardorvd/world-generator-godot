@@ -101,8 +101,42 @@ func verify_refinement(h: Heightfield) -> void:
 	var a: RoadRefinement = slow.r
 	var b: RoadRefinement = fast.r
 	check(a.patches.keys() == b.patches.keys(), "RoadRefinement: те же патчи в том же порядке")
-	check(var_to_bytes(a.patches) == var_to_bytes(b.patches), "RoadRefinement: патчи совпадают побайтно")
+	var same := var_to_bytes(a.patches) == var_to_bytes(b.patches)
+	check(same, "RoadRefinement: патчи совпадают побайтно")
+	if not same:
+		report_patch_diff(a.patches, b.patches)
 	check(var_to_bytes(a.fit_routes) == var_to_bytes(b.fit_routes), "RoadRefinement: подгонка профиля совпадает побайтно")
+
+
+## Где именно патчи разошлись: по каналам число различных клеток и первые три примера
+func report_patch_diff(a: Dictionary, b: Dictionary) -> void:
+	var diffs := {}
+	var samples := {}
+	for key: int in a:
+		if not b.has(key):
+			print("  нет патча ", key)
+			continue
+		for channel: String in ["h", "color", "uv", "surface", "road"]:
+			var pa = a[key][channel]
+			var pb = b[key][channel]
+			if var_to_bytes(pa) == var_to_bytes(pb):
+				continue
+			diffs[channel] = diffs.get(channel, 0) + 1
+			if not samples.has(channel): samples[channel] = []
+			if samples[channel].size() < 3:
+				for i in pa.size():
+					if var_to_bytes(pa[i]) != var_to_bytes(pb[i]):
+						samples[channel].append("клетка %d (x %d, z %d) вершина %d: было %s стало %s" % [key, key % 768, key / 768, i, str(pa[i]), str(pb[i])])
+						break
+	print("  расхождения по каналам: ", diffs)
+	var k0: int = a.keys()[0]
+	print("  первый патч: ключ ", typeof(k0), "/", typeof(b.keys()[0]), ", поля ", a[k0].keys(), " / ", b[k0].keys(),
+		", типы ", typeof(a[k0].h), typeof(b[k0].h), typeof(a[k0].color), typeof(b[k0].color), typeof(a[k0].uv), typeof(b[k0].uv),
+		typeof(a[k0].surface), typeof(b[k0].surface), typeof(a[k0].road), typeof(b[k0].road))
+	print("  словарь патча равен: ", var_to_bytes(a[k0]) == var_to_bytes(b[k0]), ", размеры ", var_to_bytes(a[k0]).size(), "/", var_to_bytes(b[k0]).size())
+	for channel: String in samples:
+		for line: String in samples[channel]:
+			print("  ", channel, ": ", line)
 
 
 func time_build(h: Heightfield, fast: bool) -> Dictionary:
