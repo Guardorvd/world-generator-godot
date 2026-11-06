@@ -44,7 +44,7 @@ const PER_CELL := ["h", "filled", "elev", "ocean", "lake", "river", "river_area"
 const PER_OBJECT := ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]
 
 var enabled := false
-var dir := "user://world_cache"
+var dir := QuickTrails.cache_dir() # быстрый режим трасс (--quick-trails) пишет в свою папку, обычный кэш не трогает
 ## 14.5: готовые миры автора в проекте (RecommendedSeeds): копируются в dir, если их там нет
 const BUNDLED := "res://resources/world_cache"
 var _writes: Array[int] = []
@@ -752,6 +752,6 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 func reset() -> void:
 	wait_writes()
 	enabled = false
-	dir = "user://world_cache"
+	dir = QuickTrails.cache_dir()
 	_layer_keys.clear()
 	take_io_timings()

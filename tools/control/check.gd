@@ -315,6 +315,18 @@ func _process(delta: float) -> bool:
 			result.loaded_memory = _memory()
 			var id := Dev.world_id(seed_text, size)
 			var stats := Dev.world_stats(game.world, true)
+			# Где лежит сеть трасс (быстрый режим --quick-trails: только в середине мира)
+			var plan: Dictionary = game.world.trail_plan
+			var low := Vector2(INF, INF)
+			var high := Vector2(-INF, -INF)
+			for route: Dictionary in plan.get("routes", []):
+				for p: Vector2 in route.points:
+					low = low.min(p / GameConfig.TILE)
+					high = high.max(p / GameConfig.TILE)
+			print("TRAIL PLAN ", JSON.stringify({state = plan.get("state", ""), routes = plan.get("routes", []).size(),
+				length_m = roundi(plan.get("stats", {}).get("length_m", 0.0)), area = str(plan.get("area", Rect2i())),
+				routes_cells_from = str(low), routes_cells_to = str(high), world = str(Vector2i(game.world.W, game.world.H)),
+				quick = QuickTrails.active()}))
 			if "--verify-generation" in OS.get_cmdline_user_args():
 				var fields := preload("res://tools/generation_field_checks.gd").real_world(game.world)
 				Dev.save_json(out.path_join("field_parity.json"), fields)

@@ -62,6 +62,25 @@ static func random_seed() -> String:
 	return "%s-%d" % [WORDS[randi() % WORDS.size()], randi_range(1000, 9999)]
 
 
+## Быстрый режим трасс (--quick-trails, только разработка): пометка в заголовке окна и поверх всего экрана,
+## чтобы снимок не приняли за полный мир
+func _mark_quick_trails() -> void:
+	DisplayServer.window_set_title("%s — %s" % [ProjectSettings.get_setting("application/config/name", ""), QuickTrails.LABEL])
+	var layer := CanvasLayer.new()
+	layer.layer = 128
+	var label := Label.new()
+	label.text = QuickTrails.LABEL.to_upper() + " (сеть трасс только в середине мира)"
+	label.add_theme_color_override("font_color", Color(1.0, 0.35, 0.25))
+	label.add_theme_color_override("font_outline_color", Color(0, 0, 0))
+	label.add_theme_constant_override("outline_size", 6)
+	label.add_theme_font_size_override("font_size", 18)
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	label.set_anchors_and_offsets_preset(Control.PRESET_CENTER_TOP, Control.PRESET_MODE_MINSIZE, 6)
+	label.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	layer.add_child(label)
+	add_child(layer)
+
+
 func _ready() -> void:
 	if OS.get_cmdline_user_args().has("--resource-report"):
 		GameContext.scope.resource_profile = preload("res://scripts/core/resource_profile.gd").new()
@@ -85,8 +104,11 @@ func _ready() -> void:
 		GameContext.scope.settings.save_settings())
 	display_options = DisplayOptions.new()
 	display_options.setup(self)
+	if QuickTrails.active():
+		_mark_quick_trails()
 	if GameContext.scope.cache.enabled:
-		GameContext.scope.cache.install_bundled()
+		if not QuickTrails.active(): # готовые миры из сборки полные: в быстрый кэш им не место
+			GameContext.scope.cache.install_bundled()
 		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	var tabs := ButtonGroup.new()
 	for tab: String in ["recent", "favorites", "recommended", "saved"]:

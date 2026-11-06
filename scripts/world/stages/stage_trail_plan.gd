@@ -16,7 +16,12 @@ static func run(w: WorldData, size: int, on_progress := Callable()) -> void:
 	var h := w.base_heights.copy()
 	h.finish_paths()
 	var surface_ms := Time.get_ticks_msec() - started
-	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, WorldGenerator.start_rect(w, size), {on_progress = on_progress})
+	var area := WorldGenerator.start_rect(w, size)
+	var options := {on_progress = on_progress}
+	if QuickTrails.active(): # только разработка: сеть на средней части мира и короче (scripts/core/quick_trails.gd)
+		area = QuickTrails.area(Rect2i(0, 0, w.W, w.H))
+		options.merge(QuickTrails.options())
+	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, area, options)
 	w.trail_plan.stats.base_surface_ms = surface_ms
 	w.trail_plan.version = VERSION
 	# Generation-only handoff, never part of the canonical cache fields; avoid a WorldData reference cycle.

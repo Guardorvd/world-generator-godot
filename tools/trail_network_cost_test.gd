@@ -7,7 +7,8 @@ const Check := preload("res://tools/selftest.gd")
 var failures := 0
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 300)
+	# быстрый режим (--part): мир готовится ~20 с, сеть ~20 с; лимит с запасом для второго ПК
+	preload("res://tools/watchdog.gd").arm(self, 150 if "--part" in OS.get_cmdline_user_args() else 300)
 	run.call_deferred()
 
 func check(ok: bool, message: String) -> void:
@@ -44,15 +45,19 @@ func run() -> void:
 	var reference := "--reference" in OS.get_cmdline_user_args()
 	RoadRefinement.restrict_local_index = not reference
 	var h := prepared_copy(base)
-	# --part: быстрый режим на части мира (середина, 1/3 по каждой стороне; ~20-25 с вместо полного прогона).
-	# Эталон (--reference) и сравнение надо снимать в одном и том же режиме.
+	# --part: быстрый режим (QuickTrails): сеть только в середине мира (треть по каждой стороне) и короче обычной —
+	# та же область и те же пределы длины, что у игры с ключом --quick-trails. Своё имя файла эталона (_part):
+	# `-- --part --save` снимает эталон быстрого режима, обычный `-- --part` сверяет с ним. Полный эталон не трогается.
 	var area := Rect2i(0, 0, w.W, w.H)
-	if "--part" in OS.get_cmdline_user_args():
-		area = Rect2i(w.W / 3, w.H / 3, w.W / 3, w.H / 3)
-		print("PART ", area)
+	var options := {early_audit = not reference}
+	var quick := "--part" in OS.get_cmdline_user_args()
+	if quick:
+		area = QuickTrails.area(area)
+		options.merge(QuickTrails.options())
+		print("PART ", area, " длина сети до ", QuickTrails.LENGTH_TARGET, " м, собрано не больше ", QuickTrails.WORK_LIMIT, " м")
 	var started := Time.get_ticks_msec()
-	var plan := Network.build(w, h, area, {early_audit = not reference,
-		on_progress = func(_p: float, label: String) -> void: print("[%6.1f с] %s" % [(Time.get_ticks_msec() - started) / 1000.0, label])})
+	options.on_progress = func(_p: float, label: String) -> void: print("[%6.1f с] %s" % [(Time.get_ticks_msec() - started) / 1000.0, label])
+	var plan := Network.build(w, h, area, options)
 	print("BUILD ", (Time.get_ticks_msec() - started) / 1000.0, " с")
 	print("REFERENCE " if reference else "OPTIMIZED ", JSON.stringify(plan.stats))
 	print("DISTRICTS ", JSON.stringify(plan.get("districts", [])))
@@ -62,7 +67,9 @@ func run() -> void:
 	var snapshot := preload("res://scripts/game/surface_snapshot.gd")
 	if reference or "--save" in OS.get_cmdline_user_args():
 		FileAccess.open(result_path, FileAccess.WRITE).store_var({routes = plan.routes, surface = snapshot.capture(h, "final")})
-	elif FileAccess.file_exists(result_path):
+	elif not FileAccess.file_exists(result_path):
+		print("ЭТАЛОНА НЕТ: ", result_path, " (", "быстрый режим: -- --part --save" if quick else "полный режим: -- --reference", ")")
+	else:
 		var saved: Dictionary = FileAccess.open(result_path, FileAccess.READ).get_var()
 		check(saved.routes == plan.routes, "all routes match the reference with identical acceptance rules")
 		var restored: Heightfield = snapshot.restore(w, saved.surface, "final")

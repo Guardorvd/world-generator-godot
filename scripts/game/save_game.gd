@@ -2,7 +2,7 @@ extends RefCounted
 ## Прогресс отделён от расходного WorldCache. Авто- и ручной слот на зерно.
 const FORMAT := 1
 const MAX_BYTES := 4 * 1024 * 1024
-static var dir := "user://saves"
+static var dir := QuickTrails.saves_dir() # быстрый режим трасс — свои сохранения
 
 static func path_for(seed_text: String, slot := "auto") -> String:
 	return dir.path_join(seed_text.sha256_text() + "." + slot + ".save")
