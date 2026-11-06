@@ -53,8 +53,8 @@ static func finish_neighbors(source: WorldData, regions: Array, networks: Array,
 
 ## 13.5: следующий явный этап после воды и поселений, не изменяет уже подготовленную группу.
 ## 13.8: подходы к дорогам стартового плана, продолжение выходов закреплённых дорог и новые выходы.
-static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary, ledger := {}) -> Dictionary:
-	return Roads.prepare(source, regions, batch, ledger)
+static func prepare_roads(source: WorldData, regions: Array, batch: Dictionary, ledger := {}, stop := Callable()) -> Dictionary:
+	return Roads.prepare(source, regions, batch, ledger, stop)
 
 
 ## 13.8: закрепить принятую группу. Возвращает новый журнал, входной не меняется.

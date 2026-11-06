@@ -361,7 +361,8 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 		if not batch.ready:
 			return {ready = false, reason = batch.reason}
 	if stop.is_valid() and stop.call(): return {cancelled = true}
-	var roads := Regions.prepare_roads(w, [r], batch, current)
+	var roads := Regions.prepare_roads(w, [r], batch, current, stop)
+	if stop.is_valid() and stop.call(): return {cancelled = true}
 	var done := Regions.commit(current, [r], [network], batch, roads)
 	if stop.is_valid() and stop.call(): return {cancelled = true}
 	if done.ready:

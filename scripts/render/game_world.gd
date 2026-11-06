@@ -411,7 +411,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		for p: Dictionary in hud.all_places():
 			places[p.key] = p
 		hud.visited = saved.visited.duplicate()
-		quests.restore_state(saved.quest, places)
+		if not quests.restore_state(saved.quest, places):
+			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
 		_quest_changed()
 		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)

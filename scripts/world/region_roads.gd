@@ -22,7 +22,9 @@ const SIDES := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
 static var eager_fallback := false
 
 
-static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger := {}) -> Dictionary:
+## stop — необязательная отмена (Callable -> bool): проверяется между поисками путей, при отмене результат пустой
+## (reason = cancelled), его вызывающий отбрасывает.
+static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger := {}, stop := Callable()) -> Dictionary:
 	if not batch.get("ready", false) or regions.is_empty():
 		return {ready = false, reason = "water_not_ready", trails = [], settlements = [], exits = []}
 	var union: Rect2i = regions[0].sample_rect
@@ -153,6 +155,9 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		var b: int = pair[2]
 		if _root(groups, a) == _root(groups, b): continue
 		if finder.search_budget <= 0 or attempts >= maxi(1, nodes.size() * 3): break
+		if stop.is_valid() and stop.call():
+			finder.release()
+			return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
 		attempts += 1
 		if not _build(w, finder, state, open, nodes[a].i, pair[3]): continue
 		edges.append({from = nodes[a].id, to = nodes[b].id})
@@ -163,6 +168,9 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		var rect: Rect2i = regions[n].rect
 		for d: Vector2i in SIDES:
 			if finder.search_budget <= 0: break
+			if stop.is_valid() and stop.call():
+				finder.release()
+				return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
 			var beyond := Rect2i(rect.position + d * rect.size, rect.size)
 			if not _free_side(beyond, regions, ledger, plan): continue
 			var from := _side_node(w, nodes, bounds, rect, d)

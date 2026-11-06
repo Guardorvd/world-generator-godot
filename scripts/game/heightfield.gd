@@ -877,7 +877,7 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
 	var w := world
-	if not raw and w.outer != null:
+	if not raw and w.outer != null and not _in_plan(x, z):
 		var refined := OuterLand.refined_at(w.outer.get_ledger().get("regions", {}), x, z)
 		if not refined.is_empty(): return refined.h
 	var W := w.W
@@ -1016,8 +1016,16 @@ func immersion_at(x: float, z: float, feet: float) -> float:
 	return clampf(ground_at(x, z) + depth - feet, 0.0, depth)
 
 
+## Точка внутри стартового плана: закреплённые области (OuterLand) лежат только за его краем (RegionStream._plan),
+## поэтому журнал областей там не нужен — и его замок не берётся на каждый запрос высоты.
+func _in_plan(x: float, z: float) -> bool:
+	var fx := x / TILE - 0.5
+	var fz := z / TILE - 0.5
+	return fx >= 0.0 and fz >= 0.0 and fx < world.W and fz < world.H
+
+
 func path_contact(x: float, z: float) -> Dictionary:
-	if world.outer != null:
+	if world.outer != null and not _in_plan(x, z):
 		var contact := OuterLand.refined_at(world.outer.get_ledger().get("regions", {}), x, z)
 		if not contact.is_empty(): return contact
 	return road_refinement.sample(x, z, world.W) if road_refinement != null else {}
