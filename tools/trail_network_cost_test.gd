@@ -44,10 +44,18 @@ func run() -> void:
 	var reference := "--reference" in OS.get_cmdline_user_args()
 	RoadRefinement.restrict_local_index = not reference
 	var h := prepared_copy(base)
-	var plan := Network.build(w, h, Rect2i(0, 0, w.W, w.H), {early_audit = not reference,
-		on_progress = func(_p: float, label: String) -> void: print(label)})
+	# --part: быстрый режим на части мира (середина, 1/3 по каждой стороне; ~20-25 с вместо полного прогона).
+	# Эталон (--reference) и сравнение надо снимать в одном и том же режиме.
+	var area := Rect2i(0, 0, w.W, w.H)
+	if "--part" in OS.get_cmdline_user_args():
+		area = Rect2i(w.W / 3, w.H / 3, w.W / 3, w.H / 3)
+		print("PART ", area)
+	var started := Time.get_ticks_msec()
+	var plan := Network.build(w, h, area, {early_audit = not reference,
+		on_progress = func(_p: float, label: String) -> void: print("[%6.1f с] %s" % [(Time.get_ticks_msec() - started) / 1000.0, label])})
+	print("BUILD ", (Time.get_ticks_msec() - started) / 1000.0, " с")
 	print("REFERENCE " if reference else "OPTIMIZED ", JSON.stringify(plan.stats))
-	var result_path := "res://.godot/trail_network_cost_reference.bin"
+	var result_path := "res://.godot/trail_network_cost_reference%s.bin" % ("_part" if "--part" in OS.get_cmdline_user_args() else "")
 	var snapshot := preload("res://scripts/game/surface_snapshot.gd")
 	if reference:
 		FileAccess.open(result_path, FileAccess.WRITE).store_var({routes = plan.routes, surface = snapshot.capture(h, "final")})

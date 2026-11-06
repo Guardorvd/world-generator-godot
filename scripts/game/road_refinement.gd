@@ -17,6 +17,8 @@ static var allow_fast_nearest := true # false — исходный цикл GDSc
 static var allow_fast_vertices := true # reference switch for complete vertex-channel parity
 static var road_simd := true
 static var restrict_local_index := true # reference switch for exact local-build comparisons
+static var allow_fast_index := true # false — индекс отрезков на GDScript (эталон для tools/dod_verify.gd)
+static var allow_fast_patches := true # false — сбор патчей в GDScript (эталон для tools/dod_verify.gd)
 
 var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
