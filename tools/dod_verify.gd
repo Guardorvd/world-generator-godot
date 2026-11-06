@@ -59,10 +59,12 @@ func run() -> void:
 	if wanted("rivers"):
 		verify_rivers(w)
 	var refine_base: Heightfield = null
-	if wanted("refine") or wanted("fit"):
+	if wanted("refine") or wanted("mesh"):
 		refine_base = prepared_for_refinement(base)
 	if wanted("refine"):
 		verify_refinement(refine_base)
+	if wanted("mesh"):
+		verify_mesh(refine_base)
 	print("DOD RESULT ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -183,6 +185,35 @@ func report_patch_diff(a: Dictionary, b: Dictionary) -> void:
 	for channel: String in samples:
 		for line: String in samples[channel]:
 			print("  ", channel, ": ", line)
+
+
+## Меш рельефа с метровой сеткой у путей (TerrainBuilder.refine_arrays): общий исходный меш, два пути
+func verify_mesh(h: Heightfield) -> void:
+	h.road_refinement = null
+	var source := TerrainBuilder.build_arrays(h.world, h)
+	h.road_refinement = RoadRefinement.build(h)
+	var slow := clone_arrays(source)
+	var fast := clone_arrays(source)
+	var t := Time.get_ticks_usec()
+	TerrainBuilder.allow_fast_refine = false
+	TerrainBuilder.refine_arrays(slow, h.world, h)
+	var slow_ms := (Time.get_ticks_usec() - t) / 1000.0
+	t = Time.get_ticks_usec()
+	TerrainBuilder.allow_fast_refine = true
+	TerrainBuilder.refine_arrays(fast, h.world, h)
+	var fast_ms := (Time.get_ticks_usec() - t) / 1000.0
+	print("refine_arrays: GDScript %.0f мс, C# %.0f мс, вершин %d" % [slow_ms, fast_ms, slow[Mesh.ARRAY_VERTEX].size()])
+	var names := {Mesh.ARRAY_VERTEX: "вершины", Mesh.ARRAY_NORMAL: "нормали", Mesh.ARRAY_TEX_UV: "UV", Mesh.ARRAY_TEX_UV2: "UV2",
+		Mesh.ARRAY_COLOR: "цвета", Mesh.ARRAY_INDEX: "индексы"}
+	for channel: int in names:
+		check(var_to_bytes(slow[channel]) == var_to_bytes(fast[channel]), "меш рельефа: %s совпадают побайтно" % names[channel])
+
+
+func clone_arrays(source: Array) -> Array:
+	var copy := []
+	for item: Variant in source:
+		copy.append(item.duplicate() if item != null else null)
+	return copy
 
 
 func time_build(h: Heightfield, fast: bool) -> Dictionary:

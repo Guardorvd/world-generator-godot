@@ -8,6 +8,7 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const SHADER := preload("res://resources/terrain.gdshader")
 const DETAIL_SIZE := 256   # сторона бесшовной текстуры шума для мелкой детали
+static var allow_fast_refine := true # false — метровая сетка меша на GDScript (эталон для tools/dod_verify.gd)
 
 var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на ServiceScope
 
@@ -102,12 +103,41 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 	arrays[Mesh.ARRAY_NORMAL] = nor
 
 
+## С 14.11 (DOD): весь проход одним вызовом C# (FastGrid.RefineTerrain), патчи — столбцами. Результат тот же, что у
+## цикла в refine_arrays ниже (он остаётся эталоном для tools/dod_verify.gd).
+static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i) -> void:
+	var keys := PackedInt32Array()
+	var ph := PackedFloat32Array()
+	var pc := PackedColorArray()
+	var pu := PackedVector2Array()
+	var patches := heights.road_refinement.patches
+	for key: int in patches:
+		keys.append(key)
+		var p: Dictionary = patches[key]
+		ph.append_array(p.h)
+		pc.append_array(p.color)
+		pu.append_array(p.uv)
+	var out: Dictionary = fast.RefineTerrain(w.W, w.H, TILE, RoadRefinement.DIV, area.position.x, area.position.y, area.size.x, area.size.y,
+		arrays[Mesh.ARRAY_VERTEX], arrays[Mesh.ARRAY_NORMAL], arrays[Mesh.ARRAY_TEX_UV], arrays[Mesh.ARRAY_INDEX], keys, ph, pc, pu, heights.hv)
+	arrays[Mesh.ARRAY_VERTEX] = out.pos
+	arrays[Mesh.ARRAY_NORMAL] = out.nor
+	arrays[Mesh.ARRAY_TEX_UV] = out.uv
+	arrays[Mesh.ARRAY_TEX_UV2] = out.uv2
+	arrays[Mesh.ARRAY_COLOR] = out.color
+	arrays[Mesh.ARRAY_INDEX] = out.idx
+
+
 ## Заменить только квадраты у путей сеткой 1 м. Это часть земли, отдельной накладной ленты нет.
 static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cells := Rect2i()) -> void:
 	var refinement := heights.road_refinement
 	if arrays.is_empty() or refinement == null:
 		return
 	var area := Rect2i(0, 0, w.W - 1, w.H - 1) if not cells.has_area() else cells
+	if allow_fast_refine and w.outer == null:
+		var native := Grid.fast_grid()
+		if native != null:
+			_refine_native(native, arrays, w, heights, area)
+			return
 	var patches := {}
 	for key: int in refinement.patches:
 		if area.has_point(Vector2i(key % w.W, key / w.W)): patches[key] = refinement.patches[key]
