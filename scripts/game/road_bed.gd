@@ -37,6 +37,10 @@ static var allow_fast := true # false — исходный GDScript для св�
 ## Пусто — все пути, как в игре.
 static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()) -> PackedInt32Array:
 	var w := heights.world
+	if allow_fast and only.is_empty() and w.outer == null and heights.road_refinement == null:
+		var fast := Grid.fast_grid()
+		if fast != null:
+			return _refine_native(fast, heights, frozen)
 	var weight := PackedFloat32Array()
 	weight.resize(w.N)
 	var target := PackedFloat32Array()
@@ -67,6 +71,43 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 		if absf(h - hv[i]) > 0.005:
 			hv[i] = h
 			changed.append(i)
+	return changed
+
+
+## С 14.11 (DOD): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
+## GDScript-пути ниже (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
+static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> PackedInt32Array:
+	var w := heights.world
+	var names: Array = KINDS.keys()
+	var params := PackedFloat64Array()
+	for name: String in names:
+		var k: Dictionary = KINDS[name]
+		params.append_array(PackedFloat64Array([k.flat, k.shoulder, k.window, k.keep, k.cut, k.side]))
+	var kinds := PackedInt32Array()
+	var starts := PackedInt32Array()
+	var xs := PackedFloat64Array()
+	var ys := PackedFloat64Array()
+	var ws := PackedFloat64Array()
+	for t: Dictionary in w.trails:
+		if KINDS.has(t.kind) and t.pts.size() >= 2:
+			kinds.append(names.find(t.kind))
+			starts.append(xs.size())
+			for p: Dictionary in t.pts:
+				xs.append(p.x)
+				ys.append(p.y)
+				ws.append(p.w)
+	starts.append(xs.size())
+	var ends := PackedInt32Array()
+	for s: EntityRecord in w.bridges + w.tunnels:
+		ends.append(s.a)
+		ends.append(s.b)
+	var out: Dictionary = fast.RoadBedRefine(w.W, w.H, TILE, heights.hv, heights.water_level, w.dist_water, ends, kinds, starts,
+		xs, ys, ws, params, frozen, STEP, STEEP.x, STEEP.y, SHORE.x, SHORE.y, PIN, PIN_FADE, WATER_GAP)
+	var changed: PackedInt32Array = out.changed
+	var done: PackedFloat32Array = out.hv
+	var hv := heights.hv
+	for i: int in changed:
+		hv[i] = done[i]
 	return changed
 
 

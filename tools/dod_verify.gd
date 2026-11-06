@@ -34,6 +34,10 @@ func run() -> void:
 	var args := OS.get_cmdline_user_args()
 	if "--only" in args:
 		_only = _arg("--only", "").split(",")
+	if Grid.fast_grid() == null:
+		print("FAIL C# (FastGrid) недоступен: сначала dotnet build; сверка C# с самим собой ничего не доказывает")
+		quit(1)
+		return
 	var cache := WorldCache.new()
 	cache.dir = _arg("--dir", "res://tools/control/runs/network_game_cache")
 	var size := WorldGenerator.START_SIZE
