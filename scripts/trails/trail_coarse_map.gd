@@ -5,6 +5,13 @@ const STEP := 8
 const LOCAL := 16.0
 const MOUNTAIN_FROM := 0.15
 const MOUNTAIN_FULL := 0.30
+## false — прежний обзор только по узлам 32 м (для сравнения в стендах)
+static var refine := true
+## Узлов по ходу коридора, после которых его участок считается прежним витком (для _layered)
+const LAYER_GAP := 6
+## Коридор сети за PROGRESS_STEPS узлов (около 770 м) должен уйти хотя бы на PROGRESS_MIN, м
+const PROGRESS_STEPS := 24
+const PROGRESS_MIN := 190.0
 const GenerationInput := preload("res://scripts/trails/trail_generation_input.gd")
 var size := 0
 var heights := PackedFloat32Array()
@@ -49,7 +56,7 @@ func prepare(n: int, ground: Callable, wet: PackedByteArray, input) -> void:
 			var form := (heights[i - 1] + heights[i + 1] + heights[i - size] + heights[i + size]) * 0.25 - heights[i]
 			# В горах окно 64 м усредняет полки, рёбра и ложбины в один средний склон. Там, где склон обзора
 			# круче MOUNTAIN_FROM, уклон и форма плавно переходят к точкам через LOCAL; узлы и их шаг прежние.
-			var w := smoothstep(MOUNTAIN_FROM, MOUNTAIN_FULL, g.length())
+			var w := smoothstep(MOUNTAIN_FROM, MOUNTAIN_FULL, g.length()) if refine else 0.0
 			if w > 0.0:
 				var p := point(i)
 				var west: float = ground.call(p - Vector2(LOCAL, 0))
@@ -141,6 +148,25 @@ func _crowded(run: Dictionary, q: int, p: int) -> bool:
 		if int(run.visited[n]) < int(run.visited[p]) - 1 or int(run.visited[n]) > int(run.visited[p]): return true
 	return false
 
+## Клетка q в двух узлах (64 м) от двух и более прежних витков коридора. Один соседний виток — обычный серпантин; третий слой
+## уже клубок: длинный коридор заполняет склон зигзагами, и маршрут по нему ездит кругами на одном месте.
+func _layered(run: Dictionary, q: int) -> bool:
+	var older: Array[int] = []
+	var x := q % size
+	var z := q / size
+	for dz in range(-2, 3):
+		for dx in range(-2, 3):
+			var k := (z + dz) * size + x + dx
+			if x + dx < 0 or z + dz < 0 or x + dx >= size or z + dz >= size or not run.visited.has(k): continue
+			var at := int(run.visited[k])
+			if at < int(run.counter) - LAYER_GAP: older.append(at)
+	if older.size() < 2: return false
+	older.sort()
+	var passes := 1
+	for i in range(1, older.size()):
+		if older[i] - older[i - 1] > LAYER_GAP: passes += 1
+	return passes >= 2
+
 ## Рост коридора от клетки p. Уклон считается по ходу седока: down = 1 — шаг идёт вниз по трассе, -1 — вверх, к её началу.
 func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: String) -> void:
 	for step in int(run.steps):
@@ -148,7 +174,7 @@ func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: Strin
 		var best_cost := INF
 		for q in neighbours(p):
 			if not free[q] or run.visited.has(q): continue
-			if run.spaced and _crowded(run, q, p): continue
+			if run.spaced and (_crowded(run, q, p) or _layered(run, q)): continue
 			var at := point(q)
 			if at.x < run.edge or at.y < run.edge or at.x > world_size * GameConfig.TILE - run.edge or at.y > world_size * GameConfig.TILE - run.edge: continue
 			var next_bounds: Rect2 = run.bounds.expand(at)
@@ -174,4 +200,14 @@ func _extend(run: Dictionary, p: int, heading: Vector2, down: float, kind: Strin
 		heading = delta.normalized(); p = best
 		run.counter += 1
 		run.visited[p] = run.counter; run.path.append(point(p)); run.bounds = run.bounds.expand(point(p))
+		# Змейка на одном месте: за последние PROGRESS_STEPS узлов коридор почти не ушёл. Дальше он заполнял бы склон
+		# зигзагами; конец змейки отрезается, коридор кончается там, где ещё шёл вперёд.
+		var path: PackedVector2Array = run.path
+		if run.spaced and path.size() > PROGRESS_STEPS and path[-1].distance_to(path[-1 - PROGRESS_STEPS]) < PROGRESS_MIN:
+			var keep := int(run.counter) - PROGRESS_STEPS / 2
+			for k in run.visited:
+				if int(run.visited[k]) == keep: p = k
+			path.resize(path.size() - PROGRESS_STEPS / 2)
+			run.path = path
+			break
 	run.end = p
