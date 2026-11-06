@@ -91,6 +91,14 @@ func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, _watchdog_limit())
 	t_start = Time.get_ticks_msec()
 	out = Dev.out_dir()
+	if "--legacy-dod" in OS.get_cmdline_user_args():
+		# «Было» для переносов генерации в C# (DOD): тот же код, но старые пути GDScript (см. docs/GODOT_NOTES.md)
+		RoadBed.allow_fast = false
+		RoadRefinement.allow_fast_index = false
+		RoadRefinement.allow_fast_patches = false
+		StageRivers.allow_fast = false
+		Heightfield.allow_fast_river_surface = false
+		TerrainBuilder.allow_fast_refine = false
 	if "--verify-generation" in OS.get_cmdline_user_args():
 		Pathfinder.profile_searches = true
 		var preflight := preload("res://tools/generation_field_checks.gd").synthetic()
