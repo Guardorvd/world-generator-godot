@@ -300,12 +300,18 @@ func trail_places() -> Array:
 			var points: PackedVector2Array = definition.get("points", PackedVector2Array())
 			if points.size() < 2: continue
 			# Участки одного маршрута — одно место: старт первого, линия всех
-			if not result.is_empty() and result[-1].name == definition.get("title", "Велотрасса"):
+			var length := 0.0
+			for k in range(1, points.size()): length += points[k - 1].distance_to(points[k])
+			if not result.is_empty() and result[-1].base == definition.get("title", "Велотрасса"):
 				result[-1].points = result[-1].points + points
+				result[-1].length += length
 				continue
 			var start := points[0] / TILE
-			result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"),
-				x = start.x, y = start.y, points = points})
+			result.append({key = definition.id, kind = "trail", name = definition.get("title", "Велотрасса"), base = definition.get("title", "Велотрасса"),
+				x = start.x, y = start.y, points = points, length = length})
+	# в названии — длина маршрута со всеми его участками и связями: видно, куда и на сколько ехать
+	for place: Dictionary in result:
+		place.name = "%s · %.1f км" % [place.base, place.length / 1000.0]
 	return result
 
 

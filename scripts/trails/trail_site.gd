@@ -107,9 +107,11 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	site.hv_raw = _crop(h.hv_raw, w.W, data)
 	site.water_level = _crop(h.water_level, w.W, data)
 	var near := Rect2(Vector2(data.position - Vector2i(4, 4)), Vector2(data.size + Vector2i(8, 8)))
+	var bounds := _trail_bounds(w)
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
-		if RoadBed.KINDS.has(t.kind):
+		# путь, чей охват не задевает участок, кусков не даёт (ни одной точки внутри near): точки не перебираются
+		if RoadBed.KINDS.has(t.kind) and (bounds[route] as Rect2).intersects(near, true):
 			site.trails.append_array(_clip_route(t, route, near, data.position))
 	var bridge_count := w.bridges.size()
 	for k in kept:
@@ -131,12 +133,20 @@ static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view :=
 	for k in h.ribbons.size():
 		if boxes[k].grow(TILE).intersects(reach):
 			site.ribbons.append_array(_clip_ribbon(h.ribbons[k], reach, o))
-	for key: int in h.road_refinement.patches:
-		var cx := key % w.W - data.position.x
-		var cz := key / w.W - data.position.y
-		if cx >= 0 and cz >= 0 and cx <= data.size.x - 2 and cz <= data.size.y - 2:
-			# Immutable source: preparation replaces changed patch dictionaries on write.
-			site.patches[cz * data.size.x + cx] = h.road_refinement.patches[key]
+	var world_patches: Dictionary = h.road_refinement.patches
+	if world_patches.size() > (data.size.x - 1) * (data.size.y - 1):
+		# the world has more metre patches than the site has cells: ask for the cells instead of walking all patches
+		for cz in range(0, data.size.y - 1):
+			for cx in range(0, data.size.x - 1):
+				var found: Variant = world_patches.get((cz + data.position.y) * w.W + cx + data.position.x)
+				if found != null: site.patches[cz * data.size.x + cx] = found
+	else:
+		for key: int in world_patches:
+			var cx := key % w.W - data.position.x
+			var cz := key / w.W - data.position.y
+			if cx >= 0 and cz >= 0 and cx <= data.size.x - 2 and cz <= data.size.y - 2:
+				# Immutable source: preparation replaces changed patch dictionaries on write.
+				site.patches[cz * data.size.x + cx] = world_patches[key]
 	var terrain: Variant = view.get("terrain")
 	if terrain is Dictionary and terrain.w % w.W == 0:
 		var px: int = terrain.w / w.W
@@ -160,6 +170,35 @@ static func _crop(values: Variant, width: int, data: Rect2i) -> Variant:
 		out.append_array(values.slice(z * width + data.position.x, z * width + data.end.x))
 	return out
 
+
+## Охват (клетки) каждого пути мира: по нему вырезка участка пропускает далёкие пути, не перебирая их точки (на сотнях путей
+## по тысяче точек это больше всего времени вырезки). Хранится по миру и дописывается, когда пути добавляются; запись
+## пересчитывается, если у пути стало другое число точек.
+static var _bounds_cache := {}
+static func _trail_bounds(w: WorldData) -> Array:
+	var key := w.get_instance_id()
+	var entry: Dictionary = _bounds_cache.get(key, {})
+	var rects: Array = entry.get("rects", [])
+	var sizes: PackedInt32Array = entry.get("sizes", PackedInt32Array())
+	var ends: PackedFloat64Array = entry.get("ends", PackedFloat64Array()) # первая и последняя точка: узнаёт чужой мир с тем же номером объекта
+	rects.resize(w.trails.size())
+	sizes.resize(w.trails.size())
+	ends.resize(w.trails.size() * 4)
+	for route in w.trails.size():
+		var pts: Array = (w.trails[route] as Dictionary).pts
+		var first: Dictionary = pts[0] if not pts.is_empty() else {x = 0.0, y = 0.0}
+		var last: Dictionary = pts[-1] if not pts.is_empty() else {x = 0.0, y = 0.0}
+		if rects[route] != null and sizes[route] == pts.size() and ends[route * 4] == first.x and ends[route * 4 + 1] == first.y 				and ends[route * 4 + 2] == last.x and ends[route * 4 + 3] == last.y: continue
+		var box := Rect2(Vector2(first.x, first.y), Vector2.ZERO)
+		for p: Dictionary in pts: box = box.expand(Vector2(p.x, p.y))
+		rects[route] = box
+		sizes[route] = pts.size()
+		ends[route * 4] = first.x
+		ends[route * 4 + 1] = first.y
+		ends[route * 4 + 2] = last.x
+		ends[route * 4 + 3] = last.y
+	_bounds_cache[key] = {rects = rects, sizes = sizes, ends = ends}
+	return rects
 
 ## Куски пути с точками в near (клетки): с одной точкой до и после, чтобы разметка и соседство не обрывались.
 static func _clip_route(t: Dictionary, route: int, near: Rect2, corner: Vector2i) -> Array:
@@ -333,6 +372,12 @@ func prepare(routes: Array[TrailDefinition], with_elements := true, limits := {}
 	h.road_refinement = _form(h, only)
 	timings.surface_ms = (Time.get_ticks_usec() - started) / 1000.0
 	if with_elements and not routes.is_empty():
+		# limits.guard: проверка на готовом полотне до земляных работ (ground под путём уже его собственный); отказ — без запекания
+		var guard: Callable = limits.get("guard", Callable())
+		if guard.is_valid():
+			errors = guard.call(h)
+			if not errors.is_empty():
+				return {heights = null, errors = errors, timings = timings}
 		errors = TrailBuilder.bake_elements(h, routes, limits)
 		if not errors.is_empty():
 			return {heights = null, errors = errors, timings = timings}

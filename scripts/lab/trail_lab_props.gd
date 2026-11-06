@@ -14,6 +14,9 @@ static func populate(parent: Node3D, props: Array) -> void:
 		if p.kind == "deck":
 			_deck(parent, p, planks[1 if p.odd else 0], log)
 			continue
+		if p.kind == "gate":
+			_gate(parent, p)
+			continue
 		var node := MeshInstance3D.new()
 		match p.kind:
 			"stone", "boulder":
@@ -67,6 +70,46 @@ static func _deck(parent: Node3D, p: Dictionary, planks: Material, post: Materia
 		leg.material_override = post
 		leg.position = Vector3(p.a.x, (top + bottom) * 0.5, p.a.z) + side * lateral * (p.half - 0.1)
 		parent.add_child(leg)
+
+## Ворота старта (зелёные, «СТАРТ») и финиша (в шашку, «ФИНИШ»): две стойки по краям полотна и перекладина над ним. Только картинка.
+static func _gate(parent: Node3D, p: Dictionary) -> void:
+	var finish: bool = p.finish
+	var half: float = p.half
+	var root := Node3D.new()
+	root.position = p.pos
+	root.rotation.y = p.yaw
+	var post := _material(Color(0.82, 0.82, 0.8) if finish else Color(0.2, 0.6, 0.3))
+	for side: float in [-1.0, 1.0]:
+		var mesh := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = Vector3(0.2, 3.4, 0.2)
+		mesh.mesh = box
+		mesh.material_override = post
+		mesh.position = Vector3(side * half, 1.7, 0)
+		root.add_child(mesh)
+	var cells := maxi(4, roundi(half * 2.0 / 0.5))
+	var cell := half * 2.0 / cells
+	var a := _material(Color(0.1, 0.1, 0.1) if finish else Color(0.2, 0.6, 0.3))
+	var b := _material(Color(0.95, 0.95, 0.95) if finish else Color(0.9, 0.85, 0.35))
+	for k in cells:
+		var bar := MeshInstance3D.new()
+		var plank := BoxMesh.new()
+		plank.size = Vector3(cell, 0.7, 0.08)
+		bar.mesh = plank
+		bar.material_override = a if (k + (1 if finish and k % 2 == 0 else 0)) % 2 == 0 else b
+		bar.position = Vector3(-half + cell * (k + 0.5), 3.1, 0)
+		root.add_child(bar)
+	for facing: float in [0.0, PI]:
+		var label := Label3D.new()
+		label.text = "ФИНИШ" if finish else "СТАРТ"
+		label.pixel_size = 0.01
+		label.font_size = 64
+		label.outline_size = 12
+		label.modulate = Color(1, 1, 1)
+		label.position = Vector3(0, 3.1, 0.06 if facing == 0.0 else -0.06)
+		label.rotation.y = facing
+		root.add_child(label)
+	parent.add_child(root)
 
 static func _material(color: Color) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()

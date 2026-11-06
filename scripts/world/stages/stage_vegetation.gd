@@ -335,6 +335,29 @@ static func age_at(w: WorldData, x: float, y: float) -> float:
 	return _ss(-0.45, 0.45, w.noise.forest.fbm(x / 78.0 + 91.0, y / 78.0 - 47.0, 2))
 
 
+## Полог клетки (x, y) стартовой области для маршрутов: x — доля кроны 0..1 (глубина массива за вычетом поляны), y — доля
+## поляны 0..1 (открытое место в глубине леса). Те же шумы и пороги, что в place_chunk (лесистость, древостой, поляны), но без
+## раскладки деревьев; вода и тестовые миры без шумов — (0, 0).
+static func cover_at(w: WorldData, x: int, y: int) -> Vector2:
+	if x < 0 or y < 0 or x >= w.W or y >= w.H or not w.noise.has("forest"): return Vector2.ZERO
+	var i := y * w.W + x
+	var bi := w.biome[i]
+	if _TABLES.water[bi] != 0: return Vector2.ZERO
+	var dens: float = _TABLES.trees[bi]
+	var fv: float = w.noise_field("forest")[i]
+	var wv: float = w.noise.forest.fbm(x / WOOD_SCALE + WOOD_OX, y / WOOD_SCALE + WOOD_OY, WOOD_OCT)
+	var cover := wv * 1.15 + world_cover(w.seed_num) + fv * 0.4
+	if dens > 0.3:
+		var interior := _ss(-0.3, 0.12, cover)
+		var gv: float = w.noise.forest.fbm(x / GLADE_SCALE + GLADE_OX, y / GLADE_SCALE + GLADE_OY, 2)
+		var glade := _ss(0.3, 0.45, gv) * interior
+		return Vector2(clampf(interior * (1.0 - 0.92 * glade) * minf(1.0, dens * 1.2), 0.0, 1.0), glade)
+	# открытая местность: рощи пятнами и массив, заходящий на влажные луга
+	var grove := _ss(0.1, 0.5, fv) * 0.35
+	if bi == Biomes.GRASS: grove = maxf(grove, SPREAD * _ss(0.2, 0.55, cover) * _ss(0.3, 0.42, w.moist[i]))
+	return Vector2(clampf(grove, 0.0, 0.6), 0.0)
+
+
 ## Возраст — характер участка, а не симуляция лет. Под старым пологом есть молодые деревья.
 static func tree_scale(age: float, interior: float, line: float, moist: float, r: float) -> float:
 	var size := lerpf(0.5, 1.6, age) * (0.85 + r * 0.3)

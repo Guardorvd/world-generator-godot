@@ -50,6 +50,14 @@ const DRAG := GameConfig.BIKE_DRAG
 ## отрыва на прыжках ~14 м/с (разбор Хайку). Уточнять по новым записям.
 const CRUISE := 14.5 # 01.11 v4: было 13 — на сгенерированных трассах приезжали на 12,6–15,6 там, где ждали 10–11 (Shift ~50 % времени)
 const PEDAL := GameConfig.BIKE_ACCEL
+## Разгон с Shift: тяга BikeRide._step_speed (push / (1 + taper · (v / top)²), без усталости), предел — BIKE_SPEED × BIKE_BOOST.
+## Модель «педали до CRUISE минус сопротивление» на ровном даёт только 11,8 м/с, настоящий Shift держит 14,3.
+const BOOST_TOP := GameConfig.BIKE_SPEED * GameConfig.BIKE_BOOST
+static func boost_drive(v: float) -> float:
+	var push := GameConfig.BIKE_ACCEL * 1.75
+	var taper := maxf(0.1, push / (GameConfig.BIKE_ROLL + GameConfig.BIKE_DRAG * BOOST_TOP * BOOST_TOP) - 1.0)
+	var ratio := maxf(v, 0.0) / BOOST_TOP
+	return push / (1.0 + taper * ratio * ratio)
 const BRAKE := 5.0
 ## Модель прыжка повторяет BikeRide: шаг сетки рельефа (м) и база колёс (оси впереди и позади середины, м).
 const GRID_STEP := 1.0
@@ -245,6 +253,8 @@ static func window(e: TrailElement, d: TrailDefinition = null, grade := 0.0, lev
 			r = {speed_hi = snappedf(pump_speed(e), 0.1)}
 		T.ROCK_GARDEN, T.ROOTS, T.ROUGH, T.RUTS, T.SLALOM, T.NARROW, T.LOG:
 			r = {speed_hi = snappedf(tech_speed(e, d, level), 0.1)}
+		T.NORTHSHORE:
+			if e.gap < DECK_NARROW: r = {speed_hi = snappedf(tech_speed(e, d, level), 0.1)}
 		T.BERM, T.S_BERM, T.OFF_CAMBER:
 			if d != null:
 				var radius := tightest(d, from, from + e.length)
@@ -309,6 +319,14 @@ static func tightest(d: TrailDefinition, from: float, to: float) -> float:
 		s += 1.0
 	return 1.0 / peak if peak > 0.005 else INF
 
+## Самая высокая скорость входа в прыжок [from, to] (оси d), при которой поворот на подходе или в приземлении ещё держится
+## на доле lat уровня. Седок притормаживает до неё заранее, поэтому и составитель, и проверка полотна считают прыжок на ней.
+static func jump_turn_cap(d: TrailDefinition, from: float, to: float, level: int) -> float:
+	# с запасом по обе стороны: полёт может уйти дальше окна, а быстрый седок смотрит вперёд дальше
+	var radius := tightest(d, maxf(0.0, from - HUB - 6.0), minf(d.route_length(), to + recovery_distance(17.0, true) + 4.0))
+	if not is_finite(radius): return INF
+	return sqrt(radius * LAT_MAX * float(LEVELS[level].lat))
+
 ## Высота виража, с которой поворот радиуса radius проходится на скорости v (на уровне level); 0 — хватает без виража,
 ## INF — не хватит и предельного наклона (нужно тормозить до turn_speed).
 static func berm_height(v: float, radius: float, level: int, width := 4.0) -> float:
@@ -346,11 +364,16 @@ static func tech_speed(e: TrailElement, d: TrailDefinition = null, level := 1) -
 	if e.profile == T.LOG: limit = minf(limit, LOG_SPEED)
 	# узкий проход: стенки по краям, промах курса — удар в стенку и через руль (заезды 01.11: 6,6–10 м/с после виража)
 	if e.profile == T.NARROW: limit = minf(limit, NARROW_SPEED)
+	if e.profile == T.NORTHSHORE: limit = minf(limit, DECK_SPEED)
 	var radius := tightest(d, e.station - e.length * 0.5, e.station + e.length * 0.5)
 	if is_finite(radius): limit = minf(limit, sqrt(LAT_MAX * float(LEVELS[level].lat) * BikeRide.ROOT_GRIP * radius))
 	return limit
 const LOG_SPEED := 9.0
 const NARROW_SPEED := 7.5
+## Настил (норшор) уже DECK_NARROW м — узкая доска: сорваться с неё легко, скорость на ней не выше DECK_SPEED, м/с.
+## Широкий мост (лабораторные овраги и долины) скорость не ограничивает.
+const DECK_SPEED := 9.0
+const DECK_NARROW := 2.2
 ## Гэп: приземление длиннее минимального на столько, м (v4: быстрее расчёта — всё равно на спуск, а не на ровное).
 const GAP_RUNOUT := 8.0
 ## Стол: длина не меньше этой доли высоты — тогда кромка не круче LIP_MAX (v4: стол 9 × 1,8 м со стенкой 40° на
@@ -553,7 +576,8 @@ static func line_heights(d: TrailDefinition, ground := Callable()) -> PackedFloa
 ## Профиль скорости по готовой высоте оси (line_heights); caps — {станция: предел скорости} (техника и т. п.).
 ## braking = false — «как едут» (01.11, заезды по генератору: тормоз 10 % времени, в поворотах — в 29–47 % проездов):
 ## без торможения заранее, поворот срезает скорость только в нём самом, после него — снова разгон.
-static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, caps := {}, braking := true) -> PackedFloat32Array:
+## boost = true — разбег с Shift: комфортная скорость уровня не предел, седок едет до CRUISE (скорость перед прыжком).
+static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, caps := {}, braking := true, boost := false) -> PackedFloat32Array:
 	var n := y.size()
 	var v := PackedFloat32Array()
 	v.resize(n)
@@ -565,7 +589,7 @@ static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, 
 	for i in n:
 		var k := absf(d.curvature_at(i))
 		var bank := minf(k * shape.bank_gain, shape.bank_max) * d.auto_bank
-		cap[i] = minf(turn_speed(1.0 / k, bank, lat) if k > 0.004 else 30.0, float(lv.top))
+		cap[i] = minf(turn_speed(1.0 / k, bank, lat) if k > 0.004 else 30.0, maxf(float(lv.top), CRUISE) if boost else float(lv.top))
 	for station: int in caps:
 		var at := clampi(station, 0, n - 1)
 		cap[at] = minf(cap[at], float(caps[station]))
@@ -575,7 +599,8 @@ static func profile_from(d: TrailDefinition, y: PackedFloat32Array, level := 1, 
 		var grade := y[i] - y[i - 1]
 		var u := v[i - 1]
 		var a := -G * grade / sqrt(1.0 + grade * grade) - ROLL - DRAG * u * u
-		if u < CRUISE: a += PEDAL * (1.0 - u / CRUISE)
+		if boost: a += boost_drive(u)
+		elif u < CRUISE: a += PEDAL * (1.0 - u / CRUISE)
 		v[i] = minf(sqrt(maxf(1.0, u * u + 2.0 * a)), cap[i])
 	if braking:
 		for i in range(n - 2, -1, -1):

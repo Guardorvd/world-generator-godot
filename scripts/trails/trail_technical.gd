@@ -38,8 +38,32 @@ static func build(h: Heightfield, routes: Array[TrailDefinition]) -> Dictionary:
 				TrailElement.Profile.LOG: _logs(h, d, e, rng, set)
 				TrailElement.Profile.SLALOM: _slalom(h, d, e, rng, set)
 				TrailElement.Profile.NORTHSHORE: _northshore(h, d, e, d.id + ":" + str(i), set)
+	_route_gates(h, routes, set)
 	h.add_decks(set.decks)
 	return set
+
+## Ворота старта и финиша маршрута (только картинка): у первого участка маршрута — 6 м от начала, у последнего — за 10 м до конца,
+## чтобы после ворот оставался выкат. Варианты и очень короткие линии без ворот.
+const GATE_START := 6.0
+const GATE_FINISH := 10.0
+static func _route_gates(h: Heightfield, routes: Array[TrailDefinition], set: Dictionary) -> void:
+	var first := {}
+	var last := {}
+	var order := []
+	for d in routes:
+		if d.title.ends_with("вариант") or d.route_length() < 40.0: continue
+		if not first.has(d.title):
+			first[d.title] = d
+			order.append(d.title)
+		last[d.title] = d
+	for title: String in order:
+		_route_gate(h, first[title], GATE_START, false, set)
+		_route_gate(h, last[title], last[title].route_length() - GATE_FINISH, true, set)
+
+static func _route_gate(h: Heightfield, d: TrailDefinition, station: float, finish: bool, set: Dictionary) -> void:
+	var p := d.point_at(station)
+	var t := d.tangent_at(station)
+	set.props.append({kind = "gate", pos = Vector3(p.x, h.ground_at(p.x, p.y), p.y), yaw = atan2(-t.x, -t.y), half = d.width * 0.5 + 0.7, finish = finish})
 
 ## Lateral centres (positive across) of the clean lines through an element.
 static func line_offsets(d: TrailDefinition, e: TrailElement) -> PackedFloat32Array:

@@ -45,7 +45,7 @@ func find(seed_value: int, publish := Callable(), cancelled := Callable()) -> Ar
 	atlas.prepare(world_size, _ground, world_wet, generation_input)
 	stats.overview_ms = (Time.get_ticks_usec() - started) / 1000.0
 	stats.overview_cells = atlas.heights.size()
-	var anchors := atlas.anchors(seed_value)
+	var anchors := atlas.anchors(seed_value, options.get("rideable", false))
 	stats.looked = anchors.size()
 	var area: Rect2i = options.get("area", Rect2i(0, 0, world_size, world_size))
 	anchors = anchors.filter(func(anchor: int) -> bool: return area.has_point(Vector2i(atlas.point(anchor) / GameConfig.TILE)))

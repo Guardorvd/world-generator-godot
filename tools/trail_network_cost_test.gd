@@ -55,9 +55,12 @@ func run() -> void:
 		on_progress = func(_p: float, label: String) -> void: print("[%6.1f с] %s" % [(Time.get_ticks_msec() - started) / 1000.0, label])})
 	print("BUILD ", (Time.get_ticks_msec() - started) / 1000.0, " с")
 	print("REFERENCE " if reference else "OPTIMIZED ", JSON.stringify(plan.stats))
+	print("DISTRICTS ", JSON.stringify(plan.get("districts", [])))
+	print("ROUTES ", JSON.stringify(plan.routes.map(func(r: Dictionary) -> Array: return [r.title, roundi(StageTrailPlan.unpack(r).route_length()), snappedf(r.points[0].x, 1), snappedf(r.points[0].y, 1)])))
+	print("EARTH ", JSON.stringify(earth_summary(plan)))
 	var result_path := "res://.godot/trail_network_cost_reference%s.bin" % ("_part" if "--part" in OS.get_cmdline_user_args() else "")
 	var snapshot := preload("res://scripts/game/surface_snapshot.gd")
-	if reference:
+	if reference or "--save" in OS.get_cmdline_user_args():
 		FileAccess.open(result_path, FileAccess.WRITE).store_var({routes = plan.routes, surface = snapshot.capture(h, "final")})
 	elif FileAccess.file_exists(result_path):
 		var saved: Dictionary = FileAccess.open(result_path, FileAccess.READ).get_var()
@@ -68,3 +71,23 @@ func run() -> void:
 	check(Check.settlement_network_valid(w), "settlement connections remain physically valid")
 	print("COST RESULT ", failures, " failures")
 	quit(1 if failures else 0)
+
+## Земляные работы по видам: кубометры выемки и насыпи на 100 м линии, самая глубокая выемка и самая высокая насыпь, м.
+static func earth_summary(plan: Dictionary) -> Dictionary:
+	var out := {}
+	for entry: Dictionary in plan.get("entries", []):
+		var row: Dictionary = out.get(entry.style, {legs = 0, length = 0.0, cut = 0.0, fill = 0.0, deepest = 0.0})
+		row.legs += 1
+		row.length += entry.length
+		var worked: Dictionary = entry.get("earthworks", {})
+		row.cut += float(worked.get("cut_m3", 0.0))
+		row.fill += float(worked.get("fill_m3", 0.0))
+		row.deepest = maxf(row.deepest, float(worked.get("max_cut", 0.0)))
+		out[entry.style] = row
+	for style: String in out:
+		var row: Dictionary = out[style]
+		row.cut_per_100m = snappedf(row.cut / maxf(1.0, row.length) * 100.0, 0.1)
+		row.fill_per_100m = snappedf(row.fill / maxf(1.0, row.length) * 100.0, 0.1)
+		row.erase("cut")
+		row.erase("fill")
+	return out
