@@ -18,7 +18,7 @@ extends RefCounted
 const C := 64              # сторона куска в клетках
 ## Насколько далеко клетка видит море (осадки, берег, влага). Дальше море не учитывается ни здесь, ни в
 ## полосе вокруг куска; поправка на близость моря сведена к нулю на этом расстоянии (см. compute)
-const SEA_REACH := 32
+const SEA_REACH := StageHydrology.COAST_REACH
 const PAD := SEA_REACH + 2 # полоса вокруг прямоугольника: море и ещё две клетки на свет склона
 
 var W := 0                 # размер карты в клетках
@@ -81,7 +81,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 		dist = PackedFloat32Array(), light = PackedFloat32Array()}
 	for key in out:
 		out[key].resize(n)
-	var far := exp(-SEA_REACH / 30.0)
+	# Rainfall uses the actual ocean field; climate never invents freshwater.
 	for j in ch:
 		var lat := StageClimate.latitude(w, y0 + j)
 		for i in cw:
@@ -98,10 +98,12 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			var light := clampf(0.5 - 0.5 * lgy / sqrt(1.0 + lgx * lgx + lgy * lgy), 0.0, 1.0)
 			var around := (maxf(0.0, hn[c - 2]) + maxf(0.0, hn[c + 2]) + maxf(0.0, hn[c - 2 * pw]) + maxf(0.0, hn[c + 2 * pw])) * 0.25
 			var hollow := clampf((around - e) * 18.0, -0.16, 0.16)
-			var d := minf(dist[c], SEA_REACH)
+			# Outside the coastal halo there is no known nearby water. Preserve
+			# the no-source sentinel, rather than pretending water is 32 cells away.
+			var d := dist[c] if dist[c] <= SEA_REACH else 1e9
 			# осадки — как в StageHydrology, поправка на близость моря гаснет к SEA_REACH
-			var rain := clampf(0.36 + 0.85 * moist_n[o] + 0.18 * (exp(-d / 30.0) - far) / (1.0 - far), 0.02, 1.0)
-			var t := clampf(0.16 + lat * 0.86 + temp_n[o] * 0.18 - e * 0.6, 0.0, 1.0)
+			var rain := StageHydrology.rainfall(moist_n[o], dist[c])
+			var t := clampf(0.43 + lat * 0.32 + temp_n[o] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain + 0.22 * exp(-d / 4.0), 0.0, 1.0)
 			var b: int
 			if hh < 0.0:

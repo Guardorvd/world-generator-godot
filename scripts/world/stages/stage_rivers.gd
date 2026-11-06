@@ -4,7 +4,7 @@ extends RefCounted
 ## Пишет: w.h, filled — профиль рек и долины; rivers — ломаные {x, y, w, e}; river_exits.
 
 const PROGRESS := 0.3
-const LABEL := "Русла рек и озёра"
+const LABEL := "Поверхность воды"
 const WIDTH_ACC := 70.0  # сток, от которого считается ширина (прежний порог реки: с 2.9 реки реже, но не уже)
 static var allow_fast := true # false — долины рек на GDScript (эталон для tools/dod_verify.gd)
 
@@ -31,6 +31,18 @@ static func _pt(w: WorldData, i: int) -> Dictionary:
 
 
 static func run(w: WorldData) -> void:
+	# Normal generation has no drainage network. Keep the existing lake/ocean
+	# surface contract, without valley shaping, donor scans or mass tracing.
+	if w.river.find(1) < 0:
+		w.rivers.clear()
+		w.river_exits.clear()
+		w.river_area = w.river.duplicate()
+		var started := Time.get_ticks_usec()
+		w.base_heights = Heightfield.new(w, false)
+		w.generation_profile.river_surface_ms = (Time.get_ticks_usec() - started) / 1000.0
+		w.generation_profile.river_valleys_ms = 0.0
+		w.generation_profile.river_lines_ms = 0.0
+		return
 	var valley_started := Time.get_ticks_usec()
 	_shape_valleys(w)
 	w.generation_profile.river_valleys_ms = (Time.get_ticks_usec() - valley_started) / 1000.0

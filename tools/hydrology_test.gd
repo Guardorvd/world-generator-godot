@@ -1,5 +1,5 @@
 extends SceneTree
-## 5.8: сток, слияния, короткие ручьи, долины и выходы из окна мира.
+## Rare lakes preserve relief; explicitly authored rivers retain their geometry contract.
 ## godot --headless --path . --script res://tools/hydrology_test.gd [-- --gdscript]
 
 var fails := 0
@@ -37,7 +37,7 @@ func inspect(w: WorldData, before: PackedFloat32Array) -> void:
 				bad_flow += 1
 	check(bad_flow == 0, "%s: циклы, потеря стока или разрыв реки (%d)" % [w.seed_text, bad_flow])
 	check(raised == 0, "Долины только срезают рельеф, устье не ниже моря")
-	check(cuts > 0, "%s: реки формируют соседние склоны" % w.seed_text)
+	check(cuts == 0 and w.order_n == 0 and w.rivers.is_empty(), "%s: обычная генерация не прорезает долины и не строит сток" % w.seed_text)
 	var ends := {}
 	for r: Array in w.rivers:
 		check(r.size() >= 2, "Сохранять короткие ручьи")

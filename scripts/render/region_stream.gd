@@ -107,17 +107,17 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 ## Папка журнала этого мира: тот же план (зерно, размер, рельеф, пути) — те же области.
 static func store_dir(w: WorldData) -> String:
 	if w.region_basis_id.is_empty():
-		# Explicit fingerprint v1: UTF-8 header, IEEE float32 height bytes, byte path mask.
+		# Fingerprint v2 includes geography, even when relief/path bytes happen to match.
 		var ctx := HashingContext.new()
 		ctx.start(HashingContext.HASH_SHA256)
-		ctx.update(("region-basis-v1|%s|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).to_utf8_buffer())
+		ctx.update(("region-basis-v2|%s|%d|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, WorldCache.SCHEMA_GEO_VERSION, FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).to_utf8_buffer())
 		ctx.update(w.h.to_byte_array())
 		ctx.update(w.path_mask)
 		w.region_basis_id = ctx.finish().hex_encode().left(24)
 	if w.region_store_leaf.is_empty():
-		# Retain access to existing pinned journals; upgrade their writes in place.
-		var legacy := ("%s|%d|%d|%d|%d|%d|%d|%d" % [w.seed_text, w.W, w.H, hash(w.h), hash(w.path_mask), FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).sha256_text().left(24)
-		w.region_store_leaf = legacy if FileAccess.file_exists(root.path_join(legacy).path_join("ledger.bin")) or FileAccess.file_exists(root.path_join(legacy).path_join("ledger.bin.bak")) else w.region_basis_id
+		# Legacy journals predate the rare-water geography. They must not pin old
+		# rivers/climate onto a newly generated dry plan; player progress is separate.
+		w.region_store_leaf = w.region_basis_id
 	return root.path_join(w.region_store_leaf)
 
 

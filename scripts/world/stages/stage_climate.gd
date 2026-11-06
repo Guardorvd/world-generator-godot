@@ -65,13 +65,13 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 
 
 ## Широта строки y для температуры: 0 — холодный север, 1 — жаркий юг. С 1.9.6 шкала не зависит от
-## размера карты (LAT_CELLS клеток на весь размах, фиксированная строка 255.5 — 0.5) и продолжается за край:
+## размера окна: центр фиксированного плана 768 — 383.5; мягкий умеренный градиент продолжается за край:
 ## к северу холоднее, к югу жарче
-const LAT_CELLS := 511.0
+const LAT_CELLS := 3072.0
 
 
 static func latitude(_w: WorldData, y: int) -> float:
-	return 0.5 + (y - 255.5) / LAT_CELLS
+	return 0.5 + (y - 383.5) / LAT_CELLS
 
 
 static func run(w: WorldData) -> void:
@@ -121,7 +121,7 @@ static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictio
 			var e := elev[i]
 			var conditions := natural_conditions(w, x, y)
 			light[i] = conditions.x
-			var t := clampf(0.16 + lat * 0.86 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
+			var t := clampf(0.43 + lat * 0.32 + temp_n[i] * 0.18 - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain[i] + 0.22 * exp(-dist_water[i] / 4.0), 0.0, 1.0)
 			if ocean[i] == 0 and lake[i] == 0:
 				t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)

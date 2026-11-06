@@ -111,7 +111,7 @@ public partial class FastGrid
 		var light = new float[n];
 		RunRows(h, true, y =>
 		{
-			double lat = 0.5 + (y - 255.5) / latCells;
+			double lat = 0.5 + (y - 383.5) / latCells;
 			for (int x = 0; x < w; x++)
 			{
 				int i = y * w + x;
@@ -119,7 +119,7 @@ public partial class FastGrid
 				double gx = ((double)elev[y * w + Math.Min(w - 1, x + 1)] - elev[y * w + Math.Max(0, x - 1)]) * 30.0;
 				double gy = ((double)elev[Math.Min(h - 1, y + 1) * w + x] - elev[Math.Max(0, y - 1) * w + x]) * 30.0;
 				light[i] = (float)Math.Clamp(0.5 - 0.5 * gy / Math.Sqrt(1.0 + gx * gx + gy * gy), 0.0, 1.0);
-				double t = Math.Clamp(0.16 + lat * 0.86 + tempNoise[i] * 0.18 - e * 0.6, 0.0, 1.0);
+				double t = Math.Clamp(0.43 + lat * 0.32 + tempNoise[i] * 0.18 - e * 0.6, 0.0, 1.0);
 				double waterMoisture = 0.22 * Math.Exp(-distWater[i] / 4.0);
 				double m;
 				if (ocean[i] == 0 && lake[i] == 0)
