@@ -57,6 +57,11 @@ func measure(w: WorldData) -> Dictionary:
 	var steep := 0
 	var saddles := 0
 	var peaks := []
+	var grads := PackedFloat32Array()
+	# Характер массива в горных точках (без искривления координат): доля возвышенностей и острых форм
+	var hill: Simplex = w.noise.hill
+	var upland := 0
+	var rocky := 0
 	for y in range(1, m - 1):
 		for x in range(1, m - 1):
 			var i := y * m + x
@@ -64,6 +69,15 @@ func measure(w: WorldData) -> Dictionary:
 				continue
 			mount += 1
 			var g := Vector2(hs[i + 1] - hs[i - 1], hs[i + m] - hs[i - m]).length() / (2.0 * span)
+			grads.append(g)
+			var X := (x * STEP + STEP / 2) / w.mountain_scale
+			var Y := (y * STEP + STEP / 2) / w.mountain_scale
+			var tu := clampf((hill.fbm(X / StageRelief.MASSIF + 25.1, Y / StageRelief.MASSIF - 71.3, 2) + StageRelief.UPLAND_SHIFT) / 0.4, 0.0, 1.0)
+			var up := tu * tu * (3.0 - 2.0 * tu)
+			var ts := clampf((hill.fbm(X / StageRelief.MASSIF + 63.2, Y / StageRelief.MASSIF + 12.5, 2) + 0.25 - StageRelief.SHARP_SHIFT) / 0.5, 0.0, 1.0)
+			var sharp := (0.25 + 0.75 * ts * ts * (3.0 - 2.0 * ts)) * (1.0 - up)
+			upland += int(up > 0.5)
+			rocky += int(sharp > 0.5)
 			if g < 0.06: flat += 1
 			elif g <= 0.20: ride += 1
 			elif g > 0.45: steep += 1
@@ -112,7 +126,10 @@ func measure(w: WorldData) -> Dictionary:
 	var long_runs := 0
 	for r: float in runs:
 		long_runs += int(r >= 400.0)
+	grads.sort()
+	var q := func(f: float) -> float: return snappedf(grads[int(grads.size() * f)] * 100.0, 1.0) if grads.size() > 0 else 0.0
 	return {
+		mountain_cells = mount, upland_pct = snappedf(100.0 * upland / maxi(mount, 1), 0.1), rocky_pct = snappedf(100.0 * rocky / maxi(mount, 1), 0.1), slope_p25 = q.call(0.25), slope_p50 = q.call(0.5), slope_p75 = q.call(0.75),
 		peaks = peaks.size(), saddles = saddles,
 		flat_pct = snappedf(100.0 * flat / maxi(mount, 1), 0.1),
 		ride_pct = snappedf(100.0 * ride / maxi(mount, 1), 0.1),
