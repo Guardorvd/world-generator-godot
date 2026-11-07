@@ -184,7 +184,8 @@ func _integration() -> void:
 				small_shadow = small_shadow or node.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		else: large_nodes += entry.nodes.size()
 	_check(small_nodes == 1 and large_nodes == 3 and not small_shadow, "pebbles: one mesh and no shadows; boulders: three LOD")
-	# Снимок за краем карты: world.outer отсутствует, доступно только переданное поле.
+	# Снимок за краем карты: пустой реестр, без живых чанков и закреплённых областей.
+	w.outer = OuterLand.new()
 	var raw := PackedFloat32Array()
 	raw.resize(20 * 20)
 	raw.fill(4.0 / GameConfig.HS)

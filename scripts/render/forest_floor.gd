@@ -2,6 +2,7 @@ extends RefCounted
 ## 6.6+: подстилка и валежник. Только оформление готового мира.
 
 const Plants := preload("res://scripts/render/understory_models.gd")
+const Surface := preload("res://scripts/world/mountain_surface.gd")
 enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге
 const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
 const BARK := Color(0.29, 0.22, 0.15)
@@ -13,14 +14,15 @@ static func moisture_at(w: WorldData, k: int) -> float:
 
 
 static func rockiness(w: WorldData, k: int) -> float:
-	var patch := WGRandom.hash2((k % w.W) / 3, (k / w.W) / 3, w.seed_num ^ 6673)
-	return clampf((maxf(0.0, w.slope[k] - 0.15) * 0.8
-		+ smoothstep(0.12, 0.35, w.elev[k]) * 0.3 + (1.0 - w.moist[k]) * 0.12) * (0.4 + patch * 0.6), 0.0, 1.0)
+	return Surface.exposure(w.elev[k],w.slope[k],w.moist[k])
 
 
 ## Линейные RGBA-данные: фактический полог, доля хвойных, влажность, каменистость.
 ## Один проход по деревьям вместо поиска соседей для каждой клетки всей карты.
 static func surface_image(w: WorldData) -> Image:
+	if w.generation.surface_rock.size()!=w.N:
+		w.generation.surface_rock=Surface.field(w.elev,w.slope,w.moist)
+	var rock := w.generation.surface_rock
 	var cover := PackedFloat32Array()
 	var needles := PackedFloat32Array()
 	cover.resize(w.N)
@@ -46,7 +48,7 @@ static func surface_image(w: WorldData) -> Image:
 		bytes[k * 4] = roundi(minf(1.0, cover[k]) * 255.0) if dry_ground else 0
 		bytes[k * 4 + 1] = roundi(needles[k] / maxf(cover[k], 0.001) * 255.0)
 		bytes[k * 4 + 2] = roundi(moisture_at(w, k) * 255.0)
-		bytes[k * 4 + 3] = roundi(rockiness(w, k) * 255.0)
+		bytes[k * 4 + 3] = rock[k] if dry_ground else 0
 	return Image.create_from_data(w.W, w.H, false, Image.FORMAT_RGBA8, bytes)
 
 

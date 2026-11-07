@@ -1363,7 +1363,7 @@ func _fill_grass(px: float, pz: float) -> void:
 func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}) -> int:
 	var buf := grass_buf
 	var w := world
-	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush)
+	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
 	var tc: Array = gr.tint
 	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
 	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
@@ -1444,14 +1444,15 @@ func _region_inner(regions: Dictionary, i: int, j: int) -> bool:
 
 ## 14.4: полог, хвоя, влага и каменистость клетки за краем плана — по биому (у плана это картинка леса)
 static func _outer_surface(cell: Dictionary) -> Color:
+	var exposed:=StageVegetation.Surface.exposure(cell.elev,cell.slope,cell.moist)
 	match cell.biome:
 		Biomes.FOREST, Biomes.JUNGLE:
-			return Color(0.6, 0.25, cell.moist, 0.15)
+			return Color(0.6, 0.25, cell.moist, exposed)
 		Biomes.TAIGA:
-			return Color(0.55, 0.85, cell.moist, 0.2)
+			return Color(0.55, 0.85, cell.moist, exposed)
 		Biomes.SWAMP:
-			return Color(0.35, 0.3, 0.9, 0.05)
-	return Color(0.0, 0.0, cell.moist, 0.2)
+			return Color(0.35, 0.3, 0.9, exposed)
+	return Color(0.0, 0.0, cell.moist, exposed)
 
 
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
@@ -1492,6 +1493,7 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 	var seed := world.seed_num ^ 6601
 	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
 	var density := (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) # 9.4: гуще
+	density *= 1.0-0.65*surface.a
 	# В чаще мест больше: кусты и подрост стоят стеной.
 	for m in 5 + roundi(3.0 * ch[Understory.THICKET]):
 		if WGRandom.hash2(i * 8 + m, j, seed + 1) > density:

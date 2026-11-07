@@ -123,6 +123,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 	_overlay(w, Rect2i(x0, y0, cw, ch), out)
 	if w.outer != null:
 		_overlay_regions(w.outer.get_ledger(), Rect2i(x0, y0, cw, ch), out)
+	out.rock=preload("res://scripts/world/mountain_surface.gd").field(out.elev,out.slope,out.moist)
 	return out
 
 

@@ -247,6 +247,8 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 	var f: Dictionary = prepared_fields.duplicate() if not prepared_fields.is_empty() else OuterLand.compute_chunk(world, key)
 	var ledger: Dictionary = snapshot if snapshot is Dictionary else world.outer.get_ledger()
 	OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)
+	# A newer region snapshot may replace climate/relief after compute_chunk.
+	f.rock = preload("res://scripts/world/mountain_surface.gd").field(f.elev,f.slope,f.moist)
 	var regions: Dictionary = ledger.get("regions", {})
 	var refined := false
 	var W := world.W
@@ -278,6 +280,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
 			col[k] = _palette[bi]
+			col[k].a=float(f.rock[k])/255.0 if f.has("rock") else 0.0
 	var V := C + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
@@ -315,6 +318,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 						if surface > 0:
 							var rgb: Array = RoadSurface.LIST[surface].color
 							tint = tint.lerp(Color8(rgb[0], rgb[1], rgb[2]), patch.color[n].a)
+						tint.a=col[(b+1)*S+a+1].a*(1.0-patch.color[n].a)
 						vc.append(tint)
 				for rz in RoadRefinement.DIV:
 					for rx in RoadRefinement.DIV:

@@ -32,6 +32,7 @@ const STAND_OY := -83.0
 const GLADE_SCALE := 20.0
 const GLADE_OX := -61.0
 const GLADE_OY := 39.0
+const Surface := preload("res://scripts/world/mountain_surface.gd")
 
 
 static func run(w: WorldData) -> void:
@@ -144,11 +145,12 @@ static func fields(w: WorldData) -> Dictionary:
 	var noise_started := Time.get_ticks_usec()
 	var age_n := Parallel.fbm_rect(w.noise.forest, 0, 0, W, H, 78.0, 2, 91.0, -47.0, true) # как в age_at
 	var structure := structure_rect(w, 0, 0, W, H, true)
+	w.generation.surface_rock=Surface.field(elev,slope,moist)
 	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
 	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
 	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
-		light = light, age_n = age_n}.merged(structure)
+		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
 
 
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
@@ -200,6 +202,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var has_village := not village.is_empty()
 	var has_light := not light_f.is_empty()
 	var has_age := not age_n.is_empty()
+	var rock_f: PackedByteArray=f.get("rock",PackedByteArray())
 	var b_water: PackedByteArray = _TABLES.water
 	var b_trees: PackedFloat64Array = _TABLES.trees
 	# Своя копия списков видов: чанки считаются в нескольких потоках (12.2), а общий массив на каждой
@@ -224,6 +227,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			var fv := forest[i]
 			var e := elev[i]
 			var sl := slope[i]
+			var exposed := float(rock_f[i])/255.0 if not rock_f.is_empty() else 0.0
 			var dw := dist_water[i]
 			var light: float = light_f[i] if has_light else StageClimate.natural_conditions(w, x, y).x
 			# Один медленный шум задаёт возраст участка и плавную смену сообщества.
@@ -264,7 +268,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				dens = 0.0
 			# граница леса в горах и редкие деревья на кручах
 			# вызов функции на каждую клетку заметен по времени: большинство клеток ниже границы леса
-			var line := 0.0 if e <= LINE_LO else _ss(LINE_LO, LINE_HI, e)
+			# Moist, sheltered slopes support forest above exposed slopes at the same height.
+			var line := 0.0 if e <= LINE_LO else _ss(LINE_LO+0.05*moist[i], LINE_HI+0.10*moist[i]-0.04*light, e)
+			dens *= 1.0-0.85*exposed
 			if line > 0.0 and bi != Biomes.SNOW and bi != Biomes.ROCK and bi != Biomes.PEAK:
 				dens *= 1.0 - 0.65 * line
 			if sl > STEEP:
@@ -287,6 +293,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
+					if b_tree[kind] != 0: sc *= 1.0-0.22*exposed
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
 					if kind != Biomes.T_ROCK:
 						store.add(px, py, kind, v, sc)
@@ -394,6 +401,8 @@ static func _reedy(bi: int) -> bool:
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
 static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float, interior: float) -> int:
 	var shore := dw < SHORE
+	if bi in [Biomes.FOREST,Biomes.GRASS,Biomes.TAIGA] and m<0.58 and r<0.28*_ss(0.24,0.45,e):
+		return Biomes.T_BUSH
 	# Ограничение действует и на специальные сообщества ниже.
 	if sl > 1.0 and r < 0.4:
 		return Biomes.T_ROCK if r < 0.2 else Biomes.T_BUSH

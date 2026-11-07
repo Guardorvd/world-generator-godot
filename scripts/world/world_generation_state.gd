@@ -10,12 +10,14 @@ var profile := {}
 var base_heights: Heightfield
 var trail_surface: Heightfield # accepted preparation; consumed by WorldLoader, never serialized
 var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
+var surface_rock := PackedByteArray() # one byte/cell, shared by placement and the existing forest texture
 var _thread: Thread
 var _fields := {}
 
 
 func start_fields(width: int, height: int, definitions: Dictionary) -> void:
 	clear_fields()
+	surface_rock=PackedByteArray()
 	var inputs := noise
 	_thread = Thread.new()
 	_thread.start(func() -> Dictionary:

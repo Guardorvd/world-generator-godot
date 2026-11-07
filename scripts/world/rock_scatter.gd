@@ -3,6 +3,8 @@ extends RefCounted
 ## Отдельный слой 37. Только готовые поля; RNG создаётся один раз на чанк.
 const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
+const DEBRIS_NEIGHBOURS := [Vector2i(-2,0),Vector2i(2,0),Vector2i(0,-2),Vector2i(0,2)]
+const Surface := preload("res://scripts/world/mountain_surface.gd")
 
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 		f: Dictionary, ox: int, oy: int, stride: int, store: StageVegetation.ObjStore) -> void:
@@ -18,6 +20,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var villages: PackedByteArray = f.get("village", PackedByteArray())
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
+	var rock: PackedByteArray=f.get("rock",PackedByteArray())
+	if rock.is_empty(): rock=Surface.field(elev,slope,f.get("moist",PackedFloat32Array()))
+	var rows := elev.size()/stride
 	# Несколько хешей на чанк вместо нового шума на каждую клетку.
 	var px0 := floori(float(x0) / PATCH_CELLS)
 	var py0 := floori(float(y0) / PATCH_CELLS)
@@ -34,7 +39,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			if water[bi] != 0 or (not rivers.is_empty() and rivers[i] != 0) or (not villages.is_empty() and villages[i] != 0):
 				continue
 			var sl := slope[i]
-			if sl > 1.05 or dw[i] < 0.65: continue
+			if sl > 0.85 or dw[i] < 0.65: continue
 			var dp: float = paths[i] if not paths.is_empty() else 100.0
 			if dp < 0.5: continue
 			# Верхняя граница вероятности отсекает дорогие расчёты и RNG у половины клеток.
@@ -43,14 +48,18 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			if roll >= MAX_CHANCE: continue
 			var patch := smoothstep(-0.15, 0.5, stony[i])
 			var mountain := smoothstep(0.12, 0.36, elev[i])
+			var exposed := float(rock[i])/255.0
 			var shoulder := 1.0 - smoothstep(1.0, 3.0, dp)
-			var uphill := sl
+			var source := 0.0
 			if mountain > 0.0:
-				if i >= stride: uphill = maxf(uphill, slope[i - stride])
-				if i + stride < slope.size(): uphill = maxf(uphill, slope[i + stride])
-				if i % stride > 0: uphill = maxf(uphill, slope[i - 1])
-				if i % stride < stride - 1: uphill = maxf(uphill, slope[i + 1])
-			var talus := smoothstep(0.35, 1.4, uphill) * (1.0 - smoothstep(0.65, 1.05, sl))
+				# Only a higher exposed neighbour supplies debris: a steep slope below
+				# the cell must not create an upside-down talus deposit.
+				for offset: Vector2i in DEBRIS_NEIGHBOURS:
+					var nx:=x-ox+offset.x; var ny:=y-oy+offset.y
+					if nx<0 or ny<0 or nx>=stride or ny>=rows: continue
+					var ni:=ny*stride+nx
+					if elev[ni]>elev[i]: source=maxf(source,float(rock[ni])/255.0)
+			var talus := smoothstep(0.18,0.6,source) * (1.0-smoothstep(0.4,0.85,sl))
 			var edge := 1.0 - absf(clampf(forest[i] + 0.5, 0.0, 1.0) * 2.0 - 1.0)
 			var gx := float(x) / PATCH_CELLS
 			var gy := float(y) / PATCH_CELLS
@@ -59,19 +68,21 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var pi := (floori(gy) - py0) * pw + floori(gx) - px0
 			var deposit := lerpf(lerpf(patches[pi], patches[pi + 1], tx), lerpf(patches[pi + pw], patches[pi + pw + 1], tx), ty)
 			var deposit_weight := lerpf(0.15, 1.65, smoothstep(0.2, 0.8, deposit))
-			var chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.15 * patch + talus * 0.1))
+			var chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.18 + talus * 0.18))
 			chance += shoulder * (0.14 + patch * 0.19)
-			chance *= deposit_weight * (1.0 - smoothstep(0.65, 1.05, sl))
+			chance *= deposit_weight * (1.0 - smoothstep(0.6, 0.85, sl))
 			if bi == Biomes.SWAMP or bi == Biomes.SNOW: chance *= 0.35
 			if bi == Biomes.DESERT or bi == Biomes.BEACH: chance *= 0.5
 			if roll >= minf(MAX_CHANCE, chance): continue
 			rng.reset(hc ^ 0x51ed270b)
 			var cx := x + 0.12 + rng.next_float() * 0.76
 			var cy := y + 0.12 + rng.next_float() * 0.76
-			var large := shoulder < 0.1 and rng.next_float() < 0.12 + mountain * 0.28
+			var large := shoulder < 0.1 and rng.next_float() < 0.07 + exposed * 0.18 + talus * 0.12
 			var r := rng.next_float()
-			var scale := (0.65 + r * r * 1.35) if large else (0.07 + r * r * 0.34)
+			var scale := (0.75 + r * r * 1.35) if large else ((0.24+r*r*0.48) if mountain>0.3 and r>0.55 else (0.07+r*r*0.30))
 			if not path_mask.is_empty() and not clear_path(path_mask, ox, oy, stride, cx, cy, scale): continue
+			if not villages.is_empty() and not clear_path(villages,ox,oy,stride,cx,cy,scale): continue
+			if not rivers.is_empty() and not clear_path(rivers,ox,oy,stride,cx,cy,scale): continue
 			# Цвет в одном месторождении общий, формы и повороты остаются индивидуальными.
 			var tint := int(clampf(deposit * 3.0, 0.0, 2.0))
 			store.add(cx, cy, Biomes.T_ROCK, tint, scale)
@@ -85,6 +96,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				if floori(px) != x or floori(py) != y: continue
 				var fragment := 0.055 + rng.next_float() * (0.16 + mountain * 0.16)
 				if not path_mask.is_empty() and not clear_path(path_mask, ox, oy, stride, px, py, fragment): continue
+				if not villages.is_empty() and not clear_path(villages,ox,oy,stride,px,py,fragment): continue
+				if not rivers.is_empty() and not clear_path(rivers,ox,oy,stride,px,py,fragment): continue
 				store.add(px, py, Biomes.T_ROCK, tint, fragment)
 
 

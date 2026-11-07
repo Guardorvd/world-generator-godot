@@ -2,6 +2,21 @@ using System;
 
 public partial class FastGrid
 {
+	/// <summary>Shared surface exposure; byte-identical to mountain_surface.gd.</summary>
+	public byte[] MountainExposure(float[] elev, float[] slope, float[] moist)
+	{
+		var result = new byte[elev.Length];
+		bool wet = moist.Length == elev.Length;
+		for (int i = 0; i < result.Length; i++)
+		{
+			double high = RoadSmooth(0.10, 0.26, elev[i]);
+			double dry = 1.0 - RoadSmooth(0.35, 0.88, wet ? moist[i] : 0.5);
+			double rock = RoadSmooth(0.24, 1.20, slope[i]) * (0.35 + 0.65 * dry);
+			result[i] = (byte)Math.Floor(Clamp01(high * rock + 0.035 * RoadSmooth(0.2, 0.8, slope[i])) * 255.0 + 0.5);
+		}
+		return result;
+	}
+
 	/// <summary>Копия выбора стока в StageHydrology.run: у каждой клетки суши с выходом — самый крутой спуск по длине
 	/// ребра к соседу с меньшим рангом заполнения (rank — место в order). Клетки решают независимо: тот же результат,
 	/// что подряд в GDScript; арифметика — double от float, как там.</summary>

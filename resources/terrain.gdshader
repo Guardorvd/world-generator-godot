@@ -157,11 +157,13 @@ void fragment() {
 	// скала там, где склон круче; граница рваная от шума
 	float slope = 1.0 - normalize(wnormal).y;
 	float rock = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
+	float exposure = use_vertex_color ? COLOR.a : 0.0;
 	// на снегу скала проступает слабее, чтобы вершины оставались белыми
 	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
 	float sky = 1.0;
 	if (forest_enabled && !use_vertex_color) {
 		vec4 forest = texture(forest_tex, UV);
+		exposure = forest.a;
 		float cover = smoothstep(0.03, 0.8, forest.r) * (1.0 - snow);
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
 		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
@@ -197,7 +199,13 @@ void fragment() {
 			col *= 1.0 + smoothstep(0.55, 0.75, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.22, 0.18, 0.1);
 		}
 	}
-	col = mix(col, rock_color * (0.8 + 0.4 * n_big), rock * (0.75 - 0.45 * snow));
+	// The same exposure channel reduces trees/grass and seeds rock compositions.
+	// Broad bedding stays visible beyond the near-detail radius; it changes colour only.
+	float bedding = 0.5 + 0.5 * sin(wpos.y * 0.24 + dot(p, vec2(0.008,0.013)) + n_big * 1.8);
+	float broken = smoothstep(0.25,0.75,n_big + (n_mid-0.5)*0.25);
+	rock = max(rock, exposure * mix(0.65,1.0,broken));
+	vec3 mineral = rock_color * (0.70 + 0.24*bedding + 0.12*n_big);
+	col = mix(col, mineral, rock * (0.90 - 0.55 * snow));
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
 	// Маска метровой сетки задаёт общий силуэт, мелкая кромка считается в пикселях.
