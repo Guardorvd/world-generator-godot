@@ -37,6 +37,9 @@ const FOOTHILL_LIFT := 0.18
 const HEIGHT_PER_WIDTH := 0.7
 ## Доля мелких октав основания вглубь суши (с GEO 7), у берега 1
 const INLAND_DETAIL := 0.35
+## Волнистые участки склонов: только две старшие октавы уже существующих холмов
+## (160/80 м), без возврата мелких 40/20 м октав, подавленных GEO 7.
+const SLOPE_ROLL := 0.015
 ## Ширина подъёма от равнины к горам (в долях шума гор)
 const MASK_EDGE := 0.9
 ## Небольшие долины: масштаб шума в клетках, ширина (в долях шума) и глубина
@@ -205,7 +208,18 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	var h := (base - fine_c * (1.0 - INLAND_DETAIL) * inland) * 0.55
 	if h > SEA_RAW:
 		h = SEA_RAW + (h - SEA_RAW) * (PLAIN_LIFT + (1.0 - PLAIN_LIFT) * rough)
-	var hills := hill.fbm(X / 40.0, Y / 40.0, 4)
+	var hills := 0.0
+	var slope_roll := 0.0
+	amp = 1.0
+	fr = 1.0
+	norm = 0.0
+	for o in 4:
+		hills += amp * hill.noise(X / 40.0 * fr, Y / 40.0 * fr)
+		norm += amp
+		if o == 1: slope_roll = hills / norm
+		amp *= 0.5
+		fr *= 2.0
+	hills /= norm
 	if foothills > 0.0:
 		# Холмы предгорий шире вместе с гребнями (с GEO 7)
 		var foot_scale := 100.0 * maxf(mountain_scale, mountain_height / HEIGHT_PER_WIDTH)
@@ -224,6 +238,9 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	if mask > 0.0:
 		var wide := mountain_scale * maxf(1.0, mountain_height / (mountain_scale * HEIGHT_PER_WIDTH))
 		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, inland) * mask * MOUNTAIN_AMP * mountain_height
+	# Modest rolls on the structural slopes, fading into the shared valley floor.
+	# Use final land height: a coastal massif may have a low continental base.
+	h += slope_roll * SLOPE_ROLL * mask * (1.0 - 0.7 * valley) * smoothstep(0.015, 0.08, h - SEA_RAW)
 	return h
 
 
@@ -244,6 +261,9 @@ const INNER_ALONG := 520.0
 const INNER_ACROSS := 180.0
 const INNER_CUT := 0.75
 const SIDE_CUT := 0.28
+## GEO 8: рёбра из уже взятых двух малых октав гребня. Только на боках массива,
+## вне дна долин и берега; общий масштаб, округление и бюджет крутизны GEO 7 прежние.
+const FLANK_FOLD := 0.07
 ## Горы искривлены слабее остального рельефа: при полном искривлении гребни вытягиваются в одинаковые
 ## волнистые полосы
 const MOUNTAIN_WARP := 0.35
@@ -292,9 +312,9 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	var fine := (1.0 - UPLAND_SMOOTH * up) * (0.35 + 0.65 * sharp)
 	var r := 0.0
 	if f < 1.0:
-		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f)
+		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up, inland) * (1.0 - f)
 	if f > 0.0:
-		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f
+		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, inland) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	var pk := hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2)
@@ -326,7 +346,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 ## гребень) несимметрична: с одной стороны склон круче в asym раз. С 3.1 больше веса у главного гребня,
 ## мелких октав две вместо трёх, их вес убывает быстрее: они уточняют склон, а не дробят его на бугры
 ## interior — сила внутренних долин и котловин (с 3.4); у сглаженных массивов 0.45, у гор до 1.
-static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0) -> float:
+static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0, inland: float = 1.0) -> float:
 	var along := X * dc + Y * ds
 	var across := Y * dc - X * ds
 	var u := along / RIDGE_ALONG
@@ -335,6 +355,7 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 	var fq := 1.0
 	var s := 0.0
 	var wt := 1.0
+	var fold := 0.0
 	for o in 4:
 		var n := ridge.noise(u * fq, v * fq)
 		# С 3.1 асимметрия до скругления: умножение e давало разные высоты справа и слева
@@ -344,6 +365,10 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
 		var val := maxf(0.0, 1.0 - e)
 		val *= val
+		# Centered ribs, before the recursive crest weight erases them on the flanks.
+		# Same oriented octaves as the parent ridge, no independent noise field.
+		if o >= 2:
+			fold += (val - 0.35) * (1.0 if o == 2 else 0.3)
 		val *= wt
 		wt = minf(1.0, maxf(0.0, val * 2.0))
 		s += val * a * (fine if o >= 2 else 1.0)
@@ -365,6 +390,11 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		var branch := t * t * (3.0 - 2.0 * t)
 		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
 		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
+		# Smoothly bounded slope band: summit and valley floor retain their profiles.
+		# The alternating ribs make hollows, rolls and slope breaks. Coastal saddles
+		# are unchanged; the finer octave has less slope contribution.
+		var flank := smoothstep(0.12, 0.30, s) * (1.0 - smoothstep(0.55, 0.75, s))
+		s += fold * FLANK_FOLD * flank * interior * inland * (1.0 - 0.85 * valley)
 		# A shoulder follows the same ribs, with its level varying along the valley.
 		# Broad transitions leave traversable shelves, never a quantized terrace.
 		var shelf_level := 0.36 + 0.12 * opening

@@ -317,6 +317,7 @@ public partial class FastGrid : RefCounted
 	private const double PlainHills = 0.15;
 	private const double HillAmp = 0.07;
 	private const double InlandDetail = 0.35;
+	private const double SlopeRoll = 0.015; // StageRelief.SLOPE_ROLL
 	private const double HeightPerWidth = 0.7;
 	private const double Foothills = 0.35;
 	private const double FoothillLift = 0.18; // StageRelief.FOOTHILL_LIFT (с 3.6)
@@ -383,7 +384,16 @@ public partial class FastGrid : RefCounted
 				double h = (bas - fineC * (1.0 - InlandDetail) * inland) * 0.55;
 				if (h > SeaRaw)
 					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
-				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
+				double hills = 0.0, slopeRoll = 0.0;
+				amp = 1.0; fr = 1.0; norm = 0.0;
+				for (int o = 0; o < 4; o++)
+				{
+					hills += amp * Noise(hill, X / 40.0 * fr, Y / 40.0 * fr);
+					norm += amp;
+					if (o == 1) slopeRoll = hills / norm;
+					amp *= 0.5; fr *= 2.0;
+				}
+				hills /= norm;
 				if (foothills > 0.0)
 				{
 					double footScale = 100.0 * Math.Max(mountainScale, mountainHeight / HeightPerWidth);
@@ -402,6 +412,9 @@ public partial class FastGrid : RefCounted
 					double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
 					h += Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland) * m * MountainAmp * mountainHeight;
 				}
+				double rollT = Clamp01(((h - SeaRaw) - 0.015) / (0.08 - 0.015));
+				double rollFade = rollT * rollT * (3.0 - 2.0 * rollT);
+				h += slopeRoll * SlopeRoll * m * (1.0 - 0.7 * valley) * rollFade;
 				outH[j * W + i] = (float)h;
 			}
 		}
@@ -421,6 +434,7 @@ public partial class FastGrid : RefCounted
 	private const double InnerAcross = 180.0;
 	private const double InnerCut = 0.75;
 	private const double SideCut = 0.28;
+	private const double FlankFold = 0.07; // StageRelief.FLANK_FOLD
 	private const double MountainWarp = 0.35;
 	private const double RidgeAlong = 220.0;
 	private const double RidgeAcross = 125.0;
@@ -456,9 +470,9 @@ public partial class FastGrid : RefCounted
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f);
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, inland) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f;
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, inland) * f;
 		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
 		r = Math.Min(r * (1.0 + 0.35 * pk * r), PeakCap);
 		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.
@@ -480,13 +494,13 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Копия StageRelief._crest.</summary>
-	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior)
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior, double inland)
 	{
 		double along = X * dc + Y * ds;
 		double across = Y * dc - X * ds;
 		double u = along / RidgeAlong;
 		double v = across / RidgeAcross;
-		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0;
+		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0, fold = 0.0;
 		for (int o = 0; o < 4; o++)
 		{
 			double n = Noise(pm, u * fq, v * fq);
@@ -495,6 +509,8 @@ public partial class FastGrid : RefCounted
 			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
 			double val = Math.Max(0.0, 1.0 - e);
 			val *= val;
+			// The same small oriented octaves, before recursive crest attenuation.
+			if (o >= 2) fold += (val - 0.35) * (o == 2 ? 1.0 : 0.3);
 			val *= wt;
 			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
 			s += val * a * (o >= 2 ? fine : 1.0);
@@ -515,6 +531,10 @@ public partial class FastGrid : RefCounted
 			double branch = t * t * (3.0 - 2.0 * t);
 			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
 			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SideCut * interior;
+			double flankIn = Clamp01((s - 0.12) / (0.30 - 0.12));
+			double flankOut = Clamp01((s - 0.55) / (0.75 - 0.55));
+			double flank = flankIn * flankIn * (3.0 - 2.0 * flankIn) * (1.0 - flankOut * flankOut * (3.0 - 2.0 * flankOut));
+			s += fold * FlankFold * flank * interior * inland * (1.0 - 0.85 * valley);
 			double shelfLevel = 0.36 + 0.12 * opening;
 			double shelfIn = Clamp01((s - (shelfLevel - 0.12)) / (shelfLevel - (shelfLevel - 0.12)));
 			double shelfOut = Clamp01((s - shelfLevel) / ((shelfLevel + 0.12) - shelfLevel));
