@@ -112,10 +112,13 @@ func _initialize() -> void:
 				wet += 1 if final.depth_at(x, z) > 0.3 else 0
 	print("въезды мостов в игре: наибольший перепад %.2f м, над водой %d, выше %.2f м: %d %s (%d мс)" % [max_gap, wet,
 		StageTrails.BRIDGE_LANDING_GAP, worst.size(), str(worst.slice(0, 8)), Time.get_ticks_msec() - started])
+	# --rides: природные велосипедные маршруты (RideRoutes): сводка, проходимость на готовой поверхности, картинка.
+	var fails := 0
+	if "--rides" in args:
+		fails += _rides(w, final, seed_text)
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))
-	var fails := 0
 	var save := _arg(args, "--save", "")
 	if not save.is_empty():
 		var f := FileAccess.open(save, FileAccess.WRITE)
@@ -136,6 +139,77 @@ func _initialize() -> void:
 					print("  отличается %s: было %s, стало %s" % [key, str(before.get(key)).left(120), str(print_out[key]).left(120)])
 			print("мир путей %s" % ("тот же" if same else "другой"))
 	quit(1 if fails > 0 else 0)
+
+
+## Природные маршруты: сводка RideRoutes, каждый маршрут на готовой поверхности (уклон на 8 м, вода на оси),
+## картинка tools/control/runs/rides/<сид>.png (дороги светлые, тропы серые, горные тропы коричневые; маршруты: плавные
+## оранжевые, лесные зелёные, технические красные, старт — белая точка). Возвращает число отказов.
+func _rides(w: WorldData, final: Heightfield, seed_text: String) -> int:
+	var stats: Dictionary = w.generation_profile.get("rides", {})
+	print("RIDES ", JSON.stringify(stats))
+	var fails := 0
+	var S := 2
+	var img := Image.create(w.W * S, w.H * S, false, Image.FORMAT_RGB8)
+	var river := w.river_cells()
+	for y in w.H:
+		for x in w.W:
+			var i := y * w.W + x
+			var v := clampf(0.25 + w.h[i] * 0.9, 0.0, 1.0) * (1.0 - clampf(w.slope[i] * 1.5, 0.0, 0.5))
+			var c := Color(v, v, v * 0.95)
+			if w.ocean[i] != 0 or w.lake[i] != 0 or river[i] != 0: c = Color(0.25, 0.45, 0.8)
+			elif w.path_mask[i] >= 3: c = Color(0.95, 0.95, 0.85)
+			elif w.path_mask[i] >= 2: c = c.lerp(Color(0.55, 0.55, 0.5), 0.6)
+			img.fill_rect(Rect2i(x * S, y * S, S, S), c)
+	var colors := {flow = Color(1.0, 0.55, 0.1), forest = Color(0.1, 0.75, 0.2), tech = Color(0.9, 0.1, 0.1), climb = Color(0.75, 0.45, 0.95)}
+	for t: Dictionary in w.trails:
+		if t.kind == "mountain" and not t.has("ride"): _draw(img, t.pts, S, Color(0.55, 0.35, 0.2), 1)
+	for t: Dictionary in w.trails:
+		if not t.has("ride"): continue
+		_draw(img, t.pts, S, colors.get(t.ride_style, Color.MAGENTA), 2)
+		img.fill_rect(Rect2i(int(t.pts[0].x * S) - 2, int(t.pts[0].y * S) - 2, 5, 5), Color.WHITE)
+		# Проходимость: высоты готовой поверхности через 1 м, уклон на 8 м, вода глубже 0,3 м на оси
+		var heights := PackedFloat32Array()
+		var wet := 0
+		var length := 0.0
+		for k in range(1, t.pts.size()):
+			var a: Dictionary = t.pts[k - 1]
+			var b: Dictionary = t.pts[k]
+			var seg := Grid.hypot(b.x - a.x, b.y - a.y) * GameConfig.TILE
+			var n := maxi(1, ceili(seg))
+			for j in n:
+				var x: float = lerpf(a.x, b.x, float(j) / n) * GameConfig.TILE
+				var z: float = lerpf(a.y, b.y, float(j) / n) * GameConfig.TILE
+				heights.append(final.ground_at(x, z))
+				if final.depth_at(x, z) > 0.3: wet += 1
+			length += seg
+		var worst := 0.0
+		var steep := 0
+		for k in range(8, heights.size(), 2):
+			var g := absf(heights[k] - heights[k - 8]) / 8.0
+			worst = maxf(worst, g)
+			if g > 0.4: steep += 2
+		var drop := heights[0] - heights[-1]
+		print("  %s %-6s %4.0f м, перепад %3.0f м, ср. уклон %4.1f %%, круче 40 %%: %3.0f м, наибольший на 8 м %3.0f %%, вода %d м, вид %s" % [
+			t.ride, t.ride_style, length, drop, drop / maxf(length, 1.0) * 100.0, float(steep), worst * 100.0, wet, t.kind])
+		if wet > 12: # брод через узкую речку (две клетки) допустим, путь по руслу — нет
+			print("    ОШИБКА: %s идёт по воде %d м" % [t.ride, wet])
+			fails += 1
+	var dir := ProjectSettings.globalize_path("res://tools/control/runs/rides")
+	DirAccess.make_dir_recursive_absolute(dir)
+	var file := dir.path_join("%s.png" % seed_text)
+	img.save_png(file)
+	print("картинка: ", file)
+	return fails
+
+
+func _draw(img: Image, pts: Array, S: int, color: Color, width: int) -> void:
+	for k in range(1, pts.size()):
+		var a := Vector2(pts[k - 1].x, pts[k - 1].y) * S
+		var b := Vector2(pts[k].x, pts[k].y) * S
+		var n := maxi(1, ceili(a.distance_to(b) * 2.0))
+		for j in n + 1:
+			var p := a.lerp(b, float(j) / n)
+			img.fill_rect(Rect2i(int(p.x) - width / 2, int(p.y) - width / 2, width, width), color)
 
 
 ## Отпечаток результата: поселения, их связи, мосты, туннели и разметка путей.

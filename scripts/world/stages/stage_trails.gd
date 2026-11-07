@@ -106,8 +106,11 @@ static func run(w: WorldData, step: Callable) -> void:
 	_route_surface(finder, surface, WIDTHS.mountain, "corridor_mountain_ms")
 	step.call(0.74, "Прокладка горных троп")
 	detail_us = Time.get_ticks_usec()
-	_mountain_trails(w, finder, surface)
+	var on_axis := _mountain_trails(w, finder, surface)
 	w.generation_profile.mountain_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
+	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
+	step.call(0.76, "Природные велосипедные маршруты")
+	RideRoutes.run(w, finder, surface, on_axis)
 	# Исходы и раскрытия считаются всегда (дёшево); время вызовов и кэш — только с profile_searches.
 	w.generation_profile.merge(finder.search_stats())
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
@@ -1705,7 +1708,8 @@ static func _key(a: int, b: int) -> String:
 
 
 ## Горные тропы ответвляются от ближайшего доступного пути людей, а не обязательно от поселения.
-static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfield = null) -> void:
+## Возвращает клетки осей мостов и туннелей (их же берут природные маршруты, RideRoutes).
+static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfield = null) -> PackedByteArray:
 	var started_us := Time.get_ticks_usec()
 	var nearest_us := 0
 	var search_us := 0
@@ -1752,6 +1756,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 	w.generation_profile.mountain_nearest_ms = nearest_us / 1000.0
 	w.generation_profile.mountain_search_ms = search_us / 1000.0
 	w.generation_profile.mountain_add_ms = add_us / 1000.0
+	return on_axis
 
 
 ## Клетки рек (не на осях сооружений), где брод небезопасен (_unsafe_ford). С 9.7 в сборке .NET полная

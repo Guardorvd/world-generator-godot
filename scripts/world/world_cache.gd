@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 11 # slope detail without contour terraces; independent lake proposal streams
-const SCHEMA_TRAILS_VERSION := 14 # publish the largest confirmed settlement component before choosing the home
+const SCHEMA_TRAILS_VERSION := 15 # natural bike rides (RideRoutes) after the mountain trails
 const SCHEMA_NATURE_VERSION := 5 # shared slope exposure, mountain communities and downhill rock compositions
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
