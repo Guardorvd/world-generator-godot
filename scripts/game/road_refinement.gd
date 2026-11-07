@@ -13,6 +13,9 @@ const FIT_FADE := 12.0   # 4.5: плавный переход у концов, �
 const FIT_LIMIT := 1.2   # обычное уточнение относительно сетки RoadBed, м
 const BENCH_LIMIT := Heightfield.TUNNEL_HEIGHT # полка дороги в склоне: до высоты существующей выемки, м
 const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной тропы; технические горные тропы не выравниваем
+const RELIEF_LIMIT := 0.32 # medium tread forms, separate from sub-metre RoadBump
+const RELIEF_GRADE := 0.045 # maximum added axial grade of the relief profile, before vertex masks
+static var natural_relief := true # A/B measurement only; baked into the existing metre patches
 static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
 static var allow_fast_vertices := true # reference switch for complete vertex-channel parity
 static var road_simd := true
@@ -192,7 +195,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	return r
 
 
-## Весь этап двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): отрезки и вершины столбцами, без
+## Индекс и вершины двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): столбцами, без
 ## словарей на отрезок и на вершину. Результат тот же, что у пути в build ниже (он остаётся эталоном для
 ## tools/dod_verify.gd). Только для всей сети (only пусто) и без земли за краем карты.
 func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
@@ -252,6 +255,7 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 			fits.append(fit.profile[j])
 			fits.append(fit.strength[j])
 			fits.append(fit.limit[j])
+			fits.append(fit.relief[j])
 	var axes := PackedFloat64Array()
 	for s: Dictionary in _heights.structures:
 		axes.append(s.ax)
@@ -365,7 +369,7 @@ func _native_vertices(fast: Object, nearest: PackedFloat64Array) -> Dictionary:
 	for route: int in fit_routes:
 		var fit: Dictionary = fit_routes[route]
 		offsets[route] = Vector2i(fits.size(), fit.profile.size())
-		for j in fit.profile.size(): fits.append_array(PackedFloat64Array([fit.profile[j], fit.strength[j], fit.limit[j]]))
+		for j in fit.profile.size(): fits.append_array(PackedFloat64Array([fit.profile[j], fit.strength[j], fit.limit[j], fit.relief[j]]))
 	for s: Dictionary in _segment_list:
 		var fit: Vector2i = offsets.get(s.route, Vector2i.ZERO)
 		segments.append_array(PackedFloat64Array([s.a.x, s.a.y, s.delta.x, s.delta.y, s.len2, s.half,
@@ -499,17 +503,25 @@ func _fit_network() -> void:
 		if count < 3:
 			continue
 		var ground := PackedFloat32Array()
+		var removed := PackedFloat32Array()
 		ground.resize(count)
+		removed.resize(count)
+		# Authored routes keep their exact input to TrailShaping and element baking.
+		var use_relief := natural_relief and not t.has("trail_id")
 		for j in count:
 			ground[j] = _heights.base_ground_at(points[j].x, points[j].y)
+			if use_relief:
+				removed[j] = _heights.base_ground_at(points[j].x, points[j].y, true) - ground[j]
 		var need := PackedFloat32Array()
 		var cross_slopes := PackedFloat32Array()
 		var allowed := PackedFloat32Array()
 		var distance := PackedFloat32Array()
+		var relief := PackedFloat32Array() # first eligibility, then the final displacement
 		need.resize(count)
 		cross_slopes.resize(count)
 		allowed.resize(count)
 		distance.resize(count)
+		relief.resize(count)
 		for j in count:
 			var p := points[j]
 			var lo := maxi(0, j - 2)
@@ -526,8 +538,10 @@ func _fit_network() -> void:
 			var sustained := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
 			# Косой склон требует полки и у обычной тропы. Непригодный продольный подъём остаётся защищён.
 			allowed[j] = 1.0 - smoothstep(0.45, 0.7, sustained)
-			if not _fit_safe(p, tangent, route, j * STEP, t.kind == "road"):
+			var safe := _fit_safe(p, tangent, route, j * STEP, t.kind == "road")
+			if safe == 0:
 				allowed[j] = 0.0
+			relief[j] = 1.0 if (safe & 2) != 0 else 0.0
 			distance[j] = 0.0 if allowed[j] <= 0.0 else (distance[j - 1] + STEP if j > 0 else 0.0)
 		# Симметричное окно не пересекает берег, сооружение, развилку или конец пути.
 		var back := 0.0
@@ -566,18 +580,63 @@ func _fit_network() -> void:
 			var bench_limit := BENCH_LIMIT if t.kind == "road" else TRAIL_BENCH_LIMIT
 			cap = maxf(cap, minf(bench_limit, cross_slope * float(t.pts[0].w) * TILE * 0.5))
 			limits.append(cap)
-		fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
+		if use_relief:
+			# A route-sized batch, never a per-vertex call or a world-sized raster.
+			var fast := Grid.fast_grid() if allow_fast_vertices else null
+			if fast != null:
+				relief = fast.RoadNaturalProfile(points, removed, distance, allowed, relief, _noise, _origin,
+					STEP, FIT_FADE, RELIEF_LIMIT, RELIEF_GRADE, t.kind == "road")
+			else:
+				relief = _natural_profile(points, removed, distance, allowed, relief, t.kind == "road")
+		else:
+			relief.fill(0.0)
+		fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits, relief = relief}
 
 
-func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false) -> bool:
+## Reference for FastGrid.RoadNaturalProfile. Only the 8..24 m band of the removed
+## terrain is restored, never the whole cut/fill offset or the dangerous cross-slope.
+func _natural_profile(points: PackedVector2Array, removed: PackedFloat32Array, distance: PackedFloat32Array, allowed: PackedFloat32Array, eligible: PackedFloat32Array, road: bool) -> PackedFloat32Array:
+	var relief := eligible.duplicate()
+	for j in points.size():
+		var radius := mini(12, maxi(0, floori(distance[j] / STEP) - 1))
+		var small := mini(4, radius)
+		var wide_sum := 0.0
+		var small_sum := 0.0
+		for k in range(j - radius, j + radius + 1):
+			wide_sum += removed[k]
+			if absi(k - j) <= small: small_sum += removed[k]
+		var restored := small_sum / (2 * small + 1) - wide_sum / (2 * radius + 1)
+		var p := points[j] + _origin
+		var wear := _noise.get_noise_2d(p.x * 0.013 + 193.0, p.y * 0.013 - 71.0)
+		var form := _noise.get_noise_2d(p.x * 0.065 + wear * 1.7, p.y * 0.065 - wear)
+		var activity := lerpf(0.18, 1.0, smoothstep(-0.35, 0.4, wear))
+		var amplitude := 0.38 if road else 0.55
+		var shape := clampf(restored * 0.4 + form * amplitude * activity, -RELIEF_LIMIT, RELIEF_LIMIT)
+		relief[j] = shape * (eligible[j] * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j]))
+	# Preserve zeros at pins while limiting the added profile grade on both sides.
+	for j in range(1, relief.size()):
+		var cap := absf(relief[j - 1]) + RELIEF_GRADE * STEP
+		if relief[j] * relief[j - 1] < 0.0: cap = RELIEF_GRADE * STEP * 0.5
+		relief[j] = clampf(relief[j], -cap, cap)
+	for j in range(relief.size() - 2, -1, -1):
+		var cap := absf(relief[j + 1]) + RELIEF_GRADE * STEP
+		if relief[j] * relief[j + 1] < 0.0: cap = RELIEF_GRADE * STEP * 0.5
+		relief[j] = clampf(relief[j], -cap, cap)
+	return relief
+
+
+## Bit 0: existing profile fit allowed; bit 1: medium relief allowed as well.
+## Shallow forks pin only the new relief, preserving the established fitted profile.
+func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false) -> int:
 	var w := _heights.world
+	var safe := 3
 	var cell := floori(p.y / TILE) * w.W + floori(p.x / TILE)
 	if cell < 0 or cell >= w.N or (not shore_ok and w.dist_water[cell] < RoadBed.SHORE.y) or _heights.water_level[cell] != -INF:
-		return false
+		return 0
 	var key := floori(p.y / TILE - 0.5) * w.W + floori(p.x / TILE - 0.5)
 	for s: Dictionary in _structures.get(key, []):
 		if Grid.segment_dist(p.x, p.y, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN + RoadBed.PIN_FADE:
-			return false
+			return 0
 	if not _cs_starts.is_empty():
 		# Быстрый путь: те же отрезки клетки столбцами (FastGrid.RoadIndex), те же вычисления
 		if key >= 0 and key < w.N:
@@ -587,27 +646,31 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 				var delta := _sg_delta[id]
 				var b := a + delta
 				var seg_route := _sg_route[id]
-				var crossing: bool = seg_route != route and absf(tangent.dot(delta.normalized())) < 0.9
+				var other := seg_route != route
+				var crossing: bool = other and absf(tangent.dot(delta.normalized())) < 0.9
 				var hairpin := false
 				if seg_route == route and absf(_sg_along[id] - along) > 20.0:
 					var u := clampf((p - a).dot(delta) / _sg_len2[id], 0.0, 1.0)
 					hairpin = absf(_sg_along[id] + u * sqrt(_sg_len2[id]) - along) > 20.0
-				if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y) < _sg_half[id] + REACH + 0.5:
-					return false
+				if (other or hairpin) and Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y) < _sg_half[id] + REACH + 0.5:
+					if crossing or hairpin: return 0
+					safe = 1
 	else:
 		for s: Dictionary in _segments.get(key, []):
 			var b: Vector2 = s.a + s.delta
-			var crossing: bool = s.route != route and absf(tangent.dot(s.delta.normalized())) < 0.9
+			var other: bool = s.route != route
+			var crossing: bool = other and absf(tangent.dot(s.delta.normalized())) < 0.9
 			var hairpin := false
 			if s.route == route and absf(s.along - along) > 20.0:
 				var u := clampf((p - s.a).dot(s.delta) / s.len2, 0.0, 1.0)
 				hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
-			if (crossing or hairpin) and Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y) < s.half + REACH + 0.5:
-				return false
+			if (other or hairpin) and Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y) < s.half + REACH + 0.5:
+				if crossing or hairpin: return 0
+				safe = 1
 	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
-			return false
-	return true
+			return 0
+	return safe
 
 
 func _base_at(x: float, z: float) -> float:
@@ -686,10 +749,10 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 	var gx := _base_at(x + 1.0, z) - _base_at(x - 1.0, z)
 	var gz := _base_at(x, z + 1.0) - _base_at(x, z - 1.0)
 	pin *= 1.0 - smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, Vector2(gx, gz).length() * 0.5)
-	var rough: float = _surf[surf].rough
 	var crown := 0.035 * (1.0 - smoothstep(0.0, half, d))
-	var rut := -0.045 * exp(-pow((d - half * 0.48) / 0.3, 2.0))
-	var detail := crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - ground_mask)
+	# Sub-metre ruts belong to RoadBump + its shader field. Baking
+	# another 30 cm rut into a metre grid both aliases it and doubles its depth.
+	var detail: float = crown + grain * (0.025 + _surf[surf].rough * 0.12) + slow * 0.06 * (1.0 - ground_mask)
 	var limit := 0.65 if road.kind == "road" else 0.3
 	var target := lerpf(road.ha, road.hb, u) + detail
 	var h := base + clampf(target - base, -limit, limit) * influence * pin
@@ -701,6 +764,7 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 		var level := lerpf(fit.profile[j], fit.profile[j + 1], f)
 		var power := lerpf(fit.strength[j], fit.strength[j + 1], f)
 		var cap := lerpf(fit.limit[j], fit.limit[j + 1], f)
+		var relief := lerpf(fit.relief[j], fit.relief[j + 1], f)
 		h = base + clampf(level + detail - base, -cap, cap) * influence * pin * power
 		# Ограниченная земляная полка дороги или обычной тропы на косом склоне.
 		# Полотно остаётся частью того же меша и поверхности движения; вода закреплена.
@@ -715,6 +779,12 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 				var dry_level := maxf(axis_level + detail, _wet_near(i) + RoadBed.WATER_GAP)
 				var shelf := base + clampf(dry_level - base, -cap, cap)
 				h = lerpf(h, shelf, influence * structure_pin * power * bench)
+		# One real surface for rendering and wheel support. A broad asymmetric
+		# cross section offers different lines; fine ruts/holes remain in RoadBump.
+		var character := lerpf(_surf[road.surf].rough, _surf[road.next].rough, blend)
+		var cross_shape := 1.0 + 0.3 * slow * clampf(side / half, -1.0, 1.0)
+		var edge_pin := smoothstep(0.0, FIT_FADE, minf(minf(x - TILE * 0.5, (W - 0.5) * TILE - x), minf(z - TILE * 0.5, (H - 0.5) * TILE - z)))
+		h += relief * minf(1.0, character * 3.0) * cross_shape * influence * pin * edge_pin
 	if _heights.water_level[i] == -INF and h < base:
 		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
 	return {h = h, color = color, uv = Vector2(side / half, float(surf)), surface = surf, road = road.kind == "road", route = road.route}

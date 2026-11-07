@@ -7,7 +7,8 @@ public partial class FastGrid
 {
 	private static readonly StringName NameH = "h", NameColor = "color", NameUv = "uv", NameSurface = "surface", NameRoad = "road";
 
-	// RoadRefinement.build одним этапом (scripts/game/road_refinement.gd), DOD: два вызова на весь этап,
+	// RoadRefinement.build (scripts/game/road_refinement.gd), DOD: индекс и патчи двумя вызовами;
+	// профиль средних форм считается компактными пакетами RoadNaturalProfile по готовым станциям пути.
 	// на входе и выходе только массивы. RoadIndex — отрезки метровой дорожной сетки и индекс «клетка -> отрезки»
 	// (копия RoadRefinement._index); RoadPatches — уникальные вершины патчей, ближайший отрезок, высота/цвет/UV
 	// вершины и сборка словарей патчей (копии _nearest_vertices, _vertex и цикла сборки build).
@@ -133,7 +134,7 @@ public partial class FastGrid
 
 	/// <summary>Патчи метровой сетки по клеткам keys. Входные отрезки — столбцы из RoadIndex (a, delta, len2, half, road, surf,
 	/// next, ha, hb, along, route, starts, candidates), fitStart/fitCount — смещение и длина профиля подгонки пути (по номеру
-	/// пути), fits — тройки profile/strength/limit подряд. Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
+	/// пути), fits — profile/strength/limit/relief подряд. Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
 	/// points — число уникальных вершин}.</summary>
 	public Godot.Collections.Dictionary RoadPatches(int[] keys, int width, int height, double tile, int div,
 		Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext,
@@ -271,22 +272,22 @@ public partial class FastGrid
 		double gx = RoadGround(ground, width, height, tile, x + 1.0, z) - RoadGround(ground, width, height, tile, x - 1.0, z);
 		double gz = RoadGround(ground, width, height, tile, x, z + 1.0) - RoadGround(ground, width, height, tile, x, z - 1.0);
 		pin *= 1.0 - RoadSmooth(steepLo, steepHi, new Vector2((float)gx, (float)gz).Length() * 0.5);
-		double rough = surfaces[surf * 5 + 3];
 		double crown = 0.035 * (1.0 - RoadSmooth(0.0, half, distance));
-		double rut = -0.045 * Math.Exp(-Math.Pow((distance - half * 0.48) / 0.3, 2.0));
-		double detail = crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - mask);
+		double detail = crown + grain * (0.025 + surfaces[surf * 5 + 3] * 0.12) + slow * 0.06 * (1.0 - mask);
 		double limit = road ? 0.65 : 0.3;
 		double target = RoadLerp(segHa[selected], segHb[selected], u) + detail;
-		double power = 1.0, level = 0.0;
+		double power = 1.0, level = 0.0, relief = 0.0;
 		int route = segRoute[selected], fitLen = fitCount[route];
 		if (fitLen > 0)
 		{
 			double station = Math.Clamp((segAlong[selected] + u * Math.Sqrt(segLen2[selected])) / step, 0.0, fitLen - 1.0);
-			int j = Math.Min(fitLen - 2, (int)Math.Floor(station)), offset = fitStart[route] + j * 3;
+			int j = Math.Min(fitLen - 2, (int)Math.Floor(station)), offset = fitStart[route] + j * 4;
 			double f = station - j;
-			level = RoadLerp(fits[offset], fits[offset + 3], f);
-			power = RoadLerp(fits[offset + 1], fits[offset + 4], f);
-			limit = RoadLerp(fits[offset + 2], fits[offset + 5], f);
+			level = RoadLerp(fits[offset], fits[offset + 4], f);
+			power = RoadLerp(fits[offset + 1], fits[offset + 5], f);
+			limit = RoadLerp(fits[offset + 2], fits[offset + 6], f);
+			double character = RoadLerp(surfaces[from * 5 + 3], surfaces[to * 5 + 3], RoadSmooth(0.0, 1.0, u));
+			relief = RoadRelief(RoadLerp(fits[offset + 3], fits[offset + 7], f), character, slow, side, half) * influence * pin * RoadReliefEdge(pt, width, height, tile);
 			target = level + detail;
 		}
 		double delta = Math.Clamp(target - baseHeight, -limit, limit);
@@ -308,6 +309,7 @@ public partial class FastGrid
 				value = RoadLerp(value, shelf, influence * structurePin * power * bench);
 			}
 		}
+		value += relief;
 		if (float.IsNegativeInfinity(water[cell]) && value < baseHeight)
 			value = Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
 		hs[n] = (float)value;

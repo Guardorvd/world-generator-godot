@@ -10,6 +10,52 @@ public partial class FastGrid
 		return t * t * (3.0 - 2.0 * t);
 	}
 	private static double RoadLerp(double a, double b, double t) => a + (b - a) * t;
+	// Same broad cross-section as RoadRefinement._vertex. No independent wheel force.
+	private static double RoadRelief(double relief, double rough, double slow, double side, double half)
+		=> relief * Math.Min(1.0, rough * 3.0) * (1.0 + 0.3 * slow * Math.Clamp(side / half, -1.0, 1.0));
+	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
+	private static double RoadReliefEdge(Vector2 p, int width, int height, double tile)
+		=> RoadSmooth(0.0, 12.0, Math.Min(Math.Min(p.X - tile * 0.5, (width - 0.5) * tile - p.X),
+			Math.Min(p.Y - tile * 0.5, (height - 0.5) * tile - p.Y)));
+
+	/// <summary>RoadRefinement's medium profile, one small batch per ordinary route.
+	/// Uses existing metre stations and fit pins; no world raster or persistent native state.</summary>
+	public float[] RoadNaturalProfile(Vector2[] points, float[] removed, float[] distance, float[] allowed,
+		float[] eligible, FastNoiseLite noise, Vector2 origin, double step, double fade, double limit, double grade, bool road)
+	{
+		var relief = new float[points.Length];
+		for (int j = 0; j < points.Length; j++)
+		{
+			int radius = Math.Min(12, Math.Max(0, (int)Math.Floor(distance[j] / step) - 1));
+			int small = Math.Min(4, radius);
+			double wideSum = 0.0, smallSum = 0.0;
+			for (int k = j - radius; k <= j + radius; k++)
+			{
+				wideSum += removed[k];
+				if (Math.Abs(k - j) <= small) smallSum += removed[k];
+			}
+			double restored = smallSum / (2 * small + 1) - wideSum / (2 * radius + 1);
+			var p = points[j] + origin;
+			double wear = noise.GetNoise2D((float)(p.X * 0.013 + 193.0), (float)(p.Y * 0.013 - 71.0));
+			double form = noise.GetNoise2D((float)(p.X * 0.065 + wear * 1.7), (float)(p.Y * 0.065 - wear));
+			double activity = RoadLerp(0.18, 1.0, RoadSmooth(-0.35, 0.4, wear));
+			double shape = Math.Clamp(restored * 0.4 + form * (road ? 0.38 : 0.55) * activity, -limit, limit);
+			relief[j] = (float)(shape * ((double)eligible[j] * allowed[j] * RoadSmooth(0.0, fade, distance[j])));
+		}
+		for (int j = 1; j < relief.Length; j++)
+		{
+			double cap = Math.Abs((double)relief[j - 1]) + grade * step;
+			if ((double)relief[j] * relief[j - 1] < 0.0) cap = grade * step * 0.5;
+			relief[j] = (float)Math.Clamp(relief[j], -cap, cap);
+		}
+		for (int j = relief.Length - 2; j >= 0; j--)
+		{
+			double cap = Math.Abs((double)relief[j + 1]) + grade * step;
+			if ((double)relief[j] * relief[j + 1] < 0.0) cap = grade * step * 0.5;
+			relief[j] = (float)Math.Clamp(relief[j], -cap, cap);
+		}
+		return relief;
+	}
 	// core/math/color.h promotes these constants to double before rounding the pow input.
 	// Color.SrgbToLinear() in GodotSharp uses float constants and is not bit-identical.
 	private static float RoadLinear(float c) => c < 0.04045f ? c * (1.0f / 12.92f)
@@ -45,7 +91,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>Batch RoadRefinement._vertex. Input segments use 15 doubles; fits use interleaved
-	/// profile/strength/limit triples. SIMD preserves the scalar multiply/add order (no FMA).
+	/// profile/strength/limit/relief quadruples. SIMD preserves the scalar multiply/add order (no FMA).
 	/// Outside-world sampling is deliberately left to the GDScript fallback.</summary>
 	public Godot.Collections.Dictionary RoadVertices(Vector2[] points, double[] nearest, int width, int height,
 		double tile, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
@@ -56,6 +102,7 @@ public partial class FastGrid
 		var bases = new double[count]; var delta = new double[count]; var influence = new double[count];
 		var pins = new double[count]; var power = new double[count]; var levels = new double[count];
 		var caps = new double[count]; var details = new double[count]; var structurePins = new double[count];
+		var relief = new double[count];
 		var cells = new int[count]; var values = new double[count];
 		var hs = new float[count]; var colors = new Color[count]; var uv = new Vector2[count];
 		var surface = new byte[count]; var roadFlags = new byte[count]; var routes = new int[count];
@@ -102,10 +149,8 @@ public partial class FastGrid
 			double gz = RoadGround(ground, width, height, tile, x, z + 1.0) - RoadGround(ground, width, height, tile, x, z - 1.0);
 			pin *= 1.0 - RoadSmooth(steepLo, steepHi, new Vector2((float)gx, (float)gz).Length() * 0.5);
 			pins[n] = pin;
-			double rough = surfaces[surf * 5 + 3];
 			double crown = 0.035 * (1.0 - RoadSmooth(0.0, half, distance));
-			double rut = -0.045 * Math.Exp(-Math.Pow((distance - half * 0.48) / 0.3, 2.0));
-			double detail = crown + rut + grain * (0.025 + rough * 0.12) + slow * 0.06 * (1.0 - mask);
+			double detail = crown + grain * (0.025 + surfaces[surf * 5 + 3] * 0.12) + slow * 0.06 * (1.0 - mask);
 			details[n] = detail;
 			double limit = road ? 0.65 : 0.3;
 			double target = RoadLerp(segments[at + 9], segments[at + 10], u) + detail;
@@ -114,11 +159,13 @@ public partial class FastGrid
 			if (fitCount > 0)
 			{
 				double station = Math.Clamp(segments[at + 11] + u * Math.Sqrt(segments[at + 4]), 0.0, fitCount - 1.0);
-				int j = Math.Min(fitCount - 2, (int)Math.Floor(station)), offset = (int)segments[at + 13] + j * 3;
+				int j = Math.Min(fitCount - 2, (int)Math.Floor(station)), offset = (int)segments[at + 13] + j * 4;
 				double f = station - j;
-				double level = RoadLerp(fits[offset], fits[offset + 3], f);
-				power[n] = RoadLerp(fits[offset + 1], fits[offset + 4], f);
-				limit = RoadLerp(fits[offset + 2], fits[offset + 5], f);
+				double level = RoadLerp(fits[offset], fits[offset + 4], f);
+				power[n] = RoadLerp(fits[offset + 1], fits[offset + 5], f);
+				limit = RoadLerp(fits[offset + 2], fits[offset + 6], f);
+				double character = RoadLerp(surfaces[from * 5 + 3], surfaces[to * 5 + 3], RoadSmooth(0.0, 1.0, u));
+				relief[n] = RoadRelief(RoadLerp(fits[offset + 3], fits[offset + 7], f), character, slow, side, half) * reach * pin * RoadReliefEdge(points[n], width, height, tile);
 				levels[n] = level; target = level + detail;
 			}
 			caps[n] = limit;
@@ -161,6 +208,7 @@ public partial class FastGrid
 						value = RoadLerp(value, shelf, influence[n] * structurePins[n] * power[n] * bench);
 					}
 				}
+				value += relief[n];
 				if (float.IsNegativeInfinity(water[cell]) && value < baseHeight)
 					value = Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
 			}

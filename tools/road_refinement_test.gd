@@ -18,7 +18,8 @@ func _loading() -> void:
 	var loaded := WorldLoader.load_world("abc", 128)
 	# Внешнее продолжение появляется после подготовки дорог; сравниваем одинаковые входные данные.
 	loaded.world.outer = null
-	var direct := Heightfield.new(loaded.world)
+	var direct := Heightfield.new(loaded.world, false)
+	StageTrailPlan.prepare(direct) # The loader also bakes authored bike-park earthworks.
 	check(loaded.heights.hv == direct.hv, "загрузчик и Heightfield расходятся по базовому полотну")
 	check(loaded.heights.structures == direct.structures, "загрузчик и Heightfield расходятся по сооружениям")
 	check(loaded.heights.road_refinement.patches == direct.road_refinement.patches,
@@ -71,7 +72,9 @@ func _init() -> void:
 					elif value < h.base_ground_at(px, pz):
 						check(value >= minf(h.base_ground_at(px, pz), RoadBed.wet_near(h, cell) + RoadBed.WATER_GAP) - 0.001, "срез сухого берега затопил полотно")
 					biggest = maxf(biggest, diff)
-					var on_boundary := (x == 0 and not r.patches.has(key - 1)) or (x == RoadRefinement.DIV and not r.patches.has(key + 1)) or (z == 0 and not r.patches.has(key - w.W)) or (z == RoadRefinement.DIV and not r.patches.has(key + w.W))
+					# The outer map edge has no adjacent coarse triangle. Only internal
+					# patch/coarse boundaries must lie on the unrefined surface.
+					var on_boundary := (x == 0 and cx > 0 and not r.patches.has(key - 1)) or (x == RoadRefinement.DIV and cx < w.W - 2 and not r.patches.has(key + 1)) or (z == 0 and cz > 0 and not r.patches.has(key - w.W)) or (z == RoadRefinement.DIV and cz < w.H - 2 and not r.patches.has(key + w.W))
 					if on_boundary:
 						boundary = maxf(boundary, diff)
 					if x == RoadRefinement.DIV and r.patches.has(key + 1):
@@ -86,10 +89,10 @@ func _init() -> void:
 		check(protected_error < 0.001, "%s: сдвинут подход сооружения" % seed_text)
 		check(r.patches.size() < w.N * 0.25, "%s: уточнение захватывает слишком много мира" % seed_text)
 		# Оба способа загрузки должны давать одну и ту же поверхность.
+		var finished := Heightfield.new(w, false)
+		StageTrailPlan.prepare(finished)
 		var loaded := WorldLoader.load_world(seed_text, 256)
-		check(loaded.heights.road_refinement.patches.size() == r.patches.size(), "разные наборы патчей")
-		for key: int in r.patches:
-			check(r.patches[key].h == loaded.heights.road_refinement.patches[key].h, "невоспроизводимые высоты")
+		check(loaded.heights.road_refinement.patches == finished.road_refinement.patches, "загрузчик и прямой полный конвейер дают разные патчи")
 		print("%s: %.1f %% квадратов, +%d вершин, меш/опора %.6f м, стык %.6f м; проверка %d мс" % [seed_text,
 			100.0 * r.patches.size() / w.N, vertices.size() - w.N, error, maxf(boundary, joins), Time.get_ticks_msec() - t0])
 	print("Road Refinement 4.4: нарушений %d" % fails)
@@ -137,6 +140,6 @@ func _ride() -> void:
 		high = maxf(high, b.y)
 		air_ticks += 1 if b.airborne else 0
 		check(is_finite(b.y) and absf(b.y - b._contact(b.x, b.z, h)) < 0.002, "база колёс расходится с грунтом")
-	check(high - low > 0.005 and high - low < 0.15, "грунтовка не даёт разумной локальной неровности")
+	check(high - low > 0.005 and high - low < 0.4, "грунтовка не даёт разумной средней неровности")
 	check(air_ticks == 0 and b.x > 85.0, "мелкий грунт мешает езде или вызывает ложные взлёты")
 	print("Контрольная грунтовка: неровность %.1f см, ложных взлётов %d, путь %.1f м" % [(high - low) * 100.0, air_ticks, b.x - 50.0])
