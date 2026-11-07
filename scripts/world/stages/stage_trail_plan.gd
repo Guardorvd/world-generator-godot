@@ -3,7 +3,7 @@ extends RefCounted
 ## Prepared-world trail network. The shared search/layout and TrailSite preparation are also used by Trail Lab.
 ## Discovery runs once; accepted metre patches are handed to WorldLoader and its normal surface cache.
 const NETWORK_SCRIPT := "res://scripts/trails/trail_world_network.gd"
-const VERSION := 27
+const VERSION := 28 # 28: в обычной игре одни велопарки (до трёх, BikePark.build_all)
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 
@@ -17,7 +17,8 @@ static func run(w: WorldData, size: int, on_progress := Callable()) -> void:
 	h.finish_paths()
 	var surface_ms := Time.get_ticks_msec() - started
 	var area := WorldGenerator.start_rect(w, size)
-	var options := {on_progress = on_progress}
+	# Обычная игра — только велопарки; прежняя универсальная сеть маршрутов осталась для опытов (`-- --trail-network`, QuickTrails)
+	var options := {on_progress = on_progress, mode = "network" if QuickTrails.network() else "parks"}
 	if QuickTrails.active(): # только разработка: сеть на средней части мира и короче (scripts/core/quick_trails.gd)
 		area = QuickTrails.area(Rect2i(0, 0, w.W, w.H))
 		options.merge(QuickTrails.options())

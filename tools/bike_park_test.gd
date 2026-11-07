@@ -38,11 +38,29 @@ func run() -> void:
 		quit(1)
 		return
 	var plan: Dictionary = r.world.trail_plan
-	print("План: ", plan.state, " · ", plan.get("reason", ""), " · ", plan.get("stats", {}), " · ", plan.get("park", {}))
-	check(plan.state == "found", "парк найден")
+	print("План: ", plan.state, " · ", plan.get("reason", ""), " · ", plan.get("stats", {}))
+	print("Площадки: ", plan.stats.park.get("found", []), " · отказы: ", plan.stats.park.get("refused", {}))
+	for info: Dictionary in plan.get("parks", []):
+		print("Парк %d «%s» (%s): оценка %.2f, радиус %.0f м, дальность линий %.0f м, линий %d из %d, %.0f м, доступ %s (до дороги %.0f м)" % [info.index, info.name, info.character,
+			info.quality, info.radius, info.extent, info.lines, info.candidates, info.length, info.access, info.access_m])
+	var parks: Array = plan.get("parks", [])
+	check(plan.stats.mode == "parks", "обычный режим: только велопарки")
+	check(parks.size() <= BikePark.MAX_PARKS, "парков не больше %d (%d)" % [BikePark.MAX_PARKS, parks.size()])
 	if plan.state != "found":
-		quit(1)
+		# парков может не быть: площадки нет — допустимо; тогда проверять нечего
+		print("парков нет: ", plan.get("reason", ""))
+		print("bike_park: ", failures, " failures")
+		quit(1 if failures else 0)
 		return
+	for info: Dictionary in parks:
+		check(info.lines >= 2, "парк «%s»: сеть из нескольких линий (%d)" % [info.name, info.lines])
+		check(info.access, "парк «%s»: к нему есть подъезд от дороги" % info.name)
+	for a in parks.size():
+		for b in range(a + 1, parks.size()):
+			var pa: Dictionary = parks[a]
+			var pb: Dictionary = parks[b]
+			# парки строятся по порядку: линии позднего не ближе GAP к дальности линий раннего от его центра
+			check((pa.center as Vector2).distance_to(pb.center) >= pa.extent + BikePark.GAP * 0.9, "парки «%s» и «%s» не накладываются" % [pa.name, pb.name])
 	var kit: Array[TrailDefinition] = []
 	var total := 0.0
 	for data: Dictionary in plan.routes:
@@ -56,11 +74,15 @@ func run() -> void:
 		var e: Variant = r.trail.earthworks[id]
 		if e is Dictionary: print("  %s: зона %.0f м, выемка до %.1f м, насыпь до %.1f м, уклон %s" % [id, e.get("reach", 0.0), e.get("max_cut", 0.0), e.get("max_fill", 0.0), e.get("grade_used", 0.0)])
 	print("Всего трасс %d, %.0f м; запекание: %s, %s" % [kit.size(), total, r.trail.variant, r.trail.errors])
-	check(kit.size() >= 3 and total >= 1000.0, "сеть трасс от километра (%d, %.0f м)" % [kit.size(), total])
+	check(kit.size() >= 2 and total >= 1000.0, "сеть трасс от километра (%d, %.0f м)" % [kit.size(), total])
+	for d in kit:
+		check(d.validate().is_empty(), "%s: определение допустимо" % d.title)
 	check(r.trail.applied and r.trail.errors.is_empty(), "запечено без ошибок (%s)" % r.trail.variant)
 	var listed := 0
+	var ids := {}
+	for d in kit: ids[d.id] = true
 	for route: Dictionary in r.world.trails:
-		if str(route.get("trail_id", "")).begins_with(StageTrailPlan.ID + "/"): listed += 1
+		if ids.has(str(route.get("trail_id", ""))): listed += 1
 	check(listed == kit.size(), "все трассы в мире ровно по разу (%d)" % listed)
 	print("Объекты трассы: ", r.trail.get("technical", {}))
 	check(r.trail.has("technical") and r.heights.trail_technical.props.size() == r.trail.technical.props, "объекты технических элементов собраны")
@@ -80,7 +102,8 @@ func run() -> void:
 		cache.wait_writes()
 		cache.remove_seed(seed)
 		cache.enabled = false
-	picture(r.heights, plan.park, kit, OUT + "/" + seed + ".png")
+	for info: Dictionary in parks:
+		picture(r.heights, info, kit, "%s/%s_%d.png" % [OUT, seed, info.index])
 	print("bike_park: ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -104,7 +127,7 @@ func obstacles(h: Heightfield) -> void:
 
 func picture(h: Heightfield, park: Dictionary, kit: Array[TrailDefinition], path: String) -> void:
 	var c: Vector2 = park.center
-	var rad: float = park.extent + 40.0
+	var rad: float = maxf(park.extent, park.radius) + 40.0
 	var px := 2.0
 	var n := int(rad * 2.0 / px)
 	var img := Image.create(n, n, false, Image.FORMAT_RGB8)

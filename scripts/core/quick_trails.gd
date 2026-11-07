@@ -10,6 +10,9 @@ const FLAG := "--quick-trails"
 const LABEL := "быстрый режим трасс"
 const CACHE_DIR := "user://world_cache_quick"
 const SAVES_DIR := "user://saves_quick"
+const NETWORK_FLAG := "--trail-network"
+const NETWORK_CACHE_DIR := "user://world_cache_network"
+const NETWORK_SAVES_DIR := "user://saves_network"
 ## Длина сети: цель и предел собранных метров вместо обычных 12000 и 18000 м (trail_world_network.gd)
 const LENGTH_TARGET := 2000.0
 const WORK_LIMIT := 3000.0
@@ -17,6 +20,13 @@ const WORK_LIMIT := 3000.0
 
 static func active() -> bool:
 	return not OS.has_feature("template") and OS.get_cmdline_user_args().has(FLAG)
+
+
+## Опыты с прежней универсальной сетью маршрутов (`-- --trail-network`, только разработка): в обычной игре строятся одни
+## велопарки (TrailWorldNetwork.MODE_PARKS). Быстрый режим трасс (--quick-trails) — это тоже сеть маршрутов. У опытов своя
+## папка кэша и сохранений: мир с сетью не должен оказаться в кэше обычной игры и наоборот.
+static func network() -> bool:
+	return not OS.has_feature("template") and (OS.get_cmdline_user_args().has(NETWORK_FLAG) or active())
 
 
 ## Средняя треть мира по каждой стороне
@@ -30,8 +40,8 @@ static func options() -> Dictionary:
 
 
 static func cache_dir() -> String:
-	return CACHE_DIR if active() else "user://world_cache"
+	return CACHE_DIR if active() else (NETWORK_CACHE_DIR if network() else "user://world_cache")
 
 
 static func saves_dir() -> String:
-	return SAVES_DIR if active() else "user://saves"
+	return SAVES_DIR if active() else (NETWORK_SAVES_DIR if network() else "user://saves")

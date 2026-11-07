@@ -1,51 +1,91 @@
 class_name BikePark
 extends RefCounted
 ## Прокладка линий трейл-парка: trail_world_network.gd берёт их как кандидатов, принимает и запекает как все трассы.
-## Велопарк стартовой области: простой дешёвый поиск самой большой пустой области (без дорог, поселений, воды и
-## сооружений) и прокладка в ней сети длинных извилистых трасс с разворотами и элементами. Без перебора участков и
-## без построителя линии по рельефу: линии ведёт простой «ходок», рельеф под них готовит общее формирование
-## (TrailShaping при запекании), элементы ставит общий TrailComposer. Детерминирован по сиду.
+## Велопарки стартовой области (от одного до MAX_PARKS): простой дешёвый поиск пустых просторных площадок (без дорог,
+## поселений, воды и сооружений) и прокладка в каждой сети длинных извилистых трасс с разворотами и элементами. Без
+## перебора участков и без построителя линии по рельефу: линии ведёт простой «ходок», рельеф под них готовит общее
+## формирование (TrailShaping при запекании), элементы ставит общий TrailComposer. Детерминирован по сиду.
 ##
-## Поиск: сетка через STRIDE клеток, расстояние до ближайшей занятой клетки (дороги, поселения, море, озёра, реки, кручи) (двухпроходная фаска 1 / √2), центр — самая
-## дальняя точка; радиус парка — это расстояние минус запас, не больше R_MAX.
-## Прокладка: магистраль от верхней точки области, затем ветки из случайных мест уже проложенных линий. Ходок шагает по
+## Поиск (build_all): сетка через STRIDE клеток, расстояние до ближайшей занятой клетки (дороги, поселения, море, озёра,
+## реки, кручи; двухпроходная фаска 1 / √2). Оценка клетки — простор + подходящий склон + перепад высот в окне вокруг неё;
+## лучшие клетки блоков сетки, не ближе друг к другу радиуса площадки, и есть кандидаты. Кандидату добавляется или
+## вычитается доступность (расстояние от площадки до ближайшей дороги или тропы): парк, к которому нельзя подъехать, не
+## нужен. Парки строятся по порядку ценности (с небольшой прибавкой за характер, которого ещё нет); следующий не ближе
+## занятого предыдущими (по фактической дальности его линий) и должен быть не хуже EXTRA_QUALITY: лучше один хороший
+## парк, чем три посредственных. Площадок нет — парков нет.
+## Характер площадки (по среднему склону окна): поляна (пологая), холмы, предгорье (умеренный склон). От него зависят
+## уклон, до которого ходок идёт, его тяга вниз и извилистость; вид трассы (park, flow, enduro, downhill, tech) — по уклону
+## самой линии, так что у парка есть и пологие, и динамичные линии, а не одна заготовка.
+## Прокладка: магистраль от верхней точки площадки, затем ветки из случайных мест уже проложенных линий. Ходок шагает по
 ## STEP м: плавные изгибы (сумма синусоид), уход к горизонтали на крутом склоне и лёгкий уклон вниз на пологом, разворот
-## радиуса HAIRPIN у края области или перед чужой линией. Ветка в конце ищет ближайшую линию и примыкает к ней — сеть.
+## радиуса HAIRPIN у края площадки или перед чужой линией. Ветка в конце ищет ближайшую линию и примыкает к ней — сеть.
 
+const MAX_PARKS := 3
+const PARK_QUALITY := 1.15   # первый парк: площадка хуже этой оценки парка не получает (нет склона, простора или перепада)
+const EXTRA_QUALITY := 1.5  # второй и третий парк только на заметно хорошей площадке
+const DIVERSITY := 0.15      # прибавка к ценности площадки за характер, которого в мире ещё нет
+const CANDIDATES := 8        # площадок-кандидатов с запасом: часть не пройдёт по доступу, соседству или длине
+const LAYOUT_TRIES := 5      # не больше стольких прокладок (каждая — работа ходока)
+const BLOCK := 12            # блок поиска кандидатов, клеток сетки: одна лучшая клетка на блок
+const GAP := 60.0            # между фактическими линиями соседних парков не меньше, м
+const ACCESS_FAR := 380.0    # парк дальше этого от дороги или тропы (от края площадки) не строится, м
+const MIN_LENGTH := 1000.0   # меньше этого суммарной длины и двух линий — парка нет, м
+const MIN_LINES := 2
+const LINE_MIN := 280.0      # линия короче сети не нужна: PARK_MIN 250 м плюс отступы концов (TrailWorldNetwork), м
+const CHARACTER_NAMES := {meadow = "Поляна", hills = "Холмы", foothill = "Предгорье"}
+## Ходок по характеру: до какого уклона идёт без штрафа, тяга вниз, множитель извилистости
+const WALKER := {meadow = {grade = 0.08, bias = 0.03, wind = 1.6}, hills = {grade = 0.10, bias = 0.04, wind = 1.0},
+	foothill = {grade = 0.14, bias = 0.07, wind = 0.7}}
 const STRIDE := 2            # шаг сетки поиска, клеток
 const SETTLE_R := 14.0       # поселение занимает круг такого радиуса вокруг центра, клеток
 const HUT_R := 4.0           # и вокруг каждого дома
 const STEEP_LAND := 0.35     # круче (≈19°) земля для парка занята: на кручах полотно уходит в глубокие насыпи, а запекание
                              # рельефа под них (TrailBuilder.bake_elements при каждой загрузке) растёт с шириной зоны работ
-const MARGIN := 24.0         # запас от края области до линий, м
+const STEEP_ONE := 0.7       # одна клетка круче (≈35°) занята всегда
+const MARGIN := 24.0        # запас от края области до линий, м
 const R_MIN := 50.0          # меньше — парка нет, м
-const R_MAX := 450.0         # дальше от центра парк не уходит, м
+const R_GOOD := 160.0        # площадка такого радиуса — полный балл за простор: пустого места мира больше почти не бывает, м
+const R_MAX := 450.0        # дальше от центра парк не уходит, м
 const STEP := 4.0            # шаг линии, м
 const HAIRPIN := 8.0         # радиус разворота, м
 const SEP := 12.0            # линии не ближе друг к другу, м
 const LOOK := 24.0           # взгляд вперёд, м
 const OWN_SKIP := 70.0       # свою линию ближе этой станции назад не считаем препятствием, м
 const CELL := 8.0            # клетка индекса занятости, м
-const GRADE := 0.10          # круче вдоль линии — штраф: на склоне линия идёт серпантином
 const TRUNK := 2400.0        # длина магистрали, м
 const BRANCH := Vector2(500.0, 1300.0)
-const TARGET := 3000.0       # общая длина парка, м (ориентир: запекание растёт с длиной)
+const TARGET := 3000.0       # общая длина парка, м: ориентир для большой площадки (запекание растёт с длиной)
+const TARGET_BASE := 600.0
+const TARGET_PER_M := 10.0  # площадка меньше — парк короче: TARGET_BASE + радиус × это, м
+const TARGET_MIN := 1400.0
 const ATTEMPTS := 80
 const DEAD_END := 300.0      # ветка без примыкания остаётся, если не короче, м
 const SEEK := 220.0          # ветка ищет примыкание не дальше, м
 const WIDTH := 3.5
-const PROFILES := ["flow", "mountain", "mixed", "technical", "flow", "forest"]
+## Вид линии по её среднему уклону (круче — динамичнее), по кругу внутри полосы: у парка и пологие, и крутые, и техничные линии
+const STYLES := [[0.05, ["park", "park", "flow"]], [0.09, ["flow", "park", "tech", "flow"]], [0.14, ["enduro", "flow", "tech"]],
+	[1.0, ["downhill", "enduro", "tech"]]]
 const NAMES := ["Магистраль", "Горная", "Смешанная", "Техничная", "Флоу", "Лесная"]
 
 var center := Vector2.ZERO   ## м
 var quality := 0.0           ## оценка площадки: простор + подходящий склон + перепад высот (до ~2,1); 0 — выбора не было
+var value := 0.0             ## оценка с учётом доступности: по ней парки идут по порядку
+var access := INF            ## м от края площадки до ближайшей дороги или тропы (INF — не считалось)
 var radius := 0.0            ## м, до ближайшего занятого места от центра
 var extent := 0.0            ## м, самая дальняя точка трасс от центра
+var character := "hills"     ## meadow (поляна), hills (холмы), foothill (предгорье)
+var park_name := ""
 var routes: Array[TrailDefinition] = []
+var styles: Array[String] = []   ## вид каждой линии (по номеру в routes): park, flow, enduro, downhill, tech
 var reason := ""
 var stats := {find_ms = 0.0, layout_ms = 0.0, length = 0.0, attempts = 0, stops = {}}
 
 var _h: Heightfield
+var _avoid: Array[Vector3] = [] # занятые другими парками круги: центр и радиус, м
+var _grade := 0.10
+var _bias := 0.04
+var _wind := 1.0
+var _target := TARGET
 var _rng := RandomNumberGenerator.new()
 var _occ := {}
 var _wet := {} # клетка -> у неё или рядом вода / край карты (_inside спрашивает одни и те же клетки много раз)
@@ -57,25 +97,94 @@ var _ground_fn := Callable()
 var _inside_fn := Callable()
 
 
-## Найти область в rect (клетки) и проложить парк. Пустой routes и reason — места нет.
-static func build(w: WorldData, h: Heightfield, rect: Rect2i, prefix: String) -> BikePark:
-	var park := BikePark.new()
-	park._h = h
-	park._rng.seed = hash(w.seed_text + "|bike_park")
+## Найти площадки в rect (клетки) и проложить на них парки: от нуля до MAX_PARKS, лучшие первыми. `access(Vector2) -> float` —
+## необязательно: расстояние от точки (м) до ближайшей дороги или тропы; без него доступность не учитывается.
+## Пустой массив — подходящего места нет (причина в stats последнего поиска: BikePark.last_reason).
+static var last_reason := ""
+static var last_stats := {}
+
+static func build_all(w: WorldData, h: Heightfield, rect: Rect2i, prefix: String, access := Callable()) -> Array[BikePark]:
+	var parks: Array[BikePark] = []
+	last_reason = ""
 	var t := Time.get_ticks_usec()
-	park._find(w, rect)
-	park.stats.find_ms = (Time.get_ticks_usec() - t) / 1000.0
-	if park.radius < R_MIN:
-		park.reason = "нет пустой области радиусом от %.0f м (самая большая %.0f м)" % [R_MIN, park.radius]
-		return park
-	t = Time.get_ticks_usec()
-	park._layout(prefix)
-	park.stats.layout_ms = (Time.get_ticks_usec() - t) / 1000.0
-	if park.routes.is_empty(): park.reason = "линии парка не проложились"
-	return park
+	var survey := _survey(w, h, rect)
+	var sites := _sites(survey, access)
+	var find_ms := (Time.get_ticks_usec() - t) / 1000.0
+	last_stats = {find_ms = find_ms, layout_ms = 0.0, sites = sites.size(), best_quality = 0.0, refused = {},
+		found = sites.map(func(s: Dictionary) -> String: return "%s r%.0f q%.2f v%.2f доступ %.0f (%.0f,%.0f)" % [s.character, s.radius, s.quality, s.value, s.access, s.center.x, s.center.y])}
+	if sites.is_empty():
+		last_reason = "нет пустой площадки радиусом от %.0f м с доступом к дорогам" % R_MIN
+		return parks
+	last_stats.best_quality = snappedf(float(sites[0].quality), 0.01)
+	var avoid: Array[Vector3] = []
+	var used := {}
+	var tries := 0
+	while parks.size() < MAX_PARKS and tries < LAYOUT_TRIES and not sites.is_empty():
+		var pick := 0
+		var best := -INF
+		for i in sites.size():
+			var v: float = sites[i].value + (0.0 if used.has(sites[i].character) else DIVERSITY)
+			if v > best:
+				best = v
+				pick = i
+		var site: Dictionary = sites.pop_at(pick)
+		if float(site.value) < (PARK_QUALITY if parks.is_empty() else EXTRA_QUALITY):
+			_refuse("оценка площадки ниже нужной")
+			continue
+		var near := false
+		for a: Vector3 in avoid:
+			if Vector2(a.x, a.y).distance_to(site.center) < a.z + R_MIN: near = true
+		if near:
+			_refuse("площадка у другого парка")
+			continue
+		tries += 1
+		var park := BikePark.new()
+		park._h = h
+		park._rect = rect
+		park._field = survey.d
+		park._gw = survey.gw
+		park._gh = survey.gh
+		park.center = site.center
+		park.radius = site.radius
+		park.quality = site.quality
+		park.value = site.value
+		park.access = site.access
+		park.character = site.character
+		park._avoid = avoid.duplicate()
+		park._setup()
+		park._rng.seed = hash("%s|bike_park|%d,%d" % [w.seed_text, roundi(site.center.x), roundi(site.center.y)])
+		var started := Time.get_ticks_usec()
+		park._layout("%s%d" % [prefix, parks.size()])
+		park.stats.layout_ms = (Time.get_ticks_usec() - started) / 1000.0
+		last_stats.layout_ms += park.stats.layout_ms
+		# считаются линии, которые сеть возьмёт (TrailWorldNetwork: без концов по PARK_END, не короче PARK_MIN)
+		var usable := 0
+		var usable_length := 0.0
+		for d in park.routes:
+			if d.route_length() >= LINE_MIN:
+				usable += 1
+				usable_length += d.route_length()
+		if usable < MIN_LINES or usable_length < MIN_LENGTH:
+			_refuse("линии парка не проложились (годных %d, %.0f м)" % [usable, usable_length])
+			continue
+		avoid.append(Vector3(park.center.x, park.center.y, park.extent + GAP))
+		used[park.character] = true
+		var base: String = CHARACTER_NAMES[park.character]
+		var same := 0
+		for other in parks:
+			if other.character == park.character: same += 1
+		park.park_name = base if same == 0 else "%s %d" % [base, same + 1]
+		parks.append(park)
+	if parks.is_empty(): last_reason = "площадки есть (%d), но парк ни на одной не вышел: %s" % [last_stats.sites, last_stats.refused]
+	return parks
 
 
-func _find(w: WorldData, rect: Rect2i) -> void:
+static func _refuse(why: String) -> void:
+	last_stats.refused[why] = int(last_stats.refused.get(why, 0)) + 1
+
+
+## Занятость сетки поиска и расстояние до занятого (в клетках сетки): {d, slope, height, gw, gh}.
+static func _survey(w: WorldData, h: Heightfield, rect: Rect2i) -> Dictionary:
 	var gw := maxi(1, rect.size.x / STRIDE)
 	var gh := maxi(1, rect.size.y / STRIDE)
 	var d := PackedFloat32Array()
@@ -88,7 +197,7 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 	var lake := w.lake
 	var river := w.river
 	var acc := w.acc
-	var hv := _h.hv
+	var hv := h.hv
 	var slope := PackedFloat32Array() # крутизна и высота клеток сетки поиска: для оценки, годится ли место под парк
 	var height := PackedFloat32Array()
 	slope.resize(gw * gh)
@@ -108,8 +217,12 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 					if (has_mask and mask[i] >= 2) or ocean[i] != 0 or lake[i] != 0 or (river[i] != 0 and acc[i] >= WorldData.RIVER_ACC): busy = true
 					var sx := (hv[mini(i + 1, w.N - 1)] - hv[maxi(i - 1, 0)]) / (2.0 * GameConfig.TILE)
 					var sz := (hv[mini(i + w.W, w.N - 1)] - hv[maxi(i - w.W, 0)]) / (2.0 * GameConfig.TILE)
-					if sx * sx + sz * sz > STEEP_LAND * STEEP_LAND: busy = true
-					steepness += sqrt(sx * sx + sz * sz)
+					var here := sqrt(sx * sx + sz * sz)
+					if here > STEEP_ONE: busy = true # отвесная клетка (скала, обрыв) — не пройти
+					steepness += here
+			# Крутая земля по клетке блока, а не по каждой клетке: рябь и овражки горной детали (GEO 9) единичными клетками круче
+			# порога не делают площадку непригодной — полотно положат земляные работы
+			if steepness / (STRIDE * STRIDE) > STEEP_LAND: busy = true
 			slope[gz * gw + gx] = steepness / (STRIDE * STRIDE)
 			height[gz * gw + gx] = hv[cz * w.W + cx]
 			if busy: d[gz * gw + gx] = 0.0
@@ -117,7 +230,7 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 	for v: SettlementData in w.settlements:
 		discs.append(Vector3(v.x, v.y, SETTLE_R))
 		for hut in v.huts: discs.append(Vector3(hut.x, hut.y, HUT_R))
-	for s: Dictionary in _h.structures:
+	for s: Dictionary in h.structures:
 		var foot := TrailSite.structure_foot(s)
 		var c := foot.get_center() / GameConfig.TILE
 		discs.append(Vector3(c.x, c.y, foot.size.length() * 0.5 / GameConfig.TILE + 2.0))
@@ -133,27 +246,26 @@ func _find(w: WorldData, rect: Rect2i) -> void:
 		for gx in range(1, gw - 1):
 			var i := gz * gw + gx
 			d[i] = minf(d[i], minf(minf(d[i - 1] + 1.0, d[i - gw] + 1.0), minf(d[i - gw - 1] + diag, d[i - gw + 1] + diag)))
-	var best := 0
 	for gz in range(gh - 2, -1, -1):
 		for gx in range(gw - 2, 0, -1):
 			var i := gz * gw + gx
 			d[i] = minf(d[i], minf(minf(d[i + 1] + 1.0, d[i + gw] + 1.0), minf(d[i + gw + 1] + diag, d[i + gw - 1] + diag)))
-			if d[i] > d[best]: best = i
-	best = _best_site(d, slope, height, gw, gh, best)
-	center = (Vector2(rect.position) + Vector2(best % gw, best / gw) * STRIDE + Vector2.ONE * STRIDE * 0.5) * GameConfig.TILE
-	radius = minf(R_MAX, d[best] * STRIDE * GameConfig.TILE - MARGIN)
-	_field = d
-	_rect = rect
-	_gw = gw
-	_gh = gh
+	return {d = d, slope = slope, height = height, gw = gw, gh = gh, rect = rect}
 
 
-## Место парка: не просто самая большая пустая область, а та, где есть чем кататься. Парку нужна просторная площадка
-## (расстояние до занятого), склон около 4–20 % вокруг (на ровном нечего строить, на крутом линии уходят в глубокие
-## насыпи) и перепад высот, из которого получаются развороты, прыжки и вид. Оценка по окну вокруг клетки; места с радиусом
-## меньше R_MIN не берутся, нет ни одного — прежний выбор (самая просторная область).
-func _best_site(d: PackedFloat32Array, slope: PackedFloat32Array, height: PackedFloat32Array, gw: int, gh: int, fallback: int) -> int:
+## Площадки-кандидаты, лучшие по ценности первыми: [{center, radius, quality, value, access, character, cell}].
+## Не просто самая большая пустая область, а та, где есть чем кататься. Парку нужна просторная площадка (расстояние до
+## занятого), склон около 4–20 % вокруг (на ровном нечего строить, на крутом линии уходят в глубокие насыпи) и перепад
+## высот, из которого получаются развороты, прыжки и вид. Оценка по окну вокруг клетки; места с радиусом меньше R_MIN не
+## берутся. От каждого блока сетки берётся лучшая клетка; кандидаты не ближе радиуса площадки друг к другу.
+static func _sites(survey: Dictionary, access: Callable) -> Array[Dictionary]:
 	const WINDOW := 14 # половина окна, клеток сетки поиска (около 110 м)
+	var d: PackedFloat32Array = survey.d
+	var slope: PackedFloat32Array = survey.slope
+	var height: PackedFloat32Array = survey.height
+	var gw: int = survey.gw
+	var gh: int = survey.gh
+	var rect: Rect2i = survey.rect
 	var stride := gw + 1
 	var sum_slope := PackedFloat64Array()
 	var sum_h := PackedFloat64Array()
@@ -175,8 +287,15 @@ func _best_site(d: PackedFloat32Array, slope: PackedFloat32Array, height: Packed
 			sum_slope[at] = sum_slope[up] + row_s
 			sum_h[at] = sum_h[up] + row_h
 			sum_h2[at] = sum_h2[up] + row_h2
-	var best := fallback
-	var best_score := -INF
+	var bw := ceili(float(gw) / BLOCK)
+	var bh := ceili(float(gh) / BLOCK)
+	var block_score := PackedFloat32Array()
+	var block_cell := PackedInt32Array()
+	var block_slope := PackedFloat32Array()
+	block_score.resize(bw * bh)
+	block_score.fill(-1.0)
+	block_cell.resize(bw * bh)
+	block_slope.resize(bw * bh)
 	var min_d := (R_MIN + MARGIN) / (STRIDE * GameConfig.TILE)
 	for gz in range(1, gh - 1):
 		for gx in range(1, gw - 1):
@@ -191,14 +310,47 @@ func _best_site(d: PackedFloat32Array, slope: PackedFloat32Array, height: Packed
 			var m := (sum_h[z1 * stride + x1] - sum_h[z0 * stride + x1] - sum_h[z1 * stride + x0] + sum_h[z0 * stride + x0]) / count
 			var m2 := (sum_h2[z1 * stride + x1] - sum_h2[z0 * stride + x1] - sum_h2[z1 * stride + x0] + sum_h2[z0 * stride + x0]) / count
 			var relief := sqrt(maxf(0.0, m2 - m * m))
-			var fit := clampf(1.0 - absf(s - 0.11) / 0.09, 0.0, 1.0)
-			var size := minf(room * STRIDE * GameConfig.TILE - MARGIN, R_MAX) / R_MAX
+			# полка вокруг 11 %: от 7,5 до 14,5 % — полная оценка, дальше убывает (поляна и предгорье тоже годятся, но хуже)
+			var fit := clampf(1.0 - maxf(0.0, absf(s - 0.11) - 0.035) / 0.075, 0.0, 1.0)
+			var size := minf(room * STRIDE * GameConfig.TILE - MARGIN, R_GOOD) / R_GOOD
 			var score := size + 0.8 * fit + 0.3 * clampf(relief / 12.0, 0.0, 1.0)
-			if score > best_score:
-				best_score = score
-				best = gz * gw + gx
-	quality = maxf(0.0, best_score)
-	return best
+			var b := (gz / BLOCK) * bw + gx / BLOCK
+			if score > block_score[b]:
+				block_score[b] = score
+				block_cell[b] = gz * gw + gx
+				block_slope[b] = s
+	var order := range(bw * bh).filter(func(b: int) -> bool: return block_score[b] >= 0.0)
+	order.sort_custom(func(a: int, b: int) -> bool: return block_score[a] > block_score[b])
+	var sites: Array[Dictionary] = []
+	for b: int in order:
+		if sites.size() >= CANDIDATES: break
+		var cell := block_cell[b]
+		var at := (Vector2(rect.position) + Vector2(cell % gw, cell / gw) * STRIDE + Vector2.ONE * STRIDE * 0.5) * GameConfig.TILE
+		var r := minf(R_MAX, d[cell] * STRIDE * GameConfig.TILE - MARGIN)
+		var crowded := false
+		for other: Dictionary in sites:
+			if (other.center as Vector2).distance_to(at) < maxf(float(other.radius), r) + R_MIN: crowded = true
+		if crowded: continue
+		var s: float = block_slope[b]
+		var distance := INF
+		var bonus := 0.0
+		if access.is_valid():
+			distance = maxf(0.0, float(access.call(at)) - r)
+			if distance > ACCESS_FAR: continue
+			bonus = 0.2 if distance <= 120.0 else (0.0 if distance <= 260.0 else -0.2)
+		sites.append({center = at, radius = r, quality = block_score[b], value = block_score[b] + bonus, access = distance,
+			character = "meadow" if s < 0.06 else ("foothill" if s >= 0.13 else "hills"), cell = cell})
+	sites.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.value > b.value)
+	return sites
+
+
+## Настройки ходка и длина парка по характеру и размеру площадки.
+func _setup() -> void:
+	var walker: Dictionary = WALKER[character]
+	_grade = walker.grade
+	_bias = walker.bias
+	_wind = walker.wind
+	_target = clampf(TARGET_BASE + radius * TARGET_PER_M, TARGET_MIN, TARGET)
 
 
 func _ground(p: Vector2) -> float:
@@ -227,11 +379,11 @@ func _layout(prefix: String) -> void:
 		if _inside(p) and _ground(p) > _ground(top): top = p
 	var heading := (center - top).angle() if top != center else _rng.randf() * TAU
 	_mark(top, 0, 0.0)
-	var trunk := _walk(top, heading, TRUNK, 0, false)
+	var trunk := _walk(top, heading, minf(TRUNK, _target * 0.8), 0, false)
 	if trunk.size() < 20: return
 	_add(trunk, prefix)
 	var total := routes[0].route_length()
-	while total < TARGET and stats.attempts < ATTEMPTS:
+	while total < _target and stats.attempts < ATTEMPTS:
 		stats.attempts += 1
 		# начало ветки — лучшее из нескольких случайных мест: туда, где впереди больше свободной земли
 		var at := Vector2.ZERO
@@ -289,7 +441,7 @@ func _walk(start: Vector2, heading: float, length: float, route: int, seek: bool
 				if target.distance_to(p) < STEP * 1.5:
 					if target.distance_to(pts[-1]) > 0.5: pts.append(target)
 					return pts
-		var want := (0.05 * sin(s / 43.0 + ph.x) + 0.035 * sin(s / 17.0 + ph.y)) * STEP
+		var want := (0.05 * sin(s / 43.0 + ph.x) + 0.035 * sin(s / 17.0 + ph.y)) * STEP * _wind
 		if seeking and target != Vector2.INF:
 			want = clampf(Vector2.from_angle(a).angle_to(target - p), -max_turn, max_turn)
 		var best := INF
@@ -300,7 +452,7 @@ func _walk(start: Vector2, heading: float, length: float, route: int, seek: bool
 			var dir := Vector2.from_angle(a + o)
 			var next := p + dir * STEP
 			var g := (_ground(next) - here_y) / STEP
-			var cost := absf(o - want) + maxf(0.0, absf(g) - GRADE) * 40.0 + absf(g + 0.04) * 2.0
+			var cost := absf(o - want) + maxf(0.0, absf(g) - _grade) * 40.0 + absf(g + _bias) * 2.0
 			# взгляд вперёд только добавляет к цене: ход, который уже не лучше найденного, дальше не проверяется
 			if cost >= best or not _free(next, route, s, start, target): continue
 			for j in range(1, 5):
@@ -339,6 +491,8 @@ func _free(p: Vector2, route: int, s: float, start: Vector2, target: Vector2) ->
 
 func _inside(p: Vector2) -> bool:
 	if _inside_fn.is_valid(): return _inside_fn.call(p)
+	for a: Vector3 in _avoid:
+		if Vector2(a.x, a.y).distance_squared_to(p) < a.z * a.z: return false
 	# воду (и ручьи) линии пока обходят: у воды рельеф не формируется, и переход через ручей выходит крутым
 	var cell := Vector2i((p / GameConfig.TILE).floor())
 	var wet: Variant = _wet.get(cell)
@@ -403,13 +557,22 @@ func _add(points: PackedVector2Array, prefix: String) -> void:
 	var n := routes.size()
 	var d := TrailDefinition.new()
 	d.id = "%s/%d" % [prefix, n]
-	d.title = "Велопарк · %s" % (NAMES[n] if n < NAMES.size() else "Ветка %d" % n)
+	d.title = NAMES[n] if n < NAMES.size() else "Ветка %d" % n
 	d.kind = "mountain"
 	d.width = WIDTH
 	d.surface = RoadSurface.DIRT
 	d.earthwork = 1.0
 	d.auto_bank = 1.0
 	d.points = points
-	var profile: Dictionary = TrailComposer.PROFILES[PROFILES[n % PROFILES.size()]]
-	d.elements.assign(TrailComposer.compose(d, profile, _rng.randi(), _ground).elements)
 	routes.append(d)
+	# вид линии — по её среднему уклону; в мире элементы ставит общий построитель при приёмке, черновые не нужны
+	var grade := absf(_ground(points[0]) - _ground(points[-1])) / maxf(1.0, d.route_length())
+	var kinds: Array = STYLES[-1][1]
+	for band: Array in STYLES:
+		if grade < float(band[0]):
+			kinds = band[1]
+			break
+	styles.append(kinds[n % kinds.size()])
+	if _h == null:
+		var profile: Dictionary = TrailComposer.PROFILES[["flow", "mountain", "mixed", "technical", "flow", "forest"][n % 6]]
+		d.elements.assign(TrailComposer.compose(d, profile, _rng.randi(), _ground).elements)

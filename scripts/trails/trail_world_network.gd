@@ -49,9 +49,10 @@ const ALT_MIN_LENGTH := 400.0 # вариант берёт участки не к
 const VARIANT_ELEMENTS := 3   # у варианта не меньше стольких элементов
 const VARIANT_APART := 12.0   # и в среднем он не ближе этого к основной линии, м
 const END_MARGIN := 60.0       # последний участок маршрута кончается не ближе этого к концу коридора, м
-const PARK_LINES := 7         # не больше стольких самых длинных линий трейл-парка
-const PARK_QUALITY := 1.0     # площадка хуже этой оценки (BikePark.quality) парка не получает: нет склона, простора или перепада
-const PARK_GAIN := 6.0        # линий на единицу оценки сверх PARK_QUALITY (две в худшем случае): хорошая площадка — больше линий
+const MODE_PARKS := "parks"     # обычная игра: только велопарки (BikePark)
+const MODE_NETWORK := "network" # опыты: универсальная сеть маршрутов вдоль коридоров и парк
+const PARK_LINES := 7         # не больше стольких самых длинных линий одного трейл-парка
+const PARK_GAIN := 6.0        # линий на единицу оценки сверх BikePark.PARK_QUALITY (две в худшем случае): хорошая площадка — больше линий
 const PARK_MIN := 250.0       # короче линия парка не нужна, м
 const PARK_END := 14.0        # концы линии парка отступают от родительской, м
 const DIFFICULTY := [0.25, 0.4, 0.55]
@@ -70,44 +71,63 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	var input_ms := Time.get_ticks_msec() - started
 	input.earthwork_limits = EARTHWORKS.duplicate()
 	var budget := int(options.get("probe_budget", PROBES))
-	var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
-		{area = area.grow(-MARGIN), probe_budget = budget, corridor = CORRIDOR, rideable = true})
-	surveys += 1
-	var corridors := search.find(w.seed_num)
-	# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
-	# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+	# Режим: «parks» — только велопарки (обычная игра); «network» — прежняя универсальная сеть маршрутов вдоль коридоров
+	# (опыты и тесты: поиск коридоров, маршруты, варианты) вместе с парком. Без ключа — прежняя сеть.
+	var parks_only: bool = options.get("mode", MODE_NETWORK) == MODE_PARKS
+	var search_stats := {sites = 0, budget_exhausted = false}
+	var corridors: Array[Dictionary] = []
 	# лес и поляны мира (StageVegetation.cover_at) участвуют в оценке потенциала: лесные траверсы, открытые мягкие склоны
 	var cover := func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE), floori(p.y / GameConfig.TILE))
-	var mean_work := 0.0
-	for c: Dictionary in corridors: mean_work += float(c.probe.build_cost)
-	mean_work = maxf(0.001, mean_work / maxi(1, corridors.size()))
-	for c: Dictionary in corridors:
-		c.probe.points = _downhill(input, c.probe.points)
-		c.potential = Potential.assess(input, c.probe.points, cover)
-		c.rank = Potential.rank(c.potential, float(c.probe.length), float(c.probe.build_cost) / mean_work)
-	corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
-	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [],
-		area = area, stats = {survey = search.stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
+	if not parks_only:
+		var search := Search.new({size = w.W, seed = w.seed_num, heights = input.heights, water = input.water, input = input},
+			{area = area.grow(-MARGIN), probe_budget = budget, corridor = CORRIDOR, rideable = true})
+		surveys += 1
+		corridors.assign(search.find(w.seed_num))
+		search_stats = search.stats
+		# Первыми места, которые лучше всего подходят какому-то виду катания (спуск, неровность, вид), и среди них длинные.
+		# Границы работы — метры и числа, не время: секундомер только для диагностики и не выбирает канонический мир.
+		var mean_work := 0.0
+		for c: Dictionary in corridors: mean_work += float(c.probe.build_cost)
+		mean_work = maxf(0.001, mean_work / maxi(1, corridors.size()))
+		for c: Dictionary in corridors:
+			c.probe.points = _downhill(input, c.probe.points)
+			c.potential = Potential.assess(input, c.probe.points, cover)
+			c.rank = Potential.rank(c.potential, float(c.probe.length), float(c.probe.build_cost) / mean_work)
+		corridors.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+			return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
+	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [], parks = [],
+		area = area, stats = {mode = MODE_PARKS if parks_only else MODE_NETWORK, survey = search_stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
 	var ctx := {w = w, h = h, input = input, cover = cover, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0, walls = []}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
-	if budget > 0: park = _park_candidates(w, h, ctx.area)
-	plan.stats.park = {ms = Time.get_ticks_msec() - park_started, lines = park.size(), quality = snappedf(park_quality, 0.01)}
-	# Парк — сеть: подъезд от ближайшего пути к магистрали (самой длинной линии) и выезд с конца каждой линии к другим линиям
-	# или дорогам, чтобы после спуска можно было ехать дальше и вернуться к началу.
+	if budget > 0: park = _park_candidates(ctx)
+	plan.stats.park = {ms = Time.get_ticks_msec() - park_started, lines = park.size(), parks = plan.parks.size(), quality = snappedf(park_quality, 0.01),
+		find_ms = snappedf(float(BikePark.last_stats.get("find_ms", 0.0)), 0.1), layout_ms = snappedf(float(BikePark.last_stats.get("layout_ms", 0.0)), 0.1),
+		refused = BikePark.last_stats.get("refused", {}), found = BikePark.last_stats.get("found", []), reason = BikePark.last_reason}
+	# Парк — сеть: подъезд от ближайшего пути к началу линии парка (магистрали, а если к ней подъехать не вышло — следующей линии)
+	# и выезд с конца каждой линии к другим линиям или дорогам, чтобы после спуска можно было ехать дальше и вернуться к началу.
 	var park_index := 0
+	var entered := {}
+	var built := {} # парк -> принятых линий
 	for candidate: Dictionary in park:
 		plan.stats.attempted += 1
 		ctx.route = -100 - park_index
+		ctx.park = true # линия парка — не участок маршрута: конец выкатом не требуется
 		var line := _leg(ctx, candidate.points, candidate.region, candidate.style, candidate.title, candidate.trail_seed, candidate.difficulty, false)
 		if line != null:
+			built[candidate.park] = int(built.get(candidate.park, 0)) + 1
 			ctx.width = line.width
 			var tail := (line.points[-1] - line.points[-2]).normalized()
-			if park_index == 0: _entry(ctx, line.points[0], ctx.route, line.title, candidate.difficulty, candidate.trail_seed + 97)
+			if not entered.has(candidate.park):
+				var entry := _entry(ctx, line.points[0], ctx.route, line.title, candidate.difficulty, candidate.trail_seed + 97)
+				if entry != null or _road_distance(ctx.input, line.points[0]) < LINK_MIN: entered[candidate.park] = true # или и так у дороги
 			_exit(ctx, line.points[-1], tail, ctx.route, line.title, candidate.difficulty, candidate.trail_seed + 191)
 		park_index += 1
 	ctx.erase("route")
+	ctx.erase("park")
+	for info: Dictionary in plan.parks:
+		info.lines = int(built.get(info.index, 0))
+		info.access = entered.has(info.index)
 	var route_index := 0
 	for corridor: Dictionary in corridors:
 		if plan.stats.length_m >= ctx.length_target or plan.stats.work_m >= ctx.work_limit: break
@@ -115,14 +135,16 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 		plan.stats.corridors.append(roundi(corridor.probe.length))
 		route_index = _route(ctx, corridor.probe.points, corridor.trail_seed, route_index)
 	ctx.erase("route")
-	_alternatives(ctx)
+	if not parks_only: _alternatives(ctx)
 	if not plan.routes.is_empty(): _districts(ctx)
 	if not plan.routes.is_empty():
 		RoadSurface.rebuild_map(w)
 		plan.state = "found"
 		plan.reason = ""
 		plan.definition = plan.routes[0]
-	plan.stats.budget_exhausted = search.stats.budget_exhausted or plan.stats.attempted < corridors.size() + park.size()
+	elif parks_only:
+		plan.reason = BikePark.last_reason if not BikePark.last_reason.is_empty() else "парки не принялись"
+	plan.stats.budget_exhausted = search_stats.budget_exhausted or plan.stats.attempted < corridors.size() + park.size()
 	for style: String in ctx.styles: ctx.styles[style] = roundi(ctx.styles[style])
 	plan.stats.styles = ctx.styles
 	plan.stats.total_ms = Time.get_ticks_msec() - started
@@ -564,7 +586,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 	var hint := PackedVector2Array()
 	for p: Vector2 in world_hint: hint.append(p - site.origin_m())
 	var settings := {bounds = Rect2(Vector2(region.position - site.origin) * GameConfig.TILE, Vector2(region.size) * GameConfig.TILE).grow(-WORK_EDGE),
-		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, keep_start = true, strict_finish = ctx.get("reference") == null and not ctx.get("link", false), persona = ctx.get("persona", Character.persona(seed_value)), width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
+		difficulty = difficulty, modification = MODIFICATION[style], mandatory_gaps = true, keep_start = true, strict_finish = ctx.get("reference") == null and not ctx.get("link", false) and not ctx.get("park", false), persona = ctx.get("persona", Character.persona(seed_value)), width = ctx.get("width", 0.0) if is_leg else 0.0, arc = ctx.get("arc", Vector2(0.0, 1.0)) if is_leg else Vector2(0.0, 1.0), peak = ctx.get("peak", 0.75), clear_ends = LEG_CLEAR if is_leg else 0.0, start_speed = float(ctx.get("start_speed", 3.0)) if is_leg else 3.0,
 		# лесистость и поляны под линией (StageVegetation.cover_at): горные и природные характеры меняют по ним настроение участков
 		cover = func(p: Vector2) -> Vector2: return StageVegetation.cover_at(w, floori(p.x / GameConfig.TILE) + site.origin.x, floori(p.y / GameConfig.TILE) + site.origin.y),
 		soft = func(p: Vector2) -> bool:
@@ -669,46 +691,71 @@ static func _too_deep(h: Heightfield, d: TrailDefinition) -> float:
 		s += 2.0
 	return INF
 
-## Трейл-парк: линии BikePark в самой большой свободной области как готовые кандидаты сети. Только прокладка и кандидаты:
-## элементы, формирование и приёмка — общие. Концы отступают от родительской линии: сеть держит пути раздельно.
-static func _park_candidates(w: WorldData, h: Heightfield, rect: Rect2i) -> Array[Dictionary]:
-	var out: Array[Dictionary] = []
-	var park := BikePark.build(w, h, rect, "park")
-	park_quality = park.quality
-	# Парк строится там, где площадка этого стоит: чем лучше склон, простор и перепад высот, тем больше линий; плохой площадке
-	# парка нет (раньше в каждом мире строились одни и те же три линии).
-	if park.routes.is_empty() or park.quality < PARK_QUALITY: return out
-	var wanted := clampi(roundi(2.0 + (park.quality - PARK_QUALITY) * PARK_GAIN), 2, PARK_LINES)
-	var lines := park.routes.duplicate()
-	lines.sort_custom(func(a: TrailDefinition, b: TrailDefinition) -> bool: return a.route_length() > b.route_length())
-	var picked: Array[TrailDefinition] = []
-	for d: TrailDefinition in lines:
-		if d.route_length() - PARK_END * 2.0 >= PARK_MIN: picked.append(d)
-		if picked.size() >= wanted: break
-	# Сложность по крутизне линии: самая пологая треть — лёгкая, круче — средняя и сложная
-	var steepness: Array[float] = []
-	for d: TrailDefinition in picked:
-		steepness.append(absf(h.ground_at(d.points[0].x, d.points[0].y) - h.ground_at(d.points[-1].x, d.points[-1].y)) / maxf(1.0, d.route_length()))
-	var order := range(picked.size())
-	order.sort_custom(func(a: int, b: int) -> bool: return steepness[a] < steepness[b])
-	var tier := {}
-	for rank in order.size(): tier[order[rank]] = mini(2, rank * 3 / order.size())
-	for index in picked.size():
-		var d: TrailDefinition = picked[index]
-		var total := d.route_length()
-		var points := PackedVector2Array()
-		var s := PARK_END
-		while s < total - PARK_END:
-			points.append(d.point_at(s))
-			s += 4.0
-		var box := Rect2(points[0], Vector2.ZERO)
-		for p in points: box = box.expand(p)
-		var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * 8
-		var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * 8
-		out.append({region = Rect2i(lo, hi - lo).intersection(rect), title = d.title, trail_seed = posmod(hash([w.seed_num, d.id]), 99999) + 1, points = points,
-			difficulty = DIFFICULTY[tier[index]], style = "park"})
-	return out
+## Расстояние от точки до ближайшего пути мира (дороги, тропы; принятые линии сети не считаются), м; INF — путей нет.
+static func _road_distance(input: GI, from: Vector2) -> float:
+	var best := INF
+	for path: Dictionary in input.existing_paths:
+		if path.has("route"): continue
+		var pts: PackedVector2Array = path.points
+		for k in range(1, pts.size()):
+			best = minf(best, from.distance_squared_to(Geometry2D.get_closest_point_to_segment(from, pts[k - 1], pts[k])))
+	return sqrt(best) if best < INF else INF
 
+## Трейл-парки: площадки и линии BikePark (от нуля до трёх, по оценке простора, склона, перепада и доступа от дорог) как
+## готовые кандидаты сети. Только прокладка и кандидаты: элементы, формирование и приёмка — общие. Описание каждого парка
+## — в ctx.plan.parks. Концы отступают от родительской линии: сеть держит пути раздельно.
+static func _park_candidates(ctx: Dictionary) -> Array[Dictionary]:
+	var out: Array[Dictionary] = []
+	var w: WorldData = ctx.w
+	var h: Heightfield = ctx.h
+	var input: GI = ctx.input
+	var rect: Rect2i = ctx.area
+	park_quality = 0.0
+	var parks := BikePark.build_all(w, h, rect, "park", func(p: Vector2) -> float: return _road_distance(input, p))
+	var line_index := 0
+	for index in parks.size():
+		var park := parks[index]
+		park_quality = maxf(park_quality, park.quality)
+		# чем лучше склон, простор и перепад высот, тем больше линий
+		var wanted := clampi(roundi(2.0 + (park.quality - BikePark.PARK_QUALITY) * PARK_GAIN), 2, PARK_LINES)
+		var order_of: Array[int] = []
+		order_of.assign(range(park.routes.size()))
+		order_of.sort_custom(func(a: int, b: int) -> bool: return park.routes[a].route_length() > park.routes[b].route_length())
+		var picked: Array[int] = []
+		for n: int in order_of:
+			if park.routes[n].route_length() - PARK_END * 2.0 >= PARK_MIN: picked.append(n)
+			if picked.size() >= wanted: break
+		# Сложность по крутизне линии: самая пологая треть — лёгкая, круче — средняя и сложная
+		var steepness: Array[float] = []
+		for n: int in picked:
+			var d: TrailDefinition = park.routes[n]
+			steepness.append(absf(h.ground_at(d.points[0].x, d.points[0].y) - h.ground_at(d.points[-1].x, d.points[-1].y)) / maxf(1.0, d.route_length()))
+		var order := range(picked.size())
+		order.sort_custom(func(a: int, b: int) -> bool: return steepness[a] < steepness[b])
+		var tier := {}
+		for rank in order.size(): tier[order[rank]] = mini(2, rank * 3 / maxi(1, order.size()))
+		var title := "Велопарк %s" % park.park_name
+		var length := 0.0
+		for slot in picked.size():
+			var d: TrailDefinition = park.routes[picked[slot]]
+			var total := d.route_length()
+			length += total
+			var points := PackedVector2Array()
+			var s := PARK_END
+			while s < total - PARK_END:
+				points.append(d.point_at(s))
+				s += 4.0
+			var box := Rect2(points[0], Vector2.ZERO)
+			for p in points: box = box.expand(p)
+			var lo := Vector2i((box.position / GameConfig.TILE).floor()) - Vector2i.ONE * 8
+			var hi := Vector2i((box.end / GameConfig.TILE).ceil()) + Vector2i.ONE * 8
+			out.append({park = index, region = Rect2i(lo, hi - lo).intersection(rect), title = "%s · %s" % [title, d.title], trail_seed = posmod(hash([w.seed_num, d.id]), 99999) + 1,
+				points = points, difficulty = DIFFICULTY[tier[slot]], style = park.styles[picked[slot]]})
+			line_index += 1
+		ctx.plan.parks.append({index = index, name = park.park_name, character = park.character, center = park.center, radius = snappedf(park.radius, 1.0),
+			extent = snappedf(park.extent, 1.0), quality = snappedf(park.quality, 0.01), access_m = snappedf(park.access, 1.0), candidates = picked.size(),
+			length = snappedf(length, 1.0), lines = 0, access = false})
+	return out
 ## Сборка и проверка одной линии. Один плохой участок не выбрасывает всю длинную линию: элемент, не прошедший проверку,
 ## снимается, а по месту, где не годится само полотно, линия обрезается до большего годного куска. Не больше ADMIT_PASSES
 ## сборок на кандидата. {d, prepared} или пусто (причина — в статистике). Лабораторный ремонт основания здесь не вызывается.
