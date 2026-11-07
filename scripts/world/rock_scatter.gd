@@ -7,8 +7,9 @@ extends RefCounted
 const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
 const OUTCROP_CHANCE := 0.12
-## Радиус выхода против радиуса валуна в clear_path (RockModels.OUTCROP_R * 1.2 / 4 м против CROWN_RADIUS).
-const OUTCROP_CLEAR := 1.25
+## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
+const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
+const FIELD_HALO := 6 # furthest uphill source read; also covers outcrop seating
 const TALUS_REACH := [2, 4, 6]
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 
@@ -23,6 +24,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var forest: PackedFloat64Array = f.forest
 	var paths: PackedFloat32Array = f.get("dist_path", PackedFloat32Array())
 	var path_mask: PackedByteArray = f.get("path", PackedByteArray())
+	# The full-plan fields carry distances, while ObjStore already owns the exact mask.
+	# Use it too: otherwise enlarged outcrop clearance was applied only to outer chunks.
+	var outcrop_path := path_mask
+	if outcrop_path.is_empty() and store.w != null: outcrop_path = store._path_mask
 	var villages: PackedByteArray = f.get("village", PackedByteArray())
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
@@ -71,7 +76,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 					var os := 0.85 + r * r * 0.95 + steep * 0.25
 					var otint := RockModels.OUTCROP_V + int(clampf(deposit * 3.0, 0.0, 2.0))
 					var reach := os * OUTCROP_CLEAR
-					if (path_mask.is_empty() or clear_path(path_mask, ox, oy, stride, ocx, ocy, reach)) \
+					if (outcrop_path.is_empty() or clear_path(outcrop_path, ox, oy, stride, ocx, ocy, reach)) \
 							and (villages.is_empty() or clear_path(villages, ox, oy, stride, ocx, ocy, reach)) \
 							and (rivers.is_empty() or clear_path(rivers, ox, oy, stride, ocx, ocy, reach)):
 						store.add(ocx, ocy, Biomes.T_ROCK, otint, os)

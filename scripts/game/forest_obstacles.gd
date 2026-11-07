@@ -20,7 +20,6 @@ const TRUNK := {
 }
 const ROCK_R := 1.15    # валун: сфера 1,1 м, сплюснутая до 1,43 × 0,83 × 1,1, при масштабе 1
 const ROCK_TOP := 1.07
-const OUTCROP_R := RockModels.OUTCROP_R * 0.85 # скальный выход: тело уже основания, края утоплены в склон
 ## Модель двух контактов: препятствие не выше этого (бревно, невысокий валун) встречает колесо, а не раму —
 ## колесо накатывается на его скруглённую кромку (wheel_support); выше — стена, как прежде, м
 const CLIMB_MAX := 0.45
@@ -161,7 +160,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
 					var seat := RockModels.seat(heights, x, z, s * 1.2, world.obj_v[o])
 					if seat.x != INF:
-						_put(out, x, z, x, z, OUTCROP_R * s * 1.2, seat.x, seat.x + RockModels.OUTCROP_TOP * s * 1.2 * seat.z)
+						_add_outcrop(out, x, z, s * 1.2, seat.x, Vector3(seat.y, seat.z, seat.w))
 					continue
 				var base := heights.ground_at(x, z)
 				if kind == Biomes.T_ROCK:
@@ -187,7 +186,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 			var base: float = items.ground[o]
 			if kind == Biomes.T_ROCK and RockModels.is_outcrop(items.v[o]):
 				var up: Vector3 = items.normals[o] if items.has("normals") else Vector3.UP
-				_put(out, x, z, x, z, OUTCROP_R * s * 1.2, base, base + RockModels.OUTCROP_TOP * s * 1.2 * up.y)
+				_add_outcrop(out, x, z, s * 1.2, base, up)
 				continue
 			if kind == Biomes.T_ROCK:
 				if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
@@ -196,6 +195,15 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 			else:
 				_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+
+
+## Same transformed block cores as the rendered outcrop; no per-object collision nodes.
+func _add_outcrop(out: Dictionary, x: float, z: float, scale: float, base: float, up: Vector3) -> void:
+	var origin := Vector2(world.world_origin) * TILE
+	var xf := RockModels.outcrop_transform(x, z, scale, up, base, origin)
+	var solids := RockModels.outcrop_solids(xf, RockModels.outcrop_form(x, z, origin))
+	for at in range(0, solids.size(), STRIDE):
+		_put(out, solids[at], solids[at + 1], solids[at + 2], solids[at + 3], solids[at + 4], solids[at + 5], solids[at + 6])
 
 
 ## Отрезок a–b толщиной r (у круга a = b), от основания base до верха top

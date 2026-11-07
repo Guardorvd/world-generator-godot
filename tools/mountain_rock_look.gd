@@ -4,12 +4,12 @@ extends SceneTree
 ## RockScatter, модели камней и выходов, раскладка VegetationLayer, препятствия велосипеда.
 ## «Было» — terrain.gdshader и rock_scatter.gd из коммита BASE (git show) в том же запуске.
 ## Снимки — пары было|стало в .godot/mountain_rock_look/<вид>.png. Нужно окно (без --headless).
-## Ключи: -- --base <коммит> (по умолчанию HEAD), -- --rules-only (без снимков).
+## Ключи: -- --base <коммит> (по умолчанию версия до скальных выходов), -- --rules-only (без снимков).
 const OUT := "res://.godot/mountain_rock_look"
 const N := 160
 const CS := 16
 const Surface := preload("res://scripts/world/mountain_surface.gd")
-var base_rev := "HEAD"
+var base_rev := "cb4622c"
 var failures := 0
 var camera: Camera3D
 var scene: Node3D
@@ -124,7 +124,20 @@ func run() -> void:
 	if OS.execute("git", ["show", base_rev + ":resources/terrain.gdshader"], output) == 0:
 		old_shader = Shader.new()
 		old_shader.code = str(output[0])
-	check(old_scatter != null and old_shader != null, "baseline " + base_rev + " available")
+	# Freeze seating and rendering too; otherwise a baseline with outcrops silently used new poses.
+	var old_layer: Script
+	for pair: Array in [["rock_models.gd", "scripts/render/rock_models.gd"], ["vegetation_layer.gd", "scripts/render/vegetation_layer.gd"]]:
+		output.clear()
+		if OS.execute("git", ["show", base_rev + ":" + pair[1]], output) != 0: continue
+		var source := str(output[0]).replace("class_name RockModels", "").replace("class_name VegetationLayer", "")
+		if pair[0] == "vegetation_layer.gd":
+			source = source.replace("extends Node3D", "extends Node3D\nconst PriorRockModels := preload(\"res://.godot/mountain_rock_look/rock_models_before.gd\")").replace("RockModels.", "PriorRockModels.")
+		FileAccess.open(OUT.path_join(pair[0].replace(".gd", "_before.gd")), FileAccess.WRITE).store_string(source)
+	old_layer = load(OUT.path_join("vegetation_layer_before.gd"))
+	check(old_scatter != null and old_shader != null and old_layer != null, "baseline " + base_rev + " available")
+	if old_scatter == null or old_shader == null or old_layer == null:
+		quit(1)
+		return
 	var hv := relief()
 	var f := fields(hv)
 	var h := Heightfield.new()
@@ -156,16 +169,15 @@ func run() -> void:
 			if seat.x == INF: continue
 			seated += 1
 			var up := Vector3(seat.y, seat.z, seat.w)
-			var side := up.cross(Vector3.BACK).normalized()
-			var ahead := side.cross(up)
+			var basis := RockModels.outcrop_transform(st_after.x[o] * 4.0, st_after.y[o] * 4.0, rs, up, seat.x).basis
 			for n in 40:
-				var off := (side * cos(n * TAU / 40.0) + ahead * sin(n * TAU / 40.0)) * RockModels.OUTCROP_R * rs
+				var off := basis * Vector3(cos(n * TAU / 40.0) * RockModels.OUTCROP_R, RockModels.OUTCROP_ANCHOR_Y, sin(n * TAU / 40.0) * RockModels.OUTCROP_R)
 				var g: Vector2 = sample.call(st_after.x[o] * 4.0 + off.x, st_after.y[o] * 4.0 + off.z)
 				if seat.x + off.y > g.x + 0.15: floating += 1
 		elif RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, rs, st_after.v[o]).x != INF:
 			if RockModels.normal_at(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0).y < 0.74: steep_boulders += 1
 	print("ROCKS after=", st_after.x.size(), " outcrops=", outcrops, " seated=", seated)
-	check(outcrops > 20 and seated > outcrops / 3, "outcrops on the cliff band and most of them seated")
+	check(outcrops > 20 and seated > outcrops / 3, "a supported outcrop population remains on the cliff band")
 	check(floating == 0, "outcrop base ring stays at or below ground (40 points)")
 	check(on_path == 0, "outcrops keep clear of the trail")
 	check(steep_boulders == 0, "ordinary boulders keep their support rule")
@@ -182,13 +194,15 @@ func run() -> void:
 		quit(1 if failures else 0)
 		return
 	print("ROCKS before=", st_before.x.size())
-	await shots(f, hv, h, w, world_of(st_before, f), old_shader)
+	await shots(f, hv, h, w, world_of(st_before, f), old_shader, old_layer)
 	print("MOUNTAIN ROCK LOOK ", failures, " failures")
 	quit(1 if failures else 0)
 
 
-func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: WorldData, w_before: WorldData, old_shader: Shader) -> void:
+func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: WorldData, w_before: WorldData, old_shader: Shader, old_layer: Script) -> void:
 	root.size = Vector2i(1280, 720)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	RenderingServer.global_shader_parameter_set("cloud_shadow", Vector4.ZERO)
 	scene = Node3D.new()
 	root.add_child(scene)
@@ -225,10 +239,9 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(w_after, h))
 	var builder := TerrainBuilder.new()
 	var defs := Models.tree_defs()
-	var rock_mat := ShaderMaterial.new()
-	rock_mat.shader = preload("res://resources/rock.gdshader")
-	rock_mat.set_shader_parameter("fade_far", 420.0)
-	rock_mat.set_shader_parameter("fade_len", 60.0)
+	var rock_defs := {}
+	for key: int in defs:
+		if key % ForestModels.MODEL_STRIDE == Biomes.T_ROCK: rock_defs[key] = defs[key]
 	# Камеры по самому массиву: луч от вершины на юго-восток, на нём круча, осыпь и плечо.
 	var top := Vector2(80, 76) * 4.0
 	var dir := Vector2(0.55, 0.83).normalized()
@@ -270,34 +283,19 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 		scene.add_child(terrain)
 		var w: WorldData = w_before if version == "before" else w_after
 		h.world = w
-		var layer := VegetationLayer.new()
-		layer.world = w
-		layer.heights = h
-		for key: int in defs:
-			if key % ForestModels.MODEL_STRIDE == Biomes.T_ROCK:
-				var def: Dictionary = defs[key]
-				layer._defs[key] = {crown = def.crown, box = def.crown.get_aabb(), leaves = def.leaves}
-		var rocks := Node3D.new()
+		var layer: Node3D = old_layer.new() if version == "before" else VegetationLayer.new()
+		var rocks := layer
 		scene.add_child(rocks)
+		layer.setup(w, h, rock_defs, Models.grass_mesh(), forest)
 		var instances := 0
 		var outcrop_instances := 0
 		for cy in w.CH:
 			for cx in w.CW:
-				var built := layer._build_chunk(Vector2i(cx, cy))
+				var built: Dictionary = layer._build_chunk(Vector2i(cx, cy))
 				for entry: Dictionary in built.entries:
-					var mm := MultiMesh.new()
-					mm.transform_format = MultiMesh.TRANSFORM_3D
-					mm.use_colors = true
-					mm.mesh = layer._defs[entry.kind].crown
-					mm.instance_count = entry.count
-					mm.buffer = entry.cbuf
-					var node := MultiMeshInstance3D.new()
-					node.multimesh = mm
-					node.material_override = rock_mat
-					rocks.add_child(node)
 					instances += entry.count
 					if entry.kind >= VegetationLayer.OUTCROP_MODEL: outcrop_instances += entry.count
-		layer.free()
+				layer._apply_chunk(built)
 		print("RENDER ", version, " instances=", instances, " outcrops=", outcrop_instances)
 		for view: String in views:
 			camera.look_at_from_position(views[view][0], views[view][1], Vector3.UP)
@@ -313,6 +311,21 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 			images[view + version] = img
 			print("SHOT ", view, " ", version, " frame_ms=", snappedf(frame_ms, 0.1), " draw_calls=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
 				" primitives=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+		# Travel through both production LOD transition bands, with actual GPU timings.
+		var cpu := 0.0; var gpu := 0.0; var frames := 0; var peak_ms := 0.0
+		var started := Time.get_ticks_usec()
+		var last := started
+		while Time.get_ticks_usec() - started < 3000000:
+			var t := (Time.get_ticks_usec() - started) / 3000000.0
+			camera.look_at_from_position(g.call(near_outcrop + dir * lerpf(210.0, 25.0, t) + side * 8, 3.0), g.call(near_outcrop, 1.0))
+			RenderingServer.global_shader_parameter_set("veg_center", Vector2(camera.position.x, camera.position.z))
+			await process_frame
+			var now := Time.get_ticks_usec()
+			peak_ms = maxf(peak_ms, (now - last) / 1000.0); last = now
+			cpu += RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
+			gpu += RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid())
+			frames += 1
+		print("MOTION ", version, " frames=", frames, " render_cpu_ms=", cpu / frames, " gpu_ms=", gpu / frames, " peak_frame_ms=", peak_ms)
 		terrain.queue_free()
 		rocks.queue_free()
 		await process_frame

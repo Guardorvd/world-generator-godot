@@ -168,7 +168,8 @@ static func _snapshot_surface(f: Dictionary, hv: PackedFloat32Array, width: int,
 ## что у валунов. Размеры — в метрах при масштабе отрисовки 1 (obj_s * 1.2, как у валунов).
 const OUTCROP_V := 3
 const OUTCROPS := 3
-const OUTCROP_R := 1.7      # радиус основания (y = 0)
+const OUTCROP_R := 2.1      # conservative local footprint of every baked form, before instance scaling
+const OUTCROP_ANCHOR_Y := -0.4 # lower block contact plane; the model origin is above its buried foot
 const OUTCROP_TOP := 2.0    # верх над основанием
 const OUTCROP_TILT := 0.8   # доля наклона по склону: плиты следуют падению, но не ложатся на него
 ## Части форм: центр, полуоси, поворот вокруг Y, наклон вокруг X. Нижняя часть уходит в склон.
@@ -265,7 +266,7 @@ static func outcrop_up(normal: Vector3) -> Vector3:
 ## Основание опускается до самой низкой точки кольца опоры: край выхода не висит над склоном,
 ## а нижняя часть модели уходит в землю. Слишком неровное кольцо (кромка выемки дороги,
 ## излом гребня) похоронило бы выход — такое место отклоняется.
-static func outcrop_seat(sample: Callable, x: float, z: float, scale: float) -> Vector4:
+static func outcrop_seat(sample: Callable, x: float, z: float, scale: float, origin := Vector2.ZERO) -> Vector4:
 	var r := OUTCROP_R * scale
 	var l: Vector2 = sample.call(x - r, z)
 	var rr: Vector2 = sample.call(x + r, z)
@@ -274,16 +275,14 @@ static func outcrop_seat(sample: Callable, x: float, z: float, scale: float) -> 
 	if l.x == INF or rr.x == INF or b.x == INF or f.x == INF:
 		return Vector4(INF, 0, 1, 0)
 	var up := outcrop_up(Vector3(l.x - rr.x, 2.0 * r, b.x - f.x).normalized())
-	var side := up.cross(Vector3.BACK)
-	if side.length_squared() < 1e-6:
-		side = Vector3.RIGHT
-	side = side.normalized()
-	var ahead := side.cross(up)
+	var basis := outcrop_transform(x, z, scale, up, 0.0, origin).basis
 	var lo := INF
 	var hi := -INF
 	# 16 точек кольца: на выпуклом гребне между редкими точками край повис бы над землёй.
 	for n in 17:
-		var off := Vector3.ZERO if n == 16 else (side * cos(n * TAU / 16.0) + ahead * sin(n * TAU / 16.0)) * r
+		var foot := Vector3(0.0, OUTCROP_ANCHOR_Y, 0.0)
+		if n < 16: foot += Vector3(cos(n * TAU / 16.0), 0.0, sin(n * TAU / 16.0)) * OUTCROP_R
+		var off := basis * foot
 		var s: Vector2 = sample.call(x + off.x, z + off.z)
 		if s.x == INF or s.y > 0.05:
 			return Vector4(INF, 0, 1, 0)
@@ -292,14 +291,66 @@ static func outcrop_seat(sample: Callable, x: float, z: float, scale: float) -> 
 	var sink := 0.12 * scale
 	if hi - lo > OUTCROP_TOP * scale * 0.8 - sink:
 		return Vector4(INF, 0, 1, 0)
+	# A numerically seated model may still be completely buried in a convex slope.
+	# Probe upper interior points of its existing blocks, without loading mesh data on workers.
+	var xf := outcrop_transform(x, z, scale, up, lo - sink, origin)
+	var exposed := false
+	for part: Array in _OUTCROP_PARTS[outcrop_form(x, z, origin)]:
+		var local_basis := Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+		var peak: Vector3 = xf * (part[0] + local_basis * Vector3(0.0, part[1].y * 0.7, 0.0))
+		var surface: Vector2 = sample.call(peak.x, peak.z)
+		if surface.x == INF or surface.y > 0.05: return Vector4(INF, 0, 1, 0)
+		if peak.y - surface.x > 0.2 * scale: exposed = true
+	if not exposed: return Vector4(INF, 0, 1, 0)
 	return Vector4(lo - sink, up.x, up.y, up.z)
+
+
+## One pose for rendering, footprint tests and collision, including saved sites' world origin.
+static func outcrop_form(x: float, z: float, origin := Vector2.ZERO) -> int:
+	var cell := (Vector2(x, z) + origin) / (GameConfig.TILE * WorldData.CHUNK_SIZE)
+	return mini(OUTCROPS - 1, int(WGRandom.hash2(floori(cell.x), floori(cell.y), 65) * OUTCROPS))
+
+
+static func outcrop_transform(x: float, z: float, scale: float, up: Vector3, base: float, origin := Vector2.ZERO) -> Transform3D:
+	var ox := (x + origin.x) / GameConfig.TILE
+	var oy := (z + origin.y) / GameConfig.TILE
+	var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
+	var shape := WGRandom.hash2(floori(ox * 127), floori(oy * 131), 15632)
+	var basis := Basis(Quaternion(Vector3.UP, up)) * Basis(Vector3.UP, rot)
+	basis = basis.scaled_local(Vector3(scale, scale * lerpf(0.85, 1.15, shape), scale * lerpf(0.85, 1.05, shape)))
+	return Transform3D(basis, Vector3(x, base, z))
+
+
+## Small solid cores of the visible blocks, in ForestObstacles' existing capsule format.
+## No extra nodes or mesh collision: unlike a single upright cylinder, these follow the tilt.
+static func outcrop_solids(xf: Transform3D, form: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for part: Array in _OUTCROP_PARTS[form]:
+		var axes: Vector3 = part[1]
+		var b := xf.basis * Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+		var center: Vector3 = xf * part[0]
+		var vertical := b.y * axes.y * 0.55
+		var a := center - vertical
+		var c := center + vertical
+		var radius := minf(b.x.length() * axes.x, b.z.length() * axes.z) * 0.72
+		var height := (absf(b.x.y) * axes.x + absf(b.y.y) * axes.y + absf(b.z.y) * axes.z) * 0.9
+		# Upper plates belong to the same anchored rock. Measuring climbability from
+		# their own thin bottom would let wheel_support teleport a wheel onto a high ledge.
+		out.append_array(PackedFloat32Array([a.x, a.z, c.x, c.z, radius, minf(center.y - height, xf.origin.y), center.y + height]))
+	return out
 
 
 ## Опора любого камня мира на Heightfield: Vector4(земля или основание выхода, нормаль/ось);
 ## x = INF — камень не ставится. Общая для отрисовки, препятствий и раскладки подлеска.
 static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
 	if is_outcrop(v):
-		return outcrop_seat(func(px: float, pz: float) -> Vector2: return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale)
+		return outcrop_seat(func(px: float, pz: float) -> Vector2:
+			var cell := Vector2i(floori(px / GameConfig.TILE), floori(pz / GameConfig.TILE))
+			if cell.x >= 0 and cell.y >= 0 and cell.x < heights.world.W and cell.y < heights.world.H:
+				var index := cell.y * heights.world.W + cell.x
+				if index < heights.world.path_mask.size() and heights.world.path_mask[index] > 0: return Vector2(INF, INF)
+			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, heights.world.W) > 0.08: return Vector2(INF, INF)
+			return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE)
 	var normal := normal_at(heights, x, z)
 	var ground := heights.ground_at(x, z)
 	if not has_seat(heights, x, z, scale, normal, ground):
@@ -312,5 +363,9 @@ static func seat_snapshot_any(f: Dictionary, hv: PackedFloat32Array, width: int,
 	if not is_outcrop(v):
 		return seat_snapshot(f, hv, width, height, x, z, scale)
 	return outcrop_seat(func(px: float, pz: float) -> Vector2:
+		var cell := Vector2i(floori(px / GameConfig.TILE), floori(pz / GameConfig.TILE))
+		var paths: PackedByteArray = f.get("plan_path", PackedByteArray()) if cell.x >= 0 and cell.y >= 0 and cell.x < width and cell.y < height else f.get("path", PackedByteArray())
+		var index := cell.y * width + cell.x if cell.x >= 0 and cell.y >= 0 and cell.x < width and cell.y < height else (cell.y - int(f.y0)) * int(f.side) + cell.x - int(f.x0)
+		if index >= 0 and index < paths.size() and paths[index] > 0: return Vector2(INF, INF)
 		var s := _snapshot_surface(f, hv, width, height, px, pz)
-		return Vector2(s.x, INF if s.x == INF else s.y - s.x), x, z, scale)
+		return Vector2(s.x, INF if s.x == INF else s.y - s.x), x, z, scale, f.get("world_origin", Vector2.ZERO))

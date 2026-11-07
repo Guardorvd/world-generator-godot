@@ -7,13 +7,15 @@ const Surface := preload("res://scripts/world/mountain_surface.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const N := 768
 const SIDE := 320
-const BASE_REV := "cb4622c" # 07.11.2026: до скальных выходов и породы в материале
+var base_rev := "cb4622c" # pass --base 3676c62 to review the original outcrop implementation
 var failures := 0
 var scene: Node3D
 var camera: Camera3D
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self,300)
+	var args := OS.get_cmdline_user_args()
+	if "--base" in args: base_rev = args[args.find("--base") + 1]
 	run.call_deferred()
 
 func check(ok:bool,label:String) -> void:
@@ -81,13 +83,15 @@ func geography(seed_text:String) -> WorldData:
 
 func baseline() -> bool:
 	DirAccess.make_dir_recursive_absolute(OUT)
-	for item:Array in [["rock_scatter.gd","scripts/world/rock_scatter.gd"],["stage_vegetation.gd","scripts/world/stages/stage_vegetation.gd"],["forest_floor.gd","scripts/render/forest_floor.gd"],["vegetation_layer.gd","scripts/render/vegetation_layer.gd"],["terrain.gdshader","resources/terrain.gdshader"]]:
+	for item:Array in [["rock_scatter.gd","scripts/world/rock_scatter.gd"],["rock_models.gd","scripts/render/rock_models.gd"],["stage_vegetation.gd","scripts/world/stages/stage_vegetation.gd"],["forest_floor.gd","scripts/render/forest_floor.gd"],["vegetation_layer.gd","scripts/render/vegetation_layer.gd"],["terrain.gdshader","resources/terrain.gdshader"]]:
 		var output:Array=[]
-		if OS.execute("git",["show",BASE_REV+":"+item[1]],output)!=0:return false
-		var source:=str(output[0]).replace("class_name RockScatter","").replace("class_name StageVegetation","").replace("class_name VegetationLayer","")
+		if OS.execute("git",["show",base_rev+":"+item[1]],output)!=0:return false
+		var source:=str(output[0]).replace("class_name RockScatter","").replace("class_name RockModels","").replace("class_name StageVegetation","").replace("class_name VegetationLayer","")
 		if item[0]=="rock_scatter.gd":source=source.replace("store: StageVegetation.ObjStore","store")
 		if item[0]=="stage_vegetation.gd":source=source.replace("extends RefCounted","extends RefCounted\nconst PriorRocks := preload(\"res://.godot/mountain_environment/rock_scatter.gd\")").replace("RockScatter.place_chunk(","PriorRocks.place_chunk(")
-		if item[0]=="vegetation_layer.gd":source=source.replace("res://scripts/render/forest_floor.gd","res://.godot/mountain_environment/forest_floor.gd")
+		if item[0]=="vegetation_layer.gd":
+			source=source.replace("res://scripts/render/forest_floor.gd","res://.godot/mountain_environment/forest_floor.gd")
+			source=source.replace("extends Node3D", "extends Node3D\nconst PriorRockModels := preload(\"res://.godot/mountain_environment/rock_models.gd\")").replace("RockModels.", "PriorRockModels.")
 		FileAccess.open(OUT.path_join(item[0]),FileAccess.WRITE).store_string(source)
 	return true
 
@@ -99,6 +103,7 @@ func views(w:WorldData,h:Heightfield,origin:Vector2i,peak:Vector3) -> Dictionary
 	for y in range(origin.y+24,origin.y+SIDE-24,2):
 		for x in range(origin.x+24,origin.x+SIDE-24,2):
 			var i:=y*N+x
+			if w.biome[i] not in [Biomes.ROCK, Biomes.STONESHORE]: continue
 			if w.slope[i]<0.22 or w.slope[i]>0.65 or w.elev[i]<0.15:continue
 			var score:=Surface.exposure(w.elev[i],w.slope[i],w.moist[i])-Vector2(x,y).distance_to(Vector2(peak.x,peak.z)/4)*0.001
 			if score>best:best=score;open=Vector2(x,y)*4
@@ -115,10 +120,14 @@ func views(w:WorldData,h:Heightfield,origin:Vector2i,peak:Vector3) -> Dictionary
 	for y in range(origin.y+24,origin.y+SIDE-24,2):
 		for x in range(origin.x+24,origin.x+SIDE-24,2):
 			var i:=y*N+x
+			if w.biome[i] not in [Biomes.ROCK, Biomes.STONESHORE]: continue
 			var score:=w.slope[i]*Surface.exposure(w.elev[i],w.slope[i],w.moist[i])-Vector2(x,y).distance_to(Vector2(peak.x,peak.z)/4)*0.002
 			if score>best:best=score;cliff=Vector2(x,y)*4
+	var normal := RockModels.normal_at(h, cliff.x, cliff.y)
+	var downhill := Vector2(normal.x, normal.z).normalized()
+	var sideways := Vector2(-downhill.y, downhill.x)
 	return {panorama=[peak+Vector3(-235,145,235),peak-Vector3(0,35,0)],
-		cliff=[ground(h,cliff+Vector2(38,-30),6.0),ground(h,cliff,3.0)],
+		cliff=[ground(h,cliff+downhill*45+sideways*12,8.0),ground(h,cliff,3.0)],
 		rocks=[ground(h,open+Vector2(-45,55),10),ground(h,open,1.0)],
 		rider_road=[ground(h,road,1.8),ground(h,road+along*45,2.0)]}
 
@@ -128,6 +137,8 @@ func run() -> void:
 	if Grid.fast_grid()==null:push_error("Build C# first");quit(1);return
 	if not baseline():push_error("Baseline commit unavailable");quit(1);return
 	root.size=Vector2i(1280,720)
+	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	RenderingServer.global_shader_parameter_set("cloud_shadow",Vector4.ZERO)
 	scene=Node3D.new();root.add_child(scene)
 	var env:=WorldEnvironment.new();env.environment=Environment.new()
@@ -178,11 +189,18 @@ func run() -> void:
 				var stream_ms:=(Time.get_ticks_usec()-started)/1000.0
 				for frame in 4:await process_frame
 				started=Time.get_ticks_usec()
-				for frame in 10:await process_frame
-				var frame_ms:=(Time.get_ticks_usec()-started)/10000.0
+				var frames := 0
+				var render_cpu := 0.0; var render_gpu := 0.0
+				while Time.get_ticks_usec() - started < 1000000:
+					await process_frame
+					render_cpu += RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid())
+					render_gpu += RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid())
+					frames += 1
+				var frame_ms:=(Time.get_ticks_usec()-started)/(1000.0*frames)
 				await RenderingServer.frame_post_draw
 				root.get_texture().get_image().save_png(OUT.path_join(seed_text+"_"+view+"_"+version+".png"))
-				row.views[view]={stream_ms=stream_ms,frame_ms=frame_ms,draw_calls=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)}
+				row.views[view]={stream_ms=stream_ms,frame_ms=frame_ms,render_cpu_ms=render_cpu/frames,render_gpu_ms=render_gpu/frames,
+					video_bytes=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),draw_calls=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)}
 				print("SHOT ",seed_text," ",view," ",version)
 			check(frozen==var_to_bytes([w.h,w.filled,w.path_mask,w.ocean,w.lake]),"environment preserves relief, water and route masks")
 			results.append(row);print("ENVIRONMENT ",JSON.stringify(row))

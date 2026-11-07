@@ -227,10 +227,12 @@ void fragment() {
 		scree *= 1.0 - soil;
 		// Тела породы: светлая тёплая и тёмная холодная, полосы в сотни метров.
 		float litho = smoothstep(0.3, 0.7, n_macro + (n_big - 0.5) * 0.12);
-		vec3 lith = mix(rock_color * vec3(0.62, 0.63, 0.67), rock_color * vec3(1.14, 1.09, 1.0), litho);
+		vec3 lith = mix(rock_color * vec3(0.58, 0.60, 0.65), rock_color * vec3(1.16, 1.10, 1.0), litho);
 		// Пласты (по высоте, с падением) и швы отдельности: блоки 3–4 м, мощность пласта 1,6–3,2 м.
 		vec3 q = vec3(p.x, wpos.y + dot(p, vec2(0.11, -0.07)) + (n_big - 0.5) * 2.5, p.y);
-		q.xz += (vec2(n_mid, n_big) - 0.5) * 1.2;
+		// Joint directions follow the rock body, without a world-axis checkerboard.
+		q.xz = vec2(dot(p, vec2(0.83, 0.56)), dot(p, vec2(-0.56, 0.83)));
+		q.xz += (vec2(n_mid, n_big) - 0.5) * 3.2;
 		float layer_h = mix(2.2, 4.4, n_macro);
 		// Столбы отдельности 4,3 × 3,7 м, у каждого свой сдвиг пластов: уступы обрываются на швах
 		// ступеньками, а не тянутся по склону сплошными горизонталями.
@@ -242,7 +244,7 @@ void fragment() {
 		float fy = row - row_i;
 		vec2 blk = grain_hash(cell_i + vec2(row_i * 17.0, row_i * 5.0));
 		// Тон блоков меняется на границах пластов; на округлом склоне это кольца горизонталей, поэтому там слабо.
-		float block_vis = (1.0 - smoothstep(0.6, 1.6, px3)) * mix(0.2, 1.0, cliff);
+		float block_vis = (1.0 - smoothstep(0.6, 1.6, px3)) * mix(0.08, 0.65, cliff);
 		float ledge_vis = (1.0 - smoothstep(layer_h * 0.04, layer_h * 0.14, px3)) * smoothstep(0.18, 0.36, slope);
 		float crack_vis = 1.0 - smoothstep(0.06, 0.22, px3);
 		float d_joint = min(min(fxz.x, 1.0 - fxz.x) * 4.3, min(fxz.y, 1.0 - fxz.y) * 3.7);
@@ -252,11 +254,11 @@ void fragment() {
 		// по границам пластов на гладком меше рельефа читались как горизонтали карты — их нет.
 		float crack = joint * mix(step(0.6, blk.x) * 0.55, step(0.18, blk.x), cliff) * smoothstep(0.08, 0.3, min(fy, 1.0 - fy) * layer_h);
 		// Только у части блоков и только на круче: на округлом склоне сплошные пласты читались как горизонтали.
-		ledge_vis *= cliff * step(0.4, blk.y);
-		float ledge = mix(mix(0.86, 1.05, smoothstep(0.0, 0.4, fy)), 1.0, 1.0 - ledge_vis);
+		ledge_vis *= cliff * step(0.62, blk.y);
+		float ledge = mix(mix(0.93, 1.03, smoothstep(0.0, 0.4, fy)), 1.0, 1.0 - ledge_vis);
 		vec3 bed = lith * mix(1.0, 0.86 + 0.26 * blk.x, block_vis) * ledge;
 		// Лишайник на открытых плитах (пятна 7 м, вблизи — мелкие) и мох в трещинах сырых склонов.
-		float lichen = smoothstep(0.60, 0.74, n_mid * 0.55 + n_fine * 0.45) * (0.35 + 0.65 * near) * (1.0 - snow);
+		float lichen = smoothstep(0.60, 0.74, mix(n_mid, n_mid * 0.55 + n_fine * 0.45, near)) * (0.35 + 0.65 * near) * (1.0 - snow);
 		bed = mix(bed, mix(vec3(0.30, 0.29, 0.15), lith * 0.55, smoothstep(0.4, 0.6, n_big)), lichen * 0.3);
 		bed = mix(bed, mix(lith * 0.38, vec3(0.06, 0.09, 0.035), smoothstep(0.5, 0.75, wet) * (1.0 - snow)), crack * 0.7);
 		// Щебень: светлее и мельче, с отдельными камнями вблизи; дальше — только тон.
@@ -278,8 +280,8 @@ void fragment() {
 		col = mix(col, geo, rock * (0.92 - 0.7 * snow));
 		// Уступы и швы видны и светом: нормаль верха пласта к небу, подрез вниз (мировые координаты).
 		float relief_w = rock * (1.0 - scree) * (1.0 - soil) * (1.0 - snow * 0.6);
-		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.55 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.45) * ledge_vis * cliff;
-		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.25 * block_vis * cliff;
+		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.30 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.25) * ledge_vis * cliff;
+		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.12 * block_vis * cliff;
 		NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(dn * relief_w, 0.0)).xyz);
 	}
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
