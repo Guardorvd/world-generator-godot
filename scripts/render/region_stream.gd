@@ -25,6 +25,9 @@ const KEEP := 2800.0                        # м: ближе поля клето
 const EVICT := 3400.0                       # м: дальше поля клеток выгружаются из памяти
 const RECHECK := 32.0                       # м пути между пересмотром очереди и выгрузки
 const FORMAT := 3                           # 14.4: гуще поселения областей — прежние журналы не читаются
+## 07.11.2026: соседние области — только вид, своей трассы у них нет (прежний поиск TrailScout — 1 в ключе журнала,
+## до 8 с на область). 0 в ключе: журналы с трассами областей не подходят и готовятся заново, без трасс.
+const REGION_TRAILS := 0
 const ROAD_LIFT := 0.05                     # м: полотно над рельефом без мерцания
 const ROAD_COLOR := Color8(0x8e, 0x7d, 0x62)
 const ROAD_STEP := 1.0                      # м: шаг точек ленты вдоль дороги
@@ -110,7 +113,7 @@ static func store_dir(w: WorldData) -> String:
 		# Fingerprint v2 includes geography, even when relief/path bytes happen to match.
 		var ctx := HashingContext.new()
 		ctx.start(HashingContext.HASH_SHA256)
-		ctx.update(("region-basis-v2|%s|%d|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, WorldCache.SCHEMA_GEO_VERSION, FORMAT, StageTrailPlan.VERSION, preload("res://scripts/world/region_trails.gd").VERSION]).to_utf8_buffer())
+		ctx.update(("region-basis-v2|%s|%d|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, WorldCache.SCHEMA_GEO_VERSION, FORMAT, StageTrailPlan.VERSION, REGION_TRAILS]).to_utf8_buffer())
 		ctx.update(w.h.to_byte_array())
 		ctx.update(w.path_mask)
 		w.region_basis_id = ctx.finish().hex_encode().left(24)
@@ -221,7 +224,7 @@ func update(x: float, z: float) -> bool:
 		timing.publish_ms = (Time.get_ticks_usec() - publish_started) / 1000.0
 		timing.complete_ms = Time.get_ticks_msec() - pending.done.trail_started
 		stats.max_publish_ms = maxf(stats.get("max_publish_ms", 0.0), timing.publish_ms)
-		print("Region trail ", _key, ": ", pending.done.trail.state, "/", pending.done.trail.verdict, " ", timing)
+		print("Region ready ", _key, ": ", timing)
 		_persist(_key)
 		return true
 	if _task != -1 and WorkerThreadPool.is_task_completed(_task):
@@ -367,38 +370,18 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 	if stop.is_valid() and stop.call(): return {cancelled = true}
 	if done.ready:
 		var trail_started := Time.get_ticks_msec()
-		var deadline := trail_started + preload("res://scripts/world/region_trails.gd").BUDGET_MS
-		var baseline: Dictionary = done.ledger.duplicate()
-		baseline.regions = done.ledger.regions.duplicate()
-		var base_chunks := {}
-		# Surface and CPU mesh preparation consume the same deadline as search and shaping.
 		if terrain_source != null:
+			done.chunks = {}
 			var rect := Regions.rect_for(key).grow(1)
 			for cy in range(floori(float(rect.position.y) / OuterLand.C), floori(float(rect.end.y - 1) / OuterLand.C) + 1):
 				for cx in range(floori(float(rect.position.x) / OuterLand.C), floori(float(rect.end.x - 1) / OuterLand.C) + 1):
 					if stop.is_valid() and stop.call(): return {cancelled = true}
 					var chunk := Vector2i(cx, cy)
-					base_chunks[chunk] = terrain_source._build(chunk, baseline)
+					done.chunks[chunk] = terrain_source._build(chunk, done.ledger)
 		var mesh_ms := Time.get_ticks_msec() - trail_started
-		# Общий остаток на поиск; последние две секунды оставлены на окончательные CPU-меши и декор.
-		done.trail = Regions.prepare_trails(w, key, done.ledger, stop, maxi(0, deadline - Time.get_ticks_msec() - 2000))
-		if stop.is_valid() and stop.call(): return {cancelled = true}
-		if terrain_source != null:
-			done.chunks = base_chunks.duplicate()
-			if done.trail.state == "found":
-				var zone: Rect2i = done.trail.zone
-				for chunk: Vector2i in base_chunks:
-					if not Rect2i(chunk * OuterLand.C, Vector2i.ONE * OuterLand.C).intersects(zone): continue
-					if stop.is_valid() and stop.call(): return {cancelled = true}
-					done.chunks[chunk] = terrain_source._build(chunk, done.ledger, base_chunks[chunk].fields)
-		if Time.get_ticks_msec() >= deadline - 1000:
-			# Budget expiry is a stored outcome, never a partly installed kit or a fresh search next load.
-			var budget := {version = 1, builder_version = StageTrailPlan.VERSION, state = "none", verdict = "budget", reason = "общий бюджет подготовки области исчерпан", stats = done.trail.stats}
-			done.ledger = baseline
-			done.ledger.regions[key] = baseline.regions[key].duplicate()
-			done.ledger.regions[key].trail_plan = budget
-			done.trail = budget
-			if terrain_source != null: done.chunks = base_chunks
+		# 07.11.2026: соседняя область — только вид, трасса не ищется (REGION_TRAILS). Запись плана остаётся для отчёта.
+		done.trail = {version = REGION_TRAILS, state = "none", verdict = "off", reason = "у соседних областей нет своих трасс", stats = {}}
+		done.ledger.regions[key].trail_plan = done.trail
 		if view != null:
 			view.world.outer.set_ledger(done.ledger)
 			var decor_started := Time.get_ticks_msec()
@@ -409,7 +392,6 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 				return {cancelled = true}
 		done.trail.stats.mesh_ms = mesh_ms
 		done.trail.stats.worker_ms = Time.get_ticks_msec() - trail_started
-		done.trail.stats.budget_ms = preload("res://scripts/world/region_trails.gd").BUDGET_MS
 		done.trail_started = trail_started
 	done.dropped_rivers = dropped
 	done.roads = roads

@@ -786,6 +786,10 @@ TrailPicker → TrailRouter → TrailFlow.
 
 ## Области и общий бюджет (шаг 3, 28.10.2026)
 
+**С 07.11.2026 отключено:** соседние области — только вид, своей трассы у них нет (`RegionStream.REGION_TRAILS = 0`),
+`region_trails.gd`, `prepare_trails`, `StageTrailPlan.from_scout` и тесты `trail_region_test`/`trail_region_recorded_test`
+удалены. Цепочка Scout → Picker → Router → Access → Flow осталась для Trail Lab. Ниже — как это было устроено.
+
 `RegionPreparation.prepare_trails` — адаптер `region_trails.gd`, не второй генератор. Он собирает локальное представление
 готовой области и вызывает ту же цепочку Scout → Picker → Router → Access → Flow и `StageTrailPlan.from_scout`.
 У региональных дорог уже есть опубликованная поверхность: она служит исходной, повторно `finish_paths` к ней не применяется.

@@ -189,7 +189,3 @@ static func river_inputs(w: WorldData, rect: Rect2i, ledger := {}) -> Array[Dict
 		return a.y < b.y or a.y == b.y and a.x < b.x)
 	return inputs
 
-
-## One kit at most, using the start area's production construction chain on private regional data.
-static func prepare_trails(w: WorldData, key: Vector2i, ledger: Dictionary, stop := Callable(), budget_ms := 10000) -> Dictionary:
-	return preload("res://scripts/world/region_trails.gd").prepare(w, key, ledger, stop, budget_ms)
