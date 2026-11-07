@@ -25,6 +25,10 @@ const FAR_KEY := 1 << 20
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
+## Модель первого скального выхода (RockModels.OUTCROP_V); без неё в каталоге выходы не рисуются.
+const OUTCROP_MODEL := Biomes.T_ROCK + RockModels.VARIANTS * ForestModels.MODEL_STRIDE
+## Скалы без своей травы: низкая сухая трава только в сырых ложбинах (_rock_shelter).
+const ROCK_GRASS := {dens = 2.4, tint = [0.5, 0.56, 0.31]}
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
@@ -705,7 +709,8 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 		var gx := fx[o] - 0.5
 		var rock_probe := Vector4.ZERO
 		if kind == Biomes.T_ROCK:
-			rock_probe = RockModels.seat_snapshot(f, hv, W, H, fx[o] * TILE, fy[o] * TILE, f.s[o] * 1.2)
+			if RockModels.is_outcrop(f.v[o]) and not _defs.has(OUTCROP_MODEL): continue
+			rock_probe = RockModels.seat_snapshot_any(f, hv, W, H, fx[o] * TILE, fy[o] * TILE, f.s[o] * 1.2, f.v[o])
 			if rock_probe.x == INF: continue
 		var gz := fy[o] - 0.5
 		var i := floori(gx)
@@ -732,6 +737,9 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 		# за краем вода только морская, её уровень 0
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK and ground < -WATER_MARGIN:
 			continue
+		# Выход стоит на своём основании, утопленном в склон, а не на земле в центре.
+		if kind == Biomes.T_ROCK and RockModels.is_outcrop(f.v[o]):
+			ground = rock_probe.x
 		items.x.append(fx[o])
 		items.y.append(fy[o])
 		items.k.append(kind)
@@ -763,10 +771,18 @@ func _build_chunk(chunk: Vector2i) -> Dictionary:
 			continue
 		var x := ox * TILE
 		var z := oy * TILE
-		var ground := heights.ground_at(x, z)
-		var normal := RockModels.normal_at(heights, x, z) if kind == Biomes.T_ROCK else Vector3.UP
-		if kind == Biomes.T_ROCK and not RockModels.has_seat(heights, x, z, world.obj_s[o] * 1.2, normal, ground):
-			continue
+		var ground := 0.0
+		var normal := Vector3.UP
+		if kind == Biomes.T_ROCK:
+			if RockModels.is_outcrop(world.obj_v[o]) and not _defs.has(OUTCROP_MODEL):
+				continue
+			var seat := RockModels.seat(heights, x, z, world.obj_s[o] * 1.2, world.obj_v[o])
+			if seat.x == INF:
+				continue
+			ground = seat.x
+			normal = Vector3(seat.y, seat.z, seat.w)
+		else:
+			ground = heights.ground_at(x, z)
 		if kind != Biomes.T_REED and kind != Biomes.T_ROCK:
 			if heights.depth_at(x, z) > WATER_MARGIN:
 				continue
@@ -791,14 +807,21 @@ func _build_entries(items: Dictionary) -> Dictionary:
 	var ys: PackedFloat64Array = items.y
 	for o in xs.size():
 		var kind: int = items.k[o]
-		if kind == Biomes.T_ROCK and items.has("normals") and not RockModels.supported(items.normals[o]):
+		var outcrop := kind == Biomes.T_ROCK and RockModels.is_outcrop(items.v[o])
+		if kind == Biomes.T_ROCK and not outcrop and items.has("normals") and not RockModels.supported(items.normals[o]):
 			continue
 		var ox := xs[o]
 		var oy := ys[o]
 		var ground: float = items.ground[o]
 		# Выбор силуэта по координатам независим от оттенка и возраста дерева.
 		var model := kind
-		if _defs.has(kind + ForestModels.MODEL_STRIDE):
+		if outcrop:
+			# Одна форма выходов на чанк (характер отдельности массива): не больше одной группы MultiMesh
+			# и её LOD на чанк вместо трёх.
+			var size := WorldData.CHUNK_SIZE
+			var form := mini(RockModels.OUTCROPS - 1, int(WGRandom.hash2(floori(ox / size), floori(oy / size), 65) * RockModels.OUTCROPS))
+			model = OUTCROP_MODEL + form * ForestModels.MODEL_STRIDE
+		elif _defs.has(kind + ForestModels.MODEL_STRIDE):
 			var variants := RockModels.VARIANTS if kind == Biomes.T_ROCK else ForestModels.VARIANTS
 			var variant := mini(variants - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * variants))
 			model += variant * ForestModels.MODEL_STRIDE
@@ -838,6 +861,12 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				xf.basis = Basis(Quaternion(Vector3.UP, normal)) * Basis(Vector3.UP, rot)
 				xf.basis = xf.basis.scaled_local(Vector3(s, sy * lerpf(0.75, 1.25, shape), s * lerpf(0.8, 1.0, shape)))
 				xf.origin.y = group.ground[n] - s * 0.08
+				if RockModels.is_outcrop(v):
+					# Основание уже опущено до нижней точки опоры (RockModels.outcrop_seat); ось — между
+					# вертикалью и склоном, поэтому плиты и уступы почти горизонтальны.
+					xf.basis = Basis(Quaternion(Vector3.UP, normal)) * Basis(Vector3.UP, rot)
+					xf.basis = xf.basis.scaled_local(Vector3(s, s * lerpf(0.85, 1.15, shape), s * lerpf(0.85, 1.05, shape)))
+					xf.origin.y = group.ground[n]
 			var box: AABB = xf * def.box
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
@@ -1296,7 +1325,8 @@ func _fill_grass(px: float, pz: float) -> void:
 		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
 			var k := j * w.W + i
 			var bd: Dictionary = Biomes.LIST[w.biome[k]]
-			if not bd.has("grass") or w.river[k] != 0:
+			var rocky_cell := w.biome[k] == Biomes.ROCK
+			if (not bd.has("grass") and not rocky_cell) or w.river[k] != 0:
 				continue
 			var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, origin, _fill_lead) / TILE
 			var d2 := d * d
@@ -1306,7 +1336,7 @@ func _fill_grass(px: float, pz: float) -> void:
 				# За кругом травы — только крупный подлесок
 				_fill_understory(i, j, _forest_surface.get_pixel(i, j), StageClimate.natural_conditions(w, i, j).x, px, pz)
 				continue
-			var gr: Dictionary = bd.grass
+			var gr: Dictionary = ROCK_GRASS if rocky_cell else bd.grass
 			# Почвенная влага и освещение общие с генератором леса.
 			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
 			var light := StageClimate.natural_conditions(w, i, j).x
@@ -1314,6 +1344,7 @@ func _fill_grass(px: float, pz: float) -> void:
 			var surface := _forest_surface.get_pixel(i, j)
 			lush *= 1.0 - 0.65 * surface.r
 			lush *= _fill_understory(i, j, surface, light, px, pz)
+			if rocky_cell: lush *= _rock_shelter(surface, i, j)
 			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
 	# 14.4: за краем плана — трава и подлесок закреплённых соседних областей. Поля берутся из снимка
 	# журнала (_outer_regions, его подменяют целиком в главном потоке), куски OuterLand не читаются
@@ -1331,7 +1362,8 @@ func _fill_grass(px: float, pz: float) -> void:
 				if cell.is_empty() or cell.river or cell.elev <= 0.0 or not _region_inner(regions, i, j):
 					continue
 				var bd: Dictionary = Biomes.LIST[cell.biome]
-				if not bd.has("grass"):
+				var rocky_cell: bool = cell.biome == Biomes.ROCK
+				if not bd.has("grass") and not rocky_cell:
 					continue
 				var surface := _outer_surface(cell)
 				if d2 > rT * rT:
@@ -1341,7 +1373,8 @@ func _fill_grass(px: float, pz: float) -> void:
 				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * OUTER_LIGHT)
 				lush *= 1.0 - 0.65 * surface.r
 				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
-				n = _grass_cell(i, j, bd.grass, lush, surface, d2, n, cell.path, regions)
+				if rocky_cell: lush *= _rock_shelter(surface, i, j)
+				n = _grass_cell(i, j, ROCK_GRASS if rocky_cell else bd.grass, lush, surface, d2, n, cell.path, regions)
 	low = _grass_low
 	high = _grass_high
 	_grass_n = n
@@ -1455,6 +1488,13 @@ static func _outer_surface(cell: Dictionary) -> Color:
 	return Color(0.0, 0.0, cell.moist, exposed)
 
 
+## Скалы не зеленеют: трава пятнами 8 м только в сырых защищённых местах (влага и открытость
+## породы — те же каналы, что у материала рельефа, поэтому пучки стоят на тёмном грунте).
+static func _rock_shelter(surface: Color, i: int, j: int) -> float:
+	var patch := WGRandom.hash2(floori(i / 2.0), floori(j / 2.0), 9127)
+	return smoothstep(0.5, 0.74, surface.b) * smoothstep(0.35, 0.75, patch) * (1.0 - surface.a)
+
+
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
 ## с запасом: игрок до следующей раскладки может подъехать на ahead ближе (шейдер считает без запаса).
 static func _keep(d: float, full: float, ahead: float) -> float:
@@ -1471,6 +1511,9 @@ func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float
 ## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info)
 func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var canopy := surface.r
+	if bi == Biomes.ROCK and canopy < 0.15:
+		_fill_rock_hollow(i, j, path, slope, surface, px, pz)
+		return 1.0
 	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
 		return 1.0
 	var moisture := surface.b
@@ -1518,6 +1561,47 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
 		_understory_sites.append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
+
+
+## Скальные ложбины (07.11.2026): редкие мох, травы, низкий кустарник и мелкие камни из общих форм
+## подлеска (их MultiMesh общие на весь круг — новых узлов и вызовов отрисовки нет). Только там,
+## где _rock_shelter: сыро и закрыто; открытая порода остаётся голой.
+func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, px: float, pz: float) -> void:
+	if path > 0 or slope > 0.9:
+		return
+	var shelter := _rock_shelter(surface, i, j)
+	if shelter <= 0.02:
+		return
+	var weights := PackedFloat32Array()
+	weights.resize(understory.size())
+	weights[Understory.MOSS] = 1.0
+	weights[Understory.HERB] = 0.45
+	weights[Understory.GRASS] = 0.5
+	weights[Understory.BUSH] = 0.22
+	weights[Understory.FLOWERS] = 0.08
+	weights[Floor.FIRST + Floor.STONES] = 0.6
+	var total := 3.05
+	var seed := world.seed_num ^ 7717
+	for m in 3:
+		if WGRandom.hash2(i * 8 + m, j, seed + 1) > shelter * 0.55:
+			continue
+		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
+		var kind := 0
+		while kind < weights.size() - 1 and pick >= weights[kind]:
+			pick -= weights[kind]
+			kind += 1
+		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
+		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
+		var far: bool = understory[kind].far
+		var d := StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead)
+		if d > (under_r if far else grass_r):
+			continue
+		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
+		if rank > _keep(d, UNDERSTORY_FAR_R if far else GameConfig.GRASS_R, _ahead(under_r if far else grass_r)):
+			continue
+		var scale := 0.6 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.5
+		var tint := 0.8 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.25
+		_understory_sites.append([kind, x, z, WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU, scale, tint, rank])
 
 
 ## 11.6: на полотне путей — препятствия RoadObstacles в радиусе подлеска, тем же размещением, что подстилка

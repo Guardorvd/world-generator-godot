@@ -160,3 +160,157 @@ static func _snapshot_surface(f: Dictionary, hv: PackedFloat32Array, width: int,
 	var tz := gz - j
 	var ground := corners.x + (corners.y - corners.x) * tx + (corners.z - corners.x) * tz if tx + tz <= 1.0 else corners.w + (corners.z - corners.w) * (1.0 - tx) + (corners.y - corners.w) * (1.0 - tz)
 	return Vector2(ground, level)
+
+
+## Скальные выходы (07.11.2026): крупные формы коренной породы, утопленные в склон, — уступы,
+## рёбра и развалы глыб. Хранятся как камни T_ROCK с obj_v >= OUTCROP_V (оттенок v - OUTCROP_V),
+## модели — T_ROCK + (VARIANTS + форма) * MODEL_STRIDE: те же MultiMesh, LOD, материал и стриминг,
+## что у валунов. Размеры — в метрах при масштабе отрисовки 1 (obj_s * 1.2, как у валунов).
+const OUTCROP_V := 3
+const OUTCROPS := 3
+const OUTCROP_R := 1.7      # радиус основания (y = 0)
+const OUTCROP_TOP := 2.0    # верх над основанием
+const OUTCROP_TILT := 0.8   # доля наклона по склону: плиты следуют падению, но не ложатся на него
+## Части форм: центр, полуоси, поворот вокруг Y, наклон вокруг X. Нижняя часть уходит в склон.
+const _OUTCROP_PARTS := [
+	# Уступы: плиты лестницей.
+	[[Vector3(0.0, -0.45, 0.0), Vector3(1.75, 1.0, 1.45), 0.0, 0.0],
+	 [Vector3(0.3, 0.45, -0.2), Vector3(1.5, 0.36, 1.2), 0.2, 0.06],
+	 [Vector3(-0.15, 0.95, 0.15), Vector3(1.2, 0.3, 0.95), -0.25, -0.08],
+	 [Vector3(-0.45, 1.38, 0.3), Vector3(0.7, 0.26, 0.6), 0.5, 0.1]],
+	# Ребро: высокий блок с наклонной гранью и плечо сбоку.
+	[[Vector3(0.0, -0.3, 0.0), Vector3(1.6, 1.1, 1.3), 0.0, 0.0],
+	 [Vector3(-0.35, 0.9, 0.0), Vector3(0.75, 1.1, 1.0), 0.15, 0.12],
+	 [Vector3(0.75, 0.55, 0.3), Vector3(0.7, 0.6, 0.75), -0.3, 0.0]],
+	# Развал глыб по трещинам отдельности.
+	[[Vector3(0.0, -0.35, 0.0), Vector3(1.7, 0.95, 1.5), 0.0, 0.0],
+	 [Vector3(-0.6, 0.6, 0.35), Vector3(0.85, 0.7, 0.8), 0.4, 0.1],
+	 [Vector3(0.65, 0.5, -0.3), Vector3(0.8, 0.6, 0.7), -0.2, -0.15],
+	 [Vector3(0.1, 1.15, -0.05), Vector3(0.55, 0.45, 0.5), 0.7, 0.2]],
+]
+
+
+static func is_outcrop(v: int) -> bool:
+	return v >= OUTCROP_V
+
+
+## Модель выхода формы form с тремя LOD (около 430 / 190 / 110 треугольников у трёх частей).
+static func outcrop_mesh(form: int) -> ArrayMesh:
+	var near := _outcrop_level(form, 12, 6)
+	near.set_meta("lod_meshes", [_outcrop_level(form, 8, 4), _outcrop_level(form, 6, 3)])
+	return near
+
+
+static func _outcrop_level(form: int, segments: int, rings: int) -> ArrayMesh:
+	var sphere := SphereMesh.new()
+	sphere.radial_segments = segments
+	sphere.rings = rings
+	var arrays := sphere.get_mesh_arrays()
+	var dirs: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var parts: Array = _OUTCROP_PARTS[form]
+	for n in parts.size():
+		var part: Array = parts[n]
+		var seed := 500 + form * 17 + n * 5
+		var basis := Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+		# Соседние отдельности светлее и темнее: плиты читаются и без теней.
+		var tone := 0.88 + 0.22 * WGRandom.hash2(form, n, 71)
+		var cuts: Array = []
+		for c in 3:
+			var a := (c + WGRandom.hash2(seed, c, 3) * 0.8) * TAU / 3.0
+			cuts.append([Vector3(cos(a), 0.15 + 0.6 * WGRandom.hash2(seed, c, 5), sin(a)).normalized(), 0.52 + 0.2 * WGRandom.hash2(seed, c, 7)])
+		var positions := PackedVector3Array()
+		var colors := PackedColorArray()
+		positions.resize(dirs.size())
+		colors.resize(dirs.size())
+		for i in dirs.size():
+			var d := dirs[i].normalized()
+			# Скруглённый параллелепипед вместо шара: грани плит и блоков, а не валунов.
+			var p := d / pow(pow(absf(d.x), 3.0) + pow(absf(d.y), 3.0) + pow(absf(d.z), 3.0), 1.0 / 3.0)
+			p *= 0.86 + 0.24 * Models._noise3(d * 1.7, seed)
+			for cut: Array in cuts:
+				var over: float = p.dot(cut[0]) - cut[1]
+				if over > 0.0:
+					p -= cut[0] * over
+			positions[i] = part[0] + basis * (p * part[1])
+			var mineral := Models._noise3(d * 5.0, seed + 3)
+			var stone := (0.8 + mineral * 0.2) * tone * (0.82 + 0.18 * smoothstep(-0.6, 0.4, d.y))
+			var lichen := smoothstep(0.64, 0.82, Models._noise3(d * 7.0, seed + 9)) * 0.45
+			var green := smoothstep(0.35, 0.9, d.y) * smoothstep(0.5, 0.78, mineral) * 0.3
+			colors[i] = Color(stone * 1.02, stone, stone * 0.97).lerp(Color(0.6, 0.6, 0.47), lichen).lerp(Color(0.38, 0.47, 0.26), green)
+		for t in range(0, indices.size(), 3):
+			var a := positions[indices[t]]
+			var b := positions[indices[t + 1]]
+			var c := positions[indices[t + 2]]
+			var normal := (c - a).cross(b - a).normalized()
+			if normal.length_squared() < 0.5:
+				continue
+			for j in 3:
+				st.set_color(colors[indices[t + j]])
+				st.set_normal(normal)
+				st.add_vertex(positions[indices[t + j]])
+	st.index()
+	return st.commit()
+
+
+## Ось выхода: между вертикалью и нормалью склона.
+static func outcrop_up(normal: Vector3) -> Vector3:
+	return Vector3.UP.lerp(normal, OUTCROP_TILT).normalized()
+
+
+## Опора выхода масштаба scale: Vector4(высота основания, ось x, y, z); x = INF — места нет.
+## sample(x, z) -> Vector2(земля, глубина воды над ней; INF — нет данных).
+## Основание опускается до самой низкой точки кольца опоры: край выхода не висит над склоном,
+## а нижняя часть модели уходит в землю. Слишком неровное кольцо (кромка выемки дороги,
+## излом гребня) похоронило бы выход — такое место отклоняется.
+static func outcrop_seat(sample: Callable, x: float, z: float, scale: float) -> Vector4:
+	var r := OUTCROP_R * scale
+	var l: Vector2 = sample.call(x - r, z)
+	var rr: Vector2 = sample.call(x + r, z)
+	var b: Vector2 = sample.call(x, z - r)
+	var f: Vector2 = sample.call(x, z + r)
+	if l.x == INF or rr.x == INF or b.x == INF or f.x == INF:
+		return Vector4(INF, 0, 1, 0)
+	var up := outcrop_up(Vector3(l.x - rr.x, 2.0 * r, b.x - f.x).normalized())
+	var side := up.cross(Vector3.BACK)
+	if side.length_squared() < 1e-6:
+		side = Vector3.RIGHT
+	side = side.normalized()
+	var ahead := side.cross(up)
+	var lo := INF
+	var hi := -INF
+	# 16 точек кольца: на выпуклом гребне между редкими точками край повис бы над землёй.
+	for n in 17:
+		var off := Vector3.ZERO if n == 16 else (side * cos(n * TAU / 16.0) + ahead * sin(n * TAU / 16.0)) * r
+		var s: Vector2 = sample.call(x + off.x, z + off.z)
+		if s.x == INF or s.y > 0.05:
+			return Vector4(INF, 0, 1, 0)
+		lo = minf(lo, s.x - off.y)
+		hi = maxf(hi, s.x - off.y)
+	var sink := 0.12 * scale
+	if hi - lo > OUTCROP_TOP * scale * 0.8 - sink:
+		return Vector4(INF, 0, 1, 0)
+	return Vector4(lo - sink, up.x, up.y, up.z)
+
+
+## Опора любого камня мира на Heightfield: Vector4(земля или основание выхода, нормаль/ось);
+## x = INF — камень не ставится. Общая для отрисовки, препятствий и раскладки подлеска.
+static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
+	if is_outcrop(v):
+		return outcrop_seat(func(px: float, pz: float) -> Vector2: return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale)
+	var normal := normal_at(heights, x, z)
+	var ground := heights.ground_at(x, z)
+	if not has_seat(heights, x, z, scale, normal, ground):
+		return Vector4(INF, 0, 1, 0)
+	return Vector4(ground, normal.x, normal.y, normal.z)
+
+
+## То же по снимку области за краем (фоновый поток, без живого мира).
+static func seat_snapshot_any(f: Dictionary, hv: PackedFloat32Array, width: int, height: int, x: float, z: float, scale: float, v: int) -> Vector4:
+	if not is_outcrop(v):
+		return seat_snapshot(f, hv, width, height, x, z, scale)
+	return outcrop_seat(func(px: float, pz: float) -> Vector2:
+		var s := _snapshot_surface(f, hv, width, height, px, pz)
+		return Vector2(s.x, INF if s.x == INF else s.y - s.x), x, z, scale)

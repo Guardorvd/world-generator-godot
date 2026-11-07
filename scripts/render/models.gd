@@ -60,6 +60,10 @@ static func build_tree_defs() -> Dictionary:
 	for variant in RockModels.VARIANTS:
 		defs[Biomes.T_ROCK + variant * ForestModels.MODEL_STRIDE] = {crown = boulder(Vector3(1.3, 0.78, 1.05), 72 + variant, 0.24),
 			leaves = [_c(158, 152, 142), _c(142, 138, 130), _c(168, 160, 146)]}
+	# Скальные выходы: те же камни T_ROCK, формы после шести валунов (RockModels.OUTCROP_V).
+	for form in RockModels.OUTCROPS:
+		defs[Biomes.T_ROCK + (RockModels.VARIANTS + form) * ForestModels.MODEL_STRIDE] = {crown = RockModels.outcrop_mesh(form),
+			leaves = [_c(170, 167, 161), _c(152, 150, 146), _c(181, 176, 168)]}
 	return defs
 
 

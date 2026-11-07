@@ -161,8 +161,11 @@ void fragment() {
 	// на снегу скала проступает слабее, чтобы вершины оставались белыми
 	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
 	float sky = 1.0;
+	vec3 base_col = col;
+	float wet = 0.45; // влажность почвы: у плана из forest_tex.b, за краем — средняя
 	if (forest_enabled && !use_vertex_color) {
 		vec4 forest = texture(forest_tex, UV);
+		wet = forest.b;
 		exposure = forest.a;
 		float cover = smoothstep(0.03, 0.8, forest.r) * (1.0 - snow);
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
@@ -199,13 +202,86 @@ void fragment() {
 			col *= 1.0 + smoothstep(0.54, 0.74, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.24, 0.19, 0.11);
 		}
 	}
-	// The same exposure channel reduces trees/grass and seeds rock compositions.
-	// Broad bedding stays visible beyond the near-detail radius; it changes colour only.
-	float bedding = 0.5 + 0.5 * sin(wpos.y * 0.24 + dot(p, vec2(0.008,0.013)) + n_big * 1.8);
+	// 07.11.2026: горная порода. Тот же канал открытости (forest.a / COLOR.a), уклон и серые скальные
+	// биомы (по цвету карты, как снег) дают три характера: коренную породу (плиты, уступы, трещины),
+	// осыпи (щебень на склонах 25–40°) и пятна грунта с дёрном в сырых местах. Крупные различия
+	// (тела породы и осыпи в сотню метров, осыпи, грунт, пласты, тон отдельных блоков) — только цвет и ALU, они видны
+	// и за DETAIL_FAR и гаснут по размеру пикселя, а не по расстоянию. Одна новая выборка текстуры.
 	float broken = smoothstep(0.25,0.75,n_big + (n_mid-0.5)*0.25);
-	rock = max(rock, exposure * mix(0.65,1.0,broken));
-	vec3 mineral = rock_color * (0.70 + 0.24*bedding + 0.12*n_big);
-	col = mix(col, mineral, rock * (0.90 - 0.55 * snow));
+	float sat = max(base_col.r, max(base_col.g, base_col.b)) - min(base_col.r, min(base_col.g, base_col.b));
+	float grey = (1.0 - smoothstep(0.05, 0.09, sat)) * smoothstep(0.09, 0.15, dot(base_col, vec3(0.333))) * (1.0 - snow);
+	rock = max(max(rock, exposure * mix(0.65,1.0,broken)), grey * 0.96);
+	// Выборка и производные — до ветвления (см. маску полотна ниже): на краю ветки они не определены.
+	float n_macro = texture(detail_tex, p * (1.0 / 600.0) + vec2(0.13, 0.57)).r;
+	float px3 = max(length(fwidth(wpos)), 1e-4);
+	if (rock > 0.01) {
+		float cliff = smoothstep(0.20, 0.40, slope + (n_big - 0.5) * 0.10);
+		// Осыпи — на склонах угла естественного откоса и пятнами по крупному шуму, не сплошным поясом.
+		float band = smoothstep(0.05, 0.11, slope) * (1.0 - smoothstep(0.24, 0.34, slope));
+		float scree = band * smoothstep(0.34, 0.66, n_macro * 0.75 + n_big * 0.25 + (n_mid - 0.5) * 0.1);
+		scree = max(scree, (1.0 - band) * smoothstep(0.45, 0.8, n_big * 0.5 + n_macro * 0.5 + (n_mid - 0.5) * 0.2) * 0.4);
+		scree *= 1.0 - cliff;
+		// Грунт и дёрн — пологие сырые ложбины; на открытом сухом склоне его почти нет.
+		float soil = (1.0 - smoothstep(0.05, 0.16, slope)) * smoothstep(0.6, 0.85, wet + (0.5 - n_macro) * 0.25 + (n_mid - 0.5) * 0.2);
+		soil *= (1.0 - cliff) * (1.0 - exposure * 0.6);
+		scree *= 1.0 - soil;
+		// Тела породы: светлая тёплая и тёмная холодная, полосы в сотни метров.
+		float litho = smoothstep(0.3, 0.7, n_macro + (n_big - 0.5) * 0.12);
+		vec3 lith = mix(rock_color * vec3(0.62, 0.63, 0.67), rock_color * vec3(1.14, 1.09, 1.0), litho);
+		// Пласты (по высоте, с падением) и швы отдельности: блоки 3–4 м, мощность пласта 1,6–3,2 м.
+		vec3 q = vec3(p.x, wpos.y + dot(p, vec2(0.11, -0.07)) + (n_big - 0.5) * 2.5, p.y);
+		q.xz += (vec2(n_mid, n_big) - 0.5) * 1.2;
+		float layer_h = mix(2.2, 4.4, n_macro);
+		// Столбы отдельности 4,3 × 3,7 м, у каждого свой сдвиг пластов: уступы обрываются на швах
+		// ступеньками, а не тянутся по склону сплошными горизонталями.
+		vec2 cell = q.xz / vec2(4.3, 3.7);
+		vec2 cell_i = floor(cell);
+		vec2 fxz = cell - cell_i;
+		float row = q.y / layer_h + grain_hash(cell_i).x;
+		float row_i = floor(row);
+		float fy = row - row_i;
+		vec2 blk = grain_hash(cell_i + vec2(row_i * 17.0, row_i * 5.0));
+		// Тон блоков меняется на границах пластов; на округлом склоне это кольца горизонталей, поэтому там слабо.
+		float block_vis = (1.0 - smoothstep(0.6, 1.6, px3)) * mix(0.2, 1.0, cliff);
+		float ledge_vis = (1.0 - smoothstep(layer_h * 0.04, layer_h * 0.14, px3)) * smoothstep(0.18, 0.36, slope);
+		float crack_vis = 1.0 - smoothstep(0.06, 0.22, px3);
+		float d_joint = min(min(fxz.x, 1.0 - fxz.x) * 4.3, min(fxz.y, 1.0 - fxz.y) * 3.7);
+		float crack_w = 0.035 + 0.04 * blk.y;
+		float joint = (1.0 - smoothstep(crack_w, crack_w + px3, d_joint)) * crack_vis;
+		// Швы — короткие отрезки внутри пласта (отдельность смещена от пласта к пласту). Сплошные швы
+		// по границам пластов на гладком меше рельефа читались как горизонтали карты — их нет.
+		float crack = joint * mix(step(0.6, blk.x) * 0.55, step(0.18, blk.x), cliff) * smoothstep(0.08, 0.3, min(fy, 1.0 - fy) * layer_h);
+		// Только у части блоков и только на круче: на округлом склоне сплошные пласты читались как горизонтали.
+		ledge_vis *= cliff * step(0.4, blk.y);
+		float ledge = mix(mix(0.86, 1.05, smoothstep(0.0, 0.4, fy)), 1.0, 1.0 - ledge_vis);
+		vec3 bed = lith * mix(1.0, 0.86 + 0.26 * blk.x, block_vis) * ledge;
+		// Лишайник на открытых плитах (пятна 7 м, вблизи — мелкие) и мох в трещинах сырых склонов.
+		float lichen = smoothstep(0.60, 0.74, n_mid * 0.55 + n_fine * 0.45) * (0.35 + 0.65 * near) * (1.0 - snow);
+		bed = mix(bed, mix(vec3(0.30, 0.29, 0.15), lith * 0.55, smoothstep(0.4, 0.6, n_big)), lichen * 0.3);
+		bed = mix(bed, mix(lith * 0.38, vec3(0.06, 0.09, 0.035), smoothstep(0.5, 0.75, wet) * (1.0 - snow)), crack * 0.7);
+		// Щебень: светлее и мельче, с отдельными камнями вблизи; дальше — только тон.
+		vec3 talus = mix(lith, rock_color * 1.15, 0.5) * (0.95 + 0.1 * n_mid);
+		if (near > 0.0) {
+			vec2 sc = p * 3.1 + vec2(n_big * 2.3, n_mid * 1.7);
+			vec2 sh = grain_hash(floor(sc));
+			vec2 sl = fract(sc) - (vec2(0.3) + sh * 0.4);
+			float sr = 0.12 + sh.x * 0.16;
+			float saa = max(px3 * 3.1 * 0.5, 0.01);
+			float stone = (1.0 - smoothstep(sr - saa, sr + saa, length(sl))) * step(0.3, sh.y) * (1.0 - smoothstep(0.25, 0.6, saa));
+			float dome = clamp(1.0 - length(sl) / sr, 0.0, 1.0);
+			talus *= 1.0 + stone * (dome * 0.45 - 0.22) * near;
+			talus = mix(talus, lith * mix(0.85, 1.12, sh.x), stone * 0.5 * near);
+		}
+		vec3 turf = mix(vec3(0.115, 0.095, 0.065), vec3(0.13, 0.16, 0.065), smoothstep(0.5, 0.8, wet + (n_mid - 0.5) * 0.4));
+		turf = mix(turf, talus * 0.8, smoothstep(0.55, 0.75, n_fine) * 0.35 * near);
+		vec3 geo = mix(mix(bed, talus, scree), turf, soil);
+		col = mix(col, geo, rock * (0.92 - 0.7 * snow));
+		// Уступы и швы видны и светом: нормаль верха пласта к небу, подрез вниз (мировые координаты).
+		float relief_w = rock * (1.0 - scree) * (1.0 - soil) * (1.0 - snow * 0.6);
+		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.55 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.45) * ledge_vis * cliff;
+		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.25 * block_vis * cliff;
+		NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(dn * relief_w, 0.0)).xyz);
+	}
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
 	// Маска метровой сетки задаёт общий силуэт, мелкая кромка считается в пикселях.

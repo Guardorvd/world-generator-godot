@@ -20,6 +20,7 @@ const TRUNK := {
 }
 const ROCK_R := 1.15    # валун: сфера 1,1 м, сплюснутая до 1,43 × 0,83 × 1,1, при масштабе 1
 const ROCK_TOP := 1.07
+const OUTCROP_R := RockModels.OUTCROP_R * 0.85 # скальный выход: тело уже основания, края утоплены в склон
 ## Модель двух контактов: препятствие не выше этого (бревно, невысокий валун) встречает колесо, а не раму —
 ## колесо накатывается на его скруглённую кромку (wheel_support); выше — стена, как прежде, м
 const CLIMB_MAX := 0.45
@@ -157,6 +158,11 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				# на дорогах и в воде дерево не рисуется — не мешает и здесь
 				if world.path_mask[floori(world.obj_y[o]) * world.W + floori(world.obj_x[o])] >= 2:
 					continue
+				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
+					var seat := RockModels.seat(heights, x, z, s * 1.2, world.obj_v[o])
+					if seat.x != INF:
+						_put(out, x, z, x, z, OUTCROP_R * s * 1.2, seat.x, seat.x + RockModels.OUTCROP_TOP * s * 1.2 * seat.z)
+					continue
 				var base := heights.ground_at(x, z)
 				if kind == Biomes.T_ROCK:
 					if s < 0.42 or not RockModels.has_seat(heights, x, z, s * 1.2):
@@ -179,6 +185,10 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 			if absf(x - px) > REACH or absf(z - pz) > REACH:
 				continue
 			var base: float = items.ground[o]
+			if kind == Biomes.T_ROCK and RockModels.is_outcrop(items.v[o]):
+				var up: Vector3 = items.normals[o] if items.has("normals") else Vector3.UP
+				_put(out, x, z, x, z, OUTCROP_R * s * 1.2, base, base + RockModels.OUTCROP_TOP * s * 1.2 * up.y)
+				continue
 			if kind == Biomes.T_ROCK:
 				if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
 					continue

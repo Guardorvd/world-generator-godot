@@ -7,7 +7,7 @@ const Surface := preload("res://scripts/world/mountain_surface.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const N := 768
 const SIDE := 320
-const BASE_REV := "3b95849"
+const BASE_REV := "cb4622c" # 07.11.2026: до скальных выходов и породы в материале
 var failures := 0
 var scene: Node3D
 var camera: Camera3D
@@ -68,7 +68,9 @@ func rules() -> void:
 	f.slope.fill(1.5);f.rock=Surface.field(f.elev,f.slope,f.moist)
 	var cliff:=StageVegetation.ObjStore.new(null);cliff.begin_chunk(0,0,32,32)
 	RockScatter.place_chunk(73,0,0,32,32,f,0,0,32,cliff)
-	check(cliff.x.is_empty(),"cliffs use terrain material, not unsupported ordinary boulders")
+	var boulders:=0
+	for v in cliff.v: boulders+=int(not RockModels.is_outcrop(v))
+	check(boulders==0 and cliff.x.size()>0,"cliffs get bedrock outcrops, not unsupported ordinary boulders")
 
 func geography(seed_text:String) -> WorldData:
 	var w:=Probe.world(seed_text);w.scale=float(w.N)/(512*512)
@@ -108,7 +110,15 @@ func views(w:WorldData,h:Heightfield,origin:Vector2i,peak:Vector3) -> Dictionary
 			if a.x<origin.x+16 or a.y<origin.y+16 or a.x>origin.x+SIDE-16 or a.y>origin.y+SIDE-16:continue
 			var score:=w.elev[int(a.y)*N+int(a.x)]-Vector2(a.x,a.y).distance_to(Vector2(peak.x,peak.z)/4)*0.002
 			if score>best:best=score;road=Vector2(a.x,a.y)*4;along=Vector2(b.x-a.x,b.y-a.y).normalized()
+	# Самая крутая открытая клетка недалеко от вершины: скальный пояс и осыпь под ним.
+	var cliff:=open;best=-INF
+	for y in range(origin.y+24,origin.y+SIDE-24,2):
+		for x in range(origin.x+24,origin.x+SIDE-24,2):
+			var i:=y*N+x
+			var score:=w.slope[i]*Surface.exposure(w.elev[i],w.slope[i],w.moist[i])-Vector2(x,y).distance_to(Vector2(peak.x,peak.z)/4)*0.002
+			if score>best:best=score;cliff=Vector2(x,y)*4
 	return {panorama=[peak+Vector3(-235,145,235),peak-Vector3(0,35,0)],
+		cliff=[ground(h,cliff+Vector2(38,-30),6.0),ground(h,cliff,3.0)],
 		rocks=[ground(h,open+Vector2(-45,55),10),ground(h,open,1.0)],
 		rider_road=[ground(h,road,1.8),ground(h,road+along*45,2.0)]}
 
