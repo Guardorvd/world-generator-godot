@@ -69,28 +69,34 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 	])
 
 
-static func _beam(a: Vector3, b: Vector3, radius: float, sides := 6) -> Array:
+static func _beam(a: Vector3, b: Vector3, radius: float, sides := 6, caps := false) -> Array:
 	var delta := b - a
-	var part := Models._cyl(radius * 0.7, radius, delta.length(), sides)
+	var part := Models._cyl(radius * 0.72, radius, delta.length(), sides, caps)
 	return [part[0], Transform3D(Basis(Quaternion(Vector3.UP, delta.normalized())), a) * part[1]]
 
 
 static func _log(moss: bool) -> Mesh:
-	var a := Vector3(-2.2, 0.22, 0)
-	var b := Vector3(2.1, 0.17, 0.07)
-	var parts: Array = [[_beam(a, b, 0.23), BARK],
-		[_beam(a - Vector3(0.01, 0, 0), a, 0.21), WOOD],
-		[_beam(b, b + Vector3(0.01, 0, 0), 0.15), WOOD]]
+	var a := Vector3(-2.2, 0.22, -0.04)
+	var mid := Vector3(-0.1, 0.20, 0.06)
+	var b := Vector3(2.1, 0.16, -0.02)
+	var parts: Array = [
+		[_beam(a, mid, 0.24, 6, false), BARK],
+		[_beam(mid, b, 0.18, 6, false), BARK],
+		[_beam(a - Vector3(0.02, 0, 0), a, 0.20, 6, true), WOOD],
+		[_beam(b, b + Vector3(0.02, 0, 0), 0.14, 6, true), WOOD],
+	]
 	for n in 4:
-		var x := -1.2 + n * 0.8
+		var x := -1.25 + n * 0.82
 		var side := 1.0 if n % 2 == 0 else -1.0
-		parts.append([_beam(Vector3(x, 0.23, 0), Vector3(x + 0.35, 0.35, side * 0.7), 0.055), BARK])
+		var z_off := 0.04 if n in [1, 2] else -0.02
+		parts.append([_beam(Vector3(x, 0.22, z_off), Vector3(x + 0.34, 0.36, side * 0.68), 0.055, 4, false), BARK])
 	# Остатки корневой лапы на комлевом конце.
 	for n in 3:
-		parts.append([_beam(a, a + Vector3(-0.35, 0.18 + n * 0.14, (n - 1) * 0.35), 0.065), BARK])
+		parts.append([_beam(a, a + Vector3(-0.36, 0.16 + n * 0.14, (n - 1) * 0.36), 0.068, 4, false), BARK])
 	if moss:
 		for n in 4:
-			parts.append([Models._moved(Plants._mound(0.33, 0.41, 1.4, 0.17, 0.55), Vector3(-1.4 + n * 0.8, 0, 0)), Color(0.25 + n * 0.015, 0.36, 0.15)])
+			var z_m := 0.04 if n in [1, 2] else -0.01
+			parts.append([Models._moved(Plants._mound(0.32, 0.40, 1.45, 0.16, 0.56), Vector3(-1.35 + n * 0.82, 0, z_m)), Color(0.26 + n * 0.018, 0.38, 0.16)])
 	return Plants._colored(parts)
 
 
@@ -102,9 +108,9 @@ static func meshes() -> Array[Mesh]:
 static func build_far_meshes() -> Dictionary:
 	var roots: Array = []
 	for n in 5:
-		var a := n * TAU / 5.0 + 0.3
+		var a := n * TAU / 5.0 + 0.3 + sin(n * 1.9) * 0.12
 		var f := Vector3(cos(a), 0, sin(a))
-		roots.append([_beam(f * 0.08 + Vector3.UP * 0.22, f * 1.0, 0.09, 4), BARK])
+		roots.append([_beam(f * 0.10 + Vector3.UP * 0.20, f * 1.05, 0.042, 4, false), BARK])
 	var stones := SurfaceTool.new()
 	for n in 5:
 		var a := n * 2.4
@@ -118,30 +124,39 @@ static func build_far_meshes() -> Dictionary:
 static func build_meshes() -> Array[Mesh]:
 	var leaves: Array = []
 	var needles: Array = []
-	# Несколько приподнятых листьев и иголок поверх шейдерной подстилки.
+	# Несколько приподнятых желобчатых листьев и хвойных веточек поверх шейдерной подстилки.
 	for n in 11:
-		var a := n * 2.4
-		var p := Vector3(cos(a), 0.025, sin(a)) * (0.12 + n * 0.045)
-		p.y = 0.025
-		var f := Vector3(cos(a), 0, sin(a)) * 0.12
-		var s := Vector3(-sin(a), 0.012, cos(a)) * 0.055
-		leaves.append([p - f, p + s, p + f + Vector3.UP * 0.025, p - s])
-		var thin := Vector3(-sin(a), 0, cos(a)) * 0.009
-		needles.append([p - thin, p + thin, p + f * 1.3])
-	var twig := Plants._colored([[_beam(Vector3(-0.5, 0.045, 0), Vector3(0.55, 0.07, 0.1), 0.035), BARK],
-		[_beam(Vector3(0, 0.06, 0.05), Vector3(0.25, 0.06, 0.4), 0.02), BARK]])
+		var a := n * 2.39996
+		var p := Vector3(cos(a), 0.024, sin(a)) * (0.11 + n * 0.044)
+		p.y = 0.022 + (n % 3) * 0.008
+		var rot_a := a + sin(n * 1.7) * 0.6
+		var f := Vector3(cos(rot_a), 0, sin(rot_a)) * (0.11 + (n % 2) * 0.025)
+		var s := Vector3(-sin(rot_a), 0.014, cos(rot_a)) * 0.058
+		leaves.append([p - f, p + s, p + f + Vector3.UP * 0.028, p - s])
+		var thin := Vector3(-sin(rot_a), 0.004, cos(rot_a)) * 0.011
+		needles.append([p - thin, p + thin, p + f * 1.35 + Vector3.UP * 0.012])
+	var twig := Plants._colored([
+		[_beam(Vector3(-0.52, 0.04, -0.04), Vector3(0.05, 0.065, 0.04), 0.036, 4, false), BARK],
+		[_beam(Vector3(0.05, 0.065, 0.04), Vector3(0.56, 0.05, 0.12), 0.024, 4, false), BARK],
+		[_beam(Vector3(-0.02, 0.06, 0.03), Vector3(0.28, 0.07, 0.42), 0.018, 3, false), BARK],
+	])
 	var roots: Array = []
 	for n in 5:
-		var a := n * TAU / 5.0 + 0.3
+		var a := n * TAU / 5.0 + 0.3 + sin(n * 1.9) * 0.12
 		var f := Vector3(cos(a), 0, sin(a))
-		roots.append([_beam(f * 0.08 + Vector3.UP * 0.22, f * 0.65 + Vector3.UP * 0.07, 0.11), BARK])
-		roots.append([_beam(f * 0.65 + Vector3.UP * 0.07, f * 1.15, 0.04), BARK])
-	var snag: Array = [[_beam(Vector3.ZERO, Vector3(0.08, 3.1, 0), 0.18), BARK],
-		[_beam(Vector3(0.08, 3.1, 0), Vector3(0.17, 3.35, 0.04), 0.085), WOOD]]
+		var side := Vector3(-sin(a), 0, cos(a)) * (0.05 if n % 2 == 0 else -0.05)
+		var knee := f * 0.58 + side + Vector3.UP * 0.085
+		roots.append([_beam(f * 0.08 + Vector3.UP * 0.24, knee, 0.11, 5, false), BARK])
+		roots.append([_beam(knee, f * 1.16, 0.045, 4, false), BARK])
+	var snag: Array = [
+		[_beam(Vector3.ZERO, Vector3(0.05, 1.65, -0.02), 0.19, 6, false), BARK],
+		[_beam(Vector3(0.05, 1.65, -0.02), Vector3(0.09, 3.10, 0.01), 0.14, 5, false), BARK],
+		[_beam(Vector3(0.09, 3.10, 0.01), Vector3(0.17, 3.36, 0.04), 0.085, 5, true), WOOD],
+	]
 	for n in 3:
-		var a := n * 2.4
-		var p := Vector3(0.05, 1.3 + n * 0.5, 0)
-		snag.append([_beam(p, p + Vector3(cos(a) * 0.65, 0.45, sin(a) * 0.65), 0.045), BARK])
+		var a := n * 2.39996 + 0.4
+		var p := Vector3(0.06, 1.32 + n * 0.52, 0)
+		snag.append([_beam(p, p + Vector3(cos(a) * 0.66, 0.44, sin(a) * 0.66), 0.045, 4, false), BARK])
 	# 9.4: россыпь из тех же бугристых камней, что валуны мира, а не из сплюснутых сфер
 	var stones := SurfaceTool.new()
 	for n in 5:
@@ -150,20 +165,35 @@ static func build_meshes() -> Array[Mesh]:
 		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * r, 300 + n, 0.35, 0.5)
 		stones.append_from(stone, 0, Transform3D(Basis(), Vector3(cos(a) * 0.45, 0.0, sin(a) * 0.45)))
 	# Пень: срез светлой древесины, корневые лапы и шапка мха.
-	var stump: Array = [[_beam(Vector3(0, -0.05, 0), Vector3(0.02, 0.45, 0), 0.3), BARK],
-		[_beam(Vector3(0.02, 0.45, 0), Vector3(0.02, 0.47, 0), 0.22), WOOD],
-		[Models._moved(Plants._mound(0.2, 0.47, 1.0, 0.25, 0.8), Vector3(-0.06, 0, 0.05)), Color(0.36, 0.5, 0.2)]]
-	for n in 4:
-		var a := n * TAU / 4.0 + 0.4
+	var stump: Array = [
+		[_beam(Vector3(0, -0.05, 0), Vector3(0.02, 0.45, 0), 0.30, 6, false), BARK],
+		[_beam(Vector3(0.02, 0.44, 0), Vector3(0.02, 0.47, 0), 0.22, 6, true), WOOD],
+		[Models._moved(Plants._mound(0.20, 0.47, 1.05, 0.24, 0.82), Vector3(-0.06, 0, 0.05)), Color(0.35, 0.50, 0.20)],
+	]
+	for n in 5:
+		var a := n * TAU / 5.0 + 0.35
 		var f := Vector3(cos(a), 0, sin(a))
-		stump.append([_beam(f * 0.15 + Vector3.UP * 0.25, f * 0.62, 0.09), BARK])
+		stump.append([_beam(f * 0.14 + Vector3.UP * 0.26, f * 0.64, 0.088, 4, false), BARK])
 	# 11.6: упавшая сухая ветка поперёк колеи — 2,2 м, развилки и пучок сухой листвы (кочка RoadObstacles.BUMP)
-	var branch: Array = [[_beam(Vector3(-1.1, 0.05, 0), Vector3(1.1, 0.04, 0.1), 0.05), BARK]]
+	var branch: Array = [
+		[_beam(Vector3(-1.1, 0.05, -0.02), Vector3(0.0, 0.06, 0.05), 0.052, 5, false), BARK],
+		[_beam(Vector3(0.0, 0.06, 0.05), Vector3(1.1, 0.04, 0.10), 0.038, 4, false), BARK],
+	]
 	for n in 5:
 		var x := -0.8 + n * 0.4
 		var side := 1.0 if n % 2 == 0 else -1.0
-		branch.append([_beam(Vector3(x, 0.05, 0.02), Vector3(x + 0.45, 0.07 + n * 0.015, side * 0.42), 0.022), BARK])
+		branch.append([_beam(Vector3(x, 0.05, 0.02), Vector3(x + 0.45, 0.07 + n * 0.015, side * 0.42), 0.022, 3, false), BARK])
 	branch.append([Models._moved(Plants._mound(0.16, 0.05, 1.6, 0.45, 0.4), Vector3(0.95, 0.0, 0.05)), Color(0.42, 0.31, 0.16)])
-	return [Plants._leaves(leaves, Color(0.46, 0.35, 0.18)), Plants._leaves(needles, Color(0.4, 0.33, 0.19)),
-		twig, Plants._colored(roots), _log(false), _log(true), Plants._colored(snag), stones.commit(),
-		Plants._colored(stump), Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62), Plants._colored(branch)]
+	return [
+		Plants._leaves(leaves, Color(0.47, 0.35, 0.18)),
+		Plants._leaves(needles, Color(0.40, 0.33, 0.19)),
+		twig,
+		Plants._colored(roots),
+		_log(false),
+		_log(true),
+		Plants._colored(snag),
+		stones.commit(),
+		Plants._colored(stump),
+		Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62),
+		Plants._colored(branch),
+	]

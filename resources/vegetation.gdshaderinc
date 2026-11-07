@@ -64,8 +64,9 @@ void vertex() {
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
 	if (grass_variation) {
 		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;
-		VERTEX.xz += vec2(cos(seed), sin(seed)) * (0.035 + INSTANCE_CUSTOM.z * 0.065) * UV.y;
-		VERTEX.y *= mix(0.9, 1.1, fract(seed * 0.381966));
+		float bend = UV.y * (0.35 + 0.65 * UV.y);
+		VERTEX.xz = VERTEX.xz * mix(1.16, 0.92, INSTANCE_CUSTOM.z) + vec2(cos(seed), sin(seed)) * (0.04 + INSTANCE_CUSTOM.z * 0.08) * bend;
+		VERTEX.y *= mix(0.84, 1.18, fract(seed * 0.381966 + INSTANCE_CUSTOM.z * 0.5));
 	}
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
