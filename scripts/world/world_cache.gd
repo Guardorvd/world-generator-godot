@@ -27,8 +27,8 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 9 # mountain detail layer: fall-line ribs and gullies, soft benches over the GEO 7 relief
-const SCHEMA_TRAILS_VERSION := 13 # long-corridor trail network with the trail park; geography remains reusable
+const SCHEMA_GEO_VERSION := 11 # slope detail without contour terraces; independent lake proposal streams
+const SCHEMA_TRAILS_VERSION := 14 # publish the largest confirmed settlement component before choosing the home
 const SCHEMA_NATURE_VERSION := 4 # coherent rock deposits, bounded density and climate exclusions
 const SCHEMA_VIEW_VERSION := 1
 ## Картинки мира: имя файла и исходники рисования

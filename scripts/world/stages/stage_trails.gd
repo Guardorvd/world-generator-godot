@@ -540,9 +540,8 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		connected += 1
 	if n > 0:
 		joined[0] = 1
-	# Только подтверждённые поселения попадают на карту, в растительность и постройки:
-	# у каждого есть дорога к соседу. Первое (самое удобное) место остаётся всегда, как раньше;
-	# начало новой сети, к которому никто не подъехал, — нет.
+	# Сохраняем подтверждённые узлы и первый кандидат как запасной, если дорог нет.
+	# Основная компонента выбирается после вторичных связей: старт игрока ещё не задан.
 	var linked := PackedByteArray()
 	linked.resize(n)
 	if n > 0:
@@ -607,8 +606,10 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.restores = state.get("restores", 0)
 
 
-## Keep the starting settlement and villages reached by confirmed primary OR
-## secondary paths. A 2D mask contact alone cannot prove access at an overpass.
+## Publish the largest confirmed component, not the component of candidate zero.
+## Candidate order ranks sites, not connectivity; PlayerState.home chooses the
+## actual start after publication. Ties prefer the earliest ranked component.
+## A 2D mask contact alone cannot prove access at an overpass.
 static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
 	if w.settlements.is_empty(): return
 	var groups: Array = range(w.settlements.size())
@@ -616,7 +617,15 @@ static func _retain_connected_settlements(w: WorldData, paths: Array) -> void:
 		var a := _group(groups, edge[0])
 		var b := _group(groups, edge[1])
 		groups[maxi(a, b)] = mini(a, b)
-	var root := _group(groups, 0)
+	var sizes := {}
+	var root := 0
+	var largest := 0
+	for index in w.settlements.size():
+		var r := _group(groups, index)
+		sizes[r] = int(sizes.get(r, 0)) + 1
+		if sizes[r] > largest or sizes[r] == largest and r < root:
+			root = r
+			largest = sizes[r]
 	var keep: Array[SettlementData] = []
 	var remap := {}
 	for index in w.settlements.size():

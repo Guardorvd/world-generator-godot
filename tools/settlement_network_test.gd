@@ -69,10 +69,24 @@ func component_checks() -> void:
 	var groups: Array = [0, 0, 1, 2, 4, 4]
 	check(StageTrails._group(groups, 3) == 0 and StageTrails._group(groups, 5) == 4, "DSU находит корни через цепочки родителей и различает компоненты")
 	var isolated := world()
-	var only: SettlementData = isolated.settlements[0]
+	var sites := isolated.settlements.duplicate()
 	var disconnected: Array = [[2, 4, PackedInt32Array(), true, 1.0], [4, 6, PackedInt32Array(), false, 1.0]]
 	StageTrails._retain_connected_settlements(isolated, disconnected)
-	check(isolated.settlements == [only] and disconnected.is_empty(), "изолированное стартовое поселение не объявляет доступными чужие группы")
+	check(isolated.settlements == [sites[2],sites[4],sites[6]], "изолированный лучший кандидат не уничтожает готовую сеть остальных поселений")
+	check(disconnected.map(func(e:Array)->Vector2i:return Vector2i(e[0],e[1]))==[Vector2i(0,1),Vector2i(1,2)],"связи выбранной компоненты перенумерованы")
+	var snapshot := var_to_bytes([isolated.settlements.map(func(s:SettlementData)->int:return s.i),disconnected])
+	StageTrails._retain_connected_settlements(isolated,disconnected)
+	check(snapshot==var_to_bytes([isolated.settlements.map(func(s:SettlementData)->int:return s.i),disconnected]),"повторная публикация идемпотентна")
+	var tied := world()
+	var tied_sites := tied.settlements.duplicate()
+	var tied_paths: Array = [[4,6,PackedInt32Array(),false,1.0],[0,2,PackedInt32Array(),true,1.0]]
+	StageTrails._retain_connected_settlements(tied,tied_paths)
+	check(tied.settlements==[tied_sites[0],tied_sites[2]],"равные компоненты: стабильный выбор по рангу кандидатов, не порядку рёбер")
+	var empty := world()
+	var first: SettlementData = empty.settlements[0]
+	var no_paths: Array=[]
+	StageTrails._retain_connected_settlements(empty,no_paths)
+	check(empty.settlements==[first],"если подтверждённых дорог нет, остаётся один запасной кандидат")
 
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)

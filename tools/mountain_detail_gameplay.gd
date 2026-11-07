@@ -16,6 +16,12 @@ func check(ok: bool, label: String) -> void:
 	failures += int(not ok)
 
 func run() -> void:
+	# This stand's generation limit assumes the native backend. Fail before a
+	# stale assembly silently turns the integrated comparison into a long fallback run.
+	check(Grid.fast_grid()!=null,"native backend available")
+	if failures:
+		quit(1)
+		return
 	var rows := []
 	var seeds: Array = Probe.SEEDS
 	var args := OS.get_cmdline_user_args()
@@ -26,15 +32,9 @@ func run() -> void:
 			print("BEGIN ",seed_text," ",version)
 			var started := Time.get_ticks_usec()
 			var saved: Dictionary = FileAccess.open(OUT.path_join(seed_text+"_"+version+".bin"),FileAccess.READ).get_var()
-			var w := WorldData.new()
-			w.W=768; w.H=768; w.N=768*768; w.scale=float(w.N)/(512*512)
-			w.seed_text=seed_text; w.seed_num=WGRandom.hash_string(seed_text)
-			for key: String in WorldGenerator.NOISE_SLOTS:
-				w.noise[key]=Simplex.new(WorldGenerator.noise_rng(w.seed_num,key))
-			w.mountain_scale=0.8+0.8*WGRandom.hash2(31,7,w.seed_num)
-			w.mountain_bias=0.05+0.4*WGRandom.hash2(17,19,w.seed_num)
-			w.mountain_height=0.75+0.6*WGRandom.hash2(47,3,w.seed_num)
-			w.foothill_spread=0.15+0.85*WGRandom.hash2(73,11,w.seed_num)
+			var w := Probe.world(seed_text)
+			w.scale=float(w.N)/(512*512)
+			StageRelief.configure(w)
 			w.macro_x=saved.macro.x; w.macro_y=saved.macro.y; w.h=saved.h
 			w.start_noise_fields()
 			StageOcean.run(w); StageHydrology.run(w); StageRivers.run(w)
@@ -50,7 +50,7 @@ func run() -> void:
 					river_high += int(w.slope[i] > StageTrails.FORD_SLOPE)
 			var proposed := w.settlements.size()
 			if args.has("--places"):
-				for s: SettlementData in w.settlements: print("PLACE ", version, " ", s.x, ",", s.y, " h=", snappedf(w.h[s.y * w.W + s.x] * GameConfig.HS, 0.1))
+				for s: SettlementData in w.settlements: print("PLACE ", version, " ", s.x, ",", s.y, " h=", snappedf(w.h[s.i] * GameConfig.HS, 0.1))
 			started=Time.get_ticks_usec()
 			StageTrails.run(w,func(_p:float,_s:String)->void:pass)
 			var road_ms := (Time.get_ticks_usec()-started)/1000.0

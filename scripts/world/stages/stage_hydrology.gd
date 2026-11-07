@@ -46,14 +46,15 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 	for i in w.N:
 		rain[i] = rainfall(noise_values[i], w.dist_ocean[i])
 	w.rain = rain
-	var rng := WGRandom.new(WGRandom.derive(w.seed_num, "water.rare_lakes"))
-	var want := mini(2, floori(rng.next_float() * 3.0)) if lake_budget < 0 else clampi(lake_budget, 0, 2)
+	var budget_rng := WGRandom.new(WGRandom.derive(w.seed_num, "water.rare_lakes"))
+	var want := mini(2, floori(budget_rng.next_float() * 3.0)) if lake_budget < 0 else clampi(lake_budget, 0, 2)
 	var count := 0
 	# Work is bounded independently of the number of depressions in the map.
 	for attempt in (192 if want > 0 and mini(w.W, w.H) > 48 else 0):
 		if count >= want: break
-		var x := 24 + floori(rng.next_float() * (w.W - 48))
-		var y := 24 + floori(rng.next_float() * (w.H - 48))
+		var candidate := lake_candidate(w.seed_num, w.W, w.H, attempt)
+		var x: int = candidate.x
+		var y: int = candidate.y
 		var c := y * w.W + x
 		# A short local descent only proposes a basin; it never edits terrain.
 		for step in 24:
@@ -64,7 +65,7 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 			if best == c: break
 			c = best
 		if w.ocean[c] != 0 or w.lake[c] != 0 or w.dist_ocean[c] < 12.0: continue
-		var level := w.h[c] + 0.006 + rng.next_float() * 0.010
+		var level := w.h[c] + float(candidate.depth)
 		var cells := _closed_basin(w, c, level)
 		if cells.is_empty(): continue
 		for i in cells:
@@ -72,6 +73,16 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 			w.filled[i] = level
 		count += 1
 	w.generation_profile.freshwater_lakes = count
+
+
+## Each proposal owns its random stream. Rejecting a basin must not consume or
+## skip numbers belonging to later coordinates/depths. Terrain still decides
+## which proposals form real lakes; the bounded lake budget is a separate policy.
+## depth uses the same normalized height units as w.h (not metres).
+static func lake_candidate(seed_num: int, width: int, height: int, attempt: int) -> Dictionary:
+	var proposal := WGRandom.at(seed_num, "water.lake_candidate", attempt, 0)
+	return {x=24+floori(proposal.next_float()*(width-48)),
+		y=24+floori(proposal.next_float()*(height-48)), depth=0.006+proposal.next_float()*0.010}
 
 
 ## Reject open, narrow, oversized or overlapping pools. One constant level per lake.

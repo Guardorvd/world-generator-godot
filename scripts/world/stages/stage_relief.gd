@@ -3,8 +3,10 @@ extends RefCounted
 ## Этап 1. Макрорельеф: континенты, горные массивы (с 1.9.7, см. mountain) и возвышенности (с 3.0), равнины и холмистые края (с 1.9.8), уровень моря, микрорельеф суши.
 ## Пишет: w.macro_x, macro_y — сдвиг шума материков (место старта), w.h — высота клетки (0 — уровень моря,
 ## суша до 1, дно до -1).
-## Строки карты независимы, поэтому считаются параллельно полосами. В сборке Godot .NET тот же цикл
-## идёт на C# (FastGrid.ReliefField), результат тот же бит в бит.
+## Основа считается независимо по клеткам; слой склонов читает готовую основу с полосой соседей.
+## Оба прохода можно распараллеливать. Native-копия — FastGrid.Relief.cs; результат бит в бит.
+
+const Detail := preload("res://scripts/world/mountain_detail.gd")
 
 const PROGRESS := 0.02
 const LABEL := "Формирование континентов"
@@ -53,22 +55,26 @@ const PICK_LAND := 0.6
 
 
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
-static func run(w: WorldData) -> void:
+static func run(w: WorldData, include_detail: bool = true) -> void:
 	var N := w.N
-	# Свойства гор и предгорий на весь мир, без расхода общего rng. Редкие горы могут оставаться крупными.
-	w.mountain_scale = 0.8 + 0.8 * WGRandom.hash2(31, 7, w.seed_num)
-	w.mountain_bias = 0.05 + 0.4 * WGRandom.hash2(17, 19, w.seed_num)
-	w.mountain_height = 0.75 + 0.6 * WGRandom.hash2(47, 3, w.seed_num)
-	w.foothill_spread = 0.15 + 0.85 * WGRandom.hash2(73, 11, w.seed_num)
+	configure(w)
 	_pick_start(w)
-	var h := raw_rect(w, 0, 0, w.W, w.H, true)
+	var h := raw_rect(w, 0, 0, w.W, w.H, true, include_detail)
 	for i in N:
 		h[i] = normalize(h[i])
-	# Микрорельеф суши: мелкие неровности, из-за которых реки на равнинах петляют
+	# Микрорельеф суши: небольшие неровности поверхности, с затуханием к берегу.
 	var micro := Parallel.fbm_field(w.W, w.H, w.noise.micro, 9.0, 2)
 	for i in N:
 		h[i] = add_micro(h[i], micro[i])
 	w.h = h
+
+
+## Параметры всего мира, без расхода общего RNG. Не меняет окно старта и готовые высоты.
+static func configure(w: WorldData) -> void:
+	w.mountain_scale = 0.8 + 0.8 * WGRandom.hash2(31, 7, w.seed_num)
+	w.mountain_bias = 0.05 + 0.4 * WGRandom.hash2(17, 19, w.seed_num)
+	w.mountain_height = 0.75 + 0.6 * WGRandom.hash2(47, 3, w.seed_num)
+	w.foothill_spread = 0.15 + 0.85 * WGRandom.hash2(73, 11, w.seed_num)
 
 
 ## Стартовая область — окно в бесконечный мир. Мир один на сид, а окно выбирается сдвигом шума
@@ -111,15 +117,19 @@ static func add_micro(h: float, micro: float) -> float:
 ## Макрорельеф до уровня моря по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за краем карты.
 ## С 1.9.5 без спуска к краю карты: шум один для всей плоскости, карта — только стартовая область.
 ## parallel — считать полосами на всех ядрах (иначе в текущем потоке)
-static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool) -> PackedFloat32Array:
+## include_detail — параметр запроса, а не глобальный переключатель: фоновые запросы независимы.
+## false возвращает основу GEO 7 для проб и стендов. Игровые вызовы используют true.
+static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
+	if cw <= 0 or ch <= 0:
+		return PackedFloat32Array()
 	var fast := Grid.fast_grid()
 	if fast != null:
 		var n := w.noise
-		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, parallel, mountain_detail)
+		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, parallel, include_detail, GameConfig.HS, GameConfig.TILE)
 	if not parallel:
-		return _rows(w, x0, y0, cw, 0, ch)
+		return _rows(w, x0, y0, cw, 0, ch, include_detail)
 	var h := PackedFloat32Array()
-	for b in Parallel.bands(ch, func(j0: int, j1: int) -> PackedFloat32Array: return _rows(w, x0, y0, cw, j0, j1)):
+	for b in Parallel.bands(ch, func(j0: int, j1: int) -> PackedFloat32Array: return _rows(w, x0, y0, cw, j0, j1, include_detail)):
 		h.append_array(b)
 	return h
 
@@ -127,10 +137,10 @@ static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel:
 ## Строки j0..j1 прямоугольника (один кусок работы для Parallel.bands). Со слоем детализации
 ## основа считается с полосой DETAIL_PAD: склон в клетке берётся по соседям, поэтому
 ## результат не зависит от размера и положения запроса (области стыкуются без швов).
-static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int) -> PackedFloat32Array:
-	if not mountain_detail:
+static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int, include_detail: bool = true) -> PackedFloat32Array:
+	if not include_detail:
 		return _base_rows(w, x0, y0 + j0, cw, j1 - j0)
-	var P := DETAIL_PAD
+	var P := Detail.DETAIL_PAD
 	var bw := cw + 2 * P
 	var base := _base_rows(w, x0 - P, y0 + j0 - P, bw, j1 - j0 + 2 * P)
 	var ridge: Simplex = w.noise.ridge.clone()
@@ -139,14 +149,12 @@ static func _rows(w: WorldData, x0: int, y0: int, cw: int, j0: int, j1: int) -> 
 	out.resize((j1 - j0) * cw)
 	for j in range(j0, j1):
 		for i in cw:
-			out[(j - j0) * cw + i] = _detail(ridge, hill, base, bw, (j - j0 + P) * bw + i + P, x0 + i, y0 + j)
+			out[(j - j0) * cw + i] = Detail.apply(ridge, hill, base, bw, (j - j0 + P) * bw + i + P, x0 + i, y0 + j, SEA_RAW, TOP_RAW, GameConfig.HS, GameConfig.TILE)
 	return out
 
 
 ## Макрорельеф без слоя детализации по прямоугольнику cw × ch с углом (x0, y0)
 static func _base_rows(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> PackedFloat32Array:
-	var j0 := 0
-	var j1 := ch
 	var warp_x: Simplex = w.noise.warpX.clone()
 	var warp_y: Simplex = w.noise.warpY.clone()
 	var cont: Simplex = w.noise.cont.clone()
@@ -154,10 +162,10 @@ static func _base_rows(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Pack
 	var ridge: Simplex = w.noise.ridge.clone()
 	var hill: Simplex = w.noise.hill.clone()
 	var out := PackedFloat32Array()
-	out.resize((j1 - j0) * cw)
-	for j in range(j0, j1):
+	out.resize(ch * cw)
+	for j in ch:
 		for i in cw:
-			out[(j - j0) * cw + i] = raw_at(warp_x, warp_y, cont, mask_n, ridge, hill, x0 + i, y0 + j, w.macro_x, w.macro_y, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+			out[j * cw + i] = raw_at(warp_x, warp_y, cont, mask_n, ridge, hill, x0 + i, y0 + j, w.macro_x, w.macro_y, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
 	return out
 
 
@@ -246,153 +254,6 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 		var wide := mountain_scale * maxf(1.0, mountain_height / (mountain_scale * HEIGHT_PER_WIDTH))
 		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, inland) * mask * MOUNTAIN_AMP * mountain_height
 	return h
-
-
-## Слой детализации гор (GEO 9). Макрорельеф GEO 7 — основа; поверх неё на склонах — формы
-## 15–150 м, которых внутри массивов не осталось: мелкие октавы там подавлены, а оставшиеся
-## растянуты вместе с шириной гор. Слой зависит от уже посчитанной основы в клетке и её соседях:
-##  - ложбины и отроги вытянуты по линии падения склона (направленный ridged-шум в четырёх
-##    повёрнутых осях, вес оси — по направлению склона), глубина растёт с крутизной;
-##  - мягкие уступы и перегибы: крутизна чередуется по высоте (сглаженные ступени, не террасы);
-##  - сила и характер меняются по местности: пологие склоны — волны, крутые — рёбра и ложбины,
-##    на равнинах, у моря, на дне долин и гребнях слоя нет; самые крутые участки ослаблены.
-## mountain_detail = false — рельеф GEO 7 бит в бит (для сравнения; кэш мира это не учитывает).
-static var mountain_detail := true
-## Полоса соседей для уклона, в клетках
-const DETAIL_PAD := 2
-## Высота над морем, м: ниже DETAIL_LOW слоя нет, выше DETAIL_HIGH — в полную силу
-const DETAIL_LOW := 30.0
-const DETAIL_HIGH := 60.0
-## Ширина рёбер поперёк склона (клетки): на пологих склонах, на крутых и мелкие; вдоль склона они
-## в DETAIL_LONG раз длиннее
-const DETAIL_RIB_BROAD := 40.0
-const DETAIL_RIB := 22.0
-const DETAIL_RIB_FINE := 9.0
-const DETAIL_LONG := 3.5
-## Перепад ложбина–отрог, м на единицу уклона, и его предел, м
-const DETAIL_DEPTH := 26.0
-const DETAIL_MAX := 12.0
-## Предел перепада на крутом склоне: DETAIL_WALL × √(DETAIL_LIMIT² − уклон²), м. Тропа идёт, пока уклон
-## вдоль неё до 55 %, а поперёк до 65 %: склон круче ~85 % для неё стена, и ложбины не должны
-## превращать в стены проходимые склоны (выше DETAIL_LIMIT рёбер нет)
-const DETAIL_WALL := 12.0
-const DETAIL_LIMIT := 0.8
-## Перепад на метр ширины рёбер (крутизна их стенок, примерно в пять раз меньше уклона стенки)
-const DETAIL_CROSS := 0.08
-## Уступы: шаг по высоте, м, и сила (доля уклона, которую уступ снимает)
-const DETAIL_STEP := 14.0
-const DETAIL_BENCH := 0.5
-## Предел крутизны подъёма уступа
-const DETAIL_RISER := 0.5
-
-
-## Высота клетки k основы base (ширина строки bw) со слоем детализации; (x, y) — клетка мира.
-## Копия — FastGrid.Detail, бит в бит.
-static func _detail(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: int, k: int, x: float, y: float) -> float:
-	var v := base[k]
-	var q := (v - SEA_RAW) / (TOP_RAW - SEA_RAW)
-	if q <= 0.0:
-		return v
-	# Нормированная высота в метрах и метров на единицу сырой высоты (как в normalize)
-	var r4 := sqrt(sqrt(q))
-	var elev := q * r4 * GameConfig.HS
-	var t := clampf((elev - DETAIL_LOW) / (DETAIL_HIGH - DETAIL_LOW), 0.0, 1.0)
-	if t <= 0.0:
-		return v
-	var lift := t * t * (3.0 - 2.0 * t)
-	var per_raw := 1.25 * r4 / (TOP_RAW - SEA_RAW) * GameConfig.HS
-	# Уклон основы (Собель на ±2 клетки), м на м
-	var b := 2 * bw
-	var gx := ((base[k + 2 - b] + 2.0 * base[k + 2] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - 2] + base[k - 2 + b])) * per_raw / (16.0 * GameConfig.TILE)
-	var gy := ((base[k - 2 + b] + 2.0 * base[k + b] + base[k + 2 + b]) - (base[k - 2 - b] + 2.0 * base[k - b] + base[k + 2 - b])) * per_raw / (16.0 * GameConfig.TILE)
-	var g2 := gx * gx + gy * gy
-	if g2 < 0.0016:
-		return v
-	var s := sqrt(g2)
-	# Гребни и вершины чистые: на выпуклом перегибе (лапласиан на ±2 клетки, м) слой затухает,
-	# ложбины начинаются ниже гребня, а вершины не дробятся на бугры
-	var bend := ((base[k + 2] + base[k - 2]) + (base[k + b] + base[k - b]) - 4.0 * base[k]) * per_raw
-	t = clampf((-bend - 0.6) / (2.0 - 0.6), 0.0, 1.0)
-	var crest := 1.0 - 0.85 * (t * t * (3.0 - 2.0 * t))
-	# Характер местности: где-то склоны изрезаны сильнее, где-то спокойнее; мелкие рёбра
-	# и уступы чередуются пятнами
-	t = clampf((hill.noise(x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0, 0.0, 1.0)
-	var vary := t * t * (3.0 - 2.0 * t)
-	t = clampf((hill.noise(x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0, 0.0, 1.0)
-	var patch := t * t * (3.0 - 2.0 * t)
-	# Пологие склоны — слабые волны; крутые — глубже, но самые крутые ослаблены
-	t = clampf((s - 0.04) / (0.12 - 0.04), 0.0, 1.0)
-	var gentle := t * t * (3.0 - 2.0 * t)
-	# Направление падения: веса четырёх осей (0°, 90°, 45°, 135°) по cos 2θ и sin 2θ, их сумма 1
-	var c2 := (gx * gx - gy * gy) / g2
-	var s2 := 2.0 * gx * gy / g2
-	# Ширина форм растёт к пологим склонам: там, где ходят дороги, — широкие ложбины и увалы
-	# (стенки их положе), на крутых — узкие рёбра и промоины; самые мелкие — от 40 % крутизны
-	t = clampf((s - 0.25) / (0.45 - 0.25), 0.0, 1.0)
-	var narrow := t * t * (3.0 - 2.0 * t)
-	t = clampf((s - 0.4) / (0.6 - 0.4), 0.0, 1.0)
-	var fine := (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t))
-	# Перепад ложбина–отрог растёт с крутизной. Пределы: DETAIL_MAX; на крутом склоне стенки
-	# складываются с его уклоном (DETAIL_WALL); стенка ложбины не круче, чем позволяет её ширина
-	# (DETAIL_CROSS), иначе ложбины рассекают склон на полосы, которые тропа не может пересечь
-	var cross := DETAIL_CROSS * GameConfig.TILE / ((1.0 - narrow) / DETAIL_RIB_BROAD + narrow / DETAIL_RIB + fine / DETAIL_RIB_FINE)
-	var depth := minf(minf(minf(DETAIL_DEPTH * s * (0.4 + 0.8 * vary), DETAIL_MAX), sqrt(maxf(0.0, DETAIL_LIMIT * DETAIL_LIMIT - s * s)) * DETAIL_WALL), cross) * lift * gentle * crest
-	var f := 0.0
-	if narrow < 1.0:
-		f += _ribs(ridge, x, y, DETAIL_RIB_BROAD, c2, s2, 37.9) * (1.0 - narrow)
-	if narrow > 0.0:
-		f += _ribs(ridge, x, y, DETAIL_RIB, c2, s2, 0.0) * narrow
-	if fine > 0.0:
-		f += _ribs(ridge, x, y, DETAIL_RIB_FINE, c2, s2, 71.3) * fine
-	var shift := depth * f
-	# Уступы по высоте: сглаженная ступень (доля шага bench снимается с уклона площадки
-	# и добавляется уступу). Шаг и сила меняются пятнами, у крутых и пологих участков уступов нет
-	var step := DETAIL_STEP * (0.8 + 0.5 * vary)
-	t = clampf((s - 0.5) / (0.9 - 0.5), 0.0, 1.0)
-	var bench := DETAIL_BENCH * lift * (1.0 - patch) * (1.0 - t * t * (3.0 - 2.0 * t))
-	# На пологих склонах уступов нет: площадка там почти плоская и манит поселение на склон,
-	# а подъём уступа круче дорожного предела
-	t = clampf((s - 0.28) / (0.38 - 0.28), 0.0, 1.0)
-	bench *= t * t * (3.0 - 2.0 * t)
-	# Подъём уступа круче склона в 1 + 0.875 × bench раза: на склоне вокруг вершины уступы — кольца,
-	# их не обойти, поэтому подъём не круче DETAIL_RISER (горные тропы ходят до 55 %)
-	bench = minf(bench, maxf(0.0, (DETAIL_RISER / s - 1.0) / 0.875))
-	var ph := (elev + shift) / step
-	var fr := ph - floorf(ph)
-	shift -= bench * step * (fr - fr * fr * fr * (fr * (fr * 6.0 - 15.0) + 10.0))
-	return v + shift / per_raw
-
-
-## Рёбра и ложбины одного масштаба (L клеток поперёк склона) по направлению падения (c2, s2):
-## шум в осях, повёрнутых на 0°, 90°, 45° и 135°, смешан по весам и нормирован, затем ложбина —
-## узкое V у нуля шума, отрог — скруглённый верх. От −0.24 до 0.5, в среднем около нуля
-static func _ribs(ridge: Simplex, x: float, y: float, L: float, c2: float, s2: float, o: float) -> float:
-	var la := L * DETAIL_LONG
-	var n := 0.0
-	var ww := 0.0
-	var a := 0.0
-	if c2 > 0.0:
-		a = c2 * c2
-		n += a * ridge.noise(x / la + 13.7 + o, y / L - 41.2)
-	elif c2 < 0.0:
-		a = c2 * c2
-		n += a * ridge.noise(y / la - 27.9 + o, x / L + 8.6)
-	ww += a * a
-	a = 0.0
-	var d1 := (x + y) * 0.7071067811865476
-	var d2 := (y - x) * 0.7071067811865476
-	if s2 > 0.0:
-		a = s2 * s2
-		n += a * ridge.noise(d1 / la + 55.1 + o, d2 / L - 19.4)
-	elif s2 < 0.0:
-		a = s2 * s2
-		n += a * ridge.noise(d2 / la - 64.8 + o, d1 / L + 33.3)
-	ww += a * a
-	n /= sqrt(ww)
-	var d := minf(sqrt(n * n + 0.02), 1.0)
-	return 0.5 - (1.0 - d) * (1.0 - d)
-
-
 
 
 ## Горы (с 1.9.7). Как и весь рельеф, функция мировых координат, поэтому за краем карты горы продолжаются.

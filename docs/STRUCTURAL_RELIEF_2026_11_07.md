@@ -97,10 +97,11 @@
 Например: [Север: близкий склон до](../.godot/structural_relief/Север-1234_close_game_before.png)
 / [после](../.godot/structural_relief/Север-1234_close_game_after.png).
 
-Стенды: `tools/structural_relief_test.gd` (`--save` запускается на исходном
-коде, затем без ключа на новом), `structural_relief_gameplay.gd` и
-`structural_relief_look.gd -- --game`. Данные в `results.json`, `gameplay.json`,
-`cameras.json` рядом со снимками. Все запуски с внутренним и внешним таймаутами.
+Это исторический отчёт GEO 8. Его три стенда `structural_relief_*` удалены при
+полировке системы: их возможности объединены в `mountain_detail_test.gd`,
+`mountain_detail_gameplay.gd` и `mountain_detail_look.gd` (режим `--game`).
+Старые данные `results.json`, `gameplay.json`, `cameras.json` и снимки
+в `.godot/structural_relief/` не удалены. Все запуски были ограничены таймаутами.
 
 C# build: 0 ошибок, 0 предупреждений. Численные и сквозные проверки:
 0 failures; C#/GDScript совпадают, проверены параллельный расчёт, отрицательные
