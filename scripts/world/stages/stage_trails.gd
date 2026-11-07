@@ -260,6 +260,22 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
 	var cross_grade := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
 	var probe: Object = surface.fast_water() # 9.7: проверки отрезков на C#, если рельеф генерации
+	if probe != null and pts.size() >= 2:
+		# 07.11.2026: весь проход на C# одним вызовом (FastGrid.RoadLine — копия цикла ниже); GDScript — эталон и запасной путь
+		var xs := PackedFloat64Array()
+		var ys := PackedFloat64Array()
+		var ws := PackedFloat64Array()
+		for p: Dictionary in pts:
+			xs.append(p.x)
+			ys.append(p.y)
+			ws.append(p.w)
+		var line: PackedFloat64Array = probe.RoadLine(xs, ys, ws, on_axis, w.W, w.H, grade, cross_grade)
+		var n := line.size() / 3
+		var out: Array = []
+		out.resize(n)
+		for k in n:
+			out[k] = {x = line[k], y = line[n + k], w = line[2 * n + k]}
+		return out
 	for iteration in 3:
 		var out: Array = [pts[0]]
 		for k in range(1, pts.size() - 1):

@@ -80,8 +80,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	# Расстояние до готовой сети (дороги, тропы, горные тропы) — одна проходка C#
 	var net := PackedByteArray()
 	net.resize(w.N)
+	var mask := w.path_mask # свойство WorldData: в цикле — локальная ссылка
 	for i in w.N:
-		if w.path_mask[i] >= 2: net[i] = 1
+		if mask[i] >= 2: net[i] = 1
 	var dist := Grid.distance_field(W, w.H, net)
 	# Стоимость маршрута: та же местность, рядом с сетью дороже (и сама сеть: протоптанная дешевизна не тянет вдоль дороги)
 	var cost := PackedFloat32Array()
@@ -97,6 +98,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var block := PackedInt32Array()
 	block.resize(bw * ceili(float(w.H) / BLOCK))
 	block.fill(-1)
+	var wooded := PackedByteArray()
+	wooded.resize(Biomes.LIST.size())
+	for b: int in WOODED: wooded[b] = 1
 	for i in w.N:
 		var c: float = base[i]
 		if c == INF:
@@ -107,9 +111,10 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		if dist[i] < NEAR_R: c *= NEAR_MUL
 		if river[i] != 0: c *= RIVER_MUL # реку — поперёк, коротким бродом, а не по руслу
 		cost[i] = c
-		wood[i] = c if biome[i] in WOODED else c * OPEN_MUL
+		wood[i] = c if wooded[biome[i]] != 0 else c * OPEN_MUL
 		var b := (i / W / BLOCK) * bw + (i % W) / BLOCK
 		if slope[i] < TOP_SLOPE and (block[b] < 0 or hv[i] > hv[block[b]]): block[b] = i
+	stats.prepare_ms = (Time.get_ticks_usec() - started) / 1000.0
 	var anchors := _anchors(w, hv, on_axis, cost)
 	stats.anchors = anchors.size()
 	var virtual := _virtual_tops(w, hv, dist, block, bw, anchors)
@@ -175,7 +180,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			candidates.append(c)
 	finder.window = Rect2i()
 	finder.search_budget = -1
+	stats.search_ms = (Time.get_ticks_usec() - started) / 1000.0 - stats.prepare_ms
 	var chosen := _select(w, candidates, stats)
+	var publish_us := Time.get_ticks_usec()
 	var number := 0
 	for c: Dictionary in chosen:
 		var top: Dictionary = c.top
@@ -197,6 +204,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		stats.km += c.length / 1000.0
 		stats.styles[c.style] = int(stats.styles.get(c.style, 0)) + 1
 		if c.top.mountain: stats.from_mountain += 1
+	stats.publish_ms = (Time.get_ticks_usec() - publish_us) / 1000.0
 	stats.accepted = chosen.size()
 	stats.km = snappedf(stats.km, 0.01)
 	stats.climb_km = snappedf(stats.climb_km, 0.01)
