@@ -27,7 +27,7 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 8 # structural flank ribs from existing crest octaves; GEO 7 slope budget retained
+const SCHEMA_GEO_VERSION := 9 # mountain detail layer: fall-line ribs and gullies, soft benches over the GEO 7 relief
 const SCHEMA_TRAILS_VERSION := 13 # long-corridor trail network with the trail park; geography remains reusable
 const SCHEMA_NATURE_VERSION := 4 # coherent rock deposits, bounded density and climate exclusions
 const SCHEMA_VIEW_VERSION := 1

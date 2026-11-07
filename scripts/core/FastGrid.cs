@@ -1,4 +1,4 @@
-using System;
+﻿using System;
 using Godot;
 
 /// <summary>
@@ -317,7 +317,6 @@ public partial class FastGrid : RefCounted
 	private const double PlainHills = 0.15;
 	private const double HillAmp = 0.07;
 	private const double InlandDetail = 0.35;
-	private const double SlopeRoll = 0.015; // StageRelief.SLOPE_ROLL
 	private const double HeightPerWidth = 0.7;
 	private const double Foothills = 0.35;
 	private const double FoothillLift = 0.18; // StageRelief.FOOTHILL_LIFT (с 3.6)
@@ -330,7 +329,139 @@ public partial class FastGrid : RefCounted
 	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
 	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel, bool detail)
+	{
+		if (!detail)
+			return BaseField(warpX, warpY, cont, mask, ridge, hill, mx, my, x0, y0, W, H, mountainScale, mountainBias, mountainHeight, foothillSpread, parallel);
+		// Слой детализации гор (GEO 9): основа с полосой DetailPad, затем склоны по соседям.
+		const int P = DetailPad;
+		int bw = W + 2 * P;
+		var b = BaseField(warpX, warpY, cont, mask, ridge, hill, mx, my, x0 - P, y0 - P, bw, H + 2 * P, mountainScale, mountainBias, mountainHeight, foothillSpread, parallel);
+		var outH = new float[W * H];
+		void Row(int j)
+		{
+			for (int i = 0; i < W; i++)
+				outH[j * W + i] = (float)Detail(ridge, hill, b, bw, (j + P) * bw + i + P, x0 + i, y0 + j);
+		}
+		RunRows(H, parallel, Row);
+		return outH;
+	}
+
+	/// <summary>Копия StageRelief.DETAIL_*.</summary>
+	private const int DetailPad = 2;
+	private const double DetailLow = 30.0;
+	private const double DetailHigh = 60.0;
+	private const double DetailRibBroad = 40.0;
+	private const double DetailRib = 22.0;
+	private const double DetailRibFine = 9.0;
+	private const double DetailLong = 3.5;
+	private const double DetailDepth = 26.0;
+	private const double DetailMax = 12.0;
+	private const double DetailWall = 12.0;
+	private const double DetailLimit = 0.8;
+	private const double DetailCross = 0.08;
+	private const double DetailStep = 14.0;
+	private const double DetailBench = 0.5;
+	private const double DetailRiser = 0.5;
+	private const double TopRaw = 1.05; // StageRelief.TOP_RAW
+	private const double HeightScale = 260.0; // GameConfig.HS
+	private const double Tile = 4.0; // GameConfig.TILE
+
+	/// <summary>Копия StageRelief._detail: высота клетки k основы b со слоем детализации.</summary>
+	private static double Detail(int[] ridge, int[] hill, float[] b, int bw, int k, double x, double y)
+	{
+		double v = b[k];
+		double q = (v - SeaRaw) / (TopRaw - SeaRaw);
+		if (q <= 0.0)
+			return v;
+		double r4 = Math.Sqrt(Math.Sqrt(q));
+		double elev = q * r4 * HeightScale;
+		double t = Clamp01((elev - DetailLow) / (DetailHigh - DetailLow));
+		if (t <= 0.0)
+			return v;
+		double lift = t * t * (3.0 - 2.0 * t);
+		double perRaw = 1.25 * r4 / (TopRaw - SeaRaw) * HeightScale;
+		int r = 2 * bw;
+		double gx = (((double)b[k + 2 - r] + 2.0 * b[k + 2] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - 2] + b[k - 2 + r])) * perRaw / (16.0 * Tile);
+		double gy = (((double)b[k - 2 + r] + 2.0 * b[k + r] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - r] + b[k + 2 - r])) * perRaw / (16.0 * Tile);
+		double g2 = gx * gx + gy * gy;
+		if (g2 < 0.0016)
+			return v;
+		double s = Math.Sqrt(g2);
+		double bend = (((double)b[k + 2] + b[k - 2]) + ((double)b[k + r] + b[k - r]) - 4.0 * b[k]) * perRaw;
+		t = Clamp01((-bend - 0.6) / (2.0 - 0.6));
+		double crest = 1.0 - 0.85 * (t * t * (3.0 - 2.0 * t));
+		t = Clamp01((Noise(hill, x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0);
+		double vary = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((Noise(hill, x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0);
+		double patch = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((s - 0.04) / (0.12 - 0.04));
+		double gentle = t * t * (3.0 - 2.0 * t);
+		double c2 = (gx * gx - gy * gy) / g2;
+		double s2 = 2.0 * gx * gy / g2;
+		t = Clamp01((s - 0.25) / (0.45 - 0.25));
+		double narrow = t * t * (3.0 - 2.0 * t);
+		t = Clamp01((s - 0.4) / (0.6 - 0.4));
+		double fine = (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t));
+		double cross = DetailCross * Tile / ((1.0 - narrow) / DetailRibBroad + narrow / DetailRib + fine / DetailRibFine);
+		double depth = Math.Min(Math.Min(Math.Min(DetailDepth * s * (0.4 + 0.8 * vary), DetailMax), Math.Sqrt(Math.Max(0.0, DetailLimit * DetailLimit - s * s)) * DetailWall), cross) * lift * gentle * crest;
+		double f = 0.0;
+		if (narrow < 1.0)
+			f += Ribs(ridge, x, y, DetailRibBroad, c2, s2, 37.9) * (1.0 - narrow);
+		if (narrow > 0.0)
+			f += Ribs(ridge, x, y, DetailRib, c2, s2, 0.0) * narrow;
+		if (fine > 0.0)
+			f += Ribs(ridge, x, y, DetailRibFine, c2, s2, 71.3) * fine;
+		double shift = depth * f;
+		double step = DetailStep * (0.8 + 0.5 * vary);
+		t = Clamp01((s - 0.5) / (0.9 - 0.5));
+		double bench = DetailBench * lift * (1.0 - patch) * (1.0 - t * t * (3.0 - 2.0 * t));
+		t = Clamp01((s - 0.28) / (0.38 - 0.28));
+		bench *= t * t * (3.0 - 2.0 * t);
+		bench = Math.Min(bench, Math.Max(0.0, (DetailRiser / s - 1.0) / 0.875));
+		double ph = (elev + shift) / step;
+		double fr = ph - Math.Floor(ph);
+		shift -= bench * step * (fr - fr * fr * fr * (fr * (fr * 6.0 - 15.0) + 10.0));
+		return v + shift / perRaw;
+	}
+
+	/// <summary>Копия StageRelief._ribs.</summary>
+	private static double Ribs(int[] ridge, double x, double y, double L, double c2, double s2, double o)
+	{
+		double la = L * DetailLong;
+		double n = 0.0, ww = 0.0, a = 0.0;
+		if (c2 > 0.0)
+		{
+			a = c2 * c2;
+			n += a * Noise(ridge, x / la + 13.7 + o, y / L - 41.2);
+		}
+		else if (c2 < 0.0)
+		{
+			a = c2 * c2;
+			n += a * Noise(ridge, y / la - 27.9 + o, x / L + 8.6);
+		}
+		ww += a * a;
+		a = 0.0;
+		double d1 = (x + y) * 0.7071067811865476;
+		double d2 = (y - x) * 0.7071067811865476;
+		if (s2 > 0.0)
+		{
+			a = s2 * s2;
+			n += a * Noise(ridge, d1 / la + 55.1 + o, d2 / L - 19.4);
+		}
+		else if (s2 < 0.0)
+		{
+			a = s2 * s2;
+			n += a * Noise(ridge, d2 / la - 64.8 + o, d1 / L + 33.3);
+		}
+		ww += a * a;
+		n /= Math.Sqrt(ww);
+		double d = Math.Min(Math.Sqrt(n * n + 0.02), 1.0);
+		return 0.5 - (1.0 - d) * (1.0 - d);
+	}
+
+	/// <summary>Макрорельеф GEO 7 без слоя детализации (копия StageRelief._base_rows).</summary>
+	private float[] BaseField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel)
 	{
 		var outH = new float[W * H];
 		void Row(int j)
@@ -384,16 +515,7 @@ public partial class FastGrid : RefCounted
 				double h = (bas - fineC * (1.0 - InlandDetail) * inland) * 0.55;
 				if (h > SeaRaw)
 					h = SeaRaw + (h - SeaRaw) * (PlainLift + (1.0 - PlainLift) * rough);
-				double hills = 0.0, slopeRoll = 0.0;
-				amp = 1.0; fr = 1.0; norm = 0.0;
-				for (int o = 0; o < 4; o++)
-				{
-					hills += amp * Noise(hill, X / 40.0 * fr, Y / 40.0 * fr);
-					norm += amp;
-					if (o == 1) slopeRoll = hills / norm;
-					amp *= 0.5; fr *= 2.0;
-				}
-				hills /= norm;
+				double hills = Fbm(hill, X / 40.0, Y / 40.0, 4);
 				if (foothills > 0.0)
 				{
 					double footScale = 100.0 * Math.Max(mountainScale, mountainHeight / HeightPerWidth);
@@ -412,9 +534,6 @@ public partial class FastGrid : RefCounted
 					double wide = mountainScale * Math.Max(1.0, mountainHeight / (mountainScale * HeightPerWidth));
 					h += Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland) * m * MountainAmp * mountainHeight;
 				}
-				double rollT = Clamp01(((h - SeaRaw) - 0.015) / (0.08 - 0.015));
-				double rollFade = rollT * rollT * (3.0 - 2.0 * rollT);
-				h += slopeRoll * SlopeRoll * m * (1.0 - 0.7 * valley) * rollFade;
 				outH[j * W + i] = (float)h;
 			}
 		}
@@ -434,7 +553,6 @@ public partial class FastGrid : RefCounted
 	private const double InnerAcross = 180.0;
 	private const double InnerCut = 0.75;
 	private const double SideCut = 0.28;
-	private const double FlankFold = 0.07; // StageRelief.FLANK_FOLD
 	private const double MountainWarp = 0.35;
 	private const double RidgeAlong = 220.0;
 	private const double RidgeAcross = 125.0;
@@ -470,9 +588,9 @@ public partial class FastGrid : RefCounted
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, inland) * (1.0 - f);
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, inland) * f;
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f;
 		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
 		r = Math.Min(r * (1.0 + 0.35 * pk * r), PeakCap);
 		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.
@@ -494,13 +612,13 @@ public partial class FastGrid : RefCounted
 	}
 
 	/// <summary>Копия StageRelief._crest.</summary>
-	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior, double inland)
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior)
 	{
 		double along = X * dc + Y * ds;
 		double across = Y * dc - X * ds;
 		double u = along / RidgeAlong;
 		double v = across / RidgeAcross;
-		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0, fold = 0.0;
+		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0;
 		for (int o = 0; o < 4; o++)
 		{
 			double n = Noise(pm, u * fq, v * fq);
@@ -509,8 +627,6 @@ public partial class FastGrid : RefCounted
 			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
 			double val = Math.Max(0.0, 1.0 - e);
 			val *= val;
-			// The same small oriented octaves, before recursive crest attenuation.
-			if (o >= 2) fold += (val - 0.35) * (o == 2 ? 1.0 : 0.3);
 			val *= wt;
 			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
 			s += val * a * (o >= 2 ? fine : 1.0);
@@ -531,10 +647,6 @@ public partial class FastGrid : RefCounted
 			double branch = t * t * (3.0 - 2.0 * t);
 			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
 			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SideCut * interior;
-			double flankIn = Clamp01((s - 0.12) / (0.30 - 0.12));
-			double flankOut = Clamp01((s - 0.55) / (0.75 - 0.55));
-			double flank = flankIn * flankIn * (3.0 - 2.0 * flankIn) * (1.0 - flankOut * flankOut * (3.0 - 2.0 * flankOut));
-			s += fold * FlankFold * flank * interior * inland * (1.0 - 0.85 * valley);
 			double shelfLevel = 0.36 + 0.12 * opening;
 			double shelfIn = Clamp01((s - (shelfLevel - 0.12)) / (shelfLevel - (shelfLevel - 0.12)));
 			double shelfOut = Clamp01((s - shelfLevel) / ((shelfLevel + 0.12) - shelfLevel));
