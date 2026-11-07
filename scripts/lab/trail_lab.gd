@@ -123,15 +123,56 @@ func _ready() -> void:
 	add_child(trial_visuals)
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-48, -30, 0)
+	sun.light_color = Color(1.0, 0.93, 0.82)
+	sun.light_energy = 1.45
 	sun.shadow_enabled = true
+	sun.shadow_bias = 0.04
+	sun.shadow_normal_bias = 1.2
+	sun.shadow_blur = 1.6
+	sun.directional_shadow_split_1 = 0.07
+	sun.directional_shadow_split_2 = 0.2
+	sun.directional_shadow_split_3 = 0.5
+	sun.directional_shadow_blend_splits = true
+	sun.directional_shadow_fade_start = 0.7
+	sun.directional_shadow_max_distance = 190.0
 	add_child(sun)
 	var environment := WorldEnvironment.new()
-	environment.environment = Environment.new()
-	environment.environment.background_mode = Environment.BG_COLOR
-	environment.environment.background_color = Color(0.47, 0.65, 0.8)
-	environment.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	environment.environment.ambient_light_color = Color(0.7, 0.8, 1.0)
-	environment.environment.ambient_light_energy = 0.65
+	var env := Environment.new()
+	environment.environment = env
+	if DisplayServer.get_name() == "headless":
+		env.background_mode = Environment.BG_COLOR
+		env.background_color = Color(0.47, 0.65, 0.8)
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
+		env.ambient_light_color = Color(0.7, 0.8, 1.0)
+		env.ambient_light_energy = 0.65
+	else:
+		var sky_mat := ShaderMaterial.new()
+		sky_mat.shader = preload("res://resources/sky.gdshader")
+		sky_mat.set_shader_parameter("zenith_color", Color(0.32, 0.52, 0.82))
+		sky_mat.set_shader_parameter("horizon_color", Color(0.62, 0.74, 0.88))
+		sky_mat.set_shader_parameter("sun_dir", -sun.global_basis.z)
+		sky_mat.set_shader_parameter("sun_color", sun.light_color)
+		sky_mat.set_shader_parameter("cloud_cover", 0.30)
+		var sky := Sky.new()
+		sky.sky_material = sky_mat
+		sky.radiance_size = Sky.RADIANCE_SIZE_64
+		env.background_mode = Environment.BG_SKY
+		env.sky = sky
+		env.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+		env.ambient_light_color = Color(0.62, 0.72, 0.9)
+		env.ambient_light_sky_contribution = 0.6
+		env.ambient_light_energy = 0.52
+		env.tonemap_mode = Environment.TONE_MAPPER_ACES
+		env.tonemap_exposure = 0.92
+		env.tonemap_white = 6.0
+		env.fog_enabled = true
+		env.fog_light_color = Color(0.62, 0.74, 0.88)
+		env.fog_sun_scatter = 0.12
+		env.fog_density = 0.0018
+		env.fog_aerial_perspective = 0.15
+		env.fog_sky_affect = 0.0
+		env.adjustment_enabled = true
+		env.adjustment_saturation = 1.08
 	add_child(environment)
 	view = preload("res://scenes/bike.tscn").instantiate() as BikeView
 	add_child(view)

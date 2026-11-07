@@ -8,14 +8,18 @@ shader_type spatial;
 //   w — яркость свечения (для искр, > 0).
 render_mode blend_mix, depth_draw_opaque, cull_disabled;
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 varying vec4 v_custom;
 varying vec4 v_color;
 varying vec3 v_local;
+varying float v_cloud;
 
 void vertex() {
 	v_custom = INSTANCE_CUSTOM;
 	v_color = COLOR;
 	v_local = VERTEX;
+	v_cloud = cloud_light(MODEL_MATRIX[3].xz);
 }
 
 void fragment() {
@@ -36,7 +40,7 @@ void fragment() {
 		EMISSION = hot_col * (3.8 * glow * (1.0 - age * 0.75));
 		ROUGHNESS = 0.2;
 	} else {
-		ALBEDO = col;
+		ALBEDO = col * v_cloud;
 		EMISSION = vec3(0.0);
 		ROUGHNESS = (abs(kind - 2.0) < 0.4) ? 0.25 : 0.88;
 		SPECULAR = (abs(kind - 2.0) < 0.4) ? 0.65 : 0.18;

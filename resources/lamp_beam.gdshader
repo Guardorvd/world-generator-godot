@@ -18,17 +18,23 @@ void vertex() {
 void fragment() {
 	// край силуэта конуса гаснет: смотрим на поверхность вскользь — света почти нет
 	float facing = abs(dot(normalize(NORMAL), normalize(VIEW)));
-	float rim = facing * facing * facing * facing;
+	float rim = smoothstep(0.05, 0.85, facing) * facing * facing;
 	float a = clamp(along, 0.0, 1.0);
-	float fade = smoothstep(0.0, 0.15, a) * (1.0 - a) * (1.0 - a);
+	float fade = smoothstep(0.0, 0.14, a) * (1.0 - a) * (1.0 - a);
 	// у поверхностей за конусом свет тает за 0.8 м, без резкой линии пересечения
 	float depth = texture(depth_tex, SCREEN_UV).r;
-	vec4 scene = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
+	#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+		vec3 ndc = vec3(SCREEN_UV, depth) * 2.0 - 1.0;
+	#else
+		vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth);
+	#endif
+	vec4 scene = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
 	float soft = clamp((-scene.z / scene.w + VERTEX.z) / 0.8, 0.0, 1.0);
 	// у камеры тоже тает: изнутри конуса не видно стенок
 	soft *= clamp((-VERTEX.z - 0.3) / 1.2, 0.0, 1.0);
 	// видна в темноте: чем светлее фон, тем слабее дымка
 	float bg = dot(texture(screen_tex, SCREEN_UV).rgb, vec3(0.3, 0.59, 0.11));
 	float dark = 1.0 - smoothstep(0.04, 0.35, bg);
-	ALBEDO = tint * strength * rim * fade * soft * dark;
+	float dither = (fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715)))) - 0.5) * 0.015;
+	ALBEDO = tint * max(0.0, strength * rim * fade * soft * dark * (1.0 + dither));
 }

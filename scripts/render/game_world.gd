@@ -388,6 +388,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	_apply_shadows()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
 	day.terrain_mats = [$Terrain.material_override]
+	if outer != null and outer._mat != null:
+		day.terrain_mats.append(outer._mat)
 	day.camera = camera
 	day.world_seed = world.seed_num
 	hour = services.settings.pick_start_hour() if saved.is_empty() else fposmod(saved.player.hour, 24.0)

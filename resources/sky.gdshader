@@ -65,19 +65,22 @@ float fbm(vec2 p) {
 }
 
 // Бесшовный 3x3 ячеистый шум Уорли (Worley / Cellular): создаёт выпуклые сферические клубы («кудрявые шапки»)
-// кучевых облаков со складками-ложбинками между соседними ячейками и живым вращением во времени
+// кучевых облаков со складками-ложбинками между соседними ячейками и живым вращением во времени.
+// Предвычисленные sin/cos для morph избавляют от 9 вызовов тригонометрии на одну выборку.
 float worley_puff(vec2 p, float morph) {
 	vec2 i = floor(p);
 	vec2 f = fract(p);
 	float min_d2 = 4.0;
+	vec2 m_cs = vec2(cos(morph * 0.78), sin(morph * 0.78));
 	for (int y = -1; y <= 1; y++) {
 		for (int x = -1; x <= 1; x++) {
 			vec2 nb = vec2(float(x), float(y));
 			vec2 cell = i + nb;
 			float h1 = hash(cell);
 			float h2 = hash(cell + vec2(17.3, 31.7));
-			float ang = h1 * 6.2832 + morph * (0.55 + 0.45 * h2);
-			vec2 jitter = 0.5 + (vec2(h1, h2) - 0.5) * 0.46 + vec2(cos(ang), sin(ang)) * 0.14;
+			vec2 dir = normalize(vec2(h1 - 0.5, h2 - 0.5) + vec2(1e-4));
+			vec2 rot_dir = vec2(dir.x * m_cs.x - dir.y * m_cs.y, dir.x * m_cs.y + dir.y * m_cs.x);
+			vec2 jitter = 0.5 + (vec2(h1, h2) - 0.5) * 0.46 + rot_dir * 0.14;
 			vec2 diff = nb + jitter - f;
 			min_d2 = min(min_d2, dot(diff, diff));
 		}
@@ -116,15 +119,21 @@ float cloud_phase(float cos_theta) {
 
 // 3D-плотность кучевого яруса (крупная форма FBM + скульптурная эрозия Worley-куполами):
 // p — координаты в слое, h (0..1) — доля высоты от плоской подошвы до вершин башен,
-// cov — базовое покрытие, morph — фаза живой конвекции, out_tower — высота башни, out_cauli — рельеф клубов
-float cumulus_density(vec2 p, float h, float cov, float morph, out float out_tower, out float out_cauli) {
+// cov — базовое покрытие, morph — фаза живой конвекции, shadow_pass — облегчённая выборка для самотени
+float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass, out float out_tower, out float out_cauli) {
 	vec2 seed_ofs = vec2(cloud_seed * 0.37, cloud_seed * 0.61);
 	vec2 mp = p * 0.28 + seed_ofs;
 	// Синоптическая карта погоды: чередование чистых небесных окон, кучевых островов, мощных башен и валов
 	float syn_group = smoothstep(0.28, 0.72, fbm(mp + vec2(morph * 0.04, -morph * 0.03)));
 	float syn_tower = smoothstep(0.30, 0.75, noise(mp * 1.35 + vec2(13.4, -7.8) + morph * 0.05));
-	float syn_street = smoothstep(0.45, 0.82, noise(mp * 0.90 + vec2(-9.1, 19.2)));
 	out_tower = mix(0.45, 1.0, syn_tower);
+
+	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
+	float taper = mix(0.0, 0.16, (h * h) / max(out_tower, 0.38));
+	float eff_cov = clamp(cov * 0.90 - taper, 0.06, 0.74);
+	float edge = 1.0 - eff_cov;
+
+	float syn_street = smoothstep(0.45, 0.82, noise(mp * 0.90 + vec2(-9.1, 19.2)));
 
 	// Плавное вихревое искажение области + небольшой ветровой наклон вершин башен
 	vec2 w_uv = p * 0.62 + seed_ofs;
@@ -139,24 +148,36 @@ float cumulus_density(vec2 p, float h, float cov, float morph, out float out_tow
 	float macro_fbm = smoothstep(0.30, 0.73, fbm_flow(q * 0.88, morph));
 	float base_island = mix(macro_fbm, syn_group, 0.28);
 
-	// Многомасштабные сферические клубы Worley + кудрявая детализация шапок (чёткая и в зените, и у горизонта)
+	// Ранний выход в чистом небе до тяжёлых 3x3 выборок Уорли
+	if (base_island * 0.68 + 0.32 <= edge - 0.04) {
+		out_cauli = 0.0;
+		return 0.0;
+	}
+
 	float puff_main = worley_puff(q * 1.30 + vec2(h * 0.16, 0.0), morph);
+	float bottom_flat = smoothstep(0.0, 0.14, h);
+
+	if (shadow_pass) {
+		// Для оптической глубины самотени достаточно крупного купола без высокочастотной кудрявой ряби
+		out_cauli = puff_main * 0.82 + 0.10;
+		float dome_sh = out_tower * (0.62 + 0.52 * puff_main);
+		float vert_sh = bottom_flat * smoothstep(dome_sh, dome_sh * 0.20, h);
+		float comb_sh = base_island * 0.68 + out_cauli * 0.32;
+		float core_sh = clamp((comb_sh - edge) / max(1.0 - edge, 0.18), 0.0, 1.0);
+		float ero_sh = (1.0 - out_cauli) * (0.22 + 0.22 * h) * (1.0 - core_sh * 0.75);
+		return clamp((core_sh - ero_sh) * 1.95, 0.0, 1.0) * vert_sh;
+	}
+
+	// Многомасштабные сферические клубы Worley + кудрявая детализация шапок (чёткая и в зените, и у горизонта)
 	float puff_mid = worley_puff(OCT_ROT * q * 2.85 + vec2(-2.7, 4.1 - h * 0.2), -morph * 1.3);
 	float puff_fine = smoothstep(0.26, 0.74, fbm_flow(q * 5.2 + vec2(3.4, -5.1), morph * 1.7));
 	float cauli = puff_main * 0.48 + puff_mid * 0.32 + puff_fine * 0.20;
 	out_cauli = cauli;
 
-	// Вертикальный профиль: ровная плоская подошва конденсации внизу и куполообразные вершины вверху
-	float bottom_flat = smoothstep(0.0, 0.14, h);
 	// Каждый клуб поднимает свою шапку выше соседних: пышные округлые купола вместо плоских пятен
 	float dome_h = out_tower * (0.62 + 0.62 * puff_main * (0.6 + 0.4 * puff_mid));
 	float top_round = smoothstep(dome_h, dome_h * 0.20, h);
 	float vert_profile = bottom_flat * top_round;
-
-	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
-	float taper = mix(0.0, 0.16, (h * h) / max(out_tower, 0.38));
-	float eff_cov = clamp(cov * 0.90 - taper, 0.06, 0.74);
-	float edge = 1.0 - eff_cov;
 
 	// Формируем плотное ядро облака и скульптурно вырезаем кудрявые купола по краям и на шапках
 	float combined = base_island * 0.68 + cauli * 0.32;
@@ -282,17 +303,21 @@ vec3 night_sky(vec3 d, float sd) {
 void sky() {
 	vec3 d = EYEDIR;
 	float h = max(d.y, 0.0);
-	vec3 col = mix(horizon_color, zenith_color, smoothstep(0.0, 1.0, sqrt(h)));
+	vec3 col = mix(horizon_color, zenith_color, smoothstep(0.0, 1.0, pow(h, 0.54)));
 	vec3 s_dir = normalize(sun_dir);
 	vec3 m_dir = normalize(moon_dir);
 	float sd = max(dot(d, s_dir), 0.0);
 	float md = max(dot(d, m_dir), 0.0);
 	float above = smoothstep(-0.15, 0.05, s_dir.y);   // гало гаснет, когда солнце глубоко под горизонтом
-	col += sun_color * (pow(sd, 6.0) * 0.35 + pow(sd, 48.0) * 0.5) * halo * above;
+	float low_sun = smoothstep(0.32, -0.02, s_dir.y) * smoothstep(-0.16, -0.01, s_dir.y);
+	// Двухзонное рассеяние Ми и мягкое зарево вдоль горизонта со стороны солнца
+	float horizon_band = exp(-h * 5.2) * (0.35 + 0.65 * pow(sd, 3.0)) * low_sun * above;
+	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24;
+	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above;
 	if (!AT_CUBEMAP_PASS) {
 		// солнце: диск, днём не ярче, чем выдержит тоновая кривая
 		float sun_disc = smoothstep(0.9993, 0.9996, sd) * smoothstep(-0.05, 0.02, s_dir.y);
-		col += sun_color * sun_disc * 3.0;
+		col += sun_color * sun_disc * 2.8;
 		if (night > 0.001) {
 			col += night_sky(d, sd) * night;
 		}
@@ -309,47 +334,50 @@ void sky() {
 			vec3 active_dir = s_dir.y >= -0.04 ? s_dir : m_dir;
 			float active_dot = dot(d, active_dir);
 			vec3 active_light_col = mix(sun_color, vec3(0.72, 0.82, 1.0) * moon_illum * 0.55, night);
-			float low_sun = smoothstep(0.32, -0.02, s_dir.y) * smoothstep(-0.16, -0.01, s_dir.y);
-			vec3 warm_sunset = mix(sun_color, vec3(1.0, 0.44, 0.26), low_sun * 0.65);
+			vec3 warm_sunset = mix(sun_color, vec3(1.0, 0.48, 0.30), low_sun * 0.58);
 
 			// 1. Высокий ярус: перистые «когти/перья» (cirrus uncinus) и перисто-кучевые «барашки» (cirrocumulus)
 			vec2 uv_high = sky_uv(d, 0.16);
-			vec2 cq = OCT_ROT * (uv_high * 0.85 + wind * 1.65 + seed_ofs);
-			float hook = sin(cq.x * 1.35 + noise(cq * 0.45 + morph * 0.15) * 3.2) * 0.42;
-			vec2 streak_uv = vec2(cq.x * 0.55, (cq.y + hook) * 4.8);
 			float cirrus_band = smoothstep(0.52, 0.80, noise(uv_high * 0.28 + seed_ofs + vec2(3.3, -1.9) + wind * 0.25));
-			float wisps = smoothstep(0.50, 0.84, fbm(streak_uv + vec2(morph * 0.2, 0.0)));
-			// Мелкая перисто-кучевая рябь («барашки») по краям перистых потоков
-			float ripples = worley_puff(cq * 3.8, morph * 0.8);
-			float mackerel = smoothstep(0.55, 0.88, ripples) * smoothstep(0.52, 0.78, noise(cq * 0.8 + 7.1));
-			float cirrus = clamp((wisps * 0.78 + mackerel * 0.52) * cirrus_band, 0.0, 1.0);
-			if (cirrus > 0.002) {
-				// Высокие облака дольше ловят малиново-золотой свет зари после захода солнца у земли
-				float high_twilight = smoothstep(-0.22, 0.04, s_dir.y) * smoothstep(0.28, -0.04, s_dir.y);
-				vec3 c_high = mix(cloud_color * 1.04, mix(sun_color * 1.25, vec3(1.0, 0.50, 0.42), high_twilight * 0.68),
-					clamp(pow(sd, 2.5) * halo * 0.85 + high_twilight * 0.78, 0.0, 1.0));
-				c_high += active_light_col * pow(max(active_dot, 0.0), 8.0) * 0.50;
-				c_high = mix(c_high, horizon_color, horizon_haze * 0.55);
-				col = mix(col, c_high, cirrus * 0.36 * fade);
+			if (cirrus_band > 0.002) {
+				vec2 cq = OCT_ROT * (uv_high * 0.85 + wind * 1.65 + seed_ofs);
+				float hook = sin(cq.x * 1.35 + noise(cq * 0.45 + morph * 0.15) * 3.2) * 0.42;
+				vec2 streak_uv = vec2(cq.x * 0.55, (cq.y + hook) * 4.8);
+				float wisps = smoothstep(0.50, 0.84, fbm(streak_uv + vec2(morph * 0.2, 0.0)));
+				// Мелкая перисто-кучевая рябь («барашки») по краям перистых потоков
+				float mackerel_mask = smoothstep(0.52, 0.78, noise(cq * 0.8 + 7.1));
+				float mackerel = mackerel_mask > 0.002 ? smoothstep(0.55, 0.88, worley_puff(cq * 3.8, morph * 0.8)) * mackerel_mask : 0.0;
+				float cirrus = clamp((wisps * 0.78 + mackerel * 0.52) * cirrus_band, 0.0, 1.0);
+				if (cirrus > 0.002) {
+					// Высокие облака дольше ловят малиново-золотой свет зари после захода солнца у земли
+					float high_twilight = smoothstep(-0.22, 0.04, s_dir.y) * smoothstep(0.28, -0.04, s_dir.y);
+					vec3 c_high = mix(cloud_color * 1.03, mix(sun_color * 1.18, vec3(1.0, 0.52, 0.44), high_twilight * 0.62),
+						clamp(pow(sd, 2.5) * halo * 0.80 + high_twilight * 0.72, 0.0, 1.0));
+					c_high += active_light_col * pow(max(active_dot, 0.0), 8.0) * 0.45;
+					c_high = mix(c_high, horizon_color, horizon_haze * 0.55);
+					col = mix(col, c_high, cirrus * 0.36 * fade);
+				}
 			}
 
 			// 2. Средний ярус: высококучевые гряды и слоистые волны (altocumulus)
 			vec2 uv_mid = sky_uv(d, 0.13);
-			vec2 mq = mat2(vec2(0.92, -0.39), vec2(0.39, 0.92)) * (uv_mid * 1.15 + wind * 1.18 - seed_ofs * 0.7);
 			float mid_patch = smoothstep(0.54, 0.80, noise(uv_mid * 0.34 - seed_ofs + vec2(9.2, 4.1) + wind * 0.4));
-			float mid_wave = worley_puff(mq * vec2(1.4, 2.2), morph * 0.6) * 0.62
-				+ smoothstep(0.28, 0.72, fbm_flow(mq * 2.8, -morph * 0.8)) * 0.38;
-			float altocum = smoothstep(0.54 - cloud_cover * 0.14, 0.78 - cloud_cover * 0.10, mid_wave) * mid_patch;
-			if (altocum > 0.002) {
-				vec2 mid_sun_step = normalize(active_dir.xz + vec2(1e-4)) * 0.08;
-				float mid_n2 = worley_puff((mq + mid_sun_step) * vec2(1.4, 2.2), morph * 0.6);
-				float mid_lit = clamp((mid_wave - mid_n2) * 3.5 + 0.62, 0.0, 1.0);
-				vec3 mid_shadow = mix(cloud_color * vec3(0.58, 0.64, 0.78), zenith_color, 0.28);
-				vec3 mid_lit_col = mix(cloud_color * 1.08, warm_sunset * 1.18, low_sun * 0.68);
-				vec3 mid_col = mix(mid_shadow, mid_lit_col, mid_lit);
-				mid_col += active_light_col * pow(max(active_dot, 0.0), 10.0) * (1.0 - altocum * 0.6) * 0.65;
-				mid_col = mix(mid_col, horizon_color, horizon_haze * 0.62);
-				col = mix(col, mid_col, altocum * 0.46 * fade);
+			if (mid_patch > 0.002) {
+				vec2 mq = mat2(vec2(0.92, -0.39), vec2(0.39, 0.92)) * (uv_mid * 1.15 + wind * 1.18 - seed_ofs * 0.7);
+				float mid_wave = worley_puff(mq * vec2(1.4, 2.2), morph * 0.6) * 0.62
+					+ smoothstep(0.28, 0.72, fbm_flow(mq * 2.8, -morph * 0.8)) * 0.38;
+				float altocum = smoothstep(0.54 - cloud_cover * 0.14, 0.78 - cloud_cover * 0.10, mid_wave) * mid_patch;
+				if (altocum > 0.002) {
+					vec2 mid_sun_step = normalize(active_dir.xz + vec2(1e-4)) * 0.08;
+					float mid_n2 = worley_puff((mq + mid_sun_step) * vec2(1.4, 2.2), morph * 0.6);
+					float mid_lit = clamp((mid_wave - mid_n2) * 3.5 + 0.62, 0.0, 1.0);
+					vec3 mid_shadow = mix(cloud_color * vec3(0.58, 0.64, 0.78), zenith_color, 0.28);
+					vec3 mid_lit_col = mix(cloud_color * 1.06, warm_sunset * 1.14, low_sun * 0.64);
+					vec3 mid_col = mix(mid_shadow, mid_lit_col, mid_lit);
+					mid_col += active_light_col * pow(max(active_dot, 0.0), 10.0) * (1.0 - altocum * 0.6) * 0.60;
+					mid_col = mix(mid_col, horizon_color, horizon_haze * 0.62);
+					col = mix(col, mid_col, altocum * 0.46 * fade);
+				}
 			}
 
 			// 3. Нижний объёмный ярус: живые кучевые облака (humilis, mediocris, congestus) и валы (stratocumulus)
@@ -358,15 +386,15 @@ void sky() {
 			float trans = 1.0;
 			vec3 accum = vec3(0.0);
 			float phase = cloud_phase(active_dot);
-			float silver = pow(max(active_dot, 0.0), 12.0) * (0.85 + halo * 1.45) * (above + night * 0.45);
+			float silver = pow(max(active_dot, 0.0), 12.0) * (0.82 + halo * 1.35) * (above + night * 0.45);
 			vec2 light_horiz = normalize(active_dir.xz + vec2(1e-4)) * 0.075;
 			float light_vert = clamp(active_dir.y, 0.14, 0.85) * 0.24;
 
-			// Цветовая палитра объёма: глубокая сизо-синяя тень на плоской подошве и ослепительно-белые освещённые купола
-			vec3 base_ambient = mix(cloud_color * vec3(0.44, 0.52, 0.68), zenith_color * 0.75, 0.32);
-			base_ambient = mix(base_ambient, horizon_color * 0.74, low_sun * 0.35);
-			vec3 top_ambient = mix(cloud_color * 0.96, zenith_color * 1.05, 0.16);
-			vec3 direct_tint = mix(cloud_color * 1.18, warm_sunset * 1.26, low_sun * 0.75);
+			// Цветовая палитра объёма: глубокая сизо-синяя тень на плоской подошве и чисто-белые освещённые купола
+			vec3 base_ambient = mix(cloud_color * vec3(0.45, 0.53, 0.68), zenith_color * 0.76, 0.32);
+			base_ambient = mix(base_ambient, horizon_color * 0.76, low_sun * 0.35);
+			vec3 top_ambient = mix(cloud_color * 0.96, zenith_color * 1.04, 0.16);
+			vec3 direct_tint = mix(cloud_color * 1.15, warm_sunset * 1.20, low_sun * 0.70);
 
 			for (int i = 0; i < 5; i++) {
 				float lh = (float(i) + 0.5) * 0.2;
@@ -374,13 +402,13 @@ void sky() {
 				vec2 p_step = uv_base * (1.0 + 0.065 * lh * (1.0 - h * 0.82)) + wind * (1.0 + 0.08 * lh);
 				float tower_h = 0.6;
 				float cauli_rel = 0.5;
-				float dens = cumulus_density(p_step, lh, cloud_cover, morph, tower_h, cauli_rel);
+				float dens = cumulus_density(p_step, lh, cloud_cover, morph, false, tower_h, cauli_rel);
 				if (dens > 0.002) {
-					// Шаг к светилу для настоящей объёмной самотени и просвечивания краёв
+					// Шаг к светилу для настоящей объёмной самотени и просвечивания краёв (облегчённая выборка shadow_pass = true)
 					float dummy_t = 0.0;
 					float sh_c = 0.5;
 					float sh_h = clamp(lh + light_vert, 0.05, 0.98);
-					float sh_dens = cumulus_density(p_step + light_horiz, sh_h, cloud_cover, morph, dummy_t, sh_c);
+					float sh_dens = cumulus_density(p_step + light_horiz, sh_h, cloud_cover, morph, true, dummy_t, sh_c);
 					// Вторая выборка тени заменена оценкой: втрое меньше обращений к плотности на пиксель
 					float sh_dens2 = sh_dens * 0.62;
 					float opt_depth = sh_dens * 3.0 + sh_dens2 * 1.7;
@@ -403,12 +431,12 @@ void sky() {
 					// Многократное рассеяние внутри толщи (мягкое внутреннее свечение)
 					amb += direct_tint * exp(-opt_depth * 0.48) * (0.28 + 0.72 * cavity) * 0.18;
 					// На закате и рассвете низкие лучи подсвечивают плоскую подошву и бока облаков золотом и багрянцем
-					amb += warm_sunset * low_sun * (1.0 - lh * 0.60) * exp(-sh_dens * 1.3) * 0.44;
+					amb += warm_sunset * low_sun * (1.0 - lh * 0.60) * exp(-sh_dens * 1.3) * 0.40;
 
 					vec3 step_col = mix(amb, direct_tint, clamp(direct, 0.0, 1.0));
 					// Серебристая и золотая кромка (Ми-рассеяние сквозь тонкие края у солнца или луны)
 					float thin_edge = exp(-dens * 2.5) * exp(-opt_depth * 0.65);
-					step_col += active_light_col * silver * thin_edge * 2.4;
+					step_col += active_light_col * silver * thin_edge * 2.2;
 
 					float absorb = (1.55 + 0.85 * (1.0 - lh)) * 0.82;
 					float alpha = 1.0 - exp(-dens * absorb * 3.0);
@@ -442,10 +470,12 @@ void sky() {
 			}
 		}
 	} else if (d.y > 0.02) {
-		// В карте отражений (AT_CUBEMAP_PASS) — лёгкий отсвет облачного покрова для воды и гладких поверхностей
-		vec2 uv_c = sky_uv(d, 0.12) + vec2(cloud_time * 0.012, cloud_time * 0.004);
+		// В карте отражений (AT_CUBEMAP_PASS) — согласованный по времени суток отсвет облачного покрова для воды и поверхностей
+		vec2 uv_c = sky_uv(d, 0.12) + vec2(cloud_time * 0.012, cloud_time * 0.004) + vec2(cloud_seed * 0.37, cloud_seed * 0.61);
 		float cn = smoothstep(0.62 - cloud_cover * 0.45, 0.82 - cloud_cover * 0.35, noise(uv_c * 1.4));
-		col = mix(col, cloud_color * 0.92, cn * smoothstep(0.02, 0.35, d.y) * 0.45);
+		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55);
+		refl_cloud = mix(refl_cloud, mix(zenith_color, horizon_color, 0.5) * 1.15, night * 0.65);
+		col = mix(col, refl_cloud, cn * smoothstep(0.02, 0.35, d.y) * 0.45);
 	}
 	COLOR = col;
 }

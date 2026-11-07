@@ -192,11 +192,11 @@ void fragment() {
 		// медленно плывут тёплые просветы — как солнце сквозь качающуюся листву.
 		// 6.8: на опушке тень набирается медленнее, под ельником светлее, просветы заметнее.
 		float shade = smoothstep(0.12, 1.0, forest.r) * (1.0 - snow);
-		sky = 1.0 - shade * mix(0.32, 0.42, forest.g);
+		sky = 1.0 - shade * mix(0.28, 0.37, forest.g);
 		col *= mix(vec3(1.0), vec3(0.95, 0.98, 1.0), shade * forest.g);
 		if (near > 0.0 && sunlight > 0.0) {
 			float sun = texture(detail_tex, p * (1.0 / 3.1) + vec2(TIME * 0.006, TIME * 0.004)).r;
-			col *= 1.0 + smoothstep(0.55, 0.75, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.22, 0.18, 0.1);
+			col *= 1.0 + smoothstep(0.54, 0.74, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.24, 0.19, 0.11);
 		}
 	}
 	// The same exposure channel reduces trees/grass and seeds rock compositions.

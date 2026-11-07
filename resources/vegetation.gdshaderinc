@@ -126,7 +126,7 @@ void vertex() {
 			VERTEX += transpose(basis) * world * (sqrt(scale2) / scale2);
 		}
 		v_cloud = cloud_light(origin.xz);
-		v_ao = mix(ao_low, 1.0, h) * mix(1.0, shelter_ao, sheltered);
+		v_ao = max(0.30, mix(ao_low, 1.0, h) * mix(1.0, shelter_ao, sheltered));
 		if (use_vertex_color && !OUTPUT_IS_SRGB) {
 			// как vertex_color_is_srgb у StandardMaterial3D
 			COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));

@@ -13,12 +13,11 @@ extends RefCounted
 const SKY_SHADER := preload("res://resources/sky.gdshader")
 const TILT := deg_to_rad(35.0)   # наклон пути солнца к югу: высота в полдень 90° − 35° = 55°
 const DUSK := 0.08               # свет солнца и луны нарастает от горизонта до этой высоты (синус угла)
-const SHADOW_NORMAL_LOW := 1.2   # не увеличиваем normal bias при закате: тень сохраняет контакт
-const SHADOW_NORMAL_HIGH := 1.2
+const SHADOW_NORMAL_BIAS := 1.2  # фиксированное смещение нормали: тень сохраняет контакт со стволами и камнями
 const MOON_COLOR := Color(0.62, 0.72, 1.0)
 const MOON_ENERGY := 0.32        # лунный свет ночью; в сумерках слабее (доля «ночи» в таблице)
 const FOG := 0.0021              # дневная густота тумана, как в game_world.tscn (окружение общее для всех миров)
-const CLOUD_SHADOW := 0.45      # насколько тень облака темнит землю днём
+const CLOUD_SHADOW := 0.44      # насколько тень облака темнит землю днём
 const CLOUD_WIND := Vector2(-8.0, -2.7)  # м/с: тени облаков бегут туда же, куда облака на небе
 const MIST_TOP := 45.0           # дымка лежит ниже этой высоты, м (суша до 260 м)
 const MIST_BELOW_EYE := 10.0     # и ниже камеры на столько: вблизи вокруг игрока земля чистая
@@ -37,16 +36,16 @@ const METEOR_SHOWER := 0.35
 ## красок мира и плотность теней (при низком солнце и ночью тени мягче, днём глубже); с 8.3 — дымка в низинах.
 ## Последний ключ повторяет первый через сутки.
 const KEYS := [
-	[0.0, Color(0.05, 0.08, 0.19), Color(0.13, 0.18, 0.31), Color(0.62, 0.72, 1.0), 0.32, Color(0.36, 0.46, 0.78), 0.62, 1.3, 0.0, 1.0, Color(0.17, 0.21, 0.32), 0.28, 1.0, 0.85, 0.55, 0.5],
+	[0.0, Color(0.05, 0.08, 0.19), Color(0.13, 0.18, 0.31), Color(0.62, 0.72, 1.0), 0.32, Color(0.36, 0.46, 0.78), 0.62, 1.3, 0.0, 1.0, Color(0.17, 0.21, 0.32), 0.28, 1.0, 0.86, 0.55, 0.5],
 	[4.5, Color(0.07, 0.1, 0.23), Color(0.2, 0.22, 0.36), Color(0.62, 0.72, 1.0), 0.28, Color(0.38, 0.46, 0.76), 0.6, 1.3, 0.2, 0.9, Color(0.22, 0.24, 0.36), 0.28, 1.2, 0.9, 0.55, 0.7],
-	[5.6, Color(0.17, 0.23, 0.42), Color(0.62, 0.48, 0.5), Color(1.0, 0.62, 0.42), 0.6, Color(0.52, 0.52, 0.72), 0.5, 1.15, 0.9, 0.35, Color(0.7, 0.5, 0.52), 0.22, 1.5, 1.0, 0.7, 1.0],
-	[7.5, Color(0.3, 0.47, 0.76), Color(0.78, 0.7, 0.64), Color(1.0, 0.78, 0.58), 1.15, Color(0.64, 0.67, 0.82), 0.48, 1.0, 0.8, 0.0, Color(1.0, 0.88, 0.78), 0.24, 1.25, 1.12, 0.8, 0.8],
-	[10.5, Color(0.32, 0.52, 0.82), Color(0.62, 0.74, 0.88), Color(1.0, 0.93, 0.8), 1.5, Color(0.62, 0.72, 0.9), 0.5, 0.92, 0.3, 0.0, Color(1.0, 1.0, 1.0), 0.28, 1.0, 1.1, 0.95, 0.0],
-	[15.0, Color(0.32, 0.52, 0.82), Color(0.62, 0.74, 0.88), Color(1.0, 0.93, 0.8), 1.5, Color(0.62, 0.72, 0.9), 0.5, 0.92, 0.3, 0.0, Color(1.0, 1.0, 1.0), 0.36, 1.0, 1.1, 0.95, 0.0],
-	[17.3, Color(0.3, 0.42, 0.7), Color(0.96, 0.68, 0.45), Color(1.0, 0.64, 0.38), 1.25, Color(0.7, 0.63, 0.72), 0.48, 1.0, 1.0, 0.0, Color(1.0, 0.76, 0.6), 0.32, 1.1, 1.25, 0.9, 0.1],
-	[18.6, Color(0.16, 0.19, 0.38), Color(0.66, 0.42, 0.42), Color(1.0, 0.55, 0.4), 0.6, Color(0.52, 0.5, 0.7), 0.5, 1.15, 0.9, 0.3, Color(0.6, 0.4, 0.45), 0.28, 1.2, 1.1, 0.7, 0.35],
+	[5.6, Color(0.17, 0.23, 0.42), Color(0.62, 0.48, 0.5), Color(1.0, 0.63, 0.44), 0.6, Color(0.52, 0.52, 0.72), 0.5, 1.15, 0.9, 0.35, Color(0.7, 0.5, 0.52), 0.22, 1.5, 1.0, 0.7, 1.0],
+	[7.5, Color(0.3, 0.47, 0.76), Color(0.78, 0.7, 0.64), Color(1.0, 0.79, 0.60), 1.15, Color(0.64, 0.67, 0.82), 0.5, 1.0, 0.78, 0.0, Color(1.0, 0.88, 0.78), 0.24, 1.25, 1.10, 0.8, 0.8],
+	[10.5, Color(0.32, 0.52, 0.82), Color(0.62, 0.74, 0.88), Color(1.0, 0.93, 0.8), 1.5, Color(0.62, 0.72, 0.9), 0.52, 0.92, 0.3, 0.0, Color(1.0, 1.0, 1.0), 0.28, 1.0, 1.08, 0.94, 0.0],
+	[15.0, Color(0.32, 0.52, 0.82), Color(0.62, 0.74, 0.88), Color(1.0, 0.93, 0.8), 1.5, Color(0.62, 0.72, 0.9), 0.52, 0.92, 0.3, 0.0, Color(1.0, 1.0, 1.0), 0.36, 1.0, 1.08, 0.94, 0.0],
+	[17.3, Color(0.3, 0.42, 0.7), Color(0.93, 0.68, 0.47), Color(1.0, 0.67, 0.42), 1.25, Color(0.7, 0.64, 0.72), 0.5, 0.98, 0.92, 0.0, Color(1.0, 0.78, 0.63), 0.32, 1.1, 1.16, 0.88, 0.1],
+	[18.6, Color(0.16, 0.19, 0.38), Color(0.65, 0.43, 0.44), Color(1.0, 0.56, 0.42), 0.6, Color(0.52, 0.5, 0.7), 0.5, 1.15, 0.9, 0.3, Color(0.6, 0.4, 0.45), 0.28, 1.2, 1.06, 0.7, 0.35],
 	[20.0, Color(0.07, 0.1, 0.23), Color(0.2, 0.22, 0.36), Color(0.62, 0.72, 1.0), 0.28, Color(0.38, 0.46, 0.76), 0.6, 1.3, 0.2, 0.9, Color(0.22, 0.24, 0.36), 0.26, 1.1, 0.9, 0.55, 0.45],
-	[24.0, Color(0.05, 0.08, 0.19), Color(0.13, 0.18, 0.31), Color(0.62, 0.72, 1.0), 0.32, Color(0.36, 0.46, 0.78), 0.62, 1.3, 0.0, 1.0, Color(0.17, 0.21, 0.32), 0.28, 1.0, 0.85, 0.55, 0.5],
+	[24.0, Color(0.05, 0.08, 0.19), Color(0.13, 0.18, 0.31), Color(0.62, 0.72, 1.0), 0.32, Color(0.36, 0.46, 0.78), 0.62, 1.3, 0.0, 1.0, Color(0.17, 0.21, 0.32), 0.28, 1.0, 0.86, 0.55, 0.5],
 ]
 
 var env: Environment
@@ -59,6 +58,8 @@ var world_seed := 0            # сид мира: какие ночи с сия�
 var events := {}               # явления текущей ночи (см. _night_events); можно подменить для снимков
 var _clock := NAN              # часы без сброса в полночь: по ним вращаются звёзды и считаются ночи
 var _night := 0x7fffffff
+var _dark_active := true       # были ли включены ночные параметры шейдера неба на прошлом кадре
+var _last_sunlight := -1.0     # кэш sunlight для материалов рельефа
 
 
 func _init(environment: Environment, sun: DirectionalLight3D) -> void:
@@ -205,9 +206,7 @@ func apply(hour: float, time: float) -> void:
 		env.fog_height = minf(MIST_TOP, eye - MIST_BELOW_EYE)
 	env.adjustment_saturation = s[13]
 	light.shadow_opacity = s[14]
-	# При скользящем свете завышенное смещение особенно заметно на земле:
-	# деревья и камни кажутся парящими, особенно при низком разрешении карты теней.
-	light.shadow_normal_bias = lerpf(SHADOW_NORMAL_LOW, SHADOW_NORMAL_HIGH, smoothstep(0.1, 0.45, src.y))
+	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
 	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
 	var seed_phase := float(posmod(world_seed, 997)) * 0.13
 	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
@@ -217,8 +216,11 @@ func apply(hour: float, time: float) -> void:
 		light.light_energy *= lerpf(1.0, 0.7, overcast)
 	env.ambient_light_energy = s[6] * lerpf(1.0, 1.18, overcast)
 	light.shadow_opacity = s[14] * lerpf(1.0, 0.7, overcast)
+	env.fog_aerial_perspective = lerpf(0.15, 0.24, maxf(overcast * 0.65, s[8] * 0.35))
+	# сдвиг теней облаков учитывает зерно облачности мира, чтобы пятна на земле соответствовали синоптической фазе неба
+	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
 	RenderingServer.global_shader_parameter_set("cloud_shadow",
-		Vector4(CLOUD_WIND.x * time, CLOUD_WIND.y * time, CLOUD_SHADOW * sunlight, cover))
+		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, CLOUD_SHADOW * sunlight, cover))
 	sky_mat.set_shader_parameter("zenith_color", s[1])
 	sky_mat.set_shader_parameter("horizon_color", s[2])
 	sky_mat.set_shader_parameter("sun_dir", sun)
@@ -230,15 +232,20 @@ func apply(hour: float, time: float) -> void:
 	sky_mat.set_shader_parameter("cloud_time", time)
 	sky_mat.set_shader_parameter("cloud_cover", cover)
 	sky_mat.set_shader_parameter("cloud_seed", seed_phase)
-	sky_mat.set_shader_parameter("star_rot", _clock / 24.0 * TAU)
-	sky_mat.set_shader_parameter("moon_phase", events.phase)
-	# редкие явления видны только ночью и в глубоких сумерках
+	# редкие ночные явления, звёзды и фаза луны передаются только в сумерках и ночью
 	var dark := smoothstep(0.25, 0.85, s[9])
-	sky_mat.set_shader_parameter("aurora", events.aurora * dark * (0.75 + 0.25 * sin(time / 9.0)))
-	sky_mat.set_shader_parameter("aurora_seed", events.aurora_seed)
-	sky_mat.set_shader_parameter("comet", events.comet * dark)
-	sky_mat.set_shader_parameter("comet_dir", events.comet_dir)
-	sky_mat.set_shader_parameter("comet_tail", events.comet_tail)
-	sky_mat.set_shader_parameter("meteor_rate", events.meteor * dark)
-	for m: ShaderMaterial in terrain_mats:
-		m.set_shader_parameter("sunlight", sunlight)
+	if s[9] > 0.001 or _dark_active:
+		sky_mat.set_shader_parameter("star_rot", _clock / 24.0 * TAU)
+		sky_mat.set_shader_parameter("moon_phase", events.phase)
+		sky_mat.set_shader_parameter("aurora", events.aurora * dark * (0.75 + 0.25 * sin(time / 9.0)))
+		sky_mat.set_shader_parameter("aurora_seed", events.aurora_seed)
+		sky_mat.set_shader_parameter("comet", events.comet * dark)
+		sky_mat.set_shader_parameter("comet_dir", events.comet_dir)
+		sky_mat.set_shader_parameter("comet_tail", events.comet_tail)
+		sky_mat.set_shader_parameter("meteor_rate", events.meteor * dark)
+		_dark_active = s[9] > 0.001
+	if absf(sunlight - _last_sunlight) > 0.002:
+		_last_sunlight = sunlight
+		for m: ShaderMaterial in terrain_mats:
+			if m != null:
+				m.set_shader_parameter("sunlight", sunlight)

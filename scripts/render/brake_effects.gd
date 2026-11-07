@@ -304,6 +304,17 @@ func clear() -> void:
 		_spark_accum[w] = 0.0
 
 
+## Единая модель нагрева и охлаждения тормозных дисков (для BrakeEffects и BikeView).
+static func step_rotor_heat(b: BikeRide, dt: float, prev_f: float, prev_r: float) -> Vector2:
+	var spd := absf(b.speed)
+	var cool := (0.22 + 0.032 * spd) * dt
+	var wf := maxf(b.brake_force.x, b.brakes.front_force) * spd if (b.riding and not b.airborne and b.contact_f()) else 0.0
+	var wr := maxf(b.brake_force.y, b.brakes.rear_force) * spd if (b.riding and not b.airborne and b.contact_r()) else 0.0
+	var hf := clampf(prev_f + (wf * 0.0085 + b.brakes.risk * 0.16) * dt - cool * (0.40 + 0.60 * prev_f), 0.0, 1.0)
+	var hr := clampf(prev_r + (wr * 0.0075 + b.brakes.risk * 0.12) * dt - cool * (0.40 + 0.60 * prev_r), 0.0, 1.0)
+	return Vector2(hf, hr)
+
+
 ## Шаг симуляции эффектов торможения (вызывается в _physics_process из GameWorld или TrailLab).
 func tick(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 	if not _ready_done:
@@ -318,12 +329,9 @@ func tick(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 	_prev_bike_pos = bike_pos
 
 	var speed := absf(b.speed)
-	# Охлаждение тормозных дисков набегающим потоком воздуха и нагрев от мощности трения колодок
-	var cool := (0.22 + 0.032 * speed) * dt
-	var work_f := maxf(b.brake_force.x, b.brakes.front_force) * speed if (b.riding and not b.airborne) else 0.0
-	var work_r := maxf(b.brake_force.y, b.brakes.rear_force) * speed if (b.riding and not b.airborne) else 0.0
-	heat_f = clampf(heat_f + (work_f * 0.0085 + b.brakes.risk * 0.16) * dt - cool * (0.40 + 0.60 * heat_f), 0.0, 1.0)
-	heat_r = clampf(heat_r + (work_r * 0.0075 + b.brakes.risk * 0.12) * dt - cool * (0.40 + 0.60 * heat_r), 0.0, 1.0)
+	var next_heat := step_rotor_heat(b, dt, heat_f, heat_r)
+	heat_f = next_heat.x
+	heat_r = next_heat.y
 
 	if b.riding and not b.fallen and speed > 0.35:
 		_emit_wheels(dt, b, w, h)

@@ -18,17 +18,17 @@ ssao_radius = 1.6
 ssao_intensity = 1.6
 ssao_detail = 0.3
 glow_enabled = true
-glow_intensity = 0.35
-glow_bloom = 0.04
+glow_intensity = 0.32
+glow_bloom = 0.03
 glow_blend_mode = 1
 fog_enabled = true
 fog_light_color = Color(0.62, 0.74, 0.88, 1)
 fog_sun_scatter = 0.12
 fog_density = 0.0021
-fog_aerial_perspective = 0.15
+fog_aerial_perspective = 0.16
 fog_sky_affect = 0.0
 adjustment_enabled = true
-adjustment_saturation = 1.1
+adjustment_saturation = 1.08
 
 [node name="GameWorld" type="Node3D"]
 script = ExtResource("1_game")

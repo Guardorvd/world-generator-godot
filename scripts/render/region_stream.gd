@@ -37,6 +37,7 @@ render_mode blend_mix, depth_draw_opaque, cull_disabled;
 uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform vec3 road_color : source_color;
 varying vec3 wpos;
+#include "res://resources/cloud_shadow.gdshaderinc"
 void vertex() {
 	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 }
@@ -47,7 +48,7 @@ void fragment() {
 	float edge = COLOR.a + (n1 - 0.5) * 0.4 + (n2 - 0.5) * 0.15;
 	ALPHA = smoothstep(0.12, 0.5, edge);
 	float ruts = exp(-pow((abs(UV.x) - 0.42) / 0.12, 2.0));
-	ALBEDO = road_color * (0.85 + (n1 - 0.5) * 0.32 + (n2 - 0.5) * 0.2) * (1.0 - ruts * 0.09);
+	ALBEDO = road_color * (0.85 + (n1 - 0.5) * 0.32 + (n2 - 0.5) * 0.2) * (1.0 - ruts * 0.09) * cloud_light(wpos.xz);
 	ROUGHNESS = 0.95;
 }
 """

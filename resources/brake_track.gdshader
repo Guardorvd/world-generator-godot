@@ -10,6 +10,8 @@ render_mode blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
 
 varying vec3 world_pos;
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
 	p3 += dot(p3, p3.yzx + 33.33);
@@ -70,7 +72,7 @@ void fragment() {
 	float fade = (1.0 - age * age) * smoothstep(1.0, 0.72, age + abs_x * 0.22);
 	float alpha = COLOR.a * mask * clamp(tread * 0.75 + side_berm * 0.5, 0.0, 1.0) * fade;
 
-	ALBEDO = col;
+	ALBEDO = col * cloud_light(world_pos.xz);
 	ROUGHNESS = ( abs(kind - 8.0) < 0.4 ) ? 0.35 : 0.92; // мокрый след блестит сильнее
 	SPECULAR = ( abs(kind - 8.0) < 0.4 ) ? 0.55 : 0.12;
 	ALPHA = clamp(alpha, 0.0, 0.88);

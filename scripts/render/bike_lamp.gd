@@ -103,8 +103,8 @@ func _ready() -> void:
 	cone.top_radius = BEAM_RADIUS
 	cone.bottom_radius = 0.03
 	cone.height = BEAM_LENGTH
-	cone.radial_segments = 16
-	cone.rings = 1
+	cone.radial_segments = 32
+	cone.rings = 4
 	cone.cap_top = false
 	cone.cap_bottom = false
 	var haze := ShaderMaterial.new()

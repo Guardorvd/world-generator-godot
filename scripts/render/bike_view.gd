@@ -259,11 +259,9 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_STEER] += _hit_f * 0.15 * _recoil
 	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
 	var spd := absf(b.speed)
-	var cool := (0.22 + 0.032 * spd) * dt
-	var wf := maxf(b.brake_force.x, b.brakes.front_force) * spd if (b.riding and not b.airborne and b.contact_f()) else 0.0
-	var wr := maxf(b.brake_force.y, b.brakes.rear_force) * spd if (b.riding and not b.airborne and b.contact_r()) else 0.0
-	_heat_f = clampf(_heat_f + (wf * 0.0085 + b.brakes.risk * 0.16) * dt - cool * (0.40 + 0.60 * _heat_f), 0.0, 1.0)
-	_heat_r = clampf(_heat_r + (wr * 0.0075 + b.brakes.risk * 0.12) * dt - cool * (0.40 + 0.60 * _heat_r), 0.0, 1.0)
+	var next_heat := BrakeEffects.step_rotor_heat(b, dt, _heat_f, _heat_r)
+	_heat_f = next_heat.x
+	_heat_r = next_heat.y
 	_cur[S_HEAT_F] = _heat_f
 	_cur[S_HEAT_R] = _heat_r
 	# Мелкая высокочастотная вибрация вилки и ручек тормоза при насыщении сцепления (skid)

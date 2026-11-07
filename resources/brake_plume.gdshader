@@ -11,8 +11,11 @@ render_mode blend_mix, depth_draw_never, cull_disabled, shadows_disabled;
 
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 varying vec4 v_custom;
 varying vec4 v_color;
+varying float v_cloud;
 
 float hash12(vec2 p) {
 	vec3 p3 = fract(vec3(p.xyx) * 0.1031);
@@ -42,6 +45,7 @@ float fbm(vec2 p) {
 void vertex() {
 	v_custom = INSTANCE_CUSTOM;
 	v_color = COLOR;
+	v_cloud = cloud_light(MODEL_MATRIX[3].xz);
 	MODELVIEW_MATRIX = VIEW_MATRIX * mat4(
 		vec4(normalize(INV_VIEW_MATRIX[0].xyz) * length(MODEL_MATRIX[0].xyz), 0.0),
 		vec4(normalize(INV_VIEW_MATRIX[1].xyz) * length(MODEL_MATRIX[1].xyz), 0.0),
@@ -80,20 +84,26 @@ void fragment() {
 
 	// Мягкое пересечение с землёй и колёсами (soft particles)
 	float depth = texture(depth_tex, SCREEN_UV).r;
-	vec4 scene = INV_PROJECTION_MATRIX * vec4(SCREEN_UV * 2.0 - 1.0, depth, 1.0);
+	#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
+		vec3 ndc = vec3(SCREEN_UV, depth) * 2.0 - 1.0;
+	#else
+		vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth);
+	#endif
+	vec4 scene = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
 	float scene_z = -scene.z / scene.w;
 	float frag_z = -VERTEX.z;
 	float soft = clamp((scene_z - frag_z) / 0.22, 0.0, 1.0);
 	soft *= clamp((frag_z - 0.25) / 0.45, 0.0, 1.0);
 
-	// Объёмная светотень внутри облачка пыли/дыма
+	// Объёмная светотень внутри облачка пыли/дыма и мягкое просвечивание тонких краёв на просвет
 	float billow = clamp(0.52 - p.y * 0.35 + (n - 0.48) * 0.45, 0.0, 1.0);
-	vec3 col = v_color.rgb * mix(0.76, 1.18, billow);
+	vec3 col = v_color.rgb * mix(0.76, 1.18, billow) * v_cloud;
 	if (abs(kind - 2.0) < 0.4 || abs(kind - 3.0) < 0.4) {
-		col += vec3(0.08, 0.10, 0.12) * smoothstep(0.58, 0.82, n2);
+		col += vec3(0.08, 0.10, 0.12) * smoothstep(0.58, 0.82, n2) * v_cloud;
 	}
 
 	ALBEDO = col;
+	BACKLIGHT = col * 0.42;
 	ROUGHNESS = (abs(kind - 3.0) < 0.4) ? 0.35 : 0.95;
 	ALPHA = clamp(erosion * life_curve * v_color.a * density * soft, 0.0, 0.85);
 }

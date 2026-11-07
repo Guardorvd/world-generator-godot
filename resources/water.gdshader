@@ -12,6 +12,8 @@ uniform vec3 shallow_color : source_color = vec3(0.22, 0.43, 0.38);
 uniform vec3 deep_color : source_color = vec3(0.10, 0.27, 0.25);
 varying vec3 world_position;
 
+#include "res://resources/cloud_shadow.gdshaderinc"
+
 float hash(vec2 p) {
 	vec3 q = fract(vec3(p.xyx) * 0.1031);
 	q += dot(q, q.yzx + 33.33);
@@ -101,15 +103,16 @@ void fragment() {
 	foam = max(foam, shore * crest * mix(0.08, 0.24, rapid) * detail);
 	foam = max(foam, max(wake_foam, turbulence * crest * 0.6));
 	vec3 deep = ocean ? vec3(0.045, 0.15, 0.23) : deep_color;
-	ALBEDO = mix(mix(shallow_color, deep, absorption), vec3(0.80, 0.87, 0.82), foam);
+	float c_light = cloud_light(world_position.xz);
+	ALBEDO = mix(mix(shallow_color, deep, absorption), vec3(0.80, 0.87, 0.82), foam) * c_light;
 	METALLIC = 0.0;
 	// Микроблики остаются только вблизи. Одной шероховатости 0.5 было мало:
 	// вдали плоская нормаль всё ещё давала большие круглые пятна от источников света.
 	float far_rough = smoothstep(55.0, 220.0, distance_to_eye);
-	ROUGHNESS = mix(mix(mix(0.24, 0.36, rapid), 0.88, far_rough), 0.65, foam);
-	SPECULAR = 0.4 * (1.0 - smoothstep(45.0, 180.0, distance_to_eye));
-	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 5.0);
+	ROUGHNESS = mix(mix(mix(0.20, 0.34, rapid), 0.86, far_rough), 0.65, foam);
+	SPECULAR = 0.45 * (1.0 - smoothstep(45.0, 190.0, distance_to_eye));
+	float fresnel = pow(1.0 - clamp(dot(NORMAL, VIEW), 0.0, 1.0), 4.5);
 	float bank = river > 0.5 ? smoothstep(0.0, 0.045, min(UV2.x, 1.0 - UV2.x)) : 1.0;
 	float join = river_surface ? 1.0 - COLOR.b : 1.0;
-	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * join * clamp(0.38 + absorption * 0.56 + fresnel * 0.22 + foam * 0.4, 0.0, 0.97);
+	ALPHA = smoothstep(0.0, 0.08, thickness) * bank * join * clamp(0.38 + absorption * 0.56 + fresnel * 0.26 + foam * 0.4, 0.0, 0.97);
 }

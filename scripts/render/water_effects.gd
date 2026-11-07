@@ -28,15 +28,20 @@ func setup(water: Node3D) -> void:
 	levels.resize(RINGS)
 	_currents.resize(RINGS)
 	_materials.clear()
-	# Среди детей воды бывают не только поверхности (сам WaterEffects, другие узлы) и сетки без
-	# поверхностей: их пропускаем, а не падаем на типе
+	# Среди детей воды бывают как прямые сетки (Ocean, Lakes, Rivers), так и потоковые слои
+	# PlanTerrain, хранящие свой материал в поле material: собираем оба варианта без падения на типе
 	for node in water.get_children():
 		var mi := node as MeshInstance3D
-		if mi == null or mi.mesh == null or mi.mesh.get_surface_count() == 0:
-			continue
-		var mat := mi.mesh.surface_get_material(0) as ShaderMaterial
-		if mat != null and not _materials.has(mat):
-			_materials.append(mat)
+		if mi != null and mi.mesh != null and mi.mesh.get_surface_count() > 0:
+			var mat := mi.mesh.surface_get_material(0) as ShaderMaterial
+			if mat == null:
+				mat = mi.material_override as ShaderMaterial
+			if mat != null and not _materials.has(mat):
+				_materials.append(mat)
+		elif node.get("material") is ShaderMaterial:
+			var stream_mat := node.get("material") as ShaderMaterial
+			if not _materials.has(stream_mat):
+				_materials.append(stream_mat)
 	var mesh := SphereMesh.new()
 	mesh.radius = 0.022
 	mesh.height = 0.044
