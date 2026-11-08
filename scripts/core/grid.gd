@@ -156,6 +156,8 @@ static func on_edge(i: int, w: int, h: int) -> bool:
 ## у линий (полоса cap), а не по всей карте. Растительность и камни ставят ствол или камень, если просвет в их точке
 ## не меньше их радиуса: деревья подходят к кромке тропы, кроны над ней не запрещены. Тот же расчёт, что у
 ## FastGrid.PathClearance (double, хранение во float).
+## При смене ширины берётся максимальная полуширина отрезка: консервативная огибающая полотна,
+## сохраняющая нижнюю оценку clearance_at и покрывающая среднюю ширину метрового меша.
 static func path_clearance(w: int, h: int, starts: PackedInt32Array, px: PackedFloat64Array, py: PackedFloat64Array,
 		pw: PackedFloat64Array, margin: PackedFloat64Array, tile: float, cap: float) -> PackedFloat32Array:
 	var fast := fast_grid()
@@ -173,13 +175,16 @@ static func path_clearance(w: int, h: int, starts: PackedInt32Array, px: PackedF
 			var l2 := dx * dx + dy * dy
 			var wa := pw[n - 1] * tile * 0.5
 			var wb := pw[n] * tile * 0.5
+			# Постоянная огибающая покрывает и среднюю полуширину отрезка RoadRefinement.
+			# Переменная ширина в проекции на ось не даёт 1-липшицево поле, нужное clearance_at.
+			var half := maxf(wa, wb)
 			var reach := (maxf(wa, wb) + margin[r] + cap) / tile
 			for y in range(maxi(0, floori(minf(ay, ay + dy) - reach)), mini(h, floori(maxf(ay, ay + dy) + reach) + 1)):
 				for x in range(maxi(0, floori(minf(ax, ax + dx) - reach)), mini(w, floori(maxf(ax, ax + dx) + reach) + 1)):
 					var t := 0.0 if l2 == 0.0 else clampf(((x + 0.5 - ax) * dx + (y + 0.5 - ay) * dy) / l2, 0.0, 1.0)
 					var ox := x + 0.5 - ax - dx * t
 					var oy := y + 0.5 - ay - dy * t
-					var value := sqrt(ox * ox + oy * oy) * tile - (wa + (wb - wa) * t) - margin[r]
+					var value := sqrt(ox * ox + oy * oy) * tile - half - margin[r]
 					var i := y * w + x
 					if value < out[i]:
 						out[i] = value

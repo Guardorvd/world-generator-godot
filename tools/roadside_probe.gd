@@ -24,6 +24,7 @@ var fixtures := "res://tools/control/runs/road_relief"
 var base_dir := ""
 var seeds := PackedStringArray(["Север-1234", "Туман-4821", "Ущелье"])
 var summary := {}
+var failures := 0
 
 
 func _arg(name: String, fallback: String) -> String:
@@ -44,33 +45,44 @@ func _initialize() -> void:
 
 
 func run() -> void:
+	if seeds.is_empty() or ("--parity" in OS.get_cmdline_user_args() and Grid.fast_grid() == null):
+		printerr("ROADSIDE: нужны сиды и C# backend для --parity")
+		quit(1)
+		return
+	for seed_text in seeds:
+		if not FileAccess.file_exists(fixtures.path_join(seed_text + ".fixture.bin")):
+			printerr("ROADSIDE: нет фикстуры ", seed_text)
+			quit(1)
+			return
 	for seed_text in seeds:
 		var path := fixtures.path_join(seed_text + ".fixture.bin")
-		if not FileAccess.file_exists(path): continue
 		var saved: Dictionary = FileAccess.open(path, FileAccess.READ).get_var()
 		var w: WorldData = WorldCache.new()._restore(saved.world, true)
 		saved = {}
 		var started := Time.get_ticks_usec()
 		StageVegetation.run(w)
 		var ms := (Time.get_ticks_usec() - started) / 1000.0
-		var row := {seed = seed_text, vegetation_ms = ms, objects = w.obj_count, trees = 0}
+		var row := {seed = seed_text, metrics_version = 2, vegetation_ms = ms, objects = w.obj_count, trees = 0}
 		for o in w.obj_count:
 			if TRUNK.has(w.obj_k[o]) and w.obj_s[o] >= 0.6: row.trees += 1
 		row.kinds = _measure(w)
 		row.on_tread = _violations(w)
+		if row.on_tread > 0: failures += 1
 		if "--parity" in OS.get_cmdline_user_args():
 			var stage: Script = load("res://scripts/world/stages/stage_vegetation.gd") # вызов по имени: в старом коде функции нет
 			var fast: PackedFloat32Array = stage.call("path_clearance", w.W, w.H, w.trails)
+			var allowed := Grid.allow_fast
 			Grid.allow_fast = false
 			var slow: PackedFloat32Array = stage.call("path_clearance", w.W, w.H, w.trails)
-			Grid.allow_fast = true
+			Grid.allow_fast = allowed
 			row.clearance_parity = fast == slow
+			if not row.clearance_parity: failures += 1
 		summary[seed_text] = row
 		_print(row)
 	FileAccess.open(out.path_join("roadside.json"), FileAccess.WRITE).store_string(JSON.stringify(summary, "\t"))
-	if base_dir != "": _compare()
-	print("ROADSIDE DONE ", out)
-	quit(0)
+	if base_dir != "" and not _compare(): failures += 1
+	print("ROADSIDE DONE ", out, "; failures=", failures)
+	quit(1 if failures else 0)
 
 
 func _measure(w: WorldData) -> Dictionary:
@@ -85,7 +97,7 @@ func _measure(w: WorldData) -> Dictionary:
 	var result := {}
 	for t: Dictionary in w.trails:
 		if not t.kind in KINDS or t.pts.size() < 2: continue
-		if not result.has(t.kind): result[t.kind] = {stations = 0, forest = 0, gaps = [], canopy = 0, close = 0, metres = 0.0}
+		if not result.has(t.kind): result[t.kind] = {stations = 0, forest = 0, gaps = [], canopy = 0, close = {}, metres = 0.0}
 		var g: Dictionary = result[t.kind]
 		var pts: Array = t.pts
 		var next := 0.0
@@ -111,7 +123,7 @@ func _measure(w: WorldData) -> Dictionary:
 		outv[kind] = {km = g.metres / 1000.0, forest_share = float(g.forest) / maxi(1, g.stations),
 			median_gap_m = gaps[gaps.size() / 2] if not gaps.is_empty() else -1.0,
 			p25_gap_m = gaps[gaps.size() / 4] if not gaps.is_empty() else -1.0,
-			canopy_share = float(g.canopy) / maxi(1, g.forest), close_per_100m = g.close * 100.0 / maxf(1.0, g.forest * STATION)}
+			canopy_share = float(g.canopy) / maxi(1, g.forest), close_per_100m = g.close.size() * 100.0 / maxf(1.0, g.forest * STATION)}
 	return outv
 
 
@@ -119,8 +131,10 @@ func _measure(w: WorldData) -> Dictionary:
 func _violations(w: WorldData) -> int:
 	var bad := {}
 	var grid := {}
+	var radius := 0.0
 	for o in w.obj_count:
 		if not TRUNK.has(w.obj_k[o]) or w.obj_s[o] < 0.6: continue
+		radius = maxf(radius, TRUNK[w.obj_k[o]] * w.obj_s[o])
 		var key := Vector2i(floori(w.obj_x[o] * TILE / CELL), floori(w.obj_y[o] * TILE / CELL))
 		if not grid.has(key): grid[key] = []
 		(grid[key] as Array).append(o)
@@ -131,14 +145,16 @@ func _violations(w: WorldData) -> int:
 			var b := Vector2(t.pts[n].x, t.pts[n].y) * TILE
 			var ha := float(t.pts[n - 1].w) * TILE * 0.5
 			var hb := float(t.pts[n].w) * TILE * 0.5
-			var key := Vector2i(floori((a.x + b.x) * 0.5 / CELL), floori((a.y + b.y) * 0.5 / CELL))
-			for dy in range(-1, 2):
-				for dx in range(-1, 2):
-					for o: int in grid.get(key + Vector2i(dx, dy), []):
+			# В том числе длинный прямой отрезок: индекс у середины не покрывает его концы.
+			var reach := maxf(ha, hb) + radius
+			for dy in range(floori((minf(a.y, b.y) - reach) / CELL), floori((maxf(a.y, b.y) + reach) / CELL) + 1):
+				for dx in range(floori((minf(a.x, b.x) - reach) / CELL), floori((maxf(a.x, b.x) + reach) / CELL) + 1):
+					for o: int in grid.get(Vector2i(dx, dy), []):
 						var q := Vector2(w.obj_x[o], w.obj_y[o]) * TILE
 						var d := b - a
 						var f := clampf((q - a).dot(d) / maxf(d.length_squared(), 1e-9), 0.0, 1.0)
-						if q.distance_to(a + d * f) < lerpf(ha, hb, f) + TRUNK[w.obj_k[o]] * w.obj_s[o]:
+						# Метровый меш использует среднюю полуширину отрезка.
+						if q.distance_to(a + d * f) < (ha + hb) * 0.5 + TRUNK[w.obj_k[o]] * w.obj_s[o]:
 							bad[o] = true
 	return bad.size()
 
@@ -148,6 +164,7 @@ func _station(w: WorldData, grid: Dictionary, p: Vector2, dir: Vector2, half: fl
 	var near := INF
 	var trees := 0
 	var canopy := false
+	var close := {}
 	var key := Vector2i(floori(p.x / CELL), floori(p.y / CELL))
 	for dy in range(-4, 5):
 		for dx in range(-4, 5):
@@ -164,9 +181,11 @@ func _station(w: WorldData, grid: Dictionary, p: Vector2, dir: Vector2, half: fl
 				if along < 4.0:
 					var gap := lateral - half
 					near = minf(near, gap)
-					if gap < 2.0: g.close += 1
+					if gap < 2.0: close[o] = true
 				if d < Biomes.CROWN_RADIUS[w.obj_k[o]] * w.obj_s[o] * TILE: canopy = true
 	if trees < 10: return
+	# Считать ствол один раз, только у лесных станций, которыми нормируется длина.
+	(g.close as Dictionary).merge(close)
 	g.forest += 1
 	if canopy: g.canopy += 1
 	(g.gaps as Array).append(near if near < INF else 12.0)
@@ -181,10 +200,20 @@ func _print(row: Dictionary) -> void:
 			kind, m.km, m.forest_share * 100.0, m.median_gap_m, m.p25_gap_m, m.canopy_share * 100.0, m.close_per_100m])
 
 
-func _compare() -> void:
+func _compare() -> bool:
 	var path := base_dir.path_join("roadside.json")
-	if not FileAccess.file_exists(path): return
-	var before: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not FileAccess.file_exists(path):
+		printerr("ROADSIDE: нет базы сравнения ", path)
+		return false
+	var parsed: Variant = JSON.parse_string(FileAccess.get_file_as_string(path))
+	if not parsed is Dictionary:
+		printerr("ROADSIDE: некорректная база сравнения ", path)
+		return false
+	var before: Dictionary = parsed
+	for seed_text: String in summary:
+		if not before.has(seed_text):
+			printerr("ROADSIDE: в базе нет сида ", seed_text)
+			return false
 	var lines := PackedStringArray()
 	for seed_text: String in summary:
 		if not before.has(seed_text): continue
@@ -197,9 +226,13 @@ func _compare() -> void:
 			if not a.kinds.has(kind): continue
 			var x: Dictionary = a.kinds[kind]
 			var y: Dictionary = b.kinds[kind]
-			lines.append("  %-9s до ствола медиана %.1f → %.1f м, четверть %.1f → %.1f м | крона над осью %3.0f → %3.0f%% | у кромки %.1f → %.1f на 100 м" % [
+			var close := "у кромки: разные версии подсчёта"
+			if a.get("metrics_version", 1) == b.get("metrics_version", 1):
+				close = "у кромки %.1f → %.1f на 100 м" % [x.close_per_100m, y.close_per_100m]
+			lines.append("  %-9s до ствола медиана %.1f → %.1f м, четверть %.1f → %.1f м | крона над осью %3.0f → %3.0f%% | %s" % [
 				kind, x.median_gap_m, y.median_gap_m, x.p25_gap_m, y.p25_gap_m, x.canopy_share * 100.0, y.canopy_share * 100.0,
-				x.close_per_100m, y.close_per_100m])
+				close])
 	var text := "\n".join(lines)
 	print("ROADSIDE COMPARE\n", text)
 	FileAccess.open(out.path_join("compare.txt"), FileAccess.WRITE).store_string(text)
+	return true

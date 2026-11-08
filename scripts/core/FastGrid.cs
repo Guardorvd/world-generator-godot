@@ -265,6 +265,10 @@ public partial class FastGrid : RefCounted
 				double ax = px[n - 1], ay = py[n - 1], dx = px[n] - ax, dy = py[n] - ay;
 				double l2 = dx * dx + dy * dy;
 				double wa = pw[n - 1] * tile * 0.5, wb = pw[n] * tile * 0.5;
+				// A fixed envelope also covers the averaged width of RoadRefinement segments.
+				// Interpolating width at the axis projection is not a 1-Lipschitz distance:
+				// clearance_at could then overestimate the safe gap on tapered segments.
+				double half = Math.Max(wa, wb);
 				double reach = (Math.Max(wa, wb) + margin[r] + cap) / tile;
 				int y0 = Math.Max(0, (int)Math.Floor(Math.Min(ay, ay + dy) - reach)), y1 = Math.Min(h, (int)Math.Floor(Math.Max(ay, ay + dy) + reach) + 1);
 				int x0 = Math.Max(0, (int)Math.Floor(Math.Min(ax, ax + dx) - reach)), x1 = Math.Min(w, (int)Math.Floor(Math.Max(ax, ax + dx) + reach) + 1);
@@ -274,7 +278,7 @@ public partial class FastGrid : RefCounted
 					{
 						double t = l2 == 0.0 ? 0.0 : Math.Clamp(((x + 0.5 - ax) * dx + (y + 0.5 - ay) * dy) / l2, 0.0, 1.0);
 						double ox = x + 0.5 - ax - dx * t, oy = y + 0.5 - ay - dy * t;
-						double value = Math.Sqrt(ox * ox + oy * oy) * tile - (wa + (wb - wa) * t) - margin[r];
+						double value = Math.Sqrt(ox * ox + oy * oy) * tile - half - margin[r];
 						int i = y * w + x;
 						if (value < outv[i]) outv[i] = (float)value;
 					}

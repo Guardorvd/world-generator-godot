@@ -29,7 +29,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 11 # slope detail without contour terraces; independent lake proposal streams
 const SCHEMA_TRAILS_VERSION := 15 # natural bike rides (RideRoutes) after the mountain trails
-const SCHEMA_NATURE_VERSION := 8 # 15.0: path clearance by the real tread (trees up to trail edges), roadside stones by geology
+const SCHEMA_NATURE_VERSION := 9 # Conservative clearance at changes of path width
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

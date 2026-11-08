@@ -1634,11 +1634,13 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		return
 	var floor_kind := kind - Floor.FIRST
 	var local_box: AABB = entry.box
-	var reach := local_box.position.abs().max(local_box.end.abs()) * scale
+	# Проверка стволов должна видеть ту же длину, что меш и капсула столкновения.
+	var object_box := AABB(local_box.position * Vector3(stretch, 1.0, 1.0), local_box.size * Vector3(stretch, 1.0, 1.0))
+	var reach := object_box.position.abs().max(object_box.end.abs()) * scale
 	var radius := Vector2(reach.x, reach.z).length()
 	if not on_road and not placement.ground_clear(x, z, radius):
 		return
-	if not placement.objects_clear(x, z, rot, scale, local_box, radius, owner):
+	if not placement.objects_clear(x, z, rot, scale, object_box, radius, owner):
 		return
 	var pos := Vector3(x, heights.ground_at(x, z) - 0.015 - sink, z)
 	var offset: int = entry.count * STRIDE
@@ -1655,11 +1657,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var box: AABB = xf * local_box
 	if not placement.details_clear(box):
 		return
-	_put_xform(entry.buf, offset, x, pos.y, z, rot, scale, scale)
-	entry.buf[offset] = xf.basis.x.x
-	entry.buf[offset + 8] = xf.basis.x.z
-	entry.buf[offset + 4] = xf.basis.x.y
-	entry.buf[offset + 6] = xf.basis.z.y
+	_put_transform(entry.buf, offset, xf)
 	for c in 3:
 		entry.buf[offset + 12 + c] = tint
 	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r

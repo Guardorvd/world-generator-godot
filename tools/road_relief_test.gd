@@ -233,7 +233,23 @@ func corridor_contracts() -> void:
 	duplicate.pts.reverse()
 	duplicate.surf.reverse()
 	w.trails.append(duplicate)
-	check(full.patches == build(h, true).patches, "reversed duplicate preserves the mountain surface")
+	var duplicated := build(h, true)
+	var physical_error := 0.0
+	var same_channels := full.patches.size() == duplicated.patches.size()
+	for key: int in full.patches:
+		if not duplicated.patches.has(key):
+			same_channels = false
+			continue
+		var original: Dictionary = full.patches[key]
+		var repeated: Dictionary = duplicated.patches[key]
+		same_channels = same_channels and original.surface == repeated.surface and original.road == repeated.road
+		for j in (original.h as PackedFloat32Array).size():
+			physical_error = maxf(physical_error, absf(original.h[j] - repeated.h[j]))
+			# Signed UV.x follows route direction; reversing the selected segment can
+			# flip it without changing the tread. Compare its magnitude and material.
+			same_channels = same_channels and absf(absf(original.uv[j].x) - absf(repeated.uv[j].x)) < 0.00001 \
+				and original.uv[j].y == repeated.uv[j].y and original.color[j].is_equal_approx(repeated.color[j])
+	check(same_channels and physical_error < 0.00001, "reversed duplicate preserves the physical mountain surface: %.8f m" % physical_error)
 	# A strict configured grade limit must reduce peaks, never move a protected zero.
 	var r := RoadRefinement.new()
 	r._heights = h
