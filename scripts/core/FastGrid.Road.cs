@@ -127,7 +127,7 @@ public partial class FastGrid
 			lift[j] = (table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy) * mul * g;
 			double natural = cross * table[k + 3] * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
 			double limit = table[k + 4] * hw;
-			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * scale, -limit, limit) * g;
+			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * g;
 			outv[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * g;
 			outv[at + 3] = table[k + 7] * RoadSmooth(0.2, 0.55, hole) * RoadLerp(0.3, 1.0, broken) * mul * holes * g;
 			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
@@ -137,9 +137,12 @@ public partial class FastGrid
 			outv[at + 6] = RoadShoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain;
 		}
 		double cap = table[k + 10] * step;
+		// Bound by the distance to every protected zero before the slope passes. Otherwise
+		// clamping a zero against a high neighbour can move the protected station itself.
+		for (int j = 0; j < n; j++) lift[j] = Math.Clamp(lift[j], -cap * dist[j] / step, cap * dist[j] / step);
 		for (int j = 1; j < n; j++) lift[j] = Math.Clamp(lift[j], lift[j - 1] - cap, lift[j - 1] + cap);
 		for (int j = n - 2; j >= 0; j--) lift[j] = Math.Clamp(lift[j], lift[j + 1] - cap, lift[j + 1] + cap);
-		for (int j = 0; j < n; j++) outv[(from + j) * stride] = lift[j];
+		for (int j = 0; j < n; j++) outv[(from + j) * stride] = dist[j] == 0.0 ? 0.0 : lift[j];
 	}
 
 	/// <summary>RoadRefinement._fit_network for the whole network in one call (14.11): stations every `step` m of every road,

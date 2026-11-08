@@ -53,12 +53,21 @@ func _initialize() -> void:
 
 
 func run() -> void:
-	if shots: _scene()
+	# Fixtures are local measurement data, not part of a clean checkout. An empty
+	# successful report must not look like a completed real-world verification.
+	if runs < 1 or seeds.is_empty():
+		printerr("PROBE: нужны --runs >= 1 и хотя бы один сид")
+		quit(1)
+		return
 	for seed_text in seeds:
 		var path := fixtures.path_join(seed_text + ".fixture.bin")
 		if not FileAccess.file_exists(path):
-			print("PROBE нет фикстуры ", path)
-			continue
+			printerr("PROBE нет фикстуры ", path)
+			quit(1)
+			return
+	if shots: _scene()
+	for seed_text in seeds:
+		var path := fixtures.path_join(seed_text + ".fixture.bin")
 		var saved: Dictionary = FileAccess.open(path, FileAccess.READ).get_var()
 		var w: WorldData = WorldCache.new()._restore(saved.world, true)
 		w.available_rect = Rect2i() # весь план открыт: участки и заезды не только в стартовом окне

@@ -819,7 +819,7 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			lift[j] = (table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy) * mul * gate
 			var natural := cross * table[k + 3] * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
 			var limit := table[k + 4] * half
-			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * scale, -limit, limit) * gate
+			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * gate
 			out[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * gate
 			out[at + 3] = table[k + 7] * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
 			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)
@@ -829,12 +829,16 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			out[at + 6] = _shoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain
 		# добавленный продольный уклон не круче grade: от закреплённых нулей формы поднимаются плавно
 		var cap := table[k + 10] * STEP
+		# Сначала ограничиваем высоту расстоянием до закреплённых нулей: проходы уклона
+		# должны уменьшать соседние пики, а не сдвигать сами закреплённые станции.
+		for j in n:
+			lift[j] = clampf(lift[j], -cap * dist[j] / STEP, cap * dist[j] / STEP)
 		for j in range(1, n):
 			lift[j] = clampf(lift[j], lift[j - 1] - cap, lift[j - 1] + cap)
 		for j in range(n - 2, -1, -1):
 			lift[j] = clampf(lift[j], lift[j + 1] - cap, lift[j + 1] + cap)
 		for j in n:
-			out[(from + j) * CORRIDOR_STRIDE] = lift[j]
+			out[(from + j) * CORRIDOR_STRIDE] = 0.0 if dist[j] == 0.0 else lift[j]
 	return out
 
 

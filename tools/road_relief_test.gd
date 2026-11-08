@@ -177,6 +177,11 @@ func ride(h: Heightfield, lane: int, hz: int) -> void:
 func run() -> void:
 	check(Grid.fast_grid() != null, "native backend available")
 	if failures: quit(1); return
+	corridor_contracts()
+	if "--contracts-only" in OS.get_cmdline_user_args():
+		print("ROAD RELIEF RESULT ", failures, " failures")
+		quit(1 if failures else 0)
+		return
 	DirAccess.make_dir_recursive_absolute(OUT)
 	compare(Fixture.world(), "isolated", true)
 	if not "--synthetic-only" in OS.get_cmdline_user_args():
@@ -191,3 +196,68 @@ func run() -> void:
 	RoadRefinement.natural_relief = true
 	print("ROAD RELIEF RESULT ", failures, " failures")
 	quit(1 if failures else 0)
+
+
+func corridor_contracts() -> void:
+	# A side slope exercises the natural component of tilt, absent from the flat ride fixture.
+	var w := Fixture.world()
+	w.trails = [w.trails[2]]
+	w.trails[0].kind = "mountain"
+	for z in w.H:
+		for x in w.W:
+			w.h[z * w.W + x] += (z + 0.5) * GameConfig.TILE * 0.12 / GameConfig.HS
+	var h := Heightfield.new(w, false)
+	var full := build(h, true)
+	check(full.corridor_routes.has(0) and full.fit_routes.is_empty(), "mountain corridor without profile fitting")
+	w.trails[0].trail_id = "natural"
+	w.trails[0].formation = Vector3.ZERO
+	var prepared := build(h, true)
+	var a: Vector2i = full.corridor_routes[0]
+	var b: Vector2i = prepared.corridor_routes[0]
+	var error := 0.0
+	for j in a.y:
+		error = maxf(error, absf(prepared.corridor[(b.x + j) * 7 + 1] - full.corridor[(a.x + j) * 7 + 1] * RoadRefinement.PREPARED_SCALE))
+	check(error < 0.0000001, "prepared cross-slope scales with all other forms: %.8f m" % error)
+	RoadRefinement.allow_fast_patches = false
+	RoadRefinement.allow_fast_nearest = false
+	RoadRefinement.allow_fast_vertices = false
+	var reference := build(h, true)
+	check(prepared.patches == reference.patches and prepared.corridor == reference.corridor, "sloped mountain native/reference parity")
+	RoadRefinement.allow_fast_patches = true
+	RoadRefinement.allow_fast_nearest = true
+	RoadRefinement.allow_fast_vertices = true
+	# Coincident routes must keep their forms, including when one route runs in reverse.
+	w.trails[0].erase("trail_id")
+	w.trails[0].erase("formation")
+	var duplicate: Dictionary = w.trails[0].duplicate(true)
+	duplicate.pts.reverse()
+	duplicate.surf.reverse()
+	w.trails.append(duplicate)
+	check(full.patches == build(h, true).patches, "reversed duplicate preserves the mountain surface")
+	# A strict configured grade limit must reduce peaks, never move a protected zero.
+	var r := RoadRefinement.new()
+	r._heights = h
+	r._noise = FastNoiseLite.new()
+	r._noise.seed = w.seed_num
+	r._noise.frequency = 1.0
+	r._noise.fractal_octaves = 2
+	var points := PackedVector2Array()
+	var halves := PackedFloat32Array()
+	var surfaces := PackedInt32Array()
+	var gates := PackedFloat32Array()
+	for j in 160:
+		points.append(Vector2(50 + j, 100))
+		halves.append(1.1)
+		surfaces.append(RoadSurface.FOREST)
+		gates.append(0.0 if j == 80 else 1.0)
+	var table := PackedFloat64Array()
+	for kind: String in RoadRefinement.CORRIDOR_KINDS:
+		table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR[kind]))
+	table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR_SURFACE))
+	table[10] = 0.001
+	var forms := r._corridor_reference(points, halves, surfaces, gates, PackedInt32Array([0, 160]), PackedInt32Array([0]),
+		PackedFloat32Array([1.0]), PackedInt32Array([0]), table)
+	var pinned := maxf(absf(forms[0]), maxf(absf(forms[80 * 7]), absf(forms[159 * 7])))
+	var grade := 0.0
+	for j in range(1, 160): grade = maxf(grade, absf(forms[j * 7] - forms[(j - 1) * 7]))
+	check(pinned == 0.0 and grade <= table[10] + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)

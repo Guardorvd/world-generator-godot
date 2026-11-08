@@ -8,7 +8,7 @@ public partial class FastGrid
 	private static readonly StringName NameH = "h", NameColor = "color", NameUv = "uv", NameSurface = "surface", NameRoad = "road";
 
 	// RoadRefinement.build (scripts/game/road_refinement.gd), DOD: индекс и патчи двумя вызовами;
-	// формы коридора всех путей — одним пакетом RoadCorridor по готовым станциям (FastGrid.Road.cs).
+	// формы коридора всех путей — внутри RoadFitNetwork (FastGrid.Road.cs).
 	// на входе и выходе только массивы. RoadIndex — отрезки метровой дорожной сетки и индекс «клетка -> отрезки»
 	// (копия RoadRefinement._index); RoadPatches — уникальные вершины патчей, ближайший отрезок, высота/цвет/UV
 	// вершины и сборка словарей патчей (копии _nearest_vertices, _vertex и цикла сборки build).
@@ -135,7 +135,7 @@ public partial class FastGrid
 	/// <summary>Патчи метровой сетки по клеткам keys. Входные отрезки — столбцы из RoadIndex (a, delta, len2, half, road, surf,
 	/// next, ha, hb, along, route, starts, candidates), fitStart/fitCount — смещение и длина профиля подгонки пути (по номеру
 	/// пути), fits — profile/strength/limit подряд; corStart/corCount — начало (в числах) и число станций форм коридора пути,
-	/// corridor — 7 чисел на станцию (RoadCorridor). Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
+	/// corridor — 7 чисел на станцию (RoadFitNetwork). Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
 	/// points — число уникальных вершин}.</summary>
 	public Godot.Collections.Dictionary RoadPatches(int[] keys, int width, int height, double tile, int div,
 		Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext,
