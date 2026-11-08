@@ -82,7 +82,8 @@ func ground_clear(x: float, z: float, radius: float) -> bool:
 			if cx < 0 or cy < 0 or cx >= world.W or cy >= world.H:
 				return false
 			var k := cy * world.W + cx
-			if world.path_mask[k] > 0 or rc[k] != 0:
+			# 15.0: у дорог и троп — их настоящее полотно (weight_at ниже), а не клетка 4 м; звериная тропа без полотна — клеткой
+			if world.path_mask[k] == 1 or (world.path_mask[k] > 1 and heights.road_refinement == null) or rc[k] != 0:
 				return false
 			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, world.W) > 0.08:
 				return false

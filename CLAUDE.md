@@ -49,7 +49,8 @@
 | Генерация мира, рельеф, реки, дороги, мосты, туннели | `check.gd`: хеши мира, снимки `road`/`valley` (`--world Ущелье` для мостов) |
 | Местность за краем стартовой области; соседние области в игре (`RegionStream`) | `territory_test` (`-- --regions` — три области как в игре); путешествие, выгрузка, сохранение областей, их места и задания — `region_travel_test` |
 | Подготовка соседних областей (`scripts/world/region_*.gd`): реки, вода, поселения, дороги, закрепление | изолированная `region_rivers_test.gd -- --neighbors`; заготовка области — `region_preparation_test.gd -- --gdscript` |
-| Препятствия на дорогах (раскладка, ступени, кочки) | изолированная `road_obstacles_test.gd` (+ `road_look.gd -- --obstacles` для вида) |
+| Препятствия на дорогах (раскладка от причин: корни от стволов, камни, валежник; ступени, кочки) | изолированная `road_obstacles_test.gd` (+ `road_look.gd -- --obstacles` для вида) |
+| Лес и камни у путей (просвет `StageVegetation.path_clearance`, [docs/ROADSIDE_NATURE.md](docs/ROADSIDE_NATURE.md)) | `roadside_probe.gd` (три сохранённых мира без генерации, ~1,5 мин, было/стало через `--base`, `--parity` — C#/GDScript); в игре — `check.gd --views trail,forest` один раз в конце |
 | Подвеска, кочки полотна, ощущение езды без мира | изолированный `feel_test -- --downhill` (+ `road_look.gd` для вида кочек) |
 | Модель седока, его анимации | `cyclist_animation_test -- --capture` |
 | Велосипедные трассы, элементы, физика велосипеда на трассе | изолированная `trail_lab_test` (`-- --ui-only`, `-- --capture` по нужде); `feel_test` не нужен |

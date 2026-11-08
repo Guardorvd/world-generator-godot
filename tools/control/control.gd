@@ -338,4 +338,28 @@ static func views(game: GameWorld) -> Array:
 		var eye := Vector3(best.x, h.ground_at(best.x, best.y) + GameConfig.EYE, best.y)
 		var ahead := Vector2(tx, tz) + (Vector2(tx, tz) - best).normalized() * 14.0
 		out.append({name = "forest", title = "Лес", pos = eye, target = Vector3(ahead.x, h.ground_at(ahead.x, ahead.y) + 2.0, ahead.y)})
+	# 15.0: лесная тропа с высоты велосипедиста — в самом лесистом месте троп. Полог берётся по шумам мира
+	# (StageVegetation.cover_at), а не по деревьям, поэтому место то же до и после правок растительности.
+	var trail_best := 0.3
+	var trail_at := Vector2.INF
+	var trail_dir := Vector2.ZERO
+	for t in w.trails:
+		if t.kind != "trail" and t.kind != "mountain" or t.has("trail_id"):
+			continue
+		var pts: Array = t.pts
+		for k in range(8, pts.size() - 8, 5):
+			var cover := StageVegetation.cover_at(w, floori(pts[k].x), floori(pts[k].y)).x
+			var village := false # в лесу, а не у поселения или места (там лес вырублен)
+			for list: Array in [w.settlements, w.sites]:
+				for place: EntityRecord in list:
+					village = village or Vector2(place.x, place.y).distance_to(Vector2(pts[k].x, pts[k].y)) < 30.0
+			if cover > trail_best and not village:
+				trail_best = cover
+				var ahead: Dictionary = pts[_along(pts, k, 3.0)]
+				trail_at = Vector2(pts[k].x, pts[k].y) * TILE
+				trail_dir = (Vector2(ahead.x, ahead.y) * TILE - trail_at).normalized()
+	if trail_at != Vector2.INF:
+		var look := trail_at + trail_dir * 14.0
+		out.append({name = "trail", title = "Лесная тропа", pos = Vector3(trail_at.x, h.ground_at(trail_at.x, trail_at.y) + 1.45, trail_at.y),
+			target = Vector3(look.x, h.ground_at(look.x, look.y) + 0.6, look.y)})
 	return out

@@ -58,8 +58,8 @@ func run() -> void:
 		var entry: Dictionary = veg.understory[kind]
 		counts.append(entry.count)
 		saved.append(entry.buf.duplicate())
-		if kind == Floor.FIRST + Floor.BRANCH:
-			check(entry.count == 0, "Дорожные ветки создаёт RoadObstacles, а не случайная лесная подстилка")
+		if kind == Floor.FIRST + Floor.BRANCH or kind == Floor.FIRST + Floor.ROOT_SPAN:
+			check(entry.count == 0, "Дорожные ветки и корни через тропу создаёт RoadObstacles, а не случайная лесная подстилка")
 		else:
 			check(entry.count > 0, "Смешанный лес должен содержать подстилку, корни, ветки, валежник, сухостой и камни: %d" % kind)
 		for n: int in entry.count:

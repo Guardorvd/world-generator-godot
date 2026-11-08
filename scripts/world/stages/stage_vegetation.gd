@@ -33,6 +33,17 @@ const GLADE_SCALE := 20.0
 const GLADE_OX := -61.0
 const GLADE_OY := 39.0
 const Surface := preload("res://scripts/world/mountain_surface.gd")
+## 15.0: просвет у путей — по настоящей ширине полотна, а не по клеткам 4 м (Grid.path_clearance). Запас от кромки
+## до ствола или камня, м: у дороги — обочина с канавой, у троп — проход руля; кроны над тропой не запрещены.
+const PATH_MARGIN := {road = 2.4, trail = 0.45, mountain = 0.45, animal = 0.15}
+const CLEAR_CAP := 12.0  # дальше этого от пути (м) просвет не считается
+const PREPARED_MARGIN := 1.5 # у подготовленной трассы (trail_id), м
+## Радиус ствола у комля при масштабе 1, м: просвет у путей и столкновения (ForestObstacles.TRUNK — эта же таблица)
+const TRUNK := {
+	Biomes.T_BIRCH: 0.14, Biomes.T_PINE: 0.23, Biomes.T_SNOWPINE: 0.23, Biomes.T_OAK: 0.32,
+	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
+}
+const LOW_CROWN := 0.3   # ель и снежная ель опускают ветви к земле: эта доля кроны тоже не над полотном
 
 
 static func run(w: WorldData) -> void:
@@ -105,11 +116,7 @@ static func fields(w: WorldData) -> Dictionary:
 	var moist := w.moist
 	var forest := w.noise_field("forest")
 	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
-	var path_src := PackedByteArray()
-	path_src.resize(N)
-	for i in N:
-		path_src[i] = 1 if w.path_mask[i] > 0 else 0
-	var dist_path := Grid.distance_field(W, H, path_src)
+	var dist_path := path_clearance(W, H, w.trails)
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)
@@ -153,6 +160,38 @@ static func fields(w: WorldData) -> Dictionary:
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
 
 
+## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и PATH_MARGIN. Тот же расчёт у плана
+## и у закреплённых областей (RegionRoads), поэтому на границе областей не бывает внезапной просеки.
+static func path_clearance(W: int, H: int, trails: Array) -> PackedFloat32Array:
+	var starts := PackedInt32Array()
+	var px := PackedFloat64Array()
+	var py := PackedFloat64Array()
+	var pw := PackedFloat64Array()
+	var margin := PackedFloat64Array()
+	for t: Dictionary in trails:
+		if t.pts.size() < 2 or not PATH_MARGIN.has(t.kind):
+			continue
+		starts.append(px.size())
+		# подготовленная трасса (велопарк): у её линии, приземлений и настилов просвет шире, чем у природной тропы
+		margin.append(maxf(PATH_MARGIN[t.kind], PREPARED_MARGIN) if t.has("trail_id") else PATH_MARGIN[t.kind])
+		for p: Dictionary in t.pts:
+			px.append(p.x)
+			py.append(p.y)
+			pw.append(p.w)
+	starts.append(px.size())
+	return Grid.path_clearance(W, H, starts, px, py, pw, margin, GameConfig.TILE, CLEAR_CAP)
+
+
+## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели) не на полотне
+static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float) -> bool:
+	var need: float = TRUNK.get(kind, 0.0) * sc
+	if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE:
+		need += LOW_CROWN * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
+	elif not TRUNK.has(kind):
+		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
+	return Grid.clearance_at(field, ox, oy, stride, x, y, GameConfig.TILE) >= need
+
+
 ## Поля строения леса прямоугольника клеток, одни и те же внутри плана и за его краем: wood — лесистость (9.1),
 ## stand — густой или редкий древостой и его состав (9.2), glade — поляны (9.2). Все — сдвиги одного лесного Simplex
 static func structure_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel_rows := false) -> Dictionary:
@@ -174,7 +213,8 @@ static func world_cover(seed_num: int) -> float:
 ## отступы между объектами проверяются только внутри чанка, поэтому чанк не зависит ни от соседей, ни от
 ## порядка, в котором считаются чанки. f: biome, forest, stony, elev, slope, dw, temp, moist и необязательные
 ## river, dist_path, village (стартовая область), light, age_n, wood, stand, glade (без них они считаются по w).
-## Просеки и лесные дороги вписываются через dist_path: у пути лес редеет, на полотне его нет.
+## Просеки и лесные дороги вписываются через dist_path — просвет (м) до кромки полотна (15.0, path_clearance): ствол
+## ставится, если просвета хватает его радиусу; у дороги запас шире, у тропы лес подходит к самой кромке.
 ## w — стартовая область (тропы и дома) или null за её краем.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictionary, ox: int, oy: int, stride: int,
 		w: WorldData, store: ObjStore) -> void:
@@ -275,11 +315,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				dens *= 1.0 - 0.65 * line
 			if sl > STEEP:
 				dens /= 1.0 + (sl - STEEP) * 1.5
-			if has_path:
-				if dist_path[i] < 1.2:
-					continue
-				if dist_path[i] < 2.5:
-					dens *= 0.35
+			# клетка целиком под полотном широкой дороги (полудиагональ клетки 2,83 м)
+			if has_path and dist_path[i] < -3.0:
+				continue
 			if has_village and village[i] != 0:
 				dens *= 0.08
 			var kinds: Array = b_kinds[bi]
@@ -295,7 +333,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
 					if b_tree[kind] != 0: sc *= 1.0-0.22*exposed
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
-					if kind != Biomes.T_ROCK:
+					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
+					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc)):
 						store.add(px, py, kind, v, sc)
 			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48:
 				# Старый RNG нужен только камышу. Вдали от воды и на кручах пустую
@@ -309,7 +348,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var px := x + rng.next_float()
 					var py := y + rng.next_float()
 					var v := floori(rng.next_float() * 3)
-					store.add(px, py, Biomes.T_REED, v, 0.8 + rng.next_float() * 0.3)
+					var sc := 0.8 + rng.next_float() * 0.3
+					if not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, Biomes.T_REED, sc):
+						store.add(px, py, Biomes.T_REED, v, sc)
 
 
 	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store)
@@ -513,16 +554,8 @@ class ObjStore:
 			for n in range(0, _huts.size(), 4):
 				if absf(_huts[n] - ox) <= VILLAGE_R + radius and absf(_huts[n + 1] - oy) <= VILLAGE_R + radius 						and absf(_huts[n + 2] - ox) < 0.75 + radius and absf(_huts[n + 3] - oy) < 0.75 + radius:
 					return
-			# Увеличенные кроны не заходят на полотно. Животные тропы тоже сохраняются.
-			var reach := ceili(radius + 1.0)
-			for yy in range(maxi(0, cy - reach), mini(_H, cy + reach + 1)):
-				for xx in range(maxi(0, cx - reach), mini(_W, cx + reach + 1)):
-					if _path_mask[yy * _W + xx] == 0:
-						continue
-					var dx := maxf(maxf(xx - ox, ox - xx - 1.0), 0.0)
-					var dy := maxf(maxf(yy - oy, oy - yy - 1.0), 0.0)
-					if dx * dx + dy * dy < (radius + 0.25) ** 2:
-						return
+			# 15.0: прежняя проверка «крона не над клетками путей» убрана: просвет у путей решает place_chunk
+			# по стволу и кромке полотна (clear_of_path), кроны могут смыкаться над тропой
 		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
 		# Максимальный масштаб дерева < 1.85; поиск ±3 клетки покрывает любую пару.
 		var cw := _x1 - _x0

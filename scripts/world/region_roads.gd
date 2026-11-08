@@ -206,9 +206,8 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		var label: String = labels[_root(groups, k)]
 		if nodes[k].net != "" and nodes[k].net != label: merged_nets[nodes[k].net] = label
 	# 13.9: поля для растительности закреплённой области — как у плана в StageVegetation.
-	var path_src := PackedByteArray()
-	path_src.resize(w.N)
-	for i in w.N: path_src[i] = int(w.path_mask[i] > 0)
+	# 15.0: просвет до кромки полотна — по линиям путей области в её клетках, до сдвига в мировые координаты
+	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails)
 	var village := PackedByteArray()
 	village.resize(w.N)
 	var reach := StageVegetation.VILLAGE_R
@@ -272,7 +271,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		trails = w.trails, bridges = bridges, settlements = out_places, underfilled = underfilled, connections = edges, components = components.size(), attempts = attempts,
 		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
 		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome,
-		slope = w.slope, dw = w.dist_water, dist_path = Grid.distance_field(w.W, w.H, path_src), village = village,
+		slope = w.slope, dw = w.dist_water, dist_path = dist_path, village = village,
 		profile = profile} # время и счётчики работы; при сравнении результатов не учитывать
 
 

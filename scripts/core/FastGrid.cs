@@ -252,6 +252,38 @@ public partial class FastGrid : RefCounted
 		return r;
 	}
 
+	/// <summary>Grid.path_clearance (15.0): расстояние (м) от центра клетки до кромки полотна ближайшего пути минус запас его вида,
+	/// не больше cap; считается только в полосе у линий. Те же операции в double, хранение во float.</summary>
+	public float[] PathClearance(int w, int h, int[] starts, double[] px, double[] py, double[] pw, double[] margin, double tile, double cap)
+	{
+		var outv = new float[w * h];
+		System.Array.Fill(outv, (float)cap);
+		for (int r = 0; r < margin.Length; r++)
+		{
+			for (int n = starts[r] + 1; n < starts[r + 1]; n++)
+			{
+				double ax = px[n - 1], ay = py[n - 1], dx = px[n] - ax, dy = py[n] - ay;
+				double l2 = dx * dx + dy * dy;
+				double wa = pw[n - 1] * tile * 0.5, wb = pw[n] * tile * 0.5;
+				double reach = (Math.Max(wa, wb) + margin[r] + cap) / tile;
+				int y0 = Math.Max(0, (int)Math.Floor(Math.Min(ay, ay + dy) - reach)), y1 = Math.Min(h, (int)Math.Floor(Math.Max(ay, ay + dy) + reach) + 1);
+				int x0 = Math.Max(0, (int)Math.Floor(Math.Min(ax, ax + dx) - reach)), x1 = Math.Min(w, (int)Math.Floor(Math.Max(ax, ax + dx) + reach) + 1);
+				for (int y = y0; y < y1; y++)
+				{
+					for (int x = x0; x < x1; x++)
+					{
+						double t = l2 == 0.0 ? 0.0 : Math.Clamp(((x + 0.5 - ax) * dx + (y + 0.5 - ay) * dy) / l2, 0.0, 1.0);
+						double ox = x + 0.5 - ax - dx * t, oy = y + 0.5 - ay - dy * t;
+						double value = Math.Sqrt(ox * ox + oy * oy) * tile - (wa + (wb - wa) * t) - margin[r];
+						int i = y * w + x;
+						if (value < outv[i]) outv[i] = (float)value;
+					}
+				}
+			}
+		}
+		return outv;
+	}
+
 	/// <summary>Расстояние в клетках до ближайшей клетки source != 0 (фаска 1 / √2): копия Grid.distance_field,
 	/// с теми же округлениями (сравнение в double, хранение во float). С 8.4: его считают и куски OuterLand.</summary>
 	public float[] DistanceField(int w, int h, byte[] source)

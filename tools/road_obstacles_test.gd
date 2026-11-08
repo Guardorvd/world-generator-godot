@@ -4,7 +4,7 @@ extends SceneTree
 ## 1) Ступени на ровной площадке: ветка и камни — только кочка подвески, бревно — стоп, прыжок или падение,
 ##    валун у края — объезд или падение в лоб. Размеры — как кладёт VegetationLayer на полотно.
 ## 2) Раскладка RoadObstacles на искусственной тропе: частота и виды по местности и виду пути,
-##    одинаковость при повторе, пустое место у старта.
+##    одинаковость при повторе, пустое место у старта. 15.0: корни только от настоящих стволов у кромки.
 
 const DT := 1.0 / 60.0
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -83,6 +83,17 @@ func _tiers() -> void:
 		var label := "ветка" if kind == RoadObstacles.BRANCH else "камни"
 		check(not r[0].crashed and r[0].z < -15.0 and r[0].speed > base[0].speed - 0.3, "%s на 10 м/с: проезд (скорость %.1f м/с, по ровному %.1f)" % [label, r[0].speed, base[0].speed])
 		check(r[1] > base[1] + 0.01, "%s: вилка сжалась на %.1f см (ровно %.1f)" % [label, r[1] * 100.0, base[1] * 100.0])
+	# 15.0: корень через полотно — самый толстый (масштаб 1,3), наискосок: кочка, проезд на 10 и на 4 м/с без падения
+	for pace: float in [10.0, 4.0]:
+		var g := flat()
+		var xf := Transform3D(Basis(Vector3.UP, 0.5).scaled(Vector3.ONE * 1.3), Vector3(0, 100, -10))
+		xf.basis.x *= 3.6 / 1.3
+		xf.origin -= xf.basis * Vector3(-0.26, 0.0, 0.07) # под колесом — дуга корня над грунтом, а не его часть под землёй
+		g.obstacles.set_bumps(RoadObstacles.bump(RoadObstacles.ROOT, xf, 1.3), 1)
+		var r: Array = ride(g, 0.0, pace, 12.0 / pace + 1.0)
+		var flat_ride: Array = ride(flat(), 0.0, pace, 12.0 / pace + 1.0)
+		check(not r[0].crashed and r[0].z < -12.0, "корень на %.0f м/с: проезд без падения" % pace)
+		check(r[1] > flat_ride[1] + 0.005 and r[1] < flat_ride[1] + 0.08, "корень на %.0f м/с: вилка сжалась на %.1f см (ровно %.1f) — заметно, но не удар" % [pace, r[1] * 100.0, flat_ride[1] * 100.0])
 	# Бревно поперёк — самое толстое, что кладётся на полотно (масштаб 0,95)
 	var s := 0.95
 	var log_ground := func() -> TestGround:
@@ -144,6 +155,24 @@ func _world(kind: String, cover: float, rocky: float, tilt := 0.0) -> Array:
 		pts.append({x = 128.5 + 3.0 * sin(y * 0.05), y = y + 0.5, w = 1 if kind != "road" else 2})
 		surf.append(RoadSurface.FOREST if kind != "road" else RoadSurface.GRAVEL)
 	w.trails = [{kind = kind, pts = pts, surf = surf}]
+	# 15.0: деревья мира — крупные стволы у кромки тропы через каждые ~12 м (в лесу), объекты по чанкам 16 клеток
+	w.CS = 16
+	w.CW = 16
+	w.CH = 16
+	w.chunks.resize(w.CW * w.CH)
+	for c in w.chunks.size(): w.chunks[c] = PackedInt32Array()
+	if cover > 0.5:
+		for y in range(12, 250, 3):
+			var side := 1.0 if (y / 3) % 2 == 0 else -1.0
+			var x := 128.5 + 3.0 * sin(y * 0.05) + side * (0.5 + 0.25 + 0.3 * ((y * 7) % 5) / 4.0)
+			w.obj_x.append(x)
+			w.obj_y.append(y + 0.3)
+			w.obj_k.append(Biomes.T_OAK if (y / 3) % 3 != 0 else Biomes.T_PINE)
+			w.obj_v.append(0)
+			w.obj_s.append(0.9 + 0.1 * ((y * 3) % 4))
+			var chunk := floori(y / 16.0) * w.CW + floori(x / 16.0)
+			w.chunks[chunk].append(w.obj_x.size() - 1)
+	w.obj_count = w.obj_x.size()
 	var g := TestGround.new(w)
 	g.tilt = tilt
 	var image := Image.create(w.W, w.H, false, Image.FORMAT_RGBA8)
@@ -153,7 +182,7 @@ func _world(kind: String, cover: float, rocky: float, tilt := 0.0) -> Array:
 
 func _count(scene: Array) -> Dictionary:
 	var road := RoadObstacles.new(scene[0])
-	var kinds := [0, 0, 0, 0]
+	var kinds := [0, 0, 0, 0, 0]
 	var list: Array = []
 	var t: Dictionary = scene[0].trails[0]
 	var length := 0.0
@@ -164,20 +193,33 @@ func _count(scene: Array) -> Dictionary:
 			o.mid = (RoadObstacles._point(t, n) + RoadObstacles._point(t, n - 1)) * 0.5
 			kinds[o.kind] += 1
 			list.append(o)
+			check(o.parts.size() >= 1 and o.parts.size() <= 3, "у препятствия от одной до трёх частей")
 	return {kinds = kinds, per_km = list.size() * 1000.0 / length, list = list, road = road}
 
 
 func _placement() -> void:
 	var forest := _count(_world("trail", 0.9, 0.1))
-	print("  лесная тропа: %.0f на км, ветки/камни/брёвна/валуны %s" % [forest.per_km, forest.kinds])
-	check(forest.per_km > 8.0 and forest.per_km < 40.0, "лесная тропа: препятствия есть, но не завал")
+	print("  лесная тропа: %.0f на км, ветки/камни/брёвна/валуны/корни %s" % [forest.per_km, forest.kinds])
+	check(forest.per_km > 8.0 and forest.per_km < 45.0, "лесная тропа: препятствия есть, но не завал")
 	check(forest.kinds[RoadObstacles.BRANCH] > 0 and forest.kinds[RoadObstacles.LOG] > 0, "в лесу ветки и брёвна")
+	check(forest.kinds[RoadObstacles.ROOT] > 0, "у стволов у кромки корни выходят на тропу")
+	# корень идёт от своего ствола: начало у ствола, наискосок через полотно
+	var crossing := true
+	for o: Dictionary in forest.list:
+		if o.kind != RoadObstacles.ROOT: continue
+		for part: Dictionary in o.parts:
+			var along := Vector2.from_angle(-part.rot)
+			if absf(along.dot(Vector2(0.0, 1.0))) > 0.95: crossing = false
+	check(crossing, "корни пересекают тропу, а не лежат вдоль неё")
 	var road := _count(_world("road", 0.9, 0.1))
 	print("  лесная дорога: %.0f на км, %s" % [road.per_km, road.kinds])
 	check(road.per_km < forest.per_km * 0.7, "дорога чище тропы")
 	var open := _count(_world("trail", 0.0, 0.05))
 	print("  тропа в поле: %.0f на км, %s" % [open.per_km, open.kinds])
-	check(open.kinds[RoadObstacles.LOG] == 0 and open.per_km < forest.per_km * 0.5, "в поле без брёвен и реже")
+	check(open.kinds[RoadObstacles.LOG] == 0 and open.kinds[RoadObstacles.ROOT] == 0 and open.per_km < forest.per_km * 0.5, "в поле без брёвен и корней и реже")
+	var plain := _count(_world("road", 0.0, 0.0))
+	print("  равнинная дорога: %.0f на км, %s" % [plain.per_km, plain.kinds])
+	check(plain.per_km < 3.0, "на открытой равнинной дороге почти ничего не лежит")
 	var scree := _count(_world("mountain", 0.0, 0.9, 0.35))
 	print("  горная тропа на косогоре: %.0f на км, %s" % [scree.per_km, scree.kinds])
 	check(scree.kinds[RoadObstacles.BOULDER] > 0 and scree.kinds[RoadObstacles.STONES] > 0, "на косогоре камни и валуны")
@@ -199,8 +241,8 @@ func _placement() -> void:
 		if not o.is_empty() and Vector2(o.x, o.z).distance_to(start) < RoadObstacles.CLEAR_R - 6.0:
 			near += 1
 	check(near == 0, "у старта пусто")
-	# мешы на месте: новая ветка в списке подстилки, веса подстилки не сдвинулись
-	check(Floor.meshes().size() == Floor.BRANCH + 1 and Floor.weights(0.5, 0.5, 0.5, 0.5, 0.5).size() == Floor.BRANCH + 1, "ветка — последняя деталь подстилки")
+	# мешы на месте: корень через тропу — последняя деталь подстилки, веса подстилки не сдвинулись
+	check(Floor.meshes().size() == Floor.ROOT_SPAN + 1 and Floor.weights(0.5, 0.5, 0.5, 0.5, 0.5).size() == Floor.ROOT_SPAN + 1, "корень — последняя деталь подстилки")
 
 
 func _initialize() -> void:

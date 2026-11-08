@@ -811,6 +811,9 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var out_l := p - across * (half + 1.5)
 			var left := _noise.get_noise_2d(out_l.x * 0.028 + 400.0, out_l.y * 0.028 + 12.0)
 			var right := _noise.get_noise_2d(out_r.x * 0.028 + 400.0, out_r.y * 0.028 + 12.0)
+			# 15.0: канава и вал прерывистые и бугристые (~9 м): то промоина, то холмик, то ровная обочина
+			var lump_l := _noise.get_noise_2d(out_l.x * 0.11 + 37.0, out_l.y * 0.11 - 19.0)
+			var lump_r := _noise.get_noise_2d(out_r.x * 0.11 + 37.0, out_r.y * 0.11 - 19.0)
 			var energy := lerpf(0.3, 1.0, smoothstep(-0.3, 0.0, character)) + 0.5 * smoothstep(0.15, 0.4, character)
 			energy *= 1.0 + 0.5 * smoothstep(0.05, 0.15, grade)
 			var broken := smoothstep(0.12, 0.35, character)
@@ -825,8 +828,8 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)
 			var slope := smoothstep(0.04, 0.15, absf(cross)) * (1.0 - smoothstep(0.35, 0.6, absf(cross)))
 			var gain := (0.6 + 0.4 * energy) * scale * gate
-			out[at + 5] = _shoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain
-			out[at + 6] = _shoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain
+			out[at + 5] = _shoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_l))
+			out[at + 6] = _shoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_r))
 		# добавленный продольный уклон не круче grade: от закреплённых нулей формы поднимаются плавно
 		var cap := table[k + 10] * STEP
 		# Сначала ограничиваем высоту расстоянием до закреплённых нулей: проходы уклона

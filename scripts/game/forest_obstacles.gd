@@ -13,11 +13,8 @@ const REBUILD := 6.0    # отошли дальше этого от места �
 const MIN_SCALE := 0.6  # деревья мельче (молодняк) проходимы
 const SNUG := 0.85      # круг ствола чуть уже видимого: задевание кроной и корой не держит
 const STRIDE := 7       # ax, az, bx, bz, радиус, основание, верх
-## радиус ствола у комля при масштабе 1, м (как в ForestModels и Models)
-const TRUNK := {
-	Biomes.T_BIRCH: 0.14, Biomes.T_PINE: 0.23, Biomes.T_SNOWPINE: 0.23, Biomes.T_OAK: 0.32,
-	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
-}
+## радиус ствола у комля при масштабе 1, м (как в ForestModels и Models); та же таблица ставит стволы у путей
+const TRUNK := StageVegetation.TRUNK
 const ROCK_R := 1.15    # валун: сфера 1,1 м, сплюснутая до 1,43 × 0,83 × 1,1, при масштабе 1
 const ROCK_TOP := 1.07
 ## Модель двух контактов: препятствие не выше этого (бревно, невысокий валун) встречает колесо, а не раму —
@@ -154,8 +151,8 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				var z := world.obj_y[o] * TILE
 				if absf(x - px) > REACH or absf(z - pz) > REACH:
 					continue
-				# на дорогах и в воде дерево не рисуется — не мешает и здесь
-				if world.path_mask[floori(world.obj_y[o]) * world.W + floori(world.obj_x[o])] >= 2:
+				# на полотне и в воде дерево не рисуется — не мешает и здесь (та же проверка, что у VegetationLayer)
+				if on_tread(heights, x, z):
 					continue
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
 					var seat := RockModels.seat(heights, x, z, s * 1.2, world.obj_v[o])
@@ -195,6 +192,12 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 			else:
 				_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+
+
+## 15.0: ствол на самом полотне (вес покрытия метровой сетки), а не в клетке пути: так дерево у кромки тропы остаётся.
+## Растительность ставит стволы с просветом до кромки; это страховка для путей, проложенных позже неё.
+static func on_tread(heights: Heightfield, x: float, z: float) -> bool:
+	return heights.road_refinement != null and heights.road_refinement.weight_at(x, z, heights.world.W) > 0.5
 
 
 ## Same transformed block cores as the rendered outcrop; no per-object collision nodes.

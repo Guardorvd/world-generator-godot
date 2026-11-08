@@ -150,6 +150,58 @@ static func on_edge(i: int, w: int, h: int) -> bool:
 	return x == 0 or y == 0 or x == w - 1 or y == h - 1
 
 
+## Просвет у путей (15.0): у каждой клетки — расстояние (м) от её центра до кромки полотна ближайшего пути минус запас
+## его вида; дальше cap — cap. Пути — столбцами: CSR starts по точкам, px/py/pw — x, y и ширина точек в клетках,
+## tile — метров в клетке, margin — запас пути, м (дорога — обочина, тропа — проход руля, звериная тропа — почти ничего). Считается только
+## у линий (полоса cap), а не по всей карте. Растительность и камни ставят ствол или камень, если просвет в их точке
+## не меньше их радиуса: деревья подходят к кромке тропы, кроны над ней не запрещены. Тот же расчёт, что у
+## FastGrid.PathClearance (double, хранение во float).
+static func path_clearance(w: int, h: int, starts: PackedInt32Array, px: PackedFloat64Array, py: PackedFloat64Array,
+		pw: PackedFloat64Array, margin: PackedFloat64Array, tile: float, cap: float) -> PackedFloat32Array:
+	var fast := fast_grid()
+	if fast != null:
+		return fast.PathClearance(w, h, starts, px, py, pw, margin, tile, cap)
+	var out := PackedFloat32Array()
+	out.resize(w * h)
+	out.fill(cap)
+	for r in margin.size():
+		for n in range(starts[r] + 1, starts[r + 1]):
+			var ax := px[n - 1]
+			var ay := py[n - 1]
+			var dx := px[n] - ax
+			var dy := py[n] - ay
+			var l2 := dx * dx + dy * dy
+			var wa := pw[n - 1] * tile * 0.5
+			var wb := pw[n] * tile * 0.5
+			var reach := (maxf(wa, wb) + margin[r] + cap) / tile
+			for y in range(maxi(0, floori(minf(ay, ay + dy) - reach)), mini(h, floori(maxf(ay, ay + dy) + reach) + 1)):
+				for x in range(maxi(0, floori(minf(ax, ax + dx) - reach)), mini(w, floori(maxf(ax, ax + dx) + reach) + 1)):
+					var t := 0.0 if l2 == 0.0 else clampf(((x + 0.5 - ax) * dx + (y + 0.5 - ay) * dy) / l2, 0.0, 1.0)
+					var ox := x + 0.5 - ax - dx * t
+					var oy := y + 0.5 - ay - dy * t
+					var value := sqrt(ox * ox + oy * oy) * tile - (wa + (wb - wa) * t) - margin[r]
+					var i := y * w + x
+					if value < out[i]:
+						out[i] = value
+	return out
+
+
+## Просвет в точке (x, y) в клетках поля field с началом (ox, oy) и шириной stride, м. Нижняя оценка по четырём
+## соседним центрам клеток: расстояние меняется не быстрее самого смещения, поэтому значение в центре минус путь
+## до точки не больше настоящего (билинейная интерполяция у самой оси завышала бы его и пускала ствол на полотно).
+static func clearance_at(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, tile := 4.0) -> float:
+	var rows := field.size() / stride
+	var i0 := clampi(floori(x - 0.5) - ox, 0, stride - 2)
+	var j0 := clampi(floori(y - 0.5) - oy, 0, rows - 2)
+	var best := -INF
+	for j in range(j0, j0 + 2):
+		for i in range(i0, i0 + 2):
+			var dx := x - (ox + i + 0.5)
+			var dy := y - (oy + j + 0.5)
+			best = maxf(best, field[j * stride + i] - sqrt(dx * dx + dy * dy) * tile)
+	return best
+
+
 ## Дистанционное преобразование (фаска 1 / √2): расстояние в клетках до ближайшей клетки, где source[i] != 0
 ## В сборке .NET считается на C# (FastGrid.DistanceField), результат тот же
 static func distance_field(w: int, h: int, source: PackedByteArray) -> PackedFloat32Array:

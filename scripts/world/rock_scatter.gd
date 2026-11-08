@@ -51,8 +51,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				continue
 			var sl := slope[i]
 			if dw[i] < 0.65: continue
+			# 15.0: dist_path — просвет (м) до кромки полотна с запасом пути (StageVegetation.path_clearance)
 			var dp: float = paths[i] if not paths.is_empty() else 100.0
-			if dp < 0.5: continue
+			if dp < 0.0: continue
 			var mountain := smoothstep(0.12, 0.36, elev[i])
 			var exposed := float(rock[i])/255.0
 			var gx := float(x) / PATCH_CELLS
@@ -63,7 +64,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var deposit := lerpf(lerpf(patches[pi], patches[pi + 1], tx), lerpf(patches[pi + pw], patches[pi + pw + 1], tx), ty)
 			# Коренная порода выходит там, где склон открыт и крут; на пологих скалах — редкие останцы.
 			# Места выходов собраны в те же пятна, что россыпи: скальный пояс, а не ровный посев.
-			if mountain > 0.0 and exposed > 0.3 and dp > 2.5 and dw[i] >= 1.5:
+			if mountain > 0.0 and exposed > 0.3 and dp > 10.0 and dw[i] >= 1.5:
 				var steep := smoothstep(0.45, 0.95, sl)
 				var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
 				var oc := OUTCROP_CHANCE * smoothstep(0.3, 0.75, exposed) * mountain * maxf(steep, tor) * lerpf(0.04, 1.8, smoothstep(0.3, 0.85, deposit))
@@ -87,7 +88,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var roll := float(hc) / 4294967296.0
 			if roll >= MAX_CHANCE: continue
 			var patch := smoothstep(-0.15, 0.5, stony[i])
-			var shoulder := 1.0 - smoothstep(1.0, 3.0, dp)
+			# Камни у обочины — там, где им есть откуда взяться (порода, горы); у равнинной дороги их мало
+			var shoulder := (1.0 - smoothstep(1.0, 8.0, dp)) * (0.15 + 0.85 * maxf(exposed, mountain))
 			# Осыпь питает скала выше по линии падения, а не любой соседний склон: на 8, 16 и 24 м вверх.
 			var source := 0.0
 			var reach_cells := 0
@@ -127,7 +129,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var large := shoulder < 0.1 and rng.next_float() < 0.06 + exposed * 0.12 + talus * (0.04 + 0.2 * toe)
 			var r := rng.next_float()
 			var scale := (0.75 + r * r * 1.35) if large else ((0.24+r*r*0.48) if mountain>0.3 and r>0.55 else (0.07+r*r*0.30))
-			if not path_mask.is_empty() and not clear_path(path_mask, ox, oy, stride, cx, cy, scale): continue
+			if not paths.is_empty() and Grid.clearance_at(paths, ox, oy, stride, cx, cy, GameConfig.TILE) < rock_reach(scale): continue
 			if not villages.is_empty() and not clear_path(villages,ox,oy,stride,cx,cy,scale): continue
 			if not rivers.is_empty() and not clear_path(rivers,ox,oy,stride,cx,cy,scale): continue
 			# Цвет в одном месторождении общий, формы и повороты остаются индивидуальными.
@@ -147,10 +149,15 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				# Каждая группа имеет владельца-клетку: независима от порядка чанков.
 				if floori(px) != x or floori(py) != y: continue
 				var fragment := 0.055 + rng.next_float() * (0.16 + mountain * 0.16) * (1.0 - 0.35 * talus * (1.0 - toe))
-				if not path_mask.is_empty() and not clear_path(path_mask, ox, oy, stride, px, py, fragment): continue
+				if not paths.is_empty() and Grid.clearance_at(paths, ox, oy, stride, px, py, GameConfig.TILE) < rock_reach(fragment): continue
 				if not villages.is_empty() and not clear_path(villages,ox,oy,stride,px,py,fragment): continue
 				if not rivers.is_empty() and not clear_path(rivers,ox,oy,stride,px,py,fragment): continue
 				store.add(px, py, Biomes.T_ROCK, tint, fragment)
+
+
+## Радиус камня масштаба scale на земле, м: столько просвета ему нужно у кромки пути
+static func rock_reach(scale: float) -> float:
+	return Biomes.CROWN_RADIUS[Biomes.T_ROCK] * scale * GameConfig.TILE
 
 
 ## Внешний ObjStore не хранит WorldData: проверяем весь радиус по маске снимка.

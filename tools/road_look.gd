@@ -81,7 +81,9 @@ func _obstacles() -> void:
 	var mat := StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.roughness = 0.9
-	for item: Array in [[Floor.BRANCH, 10.0, 0.4, 1.0], [Floor.STONES, 14.0, -0.5, 1.0], [Floor.LOG, 19.0, 0.0, 0.85], [Floor.BOULDER, 25.0, 1.0, 0.85]]:
+	# 15.0: корни через тропу (растянуты на ширину полотна, наискосок), бревно у кромки наискосок, утоплено
+	for item: Array in [[Floor.BRANCH, 10.0, 0.4, 1.0], [Floor.STONES, 14.0, -0.5, 1.0], [Floor.LOG, 19.0, 0.0, 0.85], [Floor.BOULDER, 25.0, 1.0, 0.85],
+			[Floor.ROOT_SPAN, 8.0, 0.0, 1.1], [Floor.ROOT_SPAN, 8.7, 0.2, 0.8], [Floor.LOG, 30.0, 1.6, 0.8]]:
 		var z: float = item[1]
 		var tangent := Vector2(_axis(z + 0.05) - _axis(z), 0.05).normalized()
 		var side := Vector2(-tangent.y, tangent.x)
@@ -89,8 +91,11 @@ func _obstacles() -> void:
 		var node := MeshInstance3D.new()
 		node.mesh = meshes[item[0]]
 		node.material_override = mat
-		var rot := atan2(-side.y, side.x) + (0.3 if item[0] == Floor.LOG else 1.1)
-		node.transform = Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * float(item[3])), Vector3(at.x, -0.015, at.y))
+		var rot := atan2(-side.y, side.x) + (0.3 if item[0] == Floor.LOG else (0.5 if item[0] == Floor.ROOT_SPAN else 1.1))
+		if item[1] > 28.0: rot += 1.1 # бревно у кромки наискосок
+		var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * float(item[3])), Vector3(at.x, -0.015 - (0.04 if item[0] == Floor.LOG else 0.0), at.y))
+		if item[0] == Floor.ROOT_SPAN: xf.basis.x *= 4.4 / float(item[3]) # длина корня 4,4 м
+		node.transform = xf
 		root.add_child.call_deferred(node)
 
 

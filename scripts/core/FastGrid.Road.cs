@@ -119,6 +119,8 @@ public partial class FastGrid
 			Vector2 outR = p + acrossV * (float)(hw + 1.5), outL = p - acrossV * (float)(hw + 1.5);
 			double left = noise.GetNoise2D((float)(outL.X * 0.028 + 400.0), (float)(outL.Y * 0.028 + 12.0));
 			double right = noise.GetNoise2D((float)(outR.X * 0.028 + 400.0), (float)(outR.Y * 0.028 + 12.0));
+			double lumpL = noise.GetNoise2D((float)(outL.X * 0.11 + 37.0), (float)(outL.Y * 0.11 - 19.0));
+			double lumpR = noise.GetNoise2D((float)(outR.X * 0.11 + 37.0), (float)(outR.Y * 0.11 - 19.0));
 			double energy = RoadLerp(0.3, 1.0, RoadSmooth(-0.3, 0.0, character)) + 0.5 * RoadSmooth(0.15, 0.4, character);
 			energy *= 1.0 + 0.5 * RoadSmooth(0.05, 0.15, grade);
 			double broken = RoadSmooth(0.12, 0.35, character);
@@ -133,8 +135,8 @@ public partial class FastGrid
 			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
 			double slope = RoadSmooth(0.04, 0.15, Math.Abs(cross)) * (1.0 - RoadSmooth(0.35, 0.6, Math.Abs(cross)));
 			double gain = (0.6 + 0.4 * energy) * scale * g;
-			outv[at + 5] = RoadShoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain;
-			outv[at + 6] = RoadShoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain;
+			outv[at + 5] = RoadShoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain * RoadLerp(0.2, 1.25, RoadSmooth(-0.35, 0.35, lumpL));
+			outv[at + 6] = RoadShoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain * RoadLerp(0.2, 1.25, RoadSmooth(-0.35, 0.35, lumpR));
 		}
 		double cap = table[k + 10] * step;
 		// Bound by the distance to every protected zero before the slope passes. Otherwise

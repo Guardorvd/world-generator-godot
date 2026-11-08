@@ -3,7 +3,7 @@ extends RefCounted
 
 const Plants := preload("res://scripts/render/understory_models.gd")
 const Surface := preload("res://scripts/world/mountain_surface.gd")
-enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге
+enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH, ROOT_SPAN } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге; 15.0: корень через тропу
 const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
@@ -66,6 +66,7 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 		cover * (0.012 + (1.0 - wet) * 0.01),
 		cover * (0.008 + rocky * 0.05),
 		0.0, # ветки кладёт только RoadObstacles на полотно
+		0.0, # корень через тропу — тоже RoadObstacles, от настоящего ствола
 	])
 
 
@@ -101,7 +102,28 @@ static func _log(moss: bool) -> Mesh:
 
 
 static func meshes() -> Array[Mesh]:
-	return preload("res://scripts/render/asset_catalog.gd").get_catalog().floor_meshes.duplicate()
+	var list: Array[Mesh] = preload("res://scripts/render/asset_catalog.gd").get_catalog().floor_meshes.duplicate()
+	# каталог, запечённый до 15.0, корня через тропу не знает: маленький меш строится на месте
+	if list.size() == ROOT_SPAN:
+		list.append(root_span())
+	return list
+
+
+## 15.0: корень, пересекающий тропу (RoadObstacles.ROOT): единичная длина вдоль X (−0,5…0,5, от ствола к концу),
+## растягивается по X на ширину полотна; толщина и изгибы поперёк (Z, м) при этом прежние. Корень то выходит из
+## грунта двумя дугами до 5–6 см, то уходит под него, виляет на ±12 см, у ствола толще; сбоку короткий отросток,
+## ныряющий в землю. Кочки колеса — те же две дуги (RoadObstacles.bump).
+static func root_span() -> Mesh:
+	var xs := [-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+	var ys := [-0.085, -0.012, 0.018, 0.012, -0.03, -0.045, -0.005, 0.02, 0.008, -0.035, -0.075]
+	var zs := [0.0, 0.06, 0.12, 0.1, 0.03, -0.05, -0.1, -0.08, -0.02, 0.05, 0.08]
+	var parts: Array = []
+	var bark := Color(0.21, 0.16, 0.11)
+	for n in range(1, xs.size()):
+		var radius := lerpf(0.062, 0.028, float(n - 1) / (xs.size() - 2))
+		parts.append([_beam(Vector3(xs[n - 1], ys[n - 1], zs[n - 1]), Vector3(xs[n], ys[n], zs[n]), radius, 5, false), bark])
+	parts.append([_beam(Vector3(-0.24, 0.012, 0.11), Vector3(-0.13, -0.05, 0.34), 0.024, 4, false), bark])
+	return Plants._colored(parts)
 
 
 ## 15.0: упрощённые корни и камни для дальнего подлеска, ключ - номер формы Floor.FIRST + вид.
@@ -196,4 +218,5 @@ static func build_meshes() -> Array[Mesh]:
 		Plants._colored(stump),
 		Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62),
 		Plants._colored(branch),
+		root_span(),
 	]
