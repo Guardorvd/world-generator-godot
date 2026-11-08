@@ -10,51 +10,380 @@ public partial class FastGrid
 		return t * t * (3.0 - 2.0 * t);
 	}
 	private static double RoadLerp(double a, double b, double t) => a + (b - a) * t;
-	// Same broad cross-section as RoadRefinement._vertex. No independent wheel force.
-	private static double RoadRelief(double relief, double rough, double slow, double side, double half)
-		=> relief * Math.Min(1.0, rough * 3.0) * (1.0 + 0.3 * slow * Math.Clamp(side / half, -1.0, 1.0));
 	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
 	private static double RoadReliefEdge(Vector2 p, int width, int height, double tile)
 		=> RoadSmooth(0.0, 12.0, Math.Min(Math.Min(p.X - tile * 0.5, (width - 0.5) * tile - p.X),
 			Math.Min(p.Y - tile * 0.5, (height - 0.5) * tile - p.Y)));
-
-	/// <summary>RoadRefinement's medium profile, one small batch per ordinary route.
-	/// Uses existing metre stations and fit pins; no world raster or persistent native state.</summary>
-	public float[] RoadNaturalProfile(Vector2[] points, float[] removed, float[] distance, float[] allowed,
-		float[] eligible, FastNoiseLite noise, Vector2 origin, double step, double fade, double limit, double grade, bool road)
+	private static double RoadBell(double t)
 	{
-		var relief = new float[points.Length];
-		for (int j = 0; j < points.Length; j++)
+		double q = 1.0 - t * t;
+		return q > 0.0 ? q * q : 0.0;
+	}
+	private const int CorridorStride = 7;
+	private const double CorridorHollowW = 0.6;
+
+	/// <summary>RoadRefinement._vertex, forms of the corridor at one vertex (station in STEP units).
+	/// Returns the height to add before pins; the cross section and bank for the colour.</summary>
+	private static double RoadCorridorShape(double[] cor, int start, int count, double station, double side, double d, double half,
+		out double section, out double bank)
+	{
+		double at = Math.Clamp(station, 0.0, count - 1.0);
+		int j = Math.Min(count - 2, (int)Math.Floor(at));
+		double f = at - j;
+		int o = start + j * CorridorStride, q = o + CorridorStride;
+		double lift = RoadLerp(cor[o], cor[q], f), tilt = RoadLerp(cor[o + 1], cor[q + 1], f), dish = RoadLerp(cor[o + 2], cor[q + 2], f);
+		double hollow = RoadLerp(cor[o + 3], cor[q + 3], f), hollowAt = RoadLerp(cor[o + 4], cor[q + 4], f);
+		double sideNeg = RoadLerp(cor[o + 5], cor[q + 5], f), sidePos = RoadLerp(cor[o + 6], cor[q + 6], f);
+		double across = side / half;
+		double s = Math.Clamp(across, -1.0, 1.0);
+		section = tilt * s + dish * (1.0 - s * s) - hollow * RoadBell((across - hollowAt) / CorridorHollowW);
+		double core = (lift + section) * (1.0 - RoadSmooth(half + 0.3, half + 2.2, d));
+		double e = d - half;
+		double v = across < 0.0 ? sideNeg : sidePos;
+		bank = v > 0.0 ? v * RoadBell((e - 0.35) / 0.8) : v * RoadBell((e - 1.3) / 0.75);
+		return core + bank;
+	}
+
+	private static void RoadCorridorColor(ref Color color, double section, double bank, double gain)
+	{
+		double shade = Math.Clamp(section * gain * 2.5, -0.22, 0.12);
+		color.R = (float)(color.R * (1.0 + shade));
+		color.G = (float)(color.G * (1.0 + shade));
+		color.B = (float)(color.B * (1.0 + shade));
+		color.A = (float)(color.A * (1.0 - Math.Clamp(Math.Max(0.0, bank) * gain * 4.0, 0.0, 0.5)));
+	}
+
+	private static double RoadShoulder(double side, double cross, double n, double slope, double ditch, double lip)
+	{
+		double flat = n >= 0.0 ? lip * Math.Min(1.0, n * 2.5) : -ditch * Math.Min(1.0, -n * 2.5);
+		double sloped = side * cross > 0.0 ? -ditch * (0.7 + 0.3 * n) : lip * (0.6 + 0.4 * n);
+		return RoadLerp(flat, sloped, slope);
+	}
+
+	/// <summary>RoadRefinement._corridor_reference for one route of RoadFitNetwork (docs/ROAD_RELIEF.md): stations
+	/// from..to every `step` m, their half width, surface and gate (fit allowance times corridor bit); the kind indexes `table`
+	/// (11 numbers per kind, then the surface gains). Another path or a hairpin of the same route closer than both half widths
+	/// + gap (segments of the 3 x 3 index cells) closes the gate. Writes 7 doubles per station (lift, tilt, dish, hollow,
+	/// hollow_at, side_neg, side_pos).</summary>
+	private static void CorridorRoute(int from, int to, int kind, double scale, int route, Vector2[] points, float[] half, int[] surface,
+		float[] gate, float[] raw, int width, int height, double tile, FastNoiseLite noise, Vector2 origin, double step, double fade,
+		double gap, double shared, int[] routeKinds, int stride, double[] table, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute,
+		double[] segAlong, int[] cellStarts, int[] candidates, double[] outv)
+	{
+		int kindSize = 11, surfaceAt = kindSize * 3;
+		int n = to - from, k = kind * kindSize;
+		double holes = scale >= 1.0 ? 1.0 : 0.0;
+		var open = new double[n];
+		for (int j = 0; j < n; j++)
 		{
-			int radius = Math.Min(12, Math.Max(0, (int)Math.Floor(distance[j] / step) - 1));
-			int small = Math.Min(4, radius);
-			double wideSum = 0.0, smallSum = 0.0;
-			for (int k = j - radius; k <= j + radius; k++)
+			open[j] = gate[from + j];
+			Vector2 tangent = (points[Math.Min(to - 1, from + j + 2)] - points[Math.Max(from, from + j - 2)]).Normalized();
+			if (open[j] > 0.0 && RoadCrowded(points[from + j], tangent, route, j * step, half[from + j], width, height, tile, gap, shared,
+				routeKinds, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates)) open[j] = 0.0;
+		}
+		var dist = new double[n];
+		for (int j = 0; j < n; j++) dist[j] = open[j] <= 0.0 || j == 0 ? 0.0 : dist[j - 1] + step;
+		double back = 0.0;
+		for (int j = n - 1; j >= 0; j--)
+		{
+			back = open[j] <= 0.0 || j == n - 1 ? 0.0 : back + step;
+			dist[j] = Math.Min(dist[j], back);
+		}
+		var lift = new double[n];
+		for (int j = 0; j < n; j++)
+		{
+			int i = from + j;
+			double g = open[j] * RoadSmooth(0.0, fade, dist[j]);
+			if (g <= 0.0) continue;
+			Vector2 tangent = (points[Math.Min(to - 1, i + 2)] - points[Math.Max(from, i - 2)]).Normalized();
+			var acrossV = new Vector2(tangent.Y, -tangent.X);
+			double hw = half[i];
+			double reach = hw + 3.0;
+			Vector2 a = points[i] + acrossV * (float)reach, b = points[i] - acrossV * (float)reach;
+			double cross = (RoadGround(raw, width, height, tile, a.X, a.Y) - RoadGround(raw, width, height, tile, b.X, b.Y)) / (2.0 * reach);
+			int g0 = Math.Max(from, i - 5), g1 = Math.Min(to - 1, i + 5);
+			double grade = Math.Abs(RoadGround(raw, width, height, tile, points[g1].X, points[g1].Y)
+				- RoadGround(raw, width, height, tile, points[g0].X, points[g0].Y)) / Math.Max(1.0, g1 - g0) / step;
+			Vector2 p = points[i] + origin;
+			double character = noise.GetNoise2D((float)(p.X * 0.005 + 311.0), (float)(p.Y * 0.005 - 97.0));
+			double roll = noise.GetNoise2D((float)(p.X * 0.033 + 17.0), (float)(p.Y * 0.033 + 53.0));
+			double bump = noise.GetNoise2D((float)(p.X * 0.1 - 41.0), (float)(p.Y * 0.1 + 9.0));
+			Vector2 wide = acrossV * 6.0f;
+			double wobble = ((double)noise.GetNoise2D((float)(((double)p.X + wide.X) * 0.045 + 88.0), (float)(((double)p.Y + wide.Y) * 0.045 - 14.0))
+				- noise.GetNoise2D((float)(((double)p.X - wide.X) * 0.045 + 88.0), (float)(((double)p.Y - wide.Y) * 0.045 - 14.0))) * 0.9;
+			double bowl = noise.GetNoise2D((float)(p.X * 0.022 - 201.0), (float)(p.Y * 0.022 + 77.0));
+			double hole = noise.GetNoise2D((float)(p.X * 0.12 + 57.0), (float)(p.Y * 0.12 + 211.0));
+			Vector2 near = acrossV * 4.0f;
+			double spot = (double)noise.GetNoise2D((float)(((double)p.X + near.X) * 0.04 - 140.0), (float)(((double)p.Y + near.Y) * 0.04 + 33.0))
+				- noise.GetNoise2D((float)(((double)p.X - near.X) * 0.04 - 140.0), (float)(((double)p.Y - near.Y) * 0.04 + 33.0));
+			Vector2 outR = p + acrossV * (float)(hw + 1.5), outL = p - acrossV * (float)(hw + 1.5);
+			double left = noise.GetNoise2D((float)(outL.X * 0.028 + 400.0), (float)(outL.Y * 0.028 + 12.0));
+			double right = noise.GetNoise2D((float)(outR.X * 0.028 + 400.0), (float)(outR.Y * 0.028 + 12.0));
+			double energy = RoadLerp(0.3, 1.0, RoadSmooth(-0.3, 0.0, character)) + 0.5 * RoadSmooth(0.15, 0.4, character);
+			energy *= 1.0 + 0.5 * RoadSmooth(0.05, 0.15, grade);
+			double broken = RoadSmooth(0.12, 0.35, character);
+			double mul = table[surfaceAt + surface[i]] * scale;
+			int at = i * stride;
+			lift[j] = (table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy) * mul * g;
+			double natural = cross * table[k + 3] * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
+			double limit = table[k + 4] * hw;
+			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * scale, -limit, limit) * g;
+			outv[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * g;
+			outv[at + 3] = table[k + 7] * RoadSmooth(0.2, 0.55, hole) * RoadLerp(0.3, 1.0, broken) * mul * holes * g;
+			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
+			double slope = RoadSmooth(0.04, 0.15, Math.Abs(cross)) * (1.0 - RoadSmooth(0.35, 0.6, Math.Abs(cross)));
+			double gain = (0.6 + 0.4 * energy) * scale * g;
+			outv[at + 5] = RoadShoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain;
+			outv[at + 6] = RoadShoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain;
+		}
+		double cap = table[k + 10] * step;
+		for (int j = 1; j < n; j++) lift[j] = Math.Clamp(lift[j], lift[j - 1] - cap, lift[j - 1] + cap);
+		for (int j = n - 2; j >= 0; j--) lift[j] = Math.Clamp(lift[j], lift[j + 1] - cap, lift[j + 1] + cap);
+		for (int j = 0; j < n; j++) outv[(from + j) * stride] = lift[j];
+	}
+
+	/// <summary>RoadRefinement._fit_network for the whole network in one call (14.11): stations every `step` m of every road,
+	/// trail and mountain trail (routes in CSR ptStarts, px/py/pw in cells, psurf per point), profile fit of roads and
+	/// trails (_fit_route), gate of the corridor forms and the forms themselves (CorridorRoute). Same operations in the same
+	/// order as the GDScript reference; PackedFloat32Array stores are rounded to float. kinds: 0 road, 1 trail, 2 mountain;
+	/// scales: corridor scale of the route (0 — no forms; a mountain trail without forms is skipped). fitParams: shore,
+	/// pin, pin fade, reach, shared, fit fade, fit limit, road bench limit, trail bench limit.
+	/// Returns {routes, starts, fitted, points, profile, strength, limit, corridor} — per included route and per station.</summary>
+	public Godot.Collections.Dictionary RoadFitNetwork(int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, int[] kinds,
+		float[] scales, int[] routeIds, int width, int height, double tile, double step, float[] ground, float[] raw, float[] water,
+		float[] distWater, double[] structureAxes, double[] settlements, Vector2[] segA, Vector2[] segDelta, double[] segLen2,
+		double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates, int[] routeKinds, FastNoiseLite noise,
+		Vector2 origin, double[] fitParams, double fade, double gap, int stride, double[] table)
+	{
+		double shore = fitParams[0], pinStart = fitParams[1], pinFade = fitParams[2], reach = fitParams[3], shared = fitParams[4];
+		double fitFade = fitParams[5], fitLimit = fitParams[6], roadBench = fitParams[7], trailBench = fitParams[8];
+		RoadStructureIndex(width, height, tile, structureAxes, pinStart + pinFade, out int[] structStarts, out double[] structs);
+		float ftile = (float)tile;
+		var included = new System.Collections.Generic.List<int>();
+		var starts = new System.Collections.Generic.List<int>();
+		var points = new System.Collections.Generic.List<Vector2>();
+		var halves = new System.Collections.Generic.List<float>();
+		var surfs = new System.Collections.Generic.List<int>();
+		for (int t = 0; t < routeIds.Length; t++)
+		{
+			bool fitted = kinds[t] != 2;
+			if (!fitted && scales[t] <= 0.0f) continue;
+			int from = ptStarts[t], to = ptStarts[t + 1], first = points.Count;
+			double along = 0.0, next = 0.0;
+			for (int n = from + 1; n < to; n++)
 			{
-				wideSum += removed[k];
-				if (Math.Abs(k - j) <= small) smallSum += removed[k];
+				var a = new Vector2((float)px[n - 1], (float)py[n - 1]) * ftile;
+				var b = new Vector2((float)px[n], (float)py[n]) * ftile;
+				double length = a.DistanceTo(b);
+				if (length < 0.01) continue;
+				while (next <= along + length)
+				{
+					double f = (next - along) / length;
+					points.Add(a.Lerp(b, (float)f));
+					halves.Add((float)(RoadLerp(pw[n - 1], pw[n], f) * tile * 0.5));
+					surfs.Add(f < 0.5 ? psurf[n - 1] : psurf[n]);
+					next += step;
+				}
+				along += length;
 			}
-			double restored = smallSum / (2 * small + 1) - wideSum / (2 * radius + 1);
-			var p = points[j] + origin;
-			double wear = noise.GetNoise2D((float)(p.X * 0.013 + 193.0), (float)(p.Y * 0.013 - 71.0));
-			double form = noise.GetNoise2D((float)(p.X * 0.065 + wear * 1.7), (float)(p.Y * 0.065 - wear));
-			double activity = RoadLerp(0.18, 1.0, RoadSmooth(-0.35, 0.4, wear));
-			double shape = Math.Clamp(restored * 0.4 + form * (road ? 0.38 : 0.55) * activity, -limit, limit);
-			relief[j] = (float)(shape * ((double)eligible[j] * allowed[j] * RoadSmooth(0.0, fade, distance[j])));
+			if (points.Count - first < 3)
+			{
+				points.RemoveRange(first, points.Count - first);
+				halves.RemoveRange(first, halves.Count - first);
+				surfs.RemoveRange(first, surfs.Count - first);
+				continue;
+			}
+			included.Add(t);
+			starts.Add(first);
 		}
-		for (int j = 1; j < relief.Length; j++)
+		starts.Add(points.Count);
+		int total = points.Count, count = included.Count;
+		var pts = points.ToArray();
+		var half = halves.ToArray();
+		var surface = surfs.ToArray();
+		var gate = new float[total];
+		var profile = new float[total];
+		var strength = new float[total];
+		var limits = new float[total];
+		var fittedOut = new byte[count];
+		var corridor = new double[total * stride];
+		var routes = new int[count];
+		var routeStarts = starts.ToArray();
+		var kindOf = new int[count];
+		var scaleOf = new float[count];
+		for (int r = 0; r < count; r++)
 		{
-			double cap = Math.Abs((double)relief[j - 1]) + grade * step;
-			if ((double)relief[j] * relief[j - 1] < 0.0) cap = grade * step * 0.5;
-			relief[j] = (float)Math.Clamp(relief[j], -cap, cap);
+			int t = included[r];
+			routes[r] = routeIds[t]; kindOf[r] = kinds[t]; scaleOf[r] = scales[t];
+			fittedOut[r] = kinds[t] != 2 ? (byte)1 : (byte)0;
 		}
-		for (int j = relief.Length - 2; j >= 0; j--)
+		System.Threading.Tasks.Parallel.For(0, count, r =>
 		{
-			double cap = Math.Abs((double)relief[j + 1]) + grade * step;
-			if ((double)relief[j] * relief[j + 1] < 0.0) cap = grade * step * 0.5;
-			relief[j] = (float)Math.Clamp(relief[j], -cap, cap);
+			int t = included[r], from = routeStarts[r], to = routeStarts[r + 1], n = to - from;
+			bool road = kinds[t] == 0, trail = kinds[t] == 1;
+			if (kinds[t] == 2)
+			{
+				for (int j = 0; j < n; j++)
+				{
+					Vector2 tangent = (pts[from + Math.Min(n - 1, j + 2)] - pts[from + Math.Max(0, j - 2)]).Normalized();
+					gate[from + j] = (FitSafe(pts[from + j], tangent, routes[r], j * step, false, half[from + j], width, height, tile, water,
+						distWater, shore, structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong,
+						cellStarts, candidates, reach, shared, settlements, routeKinds) & 2) != 0 ? 1.0f : 0.0f;
+				}
+			}
+			else
+			{
+				var groundAt = new float[n];
+				var need = new float[n];
+				var crossSlopes = new float[n];
+				var allowed = new float[n];
+				var distance = new float[n];
+				for (int j = 0; j < n; j++) groundAt[j] = (float)RoadGround(ground, width, height, tile, pts[from + j].X, pts[from + j].Y);
+				for (int j = 0; j < n; j++)
+				{
+					Vector2 p = pts[from + j];
+					int lo = Math.Max(0, j - 2), hi = Math.Min(n - 1, j + 2);
+					Vector2 tangent = (pts[from + hi] - pts[from + lo]).Normalized();
+					Vector2 normal = new Vector2(-tangent.Y, tangent.X) * 1.5f;
+					double crossGrade = Math.Abs(RoadGround(ground, width, height, tile, (double)p.X + normal.X, (double)p.Y + normal.Y)
+						- RoadGround(ground, width, height, tile, (double)p.X - normal.X, (double)p.Y - normal.Y)) / 3.0;
+					crossSlopes[j] = (float)crossGrade;
+					double grade = Math.Abs((double)groundAt[hi] - groundAt[lo]) / Math.Max((hi - lo) * step, step);
+					double ripple = Math.Abs((double)groundAt[Math.Max(0, j - 4)] - 2.0 * groundAt[j] + groundAt[Math.Min(n - 1, j + 4)]) / (8.0 * step);
+					need[j] = (float)Math.Max(RoadSmooth(0.02, 0.10, crossGrade), Math.Max(RoadSmooth(0.08, 0.30, grade), RoadSmooth(0.004, 0.035, ripple)));
+					lo = Math.Max(0, j - 12);
+					hi = Math.Min(n - 1, j + 12);
+					double sustained = Math.Abs((double)groundAt[hi] - groundAt[lo]) / Math.Max((hi - lo) * step, step);
+					allowed[j] = (float)(1.0 - RoadSmooth(0.45, 0.7, sustained));
+					int safe = FitSafe(p, tangent, routes[r], j * step, road, half[from + j], width, height, tile, water, distWater, shore,
+						structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates,
+						reach, shared, settlements, routeKinds);
+					if (safe == 0) allowed[j] = 0.0f;
+					gate[from + j] = (safe & 2) != 0 ? allowed[j] : 0.0f;
+					distance[j] = allowed[j] <= 0.0f ? 0.0f : (j > 0 ? (float)(distance[j - 1] + step) : 0.0f);
+				}
+				double back = 0.0;
+				for (int j = n - 1; j >= 0; j--)
+				{
+					back = j == n - 1 || allowed[j] <= 0.0f ? 0.0 : back + step;
+					distance[j] = (float)Math.Min(distance[j], back);
+				}
+				double width0 = pw[ptStarts[t]];
+				for (int j = 0; j < n; j++)
+				{
+					double amount = 0.0, crossSlope = 0.0;
+					int lo = Math.Max(0, j - 4), hi = Math.Min(n - 1, j + 4);
+					for (int k = lo; k <= hi; k++) { amount += need[k]; crossSlope += crossSlopes[k]; }
+					amount /= hi - lo + 1;
+					crossSlope /= hi - lo + 1;
+					int radius = Math.Min(12, Math.Max(0, (int)Math.Floor(distance[j] / step) - 1));
+					int small = Math.Min(4, radius);
+					double sumH = 0.0, sumSmall = 0.0;
+					for (int k = j - radius; k <= j + radius; k++)
+					{
+						sumH += groundAt[k];
+						if (Math.Abs(k - j) <= small) sumSmall += groundAt[k];
+					}
+					double average = RoadLerp(sumSmall / (2 * small + 1), sumH / (2 * radius + 1), amount);
+					double axialLimit = RoadLerp(0.15, 0.9, amount) * (trail ? 0.35 : 1.0);
+					double target = groundAt[j] + Math.Clamp((average - groundAt[j]) * RoadLerp(0.35, 0.95, amount), -axialLimit, axialLimit);
+					profile[from + j] = (float)target;
+					double power = RoadLerp(0.25, 1.0, amount) * allowed[j] * RoadSmooth(0.0, fitFade, distance[j]);
+					double trailPower = trail ? RoadLerp(0.55, 0.85, RoadSmooth(0.5, 0.9, crossSlope)) : 1.0;
+					strength[from + j] = (float)(power * trailPower);
+					double cap = RoadLerp(0.2, fitLimit, amount) * (trail ? 0.5 : 1.0);
+					double benchLimit = road ? roadBench : trailBench;
+					cap = Math.Max(cap, Math.Min(benchLimit, crossSlope * width0 * tile * 0.5));
+					limits[from + j] = (float)cap;
+				}
+			}
+			if (scales[t] > 0.0f)
+				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, raw, width, height, tile, noise, origin, step,
+					fade, gap, shared, routeKinds, stride, table, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
+		});
+		return new Godot.Collections.Dictionary
+		{
+			["routes"] = routes, ["starts"] = routeStarts, ["fitted"] = fittedOut, ["scales"] = scaleOf, ["points"] = pts,
+			["profile"] = profile, ["strength"] = strength, ["limit"] = limits, ["corridor"] = corridor,
+		};
+	}
+
+	/// <summary>RoadRefinement._fit_safe on the column index: bit 0 — profile fit allowed, bit 1 — corridor forms too.</summary>
+	private static int FitSafe(Vector2 p, Vector2 tangent, int route, double along, bool shoreOk, double ownHalf, int width, int height,
+		double tile, float[] water, float[] distWater, double shore, int[] structStarts, double[] structs, double pinReach, Vector2[] segA,
+		Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates,
+		double reach, double shared, double[] settlements, int[] routeKinds)
+	{
+		int safe = 3;
+		int cell = (int)Math.Floor(p.Y / tile) * width + (int)Math.Floor(p.X / tile);
+		if (cell < 0 || cell >= width * height || (!shoreOk && distWater[cell] < shore) || !float.IsNegativeInfinity(water[cell])) return 0;
+		int key = (int)Math.Floor(p.Y / tile - 0.5) * width + (int)Math.Floor(p.X / tile - 0.5);
+		if (key >= 0 && key < width * height)
+		{
+			for (int s = structStarts[key]; s < structStarts[key + 1]; s++)
+				if (RoadSegmentDistance(p.X, p.Y, structs, s * 4) < pinReach) return 0;
+			for (int k = cellStarts[key]; k < cellStarts[key + 1]; k++)
+			{
+				int id = candidates[k];
+				Vector2 a = segA[id], delta = segDelta[id];
+				Vector2 b = a + delta;
+				bool other = segRoute[id] != route;
+				bool crossing = other && Math.Abs(tangent.Dot(delta.Normalized())) < 0.9;
+				bool hairpin = false;
+				if (segRoute[id] == route && Math.Abs(segAlong[id] - along) > 20.0)
+				{
+					double u = Math.Clamp((double)(p - a).Dot(delta) / segLen2[id], 0.0, 1.0);
+					hairpin = Math.Abs(segAlong[id] + u * Math.Sqrt(segLen2[id]) - along) > 20.0;
+				}
+				if (other || hairpin)
+				{
+					double gapDist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
+					if (gapDist < segHalf[id] + reach + 0.5)
+					{
+						if (crossing || hairpin) return 0;
+						if (!RoadShared(gapDist, crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds)) safe = 1;
+					}
+				}
+			}
 		}
-		return relief;
+		for (int v = 0; v + 1 < settlements.Length; v += 2)
+			if (p.DistanceTo(new Vector2((float)settlements[v], (float)settlements[v + 1]) * (float)tile) < 10.0) return 0;
+		return safe;
+	}
+
+	private static bool RoadShared(double gap, bool crossing, int route, int other, double ownHalf, double half, double shared, int[] routeKinds)
+		=> !crossing && gap < shared && ownHalf >= 0.0 && Math.Abs(half - ownHalf) < 0.05 && routeKinds[route] == routeKinds[other];
+
+	private static bool RoadCrowded(Vector2 p, Vector2 tangent, int route, double along, double ownHalf, int width, int height, double tile,
+		double gap, double shared, int[] routeKinds, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates)
+	{
+		int cx = (int)Math.Floor(p.X / tile - 0.5), cz = (int)Math.Floor(p.Y / tile - 0.5);
+		for (int dz = -1; dz <= 1; dz++)
+		{
+			for (int dx = -1; dx <= 1; dx++)
+			{
+				int x = cx + dx, z = cz + dz;
+				if (x < 0 || z < 0 || x >= width || z >= height) continue;
+				int key = z * width + x;
+				for (int c = cellStarts[key]; c < cellStarts[key + 1]; c++)
+				{
+					int id = candidates[c];
+					Vector2 a = segA[id], delta = segDelta[id];
+					if (segRoute[id] == route)
+					{
+						if (Math.Abs(segAlong[id] - along) <= 20.0) continue;
+						double u = Math.Clamp((double)(p - a).Dot(delta) / segLen2[id], 0.0, 1.0);
+						if (Math.Abs(segAlong[id] + u * Math.Sqrt(segLen2[id]) - along) <= 20.0) continue;
+					}
+					Vector2 b = a + delta;
+					double dist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
+					if (segRoute[id] != route && RoadShared(dist, Math.Abs(tangent.Dot(delta.Normalized())) < 0.9, route, segRoute[id], ownHalf,
+						segHalf[id], shared, routeKinds)) continue;
+					if (dist < segHalf[id] + ownHalf + gap) return true;
+				}
+			}
+		}
+		return false;
 	}
 	// core/math/color.h promotes these constants to double before rounding the pow input.
 	// Color.SrgbToLinear() in GodotSharp uses float constants and is not bit-identical.
@@ -90,12 +419,12 @@ public partial class FastGrid
 		return Math.Sqrt(ox * ox + oz * oz);
 	}
 
-	/// <summary>Batch RoadRefinement._vertex. Input segments use 15 doubles; fits use interleaved
-	/// profile/strength/limit/relief quadruples. SIMD preserves the scalar multiply/add order (no FMA).
+	/// <summary>Batch RoadRefinement._vertex. Input segments use 17 doubles (the last two: corridor start and station count);
+	/// fits use interleaved profile/strength/limit triples, corridor 7 doubles per station. SIMD preserves the scalar multiply/add order (no FMA).
 	/// Outside-world sampling is deliberately left to the GDScript fallback.</summary>
 	public Godot.Collections.Dictionary RoadVertices(Vector2[] points, double[] nearest, int width, int height,
 		double tile, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
-		double[] segments, double[] fits, double[] surfaces, int[] structureStarts, double[] structures,
+		double[] segments, double[] fits, double[] corridor, double[] surfaces, int[] structureStarts, double[] structures,
 		double steepLo, double steepHi, double waterGap, bool simd)
 	{
 		int count = points.Length;
@@ -114,7 +443,7 @@ public partial class FastGrid
 			bases[n] = baseHeight;
 			int selected = (int)nearest[n * 4];
 			if (selected < 0) continue;
-			int at = selected * 15;
+			int at = selected * 17;
 			double u = nearest[n * 4 + 1], distance = nearest[n * 4 + 2], side = nearest[n * 4 + 3];
 			double half = segments[at + 5]; bool road = segments[at + 6] != 0;
 			int from = (int)segments[at + 7], to = (int)segments[at + 8];
@@ -150,7 +479,7 @@ public partial class FastGrid
 			pin *= 1.0 - RoadSmooth(steepLo, steepHi, new Vector2((float)gx, (float)gz).Length() * 0.5);
 			pins[n] = pin;
 			double crown = 0.035 * (1.0 - RoadSmooth(0.0, half, distance));
-			double detail = crown + grain * (0.025 + surfaces[surf * 5 + 3] * 0.12) + slow * 0.06 * (1.0 - mask);
+			double detail = crown + slow * 0.06 * (1.0 - mask);
 			details[n] = detail;
 			double limit = road ? 0.65 : 0.3;
 			double target = RoadLerp(segments[at + 9], segments[at + 10], u) + detail;
@@ -159,14 +488,20 @@ public partial class FastGrid
 			if (fitCount > 0)
 			{
 				double station = Math.Clamp(segments[at + 11] + u * Math.Sqrt(segments[at + 4]), 0.0, fitCount - 1.0);
-				int j = Math.Min(fitCount - 2, (int)Math.Floor(station)), offset = (int)segments[at + 13] + j * 4;
+				int j = Math.Min(fitCount - 2, (int)Math.Floor(station)), offset = (int)segments[at + 13] + j * 3;
 				double f = station - j;
-				double level = RoadLerp(fits[offset], fits[offset + 4], f);
-				power[n] = RoadLerp(fits[offset + 1], fits[offset + 5], f);
-				limit = RoadLerp(fits[offset + 2], fits[offset + 6], f);
-				double character = RoadLerp(surfaces[from * 5 + 3], surfaces[to * 5 + 3], RoadSmooth(0.0, 1.0, u));
-				relief[n] = RoadRelief(RoadLerp(fits[offset + 3], fits[offset + 7], f), character, slow, side, half) * reach * pin * RoadReliefEdge(points[n], width, height, tile);
+				double level = RoadLerp(fits[offset], fits[offset + 3], f);
+				power[n] = RoadLerp(fits[offset + 1], fits[offset + 4], f);
+				limit = RoadLerp(fits[offset + 2], fits[offset + 5], f);
 				levels[n] = level; target = level + detail;
+			}
+			int corCount = (int)segments[at + 16];
+			if (corCount > 0)
+			{
+				double gain = pin * RoadReliefEdge(points[n], width, height, tile);
+				relief[n] = RoadCorridorShape(corridor, (int)segments[at + 15], corCount, segments[at + 11] + u * Math.Sqrt(segments[at + 4]),
+					side, distance, half, out double section, out double bank) * gain;
+				RoadCorridorColor(ref colors[n], section, bank, gain);
 			}
 			caps[n] = limit;
 			delta[n] = Math.Clamp(target - baseHeight, -limit, limit);
@@ -189,7 +524,7 @@ public partial class FastGrid
 			int selected = (int)nearest[n * 4];
 			if (selected >= 0)
 			{
-				int at = selected * 15, cell = cells[n];
+				int at = selected * 17, cell = cells[n];
 				if ((int)segments[at + 14] > 0 && float.IsNegativeInfinity(water[cell]) && power[n] > 0.0)
 				{
 					var a = new Vector2((float)segments[at], (float)segments[at + 1]);

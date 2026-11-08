@@ -8,7 +8,7 @@ public partial class FastGrid
 	private static readonly StringName NameH = "h", NameColor = "color", NameUv = "uv", NameSurface = "surface", NameRoad = "road";
 
 	// RoadRefinement.build (scripts/game/road_refinement.gd), DOD: индекс и патчи двумя вызовами;
-	// профиль средних форм считается компактными пакетами RoadNaturalProfile по готовым станциям пути.
+	// формы коридора всех путей — одним пакетом RoadCorridor по готовым станциям (FastGrid.Road.cs).
 	// на входе и выходе только массивы. RoadIndex — отрезки метровой дорожной сетки и индекс «клетка -> отрезки»
 	// (копия RoadRefinement._index); RoadPatches — уникальные вершины патчей, ближайший отрезок, высота/цвет/UV
 	// вершины и сборка словарей патчей (копии _nearest_vertices, _vertex и цикла сборки build).
@@ -134,14 +134,15 @@ public partial class FastGrid
 
 	/// <summary>Патчи метровой сетки по клеткам keys. Входные отрезки — столбцы из RoadIndex (a, delta, len2, half, road, surf,
 	/// next, ha, hb, along, route, starts, candidates), fitStart/fitCount — смещение и длина профиля подгонки пути (по номеру
-	/// пути), fits — profile/strength/limit/relief подряд. Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
+	/// пути), fits — profile/strength/limit подряд; corStart/corCount — начало (в числах) и число станций форм коридора пути,
+	/// corridor — 7 чисел на станцию (RoadCorridor). Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
 	/// points — число уникальных вершин}.</summary>
 	public Godot.Collections.Dictionary RoadPatches(int[] keys, int width, int height, double tile, int div,
 		Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext,
 		double[] segHa, double[] segHb, double[] segAlong, int[] segRoute, int[] cellStarts, int[] candidates,
-		int[] fitStart, int[] fitCount, double[] fits, double[] surfaces, float[] ground, float[] water, float[] distWater,
-		FastNoiseLite noise, Vector2 origin, double[] structureAxes, double steepLo, double steepHi, double waterGap,
-		double pinStart, double pinFade, double reach)
+		int[] fitStart, int[] fitCount, double[] fits, int[] corStart, int[] corCount, double[] corridor, double[] surfaces,
+		float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin, double[] structureAxes,
+		double steepLo, double steepHi, double waterGap, double pinStart, double pinFade, double reach)
 	{
 		var clock = System.Diagnostics.Stopwatch.StartNew();
 		int stride = div + 1, fineW = width * div, fineH = height * div;
@@ -179,7 +180,7 @@ public partial class FastGrid
 				RoadNearest(points[n], width, height, tile, reach, segA, segDelta, segLen2, segHalf, segRoad, cellStarts, candidates,
 					ref selected, ref u, ref dist, ref side);
 				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, segHalf, segRoad, segSurf, segNext, segHa, segHb,
-					segAlong, segLen2, segRoute, segA, segDelta, fitStart, fitCount, fits, surfaces, ground, water, distWater, noise, origin,
+					segAlong, segLen2, segRoute, segA, segDelta, fitStart, fitCount, fits, corStart, corCount, corridor, surfaces, ground, water, distWater, noise, origin,
 					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags);
 			}
 		});
@@ -235,7 +236,7 @@ public partial class FastGrid
 	private static void RoadVertexOne(int n, Vector2 pt, int selected, double u, double distance, double side, int width, int height,
 		double tile, double step, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext, double[] segHa, double[] segHb, double[] segAlong,
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, double[] fits,
-		double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
+		int[] corStart, int[] corCount, double[] corridor, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap,
 		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut)
 	{
@@ -257,7 +258,7 @@ public partial class FastGrid
 		double organic = RoadLerp(surfaces[from * 5 + 4], surfaces[to * 5 + 4], RoadSmooth(0.0, 1.0, u));
 		double visualEdge = edge * (1.0 - organic * 0.12), visualShoulder = shoulder * (1.0 + organic * 0.5);
 		color.A = (float)((1.0 - RoadSmooth(visualEdge * 0.55, visualEdge + visualShoulder, distance)) * (1.0 - organic * 0.35));
-		colors[n] = color; uvs[n] = new Vector2((float)(side / half), surf);
+		uvs[n] = new Vector2((float)(side / half), surf);
 		surfaceOut[n] = (byte)surf; roadOut[n] = road ? (byte)1 : (byte)0;
 		double influence = 1.0 - RoadSmooth(half + 0.3, half + 3.0, distance);
 		int cx = Math.Clamp((int)Math.Floor(x / tile), 0, width - 1), cz = Math.Clamp((int)Math.Floor(z / tile), 0, height - 1);
@@ -273,7 +274,7 @@ public partial class FastGrid
 		double gz = RoadGround(ground, width, height, tile, x, z + 1.0) - RoadGround(ground, width, height, tile, x, z - 1.0);
 		pin *= 1.0 - RoadSmooth(steepLo, steepHi, new Vector2((float)gx, (float)gz).Length() * 0.5);
 		double crown = 0.035 * (1.0 - RoadSmooth(0.0, half, distance));
-		double detail = crown + grain * (0.025 + surfaces[surf * 5 + 3] * 0.12) + slow * 0.06 * (1.0 - mask);
+		double detail = crown + slow * 0.06 * (1.0 - mask);
 		double limit = road ? 0.65 : 0.3;
 		double target = RoadLerp(segHa[selected], segHb[selected], u) + detail;
 		double power = 1.0, level = 0.0, relief = 0.0;
@@ -281,15 +282,21 @@ public partial class FastGrid
 		if (fitLen > 0)
 		{
 			double station = Math.Clamp((segAlong[selected] + u * Math.Sqrt(segLen2[selected])) / step, 0.0, fitLen - 1.0);
-			int j = Math.Min(fitLen - 2, (int)Math.Floor(station)), offset = fitStart[route] + j * 4;
+			int j = Math.Min(fitLen - 2, (int)Math.Floor(station)), offset = fitStart[route] + j * 3;
 			double f = station - j;
-			level = RoadLerp(fits[offset], fits[offset + 4], f);
-			power = RoadLerp(fits[offset + 1], fits[offset + 5], f);
-			limit = RoadLerp(fits[offset + 2], fits[offset + 6], f);
-			double character = RoadLerp(surfaces[from * 5 + 3], surfaces[to * 5 + 3], RoadSmooth(0.0, 1.0, u));
-			relief = RoadRelief(RoadLerp(fits[offset + 3], fits[offset + 7], f), character, slow, side, half) * influence * pin * RoadReliefEdge(pt, width, height, tile);
+			level = RoadLerp(fits[offset], fits[offset + 3], f);
+			power = RoadLerp(fits[offset + 1], fits[offset + 4], f);
+			limit = RoadLerp(fits[offset + 2], fits[offset + 5], f);
 			target = level + detail;
 		}
+		if (corCount[route] > 0)
+		{
+			double gain = pin * RoadReliefEdge(pt, width, height, tile);
+			relief = RoadCorridorShape(corridor, corStart[route], corCount[route], (segAlong[selected] + u * Math.Sqrt(segLen2[selected])) / step,
+				side, distance, half, out double section, out double bank) * gain;
+			RoadCorridorColor(ref color, section, bank, gain);
+		}
+		colors[n] = color;
 		double delta = Math.Clamp(target - baseHeight, -limit, limit);
 		double value = baseHeight + delta * influence * pin * power;
 		if (fitLen > 0 && float.IsNegativeInfinity(water[cell]) && power > 0.0)

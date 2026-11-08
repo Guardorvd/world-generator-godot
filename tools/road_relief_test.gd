@@ -1,6 +1,7 @@
 extends SceneTree
 const Fixture := preload("res://tools/road_relief_fixture.gd")
 const OUT := "res://tools/control/runs/road_relief"
+const LIMIT := 1.0 # m, largest change of one vertex by the corridor forms
 var failures := 0
 var profiles := []
 
@@ -41,19 +42,24 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 			var cell := clampi(floori(z / 4), 0, w.H - 1) * w.W + clampi(floori(x / 4), 0, w.W - 1)
 			if h.water_level[cell] != -INF: wet = maxf(wet, absf(b[i] - a[i]))
 			if x <= 2 or z <= 2 or x >= w.W * 4 - 2 or z >= w.H * 4 - 2: outer_edge = maxf(outer_edge, absf(b[i] - a[i]))
-	check(peak <= RoadRefinement.RELIEF_LIMIT * 1.3 + 0.001 and wet == 0.0, label + ": bounded displacement; water unchanged")
-	check(original_peak <= RoadRefinement.RELIEF_LIMIT * 1.3 + 0.046, label + ": original fit preserved; change %.3f m including removed rut" % original_peak)
+	# 14.11: формы коридора — подъём, сечение, продавленное место и обочина вместе; верх — с запасом к таблице CORRIDOR
+	check(peak <= LIMIT and wet == 0.0, label + ": bounded displacement %.3f m; water unchanged" % peak)
+	check(original_peak <= LIMIT + 0.2, label + ": change against the saved Git patches %.3f m" % original_peak)
 	check(outer_edge == 0.0, label + ": no extra lip against the outer mesh")
 	var grade := 0.0
-	var pinned := true
+	var pinned := 0.0
 	var active := 0
-	for route: int in after.fit_routes:
-		var fit: Dictionary = after.fit_routes[route]
-		for j in fit.relief.size():
-			active += int(absf(fit.relief[j]) > 0.01)
-			if fit.strength[j] == 0.0: pinned = pinned and fit.relief[j] == 0.0
-			if j > 0: grade = maxf(grade, absf(fit.relief[j] - fit.relief[j - 1]) / RoadRefinement.STEP)
-	check(pinned and grade <= RoadRefinement.RELIEF_GRADE + 0.000001, label + ": pins and added profile grade %.5f" % grade)
+	for route: int in after.corridor_routes:
+		var span: Vector2i = after.corridor_routes[route]
+		var kind: int = RoadRefinement.CORRIDOR_KINDS.find(w.trails[route].kind)
+		var limit: float = RoadRefinement.CORRIDOR[RoadRefinement.CORRIDOR_KINDS[kind]][10]
+		var fit: Dictionary = after.fit_routes.get(route, {})
+		for j in span.y:
+			var lift: float = after.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE]
+			active += int(absf(lift) > 0.01)
+			if not fit.is_empty() and fit.strength[j] == 0.0: pinned = maxf(pinned, absf(lift))
+			if j > 0: grade = maxf(grade, absf(lift - after.corridor[(span.x + j - 1) * RoadRefinement.CORRIDOR_STRIDE]) / RoadRefinement.STEP / limit)
+	check(pinned < 0.02 and grade <= 1.000001, label + ": pins %.4f m, added grade %.3f of the limit" % [pinned, grade])
 	var boundary := 0.0
 	for key: int in after.patches:
 		for z in RoadRefinement.STRIDE:
@@ -89,15 +95,36 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 		RoadRefinement.allow_fast_vertices = false
 		var reference := build(h, true)
 		check(after.patches == reference.patches, "native/GDScript vertex parity")
-		check(after.fit_routes == reference.fit_routes, "native/GDScript medium profile parity")
+		check(after.fit_routes == reference.fit_routes, "native/GDScript profile fit parity")
+		var same := after.corridor_routes.keys() == reference.corridor_routes.keys()
+		for route: int in reference.corridor_routes:
+			var a: Vector2i = after.corridor_routes.get(route, Vector2i.ZERO)
+			var b: Vector2i = reference.corridor_routes[route]
+			same = same and a.y == b.y and after.corridor.slice(a.x * 7, (a.x + a.y) * 7) == reference.corridor.slice(b.x * 7, (b.x + b.y) * 7)
+		check(same, "native/GDScript corridor forms parity")
 		RoadRefinement.allow_fast_patches = true; RoadRefinement.allow_fast_nearest = true; RoadRefinement.allow_fast_vertices = true
 		check(after.patches == build(h, true).patches, "repeatable native bake")
 		h.road_refinement = after
 		for hz in [60, 120]:
 			for lane in 3: ride(h, lane, hz)
-		# Authored courses are byte-identical when the new relief is toggled.
-		for route: Dictionary in w.trails: route.trail_id = "prepared"
-		check(build(h, false).patches == build(h, true).patches, "prepared tread is unchanged")
+		# Shaped authored courses (TrailShaping owns the tread) are byte-identical when the corridor forms are toggled;
+		# an authored route without earthworks gets weaker natural forms.
+		for route: Dictionary in w.trails:
+			route.trail_id = "prepared"
+			route.formation = Vector3(1.0, 0.0, 0.0)
+		check(build(h, false).patches == build(h, true).patches, "shaped prepared tread is unchanged")
+		for route: Dictionary in w.trails: route.formation = Vector3.ZERO
+		var natural := build(h, true)
+		var calm := 0.0
+		var full := 0.0
+		for key: int in natural.patches:
+			for i in (natural.patches[key].h as PackedFloat32Array).size():
+				calm = maxf(calm, absf(natural.patches[key].h[i] - before.patches[key].h[i]))
+				full = maxf(full, absf(after.patches[key].h[i] - before.patches[key].h[i]))
+		check(calm > 0.0 and calm < full, "prepared route without earthworks: weaker forms %.3f < %.3f m" % [calm, full])
+		for route: Dictionary in w.trails:
+			route.erase("trail_id")
+			route.erase("formation")
 		rebase()
 
 func rebase() -> void:
