@@ -1197,6 +1197,9 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		if _hop_buf > 0.0 and _hop_wait <= 0.0 and not airborne and _auto_hop < 0.0:
 			_hop_buf = 0.0
 			_auto_hop = 0.0
+			# Новый пробел — новый прыжок: защёлка прошлого (_hop_used ждёт возврата тела в середину) его не съедает.
+			# Иначе пробел, нажатый перед приземлением после прыжка, давал только подъём переднего.
+			_hop_used = false
 		elif _hop_buf > 0.0 and _coyote > 0.0 and _auto_hop < 0.0 and not _hop_used:
 			# Малый запас после кромки: игрок нажал вовремя, хотя колёса уже потеряли опору.
 			_hop_buf = 0.0
