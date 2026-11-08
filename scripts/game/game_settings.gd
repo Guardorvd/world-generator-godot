@@ -21,6 +21,7 @@ const DEFAULT_MOUSE := 1.0
 const DEFAULT_INVERT_Y := false
 const DEFAULT_FOV := 70.0
 const DEFAULT_HEAD_BOB := true
+const DEFAULT_TRAIL_CLUTTER := true # корни, брёвна, ветки и камни на тропах (RoadObstacles)
 const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
 const DEFAULT_VOLUME := 0.8
@@ -41,6 +42,7 @@ var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y
 var fov := DEFAULT_FOV            # угол обзора по вертикали, градусы
 var head_bob := DEFAULT_HEAD_BOB  # покачивание и удары камеры пешком и на велосипеде
+var trail_clutter := DEFAULT_TRAIL_CLUTTER  # препятствия на тропах и дорогах; выключено — полотно чистое
 var fullscreen := DEFAULT_FULLSCREEN
 var resolution := DisplayConfig.BASE
 var render_scale := 1.0
@@ -77,6 +79,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	invert_y = _flag(cfg, "input", "invert_y", invert_y)
 	fov = _number(cfg, "view", "fov", fov, MIN_FOV, MAX_FOV)
 	head_bob = _flag(cfg, "view", "head_bob", head_bob)
+	trail_clutter = _flag(cfg, "view", "trail_clutter", trail_clutter)
 	fullscreen = _flag(cfg, "view", "fullscreen", fullscreen)
 	var saved_resolution: Variant = cfg.get_value("display", "resolution", Vector2i.ZERO if fullscreen else resolution)
 	if DisplayConfig.valid_resolution(saved_resolution):
@@ -164,6 +167,7 @@ func reset_defaults() -> void:
 	invert_y = DEFAULT_INVERT_Y
 	fov = DEFAULT_FOV
 	head_bob = DEFAULT_HEAD_BOB
+	trail_clutter = DEFAULT_TRAIL_CLUTTER
 	fullscreen = DEFAULT_FULLSCREEN
 	resolution = DisplayConfig.BASE
 	render_scale = 1.0
@@ -183,6 +187,7 @@ func save_settings() -> Error:
 	cfg.set_value("input", "invert_y", invert_y)
 	cfg.set_value("view", "fov", fov)
 	cfg.set_value("view", "head_bob", head_bob)
+	cfg.set_value("view", "trail_clutter", trail_clutter)
 	cfg.set_value("view", "fullscreen", fullscreen)
 	cfg.set_value("display", "resolution", resolution)
 	cfg.set_value("display", "render_scale", render_scale)

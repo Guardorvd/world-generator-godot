@@ -845,11 +845,17 @@ unique_name_in_owner = true
 layout_mode = 2
 text = "Покачивание и удары камеры"
 
+[node name="TrailClutter" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+tooltip_text = "Корни, брёвна, ветки и камни на тропах и дорогах. Выключите, если хотите ехать по чистому полотну."
+text = "Корни, брёвна и камни на тропах"
+
 [node name="ControlsHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
 custom_minimum_size = Vector2(520, 0)
 layout_mode = 2
 theme_type_variation = &"HintLabel"
-text = "Применяется сразу."
+text = "Применяется сразу. Препятствия на тропах убираются и появляются на участках, которые подгружаются после переключения."
 autowrap_mode = 3
 
 [node name="Звук" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]
@@ -963,6 +969,7 @@ text = "Готово"
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/InvertY" to="." method="_on_invert_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/FovSlider" to="." method="_on_fov_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/HeadBob" to="." method="_on_head_bob_toggled"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/TrailClutter" to="." method="_on_trail_clutter_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук/Page/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Reset" to="." method="_on_reset_settings"]
 [connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Storage" to="." method="_open_storage"]

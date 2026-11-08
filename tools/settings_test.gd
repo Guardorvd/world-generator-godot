@@ -38,6 +38,14 @@ func _initialize() -> void:
 		and GameContext.scope.settings.volume == GameSettings.DEFAULT_VOLUME, "строки, NaN и бесконечность заменяются безопасными значениями")
 	_check(not GameContext.scope.settings.invert_y and GameContext.scope.settings.head_bob and not GameContext.scope.settings.fullscreen,
 		"переключатели принимают только логические значения")
+	_check(GameContext.scope.settings.trail_clutter, "выключатель препятствий на тропах по умолчанию включён и не ломается от соседних полей")
+	var clutter_cfg := ConfigFile.new()
+	clutter_cfg.set_value("view", "trail_clutter", false)
+	GameContext.scope.settings._apply_config(clutter_cfg)
+	_check(not GameContext.scope.settings.trail_clutter, "выключатель препятствий читается из файла")
+	GameContext.scope.settings.reset_defaults()
+	_check(GameContext.scope.settings.trail_clutter, "сброс настроек возвращает препятствия на тропах")
+	GameContext.scope.settings._apply_config(cfg)
 	_check(not GameContext.scope.settings.shadows and GameContext.scope.settings.last_seed == "Север-1234",
 		"исправные поля читаются даже при повреждении соседних")
 	cfg.set_value("input", "mouse", 100)

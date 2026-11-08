@@ -178,6 +178,7 @@ func _sync_settings_controls() -> void:
 	%FovSlider.set_value_no_signal(GameContext.scope.settings.fov)
 	%InvertY.set_pressed_no_signal(GameContext.scope.settings.invert_y)
 	%HeadBob.set_pressed_no_signal(GameContext.scope.settings.head_bob)
+	%TrailClutter.set_pressed_no_signal(GameContext.scope.settings.trail_clutter)
 	%VolumeSlider.set_value_no_signal(GameContext.scope.settings.volume)
 	%DaySlider.set_value_no_signal(GameContext.scope.settings.day_minutes)
 	%StartHourSlider.set_value_no_signal(GameContext.scope.settings.start_hour)
@@ -263,6 +264,11 @@ func _on_invert_toggled(on: bool) -> void:
 
 func _on_head_bob_toggled(on: bool) -> void:
 	GameContext.scope.settings.head_bob = on
+	_settings_changed()
+
+
+func _on_trail_clutter_toggled(on: bool) -> void:
+	GameContext.scope.settings.trail_clutter = on
 	_settings_changed()
 
 

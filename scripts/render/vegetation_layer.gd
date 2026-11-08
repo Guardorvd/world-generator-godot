@@ -1606,8 +1606,9 @@ func _in_plan(i: int, j: int) -> bool:
 
 
 ## 11.6: на полотне путей — препятствия RoadObstacles в радиусе подлеска, тем же размещением, что подстилка
+## Выключатель игрока (settings.trail_clutter) действует на вновь подгружаемые участки: уже лежащие остаются, пока не выгрузятся.
 func _fill_road(px: float, pz: float) -> void:
-	if road == null:
+	if road == null or not settings.trail_clutter:
 		return
 	var pairs := road.around(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, maxf(grass_r, under_r) + _fill_lead.length() * 0.5)
 	for p in range(0, pairs.size(), 2):
