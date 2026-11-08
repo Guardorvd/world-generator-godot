@@ -1468,7 +1468,7 @@ func _process(dt: float) -> void:
 	else:
 		var riding := bike.riding and not crash.active()
 		_cam_surge = lerpf(_cam_surge, clampf(bike.feel_acceleration, -9.0, 5.0) if riding else 0.0, Util.damp(5.0, dt))
-		_cam_brake = lerpf(_cam_brake, bike.brake_deceleration if riding else 0.0, Util.damp(6.0, dt))
+		_cam_brake = lerpf(_cam_brake, bike.brake_applied if riding else 0.0, Util.damp(6.0, dt))
 		var brake := clampf(_cam_brake / 7.0, 0.0, 1.0)
 		var push := clampf(_cam_surge / 4.0, 0.0, 1.0)
 		var back := 7.0 - 1.6 * brake + 0.8 * push

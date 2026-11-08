@@ -757,6 +757,10 @@ var tick_time := 0.0       # длительность последнего вн�
 ## Продольная сила в пятнах контакта за внешний шаг (тяга минус тормоз): перенос нагрузки, которую принимает тело
 var contact_acceleration: float:
 	get: return drive_force - brake_force.x - brake_force.y
+## Фактически приложенный тормоз за внешний шаг (обе оси, среднее по подшагам): единый сигнал для седока и камер.
+## brake_deceleration — значение последнего подшага, для замеров.
+var brake_applied: float:
+	get: return brake_force.x + brake_force.y
 
 
 func _end_tick(sums: PackedFloat32Array, done: float, start: Vector2) -> void:
@@ -810,7 +814,11 @@ func _substep(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bo
 	if crashed:
 		_sync(p)
 		return
+	var h_wheels := heading
 	_step_wheels(heights, f.rough, dt, f.surf, f.path_weight, f.slope, f.across)
+	# Камень под передним колесом выбивает курс; как руль и доворот, это проходит проверку габарита (у стены — нет)
+	if heading != h_wheels and not fits(x, z, heading, w, heights):
+		heading = h_wheels
 	if crashed:
 		_sync(p)
 		return
@@ -1335,13 +1343,13 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		var right := Vector2(cos(heading), -sin(heading)) * ROCK_PROBE
 		var push := 0.0
 		if touch_f and of > SLICK_BUMP:
-			var side_f := (heights.obstacles.bump_at(x + fx + right.x, z + fz + right.y) - heights.obstacles.bump_at(x + fx - right.x, z + fz - right.y)) / (2.0 * ROCK_PROBE)
+			var rock_f := (heights.obstacles.bump_at(x + fx + right.x, z + fz + right.y) - heights.obstacles.bump_at(x + fx - right.x, z + fz - right.y)) / (2.0 * ROCK_PROBE)
 			var up_f := clampf(vf - _gv_f, 0.0, KICK_MAX)
-			push += side_f * up_f
-			heading += side_f * up_f * ROCK_STEER / maxf(absf(speed), 3.0) * signf(speed)
+			push += rock_f * up_f
+			heading += rock_f * up_f * ROCK_STEER / maxf(absf(speed), 3.0) * signf(speed)
 		if touch_r and orr > SLICK_BUMP:
-			var side_r := (heights.obstacles.bump_at(x - fx + right.x, z - fz + right.y) - heights.obstacles.bump_at(x - fx - right.x, z - fz - right.y)) / (2.0 * ROCK_PROBE)
-			push += side_r * clampf(vr - _gv_r, 0.0, KICK_MAX)
+			var rock_r := (heights.obstacles.bump_at(x - fx + right.x, z - fz + right.y) - heights.obstacles.bump_at(x - fx - right.x, z - fz - right.y)) / (2.0 * ROCK_PROBE)
+			push += rock_r * clampf(vr - _gv_r, 0.0, KICK_MAX)
 		lateral_speed -= push * ROCK_DEFLECT
 	_g_f = gf
 	_g_r = gr
@@ -1417,12 +1425,12 @@ static func _bump(d: float) -> float:
 
 
 ## Две пружины-демпфера, вилка и задний ход. Короткие подшаги не дают раскачки от длинного такта.
-## load — сжатие от поворота, acceleration — продольная сила в пятнах контакта (тяга минус тормоз), м/с²: перенос
+## load — сжатие от поворота, contact_accel — продольная сила в пятнах контакта (тяга минус тормоз), м/с²: перенос
 ## нагрузки между осями. Не итоговое изменение скорости: тормоз, держащий скорость на спуске, всё так же сжимает
 ## вилку, а потеря хода в подъём без тормоза её не сжимает (тяжесть приложена к центру масс, не к колёсам).
-func _step_suspension(dt: float, load := 0.0, acceleration := 0.0) -> void:
+func _step_suspension(dt: float, load := 0.0, contact_accel := 0.0) -> void:
 	var target := -0.035 if airborne else load
-	var shift := 0.0 if airborne else acceleration * PITCH_LOAD
+	var shift := 0.0 if airborne else contact_accel * PITCH_LOAD
 	var ticks := maxi(1, ceili(dt * SUB_HZ))
 	var h := dt / ticks
 	var f := Vector2(squash_f, squash_fv)
@@ -1523,8 +1531,6 @@ func _step_contacts(grade: float, dt: float) -> void:
 		# Седок компенсирует перенос веса, готовя рывок: одинаковый Q/E работает и вверх, и вниз.
 		# Это помощь только подъёму; настоящие нагрузки тормоза и шин остаются выше.
 		_step_lift(normal * 0.5, normal * 0.5, unweight * normal, dt)
-		if airborne:
-			return
 	if lift_f > 0.0:
 		raw_r = minf(raw_r + raw_f, LOAD_MAX)
 		raw_f = 0.0

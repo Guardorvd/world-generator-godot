@@ -172,6 +172,19 @@ func run() -> void:
 		tick(buffered)
 		jumped = jumped or buffered._hop_used
 	check(jumped, "Space перед приземлением сохраняется и запускает следующий прыжок")
+	# 08.11: то же сразу после банни-хопа — защёлка прошлого прыжка не съедает новое нажатие
+	var chain := bike(8.0)
+	tick(chain, 0.0, true)
+	var hops := 0
+	var was_air := false
+	var pressed := false
+	for i in 90:
+		var press := not pressed and hops == 1 and chain.airborne and chain.vy < 0.0 and chain.y - ground.surface_at(chain.x, chain.z) < 0.15
+		pressed = pressed or press
+		tick(chain, 0.0, press)
+		if chain.airborne and not was_air: hops += 1
+		was_air = chain.airborne
+	check(pressed and hops == 2, "Space перед приземлением после прыжка запускает следующий прыжок (прыжков %d)" % hops)
 	var air := bike()
 	air.airborne = true
 	air.y += 8.0

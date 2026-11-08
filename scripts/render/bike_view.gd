@@ -223,8 +223,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_BODY_Y] = b.y + (b.ground_f + b.ground_r) * 0.5 - (b.squash_f + b.squash_r) * 0.5
 	_cur[S_Z] = b.z
 	_cur[S_TILT] = b.tilt
-	var brake_decel := maxf(b.brake_deceleration, b.brake_force.x + b.brake_force.y)
-	_cur[S_BRAKE] = maxf(b.brakes.pressure, clampf(brake_decel / GameConfig.BIKE_BRAKE, 0.0, 1.0)) if not b.airborne else 0.0
+	_cur[S_BRAKE] = maxf(b.brakes.pressure, clampf(b.brake_applied / GameConfig.BIKE_BRAKE, 0.0, 1.0)) if not b.airborne else 0.0
 	# Pitch about the front contact point while the rear wheel unloads.
 	var lift := b.brakes.lift if not b.airborne else 0.0
 	_cur[S_TILT] -= lift
@@ -295,7 +294,7 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	else:
 		_effort = lerpf(_effort, effort_target, Util.damp(5.0, dt)) if continuous else 0.0
 	var effort := _effort
-	var braking := clampf(maxf(b.brake_deceleration, b.brake_force.x + b.brake_force.y) / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
+	var braking := clampf(b.brake_applied / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
 	var climb := smoothstep(0.07, 0.16, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(7.0, 11.0, absf(b.speed)))
