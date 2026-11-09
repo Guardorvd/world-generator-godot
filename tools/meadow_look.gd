@@ -19,6 +19,9 @@ const VIEWS := [
 	["foothill", Vector2(140, 196), Vector2(210, 214)],
 	["wet", Vector2(60, 150), Vector2(66, 172)],
 	["road", Vector2(10, 140.5), Vector2(80, 140.5)],
+	["steppe", Vector2(14, 214), Vector2(46, 250)],
+	["edge", Vector2(132, 58), Vector2(158, 72)],
+	["rocky", Vector2(196, 204), Vector2(236, 238)],
 ]
 var world: WorldData
 var heights: Heightfield

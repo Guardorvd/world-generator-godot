@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 3 # 16.0: формы открытых мест (куртина, разнотравье, осока) и их дальние формы
+const VERSION := 4 # 16.1: ковыль и иван-чай (+ дальние формы); 16.0: куртина, разнотравье, осока
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}

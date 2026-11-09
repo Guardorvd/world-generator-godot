@@ -3,25 +3,27 @@ extends RefCounted
 ## 8.2: мелкие цветы, высокая трава, молодые деревья и характеры леса.
 ## UV2.x — ранг удаления отдельного листа вдали; жилки, стебли и сплошные лапы имеют ранг 0.
 
-enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE }
-const COUNT := 15
+enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED }
+const COUNT := 17
 ## 16.0: групповые формы открытых мест. Одна куртина — десятки травинок на 1,5–2 м: густой массив
 ## получается из сотен экземпляров, а не из тысяч мелких пучков. Видны дальше травы (как кусты).
 ## MEADOW — высокотравье с колосьями (0,9–1,5 м), FORBS — цветущее разнотравье, SEDGE — осока с рогозом.
-const OPEN_FORMS := [MEADOW, FORBS, SEDGE]
+## 16.1: STIPA — ковыль: тонкие листья и длинные поникающие серебристые ости (степь, сухие склоны),
+## FIREWEED — иван-чай: высокие стебли с розовыми кистями (опушки, просветы, поляны, долины).
+const OPEN_FORMS := [MEADOW, FORBS, SEDGE, STIPA, FIREWEED]
 ## Растительные сообщества открытых мест (луга, степь, опушки, предгорья, берега).
 enum { C_LAWN, C_TALL, C_FORBS, C_SHRUB, C_WET, C_TURF }
 const COMMUNITIES := 6
 ## Вес каждой формы в сообществе (порядок форм как в enum). Кусты и подрост у опушек и в предгорьях,
 ## осока у воды, разнотравье на солнечных сухих местах, высокотравье в сырых ложбинах и у обочин.
 const COMMUNITY := [
-	#  FERN MOSS MUSH HERB GRASS BUSH SAPL PINE FLOW HIGH YOUNG YPINE MEAD FORBS SEDGE
-	[0.0, 0.0, 0.0, 0.2, 0.5, 0.0, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.1, 0.4, 0.0],  # газон: редкие пучки, контраст
-	[0.0, 0.0, 0.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 3.2, 0.45, 0.0],  # высокотравье
-	[0.0, 0.0, 0.0, 0.2, 0.15, 0.0, 0.0, 0.0, 0.3, 0.2, 0.0, 0.0, 0.5, 2.6, 0.0],  # разнотравье
-	[0.2, 0.0, 0.0, 0.1, 0.0, 2.2, 0.5, 0.3, 0.1, 0.5, 0.25, 0.15, 1.2, 0.3, 0.0], # кустарник, опушка
-	[0.1, 0.1, 0.0, 0.2, 0.0, 0.25, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.5, 0.2, 3.0],  # сырое место, берег
-	[0.0, 0.4, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0], # горная дернина
+	#  FERN MOSS MUSH HERB GRASS BUSH SAPL PINE FLOW HIGH YOUNG YPINE MEAD FORBS SEDGE STIPA FIRE
+	[0.0, 0.0, 0.0, 0.2, 0.5, 0.0, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.0],  # газон: редкие пучки, контраст
+	[0.0, 0.0, 0.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 3.2, 0.45, 0.0, 0.0, 0.15],  # высокотравье
+	[0.0, 0.0, 0.0, 0.2, 0.15, 0.0, 0.0, 0.0, 0.3, 0.2, 0.0, 0.0, 0.5, 2.6, 0.0, 0.15, 0.3],  # разнотравье
+	[0.2, 0.0, 0.0, 0.1, 0.0, 2.2, 0.5, 0.3, 0.1, 0.5, 0.25, 0.15, 1.2, 0.3, 0.0, 0.0, 0.6], # кустарник, опушка
+	[0.1, 0.1, 0.0, 0.2, 0.0, 0.25, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.5, 0.2, 3.0, 0.0, 0.1],  # сырое место, берег
+	[0.0, 0.4, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0, 0.4, 0.25], # горная дернина
 ]
 ## Доля занятых мест (из OPEN_SLOTS на клетку) и множитель низкой травы по сообществу
 const COMMUNITY_DENSITY := [0.06, 0.88, 0.6, 0.6, 0.8, 0.45]
@@ -32,10 +34,10 @@ const OPEN_SLOTS := 6
 enum { LIGHT, DARK, THICKET, FERNY }
 # Множитель веса каждой формы для каждого характера, порядок как в enum форм.
 const TEMPLATE := [
-	[0.6, 0.4, 0.3, 1.4, 2.2, 1.2, 0.6, 0.6, 1.0, 1.0, 0.5, 0.4, 1.0, 1.0, 1.0],
-	[1.0, 1.7, 1.9, 0.5, 0.12, 0.45, 0.3, 0.5, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 1.0],
-	[0.7, 0.5, 0.4, 0.8, 0.5, 3.2, 3.0, 3.0, 0.2, 0.3, 1.0, 1.0, 0.3, 0.2, 1.0],
-	[3.2, 1.2, 0.8, 0.8, 0.5, 0.6, 0.6, 0.6, 0.2, 0.3, 0.3, 0.3, 0.3, 0.2, 1.0],
+	[0.6, 0.4, 0.3, 1.4, 2.2, 1.2, 0.6, 0.6, 1.0, 1.0, 0.5, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0],
+	[1.0, 1.7, 1.9, 0.5, 0.12, 0.45, 0.3, 0.5, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.2],
+	[0.7, 0.5, 0.4, 0.8, 0.5, 3.2, 3.0, 3.0, 0.2, 0.3, 1.0, 1.0, 0.3, 0.2, 1.0, 0.3, 1.2],
+	[3.2, 1.2, 0.8, 0.8, 0.5, 0.6, 0.6, 0.6, 0.2, 0.3, 0.3, 0.3, 0.3, 0.2, 1.0, 0.0, 0.4],
 ]
 const DENSITY := [1.0, 0.8, 1.6, 1.4] # доля занятых мест подлеска (9.4: гуще, как в лесах KCD и Valheim)
 const LOW_GRASS := [1.5, 0.3, 0.55, 0.7] # множитель низкой травы
@@ -126,8 +128,10 @@ static func build_meshes() -> Array[Mesh]:
 	var meadow := _stand(16, 6, 7, 0.78, 0.82, 1.38, 0.34, 0.034, Color(0.44, 0.58, 0.24), Color(0.62, 0.56, 0.32))
 	var forbs := _forb_patch(false)
 	var sedge := _sedge()
+	var stipa := _stipa(false)
+	var fireweed := _fireweed(false)
 
-	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge]
+	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed]
 
 
 ## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
@@ -152,7 +156,137 @@ static func build_far_meshes() -> Dictionary:
 	var bush := _crowned(0, bark, Vector3(0.05, 0.34, 0.03), Vector3(0.64, 0.38, 0.54), 16, 1.7, false)
 	var sapling := _crowned(1, bark, Vector3(0.04, 1.12, 0.0), Vector3(0.46, 0.56, 0.44), 14, 1.6, false)
 	var young := _crowned(2, Color(0.60, 0.58, 0.52), Vector3(0.0, 2.32, 0.0), Vector3(0.86, 1.06, 0.86), 22, 1.65, false)
-	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), BUSH: bush, SAPLING: sapling, YOUNG: young}
+	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), BUSH: bush, SAPLING: sapling, YOUNG: young,
+		STIPA: _stipa(true), FIREWEED: _fireweed(true)}
+
+
+## 16.1: куртина ковыля ~1,2 м. Тонкие жёсткие листья (сизо-зелёные) и длинные перистые ости: от верхушки
+## стебля ость уходит дугой вверх-наружу и поникает к концу. Ость — лента из трёх треугольников, светлая
+## и просвечивающая: на ветру куртины качаются вместе (общий порыв шейдера) и дают серебристую волну.
+## UV.y — доля высоты (качание растёт к концам), UV2.x — ранг поредения; far — меньше и шире.
+static func _stipa(far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var leaf := Color(0.50, 0.58, 0.40)
+	var silver := Color(0.76, 0.76, 0.66)
+	var leaves := 5 if far else 14
+	var awns := 4 if far else 10
+	var total := leaves + awns
+	for n in total:
+		var a := n * 2.39996 + 0.3
+		var r := 0.42 * sqrt(fposmod(0.17 + n * 0.618034, 1.0))
+		var foot := Vector3(cos(a), 0.0, sin(a)) * r
+		var dir := Vector3(cos(a + 0.35), 0.0, sin(a + 0.35))
+		var side := Vector3(-dir.z, 0.0, dir.x)
+		var u := float(n) / total
+		st.set_uv2(Vector2(0.0 if n % 2 == 0 else fposmod(0.23 + n * 0.618034, 0.9), 0))
+		if n < leaves:
+			# Узкий лист-нить, слегка согнут наружу
+			var h := 0.42 + 0.28 * fposmod(n * 0.381966, 1.0)
+			var w := (0.03 if far else 0.011)
+			var knee := foot + dir * 0.07 + Vector3.UP * h * 0.6
+			var tip := foot + dir * (0.2 + 0.1 * fposmod(n * 0.7548, 1.0)) + Vector3.UP * h
+			var nrm := (-dir * 0.3 + Vector3.UP * 0.95).normalized()
+			for v: Array in [[foot - side * w, 0.0], [foot + side * w, 0.0], [knee + side * w * 0.6, 0.6],
+					[foot - side * w, 0.0], [knee + side * w * 0.6, 0.6], [knee - side * w * 0.6, 0.6],
+					[knee - side * w * 0.6, 0.6], [knee + side * w * 0.6, 0.6], [tip, 1.0]]:
+				st.set_normal(nrm)
+				st.set_color(leaf * lerpf(0.7, 1.08, v[1]))
+				st.set_uv(Vector2(u, v[1]))
+				st.add_vertex(v[0])
+		else:
+			# Стебель до 0,7–0,9 м, затем ость: вверх-наружу и дугой вниз, всего 0,5–0,7 м длины
+			var top := foot + dir * 0.05 + Vector3.UP * (0.68 + 0.22 * fposmod(n * 0.381966, 1.0))
+			var reach := 0.26 + 0.3 * fposmod(n * 0.5698, 1.0)
+			var p1 := top + dir * reach * 0.4 + Vector3.UP * (0.08 + 0.12 * fposmod(n * 0.31, 1.0))
+			var p2 := top + dir * reach * 0.85 + Vector3.UP * 0.06
+			var p3 := top + dir * reach * 1.05 - Vector3.UP * (0.18 + 0.12 * fposmod(n * 0.77, 1.0))
+			var sw := side * (0.012 if far else 0.006)
+			var aw := side * (0.02 if far else 0.011)
+			var n_up := (side * 0.6 + Vector3.UP * 0.6 + dir * 0.2).normalized()
+			var c := silver * (0.92 + 0.12 * fposmod(n * 0.4142, 1.0))
+			# Ость — узкая лента вдоль дуги (сужается к концу), а не веер от верхушки стебля
+			var a0 := aw * 0.5
+			var a2 := aw * 0.7
+			for v: Array in [[foot - sw, 0.0, leaf * 0.75], [foot + sw, 0.0, leaf * 0.75], [top, 0.8, leaf * 1.05],
+					[top - a0, 0.8, c * 0.85], [top + a0, 0.8, c * 0.85], [p1 + aw, 0.9, c],
+					[top - a0, 0.8, c * 0.85], [p1 + aw, 0.9, c], [p1 - aw, 0.9, c],
+					[p1 - aw, 0.9, c], [p1 + aw, 0.9, c], [p2 + a2, 0.97, c * 1.05],
+					[p1 - aw, 0.9, c], [p2 + a2, 0.97, c * 1.05], [p2 - a2, 0.97, c * 1.05],
+					[p2 - a2, 0.97, c * 1.05], [p2 + a2, 0.97, c * 1.05], [p3, 1.0, c * 1.12]]:
+				st.set_normal(n_up)
+				st.set_color(v[2])
+				st.set_uv(Vector2(u, v[1]))
+				st.add_vertex(v[0])
+	st.index()
+	return st.commit()
+
+
+## 16.1: иван-чай: 6 стеблей 1,1–1,7 м, ланцетные листья ярусами вдоль стебля и вытянутая
+## пирамидальная кисть розово-лиловых цветков (крест из двух сужающихся пластин) с бутонами на верхушке.
+## far — 4 стебля, без нижних листьев, кисть одной парой пластин.
+static func _fireweed(far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stem_c := Color(0.42, 0.30, 0.30)
+	var leaf_c := Color(0.28, 0.45, 0.21)
+	var bloom := Color(0.86, 0.38, 0.66)
+	var bud := Color(0.62, 0.30, 0.45)
+	var stems := 4 if far else 6
+	for k in stems:
+		var a := k * 2.39996 + 0.7
+		var foot := Vector3(cos(a), 0.0, sin(a)) * 0.32 * sqrt(fposmod(0.2 + k * 0.618034, 1.0))
+		var h := 1.1 + 0.6 * fposmod(k * 0.381966 + 0.15, 1.0)
+		var lean := Vector3(cos(a), 0.0, sin(a)) * 0.08
+		var top := foot + lean + Vector3.UP * h
+		var side := Vector3(-sin(a), 0.0, cos(a))
+		var u := float(k) / stems
+		st.set_uv2(Vector2(0.0, 0))
+		var sw := side * (0.014 if far else 0.009)
+		var start := foot.lerp(top, 0.62)
+		for v: Array in [[foot - sw, 0.0, stem_c * 0.8], [foot + sw, 0.0, stem_c * 0.8], [start, 0.62, stem_c]]:
+			st.set_normal((side * 0.3 + Vector3.UP * 0.9).normalized())
+			st.set_color(v[2])
+			st.set_uv(Vector2(u, v[1]))
+			st.add_vertex(v[0])
+		# Листья: узкие, косо вверх, по спирали; верхние мельче
+		var leaves := 2 if far else 6
+		for l in leaves:
+			var t := 0.18 + 0.4 * float(l) / leaves
+			var base := foot.lerp(top, t)
+			var la := a + l * 2.2
+			var ld := Vector3(cos(la), 0.0, sin(la))
+			var ls := Vector3(-ld.z, 0.0, ld.x) * (0.03 if not far else 0.05)
+			var length := (0.2 - 0.07 * float(l) / leaves) * (1.3 if far else 1.0)
+			var tip := base + ld * length + Vector3.UP * length * 0.45
+			var mid := base.lerp(tip, 0.45)
+			st.set_uv2(Vector2(0.0 if l % 2 == 0 or far else fposmod(0.3 + l * 0.618, 0.9), 0))
+			for v: Array in [[base, mid + ls, tip], [base, tip, mid - ls]]:
+				for p: Vector3 in v:
+					st.set_normal((Vector3.UP * 0.8 + ld * 0.4).normalized())
+					st.set_color(leaf_c * lerpf(0.82, 1.06, (p - base).length() / length))
+					st.set_uv(Vector2(u, t))
+					st.add_vertex(p)
+		# Кисть: от 62 % высоты до верхушки, широкая внизу, сужается к бутонам
+		st.set_uv2(Vector2(0.0, 0))
+		var width := 0.075 if far else 0.06
+		var planes := [side, Vector3(cos(a), 0.0, sin(a))] if not far else [side]
+		for axis: Vector3 in planes:
+			var w0 := axis * width
+			var w1 := axis * width * 0.35
+			var low := start
+			var high := foot.lerp(top, 0.92) + lean * 0.3
+			var tip := top + lean * 0.4 + Vector3.UP * 0.06
+			var nrm := axis.cross(Vector3.UP).normalized()
+			for v: Array in [[low - w0, 0.62, bloom * 0.92], [low + w0, 0.62, bloom * 0.92], [high + w1, 0.92, bloom * 1.06],
+					[low - w0, 0.62, bloom * 0.92], [high + w1, 0.92, bloom * 1.06], [high - w1, 0.92, bloom * 1.06],
+					[high - w1, 0.92, bud], [high + w1, 0.92, bud], [tip, 1.0, bud * 0.9]]:
+				st.set_normal((nrm * 0.5 + Vector3.UP * 0.5).normalized())
+				st.set_color(v[2])
+				st.set_uv(Vector2(u, v[1]))
+				st.add_vertex(v[0])
+	st.index()
+	return st.commit()
 
 
 ## 16.0: куртина высокотравья: травинки на круге radius, дугой наружу, плюс колосья на стеблях.
@@ -194,9 +328,10 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 		else:
 			# Колос: тонкий стебель и вытянутая метёлка над травой, чуть наклонённая по ветру.
 			var top := foot + dir * 0.12 + Vector3.UP * h * 1.12
-			var head_top := top + dir * 0.06 + Vector3.UP * 0.2
+			# 16.1: метёлка узкая и длинная — вблизи колос, а не жёлтый ромб
+			var head_top := top + dir * 0.08 + Vector3.UP * 0.24
 			var sw := side * 0.007
-			var hw := side * 0.034
+			var hw := side * (0.018 if width < 0.05 else 0.03)
 			var n_up := (side * 0.3 + Vector3.UP * 0.9).normalized()
 			var hc := head_color * (0.9 + 0.2 * fposmod(n * 0.4142, 1.0))
 			for v: Array in [[foot - sw, 0.0, base_c], [foot + sw, 0.0, base_c], [top, 0.88, mid_c],
@@ -313,11 +448,12 @@ static func _sedge() -> ArrayMesh:
 			st.set_uv(Vector2(0.8 + k * 0.05, v[1]))
 			st.add_vertex(v[0])
 		# Початок: четырёхгранная коричневая «сигара»
-		var brown := Color(0.36, 0.24, 0.14)
-		var low := top - Vector3.UP * 0.2
+		# 16.1: початок тоньше и короче — вблизи не «кирпич»
+		var brown := Color(0.44, 0.31, 0.19)
+		var low := top - Vector3.UP * 0.15
 		for s in 4:
-			var d0 := Vector3(cos(s * TAU / 4.0), 0.0, sin(s * TAU / 4.0)) * 0.03
-			var d1 := Vector3(cos((s + 1) * TAU / 4.0), 0.0, sin((s + 1) * TAU / 4.0)) * 0.03
+			var d0 := Vector3(cos(s * TAU / 4.0), 0.0, sin(s * TAU / 4.0)) * 0.018
+			var d1 := Vector3(cos((s + 1) * TAU / 4.0), 0.0, sin((s + 1) * TAU / 4.0)) * 0.018
 			for v: Vector3 in [low + d0, low + d1, top + d1, low + d0, top + d1, top + d0]:
 				st.set_normal((d0 + d1).normalized())
 				st.set_color(brown * (0.85 + 0.15 * float(s % 2)))
@@ -841,6 +977,8 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 		light * (1.0 - canopy) * 0.3,
 		light * (1.0 - canopy) * 0.12,
 		wet * wet * (1.0 - canopy * 0.6) * (0.25 if biome == Biomes.SWAMP else 0.06),
+		0.0, # ковыль под пологом не растёт
+		light * (1.0 - canopy) * (0.04 if conifer else 0.1), # 16.1: иван-чай в просветах (пятнами — VegetationLayer)
 	])
 	# Характер меняет состав, а не долю растений рядом с подстилкой: её задаёт DENSITY.
 	var before := 0.0
@@ -877,7 +1015,8 @@ static func communities(big: float, mid: float, moisture: float, light: float, s
 	var tall := smoothstep(0.42, 0.72, big * 0.65 + mid * 0.35 + (moisture - 0.5) * 0.45 + verge * 0.18) * flat
 	var forbs := smoothstep(0.4, 0.7, (1.0 - big) * 0.55 + mid * 0.45 + (light - 0.5) * 0.35) * (1.0 - 0.6 * wet)
 	var shrub := smoothstep(0.15, 0.55, edge) * 0.9 + foothill * smoothstep(0.5, 0.8, mid) * 0.65 + verge * 0.25 * mid
-	var reed := shore * (0.4 + 0.6 * wet) * flat + wet * smoothstep(0.65, 0.9, moisture) * flat * 0.5
+	# 16.1: осока с рогозом — у воды; просто сырой склон даёт её мало
+	var reed := shore * (0.4 + 0.6 * wet) * flat + smoothstep(0.78, 0.95, moisture) * flat * (1.0 - smoothstep(0.1, 0.3, alt)) * 0.3
 	var turf := high * (1.0 - 0.5 * rock) + rock * 0.5
 	var lawn := 0.45 + 0.4 * (1.0 - mid) + dry * 0.5
 	var out := PackedFloat32Array([lawn, tall * (1.0 - 0.7 * dry), forbs * (1.0 - 0.5 * high), shrub * (1.0 - 0.4 * dry),

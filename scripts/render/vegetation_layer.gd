@@ -168,7 +168,11 @@ var flora: Dictionary = GameSettings.FLORA_LEVELS[GameSettings.DEFAULT_FLORA]
 var far_form_r := FAR_FORM_R
 ## 16.0: сообщества открытых клеток плана, по OPEN_CACHE байт (0 в первом — не посчитано). Пишет
 ## и читает только раскладка деталей (одна задача за раз); мир не меняется — кэш не сбрасывается.
-const OPEN_CACHE := 11
+const OPEN_CACHE := 13
+## 16.1: стелющийся можжевельник — тот же меш куста, распластанный (ниже и шире) и сизо-тёмный
+const JUNIPER_HUE := Color(0.6, 0.84, 0.95)
+const JUNIPER_SQUASH := 0.42
+const JUNIPER_SPREAD := 1.45
 var _open_cache := PackedByteArray()
 var _open_valid := PackedByteArray() # 16.0: по 2 байта на клетку плана — места открытых клеток проверены / свободны
 var fill_stats := {} # время частей последней раскладки деталей, мс (замеры)
@@ -256,7 +260,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var mat := _wind_mat(SHADER, wind, true)
 		mat.set_shader_parameter("stream_instances", true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
-		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE]
+		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE, Understory.STIPA]
 		mat.set_shader_parameter("grass_variation", blades)
 		var detail := []
 		if not still and not blades:
@@ -430,6 +434,11 @@ static func _plant_wind(kind: int) -> Array:
 		return [0.13, 0.018, 1.4, 0.85, 0.25]
 	if kind == Understory.SEDGE:
 		return [0.07, 0.012, 1.2, 0.8, 0.2]
+	if kind == Understory.STIPA:
+		# 16.1: ковыль — длинные гибкие ости: сильный наклон и просвечивание против солнца (серебристая волна)
+		return [0.22, 0.03, 1.5, 0.88, 0.4]
+	if kind == Understory.FIREWEED:
+		return [0.1, 0.02, 1.0, 0.85, 0.3]
 	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
 		return [0.08, 0.02, 0.85, 0.8, 0.25]
 	if kind in [Understory.PINE, Understory.YOUNG_PINE]:
@@ -1452,7 +1461,8 @@ func _fill_grass(px: float, pz: float) -> void:
 		for site: Array in _understory_sites:
 			if Placement.priority(site[0]) == priority:
 				if site.size() > 7:
-					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6], false, 1.0, 0.0, site[7], site[8])
+					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6], false, 1.0, 0.0, site[7], site[8],
+						site[9] if site.size() > 9 else 1.0)
 				else:
 					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
 	var t_place := Time.get_ticks_usec()
@@ -1627,6 +1637,10 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		weights[Understory.YOUNG_PINE if conifer else Understory.YOUNG] += rim * 0.1
 		weights[Understory.MEADOW] += rim * 0.35 * light
 		weights[Understory.HIGH_GRASS] += rim * 0.2
+		weights[Understory.FIREWEED] += rim * 0.4 * light
+	# 16.1: иван-чай — теми же пятнами, что на лугу (общий шум), иначе его нет
+	if weights[Understory.FIREWEED] > 0.0:
+		weights[Understory.FIREWEED] *= 3.0 * smoothstep(0.58, 0.82, _vnoise(i, j, 6.0, (world.seed_num ^ 8803) + 41))
 	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
@@ -1725,6 +1739,8 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	var grass_mul := q[o + 8] / 200.0
 	var parch := q[o + 9] / 255.0
 	var verge := q[o + 10] / 255.0
+	var steppe := q[o + 11] / 255.0
+	var bloom := q[o + 12] / 255.0
 	if density <= 0.004:
 		return grass_mul
 	var weights := PackedFloat32Array()
@@ -1742,9 +1758,17 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		weights[Understory.YOUNG_PINE] += weights[Understory.YOUNG]
 		weights[Understory.SAPLING] = 0.0
 		weights[Understory.YOUNG] = 0.0
+	# 16.1: в сухом и степном высокотравье место куртин и высоких пучков занимает ковыль (не поверх них);
+	# в степном газоне — ковыль куртинами. Иван-чай — только в своих пятнах (bloom), там гуще.
+	weights[Understory.STIPA] += steppe * (weights[Understory.MEADOW] * 0.8 + weights[Understory.HIGH_GRASS] + com[Understory.C_LAWN] * 2.5)
+	weights[Understory.MEADOW] *= 1.0 - 0.8 * steppe
+	weights[Understory.HIGH_GRASS] *= 1.0 - steppe
+	weights[Understory.FIREWEED] *= bloom * 3.0 * (1.0 - steppe)
 	for weight in weights:
 		total += weight
 	var hue := Color(1.0 + 0.16 * parch, 1.0 - 0.03 * parch, 1.0 - 0.3 * parch)
+	# Стелющийся можжевельник: куст в горах и на каменистых склонах
+	var juniper := alt > 0.27 or surface.a > 0.3 or com[Understory.C_TURF] > 0.5
 	var hx := i * 8
 	for m in Understory.OPEN_SLOTS:
 		if WGRandom.hash2(hx + m, j, seed + 1) > density:
@@ -1767,11 +1791,21 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		if kind == Understory.MEADOW:
 			# В сердцевине массива и у обочины куртины выше: местами по пояс и выше
 			scale *= 0.8 + 0.35 * com[Understory.C_TALL] + 0.2 * verge
+		var squash := 1.0
+		var site_hue := hue
+		if kind == Understory.BUSH and juniper:
+			scale *= JUNIPER_SPREAD
+			squash = JUNIPER_SQUASH
+			site_hue = JUNIPER_HUE
 		elif kind == Understory.BUSH:
 			scale *= 1.0 + 0.5 * com[Understory.C_SHRUB]
+		elif kind == Understory.STIPA:
+			site_hue = Color.WHITE # серебро остей не желтим
+		elif kind == Understory.FIREWEED:
+			scale *= 0.85 + 0.3 * bloom
 		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24
-		_understory_sites.append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, hue,
-			(j * world.W + i) * 8 + m if inside else -1])
+		_understory_sites.append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, site_hue,
+			(j * world.W + i) * 8 + m if inside else -1, squash])
 	return grass_mul
 
 
@@ -1794,7 +1828,14 @@ func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunl
 	density *= 1.0 - 0.75 * smoothstep(0.55, 1.1, slope)
 	# Сушь желтит и высушивает метёлки, сырость — сочная зелень; оттенок общий у соседей.
 	var parch := clampf((0.55 - surface.b) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)
-	var q := PackedByteArray([1, 0, 0, 0, 0, 0, 0, roundi(density * 255.0), mini(255, roundi(grass_mul * 200.0)), roundi(parch * 255.0), roundi(verge * 255.0)])
+	# 16.1: степь и сухие солнечные склоны — ковыль. Раньше газон степи был почти пуст (густота 0,06):
+	# пятнами (средний шум) там встают куртины ковыля, между ними — открытая степь.
+	var steppe := clampf(maxf(dry, smoothstep(0.45, 0.8, parch) * sunlight * 1.3), 0.0, 1.0)
+	density += com[Understory.C_LAWN] * steppe * 0.7 * smoothstep(0.35, 0.7, mid) * smoothstep(0.1, 0.45, _vnoise(i, j, 3.0, seed + 31))
+	# Иван-чай — группами: свой шум ~25 м, большие цветущие участки только где он высок
+	var bloom := smoothstep(0.58, 0.82, _vnoise(i, j, 6.0, seed + 41))
+	var q := PackedByteArray([1, 0, 0, 0, 0, 0, 0, roundi(minf(density, 1.0) * 255.0), mini(255, roundi(grass_mul * 200.0)), roundi(parch * 255.0), roundi(verge * 255.0),
+		roundi(steppe * 255.0), roundi(bloom * 255.0)])
 	for c in Understory.COMMUNITIES:
 		q[1 + c] = roundi(com[c] * 255.0)
 	return q
@@ -1877,7 +1918,11 @@ func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, 
 			continue
 		var scale := (0.6 + WGRandom.hash2(hx * 8 + m, hy, seed + 5) * 0.5) * _flora_grow(kind)
 		var tint := 0.8 + WGRandom.hash2(hx * 8 + m, hy, seed + 7) * 0.25
-		_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale, tint, rank])
+		if kind == Understory.BUSH and not legacy_open:
+			# 16.1: среди камней куст — стелющийся можжевельник
+			_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale * JUNIPER_SPREAD, tint, rank, JUNIPER_HUE, -1, JUNIPER_SQUASH])
+		else:
+			_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale, tint, rank])
 
 
 func _in_plan(i: int, j: int) -> bool:
@@ -1904,7 +1949,7 @@ func _fill_road(px: float, pz: float) -> void:
 
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло.
 ## stretch — длина вдоль локальной X в долях масштаба (бревно, ветка, корень), sink — насколько утоплено в грунт, м
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1) -> void:
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1, squash := 1.0) -> void:
 	var entry: Dictionary = understory[kind]
 	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
 	# 16.0: граница — по качеству растительности (far_form_r)
@@ -1942,6 +1987,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var offset: int = entry.count * STRIDE
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
 	xf.basis.x *= stretch
+	xf.basis.y *= squash # 16.1: распластанный куст (можжевельник)
 	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind not in [Floor.SNAG, Floor.STUMP, Floor.BOULDER]):
 		# Почвенные детали и валежник следуют склону; сухостой, пни и валуны остаются вертикальными.
 		var dx := heights.ground_at(x + 0.3, z) - heights.ground_at(x - 0.3, z)
