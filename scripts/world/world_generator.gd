@@ -163,8 +163,12 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
-	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
+	# Без этапа сети трасс (например, для фона меню) покрытия ещё не назначены.
+	# Они нужны для finish_paths, который строит рельеф полотна.
 	var later := Time.get_ticks_usec()
+	if w.trail_plan.get("mode", "") != "terrain_network": RoadSurface.run(w)
+	later = _stage_time(w, "road_surface", later)
+	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	var surface: Heightfield = w.generation.trail_surface
 	if surface == null:
 		# При частичном попадании в кэш готовых высот ещё нет. Массивы вдали
@@ -174,11 +178,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 	StageVegetation.run(w, surface)
 	later = _stage_time(w, "vegetation", later)
 	StageLakes.run(w)
-	later = _stage_time(w, "lakes", later)
-	# слой полотна поверх готовых путей: покрытие, без rng и без изменения маршрутов
-	# The network stage has already assigned all routes and published the surface map.
-	if w.trail_plan.get("mode", "") != "terrain_network": RoadSurface.run(w)
-	_stage_time(w, "road_surface", later)
+	_stage_time(w, "lakes", later)
 	w.clear_noise_fields()
 	w.base_heights = null
 	step.call(0.86, "Отрисовка ландшафта")
