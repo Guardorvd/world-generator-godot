@@ -203,9 +203,9 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
 	# (13.9: и в поселениях закреплённых соседних областей)
-	for list: Array in [w.settlements, w.outer.settlements if w.outer != null else []]:
+	for list: Array in [w.settlements, w.outer.collision_settlements(x, z) if w.outer != null else []]:
 		for s in list:
-			if absf(s.x * TILE - x) > 32.0 or absf(s.y * TILE - z) > 32.0:
+			if absf(s.x * TILE - x) > OuterLand.SETTLEMENT_REACH or absf(s.y * TILE - z) > OuterLand.SETTLEMENT_REACH:
 				continue
 			for u in s.huts:
 				if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):

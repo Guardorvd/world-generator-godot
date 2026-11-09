@@ -1019,8 +1019,11 @@ func _merge_far_variants(entries: Array) -> void:
 ## по окончательной географии (вода, дороги, поселения).
 func refresh(rect: Rect2i) -> void:
 	_epoch += 1
+	# Unpublished groups belong to the old terrain. Keep only the live buffers
+	# and let the normal worker rebuild the snapshot under the frame budget.
 	if not _present.is_empty():
-		_present_next(0) # фильтр ниже должен видеть весь снимок
+		_present.clear()
+		_detail_frames.clear()
 	# Published earthworks cannot leave old trees, rocks or undergrowth floating over the cut.
 	var box := Rect2(Vector2(rect.position) * TILE, Vector2(rect.size) * TILE)
 	var meshes: Array[MultiMesh] = []

@@ -97,6 +97,8 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 			_stale.erase(done)
 			if _nodes.has(done):
 				_redo.append(done)
+			else:
+				_checked_at = Vector2.INF
 	if Vector2(x, z).distance_to(_checked_at) > RECHECK:
 		_checked_at = Vector2(x, z)
 		for key: Vector2i in _nodes.keys():

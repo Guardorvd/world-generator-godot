@@ -100,9 +100,10 @@ const SIDE_HOLD_SPEED := 2.0 # ниже этой скорости (м/с) сед
 ## Шина набирает силу не мгновенно, а за путь (длина релаксации): скачки нагрузки от каждой кочки сглаживаются,
 ## а гребень роллера или ложбина, длинные по сравнению с ней, меняют запас сцепления полностью.
 ## Колесо и препятствие: удар о кромку отнимает у колеса скорость по углу встречи (1 − cos), торможение рамы —
-## по доле массы на этом колесе (нагрузка шины). Переднее колесо, остановленное резче ENDO_DV, бросает седока через руль.
+## по доле массы на этом колесе (нагрузка шины). Порог переворота задан для колеса с половиной нагрузки.
 const IMPACT_ANGLE := 0.12   # рад: плавнее этого подъём опоры — накат, а не удар
 const ENDO_DV := 5.0         # м/с: такая потеря скорости переднего колеса (при обычной нагрузке) — полёт через руль
+const ENDO_REFERENCE_LOAD := 0.5
 const EDGE_SOAK := 0.75      # наибольшая доля удара о кромку, которую принимает оставшийся ход подвески (не раму)
 ## Тело седока (модель двух контактов): положение вперёд/назад body_x от −1 (вперёд) до 1 (назад), движется к цели
 ## (body_back / body_forward) с ограниченными скоростью и ходом. Положение переносит часть веса (BODY_HOLD на весь
@@ -322,22 +323,23 @@ var fallen := false # рама остаётся в физической позе
 var fallen_transform := Transform3D.IDENTITY
 
 
-## Поставить велосипед справа от игрока, лицом туда же, куда смотрит игрок
+## Найти место рядом с игроком, начиная справа. null, если рама нигде не помещается.
 static func park_near(p: PlayerState, yaw: float, w: WorldData, heights: Heightfield) -> BikeRide:
 	var b := BikeRide.new()
-	b.heading = yaw
-	b.x = p.x
-	b.z = p.z
-	b.y = p.feet
-	for side: float in [1.6, -1.6]:
-		var bx: float = p.x + cos(yaw) * side
-		var bz: float = p.z - sin(yaw) * side
-		if b.fits(bx, bz, yaw, w, heights):
-			b.x = bx
-			b.z = bz
-			break
-	b.y = heights.surface_at(b.x, b.z, p.feet)
-	return b
+	for offset: Vector2 in [Vector2(1.6, 0), Vector2(-1.6, 0), Vector2(0, 1.6), Vector2(0, -1.6),
+			Vector2(1.6, 1.6), Vector2(-1.6, 1.6), Vector2(1.6, -1.6), Vector2(-1.6, -1.6), Vector2.ZERO]:
+		var b_x := p.x + cos(yaw) * offset.x - sin(yaw) * offset.y
+		var b_z := p.z - sin(yaw) * offset.x - cos(yaw) * offset.y
+		b.y = heights.surface_at(b_x, b_z, p.feet)
+		if not is_finite(b.y) or absf(b.y - p.feet) >= MOUNT_RISE:
+			continue
+		for hd: float in [yaw, yaw + PI * 0.5]:
+			if b.fits(b_x, b_z, hd, w, heights, false):
+				b.x = b_x
+				b.z = b_z
+				b.heading = hd
+				return b
+	return null
 
 
 func distance_to(p: PlayerState) -> float:
@@ -1393,10 +1395,12 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	var forward := Vector2(-sin(heading), -cos(heading))
 	var side := Vector2(-forward.y, forward.x)
 	var dv := strike - forward * strike.dot(forward) * soak
+	# dv уже взвешено по нагрузке. 5 м/с при половинной нагрузке дают 2,5 м/с потери скорости рамы.
+	var endo := dv.dot(forward) / (ENDO_REFERENCE_LOAD * ENDO_DV)
 	# Диагностика последней встречи с кромкой (стенды): что именно ударило и насколько близко к порогу
 	last_hit = {front = front, angle = angle, approach = approach, share = share, dv = dv.length(), soak = soak, rise = hit.get("rise", 0.0),
-		endo = dv.dot(forward) / 0.5 / ENDO_DV, ground = ground, support = support, vy = vy, lift = lift_f if front else lift_r}
-	if front and dv.dot(forward) / 0.5 > ENDO_DV:
+		endo = endo, ground = ground, support = support, vy = vy, lift = lift_f if front else lift_r}
+	if front and endo > 1.0:
 		_crash(vy, Vector3(-sin(heading), 0.6, -cos(heading)), CrashCause.OBSTACLE)
 		return hit.id
 	# импульс вычитается из вектора скорости (и при заднем ходе), но не разворачивает движение через препятствие
@@ -1748,10 +1752,10 @@ func obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> V
 
 
 ## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны
-func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield) -> bool:
+func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield, allow_climb := true) -> bool:
 	var fx := -sin(hd) * AXLE
 	var fz := -cos(hd) * AXLE
-	var climb := _climb()
+	var climb := _climb() if allow_climb else 0.0
 	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb)
 		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb)
 		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb)

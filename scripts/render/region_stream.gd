@@ -81,6 +81,8 @@ var queue: Array[Vector2i] = []
 var _cancel := Mutex.new()
 var _cancelled := false
 var _save_task := -1
+var _save_result := {}
+var _unsaved_fields := {}
 var _publishing := {}
 var stats := {prepared = 0, loaded = 0, evicted = 0, built = 0, hidden = 0, apply_ms = 0.0, show_ms = 0.0}
 var _task := -1
@@ -179,12 +181,16 @@ func restore(x: float, z: float) -> void:
 ## выгрузить или начать следующую. true — в кадре была заметная работа главного потока.
 func update(x: float, z: float) -> bool:
 	if _ledger_failed: return false
+	if _save_task != -1 and WorkerThreadPool.is_task_completed(_save_task):
+		_finish_save()
 	var p := Vector2(x, z)
 	if _field_task != -1 and WorkerThreadPool.is_task_completed(_field_task):
 		WorkerThreadPool.wait_for_task_completion(_field_task)
 		_field_task = -1
-		if not _field_out.get("fields", {}).is_empty():
-			_publish_fields(_field_key, _field_out.fields)
+		var fields: Dictionary = _field_out.get("fields", {})
+		_field_out = {}
+		if not fields.is_empty():
+			_publish_fields(_field_key, fields)
 			var rect: Rect2i = ledger.regions[_field_key].rect.grow(2)
 			terrain.refresh(rect)
 			vegetation.refresh(rect)
@@ -232,6 +238,7 @@ func update(x: float, z: float) -> bool:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		var result: Dictionary = _out.get("r", {})
+		_out = {}
 		if result.get("cancelled", false) or _distance(_key, p) > REACH:
 			if result.has("decor"): result.decor.node.free()
 			_checked_at = Vector2.INF
@@ -259,7 +266,7 @@ func update(x: float, z: float) -> bool:
 		if d <= KEEP and not entry.has("fields") and not field_errors.has(key):
 			if _field_task == -1: _request_fields(key)
 			continue
-		if d > EVICT and entry.has("fields"):
+		if d > EVICT and entry.has("fields") and not _unsaved_fields.has(key):
 			_evict(key)
 			return false
 		if d <= REACH and not _shown.has(key) and entry.has("fields"):
@@ -269,14 +276,11 @@ func update(x: float, z: float) -> bool:
 		if d > HIDE and _shown.has(key):
 			_hide(key)
 			return true
-	if generation_enabled and _task == -1 and not queue.is_empty() and (_save_task == -1 or WorkerThreadPool.is_task_completed(_save_task)):
+	if generation_enabled and _task == -1 and _save_task == -1 and not queue.is_empty():
 		var key: Vector2i = queue.pop_front()
 		if ledger.get("regions", {}).has(key) or failed.has(key) or not _neighbors_ready(key):
 			_checked_at = Vector2.INF # пересмотреть очередь в следующем кадре
 			return false
-		if _save_task != -1:
-			WorkerThreadPool.wait_for_task_completion(_save_task)
-			_save_task = -1
 		_key = key
 		_cancelled = false
 		_out = {}
@@ -311,8 +315,7 @@ func finish() -> void:
 	_cancelled = true
 	_cancel.unlock()
 	if _save_task != -1:
-		WorkerThreadPool.wait_for_task_completion(_save_task)
-		_save_task = -1
+		_finish_save()
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
@@ -408,14 +411,14 @@ static func prepare_region(w: WorldData, key: Vector2i, current: Dictionary, dir
 
 
 ## Поля области — в свой файл, журнал без полей — в ledger.bin; запись через временный файл.
-static func save(dir: String, current: Dictionary, key: Vector2i) -> Error:
+static func save(dir: String, current: Dictionary, key: Vector2i, written := {}) -> Error:
 	_store_lock.lock()
-	var result := _save_generation(dir, current, key)
+	var result := _save_generation(dir, current, key, written)
 	_store_lock.unlock()
 	return result
 
 
-static func _save_generation(dir: String, current: Dictionary, key: Vector2i) -> Error:
+static func _save_generation(dir: String, current: Dictionary, key: Vector2i, written: Dictionary) -> Error:
 	var err := DirAccess.make_dir_recursive_absolute(dir)
 	if err != OK:
 		return err
@@ -444,7 +447,10 @@ static func _save_generation(dir: String, current: Dictionary, key: Vector2i) ->
 				ref = {field_file = "%d_%d.region" % [k.x, k.y], field_sha = ""}
 		light.regions[k].field_file = ref.field_file
 		light.regions[k].field_sha = ref.get("field_sha", "")
-	return _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
+	err = _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
+	if err == OK:
+		written.regions = light.regions
+	return err
 
 
 static func _write(path: String, value: Variant) -> Error:
@@ -887,14 +893,32 @@ func publication_pending() -> bool:
 	return not _publishing.is_empty()
 
 func _persist(key: Vector2i) -> void:
-	# одна запись журнала за раз: обе пишут ledger.bin через один и тот же .tmp
-	if _save_task != -1:
-		WorkerThreadPool.wait_for_task_completion(_save_task)
-		_save_task = -1
-	# Encode entity records before copying: duplicate(true) alone keeps RefCounted objects.
-	# The worker owns containers AND packed buffers, independent of publication/eviction.
+	# Own a snapshot of the entity records and fields. Generation waits for the
+	# write, but the frame only polls and can keep streaming existing regions.
+	_unsaved_fields[key] = true
 	var accepted: Dictionary = EntityCodec.encode(ledger).duplicate(true)
+	_save_result = {key = key}
+	var result := _save_result
 	var dir := store_dir(world)
 	_save_task = WorkerThreadPool.add_task(func() -> void:
-		var err := save(dir, accepted, key)
-		if err != OK: push_warning("Region save failed: %s (%d)" % [key, err]), false, "Запись области")
+		result.error = save(dir, accepted, key, result), false, "Запись области")
+
+
+func _finish_save() -> void:
+	WorkerThreadPool.wait_for_task_completion(_save_task)
+	_save_task = -1
+	var result := _save_result
+	_save_result = {}
+	if result.error != OK:
+		_storage_failure("Не удалось записать область %s (%d)." % [result.key, result.error])
+		return
+	ledger = ledger.duplicate()
+	ledger.regions = ledger.regions.duplicate()
+	for key: Vector2i in _unsaved_fields.keys():
+		var saved: Dictionary = result.regions[key]
+		var entry: Dictionary = ledger.regions[key].duplicate()
+		entry.field_file = saved.field_file
+		entry.field_sha = saved.field_sha
+		ledger.regions[key] = entry
+		_unsaved_fields.erase(key)
+	world.outer.set_ledger(ledger)

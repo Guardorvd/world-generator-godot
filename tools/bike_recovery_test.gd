@@ -56,6 +56,16 @@ func run() -> void:
 	w.available_rect = Rect2i(0, 0, 64, 64)
 	h = TestGround.new(w)
 	h.obstacles = ForestObstacles.new(w, h)
+	var p := PlayerState.new()
+	p.x = 40.0
+	p.z = 40.0
+	p.feet = 100.0
+	h.wall = Rect2(37, 38, 6, 4)
+	check(BikeRide.park_near(p, 0.0, w, h) == null, "parking rejects the player position when the frame is blocked")
+	h.wall = Rect2(40.7, 38, 3, 4)
+	var parked := BikeRide.park_near(p, 0.0, w, h)
+	check(parked != null and parked.x < p.x, "parking tries the clear side when the right side is blocked")
+	h.wall = Rect2()
 	_check_mount()
 	_check_dismount()
 	check_navigation()

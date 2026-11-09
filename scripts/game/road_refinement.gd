@@ -937,10 +937,14 @@ static func _bell(t: float) -> float:
 func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false, own_half := -1.0) -> int:
 	var w := _heights.world
 	var safe := 3
-	var cell := floori(p.y / TILE) * w.W + floori(p.x / TILE)
-	if cell < 0 or cell >= w.N or (not shore_ok and w.dist_water[cell] < RoadBed.SHORE.y) or _heights.water_level[cell] != -INF:
+	var x := floori(p.x / TILE)
+	var z := floori(p.y / TILE)
+	if x < 0 or x >= w.W or z < 0 or z >= w.H:
 		return 0
-	var key := floori(p.y / TILE - 0.5) * w.W + floori(p.x / TILE - 0.5)
+	var cell := z * w.W + x
+	if (not shore_ok and w.dist_water[cell] < RoadBed.SHORE.y) or _heights.water_level[cell] != -INF:
+		return 0
+	var key := clampi(floori(p.y / TILE - 0.5), 0, w.H - 2) * w.W + clampi(floori(p.x / TILE - 0.5), 0, w.W - 2)
 	for s: Dictionary in _structures.get(key, []):
 		if Grid.segment_dist(p.x, p.y, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN + RoadBed.PIN_FADE:
 			return 0

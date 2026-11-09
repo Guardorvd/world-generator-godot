@@ -340,9 +340,12 @@ public partial class FastGrid
 		double reach, double shared, double[] settlements, int[] routeKinds)
 	{
 		int safe = 3;
-		int cell = (int)Math.Floor(p.Y / tile) * width + (int)Math.Floor(p.X / tile);
-		if (cell < 0 || cell >= width * height || (!shoreOk && distWater[cell] < shore) || !float.IsNegativeInfinity(water[cell])) return 0;
-		int key = (int)Math.Floor(p.Y / tile - 0.5) * width + (int)Math.Floor(p.X / tile - 0.5);
+		int x = (int)Math.Floor(p.X / tile), z = (int)Math.Floor(p.Y / tile);
+		if (x < 0 || x >= width || z < 0 || z >= height) return 0;
+		int cell = z * width + x;
+		if ((!shoreOk && distWater[cell] < shore) || !float.IsNegativeInfinity(water[cell])) return 0;
+		int key = Math.Clamp((int)Math.Floor(p.Y / tile - 0.5), 0, height - 2) * width
+			+ Math.Clamp((int)Math.Floor(p.X / tile - 0.5), 0, width - 2);
 		if (key >= 0 && key < width * height)
 		{
 			for (int s = structStarts[key]; s < structStarts[key + 1]; s++)

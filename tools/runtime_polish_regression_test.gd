@@ -21,6 +21,11 @@ class QuietTerrain extends OuterTerrain:
 	func _wanted(_x: float, _z: float, _radius := RADIUS) -> Array[Vector2i]: return []
 	func stage_chunk(_key: Vector2i, _built: Dictionary) -> MeshInstance3D: return null
 
+class PendingTerrain extends QuietTerrain:
+	func _wanted(_x: float, _z: float, _radius := RADIUS) -> Array[Vector2i]: return [Vector2i(-1, 0)]
+	func _build(_key: Vector2i, _snapshot: Variant = null, _prepared_fields := {}) -> Dictionary:
+		return {fields = {h = PackedFloat32Array([1.0])}}
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
 	run.call_deferred()
@@ -33,8 +38,10 @@ func run() -> void:
 	_test_spawn()
 	_test_slide()
 	_test_save_snapshot()
+	_test_road_edge()
 	_test_speed()
 	_test_chunk_retirement()
+	await _test_stationary_chunk_retry()
 	print("runtime_polish_regression: ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -136,6 +143,22 @@ func _test_speed() -> void:
 		limited = limited and speeds[3] * speeds[3] - speeds[2] * speeds[2] <= 2.0 * (S.G + S.PEDAL) + 0.001
 	check(limited, "sharp drop does not create gravity acceleration greater than G")
 
+func _test_road_edge() -> void:
+	var h := Heightfield.new()
+	h.world = _world()
+	h.water_level.resize(h.world.N)
+	h.water_level.fill(-INF)
+	h.structures = [{ax = 1.0, az = 1.0, bx = 12.0, bz = 1.0}]
+	var refinement := RoadRefinement.new()
+	refinement._heights = h
+	refinement._index_structures()
+	check(refinement._fit_safe(Vector2(1, 8), Vector2.RIGHT, 0, 0.0, true) == 0
+		and refinement._fit_safe(Vector2(8, 1), Vector2.RIGHT, 0, 0.0, true) == 0,
+		"bridge protection covers the left and top half cells")
+	check(refinement._fit_safe(Vector2(-1, 120), Vector2.RIGHT, 0, 0.0, true) == 0
+		and refinement._fit_safe(Vector2(40, 120), Vector2.RIGHT, 0, 0.0, true) == 3,
+		"fit checks reject outside samples without wrapping to another row")
+
 func _test_chunk_retirement() -> void:
 	var terrain := QuietTerrain.new()
 	terrain.world = _world()
@@ -155,4 +178,21 @@ func _test_chunk_retirement() -> void:
 		peak = maxi(peak, terrain.land.chunks.size())
 		bounded = bounded and terrain.land.chunks.size() == terrain._nodes.size() and terrain.land.chunks.size() <= 40
 	check(bounded, "200 chunk transitions retire distant OuterLand fields (peak=%d)" % peak)
+	terrain.free()
+
+
+func _test_stationary_chunk_retry() -> void:
+	var terrain := PendingTerrain.new()
+	terrain.world = _world()
+	terrain.land = OuterLand.new()
+	var key := Vector2i(-1, 0)
+	terrain.update(0.0, 0.0)
+	terrain.refresh(Rect2i(key * OuterLand.C, Vector2i.ONE * OuterLand.C))
+	while not WorkerThreadPool.is_task_completed(terrain._tasks[key].id): await process_frame
+	terrain.update(0.0, 0.0)
+	check(terrain._tasks.has(key) and not terrain._nodes.has(key), "stale first chunk is rescheduled with a stationary player")
+	if terrain._tasks.has(key):
+		while not WorkerThreadPool.is_task_completed(terrain._tasks[key].id): await process_frame
+		terrain.update(0.0, 0.0)
+	check(terrain.land.chunks.has(key), "replacement chunk publishes without a movement threshold")
 	terrain.free()

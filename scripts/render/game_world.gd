@@ -318,16 +318,25 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			regions.terrain = outer
 	if heights.obstacles == null:
 		heights.obstacles = ForestObstacles.new(world, heights)
+	t = _mark("start_outer_ms", t)
+	hud.set_world(world, loaded.map_image)
+	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	heights.obstacles.async_rebuild = true # дальше препятствия леса пересобираются в фоне, а не в такте физики
 	bike = BikeRide.park_near(player, yaw, world, heights)
 	if not saved.is_empty():
 		var b: Dictionary = saved.bike
 		if safe_position(b.x, b.z, b.y):
-			bike.x = b.x
-			bike.z = b.z
-			bike.y = heights.surface_at(b.x, b.z, b.y)
-			bike.heading = b.heading
+			var restored := BikeRide.new()
+			restored.y = heights.surface_at(b.x, b.z, b.y)
+			if restored.fits(b.x, b.z, b.heading, world, heights, false):
+				restored.x = b.x
+				restored.z = b.z
+				restored.heading = b.heading
+				bike = restored
+	if bike == null:
+		loaded.error = "Рядом с местом появления не найдено безопасной точки для велосипеда."
+		return
 	bike_view = preload("res://scenes/bike.tscn").instantiate()
 	add_child(bike_view)
 	brake_effects = BrakeEffects.new()
@@ -338,26 +347,17 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(crash)
 	_snap()
 	bike_view.draw(1.0)
-	t = _mark("start_outer_ms", t)
-	hud.set_world(world, loaded.map_image)
-	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
-	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
-	# Валежник и камни появились только сейчас: велосипед, поставленный раньше, может стоять в бревне
-	if not bike.fits(bike.x, bike.z, bike.heading, world, heights):
-		var moved := BikeRide.park_near(player, yaw, world, heights)
-		if moved.fits(moved.x, moved.z, moved.heading, world, heights):
-			bike.x = moved.x
-			bike.z = moved.z
-			bike.y = moved.y
-			bike.heading = moved.heading
-			_snap()
-			bike_view.draw(1.0)
 	# Посадка из сохранения проходит те же проверки после появления локальных препятствий.
 	if not saved.is_empty() and saved.bike.riding and bike.prepare_mount(player, world, heights):
 		bike.mount(player)
 		_snap()
 		bike_view.draw(1.0)
+	var opening_bike: BikeRide = null
 	if not opening_spot.is_empty():
+		opening_bike = BikeRide.new()
+		opening_bike.y = player.feet
+	if opening_bike != null and opening_bike.fits(player.x, player.z, yaw, world, heights, false):
+		bike = opening_bike
 		bike.x = player.x
 		bike.z = player.z
 		bike.y = player.feet
@@ -723,11 +723,11 @@ func travel_to(place: Dictionary) -> void:
 		return
 	_set_photo(false)
 	_close_settlement(false)
-	crash.abort()
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
 	heights.obstacles.update(place.x * TILE, place.y * TILE, PackedFloat32Array(), -1, true)
 	var arriving := PlayerState.arrive(world, heights, place)
 	if arriving == null:
+		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 		hud.toast_now("Рядом с местом прибытия не найдено безопасной точки")
 		return
 	if chunk_source != null:
@@ -745,13 +745,26 @@ func travel_to(place: Dictionary) -> void:
 			if not is_inside_tree() or is_queued_for_deletion(): return
 		WorkerThreadPool.wait_for_task_completion(_travel_task)
 		_travel_task = -1
-	player = arriving
-	stream_coordinator.force_terrain(Vector3(player.x, player.feet, player.z), NEAR)
+	var destination := Vector3(arriving.x, arriving.feet, arriving.z)
+	stream_coordinator.force_terrain(destination, NEAR)
 	if chunk_source != null: chunk_source.finish_startup()
-	heights.obstacles.update(player.x, player.z, PackedFloat32Array(), -1, true)
-	yaw = PlayerState.arrival_heading(place, Vector2(player.x, player.z), yaw)
+	stream_coordinator.force_vegetation(destination)
+	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
+	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
+	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
+	if parked == null or not safe_position(arriving.x, arriving.z, arriving.feet):
+		var origin := Vector3(player.x, player.feet, player.z)
+		stream_coordinator.force_terrain(origin, NEAR)
+		stream_coordinator.force_vegetation(origin)
+		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
+		audio.set_paused(paused)
+		hud.toast_now("Рядом с местом прибытия нет свободного места для игрока и велосипеда")
+		return
+	crash.abort()
+	player = arriving
+	yaw = arrival_yaw
 	pitch = -0.05
-	bike = BikeRide.park_near(player, yaw, world, heights)
+	bike = parked
 	_dip = 0.0
 	_dip_v = 0.0
 	_trauma = 0.0
@@ -759,7 +772,6 @@ func travel_to(place: Dictionary) -> void:
 	bike_view.draw(1.0)
 	if world.outer != null:
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
-	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	if show_map:
 		toggle_map()
 	audio.set_paused(paused)
@@ -1417,7 +1429,11 @@ func _choose_settlement_route(place: Dictionary) -> void:
 func _recall_bike() -> void:
 	if not _settlement_open() or paused or not player.on_ground:
 		return
-	bike = BikeRide.park_near(player, yaw, world, heights)
+	var parked := BikeRide.park_near(player, yaw, world, heights)
+	if parked == null:
+		hud.toast_now("Рядом нет свободного места для велосипеда")
+		return
+	bike = parked
 	bike_view.snap(bike)
 	bike_view.draw(1.0)
 	_close_settlement()

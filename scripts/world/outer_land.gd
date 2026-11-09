@@ -34,7 +34,23 @@ var _ring: Array[Dictionary] = []   # над картой, под ней, сле
 ## compute берёт их поля вместо сырого шума, height/water/info — сначала из них. Журнал заменяется
 ## целиком в главном потоке (set_ledger); опубликованные словари и вложенные данные больше не меняются.
 ## Замок защищает публикацию ссылки; _load_fields/_evict копируют словари перед записью.
-var settlements: Array = []        # поселения закреплённых областей (мировые клетки), для столкновений
+const SETTLEMENT_REACH := 32.0 # м: радиус отбора поселений для проверки стен
+var _settlement_cells := {}
+var settlements: Array = []:
+	set(value):
+		if is_same(settlements, value):
+			return
+		settlements = value
+		var cells := {}
+		for s in value:
+			var x: float = s.x * GameConfig.TILE
+			var z: float = s.y * GameConfig.TILE
+			for cz in range(floori(z / SETTLEMENT_REACH - 1.0), floori(z / SETTLEMENT_REACH + 1.0) + 1):
+				for cx in range(floori(x / SETTLEMENT_REACH - 1.0), floori(x / SETTLEMENT_REACH + 1.0) + 1):
+					var key := Vector2i(cx, cz)
+					if not cells.has(key): cells[key] = []
+					cells[key].append(s)
+		_settlement_cells = cells
 var _ledger := {}
 var _lock := Mutex.new()
 
@@ -132,6 +148,10 @@ func set_ledger(ledger: Dictionary) -> void:
 	_ledger = ledger
 	_lock.unlock()
 	settlements = ledger.get("settlements", [])
+
+
+func collision_settlements(x: float, z: float) -> Array:
+	return _settlement_cells.get(Vector2i(floori(x / SETTLEMENT_REACH), floori(z / SETTLEMENT_REACH)), [])
 
 
 func get_ledger() -> Dictionary:

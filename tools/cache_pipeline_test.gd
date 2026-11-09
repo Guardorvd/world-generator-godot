@@ -198,6 +198,19 @@ func _test_regions() -> void:
 	corrupt.close()
 	check(RegionStream._read_fields(dir, key, ref).h[0] == 9.0, "region block backup is validated against the ledger digest when primary is corrupt")
 	Files.replace(block, good_bytes, true)
+	# A freshly published entry starts without a disk address in the live ledger.
+	streaming.generation_enabled = false
+	streaming.ledger = current
+	streaming._persist(key)
+	while not WorkerThreadPool.is_task_completed(streaming._save_task): await process_frame
+	streaming._finish_save()
+	streaming._evict(key)
+	streaming._field_cache.clear()
+	streaming._request_fields(key)
+	while not WorkerThreadPool.is_task_completed(streaming._field_task): await process_frame
+	streaming.update(0, 0)
+	check(streaming.ledger.regions[key].get("fields", {}).get("h", PackedFloat32Array()) == fields.h,
+		"fresh region reloads from its committed block in the same session after RAM eviction")
 	_test_region_validation(rect, fields, key)
 	streaming.finish()
 	streaming.free()
