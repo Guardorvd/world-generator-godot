@@ -163,10 +163,23 @@ func run() -> void:
 	var old_layer:Script=load(OUT.path_join("vegetation_layer.gd"))
 	var builder:=TerrainBuilder.new();var defs:=Models.tree_defs();var grass:=Models.grass_mesh()
 	var results:=[]
-	for seed_text:String in Probe.SEEDS:
+	var seeds:Array=Probe.SEEDS
+	var args:=OS.get_cmdline_user_args()
+	if "--seeds" in args:seeds=args[args.find("--seeds")+1].split(",")
+	for seed_text:String in seeds:
 		print("BEGIN ENVIRONMENT ",seed_text)
 		var w:=geography(seed_text)
+		# «Было» — тот же мир без скального рельефа склонов (RockRelief), «стало» — с ним.
+		Heightfield.allow_rock_relief=false
+		var flat:=Heightfield.base_of(w).copy();flat.finish_paths()
+		Heightfield.allow_rock_relief=true
 		var surface:=Heightfield.base_of(w).copy();surface.finish_paths()
+		var moved:=0;var max_shift:=0.0
+		for i in w.N:
+			var d:=absf(surface.hv[i]-flat.hv[i])
+			if d>0.05:moved+=1
+			max_shift=maxf(max_shift,d)
+		print("RELIEF ",seed_text," cells=",surface.path_timings.get("rock_relief_cells",0)," moved=",moved," max_m=",snappedf(max_shift,0.01)," ms=",surface.path_timings.get("rock_relief_ms",0.0)," road_bed_ms=",surface.path_timings.get("road_bed_ms",0.0))
 		var frozen:=var_to_bytes([w.h,w.filled,w.path_mask,w.ocean,w.lake])
 		var top:=0
 		for i in w.N:
@@ -196,6 +209,7 @@ func run() -> void:
 			cameras.massif_mid=[ground(surface,pick+md*60+Vector2(-md.y,md.x)*20,10.0),ground(surface,pick,4.0)]
 			cameras.massif_near=[ground(surface,pick+md*18+Vector2(-md.y,md.x)*7,1.8),ground(surface,pick,5.0)]
 		var mesh:=ArrayMesh.new();mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,TerrainBuilder.build_arrays(w,surface,Rect2i(origin,Vector2i.ONE*SIDE)))
+		var mesh_flat:=ArrayMesh.new();mesh_flat.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,TerrainBuilder.build_arrays(w,flat,Rect2i(origin,Vector2i.ONE*SIDE)))
 		var base:=Image.create(N,N,false,Image.FORMAT_RGB8)
 		for y in N:
 			for x in N:
@@ -208,11 +222,11 @@ func run() -> void:
 			else:StageVegetation.run(w)
 			var placement_ms:=(Time.get_ticks_usec()-started)/1000.0
 			var floor_image:Image=old_floor.surface_image(w) if version.begins_with("before") else Floor.surface_image(w)
-			var terrain:=MeshInstance3D.new();terrain.mesh=mesh;terrain.material_override=builder.material(base.duplicate(),floor_image)
+			var terrain:=MeshInstance3D.new();terrain.mesh=mesh_flat if version.begins_with("before") else mesh;terrain.material_override=builder.material(base.duplicate(),floor_image)
 			if version.begins_with("before"):terrain.material_override.shader=load(OUT.path_join("terrain.gdshader"))
 			scene.add_child(terrain)
 			var layer:Node3D=old_layer.new() if version.begins_with("before") else VegetationLayer.new()
-			scene.add_child(layer);layer.setup(w,surface,defs,grass,floor_image)
+			scene.add_child(layer);layer.setup(w,flat if version.begins_with("before") else surface,defs,grass,floor_image)
 			var row:Dictionary={seed=seed_text,version=version,objects=w.obj_count,placement_ms=placement_ms,views={}}
 			var trees:=0;var rocks:=0
 			for k in w.obj_k:trees+=int(Biomes.is_tree(k));rocks+=int(k==Biomes.T_ROCK)
@@ -261,7 +275,7 @@ func run() -> void:
 					var img:=Image.load_from_file(ProjectSettings.globalize_path(a_path if k==0 else b_path));img.convert(Image.FORMAT_RGBA8);img.resize(640,360,Image.INTERPOLATE_LANCZOS)
 					sheet.blit_rect(img,Rect2i(0,0,640,360),Vector2i(640*k,0))
 				sheet.save_png(OUT.path_join("sheet_"+seed_text+"_"+view+pair[2]+".png"))
-		surface.weaken_world();w.base_heights=null;w.clear_noise_fields()
+		surface.weaken_world();flat.weaken_world();w.base_heights=null;w.clear_noise_fields()
 	FileAccess.open(OUT.path_join("results.json"),FileAccess.WRITE).store_string(JSON.stringify({failures=failures,worlds=results},"\t"))
 	print("MOUNTAIN ENVIRONMENT ",failures," failures")
 	quit(1 if failures else 0)

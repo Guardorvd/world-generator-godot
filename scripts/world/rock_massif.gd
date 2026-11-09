@@ -102,7 +102,7 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 					form = RockModels.M_BLOCKS
 					chance = 0.6
 				chance *= smoothstep(0.4, 0.7, exposed)
-			elif sl >= 0.24 and exposed >= 0.45:
+			elif sl >= 0.24 and exposed >= 0.6: # средняя крутизна — только на явно скальной земле, не плитой на траве
 				if sturdy > 0.55 and sl >= 0.3:
 					form = RockModels.M_WALL # низкий уступ на скальном склоне средней крутизны
 					chance = 0.6
@@ -122,8 +122,10 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			chance *= lerpf(0.3, 1.25, crag) * lerpf(0.5, 1.0, mountain)
 			if form == RockModels.M_WALL:
 				# Пояс: место сдвигается по линии падения к ближайшей отметке пласта.
-				var spacing := lerpf(9.0, 17.0, _value(seed_num, sx, sy, 70.0, 0x42414e44))
-				var phase := _value(seed_num, sx, sy, 45.0, 0x50484153) * spacing * 3.0
+				# Те же пласты, что у уступов рельефа (RockRelief): стена встаёт на обрыв полки.
+				var st := RockRelief.strata(seed_num, sx, sy)
+				var spacing := st.x
+				var phase := st.y
 				var h := e * hs
 				var band := roundf((h - phase) / spacing) * spacing + phase
 				var shift := (band - h) / maxf(g, 0.5)

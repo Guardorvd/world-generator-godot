@@ -1,7 +1,8 @@
 class_name Heightfield
 extends RefCounted
 static var allow_fast_water_levels := true
-static var allow_fast_river_surface := true # false — русла и берега на GDScript (эталон для tools/dod_verify.gd)
+static var allow_fast_river_surface := true
+static var allow_rock_relief := true # false — без скального рельефа склонов (стенды «было») # false — русла и берега на GDScript (эталон для tools/dod_verify.gd)
 ## Рельеф и вода в метрах: высоты в центрах клеток, русла рек, уровень воды. Копия js/game/heightfield.js.
 ## Чистые данные и математика: по ним строятся меши и считается движение игрока.
 ## С 4.4 ground_at также читает локальную метровую сетку дорог RoadRefinement.
@@ -273,6 +274,12 @@ func complete_water() -> void:
 ## Возвращает изменённые вершины базовой сетки для уже подготовленного меша загрузчика.
 func finish_paths() -> PackedInt32Array:
 	var t := Time.get_ticks_usec()
+	# 09.11.2026: скальный рельеф склонов — после маршрутов, вдали от путей (RockRelief); меш берёт его через
+	# список изменённых клеток загрузчика, физика и опоры — из тех же hv.
+	if allow_rock_relief:
+		path_timings.rock_relief_cells = RockRelief.apply(self)
+		path_timings.rock_relief_ms = (Time.get_ticks_usec() - t) / 1000.0
+		t = Time.get_ticks_usec()
 	var changed := RoadBed.refine(self)
 	path_timings.road_bed_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
