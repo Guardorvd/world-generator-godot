@@ -48,6 +48,14 @@ func run() -> int:
 	source.seed_num = 734
 	var a := plain(Rect2i(0, 0, 32, 32))
 	var b := plain(Rect2i(32, 0, 32, 32))
+	var edge := RoadPolicy._unprepared_distance(a.rect, [a, b], {}, Rect2i())
+	var incoming := RoadPolicy._unprepared_distance(a.rect, [a], {regions = {Vector2i.RIGHT: b}}, Rect2i())
+	var center_row := 16 * 32
+	check(edge[center_row] == 1.0 and edge[center_row + 31] > StageTrails.EDGE_COST_BAND
+		and edge == incoming, "штраф учитывает открытый край и пропускает шов готовых областей")
+	check(StageTrails.edge_cost(edge[center_row] - 1.0) > StageTrails.edge_cost(edge[center_row + 6] - 1.0)
+		and StageTrails.edge_cost(edge[center_row + 6] - 1.0) > StageTrails.edge_cost(edge[center_row + 12] - 1.0)
+		and StageTrails.edge_cost(edge[center_row + 12] - 1.0) == 0.0, "стоимость плавно спадает внутрь готовой области")
 	a.river_inputs = [{x = 0.0, y = 16.5, dx = 1, dy = 0, e = 0.15, w = 0.6, acc = 90.0}]
 	# Точное float32-значение земли требуется для входа без подъёма.
 	a.river_inputs[0].e = a.fields.h[0]

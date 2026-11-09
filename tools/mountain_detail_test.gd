@@ -1,12 +1,10 @@
 extends SceneTree
-## Слой детализации гор (GEO 9) без генерации мира: рельеф трёх сидов с выключенным слоем
-## (= GEO 7) и включённым в одном процессе. Сверка: выключенный слой бит в бит равен снимку GEO 7
-## (.godot/structural_relief/<сид>_before.bin, если он есть), C#/GDScript, параллельный расчёт,
+## Слой детализации гор без генерации мира: рельеф трёх сидов с выключенным и включённым
+## слоем в одном процессе. Сверка: C#/GDScript, параллельный расчёт,
 ## отрицательные координаты, перекрытие запросов соседних кусков (швы). Метрики склонов,
 ## кривизны, высоты, береговой маски и времени. Поля для mountain_detail_look — в OUT.
 ## godot --headless --path . --script res://tools/mountain_detail_test.gd [-- --seeds "Ущелье"]
 const OUT := "res://.godot/mountain_detail"
-const GEO7 := "res://.godot/structural_relief"
 const SEEDS := ["Вальхейм 3", "Север-1234", "Ущелье"]
 const SIDE := 768
 const Detail := preload("res://scripts/world/mountain_detail.gd")
@@ -54,7 +52,10 @@ func contracts() -> void:
 		check(v==b[12],"no detail on low, flat or steep ground "+str(spec))
 		check(ridge.calls==0 and hill.calls==0,"no noise calls for inactive layer "+str(spec))
 	var convex := profile(100.0,0.35,0.04)
-	check(Detail.apply(ridge,hill,convex,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)==convex[12],"detail protects convex crests")
+	var same_grade := profile(100.0,0.35)
+	var rib := absf(Detail.apply(ridge,hill,same_grade,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)-same_grade[12])
+	var crest_rib := absf(Detail.apply(ridge,hill,convex,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)-convex[12])
+	check(crest_rib > 0.0 and crest_rib < rib, "convex slopes keep a smaller share of the ribs")
 	# At the steep cutoff, sqrt(limit²-s²) alone has an infinite derivative.
 	# A smooth fade must remove the ridge well before its amplitude reaches zero.
 	var edge := profile(100.0,Detail.DETAIL_LIMIT-0.0001)
@@ -140,10 +141,6 @@ func run() -> void:
 		var off := relief(w, false)
 		var on := relief(w, true)
 		check(off.macro == on.macro, "same world window " + seed_text)
-		var geo7 := GEO7.path_join(seed_text + "_before.bin")
-		if FileAccess.file_exists(geo7):
-			var old: Dictionary = FileAccess.open(geo7, FileAccess.READ).get_var()
-			check(old.h == off.h, "layer off == GEO 7 bit for bit " + seed_text)
 		var delta := 0.0; var mean := 0.0; var coast := 0; var changed := 0; var detail_cell := 0
 		for i in w.N:
 			var d: float = (on.h[i] - off.h[i]) * GameConfig.HS

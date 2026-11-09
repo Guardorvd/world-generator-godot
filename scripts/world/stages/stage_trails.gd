@@ -21,6 +21,8 @@ const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
 
 const BRIDGE_COST := 30.0   # стоимость клетки воды для дороги: дорога обходит воду, если обход не слишком длинный
+const EDGE_COST_BAND := 12  # ширина полосы у неподготовленного края, в клетках
+const EDGE_COST_MAX := 6.0
 const RISE := 0.1           # хребет выше этого (около 26 м) над входами — туннель
 const RISE_LEN := 30        # самый длинный туннель, клеток
 const SPAN := 60            # мост или туннель охватывает не больше стольких клеток пути
@@ -151,6 +153,28 @@ static func _build_cost(w: WorldData) -> void:
 		w.cost = fast.PathCost(w.W, w.H, w.ocean, w.lake, w.river_cells(), w.slope, w.biome, cost_n, biome_cost, FORD_SLOPE)
 	else:
 		w.cost = cost_reference(w, cost_n)
+	var cost := w.cost
+	for y in w.H:
+		var row_gap := mini(y, w.H - 1 - y)
+		var band := EDGE_COST_BAND if row_gap >= EDGE_COST_BAND else w.W
+		for x in mini(band, w.W):
+			var i := y * w.W + x
+			var gap := mini(row_gap, mini(x, w.W - 1 - x))
+			cost[i] += edge_cost(gap)
+		if row_gap >= EDGE_COST_BAND:
+			for x in range(maxi(band, w.W - band), w.W):
+				cost[y * w.W + x] += edge_cost(w.W - 1 - x)
+	w.cost = cost
+
+
+static func edge_cost(gap: float) -> float:
+	return EDGE_COST_MAX * (1.0 - smoothstep(0.0, float(EDGE_COST_BAND), gap))
+
+
+static func _plan_edge_gap(w: WorldData, i: int) -> int:
+	var x := i % w.W
+	var y := i / w.W
+	return mini(mini(x, w.W - 1 - x), mini(y, w.H - 1 - y))
 
 
 ## Исходный цикл: запасной путь и эталон численных правил.
@@ -469,7 +493,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	for i in w.N:
 		# Сначала дешёвое условие: результат тот же.
 		if cost[i] == INF and _wet(w, i):
-			road_cost[i] = BRIDGE_COST if reach[i] <= BRIDGE_REACH else INF
+			road_cost[i] = BRIDGE_COST + edge_cost(_plan_edge_gap(w, i)) if reach[i] <= BRIDGE_REACH else INF
 	_part("roads_setup", setup_us)
 	var joined := PackedByteArray()
 	joined.resize(n)

@@ -470,6 +470,8 @@ func _photo_capturing(on: bool) -> void:
 
 
 func _exit_tree() -> void:
+	if day != null:
+		RenderingServer.global_shader_parameter_set("vegetation_night", 0.0)
 	if heights != null and heights.obstacles != null:
 		heights.obstacles.finish()
 	if _travel_task != -1:

@@ -206,3 +206,7 @@ vegetation_clock={
 "type": "float",
 "value": 1.0
 }
+vegetation_night={
+"type": "float",
+"value": 0.0
+}

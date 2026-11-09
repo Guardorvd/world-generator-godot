@@ -87,6 +87,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	open.resize(w.N)
 	var targets := PackedInt32Array()
 	w.cost.resize(w.N)
+	var edge_dist := _unprepared_distance(bounds, regions, ledger, plan)
 	var span_reach := StageTrails._bridge_reach(w) # вода дальше любого возможного моста — непроходима
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
@@ -97,6 +98,8 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			open[i] = 1
 			if w.path_mask[i] >= 2: targets.append(i)
 		w.cost[i] = INF if open[i] == 0 or wet and span_reach[i] > StageTrails.BRIDGE_REACH else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
+		if edge_dist[i] < StageTrails.EDGE_COST_BAND + 1:
+			w.cost[i] += StageTrails.edge_cost(edge_dist[i] - 1.0)
 	# Узлы: поселения, приходящие выходы закреплённых дорог, старая сеть плана.
 	var nodes: Array = []
 	for place: SettlementData in settlements:
@@ -305,6 +308,35 @@ static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: Pa
 		StageTrails._count_failure(state.failures, state)
 		return false
 	return true
+
+
+## Sample margins and temporary search bounds are not territory. Include nearby
+## prepared neighbours even where their roads are reachable only through ledger exits.
+static func _unprepared_distance(bounds: Rect2i, regions: Array, ledger: Dictionary, plan: Rect2i) -> PackedFloat32Array:
+	var domain := bounds.grow(StageTrails.EDGE_COST_BAND + 1)
+	var unknown := PackedByteArray()
+	unknown.resize(domain.get_area())
+	unknown.fill(1)
+	var prepared: Array[Rect2i] = [plan]
+	for region: Dictionary in regions:
+		prepared.append(region.rect)
+	for region: Dictionary in ledger.get("regions", {}).values():
+		prepared.append(region.rect)
+	for rect: Rect2i in prepared:
+		var local := domain.intersection(rect)
+		for y in range(local.position.y, local.end.y):
+			var row := (y - domain.position.y) * domain.size.x - domain.position.x
+			for x in range(local.position.x, local.end.x):
+				unknown[row + x] = 0
+	var distance := Grid.distance_field(domain.size.x, domain.size.y, unknown)
+	var result := PackedFloat32Array()
+	result.resize(bounds.get_area())
+	var offset := bounds.position - domain.position
+	for y in bounds.size.y:
+		var row := (y + offset.y) * domain.size.x + offset.x
+		for x in bounds.size.x:
+			result[y * bounds.size.x + x] = distance[row + x]
+	return result
 
 
 static func _root(groups: Array, k: int) -> int:

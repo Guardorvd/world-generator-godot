@@ -24,6 +24,7 @@ uniform float fade_far = 1.0e9;
 uniform float fade_len = 1.0;
 global uniform vec2 veg_center;
 global uniform float vegetation_clock;
+global uniform float vegetation_night;
 uniform bool stream_instances = false;
 uniform float stream_birth = 0.0;
 // Поредение травы и подлеска дальше thin_full (м, 0 — нет): остаётся доля (thin_full / расстояние)²;
@@ -130,7 +131,8 @@ void vertex() {
 			VERTEX += transpose(basis) * world * (sqrt(scale2) / scale2);
 		}
 		v_cloud = cloud_light(origin.xz);
-		v_ao = max(0.30, mix(ao_low, 1.0, h) * mix(1.0, shelter_ao, sheltered));
+		float shelter = mix(shelter_ao, shelter_ao * 0.78, vegetation_night);
+		v_ao = max(0.30, mix(ao_low, 1.0, h) * mix(1.0, shelter, sheltered));
 		if (use_vertex_color && !OUTPUT_IS_SRGB) {
 			// как vertex_color_is_srgb у StandardMaterial3D
 			COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
@@ -161,6 +163,10 @@ void fragment() {
 	if (use_vertex_color) {
 		col *= COLOR.rgb;
 	}
+	if (translucency > 0.0) {
+		float neutral = dot(col, vec3(0.2126, 0.7152, 0.0722));
+		col = mix(col, vec3(neutral), vegetation_night * 0.32);
+	}
 	ALBEDO = col * v_cloud;
 	ROUGHNESS = 1.0;
 #ifdef ROCK_DETAIL
@@ -176,10 +182,16 @@ void fragment() {
 #endif
 	AO = v_ao;
 	AO_LIGHT_AFFECT = 0.15;
-	BACKLIGHT = col * translucency;
+	BACKLIGHT = col * translucency * mix(1.0, 0.28, vegetation_night);
 #ifdef CUTOUT
-	ALPHA = tex.a * (1.0 - smoothstep(0.86, 1.0, cluster_radius));
-	// Немного компенсируем усреднение альфы в mipmaps, сохраняя внешний контур объёма.
-	ALPHA_SCISSOR_THRESHOLD = lod_level == 2 ? 0.29 : (lod_level == 1 ? 0.32 : 0.35);
+	// The merged clusters cover fewer layers. Fill small gaps and recover the
+	// interior shade where overlapping leaves and the last shadow cascade drop out.
+	float simplification = lod_level == 2 ? 1.0 : (lod_level == 1 ? 0.45 : 0.0);
+	float inner_shade = mix(1.0, mix(0.66, 0.94, smoothstep(0.55, 0.98, v_ao)), simplification);
+	ALBEDO *= inner_shade;
+	AO *= inner_shade;
+	BACKLIGHT *= mix(1.0, 0.60, simplification);
+	ALPHA = tex.a * (1.0 - smoothstep(mix(0.86, 0.92, simplification), 1.0, cluster_radius));
+	ALPHA_SCISSOR_THRESHOLD = mix(0.35, 0.24, simplification);
 #endif
 }

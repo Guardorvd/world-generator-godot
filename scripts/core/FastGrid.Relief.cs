@@ -88,9 +88,7 @@ public partial class FastGrid
 			return v;
 		double bend = (((double)b[k + 2] + b[k - 2]) + ((double)b[k + r] + b[k - r]) - 4.0 * b[k]) * perRaw;
 		t = Clamp01((-bend - 0.6) / (2.0 - 0.6));
-		double crest = 1.0 - t * t * (3.0 - 2.0 * t);
-		if (crest <= 0.0)
-			return v;
+		double crest = 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
 		t = Clamp01((Noise(hill, x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0);
 		double vary = t * t * (3.0 - 2.0 * t);
 		t = Clamp01((Noise(hill, x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0);
@@ -245,7 +243,7 @@ public partial class FastGrid
 	private const double InnerAlong = 520.0;
 	private const double InnerAcross = 180.0;
 	private const double InnerCut = 0.75;
-	private const double SideCut = 0.28;
+	private const double SideCut = 0.38;
 	private const double MountainWarp = 0.35;
 	private const double RidgeAlong = 220.0;
 	private const double RidgeAcross = 125.0;
@@ -276,16 +274,17 @@ public partial class FastGrid
 		double up = t * t * (3.0 - 2.0 * t);
 		// С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня.
 		sharp *= 1.0 - up;
-		double asym = 1.0 + (Asym - 1.0) * sharp;
+		double structure = inland * (1.0 - 0.62 * up);
+		double asym = 1.0 + (Asym - 1.0) * sharp + 0.22 * structure;
 		// С 3.1 мелкие детали сильнее у острых массивов; главный гребень шире и цельнее.
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f);
+			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, structure) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f;
+			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure) * f;
 		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
-		r = Math.Min(r * (1.0 + 0.35 * pk * r), PeakCap);
+		r = Math.Min(r * (1.0 + (0.35 + 0.70 * structure) * pk * r), PeakCap);
 		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.
 		t = Clamp01((r - 0.25) / 0.15);
 		double shoulder = t * t * (3.0 - 2.0 * t);
@@ -305,7 +304,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>Копия StageRelief._crest.</summary>
-	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior)
+	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior, double structure)
 	{
 		double along = X * dc + Y * ds;
 		double across = Y * dc - X * ds;
@@ -317,7 +316,8 @@ public partial class FastGrid
 			double n = Noise(pm, u * fq, v * fq);
 			if (o == 0)
 				n *= n > 0.0 ? asym : 1.0 / asym;
-			double e = Math.Sqrt(n * n + CrestRound * CrestRound);
+			double rounding = o == 0 ? CrestRound - 0.16 * structure : CrestRound;
+			double e = Math.Sqrt(n * n + rounding * rounding) + CrestRound - rounding;
 			double val = Math.Max(0.0, 1.0 - e);
 			val *= val;
 			val *= wt;
@@ -339,12 +339,20 @@ public partial class FastGrid
 			t = Clamp01(1.0 - Math.Abs(side) / 0.2);
 			double branch = t * t * (3.0 - 2.0 * t);
 			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
-			s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SideCut * interior;
+			double drainage = t * t * (3.0 - 2.0 * t);
+			s *= 1.0 - branch * drainage * (1.0 - valley) * (SideCut - 0.10 * (1.0 - structure)) * interior;
+			double spur = (1.0 - branch) * drainage * (1.0 - valley);
+			double spurHeight = Clamp01((s - 0.16) / (0.46 - 0.16));
+			s += 0.20 * spur * (spurHeight * spurHeight * (3.0 - 2.0 * spurHeight)) * structure;
 			double shelfLevel = 0.36 + 0.12 * opening;
 			double shelfIn = Clamp01((s - (shelfLevel - 0.12)) / (shelfLevel - (shelfLevel - 0.12)));
 			double shelfOut = Clamp01((s - shelfLevel) / ((shelfLevel + 0.12) - shelfLevel));
 			double shelf = shelfIn * shelfIn * (3.0 - 2.0 * shelfIn) * (1.0 - shelfOut * shelfOut * (3.0 - 2.0 * shelfOut));
 			s += (shelfLevel - s) * shelf * 0.35 * fine * interior * (1.0 - 0.8 * valley);
+			double lipIn = Clamp01((s - (shelfLevel - 0.09)) / ((shelfLevel - 0.025) - (shelfLevel - 0.09)));
+			double lipOut = Clamp01((s - (shelfLevel + 0.02)) / ((shelfLevel + 0.16) - (shelfLevel + 0.02)));
+			double lip = lipIn * lipIn * (3.0 - 2.0 * lipIn) * (1.0 - lipOut * lipOut * (3.0 - 2.0 * lipOut));
+			s += 0.16 * lip * spur * structure;
 		}
 		return s;
 	}

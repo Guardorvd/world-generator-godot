@@ -118,7 +118,7 @@ static func add_micro(h: float, micro: float) -> float:
 ## С 1.9.5 без спуска к краю карты: шум один для всей плоскости, карта — только стартовая область.
 ## parallel — считать полосами на всех ядрах (иначе в текущем потоке)
 ## include_detail — параметр запроса, а не глобальный переключатель: фоновые запросы независимы.
-## false возвращает основу GEO 7 для проб и стендов. Игровые вызовы используют true.
+## false возвращает макрорельеф без слоя склонов для проб и стендов. Игровые вызовы используют true.
 static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
 	if cw <= 0 or ch <= 0:
 		return PackedFloat32Array()
@@ -270,7 +270,7 @@ const CREST_SHARE := 0.75
 const INNER_ALONG := 520.0
 const INNER_ACROSS := 180.0
 const INNER_CUT := 0.75
-const SIDE_CUT := 0.28
+const SIDE_CUT := 0.38
 ## Горы искривлены слабее остального рельефа: при полном искривлении гребни вытягиваются в одинаковые
 ## волнистые полосы
 const MOUNTAIN_WARP := 0.35
@@ -313,19 +313,20 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	var up := t * t * (3.0 - 2.0 * t)
 	# С 3.2 холмистый характер смягчает и форму склона, а не только высоту гребня
 	sharp *= 1.0 - up
-	var asym := 1.0 + (ASYM - 1.0) * sharp
+	var structure := inland * (1.0 - 0.62 * up)
+	var asym := 1.0 + (ASYM - 1.0) * sharp + 0.22 * structure
 	# С 3.1 мелкая складчатость зависит и от формы массива: у сглаженных гор главный гребень
 	# цельный, у острых остаются скалистые детали. Возвышенности по-прежнему теряют большую их часть
 	var fine := (1.0 - UPLAND_SMOOTH * up) * (0.35 + 0.65 * sharp)
 	var r := 0.0
 	if f < 1.0:
-		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up) * (1.0 - f)
+		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up, structure) * (1.0 - f)
 	if f > 0.0:
-		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up) * f
+		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	var pk := hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2)
-	r = minf(r * (1.0 + 0.35 * pk * r), PEAK_CAP)
+	r = minf(r * (1.0 + (0.35 + 0.70 * structure) * pk * r), PEAK_CAP)
 	# С 3.5 у сглаженных массивов середина склона образует широкое пологое плечо.
 	# Два плавных края ограничивают его одним поясом; долины и вершины сохраняются.
 	# С GEO 6 плечо есть и у гор (слабее): склон идёт ярусами — предгорье, плечо, вершина.
@@ -353,7 +354,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 ## гребень) несимметрична: с одной стороны склон круче в asym раз. С 3.1 больше веса у главного гребня,
 ## мелких октав две вместо трёх, их вес убывает быстрее: они уточняют склон, а не дробят его на бугры
 ## interior — сила внутренних долин и котловин (с 3.4); у сглаженных массивов 0.45, у гор до 1.
-static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0) -> float:
+static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0, structure: float = 0.0) -> float:
 	var along := X * dc + Y * ds
 	var across := Y * dc - X * ds
 	var u := along / RIDGE_ALONG
@@ -368,7 +369,9 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		# от n = 0, то есть отвесную ступеньку вдоль гребня даже при плавном шуме
 		if o == 0:
 			n *= asym if n > 0.0 else 1.0 / asym
-		var e := sqrt(n * n + CREST_ROUND * CREST_ROUND)
+		var rounding := CREST_ROUND - 0.16 * structure if o == 0 else CREST_ROUND
+		# Keep the height at the crest while tightening the cap around it.
+		var e := sqrt(n * n + rounding * rounding) + CREST_ROUND - rounding
 		var val := maxf(0.0, 1.0 - e)
 		val *= val
 		val *= wt
@@ -391,10 +394,15 @@ static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asy
 		t = clampf(1.0 - absf(side) / 0.2, 0.0, 1.0)
 		var branch := t * t * (3.0 - 2.0 * t)
 		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
-		s *= 1.0 - branch * t * t * (3.0 - 2.0 * t) * (1.0 - valley) * SIDE_CUT * interior
-		# A shoulder follows the same ribs, with its level varying along the valley.
-		# Broad transitions leave traversable shelves, never a quantized terrace.
+		var drainage := t * t * (3.0 - 2.0 * t)
+		s *= 1.0 - branch * drainage * (1.0 - valley) * (SIDE_CUT - 0.10 * (1.0 - structure)) * interior
+		# Interfluves join the main crest and taper out into the valley floor.
+		var spur := (1.0 - branch) * drainage * (1.0 - valley)
+		s += 0.20 * spur * smoothstep(0.16, 0.46, s) * structure
 		var shelf_level := 0.36 + 0.12 * opening
 		var shelf := smoothstep(shelf_level - 0.12, shelf_level, s) * (1.0 - smoothstep(shelf_level, shelf_level + 0.12, s))
 		s += (shelf_level - s) * shelf * 0.35 * fine * interior * (1.0 - 0.8 * valley)
+		# A short scarp at the outer lip of each spur, at varying heights along the massif.
+		var lip := smoothstep(shelf_level - 0.09, shelf_level - 0.025, s) * (1.0 - smoothstep(shelf_level + 0.02, shelf_level + 0.16, s))
+		s += 0.16 * lip * spur * structure
 	return s
