@@ -48,7 +48,15 @@ var _cells := {}                    # клетка -> номера сооруж�
 var outer_structures: Array = []    # 13.9: мосты закреплённых соседних областей (в конце structures)
 var _outer_cells := {}              # Vector2i клетки за картой -> номера сооружений
 var _deck_keys := {}                # настилы Trail Lab, уже добавленные (add_decks)
-var road_refinement: RoadRefinement # 4.4: метровая сетка только у дорог, общая для меша и опоры
+var road_refinement: RoadRefinement: # 4.4: метровая сетка только у дорог, общая для меша и опоры
+	set(value):
+		road_refinement = value
+		clear_rock_seats()
+## 09.11.2026: опоры крупных камней (RockModels.seat у выходов и массивов) — их считают отрисовка, раскладка травы
+## и препятствия по многу раз; опора скального массива стоит около миллисекунды. Ключ — Vector3(x, z, вариант);
+## сбрасывается при смене полотна дорог и сооружений (опора читает их через ground_at).
+var rock_seats := {}
+var rock_seats_lock := Mutex.new()
 var path_timings := {}
 var obstacles: ForestObstacles      # 7.7: стволы, валуны и валежник у игрока (ставит GameWorld; без него их нет)
 var trail_technical := {}           # объекты технических элементов трасс (TrailTechnical.build): StageTrailPlan, Trail Lab
@@ -272,7 +280,15 @@ func finish_paths() -> PackedInt32Array:
 	path_timings.structures_ms = (Time.get_ticks_usec() - t) / 1000.0
 	road_refinement = RoadRefinement.build(self)
 	path_timings.merge(road_refinement.build_timings)
+	clear_rock_seats()
 	return changed
+
+
+func clear_rock_seats() -> void:
+	if rock_seats_lock == null: return
+	rock_seats_lock.lock()
+	rock_seats.clear()
+	rock_seats_lock.unlock()
 
 
 ## Мосты и туннели из w.bridges и w.tunnels в метрах; под туннелями рельеф опускается до пола.
@@ -357,6 +373,7 @@ func add_outer_bridges(spans: Array) -> Array:
 ## deck_at / surface_at, а с края падает на землю. Каждый — прямой кусок {key, half, ax, az, ay, bx, bz, by};
 ## ключ, который уже добавлен, пропускается. Вызывать после build_structures.
 func add_decks(list: Array) -> void:
+	clear_rock_seats()
 	for d: Dictionary in list:
 		if _deck_keys.has(d.key):
 			continue

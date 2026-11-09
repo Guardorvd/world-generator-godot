@@ -154,10 +154,13 @@ static func fields(w: WorldData) -> Dictionary:
 	var structure := structure_rect(w, 0, 0, W, H, true)
 	w.generation.surface_rock=Surface.field(elev,slope,moist)
 	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
-	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
-	return {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
+	var out := {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,
 		light = light, age_n = age_n, rock=w.generation.surface_rock}.merged(structure)
+	# Скальные массивы всего плана — один раз, а не заново в каждом чанке (RockMassif.near).
+	out.massifs = RockMassif.sites(w.seed_num, 0, 0, W, H, out, 0, 0, W, w.path_mask)
+	w.generation_profile.forest_fields_ms = (Time.get_ticks_usec() - started) / 1000.0
+	return out
 
 
 ## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и PATH_MARGIN. Тот же расчёт у плана
@@ -253,7 +256,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var mask := WGRandom.MASK
 	store.begin_chunk(x0, y0, x1, y1)
 	# 09.11.2026: скальные массивы решаются до деревьев: в их теле деревьев и камыша нет (RockMassif.covers).
-	var massifs := RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
+	var massifs: PackedFloat32Array = RockMassif.near(f.massifs, x0, y0, x1, y1) if f.has("massifs") \
+		else RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox

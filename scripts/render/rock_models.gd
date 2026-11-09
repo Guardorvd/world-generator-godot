@@ -666,18 +666,31 @@ static func outcrop_solids(xf: Transform3D, form: int) -> PackedFloat32Array:
 ## x = INF — камень не ставится. Общая для отрисовки, препятствий и раскладки подлеска.
 static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
 	if is_outcrop(v):
-		return outcrop_seat(func(px: float, pz: float) -> Vector2:
-			var cell := Vector2i(floori(px / GameConfig.TILE), floori(pz / GameConfig.TILE))
-			if cell.x >= 0 and cell.y >= 0 and cell.x < heights.world.W and cell.y < heights.world.H:
-				var index := cell.y * heights.world.W + cell.x
-				if index < heights.world.path_mask.size() and heights.world.path_mask[index] > 0: return Vector2(INF, INF)
-			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, heights.world.W) > 0.08: return Vector2(INF, INF)
-			return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE, v)
+		var key := Vector4(x, z, scale, v)
+		heights.rock_seats_lock.lock()
+		var known: Variant = heights.rock_seats.get(key)
+		heights.rock_seats_lock.unlock()
+		if known != null: return known
+		var found := _outcrop_seat_live(heights, x, z, scale, v)
+		heights.rock_seats_lock.lock()
+		heights.rock_seats[key] = found
+		heights.rock_seats_lock.unlock()
+		return found
 	var normal := normal_at(heights, x, z)
 	var ground := heights.ground_at(x, z)
 	if not has_seat(heights, x, z, scale, normal, ground):
 		return Vector4(INF, 0, 1, 0)
 	return Vector4(ground, normal.x, normal.y, normal.z)
+
+
+static func _outcrop_seat_live(heights: Heightfield, x: float, z: float, scale: float, v: int) -> Vector4:
+	return outcrop_seat(func(px: float, pz: float) -> Vector2:
+		var cell := Vector2i(floori(px / GameConfig.TILE), floori(pz / GameConfig.TILE))
+		if cell.x >= 0 and cell.y >= 0 and cell.x < heights.world.W and cell.y < heights.world.H:
+			var index := cell.y * heights.world.W + cell.x
+			if index < heights.world.path_mask.size() and heights.world.path_mask[index] > 0: return Vector2(INF, INF)
+		if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, heights.world.W) > 0.08: return Vector2(INF, INF)
+		return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE, v)
 
 
 ## То же по снимку области за краем (фоновый поток, без живого мира).

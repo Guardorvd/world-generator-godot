@@ -89,6 +89,8 @@ func _watchdog_limit() -> float:
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, _watchdog_limit())
+	# 09.11.2026: старт и вступление в одном и том же месте: иначе осмотр и пролёт меряются в случайном месте мира.
+	preload("res://scripts/game/opening_route.gd").fixed_seed = 1
 	t_start = Time.get_ticks_msec()
 	out = Dev.out_dir()
 	if "--legacy-dod" in OS.get_cmdline_user_args():
@@ -309,6 +311,8 @@ func _process(delta: float) -> bool:
 			if game.pause_requested.is_connected(main._toggle_pause):
 				game.pause_requested.disconnect(main._toggle_pause)
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+			# Вступительный облёт ведёт свою камеру: без завершения точка осмотра — кадр вступления.
+			if game._opening: game._finish_opening()
 			game.camera.fov = 70.0
 			spawn = game.camera.global_transform
 			yaw0 = game.yaw

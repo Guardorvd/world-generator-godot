@@ -225,6 +225,14 @@ func run() -> void:
 				if px >= 0 and py >= 0 and px < N * 4 and py < N * 4 and (dx * dx + dy * dy > (r - 2) * (r - 2) or not ok): map.set_pixel(px, py, c)
 	map.save_png(OUT.path_join("massifs_map.png"))
 	print("ROCKS after=", st_after.x.size(), " outcrops=", outcrops, " seated=", seated)
+	var bench_t := Time.get_ticks_usec(); var bench_n := 0; var bench_o := 0
+	for o in st_after.x.size():
+		if RockModels.is_massif(st_after.v[o]): RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, st_after.s[o] * 1.2, st_after.v[o]); bench_n += 1
+	var massif_us := (Time.get_ticks_usec() - bench_t) / maxf(1.0, bench_n)
+	bench_t = Time.get_ticks_usec()
+	for o in st_after.x.size():
+		if RockModels.is_outcrop(st_after.v[o]) and not RockModels.is_massif(st_after.v[o]): RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, st_after.s[o] * 1.2, st_after.v[o]); bench_o += 1
+	print("SEAT_US massif=", massif_us, " outcrop=", (Time.get_ticks_usec() - bench_t) / maxf(1.0, bench_o))
 	print("MASSIFS candidates=", stats.get("candidates", 0), " rejected_path=", stats.get("path", 0), " rejected_water=", stats.get("water", 0),
 		" placed=", massifs, " placed_by_form=", placed_by_form, " seated=", massif_seated, " wall/rib/tor/blocks=", by_form, " seat_rejects=", RockModels.debug_rejects)
 	RockModels.debug_on = false

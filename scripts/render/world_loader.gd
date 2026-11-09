@@ -229,8 +229,7 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 	if start_at.is_finite():
 		points.push_front(start_at)
 	else:
-		var rng := RandomNumberGenerator.new()
-		rng.randomize()
+		var rng: RandomNumberGenerator = preload("res://scripts/game/opening_route.gd").make_rng()
 		opening_spot = preload("res://scripts/game/opening_route.gd").choose(world, heights, rng)
 		if not opening_spot.is_empty(): points.push_front(Vector2(opening_spot.position.x, opening_spot.position.z))
 	startup_at = points[0]

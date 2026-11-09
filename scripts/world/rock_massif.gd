@@ -21,7 +21,7 @@ const SNAP := 1.2           # насколько место сдвигается
 const MAX_R := 4.5          # наибольший радиус пятна массива, клеток (r × масштаб отрисовки / TILE)
 ## Поля читаются в клетке места и у соседей (±1): место дальше чанка не более чем на MAX_R + SNAP,
 ## поэтому запас полей за краем — MAX_R + SNAP + 1 <= RockScatter.FIELD_HALO.
-const STRIDE := 8           # x, y (клетки), форма, масштаб, оттенок, радиус пятна (клетки), вниз x, y
+const STRIDE := 10          # x, y (клетки), obj_v, масштаб, оттенок, радиус пятна (клетки), вниз x, y, исходное место x, y
 const LAYER := 0x4d415353
 const Spec := RockModels.MASSIF_SPEC
 
@@ -62,6 +62,7 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			var sx := (lx + 0.15 + 0.7 * WGRandom.hash2(lx, ly, seed_num ^ LAYER)) * LATTICE
 			var sy := (ly + 0.15 + 0.7 * WGRandom.hash2(lx, ly, seed_num ^ 0x53495445)) * LATTICE
 			if sx < x0 - reach or sy < y0 - reach or sx >= x1 + reach or sy >= y1 + reach: continue
+			var site := Vector2(sx, sy)
 			var cx := floori(sx) - ox
 			var cy := floori(sy) - oy
 			if cx < 1 or cy < 1 or cx + 1 >= stride or cy + 1 >= rows: continue
@@ -162,7 +163,21 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			# Рисунок — один на чанк (меньше групп MultiMesh), соседние чанки разные.
 			var variant := int(WGRandom.hash2(floori(sx / WorldData.CHUNK_SIZE), floori(sy / WorldData.CHUNK_SIZE), seed_num ^ 0x56415249) * RockModels.MASSIF_VARIANTS)
 			var tint := int(clampf(sturdy * 3.0, 0.0, 2.0))
-			out.append_array(PackedFloat32Array([sx, sy, RockModels.massif_v(form, variant, tint), scale, tint, radius, down.x, down.y]))
+			out.append_array(PackedFloat32Array([sx, sy, RockModels.massif_v(form, variant, tint), scale, tint, radius, down.x, down.y, site.x, site.y]))
+	return out
+
+
+## Массивы списка всего плана (sites по всей карте), которые sites(x0, y0, x1, y1) вернул бы для чанка:
+## тот же отбор по исходному месту и тот же порядок, поэтому план и чанки за краем считают одинаково,
+## а план не решает одни и те же места заново в каждом чанке.
+static func near(all: PackedFloat32Array, x0: int, y0: int, x1: int, y1: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var reach := MAX_R + SNAP
+	for at in range(0, all.size(), STRIDE):
+		var sx := all[at + 8]
+		var sy := all[at + 9]
+		if sx < x0 - reach or sy < y0 - reach or sx >= x1 + reach or sy >= y1 + reach: continue
+		out.append_array(all.slice(at, at + STRIDE))
 	return out
 
 

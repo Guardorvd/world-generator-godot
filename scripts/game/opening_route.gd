@@ -2,6 +2,16 @@ extends RefCounted
 ## 11.0: выбираем место отдельным RNG, затем ближайшую готовую дорогу/тропу.
 ## Используем уже проложенную линию, без нового поиска маршрутов и проверок коридора.
 const SPEED := 3.0
+## Инструменты проверки (tools/control/check.gd): не 0 — одно и то же место старта и вступления в каждом прогоне,
+## иначе замер FPS «было/стало» снимается в разных местах мира. В игре 0 — случайное место.
+static var fixed_seed := 0
+
+
+static func make_rng() -> RandomNumberGenerator:
+	var rng := RandomNumberGenerator.new()
+	if fixed_seed != 0: rng.seed = fixed_seed
+	else: rng.randomize()
+	return rng
 
 
 static func choose(w: WorldData, h: Heightfield, rng: RandomNumberGenerator) -> Dictionary:

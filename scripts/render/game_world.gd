@@ -250,8 +250,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	load_timings.start_scene_ms = (t - scene_started) / 1000.0
 
 	var spawn_started := Time.get_ticks_usec()
-	var rng := RandomNumberGenerator.new()
-	rng.randomize()
+	var rng := OpeningRoute.make_rng()
 	var opening_spot := (loaded.opening_spot if loaded.opening_prepared else OpeningRoute.choose(world, heights, rng)) if saved.is_empty() else {}
 	load_timings.start_spawn_ms = (Time.get_ticks_usec() - spawn_started) / 1000.0
 	# Restore pinned regions even when generation of new regions is disabled.
