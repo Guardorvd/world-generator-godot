@@ -135,7 +135,7 @@ public partial class FastGrid
 	/// <summary>Патчи метровой сетки по клеткам keys. Входные отрезки — столбцы из RoadIndex (a, delta, len2, half, road, surf,
 	/// next, ha, hb, along, route, starts, candidates), fitStart/fitCount — смещение и длина профиля подгонки пути (по номеру
 	/// пути), fits — profile/strength/limit подряд; corStart/corCount — начало (в числах) и число станций форм коридора пути,
-	/// corridor — 7 чисел на станцию (RoadFitNetwork). Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
+	/// corridor — CorridorStride чисел на станцию (RoadFitNetwork). Возвращает {patches — словарь клетка -> {h, color, uv, surface, road},
 	/// points — число уникальных вершин}.</summary>
 	public Godot.Collections.Dictionary RoadPatches(int[] keys, int width, int height, double tile, int div,
 		Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext,
@@ -152,9 +152,13 @@ public partial class FastGrid
 		var request = new int[fineW * fineH];
 		Array.Fill(request, -1);
 		var points = new List<Vector2>(keys.Length * 16);
+		var patchKeys = new List<int>(keys.Length);
 		foreach (int key in keys)
 		{
 			int cx = key % width, cz = key / width;
+			if (!RoadPatchMayChange(key, cx, cz, tile, step, cellStarts, candidates, segA, segDelta, segLen2, segHalf,
+				segAlong, segRoute, corStart, corCount, corridor)) continue;
+			patchKeys.Add(key);
 			for (int z = 0; z < stride; z++)
 			{
 				for (int x = 0; x < stride; x++)
@@ -170,6 +174,7 @@ public partial class FastGrid
 		int count = points.Count;
 		var hs = new float[count]; var colors = new Color[count]; var uv = new Vector2[count];
 		var surface = new byte[count]; var roadFlags = new byte[count];
+		var active = new bool[count];
 		int chunks = (count + 4095) / 4096;
 		Parallel.For(0, chunks, c =>
 		{
@@ -181,15 +186,21 @@ public partial class FastGrid
 					ref selected, ref u, ref dist, ref side);
 				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, segHalf, segRoad, segSurf, segNext, segHa, segHb,
 					segAlong, segLen2, segRoute, segA, segDelta, fitStart, fitCount, fits, corStart, corCount, corridor, surfaces, ground, water, distWater, noise, origin,
-					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags);
+					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags, active);
 			}
 		});
 		double msVertices = clock.Elapsed.TotalMilliseconds;
-		var patches = new Godot.Collections.Dictionary();
+		using var patches = new Godot.Collections.Dictionary();
 		int cellsPer = stride * stride;
-		foreach (int key in keys)
+		foreach (int key in patchKeys)
 		{
 			int cx = key % width, cz = key / width;
+			// Leave cells whose vertices all lie on the original terrain in the coarse mesh.
+			bool changed = false;
+			for (int z = 0; z < stride && !changed; z++)
+				for (int x = 0; x < stride && !changed; x++)
+					changed = active[request[(cz * div + z) * fineW + cx * div + x]];
+			if (!changed) continue;
 			var ph = new float[cellsPer]; var pc = new Color[cellsPer]; var pu = new Vector2[cellsPer];
 			var ps = new byte[cellsPer]; var pr = new byte[cellsPer];
 			for (int z = 0; z < stride; z++)
@@ -201,10 +212,35 @@ public partial class FastGrid
 				}
 			}
 			// ключи — StringName, как у литерала {h = ...} в GDScript: словарь побайтно тот же
-			patches[key] = new Godot.Collections.Dictionary { [NameH] = ph, [NameColor] = pc, [NameUv] = pu, [NameSurface] = ps, [NameRoad] = pr };
+			using var patch = new Godot.Collections.Dictionary { [NameH] = ph, [NameColor] = pc, [NameUv] = pu, [NameSurface] = ps, [NameRoad] = pr };
+			patches[key] = patch;
 		}
 		return new Godot.Collections.Dictionary { ["patches"] = patches, ["points"] = count, ["ms_points"] = msPoints,
 			["ms_vertices"] = msVertices - msPoints, ["ms_assemble"] = clock.Elapsed.TotalMilliseconds - msVertices };
+	}
+
+	private static bool RoadPatchMayChange(int key, int cx, int cz, double tile, double step, int[] starts, int[] candidates,
+		Vector2[] anchors, Vector2[] deltas, double[] lengths, double[] halves, double[] along, int[] routes,
+		int[] corStart, int[] corCount, double[] corridor)
+	{
+		var center = new Vector2((float)((cx + 1) * tile), (float)((cz + 1) * tile));
+		double corner = tile * 0.71;
+		for (int j = starts[key]; j < starts[key + 1]; j++)
+		{
+			int id = candidates[j];
+			Vector2 offset = center - anchors[id];
+			double t = Math.Clamp((double)offset.Dot(deltas[id]) / lengths[id], 0.0, 1.0);
+			double distance = (offset - deltas[id] * (float)t).Length();
+			if (distance <= halves[id] + 3.0 + corner) return true;
+			int route = routes[id], count = corCount[route];
+			if (count == 0) continue;
+			double station = along[id] + t * Math.Sqrt(lengths[id]);
+			int lo = Math.Clamp((int)Math.Floor((station - corner) / step), 0, count - 1);
+			int hi = Math.Clamp((int)Math.Ceiling((station + corner) / step), 0, count - 1);
+			for (int s = lo; s <= hi; s++)
+				if (corridor[corStart[route] + s * CorridorStride + 7] > 0.0) return true;
+		}
+		return false;
 	}
 
 	private static void RoadNearest(Vector2 point, int width, int height, double tile, double reach, Vector2[] anchors, Vector2[] deltas,
@@ -215,7 +251,9 @@ public partial class FastGrid
 		int z = Math.Clamp((int)Math.Floor(point.Y / tile - 0.5), 0, height - 2);
 		int key = z * width + x;
 		double best = double.PositiveInfinity;
+		bool fitted = false;
 		selected = -1;
+		Vector2 bestOffset = default;
 		for (int j = starts[key]; j < starts[key + 1]; j++)
 		{
 			int id = candidates[j];
@@ -223,12 +261,15 @@ public partial class FastGrid
 			double f = Math.Clamp((double)(point - anchors[id]).Dot(delta) / lengths[id], 0.0, 1.0);
 			Vector2 offset = point - (anchors[id] + delta * (float)f);
 			double d = offset.Length();
+			bool inFit = d < halves[id] + 3.0;
 			double rank = d / halves[id] - (roads[id] != 0 ? 0.08 : 0.0);
-			if (d < halves[id] + reach && rank < best)
+			if (d < halves[id] + reach && (inFit && !fitted || inFit == fitted && rank < best))
 			{
-				best = rank; selected = id; uOut = f; distOut = d; sideOut = offset.Cross(delta.Normalized());
+				best = rank; fitted = inFit; selected = id; uOut = f; distOut = d; bestOffset = offset;
 			}
 		}
+		if (selected >= 0)
+			sideOut = bestOffset.Cross(deltas[selected].Normalized());
 	}
 
 	/// <summary>RoadRefinement._vertex для одной точки без пути (selected &lt; 0) и с путём; тот же порядок операций, что у
@@ -238,7 +279,7 @@ public partial class FastGrid
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, double[] fits,
 		int[] corStart, int[] corCount, double[] corridor, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap,
-		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut)
+		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active)
 	{
 		double x = pt.X, z = pt.Y;
 		double baseHeight = RoadGround(ground, width, height, tile, x, z);
@@ -293,13 +334,13 @@ public partial class FastGrid
 		{
 			double gain = pin * RoadReliefEdge(pt, width, height, tile);
 			relief = RoadCorridorShape(corridor, corStart[route], corCount[route], (segAlong[selected] + u * Math.Sqrt(segLen2[selected])) / step,
-				side, distance, half, out double section, out double bank) * gain;
+				side, distance, half, noise, x + origin.X, z + origin.Y, out double section, out double bank) * gain;
 			RoadCorridorColor(ref color, section, bank, gain);
 		}
 		colors[n] = color;
 		double delta = Math.Clamp(target - baseHeight, -limit, limit);
 		double value = baseHeight + delta * influence * pin * power;
-		if (fitLen > 0 && float.IsNegativeInfinity(water[cell]) && power > 0.0)
+		if (fitLen > 0 && influence > 0.0 && float.IsNegativeInfinity(water[cell]) && power > 0.0)
 		{
 			var a = segA[selected];
 			var d = segDelta[selected];
@@ -320,6 +361,7 @@ public partial class FastGrid
 		if (float.IsNegativeInfinity(water[cell]) && value < baseHeight)
 			value = Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
 		hs[n] = (float)value;
+		active[n] = hs[n] != (float)baseHeight || color.A > 0.0f;
 	}
 }
 

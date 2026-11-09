@@ -57,13 +57,41 @@ func details_clear(box: AABB) -> bool:
 
 
 ## На переломах склона плоская деталь иначе висит в воздухе или проваливается.
-func terrain_fits(xf: Transform3D, box: AABB) -> bool:
+func terrain_fits(xf: Transform3D, box: AABB, tolerance := 0.18) -> bool:
 	for j in 3:
 		for i in 3:
 			var point := xf * Vector3(lerpf(box.position.x, box.end.x, i * 0.5), 0.0, lerpf(box.position.z, box.end.z, j * 0.5))
-			if absf(point.y + 0.015 - heights.ground_at(point.x, point.z)) > 0.18:
+			if absf(point.y + 0.015 - heights.ground_at(point.x, point.z)) > tolerance:
 				return false
 	return true
+
+
+## Long trail debris follows the chord of its contact points. The local tangent
+## at the midpoint is unreliable on a rut, at a shoulder or on a grade break.
+func seat_road_span(xf: Transform3D, span: Vector2, sink: float, tolerance: float, settle: float) -> Transform3D:
+	var left := span.x
+	var right := span.y
+	var a := xf * Vector3(left, 0.0, 0.0)
+	var b := xf * Vector3(right, 0.0, 0.0)
+	var ya := heights.ground_at(a.x, a.z)
+	var yb := heights.ground_at(b.x, b.z)
+	xf.basis.x.y = (yb - ya) / (right - left)
+	xf.origin.y = ya - left * xf.basis.x.y - 0.015 - sink
+	var low := INF
+	var high := -INF
+	for j in 7:
+		var p := xf * Vector3(lerpf(left, right, j / 6.0), 0.0, 0.0)
+		if heights.depth_at(p.x, p.z) > 0.0 or heights._cell_list(p.x, p.z) != null:
+			return Transform3D()
+		var error := heights.ground_at(p.x, p.z) - p.y
+		low = minf(low, error)
+		high = maxf(high, error)
+	# Logs can rest on raised ground. Roots should hug it closely enough for
+	# their two small arches to emerge and their tips to stay in the soil.
+	if high - low > tolerance * xf.basis.y.y:
+		return Transform3D()
+	xf.origin.y += lerpf(low, high, settle) - 0.015 - sink
+	return xf
 
 
 ## Проверяем весь след у воды, дорог и домов; шаг не больше метра.

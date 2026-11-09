@@ -72,7 +72,7 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 	if _task != -1:
 		if not force and not WorkerThreadPool.is_task_completed(_task):
 			return
-		finish()
+		finish(version == _version)
 	if not force and version == _version and Vector2(px, pz).distance_to(_center) < REBUILD:
 		return
 	_center = Vector2(px, pz)
@@ -86,13 +86,13 @@ func update(px: float, pz: float, details: PackedFloat32Array, version: int, for
 	_adopt(job)
 
 
-## Дожидается фоновой пересборки и принимает её, если с запуска не сменился постоянный слой
-func finish() -> void:
+## Дожидается пересборки. Снимок можно принять, пока актуальны подлесок и постоянный слой.
+func finish(adopt := true) -> void:
 	if _task == -1:
 		return
 	WorkerThreadPool.wait_for_task_completion(_task)
 	_task = -1
-	if _job.generation == _generation:
+	if adopt and _job.generation == _generation:
 		_adopt(_job)
 	_job = {}
 

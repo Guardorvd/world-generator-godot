@@ -10,8 +10,10 @@ extends SceneTree
 ## «стало» с --base <папка прогона «было»> кладёт снимки парами (слева было, справа стало) и печатает обе сводки.
 ##   godot --path . --script res://tools/road_corridor_probe.gd -- [--tag after] [--out <папка>] [--fixtures <папка>]
 ##         [--base <папка>] [--seeds Север-1234,Туман-4821,Ущелье] [--no-shots] [--runs 3]
+##         [--clutter] [--ride-metres 550] [--ride-clutter] [--verify-roots] [--sections forest] [--shot-kinds road,forest]
 
 const Snapshot := preload("res://scripts/game/surface_snapshot.gd")
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const TILE := GameConfig.TILE
 const KINDS := ["road", "trail", "mountain"]
 const WINDOW := 20          # м, окно продольной меры
@@ -25,17 +27,32 @@ var fixtures := "res://tools/control/runs/road_relief"
 var base_dir := ""
 var seeds := PackedStringArray(["Север-1234", "Туман-4821", "Ущелье"])
 var shots := true
+var clutter := false
+var ride_clutter := false
+var verify_roots := false
+var ride_metres := 95
 var runs := 3
 var summary := {}
 var stations := {} # сид -> путь -> высоты станций подряд: ось, линии ±0,5, края ±0,9 полуширины, закреплено (1/0)
 var mesh_node: MeshInstance3D
 var camera: Camera3D
+var vegetation: VegetationLayer
+var terrain_material: ShaderMaterial
+var shot_kinds := PackedStringArray()
+var section_kinds := PackedStringArray()
+var clutter_mismatches := 0
 
 
 func _arg(name: String, fallback: String) -> String:
 	var a := OS.get_cmdline_user_args()
 	var at := a.find("--" + name)
 	return a[at + 1] if at >= 0 and at + 1 < a.size() else fallback
+
+
+func _warm_median(times: Array) -> float:
+	var warm := times.slice(1)
+	warm.sort()
+	return (warm[(warm.size() - 1) / 2] + warm[warm.size() / 2]) * 0.5
 
 
 func _initialize() -> void:
@@ -48,6 +65,12 @@ func _initialize() -> void:
 	var listed := _arg("seeds", "")
 	if listed != "": seeds = listed.split(",")
 	shots = not "--no-shots" in OS.get_cmdline_user_args() and DisplayServer.get_name() != "headless"
+	shot_kinds = _arg("shot-kinds", "").split(",", false)
+	section_kinds = _arg("sections", "").split(",", false)
+	clutter = "--clutter" in OS.get_cmdline_user_args()
+	ride_clutter = "--ride-clutter" in OS.get_cmdline_user_args() and clutter
+	verify_roots = "--verify-roots" in OS.get_cmdline_user_args() and clutter
+	ride_metres = clampi(int(_arg("ride-metres", "95")), 95, 1000)
 	DirAccess.make_dir_recursive_absolute(out)
 	run.call_deferred()
 
@@ -82,26 +105,58 @@ func run() -> void:
 			h.finish_paths()
 			times.append((Time.get_ticks_usec() - started) / 1000.0)
 			stages = h.path_timings.duplicate()
-		var warm := times.slice(1) if times.size() > 1 else times
-		warm.sort()
-		var row := {seed = seed_text, finish_ms = times, finish_warm_median_ms = warm[warm.size() / 2], stages = stages}
-		var sections := _sections(w, h)
+		var row := {seed = seed_text, finish_ms = times, stages = stages}
+		if times.size() > 1:
+			row.finish_warm_median_ms = _warm_median(times)
+		row.patches = h.road_refinement.patches.size()
+		if shots:
+			var terrain_image := MapBaker.finish(w, 1, [MapBaker.paint(w, 1, true, false)[0]], false)[0]
+			terrain_material = GameContext.scope.terrain.material(terrain_image)
+		var forest := Floor.surface_image(w) if clutter else null
+		var sections := _sections(w, h, forest)
 		stations = {}
 		row.metrics = _metrics(w, h)
 		FileAccess.open(out.path_join(seed_text + "_stations.bin"), FileAccess.WRITE).store_var(stations)
+		if clutter:
+			vegetation = VegetationLayer.new()
+			root.add_child(vegetation)
+			vegetation.setup(w, h, Models.tree_defs() if shots else {}, Models.grass_mesh(), forest)
+			vegetation.settings.trail_clutter = true
+			if "measure_road_clutter" in vegetation:
+				vegetation.set("measure_road_clutter", true)
 		row.sections = []
 		for s: Dictionary in sections:
+			if not section_kinds.is_empty() and not s.kind in section_kinds:
+				continue
+			var capture: bool = shots and (shot_kinds.is_empty() or s.kind in shot_kinds)
 			var ride := _ride(w, h, s)
 			s.ride = ride
 			s.profile = _profile(h, s)
+			if clutter:
+				s.clutter = _clutter_at(Vector2(s.x, s.z), capture)
+				print("CLUTTER ", seed_text, " ", s.kind, " ", JSON.stringify(s.clutter))
+			var root_at := _nearest_root(Vector2(s.x, s.z)) if verify_roots and s.kind == "forest" else Vector2.INF
+			if ride_clutter and s.kind == "forest":
+				s.clutter_ride = _ride(w, h, s, true)
+				print("CLUTTER RIDE ", seed_text, " ", JSON.stringify(s.clutter_ride))
+				h.obstacles = null
+				if capture: _clutter_at(Vector2(s.x, s.z), true)
 			row.sections.append(s.duplicate())
-			if shots: await _shoot(w, h, seed_text, s)
+			if capture: await _shoot(w, h, seed_text, s)
+			if root_at != Vector2.INF:
+				var near_root := _clutter_at(root_at, false)
+				row.sections[-1].root_contact = near_root
+				print("ROOT CONTACT ", seed_text, " ", root_at, " ", JSON.stringify(near_root))
+		if vegetation != null:
+			vegetation.free()
+			vegetation = null
 		summary[seed_text] = row
 		_print(seed_text, row)
+		FileAccess.open(out.path_join(seed_text + "_probe.json"), FileAccess.WRITE).store_string(JSON.stringify(row, "\t"))
 	FileAccess.open(out.path_join("probe.json"), FileAccess.WRITE).store_string(JSON.stringify(summary, "\t"))
 	if base_dir != "": _compare()
 	print("PROBE DONE ", out)
-	quit(0)
+	quit(1 if clutter_mismatches > 0 else 0)
 
 
 ## Станции через 1 м по линии пути: точка, полуширина
@@ -160,11 +215,11 @@ func _cell(w: WorldData, p: Vector2) -> int:
 	return clampi(floori(p.y / TILE), 0, w.H - 1) * w.W + clampi(floori(p.x / TILE), 0, w.W - 1)
 
 
-func _sections(w: WorldData, h: Heightfield) -> Array:
+func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
 	var pin := _pinned(w, h)
 	var picked := []
 	# по виду пути самый длинный; ещё самая длинная лесная тропа (покрытие у начала), если она есть
-	for kind: String in KINDS + ["forest"]:
+	for kind: String in KINDS + ([] if forest != null else ["forest"]):
 		var best := -1
 		var best_len := 0
 		for k in w.trails.size():
@@ -191,6 +246,28 @@ func _sections(w: WorldData, h: Heightfield) -> Array:
 		var surf: int = w.road_surface[_cell(w, ps[at])]
 		picked.append({kind = kind, route = best, station = at, x = ps[at].x, z = ps[at].y, surface = surf,
 			surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"})
+	if forest != null:
+		var best := {}
+		var best_cover := 0.0
+		for route in w.trails.size():
+			var trail: Dictionary = w.trails[route]
+			if trail.kind != "trail" or trail.has("trail_id"): continue
+			var points: PackedVector2Array = _stations(trail).p
+			for j in range(45, points.size() - 45, 16):
+				if pin[_cell(w, points[j])] != 0: continue
+				var cover := 0.0
+				for k in range(j - 24, j + 25, 8):
+					var side := _normal(points, k) * 4.0
+					for p: Vector2 in [points[k] - side, points[k] + side]:
+						var cell := _cell(w, p)
+						cover += forest.get_pixel(cell % w.W, cell / w.W).r
+				cover *= minf(1.0, (points.size() - j) / float(ride_metres))
+				if cover <= best_cover: continue
+				best_cover = cover
+				var surf: int = w.road_surface[_cell(w, points[j])]
+				best = {kind = "forest", route = route, station = j, x = points[j].x, z = points[j].y, surface = surf,
+					surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"}
+		if not best.is_empty(): picked.append(best)
 	return picked
 
 
@@ -350,8 +427,8 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 	return result
 
 
-## Заезд по участку: 70 м с 8 м/с, руль держит ось (точка в 5 м впереди)
-func _ride(w: WorldData, h: Heightfield, s: Dictionary) -> Dictionary:
+## Заезд по участку с 8 м/с, руль держит ось (точка в 5 м впереди).
+func _ride(w: WorldData, h: Heightfield, s: Dictionary, with_clutter := false) -> Dictionary:
 	var st := _stations(w.trails[s.route])
 	var ps: PackedVector2Array = st.p
 	var from: int = maxi(0, s.station - 25)
@@ -374,13 +451,21 @@ func _ride(w: WorldData, h: Heightfield, s: Dictionary) -> Dictionary:
 	var off := 0.0
 	var ticks := 0
 	var air := 0
-	for tick in hz * 12:
+	var fill_at := Vector2.INF
+	if with_clutter:
+		h.obstacles = ForestObstacles.new(w, h)
+	for tick in ceili(hz * ride_metres / 7.0):
 		var pos := Vector2(b.x, b.z)
+		if with_clutter and pos.distance_squared_to(fill_at) >= 35.0 * 35.0:
+			_clutter_at(pos, false)
+			h.obstacles.update(pos.x, pos.y, vegetation.obstacles, vegetation.obstacles_version, true)
+			h.obstacles.set_bumps(vegetation.bumps, vegetation.obstacles_version)
+			fill_at = pos
 		var best := INF
 		for j in range(near, mini(ps.size(), near + 12)):
 			var d := pos.distance_squared_to(ps[j])
 			if d < best: best = d; near = j
-		if near >= mini(ps.size() - 6, from + 95): break
+		if near >= mini(ps.size() - 6, from + ride_metres): break
 		var goal := ps[mini(ps.size() - 1, near + 5)] - pos
 		var want := atan2(-goal.x, -goal.y)
 		var steer := clampf(-wrapf(want - b.heading, -PI, PI) * 2.5, -1.0, 1.0)
@@ -406,9 +491,58 @@ func _ride(w: WorldData, h: Heightfield, s: Dictionary) -> Dictionary:
 		var2 += (v - mean) * (v - mean)
 		lo = minf(lo, v)
 		hi = maxf(hi, v)
-	return {metres = (near - from), ticks = ticks, crashed = b.crashed, airborne_ticks = air, axis_offset_m = off / maxi(1, ticks),
+	return {metres = (near - from), ticks = ticks, crashed = b.crashed, crash_cause = BikeRide.CrashCause.keys()[b.crash_cause],
+		airborne_ticks = air, axis_offset_m = off / maxi(1, ticks),
 		travel_rms_cm = sqrt(var2 / maxi(1, travel.size())) * 100.0, travel_range_cm = (hi - lo) * 100.0,
 		vertical_accel_rms = sqrt(accel / maxi(1, ticks - 1))}
+
+
+func _clutter_at(at: Vector2, trees: bool) -> Dictionary:
+	var started := Time.get_ticks_usec()
+	if trees:
+		vegetation.update(at.x, at.y, true)
+	else:
+		vegetation._fill_details(at.x, at.y, Vector2.ZERO, 0, 0.0, true)
+		vegetation._apply_grass(true)
+	var counts := {}
+	for kind: int in [Floor.BRANCH, Floor.STONES, Floor.LOG, Floor.MOSS_LOG, Floor.BOULDER, Floor.ROOT_SPAN]:
+		var group_id := Floor.FIRST + kind
+		var group: MultiMesh = vegetation.understory[group_id].mm
+		counts[kind] = group.visible_instance_count
+		if vegetation._far_of.has(group_id):
+			var distant: MultiMesh = vegetation.understory[vegetation._far_of[group_id]].mm
+			counts[kind] += distant.visible_instance_count
+	var parts: Dictionary = vegetation.get("road_clutter_stats").duplicate(true) if "road_clutter_stats" in vegetation else {}
+	if "road_clutter_stats" in vegetation:
+		var bumps := 0
+		for kind: int in [RoadObstacles.BRANCH, RoadObstacles.STONES, RoadObstacles.ROOT]:
+			var part: Dictionary = parts.get(kind, {})
+			bumps += int(part.get("CONTACT", 0))
+			if kind == RoadObstacles.STONES: continue # shared with the forest floor
+			var mesh_kind := Floor.BRANCH if kind == RoadObstacles.BRANCH else Floor.ROOT_SPAN
+			if counts[mesh_kind] != int(part.get("VISUAL", 0)) + int(part.get("CONTACT", 0)):
+				clutter_mismatches += 1
+				printerr("ROAD CLUTTER: missing MultiMesh instances of kind ", kind, " at ", at)
+		if vegetation.bumps.size() / 6 < bumps:
+			clutter_mismatches += 1
+			printerr("ROAD CLUTTER: missing wheel contacts at ", at)
+	return {
+		road_parts = parts,
+		multimesh_counts = counts, capsules = vegetation.obstacles.size() / 7, bumps = vegetation.bumps.size() / 6,
+		fill_and_upload_ms = (Time.get_ticks_usec() - started) / 1000.0,
+	}
+
+
+func _nearest_root(at: Vector2) -> Vector2:
+	var entry: Dictionary = vegetation.understory[Floor.FIRST + Floor.ROOT_SPAN]
+	var buffer: PackedFloat32Array = entry.buf
+	var best := Vector2.INF
+	for i in entry.count:
+		var offset: int = i * VegetationLayer.STRIDE
+		var point := Vector2(buffer[offset + 3], buffer[offset + 11])
+		if at.distance_squared_to(point) < at.distance_squared_to(best):
+			best = point
+	return best
 
 
 ## Высоты участка для чертежа: ось и две линии движения ±0,5 полуширины на ±30 м, три поперечника
@@ -436,7 +570,7 @@ func _profile(h: Heightfield, s: Dictionary) -> Dictionary:
 
 
 func _scene() -> void:
-	DisplayServer.window_set_size(Vector2i(1280, 720))
+	DisplayServer.window_set_size(Vector2i(1000, 562))
 	var env := WorldEnvironment.new()
 	env.environment = Environment.new()
 	var sky := Sky.new()
@@ -444,7 +578,7 @@ func _scene() -> void:
 	env.environment.background_mode = Environment.BG_SKY
 	env.environment.sky = sky
 	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	env.environment.ambient_light_energy = 0.6
+	env.environment.ambient_light_energy = 0.4
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	root.add_child(env)
 	var sun := DirectionalLight3D.new()
@@ -456,7 +590,7 @@ func _scene() -> void:
 	root.add_child(mesh_node)
 	camera = Camera3D.new()
 	camera.fov = 70.0
-	camera.far = 600.0
+	camera.far = 140.0
 	root.add_child(camera)
 	camera.make_current()
 
@@ -468,19 +602,12 @@ func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> v
 	var j: int = s.station
 	var box := Rect2(ps[j], Vector2.ZERO)
 	for k in range(maxi(0, j - 60), mini(ps.size(), j + 60)): box = box.expand(ps[k])
-	box = box.grow(24.0)
+	box = box.grow(155.0)
 	var cells := Rect2i(Vector2i((box.position / TILE).floor()), Vector2i((box.size / TILE).ceil()) + Vector2i.ONE)
 	var arrays := TerrainBuilder.build_arrays(w, h, cells)
 	var mesh := ArrayMesh.new()
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-	var img := Image.create(256, 256, false, Image.FORMAT_RGB8)
-	var noise := FastNoiseLite.new()
-	noise.frequency = 0.05
-	for y in 256:
-		for x in 256:
-			var v := noise.get_noise_2d(x, y) * 0.05
-			img.set_pixel(x, y, Color(0.33 + v, 0.48 + v, 0.20 + v * 0.5))
-	mesh.surface_set_material(0, GameContext.scope.terrain.material(img))
+	mesh.surface_set_material(0, terrain_material)
 	mesh_node.mesh = mesh
 	var back := ps[maxi(0, j - 9)]
 	var nn := _normal(ps, j)
@@ -492,7 +619,7 @@ func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> v
 		var v: Array = views[view]
 		var target: Vector2 = v[1]
 		camera.look_at_from_position(v[0], Vector3(target.x, h.ground_at(target.x, target.y) + float(v[2]), target.y), Vector3.UP)
-		for f in 10: await process_frame
+		for f in 3: await process_frame
 		await RenderingServer.frame_post_draw
 		var name := "%s_%s_%s.png" % [seed_text, s.kind, view]
 		root.get_texture().get_image().save_png(out.path_join(name))
@@ -520,7 +647,8 @@ func _side_camera(h: Heightfield, at: Vector2, nn: Vector2, half: float) -> Vect
 
 
 func _print(seed_text: String, row: Dictionary) -> void:
-	print("PROBE ", seed_text, " finish_paths warm median %.0f ms, runs %s" % [row.finish_warm_median_ms, str(row.finish_ms)])
+	var timing := "warm median %.0f ms" % row.finish_warm_median_ms if row.has("finish_warm_median_ms") else "single run"
+	print("PROBE ", seed_text, " finish_paths ", timing, ", runs ", row.finish_ms)
 	var names: Array = row.metrics.keys()
 	names.sort()
 	for name: String in names:
@@ -544,8 +672,13 @@ func _compare() -> void:
 		if not before.has(seed_text): continue
 		var a: Dictionary = before[seed_text]
 		var b: Dictionary = summary[seed_text]
-		lines.append("%s: finish_paths %.0f → %.0f мс (%+.0f%%)" % [seed_text, a.finish_warm_median_ms, b.finish_warm_median_ms,
-			(b.finish_warm_median_ms / a.finish_warm_median_ms - 1.0) * 100.0])
+		if a.finish_ms.size() > 1 and b.finish_ms.size() > 1:
+			var before_ms := _warm_median(a.finish_ms)
+			var after_ms := _warm_median(b.finish_ms)
+			lines.append("%s: finish_paths %.0f → %.0f мс (%+.0f%%)" % [seed_text, before_ms, after_ms,
+				(after_ms / before_ms - 1.0) * 100.0])
+		else:
+			lines.append("%s: геометрия сопоставима, замер времени с одним прогоном исключён" % seed_text)
 		for name: String in b.metrics:
 			if not a.metrics.has(name): continue
 			var x: Dictionary = a.metrics[name]

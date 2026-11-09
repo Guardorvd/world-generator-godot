@@ -3,6 +3,11 @@ const Policy := preload("res://scripts/render/vegetation_stream_policy.gd")
 const Snapshots := preload("res://scripts/render/vegetation_snapshots.gd")
 var fails := 0
 
+class ContactLayer extends VegetationLayer:
+	var version_at_upload := {}
+	func _present_group(group: int, _immediate: bool) -> void:
+		version_at_upload[group] = obstacles_version
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)
 	run.call_deferred()
@@ -27,7 +32,44 @@ func stamp(frame: Dictionary, x: float) -> float:
 	fails += 1
 	return 0.0
 
+func contact_publication() -> void:
+	var layer := ContactLayer.new()
+	layer.understory = [{}, {}, {}]
+	layer._last_contact_group = 1
+	layer._obstacles_next = PackedFloat32Array([4, 0, 4, 0, 0.3, 0, 0.4])
+	layer._bumps_next = PackedFloat32Array([5, 0, 5, 0, 0.3, 0.1])
+	layer._begin_present()
+	layer._present_next(Time.get_ticks_usec() - 1)
+	check(layer.obstacles_version == 0 and layer.obstacles.is_empty() and layer.bumps.is_empty(),
+		"Waiting for GPU budget leaves both contact buffers unpublished")
+	layer._present_next(0)
+	check(layer.version_at_upload == {-1: 0, 0: 0, 1: 0, 2: 1},
+		"Contacts publish after the last obstacle group, without waiting for later decorations")
+	check(layer.obstacles == layer._obstacles_next and layer.bumps == layer._bumps_next,
+		"Solids and wheel bumps publish together")
+	layer.version_at_upload.clear()
+	layer._apply_grass(true)
+	check(layer.version_at_upload == {-1: 1, 0: 1, 1: 1, 2: 1} and layer.obstacles_version == 2,
+		"Forced publication also uploads before publishing contacts")
+	layer.free()
+
+
+func stale_contacts() -> void:
+	var world := WorldData.new()
+	var heights := Heightfield.new()
+	var forest := ForestObstacles.new(world, heights)
+	forest.async_rebuild = true
+	forest.update(0, 0, PackedFloat32Array([4, 0, 4, 0, 0.3, 0, 0.4]), 1)
+	while not WorkerThreadPool.is_task_completed(forest._task):
+		await process_frame
+	forest.update(0, 0, PackedFloat32Array(), 2)
+	check(not forest.hits(4, 0, 0, 0.1), "A completed worker cannot install a superseded solid")
+	forest.finish()
+
+
 func run() -> void:
+	contact_publication()
+	await stale_contacts()
 	var history := Snapshots.new()
 	var bounds := AABB(Vector3.ZERO, Vector3.ONE * 40)
 	var first := rows([10, 20])
@@ -58,6 +100,12 @@ func run() -> void:
 	frame = history.merge(0, rows([]), 0, AABB(), 1, 14)
 	frame = history.merge(0, rows([]), 0, AABB(), 1, 15)
 	check(frame.count == 0, "Empty snapshots eventually release all retained plants")
+	frame = history.merge(1, rows([10]), 1, bounds, 1, 16, true)
+	frame = history.merge(1, rows([20]), 1, bounds, 1, 17, false, true)
+	check(stamp(frame, 20) == 0.0 and stamp(frame, 10) < 0.0,
+		"A new obstacle is visible immediately, while the outgoing obstacle can fade")
+	frame = history.merge(1, rows([10, 20]), 2, bounds, 1, 17.2, false, true)
+	check(stamp(frame, 10) == 0.0, "Returning obstacles are fully visible before their contacts can return")
 	var stamped := []
 	for fast in [false, true]:
 		Snapshots.allow_fast_stamps = fast

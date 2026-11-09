@@ -57,30 +57,15 @@ public partial class FastGrid : RefCounted
 		var result = new double[points.Length * 4];
 		for (int i = 0; i < points.Length; i++)
 		{
-			Vector2 point = points[i];
-			int x = Math.Clamp((int)Math.Floor(point.X / tile - 0.5), 0, width - 2);
-			int z = Math.Clamp((int)Math.Floor(point.Y / tile - 0.5), 0, height - 2);
-			int key = z * width + x;
-			double best = double.PositiveInfinity;
+			int selected = -1;
+			double u = 0.0, distance = 0.0, side = 0.0;
+			RoadNearest(points[i], width, height, tile, reach, anchors, deltas, lengths, halves, roads, starts, candidates,
+				ref selected, ref u, ref distance, ref side);
 			int at = i * 4;
-			result[at] = -1;
-			for (int j = starts[key]; j < starts[key + 1]; j++)
-			{
-				int id = candidates[j];
-				Vector2 delta = deltas[id];
-				double f = Math.Clamp((double)(point - anchors[id]).Dot(delta) / lengths[id], 0.0, 1.0);
-				Vector2 offset = point - (anchors[id] + delta * (float)f);
-				double d = offset.Length();
-				double rank = d / halves[id] - (roads[id] != 0 ? 0.08 : 0.0);
-				if (d < halves[id] + reach && rank < best)
-				{
-					best = rank;
-					result[at] = id;
-					result[at + 1] = f;
-					result[at + 2] = d;
-					result[at + 3] = offset.Cross(delta.Normalized());
-				}
-			}
+			result[at] = selected;
+			result[at + 1] = u;
+			result[at + 2] = distance;
+			result[at + 3] = side;
 		}
 		return result;
 	}

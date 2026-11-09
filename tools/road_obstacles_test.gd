@@ -185,12 +185,14 @@ func _count(scene: Array) -> Dictionary:
 	var kinds := [0, 0, 0, 0, 0]
 	var list: Array = []
 	var t: Dictionary = scene[0].trails[0]
+	var samples := road._sampled[0]
 	var length := 0.0
 	for n in range(1, t.pts.size()):
 		length += RoadObstacles._point(t, n).distance_to(RoadObstacles._point(t, n - 1))
+	for n in range(1, samples.size()):
 		var o := road.pick(scene[1], scene[2], 0, n)
 		if not o.is_empty():
-			o.mid = (RoadObstacles._point(t, n) + RoadObstacles._point(t, n - 1)) * 0.5
+			o.mid = (RoadObstacles._point(t, samples[n]) + RoadObstacles._point(t, samples[n - 1])) * 0.5
 			kinds[o.kind] += 1
 			list.append(o)
 			check(o.parts.size() >= 1 and o.parts.size() <= 3, "у препятствия от одной до трёх частей")
@@ -231,6 +233,24 @@ func _placement() -> void:
 	check(uphill, "валун лежит у края со стороны подъёма")
 	var again := _count(_world("trail", 0.9, 0.1))
 	check(str(again.list) == str(forest.list), "повтор раскладки даёт то же самое")
+	var dense := _world("trail", 0.9, 0.1)
+	var trail: Dictionary = dense[0].trails[0]
+	var fine: Array = [trail.pts[0]]
+	for j in range(1, trail.pts.size()):
+		var a: Dictionary = trail.pts[j - 1]
+		var b: Dictionary = trail.pts[j]
+		for k in range(1, 8):
+			fine.append({x = lerpf(a.x, b.x, k / 8.0), y = lerpf(a.y, b.y, k / 8.0), w = a.w})
+		fine.append(b)
+	trail.pts = fine
+	trail.surf.resize(fine.size())
+	trail.surf.fill(RoadSurface.FOREST)
+	check(str(_count(dense).list) == str(forest.list), "подразбиение линии на отрезки короче метра сохраняет препятствия")
+	var overlap := _world("trail", 0.9, 0.1)
+	overlap[0].trails.append(overlap[0].trails[0].duplicate(true))
+	check(str(_count(overlap).list) == str(forest.list), "дубль маршрута сохраняет препятствия общего полотна")
+	overlap[0].trails[1].trail_id = "authored"
+	check(_count(overlap).list.is_empty(), "у авторской трассы нет случайных дорожных препятствий")
 	var scene := _world("trail", 0.9, 0.1)
 	var cleared := RoadObstacles.new(scene[0])
 	var start := RoadObstacles._point(scene[0].trails[0], 120)

@@ -27,12 +27,13 @@ func cleanup_due(now: float) -> bool:
 			return true
 	return false
 
-func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false) -> Dictionary:
-	return commit(group, prepare(group, source, count, bounds, radius, now, immediate), now)
+func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false) -> Dictionary:
+	return commit(group, prepare(group, source, count, bounds, radius, now, immediate, instant_arrival), now)
 
 
 ## Подготовка выполняется фоновым потоком. История неизменна до завершения задачи.
-func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false) -> Dictionary:
+## Препятствия видны сразу после передачи группы, когда для неё могут включиться контакты.
+func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false) -> Dictionary:
 	var previous: PackedFloat32Array = displayed.get(group, PackedFloat32Array())
 	var rows: int = shown.get(group, previous.size() / STRIDE)
 	var changes := PackedFloat64Array()
@@ -46,11 +47,12 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 		var id := key(result, at)
 		var stamp := 0.0
 		if old.has(id):
-			stamp = previous[old[id] + 19]
-			if stamp < 0.0:
-				changes.append_array(PackedFloat64Array([at, 1, stamp]))
+			if not instant_arrival:
+				stamp = previous[old[id] + 19]
+				if stamp < 0.0:
+					changes.append_array(PackedFloat64Array([at, 1, stamp]))
 			old.erase(id)
-		elif not immediate:
+		elif not immediate and not instant_arrival:
 			changes.append_array(PackedFloat64Array([at, 2, 0]))
 		result[at + 19] = stamp
 	var box := bounds

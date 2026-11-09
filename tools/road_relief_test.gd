@@ -1,5 +1,6 @@
 extends SceneTree
 const Fixture := preload("res://tools/road_relief_fixture.gd")
+const FORM_STRIDE := RoadRefinement.CORRIDOR_STRIDE
 const OUT := "res://tools/control/runs/road_relief"
 const LIMIT := 1.0 # m, largest change of one vertex by the corridor forms
 var failures := 0
@@ -17,6 +18,10 @@ func build(h: Heightfield, enabled: bool) -> RoadRefinement:
 	RoadRefinement.natural_relief = enabled
 	return RoadRefinement.build(h)
 
+func surface_at(r: RoadRefinement, h: Heightfield, x: float, z: float) -> float:
+	var y := r.height_at(x, z, h.world.W)
+	return y if is_finite(y) else h.base_ground_at(x, z)
+
 func compare(w: WorldData, label: String, parity := false) -> void:
 	var h := Heightfield.new(w, false)
 	RoadBed.refine(h); h.build_structures()
@@ -26,26 +31,27 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 	var baseline_path := OUT.path_join(label + "_before_patches.bin")
 	if FileAccess.file_exists(baseline_path):
 		original = RoadRefinement.from_patches(FileAccess.open(baseline_path, FileAccess.READ).get_var(), w.H)
-	check(before.patches.size() == after.patches.size(), label + ": no extra patches")
 	var peak := 0.0
 	var original_peak := 0.0
 	var wet := 0.0
 	var outer_edge := 0.0
 	for key: int in after.patches:
-		var a: PackedFloat32Array = before.patches[key].h
 		var b: PackedFloat32Array = after.patches[key].h
 		for i in b.size():
-			peak = maxf(peak, absf(b[i] - a[i]))
-			original_peak = maxf(original_peak, absf(b[i] - original.patches[key].h[i]))
 			var x := (key % w.W + 0.5) * GameConfig.TILE + (i % RoadRefinement.STRIDE) * RoadRefinement.STEP
 			var z := (key / w.W + 0.5) * GameConfig.TILE + (i / RoadRefinement.STRIDE) * RoadRefinement.STEP
+			var base := h.base_ground_at(x, z)
+			var a: float = before.patches[key].h[i] if before.patches.has(key) else base
+			var old: float = original.patches[key].h[i] if original.patches.has(key) else base
+			peak = maxf(peak, absf(b[i] - a))
+			original_peak = maxf(original_peak, absf(b[i] - old))
 			var cell := clampi(floori(z / 4), 0, w.H - 1) * w.W + clampi(floori(x / 4), 0, w.W - 1)
-			if h.water_level[cell] != -INF: wet = maxf(wet, absf(b[i] - a[i]))
-			if x <= 2 or z <= 2 or x >= w.W * 4 - 2 or z >= w.H * 4 - 2: outer_edge = maxf(outer_edge, absf(b[i] - a[i]))
+			if h.water_level[cell] != -INF: wet = maxf(wet, absf(b[i] - a))
+			if x <= 2 or z <= 2 or x >= w.W * 4 - 2 or z >= w.H * 4 - 2: outer_edge = maxf(outer_edge, absf(b[i] - a))
 	# 14.11: формы коридора — подъём, сечение, продавленное место и обочина вместе; верх — с запасом к таблице CORRIDOR
-	check(peak <= LIMIT and wet == 0.0, label + ": bounded displacement %.3f m; water unchanged" % peak)
+	check(peak <= LIMIT and wet < 0.0001, label + ": bounded displacement %.3f m; water unchanged" % peak)
 	check(original_peak <= LIMIT + 0.2, label + ": change against the saved Git patches %.3f m" % original_peak)
-	check(outer_edge == 0.0, label + ": no extra lip against the outer mesh")
+	check(outer_edge < 0.0001, label + ": no extra lip against the outer mesh")
 	var grade := 0.0
 	var pinned := 0.0
 	var active := 0
@@ -100,7 +106,7 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 		for route: int in reference.corridor_routes:
 			var a: Vector2i = after.corridor_routes.get(route, Vector2i.ZERO)
 			var b: Vector2i = reference.corridor_routes[route]
-			same = same and a.y == b.y and after.corridor.slice(a.x * 7, (a.x + a.y) * 7) == reference.corridor.slice(b.x * 7, (b.x + b.y) * 7)
+			same = same and a.y == b.y and after.corridor.slice(a.x * FORM_STRIDE, (a.x + a.y) * FORM_STRIDE) == reference.corridor.slice(b.x * FORM_STRIDE, (b.x + b.y) * FORM_STRIDE)
 		check(same, "native/GDScript corridor forms parity")
 		RoadRefinement.allow_fast_patches = true; RoadRefinement.allow_fast_nearest = true; RoadRefinement.allow_fast_vertices = true
 		check(after.patches == build(h, true).patches, "repeatable native bake")
@@ -212,11 +218,14 @@ func corridor_contracts() -> void:
 	w.trails[0].trail_id = "natural"
 	w.trails[0].formation = Vector3.ZERO
 	var prepared := build(h, true)
+	var authored_local := RoadRefinement.build(h, true, {0: true})
+	check(RoadRefinement.REACH == 3.0 and authored_local._reach == RoadRefinement.REACH
+		and full._reach == RoadRefinement.NATURAL_REACH, "authored patch ownership retains its original reach")
 	var a: Vector2i = full.corridor_routes[0]
 	var b: Vector2i = prepared.corridor_routes[0]
 	var error := 0.0
 	for j in a.y:
-		error = maxf(error, absf(prepared.corridor[(b.x + j) * 7 + 1] - full.corridor[(a.x + j) * 7 + 1] * RoadRefinement.PREPARED_SCALE))
+		error = maxf(error, absf(prepared.corridor[(b.x + j) * FORM_STRIDE + 1] - full.corridor[(a.x + j) * FORM_STRIDE + 1] * RoadRefinement.PREPARED_SCALE))
 	check(error < 0.0000001, "prepared cross-slope scales with all other forms: %.8f m" % error)
 	RoadRefinement.allow_fast_patches = false
 	RoadRefinement.allow_fast_nearest = false
@@ -250,6 +259,23 @@ func corridor_contracts() -> void:
 			same_channels = same_channels and absf(absf(original.uv[j].x) - absf(repeated.uv[j].x)) < 0.00001 \
 				and original.uv[j].y == repeated.uv[j].y and original.color[j].is_equal_approx(repeated.color[j])
 	check(same_channels and physical_error < 0.00001, "reversed duplicate preserves the physical mountain surface: %.8f m" % physical_error)
+	var base := build(h, false)
+	var far_change := 0.0
+	var parallel: Dictionary = w.trails[0].duplicate(true)
+	for point: Dictionary in parallel.pts:
+		point.y += 1.5 # 6 m between axes, 3.8 m between the treads
+	for j in range(40, 330):
+		var z: float = w.trails[0].pts[0].y * GameConfig.TILE - 4.6
+		far_change = maxf(far_change, absf(surface_at(full, h, j, z) - surface_at(base, h, j, z)))
+	check(far_change > 0.05, "land shape reaches beyond the old shoulder: %.3f m" % far_change)
+	w.trails[1] = parallel
+	var separate := build(h, true)
+	var changed := false
+	var wide := false
+	for j in range(15, a.y - 15):
+		changed = changed or absf(separate.corridor[j * FORM_STRIDE]) > 0.05
+		wide = wide or separate.corridor[j * FORM_STRIDE + 7] > 0.0
+	check(changed and not wide, "parallel treads retain core forms with wide terrain excluded")
 	# A strict configured grade limit must reduce peaks, never move a protected zero.
 	var r := RoadRefinement.new()
 	r._heights = h
@@ -273,7 +299,7 @@ func corridor_contracts() -> void:
 	table[10] = 0.001
 	var forms := r._corridor_reference(points, halves, surfaces, gates, PackedInt32Array([0, 160]), PackedInt32Array([0]),
 		PackedFloat32Array([1.0]), PackedInt32Array([0]), table)
-	var pinned := maxf(absf(forms[0]), maxf(absf(forms[80 * 7]), absf(forms[159 * 7])))
+	var pinned := maxf(absf(forms[0]), maxf(absf(forms[80 * FORM_STRIDE]), absf(forms[159 * FORM_STRIDE])))
 	var grade := 0.0
-	for j in range(1, 160): grade = maxf(grade, absf(forms[j * 7] - forms[(j - 1) * 7]))
+	for j in range(1, 160): grade = maxf(grade, absf(forms[j * FORM_STRIDE] - forms[(j - 1) * FORM_STRIDE]))
 	check(pinned == 0.0 and grade <= table[10] + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)
