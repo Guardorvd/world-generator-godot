@@ -195,6 +195,157 @@ static func is_outcrop(v: int) -> bool:
 	return v >= OUTCROP_V
 
 
+## Скальные массивы (09.11.2026): крупные образования среднего масштаба, 8–16 м, которые читаются с сотен
+## метров и меняют форму склона, а не его цвет: уступ-стена со ступенями пластов, ребро вдоль линии падения,
+## останец-стопка плит на пологих вершинах и развал крупных глыб. Те же камни T_ROCK: obj_v = MASSIF_V +
+## форма * 3 + оттенок. Модели — после трёх выходов: T_ROCK + (VARIANTS + OUTCROPS + форма) * MODEL_STRIDE.
+## Локальные оси формы: X — вдоль горизонтали склона, +Z — вниз по склону (лицо стены), Y — вверх; начало —
+## подошва лица. Нижняя часть тела уходит в склон на bury метров, поэтому край не висит на неровном склоне.
+const MASSIF_V := 6
+const MASSIFS := 4
+const MASSIF_VARIANTS := 2 # два рисунка каждой формы: соседние стены пояса не повторяют друг друга
+const M_WALL := 0
+const M_RIB := 1
+const M_TOR := 2
+const M_BLOCKS := 3
+## tilt — доля наклона оси по склону; r — радиус пятна (м при масштабе 1); bury — глубина тела под основанием;
+## core — центр плотного тела в локальных осях и его радиус (просвет для травы и подлеска);
+## foot — точки, по которым садится основание (лицо стены, кольцо опоры).
+const MASSIF_SPEC := [
+	{tilt = 0.12, r = 9.6, bury = 4.5, even = 4.5, core = Vector3(0.0, 0.0, -3.0), core_r = 8.6,
+		foot = [Vector2(-7.4, 0.5), Vector2(-3.7, 0.5), Vector2(0.0, 0.5), Vector2(3.7, 0.5), Vector2(7.4, 0.5)]},
+	{tilt = 0.95, r = 9.8, bury = 3.5, even = 6.0, core = Vector3(0.0, 0.0, -1.5), core_r = 8.0,
+		foot = [Vector2(-2.6, -8.0), Vector2(2.6, -8.0), Vector2(-2.9, -3.0), Vector2(2.9, -3.0), Vector2(-2.6, 2.0), Vector2(2.6, 2.0), Vector2(0.0, 6.2), Vector2(0.0, -9.6)]},
+	{tilt = 0.15, r = 5.6, bury = 3.0, even = 3.0, core = Vector3.ZERO, core_r = 5.0,
+		foot = [Vector2(-4.3, 0.0), Vector2(4.3, 0.0), Vector2(0.0, -3.9), Vector2(0.0, 3.9), Vector2(-3.0, -2.7), Vector2(3.0, -2.7), Vector2(-3.0, 2.7), Vector2(3.0, 2.7)]},
+	{tilt = 0.95, r = 7.2, bury = 1.6, even = 4.5, core = Vector3.ZERO, core_r = 6.4,
+		foot = [Vector2(-5.5, 0.0), Vector2(5.5, 0.0), Vector2(0.0, -4.6), Vector2(0.0, 4.6), Vector2(-3.9, -3.3), Vector2(3.9, -3.3), Vector2(-3.9, 3.3), Vector2(3.9, 3.3)]},
+]
+const MASSIF_REACH := 18.0 # самый дальний край массива от его точки, м (r × наибольший масштаб отрисовки)
+static var _variant := 0
+## Строятся один раз при загрузке класса: опору и коллизию читают фоновые потоки.
+static var _massif_parts: Array = _all_massif_parts()
+
+
+static func _all_massif_parts() -> Array:
+	var out: Array = []
+	for m in MASSIFS * MASSIF_VARIANTS: out.append(_build_massif_parts(m / MASSIF_VARIANTS, m % MASSIF_VARIANTS))
+	_variant = 0
+	return out
+
+
+static func is_massif(v: int) -> bool:
+	return v >= MASSIF_V
+
+
+static func massif_v(form: int, variant: int, tint: int) -> int:
+	return MASSIF_V + (form * MASSIF_VARIANTS + variant) * 3 + clampi(tint, 0, 2)
+
+
+static func massif_form(v: int) -> int:
+	return clampi((v - MASSIF_V) / 3 / MASSIF_VARIANTS, 0, MASSIFS - 1)
+
+
+## Номер модели массива (форма и рисунок) среди MASSIFS * MASSIF_VARIANTS.
+static func massif_model(v: int) -> int:
+	return clampi((v - MASSIF_V) / 3, 0, MASSIFS * MASSIF_VARIANTS - 1)
+
+
+## Форма для отрисовки, опоры и коллизии: у выходов — одна на чанк, у массива — из obj_v.
+static func form_of(v: int, x: float, z: float, origin := Vector2.ZERO) -> int:
+	return OUTCROPS + massif_model(v) if is_massif(v) else outcrop_form(x, z, origin)
+
+
+## Части формы form (0..OUTCROPS-1 — выходы, дальше массивы): центр, полуоси, поворот вокруг Y, наклон вокруг X.
+static func parts(form: int) -> Array:
+	if form < OUTCROPS: return _OUTCROP_PARTS[form]
+	return _massif_parts[form - OUTCROPS]
+
+
+## Радиус плотного тела (м) и его центр для травы, подлеска и отступов: точнее круга всего пятна.
+static func footprint(v: int, scale: float) -> float:
+	if is_massif(v): return MASSIF_SPEC[massif_form(v)].core_r * scale
+	return OUTCROP_R * scale
+
+
+static func _h(form: int, n: int, salt: int) -> float:
+	return WGRandom.hash2(form * 31 + n, salt, 0x6d617373 + _variant * 7919)
+
+
+## Части массивов детерминированы (не зависят от сида мира): одинаковые для каталога, опоры и коллизии.
+static func _build_massif_parts(m: int, variant: int) -> Array:
+	_variant = variant
+	var out: Array = []
+	match m:
+		M_WALL:
+			# Столбы отдельности 2,4–3,8 м вдоль склона; нижний пласт с лицом стены, верхний отступает
+			# на 0,9–2,1 м — настоящая ступень (уступ), иногда ещё верхний блок. Высота по столбам разная.
+			var x := -8.2
+			var n := 0
+			while x < 8.0:
+				var r := _h(m, n, 1)
+				var w := 2.4 + 1.4 * _h(m, n, 2)
+				var cx := x + w * 0.5
+				var z0 := (_h(m, n, 3) - 0.5) * 0.6
+				# Пласт общий для пояса: высоты столбов близки, иначе стена читается штабелем ящиков.
+				var h1 := 4.0 + 1.2 * r
+				var depth := 6.8
+				# Столбы чуть перекрываются: монолитная стена со швами, а не ряд отдельных ящиков.
+				# Наклон назад (верх к склону): лицо ~75°, тыл уходит в гору, а не стоит ящиком над ней.
+				out.append([Vector3(cx, (h1 - 4.5) * 0.5, z0 - depth * 0.5), Vector3(w * 0.54, (h1 + 4.5) * 0.5, depth * 0.5), (_h(m, n, 4) - 0.5) * 0.06, -0.22 - 0.08 * _h(m, n, 5)])
+				if _h(m, n, 6) > 0.18:
+					var back := 0.9 + 1.2 * _h(m, n, 7)
+					var h2 := 2.0 + 1.2 * _h(m, n, 8)
+					out.append([Vector3(cx + (_h(m, n, 9) - 0.5) * 0.3, h1 + h2 * 0.5 - 0.15, z0 - back - (depth - back) * 0.5 - 1.0), Vector3(w * 0.52, h2 * 0.5 + 0.15, (depth - back) * 0.5), (_h(m, n, 10) - 0.5) * 0.06, -0.24 - 0.08 * _h(m, n, 11)])
+					if _h(m, n, 12) > 0.55:
+						var h3 := 1.1 + 1.3 * _h(m, n, 13)
+						var back3 := back + 0.8 + 1.4 * _h(m, n, 14)
+						out.append([Vector3(cx + (_h(m, n, 15) - 0.5) * 0.8, h1 + h2 + h3 * 0.5 - 0.2, z0 - back3 - (depth - back3) * 0.45), Vector3(w * 0.38, h3 * 0.5 + 0.2, (depth - back3) * 0.45), (_h(m, n, 16) - 0.5) * 0.3, (_h(m, n, 17) - 0.5) * 0.12])
+				x += w
+				n += 1
+		M_RIB:
+			# Ребро: гребень из блоков вдоль линии падения, выше у склона и ниже к подножию; плечи по бокам.
+			for k in 4:
+				var z := -7.4 + k * 4.4
+				var w := 3.4 + 1.2 * _h(m, k, 1)
+				var top := 6.2 - k * 1.25 + 1.2 * _h(m, k, 2)
+				out.append([Vector3((_h(m, k, 3) - 0.5) * 0.9, (top - 3.5) * 0.5, z), Vector3(w * 0.5, (top + 3.5) * 0.5, 2.5), (_h(m, k, 4) - 0.5) * 0.3, (_h(m, k, 5) - 0.5) * 0.2])
+				if k < 3:
+					out.append([Vector3((_h(m, k, 6) - 0.5) * 0.7, top + 0.7, z + (_h(m, k, 7) - 0.5) * 1.2), Vector3(w * 0.3, 1.0, 1.6), (_h(m, k, 8) - 0.5) * 0.5, (_h(m, k, 9) - 0.5) * 0.25])
+				if k == 1 or k == 2:
+					var side := -1.0 if _h(m, k, 10) < 0.5 else 1.0
+					out.append([Vector3(side * (w * 0.5 + 1.2), (top * 0.55 - 3.0) * 0.5, z + 0.8), Vector3(1.6, (top * 0.55 + 3.0) * 0.5, 2.0), (_h(m, k, 11) - 0.5) * 0.6, 0.0])
+		M_TOR:
+			# Останец: стопка плит, уменьшающихся кверху и смещённых; швы делят ярусы на блоки.
+			var y := -3.0
+			var sizes := [Vector3(4.3, 2.6, 3.8), Vector3(3.3, 1.15, 2.9), Vector3(2.3, 0.95, 2.1), Vector3(1.25, 0.7, 1.15)]
+			var shift := Vector2.ZERO
+			for t in 4:
+				var e: Vector3 = sizes[t]
+				var h := e.y * 2.0 + (0.0 if t == 0 else 0.5 * _h(m, t, 1))
+				if t == 0: h = 5.2 + 0.6 * _h(m, t, 1)
+				shift += Vector2(_h(m, t, 2) - 0.5, _h(m, t, 3) - 0.5) * (0.7 if t > 0 else 0.0)
+				if t < 2:
+					# Ярус из двух блоков по шву, чуть разной высоты.
+					var split := (_h(m, t, 4) - 0.5) * e.x * 0.6
+					var left := e.x + split
+					var right := e.x - split
+					out.append([Vector3(shift.x - e.x + left * 0.5, y + h * 0.5, shift.y), Vector3(left * 0.5 - 0.05, h * 0.5, e.z), (_h(m, t, 5) - 0.5) * 0.2, (_h(m, t, 6) - 0.5) * 0.08])
+					out.append([Vector3(shift.x + e.x - right * 0.5, y + h * 0.5 + 0.3 * _h(m, t, 7) - 0.15, shift.y + (_h(m, t, 8) - 0.5) * 0.5), Vector3(right * 0.5 - 0.05, h * 0.5, e.z * 0.92), (_h(m, t, 9) - 0.5) * 0.2, (_h(m, t, 10) - 0.5) * 0.08])
+				else:
+					out.append([Vector3(shift.x, y + h * 0.5, shift.y), Vector3(e.x, h * 0.5, e.z), (_h(m, t, 5) - 0.5) * 0.5, (_h(m, t, 6) - 0.5) * 0.1])
+				y += h - 0.1
+		M_BLOCKS:
+			# Развал крупных глыб 2–4 м: разные наклоны и повороты, глыбы опираются друг на друга.
+			var spots := [Vector2(0.0, 0.0), Vector2(-3.6, -1.2), Vector2(3.4, -0.6), Vector2(-1.4, 2.9), Vector2(2.0, 3.0), Vector2(0.6, -3.4), Vector2(-4.0, 2.4)]
+			for k in spots.size():
+				var at: Vector2 = spots[k]
+				var s := 1.0 if k == 0 else 0.62 + 0.3 * _h(m, k, 1)
+				var e := Vector3(2.2 + 0.6 * _h(m, k, 2), 1.7 + 0.8 * _h(m, k, 3), 1.8 + 0.6 * _h(m, k, 4)) * s
+				out.append([Vector3(at.x, e.y - 1.6, at.y), e, _h(m, k, 5) * TAU, (_h(m, k, 6) - 0.5) * 0.3])
+	return out
+
+
 ## Модель выхода формы form с тремя LOD (около 430 / 190 / 110 треугольников у трёх частей).
 static func outcrop_mesh(form: int) -> ArrayMesh:
 	var near := _outcrop_level(form, 12, 6)
@@ -256,6 +407,84 @@ static func _outcrop_level(form: int, segments: int, rings: int) -> ArrayMesh:
 	return st.commit()
 
 
+## Модель массива (номер massif_model) с тремя LOD: гранёные блоки (сетка граней 2 × 2 и 1 × 1 на сторону, без дна),
+## около 600 / 170 треугольников у стены. Плоские грани и сколы вместо скруглённых валунов: плиты и
+## отдельности читаются формой и тенью при любом материале.
+static func massif_mesh(model: int) -> ArrayMesh:
+	var near := _massif_level(model, 2)
+	near.set_meta("lod_meshes", [_massif_level(model, 1), _massif_level(model, 1)])
+	return near
+
+
+static func _massif_level(m: int, grid: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var list := parts(OUTCROPS + m)
+	var faces := [[Vector3.RIGHT, Vector3.BACK, Vector3.UP], [Vector3.LEFT, Vector3.UP, Vector3.BACK],
+		[Vector3.UP, Vector3.RIGHT, Vector3.BACK], [Vector3.DOWN, Vector3.BACK, Vector3.RIGHT],
+		[Vector3.BACK, Vector3.UP, Vector3.RIGHT], [Vector3.FORWARD, Vector3.RIGHT, Vector3.UP]]
+	for n in list.size():
+		var part: Array = list[n]
+		var seed := 900 + m * 37 + n * 11
+		var basis := Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+		var half: Vector3 = part[1]
+		var tone := 0.9 + 0.14 * WGRandom.hash2(m, n, 71)
+		var cuts: Array = []
+		for c in 2:
+			var a := (c + WGRandom.hash2(seed, c, 3) * 0.9) * TAU / 2.0
+			cuts.append([Vector3(cos(a), 0.3 + 0.6 * WGRandom.hash2(seed, c, 5), sin(a)).normalized(), 0.97 + 0.25 * WGRandom.hash2(seed, c, 7)])
+		var point := func(q: Vector3) -> Vector3:
+			# Плоские грани ящика; характер дают сколы (cuts) и лёгкий излом вершин, а не вздутие граней.
+			var p := q * (0.985 + 0.03 * Models._noise3(q * 1.4, seed))
+			for cut: Array in cuts:
+				var over: float = p.dot(cut[0]) - cut[1]
+				if over > 0.0: p -= cut[0] * over
+			return part[0] + basis * (p * half)
+		for face: Array in faces:
+			var nrm: Vector3 = face[0]
+			var u: Vector3 = face[1]
+			var v: Vector3 = face[2]
+			if nrm == Vector3.DOWN: continue # дно в земле
+			var pts: Array = []
+			for j in grid + 1:
+				var row: Array = []
+				for i in grid + 1:
+					row.append(point.call(nrm + u * (2.0 * i / grid - 1.0) + v * (2.0 * j / grid - 1.0)))
+				pts.append(row)
+			for j in grid:
+				for i in grid:
+					for tri: Array in [[pts[j][i], pts[j][i + 1], pts[j + 1][i + 1]], [pts[j][i], pts[j + 1][i + 1], pts[j + 1][i]]]:
+						var a: Vector3 = tri[0]
+						var b: Vector3 = tri[1]
+						var c: Vector3 = tri[2]
+						var normal := (b - a).cross(c - a)
+						if normal.length_squared() < 1e-8: continue
+						normal = normal.normalized()
+						# Наружу от центра части: порядок обхода граней разный, нормаль выравниваем по центру.
+						if normal.dot((a + b + c) / 3.0 - part[0]) < 0.0:
+							normal = -normal
+							var t := b
+							b = c
+							c = t
+						for p: Vector3 in [a, c, b]:
+							var mineral := Models._noise3(p * 0.45, seed + 3)
+							var streak := Models._noise3(Vector3(p.x * 0.9, p.y * 0.12, p.z * 0.9), seed + 5)
+							# Верх плит светлее и с лишайником/дерновиной, лицо — потёки, низ и щели темнее.
+							var stone := tone * (0.78 + 0.2 * mineral) * (0.86 + 0.14 * smoothstep(-0.4, 0.8, normal.y))
+							stone *= 1.0 - 0.12 * smoothstep(0.55, 0.85, streak) * (1.0 - absf(normal.y))
+							stone *= 0.8 + 0.2 * smoothstep(-1.5, 1.0, p.y - part[0].y + half.y)
+							var col := Color(stone * 1.02, stone, stone * 0.96)
+							var lichen := smoothstep(0.64, 0.8, Models._noise3(p * 1.3, seed + 9)) * 0.25
+							col = col.lerp(Color(0.62, 0.61, 0.47), lichen)
+							var turf := smoothstep(0.85, 0.97, normal.y) * smoothstep(0.5, 0.72, mineral) * 0.3
+							col = col.lerp(Color(0.36, 0.43, 0.24), turf)
+							st.set_color(col)
+							st.set_normal(normal)
+							st.add_vertex(p)
+	st.index()
+	return st.commit()
+
+
 ## Ось выхода: между вертикалью и нормалью склона.
 static func outcrop_up(normal: Vector3) -> Vector3:
 	return Vector3.UP.lerp(normal, OUTCROP_TILT).normalized()
@@ -266,7 +495,8 @@ static func outcrop_up(normal: Vector3) -> Vector3:
 ## Основание опускается до самой низкой точки кольца опоры: край выхода не висит над склоном,
 ## а нижняя часть модели уходит в землю. Слишком неровное кольцо (кромка выемки дороги,
 ## излом гребня) похоронило бы выход — такое место отклоняется.
-static func outcrop_seat(sample: Callable, x: float, z: float, scale: float, origin := Vector2.ZERO) -> Vector4:
+static func outcrop_seat(sample: Callable, x: float, z: float, scale: float, origin := Vector2.ZERO, v := OUTCROP_V) -> Vector4:
+	if is_massif(v): return _massif_seat(sample, x, z, scale, origin, v)
 	var r := OUTCROP_R * scale
 	var l: Vector2 = sample.call(x - r, z)
 	var rr: Vector2 = sample.call(x + r, z)
@@ -311,7 +541,67 @@ static func outcrop_form(x: float, z: float, origin := Vector2.ZERO) -> int:
 	return mini(OUTCROPS - 1, int(WGRandom.hash2(floori(cell.x), floori(cell.y), 65) * OUTCROPS))
 
 
-static func outcrop_transform(x: float, z: float, scale: float, up: Vector3, base: float, origin := Vector2.ZERO) -> Transform3D:
+## Массив садится по точкам своей подошвы (лицо стены, кольцо опоры), а не по кругу: стена врезается
+## в склон тылом, её лицо стоит на земле. Тело уходит под основание на bury, поэтому на неровном
+## склоне край не висит; место отклоняется, если под нижней частью тела земля ниже его дна,
+## если подошва слишком неровна или если над склоном не остаётся видимой скалы.
+## Только для стендов (один поток): причины отказов опоры массивов.
+static var debug_rejects: Dictionary = {}
+static var debug_on := false
+
+
+static func _reject(reason: String) -> Vector4:
+	if debug_on: debug_rejects[reason] = debug_rejects.get(reason, 0) + 1
+	return Vector4(INF, 0, 1, 0)
+
+
+static func _massif_seat(sample: Callable, x: float, z: float, scale: float, origin: Vector2, v: int) -> Vector4:
+	var spec: Dictionary = MASSIF_SPEC[massif_form(v)]
+	var r: float = spec.r * scale * 0.6
+	var l: Vector2 = sample.call(x - r, z)
+	var rr: Vector2 = sample.call(x + r, z)
+	var b: Vector2 = sample.call(x, z - r)
+	var f: Vector2 = sample.call(x, z + r)
+	if l.x == INF or rr.x == INF or b.x == INF or f.x == INF:
+		return _reject("probe")
+	var normal := Vector3(l.x - rr.x, 2.0 * r, b.x - f.x).normalized()
+	var up := Vector3.UP.lerp(normal, spec.tilt).normalized()
+	var xf := outcrop_transform(x, z, scale, up, 0.0, origin, v)
+	var lo := INF
+	var hi := -INF
+	for foot: Vector2 in spec.foot:
+		var off := xf.basis * Vector3(foot.x, 0.0, foot.y)
+		var s: Vector2 = sample.call(x + off.x, z + off.z)
+		if s.x == INF or s.y > 0.05: return _reject("foot_path_water")
+		lo = minf(lo, s.x - off.y)
+		hi = maxf(hi, s.x - off.y)
+	# Неровная подошва — один край глубже в склоне; висеть не даёт проверка дна ниже.
+	if hi - lo > spec.even * scale: return _reject("uneven_foot")
+	xf.origin.y = lo - 0.25 * scale
+	var exposed := 0
+	for part: Array in parts(form_of(v, x, z, origin)):
+		var local_basis := Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+		var half: Vector3 = part[1]
+		var center: Vector3 = part[0]
+		# Нижние блоки (стоят на земле, а не на других блоках): углы их дна должны быть под землёй.
+		if center.y - half.y < 0.5:
+			for corner: Vector2 in [Vector2(-0.8, -0.8), Vector2(0.8, -0.8), Vector2(-0.8, 0.8), Vector2(0.8, 0.8)]:
+				var bottom: Vector3 = xf * (center + local_basis * Vector3(half.x * corner.x, -half.y * 0.9, half.z * corner.y))
+				var g: Vector2 = sample.call(bottom.x, bottom.z)
+				if g.x == INF or g.y > 0.05: return _reject("bottom_path_water")
+				if bottom.y > g.x + 0.1: return _reject("floating")
+		# Верхний край лица блока (лицо — вниз по склону): у стены, врезанной в кручу, верх может
+		# быть вровень со склоном, но лицо и уступ над ним видны.
+		var peak: Vector3 = xf * (center + local_basis * Vector3(0.0, half.y * 0.6, half.z * 0.9))
+		var surface: Vector2 = sample.call(peak.x, peak.z)
+		if surface.x == INF or surface.y > 0.05: return _reject("face_path_water")
+		if peak.y - surface.x > 0.6 * scale: exposed += 1
+	if exposed < 2: return _reject("buried")
+	return Vector4(xf.origin.y, up.x, up.y, up.z)
+
+
+static func outcrop_transform(x: float, z: float, scale: float, up: Vector3, base: float, origin := Vector2.ZERO, v := OUTCROP_V) -> Transform3D:
+	if is_massif(v): return _massif_transform(x, z, scale, up, base, origin)
 	var ox := (x + origin.x) / GameConfig.TILE
 	var oy := (z + origin.y) / GameConfig.TILE
 	var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
@@ -321,10 +611,42 @@ static func outcrop_transform(x: float, z: float, scale: float, up: Vector3, bas
 	return Transform3D(basis, Vector3(x, base, z))
 
 
+## Лицо массива — вниз по склону (локальная +Z к понижению), вдоль горизонтали — его длина.
+## На ровном месте (останец на плоской вершине) поворот случайный по месту.
+static func _massif_transform(x: float, z: float, scale: float, up: Vector3, base: float, origin: Vector2) -> Transform3D:
+	var ox := (x + origin.x) / GameConfig.TILE
+	var oy := (z + origin.y) / GameConfig.TILE
+	var jitter := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7)
+	var shape := WGRandom.hash2(floori(ox * 127), floori(oy * 131), 15632)
+	var down := Vector2(up.x, up.z)
+	var rot := jitter * TAU
+	if down.length() > 0.004: rot = atan2(down.x, down.y) + (jitter - 0.5) * 0.12
+	var basis := Basis(Quaternion(Vector3.UP, up)) * Basis(Vector3.UP, rot)
+	basis = basis.scaled_local(Vector3(scale * lerpf(0.85, 1.2, shape), scale * lerpf(1.15, 0.85, shape), scale * lerpf(0.92, 1.08, jitter)))
+	return Transform3D(basis, Vector3(x, base, z))
+
+
 ## Small solid cores of the visible blocks, in ForestObstacles' existing capsule format.
 ## No extra nodes or mesh collision: unlike a single upright cylinder, these follow the tilt.
+## Массивы: капсула вдоль длинной горизонтальной оси каждого блока, иначе стена из столбов
+## пропускала бы велосипед между кругами в центрах.
 static func outcrop_solids(xf: Transform3D, form: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
+	if form >= OUTCROPS:
+		for part: Array in parts(form):
+			var axes: Vector3 = part[1]
+			var b := xf.basis * Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+			var center: Vector3 = xf * part[0]
+			var hx := Vector2(b.x.x, b.x.z) * axes.x
+			var hz := Vector2(b.z.x, b.z.z) * axes.z
+			var major := hx if hx.length() >= hz.length() else hz
+			var minor := hz if hx.length() >= hz.length() else hx
+			var radius := minor.length() * 0.92
+			var reach := maxf(0.0, major.length() - radius)
+			var dir := major.normalized() * reach
+			var height := (absf(b.x.y) * axes.x + absf(b.y.y) * axes.y + absf(b.z.y) * axes.z) * 0.95
+			out.append_array(PackedFloat32Array([center.x - dir.x, center.z - dir.y, center.x + dir.x, center.z + dir.y, radius, minf(center.y - height, xf.origin.y), center.y + height]))
+		return out
 	for part: Array in _OUTCROP_PARTS[form]:
 		var axes: Vector3 = part[1]
 		var b := xf.basis * Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
@@ -350,7 +672,7 @@ static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int)
 				var index := cell.y * heights.world.W + cell.x
 				if index < heights.world.path_mask.size() and heights.world.path_mask[index] > 0: return Vector2(INF, INF)
 			if heights.road_refinement != null and heights.road_refinement.weight_at(px, pz, heights.world.W) > 0.08: return Vector2(INF, INF)
-			return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE)
+			return Vector2(heights.ground_at(px, pz), heights.depth_at(px, pz)), x, z, scale, Vector2(heights.world.world_origin) * GameConfig.TILE, v)
 	var normal := normal_at(heights, x, z)
 	var ground := heights.ground_at(x, z)
 	if not has_seat(heights, x, z, scale, normal, ground):
@@ -368,4 +690,4 @@ static func seat_snapshot_any(f: Dictionary, hv: PackedFloat32Array, width: int,
 		var index := cell.y * width + cell.x if cell.x >= 0 and cell.y >= 0 and cell.x < width and cell.y < height else (cell.y - int(f.y0)) * int(f.side) + cell.x - int(f.x0)
 		if index >= 0 and index < paths.size() and paths[index] > 0: return Vector2(INF, INF)
 		var s := _snapshot_surface(f, hv, width, height, px, pz)
-		return Vector2(s.x, INF if s.x == INF else s.y - s.x), x, z, scale, f.get("world_origin", Vector2.ZERO))
+		return Vector2(s.x, INF if s.x == INF else s.y - s.x), x, z, scale, f.get("world_origin", Vector2.ZERO), v)

@@ -5,6 +5,8 @@ extends SceneTree
 ## «Было» — terrain.gdshader и rock_scatter.gd из коммита BASE (git show) в том же запуске.
 ## Снимки — пары было|стало в .godot/mountain_rock_look/<вид>.png. Нужно окно (без --headless).
 ## Ключи: -- --base <коммит> (по умолчанию версия до скальных выходов), -- --rules-only (без снимков).
+## 09.11.2026: скальные массивы (RockMassif): счёт кандидатов/отказов/опоры, вид massif и нейтральный материал
+## (серый без цвета вершин и рисунка породы — видна только форма): листы <вид>_neutral.png.
 const OUT := "res://.godot/mountain_rock_look"
 const N := 160
 const CS := 16
@@ -16,7 +18,7 @@ var scene: Node3D
 
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 150)
+	preload("res://tools/watchdog.gd").arm(self, 240)
 	var args := OS.get_cmdline_user_args()
 	var at := args.find("--base")
 	if at >= 0 and at + 1 < args.size(): base_rev = args[at + 1]
@@ -154,6 +156,15 @@ func run() -> void:
 	a.sort()
 	b.sort()
 	check(a == b, "deterministic and independent of chunk order")
+	var stats := {}
+	RockMassif.sites(29, 0, 0, N, N, f, 0, 0, N, f.path, stats)
+	var placed_by_form := [0, 0, 0, 0]
+	RockModels.debug_on = true
+	RockModels.debug_rejects.clear()
+	var massifs := 0
+	var massif_seated := 0
+	var massif_floating := 0
+	var by_form := [0, 0, 0, 0]
 	var outcrops := 0
 	var seated := 0
 	var floating := 0
@@ -162,6 +173,22 @@ func run() -> void:
 	var sample := func(px: float, pz: float) -> Vector2: return Vector2(h.ground_at(px, pz), h.depth_at(px, pz))
 	for o in st_after.x.size():
 		var rs: float = st_after.s[o] * 1.2
+		if RockModels.is_massif(st_after.v[o]):
+			massifs += 1
+			placed_by_form[RockModels.massif_form(st_after.v[o])] += 1
+			var mseat := RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, rs, st_after.v[o])
+			if mseat.x == INF: continue
+			massif_seated += 1
+			by_form[RockModels.massif_form(st_after.v[o])] += 1
+			var mxf := RockModels.outcrop_transform(st_after.x[o] * 4.0, st_after.y[o] * 4.0, rs, Vector3(mseat.y, mseat.z, mseat.w), mseat.x, Vector2.ZERO, st_after.v[o])
+			for part: Array in RockModels.parts(RockModels.form_of(st_after.v[o], 0, 0)):
+				var half: Vector3 = part[1]
+				if part[0].y - half.y >= 0.5: continue
+				var pb := Basis(Vector3.UP, part[2]) * Basis(Vector3.RIGHT, part[3])
+				for n in 12:
+					var q: Vector3 = mxf * (part[0] + pb * Vector3(cos(n * TAU / 12.0) * half.x * 0.85, -half.y * 0.9, sin(n * TAU / 12.0) * half.z * 0.85))
+					if q.y > h.ground_at(q.x, q.z) + 0.15: massif_floating += 1
+			continue
 		if RockModels.is_outcrop(st_after.v[o]):
 			outcrops += 1
 			if not RockScatter.clear_path(f.path, 0, 0, N, st_after.x[o], st_after.y[o], st_after.s[o] * RockScatter.OUTCROP_CLEAR): on_path += 1
@@ -176,7 +203,33 @@ func run() -> void:
 				if seat.x + off.y > g.x + 0.15: floating += 1
 		elif RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, rs, st_after.v[o]).x != INF:
 			if RockModels.normal_at(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0).y < 0.74: steep_boulders += 1
+	# Карта сверху: крутизна (серым), открытость породы (красным), массивы: стена — синий, ребро — зелёный,
+	# останец — жёлтый, развал — пурпурный; не севшие — чёрная точка.
+	var map := Image.create(N * 4, N * 4, false, Image.FORMAT_RGB8)
+	for y in N * 4:
+		for x in N * 4:
+			var i := (y / 4) * N + x / 4
+			var s := clampf(f.slope[i] / 1.2, 0.0, 1.0)
+			map.set_pixel(x, y, Color(0.35 + 0.6 * s * 0.6 + 0.4 * f.rock[i] / 255.0, 0.35 + 0.4 * s, 0.35 + 0.4 * s) if f.path[i] == 0 else Color(1, 1, 1))
+	var colors := [Color(0.1, 0.3, 1.0), Color(0.1, 0.9, 0.2), Color(1.0, 0.9, 0.1), Color(0.9, 0.1, 0.9)]
+	for o in st_after.x.size():
+		if not RockModels.is_massif(st_after.v[o]): continue
+		var ok := RockModels.seat(h, st_after.x[o] * 4.0, st_after.y[o] * 4.0, st_after.s[o] * 1.2, st_after.v[o]).x != INF
+		var c: Color = colors[RockModels.massif_form(st_after.v[o])] if ok else Color.BLACK
+		var r := int(RockModels.MASSIF_SPEC[RockModels.massif_form(st_after.v[o])].core_r * st_after.s[o] * 1.2)
+		for dy in range(-r, r + 1):
+			for dx in range(-r, r + 1):
+				if dx * dx + dy * dy > r * r: continue
+				var px := int(st_after.x[o] * 4.0) + dx
+				var py := int(st_after.y[o] * 4.0) + dy
+				if px >= 0 and py >= 0 and px < N * 4 and py < N * 4 and (dx * dx + dy * dy > (r - 2) * (r - 2) or not ok): map.set_pixel(px, py, c)
+	map.save_png(OUT.path_join("massifs_map.png"))
 	print("ROCKS after=", st_after.x.size(), " outcrops=", outcrops, " seated=", seated)
+	print("MASSIFS candidates=", stats.get("candidates", 0), " rejected_path=", stats.get("path", 0), " rejected_water=", stats.get("water", 0),
+		" placed=", massifs, " placed_by_form=", placed_by_form, " seated=", massif_seated, " wall/rib/tor/blocks=", by_form, " seat_rejects=", RockModels.debug_rejects)
+	RockModels.debug_on = false
+	check(massifs > 0 and massif_seated * 2 >= massifs, "most placed massifs find support on the real surface")
+	check(massif_floating == 0, "massif lower blocks stay under ground (12 points each)")
 	check(outcrops > 20 and seated > outcrops / 3, "a supported outcrop population remains on the cliff band")
 	check(floating == 0, "outcrop base ring stays at or below ground (40 points)")
 	check(on_path == 0, "outcrops keep clear of the trail")
@@ -272,18 +325,51 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 		if at.distance_to(cliff_at) < best:
 			best = at.distance_to(cliff_at)
 			near_outcrop = at
+	var neutral_views := ["far", "face", "massif_mid", "massif_near"]
 	views.outcrop = [g.call(near_outcrop + dir * 10 + side * 5, 3.0), g.call(near_outcrop, 1.2)]
+	# Средняя дистанция (~60 м) на массив у кручи и вид с высоты велосипедиста у его подножия.
+	var near_massif := cliff_at
+	best = INF
+	for o in w_after.obj_x.size():
+		if not RockModels.is_massif(w_after.obj_v[o]): continue
+		var at := Vector2(w_after.obj_x[o], w_after.obj_y[o]) * 4.0
+		if RockModels.seat(h, at.x, at.y, w_after.obj_s[o] * 1.2, w_after.obj_v[o]).x == INF: continue
+		if at.distance_to(cliff_at) < best:
+			best = at.distance_to(cliff_at)
+			near_massif = at
+	views.massif_mid = [g.call(near_massif + dir * 55 + side * 25, 8.0), g.call(near_massif, 4.0)]
+	# По одному виду на стену и ребро: камера ниже по склону от массива, по его линии падения.
+	for want: int in [RockModels.M_WALL, RockModels.M_RIB]:
+		var pick := Vector4(INF, 0, 0, 0)
+		for o in w_after.obj_x.size():
+			if not RockModels.is_massif(w_after.obj_v[o]) or RockModels.massif_form(w_after.obj_v[o]) != want: continue
+			var at := Vector2(w_after.obj_x[o], w_after.obj_y[o]) * 4.0
+			var ms := RockModels.seat(h, at.x, at.y, w_after.obj_s[o] * 1.2, w_after.obj_v[o])
+			if ms.x == INF: continue
+			if at.distance_to(cliff_at) < pick.x: pick = Vector4(at.distance_to(cliff_at), at.x, at.y, 0)
+		if pick.x == INF: continue
+		var at := Vector2(pick.y, pick.z)
+		var nd := Vector2(RockModels.normal_at(h, at.x, at.y).x, RockModels.normal_at(h, at.x, at.y).z).normalized()
+		var key := "wall" if want == RockModels.M_WALL else "rib"
+		views[key] = [g.call(at + nd * 38 + Vector2(-nd.y, nd.x) * 14, 3.0), g.call(at, 4.0)]
+		neutral_views.append(key)
+	views.massif_near = [g.call(near_massif + dir * 16 + side * 6, 1.8), g.call(near_massif, 4.5)]
 	var images := {}
-	for version in ["before", "after"]:
-		var mat := builder.material(base.duplicate(), forest)
-		if version == "before": mat.shader = old_shader
+	var neutral_mat := StandardMaterial3D.new()
+	neutral_mat.albedo_color = Color(0.6, 0.6, 0.6)
+	neutral_mat.roughness = 0.95
+	for version: String in ["before", "after", "before_n", "after_n"]:
+		var plain := version.ends_with("_n")
+		var mat: Material = builder.material(base.duplicate(), forest)
+		if version.begins_with("before"): (mat as ShaderMaterial).shader = old_shader
+		if plain: mat = neutral_mat
 		var terrain := MeshInstance3D.new()
 		terrain.mesh = mesh
 		terrain.material_override = mat
 		scene.add_child(terrain)
-		var w: WorldData = w_before if version == "before" else w_after
+		var w: WorldData = w_before if version.begins_with("before") else w_after
 		h.world = w
-		var layer: Node3D = old_layer.new() if version == "before" else VegetationLayer.new()
+		var layer: Node3D = old_layer.new() if version.begins_with("before") else VegetationLayer.new()
 		var rocks := layer
 		scene.add_child(rocks)
 		layer.setup(w, h, rock_defs, Models.grass_mesh(), forest)
@@ -296,8 +382,11 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 					instances += entry.count
 					if entry.kind >= VegetationLayer.OUTCROP_MODEL: outcrop_instances += entry.count
 				layer._apply_chunk(built)
+		if plain:
+			for node in layer.find_children("*", "GeometryInstance3D", true, false): (node as GeometryInstance3D).material_override = neutral_mat
 		print("RENDER ", version, " instances=", instances, " outcrops=", outcrop_instances)
 		for view: String in views:
+			if plain and view not in neutral_views: continue
 			camera.look_at_from_position(views[view][0], views[view][1], Vector3.UP)
 			RenderingServer.global_shader_parameter_set("veg_center", Vector2(camera.position.x, camera.position.z))
 			for frame in 4: await process_frame
@@ -311,6 +400,11 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 			images[view + version] = img
 			print("SHOT ", view, " ", version, " frame_ms=", snappedf(frame_ms, 0.1), " draw_calls=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
 				" primitives=", RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+		if plain:
+			terrain.queue_free()
+			rocks.queue_free()
+			await process_frame
+			continue
 		# Travel through both production LOD transition bands, with actual GPU timings.
 		var cpu := 0.0; var gpu := 0.0; var frames := 0; var peak_ms := 0.0
 		var started := Time.get_ticks_usec()
@@ -335,4 +429,9 @@ func shots(f: Dictionary, hv: PackedFloat32Array, h: Heightfield, w_after: World
 		sheet.blit_rect(images[view + "before"], Rect2i(0, 0, 640, 360), Vector2i.ZERO)
 		sheet.blit_rect(images[view + "after"], Rect2i(0, 0, 640, 360), Vector2i(640, 0))
 		sheet.save_png(OUT.path_join(view + ".png"))
+		if images.has(view + "after_n"):
+			var plain_sheet := Image.create(1280, 360, false, Image.FORMAT_RGBA8)
+			plain_sheet.blit_rect(images[view + "before_n"], Rect2i(0, 0, 640, 360), Vector2i.ZERO)
+			plain_sheet.blit_rect(images[view + "after_n"], Rect2i(0, 0, 640, 360), Vector2i(640, 0))
+			plain_sheet.save_png(OUT.path_join(view + "_neutral.png"))
 	print("SHEETS ", ProjectSettings.globalize_path(OUT))

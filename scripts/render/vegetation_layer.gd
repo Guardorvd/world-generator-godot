@@ -900,8 +900,10 @@ func _build_entries(items: Dictionary) -> Dictionary:
 		if outcrop:
 			# Одна форма выходов на чанк (характер отдельности массива): не больше одной группы MultiMesh
 			# и её LOD на чанк вместо трёх.
-			var form := RockModels.outcrop_form(ox * TILE, oy * TILE, Vector2(world.world_origin) * TILE)
+			var form := RockModels.form_of(items.v[o], ox * TILE, oy * TILE, Vector2(world.world_origin) * TILE)
 			model = OUTCROP_MODEL + form * ForestModels.MODEL_STRIDE
+			# Каталог без моделей массивов (старый) — массив не рисуется, как выходы без своей модели.
+			if not _defs.has(model): continue
 		elif _defs.has(kind + ForestModels.MODEL_STRIDE):
 			var variants := RockModels.VARIANTS if kind == Biomes.T_ROCK else ForestModels.VARIANTS
 			var variant := mini(variants - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * variants))
@@ -945,7 +947,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				if RockModels.is_outcrop(v):
 					# Основание уже опущено до нижней точки опоры (RockModels.outcrop_seat); ось — между
 					# вертикалью и склоном, поэтому плиты и уступы почти горизонтальны.
-					xf = RockModels.outcrop_transform(ox * TILE, oy * TILE, s, normal, group.ground[n], Vector2(world.world_origin) * TILE)
+					xf = RockModels.outcrop_transform(ox * TILE, oy * TILE, s, normal, group.ground[n], Vector2(world.world_origin) * TILE, v)
 			var box: AABB = xf * def.box
 			entry.bounds = box if n == 0 else entry.bounds.merge(box)
 			if entry.has("tbuf"):
@@ -1589,7 +1591,10 @@ static func _rock_shelter(surface: Color, i: int, j: int) -> float:
 	if legacy_open:
 		return smoothstep(0.5, 0.74, surface.b) * smoothstep(0.35, 0.75, patch) * (1.0 - surface.a)
 	# 16.0: чуть суше и чаще — дернина и цветы пятнами, открытая порода (surface.a) по-прежнему голая
-	return smoothstep(0.42, 0.7, surface.b) * smoothstep(0.25, 0.65, patch) * (1.0 - surface.a)
+	# 09.11.2026: на пологих скальных вершинах без открытой породы — каменистая тундра: дерновина и суше
+	# (тот же признак, что у материала рельефа: малая открытость на сером биоме).
+	var gentle := 1.0 - smoothstep(0.1, 0.4, surface.a)
+	return smoothstep(0.42 - 0.16 * gentle, 0.7, surface.b) * smoothstep(0.25, 0.65, patch) * (1.0 - surface.a)
 
 
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,

@@ -13,7 +13,7 @@ var scene: Node3D
 var camera: Camera3D
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self,300)
+	preload("res://tools/watchdog.gd").arm(self,480)
 	var args := OS.get_cmdline_user_args()
 	if "--base" in args: base_rev = args[args.find("--base") + 1]
 	run.call_deferred()
@@ -56,7 +56,9 @@ func rules() -> void:
 			store.begin_chunk(rect.position.x,rect.position.y,rect.end.x,rect.end.y)
 			RockScatter.place_chunk(73,rect.position.x,rect.position.y,rect.end.x,rect.end.y,f,0,0,32,store)
 			for i in store.x.size():
-				clear=clear and RockScatter.clear_path(f.path,0,0,32,store.x[i],store.y[i],store.s[i])
+				var ok_clear:=RockScatter.clear_path(f.path,0,0,32,store.x[i],store.y[i],store.s[i])
+				if not ok_clear:print("ON ROUTE x=",store.x[i]," y=",store.y[i]," s=",store.s[i]," v=",store.v[i])
+				clear=clear and ok_clear
 				pattern.append("%.12f %.12f %.12f"%[store.x[i],store.y[i],store.s[i]])
 		pattern.sort();patterns.append(pattern)
 	check(clear,"all rock footprints stay clear of a route")
@@ -126,7 +128,17 @@ func views(w:WorldData,h:Heightfield,origin:Vector2i,peak:Vector3) -> Dictionary
 	var normal := RockModels.normal_at(h, cliff.x, cliff.y)
 	var downhill := Vector2(normal.x, normal.z).normalized()
 	var sideways := Vector2(-downhill.y, downhill.x)
+	# 09.11.2026: пологая серая вершина (была серым «плитным» материалом без формы).
+	var gentle:=open;best=-INF
+	for y in range(origin.y+24,origin.y+SIDE-24,2):
+		for x in range(origin.x+24,origin.x+SIDE-24,2):
+			var i:=y*N+x
+			if w.biome[i] not in [Biomes.ROCK, Biomes.PEAK]: continue
+			if w.slope[i]>0.22: continue
+			var score:=w.elev[i]-Vector2(x,y).distance_to(Vector2(peak.x,peak.z)/4)*0.001
+			if score>best:best=score;gentle=Vector2(x,y)*4
 	return {panorama=[peak+Vector3(-235,145,235),peak-Vector3(0,35,0)],
+		gentle_top=[ground(h,gentle+Vector2(38,-30),2.5),ground(h,gentle,2.0)],
 		cliff=[ground(h,cliff+downhill*45+sideways*12,8.0),ground(h,cliff,3.0)],
 		rocks=[ground(h,open+Vector2(-45,55),10),ground(h,open,1.0)],
 		rider_road=[ground(h,road,1.8),ground(h,road+along*45,2.0)]}
@@ -162,22 +174,44 @@ func run() -> void:
 		var origin:=Vector2i(clampi(top%N-SIDE/2,1,N-SIDE-2),clampi(top/N-SIDE/2,1,N-SIDE-2))
 		var peak:=ground(surface,Vector2(top%N,top/N)*4,0)
 		var cameras:=views(w,surface,origin,peak)
+		# Скальные массивы этого мира: кандидаты, отказы, опора на готовой поверхности (до раскладки леса).
+		var fields:=StageVegetation.fields(w)
+		var mstats:={}
+		var sites:=RockMassif.sites(w.seed_num,0,0,w.W,w.H,fields,0,0,w.W,w.path_mask,mstats)
+		var seated:=[0,0,0,0];var placed:=[0,0,0,0];var pick:=Vector2.INF;var pick_d:=INF
+		var cliff_at:=Vector2(cameras.cliff[1].x,cameras.cliff[1].z)
+		for at in range(0,sites.size(),RockMassif.STRIDE):
+			var v:=int(sites[at+2]);var form:=RockModels.massif_form(v)
+			placed[form]+=1
+			var mx:=sites[at]*4.0;var mz:=sites[at+1]*4.0
+			var ms:=RockModels.seat(surface,mx,mz,sites[at+3]*1.2,v)
+			if ms.x==INF:continue
+			seated[form]+=1
+			var d:=Vector2(mx,mz).distance_to(cliff_at)+(0.0 if form==RockModels.M_WALL else 60.0)
+			if d<pick_d:pick_d=d;pick=Vector2(mx,mz)
+		print("MASSIFS ",seed_text," candidates=",mstats.get("candidates",0)," rejected=",{path=mstats.get("path",0),village=mstats.get("village",0),water=mstats.get("water",0)},
+			" decided wall/rib/tor/blocks=",placed," seated=",seated)
+		if pick!=Vector2.INF:
+			var mn:=RockModels.normal_at(surface,pick.x,pick.y);var md:=Vector2(mn.x,mn.z).normalized()
+			cameras.massif_mid=[ground(surface,pick+md*60+Vector2(-md.y,md.x)*20,10.0),ground(surface,pick,4.0)]
+			cameras.massif_near=[ground(surface,pick+md*18+Vector2(-md.y,md.x)*7,1.8),ground(surface,pick,5.0)]
 		var mesh:=ArrayMesh.new();mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,TerrainBuilder.build_arrays(w,surface,Rect2i(origin,Vector2i.ONE*SIDE)))
 		var base:=Image.create(N,N,false,Image.FORMAT_RGB8)
 		for y in N:
 			for x in N:
 				var rgb:Array=Biomes.LIST[w.biome[y*N+x]].color
 				base.set_pixel(x,y,Color8(rgb[0],rgb[1],rgb[2]))
+		var plain_mat:=StandardMaterial3D.new();plain_mat.albedo_color=Color(0.6,0.6,0.6);plain_mat.roughness=0.95
 		for version:String in ["before","after"]:
 			var started:=Time.get_ticks_usec()
-			if version=="before":old_veg.run(w)
+			if version.begins_with("before"):old_veg.run(w)
 			else:StageVegetation.run(w)
 			var placement_ms:=(Time.get_ticks_usec()-started)/1000.0
-			var floor_image:Image=old_floor.surface_image(w) if version=="before" else Floor.surface_image(w)
+			var floor_image:Image=old_floor.surface_image(w) if version.begins_with("before") else Floor.surface_image(w)
 			var terrain:=MeshInstance3D.new();terrain.mesh=mesh;terrain.material_override=builder.material(base.duplicate(),floor_image)
-			if version=="before":terrain.material_override.shader=load(OUT.path_join("terrain.gdshader"))
+			if version.begins_with("before"):terrain.material_override.shader=load(OUT.path_join("terrain.gdshader"))
 			scene.add_child(terrain)
-			var layer:Node3D=old_layer.new() if version=="before" else VegetationLayer.new()
+			var layer:Node3D=old_layer.new() if version.begins_with("before") else VegetationLayer.new()
 			scene.add_child(layer);layer.setup(w,surface,defs,grass,floor_image)
 			var row:Dictionary={seed=seed_text,version=version,objects=w.obj_count,placement_ms=placement_ms,views={}}
 			var trees:=0;var rocks:=0
@@ -201,10 +235,32 @@ func run() -> void:
 				root.get_texture().get_image().save_png(OUT.path_join(seed_text+"_"+view+"_"+version+".png"))
 				row.views[view]={stream_ms=stream_ms,frame_ms=frame_ms,render_cpu_ms=render_cpu/frames,render_gpu_ms=render_gpu/frames,
 					video_bytes=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),draw_calls=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)}
-				print("SHOT ",seed_text," ",view," ",version)
+				print("SHOT ",seed_text," ",view," ",version," draw_calls=",row.views[view].draw_calls," gpu_ms=",snappedf(row.views[view].render_gpu_ms,0.01)," frame_ms=",snappedf(frame_ms,0.1),
+					" primitives=",RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+				# Нейтральный материал в том же проходе (без повторной раскладки и подгрузки): видна только форма.
+				if view in ["panorama","cliff","massif_mid","gentle_top"]:
+					var saved:={}
+					for node:GeometryInstance3D in layer.find_children("*","GeometryInstance3D",true,false):
+						saved[node]=node.material_override;node.material_override=plain_mat
+					var terrain_mat:=terrain.material_override;terrain.material_override=plain_mat
+					for frame in 3:await process_frame
+					await RenderingServer.frame_post_draw
+					root.get_texture().get_image().save_png(OUT.path_join(seed_text+"_"+view+"_"+version+"_neutral.png"))
+					for node:GeometryInstance3D in saved:node.material_override=saved[node]
+					terrain.material_override=terrain_mat
 			check(frozen==var_to_bytes([w.h,w.filled,w.path_mask,w.ocean,w.lake]),"environment preserves relief, water and route masks")
 			results.append(row);print("ENVIRONMENT ",JSON.stringify(row))
 			layer.queue_free();terrain.queue_free();await process_frame
+		# Листы было | стало (и нейтральный материал) по каждому виду, 1280 × 360.
+		for view:String in cameras:
+			for pair:Array in [["before","after",""],["before_neutral","after_neutral","_neutral"]]:
+				var a_path:String=OUT.path_join(seed_text+"_"+view+"_"+pair[0]+".png");var b_path:String=OUT.path_join(seed_text+"_"+view+"_"+pair[1]+".png")
+				if not FileAccess.file_exists(a_path) or not FileAccess.file_exists(b_path):continue
+				var sheet:=Image.create(1280,360,false,Image.FORMAT_RGBA8)
+				for k in 2:
+					var img:=Image.load_from_file(ProjectSettings.globalize_path(a_path if k==0 else b_path));img.convert(Image.FORMAT_RGBA8);img.resize(640,360,Image.INTERPOLATE_LANCZOS)
+					sheet.blit_rect(img,Rect2i(0,0,640,360),Vector2i(640*k,0))
+				sheet.save_png(OUT.path_join("sheet_"+seed_text+"_"+view+pair[2]+".png"))
 		surface.weaken_world();w.base_heights=null;w.clear_noise_fields()
 	FileAccess.open(OUT.path_join("results.json"),FileAccess.WRITE).store_string(JSON.stringify({failures=failures,worlds=results},"\t"))
 	print("MOUNTAIN ENVIRONMENT ",failures," failures")

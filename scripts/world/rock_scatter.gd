@@ -9,12 +9,20 @@ const MAX_CHANCE := 0.48
 const OUTCROP_CHANCE := 0.12
 ## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
 const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
-const FIELD_HALO := 6 # furthest uphill source read; also covers outcrop seating
+const FIELD_HALO := 7 # furthest uphill source read and outcrop seating; RockMassif sites need MAX_R + SNAP + 1
 const TALUS_REACH := [2, 4, 6]
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 
+## Маска путей для крупных форм: у плана полей с расстоянием её нет, она есть у ObjStore.
+static func path_mask_of(f: Dictionary, store: StageVegetation.ObjStore) -> PackedByteArray:
+	var mask: PackedByteArray = f.get("path", PackedByteArray())
+	if mask.is_empty() and store.w != null: mask = store._path_mask
+	return mask
+
+
+## massifs — RockMassif.sites этого чанка (StageVegetation считает их до деревьев); без них считаются здесь.
 static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
-		f: Dictionary, ox: int, oy: int, stride: int, store: StageVegetation.ObjStore) -> void:
+		f: Dictionary, ox: int, oy: int, stride: int, store: StageVegetation.ObjStore, massifs: Variant = null) -> void:
 	var rng := WGRandom.new(1)
 	var biome: PackedByteArray = f.biome
 	var slope: PackedFloat32Array = f.slope
@@ -26,8 +34,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var path_mask: PackedByteArray = f.get("path", PackedByteArray())
 	# The full-plan fields carry distances, while ObjStore already owns the exact mask.
 	# Use it too: otherwise enlarged outcrop clearance was applied only to outer chunks.
-	var outcrop_path := path_mask
-	if outcrop_path.is_empty() and store.w != null: outcrop_path = store._path_mask
+	var outcrop_path := path_mask_of(f, store)
 	var villages: PackedByteArray = f.get("village", PackedByteArray())
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
@@ -43,6 +50,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	patches.resize(pw * ph)
 	for yy in ph:
 		for xx in pw: patches[yy * pw + xx] = WGRandom.hash2(px0 + xx, py0 + yy, seed_num ^ 0x524f434b)
+	# Скальные массивы этого чанка: владелец — чанк, в котором лежит точка массива.
+	var big: PackedFloat32Array = massifs if massifs != null else RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, outcrop_path)
+	for at in range(0, big.size(), RockMassif.STRIDE):
+		if big[at] >= x0 and big[at] < x1 and big[at + 1] >= y0 and big[at + 1] < y1:
+			store.add(big[at], big[at + 1], Biomes.T_ROCK, int(big[at + 2]), big[at + 3])
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox
@@ -64,6 +76,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var deposit := lerpf(lerpf(patches[pi], patches[pi + 1], tx), lerpf(patches[pi + pw], patches[pi + pw + 1], tx), ty)
 			# Коренная порода выходит там, где склон открыт и крут; на пологих скалах — редкие останцы.
 			# Места выходов собраны в те же пятна, что россыпи: скальный пояс, а не ровный посев.
+			# В теле массива ни выходов, ни валунов: они бы утонули в нём или торчали из его граней.
+			if not big.is_empty() and RockMassif.covers(big, x + 0.5, y + 0.5, 0.0): continue
 			if mountain > 0.0 and exposed > 0.3 and dp > 10.0 and dw[i] >= 1.5:
 				var steep := smoothstep(0.45, 0.95, sl)
 				var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
@@ -112,6 +126,20 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 						if src > source:
 							source = src
 							reach_cells = step
+			# Под лицом стены и у подножия ребра или развала — их обломки: источник известен точно.
+			for at in range(0, big.size(), RockMassif.STRIDE):
+				var md := Vector2(big[at + 6], big[at + 7])
+				if md == Vector2.ZERO: continue
+				var rel := Vector2(x + 0.5 - big[at], y + 0.5 - big[at + 1])
+				var along := rel.dot(md)
+				var across := absf(rel.dot(Vector2(-md.y, md.x)))
+				var half: float = big[at + 5] * 0.8
+				if along > 0.1 and along < 6.5 and across < half:
+					var fed := (1.0 - along / 6.5) * (1.0 - 0.5 * across / half)
+					if fed > source:
+						source = 0.3 + 0.7 * fed
+						reach_cells = clampi(roundi(along), 2, 6)
+						if down == Vector2.ZERO: down = md
 			var talus := smoothstep(0.15, 0.55, source) * (1.0 - smoothstep(0.45, 0.85, sl))
 			var toe := float(reach_cells) / 6.0
 			var edge := 1.0 - absf(clampf(forest[i] + 0.5, 0.0, 1.0) * 2.0 - 1.0)

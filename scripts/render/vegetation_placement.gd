@@ -133,18 +133,38 @@ func prepare(px: float, pz: float, radius: float) -> void:
 				var kind := world.obj_k[o]
 				if not Biomes.is_tree(kind) and kind not in [Biomes.T_ROCK, Biomes.T_BUSH, Biomes.T_DEAD, Biomes.T_CACTUS]:
 					continue
-				if kind == Biomes.T_ROCK and RockModels.seat(heights, world.obj_x[o] * TILE, world.obj_y[o] * TILE, world.obj_s[o] * 1.2, world.obj_v[o]).x == INF:
-					continue
+				var at := Vector2(world.obj_x[o], world.obj_y[o]) * TILE
+				var seat := Vector4.ZERO
+				if kind == Biomes.T_ROCK:
+					seat = RockModels.seat(heights, at.x, at.y, world.obj_s[o] * 1.2, world.obj_v[o])
+					if seat.x == INF:
+						continue
 				var r := 0.3 * world.obj_s[o]
 				if kind == Biomes.T_ROCK or kind == Biomes.T_BUSH:
 					r = Biomes.CROWN_RADIUS[kind] * TILE * world.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
-					r = RockModels.OUTCROP_R * world.obj_s[o] * 1.2
+					r = RockModels.footprint(world.obj_v[o], world.obj_s[o] * 1.2)
+					# Массив: круг плотного тела, сдвинутый в склон, — трава у подножия стены остаётся.
+					if RockModels.is_massif(world.obj_v[o]):
+						var xf := RockModels.outcrop_transform(at.x, at.y, world.obj_s[o] * 1.2, Vector3(seat.y, seat.z, seat.w), seat.x,
+							Vector2(world.world_origin) * TILE, world.obj_v[o])
+						var core: Vector3 = xf * RockModels.MASSIF_SPEC[RockModels.massif_form(world.obj_v[o])].core
+						at = Vector2(core.x, core.z)
+				if r > 3.0:
+					# Крупный массив записан во все клетки своего круга: поиск соседей у каждой травинки
+					# не расширяется на его радиус (иначе по 30+ клеток на травинку у каждой горы).
+					for gy in range(floori((at.y - r) / TILE), floori((at.y + r) / TILE) + 1):
+						for gx in range(floori((at.x - r) / TILE), floori((at.x + r) / TILE) + 1):
+							var key := Vector2i(gx, gy)
+							if not _cells.has(key):
+								_cells[key] = []
+							_cells[key].append_array([at.x, at.y, r, o])
+					continue
 				_max_r = maxf(_max_r, r)
-				var cell := Vector2i(floori(world.obj_x[o]), floori(world.obj_y[o]))
+				var cell := Vector2i(floori(at.x / TILE), floori(at.y / TILE))
 				if not _cells.has(cell):
 					_cells[cell] = []
-				_cells[cell].append_array([world.obj_x[o] * TILE, world.obj_y[o] * TILE, r, o])
+				_cells[cell].append_array([at.x, at.y, r, o])
 
 
 func objects_clear(x: float, z: float, rot: float, scale: float, box: AABB, radius: float, owner: int = -1) -> bool:

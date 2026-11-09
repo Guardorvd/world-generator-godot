@@ -66,6 +66,10 @@ static func build_tree_defs() -> Dictionary:
 	for form in RockModels.OUTCROPS:
 		defs[Biomes.T_ROCK + (RockModels.VARIANTS + form) * ForestModels.MODEL_STRIDE] = {crown = RockModels.outcrop_mesh(form),
 			leaves = [_c(170, 167, 161), _c(152, 150, 146), _c(181, 176, 168)]}
+	# 09.11.2026: скальные массивы (стена, ребро, останец, развал глыб) по два рисунка, после выходов.
+	for model in RockModels.MASSIFS * RockModels.MASSIF_VARIANTS:
+		defs[Biomes.T_ROCK + (RockModels.VARIANTS + RockModels.OUTCROPS + model) * ForestModels.MODEL_STRIDE] = {crown = RockModels.massif_mesh(model),
+			leaves = [_c(168, 164, 157), _c(146, 145, 143), _c(182, 175, 163)]}
 	return defs
 
 

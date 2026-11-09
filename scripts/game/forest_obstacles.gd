@@ -9,6 +9,7 @@ extends RefCounted
 const TILE := GameConfig.TILE
 const CELL := 2.0       # сторона клетки сетки, м
 const REACH := 24.0     # препятствия собираются в этом радиусе от игрока, м
+const SCAN := REACH + RockModels.MASSIF_REACH # центр скального массива может лежать дальше REACH, а его край — ближе
 const REBUILD := 6.0    # отошли дальше этого от места сборки — пересобрать, м
 const MIN_SCALE := 0.6  # деревья мельче (молодняк) проходимы
 const SNUG := 0.85      # круг ствола чуть уже видимого: задевание кроной и корой не держит
@@ -126,8 +127,8 @@ func _outer_snapshot(px: float, pz: float) -> Dictionary:
 	if world.outer == null:
 		return out
 	var side := world.CS * TILE
-	for cy in range(floori((pz - REACH) / side), floori((pz + REACH) / side) + 1):
-		for cx in range(floori((px - REACH) / side), floori((px + REACH) / side) + 1):
+	for cy in range(floori((pz - SCAN) / side), floori((pz + SCAN) / side) + 1):
+		for cx in range(floori((px - SCAN) / side), floori((px + SCAN) / side) + 1):
 			var items: Variant = world.outer.veg.get(Vector2i(cx, cy))
 			if items != null:
 				out[Vector2i(cx, cy)] = items
@@ -140,8 +141,8 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 	if heights == null:
 		return
 	var side := world.CS * TILE
-	for cy in range(maxi(0, floori((pz - REACH) / side)), mini(world.CH, floori((pz + REACH) / side) + 1)):
-		for cx in range(maxi(0, floori((px - REACH) / side)), mini(world.CW, floori((px + REACH) / side) + 1)):
+	for cy in range(maxi(0, floori((pz - SCAN) / side)), mini(world.CH, floori((pz + SCAN) / side) + 1)):
+		for cx in range(maxi(0, floori((px - SCAN) / side)), mini(world.CW, floori((px + SCAN) / side) + 1)):
 			for o in world.chunks[cy * world.CW + cx]:
 				var kind := world.obj_k[o]
 				var s := world.obj_s[o]
@@ -149,7 +150,8 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
-				if absf(x - px) > REACH or absf(z - pz) > REACH:
+				var reach := REACH + (RockModels.MASSIF_REACH if kind == Biomes.T_ROCK and RockModels.is_massif(world.obj_v[o]) else 0.0)
+				if absf(x - px) > reach or absf(z - pz) > reach:
 					continue
 				# на полотне и в воде дерево не рисуется — не мешает и здесь (та же проверка, что у VegetationLayer)
 				if on_tread(heights, x, z):
@@ -157,7 +159,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
 					var seat := RockModels.seat(heights, x, z, s * 1.2, world.obj_v[o])
 					if seat.x != INF:
-						_add_outcrop(out, x, z, s * 1.2, seat.x, Vector3(seat.y, seat.z, seat.w))
+						_add_outcrop(out, x, z, s * 1.2, seat.x, Vector3(seat.y, seat.z, seat.w), world.obj_v[o])
 					continue
 				var base := heights.ground_at(x, z)
 				if kind == Biomes.T_ROCK:
@@ -178,12 +180,13 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				continue
 			var x: float = xs[o] * TILE
 			var z: float = items.y[o] * TILE
-			if absf(x - px) > REACH or absf(z - pz) > REACH:
+			var reach := REACH + (RockModels.MASSIF_REACH if kind == Biomes.T_ROCK and RockModels.is_massif(items.v[o]) else 0.0)
+			if absf(x - px) > reach or absf(z - pz) > reach:
 				continue
 			var base: float = items.ground[o]
 			if kind == Biomes.T_ROCK and RockModels.is_outcrop(items.v[o]):
 				var up: Vector3 = items.normals[o] if items.has("normals") else Vector3.UP
-				_add_outcrop(out, x, z, s * 1.2, base, up)
+				_add_outcrop(out, x, z, s * 1.2, base, up, items.v[o])
 				continue
 			if kind == Biomes.T_ROCK:
 				if s < 0.42 or (items.has("normals") and not RockModels.supported(items.normals[o])):
@@ -201,10 +204,10 @@ static func on_tread(heights: Heightfield, x: float, z: float) -> bool:
 
 
 ## Same transformed block cores as the rendered outcrop; no per-object collision nodes.
-func _add_outcrop(out: Dictionary, x: float, z: float, scale: float, base: float, up: Vector3) -> void:
+func _add_outcrop(out: Dictionary, x: float, z: float, scale: float, base: float, up: Vector3, v: int) -> void:
 	var origin := Vector2(world.world_origin) * TILE
-	var xf := RockModels.outcrop_transform(x, z, scale, up, base, origin)
-	var solids := RockModels.outcrop_solids(xf, RockModels.outcrop_form(x, z, origin))
+	var xf := RockModels.outcrop_transform(x, z, scale, up, base, origin, v)
+	var solids := RockModels.outcrop_solids(xf, RockModels.form_of(v, x, z, origin))
 	for at in range(0, solids.size(), STRIDE):
 		_put(out, solids[at], solids[at + 1], solids[at + 2], solids[at + 3], solids[at + 4], solids[at + 5], solids[at + 6])
 

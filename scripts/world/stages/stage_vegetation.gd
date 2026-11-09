@@ -252,6 +252,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var rng := WGRandom.new(0)
 	var mask := WGRandom.MASK
 	store.begin_chunk(x0, y0, x1, y1)
+	# 09.11.2026: скальные массивы решаются до деревьев: в их теле деревьев и камыша нет (RockMassif.covers).
+	var massifs := RockMassif.sites(seed_num, x0, y0, x1, y1, f, ox, oy, stride, RockScatter.path_mask_of(f, store))
 	for y in range(y0, y1):
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox
@@ -334,7 +336,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					if b_tree[kind] != 0: sc *= 1.0-0.22*exposed
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
 					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
-					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc)):
+					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc)) \
+							and (massifs.is_empty() or not RockMassif.covers(massifs, px, py, 0.2)):
 						store.add(px, py, kind, v, sc)
 			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48:
 				# Старый RNG нужен только камышу. Вдали от воды и на кручах пустую
@@ -349,11 +352,12 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var py := y + rng.next_float()
 					var v := floori(rng.next_float() * 3)
 					var sc := 0.8 + rng.next_float() * 0.3
-					if not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, Biomes.T_REED, sc):
+					if (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, Biomes.T_REED, sc)) \
+							and (massifs.is_empty() or not RockMassif.covers(massifs, px, py, 0.0)):
 						store.add(px, py, Biomes.T_REED, v, sc)
 
 
-	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store)
+	RockScatter.place_chunk(seed_num, x0, y0, x1, y1, f, ox, oy, stride, store, massifs)
 
 
 ## Свойства биомов в плоских таблицах: в цикле по всем клеткам словари читать дорого
