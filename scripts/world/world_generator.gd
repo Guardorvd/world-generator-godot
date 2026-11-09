@@ -165,7 +165,13 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			on_layer.call(w, 1)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	var later := Time.get_ticks_usec()
-	StageVegetation.run(w)
+	var surface: Heightfield = w.generation.trail_surface
+	if surface == null:
+		# При частичном попадании в кэш готовых высот ещё нет. Массивы вдали
+		# от маршрутов садятся на то же основание, что и при обычной генерации.
+		surface = Heightfield.base_of(w).copy()
+		surface.finish_paths()
+	StageVegetation.run(w, surface)
 	later = _stage_time(w, "vegetation", later)
 	StageLakes.run(w)
 	later = _stage_time(w, "lakes", later)

@@ -18,9 +18,9 @@ const SALT := 0x524c4946
 
 
 ## Пласты массива в точке (клетки мира): x — шаг пласта, м; y — сдвиг отметок, м. Медленно меняются
-## по массиву: шаг 9–17 м, отметки плавно «падают» — пласты наклонены, а не горизонтали карты.
+## по массиву: шаг 9–21 м, отметки плавно «падают» — пласты наклонены, а не горизонтали карты.
 static func strata(seed_num: int, x: float, y: float) -> Vector2:
-	var spacing := lerpf(9.0, 17.0, RockMassif._value(seed_num, x, y, 70.0, 0x42414e44))
+	var spacing := lerpf(9.0, 21.0, RockMassif._value(seed_num, x, y, 70.0, 0x42414e44))
 	return Vector2(spacing, RockMassif._value(seed_num, x, y, 45.0, 0x50484153) * spacing * 3.0)
 
 
@@ -64,18 +64,26 @@ class Lattice:
 ## Поправка высоты (м) по значениям шумов места: sturdy (прочность), crag (скалистость), пласт st,
 ## n — зубцы (~20 м), spire — шпили (~12 м); h — исходная высота, sl — крутизна, convex — выпуклость (м).
 static func shape(h: float, sl: float, convex: float, rock: float, sturdy: float, crag: float, st: Vector2, n: float, spire: float) -> float:
-	# Пласты-уступы: склон собирается в полки и обрывы (профиль f^k), средняя высота склона сохраняется.
-	var k := lerpf(3.5, 7.0, sturdy)
+	# Соседние пласты имеют разную мощность. Профили сходятся к нулю на общей
+	# отметке, поэтому смена мощности не разрывает поверхность.
 	var u := (h - st.y) / st.x
 	var f := u - floorf(u)
-	var terrace := (pow(f, k) - f + 0.5 - 1.0 / (k + 1.0)) * st.x
-	var steep := smoothstep(0.1, 0.38, sl)
-	var shift := terrace * rock * lerpf(0.7, 1.0, sturdy) * lerpf(0.65, 1.0, crag) * steep
-	# Зубцы и гребешки: рвут полки по горизонтали на отдельности, сильнее на крутом.
-	var ridged := 1.0 - absf(2.0 * n - 1.0)
-	shift += (ridged - 0.5) * 6.0 * rock * (0.35 + 0.65 * smoothstep(0.2, 0.7, sl)) * lerpf(0.5, 1.2, crag)
-	# Скальные вершины и гребни: выпуклое место получает зубчатый силуэт (тур, жандарм).
-	shift += smoothstep(0.55, 0.9, spire) * 4.5 * rock * smoothstep(0.05, 0.6, convex)
+	var competence := smoothstep(0.24, 0.7, sturdy)
+	var broken_bed := posmod(floori(u), 3) == 1
+	var k := lerpf(2.8, 6.5, competence)
+	var terrace := (pow(f, k) - f + (0.5 - 1.0 / (k + 1.0)) * 6.0 * f * (1.0 - f)) * st.x
+	var ledge := lerpf(0.18, 1.0, competence)
+	if broken_bed: ledge *= lerpf(0.22, 0.82, competence)
+	var open := smoothstep(0.22, 0.72, crag)
+	var steep := smoothstep(0.15, 0.5, sl)
+	var shift := terrace * ledge * lerpf(0.3, 1.05, open) * steep
+	# Разрушение проявляется пятнами. На пологой поверхности остаются только
+	# отдельные выступы, привязанные к выпуклым плечам и гребням.
+	var fracture := smoothstep(0.26, 0.77, n)
+	var ribs := smoothstep(0.0, 0.65, convex)
+	shift += (fracture - 0.45) * lerpf(2.0, 6.4, 1.0 - competence) * open * steep
+	shift += smoothstep(0.52, 0.87, spire) * 5.2 * ribs * open
+	shift *= rock
 	return clampf(shift, -MAX_SHIFT, MAX_SHIFT)
 
 ## Поправить высоты h.hv стартовой области (на месте). Возвращает число изменённых клеток.
@@ -154,9 +162,10 @@ static func apply(h: Heightfield) -> int:
 				if not dw.is_empty(): rock *= smoothstep(3.0, 6.0, dw[i])
 				if rock <= 0.0: continue
 				var convex := (e - (elev[i - 1] + elev[i + 1] + elev[i - W] + elev[i + W]) * 0.25) * hs
+				if slope[i] <= 0.15 and convex <= 0.0: continue
 				var wx := float(x + seed_ox)
 				var wy := float(y + seed_oy)
-				var spacing := lerpf(9.0, 17.0, l_band.at(wx, wy))
+				var spacing := lerpf(9.0, 21.0, l_band.at(wx, wy))
 				var st := Vector2(spacing, l_phase.at(wx, wy) * spacing * 3.0)
 				var d := shape(e * hs, slope[i], convex, rock, l_sturdy.at(wx, wy), l_crag.at(wx, wy), st, l_teeth.at(wx, wy), l_spire.at(wx, wy))
 				if absf(d) >= 0.01: out[(y - r0) * W + x] = d

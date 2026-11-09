@@ -1,13 +1,12 @@
 extends SceneTree
-## Paired production materials, objects, LOD and streaming over unchanged relief.
-## Baseline scripts/shader are snapshots of HEAD in .godot/mountain_environment.
+## Paired production relief, objects, materials and LOD on the same geography and routes.
 const OUT := "res://.godot/mountain_environment"
 const Probe := preload("res://tools/mountain_detail_test.gd")
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const N := 768
 const SIDE := 320
-var base_rev := "cb4622c" # pass --base 3676c62 to review the original outcrop implementation
+var base_rev := "82e5341"
 var failures := 0
 var scene: Node3D
 var camera: Camera3D
@@ -46,7 +45,10 @@ func rules() -> void:
 	f.biome.fill(Biomes.GRASS); f.elev.fill(0.4);f.slope.fill(0.3);f.moist.fill(0.5)
 	f.dw.fill(100);f.dist_path.fill(100);f.stony.fill(0.5);f.forest.fill(0.1)
 	f.rock=Surface.field(f.elev,f.slope,f.moist)
-	for y in 32: f.path[y*32+16]=3
+	for y in 32:
+		f.path[y*32+16]=3
+		for x in 32:
+			f.dist_path[y*32+x] = absf(x - 16.0) * GameConfig.TILE - 3.0
 	var patterns := []
 	var clear := true
 	for pieces:Array in [[Rect2i(0,0,32,32)],[Rect2i(16,0,16,32),Rect2i(0,0,16,32)]]:
@@ -80,17 +82,27 @@ func geography(seed_text:String) -> WorldData:
 	var w:=Probe.world(seed_text);w.scale=float(w.N)/(512*512)
 	StageRelief.run(w)
 	w.start_noise_fields();StageOcean.run(w);StageHydrology.run(w);StageRivers.run(w);StageGeography.run(w);StageClimate.run(w)
-	StageLandmarks.run(w);StageTrails.run(w,func(_p:float,_s:String)->void:pass);RoadSurface.run(w)
+	StageLandmarks.run(w)
+	var started := Time.get_ticks_usec()
+	StageTrails.run(w,func(_p:float,_s:String)->void:pass)
+	print("ROUTES ", seed_text, " count=", w.trails.size(), " build_ms=", (Time.get_ticks_usec()-started)/1000.0)
+	RoadSurface.run(w)
 	return w
 
 func baseline() -> bool:
 	DirAccess.make_dir_recursive_absolute(OUT)
-	for item:Array in [["rock_scatter.gd","scripts/world/rock_scatter.gd"],["rock_models.gd","scripts/render/rock_models.gd"],["stage_vegetation.gd","scripts/world/stages/stage_vegetation.gd"],["forest_floor.gd","scripts/render/forest_floor.gd"],["vegetation_layer.gd","scripts/render/vegetation_layer.gd"],["terrain.gdshader","resources/terrain.gdshader"]]:
+	for item:Array in [["rock_relief.gd","scripts/world/rock_relief.gd"],["rock_massif.gd","scripts/world/rock_massif.gd"],["rock_scatter.gd","scripts/world/rock_scatter.gd"],["rock_models.gd","scripts/render/rock_models.gd"],["stage_vegetation.gd","scripts/world/stages/stage_vegetation.gd"],["forest_floor.gd","scripts/render/forest_floor.gd"],["vegetation_layer.gd","scripts/render/vegetation_layer.gd"],["terrain.gdshader","resources/terrain.gdshader"]]:
 		var output:Array=[]
 		if OS.execute("git",["show",base_rev+":"+item[1]],output)!=0:return false
-		var source:=str(output[0]).replace("class_name RockScatter","").replace("class_name RockModels","").replace("class_name StageVegetation","").replace("class_name VegetationLayer","")
-		if item[0]=="rock_scatter.gd":source=source.replace("store: StageVegetation.ObjStore","store")
-		if item[0]=="stage_vegetation.gd":source=source.replace("extends RefCounted","extends RefCounted\nconst PriorRocks := preload(\"res://.godot/mountain_environment/rock_scatter.gd\")").replace("RockScatter.place_chunk(","PriorRocks.place_chunk(")
+		var source:=str(output[0]).replace("class_name " + str(item[0]).get_basename().to_pascal_case(), "")
+		if item[0]=="rock_relief.gd":
+			source=source.replace('"rock_relief_', '"prior_rock_relief_')
+		if item[0]=="rock_massif.gd":
+			source=source.replace("extends RefCounted", "extends RefCounted\nconst RockRelief := preload(\"res://.godot/mountain_environment/rock_relief.gd\")\nconst RockModels := preload(\"res://.godot/mountain_environment/rock_models.gd\")")
+		if item[0]=="rock_scatter.gd":
+			source=source.replace("store: StageVegetation.ObjStore","store").replace("extends RefCounted", "extends RefCounted\nconst RockMassif := preload(\"res://.godot/mountain_environment/rock_massif.gd\")")
+		if item[0]=="stage_vegetation.gd":
+			source=source.replace("extends RefCounted","extends RefCounted\nconst PriorRocks := preload(\"res://.godot/mountain_environment/rock_scatter.gd\")\nconst RockMassif := preload(\"res://.godot/mountain_environment/rock_massif.gd\")").replace("RockScatter.","PriorRocks.")
 		if item[0]=="vegetation_layer.gd":
 			source=source.replace("res://scripts/render/forest_floor.gd","res://.godot/mountain_environment/forest_floor.gd")
 			source=source.replace("extends Node3D", "extends Node3D\nconst PriorRockModels := preload(\"res://.godot/mountain_environment/rock_models.gd\")").replace("RockModels.", "PriorRockModels.")
@@ -161,7 +173,16 @@ func run() -> void:
 	var old_veg:Script=load(OUT.path_join("stage_vegetation.gd"))
 	var old_floor:Script=load(OUT.path_join("forest_floor.gd"))
 	var old_layer:Script=load(OUT.path_join("vegetation_layer.gd"))
+	var old_relief:Script=load(OUT.path_join("rock_relief.gd"))
+	var old_massif:Script=load(OUT.path_join("rock_massif.gd"))
+	var old_models:Script=load(OUT.path_join("rock_models.gd"))
+	if not old_veg or not old_veg.can_instantiate() or not old_floor or not old_layer or not old_relief or not old_massif or not old_models:
+		push_error("Could not load comparison scripts");quit(1);return
 	var builder:=TerrainBuilder.new();var defs:=Models.tree_defs();var grass:=Models.grass_mesh()
+	var old_defs := defs.duplicate(true)
+	for model in RockModels.MASSIFS * RockModels.MASSIF_VARIANTS:
+		var id := VegetationLayer.OUTCROP_MODEL + (RockModels.OUTCROPS + model) * ForestModels.MODEL_STRIDE
+		old_defs[id].crown = old_models.massif_mesh(model)
 	var results:=[]
 	var seeds:Array=Probe.SEEDS
 	var args:=OS.get_cmdline_user_args()
@@ -169,9 +190,12 @@ func run() -> void:
 	for seed_text:String in seeds:
 		print("BEGIN ENVIRONMENT ",seed_text)
 		var w:=geography(seed_text)
-		# «Было» — тот же мир без скального рельефа склонов (RockRelief), «стало» — с ним.
+		var flat:=Heightfield.base_of(w).copy()
+		var relief_started:=Time.get_ticks_usec()
+		var old_cells:int=old_relief.apply(flat)
+		var old_ms:=(Time.get_ticks_usec()-relief_started)/1000.0
 		Heightfield.allow_rock_relief=false
-		var flat:=Heightfield.base_of(w).copy();flat.finish_paths()
+		flat.finish_paths()
 		Heightfield.allow_rock_relief=true
 		var surface:=Heightfield.base_of(w).copy();surface.finish_paths()
 		var moved:=0;var max_shift:=0.0
@@ -179,7 +203,14 @@ func run() -> void:
 			var d:=absf(surface.hv[i]-flat.hv[i])
 			if d>0.05:moved+=1
 			max_shift=maxf(max_shift,d)
-		print("RELIEF ",seed_text," cells=",surface.path_timings.get("rock_relief_cells",0)," moved=",moved," max_m=",snappedf(max_shift,0.01)," ms=",surface.path_timings.get("rock_relief_ms",0.0)," road_bed_ms=",surface.path_timings.get("road_bed_ms",0.0))
+		print("RELIEF ",seed_text," cells=",old_cells," -> ",surface.path_timings.get("rock_relief_cells",0)," moved=",moved,
+			" max_m=",snappedf(max_shift,0.01)," ms=",old_ms," -> ",surface.path_timings.get("rock_relief_ms",0.0),
+			" road_bed_ms=",flat.path_timings.get("road_bed_ms",0.0)," -> ",surface.path_timings.get("road_bed_ms",0.0))
+		var route_shift:=0.0
+		for route:Dictionary in w.trails:
+			for p:Dictionary in route.pts:
+				route_shift=maxf(route_shift,absf(surface.ground_at(p.x*GameConfig.TILE,p.y*GameConfig.TILE)-flat.ground_at(p.x*GameConfig.TILE,p.y*GameConfig.TILE)))
+		check(route_shift<0.01,"route centreline height preserved (max shift %.4f m)"%route_shift)
 		var frozen:=var_to_bytes([w.h,w.filled,w.path_mask,w.ocean,w.lake])
 		var top:=0
 		for i in w.N:
@@ -191,6 +222,15 @@ func run() -> void:
 		var fields:=StageVegetation.fields(w)
 		var mstats:={}
 		var sites:=RockMassif.sites(w.seed_num,0,0,w.W,w.H,fields,0,0,w.W,w.path_mask,mstats)
+		var old_sites:PackedFloat32Array=old_massif.sites(w.seed_num,0,0,w.W,w.H,fields,0,0,w.W,w.path_mask)
+		var old_seated:=[0,0,0,0];var old_placed:=[0,0,0,0]
+		for at in range(0,old_sites.size(),RockMassif.STRIDE):
+			var v:=int(old_sites[at+2])
+			var form:=RockModels.massif_form(v)
+			old_placed[form]+=1
+			var ms:Vector4=old_models.seat(flat,old_sites[at]*4.0,old_sites[at+1]*4.0,old_sites[at+3]*1.2,v)
+			old_seated[form]+=int(ms.x!=INF)
+		print("MASSIFS BEFORE ",seed_text," placed=",old_placed," seated=",old_seated)
 		var seated:=[0,0,0,0];var placed:=[0,0,0,0];var pick:=Vector2.INF;var pick_d:=INF
 		var cliff_at:=Vector2(cameras.cliff[1].x,cameras.cliff[1].z)
 		for at in range(0,sites.size(),RockMassif.STRIDE):
@@ -208,6 +248,11 @@ func run() -> void:
 			var mn:=RockModels.normal_at(surface,pick.x,pick.y);var md:=Vector2(mn.x,mn.z).normalized()
 			cameras.massif_mid=[ground(surface,pick+md*60+Vector2(-md.y,md.x)*20,10.0),ground(surface,pick,4.0)]
 			cameras.massif_near=[ground(surface,pick+md*18+Vector2(-md.y,md.x)*7,1.8),ground(surface,pick,5.0)]
+		# Keep the same camera for the pair, above both versions of the terrain.
+		for view: String in cameras:
+			var eye: Vector3 = cameras[view][0]
+			eye.y = maxf(eye.y, flat.ground_at(eye.x, eye.z) + 1.8)
+			cameras[view][0] = eye
 		var mesh:=ArrayMesh.new();mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,TerrainBuilder.build_arrays(w,surface,Rect2i(origin,Vector2i.ONE*SIDE)))
 		var mesh_flat:=ArrayMesh.new();mesh_flat.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES,TerrainBuilder.build_arrays(w,flat,Rect2i(origin,Vector2i.ONE*SIDE)))
 		var base:=Image.create(N,N,false,Image.FORMAT_RGB8)
@@ -215,18 +260,18 @@ func run() -> void:
 			for x in N:
 				var rgb:Array=Biomes.LIST[w.biome[y*N+x]].color
 				base.set_pixel(x,y,Color8(rgb[0],rgb[1],rgb[2]))
-		var plain_mat:=StandardMaterial3D.new();plain_mat.albedo_color=Color(0.6,0.6,0.6);plain_mat.roughness=0.95
+		var plain_mat:=StandardMaterial3D.new();plain_mat.albedo_color=Color(0.36,0.36,0.36);plain_mat.roughness=0.95
 		for version:String in ["before","after"]:
 			var started:=Time.get_ticks_usec()
 			if version.begins_with("before"):old_veg.run(w)
-			else:StageVegetation.run(w)
+			else:StageVegetation.run(w,surface)
 			var placement_ms:=(Time.get_ticks_usec()-started)/1000.0
 			var floor_image:Image=old_floor.surface_image(w) if version.begins_with("before") else Floor.surface_image(w)
 			var terrain:=MeshInstance3D.new();terrain.mesh=mesh_flat if version.begins_with("before") else mesh;terrain.material_override=builder.material(base.duplicate(),floor_image)
 			if version.begins_with("before"):terrain.material_override.shader=load(OUT.path_join("terrain.gdshader"))
 			scene.add_child(terrain)
 			var layer:Node3D=old_layer.new() if version.begins_with("before") else VegetationLayer.new()
-			scene.add_child(layer);layer.setup(w,flat if version.begins_with("before") else surface,defs,grass,floor_image)
+			scene.add_child(layer);layer.setup(w,flat if version.begins_with("before") else surface,old_defs if version.begins_with("before") else defs,grass,floor_image)
 			var row:Dictionary={seed=seed_text,version=version,objects=w.obj_count,placement_ms=placement_ms,views={}}
 			var trees:=0;var rocks:=0
 			for k in w.obj_k:trees+=int(Biomes.is_tree(k));rocks+=int(k==Biomes.T_ROCK)
@@ -248,9 +293,10 @@ func run() -> void:
 				await RenderingServer.frame_post_draw
 				root.get_texture().get_image().save_png(OUT.path_join(seed_text+"_"+view+"_"+version+".png"))
 				row.views[view]={stream_ms=stream_ms,frame_ms=frame_ms,render_cpu_ms=render_cpu/frames,render_gpu_ms=render_gpu/frames,
-					video_bytes=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),draw_calls=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME)}
+					video_bytes=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_VIDEO_MEM_USED),draw_calls=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_DRAW_CALLS_IN_FRAME),
+					primitives=RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME)}
 				print("SHOT ",seed_text," ",view," ",version," draw_calls=",row.views[view].draw_calls," gpu_ms=",snappedf(row.views[view].render_gpu_ms,0.01)," frame_ms=",snappedf(frame_ms,0.1),
-					" primitives=",RenderingServer.get_rendering_info(RenderingServer.RENDERING_INFO_TOTAL_PRIMITIVES_IN_FRAME))
+					" primitives=",row.views[view].primitives)
 				# Нейтральный материал в том же проходе (без повторной раскладки и подгрузки): видна только форма.
 				if view in ["panorama","cliff","massif_mid","gentle_top"]:
 					var saved:={}

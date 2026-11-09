@@ -31,7 +31,6 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var stony: PackedFloat64Array = f.stony
 	var forest: PackedFloat64Array = f.forest
 	var paths: PackedFloat32Array = f.get("dist_path", PackedFloat32Array())
-	var path_mask: PackedByteArray = f.get("path", PackedByteArray())
 	# The full-plan fields carry distances, while ObjStore already owns the exact mask.
 	# Use it too: otherwise enlarged outcrop clearance was applied only to outer chunks.
 	var outcrop_path := path_mask_of(f, store)
@@ -134,10 +133,11 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				var along := rel.dot(md)
 				var across := absf(rel.dot(Vector2(-md.y, md.x)))
 				var half: float = big[at + 5] * 0.8
-				if along > 0.1 and along < 6.5 and across < half:
-					var fed := (1.0 - along / 6.5) * (1.0 - 0.5 * across / half)
+				if along > 0.1 and along < RockMassif.TALUS_RANGE and across < half:
+					if RockModels.massif_form(int(big[at + 2])) == RockModels.M_TOR: continue
+					var fed := 0.92 * (1.0 - along / RockMassif.TALUS_RANGE) * (1.0 - smoothstep(half * 0.4, half, across))
 					if fed > source:
-						source = 0.3 + 0.7 * fed
+						source = fed
 						reach_cells = clampi(roundi(along), 2, 6)
 						if down == Vector2.ZERO: down = md
 			var talus := smoothstep(0.15, 0.55, source) * (1.0 - smoothstep(0.45, 0.85, sl))

@@ -46,13 +46,15 @@ const TRUNK := {
 const LOW_CROWN := 0.3   # ель и снежная ель опускают ветви к земле: эта доля кроны тоже не над полотном
 
 
-static func run(w: WorldData) -> void:
+static func run(w: WorldData, surface: Heightfield = null) -> void:
 	var W := w.W
 	var H := w.H
 	w.CS = WorldData.CHUNK_SIZE
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
 	var f := fields(w)
+	if surface != null:
+		f.massifs = RockMassif.seated(f.massifs, surface)
 	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
 	# С 12.2 ряды чанков считаются на всех ядрах (Parallel.bands), каждый в свой список; списки склеиваются
 	# по порядку рядов, поэтому номера объектов те же, что при обходе подряд.

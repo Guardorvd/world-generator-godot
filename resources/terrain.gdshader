@@ -250,7 +250,7 @@ void fragment() {
 		float fy = row - row_i;
 		vec2 blk = grain_hash(cell_i + vec2(row_i * 17.0, row_i * 5.0));
 		// Тон блоков меняется на границах пластов; на округлом склоне это кольца горизонталей, поэтому там слабо.
-		float block_vis = (1.0 - smoothstep(0.6, 1.6, px3)) * mix(0.08, 0.65, cliff);
+		float block_vis = (1.0 - smoothstep(0.6, 1.6, px3)) * mix(0.04, 0.40, cliff);
 		float ledge_vis = (1.0 - smoothstep(layer_h * 0.04, layer_h * 0.14, px3)) * smoothstep(0.18, 0.36, slope);
 		float crack_vis = 1.0 - smoothstep(0.06, 0.22, px3);
 		float d_joint = min(min(fxz.x, 1.0 - fxz.x) * 4.3, min(fxz.y, 1.0 - fxz.y) * 3.7);
@@ -260,7 +260,7 @@ void fragment() {
 		// по границам пластов на гладком меше рельефа читались как горизонтали карты — их нет.
 		float crack = joint * mix(step(0.6, blk.x) * 0.55, step(0.18, blk.x), cliff) * smoothstep(0.08, 0.3, min(fy, 1.0 - fy) * layer_h);
 		// Только у части блоков и только на круче: на округлом склоне сплошные пласты читались как горизонтали.
-		ledge_vis *= cliff * step(0.62, blk.y);
+		ledge_vis *= cliff * step(0.62, blk.y) * 0.55;
 		float ledge = mix(mix(0.93, 1.03, smoothstep(0.0, 0.4, fy)), 1.0, 1.0 - ledge_vis);
 		vec3 bed = lith * mix(1.0, 0.86 + 0.26 * blk.x, block_vis) * ledge;
 		// Лишайник на открытых плитах (пятна 7 м, вблизи — мелкие) и мох в трещинах сырых склонов.

@@ -7,7 +7,7 @@ extends RefCounted
 ## замедляется; опора, коллизия и отрисовка — общие с выходами (RockModels.seat / outcrop_solids).
 ##
 ## Композиция, а не россыпь:
-## - стены-уступы стоят поясами на общих отметках пластов (шаг 9–17 м и наклон пласта меняются по
+## - стены-уступы стоят поясами на общих отметках пластов (шаг 9–21 м и наклон пласта меняются по
 ##   массиву): место сдвигается вверх/вниз по склону к ближайшей отметке, соседние стены пояса
 ##   оказываются на одной горизонтали и вместе читаются как продолжающийся уступ;
 ## - рёбра — на выпуклых отрогах крутых склонов, вдоль линии падения;
@@ -18,7 +18,7 @@ extends RefCounted
 
 const LATTICE := 5          # шаг возможных мест, клеток (20 м): стены пояса почти смыкаются
 const SNAP := 1.2           # насколько место сдвигается к отметке пласта, клеток
-const MAX_R := 4.5          # наибольший радиус пятна массива, клеток (r × масштаб отрисовки / TILE)
+const MAX_R := RockModels.MASSIF_REACH / GameConfig.TILE
 ## Поля читаются в клетке места и у соседей (±1): место дальше чанка не более чем на MAX_R + SNAP,
 ## поэтому запас полей за краем — MAX_R + SNAP + 1 <= RockScatter.FIELD_HALO.
 const STRIDE := 10          # x, y (клетки), obj_v, масштаб, оттенок, радиус пятна (клетки), вниз x, y, исходное место x, y
@@ -119,14 +119,14 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 				chance = 0.3 + 0.3 * smoothstep(0.0, 0.4, convex)
 			if form < 0: continue
 			# Одни горы и склоны голые и уступчатые, другие мягче — крупная «скалистость».
-			chance *= lerpf(0.3, 1.25, crag) * lerpf(0.5, 1.0, mountain)
+			chance *= lerpf(0.2, 1.25, smoothstep(0.20, 0.72, crag)) * lerpf(0.5, 1.0, mountain)
 			if form == RockModels.M_WALL:
 				# Пояс: место сдвигается по линии падения к ближайшей отметке пласта.
 				# Те же пласты, что у уступов рельефа (RockRelief): стена встаёт на обрыв полки.
 				var st := RockRelief.strata(seed_num, sx, sy)
 				var spacing := st.x
 				var phase := st.y
-				var h := e * hs
+				var h := e * hs + gx * (sx - floorf(sx) - 0.5) + gy * (sy - floorf(sy) - 0.5)
 				var band := roundf((h - phase) / spacing) * spacing + phase
 				var shift := (band - h) / maxf(g, 0.5)
 				if absf(shift) <= SNAP and down != Vector2.ZERO:
@@ -145,14 +145,16 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			var radius: float = Spec[form].r * scale * 1.2 / GameConfig.TILE
 			# Пятно не задевает пути, поселения, реки и воду (маски проверяются целиком по кругу).
 			var blocked := ""
-			for yy in range(floori(sy - radius), floori(sy + radius) + 1):
-				for xx in range(floori(sx - radius), floori(sx + radius) + 1):
+			var clearance := radius + 0.6
+			var clearance_sq := clearance * clearance
+			for yy in range(floori(sy - clearance), floori(sy + clearance) + 1):
+				for xx in range(floori(sx - clearance), floori(sx + clearance) + 1):
 					var lxx := xx - ox
 					var lyy := yy - oy
 					if lxx < 0 or lyy < 0 or lxx >= stride or lyy >= rows: continue
 					var dx := maxf(maxf(xx - sx, sx - xx - 1.0), 0.0)
 					var dy := maxf(maxf(yy - sy, sy - yy - 1.0), 0.0)
-					if dx * dx + dy * dy >= (radius + 0.6) * (radius + 0.6): continue
+					if dx * dx + dy * dy >= clearance_sq: continue
 					var k := lyy * stride + lxx
 					if not path.is_empty() and path[k] != 0: blocked = "path"
 					elif not villages.is_empty() and villages[k] != 0: blocked = "village"
@@ -162,22 +164,46 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			if blocked != "":
 				stats[blocked] = stats.get(blocked, 0) + 1
 				continue
-			# Рисунок — один на чанк (меньше групп MultiMesh), соседние чанки разные.
-			var variant := int(WGRandom.hash2(floori(sx / WorldData.CHUNK_SIZE), floori(sy / WorldData.CHUNK_SIZE), seed_num ^ 0x56415249) * RockModels.MASSIF_VARIANTS)
+			# Крупные формы редки. Два силуэта могут делить чанк, но число групп
+			# по-прежнему ограничено общими моделями каталога.
+			var silhouette := WGRandom.hash2(lx, ly, seed_num ^ 0x56415249)
+			var low_wall := lerpf(0.74, 0.32, smoothstep(0.3, 1.1, sl))
+			var variant := int(silhouette >= (low_wall if form == RockModels.M_WALL else 0.5))
 			var tint := int(clampf(sturdy * 3.0, 0.0, 2.0))
 			out.append_array(PackedFloat32Array([sx, sy, RockModels.massif_v(form, variant, tint), scale, tint, radius, down.x, down.y, site.x, site.y]))
 	return out
 
 
-## Массивы списка всего плана (sites по всей карте), которые sites(x0, y0, x1, y1) вернул бы для чанка:
-## тот же отбор по исходному месту и тот же порядок, поэтому план и чанки за краем считают одинаково,
-## а план не решает одни и те же места заново в каждом чанке.
+## Только опёртые массивы закрывают место для подлеска и питают осыпь.
+static func seated(candidates: PackedFloat32Array, surface: Heightfield) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var tile := GameConfig.TILE
+	for at in range(0, candidates.size(), STRIDE):
+		var x := candidates[at] * tile
+		var z := candidates[at + 1] * tile
+		var v := int(candidates[at + 2])
+		var pose := RockModels.seat(surface, x, z, candidates[at + 3] * 1.2, v)
+		if pose.x == INF: continue
+		var item := candidates.slice(at, at + STRIDE)
+		var down := Vector2(pose.y, pose.w)
+		if down.length_squared() > 0.004 * 0.004:
+			down = down.normalized()
+			item[6] = down.x
+			item[7] = down.y
+		out.append_array(item)
+	return out
+
+
+## Соседние массивы могут влиять на осыпь за пределами собственного пятна.
+const TALUS_RANGE := 6.5
+
+
 static func near(all: PackedFloat32Array, x0: int, y0: int, x1: int, y1: int) -> PackedFloat32Array:
 	var out := PackedFloat32Array()
-	var reach := MAX_R + SNAP
+	var reach := TALUS_RANGE + 1.0 # включая поперечную ширину веера
 	for at in range(0, all.size(), STRIDE):
-		var sx := all[at + 8]
-		var sy := all[at + 9]
+		var sx := all[at]
+		var sy := all[at + 1]
 		if sx < x0 - reach or sy < y0 - reach or sx >= x1 + reach or sy >= y1 + reach: continue
 		out.append_array(all.slice(at, at + STRIDE))
 	return out

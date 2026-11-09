@@ -29,7 +29,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 11 # slope detail without contour terraces; independent lake proposal streams
 const SCHEMA_TRAILS_VERSION := 15 # natural bike rides (RideRoutes) after the mountain trails
-const SCHEMA_NATURE_VERSION := 10 # 09.11.2026: rock massifs (RockMassif); 9: conservative clearance at changes of path width
+const SCHEMA_NATURE_VERSION := 11 # seated rock massifs and downhill talus
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"
@@ -51,7 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
-const SURFACE_VERSION := 9 # 09.11.2026: rock relief of mountain slopes (RockRelief); 8: separate authored earthwork reach from natural road terrain
+const SURFACE_VERSION := 10 # local variation of rock strata and weathering
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()
