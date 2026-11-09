@@ -71,7 +71,7 @@
 | Жизненный цикл мира, меню, память | `lifecycle_test -- --size 256 --worlds 3` |
 | Трава, подлесок и сообщества открытых мест (`VegetationLayer`, `UnderstoryModels`, качество растительности, [docs/VEGETATION_COMMUNITIES.md](docs/VEGETATION_COMMUNITIES.md)) | изолированная `meadow_look.gd` (~40 с, нужно окно; было/стало `--legacy`, `--flora 0..2`, склейка `--compose before,after`); новые формы — пересборка каталога `bake_assets.gd`; `check.gd` с FPS — один раз в конце |
 | Графика, свет, небо, растительность, тяжёлые системы без своей сцены | `check.gd` с FPS (для света `--hours 7.5,19.1`) |
-| Скалистые вершины: материал породы в `terrain.gdshader`, скальные выходы и осыпи (`RockModels`, `RockScatter`), жизнь в скальных ложбинах | изолированная `mountain_rock_look.gd` (~15 с, было/стало, нужно окно); три мира — `mountain_environment_look.gd` (~3,5 мин) только для финальных снимков |
+| Скалистые вершины: материал породы в `terrain.gdshader`, скальные выходы, массивы и осыпи (`RockModels`, `RockScatter`, `RockMassif`, [docs/MOUNTAIN_MASSIFS_2026_11_09.md](docs/MOUNTAIN_MASSIFS_2026_11_09.md)), жизнь в скальных ложбинах | изолированная `mountain_rock_look.gd` (~2 мин, было/стало через `--base`, нейтральный материал, карта массивов; нужно окно); три мира — `mountain_environment_look.gd` (~5,5 мин) только для финальных снимков; новые формы — пересборка каталога `bake_assets.gd` |
 | Фара велосипеда (свет, луч) | изолированная `lamp_look.gd` (было/стало через `--lamp`) |
 | Фотоаппарат: видоискатель, наведение на места, снимки | изолированная `photo_look.gd` |
 | Задания, доска заданий, счётчик, сумка | изолированная `quest_look.gd` |

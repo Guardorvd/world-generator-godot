@@ -76,7 +76,10 @@ void vertex() {
 	rock_local = VERTEX;
 	float rock_scale = length(MODEL_MATRIX[0].xyz);
 	float rock_far = min(fade_far, mix(55.0, fade_far, smoothstep(0.18, 0.85, rock_scale)));
-	v_fade = clamp((rock_far - dist) / min(fade_len, max(10.0, rock_far * 0.22)), 0.0, 1.0);
+	// 09.11.2026: крупные скалы и массивы — силуэт дальнего склона: целиком до самого края дальности,
+	// короткая полоса растворения вместо сотни метров точечного узора на вершинах.
+	float rock_band = min(fade_len, max(10.0, rock_far * 0.22));
+	v_fade = clamp((rock_far - dist) / mix(rock_band, min(rock_band, 18.0), smoothstep(0.9, 1.3, rock_scale)), 0.0, 1.0);
 #endif
 	float stamp = stream_instances ? INSTANCE_CUSTOM.w : stream_birth;
 	if (stamp > 0.0) {
