@@ -218,7 +218,11 @@ func copy() -> Heightfield:
 ## C#-копия земли и воды (FastGrid.Water.cs) для дорожного этапа или null: без .NET, с полотном дорог
 ## или с землёй за краем карты (их копия не знает). Высоты передаются при каждом вызове: выемки туннелей меняют hv
 func fast_water() -> Object:
-	if road_refinement != null or world.outer != null:
+	if world == null or road_refinement != null or world.outer != null:
+		return null
+	# Частичные поверхности могут обслуживать запросы своим GDScript-методом.
+	var count := world.W * world.H
+	if world.lake.size() != count or world.filled.size() != count:
 		return null
 	if _fast_water == null:
 		_fast_water = Grid.fast_grid()

@@ -37,8 +37,9 @@ func run() -> void:
 	check_speed()
 	var scene: GameWorld = load("res://scenes/game_world.tscn").instantiate()
 	var sun := scene.get_node("Sun") as DirectionalLight3D
-	check(is_equal_approx(sun.directional_shadow_max_distance, 220.0), "sun shadows stay within the measured frame budget")
-	check(sun.directional_shadow_split_1 * sun.directional_shadow_max_distance <= 40.0, "first shadow cascade retains contact detail")
+	var shadow_distance := sun.directional_shadow_max_distance
+	check(sun.shadow_enabled and shadow_distance > 0.0 and shadow_distance <= 190.0, "sun shadows stay within the measured frame budget")
+	check(sun.directional_shadow_split_1 * shadow_distance <= 40.0, "first shadow cascade retains contact detail")
 	scene.free()
 	if "--capture" in OS.get_cmdline_user_args():
 		await capture()
@@ -54,6 +55,7 @@ func check_bridge() -> void:
 	w.H = 64
 	w.N = w.W * w.H
 	var h := RiverGround.new(w)
+	check(h.fast_water() == null, "partial bridge fixture uses the GDScript surface")
 	var path := PackedInt32Array()
 	for y in range(8, 25): path.append(y * w.W + 28)
 	var start := path.size() - 1

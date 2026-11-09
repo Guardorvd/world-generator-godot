@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 12 # connected mountain spurs, scarps and sharper crests
-const SCHEMA_TRAILS_VERSION := 16 # routing cost increases near unprepared territory
+const SCHEMA_TRAILS_VERSION := 17 # symmetric search bounds for animal watering spots
 const SCHEMA_NATURE_VERSION := 11 # seated rock massifs and downhill talus
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования

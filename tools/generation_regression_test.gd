@@ -51,19 +51,20 @@ func _nearest_water() -> void:
 	var same := true
 	for sy in H:
 		for sx in W:
-			for radius in [1, 4, 40]:
+			for radius in [0, 1, 4, 40]:
 				var best := -1
 				var distance := INF
-				for y in range(maxi(0, sy - radius), mini(H, sy + radius)):
-					for x in range(maxi(0, sx - radius), mini(W, sx + radius)):
-						var i := y * W + x
-						if cost[i] == INF or water[i] > 1.5: continue
-						var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
-						if d < distance:
-							distance = d
-							best = i
+				for i in W * H:
+					var dx := i % W - sx
+					var dy := i / W - sy
+					if maxi(absi(dx), absi(dy)) > radius or cost[i] == INF or water[i] > 1.5: continue
+					var d := dx * dx + dy * dy
+					if d < distance:
+						distance = d
+						best = i
 				same = same and best == fast.FindNearestWater(cost, water, W, H, sx, sy, radius)
-	_check(same, "FindNearestWater совпадает с прежним циклом: границы, равные расстояния, запретные клетки")
+				same = same and best == StageTrails._nearest_water(cost, water, W, H, sx, sy, radius)
+	_check(same, "C# и GDScript совпадают с эталоном: симметричные границы, равные расстояния, запретные клетки")
 
 
 func _settlements() -> void:

@@ -453,22 +453,29 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 		if fast != null:
 			best = fast.FindNearestWater(cost, dist_water, W, H, sx, sy, R)
 		else:
-			var bd := INF
-			for y in range(maxi(0, sy - R), mini(H, sy + R)):
-				for x in range(maxi(0, sx - R), mini(W, sx + R)):
-					var i := y * W + x
-					if cost[i] == INF or dist_water[i] > 1.5:
-						continue
-					var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
-					if d < bd:
-						bd = d
-						best = i
+			best = _nearest_water(cost, dist_water, W, H, sx, sy, R)
 		if best < 0:
 			continue
 		var p := finder.find_path(w.cost, s, best, TRAIL_CLIMB)
 		if p.size() > 6:
 			_add_trail(w, p, "animal")
 			k += 1
+
+
+## R ограничивает квадрат поиска по каждой оси. Ближайшую клетку выбираем по евклидову расстоянию.
+static func _nearest_water(cost: PackedFloat32Array, dist_water: PackedFloat32Array, W: int, H: int, sx: int, sy: int, R: int) -> int:
+	var best := -1
+	var bd := INF
+	for y in range(maxi(0, sy - R), mini(H, sy + R + 1)):
+		for x in range(maxi(0, sx - R), mini(W, sx + R + 1)):
+			var i := y * W + x
+			if cost[i] == INF or dist_water[i] > 1.5:
+				continue
+			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
+			if d < bd:
+				bd = d
+				best = i
+	return best
 
 
 ## Сеть растёт только через уже построенные безопасные дороги. Недоступный кандидат

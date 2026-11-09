@@ -17,13 +17,13 @@ public partial class FastGrid : RefCounted
 	private const double HCost = 0.6;
 	private static readonly double[] Dl = { 1.0, 1.0, 1.0, 1.0, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951, 1.4142135623730951 };
 
-	/// <summary>Поиск ближайшей ячейки водопоя, точная копия цикла StageTrails._animal_trails.</summary>
+	/// <summary>Поиск ближайшей ячейки водопоя в симметричном квадрате, как в StageTrails._nearest_water.</summary>
 	public int FindNearestWater(float[] cost, float[] distWater, int W, int H, int sx, int sy, int R)
 	{
 		int y0 = Math.Max(0, sy - R);
-		int y1 = Math.Min(H, sy + R);
+		int y1 = Math.Min(H, sy + R + 1);
 		int x0 = Math.Max(0, sx - R);
-		int x1 = Math.Min(W, sx + R);
+		int x1 = Math.Min(W, sx + R + 1);
 		double bd = double.PositiveInfinity;
 		int best = -1;
 		for (int y = y0; y < y1; y++)
