@@ -581,7 +581,9 @@ func set_paused(p: bool) -> void:
 		_close_settlement(false)
 	else:
 		_apply_shadows() # тени меняются в настройках на паузе
-		if vegetation.set_draw(services.settings.draw): # и дальность прорисовки (с 9.8+)
+		var redraw := vegetation.set_draw(services.settings.draw) # и дальность прорисовки (с 9.8+)
+		redraw = vegetation.set_flora(services.settings.flora) or redraw # и качество растительности (16.0)
+		if redraw:
 			stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	audio.set_paused(p or travel_active())
 	# отпущенная кнопка мыши на паузе не приходит, перетаскивание не должно «залипнуть»

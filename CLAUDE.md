@@ -69,6 +69,7 @@
 | Движение в мире, камера, проходы мостов и туннелей (то, чего нет в `trail_lab_test`) | `feel_test` (вместо `check.gd`, без FPS; лимит 5 мин) |
 | Столкновения | `forest_collision_test` |
 | Жизненный цикл мира, меню, память | `lifecycle_test -- --size 256 --worlds 3` |
+| Трава, подлесок и сообщества открытых мест (`VegetationLayer`, `UnderstoryModels`, качество растительности, [docs/VEGETATION_COMMUNITIES.md](docs/VEGETATION_COMMUNITIES.md)) | изолированная `meadow_look.gd` (~40 с, нужно окно; было/стало `--legacy`, `--flora 0..2`, склейка `--compose before,after`); новые формы — пересборка каталога `bake_assets.gd`; `check.gd` с FPS — один раз в конце |
 | Графика, свет, небо, растительность, тяжёлые системы без своей сцены | `check.gd` с FPS (для света `--hours 7.5,19.1`) |
 | Скалистые вершины: материал породы в `terrain.gdshader`, скальные выходы и осыпи (`RockModels`, `RockScatter`), жизнь в скальных ложбинах | изолированная `mountain_rock_look.gd` (~15 с, было/стало, нужно окно); три мира — `mountain_environment_look.gd` (~3,5 мин) только для финальных снимков |
 | Фара велосипеда (свет, луч) | изолированная `lamp_look.gd` (было/стало через `--lamp`) |

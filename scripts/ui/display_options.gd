@@ -15,6 +15,7 @@ var aa: OptionButton
 var vsync: CheckBox
 var shadows: CheckBox
 var draw: OptionButton
+var flora: OptionButton # 16.0: качество растительности
 var apply_button: Button
 var dialog: ConfirmationDialog
 var _host: Node
@@ -35,14 +36,18 @@ func setup(host: Node) -> void:
 	vsync = host.get_node("%VSync")
 	shadows = host.get_node("%Shadows")
 	draw = host.get_node("%DrawOption")
+	flora = host.get_node("%FloraOption")
 	apply_button = host.get_node("%ApplyDisplay")
 	if draw.item_count == 0:
 		for level: Dictionary in GameSettings.DRAW_LEVELS:
 			draw.add_item(level.title.capitalize())
+	if flora.item_count == 0:
+		for level: Dictionary in GameSettings.FLORA_LEVELS:
+			flora.add_item(level.title.capitalize())
 	apply_button.pressed.connect(preview)
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, draw]:
+	for option: OptionButton in [scale, aa, draw, flora]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
 	for box: CheckBox in [vsync, shadows]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
@@ -70,6 +75,7 @@ func sync() -> void:
 	vsync.set_pressed_no_signal(state.vsync)
 	shadows.set_pressed_no_signal(state.shadows)
 	draw.select(state.draw)
+	flora.select(state.flora)
 	_update_apply()
 
 ## Режим окна и разрешение в списках: сохранённые или предложенные (сброс), без применения
@@ -89,7 +95,7 @@ func stage_mode(state: Dictionary) -> void:
 func selected_state() -> Dictionary:
 	return {fullscreen = mode.selected == 1, resolution = _sizes[resolution.selected],
 		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
-		shadows = shadows.button_pressed, draw = draw.selected}
+		shadows = shadows.button_pressed, draw = draw.selected, flora = flora.selected}
 
 func pending() -> bool:
 	return not _pending.is_empty()
@@ -104,7 +110,7 @@ func _update_apply() -> void:
 func apply_graphics() -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw"]:
+	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw", "flora"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

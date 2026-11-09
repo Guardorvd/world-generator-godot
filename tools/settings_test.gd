@@ -45,6 +45,17 @@ func _initialize() -> void:
 	_check(not GameContext.scope.settings.trail_clutter, "выключатель препятствий читается из файла")
 	GameContext.scope.settings.reset_defaults()
 	_check(GameContext.scope.settings.trail_clutter, "сброс настроек возвращает препятствия на тропах")
+	# 16.0: качество растительности — в файле, в пределах списка, в сбросе и в состоянии графики
+	var flora_cfg := ConfigFile.new()
+	flora_cfg.set_value("view", "flora", 0)
+	GameContext.scope.settings._apply_config(flora_cfg)
+	_check(GameContext.scope.settings.flora == 0 and GameContext.scope.settings.display_state().flora == 0, "качество растительности читается из файла")
+	flora_cfg.set_value("view", "flora", 99)
+	GameContext.scope.settings._apply_config(flora_cfg)
+	_check(GameContext.scope.settings.flora == GameSettings.FLORA_LEVELS.size() - 1, "качество растительности ограничено списком")
+	GameContext.scope.settings.flora = 0
+	GameContext.scope.settings.reset_defaults()
+	_check(GameContext.scope.settings.flora == GameSettings.DEFAULT_FLORA, "сброс настроек возвращает качество растительности")
 	GameContext.scope.settings._apply_config(cfg)
 	_check(not GameContext.scope.settings.shadows and GameContext.scope.settings.last_seed == "Север-1234",
 		"исправные поля читаются даже при повреждении соседних")

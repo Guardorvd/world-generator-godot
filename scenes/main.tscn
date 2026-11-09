@@ -761,6 +761,21 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
 
+[node name="FloraRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="FloraLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/FloraRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Густота и детализация травы, цветов и кустарника. Деревья, тропы и препятствия не меняются."
+mouse_filter = 1
+text = "Растительность"
+
+[node name="FloraOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/FloraRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+
 [node name="VSync" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 unique_name_in_owner = true
 layout_mode = 2

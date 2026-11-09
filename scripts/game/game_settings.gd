@@ -37,6 +37,16 @@ const DRAW_LEVELS := [
 	{title = "высокая", trees = 450.0, grass = 300.0, under = 300.0},
 ]
 const DEFAULT_DRAW := 2 # высокая (решение пользователя в 9.8+)
+## 16.0: качество растительности. Природная раскладка одна и та же; меняется доля мелких растений
+## (трава, цветы, куртины, кусты подлеска — не валежник и не деревья), их размер (меньше — крупнее,
+## чтобы земля не пустела), граница упрощённых форм, поредение листьев вдали и тени подроста.
+## География, деревья, столкновения и препятствия на тропах от неё не зависят. Читает VegetationLayer.
+const FLORA_LEVELS := [
+	{title = "низкое", density = 0.45, grass = 0.55, grow = 1.25, far_form = 12.0, detail = 0.6, reach = 0.6, shadows = false},
+	{title = "среднее", density = 0.65, grass = 0.72, grow = 1.14, far_form = 16.0, detail = 0.75, reach = 0.8, shadows = true},
+	{title = "высокое", density = 1.0, grass = 1.0, grow = 1.0, far_form = 24.0, detail = 1.0, reach = 1.0, shadows = true},
+]
+const DEFAULT_FLORA := 2
 
 var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y
@@ -49,6 +59,7 @@ var render_scale := 1.0
 var msaa := 2 # прежнее MSAA 4x
 var vsync := true
 var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
+var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
@@ -89,6 +100,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
+	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
@@ -175,6 +187,7 @@ func reset_defaults() -> void:
 	vsync = true
 	shadows = DEFAULT_SHADOWS
 	draw = DEFAULT_DRAW
+	flora = DEFAULT_FLORA
 	volume = DEFAULT_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
 	start_hour = DEFAULT_START_HOUR
@@ -195,6 +208,7 @@ func save_settings() -> Error:
 	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
 	cfg.set_value("view", "draw", draw)
+	cfg.set_value("view", "flora", flora)
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
@@ -218,7 +232,7 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw}
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora}
 
 
 func set_display_state(state: Dictionary) -> void:
@@ -229,6 +243,7 @@ func set_display_state(state: Dictionary) -> void:
 	vsync = state.vsync
 	shadows = state.shadows
 	draw = state.draw
+	flora = state.get("flora", flora)
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный

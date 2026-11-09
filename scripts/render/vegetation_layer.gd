@@ -31,7 +31,10 @@ const OUTCROP_MODEL := Biomes.T_ROCK + RockModels.VARIANTS * ForestModels.MODEL_
 const ROCK_GRASS := {dens = 2.4, tint = [0.5, 0.56, 0.31]}
 ## Cumulative weights: no zero-weight forms or per-cell array allocations.
 const ROCK_HOLLOW := [[Understory.MOSS, 1.0], [Understory.HERB, 1.45], [Understory.GRASS, 1.95],
-	[Understory.BUSH, 2.17], [Understory.FLOWERS, 2.25], [Floor.FIRST + Floor.STONES, 2.85]]
+	[Understory.BUSH, 2.2], [Understory.FLOWERS, 2.32], [Understory.FORBS, 2.5], [Understory.MEADOW, 2.62],
+	[Floor.FIRST + Floor.STONES, 3.15]]
+## 16.0: только для сравнения «было» в изолированной сцене: открытые места без сообществ, как до 16.0
+static var legacy_open := false
 const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
@@ -42,6 +45,14 @@ const UNDERSTORY_MAX := 2048 # на форму мелкого подлеска, 
 ## с 9.4 он гуще и на границе GRASS_R (52 м) вырастал прямо перед игроком. Мелкие растения — как прежде.
 const UNDERSTORY_FAR_R := 140.0
 const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подлеска: площадь круга в 7 раз больше
+## 16.0: куртины открытых мест полной густоты до 55 м, дальше редеют как (55 / d)² и растут
+## (OPEN_GROW): массив вдали — меньше, но крупнее куртин. Один MultiMesh на форму рисует всю раскладку
+## (и за спиной), поэтому число экземпляров важнее треугольников одного.
+const OPEN_FULL_R := 45.0
+const OPEN_GROW := 1.0
+const OPEN_MAX_R := 200.0 # дальше куртины растворяются (за 160–200 м куртина — пара пикселей)
+## 16.0: кусты и подрост переходят на дальнюю форму позже мелочи (крупнее, заметнее)
+const WOODY_FAR_FORM := 1.6
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
 ## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
 ## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
@@ -150,6 +161,18 @@ var _grass_mat: ShaderMaterial
 var tree_r := GameConfig.TREE_R      # деревья, м
 var grass_r := GameConfig.GRASS_R    # трава и мелкие растения, м
 var under_r := UNDERSTORY_FAR_R      # крупный подлесок, м
+## 16.0: качество растительности (GameSettings.FLORA_LEVELS): та же раскладка, меньше мелких растений.
+## Валежник, сухостой, пни, валуны и препятствия на тропах от него не зависят (столкновения и физика).
+var flora_level := -1
+var flora: Dictionary = GameSettings.FLORA_LEVELS[GameSettings.DEFAULT_FLORA]
+var far_form_r := FAR_FORM_R
+## 16.0: сообщества открытых клеток плана, по OPEN_CACHE байт (0 в первом — не посчитано). Пишет
+## и читает только раскладка деталей (одна задача за раз); мир не меняется — кэш не сбрасывается.
+const OPEN_CACHE := 11
+var _open_cache := PackedByteArray()
+var _open_valid := PackedByteArray() # 16.0: по 2 байта на клетку плана — места открытых клеток проверены / свободны
+var fill_stats := {} # время частей последней раскладки деталей, мс (замеры)
+var _fill_started := 0
 var load_radius := tree_r + LOAD_MARGIN
 var drop_radius := load_radius + DROP_MARGIN
 
@@ -208,6 +231,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	grass_mat.set_shader_parameter("grass_variation", true)
 	grass_mat.set_shader_parameter("stream_instances", true)
 	_set_radii(settings.draw)
+	_set_flora(settings.flora)
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
@@ -232,22 +256,26 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var mat := _wind_mat(SHADER, wind, true)
 		mat.set_shader_parameter("stream_instances", true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
-		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS]
+		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE]
 		mat.set_shader_parameter("grass_variation", blades)
+		var detail := []
 		if not still and not blades:
 			var woody := Placement.priority(base) == 1
-			mat.set_shader_parameter("detail_full", 35.0 if woody else 12.0)
-			mat.set_shader_parameter("detail_far", 120.0 if woody else 45.0)
+			detail = [35.0, 120.0] if woody else [12.0, 45.0]
 			mat.set_shader_parameter("detail_keep", 0.5 if woody else 0.6)
-		var far := Placement.priority(base) < 2
-		var cap := _understory_cap(far)
+		# 16.0: куртины открытых мест видны дальше травы, как кусты; места не занимают (мягкие)
+		var open_form := base in Understory.OPEN_FORMS
+		var far := Placement.priority(base) < 2 or open_form
+		# Ближняя форма с упрощённой дальней живёт только в FAR_FORM_R (кусты — в 1,6 раза дальше): ей хватает буфера мелочи
+		var cap := _understory_cap(far and not (far_forms.has(base) and spec[0] != far_forms[base]))
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		if shadows and kind < 0:
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		# Один MultiMesh покрывает всю раскладку: её центр не является расстоянием до каждого растения.
 		# Дальность и растворение задаёт общий шейдер, AABB оставляем для отсечения по фрустуму.
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), base = base,
+			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), base = base, detail = detail,
+			shadows = shadows, near_cap = cap != _understory_cap(far),
 			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0)})
 	_grass_mat = grass_mat
 	_apply_fade()
@@ -284,12 +312,21 @@ func _apply_fade() -> void:
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
-		var radius := under_r if entry.far else grass_r
+		var radius := _reach_r(entry.base, entry.far)
 		if entry.base == Floor.FIRST + Floor.ROOTS:
 			# Корни раскладываются только у больших деревьев до GRASS_R (+ запас), без поредения.
 			radius = GameConfig.GRASS_R
-		_fade(entry.node.material_override, radius, _ahead(radius))
-		entry.node.material_override.set_shader_parameter("thin_full", UNDERSTORY_FAR_R if entry.far else GameConfig.GRASS_R)
+		var mat: ShaderMaterial = entry.node.material_override
+		_fade(mat, radius, _ahead(radius))
+		mat.set_shader_parameter("thin_full", _full_r(entry.base, entry.far))
+		# 16.0: редеющие вдали куртины крупнее — массив сохраняет объём (как пучки травы за GRASS_R)
+		mat.set_shader_parameter("thin_grow", OPEN_GROW if entry.base in Understory.OPEN_FORMS else 0.0)
+		if not entry.detail.is_empty():
+			mat.set_shader_parameter("detail_full", entry.detail[0] * flora.detail)
+			mat.set_shader_parameter("detail_far", entry.detail[1] * flora.detail)
+		if entry.shadows:
+			entry.node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if not flora.shadows and entry.base < Floor.FIRST \
+				else (GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if entry.base < Floor.FIRST else GeometryInstance3D.SHADOW_CASTING_SETTING_ON)
 
 
 static func _fade(mat: ShaderMaterial, radius: float, ahead: float) -> void:
@@ -328,6 +365,27 @@ func _understory_cap(far: bool) -> int:
 	return _cap(UNDERSTORY_MAX, _spread(grass_r, GameConfig.GRASS_R))
 
 
+## 16.0: качество растительности GameSettings.FLORA_LEVELS[level]: доля мелких растений, их размер,
+## граница упрощённых форм, поредение листьев и тени подроста. Раскладка и её места те же.
+func _set_flora(level: int) -> void:
+	flora_level = clampi(level, 0, GameSettings.FLORA_LEVELS.size() - 1)
+	flora = GameSettings.FLORA_LEVELS[flora_level]
+	far_form_r = flora.far_form
+
+
+## Смена качества растительности на паузе; true — другое, вызывающий затем делает update(..., true).
+func set_flora(level: int) -> bool:
+	if clampi(level, 0, GameSettings.FLORA_LEVELS.size() - 1) == flora_level:
+		return false
+	_finish()
+	snapshots.reset()
+	_set_flora(level)
+	_open_valid.fill(0) # размер куртин другой — места проверяются заново
+	_apply_fade()
+	last_fill = Vector2.INF
+	return true
+
+
 ## Смена дальности на паузе. true — уровень другой: вызывающий затем делает update(..., true).
 func set_draw(level: int) -> bool:
 	if clampi(level, 0, GameSettings.DRAW_LEVELS.size() - 1) == draw_level:
@@ -340,7 +398,7 @@ func set_draw(level: int) -> bool:
 	grass_buf = _buffer(grass.instance_count, STRIDE)
 	_grass_n = 0
 	for entry: Dictionary in understory:
-		entry.cap = _understory_cap(entry.far)
+		entry.cap = _understory_cap(entry.far and not entry.near_cap)
 		entry.mm.visible_instance_count = 0
 		entry.mm.instance_count = entry.cap
 		entry.buf = _buffer(entry.cap, STRIDE)
@@ -368,8 +426,10 @@ static func _wind_mat(shader: Shader, wind: Array, leaves: bool) -> ShaderMateri
 
 
 static func _plant_wind(kind: int) -> Array:
-	if kind in [Understory.GRASS, Understory.HIGH_GRASS]:
+	if kind in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW]:
 		return [0.13, 0.018, 1.4, 0.85, 0.25]
+	if kind == Understory.SEDGE:
+		return [0.07, 0.012, 1.2, 0.8, 0.2]
 	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
 		return [0.08, 0.02, 0.85, 0.8, 0.25]
 	if kind in [Understory.PINE, Understory.YOUNG_PINE]:
@@ -676,7 +736,7 @@ func _reserve_details(lead: Vector2) -> void:
 	if grass_buf.size() < cap * STRIDE:
 		grass_buf.resize(cap * STRIDE)
 	for entry: Dictionary in understory:
-		cap = ceili(_understory_cap(entry.far) * StreamPolicy.reserve_factor(under_r if entry.far else grass_r, lead))
+		cap = ceili(_understory_cap(entry.far and not entry.near_cap) * StreamPolicy.reserve_factor(under_r if entry.far else grass_r, lead))
 		if entry.cap < cap:
 			entry.cap = cap
 			entry.buf.resize(cap * STRIDE)
@@ -1309,6 +1369,7 @@ func _fill_grass(px: float, pz: float) -> void:
 	var n := 0
 	var low := Vector3.INF
 	var high := -Vector3.INF
+	_fill_started = Time.get_ticks_usec()
 	_grass_low = low
 	_grass_high = high
 	_fill_at = Vector2(px, pz)
@@ -1370,27 +1431,36 @@ func _fill_grass(px: float, pz: float) -> void:
 					continue
 				var surface := _outer_surface(cell)
 				if d2 > rT * rT:
-					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, cell.elev, cell.dw)
 					continue
 				var lush := clampf(1.0 - 0.45 * (cell.slope - 0.5), 0.35, 1.0)
 				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * OUTER_LIGHT)
 				lush *= 1.0 - 0.65 * surface.r
-				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz)
+				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, cell.elev, cell.dw)
 				if rocky_cell: lush *= _rock_shelter(surface, i, j)
 				n = _grass_cell(i, j, ROCK_GRASS if rocky_cell else bd.grass, lush, surface, d2, n, cell.path, regions)
 	low = _grass_low
 	high = _grass_high
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
+	var t_scan := Time.get_ticks_usec()
 	# 9.9+: внутри одного приоритета — по порогу поредения: место занимает тот, кто виден дальше.
 	# Иначе невидимый ещё куст, попавший в раскладку с запасом, вытеснял бы видимый соседний.
 	_understory_sites.sort_custom(func(a: Array, b: Array) -> bool: return a[6] < b[6])
+	var t_sort := Time.get_ticks_usec()
 	for priority in 3:
 		for site: Array in _understory_sites:
 			if Placement.priority(site[0]) == priority:
-				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
+				if site.size() > 7:
+					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6], false, 1.0, 0.0, site[7], site[8])
+				else:
+					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
+	var t_place := Time.get_ticks_usec()
 	_fill_tree_roots(px, pz)
 	_filter_grass()
+	fill_stats = {scan_ms = (t_scan - _fill_started) / 1000.0, sort_ms = (t_sort - t_scan) / 1000.0,
+		place_ms = (t_place - t_sort) / 1000.0, grass_filter_ms = (Time.get_ticks_usec() - t_place) / 1000.0,
+		sites = _understory_sites.size()}
 	_understory_sites.clear()
 
 
@@ -1403,7 +1473,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var tc: Array = gr.tint
 	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
 	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
-	var keep := _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r))
+	var keep: float = _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r)) * flora.grass
 	var inside := i >= 0 and j >= 0 and i < w.W and j < w.H
 	for m in cnt:
 		if n >= grass_buf.size() / STRIDE:
@@ -1431,7 +1501,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 				continue
 		else:
 			y = RegionStream.snapshot_ground(w, heights, regions, x, z)
-		var sc := 0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7
+		var sc: float = (0.8 + WGRandom.hash2(i + m, j - m, 17) * 0.7) * flora.grow
 		var sy := sc * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9) * (1.0 + verge * 0.35)
 		_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, sc, sy)
 		var origin := Vector3(x, y - 0.05, z)
@@ -1460,7 +1530,7 @@ static func _region_cell(regions: Dictionary, i: int, j: int) -> Dictionary:
 	var q := (j - rect.position.y) * rect.size.x + i - rect.position.x
 	# влажности в полях области нет: у воды трава гуще, как у плана (dist_water)
 	return {biome = f.biome[q], path = f.path[q], slope = f.slope[q], river = f.river[q] != 0 or f.lake[q] != 0,
-		elev = f.h[q], moist = 0.45 + 0.4 * exp(-f.dw[q] / 3.0)}
+		elev = f.h[q], moist = 0.45 + 0.4 * exp(-f.dw[q] / 3.0), dw = float(f.dw[q])}
 
 
 ## Вокруг клетки (3 × 3) только план и закреплённые области: высоты подлеска (Heightfield) здесь
@@ -1495,7 +1565,10 @@ static func _outer_surface(cell: Dictionary) -> Color:
 ## породы — те же каналы, что у материала рельефа, поэтому пучки стоят на тёмном грунте).
 static func _rock_shelter(surface: Color, i: int, j: int) -> float:
 	var patch := WGRandom.hash2(floori(i / 2.0), floori(j / 2.0), 9127)
-	return smoothstep(0.5, 0.74, surface.b) * smoothstep(0.35, 0.75, patch) * (1.0 - surface.a)
+	if legacy_open:
+		return smoothstep(0.5, 0.74, surface.b) * smoothstep(0.35, 0.75, patch) * (1.0 - surface.a)
+	# 16.0: чуть суше и чаще — дернина и цветы пятнами, открытая порода (surface.a) по-прежнему голая
+	return smoothstep(0.42, 0.7, surface.b) * smoothstep(0.25, 0.65, patch) * (1.0 - surface.a)
 
 
 ## Доля травы или подлеска, что остаётся на расстоянии d (м) при полной густоте до full,
@@ -1508,17 +1581,28 @@ static func _keep(d: float, full: float, ahead: float) -> float:
 ## Возвращает множитель низкой травы по характеру леса (вне леса 1).
 func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var k := j * world.W + i
-	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz)
+	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz, world.elev[k], world.dist_water[k])
 
 
-## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info)
-func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
+## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info).
+## alt — высота, water — расстояние до воды в клетках (для сообществ открытых мест).
+func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float,
+		alt := 0.2, water := 99.0) -> float:
 	var canopy := surface.r
 	if bi == Biomes.ROCK and canopy < 0.15:
 		_fill_rock_hollow(i, j, path, slope, surface, px, pz)
 		return 1.0
-	if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] and canopy < 0.15:
-		return 1.0
+	if canopy < 0.15:
+		# 16.0: открытые места — растительные сообщества (раньше подлеска здесь не было вовсе)
+		if legacy_open:
+			return 1.0 if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz)
+		return _fill_open_cell(i, j, bi, path, slope, surface, sunlight, px, pz, alt, water)
+	return _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz)
+
+
+## Подлесок под пологом: характер леса (8.2) и, с 16.0, опушка — кусты, подрост и высокотравье у края
+func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
+	var canopy := surface.r
 	var moisture := surface.b
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
 	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
@@ -1532,6 +1616,17 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 	var deadwood := Understory.mix(Understory.DEADWOOD, ch)
 	for f in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP]:
 		floor_weights[f] *= deadwood
+	# 16.0: опушка — рядом (8–12 м) открытое место: кусты, подрост и высокотравье стеной, полог редеет к краю
+	if legacy_open:
+		for f: int in Understory.OPEN_FORMS: weights[f] = 0.0
+	var rim := 0.0 if legacy_open or not _in_plan(i, j) else smoothstep(0.3, 0.05, _ring_canopy(i, j).y) * (1.0 - smoothstep(0.55, 0.9, canopy))
+	if rim > 0.0:
+		var conifer := surface.g > 0.5
+		weights[Understory.BUSH] += rim * 0.55
+		weights[Understory.PINE if conifer else Understory.SAPLING] += rim * 0.25
+		weights[Understory.YOUNG_PINE if conifer else Understory.YOUNG] += rim * 0.1
+		weights[Understory.MEADOW] += rim * 0.35 * light
+		weights[Understory.HIGH_GRASS] += rim * 0.2
 	weights.append_array(floor_weights)
 	var total := 0.0
 	for weight in weights:
@@ -1554,17 +1649,199 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
 		var far: bool = understory[kind].far
 		var d := StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead)
-		if d > (under_r if far else grass_r):
+		if d > _reach_r(kind, far):
 			continue
-		var full := UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
+		var full := _full_r(kind, far)
 		var rank := WGRandom.hash2(i * 8 + m, j, seed + 8)
-		if rank > _keep(d, full, _ahead(under_r if far else grass_r)):
+		if rank > _keep(d, full, _ahead(_reach_r(kind, far))) * _flora_keep(kind):
 			continue
-		var scale := 0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6
+		var scale := (0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6) * _flora_grow(kind)
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
 		_understory_sites.append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
+
+
+## 16.0: доля и размер растения по качеству растительности. Валежник, сухостой, пни и камни
+## (столкновения) не зависят от настройки.
+## Дальность раскладки формы, м
+func _reach_r(kind: int, far: bool) -> float:
+	if kind in Understory.OPEN_FORMS:
+		return minf(under_r, OPEN_MAX_R * flora.reach)
+	return under_r if far else grass_r
+
+
+## Радиус полной густоты формы (за ним поредение): куртины открытых мест, крупный подлесок, мелочь
+static func _full_r(kind: int, far: bool) -> float:
+	if kind in Understory.OPEN_FORMS:
+		return OPEN_FULL_R
+	return UNDERSTORY_FAR_R if far else GameConfig.GRASS_R
+
+
+func _flora_keep(kind: int) -> float:
+	return flora.density if kind < Floor.FIRST else 1.0
+
+
+func _flora_grow(kind: int) -> float:
+	return flora.grow if kind < Floor.FIRST else 1.0
+
+
+## 16.0: открытое место — растительное сообщество клетки (Understory.communities): массивы
+## высокотравья и разнотравья на сотни метров, кустарник у опушек, обочин и в предгорьях, осока
+## у воды, дернина в горах, а между ними — газон для контраста. Поля — существующие (влага, свет,
+## высота, уклон, порода, вода, полог, пути) и плавный шум трёх масштабов; новых карт нет.
+func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float,
+		alt: float, water: float) -> float:
+	if path == 1 or (path > 0 and not _in_plan(i, j)) or slope > 1.15:
+		return 1.0
+	var seed := world.seed_num ^ 8803
+	var inside := _in_plan(i, j)
+	# Сообщество клетки неизменно: на плане считается один раз и хранится байтами (раскладка
+	# повторяется каждые несколько метров пути). Всегда используются квантованные значения —
+	# первая и повторная раскладки совпадают.
+	var at := -1
+	if inside:
+		if _open_cache.size() != world.N * OPEN_CACHE:
+			_open_cache.resize(world.N * OPEN_CACHE)
+			_open_cache.fill(0)
+			_open_valid.resize(world.N * 2)
+			_open_valid.fill(0)
+		at = (j * world.W + i) * OPEN_CACHE
+	var q: PackedByteArray
+	var o := 0
+	if at >= 0 and _open_cache[at] != 0:
+		q = _open_cache
+		o = at
+	else:
+		q = _open_community(i, j, bi, slope, surface, sunlight, alt, water, inside)
+		if at >= 0:
+			for n in OPEN_CACHE:
+				_open_cache[at + n] = q[n]
+	var com := PackedFloat32Array()
+	com.resize(Understory.COMMUNITIES)
+	for c in Understory.COMMUNITIES:
+		com[c] = q[o + 1 + c] / 255.0
+	var density := q[o + 7] / 255.0
+	var grass_mul := q[o + 8] / 200.0
+	var parch := q[o + 9] / 255.0
+	var verge := q[o + 10] / 255.0
+	if density <= 0.004:
+		return grass_mul
+	var weights := PackedFloat32Array()
+	weights.resize(Understory.COUNT)
+	var total := 0.0
+	var conifer := bi in [Biomes.TAIGA, Biomes.TUNDRA] or alt > 0.3
+	for c in Understory.COMMUNITIES:
+		if com[c] < 0.02:
+			continue
+		var row: Array = Understory.COMMUNITY[c]
+		for f in Understory.COUNT:
+			weights[f] += com[c] * row[f]
+	if conifer:
+		weights[Understory.PINE] += weights[Understory.SAPLING]
+		weights[Understory.YOUNG_PINE] += weights[Understory.YOUNG]
+		weights[Understory.SAPLING] = 0.0
+		weights[Understory.YOUNG] = 0.0
+	for weight in weights:
+		total += weight
+	var hue := Color(1.0 + 0.16 * parch, 1.0 - 0.03 * parch, 1.0 - 0.3 * parch)
+	var hx := i * 8
+	for m in Understory.OPEN_SLOTS:
+		if WGRandom.hash2(hx + m, j, seed + 1) > density:
+			continue
+		var pick := WGRandom.hash2(hx + m, j, seed + 2) * total
+		var kind := 0
+		while kind < Understory.COUNT - 1 and pick >= weights[kind]:
+			pick -= weights[kind]
+			kind += 1
+		var x := (i + 0.05 + 0.9 * WGRandom.hash2(hx + m, j, seed + 3)) * TILE
+		var z := (j + 0.05 + 0.9 * WGRandom.hash2(hx + m, j, seed + 4)) * TILE
+		var far: bool = understory[kind].far
+		var d := StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead)
+		if d > _reach_r(kind, far):
+			continue
+		var rank := WGRandom.hash2(hx + m, j, seed + 8)
+		if rank > _keep(d, _full_r(kind, far), _ahead(_reach_r(kind, far))) * flora.density:
+			continue
+		var scale := 0.75 + WGRandom.hash2(hx + m, j, seed + 5) * 0.5
+		if kind == Understory.MEADOW:
+			# В сердцевине массива и у обочины куртины выше: местами по пояс и выше
+			scale *= 0.8 + 0.35 * com[Understory.C_TALL] + 0.2 * verge
+		elif kind == Understory.BUSH:
+			scale *= 1.0 + 0.5 * com[Understory.C_SHRUB]
+		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24
+		_understory_sites.append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, hue,
+			(j * world.W + i) * 8 + m if inside else -1])
+	return grass_mul
+
+
+## 16.0: сообщество открытой клетки байтами (OPEN_CACHE): флаг, 6 долей, густота, множитель травы, сушь, обочина
+func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunlight: float, alt: float, water: float, inside: bool) -> PackedByteArray:
+	var seed := world.seed_num ^ 8803
+	var big := _vnoise(i, j, 36.0, seed)
+	var mid := _vnoise(i, j, 11.0, seed + 17)
+	var edge := _ring_canopy(i, j).x if inside else 0.0
+	var verge := _verge(i, j) if inside else 0.0
+	var dry := 1.0 if bi in [Biomes.STEPPE, Biomes.SAVANNA, Biomes.DESERT] else (0.6 if bi == Biomes.BEACH else 0.0)
+	var com := Understory.communities(big, mid, surface.b, sunlight, slope, alt, surface.a, water, edge, verge, dry)
+	var density := 0.0
+	var grass_mul := 0.0
+	for c in Understory.COMMUNITIES:
+		density += com[c] * Understory.COMMUNITY_DENSITY[c]
+		grass_mul += com[c] * Understory.COMMUNITY_GRASS[c]
+	# Пятна ~12 м с просветами внутри массива; крутизна и голая порода редят.
+	density *= smoothstep(0.1, 0.45, _vnoise(i, j, 3.0, seed + 31)) * (1.0 - 0.6 * surface.a)
+	density *= 1.0 - 0.75 * smoothstep(0.55, 1.1, slope)
+	# Сушь желтит и высушивает метёлки, сырость — сочная зелень; оттенок общий у соседей.
+	var parch := clampf((0.55 - surface.b) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)
+	var q := PackedByteArray([1, 0, 0, 0, 0, 0, 0, roundi(density * 255.0), mini(255, roundi(grass_mul * 200.0)), roundi(parch * 255.0), roundi(verge * 255.0)])
+	for c in Understory.COMMUNITIES:
+		q[1 + c] = roundi(com[c] * 255.0)
+	return q
+
+
+## 16.0: плавный шум по клеткам: значения в узлах решётки шага scale клеток, сглаженная интерполяция
+static func _vnoise(i: int, j: int, scale: float, seed: int) -> float:
+	var fx := (i + 0.5) / scale
+	var fy := (j + 0.5) / scale
+	var x0 := floori(fx)
+	var y0 := floori(fy)
+	var tx := fx - x0
+	var ty := fy - y0
+	tx = tx * tx * (3.0 - 2.0 * tx)
+	ty = ty * ty * (3.0 - 2.0 * ty)
+	var a := lerpf(WGRandom.hash2(x0, y0, seed), WGRandom.hash2(x0 + 1, y0, seed), tx)
+	var b := lerpf(WGRandom.hash2(x0, y0 + 1, seed), WGRandom.hash2(x0 + 1, y0 + 1, seed), tx)
+	return lerpf(a, b, ty)
+
+
+## 16.0: полог кольца 8–12 м вокруг клетки плана: x — наибольший (рядом лес — опушка), y — наименьший
+## (рядом поляна или луг — край леса)
+func _ring_canopy(i: int, j: int) -> Vector2:
+	var high := 0.0
+	var low := 1.0
+	for o: Vector2i in [Vector2i(2, 0), Vector2i(-2, 0), Vector2i(0, 2), Vector2i(0, -2), Vector2i(2, 2), Vector2i(-2, -2), Vector2i(2, -2), Vector2i(-2, 2),
+			Vector2i(3, 1), Vector2i(-3, -1), Vector2i(1, -3), Vector2i(-1, 3)]:
+		var a := clampi(i + o.x, 0, world.W - 1)
+		var b := clampi(j + o.y, 0, world.H - 1)
+		var c := _forest_surface.get_pixel(a, b).r
+		high = maxf(high, c)
+		low = minf(low, c)
+	return Vector2(high, low)
+
+
+## 16.0: 1 — клетка у дороги или тропы (не звериной), 0 — дальше 4 м: некошеная полоса вдоль пути
+func _verge(i: int, j: int) -> float:
+	var near := 0.0
+	for dj in range(-1, 2):
+		for di in range(-1, 2):
+			var a := i + di
+			var b := j + dj
+			if a < 0 or b < 0 or a >= world.W or b >= world.H:
+				continue
+			if world.path_mask[b * world.W + a] >= 2:
+				near = 1.0 if di == 0 and dj == 0 else maxf(near, 0.8)
+	return near
 
 
 ## Скальные ложбины (07.11.2026): редкие мох, травы, низкий кустарник и мелкие камни из общих форм
@@ -1580,10 +1857,12 @@ func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, 
 	if shelter <= 0.02:
 		return
 	var seed := world.seed_num ^ 7717
-	for m in 3:
-		if WGRandom.hash2(hx * 8 + m, hy, seed + 1) > shelter * 0.55:
+	# 16.0: дернина гуще (было 3 места и 0,55): ложбины среди камней зелёные, а не точечные
+	for m in (3 if legacy_open else 5):
+		if WGRandom.hash2(hx * 8 + m, hy, seed + 1) > shelter * (0.55 if legacy_open else 0.8):
 			continue
 		var pick := WGRandom.hash2(hx * 8 + m, hy, seed + 2) * float(ROCK_HOLLOW[-1][1])
+		if legacy_open: pick *= 2.85 / float(ROCK_HOLLOW[-1][1])
 		var choice := 0
 		while choice < ROCK_HOLLOW.size() - 1 and pick >= ROCK_HOLLOW[choice][1]: choice += 1
 		var kind: int = ROCK_HOLLOW[choice][0]
@@ -1591,12 +1870,12 @@ func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, 
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(hx * 8 + m, hy, seed + 4)) * TILE
 		var far: bool = understory[kind].far
 		var d := StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead)
-		if d > (under_r if far else grass_r):
+		if d > _reach_r(kind, far):
 			continue
 		var rank := WGRandom.hash2(hx * 8 + m, hy, seed + 8)
-		if rank > _keep(d, UNDERSTORY_FAR_R if far else GameConfig.GRASS_R, _ahead(under_r if far else grass_r)):
+		if rank > _keep(d, _full_r(kind, far), _ahead(_reach_r(kind, far))) * _flora_keep(kind):
 			continue
-		var scale := 0.6 + WGRandom.hash2(hx * 8 + m, hy, seed + 5) * 0.5
+		var scale := (0.6 + WGRandom.hash2(hx * 8 + m, hy, seed + 5) * 0.5) * _flora_grow(kind)
 		var tint := 0.8 + WGRandom.hash2(hx * 8 + m, hy, seed + 7) * 0.25
 		_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale, tint, rank])
 
@@ -1625,10 +1904,13 @@ func _fill_road(px: float, pz: float) -> void:
 
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло.
 ## stretch — длина вдоль локальной X в долях масштаба (бревно, ветка, корень), sink — насколько утоплено в грунт, м
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0) -> void:
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1) -> void:
 	var entry: Dictionary = understory[kind]
 	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
-	if _far_of.has(kind) and Vector2(x, z).distance_squared_to(_fill_at) > FAR_FORM_R * FAR_FORM_R:
+	# 16.0: граница — по качеству растительности (far_form_r)
+	var woody := Placement.priority(kind) == 1
+	var switch_r := far_form_r * (WOODY_FAR_FORM if woody else 1.0)
+	if _far_of.has(kind) and not (legacy_open and woody) and Vector2(x, z).distance_squared_to(_fill_at) > switch_r * switch_r:
 		entry = understory[_far_of[kind]]
 	if entry.count >= entry.cap:
 		fill_capped += 1
@@ -1639,10 +1921,23 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var object_box := AABB(local_box.position * Vector3(stretch, 1.0, 1.0), local_box.size * Vector3(stretch, 1.0, 1.0))
 	var reach := object_box.position.abs().max(object_box.end.abs()) * scale
 	var radius := Vector2(reach.x, reach.z).length()
-	if not on_road and not placement.ground_clear(x, z, radius):
-		return
-	if not placement.objects_clear(x, z, rot, scale, object_box, radius, owner):
-		return
+	# 16.0: куртина проверяет у полотна и воды свою сердцевину: края травы склоняются к кромке
+	var ground_r := radius * (0.5 if kind in Understory.OPEN_FORMS else 1.0)
+	# 16.0: у мест открытых клеток (key = клетка * 8 + место) проверка воды, путей, домов и стволов
+	# неизменна — считается один раз (бит «посчитано» и бит «можно»), а не в каждой раскладке.
+	var cell := key >> 3
+	var bit := 1 << (key & 7)
+	if key >= 0 and (_open_valid[cell * 2] & bit) != 0:
+		if (_open_valid[cell * 2 + 1] & bit) == 0:
+			return
+	else:
+		var ok := (on_road or placement.ground_clear(x, z, ground_r)) and placement.objects_clear(x, z, rot, scale, object_box, radius, owner)
+		if key >= 0:
+			_open_valid[cell * 2] |= bit
+			if ok:
+				_open_valid[cell * 2 + 1] |= bit
+		if not ok:
+			return
 	var pos := Vector3(x, heights.ground_at(x, z) - 0.015 - sink, z)
 	var offset: int = entry.count * STRIDE
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
@@ -1659,8 +1954,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	if not placement.details_clear(box):
 		return
 	_put_transform(entry.buf, offset, xf)
-	for c in 3:
-		entry.buf[offset + 12 + c] = tint
+	entry.buf[offset + 12] = tint * hue.r
+	entry.buf[offset + 13] = tint * hue.g
+	entry.buf[offset + 14] = tint * hue.b
 	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
 	entry.buf[offset + 16] = rank
 	entry.buf[offset + 17] = WGRandom.hash2(floori(x * 13), floori(z * 11), 73)
