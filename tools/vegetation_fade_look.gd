@@ -77,7 +77,6 @@ func run() -> void:
 		var node := MultiMeshInstance3D.new()
 		node.multimesh = mm
 		var mat := VegetationLayer._wind_mat(test[2], VegetationLayer.CALM, true)
-		mat.set_shader_parameter("stream_instances", test[3])
 		if test[0] == "cutout":
 			mat.set_shader_parameter("albedo_tex", defs[Biomes.T_OAK].crown_texture)
 		node.material_override = mat
@@ -88,14 +87,12 @@ func run() -> void:
 		camera.look_at_from_position(center + Vector3(2, 1.1, -3).normalized() * maxf(5, camera.size * 2), center)
 		var counts: Array[int] = []
 		for phase in [0.0, 0.25, 0.5]:
-			node.set_instance_shader_parameter("stream_birth", 10.0)
 			mm.set_instance_custom_data(0, Color(0, 0, 0, 10))
 			RenderingServer.global_shader_parameter_set("vegetation_clock", 10.0 + phase)
 			var shot := await capture()
 			counts.append(pixels(shot))
 			shot.save_png(out.path_join("%s_in_%d.png" % [test[0], roundi(phase * 100)]))
 		check(counts[0] == 0 and counts[1] > 0 and counts[1] < counts[2] and counts[2] > 30, "%s appears progressively: %s" % [test[0], counts])
-		node.set_instance_shader_parameter("stream_birth", -11.0)
 		mm.set_instance_custom_data(0, Color(0, 0, 0, -11))
 		RenderingServer.global_shader_parameter_set("vegetation_clock", 11.25)
 		var half := pixels(await capture())

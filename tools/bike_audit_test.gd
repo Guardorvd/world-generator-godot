@@ -13,7 +13,7 @@ class LowRoof extends TestGround:
 class NarrowSlotBike extends BikeRide:
 	var low := -0.005
 	var high := 0.005
-	func fits(_px: float, _pz: float, hd: float, _w: WorldData, _h: Heightfield) -> bool:
+	func fits(_px: float, _pz: float, hd: float, _w: WorldData, _h: Heightfield, _allow_climb := true) -> bool:
 		return hd > low and hd < high
 
 ## Стена (как перила моста) севернее z = -1.

@@ -25,8 +25,8 @@ uniform float fade_len = 1.0;
 global uniform vec2 veg_center;
 global uniform float vegetation_clock;
 global uniform float vegetation_night;
-uniform bool stream_instances = false;
-instance uniform float stream_birth = 0.0;
+// All vegetation carries its fade timestamp in MultiMesh custom data. Per-node
+// instance uniforms exhaust the shared hardware buffer in a streamed forest.
 // Поредение травы и подлеска дальше thin_full (м, 0 — нет): остаётся доля (thin_full / расстояние)²;
 // экземпляр с порогом INSTANCE_CUSTOM.x гаснет, когда доля опускается от 1,3 порога до порога.
 // Считается по нынешнему расстоянию, а не по раскладке: новая раскладка ничего не включает рывком.
@@ -82,7 +82,7 @@ void vertex() {
 	float rock_band = min(fade_len, max(10.0, rock_far * 0.22));
 	v_fade = clamp((rock_far - dist) / mix(rock_band, min(rock_band, 18.0), smoothstep(0.9, 1.3, rock_scale)), 0.0, 1.0);
 #endif
-	float stamp = stream_instances ? INSTANCE_CUSTOM.w : stream_birth;
+	float stamp = INSTANCE_CUSTOM.w;
 	if (stamp > 0.0) {
 		v_fade *= clamp((vegetation_clock - stamp) / 0.5, 0.0, 1.0);
 	} else if (stamp < 0.0) {

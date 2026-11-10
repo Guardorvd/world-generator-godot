@@ -139,6 +139,9 @@ func game_world() -> void:
 	var seed := "Север-1234"
 	var cache := GameContext.scope.cache
 	cache.dir = "res://tools/control/runs/network_game_cache"
+	var args := OS.get_cmdline_user_args()
+	var cache_arg := args.find("--cache-dir")
+	if cache_arg >= 0 and cache_arg + 1 < args.size(): cache.dir = args[cache_arg + 1]
 	cache.enabled = true
 	var existing := "--existing" in OS.get_cmdline_user_args()
 	if not existing: cache.remove_seed(seed)
@@ -173,7 +176,8 @@ func game_world() -> void:
 	cache.wait_writes()
 	check(a.error.is_empty(), "main loader accepts the world: " + a.error)
 	if not a.error.is_empty(): return
-	check(Network.surveys == searches + 1, "one survey of the real world")
+	var expected_surveys := searches + (0 if a.world.trail_plan.stats.get("mode", "") == Network.MODE_PARKS else 1)
+	check(Network.surveys == expected_surveys, "discovery uses the configured game mode")
 	if reference != null: check(same_surface(reference, a.heights), "cached definitions reproduce the newly admitted real-world surface")
 	check(a.world.trail_plan.state == "found", "main game has admitted tracks")
 	print("GAME NETWORK ", a.world.trail_plan.stats)
@@ -193,9 +197,23 @@ func game_world() -> void:
 	var c := WorldLoader.load_world(seed, WorldGenerator.START_SIZE)
 	check(c.error.is_empty() and c.from_cache and not c.surface_hit, "missing surface rebuilds from cached world definitions")
 	print("REPLAY LOAD ", JSON.stringify(c.timings))
-	check(Network.surveys == searches + 1, "both cache paths skip discovery and world regeneration")
+	check(Network.surveys == expected_surveys, "both cache paths skip discovery and world regeneration")
 	check(same_surface(a.heights, c.heights), "rebuilt real-world surface equals the originally accepted surface")
 	if not c.error.is_empty(): return
+	# Nature-only invalidation must replay the same rocks on the same final terrain.
+	cache.wait_writes()
+	cache.invalidate_from(seed, WorldGenerator.START_SIZE, 2)
+	var nature := WorldLoader.load_world(seed, WorldGenerator.START_SIZE)
+	check(nature.error.is_empty() and Network.surveys == expected_surveys,
+		"nature-only regeneration preserves admitted paths without discovery")
+	check(nature.world.trail_plan == a.world.trail_plan and same_surface(a.heights, nature.heights),
+		"nature-only regeneration preserves every terrain and material channel")
+	var same_plants := true
+	for field in ["obj_x", "obj_y", "obj_k", "obj_v", "obj_s"]:
+		same_plants = same_plants and a.world.get(field) == nature.world.get(field)
+	check(same_plants, "nature-only regeneration reproduces every plant and rock exactly")
+	print("NATURE LOAD ", JSON.stringify(nature.timings))
+	nature.chunk_source.close()
 	# Real game scene and real main HUD, with the menu script disabled: no second background world.
 	var shell := load("res://scenes/main.tscn").instantiate() as Node
 	shell.set_script(null)
@@ -238,6 +256,11 @@ func game_world() -> void:
 			game.bike.step(game.player, 0.5 if game.bike.speed < 4 else -0.3, steer, false, false, 1.0 / 60.0, c.world, c.heights)
 			if game.bike.crashed: crashed = true; break
 		check(not crashed and advanced > 6, "real BikeRide starts moving on the track without a fall (%.1f m)" % advanced)
+	if "--capture" in args:
+		await process_frame
+		await RenderingServer.frame_post_draw
+		var captured := root.get_texture().get_image()
+		check(captured.save_png("res://.godot/audit-game.png") == OK, "game frame captured")
 	await process_frame
 	game.queue_free()
 	shell.queue_free()

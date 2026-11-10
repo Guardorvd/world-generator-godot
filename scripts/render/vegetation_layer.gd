@@ -234,7 +234,6 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	var grass_mat := _wind_mat(SHADER, GRASS_WIND, true)
 	grass_mat.set_shader_parameter("height", grass_mesh.get_aabb().end.y)
 	grass_mat.set_shader_parameter("grass_variation", true)
-	grass_mat.set_shader_parameter("stream_instances", true)
 	_set_radii(settings.draw)
 	_set_flora(settings.flora)
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
@@ -262,7 +261,6 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM]
 		var wind := CALM if still else _plant_wind(base)
 		var mat := _wind_mat(SHADER, wind, true)
-		mat.set_shader_parameter("stream_instances", true)
 		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
 		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE, Understory.STIPA]
 		mat.set_shader_parameter("grass_variation", blades)
@@ -1143,7 +1141,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					built.node_cursor = node_index
 					return false
 				var mat := _shared_tree_material(def, part, level, small)
-				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small, false, true)
+				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small, true, true)
 				if limit > 0:
 					_reveal_node(node, mat)
 				if level >= FAR_LOD_NO_SHADOW:
@@ -1155,11 +1153,11 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					# 15.0: тень ближнего ствола считает дальний меш (в 10-15 раз меньше треугольников): ствол сам
 					# рисуется ближним мешом, а в каждый из каскадов теней попадал бы ещё раз.
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-					var caster := _multimesh(levels[levels.size() - 1], mat, entry.count, false, true, false, true)
+					var caster := _multimesh(levels[levels.size() - 1], mat, entry.count, false, true, true, true)
 					caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
 					if limit > 0:
 						_reveal_node(caster, mat)
-					caster.multimesh.buffer = entry.tbuf
+					caster.multimesh.buffer = _tree_buffer(entry.tbuf, false, caster.get_meta("stream_birth", 0.0))
 					caster.multimesh.custom_aabb = entry.bounds
 					caster.multimesh.visible_instance_count = entry.count
 					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
@@ -1168,7 +1166,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
-				mm.buffer = entry.tbuf if part == "trunk" else entry.cbuf
+				mm.buffer = _tree_buffer(entry.tbuf if part == "trunk" else entry.cbuf, part == "crown", node.get_meta("stream_birth", 0.0))
 				mm.custom_aabb = entry.bounds
 				mm.visible_instance_count = entry.count
 				# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
@@ -1267,7 +1265,25 @@ func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:
 
 static func _set_tree_stamp(node: MultiMeshInstance3D, stamp: float) -> void:
 	node.set_meta("stream_birth", stamp)
-	node.set_instance_shader_parameter("stream_birth", stamp)
+	var mm := node.multimesh
+	if mm == null or not mm.use_custom_data or mm.instance_count == 0:
+		return
+	var data := mm.buffer
+	var stride := 20 if mm.use_colors else 16
+	for at in range(stride - 1, data.size(), stride): data[at] = stamp
+	mm.buffer = data
+
+
+## Keep compact immutable CPU entries; add GPU fade data only at publication.
+static func _tree_buffer(source: PackedFloat32Array, colors: bool, stamp: float) -> PackedFloat32Array:
+	var source_stride := 16 if colors else 12
+	var stride := source_stride + 4
+	var count := source.size() / source_stride
+	var data := _buffer(count, stride)
+	for i in count:
+		for j in source_stride: data[i * stride + j] = source[i * source_stride + j]
+		data[i * stride + stride - 1] = stamp
+	return data
 
 
 func _retire_nodes(nodes: Array) -> void:
@@ -1290,7 +1306,9 @@ func _clean_retired() -> void:
 		if node.is_queued_for_deletion() or node.get_meta("stream_retiring", false):
 			_appearing.remove_at(i)
 		elif stream.clock >= entry.until:
-			_set_tree_stamp(node, 0.0)
+			# A completed positive GPU stamp already stays opaque. Only reset the
+			# CPU lifecycle marker; avoid re-uploading every mature tree buffer.
+			node.set_meta("stream_birth", 0.0)
 			_appearing.remove_at(i)
 	for i in range(_retired.size() - 1, -1, -1):
 		if frame_budget != null and not frame_budget.allows_work(): break

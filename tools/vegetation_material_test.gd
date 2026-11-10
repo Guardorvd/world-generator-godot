@@ -27,7 +27,22 @@ func run() -> void:
 	layer.add_child(b)
 	a.material_override = shared
 	b.material_override = shared
+	for node: MultiMeshInstance3D in [a, b]:
+		node.multimesh = MultiMesh.new()
+		node.multimesh.transform_format = MultiMesh.TRANSFORM_3D
+		node.multimesh.use_custom_data = true
+		node.multimesh.mesh = BoxMesh.new()
+		node.multimesh.instance_count = 1
+		node.multimesh.buffer = layer._tree_buffer(PackedFloat32Array([1, 0, 0, 2, 0, 1, 0, 3, 0, 0, 1, 4]), false, 0.0)
 	layer._reveal_node(a, shared)
+	# The headless dummy renderer does not retain MultiMesh transform/custom data.
+	if DisplayServer.get_name() != "headless":
+		check(a.multimesh.get_instance_custom_data(0).a == a.get_meta("stream_birth")
+			and b.multimesh.get_instance_custom_data(0).a == 0.0, "GPU timestamps are private without shader instance uniforms")
+		check(a.multimesh.get_instance_transform(0).origin == Vector3(2, 3, 4), "Fade upload preserves the tree transform")
+	var crown := layer._tree_buffer(PackedFloat32Array([1, 0, 0, 2, 0, 1, 0, 3, 0, 0, 1, 4, 0.2, 0.3, 0.4, 1]), true, -10.0)
+	check(crown.slice(12, 16) == PackedFloat32Array([0.2, 0.3, 0.4, 1]) and crown[19] == -10.0,
+		"Crown tint and fade occupy independent GPU channels")
 	check(a.material_override == shared and b.material_override == shared and a.get_meta("stream_birth", 0.0) > 0.0, "Reveal shares the material but has a private timestamp")
 	layer.stream.clock += 0.25
 	check(is_equal_approx(layer.Snapshots.opacity(a.get_meta("stream_birth", 0.0), layer.stream.clock), 0.5), "Halfway reveal is continuous")
@@ -36,6 +51,9 @@ func run() -> void:
 	layer.stream.clock += 0.25
 	layer._clean_retired()
 	check(a.get_meta("stream_birth", 0.0) == 0.0 and layer._appearing.is_empty(), "Completed reveal clears the timestamp")
+	if DisplayServer.get_name() != "headless":
+		check(a.multimesh.get_instance_custom_data(0).a > 0.0,
+			"Mature GPU timestamp remains opaque without another buffer upload")
 	layer._retire_nodes([a])
 	check(a.material_override == shared and b.material_override == shared and a.get_meta("stream_birth", 0.0) < 0.0 and b.get_meta("stream_birth", 0.0) == 0.0, "Retiring one mature node leaves its neighbours unchanged")
 	var c := MultiMeshInstance3D.new()
@@ -57,6 +75,28 @@ func run() -> void:
 	layer.stream.clock += 1.0
 	layer._clean_retired()
 	check(layer._retired.is_empty(), "Retirement queue drains")
+	if "--render" in OS.get_cmdline_user_args():
+		var scene := Node3D.new()
+		root.add_child(scene)
+		var camera := Camera3D.new()
+		camera.position = Vector3(32, 32, 100)
+		camera.projection = Camera3D.PROJECTION_ORTHOGONAL
+		camera.size = 75
+		scene.add_child(camera)
+		camera.current = true
+		var mesh := BoxMesh.new()
+		mesh.size = Vector3.ONE * 0.5
+		for i in 4200:
+			var node := layer._multimesh(mesh, shared, 1, false, false, true, true)
+			var source := PackedFloat32Array([1, 0, 0, i % 70, 0, 1, 0, i / 70, 0, 0, 1, 0])
+			node.multimesh.buffer = layer._tree_buffer(source, false, 0.0)
+			node.multimesh.visible_instance_count = 1
+		await process_frame
+		await RenderingServer.frame_post_draw
+		check(root.get_texture().get_image().save_png("res://.godot/audit-vegetation-limit.png") == OK,
+			"Rendered 4200 vegetation nodes beyond the shader instance limit")
+		scene.queue_free()
 	layer.queue_free()
 	await process_frame
+	print("vegetation_material_test: ", fails, " failures")
 	quit(1 if fails else 0)

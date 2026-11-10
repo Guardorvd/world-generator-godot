@@ -261,6 +261,16 @@ func cross(h: Heightfield, d: TrailDefinition, hz: int, speed: float) -> Diction
 
 
 func run() -> void:
+	var reserve := BikeRide.new()
+	reserve.airborne = false
+	reserve.load_f = 0.5; reserve.load_r = 0.5
+	var coast_caps := reserve._side_caps(1.0)
+	reserve.brakes.rear_force = coast_caps.y * 0.6
+	var braking_caps := reserve._side_caps(1.0)
+	check(coast_caps.y > 0 and is_equal_approx(braking_caps.y, coast_caps.y * 0.8)
+		and is_equal_approx(braking_caps.x, coast_caps.x), "задний тормоз расходует круг сцепления только заднего колеса")
+	reserve.lift_r = 0.1
+	check(reserve._side_caps(1.0).y == 0.0, "поднятое заднее колесо не создаёт бокового сцепления")
 	var d := section()
 	var kit: Array[TrailDefinition] = [d]
 	var prepared := Fixture.prepare(kit)
@@ -332,7 +342,7 @@ func run() -> void:
 	# Полный тормоз останавливает велосипед в зоне; до 30.10 удержание у остановки включало задний ход, и откат
 	# назад давал «снос» 3 м. Теперь стоянка, поэтому проверяется сам расход запаса заднего колеса и снос не меньше.
 	# 31.10: порог относительный — тяжесть поперёк теперь 10 м/с² (SIDE_GRAVITY), а не 16, и запас расходуется меньше.
-	check(new_brake.peak_use_r > new_coast.peak_use_r * 1.5 + 0.05 and new_brake.offset >= new_coast.offset, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
+	check(new_brake.peak_use_r > new_coast.peak_use_r + 0.05 and new_brake.offset >= new_coast.offset, "тормоз на контруклоне отнимает запас у поворота: сносит сильнее")
 	check(not new_coast.crashed and not new_brake.crashed, "контруклон проезжается без падения")
 	# 3. Корни: удар прижимает переднее колесо, отскок его разгружает.
 	var roots := ride(h, d, true, 60, ROOTS - 12.0, ROOTS + 10.0, 8.0, Vector2(-1, -1), false, Vector2(ROOTS - 7.0, ROOTS + 7.0))

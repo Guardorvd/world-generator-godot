@@ -30,6 +30,7 @@ func patch_scatter(f: Dictionary, rect: Rect2i, pad := -1) -> StageVegetation.Ob
 func run() -> void:
 	massif_contracts()
 	if "--massif-contracts-only" in OS.get_cmdline_user_args():
+		print("MOUNTAIN ROCK REVIEW ", failures, " failures")
 		quit(1 if failures else 0)
 		return
 	var hv := relief()
@@ -60,12 +61,12 @@ func run() -> void:
 		var seat := RockModels.seat(h, x, z, scale, st.v[o])
 		if seat.x == INF: continue
 		var up := Vector3(seat.y, seat.z, seat.w)
-		var xf := RockModels.outcrop_transform(x, z, scale, up, seat.x)
+		var xf := RockModels.outcrop_transform(x, z, scale, up, seat.x, Vector2.ZERO, st.v[o])
 		var raw := hv.duplicate()
 		for i in raw.size(): raw[i] /= GameConfig.HS
 		var snapshot := {h = raw, water = PackedFloat32Array(), path = w.path_mask, x0 = 0, y0 = 0, side = N}
 		check(RockModels.seat_snapshot_any(snapshot, PackedFloat32Array(), 0, 0, x, z, scale, st.v[o]) == seat, "live and immutable-snapshot seating agree")
-		var form := RockModels.outcrop_form(x, z)
+		var form := RockModels.form_of(st.v[o], x, z)
 		var model: Mesh = defs[VegetationLayer.OUTCROP_MODEL + form * ForestModels.MODEL_STRIDE].crown
 		var exposed := 0
 		for point: Vector3 in model.surface_get_arrays(0)[Mesh.ARRAY_VERTEX]:
@@ -95,8 +96,8 @@ func run() -> void:
 		check(built.entries[0].cbuf.slice(0, 12) == expected_buffer, "renderer uses the same transform as collision and seating")
 		# The same physical point copied into a local site keeps its form and orientation.
 		var shift := Vector2(12, -20)
-		var rebased := RockModels.outcrop_transform(x - shift.x, z - shift.y, scale, up, seat.x, shift)
-		check(rebased.basis == xf.basis and RockModels.outcrop_form(x - shift.x, z - shift.y, shift) == form, "saved-site origin preserves geological form and orientation")
+		var rebased := RockModels.outcrop_transform(x - shift.x, z - shift.y, scale, up, seat.x, shift, st.v[o])
+		check(rebased.basis == xf.basis and RockModels.form_of(st.v[o], x - shift.x, z - shift.y, shift) == form, "saved-site origin preserves geological form and orientation")
 		checked += 1
 		if checked == 4: break
 	check(checked == 4, "four distinct seated outcrops examined")
@@ -107,6 +108,8 @@ func run() -> void:
 	plants(w)
 	if "--bench" in OS.get_cmdline_user_args(): outer_cost()
 	layer.free()
+	print("MOUNTAIN ROCK REVIEW ", failures, " failures")
+	quit(1 if failures else 0)
 
 
 func massif_contracts() -> void:
@@ -139,8 +142,6 @@ func massif_contracts() -> void:
 	var ramp := PackedFloat32Array([0, 4, 8, 0, 4, 8, 0, 4, 8])
 	check(TerrainBuilder._normal(ramp, 3, 3, 0, 1).is_equal_approx(TerrainBuilder._normal(ramp, 3, 3, 1, 1)),
 		"edge normal uses the actual one-sided sample distance")
-	print("MOUNTAIN ROCK REVIEW ", failures, " failures")
-	quit(1 if failures else 0)
 
 
 func outer_cost() -> void:
@@ -170,7 +171,8 @@ func plants(w: WorldData) -> void:
 	layer.world = w
 	layer.grass_r = 2000; layer.under_r = 2000
 	layer.understory = []
-	for kind in 23: layer.understory.append({far = false})
+	for kind in VegetationLayer.Floor.FIRST + VegetationLayer.Floor.ROOT_SPAN + 1:
+		layer.understory.append({far = false})
 	var allowed := {}
 	for entry: Array in VegetationLayer.ROCK_HOLLOW: allowed[entry[0]] = true
 	var forbidden := 0
@@ -180,8 +182,16 @@ func plants(w: WorldData) -> void:
 	for site: Array in layer._understory_sites: forbidden += int(not allowed.has(site[0]))
 	check(layer._understory_sites.size() > 100 and forbidden == 0, "rock hollows select only configured species; no zero-weight branches/logs")
 	layer._understory_sites.clear()
-	layer._fill_rock_hollow(45, 45, 3, 0.2, Color(0, 0, 1, 0), 180, 180)
-	check(layer._understory_sites.is_empty(), "rock hollow plants do not enter an authored route")
+	layer._fill_rock_hollow(45, 45, 1, 0.2, Color(0, 0, 1, 0), 180, 180)
+	check(layer._understory_sites.is_empty(), "rock hollow candidates avoid paths without a refined tread")
+	var heights := Heightfield.new()
+	heights.world = w
+	var placement := VegetationLayer.Placement.new(w, heights)
+	var cell := 45 * w.W + 45
+	var previous_path: int = w.path_mask[cell]
+	w.path_mask[cell] = 3
+	check(not placement.ground_clear(182, 182, 0.1), "final plant placement rejects an authored route without refinement")
+	w.path_mask[cell] = previous_path
 	var pairs := []
 	for shift: Vector2i in [Vector2i.ZERO, Vector2i(8, -8)]:
 		w.world_origin = shift
@@ -196,7 +206,10 @@ func plants(w: WorldData) -> void:
 	var same: bool = pairs[0].size() > 0 and pairs[0].size() == pairs[1].size()
 	if same:
 		for i in pairs[0].size():
-			for j in pairs[0][i].size(): same = same and absf(float(pairs[0][i][j]) - float(pairs[1][i][j])) < 0.00001
+			for j in pairs[0][i].size():
+				var a: Variant = pairs[0][i][j]
+				var b: Variant = pairs[1][i][j]
+				same = same and (a.is_equal_approx(b) if a is Color else absf(float(a) - float(b)) < 0.00001)
 	check(same, "rock hollow species, transforms and density survive a saved-site origin shift")
 	w.world_origin = Vector2i.ZERO
 	layer.free()
