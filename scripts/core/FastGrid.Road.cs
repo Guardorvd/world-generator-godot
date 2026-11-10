@@ -69,9 +69,8 @@ public partial class FastGrid
 			double originalShoulder = (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5);
 			return (1.0 - RoadSmooth(originalEdge * 0.55, originalEdge + originalShoulder, distance)) * (1.0 - organic * 0.35);
 		}
-		double edge = half * (road ? 0.94 : 0.66) * (1.0 - organic * 0.08) + slow * 0.10;
-		double shoulder = (road ? 0.5 : 0.35) + organic * 0.35;
-		return 1.0 - RoadSmooth(edge * 0.55, edge + shoulder, distance);
+		double edge = half * 0.82 * (1.0 - organic * 0.04);
+		return Math.Clamp(0.5 + edge - distance, 0.0, 1.0);
 	}
 	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
 	private static double RoadReliefEdge(Vector2 p, int width, int height, double tile)
@@ -125,7 +124,6 @@ public partial class FastGrid
 		color.R = (float)(color.R * (1.0 + shade));
 		color.G = (float)(color.G * (1.0 + shade));
 		color.B = (float)(color.B * (1.0 + shade));
-		color.A = (float)(color.A * (1.0 - Math.Clamp(Math.Max(0.0, bank) * gain * 4.0, 0.0, 0.5)));
 	}
 
 	private static double RoadShoulder(double side, double cross, double n, double slope, double ditch, double lip)

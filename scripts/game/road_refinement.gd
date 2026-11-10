@@ -1237,7 +1237,6 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 		color.r *= 1.0 + shade
 		color.g *= 1.0 + shade
 		color.b *= 1.0 + shade
-		color.a *= 1.0 - clampf(maxf(0.0, bank) * gain * 4.0, 0.0, 0.5)
 	if _heights.water_level[i] == -INF and h < base:
 		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
 	var active := color.a > 0.0
@@ -1254,9 +1253,11 @@ static func tread_mask(half: float, d: float, slow: float, organic: float, road:
 		var original_edge := (half + slow * 0.24 + grain * 0.10) * (1.0 - organic * 0.12)
 		var original_shoulder := (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5)
 		return (1.0 - smoothstep(original_edge * 0.55, original_edge + original_shoulder, d)) * (1.0 - organic * 0.35)
-	var edge := half * (0.94 if road else 0.66) * (1.0 - organic * 0.08) + slow * 0.10
-	var shoulder := (0.5 if road else 0.35) + organic * 0.35
-	return 1.0 - smoothstep(edge * 0.55, edge + shoulder, d)
+	# A linear signed-distance ramp interpolates predictably on the metre grid.
+	# Applying smoothstep here and again in the shader inflated corners and left
+	# disconnected shoulder fragments. Organic litter changes texture, not width.
+	var edge := half * 0.82 * (1.0 - organic * 0.04)
+	return clampf(0.5 + edge - d, 0.0, 1.0)
 
 
 ## A meandering contour crosses the tread and shoulders in world space.

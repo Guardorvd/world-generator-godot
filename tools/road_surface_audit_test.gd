@@ -249,6 +249,19 @@ func tread_check() -> void:
 	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5), "trail", 0.55, 0.55)]
 	var h := Heightfield.new(w, false)
 	var r := RoadRefinement.build(h)
+	RoadRefinement.natural_relief = false
+	var flat_mask := RoadRefinement.build(h)
+	RoadRefinement.natural_relief = true
+	var alpha_error := 0.0
+	for key: int in r.patches:
+		if not flat_mask.patches.has(key): continue
+		for j in r.patches[key].color.size():
+			alpha_error = maxf(alpha_error, absf(r.patches[key].color[j].a - flat_mask.patches[key].color[j].a))
+	check(alpha_error == 0.0, "banks and corridor relief cannot cut holes or widen the painted tread")
+	var radius := 1.1 * 0.82 * (1.0 - 0.65 * 0.04)
+	check(is_equal_approx(RoadRefinement.tread_mask(1.1, radius, -1.0, 0.65, false), 0.5)
+		and RoadRefinement.tread_mask(1.1, radius, -1.0, 0.65, false) == RoadRefinement.tread_mask(1.1, radius, 1.0, 0.65, false),
+		"constant-distance edge is independent of random width noise")
 	var sample := r.sample(130, 130, w.W)
 	check(sample.surface == RoadSurface.GRAVEL and roundi(r.patches[32 * w.W + 32].uv[0].y) == RoadSurface.GRAVEL \
 		and is_equal_approx(fposmod(r.patches[32 * w.W + 32].uv[0].y, 1.0), 0.25), "singletrack shader channel leaves the physical material ID intact")

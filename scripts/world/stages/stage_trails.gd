@@ -263,7 +263,10 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var cheaper := 0.6 if kind == "animal" else 0.35
 	var both := road_cost.size() > 0
 	for i: int in path:
-		if mask[i] < mark:
+		# Human paths are stamped from their final, validated centreline below.
+		# Marking the raw search cells as well leaves a second ghost corridor after
+		# rounding or consolidation, which later routes mistake for an existing road.
+		if kind == "animal" and mask[i] < mark:
 			mask[i] = mark
 		# протоптанная тропа дешевле: следующие маршруты сливаются с ней
 		cost[i] = maxf(0.3, cost[i] * cheaper)
@@ -315,7 +318,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 		out.resize(n)
 		for k in n:
 			out[k] = {x = line[k], y = line[n + k], w = line[2 * n + k]}
-		return out
+		return _shared_passage(w, out, kind, surface, on_axis)
 	for iteration in 3:
 		var out: Array = [pts[0]]
 		for k in range(1, pts.size() - 1):
@@ -336,7 +339,80 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				out.append(b)
 		out.append(pts[-1])
 		pts = out
-	return pts
+	return _shared_passage(w, pts, kind, surface, on_axis)
+
+
+## Reuse a nearby parallel passage instead of painting another strip beside it.
+## Operates before stamping, vegetation and surface assignment, so all consumers
+## receive the same centreline. A crossing is not a parallel shared passage.
+static func _shared_passage(w: WorldData, line: Array, kind: String, surface: Heightfield, on_axis: PackedByteArray) -> Array:
+	if line.size() < 3 or kind == "animal": return line
+	var bins := {}
+	for old: Dictionary in w.trails:
+		if old.kind == "animal" or old.has("trail_id") or (old.kind != kind and old.kind != "road"): continue
+		for j in range(1, old.pts.size()):
+			var a := Vector2(old.pts[j - 1].x, old.pts[j - 1].y)
+			var b := Vector2(old.pts[j].x, old.pts[j].y)
+			if a.distance_squared_to(b) < 0.000001: continue
+			var box := Rect2(a, b - a).abs().grow(1.2)
+			var segment := {a = a, delta = b - a, half = (float(old.pts[j - 1].w) + float(old.pts[j].w)) * 0.25}
+			for y in range(floori(box.position.y / 4.0), floori(box.end.y / 4.0) + 1):
+				for x in range(floori(box.position.x / 4.0), floori(box.end.x / 4.0) + 1):
+					var key := Vector2i(x, y)
+					if not bins.has(key): bins[key] = []
+					bins[key].append(segment)
+	if bins.is_empty(): return line
+	var projected := PackedVector2Array()
+	var matched := PackedByteArray()
+	projected.resize(line.size()); matched.resize(line.size())
+	var along := PackedFloat64Array([0.0])
+	for j in line.size():
+		var p := Vector2(line[j].x, line[j].y)
+		projected[j] = p
+		if j > 0: along.append(along[-1] + p.distance_to(Vector2(line[j - 1].x, line[j - 1].y)))
+		var cell := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
+		if _by_water(w, cell) or (not on_axis.is_empty() and on_axis[cell] != 0): continue
+		var tangent := (Vector2(line[mini(j + 2, line.size() - 1)].x, line[mini(j + 2, line.size() - 1)].y)
+			- Vector2(line[maxi(0, j - 2)].x, line[maxi(0, j - 2)].y)).normalized()
+		var best := INF
+		var endpoint := j == 0 or j == line.size() - 1
+		for s: Dictionary in bins.get(Vector2i(floori(p.x / 4.0), floori(p.y / 4.0)), []):
+			var delta: Vector2 = s.delta
+			if not endpoint and absf(tangent.dot(delta.normalized())) < 0.94: continue
+			var f := clampf((p - (s.a as Vector2)).dot(delta) / delta.length_squared(), 0.0, 1.0)
+			var q: Vector2 = s.a + delta * f
+			var distance := p.distance_to(q)
+			var tolerance := float(s.half) + 0.15 + (0.0 if endpoint else float(line[j].w) * 0.5)
+			if distance > tolerance or distance >= best: continue
+			best = distance; projected[j] = q; matched[j] = 1
+	var out := line.duplicate(true)
+	var first := 0
+	while first < line.size():
+		if matched[first] == 0:
+			first += 1
+			continue
+		var last := first
+		while last + 1 < line.size() and matched[last + 1] != 0: last += 1
+		# Reject isolated projections and short corner contacts. Fade over 8 m at
+		# entry/exit, preserving route endpoints and genuine alternative passages.
+		if along[last] - along[first] >= 4.0:
+			for j in range(first, last + 1):
+				var fade := smoothstep(0.0, 2.0, minf(along[j] - along[first], along[last] - along[j]))
+				var p := Vector2(line[j].x, line[j].y).lerp(projected[j], fade)
+				out[j].x = p.x; out[j].y = p.y
+		first = last + 1
+	# A route terminating inside another tread joins its axis, rather than leaving
+	# an independent round end cap sticking through the opposite verge.
+	for j: int in [0, line.size() - 1]:
+		if matched[j] != 0:
+			out[j].x = projected[j].x; out[j].y = projected[j].y
+	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
+	var cross := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
+	var probe := surface.fast_water()
+	for j in range(1, out.size()):
+		if out[j] == line[j] and out[j - 1] == line[j - 1]: continue
+		if not _road_segment(surface, out[j - 1], out[j], grade, cross, probe): return line
+	return out
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)

@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 15 # one sea-level rule and consistent lake water levels
-const SCHEMA_TRAILS_VERSION := 21 # coherent environmental road materials and junctions
+const SCHEMA_TRAILS_VERSION := 22 # nearby parallel routes reuse one validated passage
 const SCHEMA_NATURE_VERSION := 12 # accepted massifs survive object spacing
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
@@ -51,7 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
-const SURFACE_VERSION := 13 # shared tread mask, singletrack channel and preserved natural road profile
+const SURFACE_VERSION := 14 # distance tread mask independent of shoulder height
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()
