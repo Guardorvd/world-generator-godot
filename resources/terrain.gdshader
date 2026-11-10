@@ -44,6 +44,7 @@ varying vec3 road_detail;
 varying vec4 road_bump_p;
 varying float road_bump_weight;
 varying float road_crack;
+varying float singletrack;
 
 // 11.5: волна RoadBump.shape и её наклон: x — высота 0..1, yz — производные по x и z мира.
 vec3 road_wave(vec2 p, float wave) {
@@ -130,6 +131,8 @@ void vertex() {
 	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
 	road_bump_weight = UV2.y > 0.0 ? 1.0 : 0.0;
 	road_crack = surface_crack[clamp(int(round(UV2.y)), 0, 7)];
+	// Fractional channel preserves the material ID and the physical across coordinate.
+	singletrack = clamp(fract(UV2.y) * 4.0, 0.0, 1.0);
 	if (use_vertex_color) {
 		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
 		COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
@@ -316,21 +319,20 @@ void fragment() {
 		rp += vec2(n_mid, n_big) * 0.25 + vec2(n_big * 2.3, n_big * 1.7);
 		float fine = texture(detail_tex, rp * 2.31).r;
 		float fleck = texture(detail_tex, rp * 0.73 + vec2(0.21, 0.67)).r;
-		// 11.3: кромка — тот же метровый силуэт, но переход уже и рвётся тремя масштабами шума,
-		// поэтому ломаная треугольников сетки и размытая полоса вдоль края больше не читаются.
-		// Ширина сглаживания — производная маски плюс оценка крутизны шума (около 2,5 на метр) на размер пикселя.
-		float edge_noise = ((n_mid - 0.5) * 0.34 + (fleck - 0.5) * 0.30 + (fine - 0.5) * 0.16 * near) * (1.0 + organic * 0.5);
-		float edge_amp = 4.0 * COLOR.a * (1.0 - COLOR.a);
-		edge_noise *= edge_amp;
-		float edge_v = COLOR.a + edge_noise;
-		float soft = mix(0.16, 0.32, organic);
-		float aa = clamp(mask_w + pixel_m * 2.5 * edge_amp, 0.004, 0.3);
+		// The mesh alpha also controls vegetation. Keep that boundary: fine noise belongs
+		// to the litter/grit inside it, not a second repeating torn silhouette.
+		float edge_v = COLOR.a;
+		float soft = mix(0.12, 0.24, organic * (0.55 + wet * 0.45));
+		soft = mix(soft, 0.10, rock * (1.0 - organic));
+		float aa = clamp(mask_w * 0.5, 0.004, 0.18);
 		road = smoothstep(0.5 - soft - aa, 0.5 + soft + aa, edge_v);
 		// 11.4: обочина — полоса снаружи кромки, до конца маски вершин (около метра). У полотна сухой ободок.
 		float verge = smoothstep(0.02, 0.30, edge_v) * (1.0 - road);
 		float lip = road * (1.0 - smoothstep(0.55, 0.85, edge_v));
 		// Поперечная координата полотна: 0 — ось, 1 — половина ширины (по ближайшему отрезку пути).
 		float across = abs(UV2.x + (n_mid - 0.5) * 0.18);
+		float tread = 1.0 - smoothstep(0.12, mix(0.78, 0.60, singletrack), across);
+		float meadow = smoothstep(0.75, 0.98, organic);
 		// 11.5: кочки полотна — то же поле, что у колёс (RoadBump): по покрытию, на крутом выше.
 		// 12.3: с участками, колеями и ямами. Видны светом и тоном; гаснут, когда волна меньше нескольких пикселей.
 		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
@@ -372,6 +374,8 @@ void fragment() {
 		float big_rocks = (1.0 - smoothstep(rock_r - big_aa, rock_r + big_aa, length(rock_at)))
 			* step(0.86 - grain * 0.10 - smoothstep(0.55, 0.95, across) * 0.08, big_scatter.x)
 			* max(smoothstep(0.25, 0.7, grain), verge * (0.6 - organic * 0.3)) * (1.0 - smoothstep(0.2, 0.6, big_aa));
+		// Traffic sorts fines onto the tread; coarser scree remains at its sides.
+		big_rocks *= 1.0 - tread * 0.85;
 		float big_dome = clamp(1.0 - length(rock_at) / rock_r, 0.0, 1.0);
 		// Обочина: трава гуще и темнее, с сухими пятнами; просветы почвы, разнесённой с полотна;
 		// на них — выкатившийся гравий; камни. Цвет почвы — смесь покрытия и травы, без новых данных.
@@ -379,7 +383,10 @@ void fragment() {
 		if (verge > 0.0) {
 			float dry_grass = smoothstep(0.42, 0.72, fine * 0.5 + fleck * 0.5);
 			verge_col *= mix(vec3(0.93, 0.97, 0.88), vec3(1.08, 1.03, 0.78), dry_grass);
-			float bare = smoothstep(0.56, 0.76, fleck * 0.55 + (1.0 - n_mid) * 0.35 + verge * 0.25 - organic * 0.1) * near;
+			// Sparse dust/litter follows the shared shoulder, rather than drawing a
+			// second bright, noise-cut outline (particularly conspicuous on sand).
+			float bare = smoothstep(0.12, 0.48, edge_v) * (0.20 + (1.0 - organic) * 0.22)
+				* (0.75 + fleck * 0.25) * near;
 			vec3 earth = mix(COLOR.rgb * (0.9 + (fine - 0.5) * 0.12), col * 0.7, 0.22 + organic * 0.3);
 			earth *= 1.0 + vec3(pebbles * (dome * 1.2 - 0.3) * 0.4 * near);
 			verge_col = mix(verge_col, earth, bare * 0.8);
@@ -389,8 +396,8 @@ void fragment() {
 		float soil_detail = (fine - 0.5) * mix(0.05, 0.10, grain) + (fleck - 0.5) * 0.08;
 		vec3 soil = COLOR.rgb * (0.95 + (n_mid - 0.5) * 0.14 + soil_detail * near);
 		// Крупные пятна: суше и светлее / сырее, темнее и холоднее, чтобы полотно не было одного тона.
-		float dry = n_big + (n_mid - 0.5) * 0.25;
-		soil *= mix(vec3(0.92, 0.94, 0.97), vec3(1.06, 1.03, 0.97), smoothstep(0.3, 0.7, dry));
+		float dry = (1.0 - wet) * 0.8 + n_big * 0.2;
+		soil *= mix(vec3(0.92, 0.94, 0.96), vec3(1.04, 1.02, 0.98), smoothstep(0.2, 0.8, dry));
 		soil *= 1.0 + vec3(pebbles * (dome * 1.1 - 0.3) * (0.20 + scatter.x * 0.12) * near);
 		vec3 rock_tone = mix(soil, rock_color * 0.8, 0.55) * (0.82 + big_dome * 0.22) * mix(0.92, 1.05, big_scatter.y);
 		soil = mix(soil, rock_tone, big_rocks * near);
@@ -410,24 +417,31 @@ void fragment() {
 				* step(0.55, litter_scatter.y) * (1.0 - smoothstep(0.18, 0.55, litter_aa)) * organic * near;
 			soil = mix(soil, dry_litter * mix(0.65, 1.0, litter_scatter.x), leaf * 0.35);
 		}
-		road *= 1.0 - organic * smoothstep(0.55, 0.8, fleck) * 0.25 * near;
+		// Forest litter approaches from the sides without erasing the compacted centre.
+		soil = mix(soil, col, organic * (1.0 - tread) * 0.24);
 		// Накатанные колеи: местами, с разрывами, плотнее и темнее, мелкий камень с них выбит.
 		// 12.3: там же, где колея RoadBump (её участки), а глубокие колеи на мягком ещё темнее.
 		float rut_on = smoothstep(0.35, 0.7, ruts_patch.y);
 		float tracks = exp(-pow((abs(UV2.x) - 0.47) / 0.13, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
 			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
 			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
+		tracks *= mix(1.0, meadow, singletrack);
+		float foot_wear = tread * singletrack * (1.0 - meadow);
+		soil *= 1.0 - foot_wear * (0.035 + wet * 0.035);
 		soil *= 1.0 - tracks * (0.07 + fine * 0.05 + road_bump_p.z * 2.5);
 		// Разбитая светлая кромка колеи и разная плотность грунта придают дороге глубину.
-		float rut_edge = exp(-pow((abs(UV2.x) - 0.62) / 0.09, 2.0)) * rut_on;
+		float rut_edge = exp(-pow((abs(UV2.x) - 0.62) / 0.09, 2.0)) * rut_on * mix(1.0, meadow, singletrack);
 		soil *= 1.0 + rut_edge * (0.025 + 0.025 * fleck) * (1.0 - organic * 0.5) * near;
 		float compacted = smoothstep(0.38, 0.72, n_mid * 0.65 + fleck * 0.35);
 		soil = mix(soil, soil * vec3(1.035, 1.02, 0.99), compacted * (1.0 - grain * 0.5) * near);
 		// На заросшей колее в колеях проступает земля.
-		road = max(road, tracks * organic * 0.7 * smoothstep(0.0, 0.02, road_bump_p.z));
+		// Meadow cart tracks expose soil, with a grass centre. Never expand beyond the
+		// shared mask at a junction or into grass/rocks placed outside the tread.
+		float meadow_wear = 1.0 - exp(-pow(across / 0.24, 2.0)) * 0.72;
+		road *= mix(1.0, meadow_wear, meadow);
 		// Ямы: дно темнее и влажнее.
 		float pit = clamp(-bump.x / 0.03, 0.0, 1.0) * (1.0 - tracks) * near;
-		soil *= 1.0 - pit * 0.28;
+		soil *= 1.0 - pit * 0.12;
 		// 12.3: трещины — сетка ячеек ~0,9 м (Вороной по повёрнутым координатам), местами, тонкие тёмные линии.
 		if (road_crack > 0.0 && near > 0.0 && pixel_m < 0.06) {
 			vec2 cp = rp * 1.1;
@@ -449,13 +463,15 @@ void fragment() {
 			float edge_m = (f2 - f1) * 0.5 / 1.1;
 			float crack_w = 0.012 + 0.02 * fine;
 			float lines = 1.0 - smoothstep(crack_w, crack_w + pixel_m, edge_m);
-			float zone = smoothstep(0.42, 0.62, n_big + (fleck - 0.5) * 0.5) * road_crack;
+			// A compacted stony tread is fines, not a sheet of cracked bedrock/concrete.
+			float zone = smoothstep(0.42, 0.62, n_big + (fleck - 0.5) * 0.5) * road_crack
+				* (1.0 - grain * 0.9) * (1.0 - wet * 0.65);
 			soil *= 1.0 - lines * zone * (1.0 - smoothstep(0.02, 0.06, pixel_m)) * (1.0 - tracks * 0.6) * 0.4;
 		}
 		float wear = exp(-pow((UV2.x + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
 		soil *= 1.0 - wear * (1.0 - grain) * (1.0 - organic) * (0.02 + fleck * 0.04) * near;
 		// Трава пробивается между колеями и у краёв заросших троп и грунтовок.
-		float middle = exp(-pow(across * 2.6, 2.0)) * smoothstep(0.35, 0.9, 1.0 - grain) + smoothstep(0.65, 1.0, across) * 0.5;
+		float middle = exp(-pow(across * 2.6, 2.0)) * smoothstep(0.35, 0.9, 1.0 - grain) * mix(1.0, meadow, singletrack) + smoothstep(0.65, 1.0, across) * 0.5;
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
 		soil *= 1.0 - lip * 0.06;

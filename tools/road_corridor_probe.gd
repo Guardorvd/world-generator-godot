@@ -11,6 +11,8 @@ extends SceneTree
 ##   godot --path . --script res://tools/road_corridor_probe.gd -- [--tag after] [--out <папка>] [--fixtures <папка>]
 ##         [--base <папка>] [--seeds Север-1234,Туман-4821,Ущелье] [--no-shots] [--runs 3]
 ##         [--clutter] [--ride-metres 550] [--ride-clutter] [--verify-roots] [--sections forest] [--shot-kinds road,forest]
+## --refresh-surface — переназначить материалы сохранённых путей; --base закрепляет также выбор участков.
+## --motion — короткий пролёт камеры 8 м/с по каждому снятому участку, время кадра/GPU (не полный игровой FPS).
 
 const Snapshot := preload("res://scripts/game/surface_snapshot.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -93,6 +95,13 @@ func run() -> void:
 		var path := fixtures.path_join(seed_text + ".fixture.bin")
 		var saved: Dictionary = FileAccess.open(path, FileAccess.READ).get_var()
 		var w: WorldData = WorldCache.new()._restore(saved.world, true)
+		var materials_before := _material_runs(w)
+		var material_ms := 0.0
+		if "--refresh-surface" in OS.get_cmdline_user_args():
+			var material_start := Time.get_ticks_usec()
+			RoadSurface.run(w)
+			material_ms = (Time.get_ticks_usec() - material_start) / 1000.0
+			print("SURFACE ", seed_text, " ", material_ms, " ms; runs ", materials_before, " -> ", _material_runs(w))
 		w.available_rect = Rect2i() # весь план открыт: участки и заезды не только в стартовом окне
 		var base: Heightfield = Snapshot.restore(w, saved.base, "base")
 		saved = {}
@@ -105,7 +114,8 @@ func run() -> void:
 			h.finish_paths()
 			times.append((Time.get_ticks_usec() - started) / 1000.0)
 			stages = h.path_timings.duplicate()
-		var row := {seed = seed_text, finish_ms = times, stages = stages}
+		var row := {seed = seed_text, finish_ms = times, stages = stages, material_ms = material_ms,
+			material_runs_before = materials_before, material_runs_after = _material_runs(w)}
 		if times.size() > 1:
 			row.finish_warm_median_ms = _warm_median(times)
 		row.patches = h.road_refinement.patches.size()
@@ -114,6 +124,15 @@ func run() -> void:
 			terrain_material = GameContext.scope.terrain.material(terrain_image)
 		var forest := Floor.surface_image(w) if clutter else null
 		var sections := _sections(w, h, forest)
+		# Material changes must not select a more flattering forest location for 'after'.
+		var previous_path := base_dir.path_join(seed_text + "_probe.json")
+		if base_dir != "" and FileAccess.file_exists(previous_path):
+			var previous: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(previous_path))
+			sections = []
+			for old: Dictionary in previous.sections:
+				var surf: int = w.road_surface[_cell(w, Vector2(old.x, old.z))]
+				sections.append({kind = old.kind, route = int(old.route), station = int(old.station), x = old.x, z = old.z,
+					surface = surf, surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"})
 		stations = {}
 		row.metrics = _metrics(w, h)
 		FileAccess.open(out.path_join(seed_text + "_stations.bin"), FileAccess.WRITE).store_var(stations)
@@ -142,7 +161,10 @@ func run() -> void:
 				h.obstacles = null
 				if capture: _clutter_at(Vector2(s.x, s.z), true)
 			row.sections.append(s.duplicate())
-			if capture: await _shoot(w, h, seed_text, s)
+			if capture:
+				await _shoot(w, h, seed_text, s)
+				if "--motion" in OS.get_cmdline_user_args():
+					row.sections[-1].motion = await _motion(w, h, s)
 			if root_at != Vector2.INF:
 				var near_root := _clutter_at(root_at, false)
 				row.sections[-1].root_contact = near_root
@@ -157,6 +179,16 @@ func run() -> void:
 	if base_dir != "": _compare()
 	print("PROBE DONE ", out)
 	quit(1 if clutter_mismatches > 0 else 0)
+
+
+func _material_runs(w: WorldData) -> Dictionary:
+	var result := {}
+	for t: Dictionary in w.trails:
+		if t.kind == "animal" or t.has("trail_id"): continue
+		var changes := 0
+		for i in range(1, t.surf.size()): changes += int(t.surf[i] != t.surf[i - 1])
+		result[t.kind] = int(result.get(t.kind, 0)) + changes
+	return result
 
 
 ## Станции через 1 м по линии пути: точка, полуширина
@@ -571,6 +603,10 @@ func _profile(h: Heightfield, s: Dictionary) -> Dictionary:
 
 func _scene() -> void:
 	DisplayServer.window_set_size(Vector2i(1000, 562))
+	if "--motion" in OS.get_cmdline_user_args():
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		Engine.max_fps = 0
+		RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	var env := WorldEnvironment.new()
 	env.environment = Environment.new()
 	var sky := Sky.new()
@@ -634,6 +670,31 @@ func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> v
 			pair.blit_rect(after, Rect2i(Vector2i.ZERO, after.get_size()), Vector2i(before.get_width() + 8, 0))
 			pair.resize(pair.get_width() / 2, pair.get_height() / 2, Image.INTERPOLATE_BILINEAR)
 			pair.save_jpg(out.path_join("pair_" + name.get_basename() + ".jpg"), 0.9)
+
+
+## A short eye-level camera pass over the same production mesh, not a full-game FPS benchmark.
+func _motion(w: WorldData, h: Heightfield, s: Dictionary) -> Dictionary:
+	var ps: PackedVector2Array = _stations(w.trails[s.route]).p
+	var times := PackedFloat32Array()
+	var gpu := PackedFloat32Array()
+	for frame in 120:
+		var station := float(s.station) - 9.0 + frame * 8.0 / 60.0
+		var j := clampi(floori(station), 0, ps.size() - 16)
+		var p := ps[j].lerp(ps[j + 1], station - floorf(station))
+		var side := _normal(ps, j) * 0.4
+		var target := ps[j + 14]
+		camera.look_at_from_position(Vector3(p.x + side.x, h.ground_at(p.x, p.y) + 1.35, p.y + side.y),
+			Vector3(target.x, h.ground_at(target.x, target.y) + 0.2, target.y), Vector3.UP)
+		var start := Time.get_ticks_usec()
+		await process_frame
+		await RenderingServer.frame_post_draw
+		if frame >= 12:
+			times.append((Time.get_ticks_usec() - start) / 1000.0)
+			gpu.append(RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid()))
+	times.sort(); gpu.sort()
+	var result := {frames = times.size(), median_ms = times[times.size() / 2], p99_ms = times[-2], gpu_ms = gpu[gpu.size() / 2]}
+	print("MOTION ", w.seed_text, " ", s.kind, " ", JSON.stringify(result))
+	return result
 
 
 ## Сбоку и чуть сверху: над землёй у камеры и над полотном, чтобы склон между ними не закрывал вид

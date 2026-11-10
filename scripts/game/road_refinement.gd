@@ -46,7 +46,7 @@ static var restrict_local_index := true # reference switch for exact local-build
 static var allow_fast_index := true # false — индекс отрезков на GDScript (эталон для tools/dod_verify.gd)
 static var allow_fast_patches := true # false — сбор патчей в GDScript (эталон для tools/dod_verify.gd)
 
-var patches := {}  # индекс исходного квадрата -> {h, color, uv, surface, road}; uv: поперечная координата, номер покрытия
+var patches := {}  # uv: across, surface + 0.25 for singletrack (round gives the material). Physics uses surface separately.
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
 var corridor := PackedFloat64Array() # формы коридора всех путей подряд, по CORRIDOR_STRIDE на станцию
 var corridor_routes := {} # маршрут -> Vector2i(первая станция в corridor, число станций)
@@ -77,6 +77,7 @@ var _sg_len2 := PackedFloat64Array()
 var _sg_half := PackedFloat64Array()
 var _sg_route := PackedInt32Array()
 var _sg_along := PackedFloat64Array()
+var _route_identity := PackedInt32Array() # exact complete natural routes only; never aliases merely nearby axes
 
 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
@@ -363,7 +364,7 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var out: Dictionary = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
 		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
 		corridor_start, corridor_count, corridor, surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes,
-		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach)
+		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes())
 	patches = out.patches
 	build_timings.native_points_ms = out.ms_points
 	build_timings.native_vertices_ms = out.ms_vertices
@@ -485,7 +486,14 @@ func _native_vertices(fast: Object, nearest: PackedFloat64Array) -> Dictionary:
 		var color: Array = s.get("color", [0, 0, 0])
 		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
 	return fast.RoadVertices(_points, nearest, _heights.world.W, _height, TILE, _heights.hv, _heights.water_level,
-		_dist_water, _noise, _origin, segments, fits, corridor, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd)
+		_dist_water, _noise, _origin, segments, fits, corridor, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd, _authored_routes())
+
+
+func _authored_routes() -> PackedByteArray:
+	var result := PackedByteArray()
+	for t: Dictionary in _heights.world.trails:
+		result.append(1 if t.has("trail_id") else 0)
+	return result
 
 
 func _index_structures() -> void:
@@ -582,6 +590,7 @@ func _index(t: Dictionary, route: int) -> void:
 ## профиля); формы всех путей считаются потом одним пакетом (_build_corridor).
 func _fit_network() -> void:
 	var w := _heights.world
+	_index_route_identity()
 	if allow_fast_vertices and not _cs_starts.is_empty() and w.outer == null:
 		var fast := Grid.fast_grid()
 		if fast != null:
@@ -680,12 +689,9 @@ func _fit_network_native(fast: Object) -> void:
 		table.append_array(PackedFloat64Array(CORRIDOR[name]))
 	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
 	var limits := PackedFloat64Array([RoadBed.SHORE.y, RoadBed.PIN, RoadBed.PIN_FADE, REACH, SHARED, FIT_FADE, FIT_LIMIT, BENCH_LIMIT, TRAIL_BENCH_LIMIT, LAND_GAP])
-	var route_kinds := PackedInt32Array()
-	for t: Dictionary in w.trails:
-		route_kinds.append(CORRIDOR_KINDS.find(t.kind) if not t.has("trail_id") else -1)
 	var out: Dictionary = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
 		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
-		_cs_starts, _cs_ids, route_kinds, _noise, _origin, limits, CORRIDOR_FADE, CORRIDOR_GAP, CORRIDOR_STRIDE, table)
+		_cs_starts, _cs_ids, _route_identity, _noise, _origin, limits, CORRIDOR_FADE, CORRIDOR_GAP, CORRIDOR_STRIDE, table, _authored_routes())
 	var routes: PackedInt32Array = out.routes
 	var at: PackedInt32Array = out.starts
 	var fitted: PackedByteArray = out.fitted
@@ -757,9 +763,9 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 		# Косой склон требует полки и у обычной тропы. Непригодный продольный подъём остаётся защищён.
 		allowed[j] = 1.0 - smoothstep(0.45, 0.7, sustained)
 		var safe := _fit_safe(p, tangent, route, j * STEP, t.kind == "road", halves[j])
-		if safe == 0:
-			allowed[j] = 0.0
 		gate[j] = allowed[j] if (safe & 2) != 0 else 0.0
+		if (safe & 1) == 0:
+			allowed[j] = 0.0
 		distance[j] = 0.0 if allowed[j] <= 0.0 else (distance[j - 1] + STEP if j > 0 else 0.0)
 	# Симметричное окно не пересекает берег, сооружение, развилку или конец пути.
 	var back := 0.0
@@ -789,7 +795,9 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 				sum_small += ground[k]
 		var average := lerpf(sum_small / (2 * small + 1), sum_h / (2 * radius + 1), amount)
 		var axial_limit := lerpf(0.15, 0.9, amount) * (0.35 if t.kind == "trail" else 1.0)
-		var target := ground[j] + clampf((average - ground[j]) * lerpf(0.35, 0.95, amount), -axial_limit, axial_limit)
+		# RoadBed already retained a safe natural profile. Do not erase its crests a second time.
+		var smoothing := 0.0 if t.kind == "road" and not t.has("trail_id") else lerpf(0.35, 0.95, amount)
+		var target := ground[j] + clampf((average - ground[j]) * smoothing, -axial_limit, axial_limit)
 		profile.append(target)
 		var power := lerpf(0.25, 1.0, amount) * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j])
 		var trail_power := lerpf(0.55, 0.85, smoothstep(0.5, 0.9, cross_slope)) if t.kind == "trail" else 1.0
@@ -901,7 +909,18 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var broken := smoothstep(0.12, 0.35, character)
 			var mul: float = table[surface_at + surfaces[i]] * scale
 			var at := i * CORRIDOR_STRIDE
-			lift[j] = (table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy) * mul * gate
+			# A real hollow/crest across the route takes precedence over an unrelated wave.
+			# Sample the raw terrain, before both road smoothing passes. The symmetric
+			# 20 m chord is direction-independent; existing pins/grade limits still apply.
+			var reach_along := tangent * 10.0
+			var raw_mid := _heights.base_ground_at(points[i].x, points[i].y, true)
+			var raw_a := _heights.base_ground_at(points[i].x - reach_along.x, points[i].y - reach_along.y, true)
+			var raw_b := _heights.base_ground_at(points[i].x + reach_along.x, points[i].y + reach_along.y, true)
+			var curve := raw_mid - (raw_a + raw_b) * 0.5
+			var landform := smoothstep(0.035, 0.16, absf(curve)) * (1.0 if kinds[r] == 0 else 0.55)
+			var terrain_lift := clampf(curve, -0.35, 0.35) * (1.0 - smoothstep(0.25, 0.5, maxf(grade, absf(cross))))
+			var free_lift := table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy
+			lift[j] = lerpf(free_lift, terrain_lift, landform) * mul * gate
 			var natural := cross * table[k + 3] * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
 			var limit := table[k + 4] * half
 			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * gate
@@ -976,10 +995,32 @@ func _corridor_gap(p: Vector2, tangent: Vector2, route: int, along: float, own_h
 	return gap - half - own_half
 
 
-## Only a route's own stations share a profile. Matching width/kind does not
-## prove that another route has the same anchors, surface or corridor phase.
+## Matching width/kind is insufficient. Only byte-identical complete input lines,
+## including surfaces and endpoints (possibly reversed), can share a natural profile.
+func _index_route_identity() -> void:
+	var seen := {}
+	_route_identity.clear()
+	for route in _heights.world.trails.size():
+		var t: Dictionary = _heights.world.trails[route]
+		_route_identity.append(route)
+		if t.has("trail_id") or not t.kind in CORRIDOR_KINDS:
+			continue
+		var forward := PackedFloat64Array([CORRIDOR_KINDS.find(t.kind)])
+		var backward := forward.duplicate()
+		for n in t.pts.size():
+			var p: Dictionary = t.pts[n]
+			var q: Dictionary = t.pts[t.pts.size() - 1 - n]
+			forward.append_array(PackedFloat64Array([p.x, p.y, p.w, t.surf[n]]))
+			backward.append_array(PackedFloat64Array([q.x, q.y, q.w, t.surf[t.pts.size() - 1 - n]]))
+		var a := forward.to_byte_array().hex_encode().sha256_text()
+		var b := backward.to_byte_array().hex_encode().sha256_text()
+		var key := a if a < b else b
+		if seen.has(key): _route_identity[route] = seen[key]
+		else: seen[key] = route
+
+
 func _shared(_gap: float, _crossing: bool, route: int, other: int, _own_half: float, _half: float) -> bool:
-	return route == other
+	return route == other or (not _route_identity.is_empty() and _route_identity[route] == _route_identity[other])
 
 
 static func _shoulder(side: float, cross: float, n: float, slope: float, ditch: float, lip: float) -> float:
@@ -1030,7 +1071,9 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 						if crossing or hairpin: return 0
 						# Independent station profiles cannot safely switch at a nearest-route boundary.
 						var lateral := absf((p - a).cross(delta.normalized()))
-						if not _shared(lateral, crossing, route, seg_route, own_half, _sg_half[id]): return 0
+						if not _shared(lateral, crossing, route, seg_route, own_half, _sg_half[id]):
+							if gap < _sg_half[id] + maxf(0.0, own_half) + CORRIDOR_GAP: return 0
+							safe &= 2 # distinct shelves stay pinned; disjoint narrow forms remain available
 	else:
 		for s: Dictionary in _segments.get(key, []):
 			var b: Vector2 = s.a + s.delta
@@ -1045,7 +1088,9 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 				if gap < s.half + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
 					if crossing or hairpin: return 0
 					var lateral := absf((p - (s.a as Vector2)).cross((s.delta as Vector2).normalized()))
-					if not _shared(lateral, crossing, route, s.route, own_half, s.half): return 0
+					if not _shared(lateral, crossing, route, s.route, own_half, s.half):
+						if gap < s.half + maxf(0.0, own_half) + CORRIDOR_GAP: return 0
+						safe &= 2
 	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
 			return 0
@@ -1112,9 +1157,8 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 	var ground_mask := mask
 	var blend := smoothstep(0.0, 1.0, u)
 	var organic := lerpf(_surf[road.surf].organic, _surf[road.next].organic, blend)
-	var visual_edge := edge * (1.0 - organic * 0.12)
-	var visual_shoulder := shoulder * (1.0 + organic * 0.5)
-	color.a = (1.0 - smoothstep(visual_edge * 0.55, visual_edge + visual_shoulder, d)) * (1.0 - organic * 0.35)
+	var authored: bool = _heights.world.trails[road.route].has("trail_id")
+	color.a = tread_mask(half, d, slow, organic, road.kind == "road", authored, grain)
 	var influence := 1.0 - smoothstep(half + 0.3, half + REACH, d)
 	var cx := clampi(floori(x / TILE), 0, W - 1)
 	var cz := clampi(floori(z / TILE), 0, H - 1)
@@ -1200,7 +1244,19 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 	if not active and h != base:
 		var stored := PackedFloat32Array([h, base])
 		active = stored[0] != stored[1]
-	return {h = h, color = color, uv = Vector2(side / half, float(surf)), surface = surf, road = road.kind == "road", route = road.route, active = active}
+	return {h = h, color = color, uv = Vector2(side / half, float(surf) + (0.0 if road.kind == "road" or authored else 0.25)), surface = surf, road = road.kind == "road", route = road.route, active = active}
+
+
+## Visible wear lies inside the rideable/cleared corridor. This same alpha places grass,
+## understory and obstacles; the shader adds texture, not another displaced boundary.
+static func tread_mask(half: float, d: float, slow: float, organic: float, road: bool, authored := false, grain := 0.0) -> float:
+	if authored:
+		var original_edge := (half + slow * 0.24 + grain * 0.10) * (1.0 - organic * 0.12)
+		var original_shoulder := (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5)
+		return (1.0 - smoothstep(original_edge * 0.55, original_edge + original_shoulder, d)) * (1.0 - organic * 0.35)
+	var edge := half * (0.94 if road else 0.66) * (1.0 - organic * 0.08) + slow * 0.10
+	var shoulder := (0.5 if road else 0.35) + organic * 0.35
+	return 1.0 - smoothstep(edge * 0.55, edge + shoulder, d)
 
 
 ## A meandering contour crosses the tread and shoulders in world space.

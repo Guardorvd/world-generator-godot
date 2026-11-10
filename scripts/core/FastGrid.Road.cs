@@ -4,12 +4,75 @@ using Simd = System.Numerics.Vector<double>;
 
 public partial class FastGrid
 {
+	/// <summary>RoadSurface.pick, batched at route points. Same bilinear 16 m kernel and decision order as GDScript.</summary>
+	public byte[] PickRoadSurfaces(double[] xs, double[] ys, int[] kinds, int width, int height, byte[] biome, float[] slopes,
+		float[] moisture, double[] villages, int[] biomes, double villageRadius, double stoneSlope)
+	{
+		var result = new byte[xs.Length];
+		for (int n = 0; n < xs.Length; n++)
+		{
+			double x = xs[n], y = ys[n];
+			double wooded = 0.0, rocky = 0.0, sandy = 0.0, grass = 0.0, slope = 0.0, moist = 0.0;
+			for (int dz = -1; dz <= 1; dz++)
+				for (int dx = -1; dx <= 1; dx++)
+				{
+					double px = Math.Clamp(x + dx * 2.0 - 0.5, 0.0, width - 1.0);
+					double py = Math.Clamp(y + dz * 2.0 - 0.5, 0.0, height - 1.0);
+					int ix = (int)Math.Floor(px), iy = (int)Math.Floor(py);
+					double kernel = (dx == 0 ? 2.0 : 1.0) * (dz == 0 ? 2.0 : 1.0) / 16.0;
+					for (int oz = 0; oz < 2; oz++)
+						for (int ox = 0; ox < 2; ox++)
+						{
+							double weight = kernel * (ox != 0 ? px - ix : 1.0 - px + ix) * (oz != 0 ? py - iy : 1.0 - py + iy);
+							int i = Math.Min(iy + oz, height - 1) * width + Math.Min(ix + ox, width - 1);
+							int b = biome[i];
+							wooded += b == biomes[0] || b == biomes[1] || b == biomes[2] ? weight : 0.0;
+							rocky += b == biomes[3] || b == biomes[4] || b == biomes[5] || b == biomes[6] ? weight : 0.0;
+							sandy += b == biomes[7] || b == biomes[8] ? weight : 0.0;
+							grass += b == biomes[9] ? weight : 0.0;
+							slope += Math.Min((double)slopes[i], 0.4) * weight;
+							moist += moisture[i] * weight;
+						}
+				}
+			if (sandy > 0.55) { result[n] = 5; continue; }
+			if (kinds[n] == 0)
+			{
+				bool packed = false;
+				for (int v = 0; v + 1 < villages.Length; v += 2)
+				{
+					double vx = villages[v] - x, vy = villages[v + 1] - y;
+					if (Math.Abs(vx) < villageRadius && Math.Abs(vy) < villageRadius && Math.Sqrt(vx * vx + vy * vy) < villageRadius)
+					{ packed = true; break; }
+				}
+				result[n] = packed ? (byte)3 : (rocky > 0.6 && slope > stoneSlope + 0.04 ? (byte)4 : (byte)1);
+			}
+			else if (rocky > 0.55 || slope > stoneSlope) result[n] = 4;
+			else if (wooded > 0.45) result[n] = 6;
+			else if (kinds[n] == 2) result[n] = 2;
+			else result[n] = grass > 0.6 && moist > 0.32 && slope < 0.10 ? (byte)7 : (byte)2;
+		}
+		return result;
+	}
+
 	private static double RoadSmooth(double a, double b, double x)
 	{
 		double t = Math.Clamp((x - a) / (b - a), 0.0, 1.0);
 		return t * t * (3.0 - 2.0 * t);
 	}
 	private static double RoadLerp(double a, double b, double t) => a + (b - a) * t;
+	// RoadRefinement.tread_mask: shared by the whole-network and batched vertex paths.
+	private static double RoadTreadMask(double half, double distance, double slow, double organic, bool road, bool authored, double grain)
+	{
+		if (authored)
+		{
+			double originalEdge = (half + slow * 0.24 + grain * 0.10) * (1.0 - organic * 0.12);
+			double originalShoulder = (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5);
+			return (1.0 - RoadSmooth(originalEdge * 0.55, originalEdge + originalShoulder, distance)) * (1.0 - organic * 0.35);
+		}
+		double edge = half * (road ? 0.94 : 0.66) * (1.0 - organic * 0.08) + slow * 0.10;
+		double shoulder = (road ? 0.5 : 0.35) + organic * 0.35;
+		return 1.0 - RoadSmooth(edge * 0.55, edge + shoulder, distance);
+	}
 	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
 	private static double RoadReliefEdge(Vector2 p, int width, int height, double tile)
 		=> RoadSmooth(0.0, 12.0, Math.Min(Math.Min(p.X - tile * 0.5, (width - 0.5) * tile - p.X),
@@ -143,7 +206,15 @@ public partial class FastGrid
 			double broken = RoadSmooth(0.12, 0.35, character);
 			double mul = table[surfaceAt + surface[i]] * scale;
 			int at = i * stride;
-			lift[j] = (table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy) * mul * g;
+			Vector2 reachAlong = tangent * 10.0f;
+			double rawMid = RoadGround(raw, width, height, tile, points[i].X, points[i].Y);
+			double rawA = RoadGround(raw, width, height, tile, (double)points[i].X - reachAlong.X, (double)points[i].Y - reachAlong.Y);
+			double rawB = RoadGround(raw, width, height, tile, (double)points[i].X + reachAlong.X, (double)points[i].Y + reachAlong.Y);
+			double curve = rawMid - (rawA + rawB) * 0.5;
+			double landform = RoadSmooth(0.035, 0.16, Math.Abs(curve)) * (kind == 0 ? 1.0 : 0.55);
+			double terrainLift = Math.Clamp(curve, -0.35, 0.35) * (1.0 - RoadSmooth(0.25, 0.5, Math.Max(grade, Math.Abs(cross))));
+			double freeLift = table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy;
+			lift[j] = RoadLerp(freeLift, terrainLift, landform) * mul * g;
 			double natural = cross * table[k + 3] * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
 			double limit = table[k + 4] * hw;
 			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * g;
@@ -178,7 +249,7 @@ public partial class FastGrid
 		float[] scales, int[] routeIds, int width, int height, double tile, double step, float[] ground, float[] raw, float[] water,
 		float[] distWater, double[] structureAxes, double[] settlements, Vector2[] segA, Vector2[] segDelta, double[] segLen2,
 		double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates, int[] routeKinds, FastNoiseLite noise,
-		Vector2 origin, double[] fitParams, double fade, double gap, int stride, double[] table)
+		Vector2 origin, double[] fitParams, double fade, double gap, int stride, double[] table, byte[] authoredRoutes)
 	{
 		double shore = fitParams[0], pinStart = fitParams[1], pinFade = fitParams[2], reach = fitParams[3], shared = fitParams[4];
 		double fitFade = fitParams[5], fitLimit = fitParams[6], roadBench = fitParams[7], trailBench = fitParams[8], landGap = fitParams[9];
@@ -252,7 +323,7 @@ public partial class FastGrid
 					Vector2 tangent = (pts[from + Math.Min(n - 1, j + 2)] - pts[from + Math.Max(0, j - 2)]).Normalized();
 					int safe = FitSafe(pts[from + j], tangent, routes[r], j * step, false, half[from + j], width, height, tile, water,
 						distWater, shore, structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong,
-						cellStarts, candidates, reach, shared, settlements, routeKinds);
+						cellStarts, candidates, reach, shared, settlements, routeKinds, gap);
 					gate[from + j] = (safe & 2) != 0 ? 1.0f : 0.0f;
 					profile[from + j] = (float)RoadGround(ground, width, height, tile, pts[from + j].X, pts[from + j].Y);
 					distance[j] = safe == 0 || j == 0 ? 0.0f : (float)(distance[j - 1] + step);
@@ -295,9 +366,9 @@ public partial class FastGrid
 					allowed[j] = (float)(1.0 - RoadSmooth(0.45, 0.7, sustained));
 					int safe = FitSafe(p, tangent, routes[r], j * step, road, half[from + j], width, height, tile, water, distWater, shore,
 						structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates,
-						reach, shared, settlements, routeKinds);
-					if (safe == 0) allowed[j] = 0.0f;
+						reach, shared, settlements, routeKinds, gap);
 					gate[from + j] = (safe & 2) != 0 ? allowed[j] : 0.0f;
+					if ((safe & 1) == 0) allowed[j] = 0.0f;
 					distance[j] = allowed[j] <= 0.0f ? 0.0f : (j > 0 ? (float)(distance[j - 1] + step) : 0.0f);
 				}
 				double back = 0.0;
@@ -323,7 +394,8 @@ public partial class FastGrid
 					}
 					double average = RoadLerp(sumSmall / (2 * small + 1), sumH / (2 * radius + 1), amount);
 					double axialLimit = RoadLerp(0.15, 0.9, amount) * (trail ? 0.35 : 1.0);
-					double target = groundAt[j] + Math.Clamp((average - groundAt[j]) * RoadLerp(0.35, 0.95, amount), -axialLimit, axialLimit);
+					double smoothing = road && authoredRoutes[routes[r]] == 0 ? 0.0 : RoadLerp(0.35, 0.95, amount);
+					double target = groundAt[j] + Math.Clamp((average - groundAt[j]) * smoothing, -axialLimit, axialLimit);
 					profile[from + j] = (float)target;
 					double power = RoadLerp(0.25, 1.0, amount) * allowed[j] * RoadSmooth(0.0, fitFade, distance[j]);
 					double trailPower = trail ? RoadLerp(0.55, 0.85, RoadSmooth(0.5, 0.9, crossSlope)) : 1.0;
@@ -349,7 +421,7 @@ public partial class FastGrid
 	private static int FitSafe(Vector2 p, Vector2 tangent, int route, double along, bool shoreOk, double ownHalf, int width, int height,
 		double tile, float[] water, float[] distWater, double shore, int[] structStarts, double[] structs, double pinReach, Vector2[] segA,
 		Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates,
-		double reach, double shared, double[] settlements, int[] routeKinds)
+		double reach, double shared, double[] settlements, int[] routeKinds, double corridorGap)
 	{
 		int safe = 3;
 		int x = (int)Math.Floor(p.X / tile), z = (int)Math.Floor(p.Y / tile);
@@ -381,7 +453,11 @@ public partial class FastGrid
 					if (gapDist < segHalf[id] + Math.Max(0.0, ownHalf) + 2.0 * reach + 0.5)
 					{
 						if (crossing || hairpin) return 0;
-						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds)) return 0;
+						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds))
+						{
+							if (gapDist < segHalf[id] + Math.Max(0.0, ownHalf) + corridorGap) return 0;
+							safe &= 2;
+						}
 					}
 				}
 			}
@@ -392,7 +468,7 @@ public partial class FastGrid
 	}
 
 	private static bool RoadShared(double gap, bool crossing, int route, int other, double ownHalf, double half, double shared, int[] routeKinds)
-		=> route == other;
+		=> route == other || routeKinds[route] == routeKinds[other]; // IDs of proven identical complete routes
 
 	private static double RoadClearance(Vector2 p, Vector2 tangent, int route, double along, double ownHalf, int width, int height, double tile,
 		double gap, double landGap, double shared, int[] routeKinds, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates)
@@ -473,7 +549,7 @@ public partial class FastGrid
 	public Godot.Collections.Dictionary RoadVertices(Vector2[] points, double[] nearest, int width, int height,
 		double tile, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		double[] segments, double[] fits, double[] corridor, double[] surfaces, int[] structureStarts, double[] structures,
-		double steepLo, double steepHi, double waterGap, bool simd)
+		double steepLo, double steepHi, double waterGap, bool simd, byte[] authoredRoutes)
 	{
 		int count = points.Length;
 		var bases = new double[count]; var delta = new double[count]; var influence = new double[count];
@@ -506,9 +582,9 @@ public partial class FastGrid
 			color = new Color(RoadLinear(color.R), RoadLinear(color.G), RoadLinear(color.B));
 			if (surf == 7) mask *= 0.65;
 			double organic = RoadLerp(surfaces[from * 5 + 4], surfaces[to * 5 + 4], RoadSmooth(0.0, 1.0, u));
-			double visualEdge = edge * (1.0 - organic * 0.12), visualShoulder = shoulder * (1.0 + organic * 0.5);
-			color.A = (float)((1.0 - RoadSmooth(visualEdge * 0.55, visualEdge + visualShoulder, distance)) * (1.0 - organic * 0.35));
-			colors[n] = color; uv[n] = new Vector2((float)(side / half), surf);
+			bool authored = authoredRoutes[(int)segments[at + 12]] != 0;
+			color.A = (float)RoadTreadMask(half, distance, slow, organic, road, authored, grain);
+			colors[n] = color; uv[n] = new Vector2((float)(side / half), surf + (road || authored ? 0.0f : 0.25f));
 			surface[n] = (byte)surf; roadFlags[n] = road ? (byte)1 : (byte)0; routes[n] = (int)segments[at + 12];
 			double reach = 1.0 - RoadSmooth(half + 0.3, half + 3.0, distance);
 			influence[n] = reach;

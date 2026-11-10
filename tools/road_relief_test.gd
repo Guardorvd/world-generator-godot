@@ -125,8 +125,12 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 		var full := 0.0
 		for key: int in natural.patches:
 			for i in (natural.patches[key].h as PackedFloat32Array).size():
-				calm = maxf(calm, absf(natural.patches[key].h[i] - before.patches[key].h[i]))
-				full = maxf(full, absf(after.patches[key].h[i] - before.patches[key].h[i]))
+				# Authored masks may retain a patch that the natural sparse surface omitted.
+				var x := (key % w.W + 0.5) * GameConfig.TILE + (i % RoadRefinement.STRIDE) * RoadRefinement.STEP
+				var z := (key / w.W + 0.5) * GameConfig.TILE + (i / RoadRefinement.STRIDE) * RoadRefinement.STEP
+				var base := surface_at(before, h, x, z)
+				calm = maxf(calm, absf(natural.patches[key].h[i] - base))
+				full = maxf(full, absf(surface_at(after, h, x, z) - base))
 		check(calm > 0.0 and calm < full, "prepared route without earthworks: weaker forms %.3f < %.3f m" % [calm, full])
 		for route: Dictionary in w.trails:
 			route.erase("trail_id")
@@ -184,6 +188,7 @@ func run() -> void:
 	check(Grid.fast_grid() != null, "native backend available")
 	if failures: quit(1); return
 	corridor_contracts()
+	terrain_profile_contracts()
 	patch_contracts()
 	if "--contracts-only" in OS.get_cmdline_user_args():
 		print("ROAD RELIEF RESULT ", failures, " failures")
@@ -203,6 +208,24 @@ func run() -> void:
 	RoadRefinement.natural_relief = true
 	print("ROAD RELIEF RESULT ", failures, " failures")
 	quit(1 if failures else 0)
+
+
+func terrain_profile_contracts() -> void:
+	var w := Fixture.world()
+	var h := Heightfield.new(w, false)
+	RoadBed.refine(h)
+	var r := build(h, true)
+	var span: Vector2i = r.corridor_routes[0]
+	var crest := 103 # x = 135, raw natural knoll
+	var hollow := 193 # x = 225, raw natural depression
+	check(r.corridor[(span.x + crest) * FORM_STRIDE] > 0.05 and r.corridor[(span.x + hollow) * FORM_STRIDE] < -0.05,
+		"corridor follows the real raw-terrain crest and drainage hollow")
+	var fit: Dictionary = r.fit_routes[0]
+	var error := 0.0
+	for j in fit.points.size():
+		var p: Vector2 = fit.points[j]
+		error = maxf(error, absf(fit.profile[j] - h.base_ground_at(p.x, p.y)))
+	check(error < 0.00001, "ordinary roads preserve RoadBed's axial profile instead of smoothing it twice")
 
 
 func patch_contracts() -> void:

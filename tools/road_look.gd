@@ -7,6 +7,7 @@ extends SceneTree
 ## --shader — другой код шейдера рельефа (например, прошлая версия) для сравнения «было | стало».
 ## --obstacles — 11.6: на полотне ветка, камни, бревно поперёк и валун у края (модели подстилки, цвет вершин).
 ## --shift x,z — 12.3: сдвиг участка в мире (м): поля RoadBump (разбитые участки, колеи, ямы) — в мировых координатах.
+## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -24,6 +25,11 @@ var shots: Array[Dictionary] = []
 var shot := -1
 var wait := 0
 var noise := FastNoiseLite.new()
+var measure := false
+var frame_times := PackedFloat32Array()
+var gpu_times := PackedFloat32Array()
+var cpu_times := PackedFloat32Array()
+var timings := []
 
 
 func _arg(name: String, fallback: String) -> String:
@@ -37,6 +43,11 @@ func _initialize() -> void:
 	out = _arg("out", OS.get_user_data_dir().path_join("road_look"))
 	DirAccess.make_dir_recursive_absolute(out)
 	shader_path = _arg("shader", "")
+	measure = "--measure" in OS.get_cmdline_user_args()
+	if measure:
+		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
+		Engine.max_fps = 0
+		RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	var moved := _arg("shift", "0,0").split(",")
 	shift = Vector3(float(moved[0]), 0.0, float(moved[1]))
 	var list := _arg("surfaces", "")
@@ -146,18 +157,12 @@ func _build(surface: int) -> void:
 				continue
 			# Как RoadRefinement._vertex: несимметричные края и обочина, примесь подстилки
 			var slow := noise.get_noise_2d(x * 0.13, z * 0.13)
-			var grain := noise.get_noise_2d(x * 0.8 + 71.0, z * 0.8)
-			var edge := half + slow * 0.24 + grain * 0.10
-			var shoulder := 0.7 + (slow + 1.0) * 0.3
 			var organic: float = data.organic
 			var color := Color8(data.color[0], data.color[1], data.color[2]).srgb_to_linear()
-			var visual_edge := edge * (1.0 - organic * 0.12)
-			var visual_shoulder := shoulder * (1.0 + organic * 0.5)
-			color.a = (1.0 - smoothstep(visual_edge * 0.55, visual_edge + visual_shoulder, d)) * (1.0 - organic * 0.35)
-			if surface == RoadSurface.MEADOW:
-				color.a *= 0.65
+			var road := surface != RoadSurface.FOREST and surface != RoadSurface.MEADOW and surface != RoadSurface.STONE
+			color.a = RoadRefinement.tread_mask(half, d, slow, organic, road)
 			colors.append(color)
-			uv2.append(Vector2(near.y * d / half, float(surface)))
+			uv2.append(Vector2(near.y * d / half, float(surface) + (0.0 if road else 0.25)))
 	var idx := PackedInt32Array()
 	for z in SIZE:
 		for x in SIZE:
@@ -189,7 +194,7 @@ func _build(surface: int) -> void:
 	mesh_node.mesh = mesh
 
 
-func _process(_delta: float) -> bool:
+func _process(delta: float) -> bool:
 	if shot < 0:
 		DisplayServer.window_set_size(WINDOW)
 		shot = 0
@@ -198,13 +203,25 @@ func _process(_delta: float) -> bool:
 	wait += 1
 	if wait < SETTLE:
 		return false
+	if measure and frame_times.size() < 120:
+		frame_times.append(delta * 1000.0)
+		gpu_times.append(RenderingServer.viewport_get_measured_render_time_gpu(root.get_viewport_rid()))
+		cpu_times.append(RenderingServer.viewport_get_measured_render_time_cpu(root.get_viewport_rid()))
+		return false
 	var s: Dictionary = shots[shot]
+	if measure:
+		frame_times.sort(); gpu_times.sort(); cpu_times.sort()
+		var row := {surface = s.surface, view = s.name, frame_ms = frame_times[60], gpu_ms = gpu_times[60], cpu_ms = cpu_times[60], p99_ms = frame_times[118]}
+		timings.append(row)
+		print("TIMING ", JSON.stringify(row))
+		frame_times.clear(); gpu_times.clear(); cpu_times.clear()
 	var path := out.path_join("road_%d_%s.jpg" % [s.surface, s.name])
 	root.get_texture().get_image().save_jpg(path, 0.92)
 	print("Снимок: ", path)
 	shot += 1
 	wait = 0
 	if shot >= shots.size():
+		if measure: FileAccess.open(out.path_join("timings.json"), FileAccess.WRITE).store_string(JSON.stringify(timings, "\t"))
 		quit(0)
 		return true
 	_place()

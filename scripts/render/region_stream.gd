@@ -12,7 +12,7 @@ var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## клеток — дальше EVICT (остаются в файле и читаются снова при возвращении ближе KEEP).
 ## 14.4: меши воды и дорог области считаются в фоновой задаче (build_arrays), главный поток только
 ## собирает узлы — меньше заметных подёргиваний у края плана. Дороги — мягкая лента по рельефу
-## (ROAD_SHADER): сглаженные повороты, плотная сетка поперёк, рваный прозрачный край и фактура;
+## (ROAD_SHADER): сглаженные повороты, общая с планом маска накатанной части и палитра покрытий;
 ## там, где у плана уже есть своя дорога, лента не кладётся поверх неё.
 
 const Regions := preload("res://scripts/world/region_preparation.gd")
@@ -44,11 +44,13 @@ void vertex() {
 void fragment() {
 	float n1 = texture(detail_tex, wpos.xz * 0.09).r;
 	float n2 = texture(detail_tex, wpos.xz * 0.47).r;
-	// край полотна рваный: прозрачность по поперечной доле с шумом, а не ровной линией
-	float edge = COLOR.a + (n1 - 0.5) * 0.4 + (n2 - 0.5) * 0.15;
-	ALPHA = smoothstep(0.12, 0.5, edge);
-	float ruts = exp(-pow((abs(UV.x) - 0.42) / 0.12, 2.0));
-	ALBEDO = road_color * (0.85 + (n1 - 0.5) * 0.32 + (n2 - 0.5) * 0.2) * (1.0 - ruts * 0.09) * cloud_light(wpos.xz);
+	// Same tread alpha/threshold and palette as the plan. Regional ribbons follow
+	// the real supporting terrain; only their sub-metre texture is simplified.
+	float aa = clamp(fwidth(COLOR.a) * 0.5, 0.004, 0.18);
+	ALPHA = smoothstep(0.38 - aa, 0.62 + aa, COLOR.a);
+	float ruts = exp(-pow((abs(UV.x) - 0.47) / 0.13, 2.0)) * (1.0 - UV.y);
+	float foot = (1.0 - smoothstep(0.12, 0.60, abs(UV.x))) * UV.y;
+	ALBEDO = COLOR.rgb * (0.95 + (n1 - 0.5) * 0.10 + (n2 - 0.5) * 0.06) * (1.0 - ruts * 0.06 - foot * 0.035) * cloud_light(wpos.xz);
 	ROUGHNESS = 0.95;
 }
 """
@@ -813,9 +815,13 @@ static func _cell_m(w: WorldData, heights: Heightfield, regions: Dictionary, i: 
 
 ## 14.4: лента дорог. Повороты сглажены (два прохода Чайкина), точки каждые ROAD_STEP м, поперёк пять
 ## рядов: высота каждой вершины — земля под ней, поэтому лента ложится по рельефу, а не висит хордой.
-## Прозрачность края — в цвете вершины (шейдер рвёт её шумом), UV.x — поперечная доля для колей.
+## Прозрачность края — общая tread_mask в цвете вершины; UV.x — поперечная доля, UV.y — singletrack.
 ## Участки по клеткам, где у плана уже есть дорога (path_mask ≥ 2), пропускаются: её рисует план.
 static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
+	var noise := FastNoiseLite.new()
+	noise.seed = w.seed_num
+	noise.frequency = 1.0
+	noise.fractal_octaves = 2
 	var pos := PackedVector3Array()
 	var col := PackedColorArray()
 	var uv := PackedVector2Array()
@@ -825,24 +831,36 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 		var pts: Array = trail.pts
 		var line := PackedVector2Array()
 		var half := PackedFloat32Array()
-		for p: Dictionary in pts:
+		var colors := PackedColorArray()
+		for p_idx in pts.size():
+			var p: Dictionary = pts[p_idx]
 			line.append(Vector2(p.x, p.y) * TILE)
 			half.append(float(p.w) * TILE * 0.5)
+			var surface: int = trail.surf[p_idx] if trail.has("surf") and p_idx < trail.surf.size() else RoadSurface.GRAVEL
+			var data: Dictionary = RoadSurface.LIST[maxi(1, surface)]
+			var color := Color8(data.color[0], data.color[1], data.color[2]).srgb_to_linear()
+			color.a = data.organic
+			colors.append(color)
 		for pass_n in 2:
 			if line.size() < 3:
 				break
 			var sl := PackedVector2Array([line[0]])
 			var sh := PackedFloat32Array([half[0]])
+			var sc := PackedColorArray([colors[0]])
 			for k in line.size() - 1:
 				sl.append_array([line[k].lerp(line[k + 1], 0.25), line[k].lerp(line[k + 1], 0.75)])
 				sh.append_array([lerpf(half[k], half[k + 1], 0.25), lerpf(half[k], half[k + 1], 0.75)])
+				sc.append_array([colors[k].lerp(colors[k + 1], 0.25), colors[k].lerp(colors[k + 1], 0.75)])
 			sl.append(line[-1])
 			sh.append(half[-1])
+			sc.append(colors[-1])
 			line = sl
 			half = sh
+			colors = sc
 		# ровный шаг вдоль дороги
 		var dense := PackedVector2Array()
 		var dhalf := PackedFloat32Array()
+		var dcolors := PackedColorArray()
 		for k in line.size():
 			if k > 0:
 				var q := line[k - 1]
@@ -850,8 +868,10 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 				for st in range(1, steps):
 					dense.append(q.lerp(line[k], float(st) / steps))
 					dhalf.append(lerpf(half[k - 1], half[k], float(st) / steps))
+					dcolors.append(colors[k - 1].lerp(colors[k], float(st) / steps))
 			dense.append(line[k])
 			dhalf.append(half[k])
+			dcolors.append(colors[k])
 		var run := -1 # номер первой вершины текущего непрерывного участка
 		for k in dense.size():
 			var at := dense[k]
@@ -862,11 +882,15 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 			var along := (dense[mini(k + 1, dense.size() - 1)] - dense[maxi(k - 1, 0)]).normalized()
 			var side := along.orthogonal() * dhalf[k]
 			var base := pos.size()
+			var road: bool = trail.kind == "road"
+			var slow := noise.get_noise_2d(at.x * 0.13, at.y * 0.13)
 			for u: float in ROAD_ACROSS:
 				var v := at + side * u
 				pos.append(Vector3(v.x, ground.call(v.x, v.y) + ROAD_LIFT, v.y))
-				col.append(Color(1, 1, 1, clampf((1.15 - absf(u)) / 0.55, 0.0, 1.0)))
-				uv.append(Vector2(u, 0.0))
+				var tint := dcolors[k]
+				tint.a = RoadRefinement.tread_mask(dhalf[k], absf(u) * dhalf[k], slow, tint.a, road)
+				col.append(tint)
+				uv.append(Vector2(u, 0.0 if road else 1.0))
 			if run != -1:
 				var n := ROAD_ACROSS.size()
 				for c in n - 1:

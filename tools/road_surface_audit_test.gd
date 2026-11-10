@@ -192,9 +192,148 @@ func bake_seam_check() -> void:
 	check(TrailBuilder.bake_without(h, d, removed, limits).is_empty(), "partial element removal succeeds")
 	check(coarse_seam_error(h) < 0.00001, "partial rebake also keeps coarse boundaries")
 
+func material_check() -> void:
+	var w := world()
+	var stable := true
+	for seed_value in [44, 1234, 4821]:
+		w.seed_num = seed_value
+		for x in range(4, 60):
+			stable = stable and RoadSurface.pick(w, "road", x + 0.5, 32.5, 0.0) == RoadSurface.GRAVEL \
+				and RoadSurface.pick(w, "road", x + 0.5, 32.5, 0.99) == RoadSurface.GRAVEL
+	check(stable, "maintained aggregate is independent of hash cells and seed")
+	w.biome.fill(Biomes.FOREST)
+	w.slope[32 * w.W + 32] = 0.8
+	check(RoadSurface.pick(w, "trail", 32.5, 32.5) == RoadSurface.FOREST, "isolated steep cell does not change the whole forest tread to stone")
+	w.slope.fill(0.0)
+	check(RoadSurface.pick(w, "trail", 32.5, 32.5) == RoadSurface.FOREST, "forest soil follows its environment")
+	w.biome.fill(Biomes.ROCK)
+	check(RoadSurface.pick(w, "mountain", 32.5, 32.5) == RoadSurface.STONE, "continuous rocky exposure retains physical stone")
+	w.biome.fill(Biomes.GRASS)
+	w.moist.fill(0.6)
+	check(RoadSurface.pick(w, "trail", 32.5, 32.5) == RoadSurface.MEADOW, "gentle moist meadow grows into unused tread")
+	w.moist.fill(0.1)
+	check(RoadSurface.pick(w, "trail", 32.5, 32.5) == RoadSurface.DIRT, "dry open singletrack retains soil")
+	w.biome.fill(Biomes.FOREST)
+	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5)),
+		{kind = "trail", pts = [{x = 32.5, y = 24.5, w = 0.55}, {x = 32.5, y = 32.5, w = 0.55}, {x = 32.5, y = 40.5, w = 0.55}]}]
+	RoadSurface.run(w)
+	check(w.trails[1].surf == PackedByteArray([RoadSurface.FOREST, RoadSurface.GRAVEL, RoadSurface.FOREST]), "junction inherits the dominant aggregate while forest approaches retain soil")
+	var surfaces: PackedByteArray = w.trails[1].surf.duplicate()
+	w.trails.reverse()
+	w.trails[0].pts.reverse()
+	RoadSurface.run(w)
+	surfaces.reverse()
+	check(w.trails[0].surf == surfaces, "junction materials are invariant to route order and reversal")
+	w.trails[0].surface_override = RoadSurface.PACKED
+	RoadSurface.run(w)
+	check(w.trails[0].surf == PackedByteArray([3, 3, 3]), "authored surface survives junction harmonisation")
+	# The same climate/biomes cropped into a regional/local coordinate system.
+	var b := world()
+	b.world_origin = Vector2i(5, 0)
+	for y in w.H:
+		for x in w.W:
+			w.biome[y * w.W + x] = Biomes.FOREST if x < 30 else Biomes.ROCK
+			b.biome[y * w.W + x] = Biomes.FOREST if x + 5 < 30 else Biomes.ROCK
+	var matches := true
+	for x in range(15, 45):
+		matches = matches and RoadSurface.pick(w, "trail", x + 0.25, 30.5) == RoadSurface.pick(b, "trail", x - 4.75, 30.5)
+	check(matches, "surface environment agrees across local/world-origin rebases")
+
+
+func tread_check() -> void:
+	var half := 1.1
+	check(RoadRefinement.tread_mask(half, 0.0, 0.0, 0.65, false) == 1.0, "forest singletrack retains a readable continuous centre")
+	check(RoadRefinement.tread_mask(half, 0.9, 0.0, 0.65, false) < 0.5 \
+		and RoadRefinement.tread_mask(half, 0.9, 0.0, 0.0, true) > 0.5, "singletrack wear is narrower than a road inside the same safe corridor")
+	var w := world()
+	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5), "trail", 0.55, 0.55)]
+	var h := Heightfield.new(w, false)
+	var r := RoadRefinement.build(h)
+	var sample := r.sample(130, 130, w.W)
+	check(sample.surface == RoadSurface.GRAVEL and roundi(r.patches[32 * w.W + 32].uv[0].y) == RoadSurface.GRAVEL \
+		and is_equal_approx(fposmod(r.patches[32 * w.W + 32].uv[0].y, 1.0), 0.25), "singletrack shader channel leaves the physical material ID intact")
+	var regional := route(Vector2(70, 32), Vector2(80, 32))
+	var arrays := RegionStream.road_arrays(w, func(_x: float, _z: float) -> float: return 20.0, [regional])
+	var colors: PackedColorArray = arrays[Mesh.ARRAY_COLOR]
+	check(not colors.is_empty() and colors[2].r < 0.5 and colors[2].r > 0.3 and colors[2].a == 1.0,
+		"regional ribbon uses linear aggregate palette and shared tread alpha")
+	var author_mask := RoadRefinement.tread_mask(1.1, 0.9, 0.2, 0.65, false, true, -0.1)
+	var edge := (1.1 + 0.2 * 0.24 - 0.1 * 0.10) * (1.0 - 0.65 * 0.12)
+	var shoulder := (0.7 + 1.2 * 0.3) * (1.0 + 0.65 * 0.5)
+	check(is_equal_approx(author_mask, (1.0 - smoothstep(edge * 0.55, edge + shoulder, 0.9)) * (1.0 - 0.65 * 0.35)),
+		"authored trails retain their original visible width")
+
+
+func surface_channels(w: WorldData) -> Array:
+	var result := []
+	for t: Dictionary in w.trails: result.append(t.surf.duplicate())
+	return result
+
+
+func native_material_check() -> void:
+	var w := world()
+	var biomes := [Biomes.FOREST, Biomes.GRASS, Biomes.ROCK, Biomes.BEACH, Biomes.DESERT, Biomes.TAIGA]
+	for y in w.H:
+		for x in w.W:
+			var i := y * w.W + x
+			w.biome[i] = biomes[(x / 7 + y / 11) % biomes.size()]
+			w.slope[i] = float((x * 17 + y * 23) % 101) * 0.003
+			w.moist[i] = float((x * 13 + y * 3) % 101) * 0.01
+	for kind: String in ["road", "trail", "mountain"]:
+		var pts := []
+		for i in 160: pts.append({x = i * 0.417 - 1.0, y = 32.37 + sin(i * 0.1) * 30.0, w = 0.55})
+		w.trails.append({kind = kind, pts = pts})
+	w.settlements.append(SettlementData.from_dict({x = 17.3, y = 30.8, i = 30 * w.W + 17, huts = []}))
+	RoadSurface.allow_fast = false
+	RoadSurface.run(w)
+	var reference := surface_channels(w)
+	var cells := w.road_surface.duplicate()
+	RoadSurface.allow_fast = true
+	RoadSurface.run(w)
+	check(surface_channels(w) == reference and w.road_surface == cells, "native environmental materials and junction stamps match the scalar reference exactly")
+
+
+func fixture_materials() -> void:
+	var legacy := GDScript.new()
+	legacy.source_code = FileAccess.get_file_as_string("res://tools/control/runs/road_natural/before/road_surface.txt").replace("\r\n", "\n").replace("class_name RoadSurface\n", "")
+	check(legacy.reload() == OK, "original surface algorithm loads for the timing comparison")
+	var rows := []
+	for seed_text: String in ["Север-1234", "Туман-4821", "Ущелье"]:
+		var path := "res://tools/control/runs/road_relief/" + seed_text + ".fixture.bin"
+		check(FileAccess.file_exists(path), "surface fixture exists: " + seed_text)
+		if not FileAccess.file_exists(path): continue
+		var saved: Dictionary = FileAccess.open(path, FileAccess.READ).get_var()
+		var w := WorldCache.new()._restore(saved.world, true)
+		var start := Time.get_ticks_usec()
+		legacy.call("run", w)
+		var legacy_ms := (Time.get_ticks_usec() - start) / 1000.0
+		RoadSurface.allow_fast = false
+		start = Time.get_ticks_usec()
+		RoadSurface.run(w)
+		var reference_ms := (Time.get_ticks_usec() - start) / 1000.0
+		var expected := surface_channels(w)
+		var cells := w.road_surface.duplicate()
+		RoadSurface.allow_fast = true
+		start = Time.get_ticks_usec()
+		RoadSurface.run(w)
+		var native_ms := (Time.get_ticks_usec() - start) / 1000.0
+		check(expected == surface_channels(w) and cells == w.road_surface, seed_text + ": all real-world surface channels match C#/GDScript")
+		var row := {seed = seed_text, legacy_ms = legacy_ms, reference_ms = reference_ms, native_ms = native_ms}
+		rows.append(row)
+		print("MATERIAL PERF ", JSON.stringify(row))
+	FileAccess.open("res://tools/control/runs/road_natural/material_timings.json", FileAccess.WRITE).store_string(JSON.stringify(rows, "\t"))
+
+
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)
 	check(Grid.fast_grid() != null, "native backend available")
+	if "--fixtures-only" in OS.get_cmdline_user_args():
+		fixture_materials()
+		quit(1 if fails else 0)
+		return
+	material_check()
+	native_material_check()
+	tread_check()
 	parity_check()
 	width_check()
 	bed_width_check()
