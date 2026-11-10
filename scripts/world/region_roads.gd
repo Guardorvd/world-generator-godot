@@ -211,7 +211,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		if nodes[k].net != "" and nodes[k].net != label: merged_nets[nodes[k].net] = label
 	# 13.9: поля для растительности закреплённой области — как у плана в StageVegetation.
 	# 15.0: просвет до кромки полотна — по линиям путей области в её клетках, до сдвига в мировые координаты
-	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails)
+	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails, w.tunnels)
 	var village := PackedByteArray()
 	village.resize(w.N)
 	var reach := StageVegetation.VILLAGE_R

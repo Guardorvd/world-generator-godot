@@ -118,7 +118,7 @@ static func fields(w: WorldData) -> Dictionary:
 	var moist := w.moist
 	var forest := w.noise_field("forest")
 	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
-	var dist_path := path_clearance(W, H, w.trails)
+	var dist_path := path_clearance(W, H, w.trails, w.tunnels)
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)
@@ -168,7 +168,7 @@ static func fields(w: WorldData) -> Dictionary:
 
 ## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и PATH_MARGIN. Тот же расчёт у плана
 ## и у закреплённых областей (RegionRoads), поэтому на границе областей не бывает внезапной просеки.
-static func path_clearance(W: int, H: int, trails: Array) -> PackedFloat32Array:
+static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -> PackedFloat32Array:
 	var starts := PackedInt32Array()
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()
@@ -184,6 +184,14 @@ static func path_clearance(W: int, H: int, trails: Array) -> PackedFloat32Array:
 			px.append(p.x)
 			py.append(p.y)
 			pw.append(p.w)
+	# Выемка туннеля шире полотна; общий просвет нужен и деревьям, и RockScatter.
+	for tunnel: TunnelData in tunnels:
+		starts.append(px.size())
+		margin.append(0.0)
+		for cell: int in [tunnel.a, tunnel.b]:
+			px.append(cell % W + 0.5)
+			py.append(floori(float(cell) / W) + 0.5)
+			pw.append(StageTrails.TUNNEL_R * 2.0)
 	starts.append(px.size())
 	return Grid.path_clearance(W, H, starts, px, py, pw, margin, GameConfig.TILE, CLEAR_CAP)
 
@@ -251,9 +259,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 	var rock_f: PackedByteArray=f.get("rock",PackedByteArray())
 	var b_water: PackedByteArray = _TABLES.water
 	var b_trees: PackedFloat64Array = _TABLES.trees
-	# Своя копия списков видов: чанки считаются в нескольких потоках (12.2), а общий массив на каждой
-	# клетке менял бы один и тот же счётчик ссылок из всех потоков
-	var b_kinds: Array = _TABLES.kinds.duplicate(true)
+	# Своя копия на задачу хранится в ObjStore и используется всеми её чанками.
+	var b_kinds: Array = store.kinds
 	var b_tree: PackedByteArray = _TABLES.tree
 	var rng := WGRandom.new(0)
 	var mask := WGRandom.MASK
@@ -512,6 +519,7 @@ class ObjStore:
 	var k := PackedInt32Array()
 	var v := PackedInt32Array()
 	var s := PackedFloat64Array()
+	var kinds: Array = StageVegetation._TABLES.kinds.duplicate(true)
 	var chunk_lists: Array = []
 	var w: WorldData
 	# Поля мира копируются в хранилище: с 12.2 хранилищ несколько, по одному на поток, а частое чтение
@@ -541,8 +549,7 @@ class ObjStore:
 			_path_mask = w.path_mask
 			_W = w.W
 			_H = w.H
-			for c: int in w.CW * w.CH:
-				chunk_lists.append([])
+			chunk_lists.resize(w.CW * w.CH)
 		else:
 			chunk_lists.append(_list)
 
@@ -554,7 +561,9 @@ class ObjStore:
 		heads.resize((x1 - x0) * (y1 - y0))
 		heads.fill(-1)
 		if w != null:
-			_list = chunk_lists[floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)]
+			var c := floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)
+			chunk_lists[c] = []
+			_list = chunk_lists[c]
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
 		var massif := kind == Biomes.T_ROCK and RockModels.is_massif(variant)

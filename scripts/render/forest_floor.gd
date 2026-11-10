@@ -235,3 +235,30 @@ static func build_meshes() -> Array[Mesh]:
 		Plants._colored(branch),
 		root_span(),
 	]
+
+
+## Тот же радиальный полог, что у surface_image, для снимка реальных деревьев за краем плана.
+static func canopy_image(rect: Rect2i, batches: Array) -> Image:
+	var cover := PackedFloat32Array()
+	var needles := PackedFloat32Array()
+	cover.resize(rect.get_area())
+	needles.resize(rect.get_area())
+	for batch: Dictionary in batches:
+		for o in batch.x.size():
+			var kind: int = batch.k[o]
+			if not Biomes.is_tree(kind): continue
+			var r: float = Biomes.CROWN_RADIUS[kind] * batch.s[o] + 0.5
+			var ox: float = batch.x[o]
+			var oy: float = batch.y[o]
+			for y in range(maxi(rect.position.y, floori(oy - r)), mini(rect.end.y, ceili(oy + r))):
+				for x in range(maxi(rect.position.x, floori(ox - r)), mini(rect.end.x, ceili(ox + r))):
+					var k := (y - rect.position.y) * rect.size.x + x - rect.position.x
+					var weight := maxf(0.0, 1.0 - Vector2(x + 0.5 - ox, y + 0.5 - oy).length() / r)
+					cover[k] += weight
+					if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE: needles[k] += weight
+	var bytes := PackedByteArray()
+	bytes.resize(rect.get_area() * 4)
+	for k in cover.size():
+		bytes[k * 4] = roundi(minf(1.0, cover[k]) * 255.0)
+		bytes[k * 4 + 1] = roundi(needles[k] / maxf(cover[k], 0.001) * 255.0)
+	return Image.create_from_data(rect.size.x, rect.size.y, false, Image.FORMAT_RGBA8, bytes)

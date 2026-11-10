@@ -95,7 +95,6 @@ var veg := {} # Vector3i(cx, cy, вид) -> буферы, MultiMesh и узлы
 var grass: MultiMesh
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
 var _grass_high := -Vector3.INF
-var _outer_regions := {}       # 14.4: снимок закреплённых областей для фоновой раскладки травы
 var grass_buf: PackedFloat32Array
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
@@ -507,8 +506,6 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	if force or frame_budget == null or frame_budget.allows_work():
 		var free_us := FREE_US if frame_budget == null else maxi(1, frame_budget.deadline(FREE_US) - Time.get_ticks_usec())
 		_free_trash(0 if force else free_us)
-	if world.outer != null:
-		_outer_regions = world.outer.get_ledger().get("regions", {})
 	phase_started = _record_phase(0, phase_started)
 	if force:
 		_finish()
@@ -580,7 +577,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		last_fill = p
 		_job_lead = lead
 		_detail_started_clock = stream.clock
-		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock), true, "Трава и подлесок")
+		_task = WorkerThreadPool.add_task(_fill_details.bind(px, pz, lead, _epoch, stream.clock, false, _detail_snapshot()), true, "Трава и подлесок")
 	phase_started = _record_phase(4, phase_started)
 	if allow_upload and not uploaded and not _pending.is_empty() and (frame_budget == null or frame_budget.allows_work()):
 		_upload_next()
@@ -674,7 +671,6 @@ func _drop(p: Vector2) -> void:
 ## Заполнение при появлении: трава, подлесок и деревья — в задачах пула. Те же функции, что у фоновой подгрузки,
 ## поэтому результат тот же; _built — в порядке missing.
 func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
-	var details := WorkerThreadPool.add_task(_fill_details.bind(px, pz, Vector2.ZERO, _epoch, stream.clock, true), true, "Трава и подлесок")
 	var results: Array = []
 	results.resize(missing.size())
 	if not missing.is_empty():
@@ -686,6 +682,10 @@ func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 			results[j] = built
 			lock.unlock(), missing.size(), clampi(OS.get_processor_count() / 2, 1, 8), true, "Деревья")
 		WorkerThreadPool.wait_for_group_task_completion(trees)
+	var snapshot := _detail_snapshot()
+	for built: Dictionary in results:
+		if built.has("outer"): snapshot.trees.append(built.outer)
+	var details := WorkerThreadPool.add_task(_fill_details.bind(px, pz, Vector2.ZERO, _epoch, stream.clock, true, snapshot), true, "Трава и подлесок")
 	WorkerThreadPool.wait_for_task_completion(details)
 	_built = []
 	for built: Dictionary in results:
@@ -703,12 +703,21 @@ func _fill_trees(missing: Array[Vector2i], epoch: int) -> void:
 
 ## Раскладка и ёмкость GPU-буферов готовятся в задаче. Отметки появления предварительные:
 ## перед публикацией короткий нативный проход привязывает их к фактическому времени передачи.
-func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false) -> void:
+func _detail_snapshot() -> Dictionary:
+	var trees: Array = [{x = world.obj_x, y = world.obj_y, k = world.obj_k, s = world.obj_s}]
+	var regions := {}
+	if world.outer != null:
+		regions = world.outer.get_ledger().get("regions", {})
+		trees.append_array(world.outer.veg.values())
+	return {regions = regions, trees = trees}
+
+
+func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false, snapshot: Dictionary = {}) -> void:
 	var started := Time.get_ticks_usec()
 	_fill_lead = lead
 	_detail_epoch = epoch
 	_reserve_details(lead)
-	_fill_grass(px, pz)
+	_fill_grass(px, pz, _detail_snapshot() if snapshot.is_empty() else snapshot)
 	var frames := {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
@@ -1101,6 +1110,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 		return false
 	if built.has("outer"):
 		world.outer.veg[chunk] = built.outer
+		if not built.has("cursor"): _refresh_details = true
 	var first: int = built.get("cursor", 0)
 	var end: int = built.entries.size() if limit == 0 else mini(first + limit, built.entries.size())
 	var uploaded := 0
@@ -1393,7 +1403,7 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 	buf[o + 11] = z
 
 
-func _fill_grass(px: float, pz: float) -> void:
+func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	var w := world
 	var rT := grass_r / TILE
 	var rF := maxf(grass_r, under_r) / TILE
@@ -1419,6 +1429,11 @@ func _fill_grass(px: float, pz: float) -> void:
 		entry.high = -Vector3.INF
 	# Препятствия на полотне — первыми: обочина, подлесок и трава обходят их, а не наоборот.
 	_fill_road(px, pz)
+	# Объекты и журнал захвачены главным потоком до запуска задачи.
+	if snapshot.is_empty(): snapshot = _detail_snapshot()
+	var regions: Dictionary = snapshot.regions
+	var canopy_rect := Rect2i(Vector2i(floori(scan_low.x), floori(scan_low.y)), Vector2i(ceili(scan_high.x) - floori(scan_low.x) + 1, ceili(scan_high.y) - floori(scan_low.y) + 1))
+	var canopy := Floor.canopy_image(canopy_rect, snapshot.trees) if not regions.is_empty() and (scan_low.x < 0 or scan_low.y < 0 or scan_high.x >= w.W or scan_high.y >= w.H) else null
 	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
 	for j in range(maxi(0, floori(scan_low.y)), mini(w.H - 1, ceili(scan_high.y)) + 1):
 		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
@@ -1431,24 +1446,25 @@ func _fill_grass(px: float, pz: float) -> void:
 			var d2 := d * d
 			if d2 > rF * rF:
 				continue
+			var surface := _forest_surface.get_pixel(i, j)
+			if canopy != null:
+				var cover := canopy.get_pixel(i - canopy_rect.position.x, j - canopy_rect.position.y)
+				surface.r = cover.r
+				surface.g = cover.g
 			if d2 > rT * rT:
 				# За кругом травы — только крупный подлесок
-				_fill_understory(i, j, _forest_surface.get_pixel(i, j), StageClimate.natural_conditions(w, i, j).x, px, pz)
+				_fill_understory(i, j, surface, StageClimate.natural_conditions(w, i, j).x, px, pz)
 				continue
 			var gr: Dictionary = ROCK_GRASS if rocky_cell else bd.grass
 			# Почвенная влага и освещение общие с генератором леса.
 			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
 			var light := StageClimate.natural_conditions(w, i, j).x
 			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
-			var surface := _forest_surface.get_pixel(i, j)
 			lush *= 1.0 - 0.65 * surface.r
 			lush *= _fill_understory(i, j, surface, light, px, pz)
 			if rocky_cell: lush *= _rock_shelter(surface, i + world.world_origin.x, j + world.world_origin.y)
 			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
-	# 14.4: за краем плана — трава и подлесок закреплённых соседних областей. Поля берутся из снимка
-	# журнала (_outer_regions, его подменяют целиком в главном потоке), куски OuterLand не читаются
-	var regions := _outer_regions
-	if not regions.is_empty():
+	if canopy != null:
 		for j in range(floori(scan_low.y), ceili(scan_high.y) + 1):
 			for i in range(floori(scan_low.x), ceili(scan_high.x) + 1):
 				if i >= 0 and j >= 0 and i < w.W and j < w.H:
@@ -1464,7 +1480,8 @@ func _fill_grass(px: float, pz: float) -> void:
 				var rocky_cell: bool = cell.biome == Biomes.ROCK
 				if not bd.has("grass") and not rocky_cell:
 					continue
-				var surface := _outer_surface(cell)
+				var cover := canopy.get_pixel(i - canopy_rect.position.x, j - canopy_rect.position.y)
+				var surface := _outer_surface(cell, cover)
 				if d2 > rT * rT:
 					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, cell.light, px, pz, cell.elev, cell.dw)
 					continue
@@ -1585,18 +1602,11 @@ func _region_inner(regions: Dictionary, i: int, j: int) -> bool:
 	return true
 
 
-## 14.4: полог, хвоя, влага и каменистость клетки за краем плана — по биому (у плана это картинка леса)
-static func _outer_surface(cell: Dictionary) -> Color:
+## Полог и хвоя — от фактических деревьев; влага и порода — от полей области.
+static func _outer_surface(cell: Dictionary, canopy: Color) -> Color:
 	var exposed:=StageVegetation.Surface.exposure(cell.elev,cell.slope,cell.moist)
 	var wet := Floor.ground_moisture(cell.moist, cell.dw)
-	match cell.biome:
-		Biomes.FOREST, Biomes.JUNGLE:
-			return Color(0.6, 0.25, wet, exposed)
-		Biomes.TAIGA:
-			return Color(0.55, 0.85, wet, exposed)
-		Biomes.SWAMP:
-			return Color(0.35, 0.3, wet, exposed)
-	return Color(0.0, 0.0, wet, exposed)
+	return Color(canopy.r, canopy.g, wet, exposed)
 
 
 ## Скалы не зеленеют: трава пятнами 8 м только в сырых защищённых местах (влага и открытость

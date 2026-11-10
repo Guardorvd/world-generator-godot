@@ -7,10 +7,10 @@ class ProbeLayer extends VegetationLayer:
 	var hold := false
 	var commits := 0
 	var invalid_commits := 0
-	func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false) -> void:
+	func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false, snapshot: Dictionary = {}) -> void:
 		if hold and not immediate:
 			gate.wait()
-		super._fill_details(px, pz, lead, epoch, clock, immediate)
+		super._fill_details(px, pz, lead, epoch, clock, immediate, snapshot)
 	func _present_frame(group: int, mm: MultiMesh, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, immediate: bool) -> void:
 		super._present_frame(group, mm, source, count, bounds, radius, immediate)
 		if group < 0:
