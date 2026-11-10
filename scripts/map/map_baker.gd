@@ -31,6 +31,20 @@ static func paint(w: WorldData, px: int, want_flat := true, want_shaded := true)
 	var fields := _cell_fields(w)
 	var rng := WGRandom.new(w.seed_num ^ SEED_PAINT)
 	var noises := [Simplex.new(rng), Simplex.new(rng), Simplex.new(rng), Simplex.new(rng)]
+	var native := Grid.fast_grid()
+	if native != null:
+		var flags := PackedByteArray()
+		var colors := PackedFloat64Array()
+		var flowers := PackedFloat64Array()
+		for biome: Dictionary in Biomes.LIST:
+			flags.append(int(biome.get("water", false)) | (int(biome.get("flowers", false)) << 1) | (int(biome.get("pebbles", false)) << 2))
+			colors.append_array(PackedFloat64Array(biome.color))
+		for flower: Array in FLOWERS:
+			flowers.append_array(PackedFloat64Array(flower))
+		var result: Dictionary = native.PaintMap(w.W, w.H, px, w.seed_num, w.biome, w.lake, w.elev, w.temp, fields[0], fields[1], fields[2],
+			noises[0].perm, noises[1].perm, noises[2].perm, noises[3].perm, flags, colors, flowers, PackedFloat64Array(ROCKC),
+			Biomes.STONESHORE, Biomes.BEACH, Biomes.SNOW, Biomes.PEAK, want_flat, want_shaded)
+		return [result.flat, result.shaded]
 	var flat := PackedByteArray()
 	var shaded := PackedByteArray()
 	for b in Parallel.bands(w.H * px, func(y0: int, y1: int) -> Array: return _paint_rows(w, px, fields, noises, y0, y1, want_flat, want_shaded), BAND):

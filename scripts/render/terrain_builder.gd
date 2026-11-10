@@ -111,7 +111,10 @@ static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: H
 	var pc := PackedColorArray()
 	var pu := PackedVector2Array()
 	var patches := heights.road_refinement.patches
+	var sampled := area.grow(1)
 	for key: int in patches:
+		if not sampled.has_point(Vector2i(key % w.W, key / w.W)):
+			continue
 		keys.append(key)
 		var p: Dictionary = patches[key]
 		ph.append_array(p.h)
@@ -125,6 +128,25 @@ static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: H
 	arrays[Mesh.ARRAY_TEX_UV2] = out.uv2
 	arrays[Mesh.ARRAY_COLOR] = out.color
 	arrays[Mesh.ARRAY_INDEX] = out.idx
+
+
+## Final terrain directly from the authoritative heightfield. Each worker owns its chunk arrays.
+static func build_chunks(w: WorldData, heights: Heightfield) -> Dictionary:
+	var columns := ceili(float(w.W - 1) / PlanTerrain.CELLS)
+	var rows := ceili(float(w.H - 1) / PlanTerrain.CELLS)
+	var chunks := {}
+	if columns <= 0 or rows <= 0:
+		return chunks
+	var count := columns * rows
+	var band := maxi(1, ceili(count / 8.0))
+	for part: Dictionary in Parallel.bands(count, func(first: int, last: int) -> Dictionary:
+		var result := {}
+		for i in range(first, last):
+			var key := Vector2i(i % columns, i / columns)
+			result[key] = build_chunk(w, heights, key)
+		return result, band):
+		chunks.merge(part)
+	return chunks
 
 
 ## Заменить только квадраты у путей сеткой 1 м. Это часть земли, отдельной накладной ленты нет.

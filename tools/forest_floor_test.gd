@@ -40,6 +40,11 @@ func run() -> void:
 	var frozen := var_to_bytes([w.obj_x, w.obj_y, w.obj_k, w.obj_s, w.h, w.moist, w.path_mask])
 	var surface := Floor.surface_image(w)
 	check(surface.get_data() == Floor.surface_image(w).get_data(), "Маски почвы должны повторяться")
+	var use_native := Grid.allow_fast
+	Grid.allow_fast = false
+	var reference := Floor.surface_image(w)
+	Grid.allow_fast = use_native
+	check(surface.get_data() == reference.get_data(), "C# и GDScript дают побайтно одинаковые маски почвы")
 	var center := surface.get_pixel(127, 127)
 	check(center.r > 0.0 and center.g > 0.0 and center.g < 1.0, "Маска должна видеть смешанный полог")
 	check(absf(center.r - StageVegetation.canopy_at(w, 127.5, 127.5)) < 0.005, "Полог почвы должен совпадать с пологом готового леса")

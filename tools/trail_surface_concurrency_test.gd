@@ -36,6 +36,12 @@ func run() -> void:
 	check(built.errors.is_empty(), "fixture prepares through production builders")
 	if not built.errors.is_empty(): quit(1); return
 	var w: WorldData = built.heights.world
+	var pixels := MapBaker.paint(w, 2)
+	var use_native := Grid.allow_fast
+	Grid.allow_fast = false
+	var reference := MapBaker.paint(w, 2)
+	Grid.allow_fast = use_native
+	check(pixels == reference, "native and GDScript map painters produce identical RGB")
 	var packed := StageTrailPlan.pack(d)
 	w.trail_plan = {version = StageTrailPlan.VERSION, mode = "terrain_network", state = "found",
 		routes = [packed], definition = packed, entries = [{rect = Rect2i(12, 12, 40, 40), route = packed.duplicate(true)}]}

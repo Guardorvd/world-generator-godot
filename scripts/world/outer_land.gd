@@ -41,16 +41,7 @@ var settlements: Array = []:
 		if is_same(settlements, value):
 			return
 		settlements = value
-		var cells := {}
-		for s in value:
-			var x: float = s.x * GameConfig.TILE
-			var z: float = s.y * GameConfig.TILE
-			for cz in range(floori(z / SETTLEMENT_REACH - 1.0), floori(z / SETTLEMENT_REACH + 1.0) + 1):
-				for cx in range(floori(x / SETTLEMENT_REACH - 1.0), floori(x / SETTLEMENT_REACH + 1.0) + 1):
-					var key := Vector2i(cx, cz)
-					if not cells.has(key): cells[key] = []
-					cells[key].append(s)
-		_settlement_cells = cells
+		_settlement_cells = index_collision_places(value)
 var _ledger := {}
 var _lock := Mutex.new()
 
@@ -151,7 +142,26 @@ func set_ledger(ledger: Dictionary) -> void:
 
 
 func collision_settlements(x: float, z: float) -> Array:
-	return _settlement_cells.get(Vector2i(floori(x / SETTLEMENT_REACH), floori(z / SETTLEMENT_REACH)), [])
+	return _settlement_cells.get(collision_cell(x, z), [])
+
+
+static func collision_cell(x: float, z: float) -> Vector2i:
+	return Vector2i(floori(x / SETTLEMENT_REACH), floori(z / SETTLEMENT_REACH))
+
+
+static func index_collision_places(places: Array) -> Dictionary:
+	var cells := {}
+	for place in places:
+		var x: float = place.x * GameConfig.TILE
+		var z: float = place.y * GameConfig.TILE
+		var lo := collision_cell(x - SETTLEMENT_REACH, z - SETTLEMENT_REACH)
+		var hi := collision_cell(x + SETTLEMENT_REACH, z + SETTLEMENT_REACH)
+		for cz in range(lo.y, hi.y + 1):
+			for cx in range(lo.x, hi.x + 1):
+				var key := Vector2i(cx, cz)
+				if not cells.has(key): cells[key] = []
+				cells[key].append(place)
+	return cells
 
 
 func get_ledger() -> Dictionary:

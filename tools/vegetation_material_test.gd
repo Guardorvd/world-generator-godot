@@ -15,7 +15,6 @@ func run() -> void:
 	root.add_child(layer)
 	var shared := ShaderMaterial.new()
 	shared.shader = preload("res://resources/vegetation.gdshader")
-	shared.set_shader_parameter("stream_birth", 0.0)
 	shared.set_shader_parameter("lod_level", 0)
 	var definition := {trunk_mats = [shared]}
 	check(layer._shared_tree_material(definition, "trunk", 0, false) == shared, "Mature trees reuse the canonical material")
@@ -29,26 +28,26 @@ func run() -> void:
 	a.material_override = shared
 	b.material_override = shared
 	layer._reveal_node(a, shared)
-	check(a.material_override != shared and b.material_override == shared, "Reveal is private to the arriving node")
+	check(a.material_override == shared and b.material_override == shared and a.get_meta("stream_birth", 0.0) > 0.0, "Reveal shares the material but has a private timestamp")
 	layer.stream.clock += 0.25
-	check(is_equal_approx(layer.Snapshots.opacity(a.material_override.get_shader_parameter("stream_birth"), layer.stream.clock), 0.5), "Halfway reveal is continuous")
+	check(is_equal_approx(layer.Snapshots.opacity(a.get_meta("stream_birth", 0.0), layer.stream.clock), 0.5), "Halfway reveal is continuous")
 	layer._clean_retired()
-	check(a.material_override != shared, "No early promotion")
+	check(a.get_meta("stream_birth", 0.0) > 0.0, "No early promotion")
 	layer.stream.clock += 0.25
 	layer._clean_retired()
-	check(a.material_override == shared and layer._appearing.is_empty(), "Completed reveal returns to shared material")
+	check(a.get_meta("stream_birth", 0.0) == 0.0 and layer._appearing.is_empty(), "Completed reveal clears the timestamp")
 	layer._retire_nodes([a])
-	check(a.material_override != shared and b.material_override == shared and shared.get_shader_parameter("stream_birth") == 0.0, "Retiring one mature node leaves its neighbours unchanged")
+	check(a.material_override == shared and b.material_override == shared and a.get_meta("stream_birth", 0.0) < 0.0 and b.get_meta("stream_birth", 0.0) == 0.0, "Retiring one mature node leaves its neighbours unchanged")
 	var c := MultiMeshInstance3D.new()
 	layer.add_child(c)
 	layer._reveal_node(c, shared)
 	layer.stream.clock += 0.2
-	var before := layer.Snapshots.opacity(c.material_override.get_shader_parameter("stream_birth"), layer.stream.clock)
+	var before := layer.Snapshots.opacity(c.get_meta("stream_birth", 0.0), layer.stream.clock)
 	layer._retire_nodes([c])
-	check(is_equal_approx(before, layer.Snapshots.opacity(c.material_override.get_shader_parameter("stream_birth"), layer.stream.clock)), "Retiring during reveal preserves opacity")
+	check(is_equal_approx(before, layer.Snapshots.opacity(c.get_meta("stream_birth", 0.0), layer.stream.clock)), "Retiring during reveal preserves opacity")
 	layer.stream.clock += 0.31
 	layer._clean_retired()
-	check(c.material_override != shared and layer._appearing.is_empty(), "A retiring node is not promoted back to opaque")
+	check(c.material_override == shared and c.get_meta("stream_birth", 0.0) < 0.0 and layer._appearing.is_empty(), "A retiring node is not promoted back to opaque")
 	var freed := MultiMeshInstance3D.new()
 	layer.add_child(freed)
 	layer._reveal_node(freed, shared)

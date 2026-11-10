@@ -153,12 +153,14 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
 	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
 	# построен без них, чтобы путь был один
-	var before := r.heights.hv.duplicate() if not r.surface_hit else PackedFloat32Array() # finish_paths may edit in place.
+	var keep_monolith := not services.cache.enabled
+	var before := r.heights.hv.duplicate() if not r.surface_hit and keep_monolith else PackedFloat32Array()
 	var changed := PackedInt32Array()
 	if not r.surface_hit:
 		r.trail = StageTrailPlan.prepare(r.heights)
-		for i in r.world.N:
-			if before[i] != r.heights.hv[i]: changed.append(i)
+		if keep_monolith:
+			for i in r.world.N:
+				if before[i] != r.heights.hv[i]: changed.append(i)
 	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
@@ -168,11 +170,11 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	t = Time.get_ticks_usec()
 	if not r.surface_hit and changed.size() > 0:
 		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
-	if not r.surface_hit: TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
+	if not r.surface_hit and keep_monolith: TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
 	r.timings.patch_refine_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
-	if not r.surface_hit: r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays)
-	if services.cache.enabled: r.terrain_arrays = [] # inspection tools without caching retain the source mesh
+	if not r.surface_hit:
+		r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays) if keep_monolith else TerrainBuilder.build_chunks(r.world, r.heights)
 	if not r.surface_hit:
 		for arrays: Array in r.water_arrays: r.water_chunks.append(WaterBuilder.partition_arrays(arrays))
 	r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
@@ -261,9 +263,10 @@ func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) ->
 	_prepare_times.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
 	if base == null and service_scope != null and service_scope.cache.enabled:
 		service_scope.cache.save_artifact(w.seed_text, cache_size, "base", Surface.capture(heights, "base"))
-	t = Time.get_ticks_usec()
-	terrain_arrays = TerrainBuilder.build_arrays(w, heights)
-	_prepare_times.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+	if service_scope == null or not service_scope.cache.enabled:
+		t = Time.get_ticks_usec()
+		terrain_arrays = TerrainBuilder.build_arrays(w, heights)
+		_prepare_times.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	water_arrays = WaterBuilder.prepare(w, heights)
 	_prepare_times.prepare_water_ms = (Time.get_ticks_usec() - t) / 1000.0

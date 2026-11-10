@@ -239,8 +239,10 @@ static func _name(w: WorldData, type: String, rank: int, x: int, y: int) -> Stri
 static func _settlement_dist(w: WorldData, x: int, y: int) -> float:
 	var best := INF
 	for s: SettlementData in w.settlements:
-		best = minf(best, Grid.hypot(s.x - x, s.y - y))
-	return best
+		var dx := s.x - x
+		var dy := s.y - y
+		best = minf(best, dx * dx + dy * dy)
+	return sqrt(best)
 
 
 ## Насколько клетка выше окрестности в кольце RING (единицы elev, 0,01 ≈ 2,6 м)

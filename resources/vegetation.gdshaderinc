@@ -26,7 +26,7 @@ global uniform vec2 veg_center;
 global uniform float vegetation_clock;
 global uniform float vegetation_night;
 uniform bool stream_instances = false;
-uniform float stream_birth = 0.0;
+instance uniform float stream_birth = 0.0;
 // Поредение травы и подлеска дальше thin_full (м, 0 — нет): остаётся доля (thin_full / расстояние)²;
 // экземпляр с порогом INSTANCE_CUSTOM.x гаснет, когда доля опускается от 1,3 порога до порога.
 // Считается по нынешнему расстоянию, а не по раскладке: новая раскладка ничего не включает рывком.

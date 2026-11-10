@@ -153,5 +153,10 @@ func _init() -> void:
 		StageLandmarks._place_settlements(sample)
 		counts[sample.settlements.size()] = true
 		check(sample.settlements.size() >= 2 and sample.settlements.size() <= 4, "численность малого мира в пределах 2–4, сид %d" % seed_num)
+		var native: Variant = EntityCodec.encode(sample.settlements)
+		Grid.allow_fast = false
+		StageLandmarks._place_settlements(sample)
+		Grid.allow_fast = true
+		check(native == EntityCodec.encode(sample.settlements), "C# и GDScript выбирают те же поселения, сид %d" % seed_num)
 	check(counts.size() > 1, "число поселений действительно меняется между сидами")
 	quit(1 if fails else 0)

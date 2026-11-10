@@ -28,12 +28,10 @@ static func _place_settlements(w: WorldData) -> void:
 	var density_seed := WGRandom.derive(w.seed_num, "settlement.density")
 	var biome := w.biome
 	var river := w.river_cells()
-	var slope := w.slope
 	var dist_water := w.dist_water
 	var ocean := w.ocean
 	var lake := w.lake
 	var settlements: Array = []
-	var cand: Array = []
 	# Не размещаем поселение за проливом, который шире любого допустимого моста.
 	# Иначе дороги перебирают все соседние поселения и десятки объездов без шанса на связь.
 	var wet := PackedByteArray()
@@ -41,6 +39,70 @@ static func _place_settlements(w: WorldData) -> void:
 	for i in w.N:
 		wet[i] = 1 if ocean[i] != 0 or lake[i] != 0 or river[i] != 0 else 0
 	var reachable := Grid.bridge_region(W, H, wet, StageTrails.SPAN)
+	var cand := _settlement_candidates(w, river, wet, reachable, candidate_seed, density_seed)
+	# Плотность мира зависит от сида. С 9.3 деревень почти вдвое меньше и они дальше друг от друга:
+	# мелкое жильё между ними — хутора и одинокие дома (StageSites).
+	var maximum := clampi(roundi(7.0 * w.scale), 3, 16)
+	var minimum := maxi(2, ceili(maximum * 0.5))
+	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
+	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
+	var min_d := maxf(32.0, W / 8.0)
+	for at in range(0, cand.size(), 4):
+		if settlements.size() >= want:
+			break
+		var i := int(cand[at + 1])
+		var x := (i % W) + 0.5
+		var y := (i / W) + 0.5
+		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
+		# Радиусы обоих соседей действуют и через границу любой области.
+		var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
+		var close := false
+		for s: SettlementData in settlements:
+			var dx: float = s.x - x
+			var dy: float = s.y - y
+			var separation: float = (spacing + s.spacing) * 0.5
+			if dx * dx + dy * dy < separation * separation:
+				close = true
+				break
+		if close:
+			continue
+		# Берег большой воды и удобная долина делают место узлом округи.
+		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
+		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + cand[at + 2] * 0.5 + cand[at + 3] * 0.3 + shore, 0.0, 1.0)
+		var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
+		settlement.spacing = spacing
+		settlement.importance = importance
+		settlements.append(settlement)
+	# Посёлков — примерно треть, самые важные места; остальные — деревни.
+	var ranks: Array = settlements.map(func(s: SettlementData) -> float: return s.importance)
+	ranks.sort()
+	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
+	for s: SettlementData in settlements:
+		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
+		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
+		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
+		s.town = s.importance >= town_from
+		s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
+		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
+		s.style = floori(rng.next_float() * 4)
+		s.character = _character(w, s.i, s.town)
+	w.settlements = settlements
+
+
+static func _settlement_candidates(w: WorldData, river: PackedByteArray, wet: PackedByteArray, reachable: PackedByteArray,
+		candidate_seed: int, density_seed: int) -> PackedFloat64Array:
+	var W := w.W
+	var H := w.H
+	var biome := w.biome
+	var slope := w.slope
+	var dist_water := w.dist_water
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var habit := PackedFloat64Array()
+		for definition: Dictionary in Biomes.LIST:
+			habit.append(definition.get("habit", -INF))
+		return fast.SettlementCandidates(W, H, biome, wet, reachable, slope, dist_water, habit, candidate_seed, density_seed)
+	var cand: Array = []
 	for y in range(6, H - 6, 2):
 		for x in range(6, W - 6, 2):
 			var i := y * W + x
@@ -66,53 +128,12 @@ static func _place_settlements(w: WorldData) -> void:
 				score -= 0.4
 			cand.append([score, i, access, density_value])
 	cand.sort_custom(_by_score_desc)
-	# Плотность мира зависит от сида. С 9.3 деревень почти вдвое меньше и они дальше друг от друга:
-	# мелкое жильё между ними — хутора и одинокие дома (StageSites).
-	var maximum := clampi(roundi(7.0 * w.scale), 3, 16)
-	var minimum := maxi(2, ceili(maximum * 0.5))
-	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
-	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
-	var min_d := maxf(32.0, W / 8.0)
-	for c: Array in cand:
-		if settlements.size() >= want:
-			break
-		var i: int = c[1]
-		var x := (i % W) + 0.5
-		var y := (i / W) + 0.5
-		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
-		# Радиусы обоих соседей действуют и через границу любой области.
-		var spacing: float = min_d * lerpf(1.35, 0.7, c[3])
-		var close := false
-		for s: SettlementData in settlements:
-			var dx: float = s.x - x
-			var dy: float = s.y - y
-			var separation: float = (spacing + s.spacing) * 0.5
-			if dx * dx + dy * dy < separation * separation:
-				close = true
-				break
-		if close:
-			continue
-		# Берег большой воды и удобная долина делают место узлом округи.
-		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
-		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + c[2] * 0.5 + c[3] * 0.3 + shore, 0.0, 1.0)
-		var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
-		settlement.spacing = spacing
-		settlement.importance = importance
-		settlements.append(settlement)
-	# Посёлков — примерно треть, самые важные места; остальные — деревни.
-	var ranks: Array = settlements.map(func(s: SettlementData) -> float: return s.importance)
-	ranks.sort()
-	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
-	for s: SettlementData in settlements:
-		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
-		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
-		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
-		s.town = s.importance >= town_from
-		s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
-		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
-		s.style = floori(rng.next_float() * 4)
-		s.character = _character(w, s.i, s.town)
-	w.settlements = settlements
+	var columns := PackedFloat64Array()
+	columns.resize(cand.size() * 4)
+	for i in cand.size():
+		for column in 4:
+			columns[i * 4 + column] = cand[i][column]
+	return columns
 
 
 ## Дома, площадь и хозяйственные постройки (с 9.5, после путей). Улица — путь людей у поселения: дома

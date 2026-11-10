@@ -23,6 +23,17 @@ static func surface_image(w: WorldData) -> Image:
 	if w.generation.surface_rock.size()!=w.N:
 		w.generation.surface_rock=Surface.field(w.elev,w.slope,w.moist)
 	var rock := w.generation.surface_rock
+	var native := Grid.fast_grid()
+	if native != null:
+		var trees := PackedByteArray()
+		var water := PackedByteArray()
+		for kind in Biomes.CROWN_RADIUS.size():
+			trees.append(2 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else int(Biomes.is_tree(kind)))
+		for biome: Dictionary in Biomes.LIST:
+			water.append(int(biome.get("water", false)))
+		var pixels: PackedByteArray = native.ForestSurface(w.W, w.H, w.obj_count, w.obj_x, w.obj_y, w.obj_k, w.obj_s,
+			trees, PackedFloat64Array(Biomes.CROWN_RADIUS), w.biome, water, w.river, w.moist, w.dist_water, rock)
+		return Image.create_from_data(w.W, w.H, false, Image.FORMAT_RGBA8, pixels)
 	var cover := PackedFloat32Array()
 	var needles := PackedFloat32Array()
 	cover.resize(w.N)

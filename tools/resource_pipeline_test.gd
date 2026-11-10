@@ -44,6 +44,7 @@ func finish_suite(cache: WorldCache) -> void:
 		local_ms += (Time.get_ticks_usec() - t) / 1000.0
 		exact = exact and local == pieces[key]
 	check(exact, "local terrain chunks match monolithic partition at all boundaries and road patches")
+	check(TerrainBuilder.build_chunks(w, h) == pieces, "parallel cold terrain matches the monolithic reference with road patches")
 	measurements.local_all_chunks_ms = local_ms
 	measurements.local_max_cells = 66 * 66
 	measurements.reference_cells = w.N

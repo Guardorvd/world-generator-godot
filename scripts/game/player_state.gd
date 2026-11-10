@@ -203,7 +203,8 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
 	# (13.9: и в поселениях закреплённых соседних областей)
-	for list: Array in [w.settlements, w.outer.collision_settlements(x, z) if w.outer != null else []]:
+	var collision_cell := OuterLand.collision_cell(x, z)
+	for list: Array in [w.collision_places(collision_cell, false), w.outer.collision_settlements(x, z) if w.outer != null else []]:
 		for s in list:
 			if absf(s.x * TILE - x) > OuterLand.SETTLEMENT_REACH or absf(s.y * TILE - z) > OuterLand.SETTLEMENT_REACH:
 				continue
@@ -211,7 +212,7 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 				if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):
 					return false
 	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
-	for s in w.sites:
+	for s in w.collision_places(collision_cell, true):
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:

@@ -64,7 +64,7 @@ func run() -> void:
 	check(veg.veg.has(cactus_key) and veg._task != -1, "A delayed grass task does not block cactus/tree uploads")
 	if veg.veg.has(cactus_key):
 		var node: MultiMeshInstance3D = veg.veg[cactus_key].nodes[0]
-		check(node.material_override.get_shader_parameter("stream_birth") > 0.0, "Opaque models use the same temporal reveal as cutout crowns")
+		check(node.get_meta("stream_birth", 0.0) > 0.0, "Opaque models use the same temporal reveal as cutout crowns")
 	var previous_commits := veg.commits
 	veg.refresh(Rect2i(0, 0, 1, 1))
 	veg.hold = false

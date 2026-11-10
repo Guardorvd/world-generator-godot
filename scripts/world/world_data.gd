@@ -479,11 +479,32 @@ var tunnels: Array:
 		return civil.tunnels
 	set(value):
 		civil.tunnels = EntityCodec.tunnels(value)
+var _collision_settlements := {}
+var _collision_sites := {}
+var _collision_settlement_count := -1
+var _collision_site_count := -1
+
+
+## Centres of plan places are fixed after generation. Rebuild on list replacement
+## or when a caller populates a new world by appending records directly.
+func collision_places(cell: Vector2i, for_sites: bool) -> Array:
+	if for_sites:
+		if _collision_site_count != civil.sites.size():
+			_collision_sites = OuterLand.index_collision_places(civil.sites)
+			_collision_site_count = civil.sites.size()
+		return _collision_sites.get(cell, [])
+	if _collision_settlement_count != civil.settlements.size():
+		_collision_settlements = OuterLand.index_collision_places(civil.settlements)
+		_collision_settlement_count = civil.settlements.size()
+	return _collision_settlements.get(cell, [])
+
+
 var settlements: Array:
 	get:
 		return civil.settlements
 	set(value):
 		civil.settlements = EntityCodec.settlements(value)
+		_collision_settlement_count = -1
 var peaks: Array:
 	get:
 		return geology.peaks
@@ -494,6 +515,7 @@ var sites: Array:
 		return civil.sites
 	set(value):
 		civil.sites = EntityCodec.sites(value)
+		_collision_site_count = -1
 var lakes: Array:
 	get:
 		return geology.lakes

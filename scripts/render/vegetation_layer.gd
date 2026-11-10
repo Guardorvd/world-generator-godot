@@ -111,9 +111,7 @@ var _detail_seconds := 0.0
 var _detail_started_clock := 1.0
 var _detail_frames := {}
 var _retired: Array = []
-var _appearing: Array = [] # временные материалы только на полсекунды проявления
-var _reveal_mats := {} # общий материал -> его копия проявления этого кадра (у всех узлов кадра одно время)
-var _reveal_clock := -1.0
+var _appearing: Array = [] # узлы до конца проявления
 var _trash: Array[Node] = [] # скрытые узлы, удаляются по FREE_US за кадр
 var _tree_pool: Array[MultiMeshInstance3D] = []
 var frame_budget: RefCounted
@@ -676,27 +674,21 @@ func _drop(p: Vector2) -> void:
 				world.outer.veg.erase(chunk)
 
 
-## Синхронное заполнение при появлении: трава и подлесок — в задаче пула, деревья кусков карты — группой задач,
-## куски за краем — здесь (OuterLand.vegetation в одном потоке). Те же функции, что у фоновой подгрузки,
+## Заполнение при появлении: трава, подлесок и деревья — в задачах пула. Те же функции, что у фоновой подгрузки,
 ## поэтому результат тот же; _built — в порядке missing.
 func _fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
 	var details := WorkerThreadPool.add_task(_fill_details.bind(px, pz, Vector2.ZERO, _epoch, stream.clock, true), true, "Трава и подлесок")
 	var results: Array = []
 	results.resize(missing.size())
-	var inner: Array[int] = []
-	for i in missing.size():
-		if _on_map(missing[i]):
-			inner.append(i)
-	var lock := Mutex.new()
-	var trees := WorkerThreadPool.add_group_task(func(j: int) -> void:
-		var built := _build_chunk(missing[inner[j]])
-		lock.lock()
-		results[inner[j]] = built
-		lock.unlock(), inner.size(), -1, true, "Деревья")
-	for i in missing.size():
-		if not _on_map(missing[i]):
-			results[i] = _build_outer(missing[i])
-	WorkerThreadPool.wait_for_group_task_completion(trees)
+	if not missing.is_empty():
+		var lock := Mutex.new()
+		var trees := WorkerThreadPool.add_group_task(func(j: int) -> void:
+			var chunk := missing[j]
+			var built := _build_chunk(chunk) if _on_map(chunk) else _build_outer(chunk)
+			lock.lock()
+			results[j] = built
+			lock.unlock(), missing.size(), clampi(OS.get_processor_count() / 2, 1, 8), true, "Деревья")
+		WorkerThreadPool.wait_for_group_task_completion(trees)
 	WorkerThreadPool.wait_for_task_completion(details)
 	_built = []
 	for built: Dictionary in results:
@@ -1140,7 +1132,9 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				if part == "trunk" and level == 2 and not small and def.has("crown") and FAR_TRUNKLESS.has(kind % ForestModels.MODEL_STRIDE):
 					node_index += 1
 					continue
-				if limit > 0 and (uploaded >= TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):
+				var shadow_proxy: bool = part == "trunk" and level == 0 and not small and levels.size() > 2
+				var node_count := 2 if shadow_proxy else 1
+				if limit > 0 and (uploaded + node_count > TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):
 					built.cursor = i
 					built.node_cursor = node_index
 					return false
@@ -1153,7 +1147,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				elif part == "trunk" and level >= 1:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF # тень тонкого ствола за 60 м не видна
-				elif part == "trunk" and not small and levels.size() > 2:
+				elif shadow_proxy:
 					# 15.0: тень ближнего ствола считает дальний меш (в 10-15 раз меньше треугольников): ствол сам
 					# рисуется ближним мешом, а в каждый из каскадов теней попадал бы ещё раз.
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -1186,7 +1180,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				entry[part] = mm
 				entry.nodes.append(node)
 				node_index += 1
-				uploaded += 1
+				uploaded += node_count
 		built.node_cursor = 0
 		built.cursor = i + 1
 	_loaded[chunk] = true
@@ -1262,28 +1256,21 @@ func _shared_tree_material(def: Dictionary, part: String, level: int, small: boo
 
 
 func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:
-	# Узлы, появившиеся в одном кадре, получают одно время рождения — значит, и одну копию материала.
-	if _reveal_clock != stream.clock:
-		_reveal_clock = stream.clock
-		_reveal_mats.clear()
-	var id := shared.get_instance_id()
-	if not _reveal_mats.has(id):
-		var copy: ShaderMaterial = shared.duplicate()
-		copy.set_shader_parameter("stream_birth", stream.clock)
-		_reveal_mats[id] = copy
-	var mat: ShaderMaterial = _reveal_mats[id]
-	node.material_override = mat
-	_appearing.append({node = node, shared = shared, until = stream.clock + StreamPolicy.FADE_SECONDS})
+	node.material_override = shared
+	_set_tree_stamp(node, stream.clock)
+	_appearing.append({node = node, until = stream.clock + StreamPolicy.FADE_SECONDS})
+
+
+static func _set_tree_stamp(node: MultiMeshInstance3D, stamp: float) -> void:
+	node.set_meta("stream_birth", stamp)
+	node.set_instance_shader_parameter("stream_birth", stamp)
 
 
 func _retire_nodes(nodes: Array) -> void:
 	for node: MultiMeshInstance3D in nodes:
-		var stamp: float = node.material_override.get_shader_parameter("stream_birth")
+		var stamp: float = node.get_meta("stream_birth", 0.0)
 		var alpha := Snapshots.opacity(stamp, stream.clock)
-		# Зрелый материал общий: уход одного чанка не должен гасить остальные.
-		var mat: ShaderMaterial = node.material_override.duplicate()
-		mat.set_shader_parameter("stream_birth", -(stream.clock - (1.0 - alpha) * StreamPolicy.FADE_SECONDS))
-		node.material_override = mat
+		_set_tree_stamp(node, -(stream.clock - (1.0 - alpha) * StreamPolicy.FADE_SECONDS))
 		node.set_meta("stream_retiring", true)
 	_retired.append({until = stream.clock + StreamPolicy.FADE_SECONDS, nodes = nodes})
 
@@ -1299,7 +1286,7 @@ func _clean_retired() -> void:
 		if node.is_queued_for_deletion() or node.get_meta("stream_retiring", false):
 			_appearing.remove_at(i)
 		elif stream.clock >= entry.until:
-			node.material_override = entry.shared
+			_set_tree_stamp(node, 0.0)
 			_appearing.remove_at(i)
 	for i in range(_retired.size() - 1, -1, -1):
 		if frame_budget != null and not frame_budget.allows_work(): break
@@ -1336,6 +1323,7 @@ func _free_trash(budget_us: int) -> void:
 				# Keep the scene/render instance, release all per-chunk GPU data.
 				node.multimesh.instance_count = 0
 				node.multimesh.mesh = null
+				_set_tree_stamp(node, 0.0)
 				node.material_override = null
 				_tree_pool.append(node)
 				node_stats.pooled += 1
