@@ -1194,22 +1194,20 @@ static func _share(p: PackedInt32Array, near: PackedByteArray) -> float:
 ## Дома, которые стоят на мосту, в туннеле или вплотную к ним, убираются: иначе в них упрётся дорога
 static func _clear_huts(w: WorldData) -> void:
 	var W := w.W
-	var spans: Array = w.bridges + w.tunnels
 	for st in w.settlements:
 		var keep: Array[HutData] = []
 		for u in st.huts:
-			var free := true
+			var free := StageLandmarks.structure_clear(w, Vector2(u.x, u.y), u.a, u.t)
 			# Полоса дороги должна оставаться свободной и внутри деревни, не только на мостах.
-			for dz: float in [-0.55, 0.0, 0.55]:
-				for dx: float in [-0.55, 0.0, 0.55]:
-					var x := clampi(floori(u.x + dx), 0, w.W - 1)
-					var y := clampi(floori(u.y + dz), 0, w.H - 1)
+			var half: Vector2 = PlayerState.SITE_HALF[u.t] + Vector2(0.4, 0.4)
+			var basis := Basis(Vector3.UP, u.a)
+			for dz: float in [-1.0, 0.0, 1.0]:
+				for dx: float in [-1.0, 0.0, 1.0]:
+					var offset := basis * Vector3(dx * half.x, 0, dz * half.y) / GameConfig.TILE
+					var x := clampi(floori(u.x + offset.x), 0, w.W - 1)
+					var y := clampi(floori(u.y + offset.z), 0, w.H - 1)
 					if w.path_mask[y * W + x] >= 2:
 						free = false
-			for sp in spans:
-				if Grid.segment_dist(u.x, u.y, sp.a % W + 0.5, sp.a / W + 0.5, sp.b % W + 0.5, sp.b / W + 0.5) < HUT_CLEAR:
-					free = false
-					break
 			if free:
 				keep.append(u)
 		st.huts = keep

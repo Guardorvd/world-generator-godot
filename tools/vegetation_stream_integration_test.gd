@@ -93,6 +93,8 @@ func run() -> void:
 	var route_start := veg.commits
 	var previous: PackedFloat32Array = veg.snapshots.displayed[-1].slice(0, veg.snapshots.shown[-1] * 20)
 	var continuity := true
+	var max_opacity_error := 0.0
+	var changed_rows := 0
 	for i in 90:
 		await process_frame
 		var before := veg.commits
@@ -106,13 +108,26 @@ func run() -> void:
 				var id := veg.Snapshots.key(current, at)
 				var alpha := veg.Snapshots.opacity(current[at + 19], veg.stream.clock)
 				var expected := veg.Snapshots.opacity(old[id], veg.stream.clock) if old.has(id) else 0.0
-				continuity = continuity and absf(alpha - expected) < 0.00001
+				var error := absf(alpha - expected)
+				if error >= 0.00001:
+					if changed_rows == 0: print("First opacity discontinuity: id=", id, " old=", old.get(id, "new"), " stamp=", current[at + 19], " clock=", veg.stream.clock, " alpha=", alpha, " expected=", expected)
+					changed_rows += 1
+				max_opacity_error = maxf(max_opacity_error, error)
+				continuity = continuity and error < 0.00001
 			previous = current
-	check(veg.commits > route_start + 1 and continuity, "Repeated real worker snapshots at 45 m/s preserve shared, incoming and outgoing opacity")
+	check(veg.commits > route_start + 1, "45 m/s streaming publishes more than one replacement within 90 frames")
+	check(continuity, "Real worker snapshots at 45 m/s preserve shared, incoming and outgoing opacity")
+	print("Opacity diagnostic: publications=", veg.commits - route_start, " discontinuities=", changed_rows, " max_error=", max_opacity_error, " phases_us=", veg.phase_stats.max_us, " worker_seconds=", veg._detail_seconds)
+	print("Detail CPU phases: ", veg.fill_stats)
 	veg.update(800, 800, true, 1.0 / 60.0)
 	check(veg._task == -1 and veg._tree_task == -1 and veg._pending.is_empty() and veg._queued.is_empty(), "Teleport joins both workers and clears queued data")
 	check(veg._fill_lead == Vector2.ZERO and veg.stream.velocity == Vector2.ZERO, "Teleport resets prediction")
 	check(veg.grass.visible_instance_count == veg._grass_n, "Teleport replaces outgoing history instead of retaining the old location")
+	var history: PackedFloat32Array = veg.snapshots.displayed[-1]
+	veg._refresh_details = true # same notification as publication of an outer tree chunk
+	veg.update(800, 800, false, 1.0 / 60.0)
+	check(veg.snapshots.displayed.get(-1, PackedFloat32Array()) == history, "Canopy publication schedules a refill without erasing live fade history")
+	veg._finish()
 	veg.free()
 	await process_frame
 	print("vegetation_stream_integration_test: %d failures" % fails)

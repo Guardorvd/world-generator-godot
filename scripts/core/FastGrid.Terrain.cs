@@ -4,6 +4,21 @@ using Godot;
 
 public partial class FastGrid
 {
+	// Expand compact immutable tree rows for the GPU without a GDScript loop per
+	// float on every LOD/shadow publication. The stamp belongs to this upload.
+	public float[] TreeBuffer(float[] source, bool colors, double stamp)
+	{
+		int inputStride = colors ? 16 : 12, stride = inputStride + 4;
+		int count = source.Length / inputStride;
+		var result = new float[count * stride];
+		for (int i = 0; i < count; i++)
+		{
+			Array.Copy(source, i * inputStride, result, i * stride, inputStride);
+			result[i * stride + stride - 1] = (float)stamp;
+		}
+		return result;
+	}
+
 	/// <summary>Timestamp only changed vegetation rows at their actual publication time.</summary>
 	public Godot.Collections.Dictionary StampVegetation(float[] buffer, double[] changes, double deadline, double now, double duration)
 	{

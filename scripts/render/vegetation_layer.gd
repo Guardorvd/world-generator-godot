@@ -131,6 +131,7 @@ var _pending: Array = [] # готовые чанки, ближайшие в ко
 var _built: Array = []   # пишет задача, читаем после wait_for_task_completion
 var _loaded := {}       # включая пустые чанки
 var _refresh_details := false
+var _history_cuts: Array[Rect2] = [] # apply after the reader task has joined
 var _epoch := 0         # 13.9: номер закрепления областей; чанк, посчитанный раньше, устарел
 var _dirty := {}        # чанк за краем -> _epoch, когда его область закрепили
 var _defs := {}         # неизменяемые меши, материалы и локальные AABB
@@ -513,6 +514,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_clear_pending()
 		_built.clear()
 		snapshots.reset()
+		_history_cuts.clear()
 		_fill_lead = Vector2.ZERO
 		_drop(p)
 		last_trees = p
@@ -522,6 +524,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			_apply_chunk(built)
 		_built.clear()
 		_apply_grass(true)
+		_refresh_details = false # the initial snapshot already includes these trees
 		return true
 	var uploaded := false
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
@@ -570,7 +573,10 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				_tree_task = WorkerThreadPool.add_task(_fill_trees.bind(missing, _epoch), true, "Деревья")
 	phase_started = _record_phase(3, phase_started)
 	if _task == -1 and _present.is_empty() and _refresh_details:
-		snapshots.reset()
+		for box: Rect2 in _history_cuts:
+			snapshots.exclude_rect(box)
+		_history_cuts.clear()
+		last_fill = Vector2.INF
 		_refresh_details = false
 	# Новый снимок — только когда прежний передан целиком: задача пишет те же буферы.
 	if (frame_budget == null or frame_budget.allows_work()) and _task == -1 and _present.is_empty() and (last_fill == Vector2.INF or p.distance_to(last_fill) >= StreamPolicy.REFILL_STEP or lead.distance_to(_job_lead) >= StreamPolicy.REFILL_STEP or snapshots.cleanup_due(stream.clock)):
@@ -1029,6 +1035,7 @@ func refresh(rect: Rect2i) -> void:
 		_detail_frames.clear()
 	# Published earthworks cannot leave old trees, rocks or undergrowth floating over the cut.
 	var box := Rect2(Vector2(rect.position) * TILE, Vector2(rect.size) * TILE)
+	_history_cuts.append(box)
 	var meshes: Array[MultiMesh] = []
 	if grass != null: meshes.append(grass)
 	for e: Dictionary in understory: meshes.append(e.mm)
@@ -1269,7 +1276,8 @@ func _shared_tree_material(def: Dictionary, part: String, level: int, small: boo
 
 func _reveal_node(node: MultiMeshInstance3D, shared: ShaderMaterial) -> void:
 	node.material_override = shared
-	_set_tree_stamp(node, stream.clock)
+	# This node has no instance data yet. Stamp the first upload below, once.
+	node.set_meta("stream_birth", stream.clock)
 	_appearing.append({node = node, until = stream.clock + StreamPolicy.FADE_SECONDS})
 
 
@@ -1286,6 +1294,9 @@ static func _set_tree_stamp(node: MultiMeshInstance3D, stamp: float) -> void:
 
 ## Keep compact immutable CPU entries; add GPU fade data only at publication.
 static func _tree_buffer(source: PackedFloat32Array, colors: bool, stamp: float) -> PackedFloat32Array:
+	var fast := Grid.fast_grid()
+	if fast != null:
+		return fast.TreeBuffer(source, colors, stamp)
 	var source_stride := 16 if colors else 12
 	var stride := source_stride + 4
 	var count := source.size() / source_stride

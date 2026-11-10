@@ -27,6 +27,19 @@ func cleanup_due(now: float) -> bool:
 			return true
 	return false
 
+
+## Match refresh's removal from live MultiMeshes without restarting unaffected fades.
+## Call only when the preparation worker no longer reads displayed history.
+func exclude_rect(box: Rect2) -> void:
+	for group: int in displayed:
+		var data: PackedFloat32Array = displayed[group]
+		var kept := PackedFloat32Array()
+		for at in range(0, int(shown[group]) * STRIDE, STRIDE):
+			if not box.has_point(key(data, at)):
+				kept.append_array(data.slice(at, at + STRIDE))
+		displayed[group] = kept
+		shown[group] = kept.size() / STRIDE
+
 func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false) -> Dictionary:
 	return commit(group, prepare(group, source, count, bounds, radius, now, immediate, instant_arrival), now)
 

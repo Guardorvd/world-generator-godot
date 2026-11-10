@@ -288,6 +288,8 @@ static func _crowded(huts: Array, p: Vector2, gap: float) -> bool:
 ## Постройка вида kind (PlayerState.SITE_HALF) встаёт на сухую землю с перепадом не больше FLAT,
 ## не на путь и не на голую скалу. Пробы — по углам и серединам стен, повёрнутых на a
 static func _fits(w: WorldData, ground: Heightfield, river: PackedByteArray, p: Vector2, a: float, kind: String) -> bool:
+	if not structure_clear(w, p, a, kind):
+		return false
 	var half: Vector2 = PlayerState.SITE_HALF[kind] + Vector2(0.4, 0.4)
 	var low := INF
 	var high := -INF
@@ -310,6 +312,28 @@ static func _fits(w: WorldData, ground: Heightfield, river: PackedByteArray, p: 
 			low = minf(low, h)
 			high = maxf(high, h)
 	return high - low <= StageSites.FLAT[kind]
+
+
+## The base heightfield has no tunnel excavation. Reserve the entire rotated
+## foundation before selecting a slot, rather than deleting the chosen house later.
+static func structure_clear(w: WorldData, p: Vector2, a: float, kind: String) -> bool:
+	var half: Vector2 = (PlayerState.SITE_HALF[kind] + Vector2(0.4, 0.4)) / GameConfig.TILE
+	var basis := Basis(Vector3.UP, a)
+	for tunnel: bool in [false, true]:
+		for sp in (w.tunnels if tunnel else w.bridges):
+			var ax: float = sp.a % w.W + 0.5
+			var ay: float = sp.a / w.W + 0.5
+			var bx: float = sp.b % w.W + 0.5
+			var by: float = sp.b / w.W + 0.5
+			if Grid.segment_dist(p.x, p.y, ax, ay, bx, by) < StageTrails.HUT_CLEAR:
+				return false
+			var radius := StageTrails.TUNNEL_R if tunnel else Heightfield.BRIDGE_HALF / GameConfig.TILE
+			for z: float in [-1.0, 0.0, 1.0]:
+				for x: float in [-1.0, 0.0, 1.0]:
+					var offset := basis * Vector3(x * half.x, 0, z * half.y)
+					if Grid.segment_dist(p.x + offset.x, p.y + offset.z, ax, ay, bx, by) < radius:
+						return false
+	return true
 
 
 ## Характер поселения по месту: «приморский посёлок», «горная деревня»…
