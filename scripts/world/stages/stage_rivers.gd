@@ -93,7 +93,8 @@ static func run(w: WorldData) -> void:
 					p.x += dx * 0.5
 					p.y += dy * 0.5
 					pts.append(p)
-					w.river_exits.append({x = p.x, y = p.y, dx = dx, dy = dy, acc = acc[c], e = p.e, w = p.w})
+					w.river_exits.append({x = p.x, y = p.y, dx = dx, dy = dy, acc = acc[c],
+						e = maxf(0.0, p.e - GameConfig.LAKE_DROP / GameConfig.HS), w = p.w})
 				break
 			if ocean[d] != 0 or lake[d] != 0:
 				var p := _pt(w, d)

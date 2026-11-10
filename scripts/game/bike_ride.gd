@@ -404,6 +404,8 @@ func mount(p: PlayerState) -> void:
 ## замеров (impacts, hop_height) остаётся: её сбрасывает reset_stats(). Положение и визуальные углы колёс
 ## и педалей (wheel, crank) тоже остаются.
 func reset_motion() -> void:
+	last_hit = {}
+	tick_time = 0.0
 	landing_info = {}
 	crash_info = {}
 	slick_f = 1.0
@@ -560,7 +562,7 @@ func _slope(heights: Heightfield) -> float:
 	var fz := -cos(heading) * HUB
 	if contact_model:
 		# по опорам колёс: на бревне и валуне тоже подъём, который надо одолеть
-		return (_wheel_ground(x + fx, z + fz, heights) - _wheel_ground(x - fx, z - fz, heights)) / (2.0 * HUB)
+		return (_wheel_ground(x + fx, z + fz, heights, lift_f) - _wheel_ground(x - fx, z - fz, heights, lift_r)) / (2.0 * HUB)
 	return _ground_slope(heights)
 
 
@@ -576,12 +578,12 @@ func _ground_slope(heights: Heightfield) -> float:
 func _contact(px: float, pz: float, heights: Heightfield) -> float:
 	var fx := -sin(heading) * HUB
 	var fz := -cos(heading) * HUB
-	return (_wheel_ground(px + fx, pz + fz, heights) + _wheel_ground(px - fx, pz - fz, heights)) * 0.5
+	return (_wheel_ground(px + fx, pz + fz, heights, lift_f) + _wheel_ground(px - fx, pz - fz, heights, lift_r)) * 0.5
 
 
 ## Высота земли под ступицей колеса как круга: ребро ступеньки или резкий гребень поднимают колесо
 ## плавно по дуге, а не проваливают в излом метровой сетки. На гладком рельефе равна высоте точки.
-func _wheel_ground(px: float, pz: float, heights: Heightfield) -> float:
+func _wheel_ground(px: float, pz: float, heights: Heightfield, lift := 0.0) -> float:
 	var best := heights.surface_at(px, pz, y)
 	var dx := -sin(heading) * WHEEL_REACH
 	var dz := -cos(heading) * WHEEL_REACH
@@ -589,7 +591,7 @@ func _wheel_ground(px: float, pz: float, heights: Heightfield) -> float:
 	best = maxf(best, heights.surface_at(px + dx, pz + dz, y) + arc)
 	best = maxf(best, heights.surface_at(px - dx, pz - dz, y) + arc)
 	if contact_model and heights.obstacles != null:
-		best = maxf(best, heights.obstacles.wheel_support(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX))
+		best += maxf(0.0, heights.obstacles.wheel_support(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX) - best - lift)
 	return best
 
 
@@ -820,13 +822,25 @@ func _substep(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bo
 	_step_wheels(heights, f.rough, dt, f.surf, f.path_weight, f.slope, f.across)
 	# Камень под передним колесом выбивает курс; как руль и доворот, это проходит проверку габарита (у стены — нет)
 	if heading != h_wheels and not fits(x, z, heading, w, heights):
+		var velocity := horizontal_velocity()
 		heading = h_wheels
+		speed = velocity.dot(Vector2(-sin(heading), -cos(heading)))
+		lateral_speed = velocity.dot(Vector2(cos(heading), -sin(heading)))
 	if crashed:
 		_sync(p)
 		return
 	acceleration = clampf((speed - speed0) / maxf(dt, 0.0001), -9.0, 12.0)
 	_step_suspension(dt, minf(absf(lateral) * 0.001, 0.015) + clampf(vertical_g, G_MIN, G_MAX) * SAG_MAX * PROFILE_SAG, _sub[T_DRIVE] - _sub[T_BRAKE_F] - _sub[T_BRAKE_R])
+	var before_hop := y
 	_step_contacts(f.slope, dt)
+	if airborne and y > before_hop:
+		var roof := _roof_over(x, z, heading, before_hop, heights) - BikeRecovery.CLEARANCE
+		if y > roof:
+			var correction := y - maxf(before_hop, roof)
+			y -= correction
+			ground_f += correction
+			ground_r += correction
+			vy = minf(vy, 0.0)
 	_step_pose(throttle, lateral, dt)
 	_sync(p)
 
@@ -1207,10 +1221,11 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 		if _hop_buf > 0.0 and _hop_wait <= 0.0 and not airborne and _auto_hop < 0.0:
 			_hop_buf = 0.0
 			_auto_hop = 0.0
+			_hop_buf = HOP_BUFFER
 			# Новый пробел — новый прыжок: защёлка прошлого (_hop_used ждёт возврата тела в середину) его не съедает.
 			# Иначе пробел, нажатый перед приземлением после прыжка, давал только подъём переднего.
 			_hop_used = false
-		elif _hop_buf > 0.0 and _coyote > 0.0 and _auto_hop < 0.0 and not _hop_used:
+		elif airborne and _hop_buf > 0.0 and _coyote > 0.0 and (_auto_hop < 0.0 or _auto_hop < AUTO_BACK) and not _hop_used:
 			# Малый запас после кромки: игрок нажал вовремя, хотя колёса уже потеряли опору.
 			_hop_buf = 0.0
 			_hop_front = HOP_FRONT * 0.5
@@ -1287,6 +1302,9 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 			lift_rv = 0.0
 	_sup_f = gf
 	_sup_r = gr
+	if contact_model:
+		gf -= minf(lift_f, maxf(0.0, gf - heights.surface_at(x + fx, z + fz, y)))
+		gr -= minf(lift_r, maxf(0.0, gr - heights.surface_at(x - fx, z - fz, y)))
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var wild := BUMP * rough * (1.0 - path_weight)
 	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
@@ -1342,6 +1360,7 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	# скоростью (подъём колеса быстрее), скользкий камень держит хуже — на скорости через сад линию уже не удержать.
 	# Раньше камни до 18 см на прямой не делали ничего, кроме качания подвески (стенд tools/trail_standards_stand.gd).
 	if contact_model and heights.obstacles != null and (of > SLICK_BUMP or orr > SLICK_BUMP):
+		var velocity_before := horizontal_velocity()
 		var right := Vector2(cos(heading), -sin(heading)) * ROCK_PROBE
 		var push := 0.0
 		if touch_f and of > SLICK_BUMP:
@@ -1352,7 +1371,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		if touch_r and orr > SLICK_BUMP:
 			var rock_r := (heights.obstacles.bump_at(x - fx + right.x, z - fz + right.y) - heights.obstacles.bump_at(x - fx - right.x, z - fz - right.y)) / (2.0 * ROCK_PROBE)
 			push += rock_r * clampf(vr - _gv_r, 0.0, KICK_MAX)
-		lateral_speed -= push * ROCK_DEFLECT
+		speed = velocity_before.dot(Vector2(-sin(heading), -cos(heading)))
+		lateral_speed = velocity_before.dot(Vector2(cos(heading), -sin(heading))) - push * ROCK_DEFLECT
 	_g_f = gf
 	_g_r = gr
 	_gv_f = vf
@@ -1373,7 +1393,8 @@ func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, befo
 	var hit := heights.obstacles.wheel_contact(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, minf(before, support) if on_id >= 0 else ground)
 	if hit.is_empty():
 		return -1
-	if hit.id == on_id or _fresh or clear:
+	if clear: return -1
+	if hit.id == on_id or _fresh:
 		return hit.id # то же препятствие, колесо опустилось на него сверху (приземление) или прошло над ним поднятым
 	var angle: float = hit.angle - atan(maxf(0.0, _ground_slope(heights) * signf(speed)))
 	if angle < IMPACT_ANGLE:
@@ -1600,17 +1621,26 @@ func _step_lift(weight_f: float, weight_r: float, pull: float, dt: float) -> voi
 	if lift_r >= LIFT_MAX:
 		lift_r = LIFT_MAX
 		lift_rv = minf(lift_rv, 0.0)
+	if lift_f > 0.0 and lift_r > 0.0 and _hop_link <= 0.0:
+		lift_r = 0.0
+		lift_rv = 0.0
 
 
 ## Q поднял переднее, E подтягивает заднее. Высота зависит от подготовки, окно не требует точности до кадра.
 func _takeoff_hop() -> void:
+	_auto_hop = -1.0
+	_hop_buf = 0.0
+	_hop_wait = HOP_BUFFER
 	airborne = true
 	air_time = 0.0
 	_coyote = 0.0
 	_hop_from = y
 	hop_height = 0.0
 	var quality := clampf(_hop_front / HOP_FRONT, 0.0, 1.0)
-	y += minf((lift_f + lift_r) * 0.5, 0.12 if vy > 0.5 else LIFT_MAX)
+	var rise := minf((lift_f + lift_r) * 0.5, 0.12 if vy > 0.5 else LIFT_MAX)
+	y += rise
+	ground_f -= rise
+	ground_r -= rise
 	# Сохраняем движение вдоль спуска: прыжок считается относительно полотна, без катапульты вниз по склону.
 	var carry := lerpf(HOP_CARRY, HOP_CARRY * 0.5, smoothstep(0.1, 0.5, absf(vertical_g)))
 	vy = minf(vy, carry) + HOP_POP * lerpf(0.8, 1.0, quality) + maxf(0.0, _hop_front_v) * 0.35
@@ -1756,9 +1786,9 @@ func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield, a
 	var fx := -sin(hd) * AXLE
 	var fz := -cos(hd) * AXLE
 	var climb := _climb() if allow_climb else 0.0
-	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb)
-		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb)
-		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb)
+	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb, airborne)
+		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb, airborne)
+		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb, airborne)
 		and _roof_over(px, pz, hd, y, heights) >= y + BikeRecovery.CLEARANCE)
 
 

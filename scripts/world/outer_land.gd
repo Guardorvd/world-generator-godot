@@ -210,18 +210,20 @@ static func _overlay_regions(ledger: Dictionary, rect: Rect2i, out: Dictionary) 
 	out.water = PackedFloat32Array()
 	out.water.resize(area)
 	out.water.fill(-INF)
-	out.path = PackedByteArray()
-	out.path.resize(area)
+	if not out.has("path"):
+		out.path = PackedByteArray()
+		out.path.resize(area)
 	var regions: Dictionary = ledger.get("regions", {})
 	for key: Vector2i in regions:
 		var r: Rect2i = regions[key].rect
 		var part := r.intersection(rect)
 		if not part.has_area() or not regions[key].has("fields"):
 			continue
-		if not out.has("village"):
+		if not out.has("dist_path"):
 			out.dist_path = PackedFloat32Array()
 			out.dist_path.resize(area)
 			out.dist_path.fill(99.0)
+		if not out.has("village"):
 			out.village = PackedByteArray()
 			out.village.resize(area)
 		var f: Dictionary = regions[key].fields
@@ -261,6 +263,10 @@ static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
 	if not out.has("dw"): out.dw = out.dist.duplicate()
 	out.river = PackedByteArray()
 	out.river.resize(rect.get_area())
+	out.path = PackedByteArray()
+	out.path.resize(rect.get_area())
+	out.village = PackedByteArray()
+	out.village.resize(rect.get_area())
 	# Готовая география есть после StageClimate; заготовки WorldData в тестах её не имеют.
 	if w.N <= 0 or w.biome.size() != w.N or w.dist_water.size() != w.N:
 		return
@@ -298,12 +304,19 @@ static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
 			dest_dw[dst] = source_dw[src]
 			dest_river[dst] = river[src]
 			dest_light[dst] = StageClimate.natural_conditions(w, x, y).x
+			if w.path_mask.size() == w.N: out.path[dst] = w.path_mask[src]
+	for place: EntityRecord in w.settlements + w.sites:
+		var radius: float = StageVegetation.VILLAGE_R if place is SettlementData else place.get("clear")
+		var box := Rect2i(floori(place.x - radius), floori(place.y - radius), ceili(radius * 2.0) + 1, ceili(radius * 2.0) + 1).intersection(rect)
+		for y in range(box.position.y, box.end.y):
+			for x in range(box.position.x, box.end.x):
+				out.village[(y - rect.position.y) * rect.size.x + x - rect.position.x] = 1
 
 
 ## Лес, камни и тростник чанка растительности key (WorldData.CHUNK_SIZE клеток, в общих координатах; для
 ## фоновой задачи). Тот же код, что у стартовой области, без троп и домов. Кроме объектов (x, y в клетках, k, v, s)
 ## возвращает высоты h, воду и маску путей с запасом RockScatter.FIELD_HALO: опора и источник осыпи
-static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
+static func vegetation(w: WorldData, key: Vector2i, surface: Heightfield = null) -> Dictionary:
 	var cs := WorldData.CHUNK_SIZE
 	var x0 := key.x * cs
 	var y0 := key.y * cs
@@ -317,6 +330,12 @@ static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 	f.stony = Parallel.fbm_rect(w.noise.cost, x0 - pad, y0 - pad, side, side, p[0], p[1])
 	f.age_n = Parallel.fbm_rect(w.noise.forest, x0 - pad, y0 - pad, side, side, 78.0, 2, 91.0, -47.0) # как в age_at
 	f.merge(StageVegetation.structure_rect(w, x0 - pad, y0 - pad, side, side))
+	var candidates := RockMassif.sites(w.seed_num, x0, y0, x0 + cs, y0 + cs, f, x0 - pad, y0 - pad, side, f.path)
+	var snapshot := {h = f.h, water = f.water, path = f.path, x0 = x0 - pad, y0 = y0 - pad, side = side,
+		plan_path = w.path_mask, plan_water = surface.water_level if surface != null else PackedFloat32Array(),
+		world_origin = Vector2(w.world_origin) * GameConfig.TILE}
+	var plan_hv := surface.hv if surface != null else PackedFloat32Array()
+	f.massifs = RockMassif.seated_snapshot(candidates, snapshot, plan_hv, w.W if surface != null else 0, w.H if surface != null else 0)
 	# dw уже содержит расстояние до всей воды общего плана, а снаружи — до моря.
 	if not f.has("dw"):
 		f.dw = f.dist
@@ -340,6 +359,7 @@ func _region_at(i: int, j: int) -> Array:
 	if r == null or not r.has("fields"):
 		return []
 	var rect: Rect2i = r.rect
+	if not rect.has_point(Vector2i(i, j)): return []
 	return [r.fields, (j - rect.position.y) * rect.size.x + i - rect.position.x]
 
 
@@ -371,6 +391,16 @@ func height(i: int, j: int) -> float:
 	return at[0].h[at[1]] if not at.is_empty() else 0.0
 
 
+## Речное дно может быть ниже нуля, сохраняя масштаб суши.
+func ground(i: int, j: int) -> float:
+	var known := _region_at(i, j)
+	if not known.is_empty():
+		var f: Dictionary = known[0]
+		var k: int = known[1]
+		return Heightfield.outer_meters(f.h[k], f.ocean[k] == 0)
+	return Heightfield.outer_meters(height(i, j))
+
+
 ## Посчитана ли клетка за краем карты
 func has(i: int, j: int) -> bool:
 	return not _region_at(i, j).is_empty() or not _locate(i, j).is_empty()
@@ -389,6 +419,43 @@ func water(i: int, j: int) -> float:
 	var f: Dictionary = known[0]
 	var k: int = known[1]
 	return f.water_level[k] if f.river[k] != 0 or f.lake[k] != 0 else -INF
+
+
+static func water_corner(f: Dictionary, width: int, height: int, x: int, y: int) -> float:
+	var sum := 0.0
+	var count := 0
+	for d in 4:
+		var nx := x - 1 + (d & 1)
+		var ny := y - 1 + (d >> 1)
+		if nx < 0 or ny < 0 or nx >= width or ny >= height: continue
+		var k := ny * width + nx
+		if (f.river[k] != 0 or f.lake[k] != 0) and is_finite(f.water_level[k]):
+			sum += f.water_level[k]
+			count += 1
+	return maxf(0.0, sum / count) if count > 0 else -INF
+
+
+## Та же сетка и диагонали, что у RegionStream.water_arrays.
+func water_at(x: float, z: float) -> float:
+	var i := floori(x / GameConfig.TILE)
+	var j := floori(z / GameConfig.TILE)
+	var known := _region_at(i, j)
+	if known.is_empty(): return -INF
+	var f: Dictionary = known[0]
+	var k: int = known[1]
+	if f.river[k] == 0 and f.lake[k] == 0: return -INF
+	var size := WorldData.REGION_SIZE
+	var key := Vector2i(floori(float(i) / size), floori(float(j) / size))
+	var rect: Rect2i = get_ledger().regions[key].rect
+	var cx := i - rect.position.x
+	var cy := j - rect.position.y
+	var a := water_corner(f, rect.size.x, rect.size.y, cx, cy)
+	var b := water_corner(f, rect.size.x, rect.size.y, cx + 1, cy)
+	var c := water_corner(f, rect.size.x, rect.size.y, cx, cy + 1)
+	var d := water_corner(f, rect.size.x, rect.size.y, cx + 1, cy + 1)
+	var tx := x / GameConfig.TILE - i
+	var tz := z / GameConfig.TILE - j
+	return a + (b - a) * tx + (c - a) * tz if tx + tz <= 1.0 else d + (c - d) * (1.0 - tx) + (b - d) * (1.0 - tz)
 
 
 ## Сведения о клетке за краем карты в том же виде, что WorldData.tile_info, или {}, если куска нет

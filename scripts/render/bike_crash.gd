@@ -321,6 +321,10 @@ func _build_ragdoll() -> void:
 
 func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	var destination := _recovery_spot(b, w, heights)
+	if destination.is_empty() and t >= LIE_MAX:
+		var spawn := PlayerState.spawn(w, heights)
+		if spawn != null:
+			destination = {position = Vector3(spawn.x, spawn.feet, spawn.z), heading = b.heading}
 	if destination.is_empty():
 		_recover_retry = t + 0.25
 		return

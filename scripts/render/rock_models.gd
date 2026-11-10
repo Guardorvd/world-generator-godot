@@ -154,7 +154,7 @@ static func _snapshot_surface(f: Dictionary, hv: PackedFloat32Array, width: int,
 			corners[c] = hv[cj * width + ci]
 			if plan_water.size() == hv.size(): level = maxf(level, plan_water[cj * width + ci])
 		else:
-			corners[c] = Heightfield.outer_meters(raw[k])
+			corners[c] = Heightfield.outer_meters(raw[k], not water.is_empty() and is_finite(water[k]) and water[k] > 0.0)
 			if not water.is_empty(): level = maxf(level, water[k] * GameConfig.HS)
 	var tx := gx - i
 	var tz := gz - j
@@ -221,7 +221,7 @@ const MASSIF_SPEC := [
 	{tilt = 0.95, r = 7.2, even = 4.5, core = Vector3.ZERO, core_r = 3.0,
 		foot = [Vector2(-5.5, 0.0), Vector2(5.5, 0.0), Vector2(0.0, -4.6), Vector2(0.0, 4.6), Vector2(-3.9, -3.3), Vector2(3.9, -3.3), Vector2(-3.9, 3.3), Vector2(3.9, 3.3)]},
 ]
-const MASSIF_REACH := 19.0 # 10,7 × 1,44 × 1,2, округлено вверх
+const MASSIF_REACH := 20.0 # 10,7 × 1,5 × 1,2, округлено вверх
 ## Строятся один раз при загрузке класса: опору и коллизию читают фоновые потоки.
 static var _massif_parts: Array = _all_massif_parts()
 

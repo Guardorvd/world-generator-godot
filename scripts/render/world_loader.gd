@@ -106,6 +106,9 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	var map_times := {}
 	var texture_times := {}
 	var forest_task := -1
+	# Общая неизменяемая маска готова до запуска читателей поверхности и подстилки.
+	if view.is_empty() or not r.surface_hit:
+		r.world.generation.surface_rock = RockRelief.field_of(r.world)
 	if not view.is_empty():
 		r.forest_surface = view.forest
 	else:

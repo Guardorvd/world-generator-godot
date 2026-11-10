@@ -385,12 +385,15 @@ static func _old_places(source: WorldData, bounds: Rect2i) -> PackedByteArray:
 		var steps := maxi(1, ceili(a.distance_to(b)))
 		for k in steps + 1: mark.call(lerpf(a.x, b.x, float(k) / steps), lerpf(a.y, b.y, float(k) / steps), 2.0)
 	# Растительность плана уже стоит: подход идёт только по свободной земле (13.9).
-	var part := bounds.intersection(Rect2i(0, 0, source.W, source.H))
+	var part := bounds.grow(ceili(RockModels.MASSIF_REACH / GameConfig.TILE)).intersection(Rect2i(0, 0, source.W, source.H))
 	if part.has_area() and source.chunks.size() == source.CW * source.CH and source.CW > 0:
 		for cy in range(part.position.y / source.CS, (part.end.y - 1) / source.CS + 1):
 			for cx in range(part.position.x / source.CS, (part.end.x - 1) / source.CS + 1):
 				for o: int in source.chunks[cy * source.CW + cx]:
-					mark.call(source.obj_x[o], source.obj_y[o], 1.0)
+					var radius := 1.0
+					if source.obj_k[o] == Biomes.T_ROCK and RockModels.is_massif(source.obj_v[o]):
+						radius = RockModels.MASSIF_SPEC[RockModels.massif_form(source.obj_v[o])].r * source.obj_s[o] * 1.2 / GameConfig.TILE
+					mark.call(source.obj_x[o], source.obj_y[o], radius)
 	return blocked
 
 

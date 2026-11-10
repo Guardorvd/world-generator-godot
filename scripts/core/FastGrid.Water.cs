@@ -22,7 +22,7 @@ public partial class FastGrid
 		for (int i = 0; i < levels.Length; i++)
 		{
 			if (ocean[i] != 0) { levels[i] = 0; continue; }
-			if (_lake[i] != 0) { levels[i] = (float)(_filled[i] * heightScale); continue; }
+			if (_lake[i] != 0) { levels[i] = (float)(_filled[i] * heightScale - _lakeDrop); continue; }
 			double level = double.NegativeInfinity;
 			if (riverCells[i] != 0)
 			{

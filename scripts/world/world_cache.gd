@@ -27,9 +27,9 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 14 # dry depressions stay above the ocean plane
+const SCHEMA_GEO_VERSION := 15 # one sea-level rule and consistent lake water levels
 const SCHEMA_TRAILS_VERSION := 19 # preserve finished trail junctions and stitch metre patches to the coarse mesh
-const SCHEMA_NATURE_VERSION := 11 # seated rock massifs and downhill talus
+const SCHEMA_NATURE_VERSION := 12 # accepted massifs survive object spacing
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

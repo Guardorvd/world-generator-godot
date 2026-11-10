@@ -753,7 +753,7 @@ func _reserve_details(lead: Vector2) -> void:
 ## триангуляцией, что у меша OuterTerrain (клетки карты у края — из Heightfield.hv, остальные — из куска).
 ## Карта OuterLand.chunks здесь не читается: она главного потока.
 func _build_outer(chunk: Vector2i) -> Dictionary:
-	var f := OuterLand.vegetation(world, chunk)
+	var f := OuterLand.vegetation(world, chunk, heights)
 	return _build_outer_snapshot(chunk, f)
 
 
@@ -793,7 +793,9 @@ func _build_outer_snapshot(chunk: Vector2i, f: Dictionary) -> Dictionary:
 			if ci >= 0 and cj >= 0 and ci < W and cj < H:
 				corner[c] = hv[cj * W + ci]
 			else:
-				corner[c] = Heightfield.outer_meters(fh[(cj - hy0) * side + ci - hx0])
+				var at := (cj - hy0) * side + ci - hx0
+				var water: PackedFloat32Array = f.get("water", PackedFloat32Array())
+				corner[c] = Heightfield.outer_meters(fh[at], not water.is_empty() and is_finite(water[at]) and water[at] > 0.0)
 		var tx := gx - i
 		var tz := gz - j
 		var ground: float
@@ -899,19 +901,22 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			var variants := RockModels.VARIANTS if kind == Biomes.T_ROCK else ForestModels.VARIANTS
 			var variant := mini(variants - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * variants))
 			model += variant * ForestModels.MODEL_STRIDE
-		if not groups.has(model):
-			groups[model] = {ids = [], ground = [], max_scale = 0.0}
-		groups[model].ids.append(o)
-		groups[model].ground.append(ground)
+		var group_key := Vector2i(model, int(kind == Biomes.T_ROCK and not outcrop and items.s[o] < 0.42))
+		if not groups.has(group_key):
+			groups[group_key] = {ids = [], ground = [], max_scale = 0.0}
+		groups[group_key].ids.append(o)
+		groups[group_key].ground.append(ground)
 		if kind == Biomes.T_ROCK:
-			groups[model].max_scale = maxf(groups[model].max_scale, items.s[o])
+			groups[group_key].max_scale = maxf(groups[group_key].max_scale, items.s[o])
 	var entries: Array = []
-	for kind: int in groups:
+	for group_key: Vector2i in groups:
+		var kind := group_key.x
 		var rock := kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK
 		var def: Dictionary = _defs[kind]
-		var group: Dictionary = groups[kind]
+		var group: Dictionary = groups[group_key]
 		var count: int = group.ids.size()
 		var entry := {kind = kind, count = count, bounds = AABB()}
+		if group_key.y != 0: entry.key_kind = kind + FAR_KEY * 2
 		entry.small_rocks = rock and group.max_scale < 0.42
 		if def.has("trunk"):
 			entry.tbuf = _buffer(count, 12)

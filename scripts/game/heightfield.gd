@@ -95,7 +95,7 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	hv_raw.resize(N)
 	for i in N:
 		var h := w.h[i]
-		if w.ocean[i] == 0 and w.lake[i] == 0:
+		if w.ocean[i] == 0 and w.lake[i] == 0 and w.river[i] == 0:
 			h = maxf(0.0, h)
 		hv_raw[i] = (maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5) if w.ocean[i] != 0 else h * HS
 		hv[i] = hv_raw[i]
@@ -124,7 +124,8 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 				# Сдвиг треугольника сохраняет уже заданный поперечный профиль;
 				# выравнивание всех вершин в одну отметку стирало отмели.
 				for k: int in tri:
-					hv[k] -= cut
+					if w.ocean[k] == 0 and w.lake[k] == 0:
+						hv[k] -= cut
 	path_timings.bed_cut_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
 	_fit_river_banks()
@@ -167,7 +168,7 @@ func _river_surface_native(fast: Object) -> void:
 			left_z.append(edge.z)
 	starts.append(xs.size())
 	var out: Dictionary = fast.RiverSurface(w.W, w.H, TILE, HS, GameConfig.OCEAN_DEPTH, GameConfig.LAKE_DROP, w.h, w.ocean, w.lake,
-		w.filled, starts, xs, zs, ws, ys, depths, bends, left_x, left_z)
+		w.filled, starts, xs, zs, ws, ys, depths, bends, left_x, left_z, w.river)
 	hv_raw = out.hv_raw
 	hv = out.hv
 	var left: PackedFloat32Array = out.left
@@ -262,7 +263,7 @@ func complete_water() -> void:
 		if w.ocean[i] != 0:
 			water_level[i] = 0.0
 		elif w.lake[i] != 0:
-			water_level[i] = w.filled[i] * HS
+			water_level[i] = w.filled[i] * HS - GameConfig.LAKE_DROP
 		elif rc[i] != 0:
 			# Для коридора A* и закрепления берегов — верхняя оценка по ленте.
 			# В точке depth_at проверяет её фактические треугольники.
@@ -987,13 +988,13 @@ func base_ground_at(x: float, z: float, raw: bool = false) -> float:
 func _cell_height(arr: PackedFloat32Array, i: int, j: int) -> float:
 	if i >= 0 and j >= 0 and i < world.W and j < world.H:
 		return arr[j * world.W + i]
-	return outer_meters(world.outer.height(i, j))
+	return world.outer.ground(i, j)
 
 
 ## Высота клетки за краем карты (OuterLand, единицы WorldData.h) в метрах: ниже 0 — дно моря, как у
 ## клеток океана на карте. Копия развёрнута в OuterTerrain._build
-static func outer_meters(h: float) -> float:
-	return h * HS if h >= 0.0 else maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5
+static func outer_meters(h: float, freshwater := false) -> float:
+	return h * HS if h >= 0.0 or freshwater else maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5
 
 
 ## Известна ли земля в точке (x, z): на карте всегда, за краем — если OuterLand уже посчитал клетки вокруг.
@@ -1025,7 +1026,7 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 		if world.outer == null:
 			return 0.0
 		# 13.9: реки и озёра закреплённых областей; в остальном за краем только море
-		var level := world.outer.water(tx, tz)
+		var level := world.outer.water_at(x, z)
 		if level > -INF:
 			return maxf(0.0, level * HS - ground_at(x, z))
 		if world.outer.height(tx, tz) >= 0.0:

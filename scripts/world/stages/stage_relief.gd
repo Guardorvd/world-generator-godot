@@ -319,10 +319,11 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	# цельный, у острых остаются скалистые детали. Возвышенности по-прежнему теряют большую их часть
 	var fine := (1.0 - UPLAND_SMOOTH * up) * (0.35 + 0.65 * sharp)
 	var r := 0.0
+	var last_crest := _crest(ridge, X, Y, DIR_C[2], DIR_S[2], asym, fine, 1.0 - 0.55 * up, structure) if k == 2 else 0.0
 	if f < 1.0:
-		r += _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up, structure) * (1.0 - f)
+		r += (last_crest if k == 2 else _crest(ridge, X, Y, DIR_C[k], DIR_S[k], asym, fine, 1.0 - 0.55 * up, structure)) * (1.0 - f)
 	if f > 0.0:
-		r += _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure) * f
+		r += (last_crest if k == 2 else _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure)) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
 	var pk := hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2)

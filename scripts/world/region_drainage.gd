@@ -20,7 +20,7 @@ static func resolve(r: Dictionary, input: Dictionary) -> Dictionary:
 	for y in range(rect.position.y, rect.end.y):
 		for x in range(rect.position.x, rect.end.x):
 			var c := Vector2i(x, y)
-			if r.fields.fixed[idx(r, c)] != 0: continue
+			if r.fields.fixed[idx(r, c)] != 0 and r.fields.ocean[idx(r, c)] == 0: continue
 			var raw := height(r, c)
 			if raw - input.e > HEAD_CUT: continue
 			var h := minf(raw, input.e)
@@ -32,7 +32,7 @@ static func resolve(r: Dictionary, input: Dictionary) -> Dictionary:
 				for d: Vector2i in DIRS:
 					var next := c + d
 					if rect.has_point(next) or not sample.has_point(next): continue
-					if d.x * input.dx + d.y * input.dy < 0 or r.fields.fixed[idx(r, next)] != 0: continue
+					if d.x * input.dx + d.y * input.dy < 0 or (r.fields.fixed[idx(r, next)] != 0 and r.fields.ocean[idx(r, next)] == 0): continue
 					var beyond := height(r, next)
 					if beyond - input.e > HEAD_CUT: continue
 					var level := maxf(h, minf(beyond, input.e))
@@ -54,7 +54,7 @@ static func resolve(r: Dictionary, input: Dictionary) -> Dictionary:
 		settled[c] = true
 		for d: Vector2i in DIRS:
 			var next := c + d
-			if not rect.has_point(next) or settled.has(next) or r.fields.fixed[idx(r, next)] != 0: continue
+			if not rect.has_point(next) or settled.has(next) or (r.fields.fixed[idx(r, next)] != 0 and r.fields.ocean[idx(r, next)] == 0): continue
 			var raw := height(r, next)
 			if raw - input.e > HEAD_CUT: continue
 			var h := minf(raw, input.e)

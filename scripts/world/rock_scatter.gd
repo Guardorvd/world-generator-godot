@@ -9,7 +9,7 @@ const MAX_CHANCE := 0.48
 const OUTCROP_CHANCE := 0.12
 ## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
 const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
-const FIELD_HALO := 7 # furthest uphill source read and outcrop seating; RockMassif sites need MAX_R + SNAP + 1
+const FIELD_HALO := 15 # соседний источник массива, его полный круг просвета и выборки посадки
 const TALUS_REACH := [2, 4, 6]
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 

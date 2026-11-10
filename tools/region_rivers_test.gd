@@ -57,6 +57,12 @@ func _init() -> void:
 	var b := Regions.prepare_rivers(neighbor)
 	check(b.rivers.size() == 1 and b.outlets.is_empty() and b.rivers[0].termination == "ocean", "сосед доводит реку до моря")
 	check(a.rivers[0].points.back() == b.rivers[0].points[0] and descending(b.rivers[0].points), "стык двух областей совпадает точно")
+	var fixed_sea := neighbor.duplicate(true)
+	for i in fixed_sea.fields.ocean.size():
+		if fixed_sea.fields.ocean[i] != 0: fixed_sea.fields.fixed[i] = 1
+	var mouth := Regions.prepare_rivers(fixed_sea)
+	check(mouth.unresolved.is_empty() and mouth.rivers.size() == 1 and mouth.rivers[0].termination == "ocean",
+		"закреплённый океан принимает устье без изменения готового берега")
 	check(var_to_bytes(r) == before and var_to_bytes(a) == var_to_bytes(Regions.prepare_rivers(r)), "исходные данные неизменны, повтор детерминирован")
 	var blocked := fixture()
 	for y in range(-2, 7): blocked.fields.h[index(blocked, 4, y)] = 0.8

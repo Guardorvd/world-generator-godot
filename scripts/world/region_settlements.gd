@@ -221,8 +221,8 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 	w.river = surface.river.duplicate()
 	for i in w.N:
 		w.river[i] = maxi(w.river[i], region.fields.river[i])
-		if w.lake[i] != 0: w.filled[i] = region.fields.water_level[i]
-		if surface.river[i] != 0: w.filled[i] = surface.water_level[i]
+		if w.lake[i] != 0: w.filled[i] = region.fields.water_level[i] + GameConfig.LAKE_DROP / GameConfig.HS
+		if surface.river[i] != 0: w.filled[i] = surface.water_level[i] + GameConfig.LAKE_DROP / GameConfig.HS
 	w.dist_ocean = region.fields.dist.duplicate()
 	w.path_mask.resize(w.N)
 	var f: Dictionary = region.fields

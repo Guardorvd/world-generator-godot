@@ -269,6 +269,23 @@ func run() -> void:
 		quit(1)
 		return
 	var h: Heightfield = prepared.heights
+	var probe := BikeRide.new()
+	probe.y = 20.0
+	probe.ground_f = 0.2
+	probe.ground_r = 0.0
+	probe.lift_f = 0.2
+	probe._auto_hop = 0.1
+	var visual := probe.y + (probe.ground_f + probe.ground_r) * 0.5
+	probe._takeoff_hop()
+	check(is_equal_approx(probe.y + (probe.ground_f + probe.ground_r) * 0.5, visual)
+		and probe._auto_hop < 0.0, "отрыв сохраняет высоту модели и завершает автохоп")
+	probe._auto_hop = 0.02
+	probe._hop_used = false
+	probe._hop_buf = 0.1
+	probe._coyote = 0.1
+	probe._hop_wait = 0.0
+	probe._step_height(0.0, false, 1.0 / 120.0, h)
+	check(probe.vy > 3.0 and probe._hop_used, "подготовленный перед кромкой автохоп использует coyote")
 	var technical := TrailTechnical.build(h, kit)
 	h.obstacles.set_trail(technical.collide, technical.bumps)
 	var profile := PackedStringArray()

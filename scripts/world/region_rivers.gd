@@ -87,7 +87,7 @@ static func _trace_one(region: Dictionary, input: Dictionary) -> Dictionary:
 			or not is_finite(input.acc) or input.acc <= 0.0 or not is_finite(input.w) or input.w <= 0.0:
 		return {reason = "invalid_input"}
 	var fields: Dictionary = region.fields
-	if fields.fixed[_index(region, start)] != 0 or _level(region, start) - input.e > Drainage.MAX_CUT:
+	if (fields.fixed[_index(region, start)] != 0 and fields.ocean[_index(region, start)] == 0) or _level(region, start) - input.e > Drainage.MAX_CUT:
 		return {reason = "blocked_entry"}
 	if _level(region, start) > input.e:
 		return Drainage.resolve(region, input)
@@ -113,7 +113,13 @@ static func _trace_one(region: Dictionary, input: Dictionary) -> Dictionary:
 			var next := cell + direction
 			if not sample.has_point(next): continue
 			var idx := _index(region, next)
-			if fields.fixed[idx] != 0 or _level(region, next) > level: continue
+			if (fields.fixed[idx] != 0 and fields.ocean[idx] == 0) or _level(region, next) > level: continue
+			if fields.ocean[idx] != 0:
+				parent[next] = cell
+				end = next
+				sea = true
+				found = true
+				break
 			if not rect.has_point(next):
 				# Не возвращать реку через сторону, откуда она только что пришла.
 				if direction.x * input.dx + direction.y * input.dy < 0: continue

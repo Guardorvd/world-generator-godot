@@ -156,6 +156,14 @@ func _upload() -> void:
 	if not active and _idle:
 		return
 	_idle = not active
-	for material in _materials:
+	var materials := _materials.duplicate()
+	if is_inside_tree():
+		for node in get_tree().get_nodes_in_group("regional_water_effects"):
+			if not node is MeshInstance3D or not get_parent().is_ancestor_of(node): continue
+			var mat := node.material_override as ShaderMaterial
+			if mat == null and node.mesh != null and node.mesh.get_surface_count() > 0:
+				mat = node.mesh.surface_get_material(0) as ShaderMaterial
+			if mat != null and not materials.has(mat): materials.append(mat)
+	for material in materials:
 		material.set_shader_parameter("disturbances", rings)
 		material.set_shader_parameter("disturbance_levels", levels)

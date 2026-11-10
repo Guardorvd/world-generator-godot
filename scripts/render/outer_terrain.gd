@@ -286,8 +286,9 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 			else:
 				# Heightfield.outer_meters, развёрнута на месте (тот же расчёт, что в ней)
 				var h := fh[k]
-				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
+				var sea := bi == Biomes.SHALLOW or bi == Biomes.OCEAN or bi == Biomes.DEEP
+				hs[k] = Heightfield.outer_meters(h, not sea)
 			var elevation: float = f.elev[k]
 			if Biomes.LIST[bi].get("water", false):
 				col[k] = Color8(112, 108, 91)
@@ -295,7 +296,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 				col[k] = _palette[bi]
 			else:
 				col[k] = _palette[bi].lerp(rock_tint, 0.45 * smoothstep(0.3, 0.6, elevation))
-			col[k].a=float(f.rock[k])/255.0 if f.has("rock") else 0.0
+			col[k].a = float(f.rock[k]) / 255.0 if f.has("rock") and not Biomes.LIST[bi].get("water", false) and f.river[k] == 0 else 0.0
 	var V := C + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()

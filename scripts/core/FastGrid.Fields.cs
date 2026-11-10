@@ -54,11 +54,11 @@ public partial class FastGrid
 	}
 
 	/// <summary>Копия высот поиска в StageTrails.run: 0 у моря, уровень озера (filled × scale), иначе hv / tile.</summary>
-	public float[] RouteHeights(byte[] ocean, byte[] lake, float[] filled, float[] hv, double scale, double tile)
+	public float[] RouteHeights(byte[] ocean, byte[] lake, float[] filled, float[] hv, double scale, double tile, double lakeDrop = 0.1)
 	{
 		var heights = new float[hv.Length];
 		for (int i = 0; i < hv.Length; i++)
-			heights[i] = ocean[i] != 0 ? 0f : (float)(lake[i] != 0 ? filled[i] * scale : hv[i] / tile);
+			heights[i] = ocean[i] != 0 ? 0f : (float)(lake[i] != 0 ? filled[i] * scale - lakeDrop / tile : hv[i] / tile);
 		return heights;
 	}
 

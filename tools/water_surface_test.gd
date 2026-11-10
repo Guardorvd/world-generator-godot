@@ -20,6 +20,11 @@ func _init() -> void:
 	w.lake = PackedByteArray([1, 0, 0, 0])
 	w.river = PackedByteArray([0, 0, 0, 0])
 	var h := Heightfield.new(w, false)
+	check(absf(h.water_level[0] - h.lake_level(2, 2)) < 0.0001, "Растр уровня озера совпадает с зеркалом")
+	Heightfield.allow_fast_water_levels = false
+	var reference := Heightfield.new(w, false)
+	Heightfield.allow_fast_water_levels = true
+	check(reference.water_level == h.water_level, "Уровни воды C# и GDScript совпадают")
 	var mesh := WaterBuilder._lake_arrays(w, h)
 	var p: PackedVector3Array = mesh[Mesh.ARRAY_VERTEX]
 	var indices: PackedInt32Array = mesh[Mesh.ARRAY_INDEX]
@@ -58,5 +63,44 @@ func _init() -> void:
 	conditions = mesh[Mesh.ARRAY_COLOR]
 	for state in conditions:
 		check(state.b == 1.0, "Устье использует единую поверхность озера")
+	var sea := WorldData.new()
+	sea.W = 3
+	sea.H = 3
+	sea.N = 9
+	sea.h = PackedFloat32Array([1, 1, 1, 1, -0.2, 1, 1, 1, 1])
+	StageOcean.run(sea)
+	check(sea.ocean[4] == 1, "Замкнутая впадина под общей плоскостью моря имеет морскую маску")
+	var fields := {h = PackedFloat32Array([-0.001, -0.001, -0.001, -0.001]),
+		river = PackedByteArray([1, 1, 1, 1]), lake = PackedByteArray([0, 0, 0, 0]),
+		ocean = PackedByteArray([0, 0, 0, 0]), water_level = PackedFloat32Array([0.01, 0.02, 0.015, 0.025])}
+	var rect := Rect2i(256, 0, 2, 2)
+	var region := {rect = rect, fields = fields}
+	var outer := OuterLand.new()
+	outer.set_ledger({regions = {Vector2i(1, 0): region}})
+	var arrays := RegionStream.water_arrays(region)
+	var points: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	for at in range(0, points.size(), 3):
+		var center := (points[at] + points[at + 1] + points[at + 2]) / 3.0
+		check(absf(outer.water_at(center.x, center.z) * GameConfig.HS - center.y) < 0.0001,
+			"Физика региональной воды совпадает с треугольником меша")
+	check(is_equal_approx(outer.ground(256, 0), -0.001 * GameConfig.HS),
+		"Отрицательное речное дно сохраняет масштаб суши")
+	var named := WorldData.new()
+	named.W = 20
+	named.H = 20
+	named.N = 400
+	named.scale = 1.0
+	named.lake.resize(named.N)
+	named.ocean.resize(named.N)
+	named.river.resize(named.N)
+	named.filled.resize(named.N)
+	named.filled.fill(0.1)
+	for y in range(1, 19):
+		for x in range(1, 19):
+			if (x <= 9 and y <= 9) or (x >= 10 and y >= 10):
+				named.lake[y * named.W + x] = 1
+	StageLakes.run(named)
+	check(named.lakes.size() == 1 and named.lake_id[21] == named.lake_id[210],
+		"Диагональная перемычка сохраняет единое именованное озеро площадью 162 клетки")
 	print("Ошибок поверхности воды: %d" % fails)
 	quit(1 if fails else 0)

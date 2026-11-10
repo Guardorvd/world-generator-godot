@@ -660,6 +660,7 @@ static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, e
 	var water := WaterBuilder.flat_mesh(water_arrays(entry), WaterBuilder._material(), "Water")
 	if water != null:
 		water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		water.add_to_group("regional_water_effects")
 		node.add_child(water)
 	var ribbons: Array = road_arrays(world, func(x: float, z: float) -> float: return heights.ground_at(x, z), decor.trails)
 	if not ribbons.is_empty():
@@ -765,15 +766,7 @@ static func water_arrays(region: Dictionary) -> Array:
 			for c in 4:
 				var cx := x + (c & 1)
 				var cy := y + (c >> 1)
-				var sum := 0.0
-				var n := 0
-				for d in 4:
-					var nx := cx - 1 + (d & 1)
-					var ny := cy - 1 + (d >> 1)
-					if nx >= 0 and ny >= 0 and nx < W and ny < H and wet[ny * W + nx] != 0:
-						sum += level[ny * W + nx]
-						n += 1
-				corner[c] = Vector3((rect.position.x + cx) * TILE, maxf(0.0, sum / n) * HS, (rect.position.y + cy) * TILE)
+				corner[c] = Vector3((rect.position.x + cx) * TILE, OuterLand.water_corner(f, W, H, cx, cy) * HS, (rect.position.y + cy) * TILE)
 			pos.append_array([corner[0], corner[1], corner[2], corner[1], corner[3], corner[2]])
 	return WaterBuilder._arrays(pos)
 
@@ -814,7 +807,8 @@ static func _cell_m(w: WorldData, heights: Heightfield, regions: Dictionary, i: 
 	if r == null or not r.has("fields"):
 		return heights.hv[clampi(j, 0, w.H - 1) * w.W + clampi(i, 0, w.W - 1)]
 	var rect: Rect2i = r.rect
-	return Heightfield.outer_meters(r.fields.h[(j - rect.position.y) * rect.size.x + i - rect.position.x])
+	var k := (j - rect.position.y) * rect.size.x + i - rect.position.x
+	return Heightfield.outer_meters(r.fields.h[k], r.fields.ocean[k] == 0)
 
 
 ## 14.4: лента дорог. Повороты сглажены (два прохода Чайкина), точки каждые ROAD_STEP м, поперёк пять

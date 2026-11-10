@@ -279,10 +279,11 @@ public partial class FastGrid
 		// С 3.1 мелкие детали сильнее у острых массивов; главный гребень шире и цельнее.
 		double fine = (1.0 - UplandSmooth * up) * (0.35 + 0.65 * sharp);
 		double r = 0.0;
+		double lastCrest = k == 2 ? Crest(ridge, X, Y, DirC[2], DirS[2], asym, fine, 1.0 - 0.55 * up, structure) : 0.0;
 		if (f < 1.0)
-			r += Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, structure) * (1.0 - f);
+			r += (k == 2 ? lastCrest : Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, structure)) * (1.0 - f);
 		if (f > 0.0)
-			r += Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure) * f;
+			r += (k == 2 ? lastCrest : Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure)) * f;
 		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
 		r = Math.Min(r * (1.0 + (0.35 + 0.70 * structure) * pk * r), PeakCap);
 		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.

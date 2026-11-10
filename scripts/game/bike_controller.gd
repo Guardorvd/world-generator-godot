@@ -64,3 +64,7 @@ func begin_crash(view: BikeView, bike: BikeRide, crash: BikeCrash, heights: Heig
 	bike.crashed = false
 	crash.start(view, bike, bike.crash_velocity, heights)
 	bike.speed = 0.0
+	bike.riding = false
+	bike.slip = 0.0
+	bike.braking = 0.0
+	bike.brakes.reset()

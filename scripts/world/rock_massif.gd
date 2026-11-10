@@ -56,7 +56,7 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 	var water: PackedByteArray = StageVegetation._TABLES.water
 	var rows := elev.size() / stride
 	var hs := GameConfig.HS
-	var reach := MAX_R + SNAP
+	var reach := maxf(MAX_R + SNAP, TALUS_RANGE + 1.0)
 	for ly in range(floori((y0 - reach) / LATTICE), floori((y1 + reach) / LATTICE) + 1):
 		for lx in range(floori((x0 - reach) / LATTICE), floori((x1 + reach) / LATTICE) + 1):
 			var sx := (lx + 0.15 + 0.7 * WGRandom.hash2(lx, ly, seed_num ^ LAYER)) * LATTICE
@@ -146,6 +146,8 @@ static func sites(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Dictiona
 			# Пятно не задевает пути, поселения, реки и воду (маски проверяются целиком по кругу).
 			var blocked := ""
 			var clearance := radius + 0.6
+			if sx - clearance < ox or sy - clearance < oy or sx + clearance >= ox + stride or sy + clearance >= oy + rows:
+				continue
 			var clearance_sq := clearance * clearance
 			for yy in range(floori(sy - clearance), floori(sy + clearance) + 1):
 				for xx in range(floori(sx - clearance), floori(sx + clearance) + 1):
@@ -183,6 +185,23 @@ static func seated(candidates: PackedFloat32Array, surface: Heightfield) -> Pack
 		var z := candidates[at + 1] * tile
 		var v := int(candidates[at + 2])
 		var pose := RockModels.seat(surface, x, z, candidates[at + 3] * 1.2, v)
+		if pose.x == INF: continue
+		var item := candidates.slice(at, at + STRIDE)
+		var down := Vector2(pose.y, pose.w)
+		if down.length_squared() > 0.004 * 0.004:
+			down = down.normalized()
+			item[6] = down.x
+			item[7] = down.y
+		out.append_array(item)
+	return out
+
+
+## Тот же отбор, что у внешнего рендера, до расчёта просветов и осыпи.
+static func seated_snapshot(candidates: PackedFloat32Array, snapshot: Dictionary, hv: PackedFloat32Array, width: int, height: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	for at in range(0, candidates.size(), STRIDE):
+		var pose := RockModels.seat_snapshot_any(snapshot, hv, width, height, candidates[at] * GameConfig.TILE,
+			candidates[at + 1] * GameConfig.TILE, candidates[at + 3] * 1.2, int(candidates[at + 2]))
 		if pose.x == INF: continue
 		var item := candidates.slice(at, at + STRIDE)
 		var down := Vector2(pose.y, pose.w)

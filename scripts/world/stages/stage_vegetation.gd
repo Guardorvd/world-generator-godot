@@ -557,6 +557,7 @@ class ObjStore:
 			_list = chunk_lists[floori(float(y0) / w.CS) * w.CW + floori(float(x0) / w.CS)]
 
 	func add(ox: float, oy: float, kind: int, variant: int, sc: float) -> void:
+		var massif := kind == Biomes.T_ROCK and RockModels.is_massif(variant)
 		var radius: float = _crown[kind] * sc
 		var cx := floori(ox)
 		var cy := floori(oy)
@@ -570,14 +571,16 @@ class ObjStore:
 		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
 		# Максимальный масштаб дерева < 1.85; поиск ±3 клетки покрывает любую пару.
 		var cw := _x1 - _x0
-		for yy in range(maxi(_y0, cy - 3), mini(_y1, cy + 4)):
-			for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
-				var o := heads[(yy - _y0) * cw + xx - _x0]
-				while o != -1:
-					var gap: float = 0.18 + 0.55 * (radius + _crown[k[o]] * s[o])
-					if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
-						return
-					o = next[o]
+		# Массив уже принят по опоре и полному просвету. Его тело исключило деревья до этого прохода.
+		if not massif:
+			for yy in range(maxi(_y0, cy - 3), mini(_y1, cy + 4)):
+				for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
+					var o := heads[(yy - _y0) * cw + xx - _x0]
+					while o != -1:
+						var gap: float = 0.18 + 0.55 * (radius + _crown[k[o]] * s[o])
+						if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
+							return
+						o = next[o]
 		var cell := (cy - _y0) * cw + cx - _x0
 		next.append(heads[cell])
 		heads[cell] = x.size()

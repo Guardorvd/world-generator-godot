@@ -12,14 +12,14 @@ public partial class FastGrid
 	/// <summary>Возвращает {hv_raw, hv, left, right}: left/right — по три float (x, y, z) на точку ленты, в порядке столбцов.</summary>
 	public Godot.Collections.Dictionary RiverSurface(int width, int height, double tile, double hs, double oceanDepth, double lakeDrop,
 		float[] h, byte[] ocean, byte[] lake, float[] filled, int[] ribbonStarts, double[] px, double[] pz, double[] pw, double[] py,
-		double[] pdepth, double[] pbend, double[] leftX, double[] leftZ)
+		double[] pdepth, double[] pbend, double[] leftX, double[] leftZ, byte[] river)
 	{
 		int n = width * height;
 		var raw = new float[n];
 		var hv = new float[n];
 		for (int i = 0; i < n; i++)
 		{
-			double v = ocean[i] == 0 && lake[i] == 0 ? Math.Max(0.0, h[i]) : h[i];
+			double v = ocean[i] == 0 && lake[i] == 0 && river[i] == 0 ? Math.Max(0.0, h[i]) : h[i];
 			raw[i] = ocean[i] != 0 ? (float)(Math.Max(-oceanDepth, v * oceanDepth) - 0.5) : (float)(v * hs);
 			hv[i] = raw[i];
 		}
@@ -37,9 +37,9 @@ public partial class FastGrid
 			double cut = RoadGround(hv, width, height, tile, px[k], pz[k]) - bed;
 			if (cut > 0.0)
 			{
-				hv[a] = (float)(hv[a] - cut);
-				hv[b] = (float)(hv[b] - cut);
-				hv[c] = (float)(hv[c] - cut);
+				if (ocean[a] == 0 && lake[a] == 0) hv[a] = (float)(hv[a] - cut);
+				if (ocean[b] == 0 && lake[b] == 0) hv[b] = (float)(hv[b] - cut);
+				if (ocean[c] == 0 && lake[c] == 0) hv[c] = (float)(hv[c] - cut);
 			}
 		}
 		var left = new float[px.Length * 3];

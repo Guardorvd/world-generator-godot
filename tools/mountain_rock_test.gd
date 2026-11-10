@@ -28,6 +28,10 @@ func patch_scatter(f: Dictionary, rect: Rect2i, pad := -1) -> StageVegetation.Ob
 	return st
 
 func run() -> void:
+	massif_contracts()
+	if "--massif-contracts-only" in OS.get_cmdline_user_args():
+		quit(1 if failures else 0)
+		return
 	var hv := relief()
 	var f := fields(hv)
 	var old_halo_mismatches := 0
@@ -103,6 +107,38 @@ func run() -> void:
 	plants(w)
 	if "--bench" in OS.get_cmdline_user_args(): outer_cost()
 	layer.free()
+
+
+func massif_contracts() -> void:
+	var store := StageVegetation.ObjStore.new(null)
+	store.begin_chunk(0, 0, 16, 16)
+	store.add(8.9, 8.0, Biomes.T_OAK, 0, 1.8)
+	store.add(8.0, 8.0, Biomes.T_ROCK, RockModels.massif_v(RockModels.M_BLOCKS, 0, 0), 0.72)
+	check(store.x.size() == 2, "accepted massif survives a neighbouring tree's crown spacing")
+	var snapshot := {h = PackedFloat32Array(), water = PackedFloat32Array(), path = PackedByteArray(),
+		x0 = 0, y0 = 0, side = 40, world_origin = Vector2.ZERO}
+	snapshot.h.resize(1600)
+	snapshot.h.fill(0.4)
+	snapshot.water.resize(1600)
+	snapshot.water.fill(1.0) # every foot sample is submerged
+	snapshot.path.resize(1600)
+	var candidates := PackedFloat32Array([20, 20, RockModels.massif_v(RockModels.M_WALL, 0, 0), 1.0, 0, 3, 1, 0, 20, 20])
+	check(RockMassif.seated_snapshot(candidates, snapshot, PackedFloat32Array(), 0, 0).is_empty(),
+		"unseated outer massif is rejected before it can clear plants or feed talus")
+	var layer := VegetationLayer.new()
+	layer.world = WorldData.new()
+	for variant in RockModels.VARIANTS:
+		layer._defs[Biomes.T_ROCK + variant * ForestModels.MODEL_STRIDE] = {box = AABB(Vector3.ZERO, Vector3.ONE)}
+	var grouped := layer._build_entries({x = PackedFloat64Array([8, 8]), y = PackedFloat64Array([8, 8]),
+		k = PackedInt32Array([Biomes.T_ROCK, Biomes.T_ROCK]), v = PackedInt32Array([0, 0]),
+		s = PackedFloat64Array([0.1, 1.0]), ground = PackedFloat32Array([1, 1])})
+	check(grouped.entries.size() == 2 and grouped.entries[0].small_rocks != grouped.entries[1].small_rocks
+		and grouped.entries[0].get("key_kind", grouped.entries[0].kind) != grouped.entries[1].get("key_kind", grouped.entries[1].kind),
+		"small fragments retain a separate streaming group beside a large rock of the same model")
+	layer.free()
+	var ramp := PackedFloat32Array([0, 4, 8, 0, 4, 8, 0, 4, 8])
+	check(TerrainBuilder._normal(ramp, 3, 3, 0, 1).is_equal_approx(TerrainBuilder._normal(ramp, 3, 3, 1, 1)),
+		"edge normal uses the actual one-sided sample distance")
 	print("MOUNTAIN ROCK REVIEW ", failures, " failures")
 	quit(1 if failures else 0)
 

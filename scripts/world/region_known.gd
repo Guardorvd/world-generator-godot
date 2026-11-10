@@ -22,6 +22,10 @@ static func apply_known(fields: Dictionary, rect: Rect2i, w: WorldData, ledger: 
 				fields.ocean[dst] = w.ocean[src]
 				fields.lake[dst] = w.lake[src]
 				fields.water_level[dst] = w.filled[src]
+				if w.ocean[src] != 0:
+					fields.water_level[dst] = 0.0
+				elif w.lake[src] != 0 or river[src] != 0:
+					fields.water_level[dst] = maxf(0.0, w.filled[src] - GameConfig.LAKE_DROP / GameConfig.HS)
 				fields.river[dst] = river[src]
 				fields.biome[dst] = w.biome[src]
 				fields.dist[dst] = w.dist_ocean[src]

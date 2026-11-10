@@ -23,7 +23,7 @@ static func run(w: WorldData) -> void:
 	water_src.resize(N)
 	for i in N:
 		water_src[i] = 1 if (ocean[i] != 0 or lake[i] != 0 or river[i] != 0) else 0
-	var dist_water := Grid.distance_field(W, H, water_src)
+	var dist_water := w.dist_ocean.duplicate() if water_src == ocean and w.dist_ocean.size() == N else Grid.distance_field(W, H, water_src)
 	var elev := PackedFloat32Array()
 	elev.resize(N)
 	for i in N:

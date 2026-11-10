@@ -17,7 +17,7 @@ static func run(w: WorldData) -> void:
 	var W := w.W
 	var H := w.H
 	var lake := w.lake
-	# озёра — связные по четырём соседям куски клеток lake
+	# Та же восьмисвязность, что у котловин StageHydrology.
 	var comp := PackedInt32Array()
 	comp.resize(w.N)
 	comp.fill(-1)
@@ -35,9 +35,9 @@ static func run(w: WorldData) -> void:
 			var c := cells[head]
 			head += 1
 			var x := c % W
-			# четыре соседа без вызовов других классов: озёр в большом мире до сотни тысяч клеток
-			for n: int in [c - 1 if x > 0 else -1, c + 1 if x < W - 1 else -1, c - W, c + W]:
-				if n >= 0 and n < w.N and lake[n] != 0 and comp[n] < 0:
+			for direction in 8:
+				var n: int = c + Grid.DY[direction] * W + Grid.DX[direction]
+				if n >= 0 and n < w.N and absi(n % W - x) <= 1 and lake[n] != 0 and comp[n] < 0:
 					comp[n] = g
 					cells.append(n)
 		groups.append(cells)

@@ -19,7 +19,11 @@ static func _normal(hv: PackedFloat32Array, W: int, H: int, i: int, j: int) -> V
 	var r := hv[j * W + mini(W - 1, i + 1)]
 	var u := hv[maxi(0, j - 1) * W + i]
 	var d := hv[mini(H - 1, j + 1) * W + i]
-	return Vector3(l - r, 2.0 * TILE, u - d).normalized()
+	if i > 0 and j > 0 and i < W - 1 and j < H - 1:
+		return Vector3(l - r, 2.0 * TILE, u - d).normalized()
+	var dx := TILE if i == 0 or i == W - 1 else 2.0 * TILE
+	var dz := TILE if j == 0 or j == H - 1 else 2.0 * TILE
+	return Vector3((l - r) / dx, 1.0, (u - d) / dz).normalized()
 
 
 ## Только CPU-массивы: подготовка в фоне, загрузка на GPU — в GameWorld.start.

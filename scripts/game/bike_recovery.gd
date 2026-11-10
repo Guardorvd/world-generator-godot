@@ -17,13 +17,17 @@ static func placement(w: WorldData, h: Heightfield, at: Vector3, heading: float,
 		return {}
 	var fwd := Vector2(-sin(heading), -cos(heading))
 	var side := Vector2(cos(heading), -sin(heading))
+	var front := h.surface_at(at.x + fwd.x * BikeRide.AXLE, at.z + fwd.y * BikeRide.AXLE, floor_y)
+	var rear := h.surface_at(at.x - fwd.x * BikeRide.AXLE, at.z - fwd.y * BikeRide.AXLE, floor_y)
+	var grade := (front - rear) / (2.0 * BikeRide.AXLE)
+	if not is_finite(grade) or absf(grade) > BikeRide.CLIFF_GRADE: return {}
 	var low := floor_y
 	var high := floor_y
 	for along: float in ([-1.5, -BikeRide.AXLE, 0.0, BikeRide.AXLE, 1.5] if recovering else [-BikeRide.AXLE, 0.0, BikeRide.AXLE]):
 		for across: float in [-BikeRide.BODY_R, 0.0, BikeRide.BODY_R]:
 			var p := Vector2(at.x, at.z) + fwd * along + side * across
 			var y := h.surface_at(p.x, p.y, floor_y)
-			if not is_finite(y) or absf(y - floor_y) > MAX_GRADE * maxf(0.7, absf(along)):
+			if not is_finite(y) or absf(y - floor_y - grade * along) > MAX_GRADE * maxf(0.7, absf(along)):
 				return {}
 			if not PlayerState.is_passable(w, h, p.x, p.y, y, BikeRide.BODY_R if across == 0.0 else 0.05):
 				return {}
@@ -31,8 +35,8 @@ static func placement(w: WorldData, h: Heightfield, at: Vector3, heading: float,
 				return {}
 			if not headroom(h, p.x, p.y, y) or (recovering and h.depth_at(p.x, p.y, y) > 0.02):
 				return {}
-			low = minf(low, y)
-			high = maxf(high, y)
+			low = minf(low, y - grade * along)
+			high = maxf(high, y - grade * along)
 	if recovering and high - low > 0.65:
 		return {}
 	return {position = Vector3(at.x, floor_y, at.z), heading = heading}

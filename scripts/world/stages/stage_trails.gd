@@ -92,11 +92,11 @@ static func run(w: WorldData, step: Callable) -> void:
 	heights.resize(w.N)
 	var fast := Grid.fast_grid()
 	if fast != null:
-		heights = fast.RouteHeights(w.ocean, w.lake, w.filled, surface.hv, HEIGHT_SCALE, GameConfig.TILE) # тот же цикл на C#
+		heights = fast.RouteHeights(w.ocean, w.lake, w.filled, surface.hv, HEIGHT_SCALE, GameConfig.TILE, GameConfig.LAKE_DROP)
 	else:
 		for i in w.N:
 			# По воде ищется мост, поэтому учитывается уровень воды, а не морское дно.
-			heights[i] = (0.0 if w.ocean[i] != 0 else (w.filled[i] * HEIGHT_SCALE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
+			heights[i] = (0.0 if w.ocean[i] != 0 else ((w.filled[i] * GameConfig.HS - GameConfig.LAKE_DROP) / GameConfig.TILE if w.lake[i] != 0 else surface.hv[i] / GameConfig.TILE))
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	w.generation_profile.finder_setup_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()

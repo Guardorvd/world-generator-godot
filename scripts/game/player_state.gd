@@ -198,7 +198,7 @@ static func surface(info: Dictionary) -> int:
 ## Дома, стены и (с 7.7) крупные стволы, валуны и валежник держат тело на расстоянии r,
 ## вода и край известной земли проверяются по центру. objects_only — только твёрдые объекты, для причины удара.
 ## climb — велосипед модели двух контактов: низкие препятствия встречает колесо (ForestObstacles.hits)
-static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false, climb := 0.0) -> bool:
+static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false, climb := 0.0, above_water := false) -> bool:
 	if not objects_only and (not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z)):
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
@@ -222,7 +222,9 @@ static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, 
 		return false
 	if heights.obstacles != null and heights.obstacles.hits(x, z, feet, r, climb):
 		return false
-	return objects_only or heights.depth_at(x, z, feet) < GameConfig.FORD_DEPTH
+	if objects_only: return true
+	var depth := heights.depth_at(x, z, feet)
+	return depth < GameConfig.FORD_DEPTH or (above_water and feet > heights.ground_at(x, z) + depth)
 
 
 ## Поворот постройки поселения u (с 9.5 свой, a); у заготовок тестов без a — дом дверью к костру s
