@@ -22,6 +22,27 @@ func run() -> void:
 	for p: Dictionary in line: p.y += 1.0
 	var original := line.duplicate(true)
 	var merged := StageTrails._shared_passage(w, line, "road", h, PackedByteArray())
+	var loops: Array = []
+	for j in 81:
+		loops.append({x = 8.0 + j, y = 48.5 + 1.5 * sin(j * PI / 10.0), w = 0.9})
+	var closed := StageTrails._shared_passage(w, loops, "road", h, PackedByteArray())
+	var deviation := 0.0
+	for p: Dictionary in closed: deviation = maxf(deviation, absf(p.y - 48.5))
+	check(deviation < 0.001, "repeated divergence and rejoining uses one network subpath, without grassy islands")
+	var mixed := StageTrails._shared_passage(w, loops, "trail", h, PackedByteArray())
+	check(mixed == closed, "road and trail travelling through the same corridor share the same geometry")
+	var stable := StageTrails._shared_passage(w, closed, "road", h, PackedByteArray())
+	check(stable == closed, "normalising an already shared edge is idempotent")
+	var rival: Dictionary = w.trails[0].duplicate(true)
+	for p: Dictionary in rival.pts: p.y += 1.3
+	w.trails.append(rival)
+	check(StageTrails._shared_passage(w, loops, "road", h, PackedByteArray()) == closed,
+		"a nearer competing axis cannot make the shared passage switch ownership point by point")
+	w.trails.pop_back()
+	var reverse := loops.duplicate(true); reverse.reverse()
+	var reverse_result := StageTrails._shared_passage(w, reverse, "road", h, PackedByteArray())
+	reverse_result.reverse()
+	check(reverse_result == closed, "the common edge is independent of route traversal direction")
 	check(merged[merged.size() / 2].y == w.trails[0].pts[0].y, "adjacent parallel passage reuses the existing axis")
 	check(merged[0] == line[0] and merged[-1] == line[-1], "route endpoints preserved")
 	check(line == original, "source route remains immutable")
@@ -64,7 +85,7 @@ func run() -> void:
 	camera = Camera3D.new(); root.add_child(camera); camera.make_current()
 	DisplayServer.window_set_size(Vector2i(1000, 650))
 	for version: String in ["before", "after"]:
-		var route := {kind = "road", pts = original if version == "before" else merged}
+		var route := {kind = "road", pts = loops if version == "before" else closed}
 		RoadSurface.assign_route(w, route)
 		w.trails.resize(1); w.trails.append(route)
 		h = Heightfield.new(w)

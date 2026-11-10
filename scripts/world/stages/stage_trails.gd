@@ -342,77 +342,148 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	return _shared_passage(w, pts, kind, surface, on_axis)
 
 
-## Reuse a nearby parallel passage instead of painting another strip beside it.
+## Reuse one connected network subpath through a common corridor.
 ## Operates before stamping, vegetation and surface assignment, so all consumers
-## receive the same centreline. A crossing is not a parallel shared passage.
+## receive the same centreline. A crossing alone has no travel along the host edge.
 static func _shared_passage(w: WorldData, line: Array, kind: String, surface: Heightfield, on_axis: PackedByteArray) -> Array:
 	if line.size() < 3 or kind == "animal": return line
+	# Match continuous subpaths to an existing network edge, not independent
+	# points to whichever segment happens to be nearest. Work in world cells.
+	const REUSE_RADIUS := 2.0 # 8 m: narrow islands are not distinct passages
+	const MIN_SHARED := 4.0  # 16 m: a crossing/contact alone is not a shared edge
 	var bins := {}
-	for old: Dictionary in w.trails:
-		if old.kind == "animal" or old.has("trail_id") or (old.kind != kind and old.kind != "road"): continue
+	var hosts := {}
+	for route in w.trails.size():
+		var old: Dictionary = w.trails[route]
+		if old.kind == "animal" or old.has("trail_id"): continue
+		var stations := PackedFloat64Array([0.0])
 		for j in range(1, old.pts.size()):
 			var a := Vector2(old.pts[j - 1].x, old.pts[j - 1].y)
 			var b := Vector2(old.pts[j].x, old.pts[j].y)
-			if a.distance_squared_to(b) < 0.000001: continue
-			var box := Rect2(a, b - a).abs().grow(1.2)
-			var segment := {a = a, delta = b - a, half = (float(old.pts[j - 1].w) + float(old.pts[j].w)) * 0.25}
+			var length := a.distance_to(b)
+			stations.append(stations[-1] + length)
+			if length < 0.00001: continue
+			var box := Rect2(a, b - a).abs().grow(REUSE_RADIUS)
+			var segment := {a = a, delta = b - a, length = length, route = route, station = stations[j - 1]}
 			for y in range(floori(box.position.y / 4.0), floori(box.end.y / 4.0) + 1):
 				for x in range(floori(box.position.x / 4.0), floori(box.end.x / 4.0) + 1):
 					var key := Vector2i(x, y)
 					if not bins.has(key): bins[key] = []
 					bins[key].append(segment)
+		hosts[route] = {pts = old.pts, stations = stations, kind = old.kind}
 	if bins.is_empty(): return line
-	var projected := PackedVector2Array()
-	var matched := PackedByteArray()
-	projected.resize(line.size()); matched.resize(line.size())
 	var along := PackedFloat64Array([0.0])
+	var matches := {} # host -> point index -> nearest station on that host
 	for j in line.size():
 		var p := Vector2(line[j].x, line[j].y)
-		projected[j] = p
 		if j > 0: along.append(along[-1] + p.distance_to(Vector2(line[j - 1].x, line[j - 1].y)))
-		var cell := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
-		if _by_water(w, cell) or (not on_axis.is_empty() and on_axis[cell] != 0): continue
-		var tangent := (Vector2(line[mini(j + 2, line.size() - 1)].x, line[mini(j + 2, line.size() - 1)].y)
-			- Vector2(line[maxi(0, j - 2)].x, line[maxi(0, j - 2)].y)).normalized()
-		var best := INF
-		var endpoint := j == 0 or j == line.size() - 1
-		for s: Dictionary in bins.get(Vector2i(floori(p.x / 4.0), floori(p.y / 4.0)), []):
-			var delta: Vector2 = s.delta
-			if not endpoint and absf(tangent.dot(delta.normalized())) < 0.94: continue
-			var f := clampf((p - (s.a as Vector2)).dot(delta) / delta.length_squared(), 0.0, 1.0)
-			var q: Vector2 = s.a + delta * f
+		if _passage_fixed(w, p, on_axis): continue
+		var height := surface.ground_at(p.x * GameConfig.TILE, p.y * GameConfig.TILE)
+		for seg: Dictionary in bins.get(Vector2i(floori(p.x / 4.0), floori(p.y / 4.0)), []):
+			var delta: Vector2 = seg.delta
+			var f := clampf((p - (seg.a as Vector2)).dot(delta) / delta.length_squared(), 0.0, 1.0)
+			var q: Vector2 = seg.a + delta * f
 			var distance := p.distance_to(q)
-			var tolerance := float(s.half) + 0.15 + (0.0 if endpoint else float(line[j].w) * 0.5)
-			if distance > tolerance or distance >= best: continue
-			best = distance; projected[j] = q; matched[j] = 1
-	var out := line.duplicate(true)
-	var first := 0
-	while first < line.size():
-		if matched[first] == 0:
-			first += 1
-			continue
-		var last := first
-		while last + 1 < line.size() and matched[last + 1] != 0: last += 1
-		# Reject isolated projections and short corner contacts. Fade over 8 m at
-		# entry/exit, preserving route endpoints and genuine alternative passages.
-		if along[last] - along[first] >= 4.0:
-			for j in range(first, last + 1):
-				var fade := smoothstep(0.0, 2.0, minf(along[j] - along[first], along[last] - along[j]))
-				var p := Vector2(line[j].x, line[j].y).lerp(projected[j], fade)
-				out[j].x = p.x; out[j].y = p.y
-		first = last + 1
-	# A route terminating inside another tread joins its axis, rather than leaving
-	# an independent round end cap sticking through the opposite verge.
-	for j: int in [0, line.size() - 1]:
-		if matched[j] != 0:
-			out[j].x = projected[j].x; out[j].y = projected[j].y
+			if distance > REUSE_RADIUS: continue
+			if not matches.has(seg.route): matches[seg.route] = {}
+			var row: Dictionary = matches[seg.route]
+			if row.has(j) and row[j].distance <= distance: continue
+			row[j] = {station = float(seg.station) + f * float(seg.length), point = q, distance = distance}
+		# Sample terrain only once per host at this station, not once for every
+		# tiny smoothed segment in the spatial bin.
+		for route: int in matches:
+			var row: Dictionary = matches[route]
+			if not row.has(j): continue
+			var q: Vector2 = row[j].point
+			if _passage_fixed(w, q, on_axis) or absf(height - surface.ground_at(q.x * GameConfig.TILE, q.y * GameConfig.TILE)) > (1.2 if kind == "road" else 0.5): row.erase(j)
+	var spans := []
+	for route: int in matches:
+		var row: Dictionary = matches[route]
+		var first := 0
+		while first < line.size():
+			if not row.has(first):
+				first += 1
+				continue
+			var last := first
+			while last + 1 < line.size() and row.has(last + 1): last += 1
+			var travel: float = row[last].station - row[first].station
+			var length := along[last] - along[first]
+			var bounded := true
+			for j in range(first + 1, last + 1):
+				var station: float = row[j].station
+				if station < minf(row[first].station, row[last].station) - REUSE_RADIUS or station > maxf(row[first].station, row[last].station) + REUSE_RADIUS: bounded = false
+			if length >= MIN_SHARED and absf(travel) >= MIN_SHARED and absf(travel) <= length * 1.35 and bounded:
+				spans.append({first = first, last = last, route = route, length = length,
+					priority = 0 if hosts[route].kind == "road" else 1})
+			first = last + 1
+	# One owner per shared run, selected deterministically for the whole run.
+	spans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		if a.priority != b.priority: return a.priority < b.priority
+		if a.length != b.length: return a.length > b.length
+		return a.route < b.route)
+	var accepted := []
+	var occupied := PackedByteArray(); occupied.resize(line.size())
 	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
 	var cross := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
 	var probe := surface.fast_water()
-	for j in range(1, out.size()):
-		if out[j] == line[j] and out[j - 1] == line[j - 1]: continue
-		if not _road_segment(surface, out[j - 1], out[j], grade, cross, probe): return line
+	for span: Dictionary in spans:
+		var collision := false
+		for j in range(span.first, span.last + 1): collision = collision or occupied[j] != 0
+		if collision: continue
+		var row: Dictionary = matches[span.route]
+		var host: Dictionary = hosts[span.route]
+		var start: float = row[span.first].station
+		var finish: float = row[span.last].station
+		var direction := signf(finish - start)
+		# Enter/leave the common edge once. No sinusoidal pointwise fades that
+		# repeatedly split the centreline and leave enclosed grassy islands.
+		var piece: Array = [line[span.first].duplicate()]
+		var entry: float = start + (direction * minf(2.0, absf(finish - start) * 0.2) if row[span.first].distance > 0.02 else 0.0)
+		var exit: float = finish - (direction * minf(2.0, absf(finish - start) * 0.2) if row[span.last].distance > 0.02 else 0.0)
+		var indices := range(host.pts.size()) if direction > 0.0 else range(host.pts.size() - 1, -1, -1)
+		for j: int in indices:
+			var station: float = host.stations[j]
+			if (station - entry) * direction < 0.0 or (exit - station) * direction < 0.0: continue
+			var p: Dictionary = host.pts[j]
+			piece.append({x = p.x, y = p.y, w = line[span.first].w})
+		piece.append(line[span.last].duplicate())
+		var valid := piece.size() > 2
+		for j in range(1, piece.size()):
+			if not _road_segment(surface, piece[j - 1], piece[j], grade, cross, probe): valid = false; break
+		if not valid: continue # a bad join does not undo other independent merges
+		span.piece = piece; accepted.append(span)
+		for j in range(span.first, span.last + 1): occupied[j] = 1
+	accepted.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.first < b.first)
+	var out: Array = []
+	var at := 0
+	for span: Dictionary in accepted:
+		while at < span.first:
+			out.append(line[at].duplicate()); at += 1
+		out.append_array(span.piece); at = span.last + 1
+	while at < line.size():
+		out.append(line[at].duplicate()); at += 1
+	# Endpoints inside an existing tread use its axis even for a transverse join.
+	for j: int in [0, out.size() - 1]:
+		var original := 0 if j == 0 else line.size() - 1
+		var best := INF
+		var candidate: Dictionary = out[j]
+		for route: int in matches:
+			if not matches[route].has(original): continue
+			var m: Dictionary = matches[route][original]
+			var host: Dictionary = hosts[route]
+			var tolerance := float(host.pts[0].w) * 0.5 + 0.15
+			if m.distance > tolerance or m.distance >= best: continue
+			candidate = {x = m.point.x, y = m.point.y, w = out[j].w}; best = m.distance
+		var neighbour := 1 if j == 0 else j - 1
+		if candidate != out[j] and _road_segment(surface, out[neighbour], candidate, grade, cross, probe): out[j] = candidate
+	for j in range(out.size() - 1, 0, -1):
+		if Vector2(out[j].x, out[j].y).distance_squared_to(Vector2(out[j - 1].x, out[j - 1].y)) < 0.000001: out.remove_at(j)
 	return out
+
+
+static func _passage_fixed(w: WorldData, p: Vector2, on_axis: PackedByteArray) -> bool:
+	var cell := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
+	return _by_water(w, cell) or (not on_axis.is_empty() and on_axis[cell] != 0)
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)
