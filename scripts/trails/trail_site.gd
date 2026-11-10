@@ -72,7 +72,9 @@ const PROBE := ["ground", "support", "depth", "surface", "weight", "across", "ce
 static func cut(w: WorldData, h: Heightfield, rect: Rect2i, margin: int, view := {}) -> Dictionary:
 	var errors := PackedStringArray()
 	var data := rect.grow(margin)
-	var area := w.available_rect if w.available_rect.has_area() else Rect2i(0, 0, w.W, w.H)
+	var plan := Rect2i(0, 0, w.W, w.H)
+	var area: Rect2i = view.get("bounds", w.available_rect if w.available_rect.has_area() else plan)
+	area = area.intersection(plan)
 	if rect.size.x < 16 or rect.size.y < 16 or margin < 4:
 		errors.append("рабочий прямоугольник меньше 16 клеток или запас меньше 4")
 	if not area.encloses(data):
@@ -342,7 +344,8 @@ func inside_errors(routes: Array[TrailDefinition]) -> PackedStringArray:
 	for d in routes:
 		if d == null:
 			continue
-		var m := d.width * 0.5 + RoadRefinement.REACH + TILE
+		var reach := RoadRefinement.NATURAL_REACH if d.earthwork <= 0.0 else RoadRefinement.REACH
+		var m := d.width * 0.5 + reach + TILE
 		for p in d.points:
 			if p.x < lo.x + m or p.y < lo.y + m or p.x > hi.x - m or p.y > hi.y - m:
 				errors.append("Трасса выходит из рабочей зоны участка: " + d.id)
@@ -401,8 +404,7 @@ func rebake(prepared: Dictionary, d: TrailDefinition, removed: Array[TrailElemen
 	return {heights = h, errors = PackedStringArray(), timings = timings}
 
 
-## Метровая сетка: копия готовых патчей + патчи новых путей. В вершинах новых патчей, где ближе всего прежний путь
-## или пути нет, остаётся готовая вершина участка: полотно существующих путей не формируется второй раз.
+## Новое покрытие может пересечь готовый патч, но его высоты остаются исходными для земляных работ.
 func _form(h: Heightfield, only: Dictionary) -> RoadRefinement:
 	var ready := patches.duplicate() # unchanged patch dictionaries remain read-only
 	if only.is_empty():
@@ -420,19 +422,28 @@ func _form(h: Heightfield, only: Dictionary) -> RoadRefinement:
 		var uvs: PackedVector2Array = p.uv
 		var surfaces: PackedByteArray = p.surface
 		var roads: PackedByteArray = p.road
+		var corner := (Vector2(key % size.x, key / size.x) + Vector2.ONE * 0.5) * TILE
 		for n in owner.size():
-			if owner[n] != 0:
-				continue
 			var at := _saved_vertex(key, n)
 			if at.x < 0:
+				if owner[n] == 0:
+					var pos := corner + Vector2(n % STRIDE, n / STRIDE) * RoadRefinement.STEP
+					hs[n] = h.base_ground_at(pos.x, pos.y)
+					colors[n] = Color(0, 0, 0, 0)
+					uvs[n] = Vector2.ZERO
+					surfaces[n] = 0
+					roads[n] = 0
 				continue
 			var q: Dictionary = patches[at.x]
 			hs[n] = q.h[at.y]
+			if owner[n] != 0:
+				continue
 			colors[n] = q.color[at.y]
 			uvs[n] = q.uv[at.y]
 			surfaces[n] = q.surface[at.y]
 			roads[n] = q.road[at.y]
 		ready[key] = {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
+	RoadRefinement.pin_coarse_edges(h, ready, fresh.patches.keys())
 	fresh.patches = ready
 	h.path_timings.merge(fresh.build_timings)
 	return fresh

@@ -10,6 +10,7 @@ var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const OCEAN_DEPTH := GameConfig.OCEAN_DEPTH
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const C := OuterLand.C
 const RADIUS := 1200.0   # куски ближе этого держатся загруженными (дальше всё равно туман)
 const DROP := 1600.0     # куски дальше этого выгружаются
@@ -246,11 +247,16 @@ func _build(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) -> D
 
 
 func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) -> Dictionary:
-	var f: Dictionary = prepared_fields.duplicate() if not prepared_fields.is_empty() else OuterLand.compute_chunk(world, key)
 	var ledger: Dictionary = snapshot if snapshot is Dictionary else world.outer.get_ledger()
-	OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)
-	# A newer region snapshot may replace climate/relief after compute_chunk.
-	f.rock = preload("res://scripts/world/mountain_surface.gd").field(f.elev,f.slope,f.moist)
+	var f: Dictionary
+	if prepared_fields.is_empty():
+		f = OuterLand.compute_chunk(world, key, ledger)
+	else:
+		f = prepared_fields.duplicate()
+		for field: String in ["h", "elev", "biome", "slope", "dist", "dw", "river", "temp", "moist", "light", "dist_path", "village"]:
+			if f.has(field): f[field] = f[field].duplicate()
+		OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)
+		f.rock = preload("res://scripts/world/mountain_surface.gd").field(f.elev, f.slope, f.moist)
 	var regions: Dictionary = ledger.get("regions", {})
 	var refined := false
 	var W := world.W
@@ -267,6 +273,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 	var col := PackedColorArray()
 	hs.resize(S * S)
 	col.resize(S * S)
+	var rock_tint := Color8(int(MapBaker.ROCKC[0]), int(MapBaker.ROCKC[1]), int(MapBaker.ROCKC[2]))
 	for b in S:
 		var j := j0 - 1 + b
 		for a in S:
@@ -281,22 +288,35 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 				var h := fh[k]
 				hs[k] = h * HS if h >= 0.0 else maxf(-OCEAN_DEPTH, h * OCEAN_DEPTH) - 0.5
 				bi = fb[k]
-			col[k] = _palette[bi]
+			var elevation: float = f.elev[k]
+			if Biomes.LIST[bi].get("water", false):
+				col[k] = Color8(112, 108, 91)
+			elif bi == Biomes.SNOW or bi == Biomes.PEAK:
+				col[k] = _palette[bi]
+			else:
+				col[k] = _palette[bi].lerp(rock_tint, 0.45 * smoothstep(0.3, 0.6, elevation))
 			col[k].a=float(f.rock[k])/255.0 if f.has("rock") else 0.0
 	var V := C + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
 	var vc := PackedColorArray()
+	var climate_uv := PackedVector2Array()
 	pos.resize(V * V)
 	nor.resize(V * V)
 	vc.resize(V * V)
+	climate_uv.resize(V * V)
 	for b in V:
 		for a in V:
 			var k := (b + 1) * S + a + 1
 			var v := b * V + a
 			pos[v] = Vector3((a + 0.5 - C * 0.5) * TILE, hs[k], (b + 0.5 - C * 0.5) * TILE)
-			nor[v] = Vector3(hs[k - 1] - hs[k + 1], 2.0 * TILE, hs[k - S] - hs[k + S]).normalized()
+			var cell := Vector2i(i0 + a, j0 + b)
+			if cell.x >= 0 and cell.y >= 0 and cell.x < W and cell.y < H:
+				nor[v] = TerrainBuilder._normal(hv, W, H, cell.x, cell.y)
+			else:
+				nor[v] = Vector3(hs[k - 1] - hs[k + 1], 2.0 * TILE, hs[k - S] - hs[k + S]).normalized()
 			vc[v] = col[k]
+			climate_uv[v] = Vector2(Floor.ground_moisture(f.moist[k], f.dw[k]), 0.0)
 	var idx := PackedInt32Array()
 	for b in C:
 		var j := j0 + b
@@ -308,8 +328,13 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 			if not patch.is_empty():
 				refined = true
 				var first := pos.size()
+				var p := b * V + a
 				for rz in RoadRefinement.STRIDE:
 					for rx in RoadRefinement.STRIDE:
+						var tx := float(rx) / RoadRefinement.DIV
+						var tz := float(rz) / RoadRefinement.DIV
+						climate_uv.append(climate_uv[p].lerp(climate_uv[p + 1], tx).lerp(
+							climate_uv[p + V].lerp(climate_uv[p + V + 1], tx), tz))
 						var n := rz * RoadRefinement.STRIDE + rx
 						pos.append(Vector3((a + 0.5 - C * 0.5) * TILE + rx * RoadRefinement.STEP, patch.h[n], (b + 0.5 - C * 0.5) * TILE + rz * RoadRefinement.STEP))
 						var dx: float = patch.h[rz * RoadRefinement.STRIDE + mini(rx + 1, RoadRefinement.DIV)] - patch.h[rz * RoadRefinement.STRIDE + maxi(0, rx - 1)]
@@ -342,6 +367,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 		arrays[Mesh.ARRAY_VERTEX] = pos
 		arrays[Mesh.ARRAY_NORMAL] = nor
 		arrays[Mesh.ARRAY_COLOR] = vc
+		arrays[Mesh.ARRAY_TEX_UV] = climate_uv
 		arrays[Mesh.ARRAY_INDEX] = idx
 		# Частично закрытые картой куски сохраняют исходные треугольники и точный край выреза.
 		if not refined and not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):

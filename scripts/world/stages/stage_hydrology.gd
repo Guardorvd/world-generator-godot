@@ -66,6 +66,8 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 			c = best
 		if w.ocean[c] != 0 or w.lake[c] != 0 or w.dist_ocean[c] < 12.0: continue
 		var level := w.h[c] + float(candidate.depth)
+		# Зеркало пресного озера должно быть выше глобальной плоскости океана.
+		if level * GameConfig.HS <= GameConfig.LAKE_DROP: continue
 		var cells := _closed_basin(w, c, level)
 		if cells.is_empty(): continue
 		for i in cells:

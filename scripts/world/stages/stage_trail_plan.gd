@@ -3,24 +3,25 @@ extends RefCounted
 ## Prepared-world trail network. The shared search/layout and TrailSite preparation are also used by Trail Lab.
 ## Discovery runs once; accepted metre patches are handed to WorldLoader and its normal surface cache.
 const NETWORK_SCRIPT := "res://scripts/trails/trail_world_network.gd"
-const VERSION := 28 # 28: в обычной игре одни велопарки (до трёх, BikePark.build_all)
+const VERSION := 30 # стыки метровых патчей и сохранение готовых примыканий
 const ID := "start_trail"
 const TITLE := "Трасса у дома"
 
-static func run(w: WorldData, size: int, on_progress := Callable()) -> void:
+static func run(w: WorldData, on_progress := Callable()) -> void:
 	w.trail_plan = {version = VERSION, state = "none", reason = "этап не запускался"}
-	if size <= 0 or w.base_heights == null: return
+	if w.base_heights == null: return
 	if on_progress.is_valid(): on_progress.call(0.79, "Подготовка поверхности велосипедных трасс")
 	var started := Time.get_ticks_msec()
 	RoadSurface.run(w)
+	w.generation.surface_rock = RockRelief.field_of(w)
 	var h := w.base_heights.copy()
 	h.finish_paths()
 	var surface_ms := Time.get_ticks_msec() - started
-	var area := WorldGenerator.start_rect(w, size)
+	var area := Rect2i(0, 0, w.W, w.H)
 	# Обычная игра — только велопарки; прежняя универсальная сеть маршрутов осталась для опытов (`-- --trail-network`, QuickTrails)
 	var options := {on_progress = on_progress, mode = "network" if QuickTrails.network() else "parks"}
 	if QuickTrails.active(): # только разработка: сеть на средней части мира и короче (scripts/core/quick_trails.gd)
-		area = QuickTrails.area(Rect2i(0, 0, w.W, w.H))
+		area = QuickTrails.area(area)
 		options.merge(QuickTrails.options())
 	w.trail_plan = load(NETWORK_SCRIPT).build(w, h, area, options)
 	w.trail_plan.stats.base_surface_ms = surface_ms
@@ -207,6 +208,9 @@ static func consistency_errors(w: WorldData) -> PackedStringArray:
 			if actual.get(field, false if field == "closed" else null) != expected[field]:
 				errors.append("Трасса плана расходится с сетью (%s): %s" % [field, d.id])
 	if plan.get("mode") == "terrain_network":
+		var base_mask: Variant = plan.get("base_path_mask")
+		if not base_mask is PackedByteArray or base_mask.size() != w.N:
+			errors.append("В плане отсутствует исходная маска путей")
 		var entries: Variant = plan.get("entries")
 		if not entries is Array or entries.size() != definitions.size():
 			errors.append("Число участков поверхности не совпадает с числом трасс")

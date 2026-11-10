@@ -95,13 +95,17 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._only = only
 	# TrailSite rebuilds authored lines over the existing surface. Its patch
 	# ownership must use the same reach as TrailBuilder and TrailShaping.
-	if not only.is_empty() and only.keys().all(func(route: int) -> bool: return heights.world.trails[route].has("trail_id")):
+	if not only.is_empty() and only.keys().all(func(route: int) -> bool:
+		var t: Dictionary = heights.world.trails[route]
+		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
 	var started_us := Time.get_ticks_usec()
 	if allow_fast_index and allow_fast_patches and allow_fast_nearest and allow_fast_vertices and only.is_empty() and heights.world.outer == null:
 		var whole := Grid.fast_grid()
 		if whole != null:
-			return r._build_native(whole, fit_road)
+			var built := r._build_native(whole, fit_road)
+			pin_coarse_edges(heights, built.patches, built.patches.keys())
+			return built
 	if not only.is_empty() and restrict_local_index:
 		# Determine the exact output cells before indexing neighbours. Preserve the
 		# original route/segment order in the final index, including nearest ties.
@@ -181,7 +185,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		var surfaces := PackedByteArray()
 		var roads := PackedByteArray()
 		var owners := PackedByteArray()
-		var changed := not only.is_empty()
+		var changed := false
 		hs.resize(STRIDE * STRIDE)
 		colors.resize(STRIDE * STRIDE)
 		uvs.resize(STRIDE * STRIDE)
@@ -199,8 +203,9 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 					var request: int = cache[vk]
 					hs[idx] = native_h[request]; colors[idx] = native_color[request]; uvs[idx] = native_uv[request]
 					surfaces[idx] = native_surface[request]; roads[idx] = native_road[request]
-					changed = changed or native_active[request] != 0
-					if not only.is_empty(): owners[idx] = 1 if only.has(native_route[request]) else 0
+					var owned := only.is_empty() or only.has(native_route[request])
+					changed = changed or (owned and native_active[request] != 0)
+					if not only.is_empty(): owners[idx] = int(owned)
 					continue
 				if not cache.has(vk) or cache[vk] is int:
 					var at: int = cache[vk] * 4 if cache.has(vk) else -1
@@ -211,9 +216,9 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 				uvs[idx] = v.uv
 				surfaces[idx] = v.surface
 				roads[idx] = 1 if v.road else 0
-				changed = changed or v.active
-				if not only.is_empty():
-					owners[idx] = 1 if only.has(v.route) else 0
+				var owned := only.is_empty() or only.has(v.route)
+				changed = changed or (owned and v.active)
+				if not only.is_empty(): owners[idx] = int(owned)
 		if not changed:
 			continue
 		r.patches[key] = {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
@@ -228,7 +233,45 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._structures.clear()
 	r._noise = null
 	r._base_cache.clear()
+	if only.is_empty(): pin_coarse_edges(heights, r.patches, r.patches.keys())
 	return r
+
+
+## An edge bordering a coarse cell uses the same straight segment as its coarse mesh and physics.
+## At a corner the diagonally adjacent coarse cell also shares that vertex.
+static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -> void:
+	var w := h.world.W
+	var rows := h.world.H
+	var hv := h.hv
+	for key: int in keys:
+		var cx := key % w
+		var cz := key / w
+		var left := cx == 0 or not patches.has(key - 1)
+		var right := cx == w - 2 or not patches.has(key + 1)
+		var top := cz == 0 or not patches.has(key - w)
+		var bottom := cz == rows - 2 or not patches.has(key + w)
+		var nw := left or top or not patches.has(key - w - 1)
+		var ne := right or top or not patches.has(key - w + 1)
+		var sw := left or bottom or not patches.has(key + w - 1)
+		var se := right or bottom or not patches.has(key + w + 1)
+		if not (nw or ne or sw or se): continue
+		var patch: Dictionary = patches[key]
+		var original: PackedFloat32Array = patch.h
+		var hs := original.duplicate()
+		for i in STRIDE:
+			var f := float(i) / DIV
+			if left: hs[i * STRIDE] = lerpf(hv[key], hv[key + w], f)
+			if right: hs[i * STRIDE + DIV] = lerpf(hv[key + 1], hv[key + w + 1], f)
+			if top: hs[i] = lerpf(hv[key], hv[key + 1], f)
+			if bottom: hs[DIV * STRIDE + i] = lerpf(hv[key + w], hv[key + w + 1], f)
+		if nw: hs[0] = hv[key]
+		if ne: hs[DIV] = hv[key + 1]
+		if sw: hs[DIV * STRIDE] = hv[key + w]
+		if se: hs[STRIDE * STRIDE - 1] = hv[key + w + 1]
+		if hs != original:
+			var pinned := patch.duplicate()
+			pinned.h = hs
+			patches[key] = pinned
 
 
 ## Индекс и вершины двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): столбцами, без
@@ -1100,6 +1143,8 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 				var dry_level := maxf(axis_level + detail, _wet_near(i) + RoadBed.WATER_GAP)
 				var shelf := base + clampf(dry_level - base, -cap, cap)
 				h = lerpf(h, shelf, influence * structure_pin * power * bench)
+	var edge_pin := smoothstep(0.0, FIT_FADE, minf(minf(x - TILE * 0.5, (W - 0.5) * TILE - x), minf(z - TILE * 0.5, (H - 0.5) * TILE - z)))
+	h = lerpf(base, h, edge_pin)
 	# 14.11: формы коридора — одна настоящая поверхность для меша и колёс (дороги, тропы, горные тропы)
 	if corridor_routes.has(road.route):
 		var span: Vector2i = corridor_routes[road.route]
@@ -1123,7 +1168,6 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 		var v := side_neg if across < 0.0 else side_pos
 		var bank := v * _bell((e - 0.35) / 0.8) if v > 0.0 else v * _bell((e - 0.85) / 0.65)
 		var land := lerpf(c[o + 7], c[o + CORRIDOR_STRIDE + 7], f)
-		var edge_pin := smoothstep(0.0, FIT_FADE, minf(minf(x - TILE * 0.5, (W - 0.5) * TILE - x), minf(z - TILE * 0.5, (H - 0.5) * TILE - z)))
 		var gain := pin * edge_pin
 		h += (core + bank + _land_shape(x + _origin.x, z + _origin.y, e, land)) * gain
 		# низкие места сечения (корыто, нижний край, продавленное место) темнее и сырее, выпуклые — светлее и суше;

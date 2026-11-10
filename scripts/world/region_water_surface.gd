@@ -18,6 +18,9 @@ static func prepare(region: Dictionary, network: Dictionary) -> Dictionary:
 	water.fill(-INF)
 	var mask := PackedByteArray()
 	mask.resize(original.size())
+	if network.rivers.is_empty():
+		return {h = ground, water_level = water, river = mask, reason = "", failure = {},
+			ready = network.unresolved.is_empty()}
 	var bank_weight := PackedFloat32Array()
 	bank_weight.resize(original.size())
 	var reason := ""

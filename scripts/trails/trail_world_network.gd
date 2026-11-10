@@ -97,6 +97,8 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 			return float(a.rank) > float(b.rank) if a.rank != b.rank else a.trail_seed < b.trail_seed)
 	var plan := {mode = "terrain_network", state = "none", reason = "нет принятых трасс", routes = [], entries = [], parks = [],
 		area = area, stats = {mode = MODE_PARKS if parks_only else MODE_NETWORK, survey = search_stats, input_ms = input_ms, phases_ms = {}, attempted = 0, accepted = 0, rejected = {}, work_m = 0.0, length_m = 0.0, legs = 0, corridors = [], routes_m = []}}
+	# Штамп маршрута может перекрыть существующую тропу: при воспроизведении нужна её исходная метка.
+	var base_path_mask := w.path_mask.duplicate()
 	var ctx := {w = w, h = h, input = input, cover = cover, fords = fords, plan = plan, area = area.grow(-MARGIN - 1), length_target = float(options.get("length_target", LENGTH_TARGET)), work_limit = float(options.get("work_limit", WORK_LIMIT)), early_audit = options.get("early_audit", true), early_pruning = options.get("early_pruning", true), progress = options.get("on_progress", Callable()), styles = {}, legs = [], width = 0.0, walls = []}
 	var park_started := Time.get_ticks_msec()
 	var park: Array[Dictionary] = []
@@ -138,6 +140,7 @@ static func build(w: WorldData, h: Heightfield, area: Rect2i, options := {}) -> 
 	if not parks_only: _alternatives(ctx)
 	if not plan.routes.is_empty(): _districts(ctx)
 	if not plan.routes.is_empty():
+		plan.base_path_mask = base_path_mask
 		RoadSurface.rebuild_map(w)
 		plan.state = "found"
 		plan.reason = ""
@@ -570,7 +573,7 @@ static func _leg(ctx: Dictionary, world_hint: PackedVector2Array, region: Rect2i
 		return null
 	var phase := Time.get_ticks_usec()
 	var context := context_rect(h, region)
-	var cut := TrailSite.cut(w, h, context, MARGIN)
+	var cut := TrailSite.cut(w, h, context, MARGIN, {bounds = Rect2i(0, 0, w.W, w.H)})
 	_time(plan, "cut", phase)
 	if not cut.errors.is_empty():
 		_refuse(plan, "участок: " + cut.errors[0])
@@ -985,17 +988,21 @@ static func restore(h: Heightfield, plan: Dictionary) -> PackedStringArray:
 	var w := WorldData.new()
 	for field: String in WorldData.CACHE_FIELDS: w.set(field, source.get(field))
 	w.world_origin = source.world_origin
-	w.outer = source.outer
-	w.path_mask = source.path_mask.duplicate()
-	w.road_surface = source.road_surface.duplicate()
+	w.generation.surface_rock = source.generation.surface_rock
+	var base_mask: Variant = plan.get("base_path_mask", source.path_mask if plan.routes.is_empty() else null)
+	if not base_mask is PackedByteArray or base_mask.size() != w.N:
+		return PackedStringArray(["В плане отсутствует исходная маска путей"])
+	w.path_mask = base_mask.duplicate()
+	w.road_surface = PackedByteArray()
 	var ids := {}
 	for record: Dictionary in plan.routes: ids[record.id] = true
 	w.trails = source.trails.filter(func(route: Dictionary) -> bool: return not ids.has(route.get("trail_id", ""))).duplicate(true)
+	RoadSurface.rebuild_map(w)
 	var replay := h.copy()
 	replay.world = w
 	replay.finish_paths()
 	for entry: Dictionary in plan.entries:
-		var cut := TrailSite.cut(w, replay, entry.rect, MARGIN)
+		var cut := TrailSite.cut(w, replay, entry.rect, MARGIN, {bounds = Rect2i(0, 0, w.W, w.H)})
 		if not cut.errors.is_empty(): errors = cut.errors; break
 		var site: TrailSite = cut.site
 		var global := StageTrailPlan.unpack(entry.route)

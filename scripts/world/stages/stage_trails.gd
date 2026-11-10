@@ -113,6 +113,8 @@ static func run(w: WorldData, step: Callable) -> void:
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)
+	_clear_huts(w)
+	w.generation_profile.homes_kept = StageLandmarks.count_homes(w.settlements)
 	# Исходы и раскрытия считаются всегда (дёшево); время вызовов и кэш — только с profile_searches.
 	w.generation_profile.merge(finder.search_stats())
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
@@ -576,9 +578,6 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 			pair_tries[pair_key] = int(pair_tries.get(pair_key, 0)) + 1
 			_count_failure(failures, state)
 			continue
-		var build_us := Time.get_ticks_usec()
-		surface.build_structures()
-		_part("build_structures", build_us)
 		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
 		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
 		var kind := "road" if main_road(st[a], st[b]) else "trail"
@@ -648,8 +647,6 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
 	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
-	_clear_huts(w)
-	w.generation_profile.homes_kept = StageLandmarks.count_homes(w.settlements)
 	w.generation_profile.layout_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	w.generation_profile.checkpoints = state.get("checkpoints", 0)
 	w.generation_profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
@@ -1191,6 +1188,7 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 		return
 	var part_us := Time.get_ticks_usec()
 	var checkpoint: Dictionary = ctx.checkpoint
+	ctx.checkpoint = null
 	state.restores = int(state.get("restores", 0)) + 1
 	w.bridges = checkpoint.bridges.duplicate()
 	w.tunnels = checkpoint.tunnels.duplicate()
@@ -1286,9 +1284,9 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 						bypass[c] = INF
 					# Новый переход ищется от начала связи: фиксированный крутой берег
 					# не должен заставлять объезд карабкаться вверх сразу от воды.
+					_restore_structures(w, finder, state, ctx)
 					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor) if road else _land_path(finder, bypass, p[0], p[-1], TRAIL_CLIMB)
 					if not q.is_empty():
-						_restore_structures(w, finder, state, ctx)
 						return _structures(w, q, road, finder, bypass, state, retries + 1)
 					state.failure = "budget" if finder.search_budget == 0 else "bridge_site"
 					return PackedInt32Array()

@@ -213,7 +213,6 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 			var water_stream := PlanTerrain.new()
 			water_stream.water_layer = layer
 			water_stream.frame_budget = stream_coordinator.frame_budget
-			water_stream.cache_size = loaded.cache_size
 			water_stream.setup(loaded.water_chunks[layer], WaterBuilder._material(false, layer == 1), services.cache, world, heights, chunk_source)
 			$Water.add_child(water_stream)
 			_water_streams.append(water_stream)

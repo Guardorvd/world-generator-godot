@@ -587,8 +587,11 @@ func river_cells() -> PackedByteArray:
 
 ## Начать считать поля NOISE_FIELDS в отдельном потоке. Они зависят только от сида, поэтому
 ## их расчёт идёт одновременно с последовательными этапами (заполнение впадин), а не после них
-func start_noise_fields() -> void:
-	generation.start_fields(W, H, NOISE_FIELDS)
+func start_noise_fields(names := []) -> void:
+	var definitions := {}
+	for name: String in (NOISE_FIELDS.keys() if names.is_empty() else names):
+		definitions[name] = NOISE_FIELDS[name]
+	generation.start_fields(W, H, definitions)
 
 
 func noise_field(name: String) -> PackedFloat64Array:
@@ -597,6 +600,7 @@ func noise_field(name: String) -> PackedFloat64Array:
 
 func clear_noise_fields() -> void:
 	generation.clear_fields()
+	generation.light = PackedFloat32Array()
 
 
 ## Чистое имя места: дома, другие имена и порядок чтения областей не расходуют его RNG.

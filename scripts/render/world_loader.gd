@@ -2,11 +2,8 @@ class_name WorldLoader
 extends RefCounted
 ## Данные для игры, подготовленные в фоне: мир, высоты, массивы геометрии и изображения.
 ## Узлы отображения и GPU-ресурсы создаёт GameWorld.start в главном потоке.
-## Заливка текстуры и карты, рельеф и вода зависят только от рельефа, климата и биомов (без троп и поселений),
-## поэтому считаются в отдельном потоке, пока генератор прокладывает тропы и сажает лес.
-## Этот поток читает только то, что после климата уже не меняется (рельеф, вода, реки, биомы). Мосты и
-## туннели пишет этап троп, поэтому они встраиваются в рельеф после генерации, в одном потоке: так
-## результат один и тот же, как бы ни легли задачи (до 2.0 поток мог застать их недописанными).
+## Заливка карт и базовые высоты готовы независимо от троп и поселений, поэтому считаются параллельно
+## с генерацией. Меши земли и воды используют готовую поверхность со всеми путями и сооружениями.
 
 var world: WorldData
 var service_scope: ServiceScope
@@ -22,7 +19,7 @@ var map_image: Image
 var error := ""            # причина, по которой мир не опубликовать (Main показывает её и возвращается в меню)
 var trail := {}           # итог StageTrailPlan.apply: state (found / none), applied, variant, errors
 var from_cache := false   # мир взят из WorldCache (10.0) целиком, а не сгенерирован
-## Время CPU-подготовки в мс. prepare_* перекрываются с generate, их нельзя складывать.
+## Время CPU-подготовки в мс. Заливка карт и базовые высоты перекрываются с generate.
 var timings := {}
 var _prepare_times := {} # One worker writes; the owner merges only after joining it.
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
@@ -150,17 +147,10 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 		image_tasks.append(WorkerThreadPool.add_task(map_job, true, "Карта"))
 		image_tasks.append(WorkerThreadPool.add_task(texture_job, true, "Текстура рельефа"))
 	t = Time.get_ticks_usec()
-	# пути, мосты и туннели известны только после троп: полотно путей ложится на рельеф (RoadBed, с 4.3),
-	# рельеф опускается под туннелями, меш поправляется. Без потока (_prepare здесь же) рельеф всё равно
-	# построен без них, чтобы путь был один
+	# Сначала готовая поверхность, затем геометрия земли и воды.
 	var keep_monolith := not services.cache.enabled
-	var before := r.heights.hv.duplicate() if not r.surface_hit and keep_monolith else PackedFloat32Array()
-	var changed := PackedInt32Array()
 	if not r.surface_hit:
 		r.trail = StageTrailPlan.prepare(r.heights)
-		if keep_monolith:
-			for i in r.world.N:
-				if before[i] != r.heights.hv[i]: changed.append(i)
 	else: StageTrailPlan.restore_technical(r.heights, r.trail)
 	r.timings.finish_paths_ms = (Time.get_ticks_usec() - t) / 1000.0
 	r.timings.path_details = r.heights.path_timings.duplicate(true)
@@ -168,14 +158,15 @@ static func load_world(seed_text: String, size: int, on_progress: Callable = Cal
 	for message: String in r.trail.errors:
 		push_warning("Трасса стартовой области: " + message)
 	t = Time.get_ticks_usec()
-	if not r.surface_hit and changed.size() > 0:
-		TerrainBuilder.patch(r.terrain_arrays, r.world, r.heights, changed)
-	if not r.surface_hit and keep_monolith: TerrainBuilder.refine_arrays(r.terrain_arrays, r.world, r.heights)
-	r.timings.patch_refine_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
-	t = Time.get_ticks_usec()
 	if not r.surface_hit:
+		if keep_monolith:
+			r.terrain_arrays = TerrainBuilder.build_arrays(r.world, r.heights)
+			r.timings.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
+		var water_started := Time.get_ticks_usec()
+		r.water_arrays = WaterBuilder.prepare(r.world, r.heights)
+		r.timings.prepare_water_ms = (Time.get_ticks_usec() - water_started) / 1000.0
+		t = Time.get_ticks_usec()
 		r.terrain_chunks = PlanTerrain.partition(r.terrain_arrays) if keep_monolith else TerrainBuilder.build_chunks(r.world, r.heights)
-	if not r.surface_hit:
 		for arrays: Array in r.water_arrays: r.water_chunks.append(WaterBuilder.partition_arrays(arrays))
 	r.timings.partition_ms = (Time.get_ticks_usec() - t) / 1000.0
 	t = Time.get_ticks_usec()
@@ -248,7 +239,7 @@ func prepare_streaming(start_at := Vector2.INF) -> void:
 	timings.startup_prefetch_ms = (Time.get_ticks_usec() - t) / 1000.0
 
 
-## Часть загрузки, которой нужны только рельеф, вода и биомы: картинки, высоты и массивы геометрии.
+## Часть загрузки, которой нужны только рельеф, вода и биомы: заливка карт и базовые высоты.
 ## Возвращает пары [без отмывки, с отмывкой]; при разных разрешениях ненужный вариант пустой.
 ## base — общий рельеф генератора (9.7), снятый в момент запуска потока: к концу генерации его уже нет в мире;
 ## paint — false, когда картинки взяты из кэша (10.2)
@@ -263,13 +254,6 @@ func _prepare(w: WorldData, px: int, base: Heightfield = null, paint := true) ->
 	_prepare_times.prepare_heights_ms = (Time.get_ticks_usec() - t) / 1000.0
 	if base == null and service_scope != null and service_scope.cache.enabled:
 		service_scope.cache.save_artifact(w.seed_text, cache_size, "base", Surface.capture(heights, "base"))
-	if service_scope == null or not service_scope.cache.enabled:
-		t = Time.get_ticks_usec()
-		terrain_arrays = TerrainBuilder.build_arrays(w, heights)
-		_prepare_times.prepare_mesh_ms = (Time.get_ticks_usec() - t) / 1000.0
-	t = Time.get_ticks_usec()
-	water_arrays = WaterBuilder.prepare(w, heights)
-	_prepare_times.prepare_water_ms = (Time.get_ticks_usec() - t) / 1000.0
 	return painted
 
 
@@ -282,9 +266,3 @@ func _paint(w: WorldData, px: int) -> Array:
 ## Damaged derivative chunk: recover from the restored physics surface, never regenerate the world.
 static func rebuild_chunk(key: Vector2i, w: WorldData, h: Heightfield) -> Array:
 	return TerrainBuilder.build_chunk(w, h, key)
-
-
-static func rebuild_water_chunk(key: Vector2i, layer: int, w: WorldData, cache: WorldCache, size: int) -> Array:
-	var base := Surface.restore(w, cache.load_artifact(w.seed_text, size, "base"), "base")
-	if base == null: base = Heightfield.new(w, false)
-	return WaterBuilder.build_chunk(w, base, key, layer)

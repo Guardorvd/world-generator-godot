@@ -84,6 +84,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 	var max_cut := -float(earthwork_input.earthwork_limits.max_cut) - 0.05 if earthwork_input != null else -INF
 	var max_fill := float(earthwork_input.earthwork_limits.max_fill) + 0.05 if earthwork_input != null else INF
 	var plan: Dictionary = again.plan if not again.is_empty() else _bake_plan(h, definitions)
+	if plan.has("errors"): return plan.errors
 	var pin_at: Callable = plan.pin_at
 	var profiles: Dictionary = plan.profiles
 	var shapes: Dictionary = plan.shapes
@@ -496,12 +497,16 @@ static func _bake_plan(h: Heightfield, definitions: Array[TrailDefinition]) -> D
 	# within its half diagonal of the centre; TILE leaves room for the metre between stations). Every zone cell maps the
 	# routes that can reach it (in definition order) to their widest reach there: a vertex asks only those.
 	var zone := {}
+	var lo := Vector2.ONE * GameConfig.TILE * 0.5
+	var hi := Vector2(w.W, w.H) * GameConfig.TILE - lo
 	for d in definitions:
 		var plain := d.earthwork <= 0.0
 		var stations := ceili(d.route_length() / RoadRefinement.STEP) if plain else (profiles[d.id].points as PackedVector2Array).size() - 1
 		for j in stations + 1:
 			var p: Vector2 = d.point_at(j * RoadRefinement.STEP) if plain else profiles[d.id].points[j]
 			var reach: float = d.width * 0.5 + RoadRefinement.REACH if plain else profiles[d.id].reaches[j]
+			if not plain and (p.x - reach < lo.x or p.y - reach < lo.y or p.x + reach > hi.x or p.y + reach > hi.y):
+				return {errors = PackedStringArray(["Trail earthworks outside prepared region: " + d.id])}
 			var span := reach + GameConfig.TILE
 			var limit := span * span
 			for cz in range(maxi(0, floori((p.y - span) / GameConfig.TILE - 0.5)), mini(w.H - 1, ceili((p.y + span) / GameConfig.TILE - 0.5))):

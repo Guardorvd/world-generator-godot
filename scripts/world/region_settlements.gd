@@ -202,7 +202,8 @@ static func density_at(seed_num: int, x: int, y: int) -> float:
 ## Производные поля того же домена (sample_rect) из той же согласованной воды. Владелец — пакет
 ## подготовки (finish_neighbors): поля не меняются, дороги той же области берут их вместо пересчёта.
 static func geography_of(w: WorldData, region: Dictionary) -> Dictionary:
-	return {rect = region.sample_rect, dist_water = w.dist_water, elev = w.elev, slope = w.slope, biome = w.biome}
+	return {rect = region.sample_rect, dist_water = w.dist_water, elev = w.elev, slope = w.slope, biome = w.biome,
+		temp = w.temp, moist = w.moist, light = w.generation.light}
 
 
 ## Адаптер к существующим правилам домов: координаты в нём локальные, география — готовая.
@@ -224,17 +225,48 @@ static func local_world(source: WorldData, region: Dictionary, surface: Dictiona
 		if surface.river[i] != 0: w.filled[i] = surface.water_level[i]
 	w.dist_ocean = region.fields.dist.duplicate()
 	w.path_mask.resize(w.N)
+	var f: Dictionary = region.fields
 	if geography.get("rect") == region.sample_rect:
 		# Массивы общие (копия при записи): изменения дорог не трогают поля пакета.
 		w.dist_water = geography.dist_water
 		w.elev = geography.elev
 		w.slope = geography.slope
 		w.biome = geography.biome
+		w.temp = geography.temp
+		w.moist = geography.moist
+		w.generation.light = geography.light
 		return w
-	w.biome = region.fields.biome.duplicate()
-	StageGeography.run(w) # новые уклоны и расстояния до воды после земляных работ
+	w.temp = f.temp.duplicate()
+	w.moist = f.moist.duplicate()
+	w.generation.light = f.get("light", PackedFloat32Array()).duplicate()
+	w.generation.light.resize(w.N)
+	w.biome = f.biome.duplicate()
+	var has_halo := f.has("dw") and f.has("rain")
+	if has_halo and w.h == f.h and w.river == f.river:
+		# География ореола уже готова и видит воду за пределами этого прямоугольника.
+		w.dist_water = f.dw
+		w.elev = f.elev
+		w.slope = f.slope
+		return w
+	StageGeography.run(w)
 	for i in w.N:
-		# Готовые клетки ореола сохраняют биом стартового плана.
-		if w.ocean[i] == 0 and w.lake[i] == 0 and region.fields.fixed[i] == 0:
-			w.biome[i] = StageClimate.land_biome(w.elev[i], region.fields.temp[i], region.fields.moist[i], w.slope[i], w.dist_ocean[i])
+		w.dist_water[i] = minf(w.dist_water[i], w.dist_ocean[i])
+		if f.has("dw"):
+			w.dist_water[i] = minf(w.dist_water[i], f.dw[i])
+		if f.fixed[i] != 0:
+			if f.has("elev"): w.elev[i] = f.elev[i]
+			if f.has("slope"): w.slope[i] = f.slope[i]
+	for i in w.N:
+		if f.fixed[i] != 0: continue
+		var conditions := StageClimate.natural_conditions(w, i % w.W, i / w.W)
+		w.generation.light[i] = conditions.x
+		var land := w.ocean[i] == 0 and w.lake[i] == 0
+		if has_halo:
+			var t := clampf(f.temp_base[i] - w.elev[i] * 0.6, 0.0, 1.0)
+			if land: t = clampf(t + (conditions.x - 0.5) * 0.08, 0.0, 1.0)
+			w.temp[i] = t
+			w.moist[i] = StageClimate.soil_moisture(f.rain[i], w.dist_water[i], w.slope[i], t, conditions) if land \
+				else clampf(f.rain[i] + 0.22 * exp(-w.dist_water[i] / 4.0), 0.0, 1.0)
+		if land:
+			w.biome[i] = StageClimate.land_biome(w.elev[i], w.temp[i], w.moist[i], w.slope[i], w.dist_ocean[i], w.dist_water[i])
 	return w

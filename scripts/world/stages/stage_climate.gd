@@ -32,7 +32,9 @@ static func soil_moisture(rain: float, dw: float, sl: float, t: float, condition
 
 
 ## Правило выбора биома для клетки суши. e — высота, t — температура, m — влажность (0..1)
-static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float) -> int:
+static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: float, dist_water := INF) -> int:
+	if dist_water <= 1.0 and dist_ocean > 2.5 and slope > 0.55 and e < 0.62:
+		return Biomes.STONESHORE
 	if e > 0.62 or (e > 0.42 and t < 0.2):
 		return Biomes.PEAK
 	if e > 0.4 or slope > 1.3:
@@ -135,10 +137,6 @@ static func fields_reference(w: WorldData, temp_n: PackedFloat64Array) -> Dictio
 				b = Biomes.LAKE
 			else:
 				# t и m в JS читаются из локальных переменных (double), а не из Float32Array
-				b = land_biome(e, t, m, slope[i], dist_ocean[i])
-				# Быстрые горные потоки обнажают камень; равнинные берега остаются
-				# травянистыми. Используем готовые уклон и расстояние, без нового поля.
-				if dist_water[i] <= 1.0 and dist_ocean[i] > 2.5 and slope[i] > 0.55 and e < 0.62:
-					b = Biomes.STONESHORE
+				b = land_biome(e, t, m, slope[i], dist_ocean[i], dist_water[i])
 			biome[i] = b
 	return {temp = temp, moist = moist, biome = biome, light = light}

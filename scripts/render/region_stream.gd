@@ -563,6 +563,12 @@ static func _valid_fields(saved: Variant, rect: Rect2i) -> bool:
 		if not fields.get(field) is PackedFloat32Array or fields[field].size() != n: return false
 	for field: String in ["biome", "river", "ocean", "lake", "path", "village"]:
 		if not fields.get(field) is PackedByteArray or fields[field].size() != n: return false
+	var climate := ["elev", "temp", "moist", "light"]
+	if climate.any(func(field: String) -> bool: return fields.has(field)):
+		for field: String in climate:
+			if not fields.get(field) is PackedFloat32Array or fields[field].size() != n: return false
+			for value: float in fields[field]:
+				if not is_finite(value) or value < 0.0 or (field != "elev" and value > 1.0): return false
 	for i in n:
 		if not is_finite(fields.h[i]): return false
 		var water: float = fields.water_level[i]

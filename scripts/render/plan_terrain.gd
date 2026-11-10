@@ -24,7 +24,6 @@ var _read_task := -1
 var _read_key := Vector2i.ZERO
 var _read_out := {}
 var water_layer := -1
-var cache_size := 0
 var _uncached_key: Variant = null
 var _uncached_arrays: Array = [] # one oversized block, released as soon as it is uploaded
 var source: RefCounted
@@ -91,7 +90,7 @@ func _read_arrays(key: Vector2i) -> Array:
 	var data: Variant = _cache._read(_cache.dir.path_join(ref.file), ref.key)
 	if data is Dictionary and preload("res://scripts/game/surface_snapshot.gd").mesh_valid(data.get("arrays"), false):
 		return data.arrays
-	var arrays := WorldLoader.rebuild_chunk(key, _world, _heights) if water_layer < 0 else WorldLoader.rebuild_water_chunk(key, water_layer, _world, _cache, cache_size)
+	var arrays := WorldLoader.rebuild_chunk(key, _world, _heights) if water_layer < 0 else WaterBuilder.build_chunk(_world, _heights, key, water_layer)
 	_cache._write(_cache.dir.path_join(ref.file), ref.key, var_to_bytes({arrays = arrays}))
 	return arrays
 

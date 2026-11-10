@@ -19,7 +19,7 @@ public partial class FastGrid
 		var hv = new float[n];
 		for (int i = 0; i < n; i++)
 		{
-			double v = h[i];
+			double v = ocean[i] == 0 && lake[i] == 0 ? Math.Max(0.0, h[i]) : h[i];
 			raw[i] = ocean[i] != 0 ? (float)(Math.Max(-oceanDepth, v * oceanDepth) - 0.5) : (float)(v * hs);
 			hv[i] = raw[i];
 		}

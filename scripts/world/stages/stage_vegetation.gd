@@ -154,7 +154,8 @@ static func fields(w: WorldData) -> Dictionary:
 	var noise_started := Time.get_ticks_usec()
 	var age_n := Parallel.fbm_rect(w.noise.forest, 0, 0, W, H, 78.0, 2, 91.0, -47.0, true) # как в age_at
 	var structure := structure_rect(w, 0, 0, W, H, true)
-	w.generation.surface_rock=Surface.field(elev,slope,moist)
+	if w.generation.surface_rock.size() != N:
+		w.generation.surface_rock = Surface.field(elev, slope, moist)
 	w.generation_profile.forest_noise_ms = (Time.get_ticks_usec() - noise_started) / 1000.0
 	var out := {biome = biome, river = river, forest = forest, stony = stony, elev = elev, slope = slope,
 		dw = dist_water, temp = temp, moist = moist, dist_path = dist_path, village = village,

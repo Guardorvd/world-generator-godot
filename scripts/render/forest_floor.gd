@@ -10,7 +10,11 @@ const WOOD := Color(0.49, 0.39, 0.25)
 
 
 static func moisture_at(w: WorldData, k: int) -> float:
-	return clampf(w.moist[k] + maxf(0.0, 1.0 - w.dist_water[k] / 3.0) * 0.2, 0.0, 1.0)
+	return ground_moisture(w.moist[k], w.dist_water[k])
+
+
+static func ground_moisture(moist: float, dist_water: float) -> float:
+	return clampf(moist + maxf(0.0, 1.0 - dist_water / 3.0) * 0.2, 0.0, 1.0)
 
 
 static func rockiness(w: WorldData, k: int) -> float:

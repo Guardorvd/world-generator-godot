@@ -49,6 +49,38 @@ func same_overlap(a: Dictionary, b: Dictionary) -> bool:
 	return overlap.has_area()
 
 
+func check_water_contract(w: WorldData) -> void:
+	var sea := PackedByteArray([1, 1, 0])
+	var wet := sea.duplicate()
+	OuterLand._water_sources(Rect2i(0, 0, 3, 1), Rect2i(0, 0, 2, 1), PackedByteArray([0, 0]),
+		PackedByteArray([0, 1]), PackedByteArray([0, 0]), sea, wet)
+	check(sea == PackedByteArray([0, 0, 0]) and wet == PackedByteArray([0, 1, 0]),
+		"маска плана исключает сухую впадину из моря и учитывает пресную воду отдельно")
+	w.h[6] = -0.04
+	w.h[7] = -0.03
+	var heights := Heightfield.new(w, false)
+	check(heights.hv_raw[6] == 0.0 and heights.hv_raw[7] < 0.0,
+		"сухая котловина поднята до уровня моря, дно озера сохраняется")
+	var r := Regions.prepare_rect(w, Rect2i(8, 0, 8, 8))
+	var f: Dictionary = r.fields
+	f.dist.fill(4.0)
+	f.dw.fill(4.0)
+	f.ocean.fill(0)
+	f.lake.fill(0)
+	f.river.fill(0)
+	f.fixed.fill(0)
+	var ground: PackedFloat32Array = f.h.duplicate()
+	ground.fill(0.1)
+	var near: int = 3 * r.sample_rect.size.x + 3
+	ground[near + 1] = 0.14
+	var river: PackedByteArray = f.river.duplicate()
+	river[near - 1] = 1
+	var surface := {h = ground, river = river, water_level = f.water_level}
+	var local := Regions.Settlements.local_world(w, r, surface)
+	check(local.dist_water[local.N - 1] == 4.0 and local.biome[near] == Biomes.STONESHORE,
+		"пересчёт сохраняет воду за ореолом и восстанавливает каменистый пресный берег")
+
+
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
@@ -91,5 +123,6 @@ func _init() -> void:
 	var thread := Thread.new()
 	thread.start(func() -> Dictionary: return Regions.prepare_rect(w, Rect2i(8, 0, 8, 8)))
 	check(var_to_bytes(thread.wait_to_finish()) == var_to_bytes(repeat), "фоновая подготовка совпадает с синхронной")
+	check_water_contract(w)
 	print("region_preparation_test: %d failures" % fails)
 	quit(1 if fails else 0)

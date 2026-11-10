@@ -291,6 +291,13 @@ func pinning(no_water: Dictionary) -> void:
 	var ledger: Dictionary = done.ledger
 	check(done.ready and ledger.regions.has(Vector2i(1, 0)) and not Regions.commit(ledger, [east], [no_water], p, roads).ready,
 		"13.8: принятая область закрепляется один раз")
+	var land := OuterLand.new()
+	land.set_ledger(ledger)
+	var bounds: Rect2i = roads.sample_rect
+	var at := (10 - bounds.position.y) * bounds.size.x + 256 - bounds.position.x
+	var cell := land.info(256, 10)
+	check(cell.temp == roads.temp[at] and cell.moist == roads.moist[at] and cell.elev == roads.elev[at],
+		"климат закреплённой области доступен без загруженного меша")
 	var ledger_before := var_to_bytes(EntityCodec.encode(ledger))
 	var south := Regions.pin(plain(Rect2i(256, 256, 256, 256)), plan, ledger)
 	var seam := true

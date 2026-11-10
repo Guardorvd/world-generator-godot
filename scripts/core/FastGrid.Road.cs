@@ -582,7 +582,7 @@ public partial class FastGrid
 						value = RoadLerp(value, shelf, influence[n] * structurePins[n] * power[n] * bench);
 					}
 				}
-				value += relief[n];
+				value = RoadLerp(baseHeight, value, RoadReliefEdge(points[n], width, height, tile)) + relief[n];
 				if (float.IsNegativeInfinity(water[cell]) && value < baseHeight)
 					value = Math.Max(value, Math.Min(baseHeight, RoadWet(water, width, height, cell) + waterGap));
 			}

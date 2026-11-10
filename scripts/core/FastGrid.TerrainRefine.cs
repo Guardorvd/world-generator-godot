@@ -8,7 +8,7 @@ public partial class FastGrid
 	// Один вызов на меш; патчи — столбцами (25 вершин на патч в порядке словаря). Порядок добавления вершин и индексов тот же,
 	// что в GDScript (патчи по порядку, общие вершины соседей — один раз), поэтому массивы совпадают побайтно.
 	// Нормали на краях патчей берут Heightfield.ground_at: метровая сетка (RoadRefinement.height_at), иначе общая сетка hv.
-	// Только мир без OuterLand за краем карты.
+	// При наличии OuterLand вызывается только для внутренних чанков плана.
 
 	private static double RefineHeightAt(int[] cellPatch, float[] ph, int width, int height, double tile, int div, double x, double z)
 	{
@@ -99,7 +99,8 @@ public partial class FastGrid
 					{
 						id = (cz + z / div - areaY) * (areaW + 1) + cx + x / div - areaX;
 						var v = pos[id]; v.Y = ph[o + n]; pos[id] = v;
-						nor[id] = normal;
+						if (px > tile * 0.5 && pz > tile * 0.5 && px < (width - 0.5) * tile && pz < (height - 0.5) * tile)
+							nor[id] = normal;
 						colors[id] = pcolor[o + n];
 						uv2[id] = puv[o + n];
 					}

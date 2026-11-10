@@ -90,9 +90,38 @@ func short_junction() -> void:
 				joins += 1
 	check(joins == 3, "Все три участка сходятся в одной точке")
 
+func closed_lake_above_sea() -> void:
+	var w := WorldData.new()
+	w.W = 64
+	w.H = 64
+	w.N = w.W * w.H
+	w.noise.moist = Simplex.new(WGRandom.new(1))
+	w.ocean.resize(w.N)
+	var ground := PackedFloat32Array()
+	ground.resize(w.N)
+	for floor_height: float in [-0.02, 0.02]:
+		for i in w.N:
+			var offset := Vector2i(i % w.W - 32, i / w.W - 32)
+			ground[i] = floor_height + offset.length_squared() * 0.00025
+		w.h = ground
+		StageHydrology.run(w, 1)
+		if floor_height < 0.0:
+			check(w.lake.find(1) < 0, "Замкнутая впадина ниже моря остаётся сухой")
+		else:
+			check(w.lake.count(1) >= StageHydrology.LAKE_MIN, "Замкнутая впадина выше моря образует озеро")
+			for i in w.N:
+				if w.lake[i] != 0:
+					check(w.filled[i] * GameConfig.HS > GameConfig.LAKE_DROP, "Зеркало озера выше моря")
+
+
 func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)
 	Grid.allow_fast = not OS.get_cmdline_user_args().has("--gdscript")
+	closed_lake_above_sea()
+	if "--basin-only" in OS.get_cmdline_user_args():
+		print("Ошибок гидрологии: %d" % fails)
+		quit(1 if fails > 0 else 0)
+		return
 	short_junction()
 	for seed_text in ["Север-1234", "Туман-4821", "Ущелье", "Янтарь-5150"]:
 		var w := WorldData.new()

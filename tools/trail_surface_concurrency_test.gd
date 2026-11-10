@@ -43,8 +43,11 @@ func run() -> void:
 	Grid.allow_fast = use_native
 	check(pixels == reference, "native and GDScript map painters produce identical RGB")
 	var packed := StageTrailPlan.pack(d)
+	var base_mask := PackedByteArray()
+	base_mask.resize(w.N)
 	w.trail_plan = {version = StageTrailPlan.VERSION, mode = "terrain_network", state = "found",
-		routes = [packed], definition = packed, entries = [{rect = Rect2i(12, 12, 40, 40), route = packed.duplicate(true)}]}
+		base_path_mask = base_mask, routes = [packed], definition = packed,
+		entries = [{rect = Rect2i(12, 12, 40, 40), route = packed.duplicate(true)}]}
 	check(StageTrailPlan.consistency_errors(w).is_empty(), "plan and complete civil path network agree")
 	_test_consistency(w)
 	_test_interleaving(w)

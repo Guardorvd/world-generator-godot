@@ -45,7 +45,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	for name: String in regions[0].fields:
 		var values: Variant = regions[0].fields[name].slice(0, 0) # пустой массив того же типа, без копии поля
 		values.resize(bounds.get_area())
-		values.fill(0)
+		values.fill(1e9 if name in ["dist", "dw"] else 0)
 		fields[name] = values
 	if not fields.has("path"):
 		fields.path = PackedByteArray()
@@ -274,6 +274,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		trails = w.trails, bridges = bridges, settlements = out_places, underfilled = underfilled, connections = edges, components = components.size(), attempts = attempts,
 		exits = out_exits, merged_nets = merged_nets, plan_paths = plan_paths,
 		sample_rect = bounds, path_mask = w.path_mask, road_surface = w.road_surface, biome = w.biome,
+		elev = w.elev, temp = w.temp, moist = w.moist, light = w.generation.light,
 		slope = w.slope, dw = w.dist_water, dist_path = dist_path, village = village,
 		profile = profile} # время и счётчики работы; при сравнении результатов не учитывать
 

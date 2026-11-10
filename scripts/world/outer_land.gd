@@ -7,8 +7,8 @@ extends RefCounted
 ## Всё зависит только от места: клетка — в общих координатах мира, случайные числа — хеш (сид, клетка, слой),
 ## а соседей кусок не спрашивает: всё, что нужно рядом (море в SEA_REACH клетках, соседи для крутизны), он
 ## считает сам в полосе вокруг себя. Поэтому одна и та же местность получается в любом порядке загрузки.
-## За внешним краем плана рек и озёр нет. Клетки внутри плана compute с 8.6 берёт из общей готовой
-## географии (_overlay): с долинами, руслами и расстоянием до всей воды, а не сырой шум.
+## Океан открытой местности определяется уровнем моря. В готовом плане и закреплённых областях
+## используются их маски воды, в том числе при расчёте расстояний для соседних клеток.
 ## compute — чистая функция, её считают фоновые задачи; в chunks и veg куски кладёт и убирает главный поток.
 ## Кольцо клеток вокруг карты считается сразу и потом не меняется: его читает и поток растительности
 ## (Heightfield.ground_at у самого края карты), а chunks — только главный поток.
@@ -56,10 +56,11 @@ func _init(w: WorldData = null) -> void:
 
 ## Поля клеток прямоугольника cw × ch с углом (x0, y0): h — высота в единицах WorldData.h (ниже 0 — море,
 ## в метры её переводит Heightfield.outer_meters), biome, temp, moist, elev, slope, dist — клеток до моря
-## (не больше SEA_REACH), light — освещение склона. Климат — правила StageClimate; вместо рек и озёр только
-## море, поэтому dist — и близость воды, и близость океана. Значение клетки не зависит от того, в каком
+## (вне SEA_REACH — 1e9), dw — до любой воды, light — освещение склона. Климат — правила StageClimate.
+## При одном снимке готовых областей значение клетки не зависит от того, в каком
 ## прямоугольнике её считали: всё, что ей нужно, лежит в полосе PAD вокруг
-static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Dictionary:
+static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: Variant = null, climate_inputs := false) -> Dictionary:
+	var ledger: Dictionary = snapshot if snapshot is Dictionary else (w.outer.get_ledger() if w.outer != null else {})
 	var pw := cw + 2 * PAD
 	var ph := ch + 2 * PAD
 	var raw := StageRelief.raw_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
@@ -77,7 +78,16 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 		var hh := minf(pow((v - sea) / (top - sea), 1.25), 1.4) if v >= sea else (v - sea) / (sea - bottom)
 		hn[k] = maxf(1e-4, hh + micro[k] * 0.006 * minf(1.0, hh * 40.0)) if hh > 0.0 else hh
 		sea_src[k] = 1 if hn[k] < 0.0 else 0
+	var water_src := sea_src.duplicate()
+	var halo := Rect2i(x0 - PAD, y0 - PAD, pw, ph)
+	if w.ocean.size() == w.N and w.lake.size() == w.N and w.N > 0:
+		_water_sources(halo, Rect2i(0, 0, w.W, w.H), w.ocean, w.lake, w.river_cells(), sea_src, water_src)
+	for entry: Dictionary in ledger.get("regions", {}).values():
+		if entry.has("fields"):
+			var f: Dictionary = entry.fields
+			_water_sources(halo, entry.rect, f.ocean, f.lake, f.river, sea_src, water_src)
 	var dist := Grid.distance_field(pw, ph, sea_src)
+	var wet_dist := dist if sea_src == water_src else Grid.distance_field(pw, ph, water_src)
 	var p: Array = WorldData.NOISE_FIELDS.temp
 	var temp_n := Parallel.fbm_rect(w.noise.temp, x0, y0, cw, ch, p[0], p[1])
 	p = WorldData.NOISE_FIELDS.moist
@@ -85,7 +95,10 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 	var n := cw * ch
 	var out := {h = PackedFloat32Array(), biome = PackedByteArray(), temp = PackedFloat32Array(),
 		moist = PackedFloat32Array(), elev = PackedFloat32Array(), slope = PackedFloat32Array(),
-		dist = PackedFloat32Array(), light = PackedFloat32Array()}
+		dist = PackedFloat32Array(), dw = PackedFloat32Array(), light = PackedFloat32Array()}
+	if climate_inputs:
+		out.rain = PackedFloat32Array()
+		out.temp_base = PackedFloat32Array()
 	for key in out:
 		out[key].resize(n)
 	# Rainfall uses the actual ocean field; climate never invents freshwater.
@@ -108,17 +121,19 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			# Outside the coastal halo there is no known nearby water. Preserve
 			# the no-source sentinel, rather than pretending water is 32 cells away.
 			var d := dist[c] if dist[c] <= SEA_REACH else 1e9
+			var dw := wet_dist[c] if wet_dist[c] <= SEA_REACH else 1e9
 			# осадки — как в StageHydrology, поправка на близость моря гаснет к SEA_REACH
 			var rain := StageHydrology.rainfall(moist_n[o], dist[c])
-			var t := clampf(0.43 + lat * 0.32 + temp_n[o] * 0.18 - e * 0.6, 0.0, 1.0)
-			var m := clampf(rain + 0.22 * exp(-d / 4.0), 0.0, 1.0)
+			var temp_base := 0.43 + lat * 0.32 + temp_n[o] * 0.18
+			var t := clampf(temp_base - e * 0.6, 0.0, 1.0)
+			var m := clampf(rain + 0.22 * exp(-dw / 4.0), 0.0, 1.0)
 			var b: int
 			if hh < 0.0:
 				b = Biomes.DEEP if hh < -0.35 else (Biomes.OCEAN if hh < -0.07 else Biomes.SHALLOW)
 			else:
 				t = clampf(t + (light - 0.5) * 0.08, 0.0, 1.0)
-				m = StageClimate.soil_moisture(rain, d, slope, t, Vector2(light, hollow))
-				b = StageClimate.land_biome(e, t, m, slope, d)
+				m = StageClimate.soil_moisture(rain, dw, slope, t, Vector2(light, hollow))
+				b = StageClimate.land_biome(e, t, m, slope, d, dw)
 			out.h[o] = hh
 			out.biome[o] = b
 			out.temp[o] = t
@@ -126,12 +141,28 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int) -> Diction
 			out.elev[o] = e
 			out.slope[o] = slope
 			out.dist[o] = d
+			out.dw[o] = dw
 			out.light[o] = light
+			if climate_inputs:
+				out.rain[o] = rain
+				out.temp_base[o] = temp_base
 	_overlay(w, Rect2i(x0, y0, cw, ch), out)
-	if w.outer != null:
-		_overlay_regions(w.outer.get_ledger(), Rect2i(x0, y0, cw, ch), out)
-	out.rock=preload("res://scripts/world/mountain_surface.gd").field(out.elev,out.slope,out.moist)
+	_overlay_regions(ledger, Rect2i(x0, y0, cw, ch), out)
+	if not climate_inputs:
+		out.rock = preload("res://scripts/world/mountain_surface.gd").field(out.elev, out.slope, out.moist)
 	return out
+
+
+static func _water_sources(halo: Rect2i, rect: Rect2i, ocean: PackedByteArray, lake: PackedByteArray,
+		river: PackedByteArray, sea_src: PackedByteArray, water_src: PackedByteArray) -> void:
+	var overlap := halo.intersection(rect)
+	var has_river := river.size() == rect.get_area()
+	for y in range(overlap.position.y, overlap.end.y):
+		for x in range(overlap.position.x, overlap.end.x):
+			var dst := (y - halo.position.y) * halo.size.x + x - halo.position.x
+			var src := (y - rect.position.y) * rect.size.x + x - rect.position.x
+			sea_src[dst] = ocean[src]
+			water_src[dst] = int(ocean[src] != 0 or lake[src] != 0 or (has_river and river[src] != 0))
 
 
 func set_ledger(ledger: Dictionary) -> void:
@@ -194,13 +225,14 @@ static func _overlay_regions(ledger: Dictionary, rect: Rect2i, out: Dictionary) 
 			out.village = PackedByteArray()
 			out.village.resize(area)
 		var f: Dictionary = regions[key].fields
+		var has_climate := f.has("elev")
 		for y in range(part.position.y, part.end.y):
 			for x in range(part.position.x, part.end.x):
 				var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
 				var src := (y - r.position.y) * r.size.x + x - r.position.x
 				var h: float = f.h[src]
 				out.h[dst] = h
-				out.elev[dst] = maxf(0.0, h)
+				out.elev[dst] = _saved_elev(f, src)
 				out.biome[dst] = f.biome[src]
 				out.slope[dst] = f.slope[src]
 				out.dist[dst] = f.dist[src]
@@ -209,14 +241,24 @@ static func _overlay_regions(ledger: Dictionary, rect: Rect2i, out: Dictionary) 
 				out.path[dst] = f.path[src]
 				out.dist_path[dst] = f.dist_path[src]
 				out.village[dst] = f.village[src]
+				if has_climate:
+					out.temp[dst] = f.temp[src]
+					out.moist[dst] = f.moist[src]
+					out.light[dst] = f.light[src]
 				if f.river[src] != 0 or f.lake[src] != 0:
 					out.water[dst] = f.water_level[src]
 
 
+static func _saved_elev(f: Dictionary, i: int) -> float:
+	if f.has("elev"): return f.elev[i]
+	if f.lake[i] != 0: return f.water_level[i]
+	return maxf(0.0, f.h[i])
+
+
 ## Внутри общего плана брать окончательные долины, воду и климат, а не заново сырой шум.
-## dw — расстояние до любой воды, river — коридор русла; снаружи плана только море.
+## dw — расстояние до любой воды, river — коридор русла.
 static func _overlay(w: WorldData, rect: Rect2i, out: Dictionary) -> void:
-	out.dw = out.dist.duplicate()
+	if not out.has("dw"): out.dw = out.dist.duplicate()
 	out.river = PackedByteArray()
 	out.river.resize(rect.get_area())
 	# Готовая география есть после StageClimate; заготовки WorldData в тестах её не имеют.
@@ -284,8 +326,8 @@ static func vegetation(w: WorldData, key: Vector2i) -> Dictionary:
 
 
 ## Поля куска key (для фоновой задачи)
-static func compute_chunk(w: WorldData, key: Vector2i) -> Dictionary:
-	return compute(w, key.x * C - 1, key.y * C - 1, C + 3, C + 3)
+static func compute_chunk(w: WorldData, key: Vector2i, snapshot: Variant = null) -> Dictionary:
+	return compute(w, key.x * C - 1, key.y * C - 1, C + 3, C + 3, snapshot)
 
 
 ## Клетка закреплённой области: [её поля, номер] или []. Эти поля окончательны и важнее кусков.
@@ -356,12 +398,13 @@ func info(i: int, j: int) -> Dictionary:
 	if at.is_empty() and known.is_empty():
 		return {}
 	if not known.is_empty():
-		# Закреплённая клетка: свои биом, вода и путь; климат — из куска, если он уже есть.
+		# Старые блоки без климата используют поля куска, пока он загружен.
 		var g: Dictionary = known[0]
 		var q: int = known[1]
+		var has_climate := g.has("elev")
 		return {i = -1, biome = g.biome[q], river = g.river[q] != 0, path = g.path[q], surface = 0,
-			elev = maxf(0.0, g.h[q]), temp = at[0].temp[at[1]] if not at.is_empty() else 0.5,
-			moist = at[0].moist[at[1]] if not at.is_empty() else 0.5, slope = g.slope[q]}
+			elev = _saved_elev(g, q), temp = g.temp[q] if has_climate else (at[0].temp[at[1]] if not at.is_empty() else 0.5),
+			moist = g.moist[q] if has_climate else (at[0].moist[at[1]] if not at.is_empty() else 0.5), slope = g.slope[q]}
 	var f: Dictionary = at[0]
 	var k: int = at[1]
 	return {i = -1, biome = f.biome[k], river = false, path = 0, surface = 0,

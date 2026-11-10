@@ -35,7 +35,6 @@ const ROCK_HOLLOW := [[Understory.MOSS, 1.0], [Understory.HERB, 1.45], [Understo
 	[Floor.FIRST + Floor.STONES, 3.15]]
 ## 16.0: только для сравнения «было» в изолированной сцене: открытые места без сообществ, как до 16.0
 static var legacy_open := false
-const OUTER_LIGHT := 0.6 # 14.4: освещённость клеток за краем плана (у плана — из StageClimate)
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const Placement := preload("res://scripts/render/vegetation_placement.gd")
 const StreamPolicy := preload("res://scripts/render/vegetation_stream_policy.gd")
@@ -1444,12 +1443,12 @@ func _fill_grass(px: float, pz: float) -> void:
 					continue
 				var surface := _outer_surface(cell)
 				if d2 > rT * rT:
-					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, cell.elev, cell.dw)
+					_fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, cell.light, px, pz, cell.elev, cell.dw)
 					continue
 				var lush := clampf(1.0 - 0.45 * (cell.slope - 0.5), 0.35, 1.0)
-				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * OUTER_LIGHT)
+				lush *= (0.45 + 0.75 * cell.moist) * (0.65 + 0.7 * cell.light)
 				lush *= 1.0 - 0.65 * surface.r
-				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, OUTER_LIGHT, px, pz, cell.elev, cell.dw)
+				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, cell.light, px, pz, cell.elev, cell.dw)
 				if rocky_cell: lush *= _rock_shelter(surface, i, j)
 				n = _grass_cell(i, j, ROCK_GRASS if rocky_cell else bd.grass, lush, surface, d2, n, cell.path, regions)
 	low = _grass_low
@@ -1542,9 +1541,10 @@ static func _region_cell(regions: Dictionary, i: int, j: int) -> Dictionary:
 	var f: Dictionary = r.fields
 	var rect: Rect2i = r.rect
 	var q := (j - rect.position.y) * rect.size.x + i - rect.position.x
-	# влажности в полях области нет: у воды трава гуще, как у плана (dist_water)
+	var has_climate := f.has("elev")
 	return {biome = f.biome[q], path = f.path[q], slope = f.slope[q], river = f.river[q] != 0 or f.lake[q] != 0,
-		elev = f.h[q], moist = 0.45 + 0.4 * exp(-f.dw[q] / 3.0), dw = float(f.dw[q])}
+		elev = OuterLand._saved_elev(f, q), moist = f.moist[q] if has_climate else 0.45 + 0.4 * exp(-f.dw[q] / 3.0),
+		light = f.light[q] if has_climate else 0.6, dw = float(f.dw[q])}
 
 
 ## Вокруг клетки (3 × 3) только план и закреплённые области: высоты подлеска (Heightfield) здесь
@@ -1565,14 +1565,15 @@ func _region_inner(regions: Dictionary, i: int, j: int) -> bool:
 ## 14.4: полог, хвоя, влага и каменистость клетки за краем плана — по биому (у плана это картинка леса)
 static func _outer_surface(cell: Dictionary) -> Color:
 	var exposed:=StageVegetation.Surface.exposure(cell.elev,cell.slope,cell.moist)
+	var wet := Floor.ground_moisture(cell.moist, cell.dw)
 	match cell.biome:
 		Biomes.FOREST, Biomes.JUNGLE:
-			return Color(0.6, 0.25, cell.moist, exposed)
+			return Color(0.6, 0.25, wet, exposed)
 		Biomes.TAIGA:
-			return Color(0.55, 0.85, cell.moist, exposed)
+			return Color(0.55, 0.85, wet, exposed)
 		Biomes.SWAMP:
-			return Color(0.35, 0.3, 0.9, exposed)
-	return Color(0.0, 0.0, cell.moist, exposed)
+			return Color(0.35, 0.3, wet, exposed)
+	return Color(0.0, 0.0, wet, exposed)
 
 
 ## Скалы не зеленеют: трава пятнами 8 м только в сырых защищённых местах (влага и открытость

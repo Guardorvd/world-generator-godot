@@ -1,5 +1,5 @@
 extends SceneTree
-## Reuse a validated geographic cache; never regenerate geography for profiling.
+## Reuse the geographic fixture when its cache schema matches.
 ## One build per process: -- --reference saves a reference with the same acceptance
 ## rules, full neighbour indexing and no early audit. Default compares against it.
 const Network := preload("res://scripts/trails/trail_world_network.gd")
@@ -28,17 +28,21 @@ func run() -> void:
 	var seed := "Север-1234"
 	var path := cache.path_for(seed, WorldGenerator.START_SIZE, 0)
 	var data: Variant = cache._read(path, cache._key(seed, WorldGenerator.START_SIZE, 0))
-	check(data is Dictionary, "validated geographic fixture exists")
-	if not data is Dictionary: quit(1); return
-	var w := cache._restore(data, false)
-	check(w != null, "geographic fixture passes WorldData validation")
-	if w == null: quit(1); return
+	var replay_test := "--replay" in OS.get_cmdline_user_args()
+	var w := cache._restore(data, false) if data is Dictionary else null
+	if w == null:
+		w = WorldGenerator._geography(seed, WorldGenerator.PLAN_SIZE)
+	else:
+		print("Using validated geographic fixture")
 	var geo := var_to_bytes([w.h, w.ocean, w.lake, w.rivers])
-	w.base_heights = Heightfield.new(w, false)
-	w.start_noise_fields()
+	if w.base_heights == null:
+		w.base_heights = Heightfield.new(w, false)
+		w.base_heights.weaken_world()
+	w.start_noise_fields(["cost", "forest"])
 	StageLandmarks.run(w)
 	StageTrails.run(w, func(_p: float, _label: String) -> void: pass)
 	StageSites.run(w)
+	StageLakes.run(w)
 	RoadSurface.run(w)
 	var base := w.base_heights.copy()
 	base.finish_paths()
@@ -65,7 +69,19 @@ func run() -> void:
 	print("EARTH ", JSON.stringify(earth_summary(plan)))
 	var result_path := "res://.godot/trail_network_cost_reference%s.bin" % ("_part" if "--part" in OS.get_cmdline_user_args() else "")
 	var snapshot := preload("res://scripts/game/surface_snapshot.gd")
-	if reference or "--save" in OS.get_cmdline_user_args():
+	if replay_test:
+		plan.version = StageTrailPlan.VERSION
+		w.trail_plan = plan
+		# The saved context may use cells that are outside the window opened to the player.
+		w.territory_center = WorldGenerator.start_center(w)
+		w.expand_territory(256)
+		var replay := w.base_heights.copy()
+		var report := StageTrailPlan.prepare(replay)
+		check(not plan.routes.is_empty() and report.applied and report.errors.is_empty(),
+			"replay accepted routes in a smaller visible window: " + str(report.errors))
+		check(replay.road_refinement != null and preload("res://tools/trail_world_network_test.gd").same_surface(replay, h),
+			"replay preserves coarse heights and every metre patch")
+	elif reference or "--save" in OS.get_cmdline_user_args():
 		FileAccess.open(result_path, FileAccess.WRITE).store_var({routes = plan.routes, surface = snapshot.capture(h, "final")})
 	elif not FileAccess.file_exists(result_path):
 		print("ЭТАЛОНА НЕТ: ", result_path, " (", "быстрый режим: -- --part --save" if quick else "полный режим: -- --reference", ")")
@@ -76,6 +92,8 @@ func run() -> void:
 		check(restored != null and preload("res://tools/trail_world_network_test.gd").same_surface(restored, h), "every real-world patch and material matches")
 	check(geo == var_to_bytes([w.h, w.ocean, w.lake, w.rivers]), "geography remains byte-identical")
 	check(Check.settlement_network_valid(w), "settlement connections remain physically valid")
+	w.clear_noise_fields()
+	w.base_heights = null
 	print("COST RESULT ", failures, " failures")
 	quit(1 if failures else 0)
 

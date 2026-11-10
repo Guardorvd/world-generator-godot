@@ -11,6 +11,8 @@ static func apply_known(fields: Dictionary, rect: Rect2i, w: WorldData, ledger: 
 		var river := w.river_cells()
 		var paths: Dictionary = ledger.get("plan_paths", {})
 		var has_paths := w.path_mask.size() == w.N
+		var has_geography := w.elev.size() == w.N and w.slope.size() == w.N and w.dist_water.size() == w.N
+		var has_climate := w.temp.size() == w.N and w.moist.size() == w.N
 		for y in range(plan.position.y, plan.end.y):
 			for x in range(plan.position.x, plan.end.x):
 				var dst := (y - rect.position.y) * rect.size.x + x - rect.position.x
@@ -23,6 +25,12 @@ static func apply_known(fields: Dictionary, rect: Rect2i, w: WorldData, ledger: 
 				fields.river[dst] = river[src]
 				fields.biome[dst] = w.biome[src]
 				fields.dist[dst] = w.dist_ocean[src]
+				if fields.has("dw"): fields.dw[dst] = w.dist_water[src] if has_geography else w.dist_ocean[src]
+				if fields.has("elev"): fields.elev[dst] = w.elev[src] if has_geography else maxf(0.0, w.h[src])
+				if fields.has("slope") and has_geography: fields.slope[dst] = w.slope[src]
+				if fields.has("temp") and has_climate: fields.temp[dst] = w.temp[src]
+				if fields.has("moist") and has_climate: fields.moist[dst] = w.moist[src]
+				if fields.has("light") and has_geography: fields.light[dst] = StageClimate.natural_conditions(w, x, y).x
 				fields.path[dst] = maxi(w.path_mask[src] if has_paths else 0, int(paths.get(Vector2i(x, y), 0)))
 	var regions: Dictionary = ledger.get("regions", {})
 	for key: Vector2i in regions:
@@ -37,3 +45,6 @@ static func apply_known(fields: Dictionary, rect: Rect2i, w: WorldData, ledger: 
 				fields.fixed[dst] = 1
 				for name: String in ["h", "ocean", "lake", "water_level", "river", "biome", "dist", "path"]:
 					fields[name][dst] = known.fields[name][src]
+				for name: String in ["elev", "slope", "dw", "temp", "moist", "light"]:
+					if fields.has(name) and known.fields.has(name):
+						fields[name][dst] = known.fields[name][src]

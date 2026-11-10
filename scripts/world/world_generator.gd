@@ -37,15 +37,16 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 
 
 ## Слои генерации для кэша миров (с 10.2, WorldCache): география (рельеф, вода, климат), места и пути,
-## природа (растительность, озёра, полотно путей, окно территории). Слой читает только готовые прошлые слои.
+## природа (растительность и окно территории). Слой читает только готовые прошлые слои.
 const LAYERS := ["geo", "places", "nature"]
+enum PlanMode { STAND, WORLD, MENU }
 
 
 ## Генерация по слоям. from — мир с готовыми слоями до start (из кэша: шумы на месте, без base_heights);
 ## on_layer(w, k) — после каждого слоя k, пока следующий его не тронул.
 static func generate_layers(seed_text: String, size: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
 		from: WorldData = null, start := 0, on_layer: Callable = Callable()) -> WorldData:
-	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, size)
+	var w := _generate_plan(seed_text, PLAN_SIZE, on_progress, after_climate, from, start, on_layer, PlanMode.WORLD)
 	# Генерация не читает размер из меню: открываем окно только после всех этапов.
 	w.territory_center = start_center(w)
 	w.expand_territory(size)
@@ -60,16 +61,9 @@ static func start_center(w: WorldData) -> Vector2i:
 	return Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
 
 
-## Стартовая область, которую откроет expand_territory(size) на пустом окне; нужна до конца генерации (StageTrailPlan).
-static func start_rect(w: WorldData, size: int) -> Rect2i:
-	var side := clampi(size, 1, mini(w.W, w.H))
-	var center := start_center(w)
-	return Rect2i(Vector2i(clampi(center.x - side / 2, 0, w.W - side), clampi(center.y - side / 2, 0, w.H - side)), Vector2i(side, side))
-
-
 ## Только декоративный фон меню; не игровой мир и не источник соседних областей.
 static func menu_background(seed_text: String) -> WorldData:
-	return _generate_plan(seed_text, 192)
+	return _generate_plan(seed_text, 192, Callable(), Callable(), null, 0, Callable(), PlanMode.MENU)
 
 
 ## Общая природная география без домов и дорог. Соседние области — прямоугольники этого же плана
@@ -99,7 +93,7 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 	step.call(StageRelief.PROGRESS, StageRelief.LABEL)
 	var t := Time.get_ticks_usec()
 	StageRelief.run(w)
-	w.start_noise_fields()
+	w.start_noise_fields(["moist"])
 	t = _stage_time(w, "relief", t)
 	step.call(StageOcean.PROGRESS, StageOcean.LABEL)
 	StageOcean.run(w)
@@ -107,6 +101,7 @@ static func _geography(seed_text: String, side: int, on_progress: Callable = Cal
 	step.call(StageHydrology.PROGRESS, StageHydrology.LABEL)
 	StageHydrology.run(w)
 	t = _stage_time(w, "hydrology", t)
+	w.start_noise_fields(["temp"])
 	step.call(StageRivers.PROGRESS, StageRivers.LABEL)
 	StageRivers.run(w)
 	t = _stage_time(w, "rivers", t)
@@ -130,7 +125,7 @@ static func _stage_time(w: WorldData, stage: String, since_us: int) -> int:
 
 
 static func _generate_plan(seed_text: String, side: int, on_progress: Callable = Callable(), after_climate: Callable = Callable(),
-		from: WorldData = null, start := 0, on_layer: Callable = Callable(), size := 0) -> WorldData:
+		from: WorldData = null, start := 0, on_layer: Callable = Callable(), mode := PlanMode.STAND) -> WorldData:
 	var w := from
 	if start == 0:
 		w = _geography(seed_text, side, on_progress)
@@ -141,7 +136,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		# поля шума — из сида
 		if w.base_heights == null:
 			w.base_heights = Heightfield.new(w, false)
-		w.start_noise_fields()
+	w.start_noise_fields(["cost"] if mode == PlanMode.MENU else ["cost", "forest"])
 	if after_climate.is_valid():
 		after_climate.call(w)
 	var step := func(p: float, label: String) -> void:
@@ -158,27 +153,38 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
 		t = _stage_time(w, "sites", t)
+		if mode == PlanMode.MENU:
+			RoadSurface.run(w)
+			w.clear_noise_fields()
+			w.base_heights = null
+			return w
+		StageLakes.run(w)
+		t = _stage_time(w, "lakes", t)
 		# Принятая сеть трасс — до растительности, чтобы окружение видело готовые пути
-		StageTrailPlan.run(w, size, step)
-		_stage_time(w, "trail_plan", t)
+		if mode == PlanMode.WORLD:
+			StageTrailPlan.run(w, step)
+			_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)
-	# Без этапа сети трасс (например, для фона меню) покрытия ещё не назначены.
-	# Они нужны для finish_paths, который строит рельеф полотна.
 	var later := Time.get_ticks_usec()
-	if w.trail_plan.get("mode", "") != "terrain_network": RoadSurface.run(w)
-	later = _stage_time(w, "road_surface", later)
 	step.call(StageVegetation.PROGRESS, StageVegetation.LABEL)
 	var surface: Heightfield = w.generation.trail_surface
 	if surface == null:
-		# При частичном попадании в кэш готовых высот ещё нет. Массивы вдали
-		# от маршрутов садятся на то же основание, что и при обычной генерации.
-		surface = Heightfield.base_of(w).copy()
-		surface.finish_paths()
+		# Слой природы и загрузчик используют одну восстановленную поверхность.
+		surface = Heightfield.base_of(w)
+		w.generation.surface_rock = RockRelief.field_of(w)
+		if w.trail_plan.get("mode", "") == "terrain_network":
+			var errors: PackedStringArray = load(StageTrailPlan.NETWORK_SCRIPT).restore(surface, w.trail_plan)
+			if errors.is_empty():
+				surface.weaken_world()
+				w.generation.trail_surface = surface
+			else:
+				surface.finish_paths()
+		else:
+			RoadSurface.run(w)
+			surface.finish_paths()
 	StageVegetation.run(w, surface)
-	later = _stage_time(w, "vegetation", later)
-	StageLakes.run(w)
-	_stage_time(w, "lakes", later)
+	_stage_time(w, "vegetation", later)
 	w.clear_noise_fields()
 	w.base_heights = null
 	step.call(0.86, "Отрисовка ландшафта")

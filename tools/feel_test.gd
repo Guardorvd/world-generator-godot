@@ -435,10 +435,9 @@ func _opening_test() -> void:
 	loaded.world.expand_territory(384)
 	print("План проверки: ", loaded.world.settlements.size(), " поселений, ", loaded.world.trails.size(), " путей, ", loaded.world.peaks.size(), " вершин")
 	var painted := loaded._prepare(loaded.world, 2)
-	var changed := loaded.heights.finish_paths()
-	if not changed.is_empty():
-		TerrainBuilder.patch(loaded.terrain_arrays, loaded.world, loaded.heights, changed)
-	TerrainBuilder.refine_arrays(loaded.terrain_arrays, loaded.world, loaded.heights)
+	loaded.heights.finish_paths()
+	loaded.terrain_arrays = TerrainBuilder.build_arrays(loaded.world, loaded.heights)
+	loaded.water_arrays = WaterBuilder.prepare(loaded.world, loaded.heights)
 	loaded.terrain_chunks = PlanTerrain.partition(loaded.terrain_arrays)
 	var terrain_bytes: Array[PackedByteArray] = [painted[0][0]]
 	var map_bytes: Array[PackedByteArray] = [painted[-1][1]]

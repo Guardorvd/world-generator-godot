@@ -155,7 +155,9 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cel
 	if arrays.is_empty() or refinement == null:
 		return
 	var area := Rect2i(0, 0, w.W - 1, w.H - 1) if not cells.has_area() else cells
-	if allow_fast_refine and w.outer == null:
+	# At the plan rim normal samples can reach OuterLand; interior chunks only sample the plan.
+	var interior := Rect2i(1, 1, w.W - 3, w.H - 3)
+	if allow_fast_refine and (w.outer == null or interior.encloses(area)):
 		var native := Grid.fast_grid()
 		if native != null:
 			_refine_native(native, arrays, w, heights, area)
@@ -214,7 +216,8 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cel
 				if x % RoadRefinement.DIV == 0 and z % RoadRefinement.DIV == 0:
 					id = (cz + z / RoadRefinement.DIV - area.position.y) * (area.size.x + 1) + cx + x / RoadRefinement.DIV - area.position.x
 					pos[id].y = p.h[n]
-					nor[id] = normal
+					if px > TILE * 0.5 and pz > TILE * 0.5 and px < (w.W - 0.5) * TILE and pz < (w.H - 0.5) * TILE:
+						nor[id] = normal
 					colors[id] = p.color[n]
 					uv2[id] = p.uv[n]
 				else:

@@ -86,6 +86,12 @@ static func shape(h: float, sl: float, convex: float, rock: float, sturdy: float
 	shift *= rock
 	return clampf(shift, -MAX_SHIFT, MAX_SHIFT)
 
+static func field_of(w: WorldData) -> PackedByteArray:
+	if w.generation.surface_rock.size() == w.N:
+		return w.generation.surface_rock
+	return preload("res://scripts/world/mountain_surface.gd").field(w.elev, w.slope, w.moist)
+
+
 ## Поправить высоты h.hv стартовой области (на месте). Возвращает число изменённых клеток.
 static func apply(h: Heightfield) -> int:
 	var w := h.world
@@ -93,9 +99,7 @@ static func apply(h: Heightfield) -> int:
 		return 0
 	var W := w.W
 	var H := w.H
-	var rock_field: PackedByteArray = w.generation.surface_rock
-	if rock_field.size() != w.N:
-		rock_field = preload("res://scripts/world/mountain_surface.gd").field(w.elev, w.slope, w.moist)
+	var rock_field := field_of(w)
 	# Расстояние до путей и до домов/мест, клетки (C#: FastGrid.DistanceField).
 	var busy := PackedByteArray()
 	busy.resize(w.N)
@@ -114,18 +118,6 @@ static func apply(h: Heightfield) -> int:
 	var ox := w.world_origin.x
 	var oy := w.world_origin.y
 	var hv := h.hv
-	# Один мир — одна поправка: этап трасс генератора и загрузчик считают её на одной и той же основе.
-	var key := "rock_relief_%d_%d_%d" % [w.seed_num, hash(w.path_mask), W]
-	if w.has_meta(key):
-		var known: PackedFloat32Array = w.get_meta(key)
-		if known.size() == w.N:
-			var count := 0
-			for i in w.N:
-				if known[i] != 0.0:
-					hv[i] += known[i]
-					count += 1
-			h.hv = hv
-			return count
 	var x0 := float(ox)
 	var y0 := float(oy)
 	var x1 := float(ox + W)
@@ -175,9 +167,8 @@ static func apply(h: Heightfield) -> int:
 		shifted.append_array(part)
 	var changed := 0
 	for i in w.N:
-		if shifted[i] != 0.0: changed += 1
-	for i in w.N:
-		if shifted[i] != 0.0: hv[i] += shifted[i]
+		if shifted[i] != 0.0:
+			hv[i] += shifted[i]
+			changed += 1
 	h.hv = hv
-	w.set_meta(key, shifted)
 	return changed

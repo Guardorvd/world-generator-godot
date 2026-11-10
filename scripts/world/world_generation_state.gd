@@ -20,12 +20,14 @@ func start_fields(width: int, height: int, definitions: Dictionary) -> void:
 	surface_rock=PackedByteArray()
 	var inputs := noise
 	_thread = Thread.new()
-	_thread.start(func() -> Dictionary:
+	var err := _thread.start(func() -> Dictionary:
 		var out := {}
 		for name: String in definitions:
 			var p: Array = definitions[name]
 			out[name] = Parallel.fbm_field(width, height, inputs[name], p[0], p[1])
 		return out)
+	if err != OK:
+		_thread = null
 
 
 func field(name: String, width: int, height: int, definitions: Dictionary) -> PackedFloat64Array:
@@ -43,7 +45,6 @@ func clear_fields() -> void:
 		_thread.wait_to_finish()
 		_thread = null
 	_fields.clear()
-	light = PackedFloat32Array()
 
 
 func _notification(what: int) -> void:

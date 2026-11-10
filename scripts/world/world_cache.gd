@@ -27,8 +27,8 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 12 # connected mountain spurs, scarps and sharper crests
-const SCHEMA_TRAILS_VERSION := 17 # symmetric search bounds for animal watering spots
+const SCHEMA_GEO_VERSION := 14 # dry depressions stay above the ocean plane
+const SCHEMA_TRAILS_VERSION := 19 # preserve finished trail junctions and stitch metre patches to the coarse mesh
 const SCHEMA_NATURE_VERSION := 11 # seated rock massifs and downhill talus
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
@@ -51,7 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
-const SURFACE_VERSION := 11 # road profiles respect structures at the plan edge
+const SURFACE_VERSION := 12 # water mesh uses the final terrain
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()
@@ -457,14 +457,14 @@ func _save_layer(w: WorldData, size: int, layer: int, prev: Dictionary) -> Dicti
 	var started := Time.get_ticks_usec()
 	var snap := prev.duplicate()
 	var part := {}
-	# Include nested mutations: settlement huts in places, trail surfaces in nature.
+	# Include nested mutations, such as settlement huts and legacy road surfaces.
 	var fields: Array = WorldData.CACHE_FIELDS
 	if layer == 1:
-		fields = WorldData.Civil.CACHE_FIELDS + ["peaks", "generation_profile"]
+		fields = WorldData.Civil.CACHE_FIELDS + ["peaks", "lakes", "lake_id", "generation_profile"]
 	elif layer == 2:
 		fields = ["territory_center", "available_rect", "territory_revision", "generation_profile",
 			"obj_x", "obj_y", "obj_k", "obj_v", "obj_s", "chunks", "CS", "CW", "CH", "obj_count",
-			"lakes", "lake_id", "trails", "road_surface"]
+			"trails", "road_surface"]
 	for name: String in fields:
 		var v: Variant = EntityCodec.encode(w.get(name))
 		# массивы и словари следующие слои меняют на месте; Packed*Array копируются при записи сами

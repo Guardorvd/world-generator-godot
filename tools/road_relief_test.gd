@@ -184,6 +184,7 @@ func run() -> void:
 	check(Grid.fast_grid() != null, "native backend available")
 	if failures: quit(1); return
 	corridor_contracts()
+	patch_contracts()
 	if "--contracts-only" in OS.get_cmdline_user_args():
 		print("ROAD RELIEF RESULT ", failures, " failures")
 		quit(1 if failures else 0)
@@ -204,6 +205,59 @@ func run() -> void:
 	quit(1 if failures else 0)
 
 
+func patch_contracts() -> void:
+	var w := Fixture.world()
+	var h := Heightfield.new(w, false)
+	h.finish_paths()
+	var cut := TrailSite.cut(w, h, Rect2i(16, 32, 48, 40), 8)
+	check(cut.errors.is_empty(), "prepared road can be cut for a crossing")
+	if not cut.errors.is_empty(): return
+	var site: TrailSite = cut.site
+	var line := TrailDefinition.new()
+	line.id = "crossing"
+	line.kind = "mountain"
+	line.width = 3.0
+	line.earthwork = 0.0
+	line.points = PackedVector2Array([Vector2(120, 150) - site.origin_m(), Vector2(120, 238) - site.origin_m()])
+	var formed := site.prepare([line], false)
+	check(formed.errors.is_empty(), "crossing forms on the saved site")
+	if formed.errors.is_empty():
+		var result: Heightfield = formed.heights
+		var stable := true
+		for key: int in site.patches:
+			stable = stable and result.road_refinement.patches[key].h == site.patches[key].h
+		check(stable, "new trail preserves every height of the existing road before earthworks")
+		var only := {result.world.trails.size() - 1: true}
+		var local := RoadRefinement.build(result, true, only)
+		check(local._reach == RoadRefinement.NATURAL_REACH, "natural trail indexes the full corridor")
+	var isolated := PackedFloat32Array()
+	isolated.resize(RoadRefinement.STRIDE * RoadRefinement.STRIDE)
+	isolated.fill(42.0)
+	var key := 10 * w.W + 10
+	var patches := {key: {h = isolated}}
+	RoadRefinement.pin_coarse_edges(h, patches, [key])
+	check(patches[key].h[0] == h.hv[key] and is_equal_approx(patches[key].h[2], lerpf(h.hv[key], h.hv[key + 1], 0.5))
+		and patches[key].h[12] == 42.0, "patch perimeter follows the adjacent coarse mesh")
+	w.outer = OuterLand.new()
+	var chunk := Rect2i(10, 14, 20, 8)
+	var native := TerrainBuilder.build_arrays(w, h, chunk)
+	TerrainBuilder.allow_fast_refine = false
+	check(native == TerrainBuilder.build_arrays(w, h, chunk), "native interior rebuild matches the reference with OuterLand attached")
+	TerrainBuilder.allow_fast_refine = true
+	w.outer = null
+	line.id = "deep_fill"
+	line.earthwork = 1.0
+	line.elevation_offset = 2.0
+	line.shaping = TrailShaping.preset("mountain")
+	line.shaping.batter = 0.2
+	line.points = PackedVector2Array([Vector2(9, 40), Vector2(9, 120)])
+	var appended := TrailBuilder.append_routes(w, [line])
+	check(appended.is_empty(), "near-edge tread itself fits")
+	if appended.is_empty():
+		check("Trail earthworks outside prepared region: deep_fill" in TrailBuilder.bake_elements(h, [line]),
+			"earthworks extending past prepared terrain are rejected")
+
+
 func corridor_contracts() -> void:
 	# A side slope exercises the natural component of tilt, absent from the flat ride fixture.
 	var w := Fixture.world()
@@ -218,9 +272,12 @@ func corridor_contracts() -> void:
 	w.trails[0].trail_id = "natural"
 	w.trails[0].formation = Vector3.ZERO
 	var prepared := build(h, true)
+	var natural_local := RoadRefinement.build(h, true, {0: true})
+	w.trails[0].formation = Vector3(1.0, 0.0, 0.0)
 	var authored_local := RoadRefinement.build(h, true, {0: true})
-	check(RoadRefinement.REACH == 3.0 and authored_local._reach == RoadRefinement.REACH
-		and full._reach == RoadRefinement.NATURAL_REACH, "authored patch ownership retains its original reach")
+	w.trails[0].formation = Vector3.ZERO
+	check(authored_local._reach == RoadRefinement.REACH and natural_local._reach == RoadRefinement.NATURAL_REACH,
+		"local index covers natural forms and keeps the narrower authored tread")
 	var a: Vector2i = full.corridor_routes[0]
 	var b: Vector2i = prepared.corridor_routes[0]
 	var error := 0.0

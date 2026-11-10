@@ -162,7 +162,7 @@ void fragment() {
 	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
 	float sky = 1.0;
 	vec3 base_col = col;
-	float wet = 0.45; // влажность почвы: у плана из forest_tex.b, за краем — средняя
+	float wet = use_vertex_color ? UV.x : 0.45; // за краем влажность почвы передаёт меш
 	if (forest_enabled && !use_vertex_color) {
 		vec4 forest = texture(forest_tex, UV);
 		wet = forest.b;

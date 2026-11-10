@@ -95,6 +95,8 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	hv_raw.resize(N)
 	for i in N:
 		var h := w.h[i]
+		if w.ocean[i] == 0 and w.lake[i] == 0:
+			h = maxf(0.0, h)
 		hv_raw[i] = (maxf(-GameConfig.OCEAN_DEPTH, h * GameConfig.OCEAN_DEPTH) - 0.5) if w.ocean[i] != 0 else h * HS
 		hv[i] = hv_raw[i]
 	var t := Time.get_ticks_usec()

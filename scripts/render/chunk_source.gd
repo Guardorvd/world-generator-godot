@@ -20,8 +20,6 @@ var _handoff := {} # At most MAX_ACTIVE uncached results awaiting upload, never 
 var _handoff_bytes := 0
 var _pins: Array[String] = []
 var _persisted_refs: Array = []
-var _base: Heightfield
-var _base_lock := Mutex.new()
 var _stats_lock := Mutex.new()
 var stats := {reads = 0, repairs = 0, pending_hits = 0, rebuilt_cells = 0, read_ms = 0.0, upload_bytes = 0, upload_ms = 0.0, max_upload_ms = 0.0, peak_reads = 0}
 var closed := false
@@ -94,13 +92,7 @@ func read(layer: int, key: Vector2i) -> Array:
 			repaired = true
 			if layer < 0: arrays = TerrainBuilder.build_chunk(world, heights, key)
 			else:
-				_base_lock.lock()
-				if _base == null:
-					_base = preload("res://scripts/game/surface_snapshot.gd").restore(world, cache.load_artifact(world.seed_text, size, "base"), "base")
-					if _base == null: _base = Heightfield.new(world, false)
-				var base := _base
-				_base_lock.unlock()
-				arrays = WaterBuilder.build_chunk(world, base, key, layer)
+				arrays = WaterBuilder.build_chunk(world, heights, key, layer)
 			if ref.get("file", "") != "": cache._write(cache.dir.path_join(ref.file), ref.key, var_to_bytes({arrays = arrays}))
 	_stats_lock.lock()
 	stats.reads += 1
