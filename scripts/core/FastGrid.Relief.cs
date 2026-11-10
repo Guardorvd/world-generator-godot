@@ -223,7 +223,10 @@ public partial class FastGrid
 			 h -= valley * ValleyDepth * rough * inland;
 				if (m > 0.0)
 				{
-					h += Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland) * m * MountainAmp * mountainHeight;
+					double relief = Mountain(ridge, hill, (x + wx * MountainWarp) / wide, (y + wy * MountainWarp) / wide, inland);
+					double support = ReliefSmooth(0.12, 0.55, relief);
+					h -= Math.Max(0.0, h - SeaRaw) * 0.60 * core * inland * (1.0 - support);
+					h += relief * m * MountainAmp * mountainHeight;
 				}
 				outH[j * W + i] = (float)h;
 			}
@@ -233,32 +236,24 @@ public partial class FastGrid
 	}
 
 
-	/// <summary>Горы: копия StageRelief.MASSIF, MOUNTAIN_AMP, MOUNTAIN_WARP, RIDGE_ALONG, RIDGE_ACROSS, DIR_C, DIR_S, ASYM, PEAK_CAP, CREST_ROUND.</summary>
+	/// <summary>Горы: копия StageRelief.MASSIF, MOUNTAIN_AMP, MOUNTAIN_WARP, DIR_C, DIR_S, ASYM, PEAK_CAP.</summary>
 	private const double Massif = 650.0;
 	private const double MountainAmp = 1.0;
 	/// <summary>Общее основание и доля гребней (с 3.3): копия StageRelief.MASSIF_BASE, CREST_SHARE.</summary>
-	private const double MassifBase = 0.24;
-	private const double CrestShare = 0.75;
-	/// <summary>Внутренние долины (с 3.4): копия StageRelief.INNER_ALONG, INNER_ACROSS, INNER_CUT, SIDE_CUT.</summary>
-	private const double InnerAlong = 520.0;
-	private const double InnerAcross = 180.0;
-	private const double InnerCut = 0.75;
-	private const double SideCut = 0.38;
+	private const double MassifBase = 0.15;
+	private const double CrestShare = 1.10;
 	private const double MountainWarp = 0.35;
-	private const double RidgeAlong = 220.0;
-	private const double RidgeAcross = 125.0;
 	private static readonly double[] DirC = { 1.0, 0.5, -0.5 };
 	private static readonly double[] DirS = { 0.0, 0.8660254037844386, 0.8660254037844386 };
 	private const double Asym = 1.8;
 	private const double PeakCap = 1.05;
-	private const double CrestRound = 0.2;
 	/// <summary>Острые массивы, возвышенности и мягкий предел вершин (с 3.0): копия StageRelief.SHARP_SHIFT, UPLAND_SHIFT, UPLAND_AMP, UPLAND_SMOOTH, PEAK_KNEE, PEAK_SOFT.</summary>
 	private const double SharpShift = 0.28;
 	private const double UplandShift = 0.24;
 	private const double UplandAmp = 0.3;
 	private const double UplandSmooth = 0.8;
-	private const double PeakKnee = 0.36;
-	private const double PeakSoft = 0.25;
+	private const double PeakKnee = 0.50;
+	private const double PeakSoft = 0.40;
 
 	/// <summary>Копия StageRelief.mountain.</summary>
 	private static double Mountain(int[] ridge, int[] hill, double X, double Y, double inland)
@@ -284,77 +279,105 @@ public partial class FastGrid
 			r += (k == 2 ? lastCrest : Crest(ridge, X, Y, DirC[k], DirS[k], asym, fine, 1.0 - 0.55 * up, structure)) * (1.0 - f);
 		if (f > 0.0)
 			r += (k == 2 ? lastCrest : Crest(ridge, X, Y, DirC[Math.Min(k + 1, 2)], DirS[Math.Min(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure)) * f;
-		double pk = Fbm(hill, X / 85.0 + 17.7, Y / 85.0 - 29.3, 2);
+		double pk = Fbm(hill, X / 150.0 + 17.7, Y / 150.0 - 29.3, 2);
 		r = Math.Min(r * (1.0 + (0.35 + 0.70 * structure) * pk * r), PeakCap);
-		// С 3.5 пологое плечо сглаженного массива; с GEO 6 и у гор, слабее, с высотой вдоль хребта.
-		t = Clamp01((r - 0.25) / 0.15);
-		double shoulder = t * t * (3.0 - 2.0 * t);
-		t = Clamp01((0.7 - r) / 0.15);
-		r += (0.475 + 0.08 * pk * (1.0 - up) - r) * shoulder * t * t * (3.0 - 2.0 * t) * (0.45 * up + 0.2 * (1.0 - up));
 		double q = Math.Sqrt(r) * r;
 		t = Clamp01((Fbm(hill, X / Massif - 8.3, Y / Massif + 44.6, 2) - -0.3) / 0.6);
 		double amp = 0.6 + 0.55 * t * t * (3.0 - 2.0 * t);
 		double m = (q + (r * r - q) * sharp) * amp;
 		m += (r * UplandAmp - m) * up;
 		double foundationT = Clamp01((r - 0.12) / (0.65 - 0.12));
-		double foundation = 1.0 - 0.2 * inland * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
+		double foundation = 1.0 - 0.45 * inland * (1.0 - up) * (1.0 - foundationT * foundationT * (3.0 - 2.0 * foundationT));
 		m = MassifBase * amp * (1.0 - (1.0 - UplandAmp) * up) * foundation + m * CrestShare;
 		if (m > PeakKnee)
 			m = PeakKnee + (m - PeakKnee) / (1.0 + (m - PeakKnee) / PeakSoft);
 		return m;
 	}
 
-	/// <summary>Копия StageRelief._crest.</summary>
+	/// <summary>StageRelief._crest and its world-addressed skeleton helpers.</summary>
 	private static double Crest(int[] pm, double X, double Y, double dc, double ds, double asym, double fine, double interior, double structure)
 	{
 		double along = X * dc + Y * ds;
 		double across = Y * dc - X * ds;
-		double u = along / RidgeAlong;
-		double v = across / RidgeAcross;
-		double a = 0.6, fq = 1.0, s = 0.0, wt = 1.0;
-		for (int o = 0; o < 4; o++)
+		int band = (int)Math.Floor(across / 260.0);
+		int knot = (int)Math.Floor(along / 130.0);
+		double height = 0.0;
+		for (int row = band - 2; row < band + 3; row++)
 		{
-			double n = Noise(pm, u * fq, v * fq);
-			if (o == 0)
-				n *= n > 0.0 ? asym : 1.0 / asym;
-			double rounding = o == 0 ? CrestRound - 0.16 * structure : CrestRound;
-			double e = Math.Sqrt(n * n + rounding * rounding) + CrestRound - rounding;
-			double val = Math.Max(0.0, 1.0 - e);
-			val *= val;
-			val *= wt;
-			wt = Math.Min(1.0, Math.Max(0.0, val * 2.0));
-			s += val * a * (o >= 2 ? fine : 1.0);
-			fq *= 2.1;
-			a = o == 0 ? 0.25 : a * 0.3;
+			if (Math.Abs(across - row * 260.0) > 480.0) continue;
+			double center = Divide(pm, row, along);
+			double offset = across - center;
+			double width = 52.0 + 28.0 * (1.0 - interior);
+			double d = offset * (offset > 0.0 ? asym : 1.0 / asym) / width;
+			double peak = DivideHeight(pm, row, along);
+			double crown = Math.Max(0.0, 1.0 - d * d / 9.0);
+			double local = peak * crown * crown * crown * crown;
+			for (int column = knot - 2; column < knot + 3; column++)
+			{
+				for (int side = -1; side <= 1; side += 2)
+				{
+					int salt = side < 0 ? 17 : 83;
+					double root = (column + 0.15 + 0.7 * RidgeNode(pm, column, row, salt)) * 130.0;
+					double rootAcross = Divide(pm, row, root);
+					double dx = (RidgeNode(pm, column, row, salt + 1) - 0.5) * 240.0;
+					double dy = side * (125.0 + 105.0 * RidgeNode(pm, column, row, salt + 2));
+					double px = along - root, py = across - rootAcross;
+					double t = Clamp01((px * dx + py * dy) / (dx * dx + dy * dy));
+					double bow = 4.0 * t * (1.0 - t) * (RidgeNode(pm, column, row, salt + 4) - 0.5) * 55.0;
+					double length = Math.Sqrt(dx * dx + dy * dy);
+					double ex = px - dx * t + dy / length * bow, ey = py - dy * t - dx / length * bow;
+					double ribWidth = 22.0 + 23.0 * RidgeNode(pm, column, row, salt + 3) + 12.0 * (1.0 - interior);
+					double face = 1.0 + 0.65 * fine * structure * ReliefSmooth(-0.2, 0.25, (ex * -dy + ey * dx) / (length * ribWidth));
+					double profile = Math.Max(0.0, 1.0 - (ex * ex + ey * ey) * face / (3.0 * ribWidth * ribWidth));
+					double competence = ReliefSmooth(0.30, 0.85, RidgeNode(pm, column, row, salt + 5));
+					double rockFace = competence * structure * (0.35 + 0.65 * fine) * ReliefSmooth(0.10, 0.30, t) * (1.0 - ReliefSmooth(0.72, 0.95, t));
+					double lip = 0.28 + 0.24 * t;
+					double worn = profile * profile;
+					double bedrock = 0.38 * worn + 0.62 * ReliefSmooth(lip - 0.14, lip + 0.14, profile);
+					double rib = DivideHeight(pm, row, root) * (1.0 - 0.88 * t) * (worn + (bedrock - worn) * rockFace);
+					local = RidgeJoin(local, rib, 0.045);
+				}
+			}
+			double shoulder = ReliefSmooth(0.12, 0.32, local) * (1.0 - ReliefSmooth(0.32, 0.55, local));
+			local += (0.31 - local) * shoulder * (0.15 + 0.35 * fine) * structure;
+			height = RidgeJoin(height, local, 0.035);
 		}
-		if (interior > 0.0)
-		{
-			// Продольная долина, широкие котловины и впадающие сбоку ложбины.
-			double course = Noise(pm, along / InnerAlong + 18.7, across / InnerAcross - 37.1);
-			double side = Noise(pm, along / 180.0 - 51.3, across / 320.0 + 24.8);
-			double t = Clamp01((side + 0.2) / 0.6);
-			double opening = t * t * (3.0 - 2.0 * t);
-			t = Clamp01(1.0 - Math.Abs(course) / ((0.24 + 0.32 * opening) * (1.4 - 0.7 * interior)));
-			double valley = t * t * (3.0 - 2.0 * t);
-			s -= Math.Max(0.0, s - (0.18 + 0.16 * opening)) * valley * InnerCut * interior;
-			t = Clamp01(1.0 - Math.Abs(side) / 0.2);
-			double branch = t * t * (3.0 - 2.0 * t);
-			t = Clamp01(1.0 - Math.Abs(course) / 0.65);
-			double drainage = t * t * (3.0 - 2.0 * t);
-			s *= 1.0 - branch * drainage * (1.0 - valley) * (SideCut - 0.10 * (1.0 - structure)) * interior;
-			double spur = (1.0 - branch) * drainage * (1.0 - valley);
-			double spurHeight = Clamp01((s - 0.16) / (0.46 - 0.16));
-			s += 0.20 * spur * (spurHeight * spurHeight * (3.0 - 2.0 * spurHeight)) * structure;
-			double shelfLevel = 0.36 + 0.12 * opening;
-			double shelfIn = Clamp01((s - (shelfLevel - 0.12)) / (shelfLevel - (shelfLevel - 0.12)));
-			double shelfOut = Clamp01((s - shelfLevel) / ((shelfLevel + 0.12) - shelfLevel));
-			double shelf = shelfIn * shelfIn * (3.0 - 2.0 * shelfIn) * (1.0 - shelfOut * shelfOut * (3.0 - 2.0 * shelfOut));
-			s += (shelfLevel - s) * shelf * 0.35 * fine * interior * (1.0 - 0.8 * valley);
-			double lipIn = Clamp01((s - (shelfLevel - 0.09)) / ((shelfLevel - 0.025) - (shelfLevel - 0.09)));
-			double lipOut = Clamp01((s - (shelfLevel + 0.02)) / ((shelfLevel + 0.16) - (shelfLevel + 0.02)));
-			double lip = lipIn * lipIn * (3.0 - 2.0 * lipIn) * (1.0 - lipOut * lipOut * (3.0 - 2.0 * lipOut));
-			s += 0.16 * lip * spur * structure;
-		}
-		return s;
+		return height;
+	}
+
+	private static double RidgeNode(int[] pm, int x, int y, int salt) => pm[(x + pm[(y + salt) & 255]) & 255] / 255.0;
+
+	private static double Divide(int[] pm, int row, double along)
+	{
+		double u = along / 280.0;
+		int k = (int)Math.Floor(u);
+		double t = u - k;
+		t = t * t * (3.0 - 2.0 * t);
+		double a = RidgeNode(pm, k, row, 131), b = RidgeNode(pm, k + 1, row, 131);
+		return row * 260.0 + (a + (b - a) * t) * 190.0 - 95.0;
+	}
+
+	private static double DivideHeight(int[] pm, int row, double along)
+	{
+		double u = along / 150.0;
+		int k = (int)Math.Floor(u);
+		double t = u - k;
+		t = t * t * (3.0 - 2.0 * t);
+		double a = RidgeNode(pm, k, row, 211), b = RidgeNode(pm, k + 1, row, 211);
+		return 0.58 + 0.44 * (a + (b - a) * t);
+	}
+
+	private static double RidgeJoin(double a, double b, double width)
+	{
+		width = Math.Min(width, Math.Min(a, b));
+		if (width <= 0.0) return Math.Max(a, b);
+		double h = Math.Max(0.0, 1.0 - Math.Abs(a - b) / width);
+		return Math.Max(a, b) + width * h * h * 0.25;
+	}
+
+	private static double ReliefSmooth(double from, double to, double value)
+	{
+		double t = Clamp01((value - from) / (to - from));
+		return t * t * (3.0 - 2.0 * t);
 	}
 }

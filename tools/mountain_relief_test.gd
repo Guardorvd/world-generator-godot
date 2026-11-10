@@ -10,12 +10,148 @@ func check(ok: bool, label: String) -> void:
 	failures += int(not ok)
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 240)
+	if "--analyze-snapshots" in OS.get_cmdline_user_args():
+		call_deferred("analyze_snapshots")
+		return
+	if "--snapshot" in OS.get_cmdline_user_args():
+		call_deferred("snapshot")
+		return
 	if "--contracts-only" in OS.get_cmdline_user_args():
 		contracts()
 		return
 	call_deferred("run")
 
+## Geography actually crossed by the published road network, independent of
+## route naming and of whether a settlement graph happens to stay connected.
+func analyze_snapshots() -> void:
+	var dir := "res://.godot/mountain_structure"
+	var rows := []
+	for seed_text: String in ["Север-1234", "Вальхейм 3", "Ущелье", "Туман-4821", "Каменный берег"]:
+		for version: String in ["before", "after"]:
+			var data: Dictionary = FileAccess.open(dir.path_join(seed_text + "_" + version + ".bin"), FileAccess.READ).get_var()
+			var w := WorldData.new()
+			for key: String in ["W", "H", "N", "elev", "trails"]: w.set(key, data.world[key])
+			var row := {seed = seed_text, version = version, mountain_km = 0.0, ridge_km = 0.0,
+				hollow_km = 0.0, ascent_m = 0.0, descent_m = 0.0, highest_route_m = 0.0, longest_drop_m = 0.0}
+			for route: Dictionary in w.trails:
+				if route.kind == "animal": continue
+				var descent_peak := 0.0; var descent_low := 0.0
+				for k in range(1, route.pts.size()):
+					var a := Vector2(route.pts[k-1].x, route.pts[k-1].y)
+					var b := Vector2(route.pts[k].x, route.pts[k].y)
+					var x := clampi(int(b.x), 0, w.W-1); var y := clampi(int(b.y), 0, w.H-1)
+					var i := y*w.W+x
+					var previous := w.elev[clampi(int(a.y), 0, w.H-1)*w.W+clampi(int(a.x), 0, w.W-1)]
+					var dh := (w.elev[i]-previous)*GameConfig.HS
+					row.ascent_m += maxf(0, dh); row.descent_m += maxf(0, -dh)
+					if k == 1:
+						descent_peak = previous * GameConfig.HS; descent_low = descent_peak
+					var height := w.elev[i]*GameConfig.HS
+					# Reset on an accumulated 2 m rise from the lowest point,
+					# not on each individual step: tiny uphill steps must not
+					# silently accumulate into a supposedly continuous descent.
+					if height > descent_low + 2.0:
+						descent_peak = height; descent_low = height
+					else:
+						descent_low = minf(descent_low, height)
+						descent_peak = maxf(descent_peak, height)
+					row.longest_drop_m = maxf(row.longest_drop_m, descent_peak - descent_low)
+					row.highest_route_m = maxf(row.highest_route_m, w.elev[i]*GameConfig.HS)
+					if w.elev[i] <= 0.2: continue
+					var km := a.distance_to(b)*GameConfig.TILE/1000.0
+					row.mountain_km += km
+					if x < 8 or y < 8 or x >= w.W-8 or y >= w.H-8: continue
+					var form := ((w.elev[i-8]+w.elev[i+8]+w.elev[i-w.W*8]+w.elev[i+w.W*8])*0.25-w.elev[i])*GameConfig.HS
+					if form < -1: row.ridge_km += km
+					elif form > 1: row.hollow_km += km
+			rows.append(row)
+	FileAccess.open(dir.path_join("route_geography.json"), FileAccess.WRITE).store_string(JSON.stringify(rows, "\t"))
+	print("ROUTE GEOGRAPHY ", JSON.stringify(rows))
+	quit()
+
+## Capture the actual native pipeline before editing it, rather than loading old
+## StageRelief with today's detail dependencies. Used by mountain_compare_look.
+func snapshot() -> void:
+	var args := OS.get_cmdline_user_args()
+	var version: String = args[args.find("--snapshot") + 1]
+	var seeds := ["Север-1234", "Вальхейм 3", "Ущелье", "Туман-4821", "Каменный берег"]
+	if "--seeds" in args: seeds.assign(args[args.find("--seeds") + 1].split(",", false))
+	var dir := "res://.godot/mountain_structure"
+	DirAccess.make_dir_recursive_absolute(dir)
+	var rows := []
+	for seed_text: String in seeds:
+		print("BEGIN SNAPSHOT ", seed_text, " ", version)
+		var started := Time.get_ticks_usec()
+		var w := WorldGenerator._geography(seed_text, 768)
+		var invalid := 0; var uphill := 0; var forest := 0; var dry := 0
+		for i in w.N:
+			invalid += int(not is_finite(w.h[i]) or not is_finite(w.slope[i]))
+			if w.river[i] != 0 and w.down[i] >= 0:
+				var next := w.down[i]
+				uphill += int(w.ocean[next] == 0 and w.lake[next] == 0 and w.h[next] > w.h[i] + 1e-6)
+			forest += int(w.biome[i] in [Biomes.FOREST, Biomes.TAIGA])
+			dry += int(not Biomes.LIST[w.biome[i]].get("water", false))
+		check(invalid == 0 and uphill == 0, "finite relief and downhill rivers " + seed_text)
+		var row := metrics(w)
+		row.forest_share = 100.0 * forest / maxi(1, dry)
+		row.seed = seed_text
+		row.relief_source = FileAccess.get_sha256("res://scripts/world/stages/stage_relief.gd")
+		row.geography_ms = (Time.get_ticks_usec() - started) / 1000.0
+		var raw := StageRelief.raw_rect(w, 0, 0, 768, 768, true)
+		for i in raw.size(): raw[i] = StageRelief.normalize(raw[i])
+		var timings := []
+		for repeat in 3:
+			started = Time.get_ticks_usec()
+			StageRelief.raw_rect(w, 0, 0, 768, 768, true)
+			timings.append((Time.get_ticks_usec() - started) / 1000.0)
+		row.relief_ms = timings
+		started = Time.get_ticks_usec()
+		StageLandmarks.run(w)
+		row.proposed = w.settlements.size()
+		StageTrails.run(w, func(_p: float, _s: String) -> void: pass)
+		row.connected = preload("res://tools/selftest.gd").settlement_network_valid(w)
+		check(row.connected, "settlement connectivity " + seed_text)
+		row.settlements = w.settlements.size()
+		row.roads = w.trails.size()
+		row.road_metres = {}
+		for route: Dictionary in w.trails:
+			var length := preload("res://tools/control/control.gd").path_length(route.pts) * GameConfig.TILE
+			row.road_metres[route.kind] = row.road_metres.get(route.kind, 0.0) + length
+		StageSites.run(w)
+		StageLakes.run(w)
+		RoadSurface.run(w)
+		var surface := Heightfield.base_of(w).copy()
+		surface.finish_paths()
+		row.places_ms = (Time.get_ticks_usec() - started) / 1000.0
+		StageVegetation.run(w, surface)
+		row.objects = w.obj_count
+		row.bridges = w.bridges.size()
+		row.lakes = w.lakes.size()
+		row.profile = w.generation_profile.duplicate(true)
+		var wet_huts := 0
+		for settlement: SettlementData in w.settlements:
+			for hut: HutData in settlement.huts:
+				var i := int(hut.y) * w.W + int(hut.x)
+				wet_huts += int(w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0)
+		check(wet_huts == 0, "homes remain on dry ground " + seed_text)
+		var fields := {}
+		for key: String in WorldData.CACHE_FIELDS: fields[key] = EntityCodec.encode(w.get(key))
+		FileAccess.open(dir.path_join(seed_text + "_" + version + ".bin"), FileAccess.WRITE).store_var({
+			world = fields, raw = raw, surface = preload("res://scripts/game/surface_snapshot.gd").capture(surface, "final"), metrics = row})
+		rows.append(row)
+		print("SNAPSHOT ", JSON.stringify(row))
+		surface.weaken_world(); w.base_heights = null; w.clear_noise_fields()
+	FileAccess.open(dir.path_join(version + ".json"), FileAccess.WRITE).store_string(JSON.stringify(rows, "\t"))
+	quit(1 if failures else 0)
+
 func contracts() -> void:
+	check(Grid.fast_grid() != null, "native backend available")
+	check(StageClimate.land_biome(0.5, 0.3, 0.8, 0.15, 30) == Biomes.TUNDRA,
+		"wet alpine shoulder retains soil")
+	check(StageClimate.land_biome(0.5, 0.3, 0.4, 0.9, 30) == Biomes.ROCK,
+		"steep alpine face exposes bedrock at the same height")
+	check(preload("res://tools/generation_field_checks.gd").synthetic().ok,
+		"native/reference climate including alpine transitions")
 	var wet := PackedByteArray()
 	wet.resize(96*96)
 	for wavelength in [32.0,128.0]:
@@ -32,6 +168,17 @@ func contracts() -> void:
 		var a := StageRelief.raw_rect(w,-37,701,96,96,false)
 		check(a == StageRelief._rows(w,-37,701,96,0,96),"9216 float32 cells C#/GDScript "+seed_text)
 		check(a == StageRelief.raw_rect(w,-37,701,96,96,true),"parallel determinism "+seed_text)
+		# The integer candidate windows must not leave seams where a knot or
+		# range enters/leaves the finite-support query, including negatives.
+		var continuous := true
+		for x in [-390.0, -260.0, -130.0, 0.0, 130.0, 260.0, 390.0]:
+			for y in [-520.0, -260.0, 0.0, 260.0, 520.0]:
+				var p := Vector2(x, y)
+				for delta: Vector2 in [Vector2(0.0001, 0), Vector2(0, 0.0001)]:
+					var left := StageRelief._crest(w.noise.ridge, p.x-delta.x, p.y-delta.y, 1, 0, 1.8, 0.8, 1, 1)
+					var right := StageRelief._crest(w.noise.ridge, p.x+delta.x, p.y+delta.y, 1, 0, 1.8, 0.8, 1, 1)
+					continuous = continuous and absf(left-right) < 0.0001
+		check(continuous, "skeleton knot/range window continuity " + seed_text)
 	print("MOUNTAIN CONTRACTS ",failures," failures")
 	quit(1 if failures else 0)
 func metrics(w: WorldData) -> Dictionary:

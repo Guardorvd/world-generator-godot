@@ -252,31 +252,27 @@ static func raw_at(warp_x: Simplex, warp_y: Simplex, cont: Simplex, mask_n: Simp
 	h -= valley * VALLEY_DEPTH * rough * inland
 	if mask > 0.0:
 		var wide := mountain_scale * maxf(1.0, mountain_height / (mountain_scale * HEIGHT_PER_WIDTH))
-		h += mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, inland) * mask * MOUNTAIN_AMP * mountain_height
+		var relief := mountain(ridge, hill, (x + wx * MOUNTAIN_WARP) / wide, (y + wy * MOUNTAIN_WARP) / wide, inland)
+		# An independent continental dome would bury the lower branches. Drain
+		# its inland foundation into the SAME valleys; preserve the shoreline.
+		var support := smoothstep(0.12, 0.55, relief)
+		h -= maxf(0.0, h - SEA_RAW) * 0.60 * core * inland * (1.0 - support)
+		h += relief * mask * MOUNTAIN_AMP * mountain_height
 	return h
 
 
-## Горы (с 1.9.7). Как и весь рельеф, функция мировых координат, поэтому за краем карты горы продолжаются.
+## Горы: связанный скелет в мировых координатах продолжается за краем карты.
 ## Медленные шумы масштаба MASSIF (около 2,6 км) задают область подъёма и характер: направление гребней,
 ## высоту и острые молодые или сглаженные старые формы. Копия — FastGrid.Mountain
 const MASSIF := 650.0
 const MOUNTAIN_AMP := 1.0
 ## Общее основание под гребнями (с 3.3). Растёт вместе с маской массива, даже в седловинах.
 ## У возвышенностей ниже; часть высоты гребня отдана основанию, чтобы не раздувать вершины.
-const MASSIF_BASE := 0.24
-const CREST_SHARE := 0.75
-## Внутренние долины (с 3.4): вдоль направления массива, с широкими котловинами и боковыми ложбинами.
-## Масштаб в клетках; вырезается только часть гребней, общее основание сохраняется.
-const INNER_ALONG := 520.0
-const INNER_ACROSS := 180.0
-const INNER_CUT := 0.75
-const SIDE_CUT := 0.38
+const MASSIF_BASE := 0.15
+const CREST_SHARE := 1.10
 ## Горы искривлены слабее остального рельефа: при полном искривлении гребни вытягиваются в одинаковые
 ## волнистые полосы
 const MOUNTAIN_WARP := 0.35
-## Гребни вытянуты: длина и ширина пятна шума в клетках
-const RIDGE_ALONG := 220.0
-const RIDGE_ACROSS := 125.0
 ## Направления гребней 0°, 60° и 120° (cos, sin): массив берёт одно, между массивами плавный переход
 const DIR_C: Array[float] = [1.0, 0.5, -0.5]
 const DIR_S: Array[float] = [0.0, 0.8660254037844386, 0.8660254037844386]
@@ -284,8 +280,6 @@ const DIR_S: Array[float] = [0.0, 0.8660254037844386, 0.8660254037844386]
 const ASYM := 1.8
 ## Предел гребня с вершиной (без вершин гребень до 1)
 const PEAK_CAP := 1.05
-## Скругление главного гребня (в долях шума): без него гребень — острый излом, а вершины — иглы
-const CREST_ROUND := 0.2
 ## Доля шума формы, с которой массив считается острым; с 3.2 острые массивы реже
 const SHARP_SHIFT := 0.28
 ## Возвышенности (с 3.0): медленный шум масштаба MASSIF превращает часть массивов в холмистые
@@ -297,8 +291,8 @@ const UPLAND_AMP := 0.3
 ## Какую долю мелких гребней и отрогов возвышенность теряет
 const UPLAND_SMOOTH := 0.8
 ## Горы выше PEAK_KNEE растут всё медленнее (PEAK_SOFT — насколько плавно): высоких пиков меньше, но они есть
-const PEAK_KNEE := 0.36
-const PEAK_SOFT := 0.25
+const PEAK_KNEE := 0.50
+const PEAK_SOFT := 0.40
 
 
 static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: float = 1.0) -> float:
@@ -326,16 +320,8 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 		r += (last_crest if k == 2 else _crest(ridge, X, Y, DIR_C[mini(k + 1, 2)], DIR_S[mini(k + 1, 2)], asym, fine, 1.0 - 0.55 * up, structure)) * f
 	# Вершины и седловины: высота гребня меняется вдоль него. Выше PEAK_CAP не поднимается, иначе
 	# у острых гор вырастают тонкие иглы
-	var pk := hill.fbm(X / 85.0 + 17.7, Y / 85.0 - 29.3, 2)
+	var pk := hill.fbm(X / 150.0 + 17.7, Y / 150.0 - 29.3, 2)
 	r = minf(r * (1.0 + (0.35 + 0.70 * structure) * pk * r), PEAK_CAP)
-	# С 3.5 у сглаженных массивов середина склона образует широкое пологое плечо.
-	# Два плавных края ограничивают его одним поясом; долины и вершины сохраняются.
-	# С GEO 6 плечо есть и у гор (слабее): склон идёт ярусами — предгорье, плечо, вершина.
-	# Его высота плавно меняется вдоль хребта вместе с полем вершин и седловин.
-	t = clampf((r - 0.25) / 0.15, 0.0, 1.0)
-	var shoulder := t * t * (3.0 - 2.0 * t)
-	t = clampf((0.7 - r) / 0.15, 0.0, 1.0)
-	r += (0.475 + 0.08 * pk * (1.0 - up) - r) * shoulder * t * t * (3.0 - 2.0 * t) * (0.45 * up + 0.2 * (1.0 - up))
 	# Острые горы — узкие гребни (r^2), сглаженные — широкие (r^1.5)
 	var q := sqrt(r) * r
 	t = clampf((hill.fbm(X / MASSIF - 8.3, Y / MASSIF + 44.6, 2) + 0.3) / 0.6, 0.0, 1.0)
@@ -343,7 +329,7 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	var m := (q + (r * r - q) * sharp) * amp
 	m += (r * UPLAND_AMP - m) * up
 	# Incise inland foundations only: lowering coastal saddles can flood dry road links.
-	var foundation := 1.0 - 0.2 * inland * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
+	var foundation := 1.0 - 0.45 * inland * (1.0 - up) * (1.0 - smoothstep(0.12, 0.65, r))
 	m = MASSIF_BASE * amp * (1.0 - (1.0 - UPLAND_AMP) * up) * foundation + m * CREST_SHARE
 	# Мягкий предел высоты: выше PEAK_KNEE рост замедляется, пик скругляется, а не обрезается
 	if m > PEAK_KNEE:
@@ -351,59 +337,85 @@ static func mountain(ridge: Simplex, hill: Simplex, X: float, Y: float, inland: 
 	return m
 
 
-## Гребень одного направления (dc, ds) = (cos, sin): ridged-шум в повёрнутых и вытянутых координатах. Первая октава (главный
-## гребень) несимметрична: с одной стороны склон круче в asym раз. С 3.1 больше веса у главного гребня,
-## мелких октав две вместо трёх, их вес убывает быстрее: они уточняют склон, а не дробят его на бугры
-## interior — сила внутренних долин и котловин (с 3.4); у сглаженных массивов 0.45, у гор до 1.
+## Разреженный скелет хребтов: извилистый главный водораздел и неравные
+## боковые рёбра, привязанные к нему концами. Геометрия определяется расстоянием
+## до этих линий; долины — промежутки между рёбрами, а не отдельный шумовый вырез.
+## Узлы адресуются мировыми координатами через перестановку сида. Нет состояния,
+## растровой эрозии, границ окна, фиксированного набора вершин или расхода RNG.
 static func _crest(ridge: Simplex, X: float, Y: float, dc: float, ds: float, asym: float, fine: float, interior: float = 0.0, structure: float = 0.0) -> float:
 	var along := X * dc + Y * ds
 	var across := Y * dc - X * ds
-	var u := along / RIDGE_ALONG
-	var v := across / RIDGE_ACROSS
-	var a := 0.6
-	var fq := 1.0
-	var s := 0.0
-	var wt := 1.0
-	for o in 4:
-		var n := ridge.noise(u * fq, v * fq)
-		# С 3.1 асимметрия до скругления: умножение e давало разные высоты справа и слева
-		# от n = 0, то есть отвесную ступеньку вдоль гребня даже при плавном шуме
-		if o == 0:
-			n *= asym if n > 0.0 else 1.0 / asym
-		var rounding := CREST_ROUND - 0.16 * structure if o == 0 else CREST_ROUND
-		# Keep the height at the crest while tightening the cap around it.
-		var e := sqrt(n * n + rounding * rounding) + CREST_ROUND - rounding
-		var val := maxf(0.0, 1.0 - e)
-		val *= val
-		val *= wt
-		wt = minf(1.0, maxf(0.0, val * 2.0))
-		s += val * a * (fine if o >= 2 else 1.0)
-		fq *= 2.1
-		a = 0.25 if o == 0 else a * 0.3
-	if interior > 0.0:
-		# Медленная продольная линия задаёт извилистую долину. Поперечное поле расширяет её
-		# в котловины; их дно меняет высоту плавно, а не становится горизонтальной ступенью.
-		var course := ridge.noise(along / INNER_ALONG + 18.7, across / INNER_ACROSS - 37.1)
-		var side := ridge.noise(along / 180.0 - 51.3, across / 320.0 + 24.8)
-		var t := clampf((side + 0.2) / 0.6, 0.0, 1.0)
-		var opening := t * t * (3.0 - 2.0 * t)
-		# У скалистых гор долины уже и глубже, у сглаженных — широкие и неглубокие.
-		t = clampf(1.0 - absf(course) / ((0.24 + 0.32 * opening) * (1.4 - 0.7 * interior)), 0.0, 1.0)
-		var valley := t * t * (3.0 - 2.0 * t)
-		s -= maxf(0.0, s - (0.18 + 0.16 * opening)) * valley * INNER_CUT * interior
-		# Боковые ложбины соединяются с главной долиной; между ними остаются отроги и седловины.
-		t = clampf(1.0 - absf(side) / 0.2, 0.0, 1.0)
-		var branch := t * t * (3.0 - 2.0 * t)
-		t = clampf(1.0 - absf(course) / 0.65, 0.0, 1.0)
-		var drainage := t * t * (3.0 - 2.0 * t)
-		s *= 1.0 - branch * drainage * (1.0 - valley) * (SIDE_CUT - 0.10 * (1.0 - structure)) * interior
-		# Interfluves join the main crest and taper out into the valley floor.
-		var spur := (1.0 - branch) * drainage * (1.0 - valley)
-		s += 0.20 * spur * smoothstep(0.16, 0.46, s) * structure
-		var shelf_level := 0.36 + 0.12 * opening
-		var shelf := smoothstep(shelf_level - 0.12, shelf_level, s) * (1.0 - smoothstep(shelf_level, shelf_level + 0.12, s))
-		s += (shelf_level - s) * shelf * 0.35 * fine * interior * (1.0 - 0.8 * valley)
-		# A short scarp at the outer lip of each spur, at varying heights along the massif.
-		var lip := smoothstep(shelf_level - 0.09, shelf_level - 0.025, s) * (1.0 - smoothstep(shelf_level + 0.02, shelf_level + 0.16, s))
-		s += 0.16 * lip * spur * structure
-	return s
+	var band := floori(across / 260.0)
+	var knot := floori(along / 130.0)
+	var height := 0.0
+	for row in range(band - 2, band + 3):
+		if absf(across - row * 260.0) > 480.0: continue
+		var center := _divide(ridge, row, along)
+		var offset := across - center
+		var width := 52.0 + 28.0 * (1.0 - interior)
+		var d := offset * (asym if offset > 0.0 else 1.0 / asym) / width
+		var peak := _divide_height(ridge, row, along)
+		var crown := maxf(0.0, 1.0 - d * d / 9.0)
+		var local := peak * crown * crown * crown * crown
+		# Каждый отрог начинается на водоразделе; противоположные борта имеют
+		# разные узлы, длины, ширины и направление, без симметричного «гребешка».
+		for column in range(knot - 2, knot + 3):
+			for side: float in [-1.0, 1.0]:
+				var salt := 17 if side < 0.0 else 83
+				var root := (column + 0.15 + 0.7 * _node(ridge, column, row, salt)) * 130.0
+				var root_across := _divide(ridge, row, root)
+				var dx := (_node(ridge, column, row, salt + 1) - 0.5) * 240.0
+				var dy := side * (125.0 + 105.0 * _node(ridge, column, row, salt + 2))
+				var px := along - root
+				var py := across - root_across
+				var t := clampf((px * dx + py * dy) / (dx * dx + dy * dy), 0.0, 1.0)
+				var bow := 4.0 * t * (1.0 - t) * (_node(ridge, column, row, salt + 4) - 0.5) * 55.0
+				var length := sqrt(dx * dx + dy * dy)
+				var ex := px - dx * t + dy / length * bow
+				var ey := py - dy * t - dx / length * bow
+				var rib_width := 22.0 + 23.0 * _node(ridge, column, row, salt + 3) + 12.0 * (1.0 - interior)
+				var face := 1.0 + 0.65 * fine * structure * smoothstep(-0.2, 0.25, (ex * -dy + ey * dx) / (length * rib_width))
+				var profile := maxf(0.0, 1.0 - (ex * ex + ey * ey) * face / (3.0 * rib_width * rib_width))
+				# Resistant beds form a short headwall with a broad shoulder, only
+				# midway down selected spurs. The lip follows the rib coordinate,
+				# never an absolute height or a ring around the whole mountain.
+				var competence := smoothstep(0.30, 0.85, _node(ridge, column, row, salt + 5))
+				var rock_face := competence * structure * (0.35 + 0.65 * fine) * smoothstep(0.10, 0.30, t) * (1.0 - smoothstep(0.72, 0.95, t))
+				var lip := 0.28 + 0.24 * t
+				var worn := profile * profile
+				var bedrock := 0.38 * worn + 0.62 * smoothstep(lip - 0.14, lip + 0.14, profile)
+				var rib := _divide_height(ridge, row, root) * (1.0 - 0.88 * t) * lerpf(worn, bedrock, rock_face)
+				# Smooth union keeps the roots seated in the parent ridge.
+				local = _join(local, rib, 0.045)
+		# Broad talus foot and a steeper upper face, varying between ranges.
+		var shoulder := smoothstep(0.12, 0.32, local) * (1.0 - smoothstep(0.32, 0.55, local))
+		local += (0.31 - local) * shoulder * (0.15 + 0.35 * fine) * structure
+		height = _join(height, local, 0.035)
+	return height
+
+
+static func _node(ridge: Simplex, x: int, y: int, salt: int) -> float:
+	return ridge.perm[(x + ridge.perm[(y + salt) & 255]) & 255] / 255.0
+
+
+static func _divide(ridge: Simplex, row: int, along: float) -> float:
+	var u := along / 280.0
+	var k := floori(u)
+	var t := u - k
+	t = t * t * (3.0 - 2.0 * t)
+	return row * 260.0 + lerpf(_node(ridge, k, row, 131), _node(ridge, k + 1, row, 131), t) * 190.0 - 95.0
+
+
+static func _divide_height(ridge: Simplex, row: int, along: float) -> float:
+	var u := along / 150.0
+	var k := floori(u)
+	var t := u - k
+	t = t * t * (3.0 - 2.0 * t)
+	return 0.58 + 0.44 * lerpf(_node(ridge, k, row, 211), _node(ridge, k + 1, row, 211), t)
+
+
+static func _join(a: float, b: float, width: float) -> float:
+	width = minf(width, minf(a, b))
+	if width <= 0.0: return maxf(a, b)
+	var h := maxf(0.0, 1.0 - absf(a - b) / width)
+	return maxf(a, b) + width * h * h * 0.25

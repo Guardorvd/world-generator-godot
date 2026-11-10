@@ -238,6 +238,7 @@ static func views(game: GameWorld) -> Array:
 	var w := game.world
 	var h := game.heights
 	var out: Array = []
+	var mountain_target := Vector3.INF
 	var cam := game.camera.global_transform
 	out.append({name = "spawn", title = "Точка появления", pos = cam.origin, target = cam.origin - cam.basis.z * 20.0})
 	if w.peaks.size() > 0:
@@ -246,6 +247,7 @@ static func views(game: GameWorld) -> Array:
 			if p.elev > top.elev:
 				top = p
 		var t := _at(h, top.x, top.y, 0.0)
+		mountain_target = t
 		out.append({name = "peak", title = "Вершина «%s»" % top.name, pos = _look_from(h, t, 400.0, 30.0, -60.0), target = t})
 	var river := _longest(w.rivers)
 	if river.size() > 2:
@@ -264,6 +266,25 @@ static func views(game: GameWorld) -> Array:
 		var pos := _at(h, road[m].x, road[m].y, 5.0)
 		var k := _along(road, m, 18.0)
 		out.append({name = "road", title = "Дорога", pos = pos, target = _at(h, road[k].x, road[k].y, 1.0)})
+	# The longest road is often in a lowland. Also inspect a real mountain
+	# route at rider height, rather than judging slopes only from a free camera.
+	if mountain_target != Vector3.INF:
+		var best := -INF
+		var mountain_view := {}
+		for route: Dictionary in w.trails:
+			if route.kind == "animal": continue
+			for k in range(3, route.pts.size() - 3, 8):
+				var point: Dictionary = route.pts[k]
+				var pos := _at(h, point.x, point.y, 1.8)
+				var distance := pos.distance_to(mountain_target)
+				if distance < 120.0 or distance > 1200.0: continue
+				var i := clampi(int(point.y), 0, w.H-1)*w.W+clampi(int(point.x), 0, w.W-1)
+				var open := 24.0 if w.biome[i] in [Biomes.ROCK, Biomes.PEAK, Biomes.TUNDRA] else 0.0
+				var score := pos.y + open - distance * 0.04
+				if score > best:
+					best = score
+					mountain_view = {name = "mountain_road", title = "Горная дорога, высота глаз 1,8 м", pos = pos, target = mountain_target}
+		if not mountain_view.is_empty(): out.append(mountain_view)
 	if w.settlements.size() > 0:
 		var big: SettlementData = w.settlements[0]
 		for s in w.settlements:

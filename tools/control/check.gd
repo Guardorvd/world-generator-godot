@@ -26,7 +26,7 @@ extends SceneTree
 
 const Dev := preload("res://tools/control/control.gd")
 const Perf := preload("res://tools/control/perf.gd")
-const ALL_VIEWS := ["map", "spawn", "peak", "valley", "road", "settlement", "village", "site", "forest", "trail"]
+const ALL_VIEWS := ["map", "spawn", "peak", "valley", "road", "mountain_road", "settlement", "village", "site", "forest", "trail"]
 const NOON := 12.0
 const SETTLE_FRAMES := 12   # кадров после переноса камеры до снимка
 const WARMUP_S := 1.5       # первые кадры компилируют шейдеры, их не считаем
@@ -121,6 +121,7 @@ func _initialize() -> void:
 	size = int(Dev.arg("size", "512"))
 	var v := Dev.arg("views", "all")
 	want_views = ALL_VIEWS.duplicate() if v == "all" else ([] if v == "none" else Array(v.split(",", false)))
+	if "road" in want_views and "mountain_road" not in want_views: want_views.append("mountain_road")
 	want_fps = Dev.arg("fps", "on") != "off"
 	hours = [[NOON, ""]]
 	for h in Dev.arg("hours", "").split(",", false):

@@ -36,9 +36,15 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 	if dist_water <= 1.0 and dist_ocean > 2.5 and slope > 0.55 and e < 0.62:
 		return Biomes.STONESHORE
 	if e > 0.62 or (e > 0.42 and t < 0.2):
+		# Sheltered summit basins and shoulders retain soil; a high surface
+		# does not become bare bedrock solely by crossing a contour line.
+		if slope < 0.30 and m > 0.50 and t > 0.12:
+			return Biomes.TUNDRA
 		return Biomes.PEAK
-	if e > 0.4 or slope > 1.3:
+	if slope > 1.3 or (e > 0.4 and (slope > 0.48 or m < 0.40)):
 		return Biomes.ROCK
+	if e > 0.4:
+		return Biomes.TUNDRA
 	if dist_ocean <= 2.5 and e < 0.03:
 		return Biomes.STONESHORE if t < 0.3 else Biomes.BEACH
 	if t < 0.12:

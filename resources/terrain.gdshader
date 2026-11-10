@@ -163,8 +163,12 @@ void fragment() {
 	float slope = 1.0 - normalize(wnormal).y;
 	float rock = smoothstep(ROCK_FROM, ROCK_TO, slope + (n_mid - 0.5) * 0.12);
 	float exposure = use_vertex_color ? COLOR.a : 0.0;
-	// на снегу скала проступает слабее, чтобы вершины оставались белыми
-	float snow = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
+	// Snow rests on shoulders and ledges. A white biome texel stretched down
+	// a cliff must not paint a vertical snow streak over the bedrock face.
+	float snow_biome = smoothstep(0.55, 0.8, min(col.r, min(col.g, col.b)));
+	float snow_hold = 1.0 - smoothstep(0.18, 0.48, slope);
+	float snow = snow_biome * snow_hold;
+	col = mix(col, rock_color, snow_biome * (1.0 - snow_hold));
 	float sky = 1.0;
 	vec3 base_col = col;
 	float wet = use_vertex_color ? UV.x : 0.45; // за краем влажность почвы передаёт меш

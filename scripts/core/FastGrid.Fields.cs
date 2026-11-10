@@ -165,8 +165,10 @@ public partial class FastGrid
 
 	private static ClimateKind LandBiome(double e, double t, double m, double slope, double distOcean)
 	{
-		if (e > 0.62 || e > 0.42 && t < 0.2) return ClimateKind.Peak;
-		if (e > 0.4 || slope > 1.3) return ClimateKind.Rock;
+		if (e > 0.62 || e > 0.42 && t < 0.2)
+			return slope < 0.30 && m > 0.50 && t > 0.12 ? ClimateKind.Tundra : ClimateKind.Peak;
+		if (slope > 1.3 || e > 0.4 && (slope > 0.48 || m < 0.40)) return ClimateKind.Rock;
+		if (e > 0.4) return ClimateKind.Tundra;
 		if (distOcean <= 2.5 && e < 0.03) return t < 0.3 ? ClimateKind.StoneShore : ClimateKind.Beach;
 		if (t < 0.12) return ClimateKind.Snow;
 		if (t < 0.24) return m > 0.6 ? ClimateKind.Taiga : ClimateKind.Tundra;

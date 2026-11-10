@@ -1,0 +1,672 @@
+{
+  "baseline_commit": "8b41708",
+  "grid_m": 4,
+  "plan_cells": 768,
+  "before": [
+    {
+      "seed": "Север-1234",
+      "proposed": 11,
+      "settlements": 11,
+      "roads": 117,
+      "road_metres": {
+        "animal": 6573.8362056613,
+        "mountain": 14166.7652350366,
+        "road": 7500.21262955666,
+        "trail": 12872.1745708585
+      },
+      "max_m": 221.772433519363,
+      "mountain_cells": 125419,
+      "gentle_share": 61.2487626103211,
+      "wall_share": 5.57889952877953,
+      "bridges": 3,
+      "lakes": 0,
+      "objects": 68904,
+      "relief_ms": [
+        174.072,
+        105.716,
+        103.171
+      ],
+      "places_ms": 17631.062,
+      "stages_ms": {
+        "climate": 74.414,
+        "geography": 417.787,
+        "hydrology": 580.4,
+        "ocean": 345.134,
+        "relief": 954.109,
+        "rivers": 26.914
+      },
+      "road_failures": {
+        "bridge_site": 1,
+        "unreachable": 23
+      },
+      "rides": {
+        "accepted": 13,
+        "km": 13.86,
+        "climb_km": 1.1,
+        "styles": {
+          "flow": 9,
+          "forest": 3,
+          "tech": 1
+        }
+      }
+    },
+    {
+      "seed": "Вальхейм 3",
+      "proposed": 13,
+      "settlements": 13,
+      "roads": 134,
+      "road_metres": {
+        "animal": 6338.15559674799,
+        "mountain": 14902.4673059881,
+        "road": 13781.3345928788,
+        "trail": 11447.8419738114
+      },
+      "max_m": 171.219441890717,
+      "mountain_cells": 126009,
+      "gentle_share": 60.8144398876635,
+      "wall_share": 3.72433715052099,
+      "bridges": 5,
+      "lakes": 1,
+      "objects": 52820,
+      "relief_ms": [
+        94.103,
+        97.079,
+        97.558
+      ],
+      "places_ms": 24627.598,
+      "stages_ms": {
+        "climate": 15.191,
+        "geography": 421.07,
+        "hydrology": 778.845,
+        "ocean": 255.459,
+        "relief": 619.556,
+        "rivers": 13.455
+      },
+      "road_failures": {},
+      "rides": {
+        "accepted": 16,
+        "km": 12.96,
+        "climb_km": 2.55,
+        "styles": {
+          "flow": 3,
+          "forest": 8,
+          "tech": 5
+        }
+      }
+    },
+    {
+      "seed": "Ущелье",
+      "proposed": 8,
+      "settlements": 7,
+      "roads": 106,
+      "road_metres": {
+        "animal": 5750.09173519164,
+        "mountain": 13218.3603048325,
+        "road": 10392.5737929046,
+        "trail": 5865.24829766154
+      },
+      "max_m": 155.111256837845,
+      "mountain_cells": 115538,
+      "gentle_share": 64.5966625032925,
+      "wall_share": 4.11726012221087,
+      "bridges": 5,
+      "lakes": 0,
+      "objects": 95831,
+      "relief_ms": [
+        99.076,
+        100.602,
+        99.16
+      ],
+      "places_ms": 14580.351,
+      "stages_ms": {
+        "climate": 7.904,
+        "geography": 423.233,
+        "hydrology": 618.633,
+        "ocean": 257.421,
+        "relief": 571.027,
+        "rivers": 13.629
+      },
+      "road_failures": {
+        "bridge_site": 1,
+        "unreachable": 6
+      },
+      "rides": {
+        "accepted": 13,
+        "km": 11.92,
+        "climb_km": 1.99,
+        "styles": {
+          "flow": 8,
+          "forest": 2,
+          "tech": 3
+        }
+      }
+    },
+    {
+      "seed": "Туман-4821",
+      "proposed": 12,
+      "settlements": 12,
+      "roads": 133,
+      "road_metres": {
+        "animal": 5995.12812816724,
+        "mountain": 15919.679001689,
+        "road": 15377.7681600749,
+        "trail": 21473.5576382875
+      },
+      "max_m": 185.894910097122,
+      "mountain_cells": 185175,
+      "gentle_share": 58.3992067536551,
+      "wall_share": 5.07843931416228,
+      "bridges": 2,
+      "lakes": 0,
+      "objects": 77404,
+      "relief_ms": [
+        104.988,
+        103.853,
+        102.518
+      ],
+      "places_ms": 32078.995,
+      "stages_ms": {
+        "climate": 8.327,
+        "geography": 412.492,
+        "hydrology": 510.518,
+        "ocean": 254.095,
+        "relief": 543.552,
+        "rivers": 13.288
+      },
+      "road_failures": {
+        "budget": 2,
+        "unreachable": 11
+      },
+      "rides": {
+        "accepted": 19,
+        "km": 16.52,
+        "climb_km": 3.14,
+        "styles": {
+          "flow": 4,
+          "forest": 12,
+          "tech": 3
+        }
+      }
+    },
+    {
+      "seed": "Каменный берег",
+      "proposed": 13,
+      "settlements": 12,
+      "roads": 119,
+      "road_metres": {
+        "animal": 6366.59355499223,
+        "mountain": 9837.86691701412,
+        "road": 7593.73397883773,
+        "trail": 15348.8865670562
+      },
+      "max_m": 163.529897928238,
+      "mountain_cells": 74733,
+      "gentle_share": 71.3572585896886,
+      "wall_share": 5.22393052600591,
+      "bridges": 3,
+      "lakes": 0,
+      "objects": 82920,
+      "relief_ms": [
+        98.21,
+        100.875,
+        95.426
+      ],
+      "places_ms": 18529.326,
+      "stages_ms": {
+        "climate": 7.972,
+        "geography": 412.475,
+        "hydrology": 516.711,
+        "ocean": 256.311,
+        "relief": 540.668,
+        "rivers": 11.557
+      },
+      "road_failures": {
+        "bridge_site": 1,
+        "budget": 1,
+        "unreachable": 10
+      },
+      "rides": {
+        "accepted": 10,
+        "km": 9.33,
+        "climb_km": 2.11,
+        "styles": {
+          "flow": 7,
+          "forest": 2,
+          "tech": 1
+        }
+      }
+    }
+  ],
+  "after": [
+    {
+      "seed": "Север-1234",
+      "proposed": 11,
+      "settlements": 11,
+      "roads": 119,
+      "road_metres": {
+        "animal": 5981.6350536868,
+        "mountain": 8366.99533188343,
+        "road": 7753.51627036929,
+        "trail": 18612.2154669464
+      },
+      "max_m": 225.666401386261,
+      "mountain_cells": 91738,
+      "gentle_share": 69.6280784256096,
+      "wall_share": 9.95552551832392,
+      "forest_share": 76.4922356893693,
+      "bridges": 3,
+      "lakes": 0,
+      "objects": 74302,
+      "relief_ms": [
+        293.658,
+        292.972,
+        294.928
+      ],
+      "places_ms": 19164.106,
+      "relief_source": "bdddbbf86c3a2418e54933d88e4fb6b155e37a2bbedd823d32c75e8137682315",
+      "stages_ms": {
+        "climate": 43.357,
+        "geography": 416.791,
+        "hydrology": 521.633,
+        "ocean": 252.554,
+        "relief": 1639.844,
+        "rivers": 29.643
+      },
+      "road_failures": {},
+      "rides": {
+        "accepted": 13,
+        "km": 11.55,
+        "climb_km": 1.99,
+        "styles": {
+          "flow": 7,
+          "forest": 5,
+          "tech": 1
+        }
+      }
+    },
+    {
+      "seed": "Вальхейм 3",
+      "proposed": 13,
+      "settlements": 13,
+      "roads": 119,
+      "road_metres": {
+        "animal": 6221.68636130914,
+        "mountain": 7435.34023886919,
+        "road": 14427.1219835579,
+        "trail": 15284.97585392
+      },
+      "max_m": 161.378746032715,
+      "mountain_cells": 122060,
+      "gentle_share": 70.7565030271271,
+      "wall_share": 1.78764542028511,
+      "forest_share": 80.7860319960011,
+      "bridges": 10,
+      "lakes": 0,
+      "objects": 54017,
+      "relief_ms": [
+        250.605,
+        253.231,
+        255.817
+      ],
+      "places_ms": 21240.542,
+      "relief_source": "bdddbbf86c3a2418e54933d88e4fb6b155e37a2bbedd823d32c75e8137682315",
+      "stages_ms": {
+        "climate": 12.551,
+        "geography": 432.67,
+        "hydrology": 578.975,
+        "ocean": 253.754,
+        "relief": 1105.729,
+        "rivers": 13.02
+      },
+      "road_failures": {},
+      "rides": {
+        "accepted": 14,
+        "km": 13.42,
+        "climb_km": 2.06,
+        "styles": {
+          "flow": 5,
+          "forest": 7,
+          "tech": 2
+        }
+      }
+    },
+    {
+      "seed": "Ущелье",
+      "proposed": 8,
+      "settlements": 7,
+      "roads": 107,
+      "road_metres": {
+        "animal": 5869.02233529091,
+        "mountain": 11547.8202054501,
+        "road": 4299.78818616271,
+        "trail": 21264.9400696456
+      },
+      "max_m": 260.801174640656,
+      "mountain_cells": 132130,
+      "gentle_share": 65.2916952642416,
+      "wall_share": 7.30492696586695,
+      "forest_share": 78.0520043784465,
+      "bridges": 5,
+      "lakes": 1,
+      "objects": 99741,
+      "relief_ms": [
+        241.246,
+        236.217,
+        242.466
+      ],
+      "places_ms": 18357.044,
+      "relief_source": "bdddbbf86c3a2418e54933d88e4fb6b155e37a2bbedd823d32c75e8137682315",
+      "stages_ms": {
+        "climate": 7.461,
+        "geography": 427.918,
+        "hydrology": 660.027,
+        "ocean": 270.803,
+        "relief": 837.516,
+        "rivers": 14.212
+      },
+      "road_failures": {
+        "bridge_site": 1,
+        "unreachable": 6
+      },
+      "rides": {
+        "accepted": 15,
+        "km": 13.67,
+        "climb_km": 2.73,
+        "styles": {
+          "flow": 4,
+          "forest": 7,
+          "tech": 4
+        }
+      }
+    },
+    {
+      "seed": "Туман-4821",
+      "proposed": 12,
+      "settlements": 11,
+      "roads": 116,
+      "road_metres": {
+        "animal": 5943.30041284859,
+        "mountain": 17380.0696548224,
+        "road": 10599.7841123343,
+        "trail": 10737.2685225606
+      },
+      "max_m": 249.31977391243,
+      "mountain_cells": 234849,
+      "gentle_share": 52.6216616354862,
+      "wall_share": 6.92402352149679,
+      "forest_share": 69.0095852738459,
+      "bridges": 1,
+      "lakes": 0,
+      "objects": 77630,
+      "relief_ms": [
+        287.427,
+        297.098,
+        288.767
+      ],
+      "places_ms": 19350.841,
+      "relief_source": "bdddbbf86c3a2418e54933d88e4fb6b155e37a2bbedd823d32c75e8137682315",
+      "stages_ms": {
+        "climate": 9.152,
+        "geography": 421.611,
+        "hydrology": 533.364,
+        "ocean": 255.362,
+        "relief": 798.474,
+        "rivers": 14.21
+      },
+      "road_failures": {
+        "bridge_site": 1,
+        "unreachable": 11
+      },
+      "rides": {
+        "accepted": 12,
+        "km": 13.14,
+        "climb_km": 1.72,
+        "styles": {
+          "flow": 4,
+          "forest": 6,
+          "tech": 2
+        }
+      }
+    },
+    {
+      "seed": "Каменный берег",
+      "proposed": 13,
+      "settlements": 13,
+      "roads": 113,
+      "road_metres": {
+        "animal": 6297.30928232893,
+        "mountain": 6568.18668222427,
+        "road": 8541.58054721355,
+        "trail": 14368.5295357704
+      },
+      "max_m": 211.120117902756,
+      "mountain_cells": 99308,
+      "gentle_share": 71.7279210330841,
+      "wall_share": 7.18975309139244,
+      "forest_share": 77.4068747334149,
+      "bridges": 4,
+      "lakes": 0,
+      "objects": 86410,
+      "relief_ms": [
+        279.413,
+        283.433,
+        283.451
+      ],
+      "places_ms": 16284.579,
+      "relief_source": "bdddbbf86c3a2418e54933d88e4fb6b155e37a2bbedd823d32c75e8137682315",
+      "stages_ms": {
+        "climate": 7.464,
+        "geography": 412.482,
+        "hydrology": 510.845,
+        "ocean": 256.347,
+        "relief": 793.332,
+        "rivers": 13.364
+      },
+      "road_failures": {},
+      "rides": {
+        "accepted": 7,
+        "km": 5.88,
+        "climb_km": 1.09,
+        "styles": {
+          "flow": 4,
+          "forest": 2,
+          "tech": 1
+        }
+      }
+    }
+  ],
+  "route_geography": [
+    {
+      "ascent_m": 2079.32509930863,
+      "descent_m": 2624.53628264077,
+      "highest_route_m": 167.762200832367,
+      "hollow_km": 2.59822813481094,
+      "longest_drop_m": 125.039338370552,
+      "mountain_km": 11.1002697637387,
+      "ridge_km": 5.99468060740857,
+      "seed": "Север-1234",
+      "version": "before"
+    },
+    {
+      "ascent_m": 1907.84215942549,
+      "descent_m": 2115.29452954128,
+      "highest_route_m": 197.014590501785,
+      "hollow_km": 0.514098848998544,
+      "longest_drop_m": 81.8787548877299,
+      "mountain_km": 5.58940118193647,
+      "ridge_km": 3.28175466731197,
+      "seed": "Север-1234",
+      "version": "after"
+    },
+    {
+      "ascent_m": 2419.32959728685,
+      "descent_m": 2910.34228500837,
+      "highest_route_m": 171.219441890717,
+      "hollow_km": 1.65136978659028,
+      "longest_drop_m": 134.894942496903,
+      "mountain_km": 9.35657291561437,
+      "ridge_km": 5.2680812831523,
+      "seed": "Вальхейм 3",
+      "version": "before"
+    },
+    {
+      "ascent_m": 1854.4938118034,
+      "descent_m": 2515.32008863433,
+      "highest_route_m": 161.378746032715,
+      "hollow_km": 1.06610449531671,
+      "longest_drop_m": 138.332576821849,
+      "mountain_km": 7.85733797189605,
+      "ridge_km": 4.00054563459769,
+      "seed": "Вальхейм 3",
+      "version": "after"
+    },
+    {
+      "ascent_m": 1728.99442001813,
+      "descent_m": 1928.78186668662,
+      "highest_route_m": 147.442029714584,
+      "hollow_km": 0.741261948972932,
+      "longest_drop_m": 85.9346915781498,
+      "mountain_km": 4.94700074484965,
+      "ridge_km": 3.28739163675909,
+      "seed": "Ущелье",
+      "version": "before"
+    },
+    {
+      "ascent_m": 1831.06258426691,
+      "descent_m": 2596.29007226627,
+      "highest_route_m": 168.006483316422,
+      "hollow_km": 1.35932724854347,
+      "longest_drop_m": 137.568766777404,
+      "mountain_km": 7.70535647279064,
+      "ridge_km": 3.80567320871361,
+      "seed": "Ущелье",
+      "version": "after"
+    },
+    {
+      "ascent_m": 3087.69282900786,
+      "descent_m": 3688.91433752404,
+      "highest_route_m": 177.822631597519,
+      "hollow_km": 3.58967569512143,
+      "longest_drop_m": 117.852784991264,
+      "mountain_km": 14.3701429365891,
+      "ridge_km": 6.5970533257726,
+      "seed": "Туман-4821",
+      "version": "before"
+    },
+    {
+      "ascent_m": 2285.21372343195,
+      "descent_m": 2573.49606604359,
+      "highest_route_m": 217.489454746246,
+      "hollow_km": 3.43029032930741,
+      "longest_drop_m": 174.951435364783,
+      "mountain_km": 13.0702436181911,
+      "ridge_km": 5.51035832259076,
+      "seed": "Туман-4821",
+      "version": "after"
+    },
+    {
+      "ascent_m": 1801.5645593105,
+      "descent_m": 1882.57682236494,
+      "highest_route_m": 145.197925567627,
+      "hollow_km": 0.522432603120801,
+      "longest_drop_m": 83.2161205634475,
+      "mountain_km": 4.05466321584598,
+      "ridge_km": 2.84057437086107,
+      "seed": "Каменный берег",
+      "version": "before"
+    },
+    {
+      "ascent_m": 1472.81535611735,
+      "descent_m": 1597.6167356837,
+      "highest_route_m": 136.460708379745,
+      "hollow_km": 0.573114542216052,
+      "longest_drop_m": 102.942782044411,
+      "mountain_km": 2.90018881809719,
+      "ridge_km": 1.53984563186761,
+      "seed": "Каменный берег",
+      "version": "after"
+    }
+  ],
+  "full_game_performance": {
+    "version": "15.0",
+    "seed": "Север-1234",
+    "sizes": {
+      "Ущелье_768": {
+        "draw": 2,
+        "render": {
+          "method": "forward_plus",
+          "viewport": "(1280, 720)",
+          "scale": 1.0,
+          "shadows": true,
+          "msaa": 2
+        },
+        "menu_memory": {
+          "rss_mb": 601.5,
+          "peak_rss_mb": 601.5,
+          "video_mb": 30.7,
+          "objects": 2801,
+          "nodes": 319
+        },
+        "load_s": 62.37,
+        "loaded_memory": {
+          "rss_mb": 2087.1,
+          "peak_rss_mb": 2252.0,
+          "video_mb": 411.5,
+          "objects": 25290,
+          "nodes": 10434
+        },
+        "look": {
+          "fps": 131.2,
+          "low1": 108.3,
+          "p95_ms": 8.91800022125244,
+          "p99_ms": 9.23499965667725,
+          "over_16_7": 0,
+          "over_33_3": 0,
+          "max_ms": 9.3,
+          "frames": 394
+        },
+        "road": {
+          "fps": 101.6,
+          "low1": 75.5,
+          "p95_ms": 11.1230001449585,
+          "p99_ms": 13.2379999160767,
+          "over_16_7": 2,
+          "over_33_3": 2,
+          "max_ms": 215.1,
+          "frames": 624
+        },
+        "veg_gap": {
+          "min_m": 450.0,
+          "p10_m": 450.0,
+          "close_share": 0.0
+        },
+        "grass_lag": {
+          "max_m": 63.1,
+          "p90_m": 57.2,
+          "allowed_m": 45.0,
+          "capped": 0
+        },
+        "draw_calls": 1807,
+        "primitives": 2527801,
+        "memory": {
+          "rss_mb": 2437.8,
+          "peak_rss_mb": 3145.8,
+          "video_mb": 315.6,
+          "objects": 30766,
+          "nodes": 12971
+        }
+      }
+    },
+    "machine": {
+      "gpu": "NVIDIA GeForce GTX 1650 SUPER",
+      "cpu": "AMD Ryzen 7 2700 Eight-Core Processor",
+      "threads": 16,
+      "os": "Windows",
+      "dotnet": true
+    }
+  },
+  "full_game_fingerprint": {
+    "ok": true,
+    "differences": []
+  }
+}
