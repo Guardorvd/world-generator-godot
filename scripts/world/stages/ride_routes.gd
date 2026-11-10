@@ -66,7 +66,7 @@ static func enabled() -> bool:
 	return ENABLED and not QuickTrails.network()
 
 
-## finder — поиск этапа с коридором горных троп; on_axis — клетки осей мостов и туннелей
+## finder — поиск этапа; on_axis — клетки осей мостов и туннелей
 static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray) -> void:
 	var started := Time.get_ticks_usec()
 	var stats := {anchors = 0, tops = 0, pairs = 0, searches = 0, found = 0, rejected = {}, accepted = 0,
@@ -75,6 +75,8 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	w.generation_profile.rides = stats
 	if not enabled() or surface == null:
 		return
+	# Flow/forest publish a wider trail than mountain approaches. Search its full width.
+	StageTrails._route_surface(finder, surface, StageTrails.WIDTHS.trail, "corridor_rides_ms")
 	var W := w.W
 	var hv := surface.hv
 	# Расстояние до готовой сети (дороги, тропы, горные тропы) — одна проходка C#
@@ -195,7 +197,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			stats.climbs += 1
 			stats.climb_km += StageTrails._length(w, top.approach) * GameConfig.TILE / 1000.0
 		var path: PackedInt32Array = c.path
-		StageTrails._add_trail(w, path, "mountain" if c.style == "tech" else "trail", PackedFloat32Array(), on_axis, surface)
+		StageTrails._add_trail(w, path, "mountain" if STYLES[c.search].grade > StageTrails.TRAIL_GRADE else "trail", PackedFloat32Array(), on_axis, surface)
 		var route: Dictionary = w.trails[-1]
 		route.ride = "ride_%d" % number
 		route.ride_style = c.style
@@ -336,8 +338,8 @@ static func _search(finder: Pathfinder, w: WorldData, cost: PackedFloat32Array, 
 	return finder.find_path(cost, a, b, spec.climb, spec.grade, version)
 
 
-## Две части через ориентир без «шипа»: если начало второй части возвращается к концу первой (рядом, в пределах клетки),
-## путь срезается в самой поздней такой точке — ориентир задаёт сторону склона, а не обязательный разворот.
+## Две части через ориентир без «шипа»: срезаем возврат в общей клетке частей.
+## Каждый оставшийся шаг уже проверен поиском; соседство клеток само по себе этого не доказывает.
 static func _join(w: WorldData, a: PackedInt32Array, b: PackedInt32Array) -> PackedInt32Array:
 	var tail := {}
 	for j in range(maxi(0, a.size() - 40), a.size()):
@@ -346,13 +348,11 @@ static func _join(w: WorldData, a: PackedInt32Array, b: PackedInt32Array) -> Pac
 	var cut_b := 0
 	for k in range(1, mini(b.size(), 40)):
 		var c := b[k]
-		for dy: int in [-1, 0, 1]:
-			for dx: int in [-1, 0, 1]:
-				var j: int = tail.get(c + dy * w.W + dx, -1)
-				# Сосед ориентира у любой второй части — не возврат; возврат — к клетке первой части хотя бы на две раньше
-				if j >= 0 and j <= a.size() - 3 and (k > cut_b or k == cut_b and j < cut_a):
-					cut_a = j
-					cut_b = k
+		var j: int = tail.get(c, -1)
+		# Keep only already validated edges: splice at a shared vertex.
+		if j >= 0 and j <= a.size() - 3 and (k > cut_b or k == cut_b and j < cut_a):
+			cut_a = j
+			cut_b = k
 	var out := a.slice(0, cut_a + 1)
 	if out[-1] != b[cut_b]: out.append(b[cut_b])
 	out.append_array(b.slice(cut_b + 1))

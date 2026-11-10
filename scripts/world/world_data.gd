@@ -172,13 +172,17 @@ func region_places() -> Dictionary:
 		var record := {id = src.id, kind = "settlement", name = EntityCodec.value(src, "name", ""), x = src.x, y = src.y, region = region, src = src}
 		_region_index.places[src.id] = record
 		_region_index.list.append(record)
+	var seen_routes := {}
 	for src: SettlementData in settlements_now:
 		for other: String in EntityCodec.value(src, "connections", []):
 			var to := other
 			if other == "plan":
 				to = _nearest_plan_settlement(Vector2(src.x, src.y))
-			if not _region_index.places.has(to) and place(to).is_empty() or src.id >= to and _region_index.places.has(to):
+			if to == src.id or not _region_index.places.has(to) and _places().places.get(to, {}).is_empty():
 				continue
+			var key := src.id + ">" + to if src.id < to else to + ">" + src.id
+			if seen_routes.has(key): continue
+			seen_routes[key] = true
 			var b := place(to)
 			_region_index.routes.append({id = src.id + ">" + to, from = src.id, to = to, road = true,
 				regions = [_region_index.places[src.id].region, b.region]})

@@ -1268,12 +1268,30 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 			y = g
 
 
+## x: weighted road microheight, y: local tread weight. Obstacles are added separately.
+func _wheel_road(heights: Heightfield, px: float, pz: float, surf: int, weight: float, grade: float, across: float) -> Vector2:
+	var bump: Vector4 = RoadBump.LIST[surf]
+	if heights.road_refinement != null:
+		var contact := heights.path_contact(px, pz)
+		surf = int(contact.get("surface", RoadSurface.NONE))
+		weight = smoothstep(0.05, 0.9, float(contact.get("weight", 0.0)))
+		across = float(contact.get("across", 0.0))
+		bump = contact.get("bump", RoadBump.LIST[surf])
+		if contact.has("grade"):
+			grade = contact.grade
+		else:
+			# Older streamed patches have the same ground but no gradient in their contact record.
+			grade = Vector2(heights.surface_at(px + 0.5, pz, y) - heights.surface_at(px - 0.5, pz, y),
+				heights.surface_at(px, pz + 0.5, y) - heights.surface_at(px, pz - 0.5, y)).length()
+	var origin := Vector2(heights.world.world_origin) * GameConfig.TILE
+	return Vector2(RoadBump.height_params(px + origin.x, pz + origin.y, bump, grade, across) * weight, weight)
+
+
 ## Колёса на точках касания. Подвеска колеса получает толчок, когда вертикальная скорость земли
 ## под ним меняется (излом, ступенька, кочка): переднее колесо встречает излом раньше заднего.
 ## 11.5: на полотне кочки — поле RoadBump в точке касания (то же, что видно в шейдере), вне пути — прежние.
 ## 11.6: поверх — кочки веток и камней на полотне (ForestObstacles.bump_at).
-## 12.3: across — поперечная координата полотна у середины велосипеда (колеи RoadBump); колёса идут
-## вдоль курса, поперёк они почти не расходятся.
+## Each wheel samples its own tread, rut coordinate and full terrain grade.
 func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSurface.NONE, path_weight := 0.0, grade := 0.0, across := 0.0) -> void:
 	if airborne:
 		# в полёте колёса висят на подвеске под рамой
@@ -1306,11 +1324,10 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 		gf -= minf(lift_f, maxf(0.0, gf - heights.surface_at(x + fx, z + fz, y)))
 		gr -= minf(lift_r, maxf(0.0, gr - heights.surface_at(x - fx, z - fz, y)))
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
-	var wild := BUMP * rough * (1.0 - path_weight)
-	# поле кочек в мировых метрах: у участка Trail Lab свой сдвиг (WorldData.world_origin), у мира ноль
-	var o := Vector2(heights.world.world_origin) * GameConfig.TILE
-	var bump_f := wild * _bump(_dist + HUB) + RoadBump.height(x + fx + o.x, z + fz + o.y, surf, grade, across) * path_weight
-	var bump_r := wild * _bump(_dist - HUB) + RoadBump.height(x - fx + o.x, z - fz + o.y, surf, grade, across) * path_weight
+	var front := _wheel_road(heights, x + fx, z + fz, surf, path_weight, grade, across)
+	var rear := _wheel_road(heights, x - fx, z - fz, surf, path_weight, grade, across)
+	var bump_f := BUMP * rough * (1.0 - front.y) * _bump(_dist + HUB) + front.x
+	var bump_r := BUMP * rough * (1.0 - rear.y) * _bump(_dist - HUB) + rear.x
 	# 11.6: ветки и камни на полотне (RoadObstacles) — та же кочка, только с места препятствия
 	var of := 0.0
 	var orr := 0.0

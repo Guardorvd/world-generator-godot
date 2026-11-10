@@ -105,6 +105,7 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		if whole != null:
 			var built := r._build_native(whole, fit_road)
 			pin_coarse_edges(heights, built.patches, built.patches.keys())
+			built._drop_mountain_fits(heights.world)
 			return built
 	if not only.is_empty() and restrict_local_index:
 		# Determine the exact output cells before indexing neighbours. Preserve the
@@ -234,7 +235,14 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	r._noise = null
 	r._base_cache.clear()
 	if only.is_empty(): pin_coarse_edges(heights, r.patches, r.patches.keys())
+	r._drop_mountain_fits(heights.world)
 	return r
+
+
+## Mountain entries carry temporary protection gates, not an engineered profile.
+func _drop_mountain_fits(w: WorldData) -> void:
+	for route: int in fit_routes.keys():
+		if w.trails[route].kind == "mountain": fit_routes.erase(route)
 
 
 ## An edge bordering a coarse cell uses the same straight segment as its coarse mesh and physics.
@@ -586,15 +594,12 @@ func _fit_network() -> void:
 		var kind := CORRIDOR_KINDS.find(t.kind)
 		if kind < 0 or not (_only.is_empty() or _only.has(route)):
 			continue
-		var fitted: bool = t.kind != "mountain"
 		# Трасса с земляными работами (trail_id, earthwork > 0) — авторская геометрия TrailShaping: форм коридора под ней нет.
 		# Путь трассы без земляных работ — природная тропа: формы слабее и без продавленных мест.
 		var scale := 1.0
 		if t.has("trail_id"):
 			scale = PREPARED_SCALE if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
 		var shaped := natural_relief and scale > 0.0
-		if not fitted and not shaped:
-			continue
 		var points := PackedVector2Array()
 		var halves := PackedFloat32Array()
 		var surfs := PackedInt32Array()
@@ -618,12 +623,7 @@ func _fit_network() -> void:
 			continue
 		var gate := PackedFloat32Array()
 		gate.resize(count)
-		if not fitted:
-			for j in count:
-				var tangent := (points[mini(count - 1, j + 2)] - points[maxi(0, j - 2)]).normalized()
-				gate[j] = 1.0 if (_fit_safe(points[j], tangent, route, j * STEP, false, halves[j]) & 2) != 0 else 0.0
-		else:
-			_fit_route(t, route, points, halves, gate)
+		_fit_route(t, route, points, halves, gate)
 		if shaped:
 			var batch_points: PackedVector2Array = batch.points
 			batch.starts.append(batch_points.size())
@@ -713,6 +713,25 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 	ground.resize(count)
 	for j in count:
 		ground[j] = _heights.base_ground_at(points[j].x, points[j].y)
+	if t.kind == "mountain":
+		# Preserve the natural profile, but honour the same protected stations as roads.
+		var strength := PackedFloat32Array()
+		var limits := PackedFloat32Array()
+		var distance := PackedFloat32Array()
+		for j in count:
+			var tangent := (points[mini(count - 1, j + 2)] - points[maxi(0, j - 2)]).normalized()
+			var safe := _fit_safe(points[j], tangent, route, j * STEP, false, halves[j])
+			gate[j] = 1.0 if (safe & 2) != 0 else 0.0
+			distance.append(0.0 if safe == 0 or j == 0 else distance[j - 1] + STEP)
+		var back := 0.0
+		for j in range(count - 1, -1, -1):
+			back = 0.0 if j == count - 1 or distance[j] == 0.0 else back + STEP
+			distance[j] = minf(distance[j], back)
+		for j in count:
+			strength.append(smoothstep(0.0, FIT_FADE, distance[j]))
+			limits.append(0.3)
+		fit_routes[route] = {points = points, profile = ground, strength = strength, limit = limits}
+		return
 	var need := PackedFloat32Array()
 	var cross_slopes := PackedFloat32Array()
 	var allowed := PackedFloat32Array()
@@ -777,7 +796,7 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 		strength.append(power * trail_power)
 		var cap := lerpf(0.2, FIT_LIMIT, amount) * (0.5 if t.kind == "trail" else 1.0)
 		var bench_limit := BENCH_LIMIT if t.kind == "road" else TRAIL_BENCH_LIMIT
-		cap = maxf(cap, minf(bench_limit, cross_slope * float(t.pts[0].w) * TILE * 0.5))
+		cap = maxf(cap, minf(bench_limit, cross_slope * halves[j]))
 		limits.append(cap)
 	fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
 
@@ -957,11 +976,10 @@ func _corridor_gap(p: Vector2, tangent: Vector2, route: int, along: float, own_h
 	return gap - half - own_half
 
 
-## Другой путь — то же полотно: вдоль (не поперёк), ось ближе SHARED, тот же вид и та же полуширина
-func _shared(gap: float, crossing: bool, route: int, other: int, own_half: float, half: float) -> bool:
-	var trails := _heights.world.trails
-	return not crossing and gap < SHARED and own_half >= 0.0 and absf(half - own_half) < 0.05 \
-		and trails[route].kind == trails[other].kind and not trails[route].has("trail_id") and not trails[other].has("trail_id")
+## Only a route's own stations share a profile. Matching width/kind does not
+## prove that another route has the same anchors, surface or corridor phase.
+func _shared(_gap: float, _crossing: bool, route: int, other: int, _own_half: float, _half: float) -> bool:
+	return route == other
 
 
 static func _shoulder(side: float, cross: float, n: float, slope: float, ditch: float, lip: float) -> float:
@@ -976,7 +994,7 @@ static func _bell(t: float) -> float:
 
 
 ## Bit 0: existing profile fit allowed; bit 1: corridor forms allowed as well.
-## Shallow forks pin only the corridor forms, preserving the established fitted profile.
+## Overlapping independent profiles pin earthworks to their common base terrain.
 func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false, own_half := -1.0) -> int:
 	var w := _heights.world
 	var safe := 3
@@ -1008,12 +1026,11 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 					hairpin = absf(_sg_along[id] + u * sqrt(_sg_len2[id]) - along) > 20.0
 				if other or hairpin:
 					var gap := Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y)
-					if gap < _sg_half[id] + REACH + 0.5:
+					if gap < _sg_half[id] + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
 						if crossing or hairpin: return 0
-						# 14.11: путь того же вида и ширины, идущий той же линией (дубль сети), — одно полотно: формы коридора
-						# у обоих одинаковы (шум по месту), закреплять всю общую часть не нужно. Развилка закреплена, как раньше
+						# Independent station profiles cannot safely switch at a nearest-route boundary.
 						var lateral := absf((p - a).cross(delta.normalized()))
-						if gap < _sg_half[id] + own_half + 0.5 and not _shared(lateral, crossing, route, seg_route, own_half, _sg_half[id]): safe = 1
+						if not _shared(lateral, crossing, route, seg_route, own_half, _sg_half[id]): return 0
 	else:
 		for s: Dictionary in _segments.get(key, []):
 			var b: Vector2 = s.a + s.delta
@@ -1025,10 +1042,10 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 				hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
 			if other or hairpin:
 				var gap := Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y)
-				if gap < s.half + REACH + 0.5:
+				if gap < s.half + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
 					if crossing or hairpin: return 0
 					var lateral := absf((p - (s.a as Vector2)).cross((s.delta as Vector2).normalized()))
-					if gap < s.half + own_half + 0.5 and not _shared(lateral, crossing, route, s.route, own_half, s.half): safe = 1
+					if not _shared(lateral, crossing, route, s.route, own_half, s.half): return 0
 	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
 			return 0
@@ -1280,9 +1297,13 @@ func sample(x: float, z: float, width: int) -> Dictionary:
 	var hs: PackedFloat32Array = p.h
 	var colors: PackedColorArray = p.color
 	var uvs: PackedVector2Array = p.uv
+	var gradient := Vector2(hs[b] - hs[a], hs[c] - hs[a]) / STEP if tx + tz <= 1.0 else Vector2(hs[a] - hs[c], hs[a] - hs[b]) / STEP
+	var bumps: Vector4 = RoadBump.LIST[p.surface[a]] * wa + RoadBump.LIST[p.surface[b]] * wb + RoadBump.LIST[p.surface[c]] * wc
+	var bump_weight: float = (wa if p.surface[a] != 0 else 0.0) + (wb if p.surface[b] != 0 else 0.0) + (wc if p.surface[c] != 0 else 0.0)
+	if bump_weight > 0.0: bumps.y = maxf(0.1, bumps.y / bump_weight)
 	var closest := a if wa >= wb and wa >= wc else (b if wb >= wc else c)
 	# 12.3: across — поперечная координата полотна (UV2.x меша): колеи RoadBump у колёс там же, где в шейдере
 	return {h = hs[a] * wa + hs[b] * wb + hs[c] * wc,
 		weight = colors[a].a * wa + colors[b].a * wb + colors[c].a * wc, surface = p.surface[closest], road = p.road[closest] != 0,
-		across = uvs[a].x * wa + uvs[b].x * wb + uvs[c].x * wc}
+		across = uvs[a].x * wa + uvs[b].x * wb + uvs[c].x * wc, grade = gradient.length(), bump = bumps}
 

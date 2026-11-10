@@ -121,7 +121,7 @@ public partial class FastGrid
 			{
 				xs.Add((float)(ax + dx * s / m));
 				zs.Add((float)(az + dz * s / m));
-				half.Add((float)(pw[p - 1] * tile * 0.5));
+				half.Add((float)(RoadLerp(pw[p - 1], pw[p], (double)s / m) * tile * 0.5));
 			}
 		}
 		xs.Add((float)(px[to - 1] * tile));

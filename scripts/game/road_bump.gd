@@ -83,7 +83,12 @@ static func hole(x: float, z: float, chance: float, rough: float) -> Vector2:
 static func height(x: float, z: float, surface: int, grade: float, across := 0.0) -> float:
 	if surface <= 0 or surface >= LIST.size():
 		return 0.0
-	var b: Vector4 = LIST[surface]
+	return height_params(x, z, LIST[surface], grade, across)
+
+
+## Interpolated material parameters, as in terrain.gdshader; the category stays discrete for grip.
+static func height_params(x: float, z: float, b: Vector4, grade: float, across := 0.0) -> float:
+	if b.y <= 0.0: return 0.0
 	var p := patch(x, z)
 	var rough := lerpf(0.35, 1.6, smoothstep(0.25, 0.75, p.x))
 	var bumps := shape(x, z, b.y) + 0.7 * smoothstep(0.3, 0.8, 1.0 - p.y) * shape(0.28 * x - 0.96 * z, 0.96 * x + 0.28 * z, b.y * 0.57)

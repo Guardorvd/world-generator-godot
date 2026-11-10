@@ -42,6 +42,7 @@ varying vec3 wpos;
 varying vec3 wnormal;
 varying vec3 road_detail;
 varying vec4 road_bump_p;
+varying float road_bump_weight;
 varying float road_crack;
 
 // 11.5: волна RoadBump.shape и её наклон: x — высота 0..1, yz — производные по x и z мира.
@@ -127,6 +128,7 @@ void vertex() {
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.
 	road_detail = surface_detail[clamp(int(round(UV2.y)), 0, 7)];
 	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
+	road_bump_weight = UV2.y > 0.0 ? 1.0 : 0.0;
 	road_crack = surface_crack[clamp(int(round(UV2.y)), 0, 7)];
 	if (use_vertex_color) {
 		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
@@ -332,8 +334,12 @@ void fragment() {
 		// 11.5: кочки полотна — то же поле, что у колёс (RoadBump): по покрытию, на крутом выше.
 		// 12.3: с участками, колеями и ямами. Видны светом и тоном; гаснут, когда волна меньше нескольких пикселей.
 		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
-		float bump_wave = max(road_bump_p.y, 0.1);
-		vec3 bump = road_field(p, road_bump_p, grade, UV2.x, across_grad);
+		// NONE contributes no wavelength. Preserve frequency while amplitude fades at the edge.
+		vec4 bump_params = road_bump_p;
+		if (road_bump_weight > 0.0) bump_params.y /= road_bump_weight;
+		bump_params.y = max(bump_params.y, 0.1);
+		float bump_wave = bump_params.y;
+		vec3 bump = road_field(p, bump_params, grade, UV2.x, across_grad);
 		float bump_fade = (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
 		// 14.5: волны кочек правильные (две синусоиды), и в тоне и свете они читались ровным узором
 		// тёмных «змеек» через равный шаг, особенно под фарой. Видимая сила теперь пятнами по крупному

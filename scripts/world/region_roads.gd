@@ -121,7 +121,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		var cell := Vector2i(floori(exit.x + exit.dx * 0.5), floori(exit.y + exit.dy * 0.5)) - bounds.position
 		var i := cell.y * w.W + cell.x
 		edge_of[i] = Vector2(exit.x, exit.y) - Vector2(bounds.position)
-		nodes.append({id = "exit:%d:%d" % [cell.x + bounds.position.x, cell.y + bounds.position.y], i = i, net = exit.net})
+		nodes.append({id = _network_place(ledger, exit.net), i = i, net = exit.net})
 	if not targets.is_empty(): nodes.append({id = PLAN, i = -1, net = PLAN})
 	var groups: Array = range(nodes.size())
 	for a in nodes.size():
@@ -147,8 +147,9 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	for a in nodes.size():
 		for b in range(a + 1, nodes.size()):
 			if nodes[a].i < 0: continue
-			var to: int = nodes[b].i if nodes[b].i >= 0 else _nearest(w, targets, nodes[a].i)
-			pairs.append([_distance2(w, nodes[a].i, to), a, b, to])
+			var choices := PackedInt32Array([nodes[b].i]) if nodes[b].i >= 0 else _plan_targets(w, targets, nodes[a].i)
+			for to: int in choices:
+				pairs.append([_distance2(w, nodes[a].i, to), a, b, to])
 	pairs.sort_custom(func(a: Array, b: Array) -> bool:
 		return a[0] < b[0] or a[0] == b[0] and (a[1] < b[1] or a[1] == b[1] and a[2] < b[2]))
 	var edges: Array = []
@@ -224,7 +225,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	for s: SettlementData in w.settlements:
 		if StageLandmarks.homes_of(s) < Places.min_homes(s): underfilled.append(s.id)
 	profile.underfilled = underfilled.size()
-	edges = edges.filter(func(e: Dictionary) -> bool: return not underfilled.has(e.from) and not underfilled.has(e.to))
+	edges = _contract_edges(edges, underfilled)
 	var out_places: Array = []
 	for k in w.settlements.size():
 		var s: SettlementData = w.settlements[k]
@@ -357,15 +358,61 @@ static func _distance2(w: WorldData, a: int, b: int) -> float:
 	return Vector2(a % w.W - b % w.W, a / w.W - b / w.W).length_squared()
 
 
-static func _nearest(w: WorldData, targets: PackedInt32Array, from: int) -> int:
-	var best := -1
-	var distance := INF
-	for t: int in targets:
-		var d := _distance2(w, from, t)
-		if d < distance:
-			distance = d
-			best = t
-	return best
+## Resolve an incoming road to a real published member of its confirmed component.
+static func _network_place(ledger: Dictionary, net: String) -> String:
+	if net == PLAN: return PLAN
+	var best := ""
+	for place: SettlementData in ledger.get("settlements", []):
+		if place.net == net and (best.is_empty() or place.id < best): best = place.id
+	return best if not best.is_empty() else net
+
+
+## A few spatially separate landings prevent one blocked shore deciding the whole approach.
+static func _plan_targets(w: WorldData, targets: PackedInt32Array, from: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for slot in 4:
+		var best := -1
+		var distance := INF
+		for t: int in targets:
+			var separate := true
+			for previous: int in out:
+				if _distance2(w, previous, t) < 16 * 16:
+					separate = false
+					break
+			if not separate: continue
+			var d := _distance2(w, from, t)
+			if d < distance or d == distance and t < best:
+				distance = d
+				best = t
+		if best < 0: break
+		out.append(best)
+	return out
+
+
+## Eliminate unpublished transit vertices without deleting the roads through them.
+static func _contract_edges(edges: Array, removed: Array) -> Array:
+	var graph := {}
+	for edge: Dictionary in edges:
+		if not graph.has(edge.from): graph[edge.from] = {}
+		if not graph.has(edge.to): graph[edge.to] = {}
+		graph[edge.from][edge.to] = true
+		graph[edge.to][edge.from] = true
+	for id: String in removed:
+		var neighbors: Array = graph.get(id, {}).keys()
+		for a: String in neighbors:
+			graph[a].erase(id)
+			for b: String in neighbors:
+				if a != b: graph[a][b] = true
+		graph.erase(id)
+	var out: Array = []
+	var ids: Array = graph.keys()
+	ids.sort()
+	for a: String in ids:
+		var neighbors: Array = graph[a].keys()
+		neighbors.sort()
+		for b: String in neighbors:
+			if a < b: out.append({from = a, to = b})
+	return out
 
 
 ## Дома, места, сооружения, деревья и камни плана: подход их обходит, а не прокладывает дорогу сквозь них.

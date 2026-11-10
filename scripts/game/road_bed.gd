@@ -167,7 +167,7 @@ static func _trail(heights: Heightfield, pts: Array, k: Dictionary, pin: PackedF
 		for s in m:
 			xs.append(ax + dx * s / m)
 			zs.append(az + dz * s / m)
-			half.append(float(a.w) * TILE * 0.5)
+			half.append(lerpf(float(a.w), float(b.w), float(s) / m) * TILE * 0.5)
 	var last: Dictionary = pts[-1]
 	xs.append(last.x * TILE)
 	zs.append(last.y * TILE)

@@ -53,12 +53,12 @@ public partial class FastGrid
 		return outDown;
 	}
 
-	/// <summary>Копия высот поиска в StageTrails.run: 0 у моря, уровень озера (filled × scale), иначе hv / tile.</summary>
-	public float[] RouteHeights(byte[] ocean, byte[] lake, float[] filled, float[] hv, double scale, double tile, double lakeDrop = 0.1)
+	/// <summary>Копия высот поиска в StageTrails.run: 0 у моря, уровень озера (filled × scale), река — max(hv, water) / tile, иначе hv / tile.</summary>
+	public float[] RouteHeights(byte[] ocean, byte[] lake, byte[] river, float[] filled, float[] hv, float[] water, double scale, double tile, double lakeDrop = 0.1)
 	{
 		var heights = new float[hv.Length];
 		for (int i = 0; i < hv.Length; i++)
-			heights[i] = ocean[i] != 0 ? 0f : (float)(lake[i] != 0 ? filled[i] * scale - lakeDrop / tile : hv[i] / tile);
+			heights[i] = ocean[i] != 0 ? 0f : (float)(lake[i] != 0 ? filled[i] * scale - lakeDrop / tile : (river[i] != 0 ? Math.Max(hv[i], water[i]) : hv[i]) / tile);
 		return heights;
 	}
 

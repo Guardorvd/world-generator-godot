@@ -171,7 +171,7 @@ public partial class FastGrid
 	/// trail and mountain trail (routes in CSR ptStarts, px/py/pw in cells, psurf per point), profile fit of roads and
 	/// trails (_fit_route), gate of the corridor forms and the forms themselves (CorridorRoute). Same operations in the same
 	/// order as the GDScript reference; PackedFloat32Array stores are rounded to float. kinds: 0 road, 1 trail, 2 mountain;
-	/// scales: corridor scale of the route (0 — no forms; a mountain trail without forms is skipped). fitParams: shore,
+	/// scales: corridor scale of the route (0 — no forms; natural mountain profiles still carry protection gates). fitParams: shore,
 	/// pin, pin fade, reach, shared, fit fade, fit limit, road bench limit, trail bench limit.
 	/// Returns {routes, starts, fitted, points, profile, strength, limit, corridor} — per included route and per station.</summary>
 	public Godot.Collections.Dictionary RoadFitNetwork(int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, int[] kinds,
@@ -191,8 +191,6 @@ public partial class FastGrid
 		var surfs = new System.Collections.Generic.List<int>();
 		for (int t = 0; t < routeIds.Length; t++)
 		{
-			bool fitted = kinds[t] != 2;
-			if (!fitted && scales[t] <= 0.0f) continue;
 			int from = ptStarts[t], to = ptStarts[t + 1], first = points.Count;
 			double along = 0.0, next = 0.0;
 			for (int n = from + 1; n < to; n++)
@@ -240,7 +238,7 @@ public partial class FastGrid
 		{
 			int t = included[r];
 			routes[r] = routeIds[t]; kindOf[r] = kinds[t]; scaleOf[r] = scales[t];
-			fittedOut[r] = kinds[t] != 2 ? (byte)1 : (byte)0;
+			fittedOut[r] = 1;
 		}
 		System.Threading.Tasks.Parallel.For(0, count, r =>
 		{
@@ -248,12 +246,27 @@ public partial class FastGrid
 			bool road = kinds[t] == 0, trail = kinds[t] == 1;
 			if (kinds[t] == 2)
 			{
+				var distance = new float[n];
 				for (int j = 0; j < n; j++)
 				{
 					Vector2 tangent = (pts[from + Math.Min(n - 1, j + 2)] - pts[from + Math.Max(0, j - 2)]).Normalized();
-					gate[from + j] = (FitSafe(pts[from + j], tangent, routes[r], j * step, false, half[from + j], width, height, tile, water,
+					int safe = FitSafe(pts[from + j], tangent, routes[r], j * step, false, half[from + j], width, height, tile, water,
 						distWater, shore, structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong,
-						cellStarts, candidates, reach, shared, settlements, routeKinds) & 2) != 0 ? 1.0f : 0.0f;
+						cellStarts, candidates, reach, shared, settlements, routeKinds);
+					gate[from + j] = (safe & 2) != 0 ? 1.0f : 0.0f;
+					profile[from + j] = (float)RoadGround(ground, width, height, tile, pts[from + j].X, pts[from + j].Y);
+					distance[j] = safe == 0 || j == 0 ? 0.0f : (float)(distance[j - 1] + step);
+				}
+				double back = 0.0;
+				for (int j = n - 1; j >= 0; j--)
+				{
+					back = j == n - 1 || distance[j] == 0.0f ? 0.0 : back + step;
+					distance[j] = (float)Math.Min(distance[j], back);
+				}
+				for (int j = 0; j < n; j++)
+				{
+					strength[from + j] = (float)RoadSmooth(0.0, fitFade, distance[j]);
+					limits[from + j] = 0.3f;
 				}
 			}
 			else
@@ -293,7 +306,6 @@ public partial class FastGrid
 					back = j == n - 1 || allowed[j] <= 0.0f ? 0.0 : back + step;
 					distance[j] = (float)Math.Min(distance[j], back);
 				}
-				double width0 = pw[ptStarts[t]];
 				for (int j = 0; j < n; j++)
 				{
 					double amount = 0.0, crossSlope = 0.0;
@@ -318,7 +330,7 @@ public partial class FastGrid
 					strength[from + j] = (float)(power * trailPower);
 					double cap = RoadLerp(0.2, fitLimit, amount) * (trail ? 0.5 : 1.0);
 					double benchLimit = road ? roadBench : trailBench;
-					cap = Math.Max(cap, Math.Min(benchLimit, crossSlope * width0 * tile * 0.5));
+					cap = Math.Max(cap, Math.Min(benchLimit, crossSlope * half[from + j]));
 					limits[from + j] = (float)cap;
 				}
 			}
@@ -366,11 +378,10 @@ public partial class FastGrid
 				if (other || hairpin)
 				{
 					double gapDist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
-					if (gapDist < segHalf[id] + reach + 0.5)
+					if (gapDist < segHalf[id] + Math.Max(0.0, ownHalf) + 2.0 * reach + 0.5)
 					{
 						if (crossing || hairpin) return 0;
-						if (gapDist < segHalf[id] + ownHalf + 0.5 &&
-							!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds)) safe = 1;
+						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds)) return 0;
 					}
 				}
 			}
@@ -381,8 +392,7 @@ public partial class FastGrid
 	}
 
 	private static bool RoadShared(double gap, bool crossing, int route, int other, double ownHalf, double half, double shared, int[] routeKinds)
-		=> !crossing && gap < shared && ownHalf >= 0.0 && Math.Abs(half - ownHalf) < 0.05
-			&& routeKinds[route] >= 0 && routeKinds[route] == routeKinds[other];
+		=> route == other;
 
 	private static double RoadClearance(Vector2 p, Vector2 tangent, int route, double along, double ownHalf, int width, int height, double tile,
 		double gap, double landGap, double shared, int[] routeKinds, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates)

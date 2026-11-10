@@ -120,7 +120,7 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 		var heights := ground.duplicate() # the level of each anchor: the ground, or depth_cap from it
 		var target := levels
 		for pass_index in CAP_PASSES if depth_cap > 0.0 else 1:
-			levels = target.duplicate()
+			levels = _smooth(target, maxi(1, window / 3), false)
 			# rise allowed per step: the target, more only between anchors that need it
 			var rise := PackedFloat32Array()
 			rise.resize(count)
@@ -171,7 +171,7 @@ func profile(h: Heightfield, d: TrailDefinition, pin_at := Callable()) -> Dictio
 				added = true
 			if not added: break
 			anchors.sort()
-	levels = _smooth(levels, maxi(1, window / 3), d.closed)
+	if d.closed: levels = _smooth(levels, maxi(1, window / 3), true)
 	var banks := PackedFloat32Array()
 	for j in count + 1:
 		banks.append(clampf(curvature[j] * bank_gain, -bank_max, bank_max) * d.auto_bank)
