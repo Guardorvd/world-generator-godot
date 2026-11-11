@@ -91,7 +91,11 @@ var _task := -1
 var _out := {}
 var _key := Vector2i.ZERO
 var _shown := {}        # область -> {node, fires, windows}
-var _bridges := {}      # область -> её мосты в Heightfield (регистрируются один раз)
+var _bridges := {}      # область -> её мосты в Heightfield, только пока область показана
+var _resident := {}    # области с полями: дальние проверяем даже после телепорта
+var _stream_keys: Array[Vector2i] = []
+var _stream_at := Vector2.INF
+var _stream_region_count := -1
 var _checked_at := Vector2.INF
 var _road_mat: ShaderMaterial
 var _build_task := -1   # 14.4: фоновый расчёт мешей воды и дорог области _build_key
@@ -166,6 +170,8 @@ static func _valid_ledger(value: Dictionary) -> bool:
 
 ## Восстановить сохранённый журнал; поля областей ближе KEEP к точке (x, z) — сразу.
 func restore(x: float, z: float) -> void:
+	_resident.clear()
+	_stream_at = Vector2.INF
 	ledger = read_ledger(world)
 	if ledger.is_empty():
 		var path := store_dir(world).path_join("ledger.bin")
@@ -255,14 +261,17 @@ func update(x: float, z: float) -> bool:
 		_build_task = -1
 		var entry: Variant = ledger.get("regions", {}).get(_build_key)
 		if entry != null and entry.has("fields") and not _shown.has(_build_key) and _distance(_build_key, p) <= REACH:
-			_show(_build_key, _build_out)
+			var built := _build_out
+			_build_out = {}
+			_show(_build_key, built)
 			return true
 		var unused: Node = _build_out.get("decor", {}).get("node")
 		if is_instance_valid(unused) and unused.get_parent() == null: unused.free()
+		_build_out = {}
 	if generation_enabled and p.distance_to(_checked_at) > RECHECK:
 		_checked_at = p
 		_plan(p)
-	for key: Vector2i in ledger.get("regions", {}):
+	for key: Vector2i in _stream_candidates(p):
 		var d := _distance(key, p)
 		var entry: Dictionary = ledger.regions[key]
 		if d <= KEEP and not entry.has("fields") and not field_errors.has(key):
@@ -295,6 +304,29 @@ func update(x: float, z: float) -> bool:
 		var material := _road_mat
 		_task = WorkerThreadPool.add_task(func() -> void: out.r = prepare_region(w, key, snapshot, "", _stopped, terrain, view, material), false, "Область")
 	return false
+
+
+## Historical maps/places remain available, but never form a per-frame work queue.
+## Query the regular region grid and include currently resident/shown regions for eviction.
+func _stream_candidates(p: Vector2) -> Array[Vector2i]:
+	var regions: Dictionary = ledger.get("regions", {})
+	if p.distance_to(_stream_at) < RECHECK and _stream_region_count == regions.size():
+		return _stream_keys
+	_stream_at = p
+	_stream_region_count = regions.size()
+	var keys := _resident.duplicate()
+	keys.merge(_shown)
+	var side := WorldData.REGION_SIZE * TILE
+	# Cover movement until the next refresh, including an exact region boundary.
+	var reach := KEEP + RECHECK
+	var first := Vector2i(floori((p.x - reach) / side), floori((p.y - reach) / side))
+	var last := Vector2i(floori((p.x + reach) / side), floori((p.y + reach) / side))
+	for y in range(first.y, last.y + 1):
+		for x in range(first.x, last.x + 1):
+			var key := Vector2i(x, y)
+			if regions.has(key): keys[key] = true
+	_stream_keys.assign(keys.keys())
+	return _stream_keys
 
 
 func _storage_failure(message: String) -> void:
@@ -595,6 +627,8 @@ func _request_fields(key: Vector2i) -> void:
 
 
 func _publish_fields(key: Vector2i, fields: Dictionary) -> void:
+	_resident[key] = true
+	_stream_at = Vector2.INF
 	ledger = ledger.duplicate()
 	ledger.regions = ledger.regions.duplicate()
 	var entry: Dictionary = ledger.regions[key].duplicate()
@@ -606,6 +640,8 @@ func _publish_fields(key: Vector2i, fields: Dictionary) -> void:
 
 ## Поля далёкой области остаются только в файле; запись журнала (rect, decor) — в памяти
 func _evict(key: Vector2i) -> void:
+	_resident.erase(key)
+	_stream_at = Vector2.INF
 	var fields: Dictionary = ledger.regions[key].fields
 	_field_cache.limit = FIELD_CACHE_BYTES
 	_field_cache.put(key, fields)
@@ -631,6 +667,8 @@ func _apply(key: Vector2i, done: Dictionary, persist := true) -> void:
 		if next.regions.has(k) and ledger.regions[k].has("fields") != next.regions[k].has("fields"):
 			next.regions[k] = ledger.regions[k]
 	ledger = next
+	_resident[key] = true
+	_stream_at = Vector2.INF
 	world.outer.set_ledger(ledger)
 	var rect := Regions.rect_for(key)
 	if not done.has("chunks"): terrain.refresh(rect.grow(2))
@@ -646,8 +684,8 @@ func _apply(key: Vector2i, done: Dictionary, persist := true) -> void:
 func _show(key: Vector2i, arrays := {}) -> void:
 	var started := Time.get_ticks_usec()
 	var entry: Dictionary = ledger.regions[key]
-	var built: Dictionary = arrays.decor if arrays.has("decor") else build_decor(world, heights, key, entry, _road_mat)
 	if not _bridges.has(key): _bridges[key] = heights.add_outer_bridges(entry.decor.bridges)
+	var built: Dictionary = arrays.decor if arrays.has("decor") else build_decor(world, heights, key, entry, _road_mat, _bridges[key])
 	add_child(built.node)
 	_shown[key] = built
 	stats.built += 1
@@ -655,7 +693,7 @@ func _show(key: Vector2i, arrays := {}) -> void:
 	_collect()
 
 
-static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, entry: Dictionary, road_material: Material) -> Dictionary:
+static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, entry: Dictionary, road_material: Material, registered_bridges: Variant = null) -> Dictionary:
 	var decor: Dictionary = entry.decor
 	var node := Node3D.new()
 	node.name = "Region_%d_%d" % [key.x, key.y]
@@ -674,7 +712,7 @@ static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, e
 		mi.material_override = road_material
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		node.add_child(mi)
-	var bridges := heights.add_outer_bridges(decor.bridges)
+	var bridges: Array = heights.add_outer_bridges(decor.bridges) if registered_bridges == null else registered_bridges
 	StructuresBuilder.build(node, heights, bridges)
 	# Тот же сборщик домов, что у плана: временный мир только со списком поселений области.
 	var places := WorldData.new()
@@ -691,6 +729,10 @@ static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, e
 func _hide(key: Vector2i) -> void:
 	_shown[key].node.queue_free()
 	_shown.erase(key)
+	_stream_at = Vector2.INF
+	if _bridges.has(key):
+		heights.remove_outer_bridges(_bridges[key])
+		_bridges.erase(key)
 	stats.hidden += 1
 	_collect()
 

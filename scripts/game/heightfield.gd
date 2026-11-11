@@ -54,8 +54,9 @@ var road_refinement: RoadRefinement: # 4.4: метровая сетка толь
 		road_refinement = value
 		clear_rock_seats()
 ## 09.11.2026: опоры крупных камней (RockModels.seat у выходов и массивов) — их считают отрисовка, раскладка травы
-## и препятствия по многу раз; опора скального массива стоит около миллисекунды. Ключ — Vector3(x, z, вариант);
+## и препятствия по многу раз; опора скального массива стоит около миллисекунды. Ключ — Vector4(x, z, масштаб, вариант);
 ## сбрасывается при смене полотна дорог и сооружений (опора читает их через ground_at).
+const ROCK_SEAT_LIMIT := 4096
 var rock_seats := {}
 var rock_seats_lock := Mutex.new()
 var path_timings := {}
@@ -414,6 +415,19 @@ func add_decks(list: Array) -> void:
 					if not _cells.has(i):
 						_cells[i] = []
 					_cells[i].append(k)
+
+
+## Remove only this region's collision records, preserving the plan's structure indices.
+func remove_outer_bridges(list: Array) -> void:
+	if list.is_empty(): return
+	var kept: Array = []
+	for s: Dictionary in outer_structures:
+		if not list.any(func(owned: Dictionary) -> bool: return is_same(owned, s)):
+			kept.append(s)
+	structures.resize(structures.size() - outer_structures.size())
+	outer_structures = []
+	_outer_cells = {}
+	_add_outer(kept)
 
 
 func _add_outer(list: Array) -> void:

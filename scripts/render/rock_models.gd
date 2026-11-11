@@ -658,6 +658,12 @@ static func seat(heights: Heightfield, x: float, z: float, scale: float, v: int)
 		if known != null: return known
 		var found := _outcrop_seat_live(heights, x, z, scale, v)
 		heights.rock_seats_lock.lock()
+		# Evict a batch of old results: bounded memory without copying all keys
+		# on every new rock. Recalculation is deterministic and safe after eviction.
+		if not heights.rock_seats.has(key) and heights.rock_seats.size() >= Heightfield.ROCK_SEAT_LIMIT:
+			var oldest := heights.rock_seats.keys()
+			for i in Heightfield.ROCK_SEAT_LIMIT / 4:
+				heights.rock_seats.erase(oldest[i])
 		heights.rock_seats[key] = found
 		heights.rock_seats_lock.unlock()
 		return found
