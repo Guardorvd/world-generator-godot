@@ -75,6 +75,13 @@ const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нуж�
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
 const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
+## 11.11.2026: рисунок коры в шейдере ствола — только у деревьев: 1 — пластины и борозды, 2 — берёза, 0 — нет.
+const BARK_PLATES := [Biomes.T_OAK, Biomes.T_PINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_SNOWPINE, Biomes.T_DEAD, Biomes.T_ACACIA]
+
+
+static func bark_detail(kind: int) -> float:
+	return 2.0 if kind == Biomes.T_BIRCH else (1.0 if kind in BARK_PLATES else 0.0)
+
 # [sway, flutter, sway_speed, ao, glow]; см. _wind_mat
 const CALM := [0.0, 0.0, 1.0, 1.0, 0.0]
 const WIND := {
@@ -213,6 +220,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			if part == "trunk":
 				mat.set_shader_parameter("use_vertex_color", def.get("colored_bark", false))
 				mat.set_shader_parameter("albedo_color", def.bark)
+				mat.set_shader_parameter("bark_detail", bark_detail(kind % ForestModels.MODEL_STRIDE))
 			if kind % ForestModels.MODEL_STRIDE == Biomes.T_REED:
 				mat.set_shader_parameter("detail_full", 18.0)
 				mat.set_shader_parameter("detail_far", 65.0)

@@ -60,8 +60,21 @@ varying vec2 v_lod;      // 9.9+: порог пикселя должен быт�
 #ifdef ROCK_DETAIL
 varying vec3 rock_local;
 #endif
+#ifdef BARK
+// 11.11.2026: кора. 0 — нет (кусты, кактусы, тростник), 1 — пластины с бороздами (дуб, сосна, ель, пальма),
+// 2 — берёза: гладкая кора с тёмными чечевичками, у комля — грубая. Ставит VegetationLayer по породе.
+// Рисунок — в координатах модели (по окружности ствола и высоте), цвет породы остаётся из вершин и материала.
+// У комля ствол темнее, с северной стороны — мох. Рельеф — светом, гаснет по размеру пикселя.
+uniform float bark_detail = 0.0;
+varying vec3 bark_local;
+varying float bark_north;
+#endif
 
 void vertex() {
+#ifdef BARK
+	bark_local = VERTEX;
+	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
+#endif
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
 	if (grass_variation) {
 		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;
@@ -179,6 +192,55 @@ void fragment() {
 	ALBEDO *= 0.94 + grain * 0.045 * (1.0 - smoothstep(0.0025, 0.012, footprint));
 	ALBEDO = mix(ALBEDO, ALBEDO * 1.2, vein * 0.12);
 	ROUGHNESS = 0.91;
+#endif
+#ifdef BARK
+	if (bark_detail > 0.0) {
+		float fp = max(length(dFdx(bark_local)), length(dFdy(bark_local)));
+		float vis = 1.0 - smoothstep(0.012, 0.05, fp);
+		float r = max(length(bark_local.xz), 0.03);
+		float u = atan(bark_local.z, bark_local.x) * r;
+		float y = bark_local.y;
+		// пластины шириной ~5,5 см, борозды извилистые; поперечные трещины у каждой пластины на своей высоте
+		float pu = u / 0.055 + sin(y * 2.1 + u * 3.0) * 0.34 + sin(y * 5.3 + u * 9.0) * 0.16 + sin(y * 13.0 - u * 21.0) * 0.06;
+		float plate = floor(pu);
+		float f = fract(pu);
+		float furrow = min(f, 1.0 - f);
+		float row = y * 1.3 + sin(u * 17.0) * 0.12 + fract(sin(plate * 12.9898) * 43758.5453) * 5.0;
+		float fr = fract(row);
+		float cross_gap = min(fr, 1.0 - fr);
+		float plates = smoothstep(0.03, 0.26, furrow) * mix(0.72, 1.0, smoothstep(0.0, 0.035, cross_gap));
+		float plate_tone = 0.88 + 0.24 * fract(sin((plate + floor(row) * 7.0) * 78.233) * 43758.5453);
+		float relief = plates;
+		vec3 bark = ALBEDO;
+		if (bark_detail < 1.5) {
+			bark *= mix(0.9, mix(0.42, 1.10, plates) * plate_tone, vis);
+		} else {
+			// берёза: у комля грубая тёмная кора, выше — белая с чечевичками (короткие тёмные штрихи поперёк ствола)
+			float rough = 1.0 - smoothstep(0.4, 2.2, y + sin(u * 31.0) * 0.25);
+			vec2 lc = vec2(u / 0.11, y / 0.028);
+			vec2 lh = fract(sin(vec2(dot(floor(lc), vec2(127.1, 311.7)), dot(floor(lc), vec2(269.5, 183.3)))) * 43758.5453);
+			vec2 ll = fract(lc) - 0.5;
+			float dash = (1.0 - smoothstep(0.30 + lh.y * 0.15, 0.48, abs(ll.x))) * (1.0 - smoothstep(0.18, 0.42, abs(ll.y))) * step(0.86, lh.x);
+			vec3 smooth_bark = mix(bark, bark * 0.16, dash * vis * 0.9) * mix(1.0, 0.92 + 0.12 * lh.y, vis);
+			vec3 rough_bark = bark * mix(0.55, mix(0.14, 0.62, plates) * plate_tone, vis);
+			bark = mix(smooth_bark, rough_bark, rough);
+			relief = mix(1.0 - dash * 0.5, plates, rough);
+		}
+		// комель темнее (сырость, брызги земли), с севера — мох пятнами
+		bark *= mix(0.72, 1.0, smoothstep(0.0, 0.6, y));
+		float moss = (1.0 - smoothstep(0.2, 1.9, y)) * smoothstep(-0.1, 0.6, bark_north)
+			* smoothstep(0.35, 0.65, 0.5 + 0.5 * sin(u * 23.0 + sin(y * 5.0) * 2.0) * sin(y * 4.1 + plate));
+		bark = mix(bark, vec3(0.105, 0.15, 0.045) * (0.7 + 0.6 * plates), moss * 0.75);
+		ALBEDO = bark;
+		// рельеф пластин светом
+		float hh = relief * vis * 0.016;
+		vec3 dpx = dFdx(VERTEX);
+		vec3 dpy = dFdy(VERTEX);
+		vec3 r1 = cross(dpy, NORMAL);
+		vec3 r2 = cross(NORMAL, dpx);
+		float det = dot(dpx, r1);
+		NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2));
+	}
 #endif
 	AO = v_ao;
 	AO_LIGHT_AFFECT = 0.0;

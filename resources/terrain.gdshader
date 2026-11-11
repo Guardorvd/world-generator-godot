@@ -231,10 +231,18 @@ void fragment() {
 	//   снег — голубые тени между застругами, заструги светом, искры вблизи.
 	// Под пологом леса остаётся лесная подстилка, на скале — порода, на полотне — покрытие (они ниже).
 	// Вдали (near = 0) — только арифметика; вблизи две новые выборки шума для волокон травы.
+	// Участки (вторая волна, 11.11): внутри одного биома земля разная не цветом, а характером. Поле участков
+	// ~100 м (своя выборка шума, повёрнутая) вместе с уклоном и влажностью даёт каменистые сухие места
+	// (на склонах чаще: больше голой земли и камней, трава реже и суше) и сырые низины (трава гуще и темнее,
+	// больше цветов, песок темнее и плотнее, снег — наст). Оттенок остаётся в семье биома.
 	vec2 ground_tilt = vec2(0.0);
 	float ground_relief = 0.0;
+	float ground_lumps = 0.0;
 	float ground_w = (1.0 - rock) * (1.0 - canopy * 0.85);
+	float n_zone = texture(detail_tex, vec2(dot(p, vec2(0.78, -0.62)), dot(p, vec2(0.62, 0.78))) * (1.0 / 97.0) + vec2(0.71, 0.29)).r;
 	if (ground_w > 0.01) {
+		float stony = smoothstep(0.54, 0.68, n_zone + (n_mid - 0.5) * 0.14 + slope * 0.9);
+		float damp = smoothstep(0.54, 0.68, (1.0 - n_zone) + (n_mid - 0.5) * 0.14 + (wet - 0.45) * 0.6 - slope * 0.8);
 		float water_tone = smoothstep(0.02, 0.10, base_col.b - max(base_col.r, base_col.g));
 		float sand = smoothstep(0.52, 0.66, base_col.r) * smoothstep(0.12, 0.26, base_col.r - base_col.b) * (1.0 - snow_biome);
 		float veg = (1.0 - sand) * (1.0 - snow_biome) * (1.0 - water_tone);
@@ -242,10 +250,15 @@ void fragment() {
 		float drift = smoothstep(0.28, 0.72, n_macro * 0.55 + n_big * 0.45);
 		vec3 c0 = col;
 		if (veg > 0.01) {
-			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8, 0.0, 1.0);
+			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8 + stony * 0.28 - damp * 0.3, 0.0, 1.0);
 			vec3 turf = c0 * mix(vec3(0.80, 0.97, 0.84), vec3(1.20, 1.07, 0.74), dryness);
 			float clump = smoothstep(0.34, 0.70, n_mid * 0.6 + n_fine * 0.4);
 			turf *= mix(0.88, 1.09, clump);
+			// участки видны и вдали: каменистый — реже и землистее, сырой — гуще и темнее
+			vec3 soil_far = mix(vec3(0.20, 0.15, 0.095), vec3(0.34, 0.27, 0.17), dryness);
+			turf = mix(turf, soil_far, stony * mix(0.16, 0.30, clump));
+			turf *= mix(vec3(1.0), vec3(0.84, 0.95, 0.80), damp);
+			ground_lumps = veg;
 			if (near > 0.0) {
 				vec2 gp = p + (vec2(n_mid, n_big) - 0.5) * 1.6;
 				float blades = texture(detail_tex, vec2(dot(gp, vec2(0.92, 0.39)) * 2.9, dot(gp, vec2(-0.39, 0.92)) * 0.55)).r;
@@ -253,25 +266,30 @@ void fragment() {
 				turf *= 1.0 + (blades + blades2 - 1.0) * 0.42 * near;
 				turf = mix(turf, turf * vec3(1.30, 1.20, 0.82), smoothstep(0.60, 0.78, blades) * dryness * 0.55 * near);
 				// проплешины: на сухом чаще; земля с камешками
-				float bare = smoothstep(0.66, 0.78, (1.0 - n_mid) * 0.45 + (1.0 - n_big) * 0.2 + n_fine * 0.2 + blades2 * 0.15 + dryness * 0.09);
+				float bare = smoothstep(0.66, 0.78, (1.0 - n_mid) * 0.45 + (1.0 - n_big) * 0.2 + n_fine * 0.2 + blades2 * 0.15 + dryness * 0.09 + stony * 0.17 - damp * 0.08);
+				// впадины между куртинами темнее: трава читается объёмом, а не плоской краской
+				turf *= mix(0.74, 1.07, smoothstep(0.22, 0.62, n_fine * 0.55 + blades * 0.45));
 				vec2 pc = p * 6.3 + vec2(3.7, 9.1);
 				vec2 ph = grain_hash(floor(pc));
 				vec2 pl = fract(pc) - (vec2(0.3) + ph * 0.4);
 				float pr = 0.10 + ph.x * 0.14;
 				float paa = max(px3 * 6.3 * 0.5, 0.01);
-				float pebble = (1.0 - smoothstep(pr - paa, pr + paa, length(pl))) * step(0.45, ph.y) * (1.0 - smoothstep(0.25, 0.6, paa));
+				float pebble = (1.0 - smoothstep(pr - paa, pr + paa, length(pl))) * step(0.45 - stony * 0.2, ph.y) * (1.0 - smoothstep(0.25, 0.6, paa));
 				vec3 earth = mix(vec3(0.17, 0.12, 0.075), vec3(0.33, 0.26, 0.16), dryness) * (0.85 + n_fine * 0.3);
 				earth = mix(earth, rock_color * mix(0.6, 0.95, ph.x), pebble * 0.8);
 				turf = mix(turf, earth, bare * 0.72 * near);
-				ground_tilt += pl / pr * pebble * bare * 0.6;
-				ground_relief = max(ground_relief, pebble * bare);
+				// на каменистом участке камни лежат и в траве
+				float loose = pebble * max(bare, stony * 0.7);
+				turf = mix(turf, rock_color * mix(0.6, 0.95, ph.x) * (0.8 + 0.3 * clamp(1.0 - length(pl) / pr, 0.0, 1.0)), (loose - pebble * bare) * 0.8 * near);
+				ground_tilt += pl / pr * loose * 0.7;
+				ground_relief = max(ground_relief, loose);
 				// цветы: редкие точки на сочных полянах
 				vec2 fc = p * 4.1 + vec2(11.3, 2.9);
 				vec2 fh = grain_hash(floor(fc));
 				vec2 fl = fract(fc) - (vec2(0.2) + fh * 0.6);
 				float faa = max(px3 * 4.1 * 0.5, 0.008);
 				float flower = (1.0 - smoothstep(0.075 - faa, 0.075 + faa, length(fl))) * step(0.90, fh.x)
-					* smoothstep(0.45, 0.65, n_big + (n_mid - 0.5) * 0.5) * lush * (1.0 - bare) * (1.0 - smoothstep(0.12, 0.4, faa));
+					* smoothstep(0.45, 0.65, n_big + (n_mid - 0.5) * 0.5 + damp * 0.25) * lush * (1.0 - bare) * (1.0 - stony * 0.7) * (1.0 - smoothstep(0.12, 0.4, faa));
 				vec3 petal = fh.y < 0.45 ? vec3(0.92, 0.90, 0.80) : (fh.y < 0.8 ? vec3(0.93, 0.72, 0.10) : vec3(0.50, 0.36, 0.72));
 				turf = mix(turf, petal, flower * 0.85 * near);
 			}
@@ -279,9 +297,12 @@ void fragment() {
 		}
 		if (sand > 0.01) {
 			vec3 dune = c0 * mix(vec3(0.86, 0.84, 0.82), vec3(1.08, 1.06, 1.01), drift) * mix(1.0, 0.82, smoothstep(0.55, 0.9, wet));
+			// сырой плотный песок темнее и без ряби; каменистый участок — галька и щебень
+			dune *= mix(vec3(1.0), vec3(0.80, 0.79, 0.76), damp);
+			dune = mix(dune, rock_color * 0.82, stony * mix(0.10, 0.26, smoothstep(0.35, 0.7, n_mid)));
 			float warp = (n_mid - 0.5) * 9.0 + (n_big - 0.5) * 16.0;
 			float phase = dot(p, vec2(0.83, 0.56)) * (6.2831853 / 0.42) + warp;
-			float ripple_vis = (1.0 - smoothstep(0.05, 0.16, px3 / 0.42)) * smoothstep(0.25, 0.6, n_big + (n_mid - 0.5) * 0.4);
+			float ripple_vis = (1.0 - smoothstep(0.05, 0.16, px3 / 0.42)) * smoothstep(0.25, 0.6, n_big + (n_mid - 0.5) * 0.4) * (1.0 - damp * 0.8) * (1.0 - stony * 0.6);
 			float crest = sin(phase);
 			dune *= 1.0 + crest * 0.10 * ripple_vis;
 			if (near > 0.0) {
@@ -289,7 +310,9 @@ void fragment() {
 				vec2 sh = grain_hash(floor(sc));
 				vec2 sl = fract(sc) - (vec2(0.25) + sh * 0.5);
 				float saa = max(px3 * 5.2 * 0.5, 0.01);
-				float speck = (1.0 - smoothstep(0.09 - saa, 0.09 + saa, length(sl))) * step(0.9, sh.x) * (1.0 - smoothstep(0.2, 0.5, saa));
+				float speck = (1.0 - smoothstep(0.09 - saa, 0.09 + saa, length(sl))) * step(0.9 - stony * 0.45, sh.x) * (1.0 - smoothstep(0.2, 0.5, saa));
+				ground_tilt += sl / 0.09 * speck * 0.5;
+				ground_relief = max(ground_relief, speck * sand);
 				dune = mix(dune, sh.y < 0.5 ? rock_color * 0.6 : vec3(0.93, 0.90, 0.84), speck * 0.8 * near);
 				dune *= 1.0 + (n_fine - 0.5) * 0.10 * near;
 			}
@@ -300,6 +323,9 @@ void fragment() {
 		if (snow > 0.01) {
 			float hollow = smoothstep(0.30, 0.72, n_big * 0.6 + n_mid * 0.4);
 			vec3 drift_c = c0 * mix(vec3(0.87, 0.92, 1.0), vec3(1.0), hollow);
+			// выдутый наст: плотнее, чуть серо-голубой, проступают камни; в затишье — рыхлый белый снег
+			drift_c *= mix(vec3(1.0), vec3(0.86, 0.90, 0.95), stony);
+			drift_c = mix(drift_c, rock_color * 0.7, stony * smoothstep(0.62, 0.74, n_mid * 0.6 + n_fine * 0.4) * 0.8);
 			float sphase = dot(p, vec2(0.56, -0.83)) * (6.2831853 / 1.7) + (n_mid - 0.5) * 7.0 + (n_big - 0.5) * 11.0;
 			float sas_vis = 1.0 - smoothstep(0.05, 0.18, px3 / 1.7);
 			drift_c *= 1.0 + sin(sphase) * 0.035 * sas_vis;
@@ -588,6 +614,12 @@ void fragment() {
 	}
 	// рябь песка, заструги и камешки проплешин — своим светом (вне полотна)
 	float ground_n = ground_relief * (1.0 - road) * near;
+	// объём: к общей карте нормалей добавляется вторая, мелкая (кочки и куртины 0,6 м) — трава лежит буграми
+	float lumps = ground_lumps * ground_w * (1.0 - road) * near;
+	if (lumps > 0.0) {
+		vec3 n2 = texture(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63)).rgb;
+		detail_n.xy += (n2.xy - 0.5) * 0.9 * lumps;
+	}
 	if (ground_n > 0.0) {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
@@ -598,7 +630,7 @@ void fragment() {
 	AO = sky;
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
-	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n, 0.2 + road_rough * 0.4, road) * near;
+	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps, 0.2 + road_rough * 0.4, road) * near;
 }
 
 // Clouds attenuate the directional source, never sky light or bicycle lamps.
