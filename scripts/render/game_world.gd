@@ -72,6 +72,7 @@ var stamina: Stamina:
 	get: return bike_controller.stamina # 14.0: выносливость седока — ускорение с Shift тратит, накат и шаг восстанавливают
 var water_effects: WaterEffects
 var brake_effects: BrakeEffects
+var ambient: AmbientParticles # 11.11: частицы окружения (пылинки, листья, светлячки, снег)
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
 var fire_light: OmniLight3D     # один свет на весь мир: ночью у ближайшего костра
@@ -341,6 +342,10 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	brake_effects = BrakeEffects.new()
 	brake_effects.name = "BrakeEffects"
 	add_child(brake_effects)
+	ambient = AmbientParticles.new()
+	ambient.name = "AmbientParticles"
+	add_child(ambient)
+	ambient.setup(world, heights)
 	crash = BikeCrash.new()
 	crash.name = "BikeCrash"
 	add_child(crash)
@@ -1113,6 +1118,8 @@ func _process(delta: float) -> void:
 	_update_bike_placement(delta)
 	if _speed_wind != null:
 		_speed_wind.update_effect(_speed_rush, delta)
+	if ambient != null:
+		ambient.update(delta, camera.global_position, day.sunlight if day != null else 1.0)
 	if _opening:
 		_draw_opening(alpha)
 	if navigation_line != null:
