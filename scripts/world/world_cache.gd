@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 16 # connected mountain divides/spurs and sheltered alpine shoulders
-const SCHEMA_TRAILS_VERSION := 24 # 11.11.2026: network of unique segments and nodes, road class by role, second-way rules
+const SCHEMA_TRAILS_VERSION := 25 # automatic prepared parks disabled; retain geography/base heights
 const SCHEMA_NATURE_VERSION := 13 # road proximity no longer creates artificial rock belts
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования

@@ -160,9 +160,13 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 			return w
 		StageLakes.run(w)
 		t = _stage_time(w, "lakes", t)
-		# Принятая сеть трасс — до растительности, чтобы окружение видело готовые пути
+		# Prepared parks are temporarily disabled in normal worlds. Explicit developer
+		# network modes retain the original pipeline; Lab/manual definitions use StageTrailPlan directly.
 		if mode == PlanMode.WORLD:
-			StageTrailPlan.run(w, step)
+			if QuickTrails.network():
+				StageTrailPlan.run(w, step)
+			else:
+				w.trail_plan = {version = StageTrailPlan.VERSION, state = "none", reason = "автоматические велопарки отключены"}
 			_stage_time(w, "trail_plan", t)
 		if on_layer.is_valid():
 			on_layer.call(w, 1)

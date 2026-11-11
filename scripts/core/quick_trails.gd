@@ -22,8 +22,8 @@ static func active() -> bool:
 	return not OS.has_feature("template") and OS.get_cmdline_user_args().has(FLAG)
 
 
-## Опыты с прежней универсальной сетью маршрутов (`-- --trail-network`, только разработка): в обычной игре строятся одни
-## велопарки (TrailWorldNetwork.MODE_PARKS). Быстрый режим трасс (--quick-trails) — это тоже сеть маршрутов. У опытов своя
+## Опыты с прежней универсальной сетью маршрутов (`-- --trail-network`, только разработка).
+## В обычной игре велопарки временно отключены. Быстрый режим (--quick-trails) тоже строит сеть. У опытов своя
 ## папка кэша и сохранений: мир с сетью не должен оказаться в кэше обычной игры и наоборот.
 static func network() -> bool:
 	return not OS.has_feature("template") and (OS.get_cmdline_user_args().has(NETWORK_FLAG) or active())
