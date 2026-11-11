@@ -7,6 +7,9 @@ extends Node3D
 ## а кадров бывает и 800: между двумя последними тактами модель плавно переходит (draw), иначе дёргалась бы.
 
 const WHEEL_Y := 0.34    # высота осей колёс над землёй
+const STEERING_PIVOT := Vector3(0.0, 0.93, -0.23)
+const FORK_CROWN_Y := 0.90 # length reference before fork rake
+const FORK_RAKE := 0.40
 const STEER_VIEW := 0.6  # поворот переднего колеса в долях угла руля (30.10: было 0,35 — поворот читался как крен)
 const Lamp = preload("res://scripts/render/bike_lamp.gd")
 const PACK_AT := Vector3(0.0, -0.08, 0.06) # сумка на кости Chest: у спины (+Z), низ — у поясницы
@@ -92,6 +95,7 @@ var _pack_bag: Node3D
 var _fork_lowers: Array[Node3D] = []
 var _fork_parts: Array[Node3D] = []
 var _fork_rest: Array[Vector3] = []
+var _fork_arch_rest := Vector3.ZERO
 var _steering: Node3D
 var _levers: Array[Node3D] = []
 var _lever_rest: Array[Transform3D] = []
@@ -145,7 +149,7 @@ func _ready() -> void:
 	# Вилка, вынос и руль поворачиваются вместе; колесо отдельно вращается вокруг оси.
 	_steering = Node3D.new()
 	add_child(_steering)
-	_steering.position = Vector3(0.0, 0.76, -0.415)
+	_steering.position = STEERING_PIVOT
 	for part: String in ["ForkL", "ForkR", "Stem", "Handlebar", "ForkCrown", "ForkCrownStem", "ForkArch", "GripL", "GripR", "LeverL", "LeverR", "BrakeClampL", "BrakeClampR", "CableL", "CableR", "CableReturnL", "CableReturnR"]:
 		if not has_node(part):
 			continue
@@ -166,6 +170,7 @@ func _ready() -> void:
 			_front_struts.append(_strut(fork, front_axle))
 	if _steering.has_node("ForkArch"):
 		_fork_lowers.append(_steering.get_node("ForkArch"))
+		_fork_arch_rest = _steering.get_node("ForkArch").position
 	if _steering.has_node("ForkCrown"):
 		_fork_parts.append(_steering.get_node("ForkCrown"))
 		_fork_rest.append(_steering.get_node("ForkCrown").position)
@@ -189,7 +194,7 @@ func _ready() -> void:
 		r_rotor.material_override = _rotor_mat_r
 	lamp = Lamp.new()
 	lamp.name = "Lamp"
-	lamp.position = Vector3(0.0, 0.17, -0.1)
+	lamp.position = Vector3(0.0, 0.93, -0.515) - STEERING_PIVOT
 	_steering.add_child(lamp)
 	_view_ready = true
 
@@ -582,8 +587,8 @@ func draw(alpha: float) -> void:
 	for st: Strut in _rear_struts:
 		_stretch(st, _mix[S_SQUASH_R])
 	for lower in _fork_lowers:
-		# ForkArch был переподчинён с сохранением мирового положения; его исходная позиция — -pivot.
-		lower.position = Vector3(0, _mix[S_SQUASH_F], 0) if lower.name == "Lower" else -_steering.position + Vector3(0, _mix[S_SQUASH_F], 0)
+		# Штаны идут вдоль ног вилки, детали оси — в той же системе координат.
+		lower.position = Vector3(0, _mix[S_SQUASH_F], 0) if lower.name == "Lower" else _fork_arch_rest + Basis(Vector3.RIGHT, FORK_RAKE) * Vector3(0, _mix[S_SQUASH_F], 0)
 	if has_node("RearMechanics"):
 		get_node("RearMechanics").position.y = _mix[S_SQUASH_R]
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
@@ -601,14 +606,17 @@ func draw(alpha: float) -> void:
 	_steering.rotation.y = front_wheel.rotation.y
 	# Рейк не должен отрывать штаны вилки от оси при рулении: сохраняем прежний центр колеса.
 	var axle := Vector3(0, WHEEL_Y, -BikeRide.HUB) - _steering.position
-	var fork_offset := _steering.basis.inverse() * axle - axle
+	var travel := Vector3(0, _mix[S_SQUASH_F], 0)
+	var rake := Basis(Vector3.RIGHT, FORK_RAKE)
+	# Preserve the physical axle while the sleeves telescope along the raked legs.
+	var fork_offset := _steering.basis.inverse() * (axle + travel) - axle - rake * travel
 	for i in _fork_parts.size():
 		_fork_parts[i].position = _fork_rest[i] + fork_offset
 	if _steering.has_node("ForkArch"):
 		_steering.get_node("ForkArch").position += fork_offset
 	if _steering.has_node("ForkCrownStem"):
 		var link := _steering.get_node("ForkCrownStem") as MeshInstance3D
-		var start := Vector3(0, 0.70, -BikeRide.HUB) - _steering.position + fork_offset
+		var start := axle + rake * Vector3(0, FORK_CROWN_Y - WHEEL_Y, 0) + fork_offset
 		var along := -start
 		link.transform = Transform3D(Basis(Quaternion(Vector3.UP, along.normalized())) * Basis.from_scale(Vector3(1, along.length() / (link.mesh as CylinderMesh).height, 1)), start * 0.5)
 	crank.rotation.x = -_mix[S_CRANK]
@@ -619,8 +627,8 @@ func draw(alpha: float) -> void:
 	if _riding:
 		# Небольшая группировка на скорости и работа корпусом при сжатии подвески.
 		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4
-		var grip_l := _steering.position + _steering.basis * Vector3(-0.24, 0.22, -0.015)
-		var grip_r := _steering.position + _steering.basis * Vector3(0.24, 0.22, -0.015)
+		var grip_l := _steering.position + _steering.basis * (Vector3(-0.24, 0.98, -0.43) - STEERING_PIVOT)
+		var grip_r := _steering.position + _steering.basis * (Vector3(0.24, 0.98, -0.43) - STEERING_PIVOT)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
 		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
 				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]))

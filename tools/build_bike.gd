@@ -219,25 +219,26 @@ func saddle_mesh() -> ArrayMesh:
 func frame() -> void:
 	var bb := Vector3(0, 0.3, 0)
 	var seat_top := Vector3(0, 0.84, 0.17)
-	var head_low := Vector3(0, 0.68, -0.43)
-	var head_top := Vector3(0, 0.84, -0.40)
+	var head_low := Vector3(0, 0.88, -0.25)
+	var head_top := Vector3(0, 0.98, -0.21)
+	var down_top := Vector3(0, 0.90, -0.242)
 	add_tube(bb, seat_top, 0.026, paint, 0.024)
-	add_tube(Vector3(0, 0.79, 0.155), Vector3(0, 0.805, -0.405), 0.022, paint, 0.027, 10, Vector2(0.9, 1.0))
-	add_tube(bb, Vector3(0, 0.71, -0.43), 0.030, paint, 0.036, 10, Vector2(0.85, 1.0))
+	add_tube(Vector3(0, 0.79, 0.155), Vector3(0, 0.955, -0.22), 0.022, paint, 0.027, 10, Vector2(0.9, 1.0))
+	# Straight MTB down tube leaves room for the tyre at full suspension travel.
+	add_tube(bb, down_top, 0.030, paint, 0.036, 10, Vector2(0.85, 1.0))
 	add_tube(head_low, head_top, 0.034, paint, -1.0, 12)
 	var head_dir := (head_top - head_low).normalized()
 	add_tube(head_low - head_dir * 0.010, head_low + head_dir * 0.004, 0.037, black, -1.0, 12)
 	add_tube(head_top - head_dir * 0.004, head_top + head_dir * 0.012, 0.037, black, -1.0, 12)
 	# косынка между верхней и нижней трубой у рулевой
-	add_box(Vector3(0.010, 0.05, 0.075), Vector3(0, 0.752, -0.365), paint, Basis(Vector3.RIGHT, -0.45))
+	add_box(Vector3(0.010, 0.05, 0.075), Vector3(0, 0.922, -0.20), paint, Basis(Vector3.RIGHT, -0.45))
 	add_disc(bb, 0.037, 0.092, paint, 14)
 	add_disc(bb, 0.029, 0.118, alloy, 12)
 	# мостики задних перьев у неподвижных концов
 	add_tube(Vector3(-0.05, 0.8, 0.17), Vector3(0.05, 0.8, 0.17), 0.012, paint, -1.0, 8)
 	add_tube(Vector3(-0.05, 0.303, 0.045), Vector3(0.05, 0.303, 0.045), 0.011, paint, -1.0, 8)
 	# контрастная вставка на нижней трубе видна сбоку, без букв и текстур
-	add_tube(Vector3(0, 0.50, -0.21), Vector3(0, 0.60, -0.315), 0.0375, trim, -1.0, 10, Vector2(0.85, 1.0))
-	add_tube(Vector3(0, 0.79, 0.0), Vector3(0, 0.797, -0.22), 0.0262, trim, -1.0, 10, Vector2(0.9, 1.0))
+	add_tube(bb.lerp(down_top, 0.45), bb.lerp(down_top, 0.75), 0.0375, trim, -1.0, 10, Vector2(0.85, 1.0))
 	# подседельный зажим, штырь, замок седла
 	var seat_dir := (seat_top - bb).normalized()
 	add_tube(seat_top - seat_dir * 0.016, seat_top + seat_dir * 0.006, 0.030, black, -1.0, 12)
@@ -253,7 +254,7 @@ func frame() -> void:
 	add_box(Vector3(0.072, 0.008, 0.06), Vector3(0, 0.87, 0.258), trim, Basis(Vector3.RIGHT, 0.2))
 	add_box(Vector3(0.034, 0.022, 0.012), Vector3(0, 0.862, 0.315), tail, Basis(Vector3.RIGHT, 0.2))
 	# флягодержатель внутри переднего треугольника, на нижней трубе
-	var down := (Vector3(0, 0.71, -0.43) - bb).normalized()
+	var down := (down_top - bb).normalized()
 	var inside := Vector3(0, -down.z, down.y)
 	var bottle := bb + down * 0.27 + inside * 0.072
 	add_tube(bottle - down * 0.085, bottle + down * 0.06, 0.034, trim, -1.0, 12)
@@ -267,11 +268,11 @@ func frame() -> void:
 
 ## Руль с подъёмом, грипсы с кольцами, корпуса тормозных ручек, манетка, звонок, велокомпьютер, гидролинии.
 func cockpit() -> void:
-	var steerer_top := Vector3(0, 0.84, -0.40)
+	var steerer_top := Vector3(0, 0.98, -0.21)
 	var clamp_at := Vector3(0, 0.945, -0.445)
-	add_tube(steerer_top, Vector3(0, 0.905, -0.388), 0.019, black, -1.0, 10)
-	add_tube(Vector3(0, 0.905, -0.388), Vector3(0, 0.909, -0.3873), 0.0165, alloy, -1.0, 10)
-	add_tube(Vector3(0, 0.888, -0.392), clamp_at, 0.019, black, 0.017, 8, Vector2(1.0, 0.85))
+	add_tube(steerer_top, Vector3(0, 1.005, -0.200), 0.019, black, -1.0, 10)
+	add_tube(Vector3(0, 1.005, -0.200), Vector3(0, 1.009, -0.198), 0.0165, alloy, -1.0, 10)
+	add_tube(Vector3(0, 0.995, -0.204), clamp_at, 0.019, black, 0.017, 8, Vector2(1.0, 0.85))
 	add_box(Vector3(0.05, 0.042, 0.018), clamp_at + Vector3(0, 0, -0.016), black)
 	for x: float in [-0.017, 0.017]:
 		for y: float in [-0.013, 0.013]:
@@ -316,17 +317,17 @@ func fork() -> void:
 		var s := "L" if side < 0 else "R"
 		# Неподвижная верхняя труба и вложенные штаны с пыльником двигаются без масштабирования.
 		var leg := node(bike, "Fork" + s)
-		tube(leg, "Stanchion", Vector3(side * 0.055, 0.40, -0.53), Vector3(side * 0.055, 0.72, -0.53), 0.014, alloy)
+		tube(leg, "Stanchion", Vector3(side * 0.055, 0.40, -0.53), Vector3(side * 0.055, BikeView.FORK_CROWN_Y + 0.02, -0.53), 0.014, alloy)
 		var lower := node(leg, "Lower")
 		tube(lower, "Slider", Vector3(side * 0.055, 0.34, -0.53), Vector3(side * 0.055, 0.55, -0.53), 0.023, black)
 		tube(lower, "Seal", Vector3(side * 0.055, 0.539, -0.53), Vector3(side * 0.055, 0.556, -0.53), 0.026, rubber)
-	add_tube(Vector3(-0.07, 0.70, -0.53), Vector3(0.07, 0.70, -0.53), 0.025, black, -1.0, 10, Vector2(1.0, 0.8))
-	add_ball(Vector3(0, 0.705, -0.525), 0.036, black, Vector3(1.0, 0.8, 1.0))
+	add_tube(Vector3(-0.07, BikeView.FORK_CROWN_Y, -0.53), Vector3(0.07, BikeView.FORK_CROWN_Y, -0.53), 0.025, black, -1.0, 10, Vector2(1.0, 0.8))
+	add_ball(Vector3(0, BikeView.FORK_CROWN_Y + 0.005, -0.525), 0.036, black, Vector3(1.0, 0.8, 1.0))
 	for side: float in [-1.0, 1.0]:
-		add_tube(Vector3(side * 0.055, 0.722, -0.53), Vector3(side * 0.055, 0.734, -0.53), 0.016, trim if side > 0.0 else alloy, 0.013, 10)
+		add_tube(Vector3(side * 0.055, BikeView.FORK_CROWN_Y + 0.022, -0.53), Vector3(side * 0.055, BikeView.FORK_CROWN_Y + 0.034, -0.53), 0.016, trim if side > 0.0 else alloy, 0.013, 10)
 	commit(bike, "ForkCrown")
 	# Шток вилки BikeView тянет от короны к рулевой: должен оставаться CylinderMesh.
-	tube(bike, "ForkCrownStem", Vector3(0, 0.70, -0.53), Vector3(0, 0.76, -0.415), 0.021, black)
+	tube(bike, "ForkCrownStem", Vector3(0, BikeView.WHEEL_Y, -BikeRide.HUB) + Basis(Vector3.RIGHT, BikeView.FORK_RAKE) * Vector3(0, BikeView.FORK_CROWN_Y - BikeView.WHEEL_Y, 0), BikeView.STEERING_PIVOT, 0.021, black)
 	var arch := node(bike, "ForkArch")
 	for side: float in [-1.0, 1.0]:
 		# проушины оси, наклейки на штанах
@@ -339,6 +340,12 @@ func fork() -> void:
 	add_box(Vector3(0.012, 0.02, 0.03), Vector3(-0.062, 0.375, -0.548), alloy, Basis(Vector3.RIGHT, 0.3))
 	add_path([Vector3(-0.07, 0.415, -0.575), Vector3(-0.082, 0.47, -0.55), Vector3(-0.08, 0.545, -0.548)], 0.0035, rubber, 5)
 	commit(arch, "Detail")
+	# Rake the complete fork around the axle; sleeves retain their own local travel.
+	var rake := Basis(Vector3.RIGHT, BikeView.FORK_RAKE)
+	var axle := Vector3(0, BikeView.WHEEL_Y, -BikeRide.HUB)
+	for label: String in ["ForkL", "ForkR", "ForkCrown", "ForkArch"]:
+		var part := bike.get_node(label) as Node3D
+		part.transform = Transform3D(rake, axle - rake * axle) * part.transform
 
 
 ## Задний узел едет вместе с колесом: кассета, переключатель с лапкой и двумя роликами, суппорт, проушины.

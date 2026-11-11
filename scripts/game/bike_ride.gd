@@ -1161,11 +1161,10 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 		if not contact_model:
 			corner_grip *= lerpf(1.0, slip_yaw, smoothstep(5.0, 12.0, pace))
 		# Вираж: полотно, поднятое снаружи поворота, прижимает колёса и добавляет сцепления; уклон внутрь отнимает.
-		if contact_model:
-			# Вираж — тяжестью: полотно, поднятое снаружи поворота, тянет внутрь; контруклон тянет наружу
-			var s := clampf(bank_slope * -signf(steer), -BANK_SLOPE_MAX, BANK_SLOPE_MAX)
-			corner_grip = maxf(0.0, corner_grip + SIDE_GRAVITY * s / sqrt(1.0 + s * s) * smoothstep(2.0, 6.0, pace))
-		else:
+		# In the contact model gravity already acts on lateral velocity in _step_traction.
+		# Subtracting it here also locks steering on adverse slopes. Keep tyre-limited
+		# steering; insufficient traction must widen/drift the trajectory, not disable input.
+		if not contact_model:
 			corner_grip += _bank_assist(-signf(steer), pace, corner_grip)
 		limit = minf(rate, corner_grip / maxf(pace, 3.0))
 		var excess := maxf(0.0, absf(wanted) * pace - corner_grip)
