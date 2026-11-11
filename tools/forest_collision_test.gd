@@ -163,7 +163,7 @@ func forest_spots(w: WorldData) -> Array[Vector2]:
 	for c in w.chunks.size():
 		var n := 0
 		for o in w.chunks[c]:
-			if Biomes.is_tree(w.obj_k[o]) and w.obj_s[o] >= ForestObstacles.MIN_SCALE:
+			if Biomes.is_tree(w.obj_k[o]) and ForestObstacles.TRUNK.get(w.obj_k[o], 0.0) * w.obj_s[o] >= ForestObstacles.MIN_TRUNK:
 				n += 1
 		counts.append([n, c])
 	counts.sort_custom(func(a: Array, b: Array) -> bool: return a[0] > b[0])

@@ -22,6 +22,7 @@ const FAR_FORM_R := 24.0 # м: дальше от центра раскладки
 ## (высота выровнена по ряду Y): у дерева за 160 м силуэт различим меньше, чем стоит лишний draw call.
 ## Цвет и поворот у экземпляров свои. Ключ такой записи в veg - вид + FAR_KEY.
 const FAR_KEY := 1 << 20
+const ROOT_TRUNK := 0.2 # м: корневые лапы у стволов не тоньше этого радиуса
 const FAR_LOD_NO_SHADOW := 2 # с этого уровня LOD деревья не отбрасывают тень (дальше теней солнца)
 const TREE_POOL_LIMIT := 64 # Empty MultiMeshes only; no retired instance buffers/material copies.
 const Understory := preload("res://scripts/render/understory_models.gd")
@@ -62,7 +63,8 @@ const WOODY_FAR_FORM := 1.6
 const FADE_SHARE := 0.2
 ## 9.9+: смена уровней детализации деревьев — [середина полосы, ширина], м; копия LOD1_*/LOD2_* в шейдере.
 ## Узлы уровней видны с запасом на полосу и полдиагонали чанка (видимость считается от центра чанка).
-const LOD_STEPS := [[70.0, 24.0], [160.0, 48.0]]
+## 11.11.2026: высокий лес — деревья в 2–2,5 раза выше, ближние уровни держатся дальше (было 70/160 м).
+const LOD_STEPS := [[90.0, 28.0], [200.0, 56.0]]
 ## Трава и подлесок: преобразование (12), цвет (4) и порог поредения в INSTANCE_CUSTOM.x (4)
 const STRIDE := 20
 ## Запас буферов травы и подлеска на пучки, положенные с запасом _ahead (они ещё невидимы)
@@ -76,10 +78,10 @@ const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 # [sway, flutter, sway_speed, ao, glow]; см. _wind_mat
 const CALM := [0.0, 0.0, 1.0, 1.0, 0.0]
 const WIND := {
-	Biomes.T_OAK: [0.14, 0.035, 0.8, 0.72, 0.32],
-	Biomes.T_BIRCH: [0.22, 0.06, 1.0, 0.8, 0.42],
-	Biomes.T_PINE: [0.1, 0.012, 0.65, 0.7, 0.15],
-	Biomes.T_SNOWPINE: [0.07, 0.008, 0.6, 0.62, 0.08],
+	Biomes.T_OAK: [0.22, 0.035, 0.8, 0.72, 0.32], # 11.11.2026: верхушки высоких деревьев качаются шире
+	Biomes.T_BIRCH: [0.32, 0.06, 1.0, 0.8, 0.42],
+	Biomes.T_PINE: [0.18, 0.012, 0.65, 0.7, 0.15],
+	Biomes.T_SNOWPINE: [0.1, 0.008, 0.6, 0.62, 0.08],
 	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
 	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.65, 0.25],
 	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],
@@ -191,7 +193,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
 	for kind in defs:
 		var def: Dictionary = defs[kind]
-		var entry := {leaves = def.get("leaves", []), box = AABB()}
+		var entry := {leaves = def.get("leaves", []), box = AABB(), ref = def.get("ref", 1.0)}
 		var first := true
 		var wind: Array = WIND.get(kind % ForestModels.MODEL_STRIDE, CALM)
 		for part in ["trunk", "crown"]:
@@ -915,6 +917,21 @@ func _build_entries(items: Dictionary) -> Dictionary:
 		elif _defs.has(kind + ForestModels.MODEL_STRIDE):
 			var variants := RockModels.VARIANTS if kind == Biomes.T_ROCK else ForestModels.VARIANTS
 			var variant := mini(variants - 1, int(WGRandom.hash2(floori(ox * 113), floori(oy * 109), 65) * variants))
+			# 11.11.2026: у видов с возрастными формами молодая и старая форма — одна на чанк, а из четырёх взрослых
+			# силуэтов в чанке три (четвёртый — в соседних): групп MultiMesh на чанк почти столько же, сколько было.
+			var age: int = items.v[o] / 3 if kind != Biomes.T_ROCK and ForestModels.has_ages(kind) else ForestModels.ADULT_AGE
+			if kind != Biomes.T_ROCK and ForestModels.has_ages(kind):
+				var cx := floori(ox / world.CS)
+				var cy := floori(oy / world.CS)
+				if age == ForestModels.ADULT_AGE:
+					var dropped := mini(variants - 1, int(WGRandom.hash2(cx, cy, 64 + kind) * variants))
+					if variant == dropped:
+						variant = (variant + 1) % variants
+				else:
+					var first := ForestModels.YOUNG if age == ForestModels.YOUNG_AGE else ForestModels.OLD
+					var patch := mini(ForestModels.AGE_FORMS - 1, int(WGRandom.hash2(cx, cy, 66 + age * 16 + kind) * ForestModels.AGE_FORMS))
+					if _defs.has(kind + (first + patch) * ForestModels.MODEL_STRIDE):
+						variant = first + patch
 			model += variant * ForestModels.MODEL_STRIDE
 		var group_key := Vector2i(model, int(kind == Biomes.T_ROCK and not outcrop and items.s[o] < 0.42))
 		if not groups.has(group_key):
@@ -937,13 +954,19 @@ func _build_entries(items: Dictionary) -> Dictionary:
 			entry.tbuf = _buffer(count, 12)
 		if def.has("crown"):
 			entry.cbuf = _buffer(count, 16)
+		var tree_like := StageVegetation.TRUNK.has(kind % ForestModels.MODEL_STRIDE)
+		var ref: float = def.get("ref", 1.0)
 		for n in count:
 			var o: int = group.ids[n]
 			var ox := xs[o]
 			var oy := ys[o]
 			var v: int = items.v[o]
-			var s: float = items.s[o] * (1.2 if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK else 1.0)
+			var s: float = items.s[o] * (1.2 if rock else 1.0)
 			var sy := s * (0.9 + (v % 3) * 0.08)
+			if tree_like:
+				# 11.11.2026: obj_s — размер дерева, у формы своя высота ref; вытянутость по высоте — хешем, не оттенком.
+				s /= ref
+				sy = s * lerpf(0.92, 1.12, WGRandom.hash2(floori(ox * 71), floori(oy * 67), 23))
 			var rot := WGRandom.hash2(floori(ox * 97), floori(oy * 89), 7) * TAU
 			var pos := Vector3(ox * TILE, group.ground[n] - 0.1, oy * TILE)
 			# Точный повёрнутый AABB вместо большой сферы вокруг всего вида.
@@ -979,7 +1002,24 @@ func _build_entries(items: Dictionary) -> Dictionary:
 				buf[n * 16 + 15] = 1.0
 		entries.append(entry)
 	_merge_far_variants(entries)
+	# 11.11.2026: стволы рисуются MultiMesh с белым цветом экземпляра. Без цветов экземпляра рендер Compatibility
+	# подставлял чёрный цвет, и окрашенная вершинами кора (colored_bark) выходила чёрной.
+	for entry: Dictionary in entries:
+		if entry.has("tbuf") and not (entry.kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK):
+			entry.tcbuf = _white_rows(entry.tbuf)
 	return {entries = entries}
+
+
+## Строки 3×4 (12 чисел) -> те же строки и белый цвет экземпляра (16 чисел).
+static func _white_rows(source: PackedFloat32Array) -> PackedFloat32Array:
+	var count := source.size() / 12
+	var out := _buffer(count, 16)
+	for i in count:
+		for j in 12:
+			out[i * 16 + j] = source[i * 12 + j]
+		for j in range(12, 16):
+			out[i * 16 + j] = 1.0
+	return out
 
 
 ## Записи силуэтов одного вида чанка -> одна запись дальнего уровня (см. FAR_KEY). Вызывается и в фоне.
@@ -1004,17 +1044,26 @@ func _merge_far_variants(entries: Array) -> void:
 		var crown := def.has("crown")
 		var tbuf := PackedFloat32Array()
 		var cbuf := PackedFloat32Array()
+		var base_box: AABB = def.box
 		for entry: Dictionary in list:
-			var ratio: float = _defs[entry.kind].box.end.y / maxf(def.box.end.y, 0.01)
+			var box: AABB = _defs[entry.kind].box
+			var ratio: float = box.end.y / maxf(base_box.end.y, 0.01)
+			# 11.11.2026: молодая и старая форма шире или уже первого силуэта — дальний меш правится и по ширине
+			var ratio_w: float = maxf(box.size.x, box.size.z) / maxf(maxf(base_box.size.x, base_box.size.z), 0.01)
+			var wide := absf(ratio_w - 1.0) > 0.08
 			if trunk and entry.has("tbuf"):
 				var t: PackedFloat32Array = entry.tbuf.duplicate()
-				for at in range(5, t.size(), 12):
-					t[at] *= ratio
+				for at in range(0, t.size(), 12):
+					t[at + 5] *= ratio
+					if wide:
+						for c in [0, 2, 8, 10]: t[at + c] *= ratio_w
 				tbuf.append_array(t)
 			if crown and entry.has("cbuf"):
 				var c: PackedFloat32Array = entry.cbuf.duplicate()
-				for at in range(5, c.size(), 16):
-					c[at] *= ratio
+				for at in range(0, c.size(), 16):
+					c[at + 5] *= ratio
+					if wide:
+						for m in [0, 2, 8, 10]: c[at + m] *= ratio_w
 				cbuf.append_array(c)
 			merged.bounds = entry.bounds if merged.count == 0 else merged.bounds.merge(entry.bounds)
 			merged.count += entry.count
@@ -1161,7 +1210,8 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					built.node_cursor = node_index
 					return false
 				var mat := _shared_tree_material(def, part, level, small)
-				var node := _multimesh(levels[level], mat, entry.count, part == "crown", not small, true, true)
+				var white_trunk: bool = part == "trunk" and entry.has("tcbuf")
+				var node := _multimesh(levels[level], mat, entry.count, part == "crown" or white_trunk, not small, true, true)
 				if limit > 0:
 					_reveal_node(node, mat)
 				if level >= FAR_LOD_NO_SHADOW:
@@ -1186,7 +1236,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
-				mm.buffer = _tree_buffer(entry.tbuf if part == "trunk" else entry.cbuf, part == "crown", node.get_meta("stream_birth", 0.0))
+				mm.buffer = _tree_buffer((entry.tcbuf if white_trunk else entry.tbuf) if part == "trunk" else entry.cbuf, part == "crown" or white_trunk, node.get_meta("stream_birth", 0.0))
 				mm.custom_aabb = entry.bounds
 				mm.visible_instance_count = entry.count
 				# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
@@ -2170,7 +2220,9 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 	for cy in range(maxi(0, floori((minf(pz, tip.y) / TILE - r) / world.CS)), mini(world.CH, ceili((maxf(pz, tip.y) / TILE + r) / world.CS))):
 		for cx in range(maxi(0, floori((minf(px, tip.x) / TILE - r) / world.CS)), mini(world.CW, ceili((maxf(px, tip.x) / TILE + r) / world.CS))):
 			for o in world.chunks[cy * world.CW + cx]:
-				if not Biomes.is_tree(world.obj_k[o]) or world.obj_s[o] < 0.85:
+				# 11.11.2026: корни — у ствола толще ROOT_TRUNK, их размер — по толщине ствола
+				var trunk: float = StageVegetation.TRUNK.get(world.obj_k[o], 0.0) * world.obj_s[o]
+				if not Biomes.is_tree(world.obj_k[o]) or trunk < ROOT_TRUNK:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
@@ -2180,7 +2232,7 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 				if world.slope[k] > 0.9:
 					continue
 				var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
-				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(world.obj_s[o] * 0.7, 0.6, 1.3), 1.0, o)
+				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, _root_scale(trunk), 1.0, o)
 
 
 func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
@@ -2188,14 +2240,20 @@ func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
 	for b in range(1, batches.size()):
 		var batch: Dictionary = batches[b]
 		for o in batch.x.size():
-			if not StageVegetation.TRUNK.has(batch.k[o]) or batch.s[o] < 0.85: continue
+			var trunk: float = StageVegetation.TRUNK.get(batch.k[o], 0.0) * batch.s[o]
+			if trunk < ROOT_TRUNK: continue
 			var x: float = batch.x[o] * TILE
 			var z: float = batch.y[o] * TILE
 			if StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead) > reach: continue
 			var cell := _region_cell(placement.regions, floori(x / TILE), floori(z / TILE))
 			if cell.is_empty() or cell.slope > 0.9: continue
 			var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
-			_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(batch.s[o] * 0.7, 0.6, 1.3), 1.0, -2 - (b << 20) - o)
+			_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, _root_scale(trunk), 1.0, -2 - (b << 20) - o)
+
+
+## Корневые лапы у ствола радиуса trunk, м: прежний меш рассчитан на сосну масштаба 0.85–1.85 (ствол 0,2–0,43 м).
+static func _root_scale(trunk: float) -> float:
+	return clampf(trunk * 3.0, 0.6, 1.8)
 
 
 static func _without_region(values: PackedFloat32Array, stride: int, box: Rect2) -> PackedFloat32Array:

@@ -64,8 +64,8 @@ func _init() -> void:
 		occupied[Vector2i(p / 8.0)] = true
 		species[w.obj_k[o]] = true
 		if Biomes.is_tree(w.obj_k[o]):
-			young += int(w.obj_s[o] < 0.7)
-			old += int(w.obj_s[o] > 1.25)
+			young += int(w.obj_s[o] < 0.5)
+			old += int(w.obj_s[o] > 1.0)
 			check(StageVegetation.canopy_at(w, p.x, p.y) > 0.99, "Полог должен учитывать фактическое дерево")
 		if StageVegetation.near_hut(w.settlements, p.x, p.y, r):
 			hut_bad += 1
@@ -79,12 +79,12 @@ func _init() -> void:
 		for other in w.chunks[floori(p.y / w.CS) * w.CW + floori(p.x / w.CS)]:
 			if other >= o:
 				continue
-			var gap: float = 0.18 + 0.55 * (r + Biomes.CROWN_RADIUS[w.obj_k[other]] * w.obj_s[other])
+			var gap: float = 0.18 + (0.55 if Biomes.T_ROCK in [w.obj_k[o], w.obj_k[other]] else StageVegetation.GAP_K) * (r + Biomes.CROWN_RADIUS[w.obj_k[other]] * w.obj_s[other])
 			if p.distance_to(Vector2(w.obj_x[other], w.obj_y[other])) < gap - 0.00001:
 				spacing_bad += 1
 	check(young > 20 and old > 20, "Нужны молодняк и крупные старые деревья")
 	check(species.size() >= 3 and occupied.size() > 50, "Нужны смешанные лесные массивы")
-	check(spacing_bad == 0 and path_bad == 0 and hut_bad == 0, "Кроны и соседи должны учитывать размеры, пути, воду и дома")
+	check(spacing_bad == 0 and path_bad == 0 and hut_bad == 0, "[%d/%d/%d] " % [spacing_bad, path_bad, hut_bad] + "Кроны и соседи должны учитывать размеры, пути, воду и дома")
 	check(chunk_count == w.obj_count, "Каждый объект должен попасть в чанк")
 	var repeat := fixture()
 	StageVegetation.run(repeat)

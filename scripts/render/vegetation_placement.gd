@@ -2,6 +2,7 @@ extends RefCounted
 ## Общие проверки размещения. Только CPU, используется фоновой задачей растительности.
 
 const TILE := GameConfig.TILE
+const TRUNK_FLARE := 1.3 # просвет травы и подлеска у ствола: радиус ствола с расширением комля
 const Plants := preload("res://scripts/render/understory_models.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 var world: WorldData
@@ -194,7 +195,8 @@ func prepare(px: float, pz: float, radius: float) -> void:
 					seat = RockModels.seat(heights, at.x, at.y, world.obj_s[o] * 1.2, world.obj_v[o])
 					if seat.x == INF:
 						continue
-				var r := 0.3 * world.obj_s[o]
+				# 11.11.2026: у ствола — по его радиусу с расширением комля (раньше 0,3 на единицу масштаба)
+				var r: float = StageVegetation.TRUNK.get(kind, 0.23) * TRUNK_FLARE * world.obj_s[o]
 				if kind == Biomes.T_ROCK or kind == Biomes.T_BUSH:
 					r = Biomes.CROWN_RADIUS[kind] * TILE * world.obj_s[o] * (1.2 if kind == Biomes.T_ROCK else 1.0)
 				if kind == Biomes.T_ROCK and RockModels.is_outcrop(world.obj_v[o]):
@@ -232,7 +234,7 @@ func prepare_outer(batches: Array, px: float, pz: float, radius: float) -> void:
 			if absf(x - px) > radius or absf(z - pz) > radius: continue
 			var kind: int = batch.k[o]
 			if not Biomes.is_tree(kind) and kind not in [Biomes.T_ROCK, Biomes.T_BUSH, Biomes.T_DEAD, Biomes.T_CACTUS]: continue
-			var r: float = (Biomes.CROWN_RADIUS[kind] * TILE if kind in [Biomes.T_ROCK, Biomes.T_BUSH] else 0.3) * batch.s[o]
+			var r: float = (Biomes.CROWN_RADIUS[kind] * TILE if kind in [Biomes.T_ROCK, Biomes.T_BUSH] else StageVegetation.TRUNK.get(kind, 0.23) * TRUNK_FLARE) * batch.s[o]
 			if kind == Biomes.T_ROCK: r *= 1.2
 			if kind == Biomes.T_ROCK and batch.has("v") and RockModels.is_outcrop(batch.v[o]): r = RockModels.footprint(batch.v[o], batch.s[o] * 1.2)
 			if r > 3.0:

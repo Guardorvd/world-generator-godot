@@ -34,7 +34,7 @@ func run() -> void:
 		baseline = load(args[baseline_at + 1])
 	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
 		var silhouettes := []
-		for variant in ForestModels.VARIANTS:
+		for variant in ForestModels.form_count(kind):
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]
 			var triangles := 0
 			var cost := _cost(def)
@@ -73,7 +73,7 @@ func run() -> void:
 					for vertex_index: int in level_arrays[Mesh.ARRAY_INDEX]:
 						check(vertex_index >= 0 and vertex_index < count, "Индексы LOD должны ссылаться на свои вершины")
 				check(not mesh.has_meta("levels"), "Нет дублирующего набора мешей старого формата")
-			check(triangles < 1200, "Превышен бюджет ближнего дерева")
+			check(triangles < 1700, "Превышен бюджет ближнего дерева")
 			if def.has("crown"):
 				check(def.cutout and def.crown_texture.get_image().has_mipmaps(), "Листва должна иметь вырезанный силуэт и mipmaps")
 				check(not silhouettes.has(def.crown.get_aabb()), "Силуэты вариантов должны отличаться")

@@ -31,7 +31,8 @@ const SEED := 11606
 ## Кочка мелкого препятствия под колесом: [радиус, высота] при масштабе 1, м
 const BUMP := {BRANCH: Vector2(0.14, 0.07), STONES: Vector2(0.65, 0.11), ROOT: Vector2(0.08, 0.05)}
 const ROOT_REACH := 3.5  # от кромки полотна до ствола, м: дальше корни на тропу не выходят
-const ROOT_TREE := 0.85  # масштаб дерева, с которого у него крупные корни (как у корней у ствола в VegetationLayer)
+const ROOT_TREE := 0.85  # масштаб дерева, с которого у него крупные корни (ствол около 0,2 м, как VegetationLayer.ROOT_TRUNK)
+const TRUNK_UNIT := 0.23 # м: ствол, которому соответствует масштаб 1 в ROOT_TREE
 const LOOK := 6.0        # радиус поиска причин вокруг отрезка за кромкой, м
 ## Сколько корней даёт тропе ствол по покрытию полотна: лесная подстилка и грунт — да, гравий и укатанная земля — редко
 const ROOT_SURFACE := [0.0, 0.2, 0.8, 0.15, 0.5, 0.1, 1.0, 0.6]
@@ -184,6 +185,9 @@ func _consider(out: Dictionary, p: Vector2, kind: int, s: float, owner: int, mid
 	if kind == Biomes.T_ROCK:
 		if uphill != 0.0 and lateral * uphill > half: out.rocks += minf(s, 1.5)
 		return
+	# 11.11.2026: размер дерева — по толщине ствола в прежних единицах (сосна масштаба 1 со стволом TRUNK_UNIT):
+	# пороги и толщина корней не зависят от того, что номинальное дерево стало выше
+	s = StageVegetation.TRUNK.get(kind, TRUNK_UNIT) * s / TRUNK_UNIT
 	if not Biomes.is_tree(kind) or s < 0.6: return
 	out.trees += 1
 	var along := off.dot(dir)

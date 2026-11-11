@@ -44,10 +44,10 @@ uniform float detail_keep = 1.0;
 // порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
 // Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
 uniform int lod_level = -1;
-const float LOD1_D = 70.0;
-const float LOD1_BAND = 24.0;
-const float LOD2_D = 160.0;
-const float LOD2_BAND = 48.0;
+const float LOD1_D = 90.0;
+const float LOD1_BAND = 28.0;
+const float LOD2_D = 200.0;
+const float LOD2_BAND = 56.0;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 

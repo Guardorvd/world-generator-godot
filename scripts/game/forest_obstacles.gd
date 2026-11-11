@@ -11,7 +11,7 @@ const CELL := 2.0       # сторона клетки сетки, м
 const REACH := 24.0     # препятствия собираются в этом радиусе от игрока, м
 const SCAN := REACH + RockModels.MASSIF_REACH # центр скального массива может лежать дальше REACH, а его край — ближе
 const REBUILD := 6.0    # отошли дальше этого от места сборки — пересобрать, м
-const MIN_SCALE := 0.6  # деревья мельче (молодняк) проходимы
+const MIN_TRUNK := 0.07 # м: ствол тоньше (молодняк) проходим; 11.11.2026 — по радиусу ствола, а не масштабу
 const SNUG := 0.85      # круг ствола чуть уже видимого: задевание кроной и корой не держит
 const STRIDE := 7       # ax, az, bx, bz, радиус, основание, верх
 ## радиус ствола у комля при масштабе 1, м (как в ForestModels и Models); та же таблица ставит стволы у путей
@@ -146,7 +146,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 			for o in world.chunks[cy * world.CW + cx]:
 				var kind := world.obj_k[o]
 				var s := world.obj_s[o]
-				if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or s < MIN_SCALE):
+				if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or TRUNK[kind] * s < MIN_TRUNK):
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
@@ -176,7 +176,7 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 		for o in xs.size():
 			var kind: int = items.k[o]
 			var s: float = items.s[o]
-			if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or s < MIN_SCALE):
+			if kind != Biomes.T_ROCK and (not TRUNK.has(kind) or TRUNK[kind] * s < MIN_TRUNK):
 				continue
 			var x: float = xs[o] * TILE
 			var z: float = items.y[o] * TILE

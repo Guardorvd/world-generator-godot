@@ -1,5 +1,5 @@
 extends SceneTree
-## Изолированный смешанный лес (дуб, берёза, сосна, 4 силуэта, разные размеры) на всей карте 1 км, без генерации мира.
+## Изолированный смешанный лес (дуб, берёза, сосна; возрастные классы и отступы как в генерации) на всей карте 1 км, без генерации мира.
 ## Камера стоит 5 с, потом едет 16 м/с. Печатает FPS, draw calls, GPU мс. Нужно окно. --density 1.0 --out <json>
 ## --copies 4|8 --out <json>; --layer <скрипт> позволяет сравнить другую реализацию.
 ## --models <скрипт> позволяет сравнить библиотеку моделей при одинаковой сцене.
@@ -101,23 +101,37 @@ func _obstacle_cost(h: Heightfield) -> void:
 	quit()
 
 
+## 11.11.2026: лес древостоями, как в генерации — по два кандидата на клетку, размер и возрастной класс
+## StageVegetation.tree_form (пятна молодняка, спелый и старый лес), отступы ObjStore по кронам.
 func _forest(density: float) -> WorldData:
 	var w: WorldData = Test.fixture(0)
 	w.biome.fill(Biomes.FOREST)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77
 	var kinds := [Biomes.T_OAK, Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_PINE]
-	for y in range(8, 248):
-		for x in range(8, 248):
-			var n := int(density) + (1 if rng.randf() < density - floorf(density) else 0)
-			for i in n:
-				var o := w.obj_x.size()
-				w.obj_x.append(x + rng.randf())
-				w.obj_y.append(y + rng.randf())
-				w.obj_k.append(kinds[rng.randi() % kinds.size()])
-				w.obj_v.append(rng.randi() % 4)
-				w.obj_s.append(0.45 + rng.randf() * 1.1)
-				w.chunks[(y / w.CS) * w.CW + x / w.CS].append(o)
+	var store := StageVegetation.ObjStore.new(null)
+	for cy in range(0, 256, w.CS):
+		for cx in range(0, 256, w.CS):
+			store.begin_chunk(cx, cy, cx + w.CS, cy + w.CS)
+			for y in range(maxi(cy, 8), mini(cy + w.CS, 248)):
+				for x in range(maxi(cx, 8), mini(cx + w.CS, 248)):
+					for k in 2:
+						if rng.randf() >= 0.6 * density:
+							continue
+						var px := x + 0.1 + rng.randf() * 0.8
+						var py := y + 0.1 + rng.randf() * 0.8
+						var kind: int = kinds[rng.randi() % kinds.size()]
+						# возраст участка: медленные пятна около 200 м, молодняк — примерно седьмая часть
+						var age := clampf(0.55 + 0.5 * sin(px * 0.11) * sin(py * 0.083 + 1.3), 0.0, 1.0)
+						var form := StageVegetation.tree_form(age, 1.0, 0.0, 0.6, 0.0, rng.randf())
+						store.add(px, py, kind, rng.randi() % 3 + 3 * int(form.y), form.x)
+	for o in store.x.size():
+		w.obj_x.append(store.x[o])
+		w.obj_y.append(store.y[o])
+		w.obj_k.append(store.k[o])
+		w.obj_v.append(store.v[o])
+		w.obj_s.append(store.s[o])
+		w.chunks[(int(store.y[o]) / w.CS) * w.CW + int(store.x[o]) / w.CS].append(o)
 	w.obj_count = w.obj_x.size()
 	return w
 

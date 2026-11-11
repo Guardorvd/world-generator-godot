@@ -39,11 +39,18 @@ const PATH_MARGIN := {road = 2.4, trail = 0.45, mountain = 0.45, animal = 0.15}
 const CLEAR_CAP := 12.0  # дальше этого от пути (м) просвет не считается
 const PREPARED_MARGIN := 1.5 # у подготовленной трассы (trail_id), м
 ## Радиус ствола у комля при масштабе 1, м: просвет у путей и столкновения (ForestObstacles.TRUNK — эта же таблица)
+## 11.11.2026: высокий лес — стволы взрослого дерева номинального размера (ForestModels.NOMINAL).
 const TRUNK := {
-	Biomes.T_BIRCH: 0.14, Biomes.T_PINE: 0.23, Biomes.T_SNOWPINE: 0.23, Biomes.T_OAK: 0.32,
+	Biomes.T_BIRCH: 0.20, Biomes.T_PINE: 0.29, Biomes.T_SNOWPINE: 0.29, Biomes.T_OAK: 0.50,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }
-const LOW_CROWN := 0.3   # ель и снежная ель опускают ветви к земле: эта доля кроны тоже не над полотном
+## Снежная ель и молодые деревья (крона до земли) опускают ветви к земле: эта доля кроны тоже не над полотном.
+## У взрослых и старых крона начинается высоко, над дорогой она допустима.
+const LOW_CROWN := 0.3
+## 11.11.2026: отступ между объектами — 0.18 + GAP_K * (сумма радиусов крон), клеток. Сосны в пологе через 4,5–5 м,
+## дубы через 6–7 м, молодняк через 2–3 м. Самый большой зазор (два старых дуба) около 2,6 клетки — поиск соседей
+## ±3 клетки в ObjStore.add его покрывает; поднимать GAP_K или крону — проверить, что зазор меньше 3 клеток.
+const GAP_K := 0.75
 
 
 static func run(w: WorldData, surface: Heightfield = null) -> void:
@@ -197,9 +204,9 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -
 
 
 ## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели) не на полотне
-static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float) -> bool:
+static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float, age := ForestModels.ADULT_AGE) -> bool:
 	var need: float = TRUNK.get(kind, 0.0) * sc
-	if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE:
+	if kind == Biomes.T_SNOWPINE or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
 		need += LOW_CROWN * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
 	elif not TRUNK.has(kind):
 		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
@@ -346,11 +353,22 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
 					var v := floori(rng.next_float() * 3)
-					var sc := tree_scale(age, interior, line, moist[i], rng.next_float()) if b_tree[kind] != 0 else 0.8 + rng.next_float() * 0.45
-					if b_tree[kind] != 0: sc *= 1.0-0.22*exposed
+					var sc: float
+					var tree_age := ForestModels.ADULT_AGE
+					if b_tree[kind] != 0:
+						# 11.11.2026: размер и возрастной класс древостоя; класс пишется в вариант: v = оттенок + 3 * класс
+						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float())
+						sc = form.x
+						if ForestModels.has_ages(kind):
+							tree_age = int(form.y)
+							v += 3 * tree_age
+						elif form.y == ForestModels.YOUNG_AGE:
+							sc = maxf(sc, 0.55) # у видов без молодой формы нет карликов взрослого силуэта
+					else:
+						sc = 0.8 + rng.next_float() * 0.45
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
 					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
-					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc)) \
+					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc, tree_age)) \
 							and (massifs.is_empty() or not RockMassif.covers(massifs, px, py, 0.2)):
 						store.add(px, py, kind, v, sc)
 			if dw < 1.6 and _reedy(bi) and sl < 0.5 and temp[i] > 0.24 and moist[i] > 0.48:
@@ -424,12 +442,39 @@ static func cover_at(w: WorldData, x: int, y: int) -> Vector2:
 	return Vector2(clampf(grove, 0.0, 0.6), 0.0)
 
 
-## Возраст — характер участка, а не симуляция лет. Под старым пологом есть молодые деревья.
-static func tree_scale(age: float, interior: float, line: float, moist: float, r: float) -> float:
-	var size := lerpf(0.5, 1.6, age) * (0.85 + r * 0.3)
-	if r < 0.18 * age:
-		size *= 0.42
-	return size * (0.82 + 0.18 * interior) * (1.0 - 0.3 * line) * (0.85 + 0.15 * moist)
+## 11.11.2026: лес древостоями. x — линейный размер дерева (1 — номинальное взрослое дерево породы, ForestModels.NOMINAL),
+## y — возрастной класс (ForestModels.*_AGE). Возраст участка — характер места, а не симуляция лет:
+## молодняк пятнами (густой молодой класс и редкие взрослые семенники), спелый и старый лес — полог, второй ярус
+## (взрослые в 0,6–0,75 высоты полога) и подрост молодого класса; старые великаны — только в старом лесу.
+## На опушках и у полян молодых больше, полог поднимается вглубь массива. Граница леса и скалы: дерево мельчает
+## до 0,5 и становится молодым (компактная крона до земли), карликов взрослой формы нет.
+## Одно случайное число r на дерево, как прежде (расход чисел rng на объект не меняется).
+static func tree_form(age: float, interior: float, line: float, moist: float, exposed: float, r: float) -> Vector2:
+	var r2 := fposmod(r * 9.73, 1.0)
+	var r3 := fposmod(r * 31.7 + 0.37, 1.0)
+	var young_stand := 1.0 - _ss(0.08, 0.24, age)  # 1 — молодняк
+	var p_old := (1.0 - young_stand) * 0.032 * _ss(0.4, 0.85, age)
+	var p_young := young_stand * 0.9 + (1.0 - young_stand) * (0.095 + 0.15 * (1.0 - interior))
+	var p_second := (1.0 - young_stand) * 0.14
+	var canopy := lerpf(0.86, 1.06, age) * (0.82 + 0.18 * interior) * (0.85 + 0.15 * moist)
+	var size: float
+	var cls := ForestModels.ADULT_AGE
+	if r < p_old:
+		cls = ForestModels.OLD_AGE
+		size = 1.25 + 0.25 * r2
+	elif r < p_old + p_young:
+		cls = ForestModels.YOUNG_AGE
+		size = 0.2 + 0.22 * r2
+	elif r < p_old + p_young + p_second:
+		size = canopy * (0.6 + 0.15 * r2)
+	else:
+		size = canopy * (0.88 + 0.24 * r2)
+	var harsh := _ss(0.25, 0.8, maxf(line, exposed))
+	if harsh > 0.0:
+		size = lerpf(size, 0.5, harsh)
+		if r3 < harsh * 1.3:
+			cls = ForestModels.YOUNG_AGE
+	return Vector2(size, cls)
 
 
 ## Локальный полог готового леса для травы. Только ближайшие чанки, без новой карты теней.
@@ -578,7 +623,7 @@ class ObjStore:
 			# 15.0: прежняя проверка «крона не над клетками путей» убрана: просвет у путей решает place_chunk
 			# по стволу и кромке полотна (clear_of_path), кроны могут смыкаться над тропой
 		# Кроны могут частично перекрываться, но стволы и крупные объекты не слипаются.
-		# Максимальный масштаб дерева < 1.85; поиск ±3 клетки покрывает любую пару.
+		# Наибольший зазор (два старых дуба, масштаб до 1.5) около 2,6 клетки; поиск ±3 клетки покрывает любую пару (GAP_K).
 		var cw := _x1 - _x0
 		# Массив уже принят по опоре и полному просвету. Его тело исключило деревья до этого прохода.
 		if not massif:
@@ -586,7 +631,8 @@ class ObjStore:
 				for xx in range(maxi(_x0, cx - 3), mini(_x1, cx + 4)):
 					var o := heads[(yy - _y0) * cw + xx - _x0]
 					while o != -1:
-						var gap: float = 0.18 + 0.55 * (radius + _crown[k[o]] * s[o])
+						# камни раскладываются с прежним отступом: их россыпи не меняются
+						var gap: float = 0.18 + (0.55 if kind == Biomes.T_ROCK or k[o] == Biomes.T_ROCK else GAP_K) * (radius + _crown[k[o]] * s[o])
 						if Vector2(ox - x[o], oy - y[o]).length_squared() < gap * gap:
 							return
 						o = next[o]

@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 6 # профили массивов и отдельный дальний LOD
+const VERSION := 7 # высокий лес: возрастные формы сосны, берёзы и дуба (11.11.2026)
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}
