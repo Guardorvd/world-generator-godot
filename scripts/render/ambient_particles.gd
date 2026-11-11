@@ -19,6 +19,7 @@ const SHADER := preload("res://resources/ambient_particles.gdshader")
 const WIND := Vector3(0.82, 0.0, 0.57) # то же направление, что у ветра растительности
 const WIND_SPEED := 1.2                # м/с при обычном ветре
 const SAMPLE_EVERY := 0.5              # с: как часто перечитывать окружение
+const GROUND_VISIBLE := 0.5 # доля листьев на земле от GROUND: заметность вдвое ниже
 const GROUND := 40                     # листьев на земле
 
 ## count — частиц в слое; box — объём вокруг камеры (м); lift — его середина над камерой; size — половина стороны (м);
@@ -260,7 +261,7 @@ func _build_ground() -> void:
 
 ## Листья по земле: ветер порывами гонит их вдоль WIND, с подскоками; ушедший далеко лист появляется с наветренной стороны.
 func _update_ground(dt: float, eye: Vector3) -> void:
-	var shown := int(round(GROUND * clampf(_ground_amount, 0.0, 1.0)))
+	var shown := int(round(GROUND * GROUND_VISIBLE * clampf(_ground_amount, 0.0, 1.0)))
 	var mm := _ground.multimesh
 	mm.visible_instance_count = shown
 	if shown == 0 or heights == null:
@@ -285,5 +286,5 @@ func _update_ground(dt: float, eye: Vector3) -> void:
 		var y := heights.ground_at(at.x, at.y) + 0.02 + hop
 		var roll: float = item.phase + _clock * speed * 4.0
 		var basis := Basis(Vector3.UP, item.phase * 2.0 + _clock * speed) * Basis(Vector3.RIGHT, roll if speed > 0.05 else 0.0)
-		mm.set_instance_transform(i, Transform3D(basis.scaled(Vector3.ONE * (0.7 + item.tone * 0.6)), Vector3(at.x, y, at.y)))
+		mm.set_instance_transform(i, Transform3D(basis.scaled(Vector3.ONE * (0.55 + item.tone * 0.45)), Vector3(at.x, y, at.y)))
 		mm.set_instance_color(i, (tint[0] as Color).lerp(tint[1], item.tone * 0.6))

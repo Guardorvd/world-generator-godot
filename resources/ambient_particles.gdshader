@@ -21,7 +21,8 @@ uniform vec4 color_b : source_color = vec4(1.0);
 uniform vec3 light : source_color = vec3(1.0); // свет дня: ночью частицы темнее
 uniform float glow = 0.0;                  // собственное свечение (светлячки)
 uniform float blink = 0.0;                 // частота мерцания
-uniform float near_fade = 1.2;             // м: ближе к камере частица гаснет
+uniform float near_fade = 1.2;
+uniform float visibility = 0.5;            // общий множитель заметности (11.11: вдвое тише)             // м: ближе к камере частица гаснет
 
 varying vec4 v_col;
 
@@ -66,6 +67,6 @@ void fragment() {
 	} else {
 		a = 1.0 - smoothstep(0.45, 1.0, r);
 	}
-	ALBEDO = col * mix(light, vec3(1.0), clamp(glow, 0.0, 1.0)) * (1.0 + glow * 3.0);
-	ALPHA = v_col.a * a;
+	ALBEDO = col * mix(light, vec3(1.0), clamp(glow, 0.0, 1.0)) * (1.0 + glow * 1.5);
+	ALPHA = v_col.a * a * visibility;
 }
