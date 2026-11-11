@@ -131,7 +131,7 @@ void vertex() {
 			VERTEX += transpose(basis) * world * (sqrt(scale2) / scale2);
 		}
 		v_cloud = cloud_light(origin.xz);
-		float shelter = mix(shelter_ao, shelter_ao * 0.78, vegetation_night);
+		float shelter = shelter_ao;
 		v_ao = max(0.30, mix(ao_low, 1.0, h) * mix(1.0, shelter, sheltered));
 		if (use_vertex_color && !OUTPUT_IS_SRGB) {
 			// как vertex_color_is_srgb у StandardMaterial3D
@@ -167,7 +167,7 @@ void fragment() {
 		float neutral = dot(col, vec3(0.2126, 0.7152, 0.0722));
 		col = mix(col, vec3(neutral), vegetation_night * 0.32);
 	}
-	ALBEDO = col * v_cloud;
+	ALBEDO = col;
 	ROUGHNESS = 1.0;
 #ifdef ROCK_DETAIL
 	// Мелкое зерно затухает по производным: не мерцает на дальнем LOD.
@@ -181,17 +181,26 @@ void fragment() {
 	ROUGHNESS = 0.91;
 #endif
 	AO = v_ao;
-	AO_LIGHT_AFFECT = 0.15;
+	AO_LIGHT_AFFECT = 0.0;
 	BACKLIGHT = col * translucency * mix(1.0, 0.28, vegetation_night);
 #ifdef CUTOUT
 	// The merged clusters cover fewer layers. Fill small gaps and recover the
 	// interior shade where overlapping leaves and the last shadow cascade drop out.
 	float simplification = lod_level == 2 ? 1.0 : (lod_level == 1 ? 0.45 : 0.0);
 	float inner_shade = mix(1.0, mix(0.66, 0.94, smoothstep(0.55, 0.98, v_ao)), simplification);
-	ALBEDO *= inner_shade;
+	// Interior occlusion belongs to sky light, not a second albedo shadow.
 	AO *= inner_shade;
 	BACKLIGHT *= mix(1.0, 0.60, simplification);
 	ALPHA = tex.a * (1.0 - smoothstep(mix(0.86, 0.92, simplification), 1.0, cluster_radius));
 	ALPHA_SCISSOR_THRESHOLD = mix(0.35, 0.24, simplification);
 #endif
+}
+
+// Clouds attenuate the directional source, never sky light or bicycle lamps.
+void light() {
+	float visibility = ATTENUATION * (LIGHT_IS_DIRECTIONAL ? v_cloud : 1.0);
+	float ndl = dot(NORMAL, LIGHT);
+	vec3 diffuse = vec3(max(ndl, 0.0));
+	diffuse += BACKLIGHT * max(-ndl, 0.0);
+	DIFFUSE_LIGHT += diffuse * LIGHT_COLOR * visibility / PI;
 }

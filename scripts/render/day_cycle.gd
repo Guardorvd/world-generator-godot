@@ -16,12 +16,11 @@ const DUSK := 0.08               # свет солнца и луны нарас�
 const SHADOW_NORMAL_BIAS := 1.2  # фиксированное смещение нормали: тень сохраняет контакт со стволами и камнями
 const MOON_COLOR := Color(0.62, 0.72, 1.0)
 const MOON_ENERGY := 0.22        # лунный свет ночью; в сумерках слабее (доля «ночи» в таблице)
-const FOG := 0.0021              # дневная густота тумана, как в game_world.tscn (окружение общее для всех миров)
+const FOG := 0.00135              # дневная густота тумана, как в game_world.tscn (окружение общее для всех миров)
 const CLOUD_SHADOW := 0.44      # насколько тень облака темнит землю днём
-const CLOUD_WIND := Vector2(-8.0, -2.7)  # м/с: тени облаков бегут туда же, куда облака на небе
+const CLOUD_WIND := Vector2(-1.92, -0.64)  # м/с: тени облаков бегут туда же, куда облака на небе
 const MIST_TOP := 45.0           # дымка лежит ниже этой высоты, м (суша до 260 м)
-const MIST_BELOW_EYE := 10.0     # и ниже камеры на столько: вблизи вокруг игрока земля чистая
-const MIST_DENSITY := 0.010      # высотная густота при mist = 1
+const MIST_DENSITY := 0.004      # высотная густота при mist = 1
 const POLE := Vector3(0.0, 0.5736, -0.8192)   # ось вращения звёзд: 35° над севером, как в sky.gdshader
 const MOON_DAYS := 8.0           # ночей от полнолуния до полнолуния
 ## Вероятности редких явлений на одну ночь
@@ -53,9 +52,11 @@ var light: DirectionalLight3D
 var sky_mat: ShaderMaterial
 var terrain_mats: Array = []   # материалы рельефа: солнечные пятна под пологом гаснут вместе с солнцем
 var sunlight := 1.0            # 0..1: насколько сейчас светит именно солнце
-var camera: Camera3D           # дымка в низинах ложится ниже камеры
+var camera: Camera3D           # совместимость с игровыми и съёмочными инструментами
 var world_seed := 0            # сид мира: какие ночи с сиянием, кометой, звездопадом
 var events := {}               # явления текущей ночи (см. _night_events); можно подменить для снимков
+## -1 uses seeded weather; captures can fix coverage without changing time.
+var cloud_cover_override := -1.0
 var _clock := NAN              # часы без сброса в полночь: по ним вращаются звёзды и считаются ночи
 var _night := 0x7fffffff
 var _dark_active := true       # были ли включены ночные параметры шейдера неба на прошлом кадре
@@ -197,13 +198,12 @@ func apply(hour: float, time: float) -> void:
 	env.ambient_light_energy = s[6]
 	env.tonemap_exposure = s[7]
 	env.fog_density = FOG * s[12]
-	env.fog_sun_scatter = 0.08 + s[8] * 0.25   # низкое солнце светит сквозь дымку
-	# дымка в низинах: высотный туман ниже MIST_TOP и ниже камеры (с гребня видно туманные долины)
+	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
+	# Дымка в низинах привязана к высоте мира (с гребня видно туманные долины).
 	var mist: float = s[15]
 	env.fog_height_density = MIST_DENSITY * mist
-	if mist > 0.0:
-		var eye := camera.global_position.y if camera != null else INF
-		env.fog_height = minf(MIST_TOP, eye - MIST_BELOW_EYE)
+	# World anchored: bicycle bob and climbing never drag the fog layer.
+	env.fog_height = MIST_TOP
 	env.adjustment_saturation = s[13]
 	light.shadow_opacity = s[14]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
@@ -211,17 +211,28 @@ func apply(hour: float, time: float) -> void:
 	var seed_phase := float(posmod(world_seed, 997)) * 0.13
 	var cover: float = s[11] + 0.12 * sin(time / 67.0 + seed_phase) + 0.06 * sin(time / 23.0 + 1.0 + seed_phase * 1.7)
 	# свет через облака: чем гуще облачность, тем мягче и слабее прямое солнце, тем больше рассеянного света неба
-	var overcast := smoothstep(0.25, 0.6, cover) * clampf(sunlight, 0.0, 1.0)
+	if cloud_cover_override >= 0.0:
+		cover = cloud_cover_override
+	cover = clampf(cover, 0.05, 0.85)
+	var overcast := smoothstep(0.30, 0.65, cover) * sunlight
 	if sun.y > 0.0:
-		light.light_energy *= lerpf(1.0, 0.7, overcast)
-	env.ambient_light_energy = s[6] * lerpf(1.0, 1.18, overcast)
-	light.shadow_opacity = s[14] * lerpf(1.0, 0.7, overcast)
-	env.fog_aerial_perspective = lerpf(0.15, 0.24, maxf(overcast * 0.65, s[8] * 0.35))
-	# сдвиг теней облаков учитывает зерно облачности мира, чтобы пятна на земле соответствовали синоптической фазе неба
+		light.light_energy *= lerpf(1.12, 0.38, overcast)
+		light.light_color = light.light_color.lerp(Color(0.90, 0.94, 1.0), overcast * 0.7)
+	env.ambient_light_energy = s[6] * lerpf(0.86, 1.15, overcast)
+	var ambient: Color = s[5]
+	env.ambient_light_color = ambient.lerp(Color(0.72, 0.77, 0.85), overcast * 0.45)
+	env.fog_density *= lerpf(1.0, 1.45, overcast)
+	env.adjustment_saturation = lerpf(float(s[13]), 0.96, overcast)
+	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)
+	# Soften contrast through direct/sky balance, not translucent shadows.
+	light.shadow_blur = lerpf(1.25, 2.0, overcast)
+	env.fog_aerial_perspective = lerpf(0.24, 0.40, maxf(overcast, s[8] * 0.6))
+	# Облегчённая проекция: общие ветер, покрытие и сид; силуэты облаков приближённые.
 	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
 	RenderingServer.global_shader_parameter_set("cloud_shadow",
-		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, CLOUD_SHADOW * sunlight, cover))
-	sky_mat.set_shader_parameter("zenith_color", s[1])
+		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75), cover))
+	var zenith: Color = s[1]
+	sky_mat.set_shader_parameter("zenith_color", zenith.lerp(s[2], overcast * 0.45))
 	sky_mat.set_shader_parameter("horizon_color", s[2])
 	sky_mat.set_shader_parameter("sun_dir", sun)
 	sky_mat.set_shader_parameter("sun_color", s[3])

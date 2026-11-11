@@ -24,6 +24,8 @@ const DEFAULT_HEAD_BOB := true
 const DEFAULT_TRAIL_CLUTTER := true # корни, брёвна, ветки и камни на тропах (RoadObstacles)
 const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
+const DEFAULT_LIGHTING := 1
+const LIGHTING_LEVELS := ["Низкое", "Среднее", "Высокое"]
 const DEFAULT_VOLUME := 0.8
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
 const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
@@ -60,7 +62,8 @@ var msaa := 2 # прежнее MSAA 4x
 var vsync := true
 var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
 var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
-var shadows := DEFAULT_SHADOWS  # тени солнца и затенение в углах (SSAO): около 2 мс кадра на GTX 1650 SUPER
+var shadows := DEFAULT_SHADOWS # только тени направленного света
+var lighting := DEFAULT_LIGHTING
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
@@ -99,6 +102,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	msaa = roundi(_number(cfg, "display", "msaa", msaa, 0, 2))
 	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
+	lighting = roundi(_number(cfg, "view", "lighting", lighting, 0, 2))
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
@@ -186,6 +190,7 @@ func reset_defaults() -> void:
 	msaa = 2
 	vsync = true
 	shadows = DEFAULT_SHADOWS
+	lighting = DEFAULT_LIGHTING
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
 	volume = DEFAULT_VOLUME
@@ -207,6 +212,7 @@ func save_settings() -> Error:
 	cfg.set_value("display", "msaa", msaa)
 	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
+	cfg.set_value("view", "lighting", lighting)
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
 	cfg.set_value("sound", "volume", volume)
@@ -232,7 +238,7 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora}
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting}
 
 
 func set_display_state(state: Dictionary) -> void:
@@ -244,6 +250,7 @@ func set_display_state(state: Dictionary) -> void:
 	shadows = state.shadows
 	draw = state.draw
 	flora = state.get("flora", flora)
+	lighting = clampi(state.get("lighting", lighting), 0, 2)
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный

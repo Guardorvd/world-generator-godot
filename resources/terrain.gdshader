@@ -38,6 +38,7 @@ const float ROCK_TO = 0.46;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 
+varying float surface_cloud;
 varying vec3 wpos;
 varying vec3 wnormal;
 varying vec3 road_detail;
@@ -206,10 +207,7 @@ void fragment() {
 		float shade = smoothstep(0.12, 1.0, forest.r) * (1.0 - snow);
 		sky = 1.0 - shade * mix(0.28, 0.37, forest.g);
 		col *= mix(vec3(1.0), vec3(0.95, 0.98, 1.0), shade * forest.g);
-		if (near > 0.0 && sunlight > 0.0) {
-			float sun = texture(detail_tex, p * (1.0 / 3.1) + vec2(TIME * 0.006, TIME * 0.004)).r;
-			col *= 1.0 + smoothstep(0.54, 0.74, sun) * cover * (1.0 - forest.g) * near * sunlight * vec3(0.24, 0.19, 0.11);
-		}
+		// Sun patches come from actual crown shadows.
 	}
 	// 07.11.2026: горная порода. Тот же канал открытости (forest.a / COLOR.a), уклон и серые скальные
 	// биомы (по цвету карты, как снег) дают три характера: коренную породу (плиты, уступы, трещины),
@@ -495,11 +493,20 @@ void fragment() {
 			detail_n = mix(detail_n, road_normal, relief);
 		}
 	}
-	ALBEDO = col * (1.0 + v) * cloud_light(p);
+	ALBEDO = col * (1.0 + v);
+	surface_cloud = cloud_light(p);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
 	AO = sky;
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
 	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock, 0.2 + road_rough * 0.4, road) * near;
+}
+
+// Clouds attenuate the directional source, never sky light or bicycle lamps.
+void light() {
+	float visibility = ATTENUATION * (LIGHT_IS_DIRECTIONAL ? surface_cloud : 1.0);
+	float ndl = dot(NORMAL, LIGHT);
+	vec3 diffuse = vec3(max(ndl, 0.0));
+	DIFFUSE_LIGHT += diffuse * LIGHT_COLOR * visibility / PI;
 }

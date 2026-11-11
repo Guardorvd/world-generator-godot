@@ -776,15 +776,31 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
 
+[node name="LightingRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="LightingLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/LightingRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Освещение"
+tooltip_text = "Атмосфера сохраняется на всех уровнях. Среднее добавляет контактное затенение, высокое — непрямой свет."
+mouse_filter = 1
+
+[node name="LightingOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/LightingRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+
 [node name="VSync" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Вертикальная синхронизация"
 
-[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/LightingRow"]
 unique_name_in_owner = true
 layout_mode = 2
-text = "Тени и затенение"
+text = "Тени"
+tooltip_text = "Тени солнца и луны. Контактное затенение зависит от качества освещения."
 
 [node name="QualityHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 custom_minimum_size = Vector2(520, 0)

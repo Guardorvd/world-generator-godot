@@ -551,12 +551,10 @@ func _mark(key: String, since: int) -> int:
 	return now
 
 
-## Тени солнца и затенение (SSAO) по настройке; настройку можно поменять на паузе
+## Независимое качество света и тени; применяется при запуске и выходе из паузы.
 func _apply_shadows() -> void:
-	var sun: DirectionalLight3D = $Sun
-	if sun.shadow_enabled != services.settings.shadows:
-		sun.shadow_enabled = services.settings.shadows
-		$WorldEnvironment.environment.ssao_enabled = services.settings.shadows
+	preload("res://scripts/render/lighting_quality.gd").apply(
+		$WorldEnvironment.environment, $Sun, services.settings.lighting, services.settings.shadows)
 
 
 func capture_mouse() -> void:
