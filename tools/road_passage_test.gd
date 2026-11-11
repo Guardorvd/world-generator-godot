@@ -1,103 +1,108 @@
 extends SceneTree
+## 11.11.2026: публикация сети участками (StageTrails._add_trail, docs/ROAD_NETWORK.md) на синтетическом мире без
+## генерации: общий участок не копируется, развилка и примыкание — общая вершина на оси хозяина, пересечение проходит
+## насквозь, повышение класса делит тропу узлами, рядом с участком нет «призрачной» дешёвой полосы, правило
+## параллельных полотен. Секунды, без окна.
+##   godot --headless --path . --script res://tools/road_passage_test.gd
 const Fixture := preload("res://tools/road_relief_fixture.gd")
 var fails := 0
-var h: Heightfield
-var node: MeshInstance3D
-var camera: Camera3D
-var out := "res://tools/control/runs/road_passage"
+
 
 func check(ok: bool, label: String) -> void:
 	print("PASS " if ok else "FAIL ", label)
 	fails += int(not ok)
 
+
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 90)
+	preload("res://tools/watchdog.gd").arm(self, 60)
 	run.call_deferred()
+
+
+func cells(points: Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	for p: Vector2i in points: out.append(p.y * 96 + p.x)
+	return out
+
+
+func line(from: Vector2i, to: Vector2i) -> Array:
+	var out: Array = []
+	var at := from
+	out.append(at)
+	while at != to:
+		at += Vector2i(signi(to.x - at.x), signi(to.y - at.y))
+		out.append(at)
+	return out
+
+
+func on_polyline(pts: Array, p: Vector2) -> bool:
+	for j in pts.size():
+		if Vector2(pts[j].x, pts[j].y).distance_to(p) < 0.0001: return true
+	return false
+
+
+func overlap(w: WorldData, a: int, b: int) -> float:
+	# длина оси a ближе 0,25 клетки к оси b (дубль полотна), клеток
+	var total := 0.0
+	var pts: Array = w.trails[a].pts
+	for j in range(1, pts.size()):
+		var p := (Vector2(pts[j - 1].x, pts[j - 1].y) + Vector2(pts[j].x, pts[j].y)) * 0.5
+		var q := StageTrails._nearest_on(w.trails[b].pts, p)
+		if p.distance_to(q) < 0.25: total += Vector2(pts[j - 1].x, pts[j - 1].y).distance_to(Vector2(pts[j].x, pts[j].y))
+	return total
+
 
 func run() -> void:
 	var w := Fixture.world()
-	w.trails = [w.trails[1]]
-	h = Heightfield.new(w, false)
-	var line: Array = w.trails[0].pts.duplicate(true)
-	for p: Dictionary in line: p.y += 1.0
-	var original := line.duplicate(true)
-	var merged := StageTrails._shared_passage(w, line, "road", h, PackedByteArray())
-	var loops: Array = []
-	for j in 81:
-		loops.append({x = 8.0 + j, y = 48.5 + 1.5 * sin(j * PI / 10.0), w = 0.9})
-	var closed := StageTrails._shared_passage(w, loops, "road", h, PackedByteArray())
-	var deviation := 0.0
-	for p: Dictionary in closed: deviation = maxf(deviation, absf(p.y - 48.5))
-	check(deviation < 0.001, "repeated divergence and rejoining uses one network subpath, without grassy islands")
-	var mixed := StageTrails._shared_passage(w, loops, "trail", h, PackedByteArray())
-	check(mixed == closed, "road and trail travelling through the same corridor share the same geometry")
-	var stable := StageTrails._shared_passage(w, closed, "road", h, PackedByteArray())
-	check(stable == closed, "normalising an already shared edge is idempotent")
-	var rival: Dictionary = w.trails[0].duplicate(true)
-	for p: Dictionary in rival.pts: p.y += 1.3
-	w.trails.append(rival)
-	check(StageTrails._shared_passage(w, loops, "road", h, PackedByteArray()) == closed,
-		"a nearer competing axis cannot make the shared passage switch ownership point by point")
-	w.trails.pop_back()
-	var reverse := loops.duplicate(true); reverse.reverse()
-	var reverse_result := StageTrails._shared_passage(w, reverse, "road", h, PackedByteArray())
-	reverse_result.reverse()
-	check(reverse_result == closed, "the common edge is independent of route traversal direction")
-	check(merged[merged.size() / 2].y == w.trails[0].pts[0].y, "adjacent parallel passage reuses the existing axis")
-	check(merged[0] == line[0] and merged[-1] == line[-1], "route endpoints preserved")
-	check(line == original, "source route remains immutable")
-	var repeated := StageTrails._shared_passage(w, line, "road", h, PackedByteArray())
-	check(repeated == merged, "deterministic passage consolidation")
-	var crossing := [{x = 40.0, y = 30.0, w = 0.9}, {x = 40.0, y = 48.5, w = 0.9}, {x = 40.0, y = 65.0, w = 0.9}]
-	check(StageTrails._shared_passage(w, crossing, "road", h, PackedByteArray()) == crossing, "crossing is not snapped to a parallel passage")
-	var ending := [{x = 40.0, y = 35.0, w = 0.9}, {x = 40.0, y = 45.0, w = 0.9}, {x = 40.0, y = 49.0, w = 0.9}]
-	var joined := StageTrails._shared_passage(w, ending, "road", h, PackedByteArray())
-	check(joined[-1].y == 48.5, "terminating branch joins the host axis without an overhanging cap")
-	var separate := line.duplicate(true)
-	for p: Dictionary in separate: p.y += 3.0
-	check(StageTrails._shared_passage(w, separate, "road", h, PackedByteArray()) == separate, "separate alternative route survives")
-	var protected := PackedByteArray()
-	protected.resize(w.N); protected.fill(1)
-	check(StageTrails._shared_passage(w, line, "road", h, protected) == line, "structure axes remain fixed")
-	w.cost.resize(w.N); w.cost.fill(1.0)
-	Grid.stamp_path(w.path_mask, w.W, w.H, w.trails[0].pts, 3, 0.9 * 0.5 - Grid.PATH_IN)
-	var search_path := PackedInt32Array()
-	for x in range(8, 89): search_path.append(49 * w.W + x)
-	StageTrails._add_trail(w, search_path, "road", PackedFloat32Array(), PackedByteArray(), h)
-	check(w.path_mask[49 * w.W + 40] == 0, "search cells do not leave a ghost road beside the consolidated passage")
-	w.trails.resize(1)
-	if DisplayServer.get_name() == "headless":
-		quit(1 if fails else 0)
-		return
-	DirAccess.make_dir_recursive_absolute(out)
-	var env := WorldEnvironment.new()
-	env.environment = Environment.new()
-	env.environment.background_mode = Environment.BG_COLOR
-	env.environment.background_color = Color(0.5, 0.6, 0.7)
-	env.environment.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	env.environment.ambient_light_color = Color.WHITE
-	env.environment.ambient_light_energy = 0.5
-	root.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-45, 25, 0)
-	root.add_child(sun)
-	node = MeshInstance3D.new(); root.add_child(node)
-	camera = Camera3D.new(); root.add_child(camera); camera.make_current()
-	DisplayServer.window_set_size(Vector2i(1000, 650))
-	for version: String in ["before", "after"]:
-		var route := {kind = "road", pts = loops if version == "before" else closed}
-		RoadSurface.assign_route(w, route)
-		w.trails.resize(1); w.trails.append(route)
-		h = Heightfield.new(w)
-		var arrays := TerrainBuilder.build_arrays(w, h, Rect2i(8, 35, 80, 28))
-		var mesh := ArrayMesh.new(); mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
-		var base := Image.create(32, 32, false, Image.FORMAT_RGB8); base.fill(Color(0.32, 0.48, 0.20))
-		mesh.surface_set_material(0, GameContext.scope.terrain.material(base)); node.mesh = mesh
-		for view: String in ["side", "ride"]:
-			var p := Vector3(190, h.ground_at(190, 190), 190)
-			var from := p + Vector3(-15, 20, 28) if view == "side" else p + Vector3(-13, 1.5, 6)
-			camera.look_at_from_position(from, p + Vector3(12, 0, 6), Vector3.UP)
-			for frame in 8: await process_frame
-			await RenderingServer.frame_post_draw
-			root.get_texture().get_image().save_png(out.path_join(version + "_" + view + ".png"))
+	w.trails = []
+	w.cost.resize(w.N)
+	w.cost.fill(1.0)
+	StageTrails._net_reset(w)
+	# Хозяин: дорога по ряду 48
+	var host := StageTrails._add_trail(w, cells(line(Vector2i(8, 48), Vector2i(88, 48))), "road")
+	check(host.size() == 1 and w.trails.size() == 1, "first route is one segment")
+	# Сходится на дорогу, идёт по ней 20 клеток и уходит: два новых участка, общий участок не копируется
+	var path: Array = line(Vector2i(14, 30), Vector2i(30, 46)) + line(Vector2i(30, 47), Vector2i(30, 48)).slice(1) \
+		+ line(Vector2i(31, 48), Vector2i(50, 48)) + line(Vector2i(51, 49), Vector2i(66, 64))
+	var added := StageTrails._add_trail(w, cells(path), "trail")
+	check(added.size() == 2, "merge-and-leave makes two new segments (%d)" % added.size())
+	var shared := 0.0
+	for k: int in added: shared += overlap(w, k, 0)
+	check(shared < 1.0, "no duplicated axis along the shared road (%.2f cells)" % shared)
+	var nodes := 0
+	for k: int in added:
+		for end: Dictionary in [w.trails[k].pts[0], w.trails[k].pts[-1]]:
+			if on_polyline(w.trails[0].pts, Vector2(end.x, end.y)): nodes += 1
+	check(nodes == 2, "each branch ends on an exact vertex of the host axis (node)")
+	# Пересечение: вертикальный путь через дорогу — один участок насквозь
+	var before := w.trails.size()
+	var cross := StageTrails._add_trail(w, cells(line(Vector2i(72, 30), Vector2i(72, 66))), "trail")
+	check(cross.size() == 1 and w.trails.size() == before + 1, "a crossing passes through as one segment")
+	# Путь целиком по готовой сети — ничего нового
+	before = w.trails.size()
+	check(StageTrails._add_trail(w, cells(line(Vector2i(12, 48), Vector2i(80, 48))), "trail").is_empty() and w.trails.size() == before,
+		"a route that runs entirely on the network publishes nothing")
+	# Стоимость: на участке дешевле, рядом — не дешевле свободной земли
+	check(w.cost[48 * 96 + 40] < 0.5 and w.cost[47 * 96 + 40] >= 1.0, "trodden discount only on the segment, not a ghost strip beside it")
+	# Повышение класса: часть тропы, по которой идёт дорога-связь, — дорога; тропа делится узлами
+	StageTrails._net_reset(w)
+	w.trails = []
+	StageTrails._add_trail(w, cells(line(Vector2i(8, 20), Vector2i(88, 20))), "trail")
+	var length := StageTrails._kind_length_of(w.trails[0])
+	StageTrails._upgrade_path(w, cells(line(Vector2i(30, 20), Vector2i(60, 20))))
+	var kinds := {}
+	var total := 0.0
+	for t: Dictionary in w.trails:
+		kinds[t.kind] = int(kinds.get(t.kind, 0)) + 1
+		total += StageTrails._kind_length_of(t)
+	check(kinds.get("road", 0) == 1 and kinds.get("trail", 0) == 2, "promotion splits the trail into trail-road-trail (%s)" % str(kinds))
+	check(absf(total - length) < 0.01, "promotion keeps the axis (%.3f / %.3f cells)" % [total, length])
+	var road: Dictionary = w.trails[0]
+	check(road.kind == "road" and road.pts.all(func(p: Dictionary) -> bool: return p.w == StageTrails.WIDTHS.road), "promoted part has one road width")
+	# Параллельное полотно в 3 клетках вдоль сети на той же высоте — не новое; далеко — новое
+	var near := StageTrails._net_near(w)
+	var beside := cells(line(Vector2i(8, 23), Vector2i(88, 23)))
+	var far := cells(line(Vector2i(8, 60), Vector2i(88, 60)))
+	check(not StageTrails._adds_network(w, beside, near), "a parallel tread 12 m beside the network is rejected")
+	check(StageTrails._adds_network(w, far, near), "a route 160 m away is a real addition")
+	print("ROAD PASSAGE RESULT ", fails, " failures")
 	quit(1 if fails else 0)

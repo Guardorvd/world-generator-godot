@@ -36,36 +36,63 @@ static var allow_fast := true # false — исходный GDScript для св�
 ## only — номера путей w.trails (ключи): выровнять только их (Trail Lab: новая трасса на готовом участке, где
 ## полотно прежних путей уже в рельефе); frozen — 1 у клеток, которые не меняются (углы готовых метровых патчей).
 ## Пусто — все пути, как в игре.
+## 11.11.2026: три прохода — профиль каждого пути; узлы (_join: путь подтягивает профиль к высоте пути, обработанного
+## раньше, в точке касания — у перекрёстка и примыкания одна высота); клетки рельефа, где несколько путей смешиваются
+## по весам (раньше побеждал один путь — ступень или вал вдоль стыка). Порядок: дороги, тропы, горные тропы.
 static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()) -> PackedInt32Array:
 	var w := heights.world
 	if allow_fast and only.is_empty() and w.outer == null and heights.road_refinement == null:
 		var fast := Grid.fast_grid()
 		if fast != null:
 			return _refine_native(fast, heights, frozen)
+	var pin := _pins(w)
+	if frozen.size() == w.N:
+		for i in w.N:
+			if frozen[i] != 0:
+				pin[i] = 0.0
+	var routes: Array = []
+	for k in w.trails.size():
+		var t: Dictionary = w.trails[k]
+		if KINDS.has(t.kind) and t.pts.size() >= 2 and (only.is_empty() or only.has(k)):
+			routes.append(k)
+	var order := _order(w, routes)
+	var profiles: Array = []
+	for k: int in routes:
+		profiles.append(_profile(heights, w.trails[k].pts, KINDS[w.trails[k].kind]))
+	_join(heights, routes, order, profiles, pin)
 	var weight := PackedFloat32Array()
 	weight.resize(w.N)
-	var target := PackedFloat32Array()
-	target.resize(w.N)
+	var sum := PackedFloat64Array()
+	sum.resize(w.N)
+	var total := PackedFloat64Array()
+	total.resize(w.N)
 	var near := PackedFloat32Array()   # расстояние до линии текущего пути, для ближайшей точки профиля
 	near.resize(w.N)
 	near.fill(INF)
 	var slot := PackedInt32Array()     # номер клетки в списке текущего пути или -1
 	slot.resize(w.N)
 	slot.fill(-1)
-	var pin := _pins(w)
-	if frozen.size() == w.N:
-		for i in w.N:
-			if frozen[i] != 0:
-				pin[i] = 0.0
-	for k in w.trails.size():
-		var t: Dictionary = w.trails[k]
-		if KINDS.has(t.kind) and t.pts.size() >= 2 and (only.is_empty() or only.has(k)):
-			_trail(heights, t.pts, KINDS[t.kind], pin, weight, target, near, slot)
+	for at: int in order:
+		var r: Array = _stamp(heights, profiles[at], KINDS[w.trails[routes[at]].kind], pin, near, slot)
+		var cells: PackedInt32Array = r[0]
+		var best_w: PackedFloat32Array = r[1]
+		var best_h: PackedFloat32Array = r[2]
+		for j in cells.size():
+			var i := cells[j]
+			if best_w[j] <= 0.0:
+				continue
+			sum[i] += best_w[j] * best_h[j]
+			total[i] += best_w[j]
+			if best_w[j] > weight[i]:
+				weight[i] = best_w[j]
+	var target := PackedFloat32Array()
+	target.resize(w.N)
 	var changed := PackedInt32Array()
 	var hv := heights.hv
 	for i in w.N:
 		if weight[i] <= 0.0 or heights.water_level[i] != -INF:
 			continue
+		target[i] = sum[i] / total[i]
 		var h := lerpf(hv[i], target[i], weight[i])
 		if h < hv[i]:
 			h = maxf(h, minf(hv[i], wet_near(heights, i) + WATER_GAP))
@@ -75,8 +102,19 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 	return changed
 
 
+## Номера в routes по порядку обработки: дороги, тропы, горные тропы; внутри вида — по номеру пути (как FastGrid.RbOrder)
+static func _order(w: WorldData, routes: Array) -> Array:
+	var names: Array = KINDS.keys()
+	var order: Array = range(routes.size())
+	order.sort_custom(func(a: int, b: int) -> bool:
+		var ka := names.find(w.trails[routes[a]].kind)
+		var kb := names.find(w.trails[routes[b]].kind)
+		return ka < kb if ka != kb else a < b)
+	return order
+
+
 ## DOD (ноябрь 2026): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
-## GDScript-пути ниже (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
+## GDScript-пути выше (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
 static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> PackedInt32Array:
 	var w := heights.world
 	var names: Array = KINDS.keys()
@@ -147,12 +185,9 @@ static func wet_near(heights: Heightfield, i: int) -> float:
 	return top
 
 
-## Один путь: профиль вдоль линии, сглаживание, затем точки рельефа вокруг линии тянутся к профилю
-static func _trail(heights: Heightfield, pts: Array, k: Dictionary, pin: PackedFloat32Array, weight: PackedFloat32Array,
-		target: PackedFloat32Array, near: PackedFloat32Array, slot: PackedInt32Array) -> void:
-	var W := heights.world.W
-	var H := heights.world.H
-	# выборка через STEP метров
+## Профиль одного пути: выборка через STEP метров, скользящее среднее с сохранённой долей неровности и пределами
+## среза; fade — полотно сходит на нет на крутом склоне. {xs, zs, half, prof, fade}
+static func _profile(heights: Heightfield, pts: Array, k: Dictionary) -> Dictionary:
 	var xs := PackedFloat32Array()
 	var zs := PackedFloat32Array()
 	var half := PackedFloat32Array()
@@ -181,18 +216,157 @@ static func _trail(heights: Heightfield, pts: Array, k: Dictionary, pin: PackedF
 		g[n] = heights.ground_at(xs[n], zs[n])
 		sum[n + 1] = sum[n] + g[n]
 	var win := int(k.window / STEP)
-	var touched := PackedInt32Array()
-	var best_w := PackedFloat32Array()
-	var best_h := PackedFloat32Array()
-	var reach: float = k.flat + k.shoulder
+	var prof := PackedFloat64Array()
+	prof.resize(n_pts)
+	var fade := PackedFloat64Array()
+	fade.resize(n_pts)
 	for n in n_pts:
 		# у концов окно симметрично сужается: начало и конец пути (поселение, развилка) не сдвигаются
 		var r := mini(win, mini(n, n_pts - 1 - n))
 		var smooth := (sum[n + r + 1] - sum[n - r]) / (2 * r + 1)
-		var prof: float = clampf(smooth + k.keep * (g[n] - smooth), g[n] - k.cut, g[n] + k.cut)
+		prof[n] = clampf(smooth + k.keep * (g[n] - smooth), g[n] - k.cut, g[n] + k.cut)
 		var gx := heights.ground_at(xs[n] + 2.0, zs[n]) - heights.ground_at(xs[n] - 2.0, zs[n])
 		var gz := heights.ground_at(xs[n], zs[n] + 2.0) - heights.ground_at(xs[n], zs[n] - 2.0)
-		var fade := 1.0 - smoothstep(STEEP.x, STEEP.y, Grid.hypot(gx, gz) / 4.0)
+		fade[n] = 1.0 - smoothstep(STEEP.x, STEEP.y, Grid.hypot(gx, gz) / 4.0)
+	return {xs = xs, zs = zs, half = half, prof = prof, fade = fade}
+
+
+const JOIN_TOUCH := 0.05 # клеток: конец на оси другого пути
+const JOIN_GRADE := 0.08 # добавленный продольный уклон при подтягивании к узлу
+const JOIN_MIN := 6.0    # длина перехода, м
+const JOIN_MAX := 30.0
+const JOIN_BIN := 2
+
+
+## Узлы (эталон FastGrid.RbJoin, те же операции в том же порядке): для каждого пути по порядку — точки касания с путями
+## раньше него (пересечения отрезков, концы на оси); профиль вокруг точки подтягивается к профилю того пути.
+## У сооружений и воды (pin < 0,5) узлы не трогаются.
+static func _join(heights: Heightfield, routes: Array, order: Array, profiles: Array, pin: PackedFloat32Array) -> void:
+	var w := heights.world
+	var rank := PackedInt32Array()
+	rank.resize(routes.size())
+	for k in order.size():
+		rank[order[k]] = k
+	var bw := (w.W + JOIN_BIN - 1) / JOIN_BIN
+	var bh := (w.H + JOIN_BIN - 1) / JOIN_BIN
+	var bins := {}
+	var owner := PackedInt32Array()
+	var seg := [] # [путь, номер точки начала]
+	for t in routes.size():
+		var pts: Array = w.trails[routes[t]].pts
+		for p in range(1, pts.size()):
+			var id := owner.size()
+			owner.append(t)
+			seg.append(p - 1)
+			for key: int in _bin_keys(pts[p - 1], pts[p], bw, bh):
+				if not bins.has(key): bins[key] = []
+				bins[key].append(id)
+	for t: int in order:
+		var pts: Array = w.trails[routes[t]].pts
+		var contacts: Array = [] # [x, y, путь] в клетках; double, как в C# (Vector2 — float32)
+		for p in range(1, pts.size()):
+			var ax: float = pts[p - 1].x
+			var ay: float = pts[p - 1].y
+			var bx: float = pts[p].x
+			var by: float = pts[p].y
+			var first := p == 1
+			var last := p == pts.size() - 1
+			for key: int in _bin_keys(pts[p - 1], pts[p], bw, bh):
+				for id: int in bins.get(key, []):
+					var host := owner[id]
+					if rank[host] >= rank[t]: continue
+					var hp: Array = w.trails[routes[host]].pts
+					var q: int = seg[id]
+					var cx: float = hp[q].x
+					var cy: float = hp[q].y
+					var dx: float = hp[q + 1].x
+					var dy: float = hp[q + 1].y
+					var hit := _intersect(ax, ay, bx, by, cx, cy, dx, dy)
+					if not hit.is_empty(): contacts.append([hit[0], hit[1], host])
+					if first and Grid.segment_dist(ax, ay, cx, cy, dx, dy) < JOIN_TOUCH: contacts.append([ax, ay, host])
+					if last and Grid.segment_dist(bx, by, cx, cy, dx, dy) < JOIN_TOUCH: contacts.append([bx, by, host])
+					if q == 0 and Grid.segment_dist(cx, cy, ax, ay, bx, by) < JOIN_TOUCH: contacts.append([cx, cy, host])
+					if q + 1 == hp.size() - 1 and Grid.segment_dist(dx, dy, ax, ay, bx, by) < JOIN_TOUCH: contacts.append([dx, dy, host])
+		if contacts.is_empty(): continue
+		var own: Dictionary = profiles[t]
+		var prof: PackedFloat64Array = own.prof
+		var done: Array = []
+		for contact: Array in contacts:
+			var x: float = contact[0]
+			var y: float = contact[1]
+			var seen := false
+			for e: Array in done:
+				if (e[0] - x) * (e[0] - x) + (e[1] - y) * (e[1] - y) < 0.125 * 0.125: seen = true
+			if seen: continue
+			done.append([x, y])
+			var cell := clampi(floori(y), 0, w.H - 1) * w.W + clampi(floori(x), 0, w.W - 1)
+			if pin[cell] < 0.5: continue
+			var s := _nearest(own, x * TILE, y * TILE)
+			var other: Dictionary = profiles[contact[2]]
+			var value: float = (other.prof as PackedFloat64Array)[_nearest(other, x * TILE, y * TILE)]
+			var shift := value - prof[s]
+			if absf(shift) < 0.001: continue
+			var reach := clampf(absf(shift) / JOIN_GRADE, JOIN_MIN, JOIN_MAX)
+			for k in prof.size():
+				var along := absi(k - s) * STEP
+				if along >= reach: continue
+				prof[k] += shift * (1.0 - smoothstep(0.0, reach, along))
+		own.prof = prof
+
+static func _bin_keys(a: Dictionary, b: Dictionary, bw: int, bh: int) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var x0 := clampi(int(floorf(minf(a.x, b.x) - JOIN_TOUCH)) / JOIN_BIN, 0, bw - 1)
+	var x1 := clampi(int(floorf(maxf(a.x, b.x) + JOIN_TOUCH)) / JOIN_BIN, 0, bw - 1)
+	var y0 := clampi(int(floorf(minf(a.y, b.y) - JOIN_TOUCH)) / JOIN_BIN, 0, bh - 1)
+	var y1 := clampi(int(floorf(maxf(a.y, b.y) + JOIN_TOUCH)) / JOIN_BIN, 0, bh - 1)
+	for y in range(y0, y1 + 1):
+		for x in range(x0, x1 + 1):
+			out.append(y * bw + x)
+	return out
+
+
+## Пересечение отрезков ab и cd, включая касание концом (как FastGrid.RbIntersect): [x, y] или пусто
+static func _intersect(ax: float, ay: float, bx: float, by: float, cx: float, cy: float, dx: float, dy: float) -> Array:
+	var rx := bx - ax
+	var ry := by - ay
+	var sx := dx - cx
+	var sy := dy - cy
+	var den := rx * sy - ry * sx
+	if absf(den) < 1e-12: return []
+	var t := ((cx - ax) * sy - (cy - ay) * sx) / den
+	var u := ((cx - ax) * ry - (cy - ay) * rx) / den
+	if t < -1e-9 or t > 1.0 + 1e-9 or u < -1e-9 or u > 1.0 + 1e-9: return []
+	return [ax + rx * t, ay + ry * t]
+
+static func _nearest(p: Dictionary, x: float, z: float) -> int:
+	var xs: PackedFloat32Array = p.xs
+	var zs: PackedFloat32Array = p.zs
+	var best := 0
+	var best_d := INF
+	for k in xs.size():
+		var d := (xs[k] - x) * (xs[k] - x) + (zs[k] - z) * (zs[k] - z)
+		if d < best_d:
+			best_d = d
+			best = k
+	return best
+
+
+## Точки рельефа вокруг линии тянутся к профилю: [клетки, веса, высоты] (у клетки — ближайшая точка профиля)
+static func _stamp(heights: Heightfield, p: Dictionary, k: Dictionary, pin: PackedFloat32Array,
+		near: PackedFloat32Array, slot: PackedInt32Array) -> Array:
+	var W := heights.world.W
+	var H := heights.world.H
+	var xs: PackedFloat32Array = p.xs
+	var zs: PackedFloat32Array = p.zs
+	var half: PackedFloat32Array = p.half
+	var prof: PackedFloat64Array = p.prof
+	var fades: PackedFloat64Array = p.fade
+	var touched := PackedInt32Array()
+	var best_w := PackedFloat32Array()
+	var best_h := PackedFloat32Array()
+	var reach: float = k.flat + k.shoulder
+	for n in xs.size():
+		var fade := fades[n]
 		if fade <= 0.0:
 			continue
 		var outer: float = half[n] + reach
@@ -217,12 +391,8 @@ static func _trail(heights: Heightfield, pts: Array, k: Dictionary, pin: PackedF
 				var j := slot[i]
 				var hv := heights.hv[i]
 				best_w[j] = (1.0 - smoothstep(half[n] + k.flat, outer, d)) * pin[i] * fade
-				best_h[j] = clampf(prof, hv - k.side, hv + k.side)
-	# слияние с другими путями: у точки рельефа побеждает путь, к которому она ближе всего по весу
-	for j in touched.size():
-		var i := touched[j]
+				best_h[j] = clampf(prof[n], hv - k.side, hv + k.side)
+	for i: int in touched:
 		near[i] = INF
 		slot[i] = -1
-		if best_w[j] > weight[i]:
-			weight[i] = best_w[j]
-			target[i] = best_h[j]
+	return [touched, best_w, best_h]

@@ -60,6 +60,8 @@ public partial class FastGrid
 		return t * t * (3.0 - 2.0 * t);
 	}
 	private static double RoadLerp(double a, double b, double t) => a + (b - a) * t;
+	// RoadRefinement.BENCH (11.11.2026): полка в склон с умеренного поперечного уклона, а не только на крутом
+	private const double BenchLo = 0.15, BenchHi = 0.45;
 	// RoadRefinement.tread_mask: shared by the whole-network and batched vertex paths.
 	private static double RoadTreadMask(double half, double distance, double slow, double organic, bool road, bool authored, double grain)
 	{
@@ -69,8 +71,10 @@ public partial class FastGrid
 			double originalShoulder = (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5);
 			return (1.0 - RoadSmooth(originalEdge * 0.55, originalEdge + originalShoulder, distance)) * (1.0 - organic * 0.35);
 		}
-		double edge = half * 0.82 * (1.0 - organic * 0.04);
-		return Math.Clamp(0.5 + edge - distance, 0.0, 1.0);
+		// 11.11.2026: кромка с медленным изгибом (шум ~8 м в мировых координатах), переход шире у широкой дороги
+		double edge = half * (0.84 - organic * 0.04) + slow * 0.16 * Math.Min(1.0, half / 1.1);
+		double ramp = Math.Clamp(half * 0.8, 0.5, 1.2);
+		return Math.Clamp(0.5 + (edge - distance) / ramp, 0.0, 1.0);
 	}
 	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
 	private static double RoadReliefEdge(Vector2 p, int width, int height, double tile)
@@ -656,7 +660,7 @@ public partial class FastGrid
 					var axis = a + d * (float)u;
 					double cross = Math.Abs(RoadGround(ground, width, height, tile, axis.X + (double)normal.X, axis.Y + (double)normal.Y)
 						- RoadGround(ground, width, height, tile, axis.X - (double)normal.X, axis.Y - (double)normal.Y)) / (2.0 * half);
-					double bench = RoadSmooth(steepLo, steepHi, cross);
+					double bench = RoadSmooth(BenchLo, BenchHi, cross);
 					if (bench > 0.0)
 					{
 						double level = roadFlags[n] != 0 ? levels[n] : RoadGround(ground, width, height, tile, axis.X, axis.Y);

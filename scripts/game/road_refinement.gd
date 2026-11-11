@@ -36,7 +36,10 @@ const CORRIDOR_FADE := 8.0     # формы включаются на столь
 const CORRIDOR_GAP := 3.0    # зазор между полотнами, достаточный для узкого сечения
 const LAND_GAP := 10.5       # зазор для широких форм по обеим сторонам
 const CORRIDOR_HOLLOW_W := 0.6 # полуширина продавленного места, доля полуширины полотна
-const SHARED := 0.5            # путь того же вида и ширины вдоль оси ближе этого, м, — та же дорога (дубль сети): формы общие
+const SHARED := 0.5            # (прежний порог дублей сети; с 11.11.2026 дублей нет, остаётся параметром C#)
+## 11.11.2026: полка в склон с умеренного поперечного уклона (раньше — с RoadBed.STEEP 0,5: на средних склонах дорога
+## лежала наклонной лентой). Тот же порог в C# (FastGrid BenchLo/BenchHi).
+const BENCH := Vector2(0.15, 0.45)
 const PREPARED_SCALE := 0.5    # путь трассы без земляных работ (trail_id, earthwork 0): формы слабее, без продавленных мест
 static var natural_relief := true # false — без форм коридора (сравнение было/стало в стендах)
 static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
@@ -997,28 +1000,13 @@ func _corridor_gap(p: Vector2, tangent: Vector2, route: int, along: float, own_h
 	return gap - half - own_half
 
 
-## Matching width/kind is insufficient. Only byte-identical complete input lines,
-## including surfaces and endpoints (possibly reversed), can share a natural profile.
+## 11.11.2026: каждая ось сети существует один раз (StageTrails._add_trail: участки и узлы), поэтому «тот же путь» —
+## только сам путь. Прежний поиск полных дублей по хешу линий (sha256 каждой записи при каждой сборке) больше не нужен;
+## массив остаётся входом FastGrid.RoadFitNetwork.
 func _index_route_identity() -> void:
-	var seen := {}
-	_route_identity.clear()
-	for route in _heights.world.trails.size():
-		var t: Dictionary = _heights.world.trails[route]
-		_route_identity.append(route)
-		if t.has("trail_id") or not t.kind in CORRIDOR_KINDS:
-			continue
-		var forward := PackedFloat64Array([CORRIDOR_KINDS.find(t.kind)])
-		var backward := forward.duplicate()
-		for n in t.pts.size():
-			var p: Dictionary = t.pts[n]
-			var q: Dictionary = t.pts[t.pts.size() - 1 - n]
-			forward.append_array(PackedFloat64Array([p.x, p.y, p.w, t.surf[n]]))
-			backward.append_array(PackedFloat64Array([q.x, q.y, q.w, t.surf[t.pts.size() - 1 - n]]))
-		var a := forward.to_byte_array().hex_encode().sha256_text()
-		var b := backward.to_byte_array().hex_encode().sha256_text()
-		var key := a if a < b else b
-		if seen.has(key): _route_identity[route] = seen[key]
-		else: seen[key] = route
+	_route_identity.resize(_heights.world.trails.size())
+	for route in _route_identity.size():
+		_route_identity[route] = route
 
 
 func _shared(_gap: float, _crossing: bool, route: int, other: int, _own_half: float, _half: float) -> bool:
@@ -1199,7 +1187,7 @@ func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := 
 			var normal := Vector2(-road.delta.y, road.delta.x).normalized() * half
 			var on_axis: Vector2 = road.a + road.delta * u
 			var cross_grade := absf(_heights.base_ground_at(on_axis.x + normal.x, on_axis.y + normal.y) - _heights.base_ground_at(on_axis.x - normal.x, on_axis.y - normal.y)) / (2.0 * half)
-			var bench := smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, cross_grade)
+			var bench := smoothstep(BENCH.x, BENCH.y, cross_grade)
 			if bench > 0.0:
 				# Узкая тропа следует высоте своей оси: сильная полка не усиливает продольное сглаживание у поворота.
 				var axis_level := level if road.kind == "road" else _heights.base_ground_at(on_axis.x, on_axis.y)
@@ -1258,8 +1246,11 @@ static func tread_mask(half: float, d: float, slow: float, organic: float, road:
 	# A linear signed-distance ramp interpolates predictably on the metre grid.
 	# Applying smoothstep here and again in the shader inflated corners and left
 	# disconnected shoulder fragments. Organic litter changes texture, not width.
-	var edge := half * 0.82 * (1.0 - organic * 0.04)
-	return clampf(0.5 + edge - d, 0.0, 1.0)
+	# 11.11.2026: кромка с медленным изгибом (шум ~8 м в мировых координатах); переход шире у широкой дороги, у узкой
+	# горной тропы середина остаётся сплошной (раньше альфа 1 только в 0,2 м от оси — «бусы»)
+	var edge := half * (0.84 - organic * 0.04) + slow * 0.16 * minf(1.0, half / 1.1)
+	var ramp := clampf(half * 0.8, 0.5, 1.2)
+	return clampf(0.5 + (edge - d) / ramp, 0.0, 1.0)
 
 
 ## A meandering contour crosses the tread and shoulders in world space.

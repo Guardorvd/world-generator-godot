@@ -11,6 +11,13 @@ var base_heights: Heightfield
 var trail_surface: Heightfield # accepted preparation; consumed by WorldLoader, never serialized
 var light := PackedFloat32Array() # только до конца генерации; в дисковый кэш не входит
 var surface_rock := PackedByteArray() # one byte/cell, shared by placement and the existing forest texture
+## 11.11.2026: дорожная сеть этапа StageTrails как набор уникальных участков (StageTrails._add_trail).
+## road_owner — номер записи w.trails, которой принадлежит клетка поиска (-1 — ничья); road_cells — сырые клетки
+## каждой записи (пусто у звериных троп); road_side — клетка рядом с участком уже подорожала. Только на время этапа.
+var road_owner := PackedInt32Array()
+var road_cells: Array = []
+var road_side := PackedByteArray()
+var road_protected := {} # сооружение -> какие стоимости уже закрыты у него (StageTrails._protect_structures)
 var _thread: Thread
 var _fields := {}
 

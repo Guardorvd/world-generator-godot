@@ -348,7 +348,7 @@ public partial class FastGrid
 			var axis = a + d * (float)u;
 			double cross = Math.Abs(RoadGround(ground, width, height, tile, axis.X + (double)normal.X, axis.Y + (double)normal.Y)
 				- RoadGround(ground, width, height, tile, axis.X - (double)normal.X, axis.Y - (double)normal.Y)) / (2.0 * half);
-			double bench = RoadSmooth(steepLo, steepHi, cross);
+			double bench = RoadSmooth(BenchLo, BenchHi, cross);
 			if (bench > 0.0)
 			{
 				double lvl = road ? level : RoadGround(ground, width, height, tile, axis.X, axis.Y);

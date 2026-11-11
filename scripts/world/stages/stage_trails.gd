@@ -85,6 +85,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.path_mask = PackedByteArray()
 	w.path_mask.resize(w.N)
 	w.trails = []
+	_net_reset(w)
 	var surface := Heightfield.base_of(w)
 	w.generation_profile.route_heightfield_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
 	detail_us = Time.get_ticks_usec()
@@ -211,39 +212,184 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 	return cost
 
 
-## Записать найденный путь как тропу
-## (road_cost — стоимость для дорог, она дешевеет вместе с w.cost; on_axis — клетки на осях мостов и туннелей:
-## там и на соседних с ними клетках пути точки линии не смещаются случайно, чтобы дорога входила
-## на настил и в портал ровно, а не через перила; у воды линия тоже не смещается, чтобы не уйти в неё).
-## path_mask (скорость, деревья) отмечается по нарисованной линии (Grid.stamp_path), а дешевле становятся клетки пути
+## 11.11.2026: сеть путей людей — набор уникальных участков (docs/ROAD_NETWORK.md). Путь поиска делится по своим
+## клеткам до сглаживания: клетки, которые уже принадлежат участку сети (generation.road_owner), — повторное
+## использование, ничего не публикуется; остальные — новые участки. Их концы ложатся точно на ось участка-хозяина,
+## и там же в линию хозяина вставляется общая точка — узел (перекрёсток, примыкание, развилка). Короткое касание
+## (не длиннее CROSS_RUN клеток) — пересечение: новый участок проходит его насквозь. Так одна ось существует один раз,
+## а скидка стоимости, маска и линия описывают одну и ту же дорогу (раньше — _shared_passage после сглаживания).
+const CROSS_RUN := 2
+const SIDE_MUL := 1.3   # клетка рядом с участком (не на нём) дороже свободной земли: поиск идёт по участку или уходит
+const JOIN_R := 1.2     # конец нового участка ближе этого (клеток) к оси хозяина ложится на неё
+
+
+static func _net_reset(w: WorldData) -> void:
+	var g := w.generation
+	g.road_owner = PackedInt32Array()
+	g.road_owner.resize(w.N)
+	g.road_owner.fill(-1)
+	g.road_cells = []
+	g.road_side = PackedByteArray()
+	g.road_side.resize(w.N)
+	g.road_protected = {}
+
+
+## Мир областей (RegionRoads) и стенды начинают без сброса этапа: данные сети заводятся при первом пути.
+static func _net_ready(w: WorldData) -> void:
+	if w.generation.road_owner.size() != w.N:
+		var cells: Array = w.generation.road_cells
+		_net_reset(w)
+		w.generation.road_cells = cells
+	while w.generation.road_cells.size() < w.trails.size():
+		w.generation.road_cells.append(PackedInt32Array())
+
+
+## Записать найденный путь (road_cost — стоимость для дорог, она дешевеет вместе с w.cost; on_axis — клетки на осях
+## мостов и туннелей: там точки линии лежат на прямой оси настила и портала). Возвращает номера новых записей
+## w.trails (пусто — путь целиком прошёл по готовой сети). smooth_kind — пределы сглаживания другого вида
+## (связи поселений ищутся с пределами дороги, даже если публикуются тропой: StageTrails._upgrade_roles).
+## path_mask отмечается по нарисованной линии (Grid.stamp_path), дешевле становятся клетки пути.
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
-		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null) -> void:
+		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "") -> Array:
 	var part_us := Time.get_ticks_usec()
+	_net_ready(w)
 	path = _explicit(w, path, on_axis)
-	var W := w.W
-	var H := w.H
-	var jitter_seed := WGRandom.derive(w.seed_num, "trail.jitter." + kind)
-	var rng := WGRandom.new(0)
 	var width: float = WIDTHS[kind]
-	var jitter := 0.1 if kind == "road" else (0.35 if kind == "mountain" else 0.5)
-	var pts: Array = []
-	var last := path.size() - 1
+	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
+	var added: Array = []
+	if kind == "animal":
+		var jitter_seed := WGRandom.derive(w.seed_num, "trail.jitter." + kind)
+		var rng := WGRandom.new(0)
+		var pts: Array = []
+		var mask := w.path_mask
+		for i: int in path:
+			rng.reset(WGRandom.hash_cell(jitter_seed, i % w.W, i / w.W, 0))
+			var px := (i % w.W) + 0.5 + (rng.next_float() - 0.5) * 0.5
+			var py := (i / w.W) + 0.5 + (rng.next_float() - 0.5) * 0.5
+			if _by_water(w, i):
+				px = (i % w.W) + 0.5
+				py = (i / w.W) + 0.5
+			pts.append({x = px, y = py, w = width})
+			if mask[i] < mark: mask[i] = mark
+		w.path_mask = mask
+		var line := Grid.chaikin(pts, 3)
+		Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
+		added.append(w.trails.size())
+		w.trails.append({kind = kind, pts = line})
+		w.generation.road_cells.append(PackedInt32Array())
+	else:
+		var owner := w.generation.road_owner
+		for piece: Dictionary in _pieces(path, owner):
+			var cells: PackedInt32Array = piece.cells
+			var pts := _cell_points(w, cells, on_axis, width)
+			var joins: Array = []
+			for end in 2:
+				var at := 0 if end == 0 else cells.size() - 1
+				var join := _join_point(w, owner, cells[at], piece.anchored[end])
+				if not join.is_empty():
+					pts[at] = {x = join.point.x, y = join.point.y, w = width}
+					joins.append(join)
+			var line_us := Time.get_ticks_usec()
+			var line := _road_line(w, pts, on_axis, surface, kind if smooth_kind.is_empty() else smooth_kind) if surface != null else Grid.chaikin(pts, 3)
+			_part("road_line", line_us)
+			var index := w.trails.size()
+			Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
+			w.trails.append({kind = kind, pts = line})
+			w.generation.road_cells.append(cells)
+			for c: int in cells:
+				if owner[c] < 0: owner[c] = index
+			for join: Dictionary in joins:
+				_insert_vertex(w, join.host, join.point)
+			added.append(index)
+		w.generation.road_owner = owner
+	_trodden(w, path, kind, road_cost)
+	var protect_us := Time.get_ticks_usec()
+	_protect_structures(w, road_cost)
+	_part("protect_structures", protect_us)
+	_part("add_trail", part_us)
+	return added
+
+
+## Протоптанный путь дешевле: следующие маршруты идут по нему. Клетки рядом с участком сети (не на нём) один раз
+## дорожают в SIDE_MUL раз: соседняя клетка больше не тянет поиск идти вплотную параллельно (раньше она дешевела).
+static func _trodden(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array) -> void:
+	var cost := w.cost
+	var cheaper := 0.6 if kind == "animal" else 0.35
+	var both := road_cost.size() > 0
+	for i: int in path:
+		cost[i] = maxf(0.3, cost[i] * cheaper)
+		if both:
+			road_cost[i] = maxf(0.3, road_cost[i] * cheaper)
+	if kind != "animal":
+		var owner := w.generation.road_owner
+		var side := w.generation.road_side
+		for i: int in path:
+			var cx := i % w.W
+			var cy := i / w.W
+			for k: int in 8:
+				var nx: int = cx + Grid.DX[k]
+				var ny: int = cy + Grid.DY[k]
+				if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H:
+					continue
+				var n := ny * w.W + nx
+				if owner[n] >= 0 or side[n] != 0:
+					continue
+				side[n] = 1
+				if cost[n] != INF:
+					cost[n] *= SIDE_MUL
+				if both and road_cost[n] != INF:
+					road_cost[n] *= SIDE_MUL
+		w.generation.road_side = side
+	w.cost = cost
+
+
+## Части пути, которые не лежат на готовой сети: {cells — клетки с опорными клетками сети по краям, anchored — [начало, конец]
+## опираются на сеть}. Короткое касание сети внутри пути (не длиннее CROSS_RUN клеток) — пересечение, часть его проходит.
+static func _pieces(path: PackedInt32Array, owner: PackedInt32Array) -> Array:
+	var n := path.size()
+	var free := PackedByteArray()
+	free.resize(n)
+	for k in n:
+		free[k] = 1 if owner[path[k]] < 0 else 0
+	var k := 0
+	while k < n:
+		if free[k] != 0:
+			k += 1
+			continue
+		var e := k
+		while e + 1 < n and free[e + 1] == 0:
+			e += 1
+		if k > 0 and e < n - 1 and e - k + 1 <= CROSS_RUN:
+			for j in range(k, e + 1):
+				free[j] = 2
+		k = e + 1
+	var out: Array = []
+	k = 0
+	while k < n:
+		if free[k] == 0:
+			k += 1
+			continue
+		var e := k
+		while e + 1 < n and free[e + 1] != 0:
+			e += 1
+		var a := k - 1 if k > 0 else k
+		var b := e + 1 if e < n - 1 else e
+		if b > a:
+			out.append({cells = path.slice(a, b + 1), anchored = [k > 0, e < n - 1]})
+		k = e + 1
+	return out
+
+
+## Точки линии по клеткам: центры клеток; на осях мостов и туннелей — на прямой оси настила (центры клеток
+## диагональной оси идут лесенкой, лента должна лежать на прямом настиле).
+static func _cell_points(w: WorldData, cells: PackedInt32Array, on_axis: PackedByteArray, width: float) -> Array:
+	var W := w.W
 	var spans: Array = w.bridges + w.tunnels
-	for k: int in path.size():
-		var i := path[k]
-		rng.reset(WGRandom.hash_cell(jitter_seed, i % W, i / W, 0))
-		var px := (i % W) + 0.5 + (rng.next_float() - 0.5) * jitter
-		var py := (i / W) + 0.5 + (rng.next_float() - 0.5) * jitter
-		if kind != "animal":
-			# Случайное смещение поперёк склона меняет реальный уклон выбранного прохода.
-			px = (i % W) + 0.5
-			py = (i / W) + 0.5
-		if (on_axis.size() > 0 and (on_axis[i] != 0 or on_axis[path[maxi(k - 1, 0)]] != 0 or on_axis[path[mini(k + 1, last)]] != 0)) \
-				or _by_water(w, i):
-			px = (i % W) + 0.5
-			py = (i / W) + 0.5
+	var pts: Array = []
+	for i: int in cells:
+		var px := (i % W) + 0.5
+		var py := (i / W) + 0.5
 		if not on_axis.is_empty() and on_axis[i] != 0:
-			# Центры клеток диагональной оси идут лесенкой. Лента должна лежать на прямом настиле.
 			var best_dist := INF
 			for span: EntityRecord in spans:
 				var ax: float = span.a % W + 0.5
@@ -257,44 +403,78 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 					px = ax + dx * t
 					py = ay + dy * t
 		pts.append({x = px, y = py, w = width})
-	var cost := w.cost
-	var mask := w.path_mask
-	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
-	var cheaper := 0.6 if kind == "animal" else 0.35
-	var both := road_cost.size() > 0
-	for i: int in path:
-		# Human paths are stamped from their final, validated centreline below.
-		# Marking the raw search cells as well leaves a second ghost corridor after
-		# rounding or consolidation, which later routes mistake for an existing road.
-		if kind == "animal" and mask[i] < mark:
-			mask[i] = mark
-		# протоптанная тропа дешевле: следующие маршруты сливаются с ней
-		cost[i] = maxf(0.3, cost[i] * cheaper)
-		if both:
-			road_cost[i] = maxf(0.3, road_cost[i] * cheaper)
-		var cx := i % W
-		var cy := i / W
-		for k: int in 8:
-			var nx: int = cx + Grid.DX[k]
-			var ny: int = cy + Grid.DY[k]
-			if nx < 0 or ny < 0 or nx >= W or ny >= H:
-				continue
-			var n := ny * W + nx
-			# соседние клетки дешевеют, но не дорожают: уже дешёвый путь (0,3) не поднимается до 0,5 (с 6.9)
-			if cost[n] != INF:
-				cost[n] = minf(cost[n], maxf(0.5, cost[n] * 0.9))
-			if both and road_cost[n] != INF:
-				road_cost[n] = minf(road_cost[n], maxf(0.5, road_cost[n] * 0.9))
-	w.cost = cost
-	var protect_us := Time.get_ticks_usec()
-	_protect_structures(w, road_cost)
-	_part("protect_structures", protect_us)
-	var line_us := Time.get_ticks_usec()
-	var line := _road_line(w, pts, on_axis, surface, kind) if kind != "animal" and surface != null else Grid.chaikin(pts, 3)
-	_part("road_line", line_us)
-	Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
-	w.trails.append({kind = kind, pts = line})
-	_part("add_trail", part_us)
+	return pts
+
+
+## Узел на конце нового участка: ближайшая точка оси участков сети в клетке cell и вокруг неё ({host, point} или пусто).
+## Опорная клетка (anchored) лежит на сети; свободный конец (поселение, начало горной тропы у маски) — только
+## если сеть вплотную.
+static func _join_point(w: WorldData, owner: PackedInt32Array, cell: int, anchored: bool) -> Dictionary:
+	var cx := cell % w.W
+	var cy := cell / w.W
+	var hosts := {}
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			var x := cx + dx
+			var y := cy + dy
+			if x >= 0 and y >= 0 and x < w.W and y < w.H and owner[y * w.W + x] >= 0:
+				hosts[owner[y * w.W + x]] = true
+	if hosts.is_empty():
+		return {}
+	var c := Vector2(cx + 0.5, cy + 0.5)
+	var best := {}
+	var best_d := JOIN_R if anchored or owner[cell] >= 0 else 1.0
+	for host: int in hosts:
+		var q := _nearest_on(w.trails[host].pts, c, 2.0)
+		var d := c.distance_to(q)
+		if d <= best_d:
+			best_d = d
+			best = {host = host, point = q}
+	return best
+
+
+## reach — отрезки дальше этого (клеток) по осям не проверяются: у длинной дороги тысячи точек
+static func _nearest_on(pts: Array, p: Vector2, reach := INF) -> Vector2:
+	var best := Vector2(pts[0].x, pts[0].y)
+	var best_d := INF
+	for j in range(1, pts.size()):
+		var ax: float = pts[j - 1].x
+		var bx: float = pts[j].x
+		if minf(ax, bx) > p.x + reach or maxf(ax, bx) < p.x - reach: continue
+		var ay: float = pts[j - 1].y
+		var by: float = pts[j].y
+		if minf(ay, by) > p.y + reach or maxf(ay, by) < p.y - reach: continue
+		var a := Vector2(ax, ay)
+		var b := Vector2(bx, by)
+		var q := Geometry2D.get_closest_point_to_segment(p, a, b)
+		var d := p.distance_squared_to(q)
+		if d < best_d:
+			best_d = d
+			best = q
+	return best
+
+
+## Общая точка узла в линии хозяина: дороги сходятся в одной вершине (навигация, полотно, развилки).
+static func _insert_vertex(w: WorldData, host: int, point: Vector2) -> void:
+	var pts: Array = w.trails[host].pts
+	var best := 0
+	var best_d := INF
+	for j in range(1, pts.size()):
+		if minf(pts[j - 1].x, pts[j].x) > point.x + 1.0 or maxf(pts[j - 1].x, pts[j].x) < point.x - 1.0 \
+				or minf(pts[j - 1].y, pts[j].y) > point.y + 1.0 or maxf(pts[j - 1].y, pts[j].y) < point.y - 1.0:
+			continue
+		var d := Geometry2D.get_closest_point_to_segment(point, Vector2(pts[j - 1].x, pts[j - 1].y), Vector2(pts[j].x, pts[j].y)).distance_squared_to(point)
+		if d < best_d:
+			best_d = d
+			best = j
+	if best_d == INF:
+		return
+	var a := Vector2(pts[best - 1].x, pts[best - 1].y)
+	var b := Vector2(pts[best].x, pts[best].y)
+	if a.distance_to(point) < 0.01 or b.distance_to(point) < 0.01:
+		return
+	var f := clampf(a.distance_to(point) / maxf(a.distance_to(b), 0.000001), 0.0, 1.0)
+	pts.insert(best, {x = point.x, y = point.y, w = lerpf(float(pts[best - 1].w), float(pts[best].w), f)})
 
 
 ## Скругляем только безопасные углы. У сооружений сохраняем точный вход на ось;
@@ -318,7 +498,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 		out.resize(n)
 		for k in n:
 			out[k] = {x = line[k], y = line[n + k], w = line[2 * n + k]}
-		return _shared_passage(w, out, kind, surface, on_axis)
+		return out
 	for iteration in 3:
 		var out: Array = [pts[0]]
 		for k in range(1, pts.size() - 1):
@@ -339,151 +519,8 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				out.append(b)
 		out.append(pts[-1])
 		pts = out
-	return _shared_passage(w, pts, kind, surface, on_axis)
+	return pts
 
-
-## Reuse one connected network subpath through a common corridor.
-## Operates before stamping, vegetation and surface assignment, so all consumers
-## receive the same centreline. A crossing alone has no travel along the host edge.
-static func _shared_passage(w: WorldData, line: Array, kind: String, surface: Heightfield, on_axis: PackedByteArray) -> Array:
-	if line.size() < 3 or kind == "animal": return line
-	# Match continuous subpaths to an existing network edge, not independent
-	# points to whichever segment happens to be nearest. Work in world cells.
-	const REUSE_RADIUS := 2.0 # 8 m: narrow islands are not distinct passages
-	const MIN_SHARED := 4.0  # 16 m: a crossing/contact alone is not a shared edge
-	var bins := {}
-	var hosts := {}
-	for route in w.trails.size():
-		var old: Dictionary = w.trails[route]
-		if old.kind == "animal" or old.has("trail_id"): continue
-		var stations := PackedFloat64Array([0.0])
-		for j in range(1, old.pts.size()):
-			var a := Vector2(old.pts[j - 1].x, old.pts[j - 1].y)
-			var b := Vector2(old.pts[j].x, old.pts[j].y)
-			var length := a.distance_to(b)
-			stations.append(stations[-1] + length)
-			if length < 0.00001: continue
-			var box := Rect2(a, b - a).abs().grow(REUSE_RADIUS)
-			var segment := {a = a, delta = b - a, length = length, route = route, station = stations[j - 1]}
-			for y in range(floori(box.position.y / 4.0), floori(box.end.y / 4.0) + 1):
-				for x in range(floori(box.position.x / 4.0), floori(box.end.x / 4.0) + 1):
-					var key := Vector2i(x, y)
-					if not bins.has(key): bins[key] = []
-					bins[key].append(segment)
-		hosts[route] = {pts = old.pts, stations = stations, kind = old.kind}
-	if bins.is_empty(): return line
-	var along := PackedFloat64Array([0.0])
-	var matches := {} # host -> point index -> nearest station on that host
-	for j in line.size():
-		var p := Vector2(line[j].x, line[j].y)
-		if j > 0: along.append(along[-1] + p.distance_to(Vector2(line[j - 1].x, line[j - 1].y)))
-		if _passage_fixed(w, p, on_axis): continue
-		var height := surface.ground_at(p.x * GameConfig.TILE, p.y * GameConfig.TILE)
-		for seg: Dictionary in bins.get(Vector2i(floori(p.x / 4.0), floori(p.y / 4.0)), []):
-			var delta: Vector2 = seg.delta
-			var f := clampf((p - (seg.a as Vector2)).dot(delta) / delta.length_squared(), 0.0, 1.0)
-			var q: Vector2 = seg.a + delta * f
-			var distance := p.distance_to(q)
-			if distance > REUSE_RADIUS: continue
-			if not matches.has(seg.route): matches[seg.route] = {}
-			var row: Dictionary = matches[seg.route]
-			if row.has(j) and row[j].distance <= distance: continue
-			row[j] = {station = float(seg.station) + f * float(seg.length), point = q, distance = distance}
-		# Sample terrain only once per host at this station, not once for every
-		# tiny smoothed segment in the spatial bin.
-		for route: int in matches:
-			var row: Dictionary = matches[route]
-			if not row.has(j): continue
-			var q: Vector2 = row[j].point
-			if _passage_fixed(w, q, on_axis) or absf(height - surface.ground_at(q.x * GameConfig.TILE, q.y * GameConfig.TILE)) > (1.2 if kind == "road" else 0.5): row.erase(j)
-	var spans := []
-	for route: int in matches:
-		var row: Dictionary = matches[route]
-		var first := 0
-		while first < line.size():
-			if not row.has(first):
-				first += 1
-				continue
-			var last := first
-			while last + 1 < line.size() and row.has(last + 1): last += 1
-			var travel: float = row[last].station - row[first].station
-			var length := along[last] - along[first]
-			var bounded := true
-			for j in range(first + 1, last + 1):
-				var station: float = row[j].station
-				if station < minf(row[first].station, row[last].station) - REUSE_RADIUS or station > maxf(row[first].station, row[last].station) + REUSE_RADIUS: bounded = false
-			if length >= MIN_SHARED and absf(travel) >= MIN_SHARED and absf(travel) <= length * 1.35 and bounded:
-				spans.append({first = first, last = last, route = route, length = length,
-					priority = 0 if hosts[route].kind == "road" else 1})
-			first = last + 1
-	# One owner per shared run, selected deterministically for the whole run.
-	spans.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-		if a.priority != b.priority: return a.priority < b.priority
-		if a.length != b.length: return a.length > b.length
-		return a.route < b.route)
-	var accepted := []
-	var occupied := PackedByteArray(); occupied.resize(line.size())
-	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
-	var cross := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
-	var probe := surface.fast_water()
-	for span: Dictionary in spans:
-		var collision := false
-		for j in range(span.first, span.last + 1): collision = collision or occupied[j] != 0
-		if collision: continue
-		var row: Dictionary = matches[span.route]
-		var host: Dictionary = hosts[span.route]
-		var start: float = row[span.first].station
-		var finish: float = row[span.last].station
-		var direction := signf(finish - start)
-		# Enter/leave the common edge once. No sinusoidal pointwise fades that
-		# repeatedly split the centreline and leave enclosed grassy islands.
-		var piece: Array = [line[span.first].duplicate()]
-		var entry: float = start + (direction * minf(2.0, absf(finish - start) * 0.2) if row[span.first].distance > 0.02 else 0.0)
-		var exit: float = finish - (direction * minf(2.0, absf(finish - start) * 0.2) if row[span.last].distance > 0.02 else 0.0)
-		var indices := range(host.pts.size()) if direction > 0.0 else range(host.pts.size() - 1, -1, -1)
-		for j: int in indices:
-			var station: float = host.stations[j]
-			if (station - entry) * direction < 0.0 or (exit - station) * direction < 0.0: continue
-			var p: Dictionary = host.pts[j]
-			piece.append({x = p.x, y = p.y, w = line[span.first].w})
-		piece.append(line[span.last].duplicate())
-		var valid := piece.size() > 2
-		for j in range(1, piece.size()):
-			if not _road_segment(surface, piece[j - 1], piece[j], grade, cross, probe): valid = false; break
-		if not valid: continue # a bad join does not undo other independent merges
-		span.piece = piece; accepted.append(span)
-		for j in range(span.first, span.last + 1): occupied[j] = 1
-	accepted.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.first < b.first)
-	var out: Array = []
-	var at := 0
-	for span: Dictionary in accepted:
-		while at < span.first:
-			out.append(line[at].duplicate()); at += 1
-		out.append_array(span.piece); at = span.last + 1
-	while at < line.size():
-		out.append(line[at].duplicate()); at += 1
-	# Endpoints inside an existing tread use its axis even for a transverse join.
-	for j: int in [0, out.size() - 1]:
-		var original := 0 if j == 0 else line.size() - 1
-		var best := INF
-		var candidate: Dictionary = out[j]
-		for route: int in matches:
-			if not matches[route].has(original): continue
-			var m: Dictionary = matches[route][original]
-			var host: Dictionary = hosts[route]
-			var tolerance := float(host.pts[0].w) * 0.5 + 0.15
-			if m.distance > tolerance or m.distance >= best: continue
-			candidate = {x = m.point.x, y = m.point.y, w = out[j].w}; best = m.distance
-		var neighbour := 1 if j == 0 else j - 1
-		if candidate != out[j] and _road_segment(surface, out[neighbour], candidate, grade, cross, probe): out[j] = candidate
-	for j in range(out.size() - 1, 0, -1):
-		if Vector2(out[j].x, out[j].y).distance_squared_to(Vector2(out[j - 1].x, out[j - 1].y)) < 0.000001: out.remove_at(j)
-	return out
-
-
-static func _passage_fixed(w: WorldData, p: Vector2, on_axis: PackedByteArray) -> bool:
-	var cell := clampi(floori(p.y), 0, w.H - 1) * w.W + clampi(floori(p.x), 0, w.W - 1)
-	return _by_water(w, cell) or (not on_axis.is_empty() and on_axis[cell] != 0)
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)
@@ -524,7 +561,15 @@ static func _road_segment(surface: Heightfield, a: Dictionary, b: Dictionary, ma
 static func _protect_structures(w: WorldData, road_cost: PackedFloat32Array) -> void:
 	var cost := w.cost
 	var both := not road_cost.is_empty()
+	# 11.11.2026: запрет у сооружения не снимается следующими путями (INF и 0,3 протаптывание не меняет), поэтому каждое
+	# сооружение закрывается один раз для каждой стоимости, а не заново после каждого пути (было ~0,5 с на мир).
+	var done: Dictionary = w.generation.road_protected
 	for span: EntityRecord in w.tunnels + w.bridges:
+		var bits: int = done.get(span, 0)
+		var need := 1 | (2 if both else 0)
+		if bits & need == need:
+			continue
+		done[span] = bits | need
 		var tunnel := span is TunnelData
 		var radius := TUNNEL_R if tunnel else 1.4
 		var ax: float = span.a % w.W + 0.5
@@ -660,9 +705,12 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	var setup_us := Time.get_ticks_usec()
 	var reach := _bridge_reach(w)
 	var cost := w.cost
+	var ocean := w.ocean
+	var lake := w.lake
+	var river := w.river_cells()
 	for i in w.N:
-		# Сначала дешёвое условие: результат тот же.
-		if cost[i] == INF and _wet(w, i):
+		# Сначала дешёвое условие: результат тот же (_wet — без вызова на клетку).
+		if cost[i] == INF and (ocean[i] != 0 or lake[i] != 0 or river[i] != 0):
 			road_cost[i] = BRIDGE_COST + edge_cost(_plan_edge_gap(w, i)) if reach[i] <= BRIDGE_REACH else INF
 	_part("roads_setup", setup_us)
 	var tries := PackedInt32Array()
@@ -745,10 +793,11 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 				pair_tries[pair_key] = int(pair_tries.get(pair_key, 0)) + 1
 			_count_failure(failures, state)
 			continue
-		# Магистраль между сильными центрами — дорога, местный подъезд — тропа.
-		# Оба проходят прежнюю проверку безопасного рельефа и сооружений.
+		# Магистраль между сильными центрами — дорога, местный подъезд — тропа; сквозной путь между сильными центрами
+		# через малое поселение становится дорогой после остова (_upgrade_roles). Связь ищется с пределами дороги —
+		# и сглаживается так же, чтобы её можно было повысить без новой линии.
 		var kind := "road" if main_road(st[a], st[b]) else "trail"
-		_add_trail(w, q, kind, road_cost, state.on_axis, surface)
+		_add_trail(w, q, kind, road_cost, state.on_axis, surface, "road")
 		paths.append([a, b, q, true, distance])
 		groups[maxi(ra, rb)] = mini(ra, rb)
 		connected += 1
@@ -768,6 +817,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.main_roads_ms = Time.get_ticks_msec() - started
 	# Нарастающий итог после основных связей: с ним сравнивается политика запасного поиска (prefetch).
 	w.generation_profile.main_roads_search = finder.search_stats()
+	w.generation_profile.upgraded_m = _upgrade_roles(w, paths)
 	finder.use_corridor = true
 	_route_surface(finder, surface, WIDTHS.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
@@ -859,6 +909,165 @@ static func _group(groups: Array, k: int) -> int:
 ## Магистраль между сильными центрами — дорога, иначе местная тропа (тот же признак читает индекс мест).
 static func main_road(a: SettlementData, b: SettlementData) -> bool:
 	return minf(EntityCodec.value(a, "importance", 1.0), EntityCodec.value(b, "importance", 1.0)) >= 0.6
+
+
+## Класс по роли в сети (11.11.2026): связь остова, которая лежит на пути между двумя сильными центрами, — дорога
+## по всей длине, в том числе через малое поселение и по участкам, которые она делит с местной тропой (такой участок
+## тропы делится узлами, и его средняя часть становится дорогой). Ширина постоянна вдоль участка и меняется в узле.
+## Возвращает длину повышенных участков, м.
+static func _upgrade_roles(w: WorldData, paths: Array) -> float:
+	var st := w.settlements
+	var links: Array = []
+	for s in st.size():
+		links.append([])
+	for k in paths.size():
+		var e: Array = paths[k]
+		if e[3]:
+			links[e[0]].append([e[1], k])
+			links[e[1]].append([e[0], k])
+	var strong: Array = []
+	for s in st.size():
+		if EntityCodec.value(st[s], "importance", 1.0) >= 0.6: strong.append(s)
+	var on_road := {}
+	for s: int in strong:
+		var via := {s: -1}
+		var queue: Array = [s]
+		var at := 0
+		while at < queue.size():
+			var c: int = queue[at]
+			at += 1
+			for l: Array in links[c]:
+				if not via.has(l[0]):
+					via[l[0]] = l[1]
+					queue.append(l[0])
+		for t: int in strong:
+			if t <= s or not via.has(t): continue
+			var c := t
+			while via[c] >= 0:
+				var k: int = via[c]
+				on_road[k] = true
+				c = paths[k][0] if paths[k][1] == c else paths[k][1]
+	var before := _kind_length(w, "road")
+	var keys := on_road.keys()
+	keys.sort()
+	for k: int in keys:
+		_upgrade_path(w, paths[k][2])
+	return (_kind_length(w, "road") - before) * GameConfig.TILE
+
+
+static func _kind_length(w: WorldData, kind: String) -> float:
+	var total := 0.0
+	for t: Dictionary in w.trails:
+		if t.kind == kind: total += _kind_length_of(t)
+	return total
+
+
+## Длина линии записи w.trails, клеток
+static func _kind_length_of(t: Dictionary) -> float:
+	var total := 0.0
+	for j in range(1, t.pts.size()):
+		total += Grid.hypot(t.pts[j].x - t.pts[j - 1].x, t.pts[j].y - t.pts[j - 1].y)
+	return total
+
+
+## Участки тропы, по которым идёт путь path, становятся дорогой (короткое касание — пересечение — нет).
+static func _upgrade_path(w: WorldData, path: PackedInt32Array) -> void:
+	var n := path.size()
+	var k := 0
+	while k < n:
+		var owner := w.generation.road_owner
+		var o := owner[path[k]]
+		if o < 0 or w.trails[o].kind != "trail":
+			k += 1
+			continue
+		var e := k
+		while e + 1 < n and owner[path[e + 1]] == o:
+			e += 1
+		if e - k + 1 > CROSS_RUN + 1:
+			_promote(w, o, path[k], path[e])
+		k = e + 1
+
+
+## Часть участка e между клетками c0 и c1 становится дорогой: участок делится в точках оси у этих клеток (узлы),
+## концы короче трёх клеток остаются с дорогой. Вершины линии не двигаются.
+static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
+	var cells: PackedInt32Array = w.generation.road_cells[e]
+	var k0 := cells.find(c0)
+	var k1 := cells.find(c1)
+	if k0 < 0 or k1 < 0:
+		return
+	if k0 > k1:
+		var swap := k0
+		k0 = k1
+		k1 = swap
+	if k0 <= 2: k0 = 0
+	if k1 >= cells.size() - 3: k1 = cells.size() - 1
+	var pts: Array = w.trails[e].pts
+	var cuts: Array = []
+	for k: int in [k0, k1]:
+		if k == 0:
+			cuts.append([1, Vector2(pts[0].x, pts[0].y), 0.0])
+		elif k == cells.size() - 1:
+			cuts.append([pts.size() - 1, Vector2(pts[-1].x, pts[-1].y), INF])
+		else:
+			cuts.append(_locate(pts, Vector2(cells[k] % w.W + 0.5, cells[k] / w.W + 0.5)))
+	if cuts[0][2] > cuts[1][2]:
+		return # клетки и ось разошлись: не режем наугад
+	var road_pts: Array = [_point(cuts[0][1], WIDTHS.road)]
+	for j in range(cuts[0][0], cuts[1][0]):
+		road_pts.append(_point(Vector2(pts[j].x, pts[j].y), WIDTHS.road))
+	road_pts.append(_point(cuts[1][1], WIDTHS.road))
+	var parts: Array = []
+	if k0 > 0:
+		var head: Array = pts.slice(0, cuts[0][0])
+		head.append(_point(cuts[0][1], WIDTHS.trail))
+		parts.append([_dedupe(head), cells.slice(0, k0 + 1)])
+	if k1 < cells.size() - 1:
+		var tail: Array = [_point(cuts[1][1], WIDTHS.trail)]
+		tail.append_array(pts.slice(cuts[1][0]))
+		parts.append([_dedupe(tail), cells.slice(k1)])
+	var record: Dictionary = w.trails[e]
+	record.kind = "road"
+	record.pts = _dedupe(road_pts)
+	w.generation.road_cells[e] = cells.slice(k0, k1 + 1)
+	var owner := w.generation.road_owner
+	for part: Array in parts:
+		var index := w.trails.size()
+		w.trails.append({kind = "trail", pts = part[0]})
+		w.generation.road_cells.append(part[1])
+		for c: int in part[1]:
+			if owner[c] == e and not (w.generation.road_cells[e] as PackedInt32Array).has(c): owner[c] = index
+	w.generation.road_owner = owner
+	Grid.stamp_path(w.path_mask, w.W, w.H, record.pts, 3, WIDTHS.road * 0.5 - Grid.PATH_IN)
+
+
+static func _point(p: Vector2, width: float) -> Dictionary:
+	return {x = p.x, y = p.y, w = width}
+
+
+static func _dedupe(pts: Array) -> Array:
+	var out: Array = [pts[0]]
+	for j in range(1, pts.size()):
+		if Vector2(pts[j].x, pts[j].y).distance_squared_to(Vector2(out[-1].x, out[-1].y)) > 0.000001:
+			out.append(pts[j])
+	return out
+
+
+## Ближайшая к p точка оси: [номер вершины конца отрезка, точка, расстояние вдоль оси]
+static func _locate(pts: Array, p: Vector2) -> Array:
+	var best: Array = [1, Vector2(pts[0].x, pts[0].y), 0.0]
+	var best_d := INF
+	var along := 0.0
+	for j in range(1, pts.size()):
+		var a := Vector2(pts[j - 1].x, pts[j - 1].y)
+		var b := Vector2(pts[j].x, pts[j].y)
+		var q := Geometry2D.get_closest_point_to_segment(p, a, b)
+		var d := p.distance_squared_to(q)
+		if d < best_d:
+			best_d = d
+			best = [j, q, along + a.distance_to(q)]
+		along += a.distance_to(b)
+	return best
 
 
 ## Дешёвая оценка направления до A*: ширина воды, крутизна и важность центров.
@@ -1032,7 +1241,9 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if neighbor:
 				pairs.append([a, b, d])
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] < q[2] if p[2] != q[2] else _key(p[0], p[1]) < _key(q[0], q[1]))
+	w.generation_profile.second_ways = []
 	var network := _network_cost(w)
+	var near := _net_near(w)
 	for index in pairs.size():
 		if finder.search_budget == 0: break
 		var e: Array = pairs[index]
@@ -1047,25 +1258,27 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var link := _land_path(finder, w.cost, a, b, TRAIL_CLIMB)
 			var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
 			if not joint.is_empty():
-				_add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface"))
+				_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
 				paths.append([e[0], e[1], joint, false, e[2]])
 				network = _network_cost(w)
+				near = _net_near(w)
 			continue
 		var old_len := _length(w, old)
 		if old.is_empty() or old_len <= e[2] * SHORTCUT:
 			continue
 		var corr := _corridor(w, [old])
-		var avoiding := _avoiding(w, corr)
+		var avoiding := _avoiding(w, _open_ends(w, corr, a, b))
 		var p := _land_path(finder, avoiding, a, b, TRAIL_CLIMB)
-		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(p, corr) > AVOID_SHARE or not _new_ground(w, p):
+		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(p, corr) > AVOID_SHARE or not _new_ground(w, p) or not _adds_network(w, p, near):
 			continue
 		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q))
+			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q) and _adds_network(w, q, near))
 		if q.is_empty():
 			continue
-		_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
+		_note_way(w, "shortcut", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 		paths.append([e[0], e[1], q, false, e[2]])
 		network = _network_cost(w)
+		near = _net_near(w)
 	# Проверяем каждую основную связь; плоская копия соседней дороги сама по себе не повод для петли.
 	var primary_paths := paths.duplicate()
 	for index in primary_paths.size():
@@ -1076,17 +1289,18 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if step.is_valid():
 			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
 		var corr := _corridor(w, [e[2]])
-		var avoiding := _avoiding(w, corr)
+		var avoiding := _avoiding(w, _open_ends(w, corr, st[e[0]].i, st[e[1]].i))
 		var p := _land_path(finder, avoiding, st[e[0]].i, st[e[1]].i, TRAIL_CLIMB)
 		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(p, corr) > AVOID_SHARE \
-				or not _new_ground(w, p) or not _different_relief(w, p, e[2]):
+				or not _new_ground(w, p) or not _different_relief(w, p, e[2]) or not _adds_network(w, p, near) or _far_share(w, p, e[2]) < FAR_SHARE:
 			continue
 		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q) and _different_relief(w, q, e[2]))
+			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q) and _different_relief(w, q, e[2]) and _adds_network(w, q, near) and _far_share(w, q, e[2]) >= FAR_SHARE)
 		if q.is_empty():
 			continue
-		_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
+		_note_way(w, "alternative", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 		paths.append([e[0], e[1], q, false, e[4]])
+		near = _net_near(w)
 	# Берег — самостоятельная цель исследования, даже у поселения с несколькими дорогами.
 	var all_paths: Array = []
 	for e in paths:
@@ -1112,13 +1326,21 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 				source = s.i # У единственного поселения ещё нет общей линии пути.
 			var p := _land_path(finder, w.cost, source, t, TRAIL_CLIMB)
 			var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
-			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p):
+			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p) and _adds_network(w, p, near):
 				var q := _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE,
-					func(q: PackedInt32Array) -> bool: return _length(w, q) <= d * BRANCH_LEN and _new_ground(w, q))
+					func(q: PackedInt32Array) -> bool: return _length(w, q) <= d * BRANCH_LEN and _new_ground(w, q) and _adds_network(w, q, near))
 				if q.is_empty():
 					continue
-				_add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface"))
+				_note_way(w, "shore", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 				all_paths.append(q)
+				near = _net_near(w)
+
+
+## Какие записи w.trails добавил каждый вид вторых путей (стенд road_plan_test)
+static func _note_way(w: WorldData, what: String, added: Array) -> void:
+	var notes: Array = w.generation_profile.get("second_ways", [])
+	notes.append([what, added])
+	w.generation_profile.second_ways = notes
 
 
 static func _nearest_path(w: WorldData, target: int, radius: int) -> int:
@@ -1184,6 +1406,107 @@ static func _new_ground(w: WorldData, p: PackedInt32Array) -> bool:
 	return fresh > p.size() * 0.5
 
 
+## 11.11.2026: второй путь не повторяет готовую сеть сбоку. Доля его новых клеток (не на сети), которые идут ближе
+## NEAR_NET клеток к сети на той же высоте (разница меньше LEVEL_GAP м: полка выше по склону — другой уровень, это
+## годится), кроме первых и последних NODE_CELLS клеток (подход к узлу всегда рядом с сетью).
+## near — Grid.distance_field от клеток сети (_net_near).
+const NODE_CELLS := 8
+const NEAR_NET := 8.0       # 32 м
+const LEVEL_GAP := 12.0     # м: склон 30 % в 30 м по горизонтали — ещё тот же склон
+const PARALLEL_SHARE := 0.25
+const PARALLEL_RUN := 15     # клеток (60 м) подряд вдоль сети — уже второе полотно
+const REJOIN_GAP := 40      # клеток пути: второе касание того же участка ближе этого — путь петляет через дорогу
+const FAR_R := 10.0         # обход уходит от своей связи дальше этого (клеток, 40 м)
+const FAR_SHARE := 0.3      # хотя бы такой долей
+
+
+## Клетки сети (участки путей людей) и расстояние до них
+static func _net_cells(w: WorldData) -> PackedByteArray:
+	var net := PackedByteArray()
+	net.resize(w.N)
+	var owner := w.generation.road_owner
+	for i in w.N:
+		if owner[i] >= 0: net[i] = 1
+	return net
+
+
+static func _net_near(w: WorldData) -> PackedFloat32Array:
+	return Grid.distance_field(w.W, w.H, _net_cells(w))
+
+
+## Вдоль сети: Vector2(доля, самый длинный подряд участок в клетках) новых клеток пути (net[i] == 0), которые идут
+## ближе NEAR_NET клеток к сети на той же высоте. near — Grid.distance_field от net. Общий для вторых путей и RideRoutes.
+static func _parallel_stats(w: WorldData, p: PackedInt32Array, near: PackedFloat32Array, net: PackedByteArray) -> Vector2:
+	var fresh := 0
+	var side := 0
+	var run := 0
+	var longest := 0
+	var r := ceili(NEAR_NET)
+	for k in range(NODE_CELLS, p.size() - NODE_CELLS):
+		var i := p[k]
+		if net[i] != 0:
+			run = 0
+			continue
+		fresh += 1
+		var level := INF
+		if near[i] <= NEAR_NET:
+			var x := i % w.W
+			var y := i / w.W
+			var reach := near[i] + 0.75
+			for dy in range(-r, r + 1):
+				for dx in range(-r, r + 1):
+					var nx := x + dx
+					var ny := y + dy
+					if nx < 0 or ny < 0 or nx >= w.W or ny >= w.H or dx * dx + dy * dy > reach * reach: continue
+					var j := ny * w.W + nx
+					if net[j] != 0: level = minf(level, absf(w.h[j] - w.h[i]) * HEIGHT_SCALE * GameConfig.TILE)
+		if level < LEVEL_GAP:
+			side += 1
+			run += 1
+			longest = maxi(longest, run)
+		else:
+			run = 0
+	return Vector2(float(side) / fresh if fresh > 0 else 0.0, longest)
+
+
+## Путь дважды касается одного участка сети (пересекает или примыкает) ближе REJOIN_GAP клеток друг от друга:
+## повторное пересечение, Z-образный заход на дорогу и обратно. Касания на концах пути (узлы) не считаются.
+static func _rejoins(w: WorldData, p: PackedInt32Array) -> bool:
+	var owner := w.generation.road_owner
+	var n := p.size()
+	var first := 0
+	while first < n and owner[p[first]] >= 0: first += 1
+	var last := n - 1
+	while last >= 0 and owner[p[last]] >= 0: last -= 1
+	var seen := {}
+	var previous := -1
+	for k in range(first, last + 1):
+		var o := owner[p[k]]
+		if o >= 0 and o != previous:
+			if seen.has(o) and k - int(seen[o]) < REJOIN_GAP: return true
+		if o < 0 and previous >= 0: seen[previous] = k
+		previous = o
+	return false
+
+
+## Доля клеток пути p дальше FAR_R от клеток пути from
+static func _far_share(w: WorldData, p: PackedInt32Array, from: PackedInt32Array) -> float:
+	var src := PackedByteArray()
+	src.resize(w.N)
+	for i: int in from: src[i] = 1
+	var dist := Grid.distance_field(w.W, w.H, src)
+	var far := 0
+	for i: int in p:
+		if dist[i] > FAR_R: far += 1
+	return float(far) / maxi(1, p.size())
+
+
+## Годится ли новый путь как дополнение сети: не вдоль неё и без повторных пересечений
+static func _adds_network(w: WorldData, p: PackedInt32Array, near: PackedFloat32Array) -> bool:
+	var side := _parallel_stats(w, p, near, _net_cells(w))
+	return side.x <= PARALLEL_SHARE and side.y <= PARALLEL_RUN and not _rejoins(w, p)
+
+
 ## Более низкий перевал или другой уровень долины/склона дают осмысленный выбор направления.
 static func _different_relief(w: WorldData, a: PackedInt32Array, b: PackedInt32Array) -> bool:
 	var top_a := -INF
@@ -1216,6 +1539,23 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 			bd = d
 			best = i
 	return best
+
+
+## 11.11.2026: у концов второй путь может идти по готовой сети — развилка в стороне от поселения, а не второе полотно
+## рядом с первым от самого поселения (коридор избегания раньше отталкивал его сразу от общего конца).
+const OPEN_END := 12.0 # клеток (48 м)
+
+
+static func _open_ends(w: WorldData, near: PackedByteArray, a: int, b: int) -> PackedByteArray:
+	var out := near.duplicate()
+	var r := ceili(OPEN_END)
+	for c: int in [a, b]:
+		var cx := c % w.W
+		var cy := c / w.W
+		for y in range(maxi(0, cy - r), mini(w.H, cy + r + 1)):
+			for x in range(maxi(0, cx - r), mini(w.W, cx + r + 1)):
+				if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= OPEN_END * OPEN_END: out[y * w.W + x] = 0
+	return out
 
 
 ## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в AVOID_MUL раз дороже

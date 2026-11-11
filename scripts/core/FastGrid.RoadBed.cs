@@ -8,8 +8,11 @@ public partial class FastGrid
 	// Копия RoadBed.refine (scripts/game/road_bed.gd) для игрового рельефа без OuterLand и без метровой сетки.
 	// DOD: один вызов на этап, на входе и выходе только массивы; пути — столбцами (CSR по точкам).
 	// Арифметика как в GDScript: double в расчётах, float32 в PackedFloat32Array (xs, zs, half, g, near,
-	// best_w, best_h, pin, weight, target, hv). Пути не зависят друг от друга до слияния, поэтому считаются
-	// параллельно (каждому потоку — свои near/slot), а слияние идёт строго по порядку путей.
+	// best_w, best_h, pin, weight, target, hv).
+	// 11.11.2026: три прохода. 1) профиль каждого пути (параллельно); 2) узлы: путь, который касается пути, обработанного
+	// раньше (порядок — дороги, тропы, горные тропы, внутри вида по номеру), подтягивает свой профиль к его высоте в точке
+	// касания — у узла одна высота (последовательно, дёшево); 3) клетки рельефа (параллельно), слияние путей — среднее
+	// по весам, а не победитель (строго по порядку путей).
 
 	private static double RbClamp(double v, double lo, double hi) => v < lo ? lo : (v > hi ? hi : v);
 
@@ -27,6 +30,15 @@ public partial class FastGrid
 		public int[] Cells = Array.Empty<int>();
 		public float[] Weight = Array.Empty<float>();
 		public float[] Height = Array.Empty<float>();
+	}
+
+	private sealed class RbProfile
+	{
+		public float[] Xs = Array.Empty<float>();
+		public float[] Zs = Array.Empty<float>();
+		public float[] Half = Array.Empty<float>();
+		public double[] Prof = Array.Empty<double>();
+		public double[] Fade = Array.Empty<double>();
 	}
 
 	/// <summary>RoadBed._pins: доля полотна у каждой точки рельефа (0 у осей мостов/туннелей и у воды).
@@ -57,8 +69,8 @@ public partial class FastGrid
 	}
 
 	/// <summary>RoadBed.refine для всех путей мира. kinds — номер вида на путь (параметры в kindParams по шесть:
-	/// flat, shoulder, window, keep, cut, side), starts — CSR по точкам, px/py/pw — x, y, w точек в клетках.
-	/// Возвращает {hv — рельеф после полотна, changed — изменённые клетки}.</summary>
+	/// flat, shoulder, window, keep, cut, side; номер вида — его место в порядке обработки), starts — CSR по точкам,
+	/// px/py/pw — x, y, w точек в клетках. Возвращает {hv — рельеф после полотна, changed — изменённые клетки}.</summary>
 	public Godot.Collections.Dictionary RoadBedRefine(int w, int h, double tile, float[] hv, float[] waterLevel,
 		float[] distWater, int[] structureEnds, int[] kinds, int[] starts, double[] px, double[] py, double[] pw,
 		double[] kindParams, byte[] frozen, double step, double steepLo, double steepHi, double shoreLo, double shoreHi,
@@ -69,9 +81,17 @@ public partial class FastGrid
 		if (frozen.Length == n)
 			for (int i = 0; i < n; i++) if (frozen[i] != 0) pin[i] = 0.0f;
 		int trails = kinds.Length;
-		var results = new RbTrail[trails];
+		var order = RbOrder(kinds);
+		var profiles = new RbProfile[trails];
 		int parts = Math.Clamp(System.Environment.ProcessorCount, 1, 8);
 		var ground = hv; // читают все пути; пишется только после слияния
+		Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, part =>
+		{
+			for (int t = part; t < trails; t += parts)
+				profiles[t] = RbProfileOf(w, h, tile, ground, kindParams, kinds[t] * 6, starts[t], starts[t + 1], px, py, pw, step, steepLo, steepHi);
+		});
+		RbJoin(w, h, tile, pin, order, starts, px, py, profiles, kindParams, kinds, step);
+		var results = new RbTrail[trails];
 		Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, part =>
 		{
 			var near = new float[n];
@@ -79,36 +99,50 @@ public partial class FastGrid
 			var slot = new int[n];
 			Array.Fill(slot, -1);
 			for (int t = part; t < trails; t += parts)
-				results[t] = RbTrailRefine(w, h, tile, ground, pin, near, slot, kindParams, kinds[t] * 6, starts[t], starts[t + 1],
-					px, py, pw, step, steepLo, steepHi);
+				results[t] = RbStamp(w, h, tile, ground, pin, near, slot, kindParams, kinds[t] * 6, profiles[t]);
 		});
 		var weight = new float[n];
-		var target = new float[n];
-		for (int t = 0; t < trails; t++)
+		var sum = new double[n];
+		var total = new double[n];
+		foreach (int t in order)
 		{
 			var r = results[t];
 			for (int j = 0; j < r.Cells.Length; j++)
 			{
 				int i = r.Cells[j];
-				if (r.Weight[j] > weight[i]) { weight[i] = r.Weight[j]; target[i] = r.Height[j]; }
+				double wj = r.Weight[j];
+				if (wj <= 0.0) continue;
+				sum[i] += wj * r.Height[j];
+				total[i] += wj;
+				if (r.Weight[j] > weight[i]) weight[i] = r.Weight[j];
 			}
 		}
 		var changed = new List<int>();
 		for (int i = 0; i < n; i++)
 		{
 			if (weight[i] <= 0.0f || !float.IsNegativeInfinity(waterLevel[i])) continue;
+			float target = (float)(sum[i] / total[i]);
 			double old = hv[i];
-			double v = RoadLerp(old, target[i], weight[i]);
+			double v = RoadLerp(old, target, weight[i]);
 			if (v < old) v = Math.Max(v, Math.Min(old, RoadWet(waterLevel, w, h, i) + waterGap));
 			if (Math.Abs(v - old) > 0.005) { hv[i] = (float)v; changed.Add(i); }
 		}
 		return new Godot.Collections.Dictionary { ["hv"] = hv, ["changed"] = changed.ToArray() };
 	}
 
-	private static RbTrail RbTrailRefine(int w, int h, double tile, float[] hv, float[] pin, float[] near, int[] slot,
-		double[] kp, int kAt, int from, int to, double[] px, double[] py, double[] pw, double step, double steepLo, double steepHi)
+	/// <summary>Порядок обработки: по номеру вида (дорога, тропа, горная тропа), внутри вида — по номеру пути.</summary>
+	private static int[] RbOrder(int[] kinds)
 	{
-		double flat = kp[kAt], shoulder = kp[kAt + 1], window = kp[kAt + 2], keep = kp[kAt + 3], cut = kp[kAt + 4], side = kp[kAt + 5];
+		var order = new int[kinds.Length];
+		for (int t = 0; t < order.Length; t++) order[t] = t;
+		Array.Sort(order, (a, b) => kinds[a] != kinds[b] ? kinds[a].CompareTo(kinds[b]) : a.CompareTo(b));
+		return order;
+	}
+
+	private static RbProfile RbProfileOf(int w, int h, double tile, float[] hv, double[] kp, int kAt, int from, int to,
+		double[] px, double[] py, double[] pw, double step, double steepLo, double steepHi)
+	{
+		double window = kp[kAt + 2], keep = kp[kAt + 3], cut = kp[kAt + 4];
 		var xs = new List<float>();
 		var zs = new List<float>();
 		var half = new List<float>();
@@ -136,29 +170,167 @@ public partial class FastGrid
 			sum[i + 1] = sum[i] + g[i];
 		}
 		int win = (int)(window / step);
-		var touched = new List<int>();
-		var bestW = new List<float>();
-		var bestH = new List<float>();
-		double reach = flat + shoulder;
+		var prof = new double[count];
+		var fade = new double[count];
 		for (int i = 0; i < count; i++)
 		{
 			int r = Math.Min(win, Math.Min(i, count - 1 - i));
 			double smooth = (sum[i + r + 1] - sum[i - r]) / (2 * r + 1);
-			double prof = RbClamp(smooth + keep * (g[i] - smooth), g[i] - cut, g[i] + cut);
+			prof[i] = RbClamp(smooth + keep * (g[i] - smooth), g[i] - cut, g[i] + cut);
 			double gx = RoadGround(hv, w, h, tile, xs[i] + 2.0, zs[i]) - RoadGround(hv, w, h, tile, xs[i] - 2.0, zs[i]);
 			double gz = RoadGround(hv, w, h, tile, xs[i], zs[i] + 2.0) - RoadGround(hv, w, h, tile, xs[i], zs[i] - 2.0);
-			double fade = 1.0 - RoadSmooth(steepLo, steepHi, Math.Sqrt(gx * gx + gz * gz) / 4.0);
+			fade[i] = 1.0 - RoadSmooth(steepLo, steepHi, Math.Sqrt(gx * gx + gz * gz) / 4.0);
+		}
+		return new RbProfile { Xs = xs.ToArray(), Zs = zs.ToArray(), Half = half.ToArray(), Prof = prof, Fade = fade };
+	}
+
+	private const double RbJoinTouch = 0.05; // клеток: конец на оси другого пути
+	private const double RbJoinGrade = 0.08; // добавленный продольный уклон при подтягивании к узлу
+	private const double RbJoinMin = 6.0, RbJoinMax = 30.0; // длина перехода, м
+
+	/// <summary>Узлы: для каждого пути по порядку — точки касания с путями раньше него (пересечения отрезков, концы
+	/// на оси); профиль в окрестности точки подтягивается к профилю того пути. Узлы у сооружений и воды (pin < 0,5)
+	/// не трогаются.</summary>
+	private static void RbJoin(int w, int h, double tile, float[] pin, int[] order, int[] starts, double[] px, double[] py,
+		RbProfile[] profiles, double[] kp, int[] kinds, double step)
+	{
+		var rank = new int[order.Length];
+		for (int k = 0; k < order.Length; k++) rank[order[k]] = k;
+		// отрезки по клеткам мира (ячейка 2 × 2 клетки)
+		const int Bin = 2;
+		int bw = (w + Bin - 1) / Bin, bh = (h + Bin - 1) / Bin;
+		var bins = new Dictionary<int, List<int>>();
+		var owner = new List<int>();
+		var segA = new List<int>();
+		for (int t = 0; t < order.Length; t++)
+		{
+			for (int p = starts[t] + 1; p < starts[t + 1]; p++)
+			{
+				int id = owner.Count;
+				owner.Add(t);
+				segA.Add(p - 1);
+				int x0 = Math.Clamp((int)Math.Floor(Math.Min(px[p - 1], px[p]) - RbJoinTouch) / Bin, 0, bw - 1);
+				int x1 = Math.Clamp((int)Math.Floor(Math.Max(px[p - 1], px[p]) + RbJoinTouch) / Bin, 0, bw - 1);
+				int y0 = Math.Clamp((int)Math.Floor(Math.Min(py[p - 1], py[p]) - RbJoinTouch) / Bin, 0, bh - 1);
+				int y1 = Math.Clamp((int)Math.Floor(Math.Max(py[p - 1], py[p]) + RbJoinTouch) / Bin, 0, bh - 1);
+				for (int y = y0; y <= y1; y++)
+					for (int x = x0; x <= x1; x++)
+					{
+						int key = y * bw + x;
+						if (!bins.TryGetValue(key, out var list)) bins[key] = list = new List<int>();
+						list.Add(id);
+					}
+			}
+		}
+		foreach (int t in order)
+		{
+			var contacts = new List<(double x, double y, int host)>();
+			for (int p = starts[t] + 1; p < starts[t + 1]; p++)
+			{
+				double ax = px[p - 1], ay = py[p - 1], bx = px[p], by = py[p];
+				int x0 = Math.Clamp((int)Math.Floor(Math.Min(ax, bx) - RbJoinTouch) / Bin, 0, bw - 1);
+				int x1 = Math.Clamp((int)Math.Floor(Math.Max(ax, bx) + RbJoinTouch) / Bin, 0, bw - 1);
+				int y0 = Math.Clamp((int)Math.Floor(Math.Min(ay, by) - RbJoinTouch) / Bin, 0, bh - 1);
+				int y1 = Math.Clamp((int)Math.Floor(Math.Max(ay, by) + RbJoinTouch) / Bin, 0, bh - 1);
+				bool first = p == starts[t] + 1, last = p == starts[t + 1] - 1;
+				for (int y = y0; y <= y1; y++)
+					for (int x = x0; x <= x1; x++)
+					{
+						if (!bins.TryGetValue(y * bw + x, out var list)) continue;
+						foreach (int id in list)
+						{
+							int host = owner[id];
+							if (rank[host] >= rank[t]) continue;
+							int q = segA[id];
+							double cx = px[q], cy = py[q], dx = px[q + 1], dy = py[q + 1];
+							bool hostFirst = q == starts[host], hostLast = q + 1 == starts[host + 1] - 1;
+							if (RbIntersect(ax, ay, bx, by, cx, cy, dx, dy, out double ix, out double iy)) contacts.Add((ix, iy, host));
+							if (first && RbSegmentDist(ax, ay, cx, cy, dx, dy) < RbJoinTouch) contacts.Add((ax, ay, host));
+							if (last && RbSegmentDist(bx, by, cx, cy, dx, dy) < RbJoinTouch) contacts.Add((bx, by, host));
+							if (hostFirst && RbSegmentDist(cx, cy, ax, ay, bx, by) < RbJoinTouch) contacts.Add((cx, cy, host));
+							if (hostLast && RbSegmentDist(dx, dy, ax, ay, bx, by) < RbJoinTouch) contacts.Add((dx, dy, host));
+						}
+					}
+			}
+			if (contacts.Count == 0) continue;
+			var own = profiles[t];
+			var done = new List<(double x, double y)>();
+			foreach (var c in contacts)
+			{
+				bool seen = false;
+				foreach (var d in done) if ((d.x - c.x) * (d.x - c.x) + (d.y - c.y) * (d.y - c.y) < 0.125 * 0.125) seen = true;
+				if (seen) continue;
+				done.Add((c.x, c.y));
+				int cell = Math.Clamp((int)Math.Floor(c.y), 0, h - 1) * w + Math.Clamp((int)Math.Floor(c.x), 0, w - 1);
+				if (pin[cell] < 0.5f) continue;
+				double mx = c.x * tile, mz = c.y * tile;
+				int s = RbNearest(own, mx, mz);
+				var other = profiles[c.host];
+				double value = other.Prof[RbNearest(other, mx, mz)];
+				double shift = value - own.Prof[s];
+				if (Math.Abs(shift) < 0.001) continue;
+				double reach = Math.Clamp(Math.Abs(shift) / RbJoinGrade, RbJoinMin, RbJoinMax);
+				for (int k = 0; k < own.Prof.Length; k++)
+				{
+					double along = Math.Abs(k - s) * step;
+					if (along >= reach) continue;
+					own.Prof[k] += shift * (1.0 - RoadSmooth(0.0, reach, along));
+				}
+			}
+		}
+	}
+
+	private static int RbNearest(RbProfile p, double x, double z)
+	{
+		int best = 0;
+		double bestD = double.PositiveInfinity;
+		for (int k = 0; k < p.Xs.Length; k++)
+		{
+			double dx = p.Xs[k] - x, dz = p.Zs[k] - z;
+			double d = dx * dx + dz * dz;
+			if (d < bestD) { bestD = d; best = k; }
+		}
+		return best;
+	}
+
+	/// <summary>Пересечение отрезков ab и cd (включая касание концом).</summary>
+	private static bool RbIntersect(double ax, double ay, double bx, double by, double cx, double cy, double dx, double dy, out double ix, out double iy)
+	{
+		ix = 0.0; iy = 0.0;
+		double rx = bx - ax, ry = by - ay, sx = dx - cx, sy = dy - cy;
+		double den = rx * sy - ry * sx;
+		if (Math.Abs(den) < 1e-12) return false;
+		double t = ((cx - ax) * sy - (cy - ay) * sx) / den;
+		double u = ((cx - ax) * ry - (cy - ay) * rx) / den;
+		if (t < -1e-9 || t > 1.0 + 1e-9 || u < -1e-9 || u > 1.0 + 1e-9) return false;
+		ix = ax + rx * t;
+		iy = ay + ry * t;
+		return true;
+	}
+
+	private static RbTrail RbStamp(int w, int h, double tile, float[] hv, float[] pin, float[] near, int[] slot,
+		double[] kp, int kAt, RbProfile p)
+	{
+		double flat = kp[kAt], shoulder = kp[kAt + 1], side = kp[kAt + 5];
+		var touched = new List<int>();
+		var bestW = new List<float>();
+		var bestH = new List<float>();
+		double reach = flat + shoulder;
+		for (int i = 0; i < p.Xs.Length; i++)
+		{
+			double fade = p.Fade[i];
 			if (fade <= 0.0) continue;
-			double outer = half[i] + reach;
-			int x0 = Math.Max(0, (int)Math.Floor((xs[i] - outer) / tile - 0.5));
-			int x1 = Math.Min(w - 1, (int)Math.Ceiling((xs[i] + outer) / tile - 0.5));
-			int z0 = Math.Max(0, (int)Math.Floor((zs[i] - outer) / tile - 0.5));
-			int z1 = Math.Min(h - 1, (int)Math.Ceiling((zs[i] + outer) / tile - 0.5));
+			double prof = p.Prof[i];
+			double outer = p.Half[i] + reach;
+			int x0 = Math.Max(0, (int)Math.Floor((p.Xs[i] - outer) / tile - 0.5));
+			int x1 = Math.Min(w - 1, (int)Math.Ceiling((p.Xs[i] + outer) / tile - 0.5));
+			int z0 = Math.Max(0, (int)Math.Floor((p.Zs[i] - outer) / tile - 0.5));
+			int z1 = Math.Min(h - 1, (int)Math.Ceiling((p.Zs[i] + outer) / tile - 0.5));
 			for (int cz = z0; cz <= z1; cz++)
 			{
 				for (int cx = x0; cx <= x1; cx++)
 				{
-					double ex = (cx + 0.5) * tile - xs[i], ez = (cz + 0.5) * tile - zs[i];
+					double ex = (cx + 0.5) * tile - p.Xs[i], ez = (cz + 0.5) * tile - p.Zs[i];
 					double d = Math.Sqrt(ex * ex + ez * ez);
 					if (d >= outer) continue;
 					int cell = cz * w + cx;
@@ -173,7 +345,7 @@ public partial class FastGrid
 					near[cell] = (float)d;
 					int j = slot[cell];
 					double ground = hv[cell];
-					bestW[j] = (float)((1.0 - RoadSmooth(half[i] + flat, outer, d)) * pin[cell] * fade);
+					bestW[j] = (float)((1.0 - RoadSmooth(p.Half[i] + flat, outer, d)) * pin[cell] * fade);
 					bestH[j] = (float)RbClamp(prof, ground - side, ground + side);
 				}
 			}

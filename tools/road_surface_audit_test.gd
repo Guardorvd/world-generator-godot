@@ -258,10 +258,12 @@ func tread_check() -> void:
 		for j in r.patches[key].color.size():
 			alpha_error = maxf(alpha_error, absf(r.patches[key].color[j].a - flat_mask.patches[key].color[j].a))
 	check(alpha_error == 0.0, "banks and corridor relief cannot cut holes or widen the painted tread")
-	var radius := 1.1 * 0.82 * (1.0 - 0.65 * 0.04)
-	check(is_equal_approx(RoadRefinement.tread_mask(1.1, radius, -1.0, 0.65, false), 0.5)
-		and RoadRefinement.tread_mask(1.1, radius, -1.0, 0.65, false) == RoadRefinement.tread_mask(1.1, radius, 1.0, 0.65, false),
-		"constant-distance edge is independent of random width noise")
+	# 11.11.2026: кромка медленно изгибается (шум ~8 м), но не больше 0,16 м в сторону и без рваного края
+	var radius := 1.1 * (0.84 - 0.65 * 0.04)
+	check(is_equal_approx(RoadRefinement.tread_mask(1.1, radius, 0.0, 0.65, false), 0.5)
+		and absf(RoadRefinement.tread_mask(1.1, radius, 1.0, 0.65, false) - 0.5) <= 0.16 / 0.88 + 0.001
+		and absf(RoadRefinement.tread_mask(1.1, radius, -1.0, 0.65, false) - 0.5) <= 0.16 / 0.88 + 0.001,
+		"tread edge bends slowly within 0.16 m of its constant-distance position")
 	var sample := r.sample(130, 130, w.W)
 	check(sample.surface == RoadSurface.GRAVEL and roundi(r.patches[32 * w.W + 32].uv[0].y) == RoadSurface.GRAVEL \
 		and is_equal_approx(fposmod(r.patches[32 * w.W + 32].uv[0].y, 1.0), 0.25), "singletrack shader channel leaves the physical material ID intact")

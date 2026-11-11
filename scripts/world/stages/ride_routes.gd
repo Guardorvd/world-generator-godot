@@ -41,7 +41,7 @@ const SEARCH_BUDGET := 300000 # раскрытий A* на поиск
 const SEARCHES := 120      # поисков на мир 512 (w.scale = 1)
 const MAX_RIDES := 10      # маршрутов на мир 512
 const SAME_R := 6          # клетки ближе этого к принятому маршруту — «рядом»
-const SAME_SHARE := 0.3    # больше этой доли рядом с принятым — дубликат
+const SAME_SHARE := 0.2    # больше этой доли рядом с принятым — дубликат (11.11.2026: было 0,3 — параллельные спуски)
 const NEW_SHARE := 0.6     # не меньше этой доли — новая земля (дальше NEAR_R от готовой сети)
 const MIN_SCORE := 1.2
 const BLOCK := 24          # виртуальные вершины: самая высокая клетка блока таких размеров (~100 м)
@@ -166,6 +166,9 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			stats.found += 1
 			tally[1] += 1
 			var c := _score(w, hv, dist, path)
+			# 11.11.2026: и не идёт подряд вдоль готовой сети на той же высоте (параллельное полотно)
+			if c.reason.is_empty() and StageTrails._parallel_stats(w, path, dist, net).y > StageTrails.PARALLEL_RUN:
+				c.reason = "вдоль готовой сети"
 			if c.reason.is_empty():
 				if not echo_ready:
 					echo_ready = true
@@ -191,17 +194,18 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		if top.virtual and not top.has("published"):
 			# Подъём к вершине — часть маршрута: публикуется как горная тропа перед первым спуском с неё
 			top.published = "climb_%d" % number
-			StageTrails._add_trail(w, top.approach, "mountain", PackedFloat32Array(), on_axis, surface)
-			w.trails[-1].ride = top.published
-			w.trails[-1].ride_style = "climb"
+			for k: int in StageTrails._add_trail(w, top.approach, "mountain", PackedFloat32Array(), on_axis, surface):
+				w.trails[k].ride = top.published
+				w.trails[k].ride_style = "climb"
 			stats.climbs += 1
 			stats.climb_km += StageTrails._length(w, top.approach) * GameConfig.TILE / 1000.0
 		var path: PackedInt32Array = c.path
-		StageTrails._add_trail(w, path, "mountain" if STYLES[c.search].grade > StageTrails.TRAIL_GRADE else "trail", PackedFloat32Array(), on_axis, surface)
-		var route: Dictionary = w.trails[-1]
-		route.ride = "ride_%d" % number
-		route.ride_style = c.style
-		if top.virtual: route.ride_climb = top.published
+		# Маршрут — участки сети: где он идёт по готовому пути, новых записей нет (11.11.2026)
+		for k: int in StageTrails._add_trail(w, path, "mountain" if STYLES[c.search].grade > StageTrails.TRAIL_GRADE else "trail", PackedFloat32Array(), on_axis, surface):
+			var route: Dictionary = w.trails[k]
+			route.ride = "ride_%d" % number
+			route.ride_style = c.style
+			if top.virtual: route.ride_climb = top.published
 		number += 1
 		stats.km += c.length / 1000.0
 		stats.styles[c.style] = int(stats.styles.get(c.style, 0)) + 1

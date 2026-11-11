@@ -31,7 +31,7 @@ const REGION_TRAILS := 0
 const ROAD_LIFT := 0.05                     # м: полотно над рельефом без мерцания
 const ROAD_COLOR := Color8(0x8e, 0x7d, 0x62)
 const ROAD_STEP := 1.0                      # м: шаг точек ленты вдоль дороги
-const ROAD_ACROSS := [-1.15, -0.6, 0.0, 0.6, 1.15] # доли полуширины: края чуть шире полотна и прозрачны
+const ROAD_ACROSS := [-1.35, -0.65, 0.0, 0.65, 1.35] # доли полуширины: края шире полотна и прозрачны (11.11.2026: общая кромка tread_mask сходит на нет к 1,3 полуширины)
 const ROAD_SHADER := """shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_disabled;
 uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap, repeat_enable;

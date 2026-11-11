@@ -163,7 +163,9 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			finder.release()
 			return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
 		attempts += 1
-		if not _build(w, finder, state, open, nodes[a].i, pair[3]): continue
+		# 11.11.2026: подход к сети плана — того же класса, что её путь в точке примыкания (тропа плана не продолжается дорогой)
+		var kind := "trail" if nodes[b].i < 0 and w.path_mask[pair[3]] == 2 else "road"
+		if not _build(w, finder, state, open, nodes[a].i, pair[3], kind): continue
 		edges.append({from = nodes[a].id, to = nodes[b].id})
 		_join(groups, a, b)
 	# Выходы на свободные стороны: следующий сосед продолжит дорогу, а не начнёт заново.
@@ -282,7 +284,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 
 ## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.
 ## Причина каждого отказа — в state.failures (StageTrails._count_failure).
-static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: PackedByteArray, a: int, b: int) -> bool:
+static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: PackedByteArray, a: int, b: int, kind := "road") -> bool:
 	if a < 0 or b < 0 or a == b or w.cost[a] == INF or w.cost[b] == INF:
 		state.failure = "endpoint"
 		StageTrails._count_failure(state.failures, state)
@@ -301,9 +303,21 @@ static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: Pa
 		StageTrails._count_failure(state.failures, state)
 		return false
 	var old_cost := w.cost.duplicate()
-	StageTrails._add_trail(w, path, "road", PackedFloat32Array(), state.on_axis, state.surface)
-	if not ready_corridor(w, w.trails[-1].pts, open):
-		w.trails.pop_back()
+	# 11.11.2026: путь публикуется участками сети (StageTrails._add_trail) — откатываются все новые и данные сети
+	StageTrails._net_ready(w)
+	var old_count := w.trails.size()
+	var old_owner := w.generation.road_owner.duplicate()
+	var old_side := w.generation.road_side.duplicate()
+	var old_protected := w.generation.road_protected.duplicate()
+	var ready := true
+	for k: int in StageTrails._add_trail(w, path, kind, PackedFloat32Array(), state.on_axis, state.surface, "road"):
+		ready = ready and ready_corridor(w, w.trails[k].pts, open)
+	if not ready:
+		w.trails.resize(old_count)
+		w.generation.road_cells.resize(old_count)
+		w.generation.road_owner = old_owner
+		w.generation.road_side = old_side
+		w.generation.road_protected = old_protected
 		w.cost = old_cost
 		StageTrails._restore_structures(w, finder, state, ctx)
 		state.failure = "corridor"

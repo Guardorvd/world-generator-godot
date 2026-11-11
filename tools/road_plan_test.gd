@@ -8,6 +8,7 @@ extends SceneTree
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
 
 const SelfTest := preload("res://tools/selftest.gd")
+const Metrics := preload("res://tools/road_network_metrics.gd")
 const SIZE := 512
 const DIR := "user://road_plan_test"
 const KEYS := ["stage_ms", "main_roads_ms", "secondary_roads_ms", "mountain_trails_ms", "settlement_attempts",
@@ -82,6 +83,7 @@ func _initialize() -> void:
 		if key in KEYS or key.begins_with("mountain_"): profile[key] = w.generation_profile[key]
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
 	print("PROFILE ", JSON.stringify(profile))
+	print("SECOND WAYS ", JSON.stringify(w.generation_profile.get("second_ways", [])), " повышено до дорог, м: ", w.generation_profile.get("upgraded_m", 0))
 	for link: Array in w.generation_profile.get("road_links", []):
 		print("  связь %d→%d, %d клеток: запас %d, %s, %.0f мс (поиск %.0f)" % link)
 	for why: Dictionary in w.generation_profile.get("site_failures", []):
@@ -116,6 +118,67 @@ func _initialize() -> void:
 	var fails := 0
 	if "--rides" in args:
 		fails += _rides(w, final, seed_text)
+	# --metrics: измеритель сети (tools/road_network_metrics.gd) и картинка tools/control/runs/network/<сид>[-<метка>].png
+	if "--metrics" in args:
+		started = Time.get_ticks_msec()
+		var trodden := w.cost
+		StageTrails._build_cost(w)
+		var base := w.cost
+		w.cost = trodden
+		var m: Dictionary = Metrics.measure(w, base)
+		print("NETWORK ", JSON.stringify(Metrics.summary(m)))
+		var tag := _arg(args, "--tag", "")
+		var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
+		Metrics.draw(w, m, file)
+		print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
+	# --bed: полотно RoadBed на этой сети — GDScript и C# побайтно, время обоих (dod_verify без своей фикстуры)
+	if "--bed" in args:
+		var base := Heightfield.new(w, false)
+		var slow := base.copy()
+		var fast := base.copy()
+		var t0 := Time.get_ticks_usec()
+		RoadBed.allow_fast = false
+		var slow_changed := RoadBed.refine(slow)
+		var slow_ms := (Time.get_ticks_usec() - t0) / 1000.0
+		t0 = Time.get_ticks_usec()
+		RoadBed.allow_fast = true
+		var fast_changed := RoadBed.refine(fast)
+		var fast_ms := (Time.get_ticks_usec() - t0) / 1000.0
+		var same := slow_changed == fast_changed and slow.hv.to_byte_array() == fast.hv.to_byte_array()
+		var gap := 0.0
+		for i in w.N: gap = maxf(gap, absf(slow.hv[i] - fast.hv[i]))
+		print("RoadBed: GDScript %.0f мс, C# %.0f мс, клеток %d, %s (наибольшая разница %.6f м)" % [slow_ms, fast_ms, fast_changed.size(),
+			"совпадает побайтно" if same else "РАСХОДИТСЯ", gap])
+		if not same: fails += 1
+		# --refine: и метровая сетка RoadRefinement на этом полотне — GDScript и C# побайтно (долго: GDScript ~1 мин)
+		if "--refine" in args:
+			fast.structures = base.structures
+			fast.build_structures()
+			var built := {}
+			for native: bool in [false, true]:
+				RoadRefinement.allow_fast_index = native
+				RoadRefinement.allow_fast_patches = native
+				t0 = Time.get_ticks_usec()
+				built[native] = RoadRefinement.build(fast)
+				print("RoadRefinement %s: %.0f мс, патчей %d" % ["C#" if native else "GDScript", (Time.get_ticks_usec() - t0) / 1000.0, built[native].patches.size()])
+			var a: RoadRefinement = built[false]
+			var b: RoadRefinement = built[true]
+			var equal := var_to_bytes(a.patches) == var_to_bytes(b.patches) and var_to_bytes(a.fit_routes) == var_to_bytes(b.fit_routes)
+			print("RoadRefinement: GDScript и C# ", "совпадают побайтно" if equal else "РАСХОДЯТСЯ")
+			if not equal: fails += 1
+	# --probe x,y: пути людей ближе 12 клеток к точке (номер, вид, длина, концы, ближайшее расстояние)
+	var probe := _arg(args, "--probe", "")
+	if not probe.is_empty():
+		var at := Vector2(float(probe.get_slice(",", 0)), float(probe.get_slice(",", 1)))
+		for k in w.trails.size():
+			var t: Dictionary = w.trails[k]
+			if t.kind == "animal": continue
+			var best := INF
+			for j in range(1, t.pts.size()):
+				best = minf(best, Grid.segment_dist(at.x, at.y, t.pts[j - 1].x, t.pts[j - 1].y, t.pts[j].x, t.pts[j].y))
+			if best <= 12.0:
+				print("  путь %d %s%s: %d точек, %.0f м, (%.1f,%.1f)→(%.1f,%.1f), до точки %.1f кл" % [k, t.kind, " " + str(t.ride) if t.has("ride") else "",
+					t.pts.size(), StageTrails._kind_length_of(t) * GameConfig.TILE, t.pts[0].x, t.pts[0].y, t.pts[-1].x, t.pts[-1].y, best])
 	# Через JSON, как в файле: числа сравниваются одного вида.
 	var print_out: Dictionary = JSON.parse_string(JSON.stringify(_fingerprint(w)))
 	print("FINGERPRINT ", JSON.stringify(print_out))
