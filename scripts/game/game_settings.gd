@@ -49,6 +49,14 @@ const FLORA_LEVELS := [
 	{title = "высокое", density = 1.0, grass = 1.0, grow = 1.0, far_form = 24.0, detail = 1.0, reach = 1.0, shadows = true},
 ]
 const DEFAULT_FLORA := 2
+# 11.11.2026: частицы окружения (AmbientParticles): название и множитель плотности
+const PARTICLE_LEVELS := [
+	{title = "выключены", density = 0.0},
+	{title = "мало", density = 0.4},
+	{title = "обычно", density = 0.75},
+	{title = "много", density = 1.0},
+]
+const DEFAULT_PARTICLES := 2
 
 var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y
@@ -62,6 +70,7 @@ var msaa := 2 # прежнее MSAA 4x
 var vsync := true
 var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
 var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
+var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
 var shadows := DEFAULT_SHADOWS # только тени направленного света
 var lighting := DEFAULT_LIGHTING
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
@@ -105,6 +114,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	lighting = roundi(_number(cfg, "view", "lighting", lighting, 0, 2))
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
+	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
@@ -193,6 +203,7 @@ func reset_defaults() -> void:
 	lighting = DEFAULT_LIGHTING
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
+	particles = DEFAULT_PARTICLES
 	volume = DEFAULT_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
 	start_hour = DEFAULT_START_HOUR
@@ -215,6 +226,7 @@ func save_settings() -> Error:
 	cfg.set_value("view", "lighting", lighting)
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
+	cfg.set_value("view", "particles", particles)
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
@@ -238,7 +250,7 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting}
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting, particles = particles}
 
 
 func set_display_state(state: Dictionary) -> void:
@@ -250,6 +262,7 @@ func set_display_state(state: Dictionary) -> void:
 	shadows = state.shadows
 	draw = state.draw
 	flora = state.get("flora", flora)
+	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
 
 

@@ -776,6 +776,21 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
 
+[node name="ParticlesRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="ParticlesLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ParticlesRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Пылинки, пух, падающие листья, мошкара, светлячки, снег и песок в воздухе. На скорость игры почти не влияют."
+mouse_filter = 1
+text = "Частицы в воздухе"
+
+[node name="ParticlesOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/ParticlesRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+
 [node name="LightingRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2
 

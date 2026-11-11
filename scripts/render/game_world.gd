@@ -346,6 +346,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	ambient.name = "AmbientParticles"
 	add_child(ambient)
 	ambient.setup(world, heights)
+	ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density
 	crash = BikeCrash.new()
 	crash.name = "BikeCrash"
 	add_child(crash)
@@ -586,6 +587,8 @@ func set_paused(p: bool) -> void:
 		_apply_shadows() # тени меняются в настройках на паузе
 		var redraw := vegetation.set_draw(services.settings.draw) # и дальность прорисовки (с 9.8+)
 		redraw = vegetation.set_flora(services.settings.flora) or redraw # и качество растительности (16.0)
+		if ambient != null:
+			ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density
 		if redraw:
 			stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	audio.set_paused(p or travel_active())

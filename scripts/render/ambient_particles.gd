@@ -52,6 +52,7 @@ const LEAF_TINT := {
 }
 
 var density := 1.0
+var _applied_density := 1.0
 var world: WorldData
 var heights: Heightfield
 var _mats: Dictionary = {}      # id → ShaderMaterial
@@ -209,6 +210,11 @@ func _apply(sunlight: float) -> void:
 func update(dt: float, eye: Vector3, sunlight: float) -> void:
 	_clock += dt
 	_sample_in -= dt
+	if density != _applied_density:
+		# настройка изменилась: пересчитать цели сразу, не дожидаясь следующего чтения окружения
+		_applied_density = density
+		if not _context.is_empty():
+			_retarget()
 	if _sample_in <= 0.0 and not _forced:
 		_sample_in = SAMPLE_EVERY
 		_context = read_context(eye, sunlight)
@@ -216,7 +222,7 @@ func update(dt: float, eye: Vector3, sunlight: float) -> void:
 	var blend := 1.0 - exp(-dt * 0.6)
 	for id: String in _amounts:
 		_amounts[id] = lerpf(_amounts[id], _targets[id], blend)
-	_ground_amount = lerpf(_ground_amount, _targets.get("leaves", 0.0), blend)
+	_ground_amount = lerpf(_ground_amount, _targets.get("leaves", 0.0), blend) if density > 0.0 else 0.0
 	_apply(sunlight)
 	_update_ground(dt, eye)
 

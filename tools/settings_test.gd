@@ -56,6 +56,15 @@ func _initialize() -> void:
 	GameContext.scope.settings.flora = 0
 	GameContext.scope.settings.reset_defaults()
 	_check(GameContext.scope.settings.flora == GameSettings.DEFAULT_FLORA, "сброс настроек возвращает качество растительности")
+	var particles_cfg := ConfigFile.new()
+	particles_cfg.set_value("view", "particles", 0)
+	GameContext.scope.settings._apply_config(particles_cfg)
+	_check(GameContext.scope.settings.particles == 0 and GameContext.scope.settings.display_state().particles == 0, "частицы окружения читаются из файла")
+	particles_cfg.set_value("view", "particles", 99)
+	GameContext.scope.settings._apply_config(particles_cfg)
+	_check(GameContext.scope.settings.particles == GameSettings.PARTICLE_LEVELS.size() - 1, "частицы окружения ограничены списком")
+	GameContext.scope.settings.reset_defaults()
+	_check(GameContext.scope.settings.particles == GameSettings.DEFAULT_PARTICLES, "сброс настроек возвращает частицы окружения")
 	GameContext.scope.settings._apply_config(cfg)
 	_check(not GameContext.scope.settings.shadows and GameContext.scope.settings.last_seed == "Север-1234",
 		"исправные поля читаются даже при повреждении соседних")
