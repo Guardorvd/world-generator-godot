@@ -354,6 +354,12 @@ func _limbs(side: float) -> void:
 	local_loft("Hand" + s, [Vector3(-side * 0.03, -0.025, -0.005), Vector3(-side * 0.046, -0.012, -0.018), Vector3(-side * 0.032, 0.006, -0.036)], [Vector2(0.015, 0.017), Vector2(0.018, 0.019), Vector2(0.012, 0.014)], navy, 8)
 	box("Hand" + s, Vector3(0.053, 0.009, 0.027), Vector3(0, 0.035, -0.008), panel)
 	box("Hand" + s, Vector3(0.038, 0.004, 0.008), Vector3(0, 0.041, -0.007), cream)
+	# 11.11: четыре пальца перчатки обхватывают грипсу спереди, на костяшках — накладка
+	for i in 4:
+		var fx := (float(i) - 1.5) * 0.0205
+		box("Hand" + s, Vector3(0.0175, 0.034, 0.02), Vector3(fx, -0.004, -0.043), navy, Basis(Vector3.RIGHT, 0.25))
+		box("Hand" + s, Vector3(0.0175, 0.02, 0.018), Vector3(fx, -0.03, -0.03), navy, Basis(Vector3.RIGHT, 1.0))
+	box("Hand" + s, Vector3(0.078, 0.012, 0.012), Vector3(0, 0.012, -0.05), panel, Basis(Vector3.RIGHT, 0.25))
 	_leg(side)
 	local_loft("Foot" + s, [Vector3(0, -0.048, -0.035), Vector3(0, -0.033, -0.035)], [Vector2(0.064, 0.124), Vector2(0.065, 0.125)], dark)
 	local_loft("Foot" + s, [Vector3(0, -0.033, -0.035), Vector3(0, -0.018, -0.037), Vector3(0, -0.005, -0.035), Vector3(0, 0.025, -0.015)], [Vector2(0.065, 0.125), Vector2(0.062, 0.114), Vector2(0.059, 0.105), Vector2(0.034, 0.055)], cream)

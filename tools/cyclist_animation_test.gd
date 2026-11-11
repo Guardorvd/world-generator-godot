@@ -326,6 +326,8 @@ func run(finish := true) -> void:
 	for i in 120:
 		advance()
 	check(absf(bike._cur[BikeView.S_SWAY]) < 0.00001, "Coasting settles shoulder effort")
+	# Дыхание и покой проверяются в прежней неподвижной посадке: стоянка с ногой на земле — отдельно ниже.
+	bike.idle_life = false
 	reset()
 	state.speed = 0
 	var breath_min := INF
@@ -366,6 +368,7 @@ func run(finish := true) -> void:
 	for i in 120:
 		advance()
 	check(bike._cur[BikeView.S_CROUCH] < 0.00001, "No artificial road vibration when stopped")
+	bike.idle_life = true
 	state.speed = 6
 	state.airborne = true
 	for i in 90:
@@ -494,6 +497,43 @@ func run(finish := true) -> void:
 	bike.draw(1)
 	check(bike._landing == 0, "Snap clears transient motion")
 	check(bike._cur[BikeView.S_SWAY] == 0 and bike._cur[BikeView.S_BREATH] == 0 and bike._breath_phase == 0 and bike._effort == 0, "Snap clears effort and breathing phase")
+	# 11.11: стоянка — нога на земле, вторая на педали, руки на руле; тяга возвращает ногу на педаль.
+	reset()
+	state.speed = 0
+	for i in 150:
+		advance()
+	var sk_stop := bike.rider.skeleton
+	var down_foot := sk_stop.get_bone_global_pose(sk_stop.find_bone("FootL"))
+	var sole := down_foot * CyclistRig.PEDAL_CONTACT_LOCAL
+	check(bike._cur[BikeView.S_STOP] < -0.95 and absf(sole.y - 0.27 * tan(BikeView.STOP_LEAN)) < 0.03 and sole.x < -0.2, "Stopped rider puts the left foot on the ground")
+	check(bike.rotation.z > 0.05 and bone("Hips").z < 0.1 and bone("Hips").y < 0.97, "Stopped rider stands over the frame and leans the bike to the foot")
+	var foot_r_stop := sk_stop.get_bone_global_pose(sk_stop.find_bone("FootR"))
+	check((foot_r_stop * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(bike.pedal_r.global_position)) < 0.001 and bike.to_local(bike.pedal_r.global_position).z < -0.08, "Other foot waits on the forward pedal")
+	for side in ["L", "R"]:
+		check(absf(bone("UpperLeg" + side).distance_to(bone("LowerLeg" + side)) - 0.43) < 0.001 and absf(bone("LowerLeg" + side).distance_to(bone("Foot" + side)) - 0.43) < 0.001, "Stop pose keeps leg lengths")
+		check(absf(bone("UpperArm" + side).distance_to(bone("Forearm" + side)) - 0.31) < 0.001 and absf(bone("Forearm" + side).distance_to(bone("Hand" + side)) - 0.31) < 0.001, "Stop pose keeps arm lengths")
+	check_skin_pose()
+	for i in 45:
+		state.speed = minf(state.speed + 4.0 * DT, 4.0)
+		state.crank += 4.0 * DT
+		advance(1)
+	check(absf(bike._cur[BikeView.S_STOP]) < 0.02 and absf(bike.rotation.z) < 0.01, "Pedalling off returns the foot to the pedal")
+	contacts()
+	# 11.11: на накате педали встают ровно; взгляд по сторонам появляется в покое и уходит в повороте.
+	reset()
+	state.crank = 0.3
+	var gaze_max := 0.0
+	for i in 480:
+		advance()
+		gaze_max = maxf(gaze_max, absf(bike._cur[BikeView.S_GAZE_YAW]))
+	check(absf(bike.to_local(bike.pedal_l.global_position).y - bike.to_local(bike.pedal_r.global_position).y) < 0.02, "Coasting levels the pedals")
+	check(gaze_max > 0.05, "Calm rider glances around")
+	contacts()
+	state.steer = 1
+	state.lean = -0.2
+	for i in 40:
+		advance()
+	check(absf(bike._cur[BikeView.S_GAZE_YAW]) < 0.02, "Turning brings the gaze back to the road")
 	state.riding = false
 	advance()
 	check(not bike.rider.visible, "Dismount hides rig")

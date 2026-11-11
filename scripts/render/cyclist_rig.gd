@@ -99,7 +99,7 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
 ## Поза строится от базовых архетипов (накат, спокойная езда, подъём стоя, спуск, торможение)
 ## с приоритетами над процедурными реакциями и раздельным приёмом переднего (руки) и заднего (ноги, таз) ударов.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
@@ -108,7 +108,12 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		return
 	if not is_finite(crank_angle) or not is_finite(tuck) or not is_finite(look) or not is_finite(pitch) or not is_finite(roll) or not is_finite(sway) or not is_finite(breath) or not is_finite(look_lag) or not is_finite(stand) or not is_finite(head_nod) or not is_finite(effort) or not is_finite(brake) or not is_finite(front_load) or not is_finite(rear_load):
 		return
+	if not is_finite(foot_down) or not is_finite(ground) or not is_finite(ground_lean) or not gaze.is_finite():
+		return
 	_poses.clear()
+	# 11.11: стоянка — нога fd_side стоит на земле (ground — высота земли в осях велосипеда, ground_lean — его наклон к ноге)
+	var fd := smoothstep(0.0, 1.0, clampf(absf(foot_down), 0.0, 1.0))
+	var fd_side := -1.0 if foot_down < 0.0 else 1.0
 	sway = clampf(sway, -0.13, 0.13)
 	breath = clampf(breath, -0.004, 0.004)
 	stand = clampf(stand, -1.0, 1.0)
@@ -154,9 +159,17 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		var foot_yaw := -side * (0.026 - 0.010 * power_phase * (heavy + up * 0.5) + 0.012 * inner_leg)
 		var foot_roll := -side * (0.022 * power_phase * (heavy + up * 0.7) + 0.032 * outer_leg)
 		var foot_basis := Basis.from_euler(Vector3(foot_pitch, foot_yaw, foot_roll))
+		var ankle_at := pedal + foot_basis * ANKLE_OFFSET
+		if fd > 0.0 and side == fd_side:
+			# стопа идёт с педали на землю по дуге наружу и встаёт плоско, носком чуть в сторону
+			var ground_basis := Basis.from_euler(Vector3(0.0, -side * 0.22, side * ground_lean))
+			var contact := Vector3(side * 0.27, ground + 0.27 * tan(ground_lean) * fd, -0.06)
+			foot_basis = foot_basis.slerp(ground_basis, fd).orthonormalized()
+			foot_pitch *= 1.0 - fd
+			ankle_at = ankle_at.lerp(contact - ground_basis * PEDAL_CONTACT_LOCAL, fd) + Vector3(side * 0.035, 0.05, 0.0) * sin(fd * PI)
 		foot_pitches[side] = foot_pitch
 		foot_bases[side] = foot_basis
-		ankles[side] = pedal + foot_basis * ANKLE_OFFSET
+		ankles[side] = ankle_at
 	# 2. Положение и ориентация таза: базовая поза + процедурные реакции опоры.
 	# В повороте таз смещается к наружной педали и компенсирует наклон рамы, отделяя баланс тела от крена велосипеда.
 	var saddle_slide := clampf(motion.x * 0.32 - heavy * 0.014, -0.045, 0.055)
@@ -169,16 +182,18 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		-hip_crouch_y + hip_rear_lift - absf(corner_right) * 0.006 * seated - double_pulse * (drive_effort * 0.002 * seated + 0.006 * up) + minf(0.0, saddle_slide) * 0.05 * seated,
 		hip_shift_z
 	)
+	hip += Vector3(fd_side * 0.045, -0.02, -0.185) * fd
 	var pelvis_pitch := clampf(float(base.pelvis_pitch) - 0.08 * tuck - 0.03 * heavy * seated - 0.04 * rear_load, -0.15, 0.09)
 	var pelvis_yaw := -sway * (0.28 + 0.12 * heavy) + body_look * 0.12
-	var pelvis_roll := clampf(-drive_side * (0.016 * spin + 0.042 * heavy + 0.055 * up) - motion.y * 0.18 - roll * (0.26 + 0.14 * standing), -0.14, 0.14)
+	var pelvis_roll := fd_side * 0.06 * fd + clampf(-drive_side * (0.016 * spin + 0.042 * heavy + 0.055 * up) - motion.y * 0.18 - roll * (0.26 + 0.14 * standing), -0.14, 0.14)
 	var pelvis_basis := Basis.from_euler(Vector3(pelvis_pitch, pelvis_yaw, pelvis_roll))
 	# Подъём таза ограничен анатомической длиной обеих ног до реального положения голеностопа.
 	for side: float in [-1.0, 1.0]:
 		var hip_offset := pelvis_basis * Vector3(side * 0.11, 0.0, 0.0)
 		var ankle: Vector3 = ankles[side]
 		var horizontal := Vector2(hip.x + hip_offset.x - ankle.x, hip.z + hip_offset.z - ankle.z).length_squared()
-		hip.y = minf(hip.y, ankle.y - hip_offset.y + sqrt(maxf(0.0, pow(LEG_LENGTH * 2.0 - 0.004, 2.0) - horizontal)))
+		var leg_reach := LEG_LENGTH * 2.0 - 0.004 - (0.012 * fd if side == fd_side else 0.0)
+		hip.y = minf(hip.y, ankle.y - hip_offset.y + sqrt(maxf(0.0, leg_reach * leg_reach - horizontal)))
 	# 3. Положение корпуса и плеч: базовая поза + реакции, где передний удар (front_load) сначала сжимает руки и подаёт плечи,
 	# а в повороте корпус остаётся собранным над пятном контакта отдельно от наклона рамы.
 	var effort_brace := heavy * seated * 0.012 + up * 0.008
@@ -187,6 +202,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		-tuck * 0.25 - motion.z * 1.15 + breath * 1.15 - effort_brace - front_load * 0.022,
 		-tuck * 0.45 - motion.z * 0.45 + motion.x - effort_brace * 0.70 + front_load * 0.024 - maxf(0.0, breath) * 0.35
 	)
+	chest += Vector3(fd_side * 0.02, 0.035, 0.07) * fd
 	var spine_len := SPINE_LENGTH + breath * 0.65
 	if (chest - hip).length_squared() > 0.000001:
 		chest = hip + (chest - hip).normalized() * spine_len
@@ -211,7 +227,7 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			chest -= pull
 			hip -= pull
 	# Взгляд компенсирует склон и крен в пределах движения шеи, опережая поворот корпуса.
-	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod, -0.36, 0.36), clampf(look, -0.5, 0.5), -roll * 0.65 + sway * 0.12))
+	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod + gaze.y, -0.36, 0.36), clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, pelvis_basis)
 	_aim("Spine", hip, chest, sway * 0.22 + body_look * 0.14)

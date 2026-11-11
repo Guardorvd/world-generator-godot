@@ -44,7 +44,11 @@ const S_REAR_LOAD := 27  # мгновенный приём заднего уда
 const S_HEAT_F := 28     # нагрев переднего тормозного диска (0..1)
 const S_HEAT_R := 29     # нагрев заднего тормозного диска (0..1)
 const S_SHUDDER := 30    # мелкая дрожь вилки и руля при торможении на грани юза
-const STATE_SIZE := 31
+const S_STOP := 31      # 11.11: стоянка — нога на земле (знак — сторона: − левая, + правая)
+const S_GAZE_YAW := 32  # взгляд по сторонам в спокойной езде и на стоянке (только голова)
+const S_GAZE_PITCH := 33
+const STATE_SIZE := 34
+const STOP_LEAN := 0.085 # наклон велосипеда к опорной ноге на стоянке, рад (только вид)
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
 const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
 const AIR_CROUCH := 0.055
@@ -92,6 +96,17 @@ var _steering: Node3D
 var _levers: Array[Node3D] = []
 var _lever_rest: Array[Transform3D] = []
 var _view_ready := false
+## Живые мелочи вида: нога на земле при остановке, ровные педали на накате, взгляд по сторонам.
+## Выключается в проверках, которым нужна неподвижная посадка.
+var idle_life := true
+var _stop := 0.0
+var _stop_side := -1.0
+var _still_time := 0.0
+var _coast_time := 0.0
+var _coast_blend := 0.0
+var _calm_time := 0.0
+var _gaze_amp := 0.0
+var _gaze_phase := 0.0
 # Перья подвески имеют именованные поля вместо позиционных массивов.
 class Strut:
 	var part: MeshInstance3D
@@ -245,9 +260,18 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 			_air_pedal_goal = PI * 0.5 + roundf((b.crank - PI * 0.5) / PI) * PI
 		_air_pedal_blend = lerpf(_air_pedal_blend, 1.0 if b.airborne else 0.0, Util.damp(12.0, dt))
 		var crank_turning := absf(angle_difference(b.crank, _last_crank)) > 0.0005 or b.effort > 0.08
+		# 11.11: на накате седок ставит педали ровно (ближайшее горизонтальное положение), а не замирает с ногой внизу;
+		# на стоянке педаль под ногой, что осталась на велосипеде, — впереди-внизу, готова к старту.
+		_coast_time = _coast_time + dt if idle_life and not crank_turning and not b.airborne else 0.0
+		_coast_blend = lerpf(_coast_blend, 1.0 if _coast_time > 0.3 else 0.0, Util.damp(7.0, dt))
+		var level_goal := PI * 0.5 + roundf((b.crank - PI * 0.5) / PI) * PI
+		var rest_crank := lerp_angle(b.crank, level_goal, _coast_blend)
+		if _stop > 0.0001:
+			var ready := -0.9 if _stop_side < 0.0 else PI - 0.9
+			rest_crank = lerp_angle(rest_crank, ready + roundf((b.crank - ready) / TAU) * TAU, smoothstep(0.0, 1.0, _stop))
 		var corner_coasting := smoothstep(0.08, 0.22, absf(b.lean)) * (0.0 if b.airborne or crank_turning else 0.78)
 		_corner_pedal_blend = lerpf(_corner_pedal_blend, corner_coasting, Util.damp(8.5, dt))
-		var view_crank := lerp_angle(b.crank, _air_pedal_goal, _air_pedal_blend)
+		var view_crank := lerp_angle(rest_crank, _air_pedal_goal, _air_pedal_blend)
 		if _corner_pedal_blend > 0.0001:
 			var outer_down_goal := (PI if b.lean < 0.0 else 0.0) + roundf(b.crank / TAU) * TAU
 			view_crank = lerp_angle(view_crank, outer_down_goal, _corner_pedal_blend * (1.0 - _air_pedal_blend))
@@ -256,6 +280,8 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_update_rider(b, dt, throttle, boost)
 	# Отдача руля от удара переднего колеса — только вид: руль дёргается в сторону, курс не меняется.
 	_cur[S_STEER] += _hit_f * 0.15 * _recoil
+	# 11.11: стоя на педалях седок тянет руль в такт: колесо чуть виляет навстречу раскачке рамы (только вид)
+	_cur[S_STEER] -= sin(_cur[S_CRANK]) * maxf(_stand, 0.0) * 0.07 * (1.0 - smoothstep(4.0, 9.0, absf(b.speed)))
 	# Нагрев тормозных дисков от мощности трения колодок и охлаждение встречным потоком воздуха
 	var spd := absf(b.speed)
 	var next_heat := BrakeEffects.step_rotor_heat(b, dt, _heat_f, _heat_r)
@@ -379,6 +405,27 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	var turn_pace := maxf(smoothstep(0.2, 3.0, absf(b.speed)), smoothstep(0.05, 0.25, absf(b.steer)))
 	var dir_signal := -b.steer * 0.27 - steer_vel * 0.018 + b._yaw_rate * 0.11 + b.lean * 0.16 - b.slip * 0.32
 	var look := clampf(dir_signal * turn_pace, -0.46, 0.46)
+	# 11.11: стоянка. Велосипед стоит без тяги — седок сходит с седла вперёд и ставит ногу на землю
+	# со стороны наклона (по умолчанию левую); тяга или ход возвращают ногу на педаль.
+	var still := continuous and idle_life and not b.airborne and absf(b.speed) < 0.35 and b.effort < 0.05 and absf(b.lean) < 0.1
+	_still_time = _still_time + dt if still else 0.0
+	if _stop < 0.01 and still:
+		_stop_side = 1.0 if b.lean < -0.01 else -1.0
+	var stop_goal := 1.0 if _still_time > 0.3 else 0.0
+	_stop = lerpf(_stop, stop_goal, Util.damp(5.0 if stop_goal > _stop else 9.0, dt)) if continuous else 0.0
+	_cur[S_STOP] = _stop * _stop_side
+	# 11.11: взгляд. После нескольких секунд спокойной езды голова время от времени поворачивается к обочине и
+	# возвращается; на стоянке седок осматривается шире. Поворот, тормоз, удар и тяжёлая работа сразу возвращают взгляд.
+	var calm := continuous and idle_life and not b.airborne and braking < 0.1 and impact_priority < 0.1 and absf(look) < 0.08 and effort < 0.6
+	_calm_time = _calm_time + dt if calm else 0.0
+	_gaze_amp = lerpf(_gaze_amp, smoothstep(3.0, 5.0, _calm_time), Util.damp(1.5 if calm else 9.0, dt)) if continuous else 0.0
+	_gaze_phase = fmod(_gaze_phase + dt, 1000.0) if continuous else 0.0
+	var wander := sin(_gaze_phase * 0.43) + 0.6 * sin(_gaze_phase * 0.17 + 1.9)
+	var glance := signf(wander) * smoothstep(0.55, 1.1, absf(wander))
+	var gaze_wide := lerpf(0.17, 0.42, _stop) * (1.0 - 0.5 * smoothstep(6.0, 12.0, absf(b.speed)))
+	var gaze_blend := Util.damp(3.5, dt)
+	_cur[S_GAZE_YAW] = lerpf(_prev[S_GAZE_YAW], glance * gaze_wide * _gaze_amp, gaze_blend) if continuous else 0.0
+	_cur[S_GAZE_PITCH] = lerpf(_prev[S_GAZE_PITCH], sin(_gaze_phase * 0.29 + 0.7) * 0.035 * _gaze_amp, gaze_blend) if continuous else 0.0
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * active_effort * (0.055 + up * 0.06)
 	# Дыхание подчинено накопленной нагрузке (_fatigue): учащается и углубляется под нагрузкой, с активным вдохом,
@@ -483,6 +530,13 @@ func snap(b: BikeRide) -> void:
 	_prev_steer = b.steer
 	_air_pedal_blend = 0.0
 	_corner_pedal_blend = 0.0
+	_stop = 0.0
+	_still_time = 0.0
+	_coast_time = 0.0
+	_coast_blend = 0.0
+	_calm_time = 0.0
+	_gaze_amp = 0.0
+	_gaze_phase = 0.0
 	_was_airborne = b.airborne
 	_pack_swing = Vector2.ZERO
 	_pack_velocity = Vector2.ZERO
@@ -518,7 +572,9 @@ func draw(alpha: float) -> void:
 	# рама и седок опускаются на ход подвески, колёса остаются на земле
 	position = Vector3(_mix[S_X], _mix[S_BODY_Y], _mix[S_Z])
 	# 12.3: стоя седок раскачивает велосипед под собой в такт педалям (только вид)
-	rotation = Vector3(_mix[S_TILT], _mix[S_HEADING], _mix[S_ROLL] + sin(_mix[S_CRANK]) * maxf(_mix[S_STAND], 0.0) * ROCK)
+	var stop_amount := smoothstep(0.0, 1.0, absf(_mix[S_STOP]))
+	var stop_side := -1.0 if _mix[S_STOP] < 0.0 else 1.0
+	rotation = Vector3(_mix[S_TILT], _mix[S_HEADING], _mix[S_ROLL] + sin(_mix[S_CRANK]) * maxf(_mix[S_STAND], 0.0) * ROCK - stop_side * stop_amount * STOP_LEAN)
 	rear_wheel.position.y = WHEEL_Y + _mix[S_SQUASH_R]
 	front_wheel.position.y = WHEEL_Y + _mix[S_SQUASH_F]
 	for st: Strut in _front_struts:
@@ -566,7 +622,8 @@ func draw(alpha: float) -> void:
 		var grip_l := _steering.position + _steering.basis * Vector3(-0.24, 0.22, -0.015)
 		var grip_r := _steering.position + _steering.basis * Vector3(0.24, 0.22, -0.015)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
-		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD])
+		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
+				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]))
 		if is_instance_valid(_pack_bag):
 			_pack_bag.position = PACK_AT + Vector3(_mix[S_PACK_ROLL] * 0.04, -clampf(_mix[S_PACK_PITCH], -0.06, 0.12) * 0.08, maxf(0.0, _mix[S_BREATH]) * 0.4)
 			_pack_bag.rotation = Vector3(_mix[S_PACK_PITCH], 0, _mix[S_PACK_ROLL])

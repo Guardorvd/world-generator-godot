@@ -53,6 +53,7 @@
 | Лес и камни у путей (просвет `StageVegetation.path_clearance`, [docs/ROADSIDE_NATURE.md](docs/ROADSIDE_NATURE.md)) | `roadside_probe.gd` (три сохранённых мира без генерации, ~1,5 мин, было/стало через `--base`, `--parity` — C#/GDScript); в игре — `check.gd --views trail,forest` один раз в конце |
 | Подвеска, кочки полотна, ощущение езды без мира | изолированный `feel_test -- --downhill` (+ `road_look.gd` для вида кочек) |
 | Модель седока, его анимации | `cyclist_animation_test -- --capture` |
+| Модель велосипеда (`tools/build_bike.gd` → `scenes/bike.tscn`), вид седока на стоянке | изолированная `bike_model_look.gd` (секунды, нужно окно; лист 2×2 `bike_model_sheet.png`, «было» — тем же запуском до пересборки с `--tag _old`); после правки сборщика — `build_bike.gd`, после `build_cyclist.gd` — оба |
 | Велосипедные трассы, элементы, физика велосипеда на трассе | изолированная `trail_lab_test` (`-- --ui-only`, `-- --capture` по нужде); `feel_test` не нужен |
 | Расчётные стандарты элементов (`TrailStandards`), их размеры в составителе | изолированная `trail_standards_stand.gd -- --check` (+ `--only <вид>`) |
 | Генераторы Trail Lab (`TrailLabTerrain`, `TrailLabBuilder`), кнопки «Новый мир» / «Другая линия» | изолированная `trail_generator_test.gd` (`-- --quick` при отладке); мир, поисковик мест, овражки и петли, список мест — `trail_world_lab_test.gd` |
