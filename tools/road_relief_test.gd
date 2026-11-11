@@ -333,30 +333,15 @@ func corridor_contracts() -> void:
 	RoadRefinement.allow_fast_patches = true
 	RoadRefinement.allow_fast_nearest = true
 	RoadRefinement.allow_fast_vertices = true
-	# Coincident routes must keep their forms, including when one route runs in reverse.
+	# 11.11.2026: полностью совпадающий путь (в том числе обратный) сеть больше не публикует — StageTrails._add_trail
+	# ничего не добавляет на готовой сети (tools/road_passage_test.gd), и RoadRefinement не ищет дубли по хешу линий.
+	# Запись остаётся вторым путём для проверок ниже (её заменяет параллельная линия).
 	w.trails[0].erase("trail_id")
 	w.trails[0].erase("formation")
 	var duplicate: Dictionary = w.trails[0].duplicate(true)
 	duplicate.pts.reverse()
 	duplicate.surf.reverse()
 	w.trails.append(duplicate)
-	var duplicated := build(h, true)
-	var physical_error := 0.0
-	var same_channels := full.patches.size() == duplicated.patches.size()
-	for key: int in full.patches:
-		if not duplicated.patches.has(key):
-			same_channels = false
-			continue
-		var original: Dictionary = full.patches[key]
-		var repeated: Dictionary = duplicated.patches[key]
-		same_channels = same_channels and original.surface == repeated.surface and original.road == repeated.road
-		for j in (original.h as PackedFloat32Array).size():
-			physical_error = maxf(physical_error, absf(original.h[j] - repeated.h[j]))
-			# Signed UV.x follows route direction; reversing the selected segment can
-			# flip it without changing the tread. Compare its magnitude and material.
-			same_channels = same_channels and absf(absf(original.uv[j].x) - absf(repeated.uv[j].x)) < 0.00001 \
-				and original.uv[j].y == repeated.uv[j].y and original.color[j].is_equal_approx(repeated.color[j])
-	check(same_channels and physical_error < 0.00001, "reversed duplicate preserves the physical mountain surface: %.8f m" % physical_error)
 	var base := build(h, false)
 	var far_change := 0.0
 	var far_lift := 0.0

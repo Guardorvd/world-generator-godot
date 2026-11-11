@@ -219,6 +219,7 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 ## (не длиннее CROSS_RUN клеток) — пересечение: новый участок проходит его насквозь. Так одна ось существует один раз,
 ## а скидка стоимости, маска и линия описывают одну и ту же дорогу (раньше — _shared_passage после сглаживания).
 const CROSS_RUN := 2
+const JITTER_RUN := 3   # свободных клеток между двумя касаниями одного участка — шаг в сторону, а не новый путь
 const SIDE_MUL := 1.3   # клетка рядом с участком (не на нём) дороже свободной земли: поиск идёт по участку или уходит
 const JOIN_R := 1.2     # конец нового участка ближе этого (клеток) к оси хозяина ложится на неё
 
@@ -279,7 +280,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		w.generation.road_cells.append(PackedInt32Array())
 	else:
 		var owner := w.generation.road_owner
-		for piece: Dictionary in _pieces(path, owner):
+		for piece: Dictionary in _pieces(path, owner, w.W):
 			var cells: PackedInt32Array = piece.cells
 			var pts := _cell_points(w, cells, on_axis, width)
 			var joins: Array = []
@@ -345,7 +346,7 @@ static func _trodden(w: WorldData, path: PackedInt32Array, kind: String, road_co
 
 ## Части пути, которые не лежат на готовой сети: {cells — клетки с опорными клетками сети по краям, anchored — [начало, конец]
 ## опираются на сеть}. Короткое касание сети внутри пути (не длиннее CROSS_RUN клеток) — пересечение, часть его проходит.
-static func _pieces(path: PackedInt32Array, owner: PackedInt32Array) -> Array:
+static func _pieces(path: PackedInt32Array, owner: PackedInt32Array, width: int) -> Array:
 	var n := path.size()
 	var free := PackedByteArray()
 	free.resize(n)
@@ -374,10 +375,34 @@ static func _pieces(path: PackedInt32Array, owner: PackedInt32Array) -> Array:
 			e += 1
 		var a := k - 1 if k > 0 else k
 		var b := e + 1 if e < n - 1 else e
-		if b > a:
+		# Шаг в сторону от участка и обратно на тот же участок (поиск обошёл клетку у сооружения или на крутом) —
+		# не новый путь: без этого рядом с осью оставались огрызки в несколько метров (двойная ось на стенде).
+		# Так же — обход вплотную вдоль того же участка (каждая клетка рядом с его клеткой): это его полотно, а не второе.
+		var jitter := k > 0 and e < n - 1 and owner[path[a]] == owner[path[b]] \
+			and (e - k + 1 <= JITTER_RUN or _hugs(path, k, e, owner, owner[path[a]], width))
+		if b > a and not jitter:
 			out.append({cells = path.slice(a, b + 1), anchored = [k > 0, e < n - 1]})
+		elif jitter:
+			for j in range(k, e + 1):
+				owner[path[j]] = owner[path[a]]
 		k = e + 1
 	return out
+
+
+## Каждая клетка пути k..e стоит вплотную (8 соседей) к клетке участка host
+static func _hugs(path: PackedInt32Array, k: int, e: int, owner: PackedInt32Array, host: int, width: int) -> bool:
+	for j in range(k, e + 1):
+		var c := path[j]
+		var near := false
+		for d in 8:
+			var x: int = c % width + Grid.DX[d]
+			var y: int = c / width + Grid.DY[d]
+			var n := y * width + x
+			if x >= 0 and y >= 0 and x < width and n < owner.size() and owner[n] == host:
+				near = true
+				break
+		if not near: return false
+	return true
 
 
 ## Точки линии по клеткам: центры клеток; на осях мостов и туннелей — на прямой оси настила (центры клеток
