@@ -250,8 +250,9 @@ static func _net_ready(w: WorldData) -> void:
 ## w.trails (пусто — путь целиком прошёл по готовой сети). smooth_kind — пределы сглаживания другого вида
 ## (связи поселений ищутся с пределами дороги, даже если публикуются тропой: StageTrails._upgrade_roles).
 ## path_mask отмечается по нарисованной линии (Grid.stamp_path), дешевле становятся клетки пути.
+## changed_lines — необязательный журнал прежних массивов pts для отката регионального коридора.
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
-		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "") -> Array:
+		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "", changed_lines: Variant = null) -> Array:
 	var part_us := Time.get_ticks_usec()
 	_net_ready(w)
 	path = _explicit(w, path, on_axis)
@@ -300,7 +301,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			for c: int in cells:
 				if owner[c] < 0: owner[c] = index
 			for join: Dictionary in joins:
-				_insert_vertex(w, join.host, join.point)
+				_insert_vertex(w, join.host, join.point, changed_lines)
 			added.append(index)
 		w.generation.road_owner = owner
 	_trodden(w, path, kind, road_cost)
@@ -480,7 +481,7 @@ static func _nearest_on(pts: Array, p: Vector2, reach := INF) -> Vector2:
 
 
 ## Общая точка узла в линии хозяина: дороги сходятся в одной вершине (навигация, полотно, развилки).
-static func _insert_vertex(w: WorldData, host: int, point: Vector2) -> void:
+static func _insert_vertex(w: WorldData, host: int, point: Vector2, changed_lines: Variant = null) -> void:
 	var pts: Array = w.trails[host].pts
 	var best := 0
 	var best_d := INF
@@ -499,6 +500,8 @@ static func _insert_vertex(w: WorldData, host: int, point: Vector2) -> void:
 	if a.distance_to(point) < 0.01 or b.distance_to(point) < 0.01:
 		return
 	var f := clampf(a.distance_to(point) / maxf(a.distance_to(b), 0.000001), 0.0, 1.0)
+	# Only touched arrays need a snapshot; point dictionaries themselves are not mutated.
+	if changed_lines != null and not changed_lines.has(host): changed_lines[host] = pts.duplicate()
 	pts.insert(best, {x = point.x, y = point.y, w = lerpf(float(pts[best - 1].w), float(pts[best].w), f)})
 
 

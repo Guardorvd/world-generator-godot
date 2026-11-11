@@ -309,10 +309,13 @@ static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: Pa
 	var old_owner := w.generation.road_owner.duplicate()
 	var old_side := w.generation.road_side.duplicate()
 	var old_protected := w.generation.road_protected.duplicate()
+	var changed_lines := {}
 	var ready := true
-	for k: int in StageTrails._add_trail(w, path, kind, PackedFloat32Array(), state.on_axis, state.surface, "road"):
+	for k: int in StageTrails._add_trail(w, path, kind, PackedFloat32Array(), state.on_axis, state.surface, "road", changed_lines):
 		ready = ready and ready_corridor(w, w.trails[k].pts, open)
 	if not ready:
+		for host: int in changed_lines:
+			if host < old_count: w.trails[host].pts = changed_lines[host]
 		w.trails.resize(old_count)
 		w.generation.road_cells.resize(old_count)
 		w.generation.road_owner = old_owner

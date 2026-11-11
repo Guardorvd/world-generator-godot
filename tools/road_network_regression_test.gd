@@ -110,6 +110,7 @@ func isolated_check() -> void:
 		w.settlements.append(SettlementData.from_dict({x = x + 0.5, y = 48.5, i = 48 * w.W + x, huts = []}))
 	var c := setup(w)
 	StageTrails._route_surface(c.finder, c.surface, StageTrails.WIDTHS.road)
+	StageTrails._net_reset(w)
 	StageTrails._settlement_trails(w, c.finder, c.surface)
 	check(w.settlements.size() == 2 and w.settlements[0].connections.has(w.settlements[1].i),
 		"RN-03: a 45 percent axis slope (32 percent diagonal) connects isolated settlements by a secondary trail")
@@ -189,6 +190,34 @@ func acceptance_check() -> void:
 		"RN-05: final route rejection rolls back structures, terrain, links and masks")
 	c.finder.release()
 
+func corridor_rollback_check() -> void:
+	var w := world(64, 48)
+	var c := setup(w)
+	StageTrails._route_surface(c.finder, c.surface, StageTrails.WIDTHS.road)
+	c.state.failures = {}
+	c.state.tunnels = false
+	StageTrails._add_trail(w, Grid.line_cells(8, 24, 56, 24, w.W), "road")
+	# Sparse host guarantees the join inserts a vertex, rather than finding one already there.
+	w.trails[0].pts = [{x = 8.5, y = 24.5, w = StageTrails.WIDTHS.road},
+		{x = 56.5, y = 24.5, w = StageTrails.WIDTHS.road}]
+	var before := var_to_bytes([w.trails, w.path_mask, w.cost, w.generation.road_cells,
+		w.generation.road_owner, w.generation.road_side, w.generation.road_protected,
+		c.finder.heights, c.finder.links, c.state.on_axis, c.surface.hv])
+	var open := PackedByteArray()
+	open.resize(w.N)
+	var accepted := Roads._build(w, c.finder, c.state, open, 8 * w.W + 32, 24 * w.W + 32)
+	check(not accepted and c.state.failures.get("corridor", 0) == 1, "RN-10: regional corridor reaches publication then rejects")
+	check(before == var_to_bytes([w.trails, w.path_mask, w.cost, w.generation.road_cells,
+		w.generation.road_owner, w.generation.road_side, w.generation.road_protected,
+		c.finder.heights, c.finder.links, c.state.on_axis, c.surface.hv]),
+		"RN-10: rejection restores existing vertices, network, mask, costs and surface exactly")
+	# Dry rejection has no lazy structure checkpoint and must preserve pre-existing markings.
+	var mask := w.path_mask.duplicate()
+	var rejected := StageTrails._structures(w, Grid.line_cells(5, 5, 20, 5, w.W), false,
+		c.finder, w.cost, c.state, 0, StageTrails.ROAD_GRADE, func(_q: PackedInt32Array) -> bool: return false)
+	check(rejected.is_empty() and w.path_mask == mask, "RN-11: rejection without structure checkpoint preserves path_mask")
+	c.finder.release()
+
 func limits_and_cuts_check() -> void:
 	var w := world(64, 32)
 	for y in w.H:
@@ -260,6 +289,7 @@ func _initialize() -> void:
 		window_check()
 		isolated_check()
 		acceptance_check()
+		corridor_rollback_check()
 	budget_orientation_check()
 	limits_and_cuts_check()
 	water_check()
