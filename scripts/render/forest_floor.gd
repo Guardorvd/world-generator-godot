@@ -3,10 +3,59 @@ extends RefCounted
 
 const Plants := preload("res://scripts/render/understory_models.gd")
 const Surface := preload("res://scripts/world/mountain_surface.gd")
-enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH, ROOT_SPAN } # 9.4: пни и мшистые валуны; 11.6: ветка на дороге; 15.0: корень через тропу
+enum { LEAVES, NEEDLES, TWIG, ROOTS, LOG, MOSS_LOG, SNAG, STONES, STUMP, BOULDER, BRANCH, ROOT_SPAN,
+	ROOT_SPAN_B, ROOT_SPAN_C, STONE_SINGLE, STONES_PAIR, LOG_BROKEN, MOSS_LOG_BROKEN, COUNT }
 const FIRST := Plants.COUNT # после форм подлеска (8.2: двенадцать)
 const BARK := Color(0.29, 0.22, 0.15)
 const WOOD := Color(0.49, 0.39, 0.25)
+static var _shared_meshes: Array[Mesh] = []
+static var _shared_far := {}
+static var _stone_bounds := {}
+
+
+static func base_kind(kind: int) -> int:
+	if kind in [ROOT_SPAN_B, ROOT_SPAN_C]: return ROOT_SPAN
+	if kind in [STONE_SINGLE, STONES_PAIR]: return STONES
+	if kind == LOG_BROKEN: return LOG
+	if kind == MOSS_LOG_BROKEN: return MOSS_LOG
+	return kind
+
+
+static func variant_kind(kind: int, variant: int) -> int:
+	if kind == ROOT_SPAN: return [ROOT_SPAN, ROOT_SPAN_B, ROOT_SPAN_C][posmod(variant, 3)]
+	if kind == STONES: return [STONES, STONE_SINGLE, STONES_PAIR][posmod(variant, 3)]
+	if kind == LOG and variant % 2: return LOG_BROKEN
+	if kind == MOSS_LOG and variant % 2: return MOSS_LOG_BROKEN
+	return kind
+
+
+static func log_span(kind: int) -> Vector2:
+	return Vector2(-2.2, 0.9 if kind in [LOG_BROKEN, MOSS_LOG_BROKEN] else 2.1)
+
+
+## Shared by near/far rendering and wheel contacts. No invisible central dome.
+static func stone_specs(variant := 0) -> Array[Vector4]:
+	match posmod(variant, 3):
+		1: return [Vector4(0.0, 0.0, 0.31, 304)]
+		2: return [Vector4(-0.23, 0.05, 0.28, 302), Vector4(0.26, -0.12, 0.19, 305)]
+	return [Vector4(-0.34, 0.12, 0.21, 300), Vector4(0.23, -0.18, 0.30, 303), Vector4(0.43, 0.30, 0.13, 301)]
+
+
+static func stone_mesh(variant := 0, far := false) -> Mesh:
+	var tool := SurfaceTool.new()
+	var bounds: Array[AABB] = []
+	for spec: Vector4 in stone_specs(variant):
+		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * spec.z, int(spec.w), 0.35, 0.5)
+		var xf := Transform3D(Basis(), Vector3(spec.x, 0.0, spec.y))
+		bounds.append(xf * stone.get_aabb())
+		tool.append_from(stone.get_meta("lod_meshes")[1] if far else stone, 0, xf)
+	_stone_bounds[posmod(variant, 3)] = bounds
+	return tool.commit()
+
+
+static func stone_bounds(variant: int) -> Array:
+	if not _stone_bounds.has(posmod(variant, 3)): stone_mesh(variant)
+	return _stone_bounds[posmod(variant, 3)]
 
 
 static func moisture_at(w: WorldData, k: int) -> float:
@@ -82,6 +131,7 @@ static func weights(cover: float, conifer: float, wet: float, light: float, rock
 		cover * (0.008 + rocky * 0.05),
 		0.0, # ветки кладёт только RoadObstacles на полотно
 		0.0, # корень через тропу — тоже RoadObstacles, от настоящего ствола
+		0.0, 0.0, 0.0, 0.0, 0.0, 0.0, # variants share their parent's placement probability
 	])
 
 
@@ -91,10 +141,10 @@ static func _beam(a: Vector3, b: Vector3, radius: float, sides := 6, caps := fal
 	return [part[0], Transform3D(Basis(Quaternion(Vector3.UP, delta.normalized())), a) * part[1]]
 
 
-static func _log(moss: bool) -> Mesh:
+static func _log(moss: bool, broken := false) -> Mesh:
 	var a := Vector3(-2.2, 0.22, -0.04)
 	var mid := Vector3(-0.1, 0.20, 0.06)
-	var b := Vector3(2.1, 0.16, -0.02)
+	var b := Vector3(0.9 if broken else 2.1, 0.16, -0.02)
 	var parts: Array = [
 		[_beam(a, mid, 0.24, 6, false), BARK],
 		[_beam(mid, b, 0.18, 6, false), BARK],
@@ -103,6 +153,7 @@ static func _log(moss: bool) -> Mesh:
 	]
 	for n in 4:
 		var x := -1.25 + n * 0.82
+		if broken and x > 0.7: continue
 		var side := 1.0 if n % 2 == 0 else -1.0
 		var z_off := 0.04 if n in [1, 2] else -0.02
 		parts.append([_beam(Vector3(x, 0.22, z_off), Vector3(x + 0.34, 0.36, side * 0.68), 0.055, 4, false), BARK])
@@ -111,33 +162,79 @@ static func _log(moss: bool) -> Mesh:
 		parts.append([_beam(a, a + Vector3(-0.36, 0.16 + n * 0.14, (n - 1) * 0.36), 0.068, 4, false), BARK])
 	if moss:
 		for n in 4:
+			if broken and n > 2: continue
 			var z_m := 0.04 if n in [1, 2] else -0.01
 			parts.append([Models._moved(Plants._mound(0.32, 0.40, 1.45, 0.16, 0.56), Vector3(-1.35 + n * 0.82, 0, z_m)), Color(0.26 + n * 0.018, 0.38, 0.16)])
 	return Plants._colored(parts)
 
 
 static func meshes() -> Array[Mesh]:
+	if not _shared_meshes.is_empty(): return _shared_meshes.duplicate()
 	var list: Array[Mesh] = preload("res://scripts/render/asset_catalog.gd").get_catalog().floor_meshes.duplicate()
 	# каталог, запечённый до 15.0, корня через тропу не знает: маленький меш строится на месте
 	if list.size() == ROOT_SPAN:
 		list.append(root_span())
-	return list
+	list[ROOT_SPAN] = root_span()
+	list[STONES] = stone_mesh()
+	list.resize(COUNT)
+	list[ROOT_SPAN_B] = root_span(1)
+	list[ROOT_SPAN_C] = root_span(2)
+	list[STONE_SINGLE] = stone_mesh(1)
+	list[STONES_PAIR] = stone_mesh(2)
+	list[LOG_BROKEN] = _log(false, true)
+	list[MOSS_LOG_BROKEN] = _log(true, true)
+	_shared_meshes = list
+	return list.duplicate()
+
+
+static func road_far_meshes() -> Dictionary:
+	if _shared_far.is_empty():
+		for v in 3: _shared_far[FIRST + variant_kind(STONES, v)] = stone_mesh(v, true)
+	return _shared_far
 
 
 ## 15.0: корень, пересекающий тропу (RoadObstacles.ROOT): единичная длина вдоль X (−0,5…0,5, от ствола к концу),
 ## растягивается по X на ширину полотна; толщина и изгибы поперёк (Z, м) при этом прежние. Корень то выходит из
-## грунта двумя дугами до 5–6 см, то уходит под него, виляет на ±12 см, у ствола толще; сбоку короткий отросток,
-## ныряющий в землю. Кочки колеса — те же две дуги (RoadObstacles.bump).
-static func root_span() -> Mesh:
+## грунта нерегулярными участками, то уходит под него, у ствола толще. Три общих силуэта;
+## их root_path/root_radius читают и меш, и контакты колёс (RoadObstacles.bump).
+static func root_path(variant := 0) -> PackedVector3Array:
 	var xs := [-0.5, -0.4, -0.3, -0.2, -0.1, 0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
-	var ys := [-0.085, -0.012, 0.018, 0.012, -0.03, -0.045, -0.005, 0.02, 0.008, -0.035, -0.075]
-	var zs := [0.0, 0.06, 0.12, 0.1, 0.03, -0.05, -0.1, -0.08, -0.02, 0.05, 0.08]
+	var ys: Array = [[-0.065, -0.012, 0.018, 0.012, -0.03, -0.045, -0.005, 0.02, 0.008, -0.035, -0.075],
+		[-0.04, 0.005, 0.025, 0.008, -0.025, -0.065, -0.055, -0.03, -0.012, -0.035, -0.07],
+		[-0.06, -0.035, -0.02, -0.045, -0.025, 0.015, 0.028, -0.02, -0.035, -0.015, -0.06]][posmod(variant, 3)]
+	var zs: Array = [[0.0, 0.06, 0.12, 0.1, 0.03, -0.05, -0.1, -0.08, -0.02, 0.05, 0.08],
+		[0.0, -0.025, -0.06, -0.08, -0.04, 0.01, 0.07, 0.12, 0.15, 0.12, 0.10],
+		[0.0, 0.05, 0.11, 0.10, 0.06, 0.02, -0.02, -0.07, -0.11, -0.14, -0.13]][posmod(variant, 3)]
+	var path := PackedVector3Array()
+	for i in xs.size(): path.append(Vector3(xs[i], ys[i], zs[i]))
+	return path
+
+
+static func root_radius(segment: int) -> float:
+	return lerpf(0.062, 0.028, segment / 9.0)
+
+
+static func root_span(variant := 0) -> Mesh:
+	var path := root_path(variant)
 	var parts: Array = []
 	var bark := Color(0.21, 0.16, 0.11)
-	for n in range(1, xs.size()):
-		var radius := lerpf(0.062, 0.028, float(n - 1) / (xs.size() - 2))
-		parts.append([_beam(Vector3(xs[n - 1], ys[n - 1], zs[n - 1]), Vector3(xs[n], ys[n], zs[n]), radius, 5, false), bark])
-	parts.append([_beam(Vector3(-0.24, 0.012, 0.11), Vector3(-0.13, -0.05, 0.34), 0.024, 4, false), bark])
+	for n in range(1, path.size()):
+		parts.append([_beam(path[n - 1], path[n], root_radius(n - 1), 5, false), bark])
+	parts.append([_beam(path[3], path[3] + Vector3(0.13, -0.065, 0.23 if variant % 2 == 0 else -0.23), 0.024, 4, false), bark])
+	return Plants._colored(parts)
+
+
+## Authored roots/logs keep their exact capsule endpoints and height. Reuse the
+## same bark/beam construction, with small bends inside that physical envelope.
+static func technical_wood(root: bool, variant := 0) -> Mesh:
+	var parts: Array = []
+	var radius := 0.05
+	var bend := -1.0 if variant % 2 else 1.0
+	var path := [Vector3(-0.5, radius, 0), Vector3(-0.16, radius * 1.05, bend * 0.008), Vector3(0.19, radius * 0.96, -bend * 0.006), Vector3(0.5, radius, 0)]
+	for i in range(1, path.size()):
+		parts.append([_beam(path[i - 1], path[i], radius * (0.95 if root else 1.0), 7, false), BARK])
+	parts.append([_beam(path[0], path[0] + Vector3(0.002, 0, 0), radius * 0.82, 7, true), WOOD])
+	parts.append([_beam(path[-1], path[-1] + Vector3(0.002, 0, 0), radius * 0.70, 6, true), WOOD])
 	return Plants._colored(parts)
 
 
@@ -148,14 +245,7 @@ static func build_far_meshes() -> Dictionary:
 		var a := n * TAU / 5.0 + 0.3 + sin(n * 1.9) * 0.12
 		var f := Vector3(cos(a), 0, sin(a))
 		roots.append([_beam(f * 0.10 + Vector3.UP * 0.20, f * 1.05, 0.042, 4, false), BARK])
-	var stones := SurfaceTool.new()
-	for n in 5:
-		var a := n * 2.4
-		var r := 0.18 + (n % 3) * 0.09
-		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * r, 300 + n, 0.35, 0.5)
-		var far: Mesh = stone.get_meta("lod_meshes")[1]
-		stones.append_from(far, 0, Transform3D(Basis(), Vector3(cos(a) * 0.45, 0.0, sin(a) * 0.45)))
-	return {ROOTS: Plants._colored(roots), STONES: stones.commit()}
+	return {ROOTS: Plants._colored(roots), STONES: stone_mesh(0, true), STONE_SINGLE: stone_mesh(1, true), STONES_PAIR: stone_mesh(2, true)}
 
 
 static func build_meshes() -> Array[Mesh]:
@@ -194,13 +284,6 @@ static func build_meshes() -> Array[Mesh]:
 		var a := n * 2.39996 + 0.4
 		var p := Vector3(0.06, 1.32 + n * 0.52, 0)
 		snag.append([_beam(p, p + Vector3(cos(a) * 0.66, 0.44, sin(a) * 0.66), 0.045, 4, false), BARK])
-	# 9.4: россыпь из тех же бугристых камней, что валуны мира, а не из сплюснутых сфер
-	var stones := SurfaceTool.new()
-	for n in 5:
-		var a := n * 2.4
-		var r := 0.18 + (n % 3) * 0.09
-		var stone := Models.boulder(Vector3(1.2, 0.55, 0.85) * r, 300 + n, 0.35, 0.5)
-		stones.append_from(stone, 0, Transform3D(Basis(), Vector3(cos(a) * 0.45, 0.0, sin(a) * 0.45)))
 	# Пень: срез светлой древесины, корневые лапы и шапка мха.
 	var stump: Array = [
 		[_beam(Vector3(0, -0.05, 0), Vector3(0.02, 0.45, 0), 0.30, 6, false), BARK],
@@ -229,11 +312,12 @@ static func build_meshes() -> Array[Mesh]:
 		_log(false),
 		_log(true),
 		Plants._colored(snag),
-		stones.commit(),
+		stone_mesh(),
 		Plants._colored(stump),
 		Models.boulder(Vector3(0.85, 0.62, 0.72), 91, 0.9, 0.62),
 		Plants._colored(branch),
 		root_span(),
+		root_span(1), root_span(2), stone_mesh(1), stone_mesh(2), _log(false, true), _log(true, true),
 	]
 
 

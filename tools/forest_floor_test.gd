@@ -2,6 +2,7 @@ extends SceneTree
 ## 6.6+: фактическое сообщество, география, корни и след крупных деталей.
 
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const Plants := preload("res://scripts/render/understory_models.gd")
 const Fixture := preload("res://tools/vegetation_test.gd")
 var fails := 0
 
@@ -59,14 +60,15 @@ func run() -> void:
 	veg.update(512.0, 512.0, true)
 	var counts: Array = []
 	var saved: Array = []
+	var totals := {}
 	for kind in range(Floor.FIRST, veg.understory.size()):
 		var entry: Dictionary = veg.understory[kind]
 		counts.append(entry.count)
+		var form := Floor.base_kind(int(entry.base) - Floor.FIRST)
+		totals[form] = totals.get(form, 0) + entry.count
 		saved.append(entry.buf.duplicate())
-		if kind == Floor.FIRST + Floor.BRANCH or kind == Floor.FIRST + Floor.ROOT_SPAN:
+		if form in [Floor.BRANCH, Floor.ROOT_SPAN]:
 			check(entry.count == 0, "Дорожные ветки и корни через тропу создаёт RoadObstacles, а не случайная лесная подстилка")
-		else:
-			check(entry.count > 0, "Смешанный лес должен содержать подстилку, корни, ветки, валежник, сухостой и камни: %d" % kind)
 		for n: int in entry.count:
 			var offset := n * VegetationLayer.STRIDE
 			var buf: PackedFloat32Array = entry.buf
@@ -76,15 +78,18 @@ func run() -> void:
 			var bounds: AABB = xf * entry.box
 			for point: Vector2 in [Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.end.x, bounds.position.z), Vector2(bounds.position.x, bounds.end.z), Vector2(bounds.end.x, bounds.end.z), Vector2(pos.x, pos.z)]:
 				var k := floori(point.y / GameConfig.TILE) * w.W + floori(point.x / GameConfig.TILE)
-				check(w.path_mask[k] == 0 and w.river[k] == 0, "Весь след детали должен обходить дорогу и реку")
+				var leafy_edge := int(entry.base) in Plants.OPEN_FORMS and point != Vector2(pos.x, pos.z)
+				check((w.path_mask[k] == 0 or form == Floor.ROOTS or leafy_edge) and w.river[k] == 0, "Деталь %d (семейство %d), путь %d, река %d у %s: твёрдый след/сердцевина должны обходить полотно/воду" % [kind, form, w.path_mask[k], w.river[k], point])
 				check(not StageVegetation.near_hut(w.settlements, point.x / GameConfig.TILE, point.y / GameConfig.TILE, 0.3), "Края детали не должны входить в дом")
-			if kind == Floor.FIRST + Floor.ROOTS:
+			if form == Floor.ROOTS:
 				var attached := false
 				for o in w.obj_count:
 					if absf(w.obj_x[o] * GameConfig.TILE - pos.x) < 0.001 and absf(w.obj_y[o] * GameConfig.TILE - pos.z) < 0.001:
 						attached = true
 						break
 				check(attached, "Корни должны расти от настоящего ствола")
+	for form in [Floor.LEAVES, Floor.NEEDLES, Floor.TWIG, Floor.ROOTS, Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STONES, Floor.STUMP, Floor.BOULDER]:
+		check(totals.get(form, 0) > 0, "В лесу присутствует семейство подстилки %d (все варианты/LOD)" % form)
 	veg.update(512.0, 512.0, true)
 	for kind in range(Floor.FIRST, veg.understory.size()):
 		check(saved[kind - Floor.FIRST] == veg.understory[kind].buf, "Детали должны повторяться при обновлении")

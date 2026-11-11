@@ -281,6 +281,24 @@ func patch_contracts() -> void:
 			"earthworks extending past prepared terrain are rejected")
 
 
+func mountain_shelf_contract() -> void:
+	var w := Fixture.world()
+	w.trails = [w.trails[2]]
+	w.trails[0].kind = "mountain"
+	for z in w.H:
+		for x in w.W: w.h[z * w.W + x] += (z + 0.5) * GameConfig.TILE * 0.6 / GameConfig.HS
+	var h := Heightfield.new(w, false)
+	var before := build(h, false)
+	var after := build(h, true)
+	var original_cross := 0.0
+	var shaped_cross := 0.0
+	var axis: float = w.trails[0].pts[0].y * GameConfig.TILE
+	for x in range(45, 330):
+		original_cross += absf(surface_at(before, h, x, axis + 0.9) - surface_at(before, h, x, axis - 0.9))
+		shaped_cross += absf(surface_at(after, h, x, axis + 0.9) - surface_at(after, h, x, axis - 0.9))
+	check(after.fit_routes.is_empty() and shaped_cross < original_cross * 0.9, "mountain shelf reduces steep cross-slope without a longitudinal fit: %.3f -> %.3f" % [original_cross, shaped_cross])
+
+
 func corridor_contracts() -> void:
 	# A side slope exercises the natural component of tilt, absent from the flat ride fixture.
 	var w := Fixture.world()
@@ -341,13 +359,18 @@ func corridor_contracts() -> void:
 	check(same_channels and physical_error < 0.00001, "reversed duplicate preserves the physical mountain surface: %.8f m" % physical_error)
 	var base := build(h, false)
 	var far_change := 0.0
+	var far_lift := 0.0
 	var parallel: Dictionary = w.trails[0].duplicate(true)
 	for point: Dictionary in parallel.pts:
 		point.y += 1.5 # 6 m between axes, 3.8 m between the treads
 	for j in range(40, 330):
 		var z: float = w.trails[0].pts[0].y * GameConfig.TILE - 4.6
 		far_change = maxf(far_change, absf(surface_at(full, h, j, z) - surface_at(base, h, j, z)))
-	check(far_change > 0.05, "land shape reaches beyond the old shoulder: %.3f m" % far_change)
+		far_lift = maxf(far_lift, surface_at(full, h, j, z) - surface_at(base, h, j, z))
+	# Triangle interpolation includes the last millimetres of the adjacent bench.
+	# The wash itself may only lower ground, never create a band of knolls.
+	check(far_change > 0.01 and far_change < 0.16 and far_lift < 0.005, "shoulder wash stays shallow without knolls (change %.3f, bench blend %.6f m)" % [far_change, far_lift])
+	mountain_shelf_contract()
 	w.trails[1] = parallel
 	var separate := build(h, true)
 	var changed := false

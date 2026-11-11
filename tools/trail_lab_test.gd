@@ -58,6 +58,11 @@ func run() -> void:
 		await process_frame
 		quit(1 if failures else 0)
 		return
+	check_nature_props()
+	if "--nature-only" in OS.get_cmdline_user_args():
+		print("trail_lab nature: ", failures, " failures / ", checks, " checks")
+		quit(1 if failures else 0)
+		return
 	var routes := Fixture.definitions()
 	var h := Fixture.build(routes, false)
 	var w := h.world
@@ -162,6 +167,32 @@ func run() -> void:
 	file.store_string(JSON.stringify(report, "\t"))
 	print("trail_lab: ", failures, " failures / ", checks, " checks; ", report)
 	quit(1 if failures else 0)
+
+func check_nature_props() -> void:
+	var props := []
+	for i in 144:
+		props.append({kind = "root", pos = Vector3(3, 0, 10), a = Vector2(2, 10), b = Vector2(4, 10), radius = 0.06, seed = i})
+		props.append({kind = "stone", pos = Vector3(3, 0, 10), size = Vector3(0.4, 0.2, 0.3), seed = i, rot = 0.0})
+	var parent := Node3D.new()
+	var began := Time.get_ticks_usec()
+	TrailLabProps.populate(parent, props)
+	var instances := 0
+	var valid := true
+	for child in parent.get_children():
+		valid = valid and child is MultiMeshInstance3D
+		if child is MultiMeshInstance3D:
+			instances += child.multimesh.instance_count
+			# Dummy RenderingServer returns identity, rather than the stored transform.
+			if DisplayServer.get_name() != "headless":
+				for i in child.multimesh.instance_count:
+					var box: AABB = child.multimesh.get_instance_transform(i) * child.multimesh.mesh.get_aabb()
+					if child.material_override.albedo_color == Color.WHITE:
+						valid = valid and box.end.y <= 0.06 / 0.8 + 0.015
+	check(valid and instances == props.size() and parent.get_child_count() <= 8, "technical nature: 288 props use at most eight shared MultiMeshes; height checked with a real renderer")
+	if DisplayServer.get_name() == "headless": print("technical nature: height check requires a real renderer (skipped in headless)")
+	print("technical nature batching: ", parent.get_child_count(), " nodes, ", instances, "/", props.size(), " instances, valid ", valid, ", ", (Time.get_ticks_usec() - began) / 1000.0, " ms")
+	parent.free()
+
 
 func capture_lab(lab: Node, out: String) -> void:
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(out))

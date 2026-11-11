@@ -102,7 +102,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			if roll >= MAX_CHANCE: continue
 			var patch := smoothstep(-0.15, 0.5, stony[i])
 			# Камни у обочины — там, где им есть откуда взяться (порода, горы); у равнинной дороги их мало
-			var shoulder := (1.0 - smoothstep(1.0, 8.0, dp)) * (0.15 + 0.85 * maxf(exposed, mountain))
+			# The road is a clearance boundary, never a source of geology.
+			# Size selection below may use proximity; abundance comes from rock/talus.
+			var shoulder := (1.0 - smoothstep(1.0, 8.0, dp)) * maxf(exposed, mountain)
 			# Осыпь питает скала выше по линии падения, а не любой соседний склон: на 8, 16 и 24 м вверх.
 			var source := 0.0
 			var reach_cells := 0
@@ -146,7 +148,6 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var deposit_weight := lerpf(0.15, 1.65, smoothstep(0.2, 0.8, deposit))
 			var chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
 			chance += mountain * talus * (0.12 + 0.14 * patch)
-			chance += shoulder * (0.14 + patch * 0.19)
 			chance *= deposit_weight * (1.0 - smoothstep(0.6, 0.85, sl))
 			if bi == Biomes.SWAMP or bi == Biomes.SNOW: chance *= 0.35
 			if bi == Biomes.DESERT or bi == Biomes.BEACH: chance *= 0.5

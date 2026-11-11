@@ -251,15 +251,19 @@ func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
 	var pin := _pinned(w, h)
 	var picked := []
 	# по виду пути самый длинный; ещё самая длинная лесная тропа (покрытие у начала), если она есть
-	for kind: String in KINDS + ([] if forest != null else ["forest"]):
+	for kind: String in KINDS + ["stone", "prepared"] + ([] if forest != null else ["forest"]):
 		var best := -1
 		var best_len := 0
 		for k in w.trails.size():
 			var t: Dictionary = w.trails[k]
-			if t.has("trail_id"): continue
-			if kind == "forest":
+			if kind == "prepared":
+				if not t.has("trail_id"): continue
+			elif t.has("trail_id"): continue
+			if kind == "stone":
+				if not t.has("surf") or not RoadSurface.STONE in t.surf: continue
+			elif kind == "forest":
 				if t.kind != "trail" or t.surf.is_empty() or t.surf[t.surf.size() / 3] != RoadSurface.FOREST: continue
-			elif t.kind != kind: continue
+			elif kind != "prepared" and t.kind != kind: continue
 			var n: int = _stations(t).p.size()
 			if n > best_len:
 				best_len = n
@@ -268,6 +272,8 @@ func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
 		var st := _stations(w.trails[best])
 		var ps: PackedVector2Array = st.p
 		var at := int(best_len * 0.35)
+		if kind == "stone":
+			while at < best_len - 45 and w.road_surface[_cell(w, ps[at])] != RoadSurface.STONE: at += 1
 		while at < best_len - 45:
 			var clean := true
 			for j in range(at - 30, at + 31, 3):
@@ -538,12 +544,10 @@ func _clutter_at(at: Vector2, trees: bool) -> Dictionary:
 		vegetation._apply_grass(true)
 	var counts := {}
 	for kind: int in [Floor.BRANCH, Floor.STONES, Floor.LOG, Floor.MOSS_LOG, Floor.BOULDER, Floor.ROOT_SPAN]:
-		var group_id := Floor.FIRST + kind
-		var group: MultiMesh = vegetation.understory[group_id].mm
-		counts[kind] = group.visible_instance_count
-		if vegetation._far_of.has(group_id):
-			var distant: MultiMesh = vegetation.understory[vegetation._far_of[group_id]].mm
-			counts[kind] += distant.visible_instance_count
+		counts[kind] = 0
+	for entry: Dictionary in vegetation.understory:
+		var kind := Floor.base_kind(int(entry.base) - Floor.FIRST)
+		if counts.has(kind): counts[kind] += entry.mm.visible_instance_count
 	var parts: Dictionary = vegetation.get("road_clutter_stats").duplicate(true) if "road_clutter_stats" in vegetation else {}
 	if "road_clutter_stats" in vegetation:
 		var bumps := 0
@@ -562,18 +566,19 @@ func _clutter_at(at: Vector2, trees: bool) -> Dictionary:
 		road_parts = parts,
 		multimesh_counts = counts, capsules = vegetation.obstacles.size() / 7, bumps = vegetation.bumps.size() / 6,
 		fill_and_upload_ms = (Time.get_ticks_usec() - started) / 1000.0,
+		phases = vegetation.fill_stats.duplicate(), candidate_evaluations = vegetation.road.evaluations, candidate_cache_entries = vegetation.road._cache.size(),
 	}
 
 
 func _nearest_root(at: Vector2) -> Vector2:
-	var entry: Dictionary = vegetation.understory[Floor.FIRST + Floor.ROOT_SPAN]
-	var buffer: PackedFloat32Array = entry.buf
 	var best := Vector2.INF
-	for i in entry.count:
-		var offset: int = i * VegetationLayer.STRIDE
-		var point := Vector2(buffer[offset + 3], buffer[offset + 11])
-		if at.distance_squared_to(point) < at.distance_squared_to(best):
-			best = point
+	for form in [Floor.ROOT_SPAN, Floor.ROOT_SPAN_B, Floor.ROOT_SPAN_C]:
+		var entry: Dictionary = vegetation.understory[Floor.FIRST + form]
+		var buffer: PackedFloat32Array = entry.buf
+		for i in entry.count:
+			var offset: int = i * VegetationLayer.STRIDE
+			var point := Vector2(buffer[offset + 3], buffer[offset + 11])
+			if at.distance_squared_to(point) < at.distance_squared_to(best): best = point
 	return best
 
 

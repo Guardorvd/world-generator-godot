@@ -111,9 +111,8 @@ public partial class FastGrid
 			double contour = noise.GetNoise2D((float)(x * 0.027 + z * 0.016 + 629.0), (float)(z * 0.028 - x * 0.016 - 137.0));
 			double patch = noise.GetNoise2D((float)(x * 0.012 - 79.0), (float)(z * 0.012 + 401.0));
 			double cut = RoadBell((contour - 0.12) / 0.21) * RoadSmooth(-0.2, 0.35, patch);
-			double knoll = RoadSmooth(0.15, 0.60, -contour) * RoadSmooth(-0.1, 0.42, -patch);
 			double blend = (1.0 - RoadSmooth(0.8, 5.0, e)) * RoadLerp(0.72, 1.0, RoadSmooth(0.0, 1.8, e));
-			land = (knoll * 0.55 - cut * 0.78) * strength * blend;
+			land = -cut * 0.32 * strength * blend;
 		}
 		return core + bank + land;
 	}
@@ -219,13 +218,13 @@ public partial class FastGrid
 			outv[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * g;
 			outv[at + 3] = table[k + 7] * RoadSmooth(0.2, 0.55, hole) * RoadLerp(0.3, 1.0, broken) * mul * holes * g;
 			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
-			double slope = RoadSmooth(0.04, 0.15, Math.Abs(cross)) * (1.0 - RoadSmooth(0.35, 0.6, Math.Abs(cross)));
+			double slope = RoadSmooth(0.04, 0.15, Math.Abs(cross));
 			double gain = (0.6 + 0.4 * energy) * scale * g;
 			outv[at + 5] = RoadShoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain * RoadLerp(0.2, 1.25, RoadSmooth(-0.35, 0.35, lumpL));
 			outv[at + 6] = RoadShoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain * RoadLerp(0.2, 1.25, RoadSmooth(-0.35, 0.35, lumpR));
 			double gradeMax = Math.Max(grade, Math.Abs(cross));
 			double landSlope = (0.3 + 0.7 * RoadSmooth(0.02, 0.18, gradeMax)) * (1.0 - RoadSmooth(0.28, 0.58, gradeMax));
-			outv[at + 7] = holes * mul * g * RoadSmooth(0.0, 12.0, landDist[j]) * landSlope * RoadSmooth(-0.25, 0.12, character);
+			outv[at + 7] = holes * mul * g * RoadSmooth(0.0, 12.0, landDist[j]) * landSlope * RoadSmooth(-0.25, 0.12, character) * RoadLerp(0.35, 1.0, RoadSmooth(0.02, 0.3, -curve));
 		}
 		double cap = table[k + 10] * step;
 		// Bound by the distance to every protected zero before the slope passes. Otherwise
@@ -335,7 +334,7 @@ public partial class FastGrid
 				for (int j = 0; j < n; j++)
 				{
 					strength[from + j] = (float)RoadSmooth(0.0, fitFade, distance[j]);
-					limits[from + j] = 0.3f;
+					limits[from + j] = scales[t] > 0.0 ? 0.6f : 0.3f;
 				}
 			}
 			else

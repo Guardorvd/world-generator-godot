@@ -262,12 +262,72 @@ func _placement() -> void:
 			near += 1
 	check(near == 0, "у старта пусто")
 	# мешы на месте: корень через тропу — последняя деталь подстилки, веса подстилки не сдвинулись
-	check(Floor.meshes().size() == Floor.ROOT_SPAN + 1 and Floor.weights(0.5, 0.5, 0.5, 0.5, 0.5).size() == Floor.ROOT_SPAN + 1, "корень — последняя деталь подстилки")
+	check(Floor.meshes().size() == Floor.COUNT and Floor.weights(0.5, 0.5, 0.5, 0.5, 0.5).size() == Floor.COUNT, "варианты мешей и веса имеют одинаковый размер")
 
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 90)
 	_tiers()
 	_placement()
+	_contracts()
 	print("Итого: ", "всё прошло" if fails == 0 else "%d не прошло" % fails)
 	quit(1 if fails > 0 else 0)
+
+
+func _contracts() -> void:
+	var scene := _world("trail", 0.9, 0.1)
+	var w: WorldData = scene[0]
+	var g: Heightfield = scene[1]
+	var road := RoadObstacles.new(w)
+	var pairs := road.around(512, 512, 700)
+	road.begin_fill(g, scene[2], pairs)
+	var began := Time.get_ticks_usec()
+	for p in range(0, pairs.size(), 2): road.pick(g, scene[2], pairs[p], pairs[p + 1])
+	var cold := Time.get_ticks_usec() - began
+	var count := road.evaluations
+	began = Time.get_ticks_usec()
+	road.begin_fill(g, scene[2], pairs)
+	for p in range(0, pairs.size(), 2): road.pick(g, scene[2], pairs[p], pairs[p + 1])
+	print("candidate cache cold/warm us ", cold, "/", Time.get_ticks_usec() - began, "; entries ", road._cache.size())
+	check(road.evaluations == count, "тёплое обновление не повторяет поиск причин и проверки кандидатов")
+	road.clear.append(Vector2(512, 512))
+	road.begin_fill(g, scene[2], pairs)
+	check(road._cache.is_empty(), "новая защищённая зона инвалидирует в том числе пустые результаты")
+	road.begin_fill(g, scene[2], PackedInt32Array())
+	check(road._cache.is_empty(), "кэш не держит выгруженные участки")
+	var d := TrailDefinition.new()
+	d.id = "prepared"
+	d.kind = "trail"
+	for p: Dictionary in w.trails[0].pts: d.points.append(Vector2(p.x, p.y) * GameConfig.TILE)
+	var e := TrailElement.new()
+	e.profile = TrailElement.Profile.TABLETOP
+	e.station = 450.0
+	e.length = 24.0
+	d.elements = [e]
+	w.trails[0].trail_id = d.id
+	w.trail_plan = {state = "found", routes = [StageTrailPlan.pack(d)]}
+	road = RoadObstacles.new(w)
+	check(road.protected(0, 430) and road.protected(0, 470), "защищены заход и приземление трамплина")
+	check(not road.protected(0, 250), "обычный участок подготовленной трассы открыт природе")
+	var natural := 0
+	for n in range(3, road._sampled[0].size() - 3):
+		var o := road.pick(g, scene[2], 0, n)
+		if not o.is_empty():
+			natural += 1
+			check(absf(road._along[0][n] - 450.0) > 24.0, "природный объект вне защищённой секции")
+	check(natural > 0, "на природных отрезках подготовленной трассы действительно есть объекты")
+	for v in 3:
+		var xf := Transform3D(Basis(), Vector3(0, 100, 0))
+		var bumps := RoadObstacles.bump(RoadObstacles.STONES, xf, 1.0, g, v)
+		var boxes := Floor.stone_bounds(v)
+		check(bumps.size() / 6 == boxes.size(), "камни %d: контакт у каждого видимого камня" % v)
+		for i in boxes.size():
+			var center: Vector3 = boxes[i].get_center()
+			check(Vector2(bumps[i * 6], bumps[i * 6 + 1]).distance_to(Vector2(center.x, center.z)) < 0.001, "камни: контакт в центре камня, не россыпи")
+		var roots := RoadObstacles.bump(RoadObstacles.ROOT, xf, 1.0, g, v)
+		check(not roots.is_empty(), "корень %d имеет выступающие участки" % v)
+		var obstacles := ForestObstacles.new(w, g)
+		obstacles.set_bumps(roots, 1)
+		var rise := obstacles.bump_at(-0.2, 0.05)
+		obstacles.set_bumps(roots + roots, 2)
+		check(is_equal_approx(rise, obstacles.bump_at(-0.2, 0.05)), "перекрытие частей корня не удваивает удар")

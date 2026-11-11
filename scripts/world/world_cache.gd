@@ -29,7 +29,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 16 # connected mountain divides/spurs and sheltered alpine shoulders
 const SCHEMA_TRAILS_VERSION := 23 # share whole network subpaths across divergence and rejoining
-const SCHEMA_NATURE_VERSION := 12 # accepted massifs survive object spacing
+const SCHEMA_NATURE_VERSION := 13 # road proximity no longer creates artificial rock belts
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"
@@ -51,7 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
-const SURFACE_VERSION := 14 # distance tread mask independent of shoulder height
+const SURFACE_VERSION := 15 # local mountain cross-slope trim; road wash instead of roadside knolls
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()

@@ -177,6 +177,7 @@ var fill_stats := {} # время частей последней расклад
 enum RoadPlacement { RANGE, CAPACITY, OBJECT, TERRAIN, DETAIL, VISUAL, CONTACT }
 var measure_road_clutter := false
 var road_clutter_stats := {} # only populated by the road corridor probe
+var _road_revision := 0 # published on the main thread, consumed only by the detail worker
 var _fill_started := 0
 var load_radius := tree_r + LOAD_MARGIN
 var drop_radius := load_radius + DROP_MARGIN
@@ -245,14 +246,15 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	var specs: Array = []
 	for form in meshes.size():
 		specs.append([meshes[form], form])
-	var far_forms: Dictionary = preload("res://scripts/render/asset_catalog.gd").get_catalog().far_forms
+	var far_forms: Dictionary = preload("res://scripts/render/asset_catalog.gd").get_catalog().far_forms.duplicate()
+	far_forms.merge(Floor.road_far_meshes(), true)
 	for form: int in far_forms:
 		_far_of[form] = specs.size()
 		specs.append([far_forms[form], form])
 	for spec: Array in specs:
 		var mesh: Mesh = spec[0]
 		var base: int = spec[1]
-		var kind := base - Floor.FIRST
+		var kind := Floor.base_kind(base - Floor.FIRST)
 		var has_contacts := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER, Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]
 		if has_contacts:
 			_last_contact_group = understory.size()
@@ -715,7 +717,7 @@ func _detail_snapshot() -> Dictionary:
 	if world.outer != null:
 		regions = world.outer.get_ledger().get("regions", {})
 		trees.append_array(world.outer.veg.values())
-	return {regions = regions, trees = trees}
+	return {regions = regions, trees = trees, road_revision = _road_revision}
 
 
 func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float, immediate := false, snapshot: Dictionary = {}) -> void:
@@ -1028,6 +1030,7 @@ func _merge_far_variants(entries: Array) -> void:
 ## по окончательной географии (вода, дороги, поселения).
 func refresh(rect: Rect2i) -> void:
 	_epoch += 1
+	_road_revision += 1
 	# Unpublished groups belong to the old terrain. Keep only the live buffers
 	# and let the normal worker rebuild the snapshot under the frame budget.
 	if not _present.is_empty():
@@ -1415,6 +1418,8 @@ static func _put_xform(buf: PackedFloat32Array, o: int, x: float, y: float, z: f
 
 
 func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
+	if snapshot.is_empty(): snapshot = _detail_snapshot()
+	placement.regions = snapshot.regions
 	var w := world
 	var rT := grass_r / TILE
 	var rF := maxf(grass_r, under_r) / TILE
@@ -1433,18 +1438,21 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	_obstacles_next = PackedFloat32Array()
 	_bumps_next = PackedFloat32Array()
 	placement.prepare(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, rF * TILE + _fill_lead.length() * 0.5 + 12.0)
+	placement.prepare_outer(snapshot.trees, px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, rF * TILE + _fill_lead.length() * 0.5 + 12.0)
 	_understory_sites.clear()
 	for entry: Dictionary in understory:
 		entry.count = 0
 		entry.low = Vector3.INF
 		entry.high = -Vector3.INF
-	# Препятствия на полотне — первыми: обочина, подлесок и трава обходят их, а не наоборот.
-	_fill_road(px, pz)
 	# Объекты и журнал захвачены главным потоком до запуска задачи.
-	if snapshot.is_empty(): snapshot = _detail_snapshot()
 	var regions: Dictionary = snapshot.regions
 	var canopy_rect := Rect2i(Vector2i(floori(scan_low.x), floori(scan_low.y)), Vector2i(ceili(scan_high.x) - floori(scan_low.x) + 1, ceili(scan_high.y) - floori(scan_low.y) + 1))
 	var canopy := Floor.canopy_image(canopy_rect, snapshot.trees) if not regions.is_empty() and (scan_low.x < 0 or scan_low.y < 0 or scan_high.x >= w.W or scan_high.y >= w.H) else null
+	placement.outer_canopy = canopy
+	placement.canopy_rect = canopy_rect
+	# Obstacles still own first placement, after the complete snapshot is ready.
+	road.sync_regions(regions, placement, snapshot.trees, snapshot.get("road_revision", 0))
+	_fill_road(px, pz)
 	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
 	for j in range(maxi(0, floori(scan_low.y)), mini(w.H - 1, ceili(scan_high.y)) + 1):
 		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
@@ -1521,6 +1529,7 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
 	var t_place := Time.get_ticks_usec()
 	_fill_tree_roots(px, pz)
+	_fill_outer_roots(snapshot.trees, px, pz)
 	_filter_grass()
 	fill_stats = {scan_ms = (t_scan - _fill_started) / 1000.0, sort_ms = (t_sort - t_scan) / 1000.0,
 		place_ms = (t_place - t_sort) / 1000.0, grass_filter_ms = (Time.get_ticks_usec() - t_place) / 1000.0,
@@ -1556,7 +1565,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 				continue
 			# 11.4: уцелевшая у полотна трава — выше и суше (некошеная обочина), та же раскладка.
 			verge = clampf(weight * 5.0, 0.0, 1.0)
-		elif path >= 2:
+		elif path >= 2 and (inside or not placement.region_clear(x, z)):
 			continue
 		var y: float
 		if inside:
@@ -1670,7 +1679,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
 	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
 	# 15.0: у дорог и троп подлесок решает ground_clear по настоящему полотну; клетка звериной тропы и путь за краем плана — пусто
-	if path == 1 or (path > 0 and not _in_plan(i, j)) or slope > 0.9:
+	if path == 1 or slope > 0.9:
 		return grass_mul
 	var light := sunlight * (1.0 - canopy * 0.85)
 	var weights := Understory.weights(bi, moisture, light, canopy, ch)
@@ -1724,6 +1733,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		var scale := (0.7 + WGRandom.hash2(i * 8 + m, j, seed + 5) * 0.6) * _flora_grow(kind)
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
+		kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, int(WGRandom.hash2(i * 8 + m, j, seed + 9) * 3.0)) if kind >= Floor.FIRST else kind
 		_understory_sites.append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
 
@@ -1758,7 +1768,7 @@ func _flora_grow(kind: int) -> float:
 ## высота, уклон, порода, вода, полог, пути) и плавный шум трёх масштабов; новых карт нет.
 func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float,
 		alt: float, water: float) -> float:
-	if path == 1 or (path > 0 and not _in_plan(i, j)) or slope > 1.15:
+	if path == 1 or slope > 1.15:
 		return 1.0
 	var seed := world.seed_num ^ 8803
 	var inside := _in_plan(i, j)
@@ -1941,7 +1951,7 @@ func _verge(i: int, j: int) -> float:
 ## подлеска (их MultiMesh общие на весь круг — новых узлов и вызовов отрисовки нет). Только там,
 ## где _rock_shelter: сыро и закрыто; открытая порода остаётся голой.
 func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, px: float, pz: float) -> void:
-	if path == 1 or (path > 0 and not _in_plan(i, j)) or slope > 0.9:
+	if path == 1 or slope > 0.9:
 		return
 	var origin: Vector2i = world.world_origin if i >= 0 and j >= 0 and i < world.W and j < world.H else Vector2i.ZERO
 	var hx := i + origin.x
@@ -1989,6 +1999,7 @@ func _fill_road(px: float, pz: float) -> void:
 	if road == null or not settings.trail_clutter:
 		return
 	var pairs := road.around(px + _fill_lead.x * 0.5, pz + _fill_lead.y * 0.5, maxf(grass_r, under_r) + _fill_lead.length() * 0.5)
+	road.begin_fill(heights, _forest_surface, pairs)
 	for p in range(0, pairs.size(), 2):
 		var o := road.pick(heights, _forest_surface, pairs[p], pairs[p + 1])
 		if o.is_empty():
@@ -2001,9 +2012,12 @@ func _fill_road(px: float, pz: float) -> void:
 		# 15.0: у препятствия может быть несколько частей (корни от одного ствола), у каждой своя длина и посадка
 		for part: Dictionary in o.parts:
 			var kind: int = Floor.FIRST + [Floor.BRANCH, Floor.STONES, Floor.MOSS_LOG if o.moss else Floor.LOG, Floor.BOULDER, Floor.ROOT_SPAN][part.kind]
+			var variant: int = part.get("variant", int(WGRandom.hash2(roundi(part.x * 7.0), roundi(part.z * 7.0), world.seed_num) * 3.0))
+			kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, variant)
 			var outcome: int = RoadPlacement.RANGE
 			if StreamPolicy.distance_to_coverage(Vector2(part.x, part.z), Vector2(px, pz), _fill_lead) <= (under_r if understory[kind].far else grass_r):
-				outcome = _put_understory(kind, part.x, part.z, part.rot, part.scale, 1.0, o.owner, 0.0, true, part.stretch, part.sink)
+				outcome = _put_understory(kind, part.x, part.z, part.rot, part.scale, 1.0, o.owner, 0.0, true, part.stretch, part.sink, Color.WHITE, -1,
+					minf(1.0, 1.25 / part.scale) if part.kind == RoadObstacles.ROOT else 1.0)
 			if measure_road_clutter:
 				var label: String = RoadPlacement.keys()[outcome]
 				counts[label] = counts.get(label, 0) + 1
@@ -2022,7 +2036,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	if entry.count >= entry.cap:
 		fill_capped += 1
 		return RoadPlacement.CAPACITY
-	var floor_kind := kind - Floor.FIRST
+	var floor_kind := Floor.base_kind(kind - Floor.FIRST)
 	var local_box: AABB = entry.box
 	# Проверка стволов должна видеть ту же длину, что меш и капсула столкновения.
 	var object_box := AABB(local_box.position * Vector3(stretch, 1.0, 1.0), local_box.size * Vector3(stretch, 1.0, 1.0))
@@ -2038,25 +2052,29 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		if (_open_valid[cell * 2 + 1] & bit) == 0:
 			return RoadPlacement.OBJECT
 	else:
-		var ok := (on_road or placement.ground_clear(x, z, ground_r)) and placement.objects_clear(x, z, rot, scale, object_box, radius, owner)
+		# A root collar belongs to its living trunk. Only this low, attached form
+		# may overlap the soft verge; it keeps all water/house/structure checks.
+		var attached := floor_kind == Floor.ROOTS and owner != -1
+		var ground_ok := on_road or placement.ground_clear(x, z, ground_r, attached)
+		if measure_road_clutter and on_road and owner != -1 and not placement.objects_clear(x, z, rot, scale, object_box, radius):
+			var roots: Dictionary = road_clutter_stats.get(RoadObstacles.ROOT, {})
+			roots.owner_overlap = roots.get("owner_overlap", 0) + 1
+		var ok := ground_ok and placement.objects_clear(x, z, rot, scale, object_box, radius, owner)
 		if key >= 0:
 			_open_valid[cell * 2] |= bit
 			if ok:
 				_open_valid[cell * 2 + 1] |= bit
 		if not ok:
 			return RoadPlacement.OBJECT
-		if measure_road_clutter and on_road and owner >= 0 and not placement.objects_clear(x, z, rot, scale, object_box, radius):
-			var roots: Dictionary = road_clutter_stats[RoadObstacles.ROOT]
-			roots.owner_overlap = roots.get("owner_overlap", 0) + 1
-	var pos := Vector3(x, heights.ground_at(x, z) - 0.015 - sink, z)
+	var pos := Vector3(x, placement.ground_at(x, z) - 0.015 - sink, z)
 	var offset: int = entry.count * STRIDE
 	var xf := Transform3D(Basis(Vector3.UP, rot).scaled(Vector3.ONE * scale), pos)
 	xf.basis.x *= stretch
 	xf.basis.y *= squash # 16.1: распластанный куст (можжевельник)
 	if kind == Understory.MOSS or (floor_kind >= 0 and floor_kind not in [Floor.SNAG, Floor.STUMP, Floor.BOULDER]):
 		# Почвенные детали и валежник следуют склону; сухостой, пни и валуны остаются вертикальными.
-		var dx := heights.ground_at(x + 0.3, z) - heights.ground_at(x - 0.3, z)
-		var dz := heights.ground_at(x, z + 0.3) - heights.ground_at(x, z - 0.3)
+		var dx := placement.ground_at(x + 0.3, z) - placement.ground_at(x - 0.3, z)
+		var dz := placement.ground_at(x, z + 0.3) - placement.ground_at(x, z - 0.3)
 		xf.basis.x.y = (dx * xf.basis.x.x + dz * xf.basis.x.z) / 0.6
 		xf.basis.z.y = (dx * xf.basis.z.x + dz * xf.basis.z.z) / 0.6
 		if on_road and floor_kind in [Floor.ROOT_SPAN, Floor.LOG, Floor.MOSS_LOG, Floor.BRANCH]:
@@ -2066,7 +2084,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 				Floor.BRANCH:
 					xf = placement.seat_road_span(xf, Vector2(-1.1, 1.1), sink, 0.23, 0.60)
 				_:
-					xf = placement.seat_road_span(xf, Vector2(-2.2, 2.1), sink, 0.34, 0.70)
+					xf = placement.seat_road_span(xf, Floor.log_span(kind - Floor.FIRST), sink, 0.34, 0.70)
 			if xf == Transform3D.IDENTITY:
 				return RoadPlacement.TERRAIN
 		elif not placement.terrain_fits(xf, local_box, 0.25 if on_road and floor_kind == Floor.STONES else 0.18):
@@ -2078,7 +2096,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.buf[offset + 12] = tint * hue.r
 	entry.buf[offset + 13] = tint * hue.g
 	entry.buf[offset + 14] = tint * hue.b
-	entry.buf[offset + 15] = 1.0 - _forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r
+	entry.buf[offset + 15] = 1.0 - (_forest_surface.get_pixel(floori(x / TILE), floori(z / TILE)).r if _in_plan(floori(x / TILE), floori(z / TILE)) else placement.cover_at(x, z))
 	entry.buf[offset + 16] = rank
 	entry.buf[offset + 17] = WGRandom.hash2(floori(x * 13), floori(z * 11), 73)
 	entry.buf[offset + 18] = WGRandom.hash2(floori(x * 7), floori(z * 17), 79)
@@ -2093,8 +2111,9 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 		return RoadPlacement.VISUAL
 	if floor_kind == Floor.LOG or floor_kind == Floor.MOSS_LOG:
 		# бревно — капсула вдоль ствола (меш: от -2,2 до 2,1 м по X, толщина 0,23 м), верх ~0,45 м
-		var a := xf * Vector3(-2.2, 0.0, 0.0)
-		var b := xf * Vector3(2.1, 0.0, 0.07)
+		var span := Floor.log_span(kind - Floor.FIRST)
+		var a := xf * Vector3(span.x, 0.0, 0.0)
+		var b := xf * Vector3(span.y, 0.0, 0.07)
 		if on_road:
 			# Existing capsules, with local height along the seated mesh.
 			var pieces := clampi(ceili(absf(a.y - b.y) / 0.09), 1, 8)
@@ -2111,10 +2130,12 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	elif floor_kind == Floor.STUMP: # невысокий, перепрыгивается
 		_obstacles_next.append_array([x, z, x, z, 0.3 * scale, pos.y, pos.y + 0.45 * scale])
 	elif floor_kind == Floor.BOULDER:
-		_obstacles_next.append_array([x, z, x, z, 0.75 * scale, pos.y, pos.y + 0.95 * scale])
+		_obstacles_next.append_array([x, z, x, z, maxf(reach.x, reach.z), box.position.y, box.end.y])
 	elif on_road and floor_kind in [Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]: # не держат, а встряхивают колесо
 		var bump_kind := RoadObstacles.BRANCH if floor_kind == Floor.BRANCH else (RoadObstacles.ROOT if floor_kind == Floor.ROOT_SPAN else RoadObstacles.STONES)
-		var contact := RoadObstacles.bump(bump_kind, xf, scale, heights)
+		var form := kind - Floor.FIRST
+		var variant := [Floor.ROOT_SPAN, Floor.ROOT_SPAN_B, Floor.ROOT_SPAN_C].find(form) if bump_kind == RoadObstacles.ROOT else [Floor.STONES, Floor.STONE_SINGLE, Floor.STONES_PAIR].find(form)
+		var contact := RoadObstacles.bump(bump_kind, xf, scale, placement, maxi(0, variant))
 		_bumps_next.append_array(contact)
 		return RoadPlacement.VISUAL if contact.is_empty() else RoadPlacement.CONTACT
 	else:
@@ -2160,6 +2181,21 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 					continue
 				var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
 				_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(world.obj_s[o] * 0.7, 0.6, 1.3), 1.0, o)
+
+
+func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
+	var reach := GameConfig.GRASS_R + _ahead(grass_r)
+	for b in range(1, batches.size()):
+		var batch: Dictionary = batches[b]
+		for o in batch.x.size():
+			if not StageVegetation.TRUNK.has(batch.k[o]) or batch.s[o] < 0.85: continue
+			var x: float = batch.x[o] * TILE
+			var z: float = batch.y[o] * TILE
+			if StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead) > reach: continue
+			var cell := _region_cell(placement.regions, floori(x / TILE), floori(z / TILE))
+			if cell.is_empty() or cell.slope > 0.9: continue
+			var rot := WGRandom.hash2(floori(x * 97.0), floori(z * 89.0), 6677) * TAU
+			_put_understory(Floor.FIRST + Floor.ROOTS, x, z, rot, clampf(batch.s[o] * 0.7, 0.6, 1.3), 1.0, -2 - (b << 20) - o)
 
 
 static func _without_region(values: PackedFloat32Array, stride: int, box: Rect2) -> PackedFloat32Array:

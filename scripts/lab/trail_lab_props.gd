@@ -2,13 +2,17 @@ class_name TrailLabProps
 extends RefCounted
 ## Picture of technical features (TrailTechnical.props): plain meshes, no collision of their own.
 ## Colours separate the three roles at a glance: grey rock is solid, brown wood is hoppable or ridable.
+const PROP_CHUNK := 64.0
 
 static func populate(parent: Node3D, props: Array) -> void:
+	var floor_script := preload("res://scripts/render/forest_floor.gd")
 	var rocks := {}
+	var woods := {}
+	var groups := {}
 	var stone := _material(Color(0.5, 0.5, 0.48))
 	var boulder := _material(Color(0.36, 0.37, 0.38))
-	var root := _material(Color(0.36, 0.23, 0.12))
 	var log := _material(Color(0.5, 0.36, 0.2))
+	var wood := _material(Color.WHITE)
 	var planks := [_material(Color(0.58, 0.42, 0.24)), _material(Color(0.52, 0.37, 0.2))]
 	for p: Dictionary in props:
 		if p.kind == "deck":
@@ -17,29 +21,40 @@ static func populate(parent: Node3D, props: Array) -> void:
 		if p.kind == "gate":
 			_gate(parent, p)
 			continue
-		var node := MeshInstance3D.new()
+		var chunk := Vector2i(floori(p.pos.x / PROP_CHUNK), floori(p.pos.z / PROP_CHUNK))
 		match p.kind:
 			"stone", "boulder":
 				var variant: int = posmod(p.seed, RockModels.VARIANTS)
 				if not rocks.has(variant): rocks[variant] = RockModels.mesh(Vector3.ONE, variant, 0.15)
-				node.mesh = rocks[variant]
-				node.material_override = stone if p.kind == "stone" else boulder
-				node.position = p.pos
-				node.scale = p.size
-				node.rotation.y = p.rot
+				var group: String = p.kind + str(variant) + str(chunk)
+				if not groups.has(group): groups[group] = {mesh = rocks[variant], material = stone if p.kind == "stone" else boulder, transforms = []}
+				groups[group].transforms.append(Transform3D(Basis(Vector3.UP, p.rot).scaled(p.size), p.pos))
+				continue
 			"root", "log":
 				var span: Vector2 = p.b - p.a
-				var cylinder := CylinderMesh.new()
-				cylinder.top_radius = p.radius
-				cylinder.bottom_radius = p.radius
-				cylinder.height = span.length()
-				cylinder.radial_segments = 8
-				cylinder.rings = 1
-				node.mesh = cylinder
-				node.material_override = root if p.kind == "root" else log
-				var lift: float = p.radius * (0.2 if p.kind == "root" else 1.0)
-				node.position = p.pos + Vector3(0, lift, 0)
-				node.basis = Basis(Quaternion(Vector3.UP, Vector3(span.x, 0, span.y).normalized()))
+				if span.length_squared() < 0.0001: continue
+				var variant := posmod(int(p.seed), 2)
+				var form: String = p.kind + str(variant)
+				if not woods.has(form): woods[form] = floor_script.technical_wood(p.kind == "root", variant)
+				var group := form + str(chunk)
+				if not groups.has(group): groups[group] = {mesh = woods[form], material = wood, transforms = []}
+				var bounds: AABB = woods[form].get_aabb()
+				var top: float = p.radius / 0.8 if p.kind == "root" else p.radius * 2.0
+				var width := maxf(absf(bounds.position.z), absf(bounds.end.z))
+				var xf := Transform3D(Basis(Vector3.UP, atan2(-span.y, span.x)).scaled(Vector3(span.length(), top / bounds.end.y, p.radius / width)), p.pos)
+				groups[group].transforms.append(xf)
+				continue
+	for group: Dictionary in groups.values():
+		var node := MultiMeshInstance3D.new()
+		node.visibility_range_end = 180.0
+		node.visibility_range_end_margin = 20.0
+		node.material_override = group.material
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.mesh = group.mesh
+		mm.instance_count = group.transforms.size()
+		for i in mm.instance_count: mm.set_instance_transform(i, group.transforms[i])
+		node.multimesh = mm
 		parent.add_child(node)
 
 ## One straight piece of a northshore deck: a slab whose top is the support level of the bike, and a pair of

@@ -721,6 +721,8 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 		ground[j] = _heights.base_ground_at(points[j].x, points[j].y)
 	if t.kind == "mountain":
 		# Preserve the natural profile, but honour the same protected stations as roads.
+		# The local transverse bench may trim 60 cm, without smoothing the axis.
+		var local_cut := 0.6 if natural_relief and (not t.has("trail_id") or (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0) else 0.3
 		var strength := PackedFloat32Array()
 		var limits := PackedFloat32Array()
 		var distance := PackedFloat32Array()
@@ -735,7 +737,7 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 			distance[j] = minf(distance[j], back)
 		for j in count:
 			strength.append(smoothstep(0.0, FIT_FADE, distance[j]))
-			limits.append(0.3)
+			limits.append(local_cut)
 		fit_routes[route] = {points = points, profile = ground, strength = strength, limit = limits}
 		return
 	var need := PackedFloat32Array()
@@ -927,13 +929,13 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			out[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * gate
 			out[at + 3] = table[k + 7] * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
 			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)
-			var slope := smoothstep(0.04, 0.15, absf(cross)) * (1.0 - smoothstep(0.35, 0.6, absf(cross)))
+			var slope := smoothstep(0.04, 0.15, absf(cross))
 			var gain := (0.6 + 0.4 * energy) * scale * gate
 			out[at + 5] = _shoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_l))
 			out[at + 6] = _shoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_r))
 			var grade_max := maxf(grade, absf(cross))
 			var land_slope := (0.3 + 0.7 * smoothstep(0.02, 0.18, grade_max)) * (1.0 - smoothstep(0.28, 0.58, grade_max))
-			out[at + 7] = holes * mul * gate * smoothstep(0.0, FIT_FADE, land_dist[j]) * land_slope * smoothstep(-0.25, 0.12, character)
+			out[at + 7] = holes * mul * gate * smoothstep(0.0, FIT_FADE, land_dist[j]) * land_slope * smoothstep(-0.25, 0.12, character) * lerpf(0.35, 1.0, smoothstep(0.02, 0.3, -curve))
 		# добавленный продольный уклон не круче grade: от закреплённых нулей формы поднимаются плавно
 		var cap := table[k + 10] * STEP
 		# Сначала ограничиваем высоту расстоянием до закреплённых нулей: проходы уклона
@@ -1268,9 +1270,10 @@ func _land_shape(x: float, z: float, edge: float, strength: float) -> float:
 	var contour := _noise.get_noise_2d(x * 0.027 + z * 0.016 + 629.0, z * 0.028 - x * 0.016 - 137.0)
 	var patch := _noise.get_noise_2d(x * 0.012 - 79.0, z * 0.012 + 401.0)
 	var cut := _bell((contour - 0.12) / 0.21) * smoothstep(-0.2, 0.35, patch)
-	var knoll := smoothstep(0.15, 0.60, -contour) * smoothstep(-0.1, 0.42, -patch)
 	var blend := (1.0 - smoothstep(0.8, NATURAL_REACH, edge)) * lerpf(0.72, 1.0, smoothstep(0.0, 1.8, edge))
-	return (knoll * 0.55 - cut * 0.78) * strength * blend
+	# Global microrelief already belongs to StageRelief/OuterLand. Do not add
+	# unrelated knolls in a five-metre road strip; only shallow local wash remains.
+	return -cut * 0.32 * strength * blend
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).
