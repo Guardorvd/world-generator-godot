@@ -3,12 +3,39 @@ extends RefCounted
 ## Художественные модели умеренного леса. Общие меши, без узлов на каждую ветку.
 ## Заранее построенные силуэты; RNG локальный, генерацию мира не затрагивает.
 
+## Взрослые силуэты 0..3 выбираются по координатам дерева; у сосны, берёзы и дуба за ними возрастные формы
+## (с 11.11.2026): молодые YOUNG, YOUNG + 1 и старые OLD, OLD + 1. Модель — вид + форма * MODEL_STRIDE.
 const VARIANTS := 4
+const AGE_FORMS := 2
+const YOUNG := 4
+const OLD := 6
 const MODEL_STRIDE := 256
+## Возрастной класс дерева в obj_v: v = оттенок (0..2) + 3 * класс.
+const ADULT_AGE := 0
+const YOUNG_AGE := 1
+const OLD_AGE := 2
+## Номинальная высота взрослого дерева породы при масштабе 1, м. Поле ref формы — её высота в долях номинала:
+## масштаб экземпляра = obj_s / ref, поэтому obj_s — линейный размер дерева независимо от возрастной формы.
+const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0}
 static var _leaf_texture: Texture2D
 static var _bark_texture: Texture2D
 static var _needle_texture: Texture2D
 static var baking := false # authoring tool only
+
+
+## Есть ли у вида молодые и старые формы.
+static func has_ages(kind: int) -> bool:
+	return kind == Biomes.T_PINE or kind == Biomes.T_BIRCH or kind == Biomes.T_OAK
+
+
+## Сколько форм вида запекается.
+static func form_count(kind: int) -> int:
+	return VARIANTS + 2 * AGE_FORMS if has_ages(kind) else VARIANTS
+
+
+## Возрастной класс формы variant: взрослая, молодая или старая.
+static func age_of(variant: int) -> int:
+	return OLD_AGE if variant >= OLD else (YOUNG_AGE if variant >= YOUNG else ADULT_AGE)
 
 
 static func definition(kind: int, variant: int) -> Dictionary:
@@ -22,63 +49,167 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		return _dead(variant)
 	if kind == Biomes.T_BUSH:
 		return _bush(variant)
-	var birch := kind == Biomes.T_BIRCH
-	var conifer := kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE
-	if not conifer:
-		return _deciduous(variant, birch)
+	if kind == Biomes.T_BIRCH:
+		return _birch(variant)
+	if kind == Biomes.T_OAK:
+		return _oak(variant)
+	return _conifer(kind, variant)
+
+
+## Хвойные. Взрослая сосна — четыре узнаваемых характера (высокий свод, строевая, густая коническая, ветровая)
+## с чистым стволом на 40–55 % высоты; молодая — правильный конус с кроной почти до земли; старая — плоская
+## раскидистая вершина на немногих толстых сучьях. Снежная ель — прежние силуэты в новом размере.
+static func _conifer(kind: int, variant: int) -> Dictionary:
+	var snow := kind == Biomes.T_SNOWPINE
+	var age := ADULT_AGE if snow else age_of(variant)
+	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 6694 + variant * 331 + (19 if kind == Biomes.T_SNOWPINE else 0)
+	rng.seed = 6694 + variant * 331 + (19 if snow else 0)
 	var branches: Array = []
 	var foliage: Array = []
-	var snow := kind == Biomes.T_SNOWPINE
-	# Четыре узнаваемых характера: сосна с высоким сводом, строевая, густая коническая и ветровая.
-	var height: float = ([7.7, 6.6, 8.5, 7.2] if snow else [7.4, 8.7, 6.8, 8.0])[variant]
-	var radius: float = ([0.23, 0.21, 0.25, 0.22] if snow else [0.23, 0.25, 0.22, 0.24])[variant]
+	var height: float
+	var radius: float
+	var bend_amount: float
+	var base: float
+	var tiers: int
+	var max_span: float
+	var pad_y: float      # толщина хвойной лапы
+	var lift := Vector2(0.12, 0.42)
+	var snags := 0
+	if snow:
+		height = [7.7, 6.6, 8.5, 7.2][form] * 1.6
+		radius = [0.29, 0.27, 0.31, 0.28][form]
+		bend_amount = [0.08, 0.16, 0.22, 0.32][form] * 1.4
+		base = [0.65, 1.10, 0.50, 1.35][form] * 1.3
+		tiers = [10, 9, 11, 10][form]
+		max_span = 2.05
+		pad_y = 0.72
+		lift = Vector2(-0.14, 0.17)
+	elif age == YOUNG_AGE:
+		height = [6.2, 7.4][form]
+		radius = [0.10, 0.12][form]
+		bend_amount = [0.06, 0.14][form]
+		base = [0.28, 0.45][form]
+		tiers = [9, 10][form]
+		max_span = [1.30, 1.42][form]
+		pad_y = 0.46
+		lift = Vector2(0.10, 0.30)
+	elif age == OLD_AGE:
+		height = [25.0, 23.5][form]
+		radius = [0.42, 0.40][form]
+		bend_amount = [0.55, 1.10][form]
+		base = height * [0.62, 0.58][form]
+		snags = 7
+	else:
+		height = [18.0, 20.5, 17.0, 19.5][form]
+		radius = [0.29, 0.30, 0.28, 0.29][form]
+		bend_amount = [0.24, 0.42, 0.28, 1.05][form]
+		base = height * [0.45, 0.52, 0.41, 0.48][form]
+		tiers = [10, 10, 11, 8][form]
+		max_span = 2.25
+		pad_y = 0.80
+		lift = Vector2(0.16, 0.55)
+		snags = 4
 	var angle := rng.randf() * TAU
 	var bend_dir := Vector3(cos(angle), 0, sin(angle))
-	var bend_amount: float = ([0.08, 0.16, 0.22, 0.32] if snow else [0.10, 0.18, 0.12, 0.44])[variant]
 	var bend := bend_dir * bend_amount
-	var sway_dir := Vector3(-bend_dir.z, 0, bend_dir.x) * (0.08 if snow else 0.15) * (0.55 + variant * 0.2)
+	var sway_dir := Vector3(-bend_dir.z, 0, bend_dir.x) * (0.08 if snow else 0.15) * (0.55 + form * 0.2) * height / 7.5
 	var bark := Color("6e5644") if snow else Color("7c5a43")
 	var path: Array[Vector3] = []
-	for i in 7:
-		var t := i / 6.0
-		path.append(bend * (0.35 * t + 0.65 * t * t) + sway_dir * sin(t * PI) * t + Vector3(0, t * height, 0))
+	var rings := 9 if height > 12.0 else 7
+	for i in rings:
+		var t := i / float(rings - 1)
+		var crook := Vector3.ZERO
+		if age == OLD_AGE: # старая сосна: ствол с мягкими коленами
+			crook = Vector3(sin(t * 7.0 + form), 0, cos(t * 5.0 + form * 2.0)) * 0.16 * t
+		path.append(bend * (0.35 * t + 0.65 * t * t) + sway_dir * sin(t * PI) * t + crook + Vector3(0, t * height, 0))
 	branches.append([path, radius, radius * 0.08, bark, false])
-	_roots(branches, rng, 4, Vector2(radius * 1.3, radius * 1.9), radius * 1.15, radius * 0.18, radius * 0.46, bark)
-	var base: float = ([0.65, 1.10, 0.50, 1.35] if snow else [2.55, 3.65, 2.15, 2.95])[variant]
-	var tiers: int = ([7, 6, 8, 7] if snow else [6, 6, 7, 5])[variant]
-	for tier in tiers:
-		var t := tier / float(tiers)
-		var y := base + t * (height - base - 0.22)
-		# Естественный конус ярусов: не раздувается у земли и не превращается в голый шпиль наверху.
-		var profile := pow(1.0 - t, 0.62 if snow else 0.46) * (0.96 + 0.14 * sin(t * PI))
-		var max_span := 1.72 if snow else 1.82
-		var span := (max_span * profile + 0.24) * rng.randf_range(0.88, 1.10)
-		if not snow and variant == 3:
-			span *= 1.10 if tier < 3 else 0.94
-		var branch_count := 4 if tier < tiers - 2 else 3
-		var tier_twist := tier * 2.399
-		for j in branch_count:
-			var a := j * TAU / branch_count + tier_twist + rng.randf_range(-0.22, 0.22)
-			var dir := Vector3(cos(a), 0, sin(a))
-			var wind_bias := bend_dir * (0.18 * span if not snow and variant == 3 else 0.0)
-			var start := _path_at(path, (y + rng.randf_range(-0.12, 0.12)) / height)
-			var dip := -0.22 * span if snow else (-0.08 + 0.16 * t) * span
-			var tip_lift := rng.randf_range(-0.12, 0.14) if snow else rng.randf_range(0.12, 0.42)
-			var elbow := start + dir * span * 0.52 + wind_bias * 0.5 + Vector3(0, dip, 0)
-			var end := start + dir * span + wind_bias + Vector3(0, tip_lift, 0)
-			var branch_path := [start, elbow, end] if tier < 3 else [start, end]
-			branches.append([branch_path, 0.064 * (1.0 - t * 0.72) + 0.012, 0.009, bark, false, true])
-			var pad_pos := elbow.lerp(end, 0.50) + Vector3(0, 0.08 if snow else 0.14, 0)
-			var pad_size := Vector3(span * 0.72, (0.56 if snow else 0.58) * (1.0 - t * 0.18), span * 0.58)
-			foliage.append([pad_pos, pad_size, a, rng.randf() * 10.0])
-	# Верхушечная шапка хвои плавно замыкает силуэт.
-	foliage.append([path[-1] - Vector3.UP * 0.14, Vector3(0.58, 0.76, 0.58), angle, 2.0, true])
+	_roots(branches, rng, 4 if age != OLD_AGE else 5, Vector2(radius * 1.3, radius * 1.9), radius * 1.15, radius * 0.18, radius * 0.46, bark)
+	# Сухие сучки и обломки ниже кроны: у леса в пологе нижние ветви отмирают.
+	for i in snags:
+		var y := rng.randf_range(0.16, 0.94) * base
+		var a := rng.randf() * TAU + i * 2.399
+		var start := _path_at(path, y / height)
+		var length := rng.randf_range(0.35, 0.95) * (1.4 if age == OLD_AGE and i < 2 else 1.0)
+		var tip := start + Vector3(cos(a), 0, sin(a)) * length + Vector3(0, rng.randf_range(-0.25, 0.08) * length, 0)
+		branches.append([[start, tip], 0.07 if age == OLD_AGE and i < 2 else 0.032, 0.012, Color("6a5546"), false, true])
+	if age == OLD_AGE:
+		_old_pine_crown(branches, foliage, path, height, base, angle, form, rng, bark)
+	else:
+		for tier in tiers:
+			var t := tier / float(tiers)
+			var y := base + t * (height - base - 0.22)
+			# Естественный конус ярусов: не раздувается у земли и не превращается в голый шпиль наверху.
+			var profile := pow(1.0 - t, 0.62 if snow else (0.95 if age == YOUNG_AGE else 0.46)) * (0.96 + 0.14 * sin(t * PI))
+			var span := (max_span * profile + (0.14 if age == YOUNG_AGE else 0.24)) * rng.randf_range(0.88, 1.10)
+			if not snow and age == ADULT_AGE and form == 3:
+				span *= 1.10 if t < 0.35 else 0.94
+			var branch_count := 4 if tier < tiers - 2 else 3
+			if age == ADULT_AGE and t < 0.45:
+				branch_count = 5
+			var tier_twist := tier * 2.399
+			for j in branch_count:
+				var a := j * TAU / branch_count + tier_twist + rng.randf_range(-0.22, 0.22)
+				var dir := Vector3(cos(a), 0, sin(a))
+				var wind_bias := bend_dir * (0.18 * span if not snow and age == ADULT_AGE and form == 3 else 0.0)
+				var start := _path_at(path, (y + rng.randf_range(-0.12, 0.12)) / height)
+				var dip := -0.22 * span if snow else ((-0.03 if age == YOUNG_AGE else -0.08) + 0.16 * t) * span
+				var tip_lift := rng.randf_range(lift.x, lift.y)
+				var elbow := start + dir * span * 0.52 + wind_bias * 0.5 + Vector3(0, dip, 0)
+				var end := start + dir * span + wind_bias + Vector3(0, tip_lift, 0)
+				var branch_path := [start, elbow, end] if t < 0.4 else [start, end]
+				var thick := 0.064 * (1.0 - t * 0.72) + 0.012
+				if age == ADULT_AGE or snow:
+					thick *= 1.25
+				elif age == YOUNG_AGE:
+					thick *= 0.6
+				branches.append([branch_path, thick, 0.009, bark, false, true])
+				var pad_pos := elbow.lerp(end, 0.50) + Vector3(0, 0.08 if snow else 0.14, 0)
+				var pad_size := Vector3(span * (0.78 if age == YOUNG_AGE else 0.72), pad_y * (1.0 - t * 0.18), span * 0.58)
+				foliage.append([pad_pos, pad_size, a, rng.randf() * 10.0])
+				# Длинная лапа взрослого дерева — двумя пучками, а не одной растянутой пластиной.
+				if span > 1.55 and not snow:
+					foliage.append([start.lerp(elbow, 0.62) + Vector3(0, 0.12, 0), Vector3(span * 0.42, pad_y * 0.8, span * 0.38), a + 0.4, rng.randf() * 10.0])
+		# Верхушечная шапка хвои плавно замыкает силуэт.
+		var cap := 1.0 if age == YOUNG_AGE else 1.3
+		foliage.append([path[-1] - Vector3.UP * 0.14 * cap, Vector3(0.58, 0.76, 0.58) * cap * (0.75 if age == YOUNG_AGE else 1.0), angle, 2.0, true])
 	var colors := [Color("568758"), Color("63945d"), Color("4e7d53")]
-	if kind == Biomes.T_SNOWPINE:
+	if snow:
 		colors = [Color("b3c7bd"), Color("a1b6aa"), Color("c3d3ca")]
-	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, conifer), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, conifer)}
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, true), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, true), ref = _ref(kind, age, height)}
+
+
+## Высота формы в долях номинала породы: у взрослых силуэтов 1 (разница характеров остаётся), у молодых и старых — своя.
+static func _ref(kind: int, age: int, height: float) -> float:
+	if age == ADULT_AGE or not NOMINAL.has(kind):
+		return 1.0
+	return height / NOMINAL[kind]
+
+
+## Старая сосна: немногие толстые сучья несут плоские пучки хвои, вершина плоская и раскидистая.
+static func _old_pine_crown(branches: Array, foliage: Array, path: Array[Vector3], height: float, base: float, angle: float, form: int, rng: RandomNumberGenerator, bark: Color) -> void:
+	var limbs: int = [9, 8][form]
+	for j in limbs:
+		var u := j / float(limbs - 1)
+		var y := lerpf(base, height * 0.9, u) + rng.randf_range(-0.3, 0.3)
+		var a := angle + j * 2.399 + rng.randf_range(-0.3, 0.3)
+		var d := Vector3(cos(a), 0, sin(a))
+		var start := _path_at(path, y / height)
+		var reach := rng.randf_range(2.9, 4.0) * (1.0 - u * 0.45)
+		var rise := rng.randf_range(1.0, 1.8) * (1.0 - u * 0.35)
+		var end := start + d * reach + Vector3(0, rise, 0)
+		end.y = minf(end.y, height - 0.5 - rng.randf() * 0.7)
+		var elbow := start + d * reach * 0.42 + Vector3(0, (end.y - start.y) * 0.72, 0)
+		branches.append([[start, elbow, end], 0.14 * (1.0 - u * 0.4), 0.05, bark, false])
+		# Плоский пучок хвои на конце сука и второй — на середине.
+		for c in 4:
+			var ca := a + (c - 1.5) * 0.8 + rng.randf_range(-0.2, 0.2)
+			var cd := Vector3(cos(ca), 0, sin(ca))
+			var spot := end + cd * rng.randf_range(0.55, 1.0) + Vector3(0, rng.randf_range(-0.1, 0.35), 0)
+			foliage.append([spot, Vector3(1.85, 0.78, 1.45) * rng.randf_range(0.9, 1.12), ca, rng.randf() * 10.0])
+		foliage.append([elbow.lerp(end, 0.45) + Vector3(0, 0.3, 0), Vector3(1.5, 0.7, 1.2), a + 0.5, rng.randf() * 10.0])
+	# Плоская верхушка вместо острой шапки.
+	foliage.append([path[-1] - Vector3.UP * 0.3, Vector3(2.2, 0.8, 2.2), angle, 2.0, true])
 
 
 ## Та же ломаная ось, что у меша: ветви не отделяются от изогнутого ствола.
@@ -88,77 +219,75 @@ static func _path_at(path: Array[Vector3], t: float) -> Vector3:
 	return path[i].lerp(path[i + 1], at - i)
 
 
-## Дубы образуют ступенчатый свод с выраженной вершиной и широкими боковыми плечами;
-## берёзы поднимаются стройными белыми стволами сквозь лёгкие ажурные ярусы листвы.
-static func _deciduous(variant: int, birch: bool) -> Dictionary:
+## Берёза поднимается стройным белым стволом сквозь лёгкие ажурные ярусы листвы. Взрослая — чистый ствол
+## почти до середины; молодая — хлыст с узкой кроной и восходящими ветвями; старая — длинные поникающие
+## ветви и тёмный растрескавшийся комель.
+static func _birch(variant: int) -> Dictionary:
+	var age := age_of(variant)
+	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
 	var rng := RandomNumberGenerator.new()
-	rng.seed = 7100 + variant * 331 + (97 if birch else 0)
+	rng.seed = 7100 + variant * 331 + 97
 	var branches: Array = []
 	var foliage: Array = []
-	var height: float = ([7.5, 6.9, 8.3, 7.2] if birch else [6.1, 7.1, 5.5, 6.6])[variant]
-	var radius: float = ([0.145, 0.15, 0.16, 0.14] if birch else [0.33, 0.30, 0.38, 0.32])[variant]
-	var bark := Color("e4dfd2") if birch else Color("63503d")
+	var height: float
+	var radius: float
+	var fork_t: float
+	var count: int
+	var p: Dictionary # reach — вылет ветвей, rise — подъём конца, droop — провис, pad — размер пучков, hang — плети
+	match age:
+		YOUNG_AGE:
+			height = [5.6, 7.0][form]
+			radius = [0.07, 0.085][form]
+			fork_t = [0.22, 0.30][form]
+			count = [9, 11][form]
+			p = {reach = 0.46, rise = 0.55, droop = 0.25, pad = 0.72, hang = false}
+		OLD_AGE:
+			height = [21.0, 19.5][form]
+			radius = [0.31, 0.29][form]
+			fork_t = [0.44, 0.40][form]
+			count = [15, 13][form]
+			p = {reach = 1.55, rise = 0.0, droop = 1.8, pad = 1.4, hang = true}
+		_:
+			height = [15.5, 16.5, 17.0, 15.0][form]
+			radius = [0.19, 0.20, 0.21, 0.19][form]
+			fork_t = [0.44, 0.40, 0.50, 0.42][form]
+			count = [16, 13, 18, 13][form]
+			p = {reach = 1.25, rise = 0.0, droop = 1.5, pad = 1.4, hang = false}
+	var bark := Color("e4dfd2")
 	var angle := rng.randf() * TAU
 	var dir := Vector3(cos(angle), 0, sin(angle))
-	var fork_t: float = ([0.34, 0.22, 0.42, 0.26] if birch else [0.34, 0.42, 0.28, 0.35])[variant]
-	var trunk_top := height if birch else height * fork_t
+	var grow := height / 7.5
 	var path: Array[Vector3] = []
-	var sway := Vector3(-dir.z, 0, dir.x) * (0.14 if birch else 0.08) * (1.0 if variant % 2 == 0 else -1.0)
-	for i in 5:
-		var t := i / 4.0
-		var bend_scale := (0.10 * t + (0.18 + variant * 0.09) * t * t) if birch else (0.10 * t + (0.18 + variant * 0.07) * t * t)
-		path.append(dir * bend_scale + sway * sin(t * PI) + Vector3(0, trunk_top * t, 0))
-	branches.append([path, radius, 0.024 if birch else radius * 0.72, bark, birch])
-	_roots(branches, rng, 3 if birch else 4, Vector2(radius * 1.25, radius * 1.9), radius * 1.15, radius * 0.16, radius * 0.44, bark)
-	if birch:
-		_birch_crown(branches, foliage, path, fork_t, 8 if variant in [1, 3] else 10, rng, bark)
-		if variant in [1, 3]:
-			var start := _path_at(path, fork_t)
-			var spread := 1.42 if variant == 1 else 1.15
-			var side_rot := 1.55 if variant == 1 else -1.45
-			var end := path[-1] + dir.rotated(Vector3.UP, side_rot) * spread - Vector3.UP * (0.48 if variant == 1 else 0.72)
-			var mid := start.lerp(end, 0.48) + dir.rotated(Vector3.UP, side_rot) * 0.28
-			var second: Array[Vector3] = [start, mid, end]
-			branches.append([second, radius * 0.68, 0.020, bark, true])
-			_birch_crown(branches, foliage, second, 0.24, 6, rng, bark)
-	else:
-		var count: int = [3, 3, 4, 3][variant]
-		var fork_origin := path[-1]
-		for i in count:
-			var a := angle + i * TAU / count + rng.randf_range(-0.18, 0.18)
-			var outward := Vector3(cos(a), 0, sin(a))
-			# Первый лидер образует верхний главный купол, боковые — широкие плечи кроны, плотно смыкающиеся с вершиной.
-			var is_apex_leader := i == 0
-			var limb_reach := rng.randf_range(0.65, 1.02) if is_apex_leader else rng.randf_range(1.32, 1.85) * (1.08 if variant == 2 else 1.0)
-			var end_y := height * (rng.randf_range(0.95, 1.02) if is_apex_leader else rng.randf_range(0.78, 0.89))
-			var start := fork_origin
-			var end := start + outward * limb_reach + Vector3(0, end_y - start.y, 0)
-			var elbow := start.lerp(end, 0.48) + outward * (0.18 if is_apex_leader else 0.36) - Vector3.UP * 0.06
-			var leader: Array[Vector3] = [start, elbow, end]
-			branches.append([leader, radius * (0.68 if is_apex_leader else 0.60), 0.052, bark, false])
-			var sub_count := 4 if count == 4 else 5
-			for j in sub_count:
-				var t := 0.26 + j * (0.66 / maxf(1, sub_count - 1))
-				var origin := _path_at(leader, t)
-				var side_angle := (-0.78 if j % 2 == 0 else 0.78) + rng.randf_range(-0.18, 0.18)
-				var reach_dir := outward.rotated(Vector3.UP, side_angle)
-				var sub_len := rng.randf_range(0.78, 1.24) * (1.05 - t * 0.22)
-				var lift := rng.randf_range(0.28, 0.54) if is_apex_leader else rng.randf_range(0.18, 0.46)
-				var tip := origin + reach_dir * sub_len + Vector3(0, lift, 0)
-				branches.append([[origin, origin.lerp(tip, 0.52) + Vector3.UP * 0.16, tip], 0.086 * (1.0 - t * 0.48), 0.014, bark, false, true])
-				var lobe_scale := Vector3(1.24, 0.84, 1.16) * rng.randf_range(0.90, 1.12)
-				foliage.append([tip, lobe_scale, a + side_angle * 0.5, rng.randf() * 10.0])
-			var cap_scale := Vector3(1.42, 0.96, 1.36) if is_apex_leader else Vector3(1.28, 0.86, 1.20)
-			foliage.append([end, cap_scale, a, rng.randf() * 10.0, true])
-		# Внутренний связующий купол в сердцевине кроны.
-		var heart_tip := fork_origin + dir * 0.16 + Vector3(0, (height - fork_origin.y) * 0.66, 0)
-		branches.append([[fork_origin, heart_tip], radius * 0.40, 0.032, bark, false, true])
-		foliage.append([heart_tip, Vector3(1.48, 0.96, 1.42), angle + 0.5, rng.randf() * 10.0, true])
-	var colors := [Color("94b85b"), Color("a3c262"), Color("86ae55")] if birch else [Color("7ca94e"), Color("8db555"), Color("709e4b")]
-	return _leafy(branches, foliage, colors, false)
+	var sway := Vector3(-dir.z, 0, dir.x) * 0.14 * sqrt(grow) * (1.0 if form % 2 == 0 else -1.0)
+	var rings := 5 if age == YOUNG_AGE else 7
+	for i in rings:
+		var t := i / float(rings - 1)
+		var bend_scale := (0.10 * t + (0.18 + form * 0.09) * t * t) * sqrt(grow)
+		path.append(dir * bend_scale + sway * sin(t * PI) + Vector3(0, height * t, 0))
+	branches.append([path, radius, 0.024 * sqrt(grow), bark, true])
+	_roots(branches, rng, 3, Vector2(radius * 1.25, radius * 1.9), radius * 1.15, radius * 0.16, radius * 0.44, bark)
+	if age == OLD_AGE:
+		# Тёмный растрескавшийся комель — рубашка поверх ствола, уходящая в него рваной границей.
+		var sleeve: Array[Vector3] = []
+		for i in 4:
+			sleeve.append(_path_at(path, i * 1.0 / height))
+		branches.append([sleeve, radius * 1.07, radius * 0.80, Color("57514a"), false])
+	var second_leader := age == ADULT_AGE and form in [1, 3]
+	_birch_crown(branches, foliage, path, fork_t, count - (4 if second_leader else 0), rng, bark, p)
+	if second_leader:
+		var start := _path_at(path, fork_t)
+		var spread := (1.42 if form == 1 else 1.15) * 1.5
+		var side_rot := 1.55 if form == 1 else -1.45
+		var end := path[-1] + dir.rotated(Vector3.UP, side_rot) * spread - Vector3.UP * (0.48 if form == 1 else 0.72) * 2.1
+		var mid := start.lerp(end, 0.48) + dir.rotated(Vector3.UP, side_rot) * 0.42
+		var second: Array[Vector3] = [start, mid, end]
+		branches.append([second, radius * 0.68, 0.024, bark, true])
+		_birch_crown(branches, foliage, second, 0.24, 8, rng, bark, p)
+	return _leafy(branches, foliage, [Color("94b85b"), Color("a3c262"), Color("86ae55")], false, _ref(Biomes.T_BIRCH, age, height))
 
 
-static func _birch_crown(branches: Array, foliage: Array, path: Array[Vector3], base: float, count: int, rng: RandomNumberGenerator, bark: Color) -> void:
+static func _birch_crown(branches: Array, foliage: Array, path: Array[Vector3], base: float, count: int, rng: RandomNumberGenerator, bark: Color, p: Dictionary) -> void:
+	var pad: float = p.pad
 	for i in count:
 		var t := lerpf(base, 0.94, float(i) / maxi(1, count - 1))
 		var u := (t - base) / maxf(0.1, 1.0 - base)
@@ -167,19 +296,130 @@ static func _birch_crown(branches: Array, foliage: Array, path: Array[Vector3], 
 		var dir := Vector3(cos(a), 0, sin(a))
 		# Овально-каплевидный профиль берёзы: раскидистая середина и лёгкая сужающаяся верхушка.
 		var envelope := sin(clampf(u * 0.86 + 0.14, 0.18, 0.98) * PI) * 0.88 + (1.0 - u) * 0.32
-		var reach := rng.randf_range(1.20, 1.88) * envelope
-		var elbow := origin + dir * reach * 0.54 + Vector3.UP * (0.34 - u * 0.12)
-		var droop := rng.randf_range(0.16, 0.48) * (1.0 - u * 0.45)
-		var tip := origin + dir * reach + Vector3(0, 0.14 - droop, 0)
-		branches.append([[origin, elbow, tip], 0.044 * (1.0 - u * 0.45), 0.007, bark, true, true])
-		foliage.append([tip - Vector3.UP * 0.10, Vector3(0.74, 0.68, 0.68) * rng.randf_range(0.9, 1.1), a, rng.randf() * 10.0])
-		if i % 2 == 0 or i >= count - 2:
-			foliage.append([elbow.lerp(tip, 0.32) + Vector3.UP * 0.14, Vector3(0.78, 0.62, 0.72), a + 0.5, rng.randf() * 10.0])
-	foliage.append([path[-1] + Vector3.UP * 0.10, Vector3(0.70, 0.78, 0.68), rng.randf() * TAU, rng.randf() * 10.0, true])
+		var reach := rng.randf_range(1.20, 1.88) * envelope * float(p.reach)
+		var elbow := origin + dir * reach * 0.54 + Vector3.UP * (0.34 - u * 0.12) * (1.0 + float(p.rise))
+		var droop := rng.randf_range(0.16, 0.48) * (1.0 - u * 0.45) * float(p.droop)
+		var tip := origin + dir * reach + Vector3(0, 0.14 - droop + float(p.rise) * reach, 0)
+		branches.append([[origin, elbow, tip], 0.044 * (1.0 - u * 0.45) * sqrt(float(p.reach)), 0.007, bark, true, true])
+		foliage.append([tip - Vector3.UP * 0.10, Vector3(0.74, 0.68, 0.68) * pad * rng.randf_range(0.9, 1.1), a, rng.randf() * 10.0])
+		if i % 2 == 0 or i >= count - 2 or pad > 1.0:
+			foliage.append([elbow.lerp(tip, 0.32) + Vector3.UP * 0.14, Vector3(0.78, 0.62, 0.72) * pad, a + 0.5, rng.randf() * 10.0])
+		if p.hang and u < 0.85:
+			# Плеть старой берёзы: тонкие ветви свисают завесой ниже конца сука.
+			var fall := rng.randf_range(1.3, 2.3) * (1.0 - u * 0.5)
+			var low := tip + dir * reach * 0.12 + Vector3(0, -fall, 0)
+			branches.append([[tip, low], 0.016, 0.006, bark, false, true])
+			foliage.append([tip.lerp(low, 0.5), Vector3(0.62, 0.95, 0.52) * pad * 0.8, a + 0.9, rng.randf() * 10.0])
+			foliage.append([low + Vector3.UP * 0.1, Vector3(0.58, 0.82, 0.5) * pad * 0.75, a - 0.6, rng.randf() * 10.0])
+	foliage.append([path[-1] + Vector3.UP * 0.10, Vector3(0.70, 0.78, 0.68) * pad, rng.randf() * TAU, rng.randf() * 10.0, true])
 
 
-static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool) -> Dictionary:
-	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, false), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, needles)}
+## Дуб: ступенчатый свод с выраженной вершиной и широкими боковыми плечами. Взрослый — развилка на 40–50 %
+## высоты над чистым стволом; молодой — один лидер без развилки и узкая яйцевидная крона; старый — очень
+## толстый ствол и широкая низкая крона на мощных почти горизонтальных сучьях.
+static func _oak(variant: int) -> Dictionary:
+	var age := age_of(variant)
+	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7100 + variant * 331
+	var branches: Array = []
+	var foliage: Array = []
+	var bark := Color("63503d") if age != OLD_AGE else Color("5b4a3a")
+	var colors := [Color("7ca94e"), Color("8db555"), Color("709e4b")]
+	if age == YOUNG_AGE:
+		return _young_oak(form, rng, bark, colors)
+	var old := age == OLD_AGE
+	var height: float = ([19.0, 18.0] if old else [14.0, 15.5, 13.5, 15.0])[form]
+	var radius: float = ([0.86, 0.80] if old else [0.50, 0.47, 0.55, 0.50])[form]
+	var fork_t: float = ([0.30, 0.27] if old else [0.42, 0.48, 0.40, 0.45])[form]
+	var angle := rng.randf() * TAU
+	var dir := Vector3(cos(angle), 0, sin(angle))
+	var trunk_top := height * fork_t
+	var path: Array[Vector3] = []
+	var sway := Vector3(-dir.z, 0, dir.x) * 0.08 * (1.0 if form % 2 == 0 else -1.0) * 2.0
+	for i in 5:
+		var t := i / 4.0
+		var bend_scale := (0.10 * t + (0.18 + form * 0.07) * t * t) * 1.6
+		path.append(dir * bend_scale + sway * sin(t * PI) + Vector3(0, trunk_top * t, 0))
+	branches.append([path, radius, radius * 0.72, bark, false])
+	_roots(branches, rng, 5 if old else 4, Vector2(radius * 1.25, radius * 1.9), radius * 1.15, radius * 0.16, radius * 0.44, bark)
+	var count: int = ([5, 6] if old else [4, 4, 5, 4])[form]
+	var reach_k := 3.1 if old else 1.65  # вылет главных сучьев
+	var sub_k := 1.6 if old else 1.35     # длина боковых ветвей
+	var lobe_k := 1.7 if old else 1.4     # размер листовых куполов
+	var fork_origin := path[-1]
+	for i in count:
+		var a := angle + i * TAU / count + rng.randf_range(-0.18, 0.18)
+		var outward := Vector3(cos(a), 0, sin(a))
+		# Первый лидер образует верхний главный купол, боковые — широкие плечи кроны, плотно смыкающиеся с вершиной.
+		var is_apex_leader := i == 0
+		var limb_reach := rng.randf_range(0.65, 1.02) * 1.5 if is_apex_leader else rng.randf_range(1.32, 1.85) * reach_k * (1.08 if form == 2 and not old else 1.0)
+		var side_y := rng.randf_range(0.56, 0.68) if old else rng.randf_range(0.78, 0.89)
+		var end_y := height * ((rng.randf_range(0.84, 0.9) if old else rng.randf_range(0.95, 1.02)) if is_apex_leader else side_y)
+		var start := fork_origin
+		var end := start + outward * limb_reach + Vector3(0, end_y - start.y, 0)
+		var elbow := start.lerp(end, 0.48) + outward * (0.18 if is_apex_leader else 0.36) * 1.5 - Vector3.UP * 0.06
+		if old and not is_apex_leader:
+			# Мощный сук старого дуба уходит в сторону почти горизонтально и лишь потом поднимается.
+			elbow = start + outward * limb_reach * 0.55 + Vector3(0, (end.y - start.y) * 0.3, 0)
+		var leader: Array[Vector3] = [start, elbow, end]
+		branches.append([leader, radius * (0.62 if is_apex_leader else 0.52), 0.07, bark, false])
+		var sub_count := 7 if old else 6
+		for j in sub_count:
+			var t := 0.22 + j * (0.72 / maxf(1, sub_count - 1))
+			var origin := _path_at(leader, t)
+			var side_angle := (-0.78 if j % 2 == 0 else 0.78) + rng.randf_range(-0.18, 0.18)
+			var reach_dir := outward.rotated(Vector3.UP, side_angle)
+			var sub_len := rng.randf_range(0.78, 1.24) * (1.05 - t * 0.22) * sub_k
+			var lift := (rng.randf_range(0.28, 0.54) if is_apex_leader else rng.randf_range(0.18, 0.46)) * sub_k
+			var tip := origin + reach_dir * sub_len + Vector3(0, lift, 0)
+			branches.append([[origin, origin.lerp(tip, 0.52) + Vector3.UP * 0.2, tip], 0.10 * (1.0 - t * 0.48), 0.016, bark, false, true])
+			var lobe_scale := Vector3(1.24, 0.84, 1.16) * lobe_k * rng.randf_range(0.90, 1.12)
+			foliage.append([tip, lobe_scale, a + side_angle * 0.5, rng.randf() * 10.0])
+		var cap_scale := (Vector3(1.42, 0.96, 1.36) if is_apex_leader else Vector3(1.28, 0.86, 1.20)) * lobe_k
+		foliage.append([end, cap_scale, a, rng.randf() * 10.0, true])
+	# Внутренний связующий купол в сердцевине кроны.
+	var heart_tip := fork_origin + dir * 0.24 + Vector3(0, (height - fork_origin.y) * (0.5 if old else 0.66), 0)
+	branches.append([[fork_origin, heart_tip], radius * 0.40, 0.04, bark, false, true])
+	foliage.append([heart_tip, Vector3(1.48, 0.96, 1.42) * lobe_k * 1.15, angle + 0.5, rng.randf() * 10.0, true])
+	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_OAK, age, height))
+
+
+## Молодой дуб: один прямой лидер без развилки, восходящие ветви и узкая яйцевидная крона.
+static func _young_oak(form: int, rng: RandomNumberGenerator, bark: Color, colors: Array) -> Dictionary:
+	var branches: Array = []
+	var foliage: Array = []
+	var height: float = [5.0, 6.3][form]
+	var radius: float = [0.12, 0.14][form]
+	var angle := rng.randf() * TAU
+	var dir := Vector3(cos(angle), 0, sin(angle))
+	var path: Array[Vector3] = []
+	for i in 5:
+		var t := i / 4.0
+		path.append(dir * (0.08 * t + (0.12 + form * 0.08) * t * t) + Vector3(0, height * t, 0))
+	branches.append([path, radius, 0.03, bark, false])
+	_roots(branches, rng, 3, Vector2(radius * 1.25, radius * 1.8), radius * 1.1, radius * 0.16, radius * 0.42, bark)
+	var count: int = [9, 11][form]
+	var base := 0.3
+	for i in count:
+		var t := lerpf(base, 0.9, float(i) / (count - 1))
+		var u := (t - base) / (0.9 - base)
+		var origin := _path_at(path, t)
+		var a := angle + i * 2.399 + rng.randf_range(-0.25, 0.25)
+		var d := Vector3(cos(a), 0, sin(a))
+		# Яйцо: шире всего в нижней трети кроны, к вершине сужается.
+		var envelope := pow(sin(clampf(u * 0.9 + 0.1, 0.0, 1.0) * PI), 0.7) * (1.1 - u * 0.35)
+		var reach := rng.randf_range(0.75, 1.15) * envelope + 0.25
+		var tip := origin + d * reach + Vector3(0, reach * rng.randf_range(0.45, 0.8), 0)
+		branches.append([[origin, origin.lerp(tip, 0.5) + Vector3.UP * 0.06, tip], 0.035, 0.008, bark, false, true])
+		foliage.append([tip, Vector3(0.95, 0.72, 0.9) * rng.randf_range(0.88, 1.1), a, rng.randf() * 10.0])
+	foliage.append([path[-1] + Vector3.UP * 0.2, Vector3(1.0, 0.95, 0.95), angle, rng.randf() * 10.0, true])
+	foliage.append([_path_at(path, 0.62), Vector3(1.05, 1.1, 1.0), angle + 0.5, rng.randf() * 10.0, true])
+	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_OAK, YOUNG_AGE, height))
+
+
+static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool, ref := 1.0) -> Dictionary:
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, false), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, needles), ref = ref}
 
 
 ## Компактные корневые лапы у самого комля: плавно уходят в землю без торчащих в воздухе распорок.
@@ -473,7 +713,8 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 				continue
 			if level == 1 and branch[1] < 0.085 and branch != branches[0]:
 				continue
-			vertex_count += _tube(st, branch, [6, 4, 3][level] if branch[1] > 0.12 else 3, level, vertex_count)
+			var segments: int = ([8, 5, 3] if branch[1] > 0.4 else [6, 4, 3])[level] if branch[1] > 0.12 else 3
+			vertex_count += _tube(st, branch, segments, level, vertex_count)
 		for spray: Array in (_far_foliage(_far_foliage(foliage, conifer), conifer) if level == 2 else (_far_foliage(foliage, conifer) if level == 1 else foliage)):
 			_spray(st, spray, level, conifer, crown)
 		st.index()
@@ -577,7 +818,8 @@ static func _tube(st: SurfaceTool, data: Array, segments: int, level: int, first
 				elif sin(p.y * 19.0 + (j % segments) * 4.3) > 0.68:
 					color = Color("4d4942")
 			color.a = 1.0
-			st.set_uv(Vector2(a / TAU * 2.0, p.y * 0.65))
+			# Кора толстого ствола повторяется по окружности чаще, чтобы рисунок не растягивался.
+			st.set_uv(Vector2(a / TAU * maxf(2.0, roundf(TAU * data[1] / 1.4)), p.y * 0.65))
 			_vertex(st, p, normal, color)
 	for k in path.size() - 1:
 		for j in segments:
