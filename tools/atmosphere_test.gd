@@ -54,8 +54,86 @@ func run() -> void:
 	env.volumetric_fog_enabled = false
 	mist.update(Vector3(512, 30, 512), day, 1.0, 13.1)
 	check(mist.patches.is_empty(), "quality change releases existing volumes")
+	_streaming_checks(world, day)
+	_geography_checks(world, day)
 	var lamp := preload("res://scripts/render/bike_lamp.gd").new()
 	root.add_child(lamp)
 	for light: Light3D in lamp._lights:
 		check(light.light_volumetric_fog_energy == 0.0, "moving lamp has no volumetric trails")
 	quit(1 if failures else 0)
+
+func _streaming_checks(world: WorldData, day: DayCycle) -> void:
+	var mist := Mist.new()
+	root.add_child(mist)
+	mist.setup(world, Heightfield.new(world, false))
+	day.env.volumetric_fog_enabled = true
+	var at := Vector3(168, 30, 168)
+	mist.update(at, day, 1.0 / 60.0, 0.0)
+	check(mist.patches.has(Vector2i(1, 1)), "nearest site admitted first")
+	var budget_ok := true
+	for frame in 120:
+		var before: int = mist.stats.evaluated
+		mist.update(at, day, 1.0 / 60.0, frame / 60.0)
+		budget_ok = budget_ok and mist.stats.evaluated - before <= Mist.BUILD_BUDGET
+	check(budget_ok, "geography work bounded each frame")
+	var updates: int = mist.stats.material_updates
+	var count := mist.patches.size()
+	for frame in 60: mist.update(at, day, 1.0 / 60.0, 2.0 + frame / 60.0)
+	var writes: int = mist.stats.material_updates - updates
+	check(writes <= count * 11, "material updates capped near 10 Hz at 60 FPS")
+	print("Material batches over 60 frames: %d (previous policy: %d)" % [writes, count * 60])
+	# No full fade-out delay after a large camera jump, even at high FPS.
+	mist.update(Vector3(840, 30, 840), day, 1.0 / 60.0, 3.0)
+	check(mist.patches.has(Vector2i(7, 7)), "teleport admits destination in the same frame")
+	var near := true
+	for entry: Dictionary in mist.patches.values():
+		near = near and entry.point.distance_to(Vector2(840, 840)) <= Mist.RADIUS
+	check(near, "teleport removes distant volumes before admission")
+	mist.free()
+
+func _geography_checks(world: WorldData, day: DayCycle) -> void:
+	var mist := Mist.new()
+	root.add_child(mist)
+	mist.setup(world, Heightfield.new(world, false))
+	world.moist.fill(0.1)
+	# A wet pocket off the original grid center must still be found.
+	# Probe at (532, 504) in bucket (4,4).
+	var cell := Vector2i(532 / 4, 504 / 4)
+	world.moist[cell.y * world.W + cell.x] = 0.9
+	var site := mist._site(Vector2i(4, 4))
+	check(not site.is_empty() and site.point == Vector2(532, 504), "off-center wet pocket is detected")
+	check(site == mist._site(Vector2i(4, 4)), "site sampling is deterministic")
+	for y in [125, 126]:
+		for x in [139, 140]: mist.heights.hv[y * world.W + x] = 76.0
+	var slope_site := mist._site(Vector2i(4, 4))
+	check(slope_site.size.x < site.size.x and slope_site.size.x >= 48.0, "nearby steep relief narrows the fog footprint")
+	# At 10 FPS, dry near cells must not repeatedly reset the queue and starve far ones.
+	world.moist.fill(0.1)
+	world.moist[126 * world.W + 210] = 0.9
+	for frame in 100: mist.update(Vector3(512, 30, 512), day, 0.1, frame * 0.1)
+	check(mist.patches.has(Vector2i(7, 4)), "dry foreground cannot starve a wet distant site")
+	mist.free()
+	world.moist.fill(0.85)
+	# Real regional field publication/removal, no procedural generation.
+	world.outer = OuterLand.new()
+	world.outer.W = world.W
+	world.outer.H = world.H
+	var fields := {}
+	for field in ["h", "elev", "temp", "moist", "slope", "biome", "ocean", "lake"]:
+		fields[field] = world.get(field).duplicate()
+	fields.river = world.river.duplicate()
+	fields.path = world.path_mask.duplicate()
+	fields.water_level = world.h.duplicate()
+	fields.water_level.fill(-INF)
+	var ledger := {regions = {}}
+	ledger.regions[Vector2i(3, 0)] = {rect = Rect2i(768, 0, 256, 256), fields = fields}
+	world.outer.set_ledger(ledger)
+	var regional := Mist.new()
+	root.add_child(regional)
+	regional.setup(world, Heightfield.new(world, false))
+	for frame in 40: regional.update(Vector3(3500, 30, 500), day, 0.1, frame * 0.1)
+	check(not regional.patches.is_empty(), "published region supplies fog sites")
+	world.outer.set_ledger({regions = {}})
+	for frame in 70: regional.update(Vector3(3500, 30, 500), day, 0.1, 4.0 + frame * 0.1)
+	check(regional.patches.is_empty(), "evicted regional fields release fog without camera movement")
+	regional.free()

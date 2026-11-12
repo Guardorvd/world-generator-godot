@@ -68,6 +68,8 @@ func _process(delta: float) -> bool:
 	var done := super._process(delta)
 	if mist != null and camera != null:
 		mist.update(camera.position, cycle, delta, elapsed)
+		results.fog_stream = mist.stats.duplicate()
+		results.fog_volumes = mist.patches.size()
 	if camera != null and "--turns" in OS.get_cmdline_user_args():
 		camera.rotate_y(sin(elapsed * 1.7) * 0.6)
 	return done
