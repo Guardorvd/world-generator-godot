@@ -1,5 +1,6 @@
 extends SceneTree
 func _initialize() -> void:
+ preload("res://tools/watchdog.gd").arm(self, 90)
  root.size = Vector2i(1280, 720)
  run.call_deferred()
 func run() -> void:

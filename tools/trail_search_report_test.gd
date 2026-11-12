@@ -5,6 +5,7 @@ func check(ok: bool, message: String) -> void:
 	print("PASS " if ok else "FAIL ", message)
 	if not ok: failures += 1
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 30)
 	var protocol: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://docs/data/trail_search_protocol_2026_11_03.json"))
 	var before: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://docs/data/trail_search_baseline_2026_11_03.json"))
 	var after: Dictionary = JSON.parse_string(FileAccess.get_file_as_string("res://docs/data/trail_search_after_2026_11_03.json"))

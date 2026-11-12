@@ -9,6 +9,7 @@ func check(ok: bool, message: String) -> void:
 	print("PASS " if ok else "FAIL ", message)
 	if not ok: failures += 1
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 90)
 	var input := GI.new()
 	input.size = Vector2i(160, 160)
 	for key in ["heights", "water", "rivers", "forbidden"]:

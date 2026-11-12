@@ -9,6 +9,7 @@ func check(value: bool, label: String) -> void:
 		printerr(label)
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 30)
 	var settings := GameSettings.new()
 	var cfg := ConfigFile.new()
 	cfg.set_value("view", "lighting", NAN)

@@ -18,7 +18,8 @@ static func run(w: WorldData, on_progress := Callable()) -> void:
 	h.finish_paths()
 	var surface_ms := Time.get_ticks_msec() - started
 	var area := Rect2i(0, 0, w.W, w.H)
-	# Обычная игра — только велопарки; прежняя универсальная сеть маршрутов осталась для опытов (`-- --trail-network`, QuickTrails)
+	# Этап строит только велопарки; прежняя универсальная сеть маршрутов осталась для опытов (`-- --trail-network`, QuickTrails).
+	# В обычной игре этап не запускается: WorldGenerator._generate_plan отключил автоматические велопарки.
 	var options := {on_progress = on_progress, mode = "network" if QuickTrails.network() else "parks"}
 	if QuickTrails.active(): # только разработка: сеть на средней части мира и короче (scripts/core/quick_trails.gd)
 		area = QuickTrails.area(area)
