@@ -244,7 +244,7 @@ func probe(spec: Dictionary) -> Dictionary:
 		r.hits += b.impacts.x + b.impacts.y - previous_hits
 		r.stamina_min = minf(r.stamina_min, control.stamina.value)
 		r.exhausted_time += DT if control.stamina.exhausted else 0.0
-		r.boost_time += DT if input.run and control.stamina.can_boost(true, input.throttle) else 0.0
+		r.boost_time += DT if input.run and control.stamina.surging(input.throttle) else 0.0
 		r.pump_time += DT if b.pump_accel > 0.00001 else 0.0
 		if input.throttle < -0.05 or absf(input.turn) > 0.25 or input.jump or b.body_back or b.body_forward:
 			r.interference = maxf(r.interference, absf(b.pump_accel) + absf(b.pump_load) + b._pump_reach)

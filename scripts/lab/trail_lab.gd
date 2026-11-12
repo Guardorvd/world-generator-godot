@@ -1409,7 +1409,7 @@ func step_simulation(dt: float, throttle: float, turn: float, run: bool, jump: b
 		controller.stamina.tick_foot(dt, run and moving)
 		player.land_impact = 0.0
 	if not crash.active():
-		view.tick(bike, dt, throttle, bike.riding and controller.stamina.can_boost(run, throttle))
+		view.tick(bike, dt, throttle, bike.riding and controller.stamina.surging(throttle))
 		brake_effects.tick(dt, bike, w, heights)
 	_cam_to = Vector4(player.x, player.feet, player.z, bike.heading)
 	if bike.riding and not crash.active(): metrics.tick(dt, bike, routes[lane])

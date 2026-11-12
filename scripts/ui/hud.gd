@@ -1138,7 +1138,7 @@ class StaminaArc extends Control:
 	const WIDTH := 5.0
 	const LOW := 0.2
 	const GHOST_LAG := 1.5                # 1/с: шлейф догоняет заливку с запаздыванием — чем быстрее трата, тем он
-	                                      # длиннее (Shift в подъём — ~5 % дуги), рывок тает за доли секунды
+	                                      # длиннее рывок Shift (треть дуги) тает за доли секунды
 	var value := 1.0
 	var exhausted := false
 	var state := Stamina.State.IDLE
@@ -1199,7 +1199,7 @@ class StaminaArc extends Control:
 		var spend := 0.5 + 0.5 * sin(_t * 4.5)
 		fill.a = a * lerpf(lerpf(0.95, 0.75 + 0.25 * spend, _drain), 0.55 + 0.4 * pulse, warning)
 		_arc(0.0, value, WIDTH + warning * pulse * 1.5 + _drain * spend * 1.0 + _kick * 3.0, fill)
-		# засечка разблокировки Shift: поперёк дуги, светлая с тёмной обводкой
+		# засечка цены рывка (треть полоски): поперёк дуги, светлая с тёмной обводкой
 		var ang := FROM + SPAN * Stamina.RECOVERED
 		var dir := Vector2(cos(ang), sin(ang))
 		var c := size / 2.0

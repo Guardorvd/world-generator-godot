@@ -939,7 +939,7 @@ func _control_rows() -> Array:
 	var pad := c.joypad
 	var rows: Array = [
 		["Правый стик" if pad else "Мышь", "осмотреться"], ["Левый стик" if pad else "WASD", "идти"],
-		[c.label(&"run"), "бег"], [c.label(&"jump"), "прыжок"],
+		[c.label(&"run"), "бег, рывок на велосипеде"], [c.label(&"jump"), "прыжок"],
 	]
 	if not pad:
 		rows.append(["ЛКМ (держать)", "памп на велосипеде"])

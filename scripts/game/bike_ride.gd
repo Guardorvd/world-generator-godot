@@ -200,11 +200,18 @@ const EFFORT_FALL := 0.1      # с (было 0,05)
 ## потери шины и подвески на скорости. Сумма на земле прежняя.
 const AIR_DRAG := 0.0035      # 1/м
 const SPEED_LOSS := GameConfig.BIKE_DRAG - AIR_DRAG
+## 15.0: подъём легче. Педали в гору получают добавку тяги — эту долю тяжести вдоль склона. Тяжесть та же
+## (спуск и полёт не меняются), добавка только при газе и гаснет у крейсерской скорости: кочки и накат
+## не становятся источником даровой скорости.
+const CLIMB_ASSIST := 0.45
+## 15.0: рывок (Shift, Stamina.surge): добавка тяги в полную силу прилива, м/с²; гаснет у поднятой крейсерской
+const SURGE_PUSH := 2.5
 
 var pump_pressed := false  # удержание ЛКМ; без него нет сил или поглощения пампа
 var pump_enabled := true    # общий механизм и в мире, и в Lab; выключатель для сравнительных прогонов
 var effort := 0.0           # усилие седока на педалях 0..1: от него тяга и поза (BikeView)
 var effort_ramp := true     # false — прежняя мгновенная тяга, для сравнительных прогонов
+var surge := -1.0           # 15.0: сила рывка 0..1 от Stamina (BikeController); меньше нуля — прежний boost (Lab, тесты)
 var gear := GEAR_MIN        # виртуальная передача: оборотов колеса на оборот педалей (только каденс и вид, не тяга)
 var pump_motion := 0.0       # -1..1: вытянуться / согнуться; поза, не ручное body_x
 var pump_load := 0.0         # добавка нагрузки, доля веса
@@ -1724,15 +1731,23 @@ func _step_speed(throttle: float, boost: bool, slope: float, terrain: float, dt:
 	var drive := 0.0
 	var request := 0.0
 	if throttle > 0.0:
-		top *= (GameConfig.BIKE_BOOST if boost else 1.0) * throttle
+		var power := surge if surge >= 0.0 else (1.0 if boost else 0.0)
+		var cruise := top * throttle
+		top *= lerpf(1.0, GameConfig.BIKE_BOOST, power) * throttle
 		var ratio := maxf(speed, 0.0) / maxf(top, 0.1)
 		# Уверенный старт и плавное ослабление тяги; скорость спуска не срезается до top.
 		var push := GameConfig.BIKE_ACCEL * 1.75
 		var taper := maxf(0.1, push / (rolling + drag * top * top) - 1.0)
 		drive = push / (1.0 + taper * ratio * ratio) * effort
-		# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
-		if boost:
-			drive += 1.5 * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * effort * grip
+		# 15.0: в гору педали тянут сильнее — часть тяжести склона снята, у крейсерской скорости добавка гаснет.
+		var uphill := SLOPE_GRAVITY * maxf(slope, 0.0) / (1.0 + slope * slope)
+		drive += CLIMB_ASSIST * uphill * effort * (1.0 - smoothstep(0.8, 1.0, maxf(speed, 0.0) / maxf(cruise, 0.1)))
+		if surge > 0.0:
+			# 15.0: прилив сил — заметный толчок, гаснет у поднятой крейсерской скорости.
+			drive += SURGE_PUSH * surge * effort * (1.0 - smoothstep(0.85, 1.0, ratio))
+		if power > 0.0:
+			# Shift помогает дожать крутой подъём на малой скорости, без переключения передач.
+			drive += 1.5 * power * smoothstep(0.08, 0.35, slope) * (1.0 - smoothstep(3.0, 9.0, speed)) * effort * grip
 		request = drive
 		if contact_model:
 			drive = _rear_drive(drive, grip)

@@ -195,7 +195,7 @@ func ride(spec: Dictionary) -> Dictionary:
 		r.steer_saturated += dt if absf(input.turn) > 0.99 else 0.0
 		r.pedal_time += dt if input.throttle > 0.1 and not b.airborne else 0.0
 		r.brake_time += dt if input.throttle < -0.1 and not b.airborne else 0.0
-		r.boost_time += dt if input.run and controller.stamina.can_boost(true, input.throttle) and not b.airborne else 0.0
+		r.boost_time += dt if input.run and controller.stamina.surging(input.throttle) and not b.airborne else 0.0
 		r.coast_time += dt if absf(input.throttle) <= 0.1 and not b.airborne else 0.0
 		r.hits += hits
 		r.jump_presses += int(input.jump)

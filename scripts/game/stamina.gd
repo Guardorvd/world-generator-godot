@@ -1,66 +1,66 @@
 class_name Stamina
 extends RefCounted
-## 14.0: выносливость седока — одна полоска 0..1 без физиологии. Тратится, пока игрок давит на педали:
-## только с Shift; больше в подъём и меньше под уклон. Восстанавливается
-## накатом (педали и тормоз отпущены) и пешком. Пуста — Shift не работает, педали крутятся слабее,
-## пока полоска не наберёт RECOVERED. Пеший бег пока не тратит её, но и не восстанавливает.
-## Новые траты (бег, плавание, груз) — ещё одна ветка в tick_*, числа — константы ниже.
+## 14.0: выносливость седока — одна полоска 0..1 без физиологии.
+## 15.0: полоска — запас рывков. Нажатие Shift на велосипеде (с педалями) сразу берёт DASH_COST полоски
+## и даёт «прилив сил» на SURGE_TIME: крейсерская скорость выше, тяга сильнее, в подъём легче
+## (как именно — BikeRide.surge). Больше полоска нигде не тратится: держать Shift бесполезно,
+## следующий рывок — новым нажатием. Восстанавливается всегда: на педалях медленнее, накатом и пешком быстрее.
+## Меньше DASH_COST — рывка нет (exhausted, дуга красная до засечки RECOVERED).
 
-# 14.4: запас больше — в подъём вдвое (было 12 и 30 с), на ровном и под уклон на четверть (15, 20 и 60 с).
-# 14.5: ещё на 20 % везде
-const SHIFT_FLAT := 1.0 / 22.5   # Shift на ровном: пусто за 22,5 с
-const SHIFT_DOWN := 1.0 / 30.0   # Shift под пологий уклон: за 30 с
-const SHIFT_UP := 1.0 / 28.8     # Shift в подъём: за 28,8 с
-const CLIMB := 0.15              # подъём на метр пути, при котором трата уже как в подъём (≈ 8,5°)
-const COAST := 1.0 / 12.0        # накатом или стоя на велосипеде: с нуля до полной за 12 с
-const REST := 1.0 / 8.0          # пешком: за 8 с
-const REST_DELAY := 0.8          # восстановление начинается после усилия не сразу, с
-const RECOVERED := 0.3           # после истощения Shift снова доступен с этого уровня
-const TIRED_PEDAL := 0.8         # педали при пустой полоске: доля газа (и крейсерской скорости) — едет медленнее, но едет
+const DASH_COST := 1.0 / 3.0     # цена рывка: треть полоски
+const SURGE_TIME := 3.0          # длительность прилива сил, с
+const SURGE_FADE := 1.0          # последнюю секунду прилив мягко спадает к нулю
+const PEDAL := 1.0 / 30.0        # восстановление на педалях: с нуля до полной за 30 с (рывок — за 10 с)
+const COAST := 1.0 / 12.0        # накатом или стоя на велосипеде: за 12 с (рывок — за 4 с)
+const REST := 1.0 / 8.0          # пешком (и на бегу): за 8 с
+const REST_DELAY := 0.8          # после рывка восстановление начинается не сразу, с
+const RECOVERED := DASH_COST     # засечка на дуге: с неё снова есть рывок
 
 enum State { IDLE, DRAIN, COAST, REST } # 14.2: что происходит с полоской в последнем такте (для интерфейса)
 
 var value := 1.0
-var exhausted := false  # полоска опустела и ещё не набрала RECOVERED
+var exhausted := false  # меньше цены рывка: Shift сейчас ничего не даёт
 var state := State.IDLE
+var surge_left := 0.0   # сколько секунд ещё длится прилив сил
 var _rest_wait := 0.0
+var _held := false      # Shift был зажат в прошлом такте: рывок — только по новому нажатию
 
 
-## Shift действительно добавляет силы: нажат, есть газ и полоска не истощена
-func can_boost(boost: bool, throttle: float) -> bool:
-	return boost and throttle > 0.0 and not exhausted
+## Сила прилива 0..1: полная до последней SURGE_FADE секунды, затем плавно к нулю
+func surge() -> float:
+	return smoothstep(0.0, SURGE_FADE, surge_left)
 
 
-## Доля газа, которую ноги ещё дают: при истощении педали слабее
-func pedal_scale() -> float:
-	return TIRED_PEDAL if exhausted else 1.0
+## Прилив идёт и есть газ (для позы седока)
+func surging(throttle: float) -> bool:
+	return throttle > 0.0 and surge_left > 0.0
 
 
-## Такт на велосипеде. throttle — газ (+) и тормоз (-), boost — Shift уже с учётом can_boost,
-## speed — м/с вдоль курса, grade — подъём земли на метр пути (BikeRide.grade), airborne — в полёте
-func tick_ride(dt: float, throttle: float, boost: bool, speed: float, grade: float, airborne: bool) -> void:
-	if airborne:
-		state = State.IDLE
+## Такт на велосипеде. run — Shift зажат, throttle — газ (+) и тормоз (-), airborne — в полёте.
+## Рывок — в момент нажатия при газе и хватающей полоске; во время прилива новое нажатие ничего не берёт.
+func tick_ride(dt: float, run: bool, throttle: float, airborne: bool) -> void:
+	if run and not _held and throttle > 0.0 and surge_left <= 0.0 and value >= DASH_COST - 0.0001:
+		value = maxf(0.0, value - DASH_COST)
+		surge_left = SURGE_TIME
+		_rest_wait = REST_DELAY
+	_held = run
+	if surge_left > 0.0:
+		surge_left = maxf(0.0, surge_left - dt)
+		state = State.DRAIN
+		_update_exhausted()
 		return
-	var g := clampf(grade * signf(speed) / CLIMB, -1.0, 1.0)
-	var drain := 0.0
-	if throttle > 0.0:
-		if boost:
-			drain = lerpf(SHIFT_FLAT, SHIFT_UP, g) if g > 0.0 else lerpf(SHIFT_FLAT, SHIFT_DOWN, -g)
-		drain *= throttle
-	if drain > 0.0:
-		_spend(drain * dt)
+	if throttle > 0.0 and not airborne:
+		_rest(PEDAL, dt)
+		state = State.IDLE
 	else:
 		_rest(COAST, dt)
 		state = State.COAST if value < 1.0 else State.IDLE
 
 
-## Такт пешком: стоя и шагом полоска восстанавливается, на бегу замирает
-func tick_foot(dt: float, running: bool) -> void:
-	if running:
-		_rest_wait = REST_DELAY
-		state = State.IDLE
-		return
+## Такт пешком: полоска восстанавливается, бег её не тратит
+func tick_foot(dt: float, _running: bool) -> void:
+	_held = false
+	surge_left = 0.0
 	_rest(REST, dt)
 	state = State.REST if value < 1.0 else State.IDLE
 
@@ -68,22 +68,19 @@ func tick_foot(dt: float, running: bool) -> void:
 func reset() -> void:
 	value = 1.0
 	exhausted = false
+	surge_left = 0.0
+	_held = false
 	_rest_wait = 0.0
 	state = State.IDLE
-
-
-func _spend(amount: float) -> void:
-	value = maxf(0.0, value - amount)
-	_rest_wait = REST_DELAY
-	state = State.DRAIN
-	if value <= 0.0:
-		exhausted = true
 
 
 func _rest(rate: float, dt: float) -> void:
 	if _rest_wait > 0.0:
 		_rest_wait -= dt
-		return
-	value = minf(1.0, value + rate * dt)
-	if exhausted and value >= RECOVERED:
-		exhausted = false
+	else:
+		value = minf(1.0, value + rate * dt)
+	_update_exhausted()
+
+
+func _update_exhausted() -> void:
+	exhausted = value < DASH_COST - 0.0001

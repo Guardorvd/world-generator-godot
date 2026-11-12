@@ -52,12 +52,11 @@ func recover(dt: float, player: PlayerState, bike: BikeRide, crash: BikeCrash,
 func ride(dt: float, player: PlayerState, bike: BikeRide, world: WorldData,
 		heights: Heightfield, forward: float, steer: float, run: bool, jump: bool,
 		opening: bool) -> float:
-	var boost := not opening and stamina.can_boost(run, forward)
-	if forward > 0.0 and not opening:
-		forward *= stamina.pedal_scale()
-	bike.step(player, forward, steer, boost, jump, dt, world, heights)
+	# 15.0: Shift — рывок по нажатию (Stamina.tick_ride), сила прилива передаётся велосипеду
 	if not opening:
-		stamina.tick_ride(dt, forward, boost, bike.speed, bike.grade(heights), bike.airborne)
+		stamina.tick_ride(dt, run, forward, bike.airborne)
+	bike.surge = 0.0 if opening else stamina.surge()
+	bike.step(player, forward, steer, bike.surge > 0.0, jump, dt, world, heights)
 	return forward
 
 func begin_crash(view: BikeView, bike: BikeRide, crash: BikeCrash, heights: Heightfield) -> void:

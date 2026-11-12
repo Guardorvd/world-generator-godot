@@ -70,7 +70,7 @@ var bike: BikeRide
 var bike_view: BikeView
 var crash: BikeCrash     # падение с велосипеда: ragdoll и подъём пешком
 var stamina: Stamina:
-	get: return bike_controller.stamina # 14.0: выносливость седока — ускорение с Shift тратит, накат и шаг восстанавливают
+	get: return bike_controller.stamina # 14.0: выносливость седока; 15.0: запас рывков (Shift — треть полоски), восстанавливается всегда
 var water_effects: WaterEffects
 var brake_effects: BrakeEffects
 var ambient: AmbientParticles # 11.11: частицы окружения (пылинки, листья, светлячки, снег)
@@ -1030,7 +1030,7 @@ func _physics_process(dt: float) -> void:
 	# пружина проседания и затухающая тряска камеры
 	camera_controller.tick_effects(dt)
 	if not crash.active():
-		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.can_boost(Input.is_action_pressed("run"), fw))
+		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.surging(fw))
 	bike.land_impact = 0.0
 	bike.wheel_impact = Vector2()
 	bike.bottom_out = 0.0

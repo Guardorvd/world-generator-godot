@@ -67,7 +67,7 @@ func _build() -> void:
 func _tick(stamina: Stamina, frames: int, ride: bool, throttle: float, boost: bool) -> void:
 	for f in frames:
 		if ride:
-			stamina.tick_ride(1.0 / 60.0, throttle, boost, 12.0, 0.0, false)
+			stamina.tick_ride(1.0 / 60.0, boost, throttle, false)
 		else:
 			stamina.tick_foot(1.0 / 60.0, false)
 		hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
@@ -95,9 +95,9 @@ func _run() -> void:
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
-	# трата с Shift до 12 %: пульс и затемнение краёв
+	# 15.0: рывок (Shift) берёт треть полоски: с 40 % остаётся ~7 % — пульс и затемнение краёв в приливе
 	var stamina := Stamina.new()
-	stamina.value = 0.18
+	stamina.value = 0.4
 	await _tick(stamina, 75, true, 1.0, true)
 	_check(stamina.value < 0.2 and hud._stamina.warning > 0.05 and hud._vignette.visible, "ниже 20 %% при трате — предупреждение (%.2f)" % hud._stamina.warning)
 	_check(hud._stamina._ghost > stamina.value, "шлейф отстаёт от заливки")
