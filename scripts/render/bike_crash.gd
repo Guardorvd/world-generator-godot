@@ -10,6 +10,7 @@ const BALANCE := 0.22   # потеря равновесия: велосипед 
 const LIE_MIN := 1.0    # тело лежит не меньше этого, с
 const LIE_MAX := 2.4    # запасной срок для нестабильной позы у опоры, с
 const RECOVER := 0.45   # пауза подъёма перед пешим управлением
+const RECOVER_MAX := 2.5 # с: дольше игрока к месту не «везём», дальше — перенос сразу
 const SETTLE := 0.2     # остановка должна держаться, а не быть одним тактом в верхней точке полёта
 const GROUND_R := 16    # радиус куска рельефа под падением, м
 const LAYER_GROUND := 4
@@ -333,7 +334,12 @@ func _begin_recover(b: BikeRide, w: WorldData, heights: Heightfield) -> void:
 	var hips: Vector3 = (_bones["Hips"] as PhysicalBone3D).global_position
 	_from_feet = Vector3(hips.x, hips.y - 0.5, hips.z)
 	standing_position = destination.position
-	_recover_time = maxf(RECOVER, _from_feet.distance_to(standing_position) / GameConfig.WALK)
+	var walk_time := _from_feet.distance_to(standing_position) / GameConfig.WALK
+	if walk_time > RECOVER_MAX:
+		# далеко (например, точка появления): переносим сразу, а не «везём» без управления
+		_from_feet = standing_position
+		walk_time = RECOVER
+	_recover_time = maxf(RECOVER, walk_time)
 	# Сохраняем раму до удаления временных физических тел.
 	b.fallen_transform = _bike_body.global_transform
 	b.x = b.fallen_transform.origin.x
