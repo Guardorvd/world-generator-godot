@@ -54,8 +54,14 @@ static func fast_grid() -> Object:
 static func _fast_build_stale() -> bool:
 	if OS.has_feature("template"):
 		return false
-	var dll := ProjectSettings.globalize_path("res://.godot/mono/temp/bin/Debug/%s.dll" % ProjectSettings.get_setting("dotnet/project/assembly_name", "WorldGeneratorGodot"))
-	if not FileAccess.file_exists(dll):
+	# Редактор и запуск из папки грузят Debug; если его нет, сборка лежит в другой конфигурации (Export*/Release).
+	var dll := ""
+	for config: String in ["Debug", "ExportDebug", "ExportRelease", "Release"]:
+		var candidate := ProjectSettings.globalize_path("res://.godot/mono/temp/bin/%s/%s.dll" % [config, ProjectSettings.get_setting("dotnet/project/assembly_name", "WorldGeneratorGodot")])
+		if FileAccess.file_exists(candidate):
+			dll = candidate
+			break
+	if dll.is_empty():
 		return false
 	var built := FileAccess.get_modified_time(dll)
 	var dir := FAST_GRID_SCRIPT.get_base_dir()
