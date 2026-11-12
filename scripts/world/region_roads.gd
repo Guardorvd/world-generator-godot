@@ -78,6 +78,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	# другие, и она считается заново.
 	var geography: Dictionary = batch.geographies[0] if regions.size() == 1 and batch.get("geographies", []).size() == 1 else {}
 	var w := Places.local_world(source, merged, surface, geography)
+	w.world_origin = source.world_origin + bounds.position
 	var profile := {geography_ms = (Time.get_ticks_usec() - started) / 1000.0, geography_reused = geography.get("rect") == bounds}
 	started = Time.get_ticks_usec()
 	w.path_mask = fields.path.duplicate()

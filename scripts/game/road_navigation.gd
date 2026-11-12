@@ -1,7 +1,7 @@
 extends RefCounted
 ## Сеть готовых дорог + ограниченные подходы по известной проходимой местности.
 ## Поиск по длине в метрах; без генерации дорог, мира или полного navmesh.
-const MAX_VISITS := 20000
+const Topology := preload("res://scripts/world/road_topology.gd")
 const LOCAL_VISITS := 1800
 const CELL := 2.0
 const OFFROAD_COST := 1.5
@@ -10,6 +10,7 @@ var points := {}
 var links := {}
 var levels := {}
 var searches := 0
+var road_route: Array[Dictionary] = [] # directed intervals of physical sections
 var road_first := 0
 var road_last := -1
 var complete := false
@@ -17,6 +18,8 @@ var status := ""
 var _world: WorldData
 var _heights: Heightfield
 var _cells := {}
+var _node_keys := {}
+var _edges := {}
 var _components := {}
 var _collision_cells := {} # chunk -> only building records that can affect its exact collision queries
 const BUILDING_CELL := 64.0
@@ -28,42 +31,59 @@ func build(w: WorldData, h: Heightfield = null) -> void:
 	links.clear()
 	levels.clear()
 	_cells.clear()
+	_node_keys.clear()
+	_edges.clear()
 	_components.clear()
 	_collision_cells.clear()
-	var trails := w.trails.duplicate()
-	if w.outer != null:
-		trails.append_array(w.outer.get_ledger().get("trails", []))
-	for trail: Dictionary in trails:
+	var graph := Topology.compile(w, func() -> bool: return cancelled)
+	if graph.is_empty(): return
+	var structures := {}
+	if h != null:
+		for span: Dictionary in h.structures:
+			var a := Vector2(span.ax, span.az) / GameConfig.TILE
+			var b := Vector2(span.bx, span.bz) / GameConfig.TILE
+			structures[Topology.passage_id(a, b, span.tunnel, w.world_origin)] = span
+	for id in graph.nodes.size():
 		if cancelled: return
-		if trail.get("kind", "animal") == "animal": continue
-		var previous := -1
-		var level := INF
-		for p: Dictionary in trail.pts:
-			if cancelled: return
-			var at := Vector2(p.x, p.y) * GameConfig.TILE
-			if not at.is_finite():
-				previous = -1
+		var node: Dictionary = graph.nodes[id]
+		var at: Vector2 = node.at * GameConfig.TILE
+		var y := 0.0
+		if h != null:
+			if node.passage.is_empty():
+				y = h.ground_at(at.x, at.y)
+			elif structures.has(node.passage):
+				var span: Dictionary = structures[node.passage]
+				y = h.level(span, (at.x - span.ax) * span.ux + (at.y - span.az) * span.uz)
+			else:
 				continue
-			level = h.surface_at(at.x, at.y, level) if h != null else 0.0
-			# Координаты клетки независимы от ширины плана; высота различает мост и проход под ним.
-			var key := Vector3i(floori(p.x), floori(p.y), roundi(level / 0.8))
-			if not _cells.has(key):
-				var id := points.size()
-				_cells[key] = id
-				points[id] = at
-				levels[id] = level
-				links[id] = []
-			var id: int = _cells[key]
-			if previous != -1 and previous != id and _segment(points[previous], at, levels[previous]) < INF:
-				if not links[previous].has(id): links[previous].append(id)
-				if not links[id].has(previous): links[id].append(previous)
-			previous = id
+		if not is_finite(y): continue
+		points[id] = at
+		levels[id] = y
+		_node_keys[id] = node.id
+		links[id] = []
+		var cell := Vector2i(node.at.floor())
+		if not _cells.has(cell): _cells[cell] = []
+		_cells[cell].append(id)
+	for edge: Dictionary in graph.edges:
+		if cancelled: return
+		var a: int = edge.from
+		var b: int = edge.to
+		var key := _edge_key(a, b)
+		if _edges.has(key) or not points.has(a) or not points.has(b):
+			continue
+		var end := _segment(points[a], points[b], levels[a])
+		if not is_finite(end) or absf(end - float(levels[b])) > 0.5:
+			continue
+		_edges[key] = edge
+		links[a].append(b)
+		links[b].append(a)
 	for id: int in points:
 		if _components.has(id): continue
 		var queue: Array[int] = [id]
 		_components[id] = id
 		var cursor := 0
 		while cursor < queue.size():
+			if cancelled: return
 			var current := queue[cursor]
 			cursor += 1
 			for next: int in links[current]:
@@ -71,10 +91,17 @@ func build(w: WorldData, h: Heightfield = null) -> void:
 					_components[next] = id
 					queue.append(next)
 
-## Компонента связности вершины пути в клетке без учёта высоты (граф построен без рельефа: build(w) без Heightfield)
-## или -1, если вершины пути в этой клетке нет.
-func component_at(cell: Vector2i) -> int:
-	return int(_components.get(_cells.get(Vector3i(cell.x, cell.y, 0), -1), -1))
+static func _edge_key(a: int, b: int) -> Vector2i:
+	return Vector2i(mini(a, b), maxi(a, b))
+
+
+## A cell is a spatial index only. It can contain several unconnected nodes.
+func component_at(cell: Vector2i, preferred := -1) -> int:
+	for id: int in _cells.get(cell, []):
+		var component: int = _components.get(id, -1)
+		if preferred < 0 or preferred == component:
+			return component
+	return -1
 
 
 ## Компонента ближайшей к точке вершины сети (метры) или -1, если сети нет.
@@ -83,12 +110,11 @@ func component_near(at: Vector2) -> int:
 	return int(_components.get(id, -1)) if id >= 0 else -1
 
 
-## Клетки вершин пути одной компоненты (без учёта высоты).
 func component_cells(comp: int) -> Array[Vector2i]:
 	var out: Array[Vector2i] = []
-	for key: Vector3i in _cells:
-		if int(_components.get(_cells[key], -1)) == comp:
-			out.append(Vector2i(key.x, key.y))
+	for cell: Vector2i in _cells:
+		if component_at(cell, comp) == comp:
+			out.append(cell)
 	return out
 
 
@@ -104,6 +130,7 @@ func nearest(at: Vector2) -> int:
 
 func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	searches += 1
+	road_route.clear()
 	road_first = 0
 	road_last = -1
 	complete = false
@@ -120,7 +147,10 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	var entries := {}
 	for id: int in points:
 		var component: int = _components[id]
-		if not entries.has(component) or from.distance_squared_to(points[id]) < from.distance_squared_to(points[entries[component]]):
+		var distance := from.distance_squared_to(points[id])
+		var old: int = entries.get(component, -1)
+		if old < 0 or distance < from.distance_squared_to(points[old]) or (distance == from.distance_squared_to(points[old])
+				and absf(feet - float(levels[id])) < absf(feet - float(levels[old]))):
 			entries[component] = id
 	var starts: Array = entries.values()
 	starts.sort_custom(func(a: int, b: int) -> bool: return from.distance_squared_to(points[a]) < from.distance_squared_to(points[b]))
@@ -137,18 +167,18 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 		previous[id] = -1
 		approaches[id] = approach
 		_push(heap, id, cost[id])
-	var visits := 0
-	while not cancelled and not heap.is_empty() and visits < MAX_VISITS:
+	# The graph is finite. Do not stop at a fixed node count when additional areas are prepared.
+	while not cancelled and not heap.is_empty():
 		var item := _pop(heap)
 		var id := int(item.y)
 		if item.x > float(cost[id]) + 0.001: continue
-		visits += 1
 		for next: int in links[id]:
 			var distance: float = cost[id] + points[id].distance_to(points[next])
 			if not cost.has(next) or distance < float(cost[next]):
 				cost[next] = distance
 				previous[next] = id
 				_push(heap, next, distance)
+	if cancelled: return PackedVector2Array()
 	var tails: Array = cost.keys()
 	tails.sort_custom(func(a: int, b: int) -> bool:
 		return points[a].distance_to(to) + float(cost[a]) * 0.05 < points[b].distance_to(to) + float(cost[b]) * 0.05)
@@ -171,16 +201,34 @@ func route_to(from: Vector2, to: Vector2, feet := INF) -> PackedVector2Array:
 	var chain: Array[int] = []
 	var id := best
 	while id != -1:
-		chain.push_front(id)
+		chain.append(id)
 		id = previous[id]
+	chain.reverse()
 	var out: PackedVector2Array = approaches[chain[0]]
 	road_first = out.size() - 1
-	for n in range(1, chain.size()): out.append(points[chain[n]])
+	for n in range(1, chain.size()):
+		out.append(points[chain[n]])
+		_append_interval(chain[n - 1], chain[n])
 	road_last = out.size() - 1
 	out.append_array(finish.slice(1))
 	complete = true
 	status = ""
 	return out
+
+## Keep stations as well as IDs so a route can traverse part of a section in either direction.
+func _append_interval(a: int, b: int) -> void:
+	var edge: Dictionary = _edges[_edge_key(a, b)]
+	var forward: bool = edge.from == a
+	var start: float = edge.from_m if forward else edge.to_m
+	var end: float = edge.to_m if forward else edge.from_m
+	if not road_route.is_empty():
+		var last: Dictionary = road_route[-1]
+		if last.section == edge.section and absf(float(last.to_m) - start) < 0.001:
+			last.to_m = end
+			last.to_node = _node_keys[b]
+			return
+	road_route.append({section = edge.section, from_node = _node_keys[a], to_node = _node_keys[b], from_m = start, to_m = end})
+
 
 func _length(path: PackedVector2Array) -> float:
 	var distance := 0.0

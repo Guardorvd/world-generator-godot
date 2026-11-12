@@ -8,8 +8,12 @@ static func capture(source: Heightfield, include_graph := true) -> Heightfield:
 	w.N = original.N
 	w.available_rect = original.available_rect
 	w.territory_revision = original.territory_revision
+	w.world_origin = original.world_origin
 	# Route records are immutable after generation; only the list is mutable.
-	if include_graph: w.trails = original.trails.duplicate()
+	if include_graph:
+		w.trails = original.trails.duplicate()
+		w.bridges = EntityCodec.copy(original.bridges)
+		w.tunnels = EntityCodec.copy(original.tunnels)
 	w.settlements = EntityCodec.copy(original.settlements)
 	w.sites = EntityCodec.copy(original.sites)
 	w.lake = original.lake.duplicate()

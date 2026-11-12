@@ -341,6 +341,8 @@ func _start_search() -> void:
 		search.points = roads.points
 		search.links = roads.links
 		search.levels = roads.levels
+		search._node_keys = roads._node_keys
+		search._edges = roads._edges
 		search._components = roads._components
 		search._world = h.world
 		search._heights = h

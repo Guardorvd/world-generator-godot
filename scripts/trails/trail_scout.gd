@@ -351,7 +351,7 @@ func _joins(cand: TrailSite) -> Array:
 		if not RoadBed.KINDS.has(t.kind):
 			continue
 		for p: Dictionary in t.pts:
-			if inner.has_point(Vector2i(floori(p.x), floori(p.y))) 					and _nav.component_at(Vector2i(floori(p.x) + cand.origin.x, floori(p.y) + cand.origin.y)) == _home:
+			if inner.has_point(Vector2i(floori(p.x), floori(p.y))) 					and _nav.component_at(Vector2i(floori(p.x) + cand.origin.x, floori(p.y) + cand.origin.y), _home) == _home:
 				out.append(Vector2(p.x, p.y) * GameConfig.TILE)
 	return out
 

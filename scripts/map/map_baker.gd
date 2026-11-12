@@ -7,6 +7,8 @@ extends RefCounted
 ## без отмывки склонов (flat, для текстуры 3D-рельефа, где свет считает движок) и с отмывкой (для карты).
 ## Строки заливки считаются параллельно полосами.
 
+const Topology := preload("res://scripts/world/road_topology.gd")
+
 const ROCKC := [150.0, 144.0, 138.0]
 const FLOWERS := [[230, 220, 80], [230, 110, 140], [240, 240, 240], [150, 120, 220], [235, 140, 60]]
 const BAND := 32
@@ -313,17 +315,17 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 	# В 3D пути смешивает шейдер метровой сетки; на карте остаются прежние линии.
 	if not human_paths:
 		return
-	for t in w.trails:
-		if t.kind != "animal":
-			cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)
-	for t in w.trails:
-		if t.kind != "animal" and t.kind != "road":
+	var sections := Topology.sections(w).values()
+	for t: Dictionary in sections:
+		cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)
+	for t: Dictionary in sections:
+		if t.kind != "road":
 			_stroke_surface(cv, t, Color8(150, 136, 112) if t.kind == "mountain" else Color8(156, 124, 84), PX)
 	# дороги поверх троп: где тропа слилась с дорогой, видна дорога
-	for t in w.trails:
+	for t: Dictionary in sections:
 		if t.kind == "road":
 			_stroke_surface(cv, t, Color8(172, 162, 142), PX)
-	for t in w.trails:
+	for t: Dictionary in sections:
 		if t.kind == "trail":
 			cv.stroke_poly(t.pts, Color8(190, 160, 115), 0.5, 0.35, 0.0, PX)
 

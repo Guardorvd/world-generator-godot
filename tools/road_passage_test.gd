@@ -60,6 +60,7 @@ func run() -> void:
 	# Хозяин: дорога по ряду 48
 	var host := StageTrails._add_trail(w, cells(line(Vector2i(8, 48), Vector2i(88, 48))), "road")
 	check(host.size() == 1 and w.trails.size() == 1, "first route is one segment")
+	var host_id: String = w.trails[0].road_id
 	# Сходится на дорогу, идёт по ней 20 клеток и уходит: два новых участка, общий участок не копируется
 	var path: Array = line(Vector2i(14, 30), Vector2i(30, 46)) + line(Vector2i(30, 47), Vector2i(30, 48)).slice(1) \
 		+ line(Vector2i(31, 48), Vector2i(50, 48)) + line(Vector2i(51, 49), Vector2i(66, 64))
@@ -73,6 +74,7 @@ func run() -> void:
 		for end: Dictionary in [w.trails[k].pts[0], w.trails[k].pts[-1]]:
 			if on_polyline(w.trails[0].pts, Vector2(end.x, end.y)): nodes += 1
 	check(nodes == 2, "each branch ends on an exact vertex of the host axis (node)")
+	check(not host_id.is_empty() and w.trails[0].road_id == host_id, "physical ID survives insertion of branch vertices")
 	# Пересечение: вертикальный путь через дорогу — один участок насквозь
 	var before := w.trails.size()
 	var cross := StageTrails._add_trail(w, cells(line(Vector2i(72, 30), Vector2i(72, 66))), "trail")

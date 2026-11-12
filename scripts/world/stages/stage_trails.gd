@@ -17,6 +17,8 @@ extends RefCounted
 ## Дополнительные тропы сокращают обход по сети или предлагают другой проход по рельефу;
 ## ответвления ведут к берегам и вершинам, без заданного количества связей (_second_ways).
 
+const Topology := preload("res://scripts/world/road_topology.gd")
+
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
 
@@ -299,12 +301,12 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			_part("road_line", line_us)
 			var index := w.trails.size()
 			Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
-			w.trails.append({kind = kind, pts = line})
+			w.trails.append(Topology.section(kind, line, w.world_origin))
 			w.generation.road_cells.append(cells)
 			for c: int in cells:
 				if owner[c] < 0: owner[c] = index
 			for join: Dictionary in joins.values():
-				_insert_vertex(w, join.host, join.point, changed_lines)
+				Topology.attach(w, join.host, join.point, changed_lines)
 			added.append(index)
 		w.generation.road_owner = owner
 	_trodden(w, path, kind, road_cost)
@@ -484,31 +486,6 @@ static func _nearest_on(pts: Array, p: Vector2, reach := INF, tangent: Array[Vec
 			if not tangent.is_empty():
 				tangent[0] = (b - a).normalized()
 	return best
-
-
-## Общая точка узла в линии хозяина: дороги сходятся в одной вершине (навигация, полотно, развилки).
-static func _insert_vertex(w: WorldData, host: int, point: Vector2, changed_lines: Variant = null) -> void:
-	var pts: Array = w.trails[host].pts
-	var best := 0
-	var best_d := INF
-	for j in range(1, pts.size()):
-		if minf(pts[j - 1].x, pts[j].x) > point.x + 1.0 or maxf(pts[j - 1].x, pts[j].x) < point.x - 1.0 \
-				or minf(pts[j - 1].y, pts[j].y) > point.y + 1.0 or maxf(pts[j - 1].y, pts[j].y) < point.y - 1.0:
-			continue
-		var d := Geometry2D.get_closest_point_to_segment(point, Vector2(pts[j - 1].x, pts[j - 1].y), Vector2(pts[j].x, pts[j].y)).distance_squared_to(point)
-		if d < best_d:
-			best_d = d
-			best = j
-	if best_d == INF:
-		return
-	var a := Vector2(pts[best - 1].x, pts[best - 1].y)
-	var b := Vector2(pts[best].x, pts[best].y)
-	if a.distance_to(point) < 0.01 or b.distance_to(point) < 0.01:
-		return
-	var f := clampf(a.distance_to(point) / maxf(a.distance_to(b), 0.000001), 0.0, 1.0)
-	# Only touched arrays need a snapshot; point dictionaries themselves are not mutated.
-	if changed_lines != null and not changed_lines.has(host): changed_lines[host] = pts.duplicate()
-	pts.insert(best, {x = point.x, y = point.y, w = lerpf(float(pts[best - 1].w), float(pts[best].w), f)})
 
 
 ## Подбор дуг в коридоре исходной оси. Прямые участки дают место для захода на поворот.
@@ -1259,7 +1236,7 @@ static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
 		on_road[c] = true
 	for part: Array in parts:
 		var index := w.trails.size()
-		w.trails.append({kind = "trail", pts = part[0]})
+		w.trails.append(Topology.section("trail", part[0], w.world_origin))
 		w.generation.road_cells.append(part[1])
 		for c: int in part[1]:
 			if owner[c] == e and not on_road.has(c): owner[c] = index
