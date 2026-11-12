@@ -995,7 +995,9 @@ func _physics_process(dt: float) -> void:
 		var wanted := atan2(-forward.x, -forward.y)
 		st = clampf(-wrapf(wanted - bike.heading, -PI, PI) * 2.0, -1.0, 1.0)
 		jump = false
-	if time < _rescue_input_until:
+	# при открытой карте руль, газ и прыжок не работают (велосипед катится по инерции)
+	var map_lock := show_map
+	if time < _rescue_input_until or map_lock:
 		fw = 0.0
 		st = 0.0
 		jump = false
@@ -1008,7 +1010,7 @@ func _physics_process(dt: float) -> void:
 	elif bike.riding:
 		var h0 := bike.heading
 		services.controls.read_bike_body(bike, not _opening and not show_map and time >= _rescue_input_until)
-		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run"), jump, _opening)
+		fw = bike_controller.ride(dt, player, bike, world, heights, fw, st, Input.is_action_pressed("run") and not map_lock, jump, _opening)
 		if _opening and (bike.airborne or bike.crashed or bike.speed < 0.3):
 			_finish_opening()
 		camera_controller.follow_bike(bike, bike.heading - h0, time, dt)
