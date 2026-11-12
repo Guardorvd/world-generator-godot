@@ -1111,8 +1111,13 @@ func refresh(rect: Rect2i) -> void:
 		var bounds := mm.custom_aabb
 		if not Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z)).intersects(box): continue
 		var buffer := mm.buffer
-		var kept := 0
-		for at in range(0, mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE, STRIDE):
+		var end := mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE
+		# Пока ни один экземпляр не попал в вырез, буфер не переписывается и не возвращается в MultiMesh.
+		var first := 0
+		while first < end and not box.has_point(Vector2(buffer[first + 3], buffer[first + 11])): first += STRIDE
+		if first >= end: continue
+		var kept := first / STRIDE
+		for at in range(first + STRIDE, end, STRIDE):
 			if box.has_point(Vector2(buffer[at + 3], buffer[at + 11])): continue
 			for c in STRIDE: buffer[kept * STRIDE + c] = buffer[at + c]
 			kept += 1

@@ -986,7 +986,8 @@ func _persist(key: Vector2i) -> void:
 	# Own a snapshot of the entity records and fields. Generation waits for the
 	# write, but the frame only polls and can keep streaming existing regions.
 	_unsaved_fields[key] = true
-	var accepted: Dictionary = EntityCodec.encode(ledger).duplicate(true)
+	# encode уже собирает новые словари и массивы (записи — через to_dict): вторая глубокая копия не нужна.
+	var accepted: Dictionary = EntityCodec.encode(ledger)
 	_save_result = {key = key}
 	var result := _save_result
 	var dir := store_dir(world)
