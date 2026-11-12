@@ -1,6 +1,6 @@
 extends SceneTree
 ## One isolated suite: authoring, real surfaces/mesh, protection and actual BikeController rides.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 var report := {}
 var checks := 0

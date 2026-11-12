@@ -1,7 +1,7 @@
 extends SceneTree
 ## Real public project builder → site ID → independent final fixture on the frozen successful case.
 const B := preload("res://scripts/lab/trail_lab_builder.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 const P := preload("res://scripts/lab/trail_lab_project.gd")
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)

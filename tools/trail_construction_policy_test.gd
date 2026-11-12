@@ -35,7 +35,7 @@ func run() -> void:
 	var area := Contract.endpoint(Vector2(200, 200), Vector2(0, -1), rough, func(_p: Vector2) -> bool: return true, 4)
 	check(area.suitable and area.estimated_work > 0, "natural endpoint slopes contribute cost without prohibiting construction")
 	check(not Contract.endpoint(Vector2(200, 200), Vector2(0, -1), rough, func(_p: Vector2) -> bool: return false, 4).suitable, "physical clearance still matters")
-	var ready := preload("res://tools/trail_lab_fixture.gd").prepare([route] as Array[TrailDefinition], true, "generated", input)
+	var ready := preload("res://scripts/lab/trail_lab_fixture.gd").prepare([route] as Array[TrailDefinition], true, "generated", input)
 	check(ready.errors.is_empty(), "ordinary final pipeline accepts the constructed route: %s" % [ready.errors])
 	if ready.errors.is_empty():
 		ready.heights.obstacles.set_trail(ready.technical.collide, ready.technical.bumps)

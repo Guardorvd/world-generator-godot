@@ -3,7 +3,7 @@ extends SceneTree
 ## never calls world generation, trail search or a full game scene.
 const Files := preload("res://scripts/core/cache_file.gd")
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
-const Fixture := preload("res://tools/trail_lab_fixture.gd")
+const Fixture := preload("res://scripts/lab/trail_lab_fixture.gd")
 const ROOT := "res://.godot/cache_pipeline_test"
 var fails := 0
 var checks := 0

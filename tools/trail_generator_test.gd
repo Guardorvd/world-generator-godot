@@ -10,7 +10,7 @@ const TrailLabBuilder := preload("res://scripts/lab/trail_lab_builder.gd")
 ## разные линии, два сида одного характера — разные местности.
 ##   godot --headless --path . --script res://tools/trail_generator_test.gd [-- --quick] [--seed 3]
 ## --quick — одна местность и один стиль (как кнопки лаборатории по умолчанию). Лимит 300 с.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 
 func _initialize() -> void:

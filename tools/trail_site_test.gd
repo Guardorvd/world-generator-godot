@@ -3,7 +3,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/trail_site_test.gd
 ##   godot --path . --script res://tools/trail_site_test.gd -- --capture   (overview.png and rider.png of the site)
 ## Report: tools/control/runs/trail_site/metrics.json. About 30 s headless on the second PC.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_site"
 var failures := 0
 var checks := 0

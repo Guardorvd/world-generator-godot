@@ -11,7 +11,7 @@ extends SceneTree
 ## exhausted budget, start in water); repeatability; Trail Lab: the button path, a refusal keeps the previous route, one
 ## automatic ride of the built line with the production controller.
 ## Report: tools/control/runs/trail_route/metrics.json. About 30 s headless on the second PC.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_route"
 ## Pairs in site metres, picked once by eye from the site's map; the builder gets nothing but these points.
 const NATURAL := [Vector2(126, 222), Vector2(78, 270)]  # west hillside: straight line up to 34 % at 4 m

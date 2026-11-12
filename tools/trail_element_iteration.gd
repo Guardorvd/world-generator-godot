@@ -37,7 +37,7 @@ func run() -> void:
 			Sites.current = -1
 			record.fitting = Fit.fit(project.source, project.routes[0], project.settings)
 			var checked := project.copy_routes()
-			var prepared := preload("res://tools/trail_lab_fixture.gd").prepare(checked, true, "generated", project.source)
+			var prepared := preload("res://scripts/lab/trail_lab_fixture.gd").prepare(checked, true, "generated", project.source)
 			record.final_errors = Array(prepared.errors)
 			record.accepted = prepared.errors.is_empty() and prepared.heights != null
 			record.final_repairs = prepared.get("repairs", [])

@@ -9,7 +9,7 @@ const TrailStandards := preload("res://scripts/trails/trail_standards.gd")
 ##   `-- --only gap,table,roller,drop,pump,waves,tech,berm` — только эти виды.
 ## Только замеры, секунды на элемент. Лимит 240 с.
 ##   godot --headless --path . --script res://tools/trail_standards_stand.gd [-- --check] [--only pump]
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const T := TrailElement.Profile
 const SPEEDS := [7.0, 9.0, 11.0, 13.0, 15.0, 17.0]
 const DT := 1.0 / 60.0

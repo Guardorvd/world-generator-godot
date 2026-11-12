@@ -1,7 +1,7 @@
 extends SceneTree
 ## Изолированная проверка проекта уклона полотна до запекания (TrailBuilder.design): на учебных трассах Trail Lab, секунды.
 ## Запуск: godot --headless --script res://tools/trail_design_test.gd
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 
 func _initialize() -> void:

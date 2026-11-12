@@ -9,7 +9,7 @@ extends SceneTree
 ## the site data separately). For every site a map of the suitability grid (map_<site>.png); for a refusal also a
 ## corridor estimate over the natural ground (an assumption, not proof). Repeatability of one found trail.
 ## Report: tools/control/runs/trail_set/metrics.json and REPORT.md. About 1 min headless on the second PC.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_set"
 ## The fixed set. Chosen by terrain figures of the source world (trail_site_export --scan) BEFORE the builder ran;
 ## a failing site is never dropped from it.

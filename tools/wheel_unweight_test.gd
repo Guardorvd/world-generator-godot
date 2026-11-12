@@ -7,7 +7,7 @@ extends SceneTree
 ## Успех — проезд внутри полотна (не дальше половины ширины от оси), скорость после обоих колёс, удары, следующий
 ## поворот. Ряды по тактам (CSV) и графики (PNG) — в tools/control/runs/wheel_unweight.
 ##   godot --headless --path . --script res://tools/wheel_unweight_test.gd
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/wheel_unweight"
 const LOG := 30.0      # станция препятствия, м
 const TURN := 40.0     # начало поворота, м

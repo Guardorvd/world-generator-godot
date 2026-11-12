@@ -3,7 +3,7 @@ extends SceneTree
 ## По каждому заезду: скорость взлёта, время и длина полёта, высота над кромкой, место приземления относительно
 ## элемента (у гэпа — недолёт до кромки приземления, на спуск или перелёт), удар, падение. Только замеры.
 ##   godot --headless --path . --script res://tools/trail_gap_stand.gd [-- --only gap]
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const SPEEDS := [7.0, 9.0, 11.0, 13.0, 15.0, 17.0]
 static var TRACE := false
 ## вид, длина, высота, разрыв (гэп)

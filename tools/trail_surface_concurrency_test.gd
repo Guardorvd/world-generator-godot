@@ -1,5 +1,5 @@
 extends SceneTree
-const F = preload("res://tools/trail_lab_fixture.gd")
+const F = preload("res://scripts/lab/trail_lab_fixture.gd")
 const Network = preload("res://scripts/trails/trail_world_network.gd")
 const Surface = preload("res://scripts/game/surface_snapshot.gd")
 var failures := 0

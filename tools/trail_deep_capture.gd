@@ -18,7 +18,7 @@ func run() -> void:
 	for i in vertices.size(): worst = maxf(worst, vertices[i].distance_to(transform * original[i]))
 	check(vertices.size() == original.size() and worst < 0.00001, "MeshBatch cached CPU geometry preserves transformed primitive vertices")
 	node.free()
-	var site := preload("res://tools/trail_lab_fixture.gd").site()
+	var site := preload("res://scripts/lab/trail_lab_fixture.gd").site()
 	var d := TrailDefinition.new()
 	d.id = "site_route"
 	d.kind = "mountain"

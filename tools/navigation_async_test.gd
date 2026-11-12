@@ -1,5 +1,5 @@
 extends SceneTree
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const Line = preload("res://scripts/render/navigation_line.gd")
 const Roads = preload("res://scripts/game/road_navigation.gd")
 const Snapshot = preload("res://scripts/game/navigation_snapshot.gd")

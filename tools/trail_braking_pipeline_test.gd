@@ -1,7 +1,7 @@
 extends SceneTree
 ## Public builder, automatic base repair, final fixture and production motion on a frozen game source.
 const B := preload("res://scripts/lab/trail_lab_builder.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 const Probe := preload("res://scripts/lab/trail_lab_ride_probe.gd")
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 600)

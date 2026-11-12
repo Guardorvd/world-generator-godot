@@ -3,7 +3,7 @@ extends SceneTree
 ## на оси, подъезд на разной скорости накатом или с педалями, прежняя и новая модель. Печатает таблицу исходов:
 ## проехал / встал / упал (причина), скорость после, потерю скорости. Только замеры, проверок нет.
 ##   godot --headless --path . --script res://tools/wheel_obstacle_stand.gd
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const AT := 150.0 # z бревна, м (едем на север, к меньшим z)
 
 

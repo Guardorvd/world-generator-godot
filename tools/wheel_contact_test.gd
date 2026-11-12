@@ -3,7 +3,7 @@ extends SceneTree
 ## Каждый заезд — тот же старт и тот же ввод в прежней модели и в новой; проверки сравнительные:
 ## тормоз на гребне держит хуже, чем в ложбине; контруклон сносит вниз; корень то прижимает, то разгружает колесо.
 ##   godot --headless --path . --script res://tools/wheel_contact_test.gd
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const ROLLER := 40.0
 const CAMBER := 100.0
 const ROOTS := 150.0

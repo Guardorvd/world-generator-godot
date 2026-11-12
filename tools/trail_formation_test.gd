@@ -1,5 +1,5 @@
 extends SceneTree
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 var checks := 0
 func _initialize() -> void:

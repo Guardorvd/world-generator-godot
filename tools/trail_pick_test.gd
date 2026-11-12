@@ -7,7 +7,7 @@ extends SceneTree
 ## the whole-operation budgets hold (also under a tight budget); Trail Lab's button, the time from the press to the
 ## ready scene, a refusal keeps the previous trail; one ride of the chosen trail with the production controller.
 ## Report: tools/control/runs/trail_pick/metrics.json. About 30 s headless on the second PC.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_pick"
 var failures := 0
 var checks := 0

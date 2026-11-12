@@ -1,7 +1,7 @@
 extends SceneTree
 const I := preload("res://scripts/trails/trail_generation_input.gd")
 const B := preload("res://scripts/lab/trail_lab_builder.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 const T := preload("res://scripts/lab/trail_lab_terrain.gd")
 const Adapter := preload("res://scripts/lab/trail_lab_input.gd")
 var failures := 0

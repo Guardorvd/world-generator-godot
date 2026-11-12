@@ -9,7 +9,7 @@ extends SceneTree
 ##   - сводно — прыжки (стол, гэп, дроп), овражки и петли на всех местах.
 ##   godot --headless --path . --script res://tools/trail_world_lab_test.gd [-- --seed 7] [--sites 3]
 ## География игры целиком — десятки секунд без C#; лимит 300 с.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const TrailLabTerrain := preload("res://scripts/lab/trail_lab_terrain.gd")
 const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
 const TrailLabScout := preload("res://scripts/lab/trail_lab_scout.gd")

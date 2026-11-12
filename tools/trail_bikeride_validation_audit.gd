@@ -1,6 +1,6 @@
 extends SceneTree
 ## Independent runs: production BikeRide + BikeController on the same baked surface as the validator.
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 const V := preload("res://scripts/lab/trail_lab_validation.gd")
 const Pilot := preload("res://scripts/lab/trail_autopilot.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")

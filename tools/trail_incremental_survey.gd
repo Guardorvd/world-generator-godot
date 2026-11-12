@@ -2,7 +2,7 @@ extends SceneTree
 const Source := preload("res://scripts/lab/trail_lab_game_source.gd")
 const Scout := preload("res://scripts/lab/trail_lab_scout_job.gd")
 const Builder := preload("res://scripts/lab/trail_lab_builder.gd")
-const Fixture := preload("res://tools/trail_lab_fixture.gd")
+const Fixture := preload("res://scripts/lab/trail_lab_fixture.gd")
 const Probe := preload("res://scripts/lab/trail_lab_ride_probe.gd")
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 600)

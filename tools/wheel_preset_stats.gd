@@ -4,7 +4,7 @@ extends SceneTree
 ## боком быстрее, чем вперёд), сходы с трассы, нехватку руля (руль упёрт, а курс не догоняет) и падения.
 ##   godot --headless --path . --script res://tools/wheel_preset_stats.gd -- --presets 2,5,9 [--seed 2910 --count 10] [--sim 40]
 ## Без --presets берёт count случайных трасс из каталога (кроме полигона 1) по seed.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 ## манера: имя, целевая скорость, тормозит ли перед поворотом, педали изо всех сил (Shift)
 ## и разгружает ли переднее колесо (Q) перед каждым низким препятствием на линии
 const STYLES := [["медленно 4", 4.0, false, false, false], ["осторожно 9", 9.0, true, false, false], ["быстро 13", 13.0, false, false, false],

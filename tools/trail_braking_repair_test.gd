@@ -1,7 +1,7 @@
 extends SceneTree
 const P := preload("res://scripts/lab/trail_lab_project.gd")
 const Repair := preload("res://scripts/lab/trail_lab_braking_repair.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 const V := preload("res://scripts/lab/trail_lab_validation.gd")
 const Probe := preload("res://scripts/lab/trail_lab_ride_probe.gd")
 const CACHE := "res://.godot/trail_element_cases_2026_11_03/"

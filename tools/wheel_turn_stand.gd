@@ -3,7 +3,7 @@ extends SceneTree
 ## один и тот же ввод в прежней и новой модели на разных скоростях. Печатает таблицу: средняя скорость рыскания,
 ## её рывки от такта к такту, снос, потеря скорости, нагрузка переднего колеса. Не тест: проверок нет, только замеры.
 ##   godot --headless --path . --script res://tools/wheel_turn_stand.gd [-- --surface grass]
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 
 
 func _initialize() -> void:

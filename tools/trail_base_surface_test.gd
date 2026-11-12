@@ -2,7 +2,7 @@ extends SceneTree
 const Base := preload("res://scripts/lab/trail_lab_base_surface.gd")
 const GI := preload("res://scripts/trails/trail_generation_input.gd")
 const V := preload("res://scripts/lab/trail_lab_validation.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 func check(ok: bool, message: String) -> void:
 	print("PASS " if ok else "FAIL ", message)

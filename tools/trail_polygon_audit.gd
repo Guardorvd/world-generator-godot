@@ -1,7 +1,7 @@
 extends SceneTree
 ## Read-only audit of preset 15. One prepared polygon, production controller/autopilot, no crash teleports.
 ## godot --headless --path . --script res://tools/trail_polygon_audit.gd
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const Polygon = preload("res://scripts/lab/trail_lab_polygon.gd")
 const Pilot = preload("res://scripts/lab/trail_autopilot.gd")
 const OUT := "res://tools/control/runs/polygon_audit"

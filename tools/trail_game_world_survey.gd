@@ -4,7 +4,7 @@ const Source := preload("res://scripts/lab/trail_lab_game_source.gd")
 const Job := preload("res://scripts/lab/trail_lab_world_job.gd")
 const Sites := preload("res://scripts/lab/trail_lab_sites.gd")
 const Terrain := preload("res://scripts/lab/trail_lab_terrain.gd")
-const F := preload("res://tools/trail_lab_fixture.gd")
+const F := preload("res://scripts/lab/trail_lab_fixture.gd")
 var failed := false
 
 func _initialize() -> void:

@@ -1,6 +1,6 @@
 extends PanelContainer
 ## Lab-only controls. Emits proposed values; the composition root commits a successful rebuild.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const Generator := preload("res://scripts/lab/trail_lab_builder.gd")
 signal generator_requested(settings: Dictionary)
 signal course_selected(index: int, kind: String, style: String, ground: String)

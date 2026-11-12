@@ -1,5 +1,5 @@
 extends SceneTree
-const F = preload("res://tools/trail_lab_fixture.gd")
+const F = preload("res://scripts/lab/trail_lab_fixture.gd")
 var failures := 0
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)

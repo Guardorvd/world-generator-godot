@@ -7,7 +7,7 @@ extends SceneTree
 ## accumulated earthworks; the base definition and its build unchanged; a line without room keeps the base with a
 ## reason; Trail Lab's flow mode; one full automatic ride of the final trail.
 ## Report: tools/control/runs/trail_flow/metrics.json. About 30 s headless on the second PC.
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const OUT := "res://tools/control/runs/trail_flow"
 const LENGTH_MIN := 90.0
 var failures := 0

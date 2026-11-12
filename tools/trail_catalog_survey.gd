@@ -4,7 +4,7 @@ extends SceneTree
 ## контактов (осторожно 9 м/с): время, сходы, полёт, встречи с препятствиями, гребни без опоры, сильнейшее приземление.
 ## Только замеры, проверок нет.
 ##   godot --headless --path . --script res://tools/trail_catalog_survey.gd [-- --presets 2,5]
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const LAT_SAFE := 6.0
 
 

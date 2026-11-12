@@ -1,5 +1,5 @@
 extends SceneTree
-const Fixture = preload("res://tools/trail_lab_fixture.gd")
+const Fixture = preload("res://scripts/lab/trail_lab_fixture.gd")
 const Floor = preload("res://scripts/render/forest_floor.gd")
 const Polygon = preload("res://scripts/lab/trail_lab_polygon.gd")
 const Epic = preload("res://scripts/lab/trail_lab_epic.gd")
