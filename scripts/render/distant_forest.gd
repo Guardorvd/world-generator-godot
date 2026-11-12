@@ -128,6 +128,7 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 	var density := 0.0
 	var woody := 0.0
 	var tall := 0.0
+	var herb := 0.0
 	var total := 0.0
 	for c in Understory.COMMUNITIES:
 		density += com[c] * Understory.COMMUNITY_DENSITY[c]
@@ -136,6 +137,7 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 			total += com[c] * row[f]
 		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE])
 		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE])
+		herb += com[c] * (row[Understory.MEADOW] + row[Understory.HIGH_GRASS] + row[Understory.SEDGE] + row[Understory.STIPA] + row[Understory.FORBS] * 0.6)
 	density *= (1.0 - 0.6 * rock) * (1.0 - 0.75 * smoothstep(0.55, 1.1, slope))
 	# Bushes per 4 m cell (OPEN_SLOTS places, density share, woody share of the weights)
 	var per_cell := density * Understory.OPEN_SLOTS * (woody + tall) / maxf(total, 0.001)
@@ -143,9 +145,15 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 	# A thicket needs a few bushes in 12 m; the 12 m patch noise of the near layout makes the gaps.
 	var patch := smoothstep(0.1, 0.45, VegetationLayer._vnoise(i, j, 3.0, seed + 31))
 	var mass := per_cell * patch
-	if mass < 0.22 or WGRandom.hash2(i, j, seed + 977) > smoothstep(0.22, 0.6, mass) + 0.15: return {}
 	var u := WGRandom.hash2(i, j, seed + 991)
 	var v := WGRandom.hash2(i, j, seed + 993)
+	if mass < 0.22 or WGRandom.hash2(i, j, seed + 977) > smoothstep(0.22, 0.6, mass) + 0.15:
+		# 12.11.2026: без кустов холм вдали не голый — массивы высокотравья (куртины по пояс) тоже видны
+		# низкими широкими валами: там, где ближняя раскладка ставит густые куртины, осоку и ковыль.
+		var herb_mass := density * Understory.OPEN_SLOTS * herb / maxf(total, 0.001) * smoothstep(0.2, 0.55, VegetationLayer._vnoise(i, j, 3.0, seed + 47))
+		if herb_mass < 0.4 or WGRandom.hash2(i, j, seed + 979) > smoothstep(0.4, 1.6, herb_mass) * 0.85: return {}
+		return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = 1.0, tall = 0.0, juniper = false,
+			conifer = false, u = u, herb = true, parch = clampf((0.55 - moisture) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)}
 	return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = minf(mass, 1.6),
 		tall = tall / maxf(woody + tall, 0.001), juniper = alt > 0.27 or rock > 0.3 or com[Understory.C_TURF] > 0.5,
 		conifer = bi in [Biomes.TAIGA, Biomes.TUNDRA] or alt > 0.3, u = u}
@@ -153,6 +161,13 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 static func _scrub_item(site: Dictionary, p: Vector2, ground: float) -> Array:
 	var mass: float = site.mass
 	var u: float = site.u
+	if site.get("herb", false):
+		# вал высокотравья: сочный оливково-зелёный, на сухом месте — соломенный (как ближние куртины)
+		var grass_r := lerpf(3.2, 5.6, u)
+		var grass_h := lerpf(0.8, 1.4, fposmod(u * 5.13, 1.0))
+		var grass_c := Color("5f7d38").lerp(Color("93884a"), float(site.parch)) * lerpf(0.92, 1.06, u)
+		grass_c.a = 0.0
+		return [Vector3(p.x, ground + grass_h * 0.3, p.y), Vector3(grass_r, grass_h * 0.5, grass_r), grass_c, 2, 0.0]
 	# Area of the bushes of 9 cells, ~3 m² each; young trees make some thickets taller.
 	var radius := clampf(sqrt(mass * 9.0 * 3.0 / PI), 1.6, 4.2) * lerpf(0.85, 1.15, u)
 	var height := lerpf(1.3, 2.2, u) + float(site.tall) * lerpf(2.0, 4.5, u)
