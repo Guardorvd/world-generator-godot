@@ -11,6 +11,7 @@ const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const OCEAN_DEPTH := GameConfig.OCEAN_DEPTH
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const FarForest := preload("res://scripts/render/distant_forest.gd")
 const C := OuterLand.C
 const RADIUS := 1200.0   # куски ближе этого держатся загруженными (дальше всё равно туман)
 const DROP := 1600.0     # куски дальше этого выгружаются
@@ -226,6 +227,7 @@ func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
 		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		add_child(mi)
+		FarForest.attach(mi, built.get("crowns", {}))
 		mi.visible = false
 	return mi
 
@@ -258,6 +260,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 		OuterLand._overlay_regions(ledger, Rect2i(key * C - Vector2i.ONE, Vector2i.ONE * (C + 3)), f)
 		f.rock = preload("res://scripts/world/mountain_surface.gd").field(f.elev, f.slope, f.moist)
 	var regions: Dictionary = ledger.get("regions", {})
+	var forest_cover := FarForest.cover_field(world, key, f)
 	var refined := false
 	var W := world.W
 	var H := world.H
@@ -317,7 +320,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 			else:
 				nor[v] = Vector3(hs[k - 1] - hs[k + 1], 2.0 * TILE, hs[k - S] - hs[k + S]).normalized()
 			vc[v] = col[k]
-			climate_uv[v] = Vector2(Floor.ground_moisture(f.moist[k], f.dw[k]), 0.0)
+			climate_uv[v] = Vector2(Floor.ground_moisture(f.moist[k], f.dw[k]), FarForest.sample_cover(forest_cover, a, b) if f.path[k] == 0 and f.river[k] == 0 else 0.0)
 	var idx := PackedInt32Array()
 	for b in C:
 		var j := j0 + b
@@ -373,7 +376,7 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 		# Частично закрытые картой куски сохраняют исходные треугольники и точный край выреза.
 		if not refined and not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):
 			lods = _lod(pos)
-	return {fields = f, arrays = arrays, lods = lods}
+	return {fields = f, arrays = arrays, lods = lods, crowns = FarForest.outer(world, heights, key, f, regions, forest_cover)}
 
 
 ## Один LOD с шагом две клетки. Периметр остаётся с шагом в клетку при любом LOD соседей.

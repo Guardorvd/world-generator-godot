@@ -316,6 +316,15 @@ func _half_chunk() -> float:
 
 ## Границы растворения по нынешним дальностям (с 9.9+)
 func _apply_fade() -> void:
+	# Far crowns/ground cover: off on the lowest flora level, 1000 m on medium, 1400 m on high (GTX 1650 SUPER target).
+	var far_forest := preload("res://scripts/render/distant_forest.gd")
+	far_forest.active = flora_level > 0
+	far_forest.far_end = 1000.0 if flora_level == 1 else 1400.0
+	if is_inside_tree():
+		for node: MultiMeshInstance3D in get_tree().get_nodes_in_group("distant_forest"):
+			node.visible = far_forest.active
+			node.visibility_range_end = far_forest.far_end + 150.0
+	RenderingServer.global_shader_parameter_set("distant_vegetation", Vector4(tree_r, tree_r * FADE_SHARE, far_forest.far_end, float(far_forest.active)))
 	for kind: int in _defs:
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):

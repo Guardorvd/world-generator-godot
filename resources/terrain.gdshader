@@ -27,6 +27,7 @@ uniform bool forest_enabled = false;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
 // 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
 uniform float sunlight = 1.0;
+global uniform vec4 distant_vegetation;
 uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
 uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
 uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
@@ -211,6 +212,12 @@ void fragment() {
 		col *= mix(vec3(1.0), vec3(0.95, 0.98, 1.0), shade * forest.g);
 		// Sun patches come from actual crown shadows.
 	}
+	// Distant plant communities use the existing masks/noise, not extra geometry/textures.
+	float nature_far = smoothstep(120.0, 360.0, length(wpos - CAMERA_POSITION_WORLD)) * distant_vegetation.w;
+	float distant_canopy = use_vertex_color ? UV.y : canopy;
+	distant_canopy *= (1.0 - snow) * (1.0 - smoothstep(0.18, 0.42, slope)) * (1.0 - road_bump_weight);
+	vec3 crown_ground = mix(vec3(0.13, 0.21, 0.065), vec3(0.075, 0.15, 0.085), clamp(0.55 - wet, 0.0, 1.0));
+	col = mix(col, crown_ground * (0.8 + n_big * 0.4), distant_canopy * nature_far * 0.55);
 	// 07.11.2026: горная порода. Тот же канал открытости (forest.a / COLOR.a), уклон и серые скальные
 	// биомы (по цвету карты, как снег) дают три характера: коренную породу (плиты, уступы, трещины),
 	// осыпи (щебень на склонах 25–40°) и пятна грунта с дёрном в сырых местах. Крупные различия

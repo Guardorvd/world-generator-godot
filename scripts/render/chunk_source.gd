@@ -4,6 +4,10 @@ const MAX_ACTIVE := 2
 const MAX_QUEUED := 6
 const READ_BYTES := 32 * 1024 * 1024
 const LRU := preload("res://scripts/core/byte_lru.gd")
+const FarForest := preload("res://scripts/render/distant_forest.gd")
+var _far_cpu := LRU.new()
+var _far_lock := Mutex.new()
+var _far_tasks := {}
 var cache: WorldCache
 var world: WorldData
 var heights: Heightfield
@@ -30,6 +34,7 @@ func setup(owner: WorldCache, w: WorldData, h: Heightfield, start_size: int, pre
 	heights = h
 	size = start_size
 	groups = prepared
+	_far_cpu.limit = 16 * 1024 * 1024
 	_cpu.limit = 128 * 1024 * 1024
 	_cpu.budget = budget
 	for group: Dictionary in groups:
@@ -54,6 +59,24 @@ func ready(layer: int, key: Vector2i) -> Variant:
 	if _handoff.has(id): return _handoff[id]
 	return _startup[id] if _startup.has(id) else _cpu.get_value(id)
 
+## Far crown proxies of a terrain tile; null until computed. Never gates the terrain itself.
+func crowns(key: Vector2i) -> Variant:
+	_far_lock.lock()
+	var value: Variant = _far_cpu.get_value(key)
+	_far_lock.unlock()
+	return value
+
+## Terrain tiles that arrived without a read (startup/cache) get their crowns on a worker.
+func request_crowns(key: Vector2i) -> void:
+	if closed or _far_tasks.has(key) or crowns(key) != null: return
+	_far_tasks[key] = WorkerThreadPool.add_task(func() -> void: _make_crowns(key), false, "Далёкий лес")
+
+func _make_crowns(key: Vector2i) -> void:
+	var batches := FarForest.plan(world, heights, key)
+	_far_lock.lock()
+	_far_cpu.put(key, batches)
+	_far_lock.unlock()
+
 ## Each layer replaces its pending demand before polling, including after turns/teleports.
 func retain_layer(layer: int, keys: Array[Vector2i]) -> void:
 	var wanted := {}
@@ -76,6 +99,7 @@ func _release_handoff(id: Vector3i) -> void:
 
 func read(layer: int, key: Vector2i) -> Array:
 	var started := Time.get_ticks_usec()
+	if layer < 0 and crowns(key) == null: _make_crowns(key)
 	var ref: Variant = groups[layer + 1][key]
 	var arrays: Array = []
 	var repaired := false
@@ -199,6 +223,10 @@ func request(layer: int, key: Vector2i, priority: float) -> void:
 	if _queue.size() > MAX_QUEUED: _queue.pop_back()
 
 func poll() -> void:
+	for key: Vector2i in _far_tasks.keys():
+		if WorkerThreadPool.is_task_completed(_far_tasks[key]):
+			WorkerThreadPool.wait_for_task_completion(_far_tasks[key])
+			_far_tasks.erase(key)
 	for id: Vector3i in _active.keys():
 		var item: Dictionary = _active[id]
 		if not WorkerThreadPool.is_task_completed(item.task): continue
@@ -233,6 +261,8 @@ func poll() -> void:
 		_stats_lock.unlock()
 
 func finish() -> void:
+	for task: int in _far_tasks.values(): WorkerThreadPool.wait_for_task_completion(task)
+	_far_tasks.clear()
 	_queue.clear()
 	_wanted.clear()
 	for item: Dictionary in _active.values():
@@ -250,6 +280,7 @@ func close() -> void:
 	_startup.clear()
 	_startup_bytes = 0
 	_cpu.clear()
+	_far_cpu.clear()
 	_release_pins()
 
 func _release_pins() -> void:

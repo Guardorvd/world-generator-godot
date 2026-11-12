@@ -17,6 +17,8 @@ var pending: Array[Vector2i] = []
 var material: Material
 var checked_at := Vector2.INF
 var _cache: WorldCache
+const FarForest := preload("res://scripts/render/distant_forest.gd")
+var _crown_wait := {} # tile key -> terrain node still waiting for its far crowns
 var _world: WorldData
 var _heights: Heightfield
 var _cpu := preload("res://scripts/core/byte_lru.gd").new()
@@ -107,6 +109,21 @@ func _exit_tree() -> void:
 		_read_task = -1
 
 
+## Far crown proxies join a terrain tile once their worker has finished; the tile itself never waits for them.
+func _attach_crowns() -> void:
+	for key: Vector2i in _crown_wait.keys():
+		var node: Variant = _crown_wait[key]
+		if not is_instance_valid(node) or nodes.get(key) != node:
+			_crown_wait.erase(key)
+			continue
+		var crowns: Variant = source.crowns(key)
+		if crowns == null:
+			source.request_crowns(key)
+			continue
+		FarForest.attach(node, crowns)
+		_crown_wait.erase(key)
+
+
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 	var corner := Vector2(key) * SIDE + Vector2.ONE * GameConfig.TILE * 0.5
 	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * SIDE))
@@ -116,6 +133,7 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
+	_attach_crowns()
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -183,6 +201,9 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		node.material_override = material
 		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(node)
+		if water_layer < 0 and _world != null:
+			if source == null: FarForest.attach(node, FarForest.plan(_world, _heights, key))
+			else: _crown_wait[key] = node
 		nodes[key] = node
 		if source != null: source.uploaded(water_layer, key, arrays, (Time.get_ticks_usec() - started) / 1000.0)
 		if _uncached_key == key:
