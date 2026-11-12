@@ -470,7 +470,7 @@ static func _save_generation(dir: String, current: Dictionary, key: Vector2i, wr
 				var bytes := _pack(data)
 				var digest := Util.sha256(bytes).hex_encode()
 				var name := "%d_%d.%s.region" % [k.x, k.y, digest]
-				if not FileAccess.file_exists(dir.path_join(name)):
+				if not _block_ok(dir.path_join(name), digest):
 					err = Files.replace(dir.path_join(name), bytes)
 					if err != OK: return err
 				# Verify every block before publishing a ledger referencing it.
@@ -484,7 +484,30 @@ static func _save_generation(dir: String, current: Dictionary, key: Vector2i, wr
 	err = _write(dir.path_join("ledger.bin"), {format = FORMAT, ledger = light})
 	if err == OK:
 		written.regions = light.regions
+		_prune_blocks(dir, light.regions, old_regions)
 	return err
+
+
+## Блоки полей, на которые не ссылается ни новый журнал, ни прежний (он остаётся резервной копией ledger.bin.bak), удаляются.
+static func _prune_blocks(dir: String, current_regions: Dictionary, old_regions: Dictionary) -> void:
+	var keep := {}
+	for regions: Dictionary in [current_regions, old_regions]:
+		for k: Variant in regions:
+			var file := String(regions[k].get("field_file", ""))
+			if not file.is_empty():
+				keep[file] = true
+	var pattern := RegEx.create_from_string("^-?\\d+_-?\\d+\\.[0-9a-f]{64}\\.region(\\.bak)?$")
+	for file: String in DirAccess.get_files_at(dir):
+		if pattern.search(file) == null:
+			continue
+		if keep.has(file.trim_suffix(".bak")):
+			continue
+		DirAccess.remove_absolute(dir.path_join(file))
+
+
+## Блок с таким именем уже лежит на диске и его хеш сходится (испорченный будет записан заново).
+static func _block_ok(path: String, digest: String) -> bool:
+	return FileAccess.file_exists(path) and Util.sha256(FileAccess.get_file_as_bytes(path)).hex_encode() == digest
 
 
 static func _write(path: String, value: Variant) -> Error:
