@@ -233,18 +233,27 @@ static func _profile(heights: Heightfield, pts: Array, k: Dictionary) -> Diction
 		var gx := heights.ground_at(xs[n] + 2.0, zs[n]) - heights.ground_at(xs[n] - 2.0, zs[n])
 		var gz := heights.ground_at(xs[n], zs[n] + 2.0) - heights.ground_at(xs[n], zs[n] - 2.0)
 		fade[n] = 1.0 - smoothstep(STEEP.x, STEEP.y, Grid.hypot(gx, gz) / 4.0)
-	return {xs = xs, zs = zs, half = half, prof = prof, fade = fade}
+	var along := PackedFloat64Array()
+	along.resize(n_pts)
+	for n in range(1, n_pts):
+		along[n] = along[n - 1] + Grid.hypot(xs[n] - xs[n - 1], zs[n] - zs[n - 1])
+	var cross_x := PackedFloat64Array()
+	var cross_z := PackedFloat64Array()
+	cross_x.resize(n_pts)
+	cross_z.resize(n_pts)
+	return {xs = xs, zs = zs, half = half, prof = prof, fade = fade, along = along, cross_x = cross_x, cross_z = cross_z}
 
 
 const JOIN_TOUCH := 0.05 # клеток: конец на оси другого пути
-const JOIN_GRADE := 0.08 # добавленный продольный уклон при подтягивании к узлу
+const JOIN_GRADE := 0.08 # запас уклона на компенсацию разности высот
+const JOIN_SLOPE := 0.16 # предел поправки касательной и поперечного уклона
 const JOIN_MIN := 6.0    # длина перехода, м
 const JOIN_MAX := 30.0
 const JOIN_BIN := 2
 
 
 ## Узлы (эталон FastGrid.RbJoin, те же операции в том же порядке): для каждого пути по порядку — точки касания с путями
-## раньше него (пересечения отрезков, концы на оси); профиль вокруг точки подтягивается к профилю того пути.
+## раньше него (пересечения отрезков, концы на оси); полотно ветви подводится к плоскости основной дороги.
 ## У сооружений и воды (pin < 0,5) узлы не трогаются.
 static func _join(heights: Heightfield, routes: Array, order: Array, profiles: Array, pin: PackedFloat32Array) -> void:
 	var w := heights.world
@@ -294,8 +303,8 @@ static func _join(heights: Heightfield, routes: Array, order: Array, profiles: A
 					if q + 1 == hp.size() - 1 and Grid.segment_dist(dx, dy, ax, ay, bx, by) < JOIN_TOUCH: contacts.append([dx, dy, host])
 		if contacts.is_empty(): continue
 		var own: Dictionary = profiles[t]
-		var prof: PackedFloat64Array = own.prof
 		var done: Array = []
+		var joined := {}
 		for contact: Array in contacts:
 			var x: float = contact[0]
 			var y: float = contact[1]
@@ -304,19 +313,82 @@ static func _join(heights: Heightfield, routes: Array, order: Array, profiles: A
 				if (e[0] - x) * (e[0] - x) + (e[1] - y) * (e[1] - y) < 0.125 * 0.125: seen = true
 			if seen: continue
 			done.append([x, y])
-			var cell := clampi(floori(y), 0, w.H - 1) * w.W + clampi(floori(x), 0, w.W - 1)
-			if pin[cell] < 0.5: continue
+			if not _join_open(w, pin, x, y): continue
 			var s := _nearest(own, x * TILE, y * TILE)
-			var other: Dictionary = profiles[contact[2]]
-			var value: float = (other.prof as PackedFloat64Array)[_nearest(other, x * TILE, y * TILE)]
-			var shift := value - prof[s]
-			if absf(shift) < 0.001: continue
-			var reach := clampf(absf(shift) / JOIN_GRADE, JOIN_MIN, JOIN_MAX)
-			for k in prof.size():
-				var along := absi(k - s) * STEP
-				if along >= reach: continue
-				prof[k] += shift * (1.0 - smoothstep(0.0, reach, along))
-		own.prof = prof
+			if not joined.has(s):
+				_join_profile(w, pin, own, s, profiles[contact[2]], x * TILE, y * TILE, joined)
+				joined[s] = true
+
+
+static func _join_open(w: WorldData, pin: PackedFloat32Array, x: float, z: float) -> bool:
+	var cell := clampi(floori(z), 0, w.H - 1) * w.W + clampi(floori(x), 0, w.W - 1)
+	return pin[cell] >= 0.5
+
+
+## Касательная и уклон на базе около 2 м по обе стороны, с односторонней выборкой у концов.
+static func _join_tangent(p: Dictionary, s: int) -> Array:
+	var along: PackedFloat64Array = p.along
+	var lo := s
+	var hi := s
+	while lo > 0 and along[s] - along[lo] < 2.0: lo -= 1
+	while hi + 1 < along.size() and along[hi] - along[s] < 2.0: hi += 1
+	var dx: float = p.xs[hi] - p.xs[lo]
+	var dz: float = p.zs[hi] - p.zs[lo]
+	var length := maxf(0.00001, Grid.hypot(dx, dz))
+	return [dx / length, dz / length, (p.prof[hi] - p.prof[lo]) / maxf(0.00001, along[hi] - along[lo])]
+
+
+static func _join_profile(w: WorldData, pin: PackedFloat32Array, own: Dictionary, s: int, host: Dictionary,
+		x: float, z: float, joined: Dictionary) -> void:
+	var q := _nearest(host, x, z)
+	var ht := _join_tangent(host, q)
+	var ot := _join_tangent(own, s)
+	var gx: float = ht[0] * ht[2] + host.cross_x[q]
+	var gz: float = ht[1] * ht[2] + host.cross_z[q]
+	var slope: float = gx * ot[0] + gz * ot[1]
+	var cross := clampf(-gx * ot[1] + gz * ot[0], -JOIN_SLOPE, JOIN_SLOPE)
+	var delta := clampf(slope - ot[2], -JOIN_SLOPE, JOIN_SLOPE)
+	var prof: PackedFloat64Array = own.prof
+	var along: PackedFloat64Array = own.along
+	var cross_x: PackedFloat64Array = own.cross_x
+	var cross_z: PackedFloat64Array = own.cross_z
+	if not _join_open(w, pin, own.xs[s] / TILE, own.zs[s] / TILE): return
+	var target: float = host.prof[q] + gx * (own.xs[s] - host.xs[q]) + gz * (own.zs[s] - host.zs[q])
+	var shift := target - prof[s]
+	var reach := clampf(1.5 * absf(shift) / JOIN_GRADE, JOIN_MIN, JOIN_MAX)
+	var spans: Array[float] = []
+	for side: int in [-1, 1]:
+		var span := reach
+		var k := s + side
+		while k >= 0 and k < prof.size():
+			var d := absf(along[k] - along[s])
+			if d >= reach: break
+			if joined.has(k) or not _join_open(w, pin, own.xs[k] / TILE, own.zs[k] / TILE):
+				span = d
+				break
+			k += side
+		spans.append(span)
+	# Кубический переход согласует высоту и производную. На границе перехода обе поправки сходят к нулю.
+	shift = clampf(shift, -JOIN_GRADE * minf(spans[0], spans[1]) / 1.5, JOIN_GRADE * minf(spans[0], spans[1]) / 1.5)
+	prof[s] += shift
+	cross_x[s] = -ot[1] * cross
+	cross_z[s] = ot[0] * cross
+	for side: int in [-1, 1]:
+		var span := spans[0 if side < 0 else 1]
+		var k := s + side
+		while k >= 0 and k < prof.size():
+			var d := along[k] - along[s]
+			if absf(d) >= span: break
+			var t := absf(d) / span
+			var fade := 1.0 - smoothstep(0.0, 1.0, t)
+			prof[k] += shift * fade + delta * d * (1.0 - t) * (1.0 - t)
+			cross_x[k] = lerpf(cross_x[k], cross_x[s], fade)
+			cross_z[k] = lerpf(cross_z[k], cross_z[s], fade)
+			k += side
+	own.prof = prof
+	own.cross_x = cross_x
+	own.cross_z = cross_z
+
 
 static func _bin_keys(a: Dictionary, b: Dictionary, bw: int, bh: int) -> PackedInt32Array:
 	var out := PackedInt32Array()
@@ -366,6 +438,8 @@ static func _stamp(heights: Heightfield, p: Dictionary, k: Dictionary, pin: Pack
 	var half: PackedFloat32Array = p.half
 	var prof: PackedFloat64Array = p.prof
 	var fades: PackedFloat64Array = p.fade
+	var cross_x: PackedFloat64Array = p.cross_x
+	var cross_z: PackedFloat64Array = p.cross_z
 	var touched := PackedInt32Array()
 	var best_w := PackedFloat32Array()
 	var best_h := PackedFloat32Array()
@@ -381,7 +455,9 @@ static func _stamp(heights: Heightfield, p: Dictionary, k: Dictionary, pin: Pack
 		var z1 := mini(H - 1, ceili((zs[n] + outer) / TILE - 0.5))
 		for cz in range(z0, z1 + 1):
 			for cx in range(x0, x1 + 1):
-				var d := Grid.hypot((cx + 0.5) * TILE - xs[n], (cz + 0.5) * TILE - zs[n])
+				var dx := (cx + 0.5) * TILE - xs[n]
+				var dz := (cz + 0.5) * TILE - zs[n]
+				var d := Grid.hypot(dx, dz)
 				if d >= outer:
 					continue
 				var i := cz * W + cx
@@ -396,7 +472,7 @@ static func _stamp(heights: Heightfield, p: Dictionary, k: Dictionary, pin: Pack
 				var j := slot[i]
 				var hv := heights.hv[i]
 				best_w[j] = (1.0 - smoothstep(half[n] + k.flat, outer, d)) * pin[i] * fade
-				best_h[j] = clampf(prof[n], hv - k.side, hv + k.side)
+				best_h[j] = clampf(prof[n] + cross_x[n] * dx + cross_z[n] * dz, hv - k.side, hv + k.side)
 	for i: int in touched:
 		near[i] = INF
 		slot[i] = -1

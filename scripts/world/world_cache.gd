@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 16 # connected mountain divides/spurs and sheltered alpine shoulders
-const SCHEMA_TRAILS_VERSION := 25 # automatic prepared parks disabled; retain geography/base heights
+const SCHEMA_TRAILS_VERSION := 26 # terrain-checked bend and junction approaches
 const SCHEMA_NATURE_VERSION := 14 # tall forest: age classes in obj_v, new tree sizes and spacing
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
@@ -51,7 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
-const SURFACE_VERSION := 16 # 11.11.2026: one height at road nodes, blended road beds, benches from 15 % cross slope, organic tread edge
+const SURFACE_VERSION := 17 # junction grade and crossfall transitions
 const BASE_VERSION := 1
 var io_timings := {}
 var _io_lock := Mutex.new()

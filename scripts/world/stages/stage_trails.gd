@@ -250,9 +250,9 @@ static func _net_ready(w: WorldData) -> void:
 ## w.trails (пусто — путь целиком прошёл по готовой сети). smooth_kind — пределы сглаживания другого вида
 ## (связи поселений ищутся с пределами дороги, даже если публикуются тропой: StageTrails._upgrade_roles).
 ## path_mask отмечается по нарисованной линии (Grid.stamp_path), дешевле становятся клетки пути.
-## changed_lines — необязательный журнал прежних массивов pts для отката регионального коридора.
+## changed_lines — журнал прежних pts для отката. corridor проверяет, что дуга остаётся в готовой области.
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
-		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "", changed_lines: Variant = null) -> Array:
+		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "", changed_lines: Variant = null, corridor := Callable()) -> Array:
 	var part_us := Time.get_ticks_usec()
 	_net_ready(w)
 	path = _explicit(w, path, on_axis)
@@ -284,15 +284,18 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		for piece: Dictionary in _pieces(path, owner, w.W):
 			var cells: PackedInt32Array = piece.cells
 			var pts := _cell_points(w, cells, on_axis, width)
-			var joins: Array = []
+			var joins := {}
 			for end in 2:
 				var at := 0 if end == 0 else cells.size() - 1
+				if not on_axis.is_empty() and on_axis[cells[at]] != 0:
+					continue
 				var join := _join_point(w, owner, cells[at], piece.anchored[end])
 				if not join.is_empty():
 					pts[at] = {x = join.point.x, y = join.point.y, w = width}
-					joins.append(join)
+					joins[end] = join
 			var line_us := Time.get_ticks_usec()
-			var line := _road_line(w, pts, on_axis, surface, kind if smooth_kind.is_empty() else smooth_kind) if surface != null else Grid.chaikin(pts, 3)
+			var line_kind := kind if smooth_kind.is_empty() else smooth_kind
+			var line := _road_line(w, pts, on_axis, surface, line_kind, joins, corridor) if surface != null else Grid.chaikin(pts, 3)
 			_part("road_line", line_us)
 			var index := w.trails.size()
 			Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
@@ -300,7 +303,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			w.generation.road_cells.append(cells)
 			for c: int in cells:
 				if owner[c] < 0: owner[c] = index
-			for join: Dictionary in joins:
+			for join: Dictionary in joins.values():
 				_insert_vertex(w, join.host, join.point, changed_lines)
 			added.append(index)
 		w.generation.road_owner = owner
@@ -451,16 +454,17 @@ static func _join_point(w: WorldData, owner: PackedInt32Array, cell: int, anchor
 	var best := {}
 	var best_d := JOIN_R if anchored or owner[cell] >= 0 else 1.0
 	for host: int in hosts:
-		var q := _nearest_on(w.trails[host].pts, c, 2.0)
+		var tangent: Array[Vector2] = [Vector2.ZERO]
+		var q := _nearest_on(w.trails[host].pts, c, 2.0, tangent)
 		var d := c.distance_to(q)
 		if d <= best_d:
 			best_d = d
-			best = {host = host, point = q}
+			best = {host = host, point = q, tangent = tangent[0]}
 	return best
 
 
 ## reach — отрезки дальше этого (клеток) по осям не проверяются: у длинной дороги тысячи точек
-static func _nearest_on(pts: Array, p: Vector2, reach := INF) -> Vector2:
+static func _nearest_on(pts: Array, p: Vector2, reach := INF, tangent: Array[Vector2] = []) -> Vector2:
 	var best := Vector2(pts[0].x, pts[0].y)
 	var best_d := INF
 	for j in range(1, pts.size()):
@@ -477,6 +481,8 @@ static func _nearest_on(pts: Array, p: Vector2, reach := INF) -> Vector2:
 		if d < best_d:
 			best_d = d
 			best = q
+			if not tangent.is_empty():
+				tangent[0] = (b - a).normalized()
 	return best
 
 
@@ -505,50 +511,242 @@ static func _insert_vertex(w: WorldData, host: int, point: Vector2, changed_line
 	pts.insert(best, {x = point.x, y = point.y, w = lerpf(float(pts[best - 1].w), float(pts[best].w), f)})
 
 
-## Скругляем только безопасные углы. У сооружений сохраняем точный вход на ось;
-## на суше проверяем высоты игрового меша и воду по середине и краям будущей ленты.
-static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield, kind := "road") -> Array:
-	var grade := MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT)
-	var cross_grade := MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS
-	var probe: Object = surface.fast_water() # 9.7: проверки отрезков на C#, если рельеф генерации
-	if probe != null and pts.size() >= 2:
-		# 07.11.2026: весь проход на C# одним вызовом (FastGrid.RoadLine — копия цикла ниже); GDScript — эталон и запасной путь
-		var xs := PackedFloat64Array()
-		var ys := PackedFloat64Array()
-		var ws := PackedFloat64Array()
-		for p: Dictionary in pts:
-			xs.append(p.x)
-			ys.append(p.y)
-			ws.append(p.w)
-		var line: PackedFloat64Array = probe.RoadLine(xs, ys, ws, on_axis, w.W, w.H, grade, cross_grade)
-		var n := line.size() / 3
-		var out: Array = []
-		out.resize(n)
-		for k in n:
-			out[k] = {x = line[k], y = line[n + k], w = line[2 * n + k]}
-		return out
-	for iteration in 3:
-		var out: Array = [pts[0]]
-		for k in range(1, pts.size() - 1):
-			var a: Dictionary = pts[k - 1]
-			var b: Dictionary = pts[k]
-			var c: Dictionary = pts[k + 1]
-			var fixed := false
-			for p: Dictionary in [a, b, c]:
-				var i := clampi(int(p.y), 0, w.H - 1) * w.W + clampi(int(p.x), 0, w.W - 1)
-				fixed = fixed or not on_axis.is_empty() and on_axis[i] != 0
-			var q := {x = lerpf(b.x, a.x, 0.25), y = lerpf(b.y, a.y, 0.25), w = b.w}
-			var r := {x = lerpf(b.x, c.x, 0.25), y = lerpf(b.y, c.y, 0.25), w = b.w}
-			if not fixed and _road_segment(surface, out[-1], q, grade, cross_grade, probe) and _road_segment(surface, q, r, grade, cross_grade, probe) \
-					and _road_segment(surface, r, c, grade, cross_grade, probe):
-				out.append(q)
-				out.append(r)
-			else:
-				out.append(b)
-		out.append(pts[-1])
-		pts = out
-	return pts
+## Подбор дуг в коридоре исходной оси. Прямые участки дают место для захода на поворот.
+const TURN_CORRIDOR := 0.65 # клеток от исходной оси
+const TURN_SPEED := {"road": 5.0, "trail": 4.0, "mountain": 3.2} # м/с
+const TURN_ACCEL := {"road": 5.4, "trail": 6.0, "mountain": 6.8} # м/с², запас на поворот и торможение
+const TURN_TRIMS := [Vector2(1, 1), Vector2(1, 0.72), Vector2(0.72, 1),
+	Vector2(0.72, 0.72), Vector2(0.52, 0.72), Vector2(0.72, 0.52), Vector2(0.52, 0.52),
+	Vector2(0.38, 0.52), Vector2(0.52, 0.38), Vector2(0.38, 0.38)]
 
+
+static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
+		kind := "road", joins := {}, corridor := Callable()) -> Array:
+	if pts.size() < 2:
+		return pts
+	var fixed := PackedByteArray()
+	fixed.resize(pts.size())
+	if not on_axis.is_empty():
+		for k in pts.size():
+			var p: Dictionary = pts[k]
+			if _road_axis(w, on_axis, Vector2(p.x, p.y)):
+				for j in range(maxi(0, k - 2), mini(pts.size(), k + 3)):
+					fixed[j] = 1
+	var bends: Array = [pts[0]]
+	var pins := PackedByteArray([fixed[0]])
+	for k in range(1, pts.size() - 1):
+		var a := Vector2(pts[k - 1].x, pts[k - 1].y)
+		var b := Vector2(pts[k].x, pts[k].y)
+		var c := Vector2(pts[k + 1].x, pts[k + 1].y)
+		if fixed[k] != 0 or pts[k].w != pts[k - 1].w or pts[k].w != pts[k + 1].w \
+				or absf((b - a).normalized().angle_to((c - b).normalized())) > 0.001:
+			bends.append(pts[k])
+			pins.append(fixed[k])
+	bends.append(pts[-1])
+	pins.append(fixed[-1])
+
+	var rules := {
+		grade = MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT),
+		cross = MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS,
+		speed = TURN_SPEED[kind], accel = TURN_ACCEL[kind],
+		probe = surface.fast_water(), axis = on_axis, corridor = corridor,
+	}
+	var start := _road_approach(surface, bends[0], bends[1], joins.get(0, {}), rules) if pins[0] == 0 else []
+	var finish := _road_approach(surface, bends[-1], bends[-2], joins.get(1, {}), rules) if pins[-1] == 0 else []
+	var out: Array = [bends[0]] if start.is_empty() else start
+	var k := 1
+	while k < bends.size() - 1:
+		var curve: Array = []
+		if pins[k] == 0 and bends[k - 1].w == bends[k].w and bends[k + 1].w == bends[k].w:
+			var a := Vector2(bends[k - 1].x, bends[k - 1].y)
+			var b := Vector2(bends[k].x, bends[k].y)
+			var c := Vector2(bends[k + 1].x, bends[k + 1].y)
+			var last := k
+			while last + 2 < bends.size() and last < k + 3 and pins[last + 1] == 0 \
+					and bends[last + 2].w == bends[k].w:
+				var next := Vector2(bends[last + 1].x, bends[last + 1].y)
+				var prev := Vector2(bends[last].x, bends[last].y)
+				if next.distance_to(prev) > 2.5:
+					break
+				last += 1
+			var consumed := 0
+			for end in range(last, k, -1):
+				var path: Array = []
+				for j in range(k - 1, end + 2):
+					path.append(Vector2(bends[j].x, bends[j].y))
+				curve = _road_bend_group(surface, path, bends[k].w, rules)
+				if not curve.is_empty():
+					consumed = end - k + 1
+					break
+			if consumed > 0:
+				out.append_array(curve)
+				k += consumed
+				continue
+			curve = _road_bend(surface, a, b, c, bends[k].w, rules)
+		if curve.is_empty():
+			out.append(bends[k])
+		else:
+			out.append_array(curve)
+		k += 1
+	if finish.is_empty():
+		out.append(bends[-1])
+	else:
+		finish.reverse()
+		out.append_array(finish)
+	return _road_stations(out)
+
+
+## Сохраняем вершины дуг и якоря; длинные прямые делим для профиля и покрытия.
+static func _road_stations(points: Array) -> Array:
+	var out: Array = [points[0]]
+	for k in range(1, points.size()):
+		var a: Dictionary = points[k - 1]
+		var b: Dictionary = points[k]
+		var length := Grid.hypot(b.x - a.x, b.y - a.y) * GameConfig.TILE
+		var steps := ceili(length / 2.0)
+		for j in range(1, steps):
+			var t := float(j) / steps
+			out.append({x = lerpf(a.x, b.x, t), y = lerpf(a.y, b.y, t), w = lerpf(a.w, b.w, t)})
+		out.append(b)
+	return out
+
+
+static func _road_axis(w: WorldData, axis: PackedByteArray, p: Vector2) -> bool:
+	var x := floori(p.x)
+	var y := floori(p.y)
+	return x < 0 or y < 0 or x >= w.W or y >= w.H or (not axis.is_empty() and axis[y * w.W + x] != 0)
+
+
+## Объединяем короткие ступени решётки, если одна кривая помещается в коридоре.
+static func _road_bend_group(surface: Heightfield, path: Array, width: float, rules: Dictionary) -> Array:
+	var a: Vector2 = path[0]
+	var b: Vector2 = path[1]
+	var c: Vector2 = path[-2]
+	var d: Vector2 = path[-1]
+	var incoming := (b - a).normalized()
+	var outgoing := (d - c).normalized()
+	var axis := (d - a).normalized()
+	var angle := absf(incoming.angle_to(outgoing))
+	if angle > PI * 0.75:
+		return []
+	for j in range(1, path.size()):
+		var direction: Vector2 = (path[j] - path[j - 1]).normalized()
+		if axis.dot(direction) < 0.25:
+			return []
+	var speed: float = rules.speed * (0.62 if angle >= deg_to_rad(105.0) else 1.0)
+	var handle := 3.0 * pow(cos(angle * 0.25), 2.0)
+	for trim: Vector2 in [Vector2(1, 1), Vector2(0.72, 1), Vector2(1, 0.72), Vector2(0.72, 0.72)]:
+		var p := b - incoming * minf(a.distance_to(b) * 0.49, 3.5) * trim.x
+		var q := c + outgoing * minf(c.distance_to(d) * 0.49, 3.5) * trim.y
+		var lead := p.distance_to(q) / handle
+		var curve := _road_curve(surface, [p, p + incoming * lead, q - outgoing * lead, q], path, width, speed, rules)
+		if not curve.is_empty():
+			return curve
+	return []
+
+
+static func _road_bend(surface: Heightfield, a: Vector2, b: Vector2, c: Vector2, width: float, rules: Dictionary) -> Array:
+	var incoming := (b - a).normalized()
+	var outgoing := (c - b).normalized()
+	var angle := absf(incoming.angle_to(outgoing))
+	if angle < 0.04 or angle > PI - 0.04:
+		return []
+	var hairpin := angle >= deg_to_rad(105.0)
+	var speed: float = rules.speed * (0.62 if hairpin else 1.0)
+	var left := minf(a.distance_to(b) * 0.49, 3.0)
+	var right := minf(b.distance_to(c) * 0.49, 3.0)
+	var handle := 4.0 / 3.0 * tan(angle * 0.25) / tan(angle * 0.5)
+	# У стеснённого поворота допускаем более медленный проход, сохраняя запас на уклоне.
+	for factor: float in [1.0, 0.72, 0.55]:
+		for trim: Vector2 in TURN_TRIMS:
+			var l := left * trim.x
+			var r := right * trim.y
+			var p := b - incoming * l
+			var q := b + outgoing * r
+			var curve := _road_curve(surface, [p, p + incoming * l * handle, q - outgoing * r * handle, q],
+				[a, b, c], width, speed * factor, rules)
+			if not curve.is_empty():
+				return curve
+	return []
+
+
+## У слияния держим различимый угол к основной дороге, у Т-образного узла выпрямляем въезд.
+## Касание осей остаётся в закреплённой точке. Подход не выходит за половину первого отрезка.
+static func _road_approach(surface: Heightfield, end: Dictionary, next: Dictionary, join: Dictionary, rules: Dictionary) -> Array:
+	if join.is_empty() or end.w != next.w:
+		return []
+	var a := Vector2(end.x, end.y)
+	var b := Vector2(next.x, next.y)
+	var direction := (b - a).normalized()
+	var host: Vector2 = join.tangent
+	var side := signf(host.cross(direction))
+	if side == 0.0:
+		return []
+	if host.dot(direction) < 0.0:
+		host = -host
+		side = -side
+	var angle := absf(host.angle_to(direction))
+	var target := deg_to_rad(30.0) if angle < deg_to_rad(30.0) else angle
+	if angle >= deg_to_rad(60.0):
+		target = PI * 0.5
+	if absf(target - angle) < 0.04:
+		return []
+	var heading := host.rotated(side * target)
+	for scale: float in [1.0, 0.8, 0.6]:
+		var lead := minf(a.distance_to(b) * 0.49, 3.0) * scale
+		var q := a + direction * lead
+		var curve := _road_curve(surface, [a, a + heading * lead / 3.0, q - direction * lead / 3.0, q],
+			[a, b], end.w, rules.speed * 0.72, rules)
+		if not curve.is_empty():
+			curve[0] = end
+			return curve
+	return []
+
+
+static func _road_curve(surface: Heightfield, control: Array, corridor: Array, width: float, speed: float, rules: Dictionary) -> Array:
+	var a: Vector2 = control[0]
+	var b: Vector2 = control[1]
+	var c: Vector2 = control[2]
+	var d: Vector2 = control[3]
+	var steps := maxi(8, ceili((a.distance_to(b) + b.distance_to(c) + c.distance_to(d)) / 0.25))
+	var curve: Array = []
+	var grade: float = rules.grade
+	for k in steps + 1:
+		var t := float(k) / steps
+		var ab := a.lerp(b, t)
+		var bc := b.lerp(c, t)
+		var cd := c.lerp(d, t)
+		var left := ab.lerp(bc, t)
+		var right := bc.lerp(cd, t)
+		var p := left.lerp(right, t)
+		var tangent := (right - left) * 3.0
+		var second := (cd - 2.0 * bc + ab) * 6.0
+		var length := tangent.length()
+		if length < 0.001:
+			return []
+		var curvature := absf(tangent.cross(second)) / (length * length * length * GameConfig.TILE)
+		var lateral := speed * speed * curvature
+		var brake_sq: float = rules.accel * rules.accel - lateral * lateral
+		if brake_sq <= 0.0 or curvature * (width * GameConfig.TILE * 0.5 + 0.15) >= 1.0:
+			return []
+		grade = minf(grade, sqrt(brake_sq) / GameConfig.GRAVITY)
+		var deviation := INF
+		for j in range(1, corridor.size()):
+			var closest := Geometry2D.get_closest_point_to_segment(p, corridor[j - 1], corridor[j])
+			deviation = minf(deviation, p.distance_squared_to(closest))
+		if deviation > TURN_CORRIDOR * TURN_CORRIDOR:
+			return []
+		var normal := tangent.orthogonal() * (width * 0.5 / length)
+		for side: float in [-1.0, 0.0, 1.0]:
+			if _road_axis(surface.world, rules.axis, p + normal * side):
+				return []
+		curve.append(_point(p, width))
+	if rules.corridor.is_valid() and not rules.corridor.call(curve):
+		return []
+	for k in range(1, curve.size()):
+		if not _road_segment(surface, curve[k - 1], curve[k], grade, rules.cross, rules.probe):
+			return []
+	return curve
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)

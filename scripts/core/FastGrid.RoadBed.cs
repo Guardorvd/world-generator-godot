@@ -39,6 +39,9 @@ public partial class FastGrid
 		public float[] Half = Array.Empty<float>();
 		public double[] Prof = Array.Empty<double>();
 		public double[] Fade = Array.Empty<double>();
+		public double[] Along = Array.Empty<double>();
+		public double[] CrossX = Array.Empty<double>();
+		public double[] CrossZ = Array.Empty<double>();
 	}
 
 	/// <summary>RoadBed._pins: доля полотна у каждой точки рельефа (0 у осей мостов/туннелей и у воды).
@@ -90,7 +93,7 @@ public partial class FastGrid
 			for (int t = part; t < trails; t += parts)
 				profiles[t] = RbProfileOf(w, h, tile, ground, kindParams, kinds[t] * 6, starts[t], starts[t + 1], px, py, pw, step, steepLo, steepHi);
 		});
-		RbJoin(w, h, tile, pin, order, starts, px, py, profiles, kindParams, kinds, step);
+		RbJoin(w, h, tile, pin, order, starts, px, py, profiles);
 		var results = new RbTrail[trails];
 		Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, part =>
 		{
@@ -181,18 +184,27 @@ public partial class FastGrid
 			double gz = RoadGround(hv, w, h, tile, xs[i], zs[i] + 2.0) - RoadGround(hv, w, h, tile, xs[i], zs[i] - 2.0);
 			fade[i] = 1.0 - RoadSmooth(steepLo, steepHi, Math.Sqrt(gx * gx + gz * gz) / 4.0);
 		}
-		return new RbProfile { Xs = xs.ToArray(), Zs = zs.ToArray(), Half = half.ToArray(), Prof = prof, Fade = fade };
+		var along = new double[xs.Count];
+		for (int i = 1; i < xs.Count; i++)
+		{
+			double dx = (double)xs[i] - xs[i - 1], dz = (double)zs[i] - zs[i - 1];
+			along[i] = along[i - 1] + Math.Sqrt(dx * dx + dz * dz);
+		}
+		return new RbProfile {
+			Xs = xs.ToArray(), Zs = zs.ToArray(), Half = half.ToArray(), Prof = prof, Fade = fade,
+			Along = along, CrossX = new double[xs.Count], CrossZ = new double[xs.Count]
+		};
 	}
 
 	private const double RbJoinTouch = 0.05; // клеток: конец на оси другого пути
-	private const double RbJoinGrade = 0.08; // добавленный продольный уклон при подтягивании к узлу
+	private const double RbJoinGrade = 0.08, RbJoinSlope = 0.16;
 	private const double RbJoinMin = 6.0, RbJoinMax = 30.0; // длина перехода, м
 
 	/// <summary>Узлы: для каждого пути по порядку — точки касания с путями раньше него (пересечения отрезков, концы
 	/// на оси); профиль в окрестности точки подтягивается к профилю того пути. Узлы у сооружений и воды (pin < 0,5)
 	/// не трогаются.</summary>
 	private static void RbJoin(int w, int h, double tile, float[] pin, int[] order, int[] starts, double[] px, double[] py,
-		RbProfile[] profiles, double[] kp, int[] kinds, double step)
+		RbProfile[] profiles)
 	{
 		var rank = new int[order.Length];
 		for (int k = 0; k < order.Length; k++) rank[order[k]] = k;
@@ -255,27 +267,86 @@ public partial class FastGrid
 			if (contacts.Count == 0) continue;
 			var own = profiles[t];
 			var done = new List<(double x, double y)>();
+			var joined = new HashSet<int>();
 			foreach (var c in contacts)
 			{
 				bool seen = false;
 				foreach (var d in done) if ((d.x - c.x) * (d.x - c.x) + (d.y - c.y) * (d.y - c.y) < 0.125 * 0.125) seen = true;
 				if (seen) continue;
 				done.Add((c.x, c.y));
-				int cell = Math.Clamp((int)Math.Floor(c.y), 0, h - 1) * w + Math.Clamp((int)Math.Floor(c.x), 0, w - 1);
-				if (pin[cell] < 0.5f) continue;
+				if (!RbJoinOpen(w, h, pin, c.x, c.y)) continue;
 				double mx = c.x * tile, mz = c.y * tile;
 				int s = RbNearest(own, mx, mz);
-				var other = profiles[c.host];
-				double value = other.Prof[RbNearest(other, mx, mz)];
-				double shift = value - own.Prof[s];
-				if (Math.Abs(shift) < 0.001) continue;
-				double reach = Math.Clamp(Math.Abs(shift) / RbJoinGrade, RbJoinMin, RbJoinMax);
-				for (int k = 0; k < own.Prof.Length; k++)
+				if (joined.Contains(s)) continue;
+				RbJoinProfile(w, h, tile, pin, own, s, profiles[c.host], mx, mz, joined);
+				joined.Add(s);
+			}
+		}
+	}
+
+	private static bool RbJoinOpen(int w, int h, float[] pin, double x, double z)
+	{
+		int cell = Math.Clamp((int)Math.Floor(z), 0, h - 1) * w + Math.Clamp((int)Math.Floor(x), 0, w - 1);
+		return pin[cell] >= 0.5f;
+	}
+
+	private static (double x, double z, double grade) RbJoinTangent(RbProfile p, int s)
+	{
+		int lo = s, hi = s;
+		while (lo > 0 && p.Along[s] - p.Along[lo] < 2.0) lo--;
+		while (hi + 1 < p.Along.Length && p.Along[hi] - p.Along[s] < 2.0) hi++;
+		double dx = (double)p.Xs[hi] - p.Xs[lo], dz = (double)p.Zs[hi] - p.Zs[lo];
+		double length = Math.Max(0.00001, Math.Sqrt(dx * dx + dz * dz));
+		return (dx / length, dz / length, (p.Prof[hi] - p.Prof[lo]) / Math.Max(0.00001, p.Along[hi] - p.Along[lo]));
+	}
+
+	private static void RbJoinProfile(int w, int h, double tile, float[] pin, RbProfile own, int s,
+		RbProfile host, double x, double z, HashSet<int> joined)
+	{
+		int q = RbNearest(host, x, z);
+		var ht = RbJoinTangent(host, q);
+		var ot = RbJoinTangent(own, s);
+		double gx = ht.x * ht.grade + host.CrossX[q], gz = ht.z * ht.grade + host.CrossZ[q];
+		double slope = gx * ot.x + gz * ot.z;
+		double cross = RbClamp(-gx * ot.z + gz * ot.x, -RbJoinSlope, RbJoinSlope);
+		double delta = RbClamp(slope - ot.grade, -RbJoinSlope, RbJoinSlope);
+		if (!RbJoinOpen(w, h, pin, own.Xs[s] / tile, own.Zs[s] / tile)) return;
+		double target = host.Prof[q] + gx * ((double)own.Xs[s] - host.Xs[q]) + gz * ((double)own.Zs[s] - host.Zs[q]);
+		double shift = target - own.Prof[s];
+		double reach = RbClamp(1.5 * Math.Abs(shift) / RbJoinGrade, RbJoinMin, RbJoinMax);
+		Span<double> spans = stackalloc double[2];
+		for (int side = -1; side <= 1; side += 2)
+		{
+			double span = reach;
+			for (int k = s + side; k >= 0 && k < own.Prof.Length; k += side)
+			{
+				double d = Math.Abs(own.Along[k] - own.Along[s]);
+				if (d >= reach) break;
+				if (joined.Contains(k) || !RbJoinOpen(w, h, pin, own.Xs[k] / tile, own.Zs[k] / tile))
 				{
-					double along = Math.Abs(k - s) * step;
-					if (along >= reach) continue;
-					own.Prof[k] += shift * (1.0 - RoadSmooth(0.0, reach, along));
+					span = d;
+					break;
 				}
+			}
+			spans[side < 0 ? 0 : 1] = span;
+		}
+		double cap = RbJoinGrade * Math.Min(spans[0], spans[1]) / 1.5;
+		shift = RbClamp(shift, -cap, cap);
+		own.Prof[s] += shift;
+		own.CrossX[s] = -ot.z * cross;
+		own.CrossZ[s] = ot.x * cross;
+		for (int side = -1; side <= 1; side += 2)
+		{
+			double span = spans[side < 0 ? 0 : 1];
+			for (int k = s + side; k >= 0 && k < own.Prof.Length; k += side)
+			{
+				double d = own.Along[k] - own.Along[s];
+				if (Math.Abs(d) >= span) break;
+				double t = Math.Abs(d) / span;
+				double fade = 1.0 - RoadSmooth(0.0, 1.0, t);
+				own.Prof[k] += shift * fade + delta * d * (1.0 - t) * (1.0 - t);
+				own.CrossX[k] += (own.CrossX[s] - own.CrossX[k]) * fade;
+				own.CrossZ[k] += (own.CrossZ[s] - own.CrossZ[k]) * fade;
 			}
 		}
 	}
@@ -346,7 +417,7 @@ public partial class FastGrid
 					int j = slot[cell];
 					double ground = hv[cell];
 					bestW[j] = (float)((1.0 - RoadSmooth(p.Half[i] + flat, outer, d)) * pin[cell] * fade);
-					bestH[j] = (float)RbClamp(prof, ground - side, ground + side);
+					bestH[j] = (float)RbClamp(prof + p.CrossX[i] * ex + p.CrossZ[i] * ez, ground - side, ground + side);
 				}
 			}
 		}

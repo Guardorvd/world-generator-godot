@@ -252,59 +252,6 @@ public partial class FastGrid
 		return true;
 	}
 
-	/// <summary>Копия StageTrails._road_line (07.11.2026: раньше вызов RoadSegment из GDScript на каждую точку, ~треть
-	/// публикации путей): три прохода скругления углов. Точка k неподвижна, если клетка её или соседней точки на оси
-	/// сооружения (onAxis, пустой — нет осей); иначе угол срезается точками на четверти отрезков, когда три новых отрезка
-	/// проходят RoadSegment. Ширина отрезка — у его первой точки. Возвращает [x..., y..., w...] (по n значений).</summary>
-	public double[] RoadLine(double[] xs, double[] ys, double[] ws, byte[] onAxis, int width, int height, double maxGrade, double maxCross)
-	{
-		var x = new List<double>(xs);
-		var y = new List<double>(ys);
-		var w = new List<double>(ws);
-		bool axis = onAxis.Length > 0;
-		for (int iteration = 0; iteration < 3; iteration++)
-		{
-			int n = x.Count;
-			var ox = new List<double>(n * 2) { x[0] };
-			var oy = new List<double>(n * 2) { y[0] };
-			var ow = new List<double>(n * 2) { w[0] };
-			for (int k = 1; k < n - 1; k++)
-			{
-				bool fixedPoint = false;
-				if (axis)
-					for (int m = k - 1; m <= k + 1 && !fixedPoint; m++)
-					{
-						int cx = Math.Clamp((int)x[m], 0, width - 1);
-						int cy = Math.Clamp((int)y[m], 0, height - 1);
-						fixedPoint = onAxis[cy * width + cx] != 0;
-					}
-				double qx = x[k] + (x[k - 1] - x[k]) * 0.25, qy = y[k] + (y[k - 1] - y[k]) * 0.25;
-				double rx = x[k] + (x[k + 1] - x[k]) * 0.25, ry = y[k] + (y[k + 1] - y[k]) * 0.25;
-				int last = ox.Count - 1;
-				if (!fixedPoint && RoadSegment(ox[last], oy[last], qx, qy, ow[last], maxGrade, maxCross)
-					&& RoadSegment(qx, qy, rx, ry, w[k], maxGrade, maxCross) && RoadSegment(rx, ry, x[k + 1], y[k + 1], w[k], maxGrade, maxCross))
-				{
-					ox.Add(qx); oy.Add(qy); ow.Add(w[k]);
-					ox.Add(rx); oy.Add(ry); ow.Add(w[k]);
-				}
-				else
-				{
-					ox.Add(x[k]); oy.Add(y[k]); ow.Add(w[k]);
-				}
-			}
-			ox.Add(x[n - 1]); oy.Add(y[n - 1]); ow.Add(w[n - 1]);
-			x = ox; y = oy; w = ow;
-		}
-		var result = new double[x.Count * 3];
-		for (int i = 0; i < x.Count; i++)
-		{
-			result[i] = x[i];
-			result[x.Count + i] = y[i];
-			result[2 * x.Count + i] = w[i];
-		}
-		return result;
-	}
-
 	/// <summary>Копия StageTrails._bridge_ends (ревью дорожной сети 29.10, шаг 5): концы настила на оси (ax, az) → (bx, bz)
 	/// длиной len и направлением (ux, uz), полуширина half. 0 — годятся, 1 — перепад концов больше maxRise,
 	/// 2 — край въезда над водой глубже 0,3 м, 3 — край въезда дальше landingGap от конца настила.</summary>
