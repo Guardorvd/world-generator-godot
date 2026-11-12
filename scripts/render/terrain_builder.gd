@@ -109,7 +109,7 @@ static func patch(arrays: Array, w: WorldData, heights: Heightfield, changed: Pa
 
 ## DOD (ноябрь 2026): весь проход одним вызовом C# (FastGrid.RefineTerrain), патчи — столбцами. Результат тот же, что у
 ## цикла в refine_arrays ниже (он остаётся эталоном для tools/dod_verify.gd).
-static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i) -> void:
+static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: Heightfield, area: Rect2i) -> bool:
 	var keys := PackedInt32Array()
 	var ph := PackedFloat32Array()
 	var pc := PackedColorArray()
@@ -124,14 +124,18 @@ static func _refine_native(fast: Object, arrays: Array, w: WorldData, heights: H
 		ph.append_array(p.h)
 		pc.append_array(p.color)
 		pu.append_array(p.uv)
-	var out: Dictionary = fast.RefineTerrain(w.W, w.H, TILE, RoadRefinement.DIV, area.position.x, area.position.y, area.size.x, area.size.y,
+	var out: Variant = fast.RefineTerrain(w.W, w.H, TILE, RoadRefinement.DIV, area.position.x, area.position.y, area.size.x, area.size.y,
 		arrays[Mesh.ARRAY_VERTEX], arrays[Mesh.ARRAY_NORMAL], arrays[Mesh.ARRAY_TEX_UV], arrays[Mesh.ARRAY_INDEX], keys, ph, pc, pu, heights.hv)
+	if not out is Dictionary:
+		push_error("TerrainBuilder: C# вернул null, сетка 1 м считается на GDScript")
+		return false   # arrays не тронуты
 	arrays[Mesh.ARRAY_VERTEX] = out.pos
 	arrays[Mesh.ARRAY_NORMAL] = out.nor
 	arrays[Mesh.ARRAY_TEX_UV] = out.uv
 	arrays[Mesh.ARRAY_TEX_UV2] = out.uv2
 	arrays[Mesh.ARRAY_COLOR] = out.color
 	arrays[Mesh.ARRAY_INDEX] = out.idx
+	return true
 
 
 ## Final terrain directly from the authoritative heightfield. Each worker owns its chunk arrays.
@@ -164,8 +168,8 @@ static func refine_arrays(arrays: Array, w: WorldData, heights: Heightfield, cel
 	if allow_fast_refine and (w.outer == null or interior.encloses(area)):
 		var native := Grid.fast_grid()
 		if native != null:
-			_refine_native(native, arrays, w, heights, area)
-			return
+			if _refine_native(native, arrays, w, heights, area):
+				return
 	var patches := {}
 	for key: int in refinement.patches:
 		if area.has_point(Vector2i(key % w.W, key / w.W)): patches[key] = refinement.patches[key]

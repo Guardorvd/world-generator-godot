@@ -44,7 +44,10 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 	if allow_fast and only.is_empty() and w.outer == null and heights.road_refinement == null:
 		var fast := Grid.fast_grid()
 		if fast != null:
-			return _refine_native(fast, heights, frozen)
+			var native: Variant = _refine_native(fast, heights, frozen)
+			if native != null:
+				return native
+			push_error("RoadBed: C# вернул null, полотно считается на GDScript")
 	var pin := _pins(w)
 	if frozen.size() == w.N:
 		for i in w.N:
@@ -115,7 +118,7 @@ static func _order(w: WorldData, routes: Array) -> Array:
 
 ## DOD (ноябрь 2026): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
 ## GDScript-пути выше (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
-static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> PackedInt32Array:
+static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> Variant:
 	var w := heights.world
 	var names: Array = KINDS.keys()
 	var params := PackedFloat64Array()
@@ -140,8 +143,10 @@ static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByt
 	for s: EntityRecord in w.bridges + w.tunnels:
 		ends.append(s.a)
 		ends.append(s.b)
-	var out: Dictionary = fast.RoadBedRefine(w.W, w.H, TILE, heights.hv, heights.water_level, w.dist_water, ends, kinds, starts,
+	var out: Variant = fast.RoadBedRefine(w.W, w.H, TILE, heights.hv, heights.water_level, w.dist_water, ends, kinds, starts,
 		xs, ys, ws, params, frozen, STEP, STEEP.x, STEEP.y, SHORE.x, SHORE.y, PIN, PIN_FADE, WATER_GAP)
+	if not out is Dictionary:
+		return null   # исключение внутри C#: hv не тронут, вызывающий считает на GDScript
 	var changed: PackedInt32Array = out.changed
 	var done: PackedFloat32Array = out.hv
 	var hv := heights.hv

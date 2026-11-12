@@ -139,11 +139,13 @@ static func _shape_valleys(w: WorldData) -> void:
 		var fast := Grid.fast_grid()
 		if fast != null:
 			# DOD (ноябрь 2026): весь проход одним вызовом C# (FastGrid.RiverValleys); GDScript ниже — эталон для сверки
-			var out: Dictionary = fast.RiverValleys(w.W, w.H, w.h, w.filled, w.order, w.order_n, w.river, w.ocean, w.lake,
+			var out: Variant = fast.RiverValleys(w.W, w.H, w.h, w.filled, w.order, w.order_n, w.river, w.ocean, w.lake,
 				w.acc, w.down, WorldData.RIVER_ACC, StageHydrology.SHORE_LIFT)
-			w.h = out.h
-			w.filled = out.filled
-			return
+			if out is Dictionary:
+				w.h = out.h
+				w.filled = out.filled
+				return
+			push_error("StageRivers: C# вернул null, долины считаются на GDScript")
 	var original := w.h.duplicate()
 	for k in w.order_n:
 		var i := w.order[k]

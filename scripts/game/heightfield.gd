@@ -85,13 +85,14 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 	if allow_fast_river_surface and w.outer == null:
 		var native := Grid.fast_grid()
 		if native != null:
-			_river_surface_native(native)
-			if rivers_only:
+			if _river_surface_native(native):
+				if rivers_only:
+					return
+				complete_water()
+				if with_structures:
+					finish_paths()
 				return
-			complete_water()
-			if with_structures:
-				finish_paths()
-			return
+			push_error("Heightfield: C# вернул null, русла считаются на GDScript")
 	hv.resize(N)
 	hv_raw.resize(N)
 	for i in N:
@@ -140,7 +141,7 @@ func _init(w: WorldData = null, with_structures := true, rivers_only := false) -
 
 ## DOD (ноябрь 2026): высоты, русла, срез дна и берега лент одним вызовом C# (FastGrid.RiverSurface); словари точек лент
 ## и индекс клетка -> отрезки остаются в GDScript. Результат тот же, что у кода в _init выше (он остаётся эталоном).
-func _river_surface_native(fast: Object) -> void:
+func _river_surface_native(fast: Object) -> bool:
 	var w := world
 	var t := Time.get_ticks_usec()
 	ribbons = _river_ribbons()
@@ -168,8 +169,10 @@ func _river_surface_native(fast: Object) -> void:
 			left_x.append(edge.x)
 			left_z.append(edge.z)
 	starts.append(xs.size())
-	var out: Dictionary = fast.RiverSurface(w.W, w.H, TILE, HS, GameConfig.OCEAN_DEPTH, GameConfig.LAKE_DROP, w.h, w.ocean, w.lake,
+	var out: Variant = fast.RiverSurface(w.W, w.H, TILE, HS, GameConfig.OCEAN_DEPTH, GameConfig.LAKE_DROP, w.h, w.ocean, w.lake,
 		w.filled, starts, xs, zs, ws, ys, depths, bends, left_x, left_z, w.river)
+	if not out is Dictionary:
+		return false
 	hv_raw = out.hv_raw
 	hv = out.hv
 	var left: PackedFloat32Array = out.left
@@ -185,6 +188,7 @@ func _river_surface_native(fast: Object) -> void:
 	t = Time.get_ticks_usec()
 	index_ribbons()
 	path_timings.banks_ms = (Time.get_ticks_usec() - t) / 1000.0
+	return true
 
 
 ## Базовый рельеф мира без путей и сооружений (9.7): копия общего из StageRivers, пока идёт генерация,

@@ -108,9 +108,12 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		var whole := Grid.fast_grid()
 		if whole != null:
 			var built := r._build_native(whole, fit_road)
-			pin_coarse_edges(heights, built.patches, built.patches.keys())
-			built._drop_mountain_fits(heights.world)
-			return built
+			if built != null:
+				pin_coarse_edges(heights, built.patches, built.patches.keys())
+				built._drop_mountain_fits(heights.world)
+				return built
+			push_error("RoadRefinement: C# вернул null, метровая сетка строится на GDScript")
+			r._reset_native_state()
 	if not only.is_empty() and restrict_local_index:
 		# Determine the exact output cells before indexing neighbours. Preserve the
 		# original route/segment order in the final index, including nearest ties.
@@ -289,6 +292,24 @@ static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -
 ## Индекс и вершины двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): столбцами, без
 ## словарей на отрезок и на вершину. Результат тот же, что у пути в build ниже (он остаётся эталоном для
 ## tools/dod_verify.gd). Только для всей сети (only пусто) и без земли за краем карты.
+## Вернуть объект к состоянию до _build_native, если C# вернул null: путь GDScript строит индекс и подгонку заново.
+func _reset_native_state() -> void:
+	fit_routes = {}
+	corridor = PackedFloat64Array()
+	corridor_routes = {}
+	_segments.clear()
+	_structures.clear()
+	_cs_starts = PackedInt32Array()
+	_cs_ids = PackedInt32Array()
+	_sg_a = PackedVector2Array()
+	_sg_delta = PackedVector2Array()
+	_sg_len2 = PackedFloat64Array()
+	_sg_half = PackedFloat64Array()
+	_sg_route = PackedInt32Array()
+	_sg_along = PackedFloat64Array()
+
+
+## null — C# вернул не словарь (исключение внутри); вызывающий считает на GDScript
 func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var w := _heights.world
 	var started_us := Time.get_ticks_usec()
@@ -317,7 +338,9 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 			ws.append(p.w)
 			surf.append(covering[n])
 	starts.append(xs.size())
-	var index: Dictionary = fast.RoadIndex(w.W, w.H, TILE, _reach, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids)
+	var index: Variant = fast.RoadIndex(w.W, w.H, TILE, _reach, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids)
+	if not index is Dictionary:
+		return null
 	_cs_starts = index.starts
 	_cs_ids = index.candidates
 	_sg_a = index.a
@@ -364,10 +387,12 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	for s: Dictionary in _surf:
 		var color: Array = s.get("color", [0, 0, 0])
 		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
-	var out: Dictionary = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
+	var out: Variant = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
 		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
 		corridor_start, corridor_count, corridor, surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes,
 		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes())
+	if not out is Dictionary:
+		return null
 	patches = out.patches
 	build_timings.native_points_ms = out.ms_points
 	build_timings.native_vertices_ms = out.ms_vertices
@@ -489,7 +514,7 @@ func _native_vertices(fast: Object, nearest: PackedFloat64Array) -> Dictionary:
 		var color: Array = s.get("color", [0, 0, 0])
 		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
 	return fast.RoadVertices(_points, nearest, _heights.world.W, _height, TILE, _heights.hv, _heights.water_level,
-		_dist_water, _noise, _origin, segments, fits, corridor, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd, _authored_routes())
+		_dist_water, _noise, _origin, segments, fits, corridor, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd, _authored_routes(), STEP)
 
 
 func _authored_routes() -> PackedByteArray:
@@ -597,8 +622,8 @@ func _fit_network() -> void:
 	if allow_fast_vertices and not _cs_starts.is_empty() and w.outer == null:
 		var fast := Grid.fast_grid()
 		if fast != null:
-			_fit_network_native(fast)
-			return
+			if _fit_network_native(fast):
+				return
 	var batch := {points = PackedVector2Array(), half = PackedFloat32Array(), surface = PackedInt32Array(), gate = PackedFloat32Array(),
 		starts = PackedInt32Array(), kinds = PackedInt32Array(), scales = PackedFloat32Array(), routes = PackedInt32Array()}
 	for route in w.trails.size():
@@ -651,7 +676,7 @@ func _fit_network() -> void:
 
 ## 14.11: весь проход одним вызовом C# (FastGrid.RoadFitNetwork) — станции, подгонка профиля, защита, формы коридора.
 ## Результат тот же, что у GDScript-пути выше (он остаётся эталоном): прежде этот проход был самым долгим этапом полотна.
-func _fit_network_native(fast: Object) -> void:
+func _fit_network_native(fast: Object) -> bool:
 	var w := _heights.world
 	var starts := PackedInt32Array()
 	var xs := PackedFloat64Array()
@@ -692,9 +717,12 @@ func _fit_network_native(fast: Object) -> void:
 		table.append_array(PackedFloat64Array(CORRIDOR[name]))
 	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
 	var limits := PackedFloat64Array([RoadBed.SHORE.y, RoadBed.PIN, RoadBed.PIN_FADE, REACH, SHARED, FIT_FADE, FIT_LIMIT, BENCH_LIMIT, TRAIL_BENCH_LIMIT, LAND_GAP])
-	var out: Dictionary = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
+	var out: Variant = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
 		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
 		_cs_starts, _cs_ids, _route_identity, _noise, _origin, limits, CORRIDOR_FADE, CORRIDOR_GAP, CORRIDOR_STRIDE, table, _authored_routes())
+	if not out is Dictionary:
+		push_error("RoadRefinement: C# вернул null, подгонка идёт на GDScript")
+		return false
 	var routes: PackedInt32Array = out.routes
 	var at: PackedInt32Array = out.starts
 	var fitted: PackedByteArray = out.fitted
@@ -713,6 +741,7 @@ func _fit_network_native(fast: Object) -> void:
 				strength = strength.slice(from, to), limit = limit.slice(from, to)}
 		if shaped[r] > 0.0:
 			corridor_routes[routes[r]] = Vector2i(from, to - from)
+	return true
 
 
 ## Подгонка профиля одной дороги или тропы (4.5). gate получает долю станции, где разрешены формы коридора.

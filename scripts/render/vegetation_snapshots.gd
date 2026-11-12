@@ -103,12 +103,14 @@ func stamp(frame: Dictionary, now: float) -> void:
 		return
 	var fast := Grid.fast_grid() if allow_fast_stamps else null
 	if fast != null:
-		var stamped: Dictionary = fast.StampVegetation(result, changes, deadline, now, DURATION)
-		frame.buffer = stamped.buffer
-		frame.deadline = stamped.deadline
-		frame.stamped = true
-		frame.stamped_at = now
-		return
+		var stamped: Variant = fast.StampVegetation(result, changes, deadline, now, DURATION)
+		if stamped is Dictionary:
+			frame.buffer = stamped.buffer
+			frame.deadline = stamped.deadline
+			frame.stamped = true
+			frame.stamped_at = now
+			return
+		push_error("VegetationSnapshots: C# вернул null, метки ставятся на GDScript")
 	for i in range(0, changes.size(), 3):
 		var at := int(changes[i])
 		var mode := changes[i + 1]

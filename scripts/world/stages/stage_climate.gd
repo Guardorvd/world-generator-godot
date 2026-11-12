@@ -86,8 +86,11 @@ static func run(w: WorldData) -> void:
 	var temp_n := w.noise_field("temp")
 	var started := Time.get_ticks_usec()
 	var fast := Grid.fast_grid()
-	var fields: Dictionary = fast.ClimateFields(w.W, w.H, w.h, w.ocean, w.lake, w.rain,
-		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, LAT_CELLS, biome_ids()) if fast != null else fields_reference(w, temp_n)
+	var native: Variant = fast.ClimateFields(w.W, w.H, w.h, w.ocean, w.lake, w.rain,
+		w.dist_ocean, w.dist_water, w.elev, w.slope, temp_n, LAT_CELLS, biome_ids()) if fast != null else null
+	if fast != null and not native is Dictionary:
+		push_error("StageClimate: C# вернул null, климат считается на GDScript")
+	var fields: Dictionary = native if native is Dictionary else fields_reference(w, temp_n)
 	w.temp = fields.temp
 	w.moist = fields.moist
 	w.biome = fields.biome
