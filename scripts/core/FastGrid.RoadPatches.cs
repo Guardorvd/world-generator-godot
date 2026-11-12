@@ -54,7 +54,8 @@ public partial class FastGrid
 				var a = new Vector2((float)px[from + n - 1], (float)py[from + n - 1]) * ftile;
 				var b = new Vector2((float)px[from + n], (float)py[from + n]) * ftile;
 				if (a.DistanceSquaredTo(b) < 0.0001) continue;
-				double half = ((double)pw[from + n - 1] + (double)pw[from + n]) * tile * 0.25;
+				double halfA = pw[from + n - 1] * tile * 0.5, halfB = pw[from + n] * tile * 0.5;
+				double half = Math.Max(halfA, halfB);
 				var delta = b - a;
 				double len2 = a.DistanceSquaredTo(b);
 				int id = -1;
@@ -74,7 +75,7 @@ public partial class FastGrid
 						if (id < 0)
 						{
 							id = segA.Count;
-							segA.Add(a); segDelta.Add(delta); segLen2.Add(len2); segHalf.Add(half);
+							segA.Add(a); segDelta.Add(delta); segLen2.Add(len2); segHalf.Add(halfA); segHalf.Add(halfB);
 							segRoad.Add(roadKind[t]); segSurf.Add(psurf[from + n - 1]); segNext.Add(psurf[from + n]);
 							segHa.Add(profile[n - 1]); segHb.Add(profile[n]); segAlong.Add(myAlong); segRoute.Add(routeIds[t]);
 						}
@@ -142,7 +143,7 @@ public partial class FastGrid
 		double[] segHa, double[] segHb, double[] segAlong, int[] segRoute, int[] cellStarts, int[] candidates,
 		int[] fitStart, int[] fitCount, double[] fits, int[] corStart, int[] corCount, double[] corridor, double[] surfaces,
 		float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin, double[] structureAxes,
-		double steepLo, double steepHi, double waterGap, double pinStart, double pinFade, double reach, byte[] authoredRoutes)
+		double steepLo, double steepHi, double waterGap, double pinStart, double pinFade, double reach, byte[] authoredRoutes, double[] tread)
 	{
 		var clock = System.Diagnostics.Stopwatch.StartNew();
 		int stride = div + 1, fineW = width * div, fineH = height * div;
@@ -187,7 +188,7 @@ public partial class FastGrid
 				RoadVertexOne(n, points[n], selected, u, dist, side, width, height, tile, step, segHalf, segRoad, segSurf, segNext, segHa, segHb,
 					segAlong, segLen2, segRoute, segA, segDelta, fitStart, fitCount, fits, corStart, corCount, corridor, surfaces, ground, water, distWater, noise, origin,
 					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags, active,
-					selected >= 0 && authoredRoutes[segRoute[selected]] != 0);
+					selected >= 0 && authoredRoutes[segRoute[selected]] != 0, tread);
 			}
 		});
 		double msVertices = clock.Elapsed.TotalMilliseconds;
@@ -232,7 +233,7 @@ public partial class FastGrid
 			Vector2 offset = center - anchors[id];
 			double t = Math.Clamp((double)offset.Dot(deltas[id]) / lengths[id], 0.0, 1.0);
 			double distance = (offset - deltas[id] * (float)t).Length();
-			if (distance <= halves[id] + 3.0 + corner) return true;
+			if (distance <= RoadMaxHalf(halves, id) + 3.0 + corner) return true;
 			int route = routes[id], count = corCount[route];
 			if (count == 0) continue;
 			double station = along[id] + t * Math.Sqrt(lengths[id]);
@@ -262,9 +263,10 @@ public partial class FastGrid
 			double f = Math.Clamp((double)(point - anchors[id]).Dot(delta) / lengths[id], 0.0, 1.0);
 			Vector2 offset = point - (anchors[id] + delta * (float)f);
 			double d = offset.Length();
-			bool inFit = d < halves[id] + 3.0;
-			double rank = d / halves[id] - (roads[id] != 0 ? 0.08 : 0.0);
-			if (d < halves[id] + reach && (inFit && !fitted || inFit == fitted && rank < best))
+			double half = RoadHalfAt(halves, id, f);
+			bool inFit = d < half + 3.0;
+			double rank = d / half - (roads[id] != 0 ? 0.08 : 0.0);
+			if (d < half + reach && (inFit && !fitted || inFit == fitted && rank < best))
 			{
 				best = rank; fitted = inFit; selected = id; uOut = f; distOut = d; bestOffset = offset;
 			}
@@ -280,12 +282,12 @@ public partial class FastGrid
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, double[] fits,
 		int[] corStart, int[] corCount, double[] corridor, double[] surfaces, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		int[] structStarts, double[] structs, double steepLo, double steepHi, double waterGap,
-		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active, bool authored)
+		float[] hs, Color[] colors, Vector2[] uvs, byte[] surfaceOut, byte[] roadOut, bool[] active, bool authored, double[] tread)
 	{
 		double x = pt.X, z = pt.Y;
 		double baseHeight = RoadGround(ground, width, height, tile, x, z);
 		if (selected < 0) { hs[n] = (float)baseHeight; return; }
-		double half = segHalf[selected]; bool road = segRoad[selected] != 0;
+		double half = RoadHalfAt(segHalf, selected, u); bool road = segRoad[selected] != 0;
 		int from = segSurf[selected], to = segNext[selected];
 		int surf = u < 0.5 ? from : to;
 		double slow = noise.GetNoise2D((float)((x + origin.X) * 0.13), (float)((z + origin.Y) * 0.13));
@@ -298,7 +300,7 @@ public partial class FastGrid
 		color = new Color(RoadLinear(color.R), RoadLinear(color.G), RoadLinear(color.B));
 		if (surf == 7) mask *= 0.65;
 		double organic = RoadLerp(surfaces[from * 5 + 4], surfaces[to * 5 + 4], RoadSmooth(0.0, 1.0, u));
-		color.A = (float)RoadTreadMask(half, distance, slow, organic, road, authored, grain);
+		color.A = (float)RoadTreadMask(half, distance, slow, organic, authored, grain, tread);
 		uvs[n] = new Vector2((float)(side / half), surf + (road || authored ? 0.0f : 0.25f));
 		surfaceOut[n] = (byte)surf; roadOut[n] = road ? (byte)1 : (byte)0;
 		double influence = 1.0 - RoadSmooth(half + 0.3, half + 3.0, distance);

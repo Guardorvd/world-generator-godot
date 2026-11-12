@@ -175,5 +175,4 @@ static func pick(w: WorldData, kind: String, x: float, y: float, _v := 0.0) -> i
 static func _stamp(w: WorldData, t: Dictionary) -> void:
 	if t.pts.size() < 2:
 		return
-	var half := maxf(float(t.pts[0].w) * 0.5 - Grid.PATH_IN, 0.0)
-	Grid.stamp_path(w.road_surface, w.W, w.H, t.pts, 0, half, t.surf)
+	Grid.stamp_path(w.road_surface, w.W, w.H, t.pts, 0, -1.0, t.surf)

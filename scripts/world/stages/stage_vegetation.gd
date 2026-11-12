@@ -35,9 +35,8 @@ const GLADE_OY := 39.0
 const Surface := preload("res://scripts/world/mountain_surface.gd")
 ## 15.0: просвет у путей — по настоящей ширине полотна, а не по клеткам 4 м (Grid.path_clearance). Запас от кромки
 ## до ствола или камня, м: у дороги — обочина с канавой, у троп — проход руля; кроны над тропой не запрещены.
-const PATH_MARGIN := {road = 2.4, trail = 0.45, mountain = 0.45, animal = 0.15}
+const Section := preload("res://scripts/world/road_section.gd")
 const CLEAR_CAP := 12.0  # дальше этого от пути (м) просвет не считается
-const PREPARED_MARGIN := 1.5 # у подготовленной трассы (trail_id), м
 ## Радиус ствола у комля при масштабе 1, м: просвет у путей и столкновения (ForestObstacles.TRUNK — эта же таблица)
 ## 11.11.2026: высокий лес — стволы взрослого дерева номинального размера (ForestModels.NOMINAL).
 const TRUNK := {
@@ -173,7 +172,7 @@ static func fields(w: WorldData) -> Dictionary:
 	return out
 
 
-## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и PATH_MARGIN. Тот же расчёт у плана
+## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и RoadSection. Тот же расчёт у плана
 ## и у закреплённых областей (RegionRoads), поэтому на границе областей не бывает внезапной просеки.
 static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -> PackedFloat32Array:
 	var starts := PackedInt32Array()
@@ -182,15 +181,27 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -
 	var pw := PackedFloat64Array()
 	var margin := PackedFloat64Array()
 	for t: Dictionary in trails:
-		if t.pts.size() < 2 or not PATH_MARGIN.has(t.kind):
+		if t.pts.size() < 2 or not Section.KINDS.has(t.kind):
 			continue
 		starts.append(px.size())
-		# подготовленная трасса (велопарк): у её линии, приземлений и настилов просвет шире, чем у природной тропы
-		margin.append(maxf(PATH_MARGIN[t.kind], PREPARED_MARGIN) if t.has("trail_id") else PATH_MARGIN[t.kind])
+		# A prepared trail needs room at the landings as well as along the tread.
+		var edge: float = Section.KINDS[t.kind].clearance
+		margin.append(maxf(edge, Section.AUTHORED_CLEARANCE) if t.has("trail_id") else edge)
+		var previous: Dictionary = t.pts[0]
 		for p: Dictionary in t.pts:
+			# Bound the tapered section with short capsules, rather than extending its widest end over a long chord.
+			if p.w != previous.w:
+				var length := Grid.hypot(p.x - previous.x, p.y - previous.y)
+				var steps := ceili(length)
+				for k in range(1, steps):
+					var f := float(k) / steps
+					px.append(lerpf(previous.x, p.x, f))
+					py.append(lerpf(previous.y, p.y, f))
+					pw.append(lerpf(previous.w, p.w, f))
 			px.append(p.x)
 			py.append(p.y)
 			pw.append(p.w)
+			previous = p
 	# Выемка туннеля шире полотна; общий просвет нужен и деревьям, и RockScatter.
 	for tunnel: TunnelData in tunnels:
 		starts.append(px.size())

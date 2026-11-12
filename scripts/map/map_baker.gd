@@ -317,7 +317,7 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 		return
 	var sections := Topology.sections(w).values()
 	for t: Dictionary in sections:
-		cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX)
+		cv.stroke_poly(t.pts, Color8(80, 60, 40), 0.35, 1.0, 0.18, PX, true)
 	for t: Dictionary in sections:
 		if t.kind != "road":
 			_stroke_surface(cv, t, Color8(150, 136, 112) if t.kind == "mountain" else Color8(156, 124, 84), PX)
@@ -327,7 +327,7 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 			_stroke_surface(cv, t, Color8(172, 162, 142), PX)
 	for t: Dictionary in sections:
 		if t.kind == "trail":
-			cv.stroke_poly(t.pts, Color8(190, 160, 115), 0.5, 0.35, 0.0, PX)
+			cv.stroke_poly(t.pts, Color8(190, 160, 115), 0.5, 0.35, 0.0, PX, true)
 
 
 ## Полоса пути цветом покрытия (RoadSurface, с 4.3): ломаная режется на куски с одним покрытием,
@@ -335,14 +335,14 @@ static func _draw_overlays(w: WorldData, PX: int, cv: Canvas, human_paths := tru
 static func _stroke_surface(cv: Canvas, t: Dictionary, fallback: Color, PX: int) -> void:
 	var surf: PackedByteArray = t.get("surf", PackedByteArray())
 	if surf.size() != t.pts.size():
-		cv.stroke_poly(t.pts, fallback, 1.0, 1.0, 0.0, PX)
+		cv.stroke_poly(t.pts, fallback, 1.0, 1.0, 0.0, PX, true)
 		return
 	var start := 0
 	for n: int in range(1, t.pts.size() + 1):
 		if n < t.pts.size() and surf[n] == surf[start]:
 			continue
 		var c: Array = RoadSurface.LIST[surf[start]].get("color", [])
-		cv.stroke_poly(t.pts.slice(start, mini(n + 1, t.pts.size())), fallback if c.is_empty() else Color8(c[0], c[1], c[2]), 1.0, 1.0, 0.0, PX)
+		cv.stroke_poly(t.pts.slice(start, mini(n + 1, t.pts.size())), fallback if c.is_empty() else Color8(c[0], c[1], c[2]), 1.0, 1.0, 0.0, PX, true)
 		start = n
 
 
@@ -384,9 +384,9 @@ class Canvas:
 					a = lerpf(0.25, 0.0, (t - 0.6) / 0.4)
 				_blend(py * iw + px, 150.0, g, 90.0, a)
 
-	## Ломаная из точек {x, y, w} в клетках. Полупрозрачная рисуется одним контуром средней ширины,
-	## чтобы стыки сегментов не темнели; непрозрачная — сегментами своей ширины
-	func stroke_poly(pts: Array, col: Color, alpha: float, w_mul: float, w_add: float, PX: int) -> void:
+	## Ломаная из точек {x, y, w} в клетках. Для дорожного сечения ширина интерполируется вдоль отрезка.
+	## Каждый пиксель контура смешивается один раз, чтобы стыки сегментов не темнели.
+	func stroke_poly(pts: Array, col: Color, alpha: float, w_mul: float, w_add: float, PX: int, vary := false) -> void:
 		if pts.size() < 2:
 			return
 		stamp_id += 1
@@ -394,7 +394,7 @@ class Canvas:
 		var g := col.g * 255.0
 		var b := col.b * 255.0
 		var avg := 0.0
-		var translucent := alpha < 1.0
+		var translucent := alpha < 1.0 and not vary
 		if translucent:
 			for p in pts:
 				avg += p.w
@@ -402,18 +402,23 @@ class Canvas:
 		for k in pts.size() - 1:
 			var p: Dictionary = pts[k]
 			var q: Dictionary = pts[k + 1]
+			if vary:
+				var ra := maxf(1.0, (p.w * w_mul + w_add) * PX) * 0.5
+				var rb := maxf(1.0, (q.w * w_mul + w_add) * PX) * 0.5
+				_segment(p.x * PX, p.y * PX, q.x * PX, q.y * PX, ra, rb, r, g, b, alpha)
+				continue
 			var width: float
 			if translucent:
 				width = maxf(1.0, (avg * w_mul + w_add) * PX)
 			else:
 				width = maxf(1.0, ((p.w + q.w) * 0.5 * w_mul + w_add) * PX)
-			_segment(p.x * PX, p.y * PX, q.x * PX, q.y * PX, width * 0.5, r, g, b, alpha)
+			_segment(p.x * PX, p.y * PX, q.x * PX, q.y * PX, width * 0.5, width * 0.5, r, g, b, alpha)
 
-	func _segment(ax: float, ay: float, bx: float, by: float, rad: float, r: float, g: float, b: float, a: float) -> void:
+	func _segment(ax: float, ay: float, bx: float, by: float, ra: float, rb: float, r: float, g: float, b: float, a: float) -> void:
 		var dx := bx - ax
 		var dy := by - ay
 		var len2 := dx * dx + dy * dy
-		var r2 := rad * rad
+		var rad := maxf(ra, rb)
 		for py in range(maxi(0, floori(minf(ay, by) - rad)), mini(ih, ceili(maxf(ay, by) + rad) + 1)):
 			for px in range(maxi(0, floori(minf(ax, bx) - rad)), mini(iw, ceili(maxf(ax, bx) + rad) + 1)):
 				var cx := px + 0.5 - ax
@@ -423,7 +428,8 @@ class Canvas:
 					t = clampf((cx * dx + cy * dy) / len2, 0.0, 1.0)
 				var ex := cx - dx * t
 				var ey := cy - dy * t
-				if ex * ex + ey * ey > r2:
+				var radius := lerpf(ra, rb, t)
+				if ex * ex + ey * ey > radius * radius:
 					continue
 				var i := py * iw + px
 				if stamp[i] == stamp_id:

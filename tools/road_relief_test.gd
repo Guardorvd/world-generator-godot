@@ -1,5 +1,7 @@
 extends SceneTree
 const Fixture := preload("res://tools/road_relief_fixture.gd")
+const Section := preload("res://scripts/world/road_section.gd")
+const Topology := preload("res://scripts/world/road_topology.gd")
 const FORM_STRIDE := RoadRefinement.CORRIDOR_STRIDE
 const OUT := "res://tools/control/runs/road_relief"
 const LIMIT := 1.0 # m, largest change of one vertex by the corridor forms
@@ -187,6 +189,7 @@ func ride(h: Heightfield, lane: int, hz: int) -> void:
 func run() -> void:
 	check(Grid.fast_grid() != null, "native backend available")
 	if failures: quit(1); return
+	section_contracts()
 	corridor_contracts()
 	terrain_profile_contracts()
 	patch_contracts()
@@ -391,3 +394,79 @@ func corridor_contracts() -> void:
 	var grade := 0.0
 	for j in range(1, 160): grade = maxf(grade, absf(forms[j * FORM_STRIDE] - forms[(j - 1) * FORM_STRIDE]))
 	check(pinned == 0.0 and grade <= table[10] + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)
+
+
+class SectionGround extends Heightfield:
+	func ground_at(x: float, z: float, _raw := false) -> float:
+		return 20.0 + 0.42 * (z - 162.0) if x >= 136.0 and x <= 180.0 and absf(z - 162.0) < 5.0 else 20.0
+
+	func depth_at(x: float, z: float, _feet := -INF) -> float:
+		return 0.18 if absf(z - 242.0) < 3.0 and absf(x - 154.0) < 1.0 else 0.0
+
+
+func section_line(kind: String, x0: int, x1: int, z: float) -> Dictionary:
+	var points: Array = []
+	for x in range(x0, x1 + 1):
+		points.append({x = x + 0.5, y = z, w = Section.WIDTHS[kind]})
+	return Topology.section(kind, points, Vector2i.ZERO)
+
+
+func section_contracts() -> void:
+	var w := Fixture.world()
+	var trail := section_line("trail", 6, 20, 40.5)
+	var road := section_line("road", 20, 76, 40.5)
+	var through_fork := Topology.section("trail",
+		[{x = 40.5, y = 40.5, w = 0.55}, {x = 40.5, y = 44.5, w = 0.55}], Vector2i.ZERO)
+	var ford := section_line("trail", 22, 60, 60.5)
+	var authored := section_line("trail", 22, 60, 70.5)
+	authored.trail_id = "authored-width"
+	authored.pts[0].w = 0.36
+	w.trails = [trail, road, through_fork, ford, authored]
+	w.bridges = [{a = 40 * w.W + 56, b = 40 * w.W + 64}]
+	for x in range(46, 50): w.biome[60 * w.W + x] = Biomes.ROCK
+	var ground := SectionGround.new(w, false)
+	StageTrails._fit_sections(w, ground)
+	var tile := GameConfig.TILE
+	var taper: float = trail.pts[-1].w * tile
+	check(is_equal_approx(taper, 2.6) and is_equal_approx(road.pts[0].w * tile, taper)
+		and is_equal_approx(road.pts[4].w * tile, 3.0) and is_equal_approx(trail.pts[-5].w * tile, 2.2),
+		"road and trail share a 2.6 m join and recover their nominal widths")
+	check(road.pts[36 - 20].w < road.pts[40 - 20].w and is_equal_approx(road.pts[40 - 20].w * tile, 3.0),
+		"the sidehill shelf narrows and returns to the normal section through a fork")
+	check(is_equal_approx(road.pts[56 - 20].w * tile, 2.0 * Heightfield.BRIDGE_HALF)
+		and road.pts[53 - 20].w > road.pts[50 - 20].w and road.pts[53 - 20].w < road.pts[56 - 20].w
+		and is_equal_approx(road.pts[64 - 20].w * tile, 2.0 * Heightfield.BRIDGE_HALF),
+		"both bridge portals match the deck with a taper on the approaches")
+	check(ford.pts[38 - 22].w < ford.pts[46 - 22].w and ford.pts[46 - 22].w < ford.pts[22 - 22].w
+		and ford.pts[37 - 22].w < ford.pts[35 - 22].w and authored.pts[0].w == 0.36,
+		"ford and rock create distinct transitions and authored width is retained")
+
+	var varying := {kind = "road", pts = [{x = 10.5, y = 16.72, w = 1.2}, {x = 58.5, y = 16.72, w = 0.48}],
+		surf = PackedByteArray([RoadSurface.GRAVEL, RoadSurface.GRAVEL])}
+	w.bridges = []
+	w.trails = [varying]
+	var mask := PackedByteArray()
+	mask.resize(w.N)
+	Grid.stamp_path(mask, w.W, w.H, varying.pts, 3)
+	RoadSurface.rebuild_map(w)
+	var wide_cell := 17 * w.W + 14
+	var narrow_cell := 17 * w.W + 55
+	check(mask[wide_cell] == 3 and mask[narrow_cell] == 0 and w.road_surface[wide_cell] == RoadSurface.GRAVEL
+		and w.road_surface[narrow_cell] == RoadSurface.NONE, "coverage and cell mask both follow the tapered width")
+	var clearance := StageVegetation.path_clearance(w.W, w.H, w.trails)
+	check(clearance[narrow_cell] > clearance[wide_cell] + 1.0, "vegetation clearance follows the long taper conservatively")
+	var h := Heightfield.new(w, false)
+	var native := build(h, true)
+	var wide := native.sample(14 * tile, 16.72 * tile + 1.0, w.W)
+	var narrow := native.sample(55 * tile, 16.72 * tile + 1.0, w.W)
+	check(absf(wide.get("across", 10.0)) < absf(narrow.get("across", 0.0)), "metre mesh uses the local width within one segment")
+	RoadRefinement.allow_fast_patches = false
+	var batched := build(h, true)
+	RoadRefinement.allow_fast_nearest = false
+	RoadRefinement.allow_fast_vertices = false
+	var reference := build(h, true)
+	check(native.patches == batched.patches and native.patches == reference.patches,
+		"variable section is byte-identical in whole, batched and GDScript bakes")
+	RoadRefinement.allow_fast_patches = true
+	RoadRefinement.allow_fast_nearest = true
+	RoadRefinement.allow_fast_vertices = true

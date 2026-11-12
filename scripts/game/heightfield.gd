@@ -11,7 +11,7 @@ static var allow_rock_relief := true # false — без скального ре�
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
-const BRIDGE_HALF := 2.2    # настил шире основной дороги, чтобы опираться на берег по обе стороны въезда
+const BRIDGE_HALF := preload("res://scripts/world/road_section.gd").BRIDGE_HALF
 const TUNNEL_HALF := 2.5    # полуширина туннеля, м
 const TUNNEL_HEIGHT := 4.5  # высота туннеля, м
 const TUNNEL_CUT := StageTrails.TUNNEL_R   # выемка под туннелем: клетки ближе этого к оси, в клетках

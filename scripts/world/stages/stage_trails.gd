@@ -55,7 +55,8 @@ const REUSE_R := 5.0        # путь идёт по уже построенно
 const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
 const CROSS_GAP := 8.0      # 10.4: вода ближе стольких клеток к мосту закрыта для следующих путей — они сходятся к одной переправе
 ## Три характера езды без отдельных режимов: дорога, извилистый обход, техническая горная тропа.
-const WIDTHS := {animal = 0.32, mountain = 0.42, trail = 0.55, road = 0.9}
+const Section := preload("res://scripts/world/road_section.gd")
+const WIDTHS := Section.WIDTHS
 const ROAD_CLIMB := 32.0
 const TRAIL_CLIMB := 12.0
 const MOUNTAIN_CLIMB := 4.0
@@ -108,6 +109,7 @@ static func run(w: WorldData, step: Callable) -> void:
 	# С 07.11.2026: природные велосипедные маршруты — спуски между точками готовой сети тем же поиском (RideRoutes)
 	step.call(0.76, "Природные велосипедные маршруты")
 	RideRoutes.run(w, finder, surface, on_axis)
+	_fit_sections(w, surface)
 	detail_us = Time.get_ticks_usec()
 	StageLandmarks.lay_out(w)
 	w.generation_profile.homes_laid = StageLandmarks.count_homes(w.settlements)
@@ -119,6 +121,23 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	w.generation_profile.parts_ms = parts.duplicate()
 	finder.release()
+
+
+## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
+static func _fit_sections(w: WorldData, surface: Heightfield, inherited := PackedByteArray(), accept := Callable()) -> void:
+	Section.fit(w, surface, accept)
+	var mask := w.path_mask
+	for i in mask.size():
+		if mask[i] >= 2:
+			mask[i] = inherited[i] if not inherited.is_empty() else 0
+	for t: Dictionary in w.trails:
+		var mark := 1 if t.kind == "animal" else (3 if t.kind == "road" else 2)
+		Grid.stamp_path(mask, w.W, w.H, t.pts, mark)
+	w.path_mask = mask
+	for span: BridgeData in w.bridges:
+		_mark_cut(w, span.a, span.b, BRIDGE_R)
+	for span: TunnelData in w.tunnels:
+		_mark_cut(w, span.a, span.b, TUNNEL_R)
 
 
 ## Wet cells use water level; dry cells use the carved ground.

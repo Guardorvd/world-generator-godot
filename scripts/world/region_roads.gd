@@ -195,6 +195,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	profile.failures = state.failures
 	profile.windows = state.get("windows", {})
 	started = Time.get_ticks_usec()
+	StageTrails._fit_sections(w, ground, fields.path, func(points: Array) -> bool: return ready_corridor(w, points, open))
 	# Единственная расстановка домов (площадки пришли без них) — вдоль получившихся улиц.
 	StageLandmarks.lay_out(w)
 	profile.homes_laid = StageLandmarks.count_homes(w.settlements)
@@ -252,8 +253,13 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			var i := floori(p.y) * w.W + floori(p.x)
 			if edge_of.has(i) and Vector2(p.x, p.y).distance_to(Vector2(i % w.W, i / w.W) + Vector2.ONE * 0.5) < 0.01:
 				var tip := {x = edge_of[i].x, y = edge_of[i].y, w = p.w}
-				if end == 0: trail.pts.insert(0, tip)
-				else: trail.pts.append(tip)
+				var material: int = trail.surf[end]
+				if end == 0:
+					trail.pts.insert(0, tip)
+					trail.surf.insert(0, material)
+				else:
+					trail.pts.append(tip)
+					trail.surf.append(material)
 		trail.approach = false
 		for p: Dictionary in trail.pts:
 			p.x += bounds.position.x
@@ -515,11 +521,14 @@ static func ready_corridor(w: WorldData, points: Array, open: PackedByteArray) -
 	for k in range(1, points.size()):
 		var a := Vector2(points[k - 1].x, points[k - 1].y)
 		var b := Vector2(points[k].x, points[k].y)
-		var normal := (b - a).normalized().orthogonal() * float(points[k].w) * 0.5
+		var normal := (b - a).normalized().orthogonal()
 		var steps := maxi(1, ceili(a.distance_to(b) * 4.0))
 		for step in range(steps + 1):
+			var f := float(step) / steps
+			var center := a.lerp(b, f)
+			var half := lerpf(float(points[k - 1].w), float(points[k].w), f) * 0.5
 			for side: float in [-1.0, 0.0, 1.0]:
-				var p := a.lerp(b, float(step) / steps) + normal * side
+				var p := center + normal * (side * half)
 				var x := floori(p.x)
 				var y := floori(p.y)
 				if x < 0 or y < 0 or x >= w.W or y >= w.H: return false
@@ -532,7 +541,7 @@ static func ready_corridor(w: WorldData, points: Array, open: PackedByteArray) -
 						var end := Vector2(span.b % w.W + 0.5, span.b / w.W + 0.5)
 						var axis := end - start
 						var t := (p - start).dot(axis) / axis.length_squared()
-						if t >= 0.0 and t <= 1.0 and p.distance_to(start + axis * t) <= Heightfield.BRIDGE_HALF / GameConfig.TILE:
+						if t >= 0.0 and t <= 1.0 and p.distance_to(start + axis * t) <= Heightfield.BRIDGE_HALF / GameConfig.TILE + 0.0001:
 							on_bridge = true
 							break
 					if not on_bridge: return false

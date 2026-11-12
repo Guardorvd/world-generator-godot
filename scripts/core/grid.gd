@@ -163,7 +163,7 @@ static func on_edge(i: int, w: int, h: int) -> bool:
 ## не меньше их радиуса: деревья подходят к кромке тропы, кроны над ней не запрещены. Тот же расчёт, что у
 ## FastGrid.PathClearance (double, хранение во float).
 ## При смене ширины берётся максимальная полуширина отрезка: консервативная огибающая полотна,
-## сохраняющая нижнюю оценку clearance_at и покрывающая среднюю ширину метрового меша.
+## сохраняющая нижнюю оценку clearance_at и покрывающая переменную ширину метрового меша.
 static func path_clearance(w: int, h: int, starts: PackedInt32Array, px: PackedFloat64Array, py: PackedFloat64Array,
 		pw: PackedFloat64Array, margin: PackedFloat64Array, tile: float, cap: float) -> PackedFloat32Array:
 	var fast := fast_grid()
@@ -181,7 +181,7 @@ static func path_clearance(w: int, h: int, starts: PackedInt32Array, px: PackedF
 			var l2 := dx * dx + dy * dy
 			var wa := pw[n - 1] * tile * 0.5
 			var wb := pw[n] * tile * 0.5
-			# Постоянная огибающая покрывает и среднюю полуширину отрезка RoadRefinement.
+			# Постоянная огибающая покрывает переменную полуширину отрезка RoadRefinement.
 			# Переменная ширина в проекции на ось не даёт 1-липшицево поле, нужное clearance_at.
 			var half := maxf(wa, wb)
 			var reach := (maxf(wa, wb) + margin[r] + cap) / tile
@@ -313,14 +313,12 @@ static func segment_dist(px: float, py: float, ax: float, ay: float, bx: float, 
 
 ## Клетки под осью и краями ленты; диагональ включает клетку у общего угла.
 ## Без values повышает маску до mark; с values пишет значение ближайшего конца сегмента.
-## Один обход для маски пути и его покрытия. half — полуширина в клетках.
-static func stamp_path(mask: PackedByteArray, W: int, H: int, pts: Array, mark: int, half: float,
+## Один обход для маски пути и покрытия. При half < 0 берём ширину по станциям с отступом PATH_IN.
+static func stamp_path(mask: PackedByteArray, W: int, H: int, pts: Array, mark: int, half := -1.0,
 		values: PackedByteArray = PackedByteArray()) -> void:
 	if pts.size() < 2:
 		return
 	var overwrite := not values.is_empty()
-	# у узкой линии (звериная тропа) края ленты почти там же, где середина
-	var sides := half > 0.1
 	var last: Dictionary = pts[0]
 	var px: float = last.x
 	var py: float = last.y
@@ -330,12 +328,14 @@ static func stamp_path(mask: PackedByteArray, W: int, H: int, pts: Array, mark: 
 		var ay: float = last.y
 		var dx: float = b.x - ax
 		var dy: float = b.y - ay
+		var ha := half if half >= 0.0 else maxf(0.0, float(last.w) * 0.5 - PATH_IN)
+		var hb := half if half >= 0.0 else maxf(0.0, float(b.w) * 0.5 - PATH_IN)
 		last = b
 		var seg_len := sqrt(dx * dx + dy * dy)
 		if seg_len == 0.0:
 			continue
-		var nx := -dy / seg_len * half
-		var ny := dx / seg_len * half
+		var nx := -dy / seg_len
+		var ny := dx / seg_len
 		var m := ceili(seg_len / PATH_STEP)
 		for s: int in range(1, m + 1):
 			var f := float(s) / m
@@ -354,9 +354,10 @@ static func stamp_path(mask: PackedByteArray, W: int, H: int, pts: Array, mark: 
 				_mark_cell(mask, W, H, x1 if floori(cy) == y0 else x0, y0 if floori(cy) == y0 else y1, value, overwrite)
 			_mark_cell(mask, W, H, x0, y0, value, overwrite)
 			_mark_cell(mask, W, H, x1, y1, value, overwrite)
-			if sides:
-				_mark_cell(mask, W, H, floori(x + nx), floori(y + ny), value, overwrite)
-				_mark_cell(mask, W, H, floori(x - nx), floori(y - ny), value, overwrite)
+			var edge := lerpf(ha, hb, f)
+			if edge > 0.1:
+				_mark_cell(mask, W, H, floori(x + nx * edge), floori(y + ny * edge), value, overwrite)
+				_mark_cell(mask, W, H, floori(x - nx * edge), floori(y - ny * edge), value, overwrite)
 			px = x
 			py = y
 

@@ -10,7 +10,7 @@ static func _position(p: Dictionary) -> Vector2:
 	return Vector2(p.x, p.y)
 
 
-static func _key(p: Vector2, origin: Vector2i) -> String:
+static func anchor_key(p: Vector2, origin: Vector2i) -> String:
 	return "%d:%d" % [roundi(p.x * SNAP) + origin.x * int(SNAP), roundi(p.y * SNAP) + origin.y * int(SNAP)]
 
 
@@ -20,7 +20,7 @@ static func section_id(points: Array, origin: Vector2i) -> String:
 	var keys := PackedStringArray()
 	for p: Dictionary in points:
 		var at := _position(p)
-		keys.append(_key(at, origin) if at.is_finite() else "-")
+		keys.append(anchor_key(at, origin) if at.is_finite() else "-")
 	var forward := "/".join(keys)
 	keys.reverse()
 	var backward := "/".join(keys)
@@ -48,8 +48,8 @@ static func attach(w: WorldData, host: int, point: Vector2, changed_lines: Varia
 		return
 	var a := Vector2(pts[best - 1].x, pts[best - 1].y)
 	var b := Vector2(pts[best].x, pts[best].y)
-	var anchor := _key(point, w.world_origin)
-	if _key(a, w.world_origin) == anchor or _key(b, w.world_origin) == anchor:
+	var anchor := anchor_key(point, w.world_origin)
+	if anchor_key(a, w.world_origin) == anchor or anchor_key(b, w.world_origin) == anchor:
 		return
 	var f := clampf(a.distance_to(point) / maxf(a.distance_to(b), 0.000001), 0.0, 1.0)
 	# Only touched arrays need a snapshot; point dictionaries themselves are not mutated.
@@ -77,8 +77,8 @@ static func _collect(result: Dictionary, records: Array, origin: Vector2i) -> vo
 
 
 static func passage_id(a: Vector2, b: Vector2, tunnel: bool, origin: Vector2i) -> String:
-	var x := _key(a, origin)
-	var y := _key(b, origin)
+	var x := anchor_key(a, origin)
+	var y := anchor_key(b, origin)
 	return ("t:" if tunnel else "b:") + (x + "/" + y if x < y else y + "/" + x)
 
 
@@ -194,7 +194,7 @@ static func _index(chord: Dictionary, all: Array, bins: Dictionary, passages: Di
 
 
 static func _node(nodes: Array, by_key: Dictionary, p: Vector2, passage: String, origin: Vector2i) -> int:
-	var id := _key(p, origin) + "@" + passage
+	var id := anchor_key(p, origin) + "@" + passage
 	if not by_key.has(id):
 		by_key[id] = nodes.size()
 		nodes.append({id = id, at = p, passage = passage})

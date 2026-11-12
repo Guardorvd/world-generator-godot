@@ -62,8 +62,12 @@ public partial class FastGrid
 	private static double RoadLerp(double a, double b, double t) => a + (b - a) * t;
 	// RoadRefinement.BENCH (11.11.2026): полка в склон с умеренного поперечного уклона, а не только на крутом
 	private const double BenchLo = 0.15, BenchHi = 0.45;
+	// The index stores the two endpoint half-widths consecutively for each segment.
+	private static double RoadMaxHalf(double[] halves, int id) => Math.Max(halves[2 * id], halves[2 * id + 1]);
+	private static double RoadHalfAt(double[] halves, int id, double u) => RoadLerp(halves[2 * id], halves[2 * id + 1], u);
+
 	// RoadRefinement.tread_mask: shared by the whole-network and batched vertex paths.
-	private static double RoadTreadMask(double half, double distance, double slow, double organic, bool road, bool authored, double grain)
+	private static double RoadTreadMask(double half, double distance, double slow, double organic, bool authored, double grain, double[] tread)
 	{
 		if (authored)
 		{
@@ -71,9 +75,9 @@ public partial class FastGrid
 			double originalShoulder = (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5);
 			return (1.0 - RoadSmooth(originalEdge * 0.55, originalEdge + originalShoulder, distance)) * (1.0 - organic * 0.35);
 		}
-		// 11.11.2026: кромка с медленным изгибом (шум ~8 м в мировых координатах), переход шире у широкой дороги
-		double edge = half * (0.84 - organic * 0.04) + slow * 0.16 * Math.Min(1.0, half / 1.1);
-		double ramp = Math.Clamp(half * 0.8, 0.5, 1.2);
+		// RoadSection.tread_alpha (natural roads).
+		double edge = half * (tread[0] - organic * tread[1]) + slow * tread[2] * Math.Min(1.0, half / tread[3]);
+		double ramp = Math.Clamp(half * tread[4], tread[5], tread[6]);
 		return Math.Clamp(0.5 + (edge - distance) / ramp, 0.0, 1.0);
 	}
 	// FIT_FADE at the boundary of the prepared mesh; never add a lip against OuterLand.
@@ -451,12 +455,12 @@ public partial class FastGrid
 				if (other || hairpin)
 				{
 					double gapDist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
-					if (gapDist < segHalf[id] + Math.Max(0.0, ownHalf) + 2.0 * reach + 0.5)
+					if (gapDist < RoadMaxHalf(segHalf, id) + Math.Max(0.0, ownHalf) + 2.0 * reach + 0.5)
 					{
 						if (crossing || hairpin) return 0;
-						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, segHalf[id], shared, routeKinds))
+						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, RoadMaxHalf(segHalf, id), shared, routeKinds))
 						{
-							if (gapDist < segHalf[id] + Math.Max(0.0, ownHalf) + corridorGap) return 0;
+							if (gapDist < RoadMaxHalf(segHalf, id) + Math.Max(0.0, ownHalf) + corridorGap) return 0;
 							safe &= 2;
 						}
 					}
@@ -495,13 +499,13 @@ public partial class FastGrid
 					}
 					Vector2 b = a + delta;
 					double dist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
-					double margin = dist - segHalf[id] - ownHalf;
+					double margin = dist - RoadMaxHalf(segHalf, id) - ownHalf;
 					if (margin >= clearance) continue;
 					if (segRoute[id] != route && dist < 20.0)
 					{
 						Vector2 direction = delta.Normalized();
 						if (RoadShared(Math.Abs((p - a).Cross(direction)), Math.Abs(tangent.Dot(direction)) < 0.9, route, segRoute[id], ownHalf,
-							segHalf[id], shared, routeKinds)) continue;
+							RoadMaxHalf(segHalf, id), shared, routeKinds)) continue;
 					}
 					clearance = margin;
 					if (clearance < gap) return clearance;
@@ -550,7 +554,7 @@ public partial class FastGrid
 	public Godot.Collections.Dictionary RoadVertices(Vector2[] points, double[] nearest, int width, int height,
 		double tile, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		double[] segments, double[] fits, double[] corridor, double[] surfaces, int[] structureStarts, double[] structures,
-		double steepLo, double steepHi, double waterGap, bool simd, byte[] authoredRoutes, double step)
+		double steepLo, double steepHi, double waterGap, bool simd, byte[] authoredRoutes, double step, double[] tread)
 	{
 		int count = points.Length;
 		var bases = new double[count]; var delta = new double[count]; var influence = new double[count];
@@ -568,9 +572,9 @@ public partial class FastGrid
 			bases[n] = baseHeight;
 			int selected = (int)nearest[n * 4];
 			if (selected < 0) continue;
-			int at = selected * 17;
+			int at = selected * 18;
 			double u = nearest[n * 4 + 1], distance = nearest[n * 4 + 2], side = nearest[n * 4 + 3];
-			double half = segments[at + 5]; bool road = segments[at + 6] != 0;
+			double half = RoadLerp(segments[at + 5], segments[at + 17], u); bool road = segments[at + 6] != 0;
 			int from = (int)segments[at + 7], to = (int)segments[at + 8];
 			int surf = u < 0.5 ? from : to;
 			double slow = noise.GetNoise2D((float)((x + origin.X) * 0.13), (float)((z + origin.Y) * 0.13));
@@ -584,7 +588,7 @@ public partial class FastGrid
 			if (surf == 7) mask *= 0.65;
 			double organic = RoadLerp(surfaces[from * 5 + 4], surfaces[to * 5 + 4], RoadSmooth(0.0, 1.0, u));
 			bool authored = authoredRoutes[(int)segments[at + 12]] != 0;
-			color.A = (float)RoadTreadMask(half, distance, slow, organic, road, authored, grain);
+			color.A = (float)RoadTreadMask(half, distance, slow, organic, authored, grain, tread);
 			colors[n] = color; uv[n] = new Vector2((float)(side / half), surf + (road || authored ? 0.0f : 0.25f));
 			surface[n] = (byte)surf; roadFlags[n] = road ? (byte)1 : (byte)0; routes[n] = (int)segments[at + 12];
 			double reach = 1.0 - RoadSmooth(half + 0.3, half + 3.0, distance);
@@ -650,12 +654,13 @@ public partial class FastGrid
 			int selected = (int)nearest[n * 4];
 			if (selected >= 0)
 			{
-				int at = selected * 17, cell = cells[n];
+				int at = selected * 18, cell = cells[n];
 				if ((int)segments[at + 14] > 0 && influence[n] > 0.0 && float.IsNegativeInfinity(water[cell]) && power[n] > 0.0)
 				{
 					var a = new Vector2((float)segments[at], (float)segments[at + 1]);
 					var d = new Vector2((float)segments[at + 2], (float)segments[at + 3]);
-					double half = segments[at + 5], u = nearest[n * 4 + 1];
+					double u = nearest[n * 4 + 1];
+					double half = RoadLerp(segments[at + 5], segments[at + 17], u);
 					var normal = new Vector2(-d.Y, d.X).Normalized() * (float)half;
 					var axis = a + d * (float)u;
 					double cross = Math.Abs(RoadGround(ground, width, height, tile, axis.X + (double)normal.X, axis.Y + (double)normal.Y)
