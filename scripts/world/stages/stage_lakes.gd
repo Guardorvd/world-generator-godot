@@ -103,17 +103,21 @@ static func run(w: WorldData) -> void:
 		# не у вытекающей реки (иначе под ногами поток вниз по склону)
 		var shore := Vector2(mx, my)
 		var sd := INF
-		for c in queue:
-			if dist[c] > 0:
-				break   # в очереди сначала идут все клетки у берега
-			var x := c % W
-			for nn: int in [c - 1 if x > 0 else -1, c + 1 if x < W - 1 else -1, c - W, c + W]:
-				if nn < 0 or nn >= w.N or lake[nn] != 0 or ocean[nn] != 0 or river[nn] != 0:
-					continue
-				var d := Vector2((nn % W) + 0.5 - mx, (nn / W) + 0.5 - my).length_squared()
-				if d < sd and not _river_near(w, nn % W, nn / W):
-					sd = d
-					shore = Vector2((nn % W) + 0.5, (nn / W) + 0.5)
+		# второй проход — без проверки реки рядом: если весь берег у реки, точка не остаётся в центре воды
+		for avoid_river in [true, false]:
+			if sd < INF:
+				break
+			for c in queue:
+				if dist[c] > 0:
+					break   # в очереди сначала идут все клетки у берега
+				var x := c % W
+				for nn: int in [c - 1 if x > 0 else -1, c + 1 if x < W - 1 else -1, c - W, c + W]:
+					if nn < 0 or nn >= w.N or lake[nn] != 0 or ocean[nn] != 0 or river[nn] != 0:
+						continue
+					var d := Vector2((nn % W) + 0.5 - mx, (nn / W) + 0.5 - my).length_squared()
+					if d < sd and not (avoid_river and _river_near(w, nn % W, nn / W)):
+						sd = d
+						shore = Vector2((nn % W) + 0.5, (nn / W) + 0.5)
 		lakes.append(LakeData.new(mx, my, n, w.filled[mid], w.make_name(Names.LAKE, "lake", floori(mx), floori(my)), cells.size(), shore.x, shore.y))
 	w.lakes = lakes
 	w.lake_id = lake_id
