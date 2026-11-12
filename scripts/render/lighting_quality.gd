@@ -2,8 +2,10 @@ extends RefCounted
 ## One quality policy for the game and capture tools. Medium is the baseline GPU budget.
 const SKY_SHADER := preload("res://resources/sky.gdshader")
 
-static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows: bool) -> void:
+static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows: bool, fog_quality := -1) -> void:
 	level = clampi(level, 0, 2)
+	# Capture tools without a fog preset still use their single quality argument.
+	var fog_level := level if fog_quality == -1 else clampi(fog_quality, 0, 2)
 	if env.sky != null:
 		var material := env.sky.sky_material as ShaderMaterial
 		if material != null and material.shader == SKY_SHADER:
@@ -29,9 +31,9 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 	env.ssil_radius = 3.0
 	env.ssil_intensity = 0.3
 	env.ssil_normal_rejection = 0.8
-	# Keep the froxel range inside existing tree shadows. Ordinary fog covers distance.
-	env.volumetric_fog_enabled = forward_plus and level >= 1
-	env.volumetric_fog_length = 160.0 if level < 2 else 190.0
+	# Ordinary fog covers distances beyond the volumetric range.
+	env.volumetric_fog_enabled = forward_plus and fog_level >= 1
+	env.volumetric_fog_length = 160.0 if fog_level < 2 else 190.0
 	env.volumetric_fog_detail_spread = 0.65
 	env.volumetric_fog_anisotropy = 0.65
 	env.volumetric_fog_ambient_inject = 0.35
@@ -39,5 +41,5 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 	env.volumetric_fog_temporal_reprojection_enabled = true
 	env.volumetric_fog_temporal_reprojection_amount = 0.75
 	if env.volumetric_fog_enabled:
-		RenderingServer.environment_set_volumetric_fog_volume_size(96 if level == 1 else 128, 64 if level == 1 else 96)
+		RenderingServer.environment_set_volumetric_fog_volume_size(96 if fog_level == 1 else 128, 64 if fog_level == 1 else 96)
 	env.sdfgi_enabled = false

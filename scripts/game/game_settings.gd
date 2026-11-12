@@ -26,6 +26,8 @@ const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
 const DEFAULT_LIGHTING := 1
 const LIGHTING_LEVELS := ["Низкое", "Среднее", "Высокое"]
+const DEFAULT_FOG_QUALITY := DEFAULT_LIGHTING
+const FOG_QUALITY_LEVELS := ["Низкий", "Средний", "Высокий"]
 const DEFAULT_VOLUME := 0.8
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
 const OLD_DAY_MINUTES := 24.0      # прежнее значение по умолчанию: в файлах до 10.1 заменяется новым
@@ -73,6 +75,7 @@ var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
 var shadows := DEFAULT_SHADOWS # только тени направленного света
 var lighting := DEFAULT_LIGHTING
+var fog_quality := DEFAULT_FOG_QUALITY
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
@@ -112,6 +115,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
 	lighting = roundi(_number(cfg, "view", "lighting", lighting, 0, 2))
+	fog_quality = roundi(_number(cfg, "view", "fog_quality", lighting, 0, FOG_QUALITY_LEVELS.size() - 1))
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
@@ -201,6 +205,7 @@ func reset_defaults() -> void:
 	vsync = true
 	shadows = DEFAULT_SHADOWS
 	lighting = DEFAULT_LIGHTING
+	fog_quality = DEFAULT_FOG_QUALITY
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
 	particles = DEFAULT_PARTICLES
@@ -224,6 +229,7 @@ func save_settings() -> Error:
 	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
 	cfg.set_value("view", "lighting", lighting)
+	cfg.set_value("view", "fog_quality", fog_quality)
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
 	cfg.set_value("view", "particles", particles)
@@ -250,7 +256,8 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting, particles = particles}
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting,
+		fog_quality = fog_quality, particles = particles}
 
 
 func set_display_state(state: Dictionary) -> void:
@@ -264,6 +271,7 @@ func set_display_state(state: Dictionary) -> void:
 	flora = state.get("flora", flora)
 	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
+	fog_quality = clampi(state.get("fog_quality", fog_quality), 0, FOG_QUALITY_LEVELS.size() - 1)
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный

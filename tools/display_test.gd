@@ -147,12 +147,17 @@ func run() -> void:
 	# 12.5+: графика применяется и сохраняется сразу, без таймера
 	options.scale.select(0)
 	options.apply_graphics()
+	options.fog_quality.select(2)
+	options.fog_quality.item_selected.emit(2)
+	check(GameContext.scope.settings.fog_quality == 2 and GameContext.scope.settings.lighting == original.lighting,
+		"fog menu changes fog quality independently of lighting")
 	check(not options.pending() and GameContext.scope.settings.render_scale == 0.5 and is_equal_approx(root.scaling_3d_scale, 0.5), "graphics apply instantly without confirmation")
 	main._save_due = 0
 	main._flush_settings()
 	GameContext.scope.settings.reset_defaults()
 	GameContext.scope.settings.load_settings()
 	check(GameContext.scope.settings.render_scale == 0.5, "graphics change saved")
+	check(GameContext.scope.settings.fog_quality == 2, "fog menu choice survives reload")
 	options.sync()
 	options.scale.select(3)
 	options.apply_graphics()

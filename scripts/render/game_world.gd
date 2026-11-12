@@ -382,7 +382,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	local_mist = preload("res://scripts/render/local_mist.gd").new()
 	add_child(local_mist)
 	local_mist.setup(world, heights)
-	_apply_shadows()
+	_apply_lighting_and_fog()
 	day.terrain_mats = [$Terrain.material_override]
 	if outer != null and outer._mat != null:
 		day.terrain_mats.append(outer._mat)
@@ -549,10 +549,11 @@ func _mark(key: String, since: int) -> int:
 	return now
 
 
-## Независимое качество света и тени; применяется при запуске и выходе из паузы.
-func _apply_shadows() -> void:
+## Качество освещения, тени и туман применяются при запуске и выходе из паузы.
+func _apply_lighting_and_fog() -> void:
+	var settings := services.settings
 	preload("res://scripts/render/lighting_quality.gd").apply(
-		$WorldEnvironment.environment, $Sun, services.settings.lighting, services.settings.shadows)
+		$WorldEnvironment.environment, $Sun, settings.lighting, settings.shadows, settings.fog_quality)
 
 
 func capture_mouse() -> void:
@@ -576,7 +577,7 @@ func set_paused(p: bool) -> void:
 	if p:
 		_close_settlement(false)
 	else:
-		_apply_shadows() # тени меняются в настройках на паузе
+		_apply_lighting_and_fog()
 		var redraw := vegetation.set_draw(services.settings.draw) # и дальность прорисовки (с 9.8+)
 		redraw = vegetation.set_flora(services.settings.flora) or redraw # и качество растительности (16.0)
 		if ambient != null:
