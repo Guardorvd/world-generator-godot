@@ -240,6 +240,9 @@ func collect_chunks(seed_text: String, size: int) -> int:
 	_pin_lock.lock()
 	var keep := {}
 	var path := artifact_path(seed_text, size, "surface")
+	# Манифест читается под замком ротации: пока файл заменяют, основного может не быть, и по одной копии .bak
+	# чанки нового манифеста попали бы под удаление (Mutex рекурсивный: _read_file берёт тот же замок).
+	Files.lock_read()
 	for suffix: String in ["", ".bak"]:
 		var signature := _manifest_signature(path + suffix)
 		if signature.is_empty(): continue
@@ -248,6 +251,7 @@ func collect_chunks(seed_text: String, size: int) -> int:
 			if not data is Dictionary: continue
 			_memo_roots(signature, data)
 		keep.merge(_root_memo[signature])
+	Files.unlock_read()
 	var removed := 0
 	var seen := {}
 	for entry: String in DirAccess.get_files_at(dir):
