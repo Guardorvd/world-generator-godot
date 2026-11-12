@@ -16,19 +16,21 @@ var _material_elapsed := 0.0
 var _pending: Array[Vector2i] = []
 var _examined := {}
 var _last_at := Vector2.INF
-var stats := {evaluated = 0, created = 0, material_updates = 0}
+var _plan_sites := {} # Immutable plan geography only; regional fields may be replaced/unloaded.
+var stats := {evaluated = 0, sampled = 0, created = 0, material_updates = 0, cache_hits = 0}
 
 func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
 
-func update(at: Vector3, day: DayCycle, delta: float, time: float) -> void:
+func update(at: Vector3, day: DayCycle, delta: float, _time: float) -> void:
 	if not day.env.volumetric_fog_enabled:
 		for entry: Dictionary in patches.values():
 			entry.node.queue_free()
 		patches.clear()
 		_pending.clear()
 		_examined.clear()
+		_plan_sites.clear()
 		_material_elapsed = 0.0
 		_last_at = Vector2.INF
 		_scan = 0.0
@@ -48,10 +50,11 @@ func update(at: Vector3, day: DayCycle, delta: float, time: float) -> void:
 		var distance := Vector2(entry.node.position.x - at.x, entry.node.position.z - at.z).length()
 		var target := (1.0 - smoothstep(230.0, RADIUS, distance)) if entry.resident else 0.0
 		entry.fade = move_toward(entry.fade, target, step / 5.0)
-		entry.material.set_shader_parameter("density", entry.strength * (0.12 + day.local_mist * 0.88) * entry.fade)
-		entry.material.set_shader_parameter("tint", day.env.volumetric_fog_albedo)
-		entry.material.set_shader_parameter("clock", time)
-		stats.material_updates += 1
+		var density: float = entry.strength * entry.fade
+		if density != entry.density:
+			entry.material.set_shader_parameter("density", density)
+			entry.density = density
+			stats.material_updates += 1
 		if target == 0.0 and entry.fade <= 0.0:
 			entry.node.queue_free()
 			patches.erase(key)
@@ -81,6 +84,8 @@ func _refresh(at: Vector2) -> void:
 	_pending = wanted
 	for key: Vector2i in _examined.keys():
 		if Vector2(key - center).length_squared() > 32.0: _examined.erase(key)
+	for key: Vector2i in _plan_sites.keys():
+		if Vector2(key - center).length_squared() > 32.0: _plan_sites.erase(key)
 
 func _resident(point: Vector2) -> bool:
 	var cell := Vector2i((point / GameConfig.TILE).floor())
@@ -92,7 +97,7 @@ func _build_pending() -> void:
 		var key: Vector2i = _pending.pop_front()
 		_examined[key] = true
 		stats.evaluated += 1
-		var site := _site(key)
+		var site := _cached_site(key)
 		if site.is_empty() or site.point.distance_to(_last_at) > RADIUS: continue
 		var volume := FogVolume.new()
 		volume.shape = RenderingServer.FOG_VOLUME_SHAPE_ELLIPSOID
@@ -102,8 +107,21 @@ func _build_pending() -> void:
 		material.shader = SHADER
 		volume.material = material
 		add_child(volume)
-		patches[key] = {node = volume, material = material, point = site.point, strength = site.strength, fade = 0.0, resident = true}
+		patches[key] = {node = volume, material = material, point = site.point, strength = site.strength, fade = 0.0, density = 0.0, resident = true}
 		stats.created += 1
+
+func _cached_site(key: Vector2i) -> Dictionary:
+	if _plan_sites.has(key):
+		stats.cache_hits += 1
+		return _plan_sites[key]
+	stats.sampled += 1
+	var site := _site(key)
+	# All selection and relief probes must be inside the immutable plan. Never cache
+	# a partial regional result or a missing field: it could arrive on the next scan.
+	var center := (Vector2(key) + Vector2.ONE * 0.5) * SPACING
+	var bounds := Rect2(Vector2.ZERO, Vector2(world.W, world.H) * GameConfig.TILE).grow(-60.0)
+	if bounds.has_point(center): _plan_sites[key] = site
+	return site
 
 func _site(key: Vector2i) -> Dictionary:
 	var center := (Vector2(key) + Vector2.ONE * 0.5) * SPACING
@@ -128,16 +146,18 @@ func _site(key: Vector2i) -> Dictionary:
 		best = {point = point, strength = strength, height = maxf(ground, water), size = Vector3(100, 12 if is_finite(water) else 20, 100)}
 	if best.is_empty(): return best
 	# Narrow a bank on uneven terrain instead of suspending it over a slope.
-	var relief := 0.0
+	var relief := Vector2.ZERO
 	for offset: Vector2 in OFFSETS.slice(1):
 		var point: Vector2 = best.point + offset
+		var axis := 0 if offset.x != 0.0 else 1
 		if not _resident(point) or not heights.known(point.x, point.y):
-			relief = maxf(relief, 20.0)
+			relief[axis] = maxf(relief[axis], 20.0)
 			continue
-		relief = maxf(relief, absf(heights.ground_at(point.x, point.y) - float(best.height)))
-	var width := lerpf(100.0, 48.0, smoothstep(3.0, 16.0, relief))
-	best.size.x = width
-	best.size.z = width
+		relief[axis] = maxf(relief[axis], absf(heights.ground_at(point.x, point.y) - float(best.height)))
+	# Different footprints, but stable through streaming and never larger than the budget.
+	var phase := float(key.x) * 1.37 + float(key.y) * 2.11 + float(posmod(world.seed_num, 997))
+	best.size.x = maxf(48.0, lerpf(100.0, 48.0, smoothstep(3.0, 16.0, relief.x)) * (0.9 + 0.1 * sin(phase)))
+	best.size.z = maxf(48.0, lerpf(100.0, 48.0, smoothstep(3.0, 16.0, relief.y)) * (0.9 + 0.1 * cos(phase)))
 	return best
 
 static func suitability(data: Dictionary) -> float:

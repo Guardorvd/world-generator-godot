@@ -204,7 +204,6 @@ func apply(hour: float, time: float) -> void:
 	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
 	# Дымка в низинах привязана к высоте мира (с гребня видно туманные долины).
 	var mist: float = s[15]
-	env.fog_height_density = MIST_DENSITY * mist
 	# World anchored: bicycle bob and climbing never drag the fog layer.
 	env.fog_height = MIST_TOP
 	env.adjustment_saturation = s[13]
@@ -228,9 +227,15 @@ func apply(hour: float, time: float) -> void:
 	var fog_blend := 1.0 if is_nan(_fog_time) else 1.0 - exp(-clampf(time - _fog_time, 0.0, 1.0) / 12.0)
 	_fog_time = time
 	local_mist = lerpf(local_mist, clampf(mist + overcast * 0.15, 0.0, 1.0), fog_blend)
+	env.fog_height_density = MIST_DENSITY * local_mist
 	_air_density = lerpf(_air_density, 0.00035 + 0.00065 * float(s[8]) + 0.0002 * overcast, fog_blend)
 	env.volumetric_fog_density = _air_density
 	env.volumetric_fog_albedo = Color(0.86, 0.90, 0.95).lerp(s[2], 0.12)
+	# Shared by every local volume: weather/animation no longer costs N material writes.
+	if env.volumetric_fog_enabled:
+		var mist_wind := CLOUD_WIND * time * 0.08
+		RenderingServer.global_shader_parameter_set("mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
+		RenderingServer.global_shader_parameter_set("mist_tint", env.volumetric_fog_albedo)
 	light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
 	if env.volumetric_fog_enabled:
 		# Share extinction with the far haze instead of stacking two full fog layers.

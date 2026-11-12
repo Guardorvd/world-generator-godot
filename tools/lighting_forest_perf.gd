@@ -65,6 +65,8 @@ func setup() -> void:
 	template.free()
 
 func _process(delta: float) -> bool:
+	if cycle != null:
+		cycle.apply(float(Dev.arg("hour", "7.5")), elapsed)
 	var done := super._process(delta)
 	if mist != null and camera != null:
 		mist.update(camera.position, cycle, delta, elapsed)

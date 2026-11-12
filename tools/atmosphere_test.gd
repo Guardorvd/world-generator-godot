@@ -22,8 +22,10 @@ func run() -> void:
 	check(env.volumetric_fog_enabled == (RenderingServer.get_current_rendering_method() == "forward_plus"), "renderer guard")
 	day.apply(7.5, 0.0)
 	var morning := day.local_mist
+	var height_density := env.fog_height_density
 	day.apply(12.0, 0.1)
 	check(absf(day.local_mist - morning) < 0.01, "time skip is smoothed")
+	check(absf(env.fog_height_density - height_density) < 0.0001, "height haze shares the smoothed weather transition")
 	for i in 120: day.apply(12.0, 1.0 + i)
 	check(day.local_mist < morning * 0.1, "clear noon settles")
 	var wet := {biome = Biomes.FOREST, moist = 0.85, elev = 0.1, slope = 0.02}
@@ -82,6 +84,14 @@ func _streaming_checks(world: WorldData, day: DayCycle) -> void:
 	var writes: int = mist.stats.material_updates - updates
 	check(writes <= count * 11, "material updates capped near 10 Hz at 60 FPS")
 	print("Material batches over 60 frames: %d (previous policy: %d)" % [writes, count * 60])
+	for frame in 420: mist.update(at, day, 1.0 / 60.0, 3.0 + frame / 60.0)
+	updates = mist.stats.material_updates
+	# Weather changes are shared shader state; settled volume materials stay untouched.
+	for frame in 60:
+		day.apply(7.5, 10.0 + frame / 60.0)
+		mist.update(at, day, 1.0 / 60.0, 10.0 + frame / 60.0)
+	check(mist.stats.material_updates == updates, "settled volumes need no material writes while weather advances")
+	print("Settled volume material writes over 60 frames: %d" % (mist.stats.material_updates - updates))
 	# No full fade-out delay after a large camera jump, even at high FPS.
 	mist.update(Vector3(840, 30, 840), day, 1.0 / 60.0, 3.0)
 	check(mist.patches.has(Vector2i(7, 7)), "teleport admits destination in the same frame")
@@ -107,11 +117,18 @@ func _geography_checks(world: WorldData, day: DayCycle) -> void:
 		for x in [139, 140]: mist.heights.hv[y * world.W + x] = 76.0
 	var slope_site := mist._site(Vector2i(4, 4))
 	check(slope_site.size.x < site.size.x and slope_site.size.x >= 48.0, "nearby steep relief narrows the fog footprint")
+	check(slope_site.size.z == site.size.z, "slope narrows only the affected axis")
 	# At 10 FPS, dry near cells must not repeatedly reset the queue and starve far ones.
 	world.moist.fill(0.1)
 	world.moist[126 * world.W + 210] = 0.9
 	for frame in 100: mist.update(Vector3(512, 30, 512), day, 0.1, frame * 0.1)
 	check(mist.patches.has(Vector2i(7, 4)), "dry foreground cannot starve a wet distant site")
+	var cached: int = mist.stats.cache_hits
+	var sampled: int = mist.stats.sampled
+	for frame in 40: mist.update(Vector3(512, 30, 512), day, 0.1, 10.0 + frame * 0.1)
+	check(mist.stats.cache_hits > cached, "dry plan sites reuse cached geography")
+	check(mist.stats.sampled == sampled, "stationary plan does not repeat geography sampling")
+	check(mist._plan_sites.size() <= 81, "plan cache stays spatially bounded")
 	mist.free()
 	world.moist.fill(0.85)
 	# Real regional field publication/removal, no procedural generation.
@@ -136,4 +153,7 @@ func _geography_checks(world: WorldData, day: DayCycle) -> void:
 	world.outer.set_ledger({regions = {}})
 	for frame in 70: regional.update(Vector3(3500, 30, 500), day, 0.1, 4.0 + frame * 0.1)
 	check(regional.patches.is_empty(), "evicted regional fields release fog without camera movement")
+	world.outer.set_ledger(ledger)
+	for frame in 50: regional.update(Vector3(3500, 30, 500), day, 0.1, 11.0 + frame * 0.1)
+	check(not regional.patches.is_empty(), "regional reload is not hidden by a negative cache")
 	regional.free()
