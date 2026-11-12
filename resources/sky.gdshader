@@ -13,6 +13,9 @@
 // вращаются вокруг полюса мира вместе с часом (star_rot). Луна с морями и фазой (moon_phase, меняется по ночам).
 // Редкие явления задаёт DayCycle по сиду мира: полярное сияние на севере, комета (неподвижна среди звёзд),
 // метеоры (по одному изредка, в «звездопад» чаще). Всё ночное считается только при night > 0.
+// 12.11.2026: клубы без сетки «прожилок» (гладкий минимум в worley_puff), холодная тень облаков на заре,
+// мягкие лучи (днём слабые), пояс Венеры и тень Земли напротив зашедшего солнца, мягкий край солнца,
+// шум против полос на градиентах, ярче звёзды и Млечный Путь.
 shader_type sky;
 
 uniform vec3 zenith_color : source_color = vec3(0.32, 0.52, 0.82);
@@ -83,10 +86,14 @@ float worley_puff(vec2 p, float morph) {
 			vec2 rot_dir = vec2(dir.x * m_cs.x - dir.y * m_cs.y, dir.x * m_cs.y + dir.y * m_cs.x);
 			vec2 jitter = 0.5 + (vec2(h1, h2) - 0.5) * 0.46 + rot_dir * 0.14;
 			vec2 diff = nb + jitter - f;
-			min_d2 = min(min_d2, dot(diff, diff));
+			// 12.11: гладкий минимум вместо жёсткого — на границах ячеек нет излома, и на облаках
+			// не проступает сетка светлых «прожилок» (подсветка считается по разности соседних выборок)
+			float d2 = dot(diff, diff);
+			float sm = clamp(0.5 + 0.5 * (min_d2 - d2) / 0.16, 0.0, 1.0);
+			min_d2 = mix(min_d2, d2, sm) - 0.16 * sm * (1.0 - sm);
 		}
 	}
-	float w = clamp(1.0 - min_d2 * 1.25, 0.0, 1.0);
+	float w = clamp(1.0 - max(min_d2, 0.0) * 1.25, 0.0, 1.0);
 	return w * w * (3.0 - 2.0 * w);
 }
 
@@ -226,13 +233,13 @@ vec3 night_sky(vec3 d, float sd) {
 	float clumps = fbm(gp);
 	float dust = smoothstep(0.45, 0.7, fbm(gp * 2.3 + 5.0)) * exp(-lat * lat / 0.0025);
 	float milky = band * (0.15 + 1.4 * clumps * clumps) * (1.0 - 0.7 * dust);
-	vec3 col = vec3(0.55, 0.6, 0.85) * milky * 0.13;
+	vec3 col = vec3(0.55, 0.6, 0.85) * milky * 0.18;
 	// туманности: редкие цветные облачка у Млечного Пути
 	float neb = smoothstep(0.62, 0.85, fbm(gp * 0.7 + 21.0)) * exp(-lat * lat / 0.05);
 	vec3 neb_col = mix(vec3(0.85, 0.3, 0.55), vec3(0.3, 0.55, 0.9), noise(gp * 0.4 + 3.0));
 	col += neb_col * neb * 0.2;
 	// звёзды: в полосе Млечного Пути их больше
-	vec3 st = stars(ds, 170.0, mix(0.975, 0.93, band), 0.3, 1.1) + stars(ds, 62.0, 0.993, 0.2, 2.2);
+	vec3 st = stars(ds, 170.0, mix(0.975, 0.93, band), 0.3, 1.4) + stars(ds, 62.0, 0.993, 0.2, 2.8);
 	col += st;
 	// комета: голова и два хвоста — пылевой желтоватый и прямой голубой ионный
 	if (comet > 0.001) {
@@ -315,10 +322,21 @@ void sky() {
 	float horizon_band = exp(-h * 5.2) * (0.35 + 0.65 * pow(sd, 3.0)) * low_sun * above;
 	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24;
 	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above;
+	// 12.11: сумерки напротив солнца — розовый «пояс Венеры» над горизонтом и сизая тень Земли под ним
+	float twilight = smoothstep(0.20, 0.0, s_dir.y) * smoothstep(-0.26, -0.03, s_dir.y);
+	if (twilight > 0.001) {
+		float anti = smoothstep(-0.1, 0.9, -dot(normalize(d.xz + vec2(1e-5)), normalize(s_dir.xz + vec2(1e-5))));
+		float lift = clamp(-s_dir.y * 0.9, 0.0, 0.16);   // пояс поднимается, пока солнце уходит под горизонт
+		float belt = exp(-pow((h - 0.10 - lift) / 0.085, 2.0));
+		float earth_shadow = smoothstep(0.07 + lift, 0.0, h) * smoothstep(0.0, -0.12, s_dir.y);
+		col = mix(col, vec3(0.86, 0.56, 0.62) * (0.55 + 0.45 * dot(horizon_color, vec3(0.33))), belt * anti * twilight * 0.42);
+		col = mix(col, zenith_color * 0.85 + vec3(0.02, 0.03, 0.06), earth_shadow * anti * twilight * 0.35);
+	}
 	if (!AT_CUBEMAP_PASS) {
-		// солнце: диск, днём не ярче, чем выдержит тоновая кривая
-		float sun_disc = smoothstep(0.9993, 0.9996, sd) * smoothstep(-0.05, 0.02, s_dir.y);
-		col += sun_color * sun_disc * 2.8;
+		// солнце: диск с мягким краем и тесным ореолом, днём не ярче, чем выдержит тоновая кривая
+		float sun_up = smoothstep(-0.05, 0.02, s_dir.y);
+		float sun_disc = smoothstep(0.99925, 0.99965, sd) * sun_up;
+		col += sun_color * (sun_disc * 2.8 + pow(sd, 1400.0) * 0.55 * sun_up);
 		if (night > 0.001) {
 			col += night_sky(d, sd) * night;
 		}
@@ -395,7 +413,9 @@ void sky() {
 
 			// Цветовая палитра объёма: глубокая сизо-синяя тень на плоской подошве и чисто-белые освещённые купола
 			vec3 base_ambient = mix(cloud_color * vec3(0.45, 0.53, 0.68), zenith_color * 0.76, 0.32);
-			base_ambient = mix(base_ambient, horizon_color * 0.76, low_sun * 0.35);
+			// 12.11: на заре теневая сторона остаётся холодной (сизо-лиловой), а не сливается с золотой освещённой
+			base_ambient = mix(base_ambient, horizon_color * 0.76, low_sun * 0.18);
+			base_ambient = mix(base_ambient, zenith_color * 0.72 + vec3(0.07, 0.03, 0.09), low_sun * 0.42);
 			vec3 top_ambient = mix(cloud_color * 0.96, zenith_color * 1.04, 0.16);
 			vec3 direct_tint = mix(cloud_color * 1.15, warm_sunset * 1.20, low_sun * 0.70);
 
@@ -466,8 +486,9 @@ void sky() {
 				float ang = atan(dot(d, rv), dot(d, ru));
 				float streaks = noise(vec2(ang * 11.0, cloud_time * 0.015 + cloud_seed)) * 0.6
 					+ noise(vec2(ang * 27.0 + 5.0, -cloud_time * 0.011)) * 0.4;
-				float shaft = smoothstep(0.42, 0.85, streaks) * pow(active_dot, 5.0) * trans;
-				float low_boost = 1.0 + low_sun * 1.2;
+				// 12.11: лучи мягче; при высоком солнце едва заметны, в полную силу — на заре
+				float shaft = smoothstep(0.36, 0.95, streaks) * pow(active_dot, 5.0) * trans;
+				float low_boost = 0.35 + low_sun * 1.6;
 				float lit_time = max(above, night * 0.3);
 				col += active_light_col * shaft * smoothstep(0.12, 0.5, cloud_cover) * low_boost * lit_time * 0.22 * fade;
 			}
@@ -479,6 +500,10 @@ void sky() {
 		vec3 refl_cloud = mix(cloud_color * 0.92, mix(sun_color, vec3(1.0, 0.52, 0.34), low_sun * 0.5) * 0.95, low_sun * 0.55);
 		refl_cloud = mix(refl_cloud, mix(zenith_color, horizon_color, 0.5) * 1.15, night * 0.65);
 		col = mix(col, refl_cloud, cn * smoothstep(0.02, 0.35, d.y) * 0.45);
+	}
+	// 12.11: лёгкий неподвижный шум ниже шага 8 бит разбивает полосы на плавных градиентах (ночь, сумерки)
+	if (!AT_CUBEMAP_PASS) {
+		col += (hash(FRAGCOORD.xy) - 0.5) * 0.006 * (0.25 + dot(col, vec3(0.33)));
 	}
 	COLOR = col;
 }

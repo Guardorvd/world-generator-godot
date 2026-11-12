@@ -2,6 +2,8 @@ extends SceneTree
 ## Изолированная сцена неба и облаков (DayCycle + resources/sky.gdshader + тени облаков на земле)
 ## без генерации мира. Снимает полдень, закат, утро в разных ракурсах и лунную ночь,
 ## а также проверяет работу шейдера, разнообразие яркости облачного купола и живую эволюцию во времени.
+## Кроме отдельных снимков сохраняет общий лист 3×2 sky_sheet<tag>.png. «Было» — прошлая версия шейдера тем же запуском:
+## --shader <файл> (например из git show HEAD:resources/sky.gdshader) и --tag _old.
 ## Запуск: godot --path . --script res://tools/sky_look.gd -- [--out <папка>] [--shader <файл>] [--tag <суффикс>]
 
 var out := ""
@@ -120,6 +122,21 @@ func _run() -> void:
 	var img_sunset := await _capture("sky_sunset_gold", 17.55, 140.0, Vector3(0.0, 3.0, 0.0), Vector3(-0.85, 0.28, 0.42))
 	var img_morning := await _capture("sky_morning_layers", 7.3, 45.0, Vector3(0.0, 3.0, 0.0), Vector3(0.82, 0.34, 0.45))
 	var img_night := await _capture("sky_night_moon", 0.8, 210.0, Vector3(0.0, 3.0, 0.0), Vector3(-0.3, 0.48, -0.82))
+	# 12.11: сумерки на востоке (пояс Венеры напротив зашедшего солнца) и ночь на юге с луной
+	var img_dusk := await _capture("sky_dusk_east", 18.35, 160.0, Vector3(0.0, 3.0, 0.0), Vector3(0.8, 0.22, 0.45))
+	var img_moon := await _capture("sky_night_south", 0.8, 210.0, Vector3(0.0, 3.0, 0.0), Vector3(-0.2, 0.62, 0.6))
+	# общий лист 3×2 в половинном размере: день, закат, утро / сумерки, ночь на север, ночь с луной
+	var frames: Array[Image] = [img_noon, img_sunset, img_morning, img_dusk, img_night, img_moon]
+	var cell := Vector2i(640, 360)
+	var sheet := Image.create(cell.x * 3, cell.y * 2, false, Image.FORMAT_RGB8)
+	for i in frames.size():
+		if frames[i] == null or frames[i].is_empty():
+			continue
+		var small: Image = frames[i].duplicate()
+		small.convert(Image.FORMAT_RGB8)
+		small.resize(cell.x, cell.y, Image.INTERPOLATE_LANCZOS)
+		sheet.blit_rect(small, Rect2i(Vector2i.ZERO, cell), Vector2i((i % 3) * cell.x, (i / 3) * cell.y))
+	_check(sheet.save_png(ProjectSettings.globalize_path(out).path_join("sky_sheet" + tag + ".png")) == OK, "лист sky_sheet" + tag + ".png")
 
 	if img_noon != null and not img_noon.is_empty():
 		var min_l := 1.0
