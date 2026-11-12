@@ -1512,7 +1512,8 @@ static func _rejoins(w: WorldData, p: PackedInt32Array) -> bool:
 		var o := owner[p[k]]
 		if o >= 0 and o != previous:
 			if seen.has(o) and k - int(seen[o]) < REJOIN_GAP: return true
-		if o < 0 and previous >= 0: seen[previous] = k
+		# выход с участка записывается при любой смене участка, в том числе без свободной клетки между участками
+		if o != previous and previous >= 0: seen[previous] = k
 		previous = o
 	return false
 
