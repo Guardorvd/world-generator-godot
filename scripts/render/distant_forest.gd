@@ -1,26 +1,46 @@
 extends RefCounted
-## Terrain-owned, opaque crown proxies. CPU buffers are built by existing terrain jobs.
-## Two detail rings share one data set: fine crowns (12 m clusters, 24 triangles) up to SPLIT metres and
-## coarse clumps (32 m, area-preserving, 12 triangles) beyond it, so the far ring costs a fraction of the primitives.
+## Terrain-owned, opaque proxies of vegetation beyond the real models. CPU buffers are built by existing terrain jobs.
+## Three sets share one material and one data pass over the tile:
+##   fine   — tree clusters (~12 m) as 2–3 lobed crowns, from the real trees (plus world bushes and boulders);
+##   coarse — 32 m clumps (area-preserving, 4 lobes) beyond SPLIT;
+##   scrub  — thickets, juniper and young trees of the open-land communities (Understory.communities: the same
+##            noise and fields as the near understory), from the edge of the real understory to SCRUB_END.
+## Fine and coarse cross-dither per instance around SPLIT (no double drawing, no pop); the instance kind is
+## INSTANCE_CUSTOM.x (0 fine, 1 coarse, 2 scrub), y — trees in the cluster, z — material (0 leaves, 1 rock).
 const SHADER := preload("res://resources/distant_forest.gdshader")
+const Understory := preload("res://scripts/render/understory_models.gd")
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const TILE := GameConfig.TILE
 const SIDE := 128.0 # Keep culling local, even when terrain tiles are 256 m wide.
 const SPLIT := 620.0 # fine -> coarse, m from the camera
 const SPLIT_BAND := 60.0
+const NODE_MARGIN := 92.0 # instances of a 128 m cell are up to 91 m from its centre (node ranges are per node)
 const COARSE_CELL := 32.0
-static var _mesh_fine: ArrayMesh
-static var _mesh_coarse: ArrayMesh
+const SCRUB_STEP := 3 # cells (12 m) between open-land samples
+const SCRUB_BEGIN := 150.0 # real bushes are at full density to 140 m and thin out beyond
+const SCRUB_END := 950.0
+enum { FINE, COARSE, SCRUB }
+static var _meshes: Array[ArrayMesh] = []
 static var _material: ShaderMaterial
 static var active := true
 static var far_end := 1400.0 # crown draw distance, m: set per quality level by VegetationLayer
 static var near_begin := 240.0 # cells nearer than this are fully covered by real trees
 
-## Draw ranges for one MultiMesh node (meta "far_lod": 0 fine, 1 coarse). Called on creation and on quality changes.
+## Draw ranges for one MultiMesh node (meta "far_lod"). The node ranges are coarse (per 128 m cell, with a margin);
+## the shader cuts each instance exactly, so neighbouring rings never draw the same place twice.
 static func apply_ranges(node: MultiMeshInstance3D) -> void:
 	node.visible = active
-	var coarse: bool = node.get_meta("far_lod", 0) == 1
-	node.visibility_range_begin = SPLIT - SPLIT_BAND if coarse else near_begin
-	node.visibility_range_end = far_end + 150.0 if coarse else SPLIT + SPLIT_BAND
+	var lod: int = node.get_meta("far_lod", FINE)
+	match lod:
+		COARSE:
+			node.visibility_range_begin = maxf(0.0, SPLIT - SPLIT_BAND * 0.5 - NODE_MARGIN)
+			node.visibility_range_end = far_end + 150.0
+		SCRUB:
+			node.visibility_range_begin = maxf(0.0, SCRUB_BEGIN - NODE_MARGIN)
+			node.visibility_range_end = minf(far_end, SCRUB_END) + NODE_MARGIN
+		_:
+			node.visibility_range_begin = near_begin
+			node.visibility_range_end = SPLIT + SPLIT_BAND * 0.5 + NODE_MARGIN
 	node.visibility_range_begin_margin = 0.0
 	node.visibility_range_end_margin = 0.0
 
@@ -28,23 +48,35 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 	var raw: Array = []
 	var groups := {}
 	var centers := {}
+	var wooded := {} # 12 m cells with trees: open-land scrub is not sampled there (the forest proxies cover it)
 	var rect := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS)
 	for cy in range(maxi(0, rect.position.y / w.CS), mini(w.CH, ceili(float(rect.end.y) / w.CS))):
 		for cx in range(maxi(0, rect.position.x / w.CS), mini(w.CW, ceili(float(rect.end.x) / w.CS))):
 			for o: int in w.chunks[cy * w.CW + cx]:
 				var kind: int = w.obj_k[o]
-				if not Biomes.is_tree(kind): continue
+				var tree := Biomes.is_tree(kind)
+				if not tree and kind != Biomes.T_BUSH and kind != Biomes.T_ROCK: continue
 				var x := float(w.obj_x[o]) * TILE
 				var z := float(w.obj_y[o]) * TILE
 				var size := float(w.obj_s[o])
-				var height: float = ForestModels.NOMINAL.get(kind, 16.0) * size
-				height *= lerpf(0.92, 1.12, WGRandom.hash2(floori(w.obj_x[o] * 71), floori(w.obj_y[o] * 67), 23))
 				var ground := h.ground_at(x, z)
+				var jitter := WGRandom.hash2(floori(w.obj_x[o] * 71), floori(w.obj_y[o] * 67), 23)
+				if not tree:
+					# World bushes and boulders: single small proxies in the fine ring (beyond the real models).
+					var r: float = Biomes.CROWN_RADIUS[kind] * TILE * size
+					var rock := kind == Biomes.T_ROCK
+					var half := Vector3(r, r * (0.45 if rock else 0.6), r)
+					raw.append([Vector3(x, ground + half.y * (0.35 if rock else 0.8), z), half,
+						Color(0.5, 0.49, 0.46, 0.0) if rock else tint(Biomes.T_BUSH, w.obj_v[o]) * 0.85, 1, 1.0 if rock else 0.0])
+					continue
+				var height: float = ForestModels.NOMINAL.get(kind, 16.0) * size * lerpf(0.92, 1.12, jitter)
 				var conifer := kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE
 				var radius: float = Biomes.CROWN_RADIUS[kind] * TILE * size
-				var at := Vector3(x, ground + height * 0.73, z)
-				var extent := Vector3(radius, height * (0.30 if conifer else 0.25), radius)
+				# Crown body: conifers from a fifth of the height to the top, broadleaf crowns from a third.
+				var at := Vector3(x, ground + height * (0.6 if conifer else 0.66), z)
+				var extent := Vector3(radius, height * (0.39 if conifer else 0.31), radius)
 				var group := cluster_key(Vector2(x, z), centers)
+				wooded[Vector2i(floori(x / (TILE * SCRUB_STEP)), floori(z / (TILE * SCRUB_STEP)))] = true
 				var box := AABB(at - extent, extent * 2.0)
 				var color := tint(kind, w.obj_v[o])
 				if not groups.has(group): groups[group] = {box = box, color = color, count = 1}
@@ -53,8 +85,85 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 					groups[group].color += color
 					groups[group].count += 1
 	for group: Dictionary in groups.values():
-		raw.append([group.box.get_center(), group.box.size * 0.5, group.color / float(group.count)])
-	return pack(raw)
+		raw.append([group.box.get_center(), group.box.size * 0.5, group.color / float(group.count), group.count, 0.0])
+	var scrub := _plan_scrub(w, h, rect, wooded)
+	return pack(raw, scrub)
+
+## Open-land woody plants of the plan tile: one proxy per 12 m sample where the community has enough of them.
+static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dictionary) -> Array:
+	var out: Array = []
+	var rock_field := w.generation.surface_rock
+	var has_rock := rock_field.size() == w.N
+	var x0 := ceili(float(rect.position.x) / SCRUB_STEP) * SCRUB_STEP
+	var y0 := ceili(float(rect.position.y) / SCRUB_STEP) * SCRUB_STEP
+	for j in range(y0, mini(rect.end.y, w.H), SCRUB_STEP):
+		for i in range(x0, mini(rect.end.x, w.W), SCRUB_STEP):
+			var cell := Vector2i(i / SCRUB_STEP, j / SCRUB_STEP)
+			if wooded.has(cell): continue
+			var k := j * w.W + i
+			if w.path_mask[k] != 0 or w.river[k] != 0: continue
+			var edge := 0.0
+			for o: Vector2i in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if wooded.has(cell + o): edge = 0.6
+			var rock := float(rock_field[k]) / 255.0 if has_rock else Floor.rockiness(w, k)
+			var light := StageClimate.natural_conditions(w, i, j).x
+			var site := scrub_site(w.seed_num, i, j, w.biome[k], Floor.ground_moisture(w.moist[k], w.dist_water[k]), light,
+				w.slope[k], w.elev[k], rock, w.dist_water[k], edge)
+			if site.is_empty(): continue
+			var p: Vector2 = site.at
+			out.append(_scrub_item(site, p, h.ground_at(p.x, p.y)))
+	return out
+
+## Woody part of the open-land community at a 12 m sample (the same Understory.communities and noise as
+## VegetationLayer._open_community, without the verge strip): {} or {at, mass, tall, juniper}.
+static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, light: float, slope: float, alt: float,
+		rock: float, water: float, edge: float) -> Dictionary:
+	if bi in [Biomes.DEEP, Biomes.OCEAN, Biomes.SHALLOW, Biomes.LAKE, Biomes.SNOW, Biomes.PEAK, Biomes.DESERT, Biomes.BEACH]: return {}
+	if slope > 1.15: return {}
+	var seed := seed_num ^ 8803
+	var big := VegetationLayer._vnoise(i, j, 36.0, seed)
+	var mid := VegetationLayer._vnoise(i, j, 11.0, seed + 17)
+	var dry := 1.0 if bi in [Biomes.STEPPE, Biomes.SAVANNA] else 0.0
+	var com := Understory.communities(big, mid, moisture, light, slope, alt, rock, water, edge, 0.0, dry)
+	var density := 0.0
+	var woody := 0.0
+	var tall := 0.0
+	var total := 0.0
+	for c in Understory.COMMUNITIES:
+		density += com[c] * Understory.COMMUNITY_DENSITY[c]
+		var row: Array = Understory.COMMUNITY[c]
+		for f in Understory.COUNT:
+			total += com[c] * row[f]
+		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE])
+		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE])
+	density *= (1.0 - 0.6 * rock) * (1.0 - 0.75 * smoothstep(0.55, 1.1, slope))
+	# Bushes per 4 m cell (OPEN_SLOTS places, density share, woody share of the weights)
+	var per_cell := density * Understory.OPEN_SLOTS * (woody + tall) / maxf(total, 0.001)
+	if bi == Biomes.ROCK: per_cell *= 0.5
+	# A thicket needs a few bushes in 12 m; the 12 m patch noise of the near layout makes the gaps.
+	var patch := smoothstep(0.1, 0.45, VegetationLayer._vnoise(i, j, 3.0, seed + 31))
+	var mass := per_cell * patch
+	if mass < 0.22 or WGRandom.hash2(i, j, seed + 977) > smoothstep(0.22, 0.6, mass) + 0.15: return {}
+	var u := WGRandom.hash2(i, j, seed + 991)
+	var v := WGRandom.hash2(i, j, seed + 993)
+	return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = minf(mass, 1.6),
+		tall = tall / maxf(woody + tall, 0.001), juniper = alt > 0.27 or rock > 0.3 or com[Understory.C_TURF] > 0.5,
+		conifer = bi in [Biomes.TAIGA, Biomes.TUNDRA] or alt > 0.3, u = u}
+
+static func _scrub_item(site: Dictionary, p: Vector2, ground: float) -> Array:
+	var mass: float = site.mass
+	var u: float = site.u
+	# Area of the bushes of 9 cells, ~3 m² each; young trees make some thickets taller.
+	var radius := clampf(sqrt(mass * 9.0 * 3.0 / PI), 1.6, 4.2) * lerpf(0.85, 1.15, u)
+	var height := lerpf(1.3, 2.2, u) + float(site.tall) * lerpf(2.0, 4.5, u)
+	var color := Color("5f7f3c") * lerpf(0.9, 1.05, u)
+	color.a = 1.0 if site.conifer and site.tall > 0.3 else 0.0
+	if site.juniper:
+		radius *= 1.3
+		height *= 0.45
+		color = Color("4c6650") * lerpf(0.9, 1.05, u)
+		color.a = 0.0
+	return [Vector3(p.x, ground + height * 0.42, p.y), Vector3(radius, height * 0.5, radius), color, 2, 0.0]
 
 static func cluster_key(p: Vector2, centers: Dictionary) -> Vector2i:
 	var cell := Vector2i((p / 12.0).floor())
@@ -78,12 +187,13 @@ static func tint(kind: int, variant: int) -> Color:
 	elif kind == Biomes.T_SNOWPINE: color = Color("a1b6aa")
 	elif kind == Biomes.T_BIRCH: color = Color("8caf50")
 	elif kind == Biomes.T_JUNGLE: color = Color("48824a")
+	elif kind == Biomes.T_BUSH: color = Color("6a8c42")
 	color = color * (0.92 + (variant % 3) * 0.06)
 	color.a = 1.0 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else 0.0
 	return color
 
-## raw: Array of [centre, half-extent, colour] -> {f = fine cells, c = coarse cells}.
-static func pack(raw: Array) -> Dictionary:
+## raw: Array of [centre, half-extent, colour, trees, material] -> {f = fine cells, c = coarse cells, s = scrub cells}.
+static func pack(raw: Array, scrub: Array = []) -> Dictionary:
 	var fine := {}
 	var coarse := {}
 	var merged := {}
@@ -91,41 +201,52 @@ static func pack(raw: Array) -> Dictionary:
 		var at: Vector3 = item[0]
 		var size: Vector3 = item[1]
 		var color: Color = item[2]
-		append(fine, at, size, color)
+		var count: int = item[3] if item.size() > 3 else 1
+		var stuff: float = item[4] if item.size() > 4 else 0.0
+		append(fine, at, size, color, FINE, count, stuff)
+		if stuff > 0.5 or size.y < 2.5: continue # boulders and lone bushes vanish in the far ring
 		var key := Vector2i(floori(at.x / COARSE_CELL), floori(at.z / COARSE_CELL))
 		var weight := size.x * size.z
-		if not merged.has(key): merged[key] = {area = 0.0, at = Vector3.ZERO, hy = 0.0, color = Color(0, 0, 0, 0)}
+		if not merged.has(key): merged[key] = {area = 0.0, at = Vector3.ZERO, hy = 0.0, color = Color(0, 0, 0, 0), n = 0}
 		var m: Dictionary = merged[key]
 		m.area += weight
 		m.at += at * weight
 		m.hy += size.y * weight
 		m.color += color * weight
+		m.n += count
 	for m: Dictionary in merged.values():
-		# Slightly overlapping, taller clumps read as continuous canopy instead of separate pebbles from far away.
-		var radius := minf(sqrt(m.area) * 1.2, 30.0)
-		var half := minf(maxf(m.hy / m.area * 1.6, radius * 0.55), 14.0) # rounded mound, not a flat lens
-		append(coarse, m.at / m.area + Vector3(0, (half - m.hy / m.area) * 0.5, 0), Vector3(radius, half, radius), m.color / m.area)
-	return {f = fine, c = coarse}
+		# Slightly overlapping clumps read as continuous canopy instead of separate pebbles from far away.
+		var radius := minf(sqrt(m.area) * 1.15, 26.0)
+		var half := minf(maxf(m.hy / m.area * 1.25, radius * 0.4), 13.0)
+		append(coarse, m.at / m.area + Vector3(0, (half - m.hy / m.area) * 0.5, 0), Vector3(radius, half, radius), m.color / m.area, COARSE, m.n, 0.0)
+	var thickets := {}
+	for item: Array in scrub:
+		append(thickets, item[0], item[1], item[2], SCRUB, 1, item[4])
+	return {f = fine, c = coarse, s = thickets}
 
-static func append(out: Dictionary, at: Vector3, size: Vector3, color: Color) -> void:
+## Buffer per instance: basis (rotation about Y × half-extent) and origin, colour, custom (kind, trees, material, 0).
+static func append(out: Dictionary, at: Vector3, size: Vector3, color: Color, kind := FINE, count := 1, stuff := 0.0) -> void:
 	var key := Vector2i(floori(at.x / SIDE), floori(at.z / SIDE))
 	if not out.has(key): out[key] = {buffer = PackedFloat32Array(), bounds = AABB(), count = 0}
 	var entry: Dictionary = out[key]
 	var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
 	var local := at - Vector3(center.x, 0, center.y)
-	entry.buffer.append_array(PackedFloat32Array([size.x, 0, 0, local.x, 0, size.y, 0, local.y, 0, 0, size.z, local.z, color.r, color.g, color.b, color.a]))
-	var box := AABB(local - size, size * 2.0)
+	var angle := WGRandom.hash2(floori(at.x * 3.0), floori(at.z * 3.0), 419) * TAU
+	var c := cos(angle)
+	var s := sin(angle)
+	entry.buffer.append_array(PackedFloat32Array([c * size.x, 0, s * size.z, local.x, 0, size.y, 0, local.y, -s * size.x, 0, c * size.z, local.z,
+		color.r, color.g, color.b, color.a, float(kind), float(count), stuff, 0.0]))
+	var box := AABB(local - Vector3(maxf(size.x, size.z), size.y, maxf(size.x, size.z)) * 1.25, Vector3(maxf(size.x, size.z), size.y, maxf(size.x, size.z)) * 2.5)
 	entry.bounds = box if entry.count == 0 else entry.bounds.merge(box)
 	entry.count += 1
 
 static func attach(parent: Node3D, batches: Dictionary) -> void:
-	if _mesh_fine == null:
-		_mesh_fine = crown_mesh(true)
-		_mesh_coarse = crown_mesh(false)
+	if _meshes.is_empty():
+		_meshes = [lobe_mesh(FINE), lobe_mesh(COARSE), lobe_mesh(SCRUB)]
 		_material = ShaderMaterial.new()
 		_material.shader = SHADER
-	for lod in 2:
-		var cells: Dictionary = batches.get("c" if lod == 1 else "f", {})
+	for lod in 3:
+		var cells: Dictionary = batches.get(["f", "c", "s"][lod], {})
 		for key: Vector2i in cells:
 			var entry: Dictionary = cells[key]
 			var node := MultiMeshInstance3D.new()
@@ -135,7 +256,8 @@ static func attach(parent: Node3D, batches: Dictionary) -> void:
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
 			mm.use_colors = true
-			mm.mesh = _mesh_coarse if lod == 1 else _mesh_fine
+			mm.use_custom_data = true
+			mm.mesh = _meshes[lod]
 			mm.instance_count = entry.count
 			mm.buffer = entry.buffer
 			mm.custom_aabb = entry.bounds
@@ -147,27 +269,39 @@ static func attach(parent: Node3D, batches: Dictionary) -> void:
 			var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
 			node.global_position = Vector3(center.x, 0, center.y)
 
-## Fine: two hexagonal rings and poles, 24 triangles. Coarse: one ring and two poles, 12 triangles.
-static func crown_mesh(fine: bool) -> ArrayMesh:
+## Clusters of lobes in the unit box. Each lobe is a hexagonal bipyramid with an off-centre waist (12 triangles):
+## a rounded top and a flatter underside. UV — lobe centre (x, z), UV2 — (lobe index, lobe-local height -1..1);
+## the shader turns lobes into cones for conifers, varies their height and drops extra lobes of small clusters.
+## Fine: 3 lobes (36 triangles), coarse: 4 lobes (48), scrub: 3 low lobes (36).
+const LOBES := {
+	FINE: [[Vector3(0.0, 0.08, 0.0), Vector3(0.66, 0.9, 0.66)], [Vector3(0.44, -0.14, 0.3), Vector3(0.5, 0.7, 0.5)],
+		[Vector3(-0.4, -0.1, -0.34), Vector3(0.52, 0.76, 0.52)]],
+	COARSE: [[Vector3(0.0, 0.1, 0.0), Vector3(0.56, 0.9, 0.56)], [Vector3(0.5, -0.12, 0.22), Vector3(0.46, 0.72, 0.46)],
+		[Vector3(-0.46, -0.06, 0.3), Vector3(0.46, 0.78, 0.46)], [Vector3(0.04, -0.16, -0.52), Vector3(0.46, 0.68, 0.46)]],
+	SCRUB: [[Vector3(0.0, 0.0, 0.0), Vector3(0.62, 1.0, 0.62)], [Vector3(0.5, -0.2, 0.22), Vector3(0.48, 0.75, 0.48)],
+		[Vector3(-0.42, -0.25, -0.32), Vector3(0.5, 0.7, 0.5)]],
+}
+
+static func lobe_mesh(kind: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for i in 6:
-		var a := float(i) * TAU / 6.0
-		var b := float(i + 1) * TAU / 6.0
-		var faces: Array
-		if fine:
-			var low_a := Vector3(cos(a) * 0.86, -0.42, sin(a) * 0.86)
-			var low_b := Vector3(cos(b) * 0.86, -0.42, sin(b) * 0.86)
-			var high_a := Vector3(cos(a) * 0.80, 0.42, sin(a) * 0.80)
-			var high_b := Vector3(cos(b) * 0.80, 0.42, sin(b) * 0.80)
-			faces = [Vector3.DOWN, low_b, low_a, low_a, high_b, high_a, low_a, low_b, high_b, high_a, high_b, Vector3.UP]
-		else:
-			var ring_a := Vector3(cos(a) * 0.95, -0.06, sin(a) * 0.95)
-			var ring_b := Vector3(cos(b) * 0.95, -0.06, sin(b) * 0.95)
-			faces = [Vector3.DOWN * 0.42, ring_b, ring_a, ring_a, ring_b, Vector3.UP * 0.46]
-		for v: Vector3 in faces:
-			st.set_normal(v.normalized())
-			st.add_vertex(v)
+	var lobes: Array = LOBES[kind]
+	for index in lobes.size():
+		var c: Vector3 = lobes[index][0]
+		var r: Vector3 = lobes[index][1]
+		var top := Vector3(0, 1.0, 0)
+		var bottom := Vector3(0, -0.7, 0)
+		for i in 6:
+			var a := (float(i) + 0.5 * (index % 2)) * TAU / 6.0
+			var b := (float(i + 1) + 0.5 * (index % 2)) * TAU / 6.0
+			var ring_a := Vector3(cos(a), -0.12, sin(a))
+			var ring_b := Vector3(cos(b), -0.12, sin(b))
+			for v: Vector3 in [top, ring_a, ring_b, bottom, ring_b, ring_a]:
+				var local := Vector3(v.x * r.x, v.y * r.y, v.z * r.z)
+				st.set_normal((v * Vector3(1.0, 0.8, 1.0)).normalized())
+				st.set_uv(Vector2(c.x, c.z))
+				st.set_uv2(Vector2(index * 4.0 + c.y + 1.0, v.y))
+				st.add_vertex(c + local)
 	return st.commit()
 
 static func cover(w: WorldData, f: Dictionary, i: int, x: float, y: float) -> float:
@@ -200,6 +334,7 @@ static func sample_cover(values: PackedFloat32Array, x: float, y: float) -> floa
 
 static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, regions: Dictionary, coverage := PackedFloat32Array()) -> Dictionary:
 	var raw: Array = []
+	var scrub: Array = []
 	var side := OuterLand.C + 3
 	for y in range(4, OuterLand.C, 8):
 		for x in range(4, OuterLand.C, 8):
@@ -207,7 +342,9 @@ static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, re
 			if Rect2i(0, 0, w.W, w.H).has_point(cell): continue
 			var i := (y + 1) * side + x + 1
 			var amount := sample_cover(coverage, x, y) if not coverage.is_empty() else cover(w, f, i, cell.x, cell.y)
-			if amount < 0.15: continue
+			if amount < 0.15:
+				_outer_scrub(w, h, key, f, regions, x, y, amount, scrub)
+				continue
 			var kind := Biomes.T_PINE if f.biome[i] == Biomes.TAIGA else Biomes.T_OAK
 			for j in 3:
 				var u := WGRandom.hash2(cell.x, cell.y, 135 + j)
@@ -219,5 +356,29 @@ static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, re
 				var ground := RegionStream.snapshot_ground(w, h, regions, p.x, p.y)
 				if ground < 1.0: continue
 				var radius := lerpf(4.0, 10.0, amount) * lerpf(0.8, 1.1, u)
-				raw.append([Vector3(p.x, ground + 14.0 + v * 4.0, p.y), Vector3(radius, 6.0 + u * 4.0, radius), tint(kind, j)])
-	return pack(raw)
+				var height := 16.0 + v * 4.0
+				raw.append([Vector3(p.x, ground + height * 0.62, p.y), Vector3(radius, height * 0.33, radius), tint(kind, j), 3, 0.0])
+	return pack(raw, scrub)
+
+## Outer land: the same community rule on the 32 m grid of the forest samples (4 samples of 12 m around each).
+static func _outer_scrub(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, regions: Dictionary, x: int, y: int,
+		amount: float, out: Array) -> void:
+	var side := OuterLand.C + 3
+	for sub in [Vector2i(-2, -2), Vector2i(1, -2), Vector2i(-2, 1), Vector2i(1, 1)]:
+		var lx: int = x + sub.x
+		var ly: int = y + sub.y
+		var k: int = (ly + 1) * side + lx + 1
+		if f.path[k] != 0 or f.river[k] != 0: continue
+		var cell: Vector2i = key * OuterLand.C + Vector2i(lx, ly)
+		var moist: float = f.moist[k] if f.has("moist") else 0.5
+		var light: float = f.light[k] if f.has("light") else 0.6
+		var elev: float = OuterLand._saved_elev(f, k)
+		var slope: float = f.slope[k]
+		var rock := StageVegetation.Surface.exposure(elev, slope, moist)
+		var site := scrub_site(w.seed_num, cell.x, cell.y, f.biome[k], Floor.ground_moisture(moist, f.dw[k]), light, slope, elev, rock,
+			float(f.dw[k]), smoothstep(0.02, 0.14, amount) * 0.6)
+		if site.is_empty(): continue
+		var p: Vector2 = site.at
+		var ground := RegionStream.snapshot_ground(w, h, regions, p.x, p.y)
+		if ground < 1.0: continue
+		out.append(_scrub_item(site, p, ground))

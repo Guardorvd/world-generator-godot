@@ -198,6 +198,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
+	RenderingServer.global_shader_parameter_set("veg_seeds", community_seeds(w.seed_num))
 	for kind in defs:
 		var def: Dictionary = defs[kind]
 		var entry := {leaves = def.get("leaves", []), box = AABB(), ref = def.get("ref", 1.0)}
@@ -1974,6 +1975,15 @@ func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunl
 	for c in Understory.COMMUNITIES:
 		q[1 + c] = roundi(com[c] * 255.0)
 	return q
+
+
+## 12.11.2026: сиды шума сообществ для шейдера рельефа (тон земли вдали): как в _open_community, 32 бита со знаком
+static func community_seeds(seed_num: int) -> Vector4i:
+	var out: Array[int] = []
+	for offset in [0, 17, 31, 41]:
+		var s: int = ((seed_num ^ 8803) + offset) & WGRandom.MASK
+		out.append(s - 0x100000000 if s >= 0x80000000 else s)
+	return Vector4i(out[0], out[1], out[2], out[3])
 
 
 ## 16.0: плавный шум по клеткам: значения в узлах решётки шага scale клеток, сглаженная интерполяция

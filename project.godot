@@ -214,6 +214,10 @@ veg_center={
 "type": "vec2",
 "value": Vector2(0, 0)
 }
+veg_seeds={
+"type": "ivec4",
+"value": Vector4i(0, 0, 0, 0)
+}
 vegetation_clock={
 "type": "float",
 "value": 1.0
