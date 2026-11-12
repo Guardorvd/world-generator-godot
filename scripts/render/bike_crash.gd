@@ -9,6 +9,7 @@ extends Node3D
 const BALANCE := 0.22   # потеря равновесия: велосипед заваливается, седок ещё на нём, с
 const LIE_MIN := 1.0    # тело лежит не меньше этого, с
 const LIE_MAX := 2.4    # запасной срок для нестабильной позы у опоры, с
+const LIE_HARD := 6.0   # жёсткий предел падения, с: тело на выступе выше NEAR_GROUND не должно держать игрока вечно
 const RECOVER := 0.45   # пауза подъёма перед пешим управлением
 const RECOVER_MAX := 2.5 # с: дольше игрока к месту не «везём», дальше — перенос сразу
 const SETTLE := 0.2     # остановка должна держаться, а не быть одним тактом в верхней точке полёта
@@ -191,7 +192,7 @@ func tick(dt: float, b: BikeRide, w: WorldData, heights: Heightfield) -> bool:
 			var lying := head.global_position.y - _support_height(head.global_position, heights) < 0.45
 			var settled := near_ground and lying and hips.linear_velocity.length() < 0.8 and head.linear_velocity.length() < 0.8 and hips.angular_velocity.length() < 1.0 and _bike_body.linear_velocity.length() < 0.8
 			_settled_time = _settled_time + dt if settled else 0.0
-			if ((t >= LIE_MIN and _settled_time >= SETTLE) or (t >= LIE_MAX and near_ground)) and t >= _recover_retry:
+			if ((t >= LIE_MIN and _settled_time >= SETTLE) or (t >= LIE_MAX and near_ground) or t >= LIE_HARD) and t >= _recover_retry:
 				_begin_recover(b, w, heights)
 		Phase.RECOVER:
 			if t >= _recover_time:
