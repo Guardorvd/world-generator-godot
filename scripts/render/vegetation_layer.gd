@@ -1156,6 +1156,8 @@ func _discard_partial(built: Dictionary) -> void:
 	if cursor == 0:
 		return
 	var chunk: Vector2i = built.chunk
+	if built.has("outer") and world.outer != null:
+		world.outer.veg.erase(chunk)   # деревья за краем области передаются в начале переноса: без чанка их там быть не должно
 	for i in cursor:
 		var key := Vector3i(chunk.x, chunk.y, built.entries[i].get("key_kind", built.entries[i].kind))
 		if veg.has(key):
