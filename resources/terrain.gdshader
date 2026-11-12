@@ -149,6 +149,8 @@ float wg_vnoise(vec2 cell, float scale, int seed) {
 void vertex() {
 	wpos =(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	// 12.11: тень облаков — в вершине (сетка 4 м, пятна 160 м; ошибка линейной интерполяции < 1 %), а не 20 хэшей на пиксель.
+	surface_cloud = cloud_light(wpos.xz + world_offset);
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.
 	road_detail = surface_detail[clamp(int(round(UV2.y)), 0, 7)];
 	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
@@ -742,7 +744,6 @@ void fragment() {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
 	ALBEDO = col * (1.0 + v);
-	surface_cloud = cloud_light(p);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
 	AO = sky;
