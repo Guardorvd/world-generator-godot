@@ -113,12 +113,22 @@ func release_motion() -> void:
 ## и повторное нажатие в ту же сторону продолжает дугу (раньше каждое начиналось заново с KEY_STEER_TAP и
 ## нажатия по 0,25 с держали руль не выше 0,44). Крупная дуга отпускается чуть мягче мелкой правки.
 ## 31.10: короткое нажатие сильнее и быстрее (было 0,22 и 18/с): на 13 м/с нажатие 0,1 с доворачивало на 2°.
-const KEY_STEER_TAP := 0.45
-const KEY_STEER_RAMP := 0.55 # curvature builds gradually while the initial correction arrives promptly
-## 31.10: на малой скорости (подъём, серпантин) полный руль набирается быстрее: там нужен крутой поворот сразу,
-## а 0,55 с до полного руля — 3 м по прежней линии. Между этими скоростями, м/с, — от KEY_STEER_RAMP_SLOW к RAMP.
-const KEY_STEER_RAMP_SLOW := 0.22
-const KEY_STEER_RAMP_PACE := Vector2(4.0, 14.0)
+## 12.11: форма команды перевёрнута. Нажатие — резкий доворот полным рулём (KEY_STEER_KICK): им объезжают
+## препятствие и правят линию на любой скорости. Удержание после KEY_KICK_TIME мягко отпускает руль до
+## KEY_STEER_HOLD — широкая устойчивая дуга (на малой скорости руль остаётся полным: серпантин, подъём).
+## Если клавишу держат дольше KEY_PRESS_FROM, дуга плавно дожимается до полной к KEY_PRESS_FULL — долгий поворот
+## срабатывает всегда. Раньше было наоборот: нажатие давало 0,45 руля, полный набирался за 0,55 с, и на 18 м/с
+## короткое нажатие доворачивало на 3,7°.
+const KEY_STEER_KICK := 1.0
+const KEY_STEER_KICK_FAST := 0.8 # на большой скорости доворот чуть мягче: полный руль с полным тормозом ронял на 18 м/с
+const KEY_KICK_PACE := Vector2(13.0, 20.0)
+const KEY_KICK_TIME := 0.14   # с: столько держится резкий доворот
+const KEY_KICK_FADE := 0.3    # с: за столько он переходит в дугу удержания
+const KEY_STEER_HOLD := 0.6   # руль широкой дуги на скорости
+const KEY_HOLD_PACE := Vector2(4.0, 12.0) # м/с: ниже — удержание полным рулём, выше — KEY_STEER_HOLD
+const KEY_STEER_CROSS := 0.3  # цель руля, пока он ещё на прежней стороне (перекладка)
+const KEY_PRESS_FROM := 0.9   # с удержания: отсюда дуга дожимается
+const KEY_PRESS_FULL := 2.0   # и здесь она полная
 const KEY_STEER_RESPONSE := 26.0
 const KEY_STEER_RELEASE := 14.0
 const KEY_STEER_ARC_RELEASE := 6.0 # отпускание заложенной дуги (руль больше половины)
@@ -154,13 +164,16 @@ func bike_steer(raw: float, dt: float, pace := 0.0) -> float:
 		_key_direction = raw
 	else:
 		_key_hold += dt
-	var ramp := lerpf(KEY_STEER_RAMP_SLOW, KEY_STEER_RAMP, smoothstep(KEY_STEER_RAMP_PACE.x, KEY_STEER_RAMP_PACE.y, absf(pace)))
-	var strength := lerpf(KEY_STEER_TAP, 1.0, smoothstep(0.0, ramp, _key_hold))
+	var hold := lerpf(1.0, KEY_STEER_HOLD, smoothstep(KEY_HOLD_PACE.x, KEY_HOLD_PACE.y, absf(pace)))
+	hold = lerpf(hold, 1.0, smoothstep(KEY_PRESS_FROM, KEY_PRESS_FULL, _key_hold))
+	var kick := lerpf(KEY_STEER_KICK, KEY_STEER_KICK_FAST, smoothstep(KEY_KICK_PACE.x, KEY_KICK_PACE.y, absf(pace)))
+	var strength := lerpf(maxf(kick, hold), hold, smoothstep(KEY_KICK_TIME, KEY_KICK_TIME + KEY_KICK_FADE, _key_hold))
 	var target := raw * strength
 	var reversing := raw * _key_steer < 0.0
 	var rate := KEY_STEER_RESPONSE
 	if reversing:
 		rate = KEY_STEER_RELEASE
+		target = raw * KEY_STEER_CROSS # через нейтраль без рывка; резкий доворот начинается уже на новой стороне
 	elif is_zero_approx(raw):
 		rate = lerpf(KEY_STEER_RELEASE, KEY_STEER_ARC_RELEASE, smoothstep(0.3, 0.8, absf(_key_steer)))
 	_key_steer = lerpf(_key_steer, target, Util.damp(rate, dt))
