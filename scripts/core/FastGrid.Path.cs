@@ -294,10 +294,19 @@ public partial class FastGrid
 		if (_pending != null && _pendingQuery.Same(q))
 		{
 			long waited = System.Diagnostics.Stopwatch.GetTimestamp();
-			var found = _pending.Result;
-			_prefetchWaitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - waited;
-			_pending = null;
-			_pendingQuery = null;
+			Found found = null;
+			try { found = _pending.Result; }
+			catch (AggregateException e)
+			{
+				// Фоновый поиск упал: результата нет, обычный поиск ниже выполнит запрос заново.
+				Godot.GD.PushError("FastGrid: фоновый поиск пути завершился ошибкой: " + e.GetBaseException().Message);
+			}
+			finally
+			{
+				_prefetchWaitTicks += System.Diagnostics.Stopwatch.GetTimestamp() - waited;
+				_pending = null;
+				_pendingQuery = null;
+			}
 			if (found != null)
 			{
 				Remember(found);
@@ -356,12 +365,23 @@ public partial class FastGrid
 		if (_pending == null)
 			return;
 		_cancel = true;
-		_pending.Wait();
-		// Раскрытия фонового поиска уже учтены в Run; здесь — был ли он закончен впустую или прерван.
-		if (_pending.Result == null) _prefetchCancelled++;
-		else _prefetchUnused++;
-		_pending = null;
-		_pendingQuery = null;
+		try
+		{
+			_pending.Wait();
+			// Раскрытия фонового поиска уже учтены в Run; здесь — был ли он закончен впустую или прерван.
+			if (_pending.Result == null) _prefetchCancelled++;
+			else _prefetchUnused++;
+		}
+		catch (AggregateException e)
+		{
+			Godot.GD.PushError("FastGrid: фоновый поиск пути завершился ошибкой: " + e.GetBaseException().Message);
+		}
+		finally
+		{
+			// Иначе упавшая задача ломала бы FastGrid до перезапуска: каждый следующий вызов снова бросал бы исключение.
+			_pending = null;
+			_pendingQuery = null;
+		}
 	}
 
 	/// <summary>Копия Pathfinder.can_reach: false, только если FindPath с этими входами точно не найдёт пути
