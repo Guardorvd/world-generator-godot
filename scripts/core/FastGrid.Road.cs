@@ -550,7 +550,7 @@ public partial class FastGrid
 	public Godot.Collections.Dictionary RoadVertices(Vector2[] points, double[] nearest, int width, int height,
 		double tile, float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin,
 		double[] segments, double[] fits, double[] corridor, double[] surfaces, int[] structureStarts, double[] structures,
-		double steepLo, double steepHi, double waterGap, bool simd, byte[] authoredRoutes)
+		double steepLo, double steepHi, double waterGap, bool simd, byte[] authoredRoutes, double step)
 	{
 		int count = points.Length;
 		var bases = new double[count]; var delta = new double[count]; var influence = new double[count];
@@ -612,7 +612,7 @@ public partial class FastGrid
 			int fitCount = (int)segments[at + 14];
 			if (fitCount > 0)
 			{
-				double station = Math.Clamp(segments[at + 11] + u * Math.Sqrt(segments[at + 4]), 0.0, fitCount - 1.0);
+				double station = Math.Clamp((segments[at + 11] + u * Math.Sqrt(segments[at + 4])) / step, 0.0, fitCount - 1.0);
 				int j = Math.Min(fitCount - 2, (int)Math.Floor(station)), offset = (int)segments[at + 13] + j * 3;
 				double f = station - j;
 				double level = RoadLerp(fits[offset], fits[offset + 3], f);
@@ -624,7 +624,7 @@ public partial class FastGrid
 			if (corCount > 0)
 			{
 				double gain = pin * RoadReliefEdge(points[n], width, height, tile);
-				relief[n] = RoadCorridorShape(corridor, (int)segments[at + 15], corCount, segments[at + 11] + u * Math.Sqrt(segments[at + 4]),
+				relief[n] = RoadCorridorShape(corridor, (int)segments[at + 15], corCount, (segments[at + 11] + u * Math.Sqrt(segments[at + 4])) / step,
 					side, distance, half, noise, x + origin.X, z + origin.Y, out double section, out double bank) * gain;
 				RoadCorridorColor(ref colors[n], section, bank, gain);
 			}
