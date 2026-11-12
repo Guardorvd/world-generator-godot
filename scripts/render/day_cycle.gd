@@ -205,7 +205,6 @@ func apply(hour: float, time: float) -> void:
 	# World anchored: bicycle bob and climbing never drag the fog layer.
 	env.fog_height = MIST_TOP
 	env.adjustment_saturation = s[13]
-	light.shadow_opacity = s[14]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
 	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
 	var seed_phase := float(posmod(world_seed, 997)) * 0.13

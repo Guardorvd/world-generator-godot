@@ -28,8 +28,8 @@ func setup() -> void:
 		assert(script.reload() == OK)
 		cycle = script.new(environment, sun)
 	else:
-		preload("res://scripts/render/lighting_quality.gd").apply(environment, sun, int(Dev.arg("quality", "1")), true)
 		cycle = DayCycle.new(environment, sun)
+		preload("res://scripts/render/lighting_quality.gd").apply(environment, sun, int(Dev.arg("quality", "1")), true)
 		cycle.cloud_cover_override = float(Dev.arg("cover", "-1"))
 	cycle.camera = camera
 	var base_image := Image.create(16, 16, false, Image.FORMAT_RGB8)

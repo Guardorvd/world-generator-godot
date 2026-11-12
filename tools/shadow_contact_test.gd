@@ -72,7 +72,7 @@ func setup() -> void:
 	day.apply(12, 0)
 	check(is_equal_approx(sun.shadow_normal_bias, 1.2), "дневное смещение теней сохранено")
 	day.apply(17.65, 0)
-	check(sun.shadow_normal_bias <= DayCycle.SHADOW_NORMAL_LOW + 0.001, "у горизонта тень не отодвигается большим normal bias")
+	check(is_equal_approx(sun.shadow_normal_bias, DayCycle.SHADOW_NORMAL_BIAS), "у горизонта сохраняется фиксированное смещение теней")
 	check(sun.basis.z.is_equal_approx(DayCycle.sun_direction(17.65)), "свет направлен от настоящего положения солнца")
 	var first := DayCycle.sun_direction(17)
 	var last := DayCycle.sun_direction(17.65)

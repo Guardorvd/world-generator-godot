@@ -1,8 +1,13 @@
 extends RefCounted
-## One quality policy for the game and capture tools. No changes to vegetation
-## density, shadow proxies or LOD ranges. Medium is the baseline GPU budget.
+## One quality policy for the game and capture tools. Medium is the baseline GPU budget.
+const SKY_SHADER := preload("res://resources/sky.gdshader")
+
 static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows: bool) -> void:
 	level = clampi(level, 0, 2)
+	if env.sky != null:
+		var material := env.sky.sky_material as ShaderMaterial
+		if material != null and material.shader == SKY_SHADER:
+			material.set_shader_parameter("cumulus_steps", 5 if level == 2 else 2)
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	sun.shadow_enabled = shadows
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if level == 0 else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS

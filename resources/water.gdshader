@@ -84,6 +84,11 @@ void fragment() {
 	behind /= behind.w;
 	vec3 ground = (INV_VIEW_MATRIX * behind).xyz;
 	float thickness = max(0.0, world_position.y - ground.y);
+	// Нулевая глубина (reverse Z) означает открытое небо за океаном.
+	// Для реального дна сохраняем вычисленную толщину и береговое затухание.
+	if (ocean && depth == 0.0) {
+		thickness = 10.0;
+	}
 	float absorption = 1.0 - exp(-thickness * 1.15);
 	float shoal = 1.0 - smoothstep(0.18, 1.2, thickness);
 	// Пересечения с видимыми камнями, опорами и берегом: дробящаяся рябь в мелкой воде.

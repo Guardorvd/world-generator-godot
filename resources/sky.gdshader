@@ -5,7 +5,7 @@
 // 7.9 / 15.0: живые объёмные облака в три яруса на сферическом куполе атмосферы:
 // 1) высокие перистые «когти/перья» (cirrus uncinus) с ветровым изгибом и перисто-кучевая рябь («барашки»);
 // 2) средний ярус — высококучевые гряды и волны (altocumulus), дольше удерживающие закатный свет;
-// 3) нижний объёмный ярус (5-шаговый марш сквозь толщу) — разнообразные кучевые облака от лёгких плоских
+// 3) нижний объёмный ярус (марш сквозь толщу) — разнообразные кучевые облака от лёгких плоских
 //    облаков хорошей погоды (humilis) и ветровых валов (stratocumulus) до мощных клубящихся башен (congestus)
 //    с ровной тёмной подошвой конденсации, кудрявыми вершинами, рваными краями (fractus), живой конвекцией,
 //    фазовым рассеянием Ми (серебристая кромка у солнца и луны), законом Бугера — Порошка и подсветкой снизу на заре.
@@ -24,6 +24,7 @@ uniform vec3 moon_dir = vec3(0.0, -0.7, -0.7);
 uniform float night = 0.0;                       // 0 днём, 1 ночью: звёзды и луна
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
+uniform int cumulus_steps : hint_range(2, 5) = 5;
 uniform float cloud_time = 0.0;
 uniform float cloud_seed = 0.0;                  // сид погоды мира: разнообразие форм и гряд
 uniform float star_rot = 0.0;                    // поворот звёздного неба вокруг полюса, рад
@@ -381,8 +382,10 @@ void sky() {
 			}
 
 			// 3. Нижний объёмный ярус: живые кучевые облака (humilis, mediocris, congestus) и валы (stratocumulus)
-			// 5-шаговый марш луча сквозь толщу облачного слоя: от плоской подошвы (lh = 0) до вершин башен (lh = 1)
+			// При меньшем числе выборок каждый шаг покрывает большую часть слоя.
 			vec2 uv_base = sky_uv(d, 0.11);
+			int steps = clamp(cumulus_steps, 2, 5);
+			float step_height = 1.0 / float(steps);
 			float trans = 1.0;
 			vec3 accum = vec3(0.0);
 			float phase = cloud_phase(active_dot);
@@ -396,8 +399,8 @@ void sky() {
 			vec3 top_ambient = mix(cloud_color * 0.96, zenith_color * 1.04, 0.16);
 			vec3 direct_tint = mix(cloud_color * 1.15, warm_sunset * 1.20, low_sun * 0.70);
 
-			for (int i = 0; i < 5; i++) {
-				float lh = (float(i) + 0.5) * 0.2;
+			for (int i = 0; i < steps; i++) {
+				float lh = (float(i) + 0.5) * step_height;
 				// По мере подъёма луча сквозь облачный слой точка пересечения плавно уходит вперёд по взгляду
 				vec2 p_step = uv_base * (1.0 + 0.065 * lh * (1.0 - h * 0.82)) + wind * (1.0 + 0.08 * lh);
 				float tower_h = 0.6;
@@ -439,7 +442,7 @@ void sky() {
 					step_col += active_light_col * silver * thin_edge * 2.2;
 
 					float absorb = (1.55 + 0.85 * (1.0 - lh)) * 0.82;
-					float alpha = 1.0 - exp(-dens * absorb * 3.0);
+					float alpha = 1.0 - exp(-dens * absorb * (15.0 * step_height));
 					accum += trans * step_col * alpha;
 					trans *= 1.0 - alpha;
 					if (trans < 0.02) {

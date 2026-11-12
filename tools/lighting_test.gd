@@ -30,11 +30,14 @@ func _initialize() -> void:
 	var cycle := DayCycle.new(env, sun)
 	for level in 3:
 		Quality.apply(env, sun, level, false)
+		check(cycle.sky_mat.get_shader_parameter("cumulus_steps") == (5 if level == 2 else 2), "cumulus steps follow lighting quality")
 		check(not sun.shadow_enabled, "independent shadow toggle")
 		check(not env.volumetric_fog_enabled and not env.sdfgi_enabled, "no streaming GI or temporal fog")
 		Quality.apply(env, sun, level, true)
 		check(sun.shadow_enabled, "shadows restored")
 		check(sun.directional_shadow_max_distance <= 190.0, "preserve distant caster budget")
+	Quality.apply(env, sun, 1, true)
+	check(cycle.sky_mat.get_shader_parameter("cumulus_steps") == 2, "cumulus steps return to medium from high")
 	for i in 1441:
 		var hour := i / 60.0
 		cycle.apply(hour, 0.0)

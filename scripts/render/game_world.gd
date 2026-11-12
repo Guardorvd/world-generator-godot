@@ -389,8 +389,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	add_child(wind_layer)
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
-	_apply_shadows()
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	_apply_shadows()
 	day.terrain_mats = [$Terrain.material_override]
 	if outer != null and outer._mat != null:
 		day.terrain_mats.append(outer._mat)
