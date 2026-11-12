@@ -73,6 +73,8 @@ static func resolve(r: Dictionary, input: Dictionary) -> Dictionary:
 	var points: Array[Dictionary] = [{x = input.x, y = input.y, e = input.e, w = input.w}]
 	var c := start
 	while true:
+		if cells.size() > levels.size():
+			return {reason = "drainage_cycle"}   # по построению цепочка down ацикличная; защита от зависания, если это нарушится
 		cells.append(c)
 		points.append({x = c.x + 0.5, y = c.y + 0.5, e = levels[c], w = input.w})
 		if not down.has(c): break
