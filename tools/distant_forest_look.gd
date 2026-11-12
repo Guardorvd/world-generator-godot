@@ -69,13 +69,13 @@ func run() -> void:
 	target.x = (best % world.CW + 0.5) * world.CS * GameConfig.TILE
 	target.z = (best / world.CW + 0.5) * world.CS * GameConfig.TILE
 	target.y = heights.ground_at(target.x, target.z) + 12.0
-	for view in 4:
-		var offset: Vector3 = [Vector3(0, 90, -330), Vector3(420, 45, -180), Vector3(-300, 30, -520), Vector3(250, 140, -1000)][view]
+	for view in (0 if "--switch-only" in OS.get_cmdline_user_args() else 6):
+		var offset: Vector3 = [Vector3(0, 90, -330), Vector3(420, 45, -180), Vector3(-300, 30, -520), Vector3(250, 140, -1000), Vector3(0, 90, -330), Vector3(0, 90, -330)][view]
 		var at := target + offset
 		at.y = maxf(at.y, heights.ground_at(at.x, at.z) + 40.0)
 		camera.look_at_from_position(at, target)
 		vegetation.update(at.x, at.z, true)
-		cycle.apply([7.5, 12.0, 17.3, 10.0][view], 0.0)
+		cycle.apply([7.5, 12.0, 17.3, 10.0, 21.0, 0.5][view], 0.0)
 		# Clear panorama variant deliberately reduces ordinary fog in BOTH comparison arms.
 		if "--clear" in OS.get_cmdline_user_args():
 			env_node.environment.fog_density *= 0.35
@@ -101,6 +101,25 @@ func run() -> void:
 			results.append({view = view, enabled = enabled, median_ms = times[12], p95_ms = times[22], gpu_ms = gpu / 24, calls = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME), primitives = Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)})
 			camera.position.x -= 2.4
 			target.x -= 2.4
+	# Runtime quality switch (the same calls the pause menu makes): visibility, ranges, global parameters.
+	var switches: Array = []
+	camera.look_at_from_position(target + Vector3(0, 90, -330), target)
+	cycle.apply(12.0, 0.0)
+	for step: Array in [["flora", 2], ["flora", 0], ["flora", 1], ["flora", 2], ["draw", 0], ["draw", 2]]:
+		if step[0] == "flora": vegetation.set_flora(step[1])
+		else: vegetation.set_draw(step[1])
+		vegetation.update(camera.position.x, camera.position.z, true)
+		for frame in 6: await process_frame
+		var nodes := get_nodes_in_group("distant_forest")
+		var shown := 0
+		for node: MultiMeshInstance3D in nodes:
+			if node.visible: shown += 1
+		var global: Variant = RenderingServer.global_shader_parameter_get("distant_vegetation")
+		if global == null: global = Vector4.ZERO
+		var ranges: Array = [nodes[0].visibility_range_begin, nodes[0].visibility_range_end] if not nodes.is_empty() else []
+		switches.append({step = step, nodes = nodes.size(), visible = shown, state = [Far.active, Far.far_end, Far.near_begin], fine_range = ranges, calls = Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)})
+		print("SWITCH ", JSON.stringify(switches.back()))
+	FileAccess.open(out.path_join("switch.json"), FileAccess.WRITE).store_string(JSON.stringify(switches, "\t"))
 	FileAccess.open(out.path_join("report.json"), FileAccess.WRITE).store_string(JSON.stringify({adapter = RenderingServer.get_video_adapter_name(), renderer = RenderingServer.get_current_rendering_method(), results = results}, "\t"))
 	print(JSON.stringify(results))
 	quit()
