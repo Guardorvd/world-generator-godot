@@ -1,6 +1,7 @@
 extends SceneTree
-## Вид модели велосипеда и седока без мира и без физики: один лист bike_model_sheet.png (2×2) —
-## сбоку, три четверти спереди, игровая камера сзади, стоянка с ногой на земле. Нужно окно, секунды.
+## Вид модели велосипеда и седока без мира и без физики: один лист bike_model_sheet.png (3×2) —
+## сбоку, три четверти спереди, игровая камера сзади, стоянка с ногой на земле, перёд сбоку крупно,
+## перёд с повёрнутым рулём и сжатой вилкой. Нужно окно, секунды.
 ##   godot --path . --script res://tools/bike_model_look.gd -- [--out <папка>] [--tag <суффикс>]
 const DT := 1.0 / 60.0
 var out := ""
@@ -47,10 +48,12 @@ func _initialize() -> void:
 	look.call_deferred()
 
 
-func ride(ticks: int, speed: float, throttle: float, crank_rate: float) -> void:
+func ride(ticks: int, speed: float, throttle: float, crank_rate: float, steer := 0.0, fork := 0.0) -> void:
 	state = BikeRide.new()
 	state.riding = true
 	state.speed = speed
+	state.steer = steer
+	state.squash_f = fork
 	state.crank = 0.9
 	bike.snap(state)
 	for i in ticks:
@@ -80,10 +83,14 @@ func look() -> void:
 	frames.append(await shot(Vector3(0.0, 2.25, 2.85), Vector3(0.0, 1.15, -0.25), 68.0))
 	ride(150, 0.0, 0.0, 0.0)
 	frames.append(await shot(Vector3(-1.7, 1.2, -1.7), Vector3(0, 0.75, 0.0), 42.0))
+	ride(40, 6.0, 1.0, 5.0)
+	frames.append(await shot(Vector3(1.25, 0.8, -0.42), Vector3(0, 0.7, -0.42), 42.0))
+	ride(40, 6.0, 0.0, 0.0, 0.6, 0.08)
+	frames.append(await shot(Vector3(-0.75, 1.15, -1.45), Vector3(0, 0.72, -0.4), 42.0))
 	var size := frames[0].get_size()
-	var sheet := Image.create(size.x * 2, size.y * 2, false, frames[0].get_format())
+	var sheet := Image.create(size.x * 3, size.y * 2, false, frames[0].get_format())
 	for i in frames.size():
-		sheet.blit_rect(frames[i], Rect2i(Vector2i.ZERO, size), Vector2i((i % 2) * size.x, (i / 2) * size.y))
+		sheet.blit_rect(frames[i], Rect2i(Vector2i.ZERO, size), Vector2i((i % 3) * size.x, (i / 3) * size.y))
 	var path := out.path_join("bike_model_sheet" + tag + ".png")
 	sheet.save_png(path)
 	print("Bike model look: ", path)

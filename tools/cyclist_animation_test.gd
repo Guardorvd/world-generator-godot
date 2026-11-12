@@ -142,7 +142,7 @@ func contacts() -> void:
 		var sk := bike.rider.skeleton
 		var foot_pose := sk.get_bone_global_pose(sk.find_bone("Foot" + side))
 		check((foot_pose * CyclistRig.PEDAL_CONTACT_LOCAL).distance_to(bike.to_local(pedal.global_position)) < 0.001, "Foot contact")
-		var grip := bike._steering.position + bike._steering.basis * Vector3(-0.24 if side == "L" else 0.24, 0.22, -0.015)
+		var grip := bike._steering.position + bike._steering.basis * (BikeView.GRIP * Vector3(-1.0 if side == "L" else 1.0, 1, 1) - BikeView.STEERING_PIVOT)
 		check(bone("Hand" + side).distance_to(grip) < 0.001, "Hand contact")
 		var upper_arm := sk.get_bone_global_pose(sk.find_bone("UpperArm" + side)).basis
 		var forearm := sk.get_bone_global_pose(sk.find_bone("Forearm" + side)).basis
