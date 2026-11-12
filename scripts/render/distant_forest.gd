@@ -67,7 +67,7 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 					var rock := kind == Biomes.T_ROCK
 					var half := Vector3(r, r * (0.45 if rock else 0.6), r)
 					raw.append([Vector3(x, ground + half.y * (0.35 if rock else 0.8), z), half,
-						Color(0.5, 0.49, 0.46, 0.0) if rock else tint(Biomes.T_BUSH, w.obj_v[o]) * 0.85, 1, 1.0 if rock else 0.0])
+						Color(0.5, 0.49, 0.46, 0.0) if rock else tint(Biomes.T_BUSH, w.obj_v[o], w.obj_x[o], w.obj_y[o]) * 0.85, 1, 1.0 if rock else 0.0])
 					continue
 				var height: float = ForestModels.NOMINAL.get(kind, 16.0) * size * lerpf(0.92, 1.12, jitter)
 				var conifer := kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE
@@ -78,7 +78,7 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 				var group := cluster_key(Vector2(x, z), centers)
 				wooded[Vector2i(floori(x / (TILE * SCRUB_STEP)), floori(z / (TILE * SCRUB_STEP)))] = true
 				var box := AABB(at - extent, extent * 2.0)
-				var color := tint(kind, w.obj_v[o])
+				var color := tint(kind, w.obj_v[o], w.obj_x[o], w.obj_y[o])
 				if not groups.has(group): groups[group] = {box = box, color = color, count = 1}
 				else:
 					groups[group].box = groups[group].box.merge(box)
@@ -156,7 +156,8 @@ static func _scrub_item(site: Dictionary, p: Vector2, ground: float) -> Array:
 	# Area of the bushes of 9 cells, ~3 m² each; young trees make some thickets taller.
 	var radius := clampf(sqrt(mass * 9.0 * 3.0 / PI), 1.6, 4.2) * lerpf(0.85, 1.15, u)
 	var height := lerpf(1.3, 2.2, u) + float(site.tall) * lerpf(2.0, 4.5, u)
-	var color := Color("5f7f3c") * lerpf(0.9, 1.05, u)
+	# конец лета: заросли оливковые, часть — с рыжиной (как ближние кусты)
+	var color := Color("667c3a").lerp(Color("8a7636"), smoothstep(0.6, 0.95, fposmod(u * 7.31, 1.0)) * (0.2 if site.conifer else 0.7)) * lerpf(0.9, 1.05, u)
 	color.a = 1.0 if site.conifer and site.tall > 0.3 else 0.0
 	if site.juniper:
 		radius *= 1.3
@@ -181,14 +182,14 @@ static func cluster_key(p: Vector2, centers: Dictionary) -> Vector2i:
 	return best
 
 ## Instance colour: rgb is the leaf tint, alpha is the conifer share (the shader narrows conifers into cones).
-static func tint(kind: int, variant: int) -> Color:
+static func tint(kind: int, variant: int, x: float, y: float) -> Color:
 	var color := Color("7ca94e")
 	if kind == Biomes.T_PINE: color = Color("568758")
 	elif kind == Biomes.T_SNOWPINE: color = Color("a1b6aa")
 	elif kind == Biomes.T_BIRCH: color = Color("8caf50")
 	elif kind == Biomes.T_JUNGLE: color = Color("48824a")
 	elif kind == Biomes.T_BUSH: color = Color("6a8c42")
-	color = color * (0.92 + (variant % 3) * 0.06)
+	color = Biomes.leaf_tone(kind, color * (0.92 + (variant % 3) * 0.06), x, y) # тот же тон, что у ближней модели
 	color.a = 1.0 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else 0.0
 	return color
 
@@ -357,7 +358,7 @@ static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, re
 				if ground < 1.0: continue
 				var radius := lerpf(4.0, 10.0, amount) * lerpf(0.8, 1.1, u)
 				var height := 16.0 + v * 4.0
-				raw.append([Vector3(p.x, ground + height * 0.62, p.y), Vector3(radius, height * 0.33, radius), tint(kind, j), 3, 0.0])
+				raw.append([Vector3(p.x, ground + height * 0.62, p.y), Vector3(radius, height * 0.33, radius), tint(kind, j, p.x / TILE, p.y / TILE), 3, 0.0])
 	return pack(raw, scrub)
 
 ## Outer land: the same community rule on the 32 m grid of the forest samples (4 samples of 12 m around each).

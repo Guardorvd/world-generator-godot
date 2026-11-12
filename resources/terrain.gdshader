@@ -222,7 +222,9 @@ void fragment() {
 			float aa = max(length(fwidth(cells)), 0.015);
 			float litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
 			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
-			soil = mix(soil, dry_litter * mix(0.85, 1.2, scatter.x), litter * near * (0.55 - moss * 0.25));
+			// первые опавшие листья: в лиственном лесу часть листьев подстилки жёлтая
+				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), vec3(0.50, 0.33, 0.05), step(0.74, scatter.x) * (1.0 - forest.g) * 0.85);
+				soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
 		}
 		col = mix(col, soil, cover * (0.62 + patch * 0.25));
 		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
@@ -278,8 +280,16 @@ void fragment() {
 		float drift = smoothstep(0.28, 0.72, n_macro * 0.55 + n_big * 0.45);
 		vec3 c0 = col;
 		if (veg > 0.01) {
-			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8 + stony * 0.28 - damp * 0.3, 0.0, 1.0);
+			// 12.11.2026: конец лета. Тёплая зелень умеренных биомов (луг, лиственный лес, степь, тундра; по цвету
+			// карты: красного больше синего) зрелая: тон глуше и оливковее, сухие поляны выгорают в солому и охру.
+			// Сочная зелень остаётся в сырых низинах и у воды. Тайга и джунгли (холодная зелень) — как были.
+			float season = smoothstep(-0.005, 0.03, base_col.r - base_col.b);
+			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8 + stony * 0.28 - damp * 0.3 + season * 0.08, 0.0, 1.0);
 			vec3 turf = c0 * mix(vec3(0.80, 0.97, 0.84), vec3(1.20, 1.07, 0.74), dryness);
+			float turf_l = dot(turf, vec3(0.3, 0.55, 0.15));
+			turf = mix(turf, turf_l * vec3(1.06, 0.98, 0.62), season * mix(0.36, 0.5, dryness) * (1.0 - damp * 0.6));
+			float ripe = smoothstep(0.30, 0.82, dryness + (n_mid - 0.5) * 0.22 + (n_zone - 0.5) * 0.3) * season * (1.0 - damp * 0.85);
+			turf = mix(turf, turf_l * vec3(1.42, 1.20, 0.40), ripe * 0.42);
 			float clump = smoothstep(0.34, 0.70, n_mid * 0.6 + n_fine * 0.4);
 			turf *= mix(0.88, 1.09, clump);
 			// участки видны и вдали: каменистый — реже и землистее, сырой — гуще и темнее
