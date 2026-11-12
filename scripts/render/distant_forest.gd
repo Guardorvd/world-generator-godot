@@ -348,6 +348,14 @@ static func sample_cover(values: PackedFloat32Array, x: float, y: float) -> floa
 	var k := iy * 9 + ix
 	return lerpf(lerpf(values[k], values[k + 1], tx), lerpf(values[k + 9], values[k + 10], tx), ty)
 
+## 12.11.2026: клетка куска за краем плана — вода (озеро закреплённой области, море или дно ниже метра, как у меша
+## OuterTerrain). Прежняя проверка шла по высоте плана у края, а не по самой клетке: на воде вдали стояли кроны и заросли.
+static func _outer_wet(f: Dictionary, index: int) -> bool:
+	if f.has("water") and is_finite(f.water[index]): return true
+	var bi: int = f.biome[index]
+	var sea := bi == Biomes.SHALLOW or bi == Biomes.OCEAN or bi == Biomes.DEEP
+	return Heightfield.outer_meters(f.h[index], not sea) < 1.0
+
 static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, regions: Dictionary, coverage := PackedFloat32Array()) -> Dictionary:
 	var raw: Array = []
 	var scrub: Array = []
@@ -368,7 +376,7 @@ static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, re
 				var p := (Vector2(cell) + Vector2(u - 0.5, v - 0.5) * 5.0) * TILE
 				var at := Vector2i((p / TILE).floor()) - key * OuterLand.C + Vector2i.ONE
 				var index := at.y * side + at.x
-				if f.path[index] != 0 or f.river[index] != 0 or Biomes.LIST[f.biome[index]].get("water", false): continue
+				if f.path[index] != 0 or f.river[index] != 0 or Biomes.LIST[f.biome[index]].get("water", false) or _outer_wet(f, index): continue
 				var ground := RegionStream.snapshot_ground(w, h, regions, p.x, p.y)
 				if ground < 1.0: continue
 				var radius := lerpf(4.0, 10.0, amount) * lerpf(0.8, 1.1, u)
@@ -395,6 +403,8 @@ static func _outer_scrub(w: WorldData, h: Heightfield, key: Vector2i, f: Diction
 			float(f.dw[k]), smoothstep(0.02, 0.14, amount) * 0.6)
 		if site.is_empty(): continue
 		var p: Vector2 = site.at
+		var at := (Vector2i((p / TILE).floor()) - key * OuterLand.C + Vector2i.ONE).clamp(Vector2i.ZERO, Vector2i.ONE * (side - 1))
+		if _outer_wet(f, at.y * side + at.x): continue
 		var ground := RegionStream.snapshot_ground(w, h, regions, p.x, p.y)
 		if ground < 1.0: continue
 		out.append(_scrub_item(site, p, ground))
