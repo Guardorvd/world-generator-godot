@@ -741,8 +741,6 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 		if cost[i] == INF and (ocean[i] != 0 or lake[i] != 0 or river[i] != 0):
 			road_cost[i] = BRIDGE_COST + edge_cost(_plan_edge_gap(w, i)) if reach[i] <= BRIDGE_REACH else INF
 	_part("roads_setup", setup_us)
-	var tries := PackedInt32Array()
-	tries.resize(n)
 	var budgets := PackedInt32Array()
 	budgets.resize(n)
 	budgets.fill(w.N * 2)
@@ -800,7 +798,6 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 			continue
 		attempts += 1
 		tried[_key(a, b)] = true
-		tries[b] += 1
 		var distance := Grid.hypot(st[a].x - st[b].x, st[a].y - st[b].y)
 		if step.is_valid():
 			step.call(0.66 + 0.03 * (connected - 1) / maxi(1, n - 1), "Дороги между поселениями: %d/%d · проверка места %d" % [connected - 1, maxi(0, n - 1), attempts])
@@ -1059,12 +1056,15 @@ static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
 	record.pts = _dedupe(road_pts)
 	w.generation.road_cells[e] = cells.slice(k0, k1 + 1)
 	var owner := w.generation.road_owner
+	var on_road := {}   # клетки дороги: множество вместо PackedInt32Array.has на каждую клетку (было квадратично)
+	for c: int in w.generation.road_cells[e]:
+		on_road[c] = true
 	for part: Array in parts:
 		var index := w.trails.size()
 		w.trails.append({kind = "trail", pts = part[0]})
 		w.generation.road_cells.append(part[1])
 		for c: int in part[1]:
-			if owner[c] == e and not (w.generation.road_cells[e] as PackedInt32Array).has(c): owner[c] = index
+			if owner[c] == e and not on_road.has(c): owner[c] = index
 	w.generation.road_owner = owner
 	Grid.stamp_path(w.path_mask, w.W, w.H, record.pts, 3, WIDTHS.road * 0.5 - Grid.PATH_IN)
 

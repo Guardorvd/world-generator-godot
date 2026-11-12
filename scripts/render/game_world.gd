@@ -114,9 +114,6 @@ var _cam_y: float:
 var _cam_dist: float:
 	get: return camera_controller._cam_dist
 	set(value): camera_controller._cam_dist = value
-var _bob_amp: float:
-	get: return camera_controller._bob_amp
-	set(value): camera_controller._bob_amp = value
 var _dip: float:
 	get: return camera_controller._dip
 	set(value): camera_controller._dip = value
@@ -126,19 +123,10 @@ var _dip_v: float:
 var _trauma: float:
 	get: return camera_controller._trauma
 	set(value): camera_controller._trauma = value
-var _cam_lead: float:
-	get: return camera_controller._cam_lead
-	set(value): camera_controller._cam_lead = value
 var _moving := false    # игрок шёл в последнем такте (для покачивания камеры)
 var _prev: Vector3:
 	get: return camera_controller._prev
 	set(value): camera_controller._prev = value
-var _prev_bob: float:
-	get: return camera_controller._prev_bob
-	set(value): camera_controller._prev_bob = value
-var _prev_dip: float:
-	get: return camera_controller._prev_dip
-	set(value): camera_controller._prev_dip = value
 var _prev_time: float:
 	get: return camera_controller._prev_time
 	set(value): camera_controller._prev_time = value
@@ -1180,7 +1168,12 @@ func _finish_opening() -> void:
 	_opening = false
 	_opening_time = 0.0
 	if is_instance_valid(_opening_caption):
-		_opening_caption.queue_free()
+		# вместе с пустым CanvasLayer, в который подпись вложена
+		var caption_layer := _opening_caption.get_parent()
+		if caption_layer is CanvasLayer:
+			caption_layer.queue_free()
+		else:
+			_opening_caption.queue_free()
 	# Тот же велосипед, скорость и камера: никаких переносов при передаче управления.
 	_rescue_input_until = time + 0.2
 	hud.visible = not paused

@@ -21,14 +21,20 @@ static func _replace(path: String, bytes: PackedByteArray, preserve_backup: bool
 	f.flush()
 	err = f.get_error()
 	f.close()
-	if err != OK: return err
+	if err != OK:
+		DirAccess.remove_absolute(tmp)   # не оставлять недописанный временный файл
+		return err
 	# Bounded verification buffer instead of another complete file-sized allocation.
-	if digest_file(tmp) != Util.sha256(bytes): return ERR_FILE_CORRUPT
+	if digest_file(tmp) != Util.sha256(bytes):
+		DirAccess.remove_absolute(tmp)
+		return ERR_FILE_CORRUPT
 	# Readers hold the same lock while the file is open: on Windows a rename over an open file fails,
 	# and a reader between the two renames would see no primary and fall to a stale backup.
 	_swap.lock()
 	err = _rotate(path, tmp, preserve_backup)
 	_swap.unlock()
+	if err != OK and FileAccess.file_exists(tmp):
+		DirAccess.remove_absolute(tmp)
 	return err
 
 ## Hold while a cache file is open for reading (open to close), so rotation never overlaps it.

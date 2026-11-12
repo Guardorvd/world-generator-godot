@@ -239,7 +239,8 @@ func update(x: float, z: float) -> bool:
 		timing.publish_ms = (Time.get_ticks_usec() - publish_started) / 1000.0
 		timing.complete_ms = Time.get_ticks_msec() - pending.done.trail_started
 		stats.max_publish_ms = maxf(stats.get("max_publish_ms", 0.0), timing.publish_ms)
-		print("Region ready ", _key, ": ", timing)
+		if OS.is_debug_build():
+			print("Region ready ", _key, ": ", timing)
 		_persist(_key)
 		return true
 	if _task != -1 and WorkerThreadPool.is_task_completed(_task):

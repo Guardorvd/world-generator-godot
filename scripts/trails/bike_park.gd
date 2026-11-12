@@ -204,12 +204,10 @@ static func _survey(w: WorldData, h: Heightfield, rect: Rect2i) -> Dictionary:
 	height.resize(gw * gh)
 	for gz in gh:
 		for gx in gw:
-			if gx == 0 or gz == 0 or gx == gw - 1 or gz == gh - 1:
-				d[gz * gw + gx] = 0.0
-				continue
 			var cx := rect.position.x + gx * STRIDE
 			var cz := rect.position.y + gz * STRIDE
-			var busy := false
+			# край сетки занят всегда, но уклон и высоту считаем и у него (раньше там оставались нули)
+			var busy := gx == 0 or gz == 0 or gx == gw - 1 or gz == gh - 1
 			var steepness := 0.0
 			for oz in STRIDE:
 				for ox in STRIDE:

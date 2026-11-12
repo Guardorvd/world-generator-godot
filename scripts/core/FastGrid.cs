@@ -70,62 +70,6 @@ public partial class FastGrid : RefCounted
 		return result;
 	}
 
-	/// <summary>
-	/// Заполнение впадин (priority flood) от океана. Копия цикла из StageHydrology._priority_flood.
-	/// Возвращает {filled, down, order, order_n}.
-	/// </summary>
-	public Godot.Collections.Dictionary PriorityFlood(float[] h, byte[] ocean, int W, int H)
-	{
-		int N = W * H;
-		var filled = (float[])h.Clone();
-		var down = new int[N];
-		Array.Fill(down, -1);
-		var order = new int[N];
-		int orderN = 0;
-		var closed = new bool[N];
-		var ids = new int[N + 16];
-		var keys = new double[N + 16];
-		int hn = 0;
-		for (int i = 0; i < N; i++)
-		{
-			int ex = i % W, ey = i / W;
-			if (ocean[i] != 0 || ex == 0 || ey == 0 || ex == W - 1 || ey == H - 1)
-			{
-				closed[i] = true;
-				Push(ids, keys, ref hn, i, h[i]);
-			}
-		}
-		while (hn > 0)
-		{
-			int c = Pop(ids, keys, ref hn);
-			order[orderN++] = c;
-			int cx = c % W, cy = c / W;
-			double fc = filled[c];
-			for (int k = 0; k < 8; k++)
-			{
-				int nx = cx + Dx[k], ny = cy + Dy[k];
-				if (nx < 0 || ny < 0 || nx >= W || ny >= H)
-					continue;
-				int n = ny * W + nx;
-				if (closed[n])
-					continue;
-				closed[n] = true;
-				double hv = h[n];
-				double up = fc + 1e-5;
-				filled[n] = (float)(hv > up ? hv : up);
-				down[n] = c;
-				Push(ids, keys, ref hn, n, filled[n]);
-			}
-		}
-		return new Godot.Collections.Dictionary
-		{
-			["filled"] = filled,
-			["down"] = down,
-			["order"] = order,
-			["order_n"] = orderN,
-		};
-	}
-
 	// ---------- Шум: копия Simplex.noise / fbm / ridged и циклов StageRelief._rows, Parallel.fbm_field ----------
 
 	private static readonly double F2 = 0.5 * (Math.Sqrt(3.0) - 1.0);
@@ -197,22 +141,6 @@ public partial class FastGrid : RefCounted
 			f *= 2.0;
 		}
 		return s / n;
-	}
-
-	private static double Ridged(int[] pm, double x, double y, int oct)
-	{
-		double a = 0.5, f = 1.0, s = 0.0, w = 1.0;
-		for (int o = 0; o < oct; o++)
-		{
-			double v = 1.0 - Math.Abs(Noise(pm, x * f, y * f));
-			v *= v;
-			v *= w;
-			w = Math.Min(1.0, Math.Max(0.0, v * 2.0));
-			s += v * a;
-			f *= 2.1;
-			a *= 0.5;
-		}
-		return s;
 	}
 
 	private static double Clamp01(double v) => v < 0.0 ? 0.0 : (v > 1.0 ? 1.0 : v);
@@ -322,51 +250,5 @@ public partial class FastGrid : RefCounted
 		else
 			for (int j = 0; j < height; j++)
 				row(j);
-	}
-
-	// Двоичная куча (min-heap): та же, что MinHeap.push и развёрнутое извлечение в GDScript
-	private static void Push(int[] ids, double[] keys, ref int hn, int id, double key)
-	{
-		int i = hn++;
-		while (i > 0)
-		{
-			int p = (i - 1) >> 1;
-			if (keys[p] <= key)
-				break;
-			ids[i] = ids[p];
-			keys[i] = keys[p];
-			i = p;
-		}
-		ids[i] = id;
-		keys[i] = key;
-	}
-
-	private static int Pop(int[] ids, double[] keys, ref int hn)
-	{
-		int top = ids[0];
-		hn--;
-		if (hn > 0)
-		{
-			int id = ids[hn];
-			double kk = keys[hn];
-			int i = 0;
-			while (true)
-			{
-				int l = 2 * i + 1;
-				if (l >= hn)
-					break;
-				int r = l + 1;
-				if (r < hn && keys[r] < keys[l])
-					l = r;
-				if (keys[l] >= kk)
-					break;
-				ids[i] = ids[l];
-				keys[i] = keys[l];
-				i = l;
-			}
-			ids[i] = id;
-			keys[i] = kk;
-		}
-		return top;
 	}
 }

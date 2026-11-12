@@ -469,7 +469,13 @@ func _update_selection() -> void:
 	if not latest.data.is_empty():
 		var d: Dictionary = latest.data
 		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s" % [
-			d.visited.size(), d.quest.done, Time.get_datetime_string_from_unix_time(int(d.saved_at)).replace("T", " ") + " UTC"]
+			d.visited.size(), d.quest.done, _local_time_text(int(d.saved_at))]
+
+
+## Время сохранения по часам компьютера (unix-время хранится в UTC)
+static func _local_time_text(unix: int) -> String:
+	var bias: int = Time.get_time_zone_from_system().get("bias", 0)
+	return Time.get_datetime_string_from_unix_time(unix + bias * 60).replace("T", " ")
 
 
 func _on_star_selected() -> void:

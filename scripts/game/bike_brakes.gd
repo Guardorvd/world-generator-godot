@@ -23,7 +23,6 @@ var deceleration := 0.0
 var front_load := 0.5
 var front_force := 0.0
 var rear_force := 0.0
-var grip_used := 0.0
 var skid := 0.0
 var risk := 0.0
 var lift := 0.0 # rear wheel lift expressed as nose-down pitch, radians
@@ -39,7 +38,6 @@ func reset() -> void:
 	front_load = 0.5
 	front_force = 0.0
 	rear_force = 0.0
-	grip_used = 0.0
 	skid = 0.0
 	risk = 0.0
 	lift = 0.0
@@ -66,7 +64,6 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 	front_force = 0.0
 	rear_force = 0.0
 	deceleration = 0.0
-	grip_used = 0.0
 	skid = 0.0
 	var normal_g := GameConfig.GRAVITY / sqrt(1.0 + grade * grade)
 	var capacity := GameConfig.BIKE_GRIP * maxf(grip, 0.0) / sqrt(1.0 + grade * grade)
@@ -100,8 +97,6 @@ func step(dt: float, command: float, speed: float, grade: float, grip: float, co
 		guess = (guess + deceleration) * 0.5
 	_match_forces()
 	front_load = 0.5 + COM_HEIGHT / WHEELBASE * (deceleration / normal_g - lean_grade) - shift / WHEELBASE
-	var total := per_load * (loads.x + loads.y) if loads.x >= 0.0 else available
-	grip_used = clampf(deceleration / maxf(total, 0.001), 0.0, 1.0)
 	skid = clampf((demand - deceleration) / maxf(demand, 0.001), 0.0, 1.0) if grounded and speed > 1.0 else 0.0
 	# Пороги скорости и силы нажатия — плавные: у их границы перегрузка нарастает постепенно, а не включается сразу.
 	var near := smoothstep(MIN_TIP_SPEED - 2.0, MIN_TIP_SPEED + 2.0, speed) * smoothstep(HARD_BRAKE - 0.1, HARD_BRAKE + 0.05, minf(command, pressure))

@@ -7,10 +7,6 @@ const STAR := preload("res://resources/icons/star.svg")
 const STAR_FILLED := preload("res://resources/icons/star_filled.svg")
 const CHECK := preload("res://resources/icons/check.svg")
 const PLAY := preload("res://resources/icons/play.svg")
-const SAVE := preload("res://resources/icons/save.svg")
-const LOAD := preload("res://resources/icons/load.svg")
-const GEAR := preload("res://resources/icons/gear.svg")
-const EXIT := preload("res://resources/icons/exit.svg")
 ## Виды заданий (Quests.KINDS)
 const QUESTS := {
 	visit = preload("res://resources/icons/quest_visit.svg"),
