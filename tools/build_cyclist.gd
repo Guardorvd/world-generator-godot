@@ -1,5 +1,7 @@
 extends SceneTree
-## Модель v7. Пересборка перезаписывает изолированную scenes/cyclist.tscn.
+## Модель v8. Пересборка перезаписывает изолированную scenes/cyclist.tscn.
+## v8 (12.11): шлем закрывает затылок (задняя часть оболочки спускается к шее), шея толще,
+## перчатка с манжетой на запястье (без скачка от тонкого запястья к кулаку).
 ## v5: шлем сидит на голове (ниже и плотнее, козырёк короче и под наклоном), из-под шлема видны волосы,
 ## велотрусы выше колена и открытые голени с носками, рукав джерси короче — у локтя видна рука.
 ## Смена ткани на конечности — одна непрерывная поверхность с узким отворотом (кромка), а не отдельные
@@ -46,7 +48,8 @@ func _init() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 60)
 	rider = CyclistRig.new()
 	rider.name = "Rider"
-	rider.set_meta("model_version", 7)
+	rider.set_meta("model_version", 8)
+	rider.spine_bow = 0.0 # bind-поза — с прямой спиной: оболочка строится вдоль прямой таз–грудь
 	skeleton = Skeleton3D.new()
 	skeleton.name = "Skeleton3D"
 	rider.add_child(skeleton)
@@ -112,7 +115,7 @@ func _init() -> void:
 	var error := packed.pack(rider)
 	if error == OK:
 		error = ResourceSaver.save(packed, "res://scenes/cyclist.tscn")
-	print("Cyclist v7: ", error_string(error), "; surfaces=", mesh.get_surface_count())
+	print("Cyclist v8: ", error_string(error), "; surfaces=", mesh.get_surface_count())
 	quit(error)
 
 
@@ -191,12 +194,12 @@ func _neck() -> void:
 	var axis := (skull - collar).normalized()
 	var basis := Basis(Quaternion(Vector3.UP, axis))
 	var rings: Array[Dictionary] = []
-	for spec: Array in [[0.0, 0.054, 0.056, "Chest", "", 0.0], [0.3, 0.052, 0.055, "Chest", "Neck", 0.5], [0.6, 0.051, 0.055, "Neck", "Head", 0.3], [0.85, 0.056, 0.062, "Neck", "Head", 0.7], [1.0, 0.058, 0.064, "Head", "", 0.0]]:
+	for spec: Array in [[0.0, 0.062, 0.064, "Chest", "", 0.0], [0.3, 0.058, 0.061, "Chest", "Neck", 0.5], [0.6, 0.056, 0.060, "Neck", "Head", 0.3], [0.85, 0.059, 0.065, "Neck", "Head", 0.7], [1.0, 0.060, 0.066, "Head", "", 0.0]]:
 		rings.append(ring(collar.lerp(skull, spec[0]), basis, spec[1], spec[2], spec[3], spec[4], spec[5]))
 	loft(rings, skin)
 	# Воротник джерси: низкая стойка вокруг шеи закрывает гранёный верх торса
 	var band: Array[Dictionary] = []
-	for spec: Vector3 in [Vector3(-0.008, 0.057, 0.059), Vector3(0.012, 0.058, 0.060), Vector3(0.027, 0.055, 0.058)]:
+	for spec: Vector3 in [Vector3(-0.008, 0.066, 0.068), Vector3(0.012, 0.065, 0.067), Vector3(0.027, 0.062, 0.064)]:
 		band.append(ring(collar + axis * spec.x, basis, spec.y, spec.z, "Chest", "Neck", clampf(spec.x / 0.09, 0.0, 0.3)))
 	loft(band, panel)
 
@@ -237,6 +240,43 @@ func _head() -> void:
 	for x in [-0.075, -0.032, 0.032, 0.075]:
 		helmet_strip(x, 0.012, dark)
 	helmet_strip(0.0, 0.012, teal)
+	_helmet_back()
+
+
+## v8: задняя часть шлема. Оболочка от обода спускается по затылку (посередине ниже, к ушам выше) и
+## сужается к голове; снизу — тёмная кромка до кожи головы, чтобы под шлем не было видно насквозь.
+func _helmet_back() -> void:
+	const COLS := 10
+	const ROWS := 3
+	var at := skeleton.get_bone_global_pose(skeleton.find_bone("Head"))
+	var r := ring(Vector3.ZERO, Basis.IDENTITY, 0, 0, "Head")
+	var grid: Array[Dictionary] = []
+	for row in ROWS + 2:
+		for col in COLS + 1:
+			var u := float(col) / COLS * 2.0 - 1.0
+			var angle := PI * 0.5 + u * 1.3
+			var bottom := lerpf(-0.012, HELMET_Y - 0.004, u * u)
+			var t := float(maxi(row - 1, 0)) / ROWS
+			var y := lerpf(bottom, HELMET_Y - 0.004, t)
+			var size := (head_size(y) + Vector2(0.016, 0.026)).lerp(HELMET_R * 1.02, t)
+			var z := lerpf(head_z(y), HELMET_Z, t)
+			if row == 0:
+				size = head_size(y) * 1.01
+			var vertex := {position = at * Vector3(cos(angle) * size.x, y, z + sin(angle) * size.y), bones = r.bones, weights = r.weights}
+			if row > 0:
+				vertex.normal = at.basis * Vector3(cos(angle) / size.x, -0.3 / 0.09 * (1.0 - t), sin(angle) / size.y).normalized()
+			grid.append(vertex)
+	for row in ROWS + 1:
+		for col in COLS:
+			var a := grid[row * (COLS + 1) + col].duplicate()
+			var b := grid[(row + 1) * (COLS + 1) + col].duplicate()
+			var c := grid[row * (COLS + 1) + col + 1].duplicate()
+			var d := grid[(row + 1) * (COLS + 1) + col + 1].duplicate()
+			if row == 0:
+				for v: Dictionary in [a, b, c, d]:
+					v.erase("normal")
+			triangle(a, b, c, navy if row == 0 else helmet)
+			triangle(c, b, d, navy if row == 0 else helmet)
 
 
 func _mask() -> void:
@@ -405,13 +445,18 @@ func _arm(side: float) -> void:
 	rings.append_array([
 		ring(forearm.origin.lerp(hand.origin, 0.38), forearm.basis, 0.046, 0.044, "Forearm" + s, "", 0.0, Vector2(side * 0.002, 0.001)),
 		ring(forearm.origin.lerp(hand.origin, 0.64), forearm.basis, 0.038, 0.035, "Forearm" + s),
-		ring(forearm.origin.lerp(hand.origin, 0.85), forearm.basis, 0.032, 0.029, "Forearm" + s),
-		ring(hand.origin, forearm.basis, 0.030, 0.026, "Forearm" + s),
+		ring(forearm.origin.lerp(hand.origin, 0.80), forearm.basis, 0.033, 0.030, "Forearm" + s),
+		ring(forearm.origin.lerp(hand.origin, 0.804), forearm.basis, 0.038, 0.035, "Forearm" + s),
+		ring(hand.origin, forearm.basis, 0.037, 0.034, "Forearm" + s),
 	])
 	var mats := []
 	for i in root_count + 2:
 		mats.append(teal)
 	mats.append_array([panel, panel])
+	# кожа до запястья, затем манжета перчатки от своей кромки до кулака
+	for i in rings.size() - 1 - mats.size() - 2:
+		mats.append(skin)
+	mats.append_array([navy, navy])
 	loft(rings, skin, null, mats, ARM_SIDES, false)
 	var outer := PI if side < 0 else 0.0
 	var inner := 0.0 if side < 0 else PI

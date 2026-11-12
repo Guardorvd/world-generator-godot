@@ -37,7 +37,7 @@ const BASE_POSES := {
 	},
 	"descent": {
 		hip = Vector3(0.0, 0.028, 0.024), pelvis_pitch = 0.045,
-		chest = Vector3(0.0, -0.034, 0.018), elbow = Vector2(0.76, -0.14), wrist = -0.11,
+		chest = Vector3(0.0, -0.058, 0.018), elbow = Vector2(0.80, -0.10), wrist = -0.11,
 	},
 	"brake": {
 		hip = Vector3(0.0, 0.004, 0.034), pelvis_pitch = 0.055,
@@ -48,6 +48,10 @@ var _bones: Dictionary[String, int] = {}
 var _poses: Dictionary[int, Transform3D] = {}
 var _rig_checked := false
 var _rig_valid := false
+## Изгиб спины дугой (0 — прямая, как в bind-позе; сборщик модели ставит 0 на время сборки).
+var spine_bow := 1.0
+var _hand_rest_l := Basis.IDENTITY # поворот кисти относительно предплечья в хвате: свободная рука держит его же
+var _hand_rest_r := Basis.IDENTITY
 
 
 ## Проверяем контракт один раз до изменения костей, в том числе при сборке сцены инструментом.
@@ -64,6 +68,8 @@ func _bind_skeleton() -> bool:
 			push_warning("CyclistRig: неверная кость или родитель у %s; процедурная поза отключена" % bone_name)
 			return false
 		_bones[bone_name] = index
+	_hand_rest_l = skeleton.get_bone_rest(_bones["HandL"]).basis.orthonormalized()
+	_hand_rest_r = skeleton.get_bone_rest(_bones["HandR"]).basis.orthonormalized()
 	return true
 
 
@@ -99,7 +105,7 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
 ## Поза строится от базовых архетипов (накат, спокойная езда, подъём стоя, спуск, торможение)
 ## с приоритетами над процедурными реакциями и раздельным приёмом переднего (руки) и заднего (ноги, таз) ударов.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
@@ -110,12 +116,20 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		return
 	if not is_finite(foot_down) or not is_finite(ground) or not is_finite(ground_lean) or not gaze.is_finite():
 		return
+	if not is_finite(hand_rest) or not hand_shake.is_finite():
+		return
 	_poses.clear()
+	# 12.11: свободная рука. hand_rest — отдых на долгой стоянке: рука (знак — сторона) лежит на бедре, спина прямее;
+	# hand_shake — в спокойной езде седок на секунду снимает руку с руля и встряхивает кисть (x — доля и сторона, y — взмах).
+	var rest := smoothstep(0.0, 1.0, clampf(absf(hand_rest), 0.0, 1.0))
+	var rest_side := -1.0 if hand_rest < 0.0 else 1.0
+	var shake := smoothstep(0.0, 1.0, clampf(absf(hand_shake.x), 0.0, 1.0))
+	var shake_side := -1.0 if hand_shake.x < 0.0 else 1.0
 	# 11.11: стоянка — нога fd_side стоит на земле (ground — высота земли в осях велосипеда, ground_lean — его наклон к ноге)
 	var fd := smoothstep(0.0, 1.0, clampf(absf(foot_down), 0.0, 1.0))
 	var fd_side := -1.0 if foot_down < 0.0 else 1.0
 	sway = clampf(sway, -0.13, 0.13)
-	breath = clampf(breath, -0.004, 0.004)
+	breath = clampf(breath, -0.0065, 0.0065)
 	stand = clampf(stand, -1.0, 1.0)
 	brake = clampf(brake, 0.0, 1.0)
 	front_load = clampf(front_load, 0.0, 1.0)
@@ -203,10 +217,13 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		-tuck * 0.45 - motion.z * 0.45 + motion.x - effort_brace * 0.70 + front_load * 0.024 - maxf(0.0, breath) * 0.35
 	)
 	chest += Vector3(fd_side * 0.02, 0.035, 0.07) * fd
+	chest += Vector3(rest_side * 0.012, 0.02, 0.06) * rest
+	# плечо свободной руки уходит назад: корпус чуть разворачивается в её сторону
+	var free_yaw := -rest_side * 0.16 * rest - shake_side * 0.07 * shake
 	var spine_len := SPINE_LENGTH + breath * 0.65
 	if (chest - hip).length_squared() > 0.000001:
 		chest = hip + (chest - hip).normalized() * spine_len
-	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.34 + sway * (1.0 + 0.14 * heavy), -sway * (0.38 + 0.14 * heavy) - motion.y * 0.20 - roll * 0.38))
+	var upper_basis := Basis.from_euler(Vector3(0.0, body_look * 0.34 + sway * (1.0 + 0.14 * heavy) + free_yaw,-sway * (0.38 + 0.14 * heavy) - motion.y * 0.20 - roll * 0.38))
 	# Ограничиваем дальность плеч до руля с сохранением фиксированной длины позвоночника.
 	var max_arm_reach := ARM_LENGTH * 2.0 - 0.006
 	for i in 4:
@@ -215,7 +232,8 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			var grip := left_grip if side < 0.0 else right_grip
 			var reach := shoulder - grip
 			if reach.length() > max_arm_reach:
-				chest -= reach.normalized() * (reach.length() - max_arm_reach)
+				var held := 1.0 - maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0)
+				chest -= reach.normalized() * (reach.length() - max_arm_reach) * held
 		if (chest - hip).length_squared() > 0.000001:
 			chest = hip + (chest - hip).normalized() * spine_len
 	for side: float in [-1.0, 1.0]:
@@ -223,16 +241,22 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		var grip := left_grip if side < 0.0 else right_grip
 		var reach := shoulder - grip
 		if reach.length() > max_arm_reach:
-			var pull := reach.normalized() * (reach.length() - max_arm_reach)
+			var pull := reach.normalized() * (reach.length() - max_arm_reach) * (1.0 - maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0))
 			chest -= pull
 			hip -= pull
 	# Взгляд компенсирует склон и крен в пределах движения шеи, опережая поворот корпуса.
-	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod + gaze.y, -0.36, 0.36), clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12))
+	var head_basis := Basis.from_euler(Vector3(clampf(-pitch * 0.75 + head_nod + gaze.y, -0.36, 0.36), clampf(look + gaze.x, -0.6, 0.6), -roll * 0.65 + sway * 0.12 - gaze.x * 0.16))
 	_set_bone("Root", Vector3.ZERO)
 	_set_bone("Hips", hip, pelvis_basis)
-	_aim("Spine", hip, chest, sway * 0.22 + body_look * 0.14)
 	var spine_dir := (chest - hip).normalized() if (chest - hip).length_squared() > 0.000001 else Vector3.UP
-	_aim("Chest", chest - spine_dir * CHEST_LENGTH, chest, body_look * 0.34 + sway * (1.0 + 0.14 * heavy))
+	# 12.11: спина — дуга, а не доска: середина уходит назад-вверх, сильнее в группировке и «атаке»,
+	# слабее стоя на педалях и на стоянке (седок выпрямляется).
+	var bow := spine_bow * clampf(0.022 + tuck * 0.12 + attack * 0.016 + brake * 0.008 + heavy * seated * 0.008 - up * 0.008 - fd * 0.012 - rest * 0.008, 0.0, 0.05)
+	var back_dir := Vector3.BACK - spine_dir * spine_dir.z
+	back_dir = back_dir.normalized() if back_dir.length_squared() > 0.0001 else Vector3.BACK
+	var chest_base := chest - spine_dir * CHEST_LENGTH + back_dir * bow
+	_aim("Spine", hip, chest_base, sway * 0.22 + body_look * 0.14 + free_yaw * 0.4)
+	_aim("Chest", chest_base, chest, body_look * 0.34 + sway * (1.0 + 0.14 * heavy) + free_yaw)
 	# Основание шеи следует вороту на Chest, а голова вращается через шею с постоянной длиной.
 	var chest_pose: Transform3D = _poses[_bones["Chest"]]
 	var rest_hip := Vector3(0, 0.97, 0.17)
@@ -270,6 +294,21 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		_set_bone("Toe" + suffix, ankle + foot_basis * TOE_OFFSET, toe_basis)
 		var shoulder := chest + upper_basis * Vector3(side * 0.18, maxf(0.0, breath) * 0.45, 0.0)
 		var grip := left_grip if side < 0.0 else right_grip
+		var free := maxf(rest if side == rest_side else 0.0, shake if side == shake_side else 0.0)
+		if free > 0.0001:
+			# на отдыхе кулак лежит сверху на бедре ноги, что осталась на педали; встряхивание — рука опущена вдоль корпуса
+			var thigh_dir := (knee - h).normalized()
+			var thigh_up := Vector3.UP - thigh_dir * thigh_dir.y
+			thigh_up = thigh_up.normalized() if thigh_up.length_squared() > 0.0001 else Vector3.UP
+			var target := h.lerp(knee, 0.6) + thigh_up * 0.108 + Vector3(side * 0.015, 0.0, 0.0)
+			if side == shake_side and shake > 0.0:
+				var hang := shoulder + upper_basis * Vector3(side * (0.13 + 0.03 * hand_shake.y), -0.47 + 0.035 * absf(hand_shake.y), 0.06)
+				target = target.lerp(hang, shake / maxf(shake + (rest if side == rest_side else 0.0), 0.0001))
+			var to_target := target - shoulder
+			if to_target.length() > max_arm_reach:
+				target = shoulder + to_target.normalized() * max_arm_reach
+			# рука сходит с руля по дуге вверх-наружу, не сквозь грипсу и раму
+			grip = grip.lerp(target, free) + Vector3(side * 0.05, 0.05, 0.03) * sin(free * PI)
 		# Передний удар (front_load) и сжатие вилки сразу принимают руки (сгиб и вынос локтей),
 		# в повороте внутренняя рука сгибает локоть шире, направляя руль, а наружная тянется через корпус.
 		var arm_pull := power_phase * (0.22 * heavy + 0.30 * up) * (1.0 - brake * 0.85)
@@ -289,7 +328,14 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 		_set_bone("Forearm" + suffix, elbow, _limb_basis(elbow, grip, arm_x))
 		var bar_yaw := atan2(-(right_grip - left_grip).z, (right_grip - left_grip).x)
 		var wrist_pitch := clampf(base_wrist - 0.10 * tuck - 0.08 * front_load - 0.06 * arm_pull, -0.26, 0.16)
-		_set_bone("Hand" + suffix, grip, Basis(Vector3.UP, bar_yaw) * Basis(Vector3.RIGHT, wrist_pitch))
+		var hand_basis := Basis(Vector3.UP, bar_yaw) * Basis(Vector3.RIGHT, wrist_pitch)
+		if free > 0.0001:
+			var forearm_basis: Basis = (_poses[_bones["Forearm" + suffix]] as Transform3D).basis
+			var loose := forearm_basis * (_hand_rest_l if side < 0.0 else _hand_rest_r)
+			if side == shake_side:
+				loose = loose * Basis(Vector3.FORWARD, hand_shake.y * 0.45 * shake)
+			hand_basis = hand_basis.slerp(loose.orthonormalized(), free).orthonormalized()
+		_set_bone("Hand" + suffix, grip, hand_basis)
 
 
 ## Смешивание 5 базовых поз с приоритетами: торможение → стоя (подъём / спуск) → сидя (спокойная езда / накат).

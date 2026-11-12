@@ -55,7 +55,7 @@
 | Препятствия на дорогах (раскладка от причин: корни от стволов, камни, валежник; ступени, кочки) | изолированная `road_obstacles_test.gd` (+ `road_look.gd -- --obstacles` для вида) |
 | Лес и камни у путей (просвет `StageVegetation.path_clearance`, [docs/ROADSIDE_NATURE.md](docs/ROADSIDE_NATURE.md)) | `roadside_probe.gd` (три сохранённых мира без генерации, ~1,5 мин, было/стало через `--base`, `--parity` — C#/GDScript); в игре — `check.gd --views trail,forest` один раз в конце |
 | Подвеска, кочки полотна, ощущение езды без мира | изолированный `feel_test -- --downhill` (+ `road_look.gd` для вида кочек) |
-| Модель седока, его анимации | `cyclist_animation_test -- --capture` |
+| Модель седока, его анимации | изолированная `rider_look.gd` (секунды, нужно окно; листы `rider_model_sheet.png` 4×2 и `rider_anim_sheet.png` 5×2, «было» — тем же запуском на прежнем коде с `--tag _old`); контакты, длины и поведение — `cyclist_animation_test` один раз в конце (~30 с, без окна); после правки `build_cyclist.gd` — пересборка `build_cyclist.gd` и `build_bike.gd` |
 | Модель велосипеда (`tools/build_bike.gd` → `scenes/bike.tscn`), вид седока на стоянке | изолированная `bike_model_look.gd` (секунды, нужно окно; лист 3×2 `bike_model_sheet.png` — общий вид, стоянка, перёд крупно и перёд с повёрнутым рулём и сжатой вилкой; «было» — тем же запуском до пересборки с `--tag _old`); после правки сборщика — `build_bike.gd`, после `build_cyclist.gd` — оба |
 | Велосипедные трассы, элементы, физика велосипеда на трассе | изолированная `trail_lab_test` (`-- --ui-only`, `-- --capture` по нужде); `feel_test` не нужен |
 | Расчётные стандарты элементов (`TrailStandards`), их размеры в составителе | изолированная `trail_standards_stand.gd -- --check` (+ `--only <вид>`) |

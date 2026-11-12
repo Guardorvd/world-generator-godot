@@ -65,7 +65,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 7 and body_mesh != null, "Seventh model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 8 and body_mesh != null, "Eighth model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -110,7 +110,7 @@ func _check_model() -> void:
 				rim_count += 1
 			roughness_values[snappedf(mat.roughness, 0.01)] = true
 	check(clearcoat_count >= 2 and rim_count >= 3 and roughness_values.size() >= 6, "Materials distinguish fabric, skin, helmet shell, lens and shoes")
-	print("Cyclist v7 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	print("Cyclist v8 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
 
 
 func check_skin_pose() -> void:
@@ -622,4 +622,4 @@ func capture() -> void:
 		await process_frame
 		await process_frame
 		await RenderingServer.frame_post_draw
-		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_v7_" + mode + ".png")
+		root.get_texture().get_image().save_png("res://tools/control/runs/cyclist_v8_" + mode + ".png")

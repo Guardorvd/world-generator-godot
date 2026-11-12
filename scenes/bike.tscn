@@ -628,138 +628,138 @@ _surfaces = [{
 "vertex_data": PackedByteArray("j8L1vHASA7vYRye9j8L1PHASA7smqje9j8L1PHASA7vYRye9j8L1vHASA7smqje9j8L1vEJgZbzYRye9j8L1PEJgZbwmqje9j8L1PEJgZbzYRye9j8L1vEJgZbwmqje9j8L1PHASA7vYRye9j8L1vHASA7smqje9j8L1PHASA7smqje9j8L1vHASA7vYRye9j8L1PEJgZbzYRye9j8L1vEJgZbwmqje9j8L1PEJgZbwmqje9j8L1vEJgZbzYRye9j8L1PHASA7vYRye9j8L1vEJgZbzYRye9j8L1vHASA7vYRye9j8L1PEJgZbzYRye9j8L1PHASA7smqje9j8L1vEJgZbwmqje9j8L1vHASA7smqje9j8L1PEJgZbwmqje9j8L1vHASA7smqjc9j8L1PHASA7vYRyc9j8L1PHASA7smqjc9j8L1vHASA7vYRyc9j8L1vEJgZbwmqjc9j8L1PEJgZbzYRyc9j8L1PEJgZbwmqjc9j8L1vEJgZbzYRyc9j8L1PHASA7smqjc9j8L1vHASA7vYRyc9j8L1PHASA7vYRyc9j8L1vHASA7smqjc9j8L1PEJgZbwmqjc9j8L1vEJgZbzYRyc9j8L1PEJgZbzYRyc9j8L1vEJgZbwmqjc9j8L1PHASA7smqjc9j8L1vEJgZbwmqjc9j8L1vHASA7smqjc9j8L1PEJgZbwmqjc9j8L1PHASA7vYRyc9j8L1vEJgZbzYRyc9j8L1vHASA7vYRyc9j8L1PEJgZbzYRyc9/3//f////7//////AAD/v/9//3////+//////wAA/7//f/9/////v/////8AAP+//3//f////7//////AAD/v///AID/////AAAAgP9//7///wCA/////wAAAID/f/+///8AgP////8AAACA/3//v///AID/////AAAAgP9//78AgP//AAD/vwCAAAD///+/AID//wAA/78AgAAA////vwCA//8AAP+/AIAAAP///78AgP//AAD/vwCAAAD///+//3//f////7//////AAD/v/9//3////+//////wAA/7//f/9/////v/////8AAP+//3//f////7//////AAD/v///AID/////AAAAgP9//7///wCA/////wAAAID/f/+///8AgP////8AAACA/3//v///AID/////AAAAgP9//78AgP//AAD/vwCAAAD///+/AID//wAA/78AgAAA////vwCA//8AAP+/AIAAAP///78AgP//AAD/vwCAAAD///+/")
 }]
 
-[node name="Bike" type="Node3D" unique_id=2138942631]
+[node name="Bike" type="Node3D" unique_id=573734203]
 script = ExtResource("1_juvdb")
 metadata/model_version = 3
 
-[node name="RearWheel" type="Node3D" parent="." unique_id=814301140]
+[node name="RearWheel" type="Node3D" parent="." unique_id=57720800]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.34, 0.53)
 
-[node name="Wheel" type="MeshInstance3D" parent="RearWheel" unique_id=1331650338]
+[node name="Wheel" type="MeshInstance3D" parent="RearWheel" unique_id=1420308468]
 mesh = SubResource("ArrayMesh_o7eds")
 
-[node name="BrakeRotor" type="MeshInstance3D" parent="RearWheel" unique_id=1626058435]
+[node name="BrakeRotor" type="MeshInstance3D" parent="RearWheel" unique_id=1261749574]
 transform = Transform3D(-4.371139e-08, 1, 0, -1, -4.371139e-08, 0, 0, 0, 1, -0.066, 0, 0)
 material_override = SubResource("StandardMaterial3D_d1jr7")
 mesh = SubResource("TorusMesh_irgsv")
 
-[node name="FrontWheel" type="Node3D" parent="." unique_id=345868465]
+[node name="FrontWheel" type="Node3D" parent="." unique_id=1939822064]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.34, -0.53)
 
-[node name="Wheel" type="MeshInstance3D" parent="FrontWheel" unique_id=595848881]
+[node name="Wheel" type="MeshInstance3D" parent="FrontWheel" unique_id=131990961]
 mesh = SubResource("ArrayMesh_qtgu3")
 
-[node name="BrakeRotor" type="MeshInstance3D" parent="FrontWheel" unique_id=1105334874]
+[node name="BrakeRotor" type="MeshInstance3D" parent="FrontWheel" unique_id=836106869]
 transform = Transform3D(-4.371139e-08, 0.4, 0, -1, -1.7484556e-08, 0, 0, 0, 1, -0.037, 0, 0)
 material_override = SubResource("StandardMaterial3D_d1jr7")
 mesh = SubResource("TorusMesh_1ced1")
 
-[node name="Frame" type="MeshInstance3D" parent="." unique_id=8917328]
+[node name="Frame" type="MeshInstance3D" parent="." unique_id=827902191]
 mesh = SubResource("ArrayMesh_cp21h")
 
-[node name="ChainStayL" type="MeshInstance3D" parent="." unique_id=2047203289]
+[node name="ChainStayL" type="MeshInstance3D" parent="." unique_id=1533420858]
 transform = Transform3D(1, 0, 0, 0, 0.07525772, -0.99716413, 0, 0.99716413, 0.07525772, -0.05, 0.32, 0.265)
 material_override = SubResource("StandardMaterial3D_uqvew")
 mesh = SubResource("CylinderMesh_ibong")
 
-[node name="SeatStayL" type="MeshInstance3D" parent="." unique_id=1380054356]
+[node name="SeatStayL" type="MeshInstance3D" parent="." unique_id=1092104887]
 transform = Transform3D(1, 0, 0, 0, -0.78750503, -0.6163082, 0, 0.6163082, -0.78750503, -0.05, 0.57, 0.35)
 material_override = SubResource("StandardMaterial3D_uqvew")
 mesh = SubResource("CylinderMesh_wamkr")
 
-[node name="ChainStayR" type="MeshInstance3D" parent="." unique_id=1279050268]
+[node name="ChainStayR" type="MeshInstance3D" parent="." unique_id=1752012932]
 transform = Transform3D(1, 0, 0, 0, 0.07525772, -0.99716413, 0, 0.99716413, 0.07525772, 0.05, 0.32, 0.265)
 material_override = SubResource("StandardMaterial3D_uqvew")
 mesh = SubResource("CylinderMesh_xwxg7")
 
-[node name="SeatStayR" type="MeshInstance3D" parent="." unique_id=102145534]
+[node name="SeatStayR" type="MeshInstance3D" parent="." unique_id=105989070]
 transform = Transform3D(1, 0, 0, 0, -0.78750503, -0.6163082, 0, 0.6163082, -0.78750503, 0.05, 0.57, 0.35)
 material_override = SubResource("StandardMaterial3D_uqvew")
 mesh = SubResource("CylinderMesh_glnsx")
 
-[node name="ForkL" type="Node3D" parent="." unique_id=1704131066]
+[node name="ForkL" type="Node3D" parent="." unique_id=1339043599]
 transform = Transform3D(1, 0, 0, 0, 0.9553365, -0.29552022, 0, 0.29552022, 0.9553365, 0, -0.14144012, -0.12414849)
 
-[node name="Stanchion" type="MeshInstance3D" parent="ForkL" unique_id=1700330037]
+[node name="Stanchion" type="MeshInstance3D" parent="ForkL" unique_id=279595167]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.07, 0.655, -0.53)
 material_override = SubResource("StandardMaterial3D_d1jr7")
 mesh = SubResource("CylinderMesh_a0es8")
 
-[node name="Lower" type="Node3D" parent="ForkL" unique_id=166665785]
+[node name="Lower" type="Node3D" parent="ForkL" unique_id=1262461865]
 
-[node name="Slider" type="MeshInstance3D" parent="ForkL/Lower" unique_id=449855553]
+[node name="Slider" type="MeshInstance3D" parent="ForkL/Lower" unique_id=1177735174]
 mesh = SubResource("ArrayMesh_8851d")
 
-[node name="ForkR" type="Node3D" parent="." unique_id=2145640920]
+[node name="ForkR" type="Node3D" parent="." unique_id=1609701192]
 transform = Transform3D(1, 0, 0, 0, 0.9553365, -0.29552022, 0, 0.29552022, 0.9553365, 0, -0.14144012, -0.12414849)
 
-[node name="Stanchion" type="MeshInstance3D" parent="ForkR" unique_id=65531501]
+[node name="Stanchion" type="MeshInstance3D" parent="ForkR" unique_id=618430125]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.07, 0.655, -0.53)
 material_override = SubResource("StandardMaterial3D_d1jr7")
 mesh = SubResource("CylinderMesh_eltme")
 
-[node name="Lower" type="Node3D" parent="ForkR" unique_id=1585773388]
+[node name="Lower" type="Node3D" parent="ForkR" unique_id=1645054729]
 
-[node name="Slider" type="MeshInstance3D" parent="ForkR/Lower" unique_id=10580657]
+[node name="Slider" type="MeshInstance3D" parent="ForkR/Lower" unique_id=1398158559]
 mesh = SubResource("ArrayMesh_0ynpw")
 
-[node name="ForkCrown" type="MeshInstance3D" parent="." unique_id=112304232]
+[node name="ForkCrown" type="MeshInstance3D" parent="." unique_id=971973253]
 transform = Transform3D(1, 0, 0, 0, 0.9553365, -0.29552022, 0, 0.29552022, 0.9553365, 0, -0.14144012, -0.12414849)
 mesh = SubResource("ArrayMesh_61422")
 
-[node name="ForkArch" type="Node3D" parent="." unique_id=1418853595]
+[node name="ForkArch" type="Node3D" parent="." unique_id=2025956069]
 transform = Transform3D(1, 0, 0, 0, 0.9553365, -0.29552022, 0, 0.29552022, 0.9553365, 0, -0.14144012, -0.12414849)
 
-[node name="Detail" type="MeshInstance3D" parent="ForkArch" unique_id=173580286]
+[node name="Detail" type="MeshInstance3D" parent="ForkArch" unique_id=179453832]
 mesh = SubResource("ArrayMesh_w52fh")
 
-[node name="Stem" type="MeshInstance3D" parent="." unique_id=2052740102]
+[node name="Stem" type="MeshInstance3D" parent="." unique_id=1340374340]
 mesh = SubResource("ArrayMesh_68bdh")
 
-[node name="Handlebar" type="MeshInstance3D" parent="." unique_id=1122801250]
+[node name="Handlebar" type="MeshInstance3D" parent="." unique_id=1500159320]
 mesh = SubResource("ArrayMesh_f8cd2")
 
-[node name="LeverL" type="MeshInstance3D" parent="." unique_id=842502172]
+[node name="LeverL" type="MeshInstance3D" parent="." unique_id=1077712236]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.152, 0.99, -0.44900158)
 cast_shadow = 0
 mesh = SubResource("ArrayMesh_re1wl")
 
-[node name="LeverR" type="MeshInstance3D" parent="." unique_id=1504055714]
+[node name="LeverR" type="MeshInstance3D" parent="." unique_id=874265329]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.152, 0.99, -0.44900158)
 cast_shadow = 0
 mesh = SubResource("ArrayMesh_fww5n")
 
-[node name="RearMechanics" type="Node3D" parent="." unique_id=386529764]
+[node name="RearMechanics" type="Node3D" parent="." unique_id=477671643]
 
-[node name="Detail" type="MeshInstance3D" parent="RearMechanics" unique_id=1219117151]
+[node name="Detail" type="MeshInstance3D" parent="RearMechanics" unique_id=463028671]
 mesh = SubResource("ArrayMesh_k8wpn")
 
-[node name="ChainTop" type="MeshInstance3D" parent="." unique_id=533458098]
+[node name="ChainTop" type="MeshInstance3D" parent="." unique_id=947962697]
 transform = Transform3D(1, 0, 0, 0, 0.022635698, -0.9997438, 0, 0.9997438, 0.022635698, 0.085, 0.403, 0.265)
 material_override = SubResource("StandardMaterial3D_yvj5b")
 cast_shadow = 0
 mesh = SubResource("CylinderMesh_2yfcb")
 
-[node name="ChainBottom" type="MeshInstance3D" parent="." unique_id=1082090056]
+[node name="ChainBottom" type="MeshInstance3D" parent="." unique_id=674325829]
 transform = Transform3D(1, 0, 0, 0, 0.014033735, -0.9999015, 0, 0.9999015, 0.014033735, 0.085, 0.206, 0.285)
 material_override = SubResource("StandardMaterial3D_yvj5b")
 cast_shadow = 0
 mesh = SubResource("CylinderMesh_xjyuj")
 
-[node name="Crank" type="Node3D" parent="." unique_id=882978263]
+[node name="Crank" type="Node3D" parent="." unique_id=1054186030]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.3, 0)
 
-[node name="Body" type="MeshInstance3D" parent="Crank" unique_id=1920185058]
+[node name="Body" type="MeshInstance3D" parent="Crank" unique_id=784610717]
 mesh = SubResource("ArrayMesh_iw6kd")
 
-[node name="PedalL" type="MeshInstance3D" parent="Crank" unique_id=933742827]
+[node name="PedalL" type="MeshInstance3D" parent="Crank" unique_id=2057002590]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.14, 0.17, 0)
 mesh = SubResource("ArrayMesh_x3oaf")
 
-[node name="PedalR" type="MeshInstance3D" parent="Crank" unique_id=726971357]
+[node name="PedalR" type="MeshInstance3D" parent="Crank" unique_id=1618963993]
 transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.14, -0.17, 0)
 mesh = SubResource("ArrayMesh_ujb3m")
 
-[node name="Rider" type="Node3D" parent="." unique_id=238475286 instance=ExtResource("2_fdhfo")]
+[node name="Rider" type="Node3D" parent="." unique_id=1655221697 instance=ExtResource("2_fdhfo")]
 script = ExtResource("3_bqlqk")
-metadata/model_version = 7
+metadata/model_version = 8
