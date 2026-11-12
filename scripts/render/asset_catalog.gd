@@ -15,5 +15,17 @@ static var _catalog: Resource
 static func get_catalog() -> Resource:
 	if _catalog == null:
 		_catalog = load(PATH)
-		assert(_catalog != null and _catalog.version == VERSION, "Rebake standard assets: tools/bake_assets.gd")
+		var problem := check()
+		if not problem.is_empty():
+			push_error(problem)
 	return _catalog
+
+
+## Пустая строка — каталог на месте и нужной версии; иначе причина (работает и в релизной сборке, где assert отключён).
+static func check() -> String:
+	var catalog: Resource = _catalog if _catalog != null else load(PATH)
+	if catalog == null:
+		return "Каталог моделей не найден (%s). Пересоберите его: tools/bake_assets.gd" % PATH
+	if catalog.version != VERSION:
+		return "Каталог моделей устарел (версия %s, нужна %s). Пересоберите его: tools/bake_assets.gd" % [catalog.version, VERSION]
+	return ""

@@ -18,15 +18,6 @@ const TrailLabScene := preload("res://scenes/trail_lab.tscn")
 const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
-## Подсказки управления в паузе: клавиша — действие, по две пары в строке
-const CONTROLS := [
-	["Мышь", "осмотреться"], ["WASD", "идти"],
-	["Shift", "бег"], ["Пробел", "прыжок"],
-	["ЛКМ (держать)", "памп на велосипеде"], ["Q → E", "баннихоп"],
-	["F", "действие, слезть"], ["V", "фонарик"],
-	["Y", "выбрать место для велосипеда"], ["M", "карта"],
-	["Tab", "сводка (зажать)"], ["Esc", "пауза"],
-]
 
 var game: GameWorld
 var trail_lab: Node
@@ -95,9 +86,12 @@ func _ready() -> void:
 	GameContext.scope.cache.enabled = _progress_enabled
 	get_tree().auto_accept_quit = false
 	_setup_save_controls()
-	# 14.4+: бесконечная генерация (по умолчанию выключена), с предупреждением, пока она не доделана
+	# 14.4+: бесконечная генерация, с предупреждением, пока она не доделана.
+	# В стабильной версии пункт скрыт (в main.tscn), а ранее сохранённое «включено» сбрасывается.
+	if not %Infinite.visible:
+		GameContext.scope.settings.infinite_world = false
 	%Infinite.set_pressed_no_signal(GameContext.scope.settings.infinite_world)
-	%InfiniteWarning.visible = GameContext.scope.settings.infinite_world
+	%InfiniteWarning.visible = GameContext.scope.settings.infinite_world and %Infinite.visible
 	%Infinite.toggled.connect(func(on: bool) -> void:
 		GameContext.scope.settings.infinite_world = on
 		%InfiniteWarning.visible = on
@@ -652,6 +646,11 @@ func _on_start() -> void:
 func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "") -> void:
 	if busy:
 		return
+	# каталог моделей устарел или не найден: мир не запускаем (в релизной сборке assert отключён)
+	var catalog_error: String = preload("res://scripts/render/asset_catalog.gd").check()
+	if not catalog_error.is_empty():
+		_message("Каталог моделей не подготовлен", catalog_error)
+		return
 	if not _save_current():
 		return
 	_pending_save = {}
@@ -729,8 +728,8 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	phase_started = Time.get_ticks_usec()
 	game.start(loaded, hud, _pending_save)
 	if not loaded.error.is_empty():
-		game.queue_free()
-		game = null
+		_free_game()
+		hud.visible = false
 		busy = false
 		_show("menu")
 		_message("Мир не подготовлен", loaded.error)
@@ -764,6 +763,7 @@ func _toggle_pause() -> void:
 		_save_current()
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		%PauseWorld.text = "Мир «%s»" % game.world.seed_text
+		_fill_controls()
 		_show("pause")
 
 
@@ -848,6 +848,10 @@ func _exit_game() -> void:
 		return
 	if not _save_current():
 		return
+	if _save_due >= 0:
+		# настройка изменена меньше чем 400 мс назад: на диск ещё не записана
+		_save_due = -1
+		GameContext.scope.settings.save_settings()
 	get_tree().quit()
 
 
@@ -919,10 +923,45 @@ func _setup_save_controls() -> void:
 			_message("Загрузка", "Ручного сохранения пока нет. Нажмите «Сохранить».")
 		else:
 			_confirm_load(game.world.seed_text, "manual"))
+	_fill_controls()
+
+
+## Подсказки управления в паузе: клавиша — действие, по две пары в строке.
+## Подписи берутся из раскладки (Controls.label): клавиатура или геймпад, как играют сейчас; перестраиваются при открытии паузы.
+func _control_rows() -> Array:
+	var c: Controls = GameContext.scope.controls
+	var pad := c.joypad
+	var rows: Array = [
+		["Правый стик" if pad else "Мышь", "осмотреться"], ["Левый стик" if pad else "WASD", "идти"],
+		[c.label(&"run"), "бег"], [c.label(&"jump"), "прыжок"],
+	]
+	if not pad:
+		rows.append(["ЛКМ (держать)", "памп на велосипеде"])
+		rows.append(["%s → %s" % [c.label(&"bike_back"), c.label(&"bike_forward")], "баннихоп"])
+	rows.append([c.label(&"interact"), "действие, слезть"])
+	rows.append([c.label(&"flashlight"), "фонарик"])
+	rows.append([c.label(&"recover_bike"), "выбрать место для велосипеда"])
+	rows.append([c.label(&"toggle_map"), "карта"])
+	rows.append([c.label(&"photo") if pad else "ПКМ", "фотоаппарат"])
+	if not pad:
+		rows.append([c.label(&"time_skip"), "время суток (+Shift — назад)"])
+	rows.append([c.label(&"show_hud"), "сводка (зажать)"])
+	rows.append([c.label(&"pause"), "пауза"])
+	return rows
+
+
+func _fill_controls() -> void:
 	var grid: GridContainer = %Controls
-	for pair: Array in CONTROLS:
+	for child in grid.get_children():
+		grid.remove_child(child)
+		child.queue_free()
+	var rows := _control_rows()
+	if rows.size() % 2 == 1:
+		rows.append(["", ""])
+	for pair: Array in rows:
 		var key := Label.new()
-		key.theme_type_variation = &"KeyLabel"
+		if not pair[0].is_empty():   # пустая пара — выравнивание последней строки, без рамки клавиши
+			key.theme_type_variation = &"KeyLabel"
 		key.text = pair[0]
 		key.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		key.custom_minimum_size.x = 64
