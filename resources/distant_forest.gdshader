@@ -1,5 +1,5 @@
 shader_type spatial;
-render_mode cull_back;
+render_mode cull_back, specular_disabled, shadows_disabled;
 global uniform vec2 veg_center;
 global uniform vec4 distant_vegetation; // near end, near fade band, far end, enabled
 #include "res://resources/cloud_shadow.gdshaderinc"
@@ -11,6 +11,13 @@ void vertex() {
 	distance_to_player = length(origin.xz - veg_center);
 	canopy_light = cloud_light(origin.xz);
 	crown_height = VERTEX.y;
+	// COLOR.a is the conifer share: conifers become narrower, taller cones; broadleaf crowns get a lumpy outline.
+	float conifer = COLOR.a;
+	float up = clamp(VERTEX.y + 0.5, 0.0, 1.0);
+	float lump = fract(sin(dot(origin.xz * 0.37 + VERTEX.xz * 5.3 + VERTEX.y * 3.1, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;
+	float cone = mix(1.1, 0.18, up);
+	VERTEX.xz *= mix(1.0 + lump * 0.34, cone, conifer);
+	VERTEX.y *= 1.0 + conifer * 0.55;
 }
 void fragment() {
 	float dither = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));

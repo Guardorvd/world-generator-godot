@@ -122,6 +122,7 @@ func _attach_crowns() -> void:
 			continue
 		FarForest.attach(node, crowns)
 		_crown_wait.erase(key)
+		return # one tile per frame keeps buffer uploads off the frame budget
 
 
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:

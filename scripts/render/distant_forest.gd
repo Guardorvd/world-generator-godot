@@ -1,15 +1,31 @@
 extends RefCounted
 ## Terrain-owned, opaque crown proxies. CPU buffers are built by existing terrain jobs.
+## Two detail rings share one data set: fine crowns (12 m clusters, 24 triangles) up to SPLIT metres and
+## coarse clumps (32 m, area-preserving, 12 triangles) beyond it, so the far ring costs a fraction of the primitives.
 const SHADER := preload("res://resources/distant_forest.gdshader")
 const TILE := GameConfig.TILE
 const SIDE := 128.0 # Keep culling local, even when terrain tiles are 256 m wide.
-static var _mesh: ArrayMesh
+const SPLIT := 620.0 # fine -> coarse, m from the camera
+const SPLIT_BAND := 60.0
+const COARSE_CELL := 32.0
+static var _mesh_fine: ArrayMesh
+static var _mesh_coarse: ArrayMesh
 static var _material: ShaderMaterial
 static var active := true
 static var far_end := 1400.0 # crown draw distance, m: set per quality level by VegetationLayer
+static var near_begin := 240.0 # cells nearer than this are fully covered by real trees
+
+## Draw ranges for one MultiMesh node (meta "far_lod": 0 fine, 1 coarse). Called on creation and on quality changes.
+static func apply_ranges(node: MultiMeshInstance3D) -> void:
+	node.visible = active
+	var coarse: bool = node.get_meta("far_lod", 0) == 1
+	node.visibility_range_begin = SPLIT - SPLIT_BAND if coarse else near_begin
+	node.visibility_range_end = far_end + 150.0 if coarse else SPLIT + SPLIT_BAND
+	node.visibility_range_begin_margin = 0.0
+	node.visibility_range_end_margin = 0.0
 
 static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
-	var out := {}
+	var raw: Array = []
 	var groups := {}
 	var centers := {}
 	var rect := Rect2i(key * PlanTerrain.CELLS, Vector2i.ONE * PlanTerrain.CELLS)
@@ -37,8 +53,8 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 					groups[group].color += color
 					groups[group].count += 1
 	for group: Dictionary in groups.values():
-		append(out, group.box.get_center(), group.box.size * 0.5, group.color / float(group.count))
-	return out
+		raw.append([group.box.get_center(), group.box.size * 0.5, group.color / float(group.count)])
+	return pack(raw)
 
 static func cluster_key(p: Vector2, centers: Dictionary) -> Vector2i:
 	var cell := Vector2i((p / 12.0).floor())
@@ -55,13 +71,41 @@ static func cluster_key(p: Vector2, centers: Dictionary) -> Vector2i:
 				best = key
 	return best
 
+## Instance colour: rgb is the leaf tint, alpha is the conifer share (the shader narrows conifers into cones).
 static func tint(kind: int, variant: int) -> Color:
 	var color := Color("7ca94e")
 	if kind == Biomes.T_PINE: color = Color("568758")
 	elif kind == Biomes.T_SNOWPINE: color = Color("a1b6aa")
 	elif kind == Biomes.T_BIRCH: color = Color("8caf50")
 	elif kind == Biomes.T_JUNGLE: color = Color("48824a")
-	return color * (0.92 + (variant % 3) * 0.06)
+	color = color * (0.92 + (variant % 3) * 0.06)
+	color.a = 1.0 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else 0.0
+	return color
+
+## raw: Array of [centre, half-extent, colour] -> {f = fine cells, c = coarse cells}.
+static func pack(raw: Array) -> Dictionary:
+	var fine := {}
+	var coarse := {}
+	var merged := {}
+	for item: Array in raw:
+		var at: Vector3 = item[0]
+		var size: Vector3 = item[1]
+		var color: Color = item[2]
+		append(fine, at, size, color)
+		var key := Vector2i(floori(at.x / COARSE_CELL), floori(at.z / COARSE_CELL))
+		var weight := size.x * size.z
+		if not merged.has(key): merged[key] = {area = 0.0, at = Vector3.ZERO, hy = 0.0, color = Color(0, 0, 0, 0)}
+		var m: Dictionary = merged[key]
+		m.area += weight
+		m.at += at * weight
+		m.hy += size.y * weight
+		m.color += color * weight
+	for m: Dictionary in merged.values():
+		# Slightly overlapping, taller clumps read as continuous canopy instead of separate pebbles from far away.
+		var radius := minf(sqrt(m.area) * 1.2, 30.0)
+		var half := minf(maxf(m.hy / m.area * 1.6, radius * 0.55), 14.0) # rounded mound, not a flat lens
+		append(coarse, m.at / m.area + Vector3(0, (half - m.hy / m.area) * 0.5, 0), Vector3(radius, half, radius), m.color / m.area)
+	return {f = fine, c = coarse}
 
 static func append(out: Dictionary, at: Vector3, size: Vector3, color: Color) -> void:
 	var key := Vector2i(floori(at.x / SIDE), floori(at.z / SIDE))
@@ -69,51 +113,59 @@ static func append(out: Dictionary, at: Vector3, size: Vector3, color: Color) ->
 	var entry: Dictionary = out[key]
 	var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
 	var local := at - Vector3(center.x, 0, center.y)
-	entry.buffer.append_array(PackedFloat32Array([size.x, 0, 0, local.x, 0, size.y, 0, local.y, 0, 0, size.z, local.z, color.r, color.g, color.b, 1]))
+	entry.buffer.append_array(PackedFloat32Array([size.x, 0, 0, local.x, 0, size.y, 0, local.y, 0, 0, size.z, local.z, color.r, color.g, color.b, color.a]))
 	var box := AABB(local - size, size * 2.0)
 	entry.bounds = box if entry.count == 0 else entry.bounds.merge(box)
 	entry.count += 1
 
 static func attach(parent: Node3D, batches: Dictionary) -> void:
-	if _mesh == null:
-		_mesh = crown_mesh()
+	if _mesh_fine == null:
+		_mesh_fine = crown_mesh(true)
+		_mesh_coarse = crown_mesh(false)
 		_material = ShaderMaterial.new()
 		_material.shader = SHADER
-	for key: Vector2i in batches:
-		var entry: Dictionary = batches[key]
-		var node := MultiMeshInstance3D.new()
-		node.name = "DistantForest"
-		node.add_to_group("distant_forest")
-		node.visible = active
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.use_colors = true
-		mm.mesh = _mesh
-		mm.instance_count = entry.count
-		mm.buffer = entry.buffer
-		mm.custom_aabb = entry.bounds
-		node.multimesh = mm
-		node.material_override = _material
-		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		parent.add_child(node)
-		var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
-		node.global_position = Vector3(center.x, 0, center.y)
-		node.visibility_range_end = far_end + 150.0
-		node.visibility_range_begin = 165.0
-		node.visibility_range_end_margin = 32.0
+	for lod in 2:
+		var cells: Dictionary = batches.get("c" if lod == 1 else "f", {})
+		for key: Vector2i in cells:
+			var entry: Dictionary = cells[key]
+			var node := MultiMeshInstance3D.new()
+			node.name = "DistantForest"
+			node.add_to_group("distant_forest")
+			node.set_meta("far_lod", lod)
+			var mm := MultiMesh.new()
+			mm.transform_format = MultiMesh.TRANSFORM_3D
+			mm.use_colors = true
+			mm.mesh = _mesh_coarse if lod == 1 else _mesh_fine
+			mm.instance_count = entry.count
+			mm.buffer = entry.buffer
+			mm.custom_aabb = entry.bounds
+			node.multimesh = mm
+			node.material_override = _material
+			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			apply_ranges(node)
+			parent.add_child(node)
+			var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
+			node.global_position = Vector3(center.x, 0, center.y)
 
-static func crown_mesh() -> ArrayMesh:
+## Fine: two hexagonal rings and poles, 24 triangles. Coarse: one ring and two poles, 12 triangles.
+static func crown_mesh(fine: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	# Two hexagonal rings and poles: 24 opaque triangles, visible from any elevation.
 	for i in 6:
 		var a := float(i) * TAU / 6.0
 		var b := float(i + 1) * TAU / 6.0
-		var low_a := Vector3(cos(a) * 0.86, -0.42, sin(a) * 0.86)
-		var low_b := Vector3(cos(b) * 0.86, -0.42, sin(b) * 0.86)
-		var high_a := Vector3(cos(a) * 0.80, 0.42, sin(a) * 0.80)
-		var high_b := Vector3(cos(b) * 0.80, 0.42, sin(b) * 0.80)
-		for v: Vector3 in [Vector3.DOWN, low_b, low_a, low_a, high_b, high_a, low_a, low_b, high_b, high_a, high_b, Vector3.UP]:
+		var faces: Array
+		if fine:
+			var low_a := Vector3(cos(a) * 0.86, -0.42, sin(a) * 0.86)
+			var low_b := Vector3(cos(b) * 0.86, -0.42, sin(b) * 0.86)
+			var high_a := Vector3(cos(a) * 0.80, 0.42, sin(a) * 0.80)
+			var high_b := Vector3(cos(b) * 0.80, 0.42, sin(b) * 0.80)
+			faces = [Vector3.DOWN, low_b, low_a, low_a, high_b, high_a, low_a, low_b, high_b, high_a, high_b, Vector3.UP]
+		else:
+			var ring_a := Vector3(cos(a) * 0.95, -0.06, sin(a) * 0.95)
+			var ring_b := Vector3(cos(b) * 0.95, -0.06, sin(b) * 0.95)
+			faces = [Vector3.DOWN * 0.42, ring_b, ring_a, ring_a, ring_b, Vector3.UP * 0.46]
+		for v: Vector3 in faces:
 			st.set_normal(v.normalized())
 			st.add_vertex(v)
 	return st.commit()
@@ -147,7 +199,7 @@ static func sample_cover(values: PackedFloat32Array, x: float, y: float) -> floa
 	return lerpf(lerpf(values[k], values[k + 1], tx), lerpf(values[k + 9], values[k + 10], tx), ty)
 
 static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, regions: Dictionary, coverage := PackedFloat32Array()) -> Dictionary:
-	var out := {}
+	var raw: Array = []
 	var side := OuterLand.C + 3
 	for y in range(4, OuterLand.C, 8):
 		for x in range(4, OuterLand.C, 8):
@@ -167,5 +219,5 @@ static func outer(w: WorldData, h: Heightfield, key: Vector2i, f: Dictionary, re
 				var ground := RegionStream.snapshot_ground(w, h, regions, p.x, p.y)
 				if ground < 1.0: continue
 				var radius := lerpf(4.0, 10.0, amount) * lerpf(0.8, 1.1, u)
-				append(out, Vector3(p.x, ground + 14.0 + v * 4.0, p.y), Vector3(radius, 6.0 + u * 4.0, radius), tint(kind, j))
-	return out
+				raw.append([Vector3(p.x, ground + 14.0 + v * 4.0, p.y), Vector3(radius, 6.0 + u * 4.0, radius), tint(kind, j)])
+	return pack(raw)

@@ -49,12 +49,14 @@ func run() -> void:
 	Far.active = true
 	var start := Time.get_ticks_usec()
 	var count := 0
+	var coarse := 0
 	for y in ceili(float(world.H) / PlanTerrain.CELLS):
 		for x in ceili(float(world.W) / PlanTerrain.CELLS):
 			var batches := Far.plan(world, heights, Vector2i(x, y))
-			for entry: Dictionary in batches.values(): count += entry.count
+			for entry: Dictionary in batches.f.values(): count += entry.count
+			for entry: Dictionary in batches.c.values(): coarse += entry.count
 			Far.attach(crowns, batches)
-	print("FAR_BUILD ", (Time.get_ticks_usec() - start) / 1000.0, " ms, crowns=", count)
+	print("FAR_BUILD ", (Time.get_ticks_usec() - start) / 1000.0, " ms, crowns=", count, " coarse=", coarse)
 	camera = Camera3D.new()
 	camera.far = 4000
 	camera.fov = 65
@@ -67,13 +69,13 @@ func run() -> void:
 	target.x = (best % world.CW + 0.5) * world.CS * GameConfig.TILE
 	target.z = (best / world.CW + 0.5) * world.CS * GameConfig.TILE
 	target.y = heights.ground_at(target.x, target.z) + 12.0
-	for view in 3:
-		var offset: Vector3 = [Vector3(0, 90, -330), Vector3(420, 45, -180), Vector3(-300, 30, -520)][view]
+	for view in 4:
+		var offset: Vector3 = [Vector3(0, 90, -330), Vector3(420, 45, -180), Vector3(-300, 30, -520), Vector3(250, 140, -1000)][view]
 		var at := target + offset
 		at.y = maxf(at.y, heights.ground_at(at.x, at.z) + 40.0)
 		camera.look_at_from_position(at, target)
 		vegetation.update(at.x, at.z, true)
-		cycle.apply(7.5 if view == 0 else (12.0 if view == 1 else 17.3), 0.0)
+		cycle.apply([7.5, 12.0, 17.3, 10.0][view], 0.0)
 		# Clear panorama variant deliberately reduces ordinary fog in BOTH comparison arms.
 		if "--clear" in OS.get_cmdline_user_args():
 			env_node.environment.fog_density *= 0.35
