@@ -20,15 +20,16 @@ const TAP_TIME := 0.12
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 60)
-	print("уклон газ скорость | нажатие: курс°  смещение м | удержание: °/с  радиус м  бок. м/с²  руль  снос")
+	print("уклон газ скорость | нажатие: курс°  смещение м | °/с через 0,6 с | удержание 2 с: °/с  радиус м  бок. м/с²  руль  снос")
 	# уклон, газ (+) или тормоз (-): ровно накатом, подъём с педалями, спуск накатом, спуск с тормозом (половина и полный)
 	for mode: Vector2 in [Vector2(0, 0), Vector2(0.25, 1), Vector2(-0.3, 0), Vector2(-0.3, -0.5), Vector2(-0.3, -1)]:
 		var grade := mode.x
 		for pace: float in ([2.0, 3.5, 5.0, 7.0] if mode.y > 0.0 else [3.0, 6.0, 10.0, 14.0, 18.0, 24.0]):
 			var tap := ride(grade, pace, TAP_TIME, 1.0, mode.y)
 			var hold := ride(grade, pace, 2.0, 2.0, mode.y)
-			print("%5.2f %4.1f %5.1f м/с | %6.1f  %6.2f | %6.1f  %6.1f  %5.1f  %4.2f  %5.2f%s" % [grade, mode.y, pace,
-				tap.turned, tap.offset, hold.rate, pace / maxf(deg_to_rad(hold.rate), 0.001),
+			var early := ride(grade, pace, 0.6, 0.6, mode.y) # дуга через 0,6 с удержания: то, что чувствуется в начале поворота
+			print("%5.2f %4.1f %5.1f м/с | %6.1f  %6.2f | %5.1f | %6.1f  %6.1f  %5.1f  %4.2f  %5.2f%s" % [grade, mode.y, pace,
+				tap.turned, tap.offset, early.rate, hold.rate, pace / maxf(deg_to_rad(hold.rate), 0.001),
 				pace * deg_to_rad(hold.rate), hold.steer, hold.slip, ("  ПАДЕНИЕ %d" % hold.cause) if hold.crashed or tap.crashed else ""])
 	quit(0)
 

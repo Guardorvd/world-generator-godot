@@ -56,7 +56,7 @@ func run() -> void:
 		var held := first
 		for i in 45: held = controls.bike_steer(1.0, 1.0 / 60, pace)
 		# 12.11: удержание на скорости мягче нажатия (KEY_STEER_HOLD), на малой — полный руль
-		check(first > 0.0 and first < 0.4 and (held > 0.9 if pace < 5.0 else held > 0.5 and held < 0.75), "быстрое начало и дуга удержания на %.0f м/с (%.2f)" % [pace, held])
+		check(first > 0.0 and first < 0.4 and (held > 0.9 if pace < 5.0 else held > 0.7 and held < 0.97), "быстрое начало и дуга удержания на %.0f м/с (%.2f)" % [pace, held])
 		for i in 90: held = controls.bike_steer(1.0, 1.0 / 60, pace)
 		check(held > 0.9, "долгое удержание дожимает дугу до полной")
 		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
