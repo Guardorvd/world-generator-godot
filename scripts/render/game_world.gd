@@ -63,6 +63,7 @@ var stream_coordinator := WorldStreamCoordinator.new()
 var interaction_service := InteractionService.new()
 var world: WorldData
 var heights: Heightfield
+var local_mist: Node3D
 var hud: Hud
 var player: PlayerState
 var bike: BikeRide
@@ -378,6 +379,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	local_mist = preload("res://scripts/render/local_mist.gd").new()
+	add_child(local_mist)
+	local_mist.setup(world, heights)
 	_apply_shadows()
 	day.terrain_mats = [$Terrain.material_override]
 	if outer != null and outer._mat != null:
@@ -1133,6 +1137,7 @@ func _process(delta: float) -> void:
 	day.apply(hour, time)
 
 	stream_coordinator.update(pos)
+	local_mist.update(camera.global_position, day, delta, time)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
 	var fire_time := lerpf(_prev_time, time, alpha)

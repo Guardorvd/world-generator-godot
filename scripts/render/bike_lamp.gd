@@ -58,6 +58,7 @@ func _ready() -> void:
 	# 12.4: свет рассеянный, без чётких краёв: большое spot_angle_attenuation (4) — яркость плавно падает
 	# от середины пятна и у края конуса уже почти нулевая, граница не видна. Конусы шире, чтобы пятно не сжалось
 	var beam := SpotLight3D.new()
+	beam.light_volumetric_fog_energy = 0.0
 	beam.name = "Beam"
 	beam.light_color = Color(1.0, 0.93, 0.8)
 	beam.light_energy = 18.0
@@ -73,6 +74,7 @@ func _ready() -> void:
 	_lights.append(beam)
 	# Ближняя заливка: рассеивает пятно под колесом и переход к темноте по бокам
 	var flood := SpotLight3D.new()
+	flood.light_volumetric_fog_energy = 0.0
 	flood.name = "Flood"
 	flood.light_color = Color(1.0, 0.9, 0.76)
 	flood.light_energy = 2.6
@@ -88,6 +90,7 @@ func _ready() -> void:
 	_lights.append(flood)
 	# Ореол вокруг фары: слабый свет на руль, колесо и землю рядом — свет не только впереди
 	var halo := OmniLight3D.new()
+	halo.light_volumetric_fog_energy = 0.0
 	halo.name = "Halo"
 	halo.light_color = Color(1.0, 0.9, 0.76)
 	halo.light_energy = 0.35

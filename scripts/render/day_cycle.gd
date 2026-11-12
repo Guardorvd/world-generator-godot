@@ -57,6 +57,9 @@ var world_seed := 0            # сид мира: какие ночи с сия�
 var events := {}               # явления текущей ночи (см. _night_events); можно подменить для снимков
 ## -1 uses seeded weather; captures can fix coverage without changing time.
 var cloud_cover_override := -1.0
+var local_mist := 0.0 # Shared, smoothed weather strength for geographic fog patches.
+var _fog_time := NAN
+var _air_density := 0.0
 var _clock := NAN              # часы без сброса в полночь: по ним вращаются звёзды и считаются ночи
 var _night := 0x7fffffff
 var _dark_active := true       # были ли включены ночные параметры шейдера неба на прошлом кадре
@@ -221,6 +224,18 @@ func apply(hour: float, time: float) -> void:
 	var ambient: Color = s[5]
 	env.ambient_light_color = ambient.lerp(Color(0.72, 0.77, 0.85), overcast * 0.45)
 	env.fog_density *= lerpf(1.0, 1.45, overcast)
+	# Seconds of game time: pause freezes the atmosphere; time skips ease over 12 s.
+	var fog_blend := 1.0 if is_nan(_fog_time) else 1.0 - exp(-clampf(time - _fog_time, 0.0, 1.0) / 12.0)
+	_fog_time = time
+	local_mist = lerpf(local_mist, clampf(mist + overcast * 0.15, 0.0, 1.0), fog_blend)
+	_air_density = lerpf(_air_density, 0.00035 + 0.00065 * float(s[8]) + 0.0002 * overcast, fog_blend)
+	env.volumetric_fog_density = _air_density
+	env.volumetric_fog_albedo = Color(0.86, 0.90, 0.95).lerp(s[2], 0.12)
+	light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
+	if env.volumetric_fog_enabled:
+		# Share extinction with the far haze instead of stacking two full fog layers.
+		env.fog_density = maxf(0.0002, env.fog_density - _air_density * 0.65)
+		env.fog_height_density *= 0.35
 	env.adjustment_saturation = lerpf(float(s[13]), 0.96, overcast)
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)
 	# Soften contrast through direct/sky balance, not translucent shadows.

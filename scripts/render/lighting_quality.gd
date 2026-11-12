@@ -29,7 +29,15 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 	env.ssil_radius = 3.0
 	env.ssil_intensity = 0.3
 	env.ssil_normal_rejection = 0.8
-	# Fast rides and a moving headlamp: no temporal volumetric trails or GI
-	# cascade updates. Height/distance fog supplies atmosphere on every tier.
-	env.volumetric_fog_enabled = false
+	# Keep the froxel range inside existing tree shadows. Ordinary fog covers distance.
+	env.volumetric_fog_enabled = forward_plus and level >= 1
+	env.volumetric_fog_length = 160.0 if level < 2 else 190.0
+	env.volumetric_fog_detail_spread = 0.65
+	env.volumetric_fog_anisotropy = 0.65
+	env.volumetric_fog_ambient_inject = 0.35
+	env.volumetric_fog_sky_affect = 0.0
+	env.volumetric_fog_temporal_reprojection_enabled = true
+	env.volumetric_fog_temporal_reprojection_amount = 0.75
+	if env.volumetric_fog_enabled:
+		RenderingServer.environment_set_volumetric_fog_volume_size(96 if level == 1 else 128, 64 if level == 1 else 96)
 	env.sdfgi_enabled = false

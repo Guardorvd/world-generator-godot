@@ -3,6 +3,7 @@ extends "res://tools/forest_scene_perf.gd"
 ## actual game environment/day cycle. --hour 7.5 --quality 1 --cover 0.2
 ## --baseline uses extracted HEAD resources under .godot/lighting_baseline.
 var cycle: RefCounted
+var mist: Node3D
 
 func setup() -> void:
 	super.setup()
@@ -44,9 +45,18 @@ func setup() -> void:
 		_replace_materials(veg.understory)
 		_replace_nodes(root)
 	cycle.apply(float(Dev.arg("hour", "7.5")), 0.0)
+	if "--no-fog" in OS.get_cmdline_user_args():
+		environment.volumetric_fog_enabled = false
+		cycle.apply(float(Dev.arg("hour", "7.5")), 0.0)
+	if "--local-fog" in OS.get_cmdline_user_args():
+		world.moist.fill(0.85)
+		mist = preload("res://scripts/render/local_mist.gd").new()
+		root.add_child(mist)
+		mist.setup(world, Heightfield.new(world, false))
 	results.hour = float(Dev.arg("hour", "7.5"))
 	results.quality = int(Dev.arg("quality", "1"))
 	results.adapter = RenderingServer.get_video_adapter_name()
+	results.volumetric_fog = environment.volumetric_fog_enabled
 	if "--lamp" in OS.get_cmdline_user_args():
 		var lamp := preload("res://scripts/render/bike_lamp.gd").new()
 		camera.add_child(lamp)
@@ -56,6 +66,8 @@ func setup() -> void:
 
 func _process(delta: float) -> bool:
 	var done := super._process(delta)
+	if mist != null and camera != null:
+		mist.update(camera.position, cycle, delta, elapsed)
 	if camera != null and "--turns" in OS.get_cmdline_user_args():
 		camera.rotate_y(sin(elapsed * 1.7) * 0.6)
 	return done
