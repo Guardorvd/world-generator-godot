@@ -77,6 +77,10 @@ const LEAN_BANK_FROM := 0.05   # поперечный уклон полотна 
 const LEAN_BANK_FULL := 0.2    # и с которого он полный
 const STEER_RATE := 3.8        # скорость поворота руля, доля хода в секунду (30.10: было 5 — руль дёргался)
 const STEER_CENTER := 5.0      # и возврата руля в середину, когда его отпустили (было 7)
+## 13.11: руль идёт к команде тем быстрее, чем дальше от неё (в начале хода до 1 + STEER_SNAP раз), и мягко
+## подходит к ней: курс начинает меняться в первые 0,1 с после нажатия (полный руль за 0,14 с вместо 0,2),
+## а у цели руль не дёргается. Возврат в середину прежний.
+const STEER_SNAP := 1.0
 const TURN_RESPONSE_SLOW := 10.0 # отклик курса на руль на малой скорости
 const TURN_RESPONSE_FAST := 4.5  # и на большой (TURN_PACE_HIGH)
 const TURN_PACE_LOW := 3.0     # между этими скоростями, м/с, отклик плавно меняется
@@ -1154,7 +1158,8 @@ func _align(dt: float) -> float:
 ## Руль отзывчив на малой скорости; на большой сцепление расширяет дугу и чуть съедает ход.
 ## Боковая инерция и торможение делят общий запас сцепления.
 func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
-	steer = move_toward(steer, turn, dt * (STEER_CENTER if is_zero_approx(turn) else STEER_RATE) * (RIDER_STEER if contact_model else 1.0))
+	var steer_rate := STEER_CENTER if is_zero_approx(turn) else STEER_RATE * (1.0 + STEER_SNAP * minf(absf(turn - steer), 1.0))
+	steer = move_toward(steer, turn, dt * steer_rate * (RIDER_STEER if contact_model else 1.0))
 	var pace := absf(speed)
 	# На малой скорости манёвр лёгкий; на большой у перекладки появляется вес.
 	var response := lerpf(TURN_RESPONSE_SLOW, TURN_RESPONSE_FAST, smoothstep(TURN_PACE_LOW, TURN_PACE_HIGH, pace)) * (1.0 if contact_model else grip)
@@ -1216,6 +1221,21 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	else:
 		_yaw_rate = clampf(_yaw_rate, -limit, limit)
 	return _yaw_rate * dt
+
+
+## Руль, как его видно на модели: на месте — команда, на ходу — в основном то, что велосипед действительно делает
+## (доля фактической угловой скорости от геометрического хода руля), и тем меньше, чем выше скорость: на скорости
+## настоящий руль почти не поворачивается, поворот идёт наклоном. Раньше модель показывала саму команду — руль
+## выворачивался на 34° сразу и на любой скорости, а курс менялся позже и по широкой дуге.
+const STEER_SHOWN_INPUT := 0.3   # доля команды, которая остаётся видна на ходу (нажатие читается сразу)
+const STEER_SHOWN_FAST := 0.4    # на скорости руль виден в такую долю хода
+const STEER_SHOWN_PACE := Vector2(5.0, 15.0)
+func steer_shown() -> float:
+	var pace := absf(speed)
+	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
+	var actual := clampf(-_yaw_rate * (1.0 if speed >= 0.0 else -1.0) / maxf(rate, 0.2), -1.0, 1.0)
+	var moving := smoothstep(0.5, 3.0, pace) * (0.0 if airborne else 1.0)
+	return lerpf(steer, lerpf(actual, steer, STEER_SHOWN_INPUT), moving) * lerpf(1.0, STEER_SHOWN_FAST, smoothstep(STEER_SHOWN_PACE.x, STEER_SHOWN_PACE.y, pace))
 
 
 ## Опора держит мелкие неровности и изломы; отрыв — только с края или когда рельеф впереди

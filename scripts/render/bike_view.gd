@@ -264,7 +264,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 	_cur[S_SQUASH_F] = b.squash_f
 	_cur[S_SQUASH_R] = b.squash_r
 	_cur[S_WHEEL] = b.wheel
-	_cur[S_STEER] = b.steer
+	_cur[S_STEER] = b.steer_shown() # 13.11: руль на модели — фактический поворот, а не команда (BikeRide.steer_shown)
 	_cur[S_CRANK] = b.crank
 	# В полёте педали быстро приходят к горизонтали, а в повороте накатом наружная нога опускается вниз для упора.
 	# Физический crank не меняется: это стойка седока, тягу и частоту усилия не подделываем.
