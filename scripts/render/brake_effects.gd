@@ -395,7 +395,7 @@ func _emit_wheels(dt: float, b: BikeRide, w: WorldData, h: Heightfield) -> void:
 			continue
 
 		# Направление колеса (переднее повёрнуто на угол руля)
-		var wheel_yaw := b.heading - (b.steer * BikeView.STEER_VIEW if is_front else 0.0)
+		var wheel_yaw := b.heading - (b.steer_shown() * BikeView.STEER_VIEW if is_front else 0.0)
 		var w_fwd := Vector3(-sin(wheel_yaw), 0.0, -cos(wheel_yaw))
 		var w_right := Vector3(cos(wheel_yaw), 0.0, -sin(wheel_yaw))
 
