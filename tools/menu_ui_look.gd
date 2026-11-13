@@ -79,6 +79,7 @@ func _run() -> void:
 	_main._show("pause")
 	_main.get_node("%Back").show()
 	await _capture_screen("pause", "%Pause")
+	await _clear_saves()
 	_main.queue_free()
 	await process_frame
 	for seed_text in _test_seeds:
@@ -89,6 +90,58 @@ func _run() -> void:
 	Saves.dir = _old_saves
 	print("MENU_UI failures=", _failures)
 	quit(int(_failures > 0))
+
+
+func _clear_saves() -> void:
+	var orphan := Saves.path_for("неизвестное зерно", "manual") + ".bak"
+	var temporary := Saves.path_for("прерванная запись") + ".tmp"
+	for path in [orphan, temporary]:
+		var file := FileAccess.open(path, FileAccess.WRITE)
+		file.store_string("damaged")
+		file.close()
+	var unrelated := _test_saves.path_join("notes.txt")
+	var notes := FileAccess.open(unrelated, FileAccess.WRITE)
+	notes.store_string("keep")
+	notes.close()
+	var settings := GameContext.scope.settings
+	settings.remember_seed("Долина-27")
+	settings.toggle_favorite("Мир-7")
+	_main._show("menu")
+	_main._open_all_worlds()
+	var button: Button = _main.get_node("%ClearAllSaves")
+	_check(button.is_visible_in_tree() and not button.disabled, "очистка доступна рядом с хранилищем")
+	button.pressed.emit()
+	_check(_main._confirm != null and not Saves.active_files().is_empty(), "открытие диалога не меняет файлы")
+	_main._confirm.canceled.emit()
+	_check(FileAccess.file_exists(orphan), "отмена сохраняет слоты")
+	button.pressed.emit()
+	_main._confirm.confirmed.emit()
+	var files := DirAccess.get_files_at(_test_saves)
+	_check(Saves.active_files().is_empty() and Saves.seeds().is_empty(), "активные слоты исчезли, включая нечитаемые")
+	_check(FileAccess.file_exists(unrelated) and files.size() > 1, "архивы и посторонние файлы сохранены")
+	_check(_main._carousel_seeds.is_empty() and _main._chosen_seed().is_empty(), "карусель и выбор очищены")
+	_check(_main.get_node("%Start").text == "Создать мир" and not _main.get_node("%Carousel/Strip").visible,
+		"с пустым списком доступно создание, карусель скрыта")
+	var reloaded := GameSettings.new()
+	reloaded.settings_path = settings.settings_path
+	reloaded.load_settings()
+	_check(reloaded.hide_recommended_worlds and reloaded.recent_seeds.is_empty() and reloaded.favorite_seeds.is_empty() and reloaded.last_seed.is_empty(),
+		"пустой список сохраняется после перезапуска")
+	await _capture_state("cleared")
+	_main._on_start()
+	_check(_main.get_node("%NewWorld").visible and not _main.get_node("%Suggestions").visible, "пустое меню открывает создание мира")
+	_main._open_all_worlds()
+	_main._show_seed_tab("recommended")
+	var restore: Button = _main.get_node("%SeedList").get_child(0)
+	restore.pressed.emit()
+	_check(_main._carousel_seeds.has(RecommendedSeeds.SEEDS[0].seed), "рекомендации можно вернуть")
+	var restored_settings := GameSettings.new()
+	restored_settings.settings_path = settings.settings_path
+	restored_settings.load_settings()
+	_check(not restored_settings.hide_recommended_worlds, "выбор показывать рекомендации записан")
+	for name in files:
+		if name == "notes.txt" or ".save" in name and ".archive." in name:
+			DirAccess.remove_absolute(_test_saves.path_join(name))
 
 
 func _fixture(seed_text: String, saved_at: int) -> void:

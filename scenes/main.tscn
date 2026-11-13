@@ -512,6 +512,15 @@ theme_override_font_sizes/font_size = 14
 tooltip_text = "Сколько места занимают готовые миры; очистка не трогает сохранения"
 text = "Хранилище миров"
 
+[node name="ClearAllSaves" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+text = "Очистить все сохранения"
+tooltip_text = "Перенести сохранения в архив и убрать все миры из меню"
+
 [node name="Spacer" type="Control" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
 size_flags_horizontal = 3
 
@@ -599,6 +608,7 @@ text = "! Не доделано: соседние области работаю�
 autowrap_mode = 3
 
 [node name="Author" type="Label" parent="UI/Root/NewWorld/Panel/Box"]
+unique_name_in_owner = true
 theme_type_variation = &"SectionLabel"
 text = "Миры от автора"
 
@@ -1366,6 +1376,7 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/PlaySelected" to="." method="_on_start"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/Storage" to="." method="_open_storage"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/ClearAllSaves" to="." method="_clear_all_saves"]
 [connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/WorldsBack" to="." method="_return_to_menu_screen"]
 [connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/CreateWorld" to="." method="_on_create_world"]
 [connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewBack" to="." method="_return_to_menu_screen"]

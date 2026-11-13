@@ -73,6 +73,11 @@ func _run() -> void:
 	await RenderingServer.frame_post_draw
 	_check(_backdrop.freeze() == null, "отмена оставляет афишу")
 	_check_released(forest_before, style_before)
+	_check(_backdrop.start(root.size, settings, quality), "можно начать сборку повторно")
+	while not _backdrop.step_ms.has("site_north"):
+		await process_frame
+	_check(_backdrop.freeze() == null, "отмена во время подготовки участка")
+	_check_released(forest_before, style_before)
 	if not _backdrop.start(root.size, settings, quality):
 		push_error("Не удалось начать сборку привала.")
 		quit(1)

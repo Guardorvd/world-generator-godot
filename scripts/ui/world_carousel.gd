@@ -13,6 +13,7 @@ const MAX_WORLDS := 8
 @onready var _placeholder: Label = $Card/CardContent/Artwork/Art/Placeholder
 @onready var _name: Label = $Card/CardContent/WorldName
 @onready var _summary: Label = $Card/CardContent/Summary
+@onready var _strip: HBoxContainer = $Strip
 @onready var _previous: Button = $Strip/Previous
 @onready var _next: Button = $Strip/Next
 @onready var _cards: HBoxContainer = $Strip/Cards
@@ -70,6 +71,8 @@ func move(direction: int) -> void:
 
 
 func move_focused(direction: int) -> bool:
+	if _entries.is_empty():
+		return false
 	var focus := get_viewport().gui_get_focus_owner()
 	if focus == _start:
 		move(direction)
@@ -102,12 +105,15 @@ func _show_index(index: int, animate: bool) -> void:
 	var changed := _index != index
 	_index = index
 	var entry: Dictionary = _entries[index] if index >= 0 else {}
+	_artwork.visible = index >= 0
+	_strip.visible = index >= 0
 	_map.texture = entry.get("texture")
 	_placeholder.visible = _map.texture == null
-	_placeholder.text = entry.get("seed", "Новый мир")
+	_placeholder.text = entry.get("seed", "Список миров пуст")
 	_name.visible = _map.texture != null
 	_name.text = entry.get("seed", "Случайный мир")
-	_summary.text = entry.get("summary", "Мир создастся при запуске, около минуты.")
+	_summary.text = entry.get("summary", "Список миров пуст")
+	_summary.custom_minimum_size.y = 44.0 if index >= 0 else 24.0
 	_previous.disabled = _entries.size() < 2
 	_next.disabled = _previous.disabled
 	for i in _entries.size():
@@ -151,7 +157,7 @@ func _link_focus() -> void:
 	if _start == null:
 		return
 	var cards := _strip_buttons()
-	var selected: Control = _cards.get_child(maxi(_index, 0))
+	var selected: Control = _cards.get_child(_index) if _index >= 0 else _start
 	_start.focus_neighbor_top = _start.get_path_to(selected)
 	_start.focus_neighbor_bottom = _start.get_path_to(_actions[0])
 	for button in cards:

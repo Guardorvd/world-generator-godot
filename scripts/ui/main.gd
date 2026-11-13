@@ -37,6 +37,7 @@ var _carousel_seeds: Array[String] = []
 var _selected_seed := ""
 var _card_reads := 0
 var _cards_ready := false
+var _has_active_saves := false
 var _pending_save := {}
 var _save_elapsed := 0.0
 var _save_status: Label
@@ -135,6 +136,7 @@ func _ready() -> void:
 		button.theme_type_variation = &"ListRow"
 		button.pressed.connect(_suggested_seed.bind(item.seed))
 		%Suggestions.add_child(button)
+	_sync_author_suggestions()
 	_refresh_world_cards()
 	_seed_tab = "saved" if not _saved_seeds.is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended")
 	%LoadPreview.texture = null
@@ -194,6 +196,12 @@ func _unhandled_input(event: InputEvent) -> void:
 func _open_new_world() -> void:
 	seed_edit.text = random_seed()
 	_show("new_world")
+
+
+func _sync_author_suggestions() -> void:
+	var show_suggestions := not GameContext.scope.settings.hide_recommended_worlds and not RecommendedSeeds.SEEDS.is_empty()
+	%Author.visible = show_suggestions
+	%Suggestions.visible = show_suggestions
 
 
 func _open_all_worlds() -> void:
@@ -520,10 +528,12 @@ func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
 	_cards_ready = true
 	_world_cards.clear()
 	_saved_seeds = Saves.seeds()
+	_has_active_saves = not Saves.active_files().is_empty()
 	var settings := GameContext.scope.settings
 	var known: Array = _saved_seeds + settings.recent_seeds + settings.favorite_seeds
-	for item: Dictionary in RecommendedSeeds.SEEDS:
-		known.append(item.seed)
+	if not settings.hide_recommended_worlds:
+		for item: Dictionary in RecommendedSeeds.SEEDS:
+			known.append(item.seed)
 	for seed_text: String in known:
 		if not _world_cards.has(seed_text):
 			_world_cards[seed_text] = _read_world_card(seed_text)
@@ -593,8 +603,14 @@ func _show_seed_tab(tab: String) -> void:
 		"favorites":
 			rows = GameContext.scope.settings.favorite_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
 		"recommended":
-			rows = RecommendedSeeds.SEEDS
-	if rows.is_empty():
+			if GameContext.scope.settings.hide_recommended_worlds:
+				var restore := Button.new()
+				restore.text = "Показать миры от автора"
+				restore.pressed.connect(_restore_author_worlds)
+				list.add_child(restore)
+			else:
+				rows = RecommendedSeeds.SEEDS
+	if rows.is_empty() and list.get_child_count() == 0:
 		var hint := Label.new()
 		hint.text = {recent = "Здесь появятся последние миры", favorites = "Отметьте мир звёздочкой, и он останется здесь",
 			recommended = "Автор пока ничего не рекомендовал", saved = "Сохранения появятся после начала игры"}[tab]
@@ -739,6 +755,8 @@ func _update_selection() -> void:
 	var corrupt: bool = state.get("corrupt", false)
 	var label := "Продолжить путешествие" if state.get("saved", false) else "Начать путешествие"
 	%Start.text = "Все миры" if corrupt else label
+	if seed_text.is_empty():
+		%Start.text = "Создать мир"
 	%PlaySelected.text = label
 	%PlaySelected.disabled = corrupt or seed_text.is_empty()
 	for row in %SeedList.get_children():
@@ -748,7 +766,7 @@ func _update_selection() -> void:
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
 	%PreviewHint.text = "Карта мира появится после первого запуска"
-	%ChoiceName.text = "Случайный мир" if seed_text.is_empty() else "«%s»" % seed_text
+	%ChoiceName.text = "Мир не выбран" if seed_text.is_empty() else "«%s»" % seed_text
 	%WorldStatus.text = state.get("summary", "")
 	var star: Button = %Star
 	var fav := seed_text in GameContext.scope.settings.favorite_seeds
@@ -761,6 +779,8 @@ func _update_selection() -> void:
 	_load_manual.disabled = not state.get("manual", false)
 	%RestartWorld.disabled = seed_text.is_empty()
 	%DeleteWorld.disabled = seed_text.is_empty()
+	var settings := GameContext.scope.settings
+	%ClearAllSaves.disabled = not _has_active_saves and _world_cards.is_empty() and settings.last_seed.is_empty()
 
 
 ## Время сохранения по часам компьютера (unix-время хранится в UTC)
@@ -851,6 +871,65 @@ func _on_clear_cache() -> void:
 	_show_seed_tab(_seed_tab)
 
 
+func _clear_all_saves() -> void:
+	if busy or game != null or not %AllWorlds.visible or %ClearAllSaves.disabled:
+		return
+	_ask("Очистить все сохранения?", "Автоматические, ручные и резервные сохранения будут перенесены в архив. Все миры исчезнут из меню, а списки недавних и избранных очистятся.",
+		"Очистить", true, _do_clear_all_saves)
+
+
+func _do_clear_all_saves() -> void:
+	if busy or game != null:
+		return
+	var settings := GameContext.scope.settings
+	var last := settings.last_seed
+	var recent := settings.recent_seeds.duplicate()
+	var favorites := settings.favorite_seeds.duplicate()
+	var hidden := settings.hide_recommended_worlds
+	settings.last_seed = ""
+	settings.recent_seeds = []
+	settings.favorite_seeds = []
+	settings.hide_recommended_worlds = true
+	var err := settings.save_settings()
+	if err == OK:
+		err = Saves.archive_all()
+		if err != OK:
+			_message("Не удалось перенести все сохранения", error_string(err))
+	else:
+		_message("Не удалось очистить список миров", error_string(err))
+	if err != OK:
+		settings.last_seed = last
+		settings.recent_seeds = recent
+		settings.favorite_seeds = favorites
+		settings.hide_recommended_worlds = hidden
+		var restore_error := settings.save_settings()
+		if restore_error != OK:
+			push_warning("Не удалось восстановить списки миров на диске: " + error_string(restore_error))
+		_refresh_world_cards()
+		_show_seed_tab(_seed_tab)
+		return
+	_previews.clear()
+	_selected_seed = ""
+	_sync_author_suggestions()
+	_refresh_world_cards()
+	_show_seed_tab("saved")
+	_show("menu")
+
+
+func _restore_author_worlds() -> void:
+	var settings := GameContext.scope.settings
+	settings.hide_recommended_worlds = false
+	var err := settings.save_settings()
+	if err != OK:
+		settings.hide_recommended_worlds = true
+		_message("Не удалось показать рекомендации", error_string(err))
+		return
+	_sync_author_suggestions()
+	_refresh_world_cards()
+	_show_seed_tab("recommended")
+	%Recommended.grab_focus()
+
+
 func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
 	var worlds: Control = %AllWorlds.get_node("Panel")
@@ -905,6 +984,9 @@ func _on_start() -> void:
 		return
 	if %NewWorld.visible:
 		_on_create_world()
+		return
+	if _selected_seed.is_empty():
+		_open_new_world()
 		return
 	_launch_seed(_selected_seed)
 

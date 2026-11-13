@@ -113,6 +113,43 @@ static func seeds() -> Array:
 			out.append(d.seed)
 	return out
 
+## Включает повреждённые слоты и незавершённые записи, даже когда их зерно прочитать нельзя.
+static func active_files() -> PackedStringArray:
+	var files := PackedStringArray()
+	if not DirAccess.dir_exists_absolute(dir):
+		return files
+	for name: String in DirAccess.get_files_at(dir):
+		var parts := name.split(".")
+		if parts.size() < 3 or parts.size() > 4 or parts[0].length() != 64 or not parts[0].is_valid_hex_number():
+			continue
+		if parts[1] in ["auto", "manual"] and parts[2] == "save" and (parts.size() == 3 or parts[3] in ["bak", "tmp"]):
+			files.append(name)
+	return files
+
+
+## Снимает все активные слоты с меню. При ошибке возвращает уже перенесённые файлы.
+static func archive_all() -> Error:
+	var files := active_files()
+	if files.is_empty():
+		return OK
+	var folder := DirAccess.open(dir)
+	if folder == null:
+		return DirAccess.get_open_error()
+	var stamp := str(Time.get_unix_time_from_system()).replace(".", "_")
+	var moved := PackedStringArray()
+	for name in files:
+		var target := name + ".archive." + stamp
+		var err := ERR_ALREADY_EXISTS if folder.file_exists(target) else folder.rename(name, target)
+		if err != OK:
+			for index in range(moved.size() - 1, -1, -1):
+				var original := moved[index]
+				if folder.file_exists(original) or folder.rename(original + ".archive." + stamp, original) != OK:
+					push_warning("Сохранение осталось в архиве: " + original + ".archive." + stamp)
+			return err
+		moved.append(name)
+	return OK
+
+
 ## Перемещаем старые слоты в архив, чтобы новый прогресс не перезаписал их.
 static func archive_seed(seed_text: String) -> Error:
 	var stamp := str(Time.get_unix_time_from_system()).replace(".", "_")

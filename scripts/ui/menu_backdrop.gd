@@ -10,6 +10,8 @@ const Lighting := preload("res://scripts/render/lighting_quality.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
 const Catalog := preload("res://scripts/render/asset_catalog.gd")
+const GROUND_SHADER := preload("res://resources/menu/ground.gdshader")
+const LAKE_SHADER := preload("res://resources/menu/lake.gdshader")
 const GAME_SCENE := "res://scenes/game_world.tscn"
 const BIKE_SCENE := "res://scenes/bike.tscn"
 const SIDE := 256
@@ -22,12 +24,14 @@ const OAK_AT := Vector2(506.3, 807.0)
 const HOUR := 17.0 + 20.0 / 60.0
 const GLOBALS := [&"cloud_shadow", &"sun_dir", &"vegetation_night", &"style_haze",
 	&"style_depth", &"veg_center", &"vegetation_clock", &"veg_seeds", &"distant_vegetation"]
-const BUILD_STEPS := [&"light", &"site", &"heightfield", &"surface", &"terrain_far", &"terrain_near", &"water", &"mountains",
-	&"vegetation", &"far_forest_north", &"far_forest_south", &"rider"]
+const BUILD_STEPS := [&"light", &"site_north", &"site_south", &"heightfield", &"surface", &"terrain_far", &"terrain_near",
+	&"water", &"mountains", &"vegetation", &"far_forest_north", &"far_forest_south", &"rider"]
 const QUALITY := [0.5, 0.67, 1.0]
 const RIDER_TICK := 1.0 / 60.0
 const SAMPLE_FRAMES := 60
 const SLOW_FRAME := 0.050
+const ATMOSPHERE_STEP := 0.10
+const SITE_SEED := 4821
 
 static var _owner: Node
 
@@ -42,6 +46,9 @@ var _world: WorldData
 var _heights: Heightfield
 var _surface: Image
 var _terrain_material: ShaderMaterial
+var _lake_material: ShaderMaterial
+var _site_fields := {}
+var _site_rng: RandomNumberGenerator
 var _vegetation: VegetationLayer
 var _bike: BikeView
 var _rider: BikeRide
@@ -56,6 +63,7 @@ var _warm_frames := 0
 var _render_delta := 0.0
 var _rider_delta := 0.0
 var _seconds := 0.0
+var _next_atmosphere := 0.0
 var _wind_offset := 0.0
 var _display_size := Vector2i.ZERO
 var _adaptive := false
@@ -70,7 +78,7 @@ static func recommended_quality() -> int:
 
 
 ## quality: 0 — экономный, 1 — средний, 2 — полный. native_size нужен для съёмки афиши.
-func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false, adaptive := false) -> bool:
+func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false, interactive := false) -> bool:
 	if _view != null or not is_inside_tree() or DisplayServer.get_name() == "headless":
 		return false
 	if is_instance_valid(_owner) or VisualStyle.is_bound():
@@ -83,12 +91,13 @@ func start(display_size: Vector2i, settings: GameSettings, quality: int, native_
 	_settings.style_amount = settings.style_amount.duplicate()
 	_quality = clampi(quality, 0, QUALITY.size() - 1)
 	_render_divisor = 2 if _quality == 0 and not native_size else 1
-	_adaptive = adaptive
+	_adaptive = interactive
 	_sample_frames = 0
 	_slow_frames = 0
 	_step = 0
 	_warm_frames = 0
 	_seconds = 0.0
+	_next_atmosphere = 0.0
 	_wind_offset = 0.0
 	_render_delta = 0.0
 	_rider_delta = 0.0
@@ -130,7 +139,7 @@ func render_count() -> int:
 ## Снимок берётся только из уже прогретой сцены. При отмене сборки вызывающий оставляет афишу.
 func freeze() -> Image:
 	var image: Image
-	if is_prepared:
+	if is_prepared and _view != null:
 		image = _view.get_texture().get_image()
 	stop()
 	return image
@@ -154,10 +163,15 @@ func stop() -> void:
 	_heights = null
 	_surface = null
 	_terrain_material = null
+	_lake_material = null
+	_site_fields.clear()
+	_site_rng = null
 	_settings = null
 	if _owner == self:
 		VisualStyle.release()
-		VisualStyle.configure(_previous_style_on, _previous_style_amount)
+		# Если стиль меняли в настройках меню, эти значения уже принадлежат игроку.
+		if not _adaptive:
+			VisualStyle.configure(_previous_style_on, _previous_style_amount)
 		for parameter: StringName in GLOBALS:
 			var entry: Dictionary = ProjectSettings.get_setting("shader_globals/" + String(parameter))
 			RenderingServer.global_shader_parameter_set(parameter, entry.value)
@@ -178,19 +192,25 @@ func _process(delta: float) -> void:
 		var step: StringName = BUILD_STEPS[_step]
 		match step:
 			&"light": _build_light()
-			&"site": _build_site()
+			&"site_north":
+				_begin_site()
+				_build_site_rows(0, SIDE / 2)
+			&"site_south":
+				_build_site_rows(SIDE / 2, SIDE)
+				_finish_site()
 			&"heightfield": _build_heightfield()
-			&"surface": _build_surface()
-			&"terrain_far": _build_terrain(Rect2i(0, 0, SIDE - 1, 112))
-			&"terrain_near": _build_terrain(Rect2i(0, 112, SIDE - 1, 100))
-			&"water": _build_water()
-			&"mountains": _build_mountains()
-			&"vegetation":
+			&"surface":
 				var problem := Catalog.check()
 				if not problem.is_empty():
 					stop()
 					failed.emit(problem)
 					return
+				_build_surface()
+			&"terrain_far": _build_terrain(Rect2i(0, 0, SIDE - 1, 112))
+			&"terrain_near": _build_terrain(Rect2i(0, 112, SIDE - 1, 100))
+			&"water": _build_water()
+			&"mountains": _build_mountains()
+			&"vegetation":
 				_build_vegetation()
 			&"far_forest_north": _build_far_forest(0)
 			&"far_forest_south": _build_far_forest(1)
@@ -198,34 +218,41 @@ func _process(delta: float) -> void:
 		step_ms[step] = (Time.get_ticks_usec() - started) / 1000.0
 		_step += 1
 		return
+	if _warm_frames == 4 and not is_prepared:
+		return
+	if not is_prepared and _warm_frames == 0:
+		var started := Time.get_ticks_usec()
+		_vegetation.update(EYE_AT.x, EYE_AT.y, false, minf(delta, 0.1))
+		step_ms["vegetation_upload_max"] = maxf(step_ms.get("vegetation_upload_max", 0.0),
+			(Time.get_ticks_usec() - started) / 1000.0)
+		# Первый вид целиком: частичная раскладка успела бы показать дырки и прогреть лишние варианты.
+		if not _vegetation.placement_ready():
+			return
+		_draw_frame = _render_divisor - 1
+		_wind_offset = _vegetation.stream.clock - _seconds
 	var dt := minf(delta, 0.1)
 	_seconds += dt
 	_render_delta += dt
 	_draw_frame += 1
-	var just_prepared := false
-	if not is_prepared:
-		var started := Time.get_ticks_usec()
-		# Сборка и загрузка буферов происходят штатными порциями на кадр.
-		_vegetation.update(EYE_AT.x, EYE_AT.y, false, dt)
-		step_ms["vegetation_upload_max"] = maxf(step_ms.get("vegetation_upload_max", 0.0),
-			(Time.get_ticks_usec() - started) / 1000.0)
-		if _vegetation.placement_ready() and _draw_frame % _render_divisor == 0:
-			_warm_frames += 1
-			if _warm_frames == 5:
-				build_ms = (Time.get_ticks_usec() - _started) / 1000.0
-				_wind_offset = _vegetation.stream.clock - _seconds
-				is_prepared = true
-				just_prepared = true
-		elif _warm_frames == 0:
-			# Не компилируем варианты материалов по мере поступления неполных пачек.
-			return
 	if _draw_frame % _render_divisor != 0:
 		return
 	_animate(_render_delta)
 	_render_delta = 0.0
 	_view.render_target_update_mode = SubViewport.UPDATE_ONCE
-	if just_prepared:
-		prepared.emit()
+	if not is_prepared:
+		_warm_frames += 1
+		if _warm_frames == 4:
+			_finish_warmup(_view)
+
+
+## Текстура готова только после завершения отрисовки, в том числе на медленном GPU.
+func _finish_warmup(view: SubViewport) -> void:
+	await RenderingServer.frame_post_draw
+	if not is_instance_valid(view) or _view != view:
+		return
+	build_ms = (Time.get_ticks_usec() - _started) / 1000.0
+	is_prepared = true
+	prepared.emit()
 
 
 ## Несколько медленных кадров нужны, чтобы случайный рывок окна не выключил сцену.
@@ -261,7 +288,7 @@ func _build_light() -> void:
 	var sun := DirectionalLight3D.new()
 	_scene.add_child(sun)
 	_cycle = DayCycle.new(env, sun)
-	_cycle.world_seed = 4821
+	_cycle.world_seed = SITE_SEED
 	_cycle.cloud_cover_override = 0.3
 	Lighting.apply(env, sun, 0, _quality == 2, 0)
 	sun.directional_shadow_max_distance = 80.0
@@ -275,7 +302,7 @@ func _build_light() -> void:
 	_camera.add_child(StyleGrain.new())
 
 
-func _build_site() -> void:
+func _begin_site() -> void:
 	var world := WorldData.new()
 	world.W = SIDE
 	world.H = SIDE
@@ -283,24 +310,32 @@ func _build_site() -> void:
 	world.CS = WorldData.CHUNK_SIZE
 	world.CW = SIDE / world.CS
 	world.CH = SIDE / world.CS
-	world.seed_num = _cycle.world_seed
-	var elevation := PackedFloat32Array()
-	var filled := PackedFloat32Array()
-	var moist := PackedFloat32Array()
-	var water_distance := PackedFloat32Array()
-	var biome := PackedByteArray()
-	var lake := PackedByteArray()
-	elevation.resize(world.N)
-	filled.resize(world.N)
-	moist.resize(world.N)
-	water_distance.resize(world.N)
-	biome.resize(world.N)
-	lake.resize(world.N)
-	var rng := RandomNumberGenerator.new()
-	rng.seed = 4821
+	world.seed_num = SITE_SEED
+	for key in ["elevation", "filled", "moist", "water_distance"]:
+		var field := PackedFloat32Array()
+		field.resize(world.N)
+		_site_fields[key] = field
+	for key in ["biome", "lake"]:
+		var field := PackedByteArray()
+		field.resize(world.N)
+		_site_fields[key] = field
 	var chunks: Array[PackedInt32Array] = []
 	chunks.resize(world.CW * world.CH)
-	for j in SIDE:
+	world.chunks = chunks
+	_world = world
+	_site_rng = RandomNumberGenerator.new()
+	_site_rng.seed = SITE_SEED
+
+
+func _build_site_rows(first: int, last: int) -> void:
+	var elevation: PackedFloat32Array = _site_fields.elevation
+	var filled: PackedFloat32Array = _site_fields.filled
+	var moist: PackedFloat32Array = _site_fields.moist
+	var water_distance: PackedFloat32Array = _site_fields.water_distance
+	var biome: PackedByteArray = _site_fields.biome
+	var lake: PackedByteArray = _site_fields.lake
+	var chunks := _world.chunks
+	for j in range(first, last):
 		var z := (j + 0.5) * GameConfig.TILE
 		for i in SIDE:
 			var x := (i + 0.5) * GameConfig.TILE
@@ -327,15 +362,36 @@ func _build_site() -> void:
 			else:
 				var wooded := z < 405.0 + 45.0 * sin(x * 0.014) and shore > 0.035
 				biome[k] = Biomes.FOREST if wooded else Biomes.GRASS
-				if wooded and absf(x - EYE_AT.x) < (EYE_AT.y - z) * 0.78 + 35.0 and rng.randf() < 0.24:
-					var kind := Biomes.T_PINE if rng.randf() < 0.58 else (Biomes.T_BIRCH if rng.randf() < 0.5 else Biomes.T_OAK)
-					_plant(world, chunks, p + Vector2(rng.randf_range(-1.6, 1.6), rng.randf_range(-1.6, 1.6)),
-						kind, rng.randi_range(0, 2), rng.randf_range(0.58, 1.22))
+				if wooded and absf(x - EYE_AT.x) < (EYE_AT.y - z) * 0.78 + 35.0 and _site_rng.randf() < 0.24:
+					var kind := Biomes.T_PINE if _site_rng.randf() < 0.58 else (Biomes.T_BIRCH if _site_rng.randf() < 0.5 else Biomes.T_OAK)
+					_plant(_world, chunks, p + Vector2(_site_rng.randf_range(-1.6, 1.6), _site_rng.randf_range(-1.6, 1.6)),
+						kind, _site_rng.randi_range(0, 2), _site_rng.randf_range(0.58, 1.22))
+	_site_fields = {elevation = elevation, filled = filled, moist = moist, water_distance = water_distance, biome = biome, lake = lake}
+
+
+func _finish_site() -> void:
+	var world := _world
+	var chunks := world.chunks
 	_plant(world, chunks, OAK_AT, Biomes.T_OAK, ForestModels.OLD_AGE * 3, 1.08)
 	_plant(world, chunks, Vector2(448.0, 795.0), Biomes.T_BIRCH, 4, 0.67)
 	_plant(world, chunks, Vector2(519.0, 790.0), Biomes.T_BUSH, 1, 1.25)
 	world.chunks = chunks
 	world.obj_count = world.obj_x.size()
+	var elevation: PackedFloat32Array = _site_fields.elevation
+	world.h = elevation
+	world.elev = elevation
+	world.filled = _site_fields.filled
+	world.moist = _site_fields.moist
+	world.dist_water = _site_fields.water_distance
+	world.biome = _site_fields.biome
+	world.lake = _site_fields.lake
+	_site_fields.clear()
+	_site_rng = null
+
+
+func _build_heightfield() -> void:
+	var world := _world
+	var elevation := world.elev
 	var slope := PackedFloat32Array()
 	slope.resize(world.N)
 	for j in SIDE:
@@ -348,23 +404,12 @@ func _build_site() -> void:
 	var temperature := PackedFloat32Array()
 	temperature.resize(world.N)
 	temperature.fill(0.53)
-	world.h = elevation
-	world.elev = elevation
-	world.filled = filled
 	world.temp = temperature
-	world.moist = moist
-	world.dist_water = water_distance
 	world.slope = slope
-	world.biome = biome
-	world.lake = lake
 	world.ocean = empty
 	world.river = empty
 	world.path_mask = empty
-	_world = world
-
-
-func _build_heightfield() -> void:
-	_heights = Heightfield.new(_world, false)
+	_heights = Heightfield.new(world, false)
 	_origin = Vector3(EYE_AT.x, _heights.ground_at(EYE_AT.x, EYE_AT.y) + 1.4, EYE_AT.y)
 
 
@@ -382,8 +427,8 @@ static func _plant(world: WorldData, chunks: Array[PackedInt32Array], p: Vector2
 func _build_surface() -> void:
 	_surface = Floor.surface_image(_world)
 	var colors := {
-		Biomes.LAKE: Color("777e68"), Biomes.STONESHORE: Color("8b8772"),
-		Biomes.GRASS: Color("719453"), Biomes.FOREST: Color("567747"),
+		Biomes.LAKE: Color("6e8a82"), Biomes.STONESHORE: Color("8c8974"),
+		Biomes.GRASS: Color("7f965f"), Biomes.FOREST: Color("526a50"),
 	}
 	var pixels := PackedByteArray()
 	pixels.resize(_world.N * 3)
@@ -396,9 +441,15 @@ func _build_surface() -> void:
 		pixels[k * 3 + 1] = roundi(tone.g * variation * 255.0)
 		pixels[k * 3 + 2] = roundi(tone.b * variation * 255.0)
 	var base := Image.create_from_data(SIDE, SIDE, false, Image.FORMAT_RGB8, pixels)
-	_terrain_material = TerrainBuilder.new().material(base, _surface)
-	_terrain_material.set_shader_parameter("micro_enabled", false)
-	_cycle.terrain_mats.append(_terrain_material)
+	base.generate_mipmaps()
+	var forest := _surface.duplicate() as Image
+	forest.generate_mipmaps()
+	_terrain_material = ShaderMaterial.new()
+	_terrain_material.shader = GROUND_SHADER
+	_terrain_material.set_shader_parameter("base_tex", ImageTexture.create_from_image(base))
+	_terrain_material.set_shader_parameter("forest_tex", ImageTexture.create_from_image(forest))
+	_terrain_material.set_shader_parameter("detail_tex", Catalog.get_catalog().textures[3])
+	_terrain_material.set_shader_parameter("detail_normal", Catalog.get_catalog().textures[4])
 
 
 func _build_terrain(area: Rect2i) -> void:
@@ -411,10 +462,9 @@ func _build_water() -> void:
 	# Берег режется теми же треугольниками, что и озёра в игре.
 	var area := Rect2i(Vector2i((LAKE_AT - LAKE_RADII) / GameConfig.TILE),
 		Vector2i(LAKE_RADII * 2.0 / GameConfig.TILE)).grow(9)
-	var material := WaterBuilder._material()
-	material.set_shader_parameter("shallow_color", Color("437774"))
-	material.set_shader_parameter("deep_color", Color("244f60"))
-	var lake := WaterBuilder.flat_mesh(WaterBuilder._lake_arrays(_world, _heights, area), material, "Lake")
+	_lake_material = ShaderMaterial.new()
+	_lake_material.shader = LAKE_SHADER
+	var lake := WaterBuilder.flat_mesh(WaterBuilder._lake_arrays(_world, _heights, area), _lake_material, "Lake")
 	lake.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_scene.add_child(lake)
 
@@ -447,7 +497,11 @@ func _build_mountains() -> void:
 			for index: int in [a, a + COLUMNS, a + 1, a + 1, a + COLUMNS, a + COLUMNS + 1]:
 				surface.add_index(index)
 	surface.generate_normals()
-	var mountain := _add_mesh("Ridge", surface.commit(), TerrainBuilder.new().outer_material())
+	var material := ShaderMaterial.new()
+	material.shader = GROUND_SHADER
+	material.set_shader_parameter("ridge", true)
+	material.set_shader_parameter("detail_tex", Catalog.get_catalog().textures[3])
+	var mountain := _add_mesh("Ridge", surface.commit(), material)
 	mountain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
@@ -509,11 +563,13 @@ func _animate(delta: float) -> void:
 	var phase := _seconds * TAU / 40.0
 	var drift := Vector3(sin(phase) * 0.24, sin(phase * 2.0) * 0.045, (cos(phase) - 1.0) * 0.09)
 	_camera.look_at_from_position(_origin + drift, _origin + Vector3(0.0, 0.5, -55.0), Vector3.UP)
-	_cycle.apply(HOUR, _seconds + 9.0)
-	var env := _cycle.env
-	env.fog_density *= 0.47
-	env.fog_sun_scatter = 0.025
-	env.fog_light_color = env.fog_light_color.lerp(Color("a3b6c9"), 0.72)
-	VisualStyle.set_haze(env.fog_light_color)
-	if is_prepared:
-		RenderingServer.global_shader_parameter_set("vegetation_clock", _wind_offset + _seconds)
+	_lake_material.set_shader_parameter("ripple_time", _seconds)
+	if _seconds >= _next_atmosphere:
+		_next_atmosphere = _seconds + ATMOSPHERE_STEP
+		_cycle.apply(HOUR, _seconds + 9.0)
+		var env := _cycle.env
+		env.fog_density *= 0.47
+		env.fog_sun_scatter = 0.025
+		env.fog_light_color = env.fog_light_color.lerp(Color("a3b6c9"), 0.72)
+		VisualStyle.set_haze(env.fog_light_color)
+	RenderingServer.global_shader_parameter_set("vegetation_clock", _wind_offset + _seconds)
