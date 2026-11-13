@@ -1,15 +1,12 @@
 extends Node
-## Приложение: меню, экраны, загрузка мира, пауза, выход. Копия js/ui/app.js и js/ui/menu-background.js.
+## Приложение: меню, экраны, загрузка мира, пауза и выход.
 ## Экраны собраны в сцене scenes/main.tscn (оформление — resources/ui_theme.tres), здесь только поведение.
 ## Мир загружается в отдельном потоке (WorldLoader), чтобы экран загрузки обновлялся.
 ## Экран настроек открывается из меню и из паузы и возвращает туда же; настройки — GameSettings.
 ## С 10.0 под полем зерна — список миров: недавние, избранные (звёздочка) и рекомендованные автором
 ## (RecommendedSeeds). Миры недавних и избранных хранятся готовыми в кэше (WorldCache), остальные удаляются.
-## С 10.2 меню в две колонки: список миров с картами-миниатюрами и выбранный мир с картой и состоянием.
 ## С 12.5 оформление только из темы (вариации кнопок и надписей), пиктограммы — UiIcons. Пауза: продолжить,
 ## быстрое сохранение, настройки, компактное управление; уход в меню и выход — с подтверждением.
-## С 12.5+ в меню выбранный мир (из списка) и новый мир по зерну (поле ввода) — разные источники: щелчок по
-## строке не трогает поле, ввод в поле снимает выбор строки. Кэш — в «Хранилище миров», не на первом плане.
 ## Настройки: вкладки в сцене, управление и звук применяются сразу, сброс — с подтверждением.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
@@ -18,19 +15,24 @@ const TrailLabScene := preload("res://scenes/trail_lab.tscn")
 const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
+const Carousel := preload("res://scripts/ui/world_carousel.gd")
 
 var game: GameWorld
 var trail_lab: Node
 var busy := false
 var gen_thread: Thread
-var bg_thread: Thread
-var bg_time := 0.0
 var _load_started_ms := 0
 var _load_elapsed := -1
 var _load_label := ""
 var _settings_from := "menu"   # куда вернуться из настроек
 var _seed_tab := "recent"      # вкладка списка миров: recent, favorites, recommended
 var _previews := {}            # зерно -> превью карты из кэша (ImageTexture) или null
+var _world_cards := {}         # зерно -> состояние, проверенное при обновлении списка
+var _saved_seeds: Array = []
+var _carousel_seeds: Array[String] = []
+var _selected_seed := ""
+var _card_reads := 0
+var _cards_ready := false
 var _pending_save := {}
 var _save_elapsed := 0.0
 var _save_status: Label
@@ -46,7 +48,8 @@ var _save_due := -1       # когда записать изменённые н�
 @onready var seed_edit: LineEdit = %SeedEdit
 @onready var bar: ProgressBar = %Progress
 @onready var load_step: Label = %Step
-@onready var screens := {back = %Back, menu = %Menu, loading = %Loading, pause = %Pause, settings = %Settings}
+@onready var screens := {back = %Back, menu = %Menu, new_world = %NewWorld, all_worlds = %AllWorlds,
+	loading = %Loading, pause = %Pause, settings = %Settings}
 
 
 static func random_seed() -> String:
@@ -78,9 +81,8 @@ func _ready() -> void:
 	GameContext.scope.settings.load_settings()
 	GameContext.scope.settings.apply_window()
 	GameContext.scope.settings.apply_volume()
-	# в поле — зерно последнего мира (если было), иначе случайное
-	seed_edit.text = GameContext.scope.settings.last_seed if not GameContext.scope.settings.last_seed.is_empty() else random_seed()
-	%Version.text = "Версия " + str(ProjectSettings.get_setting("application/config/version", "?"))
+	seed_edit.text = random_seed()
+	%Version.text = str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
 	_progress_enabled = get_tree().current_scene == self
 	GameContext.scope.cache.enabled = _progress_enabled
@@ -109,34 +111,84 @@ func _ready() -> void:
 		var b: Button = _tab_button(tab)
 		b.button_group = tabs
 		b.pressed.connect(_show_seed_tab.bind(tab))
-	_show_seed_tab("saved" if not Saves.seeds().is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended"))
+	var carousel: Carousel = %Carousel
+	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %MenuSettings, %MenuExit], %TrailLab)
+	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
+	carousel.play_requested.connect(_on_start)
+	carousel.new_world_requested.connect(_open_new_world)
+	for item: Dictionary in RecommendedSeeds.SEEDS:
+		var button := Button.new()
+		button.text = item.seed
+		button.tooltip_text = item.get("note", "")
+		button.theme_type_variation = &"ListRow"
+		button.pressed.connect(_suggested_seed.bind(item.seed))
+		%Suggestions.add_child(button)
+	_refresh_world_cards()
+	_seed_tab = "saved" if not _saved_seeds.is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended")
 	%LoadPreview.texture = null
 	get_viewport().size_changed.connect(_fit_menu)
 	_show("menu")
-	bg_thread = Thread.new()
-	bg_thread.start(_menu_background_job.bind("menu-%d" % randi_range(0, 999999)))
 
 
 func _show(screen: String) -> void:
-	for s in ["menu", "loading", "pause", "settings"]:
-		screens[s].visible = s == screen
-	screens.back.visible = screen == "menu" or screen == "loading" or (screen == "settings" and game == null)
+	for s: String in screens:
+		if s != "back":
+			screens[s].visible = s == screen
+	screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
 	# фокус на главной кнопке экрана: можно пользоваться клавиатурой (стрелки, Enter)
 	match screen:
 		"menu":
 			_fit_menu()
 			%Start.grab_focus()
+		"new_world":
+			%CreateWorld.grab_focus()
+		"all_worlds":
+			_update_selection()
+			var play: Button = %PlaySelected
+			var target: Control = _tab_button(_seed_tab) if play.disabled else play
+			target.grab_focus()
 		"pause":
 			%Resume.grab_focus()
 		"settings":
 			%Done.grab_focus()
 
 
+func _input(event: InputEvent) -> void:
+	if _confirm != null or not %Menu.is_visible_in_tree():
+		return
+	var direction := int(event.is_action_pressed("ui_right", true)) - int(event.is_action_pressed("ui_left", true))
+	if direction != 0 and (%Carousel as Carousel).move_focused(direction):
+		get_viewport().set_input_as_handled()
+
+
 func _unhandled_input(event: InputEvent) -> void:
-	# Esc (или B на геймпаде) в настройках из главного меню; в игре Esc приходит через GameWorld.pause_requested
-	if (event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")) and screens.settings.visible and game == null:
+	var button := event as InputEventJoypadButton
+	var pad_back := button != null and button.pressed and button.button_index == JOY_BUTTON_B
+	if game != null or not (pad_back or event.is_action_pressed("pause") or event.is_action_pressed("ui_cancel")):
+		return
+	if %Settings.visible:
 		_close_settings()
 		get_viewport().set_input_as_handled()
+	elif %NewWorld.visible or %AllWorlds.visible:
+		_return_to_menu_screen()
+		get_viewport().set_input_as_handled()
+
+
+func _open_new_world() -> void:
+	seed_edit.text = random_seed()
+	_show("new_world")
+
+
+func _open_all_worlds() -> void:
+	var state: Dictionary = _world_cards.get(_selected_seed, {})
+	if state.get("corrupt", false):
+		_seed_tab = _tab_with_seed(_selected_seed)
+	_show_seed_tab(_seed_tab)
+	_show("all_worlds")
+
+
+func _return_to_menu_screen() -> void:
+	_show("menu")
 
 
 # ---------- Настройки ----------
@@ -267,7 +319,7 @@ func _on_trail_clutter_toggled(on: bool) -> void:
 
 
 func _on_seed_submitted(_text: String) -> void:
-	_on_start()
+	_on_create_world()
 
 
 func _on_dice_pressed() -> void:
@@ -286,19 +338,85 @@ func _tab_button(tab: String) -> Button:
 ## Превью карты мира из кэша (null — мир ещё не запускали)
 func _preview_tex(seed_text: String) -> Texture2D:
 	if not _previews.has(seed_text):
+		_card_reads += 1
 		var img := GameContext.scope.cache.preview(seed_text) if GameContext.scope.cache.enabled else null
 		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
 	return _previews[seed_text]
 
 
-## Как быстро мир откроется: [коротко для строки, подробно для панели]. Без слов о кэше: игроку важно,
-## ждать ли около минуты; подробности — в «Хранилище миров»
-func _world_status(seed_text: String) -> Array:
-	if not GameContext.scope.cache.enabled:
-		return ["", ""]
-	if GameContext.scope.cache.ready_layers(seed_text) > 0:
-		return ["быстрый запуск", "Мир уже создавался и откроется быстро."]
-	return ["", "Мир создастся при запуске, это около минуты."]
+## На карточке храним метаданные, без состояния игрока и заданий целиком.
+func _read_world_card(seed_text: String) -> Dictionary:
+	_card_reads += 1
+	var manual := Saves.read_slot(seed_text, "manual")
+	var latest := _latest_save(seed_text, manual)
+	var data: Dictionary = latest.data
+	var corrupt := data.is_empty() and _has_save(seed_text)
+	var ready := GameContext.scope.cache.enabled and GameContext.scope.cache.has(seed_text)
+	var summary := "Откроется быстро." if ready else "Мир создастся при запуске, около минуты."
+	var saved_at := -1
+	if not data.is_empty():
+		saved_at = int(data.saved_at)
+		summary = "Открыто мест: %d · Заданий: %d\nСохранено: %s" % [data.visited.size(), data.quest.done, _local_time_text(saved_at)]
+	elif corrupt:
+		summary = "Сохранение не читается. Мир можно создать заново."
+	return {seed = seed_text, saved = not data.is_empty(), saved_at = saved_at,
+		corrupt = corrupt, manual = not manual.data.is_empty(), ready = ready, summary = summary}
+
+
+func _refresh_world_cards(deleted := "", previous_index := 0) -> void:
+	_cards_ready = true
+	_world_cards.clear()
+	_saved_seeds = Saves.seeds()
+	var settings := GameContext.scope.settings
+	var known: Array = _saved_seeds + settings.recent_seeds + settings.favorite_seeds
+	for item: Dictionary in RecommendedSeeds.SEEDS:
+		known.append(item.seed)
+	for seed_text: String in known:
+		if not _world_cards.has(seed_text):
+			_world_cards[seed_text] = _read_world_card(seed_text)
+		if _world_cards[seed_text].corrupt and seed_text not in _saved_seeds:
+			_saved_seeds.append(seed_text)
+	_saved_seeds.sort_custom(func(a: String, b: String) -> bool:
+		return _world_cards[a].saved_at > _world_cards[b].saved_at)
+	_carousel_seeds.clear()
+	for seed_text: String in _saved_seeds + settings.recent_seeds + settings.favorite_seeds + known:
+		if seed_text != deleted and seed_text not in _carousel_seeds:
+			_carousel_seeds.append(seed_text)
+		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
+			break
+	if deleted == _selected_seed and not deleted.is_empty():
+		_selected_seed = _carousel_seeds[mini(previous_index, _carousel_seeds.size() - 1)] if not _carousel_seeds.is_empty() else ""
+	elif _selected_seed.is_empty() and not _carousel_seeds.is_empty():
+		_selected_seed = _carousel_seeds[0]
+	elif not _world_cards.has(_selected_seed):
+		_selected_seed = _carousel_seeds[0] if not _carousel_seeds.is_empty() else ""
+	if not _selected_seed.is_empty() and _selected_seed not in _carousel_seeds:
+		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
+			_carousel_seeds.pop_back()
+		_carousel_seeds.append(_selected_seed)
+	if not %NewWorld.visible:
+		seed_edit.text = _selected_seed
+	_update_carousel()
+	_update_selection()
+
+
+func _update_carousel() -> void:
+	var entries: Array[Dictionary] = []
+	for seed_text: String in _carousel_seeds:
+		var entry: Dictionary = _world_cards[seed_text].duplicate()
+		entry.texture = _preview_tex(seed_text)
+		entries.append(entry)
+	(%Carousel as Carousel).set_entries(entries, _selected_seed)
+
+
+func _tab_with_seed(seed_text: String) -> String:
+	if seed_text in _saved_seeds:
+		return "saved"
+	if seed_text in GameContext.scope.settings.recent_seeds:
+		return "recent"
+	if seed_text in GameContext.scope.settings.favorite_seeds:
+		return "favorites"
+	return "recommended"
 
 
 func _show_seed_tab(tab: String) -> void:
@@ -313,7 +431,10 @@ func _show_seed_tab(tab: String) -> void:
 	var rows: Array = []
 	match tab:
 		"saved":
-			rows = Saves.seeds().map(func(s: String) -> Dictionary: return {seed = s, note = "Прогресс"})
+			if not _cards_ready:
+				_refresh_world_cards()
+			rows = _saved_seeds.map(func(s: String) -> Dictionary:
+				return {seed = s, note = "Ошибка сохранения" if _world_cards[s].corrupt else "Прогресс"})
 		"recent":
 			rows = GameContext.scope.settings.recent_seeds.map(func(s: String) -> Dictionary: return {seed = s, note = ""})
 		"favorites":
@@ -343,7 +464,9 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	row.tooltip_text = seed_text if note.is_empty() else "%s — %s" % [seed_text, note]
 	row.pressed.connect(_pick_seed.bind(seed_text))
 	row.gui_input.connect(func(e: InputEvent) -> void:
-		if e is InputEventMouseButton and e.double_click and e.button_index == MOUSE_BUTTON_LEFT:
+		if e is InputEventMouseButton and e.pressed and e.double_click and e.button_index == MOUSE_BUTTON_LEFT:
+			row.accept_event()
+			_pick_seed(seed_text)
 			_on_start())
 	var box := HBoxContainer.new()
 	box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT, Control.PRESET_MODE_MINSIZE, 6)
@@ -383,14 +506,13 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	name_label.add_theme_font_size_override("font_size", 15)
 	texts.add_child(name_label)
-	var status: String = _world_status(seed_text)[0]
-	var sub := " · ".join(PackedStringArray([note, status]).slice(0 if not note.is_empty() else 1)) \
-		if not status.is_empty() else note
+	var ready: bool = _world_cards.get(seed_text, {}).get("ready", false)
+	var sub := ("быстрый запуск" if note.is_empty() else note + " · быстрый запуск") if ready else note
 	if not sub.is_empty():
 		var sub_label := Label.new()
 		sub_label.text = sub
 		sub_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		sub_label.theme_type_variation = &"SectionLabel" if not status.is_empty() else &"CaptionLabel"
+		sub_label.theme_type_variation = &"SectionLabel" if ready else &"CaptionLabel"
 		sub_label.add_theme_font_size_override("font_size", 12)
 		texts.add_child(sub_label)
 	box.add_child(texts)
@@ -418,58 +540,72 @@ func _star_tip(fav: bool, full: bool) -> String:
 	return "В избранное: мир останется в списке и кэше"
 
 
-## Щелчок по строке ставит её зерно в поле: с 14.2 поле — единственный источник выбора (до этого
-## мир из списка и зерно в поле были разными, и не всегда было ясно, что запустится)
 func _pick_seed(seed_text: String) -> void:
-	seed_edit.text = seed_text
-	_update_selection()
-	%Start.grab_focus()
+	if not _world_cards.has(seed_text) and not seed_text.is_empty():
+		_world_cards[seed_text] = _read_world_card(seed_text)
+	_select_world(seed_text)
 
 
-## Ввод в поле или кубик: выбор — то, что в поле; строка списка с тем же зерном подсвечивается
 func _choose_typed() -> void:
-	_update_selection()
+	if not %NewWorld.visible:
+		_pick_seed(seed_edit.text.strip_edges())
 
 
 func _on_seed_changed(_text: String) -> void:
 	_choose_typed()
 
 
-## Что запустит главная кнопка: зерно из поля (пустое — случайный мир)
+func _suggested_seed(seed_text: String) -> void:
+	seed_edit.text = seed_text
+	%CreateWorld.grab_focus()
+
+
+func _select_world(seed_text: String) -> void:
+	_selected_seed = seed_text
+	if not %NewWorld.visible:
+		seed_edit.text = seed_text
+	if not seed_text.is_empty() and seed_text not in _carousel_seeds:
+		if _carousel_seeds.size() == Carousel.MAX_WORLDS:
+			_carousel_seeds.pop_back()
+		_carousel_seeds.push_front(seed_text)
+		_update_carousel()
+	else:
+		(%Carousel as Carousel).show_world(seed_text, true)
+	_update_selection()
+
+
 func _chosen_seed() -> String:
-	return seed_edit.text.strip_edges()
+	return seed_edit.text.strip_edges() if %NewWorld.visible else _selected_seed
 
 
-## Выбранный мир: подсветка строки, карта, звёздочка, прогресс и подпись главной кнопки
 func _update_selection() -> void:
-	var seed_text := _chosen_seed()
+	var seed_text := _selected_seed
+	var state: Dictionary = _world_cards.get(seed_text, {})
+	var corrupt: bool = state.get("corrupt", false)
+	var label := "Продолжить путешествие" if state.get("saved", false) else "Начать путешествие"
+	%Start.text = "Все миры" if corrupt else label
+	%PlaySelected.text = label
+	%PlaySelected.disabled = corrupt or seed_text.is_empty()
 	for row in %SeedList.get_children():
 		if row is Button:
 			(row as Button).set_pressed_no_signal(not seed_text.is_empty() and row.get_meta("seed", "") == seed_text)
-	var tex := _preview_tex(seed_text) if not seed_text.is_empty() else null
+	var tex: Texture2D = _previews.get(seed_text)
 	%Preview.texture = tex
 	%PreviewHint.visible = tex == null
 	%PreviewHint.text = "Карта мира появится после первого запуска"
 	%ChoiceName.text = "Случайный мир" if seed_text.is_empty() else "«%s»" % seed_text
-	%WorldStatus.text = _world_status(seed_text)[1] if not seed_text.is_empty() \
-		else "Пустое поле — будет случайный мир."
+	%WorldStatus.text = state.get("summary", "")
 	var star: Button = %Star
 	var fav := seed_text in GameContext.scope.settings.favorite_seeds
 	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.icon = UiIcons.star(fav)
 	star.disabled = seed_text.is_empty() or full
 	star.tooltip_text = _star_tip(fav, full)
-	var latest := _latest_save(seed_text) if not seed_text.is_empty() else {data = {}}
-	if not seed_text.is_empty() and latest.data.is_empty() and _has_save(seed_text):
+	if corrupt:
 		%WorldStatus.text = "Сохранение не читается. Можно создать мир заново; старые файлы сохранятся в архиве."
-	%Start.text = "Продолжить путешествие" if not latest.data.is_empty() else "Начать путешествие"
-	_load_manual.disabled = seed_text.is_empty() or Saves.read_slot(seed_text, "manual").data.is_empty()
+	_load_manual.disabled = not state.get("manual", false)
 	%RestartWorld.disabled = seed_text.is_empty()
 	%DeleteWorld.disabled = seed_text.is_empty()
-	if not latest.data.is_empty():
-		var d: Dictionary = latest.data
-		%WorldStatus.text = "Открыто мест: %d · Заданий: %d\nСохранено: %s" % [
-			d.visited.size(), d.quest.done, _local_time_text(int(d.saved_at))]
 
 
 ## Время сохранения по часам компьютера (unix-время хранится в UTC)
@@ -489,6 +625,8 @@ func _on_star(seed_text: String) -> void:
 	GameContext.scope.settings.save_settings()
 	if GameContext.scope.cache.enabled:
 		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
+	_previews.clear()
+	_refresh_world_cards()
 	_show_seed_tab(_seed_tab)
 
 
@@ -505,6 +643,7 @@ func _do_restart_world(seed_text: String) -> void:
 		err = GameContext.scope.cache.remove_seed(seed_text)
 	if err != OK:
 		_message("Не удалось пересоздать мир", error_string(err))
+		_refresh_world_cards()
 		_show_seed_tab(_seed_tab)
 		return
 	_previews.erase(seed_text)
@@ -521,11 +660,13 @@ func _delete_world() -> void:
 
 
 func _do_delete_world(seed_text: String) -> void:
+	var previous_index := maxi(0, _carousel_seeds.find(seed_text))
 	var err := Saves.delete_seed(seed_text)
 	if err == OK and GameContext.scope.cache.enabled:
 		err = GameContext.scope.cache.remove_seed(seed_text)
 	if err != OK:
 		_message("Не удалось удалить мир", error_string(err))
+		_refresh_world_cards()
 		_show_seed_tab(_seed_tab)
 		return
 	GameContext.scope.settings.recent_seeds.erase(seed_text)
@@ -534,7 +675,7 @@ func _do_delete_world(seed_text: String) -> void:
 		GameContext.scope.settings.last_seed = ""
 	GameContext.scope.settings.save_settings()
 	_previews.erase(seed_text)
-	seed_edit.text = ""
+	_refresh_world_cards(seed_text, previous_index)
 	_show_seed_tab(_seed_tab)
 
 
@@ -551,32 +692,14 @@ func _open_storage() -> void:
 func _on_clear_cache() -> void:
 	GameContext.scope.cache.keep_only([])
 	_previews.clear()
+	_refresh_world_cards()
 	_show_seed_tab(_seed_tab)
 
 
-## Две колонки меню растут с экраном: шире на широких мониторах, выше — на 4:3 (интерфейс не меньше 1280 × 720)
 func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
-	# Запас включает две строки статуса и предупреждение бесконечной генерации.
-	var compact := vs.y < 900.0
-	var side: VBoxContainer = screens.menu.get_node("Panel/Box/Columns/Side")
-	side.add_theme_constant_override("separation", 4 if compact else 8)
-	(side.get_node("PreviewFrame") as Control).custom_minimum_size.y = 88.0 if compact else 140.0
-	side.get_node("NewWorld/NewBox/SeedHelp").visible = not compact
-	(screens.menu.get_node("Panel") as Control).custom_minimum_size = Vector2(clampf(vs.x * 0.74, 920.0, 1320.0), clampf(vs.y * 0.86, 600.0, 940.0))
-
-
-# ---------- Фон меню: маленький мир сверху, медленно проплывающий под панелью ----------
-
-func _menu_background_job(seed_text: String) -> void:
-	var w := WorldGenerator.menu_background(seed_text)
-	var img := MapBaker.bake(w, 4, false)
-	_on_menu_background.call_deferred(img)
-
-
-func _on_menu_background(img: Image) -> void:
-	bg_thread.wait_to_finish()
-	bg.texture = ImageTexture.create_from_image(img)
+	var worlds: Control = %AllWorlds.get_node("Panel")
+	worlds.custom_minimum_size = Vector2(clampf(vs.x * 0.75, 920.0, 1220.0), clampf(vs.y * 0.80, 550.0, 700.0))
 
 
 func _process(delta: float) -> void:
@@ -593,16 +716,6 @@ func _process(delta: float) -> void:
 		if seconds != _load_elapsed:
 			_load_elapsed = seconds
 			load_step.text = "%s\nПрошло: %d:%02d" % [_load_label, seconds / 60, seconds % 60]
-	if not screens.back.visible or bg.texture == null:
-		return
-	bg_time += delta * 1000.0
-	var vs := get_viewport().get_visible_rect().size
-	var tw := float(bg.texture.get_width())
-	var s := (maxf(vs.x, vs.y) / tw) * 1.6
-	var sz := Vector2(tw, bg.texture.get_height()) * s
-	var a := bg_time / 40000.0
-	bg.size = sz
-	bg.position = Vector2((vs.x - sz.x) / 2.0 + cos(a) * (sz.x - vs.x) * 0.4, (vs.y - sz.y) / 2.0 + sin(a * 1.3) * (sz.y - vs.y) * 0.4)
 
 
 # ---------- Старт игры ----------
@@ -631,14 +744,32 @@ func _on_start() -> void:
 	# второй запуск во время загрузки не нужен: мир уже строится
 	if busy:
 		return
-	var seed_text := _chosen_seed()
+	if %NewWorld.visible:
+		_on_create_world()
+		return
+	_launch_seed(_selected_seed)
+
+
+func _on_create_world() -> void:
+	if not busy:
+		_launch_seed(seed_edit.text.strip_edges())
+
+
+func _launch_seed(seed_text: String) -> void:
 	if seed_text.is_empty():
 		seed_text = random_seed()
 		seed_edit.text = seed_text   # случайное зерно видно в поле, его можно повторить
 	var latest := _latest_save(seed_text)
 	if latest.data.is_empty() and _has_save(seed_text):
+		_world_cards[seed_text] = _read_world_card(seed_text)
+		if seed_text not in _saved_seeds:
+			_saved_seeds.append(seed_text)
+		_pick_seed(seed_text)
+		_update_carousel()
+		_open_all_worlds()
 		_message("Не удалось загрузить прогресс", latest.error + " Используйте «Создать заново»: старые файлы будут сохранены в архиве.")
 		return
+	_pick_seed(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
 	# мир, выпавший из последних и не избранный, больше не хранится
@@ -842,7 +973,7 @@ func _back_to_menu() -> void:
 	_free_game()
 	hud.visible = false
 	_previews.clear()   # после игры у мира появилось или обновилось превью
-	_show_seed_tab(_seed_tab)
+	_refresh_world_cards()
 	_show("menu")
 
 
@@ -866,9 +997,10 @@ func _notification(what: int) -> void:
 		_exit_game()
 
 
-func _latest_save(seed_text: String) -> Dictionary:
+func _latest_save(seed_text: String, manual := {}) -> Dictionary:
 	var auto := Saves.read_slot(seed_text)
-	var manual := Saves.read_slot(seed_text, "manual")
+	if manual.is_empty():
+		manual = Saves.read_slot(seed_text, "manual")
 	var use_manual: bool = not manual.data.is_empty() and (auto.data.is_empty() or manual.data.saved_at > auto.data.saved_at)
 	var result: Dictionary = manual if use_manual else auto
 	result.slot = ("manual" if use_manual else "auto") if not result.data.is_empty() else ""
@@ -982,7 +1114,6 @@ func _fill_controls() -> void:
 func _exit_tree() -> void:
 	if display_options != null:
 		display_options.shutdown()
-	for t in [gen_thread, bg_thread]:
-		if t != null and t.is_started():
-			t.wait_to_finish()
+	if gen_thread != null and gen_thread.is_started():
+		gen_thread.wait_to_finish()
 	GameContext.scope.cache.wait_writes()   # мир дописывается в кэш в фоне; оборванная запись осталась бы только .tmp

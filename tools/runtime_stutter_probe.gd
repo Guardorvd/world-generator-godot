@@ -3,7 +3,6 @@ extends SceneTree
 ## -- --seed <seed> --mode normal|nav|frozen|bare --out <json> --seconds 20
 const Dev = preload("res://tools/control/control.gd")
 class ProbeMenu extends "res://scripts/ui/main.gd":
-	func _menu_background_job(_seed: String) -> void: pass
 	func _save_current(_slot := "auto") -> bool: return true
 var main: Node
 var navigation: MeshInstance3D

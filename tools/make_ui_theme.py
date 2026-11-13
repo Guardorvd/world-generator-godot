@@ -201,6 +201,12 @@ put("TrackerPanel/styles/panel", box("tracker", (0.06, 0.07, 0.06, 0.62), (1, 0.
                                        margin=(2 * U - 4, U, U, U)))
 put("SectionPanel/base_type", '&"PanelContainer"')
 put("SectionPanel/styles/panel", box("section", (1, 1, 1, 0.04), radius=U, margin=(2 * U, U + 4)))
+put("MenuGlass/base_type", '&"PanelContainer"')
+put("MenuGlass/styles/panel", box("menu_glass", (0.05, 0.10, 0.13, 0.84), (0.80, 0.87, 0.84, 0.42),
+                                  1, radius=14, margin=(24, 20)))
+put("WorldCard/base_type", '&"PanelContainer"')
+put("WorldCard/styles/panel", box("world_card", (0.08, 0.15, 0.18, 0.77), (0.80, 0.87, 0.84, 0.48),
+                                   1, radius=12, margin=(13, 13)))
 
 # ---- отступы контейнеров: шаг 8 ----
 put("BoxContainer/constants/separation", U)
@@ -216,6 +222,23 @@ put("Label/colors/font_color", c(TEXT))
 put("TitleLabel/base_type", '&"Label"')
 put("TitleLabel/colors/font_color", c(GOLD))
 put("TitleLabel/font_sizes/font_size", 34)
+put("MenuHeading/base_type", '&"Label"')
+put("MenuHeading/colors/font_color", c((0.99, 0.95, 0.83, 1)))
+put("MenuHeading/colors/font_shadow_color", c((0.04, 0.07, 0.08, 0.85)))
+put("MenuHeading/constants/shadow_offset_y", 2)
+put("MenuHeading/constants/shadow_outline_size", 6)
+put("MenuHeading/font_sizes/font_size", 40)
+put("MenuFootnote/base_type", '&"CaptionLabel"')
+put("MenuFootnote/colors/font_color", c(MUTED))
+put("MenuFootnote/colors/font_outline_color", c((0.04, 0.07, 0.08, 0.8)))
+put("MenuFootnote/constants/outline_size", 3)
+put("WorldName/base_type", '&"Label"')
+put("WorldName/colors/font_color", c(TEXT))
+put("WorldName/font_sizes/font_size", 25)
+put("WorldPlaceholder/base_type", '&"Label"')
+put("WorldPlaceholder/colors/font_color", c(GOLD_HI))
+put("WorldPlaceholder/font_sizes/font_size", 27)
+put("WorldPlaceholder/styles/normal", box("world_placeholder", (0.11, 0.18, 0.19, 0.86), radius=7, margin=(12, 8)))
 put("SubtitleLabel/base_type", '&"Label"')
 put("SubtitleLabel/colors/font_color", c(MUTED))
 put("SubtitleLabel/font_sizes/font_size", 15)
@@ -236,6 +259,22 @@ put("KeyLabel/styles/normal", box("key", (1, 1, 1, 0.06), (1, 1, 1, 0.22), 1, ra
 put("HintLabel/base_type", '&"Label"')
 put("HintLabel/colors/font_color", c(MUTED))
 put("HintLabel/font_sizes/font_size", 13)
+
+# Главное меню: действия на затемнённом фоне, миниатюры и карточка.
+put("MenuLink/base_type", '&"Button"')
+button_type("MenuLink", box("menu_link", (0.04, 0.09, 0.12, 0.45), margin=(8, 4)),
+            box("menu_link_hover", (0.13, 0.21, 0.24, 0.78), margin=(8, 4)),
+            box("menu_link_pressed", (0.13, 0.21, 0.24, 0.92), margin=(8, 4)),
+            box("menu_link_off", (0, 0, 0, 0), margin=(8, 4)), TEXT, OFF, GOLD_HI)
+put("MenuLink/font_sizes/font_size", 16)
+put("MenuLink/colors/font_outline_color", c((0.04, 0.07, 0.08, 0.8)))
+put("MenuLink/constants/outline_size", 3)
+put("CarouselTab/base_type", '&"Button"')
+button_type("CarouselTab", box("carousel_tab", INSET, BORDER, 1, radius=5, margin=(4, 4)),
+            box("carousel_hover", SURF_HI, GOLD_OFF, 1, radius=5, margin=(4, 4)),
+            box("carousel_active", SURF, GOLD, 2, radius=5, margin=(4, 4)),
+            box("carousel_off", SURF_OFF, radius=5, margin=(4, 4)), TEXT, OFF, GOLD_HI)
+put("CarouselTab/font_sizes/font_size", 15)
 
 out = ['[gd_resource type="Theme" load_steps=%d format=3]' % (len(subs) + 1), ""]
 for s in subs:

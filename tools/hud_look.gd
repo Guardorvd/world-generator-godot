@@ -131,14 +131,14 @@ func _run() -> void:
 	_check(stamina.state == Stamina.State.COAST and hud._stamina.warning < 0.05 and hud._stamina._coast > 0.9, "накат: предупреждение погасло, ореол наката")
 	await _tick(stamina, 150, true, 0.0, false)
 	await _shot("hud_coast")
-	# меню: строка списка ставит зерно в поле, кнопка запуска под превью и полем
+	# меню: карточка над кнопкой запуска, зерно можно изменить на отдельном экране
 	hud.visible = false
 	main.get_node("UI/Root/Back").visible = true
 	main.get_node("UI/Root/Menu").visible = true
 	main._show_seed_tab("recommended")
 	var start: Button = main.get_node("%Start")
 	var edit: LineEdit = main.get_node("%SeedEdit")
-	_check(start.get_index() > edit.get_parent().get_parent().get_parent().get_index(), "«Начать путешествие» под полем зерна и превью")
+	_check(start.get_index() > main.get_node("%Carousel").get_index(), "«Начать путешествие» под карточкой")
 	main._pick_seed("Туман-4821")
 	_check(edit.text == "Туман-4821" and main._chosen_seed() == "Туман-4821", "выбор в списке ставит зерно в поле")
 	await _shot("menu")

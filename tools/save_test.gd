@@ -73,8 +73,8 @@ func run() -> void:
 		loading = main.get_node("%Loading"), pause = main.get_node("%Pause"), settings = main.get_node("%Settings")}
 	main._setup_save_controls()
 	check(main._load_manual != null and main._save_status != null, "menu save controls created")
-	main.seed_edit.text = state.seed
 	main._show_seed_tab("saved")
+	main._pick_seed(state.seed)
 	main._show("menu")
 	await process_frame
 	await process_frame

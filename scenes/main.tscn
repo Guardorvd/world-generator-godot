@@ -1,4 +1,4 @@
-[gd_scene load_steps=12 format=3]
+[gd_scene load_steps=14 format=3]
 
 [ext_resource type="Script" uid="uid://bpvp0imp4gmsq" path="res://scripts/ui/main.gd" id="1_main"]
 [ext_resource type="Theme" path="res://resources/ui_theme.tres" id="2_theme"]
@@ -11,6 +11,9 @@
 [ext_resource type="Texture2D" path="res://resources/icons/gear.svg" id="9_gear"]
 [ext_resource type="Texture2D" path="res://resources/icons/home.svg" id="10_home"]
 [ext_resource type="Texture2D" path="res://resources/icons/exit.svg" id="11_exit"]
+
+[ext_resource type="Texture2D" path="res://resources/menu/poster.jpg" id="12_poster"]
+[ext_resource type="Script" path="res://scripts/ui/world_carousel.gd" id="13_carousel"]
 
 [node name="Main" type="Node"]
 script = ExtResource("1_main")
@@ -39,9 +42,17 @@ color = Color(0.050980393, 0.08627451, 0.14901961, 1)
 
 [node name="MenuBackground" type="TextureRect" parent="UI/Root/Back"]
 unique_name_in_owner = true
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
 texture_filter = 2
-layout_mode = 0
+texture = ExtResource("12_poster")
 expand_mode = 1
+stretch_mode = 6
+mouse_filter = 2
 
 [node name="Hud" type="Control" parent="UI/Root"]
 unique_name_in_owner = true
@@ -136,7 +147,7 @@ theme_override_constants/outline_size = 6
 theme_override_font_sizes/font_size = 22
 horizontal_alignment = 1
 
-[node name="Menu" type="CenterContainer" parent="UI/Root"]
+[node name="Menu" type="Control" parent="UI/Root"]
 unique_name_in_owner = true
 layout_mode = 1
 anchors_preset = 15
@@ -144,51 +155,196 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+mouse_filter = 2
 
-[node name="Panel" type="PanelContainer" parent="UI/Root/Menu"]
-custom_minimum_size = Vector2(920, 620)
-layout_mode = 2
+[node name="Panel" type="VBoxContainer" parent="UI/Root/Menu"]
+layout_mode = 1
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 48.0
+offset_top = -42.0
+offset_right = 488.0
+offset_bottom = -42.0
+grow_vertical = 0
+mouse_filter = 2
+theme_override_constants/separation = 12
 
-[node name="Box" type="VBoxContainer" parent="UI/Root/Menu/Panel"]
-layout_mode = 2
-theme_override_constants/separation = 16
-
-[node name="Header" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box"]
-layout_mode = 2
-theme_override_constants/separation = 0
-
-[node name="Title" type="Label" parent="UI/Root/Menu/Panel/Box/Header"]
-layout_mode = 2
-theme_type_variation = &"TitleLabel"
+[node name="Heading" type="Label" parent="UI/Root/Menu/Panel"]
+theme_type_variation = &"MenuHeading"
 text = "Генератор миров"
-horizontal_alignment = 1
 
-[node name="Subtitle" type="Label" parent="UI/Root/Menu/Panel/Box/Header"]
-layout_mode = 2
-theme_type_variation = &"SubtitleLabel"
-text = "Исследуйте мир, открывайте места и выполняйте задания"
+[node name="Carousel" type="VBoxContainer" parent="UI/Root/Menu/Panel"]
+unique_name_in_owner = true
+theme_override_constants/separation = 9
+script = ExtResource("13_carousel")
+
+[node name="Card" type="PanelContainer" parent="UI/Root/Menu/Panel/Carousel"]
+theme_type_variation = &"WorldCard"
+mouse_filter = 2
+
+[node name="CardContent" type="VBoxContainer" parent="UI/Root/Menu/Panel/Carousel/Card"]
+theme_override_constants/separation = 9
+mouse_filter = 2
+
+[node name="Artwork" type="AspectRatioContainer" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
+custom_minimum_size = Vector2(0, 232.875)
+ratio = 1.7777778
+stretch_mode = 2
+mouse_filter = 0
+
+[node name="Art" type="Control" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork"]
+clip_contents = true
+mouse_filter = 2
+
+[node name="Map" type="TextureRect" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork/Art"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+expand_mode = 1
+stretch_mode = 6
+mouse_filter = 2
+
+[node name="Placeholder" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent/Artwork/Art"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_type_variation = &"WorldPlaceholder"
 horizontal_alignment = 1
+vertical_alignment = 1
+text_overrun_behavior = 3
+mouse_filter = 2
+
+[node name="WorldName" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
+custom_minimum_size = Vector2(0, 32)
+theme_type_variation = &"WorldName"
+text_overrun_behavior = 3
+
+[node name="Summary" type="Label" parent="UI/Root/Menu/Panel/Carousel/Card/CardContent"]
+custom_minimum_size = Vector2(0, 44)
+theme_type_variation = &"SubtitleLabel"
 autowrap_mode = 3
 
-[node name="Columns" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
+[node name="Strip" type="HBoxContainer" parent="UI/Root/Menu/Panel/Carousel"]
+theme_override_constants/separation = 5
+
+[node name="Previous" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
+custom_minimum_size = Vector2(34, 37)
+theme_type_variation = &"MenuLink"
+text = "‹"
+tooltip_text = "Предыдущий мир"
+
+[node name="Cards" type="HBoxContainer" parent="UI/Root/Menu/Panel/Carousel/Strip"]
+size_flags_horizontal = 3
+theme_override_constants/separation = 4
+alignment = 1
+
+[node name="Next" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
+custom_minimum_size = Vector2(34, 37)
+theme_type_variation = &"MenuLink"
+text = "›"
+tooltip_text = "Следующий мир"
+
+[node name="Start" type="Button" parent="UI/Root/Menu/Panel"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 56)
+theme_type_variation = &"PrimaryButton"
+theme_override_font_sizes/font_size = 20
+text = "Начать путешествие"
+icon = ExtResource("6_play")
+
+[node name="Actions" type="HBoxContainer" parent="UI/Root/Menu/Panel"]
+theme_override_constants/separation = 4
+
+[node name="OpenNew" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 38)
+theme_type_variation = &"MenuLink"
+text = "Новый мир"
+
+[node name="OpenWorlds" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 38)
+theme_type_variation = &"MenuLink"
+text = "Все миры"
+
+[node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 38)
+theme_type_variation = &"MenuLink"
+text = "Настройки"
+
+[node name="MenuExit" type="Button" parent="UI/Root/Menu/Panel/Actions"]
+unique_name_in_owner = true
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 38)
+theme_type_variation = &"MenuLink"
+text = "Выход"
+
+[node name="Build" type="HBoxContainer" parent="UI/Root/Menu/Panel"]
+theme_override_constants/separation = 14
+
+[node name="Version" type="Label" parent="UI/Root/Menu/Panel/Build"]
+unique_name_in_owner = true
+theme_type_variation = &"MenuFootnote"
+text = "15.0"
+
+[node name="TrailLab" type="Button" parent="UI/Root/Menu/Panel/Build"]
+unique_name_in_owner = true
+theme_type_variation = &"MenuLink"
+theme_override_font_sizes/font_size = 13
+text = "Лаборатория трасс"
+
+[node name="AllWorlds" type="CenterContainer" parent="UI/Root"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="UI/Root/AllWorlds"]
+custom_minimum_size = Vector2(920, 570)
+layout_mode = 2
+theme_type_variation = &"MenuGlass"
+
+[node name="Box" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 14
+
+[node name="Title" type="Label" parent="UI/Root/AllWorlds/Panel/Box"]
+theme_type_variation = &"TitleLabel"
+text = "Все миры"
+
+[node name="Columns" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box"]
 layout_mode = 2
 size_flags_vertical = 3
 theme_override_constants/separation = 24
 
-[node name="Worlds" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
+[node name="Worlds" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_stretch_ratio = 1.2
 
-[node name="WorldsLabel" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
+[node name="WorldsLabel" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Ваши миры"
 
-[node name="SeedTabs" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
+[node name="SeedTabs" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 layout_mode = 2
 
-[node name="Saved" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+[node name="Saved" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
@@ -198,7 +354,7 @@ theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "Сохранения"
 
-[node name="Recent" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+[node name="Recent" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
@@ -208,7 +364,7 @@ theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "Недавние"
 
-[node name="Favorites" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+[node name="Favorites" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
@@ -218,7 +374,7 @@ theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "Избранное"
 
-[node name="Recommended" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedTabs"]
+[node name="Recommended" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedTabs"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 36)
 layout_mode = 2
@@ -228,42 +384,42 @@ theme_override_font_sizes/font_size = 14
 toggle_mode = true
 text = "От автора"
 
-[node name="SeedScroll" type="ScrollContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds"]
+[node name="SeedScroll" type="ScrollContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds"]
 custom_minimum_size = Vector2(0, 240)
 layout_mode = 2
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
-[node name="SeedList" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Worlds/SeedScroll"]
+[node name="SeedList" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Worlds/SeedScroll"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="Side" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns"]
+[node name="Side" type="VBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns"]
 custom_minimum_size = Vector2(360, 0)
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ChoiceLabel" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="ChoiceLabel" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Выбранный мир"
 
-[node name="PreviewFrame" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="PreviewFrame" type="PanelContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
 custom_minimum_size = Vector2(0, 140)
 layout_mode = 2
 size_flags_vertical = 3
 theme_type_variation = &"InsetPanel"
 
-[node name="Preview" type="TextureRect" parent="UI/Root/Menu/Panel/Box/Columns/Side/PreviewFrame"]
+[node name="Preview" type="TextureRect" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/PreviewFrame"]
 unique_name_in_owner = true
 layout_mode = 2
 expand_mode = 1
 stretch_mode = 5
 
-[node name="PreviewHint" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/PreviewFrame"]
+[node name="PreviewHint" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/PreviewFrame"]
 unique_name_in_owner = true
 layout_mode = 2
 theme_type_variation = &"CaptionLabel"
@@ -272,10 +428,10 @@ horizontal_alignment = 1
 vertical_alignment = 1
 autowrap_mode = 3
 
-[node name="ChoiceRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="ChoiceRow" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
 layout_mode = 2
 
-[node name="ChoiceName" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow"]
+[node name="ChoiceName" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(200, 0)
 layout_mode = 2
@@ -284,16 +440,15 @@ theme_override_font_sizes/font_size = 22
 text = "Мир"
 text_overrun_behavior = 3
 
-[node name="Star" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow"]
+[node name="Star" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(40, 40)
 layout_mode = 2
 theme_type_variation = &"IconButton"
-focus_mode = 0
 icon = ExtResource("5_star")
 icon_alignment = 1
 
-[node name="WorldStatus" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="WorldStatus" type="Label" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(320, 0)
 layout_mode = 2
@@ -301,22 +456,97 @@ theme_type_variation = &"AccentLabel"
 text = "Новый мир"
 autowrap_mode = 3
 
-[node name="NewWorld" type="PanelContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="PlaySelected" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 48)
+theme_type_variation = &"PrimaryButton"
+text = "Начать путешествие"
+icon = ExtResource("6_play")
+
+[node name="LoadManual" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_override_font_sizes/font_size = 15
+text = "Загрузить ручное сохранение"
+icon = ExtResource("8_load")
+
+[node name="WorldActions" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side"]
+layout_mode = 2
+
+[node name="RestartWorld" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/WorldActions"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Создать заново"
+tooltip_text = "Пересоздать мир по этому зерну и начать новое путешествие"
+
+[node name="DeleteWorld" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/WorldActions"]
+unique_name_in_owner = true
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Удалить мир"
+tooltip_text = "Удалить мир из списков и его сохранения"
+
+[node name="Bottom" type="HBoxContainer" parent="UI/Root/AllWorlds/Panel/Box"]
+
+
+[node name="Storage" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+theme_type_variation = &"TabButton"
+theme_override_font_sizes/font_size = 14
+tooltip_text = "Сколько места занимают готовые миры; очистка не трогает сохранения"
+text = "Хранилище миров"
+
+[node name="Spacer" type="Control" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
+size_flags_horizontal = 3
+
+[node name="WorldsBack" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Bottom"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(112, 40)
+text = "Назад"
+
+[node name="NewWorld" type="CenterContainer" parent="UI/Root"]
+unique_name_in_owner = true
+visible = false
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="PanelContainer" parent="UI/Root/NewWorld"]
+custom_minimum_size = Vector2(488, 0)
+layout_mode = 2
+theme_type_variation = &"MenuGlass"
+
+[node name="Box" type="VBoxContainer" parent="UI/Root/NewWorld/Panel"]
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="UI/Root/NewWorld/Panel/Box"]
+theme_type_variation = &"TitleLabel"
+text = "Новый мир"
+
+[node name="NewWorld" type="PanelContainer" parent="UI/Root/NewWorld/Panel/Box"]
 layout_mode = 2
 theme_type_variation = &"SectionPanel"
 
-[node name="NewBox" type="VBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld"]
+[node name="NewBox" type="VBoxContainer" parent="UI/Root/NewWorld/Panel/Box/NewWorld"]
 layout_mode = 2
 
-[node name="NewTitle" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+[node name="NewTitle" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
 layout_mode = 2
 theme_type_variation = &"SectionLabel"
 text = "Зерно мира"
 
-[node name="SeedRow" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+[node name="SeedRow" type="HBoxContainer" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
 layout_mode = 2
 
-[node name="SeedEdit" type="LineEdit" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow"]
+[node name="SeedEdit" type="LineEdit" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow"]
 unique_name_in_owner = true
 layout_mode = 2
 size_flags_horizontal = 3
@@ -324,21 +554,21 @@ placeholder_text = "любое слово или число"
 max_length = 32
 clear_button_enabled = true
 
-[node name="Dice" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow"]
+[node name="Dice" type="Button" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow"]
 custom_minimum_size = Vector2(44, 0)
 layout_mode = 2
 tooltip_text = "Случайное зерно"
 icon = ExtResource("4_dice")
 icon_alignment = 1
 
-[node name="SeedHelp" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+[node name="SeedHelp" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
 custom_minimum_size = Vector2(300, 0)
 layout_mode = 2
 theme_type_variation = &"CaptionLabel"
-text = "Выберите мир в списке или введите любое слово. Одно зерно — один и тот же мир."
+text = "Введите зерно. Одно и то же зерно создаёт один и тот же мир."
 autowrap_mode = 3
 
-[node name="Infinite" type="CheckBox" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+[node name="Infinite" type="CheckBox" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
 unique_name_in_owner = true
 visible = false
 layout_mode = 2
@@ -346,7 +576,7 @@ tooltip_text = "Выключено — мир это стартовая обла
 Включено — за краем готовятся соседние области и по ним можно ездить."
 text = "Бесконечная генерация"
 
-[node name="InfiniteWarning" type="Label" parent="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox"]
+[node name="InfiniteWarning" type="Label" parent="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox"]
 unique_name_in_owner = true
 visible = false
 custom_minimum_size = Vector2(300, 0)
@@ -356,80 +586,24 @@ theme_override_font_sizes/font_size = 13
 text = "! Не доделано: соседние области работают плохо"
 autowrap_mode = 3
 
-[node name="Start" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="Author" type="Label" parent="UI/Root/NewWorld/Panel/Box"]
+theme_type_variation = &"SectionLabel"
+text = "Миры от автора"
+
+[node name="Suggestions" type="VBoxContainer" parent="UI/Root/NewWorld/Panel/Box"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 64)
-layout_mode = 2
+
+[node name="CreateWorld" type="Button" parent="UI/Root/NewWorld/Panel/Box"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(0, 52)
 theme_type_variation = &"PrimaryButton"
-theme_override_font_sizes/font_size = 22
-text = "Начать путешествие"
+text = "Создать мир"
 icon = ExtResource("6_play")
 
-[node name="LoadManual" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
+[node name="NewBack" type="Button" parent="UI/Root/NewWorld/Panel/Box"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
-layout_mode = 2
-theme_override_font_sizes/font_size = 15
-text = "Загрузить ручное сохранение"
-icon = ExtResource("8_load")
-
-[node name="WorldActions" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box/Columns/Side"]
-layout_mode = 2
-
-[node name="RestartWorld" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/WorldActions"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Создать заново"
-tooltip_text = "Пересоздать мир по этому зерну и начать новое путешествие"
-
-[node name="DeleteWorld" type="Button" parent="UI/Root/Menu/Panel/Box/Columns/Side/WorldActions"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-text = "Удалить мир"
-tooltip_text = "Удалить мир из списков и его сохранения"
-
-[node name="Bottom" type="HBoxContainer" parent="UI/Root/Menu/Panel/Box"]
-layout_mode = 2
-
-[node name="TrailLab" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(150, 40)
-layout_mode = 2
-text = "Лаборатория трасс"
-tooltip_text = "Лаборатория велосипедных трасс"
-icon = ExtResource("6_play")
-
-[node name="Settings" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
-custom_minimum_size = Vector2(160, 40)
-layout_mode = 2
-text = "Настройки"
-icon = ExtResource("9_gear")
-
-[node name="Exit" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
-custom_minimum_size = Vector2(120, 40)
-layout_mode = 2
-text = "Выход"
-icon = ExtResource("11_exit")
-
-[node name="Storage" type="Button" parent="UI/Root/Menu/Panel/Box/Bottom"]
-unique_name_in_owner = true
-custom_minimum_size = Vector2(0, 40)
-layout_mode = 2
-theme_type_variation = &"TabButton"
-theme_override_font_sizes/font_size = 14
-tooltip_text = "Сколько места занимают готовые миры; очистка не трогает сохранения"
-text = "Хранилище миров"
-
-[node name="Version" type="Label" parent="UI/Root/Menu/Panel/Box/Bottom"]
-unique_name_in_owner = true
-layout_mode = 2
-size_flags_horizontal = 3
-theme_type_variation = &"CaptionLabel"
-text = "Версия"
-horizontal_alignment = 2
-vertical_alignment = 1
+text = "Назад"
 
 [node name="Loading" type="CenterContainer" parent="UI/Root"]
 unique_name_in_owner = true
@@ -1150,17 +1324,22 @@ text = "Готово"
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page/TrailClutter" to="." method="_on_trail_clutter_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/VolumeSlider" to="." method="_on_volume_changed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Reset" to="." method="_on_reset_settings"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Storage" to="." method="_open_storage"]
-[connection signal="focus_entered" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_choose_typed"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Done" to="." method="_close_settings"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/DaySlider" to="." method="_on_day_changed"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/StartHourSlider" to="." method="_on_start_hour_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/RandomHour" to="." method="_on_random_hour_toggled"]
-[connection signal="text_submitted" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
-[connection signal="text_changed" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/NewWorld/NewBox/SeedRow/Dice" to="." method="_on_dice_pressed"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Columns/Side/Start" to="." method="_on_start"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/TrailLab" to="." method="_open_trail_lab"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Settings" to="." method="_open_settings"]
-[connection signal="pressed" from="UI/Root/Menu/Panel/Box/Bottom/Exit" to="." method="_exit_game"]
+[connection signal="text_submitted" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]
+[connection signal="text_changed" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_changed"]
+[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/Dice" to="." method="_on_dice_pressed"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow/Star" to="." method="_on_star_selected"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Columns/Side/PlaySelected" to="." method="_on_start"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/Storage" to="." method="_open_storage"]
+[connection signal="pressed" from="UI/Root/AllWorlds/Panel/Box/Bottom/WorldsBack" to="." method="_return_to_menu_screen"]
+[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/CreateWorld" to="." method="_on_create_world"]
+[connection signal="pressed" from="UI/Root/NewWorld/Panel/Box/NewBack" to="." method="_return_to_menu_screen"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Start" to="." method="_on_start"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Actions/OpenNew" to="." method="_open_new_world"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Actions/OpenWorlds" to="." method="_open_all_worlds"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuSettings" to="." method="_open_settings"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Actions/MenuExit" to="." method="_exit_game"]
+[connection signal="pressed" from="UI/Root/Menu/Panel/Build/TrailLab" to="." method="_open_trail_lab"]

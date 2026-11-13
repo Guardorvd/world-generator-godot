@@ -1,8 +1,5 @@
 extends SceneTree
-## Real menu/scene transition, with only the decorative menu generation disabled.
-class MenuWithoutBackground extends "res://scripts/ui/main.gd":
-	func _menu_background_job(_seed_text: String) -> void:
-		pass
+## Real menu/scene transition without launching the game world.
 
 var failures := 0
 
@@ -17,7 +14,6 @@ func check(ok: bool, message: String) -> void:
 func run() -> void:
 	root.size = Vector2i(1280, 720)
 	var main := preload("res://scenes/main.tscn").instantiate()
-	main.set_script(MenuWithoutBackground)
 	root.add_child(main)
 	await process_frame
 	await process_frame

@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=61 format=3]
+[gd_resource type="Theme" load_steps=72 format=3]
 
 [sub_resource type="StyleBoxFlat" id="focus"]
 content_margin_left = 16.0
@@ -712,6 +712,49 @@ corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
+[sub_resource type="StyleBoxFlat" id="menu_glass"]
+content_margin_left = 24.0
+content_margin_top = 20.0
+content_margin_right = 24.0
+content_margin_bottom = 20.0
+bg_color = Color(0.05, 0.1, 0.13, 0.84)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.8, 0.87, 0.84, 0.42)
+corner_radius_top_left = 14
+corner_radius_top_right = 14
+corner_radius_bottom_right = 14
+corner_radius_bottom_left = 14
+
+[sub_resource type="StyleBoxFlat" id="world_card"]
+content_margin_left = 13.0
+content_margin_top = 13.0
+content_margin_right = 13.0
+content_margin_bottom = 13.0
+bg_color = Color(0.08, 0.15, 0.18, 0.77)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.8, 0.87, 0.84, 0.48)
+corner_radius_top_left = 12
+corner_radius_top_right = 12
+corner_radius_bottom_right = 12
+corner_radius_bottom_left = 12
+
+[sub_resource type="StyleBoxFlat" id="world_placeholder"]
+content_margin_left = 12.0
+content_margin_top = 8.0
+content_margin_right = 12.0
+content_margin_bottom = 8.0
+bg_color = Color(0.11, 0.18, 0.19, 0.86)
+corner_radius_top_left = 7
+corner_radius_top_right = 7
+corner_radius_bottom_right = 7
+corner_radius_bottom_left = 7
+
 [sub_resource type="StyleBoxFlat" id="key"]
 content_margin_left = 6.0
 content_margin_top = 1.0
@@ -727,6 +770,109 @@ corner_radius_top_left = 4
 corner_radius_top_right = 4
 corner_radius_bottom_right = 4
 corner_radius_bottom_left = 4
+
+[sub_resource type="StyleBoxFlat" id="menu_link"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.04, 0.09, 0.12, 0.45)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="menu_link_hover"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.13, 0.21, 0.24, 0.78)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="menu_link_pressed"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0.13, 0.21, 0.24, 0.92)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="menu_link_off"]
+content_margin_left = 8.0
+content_margin_top = 4.0
+content_margin_right = 8.0
+content_margin_bottom = 4.0
+bg_color = Color(0, 0, 0, 0)
+corner_radius_top_left = 8
+corner_radius_top_right = 8
+corner_radius_bottom_right = 8
+corner_radius_bottom_left = 8
+
+[sub_resource type="StyleBoxFlat" id="carousel_tab"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.03, 0.05, 0.09, 0.7)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.3, 0.35, 0.45, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
+[sub_resource type="StyleBoxFlat" id="carousel_hover"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.21, 0.26, 0.36, 0.98)
+border_width_left = 1
+border_width_top = 1
+border_width_right = 1
+border_width_bottom = 1
+border_color = Color(0.86, 0.7, 0.38, 0.3)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
+[sub_resource type="StyleBoxFlat" id="carousel_active"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.15, 0.19, 0.27, 0.96)
+border_width_left = 2
+border_width_top = 2
+border_width_right = 2
+border_width_bottom = 2
+border_color = Color(0.86, 0.7, 0.38, 1)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
+
+[sub_resource type="StyleBoxFlat" id="carousel_off"]
+content_margin_left = 4.0
+content_margin_top = 4.0
+content_margin_right = 4.0
+content_margin_bottom = 4.0
+bg_color = Color(0.12, 0.15, 0.21, 0.6)
+corner_radius_top_left = 5
+corner_radius_top_right = 5
+corner_radius_bottom_right = 5
+corner_radius_bottom_left = 5
 
 [resource]
 default_font_size = 18
@@ -761,6 +907,26 @@ Button/styles/pressed = SubResource("btn_pressed")
 CaptionLabel/base_type = &"Label"
 CaptionLabel/colors/font_color = Color(1, 1, 1, 0.5)
 CaptionLabel/font_sizes/font_size = 13
+CarouselTab/base_type = &"Button"
+CarouselTab/colors/font_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/font_disabled_color = Color(1, 1, 1, 0.32)
+CarouselTab/colors/font_focus_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/font_hover_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/font_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
+CarouselTab/colors/font_pressed_color = Color(0.95, 0.8, 0.5, 1)
+CarouselTab/colors/icon_disabled_color = Color(1, 1, 1, 0.32)
+CarouselTab/colors/icon_focus_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/icon_hover_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/icon_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
+CarouselTab/colors/icon_normal_color = Color(0.93, 0.93, 0.9, 1)
+CarouselTab/colors/icon_pressed_color = Color(0.95, 0.8, 0.5, 1)
+CarouselTab/font_sizes/font_size = 15
+CarouselTab/styles/disabled = SubResource("carousel_off")
+CarouselTab/styles/focus = SubResource("focus")
+CarouselTab/styles/hover = SubResource("carousel_hover")
+CarouselTab/styles/hover_pressed = SubResource("carousel_active")
+CarouselTab/styles/normal = SubResource("carousel_tab")
+CarouselTab/styles/pressed = SubResource("carousel_active")
 CheckBox/colors/font_color = Color(0.78, 0.8, 0.84, 1)
 CheckBox/colors/font_disabled_color = Color(1, 1, 1, 0.32)
 CheckBox/colors/font_focus_color = Color(0.93, 0.93, 0.9, 1)
@@ -864,6 +1030,40 @@ ListRow/styles/hover = SubResource("row_hover")
 ListRow/styles/hover_pressed = SubResource("row_selected")
 ListRow/styles/normal = SubResource("row_normal")
 ListRow/styles/pressed = SubResource("row_selected")
+MenuFootnote/base_type = &"CaptionLabel"
+MenuFootnote/colors/font_color = Color(0.78, 0.8, 0.84, 1)
+MenuFootnote/colors/font_outline_color = Color(0.04, 0.07, 0.08, 0.8)
+MenuFootnote/constants/outline_size = 3
+MenuGlass/base_type = &"PanelContainer"
+MenuGlass/styles/panel = SubResource("menu_glass")
+MenuHeading/base_type = &"Label"
+MenuHeading/colors/font_color = Color(0.99, 0.95, 0.83, 1)
+MenuHeading/colors/font_shadow_color = Color(0.04, 0.07, 0.08, 0.85)
+MenuHeading/constants/shadow_offset_y = 2
+MenuHeading/constants/shadow_outline_size = 6
+MenuHeading/font_sizes/font_size = 40
+MenuLink/base_type = &"Button"
+MenuLink/colors/font_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/font_disabled_color = Color(1, 1, 1, 0.32)
+MenuLink/colors/font_focus_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/font_hover_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/font_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
+MenuLink/colors/font_outline_color = Color(0.04, 0.07, 0.08, 0.8)
+MenuLink/colors/font_pressed_color = Color(0.95, 0.8, 0.5, 1)
+MenuLink/colors/icon_disabled_color = Color(1, 1, 1, 0.32)
+MenuLink/colors/icon_focus_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/icon_hover_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/icon_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
+MenuLink/colors/icon_normal_color = Color(0.93, 0.93, 0.9, 1)
+MenuLink/colors/icon_pressed_color = Color(0.95, 0.8, 0.5, 1)
+MenuLink/constants/outline_size = 3
+MenuLink/font_sizes/font_size = 16
+MenuLink/styles/disabled = SubResource("menu_link_off")
+MenuLink/styles/focus = SubResource("focus")
+MenuLink/styles/hover = SubResource("menu_link_hover")
+MenuLink/styles/hover_pressed = SubResource("menu_link_pressed")
+MenuLink/styles/normal = SubResource("menu_link")
+MenuLink/styles/pressed = SubResource("menu_link_pressed")
 OptionButton/colors/font_color = Color(0.93, 0.93, 0.9, 1)
 OptionButton/colors/font_disabled_color = Color(1, 1, 1, 0.32)
 OptionButton/colors/font_focus_color = Color(0.93, 0.93, 0.9, 1)
@@ -968,3 +1168,12 @@ Window/constants/title_height = 40
 Window/font_sizes/title_font_size = 17
 Window/styles/embedded_border = SubResource("win")
 Window/styles/embedded_unfocused_border = SubResource("win")
+WorldCard/base_type = &"PanelContainer"
+WorldCard/styles/panel = SubResource("world_card")
+WorldName/base_type = &"Label"
+WorldName/colors/font_color = Color(0.93, 0.93, 0.9, 1)
+WorldName/font_sizes/font_size = 25
+WorldPlaceholder/base_type = &"Label"
+WorldPlaceholder/colors/font_color = Color(0.95, 0.8, 0.5, 1)
+WorldPlaceholder/font_sizes/font_size = 27
+WorldPlaceholder/styles/normal = SubResource("world_placeholder")
