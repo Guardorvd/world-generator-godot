@@ -56,7 +56,10 @@ const S_GAZE_PITCH := 33
 const S_REST := 34      # 12.11: отдых на долгой стоянке — рука на бедре (знак — сторона руки)
 const S_SHAKE := 35     # 12.11: встряхнуть кисть в спокойной езде (знак — сторона руки)
 const S_SHAKE_WIG := 36 # взмах кисти
-const STATE_SIZE := 37
+const S_BRAKE_POSE := 37 # 12.11: поза торможения корпуса — входит и выходит плавно, ручки (S_BRAKE) жмутся сразу
+const STATE_SIZE := 38
+const SURGE_STAND := 0.85 # насколько седок встаёт в рывке (1 — как на крутом подъёме)
+const TURN_IN_SWAY := 0.014 # плечи доворачиваются в поворот на резком движении руля, рад на долю хода руля в секунду
 const STOP_LEAN := 0.085 # наклон велосипеда к опорной ноге на стоянке, рад (только вид)
 const ROCK := 0.09 # 12.3: раскачка велосипеда под седоком, который едет стоя, рад
 const LOAD_EFFORT := 0.95 # медленная тяжёлая работа на подъёме, независимо от частоты
@@ -331,10 +334,16 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 		_effort = lerpf(_effort, effort_target, Util.damp(5.0, dt)) if continuous else 0.0
 	var effort := _effort
 	var braking := clampf(b.brake_applied / GameConfig.BIKE_BRAKE, 0.0, 1.0) if not b.airborne else 0.0
+	# корпус входит в позу торможения за ~0,12 с и выходит за ~0,25 с: раньше поза повторяла ручку такт в такт
+	_cur[S_BRAKE_POSE] = lerpf(_prev[S_BRAKE_POSE], _cur[S_BRAKE], Util.damp(9.0 if _cur[S_BRAKE] > _prev[S_BRAKE_POSE] else 4.5, dt)) if continuous else _cur[S_BRAKE]
 	# 12.3: на крутом подъёме под нагрузкой и в рывок с места седок встаёт с седла;
 	# на быстром спуске без педалей и на тряске — приподнимается и принимает удары ногами.
 	var climb := smoothstep(0.07, 0.16, slope) * smoothstep(0.45, 0.85, effort) * (1.0 - smoothstep(7.0, 11.0, absf(b.speed)))
 	var sprint := smoothstep(1.5, 3.5, acceleration) * (1.0 - smoothstep(6.0, 10.0, absf(b.speed))) if boost else 0.0
+	# 12.11: рывок на Shift (BikeRide.surge) — седок встаёт на педали и раскачивает велосипед на любой скорости,
+	# пока длится прилив и он давит на педали; раньше стойка была только при разгоне до 10 м/с
+	if b.surge > 0.0 and not b.airborne:
+		sprint = maxf(sprint, smoothstep(0.0, 0.5, b.surge) * smoothstep(0.3, 0.7, effort) * SURGE_STAND)
 	var descent := smoothstep(0.06, 0.16, -slope) * (1.0 - effort) * smoothstep(4.0, 8.0, absf(b.speed))
 	# Фаза 1 прыжка — подготовка (preload): сжатие перед отрывом (буфер прыжка, авто-хоп, рывок Q или волна).
 	var prep_raw := (0.85 if b._hop_buf > 0.0 or b.body_back or (b._auto_hop >= 0.0 and b._auto_hop < BikeRide.AUTO_BACK) else 0.0) + maxf(0.0, b.body_v) * 0.22 + clampf(b.lift_f / 0.12, 0.0, 0.65)
@@ -460,6 +469,8 @@ func _update_rider(b: BikeRide, dt: float, _throttle: float, boost: bool) -> voi
 	_cur[S_SHAKE_WIG] = sin(_gaze_phase * 21.0) * smoothstep(0.6, 1.0, _shake)
 	# Плечи чуть сопровождают нажатие на педаль, таз отвечает встречным движением.
 	var sway := sin(b.crank) * active_effort * (0.055 + up * 0.06)
+	# 12.11: на резком довороте плечи идут в поворот вместе с рулём (пружина корпуса сгладит), таз — чуть наружу
+	sway -= clampf(steer_vel, -4.0, 4.0) * TURN_IN_SWAY * moving
 	# Дыхание подчинено накопленной нагрузке (_fatigue): учащается и углубляется под нагрузкой, с активным вдохом,
 	# и кратковременно задерживается при жёстком торможении, отрыве и приёме удара.
 	var prev_fatigue := _fatigue
@@ -651,7 +662,7 @@ func draw(alpha: float) -> void:
 		var grip_l := _steering.position + _steering.basis * (GRIP * Vector3(-1, 1, 1) - STEERING_PIVOT)
 		var grip_r := _steering.position + _steering.basis * (GRIP - STEERING_PIVOT)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
-		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
+		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE_POSE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
 				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]), _mix[S_REST], Vector2(_mix[S_SHAKE], _mix[S_SHAKE_WIG]))
 		if is_instance_valid(_pack_bag):
 			_pack_bag.position = PACK_AT + Vector3(_mix[S_PACK_ROLL] * 0.04, -clampf(_mix[S_PACK_PITCH], -0.06, 0.12) * 0.08, maxf(0.0, _mix[S_BREATH]) * 0.4)

@@ -54,12 +54,15 @@ func run() -> void:
 		controls.reset()
 		var first := controls.bike_steer(1.0, 1.0 / 60, pace)
 		var held := first
-		for i in 60: held = controls.bike_steer(1.0, 1.0 / 60, pace)
-		check(first > 0.0 and first < 0.2 and held > 0.9, "быстрое, но не полное начало и полный поворот при удержании на %.0f м/с" % pace)
+		for i in 45: held = controls.bike_steer(1.0, 1.0 / 60, pace)
+		# 12.11: удержание на скорости мягче нажатия (KEY_STEER_HOLD), на малой — полный руль
+		check(first > 0.0 and first < 0.4 and (held > 0.9 if pace < 5.0 else held > 0.7 and held < 0.97), "быстрое начало и дуга удержания на %.0f м/с (%.2f)" % [pace, held])
+		for i in 90: held = controls.bike_steer(1.0, 1.0 / 60, pace)
+		check(held > 0.9, "долгое удержание дожимает дугу до полной")
 		var reverse := controls.bike_steer(-1.0, 1.0 / 60, pace)
 		check(reverse > 0.0 and held - reverse < 0.35, "перекладка не меняет знак рывком")
 		for i in 60: reverse = controls.bike_steer(-1.0, 1.0 / 60, pace)
-		check(reverse < -0.9, "противоположная дуга доступна")
+		check(reverse < -0.5, "противоположная дуга доступна")
 		for i in 30: reverse = controls.bike_steer(0.0, 1.0 / 60, pace)
 		check(absf(reverse) < 0.02, "отпускание возвращает руль")
 	controls.reset()
@@ -82,8 +85,8 @@ func run() -> void:
 	controls.reset()
 	var early := 0.0
 	for i in 6: early = controls.bike_steer(1.0, 1.0 / 60, 16.0)
-	# 31.10: нажатие сильнее (KEY_STEER_TAP 0,45): правка линии заметна сразу, но не полный руль
-	check(early > 0.3 and early < 0.5, "prompt correction in 100 ms, without full-lock steering")
+	# 12.11: нажатие — резкий доворот (KEY_STEER_KICK), сильнее дуги удержания
+	check(early > 0.7 and early <= 1.0, "нажатие за 100 мс даёт резкий доворот (%.2f)" % early)
 	# частые нажатия в одну сторону (0,25 с нажато, 0,12 с отпущено) ведут дугу, а не начинают её заново
 	controls.reset()
 	var pulsed := 0.0
@@ -91,11 +94,11 @@ func run() -> void:
 		for i in 15: pulsed = controls.bike_steer(1.0, 1.0 / 60, 12.0)
 		if tap < 3:
 			for i in 7: controls.bike_steer(0.0, 1.0 / 60, 12.0)
-	check(pulsed > 0.85, "частые нажатия собирают дугу (%.2f)" % pulsed)
+	check(pulsed > 0.55, "частые нажатия ведут дугу (%.2f)" % pulsed)
 	controls.reset()
 	var single := 0.0
 	for i in 15: single = controls.bike_steer(1.0, 1.0 / 60, 12.0)
-	check(single < 0.75, "одно короткое нажатие — только правка линии (%.2f)" % single)
+	check(single > 0.6, "одно короткое нажатие — заметный доворот (%.2f)" % single)
 	# перекладка на малой скорости (подъём): после короткого руля влево полный вправо набирается быстрее, чем на скорости
 	var reach := {}
 	for pace: float in [5.0, 14.0]:
@@ -104,7 +107,7 @@ func run() -> void:
 		var ticks := 0
 		while controls.bike_steer(1.0, 1.0 / 60, pace) < 0.9 and ticks < 120: ticks += 1
 		reach[pace] = ticks / 60.0
-	check(reach[5.0] < 0.35 and reach[5.0] < reach[14.0] - 0.1, "на малой скорости перекладка в полный руль быстрее (%.2f с против %.2f с)" % [reach[5.0], reach[14.0]])
+	check(reach[5.0] < 0.35 and reach[14.0] < 0.35, "перекладка в резкий доворот быстрая на любой скорости (%.2f с и %.2f с)" % [reach[5.0], reach[14.0]])
 	# 31.10: тормоз с клавиатуры ступенями — нажатие подтормаживает, удержание доводит до полного; газ и аналог как есть
 	controls.reset()
 	var brake_tap := controls.bike_brake(-1.0, 1.0 / 60)

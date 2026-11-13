@@ -635,7 +635,7 @@ horizontal_alignment = 1
 
 [node name="SettingsTabs" type="TabContainer" parent="UI/Root/Settings/Panel/Box"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(580, 420)
+custom_minimum_size = Vector2(580, 520)
 layout_mode = 2
 current_tab = 0
 
@@ -799,13 +799,27 @@ layout_mode = 2
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Освещение"
-tooltip_text = "Атмосфера сохраняется на всех уровнях. Среднее добавляет контактное затенение, высокое — непрямой свет."
+tooltip_text = "Среднее добавляет контактное затенение, высокое — непрямой свет."
 mouse_filter = 1
 
 [node name="LightingOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/LightingRow"]
 unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
+
+[node name="FogRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="FogLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/FogRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Туман"
+
+[node name="FogQualityOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/FogRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+tooltip_text = "Низкий — обычная дымка. Средний и высокий включают объёмный туман в Forward+. Высокий увеличивает дальность и детализацию."
 
 [node name="VSync" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 unique_name_in_owner = true

@@ -1015,6 +1015,8 @@ static func communities(big: float, mid: float, moisture: float, light: float, s
 	var tall := smoothstep(0.42, 0.72, big * 0.65 + mid * 0.35 + (moisture - 0.5) * 0.45 + verge * 0.18) * flat
 	var forbs := smoothstep(0.4, 0.7, (1.0 - big) * 0.55 + mid * 0.45 + (light - 0.5) * 0.35) * (1.0 - 0.6 * wet)
 	var shrub := smoothstep(0.15, 0.55, edge) * 0.9 + foothill * smoothstep(0.5, 0.8, mid) * 0.65 + verge * 0.25 * mid
+	# 12.11.2026: кустарниковые склоны холмов — заросли пятнами на уклонах (не на ровном лугу и не в сырых низинах)
+	shrub += smoothstep(0.1, 0.4, slope) * smoothstep(0.48, 0.7, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, moisture)) * 1.1
 	# 16.1: осока с рогозом — у воды; просто сырой склон даёт её мало
 	var reed := shore * (0.4 + 0.6 * wet) * flat + smoothstep(0.78, 0.95, moisture) * flat * (1.0 - smoothstep(0.1, 0.3, alt)) * 0.3
 	var turf := high * (1.0 - 0.5 * rock) + rock * 0.5

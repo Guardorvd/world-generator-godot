@@ -29,7 +29,7 @@ const Understory := preload("res://scripts/render/understory_models.gd")
 ## Модель первого скального выхода (RockModels.OUTCROP_V); без неё в каталоге выходы не рисуются.
 const OUTCROP_MODEL := Biomes.T_ROCK + RockModels.VARIANTS * ForestModels.MODEL_STRIDE
 ## Скалы без своей травы: низкая сухая трава только в сырых ложбинах (_rock_shelter).
-const ROCK_GRASS := {dens = 2.4, tint = [0.5, 0.56, 0.31]}
+const ROCK_GRASS := {dens = 2.4, tint = [0.52, 0.55, 0.31], straw = 0.4}
 ## Cumulative weights: no zero-weight forms or per-cell array allocations.
 const ROCK_HOLLOW := [[Understory.MOSS, 1.0], [Understory.HERB, 1.45], [Understory.GRASS, 1.95],
 	[Understory.BUSH, 2.2], [Understory.FLOWERS, 2.32], [Understory.FORBS, 2.5], [Understory.MEADOW, 2.62],
@@ -198,6 +198,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	placement = Placement.new(w, h)
 	road = RoadObstacles.new(w)
 	_forest_surface = forest if forest != null else Floor.surface_image(w)
+	RenderingServer.global_shader_parameter_set("veg_seeds", community_seeds(w.seed_num))
 	for kind in defs:
 		var def: Dictionary = defs[kind]
 		var entry := {leaves = def.get("leaves", []), box = AABB(), ref = def.get("ref", 1.0)}
@@ -431,7 +432,7 @@ func set_draw(level: int) -> bool:
 		entry.count = 0
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
-			if node.get_meta("level", 2) == 2:
+			if node.get_meta("last_level", true):
 				node.visibility_range_end = (minf(tree_r, 70.0) if veg[key].get("small_rocks", false) else tree_r) + _half_chunk()
 	_apply_fade()
 	last_fill = Vector2.INF
@@ -502,7 +503,7 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 	node.visibility_range_end = 0.0
 	node.visibility_range_end_margin = 0.0
 	if node.has_meta("stream_retiring"): node.remove_meta("stream_retiring")
-	if node.has_meta("level"): node.remove_meta("level")
+	if node.has_meta("last_level"): node.remove_meta("last_level")
 	if tree: node.set_meta("stream_tree", true)
 	if node.get_parent() == null: add_child(node)
 	node.visible = true
@@ -1011,7 +1012,7 @@ func _build_entries(items: Dictionary) -> Dictionary:
 					_put_transform(buf, n * 16, xf)
 				else:
 					_put_xform(buf, n * 16, pos.x, pos.y, pos.z, rot, s, sy)
-				var col: Color = def.leaves[v % def.leaves.size()]
+				var col: Color = Biomes.leaf_tone(kind % ForestModels.MODEL_STRIDE, def.leaves[v % def.leaves.size()], ox, oy)
 				buf[n * 16 + 12] = col.r
 				buf[n * 16 + 13] = col.g
 				buf[n * 16 + 14] = col.b
@@ -1111,8 +1112,13 @@ func refresh(rect: Rect2i) -> void:
 		var bounds := mm.custom_aabb
 		if not Rect2(Vector2(bounds.position.x, bounds.position.z), Vector2(bounds.size.x, bounds.size.z)).intersects(box): continue
 		var buffer := mm.buffer
-		var kept := 0
-		for at in range(0, mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE, STRIDE):
+		var end := mini(mm.visible_instance_count if mm.visible_instance_count >= 0 else mm.instance_count, mm.instance_count) * STRIDE
+		# Пока ни один экземпляр не попал в вырез, буфер не переписывается и не возвращается в MultiMesh.
+		var first := 0
+		while first < end and not box.has_point(Vector2(buffer[first + 3], buffer[first + 11])): first += STRIDE
+		if first >= end: continue
+		var kept := first / STRIDE
+		for at in range(first + STRIDE, end, STRIDE):
 			if box.has_point(Vector2(buffer[at + 3], buffer[at + 11])): continue
 			for c in STRIDE: buffer[kept * STRIDE + c] = buffer[at + c]
 			kept += 1
@@ -1250,6 +1256,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					caster.multimesh.visible_instance_count = entry.count
 					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
 					caster.visibility_range_end_margin = 16.0
+					caster.set_meta("last_level", false) # set_draw не должен растягивать его дальность до tree_r
 					entry.nodes.append(caster)
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
@@ -1259,7 +1266,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				mm.visible_instance_count = entry.count
 				# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
 				if levels.size() > 1:
-					node.set_meta("level", level)
+					node.set_meta("last_level", level == levels.size() - 1)
 					if level > 0:
 						node.visibility_range_begin = maxf(0.0, LOD_STEPS[level - 1][0] - LOD_STEPS[level - 1][1] * 0.5 - _half_chunk())
 				if level < levels.size() - 1:
@@ -1612,6 +1619,20 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
 	var tc: Array = gr.tint
+	# 12.11.2026: зрелая трава — поляны ~30 м, где часть пучков уже соломенная (gr.straw — доля по биому)
+	var straw: float = gr.get("straw", 0.0)
+	if straw > 0.0:
+		var sx := i / 8.0
+		var sz := j / 8.0
+		var fx := sx - floorf(sx)
+		var fz := sz - floorf(sz)
+		fx = fx * fx * (3.0 - 2.0 * fx)
+		fz = fz * fz * (3.0 - 2.0 * fz)
+		var x0 := floori(sx)
+		var z0 := floori(sz)
+		var field := lerpf(lerpf(WGRandom.hash2(x0, z0, 917), WGRandom.hash2(x0 + 1, z0, 917), fx),
+			lerpf(WGRandom.hash2(x0, z0 + 1, 917), WGRandom.hash2(x0 + 1, z0 + 1, 917), fx), fz)
+		straw *= 0.25 + 1.5 * smoothstep(0.35, 0.75, field) * (1.0 - 0.6 * surface.r)
 	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
 	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
 	var keep: float = _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r)) * flora.grass
@@ -1649,9 +1670,10 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 		_grass_low = _grass_low.min(origin)
 		_grass_high = _grass_high.max(origin)
 		var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
-		buf[n * STRIDE + 12] = tc[0] * v * (1.0 + verge * 0.12)
-		buf[n * STRIDE + 13] = tc[1] * v
-		buf[n * STRIDE + 14] = tc[2] * v * (1.0 - verge * 0.2)
+		var dry := clampf(straw * (0.4 + WGRandom.hash2(m + 3, i - j, 37) * 1.2), 0.0, 0.85)
+		buf[n * STRIDE + 12] = lerpf(tc[0], 0.66, dry) * v * (1.0 + verge * 0.12)
+		buf[n * STRIDE + 13] = lerpf(tc[1], 0.58, dry) * v
+		buf[n * STRIDE + 14] = lerpf(tc[2], 0.31, dry) * v * (1.0 - verge * 0.2)
 		buf[n * STRIDE + 15] = 1.0 - surface.r # открытость неба: свет и ветер под пологом
 		buf[n * STRIDE + 16] = rank
 		buf[n * STRIDE + 17] = WGRandom.hash2(i * 13 + m, j, 73)
@@ -1896,7 +1918,10 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	weights[Understory.FIREWEED] *= bloom * 3.0 * (1.0 - steppe)
 	for weight in weights:
 		total += weight
-	var hue := Color(1.0 + 0.16 * parch, 1.0 - 0.03 * parch, 1.0 - 0.3 * parch)
+	# 12.11.2026: конец лета — травы и кусты открытых мест зрелые: чуть теплее и глуше и на сочном месте,
+	# на сухом — соломенные. В тайге, джунглях и на болоте сдвиг слабее.
+	var ripe := 0.35 if bi in [Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else 1.0
+	var hue := Color(1.0 + (0.05 + 0.2 * parch) * ripe, 1.0 - 0.04 * parch, 1.0 - (0.1 + 0.3 * parch) * ripe)
 	# Стелющийся можжевельник: куст в горах и на каменистых склонах
 	var juniper := alt > 0.27 or surface.a > 0.3 or com[Understory.C_TURF] > 0.5
 	var hx := i * 8
@@ -1929,6 +1954,9 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 			site_hue = JUNIPER_HUE
 		elif kind == Understory.BUSH:
 			scale *= 1.0 + 0.5 * com[Understory.C_SHRUB]
+			# часть кустов уже рыжеет
+			var rust := smoothstep(0.7, 0.95, WGRandom.hash2(hx + m, j, seed + 9)) * ripe
+			site_hue = Color(hue.r * (1.0 + 0.3 * rust), hue.g * (1.0 - 0.12 * rust), hue.b * (1.0 - 0.4 * rust))
 		elif kind == Understory.STIPA:
 			site_hue = Color.WHITE # серебро остей не желтим
 		elif kind == Understory.FIREWEED:
@@ -1969,6 +1997,15 @@ func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunl
 	for c in Understory.COMMUNITIES:
 		q[1 + c] = roundi(com[c] * 255.0)
 	return q
+
+
+## 12.11.2026: сиды шума сообществ для шейдера рельефа (тон земли вдали): как в _open_community, 32 бита со знаком
+static func community_seeds(seed_num: int) -> Vector4i:
+	var out: Array[int] = []
+	for offset in [0, 17, 31, 41]:
+		var s: int = ((seed_num ^ 8803) + offset) & WGRandom.MASK
+		out.append(s - 0x100000000 if s >= 0x80000000 else s)
+	return Vector4i(out[0], out[1], out[2], out[3])
 
 
 ## 16.0: плавный шум по клеткам: значения в узлах решётки шага scale клеток, сглаженная интерполяция

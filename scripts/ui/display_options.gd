@@ -16,6 +16,7 @@ var vsync: CheckBox
 var shadows: CheckBox
 var draw: OptionButton
 var lighting: OptionButton
+var fog_quality: OptionButton
 var flora: OptionButton # 16.0: качество растительности
 var particles: OptionButton # 11.11: частицы окружения
 var style_on := {}      # 13.11: «Визуальный стиль» — CheckBox и HSlider у каждого эффекта VisualStyle.EFFECTS
@@ -43,6 +44,7 @@ func setup(host: Node) -> void:
 	draw = host.get_node("%DrawOption")
 	flora = host.get_node("%FloraOption")
 	lighting = host.get_node("%LightingOption")
+	fog_quality = host.get_node("%FogQualityOption")
 	particles = host.get_node("%ParticlesOption")
 	if particles.item_count == 0:
 		for level: Dictionary in GameSettings.PARTICLE_LEVELS:
@@ -50,6 +52,9 @@ func setup(host: Node) -> void:
 	if lighting.item_count == 0:
 		for title: String in GameSettings.LIGHTING_LEVELS:
 			lighting.add_item(title)
+	if fog_quality.item_count == 0:
+		for title: String in GameSettings.FOG_QUALITY_LEVELS:
+			fog_quality.add_item(title)
 	apply_button = host.get_node("%ApplyDisplay")
 	if draw.item_count == 0:
 		for level: Dictionary in GameSettings.DRAW_LEVELS:
@@ -70,7 +75,7 @@ func setup(host: Node) -> void:
 	apply_button.pressed.connect(preview)
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, draw, flora, lighting, particles]:
+	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, particles]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
 	for box: CheckBox in [vsync, shadows]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
@@ -100,6 +105,7 @@ func sync() -> void:
 	draw.select(state.draw)
 	flora.select(state.flora)
 	lighting.select(state.lighting)
+	fog_quality.select(state.fog_quality)
 	particles.select(state.particles)
 	for id: String in VisualStyle.EFFECTS:
 		(style_on[id] as CheckBox).set_pressed_no_signal(state.style_on[id])
@@ -126,7 +132,8 @@ func stage_mode(state: Dictionary) -> void:
 func selected_state() -> Dictionary:
 	return {fullscreen = mode.selected == 1, resolution = _sizes[resolution.selected],
 		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
-		shadows = shadows.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected, particles = particles.selected}
+		shadows = shadows.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
+		fog_quality = fog_quality.selected, particles = particles.selected}
 
 func pending() -> bool:
 	return not _pending.is_empty()
@@ -141,7 +148,7 @@ func _update_apply() -> void:
 func apply_graphics() -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw", "flora", "lighting", "particles"]:
+	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw", "flora", "lighting", "fog_quality", "particles"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

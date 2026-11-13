@@ -88,7 +88,7 @@ func shot(from: Vector3, to: Vector3, fov := 36.0) -> Image:
 
 func save(frames: Array[Image], file: String, cols := 4) -> void:
 	var size := frames[0].get_size()
-	var sheet := Image.create(size.x * cols, size.y * 2, false, frames[0].get_format())
+	var sheet := Image.create(size.x * cols, size.y * ceili(float(frames.size()) / cols), false, frames[0].get_format())
 	for i in frames.size():
 		sheet.blit_rect(frames[i], Rect2i(Vector2i.ZERO, size), Vector2i((i % cols) * size.x, (i / cols) * size.y))
 	var path := out.path_join(file + tag + ".png")
@@ -152,5 +152,18 @@ func look() -> void:
 	reset()
 	advance(872)
 	anim.append(await shot(Vector3(1.6, 1.5, -2.0), Vector3(0, 1.1, -0.05)))
+	# 12.11: рывок на Shift на скорости (стоя, велосипед раскачивается) и резкий доворот руля
+	reset(12.0)
+	state.surge = 1.0
+	advance(50, 1.0, 9.0, true)
+	anim.append(await shot(Vector3(1.6, 1.3, -2.3), mid + Vector3(0, 0.15, 0)))
+	state.surge = -1.0
+	reset(10.0)
+	advance(30)
+	for i in 8:
+		state.steer = minf(1.0, state.steer + 5.0 * DT)
+		state.lean = -state.steer * 0.25
+		advance(1)
+	anim.append(await shot(Vector3(0.6, 1.3, -2.7), Vector3(0, 1.0, 0.0)))
 	save(anim, "rider_anim_sheet", 5)
 	quit(0)

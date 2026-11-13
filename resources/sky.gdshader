@@ -169,7 +169,7 @@ float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass,
 		// Для оптической глубины самотени достаточно крупного купола без высокочастотной кудрявой ряби
 		out_cauli = puff_main * 0.82 + 0.10;
 		float dome_sh = out_tower * (0.62 + 0.52 * puff_main);
-		float vert_sh = bottom_flat * smoothstep(dome_sh, dome_sh * 0.20, h);
+		float vert_sh = bottom_flat * (1.0 - smoothstep(dome_sh * 0.20, dome_sh, h));
 		float comb_sh = base_island * 0.68 + out_cauli * 0.32;
 		float core_sh = clamp((comb_sh - edge) / max(1.0 - edge, 0.18), 0.0, 1.0);
 		float ero_sh = (1.0 - out_cauli) * (0.22 + 0.22 * h) * (1.0 - core_sh * 0.75);
@@ -184,7 +184,7 @@ float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass,
 
 	// Каждый клуб поднимает свою шапку выше соседних: пышные округлые купола вместо плоских пятен
 	float dome_h = out_tower * (0.62 + 0.62 * puff_main * (0.6 + 0.4 * puff_mid));
-	float top_round = smoothstep(dome_h, dome_h * 0.20, h);
+	float top_round = (1.0 - smoothstep(dome_h * 0.20, dome_h, h));
 	float vert_profile = bottom_flat * top_round;
 
 	// Формируем плотное ядро облака и скульптурно вырезаем кудрявые купола по краям и на шапках
@@ -195,7 +195,7 @@ float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass,
 
 	// Лёгкие рваные клочья (fractus) у самой подошвы крупных облаков
 	float fractus = smoothstep(0.66, 0.88, puff_fine) * smoothstep(edge - 0.05, edge + 0.03, base_island)
-		* smoothstep(0.32, 0.06, h) * bottom_flat * 0.18;
+		* (1.0 - smoothstep(0.06, 0.32, h)) * bottom_flat * 0.18;
 	return clamp(dens + fractus, 0.0, 1.0);
 }
 
@@ -214,7 +214,7 @@ vec3 stars(vec3 ds, float scale, float rare, float size, float bright) {
 	float twinkle = 0.75 + 0.25 * sin(TIME * (1.5 + k * 3.0) + k * 40.0);
 	float t = hash3(cell + 2.9);   // цвет: от голубых через белые к жёлтым и оранжевым
 	vec3 tint = t < 0.25 ? vec3(0.75, 0.85, 1.0) : (t < 0.8 ? vec3(1.0) : (t < 0.94 ? vec3(1.0, 0.9, 0.7) : vec3(1.0, 0.7, 0.5)));
-	return tint * smoothstep(size, 0.0, length(p - star)) * twinkle * bright * (0.35 + 0.65 * k * k);
+	return tint * (1.0 - smoothstep(0.0, size, length(p - star))) * twinkle * bright * (0.35 + 0.65 * k * k);
 }
 
 // ночное небо в направлении d: звёзды, Млечный Путь, туманности, комета, метеоры, луна и сияние
@@ -256,7 +256,7 @@ vec3 night_sky(vec3 d, float sd) {
 			vec3 ion_dir = normalize(tl + cross(hd, tl) * 0.18);
 			float a2 = dot(v, ion_dir);
 			float c2 = length(v - ion_dir * a2 - hd * dot(v, hd));
-			float ion = step(0.0, a2) * exp(-c2 * c2 / 0.000004) * smoothstep(0.42, 0.0, a2);
+			float ion = step(0.0, a2) * exp(-c2 * c2 / 0.000004) * (1.0 - smoothstep(0.0, 0.42, a2));
 			float head = exp(-dot(v, v) / 0.000012);
 			col += (vec3(1.0, 0.95, 0.8) * (dusty * 0.8 + head * 2.5) + vec3(0.5, 0.75, 1.0) * ion * 0.5) * comet;
 		}
@@ -273,7 +273,7 @@ vec3 night_sky(vec3 d, float sd) {
 			vec3 v = d - head;
 			float along = dot(v, -dm);
 			float across = length(v + dm * along - head * dot(v, head));
-			col += vec3(0.95, 0.97, 1.0) * step(0.0, along) * smoothstep(0.09, 0.0, along) * exp(-across * across / 0.0000016) * sin(ph * 3.1416) * 1.5 * up;
+			col += vec3(0.95, 0.97, 1.0) * step(0.0, along) * (1.0 - smoothstep(0.0, 0.09, along)) * exp(-across * across / 0.0000016) * sin(ph * 3.1416) * 1.5 * up;
 		}
 	}
 	// луна: диск с тёмными морями; неосвещённая часть по фазе едва видна
@@ -293,7 +293,7 @@ vec3 night_sky(vec3 d, float sd) {
 	// полярное сияние: волнистые занавеси над северным горизонтом (север — −z), зелёные внизу, сиреневые вверху
 	if (aurora > 0.001) {
 		float az = atan(d.x, -d.z);
-		float span = smoothstep(1.9, 0.6, abs(az + (aurora_seed - 0.5) * 0.8));
+		float span = (1.0 - smoothstep(0.6, 1.9, abs(az + (aurora_seed - 0.5) * 0.8)));
 		if (span > 0.0) {
 			float t = TIME * 0.05 + aurora_seed * 37.0;
 			float base = 0.05 + 0.05 * noise(vec2(az * 2.0 + t, aurora_seed * 9.0)) + 0.03 * sin(az * 5.0 + t * 3.0);
@@ -317,18 +317,18 @@ void sky() {
 	float sd = max(dot(d, s_dir), 0.0);
 	float md = max(dot(d, m_dir), 0.0);
 	float above = smoothstep(-0.15, 0.05, s_dir.y);   // гало гаснет, когда солнце глубоко под горизонтом
-	float low_sun = smoothstep(0.32, -0.02, s_dir.y) * smoothstep(-0.16, -0.01, s_dir.y);
+	float low_sun = (1.0 - smoothstep(-0.02, 0.32, s_dir.y)) * smoothstep(-0.16, -0.01, s_dir.y);
 	// Двухзонное рассеяние Ми и мягкое зарево вдоль горизонта со стороны солнца
 	float horizon_band = exp(-h * 5.2) * (0.35 + 0.65 * pow(sd, 3.0)) * low_sun * above;
 	col += mix(sun_color, vec3(1.0, 0.48, 0.28), low_sun * 0.55) * horizon_band * 0.24;
 	col += sun_color * (pow(sd, 6.0) * 0.34 + pow(sd, 48.0) * 0.48) * halo * above;
 	// 12.11: сумерки напротив солнца — розовый «пояс Венеры» над горизонтом и сизая тень Земли под ним
-	float twilight = smoothstep(0.20, 0.0, s_dir.y) * smoothstep(-0.26, -0.03, s_dir.y);
+	float twilight = (1.0 - smoothstep(0.0, 0.20, s_dir.y)) * smoothstep(-0.26, -0.03, s_dir.y);
 	if (twilight > 0.001) {
 		float anti = smoothstep(-0.1, 0.9, -dot(normalize(d.xz + vec2(1e-5)), normalize(s_dir.xz + vec2(1e-5))));
 		float lift = clamp(-s_dir.y * 0.9, 0.0, 0.16);   // пояс поднимается, пока солнце уходит под горизонт
 		float belt = exp(-pow((h - 0.10 - lift) / 0.085, 2.0));
-		float earth_shadow = smoothstep(0.07 + lift, 0.0, h) * smoothstep(0.0, -0.12, s_dir.y);
+		float earth_shadow = (1.0 - smoothstep(0.0, 0.07 + lift, h)) * (1.0 - smoothstep(-0.12, 0.0, s_dir.y));
 		col = mix(col, vec3(0.86, 0.56, 0.62) * (0.55 + 0.45 * dot(horizon_color, vec3(0.33))), belt * anti * twilight * 0.42);
 		col = mix(col, zenith_color * 0.85 + vec3(0.02, 0.03, 0.06), earth_shadow * anti * twilight * 0.35);
 	}
@@ -369,7 +369,7 @@ void sky() {
 				float cirrus = clamp((wisps * 0.78 + mackerel * 0.52) * cirrus_band, 0.0, 1.0);
 				if (cirrus > 0.002) {
 					// Высокие облака дольше ловят малиново-золотой свет зари после захода солнца у земли
-					float high_twilight = smoothstep(-0.22, 0.04, s_dir.y) * smoothstep(0.28, -0.04, s_dir.y);
+					float high_twilight = smoothstep(-0.22, 0.04, s_dir.y) * (1.0 - smoothstep(-0.04, 0.28, s_dir.y));
 					vec3 c_high = mix(cloud_color * 1.03, mix(sun_color * 1.18, vec3(1.0, 0.52, 0.44), high_twilight * 0.62),
 						clamp(pow(sd, 2.5) * halo * 0.80 + high_twilight * 0.72, 0.0, 1.0));
 					c_high += active_light_col * pow(max(active_dot, 0.0), 8.0) * 0.45;

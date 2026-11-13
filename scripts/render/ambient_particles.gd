@@ -264,6 +264,7 @@ func _update_ground(dt: float, eye: Vector3) -> void:
 	var shown := int(round(GROUND * GROUND_VISIBLE * clampf(_ground_amount, 0.0, 1.0)))
 	var mm := _ground.multimesh
 	mm.visible_instance_count = shown
+	_ground.visible = shown > 0
 	if shown == 0 or heights == null:
 		return
 	var tint: Array = LEAF_TINT.get(_context.get("biome", -1), LEAF_TINT[Biomes.FOREST])

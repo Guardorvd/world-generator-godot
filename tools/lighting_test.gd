@@ -18,14 +18,20 @@ func _initialize() -> void:
 	cfg.set_value("view", "lighting", 20)
 	settings._apply_config(cfg)
 	check(settings.lighting == 2, "quality clamp")
+	check(settings.fog_quality == 2, "older profiles inherit fog quality from lighting")
+	var state := settings.display_state()
+	state.fog_quality = 0
+	settings.set_display_state(state)
 	settings.settings_path = "res://.godot/lighting_test.cfg"
 	check(settings.save_settings() == OK, "save isolated settings")
 	var restored := GameSettings.new()
 	restored.settings_path = settings.settings_path
 	restored.load_settings()
 	check(restored.lighting == 2, "quality survives save/load")
+	check(restored.fog_quality == 0, "fog quality survives save/load independently of lighting")
 	restored.reset_defaults()
 	check(restored.lighting == 1, "balanced default")
+	check(restored.fog_quality == GameSettings.DEFAULT_FOG_QUALITY, "reset restores default fog quality")
 	var env := Environment.new()
 	var sun := DirectionalLight3D.new()
 	var cycle := DayCycle.new(env, sun)
@@ -38,7 +44,13 @@ func _initialize() -> void:
 		Quality.apply(env, sun, level, true)
 		check(sun.shadow_enabled, "shadows restored")
 		check(sun.directional_shadow_max_distance <= 190.0, "preserve distant caster budget")
-	Quality.apply(env, sun, 1, true)
+	Quality.apply(env, sun, 0, true, 2)
+	check(env.volumetric_fog_enabled == (RenderingServer.get_current_rendering_method() == "forward_plus")
+		and env.volumetric_fog_length == 190.0, "high fog works independently of low lighting")
+	Quality.apply(env, sun, 2, true, 0)
+	check(not env.volumetric_fog_enabled and cycle.sky_mat.get_shader_parameter("cumulus_steps") == 5,
+		"low fog works independently of high lighting")
+	Quality.apply(env, sun, 1, true, 1)
 	check(cycle.sky_mat.get_shader_parameter("cumulus_steps") == 2, "cumulus steps return to medium from high")
 	for i in 1441:
 		var hour := i / 60.0

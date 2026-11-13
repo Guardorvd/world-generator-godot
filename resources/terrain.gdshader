@@ -126,9 +126,32 @@ vec2 grain_hash(vec2 cell) {
 	return fract(sin(vec2(dot(cell, vec2(127.1, 311.7)), dot(cell, vec2(269.5, 183.3)))) * 43758.5453);
 }
 
+// 12.11.2026: тон растительных сообществ открытых мест. Тот же хеш (WGRandom.hash2) и плавный шум
+// (VegetationLayer._vnoise), что у раскладки подлеска: пятна высокотравья, разнотравья, кустарника и иван-чая
+// на земле совпадают с ближними куртинами и продолжаются вдаль, где самих растений уже нет.
+global uniform ivec4 veg_seeds; // (сид ^ 8803) для шума ~144 м, ~44 м, ~12 м и ~24 м (иван-чай)
+float wg_hash2(ivec2 c, int seed) {
+	uint h = (uint(c.x) * 374761393u + uint(c.y) * 668265263u) ^ uint(seed);
+	h = (h ^ (h >> 13u)) * 1274126177u;
+	return float(h ^ (h >> 16u)) * (1.0 / 4294967296.0);
+}
+// cell — непрерывные координаты клетки (м / 4); как _vnoise(i, j, scale, seed) в центре клетки i, j
+float wg_vnoise(vec2 cell, float scale, int seed) {
+	vec2 f = cell / scale;
+	vec2 i0 = floor(f);
+	vec2 t = f - i0;
+	t = t * t * (3.0 - 2.0 * t);
+	ivec2 c = ivec2(i0);
+	float a = mix(wg_hash2(c, seed), wg_hash2(c + ivec2(1, 0), seed), t.x);
+	float b = mix(wg_hash2(c + ivec2(0, 1), seed), wg_hash2(c + ivec2(1, 1), seed), t.x);
+	return mix(a, b, t.y);
+}
+
 void vertex() {
-	wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	wpos =(MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	wnormal = normalize((MODEL_MATRIX * vec4(NORMAL, 0.0)).xyz);
+	// 12.11: тень облаков — в вершине (сетка 4 м, пятна 160 м; ошибка линейной интерполяции < 1 %), а не 20 хэшей на пиксель.
+	surface_cloud = cloud_light(wpos.xz + world_offset);
 	// Выбираем свойства в вершине: в пикселях смешиваются свойства, а не номера материалов.
 	road_detail = surface_detail[clamp(int(round(UV2.y)), 0, 7)];
 	road_bump_p = surface_bump[clamp(int(round(UV2.y)), 0, 7)];
@@ -136,8 +159,9 @@ void vertex() {
 	road_crack = surface_crack[clamp(int(round(UV2.y)), 0, 7)];
 	// Fractional channel preserves the material ID and the physical across coordinate.
 	singletrack = clamp(fract(UV2.y) * 4.0, 0.0, 1.0);
-	if (use_vertex_color) {
-		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
+	if (use_vertex_color && !OUTPUT_IS_SRGB) {
+		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D): в Compatibility, как и
+		// текстура карты плана, остаются в sRGB, иначе край плана на HD 4600 даёт шов по яркости
 		COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
 	}
 }
@@ -202,7 +226,9 @@ void fragment() {
 			float aa = max(length(fwidth(cells)), 0.015);
 			float litter = (1.0 - smoothstep(0.13 - aa, 0.13 + aa, shape));
 			litter *= step(0.28, scatter.y) * (1.0 - smoothstep(0.25, 0.9, aa));
-			soil = mix(soil, dry_litter * mix(0.85, 1.2, scatter.x), litter * near * (0.55 - moss * 0.25));
+			// первые опавшие листья: в лиственном лесу часть листьев подстилки жёлтая
+				vec3 leaf_c = mix(dry_litter * mix(0.85, 1.2, scatter.x), vec3(0.50, 0.33, 0.05), step(0.74, scatter.x) * (1.0 - forest.g) * 0.85);
+				soil = mix(soil, leaf_c, litter * near * (0.55 - moss * 0.25));
 		}
 		col = mix(col, soil, cover * (0.62 + patch * 0.25));
 		// 6.7: под пологом меньше света неба. Хвойный плотнее и холоднее; в лиственном
@@ -258,8 +284,16 @@ void fragment() {
 		float drift = smoothstep(0.28, 0.72, n_macro * 0.55 + n_big * 0.45);
 		vec3 c0 = col;
 		if (veg > 0.01) {
-			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8 + stony * 0.28 - damp * 0.3, 0.0, 1.0);
+			// 12.11.2026: конец лета. Тёплая зелень умеренных биомов (луг, лиственный лес, степь, тундра; по цвету
+			// карты: красного больше синего) зрелая: тон глуше и оливковее, сухие поляны выгорают в солому и охру.
+			// Сочная зелень остаётся в сырых низинах и у воды. Тайга и джунгли (холодная зелень) — как были.
+			float season = smoothstep(-0.005, 0.03, base_col.r - base_col.b);
+			float dryness = clamp(mix(0.72, 0.22, lush) + (0.5 - wet) * 0.5 + (drift - 0.5) * 0.8 + stony * 0.28 - damp * 0.3 + season * 0.08, 0.0, 1.0);
 			vec3 turf = c0 * mix(vec3(0.80, 0.97, 0.84), vec3(1.20, 1.07, 0.74), dryness);
+			float turf_l = dot(turf, vec3(0.3, 0.55, 0.15));
+			turf = mix(turf, turf_l * vec3(1.06, 0.98, 0.62), season * mix(0.36, 0.5, dryness) * (1.0 - damp * 0.6));
+			float ripe = smoothstep(0.30, 0.82, dryness + (n_mid - 0.5) * 0.22 + (n_zone - 0.5) * 0.3) * season * (1.0 - damp * 0.85);
+			turf = mix(turf, turf_l * vec3(1.42, 1.20, 0.40), ripe * 0.42);
 			float clump = smoothstep(0.34, 0.70, n_mid * 0.6 + n_fine * 0.4);
 			turf *= mix(0.88, 1.09, clump);
 			// участки видны и вдали: каменистый — реже и землистее, сырой — гуще и темнее
@@ -301,6 +335,56 @@ void fragment() {
 				vec3 petal = fh.y < 0.45 ? vec3(0.92, 0.90, 0.80) : (fh.y < 0.8 ? vec3(0.93, 0.72, 0.10) : vec3(0.50, 0.36, 0.72));
 				turf = mix(turf, petal, flower * 0.85 * near);
 			}
+			// 12.11.2026: сообщества открытых мест (Understory.communities) — по тем же полям и шуму, что ближняя
+			// раскладка. Вблизи тон слабый (там стоят сами куртины), вдаль усиливается: массивы высокотравья
+			// гуще и темнее, разнотравье светлое с дымкой цветов, кустарник оливково-тёмный, сырые места
+			// сизо-зелёные, горная дернина сероватая, ковыль серебрится, иван-чай — розово-лиловые пятна.
+			float view_d = length(wpos - CAMERA_POSITION_WORLD);
+			float open_w = mix(0.35, 1.0, smoothstep(30.0, 160.0, view_d)) * (1.0 - (use_vertex_color ? UV.y : canopy)) * distant_vegetation.w;
+			if (open_w > 0.01) {
+				vec2 cell = p * 0.25;
+				float big = wg_vnoise(cell, 36.0, veg_seeds.x);
+				float mid = wg_vnoise(cell, 11.0, veg_seeds.y);
+				vec3 wn = normalize(wnormal);
+				float sl = sqrt(max(1.0 - wn.y * wn.y, 0.0)) / max(wn.y, 0.05) * 0.46; // уклон в единицах WorldData.slope
+				float alt = wpos.y / 260.0;
+				float light = clamp(0.5 + 0.5 * wn.z, 0.0, 1.0);
+				float dry_b = 1.0 - smoothstep(0.0, 0.08, base_col.g - base_col.r);
+				float flat_g = 1.0 - smoothstep(0.35, 0.95, sl);
+				float foothill = smoothstep(0.16, 0.3, alt) * (1.0 - smoothstep(0.42, 0.55, alt));
+				float high = smoothstep(0.3, 0.44, alt);
+				float wet_c = smoothstep(0.55, 0.85, wet);
+				float c_tall = smoothstep(0.42, 0.72, big * 0.65 + mid * 0.35 + (wet - 0.5) * 0.45) * flat_g * (1.0 - 0.7 * dry_b);
+				float c_forbs = smoothstep(0.4, 0.7, (1.0 - big) * 0.55 + mid * 0.45 + (light - 0.5) * 0.35) * (1.0 - 0.6 * wet_c) * (1.0 - 0.5 * high);
+				float c_shrub = (foothill * smoothstep(0.5, 0.8, mid) * 0.65
+					+ smoothstep(0.1, 0.4, sl) * smoothstep(0.48, 0.7, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, wet)) * 1.1) * (1.0 - 0.4 * dry_b);
+				float c_wet = smoothstep(0.78, 0.95, wet) * flat_g * (1.0 - smoothstep(0.1, 0.3, alt)) * 0.48;
+				float c_turf = high * (1.0 - 0.5 * exposure) + exposure * 0.5;
+				float c_lawn = (0.45 + 0.4 * (1.0 - mid) + dry_b * 0.5) * 0.55;
+				vec3 ca = vec3(c_lawn, c_tall, c_forbs);
+				vec3 cb = vec3(c_shrub, c_wet, c_turf);
+				ca = ca * ca * ca + 0.001;
+				cb = cb * cb * cb + 0.001;
+				float total = ca.x + ca.y + ca.z + cb.x + cb.y + cb.z;
+				ca /= total;
+				cb /= total;
+				float parch = clamp((0.55 - wet) * 1.6 + dry_b * 0.35 + alt * 0.4, 0.0, 1.0);
+				float steppe = clamp(max(dry_b, smoothstep(0.45, 0.8, parch) * light * 1.3), 0.0, 1.0);
+				vec3 tone = vec3(ca.x)
+					+ ca.y * mix(vec3(0.72, 0.88, 0.60), vec3(1.12, 1.0, 0.64), parch)
+					+ ca.z * mix(vec3(1.12, 1.08, 0.90), vec3(1.15, 1.02, 1.04), smoothstep(0.4, 0.7, big))
+					+ cb.x * vec3(0.58, 0.70, 0.52)
+					+ cb.y * vec3(0.74, 0.92, 0.84)
+					+ cb.z * vec3(1.0, 0.94, 0.82);
+				vec3 open_col = turf * tone;
+				// ковыль: серебристо-соломенный блеск в высокотравье и газоне степи
+				float lum = dot(open_col, vec3(0.3, 0.55, 0.15));
+				open_col = mix(open_col, vec3(lum) * vec3(1.12, 1.08, 0.92), steppe * (ca.x + ca.y) * 0.45);
+				// иван-чай — своими пятнами (~24 м) на опушках, в разнотравье и кустарнике
+				float bloom = smoothstep(0.58, 0.82, wg_vnoise(cell, 6.0, veg_seeds.w)) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0);
+				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
+				turf = mix(turf, open_col, open_w);
+			}
 			col = mix(col, turf, veg * ground_w);
 		}
 		if (sand > 0.01) {
@@ -308,6 +392,36 @@ void fragment() {
 			// сырой плотный песок темнее и без ряби; каменистый участок — галька и щебень
 			dune *= mix(vec3(1.0), vec3(0.80, 0.79, 0.76), damp);
 			dune = mix(dune, rock_color * 0.82, stony * mix(0.10, 0.26, smoothstep(0.35, 0.7, n_mid)));
+			// 12.11.2026: морской берег по высоте над уровнем моря (0 м): полоса прибоя — тёмный мокрый песок
+			// с рваным краем; линия выброса — прерывистая тёмная кромка водорослей и щепы; береговой вал
+			// гальки — на части берегов узкой полосой, на других (свой шум ~600 м) галечный пляж целиком;
+			// выше — дюны с пятнами серо-зелёной песчаной травы. Озёрные берега темнит влажность, как раньше.
+			float coast = (1.0 - smoothstep(3.5, 6.5, wpos.y)) * step(-0.5, wpos.y);
+			float swash = 0.0;
+			if (coast > 0.01) {
+				float shore_y = wpos.y + (n_mid - 0.5) * 0.45 + (n_big - 0.5) * 0.35;
+				swash = (1.0 - smoothstep(0.3, 0.85, shore_y)) * coast;
+				float wrack_at = 1.05 + (n_big - 0.5) * 0.5;
+				float wrack = (1.0 - smoothstep(0.04, 0.16, abs(shore_y - wrack_at))) * smoothstep(0.35, 0.6, n_mid * 0.7 + n_fine * 0.3) * coast;
+				float shingle_coast = smoothstep(0.58, 0.72, n_macro + (n_big - 0.5) * 0.25);
+				float berm = smoothstep(0.75, 1.0, shore_y) * (1.0 - smoothstep(1.6, 2.4, shore_y)) * smoothstep(0.3, 0.6, n_big + (n_mid - 0.5) * 0.4);
+				float shingle = max(shingle_coast * (1.0 - smoothstep(2.6, 4.0, shore_y)), berm * 0.8) * coast;
+				vec3 pebbles = rock_color * mix(0.58, 0.98, n_mid) * mix(vec3(1.0), vec3(1.06, 1.0, 0.92), n_big);
+				if (near > 0.0) {
+					// гальки разного тона вблизи (две ячейки на метр)
+					vec2 gc = p * 2.3 + vec2(5.1, 1.7);
+					vec2 gh = grain_hash(floor(gc));
+					float gr = length(fract(gc) - 0.5 - (gh - 0.5) * 0.3);
+					pebbles *= mix(1.0, mix(0.7, 1.18, gh.x) * (1.0 - smoothstep(0.32, 0.48, gr) * 0.35), near);
+				}
+				dune = mix(dune, pebbles, shingle * 0.85);
+				dune *= mix(1.0, 0.6, swash * (1.0 - shingle * 0.4));
+				dune = mix(dune, vec3(0.16, 0.15, 0.11), wrack * 0.55 * (1.0 - shingle));
+				float marram = smoothstep(2.2, 3.4, shore_y) * smoothstep(0.48, 0.7, n_mid * 0.6 + n_big * 0.4) * (1.0 - shingle);
+				dune = mix(dune, vec3(0.30, 0.33, 0.20) * (0.9 + n_fine * 0.2), marram * 0.4);
+				stony = max(stony, shingle);
+				damp = max(damp, swash);
+			}
 			float warp = (n_mid - 0.5) * 9.0 + (n_big - 0.5) * 16.0;
 			float phase = dot(p, vec2(0.83, 0.56)) * (6.2831853 / 0.42) + warp;
 			float ripple_vis = (1.0 - smoothstep(0.05, 0.16, px3 / 0.42)) * smoothstep(0.25, 0.6, n_big + (n_mid - 0.5) * 0.4) * (1.0 - damp * 0.8) * (1.0 - stony * 0.6);
@@ -632,7 +746,6 @@ void fragment() {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
 	ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));
-	surface_cloud = cloud_light(p);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;
 	AO = sky;
