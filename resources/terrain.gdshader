@@ -158,8 +158,9 @@ void vertex() {
 	road_crack = surface_crack[clamp(int(round(UV2.y)), 0, 7)];
 	// Fractional channel preserves the material ID and the physical across coordinate.
 	singletrack = clamp(fract(UV2.y) * 4.0, 0.0, 1.0);
-	if (use_vertex_color) {
-		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D)
+	if (use_vertex_color && !OUTPUT_IS_SRGB) {
+		// цвета вершин записаны в sRGB (как vertex_color_is_srgb у StandardMaterial3D): в Compatibility, как и
+		// текстура карты плана, остаются в sRGB, иначе край плана на HD 4600 даёт шов по яркости
 		COLOR.rgb = mix(pow((COLOR.rgb + vec3(0.055)) * (1.0 / 1.055), vec3(2.4)), COLOR.rgb * (1.0 / 12.92), lessThan(COLOR.rgb, vec3(0.04045)));
 	}
 }

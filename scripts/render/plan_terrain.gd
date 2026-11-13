@@ -138,7 +138,7 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
-	var uploaded := _attach_crowns(allow_apply and (frame_budget == null or frame_budget.allows_work()))
+	var uploaded := false
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -213,5 +213,8 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		if _uncached_key == key:
 			_uncached_key = null
 			_uncached_arrays = []
+		uploaded = true
+	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
+	if _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
 		uploaded = true
 	return uploaded

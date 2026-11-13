@@ -432,7 +432,7 @@ func set_draw(level: int) -> bool:
 		entry.count = 0
 	for key: Vector3i in veg:
 		for node: MultiMeshInstance3D in veg[key].nodes:
-			if node.get_meta("level", 2) == 2:
+			if node.get_meta("last_level", true):
 				node.visibility_range_end = (minf(tree_r, 70.0) if veg[key].get("small_rocks", false) else tree_r) + _half_chunk()
 	_apply_fade()
 	last_fill = Vector2.INF
@@ -503,7 +503,7 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 	node.visibility_range_end = 0.0
 	node.visibility_range_end_margin = 0.0
 	if node.has_meta("stream_retiring"): node.remove_meta("stream_retiring")
-	if node.has_meta("level"): node.remove_meta("level")
+	if node.has_meta("last_level"): node.remove_meta("last_level")
 	if tree: node.set_meta("stream_tree", true)
 	if node.get_parent() == null: add_child(node)
 	node.visible = true
@@ -1256,7 +1256,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					caster.multimesh.visible_instance_count = entry.count
 					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
 					caster.visibility_range_end_margin = 16.0
-					caster.set_meta("level", 0) # не дальний уровень: set_draw не должен растягивать его дальность до tree_r
+					caster.set_meta("last_level", false) # set_draw не должен растягивать его дальность до tree_r
 					entry.nodes.append(caster)
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
@@ -1266,7 +1266,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				mm.visible_instance_count = entry.count
 				# Выбор LOD и видимость — по локальному чанку, а не всему лесу.
 				if levels.size() > 1:
-					node.set_meta("level", level)
+					node.set_meta("last_level", level == levels.size() - 1)
 					if level > 0:
 						node.visibility_range_begin = maxf(0.0, LOD_STEPS[level - 1][0] - LOD_STEPS[level - 1][1] * 0.5 - _half_chunk())
 				if level < levels.size() - 1:

@@ -80,14 +80,20 @@ void fragment() {
 	if (dither < keep_lo || dither >= keep_hi) discard;
 	float under = mix(0.55, 1.0, smoothstep(-0.7, 0.6, lobe_height)) * mix(0.78, 1.0, smoothstep(-1.0, 0.4, body_height));
 	if (stuff > 0.5) {
-		ALBEDO = COLOR.rgb * canopy_light * mix(0.8, 1.0, smoothstep(-0.7, 0.6, lobe_height)) * mix(0.9, 1.05, lobe_tone);
+		ALBEDO = COLOR.rgb * mix(0.8, 1.0, smoothstep(-0.7, 0.6, lobe_height)) * mix(0.9, 1.05, lobe_tone);
 		ROUGHNESS = 0.95;
 	} else {
 		// Mean leaf-texture reflectance: plain instance tint alone makes solid crowns too bright.
 		// Lobes of one cluster differ a little in tone and hue (mixed stands, light and shade).
 		vec3 tone = COLOR.rgb * vec3(1.0 + (lobe_tone - 0.5) * 0.14, 1.0, 1.0 - (lobe_tone - 0.5) * 0.2) * mix(0.88, 1.1, lobe_tone);
-		ALBEDO = tone * 0.5 * canopy_light * under;
+		ALBEDO = tone * 0.5 * under;
 		ROUGHNESS = 1.0;
 	}
 	AO = mix(0.65, 1.0, smoothstep(-0.7, 0.6, lobe_height));
+}
+
+// Как у земли и ближних деревьев: тень облака гасит только прямое солнце, свет неба остаётся.
+void light() {
+	float visibility = ATTENUATION * (LIGHT_IS_DIRECTIONAL ? canopy_light : 1.0);
+	DIFFUSE_LIGHT += vec3(max(dot(NORMAL, LIGHT), 0.0)) * LIGHT_COLOR * visibility / PI;
 }
