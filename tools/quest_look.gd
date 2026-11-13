@@ -248,8 +248,7 @@ func _run() -> void:
 	hud.set_photo_mode(true)
 	_check(not hud.tracker.visible, "в видоискателе счётчика нет")
 	hud.set_photo_mode(false)
-	hud.quest_done("Посылка: «Каменка»")
-	hud.banner("Задание выполнено", "Посылка: «Каменка» · всего выполнено: 1", Hud.GOLD)
+	hud.toast("Задание выполнено\nПосылка: «Каменка»")
 	quests.cargo = false
 	bike.set_pack(false)
 	_check(hud.tracker.visible and hud._tracker_icon.texture == hud.UiIcons.CHECK, "выполненное задание видно в счётчике")

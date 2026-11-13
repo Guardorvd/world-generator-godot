@@ -90,9 +90,28 @@ func _run() -> void:
 	map.fill(Color(0.85, 0.88, 0.9))
 	hud.set_world(world, map)
 	hud.set_player(128, 128, 0.3)
+	await process_frame
+	_check(not hud.minimap.visible and not hud.compass.visible, "без Tab экран чистый")
 	Input.action_press("show_hud") # как зажатый Tab: панель сведений, компас и нижние подсказки
+	await process_frame
+	await process_frame
+	_check(hud.summary_visible(), "Tab показывает сводку")
+	hud.set_map_visible(true)
+	await process_frame
+	await process_frame
+	_check(not hud.summary_visible() and not hud.minimap.visible, "большая карта скрывает сводку")
+	hud.set_map_visible(false)
+	hud.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	_check(not hud.summary_visible(), "потеря фокуса сбрасывает Tab")
+	Input.action_release("show_hud")
+	await process_frame
+	await process_frame
+	Input.action_press("show_hud")
 	hud.info.text = "Тундра, тропа (снег)\nВысота: 1240 м · -12°C\nБлижайшее поселение: «Ольховка», 1,2 км"
 	hud.toast_now("Открыто место: перевал Седой")
+	hud.toast("Достигнута цель")
+	hud.toast_now("Открыто место: перевал Седой")
+	_check(hud._toast_queue.size() == 1 and hud.toast_label.text.begins_with("Открыто"), "очередь сохраняет событие без дубля")
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
 	# 15.0: рывок (Shift) берёт треть полоски: с 40 % остаётся ~7 % — пульс и затемнение краёв в приливе
@@ -131,6 +150,7 @@ func _run() -> void:
 	_check(stamina.state == Stamina.State.COAST and hud._stamina.warning < 0.05 and hud._stamina._coast > 0.9, "накат: предупреждение погасло, ореол наката")
 	await _tick(stamina, 150, true, 0.0, false)
 	await _shot("hud_coast")
+	Input.action_release("show_hud")
 	# меню: карточка над кнопкой запуска, зерно можно изменить на отдельном экране
 	hud.visible = false
 	main.get_node("UI/Root/Back").visible = true

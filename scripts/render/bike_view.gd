@@ -57,7 +57,8 @@ const S_REST := 34      # 12.11: отдых на долгой стоянке —
 const S_SHAKE := 35     # 12.11: встряхнуть кисть в спокойной езде (знак — сторона руки)
 const S_SHAKE_WIG := 36 # взмах кисти
 const S_BRAKE_POSE := 37 # 12.11: поза торможения корпуса — входит и выходит плавно, ручки (S_BRAKE) жмутся сразу
-const STATE_SIZE := 38
+const S_WATCH := 38
+const STATE_SIZE := 39
 const SURGE_STAND := 0.85 # насколько седок встаёт в рывке (1 — как на крутом подъёме)
 const TURN_IN_SWAY := 0.014 # плечи доворачиваются в поворот на резком движении руля, рад на долю хода руля в секунду
 const STOP_LEAN := 0.085 # наклон велосипеда к опорной ноге на стоянке, рад (только вид)
@@ -74,6 +75,7 @@ var _riding := false
 var _fallen := false
 var _fallen_transform := Transform3D.IDENTITY
 var _has_state := false
+var watch_requested := false
 var _last_crank := 0.0
 var _landing := 0.0
 var _breath_phase := 0.0
@@ -204,7 +206,28 @@ func _ready() -> void:
 	lamp.name = "Lamp"
 	lamp.position = Vector3(0.0, GRIP.y - 0.05, GRIP.z - 0.057) - STEERING_PIVOT # под зажимом руля
 	_steering.add_child(lamp)
+	_build_watch()
 	_view_ready = true
+
+
+func _build_watch() -> void:
+	var wrist := BoneAttachment3D.new()
+	wrist.bone_name = "HandL"
+	rider.skeleton.add_child(wrist)
+	var dimensions := [Vector3(0.066, 0.050, 0.034), Vector3(0.052, 0.010, 0.047), Vector3(0.040, 0.003, 0.035)]
+	var offsets := [Vector3(0.0, 0.0, 0.038), Vector3(0.0, 0.027, 0.036), Vector3(0.0, 0.033, 0.036)]
+	var colors := [Color("22292c"), Color("636d71"), Color("24434a")]
+	for i in dimensions.size():
+		var part := MeshInstance3D.new()
+		var box := BoxMesh.new()
+		box.size = dimensions[i]
+		var material := StandardMaterial3D.new()
+		material.albedo_color = colors[i]
+		box.material = material
+		part.mesh = box
+		part.position = offsets[i]
+		part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		wrist.add_child(part)
 
 
 ## Совместимый интерфейс управления фарой из игры.
@@ -291,6 +314,11 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 		_cur[S_CRANK] = view_crank
 	_cur[S_TUCK] = clampf(absf(b.speed) / GameConfig.BIKE_SPEED, 0.0, 1.0) * 0.08
 	_update_rider(b, dt, throttle, boost)
+	var safe := b.riding and not b.fallen and not b.airborne and not boost and not b.pump_pressed \
+		and absf(b.speed) <= 3.2 and absf(b.steer) < 0.15 and absf(b.lean) < 0.10 \
+		and absf(b.slip) < 0.06 and b.effort < 0.20 and absf(throttle) < 0.12 and _cur[S_BRAKE] < 0.07 \
+		and absf(_stand) < 0.15 and b.land_impact < 1.0 and _jump_prep < 0.1
+	_cur[S_WATCH] = move_toward(_prev[S_WATCH], float(watch_requested), dt * (4.0 if watch_requested else 7.0)) if safe and _has_state else 0.0
 	# Отдача руля от удара переднего колеса — только вид: руль дёргается в сторону, курс не меняется.
 	_cur[S_STEER] += _hit_f * 0.15 * _recoil
 	# 11.11: стоя на педалях седок тянет руль в такт: колесо чуть виляет навстречу раскачке рамы (только вид)
@@ -604,7 +632,7 @@ func snap(b: BikeRide) -> void:
 
 
 ## Показать модель в доле alpha (0..1) пути от предпоследнего такта к последнему
-func draw(alpha: float) -> void:
+func draw(alpha: float, allow_watch := true) -> void:
 	if not _has_state:
 		return
 	if _fallen:
@@ -662,8 +690,11 @@ func draw(alpha: float) -> void:
 		var grip_l := _steering.position + _steering.basis * (GRIP * Vector3(-1, 1, 1) - STEERING_PIVOT)
 		var grip_r := _steering.position + _steering.basis * (GRIP - STEERING_PIVOT)
 		var motion := Vector3(_mix[S_SHIFT], _mix[S_SIDE], _mix[S_CROUCH])
+		# При переходе к манёвру возвращаем руку на руль в текущем кадре.
+		var watch := _mix[S_WATCH] if allow_watch and _cur[S_WATCH] > 0.0 else 0.0
+		var gaze := Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]).lerp(Vector2(0.17, -0.20), watch)
 		rider.pose(_mix[S_CRANK], tuck, grip_l, grip_r, motion, _mix[S_LOOK], _mix[S_TILT], _mix[S_ROLL], _mix[S_SWAY], _mix[S_BREATH], _mix[S_BODY_LOOK] - _mix[S_LOOK], _mix[S_STAND], _mix[S_HEAD_NOD], _mix[S_EFFORT], _mix[S_BRAKE_POSE], _mix[S_FRONT_LOAD], _mix[S_REAR_LOAD],
-				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, Vector2(_mix[S_GAZE_YAW], _mix[S_GAZE_PITCH]), _mix[S_REST], Vector2(_mix[S_SHAKE], _mix[S_SHAKE_WIG]))
+				_mix[S_STOP], _mix[S_SQUASH] - 0.008, STOP_LEAN, gaze, _mix[S_REST] * (1.0 - watch), Vector2(_mix[S_SHAKE] * (1.0 - watch), _mix[S_SHAKE_WIG]), watch)
 		if is_instance_valid(_pack_bag):
 			_pack_bag.position = PACK_AT + Vector3(_mix[S_PACK_ROLL] * 0.04, -clampf(_mix[S_PACK_PITCH], -0.06, 0.12) * 0.08, maxf(0.0, _mix[S_BREATH]) * 0.4)
 			_pack_bag.rotation = Vector3(_mix[S_PACK_PITCH], 0, _mix[S_PACK_ROLL])

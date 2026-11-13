@@ -2,8 +2,6 @@ class_name InteractionService
 extends RefCounted
 ## Board/quest rules and target selection. Presentation is delivered through signals.
 signal message(text: String)
-signal banner(title: String, text: String, color: Color)
-signal completed(title: String)
 signal close_requested
 const Quests = preload("res://scripts/game/quests.gd")
 const AIM_R := 0.3
@@ -11,7 +9,6 @@ var quests: Quests
 var world: WorldData
 var all_places: Callable
 var visited: Dictionary
-var completion_color := Color(1.0, 0.82, 0.32)
 var distance_text: Callable = Util.distance_text
 
 ## Место как цель задания: копия с ключом key = id
@@ -67,8 +64,7 @@ func offers(village: Variant) -> Array:
 func accept(q: QuestData) -> void:
 	quests.accept(q)
 	close_requested.emit()
-	banner.emit("Новое задание", q.title, Quests.KINDS[q.kind].color)
-	message.emit(quests.step_text())
+	message.emit("Новое задание\n" + q.title)
 
 
 func abandon() -> void:
@@ -77,13 +73,12 @@ func abandon() -> void:
 	message.emit("Вы отказались от задания")
 
 
-## Сообщение о шаге задания: следующий шаг или «Задание выполнено» (крупно посередине и в счётчике)
+## Одно уведомление о следующем шаге или завершении задания.
 func progress(text: String) -> void:
 	if text.is_empty():
 		return
 	if quests.active.is_empty():
-		completed.emit(quests.last)
-		banner.emit("Задание выполнено", "%s · всего выполнено: %d" % [quests.last, quests.done], completion_color)
+		message.emit("Задание выполнено\n" + quests.last)
 	else:
 		message.emit("Дальше: " + text)
 

@@ -24,7 +24,6 @@ const TOAST_QUEUE := 3 # сколько сообщений ждут в очер�
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
-const DONE_TIME := 4.0 # сколько висит «Задание выполнено» в счётчике (с)
 ## 14.2: края экрана темнеют к углам, середина не тронута; strength — от StaminaArc.warning
 const VIGNETTE_CODE := """shader_type canvas_item;
 uniform float strength = 0.0;
@@ -47,15 +46,12 @@ var _tracker_title: Label
 var _tracker_icon: TextureRect  # 12.5: пиктограмма вида задания или галочка выполненного
 var _tracker_step: Label
 var _tracker_note: Label
-var _done_text := ""
-var _done_left := 0.0
 var _photo_mode := false
 var _revealed := false # 12.4: мини-карта, компас, сведения, задание и подсказки видны, пока зажат Tab
+var _reveal_needs_release := false
+var _summary_blocked := false
+var _summary_shown := false
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
-var _banner: VBoxContainer
-var _banner_title: Label
-var _banner_sub: Label
-var _banner_tween: Tween
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
 var _stamina: StaminaArc  # 14.2: дуга выносливости (14.4: в левом нижнем углу), видна, пока силы тратятся или копятся
@@ -64,13 +60,12 @@ var _hint_items: Array = []   # 14.2: чипы подсказок внизу и 
 var _prompt_items: Array = []
 var _chip_style: StyleBoxFlat
 @onready var info: Label = $InfoPanel/Info
-@onready var toast_label: Label = $Toast
+@onready var toast_label: Label = $Toast/Text
 @onready var lock_hint: Label = $LockHint
 @onready var hint: HBoxContainer = $Hint
 @onready var prompt: HBoxContainer = $Prompt
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
-var _toast_tween: Tween
 var _places: Array = []
 var _region_tex := {} # 13.9+final: картинки соседних областей для большой карты (область -> ImageTexture)
 var _places_revision := -1 # доступные места обновляются при расширении территории
@@ -111,9 +106,6 @@ func _ready() -> void:
 	tracker = _build_tracker()
 	add_child(tracker)
 	move_child(tracker, compass.get_index() + 1)
-	_banner = _build_banner()
-	add_child(_banner)
-	move_child(_banner, tracker.get_index() + 1)
 
 	big_map = BigMap.new()
 	big_map.hud = self
@@ -178,11 +170,9 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
-	_done_left = 0.0
 	_toast_queue.clear()
-	_stop_toast_tween()
 	_toast_left = 0.0
-	toast_label.modulate.a = 0.0
+	$Toast.modulate.a = 0.0
 
 
 ## Выход из игры: забыть мир и карту, чтобы прошлый мир освободился, пока в меню
@@ -196,17 +186,12 @@ func clear_world() -> void:
 	visited = {}
 	goal = {}
 	quests = null
-	_done_left = 0.0
 	update_tracker()
-	if _banner_tween != null and _banner_tween.is_valid():
-		_banner_tween.kill()
-	_banner.visible = false
 	bike_pos = Vector2.ZERO
 	bike_shown = false
 	_toast_queue.clear()
-	_stop_toast_tween()
 	_toast_left = 0.0
-	toast_label.modulate.a = 0.0
+	$Toast.modulate.a = 0.0
 	set_hints([], [])
 	set_photo_mode(false)
 	big_map.visible = false
@@ -221,6 +206,8 @@ func set_map_visible(v: bool) -> void:
 	# открытая карта ловит мышь: щелчки по ней выбирают цель и место перемещения
 	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
 	big_map.hover = {}
+	_apply_reveal()
+	update_tracker()
 	if v:
 		big_map.queue_redraw()
 
@@ -402,48 +389,6 @@ static func draw_quest_mark(c: CanvasItem, at: Vector2, r: float, color: Color) 
 	c.draw_circle(at, r * 0.35, Color(0, 0, 0, 0.7 * color.a))
 
 
-## Крупная надпись посередине экрана: взято задание, выполнено. Всплывает, держится и гаснет
-func banner(title: String, sub: String, color: Color) -> void:
-	if _banner == null:
-		return
-	_banner_title.text = title
-	_banner_title.add_theme_color_override("font_color", color)
-	_banner_sub.text = sub
-	if _banner_tween != null and _banner_tween.is_valid():
-		_banner_tween.kill()
-	_banner.visible = true
-	_banner.modulate.a = 0.0
-	_banner.scale = Vector2.ONE * 0.92
-	_banner.pivot_offset = _banner.size * 0.5
-	_banner_tween = create_tween()
-	_banner_tween.set_parallel(true)
-	_banner_tween.tween_property(_banner, "modulate:a", 1.0, 0.25)
-	_banner_tween.tween_property(_banner, "scale", Vector2.ONE, 0.35).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	_banner_tween.chain().tween_property(_banner, "modulate:a", 0.0, 0.6).set_delay(2.4)
-	_banner_tween.chain().tween_callback(func() -> void: _banner.visible = false)
-
-
-func _build_banner() -> VBoxContainer:
-	var box := VBoxContainer.new()
-	box.anchor_left = 0.0
-	box.anchor_right = 1.0
-	box.anchor_top = 0.26
-	box.anchor_bottom = 0.26
-	box.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	box.alignment = BoxContainer.ALIGNMENT_CENTER
-	_banner_title = Label.new()
-	_banner_sub = Label.new()
-	for l: Label in [_banner_title, _banner_sub]:
-		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		l.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.75))
-		l.add_theme_constant_override("outline_size", 6)
-		box.add_child(l)
-	_banner_title.add_theme_font_size_override("font_size", 30)
-	_banner_sub.add_theme_font_size_override("font_size", 18)
-	box.visible = false
-	return box
-
-
 ## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
 func _build_tracker() -> PanelContainer:
 	var panel := PanelContainer.new()
@@ -482,13 +427,6 @@ func _tracker_label(box: BoxContainer, font_size: int, color: Color, inset := 0.
 	return label
 
 
-## Задание выполнено: счётчик ещё DONE_TIME секунд показывает это вместо шага
-func quest_done(text: String) -> void:
-	_done_text = text
-	_done_left = DONE_TIME
-	update_tracker()
-
-
 ## Задание изменилось: счётчик вспыхивает, чтобы взгляд заметил новый шаг; карты и компас — с новой меткой
 func quest_changed() -> void:
 	update_tracker()
@@ -512,14 +450,7 @@ func update_tracker() -> void:
 	var title := ""
 	var line := ""
 	var note := ""
-	if _done_left > 0.0:
-		title = _done_text
-		_tracker_icon.texture = UiIcons.CHECK
-		_tracker_icon.modulate = GOLD
-		_tracker_title.add_theme_color_override("font_color", GOLD)
-		if quests != null:
-			note = "Выполнено заданий: %d" % quests.done
-	elif quests != null and not quests.active.is_empty():
+	if quests != null and not quests.active.is_empty():
 		var q := quests.active
 		title = q.title
 		_tracker_icon.texture = UiIcons.quest(q.kind)
@@ -534,7 +465,7 @@ func update_tracker() -> void:
 		if quests.cargo:
 			note += " · сумка за спиной"
 		_tracker_title.add_theme_color_override("font_color", quest_color())
-	tracker.visible = title != "" and not _photo_mode and (_revealed or _done_left > 0.0)
+	tracker.visible = title != "" and summary_visible()
 	if _tracker_title.text != title:
 		_tracker_title.text = title
 	if _tracker_step.text != line:
@@ -558,13 +489,26 @@ func set_photo_mode(on: bool) -> void:
 
 ## 12.4: интерфейс чистый — подсказка у прицела и сообщения; остальное только с зажатым Tab.
 ## 12.7: прицел тоже только с Tab; наведение и E работают и без него
+func summary_visible() -> bool:
+	return _revealed and is_visible_in_tree() and not _photo_mode and not big_map.visible \
+		and not settlement_panel.visible and not _summary_blocked
+
+
+func set_summary_blocked(blocked: bool) -> void:
+	if _summary_blocked != blocked:
+		_summary_blocked = blocked
+		_apply_reveal()
+		update_tracker()
+
+
 func _apply_reveal() -> void:
-	var shown := _revealed and not _photo_mode
+	var shown := summary_visible()
 	for node: CanvasItem in [$InfoPanel, minimap, compass]:
 		node.visible = shown
-	hint.visible = (shown or _hint_urgent) and not _photo_mode
+	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
+	hint.visible = shown or urgent
 	$Crosshair.visible = shown
-	prompt.visible = not _photo_mode
+	prompt.visible = shown or urgent
 
 
 ## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
@@ -584,15 +528,17 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 ## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED.
 ## 14.2: state — Stamina.State: трата ниже LOW пульсирует и затемняет края, накат подсвечен
 func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
-	var allowed := not _photo_mode and not big_map.visible
+	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
 	_stamina.set_value(value, exhausted, state, allowed)
+	_stamina.visible = allowed and (summary_visible() or (state == Stamina.State.DRAIN and value < StaminaArc.LOW))
 	var mat: ShaderMaterial = _vignette.material
 	mat.set_shader_parameter("strength", _stamina.warning * 0.4)
 	_vignette.visible = _stamina.warning > 0.01
 
 
 func set_brakes(bike: BikeRide) -> void:
-	_brakes.update_state(bike, not _photo_mode and not big_map.visible)
+	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
+	_brakes.update_state(bike, allowed and (summary_visible() or bike.brakes.risk > 0.65 or bike.brakes.skid > 0.2))
 
 
 ## 14.2: чипы клавиш — тёмная плашка с контрастной обводкой, рядом действие; читаются боковым зрением
@@ -634,7 +580,7 @@ static func draw_bike(c: CanvasItem, at: Vector2, r: float) -> void:
 	c.draw_arc(at, r, 0.0, TAU, 16, Color.WHITE, 1.5)
 
 
-## Сообщение внизу у прицела. Пока одно висит на экране, следующие ждут в очереди,
+## Пока одно уведомление на экране, следующие ждут в очереди,
 ## чтобы не затирать друг друга (например, сразу два открытия поселений)
 func toast(text: String) -> void:
 	if text.is_empty():
@@ -645,46 +591,59 @@ func toast(text: String) -> void:
 		if toast_label.text == text or _toast_queue.has(text):
 			return
 		_toast_queue.append(text)
-		while _toast_queue.size() > TOAST_QUEUE:
-			_toast_queue.remove_at(0)
+		if _toast_queue.size() > TOAST_QUEUE:
+			_toast_queue.resize(TOAST_QUEUE)
 		return
 	_show_toast(text)
 
 
-## Сообщение сразу, без очереди: прежние уже не к месту (например, после быстрого перемещения)
+## Контекстное предупреждение идёт следующим, сохраняя текущий кадр и остальные события.
 func toast_now(text: String) -> void:
-	_toast_queue.clear()
-	_show_toast(text)
+	if _toast_left <= 0.0:
+		toast(text)
+	elif not text.is_empty() and toast_label.text != text:
+		var queued := _toast_queue.find(text)
+		if queued >= 0:
+			_toast_queue.remove_at(queued)
+		_toast_queue.insert(0, text)
+		if _toast_queue.size() > TOAST_QUEUE:
+			_toast_queue.resize(TOAST_QUEUE)
 
 
 func _show_toast(text: String) -> void:
-	_stop_toast_tween()
 	toast_label.text = text
-	toast_label.modulate.a = 1.0
+	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
 
 
-func _stop_toast_tween() -> void:
-	if _toast_tween != null and _toast_tween.is_valid():
-		_toast_tween.kill()
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_reveal_needs_release = true
+		_revealed = false
+		if is_node_ready():
+			_apply_reveal()
+			update_tracker()
 
 
 func _process(delta: float) -> void:
-	var reveal := Input.is_action_pressed("show_hud")
-	if reveal != _revealed:
-		_revealed = reveal
+	var held := Input.is_action_pressed("show_hud")
+	if not held and (get_window().has_focus() or DisplayServer.get_name() == "headless"):
+		_reveal_needs_release = false
+	_revealed = held and not _reveal_needs_release
+	var shown := summary_visible()
+	if shown != _summary_shown:
+		_summary_shown = shown
 		_apply_reveal()
 		update_tracker()
-		if reveal:
+		if shown:
 			minimap.queue_redraw()
 			compass.queue_redraw()
-	if _done_left > 0.0:
-		_done_left -= delta
-		if _done_left <= 0.0:
-			update_tracker()
-	if _toast_left <= 0.0:
+	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible
+	$Toast.visible = not obscured and _toast_left > 0.0
+	if obscured or _toast_left <= 0.0:
 		return
 	_toast_left -= delta
+	$Toast.modulate.a = smoothstep(0.0, 0.18, TOAST_TIME - _toast_left) * smoothstep(0.0, TOAST_FADE, _toast_left)
 	if _toast_left > 0.0:
 		return
 	if not _toast_queue.is_empty():
@@ -692,9 +651,7 @@ func _process(delta: float) -> void:
 		_toast_queue.remove_at(0)
 		_show_toast(next)
 	else:
-		_stop_toast_tween()
-		_toast_tween = create_tween()
-		_toast_tween.tween_property(toast_label, "modulate:a", 0.0, TOAST_FADE)
+		$Toast.hide()
 
 
 ## Положение игрока для мини-карты и большой карты
@@ -713,7 +670,7 @@ func set_player(x: float, z: float, y: float) -> void:
 
 ## Строки о местности под ногами: биом и дорога, высота и температура; без цели — ближайшее поселение.
 ## Курс, цель и задание сюда не пишутся: они на компасе (12.5+)
-func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
+func update_info(p: PlayerState, _look_yaw: float, depth: float, hour := NAN) -> void:
 	var w := world
 	if w == null:
 		return
@@ -741,6 +698,8 @@ func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 			nd = d
 			nearest = s
 	var text := "%s\nВысота: %d м · %s%d°C" % [where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c]
+	if is_finite(hour):
+		text = DayCycle.clock(hour) + "\n" + text
 	if goal.is_empty() and nearest != null:
 		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, Util.distance_text(nd)]
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же

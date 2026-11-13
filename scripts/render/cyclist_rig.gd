@@ -105,7 +105,7 @@ func restore_pose(snapshot: Array[Transform3D]) -> void:
 ## («атака»: таз над седлом, вес на ногах), 0 — сидит.
 ## Поза строится от базовых архетипов (накат, спокойная езда, подъём стоя, спуск, торможение)
 ## с приоритетами над процедурными реакциями и раздельным приёмом переднего (руки) и заднего (ноги, таз) ударов.
-func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO) -> void:
+func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vector3, motion := Vector3.ZERO, look := 0.0, pitch := 0.0, roll := 0.0, sway := 0.0, breath := 0.0, look_lag := 0.0, stand := 0.0, head_nod := 0.0, effort := -1.0, brake := 0.0, front_load := 0.0, rear_load := 0.0, foot_down := 0.0, ground := 0.0, ground_lean := 0.0, gaze := Vector2.ZERO, hand_rest := 0.0, hand_shake := Vector2.ZERO, watch := 0.0) -> void:
 	if not procedural_pose:
 		return
 	if not is_rig_valid():
@@ -311,6 +311,10 @@ func pose(crank_angle: float, tuck: float, left_grip: Vector3, right_grip: Vecto
 			grip = grip.lerp(target, free) + Vector3(side * 0.05, 0.05, 0.03) * sin(free * PI)
 		# Передний удар (front_load) и сжатие вилки сразу принимают руки (сгиб и вынос локтей),
 		# в повороте внутренняя рука сгибает локоть шире, направляя руль, а наружная тянется через корпус.
+		var wrist_view := smoothstep(0.0, 1.0, watch) if side < 0.0 else 0.0
+		if wrist_view > 0.0:
+			var wrist_target := shoulder + Vector3(0.045, -0.17, -0.28)
+			grip = grip.lerp(wrist_target, wrist_view)
 		var arm_pull := power_phase * (0.22 * heavy + 0.30 * up) * (1.0 - brake * 0.85)
 		var arm_compress := clampf(motion.z * 2.0 + front_load * 0.65 + tuck * 0.32, -0.15, 0.95)
 		var corner_elbow := 0.10 * inner_leg - 0.06 * outer_leg

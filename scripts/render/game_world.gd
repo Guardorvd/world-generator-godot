@@ -434,8 +434,6 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	interaction_service.all_places = hud.all_places
 	interaction_service.visited = hud.visited
 	interaction_service.message.connect(hud.toast_now)
-	interaction_service.banner.connect(hud.banner)
-	interaction_service.completed.connect(hud.quest_done)
 	interaction_service.close_requested.connect(_close_settlement)
 	bike_controller.message.connect(hud.toast)
 	bike_controller.mount_changed.connect(_bike_mount_changed)
@@ -575,6 +573,13 @@ func set_paused(p: bool) -> void:
 	paused = p
 	if is_instance_valid(navigation_line) and p:
 		navigation_line.visible = false
+	if p and place_names != null:
+		place_names.update(camera, 0.0, hud.visited, true)
+	if p and is_instance_valid(_bag_label):
+		_bag_label.hide()
+	if p and is_instance_valid(bike_view) and not crash.active():
+		bike_view.watch_requested = false
+		bike_view.draw(1.0, false)
 	if is_instance_valid(_speed_wind):
 		_speed_wind.visible = not p
 	if is_instance_valid(_opening_caption):
@@ -1036,6 +1041,7 @@ func _physics_process(dt: float) -> void:
 	# пружина проседания и затухающая тряска камеры
 	camera_controller.tick_effects(dt)
 	if not crash.active():
+		bike_view.watch_requested = hud.summary_visible() and not _opening and not show_map and not photo.active
 		bike_view.tick(bike, dt, fw, bike.riding and not _opening and stamina.surging(fw))
 	bike.land_impact = 0.0
 	bike.wheel_impact = Vector2()
@@ -1104,6 +1110,10 @@ func _process(delta: float) -> void:
 	hud.lock_hint.visible = not paused and not _settlement_open() and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if paused:
 		return
+	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())
+	var summary := hud.summary_visible()
+	if not summary:
+		info_timer = 0.0
 	if not show_map and not _settlement_open():
 		var stick := services.controls.look_delta(delta)
 		if stick != Vector2.ZERO:
@@ -1116,7 +1126,7 @@ func _process(delta: float) -> void:
 	if crash.active():
 		crash.draw()
 	else:
-		bike_view.draw(alpha)
+		bike_view.draw(alpha, summary)
 	_update_camera(alpha, delta)
 	_update_bike_placement(delta)
 	if _speed_wind != null:
@@ -1126,16 +1136,17 @@ func _process(delta: float) -> void:
 	if _opening:
 		_draw_opening(alpha)
 	if navigation_line != null:
-		navigation_line.update_line(pos, delta, not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike())
-		if navigation_line.visible and navigation_line.status != _navigation_status:
+		var navigating := not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike() and not _settlement_open()
+		navigation_line.update_line(pos, delta, navigating, summary)
+		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)
 	if place_names != null:
-		place_names.update(camera, delta, hud.visited, photo.active, quests.known)
+		place_names.update(camera, delta, hud.visited, not summary, quests.known)
 	if _bag != null and _bag.visible:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
-		_bag_label.visible = camera.global_position.distance_to(_bag.position) < 60.0 and not photo.active
+		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
 	photo.bike_at = Vector3.INF if bike.riding or crash.active() else Vector3(bike.x, bike.y + 0.6, bike.z)
 	photo.update(camera, delta)
 	_target = _aim()
@@ -1154,9 +1165,9 @@ func _process(delta: float) -> void:
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta
-	if info_timer <= 0.0:
+	if summary and info_timer <= 0.0:
 		info_timer = 0.15
-		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet))
+		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet), hour)
 	hud.set_player(pos.x, pos.z, bike.heading if bike.riding else yaw)
 	hud.set_bike(bike.x, bike.z, not bike.riding)
 
@@ -1172,7 +1183,6 @@ func opening_active() -> bool:
 func _opening_welcome() -> void:
 	if not opening_place.is_empty():
 		hud.toast_now("Начало пути: «%s»" % opening_place.name)
-	hud.toast("Tab — мини-карта, компас и задание")
 
 
 func _finish_opening() -> void:
@@ -1252,7 +1262,7 @@ func _crash() -> void:
 	# 12.3: хрупкий груз бьётся при падении
 	var broken := quests.crashed() if quests != null else ""
 	if not broken.is_empty():
-		hud.banner("Груз разбит", broken, Quests.KINDS.fragile.color)
+		hud.toast_now("Груз разбит\n" + broken)
 	if bike.land_impact <= 0.0:
 		audio.land(bike.x, bike.z, bike.y, 12.0) # удар в стену: глухой стук, как от жёсткой посадки
 	pitch = -0.35
@@ -1460,7 +1470,6 @@ func toggle_flashlight() -> void:
 		hud.toast_now("Подойдите к велосипеду, чтобы переключить фару")
 		return
 	bike_view.set_lamp(not bike_view.lamp_on())
-	hud.toast_now("Фара включена" if bike_view.lamp_on() else "Фара выключена")
 
 
 ## Камера в доле alpha пути между двумя последними тактами; dt — длина кадра, для сглаживания

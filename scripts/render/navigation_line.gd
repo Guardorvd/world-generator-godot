@@ -125,10 +125,13 @@ func _accept_path() -> void:
 	_timer = 0.0
 
 
-func update_line(at: Vector3, dt: float, shown: bool) -> void:
+func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 	if background_search: _poll_search(Vector2(at.x, at.z))
-	visible = shown and not _goal.is_empty()
-	if not visible:
+	var draw_line := active and shown and not _goal.is_empty()
+	if draw_line and not visible:
+		_timer = 0.0
+	visible = draw_line
+	if not active or _goal.is_empty():
 		_last_here = Vector2(at.x, at.z)
 		_wrong = 0.0
 		return
@@ -180,6 +183,8 @@ func update_line(at: Vector3, dt: float, shown: bool) -> void:
 		_rebuild(here, at.y)
 		return
 	_check_direction(here, nearest, start)
+	if not draw_line:
+		return
 	var vertices := PackedVector3Array()
 	var colors := PackedColorArray()
 	var ground := at.y + 0.25

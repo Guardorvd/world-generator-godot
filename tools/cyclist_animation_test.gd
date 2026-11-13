@@ -156,6 +156,32 @@ func run(finish := true) -> void:
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
 	_check_model()
+	reset()
+	state.speed = 2.0
+	advance()
+	var grip := bone("HandL")
+	var right := bone("HandR")
+	bike.watch_requested = true
+	for i in 20:
+		advance()
+	check(bone("HandL").y > grip.y + 0.07 and bone("HandR").is_equal_approx(right), "Watch raises only the left hand")
+	for unsafe in ["speed", "air", "turn", "brake"]:
+		state.speed = 2.0
+		state.airborne = false
+		state.steer = 0.0
+		state.brakes.pressure = 0.0
+		bike.snap(state)
+		for i in 20:
+			advance()
+		check(bike._cur[BikeView.S_WATCH] > 0.5, "Watch pose is active before " + unsafe)
+		state.speed = 12.0 if unsafe == "speed" else 2.0
+		state.airborne = unsafe == "air"
+		state.steer = 0.6 if unsafe == "turn" else 0.0
+		state.brakes.pressure = 0.8 if unsafe == "brake" else 0.0
+		advance()
+		check(bike._cur[BikeView.S_WATCH] == 0.0, "Watch yields immediately to " + unsafe)
+	bike.watch_requested = false
+	reset()
 	# draw до первого tick безопасен, а интерполяция не выходит за границы тактов.
 	var initial := bike.transform
 	bike.draw(1)

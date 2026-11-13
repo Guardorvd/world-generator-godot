@@ -93,7 +93,7 @@ func set_goal(goal: Dictionary) -> void:
 ## known — места взятых заданий (Quests.known, с 11.9+): их названия тоже видны
 func update(camera: Camera3D, dt: float, visited: Dictionary, hidden := false, known := {}) -> void:
 	_timer -= dt
-	if _timer <= 0.0:
+	if _timer <= 0.0 and not hidden:
 		_timer = 0.1
 		_select(camera, visited, known)
 	for item: Dictionary in _items:

@@ -145,19 +145,19 @@ theme_override_constants/outline_size = 6
 text = "Щёлкните по экрану, чтобы управлять взглядом мышью"
 horizontal_alignment = 1
 
-[node name="Toast" type="Label" parent="UI/Root/Hud"]
-layout_mode = 1
-anchors_preset = -1
-anchor_top = 0.16
-anchor_right = 1.0
-anchor_bottom = 0.16
-offset_bottom = 40.0
-grow_horizontal = 2
+[node name="Toast" type="PanelContainer" parent="UI/Root/Hud"]
+offset_left = 16.0
+offset_top = 132.0
+offset_right = 344.0
+mouse_filter = 2
+theme_type_variation = &"WorldCard"
 modulate = Color(1, 1, 1, 0)
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
-theme_override_constants/outline_size = 6
-theme_override_font_sizes/font_size = 22
-horizontal_alignment = 1
+
+[node name="Text" type="Label" parent="UI/Root/Hud/Toast"]
+layout_mode = 2
+mouse_filter = 2
+autowrap_mode = 3
+theme_override_font_sizes/font_size = 15
 
 [node name="Menu" type="Control" parent="UI/Root"]
 unique_name_in_owner = true
