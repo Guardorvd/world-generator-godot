@@ -27,6 +27,10 @@ func _run() -> void:
 	Saves.dir = _test_saves
 	_main = Main.instantiate()
 	root.add_child(_main)
+	if not _main.has_method("_chosen_seed"):
+		push_error("Не удалось загрузить скрипт главного меню.")
+		quit(1)
+		return
 	_check(_main._chosen_seed() == RecommendedSeeds.SEEDS[0].seed, "на первом запуске выбран мир от автора")
 	await _capture_state("new")
 	_fixture("Долина-27", 1700000300)
@@ -53,7 +57,7 @@ func _run() -> void:
 	_check(_main.get_node("%Start").text == "Все миры", "повреждённый слот ведёт к управлению мирами")
 	await _capture_state("corrupt")
 	_main._on_start()
-	_check(_main.get_node("%AllWorlds").visible and not _main.get_node("%RestartWorld").disabled and not _main.busy,
+	_check(_main.get_node("%AllWorlds").visible and _main.get_node("%RestartWorld").has_focus() and not _main.busy,
 		"доступно восстановление через пересоздание")
 	_main._return_to_menu_screen()
 	_main._pick_seed("Мир-6")
@@ -62,6 +66,19 @@ func _run() -> void:
 	var chosen: String = _main._chosen_seed()
 	_check(chosen != "Мир-6" and chosen == _main._carousel_seeds[previous_index],
 		"при удалении выбран сосед (%s)" % chosen)
+	_main._open_new_world()
+	await _capture_screen("create", "%NewWorld")
+	_main._open_all_worlds()
+	await _capture_screen("worlds", "%AllWorlds")
+	_main.get_node("%Title").text = "Мир «Сохранение-с-очень-длинным-именем»"
+	_main.get_node("%LoadPlaceholder").text = "Сохранение-с-очень-длинным-именем"
+	_main.get_node("%LoadPlaceholder").show()
+	_main._set_progress(0.52, "Рельеф и вода\nПрошло: 0:24")
+	_main._show("loading")
+	await _capture_screen("loading", "%Loading")
+	_main._show("pause")
+	_main.get_node("%Back").show()
+	await _capture_screen("pause", "%Pause")
 	_main.queue_free()
 	await process_frame
 	for seed_text in _test_seeds:
@@ -85,11 +102,15 @@ func _fixture(seed_text: String, saved_at: int) -> void:
 
 
 func _capture_state(label: String) -> void:
+	await _capture_screen(label, "%Menu")
+
+
+func _capture_screen(label: String, screen_path: String) -> void:
 	for dimensions: Vector2i in SIZES:
 		root.size = dimensions
 		await process_frame
 		await process_frame
-		var panel: Control = _main.get_node("%Menu/Panel")
+		var panel: Control = _main.get_node(screen_path + "/Panel")
 		_check(root.get_visible_rect().encloses(panel.get_global_rect()), "%s %s помещается" % [label, dimensions])
 		if DisplayServer.get_name() != "headless":
 			await RenderingServer.frame_post_draw

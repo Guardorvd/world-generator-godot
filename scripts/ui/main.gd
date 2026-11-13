@@ -18,6 +18,8 @@ const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const LIVE_WARM_START_DELAY := 0.18
+const WIND := "res://resources/sounds/wind.wav"
+const BIRDS := ["res://resources/sounds/bird_1.wav", "res://resources/sounds/bird_2.wav", "res://resources/sounds/bird_3.wav"]
 
 var game: GameWorld
 var trail_lab: Node
@@ -50,6 +52,11 @@ var _backdrop_mode := ""
 var _backdrop_fade: Tween
 var _poster: Texture2D
 var _frozen_fallback: Texture2D
+var _menu_wind: AudioStreamPlayer
+var _menu_bird: AudioStreamPlayer
+var _bird_wait := 0.0
+var _parallax := Vector2.ZERO
+var _menu_rng := RandomNumberGenerator.new()
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -226,8 +233,11 @@ func _set_backdrop_mode(mode: String) -> void:
 		frame = _frozen_fallback
 	_frozen_fallback = null
 	bg.texture = frame
+	_parallax = Vector2.ZERO
 	if mode == "live":
 		_start_menu_backdrop(_backdrop_epoch)
+	else:
+		_set_menu_audio(false)
 
 
 func _start_menu_backdrop(epoch: int) -> void:
@@ -239,6 +249,7 @@ func _start_menu_backdrop(epoch: int) -> void:
 	await get_tree().create_timer(LIVE_WARM_START_DELAY).timeout
 	if not is_inside_tree() or epoch != _backdrop_epoch:
 		return
+	_set_menu_audio(true)
 	var backdrop := Backdrop.new()
 	add_child(backdrop)
 	var quality := Backdrop.recommended_quality()
@@ -282,6 +293,48 @@ func _use_menu_poster() -> void:
 
 func _backdrop_size() -> Vector2i:
 	return get_window().size.clamp(Vector2i(2, 2), Vector2i(2560, 1440))
+
+
+func _set_menu_audio(enabled: bool) -> void:
+	if not enabled:
+		if _menu_wind != null:
+			_menu_wind.stop()
+			_menu_bird.stop()
+		return
+	if DisplayServer.get_name() == "headless" or AudioServer.get_driver_name() == "Dummy":
+		return
+	if _menu_wind == null:
+		_menu_wind = AudioStreamPlayer.new()
+		var source: AudioStreamWAV = load(WIND)
+		var loop: AudioStreamWAV = source.duplicate()
+		loop.loop_mode = AudioStreamWAV.LOOP_FORWARD
+		loop.loop_end = roundi(loop.get_length() * loop.mix_rate)
+		_menu_wind.stream = loop
+		_menu_wind.volume_db = -30.0
+		add_child(_menu_wind)
+		_menu_bird = AudioStreamPlayer.new()
+		_menu_bird.volume_db = -28.0
+		add_child(_menu_bird)
+	_menu_wind.play()
+	_bird_wait = 7.0
+
+
+func _animate_menu(delta: float) -> void:
+	var pointer := get_viewport().get_mouse_position()
+	var extent := get_viewport().get_visible_rect().size
+	var target := ((pointer / extent.max(Vector2.ONE)) * 2.0 - Vector2.ONE).clamp(-Vector2.ONE, Vector2.ONE) * 3.0
+	_parallax = _parallax.lerp(target, 1.0 - exp(-delta * 2.0))
+	for texture: TextureRect in [bg, %LiveBackdrop]:
+		texture.offset_left = _parallax.x - 4.0
+		texture.offset_right = _parallax.x + 4.0
+		texture.offset_top = _parallax.y - 4.0
+		texture.offset_bottom = _parallax.y + 4.0
+	if _menu_wind != null and _menu_wind.playing:
+		_bird_wait -= delta
+		if _bird_wait <= 0.0:
+			_menu_bird.stream = load(BIRDS[_menu_rng.randi_range(0, BIRDS.size() - 1)])
+			_menu_bird.play()
+			_bird_wait = _menu_rng.randf_range(12.0, 24.0)
 
 
 func _report_first_menu_frame() -> void:
@@ -552,6 +605,8 @@ func _show_seed_tab(tab: String) -> void:
 	for r: Dictionary in rows:
 		list.add_child(_seed_row(str(r.seed), str(r.get("note", ""))))
 	_update_selection()
+	if %AllWorlds.visible and get_viewport().gui_get_focus_owner() == null:
+		_tab_button(tab).grab_focus()
 
 
 ## Строка списка: миниатюра карты, зерно, подпись и состояние, звёздочка. Щелчок — выбрать мир, двойной — играть
@@ -808,6 +863,8 @@ func _process(delta: float) -> void:
 	if display_options != null:
 		display_options.tick()
 	_flush_settings()
+	if _backdrop_mode == "live" and get_window().mode != Window.MODE_MINIMIZED:
+		_animate_menu(delta)
 	if game != null and not busy and not game.paused and not game.travel_active():
 		_save_elapsed += delta
 		if _save_elapsed >= 60.0 or hud.visited.size() != _saved_discoveries:
@@ -869,7 +926,7 @@ func _launch_seed(seed_text: String) -> void:
 		_pick_seed(seed_text)
 		_update_carousel()
 		_open_all_worlds()
-		_message("Не удалось загрузить прогресс", latest.error + " Используйте «Создать заново»: старые файлы будут сохранены в архиве.")
+		%RestartWorld.grab_focus()
 		return
 	_pick_seed(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
@@ -905,7 +962,10 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	_set_progress(0.0, "Подготовка")
 	%LoadPreview.texture = _preview_tex(seed_text)
 	%LoadPreview.visible = %LoadPreview.texture != null
+	%LoadPlaceholder.visible = not %LoadPreview.visible
+	%LoadPlaceholder.text = seed_text
 	%Title.text = "Мир «%s»" % seed_text
+	%Title.tooltip_text = %Title.text
 	_show("loading")
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
@@ -1217,6 +1277,7 @@ func _fill_controls() -> void:
 
 
 func _exit_tree() -> void:
+	_backdrop_epoch += 1
 	if display_options != null:
 		display_options.shutdown()
 	if gen_thread != null and gen_thread.is_started():
