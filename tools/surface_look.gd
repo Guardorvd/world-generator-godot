@@ -53,6 +53,7 @@ func _initialize() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-42.0, 35.0, 0.0)
 	root.add_child(sun)
+	RenderingServer.global_shader_parameter_set("sun_dir", sun.basis.z) # 13.11: микротень пучков травы
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
 	var uv := PackedVector2Array()

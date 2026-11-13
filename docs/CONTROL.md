@@ -285,6 +285,8 @@ godot --path . --script res://tools/photo_look.gd -- --out <папка>
 `tools/style_menu_test.gd` (13.11) — группа «Визуальный стиль» в Настройках → Графика без мира: чтение настроек, мгновенное применение, выключатель, запись, сброс,
 снимок `.godot/style_menu_test/style_menu.png`; окно, около 10 с. `road_look.gd -- --style <сила>` включает «Планы» на участке дороги.
 
+`tools/bake_ground_micro.gd` (13.11) — печь микроструктуры земли `resources/ground/micro.res` и `micro_n.res` (без окна, ~5 с; `-- --preview <папка>` кладёт PNG каналов). Проверка — `surface_look.gd`.
+
 `tools/lamp_look.gd` (12.4) — фара велосипеда (`bike_lamp.gd`) ночью: ровная земля с дорогой, стволы и камни. Снимки от глаз седока `lamp_rider.png` и сбоку `lamp_side.png` (видимый луч в воздухе). «Было» — прошлая версия фары тем же запуском: `--lamp <файл .gd>` (например из `git show HEAD:scripts/render/bike_lamp.gd`) и `--tag _old` к именам снимков. Нужно окно.
 
 ```

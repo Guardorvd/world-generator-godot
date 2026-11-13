@@ -11,6 +11,9 @@ const DETAIL_SIZE := 256   # сторона бесшовной текстуры 
 static var allow_fast_refine := true # false — метровая сетка меша на GDScript (эталон для tools/dod_verify.gd)
 
 var _detail: Array[ImageTexture] = []   # [шум, нормали из него]: одни на ServiceScope
+var _micro: Array[Texture2D] = []       # [высоты микроструктуры, нормали]: resources/ground/micro*.res
+const MICRO_TEXTURE := "res://resources/ground/micro.res"
+const MICRO_NORMAL := "res://resources/ground/micro_n.res"
 
 
 ## Нормаль вершины клетки (i, j) по соседним высотам (на краю соседи берутся с края карты)
@@ -289,6 +292,13 @@ func _detail_material() -> ShaderMaterial:
 	mat.shader = SHADER
 	mat.set_shader_parameter("detail_tex", _detail[0])
 	mat.set_shader_parameter("detail_normal", _detail[1])
+	# 13.11: микроструктура земли (tools/bake_ground_micro.gd); без файлов шейдер работает как прежде
+	if _micro.is_empty() and ResourceLoader.exists(MICRO_TEXTURE) and ResourceLoader.exists(MICRO_NORMAL):
+		_micro.assign([load(MICRO_TEXTURE), load(MICRO_NORMAL)])
+	if not _micro.is_empty():
+		mat.set_shader_parameter("micro_tex", _micro[0])
+		mat.set_shader_parameter("micro_n", _micro[1])
+		mat.set_shader_parameter("micro_enabled", true)
 	var surfaces := PackedVector3Array([Vector3.ZERO])
 	for s: Dictionary in RoadSurface.LIST.slice(1):
 		surfaces.append(Vector3(s.grain, s.organic, s.rough))
@@ -300,3 +310,4 @@ func _detail_material() -> ShaderMaterial:
 
 func reset() -> void:
 	_detail.clear()
+	_micro.clear()

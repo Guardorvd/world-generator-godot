@@ -32,6 +32,15 @@ uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
 uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
 uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
 
+// 13.11.2026: микроструктура земли (tools/bake_ground_micro.gd). micro_tex: R — пряди и пучки травы, G — галька и комки,
+// B — зерно, A — трещины высохшей земли; micro_n: RG — нормаль прядей, BA — нормаль гальки (как detail_normal, 0..1).
+// Вблизи (near > 0) даёт траве вытянутые пряди и пучки с тенью между ними, земле — комья, гальку и трещины, песку — зерно.
+uniform sampler2D micro_tex : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform sampler2D micro_n : hint_default_black, filter_linear_mipmap_anisotropic, repeat_enable;
+uniform bool micro_enabled = false;
+// Направление на светило (DayCycle): тень пучков травы друг на друга считается в пикселе по высоте текстуры.
+global uniform vec3 sun_dir;
+
 const float DETAIL_FAR = 110.0;   // м: дальше мелкой детали нет
 const float EDGE_JITTER = 0.9;    // в пикселях карты: насколько рваный край между биомами
 const float ROCK_FROM = 0.30;     // 1 - нормаль.y: с какого уклона (около 45°) проступает скала
@@ -168,6 +177,9 @@ void vertex() {
 
 void fragment() {
 	vec2 p = wpos.xz + world_offset;
+	// в light() передаются через BACKLIGHT (x — тень пучков травы, y — блеск влажного)
+	float micro_shadow = 1.0;
+	float gloss_v = 0.0;
 	float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));
 	float n_big = texture(detail_tex, p * (1.0 / 37.0)).r;
 	float n_mid = texture(detail_tex, p * (1.0 / 7.3)).r;
@@ -177,6 +189,27 @@ void fragment() {
 	if (near > 0.0) {
 		n_fine = texture(detail_tex, p * (1.0 / 1.9)).r;
 		detail_n = texture(detail_normal, p * (1.0 / 2.3)).rgb;
+	}
+	// Микроструктура: два масштаба с поворотом (текстура не повторяется заметно); h — высоты, mn — нормали (0..1)
+	vec4 mh = vec4(0.5, 0.5, 0.5, 0.0);
+	vec4 mn = vec4(0.5);
+	float micro_occ = 0.0;
+	if (micro_enabled && near > 0.0) {
+		vec2 q1 = p * (1.0 / 1.6);
+		vec2 q2 = vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 0.73) + vec2(0.37, 0.19);
+		vec4 h1 = texture(micro_tex, q1);
+		vec4 h2 = texture(micro_tex, q2);
+		mh = mix(h1, h2, 0.4);
+		vec4 n1 = texture(micro_n, q1);
+		vec4 n2 = texture(micro_n, q2);
+		// нормаль второго масштаба повёрнута вместе с текстурой: возвращаем в мировые оси
+		vec4 n2w = vec4(0.8 * (n2.x - 0.5) - 0.6 * (n2.y - 0.5), 0.6 * (n2.x - 0.5) + 0.8 * (n2.y - 0.5),
+			0.8 * (n2.z - 0.5) - 0.6 * (n2.w - 0.5), 0.6 * (n2.z - 0.5) + 0.8 * (n2.w - 0.5)) + vec4(0.5);
+		mn = mix(n1, n2w, 0.4);
+		// Тень пучков: если со стороны солнца в паре сантиметров трава выше — здесь тень
+		float sun_up = max(sun_dir.y, 0.2);
+		float h_sun = texture(micro_tex, q1 + sun_dir.xz * (0.04 / (1.6 * sun_up))).r;
+		micro_occ = clamp((h_sun - h1.r) * 2.6, 0.0, 1.0) * step(0.02, sun_dir.y) * near;
 	}
 	vec3 col;
 	if (use_vertex_color) {
@@ -305,7 +338,15 @@ void fragment() {
 				vec2 gp = p + (vec2(n_mid, n_big) - 0.5) * 1.6;
 				float blades = texture(detail_tex, vec2(dot(gp, vec2(0.92, 0.39)) * 2.9, dot(gp, vec2(-0.39, 0.92)) * 0.55)).r;
 				float blades2 = texture(detail_tex, vec2(dot(gp, vec2(0.31, 0.95)) * 2.3, dot(gp, vec2(-0.95, 0.31)) * 0.47) + vec2(0.41, 0.13)).r;
-				turf *= 1.0 + (blades + blades2 - 1.0) * 0.42 * near;
+				turf *= 1.0 + (blades + blades2 - 1.0) * (micro_enabled ? 0.24 : 0.42) * near;
+				if (micro_enabled) {
+					// пряди и пучки: макушки светлее и суше, щели между пучками темнее и зеленее
+					float tuft = smoothstep(0.08, 0.72, mh.r);
+					turf *= mix(1.0, mix(0.74, 1.12, tuft), near);
+					turf = mix(turf, turf * vec3(0.92, 1.0, 0.84), (1.0 - tuft) * 0.35 * near);
+					micro_shadow = 1.0 - micro_occ * 0.55 * veg * ground_w;
+					gloss_v = max(gloss_v, damp * veg * 0.22 * near);
+				}
 				turf = mix(turf, turf * vec3(1.30, 1.20, 0.82), smoothstep(0.60, 0.78, blades) * dryness * 0.55 * near);
 				// проплешины: на сухом чаще; земля с камешками
 				float bare = smoothstep(0.66, 0.78, (1.0 - n_mid) * 0.45 + (1.0 - n_big) * 0.2 + n_fine * 0.2 + blades2 * 0.15 + dryness * 0.09 + stony * 0.17 - damp * 0.08);
@@ -318,6 +359,14 @@ void fragment() {
 				float paa = max(px3 * 6.3 * 0.5, 0.01);
 				float pebble = (1.0 - smoothstep(pr - paa, pr + paa, length(pl))) * step(0.45 - stony * 0.2, ph.y) * (1.0 - smoothstep(0.25, 0.6, paa));
 				vec3 earth = mix(vec3(0.17, 0.12, 0.075), vec3(0.33, 0.26, 0.16), dryness) * (0.85 + n_fine * 0.3);
+				if (micro_enabled) {
+					// комья, мелкая галька и зерно; трещины на сухой земле; нормали комков — светом
+					earth *= mix(0.78, 1.18, mh.g * 0.6 + mh.b * 0.4);
+					earth = mix(earth, rock_color * (0.55 + 0.4 * mh.b), smoothstep(0.55, 0.9, mh.g) * stony * 0.5);
+					earth *= 1.0 - mh.a * 0.5 * dryness;
+					ground_tilt += (mn.zw - vec2(0.5)) * 1.1 * bare * near;
+					ground_relief = max(ground_relief, bare * near * 0.85);
+				}
 				earth = mix(earth, rock_color * mix(0.6, 0.95, ph.x), pebble * 0.8);
 				turf = mix(turf, earth, bare * 0.72 * near);
 				// на каменистом участке камни лежат и в траве
@@ -437,7 +486,15 @@ void fragment() {
 				ground_relief = max(ground_relief, speck * sand);
 				dune = mix(dune, sh.y < 0.5 ? rock_color * 0.6 : vec3(0.93, 0.90, 0.84), speck * 0.8 * near);
 				dune *= 1.0 + (n_fine - 0.5) * 0.10 * near;
+					if (micro_enabled) {
+						// песчинки и мелкая галька каменистых участков
+						dune *= 1.0 + (mh.b - 0.5) * 0.16 * near;
+						dune = mix(dune, rock_color * (0.62 + 0.3 * mh.b), smoothstep(0.6, 0.9, mh.g) * stony * 0.45 * near);
+						ground_tilt += (mn.zw - vec2(0.5)) * 0.8 * stony * near;
+						ground_relief = max(ground_relief, stony * near * sand * 0.7);
+					}
 			}
+			gloss_v = max(gloss_v, (damp * 0.35 + swash * 0.5) * sand * near);
 			col = mix(col, dune, sand * ground_w);
 			ground_tilt += vec2(0.83, 0.56) * cos(phase) * 0.55 * ripple_vis * sand;
 			ground_relief = max(ground_relief, ripple_vis * sand);
@@ -456,6 +513,7 @@ void fragment() {
 				float spark = step(0.985, grain_hash(floor(kc)).x) * (1.0 - smoothstep(0.15, 0.5, px3 * 37.0));
 				drift_c += vec3(0.5) * spark * near;
 			}
+			gloss_v = max(gloss_v, snow * (1.0 - stony) * 0.4 * near);
 			col = mix(col, drift_c, snow * ground_w);
 			ground_tilt += vec2(0.56, -0.83) * cos(sphase) * 0.35 * sas_vis * snow;
 			ground_relief = max(ground_relief, sas_vis * snow * 0.8);
@@ -741,13 +799,18 @@ void fragment() {
 	if (lumps > 0.0) {
 		vec3 n2 = texture(detail_normal, p * (1.0 / 0.61) + vec2(0.31, 0.63)).rgb;
 		detail_n.xy += (n2.xy - 0.5) * 0.9 * lumps;
+		// пряди и пучки травы: свет цепляется за них вплоть до нескольких метров
+		detail_n.xy += (mn.xy - 0.5) * 1.5 * lumps;
 	}
 	if (ground_n > 0.0) {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
 	ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));
-	ROUGHNESS = 1.0;
-	SPECULAR = 0.3;
+	// влажная земля, мокрый песок и наст чуть блестят: отражение неба и блик солнца (light)
+	gloss_v *= 1.0 - road;
+	ROUGHNESS = 1.0 - gloss_v * 0.12;
+	SPECULAR = 0.3 + gloss_v * 0.08;
+	BACKLIGHT = vec3(micro_shadow, gloss_v, 0.0);
 	AO = sky;
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
@@ -756,8 +819,16 @@ void fragment() {
 
 // Clouds attenuate the directional source, never sky light or bicycle lamps.
 void light() {
-	float visibility = ATTENUATION * (LIGHT_IS_DIRECTIONAL ? surface_cloud : 1.0);
+	float micro_shadow = BACKLIGHT.x;
+	float gloss_v = BACKLIGHT.y;
+	float visibility = ATTENUATION * (LIGHT_IS_DIRECTIONAL ? surface_cloud * micro_shadow : 1.0);
 	float ndl = dot(NORMAL, LIGHT);
 	vec3 diffuse = vec3(max(ndl, 0.0));
 	DIFFUSE_LIGHT += diffuse * LIGHT_COLOR * visibility / PI;
+	if (gloss_v > 0.01 && ndl > 0.0) {
+		// Блик мокрого: Блинн–Фонг, узкий и слабый; сила — доля влажности, видно при низком солнце и взгляде против него
+		vec3 half_v = normalize(LIGHT + VIEW);
+		float spec = pow(max(dot(NORMAL, half_v), 0.0), mix(14.0, 60.0, gloss_v));
+		SPECULAR_LIGHT += LIGHT_COLOR * visibility * spec * gloss_v * 0.2;
+	}
 }

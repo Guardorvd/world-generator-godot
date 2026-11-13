@@ -201,6 +201,7 @@ func apply(hour: float, time: float) -> void:
 	env.ambient_light_energy = s[6]
 	env.tonemap_exposure = s[7] * VisualStyle.exposure_scale()   # 13.11: визуальный стиль («Мягкие света») подстраивает выдержку тонмаппера
 	VisualStyle.set_haze(s[2])
+	RenderingServer.global_shader_parameter_set("sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
 	env.fog_density = FOG * s[12]
 	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
 	# Дымка в низинах привязана к высоте мира (с гребня видно туманные долины).
