@@ -46,29 +46,36 @@ void fragment() {
 	float rapid = river * COLOR.g;
 	vec2 p = vec2(dot(world_position.xz, across), dot(world_position.xz, direction));
 	vec2 drift = vec2(p.x, p.y - TIME * speed);
-	vec3 small = ripple(drift * vec2(2.7, 1.8));
-	vec3 broad = ripple(drift * vec2(0.75, 0.9) + vec2(17.2, 9.4));
 	// Только нормали: берег, уровень воды и игровая глубина остаются согласованы.
 	float distance_to_eye = length(VERTEX);
 	float detail = 1.0 - smoothstep(55.0, 210.0, distance_to_eye);
+	// Дальше 210 м всё, что берёт рябь и круги на воде, умножено на detail = 0: их не считаем.
+	vec3 small = vec3(0.0);
+	vec3 broad = vec3(0.0);
+	if (detail > 0.0) {
+		small = ripple(drift * vec2(2.7, 1.8));
+		broad = ripple(drift * vec2(0.75, 0.9) + vec2(17.2, 9.4));
+	}
 	float strength = mix(0.045, 0.13, rapid) * detail;
 	float antialias = 1.0 - smoothstep(0.15, 0.8, max(length(dFdx(drift)), length(dFdy(drift))));
 	float broad_antialias = 1.0 - smoothstep(0.4, 1.6, max(length(dFdx(drift)), length(dFdy(drift))));
 	vec2 gradient = (small.yz * vec2(2.7, 1.8) * antialias + broad.yz * 0.8 * broad_antialias) * strength;
 	vec2 wake_gradient = vec2(0.0);
 	float wake_foam = 0.0;
-	for (int i = 0; i < 16; i++) {
-		vec4 event = disturbances[i];
-		float age = event.z;
-		float fade = max(0.0, 1.0 - age / 1.6) * event.w;
-		fade *= 1.0 - smoothstep(0.08, 0.3, abs(world_position.y - disturbance_levels[i]));
-		if (fade <= 0.001) { continue; }
-		vec2 delta = world_position.xz - event.xy;
-		float radius = length(delta);
-		float front = radius - (0.12 + age * 1.45);
-		float envelope = exp(-front * front * 32.0) * fade * detail;
-		wake_gradient += delta / max(radius, 0.01) * sin(front * 24.0) * envelope * 0.18;
-		wake_foam = max(wake_foam, envelope * exp(-age * 4.0) * 0.45);
+	if (detail > 0.0) {
+		for (int i = 0; i < 16; i++) {
+			vec4 event = disturbances[i];
+			float age = event.z;
+			float fade = max(0.0, 1.0 - age / 1.6) * event.w;
+			fade *= 1.0 - smoothstep(0.08, 0.3, abs(world_position.y - disturbance_levels[i]));
+			if (fade <= 0.001) { continue; }
+			vec2 delta = world_position.xz - event.xy;
+			float radius = length(delta);
+			float front = radius - (0.12 + age * 1.45);
+			float envelope = exp(-front * front * 32.0) * fade * detail;
+			wake_gradient += delta / max(radius, 0.01) * sin(front * 24.0) * envelope * 0.18;
+			wake_foam = max(wake_foam, envelope * exp(-age * 4.0) * 0.45);
+		}
 	}
 	vec3 base_normal = (INV_VIEW_MATRIX * vec4(NORMAL, 0.0)).xyz;
 	vec3 normal_world = normalize(base_normal + vec3(-across.x * gradient.x - direction.x * gradient.y, 0.0,
@@ -77,16 +84,18 @@ void fragment() {
 	float depth = textureLod(depth_texture, SCREEN_UV, 0.0).r;
 	#if CURRENT_RENDERER == RENDERER_COMPATIBILITY
 		vec3 ndc = vec3(SCREEN_UV, depth) * 2.0 - 1.0;
+		bool open_sky = depth >= 1.0; // Compatibility: обычный Z, пустое небо = 1
 	#else
 		vec3 ndc = vec3(SCREEN_UV * 2.0 - 1.0, depth);
+		bool open_sky = depth <= 0.0; // Forward+/Mobile: reverse Z, пустое небо = 0
 	#endif
 	vec4 behind = INV_PROJECTION_MATRIX * vec4(ndc, 1.0);
 	behind /= behind.w;
 	vec3 ground = (INV_VIEW_MATRIX * behind).xyz;
 	float thickness = max(0.0, world_position.y - ground.y);
-	// Нулевая глубина (reverse Z) означает открытое небо за океаном.
+	// Пустая глубина означает открытое небо за океаном.
 	// Для реального дна сохраняем вычисленную толщину и береговое затухание.
-	if (ocean && depth == 0.0) {
+	if (ocean && open_sky) {
 		thickness = 10.0;
 	}
 	float absorption = 1.0 - exp(-thickness * 1.15);

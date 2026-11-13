@@ -1256,6 +1256,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					caster.multimesh.visible_instance_count = entry.count
 					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
 					caster.visibility_range_end_margin = 16.0
+					caster.set_meta("level", 0) # не дальний уровень: set_draw не должен растягивать его дальность до tree_r
 					entry.nodes.append(caster)
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED

@@ -58,6 +58,9 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 				if not tree and kind != Biomes.T_BUSH and kind != Biomes.T_ROCK: continue
 				var x := float(w.obj_x[o]) * TILE
 				var z := float(w.obj_y[o]) * TILE
+				# Те же отказы, что у ближних деревьев (VegetationLayer._build_chunk): полотно дороги и вода.
+				if ForestObstacles.on_tread(h, x, z): continue
+				if kind != Biomes.T_ROCK and h.depth_at(x, z) > GameConfig.WATER_MARGIN: continue
 				var size := float(w.obj_s[o])
 				var ground := h.ground_at(x, z)
 				var jitter := WGRandom.hash2(floori(w.obj_x[o] * 71), floori(w.obj_y[o] * 67), 23)

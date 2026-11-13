@@ -110,7 +110,8 @@ func _exit_tree() -> void:
 
 
 ## Far crown proxies join a terrain tile once their worker has finished; the tile itself never waits for them.
-func _attach_crowns() -> void:
+## allow — общий бюджет кадра разрешает публикацию; true в ответе — кадр занят передачей крон.
+func _attach_crowns(allow: bool) -> bool:
 	for key: Vector2i in _crown_wait.keys():
 		var node: Variant = _crown_wait[key]
 		if not is_instance_valid(node) or nodes.get(key) != node:
@@ -120,9 +121,12 @@ func _attach_crowns() -> void:
 		if crowns == null:
 			source.request_crowns(key)
 			continue
+		if not allow:
+			continue
 		FarForest.attach(node, crowns)
 		_crown_wait.erase(key)
-		return # one tile per frame keeps buffer uploads off the frame budget
+		return true # one tile per frame, counted as this frame's upload
+	return false
 
 
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
@@ -134,7 +138,7 @@ func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 ## Иначе не больше одной передачи на GPU за кадр. true означает, что этот кадр уже занят передачей геометрии.
 func update(x: float, z: float, force := false, allow_apply := true, near := RADIUS) -> bool:
 	var p := Vector2(x, z)
-	_attach_crowns()
+	var uploaded := _attach_crowns(allow_apply and (frame_budget == null or frame_budget.allows_work()))
 	if _read_task != -1 and WorkerThreadPool.is_task_completed(_read_task):
 		WorkerThreadPool.wait_for_task_completion(_read_task)
 		_read_task = -1
@@ -166,7 +170,6 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		pending.clear()
 		for item: Array in keyed:
 			pending.append(item[1])
-	var uploaded := false
 	if source != null:
 		if due: source.retain_layer(water_layer, pending)
 		for offset in mini(3, pending.size()):
