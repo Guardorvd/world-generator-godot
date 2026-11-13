@@ -116,6 +116,10 @@ func look() -> void:
 	var frames: Array[Image] = []
 	var views := [[eye(4.0, 14.0, 1.45), eye(30.0, 30.0, 0.3)], [eye(50.0, 10.0, 1.45), eye(76.0, 28.0, 0.3)],
 		[eye(88.0, 8.0, 1.45), eye(112.0, 30.0, 0.3)], [Vector3(60.0, 34.0, -18.0), Vector3(60.0, 0.0, 34.0)]]
+	if "--rock" in OS.get_cmdline_user_args():
+		# 13.11: скала вблизи, крутая скала, наст вблизи и луг на средней дистанции (20–150 м)
+		views = [[eye(104.0, 12.0, 1.6), eye(116.0, 30.0, 0.2)], [eye(114.0, 52.0, 1.7), eye(114.0, 66.0, 3.0)],
+			[eye(86.0, 12.0, 1.4), eye(92.0, 30.0, 0.2)], [eye(3.0, 10.0, 1.8), eye(14.0, 78.0, 2.0)]]
 	for view: Array in views:
 		camera.position = view[0]
 		camera.look_at(view[1])

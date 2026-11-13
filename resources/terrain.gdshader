@@ -211,6 +211,19 @@ void fragment() {
 		float h_sun = texture(micro_tex, q1 + sun_dir.xz * (0.04 / (1.6 * sun_up))).r;
 		micro_occ = clamp((h_sun - h1.r) * 2.6, 0.0, 1.0) * step(0.02, sun_dir.y) * near;
 	}
+	// Средняя дистанция (20–400 м): та же текстура на крупных масштабах, мипы сами убирают лишнее. Пучки читаются пятнистостью
+	// луга, а не однотонной краской; отклонение считается от среднего значения текстуры (самый грубый мип).
+	float mid_pat = 0.0;
+	if (micro_enabled) {
+		float dist_m = length(wpos - CAMERA_POSITION_WORLD);
+		float mid_w = smoothstep(18.0, 70.0, dist_m) * (1.0 - smoothstep(160.0, 420.0, dist_m));
+		if (mid_w > 0.0) {
+			float t_far = smoothstep(60.0, 200.0, dist_m);
+			float mid_a = texture(micro_tex, p * (1.0 / 9.0)).r;
+			float mid_b = texture(micro_tex, vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 23.0) + vec2(0.11, 0.47)).r;
+			mid_pat = (mix(mid_a, mid_b, t_far) - textureLod(micro_tex, vec2(0.5), 9.0).r) * mid_w;
+		}
+	}
 	vec3 col;
 	if (use_vertex_color) {
 		col = COLOR.rgb;
@@ -388,6 +401,8 @@ void fragment() {
 			// раскладка. Вблизи тон слабый (там стоят сами куртины), вдаль усиливается: массивы высокотравья
 			// гуще и темнее, разнотравье светлое с дымкой цветов, кустарник оливково-тёмный, сырые места
 			// сизо-зелёные, горная дернина сероватая, ковыль серебрится, иван-чай — розово-лиловые пятна.
+			turf *= 1.0 + mid_pat * 1.5;
+			turf = mix(turf, turf * vec3(0.94, 1.0, 0.88), clamp(-mid_pat * 3.0, 0.0, 1.0) * 0.4);
 			float view_d = length(wpos - CAMERA_POSITION_WORLD);
 			float open_w = mix(0.35, 1.0, smoothstep(30.0, 160.0, view_d)) * (1.0 - (use_vertex_color ? UV.y : canopy)) * distant_vegetation.w;
 			if (open_w > 0.01) {
@@ -513,6 +528,13 @@ void fragment() {
 				float spark = step(0.985, grain_hash(floor(kc)).x) * (1.0 - smoothstep(0.15, 0.5, px3 * 37.0));
 				drift_c += vec3(0.5) * spark * near;
 			}
+			if (micro_enabled) {
+				// наст: мелкая зернистая рябь светом, трещины корки на каменистых местах, едва заметная пятнистость
+				drift_c *= 1.0 + (mh.b - 0.5) * 0.06 * near;
+				drift_c *= 1.0 - mh.a * 0.10 * stony * near;
+				ground_tilt += (mn.zw - vec2(0.5)) * 0.85 * snow * near;
+				ground_relief = max(ground_relief, snow * near * 0.55);
+			}
 			gloss_v = max(gloss_v, snow * (1.0 - stony) * 0.4 * near);
 			col = mix(col, drift_c, snow * ground_w);
 			ground_tilt += vec2(0.56, -0.83) * cos(sphase) * 0.35 * sas_vis * snow;
@@ -586,6 +608,23 @@ void fragment() {
 			talus *= 1.0 + stone * (dome * 0.45 - 0.22) * near;
 			talus = mix(talus, lith * mix(0.85, 1.12, sh.x), stone * 0.5 * near);
 		}
+		// 13.11: микроструктура породы. Один набор текстуры, координаты — в плоскости склона (на круче — вдоль горизонтали и по высоте):
+		// зерно и галька дают пятнистость породы, трещины — сеть мелких разломов, нормали — шершавость света.
+		vec4 mr = vec4(0.5, 0.5, 0.5, 0.0);
+		vec4 mrn = vec4(0.5);
+		if (micro_enabled && near > 0.0) {
+			vec3 wn_r = normalize(wnormal);
+			vec2 tang = normalize(vec2(-wn_r.z, wn_r.x) + vec2(1e-4));
+			vec2 qc = vec2(dot(p, tang), wpos.y) * (1.0 / 1.3);
+			vec2 qf = p * (1.0 / 1.3) + vec2(0.23, 0.61);
+			vec2 qr = mix(qf, qc, smoothstep(0.18, 0.34, slope));
+			mr = texture(micro_tex, qr);
+			mrn = texture(micro_n, qr);
+			float tone = mix(0.68, 1.22, mr.b * 0.5 + mr.g * 0.5);
+			bed *= mix(1.0, tone, near);
+			bed *= 1.0 - mr.a * 0.5 * near * (0.4 + 0.6 * cliff);
+			talus *= mix(1.0, mix(0.72, 1.18, mr.g), near);
+		}
 		vec3 turf = mix(vec3(0.115, 0.095, 0.065), vec3(0.13, 0.16, 0.065), smoothstep(0.5, 0.8, wet + (n_mid - 0.5) * 0.4));
 		turf = mix(turf, talus * 0.8, smoothstep(0.55, 0.75, n_fine) * 0.35 * near);
 		vec3 geo = mix(mix(bed, talus, scree), turf, soil);
@@ -594,7 +633,10 @@ void fragment() {
 		float relief_w = rock * (1.0 - scree) * (1.0 - soil) * (1.0 - snow * 0.6);
 		vec3 dn = vec3(0.0, 1.0, 0.0) * (smoothstep(0.62, 0.95, fy) * 0.30 - (1.0 - smoothstep(0.0, 0.14, fy)) * 0.25) * ledge_vis * cliff;
 		dn += vec3(blk.x - 0.5, 0.0, blk.y - 0.5) * 0.12 * block_vis * cliff;
-		NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(dn * relief_w, 0.0)).xyz);
+		// шершавость породы и щебня от микронормалей (у осыпи сильнее)
+		vec3 dn_m = vec3(mrn.z - 0.5, (mrn.x - 0.5) * 0.3, mrn.w - 0.5) * 1.7 * near;
+		float rock_w = rock * (1.0 - soil) * (1.0 - snow * 0.6) * mix(0.9, 1.7, scree);
+		NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(dn * relief_w + dn_m * rock_w, 0.0)).xyz);
 	}
 	// пятна яркости: крупные видны всегда, мелкие только вблизи
 	float v = (n_big - 0.5) * 0.14 + ((n_mid - 0.5) * 0.18 + (n_fine - 0.5) * 0.24) * near;
