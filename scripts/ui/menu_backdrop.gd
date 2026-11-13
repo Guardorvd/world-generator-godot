@@ -229,7 +229,8 @@ func _process(delta: float) -> void:
 		if not _vegetation.placement_ready():
 			return
 		_draw_frame = _render_divisor - 1
-		_wind_offset = _vegetation.stream.clock - _seconds
+		# Часы растений сразу за окном проявления: первый показанный кадр уже без дорисовки.
+		_wind_offset = _vegetation.stream.clock - _seconds + VegetationLayer.StreamPolicy.FADE_SECONDS + 0.1
 	var dt := minf(delta, 0.1)
 	_seconds += dt
 	_render_delta += dt

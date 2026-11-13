@@ -93,20 +93,34 @@ func _run() -> void:
 		return
 	print("MENU_BUILD quality=", quality, " viewport=", view.size, " ms=", _backdrop.build_ms,
 		" steps=", JSON.stringify(_backdrop.step_ms))
+	if "--timeline" in args:
+		await _timeline(view)
 	print("MENU_FRAME ", JSON.stringify(await _measure(view)))
+	if "--poster" in args:
+		# Афиша снимается в Full HD тем же кадром, что и живой: подмена при проявлении незаметна.
+		var poster := await _capture(Vector2i(1920, 1080))
+		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(POSTER.get_base_dir()))
+		_check(poster != null and not poster.is_empty() and poster.save_jpg(ProjectSettings.globalize_path(POSTER), 0.93) == OK, POSTER)
 	var wide := await _capture(Vector2i(1280, 720))
 	var narrow := await _capture(Vector2i(960, 720))
 	_save(wide, OUT.path_join("scene_16x9.png"))
 	_save(narrow, OUT.path_join("scene_4x3.png"))
-	if "--poster" in args and wide != null:
-		DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(POSTER.get_base_dir()))
-		_check(wide.save_jpg(ProjectSettings.globalize_path(POSTER), 0.93) == OK, POSTER)
 	picture.texture = null
 	var frozen: Image = _backdrop.freeze()
 	_check(frozen != null and not frozen.is_empty() and frozen.get_size() == Vector2i(960, 720), "заморозка готового кадра")
 	_check_released(forest_before, style_before)
 	await _check_shader_globals()
 	quit(int(_checks_failed))
+
+
+## Кадры сразу после готовности и позже: что ещё меняется на глазах у игрока.
+func _timeline(view: SubViewport) -> void:
+	var started := Time.get_ticks_msec()
+	for at: int in [0, 300, 1000, 3000, 6000]:
+		while Time.get_ticks_msec() - started < at:
+			await process_frame
+		await RenderingServer.frame_post_draw
+		_save(view.get_texture().get_image(), OUT.path_join("timeline_%04d.png" % at))
 
 
 func _measure(view: SubViewport) -> Dictionary:
