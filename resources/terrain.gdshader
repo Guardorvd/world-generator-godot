@@ -175,8 +175,24 @@ void vertex() {
 	}
 }
 
-void fragment() {
-	vec2 p = wpos.xz + world_offset;
+// 13.11: пятнистость пучков луга на средней дистанции (20–400 м): та же текстура на крупных масштабах (9 и 23 м), мипы сами убирают
+// лишнее; отклонение считается от среднего значения текстуры (самый грубый мип), поэтому средний тон луга не меняется.
+// Считается только для травы (вызов в блоке дёрна), производные передаются явно.
+float micro_mid(vec2 p, vec2 gdx, vec2 gdy, float dist_m) {
+	float w = smoothstep(18.0, 70.0, dist_m) * (1.0 - smoothstep(160.0, 420.0, dist_m));
+	if (w <= 0.0) {
+		return 0.0;
+	}
+	float t_far = smoothstep(60.0, 200.0, dist_m);
+	vec2 q_b = vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 23.0) + vec2(0.11, 0.47);
+	vec2 db_x = vec2(dot(gdx, vec2(0.80, 0.60)), dot(gdx, vec2(-0.60, 0.80))) * (1.0 / 23.0);
+	vec2 db_y = vec2(dot(gdy, vec2(0.80, 0.60)), dot(gdy, vec2(-0.60, 0.80))) * (1.0 / 23.0);
+	float a = textureGrad(micro_tex, p * (1.0 / 9.0), gdx * (1.0 / 9.0), gdy * (1.0 / 9.0)).r;
+	float b = textureGrad(micro_tex, q_b, db_x, db_y).r;
+	return (mix(a, b, t_far) - textureLod(micro_tex, vec2(0.5), 9.0).r) * w;
+}
+
+void fragment() {	vec2 p = wpos.xz + world_offset;
 	// в light() передаются через BACKLIGHT (x — тень пучков травы, y — блеск влажного)
 	float micro_shadow = 1.0;
 	float gloss_v = 0.0;
@@ -190,41 +206,36 @@ void fragment() {
 		n_fine = texture(detail_tex, p * (1.0 / 1.9)).r;
 		detail_n = texture(detail_normal, p * (1.0 / 2.3)).rgb;
 	}
-	// Микроструктура: два масштаба с поворотом (текстура не повторяется заметно); h — высоты, mn — нормали (0..1)
+	// Микроструктура: два масштаба с поворотом (текстура не повторяется заметно); h — высоты, mn — нормали (0..1).
+	// Производные берутся до ветвлений и передаются в textureGrad: внутри условий неявные производные не определены.
+	vec2 gdx = dFdx(p);
+	vec2 gdy = dFdy(p);
+	vec2 ydxy = vec2(dFdx(wpos.y), dFdy(wpos.y));
 	vec4 mh = vec4(0.5, 0.5, 0.5, 0.0);
 	vec4 mn = vec4(0.5);
 	float micro_occ = 0.0;
 	if (micro_enabled && near > 0.0) {
 		vec2 q1 = p * (1.0 / 1.6);
 		vec2 q2 = vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 0.73) + vec2(0.37, 0.19);
-		vec4 h1 = texture(micro_tex, q1);
-		vec4 h2 = texture(micro_tex, q2);
+		vec2 d1x = gdx * (1.0 / 1.6);
+		vec2 d1y = gdy * (1.0 / 1.6);
+		vec2 d2x = vec2(dot(gdx, vec2(0.80, 0.60)), dot(gdx, vec2(-0.60, 0.80))) * (1.0 / 0.73);
+		vec2 d2y = vec2(dot(gdy, vec2(0.80, 0.60)), dot(gdy, vec2(-0.60, 0.80))) * (1.0 / 0.73);
+		vec4 h1 = textureGrad(micro_tex, q1, d1x, d1y);
+		vec4 h2 = textureGrad(micro_tex, q2, d2x, d2y);
 		mh = mix(h1, h2, 0.4);
-		vec4 n1 = texture(micro_n, q1);
-		vec4 n2 = texture(micro_n, q2);
+		vec4 n1 = textureGrad(micro_n, q1, d1x, d1y);
+		vec4 n2 = textureGrad(micro_n, q2, d2x, d2y);
 		// нормаль второго масштаба повёрнута вместе с текстурой: возвращаем в мировые оси
 		vec4 n2w = vec4(0.8 * (n2.x - 0.5) - 0.6 * (n2.y - 0.5), 0.6 * (n2.x - 0.5) + 0.8 * (n2.y - 0.5),
 			0.8 * (n2.z - 0.5) - 0.6 * (n2.w - 0.5), 0.6 * (n2.z - 0.5) + 0.8 * (n2.w - 0.5)) + vec4(0.5);
 		mn = mix(n1, n2w, 0.4);
-		// Тень пучков: если со стороны солнца в паре сантиметров трава выше — здесь тень
-		float sun_up = max(sun_dir.y, 0.2);
-		float h_sun = texture(micro_tex, q1 + sun_dir.xz * (0.04 / (1.6 * sun_up))).r;
-		micro_occ = clamp((h_sun - h1.r) * 2.6, 0.0, 1.0) * step(0.02, sun_dir.y) * near;
-	}
-	// Средняя дистанция (20–400 м): та же текстура на крупных масштабах, мипы сами убирают лишнее. Пучки читаются пятнистостью
-	// луга, а не однотонной краской; отклонение считается от среднего значения текстуры (самый грубый мип).
-	float mid_pat = 0.0;
-	if (micro_enabled) {
-		float dist_m = length(wpos - CAMERA_POSITION_WORLD);
-		float mid_w = smoothstep(18.0, 70.0, dist_m) * (1.0 - smoothstep(160.0, 420.0, dist_m));
-		if (mid_w > 0.0) {
-			float t_far = smoothstep(60.0, 200.0, dist_m);
-			float mid_a = texture(micro_tex, p * (1.0 / 9.0)).r;
-			float mid_b = texture(micro_tex, vec2(dot(p, vec2(0.80, 0.60)), dot(p, vec2(-0.60, 0.80))) * (1.0 / 23.0) + vec2(0.11, 0.47)).r;
-			mid_pat = (mix(mid_a, mid_b, t_far) - textureLod(micro_tex, vec2(0.5), 9.0).r) * mid_w;
+		// Тень пучков: если со стороны солнца в паре сантиметров трава выше — здесь тень (днём; ночью луна слабая, не считаем)
+		if (sun_dir.y > 0.02) {
+			float h_sun = textureGrad(micro_tex, q1 + sun_dir.xz * (0.04 / (1.6 * max(sun_dir.y, 0.2))), d1x, d1y).r;
+			micro_occ = clamp((h_sun - h1.r) * 2.6, 0.0, 1.0) * near;
 		}
-	}
-	vec3 col;
+	}	vec3 col;
 	if (use_vertex_color) {
 		col = COLOR.rgb;
 	} else {
@@ -401,7 +412,8 @@ void fragment() {
 			// раскладка. Вблизи тон слабый (там стоят сами куртины), вдаль усиливается: массивы высокотравья
 			// гуще и темнее, разнотравье светлое с дымкой цветов, кустарник оливково-тёмный, сырые места
 			// сизо-зелёные, горная дернина сероватая, ковыль серебрится, иван-чай — розово-лиловые пятна.
-			turf *= 1.0 + mid_pat * 1.5;
+			float mid_pat = micro_enabled ? micro_mid(p, gdx, gdy, length(wpos - CAMERA_POSITION_WORLD)) : 0.0;
+				turf *= 1.0 + mid_pat * 1.5;
 			turf = mix(turf, turf * vec3(0.94, 1.0, 0.88), clamp(-mid_pat * 3.0, 0.0, 1.0) * 0.4);
 			float view_d = length(wpos - CAMERA_POSITION_WORLD);
 			float open_w = mix(0.35, 1.0, smoothstep(30.0, 160.0, view_d)) * (1.0 - (use_vertex_color ? UV.y : canopy)) * distant_vegetation.w;
@@ -618,8 +630,10 @@ void fragment() {
 			vec2 qc = vec2(dot(p, tang), wpos.y) * (1.0 / 1.3);
 			vec2 qf = p * (1.0 / 1.3) + vec2(0.23, 0.61);
 			vec2 qr = mix(qf, qc, smoothstep(0.18, 0.34, slope));
-			mr = texture(micro_tex, qr);
-			mrn = texture(micro_n, qr);
+			vec2 rdx = mix(gdx, vec2(dot(gdx, tang), ydxy.x), smoothstep(0.18, 0.34, slope)) * (1.0 / 1.3);
+			vec2 rdy = mix(gdy, vec2(dot(gdy, tang), ydxy.y), smoothstep(0.18, 0.34, slope)) * (1.0 / 1.3);
+			mr = textureGrad(micro_tex, qr, rdx, rdy);
+			mrn = textureGrad(micro_n, qr, rdx, rdy);
 			float tone = mix(0.68, 1.22, mr.b * 0.5 + mr.g * 0.5);
 			bed *= mix(1.0, tone, near);
 			bed *= 1.0 - mr.a * 0.5 * near * (0.4 + 0.6 * cliff);

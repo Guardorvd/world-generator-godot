@@ -66,6 +66,8 @@ static func release() -> void:
 
 ## Множитель выдержки поверх DayCycle: AgX темнее/светлее ACES в средних тонах, поэтому нужна поправка
 static func exposure_scale() -> float:
+	if _env == null:
+		return 1.0 # мир не привязан: DayCycle в инструментах со своим окружением (ACES) не трогаем
 	# зерно в среднем темнит на половину своей амплитуды (StyleGrain): яркость сохраняется
 	var grain_mean := 1.0 - 0.0175 * strength("grain")
 	return _agx_exposure(strength("highlights")) / grain_mean
@@ -73,12 +75,12 @@ static func exposure_scale() -> float:
 
 ## Множитель насыщенности поверх DayCycle: AgX сам обесцвечивает света, часть краски возвращается
 static func saturation_scale() -> float:
-	var k := strength("highlights")
+	var k := strength("highlights") if _env != null else 0.0
 	return 1.0 if k <= 0.0 else lerpf(1.1, 1.28, k)
 
 
 ## Параметры AgX подобраны в tools/style_look.gd --tonemap так, чтобы средняя яркость совпадала с ACES (по четырём состояниям
-## в пределах 2 %), а света уходили в белый плавно. Сила 0,7 (по умолчанию): контраст 1,4, белая точка 13, выдержка ×1,22.
+## в пределах 2 %), а света уходили в белый плавно. Сила 0,7 (по умолчанию): контраст 1,4, белая точка 13, выдержка ×1,25.
 static func _agx_exposure(k: float) -> float:
 	return 1.0 if k <= 0.0 else lerpf(1.12, 1.3, k)
 

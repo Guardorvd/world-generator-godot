@@ -75,6 +75,8 @@ func _initialize() -> void:
 	var style_state := GameContext.scope.settings.display_state()
 	_check(not style_state.style_on.grade and is_equal_approx(style_state.style_amount.depth, 0.25), "визуальный стиль читается из файла")
 	_check(is_equal_approx(style_state.style_amount.grain, 1.0) and style_state.style_on.highlights, "сила стиля ограничена 0..1, испорченный флаг не мешает")
+	# без привязанного мира (инструменты со своим окружением) множители DayCycle нейтральны, как бы ни стояли настройки
+	_check(VisualStyle.exposure_scale() == 1.0 and VisualStyle.saturation_scale() == 1.0, "без мира множители выдержки и насыщенности равны 1")
 	VisualStyle.configure(style_state.style_on, style_state.style_amount)
 	_check(VisualStyle.strength("grade") == 0.0 and is_equal_approx(VisualStyle.strength("depth"), 0.25), "выключенный эффект имеет силу 0")
 	VisualStyle.configure(VisualStyle.DEFAULT_ON, {grade = 0.0})

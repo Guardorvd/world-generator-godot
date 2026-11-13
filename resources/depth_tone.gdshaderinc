@@ -25,7 +25,9 @@ vec3 depth_tone(vec3 albedo, float dist) {
 	vec3 c = mix(vec3(luma), albedo, sat);
 	// Контраст относительно типичного альбедо сцены (0,22 в линейном пространстве; при 0,18 вблизи кадр заметно светлел): вблизи выше, вдали ниже.
 	float contrast = 1.0 + style_depth.x * 0.15 * near - style_depth.y * 0.26 * far;
-	c = pow(max(c, vec3(0.0001)) / 0.22, vec3(contrast)) * 0.22;
+	// Один pow по светлоте вместо трёх по каналам (трава даёт много перекрытий): оттенок не смещается, меняется только контраст.
+	float c_luma = max(dot(c, vec3(0.2126, 0.7152, 0.0722)), 0.0001);
+	c *= pow(c_luma / 0.22, contrast) * 0.22 / c_luma;
 	// Дальний тон тянется к цвету дымки, сохраняя светлоту детали.
 	vec3 haze = style_haze * (luma / max(dot(style_haze, vec3(0.2126, 0.7152, 0.0722)), 0.01));
 	c = mix(c, haze, style_depth.z * 0.4 * far);
