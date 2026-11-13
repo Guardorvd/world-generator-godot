@@ -4,6 +4,7 @@ extends Node
 
 signal prepared
 signal failed(reason: String)
+signal performance_fallback
 
 const Lighting := preload("res://scripts/render/lighting_quality.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
@@ -21,10 +22,12 @@ const OAK_AT := Vector2(506.3, 807.0)
 const HOUR := 17.0 + 20.0 / 60.0
 const GLOBALS := [&"cloud_shadow", &"sun_dir", &"vegetation_night", &"style_haze",
 	&"style_depth", &"veg_center", &"vegetation_clock", &"veg_seeds", &"distant_vegetation"]
-const BUILD_STEPS := [&"light", &"site", &"surface", &"terrain_far", &"terrain_near", &"water", &"mountains",
+const BUILD_STEPS := [&"light", &"site", &"heightfield", &"surface", &"terrain_far", &"terrain_near", &"water", &"mountains",
 	&"vegetation", &"far_forest_north", &"far_forest_south", &"rider"]
 const QUALITY := [0.5, 0.67, 1.0]
 const RIDER_TICK := 1.0 / 60.0
+const SAMPLE_FRAMES := 60
+const SLOW_FRAME := 0.050
 
 static var _owner: Node
 
@@ -54,6 +57,10 @@ var _render_delta := 0.0
 var _rider_delta := 0.0
 var _seconds := 0.0
 var _wind_offset := 0.0
+var _display_size := Vector2i.ZERO
+var _adaptive := false
+var _sample_frames := 0
+var _slow_frames := 0
 var _previous_style_on := {}
 var _previous_style_amount := {}
 
@@ -63,7 +70,7 @@ static func recommended_quality() -> int:
 
 
 ## quality: 0 — экономный, 1 — средний, 2 — полный. native_size нужен для съёмки афиши.
-func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false) -> bool:
+func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false, adaptive := false) -> bool:
 	if _view != null or not is_inside_tree() or DisplayServer.get_name() == "headless":
 		return false
 	if is_instance_valid(_owner) or VisualStyle.is_bound():
@@ -76,6 +83,9 @@ func start(display_size: Vector2i, settings: GameSettings, quality: int, native_
 	_settings.style_amount = settings.style_amount.duplicate()
 	_quality = clampi(quality, 0, QUALITY.size() - 1)
 	_render_divisor = 2 if _quality == 0 and not native_size else 1
+	_adaptive = adaptive
+	_sample_frames = 0
+	_slow_frames = 0
 	_step = 0
 	_warm_frames = 0
 	_seconds = 0.0
@@ -103,6 +113,7 @@ func start(display_size: Vector2i, settings: GameSettings, quality: int, native_
 func resize(display_size: Vector2i, native_size := false) -> void:
 	if _view == null:
 		return
+	_display_size = display_size
 	var scale_factor: float = 1.0 if native_size else QUALITY[_quality]
 	_view.size = Vector2i(maxi(2, roundi(display_size.x * scale_factor)),
 		maxi(2, roundi(display_size.y * scale_factor)))
@@ -160,12 +171,15 @@ func _exit_tree() -> void:
 func _process(delta: float) -> void:
 	if _view == null or get_window().mode == Window.MODE_MINIMIZED:
 		return
+	if is_prepared and _adaptive and not _sample_performance(delta):
+		return
 	if _step < BUILD_STEPS.size():
 		var started := Time.get_ticks_usec()
 		var step: StringName = BUILD_STEPS[_step]
 		match step:
 			&"light": _build_light()
 			&"site": _build_site()
+			&"heightfield": _build_heightfield()
 			&"surface": _build_surface()
 			&"terrain_far": _build_terrain(Rect2i(0, 0, SIDE - 1, 112))
 			&"terrain_near": _build_terrain(Rect2i(0, 112, SIDE - 1, 100))
@@ -212,6 +226,28 @@ func _process(delta: float) -> void:
 	_view.render_target_update_mode = SubViewport.UPDATE_ONCE
 	if just_prepared:
 		prepared.emit()
+
+
+## Несколько медленных кадров нужны, чтобы случайный рывок окна не выключил сцену.
+func _sample_performance(delta: float) -> bool:
+	if _sample_frames >= SAMPLE_FRAMES:
+		return true
+	_sample_frames += 1
+	if delta > SLOW_FRAME:
+		_slow_frames += 1
+	if _sample_frames != SAMPLE_FRAMES or _slow_frames < 6:
+		return true
+	if _quality == 0:
+		performance_fallback.emit()
+		return false
+	_quality -= 1
+	_render_divisor = 2 if _quality == 0 else 1
+	_view.msaa_3d = Viewport.MSAA_DISABLED
+	_cycle.light.shadow_enabled = false
+	resize(_display_size)
+	_sample_frames = 0
+	_slow_frames = 0
+	return true
 
 
 func _build_light() -> void:
@@ -325,7 +361,10 @@ func _build_site() -> void:
 	world.river = empty
 	world.path_mask = empty
 	_world = world
-	_heights = Heightfield.new(world, false)
+
+
+func _build_heightfield() -> void:
+	_heights = Heightfield.new(_world, false)
 	_origin = Vector3(EYE_AT.x, _heights.ground_at(EYE_AT.x, EYE_AT.y) + 1.4, EYE_AT.y)
 
 

@@ -39,7 +39,7 @@ static func generate(seed_text: String, size: int, on_progress: Callable = Calla
 ## Слои генерации для кэша миров (с 10.2, WorldCache): география (рельеф, вода, климат), места и пути,
 ## природа (растительность и окно территории). Слой читает только готовые прошлые слои.
 const LAYERS := ["geo", "places", "nature"]
-enum PlanMode { STAND, WORLD, MENU }
+enum PlanMode { STAND, WORLD }
 
 
 ## Генерация по слоям. from — мир с готовыми слоями до start (из кэша: шумы на месте, без base_heights);
@@ -59,11 +59,6 @@ static func generate_layers(seed_text: String, size: int, on_progress: Callable 
 static func start_center(w: WorldData) -> Vector2i:
 	var home: Variant = PlayerState.home(w)
 	return Vector2i(floori(home.x), floori(home.y)) if not home.is_empty() else Vector2i(w.W / 2, w.H / 2)
-
-
-## Только декоративный фон меню; не игровой мир и не источник соседних областей.
-static func menu_background(seed_text: String) -> WorldData:
-	return _generate_plan(seed_text, 192, Callable(), Callable(), null, 0, Callable(), PlanMode.MENU)
 
 
 ## Общая природная география без домов и дорог. Соседние области — прямоугольники этого же плана
@@ -136,7 +131,7 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		# поля шума — из сида
 		if w.base_heights == null:
 			w.base_heights = Heightfield.new(w, false)
-	w.start_noise_fields(["cost"] if mode == PlanMode.MENU else ["cost", "forest"])
+	w.start_noise_fields(["cost", "forest"])
 	if after_climate.is_valid():
 		after_climate.call(w)
 	var step := func(p: float, label: String) -> void:
@@ -153,11 +148,6 @@ static func _generate_plan(seed_text: String, side: int, on_progress: Callable =
 		step.call(StageSites.PROGRESS, StageSites.LABEL)
 		StageSites.run(w)
 		t = _stage_time(w, "sites", t)
-		if mode == PlanMode.MENU:
-			RoadSurface.run(w)
-			w.clear_noise_fields()
-			w.base_heights = null
-			return w
 		StageLakes.run(w)
 		t = _stage_time(w, "lakes", t)
 		# Prepared parks are temporarily disabled in normal worlds. Explicit developer

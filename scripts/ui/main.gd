@@ -16,6 +16,8 @@ const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
+const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
+const LIVE_WARM_START_DELAY := 0.18
 
 var game: GameWorld
 var trail_lab: Node
@@ -42,6 +44,12 @@ var _progress_enabled := false # инструменты не записываю�
 var display_options: DisplayOptions
 var _confirm: ConfirmationDialog   # открытое подтверждение (выход, меню, загрузка)
 var _save_due := -1       # когда записать изменённые настройки (мс), -1 — нечего
+var _backdrop: Backdrop
+var _backdrop_epoch := 0
+var _backdrop_mode := ""
+var _backdrop_fade: Tween
+var _poster: Texture2D
+var _frozen_fallback: Texture2D
 
 @onready var hud: Hud = %Hud
 @onready var bg: TextureRect = %MenuBackground
@@ -82,6 +90,7 @@ func _ready() -> void:
 	GameContext.scope.settings.apply_window()
 	GameContext.scope.settings.apply_volume()
 	seed_edit.text = random_seed()
+	_poster = bg.texture
 	%Version.text = str(ProjectSettings.get_setting("application/config/version", "?"))
 	# кэш миров — только у самой игры: инструменты проверки ставят эту сцену не главной и генерируют честно
 	_progress_enabled = get_tree().current_scene == self
@@ -102,10 +111,6 @@ func _ready() -> void:
 	display_options.setup(self)
 	if QuickTrails.active():
 		_mark_quick_trails()
-	if GameContext.scope.cache.enabled:
-		if not QuickTrails.active(): # готовые миры из сборки полные: в быстрый кэш им не место
-			GameContext.scope.cache.install_bundled()
-		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	var tabs := ButtonGroup.new()
 	for tab: String in ["recent", "favorites", "recommended", "saved"]:
 		var b: Button = _tab_button(tab)
@@ -128,6 +133,8 @@ func _ready() -> void:
 	%LoadPreview.texture = null
 	get_viewport().size_changed.connect(_fit_menu)
 	_show("menu")
+	if _progress_enabled and "--menu-timing" in OS.get_cmdline_user_args():
+		_report_first_menu_frame()
 
 
 func _show(screen: String) -> void:
@@ -135,6 +142,9 @@ func _show(screen: String) -> void:
 		if s != "back":
 			screens[s].visible = s == screen
 	screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
+	if _progress_enabled:
+		var mode := "frozen" if screen == "loading" else ("live" if screens.back.visible else "")
+		_set_backdrop_mode(mode)
 	# фокус на главной кнопке экрана: можно пользоваться клавиатурой (стрелки, Enter)
 	match screen:
 		"menu":
@@ -189,6 +199,95 @@ func _open_all_worlds() -> void:
 
 func _return_to_menu_screen() -> void:
 	_show("menu")
+
+
+func _set_backdrop_mode(mode: String) -> void:
+	if mode == _backdrop_mode:
+		return
+	_backdrop_mode = mode
+	_backdrop_epoch += 1
+	if _backdrop_fade != null and _backdrop_fade.is_valid():
+		_backdrop_fade.kill()
+	var frame := _poster
+	if _backdrop != null:
+		var live: TextureRect = %LiveBackdrop
+		var presented := live.visible
+		live.hide()
+		live.texture = null
+		if mode == "frozen" and presented:
+			var image := _backdrop.freeze()
+			if image != null and not image.is_empty():
+				frame = ImageTexture.create_from_image(image)
+		else:
+			_backdrop.stop()
+		_backdrop.queue_free()
+		_backdrop = null
+	if mode == "frozen" and _frozen_fallback != null:
+		frame = _frozen_fallback
+	_frozen_fallback = null
+	bg.texture = frame
+	if mode == "live":
+		_start_menu_backdrop(_backdrop_epoch)
+
+
+func _start_menu_backdrop(epoch: int) -> void:
+	if DisplayServer.get_name() == "headless" or "--static-menu" in OS.get_cmdline_user_args():
+		return
+	# Два кадра дают вывести афишу и дождаться отложенного освобождения игрового окружения.
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().create_timer(LIVE_WARM_START_DELAY).timeout
+	if not is_inside_tree() or epoch != _backdrop_epoch:
+		return
+	var backdrop := Backdrop.new()
+	add_child(backdrop)
+	var quality := Backdrop.recommended_quality()
+	if not backdrop.start(_backdrop_size(), GameContext.scope.settings, quality, false, true):
+		backdrop.queue_free()
+		return
+	_backdrop = backdrop
+	backdrop.prepared.connect(_reveal_menu_backdrop.bind(epoch))
+	backdrop.failed.connect(func(reason: String) -> void:
+		print("MENU_BACKDROP: ", reason)
+		_use_menu_poster())
+	backdrop.performance_fallback.connect(_use_menu_poster)
+
+
+func _reveal_menu_backdrop(epoch: int) -> void:
+	if epoch != _backdrop_epoch or _backdrop == null:
+		return
+	var live: TextureRect = %LiveBackdrop
+	live.texture = _backdrop.viewport().get_texture()
+	live.modulate.a = 0.0
+	live.show()
+	_backdrop_fade = create_tween()
+	_backdrop_fade.tween_property(live, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_SINE)
+
+
+func _use_menu_poster() -> void:
+	if _backdrop == null:
+		return
+	var live: TextureRect = %LiveBackdrop
+	if _backdrop_fade != null and _backdrop_fade.is_valid():
+		_backdrop_fade.kill()
+	live.hide()
+	live.texture = null
+	var image := _backdrop.freeze()
+	if image != null and not image.is_empty():
+		_frozen_fallback = ImageTexture.create_from_image(image)
+		bg.texture = _frozen_fallback
+	_backdrop.queue_free()
+	_backdrop = null
+
+
+func _backdrop_size() -> Vector2i:
+	return get_window().size.clamp(Vector2i(2, 2), Vector2i(2560, 1440))
+
+
+func _report_first_menu_frame() -> void:
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+	print("MENU_FIRST_FRAME_MS=", Time.get_ticks_msec())
 
 
 # ---------- Настройки ----------
@@ -339,7 +438,7 @@ func _tab_button(tab: String) -> Button:
 func _preview_tex(seed_text: String) -> Texture2D:
 	if not _previews.has(seed_text):
 		_card_reads += 1
-		var img := GameContext.scope.cache.preview(seed_text) if GameContext.scope.cache.enabled else null
+		var img := GameContext.scope.cache.preview(seed_text, not QuickTrails.active()) if GameContext.scope.cache.enabled else null
 		_previews[seed_text] = ImageTexture.create_from_image(img) if img != null else null
 	return _previews[seed_text]
 
@@ -351,7 +450,8 @@ func _read_world_card(seed_text: String) -> Dictionary:
 	var latest := _latest_save(seed_text, manual)
 	var data: Dictionary = latest.data
 	var corrupt := data.is_empty() and _has_save(seed_text)
-	var ready := GameContext.scope.cache.enabled and GameContext.scope.cache.has(seed_text)
+	var cache := GameContext.scope.cache
+	var ready := cache.enabled and (cache.has(seed_text) or (not QuickTrails.active() and cache.has_bundled(seed_text)))
 	var summary := "Откроется быстро." if ready else "Мир создастся при запуске, около минуты."
 	var saved_at := -1
 	if not data.is_empty():
@@ -649,7 +749,7 @@ func _do_restart_world(seed_text: String) -> void:
 	_previews.erase(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
-	start_game(seed_text)
+	start_game(seed_text, WorldGenerator.START_SIZE, "", false)
 
 
 func _delete_world() -> void:
@@ -700,6 +800,8 @@ func _fit_menu() -> void:
 	var vs := get_viewport().get_visible_rect().size
 	var worlds: Control = %AllWorlds.get_node("Panel")
 	worlds.custom_minimum_size = Vector2(clampf(vs.x * 0.75, 920.0, 1220.0), clampf(vs.y * 0.80, 550.0, 700.0))
+	if _backdrop != null:
+		_backdrop.resize(_backdrop_size())
 
 
 func _process(delta: float) -> void:
@@ -772,15 +874,12 @@ func _launch_seed(seed_text: String) -> void:
 	_pick_seed(seed_text)
 	GameContext.scope.settings.remember_seed(seed_text)
 	GameContext.scope.settings.save_settings()
-	# мир, выпавший из последних и не избранный, больше не хранится
-	if GameContext.scope.cache.enabled:
-		GameContext.scope.cache.keep_only(GameContext.scope.settings.keep_seeds())
 	start_game(seed_text, WorldGenerator.START_SIZE, latest.slot)
 
 
 ## С 9.0 мир один: план 768 × 768 генерируется всегда целиком, size — только окно, открытое на старте.
 ## С 9.8 по умолчанию открыт весь план; меньшее окно ставят инструменты проверки (WorldData.open_around).
-func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "") -> void:
+func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot := "", allow_bundled := true) -> void:
 	if busy:
 		return
 	# каталог моделей устарел или не найден: мир не запускаем (в релизной сборке assert отключён)
@@ -810,10 +909,15 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	_show("loading")
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
-	gen_thread.start(_generate_job.bind(seed_text, size, start_at))
+	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled))
 
 
-func _generate_job(seed_text: String, size: int, start_at := Vector2.INF) -> void:
+func _generate_job(seed_text: String, size: int, start_at := Vector2.INF, allow_bundled := true) -> void:
+	var cache := GameContext.scope.cache
+	if cache.enabled:
+		cache.keep_only(GameContext.scope.settings.keep_seeds())
+		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE:
+			cache.install_bundled(WorldCache.BUNDLED, seed_text)
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
 		_set_progress.call_deferred(p, label), null, start_at)
 	if loaded == null:
@@ -989,6 +1093,7 @@ func _exit_game() -> void:
 		# настройка изменена меньше чем 400 мс назад: на диск ещё не записана
 		_save_due = -1
 		GameContext.scope.settings.save_settings()
+	_set_backdrop_mode("")
 	get_tree().quit()
 
 

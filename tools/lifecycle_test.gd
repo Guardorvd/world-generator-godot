@@ -7,6 +7,8 @@ extends SceneTree
 const SEEDS := ["Север-1234", "Туман-4821", "Янтарь-5150", "Ущелье", "Кедр-2024", "Иней-7777"]
 const PLAY_FRAMES := 90    # кадров игры в каждом мире: растительность и рельеф за краем успевают подгрузиться
 const MENU_FRAMES := 10    # кадров в меню: освобождённые узлы уходят в конце кадра
+const MainScene := "res://scenes/main.tscn"
+const OUT := "res://.godot/menu_lifecycle"
 
 var main: Node
 var size := 512
@@ -22,6 +24,8 @@ var fails := 0
 # По умолчанию (4 мира 512) около 10 мин, --size 256 --worlds 3 в несколько раз меньше.
 func _watchdog_limit() -> float:
 	var args := OS.get_cmdline_user_args()
+	if "--menu-smoke" in args:
+		return 540.0
 	var n := worlds
 	var s := size
 	for a in args.size() - 1:
@@ -36,6 +40,10 @@ func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, _watchdog_limit())
 	_check_base_ownership()
 	var args := OS.get_cmdline_user_args()
+	if "--menu-smoke" in args:
+		phase = "smoke"
+		_menu_smoke.call_deferred()
+		return
 	for a in args.size() - 1:
 		if args[a] == "--size":
 			size = int(args[a + 1])
@@ -43,6 +51,77 @@ func _initialize() -> void:
 			worlds = int(args[a + 1])
 	main = load("res://scenes/main.tscn").instantiate()
 	root.add_child(main)
+
+
+## Один мир с окном. Основная сцена получает обычные права на кэш и сохранения в каталоге стенда.
+func _menu_smoke() -> void:
+	if DisplayServer.get_name() == "headless":
+		_check(false, "для проверки живого меню требуется окно")
+		_finish()
+		return
+	var run := OUT.path_join(str(OS.get_process_id()))
+	DirAccess.make_dir_recursive_absolute(run)
+	GameContext.scope.settings.settings_path = run.path_join("settings.cfg")
+	GameContext.scope.cache.dir = run.path_join("world_cache")
+	preload("res://scripts/game/save_game.gd").dir = run.path_join("saves")
+	change_scene_to_file(MainScene)
+	await scene_changed
+	main = current_scene
+	_check(main.get_node("%Start").has_focus() and main.bg.texture != null, "афиша и управление доступны на первом кадре")
+	_check(main._backdrop == null, "сборка фона отложена")
+	_check(main.get_node("%Carousel/Card/CardContent/Artwork/Art/Map").texture != null, "миниатюра мира читается из сборки")
+	await _wait_for_backdrop()
+	var live: TextureRect = main.get_node("%LiveBackdrop")
+	_check(live.visible and main._backdrop != null, "живой фон проявился")
+	if main._backdrop != null:
+		print("MENU_LIVE_READY_MS=", main._backdrop.build_ms)
+	await _smoke_shot("menu")
+	main._on_start()
+	_check(main._backdrop == null and not live.visible and not VisualStyle.is_bound(), "фон и стиль освобождены до загрузки")
+	_check(main.screens.loading.visible and main.bg.texture != null, "экран загрузки показывает неподвижный кадр")
+	await _smoke_shot("loading")
+	if not await _wait_for_world():
+		_finish()
+		return
+	var first_world: WeakRef = weakref(main.game.world)
+	var first_game: WeakRef = weakref(main.game)
+	main._toggle_pause()
+	_check(main.screens.pause.visible and main.get_node("%Resume").has_focus(), "пауза открывается из игры")
+	await _smoke_shot("pause")
+	main._back_to_menu()
+	await process_frame
+	await process_frame
+	_check(first_world.get_ref() == null and first_game.get_ref() == null, "после возврата узлы и данные мира освобождены")
+	_check(main.screens.menu.visible and main.get_node("%Start").text.begins_with("Продолжить"), "возврат показывает сохранённый прогресс")
+	# Сразу продолжаем, пока новый фон ещё собирается.
+	main._on_start()
+	if await _wait_for_world():
+		_check(main._backdrop == null and VisualStyle.is_bound(), "повторный вход восстановил стиль игрового мира")
+		main._back_to_menu()
+		await process_frame
+		await process_frame
+	main._set_backdrop_mode("")
+	_finish()
+
+
+func _wait_for_backdrop() -> void:
+	var deadline := Time.get_ticks_msec() + 80000
+	while not main.get_node("%LiveBackdrop").visible and Time.get_ticks_msec() < deadline:
+		await process_frame
+	await create_timer(0.65).timeout
+
+
+func _wait_for_world() -> bool:
+	while main.busy:
+		await process_frame
+	var ok: bool = main.game != null and main.game.player != null
+	_check(ok, "мир загружен через главное меню")
+	return ok
+
+
+func _smoke_shot(label: String) -> void:
+	await RenderingServer.frame_post_draw
+	root.get_texture().get_image().save_png(OUT.path_join(label + ".png"))
 
 
 func _check(ok: bool, what: String) -> void:

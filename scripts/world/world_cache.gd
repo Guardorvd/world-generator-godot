@@ -311,9 +311,16 @@ func _measure(name: String, since: int, bytes := 0) -> void:
 
 
 ## Превью карты мира для меню или null. Остаётся и после обновлений: мир от зерна почти не меняется.
-func preview(seed_text: String) -> Image:
-	var path := dir.path_join(_base(seed_text, WorldGenerator.START_SIZE) + PREVIEW)
-	return Image.load_from_file(path) if FileAccess.file_exists(path) else null
+func preview(seed_text: String, bundled := false) -> Image:
+	var base := _base(seed_text, WorldGenerator.START_SIZE)
+	var path := dir.path_join(base + PREVIEW)
+	if FileAccess.file_exists(path):
+		var cached := Image.load_from_file(path)
+		if cached != null and not cached.is_empty():
+			return cached
+	if bundled:
+		return _preview_image(BUNDLED.path_join(base + ".preview"))
+	return null
 
 
 ## Сколько файлов мира подряд подходят к нынешнему коду: 0 — ничего, WorldGenerator.LAYERS.size() — мир
@@ -329,6 +336,15 @@ func ready_layers(seed_text: String, size: int = WorldGenerator.START_SIZE) -> i
 ## Мир в кэше целиком и подходит к нынешнему коду
 func has(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
 	return ready_layers(seed_text, size) > WorldGenerator.LAYERS.size()
+
+
+## Заголовки файлов из сборки: меню может показать статус до копирования данных в профиль.
+func has_bundled(seed_text: String, size: int = WorldGenerator.START_SIZE) -> bool:
+	for layer in WorldGenerator.LAYERS.size() + 1:
+		var path := BUNDLED.path_join(path_for(seed_text, size, layer).get_file())
+		if _cache_header_key(path) != _key(seed_text, size, layer):
+			return false
+	return true
 
 
 ## Сколько миров в кэше и сколько байт на диске
@@ -556,7 +572,7 @@ func _join_writes() -> void:
 ## Удалить все файлы кэша, кроме миров из seeds (размера START_SIZE); пустой seeds — очистить всё
 ## 14.5: скопировать миры из проекта (BUNDLED) в кэш игрока, если там их ещё нет или они другие.
 ## Подходит ли файл к нынешнему коду, решает обычная проверка ключа при чтении: устаревший перегенерируется.
-func install_bundled(source := BUNDLED) -> void:
+func install_bundled(source := BUNDLED, only_seed := "") -> void:
 	var manifest: Variant = JSON.parse_string(FileAccess.get_file_as_string(source.path_join("manifest.json"))) if FileAccess.file_exists(source.path_join("manifest.json")) else null
 	if not manifest is Dictionary or manifest.get("format") != FORMAT: return
 	for entry: Dictionary in manifest.get("files", []):
@@ -567,6 +583,7 @@ func install_bundled(source := BUNDLED) -> void:
 		var layer := int(entry.get("layer", -1))
 		if layer < 0 or layer > WorldGenerator.LAYERS.size(): continue
 		var seed_text: String = entry.get("seed", "")
+		if not only_seed.is_empty() and seed_text != only_seed: continue
 		var size := int(entry.get("size", 0))
 		var key := _key(seed_text, size, layer)
 		if entry.get("key") != key or name != path_for(seed_text, size, layer).get_file(): continue
@@ -579,6 +596,7 @@ func install_bundled(source := BUNDLED) -> void:
 		var artifact: String = entry.get("artifact", "")
 		if artifact not in ["base", "surface"]: continue
 		var seed_text: String = entry.get("seed", "")
+		if not only_seed.is_empty() and seed_text != only_seed: continue
 		var size := int(entry.get("size", 0))
 		var path := artifact_path(seed_text, size, artifact)
 		var key := artifact_key(seed_text, size, artifact)
@@ -594,6 +612,7 @@ func install_bundled(source := BUNDLED) -> void:
 	for entry: Dictionary in manifest.get("previews", []):
 		var name: String = entry.get("name", "")
 		if name != name.get_file() or not name.ends_with(".preview"): continue
+		if not only_seed.is_empty() and name != _base(only_seed, WorldGenerator.START_SIZE) + ".preview": continue
 		var to := dir.path_join(name + ".png")
 		if not preview_file(to).is_empty(): continue
 		var bytes := FileAccess.get_file_as_bytes(source.path_join(name))
@@ -622,8 +641,16 @@ func _install_chunks(source: String, data: Dictionary, key: String) -> bool:
 func preview_file(path: String) -> PackedByteArray:
 	if not FileAccess.file_exists(path): return PackedByteArray()
 	var bytes := FileAccess.get_file_as_bytes(path)
+	return bytes if _decode_preview(bytes) != null else PackedByteArray()
+
+
+func _preview_image(path: String) -> Image:
+	return _decode_preview(FileAccess.get_file_as_bytes(path)) if FileAccess.file_exists(path) else null
+
+
+static func _decode_preview(bytes: PackedByteArray) -> Image:
 	var img := Image.new()
-	return bytes if img.load_png_from_buffer(bytes) == OK and img.get_width() == PREVIEW_SIZE and img.get_height() == PREVIEW_SIZE else PackedByteArray()
+	return img if img.load_png_from_buffer(bytes) == OK and img.get_size() == Vector2i.ONE * PREVIEW_SIZE else null
 
 
 func _cache_header_key(path: String) -> String:
