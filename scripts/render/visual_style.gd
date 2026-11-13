@@ -143,14 +143,14 @@ static func grade_color(c: Color) -> Color:
 	var rgb := Vector3(c.r, c.g, c.b) * Vector3.ONE.lerp(Vector3(0.93, 0.99, 1.065), shadow)
 	# 2. Золотистые света, только у окрашенных поверхностей: белые облака, снег и небо остаются нейтральными.
 	var gold := smoothstep(0.35, 0.85, luma) * smoothstep(0.05, 0.3, chroma)
-	rgb *= Vector3.ONE.lerp(Vector3(1.065, 1.018, 0.9), gold)
+	rgb *= Vector3.ONE.lerp(Vector3(1.055, 1.016, 0.915), gold)
 	var out := Color(rgb.x, rgb.y, rgb.z)
 	# 3. Зелень: на свету к жёлто-оливковому, в тени к сине-зелёному, самая кричащая приглушается.
 	var h := out.h * 360.0
 	var green := smoothstep(62.0, 92.0, h) * (1.0 - smoothstep(150.0, 180.0, h))
 	if green > 0.0 and out.s > 0.0:
 		var warm := smoothstep(0.12, 0.7, luma)
-		var shift := lerpf(10.0, -11.0, warm) * green
+		var shift := lerpf(10.0, -8.0, warm) * green
 		var sat := out.s * (1.0 - 0.24 * smoothstep(0.5, 0.95, out.s) * green)
 		out = Color.from_hsv(fposmod(h + shift, 360.0) / 360.0, sat, out.v)
 	# 4. Светлота остаётся прежней: оттенок и насыщенность меняются, яркость нет.

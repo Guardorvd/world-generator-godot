@@ -26,6 +26,7 @@ const STATES := {
 	mountains = {view = "peak", hour = 15.0, cover = 0.25},
 	water = {view = "water", hour = 12.6, cover = 0.25},
 	road = {view = "road", hour = 10.8, cover = 0.25},
+	road_far = {view = "road_far", hour = 10.8, cover = 0.25},
 }
 const SHEET_ORDER := ["noon_meadow", "morning_forest", "sunset", "night", "overcast", "mist", "mountains", "water"]
 
@@ -91,7 +92,11 @@ func _build_world(seed_text: String) -> void:
 	var saved: Dictionary = FileAccess.open(path, FileAccess.READ).get_var()
 	world = WorldCache.new()._restore(saved.world, true)
 	world.available_rect = Rect2i()
-	heights = Snapshot.restore(world, saved.base, "base")
+	heights = Snapshot.restore(world, saved.base, "base").copy()
+	# Полотно дорог — часть меша земли (метровая сетка у путей): без finish_paths дорог в кадре нет
+	var roads_started := Time.get_ticks_msec()
+	heights.finish_paths()
+	print("STYLE_ROADS finish_paths ms=", Time.get_ticks_msec() - roads_started)
 	saved = {}
 	if world.obj_count == 0:
 		StageVegetation.run(world)
@@ -197,7 +202,10 @@ func _pick_views() -> void:
 		var m := road.size() / 2
 		var k := Dev._along(road, m, 26.0)
 		views.road = {pos = Dev._at(heights, road[m].x, road[m].y, 1.9), target = Dev._at(heights, road[k].x, road[k].y, 0.8)}
-	for key: String in ["valley", "peak", "water", "road"]:
+		# Та же дорога издали: камера на 16 м над ней смотрит вдоль на 300 м вперёд (проверка читаемости дороги в «Планах»)
+		var k_far := Dev._along(road, m, 75.0)
+		views.road_far = {pos = Dev._at(heights, road[m].x, road[m].y, 16.0), target = Dev._at(heights, road[k_far].x, road[k_far].y, 0.0)}
+	for key: String in ["valley", "peak", "water", "road", "road_far"]:
 		if not views.has(key):
 			views[key] = views.forest
 			print("STYLE_VIEW нет вида ", key, ": взят лес")
@@ -331,7 +339,8 @@ func _before_after_sheet(state_names: Array) -> void:
 		if state in state_names:
 			keys.append(state + "/off")
 			keys.append(state + "/all")
-	_sheet(keys, 4, Vector2i(480, 270), "style_sheet.png")
+	if not keys.is_empty():
+		_sheet(keys, 4, Vector2i(480, 270), "style_sheet.png")
 
 
 # ---------- тонмапперы ----------
