@@ -175,6 +175,17 @@ const TURN_SCALE_RISE := 0.1   # с: а возвращается быстрее,
 ## оттормозиться и заложить — тугой поворот снова доступен (и на малой скорости он доступен всегда).
 const ARC_SHARE := 0.9 # 12.11: было 0,68 — на скорости полный руль ощущался так, будто велосипед что-то держит
 const ARC_PACE := Vector2(6.0, 13.0)
+## 13.11: руль не глохнет, когда колёса разгрузились. Раньше полный руль был долей дуги, которую шины держат
+## прямо сейчас: на гребне, на волнах спуска, в тормозе и на корнях запас падал, вместе с ним падала сама команда,
+## и велосипед шёл прямо, будто руль не работает, а с возвратом запаса поворот возвращался рывком. Теперь полный
+## руль — не меньше опорной дуги: STEER_NOMINAL от того, что шины держат на этом покрытии при обычной нагрузке
+## (вираж и сжатие по-прежнему дают больше). Чего сцепление не держит, уходит в снос: рама доворачивает на долю
+## SLIDE_YAW от нехватки, траектория шире, из-под колёс пыль, ход теряется. Занос сам себя ограничивает: доворот
+## сверх сцепления гаснет между углами сноса SLIDE_SLIP, до падения набок (SLIDE_CRASH) он не доводит.
+## Поднятое переднее колесо (Q) по-прежнему не рулит. На ровном полотне с обычной нагрузкой дуга прежняя.
+const STEER_NOMINAL := 0.9
+const SLIDE_YAW := 0.5
+const SLIDE_SLIP := Vector2(0.07, 0.17) # рад (4–10°)
 const HOP_ARM_HEIGHT := 0.015 # Q должен действительно поднять переднее колесо; кромка не съедает подготовку
 const HOP_LINK := 0.3         # окно E после подъёма, с
 ## Автопамп читает только поверхность: сгибаемся на волне, давим на обратный склон.
@@ -1152,6 +1163,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	var rate := GameConfig.BIKE_TURN * clampf(pace / 3.0, 0.0, 1.0) / (1.0 + pace * 0.04)
 	var wanted := -steer * rate * (1.0 if speed >= 0.0 else -1.0)
 	var limit := rate
+	var slide := 0.0 # рад/с: на столько рама доворачивает сверх того, что держат шины (снос)
 	if airborne:
 		wanted *= 0.25
 		limit *= 0.25
@@ -1186,8 +1198,12 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 			arc = lerpf(arc, 1.0, smoothstep(0.15, 0.6, brakes.pressure))
 			# s · (1 − (1 − arc) · s²): у малого руля доля почти полная, у полного — arc
 			var command := steer * (1.0 - (1.0 - arc) * steer * steer)
-			wanted = -command * minf(rate, _turn_scale) * (1.0 if speed >= 0.0 else -1.0)
-		wanted = clampf(wanted, -limit, limit)
+			# 13.11: команда не падает вместе с нагрузкой колёс (см. STEER_NOMINAL); нехватка сцепления — снос
+			var reference := CORNER_GRIP * RIDER_GRIP * grip * TURN_RESERVE * STEER_NOMINAL / maxf(pace, 3.0)
+			wanted = -command * minf(rate, maxf(_turn_scale, reference)) * (1.0 if speed >= 0.0 else -1.0)
+			if contact_f():
+				slide = maxf(0.0, absf(wanted) - limit) * SLIDE_YAW * (1.0 - smoothstep(SLIDE_SLIP.x, SLIDE_SLIP.y, slip * signf(wanted)))
+		wanted = clampf(wanted, -limit - slide, limit + slide)
 		# Потеря хода — от настоящей перегрузки шины, а не просто от удержания клавиши на скорости.
 		if not contact_model:
 			speed = move_toward(speed, 0.0, excess * 0.08 * dt)
@@ -1196,7 +1212,7 @@ func _step_turn(turn: float, grip: float, dt: float, brake := 0.0) -> float:
 	if contact_model and not airborne and pace > 1.0:
 		# у рамы с седоком есть инерция: когда запас переднего колеса падает (гребень, рывок на себя), поворот гаснет
 		# за доли секунды, а не обрывается в такт — избыток уходит в снос
-		_yaw_rate = move_toward(_yaw_rate, clampf(_yaw_rate, -limit, limit), YAW_DROP * dt)
+		_yaw_rate = move_toward(_yaw_rate, clampf(_yaw_rate, -limit - slide, limit + slide), YAW_DROP * dt)
 	else:
 		_yaw_rate = clampf(_yaw_rate, -limit, limit)
 	return _yaw_rate * dt
