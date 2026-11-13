@@ -36,6 +36,8 @@ static var _env: Environment
 static var _graded: PackedFloat32Array  # LUT на полной силе (r, g, b подряд)
 static var _lut_cache: Dictionary = {}
 static var _lut_step := -1
+static var _day_exposure := -1.0   # выдержка и насыщенность DayCycle без стиля (для привязанного окружения):
+static var _day_saturation := 1.0  # на паузе DayCycle стоит, и refresh() пересчитывает их сам
 
 
 ## Сила эффекта, 0 если выключен
@@ -53,6 +55,8 @@ static func configure(new_on: Dictionary, new_amount: Dictionary) -> void:
 
 ## Окружение мира: привязывается при запуске игры и применяется при каждой смене настроек
 static func bind(env: Environment) -> void:
+	if env != _env:
+		_day_exposure = -1.0
 	_env = env
 	refresh()
 
@@ -61,6 +65,7 @@ static func bind(env: Environment) -> void:
 static func release() -> void:
 	_reset_environment()
 	_env = null
+	_day_exposure = -1.0
 	RenderingServer.global_shader_parameter_set("style_depth", Vector4.ZERO)
 
 
@@ -85,6 +90,15 @@ static func _agx_exposure(k: float) -> float:
 	return 1.0 if k <= 0.0 else lerpf(1.12, 1.3, k)
 
 
+## Выдержка и насыщенность от DayCycle (каждый кадр) с множителями стиля
+static func apply_day(env: Environment, exposure: float, saturation: float) -> void:
+	if env == _env:
+		_day_exposure = exposure
+		_day_saturation = saturation
+	env.tonemap_exposure = exposure * exposure_scale()
+	env.adjustment_saturation = saturation * saturation_scale()
+
+
 ## Дымка дальнего плана: цвет горизонта из DayCycle
 static func set_haze(color: Color) -> void:
 	RenderingServer.global_shader_parameter_set("style_haze", Vector3(color.r, color.g, color.b))
@@ -99,6 +113,11 @@ static func refresh() -> void:
 		return
 	_apply_grade(strength("grade"))
 	_apply_highlights(strength("highlights"))
+	# 13.11.2026: тонмаппер меняется сразу, а выдержку раньше ставил только следующий DayCycle.apply —
+	# на паузе (меню графики) картинка была то темнее, то светлее, пока игра не продолжится.
+	if _day_exposure >= 0.0:
+		_env.tonemap_exposure = _day_exposure * exposure_scale()
+		_env.adjustment_saturation = _day_saturation * saturation_scale()
 
 
 static func _reset_environment() -> void:

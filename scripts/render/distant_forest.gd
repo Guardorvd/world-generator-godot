@@ -121,12 +121,14 @@ static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dict
 ## VegetationLayer._open_community, without the verge strip): {} or {at, mass, tall, juniper}.
 static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, light: float, slope: float, alt: float,
 		rock: float, water: float, edge: float) -> Dictionary:
-	if bi in [Biomes.DEEP, Biomes.OCEAN, Biomes.SHALLOW, Biomes.LAKE, Biomes.SNOW, Biomes.PEAK, Biomes.DESERT, Biomes.BEACH]: return {}
+	# 13.11.2026: те же биомы, что у ближней раскладки (VegetationLayer._fill_grass: есть трава или скалы):
+	# раньше дальние заросли пропускали пляж и вставали на каменистом берегу, где ближних нет.
+	if not Biomes.LIST[bi].has("grass") and bi != Biomes.ROCK: return {}
 	if slope > 1.15: return {}
 	var seed := seed_num ^ 8803
 	var big := VegetationLayer._vnoise(i, j, 36.0, seed)
 	var mid := VegetationLayer._vnoise(i, j, 11.0, seed + 17)
-	var dry := 1.0 if bi in [Biomes.STEPPE, Biomes.SAVANNA] else 0.0
+	var dry := VegetationLayer.open_dry(bi)
 	var com := Understory.communities(big, mid, moisture, light, slope, alt, rock, water, edge, 0.0, dry)
 	var density := 0.0
 	var woody := 0.0

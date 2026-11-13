@@ -199,7 +199,6 @@ func apply(hour: float, time: float) -> void:
 	env.fog_light_color = s[2]
 	env.ambient_light_color = s[5]
 	env.ambient_light_energy = s[6]
-	env.tonemap_exposure = s[7] * VisualStyle.exposure_scale()   # 13.11: визуальный стиль («Мягкие света») подстраивает выдержку тонмаппера
 	VisualStyle.set_haze(s[2])
 	RenderingServer.global_shader_parameter_set("sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
 	env.fog_density = FOG * s[12]
@@ -243,7 +242,8 @@ func apply(hour: float, time: float) -> void:
 		# Share extinction with the far haze instead of stacking two full fog layers.
 		env.fog_density = maxf(0.0002, env.fog_density - _air_density * 0.65)
 		env.fog_height_density *= 0.35
-	env.adjustment_saturation = lerpf(float(s[13]), 0.96, overcast) * VisualStyle.saturation_scale()
+	# 13.11: визуальный стиль подстраивает выдержку тонмаппера и насыщенность; база запоминается для смены стиля на паузе
+	VisualStyle.apply_day(env, s[7], lerpf(float(s[13]), 0.96, overcast))
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)
 	# Soften contrast through direct/sky balance, not translucent shadows.
 	light.shadow_blur = lerpf(1.25, 2.0, overcast)

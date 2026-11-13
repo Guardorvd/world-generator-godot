@@ -1522,7 +1522,12 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	# Объекты и журнал захвачены главным потоком до запуска задачи.
 	var regions: Dictionary = snapshot.regions
 	var canopy_rect := Rect2i(Vector2i(floori(scan_low.x), floori(scan_low.y)), Vector2i(ceili(scan_high.x) - floori(scan_low.x) + 1, ceili(scan_high.y) - floori(scan_low.y) + 1))
-	var canopy := Floor.canopy_image(canopy_rect, snapshot.trees) if not regions.is_empty() and (scan_low.x < 0 or scan_low.y < 0 or scan_high.x >= w.W or scan_high.y >= w.H) else null
+	var canopy: Image = null
+	if not regions.is_empty() and (scan_low.x < 0 or scan_low.y < 0 or scan_high.x >= w.W or scan_high.y >= w.H):
+		# 13.11.2026: деревья карты — только из чанков у rect, а не перебор всех объектов мира на каждую раскладку у края
+		var batches: Array = snapshot.trees.duplicate()
+		batches[0] = _map_trees_near(canopy_rect)
+		canopy = Floor.canopy_image(canopy_rect, batches)
 	placement.outer_canopy = canopy
 	placement.canopy_rect = canopy_rect
 	# Obstacles still own first placement, after the complete snapshot is ready.
@@ -1967,6 +1972,11 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	return grass_mul
 
 
+## Сушь открытого места по биому: общая для ближней раскладки и дальних зарослей (DistantForest.scrub_site)
+static func open_dry(bi: int) -> float:
+	return 1.0 if bi in [Biomes.STEPPE, Biomes.SAVANNA, Biomes.DESERT] else (0.6 if bi == Biomes.BEACH else 0.0)
+
+
 ## 16.0: сообщество открытой клетки байтами (OPEN_CACHE): флаг, 6 долей, густота, множитель травы, сушь, обочина
 func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunlight: float, alt: float, water: float, inside: bool) -> PackedByteArray:
 	var seed := world.seed_num ^ 8803
@@ -1974,7 +1984,7 @@ func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunl
 	var mid := _vnoise(i, j, 11.0, seed + 17)
 	var edge := _ring_canopy(i, j).x if inside else 0.0
 	var verge := _verge(i, j) if inside else 0.0
-	var dry := 1.0 if bi in [Biomes.STEPPE, Biomes.SAVANNA, Biomes.DESERT] else (0.6 if bi == Biomes.BEACH else 0.0)
+	var dry := open_dry(bi)
 	var com := Understory.communities(big, mid, surface.b, sunlight, slope, alt, surface.a, water, edge, verge, dry)
 	var density := 0.0
 	var grass_mul := 0.0
@@ -2266,6 +2276,22 @@ func _filter_grass() -> void:
 				grass_buf[write * STRIDE + c] = grass_buf[offset + c]
 		write += 1
 	_grass_n = write
+
+
+## Объекты карты из чанков, задевающих rect (клетки) с запасом в чанк на радиус кроны: первый пакет для canopy_image.
+## Объект лежит в чанке своей клетки (StageVegetation), поэтому остальные чанки в rect ничего не добавят.
+func _map_trees_near(rect: Rect2i) -> Dictionary:
+	var out := {x = PackedFloat64Array(), y = PackedFloat64Array(), k = PackedInt32Array(), s = PackedFloat64Array()}
+	var side := world.CS
+	var area := rect.grow(side)
+	for cy in range(maxi(0, floori(float(area.position.y) / side)), mini(world.CH, ceili(float(area.end.y) / side))):
+		for cx in range(maxi(0, floori(float(area.position.x) / side)), mini(world.CW, ceili(float(area.end.x) / side))):
+			for o in world.chunks[cy * world.CW + cx]:
+				out.x.append(world.obj_x[o])
+				out.y.append(world.obj_y[o])
+				out.k.append(world.obj_k[o])
+				out.s.append(world.obj_s[o])
+	return out
 
 
 func _fill_tree_roots(px: float, pz: float) -> void:
