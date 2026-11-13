@@ -190,6 +190,8 @@ var _road_revision := 0 # published on the main thread, consumed only by the det
 var _fill_started := 0
 var load_radius := tree_r + LOAD_MARGIN
 var drop_radius := load_radius + DROP_MARGIN
+## Отдельное окно привала задаёт собственные дальности леса.
+var use_shared_forest_ranges := true
 
 
 func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, forest: Image = null) -> void:
@@ -318,13 +320,14 @@ func _half_chunk() -> float:
 ## Границы растворения по нынешним дальностям (с 9.9+)
 func _apply_fade() -> void:
 	# Far crowns/ground cover: off on the lowest flora level, 1000 m on medium, 1400 m on high (GTX 1650 SUPER target).
-	var far_forest := preload("res://scripts/render/distant_forest.gd")
-	far_forest.active = flora_level > 0
-	far_forest.far_end = 1000.0 if flora_level == 1 else 1400.0
-	far_forest.near_begin = maxf(0.0, tree_r * (1.0 - FADE_SHARE) - 100.0) # crowns are invisible inside the real-tree zone
-	if is_inside_tree():
-		for node: MultiMeshInstance3D in get_tree().get_nodes_in_group("distant_forest"): far_forest.apply_ranges(node)
-	RenderingServer.global_shader_parameter_set("distant_vegetation", Vector4(tree_r, tree_r * FADE_SHARE, far_forest.far_end, float(far_forest.active)))
+	if use_shared_forest_ranges:
+		var far_forest := preload("res://scripts/render/distant_forest.gd")
+		far_forest.active = flora_level > 0
+		far_forest.far_end = 1000.0 if flora_level == 1 else 1400.0
+		far_forest.near_begin = maxf(0.0, tree_r * (1.0 - FADE_SHARE) - 100.0) # crowns are invisible inside the real-tree zone
+		if is_inside_tree():
+			for node: MultiMeshInstance3D in get_tree().get_nodes_in_group("distant_forest"): far_forest.apply_ranges(node)
+		RenderingServer.global_shader_parameter_set("distant_vegetation", Vector4(tree_r, tree_r * FADE_SHARE, far_forest.far_end, float(far_forest.active)))
 	for kind: int in _defs:
 		for part in ["trunk", "crown"]:
 			for mat: ShaderMaterial in _defs[kind].get(part + "_mats", []):
@@ -514,6 +517,11 @@ func _multimesh(mesh: Mesh, mat: Material, count: int, colors: bool, shadows: bo
 ## force используется при появлении/переносе: дождаться фона и показать только нужное место.
 func update_frame(px: float, pz: float, force: bool, allow_upload: bool) -> bool:
 	return update(px, pz, force, -1.0, allow_upload)
+
+
+## Все начатые раскладки загружены. Статичной камере достаточно один раз дождаться этого состояния.
+func placement_ready() -> bool:
+	return _task == -1 and _tree_task == -1 and _pending.is_empty() and _present.is_empty()
 
 
 func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := true) -> bool:

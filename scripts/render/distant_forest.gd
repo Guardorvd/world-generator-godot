@@ -28,23 +28,26 @@ static var near_begin := 240.0 # cells nearer than this are fully covered by rea
 
 ## Draw ranges for one MultiMesh node (meta "far_lod"). The node ranges are coarse (per 128 m cell, with a margin);
 ## the shader cuts each instance exactly, so neighbouring rings never draw the same place twice.
-static func apply_ranges(node: MultiMeshInstance3D) -> void:
-	node.visible = active
+static func apply_ranges(node: MultiMeshInstance3D, local_range := Vector2.ZERO) -> void:
+	var isolated := local_range.y > 0.0
+	var begin := local_range.x if isolated else near_begin
+	var end := local_range.y if isolated else far_end
+	node.visible = isolated or active
 	var lod: int = node.get_meta("far_lod", FINE)
 	match lod:
 		COARSE:
 			node.visibility_range_begin = maxf(0.0, SPLIT - SPLIT_BAND * 0.5 - NODE_MARGIN)
-			node.visibility_range_end = far_end + 150.0
+			node.visibility_range_end = end + 150.0
 		SCRUB:
 			node.visibility_range_begin = maxf(0.0, SCRUB_BEGIN - NODE_MARGIN)
-			node.visibility_range_end = minf(far_end, SCRUB_END) + NODE_MARGIN
+			node.visibility_range_end = minf(end, SCRUB_END) + NODE_MARGIN
 		_:
-			node.visibility_range_begin = near_begin
+			node.visibility_range_begin = begin
 			node.visibility_range_end = SPLIT + SPLIT_BAND * 0.5 + NODE_MARGIN
 	node.visibility_range_begin_margin = 0.0
 	node.visibility_range_end_margin = 0.0
 
-static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
+static func plan(w: WorldData, h: Heightfield, key: Vector2i, include_scrub := true) -> Dictionary:
 	var raw: Array = []
 	var groups := {}
 	var centers := {}
@@ -89,7 +92,7 @@ static func plan(w: WorldData, h: Heightfield, key: Vector2i) -> Dictionary:
 					groups[group].count += 1
 	for group: Dictionary in groups.values():
 		raw.append([group.box.get_center(), group.box.size * 0.5, group.color / float(group.count), group.count, 0.0])
-	var scrub := _plan_scrub(w, h, rect, wooded)
+	var scrub := _plan_scrub(w, h, rect, wooded) if include_scrub else []
 	return pack(raw, scrub)
 
 ## Open-land woody plants of the plan tile: one proxy per 12 m sample where the community has enough of them.
@@ -261,7 +264,7 @@ static func append(out: Dictionary, at: Vector3, size: Vector3, color: Color, ki
 	entry.bounds = box if entry.count == 0 else entry.bounds.merge(box)
 	entry.count += 1
 
-static func attach(parent: Node3D, batches: Dictionary) -> void:
+static func attach(parent: Node3D, batches: Dictionary, local_range := Vector2.ZERO) -> void:
 	if _meshes.is_empty():
 		_meshes = [lobe_mesh(FINE), lobe_mesh(COARSE), lobe_mesh(SCRUB)]
 		_material = ShaderMaterial.new()
@@ -272,7 +275,8 @@ static func attach(parent: Node3D, batches: Dictionary) -> void:
 			var entry: Dictionary = cells[key]
 			var node := MultiMeshInstance3D.new()
 			node.name = "DistantForest"
-			node.add_to_group("distant_forest")
+			if local_range.y <= 0.0:
+				node.add_to_group("distant_forest")
 			node.set_meta("far_lod", lod)
 			var mm := MultiMesh.new()
 			mm.transform_format = MultiMesh.TRANSFORM_3D
@@ -285,7 +289,7 @@ static func attach(parent: Node3D, batches: Dictionary) -> void:
 			node.multimesh = mm
 			node.material_override = _material
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			apply_ranges(node)
+			apply_ranges(node, local_range)
 			parent.add_child(node)
 			var center := (Vector2(key) + Vector2.ONE * 0.5) * SIDE
 			node.global_position = Vector3(center.x, 0, center.y)

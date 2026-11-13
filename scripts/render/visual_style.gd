@@ -61,6 +61,10 @@ static func bind(env: Environment) -> void:
 	refresh()
 
 
+static func is_bound() -> bool:
+	return _env != null
+
+
 ## Мир закрыт: всё возвращается в нейтральное состояние (глобальные параметры шейдеров, окружение)
 static func release() -> void:
 	_reset_environment()
