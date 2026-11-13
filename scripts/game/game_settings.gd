@@ -73,6 +73,9 @@ var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
 var shadows := DEFAULT_SHADOWS # только тени направленного света
 var lighting := DEFAULT_LIGHTING
+## 13.11: визуальный стиль (VisualStyle) — выключатель и сила 0..1 у каждого из четырёх эффектов
+var style_on: Dictionary = VisualStyle.DEFAULT_ON.duplicate()
+var style_amount: Dictionary = VisualStyle.DEFAULT_AMOUNT.duplicate()
 var volume := DEFAULT_VOLUME     # общая громкость 0..1 (шина Master)
 var day_minutes := DEFAULT_DAY_MINUTES  # минут настоящего времени на игровые сутки, 0 — время стоит
 var start_hour := DEFAULT_START_HOUR    # который час в мире при входе в игру
@@ -115,6 +118,9 @@ func _apply_config(cfg: ConfigFile) -> void:
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
+	for id: String in VisualStyle.EFFECTS:
+		style_on[id] = _flag(cfg, "style", id + "_on", style_on[id])
+		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
 	volume = _number(cfg, "sound", "volume", volume, 0.0, 1.0)
 	day_minutes = _number(cfg, "time", "day_minutes", day_minutes, 0.0, MAX_DAY_MINUTES)
 	start_hour = _number(cfg, "time", "start_hour", start_hour, 0.0, 23.0)
@@ -204,6 +210,8 @@ func reset_defaults() -> void:
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
 	particles = DEFAULT_PARTICLES
+	style_on = VisualStyle.DEFAULT_ON.duplicate()
+	style_amount = VisualStyle.DEFAULT_AMOUNT.duplicate()
 	volume = DEFAULT_VOLUME
 	day_minutes = DEFAULT_DAY_MINUTES
 	start_hour = DEFAULT_START_HOUR
@@ -227,6 +235,9 @@ func save_settings() -> Error:
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
 	cfg.set_value("view", "particles", particles)
+	for id: String in VisualStyle.EFFECTS:
+		cfg.set_value("style", id + "_on", style_on[id])
+		cfg.set_value("style", id + "_amount", style_amount[id])
 	cfg.set_value("sound", "volume", volume)
 	cfg.set_value("time", "day_minutes", day_minutes)
 	cfg.set_value("time", "start_hour", start_hour)
@@ -250,7 +261,8 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting, particles = particles}
+		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting, particles = particles,
+		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
 
 func set_display_state(state: Dictionary) -> void:
@@ -264,6 +276,9 @@ func set_display_state(state: Dictionary) -> void:
 	flora = state.get("flora", flora)
 	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
+	for id: String in VisualStyle.EFFECTS:
+		style_on[id] = bool(state.get("style_on", style_on).get(id, style_on[id]))
+		style_amount[id] = clampf(float(state.get("style_amount", style_amount).get(id, style_amount[id])), 0.0, 1.0)
 
 
 ## Час, в который начинается мир: выбранный игроком или случайный

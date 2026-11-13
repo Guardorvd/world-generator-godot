@@ -18,6 +18,9 @@ var draw: OptionButton
 var lighting: OptionButton
 var flora: OptionButton # 16.0: качество растительности
 var particles: OptionButton # 11.11: частицы окружения
+var style_on := {}      # 13.11: «Визуальный стиль» — CheckBox и HSlider у каждого эффекта VisualStyle.EFFECTS
+var style_amount := {}
+var style_value := {}
 var apply_button: Button
 var dialog: ConfirmationDialog
 var _host: Node
@@ -54,6 +57,16 @@ func setup(host: Node) -> void:
 	if flora.item_count == 0:
 		for level: Dictionary in GameSettings.FLORA_LEVELS:
 			flora.add_item(level.title.capitalize())
+	for id: String in VisualStyle.EFFECTS:
+		var node_id: String = id.capitalize()
+		style_on[id] = host.get_node("%%Style%sOn" % node_id)
+		style_amount[id] = host.get_node("%%Style%sAmount" % node_id)
+		style_value[id] = host.get_node("%%Style%sValue" % node_id)
+		(style_on[id] as CheckBox).text = VisualStyle.TITLES[id]
+		(style_on[id] as CheckBox).tooltip_text = VisualStyle.HINTS[id]
+		(style_amount[id] as HSlider).tooltip_text = VisualStyle.HINTS[id]
+		(style_on[id] as CheckBox).toggled.connect(func(_on: bool) -> void: _style_changed())
+		(style_amount[id] as HSlider).value_changed.connect(func(_v: float) -> void: _style_changed())
 	apply_button.pressed.connect(preview)
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
@@ -88,6 +101,12 @@ func sync() -> void:
 	flora.select(state.flora)
 	lighting.select(state.lighting)
 	particles.select(state.particles)
+	for id: String in VisualStyle.EFFECTS:
+		(style_on[id] as CheckBox).set_pressed_no_signal(state.style_on[id])
+		(style_amount[id] as HSlider).set_value_no_signal(state.style_amount[id])
+		(style_amount[id] as HSlider).editable = state.style_on[id]
+		_show_style_value(id)
+	VisualStyle.configure(state.style_on, state.style_amount)
 	_update_apply()
 
 ## Режим окна и разрешение в списках: сохранённые или предложенные (сброс), без применения
@@ -129,6 +148,21 @@ func apply_graphics() -> void:
 	GameContext.scope.settings.set_display_state(state)
 	_resize()
 	_host._settings_changed()
+
+## Визуальный стиль: выключатель и сила каждого эффекта сразу в GameSettings, на экран (VisualStyle) и на диск
+func _style_changed() -> void:
+	var state := GameContext.scope.settings.display_state()
+	for id: String in VisualStyle.EFFECTS:
+		state.style_on[id] = (style_on[id] as CheckBox).button_pressed
+		state.style_amount[id] = (style_amount[id] as HSlider).value
+		(style_amount[id] as HSlider).editable = state.style_on[id]
+		_show_style_value(id)
+	GameContext.scope.settings.set_display_state(state)
+	VisualStyle.configure(state.style_on, state.style_amount)
+	_host._settings_changed()
+
+func _show_style_value(id: String) -> void:
+	(style_value[id] as Label).text = "%d %%" % roundi((style_amount[id] as HSlider).value * 100.0) if (style_on[id] as CheckBox).button_pressed else "выкл."
 
 ## Пробный видеорежим: прежний вернётся, если не подтвердить
 func preview() -> void:

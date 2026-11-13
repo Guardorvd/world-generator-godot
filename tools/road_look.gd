@@ -7,6 +7,7 @@ extends SceneTree
 ## --shader — другой код шейдера рельефа (например, прошлая версия) для сравнения «было | стало».
 ## --obstacles — 11.6: на полотне ветка, камни, бревно поперёк и валун у края (модели подстилки, цвет вершин).
 ## --shift x,z — 12.3: сдвиг участка в мире (м): поля RoadBump (разбитые участки, колеи, ямы) — в мировых координатах.
+## --style <сила> — 13.11: глобальный параметр «Планы» визуального стиля (resources/depth_tone.gdshaderinc), читаемость полотна с ним и без.
 ## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
@@ -43,6 +44,10 @@ func _initialize() -> void:
 	out = _arg("out", OS.get_user_data_dir().path_join("road_look"))
 	DirAccess.make_dir_recursive_absolute(out)
 	shader_path = _arg("shader", "")
+	# 13.11: --style <сила 0..1> — «Планы» визуального стиля (тон по расстоянию в шейдере рельефа) на этом участке
+	var style_strength := float(_arg("style", "0"))
+	if style_strength > 0.0:
+		RenderingServer.global_shader_parameter_set("style_depth", Vector4(style_strength, style_strength, style_strength, 1.0))
 	measure = "--measure" in OS.get_cmdline_user_args()
 	if measure:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)

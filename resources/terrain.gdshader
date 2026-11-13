@@ -38,6 +38,7 @@ const float ROCK_FROM = 0.30;     // 1 - нормаль.y: с какого ук�
 const float ROCK_TO = 0.46;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
+#include "res://resources/depth_tone.gdshaderinc"
 
 varying float surface_cloud;
 varying vec3 wpos;
@@ -630,7 +631,7 @@ void fragment() {
 	if (ground_n > 0.0) {
 		detail_n = mix(detail_n, normalize(vec3(ground_tilt, 1.0)) * 0.5 + 0.5, ground_n * 0.8);
 	}
-	ALBEDO = col * (1.0 + v);
+	ALBEDO = depth_tone(col * (1.0 + v), length(VERTEX));
 	surface_cloud = cloud_light(p);
 	ROUGHNESS = 1.0;
 	SPECULAR = 0.3;

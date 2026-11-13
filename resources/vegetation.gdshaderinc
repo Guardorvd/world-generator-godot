@@ -50,6 +50,7 @@ const float LOD2_D = 200.0;
 const float LOD2_BAND = 56.0;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
+#include "res://resources/depth_tone.gdshaderinc"
 
 const vec2 WIND_DIR = vec2(0.82, 0.57);
 
@@ -242,6 +243,8 @@ void fragment() {
 		NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2));
 	}
 #endif
+	// Визуальный стиль: тот же тон по расстоянию, что у рельефа и дальнего леса (resources/depth_tone.gdshaderinc).
+	ALBEDO = depth_tone(ALBEDO, length(VERTEX));
 	AO = v_ao;
 	AO_LIGHT_AFFECT = 0.0;
 	BACKLIGHT = col * translucency * mix(1.0, 0.28, vegetation_night);

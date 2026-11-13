@@ -3,6 +3,7 @@ render_mode cull_back, specular_disabled, shadows_disabled;
 global uniform vec2 veg_center;
 global uniform vec4 distant_vegetation; // near end, near fade band, far end, enabled
 #include "res://resources/cloud_shadow.gdshaderinc"
+#include "res://resources/depth_tone.gdshaderinc"
 varying float distance_to_player;
 varying float canopy_light;
 varying float crown_height;
@@ -25,7 +26,7 @@ void fragment() {
 	float far_keep = 1.0 - smoothstep(distant_vegetation.z - 180.0, distant_vegetation.z, distance_to_player);
 	if (distant_vegetation.w < 0.5 || dither < near_keep || dither >= far_keep) discard;
 	// Mean leaf-texture reflectance: plain instance tint alone makes solid crowns too bright.
-	ALBEDO = COLOR.rgb * 0.5 * canopy_light * mix(0.62, 1.0, smoothstep(-1.0, 0.8, crown_height));
+	ALBEDO = depth_tone(COLOR.rgb * 0.5 * canopy_light * mix(0.62, 1.0, smoothstep(-1.0, 0.8, crown_height)), length(VERTEX));
 	ROUGHNESS = 1.0;
 	AO = mix(0.65, 1.0, smoothstep(-0.8, 0.6, crown_height));
 }

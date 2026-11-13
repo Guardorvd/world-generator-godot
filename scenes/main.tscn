@@ -818,6 +818,123 @@ layout_mode = 2
 text = "Тени"
 tooltip_text = "Тени солнца и луны. Контактное затенение зависит от качества освещения."
 
+[node name="StyleTitle" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+text = "Визуальный стиль"
+
+[node name="StyleGradeRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="StyleGradeOn" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGradeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+button_pressed = true
+text = "Grade"
+
+[node name="StyleGradeAmount" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGradeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="StyleGradeValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGradeRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 0)
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+horizontal_alignment = 2
+text = "50 %"
+
+[node name="StyleDepthRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="StyleDepthOn" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleDepthRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+button_pressed = true
+text = "Depth"
+
+[node name="StyleDepthAmount" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleDepthRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="StyleDepthValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleDepthRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 0)
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+horizontal_alignment = 2
+text = "50 %"
+
+[node name="StyleHighlightsRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="StyleHighlightsOn" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleHighlightsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+button_pressed = true
+text = "Highlights"
+
+[node name="StyleHighlightsAmount" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleHighlightsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="StyleHighlightsValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleHighlightsRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 0)
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+horizontal_alignment = 2
+text = "50 %"
+
+[node name="StyleGrainRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="StyleGrainOn" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGrainRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(230, 0)
+layout_mode = 2
+button_pressed = true
+text = "Grain"
+
+[node name="StyleGrainAmount" type="HSlider" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGrainRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(120, 24)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 4
+max_value = 1.0
+step = 0.05
+value = 0.5
+
+[node name="StyleGrainValue" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/StyleGrainRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(52, 0)
+layout_mode = 2
+theme_type_variation = &"SubtitleLabel"
+horizontal_alignment = 2
+text = "50 %"
+
 [node name="QualityHint" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 custom_minimum_size = Vector2(520, 0)
 layout_mode = 2

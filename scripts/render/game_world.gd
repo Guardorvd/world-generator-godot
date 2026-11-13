@@ -379,6 +379,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	camera.add_child(StyleGrain.new()) # 13.11: зерно визуального стиля, рисуется только в 3D-мире
 	local_mist = preload("res://scripts/render/local_mist.gd").new()
 	add_child(local_mist)
 	local_mist.setup(world, heights)
@@ -469,6 +470,7 @@ func _photo_capturing(on: bool) -> void:
 func _exit_tree() -> void:
 	if day != null:
 		RenderingServer.global_shader_parameter_set("vegetation_night", 0.0)
+		VisualStyle.release() # окружение мира закрыто; глобальные параметры стиля нейтральны для других сцен
 	if heights != null and heights.obstacles != null:
 		heights.obstacles.finish()
 	if _travel_task != -1:
@@ -553,6 +555,9 @@ func _mark(key: String, since: int) -> int:
 func _apply_shadows() -> void:
 	preload("res://scripts/render/lighting_quality.gd").apply(
 		$WorldEnvironment.environment, $Sun, services.settings.lighting, services.settings.shadows)
+	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
+	VisualStyle.bind($WorldEnvironment.environment)
+	VisualStyle.configure(services.settings.style_on, services.settings.style_amount)
 
 
 func capture_mouse() -> void:
