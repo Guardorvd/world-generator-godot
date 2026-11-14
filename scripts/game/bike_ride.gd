@@ -592,7 +592,7 @@ func _slope(heights: Heightfield) -> float:
 func _ground_slope(heights: Heightfield) -> float:
 	var fx := -sin(heading) * HUB
 	var fz := -cos(heading) * HUB
-	return (heights.surface_at(x + fx, z + fz, y) - heights.surface_at(x - fx, z - fz, y)) / (2.0 * HUB)
+	return (_surface(heights, x + fx, z + fz, y) - _surface(heights, x - fx, z - fz, y)) / (2.0 * HUB)
 
 
 ## Высота опоры в (px, pz): середина между точками касания колёс. Велосипед перекрывает
@@ -606,12 +606,12 @@ func _contact(px: float, pz: float, heights: Heightfield) -> float:
 ## Высота земли под ступицей колеса как круга: ребро ступеньки или резкий гребень поднимают колесо
 ## плавно по дуге, а не проваливают в излом метровой сетки. На гладком рельефе равна высоте точки.
 func _wheel_ground(px: float, pz: float, heights: Heightfield, lift := 0.0) -> float:
-	var best := heights.surface_at(px, pz, y)
+	var best := _surface(heights, px, pz, y)
 	var dx := -sin(heading) * WHEEL_REACH
 	var dz := -cos(heading) * WHEEL_REACH
 	var arc := sqrt(WHEEL_R * WHEEL_R - WHEEL_REACH * WHEEL_REACH) - WHEEL_R
-	best = maxf(best, heights.surface_at(px + dx, pz + dz, y) + arc)
-	best = maxf(best, heights.surface_at(px - dx, pz - dz, y) + arc)
+	best = maxf(best, _surface(heights, px + dx, pz + dz, y) + arc)
+	best = maxf(best, _surface(heights, px - dx, pz - dz, y) + arc)
 	if contact_model and heights.obstacles != null:
 		best += maxf(0.0, heights.obstacles.wheel_support(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX) - best - lift)
 	return best
@@ -628,12 +628,12 @@ func _read_surface(heights: Heightfield, dt: float) -> void:
 		vertical_g = lerpf(vertical_g, 0.0, Util.damp(G_RELAX_AIR, dt))
 		return
 	var ahead := Vector2(-sin(heading), -cos(heading)) * PROFILE_SPAN
-	var g0 := heights.surface_at(x, z, y)
-	var curve := (heights.surface_at(x + ahead.x, z + ahead.y, y) + heights.surface_at(x - ahead.x, z - ahead.y, y) - 2.0 * g0) / (PROFILE_SPAN * PROFILE_SPAN)
+	var g0 := _surface(heights, x, z, y)
+	var curve := (_surface(heights, x + ahead.x, z + ahead.y, y) + _surface(heights, x - ahead.x, z - ahead.y, y) - 2.0 * g0) / (PROFILE_SPAN * PROFILE_SPAN)
 	var goal := clampf(speed * speed * curve / GameConfig.GRAVITY, G_MIN, G_MAX)
 	vertical_g = lerpf(vertical_g, goal, Util.damp(G_RESPONSE, dt))
 	var right := Vector2(cos(heading), -sin(heading)) * BANK_SPAN
-	var cross := (heights.surface_at(x + right.x, z + right.y, y) - heights.surface_at(x - right.x, z - right.y, y)) / (2.0 * BANK_SPAN)
+	var cross := (_surface(heights, x + right.x, z + right.y, y) - _surface(heights, x - right.x, z - right.y, y)) / (2.0 * BANK_SPAN)
 	bank_slope = lerpf(bank_slope, clampf(cross, -BANK_SLOPE_MAX, BANK_SLOPE_MAX), Util.damp(BANK_RESPONSE, dt))
 
 
@@ -694,7 +694,7 @@ func _step_pump(dt: float, throttle: float, turn: float, hop: bool, heights: Hei
 			if not heights.known(at.x, at.y) or is_finite(heights.deck_at(at.x, at.y, INF)) or heights.immersion_at(at.x, at.y, y) > 0.03:
 				clear = false
 				break
-			levels.append(heights.surface_at(at.x, at.y, y))
+			levels.append(_surface(heights, at.x, at.y, y))
 		if clear:
 			var previous := 0.0
 			for i in 4:
@@ -755,6 +755,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	var sums := PackedFloat32Array()
 	sums.resize(TELEMETRY)
 	var done := 0.0
+	_surf_memo.clear()
+	_surf_at.clear()
+	_surf_val.clear()
+	_surf_plain = heights.get_script() == _HEIGHTFIELD
 	for i in ticks:
 		_fit_memo_on = true
 		_fit_memo[0] = NAN # новый подшаг: препятствия и рельеф могли смениться между тактами
@@ -1306,8 +1310,8 @@ func _step_height(g: float, hop: bool, dt: float, heights: Heightfield) -> void:
 			# При 120 Гц шов даёт вдвое больший скачок (g-y)/dt, чем при 60 Гц.
 			# Ограничиваем подъём уклоном на базе колёс, сохраняя импульс настоящего склона.
 			var gradient := Vector2(
-				(heights.surface_at(x + HUB, z, g) - heights.surface_at(x - HUB, z, g)) / (2.0 * HUB),
-				(heights.surface_at(x, z + HUB, g) - heights.surface_at(x, z - HUB, g)) / (2.0 * HUB))
+				(_surface(heights, x + HUB, z, g) - _surface(heights, x - HUB, z, g)) / (2.0 * HUB),
+				(_surface(heights, x, z + HUB, g) - _surface(heights, x, z - HUB, g)) / (2.0 * HUB))
 			gv = minf(gv, maxf(0.0, gradient.dot(horizontal_velocity())))
 			vy = gv
 			y = g
@@ -1326,8 +1330,8 @@ func _wheel_road(heights: Heightfield, px: float, pz: float, surf: int, weight: 
 			grade = contact.grade
 		else:
 			# Older streamed patches have the same ground but no gradient in their contact record.
-			grade = Vector2(heights.surface_at(px + 0.5, pz, y) - heights.surface_at(px - 0.5, pz, y),
-				heights.surface_at(px, pz + 0.5, y) - heights.surface_at(px, pz - 0.5, y)).length()
+			grade = Vector2(_surface(heights, px + 0.5, pz, y) - _surface(heights, px - 0.5, pz, y),
+				_surface(heights, px, pz + 0.5, y) - _surface(heights, px, pz - 0.5, y)).length()
 	var origin := Vector2(heights.world.world_origin) * GameConfig.TILE
 	return Vector2(RoadBump.height_params(px + origin.x, pz + origin.y, bump, grade, across) * weight, weight)
 
@@ -1349,8 +1353,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	var gf := _wheel_ground(x + fx, z + fz, heights)
 	var gr := _wheel_ground(x - fx, z - fz, heights)
 	if contact_model and heights.obstacles != null:
-		var clear_f := lift_f > 0.0 and gf <= heights.surface_at(x + fx, z + fz, y) + lift_f + 0.01
-		var clear_r := lift_r > 0.0 and gr <= heights.surface_at(x - fx, z - fz, y) + lift_r + 0.01
+		var clear_f := lift_f > 0.0 and gf <= _surface(heights, x + fx, z + fz, y) + lift_f + 0.01
+		var clear_r := lift_r > 0.0 and gr <= _surface(heights, x - fx, z - fz, y) + lift_r + 0.01
 		var was_f := _on_f
 		_on_f = _wheel_hit(heights, x + fx, z + fz, gf, _sup_f, _on_f, tire_f, true, clear_f)
 		if crashed:
@@ -1366,8 +1370,8 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 	_sup_f = gf
 	_sup_r = gr
 	if contact_model:
-		gf -= minf(lift_f, maxf(0.0, gf - heights.surface_at(x + fx, z + fz, y)))
-		gr -= minf(lift_r, maxf(0.0, gr - heights.surface_at(x - fx, z - fz, y)))
+		gf -= minf(lift_f, maxf(0.0, gf - _surface(heights, x + fx, z + fz, y)))
+		gr -= minf(lift_r, maxf(0.0, gr - _surface(heights, x - fx, z - fz, y)))
 	# мелкие кочки (только вверх, колесо не тонет в земле): заднее колесо проходит ту же кочку на базу позже
 	var front := _wheel_road(heights, x + fx, z + fz, surf, path_weight, grade, across)
 	var rear := _wheel_road(heights, x - fx, z - fz, surf, path_weight, grade, across)
@@ -1449,7 +1453,7 @@ func _step_wheels(heights: Heightfield, rough: float, dt: float, surf := RoadSur
 ## зависит от скорости и частоты тактов. Переднее колесо, потерявшее вдоль рамы больше ENDO_DV (лёгкое — меньше),
 ## бросает седока через руль. Возвращает id препятствия под колесом (-1 — на земле).
 func _wheel_hit(heights: Heightfield, px: float, pz: float, support: float, before: float, on_id: int, load: float, front: bool, clear := false) -> int:
-	var ground := heights.surface_at(px, pz, y)
+	var ground := _surface(heights, px, pz, y)
 	if support <= ground + 0.005:
 		return -1
 	var hit := heights.obstacles.wheel_contact(px, pz, WHEEL_R, ForestObstacles.CLIMB_MAX, minf(before, support) if on_id >= 0 else ground)
@@ -1877,6 +1881,36 @@ func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield, a
 	return result
 
 
+## Высота опоры (Heightfield.surface_at) внутри одного внешнего шага: подшаги и фазы зовут её в одних и тех же
+## точках (опоры колёс до и после вертикали, края колёс, профиль), а мир между подшагами не меняется. 14.11: около
+## 40 % выборок такта — повторы. Ключ — точные координаты; высота ног (feet) влияет только через настил моста, поэтому
+## без мостов в клетке (и только у самого Heightfield, не у подменённых стендов) ответ годится для любых ног.
+const _HEIGHTFIELD := preload("res://scripts/game/heightfield.gd")
+var _surf_memo := {}                       # Vector2(x, z) -> номер записи (Vector2 — float32: точность сверяется ниже)
+var _surf_at := PackedFloat64Array()       # x, z, feet (NAN — для любых ног)
+var _surf_val := PackedFloat64Array()
+var _surf_plain := false
+
+
+func _surface(heights: Heightfield, px: float, pz: float, feet: float) -> float:
+	if not _fit_memo_on:
+		return heights.surface_at(px, pz, feet)
+	var key := Vector2(px, pz)
+	var at: Variant = _surf_memo.get(key)
+	if at != null:
+		var k: int = at
+		if _surf_at[k * 3] == px and _surf_at[k * 3 + 1] == pz and (is_nan(_surf_at[k * 3 + 2]) or _surf_at[k * 3 + 2] == feet):
+			return _surf_val[k]
+	var value := heights.surface_at(px, pz, feet)
+	var any_feet := _surf_plain and heights._cell_list(px, pz) == null
+	_surf_memo[key] = _surf_val.size()
+	_surf_at.append(px)
+	_surf_at.append(pz)
+	_surf_at.append(NAN if any_feet else feet)
+	_surf_val.append(value)
+	return value
+
+
 # Последняя примерка габарита внутри текущего подшага (см. fits); вне подшага не используется
 var _fit_memo_on := false
 var _fit_memo := PackedFloat64Array([NAN, NAN, NAN, NAN, NAN])
@@ -1908,8 +1942,8 @@ func _land(g: float, heights: Heightfield) -> void:
 	# поперёк по земле. Вектор в мировых X/Z: боком к склону важна траектория, а не курс рамы.
 	var forward := Vector2(-sin(heading), -cos(heading))
 	var right := Vector2(-forward.y, forward.x)
-	var gradient := forward * _slope(heights) + right * (heights.surface_at(x + right.x * HUB, z + right.y * HUB, g)
-		- heights.surface_at(x - right.x * HUB, z - right.y * HUB, g)) / (2.0 * HUB)
+	var gradient := forward * _slope(heights) + right * (_surface(heights, x + right.x * HUB, z + right.y * HUB, g)
+		- _surface(heights, x - right.x * HUB, z - right.y * HUB, g)) / (2.0 * HUB)
 	var normal := Vector3(-gradient.x, 1.0, -gradient.y).normalized()
 	var horizontal := horizontal_velocity()
 	var incoming := Vector3(horizontal.x, vy, horizontal.y)

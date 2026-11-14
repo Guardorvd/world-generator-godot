@@ -527,9 +527,10 @@ func level(s: Variant, t: float) -> float:
 func _cell_list(x: float, z: float) -> Variant:
 	var cx := floori(x / TILE)
 	var cz := floori(z / TILE)
-	if cx < 0 or cz < 0 or cx >= world.W or cz >= world.H:
+	var W := world.W # 14.11: world — свойство с getter, в самых частых выборках читается один раз
+	if cx < 0 or cz < 0 or cx >= W or cz >= world.H:
 		return _outer_cells.get(Vector2i(cx, cz)) # 13.9: мосты закреплённых областей
-	return _cells.get(cz * world.W + cx)
+	return _cells.get(cz * W + cx)
 
 
 ## Высота настила моста под точкой (x, z), если ноги на высоте feet могут на нём стоять, иначе -INF
@@ -881,9 +882,10 @@ static func _fit_banks_local(pts: Array, heights: PackedFloat32Array, lake: Pack
 ## Уровень на тех же треугольниках, которые WaterBuilder отдаёт GPU.
 ## -INF снаружи ленты, даже в клетке исходного стока.
 func river_level(x: float, z: float) -> float:
-	if x < 0.0 or z < 0.0 or x >= world.W * TILE or z >= world.H * TILE:
+	var w := world
+	if x < 0.0 or z < 0.0 or x >= w.W * TILE or z >= w.H * TILE:
 		return -INF
-	var cell := floori(z / TILE) * world.W + floori(x / TILE)
+	var cell := floori(z / TILE) * w.W + floori(x / TILE)
 	var top := -INF
 	for s: Dictionary in _river_cells.get(cell, _NO_SEGMENTS):
 		top = maxf(top, _water_triangle(x, z, s.a.left, s.a.right, s.b.left))
@@ -894,20 +896,27 @@ func river_level(x: float, z: float) -> float:
 func lake_level(x: float, z: float) -> float:
 	var cx := floori(x / TILE - 0.5)
 	var cy := floori(z / TILE - 0.5)
-	if cx < 0 or cy < 0 or cx >= world.W - 1 or cy >= world.H - 1:
+	var w := world
+	var W := w.W
+	if cx < 0 or cy < 0 or cx >= W - 1 or cy >= w.H - 1:
 		return -INF
-	var a := cy * world.W + cx
+	var a := cy * W + cx
 	var top := -INF
-	# четыре соседние клетки без нового массива на вызов: функция в самом частом пути проверки воды
-	if world.lake[a] != 0:
-		top = world.filled[a] * HS - GameConfig.LAKE_DROP
-	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - GameConfig.LAKE_DROP)
-	a += world.W
-	if world.lake[a] != 0:
-		top = maxf(top, world.filled[a] * HS - GameConfig.LAKE_DROP)
-	if world.lake[a + 1] != 0:
-		top = maxf(top, world.filled[a + 1] * HS - GameConfig.LAKE_DROP)
+	# четыре соседние клетки без нового массива на вызов: функция в самом частом пути проверки воды.
+	# 14.11: lake и filled — свойства WorldData с getter (geology.*.data): каждое чтение было вызовом функции;
+	# массивы берутся один раз (копия не делается — общий буфер).
+	var lake := w.lake
+	if lake[a] != 0 or lake[a + 1] != 0 or lake[a + W] != 0 or lake[a + W + 1] != 0:
+		var filled := w.filled
+		if lake[a] != 0:
+			top = filled[a] * HS - GameConfig.LAKE_DROP
+		if lake[a + 1] != 0:
+			top = maxf(top, filled[a + 1] * HS - GameConfig.LAKE_DROP)
+		a += W
+		if lake[a] != 0:
+			top = maxf(top, filled[a] * HS - GameConfig.LAKE_DROP)
+		if lake[a + 1] != 0:
+			top = maxf(top, filled[a + 1] * HS - GameConfig.LAKE_DROP)
 	return top
 
 
@@ -926,12 +935,15 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
 	var w := world
-	if not raw and w.outer != null and not _in_plan(x, z):
-		var refined := OuterLand.refined_height_at(w.outer.get_ledger().get("regions", {}), x, z)
-		if refined != INF: return refined
 	var W := w.W
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5
+	# не в плане (то же условие, что _in_plan) — закреплённые области; в плане getter outer не нужен
+	if not raw and not (fx >= 0.0 and fz >= 0.0 and fx < W and fz < w.H):
+		var outer := w.outer
+		if outer != null:
+			var refined := OuterLand.refined_height_at(outer.get_ledger().get("regions", {}), x, z)
+			if refined != INF: return refined
 	# The two lookups below are RoadRefinement.height_at and the in-map branch of base_ground_at, written out: this is
 	# the most called function of the trail pipeline and of the ride (a call level less each).
 	if not raw and road_refinement != null:
@@ -1018,10 +1030,11 @@ static func outer_meters(h: float, freshwater := false) -> float:
 ## Известна ли земля в точке (x, z): на карте всегда, за краем — если OuterLand уже посчитал клетки вокруг.
 ## Без OuterLand (самопроверки) мир кончается в клетке от края карты, как до 1.9.5
 func known(x: float, z: float) -> bool:
-	var outer := world.outer
+	var w := world
+	var outer := w.outer
 	if outer == null:
-		return x >= TILE and z >= TILE and x <= (world.W - 1) * TILE and z <= (world.H - 1) * TILE
-	if x >= 0.0 and z >= 0.0 and x <= world.W * TILE and z <= world.H * TILE:
+		return x >= TILE and z >= TILE and x <= (w.W - 1) * TILE and z <= (w.H - 1) * TILE
+	if x >= 0.0 and z >= 0.0 and x <= w.W * TILE and z <= w.H * TILE:
 		return true # клетки сразу за краем — в кольце OuterLand, оно есть всегда
 	var i := floori(x / TILE - 0.5)
 	var j := floori(z / TILE - 0.5)
@@ -1040,14 +1053,16 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 		return 0.0
 	var tx := floori(x / TILE)
 	var tz := floori(z / TILE)
-	if tx < 0 or tz < 0 or tx >= world.W or tz >= world.H:
-		if world.outer == null:
+	var w := world
+	if tx < 0 or tz < 0 or tx >= w.W or tz >= w.H:
+		var outer := w.outer
+		if outer == null:
 			return 0.0
 		# 13.9: реки и озёра закреплённых областей; в остальном за краем только море
-		var level := world.outer.water_at(x, z)
+		var level := outer.water_at(x, z)
 		if level > -INF:
 			return maxf(0.0, level * HS - ground_at(x, z))
-		if world.outer.height(tx, tz) >= 0.0:
+		if outer.height(tx, tz) >= 0.0:
 			return 0.0
 		return maxf(0.0, -ground_at(x, z))
 	# Плоскость моря рисуется во всём мире; в углублениях ниже нуля она
@@ -1070,7 +1085,8 @@ func immersion_at(x: float, z: float, feet: float) -> float:
 func _in_plan(x: float, z: float) -> bool:
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5
-	return fx >= 0.0 and fz >= 0.0 and fx < world.W and fz < world.H
+	var w := world
+	return fx >= 0.0 and fz >= 0.0 and fx < w.W and fz < w.H
 
 
 func path_contact(x: float, z: float) -> Dictionary:
