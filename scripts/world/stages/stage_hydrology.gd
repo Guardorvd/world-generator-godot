@@ -10,13 +10,42 @@ const LAKE_MIN := 24
 const LAKE_MAX := 320
 const LAKE_DEPTH := 0.004
 const COAST_REACH := 32
+## Региональный характер местности (14.11.2026, GEO 18, docs/MACRO_GEOGRAPHY.md). Осадки здесь — основа
+## влажности почвы, поэтому через них без новых систем и без правки C# меняются биомы (StageClimate),
+## густота и состав леса (StageVegetation) и открытость породы (MountainSurface). Два плавных слагаемых
+## только из данных самой клетки (одинаково в плане и в OuterLand):
+##   REGION_* — медленная волна того же шума влажности: сухие и влажные края размером в несколько км;
+##              REGION_AMP — выраженность, REGION_SCALE — размер (больше — крупнее и реже);
+##   RELIEF_* — положение в рельефе: низины до ~25 м над морем влажнее, холмы и возвышенности 25–75 м суше.
+## Выше REGION_KEEP (≈ 85–110 м) поправка гаснет: горы, их биомы и скальные склоны как были. Ноль — прежние осадки.
+const REGION_SCALE := 640.0
+const REGION_OX := 57.3
+const REGION_OY := -21.9
+const REGION_AMP := 0.26
+const RELIEF_WET := 0.03
+const RELIEF_DRY := 0.08
+const REGION_KEEP := Vector2(0.32, 0.42)
+## false — прежние осадки (до 14.11.2026) для сравнения в стендах (tools/macro_geo_look.gd --no-character)
+static var regional := true
 
 
-static func rainfall(noise_value: float, distance_to_ocean: float) -> float:
+## noise_value — поле влажности (WorldData.NOISE_FIELDS.moist), region — медленная волна (region_field),
+## e — высота клетки в единицах WorldData.h (ниже нуля — море: поправки нет)
+static func rainfall(noise_value: float, distance_to_ocean: float, region: float, e: float) -> float:
 	# Compact coastal influence: OuterLand can reproduce it within its fixed halo.
 	var far := exp(-COAST_REACH / 30.0)
 	var coast := maxf(0.0, (exp(-distance_to_ocean / 30.0) - far) / (1.0 - far))
-	return clampf(0.66 + 0.48 * noise_value + 0.08 * coast, 0.12, 1.0)
+	var character := 0.0
+	if e > 0.0 and regional:
+		var lowland := 1.0 - smoothstep(0.02, 0.10, e)
+		var upland := smoothstep(0.10, 0.28, e)
+		character = (REGION_AMP * region + RELIEF_WET * lowland - RELIEF_DRY * upland) * (1.0 - smoothstep(REGION_KEEP.x, REGION_KEEP.y, e))
+	return clampf(0.66 + 0.48 * noise_value + 0.08 * coast + character, 0.12, 1.0)
+
+
+## Медленная волна влажности для rainfall по прямоугольнику клеток (тот же шум moist, свой масштаб и сдвиг)
+static func region_field(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel_rows := false) -> PackedFloat64Array:
+	return Parallel.fbm_rect(w.noise.moist, x0, y0, cw, ch, REGION_SCALE, 2, REGION_OX, REGION_OY, parallel_rows)
 
 
 ## lake_budget = 0 explicitly exercises a freshwater-free world; -1 selects by seed.
@@ -41,10 +70,19 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 	w.river_exits.clear()
 	w.dist_ocean = Grid.distance_field(w.W, w.H, w.ocean)
 	var noise_values := w.noise_field("moist")
+	var region := region_field(w, 0, 0, w.W, w.H, true)
+	var dist_ocean := w.dist_ocean
+	var h := w.h
+	var W := w.W
+	# Полосами на всех ядрах: по клетке независимо, результат тот же, что подряд
 	var rain := PackedFloat32Array()
-	rain.resize(w.N)
-	for i in w.N:
-		rain[i] = rainfall(noise_values[i], w.dist_ocean[i])
+	for part: PackedFloat32Array in Parallel.bands(w.H, func(y0: int, y1: int) -> PackedFloat32Array:
+		var out := PackedFloat32Array()
+		out.resize((y1 - y0) * W)
+		for i in range(y0 * W, y1 * W):
+			out[i - y0 * W] = rainfall(noise_values[i], dist_ocean[i], region[i], h[i])
+		return out):
+		rain.append_array(part)
 	w.rain = rain
 	var budget_rng := WGRandom.new(WGRandom.derive(w.seed_num, "water.rare_lakes"))
 	var want := mini(2, floori(budget_rng.next_float() * 3.0)) if lake_budget < 0 else clampi(lake_budget, 0, 2)

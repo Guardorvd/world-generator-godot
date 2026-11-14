@@ -27,7 +27,7 @@ const EXT := ".wgc"
 ## Общая версия — контракт WorldData, численные правила и единицы, влияющие на все слои.
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
-const SCHEMA_GEO_VERSION := 17 # start area picked over the whole 768 plan (less ocean), docs/MACRO_GEOGRAPHY.md
+const SCHEMA_GEO_VERSION := 18 # 17: start area over the whole 768 plan; 18: regional moisture character (docs/MACRO_GEOGRAPHY.md)
 const SCHEMA_TRAILS_VERSION := 27 # longitudinal tread widths and section-derived coverage
 const SCHEMA_NATURE_VERSION := 14 # tall forest: age classes in obj_v, new tree sizes and spacing
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material

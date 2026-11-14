@@ -8,6 +8,8 @@ extends SceneTree
 ##   -- --seeds a,b,c   свои сиды (по умолчанию CONTROL)
 ##   -- --quick [N]     только оценка океана по сетке 48 × 48 без слоя склонов на N сидах (секунды)
 ##   -- --legacy        прежний выбор стартовой области (StageRelief.legacy_start, до 14.11.2026)
+##   -- --no-character  прежние осадки без регионального характера (StageHydrology.regional = false)
+##   -- --moist         на листе вместо биомов влажность суши ниже гор (охра — сухо, сине-зелёный — влажно)
 ##   -- --tag <имя>     суффикс файлов, например _old
 ## Лимит 300 с: география одного сида на втором ПК — секунды.
 
@@ -41,6 +43,7 @@ func _arg(name: String, fallback: String = "") -> String:
 func _run() -> void:
 	var args := OS.get_cmdline_user_args()
 	StageRelief.legacy_start = args.has("--legacy")
+	StageHydrology.regional = not args.has("--no-character")
 	var tag := _arg("--tag", "")
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	if args.has("--quick"):
@@ -53,10 +56,11 @@ func _run() -> void:
 	for seed_text in seeds:
 		var t := Time.get_ticks_usec()
 		var w := WorldGenerator._geography(seed_text, WorldGenerator.PLAN_SIZE)
+		var total_ms := (Time.get_ticks_usec() - t) / 1000.0
 		var row := stats(w)
-		row.total_ms = (Time.get_ticks_usec() - t) / 1000.0
+		row.total_ms = total_ms
 		rows.append(row)
-		maps.append(map_image(w))
+		maps.append(map_image(w, args.has("--moist")))
 		_print_row(row)
 	var sheet := _sheet(maps)
 	sheet.save_png(ProjectSettings.globalize_path(OUT.path_join("macro_geo%s.png" % tag)))
@@ -157,7 +161,55 @@ static func stats(w: WorldData) -> Dictionary:
 	for g: String in groups:
 		gl[g] = snappedf(100.0 * groups[g] / maxf(1, land), 0.1)
 	row.biomes = gl
+	row.characters = characters(w)
 	return row
+
+
+## Характеры местности (грубая классификация клеток суши по готовым полям, только для сравнения до/после):
+## горы (выше 104 м), влажные низины, сухие каменистые склоны, лесостепь (сухо, редкий лес/луг),
+## каменистый лес, лесистые холмы, лесные низины и долины. Плюс перцентили влажности суши ниже гор
+static func characters(w: WorldData) -> Dictionary:
+	var rock: PackedByteArray = preload("res://scripts/world/mountain_surface.gd").field(w.elev, w.slope, w.moist)
+	var names := ["mountain", "wet_lowland", "dry_rocky", "forest_steppe", "rocky_forest", "forest_hills", "forest_lowland", "other"]
+	var counts := {}
+	for k: String in names:
+		counts[k] = 0
+	var land := 0
+	var moist := PackedFloat32Array()
+	for i in w.N:
+		if w.ocean[i] != 0 or w.lake[i] != 0:
+			continue
+		land += 1
+		var e := w.elev[i]
+		var m := w.moist[i]
+		var b := int(w.biome[i])
+		var ex := rock[i] / 255.0
+		var wooded := b == Biomes.FOREST or b == Biomes.TAIGA or b == Biomes.JUNGLE
+		var k := "other"
+		if e >= 0.4:
+			k = "mountain"
+		elif b == Biomes.SWAMP or (e < 0.12 and m >= 0.78):
+			k = "wet_lowland"
+		elif m < 0.5 and (ex > 0.25 or w.slope[i] > 0.5) and e >= 0.06:
+			k = "dry_rocky"
+		elif m < 0.55 and (wooded or b == Biomes.GRASS or b == Biomes.STEPPE):
+			k = "forest_steppe"
+		elif wooded and ex > 0.12:
+			k = "rocky_forest"
+		elif wooded and e >= 0.08:
+			k = "forest_hills"
+		elif wooded:
+			k = "forest_lowland"
+		counts[k] += 1
+		if e < 0.4 and i % 7 == 0:
+			moist.append(m)
+	var out := {}
+	for k: String in names:
+		out[k] = snappedf(100.0 * counts[k] / maxf(1, land), 0.1)
+	moist.sort()
+	if moist.size() > 10:
+		out.moist_p = [snappedf(moist[moist.size() / 10], 0.01), snappedf(moist[moist.size() / 2], 0.01), snappedf(moist[moist.size() * 9 / 10], 0.01)]
+	return out
 
 
 ## Клетки «океана», не связанные с краем плана: замкнутые понижения ниже нуля
@@ -190,8 +242,8 @@ static func _closed_ocean(w: WorldData) -> int:
 	return closed
 
 
-## Карта: цвет биома с отмывкой с северо-запада, 1 пиксель = 3 клетки
-static func map_image(w: WorldData) -> Image:
+## Карта: цвет биома с отмывкой с северо-запада, 1 пиксель = 3 клетки; moist_view — влажность суши ниже гор
+static func map_image(w: WorldData, moist_view := false) -> Image:
 	var s := 3
 	var side := w.W / s
 	var img := Image.create(side, side, false, Image.FORMAT_RGB8)
@@ -202,6 +254,10 @@ static func map_image(w: WorldData) -> Image:
 			var i := y * w.W + x
 			var c: Array = Biomes.LIST[w.biome[i]].color
 			var col := Color8(c[0], c[1], c[2])
+			if moist_view and w.ocean[i] == 0 and w.lake[i] == 0 and w.elev[i] < 0.4:
+				# влажность суши ниже гор: сухо — охра, середина — зелень, влажно — сине-зелёный
+				var m := w.moist[i]
+				col = Color(0.78, 0.62, 0.32).lerp(Color(0.3, 0.55, 0.22), smoothstep(0.3, 0.62, m)).lerp(Color(0.12, 0.42, 0.45), smoothstep(0.66, 0.9, m))
 			if w.ocean[i] == 0:
 				var dx := w.elev[i + 1] - w.elev[i - 1]
 				var dy := w.elev[i + w.W] - w.elev[i - w.W]
@@ -228,6 +284,7 @@ func _print_row(r: Dictionary) -> void:
 	print("%-12s океан %5.1f %% (замкнутый %.1f)  озёр %d  сдвиг (%d, %d)  горы m=%s" % [r.seed, r.ocean, r.ocean_closed, r.lakes, r.macro[0], r.macro[1], r.mountain])
 	print("    высоты суши %s" % r.heights)
 	print("    биомы суши  %s" % r.biomes)
+	print("    характеры   %s" % r.characters)
 	print("    этапы мс: рельеф %.0f, океан %.0f, озёра %.0f, климат %.0f; всего %.0f" % [sm.get("relief", 0.0), sm.get("ocean", 0.0), sm.get("hydrology", 0.0), sm.get("climate", 0.0), r.total_ms])
 
 
@@ -235,14 +292,24 @@ func _print_mean(rows: Array) -> void:
 	var ocean := 0.0
 	var high := 0.0
 	var relief := 0.0
+	var hydro := 0.0
 	var g := {}
+	var c := {}
 	for r: Dictionary in rows:
 		ocean += r.ocean
 		high += r.heights["150"] + r.heights["260"]
 		relief += r.stages_ms.get("relief", 0.0)
+		hydro += r.stages_ms.get("hydrology", 0.0)
 		for k: String in r.biomes:
 			g[k] = g.get(k, 0.0) + r.biomes[k]
+		for k: String in r.characters:
+			if k != "moist_p":
+				c[k] = c.get(k, 0.0) + r.characters[k]
 	var n := float(rows.size())
 	for k: String in g:
 		g[k] = snappedf(g[k] / n, 0.1)
-	print("Среднее по %d сидам: океан %.1f %%, суша выше 150 м %.1f %%, биомы %s, рельеф %.0f мс" % [n, ocean / n, high / n, g, relief / n])
+	for k: String in c:
+		c[k] = snappedf(c[k] / n, 0.1)
+	print("Среднее по %d сидам: океан %.1f %%, суша выше 150 м %.1f %%, рельеф %.0f мс, озёра/осадки %.0f мс" % [n, ocean / n, high / n, relief / n, hydro / n])
+	print("    биомы %s" % g)
+	print("    характеры %s" % c)
