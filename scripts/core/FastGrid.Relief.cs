@@ -6,7 +6,7 @@ public partial class FastGrid
 	/// <summary>Масштаб и вклад шума материков: копия StageRelief.MACRO, MACRO_AMP, MACRO_LIFT.</summary>
 	private const double Macro = 1400.0;
 	private const double MacroAmp = 1.2;
-	private const double MacroLift = 0.25;
+	private const double MacroLift = 0.30; // 0.25 до 14.11.2026 (GEO 19)
 	/// <summary>Сдвиг шума материков вверх (больше суши): копия StageRelief.LAND_BIAS.</summary>
 	private const double LandBias = 0.18;
 
