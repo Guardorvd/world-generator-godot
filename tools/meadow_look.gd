@@ -160,6 +160,22 @@ func _process(delta: float) -> bool:
 		calls += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 		prims += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
 	last_us = now
+	if Dev.arg("shot-moving") != "" and elapsed >= float(Dev.arg("shot-moving")) and not results.has("moving_shot"):
+		# 14.11.2026: снимок прямо на скорости (проверка «дернина не появляется при езде»)
+		results.moving_shot = true
+		var near_n := 0
+		if veg.carpet != null:
+			var live := veg.carpet.mm.buffer
+			for n in veg.carpet.count:
+				var at := n * VegetationLayer.STRIDE
+				if Vector2(live[at + 3] - x, live[at + 11] - z).length() < 10.0:
+					near_n += 1
+			results.carpet_total_moving = veg.carpet.count
+			results.carpet_job_ms = [veg.carpet.last_job_ms, veg.carpet.max_job_ms]
+			results.carpet_lead_m = veg.carpet.stream.lead().length()
+		results.carpet_near_10m_moving = near_n
+		results.coverage_lag_m = veg.coverage_lag(Vector2(x, z))
+		root.get_texture().get_image().save_png(ProjectSettings.globalize_path(OUT).path_join("%s_moving.png" % tag))
 	if elapsed < 9.0:
 		return false
 	var f := frames.duplicate()
@@ -201,15 +217,17 @@ func _counts() -> Dictionary:
 	out.carpet_triangles = 0
 	out.carpet_errors = 0
 	if veg.carpet != null:
-		out.carpet = veg._carpet_n
-		out.carpet_triangles = veg._carpet_n * veg.carpet.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3
-		for n in veg._carpet_n:
+		var live := veg.carpet.mm.buffer
+		out.carpet = veg.carpet.count
+		out.carpet_triangles = veg.carpet.count * veg.carpet.mm.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3
+		out.carpet_capped = veg.carpet.capped
+		for n in veg.carpet.count:
 			var at := n * VegetationLayer.STRIDE
-			var x := veg.carpet_buf[at + 3]
-			var z := veg.carpet_buf[at + 11]
-			var y := veg.carpet_buf[at + 7]
+			var x := live[at + 3]
+			var z := live[at + 11]
+			var y := live[at + 7]
 			var k := clampi(int(z / GameConfig.TILE), 0, world.H - 1) * world.W + clampi(int(x / GameConfig.TILE), 0, world.W - 1)
-			if absf(y + 0.02 - heights.ground_at(x, z)) > 0.001 or heights.depth_at(x, z) > 0.0 or world.path_mask[k] >= 2:
+			if absf(y + 0.015 - heights.ground_at(x, z)) > 0.001 or heights.depth_at(x, z) > 0.0 or world.path_mask[k] >= 2:
 				out.carpet_errors += 1
 	var total := 0
 	for n in veg.understory.size():

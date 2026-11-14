@@ -60,6 +60,21 @@ const PARTICLE_LEVELS := [
 	{title = "много", density = 1.0},
 ]
 const DEFAULT_PARTICLES := 2
+# 14.11.2026: дернина — плотный ковёр мелкой травы у игрока (GroundCarpet): густота и дальность отдельно.
+# Густота — доля занятых мест (0 — слой выключен), дальность — где ковёр растворяется, м.
+const CARPET_DENSITY := [
+	{title = "выключена", scale = 0.0},
+	{title = "редкая", scale = 0.45},
+	{title = "средняя", scale = 0.7},
+	{title = "густая", scale = 1.0},
+]
+const DEFAULT_CARPET_DENSITY := 3
+const CARPET_RANGE := [
+	{title = "близко", meters = 10.0},
+	{title = "средне", meters = 15.0},
+	{title = "далеко", meters = 22.0},
+]
+const DEFAULT_CARPET_RANGE := 2
 
 var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y
@@ -74,6 +89,8 @@ var vsync := true
 var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
 var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
+var carpet_density := DEFAULT_CARPET_DENSITY # номер в CARPET_DENSITY
+var carpet_range := DEFAULT_CARPET_RANGE     # номер в CARPET_RANGE
 var shadows := DEFAULT_SHADOWS # только тени направленного света
 var tree_garlands := DEFAULT_TREE_GARLANDS # парковые гирлянды вдоль отдельных дорог и полян
 var lighting := DEFAULT_LIGHTING
@@ -126,6 +143,8 @@ func _apply_config(cfg: ConfigFile) -> void:
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
+	carpet_density = roundi(_number(cfg, "view", "carpet_density", carpet_density, 0, CARPET_DENSITY.size() - 1))
+	carpet_range = roundi(_number(cfg, "view", "carpet_range", carpet_range, 0, CARPET_RANGE.size() - 1))
 	for id: String in VisualStyle.EFFECTS:
 		style_on[id] = _flag(cfg, "style", id + "_on", style_on[id])
 		style_amount[id] = _number(cfg, "style", id + "_amount", style_amount[id], 0.0, 1.0)
@@ -221,6 +240,8 @@ func reset_defaults() -> void:
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
 	particles = DEFAULT_PARTICLES
+	carpet_density = DEFAULT_CARPET_DENSITY
+	carpet_range = DEFAULT_CARPET_RANGE
 	style_on = VisualStyle.DEFAULT_ON.duplicate()
 	style_amount = VisualStyle.DEFAULT_AMOUNT.duplicate()
 	volume = DEFAULT_VOLUME
@@ -248,6 +269,8 @@ func save_settings() -> Error:
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
 	cfg.set_value("view", "particles", particles)
+	cfg.set_value("view", "carpet_density", carpet_density)
+	cfg.set_value("view", "carpet_range", carpet_range)
 	for id: String in VisualStyle.EFFECTS:
 		cfg.set_value("style", id + "_on", style_on[id])
 		cfg.set_value("style", id + "_amount", style_amount[id])
@@ -276,7 +299,7 @@ func apply_window() -> void:
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
 		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
-		fog_quality = fog_quality, particles = particles,
+		fog_quality = fog_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
 		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
 
@@ -291,6 +314,8 @@ func set_display_state(state: Dictionary) -> void:
 	draw = state.draw
 	flora = state.get("flora", flora)
 	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)
+	carpet_density = clampi(state.get("carpet_density", carpet_density), 0, CARPET_DENSITY.size() - 1)
+	carpet_range = clampi(state.get("carpet_range", carpet_range), 0, CARPET_RANGE.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
 	fog_quality = clampi(state.get("fog_quality", fog_quality), 0, FOG_QUALITY_LEVELS.size() - 1)
 	for id: String in VisualStyle.EFFECTS:

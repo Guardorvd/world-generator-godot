@@ -472,7 +472,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float under = clamp((ground_carpet.x - distance(wpos.xz, veg_center)) / ground_carpet.y, 0.0, 1.0);
 				under *= (1.0 - carpet_bare) * (1.0 - stony * 0.6) * (1.0 - snow_biome);
 				// на сухом дернина реже и соломенная: тень слабее и не зеленит
-				turf = mix(turf, turf * mix(vec3(0.58, 0.68, 0.50), vec3(0.74, 0.71, 0.60), dryness), under * mix(0.8, 0.45, dryness));
+				turf = mix(turf, turf * mix(vec3(0.46, 0.60, 0.40), vec3(0.68, 0.66, 0.54), dryness), under * mix(0.92, 0.55, dryness));
 			}
 			col = mix(col, turf, veg * ground_w);
 		}

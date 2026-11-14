@@ -993,6 +993,28 @@ unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
 
+[node name="CarpetRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="CarpetLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/CarpetRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Плотный ковёр мелкой травы вокруг велосипеда: густота и на каком расстоянии он виден. Реже и ближе — быстрее на слабой видеокарте; «выключена» убирает слой."
+mouse_filter = 1
+text = "Ковёр травы: густота и дальность"
+
+[node name="CarpetDensityOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/CarpetRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(126, 40)
+layout_mode = 2
+tooltip_text = "Густота ковра травы"
+
+[node name="CarpetRangeOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/CarpetRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(126, 40)
+layout_mode = 2
+tooltip_text = "Дальность ковра травы"
+
 [node name="ParticlesRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2
 

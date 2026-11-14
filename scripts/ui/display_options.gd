@@ -20,6 +20,8 @@ var lighting: OptionButton
 var fog_quality: OptionButton
 var flora: OptionButton # 16.0: качество растительности
 var particles: OptionButton # 11.11: частицы окружения
+var carpet_density: OptionButton # 14.11.2026: дернина — густота и дальность
+var carpet_range: OptionButton
 var style_on := {}      # 13.11: «Визуальный стиль» — CheckBox и HSlider у каждого эффекта VisualStyle.EFFECTS
 var style_amount := {}
 var style_value := {}
@@ -48,6 +50,14 @@ func setup(host: Node) -> void:
 	lighting = host.get_node("%LightingOption")
 	fog_quality = host.get_node("%FogQualityOption")
 	particles = host.get_node("%ParticlesOption")
+	carpet_density = host.get_node("%CarpetDensityOption")
+	carpet_range = host.get_node("%CarpetRangeOption")
+	if carpet_density.item_count == 0:
+		for level: Dictionary in GameSettings.CARPET_DENSITY:
+			carpet_density.add_item(level.title.capitalize())
+	if carpet_range.item_count == 0:
+		for level: Dictionary in GameSettings.CARPET_RANGE:
+			carpet_range.add_item(level.title.capitalize())
 	if particles.item_count == 0:
 		for level: Dictionary in GameSettings.PARTICLE_LEVELS:
 			particles.add_item(level.title.capitalize())
@@ -77,7 +87,7 @@ func setup(host: Node) -> void:
 	apply_button.pressed.connect(preview)
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, particles]:
+	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, particles, carpet_density, carpet_range]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
 	for box: CheckBox in [vsync, shadows, tree_garlands]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
@@ -110,6 +120,8 @@ func sync() -> void:
 	lighting.select(state.lighting)
 	fog_quality.select(state.fog_quality)
 	particles.select(state.particles)
+	carpet_density.select(state.carpet_density)
+	carpet_range.select(state.carpet_range)
 	for id: String in VisualStyle.EFFECTS:
 		(style_on[id] as CheckBox).set_pressed_no_signal(state.style_on[id])
 		(style_amount[id] as HSlider).set_value_no_signal(state.style_amount[id])
@@ -136,7 +148,8 @@ func selected_state() -> Dictionary:
 	return {fullscreen = mode.selected == 1, resolution = _sizes[resolution.selected],
 		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
 		shadows = shadows.button_pressed, tree_garlands = tree_garlands.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
-		fog_quality = fog_quality.selected, particles = particles.selected}
+		fog_quality = fog_quality.selected, particles = particles.selected,
+		carpet_density = carpet_density.selected, carpet_range = carpet_range.selected}
 
 func pending() -> bool:
 	return not _pending.is_empty()
@@ -151,7 +164,7 @@ func _update_apply() -> void:
 func apply_graphics() -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "particles"]:
+	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "particles", "carpet_density", "carpet_range"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

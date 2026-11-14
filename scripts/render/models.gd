@@ -147,41 +147,57 @@ static func grass_mesh() -> ArrayMesh:
 	return preload("res://scripts/render/asset_catalog.gd").get_catalog().grass
 
 
-## 14.11.2026: дернина — ближний низкий покров. Куртинка ~0,5 м из CARPET_BLADES узких травинок 6–36 см
-## (по треугольнику, выше в середине), каждая пятая соломенная. Корни темнее — куртинка уходит в тон земли.
-## Строится при запуске (каталог не меняется). UV.x — номер травинки для изгиба в шейдере.
-const CARPET_BLADES := 36
-const CARPET_R := 0.32
+## 14.11.2026: дернина — плотный ковёр мелкой травы у игрока (GroundCarpet). Куртинка шириной ~1 м из двух ярусов:
+## CARPET_TALL травинок 10–33 см (выше в середине, каждая пятая соломенная) и CARPET_PILE коротких широких 4–9 см —
+## подложка, закрывающая землю между ними. Куртинки стоят чаще своего радиуса и перекрываются: сплошной ковёр.
+## Корни тёмные, кончики светлые — объём читается и на зелёной земле. Строится при запуске (каталог не меняется).
+## UV.x — номер травинки для изгиба в шейдере, UV2.x — порог поредения вдали (подложка уходит первой).
+const CARPET_TALL := 48
+const CARPET_PILE := 36
+const CARPET_BLADES := CARPET_TALL + CARPET_PILE
+const CARPET_R := 0.5
 
 static func build_carpet_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for k in CARPET_BLADES:
+		var pile := k >= CARPET_TALL
+		var n := k - CARPET_TALL if pile else k
+		var total := CARPET_PILE if pile else CARPET_TALL
 		var h1 := WGRandom.hash2(k, 3, 701)
 		var h2 := WGRandom.hash2(k, 5, 703)
 		var h3 := WGRandom.hash2(k, 7, 707)
-		# Равномерно по кругу (золотой угол), гуще к середине — край куртинки рыхлый.
-		var a := k * 2.39996 + h1 * 0.6
-		var r := CARPET_R * sqrt((k + 0.5) / CARPET_BLADES) * (0.75 + 0.35 * h2)
+		# Равномерно по кругу (золотой угол); край куртинки рыхлый и уходит в соседние.
+		var a := n * 2.39996 + h1 * 0.6 + (1.3 if pile else 0.0)
+		var rr := sqrt((n + 0.5) / total)
+		var r := CARPET_R * rr * (0.8 + 0.3 * h2)
 		var foot := Vector3(cos(a) * r, 0.0, sin(a) * r)
-		var lean_a := a + (h3 - 0.5) * 2.4
+		var lean_a := a + (h3 - 0.5) * 2.6
 		var lean := Vector3(cos(lean_a), 0.0, sin(lean_a))
 		var side := Vector3(-lean.z, 0.0, lean.x)
-		# Короче у края, выше в середине: силуэт куртинки — пологий холмик.
-		var h := (0.12 + 0.18 * h2) * (1.2 - 0.5 * r / CARPET_R)
-		var width := 0.009 + 0.01 * h1
-		var tip := foot + lean * h * (0.2 + 0.5 * h3 * r / CARPET_R) + Vector3.UP * h
-		var dry := h3 > 0.8
-		# Нормаль по наклону травинки: солнечная сторона куртинки светлее теневой — объём, а не пятно цвета земли.
-		st.set_normal((Vector3.UP * 0.55 + lean * 0.8).normalized())
-		var value := 0.85 + 0.35 * h1
+		var h: float
+		var width: float
+		var tip: Vector3
+		if pile:
+			h = 0.04 + 0.05 * h2
+			width = 0.03 + 0.018 * h1
+			tip = foot + lean * h * 0.6 + Vector3.UP * h
+			st.set_normal((Vector3.UP * 0.95 + lean * 0.3).normalized())
+		else:
+			# Короче у края, выше в середине: силуэт куртинки — пологий холмик.
+			h = (0.1 + 0.16 * h2) * (1.25 - 0.5 * rr)
+			width = 0.016 + 0.013 * h1
+			tip = foot + lean * h * (0.25 + 0.55 * h3) + Vector3.UP * h
+			# Нормаль по наклону травинки: солнечная сторона куртинки светлее теневой.
+			st.set_normal((Vector3.UP * 0.85 + lean * 0.5).normalized())
+		var dry := not pile and h3 > 0.86
+		var value := 0.8 + 0.45 * h1
+		var root := Color(0.50, 0.60, 0.38) if pile else Color(0.56, 0.66, 0.42)
+		var top := Color(0.84, 1.14, 0.68) if pile else (Color(1.45, 1.3, 0.78) if dry else Color(1.0, 1.42, 0.86))
 		for v: Vector3 in [foot - side * width, foot + side * width, tip]:
-			var base := v.y == 0.0
-			var col := Color(0.6, 0.62, 0.52) if base else (Color(1.3, 1.15, 0.72) if dry else Color(0.98, 1.24, 0.82)) * value
-			st.set_color(col)
+			st.set_color(root if v.y == 0.0 else top * value)
 			st.set_uv(Vector2(float(k) / CARPET_BLADES, v.y / h))
-			# Порог поредения вдали (шейдер detail_*): травинки гаснут по одной, куртинка остаётся
-			st.set_uv2(Vector2(WGRandom.hash2(k, 11, 709), 0.0))
+			st.set_uv2(Vector2(0.62 + 0.38 * h1 if pile else 0.1 + 0.62 * WGRandom.hash2(k, 11, 709), 0.0))
 			st.add_vertex(v)
 	return st.commit()
 
