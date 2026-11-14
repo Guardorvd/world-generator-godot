@@ -6,7 +6,8 @@ render_mode unshaded, blend_add, depth_draw_never, cull_disabled, shadows_disabl
 uniform vec3 tint : source_color = vec3(1.0, 0.9, 0.74);
 uniform float strength = 0.09;
 uniform float length_m = 9.0; // длина конуса (м), как у CylinderMesh.height
-uniform sampler2D screen_tex : hint_screen_texture, filter_linear;
+// 15.1: без копии экрана (hint_screen_texture стоила ~1 мс кадра): яркость фона — по ночи из DayCycle
+global uniform float vegetation_night;
 uniform sampler2D depth_tex : hint_depth_texture, filter_nearest;
 
 varying float along; // 0 у фары, 1 на дальнем конце
@@ -33,8 +34,7 @@ void fragment() {
 	// у камеры тоже тает: изнутри конуса не видно стенок
 	soft *= clamp((-VERTEX.z - 0.3) / 1.2, 0.0, 1.0);
 	// видна в темноте: чем светлее фон, тем слабее дымка
-	float bg = dot(texture(screen_tex, SCREEN_UV).rgb, vec3(0.3, 0.59, 0.11));
-	float dark = 1.0 - smoothstep(0.04, 0.35, bg);
+	float dark = smoothstep(0.35, 0.9, vegetation_night);
 	float dither = (fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715)))) - 0.5) * 0.015;
 	ALBEDO = tint * max(0.0, strength * rim * fade * soft * dark * (1.0 + dither));
 }

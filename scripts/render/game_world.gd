@@ -760,6 +760,21 @@ func travel_active() -> bool:
 	return _travel_task != -1
 
 
+## Костры, ночные окна, свет ближайшего костра и гирлянды. Зовёт и tools/stress на паузе (там нет _process).
+func update_lights(pos: Vector3, eye: Vector3, fire_time: float, delta: float) -> void:
+	SettlementsBuilder.animate_fires(fires, fire_time, pos)
+	if regions != null:
+		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
+	_light_night(pos, fire_time)
+	if garlands != null:
+		var garland_night := smoothstep(0.22, 0.96, 1.0 - day.sunlight) if day != null else 0.0
+		var fire_on := fire_light != null and fire_light.visible
+		var fire_pos := fire_light.global_position if fire_on else Vector3.ZERO
+		garlands.update(pos, eye, fire_pos, fire_on, garland_night,
+			services.settings.draw, services.settings.lighting, delta,
+			stream_coordinator.frame_budget if stream_coordinator != null else null)
+
+
 func travel_to(place: Dictionary) -> void:
 	if _opening or paused or travel_active() or player == null or not world.accessible(place.x, place.y):
 		return
@@ -785,9 +800,13 @@ func travel_to(place: Dictionary) -> void:
 		audio.set_paused(true)
 		var source := chunk_source
 		var at := Vector2(arriving.x, arriving.z)
+		# 15.1: деревья, трава и подлесок места прибытия считаются в той же фоновой задаче (было 8–10 с без кадров)
+		var layer := vegetation
+		var missing := vegetation.travel_begin(at.x, at.y)
 		_travel_task = WorkerThreadPool.add_task(func() -> void:
 			source.finish()
-			source.prewarm([at], NEAR), true, "Место прибытия")
+			source.prewarm([at], NEAR)
+			layer.travel_fill(at.x, at.y, missing), true, "Место прибытия")
 		while not WorkerThreadPool.is_task_completed(_travel_task):
 			await get_tree().process_frame
 			if not is_inside_tree() or is_queued_for_deletion(): return
@@ -795,8 +814,11 @@ func travel_to(place: Dictionary) -> void:
 		_travel_task = -1
 	var destination := Vector3(arriving.x, arriving.feet, arriving.z)
 	stream_coordinator.force_terrain(destination, NEAR)
-	if chunk_source != null: chunk_source.finish_startup()
-	stream_coordinator.force_vegetation(destination)
+	if chunk_source != null:
+		chunk_source.finish_startup()
+		vegetation.travel_end(destination.x, destination.z)
+	else:
+		stream_coordinator.force_vegetation(destination)
 	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
 	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
@@ -1220,18 +1242,7 @@ func _process(delta: float) -> void:
 	local_mist.update(camera.global_position, day, delta, time)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
-	var fire_time := lerpf(_prev_time, time, alpha)
-	SettlementsBuilder.animate_fires(fires, fire_time, pos)
-	if regions != null:
-		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
-	_light_night(pos, fire_time)
-	if garlands != null:
-		var garland_night := smoothstep(0.22, 0.96, 1.0 - day.sunlight) if day != null else 0.0
-		var fire_on := fire_light != null and fire_light.visible
-		var fire_pos := fire_light.global_position if fire_on else Vector3.ZERO
-		garlands.update(pos, camera.global_position, fire_pos, fire_on, garland_night,
-			services.settings.draw, services.settings.lighting, delta,
-			stream_coordinator.frame_budget if stream_coordinator != null else null)
+	update_lights(pos, camera.global_position, lerpf(_prev_time, time, alpha), delta)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta

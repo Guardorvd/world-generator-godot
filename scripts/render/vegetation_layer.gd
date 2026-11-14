@@ -591,7 +591,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 			if _distance(built.chunk, p) <= load_radius + lead.length():
 				kept.append(built)
 			else:
-				_discard_partial(built)
+				_discard_partial(built, true) # 15.1: за дальностью видимости — без затухания (перезапись буферов стоила ~10 мс)
 				_queued.erase(built.chunk)
 		_pending = _by_distance(kept, p)
 		if _tree_task == -1:
@@ -619,6 +619,41 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		uploaded = true
 	_record_phase(5, phase_started)
 	return uploaded
+
+## 15.1: быстрое перемещение без замирания. То же, что update(force), но расчёт — в фоне, пока игра рисует кадры:
+## travel_begin (главный поток) -> travel_fill (поток пула, из задачи перемещения) -> travel_end (главный поток).
+## Пока идёт перемещение, GameWorld._process не зовёт update, поэтому состояние слоя трогает только этот путь.
+func travel_begin(px: float, pz: float) -> Array[Vector2i]:
+	_finish()
+	_present.clear()
+	_clear_pending()
+	_built.clear()
+	snapshots.reset()
+	_history_cuts.clear()
+	_fill_lead = Vector2.ZERO
+	return _wanted(Vector2(px, pz))
+
+
+func travel_fill(px: float, pz: float, missing: Array[Vector2i]) -> void:
+	_fill(px, pz, missing)
+
+
+func travel_end(px: float, pz: float) -> void:
+	var p := Vector2(px, pz)
+	stream.sample(p, 0.0, true)
+	RenderingServer.global_shader_parameter_set("veg_center", p)
+	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
+	_clean_retired()
+	_free_trash(0)
+	_drop(p) # дальние от места прибытия чанки — в корзину; ближние и уже собранные остаются
+	last_trees = p
+	last_fill = p
+	for built: Dictionary in _built:
+		_apply_chunk(built)
+	_built.clear()
+	_apply_grass(true)
+	_refresh_details = false
+
 
 func _finish() -> void:
 	if _task != -1:
@@ -694,9 +729,8 @@ func _drop(p: Vector2) -> void:
 			far[chunk] = _distance(chunk, p) > limit
 		if far[chunk]:
 			# 15.1: узлы за drop_radius уже за своей дальностью видимости (tree_r + полчанка) и не рисуются:
-			# прятать их здесь не нужно — visible = false на тысячах узлов при переносе давало кадр 17–22 мс.
-			for node: MultiMeshInstance3D in veg[key].nodes:
-				node.set_meta("stream_retiring", true)
+			# прятать и помечать их здесь не нужно — это делает _free_trash по бюджету кадра (на тысячах узлов
+			# при переносе было 13–22 мс за кадр).
 			_trash.append_array(veg[key].nodes)
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
@@ -1174,7 +1208,7 @@ func _clear_pending() -> void:
 
 
 ## Частично переданный чанк нельзя оставить помеченным готовым после переноса или отмены.
-func _discard_partial(built: Dictionary) -> void:
+func _discard_partial(built: Dictionary, beyond_range := false) -> void:
 	var cursor: int = built.get("cursor", 0)
 	if built.get("node_cursor", 0) > 0:
 		cursor += 1
@@ -1186,7 +1220,10 @@ func _discard_partial(built: Dictionary) -> void:
 	for i in cursor:
 		var key := Vector3i(chunk.x, chunk.y, built.entries[i].get("key_kind", built.entries[i].kind))
 		if veg.has(key):
-			_retire_nodes(veg[key].nodes)
+			if beyond_range:
+				_trash.append_array(veg[key].nodes)
+			else:
+				_retire_nodes(veg[key].nodes)
 			veg.erase(key)
 	_loaded.erase(chunk)
 
@@ -1472,6 +1509,7 @@ func _free_trash(budget_us: int) -> void:
 	while not _trash.is_empty() and (budget_us == 0 or freed < 1 or Time.get_ticks_usec() < until):
 		var node: Node = _trash.pop_back()
 		if is_instance_valid(node):
+			node.set_meta("stream_retiring", true)
 			if budget_us > 0 and node is MultiMeshInstance3D and node.get_meta("stream_tree", false) and _tree_pool.size() < TREE_POOL_LIMIT:
 				# Keep the scene/render instance, release all per-chunk GPU data.
 				node.multimesh.instance_count = 0

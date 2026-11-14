@@ -16,7 +16,7 @@ extends SceneTree
 ##   --save-base — записать этот прогон как базу (base.json); без ключа прогон сравнивается с base.json, если она есть;
 ##   --compare <база.json> <новый.json> — только сравнить два отчёта (окно не нужно, ничего не меряется).
 ## Итог: stress.json (все числа), stress.md (выводы и таблицы), строка STRESS_RESULT в консоли. Код 1 — прогон не завершён.
-## Отчёт пишется после каждого замера: при зависании остаётся всё снятое. Лимит: 150 с без мира, 420 с с миром.
+## Отчёт пишется после каждого замера: при зависании остаётся всё снятое. Лимит: 150 с без мира, 540 с с миром.
 
 const Dev := preload("res://tools/control/control.gd")
 const Report := preload("res://tools/stress/stress_report.gd")
@@ -52,11 +52,14 @@ var game: GameWorld
 var hour := 12.0
 var road: PackedVector3Array = []
 var road_len: PackedFloat32Array = []
+var _chunk_seen := {}     # ChunkSource.stats на прошлом кадре (причины пиков)
+var _quiet_particles := false # отключение «частицы»: _look не крутит их на CPU
+var _night_lights := true # _look зовёт update_lights (костры, окна, гирлянды), как _process игры
 
 
 func _initialize() -> void:
 	var groups := _groups()
-	preload("res://tools/watchdog.gd").arm(self, 30.0 if "--compare" in args else (420.0 if "world" in groups else 150.0))
+	preload("res://tools/watchdog.gd").arm(self, 30.0 if "--compare" in args else (540.0 if "world" in groups else 150.0))
 	_run.call_deferred(groups)
 
 
@@ -198,7 +201,6 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var work := PackedFloat32Array()
 	var calls := 0.0
 	var prims := 0.0
-	var logic := 0.0
 	var physics := 0.0
 	var spikes: Array = []
 	var began := Time.get_ticks_usec()
@@ -209,6 +211,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 		if step.is_valid():
 			step.call((w0 - began) / 1000000.0, dt)
 		var worked := (Time.get_ticks_usec() - w0) / 1000.0
+		_chunk_mark()
 		await process_frame
 		var now := Time.get_ticks_usec()
 		beat = Time.get_ticks_msec()
@@ -223,16 +226,17 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 				work.append(worked)
 			calls += Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)
 			prims += Performance.get_monitor(Performance.RENDER_TOTAL_PRIMITIVES_IN_FRAME)
-			logic += Performance.get_monitor(Performance.TIME_PROCESS) * 1000.0
+			# TIME_PROCESS здесь не годится: скрипт прогона — сам SceneTree, монитор давал сотни и тысячи мс на кадр.
+			# Работа кадра на CPU — work_ms (шаг прогона на паузе) или tick_us игры (замеры play_*).
 			physics += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
 			# длинный кадр — с причиной: счётчики подгрузки ещё хранят этот кадр
 			if dt > 0.0167 and spike_cause.is_valid() and spikes.size() < 64:
-				spikes.append({t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1), cause = spike_cause.call()})
+				spikes.append({t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1),
+					gpu_ms = snappedf(gpu[gpu.size() - 1], 0.1), cpu_ms = snappedf(cpu[cpu.size() - 1], 0.1), cause = spike_cause.call()})
 	if not keep:
 		return {}
 	var out := Report.stats(ms, gpu, cpu, work, calls, prims)
 	if out.frames > 0:
-		out.process_ms = snappedf(logic / out.frames, 0.01)
 		out.physics_ms = snappedf(physics / out.frames, 0.01)
 		spikes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.ms > b.ms)
 		out.worst = spikes.slice(0, 5)
@@ -432,7 +436,20 @@ func _stream_cause() -> String:
 	var last: Array = stats.group_last_us
 	var k := last.find(last.max())
 	var at := game.camera.global_position
-	return "%s %.1f мс; %s; камера %d, %d" % [stats.group_names[k], last[k] / 1000.0, _phase_cause(game.vegetation), at.x, at.z]
+	var text := "%s %.1f мс; %s" % [stats.group_names[k], last[k] / 1000.0, _phase_cause(game.vegetation)]
+	if game.chunk_source != null:
+		var cs: Dictionary = game.chunk_source.stats
+		var up: float = cs.upload_ms - _chunk_seen.get("upload_ms", cs.upload_ms)
+		var reads: int = cs.reads - int(_chunk_seen.get("reads", cs.reads))
+		if up > 0.05 or reads > 0:
+			text += "; рельеф с диска: передано %.1f мс, чтений %d" % [up, reads]
+	return text + "; камера %d, %d" % [at.x, at.z]
+
+
+## Счётчики ChunkSource на прошлом кадре: причина пика — их прирост за кадр
+func _chunk_mark() -> void:
+	if game != null and game.chunk_source != null:
+		_chunk_seen = {upload_ms = game.chunk_source.stats.upload_ms, reads = game.chunk_source.stats.reads}
 
 
 ## Цена выборок высоты (их зовёт физика велосипеда каждый подшаг): мкс на вызов по 20 тыс. вызовов у дороги
@@ -553,34 +570,61 @@ func _group_world() -> void:
 	# штатная догрузка после переноса идёт дольше 3 с). Лес — последним: в нём же меряются отключения.
 	var heavy := {}
 	var heavy_view := {}
-	for name: String in ["spawn", "village", "peak", "forest"]:
-		var base_for_toggles := name == "forest" and (_wanted("world.off_") or _wanted("world.hour_"))
-		if not views.has(name) or not (_wanted("world.view_" + name) or base_for_toggles):
+	var sun: DirectionalLight3D = game.get_node("Sun")
+	var env: Environment = game.get_node("WorldEnvironment").environment
+	var relight := func() -> void: game._apply_lighting_and_fog()
+	for name: String in ["spawn", "village", "valley", "peak", "forest"]:
+		var base_for_toggles := name == "forest" and (_wanted("world.off_") or _wanted("world.hour_") or _wanted("world.forest_"))
+		var extras := _wanted("world.%s_" % name)
+		if not views.has(name) or not (_wanted("world.view_" + name) or base_for_toggles or extras):
 			continue
 		heavy_view = views[name]
 		_place(heavy_view)
-		heavy = await _case("world.view_" + name, "Мир: " + heavy_view.title, HOLD, _look.bind(heavy_view), {}, base_for_toggles)
+		heavy = await _case("world.view_" + name, "Мир: " + heavy_view.title, HOLD, _look.bind(heavy_view), {}, base_for_toggles or extras)
 		if "--shots" in args: # снимок вида для сравнения картинки до и после правки (view_<имя>.png в папке отчёта)
 			root.get_texture().get_image().save_png(out.path_join("view_%s.png" % name))
+		var at := _look.bind(heavy_view)
+		var cut := func(nodes: Array) -> Array: return [_show.bind(nodes, false), _show.bind(nodes, true)]
+		var buildings: Array = [game.get_node("Settlements"), game.get_node("Structures")]
+		if name == "village":
+			# 15.1: в лесу постройки и вода почти не в кадре — их цена меряется там, где они видны
+			await _ablate("village", "Мир, вид «%s»" % heavy_view.title, "world.village_off_", heavy, [
+				["buildings", "поселения и сооружения"] + cut.call(buildings),
+				["water", "вода"] + cut.call([game.get_node("Water")]),
+				["garlands", "гирлянды", _garlands.bind(false), _garlands.bind(true)],
+			], at, game.vegetation)
+			hour = 23.0
+			await _case("world.village_night", "Мир: %s ночью (костры, окна, гирлянды)" % heavy_view.title, HOLD, at)
+			hour = 12.0
+		elif name == "valley":
+			await _ablate("valley", "Мир, вид «%s»" % heavy_view.title, "world.valley_off_", heavy, [
+				["water", "вода"] + cut.call([game.get_node("Water")]),
+				["particles", "частицы и местный туман", _particles.bind(false), _particles.bind(true)],
+			], at, game.vegetation)
+			# пасмурный рассвет у воды: местный туман набирает объёмы поверх объёмного
+			hour = 6.5
+			game.day.cloud_cover_override = 1.0
+			await _case("world.valley_mist", "Мир: %s, пасмурный рассвет" % heavy_view.title, HOLD, at)
+			game.day.cloud_cover_override = -1.0
+			hour = 12.0
 
 	# что сколько стоит — в лесу (последний снятый вид), сразу после его замера
 	if not heavy.is_empty():
 		var step := _look.bind(heavy_view)
-		var sun: DirectionalLight3D = game.get_node("Sun")
-		var env: Environment = game.get_node("WorldEnvironment").environment
 		var far: Array = get_nodes_in_group("distant_forest")
 		var msaa := root.msaa_3d
-		var relight := func() -> void: game._apply_lighting_and_fog()
 		var low := func() -> void:
 			Lighting.apply(env, sun, 0, false, 0)
 			VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {})
 			_veg_level(game.vegetation, 0, 0)
-			game.ambient.visible = false
+			_particles(false)
+			_garlands(false)
 			root.msaa_3d = Viewport.MSAA_DISABLED
 		var high := func() -> void:
 			relight.call()
 			_veg_level(game.vegetation, settings.draw, settings.flora)
-			game.ambient.visible = true
+			_particles(true)
+			_garlands(true)
 			root.msaa_3d = msaa
 		await _ablate("world", "Мир, вид «%s»" % heavy_view.title, "world.off_", heavy, [
 			["shadows", "тени солнца", func() -> void: sun.shadow_enabled = false, relight],
@@ -595,11 +639,9 @@ func _group_world() -> void:
 			["vegetation", "ближняя растительность", _show.bind([game.vegetation], false), _show.bind([game.vegetation], true)],
 			["far_forest", "дальний лес", _show.bind(far, false), _show.bind(far, true)],
 			["terrain", "рельеф", _show.bind([game.get_node("Terrain")], false), _show.bind([game.get_node("Terrain")], true)],
-			["outer", "местность за краем области", _show.bind([game.outer, game.regions], false), _show.bind([game.outer, game.regions], true)],
-			["water", "вода", _show.bind([game.get_node("Water")], false), _show.bind([game.get_node("Water")], true)],
-			["buildings", "поселения и сооружения", _show.bind([game.get_node("Settlements"), game.get_node("Structures")], false),
-				_show.bind([game.get_node("Settlements"), game.get_node("Structures")], true)],
-			["particles", "частицы и местный туман", _show.bind([game.ambient, game.local_mist], false), _show.bind([game.ambient, game.local_mist], true)],
+			["outer", "местность за краем области", _show.bind([game.outer], false), _show.bind([game.outer], true)],
+			["particles", "частицы и местный туман", _particles.bind(false), _particles.bind(true)],
+			["garlands", "гирлянды", _garlands.bind(false), _garlands.bind(true)],
 			["draw_min", "дальность растительности выше минимальной", func() -> void: _veg_level(game.vegetation, 0, -1), func() -> void: _veg_level(game.vegetation, settings.draw, -1)],
 			["flora_low", "качество растительности выше низкого", func() -> void: _veg_level(game.vegetation, -1, 0), func() -> void: _veg_level(game.vegetation, -1, settings.flora)],
 			["all_low", "все настройки выше минимума", low, high],
@@ -608,37 +650,54 @@ func _group_world() -> void:
 			hour = h[0]
 			await _case("world.hour_" + h[1], "Мир: тот же вид, " + h[2], TOGGLE, step)
 		hour = 12.0
+		# высокое качество света и тумана (SSIL, 5 шагов облаков, туман 128×96) — по умолчанию стоит среднее
+		if _wanted("world.forest_high"):
+			Lighting.apply(env, sun, 2, settings.shadows, 2)
+			await _settle(game.vegetation, step)
+			var high_case := await _case("world.forest_high", "Мир: тот же вид, свет и туман «высокие»", TOGGLE, step)
+			var sky_mat := env.sky.sky_material as ShaderMaterial if env.sky != null else null
+			await _ablate("high", "Мир, вид «%s», свет «высокий»" % heavy_view.title, "world.high_off_", high_case, [
+				["ssil", "SSIL (непрямой свет)", func() -> void: env.ssil_enabled = false, func() -> void: env.ssil_enabled = true],
+				["clouds", "облака в 5 шагов (как на среднем — 2)", func() -> void: if sky_mat: sky_mat.set_shader_parameter("cumulus_steps", 2),
+					func() -> void: if sky_mat: sky_mat.set_shader_parameter("cumulus_steps", 5)],
+				["fog", "объёмный туман 128×96 и 190 м (как на среднем)", func() -> void:
+					env.volumetric_fog_length = 160.0
+					RenderingServer.environment_set_volumetric_fog_volume_size(96, 64),
+					func() -> void:
+					env.volumetric_fog_length = 190.0
+					RenderingServer.environment_set_volumetric_fog_volume_size(128, 96)],
+			], step, game.vegetation)
+			relight.call()
 
 	# движение: подгрузка рельефа, растительности и воды штатным планировщиком
 	await _settle(game.vegetation, _ride.bind(0.0), 1.0, 3.0)
+	await _case("world.road_still", "Мир: начало дороги, на месте", HOLD, _ride.bind(0.0))
 	await _case("world.ride", "Мир: езда по дороге %d м/с" % GameConfig.BIKE_SPEED, MOVE * 1.5, _ride.bind(GameConfig.BIKE_SPEED))
 	await _case("world.fast", "Мир: пролёт по дороге %d м/с" % (GameConfig.BIKE_SPEED * 4), MOVE, _ride.bind(GameConfig.BIKE_SPEED * 4.0))
 	var stops: Array = views.values()
 	await _case("world.jump", "Мир: перенос в другое место раз в 1,5 с", MOVE * 1.5, func(t: float, dt: float) -> void: _look(t, dt, stops[int(t / 1.5) % stops.size()]))
 
-	# игра без паузы: логика, физика, HUD и звук на стоящем игроке
-	if _wanted("world.play_idle"):
-		main.hud.visible = true
-		game.paused = false
-		game.tick_us.clear()
-		var idle := await _case("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD)
-		# такт физики и кадр игры по частям, мкс на такт / на кадр
-		var parts := {}
-		var ticks := maxi(1, int(game.tick_us.get("ticks", 0)))
-		var frames := maxi(1, int(game.tick_us.get("frames", 0)))
-		for k: String in game.tick_us:
-			if k != "ticks" and k != "frames":
-				parts[k] = snappedf(game.tick_us[k] / float(frames if k.begins_with("frame_") else ticks) / 1000.0, 0.01)
-		idle.tick_parts_ms = parts
-		print("TICK_PARTS ticks=%d frames=%d %s" % [ticks, frames, parts])
-		game.paused = true
-		main.hud.visible = false
+	# игра без паузы: логика, физика, HUD и звук; сначала игрок стоит, потом едет (руль и газ — нажатия действий)
+	await _play("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD, Callable())
+	await _play("world.play_ride", "Мир: езда с физикой велосипеда", MOVE, _drive)
+	if _wanted("world.play_night"):
+		game.hour = 23.0
+		# сначала без фары, потом с ней: цена фары — разница двух соседних отрезков одной ночной езды
+		await _play("world.play_night_dark", "Мир: ночная езда без фары", MOVE * 0.5, _drive)
+		game.bike_view.set_lamp(true)
+		await _play("world.play_night", "Мир: ночная езда с фарой", MOVE * 0.5, _drive)
+		game.bike_view.set_lamp(false)
+		game.hour = 12.0
+	if _wanted("world.travel") and views.has("forest"):
+		await _travel(views.forest)
 
 	_memory("played", "После замеров в мире")
 	main._free_game()
 	game = null
 	await _frames(30)
 	_memory("after_free", "Мир выгружен")
+	if "--cycles" in args or _wanted("world.reload"):
+		await _reload(seed_text, size)
 
 
 ## Готовые слои этого мира из других папок кэша, если своих ещё нет: чтение чужого кэша, запись только в свой
@@ -657,6 +716,110 @@ func _seed_cache(cache: WorldCache, seed_text: String, size: int) -> void:
 		if copied > 0:
 			print("Кэш мира взят из %s (%d файлов)" % [donor, copied])
 			return
+
+
+## Гирлянды: выключаются целиком (и их CPU), как настройкой в меню
+func _garlands(on: bool) -> void:
+	if game.garlands != null:
+		game.garlands.set_enabled(on and GameContext.scope.settings.tree_garlands)
+
+
+## Частицы и местный туман: прячутся, и _look перестаёт крутить их на CPU
+func _particles(on: bool) -> void:
+	_show([game.ambient, game.local_mist], on)
+	_quiet_particles = not on
+
+
+## Замер игры без паузы: кадр ведёт сама игра (_process и _physics_process), drive(t, dt) жмёт действия.
+## В замер пишется tick_parts_ms (такт физики и кадр игры по частям) и game_cpu_ms — CPU игры на кадр.
+func _play(name: String, title: String, seconds: float, drive: Callable) -> void:
+	if not _wanted(name):
+		return
+	main.hud.visible = true
+	game.paused = false
+	game.tick_us.clear()
+	var c := await _case(name, title, seconds, drive)
+	for action: String in ["move_forward", "move_back", "move_left", "move_right"]:
+		Input.action_release(action)
+	var ticks := maxi(1, int(game.tick_us.get("ticks", 0)))
+	var frames := maxi(1, int(game.tick_us.get("frames", 0)))
+	var parts := {}
+	var cpu := 0.0
+	for k: String in game.tick_us:
+		if k == "ticks" or k == "frames":
+			continue
+		var per_frame: float = game.tick_us[k] / float(frames) / 1000.0
+		parts[k] = snappedf(game.tick_us[k] / float(frames if k.begins_with("frame_") else ticks) / 1000.0, 0.01)
+		cpu += per_frame
+	c.tick_parts_ms = parts
+	c.game_cpu_ms = snappedf(cpu, 0.01)
+	c.physics_hz = snappedf(ticks / maxf(0.001, seconds + WARM), 1.0)
+	c.bike_speed = snappedf(game.bike.speed, 0.1)
+	Dev.save_json(out.path_join("stress.json"), report)
+	game.paused = true
+	main.hud.visible = false
+
+
+## Езда: газ всё время, руль плавно вправо-влево (поворот, торможение на дуге, подъёмы по рельефу)
+func _drive(t: float, _dt: float) -> void:
+	Input.action_press("move_forward", 1.0)
+	var turn := sin(t * 1.3) * 0.8
+	if turn > 0.05:
+		Input.action_release("move_left")
+		Input.action_press("move_right", turn)
+	elif turn < -0.05:
+		Input.action_release("move_right")
+		Input.action_press("move_left", -turn)
+	else:
+		Input.action_release("move_left")
+		Input.action_release("move_right")
+
+
+## Быстрое перемещение (как с карты): сколько длится переход и какие первые кадры после него
+func _travel(v: Dictionary) -> void:
+	game.paused = false
+	main.hud.visible = true
+	var place := {kind = "peak", name = "стресс-тест", x = v.target.x / Dev.TILE, y = v.target.z / Dev.TILE}
+	var before := Vector2(game.player.x, game.player.z)
+	var t0 := Time.get_ticks_usec()
+	var worst := 0.0
+	var last := t0
+	game.travel_to(place)
+	var frames := 0
+	while game.travel_active() and Time.get_ticks_usec() - t0 < 20000000:
+		await process_frame
+		beat = Time.get_ticks_msec()
+		var now := Time.get_ticks_usec()
+		worst = maxf(worst, (now - last) / 1000.0)
+		last = now
+		frames += 1
+	var travel_s := snappedf((Time.get_ticks_usec() - t0) / 1000000.0, 0.01)
+	var moved := before.distance_to(Vector2(game.player.x, game.player.z)) > 1.0
+	await _case("world.after_travel", "Мир: первые 2 с после быстрого перемещения", HOLD, Callable(),
+		{travel_s = travel_s, travel_worst_ms = snappedf(worst, 0.1), travel_frames = frames, travel_moved = moved})
+	if not moved:
+		report.failed.append("быстрое перемещение не сработало (место недоступно)")
+	game.paused = true
+	main.hud.visible = false
+
+
+## Второй цикл «загрузка → выгрузка»: рост памяти от цикла к циклу — утечка, а не разовые кэши движка
+func _reload(seed_text: String, size: int) -> void:
+	var t0 := Time.get_ticks_msec()
+	main.start_game(seed_text, size)
+	while main.game == null or main.game.player == null or main.busy:
+		await process_frame
+		beat = Time.get_ticks_msec()
+		if Time.get_ticks_msec() - t0 > 120000 or (not main.busy and main.game == null and Time.get_ticks_msec() - t0 > 3000):
+			report.failed.append("мир %s не загрузился второй раз" % seed_text)
+			return
+	report.load.reload_s = snappedf((Time.get_ticks_msec() - t0) / 1000.0, 0.1)
+	main.game.paused = true
+	await _frames(30)
+	_memory("loaded2", "Мир загружен второй раз")
+	main._free_game()
+	await _frames(30)
+	_memory("after_free2", "Мир выгружен второй раз")
 
 
 func _show(nodes: Array, on: bool) -> void:
@@ -680,10 +843,13 @@ func _look(_t: float, dt: float, v: Dictionary) -> void:
 	game.hour = hour
 	game.day.apply(hour, clock)
 	game.stream_coordinator.update(v.pos)
-	game.ambient.update(dt, v.pos, game.day.sunlight)
-	game.local_mist.update(v.pos, game.day, dt, clock)
+	if not _quiet_particles:
+		game.ambient.update(dt, v.pos, game.day.sunlight)
+		game.local_mist.update(v.pos, game.day, dt, clock)
 	if game._ocean != null:
 		game._ocean.position = Vector3(v.pos.x, 0.0, v.pos.z)
+	if _night_lights:
+		game.update_lights(v.pos, v.pos, clock, dt) # 15.1: на паузе не было ни костров, ни окон, ни гирлянд
 
 
 func _ride(t: float, dt: float, speed: float) -> void:

@@ -28,6 +28,7 @@ static func _arg(args: PackedStringArray, key: String, def: String) -> String:
 
 
 func _build(lamp_path: String) -> void:
+	RenderingServer.global_shader_parameter_set("vegetation_night", 1.0) # ночь, как DayCycle (дымка луча с 15.1 смотрит на неё)
 	var env := WorldEnvironment.new()
 	var e := Environment.new()
 	e.background_mode = Environment.BG_COLOR
