@@ -515,7 +515,7 @@ static func refined_height_at(regions: Dictionary, x: float, z: float) -> float:
 		wa = tx + tz - 1.0
 		wb = 1.0 - tz
 		wc = 1.0 - tx
-	var h: PackedFloat32Array = patch.h
+	var h: Variant = patch.h
 	return h[a] * wa + h[b] * wb + h[c] * wc
 
 static func refined_at(regions: Dictionary, x: float, z: float) -> Dictionary:
