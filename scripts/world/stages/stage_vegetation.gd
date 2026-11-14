@@ -354,6 +354,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				continue
 			if has_village and village[i] != 0:
 				dens *= 0.08
+			if bi == Biomes.GRASS:
+				# Рощи на лугах продолжают поле древостоя соседнего леса.
+				var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
+				stand = _ss(-0.4, 0.4, sv)
 			var kinds: Array = b_kinds[bi]
 			# Числа rng на объект: проверка, x, y, вид, вариант, масштаб
 			for k in 2:
@@ -362,7 +366,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					var py := y + 0.15 + rng.next_float() * 0.8
 					# сомкнутые участки — влажнее и лиственнее, редкие — светлые сосняки (9.2)
 					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
-					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior)
+					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior, stand)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
@@ -377,6 +381,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 							sc = maxf(sc, 0.55) # у видов без молодой формы нет карликов взрослого силуэта
 					else:
 						sc = 0.8 + rng.next_float() * 0.45
+						if kind == Biomes.T_BUSH and dw >= SHORE and (bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TAIGA):
+							# Крупные кусты остаются группами в пятнах существующего лесного поля.
+							if WGRandom.hash2(x, y, seed_num ^ (3221 + k)) > lerpf(0.58, 1.0, _ss(-0.25, 0.3, fv)):
+								continue
 					# Камни выбирает отдельный слой после деревьев; старый выбор сохраняет RNG.
 					# клетка дальше 5 м от кромки (с запасом) — проверять нечего: самому большому стволу с ветвями ели хватает
 					if kind != Biomes.T_ROCK and (not has_path or dist_path[i] > 5.0 or clear_of_path(dist_path, ox, oy, stride, px, py, kind, sc, tree_age)) \
@@ -514,30 +522,39 @@ static func _reedy(bi: int) -> bool:
 
 ## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
-static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float, interior: float) -> int:
+static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float,
+		interior: float, stand := 0.5) -> int:
 	var shore := dw < SHORE
-	if bi in [Biomes.FOREST,Biomes.GRASS,Biomes.TAIGA] and m<0.58 and r<0.28*_ss(0.24,0.45,e):
+	if (bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TAIGA) and m < 0.58 and r < 0.28 * _ss(0.24, 0.45, e):
 		return Biomes.T_BUSH
 	# Ограничение действует и на специальные сообщества ниже.
 	if sl > 1.0 and r < 0.4:
 		return Biomes.T_ROCK if r < 0.2 else Biomes.T_BUSH
 	match bi:
 		Biomes.FOREST, Biomes.GRASS:
-			# Пятна лесного шума задают опушки и сообщества, условия — их состав.
-			var pine := 0.1 + 0.5 * _ss(HIGH_LO, HIGH_HI, e) + 0.25 * (1.0 - m) + 0.1 * light
-			var birch := 0.12 + 0.18 * m + 0.12 * (1.0 - interior)
 			if bi == Biomes.GRASS and m < 0.35:
 				return Biomes.T_BUSH if r < 0.75 else Biomes.T_PINE
+			var high := _ss(HIGH_LO, HIGH_HI, e)
+			var pine := 0.1 + 0.5 * high + 0.25 * (1.0 - m) + 0.1 * light
+			var birch := 0.12 + 0.18 * m + 0.12 * (1.0 - interior)
+			# На одном поле древостоя редкие сосняки переходят в березняки и сомкнутые лиственные участки.
+			# Высота и сухость сохраняют преимущество хвойных, а промежуточные значения дают смешанный лес.
+			var lowland := 1.0 - high
+			var pine_stand := (1.0 - _ss(0.18, 0.48, stand)) * lowland
+			var birch_stand := _ss(0.35, 0.62, stand) * (1.0 - _ss(0.68, 0.94, stand)) * lowland * _ss(0.25, 0.6, m)
+			var oak_stand := _ss(0.68, 0.94, stand) * lowland
+			pine = lerpf(lerpf(pine, 0.69, pine_stand), 0.17, maxf(birch_stand, oak_stand))
+			birch = lerpf(lerpf(birch, 0.17, maxf(pine_stand, oak_stand)), 0.65, birch_stand)
 			if r < pine:
 				return Biomes.T_PINE
 			if r < pine + birch:
 				return Biomes.T_BIRCH
 			return Biomes.T_OAK if r < 0.94 or interior > 0.75 else Biomes.T_BUSH
 		Biomes.TAIGA:
-			if r < (0.08 + 0.22 * m) * (1.0 - 0.5 * _ss(HIGH_LO, HIGH_HI, e)):
-				return Biomes.T_BIRCH
-			if e > HIGH_HI:
-				return Biomes.T_PINE
+			var high := _ss(HIGH_LO, HIGH_HI, e)
+			var birch := lerpf(0.30 + 0.18 * m, 0.06 + 0.07 * m, high)
+			birch += (_ss(0.26, 0.8, stand) - 0.5) * 0.42 * (1.0 - high) * _ss(0.25, 0.55, m)
+			return Biomes.T_BIRCH if r < birch else Biomes.T_PINE
 		Biomes.DESERT:
 			if shore:
 				return Biomes.T_PALM if t > 0.65 and r < 0.7 else Biomes.T_BUSH # оазис

@@ -29,7 +29,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 19 # 17: start area; 18: regional moisture; 19: dry pockets, relief-position moisture, swamp (docs/MACRO_GEOGRAPHY.md)
 const SCHEMA_TRAILS_VERSION := 27 # longitudinal tread widths and section-derived coverage
-const SCHEMA_NATURE_VERSION := 14 # tall forest: age classes in obj_v, new tree sizes and spacing
+const SCHEMA_NATURE_VERSION := 15 # stand composition and shrub distribution
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

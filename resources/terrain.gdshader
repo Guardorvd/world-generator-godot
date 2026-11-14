@@ -266,7 +266,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float patch = smoothstep(0.32, 0.72, n_mid + (n_big - 0.5) * 0.4);
 		vec3 soil = mix(leaf_soil, needle_soil, forest.g);
 		soil *= mix(1.12, 0.72, forest.b);
-		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65);
+		float moss = smoothstep(0.48, 0.85, forest.b) * patch * (0.35 + forest.r * 0.65) * (1.0 - 0.55 * forest.a);
 		soil = mix(soil, floor_moss, moss * 0.7);
 		// Светлые сухие россыпи и обнажения проходят сквозь подстилку.
 		float stones = forest.a * smoothstep(0.38, 0.70, n_big + (n_mid - 0.5) * 0.6);
@@ -432,8 +432,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				float wet_c = smoothstep(0.55, 0.85, wet);
 				float c_tall = smoothstep(0.42, 0.72, big * 0.65 + mid * 0.35 + (wet - 0.5) * 0.45) * flat_g * (1.0 - 0.7 * dry_b);
 				float c_forbs = smoothstep(0.4, 0.7, (1.0 - big) * 0.55 + mid * 0.45 + (light - 0.5) * 0.35) * (1.0 - 0.6 * wet_c) * (1.0 - 0.5 * high);
-				float c_shrub = (foothill * smoothstep(0.5, 0.8, mid) * 0.65
-					+ smoothstep(0.1, 0.4, sl) * smoothstep(0.48, 0.7, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, wet)) * 1.1) * (1.0 - 0.4 * dry_b);
+				float c_shrub = (foothill * smoothstep(0.55, 0.8, mid) * 0.65
+					+ smoothstep(0.1, 0.4, sl) * smoothstep(0.53, 0.74, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, wet)) * 1.1) * (1.0 - 0.4 * dry_b);
 				float c_wet = smoothstep(0.78, 0.95, wet) * flat_g * (1.0 - smoothstep(0.1, 0.3, alt)) * 0.48;
 				float c_turf = high * (1.0 - 0.5 * exposure) + exposure * 0.5;
 				float c_lawn = (0.45 + 0.4 * (1.0 - mid) + dry_b * 0.5) * 0.55;
@@ -459,7 +459,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				// иван-чай — своими пятнами (~24 м) на опушках, в разнотравье и кустарнике
 				float bloom = smoothstep(0.58, 0.82, wg_vnoise(cell, 6.0, veg_seeds.w)) * (1.0 - steppe) * clamp(ca.y * 0.3 + ca.z * 0.6 + cb.x * 1.2, 0.0, 1.0);
 				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
-				turf = mix(turf, open_col, open_w);
+				// Keep the ground visible between the sparser dry communities.
+				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));
 			}
 			col = mix(col, turf, veg * ground_w);
 		}

@@ -23,11 +23,12 @@ const COMMUNITY := [
 	[0.0, 0.0, 0.0, 0.2, 0.15, 0.0, 0.0, 0.0, 0.3, 0.2, 0.0, 0.0, 0.5, 2.6, 0.0, 0.15, 0.3],  # разнотравье
 	[0.2, 0.0, 0.0, 0.1, 0.0, 2.2, 0.5, 0.3, 0.1, 0.5, 0.25, 0.15, 1.2, 0.3, 0.0, 0.0, 0.6], # кустарник, опушка
 	[0.1, 0.1, 0.0, 0.2, 0.0, 0.25, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.5, 0.2, 3.0, 0.0, 0.1],  # сырое место, берег
-	[0.0, 0.4, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0, 0.4, 0.25], # горная дернина
+	[0.0, 0.08, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0, 0.4, 0.25], # горная дернина
 ]
 ## Доля занятых мест (из OPEN_SLOTS на клетку) и множитель низкой травы по сообществу
-const COMMUNITY_DENSITY := [0.06, 0.88, 0.6, 0.6, 0.8, 0.45]
+const COMMUNITY_DENSITY := [0.06, 0.81, 0.55, 0.55, 0.8, 0.34]
 const COMMUNITY_GRASS := [1.0, 0.45, 0.85, 0.7, 0.5, 0.9] # под куртинами мелкая трава не видна — её меньше
+const COMMUNITY_GRASS_OPEN := [0.9, 0.36, 0.72, 0.57, 0.5, 0.68]
 const OPEN_SLOTS := 6
 ## Характер леса: светлый (просветы, трава и цветы), тёмный (сомкнутый, чаще хвойный: мох и грибы),
 ## чаща (молодой участок: кусты и подрост стеной), папоротниковый (влажная тень).
@@ -1014,9 +1015,9 @@ static func communities(big: float, mid: float, moisture: float, light: float, s
 	# крупного шума, поэтому соседствуют пятнами в сотни метров, а не перемешиваются.
 	var tall := smoothstep(0.42, 0.72, big * 0.65 + mid * 0.35 + (moisture - 0.5) * 0.45 + verge * 0.18) * flat
 	var forbs := smoothstep(0.4, 0.7, (1.0 - big) * 0.55 + mid * 0.45 + (light - 0.5) * 0.35) * (1.0 - 0.6 * wet)
-	var shrub := smoothstep(0.15, 0.55, edge) * 0.9 + foothill * smoothstep(0.5, 0.8, mid) * 0.65 + verge * 0.25 * mid
+	var shrub := smoothstep(0.15, 0.55, edge) * lerpf(0.5, 0.95, mid) + foothill * smoothstep(0.55, 0.8, mid) * 0.65 + verge * 0.25 * mid
 	# 12.11.2026: кустарниковые склоны холмов — заросли пятнами на уклонах (не на ровном лугу и не в сырых низинах)
-	shrub += smoothstep(0.1, 0.4, slope) * smoothstep(0.48, 0.7, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, moisture)) * 1.1
+	shrub += smoothstep(0.1, 0.4, slope) * smoothstep(0.53, 0.74, mid * 0.6 + (1.0 - big) * 0.4) * (1.0 - 0.7 * smoothstep(0.6, 0.85, moisture)) * 1.1
 	# 16.1: осока с рогозом — у воды; просто сырой склон даёт её мало
 	var reed := shore * (0.4 + 0.6 * wet) * flat + smoothstep(0.78, 0.95, moisture) * flat * (1.0 - smoothstep(0.1, 0.3, alt)) * 0.3
 	var turf := high * (1.0 - 0.5 * rock) + rock * 0.5
@@ -1031,3 +1032,17 @@ static func communities(big: float, mid: float, moisture: float, light: float, s
 	for c in COMMUNITIES:
 		out[c] /= total
 	return out
+
+
+## Просветы внутри пятен, общие для куртин и их дальнего представления.
+static func open_patch(noise: float, sheltered: float) -> float:
+	var patch := smoothstep(0.19, 0.55, noise)
+	return lerpf(patch, smoothstep(0.1, 0.45, noise), sheltered)
+
+
+static func open_wetland(biome: int, wet: float, water: float) -> float:
+	return 1.0 if biome == Biomes.SWAMP else maxf(wet, 1.0 - smoothstep(1.0, 3.0, water))
+
+
+static func open_exposure(rock: float, slope: float) -> float:
+	return (1.0 - 0.6 * rock) * (1.0 - 0.75 * smoothstep(0.55, 1.1, slope))

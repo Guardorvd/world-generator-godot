@@ -146,19 +146,20 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE])
 		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE])
 		herb += com[c] * (row[Understory.MEADOW] + row[Understory.HIGH_GRASS] + row[Understory.SEDGE] + row[Understory.STIPA] + row[Understory.FORBS] * 0.6)
-	density *= (1.0 - 0.6 * rock) * (1.0 - 0.75 * smoothstep(0.55, 1.1, slope))
+	var wetland := Understory.open_wetland(bi, com[Understory.C_WET], water)
+	var patch := Understory.open_patch(VegetationLayer._vnoise(i, j, 3.0, seed + 31), wetland)
+	density *= Understory.open_exposure(rock, slope)
 	# Bushes per 4 m cell (OPEN_SLOTS places, density share, woody share of the weights)
 	var per_cell := density * Understory.OPEN_SLOTS * (woody + tall) / maxf(total, 0.001)
 	if bi == Biomes.ROCK: per_cell *= 0.5
 	# A thicket needs a few bushes in 12 m; the 12 m patch noise of the near layout makes the gaps.
-	var patch := smoothstep(0.1, 0.45, VegetationLayer._vnoise(i, j, 3.0, seed + 31))
 	var mass := per_cell * patch
 	var u := WGRandom.hash2(i, j, seed + 991)
 	var v := WGRandom.hash2(i, j, seed + 993)
 	if mass < 0.22 or WGRandom.hash2(i, j, seed + 977) > smoothstep(0.22, 0.6, mass) + 0.15:
 		# 12.11.2026: без кустов холм вдали не голый — массивы высокотравья (куртины по пояс) тоже видны
 		# низкими широкими валами: там, где ближняя раскладка ставит густые куртины, осоку и ковыль.
-		var herb_mass := density * Understory.OPEN_SLOTS * herb / maxf(total, 0.001) * smoothstep(0.2, 0.55, VegetationLayer._vnoise(i, j, 3.0, seed + 47))
+		var herb_mass := density * Understory.OPEN_SLOTS * herb / maxf(total, 0.001) * patch
 		if herb_mass < 0.4 or WGRandom.hash2(i, j, seed + 979) > smoothstep(0.4, 1.6, herb_mass) * 0.85: return {}
 		return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = 1.0, tall = 0.0, juniper = false,
 			conifer = false, u = u, herb = true, parch = clampf((0.55 - moisture) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)}

@@ -1814,7 +1814,7 @@ static func _keep(d: float, full: float, ahead: float) -> float:
 	return minf(1.0, full * full / (near * near))
 
 
-## Возвращает множитель низкой травы по характеру леса (вне леса 1).
+## Возвращает множитель низкой травы по характеру места.
 func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
 	var k := j * world.W + i
 	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz, world.elev[k], world.dist_water[k])
@@ -1831,18 +1831,20 @@ func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, sur
 	if canopy < 0.15:
 		# 16.0: открытые места — растительные сообщества (раньше подлеска здесь не было вовсе)
 		if legacy_open:
-			return 1.0 if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz)
+			return 1.0 if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water)
 		return _fill_open_cell(i, j, bi, path, slope, surface, sunlight, px, pz, alt, water)
-	return _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz)
+	return _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water)
 
 
 ## Подлесок под пологом: характер леса (8.2) и, с 16.0, опушка — кусты, подрост и высокотравье у края
-func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float) -> float:
+func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float, water := 99.0) -> float:
 	var canopy := surface.r
 	var moisture := surface.b
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
 	var ch := Understory.character(canopy, surface.g, moisture, sunlight, StageVegetation.age_at(world, i, j))
 	var grass_mul := Understory.mix(Understory.LOW_GRASS, ch)
+	var bank := Understory.open_wetland(bi, 0.0, water)
+	grass_mul -= (1.0 - bank) * (ch[Understory.LIGHT] * 0.24 + ch[Understory.THICKET] * 0.04 + ch[Understory.FERNY] * 0.02)
 	# 15.0: у дорог и троп подлесок решает ground_clear по настоящему полотну; клетка звериной тропы и путь за краем плана — пусто
 	if path == 1 or slope > 0.9:
 		return grass_mul
@@ -1874,17 +1876,29 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	# Пятна по 12 м и случайные пропуски; соседние клетки связаны без нового шума.
 	var seed := world.seed_num ^ 6601
 	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
-	var density := (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) # 9.4: гуще
-	density *= 1.0-0.65*surface.a
-	# В чаще мест больше: кусты и подрост стоят стеной.
+	var density := minf(1.0, (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) * (1.0 - 0.65 * surface.a))
+	var cluster := smoothstep(0.32, 0.76, patch)
+	var woody_keep := minf(1.0, lerpf(0.55, 0.96, cluster) + ch[Understory.THICKET] * 0.12)
+	var ground_keep := lerpf(0.7, 0.96, cluster)
+	var moss_keep := lerpf(0.25, 1.0, smoothstep(0.35, 0.78, moisture * (1.0 - light * 0.4))) * (1.0 - 0.55 * maxf(surface.a, smoothstep(0.2, 0.75, slope)))
+	# Общий бросок плотности позволяет проредить растения, сохраняя раскладку валежника и камней.
 	for m in 5 + roundi(3.0 * ch[Understory.THICKET]):
-		if WGRandom.hash2(i * 8 + m, j, seed + 1) > density:
+		var roll := WGRandom.hash2(i * 8 + m, j, seed + 1)
+		if roll > density:
 			continue
 		var pick := WGRandom.hash2(i * 8 + m, j, seed + 2) * total
 		var kind := 0
 		while kind < weights.size() - 1 and pick >= weights[kind]:
 			pick -= weights[kind]
 			kind += 1
+		if kind < Floor.FIRST and bank < 1.0:
+			var keep := ground_keep
+			if kind == Understory.MOSS:
+				keep = moss_keep
+			elif kind in [Understory.BUSH, Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]:
+				keep = woody_keep
+			if roll > density * lerpf(keep, 1.0, bank):
+				continue
 		var x := (i + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 3)) * TILE
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(i * 8 + m, j, seed + 4)) * TILE
 		var far: bool = understory[kind].far
@@ -2058,18 +2072,19 @@ func _open_community(i: int, j: int, bi: int, slope: float, surface: Color, sunl
 	var com := Understory.communities(big, mid, surface.b, sunlight, slope, alt, surface.a, water, edge, verge, dry)
 	var density := 0.0
 	var grass_mul := 0.0
+	var wetland := Understory.open_wetland(bi, com[Understory.C_WET], water)
+	var grass_shelter := maxf(wetland, maxf(dry, float(bi == Biomes.TUNDRA)))
 	for c in Understory.COMMUNITIES:
 		density += com[c] * Understory.COMMUNITY_DENSITY[c]
-		grass_mul += com[c] * Understory.COMMUNITY_GRASS[c]
-	# Пятна ~12 м с просветами внутри массива; крутизна и голая порода редят.
-	density *= smoothstep(0.1, 0.45, _vnoise(i, j, 3.0, seed + 31)) * (1.0 - 0.6 * surface.a)
-	density *= 1.0 - 0.75 * smoothstep(0.55, 1.1, slope)
+		grass_mul += com[c] * lerpf(Understory.COMMUNITY_GRASS_OPEN[c], Understory.COMMUNITY_GRASS[c], grass_shelter)
+	var patch_noise := _vnoise(i, j, 3.0, seed + 31)
+	density *= Understory.open_patch(patch_noise, wetland) * Understory.open_exposure(surface.a, slope)
 	# Сушь желтит и высушивает метёлки, сырость — сочная зелень; оттенок общий у соседей.
 	var parch := clampf((0.55 - surface.b) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)
 	# 16.1: степь и сухие солнечные склоны — ковыль. Раньше газон степи был почти пуст (густота 0,06):
 	# пятнами (средний шум) там встают куртины ковыля, между ними — открытая степь.
 	var steppe := clampf(maxf(dry, smoothstep(0.45, 0.8, parch) * sunlight * 1.3), 0.0, 1.0)
-	density += com[Understory.C_LAWN] * steppe * 0.7 * smoothstep(0.35, 0.7, mid) * smoothstep(0.1, 0.45, _vnoise(i, j, 3.0, seed + 31))
+	density += com[Understory.C_LAWN] * steppe * 0.7 * smoothstep(0.35, 0.7, mid) * Understory.open_patch(patch_noise, maxf(dry, wetland))
 	# Иван-чай — группами: свой шум ~25 м, большие цветущие участки только где он высок
 	var bloom := smoothstep(0.58, 0.82, _vnoise(i, j, 6.0, seed + 41))
 	var q := PackedByteArray([1, 0, 0, 0, 0, 0, 0, roundi(minf(density, 1.0) * 255.0), mini(255, roundi(grass_mul * 200.0)), roundi(parch * 255.0), roundi(verge * 255.0),
@@ -2154,6 +2169,8 @@ func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, 
 		var choice := 0
 		while choice < ROCK_HOLLOW.size() - 1 and pick >= ROCK_HOLLOW[choice][1]: choice += 1
 		var kind: int = ROCK_HOLLOW[choice][0]
+		if kind == Understory.MOSS and not legacy_open and pick > 0.45 * smoothstep(0.46, 0.75, surface.b) * (1.0 - surface.a):
+			continue
 		var x := (i + 0.1 + 0.8 * WGRandom.hash2(hx * 8 + m, hy, seed + 3)) * TILE
 		var z := (j + 0.1 + 0.8 * WGRandom.hash2(hx * 8 + m, hy, seed + 4)) * TILE
 		var far: bool = understory[kind].far
