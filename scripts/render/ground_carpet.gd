@@ -32,6 +32,10 @@ const SUB := 9              # ячеек на сторону плитки: 4 м 
 const CAP := 36000          # экземпляров во всех MultiMesh вместе
 const FADE := 0.35          # полоса растворения, доля дальности
 const NEAR_SHARE := 0.5     # доля дальности, где стоит полная форма и травинки ещё не поредели до дальней
+const EXTRA_REACH := Vector3(2.0, 1.18, 0.85) # вперёд, вбок, назад; те же оси в ground_carpet.gdshaderinc
+const EXTRA_DETAIL := Vector3(1.25, 0.59, 0.425)
+const EXTRA_REAR_KEEP := 0.8
+const TURN_COS := 0.9945    # пересборка при повороте примерно на 6°
 const MARGIN := 5.0         # запас раскладки за видимой дальностью, м
 const STEP := 2.5           # на сколько метров сдвигается игрок до новой склейки
 const KINDS := Models.CARPET_KINDS
@@ -55,6 +59,7 @@ var stream := StreamPolicy.new()
 ## Настройки игрока (GameSettings.CARPET_DENSITY / CARPET_RANGE) и качество растительности
 var density := 1.0           # множитель доли занятых ячеек
 var base_range := 22.0       # м, видимость целиком до base_range × (1 − FADE), растворение до base_range
+var directional := false
 var grass_keep := 1.0        # flora.grass
 var grow := 1.0              # flora.grow
 var detail := 1.0            # flora.detail
@@ -70,6 +75,7 @@ var _tile_y := {}            # Vector2i -> Vector2(мин. и макс. высо
 var _task := -1
 var _last := Vector2.INF
 var _last_lead := Vector2.ZERO
+var _last_forward := Vector2.UP
 var _started_clock := 0.0
 var _out: Array = []         # результат задачи: буфер на слой
 var _out_n := PackedInt32Array()
@@ -118,11 +124,12 @@ func reach() -> float:
 
 
 ## Настройки или качество изменились (на паузе): кэш плиток устарел.
-func configure(density_scale: float, range_m: float, flora: Dictionary) -> void:
+func configure(density_scale: float, range_m: float, flora: Dictionary, use_direction := false) -> void:
 	var changed := not is_equal_approx(density, density_scale) or not is_equal_approx(base_range, range_m) \
 		or not is_equal_approx(grass_keep, flora.grass) or not is_equal_approx(grow, flora.grow)
 	density = density_scale
 	base_range = range_m
+	directional = use_direction
 	grass_keep = flora.grass
 	grow = flora.grow
 	detail = flora.detail
@@ -145,13 +152,15 @@ func apply_ranges() -> void:
 		var mat: ShaderMaterial = entry.mat
 		mat.set_shader_parameter("fade_far", maxf(r, 0.1))
 		mat.set_shader_parameter("fade_len", maxf(r * FADE, 0.1))
+		mat.set_shader_parameter("directional_carpet", directional)
 		# Дальше 3,5 м травинок в куртинке меньше; к NEAR_SHARE дальности остаётся доля CARPET_FAR_KEEP —
 		# ровно те травинки, из которых собрана дальняя форма
 		mat.set_shader_parameter("detail_full", 3.5 * detail)
-		mat.set_shader_parameter("detail_far", maxf(r * NEAR_SHARE, 4.0))
+		mat.set_shader_parameter("detail_far", r if directional and _enabled else maxf(r * NEAR_SHARE, 4.0))
 		mat.set_shader_parameter("detail_keep", Models.CARPET_FAR_KEEP)
 	# Тень дернины на дёрне материала земли (terrain.gdshader) — та же дальность и полоса
 	RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(r, maxf(r * FADE, 0.1)))
+	RenderingServer.global_shader_parameter_set("ground_carpet_forward", _view_forward() if directional else Vector2.ZERO)
 
 
 func finish() -> void:
@@ -163,6 +172,7 @@ func finish() -> void:
 func release() -> void:
 	finish()
 	RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(0.0, 1.0))
+	RenderingServer.global_shader_parameter_set("ground_carpet_forward", Vector2.ZERO)
 
 
 ## Земля в rect (клетки плана) перестроена: плитки в ней устарели.
@@ -190,6 +200,9 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> void
 	stream.sample(p, maxf(dt, 0.000001), false)
 	if not _enabled:
 		return
+	var forward := _view_forward() if directional else Vector2.UP
+	if directional:
+		RenderingServer.global_shader_parameter_set("ground_carpet_forward", forward)
 	if _task != -1:
 		if not WorkerThreadPool.is_task_completed(_task):
 			return
@@ -200,10 +213,12 @@ func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> void
 		stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
 		_present()
 	var lead := stream.lead()
-	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 and road_revision == _road_revision:
+	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
+			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision:
 		return
+	_last_forward = forward
 	_begin(p, lead, road_revision)
-	_task = WorkerThreadPool.add_task(_job.bind(p, lead), true, "Дернина")
+	_task = WorkerThreadPool.add_task(_job.bind(p, lead, forward), true, "Дернина")
 
 
 ## Сразу, на месте (старт, возрождение): ковёр готов в том же кадре. Дальше — update.
@@ -212,9 +227,32 @@ func build_now(p: Vector2, road_revision: int) -> void:
 	stream.sample(p, 0.0, true)
 	if not _enabled:
 		return
+	_last_forward = _view_forward() if directional else Vector2.UP
+	if directional:
+		RenderingServer.global_shader_parameter_set("ground_carpet_forward", _last_forward)
 	_begin(p, Vector2.ZERO, road_revision)
-	_job(p, Vector2.ZERO)
+	_job(p, Vector2.ZERO, _last_forward)
 	_present()
+
+
+func _view_forward() -> Vector2:
+	var camera := layer.get_viewport().get_camera_3d()
+	if camera != null:
+		var heading := Vector2(-camera.global_basis.z.x, -camera.global_basis.z.z)
+		if heading.length_squared() > 0.0001:
+			return heading.normalized()
+	return _last_forward
+
+
+## Расстояние в профиле с упреждением. На стыке полуэллипсов у отрезка меняется масштаб.
+static func _profile_coverage(start: Vector2, end: Vector2, axes: Vector3) -> float:
+	var a := Vector2(start.x / (axes.x if start.x >= 0.0 else axes.z), start.y / axes.y)
+	var b := Vector2(end.x / (axes.x if end.x >= 0.0 else axes.z), end.y / axes.y)
+	if start.x * end.x < 0.0:
+		var seam := Vector2(0.0, lerpf(a.y, b.y, start.x / (start.x - end.x)))
+		return minf(StreamPolicy.distance_to_coverage(Vector2.ZERO, a, seam - a),
+			StreamPolicy.distance_to_coverage(Vector2.ZERO, seam, b - seam))
+	return StreamPolicy.distance_to_coverage(Vector2.ZERO, a, b - a)
 
 
 ## Замеры и проверки стенда: точки оснований всех куртинок на экране и число их треугольников
@@ -265,18 +303,32 @@ func _begin(p: Vector2, lead: Vector2, road_revision: int) -> void:
 
 
 ## Фоновая задача: плитки капсулы, недостающие досчитываются, буферы склеиваются из кусков.
-func _job(p: Vector2, lead: Vector2) -> void:
-	var reach_all := reach() + MARGIN
+func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
+	var r := reach()
+	var reach_all := r * (EXTRA_REACH.x if directional else 1.0) + MARGIN
+	var coverage_lead := Vector2(lead.dot(forward), forward.cross(lead))
+	var tile_pad := TILE * 0.72
+	var fade_axes := EXTRA_REACH * r + Vector3.ONE * (MARGIN + tile_pad)
+	# Геометрию упрощаем после поредения в шейдере, с запасом на размер плитки и движение.
+	var detail_axes := EXTRA_DETAIL * (r * 1.12) + Vector3.ONE * (STEP + tile_pad + 1.0)
 	# Плитка дальняя, если до следующей склейки ни одна её куртинка не окажется ближе границы поредения
-	var far_from := reach() * NEAR_SHARE + STEP + 1.0 + TILE * 0.72
+	var far_from := r * NEAR_SHARE + STEP + 1.0 + TILE * 0.72
 	var lo := p.min(p + lead) / TILE - Vector2.ONE * (reach_all / TILE + 1.0)
 	var hi := p.max(p + lead) / TILE + Vector2.ONE * (reach_all / TILE + 1.0)
 	var need: Array = []
 	for j in range(maxi(0, floori(lo.y)), mini(world.H - 1, ceili(hi.y)) + 1):
 		for i in range(maxi(0, floori(lo.x)), mini(world.W - 1, ceili(hi.x)) + 1):
-			var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, p, lead)
-			if d <= reach_all + TILE * 0.72:
-				need.append([d, i, j])
+			var offset := Vector2(i + 0.5, j + 0.5) * TILE - p
+			var d := StreamPolicy.distance_to_coverage(offset, Vector2.ZERO, lead)
+			var visible := d <= reach_all + TILE * 0.72
+			var far := d >= far_from
+			if directional:
+				var start := Vector2(offset.dot(forward), forward.cross(offset))
+				var end := start - coverage_lead
+				visible = _profile_coverage(start, end, fade_axes) <= 1.0
+				far = visible and _profile_coverage(start, end, detail_axes) >= 1.0
+			if visible:
+				need.append([d, i, j, far, directional and offset.dot(forward) < -tile_pad])
 	need.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
 	var outs: Array = []
 	var counts := PackedInt32Array()
@@ -300,10 +352,12 @@ func _job(p: Vector2, lead: Vector2) -> void:
 			tiles_built += 1
 		if tile.is_empty():
 			continue
-		var far := 1 if entry[0] >= far_from else 0
+		var far := 1 if entry[3] else 0
 		var added := 0
 		for kind in KINDS:
 			var part: PackedFloat32Array = tile[kind]
+			if entry[4]:
+				part = _thin_rear(part)
 			var m := part.size() / STRIDE
 			if m == 0:
 				continue
@@ -340,6 +394,15 @@ func _job(p: Vector2, lead: Vector2) -> void:
 	_out_box = AABB(low, high - low).grow(0.9) if total > 0 else AABB()
 	last_job_ms = (Time.get_ticks_usec() - _job_started) / 1000.0
 	max_job_ms = maxf(max_job_ms, last_job_ms)
+
+
+## Постоянная выборка по зерну куртинки: сзади меньше экземпляров в буфере MultiMesh.
+static func _thin_rear(part: PackedFloat32Array) -> PackedFloat32Array:
+	var kept := PackedFloat32Array()
+	for offset in range(0, part.size(), STRIDE):
+		if part[offset + 17] < EXTRA_REAR_KEEP:
+			kept.append_array(part.slice(offset, offset + STRIDE))
+	return kept
 
 
 func _present() -> void:

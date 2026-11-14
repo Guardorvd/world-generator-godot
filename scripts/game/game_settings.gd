@@ -74,8 +74,9 @@ const CARPET_RANGE := [
 	{title = "средне", meters = 15.0},
 	{title = "далеко", meters = 22.0},
 	{title = "очень далеко", meters = 32.0},
+	{title = "экстра", meters = 22.0, directional = true},
 ]
-const DEFAULT_CARPET_RANGE := 2
+const DEFAULT_CARPET_RANGE := 4
 
 var mouse := DEFAULT_MOUSE        # множитель GameConfig.MOUSE
 var invert_y := DEFAULT_INVERT_Y

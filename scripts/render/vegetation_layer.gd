@@ -319,17 +319,18 @@ static func _ahead(r: float) -> float:
 func _configure_carpet() -> void:
 	if carpet == null:
 		return
-	carpet.configure(GameSettings.CARPET_DENSITY[settings.carpet_density].scale, GameSettings.CARPET_RANGE[settings.carpet_range].meters, flora)
+	var preset: Dictionary = GameSettings.CARPET_RANGE[settings.carpet_range]
+	carpet.configure(GameSettings.CARPET_DENSITY[settings.carpet_density].scale, preset.meters, flora, preset.get("directional", false))
 
 
 ## Настройки дернины изменились на паузе; true — вызывающий затем делает update(..., true).
 func set_carpet() -> bool:
 	if carpet == null:
 		return false
-	var before := [carpet.density, carpet.base_range]
+	var before := [carpet.density, carpet.base_range, carpet.directional]
 	carpet.finish()
 	_configure_carpet()
-	return before != [carpet.density, carpet.base_range]
+	return before != [carpet.density, carpet.base_range, carpet.directional]
 
 
 ## Множитель низкой травы клетки плана по характеру места, без побочных эффектов: дернина (GroundCarpet)

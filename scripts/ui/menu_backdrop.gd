@@ -23,7 +23,8 @@ const BIKE_AT := Vector2(502.1, 813.2)
 const OAK_AT := Vector2(506.3, 807.0)
 const HOUR := 17.0 + 20.0 / 60.0
 const GLOBALS := [&"cloud_shadow", &"sun_dir", &"vegetation_night", &"style_haze",
-	&"style_depth", &"veg_center", &"vegetation_clock", &"veg_seeds", &"distant_vegetation"]
+	&"style_depth", &"veg_center", &"vegetation_clock", &"veg_seeds", &"distant_vegetation",
+	&"ground_carpet", &"ground_carpet_forward"]
 const BUILD_STEPS := [&"light", &"site_north", &"site_south", &"heightfield", &"surface", &"terrain_far", &"terrain_near",
 	&"water", &"mountains", &"vegetation", &"far_forest_north", &"far_forest_south", &"rider"]
 const QUALITY := [0.5, 0.67, 1.0]

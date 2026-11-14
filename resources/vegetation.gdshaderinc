@@ -42,6 +42,8 @@ uniform float trample = 0.0;
 uniform float detail_full = 0.0;
 uniform float detail_far = 1.0;
 uniform float detail_keep = 1.0;
+uniform bool directional_carpet = false;
+#include "res://resources/ground_carpet.gdshaderinc"
 // 9.9+: уровень детализации дерева у материала (-1 — без смены уровней; у каждого уровня своя копия материала). Соседние уровни смешиваются той же сеткой
 // порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
 // Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
@@ -88,7 +90,8 @@ void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
 	float dist = distance(origin.xz, veg_center);
-	v_fade = clamp((fade_far - dist) / fade_len, 0.0, 1.0);
+	float fade_dist = directional_carpet ? carpet_fade_distance(origin.xz - veg_center) : dist;
+	v_fade = clamp((fade_far - fade_dist) / fade_len, 0.0, 1.0);
 #ifdef ROCK_DETAIL
 	rock_local = VERTEX;
 	float rock_scale = length(MODEL_MATRIX[0].xyz);
@@ -119,7 +122,8 @@ void vertex() {
 		VERTEX *= 1.0 + thin_grow * (1.0 - keep);
 	}
 	if (detail_full > 0.0) {
-		float keep_detail = mix(1.0, detail_keep, smoothstep(detail_full, detail_far, dist));
+		float detail_dist = directional_carpet ? carpet_detail_distance(origin.xz - veg_center) : dist;
+		float keep_detail = mix(1.0, detail_keep, smoothstep(detail_full, detail_far, detail_dist));
 		v_fade *= clamp((keep_detail - UV2.x) * 10.0 + 1.0, 0.0, 1.0);
 	}
 	// Скрытый LOD не тратит вычисления на ветер, цвет и облака.

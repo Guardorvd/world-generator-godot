@@ -31,6 +31,7 @@ global uniform vec4 distant_vegetation;
 // 14.11.2026: дернина у игрока (VegetationLayer, carpet): x — дальность, y — полоса растворения, м (0 — нет).
 // Под ней дёрн в тени травинок: темнее и зеленее у корней, проплешины остаются светлой землёй.
 global uniform vec2 ground_carpet;
+#include "res://resources/ground_carpet.gdshaderinc"
 global uniform vec2 veg_center;
 uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
 uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
@@ -469,7 +470,9 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));
 			}
 			if (ground_carpet.x > 0.0) {
-				float under = clamp((ground_carpet.x - distance(wpos.xz, veg_center)) / ground_carpet.y, 0.0, 1.0);
+				vec2 offset = wpos.xz - veg_center;
+				float carpet_dist = ground_carpet_forward == vec2(0.0) ? length(offset) : carpet_fade_distance(offset);
+				float under = clamp((ground_carpet.x - carpet_dist) / ground_carpet.y, 0.0, 1.0);
 				under *= (1.0 - carpet_bare) * (1.0 - stony * 0.6) * (1.0 - snow_biome);
 				// на сухом дернина реже и соломенная: тень слабее и не зеленит
 				turf = mix(turf, turf * mix(vec3(0.46, 0.60, 0.40), vec3(0.68, 0.66, 0.54), dryness), under * mix(0.92, 0.55, dryness));

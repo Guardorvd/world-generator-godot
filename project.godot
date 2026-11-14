@@ -198,6 +198,10 @@ ground_carpet={
 "type": "vec2",
 "value": Vector2(0, 1)
 }
+ground_carpet_forward={
+"type": "vec2",
+"value": Vector2(0, 0)
+}
 distant_vegetation={
 "type": "vec4",
 "value": Vector4(450, 90, 1400, 1)
