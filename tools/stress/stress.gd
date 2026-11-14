@@ -55,6 +55,7 @@ var road_len: PackedFloat32Array = []
 var _chunk_seen := {}     # ChunkSource.stats на прошлом кадре (причины пиков)
 var _quiet_particles := false # отключение «частицы»: _look не крутит их на CPU
 var _night_lights := true # _look зовёт update_lights (костры, окна, гирлянды), как _process игры
+var _process_probe: RefCounted # ProcessMetrics (C#): сборки мусора .NET между замерами; null — сборка без .NET
 
 
 func _initialize() -> void:
@@ -203,6 +204,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var prims := 0.0
 	var physics := 0.0
 	var spikes: Array = []
+	var peak_video := 0.0
 	var began := Time.get_ticks_usec()
 	var last := began
 	var dt := 1.0 / 60.0
@@ -229,6 +231,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 			# TIME_PROCESS здесь не годится: скрипт прогона — сам SceneTree, монитор давал сотни и тысячи мс на кадр.
 			# Работа кадра на CPU — work_ms (шаг прогона на паузе) или tick_us игры (замеры play_*).
 			physics += Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS) * 1000.0
+			peak_video = maxf(peak_video, Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED))
 			# длинный кадр — с причиной: счётчики подгрузки ещё хранят этот кадр
 			if dt > 0.0167 and spike_cause.is_valid() and spikes.size() < 64:
 				spikes.append({t = snappedf((now - began) / 1000000.0, 0.01), ms = snappedf(dt * 1000.0, 0.1), work_ms = snappedf(worked, 0.1),
@@ -238,6 +241,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 	var out := Report.stats(ms, gpu, cpu, work, calls, prims)
 	if out.frames > 0:
 		out.physics_ms = snappedf(physics / out.frames, 0.01)
+		out.peak_video_mb = snappedf(peak_video / 1048576.0, 0.1)
 		spikes.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return a.ms > b.ms)
 		out.worst = spikes.slice(0, 5)
 	return out
@@ -247,6 +251,7 @@ func _sample(seconds: float, step: Callable, keep: bool) -> Dictionary:
 func _case(name: String, title: String, seconds: float, step := Callable(), extra := {}, always := false) -> Dictionary:
 	if not always and not _wanted(name):
 		return {}
+	var pm0 := _dotnet()
 	var warm := await _sample(WARM, step, true)
 	var setup_s := snappedf((Time.get_ticks_msec() - (case_end if case_end > 0 else started)) / 1000.0, 0.1)
 	var c := await _sample(seconds, step, true)
@@ -259,12 +264,28 @@ func _case(name: String, title: String, seconds: float, step := Callable(), extr
 	c.seconds = seconds
 	c.video_mb = snappedf(Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0, 0.1)
 	c.nodes = int(Performance.get_monitor(Performance.OBJECT_NODE_COUNT))
+	var pm1 := _dotnet()
+	if not pm0.is_empty() and not pm1.is_empty():
+		# прогрев + замер: сборки мусора .NET (C#-расчёты подгрузки) и их паузы
+		c.dotnet = {gc0 = int(pm1.gc0) - int(pm0.gc0), gc1 = int(pm1.gc1) - int(pm0.gc1), gc2 = int(pm1.gc2) - int(pm0.gc2),
+			alloc_mb = snappedf((float(pm1.managed_allocated_bytes) - float(pm0.managed_allocated_bytes)) / 1048576.0, 0.1),
+			pause_ms = snappedf(float(pm1.get("gc_pause_ms", 0.0)) - float(pm0.get("gc_pause_ms", 0.0)), 0.01),
+			heap_mb = snappedf(float(pm1.managed_heap_bytes) / 1048576.0, 0.1)}
 	c.merge(extra)
 	report.cases.append(c)
 	print("%-24s %6.0f FPS  1%% %5.0f  p99 %6.1f мс  худший %6.1f мс  GPU %5.1f мс  вызовов %5d  %s" % [name, c.fps, c.low1_fps, c.ms.p99,
 		c.ms.max, c.gpu_ms, c.draw_calls, c.bound])
 	Dev.save_json(out.path_join("stress.json"), report)
 	return c
+
+
+## Счётчики процесса из C# (ProcessMetrics); пусто, если .NET нет
+func _dotnet() -> Dictionary:
+	if _process_probe == null and ClassDB.class_exists("CSharpScript"):
+		var script: Variant = load("res://scripts/core/ProcessMetrics.cs")
+		if script is Script and (script as Script).can_instantiate():
+			_process_probe = script.new()
+	return _process_probe.Capture() if _process_probe != null else {}
 
 
 ## Ждёт, пока растительность догрузит раскладку (от least до most секунд): замер на месте не должен захватить
@@ -680,6 +701,8 @@ func _group_world() -> void:
 	# игра без паузы: логика, физика, HUD и звук; сначала игрок стоит, потом едет (руль и газ — нажатия действий)
 	await _play("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD, Callable())
 	await _play("world.play_ride", "Мир: езда с физикой велосипеда", MOVE, _drive)
+	# разгон и резкое торможение: частицы, пыль и след тормоза (первое появление эффектов за игру — в прогреве)
+	await _play("world.play_brake", "Мир: разгон и резкое торможение", MOVE, _brake)
 	if _wanted("world.play_night"):
 		game.hour = 23.0
 		# сначала без фары, потом с ней: цена фары — разница двух соседних отрезков одной ночной езды
@@ -773,6 +796,18 @@ func _drive(t: float, _dt: float) -> void:
 	else:
 		Input.action_release("move_left")
 		Input.action_release("move_right")
+
+
+## Разгон 2 с, затем полный тормоз (move_back) до конца замера
+func _brake(t: float, _dt: float) -> void:
+	Input.action_release("move_left")
+	Input.action_release("move_right")
+	if t < 2.0:
+		Input.action_release("move_back")
+		Input.action_press("move_forward", 1.0)
+	else:
+		Input.action_release("move_forward")
+		Input.action_press("move_back", 1.0)
 
 
 ## Быстрое перемещение (как с карты): сколько длится переход и какие первые кадры после него

@@ -38,11 +38,33 @@ public partial class FastGrid
 	public Godot.Collections.Dictionary RefineTerrain(int width, int height, double tile, int div, int areaX, int areaY, int areaW, int areaH,
 		Vector3[] posIn, Vector3[] norIn, Vector2[] uvIn, int[] oldIdx, int[] keys, float[] ph, Color[] pcolor, Vector2[] puv, float[] hv)
 	{
+		// Карта «клетка -> патч» на весь мир (2,4 МБ на 768²) — одна на поток, а не новая на каждый чанк загрузки:
+		// после вызова отмечены только клетки keys, они и сбрасываются в finally.
+		var cellPatch = _cellPatchBuffer;
+		if (cellPatch == null || cellPatch.Length != width * height)
+		{
+			cellPatch = new int[width * height];
+			Array.Fill(cellPatch, -1);
+			_cellPatchBuffer = cellPatch;
+		}
+		for (int k = 0; k < keys.Length; k++) cellPatch[keys[k]] = k;
+		try
+		{
+			return RefineTerrainWith(cellPatch, width, height, tile, div, areaX, areaY, areaW, areaH, posIn, norIn, uvIn, oldIdx, keys, ph, pcolor, puv, hv);
+		}
+		finally
+		{
+			for (int k = 0; k < keys.Length; k++) cellPatch[keys[k]] = -1;
+		}
+	}
+
+	[ThreadStatic] private static int[] _cellPatchBuffer;
+
+	private static Godot.Collections.Dictionary RefineTerrainWith(int[] cellPatch, int width, int height, double tile, int div, int areaX, int areaY, int areaW, int areaH,
+		Vector3[] posIn, Vector3[] norIn, Vector2[] uvIn, int[] oldIdx, int[] keys, float[] ph, Color[] pcolor, Vector2[] puv, float[] hv)
+	{
 		int stride = div + 1, perPatch = stride * stride;
 		double step = tile / div;
-		var cellPatch = new int[width * height];
-		Array.Fill(cellPatch, -1);
-		for (int k = 0; k < keys.Length; k++) cellPatch[keys[k]] = k;
 		int inArea = 0;
 		for (int k = 0; k < keys.Length; k++)
 		{

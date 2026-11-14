@@ -19,6 +19,7 @@ public partial class ProcessMetrics : RefCounted
             ["managed_allocated_bytes"] = GC.GetTotalAllocatedBytes(false),
             ["managed_heap_bytes"] = GC.GetTotalMemory(false),
             ["gc0"] = GC.CollectionCount(0), ["gc1"] = GC.CollectionCount(1), ["gc2"] = GC.CollectionCount(2),
+            ["gc_pause_ms"] = GC.GetTotalPauseDuration().TotalMilliseconds,
             ["logical_processors"] = System.Environment.ProcessorCount
         };
         if (OperatingSystem.IsWindows()) {

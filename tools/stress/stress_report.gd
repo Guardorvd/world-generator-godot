@@ -138,6 +138,19 @@ static func findings(report: Dictionary) -> Array:
 				top.append("%s %.2f" % [k, parts[k]])
 			out.append("%s: CPU игры %.1f мс на кадр (%s мс; физика %.0f Гц), кадр %.1f мс, GPU %.1f мс." % [c.title, c.get("game_cpu_ms", 0.0),
 				", ".join(top), c.get("physics_hz", 0.0), c.ms.p50, c.gpu_ms])
+	var gc_cases: Array = []
+	var gc_pause := 0.0
+	for c: Dictionary in cases:
+		var d: Dictionary = c.get("dotnet", {})
+		if d.is_empty():
+			continue
+		gc_pause += float(d.get("pause_ms", 0.0))
+		if int(d.gc0) + int(d.gc1) + int(d.gc2) > 0:
+			gc_cases.append("%s: %d/%d/%d, пауза %.1f мс, выделено %.0f МБ" % [c.name, d.gc0, d.gc1, d.gc2, d.get("pause_ms", 0.0), d.alloc_mb])
+	if not gc_cases.is_empty():
+		out.append("Сборки мусора .NET (поколения 0/1/2) во время замеров — %s; всего пауз %.1f мс." % ["; ".join(gc_cases.slice(0, 6)), gc_pause])
+	elif cases.any(func(c: Dictionary) -> bool: return c.has("dotnet")):
+		out.append("Сборок мусора .NET во время замеров не было.")
 	var tr := _case(report, "world.after_travel")
 	if not tr.is_empty():
 		out.append("Быстрое перемещение: переход %.1f с, худший кадр в нём %.0f мс; после прибытия прогрев до %.0f мс, дальше %.0f FPS (1 %% худших %.0f)." % [
