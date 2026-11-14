@@ -376,6 +376,8 @@ func _apply_fade() -> void:
 		_carpet_mat.set_shader_parameter("detail_full", 4.0 * flora.detail)
 		_carpet_mat.set_shader_parameter("detail_far", _carpet_r() * 0.8)
 		_carpet_mat.set_shader_parameter("detail_keep", 0.4)
+		# Тень дернины на дёрне материала земли (terrain.gdshader) — та же дальность и полоса
+		RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(_carpet_r(), _carpet_r() * CARPET_FADE))
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var radius := _reach_r(entry.base, entry.far)
@@ -705,6 +707,8 @@ func _finish() -> void:
 
 func _exit_tree() -> void:
 	_finish()
+	if carpet != null:
+		RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(0.0, 1.0))
 
 
 func _distance(chunk: Vector2i, p: Vector2) -> float:

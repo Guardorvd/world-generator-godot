@@ -28,6 +28,10 @@ uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
 // 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
 uniform float sunlight = 1.0;
 global uniform vec4 distant_vegetation;
+// 14.11.2026: дернина у игрока (VegetationLayer, carpet): x — дальность, y — полоса растворения, м (0 — нет).
+// Под ней дёрн в тени травинок: темнее и зеленее у корней, проплешины остаются светлой землёй.
+global uniform vec2 ground_carpet;
+global uniform vec2 veg_center;
 uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
 uniform vec3 floor_moss : source_color = vec3(0.27, 0.36, 0.17);
 uniform vec3 dry_litter : source_color = vec3(0.44, 0.34, 0.19);
@@ -340,6 +344,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float lush = smoothstep(-0.02, 0.14, base_col.g - base_col.r);
 		float drift = smoothstep(0.28, 0.72, n_macro * 0.55 + n_big * 0.45);
 		vec3 c0 = col;
+		float carpet_bare = 0.0;
 		if (veg > 0.01) {
 			// 12.11.2026: конец лета. Тёплая зелень умеренных биомов (луг, лиственный лес, степь, тундра; по цвету
 			// карты: красного больше синего) зрелая: тон глуше и оливковее, сухие поляны выгорают в солому и охру.
@@ -393,6 +398,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				}
 				earth = mix(earth, rock_color * mix(0.6, 0.95, ph.x), pebble * 0.8);
 				turf = mix(turf, earth, bare * 0.72 * near);
+				carpet_bare = bare;
 				// на каменистом участке камни лежат и в траве
 				float loose = pebble * max(bare, stony * 0.7);
 				turf = mix(turf, rock_color * mix(0.6, 0.95, ph.x) * (0.8 + 0.3 * clamp(1.0 - length(pl) / pr, 0.0, 1.0)), (loose - pebble * bare) * 0.8 * near);
@@ -461,6 +467,12 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
 				// Keep the ground visible between the sparser dry communities.
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));
+			}
+			if (ground_carpet.x > 0.0) {
+				float under = clamp((ground_carpet.x - distance(wpos.xz, veg_center)) / ground_carpet.y, 0.0, 1.0);
+				under *= (1.0 - carpet_bare) * (1.0 - stony * 0.6) * (1.0 - snow_biome);
+				// на сухом дернина реже и соломенная: тень слабее и не зеленит
+				turf = mix(turf, turf * mix(vec3(0.58, 0.68, 0.50), vec3(0.74, 0.71, 0.60), dryness), under * mix(0.8, 0.45, dryness));
 			}
 			col = mix(col, turf, veg * ground_w);
 		}

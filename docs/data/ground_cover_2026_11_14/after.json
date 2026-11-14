@@ -1,13 +1,13 @@
 {
 	"base_grass": false,
-	"setup_ms": 453.187,
+	"setup_ms": 473.24,
 	"legacy": false,
 	"flora": 2,
 	"instances": {
 		"grass": 15146,
 		"fill_capped": 0,
 		"carpet": 2974,
-		"carpet_triangles": 95168,
+		"carpet_triangles": 107064,
 		"carpet_errors": 0,
 		"form_1": "1 x 54",
 		"form_2": "1 x 84",
@@ -44,24 +44,24 @@
 		"understory_triangles": 174411
 	},
 	"moving": {
-		"fps": 17.7898135064588,
-		"p95_ms": 76.6579971313477,
-		"p99_ms": 77.8509979248047,
+		"fps": 16.642766515473,
+		"p95_ms": 83.5869979858398,
+		"p99_ms": 84.4059982299805,
 		"gpu_ms": 0.0,
-		"cpu_ms": 12.4014545720774,
-		"draw_calls": 400.916083916084,
-		"primitives": 1195958.62937063,
-		"detail_fill_s": 4.075615,
-		"video_mb": 64.147518157959,
-		"static_mb": 397.655552864075
+		"cpu_ms": 13.1473059440727,
+		"draw_calls": 401.380597014925,
+		"primitives": 1224183.71641791,
+		"detail_fill_s": 3.905087,
+		"video_mb": 64.0174827575684,
+		"static_mb": 397.148622512817
 	},
-	"force_fill_max_ms": 7213.073,
+	"force_fill_max_ms": 7107.187,
 	"fill_parts": {
-		"scan_ms": 2870.576,
-		"sort_ms": 98.038,
-		"place_ms": 752.994,
-		"grass_filter_ms": 168.218,
-		"sites": 10304
+		"scan_ms": 2802.547,
+		"sort_ms": 79.306,
+		"place_ms": 647.26,
+		"grass_filter_ms": 163.783,
+		"sites": 10240
 	},
 	"fill_capped": 0
 }

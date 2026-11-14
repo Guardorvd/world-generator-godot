@@ -150,8 +150,8 @@ static func grass_mesh() -> ArrayMesh:
 ## 14.11.2026: дернина — ближний низкий покров. Куртинка ~0,5 м из CARPET_BLADES узких травинок 6–36 см
 ## (по треугольнику, выше в середине), каждая пятая соломенная. Корни темнее — куртинка уходит в тон земли.
 ## Строится при запуске (каталог не меняется). UV.x — номер травинки для изгиба в шейдере.
-const CARPET_BLADES := 32
-const CARPET_R := 0.26
+const CARPET_BLADES := 36
+const CARPET_R := 0.32
 
 static func build_carpet_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()

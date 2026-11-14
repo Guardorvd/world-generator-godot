@@ -194,6 +194,10 @@ anti_aliasing/quality/msaa_3d=2
 
 [shader_globals]
 
+ground_carpet={
+"type": "vec2",
+"value": Vector2(0, 1)
+}
 distant_vegetation={
 "type": "vec4",
 "value": Vector4(450, 90, 1400, 1)
