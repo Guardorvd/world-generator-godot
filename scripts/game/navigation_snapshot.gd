@@ -1,6 +1,8 @@
 extends RefCounted
 ## Capture on the main thread. Workers only read this private view, never live streaming dictionaries.
-static func capture(source: Heightfield, include_graph := true) -> Heightfield:
+## include_places = false — без поселений и мест мира: их глубокая копия — почти вся цена снимка (около 4 мс на
+## мире 768), а сборке узлов области (RegionStream.build_decor) они не нужны: она берёт поселения своей области.
+static func capture(source: Heightfield, include_graph := true, include_places := true) -> Heightfield:
 	var original := source.world
 	var w := WorldData.new()
 	w.W = original.W
@@ -14,8 +16,9 @@ static func capture(source: Heightfield, include_graph := true) -> Heightfield:
 		w.trails = original.trails.duplicate()
 		w.bridges = EntityCodec.copy(original.bridges)
 		w.tunnels = EntityCodec.copy(original.tunnels)
-	w.settlements = EntityCodec.copy(original.settlements)
-	w.sites = EntityCodec.copy(original.sites)
+	if include_places:
+		w.settlements = EntityCodec.copy(original.settlements)
+		w.sites = EntityCodec.copy(original.sites)
 	w.lake = original.lake.duplicate()
 	w.filled = original.filled.duplicate()
 	if original.outer != null:

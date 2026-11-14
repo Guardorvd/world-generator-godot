@@ -376,7 +376,7 @@ func _start_build(key: Vector2i) -> void:
 	var out := _build_out
 	var entry: Dictionary = ledger.regions[key]
 	var w := world
-	var view := preload("res://scripts/game/navigation_snapshot.gd").capture(heights, false)
+	var view := preload("res://scripts/game/navigation_snapshot.gd").capture(heights, false, false)
 	var material := _road_mat
 	_build_task = WorkerThreadPool.add_task(func() -> void:
 		out.decor = build_decor(w, view, key, entry, material), false, "Узлы области")
