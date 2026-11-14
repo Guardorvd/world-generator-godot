@@ -144,7 +144,7 @@ static func build_far_meshes() -> Dictionary:
 		var a := arm * TAU / 6.0 + sin(arm * 1.9) * 0.16
 		var forward := Vector3(cos(a), 0, sin(a)) * 0.86
 		var side := Vector3(-sin(a), 0, cos(a)) * 0.86
-		var p0 := _fern_point(0.14, forward, 0.86)
+		var p0 := _fern_point(0.0, forward, 0.86)
 		var pm := _fern_point(0.52, forward, 0.86)
 		var p1 := _fern_point(0.92, forward, 0.86)
 		parts.append([p0, pm + side * 0.20 + Vector3.UP * 0.02, p1, pm - side * 0.20 + Vector3.UP * 0.02])
@@ -180,7 +180,6 @@ static func _stipa(far: bool) -> ArrayMesh:
 		var dir := Vector3(cos(a + 0.35), 0.0, sin(a + 0.35))
 		var side := Vector3(-dir.z, 0.0, dir.x)
 		var u := float(n) / total
-		st.set_uv2(Vector2(0.0 if n % 2 == 0 else fposmod(0.23 + n * 0.618034, 0.9), 0))
 		if n < leaves:
 			# Узкий лист-нить, слегка согнут наружу
 			var h := 0.42 + 0.28 * fposmod(n * 0.381966, 1.0)
@@ -309,8 +308,6 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 		var dir := Vector3(cos(out_a), 0.0, sin(out_a))
 		var side := Vector3(-dir.z, 0.0, dir.x)
 		var h := lerpf(h_min, h_max, fposmod(n * 0.381966 + 0.2, 1.0)) * (1.0 - 0.18 * r / radius)
-		var rank := 0.0 if n % 3 == 0 else fposmod(0.17 + n * 0.618034, 0.95)
-		st.set_uv2(Vector2(rank, 0))
 		var u := float(n) / total
 		if n < arched + spears:
 			var reach := reach_max * (0.55 + 0.6 * fposmod(n * 0.5698, 1.0)) * (1.0 if n < arched else 0.4)
@@ -428,7 +425,6 @@ static func _sedge() -> ArrayMesh:
 		var mid := foot + dir * lean * 0.35 + Vector3.UP * h * 0.6
 		var tip := foot + dir * lean + Vector3.UP * h
 		var c := green * (0.92 + 0.16 * fposmod(n * 0.7548, 1.0))
-		st.set_uv2(Vector2(0.0 if n % 2 == 0 else fposmod(0.21 + n * 0.618034, 0.95), 0))
 		var nrm := (-dir * 0.2 + Vector3.UP * 0.95).normalized()
 		for v: Array in [[foot - side, 0.0], [foot + side, 0.0], [mid + side * 0.7, 0.6], [foot - side, 0.0], [mid + side * 0.7, 0.6], [mid - side * 0.7, 0.6],
 				[mid - side * 0.7, 0.6], [mid + side * 0.7, 0.6], [tip, 1.0]]:
@@ -442,7 +438,6 @@ static func _sedge() -> ArrayMesh:
 		var h := 1.25 + 0.15 * k
 		var top := foot + Vector3(0.04 * cos(a), h, 0.04 * sin(a))
 		var side := Vector3(-sin(a), 0.0, cos(a))
-		st.set_uv2(Vector2(0.0, 0))
 		for v: Array in [[foot - side * 0.008, 0.0, green * 0.8], [foot + side * 0.008, 0.0, green * 0.8], [top + Vector3.UP * 0.12, 1.0, green]]:
 			st.set_normal(Vector3.UP)
 			st.set_color(v[2])
@@ -470,7 +465,7 @@ static func _mound(r: float, y: float, sx := 1.0, sy := 1.0, sz := 1.0) -> Array
 	mesh.radius = r
 	mesh.height = r * 2.0
 	mesh.radial_segments = 8
-	mesh.rings = 1
+	mesh.rings = 2
 	return [mesh, Transform3D(Basis().scaled(Vector3(sx, sy, sz)), Vector3(0, y, 0))]
 
 
@@ -498,8 +493,6 @@ static func _grass_tuft(arched_count: int, spear_count: int, h_min: float, h_max
 		var foot := dir * (0.04 + fposmod(n * 0.381966, 1.0) * 0.11)
 		var h := lerpf(h_min, h_max, fposmod(n * 0.618034, 1.0))
 		var reach := reach_max * (0.68 + 0.48 * fposmod(n * 0.754878, 1.0))
-		var rank := 0.0 if n < ceili(total * 0.45) else fposmod(0.25 + n * 0.618034, 0.95)
-		st.set_uv2(Vector2(rank, 0))
 		var base_c := Color(color.r * 0.76, color.g * 0.78, color.b * 0.72)
 		var mid_c := Color(color.r * 0.96, color.g * 0.98, color.b * 0.92)
 		var tip_c := Color(minf(1.0, color.r * 1.12), minf(1.0, color.g * 1.10), minf(1.0, color.b * 0.96))
@@ -774,10 +767,21 @@ static func _colored(parts: Array) -> ArrayMesh:
 		var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
 		var xf: Transform3D = part[1]
 		var normal_basis := xf.basis.inverse().transposed()
-		for i in indices:
-			st.set_color(entry[1])
-			st.set_normal((normal_basis * normals[i]).normalized())
-			st.add_vertex(xf * vertices[i])
+		for t in range(0, indices.size(), 3):
+			var i0 := indices[t]
+			var i1 := indices[t + 1]
+			var i2 := indices[t + 2]
+			if i0 == i1 or i1 == i2 or i2 == i0:
+				continue
+			var p0 := xf * vertices[i0]
+			var p1 := xf * vertices[i1]
+			var p2 := xf * vertices[i2]
+			if (p1 - p0).cross(p2 - p0).length_squared() < 1e-12:
+				continue
+			for idx: int in [i0, i1, i2]:
+				st.set_color(entry[1])
+				st.set_normal((normal_basis * normals[idx]).normalized())
+				st.add_vertex(xf * vertices[idx])
 	st.index()
 	return st.commit()
 
@@ -901,7 +905,7 @@ static func _crowned(kind_mode: int, bark: Color, center: Vector3, size: Vector3
 	return st.commit()
 
 
-static func _leaves(leaves: Array, color: Color, persistent_from := -1) -> ArrayMesh:
+static func _leaves(leaves: Array, color: Color, persistent_from := -1, use_uv2 := true) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for n in leaves.size():
@@ -915,7 +919,8 @@ static func _leaves(leaves: Array, color: Color, persistent_from := -1) -> Array
 		if normal.y < 0.0:
 			normal = -normal
 		st.set_normal((normal * 0.38 + Vector3.UP * 0.62).normalized())
-		st.set_uv2(Vector2(0.0 if persistent_from >= 0 and n >= persistent_from else fposmod(n * 0.754878, 1.0), 0))
+		if use_uv2:
+			st.set_uv2(Vector2(0.0 if persistent_from >= 0 and n >= persistent_from else fposmod(n * 0.754878, 1.0), 0))
 		for i in range(1, leaf.size() - 1):
 			for v: Vector3 in [leaf[0], leaf[i], leaf[i + 1]]:
 				var progress := (v.y - low) / maxf(0.001, high - low)

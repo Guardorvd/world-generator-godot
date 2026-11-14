@@ -61,20 +61,25 @@ static func _level(size: Vector3, seed: int, moss: float, tone: float, segments:
 	# Шум и цвет один раз на вершину, а не на каждое вхождение в треугольник.
 	for i in vertices.size():
 		var d := vertices[i].normalized()
+		d = Vector3(snappedf(d.x, 1e-5), snappedf(d.y, 1e-5), snappedf(d.z, 1e-5)).normalized()
 		positions[i] = _point(d, size, seed, variation)
 		var mineral := Models._noise3(d * 4.0, seed + 3)
 		var green := smoothstep(0.12, 0.8, d.y + mineral * 0.25) * moss
 		var stone := (0.78 + mineral * 0.2) * tone
 		colors[i] = Color(stone * 1.03, stone, stone * 0.96).lerp(Color(0.43, 0.53, 0.29), green)
+	var min_plane := -0.12 * size.y + 1e-4
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	for t in range(0, indices.size(), 3):
 		var a := positions[indices[t]]
 		var b := positions[indices[t + 1]]
 		var c := positions[indices[t + 2]]
-		var normal := (c - a).cross(b - a).normalized()
-		if normal.length_squared() < 0.5:
+		if a.y <= min_plane and b.y <= min_plane and c.y <= min_plane:
 			continue
+		var cross_v := (c - a).cross(b - a)
+		if cross_v.length_squared() < 4e-12:
+			continue
+		var normal := cross_v.normalized()
 		for j in 3:
 			st.set_color(colors[indices[t + j]])
 			st.set_normal(normal)

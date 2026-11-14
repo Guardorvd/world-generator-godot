@@ -111,9 +111,34 @@ func add(shape: Mesh, material: Material, at: Transform3D) -> void:
 	if tool == null:
 		tool = SurfaceTool.new()
 		tool.begin(Mesh.PRIMITIVE_TRIANGLES)
-		tool.set_material(material)
+		if material != null:
+			tool.set_material(material)
 		parts[material] = tool
-	tool.append_from(shape, 0, at)
+	var arrays: Array = (shape as PrimitiveMesh).get_mesh_arrays() if shape is PrimitiveMesh else shape.surface_get_arrays(0)
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var indices: Variant = arrays[Mesh.ARRAY_INDEX]
+	var has_idx := indices != null and (indices as PackedInt32Array).size() > 0
+	var idx_arr: PackedInt32Array = indices if has_idx else PackedInt32Array()
+	var tri_count := (idx_arr.size() if has_idx else verts.size()) / 3
+	var nxf := at.basis.inverse().transposed()
+	for t in tri_count:
+		var i0 := idx_arr[t * 3] if has_idx else t * 3
+		var i1 := idx_arr[t * 3 + 1] if has_idx else t * 3 + 1
+		var i2 := idx_arr[t * 3 + 2] if has_idx else t * 3 + 2
+		if i0 == i1 or i1 == i2 or i2 == i0:
+			continue
+		var p0 := at * verts[i0]
+		var p1 := at * verts[i1]
+		var p2 := at * verts[i2]
+		if (p1 - p0).cross(p2 - p0).length_squared() < 1e-15:
+			continue
+		tool.set_normal((nxf * normals[i0]).normalized())
+		tool.add_vertex(p0)
+		tool.set_normal((nxf * normals[i1]).normalized())
+		tool.add_vertex(p1)
+		tool.set_normal((nxf * normals[i2]).normalized())
+		tool.add_vertex(p2)
 
 
 ## Труба от a к b: радиус ra у a и rb у b, flat — сплющивание сечения (поперёк, вдоль).
@@ -147,12 +172,18 @@ func add_disc(at: Vector3, radius: float, width: float, material: Material, side
 	add(tube_shape(radius, width, sides), material, Transform3D(Basis(Vector3.FORWARD, PI * 0.5), at))
 
 
-func commit(parent: Node3D, label: String, shadows := true) -> MeshInstance3D:
+func commit_mesh() -> ArrayMesh:
 	var result := ArrayMesh.new()
-	for material: Material in parts:
-		(parts[material] as SurfaceTool).commit(result)
+	for material: Variant in parts:
+		var tool: SurfaceTool = parts[material]
+		tool.index()
+		tool.commit(result)
 	parts = {}
-	var n := mesh(parent, label, result, null)
+	return result
+
+
+func commit(parent: Node3D, label: String, shadows := true) -> MeshInstance3D:
+	var n := mesh(parent, label, commit_mesh(), null)
 	if not shadows:
 		n.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	return n
@@ -192,18 +223,15 @@ func wheel_mesh(rotor_x := -0.066, hub_width := 0.13) -> ArrayMesh:
 	for i in 5:
 		var angle := TAU * i / 5.0
 		add_tube(Vector3(rotor_x, cos(angle) * 0.018, sin(angle) * 0.018), Vector3(rotor_x, cos(angle + 0.5) * 0.05, sin(angle + 0.5) * 0.05), 0.0045, alloy, -1.0, 4)
-	var result := ArrayMesh.new()
-	for material: Material in parts:
-		(parts[material] as SurfaceTool).commit(result)
-	parts = {}
-	return result
+	return commit_mesh()
 
 
 ## thin — толщина диска в долях прежней (передний диск тонкий: он стоит в щели суппорта).
 func wheel(label: String, z: float, shape: ArrayMesh, rotor_x := -0.066, thin := 1.0) -> void:
 	var w := node(bike, label, Vector3(0, 0.34, z))
 	mesh(w, "Wheel", shape, null)
-	mesh(w, "BrakeRotor", torus(0.047, 0.083), alloy, Vector3(rotor_x, 0, 0), Basis(Vector3.FORWARD, PI * 0.5) * Basis.from_scale(Vector3(1.0, thin, 1.0)))
+	add(torus(0.047, 0.083), null, Transform3D(Basis.from_scale(Vector3(1.0, thin, 1.0)), Vector3.ZERO))
+	mesh(w, "BrakeRotor", commit_mesh(), alloy, Vector3(rotor_x, 0, 0), Basis(Vector3.FORWARD, PI * 0.5))
 
 
 ## Седло: узкий нос, широкая задняя часть с подъёмом, выпуклый верх.

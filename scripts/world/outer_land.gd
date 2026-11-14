@@ -485,6 +485,39 @@ static func refined_patch(regions: Dictionary, cell: Vector2i) -> Dictionary:
 	var key := Vector2i(floori(float(cell.x) / WorldData.REGION_SIZE), floori(float(cell.y) / WorldData.REGION_SIZE))
 	return regions.get(key, {}).get("fields", {}).get("trail_patches", {}).get(cell, {})
 
+## Только высота метровой сетки пути (та же арифметика, что h у refined_at) или INF, если патча нет. Для
+## Heightfield.ground_at за краем плана: её зовёт физика велосипеда десятки раз за такт, словарь и нормаль там не нужны.
+static func refined_height_at(regions: Dictionary, x: float, z: float) -> float:
+	var f := Vector2(x, z) / GameConfig.TILE - Vector2.ONE * 0.5
+	var cell := Vector2i(f.floor())
+	var key := Vector2i(floori(float(cell.x) / WorldData.REGION_SIZE), floori(float(cell.y) / WorldData.REGION_SIZE))
+	var region: Variant = regions.get(key)
+	if region == null: return INF
+	var fields: Variant = region.get("fields")
+	if fields == null: return INF
+	var patches: Variant = fields.get("trail_patches")
+	if patches == null: return INF
+	var patch: Variant = patches.get(cell)
+	if patch == null or patch.is_empty(): return INF
+	var uv := (f - Vector2(cell)) * RoadRefinement.DIV
+	var ix := mini(RoadRefinement.DIV - 1, floori(uv.x))
+	var iz := mini(RoadRefinement.DIV - 1, floori(uv.y))
+	var tx := uv.x - ix
+	var tz := uv.y - iz
+	var a := iz * RoadRefinement.STRIDE + ix
+	var b := a + 1
+	var c := a + RoadRefinement.STRIDE
+	var wa := 1.0 - tx - tz
+	var wb := tx
+	var wc := tz
+	if tx + tz > 1.0:
+		a = c + 1
+		wa = tx + tz - 1.0
+		wb = 1.0 - tz
+		wc = 1.0 - tx
+	var h: PackedFloat32Array = patch.h
+	return h[a] * wa + h[b] * wb + h[c] * wc
+
 static func refined_at(regions: Dictionary, x: float, z: float) -> Dictionary:
 	var f := Vector2(x, z) / GameConfig.TILE - Vector2.ONE * 0.5
 	var cell := Vector2i(f.floor())

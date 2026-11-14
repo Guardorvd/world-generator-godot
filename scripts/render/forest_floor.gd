@@ -305,8 +305,8 @@ static func build_meshes() -> Array[Mesh]:
 		branch.append([_beam(Vector3(x, 0.05, 0.02), Vector3(x + 0.45, 0.07 + n * 0.015, side * 0.42), 0.022, 3, false), BARK])
 	branch.append([Models._moved(Plants._mound(0.16, 0.05, 1.6, 0.45, 0.4), Vector3(0.95, 0.0, 0.05)), Color(0.42, 0.31, 0.16)])
 	return [
-		Plants._leaves(leaves, Color(0.47, 0.35, 0.18)),
-		Plants._leaves(needles, Color(0.40, 0.33, 0.19)),
+		Plants._leaves(leaves, Color(0.47, 0.35, 0.18), -1, false),
+		Plants._leaves(needles, Color(0.40, 0.33, 0.19), -1, false),
 		twig,
 		Plants._colored(roots),
 		_log(false),

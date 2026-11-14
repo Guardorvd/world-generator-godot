@@ -927,8 +927,8 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 func ground_at(x: float, z: float, raw: bool = false) -> float:
 	var w := world
 	if not raw and w.outer != null and not _in_plan(x, z):
-		var refined := OuterLand.refined_at(w.outer.get_ledger().get("regions", {}), x, z)
-		if not refined.is_empty(): return refined.h
+		var refined := OuterLand.refined_height_at(w.outer.get_ledger().get("regions", {}), x, z)
+		if refined != INF: return refined
 	var W := w.W
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5

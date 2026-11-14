@@ -48,10 +48,10 @@ uniform bool directional_carpet = false;
 // порогов на полосах LOD1_* и LOD2_*: пиксель берёт ровно один уровень, без дыр и двойной листвы.
 // Расстояния — VegetationLayer.LOD_STEPS (там же диапазоны видимости узлов).
 uniform int lod_level = -1;
-const float LOD1_D = 90.0;
-const float LOD1_BAND = 28.0;
-const float LOD2_D = 200.0;
-const float LOD2_BAND = 56.0;
+const float LOD1_D = 72.0;
+const float LOD1_BAND = 20.0;
+const float LOD2_D = 165.0;
+const float LOD2_BAND = 40.0;
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 #include "res://resources/depth_tone.gdshaderinc"
@@ -141,10 +141,12 @@ void vertex() {
 			// Под пологом ветер слабее.
 			swing *= 1.0 - sheltered * 0.6;
 			vec3 world = vec3(WIND_DIR.x, 0.0, WIND_DIR.y) * swing * sway * h * h;
-			// Дрожь: своя фаза у каждой вершины, сильнее к концам.
-			float leaf = sin(TIME * 4.1 + dot(VERTEX, vec3(3.1, 2.3, 2.7)) + phase);
-			float leaf_motion = 1.0 - smoothstep(LOD1_D, LOD2_D, dist) * 0.75;
-			world += vec3(leaf, leaf * 0.5, -leaf * 0.7) * flutter * gust * h * leaf_motion;
+			// Дрожь: своя фаза у каждой вершины, сильнее к концам; не считается для стволов и дальнего LOD2.
+			if (flutter > 0.0 && dist < LOD2_D) {
+				float leaf = sin(TIME * 4.1 + dot(VERTEX, vec3(3.1, 2.3, 2.7)) + phase);
+				float leaf_motion = 1.0 - smoothstep(LOD1_D, LOD2_D, dist) * 0.75;
+				world += vec3(leaf, leaf * 0.5, -leaf * 0.7) * flutter * gust * h * leaf_motion;
+			}
 			if (trample > 0.0 && dist < 3.0) {
 				// Травинки у колёс и ног ложатся от игрока и прижимаются к земле
 				vec2 away = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz - veg_center;
@@ -210,49 +212,58 @@ void fragment() {
 	if (bark_detail > 0.0) {
 		float fp = max(length(dFdx(bark_local)), length(dFdy(bark_local)));
 		float vis = 1.0 - smoothstep(0.012, 0.05, fp);
-		float r = max(length(bark_local.xz), 0.03);
-		float u = atan(bark_local.z, bark_local.x) * r;
 		float y = bark_local.y;
-		// пластины шириной ~5,5 см, борозды извилистые; поперечные трещины у каждой пластины на своей высоте
-		float pu = u / 0.055 + sin(y * 2.1 + u * 3.0) * 0.34 + sin(y * 5.3 + u * 9.0) * 0.16 + sin(y * 13.0 - u * 21.0) * 0.06;
-		float plate = floor(pu);
-		float f = fract(pu);
-		float furrow = min(f, 1.0 - f);
-		float row = y * 1.3 + sin(u * 17.0) * 0.12 + fract(sin(plate * 12.9898) * 43758.5453) * 5.0;
-		float fr = fract(row);
-		float cross_gap = min(fr, 1.0 - fr);
-		float plates = smoothstep(0.03, 0.26, furrow) * mix(0.72, 1.0, smoothstep(0.0, 0.035, cross_gap));
-		float plate_tone = 0.88 + 0.24 * fract(sin((plate + floor(row) * 7.0) * 78.233) * 43758.5453);
-		float relief = plates;
 		vec3 bark = ALBEDO;
-		if (bark_detail < 1.5) {
-			bark *= mix(0.9, mix(0.42, 1.10, plates) * plate_tone, vis);
+		if (vis > 0.001) {
+			float r = max(length(bark_local.xz), 0.03);
+			float u = atan(bark_local.z, bark_local.x) * r;
+			// пластины шириной ~5,5 см, борозды извилистые; поперечные трещины у каждой пластины на своей высоте
+			float pu = u / 0.055 + sin(y * 2.1 + u * 3.0) * 0.34 + sin(y * 5.3 + u * 9.0) * 0.16 + sin(y * 13.0 - u * 21.0) * 0.06;
+			float plate = floor(pu);
+			float f = fract(pu);
+			float furrow = min(f, 1.0 - f);
+			float row = y * 1.3 + sin(u * 17.0) * 0.12 + fract(sin(plate * 12.9898) * 43758.5453) * 5.0;
+			float fr = fract(row);
+			float cross_gap = min(fr, 1.0 - fr);
+			float plates = smoothstep(0.03, 0.26, furrow) * mix(0.72, 1.0, smoothstep(0.0, 0.035, cross_gap));
+			float plate_tone = 0.88 + 0.24 * fract(sin((plate + floor(row) * 7.0) * 78.233) * 43758.5453);
+			float relief = plates;
+			if (bark_detail < 1.5) {
+				bark *= mix(0.9, mix(0.42, 1.10, plates) * plate_tone, vis);
+			} else {
+				// берёза: у комля грубая тёмная кора, выше — белая с чечевичками (короткие тёмные штрихи поперёк ствола)
+				float rough = 1.0 - smoothstep(0.4, 2.2, y + sin(u * 31.0) * 0.25);
+				vec2 lc = vec2(u / 0.11, y / 0.028);
+				vec2 lh = fract(sin(vec2(dot(floor(lc), vec2(127.1, 311.7)), dot(floor(lc), vec2(269.5, 183.3)))) * 43758.5453);
+				vec2 ll = fract(lc) - 0.5;
+				float dash = (1.0 - smoothstep(0.30 + lh.y * 0.15, 0.48, abs(ll.x))) * (1.0 - smoothstep(0.18, 0.42, abs(ll.y))) * step(0.86, lh.x);
+				vec3 smooth_bark = mix(bark, bark * 0.16, dash * vis * 0.9) * mix(1.0, 0.92 + 0.12 * lh.y, vis);
+				vec3 rough_bark = bark * mix(0.55, mix(0.14, 0.62, plates) * plate_tone, vis);
+				bark = mix(smooth_bark, rough_bark, rough);
+				relief = mix(1.0 - dash * 0.5, plates, rough);
+			}
+			// комель темнее (сырость, брызги земли), с севера — мох пятнами
+			bark *= mix(0.72, 1.0, smoothstep(0.0, 0.6, y));
+			float moss = (1.0 - smoothstep(0.2, 1.9, y)) * smoothstep(-0.1, 0.6, bark_north)
+				* smoothstep(0.35, 0.65, 0.5 + 0.5 * sin(u * 23.0 + sin(y * 5.0) * 2.0) * sin(y * 4.1 + plate));
+			bark = mix(bark, vec3(0.105, 0.15, 0.045) * (0.7 + 0.6 * plates), moss * 0.75 * vis);
+			// рельеф пластин светом
+			float hh = relief * vis * 0.016;
+			vec3 dpx = dFdx(VERTEX);
+			vec3 dpy = dFdy(VERTEX);
+			vec3 r1 = cross(dpy, NORMAL);
+			vec3 r2 = cross(NORMAL, dpx);
+			float det = dot(dpx, r1);
+			NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2));
 		} else {
-			// берёза: у комля грубая тёмная кора, выше — белая с чечевичками (короткие тёмные штрихи поперёк ствола)
-			float rough = 1.0 - smoothstep(0.4, 2.2, y + sin(u * 31.0) * 0.25);
-			vec2 lc = vec2(u / 0.11, y / 0.028);
-			vec2 lh = fract(sin(vec2(dot(floor(lc), vec2(127.1, 311.7)), dot(floor(lc), vec2(269.5, 183.3)))) * 43758.5453);
-			vec2 ll = fract(lc) - 0.5;
-			float dash = (1.0 - smoothstep(0.30 + lh.y * 0.15, 0.48, abs(ll.x))) * (1.0 - smoothstep(0.18, 0.42, abs(ll.y))) * step(0.86, lh.x);
-			vec3 smooth_bark = mix(bark, bark * 0.16, dash * vis * 0.9) * mix(1.0, 0.92 + 0.12 * lh.y, vis);
-			vec3 rough_bark = bark * mix(0.55, mix(0.14, 0.62, plates) * plate_tone, vis);
-			bark = mix(smooth_bark, rough_bark, rough);
-			relief = mix(1.0 - dash * 0.5, plates, rough);
+			if (bark_detail < 1.5) {
+				bark *= 0.9;
+			} else {
+				bark *= mix(1.0, 0.55, 1.0 - smoothstep(0.4, 2.2, y));
+			}
+			bark *= mix(0.72, 1.0, smoothstep(0.0, 0.6, y));
 		}
-		// комель темнее (сырость, брызги земли), с севера — мох пятнами
-		bark *= mix(0.72, 1.0, smoothstep(0.0, 0.6, y));
-		float moss = (1.0 - smoothstep(0.2, 1.9, y)) * smoothstep(-0.1, 0.6, bark_north)
-			* smoothstep(0.35, 0.65, 0.5 + 0.5 * sin(u * 23.0 + sin(y * 5.0) * 2.0) * sin(y * 4.1 + plate));
-		bark = mix(bark, vec3(0.105, 0.15, 0.045) * (0.7 + 0.6 * plates), moss * 0.75);
 		ALBEDO = bark;
-		// рельеф пластин светом
-		float hh = relief * vis * 0.016;
-		vec3 dpx = dFdx(VERTEX);
-		vec3 dpy = dFdy(VERTEX);
-		vec3 r1 = cross(dpy, NORMAL);
-		vec3 r2 = cross(NORMAL, dpx);
-		float det = dot(dpx, r1);
-		NORMAL = normalize(abs(det) * NORMAL - sign(det) * (dFdx(hh) * r1 + dFdy(hh) * r2));
 	}
 #endif
 	// Визуальный стиль: тот же тон по расстоянию, что у рельефа и дальнего леса (resources/depth_tone.gdshaderinc).
