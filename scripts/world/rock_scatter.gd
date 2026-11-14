@@ -37,6 +37,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var villages: PackedByteArray = f.get("village", PackedByteArray())
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
+	var moist: PackedFloat32Array = f.get("moist", PackedFloat32Array())
 	var rock: PackedByteArray=f.get("rock",PackedByteArray())
 	if rock.is_empty(): rock=Surface.field(elev,slope,f.get("moist",PackedFloat32Array()))
 	var rows := elev.size()/stride
@@ -149,6 +150,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			var chance := 0.005 + patch * (0.014 + edge * 0.014 + mountain * (0.05 * patch + exposed * 0.12))
 			chance += mountain * talus * (0.12 + 0.14 * patch)
 			chance *= deposit_weight * (1.0 - smoothstep(0.6, 0.85, sl))
+			if not moist.is_empty():
+				# 14.11.2026: сухие склоны и гребни каменистее (тонкая почва), во влажных низинах камней мало.
+				# Влажность уже несёт положение в рельефе (StageHydrology): так возникают каменистые лесные холмы
+				chance *= lerpf(1.6, 0.6, smoothstep(0.42, 0.82, moist[i]))
 			if bi == Biomes.SWAMP or bi == Biomes.SNOW: chance *= 0.35
 			if bi == Biomes.DESERT or bi == Biomes.BEACH: chance *= 0.5
 			if roll >= minf(MAX_CHANCE, chance): continue
