@@ -227,7 +227,7 @@ func stage_chunk(key: Vector2i, built: Dictionary) -> MeshInstance3D:
 		# Terrain must occlude sunlight too; the directional shadow frustum culls distant chunks.
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		add_child(mi)
-		FarForest.attach(mi, built.get("crowns", {}))
+		FarForest.attach(mi, built.get("crowns", {}), Vector2.ZERO, true)
 		mi.visible = false
 	return mi
 
@@ -320,7 +320,8 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 			else:
 				nor[v] = Vector3(hs[k - 1] - hs[k + 1], 2.0 * TILE, hs[k - S] - hs[k + S]).normalized()
 			vc[v] = col[k]
-			climate_uv[v] = Vector2(Floor.ground_moisture(f.moist[k], f.dw[k]), FarForest.sample_cover(forest_cover, a, b) if f.path[k] == 0 and f.river[k] == 0 else 0.0)
+			var cover := FarForest.sample_cover(forest_cover, a, b) if FarForest.outer_dry(f, k) else 0.0
+			climate_uv[v] = Vector2(Floor.ground_moisture(f.moist[k], f.dw[k]), cover)
 	var idx := PackedInt32Array()
 	for b in C:
 		var j := j0 + b
@@ -376,7 +377,8 @@ func _compute(key: Vector2i, snapshot: Variant = null, prepared_fields := {}) ->
 		# Частично закрытые картой куски сохраняют исходные треугольники и точный край выреза.
 		if not refined and not (i0 < W - 1 and i0 + C > 0 and j0 < H - 1 and j0 + C > 0):
 			lods = _lod(pos)
-	return {fields = f, arrays = arrays, lods = lods, crowns = FarForest.outer(world, heights, key, f, regions, forest_cover)}
+	var crowns := {} if arrays.is_empty() else FarForest.outer(world, key, f, hs, regions, forest_cover)
+	return {fields = f, arrays = arrays, lods = lods, crowns = crowns}
 
 
 ## Один LOD с шагом две клетки. Периметр остаётся с шагом в клетку при любом LOD соседей.

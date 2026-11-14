@@ -1,21 +1,19 @@
 shader_type spatial;
-render_mode cull_back, specular_disabled, shadows_disabled;
+render_mode cull_disabled, specular_disabled, shadows_disabled;
 global uniform vec2 veg_center;
 global uniform vec4 distant_vegetation; // near end, near fade band, far end, enabled
 #include "res://resources/cloud_shadow.gdshaderinc"
 #include "res://resources/depth_tone.gdshaderinc"
+#include "res://resources/distant_vegetation.gdshaderinc"
 // Must match distant_forest.gd.
 const float SPLIT = 620.0;
 const float SPLIT_BAND = 60.0;
-const float SCRUB_BEGIN = 150.0;
-const float SCRUB_BAND = 90.0;
-const float SCRUB_END = 950.0;
-// Per instance: fragments are kept while keep_lo <= dither < keep_hi. Neighbouring rings use complementary
-// windows, so where fine crowns hand over to coarse clumps each pixel is drawn by one of them only.
+// Fine crowns and the simpler distant crowns share complementary coverage around SPLIT.
 varying flat float keep_lo;
 varying flat float keep_hi;
 varying flat float stuff;
 varying flat float lobe_tone;
+varying flat float bark;
 varying float canopy_light;
 varying float body_height;
 varying float lobe_height;
@@ -28,11 +26,16 @@ void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float d = length(origin.xz - veg_center);
 	float kind = INSTANCE_CUSTOM.x;
-	float trees = INSTANCE_CUSTOM.y;
+	float base = INSTANCE_CUSTOM.y;
 	stuff = INSTANCE_CUSTOM.z;
-	canopy_light = cloud_light(origin.xz);
-	float near_keep = clamp((distant_vegetation.x - d) / max(distant_vegetation.y, 1.0), 0.0, 1.0);
-	float far_keep = 1.0 - smoothstep(distant_vegetation.z - 180.0, distant_vegetation.z, d);
+	bool scrub = kind > 1.5;
+	bool grass = scrub && base > 2.5;
+	bool small = scrub || base >= 0.0;
+	bool outer = INSTANCE_CUSTOM.w > 0.5;
+	float near_keep = distant_veg_near(d, scrub, grass);
+	float far_keep = distant_veg_end(d, outer, scrub, small);
+	float rank = hash12(origin.xz * 0.43);
+	far_keep = min(far_keep, 1.0 - smoothstep(rank, rank + 0.14, 1.0 - distant_veg_density(d, small)));
 	float split = clamp((d - (SPLIT - SPLIT_BAND * 0.5)) / SPLIT_BAND, 0.0, 1.0);
 	if (kind < 0.5) {
 		keep_lo = max(near_keep, split);
@@ -41,46 +44,58 @@ void vertex() {
 		keep_lo = near_keep;
 		keep_hi = min(split, far_keep);
 	} else {
-		float end = min(distant_vegetation.z, SCRUB_END);
-		keep_lo = clamp((SCRUB_BEGIN + SCRUB_BAND - d) / SCRUB_BAND, 0.0, 1.0);
-		keep_hi = 1.0 - smoothstep(end - 150.0, end, d);
+		keep_lo = near_keep;
+		keep_hi = far_keep;
 	}
 	// Lobe data: UV — lobe centre (x, z); UV2.x — index * 4 + centre y + 1; UV2.y — lobe-local height (-0.7..1).
 	float index = floor(UV2.x * 0.25);
-	vec3 centre = vec3(UV.x, mod(UV2.x, 4.0) - 1.0, UV.y);
+	bark = step(3.5, index);
+	canopy_light = 1.0;
+	lobe_tone = 0.0;
 	lobe_height = UV2.y;
 	body_height = VERTEX.y;
-	float seed = hash12(origin.xz * 0.37 + index * 7.13);
-	lobe_tone = seed;
-	// Lone trees and small groups show one or two lobes; scrub thickets one to three.
-	float lobes = kind > 1.5 ? 1.0 + floor(hash12(origin.zx * 0.71) * 2.99) : (kind > 0.5 ? 4.0 : clamp(trees, 1.0, 3.0));
-	vec3 v = VERTEX - centre;
-	if (lobes < 1.5) {
-		// A single crown fills the box: the main lobe grows, the others vanish below.
-		v *= vec3(1.4, 1.05, 1.4);
-		centre = vec3(0.0, centre.y * 0.5, 0.0);
+	if (keep_lo >= keep_hi || distant_vegetation.w < 0.5) {
+		VERTEX = vec3(0.0);
+	} else if (bark > 0.5) {
+		VERTEX.y = mix(base - 0.04, -0.24, lobe_height);
+		if (base >= 0.0) VERTEX = vec3(0.0);
+		else canopy_light = cloud_light(origin.xz);
+	} else {
+		float lobes = scrub ? 1.0 + floor(hash12(origin.zx * 0.71) * 2.99) : 1.0;
+		if (index >= lobes) {
+			VERTEX = vec3(0.0);
+		} else {
+			vec3 centre = vec3(UV.x, mod(UV2.x, 4.0) - 1.0, UV.y);
+			float seed = hash12(origin.xz * 0.37 + index * 7.13);
+			lobe_tone = seed;
+			vec3 v = VERTEX - centre;
+			if (lobes < 1.5) {
+				v *= vec3(1.4, 1.05, 1.4);
+				centre.y *= 0.5;
+			}
+			float grow = mix(0.78, 1.22, seed);
+			v.y *= grow;
+			centre.y += (grow - 1.0) * 0.35;
+			float up = clamp((lobe_height + 0.7) / 1.7, 0.0, 1.0);
+			float conifer = stuff > 0.5 ? 0.0 : COLOR.a;
+			float lump = hash12(origin.xz * 0.53 + VERTEX.xz * 5.3 + VERTEX.y * 3.1) - 0.5;
+			float rock = step(0.5, stuff);
+			v.xz *= mix(mix(1.0 + lump * 0.38, mix(1.05, 0.1, up), conifer), 1.0 + lump * 0.12, rock);
+			v.y *= 1.0 + conifer * 0.25;
+			VERTEX = centre + v;
+			canopy_light = cloud_light(origin.xz);
+		}
 	}
-	// Height variety per lobe: uneven canopy line instead of equal mounds.
-	float grow = mix(0.78, 1.22, seed);
-	v.y *= grow;
-	centre.y += (grow - 1.0) * 0.35;
-	float up = clamp((lobe_height + 0.7) / 1.7, 0.0, 1.0);
-	float conifer = stuff > 0.5 ? 0.0 : COLOR.a;
-	float lump = hash12(origin.xz * 0.53 + VERTEX.xz * 5.3 + VERTEX.y * 3.1) - 0.5;
-	float rock = step(0.5, stuff);
-	// Conifers: each lobe becomes a narrow spire; broadleaf lobes get a ragged outline; boulders stay compact.
-	v.xz *= mix(mix(1.0 + lump * 0.38, mix(1.05, 0.1, up), conifer), 1.0 + lump * 0.12, rock);
-	v.y *= 1.0 + conifer * 0.25;
-	VERTEX = centre + v;
-	bool hidden = index >= lobes || keep_lo >= keep_hi || distant_vegetation.w < 0.5;
-	if (hidden) VERTEX = vec3(0.0); // degenerate: nothing rasterised
 }
 
 void fragment() {
-	float dither = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
+	float dither = distant_veg_dither(FRAGCOORD.xy);
 	if (dither < keep_lo || dither >= keep_hi) discard;
 	float under = mix(0.55, 1.0, smoothstep(-0.7, 0.6, lobe_height)) * mix(0.78, 1.0, smoothstep(-1.0, 0.4, body_height));
-	if (stuff > 0.5) {
+	if (bark > 0.5) {
+		ALBEDO = mix(vec3(0.045, 0.034, 0.021), vec3(0.11, 0.086, 0.06), lobe_height);
+		ROUGHNESS = 1.0;
+	} else if (stuff > 0.5) {
 		ALBEDO = COLOR.rgb * mix(0.8, 1.0, smoothstep(-0.7, 0.6, lobe_height)) * mix(0.9, 1.05, lobe_tone);
 		ROUGHNESS = 0.95;
 	} else {
