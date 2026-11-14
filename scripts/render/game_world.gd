@@ -34,6 +34,7 @@ const Quests = preload("res://scripts/game/quests.gd")
 const CargoBag = preload("res://scripts/render/cargo_bag.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
+const DayTiming := preload("res://scripts/game/day_timing.gd")
 var bike_placement: BikePlacement
 var place_names: PlaceNames
 var photo: PhotoCamera
@@ -98,7 +99,7 @@ var pitch: float:
 	set(value): camera_controller.pitch = value
 var time := 0.0
 var hour := 9.0          # час суток в мире, 0..24
-var _hour_goal := NAN    # плавный довод часа при перемотке клавишей T, без рывка света и облаков
+var _hour_skip := 0.0    # остаток ручной перемотки, в игровых часах со знаком
 var day: DayCycle
 var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
 var _target := {}        # на что игрок смотрит сейчас (_aim): {kind = "bike" | "board", place}
@@ -994,9 +995,8 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("flashlight"):
 		toggle_flashlight()
 	elif event.is_action_pressed("time_skip"):
-		var base_h := hour if is_nan(_hour_goal) else _hour_goal
-		_hour_goal = fposmod(base_h + (-1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0), 24.0)
-		hud.toast_now("Время %s" % DayCycle.clock(_hour_goal))
+		_hour_skip += -1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0
+		hud.toast_now("Время %s" % DayCycle.clock(hour + _hour_skip))
 	elif event.is_action_pressed("interact") and not show_map:
 		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
@@ -1052,6 +1052,19 @@ func _tick_mark(part: String, t0: int) -> int:
 	return now
 
 
+func _advance_clock(dt: float) -> void:
+	time += dt
+	var settings := services.settings
+	if settings.day_minutes > 0.0:
+		hour = DayTiming.advance(hour, dt / (settings.day_minutes * 60.0), settings.long_twilight)
+	if _hour_skip != 0.0:
+		# The remaining offset depends only on manual input. Its size and direction
+		# carry across midnight and changes in the natural rate of the clock.
+		var step := _hour_skip if absf(_hour_skip) < 0.002 else _hour_skip * Util.damp(9.0, dt)
+		hour = fposmod(hour + step, 24.0)
+		_hour_skip -= step
+
+
 func _physics_process(dt: float) -> void:
 	if player == null or paused or travel_active() or _settlement_open():
 		return
@@ -1065,19 +1078,7 @@ func _physics_process(dt: float) -> void:
 	_store_prev()
 	var yaw0 := yaw
 	var pitch0 := pitch
-	time += dt
-	if services.settings.day_minutes > 0.0:
-		var dh := dt * 24.0 / (services.settings.day_minutes * 60.0)
-		hour = fposmod(hour + dh, 24.0)
-		if not is_nan(_hour_goal):
-			_hour_goal = fposmod(_hour_goal + dh, 24.0)
-	if not is_nan(_hour_goal):
-		var diff := wrapf(_hour_goal - hour, -12.0, 12.0)
-		if absf(diff) < 0.002:
-			hour = _hour_goal
-			_hour_goal = NAN
-		else:
-			hour = fposmod(hour + diff * Util.damp(9.0, dt), 24.0)
+	_advance_clock(dt)
 	var fw := Input.get_action_strength("move_forward") - Input.get_action_strength("move_back")
 	var st := Input.get_action_strength("move_right") - Input.get_action_strength("move_left")
 	if bike.riding:
@@ -1235,8 +1236,6 @@ func _process(delta: float) -> void:
 	_update_bike_placement(delta)
 	if _speed_wind != null:
 		_speed_wind.update_effect(_speed_rush, delta)
-	if ambient != null:
-		ambient.update(delta, camera.global_position, day.sunlight if day != null else 1.0)
 	if _opening:
 		_draw_opening(alpha)
 	if navigation_line != null:
@@ -1259,6 +1258,8 @@ func _process(delta: float) -> void:
 	day.apply(hour, time)
 	t0 = _tick_mark("frame_day", t0)
 
+	if ambient != null:
+		ambient.update(delta, camera.global_position, day.sunlight)
 	stream_coordinator.update(pos)
 	t0 = _tick_mark("frame_stream", t0)
 	local_mist.update(camera.global_position, day, delta, time)

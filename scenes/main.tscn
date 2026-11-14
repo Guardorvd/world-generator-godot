@@ -1345,6 +1345,13 @@ layout_mode = 2
 max_value = 120.0
 step = 1.0
 
+[node name="LongTwilight" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+button_pressed = true
+tooltip_text = "65% суток занимает светлая часть с 04:00 до 20:00, 35% — ночь. Рассвет и закат занимают по 20% светлой части."
+text = "Длинные рассветы и закаты"
+
 [node name="StartHourRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page"]
 layout_mode = 2
 
@@ -1403,6 +1410,7 @@ text = "Готово"
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Reset" to="." method="_on_reset_settings"]
 [connection signal="pressed" from="UI/Root/Settings/Panel/Box/Bottom/Done" to="." method="_close_settings"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/DaySlider" to="." method="_on_day_changed"]
+[connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/LongTwilight" to="." method="_on_long_twilight_toggled"]
 [connection signal="value_changed" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/StartHourSlider" to="." method="_on_start_hour_changed"]
 [connection signal="toggled" from="UI/Root/Settings/Panel/Box/SettingsTabs/Звук и время/Page/RandomHour" to="." method="_on_random_hour_toggled"]
 [connection signal="text_submitted" from="UI/Root/NewWorld/Panel/Box/NewWorld/NewBox/SeedRow/SeedEdit" to="." method="_on_seed_submitted"]

@@ -1,6 +1,7 @@
 extends SceneTree
-## Проверка повреждённых настроек без чтения и изменения пользовательского файла.
+## Проверка настроек на отдельном файле, без изменения профиля игрока.
 
+const DayTiming := preload("res://scripts/game/day_timing.gd")
 var fails := 0
 
 
@@ -15,6 +16,10 @@ func _initialize() -> void:
 	if "--navigation" in OS.get_cmdline_user_args():
 		_navigation_test.call_deferred()
 		return
+	_run.call_deferred()
+
+
+func _run() -> void:
 	GameContext.scope.settings.reset_defaults()
 	_check(GameContext.scope.settings.day_minutes == 7.0, "стандартная длительность суток — 7 минут")
 	var cfg := ConfigFile.new()
@@ -22,7 +27,13 @@ func _initialize() -> void:
 	cfg.set_value("time", "start_hour_set", true)
 	GameContext.scope.settings._apply_config(cfg)
 	_check(GameContext.scope.settings.day_minutes == 12.0, "сохранённая длительность суток сохраняется")
+	_check(GameContext.scope.settings.long_twilight, "длинные рассветы и закаты включены для старых настроек")
+	cfg.set_value("time", "long_twilight", false)
+	GameContext.scope.settings._apply_config(cfg)
+	_check(not GameContext.scope.settings.long_twilight, "из настроек читается равномерный ход часов")
+	_check_day_timing()
 	GameContext.scope.settings.reset_defaults()
+	_check(GameContext.scope.settings.long_twilight, "сброс возвращает длинные рассветы и закаты")
 	cfg.clear()
 	cfg.set_value("input", "mouse", "ошибка")
 	cfg.set_value("input", "invert_y", [])
@@ -94,8 +105,115 @@ func _initialize() -> void:
 	GameContext.scope.settings._apply_config(cfg)
 	_check(GameContext.scope.settings.mouse == GameSettings.MAX_MOUSE and GameContext.scope.settings.fov == GameSettings.MIN_FOV
 		and GameContext.scope.settings.volume == 0.0, "числа ограничены диапазонами, старый ключ размера мира не мешает")
+	_check_time_settings_ui()
+	_check_world_clock()
 	print("Настройки: ошибок %d" % fails)
 	quit(0 if fails == 0 else 1)
+
+
+func _check_day_timing() -> void:
+	_check(is_equal_approx(DayTiming.advance(4.0, 0.13, true), 6.5)
+		and is_equal_approx(DayTiming.advance(6.5, 0.39, true), 17.5)
+		and is_equal_approx(DayTiming.advance(17.5, 0.13, true), 20.0)
+		and is_equal_approx(DayTiming.advance(20.0, 0.35, true), 4.0), "доли фаз суток и переход через полночь")
+	_check(is_equal_approx(DayTiming.advance(21.0, 0.25, false), 3.0)
+		and DayTiming.advance(5.37, 0.0, true) == 5.37, "равномерный ход времени и остановка часов")
+	var hour := 23.625
+	for step in 25200: # Seven minutes at 60 physics ticks per second.
+		hour = DayTiming.advance(hour, 1.0 / 25200.0, true)
+	_check(absf(hour - 23.625) < 0.00001, "длительность суток не накапливает ошибку от шага физики")
+	var smooth := true
+	var step := 0.00001
+	for boundary in [4.0, 6.5, 17.5, 20.0]:
+		var before := DayTiming.advance(boundary, -step, true)
+		var after := DayTiming.advance(boundary, step, true)
+		smooth = smooth and before < boundary and after > boundary and absf((after - boundary) - (boundary - before)) < 0.000001
+	_check(smooth, "скорость часов непрерывна на границах фаз")
+
+
+func _check_time_settings_ui() -> void:
+	var settings := GameContext.scope.settings
+	settings.reset_defaults()
+	var menu: Node = load("res://scenes/main.tscn").instantiate()
+	var toggle: CheckBox = menu.get_node("%LongTwilight")
+	var slider: HSlider = menu.get_node("%DaySlider")
+	_check(toggle.button_pressed, "в меню длинные рассветы и закаты включены при первом запуске")
+	# Emit the scene's signals without starting the animated menu in this fixture.
+	toggle.set_pressed_no_signal(false)
+	toggle.toggled.emit(false)
+	slider.set_value_no_signal(12.0)
+	slider.value_changed.emit(12.0)
+	_check(not settings.long_twilight and settings.day_minutes == 12.0, "переключатель и ползунок меняют настройки времени")
+	settings.settings_path = "user://settings_time_test_%s.cfg" % OS.get_process_id()
+	var saved := settings.save_settings()
+	var restored := GameSettings.new()
+	restored.settings_path = settings.settings_path
+	restored.load_settings()
+	_check(saved == OK and not restored.long_twilight and restored.day_minutes == 12.0,
+		"режим времени и длина суток сохраняются и читаются с диска")
+	DirAccess.remove_absolute(settings.settings_path)
+	settings.settings_path = GameSettings.PATH
+	menu.free()
+	settings.reset_defaults()
+
+
+func _check_world_clock() -> void:
+	var game := GameWorld.new()
+	var settings := game.services.settings
+	var sun := DirectionalLight3D.new()
+	var day := DayCycle.new(Environment.new(), sun)
+	var dt := 1.0 / 60.0
+	game.hour = 23.5
+	day.apply(game.hour, game.time)
+	settings.day_minutes = 0.0
+	game._advance_clock(dt)
+	_check(game.hour == 23.5 and is_equal_approx(game.time, dt),
+		"остановка часов сохраняет ход времени симуляции")
+	var night := day._night
+	game._hour_skip = 1.0
+	for tick in 60:
+		game._advance_clock(dt)
+		day.apply(game.hour, game.time)
+	var cloud_time: float = day.sky_mat.get_shader_parameter("cloud_time")
+	_check(game._hour_skip == 0.0 and is_equal_approx(game.hour, 0.5)
+		and day._night == night and is_equal_approx(day._clock, 24.5)
+		and is_equal_approx(cloud_time, game.time), "T проходит через полночь без смены ночи и скачка облаков")
+	game._hour_skip = -1.0
+	for tick in 60:
+		game._advance_clock(dt)
+		day.apply(game.hour, game.time)
+	_check(game._hour_skip == 0.0 and is_equal_approx(game.hour, 23.5) and is_equal_approx(day._clock, 23.5),
+		"Shift+T возвращает ровно на час через полночь")
+	settings.day_minutes = 7.0
+	game.hour = 5.9
+	game._hour_skip = 1.0
+	var manual_total := 0.0
+	for tick in 60:
+		var expected := DayTiming.advance(game.hour, dt / (settings.day_minutes * 60.0), true)
+		game._advance_clock(dt)
+		manual_total += wrapf(game.hour - expected, -12.0, 12.0)
+	_check(is_equal_approx(manual_total, 1.0), "ход часов во время рассвета не искажает ручной сдвиг")
+	var hour := game.hour
+	var time := game.time
+	settings.long_twilight = false
+	game._advance_clock(dt)
+	_check(is_equal_approx(game.hour, hour + dt * 24.0 / 420.0) and is_equal_approx(game.time, time + dt),
+		"переключение темпа в мире сохраняет текущий час и время симуляции")
+	settings.long_twilight = true
+	for crossing in [6.0, 18.0]:
+		game.hour = crossing - 0.1
+		var smooth := true
+		day.apply(game.hour, game.time)
+		var previous_energy := sun.light_energy
+		for tick in 540:
+			game._advance_clock(dt)
+			day.apply(game.hour, game.time)
+			smooth = smooth and absf(sun.light_energy - previous_energy) < 0.02
+			previous_energy = sun.light_energy
+		_check(smooth and game.hour > crossing, "свет плавно меняется при прохождении %s" % DayCycle.clock(crossing))
+	game.free()
+	sun.free()
+	settings.reset_defaults()
 
 
 func _navigation_test() -> void:
