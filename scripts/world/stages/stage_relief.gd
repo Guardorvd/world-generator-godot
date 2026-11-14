@@ -45,13 +45,34 @@ const MASK_EDGE := 0.9
 const VALLEY := 260.0
 const VALLEY_WIDTH := 0.24
 const VALLEY_DEPTH := 0.06
-## Сколько мест старта пробовать и какая доля суши в стартовой области подходит
-const PICK_TRIES := 48
-const START_SIDE := 512 # постоянное окно выбора старта на сид, не размер доступной территории
-## С 2.9 суши больше: шум материков сдвинут вверх на LAND_BIAS (было 0.1), окно — первое по спирали,
-## где суши хотя бы PICK_LAND. Верхней границы нет: сколько суши выше неё, решает сам шум
+## С 2.9 суши больше: шум материков сдвинут вверх на LAND_BIAS (было 0.1)
 const LAND_BIAS := 0.18
+## Прежний выбор старта (до 14.11.2026, GEO 16): первое по спирали окно 512 × 512 в углу плана,
+## где суши хотя бы PICK_LAND. Остался для сравнения: StageRelief.legacy_start = true (tools/macro_geo_look.gd --legacy)
+const PICK_TRIES := 48
+const START_SIDE := 512
 const PICK_LAND := 0.6
+static var legacy_start := false
+## Выбор старта с 14.11.2026 (GEO 17), см. docs/MACRO_GEOGRAPHY.md. Оценивается весь игровой план PICK_SIDE
+## (= WorldGenerator.PLAN_SIZE, постоянный на сид при любом --size), из PICK_CANDIDATES сдвигов по спирали
+## (первые 48 — прежние) выбирается лучший, а не первый подходящий. Время ограничено: подъём материка
+## (один медленный шум) считается у всех, полный макрорельеф по сетке PICK_GRID² — у PICK_FINALISTS лучших.
+const PICK_SIDE := 768
+const PICK_CANDIDATES := 64
+const PICK_FINALISTS := 8
+const PICK_GRID := 12
+## Мягкое предпочтение, не предел: до OCEAN_PREFER океана не штрафуется (обычная карта 0–10 %), больше —
+## штраф, но если суше взяться неоткуда, берётся лучший из возможных. COASTAL_SHARE сидов (по хешу сида)
+## предпочитают прибрежную карту с океаном в COASTAL_OCEAN — необычные морские миры остаются.
+const OCEAN_PREFER := 0.10
+const COASTAL_SHARE := 0.12
+const COASTAL_OCEAN := Vector2(0.15, 0.35)
+## Веса оценки: лишний океан, замкнутые «моря» внутри суши (не связаны с краем плана), изрезанность берега,
+## разброс высот суши (поощряется слабо: скучная ровная суша не лучше карты с небольшой водой)
+const PICK_W_OCEAN := 4.0
+const PICK_W_POCKETS := 2.0
+const PICK_W_COAST := 0.5
+const PICK_W_RELIEF := 0.3
 
 
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
@@ -78,9 +99,113 @@ static func configure(w: WorldData) -> void:
 
 
 ## Стартовая область — окно в бесконечный мир. Мир один на сид, а окно выбирается сдвигом шума
-## материков: пробуем сдвиги по спирали и берём первый, где доля суши в окне (по сетке 16 × 16 точек)
-## не меньше PICK_LAND, иначе тот, где суши больше всего. Шумы мельче материков не сдвигаются
+## материков (масштаб MACRO). Шумы мельче материков не сдвигаются: горы, холмы и долины сида на месте,
+## от сдвига зависят береговая линия и высота равнин. Без расхода RNG, детерминированно по сиду
 static func _pick_start(w: WorldData) -> void:
+	if legacy_start:
+		_pick_start_legacy(w)
+		return
+	var n := w.noise
+	var coastal := is_coastal(w.seed_num)
+	# 1. Подъём материка по плану (сетка 8 × 8) у всех кандидатов: чем выше, тем меньше океана
+	var cands := []
+	for k in PICK_CANDIDATES:
+		var a := k * 2.39996323
+		var r := MACRO * 0.6 * sqrt(float(k))
+		var mx := roundf(r * cos(a))
+		var my := roundf(r * sin(a))
+		var lift := 0.0
+		for sj in 8:
+			for si in 8:
+				var x := floorf((si + 0.5) * PICK_SIDE / 8.0)
+				var y := floorf((sj + 0.5) * PICK_SIDE / 8.0)
+				lift += minf(n.cont.fbm((x + mx) / MACRO + 91.7, (y + my) / MACRO - 43.1, 2) * MACRO_AMP, MACRO_LIFT)
+		cands.append([lift, k, mx, my])
+	cands.sort_custom(func(p: Array, q: Array) -> bool: return p[0] > q[0] or (p[0] == q[0] and p[1] < q[1]))
+	# 2. Финалисты: обычный мир — самые «материковые»; прибрежный — равномерно по всему ряду подъёма
+	var finalists := []
+	for f in PICK_FINALISTS:
+		finalists.append(cands[roundi(f * (cands.size() - 1) / float(PICK_FINALISTS - 1)) if coastal else f])
+	var best := INF
+	for c: Array in finalists:
+		var score := _start_score(w, c[2], c[3], coastal)
+		if score < best:
+			best = score
+			w.macro_x = c[2]
+			w.macro_y = c[3]
+
+
+## Сид предпочитает прибрежную карту (своя независимая случайность, общий RNG не расходуется)
+static func is_coastal(seed_num: int) -> bool:
+	return WGRandom.at(seed_num, "relief.coastal").next_float() < COASTAL_SHARE
+
+
+## Оценка сдвига (меньше — лучше) по макрорельефу без слоя склонов на сетке PICK_GRID² плана
+static func _start_score(w: WorldData, mx: float, my: float, coastal: bool) -> float:
+	var n := w.noise
+	var G := PICK_GRID
+	var sea := PackedByteArray()
+	sea.resize(G * G)
+	var heights := PackedFloat32Array()
+	var sea_n := 0
+	for sj in G:
+		for si in G:
+			var x := floorf((si + 0.5) * PICK_SIDE / float(G))
+			var y := floorf((sj + 0.5) * PICK_SIDE / float(G))
+			var raw := raw_at(n.warpX, n.warpY, n.cont, n.mask, n.ridge, n.hill, x, y, mx, my, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread)
+			if raw < SEA_RAW:
+				sea[sj * G + si] = 1
+				sea_n += 1
+			else:
+				heights.append(normalize(raw))
+	# Океан, связанный с краем плана; остальное — замкнутые понижения ниже моря посреди суши
+	var open := PackedByteArray()
+	open.resize(G * G)
+	var stack := PackedInt32Array()
+	for i in G * G:
+		var on_edge := i % G == 0 or i % G == G - 1 or i / G == 0 or i / G == G - 1
+		if on_edge and sea[i] != 0:
+			open[i] = 1
+			stack.append(i)
+	while not stack.is_empty():
+		var i := stack[stack.size() - 1]
+		stack.resize(stack.size() - 1)
+		for d: int in [-1, 1, -G, G]:
+			var j := i + d
+			if j < 0 or j >= G * G or (absi(d) == 1 and j / G != i / G):
+				continue
+			if sea[j] != 0 and open[j] == 0:
+				open[j] = 1
+				stack.append(j)
+	var pockets := 0
+	var coast := 0
+	for i in G * G:
+		if sea[i] != 0 and open[i] == 0:
+			pockets += 1
+		if i % G < G - 1 and sea[i] != sea[i + 1]:
+			coast += 1
+		if i / G < G - 1 and sea[i] != sea[i + G]:
+			coast += 1
+	var cells := float(G * G)
+	var ocean := sea_n / cells
+	var excess := maxf(0.0, ocean - OCEAN_PREFER)
+	if coastal:
+		excess = maxf(0.0, COASTAL_OCEAN.x - ocean) + maxf(0.0, ocean - COASTAL_OCEAN.y)
+	var relief := 0.0
+	if heights.size() > 1:
+		var mean := 0.0
+		for v in heights:
+			mean += v
+		mean /= heights.size()
+		for v in heights:
+			relief += (v - mean) * (v - mean)
+		relief = sqrt(relief / heights.size())
+	return excess * PICK_W_OCEAN + pockets / cells * PICK_W_POCKETS + coast / (2.0 * G * (G - 1)) * PICK_W_COAST - relief * PICK_W_RELIEF
+
+
+## Прежний выбор (до 14.11.2026): первый по спирали сдвиг, где суши в окне START_SIDE (сетка 16 × 16)
+## не меньше PICK_LAND, иначе тот, где суши больше всего
+static func _pick_start_legacy(w: WorldData) -> void:
 	var n := w.noise
 	var best := -1.0
 	for k in PICK_TRIES:

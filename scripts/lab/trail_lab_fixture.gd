@@ -82,7 +82,9 @@ static func relief(kind: String) -> PackedFloat32Array:
 	w.seed_text = "Trail Lab"
 	w.seed_num = WGRandom.hash_string(w.seed_text)
 	for name: String in WorldGenerator.NOISE_SLOTS: w.noise[name] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, name))
-	StageRelief.run(w) # world-wide mountain settings and the start shift, as in the game
+	# World-wide mountain settings and the pre-GEO 17 start shift: the lab grounds stay as they were
+	StageRelief.configure(w)
+	StageRelief._pick_start_legacy(w)
 	var want: Vector2 = GROUND_DROP[kind]
 	var n := w.noise
 	var best := Vector2i.ZERO

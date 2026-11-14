@@ -73,7 +73,9 @@ static func generate(seed_value: int, kind_name: String) -> void:
 	w.seed_text = "Trail Lab #%d" % seed
 	w.seed_num = WGRandom.hash_string(w.seed_text)
 	for name: String in WorldGenerator.NOISE_SLOTS: w.noise[name] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, name))
-	StageRelief.run(w) # горы мира и сдвиг стартовой области, как в игре
+	# Горы мира и сдвиг стартовой области — прежним выбором (до GEO 17): местности лаборатории не меняются
+	StageRelief.configure(w)
+	StageRelief._pick_start_legacy(w)
 	var want: Vector2 = spec.fall
 	var n := w.noise
 	# окна-кандидаты: годные (перепад характера с запасом, без воды) — и случайное из них; иначе ближайшее по перепаду
@@ -214,7 +216,7 @@ static func publish_world(data: Dictionary) -> void:
 	if world_input == null and not world_info.get("cached", false): _save_world()
 
 ## Кэш мира на диске по сиду: высоты и вода (повторный выбор того же мира — без географии). Версия формата — в имени.
-const CACHE := "user://trail_lab_worlds/v3_%d.bin" # v2 did not retain rivers; never import it as game water data
+const CACHE := "user://trail_lab_worlds/v4_%d.bin" # v2 did not retain rivers; v4 — new start area of the world (GEO 17)
 static func _save_world() -> void:
 	DirAccess.make_dir_recursive_absolute("user://trail_lab_worlds")
 	var f := FileAccess.open(CACHE % world_seed, FileAccess.WRITE)
