@@ -16,31 +16,94 @@ const COAST_REACH := 32
 ## только из данных самой клетки (одинаково в плане и в OuterLand):
 ##   REGION_* — медленная волна того же шума влажности: сухие и влажные края размером в несколько км;
 ##              REGION_AMP — выраженность, REGION_SCALE — размер (больше — крупнее и реже);
-##   RELIEF_* — положение в рельефе: низины до ~25 м над морем влажнее, холмы и возвышенности 25–75 м суше.
+##   RELIEF_* — положение в рельефе (position_field): дно долин и ложбин влажнее, гребни и вершины холмов
+##              суше — относительно окрестности радиусом POSITION_R, а не по абсолютной высоте (долина на 40 м
+##              влажная, гребень у моря сухой). POSITION_SCALE — перепад (в единицах h), дающий полную поправку.
 ## Выше REGION_KEEP (≈ 85–110 м) поправка гаснет: горы, их биомы и скальные склоны как были. Ноль — прежние осадки.
 const REGION_SCALE := 640.0
 const REGION_OX := 57.3
 const REGION_OY := -21.9
 const REGION_AMP := 0.26
-const RELIEF_WET := 0.03
-const RELIEF_DRY := 0.08
+const RELIEF_WET := 0.10
+const RELIEF_DRY := 0.12
+const POSITION_R := 24       # клеток (~100 м): масштаб долины и гребня; не больше OuterLand.PAD - 2
+const POSITION_SCALE := 0.03 # ~8 м ниже или выше окрестности — полная поправка
 const REGION_KEEP := Vector2(0.32, 0.42)
+const DRY_FLOOR := 0.45 # ниже этих осадков сушь действует втрое слабее (не ниже прежних осадков)
 ## false — прежние осадки (до 14.11.2026) для сравнения в стендах (tools/macro_geo_look.gd --no-character)
 static var regional := true
 
 
 ## noise_value — поле влажности (WorldData.NOISE_FIELDS.moist), region — медленная волна (region_field),
-## e — высота клетки в единицах WorldData.h (ниже нуля — море: поправки нет)
-static func rainfall(noise_value: float, distance_to_ocean: float, region: float, e: float) -> float:
+## e — высота клетки в единицах WorldData.h (ниже нуля — море: поправки нет),
+## position — высота клетки минус средняя высота окрестности (position_field)
+static func rainfall(noise_value: float, distance_to_ocean: float, region: float, e: float, position: float) -> float:
 	# Compact coastal influence: OuterLand can reproduce it within its fixed halo.
 	var far := exp(-COAST_REACH / 30.0)
 	var coast := maxf(0.0, (exp(-distance_to_ocean / 30.0) - far) / (1.0 - far))
-	var character := 0.0
+	var base := 0.66 + 0.48 * noise_value + 0.08 * coast
+	var rain := base
 	if e > 0.0 and regional:
-		var lowland := 1.0 - smoothstep(0.02, 0.10, e)
-		var upland := smoothstep(0.10, 0.28, e)
-		character = (REGION_AMP * region + RELIEF_WET * lowland - RELIEF_DRY * upland) * (1.0 - smoothstep(REGION_KEEP.x, REGION_KEEP.y, e))
-	return clampf(0.66 + 0.48 * noise_value + 0.08 * coast + character, 0.12, 1.0)
+		var valley := smoothstep(0.0, POSITION_SCALE, -position)
+		var ridge := smoothstep(0.0, POSITION_SCALE, position)
+		rain += (REGION_AMP * region + RELIEF_WET * valley - RELIEF_DRY * ridge) * (1.0 - smoothstep(REGION_KEEP.x, REGION_KEEP.y, e))
+		# Сушь мягко упирается в DRY_FLOOR: сухие края — лесостепь и луга, а не голая степь (её цвет — почти песок)
+		var floor_rain := minf(base, DRY_FLOOR)
+		if rain < floor_rain:
+			rain = floor_rain + (rain - floor_rain) * 0.3
+	return clampf(rain, 0.12, 1.0)
+
+
+## Положение в рельефе: высота суши (max(0, h)) минус средняя по квадрату ±POSITION_R клеток (у края поля квадрат
+## обрезается). Отрицательно в долинах и ложбинах, положительно на гребнях. parallel — строками на всех ядрах
+## (только для полного плана: OuterLand уже считается в потоках)
+static func position_field(h: PackedFloat32Array, W: int, H: int, parallel := false) -> PackedFloat32Array:
+	var R := POSITION_R
+	var e := PackedFloat32Array()
+	e.resize(W * H)
+	for i in W * H:
+		e[i] = maxf(0.0, h[i])
+	# Средние по строкам (окно ±R по x), затем по столбцам этих средних: ширина окна в столбце одна,
+	# поэтому это ровно среднее по прямоугольнику
+	var row_job := func(y0: int, y1: int) -> PackedFloat32Array:
+		var out := PackedFloat32Array()
+		out.resize((y1 - y0) * W)
+		var pre := PackedFloat64Array()
+		pre.resize(W + 1)
+		for y in range(y0, y1):
+			for x in W:
+				pre[x + 1] = pre[x] + e[y * W + x]
+			for x in W:
+				var a := maxi(0, x - R)
+				var b := mini(W - 1, x + R)
+				out[(y - y0) * W + x] = (pre[b + 1] - pre[a]) / (b - a + 1)
+		return out
+	var rows := PackedFloat32Array()
+	for part: PackedFloat32Array in (Parallel.bands(H, row_job) if parallel else [row_job.call(0, H)]):
+		rows.append_array(part)
+	var col_job := func(x0: int, x1: int) -> PackedFloat32Array:
+		var out := PackedFloat32Array()
+		out.resize((x1 - x0) * H)
+		var pre := PackedFloat64Array()
+		pre.resize(H + 1)
+		for x in range(x0, x1):
+			for y in H:
+				pre[y + 1] = pre[y] + rows[y * W + x]
+			for y in H:
+				var a := maxi(0, y - R)
+				var b := mini(H - 1, y + R)
+				out[(x - x0) * H + y] = (pre[b + 1] - pre[a]) / (b - a + 1)
+		return out
+	var position := PackedFloat32Array()
+	position.resize(W * H)
+	var x0 := 0
+	for part: PackedFloat32Array in (Parallel.bands(W, col_job) if parallel else [col_job.call(0, W)]):
+		var n := part.size() / H
+		for k in n:
+			for y in H:
+				position[y * W + x0 + k] = e[y * W + x0 + k] - part[k * H + y]
+		x0 += n
+	return position
 
 
 ## Медленная волна влажности для rainfall по прямоугольнику клеток (тот же шум moist, свой масштаб и сдвиг)
@@ -74,13 +137,14 @@ static func run(w: WorldData, lake_budget := -1) -> void:
 	var dist_ocean := w.dist_ocean
 	var h := w.h
 	var W := w.W
+	var position := position_field(h, W, w.H, true)
 	# Полосами на всех ядрах: по клетке независимо, результат тот же, что подряд
 	var rain := PackedFloat32Array()
 	for part: PackedFloat32Array in Parallel.bands(w.H, func(y0: int, y1: int) -> PackedFloat32Array:
 		var out := PackedFloat32Array()
 		out.resize((y1 - y0) * W)
 		for i in range(y0 * W, y1 * W):
-			out[i - y0 * W] = rainfall(noise_values[i], dist_ocean[i], region[i], h[i])
+			out[i - y0 * W] = rainfall(noise_values[i], dist_ocean[i], region[i], h[i], position[i])
 		return out):
 		rain.append_array(part)
 	w.rain = rain

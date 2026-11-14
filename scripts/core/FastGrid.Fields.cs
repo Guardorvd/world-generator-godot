@@ -141,7 +141,7 @@ public partial class FastGrid
 		{
 			if (m < 0.25) return ClimateKind.Steppe;
 			if (m < 0.45) return ClimateKind.Grass;
-			if (m > 0.82 && e < 0.12 && slope < 0.25) return ClimateKind.Swamp;
+			if (m > 0.86 && e < 0.12 && slope < 0.25) return ClimateKind.Swamp; // 0.82 до 14.11.2026, StageClimate.land_biome
 			return ClimateKind.Forest;
 		}
 		if (m < 0.27) return ClimateKind.Desert;

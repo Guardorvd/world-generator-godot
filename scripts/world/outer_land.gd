@@ -93,6 +93,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 	p = WorldData.NOISE_FIELDS.moist
 	var moist_n := Parallel.fbm_rect(w.noise.moist, x0, y0, cw, ch, p[0], p[1])
 	var region_n := StageHydrology.region_field(w, x0, y0, cw, ch)
+	var position_n := StageHydrology.position_field(hn, pw, ph) # окно ±POSITION_R внутри полосы PAD
 	var n := cw * ch
 	var out := {h = PackedFloat32Array(), biome = PackedByteArray(), temp = PackedFloat32Array(),
 		moist = PackedFloat32Array(), elev = PackedFloat32Array(), slope = PackedFloat32Array(),
@@ -124,7 +125,7 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 			var d := dist[c] if dist[c] <= SEA_REACH else 1e9
 			var dw := wet_dist[c] if wet_dist[c] <= SEA_REACH else 1e9
 			# осадки — как в StageHydrology, поправка на близость моря гаснет к SEA_REACH
-			var rain := StageHydrology.rainfall(moist_n[o], dist[c], region_n[o], hh)
+			var rain := StageHydrology.rainfall(moist_n[o], dist[c], region_n[o], hh, position_n[c])
 			var temp_base := 0.43 + lat * 0.32 + temp_n[o] * 0.18
 			var t := clampf(temp_base - e * 0.6, 0.0, 1.0)
 			var m := clampf(rain + 0.22 * exp(-dw / 4.0), 0.0, 1.0)

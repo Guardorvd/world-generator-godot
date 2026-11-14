@@ -58,7 +58,9 @@ static func land_biome(e: float, t: float, m: float, slope: float, dist_ocean: f
 			return Biomes.STEPPE
 		if m < 0.45:
 			return Biomes.GRASS
-		if m > 0.82 and e < 0.12 and slope < 0.25:
+		# 14.11.2026 (GEO 19): было m > 0.82. Влажные низины — прежде всего густой влажный лес, болото — только
+		# самые сырые ровные места (копия — FastGrid.Fields.cs, ClimateKind.Swamp)
+		if m > 0.86 and e < 0.12 and slope < 0.25:
 			return Biomes.SWAMP
 		return Biomes.FOREST
 	if m < 0.27:
