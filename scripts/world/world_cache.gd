@@ -667,9 +667,12 @@ func keep_only(seeds: Array) -> void:
 		keep[_base(s, WorldGenerator.START_SIZE)] = true
 	if not DirAccess.dir_exists_absolute(dir):
 		return
+	# 14.11: файлы, закреплённые открытым миром (ChunkSource), не удаляются, как в collect_chunks
+	_pin_lock.lock()
 	for f in DirAccess.get_files_at(dir):
-		if not keep.has(f.get_slice(".", 0)):
+		if not keep.has(f.get_slice(".", 0)) and not _file_pins.has(_absolute(dir.path_join(f))):
 			DirAccess.remove_absolute(dir.path_join(f))
+	_pin_lock.unlock()
 
 
 ## Удалить все слои одного мира, включая устаревшие версии.
@@ -678,12 +681,19 @@ func remove_seed(seed_text: String) -> Error:
 	if not DirAccess.dir_exists_absolute(dir):
 		return OK
 	var prefix := _base(seed_text, WorldGenerator.START_SIZE) + "."
+	var busy := false
+	_pin_lock.lock()
 	for file: String in DirAccess.get_files_at(dir):
 		if file.begins_with(prefix):
+			if _file_pins.has(_absolute(dir.path_join(file))):
+				busy = true # мир открыт: его файлы держит ChunkSource
+				continue
 			var err := DirAccess.remove_absolute(dir.path_join(file))
 			if err != OK:
+				_pin_lock.unlock()
 				return err
-	return OK
+	_pin_lock.unlock()
+	return ERR_BUSY if busy else OK
 
 
 func _write(path: String, key: String, raw: PackedByteArray) -> Error:

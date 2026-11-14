@@ -92,7 +92,7 @@ func photographed(shot: Dictionary) -> void:
 		message.emit("Наведите фотоаппарат на «%s»: снимок засчитается, когда в видоискателе появится название" % s.place.name)
 	elif not quests.wants_photo(shot.place):
 		message.emit("Это «%s». Для задания нужен снимок «%s»" % [shot.name, s.place.name])
-	elif shot.dist > Quests.SHOT_REACH:
-		message.emit("Слишком далеко для задания: подойдите к «%s» ближе %s (сейчас %s)" % [s.place.name, distance_text.call(Quests.SHOT_REACH), distance_text.call(shot.dist)])
+	elif shot.dist > Quests.SHOT_REACH_M:
+		message.emit("Слишком далеко для задания: подойдите к «%s» ближе %s (сейчас %s)" % [s.place.name, distance_text.call(Quests.SHOT_REACH_M), distance_text.call(shot.dist)])
 	else:
 		progress(quests.photographed(shot.place, shot.dist))

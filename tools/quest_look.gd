@@ -93,7 +93,7 @@ func _logic() -> void:
 	_check(quests.step().do == "shoot" and quests.goal().key == photo.target.key, "снимок: цель — место съёмки")
 	_check(quests.known.has(photo.target.key) and quests.known.has(quests.active.steps[1].place.key), "взятое задание открывает названия своих мест")
 	_check(quests.photographed("") == "" and quests.photographed("peak:0:0") == "", "снимок без места или чужого места не засчитан")
-	_check(quests.photographed(photo.target.key, Quests.SHOT_REACH + 50.0) == "" and quests.step().do == "shoot", "снимок издалека не засчитан")
+	_check(quests.photographed(photo.target.key, Quests.SHOT_REACH_M + 50.0) == "" and quests.step().do == "shoot", "снимок издалека не засчитан")
 	_check(quests.photographed(photo.target.key, 120.0) != "" and quests.step().do == "bring", "снимок нужного места вблизи — дальше отвезти его")
 	var back: Dictionary = quests.step().place
 	at = Vector2(back.x, back.y)

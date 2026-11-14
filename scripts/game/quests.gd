@@ -5,7 +5,7 @@ extends RefCounted
 ## Активно одно задание: метка задания одна, и задания не спорят за цель компаса. Виды (KINDS) собираются из шагов,
 ## новый вид — запись в KINDS и сборка в _make; новый шаг — запись в STEPS и событие, которое его закрывает.
 ## Задания предлагает доска: до трёх (доставка, снимок, посещение или обход), одни и те же, пока задание не выполнено.
-## 11.9+: снимок засчитывается не дальше SHOT_REACH от места, места для заданий — не ближе SPOT_MIN к поселению
+## 11.9+: снимок засчитывается не дальше SHOT_REACH_M от места, места для заданий — не ближе SPOT_MIN_CELLS к поселению
 ## (иначе снимок «с порога» закрывал задание, не выходя из деревни), обход двух мест, счёт по поселениям.
 ## 12.3: формулировки по виду места и с вариантами (выбор по id задания — устойчив), два новых вида из тех же
 ## шагов: «Хрупкий груз» (доставка; падение с велосипеда разбивает груз — за новым к доске, crashed())
@@ -39,9 +39,9 @@ const CASES := {
 	gen = {settlement = "поселения", peak = "вершины", lake = "озера", site = "места"},
 	acc = {settlement = "поселение", peak = "вершину", lake = "озеро", site = "место"},
 }
-const SPOT_MIN := 60.0   # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
-const FAR := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
-const SHOT_REACH := 400.0 # м: снимок для задания — не дальше этого от места
+const SPOT_MIN_CELLS := 60.0   # клеток (240 м): ближе к поселению место не задание — его видно и снимешь с порога
+const FAR_CELLS := 500.0       # клеток (2 км): дальше места для посещения и снимка не предлагаются
+const SHOT_REACH_M := 400.0 # м: снимок для задания — не дальше этого от места
 const TOUR_CHANCE := 0.4 # доля досок, где вместо посещения — обход двух мест
 const FRAGILE_CHANCE := 0.35   # доля досок, где вместо доставки — хрупкий груз
 const CHRONICLE_CHANCE := 0.35 # доля досок, где вместо снимка — летопись двух мест
@@ -93,7 +93,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	var spots: Array = []  # места для посещения и снимка: не поселения, не у порога и не за горизонтом
 	for p: Dictionary in places:
 		var d := center.distance_to(Vector2(p.x, p.y))
-		if p.kind != "settlement" and d > SPOT_MIN and d < FAR and (p.kind != "site" or EntityCodec.value(p.src, "rank", 0) >= 1):
+		if p.kind != "settlement" and d > SPOT_MIN_CELLS and d < FAR_CELLS and (p.kind != "site" or EntityCodec.value(p.src, "rank", 0) >= 1):
 			spots.append(p)
 	spots.sort_custom(func(a: Dictionary, b: Dictionary) -> bool: return center.distance_squared_to(Vector2(a.x, a.y)) < center.distance_squared_to(Vector2(b.x, b.y)))
 	var towns := neighbors.duplicate()
@@ -113,7 +113,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	if not shot.is_empty():
 		used[shot.key] = true
 		var pair := _nearest(spots.slice(0, 8).filter(func(p: Dictionary) -> bool: return p.key != shot.key), shot) if shot_kind == "chronicle" else {}
-		if not pair.is_empty() and Vector2(shot.x, shot.y).distance_to(Vector2(pair.x, pair.y)) < FAR * 0.5:
+		if not pair.is_empty() and Vector2(shot.x, shot.y).distance_to(Vector2(pair.x, pair.y)) < FAR_CELLS * 0.5:
 			used[pair.key] = true
 			out.append(_make("chronicle", here, [shot, pair, here]))
 		else:
@@ -124,7 +124,7 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	var walk := _pick(fresh.slice(0, 5).filter(func(p: Dictionary) -> bool: return not _done.has(_id("visit", here, p)) and not _done.has(_id("tour", here, p))), rng)
 	if not walk.is_empty():
 		var second := _nearest(fresh.filter(func(p: Dictionary) -> bool: return p.key != walk.key), walk)
-		if not second.is_empty() and rng.randf() < TOUR_CHANCE and Vector2(walk.x, walk.y).distance_to(Vector2(second.x, second.y)) < FAR * 0.6:
+		if not second.is_empty() and rng.randf() < TOUR_CHANCE and Vector2(walk.x, walk.y).distance_to(Vector2(second.x, second.y)) < FAR_CELLS * 0.6:
 			out.append(_make("tour", here, [walk, second]))
 		else:
 			out.append(_make("visit", here, [walk]))
@@ -174,14 +174,14 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 		"photo":
 			var back: Dictionary = at[1]
 			q.title = "Снимок: «%s»" % target.name
-			q.text = _variant(PHOTO_TEXTS, id, 1) % ["%d м" % int(SHOT_REACH), "сюда" if back.key == here.key else "в поселение «%s»" % back.name]
+			q.text = _variant(PHOTO_TEXTS, id, 1) % ["%d м" % int(SHOT_REACH_M), "сюда" if back.key == here.key else "в поселение «%s»" % back.name]
 			q.steps = [{do = "shoot", place = target}, {do = "bring", place = back}]
 		"chronicle":
 			var second: Dictionary = at[1]
 			var back: Dictionary = at[2]
 			q.title = "Летопись: «%s» и «%s»" % [target.name, second.name]
 			q.text = "Летописцу нужны два снимка: сначала «%s», потом «%s» — каждое не дальше %s. Снимки привезите %s.%s" % [
-				target.name, second.name, "%d м" % int(SHOT_REACH), "сюда" if back.key == here.key else "в «%s»" % back.name, known_text]
+				target.name, second.name, "%d м" % int(SHOT_REACH_M), "сюда" if back.key == here.key else "в «%s»" % back.name, known_text]
 			q.steps = [{do = "shoot", place = target}, {do = "shoot", place = second}, {do = "bring", place = back}]
 		"tour":
 			q.title = "Обход: «%s» и «%s»" % [target.name, at[1].name]
@@ -262,7 +262,7 @@ func wants_photo(place_id: String) -> bool:
 
 ## Снимок сделан, в прицеле было место place_id, до него distance м (PhotoCamera.photo_taken)
 func photographed(place_id: String, distance := 0.0) -> String:
-	if not wants_photo(place_id) or distance > SHOT_REACH:
+	if not wants_photo(place_id) or distance > SHOT_REACH_M:
 		return ""
 	return _advance()
 

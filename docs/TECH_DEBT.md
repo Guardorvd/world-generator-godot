@@ -18,7 +18,6 @@
 
    Выход — открыть эти поля через методы чтения. Имена `_label`, `_material`, `_arrays` пересекаются с другими функциями, поэтому переименовывать их нужно вручную, а не заменой.
 7. **Слои.** Генерация (`world`) зависит от `game`: `Heightfield`, `GameConfig`, `PlayerState.SITE_HALF`, `RoadRefinement`. `trails` тоже зависит от `game` (`RoadBed`, `BikeRide`, `ForestObstacles`). В `game` остались ссылки на `render`: `BikeController` → `BikeCrash`/`BikeView`, `ForestObstacles` → `RockModels`, `ServiceScope` → `TerrainBuilder`. Варианты: либо записать фактический порядок слоёв в `GODOT_NOTES.md` (`trails` между `world` и `game`, `Heightfield` и `GameConfig` как общее ядро мира), либо переносить классы. Перенос `Heightfield` — крупная правка с проверкой хешей мира.
-8. **Единицы в `Quests`.** `SPOT_MIN`/`FAR` заданы в клетках, `SHOT_REACH` — в метрах, рядом. Стоит добавить суффиксы (`_CELLS`, `_M`) или перевести всё в метры.
 9. **У журнала областей нет контрольной суммы** (у кэша мира, сохранений и площадок она есть). Повреждённый файл отбрасывается только по `format`.
 
 ## Числа и тексты

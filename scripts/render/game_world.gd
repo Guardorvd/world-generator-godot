@@ -429,7 +429,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_quest_changed()
 		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)
-	photo.wanted_reach = Quests.SHOT_REACH
+	photo.wanted_reach = Quests.SHOT_REACH_M
 	for s: SettlementData in world.settlements:
 		var foot := SettlementsBuilder.board_foot(s, heights)
 		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
