@@ -74,11 +74,14 @@ func setup(host: Node) -> void:
 	if flora.item_count == 0:
 		for level: Dictionary in GameSettings.FLORA_LEVELS:
 			flora.add_item(level.title.capitalize())
+	var value_padding := StyleBoxEmpty.new()
+	value_padding.content_margin_right = 12
 	for id: String in VisualStyle.EFFECTS:
 		var node_id: String = id.capitalize()
 		style_on[id] = host.get_node("%%Style%sOn" % node_id)
 		style_amount[id] = host.get_node("%%Style%sAmount" % node_id)
 		style_value[id] = host.get_node("%%Style%sValue" % node_id)
+		(style_value[id] as Label).add_theme_stylebox_override("normal", value_padding)
 		(style_on[id] as CheckBox).text = VisualStyle.TITLES[id]
 		(style_on[id] as CheckBox).tooltip_text = VisualStyle.HINTS[id]
 		(style_amount[id] as HSlider).tooltip_text = VisualStyle.HINTS[id]
@@ -126,6 +129,7 @@ func sync() -> void:
 		(style_on[id] as CheckBox).set_pressed_no_signal(state.style_on[id])
 		(style_amount[id] as HSlider).set_value_no_signal(state.style_amount[id])
 		(style_amount[id] as HSlider).editable = state.style_on[id]
+		(style_amount[id] as HSlider).modulate = Color.WHITE if state.style_on[id] else Color(0.55, 0.55, 0.55, 0.7)
 		_show_style_value(id)
 	VisualStyle.configure(state.style_on, state.style_amount)
 	_update_apply()
@@ -179,6 +183,7 @@ func _style_changed() -> void:
 		state.style_on[id] = (style_on[id] as CheckBox).button_pressed
 		state.style_amount[id] = (style_amount[id] as HSlider).value
 		(style_amount[id] as HSlider).editable = state.style_on[id]
+		(style_amount[id] as HSlider).modulate = Color.WHITE if state.style_on[id] else Color(0.55, 0.55, 0.55, 0.7)
 		_show_style_value(id)
 	GameContext.scope.settings.set_display_state(state)
 	VisualStyle.configure(state.style_on, state.style_amount)

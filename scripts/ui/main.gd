@@ -139,7 +139,6 @@ func _ready() -> void:
 	carousel.setup(%Start, [%OpenNew, %OpenWorlds, %MenuSettings, %MenuExit], %TrailLab)
 	carousel.world_selected.connect(func(seed_text: String) -> void: _select_world(seed_text))
 	carousel.play_requested.connect(_on_start)
-	carousel.new_world_requested.connect(_open_new_world)
 	for item: Dictionary in RecommendedSeeds.SEEDS:
 		var button := Button.new()
 		button.text = item.seed
@@ -747,9 +746,8 @@ func _seed_row(seed_text: String, note: String) -> Button:
 	star.theme_type_variation = &"IconButton"
 	star.icon = UiIcons.star(fav)
 	star.icon_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	star.custom_minimum_size = Vector2(40, 40)
+	star.custom_minimum_size = Vector2(44, 44)
 	star.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	star.focus_mode = Control.FOCUS_NONE
 	var full := not fav and GameContext.scope.settings.favorite_seeds.size() >= GameSettings.FAVORITES_MAX
 	star.disabled = full
 	star.tooltip_text = _star_tip(fav, full)
@@ -1397,7 +1395,7 @@ func _control_rows() -> Array:
 	rows.append([c.label(&"photo") if pad else "ПКМ", "фотоаппарат"])
 	if not pad:
 		rows.append([c.label(&"time_skip"), "время суток (+Shift — назад)"])
-	rows.append([c.label(&"show_hud"), "сводка (зажать)"])
+	rows.append([c.label(&"show_hud"), "сводка (показать / скрыть)"])
 	rows.append([c.label(&"pause"), "пауза"])
 	return rows
 

@@ -1,4 +1,12 @@
-[gd_resource type="Theme" load_steps=72 format=3]
+[gd_resource type="Theme" load_steps=76 format=3]
+
+[ext_resource type="Texture2D" path="res://resources/icons/checkbox_unchecked.svg" id="checkbox_unchecked"]
+
+[ext_resource type="Texture2D" path="res://resources/icons/checkbox_checked.svg" id="checkbox_checked"]
+
+[ext_resource type="Texture2D" path="res://resources/icons/checkbox_unchecked_disabled.svg" id="checkbox_unchecked_disabled"]
+
+[ext_resource type="Texture2D" path="res://resources/icons/checkbox_checked_disabled.svg" id="checkbox_checked_disabled"]
 
 [sub_resource type="StyleBoxFlat" id="focus"]
 content_margin_left = 16.0
@@ -122,7 +130,7 @@ content_margin_left = 16.0
 content_margin_top = 8.0
 content_margin_right = 16.0
 content_margin_bottom = 8.0
-bg_color = Color(0.86, 0.7, 0.38, 0.3)
+bg_color = Color(0.17, 0.19, 0.22, 1)
 corner_radius_top_left = 8
 corner_radius_top_right = 8
 corner_radius_bottom_right = 8
@@ -905,7 +913,7 @@ Button/styles/hover_pressed = SubResource("btn_pressed")
 Button/styles/normal = SubResource("btn_normal")
 Button/styles/pressed = SubResource("btn_pressed")
 CaptionLabel/base_type = &"Label"
-CaptionLabel/colors/font_color = Color(1, 1, 1, 0.5)
+CaptionLabel/colors/font_color = Color(0.72, 0.76, 0.82, 1)
 CaptionLabel/font_sizes/font_size = 13
 CarouselTab/base_type = &"Button"
 CarouselTab/colors/font_color = Color(0.93, 0.93, 0.9, 1)
@@ -934,6 +942,10 @@ CheckBox/colors/font_hover_color = Color(0.93, 0.93, 0.9, 1)
 CheckBox/colors/font_hover_pressed_color = Color(0.93, 0.93, 0.9, 1)
 CheckBox/colors/font_pressed_color = Color(0.93, 0.93, 0.9, 1)
 CheckBox/constants/h_separation = 8
+CheckBox/icons/checked = ExtResource("checkbox_checked")
+CheckBox/icons/checked_disabled = ExtResource("checkbox_checked_disabled")
+CheckBox/icons/unchecked = ExtResource("checkbox_unchecked")
+CheckBox/icons/unchecked_disabled = ExtResource("checkbox_unchecked_disabled")
 CheckBox/styles/disabled = SubResource("chk_normal")
 CheckBox/styles/focus = SubResource("focus")
 CheckBox/styles/hover = SubResource("chk_hover")
@@ -1006,7 +1018,7 @@ KeyLabel/styles/normal = SubResource("key")
 Label/colors/font_color = Color(0.93, 0.93, 0.9, 1)
 LineEdit/colors/caret_color = Color(0.95, 0.8, 0.5, 1)
 LineEdit/colors/font_color = Color(0.93, 0.93, 0.9, 1)
-LineEdit/colors/font_placeholder_color = Color(1, 1, 1, 0.5)
+LineEdit/colors/font_placeholder_color = Color(0.72, 0.76, 0.82, 1)
 LineEdit/colors/selection_color = Color(0.86, 0.7, 0.38, 0.35)
 LineEdit/styles/focus = SubResource("edit_focus")
 LineEdit/styles/normal = SubResource("edit_normal")
@@ -1092,12 +1104,12 @@ PopupMenu/styles/hover = SubResource("popup_hover")
 PopupMenu/styles/panel = SubResource("popup")
 PrimaryButton/base_type = &"Button"
 PrimaryButton/colors/font_color = Color(0.1, 0.08, 0.05, 1)
-PrimaryButton/colors/font_disabled_color = Color(0.1, 0.08, 0.05, 0.55)
+PrimaryButton/colors/font_disabled_color = Color(0.7, 0.72, 0.74, 1)
 PrimaryButton/colors/font_focus_color = Color(0.1, 0.08, 0.05, 1)
 PrimaryButton/colors/font_hover_color = Color(0.1, 0.08, 0.05, 1)
 PrimaryButton/colors/font_hover_pressed_color = Color(0.1, 0.08, 0.05, 1)
 PrimaryButton/colors/font_pressed_color = Color(0.1, 0.08, 0.05, 1)
-PrimaryButton/colors/icon_disabled_color = Color(0.1, 0.08, 0.05, 0.55)
+PrimaryButton/colors/icon_disabled_color = Color(0.7, 0.72, 0.74, 1)
 PrimaryButton/colors/icon_focus_color = Color(0.1, 0.08, 0.05, 1)
 PrimaryButton/colors/icon_hover_color = Color(0.1, 0.08, 0.05, 1)
 PrimaryButton/colors/icon_hover_pressed_color = Color(0.1, 0.08, 0.05, 1)
@@ -1122,17 +1134,17 @@ SubtitleLabel/colors/font_color = Color(0.78, 0.8, 0.84, 1)
 SubtitleLabel/font_sizes/font_size = 15
 TabBar/constants/h_separation = 4
 TabButton/base_type = &"Button"
-TabButton/colors/font_color = Color(1, 1, 1, 0.6)
+TabButton/colors/font_color = Color(0.75, 0.78, 0.82, 1)
 TabButton/colors/font_disabled_color = Color(1, 1, 1, 0.32)
-TabButton/colors/font_focus_color = Color(1, 1, 1, 0.6)
-TabButton/colors/font_hover_color = Color(1, 1, 1, 0.6)
+TabButton/colors/font_focus_color = Color(0.75, 0.78, 0.82, 1)
+TabButton/colors/font_hover_color = Color(0.75, 0.78, 0.82, 1)
 TabButton/colors/font_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
 TabButton/colors/font_pressed_color = Color(0.95, 0.8, 0.5, 1)
 TabButton/colors/icon_disabled_color = Color(1, 1, 1, 0.32)
-TabButton/colors/icon_focus_color = Color(1, 1, 1, 0.6)
-TabButton/colors/icon_hover_color = Color(1, 1, 1, 0.6)
+TabButton/colors/icon_focus_color = Color(0.75, 0.78, 0.82, 1)
+TabButton/colors/icon_hover_color = Color(0.75, 0.78, 0.82, 1)
 TabButton/colors/icon_hover_pressed_color = Color(0.95, 0.8, 0.5, 1)
-TabButton/colors/icon_normal_color = Color(1, 1, 1, 0.6)
+TabButton/colors/icon_normal_color = Color(0.75, 0.78, 0.82, 1)
 TabButton/colors/icon_pressed_color = Color(0.95, 0.8, 0.5, 1)
 TabButton/styles/disabled = SubResource("tab_disabled")
 TabButton/styles/focus = SubResource("focus")
@@ -1142,7 +1154,7 @@ TabButton/styles/normal = SubResource("tab_normal")
 TabButton/styles/pressed = SubResource("tab_pressed")
 TabContainer/colors/font_hovered_color = Color(0.93, 0.93, 0.9, 1)
 TabContainer/colors/font_selected_color = Color(0.95, 0.8, 0.5, 1)
-TabContainer/colors/font_unselected_color = Color(1, 1, 1, 0.6)
+TabContainer/colors/font_unselected_color = Color(0.75, 0.78, 0.82, 1)
 TabContainer/constants/side_margin = 0
 TabContainer/styles/panel = SubResource("tabs_panel")
 TabContainer/styles/tab_disabled = SubResource("tabs_off")

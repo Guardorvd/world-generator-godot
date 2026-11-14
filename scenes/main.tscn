@@ -150,7 +150,7 @@ offset_left = 16.0
 offset_top = 132.0
 offset_right = 344.0
 mouse_filter = 2
-theme_type_variation = &"WorldCard"
+theme_type_variation = &"HudPanel"
 modulate = Color(1, 1, 1, 0)
 
 [node name="Text" type="Label" parent="UI/Root/Hud/Toast"]
@@ -246,7 +246,7 @@ autowrap_mode = 3
 theme_override_constants/separation = 5
 
 [node name="Previous" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
-custom_minimum_size = Vector2(34, 37)
+custom_minimum_size = Vector2(44, 44)
 theme_type_variation = &"MenuLink"
 text = "‹"
 tooltip_text = "Предыдущий мир"
@@ -257,7 +257,7 @@ theme_override_constants/separation = 4
 alignment = 1
 
 [node name="Next" type="Button" parent="UI/Root/Menu/Panel/Carousel/Strip"]
-custom_minimum_size = Vector2(34, 37)
+custom_minimum_size = Vector2(44, 44)
 theme_type_variation = &"MenuLink"
 text = "›"
 tooltip_text = "Следующий мир"
@@ -276,28 +276,28 @@ theme_override_constants/separation = 4
 [node name="OpenNew" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 38)
+custom_minimum_size = Vector2(0, 44)
 theme_type_variation = &"MenuLink"
 text = "Новый мир"
 
 [node name="OpenWorlds" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 38)
+custom_minimum_size = Vector2(0, 44)
 theme_type_variation = &"MenuLink"
 text = "Все миры"
 
 [node name="MenuSettings" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 38)
+custom_minimum_size = Vector2(0, 44)
 theme_type_variation = &"MenuLink"
 text = "Настройки"
 
 [node name="MenuExit" type="Button" parent="UI/Root/Menu/Panel/Actions"]
 unique_name_in_owner = true
 size_flags_horizontal = 3
-custom_minimum_size = Vector2(0, 38)
+custom_minimum_size = Vector2(0, 44)
 theme_type_variation = &"MenuLink"
 text = "Выход"
 
@@ -454,7 +454,7 @@ text_overrun_behavior = 3
 
 [node name="Star" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/ChoiceRow"]
 unique_name_in_owner = true
-custom_minimum_size = Vector2(40, 40)
+custom_minimum_size = Vector2(44, 44)
 layout_mode = 2
 theme_type_variation = &"IconButton"
 icon = ExtResource("5_star")
@@ -495,6 +495,7 @@ tooltip_text = "Пересоздать мир по этому зерну и на
 
 [node name="DeleteWorld" type="Button" parent="UI/Root/AllWorlds/Panel/Box/Columns/Side/WorldActions"]
 unique_name_in_owner = true
+theme_type_variation = &"DangerButton"
 layout_mode = 2
 size_flags_horizontal = 3
 text = "Удалить мир"
@@ -516,7 +517,7 @@ text = "Хранилище миров"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
-theme_type_variation = &"TabButton"
+theme_type_variation = &"DangerButton"
 theme_override_font_sizes/font_size = 14
 text = "Очистить все сохранения"
 tooltip_text = "Перенести сохранения в архив и убрать все миры из меню"
@@ -1076,7 +1077,7 @@ size_flags_horizontal = 3
 text = "Гирлянды на деревьях"
 tooltip_text = "Тёплые парковые гирлянды вдоль отдельных лесных дорог и полян."
 
-[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/LightingRow"]
+[node name="Shadows" type="CheckBox" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 unique_name_in_owner = true
 layout_mode = 2
 text = "Тени"

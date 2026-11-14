@@ -15,7 +15,7 @@ INSET = (0.03, 0.05, 0.09, 0.7)
 BORDER = (0.30, 0.35, 0.45, 1)
 TEXT = (0.93, 0.93, 0.9, 1)
 MUTED = (0.78, 0.8, 0.84, 1)
-FAINT = (1, 1, 1, 0.5)
+FAINT = (0.72, 0.76, 0.82, 1)
 OFF = (1, 1, 1, 0.32)
 GOLD = (0.86, 0.7, 0.38, 1)
 GOLD_HI = (0.95, 0.8, 0.5, 1)
@@ -101,7 +101,7 @@ put("OptionButton/constants/arrow_margin", 2 * U)
 # золотая главная кнопка
 put("PrimaryButton/base_type", '&"Button"')
 button_type("PrimaryButton", box("pri_normal", GOLD), box("pri_hover", GOLD_HI), box("pri_pressed", GOLD_LO),
-            box("pri_disabled", GOLD_OFF), INK, (0.1, 0.08, 0.05, 0.55))
+            box("pri_disabled", (0.17, 0.19, 0.22, 1)), INK, (0.70, 0.72, 0.74, 1))
 # тревожная: необратимое (выход, отказ)
 put("DangerButton/base_type", '&"Button"')
 button_type("DangerButton", box("dng_normal", DANGER), box("dng_hover", DANGER_HI), box("dng_pressed", DANGER_LO),
@@ -110,7 +110,7 @@ button_type("DangerButton", box("dng_normal", DANGER), box("dng_hover", DANGER_H
 put("TabButton/base_type", '&"Button"')
 button_type("TabButton", box("tab_normal", (1, 1, 1, 0.04)), box("tab_hover", SURF_HI),
             box("tab_pressed", GOLD_TINT, GOLD, {"bottom": 2}), box("tab_disabled", (1, 1, 1, 0.02)),
-            (1, 1, 1, 0.6), OFF, GOLD_HI)
+            (0.75, 0.78, 0.82, 1), OFF, GOLD_HI)
 # строка списка (мир в меню): выбранная — золотая рамка
 put("ListRow/base_type", '&"Button"')
 row_sel = box("row_selected", GOLD_TINT, (0.86, 0.7, 0.38, 0.9), 2, radius=6)
@@ -132,6 +132,8 @@ for s, v in (("font_color", MUTED), ("font_hover_color", TEXT), ("font_focus_col
              ("font_hover_pressed_color", TEXT), ("font_disabled_color", OFF)):
     put("CheckBox/colors/" + s, c(v))
 put("CheckBox/constants/h_separation", U)
+for state in ("unchecked", "checked", "unchecked_disabled", "checked_disabled"):
+    put("CheckBox/icons/" + state, 'ExtResource("checkbox_' + state + '")')
 
 # ---- поля, полосы, ползунки ----
 put("LineEdit/styles/normal", box("edit_normal", SURF_LO, BORDER, 1, margin=(U + 4, U)))
@@ -164,7 +166,7 @@ put("TabContainer/styles/tab_hovered", box("tabs_hov", SURF_HI, radius=6, margin
 put("TabContainer/styles/tab_disabled", box("tabs_off", (1, 1, 1, 0.02), radius=6, margin=(2 * U, U)))
 put("TabContainer/styles/tab_focus", focus)
 put("TabContainer/colors/font_selected_color", c(GOLD_HI))
-put("TabContainer/colors/font_unselected_color", c((1, 1, 1, 0.6)))
+put("TabContainer/colors/font_unselected_color", c((0.75, 0.78, 0.82, 1)))
 put("TabContainer/colors/font_hovered_color", c(TEXT))
 put("TabContainer/constants/side_margin", 0)
 put("TabBar/constants/h_separation", U // 2)
@@ -276,7 +278,9 @@ button_type("CarouselTab", box("carousel_tab", INSET, BORDER, 1, radius=5, margi
             box("carousel_off", SURF_OFF, radius=5, margin=(4, 4)), TEXT, OFF, GOLD_HI)
 put("CarouselTab/font_sizes/font_size", 15)
 
-out = ['[gd_resource type="Theme" load_steps=%d format=3]' % (len(subs) + 1), ""]
+out = ['[gd_resource type="Theme" load_steps=%d format=3]' % (len(subs) + 5), ""]
+for state in ("unchecked", "checked", "unchecked_disabled", "checked_disabled"):
+    out += ['[ext_resource type="Texture2D" path="res://resources/icons/checkbox_%s.svg" id="checkbox_%s"]' % (state, state), ""]
 for s in subs:
     out += [s, ""]
 out.append("[resource]")

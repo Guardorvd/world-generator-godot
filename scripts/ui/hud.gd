@@ -14,6 +14,7 @@ var _brakes: BrakeIndicator
 
 signal travel_requested(place: Dictionary)
 signal goal_changed(place: Dictionary)
+signal map_close_requested
 
 const TILE := GameConfig.TILE
 const DIRS := ["С", "СЗ", "З", "ЮЗ", "Ю", "ЮВ", "В", "СВ"]
@@ -47,7 +48,7 @@ var _tracker_icon: TextureRect  # 12.5: пиктограмма вида зада
 var _tracker_step: Label
 var _tracker_note: Label
 var _photo_mode := false
-var _revealed := false # 12.4: мини-карта, компас, сведения, задание и подсказки видны, пока зажат Tab
+var _revealed := false # сводка закрепляется повторным нажатием show_hud
 var _reveal_needs_release := false
 var _summary_blocked := false
 var _summary_shown := false
@@ -113,6 +114,17 @@ func _ready() -> void:
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
 	add_child(big_map)
+	var close_map := Button.new()
+	close_map.text = "×"
+	close_map.tooltip_text = "Закрыть карту"
+	close_map.accessibility_name = "Закрыть карту"
+	close_map.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	close_map.offset_left = -60
+	close_map.offset_right = -16
+	close_map.offset_top = 12
+	close_map.offset_bottom = 56
+	close_map.pressed.connect(func() -> void: map_close_requested.emit())
+	big_map.add_child(close_map)
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
 	_vignette = ColorRect.new()
@@ -170,6 +182,7 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
+	_revealed = false
 	_toast_queue.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
@@ -487,8 +500,7 @@ func set_photo_mode(on: bool) -> void:
 	update_tracker()
 
 
-## 12.4: интерфейс чистый — подсказка у прицела и сообщения; остальное только с зажатым Tab.
-## 12.7: прицел тоже только с Tab; наведение и E работают и без него
+## Сводку можно закрепить; контекстная подсказка видна отдельно.
 func summary_visible() -> bool:
 	return _revealed and is_visible_in_tree() and not _photo_mode and not big_map.visible \
 		and not settlement_panel.visible and not _summary_blocked
@@ -507,8 +519,9 @@ func _apply_reveal() -> void:
 		node.visible = shown
 	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
 	hint.visible = shown or urgent
-	$Crosshair.visible = shown
-	prompt.visible = shown or urgent
+	prompt.visible = is_visible_in_tree() and not _photo_mode and not big_map.visible \
+		and not settlement_panel.visible and (not _summary_blocked or _hint_urgent) and not _prompt_items.is_empty()
+	$Crosshair.visible = shown or prompt.visible
 
 
 ## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
@@ -520,9 +533,8 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 	if _prompt_items != near:
 		_prompt_items = near.duplicate()
 		_fill_chips(prompt, near)
-	if _hint_urgent != urgent:
-		_hint_urgent = urgent
-		_apply_reveal()
+	_hint_urgent = urgent
+	_apply_reveal()
 
 
 ## 14.0: выносливость 0..1; exhausted — опустела и ещё не восстановилась до Stamina.RECOVERED.
@@ -629,7 +641,9 @@ func _process(delta: float) -> void:
 	var held := Input.is_action_pressed("show_hud")
 	if not held and (get_window().has_focus() or DisplayServer.get_name() == "headless"):
 		_reveal_needs_release = false
-	_revealed = held and not _reveal_needs_release
+	if Input.is_action_just_pressed("show_hud") and is_visible_in_tree() and not _reveal_needs_release and not _summary_blocked \
+			and not _photo_mode and not big_map.visible and not settlement_panel.visible:
+		_revealed = not _revealed
 	var shown := summary_visible()
 	if shown != _summary_shown:
 		_summary_shown = shown
@@ -958,7 +972,7 @@ class BigMap extends Control:
 			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
 				var same: bool = pl.key == hud.goal.get("key")
 				hud.set_goal({} if same else pl)
-			elif event.button_index == MOUSE_BUTTON_LEFT:
+			elif event.button_index == MOUSE_BUTTON_LEFT and event.ctrl_pressed:
 				var frame := _frame()
 				var cell: Vector2 = (event.position - frame[0]) / float(frame[2])
 				var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
@@ -1058,7 +1072,7 @@ class BigMap extends Control:
 			legend += " · синим отмечен велосипед"
 		Hud.draw_label(self, legend, Vector2(cw / 2.0, 30.0), Color.WHITE, 16)
 		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, size.y - 16.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "Зелёным — трасса, кольцо — старт · ЛКМ — цель · ПКМ — перемещение · колесо — масштаб · перетаскивание — сдвиг · средняя кнопка — к себе"
+		var tip := "ЛКМ — цель · Ctrl+ЛКМ — метка · ПКМ — перемещение · колесо — масштаб · перетаскивание — сдвиг"
 		if not hover.is_empty():
 			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
 			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Util.distance_text(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]

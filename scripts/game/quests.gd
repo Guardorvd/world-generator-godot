@@ -16,7 +16,7 @@ signal changed  # взято, пройден шаг, выполнено или �
 ## Виды заданий: подпись и цвет для доски, счётчика и меток; значок — UiIcons.QUESTS (с 12.5 векторный)
 const KINDS := {
 	visit = {title = "Посещение", color = Color(0.55, 0.85, 1.0)},
-	tour = {title = "Обход", color = Color(0.55, 0.85, 1.0)},
+	tour = {title = "Обход", color = Color(0.72, 0.65, 1.0)},
 	delivery = {title = "Доставка", color = Color(1.0, 0.7, 0.4)},
 	photo = {title = "Снимок", color = Color(0.75, 0.95, 0.6)},
 	fragile = {title = "Хрупкий груз", color = Color(1.0, 0.55, 0.45)},
@@ -29,9 +29,9 @@ const CARGO_KINDS := ["delivery", "fragile"]
 ## goal — ставить ли место шага целью на компасе (у pickup сумка рядом, хватает метки задания)
 const STEPS := {
 	reach = {text = "Доберитесь до %s «%s»", case = "gen", goal = true},
-	pickup = {text = "Наденьте сумку у доски %s «%s» (E)", case = "gen", goal = false},
+	pickup = {text = "Наденьте сумку у доски %s «%s»", case = "gen", goal = false},
 	carry = {text = "Довезите сумку в %s «%s»", case = "acc", goal = true},
-	shoot = {text = "Сфотографируйте %s «%s» (ПКМ)", case = "acc", goal = true},
+	shoot = {text = "Сфотографируйте %s «%s»", case = "acc", goal = true},
 	bring = {text = "Отвезите снимок в %s «%s»", case = "acc", goal = true},
 }
 ## Вид места в нужном падеже: название в кавычках остаётся как есть

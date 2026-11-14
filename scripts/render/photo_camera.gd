@@ -376,16 +376,14 @@ func _draw_view(c: Control) -> void:
 		c.draw_rect(Rect2(Vector2.ZERO, s), Color(1, 1, 1, _flash * _flash))
 
 
-## Метка велосипеда: голубой ромб (как на картах) с подписью расстояния, у края кадра — стрелка наружу
+## Метка велосипеда: голубой круг как на картах; у края кадра — стрелка наружу
 func _draw_bike(c: Control, font: Font, a: float) -> void:
 	var blue := Color(0.25, 0.65, 1.0, 0.95 * a)
 	var p := _bike_pos
 	if _bike_dir == 0.0:
 		var r := 7.0
-		var diamond := PackedVector2Array([p + Vector2(0, -r), p + Vector2(r, 0), p + Vector2(0, r), p + Vector2(-r, 0)])
-		c.draw_colored_polygon(diamond, blue)
-		diamond.append(diamond[0])
-		c.draw_polyline(diamond, Color(1, 1, 1, 0.9 * a), 1.5)
+		c.draw_circle(p, r, blue)
+		c.draw_arc(p, r, 0.0, TAU, 24, Color(1, 1, 1, 0.9 * a), 1.5)
 	else:
 		var f := Vector2.from_angle(_bike_dir)
 		var tri := PackedVector2Array([p + f * 10.0, p - f * 6.0 + f.orthogonal() * 7.0, p - f * 6.0 - f.orthogonal() * 7.0])

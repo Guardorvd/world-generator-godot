@@ -16,6 +16,8 @@ const PAGE_W := 456.0  # ширина строк доски: 500 без поле
 const CARD_W := 430.0  # и внутри карточки задания
 
 var _box: VBoxContainer
+var _drop_button: Button
+var _drop_generation := 0
 var _tab := 0  # 0 — задания, 1 — маршруты; помнится между досками
 
 
@@ -62,6 +64,8 @@ func _button(text: String, action: Callable, parent: Container = null) -> Button
 
 ## Убрать строки и кнопки: кнопки держат места (и записи поселений) прошлого мира
 func clear() -> void:
+	_drop_generation += 1
+	_drop_button = null
 	for child: Node in _box.get_children():
 		_box.remove_child(child)
 		child.queue_free()
@@ -106,6 +110,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 		tab.toggled.connect(func(on: bool) -> void:
 			page.visible = on
 			if on and visible:
+				_reset_drop_confirmation()
 				_tab = i
 				_fit())
 	_quests_page(pages[0], settlement, quests, offers)
@@ -115,7 +120,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	_box.add_child(row)
 	var bicycle := _button("Велосипед уже рядом" if bicycle_near else "Вернуть велосипед", func() -> void: bike_requested.emit(), row)
 	bicycle.disabled = bicycle_near
-	var close := _button("Продолжить путь · Esc", func() -> void: closed.emit(), row)
+	var close := _button("Продолжить путь", func() -> void: closed.emit(), row)
 	for b: Button in [bicycle, close]:
 		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	for i in 2:
@@ -153,12 +158,15 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 			_label(quests.step_text(q.steps[i]), 14, step, Color.WHITE if i == q.step else MUTED, CARD_W - 22)
 		# отказ — в два нажатия: случайный щелчок не теряет сумку и пройденные шаги
 		var drop := _button("Отказаться от задания", func() -> void: pass, card)
+		_drop_button = drop
 		drop.theme_type_variation = &"DangerButton"
 		drop.pressed.connect(func() -> void:
 			if drop.text == "Точно отказаться? Нажмите ещё раз":
 				quest_abandoned.emit()
 			else:
-				drop.text = "Точно отказаться? Нажмите ещё раз")
+				drop.text = "Точно отказаться? Нажмите ещё раз"
+				_drop_generation += 1
+				_reset_drop_later(drop, _drop_generation))
 	if offers.is_empty():
 		_label("Сейчас доске нечего предложить.", 15, page, MUTED)
 		return
@@ -183,11 +191,23 @@ func _quests_page(page: VBoxContainer, settlement: Variant, quests: Quests, offe
 		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 		title.clip_text = true
 		var take := _button("Взять", func() -> void: quest_accepted.emit(q), head)
-		take.custom_minimum_size = Vector2(96, 30)
+		take.custom_minimum_size = Vector2(96, 40)
 		take.tooltip_text = "Взять задание: %s" % kind.title.to_lower()
 		var length := Util.distance_text(center.distance_to(Vector2(q.target.x, q.target.y)) * GameConfig.TILE)
 		_label("%s · %s · шагов: %d" % [kind.title, length, q.steps.size()], 13, card, kind.color)
 		_label(q.text, 13, card, MUTED, CARD_W)
+
+
+func _reset_drop_confirmation() -> void:
+	_drop_generation += 1
+	if is_instance_valid(_drop_button):
+		_drop_button.text = "Отказаться от задания"
+
+
+func _reset_drop_later(button: Button, generation: int) -> void:
+	await get_tree().create_timer(4.0).timeout
+	if is_instance_valid(button) and button == _drop_button and generation == _drop_generation:
+		_reset_drop_confirmation()
 
 
 ## Название задания с пиктограммой вида (UiIcons.QUESTS) цвета вида; wrap — как у _label.

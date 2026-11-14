@@ -3,7 +3,6 @@ extends VBoxContainer
 
 signal world_selected(seed_text: String)
 signal play_requested
-signal new_world_requested
 
 const MAX_WORLDS := 8
 
@@ -47,9 +46,6 @@ func set_entries(entries: Array[Dictionary], selected: String) -> void:
 		button.toggle_mode = true
 		button.pressed.connect(_choose.bind(i))
 		button.gui_input.connect(_thumbnail_input.bind(i))
-	var add := _make_button("Новый мир", null)
-	add.text = "+"
-	add.pressed.connect(new_world_requested.emit)
 	show_world(selected)
 
 
@@ -128,7 +124,7 @@ func _show_index(index: int, animate: bool) -> void:
 
 func _make_button(label: String, texture: Texture2D) -> Button:
 	var button := Button.new()
-	button.custom_minimum_size = Vector2(34, 37)
+	button.custom_minimum_size = Vector2(38, 44)
 	button.theme_type_variation = &"CarouselTab"
 	button.tooltip_text = label
 	button.accessibility_name = label

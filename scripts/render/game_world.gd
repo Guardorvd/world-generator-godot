@@ -405,6 +405,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	navigation_line.setup(world, heights)
 	hud.goal_changed.connect(_navigation_goal)
 	hud.travel_requested.connect(travel_to)
+	hud.map_close_requested.connect(toggle_map)
 	quests = Quests.new()
 	quests.changed.connect(_quest_changed)
 	hud.quests = quests
@@ -490,7 +491,7 @@ func _exit_tree() -> void:
 	if chunk_source != null: chunk_source.close()
 	# Hud переживает игру; удалить только обработчики этой сцены, включая панель поселения.
 	if is_instance_valid(hud):
-		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to]]
+		var connections: Array = [[hud.goal_changed, _navigation_goal], [hud.travel_requested, travel_to], [hud.map_close_requested, toggle_map]]
 		if is_instance_valid(hud.settlement_panel):
 			var panel: SettlementPanel = hud.settlement_panel
 			connections.append_array([[panel.closed, _close_settlement],
@@ -1378,8 +1379,8 @@ func _crash() -> void:
 func _update_hints() -> void:
 	var k := services.controls.label
 	if _placing_bike():
-		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / E"
-		var cancel_key: String = k.call("back") if services.controls.joypad else "ПКМ / Y / Esc"
+		var confirm_key: String = k.call("jump") if services.controls.joypad else "ЛКМ / " + k.call("interact")
+		var cancel_key: String = k.call("back") if services.controls.joypad else "ПКМ / " + k.call("recover_bike") + " / " + k.call("pause")
 		var help := [[cancel_key, "Отмена"], ["Левый стик", "Поворот и расстояние"]] if services.controls.joypad else [[cancel_key, "Отмена"], ["A/D / колесо", "Поворот"], ["W/S", "Расстояние"]]
 		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true)
 		return
