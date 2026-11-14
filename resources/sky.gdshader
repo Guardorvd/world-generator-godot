@@ -28,7 +28,7 @@ uniform float night = 0.0;                       // 0 днём, 1 ночью: з
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
 uniform int cumulus_steps : hint_range(2, 5) = 5;
-uniform float cloud_time = 0.0;
+uniform float cloud_time = 0.0;                 // секунды анимации неба, общие для облаков и ночных эффектов
 uniform float cloud_seed = 0.0;                  // сид погоды мира: разнообразие форм и гряд
 uniform float star_rot = 0.0;                    // поворот звёздного неба вокруг полюса, рад
 uniform float moon_phase = 0.5;                  // 0 — новолуние, 0.5 — полнолуние
@@ -211,7 +211,7 @@ vec3 stars(vec3 ds, float scale, float rare, float size, float bright) {
 	if (r < rare) return vec3(0.0);
 	vec3 star = cell + 0.5 + (vec3(hash3(cell + 7.1), hash3(cell + 3.7), hash3(cell + 9.3)) - 0.5) * 0.6;
 	float k = (r - rare) / (1.0 - rare);
-	float twinkle = 0.75 + 0.25 * sin(TIME * (1.5 + k * 3.0) + k * 40.0);
+	float twinkle = 0.75 + 0.25 * sin(cloud_time * (1.5 + k * 3.0) + k * 40.0);
 	float t = hash3(cell + 2.9);   // цвет: от голубых через белые к жёлтым и оранжевым
 	vec3 tint = t < 0.25 ? vec3(0.75, 0.85, 1.0) : (t < 0.8 ? vec3(1.0) : (t < 0.94 ? vec3(1.0, 0.9, 0.7) : vec3(1.0, 0.7, 0.5)));
 	return tint * (1.0 - smoothstep(0.0, size, length(p - star))) * twinkle * bright * (0.35 + 0.65 * k * k);
@@ -264,8 +264,8 @@ vec3 night_sky(vec3 d, float sd) {
 	col *= up * (1.0 - 0.6 * pow(max(mc, 0.0), 8.0) * illum);   // у яркой луны звёзды бледнеют
 	// метеоры: короткий росчерк в верхней части неба
 	if (meteor_rate > 0.0) {
-		float slot = floor(TIME / 2.5);
-		float ph = fract(TIME / 2.5) / 0.3;
+		float slot = floor(cloud_time / 2.5);
+		float ph = fract(cloud_time / 2.5) / 0.3;
 		if (ph < 1.0 && hash(vec2(slot, 1.7)) < meteor_rate) {
 			vec3 s0 = normalize(vec3(hash(vec2(slot, 2.1)) * 2.0 - 1.0, 0.5 + hash(vec2(slot, 3.3)) * 0.6, hash(vec2(slot, 4.7)) * 2.0 - 1.0));
 			vec3 dm = normalize(cross(s0, normalize(vec3(hash(vec2(slot, 5.9)) - 0.5, 0.15, hash(vec2(slot, 6.3)) - 0.5))));
@@ -295,7 +295,7 @@ vec3 night_sky(vec3 d, float sd) {
 		float az = atan(d.x, -d.z);
 		float span = (1.0 - smoothstep(0.6, 1.9, abs(az + (aurora_seed - 0.5) * 0.8)));
 		if (span > 0.0) {
-			float t = TIME * 0.05 + aurora_seed * 37.0;
+			float t = cloud_time * 0.05 + aurora_seed * 37.0;
 			float base = 0.05 + 0.05 * noise(vec2(az * 2.0 + t, aurora_seed * 9.0)) + 0.03 * sin(az * 5.0 + t * 3.0);
 			float v = d.y - base;
 			float curtain = smoothstep(0.3, 0.75, fbm(vec2(az * 3.0 - t * 0.6, t * 0.4 + aurora_seed * 5.0)));

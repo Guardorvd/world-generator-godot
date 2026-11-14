@@ -44,6 +44,11 @@ static func valid(d: Dictionary) -> bool:
 	for key: String in ["x", "z", "feet", "yaw", "pitch", "hour"]:
 		if not _number(d.player.get(key)):
 			return false
+	# Optional fields keep format 1 compatible with saves that only carry the hour.
+	if d.player.has("clock_day") and not d.player.clock_day is int:
+		return false
+	if d.player.has("sky_seconds") and (not _number(d.player.sky_seconds) or d.player.sky_seconds < 0.0):
+		return false
 	for key: String in ["x", "z", "y", "heading"]:
 		if not _number(d.bike.get(key)):
 			return false

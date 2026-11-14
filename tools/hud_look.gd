@@ -108,6 +108,8 @@ func _run() -> void:
 	await process_frame
 	Input.action_press("show_hud")
 	hud.info.text = "Тундра, тропа (снег)\nВысота: 1240 м · -12°C\nБлижайшее поселение: «Ольховка», 1,2 км"
+	hud.set_clock(5.5)
+	_check(hud._clock_label.text == "05:30", "часы показываются над сведениями о местности")
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.toast("Достигнута цель")
 	hud.toast_now("Открыто место: перевал Седой")

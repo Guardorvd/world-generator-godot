@@ -115,13 +115,15 @@ func _check_day_timing() -> void:
 	_check(is_equal_approx(DayTiming.advance(4.0, 0.13, true), 6.5)
 		and is_equal_approx(DayTiming.advance(6.5, 0.39, true), 17.5)
 		and is_equal_approx(DayTiming.advance(17.5, 0.13, true), 20.0)
-		and is_equal_approx(DayTiming.advance(20.0, 0.35, true), 4.0), "доли фаз суток и переход через полночь")
-	_check(is_equal_approx(DayTiming.advance(21.0, 0.25, false), 3.0)
+		and is_equal_approx(DayTiming.advance(20.0, 0.35, true), 28.0), "доли фаз суток и переход через полночь")
+	_check(is_equal_approx(DayTiming.advance(21.0, 0.25, false), 27.0)
+		and is_equal_approx(DayTiming.advance(2.0, 3.0, true), 74.0)
+		and is_equal_approx(DayTiming.advance(2.0, -3.0, true), -70.0)
 		and DayTiming.advance(5.37, 0.0, true) == 5.37, "равномерный ход времени и остановка часов")
 	var hour := 23.625
 	for step in 25200: # Seven minutes at 60 physics ticks per second.
 		hour = DayTiming.advance(hour, 1.0 / 25200.0, true)
-	_check(absf(hour - 23.625) < 0.00001, "длительность суток не накапливает ошибку от шага физики")
+	_check(absf(hour - 47.625) < 0.00001, "длительность суток не накапливает ошибку от шага физики")
 	var smooth := true
 	var step := 0.00001
 	for boundary in [4.0, 6.5, 17.5, 20.0]:
@@ -162,9 +164,10 @@ func _check_world_clock() -> void:
 	var settings := game.services.settings
 	var sun := DirectionalLight3D.new()
 	var day := DayCycle.new(Environment.new(), sun)
+	game.day = day
 	var dt := 1.0 / 60.0
 	game.hour = 23.5
-	day.apply(game.hour, game.time)
+	game._apply_render_clock(1.0)
 	settings.day_minutes = 0.0
 	game._advance_clock(dt)
 	_check(game.hour == 23.5 and is_equal_approx(game.time, dt),
@@ -173,7 +176,7 @@ func _check_world_clock() -> void:
 	game._hour_skip = 1.0
 	for tick in 60:
 		game._advance_clock(dt)
-		day.apply(game.hour, game.time)
+	game._apply_render_clock(1.0)
 	var cloud_time: float = day.sky_mat.get_shader_parameter("cloud_time")
 	_check(game._hour_skip == 0.0 and is_equal_approx(game.hour, 0.5)
 		and day._night == night and is_equal_approx(day._clock, 24.5)
@@ -181,7 +184,7 @@ func _check_world_clock() -> void:
 	game._hour_skip = -1.0
 	for tick in 60:
 		game._advance_clock(dt)
-		day.apply(game.hour, game.time)
+	game._apply_render_clock(1.0)
 	_check(game._hour_skip == 0.0 and is_equal_approx(game.hour, 23.5) and is_equal_approx(day._clock, 23.5),
 		"Shift+T возвращает ровно на час через полночь")
 	settings.day_minutes = 7.0
@@ -203,17 +206,48 @@ func _check_world_clock() -> void:
 	for crossing in [6.0, 18.0]:
 		game.hour = crossing - 0.1
 		var smooth := true
-		day.apply(game.hour, game.time)
+		game._apply_render_clock(1.0)
 		var previous_energy := sun.light_energy
 		for tick in 540:
 			game._advance_clock(dt)
-			day.apply(game.hour, game.time)
+			game._apply_render_clock(1.0)
 			smooth = smooth and absf(sun.light_energy - previous_energy) < 0.02
 			previous_energy = sun.light_energy
 		_check(smooth and game.hour > crossing, "свет плавно меняется при прохождении %s" % DayCycle.clock(crossing))
+	_check_render_clock(game)
 	game.free()
 	sun.free()
 	settings.reset_defaults()
+
+
+func _check_render_clock(game: GameWorld) -> void:
+	var shell: Node = load("res://scenes/main.tscn").instantiate()
+	shell.set_script(null)
+	root.add_child(shell)
+	game.hud = shell.get_node("%Hud")
+	game.time = 0.0
+	game._restore_clock({player = {hour = 23.99, clock_day = 7, sky_seconds = 430.0}})
+	game._apply_render_clock(1.0)
+	var day := game.day
+	var night := day._night
+	_check(DayCycle.clock(day._clock) == "23:59" and night == 7
+		and is_equal_approx(day.sky_mat.get_shader_parameter("cloud_time"), 430.0)
+		and game.time == 0.0, "загрузка восстанавливает час, ночь и небо отдельно от времени движения")
+	game.services.settings.day_minutes = 0.0
+	game._hour_skip = 0.24
+	game._advance_clock(1.0 / 60.0)
+	game._apply_render_clock(0.5)
+	_check(game.hud._clock_label.text == DayCycle.clock(day._clock) and day._night == night
+		and day._clock >= 192.0 and day._clock < game._clock_hour, "HUD и небо показывают один кадр при переходе через полночь")
+	var shown := day._clock
+	game._apply_render_clock(0.25)
+	_check(day._clock == shown, "кадр после паузы не возвращает часы назад")
+	game._restore_clock({player = {hour = 4.5}})
+	game._apply_render_clock(1.0)
+	_check(day._clock == 4.5 and game.hud._clock_label.text == "04:30", "старое сохранение загружается по исходному часу")
+	_check(DayCycle.clock(24.0 - 1.0e-12) == "00:00", "погрешность вычислений не оставляет часы на 23:59 в полночь")
+	game.hud = null
+	shell.free()
 
 
 func _navigation_test() -> void:

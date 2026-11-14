@@ -89,8 +89,13 @@ static func sun_direction(hour: float) -> Vector3:
 
 ## Часы:минуты для подсказок, «07:30»
 static func clock(hour: float) -> String:
-	var m := int(fposmod(hour, 24.0) * 60.0)
+	var m := clock_minute(hour)
 	return "%02d:%02d" % [m / 60, m % 60]
+
+
+static func clock_minute(hour: float) -> int:
+	# A step can land infinitesimally short of an exact minute.
+	return posmod(floori(fposmod(hour, 24.0) * 60.0 + 1.0e-8), 1440)
 
 
 ## Ключевое состояние в час hour: гладкая кубическая интерполяция (C¹) между ключами без остановок на узлах
@@ -164,7 +169,7 @@ func _night_events(n: int) -> Dictionary:
 		var head := Vector3(rng.randf_range(-1.0, 1.0), rng.randf_range(0.35, 0.8), rng.randf_range(-1.0, 1.0)).normalized()
 		var side := head.cross(Vector3.UP).normalized()
 		var tail := (side * rng.randf_range(-1.0, 1.0) + head.cross(side) * -0.8).normalized()
-		var rot := -(n * 24.0 + 22.0) / 24.0 * TAU
+		var rot := -22.0 / 24.0 * TAU
 		e.comet_dir = head.rotated(POLE, rot)
 		e.comet_tail = tail.rotated(POLE, rot)
 	if rng.randf() < SHOWER_CHANCE:
@@ -172,14 +177,14 @@ func _night_events(n: int) -> Dictionary:
 	return e
 
 
-## Поставить небо, свет и туман на час hour; time — секунды игры, по ним плывут облака
-func apply(hour: float, time: float) -> void:
+## В игре передаётся полный ход часов для выбора ночи. Инструменты могут задавать только час суток.
+func apply(hour: float, time: float, full_clock := false) -> void:
 	var s := state(hour)
-	# часы без сброса: шаг больше полусуток считаем переходом через полночь назад или вперёд
-	if is_nan(_clock):
+	if full_clock or is_nan(_clock):
 		_clock = hour
 	else:
 		_clock += wrapf(hour - fposmod(_clock, 24.0), -12.0, 12.0)
+	hour = s[0]
 	var night := floori((_clock - 12.0) / 24.0)
 	if night != _night:
 		_night = night
@@ -268,7 +273,7 @@ func apply(hour: float, time: float) -> void:
 	var dark := smoothstep(0.25, 0.85, s[9])
 	RenderingServer.global_shader_parameter_set("vegetation_night", dark)
 	if s[9] > 0.001 or _dark_active:
-		sky_mat.set_shader_parameter("star_rot", _clock / 24.0 * TAU)
+		sky_mat.set_shader_parameter("star_rot", hour / 24.0 * TAU)
 		sky_mat.set_shader_parameter("moon_phase", events.phase)
 		sky_mat.set_shader_parameter("aurora", events.aurora * dark * (0.75 + 0.25 * sin(time / 9.0)))
 		sky_mat.set_shader_parameter("aurora_seed", events.aurora_seed)

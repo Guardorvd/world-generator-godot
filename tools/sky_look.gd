@@ -165,5 +165,31 @@ func _run() -> void:
 					warm_pixels += 1
 		_check(warm_pixels > 25, "тёплая закатная подсветка облачных ярусов: %d" % warm_pixels)
 
+	if not "--shader" in OS.get_cmdline_user_args():
+		await _check_night_pause()
 	print("SKY_LOOK failures=", fails)
 	quit(1 if fails else 0)
+
+
+func _check_night_pause() -> void:
+	day.apply(1.0, 120.0)
+	day.events["aurora"] = 1.0
+	day.events["meteor"] = 1.0
+	day.apply(1.0, 120.0)
+	var at := Vector3(0.0, 3.0, 0.0)
+	camera.look_at_from_position(at, at + Vector3(0.0, 0.4, -1.0))
+	# Let the incremental sky radiance map settle before comparing render frames.
+	for frame in 24:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var before := root.get_texture().get_image().get_data()
+	for frame in 12:
+		await process_frame
+	await RenderingServer.frame_post_draw
+	var frozen := root.get_texture().get_image().get_data()
+	_check(before == frozen, "ночное небо неподвижно, пока время симуляции стоит")
+	day.apply(1.0, 123.0)
+	await process_frame
+	await RenderingServer.frame_post_draw
+	var resumed := root.get_texture().get_image().get_data()
+	_check(frozen != resumed, "ночное небо снова движется с временем симуляции")

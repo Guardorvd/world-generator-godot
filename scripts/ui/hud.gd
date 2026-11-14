@@ -60,7 +60,8 @@ var _vignette: ColorRect  # 14.2: затемнение краёв экрана, 
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
 var _chip_style: StyleBoxFlat
-@onready var info: Label = $InfoPanel/Info
+@onready var info: Label = $InfoPanel/Rows/Info
+@onready var _clock_label: Label = $InfoPanel/Rows/Clock
 @onready var toast_label: Label = $Toast/Text
 @onready var lock_hint: Label = $LockHint
 @onready var hint: HBoxContainer = $Hint
@@ -70,6 +71,7 @@ var _toast_queue: PackedStringArray = []
 var _places: Array = []
 var _region_tex := {} # 13.9+final: картинки соседних областей для большой карты (область -> ImageTexture)
 var _places_revision := -1 # доступные места обновляются при расширении территории
+var _clock_minute := -1
 
 # Состояние игрока для отрисовки карт
 var px := 0.0
@@ -174,6 +176,9 @@ func _ready() -> void:
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры
 func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
+	_clock_minute = -1
+	_clock_label.hide()
+	info.text = ""
 	map_tex = ImageTexture.create_from_image(map_image)
 	_places = []
 	_region_tex = {}
@@ -682,9 +687,18 @@ func set_player(x: float, z: float, y: float) -> void:
 		big_map.queue_redraw()
 
 
+func set_clock(hour: float) -> void:
+	var minute := DayCycle.clock_minute(hour)
+	if minute == _clock_minute:
+		return
+	_clock_minute = minute
+	_clock_label.text = "%02d:%02d" % [minute / 60, minute % 60]
+	_clock_label.show()
+
+
 ## Строки о местности под ногами: биом и дорога, высота и температура; без цели — ближайшее поселение.
 ## Курс, цель и задание сюда не пишутся: они на компасе (12.5+)
-func update_info(p: PlayerState, _look_yaw: float, depth: float, hour := NAN) -> void:
+func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 	var w := world
 	if w == null:
 		return
@@ -712,8 +726,6 @@ func update_info(p: PlayerState, _look_yaw: float, depth: float, hour := NAN) ->
 			nd = d
 			nearest = s
 	var text := "%s\nВысота: %d м · %s%d°C" % [where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c]
-	if is_finite(hour):
-		text = DayCycle.clock(hour) + "\n" + text
 	if goal.is_empty() and nearest != null:
 		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, Util.distance_text(nd)]
 	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же

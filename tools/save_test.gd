@@ -32,6 +32,13 @@ func run() -> void:
 	check(Saves.write_slot(state) == OK, "write auto")
 	var r := Saves.read_slot(state.seed)
 	check(r.data == state, "disk round trip including discoveries and cargo")
+	var clock_state := state.duplicate(true)
+	clock_state.player.clock_day = 7
+	clock_state.player.sky_seconds = 432.5
+	check(Saves.write_slot(clock_state, "manual") == OK and Saves.read_slot(state.seed, "manual").data == clock_state,
+		"day number and sky animation time survive a disk round trip")
+	clock_state.player.sky_seconds = INF
+	check(not Saves.valid(clock_state), "nonfinite sky animation time rejected")
 	var restored := Quests.new()
 	check(restored.restore_state(r.data.quest, places) and restored.cargo and restored.step().do == "carry", "delivery resumes after pickup")
 	restored.tick(func(_p: Dictionary) -> bool: return true)

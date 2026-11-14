@@ -14,16 +14,21 @@ const NIGHT_TANGENT := 2.0 * DAWN_RATE * NIGHT_RATE / (DAWN_RATE + NIGHT_RATE)
 const TANGENTS := [NIGHT_TANGENT, TWILIGHT_TANGENT, TWILIGHT_TANGENT, NIGHT_TANGENT, NIGHT_TANGENT]
 
 
+## Advance an unwrapped clock so large steps and midnight retain the day number.
 static func advance(hour: float, cycle_fraction: float, long_twilight: bool) -> float:
 	if cycle_fraction == 0.0:
 		return hour
 	if not long_twilight:
-		return fposmod(hour + cycle_fraction * 24.0, 24.0)
-	var h := fposmod(hour - DAWN, 24.0)
+		return hour + cycle_fraction * 24.0
+	var since_dawn := hour - DAWN
+	var day := floorf(since_dawn / 24.0)
+	var h := since_dawn - day * 24.0
 	var segment := _segment(h, HOURS)
 	var width: float = HOURS[segment + 1] - HOURS[segment]
 	var u: float = (h - HOURS[segment]) / width
-	var phase := fposmod(_phase(segment, width, u) + cycle_fraction, 1.0)
+	var elapsed_cycles := _phase(segment, width, u) + cycle_fraction
+	var whole_cycles := floorf(elapsed_cycles)
+	var phase := elapsed_cycles - whole_cycles
 	segment = _segment(phase, PHASES)
 	width = HOURS[segment + 1] - HOURS[segment]
 	var start: float = PHASES[segment]
@@ -40,7 +45,7 @@ static func advance(hour: float, cycle_fraction: float, long_twilight: bool) -> 
 		var slope := a + u * (2.0 * quadratic + 3.0 * u * cubic)
 		var elapsed := u * (a + u * (quadratic + u * cubic))
 		u = clampf(u - (elapsed - target) / slope, 0.0, 1.0)
-	return fposmod(DAWN + HOURS[segment] + u * width, 24.0)
+	return (day + whole_cycles) * 24.0 + DAWN + HOURS[segment] + u * width
 
 
 static func _segment(value: float, boundaries: Array) -> int:

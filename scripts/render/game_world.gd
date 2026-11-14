@@ -98,7 +98,16 @@ var pitch: float:
 	get: return camera_controller.pitch
 	set(value): camera_controller.pitch = value
 var time := 0.0
-var hour := 9.0          # час суток в мире, 0..24
+var _clock_hour := 9.0   # полные часы для смены ночей, включая переход через полночь
+var _prev_clock_hour := 9.0
+var _sky_time_offset := 0.0
+var _clock_frame_tick := -1.0
+var _clock_frame_alpha := 0.0
+var hour: float:        # час суток для инструментов и сохранений
+	get: return fposmod(_clock_hour, 24.0)
+	set(value):
+		_clock_hour = floorf(_clock_hour / 24.0) * 24.0 + fposmod(value, 24.0)
+		_prev_clock_hour = _clock_hour
 var _hour_skip := 0.0    # остаток ручной перемотки, в игровых часах со знаком
 var day: DayCycle
 var _boards: Array = []  # доски маршрутов: {at (середина щита, повёрнута как щит), place}
@@ -392,8 +401,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		day.terrain_mats.append(outer._mat)
 	day.camera = camera
 	day.world_seed = world.seed_num
-	hour = services.settings.pick_start_hour() if saved.is_empty() else fposmod(saved.player.hour, 24.0)
-	day.apply(hour, time)
+	_restore_clock(saved)
+	_apply_render_clock(1.0)
 	_update_camera(1.0, 0.0)
 	if _opening:
 		_draw_opening(1.0)
@@ -549,7 +558,8 @@ func save_state() -> Dictionary:
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
 		goal = hud.goal.get("key", ""),
 		lamp = bike_view.lamp_on(),
-		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour},
+		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour,
+			clock_day = floori(_clock_hour / 24.0), sky_seconds = _sky_time_offset + time},
 		bike = {x = bike.x, z = bike.z, y = bike.y, heading = bike.heading, riding = bike.riding}}
 	# ID свободной метки общий: её положение отсутствует в каталоге мест мира.
 	if hud.goal.get("kind") == "marker":
@@ -995,8 +1005,9 @@ func _unhandled_input(event: InputEvent) -> void:
 	elif event.is_action_pressed("flashlight"):
 		toggle_flashlight()
 	elif event.is_action_pressed("time_skip"):
-		_hour_skip += -1.0 if Input.is_key_pressed(KEY_SHIFT) else 1.0
-		hud.toast_now("Время %s" % DayCycle.clock(hour + _hour_skip))
+		var step := -1.0 if event is InputEventKey and event.shift_pressed else 1.0
+		_hour_skip += step
+		hud.toast_now("Перемотка на %s1 ч" % ("−" if step < 0.0 else "+"))
 	elif event.is_action_pressed("interact") and not show_map:
 		interact()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT:
@@ -1052,17 +1063,42 @@ func _tick_mark(part: String, t0: int) -> int:
 	return now
 
 
+func _restore_clock(saved: Dictionary) -> void:
+	if saved.is_empty():
+		_clock_hour = services.settings.pick_start_hour()
+		_sky_time_offset = 0.0
+	else:
+		_clock_hour = float(saved.player.get("clock_day", 0)) * 24.0 + fposmod(saved.player.hour, 24.0)
+		_sky_time_offset = float(saved.player.get("sky_seconds", 0.0))
+	_prev_clock_hour = _clock_hour
+	_prev_time = time
+	_clock_frame_tick = -1.0
+	_hour_skip = 0.0
+
+
 func _advance_clock(dt: float) -> void:
+	_prev_clock_hour = _clock_hour
 	time += dt
 	var settings := services.settings
 	if settings.day_minutes > 0.0:
-		hour = DayTiming.advance(hour, dt / (settings.day_minutes * 60.0), settings.long_twilight)
+		_clock_hour = DayTiming.advance(_clock_hour, dt / (settings.day_minutes * 60.0), settings.long_twilight)
 	if _hour_skip != 0.0:
 		# The remaining offset depends only on manual input. Its size and direction
 		# carry across midnight and changes in the natural rate of the clock.
 		var step := _hour_skip if absf(_hour_skip) < 0.002 else _hour_skip * Util.damp(9.0, dt)
-		hour = fposmod(hour + step, 24.0)
+		_clock_hour += step
 		_hour_skip -= step
+
+
+func _apply_render_clock(alpha: float) -> void:
+	# When a modal pause ends there may be a render frame before the next tick.
+	# Do not revisit an earlier fraction of an already presented tick.
+	_clock_frame_alpha = maxf(_clock_frame_alpha, alpha) if _clock_frame_tick == time else alpha
+	_clock_frame_tick = time
+	var clock_hour := lerpf(_prev_clock_hour, _clock_hour, _clock_frame_alpha)
+	day.apply(clock_hour, _sky_time_offset + lerpf(_prev_time, time, _clock_frame_alpha), true)
+	if hud != null:
+		hud.set_clock(clock_hour)
 
 
 func _physics_process(dt: float) -> void:
@@ -1164,6 +1200,7 @@ func _physics_process(dt: float) -> void:
 ## Запомнить положение игрока как предпоследний такт (для интерполяции кадра)
 func _store_prev() -> void:
 	camera_controller.store_previous(player, time)
+	_prev_clock_hour = _clock_hour
 
 
 ## Последний такт становится и предпоследним: после переноса игрока (сел, слез, упал) кадр не тянет
@@ -1226,7 +1263,7 @@ func _process(delta: float) -> void:
 	hud.set_stamina(stamina.value, stamina.exhausted, stamina.state)
 	hud.set_brakes(bike)
 	# доля пути от предпоследнего такта физики к последнему, в которой сейчас кадр
-	var alpha := 1.0 if _placing_bike() else Engine.get_physics_interpolation_fraction()
+	var alpha := 1.0 if _placing_bike() or _settlement_open() else Engine.get_physics_interpolation_fraction()
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	if crash.active():
 		crash.draw()
@@ -1255,7 +1292,7 @@ func _process(delta: float) -> void:
 	_target = _aim()
 	_update_hints()
 	t0 = _tick_mark("frame_view", t0)
-	day.apply(hour, time)
+	_apply_render_clock(alpha)
 	t0 = _tick_mark("frame_day", t0)
 
 	if ambient != null:
@@ -1265,13 +1302,13 @@ func _process(delta: float) -> void:
 	local_mist.update(camera.global_position, day, delta, time)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
-	update_lights(pos, camera.global_position, lerpf(_prev_time, time, alpha), delta)
+	update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta
 	if summary and info_timer <= 0.0:
 		info_timer = 0.15
-		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet), hour)
+		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet))
 	hud.set_player(pos.x, pos.z, bike.heading if bike.riding else yaw)
 	hud.set_bike(bike.x, bike.z, not bike.riding)
 	_tick_mark("frame_rest", t0)
