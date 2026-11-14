@@ -3,38 +3,13 @@
 [ext_resource type="Script" uid="uid://bxcji3c8xl0f2" path="res://scripts/render/game_world.gd" id="1_game"]
 [ext_resource type="Script" uid="uid://b4aj4h2c4oin6" path="res://scripts/render/vegetation_layer.gd" id="2_veg"]
 [ext_resource type="Script" path="res://scripts/render/world_audio.gd" id="3_audio"]
-
-[sub_resource type="Environment" id="env"]
-background_mode = 2
-ambient_light_source = 3
-ambient_light_color = Color(0.62, 0.72, 0.9, 1)
-ambient_light_sky_contribution = 0.6
-ambient_light_energy = 0.5
-tonemap_mode = 3
-tonemap_exposure = 0.92
-tonemap_white = 6.0
-ssao_enabled = true
-ssao_radius = 0.75
-ssao_intensity = 0.65
-ssao_detail = 0.2
-glow_enabled = true
-glow_intensity = 0.22
-glow_bloom = 0.0
-glow_blend_mode = 1
-fog_enabled = true
-fog_light_color = Color(0.62, 0.74, 0.88, 1)
-fog_sun_scatter = 0.12
-fog_density = 0.00135
-fog_aerial_perspective = 0.24
-fog_sky_affect = 0.0
-adjustment_enabled = true
-adjustment_saturation = 1.08
+[ext_resource type="Environment" path="res://resources/game_environment.tres" id="4_env"]
 
 [node name="GameWorld" type="Node3D"]
 script = ExtResource("1_game")
 
 [node name="WorldEnvironment" type="WorldEnvironment" parent="."]
-environment = SubResource("env")
+environment = ExtResource("4_env")
 
 [node name="Sun" type="DirectionalLight3D" parent="."]
 transform = Transform3D(-0.6139406, 0, 0.7893522, 0.5073858, 0.7660445, 0.3946334, -0.6046789, 0.6427876, -0.4703058, 0, 0, 0)

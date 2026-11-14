@@ -12,7 +12,8 @@ const FarForest := preload("res://scripts/render/distant_forest.gd")
 const Catalog := preload("res://scripts/render/asset_catalog.gd")
 const GROUND_SHADER := preload("res://resources/menu/ground.gdshader")
 const LAKE_SHADER := preload("res://resources/menu/lake.gdshader")
-const GAME_SCENE := "res://scenes/game_world.tscn"
+# То же окружение, что у игровой сцены, без загрузки самой игры (её скрипты компилируются ~3 с).
+const GAME_ENVIRONMENT := "res://resources/game_environment.tres"
 const BIKE_SCENE := "res://scenes/bike.tscn"
 const SIDE := 256
 const LAKE_AT := Vector2(465.0, 551.0)
@@ -25,8 +26,11 @@ const HOUR := 17.0 + 20.0 / 60.0
 const GLOBALS := [&"cloud_shadow", &"sun_dir", &"vegetation_night", &"style_haze",
 	&"style_depth", &"veg_center", &"vegetation_clock", &"veg_seeds", &"distant_vegetation",
 	&"ground_carpet", &"ground_carpet_forward"]
-const BUILD_STEPS := [&"light", &"site_north", &"site_south", &"heightfield", &"surface", &"terrain_far", &"terrain_near",
-	&"water", &"mountains", &"vegetation", &"far_forest_north", &"far_forest_south", &"rider"]
+# Растения сразу после поверхности: их раскладка в фоне идёт, пока строятся рельеф, вода и дальний лес.
+const BUILD_STEPS := [&"light", &"site_north", &"site_south", &"heightfield", &"surface", &"vegetation",
+	&"terrain_far", &"terrain_near", &"water", &"mountains", &"far_forest_north", &"far_forest_south", &"rider"]
+const RUSH_FRAME_US := 250000
+const RUSH_UPLOAD_US := 40000
 const QUALITY := [0.5, 0.67, 1.0]
 const RIDER_TICK := 1.0 / 60.0
 const SAMPLE_FRAMES := 60
@@ -68,6 +72,10 @@ var _next_atmosphere := 0.0
 var _wind_offset := 0.0
 var _display_size := Vector2i.ZERO
 var _adaptive := false
+var _rush := false
+# Фоновые расчёты (массивы рельефа и воды, планы дальнего леса): имя -> id задачи, имя -> результат.
+var _jobs := {}
+var _job_out := {}
 var _sample_frames := 0
 var _slow_frames := 0
 var _previous_style_on := {}
@@ -79,7 +87,9 @@ static func recommended_quality() -> int:
 
 
 ## quality: 0 — экономный, 1 — средний, 2 — полный. native_size нужен для съёмки афиши.
-func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false, interactive := false) -> bool:
+## rush: сцену пока никто не видит (заставка при запуске) — собирать без оглядки на плавность кадров.
+func start(display_size: Vector2i, settings: GameSettings, quality: int, native_size := false, interactive := false,
+		rush := false) -> bool:
 	if _view != null or not is_inside_tree() or DisplayServer.get_name() == "headless":
 		return false
 	if is_instance_valid(_owner) or VisualStyle.is_bound():
@@ -93,6 +103,7 @@ func start(display_size: Vector2i, settings: GameSettings, quality: int, native_
 	_quality = clampi(quality, 0, QUALITY.size() - 1)
 	_render_divisor = 2 if _quality == 0 and not native_size else 1
 	_adaptive = interactive
+	_rush = rush
 	_sample_frames = 0
 	_slow_frames = 0
 	_step = 0
@@ -129,6 +140,11 @@ func resize(display_size: Vector2i, native_size := false) -> void:
 		maxi(2, roundi(display_size.y * scale_factor)))
 
 
+## Сцену показали раньше конца сборки (заставка истекла): дальше шаг за кадр, чтобы меню не дёргалось.
+func end_rush() -> void:
+	_rush = false
+
+
 func viewport() -> SubViewport:
 	return _view
 
@@ -149,6 +165,10 @@ func freeze() -> Image:
 func stop() -> void:
 	set_process(false)
 	is_prepared = false
+	for job: StringName in _jobs:
+		WorkerThreadPool.wait_for_task_completion(_jobs[job])
+	_jobs.clear()
+	_job_out.clear()
 	if _view != null:
 		_view.render_target_update_mode = SubViewport.UPDATE_DISABLED
 		# VegetationLayer._exit_tree дожидается начатой раскладки перед освобождением её данных.
@@ -189,46 +209,27 @@ func _process(delta: float) -> void:
 	if is_prepared and _adaptive and not _sample_performance(delta):
 		return
 	if _step < BUILD_STEPS.size():
-		var started := Time.get_ticks_usec()
-		var step: StringName = BUILD_STEPS[_step]
-		match step:
-			&"light": _build_light()
-			&"site_north":
-				_begin_site()
-				_build_site_rows(0, SIDE / 2)
-			&"site_south":
-				_build_site_rows(SIDE / 2, SIDE)
-				_finish_site()
-			&"heightfield": _build_heightfield()
-			&"surface":
-				var problem := Catalog.check()
-				if not problem.is_empty():
-					stop()
-					failed.emit(problem)
-					return
-				_build_surface()
-			&"terrain_far": _build_terrain(Rect2i(0, 0, SIDE - 1, 112))
-			&"terrain_near": _build_terrain(Rect2i(0, 112, SIDE - 1, 100))
-			&"water": _build_water()
-			&"mountains": _build_mountains()
-			&"vegetation":
-				_build_vegetation()
-			&"far_forest_north": _build_far_forest(0)
-			&"far_forest_south": _build_far_forest(1)
-			&"rider": _build_rider()
-		step_ms[step] = (Time.get_ticks_usec() - started) / 1000.0
-		_step += 1
+		# Скрытая сборка (rush): шаги подряд, пока кадр не исчерпан; иначе шаг за кадр, чтобы меню не дёргалось.
+		var frame_started := Time.get_ticks_usec()
+		while _step < BUILD_STEPS.size():
+			if not _build_step(BUILD_STEPS[_step]):
+				return
+			_step += 1
+			if not _rush or Time.get_ticks_usec() - frame_started > RUSH_FRAME_US:
+				break
+		if _step == BUILD_STEPS.size():
+			step_ms["at_built"] = (Time.get_ticks_usec() - _started) / 1000.0
+		# Раскладка растений идёт в фоне параллельно остальным шагам.
+		if _vegetation != null:
+			_place_vegetation(delta)
 		return
 	if _warm_frames == 4 and not is_prepared:
 		return
 	if not is_prepared and _warm_frames == 0:
-		var started := Time.get_ticks_usec()
-		_vegetation.update(EYE_AT.x, EYE_AT.y, false, minf(delta, 0.1))
-		step_ms["vegetation_upload_max"] = maxf(step_ms.get("vegetation_upload_max", 0.0),
-			(Time.get_ticks_usec() - started) / 1000.0)
 		# Первый вид целиком: частичная раскладка успела бы показать дырки и прогреть лишние варианты.
-		if not _vegetation.placement_ready():
+		if not _place_vegetation(delta):
 			return
+		step_ms["at_placed"] = (Time.get_ticks_usec() - _started) / 1000.0
 		_draw_frame = _render_divisor - 1
 		# Часы растений сразу за окном проявления: первый показанный кадр уже без дорисовки.
 		_wind_offset = _vegetation.stream.clock - _seconds + VegetationLayer.StreamPolicy.FADE_SECONDS + 0.1
@@ -245,6 +246,55 @@ func _process(delta: float) -> void:
 		_warm_frames += 1
 		if _warm_frames == 4:
 			_finish_warmup(_view)
+
+
+func _build_step(step: StringName) -> bool:
+	var started := Time.get_ticks_usec()
+	match step:
+		&"light": _build_light()
+		&"site_north":
+			_begin_site()
+			_build_site_rows(0, SIDE / 2)
+		&"site_south":
+			_build_site_rows(SIDE / 2, SIDE)
+			_finish_site()
+		&"heightfield":
+			_build_heightfield()
+			_launch_jobs()
+		&"surface":
+			var problem := Catalog.check()
+			if not problem.is_empty():
+				stop()
+				failed.emit(problem)
+				return false
+			_build_surface()
+		&"terrain_far", &"terrain_near": _build_terrain(_job_result(step))
+		&"water": _build_water()
+		&"mountains": _build_mountains()
+		&"vegetation": _build_vegetation()
+		&"far_forest_north": _build_far_forest(0)
+		&"far_forest_south": _build_far_forest(1)
+		&"rider": _build_rider()
+	step_ms[step] = (Time.get_ticks_usec() - started) / 1000.0
+	return true
+
+
+## Запускает и выгружает раскладку растений. В скрытой сборке выгрузка повторяется в пределах кадра:
+## по одному куску за кадр она одна занимала ~0,8 с. true — всё разложено и передано.
+func _place_vegetation(delta: float) -> bool:
+	var frame_started := Time.get_ticks_usec()
+	var dt := minf(delta, 0.1)
+	while true:
+		var started := Time.get_ticks_usec()
+		var uploaded := _vegetation.update(EYE_AT.x, EYE_AT.y, false, dt)
+		dt = 0.0
+		step_ms["vegetation_upload_max"] = maxf(step_ms.get("vegetation_upload_max", 0.0),
+			(Time.get_ticks_usec() - started) / 1000.0)
+		if _vegetation.placement_ready():
+			return true
+		if not _rush or not uploaded or Time.get_ticks_usec() - frame_started > RUSH_UPLOAD_US:
+			return false
+	return false
 
 
 ## Текстура готова только после завершения отрисовки, в том числе на медленном GPU.
@@ -281,9 +331,7 @@ func _sample_performance(delta: float) -> bool:
 
 func _build_light() -> void:
 	var env_node := WorldEnvironment.new()
-	var template: Node = load(GAME_SCENE).instantiate()
-	var env: Environment = template.get_node("WorldEnvironment").environment.duplicate()
-	template.free()
+	var env: Environment = (load(GAME_ENVIRONMENT) as Environment).duplicate()
 	env.glow_enabled = false
 	env_node.environment = env
 	_scene.add_child(env_node)
@@ -454,19 +502,42 @@ func _build_surface() -> void:
 	_terrain_material.set_shader_parameter("detail_normal", Catalog.get_catalog().textures[4])
 
 
-func _build_terrain(area: Rect2i) -> void:
+func _build_terrain(arrays: Array) -> void:
 	var mesh := ArrayMesh.new()
-	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(_world, _heights, area))
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	_add_mesh("Shore", mesh, _terrain_material)
 
 
-func _build_water() -> void:
-	# Берег режется теми же треугольниками, что и озёра в игре.
-	var area := Rect2i(Vector2i((LAKE_AT - LAKE_RADII) / GameConfig.TILE),
+## Расчёты, которым нужны только участок и высоты, идут в пуле потоков, пока главный поток собирает
+## поверхность и растения. Шаги ниже забирают готовые массивы.
+func _launch_jobs() -> void:
+	var lake_area := Rect2i(Vector2i((LAKE_AT - LAKE_RADII) / GameConfig.TILE),
 		Vector2i(LAKE_RADII * 2.0 / GameConfig.TILE)).grow(9)
+	_launch(&"terrain_far", TerrainBuilder.build_arrays.bind(_world, _heights, Rect2i(0, 0, SIDE - 1, 112)))
+	_launch(&"terrain_near", TerrainBuilder.build_arrays.bind(_world, _heights, Rect2i(0, 112, SIDE - 1, 100)))
+	# Берег режется теми же треугольниками, что и озёра в игре.
+	_launch(&"water", WaterBuilder._lake_arrays.bind(_world, _heights, lake_area))
+	for row in 2:
+		for i in ceili(float(SIDE) / PlanTerrain.CELLS):
+			_launch(StringName("forest_%d_%d" % [row, i]), FarForest.plan.bind(_world, _heights, Vector2i(i, row), false))
+
+
+## У каждой задачи свой массив для результата: общий словарь из нескольких потоков писать нельзя.
+func _launch(job: StringName, work: Callable) -> void:
+	var holder := [null]
+	_job_out[job] = holder
+	_jobs[job] = WorkerThreadPool.add_task(func() -> void: holder[0] = work.call(), false, "Привал")
+
+
+func _job_result(job: StringName) -> Variant:
+	WorkerThreadPool.wait_for_task_completion(_jobs[job])
+	_jobs.erase(job)
+	return _job_out[job][0]
+
+func _build_water() -> void:
 	_lake_material = ShaderMaterial.new()
 	_lake_material.shader = LAKE_SHADER
-	var lake := WaterBuilder.flat_mesh(WaterBuilder._lake_arrays(_world, _heights, area), _lake_material, "Lake")
+	var lake := WaterBuilder.flat_mesh(_job_result(&"water"), _lake_material, "Lake")
 	lake.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_scene.add_child(lake)
 
@@ -536,7 +607,7 @@ func _build_vegetation() -> void:
 func _build_far_forest(row: int) -> void:
 	var draw_range := Vector2(_vegetation.tree_r * (1.0 - VegetationLayer.FADE_SHARE) - 100.0, 1250.0)
 	for i in ceili(float(SIDE) / PlanTerrain.CELLS):
-		FarForest.attach(_scene, FarForest.plan(_world, _heights, Vector2i(i, row), false), draw_range)
+		FarForest.attach(_scene, _job_result(StringName("forest_%d_%d" % [row, i])), draw_range)
 
 
 func _build_rider() -> void:

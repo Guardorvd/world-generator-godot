@@ -10,18 +10,26 @@ extends Node
 ## Настройки: вкладки в сцене, управление и звук применяются сразу, сброс — с подтверждением.
 
 const WORDS := ["Север", "Туман", "Янтарь", "Ветер", "Кедр", "Заря", "Омут", "Пустошь", "Гроза", "Сокол", "Иней", "Полынь", "Руда", "Ключ"]
-const GameScene := preload("res://scenes/game_world.tscn")
-const TrailLabScene := preload("res://scenes/trail_lab.tscn")
+# Сцены игры и Лаборатории не входят в загрузку меню (их скрипты компилируются ~2,6 с до первого кадра):
+# они грузятся при входе — игра под экраном загрузки мира. Фоновая загрузка (load_threaded_request) пробовалась
+# и однажды зависла навсегда, поэтому только обычный load в главном потоке.
+const GAME_SCENE := "res://scenes/game_world.tscn"
+const TRAIL_LAB_SCENE := "res://scenes/trail_lab.tscn"
+const GAME_SCRIPT := "res://scripts/render/game_world.gd"
 const Saves := preload("res://scripts/game/save_game.gd")
 const DisplayOptions := preload("res://scripts/ui/display_options.gd")
 const UiIcons := preload("res://scripts/ui/ui_icons.gd")
 const Carousel := preload("res://scripts/ui/world_carousel.gd")
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const LIVE_WARM_START_DELAY := 0.18
+# Заставка запуска: цвет совпадает с application/boot_splash/bg_color, меню проявляется уже с живым фоном.
+const STARTUP_COVER_COLOR := Color(0.043, 0.051, 0.059)
+const STARTUP_COVER_LIMIT := 6.0
+const STARTUP_REVEAL := 0.45
 const WIND := "res://resources/sounds/wind.wav"
 const BIRDS := ["res://resources/sounds/bird_1.wav", "res://resources/sounds/bird_2.wav", "res://resources/sounds/bird_3.wav"]
 
-var game: GameWorld
+var game: Node # GameWorld; без типа, чтобы меню не тянуло скрипты игры при запуске
 var trail_lab: Node
 var busy := false
 var gen_thread: Thread
@@ -53,6 +61,7 @@ var _backdrop_mode := ""
 var _backdrop_fade: Tween
 var _poster: Texture2D
 var _frozen_fallback: Texture2D
+var _startup_cover: ColorRect
 var _menu_wind: AudioStreamPlayer
 var _menu_bird: AudioStreamPlayer
 var _bird_wait := 0.0
@@ -92,8 +101,10 @@ func _mark_quick_trails() -> void:
 
 
 func _ready() -> void:
+	if "--menu-timing" in OS.get_cmdline_user_args():
+		print("MENU_READY_MS=", Time.get_ticks_msec())
 	if OS.get_cmdline_user_args().has("--resource-report"):
-		GameContext.scope.resource_profile = preload("res://scripts/core/resource_profile.gd").new()
+		GameContext.scope.resource_profile = load("res://scripts/core/resource_profile.gd").new() # load: профиль тянет скрипт игры
 	GameContext.scope.settings.load_settings()
 	GameContext.scope.settings.apply_window()
 	GameContext.scope.settings.apply_volume()
@@ -141,6 +152,8 @@ func _ready() -> void:
 	_seed_tab = "saved" if not _saved_seeds.is_empty() else ("recent" if not GameContext.scope.settings.recent_seeds.is_empty() else "recommended")
 	%LoadPreview.texture = null
 	get_viewport().size_changed.connect(_fit_menu)
+	if _progress_enabled and DisplayServer.get_name() != "headless" and "--static-menu" not in OS.get_cmdline_user_args():
+		_cover_startup()
 	_show("menu")
 	if _progress_enabled and "--menu-timing" in OS.get_cmdline_user_args():
 		_report_first_menu_frame()
@@ -252,17 +265,21 @@ func _start_menu_backdrop(epoch: int) -> void:
 	if DisplayServer.get_name() == "headless" or "--static-menu" in OS.get_cmdline_user_args():
 		return
 	# Два кадра дают вывести афишу и дождаться отложенного освобождения игрового окружения.
-	await get_tree().process_frame
-	await get_tree().process_frame
-	await get_tree().create_timer(LIVE_WARM_START_DELAY).timeout
+	var hidden := _startup_cover != null
+	# При запуске под заставкой ждать нечего: игрового окружения ещё не было, сцену никто не видит.
+	if not hidden:
+		await get_tree().process_frame
+		await get_tree().process_frame
+		await get_tree().create_timer(LIVE_WARM_START_DELAY).timeout
 	if not is_inside_tree() or epoch != _backdrop_epoch:
 		return
 	_set_menu_audio(true)
 	var backdrop := Backdrop.new()
 	add_child(backdrop)
 	var quality := Backdrop.recommended_quality()
-	if not backdrop.start(_backdrop_size(), GameContext.scope.settings, quality, false, true):
+	if not backdrop.start(_backdrop_size(), GameContext.scope.settings, quality, false, true, hidden):
 		backdrop.queue_free()
+		_lift_startup_cover()
 		return
 	_backdrop = backdrop
 	backdrop.prepared.connect(_reveal_menu_backdrop.bind(epoch))
@@ -277,13 +294,19 @@ func _reveal_menu_backdrop(epoch: int) -> void:
 		return
 	var live: TextureRect = %LiveBackdrop
 	live.texture = _backdrop.viewport().get_texture()
-	live.modulate.a = 0.0
 	live.show()
+	if _startup_cover != null:
+		# Первый показ: меню и живая сцена проявляются вместе, без афиши.
+		live.modulate.a = 1.0
+		_lift_startup_cover()
+		return
+	live.modulate.a = 0.0
 	_backdrop_fade = create_tween()
 	_backdrop_fade.tween_property(live, "modulate:a", 1.0, 0.6).set_trans(Tween.TRANS_SINE)
 
 
 func _use_menu_poster() -> void:
+	_lift_startup_cover()
 	if _backdrop == null:
 		return
 	var live: TextureRect = %LiveBackdrop
@@ -297,6 +320,36 @@ func _use_menu_poster() -> void:
 		bg.texture = _frozen_fallback
 	_backdrop.queue_free()
 	_backdrop = null
+
+
+## Продолжение заставки движка, пока собирается живой фон (~2 с). Ввод в меню закрыт до проявления.
+## Если сборка затянулась, через STARTUP_COVER_LIMIT меню открывается с афишей, как раньше.
+func _cover_startup() -> void:
+	var layer := CanvasLayer.new()
+	layer.layer = 120
+	_startup_cover = ColorRect.new()
+	_startup_cover.color = STARTUP_COVER_COLOR
+	_startup_cover.mouse_filter = Control.MOUSE_FILTER_STOP
+	layer.add_child(_startup_cover)
+	_startup_cover.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(layer)
+	get_viewport().gui_disable_input = true
+	get_tree().create_timer(STARTUP_COVER_LIMIT).timeout.connect(_lift_startup_cover)
+
+
+func _lift_startup_cover() -> void:
+	if _startup_cover == null:
+		return
+	var cover := _startup_cover
+	_startup_cover = null
+	get_viewport().gui_disable_input = false
+	if _backdrop != null:
+		_backdrop.end_rush()
+	if "--menu-timing" in OS.get_cmdline_user_args():
+		print("MENU_REVEAL_MS=", Time.get_ticks_msec(), " live=", %LiveBackdrop.visible)
+	var fade := create_tween()
+	fade.tween_property(cover, "color:a", 0.0, STARTUP_REVEAL).set_trans(Tween.TRANS_SINE)
+	fade.tween_callback(cover.get_parent().queue_free)
 
 
 func _backdrop_size() -> Vector2i:
@@ -964,7 +1017,7 @@ func _process(delta: float) -> void:
 func _open_trail_lab() -> void:
 	if busy or game != null or trail_lab != null or not screens.menu.visible:
 		return
-	trail_lab = TrailLabScene.instantiate()
+	trail_lab = (load(TRAIL_LAB_SCENE) as PackedScene).instantiate()
 	trail_lab.exit_requested.connect(_close_trail_lab)
 	hud.visible = false
 	_show("")
@@ -1095,7 +1148,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 		_show("menu")
 		_message("Мир не подготовлен", loaded.error)
 		return
-	if not _pending_save.is_empty() and not GameWorld.can_restore(_pending_save, loaded.world):
+	if not _pending_save.is_empty() and not load(GAME_SCRIPT).can_restore(_pending_save, loaded.world):
 		busy = false
 		_show("menu")
 		_message("Мир изменился", "Места этого мира изменились после обновления. Сохранение оставлено без изменений. Нажмите «Создать заново», чтобы пересоздать этот мир и начать новое путешествие.")
@@ -1106,7 +1159,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	await get_tree().process_frame
 	loaded.timings.ready_frame_wait_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
 	phase_started = Time.get_ticks_usec()
-	game = GameScene.instantiate()
+	game = (load(GAME_SCENE) as PackedScene).instantiate()
 	game.pause_requested.connect(_toggle_pause)
 	add_child(game)
 	loaded.timings.game_scene_create_ms = (Time.get_ticks_usec() - phase_started) / 1000.0

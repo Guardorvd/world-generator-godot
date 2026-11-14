@@ -1,5 +1,5 @@
 extends SceneTree
-## Стенд привала. --quality 0|1|2, --poster перезаписывает resources/menu/poster.jpg.
+## Стенд привала. --quality 0|1|2, --rush — сборка как при запуске игры, --poster перезаписывает resources/menu/poster.jpg.
 
 const Backdrop := preload("res://scripts/ui/menu_backdrop.gd")
 const FarForest := preload("res://scripts/render/distant_forest.gd")
@@ -78,7 +78,8 @@ func _run() -> void:
 		await process_frame
 	_check(_backdrop.freeze() == null, "отмена во время подготовки участка")
 	_check_released(forest_before, style_before)
-	if not _backdrop.start(root.size, settings, quality):
+	# --rush: скрытая сборка, как при запуске игры под заставкой.
+	if not _backdrop.start(root.size, settings, quality, false, false, "--rush" in args):
 		push_error("Не удалось начать сборку привала.")
 		quit(1)
 		return
