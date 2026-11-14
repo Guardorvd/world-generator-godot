@@ -672,6 +672,14 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	_record_phase(5, phase_started)
 	return uploaded
 
+## Идут фоновые задачи слоя (раскладка, деревья, ковёр). Перемещение ждёт их кадрами, а не в travel_begin:
+## _finish() на них стоял одним кадром до 8 с (стресс-тест 14.11, перенос сразу после быстрых видов).
+func busy() -> bool:
+	if _task != -1 and not WorkerThreadPool.is_task_completed(_task): return true
+	if _tree_task != -1 and not WorkerThreadPool.is_task_completed(_tree_task): return true
+	return carpet != null and carpet.busy()
+
+
 ## 15.1: быстрое перемещение без замирания. То же, что update(force), но расчёт — в фоне, пока игра рисует кадры:
 ## travel_begin (главный поток) -> travel_fill (поток пула, из задачи перемещения) -> travel_end (главный поток).
 ## Пока идёт перемещение, GameWorld._process не зовёт update, поэтому состояние слоя трогает только этот путь.

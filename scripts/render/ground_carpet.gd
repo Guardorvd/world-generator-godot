@@ -163,6 +163,10 @@ func apply_ranges() -> void:
 	RenderingServer.global_shader_parameter_set("ground_carpet_forward", _view_forward() if directional else Vector2.ZERO)
 
 
+func busy() -> bool:
+	return _task != -1 and not WorkerThreadPool.is_task_completed(_task)
+
+
 func finish() -> void:
 	if _task != -1:
 		WorkerThreadPool.wait_for_task_completion(_task)

@@ -85,6 +85,7 @@ var terrain_stream: PlanTerrain
 var _water_streams: Array[PlanTerrain] = []
 var chunk_source: RefCounted
 var _travel_task := -1
+var _travel_waiting := false # перемещение ждёт фоновые задачи растительности (кадры идут, слой не обновляется)
 var _water_turn := 0
 var _resource_before := {}
 var load_timings := {}    # WorldLoader.timings и шаги start (мс), для tools/control/check.gd
@@ -758,7 +759,7 @@ func toggle_map() -> void:
 ## Быстрое перемещение в любое место с карты (Hud.places; с 3.0.2 и туда, где игрок ещё не был): к костру поселения,
 ## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
 func travel_active() -> bool:
-	return _travel_task != -1
+	return _travel_task != -1 or _travel_waiting
 
 
 ## Костры, ночные окна, свет ближайшего костра и гирлянды. Зовёт и tools/stress на паузе (там нет _process).
@@ -799,34 +800,18 @@ func travel_to(place: Dictionary) -> void:
 		services.controls.read_bike_body(bike, false)
 		_dragging = false
 		audio.set_paused(true)
-		var source := chunk_source
-		var at := Vector2(arriving.x, arriving.z)
-		# 15.1: деревья, трава и подлесок места прибытия считаются в той же фоновой задаче (было 8–10 с без кадров)
-		var layer := vegetation
-		var missing := vegetation.travel_begin(at.x, at.y)
-		_travel_task = WorkerThreadPool.add_task(func() -> void:
-			source.finish()
-			source.prewarm([at], NEAR)
-			layer.travel_fill(at.x, at.y, missing), true, "Место прибытия")
-		while not WorkerThreadPool.is_task_completed(_travel_task):
-			await get_tree().process_frame
-			if not is_inside_tree() or is_queued_for_deletion(): return
-		WorkerThreadPool.wait_for_task_completion(_travel_task)
-		_travel_task = -1
+		if not await _travel_load(Vector2(arriving.x, arriving.z)): return
 	var destination := Vector3(arriving.x, arriving.feet, arriving.z)
-	stream_coordinator.force_terrain(destination, NEAR)
-	if chunk_source != null:
-		chunk_source.finish_startup()
-		vegetation.travel_end(destination.x, destination.z)
-	else:
-		stream_coordinator.force_vegetation(destination)
+	_travel_publish(destination)
 	heights.obstacles.update(arriving.x, arriving.z, vegetation.obstacles, vegetation.obstacles_version, true)
 	var arrival_yaw := PlayerState.arrival_heading(place, Vector2(arriving.x, arriving.z), yaw)
 	var parked := BikeRide.park_near(arriving, arrival_yaw, world, heights)
 	if parked == null or not safe_position(arriving.x, arriving.z, arriving.feet):
 		var origin := Vector3(player.x, player.feet, player.z)
-		stream_coordinator.force_terrain(origin, NEAR)
-		stream_coordinator.force_vegetation(origin)
+		# 14.11: возврат той же фоновой задачей, что и перенос: синхронные force_terrain/force_vegetation здесь
+		# давали один кадр 7–8 с (стресс-тест, место прибытия без места для велосипеда)
+		if chunk_source != null and not await _travel_load(Vector2(origin.x, origin.z)): return
+		_travel_publish(origin)
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
 		audio.set_paused(paused)
 		hud.toast_now("Рядом с местом прибытия нет свободного места для игрока и велосипеда")
@@ -847,6 +832,41 @@ func travel_to(place: Dictionary) -> void:
 		toggle_map()
 	audio.set_paused(paused)
 	hud.toast_now("Вы переместились: «%s»" % place.name)
+
+
+## Рельеф, вода и растительность вокруг at — в фоновой задаче, кадры идут. false — мир закрыт во время ожидания.
+func _travel_load(at: Vector2) -> bool:
+	_travel_waiting = true
+	while vegetation.busy():
+		await get_tree().process_frame
+		if not is_inside_tree() or is_queued_for_deletion():
+			_travel_waiting = false
+			return false
+	_travel_waiting = false
+	var source := chunk_source
+	# 15.1: деревья, трава и подлесок места прибытия считаются в той же фоновой задаче (было 8–10 с без кадров)
+	var layer := vegetation
+	var missing := vegetation.travel_begin(at.x, at.y)
+	_travel_task = WorkerThreadPool.add_task(func() -> void:
+		source.finish()
+		source.prewarm([at], NEAR)
+		layer.travel_fill(at.x, at.y, missing), true, "Место прибытия")
+	while not WorkerThreadPool.is_task_completed(_travel_task):
+		await get_tree().process_frame
+		if not is_inside_tree() or is_queued_for_deletion(): return false
+	WorkerThreadPool.wait_for_task_completion(_travel_task)
+	_travel_task = -1
+	return true
+
+
+## Показать подготовленное _travel_load (или без ChunkSource — построить синхронно) вокруг точки.
+func _travel_publish(at: Vector3) -> void:
+	stream_coordinator.force_terrain(at, NEAR)
+	if chunk_source != null:
+		chunk_source.finish_startup()
+		vegetation.travel_end(at.x, at.z)
+	else:
+		stream_coordinator.force_vegetation(at)
 
 
 func _placing_bike() -> bool:
