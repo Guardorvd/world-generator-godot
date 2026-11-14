@@ -1,0 +1,445 @@
+{
+	"legacy": false,
+	"rows": [
+		{
+			"biomes": {
+				"forest": 75.8,
+				"open": 8.4,
+				"rock": 5.5,
+				"shore": 2.1,
+				"swamp": 6.2,
+				"tundra": 1.9
+			},
+			"characters": {
+				"dry_rocky": 3.6,
+				"forest_hills": 28.3,
+				"forest_lowland": 19.3,
+				"forest_steppe": 23.3,
+				"moist_p": [
+					0.44,
+					0.64,
+					0.87
+				],
+				"mountain": 7.2,
+				"other": 0.5,
+				"rocky_forest": 3.3,
+				"wet_lowland": 14.6
+			},
+			"heights": {
+				"0": 38.9,
+				"150": 3.2,
+				"20": 49.9,
+				"260": 0.0,
+				"80": 8.0
+			},
+			"lakes": 2,
+			"macro": [
+				-3234.0,
+				2250.0
+			],
+			"mountain": [
+				1.43,
+				0.34,
+				0.93,
+				0.29
+			],
+			"ocean": 11.4,
+			"ocean_closed": 6.1,
+			"seed": "Север-1234",
+			"stages_ms": {
+				"climate": 38.072,
+				"geography": 469.457,
+				"hydrology": 186.19,
+				"ocean": 335.702,
+				"relief": 2142.097,
+				"rivers": 37.205
+			},
+			"total_ms": 3213.964
+		},
+		{
+			"biomes": {
+				"forest": 65.6,
+				"open": 19.1,
+				"rock": 4.8,
+				"shore": 2.2,
+				"swamp": 6.5,
+				"tundra": 1.8
+			},
+			"characters": {
+				"dry_rocky": 5.5,
+				"forest_hills": 18.4,
+				"forest_lowland": 18.0,
+				"forest_steppe": 35.1,
+				"moist_p": [
+					0.34,
+					0.58,
+					0.84
+				],
+				"mountain": 6.4,
+				"other": 0.5,
+				"rocky_forest": 2.4,
+				"wet_lowland": 13.7
+			},
+			"heights": {
+				"0": 39.4,
+				"150": 2.5,
+				"20": 47.3,
+				"260": 0.0,
+				"80": 10.7
+			},
+			"lakes": 2,
+			"macro": [
+				-3234.0,
+				2250.0
+			],
+			"mountain": [
+				1.59,
+				0.15,
+				1.09,
+				0.4
+			],
+			"ocean": 9.4,
+			"ocean_closed": 4.1,
+			"seed": "Ущелье",
+			"stages_ms": {
+				"climate": 20.314,
+				"geography": 396.895,
+				"hydrology": 202.007,
+				"ocean": 295.406,
+				"relief": 1623.967,
+				"rivers": 19.615
+			},
+			"total_ms": 2567.654
+		},
+		{
+			"biomes": {
+				"forest": 60.7,
+				"open": 13.2,
+				"rock": 13.3,
+				"shore": 1.4,
+				"swamp": 4.6,
+				"tundra": 6.8
+			},
+			"characters": {
+				"dry_rocky": 6.1,
+				"forest_hills": 22.6,
+				"forest_lowland": 10.8,
+				"forest_steppe": 24.6,
+				"moist_p": [
+					0.37,
+					0.61,
+					0.86
+				],
+				"mountain": 19.6,
+				"other": 0.6,
+				"rocky_forest": 4.6,
+				"wet_lowland": 11.1
+			},
+			"heights": {
+				"0": 26.0,
+				"150": 7.0,
+				"20": 44.1,
+				"260": 0.0,
+				"80": 22.9
+			},
+			"lakes": 0,
+			"macro": [
+				4004.0,
+				2104.0
+			],
+			"mountain": [
+				1.19,
+				0.33,
+				1.16,
+				0.16
+			],
+			"ocean": 8.5,
+			"ocean_closed": 0.9,
+			"seed": "Туман-4821",
+			"stages_ms": {
+				"climate": 14.855,
+				"geography": 415.126,
+				"hydrology": 138.326,
+				"ocean": 323.281,
+				"relief": 1805.562,
+				"rivers": 21.883
+			},
+			"total_ms": 2726.839
+		},
+		{
+			"biomes": {
+				"forest": 60.4,
+				"open": 8.2,
+				"rock": 19.5,
+				"shore": 2.1,
+				"swamp": 5.3,
+				"tundra": 4.4
+			},
+			"characters": {
+				"dry_rocky": 4.5,
+				"forest_hills": 26.0,
+				"forest_lowland": 8.8,
+				"forest_steppe": 19.0,
+				"moist_p": [
+					0.42,
+					0.64,
+					0.91
+				],
+				"mountain": 23.4,
+				"other": 0.5,
+				"rocky_forest": 4.6,
+				"wet_lowland": 13.2
+			},
+			"heights": {
+				"0": 21.3,
+				"150": 12.7,
+				"20": 47.8,
+				"260": 3.6,
+				"80": 14.6
+			},
+			"lakes": 0,
+			"macro": [
+				6138.0,
+				2604.0
+			],
+			"mountain": [
+				1.58,
+				0.36,
+				1.28,
+				0.99
+			],
+			"ocean": 35.7,
+			"ocean_closed": 0.7,
+			"seed": "Янтарь-5150",
+			"stages_ms": {
+				"climate": 19.218,
+				"geography": 349.09,
+				"hydrology": 123.138,
+				"ocean": 308.686,
+				"relief": 1807.439,
+				"rivers": 19.735
+			},
+			"total_ms": 2636.08
+		},
+		{
+			"biomes": {
+				"forest": 69.7,
+				"open": 11.5,
+				"rock": 6.7,
+				"shore": 1.3,
+				"swamp": 8.3,
+				"tundra": 2.6
+			},
+			"characters": {
+				"dry_rocky": 5.2,
+				"forest_hills": 27.7,
+				"forest_lowland": 16.1,
+				"forest_steppe": 24.3,
+				"moist_p": [
+					0.4,
+					0.63,
+					0.86
+				],
+				"mountain": 8.8,
+				"other": 0.4,
+				"rocky_forest": 2.2,
+				"wet_lowland": 15.3
+			},
+			"heights": {
+				"0": 32.5,
+				"150": 4.4,
+				"20": 52.9,
+				"260": 0.2,
+				"80": 10.0
+			},
+			"lakes": 0,
+			"macro": [
+				2125.0,
+				5219.0
+			],
+			"mountain": [
+				0.86,
+				0.35,
+				1.15,
+				0.69
+			],
+			"ocean": 5.1,
+			"ocean_closed": 5.0,
+			"seed": "a1",
+			"stages_ms": {
+				"climate": 19.254,
+				"geography": 472.587,
+				"hydrology": 132.535,
+				"ocean": 288.83,
+				"relief": 1771.038,
+				"rivers": 18.585
+			},
+			"total_ms": 2710.877
+		},
+		{
+			"biomes": {
+				"forest": 72.1,
+				"open": 12.5,
+				"rock": 0.6,
+				"shore": 2.6,
+				"swamp": 11.6,
+				"tundra": 0.5
+			},
+			"characters": {
+				"dry_rocky": 4.1,
+				"forest_hills": 20.7,
+				"forest_lowland": 23.1,
+				"forest_steppe": 27.1,
+				"moist_p": [
+					0.4,
+					0.64,
+					0.89
+				],
+				"mountain": 0.9,
+				"other": 0.8,
+				"rocky_forest": 2.0,
+				"wet_lowland": 21.2
+			},
+			"heights": {
+				"0": 50.8,
+				"150": 0.0,
+				"20": 44.7,
+				"260": 0.0,
+				"80": 4.5
+			},
+			"lakes": 2,
+			"macro": [
+				3888.0,
+				-1796.0
+			],
+			"mountain": [
+				1.35,
+				0.25,
+				1.09,
+				0.32
+			],
+			"ocean": 16.4,
+			"ocean_closed": 6.7,
+			"seed": "b2",
+			"stages_ms": {
+				"climate": 14.378,
+				"geography": 482.662,
+				"hydrology": 252.768,
+				"ocean": 346.657,
+				"relief": 1819.468,
+				"rivers": 23.086
+			},
+			"total_ms": 2947.017
+		},
+		{
+			"biomes": {
+				"forest": 60.4,
+				"open": 11.5,
+				"rock": 14.5,
+				"shore": 2.0,
+				"swamp": 10.2,
+				"tundra": 1.4
+			},
+			"characters": {
+				"dry_rocky": 5.5,
+				"forest_hills": 17.8,
+				"forest_lowland": 18.2,
+				"forest_steppe": 20.7,
+				"moist_p": [
+					0.38,
+					0.65,
+					0.91
+				],
+				"mountain": 15.3,
+				"other": 0.7,
+				"rocky_forest": 3.2,
+				"wet_lowland": 18.7
+			},
+			"heights": {
+				"0": 40.0,
+				"150": 7.3,
+				"20": 37.3,
+				"260": 2.7,
+				"80": 12.8
+			},
+			"lakes": 1,
+			"macro": [
+				-1685.0,
+				4026.0
+			],
+			"mountain": [
+				0.99,
+				0.42,
+				1.15,
+				0.4
+			],
+			"ocean": 9.2,
+			"ocean_closed": 7.1,
+			"seed": "c3",
+			"stages_ms": {
+				"climate": 16.547,
+				"geography": 516.578,
+				"hydrology": 170.513,
+				"ocean": 356.145,
+				"relief": 1784.642,
+				"rivers": 19.803
+			},
+			"total_ms": 2873.431
+		},
+		{
+			"biomes": {
+				"forest": 77.1,
+				"open": 14.3,
+				"rock": 0.5,
+				"shore": 1.9,
+				"swamp": 4.8,
+				"tundra": 1.3
+			},
+			"characters": {
+				"dry_rocky": 6.0,
+				"forest_hills": 28.7,
+				"forest_lowland": 16.5,
+				"forest_steppe": 29.9,
+				"moist_p": [
+					0.39,
+					0.61,
+					0.85
+				],
+				"mountain": 1.8,
+				"other": 0.5,
+				"rocky_forest": 3.5,
+				"wet_lowland": 13.2
+			},
+			"heights": {
+				"0": 34.3,
+				"150": 0.0,
+				"20": 57.5,
+				"260": 0.0,
+				"80": 8.2
+			},
+			"lakes": 1,
+			"macro": [
+				876.0,
+				-6281.0
+			],
+			"mountain": [
+				1.51,
+				0.36,
+				0.86,
+				0.55
+			],
+			"ocean": 9.9,
+			"ocean_closed": 5.5,
+			"seed": "d4",
+			"stages_ms": {
+				"climate": 12.079,
+				"geography": 435.731,
+				"hydrology": 159.836,
+				"ocean": 319.424,
+				"relief": 1939.926,
+				"rivers": 17.595
+			},
+			"total_ms": 2890.846
+		}
+	]
+}
