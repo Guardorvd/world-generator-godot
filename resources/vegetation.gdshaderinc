@@ -35,6 +35,8 @@ uniform float thin_full = 0.0;
 uniform float thin_grow = 0.0;
 // Только общий меш травы: лёгкий индивидуальный наклон каждого листа.
 uniform bool grass_variation = false;
+// 14.11.2026: дернина расступается у игрока (veg_center): м отклонения кончиков в полуметре от него, 0 — нет.
+uniform float trample = 0.0;
 // Семантическое поредение листьев в UV2.x. Стебли имеют ранг 0 и сохраняются.
 // Решается для каждого растения, без копий буферов MultiMesh на каждый LOD.
 uniform float detail_full = 0.0;
@@ -139,6 +141,12 @@ void vertex() {
 			float leaf = sin(TIME * 4.1 + dot(VERTEX, vec3(3.1, 2.3, 2.7)) + phase);
 			float leaf_motion = 1.0 - smoothstep(LOD1_D, LOD2_D, dist) * 0.75;
 			world += vec3(leaf, leaf * 0.5, -leaf * 0.7) * flutter * gust * h * leaf_motion;
+			if (trample > 0.0 && dist < 3.0) {
+				// Травинки у колёс и ног ложатся от игрока и прижимаются к земле
+				vec2 away = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xz - veg_center;
+				float push = (1.0 - smoothstep(0.25, 1.25, length(away))) * trample * h;
+				world += vec3(away.x, 0.0, away.y) / max(length(away), 0.05) * push - vec3(0.0, push * 0.55, 0.0);
+			}
 			// В локальные координаты экземпляра: поворот и масштаб из MODEL_MATRIX.
 			mat3 basis = mat3(MODEL_MATRIX);
 			float scale2 = max(dot(basis[0], basis[0]), 1e-4);

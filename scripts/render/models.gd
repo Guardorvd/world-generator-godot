@@ -148,25 +148,43 @@ static func grass_mesh() -> ArrayMesh:
 
 
 ## 14.11.2026: дернина — плотный ковёр мелкой травы у игрока (GroundCarpet). Куртинка шириной ~1 м из двух ярусов:
-## CARPET_TALL травинок 10–33 см (выше в середине, каждая пятая соломенная) и CARPET_PILE коротких широких 4–9 см —
-## подложка, закрывающая землю между ними. Куртинки стоят чаще своего радиуса и перекрываются: сплошной ковёр.
-## Корни тёмные, кончики светлые — объём читается и на зелёной земле. Строится при запуске (каталог не меняется).
-## UV.x — номер травинки для изгиба в шейдере, UV2.x — порог поредения вдали (подложка уходит первой).
-const CARPET_TALL := 48
-const CARPET_PILE := 36
-const CARPET_BLADES := CARPET_TALL + CARPET_PILE
+## высокие травинки (выше в середине) и короткие широкие — подложка, закрывающая землю между ними. Куртинки стоят
+## чаще своего радиуса и перекрываются: сплошной ковёр. Корни тёмные, кончики светлые — объём читается и на зелёной
+## земле. Строится при запуске (каталог не меняется). UV.x — номер травинки для изгиба в шейдере, UV2.x — порог
+## поредения вдали (подложка уходит первой).
+## Виды (CARPET_KINDS): луговая, сухая соломенная (тонкие высокие стебли), теневая (розетки широких листьев и мох),
+## цветы (несколько стебельков с венчиками; цвет венчика — цвет экземпляра).
+## far — дальняя форма: только травинки с порогом ниже CARPET_FAR_KEEP, те самые, что шейдер оставляет вдали,
+## поэтому смена формы по расстоянию не видна.
+enum { CARPET_MEADOW, CARPET_DRY, CARPET_SHADE, CARPET_FLOWERS, CARPET_KINDS }
 const CARPET_R := 0.5
+const CARPET_FAR_KEEP := 0.45
+## [высоких, коротких, высота от, высота до, полуширина от, полуширина до, наклон кончика, цвет корня, цвет кончика, доля соломенных]
+const CARPET_SHAPES := [
+	[48, 36, 0.10, 0.26, 0.016, 0.029, 0.55, Color(0.56, 0.66, 0.42), Color(1.0, 1.42, 0.86), 0.14],
+	[40, 22, 0.14, 0.40, 0.008, 0.016, 0.75, Color(0.66, 0.62, 0.40), Color(1.5, 1.34, 0.82), 0.55],
+	[26, 30, 0.05, 0.13, 0.034, 0.062, 1.5, Color(0.42, 0.56, 0.34), Color(0.86, 1.28, 0.74), 0.0],
+]
 
-static func build_carpet_mesh() -> ArrayMesh:
+static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
+	if kind == CARPET_FLOWERS:
+		return _carpet_flowers(far)
+	var shape: Array = CARPET_SHAPES[kind]
+	var tall_n: int = shape[0]
+	var pile_n: int = shape[1]
+	var blades := tall_n + pile_n
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	for k in CARPET_BLADES:
-		var pile := k >= CARPET_TALL
-		var n := k - CARPET_TALL if pile else k
-		var total := CARPET_PILE if pile else CARPET_TALL
-		var h1 := WGRandom.hash2(k, 3, 701)
-		var h2 := WGRandom.hash2(k, 5, 703)
-		var h3 := WGRandom.hash2(k, 7, 707)
+	for k in blades:
+		var pile := k >= tall_n
+		var n := k - tall_n if pile else k
+		var total := pile_n if pile else tall_n
+		var h1 := WGRandom.hash2(k, 3 + kind * 31, 701)
+		var h2 := WGRandom.hash2(k, 5 + kind * 31, 703)
+		var h3 := WGRandom.hash2(k, 7 + kind * 31, 707)
+		var rank := 0.62 + 0.38 * h1 if pile else 0.1 + 0.62 * WGRandom.hash2(k, 11 + kind * 31, 709)
+		if far and rank >= CARPET_FAR_KEEP + 0.1:
+			continue
 		# Равномерно по кругу (золотой угол); край куртинки рыхлый и уходит в соседние.
 		var a := n * 2.39996 + h1 * 0.6 + (1.3 if pile else 0.0)
 		var rr := sqrt((n + 0.5) / total)
@@ -185,20 +203,57 @@ static func build_carpet_mesh() -> ArrayMesh:
 			st.set_normal((Vector3.UP * 0.95 + lean * 0.3).normalized())
 		else:
 			# Короче у края, выше в середине: силуэт куртинки — пологий холмик.
-			h = (0.1 + 0.16 * h2) * (1.25 - 0.5 * rr)
-			width = 0.016 + 0.013 * h1
-			tip = foot + lean * h * (0.25 + 0.55 * h3) + Vector3.UP * h
+			h = lerpf(shape[2], shape[3], h2) * (1.25 - 0.5 * rr)
+			width = lerpf(shape[4], shape[5], h1)
+			tip = foot + lean * h * shape[6] * (0.45 + h3) + Vector3.UP * h
 			# Нормаль по наклону травинки: солнечная сторона куртинки светлее теневой.
 			st.set_normal((Vector3.UP * 0.85 + lean * 0.5).normalized())
-		var dry := not pile and h3 > 0.86
+		var dry: bool = not pile and h3 > 1.0 - shape[9]
 		var value := 0.8 + 0.45 * h1
-		var root := Color(0.50, 0.60, 0.38) if pile else Color(0.56, 0.66, 0.42)
-		var top := Color(0.84, 1.14, 0.68) if pile else (Color(1.45, 1.3, 0.78) if dry else Color(1.0, 1.42, 0.86))
+		var root: Color = shape[7] * (0.9 if pile else 1.0)
+		var top: Color = Color(1.45, 1.3, 0.78) if dry else shape[8] * (0.82 if pile else 1.0)
 		for v: Vector3 in [foot - side * width, foot + side * width, tip]:
 			st.set_color(root if v.y == 0.0 else top * value)
-			st.set_uv(Vector2(float(k) / CARPET_BLADES, v.y / h))
-			st.set_uv2(Vector2(0.62 + 0.38 * h1 if pile else 0.1 + 0.62 * WGRandom.hash2(k, 11, 709), 0.0))
+			st.set_uv(Vector2(float(k) / blades, v.y / h))
+			st.set_uv2(Vector2(rank, 0.0))
 			st.add_vertex(v)
+	return st.commit()
+
+
+## Цветы в ковре: стебельки с венчиком из двух скрещённых лепестков-ромбов. Венчик белый — красит цвет экземпляра,
+## стебель тёмно-зелёный. Дальняя форма — половина стебельков.
+static func _carpet_flowers(far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stems := 8 # дальняя форма та же: стебельков мало
+	for k in stems:
+		var h1 := WGRandom.hash2(k, 41, 711)
+		var h2 := WGRandom.hash2(k, 43, 713)
+		var a := k * 2.39996 + h1
+		var r := 0.38 * sqrt((k + 0.5) / 8.0)
+		var foot := Vector3(cos(a) * r, 0.0, sin(a) * r)
+		var h := 0.13 + 0.14 * h2
+		var lean := Vector3(cos(a * 1.7), 0.0, sin(a * 1.7)) * 0.04
+		var top := foot + lean + Vector3.UP * h
+		var side := Vector3(-sin(a), 0.0, cos(a))
+		var rank := 0.1 + 0.4 * h1
+		st.set_normal(Vector3.UP)
+		for v: Vector3 in [foot - side * 0.006, foot + side * 0.006, top]:
+			st.set_color(Color(0.22, 0.34, 0.14) if v.y < h else Color(0.3, 0.44, 0.2))
+			st.set_uv(Vector2(float(k) / 8.0, v.y / h))
+			st.set_uv2(Vector2(rank, 0.0))
+			st.add_vertex(v)
+		# Венчик: два ромба крест-накрест, чуть наклонены к зрителю сверху
+		var size := 0.028 + 0.016 * h1
+		for turn in 2:
+			var u := side if turn == 0 else Vector3(side.z, 0.0, -side.x)
+			var w := Vector3(side.z, 0.0, -side.x) if turn == 0 else side
+			var quad := [top - u * size, top + w * size * 0.45 + Vector3.UP * size * 0.5, top + u * size, top - w * size * 0.45 + Vector3.UP * size * 0.5]
+			for index in [0, 1, 2, 0, 2, 3]:
+				st.set_color(Color(1.5, 1.5, 1.5))
+				st.set_uv(Vector2(float(k) / 8.0, 1.0))
+				st.set_uv2(Vector2(rank, 0.0))
+				st.add_vertex(quad[index])
 	return st.commit()
 
 

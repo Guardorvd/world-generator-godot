@@ -73,6 +73,7 @@ const CARPET_RANGE := [
 	{title = "близко", meters = 10.0},
 	{title = "средне", meters = 15.0},
 	{title = "далеко", meters = 22.0},
+	{title = "очень далеко", meters = 32.0},
 ]
 const DEFAULT_CARPET_RANGE := 2
 

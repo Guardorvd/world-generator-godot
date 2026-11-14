@@ -258,12 +258,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
 	grass_buf = _buffer(_grass_cap(), STRIDE)
 	if carpet_enabled:
-		var carpet_mesh := Models.build_carpet_mesh()
-		var carpet_mat := _wind_mat(SHADER, [0.05, 0.014, 1.7, 0.75, 0.4], true)
-		carpet_mat.set_shader_parameter("height", carpet_mesh.get_aabb().end.y)
-		carpet_mat.set_shader_parameter("grass_variation", true)
 		carpet = GroundCarpet.new()
-		carpet.setup(self, world, heights, _forest_surface, carpet_mesh, carpet_mat)
+		carpet.setup(self, world, heights, _forest_surface)
 		_configure_carpet()
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())

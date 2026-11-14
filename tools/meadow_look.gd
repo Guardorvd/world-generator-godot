@@ -165,11 +165,10 @@ func _process(delta: float) -> bool:
 		results.moving_shot = true
 		var near_n := 0
 		if veg.carpet != null:
-			var live := veg.carpet.mm.buffer
-			for n in veg.carpet.count:
-				var at := n * VegetationLayer.STRIDE
-				if Vector2(live[at + 3] - x, live[at + 11] - z).length() < 10.0:
+			for at: Vector3 in veg.carpet.positions():
+				if Vector2(at.x - x, at.z - z).length() < 10.0:
 					near_n += 1
+			results.carpet_triangles_moving = veg.carpet.triangles()
 			results.carpet_total_moving = veg.carpet.count
 			results.carpet_job_ms = [veg.carpet.last_job_ms, veg.carpet.max_job_ms]
 			results.carpet_lead_m = veg.carpet.stream.lead().length()
@@ -217,15 +216,14 @@ func _counts() -> Dictionary:
 	out.carpet_triangles = 0
 	out.carpet_errors = 0
 	if veg.carpet != null:
-		var live := veg.carpet.mm.buffer
 		out.carpet = veg.carpet.count
-		out.carpet_triangles = veg.carpet.count * veg.carpet.mm.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3
+		out.carpet_triangles = veg.carpet.triangles()
+		out.carpet_kinds = veg.carpet.kind_counts() # вид × 2 + дальняя форма
 		out.carpet_capped = veg.carpet.capped
-		for n in veg.carpet.count:
-			var at := n * VegetationLayer.STRIDE
-			var x := live[at + 3]
-			var z := live[at + 11]
-			var y := live[at + 7]
+		for at: Vector3 in veg.carpet.positions():
+			var x := at.x
+			var z := at.z
+			var y := at.y
 			var k := clampi(int(z / GameConfig.TILE), 0, world.H - 1) * world.W + clampi(int(x / GameConfig.TILE), 0, world.W - 1)
 			if absf(y + 0.015 - heights.ground_at(x, z)) > 0.001 or heights.depth_at(x, z) > 0.0 or world.path_mask[k] >= 2:
 				out.carpet_errors += 1
