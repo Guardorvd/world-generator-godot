@@ -147,6 +147,45 @@ static func grass_mesh() -> ArrayMesh:
 	return preload("res://scripts/render/asset_catalog.gd").get_catalog().grass
 
 
+## 14.11.2026: дернина — ближний низкий покров. Куртинка ~0,5 м из CARPET_BLADES узких травинок 6–36 см
+## (по треугольнику, выше в середине), каждая пятая соломенная. Корни темнее — куртинка уходит в тон земли.
+## Строится при запуске (каталог не меняется). UV.x — номер травинки для изгиба в шейдере.
+const CARPET_BLADES := 32
+const CARPET_R := 0.26
+
+static func build_carpet_mesh() -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for k in CARPET_BLADES:
+		var h1 := WGRandom.hash2(k, 3, 701)
+		var h2 := WGRandom.hash2(k, 5, 703)
+		var h3 := WGRandom.hash2(k, 7, 707)
+		# Равномерно по кругу (золотой угол), гуще к середине — край куртинки рыхлый.
+		var a := k * 2.39996 + h1 * 0.6
+		var r := CARPET_R * sqrt((k + 0.5) / CARPET_BLADES) * (0.75 + 0.35 * h2)
+		var foot := Vector3(cos(a) * r, 0.0, sin(a) * r)
+		var lean_a := a + (h3 - 0.5) * 2.4
+		var lean := Vector3(cos(lean_a), 0.0, sin(lean_a))
+		var side := Vector3(-lean.z, 0.0, lean.x)
+		# Короче у края, выше в середине: силуэт куртинки — пологий холмик.
+		var h := (0.12 + 0.18 * h2) * (1.2 - 0.5 * r / CARPET_R)
+		var width := 0.009 + 0.01 * h1
+		var tip := foot + lean * h * (0.2 + 0.5 * h3 * r / CARPET_R) + Vector3.UP * h
+		var dry := h3 > 0.8
+		# Нормаль по наклону травинки: солнечная сторона куртинки светлее теневой — объём, а не пятно цвета земли.
+		st.set_normal((Vector3.UP * 0.55 + lean * 0.8).normalized())
+		var value := 0.85 + 0.35 * h1
+		for v: Vector3 in [foot - side * width, foot + side * width, tip]:
+			var base := v.y == 0.0
+			var col := Color(0.6, 0.62, 0.52) if base else (Color(1.3, 1.15, 0.72) if dry else Color(0.98, 1.24, 0.82)) * value
+			st.set_color(col)
+			st.set_uv(Vector2(float(k) / CARPET_BLADES, v.y / h))
+			# Порог поредения вдали (шейдер detail_*): травинки гаснут по одной, куртинка остаётся
+			st.set_uv2(Vector2(WGRandom.hash2(k, 11, 709), 0.0))
+			st.add_vertex(v)
+	return st.commit()
+
+
 static func build_grass_mesh() -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)

@@ -71,6 +71,15 @@ const STRIDE := 20
 const AHEAD_CAP := 1.8
 ## Пучки травы за GRASS_R крупнее до 35 % (с 9.9+ — в шейдере, по нынешнему расстоянию)
 const GRASS_GROW := 0.35
+## 14.11.2026: дернина (Models.build_carpet_mesh) — ближний низкий покров между пучками травы.
+## Полная видимость до CARPET_R·(1 − CARPET_FADE), к CARPET_R растворяется (× flora.detail).
+## Раскладка — сетка CARPET_SUB × CARPET_SUB на клетку (ячейка 0,8 м) с дрожанием, густота от того же
+## lush, что у травы, и пятна голой земли по шуму 6 м. Группа снимков -2, без теней, один draw call.
+const CARPET_R := 14.0
+const CARPET_FADE := 0.45
+const CARPET_SUB := 6
+const CARPET_MAX := 9000
+const CARPET_GROUP := -2
 const OBSTACLE_R := GameConfig.GRASS_R + 16.0 # столкновения нужны только рядом с игроком
 const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
@@ -105,6 +114,14 @@ var grass: MultiMesh
 var _grass_low := Vector3.INF   # 14.4: границы раскладки травы, пока она собирается (_grass_cell)
 var _grass_high := -Vector3.INF
 var grass_buf: PackedFloat32Array
+var carpet: MultiMesh              # 14.11.2026: дернина у игрока (null — выключена)
+var carpet_enabled := true         # до setup: false — прежний вид без дернины (A/B в meadow_look)
+var carpet_buf: PackedFloat32Array
+var _carpet_n := 0
+var _carpet_low := Vector3.INF
+var _carpet_high := -Vector3.INF
+var _carpet_bounds := AABB()
+var _carpet_mat: ShaderMaterial
 var last_fill := Vector2.INF
 var last_trees := Vector2.INF
 var _task := -1
@@ -254,6 +271,13 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
 	grass_buf = _buffer(_grass_cap(), STRIDE)
+	if carpet_enabled:
+		var carpet_mesh := Models.build_carpet_mesh()
+		_carpet_mat = _wind_mat(SHADER, [0.035, 0.012, 1.7, 0.7, 0.3], true)
+		_carpet_mat.set_shader_parameter("height", carpet_mesh.get_aabb().end.y)
+		_carpet_mat.set_shader_parameter("grass_variation", true)
+		carpet = _multimesh(carpet_mesh, _carpet_mat, CARPET_MAX, true, false, true).multimesh
+		carpet_buf = _buffer(CARPET_MAX, STRIDE)
 	var meshes := Understory.meshes()
 	meshes.append_array(Floor.meshes())
 	var specs: Array = []
@@ -308,6 +332,11 @@ static func _ahead(r: float) -> float:
 	return clampf(r * 0.15, 12.0, 45.0)
 
 
+## Дальность дернины на нынешнем качестве растительности, м
+func _carpet_r() -> float:
+	return CARPET_R * flora.detail
+
+
 func coverage_lag(point: Vector2) -> float:
 	return INF if grass_at == Vector2.INF else StreamPolicy.distance_to_coverage(point, grass_at, grass_lead)
 
@@ -340,6 +369,13 @@ func _apply_fade() -> void:
 	_fade(_grass_mat, grass_r, _ahead(grass_r))
 	_grass_mat.set_shader_parameter("thin_full", GameConfig.GRASS_R)
 	_grass_mat.set_shader_parameter("thin_grow", GRASS_GROW)
+	if _carpet_mat != null:
+		_carpet_mat.set_shader_parameter("fade_far", _carpet_r())
+		_carpet_mat.set_shader_parameter("fade_len", _carpet_r() * CARPET_FADE)
+		# Дальше 4 м травинок в куртинке меньше: к краю остаётся 40 % (мелкие пиксели не нужны)
+		_carpet_mat.set_shader_parameter("detail_full", 4.0 * flora.detail)
+		_carpet_mat.set_shader_parameter("detail_far", _carpet_r() * 0.8)
+		_carpet_mat.set_shader_parameter("detail_keep", 0.4)
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var radius := _reach_r(entry.base, entry.far)
@@ -427,6 +463,9 @@ func set_draw(level: int) -> bool:
 	grass.instance_count = _grass_cap()
 	grass_buf = _buffer(grass.instance_count, STRIDE)
 	_grass_n = 0
+	if carpet != null:
+		carpet.visible_instance_count = 0
+		_carpet_n = 0
 	for entry: Dictionary in understory:
 		entry.cap = _understory_cap(entry.far and not entry.near_cap)
 		entry.mm.visible_instance_count = 0
@@ -791,6 +830,8 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 	_reserve_details(lead)
 	_fill_grass(px, pz, _detail_snapshot() if snapshot.is_empty() else snapshot)
 	var frames := {-1: snapshots.prepare(-1, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, clock, immediate)}
+	if carpet != null:
+		frames[CARPET_GROUP] = snapshots.prepare(CARPET_GROUP, carpet_buf, _carpet_n, _carpet_bounds, Models.CARPET_R * 2.0, clock, immediate)
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
@@ -798,9 +839,15 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 	var now := clock + (Time.get_ticks_usec() - started) / 1000000.0
 	for group: int in frames:
 		snapshots.stamp(frames[group], now)
-		_fit_capacity(frames[group], grass if group < 0 else understory[group].mm)
+		_fit_capacity(frames[group], _group_mm(group))
 	_detail_frames = frames
 	_detail_seconds = (Time.get_ticks_usec() - started) / 1000000.0
+
+
+func _group_mm(group: int) -> MultiMesh:
+	if group == CARPET_GROUP:
+		return carpet
+	return grass if group < 0 else understory[group].mm
 
 
 ## Ёмкость MultiMesh, которую выберет _upload_instances (ступени и гистерезис те же); буфер дополняется
@@ -821,6 +868,11 @@ func _reserve_details(lead: Vector2) -> void:
 	var cap := ceili(_grass_cap() * StreamPolicy.reserve_factor(grass_r, lead))
 	if grass_buf.size() < cap * STRIDE:
 		grass_buf.resize(cap * STRIDE)
+	if carpet != null:
+		# Дернина у игрока: капсула упреждения длиннее при скорости — та же доля запаса, что у травы
+		cap = ceili(CARPET_MAX * StreamPolicy.reserve_factor(_carpet_r() + StreamPolicy.REFILL_STEP, lead))
+		if carpet_buf.size() < cap * STRIDE:
+			carpet_buf.resize(cap * STRIDE)
 	for entry: Dictionary in understory:
 		cap = ceili(_understory_cap(entry.far and not entry.near_cap) * StreamPolicy.reserve_factor(under_r if entry.far else grass_r, lead))
 		if entry.cap < cap:
@@ -1152,6 +1204,7 @@ func refresh(rect: Rect2i) -> void:
 	_history_cuts.append(box)
 	var meshes: Array[MultiMesh] = []
 	if grass != null: meshes.append(grass)
+	if carpet != null: meshes.append(carpet)
 	for e: Dictionary in understory: meshes.append(e.mm)
 	for mm in meshes:
 		var bounds := mm.custom_aabb
@@ -1357,6 +1410,8 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 func _apply_grass(immediate := false) -> void:
 	_present.clear()
 	_present_group(-1, immediate)
+	if carpet != null:
+		_present_group(CARPET_GROUP, immediate)
 	for kind in understory.size():
 		_present_group(kind, immediate)
 	_accept_contacts()
@@ -1367,6 +1422,8 @@ func _apply_grass(immediate := false) -> void:
 func _begin_present() -> void:
 	_present.clear()
 	_present.append(-1)
+	if carpet != null:
+		_present.append(CARPET_GROUP)
 	for kind in understory.size():
 		_present.append(kind)
 
@@ -1390,6 +1447,9 @@ func _present_next(deadline_usec: int) -> void:
 
 
 func _present_group(group: int, immediate: bool) -> void:
+	if group == CARPET_GROUP:
+		_present_frame(group, carpet, carpet_buf, _carpet_n, _carpet_bounds, Models.CARPET_R * 2.0, immediate)
+		return
 	if group < 0:
 		_present_frame(-1, grass, grass_buf, _grass_n, _grass_bounds, _grass_margin * 2.0, immediate)
 		grass_at = _fill_at
@@ -1578,6 +1638,11 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	_fill_started = Time.get_ticks_usec()
 	_grass_low = low
 	_grass_high = high
+	_carpet_n = 0
+	_carpet_low = low
+	_carpet_high = high
+	# Клетка (по центру) ещё может задеть видимый круг дернины: полдиагонали клетки и шаг раскладки
+	var carpet_reach := (_carpet_r() + StreamPolicy.REFILL_STEP) / TILE + 0.71 if carpet != null else -1.0
 	_fill_at = Vector2(px, pz)
 	placement.clear_occupied()
 	_obstacles_next = PackedFloat32Array()
@@ -1633,6 +1698,8 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 			lush *= _fill_understory(i, j, surface, light, px, pz)
 			if rocky_cell: lush *= _rock_shelter(surface, i + world.world_origin.x, j + world.world_origin.y)
 			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
+			if d < carpet_reach:
+				_carpet_cell(i, j, gr, lush, surface, w.path_mask[k], origin)
 	if canopy != null:
 		for j in range(floori(scan_low.y), ceili(scan_high.y) + 1):
 			for i in range(floori(scan_low.x), ceili(scan_high.x) + 1):
@@ -1660,10 +1727,13 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 				lush *= _fill_understory_cell(i, j, cell.biome, cell.path, cell.slope, surface, cell.light, px, pz, cell.elev, cell.dw)
 				if rocky_cell: lush *= _rock_shelter(surface, i, j)
 				n = _grass_cell(i, j, ROCK_GRASS if rocky_cell else bd.grass, lush, surface, d2, n, cell.path, regions)
+				if d < carpet_reach:
+					_carpet_cell(i, j, ROCK_GRASS if rocky_cell else bd.grass, lush, surface, cell.path, origin, regions)
 	low = _grass_low
 	high = _grass_high
 	_grass_n = n
 	_grass_bounds = AABB(low, high - low).grow(_grass_margin) if n > 0 else AABB()
+	_carpet_bounds = AABB(_carpet_low, _carpet_high - _carpet_low).grow(Models.CARPET_R + 0.3) if _carpet_n > 0 else AABB()
 	var t_scan := Time.get_ticks_usec()
 	# 9.9+: внутри одного приоритета — по порогу поредения: место занимает тот, кто виден дальше.
 	# Иначе невидимый ещё куст, попавший в раскладку с запасом, вытеснял бы видимый соседний.
@@ -1694,20 +1764,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
 	var tc: Array = gr.tint
-	# 12.11.2026: зрелая трава — поляны ~30 м, где часть пучков уже соломенная (gr.straw — доля по биому)
-	var straw: float = gr.get("straw", 0.0)
-	if straw > 0.0:
-		var sx := i / 8.0
-		var sz := j / 8.0
-		var fx := sx - floorf(sx)
-		var fz := sz - floorf(sz)
-		fx = fx * fx * (3.0 - 2.0 * fx)
-		fz = fz * fz * (3.0 - 2.0 * fz)
-		var x0 := floori(sx)
-		var z0 := floori(sz)
-		var field := lerpf(lerpf(WGRandom.hash2(x0, z0, 917), WGRandom.hash2(x0 + 1, z0, 917), fx),
-			lerpf(WGRandom.hash2(x0, z0 + 1, 917), WGRandom.hash2(x0 + 1, z0 + 1, 917), fx), fz)
-		straw *= 0.25 + 1.5 * smoothstep(0.35, 0.75, field) * (1.0 - 0.6 * surface.r)
+	var straw := _straw(gr, i, j, surface)
 	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
 	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
 	var keep: float = _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r)) * flora.grass
@@ -1755,6 +1812,113 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 		buf[n * STRIDE + 18] = WGRandom.hash2(i, j * 11 + m, 79)
 		n += 1
 	return n
+
+
+## 12.11.2026: зрелая трава — поляны ~30 м, где часть пучков уже соломенная (gr.straw — доля по биому).
+## Общее для пучков травы и дернины: соломенные пятна у них одни и те же.
+static func _straw(gr: Dictionary, i: int, j: int, surface: Color) -> float:
+	var straw: float = gr.get("straw", 0.0)
+	if straw <= 0.0:
+		return 0.0
+	return straw * (0.25 + 1.5 * smoothstep(0.35, 0.75, _value_noise(i / 8.0, j / 8.0, 917)) * (1.0 - 0.6 * surface.r))
+
+
+## Гладкий шум по решётке хешей: 0..1
+static func _value_noise(sx: float, sz: float, salt: int) -> float:
+	var fx := sx - floorf(sx)
+	var fz := sz - floorf(sz)
+	fx = fx * fx * (3.0 - 2.0 * fx)
+	fz = fz * fz * (3.0 - 2.0 * fz)
+	var x0 := floori(sx)
+	var z0 := floori(sz)
+	return lerpf(lerpf(WGRandom.hash2(x0, z0, salt), WGRandom.hash2(x0 + 1, z0, salt), fx),
+		lerpf(WGRandom.hash2(x0, z0 + 1, salt), WGRandom.hash2(x0 + 1, z0 + 1, salt), fx), fz)
+
+
+## 14.11.2026: дернина клетки (i, j) в carpet_buf. Сетка CARPET_SUB² ячеек с дрожанием — покров ровный,
+## без комков случайной раскладки; доля занятых ячеек — от lush (влага, свет, уклон, полог, сообщество —
+## тот же множитель, что у пучков травы) и открытости породы, пятна голой земли — шум 6 м.
+## Куртинка наклонена по склону, полотно путей и вода исключены как у травы (полотно — строже).
+func _carpet_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, path: int, origin: Vector2, regions := {}) -> void:
+	var w := world
+	var inside := i >= 0 and j >= 0 and i < w.W and j < w.H
+	var cover: float = clampf(gr.dens * lush * (1.0 - 0.9 * surface.a) / 3.5, 0.0, 1.0) * (1.0 - 0.45 * surface.r) * flora.grass
+	if path == 1:
+		cover *= 0.4 # звериная тропа: вытоптано
+	if cover < 0.04:
+		return
+	var reach := _carpet_r() + StreamPolicy.REFILL_STEP
+	var tc: Array = gr.tint
+	var straw := _straw(gr, i, j, surface)
+	var tall: float = clampf(0.55 + 0.45 * lush, 0.5, 1.1) * flora.grow
+	var step := TILE / CARPET_SUB
+	var cap := carpet_buf.size() / STRIDE
+	for m in CARPET_SUB * CARPET_SUB:
+		var gx := i * CARPET_SUB + m % CARPET_SUB
+		var gz := j * CARPET_SUB + m / CARPET_SUB
+		var x := (gx + 0.15 + 0.7 * WGRandom.hash2(gx, gz, 211)) * step
+		var z := (gz + 0.15 + 0.7 * WGRandom.hash2(gx, gz, 223)) * step
+		# Просветы грунта пятнами 6 м и мелкая неровность внутри них.
+		var keep: float = cover * smoothstep(0.08, 0.42, _value_noise(x / 6.0, z / 6.0, 229))
+		if WGRandom.hash2(gx, gz, 227) > keep:
+			continue
+		if StreamPolicy.distance_to_coverage(Vector2(x, z), origin, _fill_lead) > reach:
+			continue
+		if _carpet_n >= cap:
+			fill_capped += 1
+			return
+		if inside and heights.road_refinement != null:
+			if heights.road_refinement.weight_at(x, z, w.W) > 0.04:
+				continue
+		elif path >= 2 and (inside or not placement.region_clear(x, z)):
+			continue
+		var y: float
+		var normal := Vector3.UP
+		if inside:
+			if heights.depth_at(x, z) > 0.0:
+				continue
+			y = heights.ground_at(x, z)
+			normal = Vector3(y - heights.ground_at(x + 0.4, z), 0.4, y - heights.ground_at(x, z + 0.4)).normalized()
+		else:
+			y = RegionStream.snapshot_ground(w, heights, regions, x, z)
+		var h1 := WGRandom.hash2(gx, gz, 233)
+		var h2 := WGRandom.hash2(gx, gz, 239)
+		var sc := 0.8 + 0.5 * h1
+		var sy: float = sc * tall * (0.75 + 0.5 * h2)
+		var basis := Basis(Vector3.UP, h2 * TAU)
+		var axis := Vector3.UP.cross(normal)
+		if axis.length_squared() > 1e-6:
+			basis = Basis(axis.normalized(), Vector3.UP.angle_to(normal)) * basis
+		basis = basis.scaled_local(Vector3(sc, sy, sc))
+		var o := _carpet_n * STRIDE
+		var buf := carpet_buf
+		y -= 0.02
+		buf[o] = basis.x.x
+		buf[o + 1] = basis.y.x
+		buf[o + 2] = basis.z.x
+		buf[o + 3] = x
+		buf[o + 4] = basis.x.y
+		buf[o + 5] = basis.y.y
+		buf[o + 6] = basis.z.y
+		buf[o + 7] = y
+		buf[o + 8] = basis.x.z
+		buf[o + 9] = basis.y.z
+		buf[o + 10] = basis.z.z
+		buf[o + 11] = z
+		# Нижний ярус свежее и зеленее пучков над ним (отава у корней), соломенные пятна те же.
+		var v := 1.0 + 0.25 * h1
+		var dry := clampf(straw * (0.5 + h2 * 1.1), 0.0, 0.85)
+		buf[o + 12] = lerpf(tc[0] * 0.8, 0.62, dry) * v
+		buf[o + 13] = lerpf(tc[1] * 1.04, 0.55, dry) * v
+		buf[o + 14] = lerpf(tc[2] * 0.85, 0.30, dry) * v
+		buf[o + 15] = 1.0 - surface.r
+		buf[o + 16] = 0.0
+		buf[o + 17] = WGRandom.hash2(gx, gz, 241)
+		buf[o + 18] = 0.3 * h1
+		var at := Vector3(x, y, z)
+		_carpet_low = _carpet_low.min(at)
+		_carpet_high = _carpet_high.max(at)
+		_carpet_n += 1
 
 
 ## 14.4: клетка закреплённой области из снимка журнала: биом, путь, уклон, вода, высота; {} — нет

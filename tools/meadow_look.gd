@@ -8,6 +8,7 @@ extends SceneTree
 ##   --tag <имя>     подпись снимков и замера (.godot/meadow_look/<tag>_*.png, <tag>.json)
 ##   --compose a,b   склеить снимки двух прогонов попарно (было | стало), без сцены
 ##   --no-perf       только снимки
+##   --base-grass    «было» для дернины: VegetationLayer без ближнего низкого покрова (A/B)
 
 const Dev := preload("res://tools/control/control.gd")
 const OUT := "res://.godot/meadow_look"
@@ -22,6 +23,9 @@ const VIEWS := [
 	["steppe", Vector2(14, 214), Vector2(46, 250)],
 	["edge", Vector2(132, 58), Vector2(158, 72)],
 	["rocky", Vector2(196, 204), Vector2(236, 238)],
+	# 14.11.2026: взгляд вниз-вперёд с седла — дернина и земля в 3–12 м
+	["meadow_near", Vector2(40, 96), Vector2(42.5, 97.5), -0.6],
+	["forest_near", Vector2(186, 60), Vector2(188.5, 61.5), -0.6],
 ]
 var world: WorldData
 var heights: Heightfield
@@ -64,13 +68,17 @@ func setup() -> void:
 	veg = VegetationLayer.new()
 	root.add_child(veg)
 	var t0 := Time.get_ticks_usec()
+	var base_grass := "--base-grass" in OS.get_cmdline_user_args()
+	veg.carpet_enabled = not base_grass
 	veg.setup(world, heights, Models.tree_defs(), Models.grass_mesh())
+	results.base_grass = base_grass
 	results.setup_ms = (Time.get_ticks_usec() - t0) / 1000.0
 	veg.set_flora(int(Dev.arg("flora", "2")))
 	root.add_child(_ground())
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-42, -35, 0)
 	sun.shadow_enabled = true
+	RenderingServer.global_shader_parameter_set("sun_dir", sun.transform.basis.z)
 	sun.directional_shadow_max_distance = 100.0
 	root.add_child(sun)
 	var env := WorldEnvironment.new()
@@ -84,6 +92,8 @@ func setup() -> void:
 	env.environment.fog_light_color = Color("b9cbdb")
 	env.environment.fog_density = 0.0016
 	root.add_child(env)
+	VisualStyle.bind(env.environment)
+	VisualStyle.apply_day(env.environment, 1.0, 0.88)
 	camera = Camera3D.new()
 	camera.fov = 70.0
 	camera.far = 800.0
@@ -100,7 +110,8 @@ func _goto(v: int) -> void:
 	var at: Vector2 = VIEWS[v][1] * GameConfig.TILE
 	var look: Vector2 = VIEWS[v][2] * GameConfig.TILE
 	var y := heights.ground_at(at.x, at.y) + EYE
-	camera.look_at_from_position(Vector3(at.x, y, at.y), Vector3(look.x, heights.ground_at(look.x, look.y) + EYE * 0.8, look.y), Vector3.UP)
+	var aim: float = VIEWS[v][3] if VIEWS[v].size() > 3 else EYE * 0.8
+	camera.look_at_from_position(Vector3(at.x, y, at.y), Vector3(look.x, heights.ground_at(look.x, look.y) + aim, look.y), Vector3.UP)
 	var t0 := Time.get_ticks_usec()
 	veg.update(at.x, at.y, true)
 	fill_max = maxf(fill_max, (Time.get_ticks_usec() - t0) / 1000.0)
@@ -166,6 +177,7 @@ func _process(delta: float) -> bool:
 
 
 func _finish() -> bool:
+	results.fill_capped = veg.fill_capped
 	print(JSON.stringify(results))
 	Dev.save_json(ProjectSettings.globalize_path(OUT).path_join(tag + ".json"), results)
 	veg.queue_free()
@@ -183,6 +195,22 @@ func _mean(a: PackedFloat32Array) -> float:
 ## Число экземпляров по формам подлеска и травы в первом виде
 func _counts() -> Dictionary:
 	var out := {grass = veg.grass.visible_instance_count}
+	out.fill_capped = veg.fill_capped
+	# Дернина: раскладка первого вида, проверка высоты, воды и полотна дорог по самим экземплярам
+	out.carpet = 0
+	out.carpet_triangles = 0
+	out.carpet_errors = 0
+	if veg.carpet != null:
+		out.carpet = veg._carpet_n
+		out.carpet_triangles = veg._carpet_n * veg.carpet.mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3
+		for n in veg._carpet_n:
+			var at := n * VegetationLayer.STRIDE
+			var x := veg.carpet_buf[at + 3]
+			var z := veg.carpet_buf[at + 11]
+			var y := veg.carpet_buf[at + 7]
+			var k := clampi(int(z / GameConfig.TILE), 0, world.H - 1) * world.W + clampi(int(x / GameConfig.TILE), 0, world.W - 1)
+			if absf(y + 0.02 - heights.ground_at(x, z)) > 0.001 or heights.depth_at(x, z) > 0.0 or world.path_mask[k] >= 2:
+				out.carpet_errors += 1
 	var total := 0
 	for n in veg.understory.size():
 		var e: Dictionary = veg.understory[n]
@@ -272,28 +300,17 @@ func _world() -> WorldData:
 
 ## Рельеф: меш по высотам клеток, цвет — биом
 func _ground() -> MeshInstance3D:
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	var step := 2
-	for y in range(0, world.H - step, step):
-		for x in range(0, world.W - step, step):
-			for c: Vector2i in [Vector2i(0, 0), Vector2i(step, 0), Vector2i(step, step), Vector2i(0, 0), Vector2i(step, step), Vector2i(0, step)]:
-				var px := (x + c.x + 0.5) * GameConfig.TILE
-				var pz := (y + c.y + 0.5) * GameConfig.TILE
-				var b: Array = Biomes.LIST[world.biome[(y + c.y) * world.W + x + c.x]].color
-				st.set_color(Color(b[0] / 255.0, b[1] / 255.0, b[2] / 255.0) * 0.8)
-				st.set_normal(Vector3.UP)
-				st.add_vertex(Vector3(px, heights.ground_at(px, pz) - 0.02, pz))
-	st.generate_normals()
+	var base := Image.create(world.W, world.H, false, Image.FORMAT_RGBA8)
+	for j in world.H:
+		for i in world.W:
+			var c: Array = Biomes.LIST[world.biome[j * world.W + i]].color
+			base.set_pixel(i, j, Color8(c[0], c[1], c[2]))
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(world, heights))
 	var node := MeshInstance3D.new()
-	node.mesh = st.commit()
-	var mat := StandardMaterial3D.new()
-	mat.vertex_color_use_as_albedo = true
-	mat.roughness = 1.0
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	node.material_override = mat
+	node.mesh = mesh
+	node.material_override = GameContext.scope.terrain.material(base, veg._forest_surface)
 	return node
-
 
 ## Было | стало: снимки двух прогонов рядом, по виду на файл
 func _compose(tags: PackedStringArray) -> void:
