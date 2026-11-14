@@ -116,6 +116,12 @@ static func findings(report: Dictionary) -> Array:
 		b = _case(report, pair[1])
 		if not a.is_empty() and not b.is_empty():
 			out.append("Подгрузка в движении (%s): 1 %% худших %.0f FPS против %.0f на месте, худший кадр %.0f мс." % [b.title, b.low1_fps, a.low1_fps, b.ms.max])
+	a = _case(report, "forest.still")
+	b = _case(report, "forest.back")
+	if not a.is_empty() and not b.is_empty() and a.draw_calls > 0:
+		out.append("Тот же вид леса после переездов: вызовов %d → %d (%+.0f %%), треугольников %+.0f %%, кадр %.1f → %.1f мс%s." % [
+			a.draw_calls, b.draw_calls, _delta(a.draw_calls, b.draw_calls), _delta(maxf(a.primitives, 1.0), b.primitives), a.ms.p50, b.ms.p50,
+			" — лес не вернулся к прежней раскладке" if absf(_delta(a.draw_calls, b.draw_calls)) > 5.0 else ""])
 	a = _case(report, "base.empty")
 	b = _case(report, "base.calib_end")
 	if not a.is_empty() and not b.is_empty():
@@ -200,7 +206,8 @@ static func markdown(report: Dictionary, comparison: Dictionary = {}) -> String:
 	if worst != "":
 		t += "\n## Длинные кадры (дольше 16,7 мс, до пяти на замер)\n\n| Замер | секунда | кадр, мс | работа подгрузки, мс | самое дорогое в этом кадре |\n|---|---:|---:|---:|---|\n" + worst
 	if report.has("micro"):
-		t += "\nВыборки высоты у дороги: ground_at %.2f мкс, surface_at %.2f мкс на вызов.\n" % [report.micro.ground_at_us, report.micro.surface_at_us]
+		t += "\nВыборки у дороги, мкс на вызов: ground_at %.2f, surface_at %.2f, depth_at %.2f, проверка габарита %.2f.\n" % [report.micro.ground_at_us,
+			report.micro.surface_at_us, report.micro.get("depth_at_us", 0.0), report.micro.get("passable_us", 0.0)]
 	var mem: Dictionary = report.get("memory", {})
 	if not mem.is_empty():
 		t += "\n## Память, МБ\n\n| Точка | процесс | пик процесса | видеопамять | объекты | узлы |\n|---|---:|---:|---:|---:|---:|\n"

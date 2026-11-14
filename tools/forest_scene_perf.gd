@@ -54,6 +54,7 @@ func setup() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.rotation_degrees = Vector3(-55, -30, 0)
 	sun.shadow_enabled = not ("--noshadow" in OS.get_cmdline_user_args())
+	if "--game-shadows" in OS.get_cmdline_user_args(): preload("res://scripts/render/lighting_quality.gd").apply_shadows(sun, 1)
 	root.add_child(sun)
 	var sky := WorldEnvironment.new()
 	sky.environment = Environment.new()

@@ -22,6 +22,7 @@ const DEFAULT_INVERT_Y := false
 const DEFAULT_FOV := 70.0
 const DEFAULT_HEAD_BOB := true
 const DEFAULT_TRAIL_CLUTTER := true # корни, брёвна, ветки и камни на тропах (RoadObstacles)
+const DEFAULT_TREE_GARLANDS := true # редкие парковые гирлянды на деревьях
 const DEFAULT_FULLSCREEN := false
 const DEFAULT_SHADOWS := true
 const DEFAULT_LIGHTING := 1
@@ -74,6 +75,7 @@ var draw := DEFAULT_DRAW        # номер в DRAW_LEVELS
 var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
 var shadows := DEFAULT_SHADOWS # только тени направленного света
+var tree_garlands := DEFAULT_TREE_GARLANDS # парковые гирлянды вдоль отдельных дорог и полян
 var lighting := DEFAULT_LIGHTING
 var fog_quality := DEFAULT_FOG_QUALITY
 ## 13.11: визуальный стиль (VisualStyle) — выключатель и сила 0..1 у каждого из четырёх эффектов
@@ -118,6 +120,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	msaa = roundi(_number(cfg, "display", "msaa", msaa, 0, 2))
 	vsync = _flag(cfg, "display", "vsync", vsync)
 	shadows = _flag(cfg, "view", "shadows", shadows)
+	tree_garlands = _flag(cfg, "view", "tree_garlands", tree_garlands)
 	lighting = roundi(_number(cfg, "view", "lighting", lighting, 0, 2))
 	fog_quality = roundi(_number(cfg, "view", "fog_quality", lighting, 0, FOG_QUALITY_LEVELS.size() - 1))
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
@@ -212,6 +215,7 @@ func reset_defaults() -> void:
 	msaa = 2
 	vsync = true
 	shadows = DEFAULT_SHADOWS
+	tree_garlands = DEFAULT_TREE_GARLANDS
 	lighting = DEFAULT_LIGHTING
 	fog_quality = DEFAULT_FOG_QUALITY
 	draw = DEFAULT_DRAW
@@ -238,6 +242,7 @@ func save_settings() -> Error:
 	cfg.set_value("display", "msaa", msaa)
 	cfg.set_value("display", "vsync", vsync)
 	cfg.set_value("view", "shadows", shadows)
+	cfg.set_value("view", "tree_garlands", tree_garlands)
 	cfg.set_value("view", "lighting", lighting)
 	cfg.set_value("view", "fog_quality", fog_quality)
 	cfg.set_value("view", "draw", draw)
@@ -270,7 +275,7 @@ func apply_window() -> void:
 
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
-		msaa = msaa, vsync = vsync, shadows = shadows, draw = draw, flora = flora, lighting = lighting,
+		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
 		fog_quality = fog_quality, particles = particles,
 		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
@@ -282,6 +287,7 @@ func set_display_state(state: Dictionary) -> void:
 	msaa = state.msaa
 	vsync = state.vsync
 	shadows = state.shadows
+	tree_garlands = bool(state.get("tree_garlands", tree_garlands))
 	draw = state.draw
 	flora = state.get("flora", flora)
 	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)

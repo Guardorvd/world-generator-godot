@@ -693,8 +693,11 @@ func _drop(p: Vector2) -> void:
 		if not far.has(chunk):
 			far[chunk] = _distance(chunk, p) > limit
 		if far[chunk]:
+			# 15.1: узлы за drop_radius уже за своей дальностью видимости (tree_r + полчанка) и не рисуются:
+			# прятать их здесь не нужно — visible = false на тысячах узлов при переносе давало кадр 17–22 мс.
 			for node: MultiMeshInstance3D in veg[key].nodes:
-				_trash_node(node)
+				node.set_meta("stream_retiring", true)
+			_trash.append_array(veg[key].nodes)
 			veg.erase(key)
 	for chunk: Vector2i in _loaded.keys():
 		if far[chunk] if far.has(chunk) else _distance(chunk, p) > limit:
@@ -1236,7 +1239,10 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					node_index += 1
 					continue
 				var shadow_proxy: bool = part == "trunk" and level == 0 and not small and levels.size() > 2
-				var node_count := 2 if shadow_proxy else 1
+				# 15.1: тень кроны среднего уровня (от ~76 м) — дальним мешом: чем дальше, тем проще тень, дальность теней та же
+				var crown_proxy: bool = part == "crown" and level == 1 and not small and levels.size() > 2 \
+					and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK
+				var node_count := 2 if shadow_proxy or crown_proxy else 1
 				if limit > 0 and (uploaded + node_count > TREE_NODES_PER_SLICE or deadline_usec > 0 and Time.get_ticks_usec() >= deadline_usec):
 					built.cursor = i
 					built.node_cursor = node_index
@@ -1244,6 +1250,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 				var mat := _shared_tree_material(def, part, level, small)
 				var white_trunk: bool = part == "trunk" and entry.has("tcbuf")
 				var node := _multimesh(levels[level], mat, entry.count, part == "crown" or white_trunk, not small, true, true)
+				node.set_meta("level", level) # уровень LOD для инструментов (stress, forest_scene_perf)
 				if limit > 0:
 					_reveal_node(node, mat)
 				if level >= FAR_LOD_NO_SHADOW:
@@ -1257,15 +1264,32 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 					var caster := _multimesh(levels[levels.size() - 1], mat, entry.count, false, true, true, true)
 					caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+					caster.set_meta("level", level) # тень ближнего уровня
 					if limit > 0:
 						_reveal_node(caster, mat)
 					caster.multimesh.buffer = _tree_buffer(entry.tbuf, false, caster.get_meta("stream_birth", 0.0))
 					caster.multimesh.custom_aabb = entry.bounds
 					caster.multimesh.visible_instance_count = entry.count
 					caster.visibility_range_end = LOD_STEPS[0][0] + LOD_STEPS[0][1] * 0.5 + _half_chunk()
-					caster.visibility_range_end_margin = 16.0
+					caster.visibility_range_end_margin = 0.0
 					caster.set_meta("last_level", false) # set_draw не должен растягивать его дальность до tree_r
 					entry.nodes.append(caster)
+				elif crown_proxy:
+					# Материал — этого уровня (тот же шейдер, полоса LOD1 по расстоянию), меш — дальнего; шейдер двусторонний.
+					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+					var crown_caster := _multimesh(levels[levels.size() - 1], mat, entry.count, true, true, true, true)
+					crown_caster.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_SHADOWS_ONLY
+					crown_caster.set_meta("level", level)
+					if limit > 0:
+						_reveal_node(crown_caster, mat)
+					crown_caster.multimesh.buffer = _tree_buffer(entry.cbuf, true, crown_caster.get_meta("stream_birth", 0.0))
+					crown_caster.multimesh.custom_aabb = entry.bounds
+					crown_caster.multimesh.visible_instance_count = entry.count
+					crown_caster.visibility_range_begin = maxf(0.0, LOD_STEPS[0][0] - LOD_STEPS[0][1] * 0.5 - _half_chunk())
+					crown_caster.visibility_range_end = LOD_STEPS[1][0] + LOD_STEPS[1][1] * 0.5 + _half_chunk()
+					crown_caster.visibility_range_end_margin = 0.0
+					crown_caster.set_meta("last_level", false)
+					entry.nodes.append(crown_caster)
 				elif part == "crown" and not small and kind % ForestModels.MODEL_STRIDE != Biomes.T_ROCK:
 					node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 				var mm := node.multimesh
@@ -1281,7 +1305,7 @@ func _apply_chunk(built: Dictionary, limit := 0, deadline_usec := 0) -> bool:
 					node.visibility_range_end = LOD_STEPS[level][0] + LOD_STEPS[level][1] * 0.5 + _half_chunk()
 				else:
 					node.visibility_range_end = (minf(tree_r, 70.0) if small else tree_r) + _half_chunk()
-				node.visibility_range_end_margin = 16.0
+				node.visibility_range_end_margin = 0.0 # 15.1: границы уже с запасом в полчанка; гистерезис 16 м держал лишние узлы после движения
 				entry[part] = mm
 				entry.nodes.append(node)
 				node_index += 1

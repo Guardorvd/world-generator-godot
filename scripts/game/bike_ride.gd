@@ -756,7 +756,10 @@ func step(p: PlayerState, throttle: float, turn: float, boost: bool, hop: bool, 
 	sums.resize(TELEMETRY)
 	var done := 0.0
 	for i in ticks:
+		_fit_memo_on = true
+		_fit_memo[0] = NAN # новый подшаг: препятствия и рельеф могли смениться между тактами
 		_substep(p, throttle, turn, boost, hop and i == 0, dt / ticks, w, heights)
+		_fit_memo_on = false
 		done += dt / ticks
 		for k in TELEMETRY:
 			sums[k] += _sub[k] * dt / ticks
@@ -1850,13 +1853,36 @@ func obstacle_normal(px: float, pz: float, hd: float, heights: Heightfield) -> V
 
 ## Помещается ли велосипед серединой в (px, pz) с курсом hd: все три круга вдоль рамы свободны
 func fits(px: float, pz: float, hd: float, w: WorldData, heights: Heightfield, allow_climb := true) -> bool:
+	var climb := _climb() if allow_climb else 0.0
+	# 15.1: внутри подшага мир не меняется — та же примерка (руль не повернул, доворота нет) берётся из прошлой.
+	# Проверка габарита — самое дорогое в такте физики (около 40 мкс на точку в отладочной сборке).
+	if _fit_memo_on and _fit_memo_w == w and px == _fit_memo[0] and pz == _fit_memo[1] and hd == _fit_memo[2] \
+			and y == _fit_memo[3] and climb == _fit_memo[4] and airborne == _fit_memo_air:
+		return _fit_memo_result
 	var fx := -sin(hd) * AXLE
 	var fz := -cos(hd) * AXLE
-	var climb := _climb() if allow_climb else 0.0
-	return (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb, airborne)
+	var result := (PlayerState.is_passable(w, heights, px, pz, y, BODY_R, false, climb, airborne)
 		and PlayerState.is_passable(w, heights, px + fx, pz + fz, y, BODY_R, false, climb, airborne)
 		and PlayerState.is_passable(w, heights, px - fx, pz - fz, y, BODY_R, false, climb, airborne)
 		and _roof_over(px, pz, hd, y, heights) >= y + BikeRecovery.CLEARANCE)
+	if _fit_memo_on:
+		_fit_memo[0] = px
+		_fit_memo[1] = pz
+		_fit_memo[2] = hd
+		_fit_memo[3] = y
+		_fit_memo[4] = climb
+		_fit_memo_air = airborne
+		_fit_memo_w = w
+		_fit_memo_result = result
+	return result
+
+
+# Последняя примерка габарита внутри текущего подшага (см. fits); вне подшага не используется
+var _fit_memo_on := false
+var _fit_memo := PackedFloat64Array([NAN, NAN, NAN, NAN, NAN])
+var _fit_memo_air := false
+var _fit_memo_w: WorldData = null
+var _fit_memo_result := false
 
 
 ## Самое низкое перекрытие над рамой (середина и оси) для ног на высоте feet: свод туннеля или низ моста.

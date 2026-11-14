@@ -74,6 +74,7 @@ var stamina: Stamina:
 var water_effects: WaterEffects
 var brake_effects: BrakeEffects
 var ambient: AmbientParticles # 11.11: частицы окружения (пылинки, листья, светлячки, снег)
+var garlands: TreeGarlandsLayer # парковые гирлянды вдоль отдельных дорог и полян
 var fires: Array = []
 var windows: StandardMaterial3D # окна и фонари всех построек, ночью ярче (SettlementsBuilder.set_night)
 var fire_light: OmniLight3D     # один свет на весь мир: ночью у ближайшего костра
@@ -428,7 +429,16 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		stream_coordinator.region_priority = regions.publication_pending
 	stream_coordinator.region_committed.connect(func() -> void:
 		for m: StandardMaterial3D in regions.windows:
-			SettlementsBuilder.set_night(m, _night))
+			SettlementsBuilder.set_night(m, _night)
+		if garlands != null and regions != null:
+			garlands.sync_regions(regions.ledger.get("regions", {}), _garland_huts()))
+	garlands = TreeGarlandsLayer.new()
+	garlands.name = "TreeGarlands"
+	add_child(garlands)
+	garlands.setup(world, heights, _garland_clear_spots(), _garland_huts())
+	if regions != null:
+		garlands.sync_regions(regions.ledger.get("regions", {}), _garland_huts())
+	garlands.set_enabled(services.settings.tree_garlands)
 	interaction_service.quests = quests
 	interaction_service.world = world
 	interaction_service.all_places = hud.all_places
@@ -471,6 +481,8 @@ func _exit_tree() -> void:
 		VisualStyle.release() # окружение мира закрыто; глобальные параметры стиля нейтральны для других сцен
 	if heights != null and heights.obstacles != null:
 		heights.obstacles.finish()
+	if garlands != null:
+		garlands.finish()
 	if _travel_task != -1:
 		WorkerThreadPool.wait_for_task_completion(_travel_task)
 		_travel_task = -1
@@ -557,6 +569,34 @@ func _apply_lighting_and_fog() -> void:
 	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
 	VisualStyle.bind($WorldEnvironment.environment)
 	VisualStyle.configure(settings.style_on, settings.style_amount)
+	if garlands != null:
+		garlands.set_enabled(settings.tree_garlands)
+
+
+func _garland_clear_spots() -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	if player != null:
+		out.append(Vector2(player.x, player.z))
+	var home: Variant = PlayerState.home(world)
+	if home != null:
+		var hx: float = home.x * GameConfig.TILE
+		var hz: float = home.y * GameConfig.TILE
+		out.append(Vector2(hx, hz))
+	return out
+
+
+func _garland_huts() -> Array[Vector3]:
+	var out: Array[Vector3] = []
+	if world != null:
+		for s: SettlementData in world.settlements:
+			out.append(Vector3(float(s.x) * GameConfig.TILE, float(s.y) * GameConfig.TILE, 30.0))
+	if regions != null:
+		for entry: Dictionary in regions.ledger.get("regions", {}).values():
+			for s: Variant in entry.get("decor", {}).get("settlements", []):
+				var sx: float = s.x * GameConfig.TILE
+				var sz: float = s.y * GameConfig.TILE
+				out.append(Vector3(sx, sz, 30.0))
+	return out
 
 
 func capture_mouse() -> void:
@@ -958,13 +998,26 @@ func _notification(what: int) -> void:
 ## одна (1/60 с), поэтому разгон, прыжки и полёт одинаковы при любом FPS, и за такт не проскочить стену.
 ## При FPS ниже 60 за кадр проходит несколько тактов, ниже 7,5 (8 тактов за кадр) игра замедляется,
 ## чтобы не захлебнуться
+## Время частей такта физики и кадра, мкс накопленно (читает tools/stress; сбрасывает он же)
+var tick_us := {}
+
+
+func _tick_mark(part: String, t0: int) -> int:
+	var now := Time.get_ticks_usec()
+	tick_us[part] = tick_us.get(part, 0) + now - t0
+	return now
+
+
 func _physics_process(dt: float) -> void:
 	if player == null or paused or travel_active() or _settlement_open():
 		return
 	if _placing_bike():
 		_store_prev()
 		return
+	var t0 := Time.get_ticks_usec()
+	tick_us.ticks = tick_us.get("ticks", 0) + 1
 	world.open_around(player.x / TILE, player.z / TILE)
+	t0 = _tick_mark("open_around", t0)
 	_store_prev()
 	var yaw0 := yaw
 	var pitch0 := pitch
@@ -1008,6 +1061,7 @@ func _physics_process(dt: float) -> void:
 	var crashed := false
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version)
 	heights.obstacles.set_bumps(vegetation.bumps, vegetation.obstacles_version)
+	t0 = _tick_mark("obstacles", t0)
 	if crash.active():
 		crashed = bike_controller.recover(dt, player, bike, crash, world, heights)
 	elif bike.riding:
@@ -1034,6 +1088,7 @@ func _physics_process(dt: float) -> void:
 			audio.land(player.x, player.z, player.feet, player.land_impact)
 			player.land_impact = 0.0
 	_tick_yaw = yaw - yaw0
+	t0 = _tick_mark("bike", t0)
 	water_effects.tick(dt, player, bike, _prev, heights)
 	if brake_effects != null:
 		brake_effects.tick(dt, bike, world, heights)
@@ -1046,7 +1101,9 @@ func _physics_process(dt: float) -> void:
 	bike.land_impact = 0.0
 	bike.wheel_impact = Vector2()
 	bike.bottom_out = 0.0
+	t0 = _tick_mark("effects", t0)
 	audio.tick(player, bike.riding)
+	t0 = _tick_mark("audio", t0)
 	if crashed:
 		_snap()
 	for text: String in player.check_discoveries(world, hud.visited):
@@ -1056,6 +1113,7 @@ func _physics_process(dt: float) -> void:
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
 	if reached != "":
 		hud.toast(reached)
+	_tick_mark("places", t0)
 
 
 ## Запомнить положение игрока как предпоследний такт (для интерполяции кадра)
@@ -1110,6 +1168,8 @@ func _process(delta: float) -> void:
 	hud.lock_hint.visible = not paused and not _settlement_open() and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
 	if paused:
 		return
+	var t0 := Time.get_ticks_usec()
+	tick_us.frames = tick_us.get("frames", 0) + 1
 	hud.set_summary_blocked(_opening or crash.active() or _placing_bike())
 	var summary := hud.summary_visible()
 	if not summary:
@@ -1151,9 +1211,12 @@ func _process(delta: float) -> void:
 	photo.update(camera, delta)
 	_target = _aim()
 	_update_hints()
+	t0 = _tick_mark("frame_view", t0)
 	day.apply(hour, time)
+	t0 = _tick_mark("frame_day", t0)
 
 	stream_coordinator.update(pos)
+	t0 = _tick_mark("frame_stream", t0)
 	local_mist.update(camera.global_position, day, delta, time)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
@@ -1162,6 +1225,13 @@ func _process(delta: float) -> void:
 	if regions != null:
 		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
 	_light_night(pos, fire_time)
+	if garlands != null:
+		var garland_night := smoothstep(0.22, 0.96, 1.0 - day.sunlight) if day != null else 0.0
+		var fire_on := fire_light != null and fire_light.visible
+		var fire_pos := fire_light.global_position if fire_on else Vector3.ZERO
+		garlands.update(pos, camera.global_position, fire_pos, fire_on, garland_night,
+			services.settings.draw, services.settings.lighting, delta,
+			stream_coordinator.frame_budget if stream_coordinator != null else null)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta
@@ -1170,6 +1240,7 @@ func _process(delta: float) -> void:
 		hud.update_info(player, yaw, heights.depth_at(player.x, player.z, player.feet), hour)
 	hud.set_player(pos.x, pos.z, bike.heading if bike.riding else yaw)
 	hud.set_bike(bike.x, bike.z, not bike.riding)
+	_tick_mark("frame_rest", t0)
 
 
 ## Камера на велосипеде упирается в землю, настил моста или стену (перила, стены туннеля) в точке p

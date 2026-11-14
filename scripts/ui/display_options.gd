@@ -14,6 +14,7 @@ var scale: OptionButton
 var aa: OptionButton
 var vsync: CheckBox
 var shadows: CheckBox
+var tree_garlands: CheckBox
 var draw: OptionButton
 var lighting: OptionButton
 var fog_quality: OptionButton
@@ -41,6 +42,7 @@ func setup(host: Node) -> void:
 	aa = host.get_node("%AAOption")
 	vsync = host.get_node("%VSync")
 	shadows = host.get_node("%Shadows")
+	tree_garlands = host.get_node("%TreeGarlands")
 	draw = host.get_node("%DrawOption")
 	flora = host.get_node("%FloraOption")
 	lighting = host.get_node("%LightingOption")
@@ -77,7 +79,7 @@ func setup(host: Node) -> void:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
 	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, particles]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
-	for box: CheckBox in [vsync, shadows]:
+	for box: CheckBox in [vsync, shadows, tree_garlands]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
 	dialog = ConfirmationDialog.new()
 	dialog.title = "Сохранить режим экрана?"
@@ -102,6 +104,7 @@ func sync() -> void:
 	aa.select(state.msaa)
 	vsync.set_pressed_no_signal(state.vsync)
 	shadows.set_pressed_no_signal(state.shadows)
+	tree_garlands.set_pressed_no_signal(state.tree_garlands)
 	draw.select(state.draw)
 	flora.select(state.flora)
 	lighting.select(state.lighting)
@@ -132,7 +135,7 @@ func stage_mode(state: Dictionary) -> void:
 func selected_state() -> Dictionary:
 	return {fullscreen = mode.selected == 1, resolution = _sizes[resolution.selected],
 		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
-		shadows = shadows.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
+		shadows = shadows.button_pressed, tree_garlands = tree_garlands.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
 		fog_quality = fog_quality.selected, particles = particles.selected}
 
 func pending() -> bool:
@@ -148,7 +151,7 @@ func _update_apply() -> void:
 func apply_graphics() -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "draw", "flora", "lighting", "fog_quality", "particles"]:
+	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "particles"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

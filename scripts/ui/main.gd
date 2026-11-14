@@ -370,6 +370,8 @@ func _close_settings() -> void:
 ## Управление, звук и графика применяются сразу; на диск — чуть позже, чтобы не писать файл на каждый шаг ползунка
 func _settings_changed() -> void:
 	_save_due = Time.get_ticks_msec() + 400
+	if game != null and game.garlands != null:
+		game.garlands.set_enabled(GameContext.scope.settings.tree_garlands)
 
 
 func _flush_settings() -> void:
@@ -1118,6 +1120,18 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 		_message("Мир не подготовлен", loaded.error)
 		return
 	loaded.timings.game_start_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	# 15.1: первые кадры мира собирают шейдеры и буферы (стресс-тест: кадры 47–67 мс и прогрев до 260 мс у точки
+	# появления) — пусть это идёт под заставкой загрузки, а не на глазах игрока. Инструменты (main не главная сцена)
+	# берут мир сразу, как раньше.
+	phase_started = Time.get_ticks_usec()
+	for i in 30 if _progress_enabled else 0:
+		await get_tree().process_frame
+		if game == null or Time.get_ticks_usec() - phase_started > 400000:
+			break
+	loaded.timings.first_frames_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	if game == null:
+		busy = false
+		return
 	_save_elapsed = 0.0
 	_saved_discoveries = hud.visited.size()
 	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)

@@ -320,6 +320,7 @@ func _stage(shadows: bool) -> Node3D:
 	sun.name = "Sun"
 	sun.rotation_degrees = Vector3(-55, -30, 0)
 	sun.shadow_enabled = shadows
+	Lighting.apply_shadows(sun, 1) # 15.1: каскады теней как в игре (среднее качество), а не по умолчанию движка
 	scene.add_child(sun)
 	var sky := WorldEnvironment.new()
 	sky.environment = Environment.new()
@@ -358,16 +359,20 @@ func _group_forest() -> void:
 		await _settle(veg, still)
 		if density == 1.0:
 			var base := await _case("forest.still", "Лес: на месте", HOLD, still, extra)
-			await _case("forest.ride", "Лес: езда 16 м/с", MOVE, ride)
-			await _case("forest.fast", "Лес: полёт 60 м/с", MOVE, func(t: float, dt: float) -> void: _forest_at(340.0 + t * 60.0, dt))
-			await _case("forest.jump", "Лес: перенос на 300 м раз в секунду", MOVE, func(t: float, dt: float) -> void: _forest_at([220.0, 520.0, 800.0, 380.0][int(t) % 4], dt))
-			await _settle(veg, still) # вернуться к исходному месту и дождаться раскладки
+			# Отключения — сразу после базы, до движения: после переносов тот же вид рисуется иначе
+			# (15.0: +17 % вызовов), и сравнение с базой до переносов врало.
 			await _ablate("forest", "Лес", "forest.off_", base, [
 				["shadows", "тени", func() -> void: sun.shadow_enabled = false, func() -> void: sun.shadow_enabled = true],
 				["shadows_far", "тени дальних уровней LOD", _far_shadows.bind(false), _far_shadows.bind(true)],
 				["details", "трава и подлесок", _details.bind(false), _details.bind(true)],
 				["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
 			], still, veg)
+			await _case("forest.ride", "Лес: езда 16 м/с", MOVE, ride)
+			await _case("forest.fast", "Лес: полёт 60 м/с", MOVE, func(t: float, dt: float) -> void: _forest_at(340.0 + t * 60.0, dt))
+			await _case("forest.jump", "Лес: перенос на 300 м раз в секунду", MOVE, func(t: float, dt: float) -> void: _forest_at([220.0, 520.0, 800.0, 380.0][int(t) % 4], dt))
+			await _settle(veg, still) # вернуться к исходному месту и дождаться раскладки
+			# Тот же вид, что база: вызовы и треугольники должны совпасть с «на месте»
+			await _case("forest.back", "Лес: на месте после переездов", HOLD, still)
 			eye = 60.0 # вид с возвышенности: в кадре весь лес до дальности прорисовки
 			await _settle(veg, still)
 			await _case("forest.high", "Лес: с высоты 60 м", HOLD, still)
@@ -434,14 +439,18 @@ func _stream_cause() -> String:
 func _micro() -> void:
 	var hf := game.heights
 	var out := {}
-	for name: String in ["ground_at", "surface_at"]:
+	for name: String in ["ground_at", "surface_at", "depth_at", "passable"]:
 		var t0 := Time.get_ticks_usec()
 		for i in 20000:
 			var p := road[i % road.size()]
-			if name == "ground_at":
-				hf.ground_at(p.x + (i % 37) * 0.7, p.z + (i % 41) * 0.7)
-			else:
-				hf.surface_at(p.x + (i % 37) * 0.7, p.z + (i % 41) * 0.7, INF)
+			var x := p.x + (i % 37) * 0.7
+			var z := p.z + (i % 41) * 0.7
+			match name:
+				"ground_at": hf.ground_at(x, z)
+				"surface_at": hf.surface_at(x, z, INF)
+				"depth_at": hf.depth_at(x, z, p.y)
+				# проверка габарита, которую велосипед зовёт трижды на каждую примерку положения (BikeRide.fits)
+				"passable": PlayerState.is_passable(game.world, hf, x, z, p.y, BikeRide.BODY_R, false, 0.0, false)
 		out[name + "_us"] = snappedf((Time.get_ticks_usec() - t0) / 20000.0, 0.01)
 	report.micro = out
 
@@ -515,7 +524,7 @@ func _group_world() -> void:
 	print("Мир %s@%d: %s" % [seed_text, size, "из кэша" if cached else "генерация (один раз)"])
 	var t0 := Time.get_ticks_msec()
 	main.start_game(seed_text, size)
-	while main.game == null or main.game.player == null:
+	while main.game == null or main.game.player == null or main.busy: # 15.1: main ещё держит заставку первые кадры
 		await process_frame
 		beat = Time.get_ticks_msec()
 		if Time.get_ticks_msec() - t0 > 330000 or (not main.busy and main.game == null and Time.get_ticks_msec() - t0 > 3000):
@@ -551,6 +560,8 @@ func _group_world() -> void:
 		heavy_view = views[name]
 		_place(heavy_view)
 		heavy = await _case("world.view_" + name, "Мир: " + heavy_view.title, HOLD, _look.bind(heavy_view), {}, base_for_toggles)
+		if "--shots" in args: # снимок вида для сравнения картинки до и после правки (view_<имя>.png в папке отчёта)
+			root.get_texture().get_image().save_png(out.path_join("view_%s.png" % name))
 
 	# что сколько стоит — в лесу (последний снятый вид), сразу после его замера
 	if not heavy.is_empty():
@@ -574,6 +585,10 @@ func _group_world() -> void:
 		await _ablate("world", "Мир, вид «%s»" % heavy_view.title, "world.off_", heavy, [
 			["shadows", "тени солнца", func() -> void: sun.shadow_enabled = false, relight],
 			["lighting", "освещение и туман выше низкого", func() -> void: Lighting.apply(env, sun, 0, settings.shadows, 0), relight],
+			# 15.1: «освещение» по частям — какая из них дорогая
+			["cascades", "каскады теней как на низком (2 каскада, 110 м)", func() -> void: Lighting.apply_shadows(sun, 0), relight],
+			["ssao", "затенение SSAO", func() -> void: env.ssao_enabled = false, relight],
+			["vol_fog", "объёмный туман", func() -> void: env.volumetric_fog_enabled = false, relight],
 			["style", "визуальный стиль", func() -> void: VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {}), relight],
 			["msaa", "сглаживание MSAA", func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
@@ -605,7 +620,17 @@ func _group_world() -> void:
 	if _wanted("world.play_idle"):
 		main.hud.visible = true
 		game.paused = false
-		await _case("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD)
+		game.tick_us.clear()
+		var idle := await _case("world.play_idle", "Мир: игра без паузы, игрок стоит", HOLD)
+		# такт физики и кадр игры по частям, мкс на такт / на кадр
+		var parts := {}
+		var ticks := maxi(1, int(game.tick_us.get("ticks", 0)))
+		var frames := maxi(1, int(game.tick_us.get("frames", 0)))
+		for k: String in game.tick_us:
+			if k != "ticks" and k != "frames":
+				parts[k] = snappedf(game.tick_us[k] / float(frames if k.begins_with("frame_") else ticks) / 1000.0, 0.01)
+		idle.tick_parts_ms = parts
+		print("TICK_PARTS ticks=%d frames=%d %s" % [ticks, frames, parts])
 		game.paused = true
 		main.hud.visible = false
 
