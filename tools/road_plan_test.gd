@@ -24,6 +24,11 @@ func _initialize() -> void:
 	var seed_text := _arg(args, "--seed", "Север-1234")
 	# --profile: время поиска A* в каждой попытке и всего (FastGrid считает вызовы; на мир не влияет).
 	Pathfinder.profile_searches = "--profile" in args
+	# --macro-legacy: прежние старт, осадки и лужи (docs/MACRO_GEOGRAPHY.md) — сравнить время путей на той же версии
+	if "--macro-legacy" in args:
+		StageRelief.legacy_start = true
+		StageHydrology.regional = false
+		StageOcean.dry_pockets = false
 	# --stages: вся генерация мира без сцены и загрузчика — время каждого этапа (generation_profile.stages_ms).
 	if "--stages" in args:
 		var t0 := Time.get_ticks_msec()

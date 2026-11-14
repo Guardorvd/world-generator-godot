@@ -383,4 +383,85 @@ static func views(game: GameWorld) -> Array:
 		var look := trail_at + trail_dir * 14.0
 		out.append({name = "trail", title = "Лесная тропа", pos = Vector3(trail_at.x, h.ground_at(trail_at.x, trail_at.y) + 1.45, trail_at.y),
 			target = Vector3(look.x, h.ground_at(look.x, look.y) + 0.6, look.y)})
+	out.append_array(character_views(w, h))
+	return out
+
+
+## 14.11.2026: характеры местности с пути на высоте глаз (docs/MACRO_GEOGRAPHY.md). Для каждого — точка дороги или
+## тропы, где окрестность ±24 м больше всего похожа на характер: wet_valley — влажная лесная низина,
+## dry_hill — сухой открытый склон или гребень, steppe — лесостепь (луг рядом с лесом), rocky_forest — лес с камнями,
+## basin — сухая ложбина на месте мелкого понижения ниже моря (StageOcean.POCKET_DRY).
+## Только по данным мира: в том же мире камера встаёт туда же. Снимаются, только если названы в --views
+static func character_views(w: WorldData, h: Heightfield) -> Array:
+	var best := {wet_valley = [-INF, -1, null], dry_hill = [-INF, -1, null], steppe = [-INF, -1, null], rocky_forest = [-INF, -1, null], basin = [-INF, -1, null]}
+	var rocks := PackedInt32Array()
+	rocks.resize(w.chunks.size())
+	var trees := PackedInt32Array()
+	trees.resize(w.chunks.size())
+	for c in w.chunks.size():
+		for o in w.chunks[c]:
+			if w.obj_k[o] == Biomes.T_ROCK:
+				rocks[c] += 1
+			elif Biomes.is_tree(w.obj_k[o]):
+				trees[c] += 1
+	for t: Dictionary in w.trails:
+		if t.kind == "animal":
+			continue
+		var pts: Array = t.pts
+		for k in range(6, pts.size() - 6, 6):
+			var px := floori(pts[k].x)
+			var py := floori(pts[k].y)
+			var near_place := false
+			for list: Array in [w.settlements, w.sites]:
+				for place: EntityRecord in list:
+					near_place = near_place or Vector2(place.x, place.y).distance_to(Vector2(px, py)) < 25.0
+			if near_place:
+				continue
+			var m := 0.0
+			var e := 0.0
+			var wooded := 0.0
+			var open := 0.0
+			var n := 0.0
+			for dy in range(-6, 7, 3):
+				for dx in range(-6, 7, 3):
+					var x := clampi(px + dx, 0, w.W - 1)
+					var y := clampi(py + dy, 0, w.H - 1)
+					var i := y * w.W + x
+					if w.ocean[i] != 0 or w.lake[i] != 0:
+						continue
+					var b := int(w.biome[i])
+					m += w.moist[i]
+					e += w.elev[i]
+					wooded += 1.0 if b == Biomes.FOREST or b == Biomes.TAIGA else 0.0
+					open += 1.0 if b == Biomes.GRASS or b == Biomes.STEPPE else 0.0
+					n += 1.0
+			if n < 20.0:
+				continue
+			m /= n
+			e /= n
+			wooded /= n
+			open /= n
+			var chunk := clampi(py / w.CS, 0, w.CH - 1) * w.CW + clampi(px / w.CS, 0, w.CW - 1)
+			var stones := float(mini(rocks[chunk], trees[chunk]))
+			var lowland := 1.0 if e < 0.15 else 0.0
+			var hill := 1.0 if e > 0.06 and e < 0.38 else 0.0
+			var scores := {wet_valley = (m + wooded * 0.3) * lowland, dry_hill = (1.0 - m + w.slope[py * w.W + px] * 0.3) * hill,
+				steppe = (open * wooded * 4.0 + (1.0 - m) * 0.3) * (1.0 if e < 0.38 else 0.0), rocky_forest = (stones * 0.02 + wooded * 0.5) * hill * (1.0 if wooded > 0.4 else 0.0),
+				basin = (0.004 - e) if w.dist_ocean[py * w.W + px] > 20.0 and e < 0.004 else -1.0}
+			for key: String in scores:
+				if scores[key] > best[key][0]:
+					best[key] = [scores[key], k, pts]
+	var out: Array = []
+	var titles := {wet_valley = "Влажная лесная низина", dry_hill = "Сухой склон", steppe = "Лесостепь", rocky_forest = "Каменистый лес",
+		basin = "Сухая ложбина на месте лужи ниже моря"}
+	for key: String in best:
+		if best[key][1] < 0 or best[key][0] < 0.0:
+			continue
+		var pts: Array = best[key][2]
+		var k: int = best[key][1]
+		var at := Vector2(pts[k].x, pts[k].y) * TILE
+		var ahead: Dictionary = pts[_along(pts, k, 30.0)]
+		var look := Vector2(ahead.x, ahead.y) * TILE
+		out.append({name = key, title = titles[key], pos = Vector3(at.x, h.ground_at(at.x, at.y) + 1.8, at.y),
+			target = Vector3(look.x, h.ground_at(look.x, look.y) + 1.2, look.y)})
 	return out

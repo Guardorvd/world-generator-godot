@@ -9,6 +9,7 @@ extends SceneTree
 ##   -- --quick [N]     только оценка океана по сетке 48 × 48 без слоя склонов на N сидах (секунды)
 ##   -- --legacy        прежний выбор стартовой области (StageRelief.legacy_start, до 14.11.2026)
 ##   -- --no-character  прежние осадки без регионального характера (StageHydrology.regional = false)
+##   -- --keep-pockets  мелкие понижения ниже моря посреди суши остаются морем (StageOcean.dry_pockets = false)
 ##   -- --moist         на листе вместо биомов влажность суши ниже гор (охра — сухо, сине-зелёный — влажно)
 ##   -- --tag <имя>     суффикс файлов, например _old
 ## Лимит 300 с: география одного сида на втором ПК — секунды.
@@ -17,7 +18,8 @@ const CONTROL := ["Север-1234", "Ущелье", "Туман-4821", "Янт�
 const OUT := "res://tools/control/runs"
 const GROUPS := {
 	forest = [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE],
-	open = [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA, Biomes.DESERT],
+	meadow = [Biomes.GRASS],
+	steppe = [Biomes.STEPPE, Biomes.SAVANNA, Biomes.DESERT],
 	tundra = [Biomes.TUNDRA],
 	swamp = [Biomes.SWAMP],
 	rock = [Biomes.ROCK, Biomes.PEAK, Biomes.SNOW],
@@ -44,6 +46,7 @@ func _run() -> void:
 	var args := OS.get_cmdline_user_args()
 	StageRelief.legacy_start = args.has("--legacy")
 	StageHydrology.regional = not args.has("--no-character")
+	StageOcean.dry_pockets = not args.has("--keep-pockets")
 	var tag := _arg("--tag", "")
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	if args.has("--quick"):
