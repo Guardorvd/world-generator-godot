@@ -126,13 +126,22 @@ static func _pick_start(w: WorldData) -> void:
 	var finalists := []
 	for f in PICK_FINALISTS:
 		finalists.append(cands[roundi(f * (cands.size() - 1) / float(PICK_FINALISTS - 1)) if coastal else f])
+	# Финалисты оцениваются параллельно, у каждой задачи свои копии шумов; выбор — по порядку, как подряд
+	var scores := Parallel.bands(finalists.size(), func(a: int, b: int) -> PackedFloat64Array:
+		var own := {}
+		for key: String in ["warpX", "warpY", "cont", "mask", "ridge", "hill"]:
+			own[key] = w.noise[key].clone()
+		var out := PackedFloat64Array()
+		for f in range(a, b):
+			out.append(_start_score(w, own, finalists[f][2], finalists[f][3], coastal))
+		return out, 1)
 	var best := INF
-	for c: Array in finalists:
-		var score := _start_score(w, c[2], c[3], coastal)
+	for f in finalists.size():
+		var score: float = scores[f][0]
 		if score < best:
 			best = score
-			w.macro_x = c[2]
-			w.macro_y = c[3]
+			w.macro_x = finalists[f][2]
+			w.macro_y = finalists[f][3]
 
 
 ## Сид предпочитает прибрежную карту (своя независимая случайность, общий RNG не расходуется)
@@ -141,8 +150,7 @@ static func is_coastal(seed_num: int) -> bool:
 
 
 ## Оценка сдвига (меньше — лучше) по макрорельефу без слоя склонов на сетке PICK_GRID² плана
-static func _start_score(w: WorldData, mx: float, my: float, coastal: bool) -> float:
-	var n := w.noise
+static func _start_score(w: WorldData, n: Dictionary, mx: float, my: float, coastal: bool) -> float:
 	var G := PICK_GRID
 	var sea := PackedByteArray()
 	sea.resize(G * G)
