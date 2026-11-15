@@ -14,6 +14,7 @@ extends SceneTree
 ## --sun <градусы> — высота солнца (по умолчанию 55); ниже 50 включаются тени: объём виден при низком свете.
 ## --stones — 15.11: россыпь камней и комьев у полотна (GroundCarpet.road_stone, та же раскладка, что в игре; материал простой).
 ## --detail <качество>,<дальность> — 15.11: уровни настройки графики (0 — простое, 0.5 — среднее, 1 — высокое; дальность 0.6 / 1 / 1.6).
+## --diagonal — прямая дорога наискосок к метровой сетке (~24°): кромка без ступенек сетки (15.11).
 ## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
@@ -35,6 +36,7 @@ var noise := FastNoiseLite.new()
 var measure := false
 var relief := false
 var grade := 0.0
+var diagonal := false
 var stones_node: MultiMeshInstance3D
 var frame_times := PackedFloat32Array()
 var gpu_times := PackedFloat32Array()
@@ -91,6 +93,7 @@ func _initialize() -> void:
 	sun.directional_shadow_max_distance = 60.0
 	relief = "--relief" in OS.get_cmdline_user_args()
 	grade = float(_arg("grade", "0"))
+	diagonal = "--diagonal" in OS.get_cmdline_user_args()
 	# направление на светило для шейдера рельефа (в игре его ставит DayCycle)
 	RenderingServer.global_shader_parameter_set("sun_dir", sun.global_transform.basis.z if sun.is_inside_tree() else sun.transform.basis.z)
 	root.add_child(sun)
@@ -135,6 +138,8 @@ func _obstacles() -> void:
 
 ## Ось дороги: x по z, плавный изгиб
 func _axis(z: float) -> float:
+	if diagonal:
+		return SIZE * 0.5 + 0.45 * (z - SIZE * 0.5)
 	return SIZE * 0.5 + 6.0 * sin(z / 11.0)
 
 

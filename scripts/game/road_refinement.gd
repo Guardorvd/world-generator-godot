@@ -1423,6 +1423,20 @@ func weight_at(x: float, z: float, width: int) -> float:
 	return colors[a].a * wa + colors[b].a * wb + colors[c].a * wc
 
 
+## 15.11.2026: маска кромки для травяного ковра — как кромка в шейдере (terrain.gdshader, edge_lin): маска вершин падает
+## на ~0,9 м при шаге вершин 1 м, и на дороге наискосок к сетке её граница идёт одинаковыми ступеньками. Поперечная
+## координата (uv.x) на прямом отрезке интерполируется точно: по ней та же формула tread_alpha; где она расходится с маской
+## (развилка, сужение, мост) — маска вершин. Без извива шейдера: дернина у края и так редеет случайно.
+func edge_at(x: float, z: float, width: int) -> float:
+	var at := sample(x, z, width)
+	if at.is_empty():
+		return 0.0
+	var mask: float = at.weight
+	var organic: float = RoadSurface.LIST[at.surface].organic if at.surface > 0 else 0.0
+	var linear := clampf(0.5 + (0.84 - organic * 0.04 - absf(at.across)) * 1.25, 0.0, 1.0)
+	return lerpf(mask, linear, 1.0 - smoothstep(0.2, 0.4, absf(linear - mask)))
+
+
 func sample(x: float, z: float, width: int) -> Dictionary:
 	var fx := x / TILE - 0.5
 	var fz := z / TILE - 0.5

@@ -628,7 +628,7 @@ func _grass_tile(i: int, j: int) -> Array:
 		# ниже; на травяной колее низкая дернина остаётся на середине между колеями. На самом покрытии её нет.
 		var low := 1.0
 		if refine != null:
-			var tread: float = refine.weight_at(x, z, w.W)
+			var tread: float = refine.edge_at(x, z, w.W) # 15.11: кромка без ступенек метровой сетки, как в шейдере
 			if tread > 0.04:
 				if tread < VERGE_MASK:
 					if WGRandom.hash2(gx, gz, 293) < tread / VERGE_MASK:
