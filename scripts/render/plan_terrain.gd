@@ -15,6 +15,13 @@ var chunks := {}
 var nodes := {}
 var pending: Array[Vector2i] = []
 var material: Material
+## 15.11.2026: дальний вариант материала (TerrainBuilder.far_material) у частей, целиком лежащих дальше FAR_FROM.
+## В шейдере ближняя деталь гаснет к DETAIL_FAR = 110 м; 40 м запаса — на камеру за игроком и путь между пересчётами
+## (FAR_RECHECK) даже на спуске. null — как раньше, один материал (вода, инструменты).
+const FAR_FROM := 150.0
+const FAR_RECHECK := 8.0
+var far_material: Material
+var _far_at := Vector2.INF
 var checked_at := Vector2.INF
 var _cache: WorldCache
 const FarForest := preload("res://scripts/render/distant_forest.gd")
@@ -129,6 +136,10 @@ func _attach_crowns(allow: bool) -> bool:
 	return false
 
 
+func _material_for(key: Vector2i, p: Vector2) -> Material:
+	return far_material if far_material != null and distance_to_chunk(key, p) >= FAR_FROM else material
+
+
 func distance_to_chunk(key: Vector2i, p: Vector2) -> float:
 	var corner := Vector2(key) * SIDE + Vector2.ONE * GameConfig.TILE * 0.5
 	return p.distance_to(p.clamp(corner, corner + Vector2.ONE * SIDE))
@@ -202,7 +213,7 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 		mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 		var node := MeshInstance3D.new()
 		node.mesh = mesh
-		node.material_override = material
+		node.material_override = _material_for(key, p)
 		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if water_layer < 0 else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		add_child(node)
 		if water_layer < 0 and _world != null:
@@ -214,6 +225,12 @@ func update(x: float, z: float, force := false, allow_apply := true, near := RAD
 			_uncached_key = null
 			_uncached_arrays = []
 		uploaded = true
+	if far_material != null and (force or p.distance_to(_far_at) >= FAR_RECHECK):
+		_far_at = p
+		for key: Vector2i in nodes:
+			var wanted := _material_for(key, p)
+			if nodes[key].material_override != wanted:
+				nodes[key].material_override = wanted
 	# Кроны — после рельефа: только в кадре без передачи чанка и в пределах общего бюджета.
 	if _attach_crowns(allow_apply and not uploaded and (frame_budget == null or frame_budget.allows_work())):
 		uploaded = true

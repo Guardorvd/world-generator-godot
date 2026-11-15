@@ -277,6 +277,32 @@ func material(base: Image, forest: Image = null) -> ShaderMaterial:
 	return mat
 
 
+## 15.11.2026: дальний вариант материала рельефа — тот же resources/terrain.gdshader, где вес ближней детали
+## near — константа 0. Дальше DETAIL_FAR (110 м) near и так ровно 0, поэтому для частей рельефа целиком дальше
+## этого картинка та же до пикселя. Но шейдер без ближних веток (микроструктура, подстилка, травинки, галька,
+## цветы, камни осыпи, полотно вблизи) компилятор собирает гораздо короче, и видеокарта держит больше пикселей
+## сразу: на виде с вершины дальняя земля — большая часть кадра (замер стресс-теста: near = 0 для всего кадра
+## −1,7 мс на вершине). Шейдер строится из того же кода при загрузке: варианты не расходятся.
+## null — строка near в шейдере не найдена (шейдер переписали): тогда дальних частей нет, всё как раньше.
+const NEAR_LINE := "float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));"
+static var _far_shader: Shader
+
+
+func far_material(near_mat: ShaderMaterial) -> ShaderMaterial:
+	if _far_shader == null:
+		var code := SHADER.code
+		if code.count(NEAR_LINE) != 1:
+			push_warning("TerrainBuilder.far_material: строка near в terrain.gdshader не найдена, дальнего варианта нет")
+			return null
+		_far_shader = Shader.new()
+		_far_shader.code = code.replace(NEAR_LINE, "const float near = 0.0; // дальний вариант (TerrainBuilder.far_material)")
+	var mat := ShaderMaterial.new()
+	mat.shader = _far_shader
+	for u: Dictionary in SHADER.get_shader_uniform_list():
+		mat.set_shader_parameter(u.name, near_mat.get_shader_parameter(u.name))
+	return mat
+
+
 ## Тот же материал для рельефа за краем карты: цвет из вершин
 func outer_material() -> ShaderMaterial:
 	var mat := _detail_material()

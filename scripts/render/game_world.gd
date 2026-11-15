@@ -198,6 +198,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)
 	terrain_stream.setup(loaded.terrain_chunks, $Terrain.material_override, services.cache, world, heights, chunk_source)
+	terrain_stream.far_material = services.terrain.far_material($Terrain.material_override)
 	stream_coordinator.terrain_update = terrain_stream.update
 	terrain_stream.frame_budget = stream_coordinator.frame_budget
 	vegetation.frame_budget = stream_coordinator.frame_budget
@@ -401,6 +402,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	local_mist.setup(world, heights)
 	_apply_lighting_and_fog()
 	day.terrain_mats = [$Terrain.material_override]
+	if terrain_stream.far_material != null:
+		day.terrain_mats.append(terrain_stream.far_material)
 	if outer != null and outer._mat != null:
 		day.terrain_mats.append(outer._mat)
 	day.camera = camera
