@@ -27,6 +27,7 @@ var world: WorldData
 ## после выхода в меню (lifecycle_test). Поэтому только слабая.
 var _heights: WeakRef
 var data := PackedFloat32Array()  # препятствия подряд по STRIDE
+var revision := 0                 # 15.11: растёт при каждой смене data/_grid (копия в C# — RideGround.SetObstacles)
 var _grid := {}                   # Vector2i(клетка) -> PackedInt32Array номеров (начало записи в data)
 var _center := Vector2.INF
 var _version := -1
@@ -101,6 +102,7 @@ func finish(adopt := true) -> void:
 func _adopt(job: Dictionary) -> void:
 	data = job.data
 	_grid = job.grid
+	revision += 1
 
 
 func _run_job(job: Dictionary) -> void:
@@ -217,6 +219,7 @@ func _add(ax: float, az: float, bx: float, bz: float, r: float, base: float, top
 	var out := {data = data, grid = _grid}
 	_put(out, ax, az, bx, bz, r, base, top)
 	data = out.data
+	revision += 1
 
 
 ## То же в буфер сборки out {data, grid}: фоновая пересборка не трогает живые данные

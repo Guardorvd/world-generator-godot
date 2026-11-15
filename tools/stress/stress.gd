@@ -557,6 +557,19 @@ func _ride_sweep(hf: Heightfield) -> void:
 		hf.depth_at(x, z, feet)
 		hf.depth_at(x, z)
 		hf.immersion_at(x, z, feet)
+		# этап 2: проверка габарита с телом пешехода и велосипеда, со всеми режимами
+		for r: float in [0.0, PlayerState.BODY_R, BikeRide.BODY_R]:
+			PlayerState.is_passable(w, hf, x, z, feet, r)
+			PlayerState.is_passable(w, hf, x, z, feet, r, false, ForestObstacles.CLIMB_MAX, true)
+			PlayerState.is_passable(w, hf, x, z, feet, r, true, 0.0)
+	# постройки поселений и мест: точки вокруг каждой
+	for list: Array in [w.civil.settlements, w.civil.sites]:
+		for s in list:
+			for u in s.huts:
+				for k in 12:
+					var x: float = u.x * GameConfig.TILE + rng.randf_range(-5.0, 5.0)
+					var z: float = u.y * GameConfig.TILE + rng.randf_range(-5.0, 5.0)
+					probe.call(x, z, hf.ground_at(x, z) + rng.randf_range(-0.5, 1.0))
 	for i in 40000:
 		var x := rng.randf() * size.x
 		var z := rng.randf() * size.y
@@ -583,6 +596,42 @@ func _ride_sweep(hf: Heightfield) -> void:
 			probe.call(x, z, hf.ground_at(x, z) + rng.randf_range(-1.5, 1.5))
 	print("RIDE_SWEEP checks %d, structures %d, river cells %d, mismatches %d %s" % [Heightfield.native_ride_checks - before,
 		hf.structures.size(), hf._river_cells.size(), Heightfield.native_ride_mismatches.size(), Heightfield.native_ride_mismatches])
+
+
+## 15.11, --verify-ride, этап 2: стволы, валуны и валежник — препятствия собираются вокруг каждого вида
+## (как вокруг игрока), сверка is_passable у каждого препятствия; затем препятствия возвращаются к игроку
+func _ride_sweep_obstacles(views: Dictionary) -> void:
+	var hf := game.heights
+	var w := game.world
+	if hf.obstacles == null:
+		return
+	var before := Heightfield.native_ride_checks
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1512
+	var count := 0
+	for name: String in ["forest", "valley", "peak", "village", "spawn"]:
+		if not views.has(name):
+			continue
+		var v: Dictionary = views[name]
+		_place(v)
+		await _frames(2)
+		hf.obstacles.update(v.pos.x, v.pos.z, game.vegetation.obstacles, game.vegetation.obstacles_version, true)
+		var data := hf.obstacles.data
+		count += data.size() / ForestObstacles.STRIDE
+		for at in range(0, data.size(), ForestObstacles.STRIDE):
+			for k in 16:
+				var t := rng.randf()
+				var x := lerpf(data[at], data[at + 2], t) + rng.randf_range(-data[at + 4] - 1.5, data[at + 4] + 1.5)
+				var z := lerpf(data[at + 1], data[at + 3], t) + rng.randf_range(-data[at + 4] - 1.5, data[at + 4] + 1.5)
+				var top := minf(data[at + 6], data[at + 5] + 3.0)
+				var feet := rng.randf_range(data[at + 5] - 0.5, top + 0.5)
+				for r: float in [0.0, PlayerState.BODY_R, BikeRide.BODY_R]:
+					for climb: float in [0.0, ForestObstacles.CLIMB_MAX]:
+						PlayerState.is_passable(w, hf, x, z, feet, r, false, climb)
+						PlayerState.is_passable(w, hf, x, z, feet, r, true, climb)
+	hf.obstacles.update(game.player.x, game.player.z, game.vegetation.obstacles, game.vegetation.obstacles_version, true)
+	print("RIDE_OBSTACLES checks %d, obstacles %d, mismatches %d %s" % [Heightfield.native_ride_checks - before, count,
+		Heightfield.native_ride_mismatches.size(), Heightfield.native_ride_mismatches])
 
 
 ## Дальность (draw) и качество (flora) растительности теми же вызовами, что меню настроек; -1 — не менять
@@ -677,6 +726,8 @@ func _group_world() -> void:
 		views[v.name] = v
 	_load_road(views.spawn.pos)
 	_micro()
+	if Heightfield.verify_native_ride:
+		await _ride_sweep_obstacles(views)
 	spike_cause = _stream_cause
 
 	# виды на месте: камера ставится с полной догрузкой окружения, как в check.gd (без неё числа гуляют:

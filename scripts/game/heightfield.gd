@@ -394,6 +394,86 @@ func _build_ride() -> bool:
 	return true
 
 
+## 15.11, этап 2: PlayerState.is_passable одним вызовом C# — 1 свободно, 0 занято, -1 решает GDScript.
+## Места (территория, поселения, постройки) и препятствия леса копируются в C#, когда меняются.
+var _places_key := Vector4i(-1, -1, -1, -1)
+var _places_ok := false
+var _ride_obst: ForestObstacles = null
+var _ride_obst_rev := -1
+
+
+func native_passable(w: WorldData, x: float, z: float, feet: float, r: float, objects_only: bool, climb: float, above_water: bool) -> int:
+	var ride := _ride_ground()
+	if ride == null or w != world:
+		return -1
+	var key := Vector4i(w.territory_revision, w.civil.settlements.size(), w.civil.sites.size(), 1 if w.outer != null else 0)
+	if key != _places_key:
+		_places_key = key
+		_places_ok = _set_places(w)
+	if not _places_ok:
+		return -1
+	var ob := obstacles
+	if ob != _ride_obst or (ob != null and ob.revision != _ride_obst_rev):
+		_ride_obst = ob
+		_ride_obst_rev = ob.revision if ob != null else -1
+		if not _set_obstacles(ob):
+			_ride_obst_rev = -2 # не удалось: попробовать на следующем запросе, пока — GDScript
+			return -1
+	return ride.Passable(x, z, feet, r, objects_only, climb, above_water)
+
+
+func _set_places(w: WorldData) -> bool:
+	var centers := PackedFloat64Array()
+	var hut_start := PackedInt32Array()
+	var huts := PackedFloat64Array()
+	var settlement_cells := PackedInt32Array()
+	var site_cells := PackedInt32Array()
+	for for_sites: bool in [false, true]:
+		var list: Array = w.civil.sites if for_sites else w.civil.settlements
+		var cells := site_cells if for_sites else settlement_cells
+		for s in list:
+			var id := centers.size() / 2
+			centers.append(s.x)
+			centers.append(s.y)
+			hut_start.append(huts.size() / 6)
+			for u in s.huts:
+				# угол и полуширина — теми же функциями, что is_passable; cos и sin — движка, а не .NET
+				var angle: float = u.a if for_sites else PlayerState.hut_angle(s, u)
+				var half: Vector2 = PlayerState.SITE_HALF[u.t] if for_sites else PlayerState.hut_half(u)
+				huts.append_array([u.x, u.y, cos(angle), sin(angle), half.x, half.y])
+			# клетки — как OuterLand.index_collision_places
+			var px: float = s.x * TILE
+			var pz: float = s.y * TILE
+			var lo := OuterLand.collision_cell(px - OuterLand.SETTLEMENT_REACH, pz - OuterLand.SETTLEMENT_REACH)
+			var hi := OuterLand.collision_cell(px + OuterLand.SETTLEMENT_REACH, pz + OuterLand.SETTLEMENT_REACH)
+			for cz in range(lo.y, hi.y + 1):
+				for cx in range(lo.x, hi.x + 1):
+					cells.append_array([cx, cz, id])
+		if for_sites:
+			site_cells = cells
+		else:
+			settlement_cells = cells
+	hut_start.append(huts.size() / 6)
+	var rect := w.available_rect
+	if not _ride.SetPlaces(rect.position.x, rect.position.y, rect.size.x, rect.size.y, w.outer != null,
+			OuterLand.SETTLEMENT_REACH, 30.0, GameConfig.FORD_DEPTH, centers, hut_start, huts, settlement_cells, site_cells):
+		push_error("RideGround: " + _ride.Error() + " — проверка габарита на GDScript")
+		return false
+	return true
+
+
+func _set_obstacles(ob: ForestObstacles) -> bool:
+	var grid := PackedInt32Array()
+	if ob != null:
+		for cell: Vector2i in ob._grid:
+			for at: int in ob._grid[cell]:
+				grid.append_array([cell.x, cell.y, at])
+	if not _ride.SetObstacles(ob.data if ob != null else PackedFloat32Array(), grid):
+		push_error("RideGround: " + _ride.Error() + " — проверка габарита на GDScript")
+		return false
+	return true
+
+
 static func _verify_ride(what: String, x: float, z: float, native: float, script: float) -> void:
 	native_ride_checks += 1
 	if native != script and not (is_nan(native) and is_nan(script)) and native_ride_mismatches.size() < 20:

@@ -199,6 +199,19 @@ static func surface(info: Dictionary) -> int:
 ## вода и край известной земли проверяются по центру. objects_only — только твёрдые объекты, для причины удара.
 ## climb — велосипед модели двух контактов: низкие препятствия встречает колесо (ForestObstacles.hits)
 static func is_passable(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false, climb := 0.0, above_water := false) -> bool:
+	# 15.11: в игре внутри плана — C# (RideGround.Passable, бит в бит как код ниже); -1 — решает GDScript
+	if heights.native_ride:
+		var v := heights.native_passable(w, x, z, feet, r, objects_only, climb, above_water)
+		if v >= 0:
+			if Heightfield.verify_native_ride:
+				var script := _is_passable_script(w, heights, x, z, feet, r, objects_only, climb, above_water)
+				Heightfield._verify_ride("is_passable", x, z, float(v), 1.0 if script else 0.0)
+			return v == 1
+	return _is_passable_script(w, heights, x, z, feet, r, objects_only, climb, above_water)
+
+
+## is_passable на GDScript (эталон RideGround.Passable)
+static func _is_passable_script(w: WorldData, heights: Heightfield, x: float, z: float, feet: float = -INF, r: float = 0.0, objects_only := false, climb := 0.0, above_water := false) -> bool:
 	if not objects_only and (not w.accessible(x / TILE, z / TILE, r / TILE) or not heights.known(x, z)):
 		return false
 	# сквозь дома не пройти: стены — прямоугольник по виду постройки, тело не ближе r к нему
