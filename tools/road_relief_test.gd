@@ -186,11 +186,37 @@ func ride(h: Heightfield, lane: int, hz: int) -> void:
 		if b.crashed: break
 	check(not b.crashed and air == 0 and b.x > 120 and is_finite(b.y), "ride lane %d @ %d Hz: %.1f m, air %d, suspension %.1f cm" % [lane, hz, b.x - 50, air, suspension * 100])
 
+func short_switchback_contract() -> void:
+	var w := Fixture.world()
+	var pts := StageTrails._road_stations([
+		{x = 15.5, y = 30.5, w = 0.75}, {x = 55.5, y = 30.5, w = 0.75},
+		{x = 55.5, y = 31.5, w = 0.75}, {x = 15.5, y = 31.5, w = 0.75}])
+	var surf := PackedByteArray()
+	surf.resize(pts.size())
+	surf.fill(RoadSurface.GRAVEL)
+	w.trails = [{kind = "road", pts = pts, surf = surf}]
+	var h := Heightfield.new(w, false)
+	var native := build(h, true)
+	var fit: Dictionary = native.fit_routes[0]
+	var span: Vector2i = native.corridor_routes[0]
+	# The stations on opposite legs are 4 m apart across the slope and 10 m along the axis.
+	for j: int in [157, 167]:
+		var form := (span.x + j) * FORM_STRIDE
+		check(fit.strength[j] == 0.0 and native.corridor.slice(form, form + FORM_STRIDE) ==
+			PackedFloat64Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "tight switchback pins station %d" % j)
+	Grid.allow_fast = false
+	var reference := build(h, true)
+	Grid.allow_fast = true
+	check(native.fit_routes == reference.fit_routes and native.corridor == reference.corridor
+		and native.patches == reference.patches, "tight switchback native/reference parity")
+
+
 func run() -> void:
 	check(Grid.fast_grid() != null, "native backend available")
 	if failures: quit(1); return
 	section_contracts()
 	corridor_contracts()
+	short_switchback_contract()
 	terrain_profile_contracts()
 	patch_contracts()
 	if "--contracts-only" in OS.get_cmdline_user_args():

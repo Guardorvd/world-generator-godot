@@ -155,6 +155,28 @@ func turns() -> void:
 	var relaxed := StageTrails._road_line(w, dogleg, PackedByteArray(), ground)
 	check(not on_polyline(relaxed, elbow) and not on_polyline(relaxed, Vector2(41.5, 41.5)),
 		"opposite grid turns share one transition")
+	var tight := points([Vector2(38.5, 39.5), Vector2(39.5, 40.5), elbow, Vector2(41.5, 41.5)])
+	var groups: Array = []
+	var collect_groups := func(curve: Array) -> bool:
+		if curve[0].x < tight[1].x and curve[-1].x > elbow.x:
+			groups.append(curve)
+		return true
+	var joined := StageTrails._road_line(w, tight, PackedByteArray(), ground, "road", {}, collect_groups)
+	check(groups.size() == 1 and joined.has(groups[0][0])
+		and joined[0] == tight[0] and joined[-1] == tight[-1], "tight S-bend uses a shared transition")
+	groups.clear()
+	StageTrails._road_line(w, tight, PackedByteArray(), ground, "trail", {}, collect_groups, "road")
+	check(groups.is_empty(), "trail retains ordinary curve selection with road design limits")
+	var uneven := points([Vector2(38.5, 40.5), elbow, Vector2(41.5, 41.5), Vector2(43.5, 39.5)])
+	var collect_uneven := func(curve: Array) -> bool:
+		if curve[0].x < elbow.x and curve[-1].x > uneven[2].x:
+			groups.append(curve)
+		return true
+	StageTrails._road_line(w, uneven, PackedByteArray(), ground, "trail", {}, collect_uneven, "road")
+	check(groups.is_empty(), "standard candidates cannot fit the uneven S-bend")
+	var retry := StageTrails._road_line(w, uneven, PackedByteArray(), ground, "road", {}, collect_uneven)
+	check(groups.size() == 1 and retry.has(groups[0][0]) and retry[0] == uneven[0] and retry[-1] == uneven[-1],
+		"uneven S-bend fits a shared curve with asymmetric handles")
 	var hairpin := points([Vector2(28.5, 40.5), elbow, Vector2(30.5, 50.5)], StageTrails.WIDTHS.mountain)
 	check(not on_polyline(StageTrails._road_line(w, hairpin, PackedByteArray(), ground, "mountain"), elbow),
 		"switchback fits at the lower design speed")

@@ -315,8 +315,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 					pts[at] = {x = join.point.x, y = join.point.y, w = width}
 					joins[end] = join
 			var line_us := Time.get_ticks_usec()
-			var line_kind := kind if smooth_kind.is_empty() else smooth_kind
-			var line := _road_line(w, pts, on_axis, surface, line_kind, joins, corridor) if surface != null else Grid.chaikin(pts, 3)
+			var line := _road_line(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind) if surface != null else Grid.chaikin(pts, 3)
 			_part("road_line", line_us)
 			var index := w.trails.size()
 			Grid.stamp_path(w.path_mask, w.W, w.H, line, mark, width * 0.5 - Grid.PATH_IN)
@@ -514,10 +513,15 @@ const TURN_ACCEL := {"road": 5.4, "trail": 6.0, "mountain": 6.8} # м/с², за
 const TURN_TRIMS := [Vector2(1, 1), Vector2(1, 0.72), Vector2(0.72, 1),
 	Vector2(0.72, 0.72), Vector2(0.52, 0.72), Vector2(0.72, 0.52), Vector2(0.52, 0.52),
 	Vector2(0.38, 0.52), Vector2(0.52, 0.38), Vector2(0.38, 0.38)]
+# Доли входного и выходного отрезков, затем множители длин касательных.
+const GROUP_TRIMS := [Vector4(1, 1, 1, 1), Vector4(0.72, 1, 1, 1),
+	Vector4(1, 0.72, 1, 1), Vector4(0.72, 0.72, 1, 1)]
+const GROUP_LONG := Vector4(1, 1, 1.25, 1.25)
+const GROUP_RETRIES := [Vector4(1, 1, 1.30, 1), Vector4(1, 1, 1, 1.30)]
 
 
 static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
-		kind := "road", joins := {}, corridor := Callable()) -> Array:
+		kind := "road", joins := {}, corridor := Callable(), smooth_kind := "") -> Array:
 	if pts.size() < 2:
 		return pts
 	var fixed := PackedByteArray()
@@ -541,10 +545,11 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	bends.append(pts[-1])
 	pins.append(fixed[-1])
 
+	var design_kind := kind if smooth_kind.is_empty() else smooth_kind
 	var rules := {
-		grade = MOUNTAIN_GRADE if kind == "mountain" else (TRAIL_GRADE if kind == "trail" else ROAD_LIMIT),
-		cross = MOUNTAIN_GRADE if kind == "mountain" else BENCH_CROSS,
-		speed = TURN_SPEED[kind], accel = TURN_ACCEL[kind],
+		grade = MOUNTAIN_GRADE if design_kind == "mountain" else (TRAIL_GRADE if design_kind == "trail" else ROAD_LIMIT),
+		cross = MOUNTAIN_GRADE if design_kind == "mountain" else BENCH_CROSS,
+		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
 		probe = surface.fast_water(), axis = on_axis, corridor = corridor,
 	}
 	var start := _road_approach(surface, bends[0], bends[1], joins.get(0, {}), rules) if pins[0] == 0 else []
@@ -566,6 +571,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 					break
 				last += 1
 			var consumed := 0
+			var pair: Array = []
 			for end in range(last, k, -1):
 				var path: Array = []
 				for j in range(k - 1, end + 2):
@@ -574,6 +580,12 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 				if not curve.is_empty():
 					consumed = end - k + 1
 					break
+				if end == k + 1:
+					pair = path
+			if consumed == 0 and kind == "road" and not pair.is_empty() and b.distance_squared_to(c) <= 2.25:
+				curve = _road_bend_group(surface, pair, bends[k].w, rules, true)
+				if not curve.is_empty():
+					consumed = 2
 			if consumed > 0:
 				out.append_array(curve)
 				k += consumed
@@ -614,7 +626,7 @@ static func _road_axis(w: WorldData, axis: PackedByteArray, p: Vector2) -> bool:
 
 
 ## Объединяем короткие ступени решётки, если одна кривая помещается в коридоре.
-static func _road_bend_group(surface: Heightfield, path: Array, width: float, rules: Dictionary) -> Array:
+static func _road_bend_group(surface: Heightfield, path: Array, width: float, rules: Dictionary, retry := false) -> Array:
 	var a: Vector2 = path[0]
 	var b: Vector2 = path[1]
 	var c: Vector2 = path[-2]
@@ -631,11 +643,27 @@ static func _road_bend_group(surface: Heightfield, path: Array, width: float, ru
 			return []
 	var speed: float = rules.speed * (0.62 if angle >= deg_to_rad(105.0) else 1.0)
 	var handle := 3.0 * pow(cos(angle * 0.25), 2.0)
-	for trim: Vector2 in [Vector2(1, 1), Vector2(0.72, 1), Vector2(1, 0.72), Vector2(0.72, 0.72)]:
-		var p := b - incoming * minf(a.distance_to(b) * 0.49, 3.5) * trim.x
-		var q := c + outgoing * minf(c.distance_to(d) * 0.49, 3.5) * trim.y
+	var left := minf(a.distance_to(b) * 0.49, 3.5)
+	var right := minf(c.distance_to(d) * 0.49, 3.5)
+	var short_s := false
+	if rules.long_s_handles and path.size() == 4 and b.distance_squared_to(c) <= 2.25:
+		var middle := (c - b).normalized()
+		var first_turn := incoming.cross(middle)
+		var second_turn := middle.cross(outgoing)
+		short_s = first_turn * second_turn < 0.0 and minf(absf(first_turn), absf(second_turn)) >= 0.65
+	var parallel := incoming.dot(outgoing) >= 0.99
+	var attempts := GROUP_TRIMS
+	if retry:
+		if not short_s:
+			return []
+		attempts = GROUP_RETRIES if parallel else [GROUP_LONG] + GROUP_RETRIES
+	elif short_s and parallel:
+		attempts = GROUP_TRIMS + [GROUP_LONG]
+	for trim: Vector4 in attempts:
+		var p := b - incoming * left * trim.x
+		var q := c + outgoing * right * trim.y
 		var lead := p.distance_to(q) / handle
-		var curve := _road_curve(surface, [p, p + incoming * lead, q - outgoing * lead, q], path, width, speed, rules)
+		var curve := _road_curve(surface, [p, p + incoming * (lead * trim.z), q - outgoing * (lead * trim.w), q], path, width, speed, rules)
 		if not curve.is_empty():
 			return curve
 	return []

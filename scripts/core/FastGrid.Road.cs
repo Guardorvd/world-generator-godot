@@ -371,7 +371,7 @@ public partial class FastGrid
 					allowed[j] = (float)(1.0 - RoadSmooth(0.45, 0.7, sustained));
 					int safe = FitSafe(p, tangent, routes[r], j * step, road, half[from + j], width, height, tile, water, distWater, shore,
 						structStarts, structs, pinStart + pinFade, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates,
-						reach, shared, settlements, routeKinds, gap);
+						reach, shared, settlements, routeKinds, gap, Math.Max(grade, crossGrade) <= 0.25);
 					gate[from + j] = (safe & 2) != 0 ? allowed[j] : 0.0f;
 					if ((safe & 1) == 0) allowed[j] = 0.0f;
 					distance[j] = allowed[j] <= 0.0f ? 0.0f : (j > 0 ? (float)(distance[j - 1] + step) : 0.0f);
@@ -426,7 +426,7 @@ public partial class FastGrid
 	private static int FitSafe(Vector2 p, Vector2 tangent, int route, double along, bool shoreOk, double ownHalf, int width, int height,
 		double tile, float[] water, float[] distWater, double shore, int[] structStarts, double[] structs, double pinReach, Vector2[] segA,
 		Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates,
-		double reach, double shared, double[] settlements, int[] routeKinds, double corridorGap)
+		double reach, double shared, double[] settlements, int[] routeKinds, double corridorGap, bool shortFold = false)
 	{
 		int safe = 3;
 		int x = (int)Math.Floor(p.X / tile), z = (int)Math.Floor(p.Y / tile);
@@ -446,21 +446,32 @@ public partial class FastGrid
 				Vector2 b = a + delta;
 				bool other = segRoute[id] != route;
 				bool crossing = other && Math.Abs(tangent.Dot(delta.Normalized())) < 0.9;
+				double combinedHalf = RoadMaxHalf(segHalf, id) + Math.Max(0.0, ownHalf);
 				bool hairpin = false;
-				if (segRoute[id] == route && Math.Abs(segAlong[id] - along) > 20.0)
+				if (!other)
 				{
-					double u = Math.Clamp((double)(p - a).Dot(delta) / segLen2[id], 0.0, 1.0);
-					hairpin = Math.Abs(segAlong[id] + u * Math.Sqrt(segLen2[id]) - along) > 20.0;
+					double dot = tangent.Dot(delta);
+					bool opposite = shortFold && dot < 0.0 && 4.0 * dot * dot > segLen2[id];
+					if (opposite || Math.Abs(segAlong[id] - along) > 20.0)
+					{
+						Vector2 offset = p - a;
+						double u = Math.Clamp((double)offset.Dot(delta) / segLen2[id], 0.0, 1.0);
+						double separation = Math.Abs(segAlong[id] + u * Math.Sqrt(segLen2[id]) - along);
+						double closeGap = combinedHalf + corridorGap;
+						// The two legs can overlap the corridor within the usual 20 m exclusion.
+						hairpin = separation > 20.0 || (opposite && separation >= 6.0 &&
+							(offset - delta * (float)u).LengthSquared() < Math.Min(closeGap * closeGap, separation * separation * 0.25));
+					}
 				}
 				if (other || hairpin)
 				{
 					double gapDist = RbSegmentDist(p.X, p.Y, a.X, a.Y, b.X, b.Y);
-					if (gapDist < RoadMaxHalf(segHalf, id) + Math.Max(0.0, ownHalf) + 2.0 * reach + 0.5)
+					if (gapDist < combinedHalf + 2.0 * reach + 0.5)
 					{
 						if (crossing || hairpin) return 0;
 						if (!RoadShared(Math.Abs((p - a).Cross(delta.Normalized())), crossing, route, segRoute[id], ownHalf, RoadMaxHalf(segHalf, id), shared, routeKinds))
 						{
-							if (gapDist < RoadMaxHalf(segHalf, id) + Math.Max(0.0, ownHalf) + corridorGap) return 0;
+							if (gapDist < combinedHalf + corridorGap) return 0;
 							safe &= 2;
 						}
 					}

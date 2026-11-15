@@ -800,7 +800,9 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 		var sustained := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
 		# Косой склон требует полки и у обычной тропы. Непригодный продольный подъём остаётся защищён.
 		allowed[j] = 1.0 - smoothstep(0.45, 0.7, sustained)
-		var safe := _fit_safe(p, tangent, route, j * STEP, t.kind == "road", halves[j])
+		# Keep the riding shelf where the natural grade or crossfall already needs it.
+		var short_fold := maxf(grade, cross_grade) <= 0.25
+		var safe := _fit_safe(p, tangent, route, j * STEP, t.kind == "road", halves[j], short_fold)
 		gate[j] = allowed[j] if (safe & 2) != 0 else 0.0
 		if (safe & 1) == 0:
 			allowed[j] = 0.0
@@ -1057,9 +1059,27 @@ static func _bell(t: float) -> float:
 	return q * q if q > 0.0 else 0.0
 
 
+# A short switchback can bring opposite legs together within 20 m along the axis.
+static func _fit_hairpin(p: Vector2, tangent: Vector2, along: float, a: Vector2, delta: Vector2,
+		len2: float, seg_along: float, close_gap: float, short_fold: bool) -> bool:
+	var dot := tangent.dot(delta)
+	var opposite := short_fold and dot < 0.0 and 4.0 * dot * dot > len2
+	if not opposite and absf(seg_along - along) <= 20.0:
+		return false
+	var offset := p - a
+	var u := clampf(offset.dot(delta) / len2, 0.0, 1.0)
+	var separation := absf(seg_along + u * sqrt(len2) - along)
+	if separation > 20.0:
+		return true
+	# Require at least twice as much distance along the road as across the gap.
+	return opposite and separation >= 6.0 and (offset - delta * u).length_squared() < minf(
+		close_gap * close_gap, separation * separation * 0.25)
+
+
 ## Bit 0: existing profile fit allowed; bit 1: corridor forms allowed as well.
 ## Overlapping independent profiles pin earthworks to their common base terrain.
-func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false, own_half := -1.0) -> int:
+func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false,
+		own_half := -1.0, short_fold := false) -> int:
 	var w := _heights.world
 	var safe := 3
 	var x := floori(p.x / TILE)
@@ -1084,10 +1104,8 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 				var seg_route := _sg_route[id]
 				var other := seg_route != route
 				var crossing: bool = other and absf(tangent.dot(delta.normalized())) < 0.9
-				var hairpin := false
-				if seg_route == route and absf(_sg_along[id] - along) > 20.0:
-					var u := clampf((p - a).dot(delta) / _sg_len2[id], 0.0, 1.0)
-					hairpin = absf(_sg_along[id] + u * sqrt(_sg_len2[id]) - along) > 20.0
+				var corridor_gap := maxf(_sg_half[2 * id], _sg_half[2 * id + 1]) + maxf(0.0, own_half) + CORRIDOR_GAP
+				var hairpin := not other and _fit_hairpin(p, tangent, along, a, delta, _sg_len2[id], _sg_along[id], corridor_gap, short_fold)
 				if other or hairpin:
 					var gap := Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y)
 					if gap < maxf(_sg_half[2 * id], _sg_half[2 * id + 1]) + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
@@ -1095,24 +1113,22 @@ func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok 
 						# Independent station profiles cannot safely switch at a nearest-route boundary.
 						var lateral := absf((p - a).cross(delta.normalized()))
 						if not _shared(lateral, crossing, route, seg_route, own_half, maxf(_sg_half[2 * id], _sg_half[2 * id + 1])):
-							if gap < maxf(_sg_half[2 * id], _sg_half[2 * id + 1]) + maxf(0.0, own_half) + CORRIDOR_GAP: return 0
+							if gap < corridor_gap: return 0
 							safe &= 2 # distinct shelves stay pinned; disjoint narrow forms remain available
 	else:
 		for s: Dictionary in _segments.get(key, []):
 			var b: Vector2 = s.a + s.delta
 			var other: bool = s.route != route
 			var crossing: bool = other and absf(tangent.dot(s.delta.normalized())) < 0.9
-			var hairpin := false
-			if s.route == route and absf(s.along - along) > 20.0:
-				var u := clampf((p - s.a).dot(s.delta) / s.len2, 0.0, 1.0)
-				hairpin = absf(s.along + u * sqrt(s.len2) - along) > 20.0
+			var corridor_gap := float(s.half_max) + maxf(0.0, own_half) + CORRIDOR_GAP
+			var hairpin := not other and _fit_hairpin(p, tangent, along, s.a, s.delta, s.len2, s.along, corridor_gap, short_fold)
 			if other or hairpin:
 				var gap := Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y)
 				if gap < s.half_max + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
 					if crossing or hairpin: return 0
 					var lateral := absf((p - (s.a as Vector2)).cross((s.delta as Vector2).normalized()))
 					if not _shared(lateral, crossing, route, s.route, own_half, s.half_max):
-						if gap < s.half_max + maxf(0.0, own_half) + CORRIDOR_GAP: return 0
+						if gap < corridor_gap: return 0
 						safe &= 2
 	for village: SettlementData in w.settlements:
 		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
