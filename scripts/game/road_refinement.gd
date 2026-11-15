@@ -32,6 +32,32 @@ const CORRIDOR := {
 const CORRIDOR_KINDS := ["road", "trail", "mountain"]
 ## Выраженность форм по покрытию RoadSurface: укатанная земля у поселений и песок спокойнее, грунт и лес — полностью
 const CORRIDOR_SURFACE := [0.0, 0.85, 1.0, 0.55, 0.9, 0.7, 1.0, 0.9]
+## 15.11.2026 (docs/ROAD_CHARACTER_2026_11_15.md): характер форм по покрытию — а покрытие RoadSurface выбрано по местности
+## (лес, луг, скалы и круча, поселение). Множители длинной волны (roll, ~30 м), бугра (bump, ~10 м) и перекоса (wobble):
+## луг и песок — плавный накат и разгон, лес — частые бугры, камень — бугры и перекос, укатанная земля — спокойно.
+const CORRIDOR_CHARACTER := [
+	1.0, 1.0, 1.0,     # нет
+	1.15, 0.8, 0.9,    # гравий
+	1.0, 1.0, 1.0,     # грунтовка
+	1.1, 0.6, 0.7,     # укатанная земля
+	0.8, 1.25, 1.4,    # камень
+	1.2, 0.6, 0.8,     # песок
+	0.85, 1.3, 1.1,    # лесная тропа
+	1.3, 0.7, 0.9,     # травяная колея
+]
+## Ритм участков (спокойный — волнистый — разбитый): с 15.11 то же медленное поле, что у кочек и препятствий
+## (RoadBump.patch().x, 75–160 м), а не отдельный шум ~200 м: спокойный по форме кусок спокоен и по кочкам.
+## Значение поля огрублено до 2^-20: синус в Godot и .NET может расходиться в последнем бите (паритет C#/GDScript).
+const RHYTHM_SPAN := 1.2
+## Спокойный участок выравнивает природную неровность 5–16 м под полотном (её не убирает RoadBed на сетке 4 м: у троп
+## окно ±4 м): подъём оси минус доля отклонения земли от среднего по ±LEVEL_R м. Доля — по виду пути и покрытию:
+## луг, укатанная земля и гравий — накат и разгон, лес и камень сохраняют больше, горные тропы почти не трогаются.
+## Разбитый участок не выравнивается. Пределы подъёма оси (уклон добавки, закреплённые места) — прежние.
+const LEVEL_R := 12
+const LEVEL_KIND := [0.75, 0.75, 0.35]  # дорога, тропа, горная тропа
+const LEVEL_SURFACE := [1.0, 1.1, 1.0, 1.2, 0.5, 1.0, 0.7, 1.2] # нет, гравий, грунтовка, укатанная, камень, песок, лес, луг
+## false — прежние характер и ритм (было/стало в стендах road_relief_test, road_corridor_probe)
+static var landscape_character := true
 const CORRIDOR_STRIDE := 8
 const CORRIDOR_FADE := 8.0     # формы включаются на столько метров от закреплённого места (вода, мост, развилка), м
 const CORRIDOR_GAP := 3.0    # зазор между полотнами, достаточный для узкого сечения
@@ -720,6 +746,7 @@ func _fit_network_native(fast: Object) -> bool:
 	for name: String in CORRIDOR_KINDS:
 		table.append_array(PackedFloat64Array(CORRIDOR[name]))
 	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
+	table.append_array(_character_table())
 	var limits := PackedFloat64Array([RoadBed.SHORE.y, RoadBed.PIN, RoadBed.PIN_FADE, REACH, SHARED, FIT_FADE, FIT_LIMIT, BENCH_LIMIT, TRAIL_BENCH_LIMIT, LAND_GAP])
 	var out: Variant = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
 		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
@@ -862,6 +889,7 @@ func _build_corridor(batch: Dictionary) -> void:
 	for name: String in CORRIDOR_KINDS:
 		table.append_array(PackedFloat64Array(CORRIDOR[name]))
 	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
+	table.append_array(_character_table())
 	corridor = _corridor_reference(points, batch.half, batch.surface, batch.gate, starts, batch.kinds, batch.scales, batch.routes, table)
 	var routes: PackedInt32Array = batch.routes
 	for k in routes.size():
@@ -870,12 +898,29 @@ func _build_corridor(batch: Dictionary) -> void:
 
 ## Эталон FastGrid.CorridorRoute: те же операции в том же порядке. Природный поперечный склон и уклон — по рельефу
 ## до полотна (hv_raw), характер участка (спокойный, волнистый, разбитый) — медленный шум в мировых метрах.
+## Хвост таблицы форм: характер по покрытию (8 × 3), признак ритма по RoadBump.patch (1 — да), выравнивание спокойных
+## участков по виду (3) и покрытию (8).
+static func _character_table() -> PackedFloat64Array:
+	var out := PackedFloat64Array()
+	for v: float in CORRIDOR_CHARACTER:
+		out.append(v if landscape_character else 1.0)
+	out.append(1.0 if landscape_character else 0.0)
+	for v: float in LEVEL_KIND:
+		out.append(v if landscape_character else 0.0)
+	for v: float in LEVEL_SURFACE:
+		out.append(v if landscape_character else 0.0)
+	return out
+
+
 func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array, surfaces: PackedInt32Array, gates: PackedFloat32Array,
 		starts: PackedInt32Array, kinds: PackedInt32Array, scales: PackedFloat32Array, routes: PackedInt32Array, table: PackedFloat64Array) -> PackedFloat64Array:
 	var out := PackedFloat64Array()
 	out.resize(points.size() * CORRIDOR_STRIDE)
 	var kind_size: int = CORRIDOR.road.size()
 	var surface_at := kind_size * CORRIDOR_KINDS.size()
+	var character_at := surface_at + CORRIDOR_SURFACE.size()
+	var rhythm: bool = table[character_at + CORRIDOR_CHARACTER.size()] > 0.0
+	var level_at := character_at + CORRIDOR_CHARACTER.size() + 1
 	for r in kinds.size():
 		var from := starts[r]
 		var to := starts[r + 1]
@@ -906,6 +951,14 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			dist[j] = minf(dist[j], back)
 			land_back = 0.0 if land_dist[j] == 0.0 else land_back + STEP
 			land_dist[j] = minf(land_dist[j], land_back)
+		# высота полотна (после RoadBed) по станциям и её скользящие суммы — для выравнивания спокойных участков
+		var bed := PackedFloat64Array()
+		bed.resize(n)
+		var bed_sum := PackedFloat64Array()
+		bed_sum.resize(n + 1)
+		for j in n:
+			bed[j] = _heights.base_ground_at(points[from + j].x, points[from + j].y)
+			bed_sum[j + 1] = bed_sum[j] + bed[j]
 		var lift := PackedFloat64Array()
 		lift.resize(n)
 		for j in n:
@@ -924,7 +977,8 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var g1 := mini(to - 1, i + 5)
 			var grade := absf(_heights.base_ground_at(points[g1].x, points[g1].y, true) - _heights.base_ground_at(points[g0].x, points[g0].y, true)) / maxf(1.0, g1 - g0) / STEP
 			var p := points[i] + _origin
-			var character := _noise.get_noise_2d(p.x * 0.005 + 311.0, p.y * 0.005 - 97.0)
+			var character := (floorf(RoadBump.patch_x(p.x, p.y) * 1048576.0) / 1048576.0 - 0.5) * RHYTHM_SPAN if rhythm else _noise.get_noise_2d(p.x * 0.005 + 311.0, p.y * 0.005 - 97.0)
+			var c_at := character_at + surfaces[i] * 3
 			var roll := _noise.get_noise_2d(p.x * 0.033 + 17.0, p.y * 0.033 + 53.0)
 			var bump := _noise.get_noise_2d(p.x * 0.1 - 41.0, p.y * 0.1 + 9.0)
 			# односторонние величины берутся по обе стороны полотна: у пути в обратную сторону или у второго пути той же
@@ -959,11 +1013,16 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var curve := raw_mid - (raw_a + raw_b) * 0.5
 			var landform := smoothstep(0.035, 0.16, absf(curve)) * (1.0 if kinds[r] == 0 else 0.55)
 			var terrain_lift := clampf(curve, -0.35, 0.35) * (1.0 - smoothstep(0.25, 0.5, maxf(grade, absf(cross))))
-			var free_lift := table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy
+			var free_lift := table[k] * roll * (0.6 + 0.4 * energy) * table[c_at] + table[k + 1] * bump * energy * table[c_at + 1]
 			lift[j] = lerpf(free_lift, terrain_lift, landform) * mul * gate
+			if rhythm:
+				var lr := mini(LEVEL_R, mini(j, n - 1 - j))
+				var deviation := bed[j] - (bed_sum[j + lr + 1] - bed_sum[j - lr]) / (2 * lr + 1)
+				var calm := 1.0 - smoothstep(-0.3, 0.15, character)
+				lift[j] -= deviation * minf(0.9, table[level_at + kinds[r]] * table[level_at + 3 + surfaces[i]]) * calm * gate
 			var natural := cross * table[k + 3] * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
 			var limit := table[k + 4] * half
-			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * gate
+			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * table[c_at + 2], -limit, limit) * scale * gate
 			out[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * gate
 			out[at + 3] = table[k + 7] * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
 			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)

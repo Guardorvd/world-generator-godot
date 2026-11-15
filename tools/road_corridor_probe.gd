@@ -73,6 +73,9 @@ func _initialize() -> void:
 	ride_clutter = "--ride-clutter" in OS.get_cmdline_user_args() and clutter
 	verify_roots = "--verify-roots" in OS.get_cmdline_user_args() and clutter
 	ride_metres = clampi(int(_arg("ride-metres", "95")), 95, 1000)
+	# --old-character: прежние характер и ритм форм (до 15.11, RoadRefinement.landscape_character) — «было» тем же кодом
+	if "--old-character" in OS.get_cmdline_user_args():
+		RoadRefinement.landscape_character = false
 	DirAccess.make_dir_recursive_absolute(out)
 	run.call_deferred()
 
@@ -434,9 +437,16 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 				raw_notice = hi_raw - lo_raw >= NOTICE
 				regular = hi_mid - lo_mid < REGULAR.x and hi_dish - lo_dish < REGULAR.y and hi_tilt - lo_tilt < REGULAR.z
 			var key: String = t.kind + ("/плоско" if slope < 0.03 else "/склон")
-			for name: String in [key, t.kind]:
+			# 15.11: характер по покрытию (лес, луг, камень...) и ритм — спокойные и насыщенные окна, связь с полем кочек
+			var centre := ps[(lo + hi) / 2]
+			var surf_id: int = w.road_surface[_cell(w, centre)] if not w.road_surface.is_empty() else 0
+			var by_surface: String = "~" + t.kind + "@" + String(RoadSurface.LIST[surf_id].name)
+			var window_rms := sqrt(acc.mid2 / WINDOW)
+			var patch := RoadBump.patch_x(centre.x + w.world_origin.x * GameConfig.TILE, centre.y + w.world_origin.y * GameConfig.TILE)
+			for name: String in [key, t.kind, by_surface]:
 				if not groups.has(name): groups[name] = {windows = 0, pinned = 0, notice = 0, raw_notice = 0, regular = 0, mid2 = 0.0, raw_mid2 = 0.0,
-					tilt_var2 = 0.0, dish_abs = 0.0, line2 = 0.0, shoulder = 0.0, grade = PackedFloat64Array(), samples = 0}
+					tilt_var2 = 0.0, dish_abs = 0.0, line2 = 0.0, shoulder = 0.0, grade = PackedFloat64Array(), samples = 0,
+					calm = 0, lively = 0, sx = 0.0, sy = 0.0, sxx = 0.0, syy = 0.0, sxy = 0.0}
 				var g: Dictionary = groups[name]
 				g.windows += 1
 				if pinned:
@@ -448,6 +458,9 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 				g.regular += int(regular)
 				g.samples += WINDOW
 				g.grade = (g.grade as PackedFloat64Array) + grade.slice(lo, hi)
+				g.calm += int(window_rms < 0.12)
+				g.lively += int(window_rms > 0.18)
+				g.sx += patch; g.sy += window_rms; g.sxx += patch * patch; g.syy += window_rms * window_rms; g.sxy += patch * window_rms
 	var result := {}
 	for name: String in groups:
 		var g: Dictionary = groups[name]
@@ -461,8 +474,18 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 			tilt_var_pct = sqrt(g.tilt_var2 / s) * 100.0, dish_cm = g.dish_abs / s * 100.0,
 			lines_cm = sqrt(g.line2 / s) * 100.0, shoulder_cm = g.shoulder / s * 100.0,
 			grade1_p99 = grades[int(grades.size() * 0.99)] if not grades.is_empty() else 0.0,
-			grade1_max = grades[-1] if not grades.is_empty() else 0.0}
+			grade1_max = grades[-1] if not grades.is_empty() else 0.0,
+			calm = float(g.calm) / maxi(1, free), lively = float(g.lively) / maxi(1, free), rhythm_corr = _corr(g, free)}
 	return result
+
+
+## Связь разбитости поля кочек (RoadBump.patch().x) и силы средних форм по окнам: −1..1
+static func _corr(g: Dictionary, n: int) -> float:
+	if n < 3: return 0.0
+	var vx: float = g.sxx / n - pow(g.sx / n, 2.0)
+	var vy: float = g.syy / n - pow(g.sy / n, 2.0)
+	if vx <= 0.0 or vy <= 0.0: return 0.0
+	return (g.sxy / n - g.sx / n * g.sy / n) / sqrt(vx * vy)
 
 
 ## Заезд по участку с 8 м/с, руль держит ось (точка в 5 м впереди).
@@ -722,6 +745,8 @@ func _print(seed_text: String, row: Dictionary) -> void:
 		print("  %-16s %6.1f км закреп %3.0f%% | заметно %3.0f%% (природа %3.0f%%) гладко %3.0f%% | средние %4.1f (природа %4.1f) см | перекос %4.2f%% выпукл %4.1f см линии %4.1f см обочина %4.1f см | шаг1м p99 %.3f max %.3f" % [
 			name, m.km, m.pinned * 100, m.notice * 100, m.raw_notice * 100, m.regular * 100, m.mid_rms_cm, m.raw_mid_rms_cm, m.tilt_var_pct, m.dish_cm,
 			m.lines_cm, m.shoulder_cm, m.grade1_p99, m.grade1_max])
+		if m.has("calm"):
+			print("  %-16s ритм: спокойных окон %3.0f%%, насыщенных %3.0f%%, связь с полем кочек %+.2f" % [name, m.calm * 100, m.lively * 100, m.rhythm_corr])
 	for s: Dictionary in row.sections:
 		var r: Dictionary = s.ride
 		print("  участок %s путь %d ст.%d (%s): заезд %d м, падение %s, полёт %d, ось %.2f м, подвеска rms %.2f см размах %.1f см, верт.ускор rms %.2f" % [

@@ -413,6 +413,7 @@ func corridor_contracts() -> void:
 	for kind: String in RoadRefinement.CORRIDOR_KINDS:
 		table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR[kind]))
 	table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR_SURFACE))
+	table.append_array(RoadRefinement._character_table())
 	table[10] = 0.001
 	var forms := r._corridor_reference(points, halves, surfaces, gates, PackedInt32Array([0, 160]), PackedInt32Array([0]),
 		PackedFloat32Array([1.0]), PackedInt32Array([0]), table)

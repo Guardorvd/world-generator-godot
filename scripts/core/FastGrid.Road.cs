@@ -144,12 +144,19 @@ public partial class FastGrid
 	/// from..to every `step` m, their half width, surface and gate (fit allowance times corridor bit); the kind indexes `table`
 	/// (11 numbers per kind, then the surface gains). Another path or a hairpin of the same route closer than both half widths
 	/// + gap closes the tread gate. Wider terrain forms require additional clearance. Writes eight doubles per station.</summary>
+	/// <summary>RoadBump.patch(x, z).x — медленное поле участков (копия; оно же в шейдере road_patch и у RoadObstacles).</summary>
+	private static double RoadPatchX(double x, double z) =>
+		0.5 + 0.5 * (0.55 * Math.Sin(0.083 * x + 0.047 * z + 1.7) + 0.45 * Math.Sin(-0.039 * x + 0.091 * z + 4.1));
+
 	private static void CorridorRoute(int from, int to, int kind, double scale, int route, Vector2[] points, float[] half, int[] surface,
-		float[] gate, float[] raw, int width, int height, double tile, FastNoiseLite noise, Vector2 origin, double step, double fade,
+		float[] gate, float[] raw, float[] bedHeights, int width, int height, double tile, FastNoiseLite noise, Vector2 origin, double step, double fade,
 		double gap, double landGap, double shared, int[] routeKinds, int stride, double[] table, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute,
 		double[] segAlong, int[] cellStarts, int[] candidates, double[] outv)
 	{
-		int kindSize = 11, surfaceAt = kindSize * 3;
+		int kindSize = 11, surfaceAt = kindSize * 3, characterAt = surfaceAt + 8;
+		// 15.11: хвост таблицы — характер по покрытию (8 × 3) и признак ритма по RoadBump.patch (копия RoadRefinement)
+		bool rhythm = table[characterAt + 24] > 0.0;
+		int levelAt = characterAt + 25;
 		int n = to - from, k = kind * kindSize;
 		double holes = scale >= 1.0 ? 1.0 : 0.0;
 		var open = new double[n];
@@ -174,6 +181,14 @@ public partial class FastGrid
 			landBack = landDist[j] == 0.0 ? 0.0 : landBack + step;
 			landDist[j] = Math.Min(landDist[j], landBack);
 		}
+		// высота полотна по станциям и скользящие суммы — выравнивание спокойных участков (копия RoadRefinement)
+		var bed = new double[n];
+		var bedSum = new double[n + 1];
+		for (int j = 0; j < n; j++)
+		{
+			bed[j] = RoadGround(bedHeights, width, height, tile, points[from + j].X, points[from + j].Y);
+			bedSum[j + 1] = bedSum[j] + bed[j];
+		}
 		var lift = new double[n];
 		for (int j = 0; j < n; j++)
 		{
@@ -190,7 +205,8 @@ public partial class FastGrid
 			double grade = Math.Abs(RoadGround(raw, width, height, tile, points[g1].X, points[g1].Y)
 				- RoadGround(raw, width, height, tile, points[g0].X, points[g0].Y)) / Math.Max(1.0, g1 - g0) / step;
 			Vector2 p = points[i] + origin;
-			double character = noise.GetNoise2D((float)(p.X * 0.005 + 311.0), (float)(p.Y * 0.005 - 97.0));
+			double character = rhythm ? (Math.Floor(RoadPatchX(p.X, p.Y) * 1048576.0) / 1048576.0 - 0.5) * 1.2 : noise.GetNoise2D((float)(p.X * 0.005 + 311.0), (float)(p.Y * 0.005 - 97.0));
+			int cAt = characterAt + surface[i] * 3;
 			double roll = noise.GetNoise2D((float)(p.X * 0.033 + 17.0), (float)(p.Y * 0.033 + 53.0));
 			double bump = noise.GetNoise2D((float)(p.X * 0.1 - 41.0), (float)(p.Y * 0.1 + 9.0));
 			Vector2 wide = acrossV * 6.0f;
@@ -218,11 +234,18 @@ public partial class FastGrid
 			double curve = rawMid - (rawA + rawB) * 0.5;
 			double landform = RoadSmooth(0.035, 0.16, Math.Abs(curve)) * (kind == 0 ? 1.0 : 0.55);
 			double terrainLift = Math.Clamp(curve, -0.35, 0.35) * (1.0 - RoadSmooth(0.25, 0.5, Math.Max(grade, Math.Abs(cross))));
-			double freeLift = table[k] * roll * (0.6 + 0.4 * energy) + table[k + 1] * bump * energy;
+			double freeLift = table[k] * roll * (0.6 + 0.4 * energy) * table[cAt] + table[k + 1] * bump * energy * table[cAt + 1];
 			lift[j] = RoadLerp(freeLift, terrainLift, landform) * mul * g;
+			if (rhythm)
+			{
+				int lr = Math.Min(12, Math.Min(j, n - 1 - j));
+				double deviation = bed[j] - (bedSum[j + lr + 1] - bedSum[j - lr]) / (2 * lr + 1);
+				double calm = 1.0 - RoadSmooth(-0.3, 0.15, character);
+				lift[j] -= deviation * Math.Min(0.9, table[levelAt + kind] * table[levelAt + 3 + surface[i]]) * calm * g;
+			}
 			double natural = cross * table[k + 3] * (1.0 - RoadSmooth(0.25, 0.5, Math.Abs(cross))) * hw;
 			double limit = table[k + 4] * hw;
-			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy), -limit, limit) * scale * g;
+			outv[at + 1] = Math.Clamp(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * table[cAt + 2], -limit, limit) * scale * g;
 			outv[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * g;
 			outv[at + 3] = table[k + 7] * RoadSmooth(0.2, 0.55, hole) * RoadLerp(0.3, 1.0, broken) * mul * holes * g;
 			outv[at + 4] = Math.Clamp(spot * 1.6, -0.7, 0.7);
@@ -412,7 +435,7 @@ public partial class FastGrid
 				}
 			}
 			if (scales[t] > 0.0f)
-				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, raw, width, height, tile, noise, origin, step,
+				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, raw, ground, width, height, tile, noise, origin, step,
 					fade, gap, landGap, shared, routeKinds, stride, table, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
 		});
 		return new Godot.Collections.Dictionary
