@@ -65,6 +65,10 @@ const MOUNTAIN_CLIMB := 4.0
 ## подбирает числа ключом --turn; 0 — прежний поиск. Звериные тропы, короткие подходы (_link) и природные маршруты
 ## (RideRoutes) без штрафа. Подбор на «Север-1234» — docs/ROAD_NETWORK.md, раздел 15.11.2026.
 static var turn_costs := {road = 12.0, trail = 6.0, mountain = 4.0}
+## 15.11.2026: длинные галсы — поворот на 90° и круче в пределах 12 м пути (Pathfinder.BEND_STEPS) дороже на
+## bend × BEND_SHAPE: на крутом склоне поиск набирает высоту длинными галсами с широкими разворотами, а не зубцами
+## в 1–2 клетки, куда дуга полотна не помещается (разбор 15.11: главная причина углов без дуги — радиус).
+static var bend_costs := {road = 6.0, trail = 0.0, mountain = 0.0}
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
@@ -527,6 +531,31 @@ const GROUP_RETRIES := [Vector4(1, 1, 1.30, 1), Vector4(1, 1, 1, 1.30)]
 
 static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
 		kind := "road", joins := {}, corridor := Callable(), smooth_kind := "") -> Array:
+	var relax: float = line_relax.get(kind if smooth_kind.is_empty() else smooth_kind, 0.0)
+	if relax <= 1.0 or pts.size() < 3:
+		return _road_line_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, 0.0)
+	# Линия с поблажкой на бугры принимается, только если её профиль целиком (окна PROFILE_BASE, вне настилов) в пределе;
+	# иначе — прежняя линия без поблажки.
+	var line := _road_line_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, relax)
+	var design := kind if smooth_kind.is_empty() else smooth_kind
+	var grade := MOUNTAIN_GRADE if design == "mountain" else (TRAIL_GRADE if design == "trail" else ROAD_LIMIT)
+	var profile: Array = []
+	var skip := PackedByteArray()
+	for p: Dictionary in line:
+		var at := Vector2(p.x, p.y)
+		profile.append(at)
+		skip.append(1 if _road_axis(w, on_axis, at) else 0)
+	if _profile_ok(surface, profile, grade, skip):
+		return line
+	line_fallbacks += 1
+	return _road_line_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, 0.0)
+
+
+static var line_fallbacks := 0 # линий, где профиль с поблажкой вышел круче предела (счётчик для стенда)
+
+
+static func _road_line_with(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
+		kind: String, joins: Dictionary, corridor: Callable, smooth_kind: String, relax: float) -> Array:
 	if pts.size() < 2:
 		return pts
 	var fixed := PackedByteArray()
@@ -542,7 +571,7 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 		grade = MOUNTAIN_GRADE if design_kind == "mountain" else (TRAIL_GRADE if design_kind == "trail" else ROAD_LIMIT),
 		cross = MOUNTAIN_GRADE if design_kind == "mountain" else BENCH_CROSS,
 		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
-		probe = surface.fast_water(), axis = on_axis, corridor = corridor,
+		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax,
 	}
 	var tolerance: float = straighten.get(design_kind, 0.0)
 	if tolerance > 0.0 and pts.size() > 2:
@@ -670,7 +699,15 @@ static func _chord_ok(surface: Heightfield, pts: Array, fixed: PackedByteArray, 
 			line.append(_point(p, pts[i].w))
 	if rules.corridor.is_valid() and not rules.corridor.call(line):
 		return false
-	return _road_segment(surface, pts[i], pts[j], rules.grade, rules.cross, rules.probe)
+	var relax: float = rules.relax
+	if relax <= 1.0:
+		return _road_segment(surface, pts[i], pts[j], rules.grade, rules.cross, rules.probe)
+	if not _road_segment(surface, pts[i], pts[j], rules.grade * relax, rules.cross, rules.probe):
+		return false
+	var profile: Array = []
+	for k in samples + 1:
+		profile.append(a.lerp(b, float(k) / samples))
+	return _profile_ok(surface, profile, rules.grade)
 
 
 ## Сохраняем вершины дуг и якоря; длинные прямые делим для профиля и покрытия.
@@ -836,10 +873,50 @@ static func _road_curve(surface: Heightfield, control: Array, corridor: Array, w
 		curve.append(_point(p, width))
 	if rules.corridor.is_valid() and not rules.corridor.call(curve):
 		return []
+	var relax: float = rules.relax
+	var local := grade * relax if relax > 1.0 else grade
 	for k in range(1, curve.size()):
-		if not _road_segment(surface, curve[k - 1], curve[k], grade, rules.cross, rules.probe):
+		if not _road_segment(surface, curve[k - 1], curve[k], local, rules.cross, rules.probe):
+			return []
+	if relax > 1.0:
+		var profile: Array = []
+		for p: Dictionary in curve:
+			profile.append(Vector2(p.x, p.y))
+		if not _profile_ok(surface, profile, grade):
 			return []
 	return curve
+
+
+## 15.11.2026: полотно (RoadBed) выравнивает профиль дороги на десятках метров, поэтому линия по найденному пути
+## проверяется так же: на каждые PROFILE_BASE клеток уклон не круче предела вида, а короткий бугор (по _road_segment)
+## не круче предела × line_relax. Иначе прямая или дуга через бугор в 4 м запрещена, и линия остаётся «пилой» сетки,
+## хотя маршрут в целом в пределе (разбор 15.11, отрог у озера на «Север-1234»). Поиск пути этим не меняется.
+static var line_relax := {road = 1.4, trail = 1.4, mountain = 1.3}
+const PROFILE_BASE := 3.0 # клеток (12 м)
+
+
+## points — точки вдоль линии (Vector2, клетки), не реже 0,25 клетки
+static func _profile_ok(surface: Heightfield, points: Array, grade: float, skip := PackedByteArray()) -> bool:
+	var T := GameConfig.TILE
+	var heights := PackedFloat64Array()
+	var along := PackedFloat64Array()
+	var run := 0.0
+	for k in points.size():
+		var p: Vector2 = points[k]
+		if k > 0: run += p.distance_to(points[k - 1])
+		along.append(run)
+		heights.append(surface.ground_at(p.x * T, p.y * T))
+	# окно от j до k; точка на настиле сооружения (skip) начинает окно заново
+	var j := 0
+	for k in range(1, points.size()):
+		if not skip.is_empty() and skip[k] != 0:
+			j = k
+			continue
+		while j + 1 < k and along[k] - along[j + 1] >= PROFILE_BASE:
+			j += 1
+		if absf(heights[k] - heights[j]) > grade * (along[k] - along[j]) * T + 0.00001:
+			return false
+	return true
 
 
 ## probe — Heightfield.fast_water(): та же проверка на C# (FastGrid.RoadSegment)
@@ -1463,7 +1540,7 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 	# состояние восстановлено, и он с теми же входами. Совпадение входов (и окна) проверяет сам поиск.
 	if limits.size() > 1:
 		finder.window = windows[0]
-		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version, turn_costs.road)
+		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version, turn_costs.road, bend_costs.road)
 	for limit: float in limits:
 		for level in windows.size():
 			if state.get("no_bridge", {}).size() != known:
@@ -1696,10 +1773,10 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 ## У троп свой предел: короткий технический подъём конкурирует с длинным обходом по цене A*.
 static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = TRAIL_GRADE) -> PackedInt32Array:
 	if finder.search_budget == 0:
-		return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb))
+		return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb), _bend(climb))
 	if not finder.can_reach(cost, a, b, climb, limit):
 		return PackedInt32Array()
-	return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb))
+	return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb), _bend(climb))
 
 
 ## Штраф поворота вида пути по его цене подъёма
@@ -1709,11 +1786,17 @@ static func _turn(climb: float) -> float:
 	return turn_costs.trail
 
 
+static func _bend(climb: float) -> float:
+	if climb == ROAD_CLIMB: return bend_costs.road
+	if climb == MOUNTAIN_CLIMB: return bend_costs.mountain
+	return bend_costs.trail
+
+
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
 ## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
 static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE, cost_version: int = -1) -> PackedInt32Array:
 	finder.use_corridor = wide
-	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version, turn_costs.road)
+	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version, turn_costs.road, bend_costs.road)
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:

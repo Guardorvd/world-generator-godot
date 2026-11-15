@@ -13,6 +13,9 @@ extends RefCounted
 ##   grade       — по виду: доля длины круче 12 %, средний и наибольший продольный уклон на хордах 16 м
 ##                 по готовой поверхности (surface, вне сооружений); без surface не считается
 ##   С 15.11 природные маршруты (ключ ride) считаются отдельным видом ride в длинах, изломах и новых показателях.
+##   corners     — настоящие углы (с 15.11): вершина линии с поворотом > 20°, у которой оба соседних отрезка не короче
+##                 0,3 клетки. Вписанная дуга (_road_curve) идёт точками через ≤ 0,25 клетки и углом не считается, даже
+##                 тесная (kinks её считает); угол — место, где сглаживание оставило вершину ломаной. Один на 1 клетку.
 ##   raw_turns   — по виду: смены направления сырого пути A* (w.generation.road_cells) на 100 клеток, из них ≥ 90°
 
 const BIN := 10        # клеток в ячейке индекса отрезков (40 м)
@@ -27,6 +30,8 @@ const KINK := 35.0
 const HAIRPIN := 110.0
 const SHARP := 60.0
 const STEEP := 0.12
+const CORNER := 20.0
+const CORNER_SEG := 0.3
 
 
 static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: Heightfield = null) -> Dictionary:
@@ -67,6 +72,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var pairs := {} # "r:other:вид" -> м
 	var kinks := {road = 0, trail = 0, mountain = 0, ride = 0}
 	var kink_spots: Array = []
+	var corners := {road = 0, trail = 0, mountain = 0, ride = 0}
+	var corner_spots: Array = []
 	var hairpins := {road = 0, trail = 0, mountain = 0, ride = 0}
 	var sharp := {road = 0, trail = 0, mountain = 0, ride = 0}
 	var hairpin_spots: Array = []
@@ -109,6 +116,17 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 							crossings[pair].append(hit)
 		stations.append(Vector2(pts[-1].x, pts[-1].y))
 		samples += stations.size()
+		var last_corner := Vector2(INF, INF)
+		for j in range(1, pts.size() - 1):
+			var a := Vector2(pts[j - 1].x, pts[j - 1].y)
+			var b := Vector2(pts[j].x, pts[j].y)
+			var c := Vector2(pts[j + 1].x, pts[j + 1].y)
+			if a.distance_to(b) < CORNER_SEG or b.distance_to(c) < CORNER_SEG: continue
+			if absf(rad_to_deg((b - a).angle_to(c - b))) <= CORNER: continue
+			if b.distance_to(last_corner) < 1.0 or _near_end(ends, b, 2.0) or _near_structure(structures, b, 3.0): continue
+			last_corner = b
+			corners[_kind(t)] = int(corners.get(_kind(t), 0)) + 1
+			if _kind(t) != "mountain": corner_spots.append(b)
 		var hairpin_skip := 0
 		var sharp_skip := 0
 		for n in stations.size():
@@ -233,7 +251,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 		raw_turns[kind] = {per100 = snappedf(acc[1] * 100.0 / maxf(acc[0], 1.0), 0.1), right_or_more = acc[2], steps = acc[0]}
 	return {routes = routes.size(), length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
-		hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
+		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
 		spots = spots, kink_spots = kink_spots, double_spots = double_spots, pairs = _top(pairs, 8)}
 
@@ -271,7 +289,8 @@ static func _near_structure(structures: Array, p: Vector2, r: float) -> bool:
 
 
 ## Картинка сети: дороги белые, тропы светло-серые, горные коричневые, природные маршруты оранжевые;
-## красные точки — совпадающие оси, жёлтые — параллельные полотна, малиновые — изломы, голубые — двойные пересечения,
+## красные точки — совпадающие оси, жёлтые — параллельные полотна, малиновые — углы (corners, с 15.11; раньше изломы
+## kinks), голубые — двойные пересечения,
 ## зелёные — развороты > 110° на 16 м.
 static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 	var S := 2
@@ -297,7 +316,7 @@ static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 				img.set_pixel(clampi(int(p.x), 0, w.W * S - 1), clampi(int(p.y), 0, w.H * S - 1), color)
 	for s: Array in m.spots:
 		_dot(img, s[0] * S, Color(1, 0.1, 0.1) if s[1] == "overlap" else Color(1, 0.9, 0.1), 1)
-	for p: Vector2 in m.kink_spots: _dot(img, p * S, Color(1, 0.2, 0.9), 1)
+	for p: Vector2 in m.get("corner_spots", m.kink_spots): _dot(img, p * S, Color(1, 0.2, 0.9), 1)
 	for p: Vector2 in m.get("hairpin_spots", []): _dot(img, p * S, Color(0.1, 1.0, 0.3), 2)
 	for p: Vector2 in m.double_spots: _dot(img, p * S, Color(0.2, 0.9, 1), 2)
 	DirAccess.make_dir_recursive_absolute(file.get_base_dir())
@@ -311,5 +330,5 @@ static func _dot(img: Image, p: Vector2, c: Color, r: int) -> void:
 ## Без точек для картинки — для печати
 static func summary(m: Dictionary) -> Dictionary:
 	var out := m.duplicate()
-	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots"]: out.erase(key)
+	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots", "corner_spots"]: out.erase(key)
 	return out

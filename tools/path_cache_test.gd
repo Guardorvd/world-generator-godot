@@ -113,18 +113,20 @@ func _turn_checks() -> void:
 	var same := true
 	var changed := false
 	for pair: Vector2i in [Vector2i(5 * N + 3, 42 * N + 44), Vector2i(40 * N + 2, 3 * N + 45), Vector2i(24 * N + 10, 24 * N + 40)]:
-		for turn: float in [0.0, 2.0, 8.0]:
+		for shape: Vector2 in [Vector2(0, 0), Vector2(2, 0), Vector2(8, 0), Vector2(8, 6), Vector2(0, 12)]:
+			var turn := shape.x
+			var bend := shape.y
 			for budget: int in [-1, 300]:
 				fast.search_budget = budget
 				slow.search_budget = budget
-				var a := fast.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn)
-				var b := slow.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn)
+				var a := fast.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn, bend)
+				var b := slow.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn, bend)
 				if a != b or fast.search_budget != slow.search_budget:
 					same = false
-					print("  расхождение: %s turn %.1f запас %d: C# %d клеток, GDScript %d" % [pair, turn, budget, a.size(), b.size()])
+					print("  расхождение: %s turn %.1f bend %.1f запас %d: C# %d клеток, GDScript %d" % [pair, turn, bend, budget, a.size(), b.size()])
 				if turn > 0.0 and budget < 0 and a != fast.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, 0.0): changed = true
 	fast.search_budget = -1
-	check(same, "C# и GDScript со штрафом поворота: те же пути и запас")
+	check(same, "C# и GDScript со штрафом поворота и длинных галсов: те же пути и запас")
 	check(changed, "штраф поворота меняет путь хотя бы в одной паре")
 	check(plain != turned or changed, "штраф поворота действует")
 	fast.release()

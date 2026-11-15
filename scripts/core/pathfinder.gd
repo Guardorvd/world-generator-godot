@@ -18,6 +18,11 @@ const H_COST := 0.6
 ## стоит turn × TURN_SHAPE[ступени] (в единицах стоимости шага). Закрытое множество по клеткам, как и было:
 ## путь может выйти чуть дороже лучшего с учётом поворотов, зато поиск не растёт в 8 раз. Штрафы ≥ 0 — оценка остаётся допустимой.
 const TURN_SHAPE: Array[float] = [0.0, 0.03, 0.4, 1.0, 2.0]
+## 15.11.2026: длинные галсы (аргумент bend). Новый шаг сравнивается с шагом BEND_STEPS шагов назад (from-цепочка, 12 м):
+## поворот на 90° и круче на таком отрезке стоит bend × BEND_SHAPE[ступени]. Резкий угол платит на каждом из BEND_STEPS
+## шагов, растянутый — один раз: поиску выгоднее длинные прямые и широкие развороты, в которые впишется дуга полотна.
+const BEND_SHAPE: Array[float] = [0.0, 0.0, 0.4, 1.0, 2.0]
+const BEND_STEPS := 3
 ## Октант направления шага k (угол / 45°) для Grid.DX/DY: разница двух шагов — min(|a − b|, 8 − |a − b|).
 const OCTANT: Array[int] = [0, 4, 2, 6, 1, 7, 3, 5]
 ## Начальная ёмкость кучи (элементов); растёт вдвое по необходимости
@@ -221,13 +226,14 @@ func _bounds() -> PackedInt32Array:
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
-func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0, bend: float = 0.0) -> PackedInt32Array:
 	if search_budget == 0:
 		_skipped += 1
 		return PackedInt32Array()
 	if _fast != null:
 		_search_versions(cost_version)
 		_fast.TurnCost = turn
+		_fast.BendCost = bend
 		_fast.SearchBudget = search_budget
 		var started := Time.get_ticks_usec()
 		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
@@ -252,15 +258,19 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	for k in 8:
 		OFF.append(DY[k] * W + DX[k])
 	# Штраф поворота: строка ka (направление прихода, 8 — старт) × новый шаг k
-	var turning := turn > 0.0
+	var bending := bend > 0.0
+	var turning := turn > 0.0 or bending
 	var arrive := self.arrive
 	var PEN := PackedFloat64Array()
+	var BPEN := PackedFloat64Array()
 	if turning:
 		PEN.resize(72)
+		BPEN.resize(72)
 		for ka in 8:
 			for k in 8:
 				var d := absi(OCTANT[ka] - OCTANT[k])
 				PEN[ka * 8 + k] = turn * TURN_SHAPE[mini(d, 8 - d)]
+				BPEN[ka * 8 + k] = bend * BEND_SHAPE[mini(d, 8 - d)]
 	var bounds := _bounds()
 	var X0 := bounds[0]
 	var Y0 := bounds[1]
@@ -321,6 +331,14 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		var gc := g[c]
 		var cc := cost[c]
 		var row := arrive[c] * 8 if turning else 0
+		var brow := 64
+		if bending:
+			var x := c
+			for j in BEND_STEPS - 1:
+				if x == -1: break
+				x = from[x]
+			if x != -1:
+				brow = arrive[x] * 8
 		# у клеток не на краю все 8 соседей внутри карты: проверка границ не нужна
 		var inner := cx > X0 and cy > Y0 and cx < X1 - 1 and cy < Y1 - 1
 		for k in 8:
@@ -367,6 +385,8 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 			var ng := gc + DL[k] * step
 			if turning:
 				ng += PEN[row + k]
+			if bending:
+				ng += BPEN[brow + k]
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn
 				g[n] = ng
@@ -491,10 +511,11 @@ func _step_allowed(cost: PackedFloat32Array, terrain: bool, max_grade: float, c:
 ## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
 ## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
-func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0) -> void:
+func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0, bend: float = 0.0) -> void:
 	if eager_fallback and _fast != null and search_budget != 0:
 		_search_versions(cost_version)
 		_fast.TurnCost = turn
+		_fast.BendCost = bend
 		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
 
 

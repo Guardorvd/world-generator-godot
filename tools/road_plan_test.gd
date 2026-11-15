@@ -53,6 +53,16 @@ func _initialize() -> void:
 	if not pull.is_empty():
 		StageTrails.straighten = {road = float(pull.get_slice(",", 0)), trail = float(pull.get_slice(",", 1)), mountain = float(pull.get_slice(",", 2))}
 		print("срезание лесенки: ", StageTrails.straighten)
+	# --bend r,t,m: штраф длинных галсов дорог, троп и горных (StageTrails.bend_costs)
+	var bend := _arg(args, "--bend", "")
+	if not bend.is_empty():
+		StageTrails.bend_costs = {road = float(bend.get_slice(",", 0)), trail = float(bend.get_slice(",", 1)), mountain = float(bend.get_slice(",", 2))}
+		print("длинные галсы: ", StageTrails.bend_costs)
+	# --line-relax r,t,m: срезаемый бугор при построении линии (StageTrails.line_relax, доля предела; 0 — без поблажки)
+	var line_arg := _arg(args, "--line-relax", "")
+	if not line_arg.is_empty():
+		StageTrails.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
+		print("линия: срезаемый бугор ", StageTrails.line_relax)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -97,6 +107,7 @@ func _initialize() -> void:
 	for key: String in w.generation_profile:
 		if key in KEYS or key.begins_with("mountain_"): profile[key] = w.generation_profile[key]
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
+	print("линий без поблажки на бугры (профиль круче предела): ", StageTrails.line_fallbacks)
 	print("PROFILE ", JSON.stringify(profile))
 	print("SECOND WAYS ", JSON.stringify(w.generation_profile.get("second_ways", [])), " повышено до дорог, м: ", w.generation_profile.get("upgraded_m", 0))
 	for link: Array in w.generation_profile.get("road_links", []):
