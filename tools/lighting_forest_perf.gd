@@ -6,6 +6,8 @@ var cycle: RefCounted
 var mist: Node3D
 
 func setup() -> void:
+	if "--gdscript" in OS.get_cmdline_user_args():
+		Grid.allow_fast = false
 	super.setup()
 	var baseline := "--baseline" in OS.get_cmdline_user_args()
 	var path := "res://.godot/lighting_baseline/scenes/game_world.tscn" if baseline else "res://scenes/game_world.tscn"
@@ -19,6 +21,9 @@ func setup() -> void:
 			child.environment = template.get_node("WorldEnvironment").environment.duplicate(true)
 			environment = child.environment
 	var original: DirectionalLight3D = template.get_node("Sun")
+	var fog_quality := int(Dev.arg("fog-quality", Dev.arg("quality", "1")))
+	if "--no-fog" in OS.get_cmdline_user_args():
+		fog_quality = 0
 	for property: String in ["shadow_bias", "shadow_normal_bias", "shadow_blur", "directional_shadow_mode",
 		"directional_shadow_split_1", "directional_shadow_split_2", "directional_shadow_split_3",
 		"directional_shadow_blend_splits", "directional_shadow_fade_start", "directional_shadow_max_distance"]:
@@ -30,7 +35,7 @@ func setup() -> void:
 		cycle = script.new(environment, sun)
 	else:
 		cycle = DayCycle.new(environment, sun)
-		preload("res://scripts/render/lighting_quality.gd").apply(environment, sun, int(Dev.arg("quality", "1")), true)
+		preload("res://scripts/render/lighting_quality.gd").apply(environment, sun, int(Dev.arg("quality", "1")), true, fog_quality)
 		cycle.cloud_cover_override = float(Dev.arg("cover", "-1"))
 	cycle.camera = camera
 	var base_image := Image.create(16, 16, false, Image.FORMAT_RGB8)
@@ -44,17 +49,18 @@ func setup() -> void:
 		_replace_materials(veg._defs)
 		_replace_materials(veg.understory)
 		_replace_nodes(root)
+		if "--no-fog" in OS.get_cmdline_user_args():
+			environment.volumetric_fog_enabled = false
 	cycle.apply(float(Dev.arg("hour", "7.5")), 0.0)
-	if "--no-fog" in OS.get_cmdline_user_args():
-		environment.volumetric_fog_enabled = false
-		cycle.apply(float(Dev.arg("hour", "7.5")), 0.0)
 	if "--local-fog" in OS.get_cmdline_user_args():
 		world.moist.fill(0.85)
 		mist = preload("res://scripts/render/local_mist.gd").new()
 		root.add_child(mist)
 		mist.setup(world, Heightfield.new(world, false))
+		mist.set_quality(fog_quality, environment)
 	results.hour = float(Dev.arg("hour", "7.5"))
 	results.quality = int(Dev.arg("quality", "1"))
+	results.fog_quality = fog_quality
 	results.adapter = RenderingServer.get_video_adapter_name()
 	results.volumetric_fog = environment.volumetric_fog_enabled
 	if "--lamp" in OS.get_cmdline_user_args():
@@ -69,9 +75,9 @@ func _process(delta: float) -> bool:
 		cycle.apply(float(Dev.arg("hour", "7.5")), elapsed)
 	var done := super._process(delta)
 	if mist != null and camera != null:
-		mist.update(camera.position, cycle, delta, elapsed)
+		mist.update(camera.position, delta)
 		results.fog_stream = mist.stats.duplicate()
-		results.fog_volumes = mist.patches.size()
+		results.fog_patches = mist.patches.size()
 	if camera != null and "--turns" in OS.get_cmdline_user_args():
 		camera.rotate_y(sin(elapsed * 1.7) * 0.6)
 	return done

@@ -1092,7 +1092,7 @@ text = "Туман"
 unique_name_in_owner = true
 custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
-tooltip_text = "Низкий — обычная дымка. Средний и высокий включают объёмный туман в Forward+. Высокий увеличивает дальность и детализацию."
+tooltip_text = "Низкий — атмосферная дымка. Средний добавляет туман во влажных низинах. Высокий добавляет объёмное рассеяние света в Forward+."
 
 [node name="ChecksRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2

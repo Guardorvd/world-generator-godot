@@ -9,6 +9,9 @@ func check(ok: bool, label: String) -> void:
 	if not ok: failures += 1
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 30)
+	if "--gdscript" in OS.get_cmdline_user_args():
+		Grid.allow_fast = false
 	run.call_deferred()
 
 func run() -> void:
@@ -17,9 +20,9 @@ func run() -> void:
 	root.add_child(sun)
 	var day := DayCycle.new(env, sun)
 	Quality.apply(env, sun, 0, true)
-	check(not env.volumetric_fog_enabled, "low quality fallback")
+	check(env.fog_enabled and not env.volumetric_fog_enabled, "low quality has ordinary fog")
 	Quality.apply(env, sun, 1, true)
-	check(env.volumetric_fog_enabled == (RenderingServer.get_current_rendering_method() == "forward_plus"), "renderer guard")
+	check(env.fog_enabled and not env.volumetric_fog_enabled, "medium has no volumetric buffer")
 	day.apply(7.5, 0.0)
 	var morning := day.local_mist
 	var height_density := env.fog_height_density
@@ -41,21 +44,34 @@ func run() -> void:
 	var mist := Mist.new()
 	root.add_child(mist)
 	mist.setup(world, Heightfield.new(world, false))
-	# Exercise the node lifecycle even under the headless renderer.
-	env.volumetric_fog_enabled = true
-	mist.update(Vector3(512, 30, 512), day, 1.0, 1.0)
+	var at := Vector3(512, 30, 512)
+	mist.set_quality(1, env)
+	mist.update(at, 1.0)
 	check(not mist.patches.is_empty() and mist.patches.size() <= Mist.LIMIT, "bounded local patches")
 	var key: Vector2i = mist.patches.keys()[0]
 	var position: Vector3 = mist.patches[key].node.position
-	mist.update(Vector3(514, 100, 514), day, 0.1, 1.1)
+	check(mist.patches[key].node is MeshInstance3D, "medium uses an analytic proxy")
+	mist.update(Vector3(514, 100, 514), 0.1)
 	check(mist.patches[key].node.position == position, "camera height does not move fog")
-	mist.update(Vector3(10000, 30, 10000), day, 10.0, 11.1)
+	mist.update(Vector3(10000, 30, 10000), 0.1)
 	check(mist.patches.is_empty(), "travel releases old patches")
-	mist.update(Vector3(512, 30, 512), day, 1.0, 12.1)
+	mist.update(at, 1.0)
 	check(mist.patches.has(key) and mist.patches[key].node.position == position, "return recreates the same geography")
-	env.volumetric_fog_enabled = false
-	mist.update(Vector3(512, 30, 512), day, 1.0, 13.1)
-	check(mist.patches.is_empty(), "quality change releases existing volumes")
+	mist.set_quality(2, env)
+	check(mist.patches[key].node is MeshInstance3D, "high falls back to analytic on other renderers")
+	env.volumetric_fog_enabled = true
+	var analytic: Node3D = mist.patches[key].node
+	mist.set_quality(2, env)
+	mist.update(at, 1.0)
+	check(not analytic.visible and mist.patches[key].node is FogVolume, "switch hides the analytic proxy and creates a fog volume")
+	check(mist.patches[key].node.position == position, "both modes share fog geography")
+	Quality.apply(env, sun, 1, true, GameSettings.FOG_OFF)
+	var volume: Node3D = mist.patches[key].node
+	mist.set_quality(GameSettings.FOG_OFF, env)
+	mist.update(at, 1.0)
+	check(not env.fog_enabled and not env.volumetric_fog_enabled and not volume.visible and mist.patches.is_empty(),
+		"off disables both global fog and local volumes immediately")
+	env.fog_enabled = true
 	_streaming_checks(world, day)
 	_geography_checks(world, day)
 	var lamp := preload("res://scripts/render/bike_lamp.gd").new()
@@ -67,33 +83,33 @@ func run() -> void:
 func _streaming_checks(world: WorldData, day: DayCycle) -> void:
 	var mist := Mist.new()
 	root.add_child(mist)
-	mist.setup(world, Heightfield.new(world, false))
 	day.env.volumetric_fog_enabled = true
+	mist.setup(world, Heightfield.new(world, false))
+	mist.set_quality(2, day.env)
 	var at := Vector3(168, 30, 168)
-	mist.update(at, day, 1.0 / 60.0, 0.0)
+	mist.update(at, 1.0 / 60.0)
 	check(mist.patches.has(Vector2i(1, 1)), "nearest site admitted first")
 	var budget_ok := true
-	for frame in 120:
+	for _frame in 120:
 		var before: int = mist.stats.evaluated
-		mist.update(at, day, 1.0 / 60.0, frame / 60.0)
+		mist.update(at, 1.0 / 60.0)
 		budget_ok = budget_ok and mist.stats.evaluated - before <= Mist.BUILD_BUDGET
 	check(budget_ok, "geography work bounded each frame")
 	var updates: int = mist.stats.material_updates
 	var count := mist.patches.size()
-	for frame in 60: mist.update(at, day, 1.0 / 60.0, 2.0 + frame / 60.0)
+	for _frame in 60: mist.update(at, 1.0 / 60.0)
 	var writes: int = mist.stats.material_updates - updates
 	check(writes <= count * 11, "material updates capped near 10 Hz at 60 FPS")
 	print("Material batches over 60 frames: %d (previous policy: %d)" % [writes, count * 60])
-	for frame in 420: mist.update(at, day, 1.0 / 60.0, 3.0 + frame / 60.0)
 	updates = mist.stats.material_updates
 	# Weather changes are shared shader state; settled volume materials stay untouched.
 	for frame in 60:
 		day.apply(7.5, 10.0 + frame / 60.0)
-		mist.update(at, day, 1.0 / 60.0, 10.0 + frame / 60.0)
+		mist.update(at, 1.0 / 60.0)
 	check(mist.stats.material_updates == updates, "settled volumes need no material writes while weather advances")
 	print("Settled volume material writes over 60 frames: %d" % (mist.stats.material_updates - updates))
 	# No full fade-out delay after a large camera jump, even at high FPS.
-	mist.update(Vector3(840, 30, 840), day, 1.0 / 60.0, 3.0)
+	mist.update(Vector3(840, 30, 840), 1.0 / 60.0)
 	check(mist.patches.has(Vector2i(7, 7)), "teleport admits destination in the same frame")
 	var near := true
 	for entry: Dictionary in mist.patches.values():
@@ -105,6 +121,7 @@ func _geography_checks(world: WorldData, day: DayCycle) -> void:
 	var mist := Mist.new()
 	root.add_child(mist)
 	mist.setup(world, Heightfield.new(world, false))
+	mist.set_quality(2, day.env)
 	world.moist.fill(0.1)
 	# A wet pocket off the original grid center must still be found.
 	# Probe at (532, 504) in bucket (4,4).
@@ -120,15 +137,15 @@ func _geography_checks(world: WorldData, day: DayCycle) -> void:
 	check(slope_site.size.z == site.size.z, "slope narrows only the affected axis")
 	# At 10 FPS, dry near cells must not repeatedly reset the queue and starve far ones.
 	world.moist.fill(0.1)
-	world.moist[126 * world.W + 210] = 0.9
-	for frame in 100: mist.update(Vector3(512, 30, 512), day, 0.1, frame * 0.1)
-	check(mist.patches.has(Vector2i(7, 4)), "dry foreground cannot starve a wet distant site")
+	world.moist[126 * world.W + 175] = 0.9
+	for _frame in 100: mist.update(Vector3(512, 30, 512), 0.1)
+	check(mist.patches.has(Vector2i(6, 4)), "dry foreground cannot starve a wet distant site")
 	var cached: int = mist.stats.cache_hits
 	var sampled: int = mist.stats.sampled
-	for frame in 40: mist.update(Vector3(512, 30, 512), day, 0.1, 10.0 + frame * 0.1)
+	for _frame in 40: mist.update(Vector3(512, 30, 512), 0.1)
 	check(mist.stats.cache_hits > cached, "dry plan sites reuse cached geography")
 	check(mist.stats.sampled == sampled, "stationary plan does not repeat geography sampling")
-	check(mist._plan_sites.size() <= 81, "plan cache stays spatially bounded")
+	check(mist._plan_sites.size() <= 25, "plan cache stays spatially bounded")
 	mist.free()
 	world.moist.fill(0.85)
 	# Real regional field publication/removal, no procedural generation.
@@ -148,12 +165,13 @@ func _geography_checks(world: WorldData, day: DayCycle) -> void:
 	var regional := Mist.new()
 	root.add_child(regional)
 	regional.setup(world, Heightfield.new(world, false))
-	for frame in 40: regional.update(Vector3(3500, 30, 500), day, 0.1, frame * 0.1)
+	regional.set_quality(2, day.env)
+	for _frame in 40: regional.update(Vector3(3500, 30, 500), 0.1)
 	check(not regional.patches.is_empty(), "published region supplies fog sites")
 	world.outer.set_ledger({regions = {}})
-	for frame in 70: regional.update(Vector3(3500, 30, 500), day, 0.1, 4.0 + frame * 0.1)
+	for _frame in 20: regional.update(Vector3(3500, 30, 500), 0.1)
 	check(regional.patches.is_empty(), "evicted regional fields release fog without camera movement")
 	world.outer.set_ledger(ledger)
-	for frame in 50: regional.update(Vector3(3500, 30, 500), day, 0.1, 11.0 + frame * 0.1)
+	for _frame in 20: regional.update(Vector3(3500, 30, 500), 0.1)
 	check(not regional.patches.is_empty(), "regional reload is not hidden by a negative cache")
 	regional.free()

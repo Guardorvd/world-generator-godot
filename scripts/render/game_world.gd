@@ -579,6 +579,7 @@ func _apply_lighting_and_fog() -> void:
 	var settings := services.settings
 	preload("res://scripts/render/lighting_quality.gd").apply(
 		$WorldEnvironment.environment, $Sun, settings.lighting, settings.shadows, settings.fog_quality)
+	local_mist.set_quality(settings.fog_quality, $WorldEnvironment.environment)
 	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
 	VisualStyle.bind($WorldEnvironment.environment)
 	VisualStyle.configure(settings.style_on, settings.style_amount)
@@ -1299,7 +1300,7 @@ func _process(delta: float) -> void:
 		ambient.update(delta, camera.global_position, day.sunlight)
 	stream_coordinator.update(pos)
 	t0 = _tick_mark("frame_stream", t0)
-	local_mist.update(camera.global_position, day, delta, time)
+	local_mist.update(camera.global_position, delta)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
 	update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta)

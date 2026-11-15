@@ -622,7 +622,7 @@ func _group_world() -> void:
 				["water", "вода"] + cut.call([game.get_node("Water")]),
 				["particles", "частицы и местный туман", _particles.bind(false), _particles.bind(true)],
 			], at, game.vegetation)
-			# пасмурный рассвет у воды: местный туман набирает объёмы поверх объёмного
+			# Пасмурный рассвет у воды с местным туманом.
 			hour = 6.5
 			game.day.cloud_cover_override = 1.0
 			await _case("world.valley_mist", "Мир: %s, пасмурный рассвет" % heavy_view.title, HOLD, at)
@@ -634,8 +634,15 @@ func _group_world() -> void:
 		var step := _look.bind(heavy_view)
 		var far: Array = get_nodes_in_group("distant_forest")
 		var msaa := root.msaa_3d
+		var low_fog := func() -> void:
+			env.volumetric_fog_enabled = false
+			game.local_mist.set_quality(0, env)
+		var low_light := func() -> void:
+			Lighting.apply(env, sun, 0, settings.shadows, 0)
+			game.local_mist.set_quality(0, env)
 		var low := func() -> void:
 			Lighting.apply(env, sun, 0, false, 0)
+			game.local_mist.set_quality(0, env)
 			VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {})
 			_veg_level(game.vegetation, 0, 0)
 			_particles(false)
@@ -649,11 +656,11 @@ func _group_world() -> void:
 			root.msaa_3d = msaa
 		await _ablate("world", "Мир, вид «%s»" % heavy_view.title, "world.off_", heavy, [
 			["shadows", "тени солнца", func() -> void: sun.shadow_enabled = false, relight],
-			["lighting", "освещение и туман выше низкого", func() -> void: Lighting.apply(env, sun, 0, settings.shadows, 0), relight],
+			["lighting", "освещение и туман выше низкого", low_light, relight],
 			# 15.1: «освещение» по частям — какая из них дорогая
 			["cascades", "каскады теней как на низком (2 каскада, 110 м)", func() -> void: Lighting.apply_shadows(sun, 0), relight],
 			["ssao", "затенение SSAO", func() -> void: env.ssao_enabled = false, relight],
-			["vol_fog", "объёмный туман", func() -> void: env.volumetric_fog_enabled = false, relight],
+			["local_fog", "местный и объёмный туман", low_fog, relight],
 			["style", "визуальный стиль", func() -> void: VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {}), relight],
 			["msaa", "сглаживание MSAA", func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
@@ -671,9 +678,13 @@ func _group_world() -> void:
 			hour = h[0]
 			await _case("world.hour_" + h[1], "Мир: тот же вид, " + h[2], TOGGLE, step)
 		hour = 12.0
-		# высокое качество света и тумана (SSIL, 5 шагов облаков, туман 128×96) — по умолчанию стоит среднее
+		# Высокое качество света и тумана — по умолчанию стоит среднее.
 		if _wanted("world.forest_high"):
 			Lighting.apply(env, sun, 2, settings.shadows, 2)
+			var high_fog := func() -> void:
+				env.volumetric_fog_enabled = RenderingServer.get_current_rendering_method() == "forward_plus"
+				game.local_mist.set_quality(2, env)
+			high_fog.call()
 			await _settle(game.vegetation, step)
 			var high_case := await _case("world.forest_high", "Мир: тот же вид, свет и туман «высокие»", TOGGLE, step)
 			var sky_mat := env.sky.sky_material as ShaderMaterial if env.sky != null else null
@@ -681,12 +692,9 @@ func _group_world() -> void:
 				["ssil", "SSIL (непрямой свет)", func() -> void: env.ssil_enabled = false, func() -> void: env.ssil_enabled = true],
 				["clouds", "облака в 5 шагов (как на среднем — 2)", func() -> void: if sky_mat: sky_mat.set_shader_parameter("cumulus_steps", 2),
 					func() -> void: if sky_mat: sky_mat.set_shader_parameter("cumulus_steps", 5)],
-				["fog", "объёмный туман 128×96 и 190 м (как на среднем)", func() -> void:
-					env.volumetric_fog_length = 160.0
-					RenderingServer.environment_set_volumetric_fog_volume_size(96, 64),
-					func() -> void:
-					env.volumetric_fog_length = 190.0
-					RenderingServer.environment_set_volumetric_fog_volume_size(128, 96)],
+				["fog", "аналитический туман вместо объёмного", func() -> void:
+					env.volumetric_fog_enabled = false
+					game.local_mist.set_quality(1, env), high_fog],
 			], step, game.vegetation)
 			relight.call()
 
@@ -880,7 +888,7 @@ func _look(_t: float, dt: float, v: Dictionary) -> void:
 	game.stream_coordinator.update(v.pos)
 	if not _quiet_particles:
 		game.ambient.update(dt, v.pos, game.day.sunlight)
-		game.local_mist.update(v.pos, game.day, dt, clock)
+		game.local_mist.update(v.pos, dt)
 	if game._ocean != null:
 		game._ocean.position = Vector3(v.pos.x, 0.0, v.pos.z)
 	if _night_lights:

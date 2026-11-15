@@ -151,13 +151,16 @@ func run() -> void:
 	options.fog_quality.item_selected.emit(2)
 	check(GameContext.scope.settings.fog_quality == 2 and GameContext.scope.settings.lighting == original.lighting,
 		"fog menu changes fog quality independently of lighting")
+	options.fog_quality.select(GameSettings.FOG_OFF)
+	options.fog_quality.item_selected.emit(GameSettings.FOG_OFF)
+	check(GameContext.scope.settings.fog_quality == GameSettings.FOG_OFF, "fog menu has an off option")
 	check(not options.pending() and GameContext.scope.settings.render_scale == 0.5 and is_equal_approx(root.scaling_3d_scale, 0.5), "graphics apply instantly without confirmation")
 	main._save_due = 0
 	main._flush_settings()
 	GameContext.scope.settings.reset_defaults()
 	GameContext.scope.settings.load_settings()
 	check(GameContext.scope.settings.render_scale == 0.5, "graphics change saved")
-	check(GameContext.scope.settings.fog_quality == 2, "fog menu choice survives reload")
+	check(GameContext.scope.settings.fog_quality == GameSettings.FOG_OFF, "fog menu choice survives reload")
 	options.sync()
 	options.scale.select(3)
 	options.apply_graphics()

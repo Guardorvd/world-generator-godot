@@ -7,7 +7,7 @@ extends RefCounted
 ## где сила обоих ноль, поэтому скачка не видно. Небо рисует resources/sky.gdshader, туман берёт цвет горизонта.
 ## С 7.9 сутки задают и атмосферу земли: густоту тумана и рассеяние света в нём, насыщенность, плотность теней,
 ## а облака отбрасывают на землю бегущие тени (resources/cloud_shadow.gdshaderinc, общий параметр cloud_shadow).
-## С 8.3: дымка в низинах (высотный туман Godot ниже камеры, столбец mist), звёздное небо вращается с часом,
+## С 8.3: дымка в низинах (столбец mist), звёздное небо вращается с часом,
 ## луна меняет фазу от ночи к ночи, а редкие явления (сияние, комета, звездопад) каждую ночь выбираются по сиду мира.
 
 const SKY_SHADER := preload("res://resources/sky.gdshader")
@@ -19,8 +19,8 @@ const MOON_ENERGY := 0.22        # лунный свет ночью; в суме
 const FOG := 0.00135              # дневная густота тумана, как в game_world.tscn (окружение общее для всех миров)
 const CLOUD_SHADOW := 0.44      # насколько тень облака темнит землю днём
 const CLOUD_WIND := Vector2(-1.92, -0.64)  # м/с: тени облаков бегут туда же, куда облака на небе
-const MIST_TOP := 45.0           # дымка лежит ниже этой высоты, м (суша до 260 м)
-const MIST_DENSITY := 0.004      # высотная густота при mist = 1
+const MIST_TOP := 45.0           # высота фоновой дымки низин, м
+const MIST_DENSITY := 0.0015     # фоновая густота при mist = 1
 const POLE := Vector3(0.0, 0.5736, -0.8192)   # ось вращения звёзд: 35° над севером, как в sky.gdshader
 const MOON_DAYS := 8.0           # ночей от полнолуния до полнолуния
 ## Вероятности редких явлений на одну ночь
@@ -77,6 +77,7 @@ func _init(environment: Environment, sun: DirectionalLight3D) -> void:
 	sky.process_mode = Sky.PROCESS_MODE_INCREMENTAL
 	sky.radiance_size = Sky.RADIANCE_SIZE_64
 	env.sky = sky
+	env.fog_height = MIST_TOP
 
 
 ## Направление на солнце в час hour (0..24)
@@ -206,12 +207,8 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	env.ambient_light_energy = s[6]
 	VisualStyle.set_haze(s[2])
 	RenderingServer.global_shader_parameter_set("sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
-	env.fog_density = FOG * s[12]
 	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
-	# Дымка в низинах привязана к высоте мира (с гребня видно туманные долины).
 	var mist: float = s[15]
-	# World anchored: bicycle bob and climbing never drag the fog layer.
-	env.fog_height = MIST_TOP
 	env.adjustment_saturation = s[13]
 	light.shadow_normal_bias = SHADOW_NORMAL_BIAS
 	# облачность медленно меняется сама: то ясно, то гряда облаков (период около 7 минут), с фазой от сида мира
@@ -228,25 +225,23 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	env.ambient_light_energy = s[6] * lerpf(0.86, 1.15, overcast)
 	var ambient: Color = s[5]
 	env.ambient_light_color = ambient.lerp(Color(0.72, 0.77, 0.85), overcast * 0.45)
-	env.fog_density *= lerpf(1.0, 1.45, overcast)
+	env.fog_density = FOG * s[12] * lerpf(1.0, 1.45, overcast)
 	# Seconds of game time: pause freezes the atmosphere; time skips ease over 12 s.
 	var fog_blend := 1.0 if is_nan(_fog_time) else 1.0 - exp(-clampf(time - _fog_time, 0.0, 1.0) / 12.0)
 	_fog_time = time
 	local_mist = lerpf(local_mist, clampf(mist + overcast * 0.15, 0.0, 1.0), fog_blend)
 	env.fog_height_density = MIST_DENSITY * local_mist
-	_air_density = lerpf(_air_density, 0.00035 + 0.00065 * float(s[8]) + 0.0002 * overcast, fog_blend)
-	env.volumetric_fog_density = _air_density
-	env.volumetric_fog_albedo = Color(0.86, 0.90, 0.95).lerp(s[2], 0.12)
-	# Shared by every local volume: weather/animation no longer costs N material writes.
+	_air_density = lerpf(_air_density, 0.00015 + 0.0004 * float(s[8]) + 0.00015 * overcast, fog_blend)
+	var mist_tint: Color = s[2]
 	if env.volumetric_fog_enabled:
+		mist_tint = Color(0.86, 0.90, 0.95).lerp(mist_tint, 0.12)
+		env.volumetric_fog_density = _air_density
+		env.volumetric_fog_albedo = mist_tint
+		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
+	if env.fog_enabled:
 		var mist_wind := CLOUD_WIND * time * 0.08
 		RenderingServer.global_shader_parameter_set("mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
-		RenderingServer.global_shader_parameter_set("mist_tint", env.volumetric_fog_albedo)
-	light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
-	if env.volumetric_fog_enabled:
-		# Share extinction with the far haze instead of stacking two full fog layers.
-		env.fog_density = maxf(0.0002, env.fog_density - _air_density * 0.65)
-		env.fog_height_density *= 0.35
+		RenderingServer.global_shader_parameter_set("mist_tint", mist_tint)
 	# 13.11: визуальный стиль подстраивает выдержку тонмаппера и насыщенность; база запоминается для смены стиля на паузе
 	VisualStyle.apply_day(env, s[7], lerpf(float(s[13]), 0.96, overcast))
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)

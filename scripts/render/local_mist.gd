@@ -1,16 +1,23 @@
 extends Node3D
 ## Bounded, world-anchored patches sampled only from resident geography.
 ## No generation, worker jobs, per-tree nodes or persisted fog state.
-const SHADER := preload("res://resources/local_mist.gdshader")
+const VOLUME_SHADER := preload("res://resources/local_mist.gdshader")
+const ANALYTIC_SHADER := preload("res://resources/analytic_mist.gdshader")
 const SPACING := 112.0
-const RADIUS := 360.0
-const LIMIT := 48
+const RADIUS := 218.0
+const FADE_BEGIN := 140.0
+const FADE_END := 190.0
+const LIMIT := 20
 const BUILD_BUDGET := 2
 const MATERIAL_INTERVAL := 0.1
 const OFFSETS := [Vector2.ZERO, Vector2(-28, 0), Vector2(28, 0), Vector2(0, -28), Vector2(0, 28)]
+enum Mode { OFF, ANALYTIC, VOLUMETRIC }
+
 var world: WorldData
 var heights: Heightfield
 var patches := {}
+var mode := Mode.OFF
+var _proxy_mesh: BoxMesh
 var _scan := 0.0
 var _material_elapsed := 0.0
 var _pending: Array[Vector2i] = []
@@ -23,21 +30,35 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	world = w
 	heights = h
 
-func update(at: Vector3, day: DayCycle, delta: float, _time: float) -> void:
-	if not day.env.volumetric_fog_enabled:
-		for entry: Dictionary in patches.values():
-			entry.node.queue_free()
-		patches.clear()
-		_pending.clear()
-		_examined.clear()
-		_plan_sites.clear()
-		_material_elapsed = 0.0
-		_last_at = Vector2.INF
-		_scan = 0.0
+func set_quality(level: int, env: Environment) -> void:
+	var next := Mode.OFF
+	if level > 0 and level < GameSettings.FOG_OFF and env.fog_enabled:
+		next = Mode.VOLUMETRIC if env.volumetric_fog_enabled else Mode.ANALYTIC
+	if next == mode:
+		return
+	for key: Vector2i in patches.keys():
+		_remove_patch(key)
+	_pending.clear()
+	_examined.clear()
+	_scan = 0.0
+	_material_elapsed = 0.0
+	mode = next
+	if mode == Mode.ANALYTIC and _proxy_mesh == null:
+		var material := ShaderMaterial.new()
+		material.shader = ANALYTIC_SHADER
+		# Draw onto the opaque scene before water and other transparent effects.
+		material.render_priority = -1
+		_proxy_mesh = BoxMesh.new()
+		_proxy_mesh.size = Vector3.ONE * 2.0
+		_proxy_mesh.material = material
+
+
+func update(at: Vector3, delta: float) -> void:
+	if mode == Mode.OFF or not visible:
 		return
 	var point := Vector2(at.x, at.z)
 	_scan -= delta
-	if _scan <= 0.0 or point.distance_to(_last_at) > SPACING:
+	if _scan <= 0.0 or point.distance_to(_last_at) > SPACING * 0.5:
 		_scan = 0.5
 		_refresh(point)
 	_build_pending()
@@ -47,34 +68,37 @@ func update(at: Vector3, day: DayCycle, delta: float, _time: float) -> void:
 	_material_elapsed = 0.0
 	for key: Vector2i in patches.keys():
 		var entry: Dictionary = patches[key]
-		var distance := Vector2(entry.node.position.x - at.x, entry.node.position.z - at.z).length()
-		var target := (1.0 - smoothstep(230.0, RADIUS, distance)) if entry.resident else 0.0
-		entry.fade = move_toward(entry.fade, target, step / 5.0)
+		var distance := at.distance_to(entry.node.position)
+		var target := (1.0 - smoothstep(FADE_BEGIN, FADE_END, distance)) if entry.resident else 0.0
+		entry.fade = move_toward(entry.fade, target, step / 0.9)
 		var density: float = entry.strength * entry.fade
 		if density != entry.density:
-			entry.material.set_shader_parameter("density", density)
+			if mode == Mode.VOLUMETRIC:
+				entry.node.material.set_shader_parameter("density", density)
+			else:
+				entry.node.set_instance_shader_parameter("density", density)
+			entry.node.visible = density > 0.0
 			entry.density = density
 			stats.material_updates += 1
-		if target == 0.0 and entry.fade <= 0.0:
-			entry.node.queue_free()
-			patches.erase(key)
+		if not entry.resident and entry.fade <= 0.0:
+			_remove_patch(key)
 
 func _refresh(at: Vector2) -> void:
 	_last_at = at
 	for key: Vector2i in patches.keys():
 		var entry: Dictionary = patches[key]
-		# Entire volume is outside the 190 m buffer: release before admission.
+		# The distance fade ends inside this radius, leaving time to preload sites.
 		if entry.point.distance_to(at) > RADIUS:
-			entry.node.queue_free()
-			patches.erase(key)
+			_remove_patch(key)
 		else:
 			entry.resident = _resident(entry.point)
 	if _pending.is_empty(): _examined.clear()
 	var wanted: Array[Vector2i] = []
 	var center := Vector2i((at / SPACING).floor())
+	var cells := Rect2i(center - Vector2i(2, 2), Vector2i(5, 5))
 	# Include the asymmetric cell edge and the maximum sampling offset.
-	for y in range(center.y - 4, center.y + 5):
-		for x in range(center.x - 4, center.x + 5):
+	for y in range(cells.position.y, cells.end.y):
+		for x in range(cells.position.x, cells.end.x):
 			var key := Vector2i(x, y)
 			var point := (Vector2(key) + Vector2(0.5, 0.5)) * SPACING
 			if point.distance_to(at) > RADIUS + 28.0: continue
@@ -83,9 +107,9 @@ func _refresh(at: Vector2) -> void:
 		return ((Vector2(a) + Vector2.ONE * 0.5) * SPACING).distance_squared_to(at) < ((Vector2(b) + Vector2.ONE * 0.5) * SPACING).distance_squared_to(at))
 	_pending = wanted
 	for key: Vector2i in _examined.keys():
-		if Vector2(key - center).length_squared() > 32.0: _examined.erase(key)
+		if not cells.has_point(key): _examined.erase(key)
 	for key: Vector2i in _plan_sites.keys():
-		if Vector2(key - center).length_squared() > 32.0: _plan_sites.erase(key)
+		if not cells.has_point(key): _plan_sites.erase(key)
 
 func _resident(point: Vector2) -> bool:
 	var cell := Vector2i((point / GameConfig.TILE).floor())
@@ -99,16 +123,35 @@ func _build_pending() -> void:
 		stats.evaluated += 1
 		var site := _cached_site(key)
 		if site.is_empty() or site.point.distance_to(_last_at) > RADIUS: continue
+		var node := _patch_node(site.size)
+		node.position = Vector3(site.point.x, site.height + 3.0, site.point.y)
+		node.hide()
+		add_child(node)
+		patches[key] = {node = node, point = site.point, strength = site.strength, fade = 0.0, density = 0.0, resident = true}
+		stats.created += 1
+
+
+func _patch_node(size: Vector3) -> Node3D:
+	if mode == Mode.VOLUMETRIC:
 		var volume := FogVolume.new()
 		volume.shape = RenderingServer.FOG_VOLUME_SHAPE_ELLIPSOID
-		volume.size = site.size
-		volume.position = Vector3(site.point.x, site.height + 3.0, site.point.y)
+		volume.size = size
 		var material := ShaderMaterial.new()
-		material.shader = SHADER
+		material.shader = VOLUME_SHADER
 		volume.material = material
-		add_child(volume)
-		patches[key] = {node = volume, material = material, point = site.point, strength = site.strength, fade = 0.0, density = 0.0, resident = true}
-		stats.created += 1
+		return volume
+	var proxy := MeshInstance3D.new()
+	proxy.mesh = _proxy_mesh
+	proxy.scale = size * 0.5
+	proxy.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	return proxy
+
+
+func _remove_patch(key: Vector2i) -> void:
+	var node: Node3D = patches[key].node
+	node.hide()
+	node.queue_free()
+	patches.erase(key)
 
 func _cached_site(key: Vector2i) -> Dictionary:
 	if _plan_sites.has(key):
