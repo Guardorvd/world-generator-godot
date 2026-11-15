@@ -25,6 +25,10 @@ public partial class FastGrid
 	private static readonly int[] Opposite = { 1, 0, 3, 2, 7, 6, 5, 4 };
 	public bool ProfileSearches { get; set; }
 	public int SearchBudget { get; set; } = -1;
+	/// <summary>Штраф смены направления следующего FindPath/Prefetch (копия аргумента turn у Pathfinder.find_path; 0 — прежний поиск).</summary>
+	public double TurnCost { get; set; }
+	private static readonly double[] TurnShape = { 0.0, 0.1, 0.4, 1.0, 2.0 };
+	private static readonly int[] Octant = { 0, 4, 2, 6, 1, 7, 3, 5 };
 	// Версия стоимости уникальна для снимка данных в пределах этого finder. -1 отключает кэш и prefetch.
 	public long CostVersion { get; set; } = -1;
 	public long HeightsVersion { get; set; }
@@ -89,7 +93,7 @@ public partial class FastGrid
 		public byte[] Links;
 		public int S, T, Version;
 		public long CostVersion, HeightsVersion, LinksVersion;
-		public double Climb, MaxGrade, MaxCross;
+		public double Climb, MaxGrade, MaxCross, Turn;
 		public bool UseCorridor;
 		public int X0, Y0, X1, Y1; // окно поиска: клетки x0 <= x < x1, y0 <= y < y1
 
@@ -98,7 +102,7 @@ public partial class FastGrid
 			HeightsVersion == o.HeightsVersion && LinksVersion == o.LinksVersion &&
 			S == o.S && T == o.T && Version == o.Version && UseCorridor == o.UseCorridor &&
 			X0 == o.X0 && Y0 == o.Y0 && X1 == o.X1 && Y1 == o.Y1 &&
-			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross);
+			Climb.Equals(o.Climb) && MaxGrade.Equals(o.MaxGrade) && MaxCross.Equals(o.MaxCross) && Turn.Equals(o.Turn);
 	}
 
 	/// <summary>Итог поиска с запасом Budget (-1 — без предела): путь, число раскрытий, остановлен ли запасом.</summary>
@@ -266,7 +270,7 @@ public partial class FastGrid
 		new()
 		{
 			Cost = cost, S = s, T = t, Heights = heights, Climb = climb, MaxGrade = maxGrade, Links = links,
-			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Version = _corridorVersion,
+			UseCorridor = useCorridor, MaxCross = maxCrossGrade, Turn = TurnCost, Version = _corridorVersion,
 			CostVersion = CostVersion, HeightsVersion = HeightsVersion, LinksVersion = LinksVersion,
 			X0 = _winX0, Y0 = _winY0, X1 = Math.Min(_winX1, _w), Y1 = Math.Min(_winY1, _h)
 		};
@@ -583,6 +587,7 @@ public partial class FastGrid
 	{
 		private readonly Node[] _nodes;
 		private readonly int[] _from;
+		private readonly byte[] _arrive; // шаг k, которым поиск пришёл в клетку (только при Turn > 0)
 		private Item[] _heap = new Item[1 << 16];
 		private int _gen;
 
@@ -590,6 +595,7 @@ public partial class FastGrid
 		{
 			_nodes = new Node[n];
 			_from = new int[n];
+			_arrive = new byte[n];
 		}
 
 		/// <summary>a > b ? a : b — для конечных неотрицательных значений здесь то же, что Math.Max, но без разбора NaN.</summary>
@@ -623,10 +629,20 @@ public partial class FastGrid
 				dys[k] = Dy[k];
 				dl[k] = Dl[k];
 			}
+			// Штраф поворота: строка ka (направление прихода, 8 — старт, нули) × новый шаг k; как PEN в find_path
+			bool turning = q.Turn > 0.0;
+			double* pen = stackalloc double[72];
+			for (int ka = 0; ka < 9; ka++)
+				for (int k = 0; k < 8; k++)
+				{
+					int d = ka < 8 ? Math.Abs(Octant[ka] - Octant[k]) : 0;
+					pen[ka * 8 + k] = ka < 8 ? q.Turn * TurnShape[Math.Min(d, 8 - d)] : 0.0;
+				}
 			var heap = _heap;
 			int hn = 1;
 			fixed (Node* nodes = _nodes)
 			fixed (int* from = _from)
+			fixed (byte* arrive = _arrive)
 			fixed (float* costs = cost)
 			fixed (float* hs = heights)
 			fixed (byte* links = q.Links)
@@ -635,6 +651,7 @@ public partial class FastGrid
 				nodes[s].G = 0f;
 				nodes[s].Mark = seenMark;
 				from[s] = -1;
+				arrive[s] = 8;
 				heap[0].Id = s;
 				heap[0].Key = 0.0;
 				while (hn > 0)
@@ -665,6 +682,7 @@ public partial class FastGrid
 					bool inner = cx > X0 && cy > Y0 && cx < XI && cy < YI;
 					int linkBits = hasLinks ? links[c] : 0;
 					float* ce = corr + c * 16;
+					double* pt = pen + arrive[c] * 8;
 					for (int k = 0; k < 8; k++)
 					{
 						int nx = cx + dxs[k], ny = cy + dys[k];
@@ -706,11 +724,14 @@ public partial class FastGrid
 							step += climb * (grade * grade + 4.0 * steep * steep + crossGrade * crossGrade);
 						}
 						double ng = gc + dl[k] * step;
+						if (turning)
+							ng += pt[k];
 						if (nn->Mark != seenMark || ng < nn->G)
 						{
 							nn->Mark = seenMark;
 							nn->G = (float)ng;
 							from[n] = c;
+							arrive[n] = (byte)k;
 							int ax = Math.Abs(nx - tx), ay = Math.Abs(ny - ty);
 							double key = ng + (Math.Max(ax, ay) + 0.414 * Math.Min(ax, ay)) * HCost;
 							if (hn >= heap.Length)

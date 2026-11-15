@@ -13,6 +13,13 @@ extends RefCounted
 ## стоимости и путь может выйти чуть дороже самого дешёвого. Замер 2.3 (5 миров, ~380 поисков): так вышло
 ## у 4 путей, дороже не больше чем на 0,1 %; с честной оценкой 0.3 пути те же, а поиск дорог на четверть дольше
 const H_COST := 0.6
+## 15.11.2026: штраф за смену направления внутри поиска (аргумент turn у find_path/prefetch, 0 — прежний поиск
+## побайтно). Направление прихода в клетку — шаг from[c] → c; разница с новым шагом в 45°-ступенях (0..4)
+## стоит turn × TURN_SHAPE[ступени] (в единицах стоимости шага). Закрытое множество по клеткам, как и было:
+## путь может выйти чуть дороже лучшего с учётом поворотов, зато поиск не растёт в 8 раз. Штрафы ≥ 0 — оценка остаётся допустимой.
+const TURN_SHAPE: Array[float] = [0.0, 0.1, 0.4, 1.0, 2.0]
+## Октант направления шага k (угол / 45°) для Grid.DX/DY: разница двух шагов — min(|a − b|, 8 − |a − b|).
+const OCTANT: Array[int] = [0, 4, 2, 6, 1, 7, 3, 5]
 ## Начальная ёмкость кучи (элементов); растёт вдвое по необходимости
 const HEAP_START_CAP := 1 << 16
 ## Дополнительные счётчики только для tools/bench.gd; в игре выключены.
@@ -70,6 +77,7 @@ var _cross := PackedFloat32Array()
 ## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
 var g := PackedFloat32Array()
 var from := PackedInt32Array()
+var arrive := PackedByteArray() # шаг k, которым поиск пришёл в клетку (только при turn > 0)
 var seen := PackedInt32Array()
 var done := PackedInt32Array()
 var heap_ids := PackedInt32Array()
@@ -89,6 +97,7 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 		return
 	g.resize(W * H)
 	from.resize(W * H)
+	arrive.resize(W * H)
 	seen.resize(W * H)
 	done.resize(W * H)
 	heap_ids.resize(HEAP_START_CAP)
@@ -212,12 +221,13 @@ func _bounds() -> PackedInt32Array:
 
 ## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
 @warning_ignore("integer_division")
-func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> PackedInt32Array:
+func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0) -> PackedInt32Array:
 	if search_budget == 0:
 		_skipped += 1
 		return PackedInt32Array()
 	if _fast != null:
 		_search_versions(cost_version)
+		_fast.TurnCost = turn
 		_fast.SearchBudget = search_budget
 		var started := Time.get_ticks_usec()
 		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
@@ -241,6 +251,16 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	var OFF := PackedInt32Array()
 	for k in 8:
 		OFF.append(DY[k] * W + DX[k])
+	# Штраф поворота: строка ka (направление прихода, 8 — старт) × новый шаг k
+	var turning := turn > 0.0
+	var arrive := self.arrive
+	var PEN := PackedFloat64Array()
+	if turning:
+		PEN.resize(72)
+		for ka in 8:
+			for k in 8:
+				var d := absi(OCTANT[ka] - OCTANT[k])
+				PEN[ka * 8 + k] = turn * TURN_SHAPE[mini(d, 8 - d)]
 	var bounds := _bounds()
 	var X0 := bounds[0]
 	var Y0 := bounds[1]
@@ -253,6 +273,8 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 	g[s] = 0.0
 	seen[s] = gn
 	from[s] = -1
+	if turning:
+		arrive[s] = 8
 	ids[0] = s
 	keys[0] = 0.0
 	var hn := 1
@@ -298,6 +320,7 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 		var cy := c / W
 		var gc := g[c]
 		var cc := cost[c]
+		var row := arrive[c] * 8 if turning else 0
 		# у клеток не на краю все 8 соседей внутри карты: проверка границ не нужна
 		var inner := cx > X0 and cy > Y0 and cx < X1 - 1 and cy < Y1 - 1
 		for k in 8:
@@ -342,10 +365,14 @@ func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max
 				# Подъём и земляные работы оплачиваются отдельно: крен не скрывает крутой подъём.
 				step += climb * (grade * grade + 4.0 * steep * steep + cross_grade * cross_grade)
 			var ng := gc + DL[k] * step
+			if turning:
+				ng += PEN[row + k]
 			if seen[n] != gn or ng < g[n]:
 				seen[n] = gn
 				g[n] = ng
 				from[n] = c
+				if turning:
+					arrive[n] = k
 				var ax := absi(nx - tx)
 				var ay := absi(ny - ty)
 				# 0.414 ≈ √2 − 1 (октильная оценка). Не заменять на Grid.SQRT2 - 1: другие знаки меняют
@@ -464,9 +491,10 @@ func _step_allowed(cost: PackedFloat32Array, terrain: bool, max_grade: float, c:
 ## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
 ## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
-func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1) -> void:
+func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0) -> void:
 	if eager_fallback and _fast != null and search_budget != 0:
 		_search_versions(cost_version)
+		_fast.TurnCost = turn
 		_fast.Prefetch(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade, search_budget)
 
 

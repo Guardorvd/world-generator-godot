@@ -60,6 +60,11 @@ const WIDTHS := Section.WIDTHS
 const ROAD_CLIMB := 32.0
 const TRAIL_CLIMB := 12.0
 const MOUNTAIN_CLIMB := 4.0
+## 15.11.2026: штраф смены направления в поиске пути (Pathfinder.find_path, аргумент turn; шкала × TURN_SHAPE
+## по 45°-ступеням). Убирает зигзаги сетки на склонах до сглаживания (_road_line). static var — стенд road_plan_test
+## подбирает числа ключом --turn; 0 — прежний поиск. Звериные тропы, короткие подходы (_link) и природные маршруты
+## (RideRoutes) без штрафа. Подбор на «Север-1234» — docs/ROAD_NETWORK.md, раздел 15.11.2026.
+static var turn_costs := {road = 8.0, trail = 6.0, mountain = 4.0}
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
@@ -1394,7 +1399,7 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 	# состояние восстановлено, и он с теми же входами. Совпадение входов (и окна) проверяет сам поиск.
 	if limits.size() > 1:
 		finder.window = windows[0]
-		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version)
+		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version, turn_costs.road)
 	for limit: float in limits:
 		for level in windows.size():
 			if state.get("no_bridge", {}).size() != known:
@@ -1627,17 +1632,24 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 ## У троп свой предел: короткий технический подъём конкурирует с длинным обходом по цене A*.
 static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = TRAIL_GRADE) -> PackedInt32Array:
 	if finder.search_budget == 0:
-		return finder.find_path(cost, a, b, climb, limit)
+		return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb))
 	if not finder.can_reach(cost, a, b, climb, limit):
 		return PackedInt32Array()
-	return finder.find_path(cost, a, b, climb, limit)
+	return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb))
+
+
+## Штраф поворота вида пути по его цене подъёма
+static func _turn(climb: float) -> float:
+	if climb == ROAD_CLIMB: return turn_costs.road
+	if climb == MOUNTAIN_CLIMB: return turn_costs.mountain
+	return turn_costs.trail
 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
 ## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
 static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE, cost_version: int = -1) -> PackedInt32Array:
 	finder.use_corridor = wide
-	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version)
+	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version, turn_costs.road)
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:

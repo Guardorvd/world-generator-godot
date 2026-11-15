@@ -43,6 +43,11 @@ func _initialize() -> void:
 		print("TRAIL PLAN ", JSON.stringify(full.trail_plan.get("stats", {})))
 		quit(0)
 		return
+	# --turn r,t,m: штраф поворота в поиске пути дорог, троп и горных троп (StageTrails.turn_costs) — подбор чисел
+	var turn := _arg(args, "--turn", "")
+	if not turn.is_empty():
+		StageTrails.turn_costs = {road = float(turn.get_slice(",", 0)), trail = float(turn.get_slice(",", 1)), mountain = float(turn.get_slice(",", 2))}
+		print("штраф поворота: ", StageTrails.turn_costs)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true
@@ -130,7 +135,7 @@ func _initialize() -> void:
 		StageTrails._build_cost(w)
 		var base := w.cost
 		w.cost = trodden
-		var m: Dictionary = Metrics.measure(w, base)
+		var m: Dictionary = Metrics.measure(w, base, final)
 		print("NETWORK ", JSON.stringify(Metrics.summary(m)))
 		var tag := _arg(args, "--tag", "")
 		var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
