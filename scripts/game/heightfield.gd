@@ -303,7 +303,105 @@ func finish_paths() -> PackedInt32Array:
 	return changed
 
 
+## 15.11: C#-копия опоры и воды для физики (scripts/core/RideGround.cs): surface_at, ground_at, depth_at и
+## immersion_at внутри плана считает она, бит в бит как код ниже (он остаётся эталоном и запасным путём).
+## Включается только у игрового рельефа (native_ride, ставит GameWorld) и только на главном потоке: потоки
+## подгрузки и генерация идут прежним путём. Любая смена опоры (ground_changed) сбрасывает снимок,
+## заново он строится на главном потоке при следующем запросе.
+static var allow_native_ride := true
+static var verify_native_ride := false # сверять каждый ответ C# с GDScript (стенды): счётчики ниже
+static var native_ride_checks := 0
+static var native_ride_mismatches: Array = []
+static var _main_thread := -1
+var native_ride := false:
+	set(value):
+		native_ride = value
+		_main_thread = OS.get_main_thread_id()
+var _ride: Object = null       # RideGround; создаётся и читается только на главном потоке
+var _ground_rev := 0           # растёт при каждой смене опоры (с любого потока)
+var _ride_rev := -1            # с какой версии опоры снят снимок
+var _ride_ok := false          # снимок удался (иначе до следующей смены опоры — GDScript)
+
+
+## Опора изменилась (полотно, сооружения, высоты): снимок C# больше не годится
+func ground_changed() -> void:
+	_ground_rev += 1
+
+
+## Снимок C# для запроса из физики или null (тогда считает GDScript). Только главный поток: снимок
+## строится и читается там, потоки подгрузки и генерации идут прежним путём.
+func _ride_ground() -> Object:
+	if OS.get_thread_caller_id() != _main_thread or not allow_native_ride:
+		return null
+	if _ride_rev != _ground_rev:
+		# версия берётся до чтения данных: смена посреди сборки даст новую сборку на следующем запросе
+		_ride_rev = _ground_rev
+		_ride_ok = _build_ride()
+	return _ride if _ride_ok else null
+
+
+func _build_ride() -> bool:
+	var w := world
+	if w == null or hv.size() != w.N or w.lake.size() != w.N or w.filled.size() != w.N:
+		return false
+	if _ride == null:
+		var script: Script = load("res://scripts/core/RideGround.cs") if Grid.fast_grid() != null else null
+		if script == null:
+			native_ride = false
+			return false
+		_ride = script.new()
+	var keys := PackedInt32Array()
+	var patch_h := PackedFloat32Array()
+	var road_h := 0
+	var r := road_refinement
+	if r != null:
+		road_h = r._height
+		var area := RoadRefinement.STRIDE * RoadRefinement.STRIDE
+		for key: int in r.patches:
+			var hs: PackedFloat32Array = r.patches[key].h
+			if hs.size() != area:
+				push_error("RideGround: участок сетки дорог %d не %d высот — физика на GDScript" % [key, area])
+				_ride.Invalidate()
+				return false
+			keys.append(key)
+			patch_h.append_array(hs)
+	var cells := PackedInt32Array()
+	var ids := PackedInt32Array()
+	for cell: int in _cells:
+		for k: int in _cells[cell]:
+			cells.append(cell)
+			ids.append(k)
+	var tunnel := PackedByteArray()
+	var rails := PackedByteArray()
+	var geo := PackedFloat64Array()
+	var sine_start := PackedInt32Array()
+	var sines := PackedFloat64Array()
+	for s: Dictionary in structures:
+		# дуга моста: синусы секций считает движок (как level), а не .NET — последний бит у них разный
+		sine_start.append(sines.size())
+		if s.arch != 0.0:
+			var count := maxi(1, ceili(s.len / BRIDGE_SECTION))
+			for k in count + 1:
+				sines.append(sin(PI * k / count))
+		tunnel.append(1 if s.tunnel else 0)
+		rails.append(1 if s.get("rails", false) else 0)
+		geo.append_array([s.ax, s.az, s.ay, s.bx, s.bz, s.by, s.half, s.len, s.ux, s.uz, s.arch])
+	sine_start.append(sines.size())
+	if not _ride.Build(w.W, w.H, TILE, HS, GameConfig.LAKE_DROP, hv, road_h, keys, patch_h, r != null,
+			cells, ids, tunnel, rails, geo, sine_start, sines, _seg_pts, _pair_cells, _pair_segs, w.lake, w.filled):
+		push_error("RideGround: " + _ride.Error() + " — физика на GDScript")
+		return false
+	return true
+
+
+static func _verify_ride(what: String, x: float, z: float, native: float, script: float) -> void:
+	native_ride_checks += 1
+	if native != script and not (is_nan(native) and is_nan(script)) and native_ride_mismatches.size() < 20:
+		native_ride_mismatches.append("%s(%.4f, %.4f): C# %s, GDScript %s" % [what, x, z, native, script])
+
+
 func clear_rock_seats() -> void:
+	ground_changed()
 	if rock_seats_lock == null: return
 	rock_seats_lock.lock()
 	rock_seats.clear()
@@ -342,6 +440,7 @@ func build_structures() -> PackedInt32Array:
 	_outer_cells = {}
 	_add_outer(outer)
 	index_structures()
+	ground_changed()
 	return changed
 
 
@@ -556,6 +655,14 @@ func deck_at(x: float, z: float, feet: float) -> float:
 
 ## Опора в точке (x, z) для ног на высоте feet: настил моста, если он под ногами, иначе земля
 func surface_at(x: float, z: float, feet: float) -> float:
+	if native_ride:
+		var ride := _ride_ground()
+		if ride != null:
+			var v: float = ride.Surface(x, z, feet)
+			if not is_nan(v):
+				if verify_native_ride:
+					_verify_ride("surface_at", x, z, v, maxf(_ground_script(x, z), deck_at(x, z, feet)))
+				return v
 	return maxf(ground_at(x, z), deck_at(x, z, feet))
 
 
@@ -934,6 +1041,19 @@ static func _water_triangle(x: float, z: float, a: Vector3, b: Vector3, c: Vecto
 ## Высота земли в точке (метры), по центрам клеток той же триангуляцией, что у сетки рельефа;
 ## raw — без прорезанных русел. За краем карты — рельеф OuterLand, если он подключён (иначе высота края)
 func ground_at(x: float, z: float, raw: bool = false) -> float:
+	if native_ride and not raw:
+		var ride := _ride_ground()
+		if ride != null:
+			var v: float = ride.Ground(x, z)
+			if not is_nan(v):
+				if verify_native_ride:
+					_verify_ride("ground_at", x, z, v, _ground_script(x, z))
+				return v
+	return _ground_script(x, z, raw)
+
+
+## ground_at на GDScript (эталон RideGround.Ground)
+func _ground_script(x: float, z: float, raw: bool = false) -> float:
 	var w := world
 	var W := w.W
 	var fx := x / TILE - 0.5
@@ -1049,6 +1169,19 @@ func _cell_known(outer: OuterLand, i: int, j: int) -> bool:
 
 ## Глубина воды в точке (0, если сухо или ноги на высоте feet стоят на мосту)
 func depth_at(x: float, z: float, feet: float = -INF) -> float:
+	if native_ride:
+		var ride := _ride_ground()
+		if ride != null:
+			var v: float = ride.Depth(x, z, feet)
+			if not is_nan(v):
+				if verify_native_ride:
+					_verify_ride("depth_at", x, z, v, _depth_script(x, z, feet))
+				return v
+	return _depth_script(x, z, feet)
+
+
+## depth_at на GDScript (эталон RideGround.Depth)
+func _depth_script(x: float, z: float, feet: float = -INF) -> float:
 	if feet > -INF and deck_at(x, z, feet) > -INF:
 		return 0.0
 	var tx := floori(x / TILE)
@@ -1074,6 +1207,15 @@ func depth_at(x: float, z: float, feet: float = -INF) -> float:
 ## Погружение ног/низа колеса, в отличие от полной глубины под ними.
 ## На мосту и в прыжке над поверхностью — ноль.
 func immersion_at(x: float, z: float, feet: float) -> float:
+	if native_ride:
+		var ride := _ride_ground()
+		if ride != null:
+			var v: float = ride.Immersion(x, z, feet)
+			if not is_nan(v):
+				if verify_native_ride:
+					var d := _depth_script(x, z, feet)
+					_verify_ride("immersion_at", x, z, v, 0.0 if d <= 0.0 else clampf(_ground_script(x, z) + d - feet, 0.0, d))
+				return v
 	var depth := depth_at(x, z, feet)
 	if depth <= 0.0:
 		return 0.0

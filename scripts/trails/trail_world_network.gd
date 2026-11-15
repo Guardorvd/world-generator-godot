@@ -977,6 +977,7 @@ static func publish(h: Heightfield, site: TrailSite, local: Heightfield) -> void
 		h.road_refinement.patches[global_key] = local.road_refinement.patches[key]
 	h.road_refinement.trail_shaping.merge(local.road_refinement.trail_shaping, true)
 	h.road_refinement.trail_elements_baked = true
+	h.ground_changed() # 15.11: снимок опоры для физики (RideGround) устарел
 
 ## A missing derived surface replays saved definitions, never discovery or the world generator.
 static func restore(h: Heightfield, plan: Dictionary) -> PackedStringArray:

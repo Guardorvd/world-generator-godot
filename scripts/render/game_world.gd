@@ -178,6 +178,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	load_timings = loaded.timings
 	world = loaded.world
 	heights = loaded.heights
+	# 15.11: опора и вода для физики на C# (RideGround): только главный поток, вне плана — прежний GDScript
+	heights.native_ride = true
 	hud = hud_node
 	hud.settlement_panel.closed.connect(_close_settlement)
 	hud.settlement_panel.destination_selected.connect(_choose_settlement_route)

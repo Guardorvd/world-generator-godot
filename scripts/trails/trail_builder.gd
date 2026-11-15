@@ -190,6 +190,7 @@ static func bake_elements(h: Heightfield, definitions: Array[TrailDefinition], l
 			if again.cells.has(key): continue
 			if again.baked[key] == null: r.patches.erase(key)
 			else: r.patches[key] = again.baked[key]
+	h.ground_changed() # 15.11: снимок опоры для физики (RideGround) устарел
 	if limits.get("keep_bake", false):
 		var baked := {}
 		for key: int in zone: baked[key] = r.patches.get(key)
@@ -579,6 +580,7 @@ static func bake_without(h: Heightfield, d: TrailDefinition, removed: Array[Trai
 		if bake.before[key] == null: r.patches.erase(key)
 		else: r.patches[key] = bake.before[key]
 	r.trail_elements_baked = false
+	h.ground_changed()
 	limits.again = {plan = bake.plan, cells = cells, before = bake.before, baked = bake.baked, stats = bake.stats}
 	limits.again_share = float(cells.size()) / maxi(1, zone.size())
 	return bake_elements(h, [d] as Array[TrailDefinition], limits)

@@ -59,6 +59,8 @@ var _process_probe: RefCounted # ProcessMetrics (C#): сборки мусора 
 
 
 func _initialize() -> void:
+	Heightfield.allow_native_ride = not "--no-native-ride" in args
+	Heightfield.verify_native_ride = "--verify-ride" in args
 	var groups := _groups()
 	preload("res://tools/watchdog.gd").arm(self, 30.0 if "--compare" in args else (540.0 if "world" in groups else 150.0))
 	_run.call_deferred(groups)
@@ -537,6 +539,50 @@ func _micro() -> void:
 				"passable": PlayerState.is_passable(game.world, hf, x, z, p.y, BikeRide.BODY_R, false, 0.0, false)
 		out[name + "_us"] = snappedf((Time.get_ticks_usec() - t0) / 20000.0, 0.01)
 	report.micro = out
+	if Heightfield.verify_native_ride:
+		_ride_sweep(hf)
+
+
+## 15.11, --verify-ride: сверка RideGround (C#) с GDScript не только на пути езды — по всему плану, у каждого
+## моста и туннеля (над настилом, под ним, на перилах), у лент рек и озёр, с разными высотами ног
+func _ride_sweep(hf: Heightfield) -> void:
+	var before := Heightfield.native_ride_checks
+	var w := game.world
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 1511
+	var size := Vector2(w.W, w.H) * GameConfig.TILE
+	var probe := func(x: float, z: float, feet: float) -> void:
+		hf.ground_at(x, z)
+		hf.surface_at(x, z, feet)
+		hf.depth_at(x, z, feet)
+		hf.depth_at(x, z)
+		hf.immersion_at(x, z, feet)
+	for i in 40000:
+		var x := rng.randf() * size.x
+		var z := rng.randf() * size.y
+		probe.call(x, z, hf.ground_at(x, z) + rng.randf_range(-1.0, 2.0))
+	for s: Dictionary in hf.structures:
+		for k in 60:
+			var t := rng.randf_range(-2.0, s.len + 2.0)
+			var side := rng.randf_range(-s.half - 2.0, s.half + 2.0)
+			var x: float = s.ax + s.ux * t + s.uz * side
+			var z: float = s.az + s.uz * t - s.ux * side
+			var deck := hf.level(s, clampf(t, 0.0, s.len))
+			for feet: float in [deck - 2.0, deck - 0.79, deck - 0.81, deck, deck + 1.0, INF, -INF]:
+				probe.call(x, z, feet)
+	for cell: int in hf._river_cells:
+		for k in 4:
+			var x := (cell % w.W + rng.randf()) * GameConfig.TILE
+			var z := (cell / w.W + rng.randf()) * GameConfig.TILE
+			probe.call(x, z, hf.ground_at(x, z) + rng.randf_range(-1.5, 1.5))
+	var lake := w.lake
+	for i in lake.size():
+		if lake[i] != 0 and rng.randf() < 0.05:
+			var x := (i % w.W + rng.randf()) * GameConfig.TILE
+			var z := (i / w.W + rng.randf()) * GameConfig.TILE
+			probe.call(x, z, hf.ground_at(x, z) + rng.randf_range(-1.5, 1.5))
+	print("RIDE_SWEEP checks %d, structures %d, river cells %d, mismatches %d %s" % [Heightfield.native_ride_checks - before,
+		hf.structures.size(), hf._river_cells.size(), Heightfield.native_ride_mismatches.size(), Heightfield.native_ride_mismatches])
 
 
 ## Дальность (draw) и качество (flora) растительности теми же вызовами, что меню настроек; -1 — не менять
@@ -831,6 +877,8 @@ func _play(name: String, title: String, seconds: float, drive: Callable) -> void
 		parts[k] = snappedf(game.tick_us[k] / float(frames if k.begins_with("frame_") else ticks) / 1000.0, 0.01)
 		cpu += per_frame
 	c.tick_parts_ms = parts
+	if Heightfield.verify_native_ride:
+		print("RIDE_VERIFY ", name, " checks ", Heightfield.native_ride_checks, " mismatches ", Heightfield.native_ride_mismatches.size(), " ", Heightfield.native_ride_mismatches)
 	c.game_cpu_ms = snappedf(cpu, 0.01)
 	c.physics_hz = snappedf(ticks / maxf(0.001, seconds + WARM), 1.0)
 	c.bike_speed = snappedf(game.bike.speed, 0.1)
