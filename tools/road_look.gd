@@ -12,6 +12,7 @@ extends SceneTree
 ## --relief — 15.11: участок с формами коридора (корыто полотна, валик и канава обочин, продольные волны) вместо плоскости.
 ## --sun <градусы> — высота солнца (по умолчанию 55); ниже 50 включаются тени: объём виден при низком свете.
 ## --stones — 15.11: россыпь камней и комьев у полотна (GroundCarpet.road_stone, та же раскладка, что в игре; материал простой).
+## --detail <качество>,<дальность> — 15.11: уровни настройки графики (0 — простое, 0.5 — среднее, 1 — высокое; дальность 0.6 / 1 / 1.6).
 ## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
@@ -54,6 +55,9 @@ func _initialize() -> void:
 	var style_strength := float(_arg("style", "0"))
 	if style_strength > 0.0:
 		RenderingServer.global_shader_parameter_set("style_depth", Vector4(style_strength, style_strength, style_strength, 1.0))
+	# 15.11: --detail <качество 0..1>,<множитель дальности> — настройка «Дороги: детализация и дальность» (road_detail)
+	var detail := _arg("detail", "1,1").split(",")
+	RenderingServer.global_shader_parameter_set("road_quality", Vector2(float(detail[0]), float(detail[1]) if detail.size() > 1 else 1.0))
 	measure = "--measure" in OS.get_cmdline_user_args()
 	if measure:
 		DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)

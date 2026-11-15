@@ -1028,6 +1028,28 @@ custom_minimum_size = Vector2(126, 40)
 layout_mode = 2
 tooltip_text = "Дальность ковра травы"
 
+[node name="RoadRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="RoadLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/RoadRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+tooltip_text = "Объём дорог и троп: глубина и тени колей и ям, мелкий камень, россыпь камней у кромок, и на каком расстоянии это видно. «Простое» оставляет только фактуру покрытия — быстрее на слабой видеокарте."
+mouse_filter = 1
+text = "Дороги: детализация и дальность"
+
+[node name="RoadQualityOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/RoadRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(126, 40)
+layout_mode = 2
+tooltip_text = "Детализация дорог"
+
+[node name="RoadRangeOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/RoadRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(126, 40)
+layout_mode = 2
+tooltip_text = "Дальность детализации дорог"
+
 [node name="ParticlesRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2
 

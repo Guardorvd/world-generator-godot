@@ -317,20 +317,23 @@ static func _ahead(r: float) -> float:
 
 ## Дернина: густота и дальность из настроек игрока, размер и доля — от качества растительности
 func _configure_carpet() -> void:
+	# 15.11.2026: детализация дорог — качество и дальность в шейдер рельефа, доля россыпи камней — ковру
+	var road: Dictionary = GameSettings.ROAD_QUALITY[settings.road_quality]
+	RenderingServer.global_shader_parameter_set("road_quality", Vector2(road.quality, GameSettings.ROAD_RANGE[settings.road_range].scale))
 	if carpet == null:
 		return
 	var preset: Dictionary = GameSettings.CARPET_RANGE[settings.carpet_range]
-	carpet.configure(GameSettings.CARPET_DENSITY[settings.carpet_density].scale, preset.meters, flora, preset.get("directional", false))
+	carpet.configure(GameSettings.CARPET_DENSITY[settings.carpet_density].scale, preset.meters, flora, preset.get("directional", false), road.stones)
 
 
 ## Настройки дернины изменились на паузе; true — вызывающий затем делает update(..., true).
 func set_carpet() -> bool:
 	if carpet == null:
 		return false
-	var before := [carpet.density, carpet.base_range, carpet.directional]
+	var before := [carpet.density, carpet.base_range, carpet.directional, carpet.stones]
 	carpet.finish()
 	_configure_carpet()
-	return before != [carpet.density, carpet.base_range, carpet.directional]
+	return before != [carpet.density, carpet.base_range, carpet.directional, carpet.stones]
 
 
 ## Множитель низкой травы клетки плана по характеру места, без побочных эффектов: дернина (GroundCarpet)

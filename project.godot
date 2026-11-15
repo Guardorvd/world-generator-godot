@@ -200,6 +200,10 @@ ground_carpet={
 "type": "vec2",
 "value": Vector2(0, 1)
 }
+road_quality={
+"type": "vec2",
+"value": Vector2(1, 1)
+}
 ground_carpet_forward={
 "type": "vec2",
 "value": Vector2(0, 0)

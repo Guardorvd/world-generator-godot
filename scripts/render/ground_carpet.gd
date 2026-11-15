@@ -66,6 +66,7 @@ var stream := StreamPolicy.new()
 
 ## Настройки игрока (GameSettings.CARPET_DENSITY / CARPET_RANGE) и качество растительности
 var density := 1.0           # множитель доли занятых ячеек
+var stones := 1.0            # доля россыпи камней у дорог (GameSettings.ROAD_QUALITY)
 var base_range := 22.0       # м, видимость целиком до base_range × (1 − FADE), растворение до base_range
 var directional := false
 var grass_keep := 1.0        # flora.grass
@@ -132,10 +133,11 @@ func reach() -> float:
 
 
 ## Настройки или качество изменились (на паузе): кэш плиток устарел.
-func configure(density_scale: float, range_m: float, flora: Dictionary, use_direction := false) -> void:
-	var changed := not is_equal_approx(density, density_scale) or not is_equal_approx(base_range, range_m) \
+func configure(density_scale: float, range_m: float, flora: Dictionary, use_direction := false, stone_share := 1.0) -> void:
+	var changed := not is_equal_approx(density, density_scale) or not is_equal_approx(base_range, range_m) or not is_equal_approx(stones, stone_share) \
 		or not is_equal_approx(grass_keep, flora.grass) or not is_equal_approx(grow, flora.grow)
 	density = density_scale
+	stones = stone_share
 	base_range = range_m
 	directional = use_direction
 	grass_keep = flora.grass
@@ -498,7 +500,7 @@ func _road_stones(i: int, j: int) -> PackedFloat32Array:
 		if at.is_empty():
 			continue
 		var h := WGRandom.hash2(gx, gz, 317)
-		var size := road_stone(at.weight, at.across, at.surface, at.road, h)
+		var size := road_stone(at.weight, at.across, at.surface, at.road, h / maxf(stones, 0.001)) if stones > 0.0 else 0.0
 		if size <= 0.0 or heights.depth_at(x, z) > 0.0:
 			continue
 		if out.is_empty():

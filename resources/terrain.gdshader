@@ -33,6 +33,8 @@ global uniform vec4 distant_vegetation;
 // 14.11.2026: дернина у игрока (VegetationLayer, carpet): x — дальность, y — полоса растворения, м (0 — нет).
 // Под ней дёрн в тени травинок: темнее и зеленее у корней, проплешины остаются светлой землёй.
 global uniform vec2 ground_carpet;
+// 15.11.2026: детализация дорог (GameSettings.ROAD_QUALITY / ROAD_RANGE): x — качество 0..1, y — множитель дальности мелкой детали.
+global uniform vec2 road_quality;
 #include "res://resources/ground_carpet.gdshaderinc"
 global uniform vec2 veg_center;
 uniform vec3 needle_soil : source_color = vec3(0.27, 0.24, 0.17);
@@ -620,6 +622,11 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	vec2 dax = vec2(dFdx(UV2.x), dFdy(UV2.x));
 	float jdet = dpx.x * dpy.y - dpx.y * dpy.x;
 	vec2 across_grad = abs(jdet) > 1e-8 ? vec2(dax.x * dpy.y - dax.y * dpx.y, dax.y * dpx.x - dax.x * dpy.x) / jdet : vec2(0.0);
+	// 15.11: кривизна настоящей поверхности меша (метровая сетка полотна: корыто, валик, канава, перекос, просадка):
+	// расхождение нормали в мире, 1/м. Выпуклое (вал, бровка) > 0, вогнутое (канава, корыто, просадка) < 0.
+	vec2 dnx = dFdx(wnormal.xz);
+	vec2 dny = dFdy(wnormal.xz);
+	float curve = abs(jdet) > 1e-8 ? ((dnx.x * dpy.y - dny.x * dpx.y) + (dny.y * dpx.x - dnx.y * dpy.x)) / jdet : 0.0;
 	if (!use_vertex_color && COLOR.a > 0.0 && UV2.y > 0.0) {
 		float grain = road_detail.x;
 		float organic = road_detail.y;
@@ -634,7 +641,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		bump_params.y = max(bump_params.y, 0.1);
 		vec2 pr = p;
 		float ax = UV2.x;
-		float depth_w = near * (1.0 - smoothstep(0.03, 0.10, pixel_m)) * smoothstep(0.3, 0.6, COLOR.a);
+		float depth_w = near * (1.0 - smoothstep(0.03 * road_quality.y, 0.10 * road_quality.y, pixel_m)) * smoothstep(0.3, 0.6, COLOR.a) * step(0.4, road_quality.x);
 		if (depth_w > 0.0) {
 			vec3 view_w = normalize(CAMERA_POSITION_WORLD - wpos);
 			vec2 slide = view_w.xz / max(view_w.y, 0.22) * (road_field(p, bump_params, grade, UV2.x, across_grad).x * ROAD_DEPTH * depth_w);
@@ -759,7 +766,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// координатам полотна); крупный угловатый щебень каменистой тропы — общий масштаб земли (road_look.w).
 		// Дальше ~10 м камень мельче пикселя: выборки не делаются, вклад мелкого масштаба плавно сходит к ровному.
 		float coarse = max(road_look.w, 0.3); // доля общего масштаба: камни разного размера
-		float fine_w = 1.0 - smoothstep(0.07, 0.12, pixel_m);
+		float fine_w = (1.0 - smoothstep(0.07 * road_quality.y, 0.12 * road_quality.y, pixel_m)) * step(0.4, road_quality.x);
 		float stone_occ = 0.0;
 		vec4 fh = mix(vec4(0.5, 0.5, 0.5, 0.0), mh, coarse);
 		vec4 fn = mix(vec4(0.5), mn, coarse);
@@ -772,7 +779,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			vec4 g1 = textureGrad(micro_n, fq, fdx, fdy) - vec4(0.5);
 			fh += f1 * (fine_w * (1.0 - coarse));
 			// самозатенение камней и комьев: со стороны солнца в паре сантиметров выше — здесь тень (как у пучков травы)
-			if (sun_dir.y > 0.02) {
+			if (sun_dir.y > 0.02 && road_quality.x > 0.9) {
 				vec2 to_sun = vec2(0.8 * sun_dir.x - 0.6 * sun_dir.z, 0.6 * sun_dir.x + 0.8 * sun_dir.z) * (0.022 / (0.7 * max(sun_dir.y, 0.2)));
 				stone_occ = clamp((textureGrad(micro_tex, fq + to_sun, fdx, fdy).g - f1.g - 0.5) * 2.4, 0.0, 1.0)
 					* fine_w * clamp(grain * (1.0 - tread * 0.5) + road_look.x * 0.6, 0.0, 1.0);
@@ -794,12 +801,14 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// 15.11: влага. Сырое место темнее и холоднее, впадины (колеи, ямы, низ волны) сыреют первыми, бугры сохнут.
 		// Сила — по покрытию (гравий почти не темнеет, земля и подстилка заметно); блеск слабый и только во впадинах.
 		float hollow = clamp(max(pit, tracks) + clamp(-bump.x * 12.0, 0.0, 0.4) - clamp(bump.x * 8.0, 0.0, 0.3), 0.0, 1.0);
-		float damp_r = smoothstep(0.50, 0.82, wet + hollow * 0.22 + (n_big - 0.5) * 0.25) * road_look.z;
+		float damp_r = smoothstep(0.50, 0.82, wet + hollow * 0.22 + clamp(-curve * 0.3, 0.0, 0.12) + (n_big - 0.5) * 0.25) * road_look.z;
+		// дно впадин темнее и при высоком солнце: объём не зависит от часа
+		soil *= 1.0 - hollow * 0.10 * bump_fade;
 		soil *= mix(vec3(1.0), vec3(0.70, 0.72, 0.76), damp_r);
-		road_gloss = damp_r * (0.25 + 0.75 * hollow) * road * near * 0.5;
+		road_gloss = damp_r * (0.25 + 0.75 * hollow) * road * near * 0.3;
 		// 15.11: тени форм. Склон колеи, ямы и кочки, отвёрнутый от солнца круче его высоты, в своей тени; дно впадин
 		// при низком солнце закрыто бровкой. Гасится только прямой свет (light), небо остаётся: тень не чёрная.
-		if (sun_dir.y > 0.02) {
+		if (sun_dir.y > 0.02 && road_quality.x >= 0.4) {
 			float sun_tan = sun_dir.y / max(length(sun_dir.xz), 0.05);
 			float rise = dot(bump.yz, normalize(sun_dir.xz + vec2(1e-5))) * ROAD_DEPTH * 1.5;
 			float self_shade = smoothstep(0.45 * sun_tan, 1.3 * sun_tan, rise) * 0.7;
@@ -807,6 +816,10 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			road_shade = (1.0 - max(self_shade, cast) * bump_fade) * (1.0 - stone_occ * 0.6);
 		}
 		col = mix(mix(col, verge_col, verge), soil, road);
+		// Крупные формы коридора читаются и без косого солнца: вогнутое темнее и глуше (меньше неба, сырее),
+		// выпуклое светлее и суше. Сила мала и гаснет, когда форма мельче нескольких пикселей.
+		float form = clamp(curve * 0.55, -0.20, 0.12) * max(road, verge) * (1.0 - smoothstep(0.25, 0.9, pixel_m));
+		col *= 1.0 + form;
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
 		float relief = max(road, verge * big_rocks);
