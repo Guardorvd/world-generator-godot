@@ -10,6 +10,7 @@ extends SceneTree
 ## --style <сила> — 13.11: глобальный параметр «Планы» визуального стиля (resources/depth_tone.gdshaderinc), читаемость полотна с ним и без.
 ## --wet <0..1> — 15.11: влажность почвы участка (сырое полотно: потемнение, блеск впадин).
 ## --relief — 15.11: участок с формами коридора (корыто полотна, валик и канава обочин, продольные волны) вместо плоскости.
+## --grade <уклон> — 15.11 (4): продольный уклон участка вдоль z (промоины грунта появляются с ~3 %).
 ## --sun <градусы> — высота солнца (по умолчанию 55); ниже 50 включаются тени: объём виден при низком свете.
 ## --stones — 15.11: россыпь камней и комьев у полотна (GroundCarpet.road_stone, та же раскладка, что в игре; материал простой).
 ## --detail <качество>,<дальность> — 15.11: уровни настройки графики (0 — простое, 0.5 — среднее, 1 — высокое; дальность 0.6 / 1 / 1.6).
@@ -33,6 +34,7 @@ var wait := 0
 var noise := FastNoiseLite.new()
 var measure := false
 var relief := false
+var grade := 0.0
 var stones_node: MultiMeshInstance3D
 var frame_times := PackedFloat32Array()
 var gpu_times := PackedFloat32Array()
@@ -88,6 +90,7 @@ func _initialize() -> void:
 	sun.shadow_enabled = sun_height < 50.0
 	sun.directional_shadow_max_distance = 60.0
 	relief = "--relief" in OS.get_cmdline_user_args()
+	grade = float(_arg("grade", "0"))
 	# направление на светило для шейдера рельефа (в игре его ставит DayCycle)
 	RenderingServer.global_shader_parameter_set("sun_dir", sun.global_transform.basis.z if sun.is_inside_tree() else sun.transform.basis.z)
 	root.add_child(sun)
@@ -135,14 +138,17 @@ func _axis(z: float) -> float:
 	return SIZE * 0.5 + 6.0 * sin(z / 11.0)
 
 
-## 15.11: высота участка с формами коридора: продольные волны, корыто полотна, валик у кромки, канава за ним
-func _height(x: float, z: float, d: float, half: float) -> float:
+## 15.11: высота участка с формами коридора: продольные волны, корыто полотна, обочины как RoadRefinement._vertex
+## (вал > 0 у кромки, канава < 0 дальше, по сторонам и вдоль пути то одно, то другое; величины — таблица CORRIDOR дорог)
+func _height(x: float, z: float, d: float, half: float, side := 1.0) -> float:
 	if not relief:
-		return 0.0
-	var y := 0.35 * sin(z / 9.0) + 0.12 * sin(x / 13.0 + 1.0)
+		return grade * z
+	var y := grade * z + 0.35 * sin(z / 9.0) + 0.12 * sin(x / 13.0 + 1.0)
 	y -= 0.07 * (1.0 - smoothstep(half * 0.5, half + 0.4, d))
-	y += 0.09 * exp(-pow((d - half - 0.7) / 0.5, 2.0))
-	y -= 0.10 * exp(-pow((d - half - 2.0) / 0.7, 2.0))
+	var e := d - half
+	var v := side * (0.6 * sin(z / 7.0) + 0.4 * sin(z / 3.1 + 1.0))
+	v = v * 0.10 if v > 0.0 else v * 0.28
+	y += v * RoadRefinement._bell((e - 0.35) / 0.8) if v > 0.0 else v * RoadRefinement._bell((e - 0.85) / 0.65)
 	return y
 
 
@@ -179,7 +185,7 @@ func _build(surface: int) -> void:
 	for z in n:
 		for x in n:
 			var near := _nearest(x, z)
-			pos.append(Vector3(x, _height(x, z, near.x, half), z))
+			pos.append(Vector3(x, _height(x, z, near.x, half, near.y), z))
 			nor.append(Vector3.UP)
 			uv.append(Vector2(x / float(SIZE), z / float(SIZE)))
 			var d := near.x
@@ -195,7 +201,7 @@ func _build(surface: int) -> void:
 			color.a = RoadRefinement.tread_mask(half, d, slow, organic, road)
 			colors.append(color)
 			uv2.append(Vector2(near.y * d / half, float(surface) + (0.0 if road else 0.25)))
-	if relief:
+	if relief or grade != 0.0:
 		for z in n:
 			for x in n:
 				var a := pos[z * n + maxi(x - 1, 0)].y - pos[z * n + mini(x + 1, SIZE)].y
@@ -269,10 +275,10 @@ func _stones(surface: int, half: float, road: bool) -> void:
 				continue
 			var weight := RoadRefinement.tread_mask(half, near.x, noise.get_noise_2d(x * 0.13, z * 0.13), organic, road)
 			var h := WGRandom.hash2(gx, gz, 317)
-			var size := GroundCarpet.road_stone(weight, near.x / half, surface, road, h)
+			var size := GroundCarpet.road_stone(weight, near.x / half, surface, road, h, GroundCarpet.stone_clump(x, z))
 			if size <= 0.0:
 				continue
-			data.append([Transform3D(Basis(Vector3.UP, h * TAU * 7.0).scaled_local(Vector3.ONE * size), Vector3(x, _height(x, z, near.x, half), z)),
+			data.append([Transform3D(Basis(Vector3.UP, h * TAU * 7.0).scaled_local(Vector3.ONE * size), Vector3(x, _height(x, z, near.x, half, near.y), z)),
 				GroundCarpet.road_stone_tint(surface, WGRandom.hash2(gx, gz, 331))])
 	mm.instance_count = data.size()
 	for n in data.size():

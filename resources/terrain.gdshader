@@ -615,6 +615,8 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	// Производные — до ветвления: на краю маски соседние пиксели квада вне ветки, и fwidth внутри
 	// неё даёт мусор (тёмный пунктир по рёбрам сетки).
 	float mask_w = fwidth(COLOR.a);
+	// 15.11 (4): номер покрытия меняется только на краю участка вершин дороги (дальше UV2 = 0) — там UV2 не годится
+	float surf_edge = fwidth(UV2.y);
 	float pixel_m = length(fwidth(p));
 	// 12.3: наклон поперечной координаты полотна в мире (для колей): из экранных производных UV2.x и p.
 	vec2 dpx = dFdx(p);
@@ -688,7 +690,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float big_aa = max(pixel_m * 2.9 * 0.5, 0.01);
 		float big_rocks = (1.0 - smoothstep(rock_r - big_aa, rock_r + big_aa, length(rock_at)))
 			* step(0.86 - grain * 0.10 - smoothstep(0.55, 0.95, across) * 0.08, big_scatter.x)
-			* max(smoothstep(0.25, 0.7, grain), verge * (0.6 - organic * 0.3)) * (1.0 - smoothstep(0.2, 0.6, big_aa));
+			* max(smoothstep(0.25, 0.7, grain), verge * (0.25 - organic * 0.12)) * (1.0 - smoothstep(0.2, 0.6, big_aa));
 		// Traffic sorts fines onto the tread; coarser scree remains at its sides.
 		big_rocks *= 1.0 - tread * 0.85;
 		float big_dome = clamp(1.0 - length(rock_at) / rock_r, 0.0, 1.0);
@@ -791,6 +793,50 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 			(n_mid - 0.5) * 9.0 + (n_big - 0.5) * 16.0, near, fabric_tilt);
 		float wear = exp(-pow((ax + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
 		soil *= 1.0 - wear * (1.0 - grain) * (1.0 - organic) * (0.02 + fleck * 0.04) * near;
+		// 15.11 (4): промоины грунта. На уклоне вода режет полотно вдоль падения склона (нормаль меша): узкие извилистые
+		// бороздки с перерывами, тёмное сырое дно, светлые намытые бровки. Мельче кочек RoadBump — только вид.
+		vec2 form_tilt = vec2(0.0);
+		float wash_hollow = 0.0;
+		float drift_h = 0.0;
+		float wash_k = road_look.x * (1.0 - organic) * (1.0 - grain) * smoothstep(0.03, 0.10, grade)
+			* smoothstep(0.0, 0.35, ruts_patch.x + (n_big - 0.5) * 0.5) * fine_w * near;
+		if (wash_k > 0.01) {
+			vec2 down = normalize(wnormal.xz + vec2(1e-5));
+			vec2 side_d = vec2(-down.y, down.x);
+			float run = dot(pr, down);
+			float sx = dot(pr, side_d) + sin(run * 1.4 + n_mid * 5.0) * 0.16 + (n_mid - 0.5) * 0.6;
+			const float RILL_GAP = 1.1;
+			float rill_cell = floor(sx / RILL_GAP);
+			vec2 rh = grain_hash(vec2(rill_cell, 17.0));
+			float rill_w = 0.07 + 0.09 * rh.y * smoothstep(0.03, 0.15, grade);
+			float t = clamp(((fract(sx / RILL_GAP) - 0.5) * RILL_GAP) / rill_w, -1.0, 1.0);
+			float on = step(0.4, rh.x) * smoothstep(0.3, 0.6, 0.5 + 0.5 * sin(run * 0.8 + rh.x * 6.28) + (fleck - 0.5) * 0.4) * wash_k;
+			float q = 1.0 - t * t;
+			float rill = q * q * on;
+			float rim = exp(-pow((abs(t) - 1.25) / 0.3, 2.0)) * on;
+			soil *= (1.0 - rill * 0.4) * (1.0 + rim * 0.1);
+			soil = mix(soil, soil * vec3(0.92, 0.95, 1.02), rill);
+			// стенки бороздки: наклон поперёк по глубине ~3 см
+			form_tilt -= side_d * (0.03 * 4.0 * t * q / rill_w) * on;
+			wash_hollow = rill;
+		}
+		// 15.11 (4): наносы песка. Мягкие валы поперёк ветра (тот же ветер, что у ряби) у кромок и между колеями,
+		// местами по крупному шуму; рыхлый сухой песок светлее, колея под ним засыпана, рябь на наносе виднее.
+		if (road_look.y > 0.01) {
+			vec2 wind = vec2(0.83, 0.56);
+			vec2 cross_w = vec2(-0.56, 0.83);
+			float wob = sin(dot(pr, cross_w) * 0.35 + n_big * 3.0);
+			float u = dot(pr, wind) * 0.9 + 1.6 * wob;
+			float dune = 0.5 + 0.5 * (sin(u) + 0.3 * sin(2.0 * u)) / 1.3;
+			float ddu = 0.5 * (cos(u) + 0.6 * cos(2.0 * u)) / 1.3;
+			vec2 du = wind * 0.9 + cross_w * (1.6 * 0.35 * cos(dot(pr, cross_w) * 0.35 + n_big * 3.0));
+			float place = (smoothstep(0.45, 0.95, across) + 0.7 * exp(-pow(across * 2.8, 2.0)) * (1.0 - singletrack))
+				* smoothstep(0.35, 0.7, n_big + (n_mid - 0.5) * 0.5) * road_look.y * near;
+			drift_h = dune * place;
+			soil = mix(soil, soil * vec3(1.15, 1.12, 1.02), drift_h);
+			soil *= 1.0 + tracks * drift_h * 0.12; // засыпанная колея светлее
+			form_tilt -= du * ddu * place * 0.12 * bump_fade;
+		}
 		// Трава пробивается между колеями и у краёв заросших троп и грунтовок.
 		float middle = exp(-pow(across * 2.6, 2.0)) * smoothstep(0.35, 0.9, 1.0 - grain) * mix(1.0, meadow, singletrack) + smoothstep(0.65, 1.0, across) * 0.5;
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
@@ -800,7 +846,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		soil *= 1.0 + clamp(bump.x * 4.5, -0.09, 0.08) * bump_vis;
 		// 15.11: влага. Сырое место темнее и холоднее, впадины (колеи, ямы, низ волны) сыреют первыми, бугры сохнут.
 		// Сила — по покрытию (гравий почти не темнеет, земля и подстилка заметно); блеск слабый и только во впадинах.
-		float hollow = clamp(max(pit, tracks) + clamp(-bump.x * 12.0, 0.0, 0.4) - clamp(bump.x * 8.0, 0.0, 0.3), 0.0, 1.0);
+		float hollow = clamp(max(max(pit, tracks * (1.0 - drift_h)), wash_hollow) + clamp(-bump.x * 12.0, 0.0, 0.4) - clamp(bump.x * 8.0, 0.0, 0.3) - drift_h * 0.4, 0.0, 1.0);
 		float damp_r = smoothstep(0.50, 0.82, wet + hollow * 0.22 + clamp(-curve * 0.3, 0.0, 0.12) + (n_big - 0.5) * 0.25) * road_look.z;
 		// дно впадин темнее и при высоком солнце: объём не зависит от часа
 		soil *= 1.0 - hollow * 0.10 * bump_fade;
@@ -826,10 +872,39 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		if (relief * near > 0.0) {
 			// Свет следует отдельным зёрнам и камням; на середине полотна нет контуров карты нормалей биома,
 			// вместо них — мелкий рельеф по повёрнутым координатам полотна.
-			vec2 tilt = fabric_tilt + rock_at / rock_r * big_rocks * 0.6
+			vec2 tilt = fabric_tilt + form_tilt * road + rock_at / rock_r * big_rocks * 0.6
 				- bump.yz * bump_vis * 0.95 * road; // 14.5: волны кочек слабые, иначе читаются узором; 15.11: глубина карты выросла, множитель меньше
 			vec3 road_normal = normalize(vec3(tilt, 1.0)) * 0.5 + 0.5;
 			detail_n = mix(detail_n, road_normal, relief);
+		}
+	}
+	// 15.11 (4): канава и вал за кромкой. Вершины коридора несут UV2 до REACH за полотном, маска COLOR.a там уже 0.
+	// Форма — настоящая кривизна меша (curve): канава (вогнутое) — сырая, тёмная, с сочной травой и сырой землёй на дне;
+	// вал (выпуклое) — сухой, выгоревший, на гребне вынутая земля. Канава и вал прерывисты по самой геометрии
+	// (RoadRefinement._shoulder), поэтому одинаковых полос по обе стороны нет.
+	if (!use_vertex_color && UV2.y > 0.0 && near > 0.0 && road < 0.99) {
+		float half_m = 1.0 / max(length(across_grad), 0.05);
+		float beyond = (abs(UV2.x) - 1.0) * half_m;
+		float zone = smoothstep(-0.3, 0.25, beyond) * (1.0 - smoothstep(1.8, 2.8, beyond)) * (1.0 - road) * (1.0 - smoothstep(0.0, 0.02, surf_edge))
+			* (1.0 - smoothstep(0.25, 0.9, pixel_m)) * near;
+		if (zone > 0.0) {
+			float patchy = (n_mid - 0.5) * 0.6 + (n_big - 0.5) * 0.4; // медленный шум: пятнами, без мелкой ряби
+			// Знак формы — по кривизне меша (метровая сетка даёт её ступенчато), рисунок — по сечению RoadRefinement._vertex:
+			// вал у кромки (0,35 м, ширина 0,8), канава дальше (0,85 м, ширина 0,65). Так полосы плавные, а не по треугольникам.
+			float bd = clamp((beyond - 0.85) / 0.75, -1.0, 1.0);
+			float bb = clamp((beyond - 0.35) / 0.9, -1.0, 1.0);
+			float ditch = smoothstep(0.004, 0.03, -curve + patchy * 0.01 + (mh.g - 0.5) * 0.012) * (1.0 - bd * bd) * (1.0 - bd * bd) * zone;
+			float bank = smoothstep(0.004, 0.03, curve + patchy * 0.01 + (mh.g - 0.5) * 0.012) * (1.0 - bb * bb) * (1.0 - bb * bb) * zone;
+			// канава: сочнее и темнее, на дне — пятна сырой земли и стоячая влага
+			float lum = dot(col, vec3(0.3, 0.59, 0.11));
+			col = mix(col, col * vec3(0.45, 0.62, 0.42), ditch * 0.85);
+			float mud = smoothstep(0.45, 0.75, -curve * 4.0 + n_mid * 0.5 + (mh.b - 0.5) * 0.4) * ditch;
+			col = mix(col, vec3(0.13, 0.10, 0.07) * (0.8 + 0.4 * wet), mud * 0.55);
+			gloss_v = max(gloss_v, mud * smoothstep(0.45, 0.8, wet) * 0.6);
+			// вал: суше и светлее, на гребне вынутая из канавы земля
+			col = mix(col, vec3(lum) * vec3(1.55, 1.3, 0.62), bank * 0.6);
+			float spoil = smoothstep(0.45, 0.75, curve * 4.0 + n_mid * 0.45 + (mh.g - 0.5) * 0.5) * bank;
+			col = mix(col, mix(col, vec3(0.30, 0.23, 0.15), 0.7) * (0.85 + (mh.g - 0.5) * 0.6), spoil * 0.6);
 		}
 	}
 	// рябь песка, заструги и камешки проплешин — своим светом (вне полотна)

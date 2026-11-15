@@ -51,8 +51,10 @@ const WIND := [
 ]
 ## 15.11.2026: россыпь у дорожного полотна по покрытию (RoadSurface): доля занятых ячеек на обочине и кромке, на самом полотне.
 ## Гравий и камень выбрасывают щебень к краям и оставляют его между колеями; грунтовка и тропы — редкие комья; песок чистый.
-const STONE_CHANCE := [Vector2.ZERO, Vector2(0.8, 0.3), Vector2(0.4, 0.1), Vector2(0.16, 0.0), Vector2(0.9, 0.5),
-	Vector2.ZERO, Vector2(0.25, 0.06), Vector2(0.16, 0.0)]
+## 15.11 (4): на обочине было почти по камню на ячейку 0,57 м — сплошная полоса щебня. Теперь втрое реже и кучками
+## (stone_clump): осыпь у кромки местами, между ними чистая трава.
+const STONE_CHANCE := [Vector2.ZERO, Vector2(0.26, 0.16), Vector2(0.12, 0.06), Vector2(0.05, 0.0), Vector2(0.32, 0.3),
+	Vector2.ZERO, Vector2(0.08, 0.04), Vector2(0.05, 0.0)]
 const STONE_SUB := 7        # ячеек россыпи на сторону плитки: 4 м / 7 = 0,57 м
 ## Венчики цветов: белый, жёлтый, лиловый, розовый
 const PETALS := [Color(1.0, 1.0, 0.94), Color(1.0, 0.84, 0.2), Color(0.66, 0.52, 0.98), Color(1.0, 0.6, 0.76)]
@@ -455,19 +457,26 @@ func _build_tile(i: int, j: int) -> Array:
 ## Размер россыпи в точке полотна (0 — нет): weight — маска полотна, across — поперечная координата (0 — ось, 1 — кромка),
 ## h — случайное 0..1. На обочине и кромке — чаще; на полотне — только между колеями и у края, в колеях чисто;
 ## на тропе в одну колею — только у края. Общая с изолированной сценой road_look.
-static func road_stone(weight: float, across: float, surface: int, road: bool, h: float) -> float:
+static func road_stone(weight: float, across: float, surface: int, road: bool, h: float, clump := 1.0) -> float:
 	if surface <= 0 or surface >= STONE_CHANCE.size():
 		return 0.0
 	var chance: Vector2 = STONE_CHANCE[surface]
 	var a := absf(across)
 	var p := 0.0
 	if weight < 0.5:
-		p = chance.x * smoothstep(0.08, 0.22, weight)
+		p = chance.x * smoothstep(0.08, 0.22, weight) * clump
 	elif a > 0.72 or (road and a < 0.2):
-		p = chance.y
+		p = chance.y * clump
 	if h >= p:
 		return 0.0
 	return lerpf(1.0, 2.0, h / p) * (1.0 if weight < 0.5 else 0.7)
+
+
+## Кучность россыпи в точке мира (x, z), 0..2, в среднем около 1: медленное поле ~12–20 м — осыпь местами,
+## а не ровной полосой вдоль всей дороги. Общая с изолированной сценой road_look.
+static func stone_clump(x: float, z: float) -> float:
+	var f := 0.5 + 0.5 * (0.6 * sin(0.37 * x + 0.21 * z + 1.3) + 0.4 * sin(-0.17 * x + 0.43 * z + 4.0))
+	return 2.2 * smoothstep(0.3, 0.85, f)
 
 
 ## Цвет россыпи: покрытие, сведённое к серому камню тем сильнее, чем оно каменистее (комья земли остаются цвета земли)
@@ -500,7 +509,7 @@ func _road_stones(i: int, j: int) -> PackedFloat32Array:
 		if at.is_empty():
 			continue
 		var h := WGRandom.hash2(gx, gz, 317)
-		var size := road_stone(at.weight, at.across, at.surface, at.road, h / maxf(stones, 0.001)) if stones > 0.0 else 0.0
+		var size := road_stone(at.weight, at.across, at.surface, at.road, h / maxf(stones, 0.001), stone_clump(x, z)) if stones > 0.0 else 0.0
 		if size <= 0.0 or heights.depth_at(x, z) > 0.0:
 			continue
 		if out.is_empty():
