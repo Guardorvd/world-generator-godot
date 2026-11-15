@@ -32,6 +32,8 @@ const SUB := 9              # ячеек на сторону плитки: 4 м 
 const CAP := 36000          # экземпляров во всех MultiMesh вместе
 const FADE := 0.35          # полоса растворения, доля дальности
 const NEAR_SHARE := 0.5     # доля дальности, где стоит полная форма и травинки ещё не поредели до дальней
+const VERGE_MASK := 0.22   # маска полотна (RoadRefinement.weight_at), до которой дернина заходит на обочину; покрытие видно с ~0,3
+const MEADOW_MIDDLE := 0.24 # доля полуширины травяной колеи: середина между колеями (колеи на 0,47, RoadBump.RUT_AT)
 const EXTRA_REACH := Vector3(2.0, 1.18, 0.85) # вперёд, вбок, назад; те же оси в ground_carpet.gdshaderinc
 const EXTRA_DETAIL := Vector3(1.25, 0.59, 0.425)
 const EXTRA_REAR_KEEP := 0.8
@@ -487,9 +489,21 @@ func _build_tile(i: int, j: int) -> Array:
 		var keep: float = cover * smoothstep(0.03 + 0.37 * shade, 0.22 + 0.46 * shade, patch)
 		if WGRandom.hash2(gx, gz, 227) > keep:
 			continue
+		# 15.11.2026: у полотна дернина не обрывается стеной. На обочине (до видимой кромки покрытия) она редеет и
+		# ниже; на травяной колее низкая дернина остаётся на середине между колеями. На самом покрытии её нет.
+		var low := 1.0
 		if refine != null:
-			if refine.weight_at(x, z, w.W) > 0.04:
-				continue
+			var tread: float = refine.weight_at(x, z, w.W)
+			if tread > 0.04:
+				if tread < VERGE_MASK:
+					if WGRandom.hash2(gx, gz, 293) < tread / VERGE_MASK:
+						continue
+					low = lerpf(0.9, 0.6, tread / VERGE_MASK)
+				else:
+					var at: Dictionary = refine.sample(x, z, w.W)
+					if at.is_empty() or at.surface != RoadSurface.MEADOW or absf(at.across) > MEADOW_MIDDLE:
+						continue
+					low = 0.55
 		elif path >= 2:
 			continue
 		if heights.depth_at(x, z) > 0.0:
@@ -510,7 +524,7 @@ func _build_tile(i: int, j: int) -> Array:
 			kind = Models.CARPET_DRY
 			dry = maxf(dry, 0.45)
 		var sc := 0.85 + 0.45 * h1
-		var sy: float = sc * tall * (0.7 + 0.6 * h2)
+		var sy: float = sc * tall * (0.7 + 0.6 * h2) * low
 		var basis := Basis(Vector3.UP, h2 * TAU)
 		var axis := Vector3.UP.cross(normal)
 		if axis.length_squared() > 1e-6:
@@ -522,7 +536,7 @@ func _build_tile(i: int, j: int) -> Array:
 		_put(parts[kind], filled[kind], basis.scaled_local(Vector3(sc, sy, sc)), x, y, z, tint, WGRandom.hash2(gx, gz, 241), 0.3 * h1)
 		filled[kind] += 1
 		# Цветы — полянами ~5 м, цвет поляны общий (шум 14 м), изредка другой
-		if flowers and kind != Models.CARPET_SHADE:
+		if flowers and kind != Models.CARPET_SHADE and low == 1.0:
 			var bloom := smoothstep(0.52, 0.78, VegetationLayer._value_noise(x / 5.0, z / 5.0, 269)) * (1.0 - 0.7 * parched)
 			if WGRandom.hash2(gx, gz, 271) < 0.16 * bloom:
 				var pick := int(VegetationLayer._value_noise(x / 14.0, z / 14.0, 277) * 3.999)

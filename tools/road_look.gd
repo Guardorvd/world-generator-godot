@@ -8,6 +8,7 @@ extends SceneTree
 ## --obstacles — 11.6: на полотне ветка, камни, бревно поперёк и валун у края (модели подстилки, цвет вершин).
 ## --shift x,z — 12.3: сдвиг участка в мире (м): поля RoadBump (разбитые участки, колеи, ямы) — в мировых координатах.
 ## --style <сила> — 13.11: глобальный параметр «Планы» визуального стиля (resources/depth_tone.gdshaderinc), читаемость полотна с ним и без.
+## --wet <0..1> — 15.11: влажность почвы участка (сырое полотно: потемнение, блеск впадин).
 ## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
@@ -190,6 +191,13 @@ func _build(surface: int) -> void:
 			var v := noise.get_noise_2d(x * 0.05, y * 0.05) * 0.06
 			base.set_pixel(x, y, Color(0.34 + v, 0.52 + v, 0.20 + v * 0.5))
 	var mat: ShaderMaterial = GameContext.scope.terrain.material(base)
+	# 15.11: --wet <0..1> — влажность почвы на участке (канал B текстуры леса), по умолчанию как раньше 0,45
+	var wet := float(_arg("wet", "-1"))
+	if wet >= 0.0:
+		var damp := Image.create(1, 1, false, Image.FORMAT_RGBA8)
+		damp.set_pixel(0, 0, Color(0.0, 0.0, wet, 0.0))
+		mat.set_shader_parameter("forest_tex", ImageTexture.create_from_image(damp))
+		mat.set_shader_parameter("forest_enabled", true)
 	if shader_path != "":
 		var code := FileAccess.get_file_as_string(shader_path)
 		var sh := Shader.new()
