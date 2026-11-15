@@ -115,6 +115,8 @@ var _target := {}        # на что игрок смотрит сейчас (_
 var paused := false
 var show_map := false
 var info_timer := 0.0
+const DISCOVERY_TICKS := 6   # такты физики между проверками открытий мест (10 раз в секунду)
+var _discovery_tick := 0
 var _dragging := false
 var _captured_at := 0
 var _looked_at: float:
@@ -1190,8 +1192,13 @@ func _physics_process(dt: float) -> void:
 	t0 = _tick_mark("audio", t0)
 	if crashed:
 		_snap()
-	for text: String in player.check_discoveries(world, hud.visited):
-		hud.toast(text)
+	# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
+	# радиус открытия — 2,5 клетки (10 м), за 0,1 с даже на спуске игрок проезжает 1–2 м
+	_discovery_tick += 1
+	if _discovery_tick >= DISCOVERY_TICKS:
+		_discovery_tick = 0
+		for text: String in player.check_discoveries(world, hud.visited):
+			hud.toast(text)
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
