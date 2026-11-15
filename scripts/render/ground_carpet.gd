@@ -40,6 +40,12 @@ const EXTRA_REAR_KEEP := 0.8
 const TURN_COS := 0.9945    # пересборка при повороте примерно на 6°
 const MARGIN := 5.0         # запас раскладки за видимой дальностью, м
 const STEP := 2.5           # на сколько метров сдвигается игрок до новой склейки
+## 15.11.2026: плиток на сторону квадрата отсечения (16 м). MultiMesh отсекается камерой только целиком, а ковёр
+## лежит вокруг игрока: одним набором на вид GPU обсчитывал вершины всех куртинок, и за спиной тоже (на стенде луга
+## около 2 мс из 5,5 — ковёр это 1 млн треугольников). Квадратами по 16 м в кадр попадает около половины вершин;
+## по 8 м — чуть меньше, но втрое больше вызовов отрисовки, по 32 м — почти без отсечения
+const SECTOR := 4
+const MIN_CAPACITY := 64
 const KINDS := Models.CARPET_KINDS
 ## Ветер и свет вида: [sway, flutter, sway_speed, ao, glow] и насколько трава расступается у игрока, м
 const WIND := [
@@ -63,7 +69,7 @@ var world: WorldData
 var heights: Heightfield
 var layer: Node3D            # VegetationLayer: общие функции множителя травы и снимок леса
 var forest: Image
-var layers: Array = []       # вид × 2 + дальняя: {mm, node, mat, tris, n}
+var layers: Array = []       # вид × 2 + дальняя: {mesh, mat, tris, n, name, nodes: квадрат -> {node, mm}, pool}
 var stream := StreamPolicy.new()
 
 ## Настройки игрока (GameSettings.CARPET_DENSITY / CARPET_RANGE) и качество растительности
@@ -88,9 +94,8 @@ var _last := Vector2.INF
 var _last_lead := Vector2.ZERO
 var _last_forward := Vector2.UP
 var _started_clock := 0.0
-var _out: Array = []         # результат задачи: буфер на слой
+var _out: Array = []         # результат задачи: на слой — квадраты отсечения {buf, n, low, high}
 var _out_n := PackedInt32Array()
-var _out_box := AABB()
 var _reset := false
 var _cuts: Array[Rect2] = []
 var _road_revision := -1
@@ -111,22 +116,46 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 		mat.set_shader_parameter("trample", WIND[kind][1])
 		for far in 2:
 			var mesh := near_mesh if far == 0 else Models.build_carpet_mesh(kind, true)
-			var node := MultiMeshInstance3D.new()
-			node.name = "GroundCarpet%d%s" % [kind, "Far" if far == 1 else ""]
-			var mm := MultiMesh.new()
-			mm.transform_format = MultiMesh.TRANSFORM_3D
-			mm.use_colors = true
-			mm.use_custom_data = true
-			mm.mesh = mesh
-			mm.instance_count = 256
-			mm.visible_instance_count = 0
-			node.multimesh = mm
-			node.material_override = mat
-			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-			node.lod_bias = 0.6
-			layer_node.add_child(node)
-			layers.append({mm = mm, node = node, mat = mat, n = 0, tris = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3})
+			layers.append({mesh = mesh, mat = mat, n = 0, tris = mesh.surface_get_arrays(0)[Mesh.ARRAY_VERTEX].size() / 3,
+				name = "GroundCarpet%d%s" % [kind, "Far" if far == 1 else ""], nodes = {}, pool = []})
 	apply_ranges()
+
+
+## Узел квадрата: из запаса слоя или новый
+func _sector_node(entry: Dictionary) -> Dictionary:
+	if not entry.pool.is_empty():
+		var kept: Dictionary = entry.pool.pop_back()
+		kept.node.visible = true
+		return kept
+	var node := MultiMeshInstance3D.new()
+	node.name = entry.name
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.use_custom_data = true
+	mm.mesh = entry.mesh
+	mm.instance_count = MIN_CAPACITY
+	mm.visible_instance_count = 0
+	node.multimesh = mm
+	node.material_override = entry.mat
+	node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	node.lod_bias = 0.6
+	layer.add_child(node)
+	return {node = node, mm = mm}
+
+
+## Все квадраты слоя убрать в запас (спрятаны, без экземпляров)
+static func _hide_layer(entry: Dictionary) -> void:
+	for key: Vector2i in entry.nodes:
+		_stash(entry, entry.nodes[key])
+	entry.nodes.clear()
+	entry.n = 0
+
+
+static func _stash(entry: Dictionary, part: Dictionary) -> void:
+	part.mm.visible_instance_count = 0
+	part.node.visible = false
+	entry.pool.append(part)
 
 
 ## Дальность видимости, м
@@ -151,8 +180,7 @@ func configure(density_scale: float, range_m: float, flora: Dictionary, use_dire
 	apply_ranges()
 	if not _enabled:
 		for entry: Dictionary in layers:
-			entry.mm.visible_instance_count = 0
-			entry.n = 0
+			_hide_layer(entry)
 		count = 0
 	_last = Vector2.INF
 
@@ -206,8 +234,7 @@ func clear() -> void:
 	_last = Vector2.INF
 	count = 0
 	for entry: Dictionary in layers:
-		entry.mm.visible_instance_count = 0
-		entry.n = 0
+		_hide_layer(entry)
 
 
 ## Каждый кадр из VegetationLayer.update. Не блокирует: считает фоновая задача, главный поток только
@@ -275,11 +302,11 @@ static func _profile_coverage(start: Vector2, end: Vector2, axes: Vector3) -> fl
 func positions() -> PackedVector3Array:
 	var out := PackedVector3Array()
 	for entry: Dictionary in layers:
-		if entry.n == 0:
-			continue
-		var live: PackedFloat32Array = entry.mm.buffer
-		for n: int in entry.n:
-			out.append(Vector3(live[n * STRIDE + 3], live[n * STRIDE + 7], live[n * STRIDE + 11]))
+		for key: Vector2i in entry.nodes:
+			var mm: MultiMesh = entry.nodes[key].mm
+			var live: PackedFloat32Array = mm.buffer
+			for n: int in mm.visible_instance_count:
+				out.append(Vector3(live[n * STRIDE + 3], live[n * STRIDE + 7], live[n * STRIDE + 11]))
 	return out
 
 
@@ -346,14 +373,12 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 			if visible:
 				need.append([d, i, j, far, directional and offset.dot(forward) < -tile_pad])
 	need.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
-	var outs: Array = []
+	var outs: Array = []        # слой -> квадрат -> {buf, n, low, high}
 	var counts := PackedInt32Array()
 	counts.resize(KINDS * 2)
 	for n in KINDS * 2:
-		outs.append(PackedFloat32Array())
+		outs.append({})
 	var total := 0
-	var low := Vector3(INF, INF, INF)
-	var high := Vector3(-INF, -INF, -INF)
 	var used := {}
 	var overflow := false
 	for entry: Array in need:
@@ -369,7 +394,10 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 		if tile.is_empty():
 			continue
 		var far := 1 if entry[3] else 0
-		var added := 0
+		var sector := Vector2i(key.x / SECTOR, key.y / SECTOR)
+		var y: Vector2 = _tile_y[key]
+		var tile_low := Vector3(key.x * TILE, y.x, key.y * TILE)
+		var tile_high := Vector3((key.x + 1) * TILE, y.y, (key.y + 1) * TILE)
 		for kind in KINDS:
 			var part: PackedFloat32Array = tile[kind]
 			if entry[4]:
@@ -380,14 +408,15 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 			if total + m > CAP:
 				overflow = true
 				continue
-			outs[kind * 2 + far].append_array(part)
+			var buckets: Dictionary = outs[kind * 2 + far]
+			if not buckets.has(sector):
+				buckets[sector] = {buf = PackedFloat32Array(), low = tile_low, high = tile_high}
+			var bucket: Dictionary = buckets[sector]
+			bucket.buf.append_array(part)
+			bucket.low = bucket.low.min(tile_low)
+			bucket.high = bucket.high.max(tile_high)
 			counts[kind * 2 + far] += m
 			total += m
-			added += m
-		if added > 0:
-			var y: Vector2 = _tile_y[key]
-			low = low.min(Vector3(key.x * TILE, y.x, key.y * TILE))
-			high = high.max(Vector3((key.x + 1) * TILE, y.y, (key.y + 1) * TILE))
 	if overflow:
 		capped += 1
 	# Кэш: плитки далеко за капсулой уходят (запас на возврат назад)
@@ -399,15 +428,16 @@ func _job(p: Vector2, lead: Vector2, forward: Vector2) -> void:
 			_tiles.erase(key)
 			_tile_y.erase(key)
 	# Ёмкость MultiMesh — ступенями (степени двойки): буфер сразу нужного размера
-	for n in KINDS * 2:
-		var capacity := 256
-		while capacity < counts[n]:
-			capacity *= 2
-		outs[n].resize(capacity * STRIDE)
+	for buckets: Dictionary in outs:
+		for sector: Vector2i in buckets:
+			var bucket: Dictionary = buckets[sector]
+			bucket.n = bucket.buf.size() / STRIDE
+			var capacity := MIN_CAPACITY
+			while capacity < bucket.n:
+				capacity *= 2
+			bucket.buf.resize(capacity * STRIDE)
 	_out = outs
 	_out_n = counts
-	# Травинки и ветер выходят за точки основания куртинок
-	_out_box = AABB(low, high - low).grow(0.9) if total > 0 else AABB()
 	last_job_ms = (Time.get_ticks_usec() - _job_started) / 1000.0
 	max_job_ms = maxf(max_job_ms, last_job_ms)
 
@@ -425,17 +455,25 @@ func _present() -> void:
 	count = 0
 	for n in layers.size():
 		var entry: Dictionary = layers[n]
-		var mm: MultiMesh = entry.mm
-		var data: PackedFloat32Array = _out[n]
-		if _out_n[n] == 0 and entry.n == 0:
-			continue
-		var capacity := data.size() / STRIDE
-		if mm.instance_count != capacity:
-			mm.visible_instance_count = 0
-			mm.instance_count = capacity
-		mm.buffer = data
-		mm.visible_instance_count = _out_n[n]
-		mm.custom_aabb = _out_box
+		var buckets: Dictionary = _out[n]
+		# Квадраты, которых больше нет, — в запас; оставшиеся держат свой узел (та же ёмкость, буфер не пересоздаётся)
+		for sector: Vector2i in entry.nodes.keys():
+			if not buckets.has(sector):
+				_stash(entry, entry.nodes[sector])
+				entry.nodes.erase(sector)
+		for sector: Vector2i in buckets:
+			var bucket: Dictionary = buckets[sector]
+			if not entry.nodes.has(sector):
+				entry.nodes[sector] = _sector_node(entry)
+			var mm: MultiMesh = entry.nodes[sector].mm
+			var capacity: int = bucket.buf.size() / STRIDE
+			if mm.instance_count != capacity:
+				mm.visible_instance_count = 0
+				mm.instance_count = capacity
+			mm.buffer = bucket.buf
+			mm.visible_instance_count = bucket.n
+			# Травинки и ветер выходят за точки основания куртинок
+			mm.custom_aabb = AABB(bucket.low, bucket.high - bucket.low).grow(0.9)
 		entry.n = _out_n[n]
 		count += entry.n
 	_out = []
