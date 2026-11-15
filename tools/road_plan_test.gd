@@ -48,6 +48,11 @@ func _initialize() -> void:
 	if not turn.is_empty():
 		StageTrails.turn_costs = {road = float(turn.get_slice(",", 0)), trail = float(turn.get_slice(",", 1)), mountain = float(turn.get_slice(",", 2))}
 		print("штраф поворота: ", StageTrails.turn_costs)
+	# --straighten r,t,m: допуск срезания лесенки сетки (клеток) для дорог, троп и горных (StageTrails.straighten)
+	var pull := _arg(args, "--straighten", "")
+	if not pull.is_empty():
+		StageTrails.straighten = {road = float(pull.get_slice(",", 0)), trail = float(pull.get_slice(",", 1)), mountain = float(pull.get_slice(",", 2))}
+		print("срезание лесенки: ", StageTrails.straighten)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true

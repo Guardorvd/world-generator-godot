@@ -71,6 +71,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var sharp := {road = 0, trail = 0, mountain = 0, ride = 0}
 	var hairpin_spots: Array = []
 	var grade_acc := {} # вид -> [длина, длина круче STEEP, сумма уклон×длина, наибольший]
+	var grade_at := {} # вид -> [путь, x, y, рядом с концом пути (16 м)] — где наибольший уклон
 	var crossings := {} # пара -> [точки]
 	var line_cells := PackedByteArray()
 	line_cells.resize(w.N)
@@ -151,7 +152,9 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 						acc[0] += share
 						if gr > STEEP: acc[1] += share
 						acc[2] += gr * share
-						acc[3] = maxf(acc[3], gr)
+						if gr > acc[3]:
+							acc[3] = gr
+							grade_at[_kind(t)] = [r, snappedf(mid.x, 0.1), snappedf(mid.y, 0.1), _near_end(ends, mid, 4.0)]
 			var near_node := _near_end(ends, p, NODE_R)
 			var best := {}
 			for by in range(floori((p.y - NEAR_MAX) / BIN), floori((p.y + NEAR_MAX) / BIN) + 1):
@@ -208,7 +211,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var grade := {}
 	for kind: String in grade_acc:
 		var acc: Array = grade_acc[kind]
-		grade[kind] = {steep_share = snappedf(acc[1] / maxf(acc[0], 1.0), 0.001), mean = snappedf(acc[2] / maxf(acc[0], 1.0), 0.001), max = snappedf(acc[3], 0.001)}
+		grade[kind] = {steep_share = snappedf(acc[1] / maxf(acc[0], 1.0), 0.001), mean = snappedf(acc[2] / maxf(acc[0], 1.0), 0.001), max = snappedf(acc[3], 0.001), max_at = grade_at.get(kind, [])}
 	var raw_turns := {}
 	var road_cells: Array = w.generation.road_cells if w.generation != null else []
 	var raw_acc := {}

@@ -64,7 +64,7 @@ const MOUNTAIN_CLIMB := 4.0
 ## по 45°-ступеням). Убирает зигзаги сетки на склонах до сглаживания (_road_line). static var — стенд road_plan_test
 ## подбирает числа ключом --turn; 0 — прежний поиск. Звериные тропы, короткие подходы (_link) и природные маршруты
 ## (RideRoutes) без штрафа. Подбор на «Север-1234» — docs/ROAD_NETWORK.md, раздел 15.11.2026.
-static var turn_costs := {road = 8.0, trail = 6.0, mountain = 4.0}
+static var turn_costs := {road = 12.0, trail = 6.0, mountain = 4.0}
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
@@ -537,6 +537,18 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 			if _road_axis(w, on_axis, Vector2(p.x, p.y)):
 				for j in range(maxi(0, k - 2), mini(pts.size(), k + 3)):
 					fixed[j] = 1
+	var design_kind := kind if smooth_kind.is_empty() else smooth_kind
+	var rules := {
+		grade = MOUNTAIN_GRADE if design_kind == "mountain" else (TRAIL_GRADE if design_kind == "trail" else ROAD_LIMIT),
+		cross = MOUNTAIN_GRADE if design_kind == "mountain" else BENCH_CROSS,
+		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
+		probe = surface.fast_water(), axis = on_axis, corridor = corridor,
+	}
+	var tolerance: float = straighten.get(design_kind, 0.0)
+	if tolerance > 0.0 and pts.size() > 2:
+		var pulled := _straighten(surface, pts, fixed, rules, tolerance)
+		pts = pulled[0]
+		fixed = pulled[1]
 	var bends: Array = [pts[0]]
 	var pins := PackedByteArray([fixed[0]])
 	for k in range(1, pts.size() - 1):
@@ -550,13 +562,6 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	bends.append(pts[-1])
 	pins.append(fixed[-1])
 
-	var design_kind := kind if smooth_kind.is_empty() else smooth_kind
-	var rules := {
-		grade = MOUNTAIN_GRADE if design_kind == "mountain" else (TRAIL_GRADE if design_kind == "trail" else ROAD_LIMIT),
-		cross = MOUNTAIN_GRADE if design_kind == "mountain" else BENCH_CROSS,
-		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
-		probe = surface.fast_water(), axis = on_axis, corridor = corridor,
-	}
 	var start := _road_approach(surface, bends[0], bends[1], joins.get(0, {}), rules) if pins[0] == 0 else []
 	var finish := _road_approach(surface, bends[-1], bends[-2], joins.get(1, {}), rules) if pins[-1] == 0 else []
 	var out: Array = [bends[0]] if start.is_empty() else start
@@ -607,6 +612,65 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 		finish.reverse()
 		out.append_array(finish)
 	return _road_stations(out)
+
+
+## 15.11.2026: срезание лесенки сетки до сглаживания. Из центров клеток выбрасываются промежуточные точки, если прямой
+## отрезок между дальними точками отходит от исходной ломаной не дальше tolerance клеток и проходит ту же проверку
+## участка, что дуги (_road_segment: уклон по пределу вида, крен, вода), не задевает осей мостов и туннелей и проверку
+## коридора (соседние области). Закреплённые точки (у сооружений) и смена ширины не срезаются; концы остаются.
+## Маршрут тот же, по тем же склонам, без ступенек 45°/90°. Допуск по видам — straighten (0 — выключено); виды —
+## по расчёту линии (связи поселений — «road»), природные маршруты — по своему виду (trail/mountain).
+static var straighten := {road = 0.5, trail = 1.0, mountain = 1.0}
+const STRAIGHT_SPAN := 10 # клеток пути в одной хорде, не больше
+
+
+static func _straighten(surface: Heightfield, pts: Array, fixed: PackedByteArray, rules: Dictionary, tolerance: float) -> Array:
+	var n := pts.size()
+	var out: Array = [pts[0]]
+	var out_fixed := PackedByteArray([fixed[0]])
+	var i := 0
+	while i < n - 1:
+		var best := i + 1
+		if fixed[i] == 0:
+			var j := mini(n - 1, i + STRAIGHT_SPAN)
+			while j > i + 1:
+				if _chord_ok(surface, pts, fixed, i, j, rules, tolerance):
+					best = j
+					break
+				j -= 1
+		out.append(pts[best])
+		out_fixed.append(fixed[best])
+		i = best
+	return [out, out_fixed]
+
+
+static func _chord_ok(surface: Heightfield, pts: Array, fixed: PackedByteArray, i: int, j: int, rules: Dictionary, tolerance: float) -> bool:
+	var a := Vector2(pts[i].x, pts[i].y)
+	var b := Vector2(pts[j].x, pts[j].y)
+	if pts[j].w != pts[i].w:
+		return false
+	for k in range(i + 1, j):
+		if fixed[k] != 0 or pts[k].w != pts[i].w:
+			return false
+		var p := Vector2(pts[k].x, pts[k].y)
+		if p.distance_squared_to(Geometry2D.get_closest_point_to_segment(p, a, b)) > tolerance * tolerance:
+			return false
+	var length := a.distance_to(b)
+	if length < 0.001:
+		return false
+	var normal := (b - a).orthogonal() * (float(pts[i].w) * 0.5 / length)
+	var samples := ceili(length / 0.25)
+	var line: Array = []
+	for k in samples + 1:
+		var p := a.lerp(b, float(k) / samples)
+		for side: float in [-1.0, 0.0, 1.0]:
+			if _road_axis(surface.world, rules.axis, p + normal * side):
+				return false
+		if k % 2 == 0 or k == samples:
+			line.append(_point(p, pts[i].w))
+	if rules.corridor.is_valid() and not rules.corridor.call(line):
+		return false
+	return _road_segment(surface, pts[i], pts[j], rules.grade, rules.cross, rules.probe)
 
 
 ## Сохраняем вершины дуг и якоря; длинные прямые делим для профиля и покрытия.

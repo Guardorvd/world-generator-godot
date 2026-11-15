@@ -27,7 +27,7 @@ public partial class FastGrid
 	public int SearchBudget { get; set; } = -1;
 	/// <summary>Штраф смены направления следующего FindPath/Prefetch (копия аргумента turn у Pathfinder.find_path; 0 — прежний поиск).</summary>
 	public double TurnCost { get; set; }
-	private static readonly double[] TurnShape = { 0.0, 0.1, 0.4, 1.0, 2.0 };
+	private static readonly double[] TurnShape = { 0.0, 0.03, 0.4, 1.0, 2.0 };
 	private static readonly int[] Octant = { 0, 4, 2, 6, 1, 7, 3, 5 };
 	// Версия стоимости уникальна для снимка данных в пределах этого finder. -1 отключает кэш и prefetch.
 	public long CostVersion { get; set; } = -1;
