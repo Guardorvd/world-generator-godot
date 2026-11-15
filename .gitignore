@@ -21,3 +21,9 @@ tools/control/runs/*
 
 # Записи сессий Trail Lab (кнопка «Сохранить запись», tools/trail_lab_recorder)
 ride_logs/
+
+# Собранные экспорты игры
+/Gen.exe
+/Gen.console.exe
+/Gen.pck
+/0.2/
