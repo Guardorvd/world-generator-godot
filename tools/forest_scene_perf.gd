@@ -52,9 +52,10 @@ func setup() -> void:
 	ground.material_override = mat
 	root.add_child(ground)
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55, -30, 0)
+	# 15.11: --sun <высота, °> — низкое солнце для снимков длинных теней; --level 0..2 — каскады уровня качества
+	sun.rotation_degrees = Vector3(-float(Dev.arg("sun", "55")), -30, 0)
 	sun.shadow_enabled = not ("--noshadow" in OS.get_cmdline_user_args())
-	if "--game-shadows" in OS.get_cmdline_user_args(): preload("res://scripts/render/lighting_quality.gd").apply_shadows(sun, 1)
+	if "--game-shadows" in OS.get_cmdline_user_args(): preload("res://scripts/render/lighting_quality.gd").apply_shadows(sun, int(Dev.arg("level", "1")))
 	root.add_child(sun)
 	var sky := WorldEnvironment.new()
 	sky.environment = Environment.new()

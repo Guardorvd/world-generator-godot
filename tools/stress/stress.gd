@@ -391,7 +391,7 @@ func _group_forest() -> void:
 				["shadows_far", "тени дальних уровней LOD", _far_shadows.bind(false), _far_shadows.bind(true)],
 				["details", "трава и подлесок", _details.bind(false), _details.bind(true)],
 				["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
-			], still, veg)
+			] + _shadow_parts(sun, veg, func() -> void: Lighting.apply_shadows(sun, 1)), still, veg)
 			await _case("forest.ride", "Лес: езда 16 м/с", MOVE, ride)
 			await _case("forest.fast", "Лес: полёт 60 м/с", MOVE, func(t: float, dt: float) -> void: _forest_at(340.0 + t * 60.0, dt))
 			await _case("forest.jump", "Лес: перенос на 300 м раз в секунду", MOVE, func(t: float, dt: float) -> void: _forest_at([220.0, 520.0, 800.0, 380.0][int(t) % 4], dt))
@@ -442,6 +442,52 @@ func _far_shadows(on: bool) -> void:
 			if int(node.get_meta("level", -1)) >= 1:
 				far_shadows[node] = node.cast_shadow
 				node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+
+
+## Снимок вида для сравнения картинки до и после правки (view_<имя>.png в папке отчёта, ключ --shots).
+## 15.11: --shot-atlas <размер> — ещё снимок того же кадра с другим атласом теней (view_<имя>_atlas<размер>.png).
+func _shot(name: String, relight: Callable) -> void:
+	if not "--shots" in args:
+		return
+	root.get_texture().get_image().save_png(out.path_join("view_%s.png" % name))
+	var atlas := int(Dev.arg("shot-atlas", "0"))
+	if atlas > 0:
+		RenderingServer.directional_shadow_atlas_set_size(atlas, true)
+		await _frames(4)
+		root.get_texture().get_image().save_png(out.path_join("view_%s_atlas%d.png" % [name, atlas]))
+		relight.call()
+		await _frames(4)
+
+
+## 15.11: части теней солнца для поочерёдного отключения; restore возвращает каскады уровня качества
+func _shadow_parts(sun: DirectionalLight3D, under: Node, restore: Callable) -> Array:
+	var bits := bool(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/16_bits", true))
+	var filter := int(ProjectSettings.get_setting("rendering/lights_and_shadows/directional_shadow/soft_shadow_filter_quality", 2))
+	return [
+		["shadow_150", "дальность теней 190 → 150 м", func() -> void: sun.directional_shadow_max_distance = 150.0, restore],
+		["shadow_cascades2", "4 каскада → 2 той же дальности", func() -> void: sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS, restore],
+		["shadow_blend", "смешивание каскадов", func() -> void: sun.directional_shadow_blend_splits = false, restore],
+		# среднее качество с 15.11 — атлас 2048 (lighting_quality.gd); вдвое меньше — сколько ещё стоит разрешение
+		["shadow_atlas_half", "атлас теней 2048 → 1024", func() -> void: RenderingServer.directional_shadow_atlas_set_size(1024, bits), restore],
+		["shadow_filter", "мягкий фильтр теней (жёсткие)", func() -> void: RenderingServer.directional_soft_shadow_filter_set_quality(RenderingServer.SHADOW_QUALITY_HARD),
+			func() -> void: RenderingServer.directional_soft_shadow_filter_set_quality(filter)],
+		["shadow_double", "двусторонние тени (односторонние)", _double_sided.bind(under, false), _double_sided.bind(under, true)],
+	]
+
+
+var _double := {}
+func _double_sided(under: Node, on: bool) -> void:
+	if on:
+		for node: Variant in _double:
+			if is_instance_valid(node):
+				node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+		_double.clear()
+		return
+	for node: Node in under.find_children("*", "GeometryInstance3D", true, false):
+		var g := node as GeometryInstance3D
+		if g.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED:
+			_double[g] = true
+			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 
 
 ## Самая дорогая фаза слоя растительности в последнем кадре
@@ -602,8 +648,7 @@ func _group_world() -> void:
 		heavy_view = views[name]
 		_place(heavy_view)
 		heavy = await _case("world.view_" + name, "Мир: " + heavy_view.title, HOLD, _look.bind(heavy_view), {}, base_for_toggles or extras)
-		if "--shots" in args: # снимок вида для сравнения картинки до и после правки (view_<имя>.png в папке отчёта)
-			root.get_texture().get_image().save_png(out.path_join("view_%s.png" % name))
+		await _shot(name, relight)
 		var at := _look.bind(heavy_view)
 		var cut := func(nodes: Array) -> Array: return [_show.bind(nodes, false), _show.bind(nodes, true)]
 		var buildings: Array = [game.get_node("Settlements"), game.get_node("Structures")]
@@ -662,6 +707,8 @@ func _group_world() -> void:
 			["ssao", "затенение SSAO", func() -> void: env.ssao_enabled = false, relight],
 			["local_fog", "местный и объёмный туман", low_fog, relight],
 			["style", "визуальный стиль", func() -> void: VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {}), relight],
+			# 15.11: цена частей теней солнца (дальность, атлас, фильтр, смешивание каскадов, двусторонние тени)
+		] + _shadow_parts(sun, game, relight) + [
 			["msaa", "сглаживание MSAA", func() -> void: root.msaa_3d = Viewport.MSAA_DISABLED, func() -> void: root.msaa_3d = msaa],
 			["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
 			["vegetation", "ближняя растительность", _show.bind([game.vegetation], false), _show.bind([game.vegetation], true)],
@@ -677,6 +724,7 @@ func _group_world() -> void:
 		for h: Array in [[6.5, "dawn", "рассвет"], [23.0, "night", "ночь"]]:
 			hour = h[0]
 			await _case("world.hour_" + h[1], "Мир: тот же вид, " + h[2], TOGGLE, step)
+			await _shot("forest_" + h[1], relight)
 		hour = 12.0
 		# Высокое качество света и тумана — по умолчанию стоит среднее.
 		if _wanted("world.forest_high"):

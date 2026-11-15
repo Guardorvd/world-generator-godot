@@ -41,6 +41,10 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 ## Каскады теней солнца по уровню качества (отдельно — для стендов без окружения, tools/stress)
 static func apply_shadows(sun: DirectionalLight3D, level: int) -> void:
 	level = clampi(level, 0, 2)
+	# 15.11: цена теней в лесу — заливка атласа (кроны с вырезами в каждом каскаде), а не число каскадов или дальность:
+	# атлас 4096 → 2048 снимает ~1,2 мс GPU из ~3 мс теней (стресс-тест, стенд леса), 4 → 2 каскада и 190 → 150 м — ~0.
+	# Высокое качество сохраняет прежний атлас 4096.
+	RenderingServer.directional_shadow_atlas_set_size(4096 if level == 2 else 2048, true)
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if level == 0 else DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 110.0 if level == 0 else 190.0
 	sun.directional_shadow_split_1 = 0.18 if level == 0 else 0.09
