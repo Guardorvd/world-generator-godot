@@ -9,6 +9,9 @@ extends SceneTree
 ## --shift x,z — 12.3: сдвиг участка в мире (м): поля RoadBump (разбитые участки, колеи, ямы) — в мировых координатах.
 ## --style <сила> — 13.11: глобальный параметр «Планы» визуального стиля (resources/depth_tone.gdshaderinc), читаемость полотна с ним и без.
 ## --wet <0..1> — 15.11: влажность почвы участка (сырое полотно: потемнение, блеск впадин).
+## --relief — 15.11: участок с формами коридора (корыто полотна, валик и канава обочин, продольные волны) вместо плоскости.
+## --sun <градусы> — высота солнца (по умолчанию 55); ниже 50 включаются тени: объём виден при низком свете.
+## --stones — 15.11: россыпь камней и комьев у полотна (GroundCarpet.road_stone, та же раскладка, что в игре; материал простой).
 ## --measure — 120 кадров на ракурс после прогрева, timings.json: CPU/GPU/кадр. Изолированный стенд, не игровой FPS.
 
 const TerrainBuilderScript := preload("res://scripts/render/terrain_builder.gd")
@@ -28,6 +31,8 @@ var shot := -1
 var wait := 0
 var noise := FastNoiseLite.new()
 var measure := false
+var relief := false
+var stones_node: MultiMeshInstance3D
 var frame_times := PackedFloat32Array()
 var gpu_times := PackedFloat32Array()
 var cpu_times := PackedFloat32Array()
@@ -74,8 +79,13 @@ func _initialize() -> void:
 	env.environment.tonemap_mode = Environment.TONE_MAPPER_FILMIC
 	root.add_child(env)
 	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-55.0, 35.0, 0.0)
-	sun.shadow_enabled = false
+	var sun_height := float(_arg("sun", "55"))
+	sun.rotation_degrees = Vector3(-sun_height, 35.0, 0.0)
+	sun.shadow_enabled = sun_height < 50.0
+	sun.directional_shadow_max_distance = 60.0
+	relief = "--relief" in OS.get_cmdline_user_args()
+	# направление на светило для шейдера рельефа (в игре его ставит DayCycle)
+	RenderingServer.global_shader_parameter_set("sun_dir", sun.global_transform.basis.z if sun.is_inside_tree() else sun.transform.basis.z)
 	root.add_child(sun)
 	mesh_node = MeshInstance3D.new()
 	mesh_node.position = shift
@@ -121,6 +131,17 @@ func _axis(z: float) -> float:
 	return SIZE * 0.5 + 6.0 * sin(z / 11.0)
 
 
+## 15.11: высота участка с формами коридора: продольные волны, корыто полотна, валик у кромки, канава за ним
+func _height(x: float, z: float, d: float, half: float) -> float:
+	if not relief:
+		return 0.0
+	var y := 0.35 * sin(z / 9.0) + 0.12 * sin(x / 13.0 + 1.0)
+	y -= 0.07 * (1.0 - smoothstep(half * 0.5, half + 0.4, d))
+	y += 0.09 * exp(-pow((d - half - 0.7) / 0.5, 2.0))
+	y -= 0.10 * exp(-pow((d - half - 2.0) / 0.7, 2.0))
+	return y
+
+
 func _half(surface: int) -> float:
 	return 1.0 if surface == RoadSurface.FOREST or surface == RoadSurface.MEADOW else 1.7
 
@@ -144,6 +165,7 @@ func _nearest(x: float, z: float) -> Vector2:
 func _build(surface: int) -> void:
 	var data: Dictionary = RoadSurface.LIST[surface]
 	var half := _half(surface)
+	var road_kind := surface != RoadSurface.FOREST and surface != RoadSurface.MEADOW and surface != RoadSurface.STONE
 	var n := SIZE + 1
 	var pos := PackedVector3Array()
 	var nor := PackedVector3Array()
@@ -152,10 +174,10 @@ func _build(surface: int) -> void:
 	var colors := PackedColorArray()
 	for z in n:
 		for x in n:
-			pos.append(Vector3(x, 0.0, z))
+			var near := _nearest(x, z)
+			pos.append(Vector3(x, _height(x, z, near.x, half), z))
 			nor.append(Vector3.UP)
 			uv.append(Vector2(x / float(SIZE), z / float(SIZE)))
-			var near := _nearest(x, z)
 			var d := near.x
 			if d > half + RoadRefinement.REACH:
 				colors.append(Color(0, 0, 0, 0))
@@ -165,10 +187,16 @@ func _build(surface: int) -> void:
 			var slow := noise.get_noise_2d(x * 0.13, z * 0.13)
 			var organic: float = data.organic
 			var color := Color8(data.color[0], data.color[1], data.color[2]).srgb_to_linear()
-			var road := surface != RoadSurface.FOREST and surface != RoadSurface.MEADOW and surface != RoadSurface.STONE
+			var road := road_kind
 			color.a = RoadRefinement.tread_mask(half, d, slow, organic, road)
 			colors.append(color)
 			uv2.append(Vector2(near.y * d / half, float(surface) + (0.0 if road else 0.25)))
+	if relief:
+		for z in n:
+			for x in n:
+				var a := pos[z * n + maxi(x - 1, 0)].y - pos[z * n + mini(x + 1, SIZE)].y
+				var b := pos[maxi(z - 1, 0) * n + x].y - pos[mini(z + 1, SIZE) * n + x].y
+				nor[z * n + x] = Vector3(a, 2.0, b).normalized()
 	var idx := PackedInt32Array()
 	for z in SIZE:
 		for x in SIZE:
@@ -205,6 +233,49 @@ func _build(surface: int) -> void:
 		mat.shader = sh
 	mesh.surface_set_material(0, mat)
 	mesh_node.mesh = mesh
+	if "--stones" in OS.get_cmdline_user_args():
+		_stones(surface, half, road_kind)
+
+
+## Россыпь у полотна: те же правила и модель, что у GroundCarpet._road_stones
+func _stones(surface: int, half: float, road: bool) -> void:
+	if stones_node == null:
+		stones_node = MultiMeshInstance3D.new()
+		var mat := StandardMaterial3D.new()
+		mat.vertex_color_use_as_albedo = true
+		mat.vertex_color_is_srgb = true
+		mat.roughness = 1.0
+		stones_node.material_override = mat
+		stones_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mesh_node.add_child(stones_node)
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.mesh = Models.build_carpet_mesh(Models.CARPET_STONES, false)
+	var data: Array = []
+	var step := 4.0 / GroundCarpet.STONE_SUB
+	var cells := int(SIZE / step)
+	var organic: float = RoadSurface.LIST[surface].organic
+	for gz in cells:
+		for gx in cells:
+			var x := (gx + WGRandom.hash2(gx, gz, 311)) * step
+			var z := (gz + WGRandom.hash2(gx, gz, 313)) * step
+			var near := _nearest(x, z)
+			if near.x > half + RoadRefinement.REACH:
+				continue
+			var weight := RoadRefinement.tread_mask(half, near.x, noise.get_noise_2d(x * 0.13, z * 0.13), organic, road)
+			var h := WGRandom.hash2(gx, gz, 317)
+			var size := GroundCarpet.road_stone(weight, near.x / half, surface, road, h)
+			if size <= 0.0:
+				continue
+			data.append([Transform3D(Basis(Vector3.UP, h * TAU * 7.0).scaled_local(Vector3.ONE * size), Vector3(x, _height(x, z, near.x, half), z)),
+				GroundCarpet.road_stone_tint(surface, WGRandom.hash2(gx, gz, 331))])
+	mm.instance_count = data.size()
+	for n in data.size():
+		mm.set_instance_transform(n, data[n][0])
+		mm.set_instance_color(n, data[n][1])
+	stones_node.multimesh = mm
+	print("россыпь: ", data.size(), " на покрытии ", surface)
 
 
 func _process(delta: float) -> bool:
@@ -245,4 +316,5 @@ func _place() -> void:
 	var s: Dictionary = shots[shot]
 	if shot == 0 or shots[shot - 1].surface != s.surface:
 		_build(s.surface)
-	camera.look_at_from_position(s.pos + shift, s.target + shift, Vector3.UP)
+	var lift := Vector3(0.0, _height(s.pos.x, s.pos.z, 0.0, 1.0) + (0.07 if relief else 0.0), 0.0)
+	camera.look_at_from_position(s.pos + shift + lift, s.target + shift + lift, Vector3.UP)

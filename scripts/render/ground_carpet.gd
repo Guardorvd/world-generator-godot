@@ -47,7 +47,13 @@ const WIND := [
 	[[0.08, 0.02, 1.9, 0.85, 0.45], 0.14],
 	[[0.02, 0.008, 1.3, 0.7, 0.3], 0.05],
 	[[0.06, 0.02, 1.6, 0.9, 0.3], 0.1],
+	[[0.0, 0.0, 1.0, 1.0, 0.0], 0.0], # камни и комья у полотна: не качаются и не расступаются
 ]
+## 15.11.2026: россыпь у дорожного полотна по покрытию (RoadSurface): доля занятых ячеек на обочине и кромке, на самом полотне.
+## Гравий и камень выбрасывают щебень к краям и оставляют его между колеями; грунтовка и тропы — редкие комья; песок чистый.
+const STONE_CHANCE := [Vector2.ZERO, Vector2(0.8, 0.3), Vector2(0.4, 0.1), Vector2(0.16, 0.0), Vector2(0.9, 0.5),
+	Vector2.ZERO, Vector2(0.25, 0.06), Vector2(0.16, 0.0)]
+const STONE_SUB := 7        # ячеек россыпи на сторону плитки: 4 м / 7 = 0,57 м
 ## Венчики цветов: белый, жёлтый, лиловый, розовый
 const PETALS := [Color(1.0, 1.0, 0.94), Color(1.0, 0.84, 0.2), Color(0.66, 0.52, 0.98), Color(1.0, 0.6, 0.76)]
 
@@ -98,7 +104,7 @@ func setup(layer_node: Node3D, w: WorldData, h: Heightfield, forest_image: Image
 		var near_mesh := Models.build_carpet_mesh(kind, false)
 		var mat: ShaderMaterial = VegetationLayer._wind_mat(VegetationLayer.SHADER, WIND[kind][0], true)
 		mat.set_shader_parameter("height", near_mesh.get_aabb().end.y)
-		mat.set_shader_parameter("grass_variation", true)
+		mat.set_shader_parameter("grass_variation", kind != Models.CARPET_STONES)
 		mat.set_shader_parameter("trample", WIND[kind][1])
 		for far in 2:
 			var mesh := near_mesh if far == 0 else Models.build_carpet_mesh(kind, true)
@@ -433,6 +439,86 @@ func _present() -> void:
 
 ## Плитка (i, j): куртинки на сетке SUB × SUB с дрожанием, по видам. Пустой массив — травы здесь нет.
 func _build_tile(i: int, j: int) -> Array:
+	var parts := _grass_tile(i, j)
+	var stones := _road_stones(i, j)
+	if stones.is_empty():
+		return parts
+	if parts.is_empty():
+		for kind in KINDS:
+			parts.append(PackedFloat32Array())
+	parts[Models.CARPET_STONES] = stones
+	return parts
+
+
+## Размер россыпи в точке полотна (0 — нет): weight — маска полотна, across — поперечная координата (0 — ось, 1 — кромка),
+## h — случайное 0..1. На обочине и кромке — чаще; на полотне — только между колеями и у края, в колеях чисто;
+## на тропе в одну колею — только у края. Общая с изолированной сценой road_look.
+static func road_stone(weight: float, across: float, surface: int, road: bool, h: float) -> float:
+	if surface <= 0 or surface >= STONE_CHANCE.size():
+		return 0.0
+	var chance: Vector2 = STONE_CHANCE[surface]
+	var a := absf(across)
+	var p := 0.0
+	if weight < 0.5:
+		p = chance.x * smoothstep(0.08, 0.22, weight)
+	elif a > 0.72 or (road and a < 0.2):
+		p = chance.y
+	if h >= p:
+		return 0.0
+	return lerpf(1.0, 2.0, h / p) * (1.0 if weight < 0.5 else 0.7)
+
+
+## Цвет россыпи: покрытие, сведённое к серому камню тем сильнее, чем оно каменистее (комья земли остаются цвета земли)
+static func road_stone_tint(surface: int, h: float) -> Color:
+	var s: Dictionary = RoadSurface.LIST[surface]
+	var c := Color(s.color[0] / 255.0, s.color[1] / 255.0, s.color[2] / 255.0).lerp(Color(0.56, 0.55, 0.52), 0.2 + 0.6 * s.grain)
+	return c * (0.95 + 0.3 * h) # материал растительности переводит цвет из sRGB: светлее, чем кажется по числу
+
+
+## Россыпь камней и комьев плитки (i, j) у дорожного полотна; пусто — полотна здесь нет.
+func _road_stones(i: int, j: int) -> PackedFloat32Array:
+	var out := PackedFloat32Array()
+	var refine = heights.road_refinement
+	if refine == null:
+		return out
+	var w := world
+	var step := TILE / STONE_SUB
+	var sky := 1.0 - forest.get_pixel(i, j).r
+	var n := 0
+	var y_low := INF
+	var y_high := -INF
+	for m in STONE_SUB * STONE_SUB:
+		var gx := i * STONE_SUB + m % STONE_SUB
+		var gz := j * STONE_SUB + m / STONE_SUB
+		var x := (gx + WGRandom.hash2(gx, gz, 311)) * step
+		var z := (gz + WGRandom.hash2(gx, gz, 313)) * step
+		if refine.weight_at(x, z, w.W) < 0.08:
+			continue
+		var at: Dictionary = refine.sample(x, z, w.W)
+		if at.is_empty():
+			continue
+		var h := WGRandom.hash2(gx, gz, 317)
+		var size := road_stone(at.weight, at.across, at.surface, at.road, h)
+		if size <= 0.0 or heights.depth_at(x, z) > 0.0:
+			continue
+		if out.is_empty():
+			out.resize(STONE_SUB * STONE_SUB * STRIDE)
+		var y := heights.ground_at(x, z)
+		var tint := road_stone_tint(at.surface, WGRandom.hash2(gx, gz, 331))
+		tint.a = sky
+		_put(out, n, Basis(Vector3.UP, h * TAU * 7.0).scaled_local(Vector3(size, size * (0.8 + 0.5 * WGRandom.hash2(gx, gz, 337)), size)), x, y, z, tint, h, 0.0)
+		n += 1
+		y_low = minf(y_low, y)
+		y_high = maxf(y_high, y)
+	out.resize(n * STRIDE)
+	if n > 0:
+		var key := Vector2i(i, j)
+		var old: Vector2 = _tile_y.get(key, Vector2.ZERO)
+		_tile_y[key] = Vector2(y_low, y_high + 0.7) if old == Vector2.ZERO else Vector2(minf(old.x, y_low), maxf(old.y, y_high + 0.7))
+	return out
+
+
+func _grass_tile(i: int, j: int) -> Array:
 	_tile_y[Vector2i(i, j)] = Vector2.ZERO
 	var w := world
 	var k := j * w.W + i

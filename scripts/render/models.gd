@@ -156,7 +156,7 @@ static func grass_mesh() -> ArrayMesh:
 ## цветы (несколько стебельков с венчиками; цвет венчика — цвет экземпляра).
 ## far — дальняя форма: только травинки с порогом ниже CARPET_FAR_KEEP, те самые, что шейдер оставляет вдали,
 ## поэтому смена формы по расстоянию не видна.
-enum { CARPET_MEADOW, CARPET_DRY, CARPET_SHADE, CARPET_FLOWERS, CARPET_KINDS }
+enum { CARPET_MEADOW, CARPET_DRY, CARPET_SHADE, CARPET_FLOWERS, CARPET_STONES, CARPET_KINDS }
 const CARPET_R := 0.5
 const CARPET_FAR_KEEP := 0.45
 ## [высоких, коротких, высота от, высота до, полуширина от, полуширина до, наклон кончика, цвет корня, цвет кончика, доля соломенных]
@@ -169,6 +169,8 @@ const CARPET_SHAPES := [
 static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
 	if kind == CARPET_FLOWERS:
 		return _carpet_flowers(far)
+	if kind == CARPET_STONES:
+		return _carpet_stones(far)
 	var shape: Array = CARPET_SHAPES[kind]
 	var tall_n: int = shape[0]
 	var pile_n: int = shape[1]
@@ -217,6 +219,52 @@ static func build_carpet_mesh(kind := CARPET_MEADOW, far := false) -> ArrayMesh:
 			st.set_uv(Vector2(float(k) / blades, v.y / h))
 			st.set_uv2(Vector2(rank, 0.0))
 			st.add_vertex(v)
+	return st.commit()
+
+
+## 15.11.2026: россыпь у дорожного полотна — горсть гранёных камней (или комьев: цвет даёт экземпляр) 10–30 см (с масштабом экземпляра).
+## Настоящая геометрия поверх фактуры полотна: у камня есть силуэт, грани ловят свет, низ тёмный (тень у земли —
+## теней от ковра нет). Раскладывает GroundCarpet по кромкам, обочинам и между колеями. Дальняя форма — половина камней.
+static func _carpet_stones(far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stones := 4 if far else 7
+	for k in stones:
+		var h1 := WGRandom.hash2(k, 51, 721)
+		var h2 := WGRandom.hash2(k, 53, 723)
+		var h3 := WGRandom.hash2(k, 57, 727)
+		var a := k * 2.39996 + h1
+		var r := 0.30 * sqrt((k + 0.5) / 7.0)
+		var centre := Vector3(cos(a) * r, 0.0, sin(a) * r)
+		var w := 0.03 + 0.05 * h2 * h2
+		var h := w * (0.55 + 0.6 * h3)
+		var rank := 0.1 + 0.5 * h1
+		var tone := 0.8 + 0.35 * h3
+		var low: Array[Vector3] = []
+		var mid: Array[Vector3] = []
+		for n in 5:
+			var b := n * TAU / 5.0 + h1 * 3.0
+			var rr := w * (0.75 + 0.5 * WGRandom.hash2(k * 7 + n, 59, 729))
+			low.append(centre + Vector3(cos(b) * rr, -0.01, sin(b) * rr * 0.8))
+			mid.append(centre + Vector3(cos(b) * rr * 0.72, h * 0.62, sin(b) * rr * 0.58))
+		var top := centre + Vector3((h1 - 0.5) * w * 0.5, h, (h2 - 0.5) * w * 0.5)
+		var faces: Array = []
+		for n in 5:
+			var m := (n + 1) % 5
+			faces.append([low[n], mid[n], mid[m]])
+			faces.append([low[n], mid[m], low[m]])
+			faces.append([mid[n], top, mid[m]])
+		for face: Array in faces:
+			var normal: Vector3 = (face[1] - face[0]).cross(face[2] - face[0]).normalized()
+			if normal.dot(face[0] + face[1] + face[2] - centre * 3.0 + Vector3.UP * 0.01) < 0.0:
+				normal = -normal
+			for v: Vector3 in face:
+				var lit := 0.62 if v.y < 0.0 else (0.95 if v.y < h * 0.9 else 1.12)
+				st.set_normal(normal)
+				st.set_color(Color(lit * tone, lit * tone, lit * tone))
+				st.set_uv(Vector2(float(k) / stones, clampf(v.y / h, 0.0, 1.0)))
+				st.set_uv2(Vector2(rank, 0.0))
+				st.add_vertex(v)
 	return st.commit()
 
 

@@ -52,6 +52,7 @@ const float DETAIL_FAR = 110.0;   // м: дальше мелкой детали 
 const float EDGE_JITTER = 0.9;    // в пикселях карты: насколько рваный край между биомами
 const float ROCK_FROM = 0.30;     // 1 - нормаль.y: с какого уклона (около 45°) проступает скала
 const float ROCK_TO = 0.46;
+const float ROAD_DEPTH = 1.5;    // во сколько раз видимая глубина колей, ям и кочек больше настоящей (сантиметры читаются с седла)
 
 #include "res://resources/cloud_shadow.gdshaderinc"
 #include "res://resources/depth_tone.gdshaderinc"
@@ -608,6 +609,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	float road = 0.0;
 	float road_rough = road_detail.z;
 	float road_gloss = 0.0;
+	float road_shade = 1.0;
 	// Производные — до ветвления: на краю маски соседние пиксели квада вне ветки, и fwidth внутри
 	// неё даёт мусор (тёмный пунктир по рёбрам сетки).
 	float mask_w = fwidth(COLOR.a);
@@ -622,7 +624,24 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float grain = road_detail.x;
 		float organic = road_detail.y;
 		// Поворот, два несоизмеримых масштаба и сдвиг снимают короткий период шумовой текстуры.
-		vec2 rp = mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * p;
+		// 15.11: глубина форм. Поле RoadBump (волны, колеи, ямы — то же, что у колёс) сдвигает точку полотна вдоль
+		// взгляда на свою высоту: дальняя стенка колеи видна, ближняя прячет дно — впадина читается впадиной,
+		// а не рисунком. Один шаг, только вблизи (форма крупнее пикселя) и внутри полотна.
+		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
+		// NONE contributes no wavelength. Preserve frequency while amplitude fades at the edge.
+		vec4 bump_params = road_bump_p;
+		if (road_bump_weight > 0.0) bump_params.y /= road_bump_weight;
+		bump_params.y = max(bump_params.y, 0.1);
+		vec2 pr = p;
+		float ax = UV2.x;
+		float depth_w = near * (1.0 - smoothstep(0.03, 0.10, pixel_m)) * smoothstep(0.3, 0.6, COLOR.a);
+		if (depth_w > 0.0) {
+			vec3 view_w = normalize(CAMERA_POSITION_WORLD - wpos);
+			vec2 slide = view_w.xz / max(view_w.y, 0.22) * (road_field(p, bump_params, grade, UV2.x, across_grad).x * ROAD_DEPTH * depth_w);
+			pr += slide;
+			ax += dot(across_grad, slide);
+		}
+		vec2 rp = mat2(vec2(0.8, 0.6), vec2(-0.6, 0.8)) * pr;
 		// 11.3: сдвиг в основном от крупного шума — мелкий сдвиг давал разводы «как масло» на подстилке.
 		rp += vec2(n_mid, n_big) * 0.25 + vec2(n_big * 2.3, n_big * 1.7);
 		float fine = texture(detail_tex, rp * 2.31).r;
@@ -640,24 +659,19 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		float verge = smoothstep(0.02, 0.30, edge_v) * (1.0 - road);
 		float lip = road * (1.0 - smoothstep(0.55, 0.85, edge_v));
 		// Поперечная координата полотна: 0 — ось, 1 — половина ширины (по ближайшему отрезку пути).
-		float across = abs(UV2.x + (n_mid - 0.5) * 0.18);
+		float across = abs(ax + (n_mid - 0.5) * 0.18);
 		float tread = 1.0 - smoothstep(0.12, mix(0.78, 0.60, singletrack), across);
 		float meadow = smoothstep(0.75, 0.98, organic);
 		// 11.5: кочки полотна — то же поле, что у колёс (RoadBump): по покрытию, на крутом выше.
 		// 12.3: с участками, колеями и ямами. Видны светом и тоном; гаснут, когда волна меньше нескольких пикселей.
-		float grade = length(wnormal.xz) / max(wnormal.y, 0.2);
-		// NONE contributes no wavelength. Preserve frequency while amplitude fades at the edge.
-		vec4 bump_params = road_bump_p;
-		if (road_bump_weight > 0.0) bump_params.y /= road_bump_weight;
-		bump_params.y = max(bump_params.y, 0.1);
 		float bump_wave = bump_params.y;
-		vec3 bump = road_field(p, bump_params, grade, UV2.x, across_grad);
+		vec3 bump = road_field(pr, bump_params, grade, ax, across_grad);
 		float bump_fade = (1.0 - smoothstep(0.06, 0.2, pixel_m / bump_wave)) * near;
 		// 14.5: волны кочек правильные (две синусоиды), и в тоне и свете они читались ровным узором
 		// тёмных «змеек» через равный шаг, особенно под фарой. Видимая сила теперь пятнами по крупному
 		// шуму, тон и наклон слабее; сами кочки (тряска, RoadBump) не меняются.
 		float bump_vis = bump_fade * mix(0.3, 1.0, smoothstep(0.3, 0.75, n_big + (n_mid - 0.5) * 0.6));
-		vec2 ruts_patch = road_patch(p);
+		vec2 ruts_patch = road_patch(pr);
 		// 15.11: мелкий камень, комья и зерно — из микроструктуры земли (road_fabric ниже), без своих ячеек.
 		// Редкие крупные камни на гравии и камне, по краям полотна чаще, чем на колее; на обочине — у любого покрытия.
 		vec2 big_cells = rp * 2.9 + vec2(13.1, 7.7);
@@ -701,7 +715,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		soil *= 1.0 + (litter - 0.5) * organic * 0.22 * near;
 		if (organic > 0.01 && near > 0.0) {
 			// Редкие обрывки листьев и хвои лежат в материале тропы, а не повторяют шум почвы.
-			vec2 litter_cells = p * 3.2 + vec2(19.7, 8.3);
+			vec2 litter_cells = pr * 3.2 + vec2(19.7, 8.3);
 			vec2 litter_scatter = grain_hash(floor(litter_cells));
 			vec2 litter_local = fract(litter_cells) - (vec2(0.25) + litter_scatter * 0.5);
 			float litter_angle = litter_scatter.x * 6.2831853;
@@ -717,7 +731,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// Накатанные колеи: местами, с разрывами, плотнее и темнее, мелкий камень с них выбит.
 		// 12.3: там же, где колея RoadBump (её участки), а глубокие колеи на мягком ещё темнее.
 		float rut_on = smoothstep(0.35, 0.7, ruts_patch.y);
-		float tracks = exp(-pow((abs(UV2.x) - 0.47) / 0.13, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
+		float tracks = exp(-pow((abs(ax) - 0.47) / 0.13, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
 			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
 			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
 		tracks *= mix(1.0, meadow, singletrack);
@@ -725,7 +739,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		soil *= 1.0 - foot_wear * (0.035 + wet * 0.035);
 		soil *= 1.0 - tracks * (0.07 + fine * 0.05 + road_bump_p.z * 2.5);
 		// Разбитая светлая кромка колеи и разная плотность грунта придают дороге глубину.
-		float rut_edge = exp(-pow((abs(UV2.x) - 0.62) / 0.09, 2.0)) * rut_on * mix(1.0, meadow, singletrack);
+		float rut_edge = exp(-pow((abs(ax) - 0.62) / 0.09, 2.0)) * rut_on * mix(1.0, meadow, singletrack);
 		soil *= 1.0 + rut_edge * (0.025 + 0.025 * fleck) * (1.0 - organic * 0.5) * near;
 		soil = mix(soil, soil * vec3(1.035, 1.02, 0.99), smoothstep(0.38, 0.72, n_mid * 0.65 + fleck * 0.35) * (1.0 - grain * 0.5) * near);
 		// На заросшей колее в колеях проступает земля.
@@ -746,35 +760,52 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// Дальше ~10 м камень мельче пикселя: выборки не делаются, вклад мелкого масштаба плавно сходит к ровному.
 		float coarse = max(road_look.w, 0.3); // доля общего масштаба: камни разного размера
 		float fine_w = 1.0 - smoothstep(0.07, 0.12, pixel_m);
+		float stone_occ = 0.0;
 		vec4 fh = mix(vec4(0.5, 0.5, 0.5, 0.0), mh, coarse);
 		vec4 fn = mix(vec4(0.5), mn, coarse);
 		if (micro_enabled && near > 0.0 && fine_w > 0.0) {
 			vec2 fdx = vec2(0.8 * gdx.x - 0.6 * gdx.y, 0.6 * gdx.x + 0.8 * gdx.y) * (1.0 / 0.7);
 			vec2 fdy = vec2(0.8 * gdy.x - 0.6 * gdy.y, 0.6 * gdy.x + 0.8 * gdy.y) * (1.0 / 0.7);
 			// без сдвига шумом (rp): на мелком масштабе он размазывает камни в разводы
-			vec2 fq = vec2(0.8 * p.x - 0.6 * p.y, 0.6 * p.x + 0.8 * p.y) * (1.0 / 0.7) + vec2(0.43, 0.17);
+			vec2 fq = vec2(0.8 * pr.x - 0.6 * pr.y, 0.6 * pr.x + 0.8 * pr.y) * (1.0 / 0.7) + vec2(0.43, 0.17);
 			vec4 f1 = textureGrad(micro_tex, fq, fdx, fdy) - vec4(0.5, 0.5, 0.5, 0.0);
 			vec4 g1 = textureGrad(micro_n, fq, fdx, fdy) - vec4(0.5);
 			fh += f1 * (fine_w * (1.0 - coarse));
+			// самозатенение камней и комьев: со стороны солнца в паре сантиметров выше — здесь тень (как у пучков травы)
+			if (sun_dir.y > 0.02) {
+				vec2 to_sun = vec2(0.8 * sun_dir.x - 0.6 * sun_dir.z, 0.6 * sun_dir.x + 0.8 * sun_dir.z) * (0.022 / (0.7 * max(sun_dir.y, 0.2)));
+				stone_occ = clamp((textureGrad(micro_tex, fq + to_sun, fdx, fdy).g - f1.g - 0.5) * 2.4, 0.0, 1.0)
+					* fine_w * clamp(grain * (1.0 - tread * 0.5) + road_look.x * 0.6, 0.0, 1.0);
+			}
 			fn += vec4(0.8 * g1.x + 0.6 * g1.y, -0.6 * g1.x + 0.8 * g1.y, 0.8 * g1.z + 0.6 * g1.w, -0.6 * g1.z + 0.8 * g1.w) * (fine_w * (1.0 - coarse));
 		}
 		vec2 fabric_tilt;
-		soil = road_fabric(soil, fh, fn, road_look, grain, organic, crack_zone, max(tread * 0.6, tracks), compacted, p, pixel_m,
+		soil = road_fabric(soil, fh, fn, road_look, grain, organic, crack_zone, max(tread * 0.6, tracks), compacted, pr, pixel_m,
 			(n_mid - 0.5) * 9.0 + (n_big - 0.5) * 16.0, near, fabric_tilt);
-		float wear = exp(-pow((UV2.x + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
+		float wear = exp(-pow((ax + (n_mid - 0.5) * 0.35) * 1.7, 2.0));
 		soil *= 1.0 - wear * (1.0 - grain) * (1.0 - organic) * (0.02 + fleck * 0.04) * near;
 		// Трава пробивается между колеями и у краёв заросших троп и грунтовок.
 		float middle = exp(-pow(across * 2.6, 2.0)) * smoothstep(0.35, 0.9, 1.0 - grain) * mix(1.0, meadow, singletrack) + smoothstep(0.65, 1.0, across) * 0.5;
 		float tufts = smoothstep(0.58, 0.78, fine * 0.45 + fleck * 0.55 + (n_mid - 0.5) * 0.3) * middle * (0.25 + organic * 0.5) * near;
 		soil = mix(soil, col * 0.92, tufts * 0.6);
-		soil *= 1.0 - lip * 0.06;
+		// кромка под травой в тени: полотно утоплено в дернину, а не лежит наклейкой
+		soil *= 1.0 - lip * mix(0.16, 0.07, grain);
 		soil *= 1.0 + clamp(bump.x * 4.5, -0.09, 0.08) * bump_vis;
 		// 15.11: влага. Сырое место темнее и холоднее, впадины (колеи, ямы, низ волны) сыреют первыми, бугры сохнут.
 		// Сила — по покрытию (гравий почти не темнеет, земля и подстилка заметно); блеск слабый и только во впадинах.
 		float hollow = clamp(max(pit, tracks) + clamp(-bump.x * 12.0, 0.0, 0.4) - clamp(bump.x * 8.0, 0.0, 0.3), 0.0, 1.0);
 		float damp_r = smoothstep(0.50, 0.82, wet + hollow * 0.22 + (n_big - 0.5) * 0.25) * road_look.z;
 		soil *= mix(vec3(1.0), vec3(0.70, 0.72, 0.76), damp_r);
-		road_gloss = damp_r * (0.25 + 0.75 * hollow) * road * near;
+		road_gloss = damp_r * (0.25 + 0.75 * hollow) * road * near * 0.5;
+		// 15.11: тени форм. Склон колеи, ямы и кочки, отвёрнутый от солнца круче его высоты, в своей тени; дно впадин
+		// при низком солнце закрыто бровкой. Гасится только прямой свет (light), небо остаётся: тень не чёрная.
+		if (sun_dir.y > 0.02) {
+			float sun_tan = sun_dir.y / max(length(sun_dir.xz), 0.05);
+			float rise = dot(bump.yz, normalize(sun_dir.xz + vec2(1e-5))) * ROAD_DEPTH * 1.5;
+			float self_shade = smoothstep(0.45 * sun_tan, 1.3 * sun_tan, rise) * 0.7;
+			float cast = hollow * (1.0 - smoothstep(0.25, 0.9, sun_tan)) * 0.5;
+			road_shade = (1.0 - max(self_shade, cast) * bump_fade) * (1.0 - stone_occ * 0.6);
+		}
 		col = mix(mix(col, verge_col, verge), soil, road);
 		// Шум биомов на полотне слабее: покрытие читается собственной фактурой.
 		v *= 1.0 - road * 0.6;
@@ -806,7 +837,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	gloss_v = mix(gloss_v, road_gloss, road);
 	ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
 	SPECULAR = 0.3 + gloss_v * 0.08;
-	BACKLIGHT = vec3(micro_shadow, gloss_v, 0.0);
+	BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);
 	AO = sky;
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
