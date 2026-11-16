@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 8 # каталог поселений (glb, общий атлас, LOD0..LOD2, мелкие детали, 16.11.2026)
+const VERSION := 9 # каталог поселений (21 .glb модель по категориям, общий атлас, LOD0..LOD2, 16.11.2026)
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}

@@ -136,7 +136,7 @@ func _load_and_validate_settlements() -> Dictionary:
 			category = spec.category,
 			half = sc.half,
 			flat = sc.flat,
-			height = sc.height,
+			height = float(spec.get("height", sc.height)),
 		}
 	return out
 

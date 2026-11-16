@@ -232,20 +232,46 @@ static func build_model_lods(id: String) -> Array[ArrayMesh]:
 	match id:
 		"house":
 			return [_build_house(0), _build_house(1), _build_house(2)]
+		"house_wing":
+			return [_build_house_wing(0), _build_house_wing(1), _build_house_wing(2)]
+		"house_steep":
+			return [_build_house_steep(0), _build_house_steep(1), _build_house_steep(2)]
 		"house_timber":
 			return [_build_house_timber(0), _build_house_timber(1), _build_house_timber(2)]
+		"cabin_long":
+			return [_build_cabin_long(0), _build_cabin_long(1), _build_cabin_long(2)]
+		"cabin_porch":
+			return [_build_cabin_porch(0), _build_cabin_porch(1), _build_cabin_porch(2)]
 		"chalet":
 			return [_build_chalet(0), _build_chalet(1), _build_chalet(2)]
+		"chalet_terrace":
+			return [_build_chalet_terrace(0), _build_chalet_terrace(1), _build_chalet_terrace(2)]
+		"chalet_stone":
+			return [_build_chalet_stone(0), _build_chalet_stone(1), _build_chalet_stone(2)]
 		"tall":
 			return [_build_tall(0), _build_tall(1), _build_tall(2)]
+		"tall_mansard":
+			return [_build_tall_mansard(0), _build_tall_mansard(1), _build_tall_mansard(2)]
+		"tall_hall":
+			return [_build_tall_hall(0), _build_tall_hall(1), _build_tall_hall(2)]
 		"barn":
 			return [_build_barn(0), _build_barn(1), _build_barn(2)]
+		"barn_loft":
+			return [_build_barn_loft(0), _build_barn_loft(1), _build_barn_loft(2)]
 		"shed":
 			return [_build_shed(0), _build_shed(1), _build_shed(2)]
 		"hay":
 			return [_build_hay(0), _build_hay(1), _build_hay(2)]
 		"fountain":
 			return [_build_fountain(0), _build_fountain(1), _build_fountain(2)]
+		"well_canopy":
+			return [_build_well_canopy(0), _build_well_canopy(1), _build_well_canopy(2)]
+		"market_stall":
+			return [_build_market_stall(0), _build_market_stall(1), _build_market_stall(2)]
+		"boat_shed":
+			return [_build_boat_shed(0), _build_boat_shed(1), _build_boat_shed(2)]
+		"woodpile_rack":
+			return [_build_woodpile_rack(0), _build_woodpile_rack(1), _build_woodpile_rack(2)]
 	return [_build_house(0), _build_house(1), _build_house(2)]
 
 
@@ -719,19 +745,748 @@ static func _build_fountain(level: int) -> ArrayMesh:
 	return st.commit()
 
 
+## Малый жилой дом с боковой пристройкой на +X под односкатной кровлей и высокой трубой на -X.
+static func _build_house_wing(level: int) -> ArrayMesh:
+	var half := Vector2(1.6, 1.6)
+	var wall_h := 2.45
+	var pitch := 0.60
+	var eave := 0.50
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, wall_h, half.y * 2.0), Vector3(0, wall_h * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+		_roof_slopes(st, half, wall_h, pitch, eave, 0.22, false)
+		_box(st, Vector3(0.88, 1.95, 2.2), Vector3(half.x + 0.44, 0.92, -0.1), Basis.IDENTITY, CELL_TIMBER)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, wall_h, half.y * 2.0), Vector3(0, wall_h * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, eave, 0.22, true)
+
+	# Боковая пристройка (+X) выше y=-0.16 м (не трогает проверку цоколя на -0.25 м)
+	_box(st, Vector3(0.86, 0.72, 2.2), Vector3(half.x + 0.43, 0.20, -0.1), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(0.84, 1.32, 2.16), Vector3(half.x + 0.42, 1.22, -0.1), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(1.18, 0.12, 2.55), Vector3(half.x + 0.48, 1.92, -0.1), Basis(Vector3.BACK, -0.34), CELL_ROOF)
+
+	# Дверь в +Z и козырёк-крыльцо + труба на -X для зрительного равновесия
+	_box(st, Vector3(0.92, 1.85, 0.10), Vector3(-0.35, 0.925, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(1.18, 0.18, 0.65), Vector3(-0.35, 0.04, half.y + 0.28), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(1.26, 0.11, 0.70), Vector3(-0.35, 2.12, half.y + 0.32), Basis(Vector3.RIGHT, 0.26), CELL_ROOF)
+	_box(st, Vector3(0.50, 1.85, 0.50), Vector3(-half.x * 0.56, wall_h + gable * 0.48 + 0.52, -half.y * 0.28), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# Окна (5 со ставнями = 180 + фронтонное = 192)
+	_window(st, 0.0, Vector3(half.x * 0.56, 1.42, half.y), true)
+	_window(st, 0.0, Vector3(half.x + 0.42, 1.30, 0.98), true)
+	_window(st, PI / 2.0, Vector3(0.10, 1.30, half.x + 0.84), true)
+	_window(st, -PI / 2.0, Vector3(0.0, 1.42, half.x), true)
+	_window(st, PI, Vector3(0.15, 1.42, half.y), true)
+	_box(st, Vector3(0.42, 0.42, 0.08), Vector3(0, wall_h + gable * 0.36, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		_box(st, Vector3(0.66, 0.14, 0.66), Vector3(-half.x * 0.56, wall_h + gable * 0.48 + 1.45, -half.y * 0.28), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(1.10, 0.12, 0.12), Vector3(-0.35, 1.88, half.y + 0.04), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.11, 1.98, 0.11), Vector3(-0.92, 1.02, half.y + 0.58), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.11, 1.98, 0.11), Vector3(0.22, 1.02, half.y + 0.58), Basis.IDENTITY, CELL_DARK_WOOD)
+		_window(st, PI, Vector3(-0.75, 1.42, half.y), true)
+		_box(st, Vector3(0.12, 2.0, 0.12), Vector3(half.x + 0.80, 1.0, -1.12), Basis.IDENTITY, CELL_DARK_WOOD)
+	st.index()
+	return st.commit()
+
+
+## Дом с крутой высокой крышей, дормером-люкарной на скате и широким каменным крыльцом.
+static func _build_house_steep(level: int) -> ArrayMesh:
+	var half := Vector2(1.6, 1.6)
+	var wall_h := 2.05
+	var pitch := 0.88
+	var eave := 0.46
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, wall_h, half.y * 2.0), Vector3(0, wall_h * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+		_roof_slopes(st, half, wall_h, pitch, eave, 0.22, false)
+		_box(st, Vector3(1.15, 0.90, 1.0), Vector3(0.95, wall_h + 0.75, 0.0), Basis.IDENTITY, CELL_ROOF)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, wall_h, half.y * 2.0), Vector3(0, wall_h * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, eave, 0.22, true)
+
+	# Дормер-люкарна на правом скате (+X)
+	_dormer(st, PI / 2.0, Vector3(0.75, wall_h + 0.42, 0.0), 1.05, 0.72, 0.52, 1.35, CELL_PLASTER, level)
+
+	# Дверь и широкое каменное крыльцо в +Z
+	_box(st, Vector3(0.92, 1.80, 0.10), Vector3(-0.48, 0.90, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(2.20, 0.28, 0.78), Vector3(0.0, 0.02, half.y + 0.34), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(0.48, 1.70, 0.48), Vector3(-half.x * 0.42, wall_h + gable * 0.60 + 0.50, -half.y * 0.35), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# Окна (5 со ставнями = 180 + чердачное = 12)
+	_window(st, 0.0, Vector3(0.68, 1.25, half.y), true)
+	_window(st, -PI / 2.0, Vector3(-0.55, 1.25, half.x), true)
+	_window(st, -PI / 2.0, Vector3(0.55, 1.25, half.x), true)
+	_window(st, PI, Vector3(-0.52, 1.25, half.y), true)
+	_window(st, PI, Vector3(0.52, 1.25, half.y), true)
+	_box(st, Vector3(0.46, 0.56, 0.08), Vector3(0, wall_h + gable * 0.42, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		# Перила крыльца, коньковая балка, подкосы щипца, наголовник трубы
+		for sx: float in [-1.02, 1.02]:
+			_box(st, Vector3(0.10, 0.85, 0.72), Vector3(sx, 0.54, half.y + 0.32), Basis.IDENTITY, CELL_RAIL)
+		for sx: float in [-0.72, 0.72]:
+			_box(st, Vector3(0.12, 0.14, 0.75), Vector3(sx, wall_h + 0.45, half.y + 0.25), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.62, 0.14, 0.62), Vector3(-half.x * 0.42, wall_h + gable * 0.60 + 1.38, -half.y * 0.35), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(1.10, 0.12, 0.12), Vector3(-0.48, 1.82, half.y + 0.04), Basis.IDENTITY, CELL_DARK_WOOD)
+	st.index()
+	return st.commit()
+
+
+## Вытянутый лесной сруб с низкой тяжёлой крышей и передней крытой галереей-рундуком.
+static func _build_cabin_long(level: int) -> ArrayMesh:
+	var half := Vector2(1.6, 1.6)
+	var body_half := Vector2(1.42, 1.42)
+	var roof_half := Vector2(1.42, 1.92)
+	var wall_h := 2.25
+	var pitch := 0.46
+	var eave := 0.44
+	var gable := roof_half.x * tan(pitch)
+	var roof_z := -0.05
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(body_half.x * 2.0, wall_h, 2.85), Vector3(0, wall_h * 0.5, -0.58), Basis.IDENTITY, CELL_TIMBER)
+		_gable(st, roof_half.x * 2.0, gable, roof_half.y * 2.0, Vector3(0, wall_h, roof_z), CELL_TIMBER)
+		_roof_slopes(st, roof_half, wall_h, pitch, eave, 0.22, false, Vector3(0, 0, roof_z))
+		_box(st, Vector3(body_half.x * 2.0, 0.22, 1.10), Vector3(0, 0.04, 1.38), Basis.IDENTITY, CELL_STONE)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	# Каменная подкладка под сруб и рундук выше -0.18 м
+	_box(st, Vector3(body_half.x * 2.0 + 0.08, 0.44, 3.88), Vector3(0, 0.08, -0.05), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(body_half.x * 2.0, 1.95, 2.84), Vector3(0, 1.28, -0.58), Basis.IDENTITY, CELL_TIMBER)
+	_gable(st, roof_half.x * 2.0, gable, 2.84, Vector3(0, wall_h, -0.58), CELL_TIMBER)
+	_roof_slopes(st, roof_half, wall_h, pitch, eave, 0.22, true, Vector3(0, 0, roof_z))
+
+	# Столбы галереи и прогон (+Z)
+	for sx: float in [-1.25, 0.0, 1.25]:
+		_box(st, Vector3(0.16, 2.02, 0.16), Vector3(sx, 1.28, 1.76), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(body_half.x * 2.0 + 0.10, 0.18, 0.18), Vector3(0, wall_h - 0.06, 1.76), Basis.IDENTITY, CELL_DARK_WOOD)
+
+	# Дверь и труба
+	_box(st, Vector3(0.92, 1.80, 0.10), Vector3(-0.38, 1.20, 0.86), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(0.48, 1.65, 0.48), Vector3(0.55, wall_h + gable * 0.55 + 0.42, -0.85), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# Окна (5 со ставнями = 180 + фронтон = 12)
+	_window(st, 0.0, Vector3(0.65, 1.52, 0.84), true)
+	_window(st, PI / 2.0, Vector3(0.25, 1.52, body_half.x), true)
+	_window(st, PI / 2.0, Vector3(1.15, 1.52, body_half.x), true)
+	_window(st, -PI / 2.0, Vector3(-0.65, 1.52, body_half.x), true)
+	_window(st, PI, Vector3(0.0, 1.52, 2.00), true)
+	_box(st, Vector3(0.42, 0.42, 0.08), Vector3(0, wall_h + gable * 0.38, 0.85), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		# Выпуски брёвен по углам сруба и скамейка под галереей
+		for sx: float in [-1.0, 1.0]:
+			for sz: float in [-2.00, 0.84]:
+				for row in 3:
+					var ly := 0.55 + row * 0.55
+					_box(st, Vector3(0.24, 0.16, 0.16), Vector3(sx * (body_half.x + 0.08), ly, sz - signf(sz) * 0.06), Basis.IDENTITY, CELL_LOGS_END)
+		_box(st, Vector3(1.15, 0.14, 0.36), Vector3(0.65, 0.66, 1.35), Basis.IDENTITY, CELL_RAIL)
+		_box(st, Vector3(2.50, 0.55, 0.10), Vector3(0.0, 0.60, 1.76), Basis.IDENTITY, CELL_RAIL)
+		_box(st, Vector3(0.22, 0.22, roof_half.y * 2.0 + eave * 2.0 + 0.15), Vector3(0, wall_h + gable + 0.20, roof_z), Basis(Vector3.BACK, PI / 4.0), CELL_DARK_WOOD)
+		_box(st, Vector3(0.62, 0.14, 0.62), Vector3(0.55, wall_h + gable * 0.55 + 1.26, -0.85), Basis.IDENTITY, CELL_STONE)
+	st.index()
+	return st.commit()
+
+
+## Высокий таёжный сруб на каменном подклете с двускатным крыльцом на резных столбах и боковой трубой.
+static func _build_cabin_porch(level: int) -> ArrayMesh:
+	var half := Vector2(1.6, 1.6)
+	var base_h := 1.15
+	var log_h := 1.48
+	var wall_h := base_h + log_h
+	var pitch := 0.68
+	var eave := 0.50
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5 + base_h, half.y * 2.0 + 0.1), Vector3(0, (base_h - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, log_h, half.y * 2.0), Vector3(0, base_h + log_h * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+		_roof_slopes(st, half, wall_h, pitch, eave, 0.22, false)
+		_box(st, Vector3(0.55, 3.8, 0.72), Vector3(-half.x - 0.26, 1.78, -0.15), Basis.IDENTITY, CELL_CHIMNEY)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5 + base_h, half.y * 2.0 + 0.1), Vector3(0, (base_h - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, log_h, half.y * 2.0), Vector3(0, base_h + log_h * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, eave, 0.22, true)
+
+	# Массивная наружная каменная печная труба на -X (выше y=-0.16 м)
+	_box(st, Vector3(0.58, 2.20, 0.90), Vector3(-half.x - 0.28, 0.96, -0.15), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(0.46, 2.25, 0.56), Vector3(-half.x - 0.22, 3.12, -0.15), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# Двускатное крыльцо на столбах в +Z
+	_box(st, Vector3(1.50, 0.55, 0.85), Vector3(-0.20, 0.22, half.y + 0.42), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(1.05, 0.24, 0.45), Vector3(-0.20, 0.04, half.y + 0.96), Basis.IDENTITY, CELL_STONE)
+	for sx: float in [-0.82, 0.42]:
+		_cyl(st, 0.11, 0.12, 1.85, 6, Vector3(sx, 1.40, half.y + 0.72), Basis.IDENTITY, CELL_DARK_WOOD)
+	_gable(st, 1.48, 0.62, 0.88, Vector3(-0.20, 2.28, half.y + 0.44), CELL_TIMBER)
+	_roof_slopes(st, Vector2(0.74, 0.44), 2.28, 0.68, 0.16, 0.12, false, Vector3(-0.20, 0.0, half.y + 0.44))
+
+	# Дверь и окна (5 со ставнями + фронтон)
+	_box(st, Vector3(0.88, 1.75, 0.10), Vector3(-0.20, 1.38, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_window(st, 0.0, Vector3(half.x * 0.58, 1.90, half.y), true)
+	_window(st, PI / 2.0, Vector3(-0.45, 1.90, half.x), true)
+	_window(st, PI / 2.0, Vector3(0.55, 1.90, half.x), true)
+	_window(st, -PI / 2.0, Vector3(0.75, 1.90, half.x), true)
+	_window(st, PI, Vector3(0.35, 1.90, half.y), true)
+	_box(st, Vector3(0.42, 0.44, 0.08), Vector3(0, wall_h + gable * 0.36, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		for sx: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				for row in 3:
+					var ly := base_h + 0.25 + row * 0.48
+					_box(st, Vector3(0.24, 0.15, 0.15), Vector3(sx * (half.x + 0.08), ly, sz * (half.y - 0.06)), Basis.IDENTITY, CELL_LOGS_END)
+		_box(st, Vector3(0.62, 0.14, 0.72), Vector3(-half.x - 0.22, 4.30, -0.15), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(1.36, 0.62, 0.08), Vector3(-0.20, 0.80, half.y + 0.78), Basis.IDENTITY, CELL_RAIL)
+	st.index()
+	return st.commit()
+
+
+## Альпийское шале с крытой боковой террасой (+X) и наружной деревянной лестницей на второй этаж.
+static func _build_chalet_terrace(level: int) -> ArrayMesh:
+	var half := Vector2(2.2, 1.9)
+	var h1 := 2.05
+	var h2 := 2.15
+	var wall_h := h1 + h2
+	var pitch := 0.44
+	var gable := half.x * tan(pitch)
+	var eave_l := 0.72
+	var eave_r := 1.24
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5 + h1, half.y * 2.0 + 0.1), Vector3(0, (h1 - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+		_roof_slopes_asym(st, half, wall_h, pitch, eave_l, eave_r, 0.55, 0.22, false)
+		_box(st, Vector3(1.05, 0.28, 3.2), Vector3(half.x + 0.52, 0.12, 0.0), Basis.IDENTITY, CELL_TIMBER)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h1, half.y * 2.0), Vector3(0, h1 * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes_asym(st, half, wall_h, pitch, eave_l, eave_r, 0.65, 0.22, true)
+
+	# Крытая боковая терраса на +X (выше y=-0.16 м)
+	_box(st, Vector3(1.06, 0.34, 3.2), Vector3(half.x + 0.53, 0.02, 0.0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(1.08, 0.12, 3.22), Vector3(half.x + 0.54, 0.24, 0.0), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(0.08, 0.72, 2.20), Vector3(half.x + 1.04, 0.65, -0.45), Basis.IDENTITY, CELL_RAIL)
+	for tz: float in [-1.52, 0.0, 1.52]:
+		_box(st, Vector3(0.14, 3.42, 0.14), Vector3(half.x + 0.98, 1.96, tz), Basis.IDENTITY, CELL_DARK_WOOD)
+
+	# Наружная лестница спереди справа к боковой площадке 2-го этажа
+	_box(st, Vector3(1.02, 0.14, 1.15), Vector3(half.x + 0.48, h1, half.y - 0.55), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(0.86, 0.22, 0.55), Vector3(half.x + 0.48, 0.65, half.y + 0.35), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.86, 0.22, 0.55), Vector3(half.x + 0.48, 1.15, half.y + 0.05), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.86, 0.22, 0.55), Vector3(half.x + 0.48, 1.65, half.y - 0.25), Basis.IDENTITY, CELL_RAIL)
+
+	# Передний вход и труба
+	_box(st, Vector3(0.95, 1.85, 0.10), Vector3(-half.x * 0.40, 0.925, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(1.15, 0.18, 0.65), Vector3(-half.x * 0.40, 0.04, half.y + 0.26), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(0.55, 1.70, 0.55), Vector3(-half.x * 0.42, wall_h + gable * 0.55 + 0.45, -half.y * 0.35), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# 7 окон со ставнями + фронтонное окно
+	_window(st, 0.0, Vector3(half.x * 0.50, 1.38, half.y), true)
+	_window(st, 0.0, Vector3(-half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, -PI / 2.0, Vector3(-half.y * 0.45, h1 + h2 * 0.55, half.x), true)
+	_window(st, PI / 2.0, Vector3(-half.y * 0.45, h1 + h2 * 0.55, half.x), true)
+	_window(st, PI / 2.0, Vector3(half.y * 0.45, 1.35, half.x), true)
+	_window(st, PI, Vector3(0.0, h1 + h2 * 0.55, half.y), true)
+	_box(st, Vector3(0.46, 0.46, 0.08), Vector3(0, wall_h + gable * 0.36, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		for sx: float in [-half.x - 0.38, half.x + 0.62]:
+			_box(st, Vector3(0.16, 0.18, half.y * 2.0 + 1.30), Vector3(sx, wall_h - 0.14, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.70, 0.14, 0.70), Vector3(-half.x * 0.42, wall_h + gable * 0.55 + 1.32, -half.y * 0.35), Basis.IDENTITY, CELL_STONE)
+		_window(st, -PI / 2.0, Vector3(half.y * 0.45, 1.35, half.x), true)
+		_box(st, Vector3(0.10, 0.72, 1.05), Vector3(half.x + 1.00, h1 + 0.40, half.y - 0.55), Basis.IDENTITY, CELL_RAIL)
+	st.index()
+	return st.commit()
+
+
+## Суровое каменное шале: контрфорсы цоколя, врезанный верхний балкон, крутой щипец.
+static func _build_chalet_stone(level: int) -> ArrayMesh:
+	var half := Vector2(2.2, 1.9)
+	var h1 := 2.2
+	var h2 := 2.1
+	var wall_h := h1 + h2
+	var pitch := 0.58
+	var eave := 0.70
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5 + h1, half.y * 2.0 + 0.1), Vector3(0, (h1 - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+		_roof_slopes(st, half, wall_h, pitch, eave, 0.24, false)
+		_box(st, Vector3(2.8, 0.90, 0.80), Vector3(0, h1 + 0.35, half.y + 0.36), Basis.IDENTITY, CELL_STONE)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h1, half.y * 2.0), Vector3(0, h1 * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_TIMBER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, eave, 0.24, true)
+
+	# 4 каменных контрфорса по углам (выше y=-0.16 м)
+	for sx: float in [-1.0, 1.0]:
+		for sz: float in [-1.0, 1.0]:
+			_box(st, Vector3(0.46, 2.38, 0.46), Vector3(sx * (half.x + 0.12), 1.04, sz * (half.y - 0.10)), Basis.IDENTITY, CELL_STONE)
+
+	# Центральный каменный крыльцо-портал и деревянный балкон второго этажа
+	_box(st, Vector3(1.05, 1.90, 0.12), Vector3(0, 0.95, half.y + 0.04), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(1.55, 0.22, 0.72), Vector3(0, 0.06, half.y + 0.32), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(2.80, 0.14, 0.85), Vector3(0, h1, half.y + 0.40), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(2.80, 0.82, 0.10), Vector3(0, h1 + 0.46, half.y + 0.78), Basis.IDENTITY, CELL_RAIL)
+	for sx: float in [-1.0, 1.0]:
+		_box(st, Vector3(0.10, 0.82, 0.82), Vector3(sx * 1.36, h1 + 0.46, half.y + 0.40), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.60, 1.85, 0.60), Vector3(half.x * 0.48, wall_h + gable * 0.55 + 0.45, -half.y * 0.30), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# 7 окон со ставнями + щипцовое
+	_window(st, 0.0, Vector3(-half.x * 0.62, 1.35, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.62, 1.35, half.y), true)
+	_window(st, 0.0, Vector3(-half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, PI / 2.0, Vector3(0.0, h1 + h2 * 0.55, half.x), true)
+	_window(st, -PI / 2.0, Vector3(0.0, h1 + h2 * 0.55, half.x), true)
+	_window(st, PI, Vector3(0.0, h1 + h2 * 0.55, half.y), true)
+	_box(st, Vector3(0.46, 0.48, 0.08), Vector3(0, wall_h + gable * 0.36, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		for sx: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				_box(st, Vector3(0.54, 0.22, 0.54), Vector3(sx * (half.x + 0.14), 2.34, sz * (half.y - 0.10)), Basis.IDENTITY, CELL_STONE)
+		for bx: float in [-1.1, 0.0, 1.1]:
+			_box(st, Vector3(0.16, 0.22, 0.78), Vector3(bx, h1 - 0.14, half.y + 0.36), Basis.IDENTITY, CELL_DARK_WOOD)
+		for sx: float in [-1.0, 1.0]:
+			_box(st, Vector3(0.16, 0.18, half.y * 2.0 + eave * 2.0), Vector3(sx * (half.x + 0.38), wall_h - 0.10, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.76, 0.14, 0.76), Vector3(half.x * 0.48, wall_h + gable * 0.55 + 1.38, -half.y * 0.30), Basis.IDENTITY, CELL_STONE)
+	st.index()
+	return st.commit()
+
+
+## Двухэтажный крупный дом с ломаной мансардной крышей и боковыми слуховыми люкарнами.
+static func _build_tall_mansard(level: int) -> ArrayMesh:
+	var half := Vector2(1.9, 1.9)
+	var h1 := 2.2
+	var h2 := 2.0
+	var wall_h := h1 + h2
+	var dy1 := 1.25
+	var x_mid := 1.05
+	var y_mid := wall_h + dy1
+	var pitch2 := 0.42
+	var gable2 := x_mid * tan(pitch2)
+	var eave := 0.38
+	var depth := half.y * 2.0 + eave * 2.0
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var p1 := atan2(dy1, half.x - x_mid)
+	var seg1 := sqrt(dy1 * dy1 + (half.x - x_mid) * (half.x - x_mid)) + 0.38
+	var add_lower_mansard := func() -> void:
+		for side: float in [-1.0, 1.0]:
+			var mid_x := side * (half.x + x_mid) * 0.5 + side * 0.12
+			var mid_y := wall_h + dy1 * 0.5 - 0.08
+			mid_x += side * sin(p1) * 0.11
+			mid_y += cos(p1) * 0.11
+			_box(st, Vector3(seg1, 0.22, depth), Vector3(mid_x, mid_y, 0), Basis(Vector3.BACK, -side * p1), CELL_ROOF)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, wall_h + 0.5, half.y * 2.0 + 0.1), Vector3(0, (wall_h - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+		_trapezoid(st, half.x * 2.0, x_mid * 2.0, dy1, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+		add_lower_mansard.call()
+		_roof_slopes(st, Vector2(x_mid, half.y), y_mid, pitch2, 0.24, 0.22, false, Vector3.ZERO, eave)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h1, half.y * 2.0), Vector3(0, h1 * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+	_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+	_trapezoid(st, half.x * 2.0, x_mid * 2.0, dy1, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+	_gable(st, x_mid * 2.0, gable2, half.y * 2.0, Vector3(0, y_mid, 0), CELL_TIMBER)
+	add_lower_mansard.call()
+	_roof_slopes(st, Vector2(x_mid, half.y), y_mid, pitch2, 0.24, 0.22, true, Vector3.ZERO, eave)
+
+	# Две боковые мансардные люкарны на крутом скате (-X и +X)
+	_dormer(st, PI / 2.0, Vector3(1.12, wall_h + 0.20, 0.0), 1.05, 0.78, 0.48, 1.15, CELL_PLASTER, level)
+	_dormer(st, -PI / 2.0, Vector3(-1.12, wall_h + 0.20, 0.0), 1.05, 0.78, 0.48, 1.15, CELL_PLASTER, level)
+
+	# Вход, крыльцо и труба
+	_box(st, Vector3(1.00, 1.90, 0.10), Vector3(0.0, 0.95, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(1.40, 0.22, 0.72), Vector3(0.0, 0.06, half.y + 0.30), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(1.50, 0.14, 0.65), Vector3(0.0, 2.15, half.y + 0.30), Basis(Vector3.RIGHT, 0.22), CELL_ROOF)
+	_box(st, Vector3(0.55, 1.45, 0.55), Vector3(0.55, y_mid + gable2 + 0.35, -half.y * 0.35), Basis.IDENTITY, CELL_CHIMNEY)
+
+	# 5 окон со ставнями + мансардное окно в +Z
+	_window(st, 0.0, Vector3(-half.x * 0.58, 1.40, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.58, 1.40, half.y), true)
+	_window(st, 0.0, Vector3(-half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.48, h1 + h2 * 0.55, half.y), true)
+	_window(st, PI, Vector3(0.0, h1 + h2 * 0.55, half.y), true)
+	_box(st, Vector3(0.56, 0.62, 0.08), Vector3(0, wall_h + dy1 * 0.52, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		_box(st, Vector3(half.x * 2.0 + 0.14, 0.16, half.y * 2.0 + 0.14), Vector3(0, h1, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+		for sx: float in [-1.0, 1.0]:
+			for sz: float in [-1.0, 1.0]:
+				_box(st, Vector3(0.18, wall_h, 0.18), Vector3(sx * (half.x - 0.03), wall_h * 0.5, sz * (half.y - 0.03)), Basis.IDENTITY, CELL_STONE)
+		_window(st, PI / 2.0, Vector3(0.0, 1.40, half.x), true)
+		_window(st, -PI / 2.0, Vector3(0.0, 1.40, half.x), true)
+		_window(st, PI, Vector3(0.0, 1.40, half.y), true)
+		_box(st, Vector3(0.70, 0.14, 0.70), Vector3(0.55, y_mid + gable2 + 1.08, -half.y * 0.35), Basis.IDENTITY, CELL_STONE)
+	st.index()
+	return st.commit()
+
+
+## Крупный общественный / торговый дом центра с входной аркадой и коньковой башенкой-звонницей.
+static func _build_tall_hall(level: int) -> ArrayMesh:
+	var half := Vector2(2.2, 1.9)
+	var h1 := 2.3
+	var h2 := 2.2
+	var wall_h := h1 + h2
+	var pitch := 0.68
+	var eave := 0.55
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, h1 + 0.5, half.y * 2.0 + 0.1), Vector3(0, (h1 - 0.5) * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+		_roof_slopes(st, half, wall_h, pitch, eave, 0.24, false)
+		_box(st, Vector3(1.05, 1.45, 1.05), Vector3(0, wall_h + gable + 0.45, 0.55), Basis.IDENTITY, CELL_TIMBER)
+		_cyl(st, 0.0, 0.72, 1.15, 4, Vector3(0, wall_h + gable + 1.72, 0.55), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h1, half.y * 2.0), Vector3(0, h1 * 0.5, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, h2, half.y * 2.0), Vector3(0, h1 + h2 * 0.5, 0), Basis.IDENTITY, CELL_PLASTER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_PLASTER)
+	_roof_slopes(st, half, wall_h, pitch, eave, 0.24, true)
+
+	# Передняя входная аркада-портик (+Z)
+	_box(st, Vector3(2.90, 0.24, 0.76), Vector3(0, 0.06, half.y + 0.34), Basis.IDENTITY, CELL_STONE)
+	for px: float in [-1.25, 0.0, 1.25]:
+		_box(st, Vector3(0.22, 2.25, 0.22), Vector3(px, 1.24, half.y + 0.56), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(3.00, 0.16, 0.72), Vector3(0, 2.38, half.y + 0.34), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(3.15, 0.14, 0.85), Vector3(0, 2.55, half.y + 0.36), Basis(Vector3.RIGHT, 0.24), CELL_ROOF)
+	_box(st, Vector3(1.15, 2.00, 0.12), Vector3(0, 1.00, half.y + 0.04), Basis.IDENTITY, CELL_DARK_WOOD)
+
+	# Коньковая башенка-звонница со шпилем (главная доминанта центра поселения)
+	var belfry_y := wall_h + gable - 0.10
+	_box(st, Vector3(1.06, 0.55, 1.06), Vector3(0, belfry_y + 0.15, 0.55), Basis.IDENTITY, CELL_TIMBER)
+	for sx: float in [-0.40, 0.40]:
+		for sz: float in [-0.40, 0.40]:
+			_box(st, Vector3(0.14, 1.05, 0.14), Vector3(sx, belfry_y + 0.92, 0.55 + sz), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(0.38, 0.45, 0.38), Vector3(0, belfry_y + 1.00, 0.55), Basis.IDENTITY, CELL_METAL)
+	_cyl(st, 0.0, 0.76, 1.20, 4, Vector3(0, belfry_y + 2.02, 0.55), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
+
+	# Труба и окна (7 со ставнями = 252 + 2 арочных окна в щипце = 24)
+	_box(st, Vector3(0.55, 1.75, 0.55), Vector3(half.x * 0.52, wall_h + gable * 0.50 + 0.45, -half.y * 0.48), Basis.IDENTITY, CELL_CHIMNEY)
+	_window(st, 0.0, Vector3(-half.x * 0.65, h1 + h2 * 0.52, half.y), true)
+	_window(st, 0.0, Vector3(0.0, h1 + h2 * 0.52, half.y), true)
+	_window(st, 0.0, Vector3(half.x * 0.65, h1 + h2 * 0.52, half.y), true)
+	_window(st, PI / 2.0, Vector3(-half.y * 0.42, h1 + h2 * 0.52, half.x), true)
+	_window(st, -PI / 2.0, Vector3(half.y * 0.42, h1 + h2 * 0.52, half.x), true)
+	_window(st, PI / 2.0, Vector3(half.y * 0.42, 1.35, half.x), true)
+	_window(st, PI, Vector3(0.0, h1 + h2 * 0.52, half.y), true)
+	for wx: float in [-0.42, 0.42]:
+		_box(st, Vector3(0.42, 0.58, 0.08), Vector3(wx, wall_h + gable * 0.36, half.y + 0.02), Basis.IDENTITY, CELL_WINDOW)
+
+	if level == 0:
+		_box(st, Vector3(half.x * 2.0 + 0.14, 0.18, half.y * 2.0 + 0.14), Vector3(0, h1, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+		for sx: float in [-0.72, 0.72]:
+			_box(st, Vector3(0.14, gable * 0.72, 0.10), Vector3(sx, wall_h + gable * 0.36, half.y + 0.01), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(1.14, 0.12, 1.14), Vector3(0, belfry_y + 1.44, 0.55), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.08, 0.42, 0.08), Vector3(0, belfry_y + 2.75, 0.55), Basis.IDENTITY, CELL_METAL)
+		_box(st, Vector3(0.70, 0.14, 0.70), Vector3(half.x * 0.52, wall_h + gable * 0.50 + 1.35, -half.y * 0.48), Basis.IDENTITY, CELL_STONE)
+		_window(st, -PI / 2.0, Vector3(-half.y * 0.42, 1.35, half.x), true)
+		_window(st, PI, Vector3(0.0, 1.35, half.y), true)
+	st.index()
+	return st.commit()
+
+
+## Высокий сарай-сеновал с коньковой балкой-клювом и боковым навесом (-X).
+static func _build_barn_loft(level: int) -> ArrayMesh:
+	var half := Vector2(2.0, 1.5)
+	var wall_h := 3.05
+	var pitch := 0.58
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 1.1, half.y * 2.0 + 0.1), Vector3(0, 0.05, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(half.x * 2.0, 2.45, half.y * 2.0), Vector3(0, 1.82, 0), Basis.IDENTITY, CELL_TIMBER)
+		_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+		_roof_slopes(st, half, wall_h, pitch, 0.55, 0.22, false)
+		_box(st, Vector3(0.85, 1.50, 2.30), Vector3(-half.x - 0.40, 0.85, 0), Basis.IDENTITY, CELL_ROOF)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 1.25, half.y * 2.0 + 0.1), Vector3(0, 0.125, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(half.x * 2.0, 2.30, half.y * 2.0), Vector3(0, 1.90, 0), Basis.IDENTITY, CELL_TIMBER)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, 0.55, 0.22, true)
+
+	# Выступающая коньковая балка-клюв и люк сеновала с торчащим сеном (+Z)
+	_box(st, Vector3(0.22, 0.22, 0.90), Vector3(0, wall_h + gable - 0.10, half.y + 0.45), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(0.75, 0.10, 0.72), Vector3(0, wall_h + gable + 0.08, half.y + 0.42), Basis.IDENTITY, CELL_ROOF)
+	_box(st, Vector3(1.05, 0.82, 0.08), Vector3(0, 3.05, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(0.85, 0.52, 0.26), Vector3(0, 2.95, half.y + 0.12), Basis.IDENTITY, CELL_STRAW)
+
+	# Ворота
+	_box(st, Vector3(1.70, 2.00, 0.10), Vector3(0, 1.00, half.y + 0.03), Basis.IDENTITY, CELL_DARK_WOOD)
+
+	# Боковой открытый навес на -X (выше y=-0.16 м)
+	_box(st, Vector3(1.05, 0.12, 2.40), Vector3(-half.x - 0.42, 1.88, 0.0), Basis(Vector3.BACK, 0.30), CELL_ROOF)
+	for sz: float in [-1.05, 1.05]:
+		_box(st, Vector3(0.14, 1.82, 0.14), Vector3(-half.x - 0.82, 0.84, sz), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(0.65, 0.72, 1.85), Vector3(-half.x - 0.35, 0.32, 0.0), Basis.IDENTITY, CELL_STRAW)
+
+	if level == 0:
+		_cyl(st, 0.14, 0.14, 0.12, 6, Vector3(0, wall_h + gable - 0.34, half.y + 0.74), Basis(Vector3.BACK, PI / 2.0), CELL_METAL)
+		_box(st, Vector3(1.88, 0.12, 0.12), Vector3(0, 2.02, half.y + 0.04), Basis.IDENTITY, CELL_RAIL)
+		for sx: float in [-0.88, 0.88]:
+			_box(st, Vector3(0.12, 2.00, 0.12), Vector3(sx, 1.00, half.y + 0.04), Basis.IDENTITY, CELL_RAIL)
+		for sx: float in [-1.0, 1.0]:
+			_box(st, Vector3(0.12, 2.25, 0.12), Vector3(sx * (half.x - 0.04), 1.90, half.y - 0.04), Basis.IDENTITY, CELL_RAIL)
+	st.index()
+	return st.commit()
+
+
+## Деревянный колодец под двускатным шатром на двух столбах с воротом (hay size).
+static func _build_well_canopy(level: int) -> ArrayMesh:
+	var half := Vector2(0.9, 0.9)
+	var roof_half := Vector2(0.90, 0.85)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0, 0.5, half.y * 2.0), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+		_box(st, Vector3(1.36, 0.80, 1.36), Vector3(0, 0.40, 0), Basis.IDENTITY, CELL_TIMBER)
+		_roof_slopes(st, roof_half, 1.90, 0.66, 0.18, 0.14, false)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0, 0.5, half.y * 2.0), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(1.36, 0.80, 1.36), Vector3(0, 0.40, 0), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(1.12, 0.06, 1.12), Vector3(0, 0.72, 0), Basis.IDENTITY, CELL_WATER)
+	for sx: float in [-0.58, 0.58]:
+		_box(st, Vector3(0.14, 1.75, 0.14), Vector3(sx, 1.25, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+	_cyl(st, 0.10, 0.10, 1.18, 5, Vector3(0, 1.42, 0), Basis(Vector3.BACK, PI / 2.0), CELL_LOGS_END)
+	_gable(st, roof_half.x * 2.0, roof_half.x * tan(0.66), roof_half.y * 2.0, Vector3(0, 1.92, 0), CELL_TIMBER)
+	_roof_slopes(st, roof_half, 1.92, 0.66, 0.18, 0.14, level == 0)
+
+	if level == 0:
+		_cyl(st, 0.14, 0.12, 0.30, 5, Vector3(0.0, 1.04, 0.0), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.28, 0.08, 0.08), Vector3(0.74, 1.42, 0.0), Basis.IDENTITY, CELL_METAL)
+		_box(st, Vector3(0.08, 0.24, 0.08), Vector3(0.86, 1.32, 0.0), Basis.IDENTITY, CELL_METAL)
+		_box(st, Vector3(1.48, 0.10, 1.48), Vector3(0, 0.82, 0), Basis.IDENTITY, CELL_RAIL)
+	st.index()
+	return st.commit()
+
+
+## Торговый навес с прилавком, полосатым тентом и товарами (shed size).
+static func _build_market_stall(level: int) -> ArrayMesh:
+	var half := Vector2(1.1, 0.75)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	_box(st, Vector3(half.x * 2.0, 0.5, half.y * 2.0), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(2.05, 0.82, 0.72), Vector3(0, 0.41, 0.24), Basis.IDENTITY, CELL_TIMBER)
+	var tilt := Basis(Vector3.RIGHT, 0.26)
+	_box(st, Vector3(half.x * 2.0 + 0.45, 0.12, half.y * 2.0 + 0.55), Vector3(0, 2.05, 0.05), tilt, CELL_SHUTTER)
+
+	if level == 2:
+		_box(st, Vector3(1.50, 0.35, 0.55), Vector3(0, 0.98, 0.24), Basis.IDENTITY, CELL_STRAW)
+		st.index()
+		return st.commit()
+
+	for sx: float in [-0.96, 0.96]:
+		for sz: float in [-0.62, 0.62]:
+			_box(st, Vector3(0.11, 1.95, 0.11), Vector3(sx, 0.98, sz), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(half.x * 2.0 + 0.45, 0.22, 0.08), Vector3(0, 1.84, half.y + 0.28), Basis.IDENTITY, CELL_PLASTER)
+	# Ящики и товары на прилавке
+	_box(st, Vector3(0.55, 0.32, 0.45), Vector3(-0.52, 0.98, 0.24), Basis.IDENTITY, CELL_STRAW)
+	_box(st, Vector3(0.48, 0.28, 0.42), Vector3(0.08, 0.96, 0.24), Basis.IDENTITY, CELL_FLOWER_A)
+	_box(st, Vector3(0.52, 0.34, 0.45), Vector3(0.62, 0.99, 0.22), Basis.IDENTITY, CELL_LOGS_END)
+
+	if level == 0:
+		for ax: float in [-0.68, 0.0, 0.68]:
+			_box(st, Vector3(0.42, 0.14, half.y * 2.0 + 0.56), Vector3(ax, 2.07, 0.05), tilt, CELL_PLASTER)
+		_box(st, Vector3(0.24, 0.32, 0.24), Vector3(0.0, 1.72, half.y + 0.22), Basis.IDENTITY, CELL_WINDOW)
+		_cyl(st, 0.22, 0.26, 0.65, 5, Vector3(-0.72, 0.33, -0.35), Basis.IDENTITY, CELL_STRAW)
+		_box(st, Vector3(0.85, 0.38, 0.08), Vector3(0, 1.48, -0.62), Basis.IDENTITY, CELL_DARK_WOOD)
+	st.index()
+	return st.commit()
+
+
+## Прибрежный лодочный навес на сваях с перевёрнутой деревянной лодкой и вешалами для сетей (barn size).
+static func _build_boat_shed(level: int) -> ArrayMesh:
+	var half := Vector2(2.0, 1.5)
+	var wall_h := 2.15
+	var pitch := 0.44
+	var gable := half.x * tan(pitch)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	if level == 2:
+		_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+		_roof_slopes(st, half, wall_h, pitch, 0.55, 0.20, false)
+		_box(st, Vector3(1.10, 0.65, 2.40), Vector3(-0.35, 0.85, 0.0), Basis.IDENTITY, CELL_DARK_WOOD)
+		_box(st, Vector3(0.25, 1.55, 2.20), Vector3(1.55, 0.82, 0.0), Basis.IDENTITY, CELL_SHUTTER)
+		st.index()
+		return st.commit()
+
+	_box(st, Vector3(half.x * 2.0 + 0.1, 0.5, half.y * 2.0 + 0.1), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	for sx: float in [-half.x + 0.12, half.x - 0.12]:
+		for sz: float in [-half.y + 0.12, 0.0, half.y - 0.12]:
+			_box(st, Vector3(0.18, wall_h, 0.18), Vector3(sx, wall_h * 0.5, sz), Basis.IDENTITY, CELL_DARK_WOOD)
+	_gable(st, half.x * 2.0, gable, half.y * 2.0, Vector3(0, wall_h, 0), CELL_TIMBER)
+	_roof_slopes(st, half, wall_h, pitch, 0.55, 0.20, true)
+
+	# Перевёрнутая лодка на козлах
+	for cz: float in [-0.75, 0.75]:
+		_box(st, Vector3(1.15, 0.45, 0.16), Vector3(-0.35, 0.225, cz), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.95, 0.14, 2.45), Vector3(-0.35, 0.52, 0), Basis.IDENTITY, CELL_TIMBER)
+	_box(st, Vector3(0.58, 0.14, 2.25), Vector3(-0.56, 0.72, 0), Basis(Vector3.BACK, 0.55), CELL_TIMBER)
+	_box(st, Vector3(0.58, 0.14, 2.25), Vector3(-0.14, 0.72, 0), Basis(Vector3.BACK, -0.55), CELL_TIMBER)
+	_box(st, Vector3(0.14, 0.16, 2.60), Vector3(-0.35, 0.90, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+
+	# Вешала с сетями у правого борта (+X)
+	_box(st, Vector3(0.12, 1.50, 0.12), Vector3(1.48, 0.75, -1.05), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.12, 1.50, 0.12), Vector3(1.48, 0.75, 1.05), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.10, 0.10, 2.25), Vector3(1.48, 1.48, 0), Basis.IDENTITY, CELL_RAIL)
+	_box(st, Vector3(0.16, 1.15, 1.95), Vector3(1.52, 0.85, 0), Basis.IDENTITY, CELL_SHUTTER)
+
+	if level == 0:
+		for sz: float in [-half.y + 0.12, 0.0, half.y - 0.12]:
+			_box(st, Vector3(half.x * 2.0 - 0.1, 0.16, 0.16), Vector3(0, wall_h - 0.08, sz), Basis.IDENTITY, CELL_DARK_WOOD)
+		_cyl(st, 0.26, 0.26, 0.22, 6, Vector3(0.68, 0.11, 0.92), Basis.IDENTITY, CELL_STRAW)
+		_cyl(st, 0.24, 0.26, 0.72, 6, Vector3(0.85, 0.36, -0.78), Basis.IDENTITY, CELL_TIMBER)
+		_box(st, Vector3(0.10, 1.85, 0.12), Vector3(0.45, 0.92, -1.35), Basis(Vector3.RIGHT, 0.20), CELL_RAIL)
+	st.index()
+	return st.commit()
+
+
+## Длинная крытая поленница с козлами для распилки брёвен и колодой (shed size).
+static func _build_woodpile_rack(level: int) -> ArrayMesh:
+	var half := Vector2(1.1, 0.75)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	_box(st, Vector3(half.x * 2.0, 0.5, half.y * 2.0), Vector3(0, -0.25, 0), Basis.IDENTITY, CELL_STONE)
+	_box(st, Vector3(2.15, 0.12, 0.95), Vector3(0, 1.65, -0.22), Basis(Vector3.RIGHT, 0.26), CELL_ROOF)
+	_box(st, Vector3(1.90, 0.98, 0.62), Vector3(0, 0.50, -0.25), Basis.IDENTITY, CELL_LOGS_END)
+
+	if level == 2:
+		_box(st, Vector3(0.65, 0.58, 0.55), Vector3(0.55, 0.29, 0.38), Basis.IDENTITY, CELL_TIMBER)
+		st.index()
+		return st.commit()
+
+	for sx: float in [-0.98, 0.0, 0.98]:
+		_box(st, Vector3(0.11, 1.68, 0.11), Vector3(sx, 0.84, -0.62), Basis.IDENTITY, CELL_DARK_WOOD)
+	_box(st, Vector3(1.94, 0.22, 0.66), Vector3(0, 1.05, -0.25), Basis.IDENTITY, CELL_TIMBER)
+	_cyl(st, 0.24, 0.26, 0.58, 6, Vector3(0.62, 0.29, 0.38), Basis.IDENTITY, CELL_LOGS_END)
+	_cyl(st, 0.11, 0.11, 1.35, 6, Vector3(-0.35, 0.54, 0.35), Basis(Vector3.BACK, PI / 2.0), CELL_TIMBER)
+
+	if level == 0:
+		for sx: float in [-0.72, 0.02]:
+			_box(st, Vector3(0.08, 0.68, 0.08), Vector3(sx, 0.32, 0.35), Basis(Vector3.RIGHT, 0.45), CELL_DARK_WOOD)
+			_box(st, Vector3(0.08, 0.68, 0.08), Vector3(sx, 0.32, 0.35), Basis(Vector3.RIGHT, -0.45), CELL_DARK_WOOD)
+		_box(st, Vector3(0.06, 0.28, 0.18), Vector3(0.62, 0.66, 0.38), Basis(Vector3.BACK, -0.35), CELL_METAL)
+		_box(st, Vector3(0.05, 0.45, 0.05), Vector3(0.76, 0.80, 0.38), Basis(Vector3.BACK, -0.55), CELL_RAIL)
+		for lx: float in [-0.55, 0.0, 0.55]:
+			_cyl(st, 0.12, 0.12, 0.58, 5, Vector3(lx, 1.24, -0.25), Basis(Vector3.RIGHT, PI / 2.0), CELL_LOGS_END)
+	st.index()
+	return st.commit()
+
+
 # ---------------- Примитивы с точными UV атласа ----------------
 
-static func _roof_slopes(st: SurfaceTool, half: Vector2, top: float, pitch: float, eave: float, thick: float, ridge: bool) -> void:
+static func _roof_slopes(st: SurfaceTool, half: Vector2, top: float, pitch: float, eave: float, thick: float, ridge: bool,
+		origin: Vector3 = Vector3.ZERO, eave_z: float = -1.0) -> void:
+	var ez := eave if eave_z < 0.0 else eave_z
 	var gable := half.x * tan(pitch)
 	var run := half.x + eave
-	var depth := half.y * 2.0 + eave * 2.0
+	var depth := half.y * 2.0 + ez * 2.0
 	for side: float in [-1.0, 1.0]:
-		var mid := Vector3(side * run * 0.5, top + gable - run * tan(pitch) * 0.5, 0)
+		var mid := origin + Vector3(side * run * 0.5, top + gable - run * tan(pitch) * 0.5, 0)
 		mid += Vector3(side * sin(pitch), cos(pitch), 0) * thick * 0.5
 		var b := Basis(Vector3.BACK, -side * pitch)
 		_box(st, Vector3(run / cos(pitch), thick, depth), mid, b, CELL_ROOF)
 	if ridge:
+		_box(st, Vector3(0.30, 0.30, depth), origin + Vector3(0, top + gable + thick * 0.8, 0), Basis(Vector3.BACK, PI / 4.0), CELL_ROOF)
+
+
+static func _roof_slopes_asym(st: SurfaceTool, half: Vector2, top: float, pitch: float, eave_l: float, eave_r: float, eave_z: float,
+		thick: float, ridge: bool) -> void:
+	var gable := half.x * tan(pitch)
+	var depth := half.y * 2.0 + eave_z * 2.0
+	for item: Array in [[-1.0, eave_l], [1.0, eave_r]]:
+		var side: float = item[0]
+		var run: float = half.x + float(item[1])
+		var mid := Vector3(side * run * 0.5, top + gable - run * tan(pitch) * 0.5, 0)
+		mid += Vector3(side * sin(pitch), cos(pitch), 0) * thick * 0.5
+		_box(st, Vector3(run / cos(pitch), thick, depth), mid, Basis(Vector3.BACK, -side * pitch), CELL_ROOF)
+	if ridge:
 		_box(st, Vector3(0.30, 0.30, depth), Vector3(0, top + gable + thick * 0.8, 0), Basis(Vector3.BACK, PI / 4.0), CELL_ROOF)
+
+
+static func _dormer(st: SurfaceTool, rot_y: float, pos: Vector3, width: float, wall_h: float, gable_h: float, depth: float,
+		wall_cell: int, level: int) -> void:
+	var b := Basis(Vector3.UP, rot_y)
+	_box(st, Vector3(width, wall_h, depth), pos + b * Vector3(0, wall_h * 0.5, 0), b, wall_cell)
+	_gable(st, width, gable_h, depth, pos + b * Vector3(0, wall_h, 0), wall_cell, b)
+	var pitch := atan2(gable_h, width * 0.5)
+	var run := width * 0.5 + 0.16
+	var rdepth := depth + 0.24
+	for side: float in [-1.0, 1.0]:
+		var local_mid := Vector3(side * run * 0.5, wall_h + gable_h - run * tan(pitch) * 0.5, 0.04)
+		local_mid += Vector3(side * sin(pitch), cos(pitch), 0) * 0.06
+		var rb := b * Basis(Vector3.BACK, -side * pitch)
+		_box(st, Vector3(run / cos(pitch), 0.12, rdepth), pos + b * local_mid, rb, CELL_ROOF)
+	var win_scale := 0.52 if level <= 1 else 0.45
+	_box(st, Vector3(win_scale, win_scale * 1.15, 0.08), pos + b * Vector3(0, wall_h * 0.54, depth * 0.5 + 0.02), b, CELL_WINDOW)
 
 
 static func _window(st: SurfaceTool, angle: float, pos: Vector3, shutters: bool) -> void:
@@ -775,17 +1530,18 @@ static func _box(st: SurfaceTool, size: Vector3, center: Vector3, basis: Basis, 
 			st.add_vertex(center + basis * lp)
 
 
-## Треугольная призма фронтона (ось вдоль Z, конёк сверху).
-static func _gable(st: SurfaceTool, width: float, height: float, depth: float, base_center: Vector3, cell: int) -> void:
+## Треугольная призма фронтона (ось вдоль Z в локальной базе basis, конёк сверху).
+static func _gable(st: SurfaceTool, width: float, height: float, depth: float, base_center: Vector3, cell: int,
+		basis: Basis = Basis.IDENTITY) -> void:
 	var hx := width * 0.5
 	var hz := depth * 0.5
 	var uv_r := cell_uv_rect(cell)
-	var fl := base_center + Vector3(-hx, 0, hz)
-	var fr := base_center + Vector3(hx, 0, hz)
-	var ft := base_center + Vector3(0, height, hz)
-	var bl := base_center + Vector3(-hx, 0, -hz)
-	var br := base_center + Vector3(hx, 0, -hz)
-	var bt := base_center + Vector3(0, height, -hz)
+	var fl := base_center + basis * Vector3(-hx, 0, hz)
+	var fr := base_center + basis * Vector3(hx, 0, hz)
+	var ft := base_center + basis * Vector3(0, height, hz)
+	var bl := base_center + basis * Vector3(-hx, 0, -hz)
+	var br := base_center + basis * Vector3(hx, 0, -hz)
+	var bt := base_center + basis * Vector3(0, height, -hz)
 	var u_mid := (uv_r.position.x + uv_r.end.x) * 0.5
 	var u_bl := Vector2(uv_r.position.x, uv_r.end.y)
 	var u_br := Vector2(uv_r.end.x, uv_r.end.y)
@@ -793,16 +1549,53 @@ static func _gable(st: SurfaceTool, width: float, height: float, depth: float, b
 	var u_tl := Vector2(uv_r.position.x, uv_r.position.y)
 	var u_tr := Vector2(uv_r.end.x, uv_r.position.y)
 
-	_tri(st, fl, ft, fr, Vector3(0, 0, 1), u_bl, u_top, u_br)
-	_tri(st, br, bt, bl, Vector3(0, 0, -1), u_bl, u_top, u_br)
-	var nr := Vector3(height, hx, 0).normalized()
-	var nl := Vector3(-height, hx, 0).normalized()
+	_tri(st, fl, ft, fr, (basis * Vector3(0, 0, 1)).normalized(), u_bl, u_top, u_br)
+	_tri(st, br, bt, bl, (basis * Vector3(0, 0, -1)).normalized(), u_bl, u_top, u_br)
+	var nr := (basis * Vector3(height, hx, 0)).normalized()
+	var nl := (basis * Vector3(-height, hx, 0)).normalized()
 	_tri(st, fr, ft, bt, nr, u_bl, u_tl, u_tr)
 	_tri(st, fr, bt, br, nr, u_bl, u_tr, u_br)
 	_tri(st, bl, bt, ft, nl, u_bl, u_tl, u_tr)
 	_tri(st, bl, ft, fl, nl, u_bl, u_tr, u_br)
-	_tri(st, fl, fr, br, Vector3(0, -1, 0), u_bl, u_br, u_tr)
-	_tri(st, fl, br, bl, Vector3(0, -1, 0), u_bl, u_tr, u_tl)
+	var nd := (basis * Vector3(0, -1, 0)).normalized()
+	_tri(st, fl, fr, br, nd, u_bl, u_br, u_tr)
+	_tri(st, fl, br, bl, nd, u_bl, u_tr, u_tl)
+
+
+## Трапецеидальная призма нижнего яруса мансарды (ось вдоль Z, bottom -> top сужается к верху).
+static func _trapezoid(st: SurfaceTool, w_bot: float, w_top: float, height: float, depth: float, base_center: Vector3, cell: int) -> void:
+	var hxb := w_bot * 0.5
+	var hxt := w_top * 0.5
+	var hz := depth * 0.5
+	var uv_r := cell_uv_rect(cell)
+	var u_bl := Vector2(uv_r.position.x, uv_r.end.y)
+	var u_br := Vector2(uv_r.end.x, uv_r.end.y)
+	var u_tl := Vector2(uv_r.position.x, uv_r.position.y)
+	var u_tr := Vector2(uv_r.end.x, uv_r.position.y)
+
+	var flb := base_center + Vector3(-hxb, 0, hz)
+	var frb := base_center + Vector3(hxb, 0, hz)
+	var flt := base_center + Vector3(-hxt, height, hz)
+	var frt := base_center + Vector3(hxt, height, hz)
+	var blb := base_center + Vector3(-hxb, 0, -hz)
+	var brb := base_center + Vector3(hxb, 0, -hz)
+	var blt := base_center + Vector3(-hxt, height, -hz)
+	var brt := base_center + Vector3(hxt, height, -hz)
+
+	_tri(st, flb, flt, frt, Vector3(0, 0, 1), u_bl, u_tl, u_tr)
+	_tri(st, flb, frt, frb, Vector3(0, 0, 1), u_bl, u_tr, u_br)
+	_tri(st, brb, brt, blt, Vector3(0, 0, -1), u_bl, u_tl, u_tr)
+	_tri(st, brb, blt, blb, Vector3(0, 0, -1), u_bl, u_tr, u_br)
+	var nr := Vector3(height, hxb - hxt, 0).normalized()
+	var nl := Vector3(-height, hxb - hxt, 0).normalized()
+	_tri(st, frb, frt, brt, nr, u_bl, u_tl, u_tr)
+	_tri(st, frb, brt, brb, nr, u_bl, u_tr, u_br)
+	_tri(st, blb, blt, flt, nl, u_bl, u_tl, u_tr)
+	_tri(st, blb, flt, flb, nl, u_bl, u_tr, u_br)
+	_tri(st, flt, blt, brt, Vector3(0, 1, 0), u_bl, u_tl, u_tr)
+	_tri(st, flt, brt, frt, Vector3(0, 1, 0), u_bl, u_tr, u_br)
+	_tri(st, flb, frb, brb, Vector3(0, -1, 0), u_bl, u_br, u_tr)
+	_tri(st, flb, brb, blb, Vector3(0, -1, 0), u_bl, u_tr, u_tl)
 
 
 static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, nrm: Vector3, uva: Vector2, uvb: Vector2, uvc: Vector2) -> void:

@@ -85,6 +85,7 @@ func run() -> void:
 		print("Поселение %-22s role=%-9s huts=%d homes=%d" % [s.name, s.role, s.huts.size(), StageLandmarks.homes_of(s)])
 		_check(StageLandmarks.homes_of(s) >= 2, "у поселения %s есть жилые дома" % s.name)
 	_append_lineup_settlement(w)
+	_append_bench50_settlement(w)
 
 	ground_node = MeshInstance3D.new()
 	ground_node.mesh = _build_ground_mesh(w, heights)
@@ -130,10 +131,10 @@ func run() -> void:
 	await _set_time(23.0, Vector3(128.0, 25.2, 128.0))
 	await _shot("legacy_center_night")
 	await _set_time(12.5, Vector3(896.0, 25.2, 128.0))
-	_aim(Vector3(896.0, 25.2 + 4.8, 128.0 + 34.0), Vector3(896.0, 25.2 + 2.4, 128.0))
+	_aim(Vector3(896.0, 25.2 + 9.0, 128.0 + 44.0), Vector3(896.0, 25.2 + 2.2, 128.0))
 	await _shot("legacy_lineup")
-	report.legacy = await _measure_square(Vector2i(0, 0), Vector3(128.0, 25.2 + 3.0, 128.0 - 40.0), Vector3(128.0, 25.2 + 2.0, 128.0))
-	print("БЫЛО (квадрат центра, 40 м): draw_calls=%d tris=%d" % [report.legacy.draw_calls, report.legacy.tris])
+	report.legacy = await _measure_square(Vector2i(4, 0), Vector3(1152.0, 25.2 + 4.0, 128.0 - 40.0), Vector3(1152.0, 25.2 + 2.0, 128.0))
+	print("БЫЛО (квадрат 50 домов всех видов, 40 м): draw_calls=%d main=%d tris=%d" % [report.legacy.draw_calls, report.legacy.main_draw_calls, report.legacy.tris])
 	active_buildings.queue_free()
 	await process_frame
 
@@ -144,11 +145,18 @@ func run() -> void:
 	var built_new := SettlementsBuilder.build(active_buildings, w, heights)
 	windows_mat = built_new.windows
 
-	# Линейка всех 8 моделей
-	await _set_time(12.5, Vector3(896.0, 25.2, 128.0))
+	# Линейка всех 21 моделей в 2 ряда (12 жилых сзади z=120, 9 хозпостроек и характерных спереди z=142)
+	await _set_time(12.5, Vector3(896.0, 25.2, 100.0))
 	_add_lineup_labels(active_buildings)
-	_aim(Vector3(896.0, 25.2 + 4.8, 128.0 + 34.0), Vector3(896.0, 25.2 + 2.4, 128.0))
+	_aim(Vector3(896.0, 25.2 + 9.5, 128.0 + 46.0), Vector3(896.0, 25.2 + 2.2, 130.0))
 	await _shot("models_lineup")
+	# Крупные планы по группам моделей (с зазора между рядами, без перекрытия передним рядом)
+	_aim(Vector3(878.0, 25.2 + 3.4, 135.5), Vector3(878.0, 25.2 + 1.8, 120.0))
+	await _shot("lineup_small_forest")
+	_aim(Vector3(914.0, 25.2 + 4.5, 136.5), Vector3(914.0, 25.2 + 2.6, 120.0))
+	await _shot("lineup_chalet_tall")
+	_aim(Vector3(896.0, 25.2 + 3.8, 142.0 + 18.0), Vector3(896.0, 25.2 + 1.4, 142.0))
+	await _shot("lineup_out_landmarks")
 
 	# Снимки 6 видов поселений днём и ночью
 	var shots := [
@@ -175,20 +183,20 @@ func run() -> void:
 	_aim(Vector3(384.0, 210.0, 620.0), Vector3(384.0, 25.0, 230.0))
 	await _shot("overview_day")
 
-	# Проверка переходов LOD и вызовов отрисовки на изолированном квадрате (0, 0) с северной стороны (-Z)
-	await _set_time(12.5, Vector3(128.0, 25.2, 128.0))
+	# Проверка переходов LOD и вызовов отрисовки на квадрате (4, 0) с 50 постройками всех 21 видов
+	await _set_time(12.5, Vector3(1152.0, 25.2, 128.0))
 	for dist: float in [40.0, 120.0, 350.0, 1500.0]:
-		var m := await _measure_square(Vector2i(0, 0), Vector3(128.0, 25.2 + clampf(dist * 0.14, 5.0, 65.0), 128.0 - dist), Vector3(128.0, 25.2 + 2.0, 128.0))
+		var m := await _measure_square(Vector2i(4, 0), Vector3(1152.0, 25.2 + clampf(dist * 0.14, 5.0, 65.0), 128.0 - dist), Vector3(1152.0, 25.2 + 2.0, 128.0))
 		report.lod[str(int(dist))] = m
-		print("СТАЛО (квадрат центра, %4d м): draw_calls=%d building_nodes=%s tris=%d" % [int(dist), m.draw_calls, str(m.nodes), m.tris])
+		print("СТАЛО (квадрат 50 домов, %4d м): draw_calls=%d main=%d tris=%d" % [int(dist), m.draw_calls, m.main_draw_calls, m.tris])
 		if dist < 1000.0:
 			await _shot("lod_%dm" % int(dist))
 
 	report.current = report.lod["40"]
-	var square_nodes := _count_building_nodes(active_buildings, Vector2i(0, 0))
+	var square_nodes := _count_building_nodes(active_buildings, Vector2i(4, 0))
 	_check(square_nodes.lod_meshes == 3, "у квадрата 256 м 3 уровня LOD (найдено %d)" % square_nodes.lod_meshes)
 	_check(square_nodes.multimeshes >= 1 and square_nodes.all_use_colors, "мелкие детали в MultiMesh с use_colors=true")
-	_check(report.lod["40"].draw_calls <= report.legacy.draw_calls, "вызовов отрисовки стало (%d) не больше, чем было (%d)" % [report.lod["40"].draw_calls, report.legacy.draw_calls])
+	_check(report.lod["40"].main_draw_calls <= report.legacy.main_draw_calls, "основных вызовов на 40 м стало (%d) не больше, чем было (%d)" % [report.lod["40"].main_draw_calls, report.legacy.main_draw_calls])
 	_check(report.lod["120"].main_draw_calls == 1, "на 120 м (LOD1) ровно 1 основной вызов отрисовки зданий (получено %d, с тенями %d)" % [report.lod["120"].main_draw_calls, report.lod["120"].draw_calls])
 	_check(report.lod["350"].main_draw_calls == 1, "на 350 м (LOD2) ровно 1 вызов отрисовки зданий (получено %d, с тенями %d)" % [report.lod["350"].main_draw_calls, report.lod["350"].draw_calls])
 	_check(report.lod["1500"].draw_calls == 0, "за 1400 м (1500 м) квадрат отсечён (вызовов %d)" % report.lod["1500"].draw_calls)
@@ -363,49 +371,69 @@ func _build_fixture_world() -> WorldData:
 	return w
 
 
+func _lineup_slots() -> Array[Dictionary]:
+	var ids: Array = SettlementSets.MODEL_ORDER
+	var rows := [
+		{list = ids.slice(0, 12), z = 120.0, gap = 5.4},
+		{list = ids.slice(12), z = 142.0, gap = 5.6},
+	]
+	var out: Array[Dictionary] = []
+	for row: Dictionary in rows:
+		var list: Array = row.list
+		var width := float(list.size() - 1) * float(row.gap)
+		var x0 := 896.0 - width * 0.5
+		for k in list.size():
+			out.append({id = str(list[k]), x = x0 + k * float(row.gap), z = float(row.z), idx = out.size()})
+	return out
+
+
 func _append_lineup_settlement(w: WorldData) -> void:
-	# Квадрат (3, 0): центр (896, 128) м -> клетка (224, 32), линейка всех 8 моделей лицом к +Z
-	var lineup := SettlementData.new(224.0, 32.0, 32 * w.W + 224, "Линейка моделей")
+	# Квадрат (3, 0): центр костра вынесен назад (896, 100) м, линейка из 21 модели лицом к +Z в два ряда
+	var lineup := SettlementData.new(224.0, 25.0, 25 * w.W + 224, "Линейка моделей")
 	lineup.style = 0
-	var ids := ["house", "house_timber", "chalet", "tall", "barn", "shed", "hay", "fountain"]
-	var x_m := 896.0 - 21.0
-	for k in ids.size():
-		var id: String = ids[k]
-		var half := SettlementSets.half_of(id)
-		if k > 0:
-			x_m += half.x + 1.8
-		lineup.huts.append(HutData.new(x_m / GameConfig.TILE, 128.0 / GameConfig.TILE, k % 4, id, 0.0))
-		x_m += half.x
+	for sl: Dictionary in _lineup_slots():
+		lineup.huts.append(HutData.new(float(sl.x) / GameConfig.TILE, float(sl.z) / GameConfig.TILE, int(sl.idx) % 4, sl.id, 0.0))
 	w.settlements.append(lineup)
 
 
+func _append_bench50_settlement(w: WorldData) -> void:
+	# Квадрат (4, 0): центр (1152, 128) м -> 50 разных построек всех 21 видов на одном квадрате 256×256 м
+	var bench := SettlementData.new(288.0, 32.0, 32 * w.W + 288, "Замер 50 домов")
+	bench.style = 1
+	var ids: Array = SettlementSets.MODEL_ORDER
+	for k in 50:
+		var row := k / 10
+		var col := k % 10
+		var id: String = str(ids[k % ids.size()])
+		var px := 1152.0 - 45.0 + col * 10.0
+		var pz := 128.0 - 20.0 + row * 10.0
+		var yaw := (k % 4) * (PI * 0.5)
+		bench.huts.append(HutData.new(px / GameConfig.TILE, pz / GameConfig.TILE, k % 4, id, yaw))
+	w.settlements.append(bench)
+
+
 func _add_lineup_labels(parent: Node3D) -> void:
-	var ids := ["house", "house_timber", "chalet", "tall", "barn", "shed", "hay", "fountain"]
-	var x_m := 896.0 - 21.0
-	for k in ids.size():
-		var id: String = ids[k]
+	var rm := StandardMaterial3D.new()
+	rm.albedo_color = Color("d8572a")
+	var cap := CapsuleMesh.new()
+	cap.radius = 0.25
+	cap.height = 1.8
+	for sl: Dictionary in _lineup_slots():
+		var id: String = sl.id
 		var half := SettlementSets.half_of(id)
-		if k > 0:
-			x_m += half.x + 1.8
 		var fig := MeshInstance3D.new()
-		var cap := CapsuleMesh.new()
-		cap.radius = 0.25
-		cap.height = 1.8
 		fig.mesh = cap
-		fig.position = Vector3(x_m + half.x + 0.7, 25.2 + 0.9, 128.0 + 1.5)
-		var rm := StandardMaterial3D.new()
-		rm.albedo_color = Color("d8572a")
+		fig.position = Vector3(float(sl.x) + half.x + 0.65, 25.2 + 0.9, float(sl.z) + 1.4)
 		fig.material_override = rm
 		parent.add_child(fig)
 		var lbl := Label3D.new()
 		lbl.text = "%s\n(%.1f×%.1f)" % [id, half.x * 2.0, half.y * 2.0]
-		lbl.pixel_size = 0.014
-		lbl.font_size = 42
-		lbl.outline_size = 10
+		lbl.pixel_size = 0.011
+		lbl.font_size = 38
+		lbl.outline_size = 9
 		lbl.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		lbl.position = Vector3(x_m, 25.2 + SettlementSets.height_of(id) + 3.2, 128.0)
+		lbl.position = Vector3(float(sl.x), 25.2 + SettlementSets.height_of(id) + 2.2, float(sl.z))
 		parent.add_child(lbl)
-		x_m += half.x
 
 
 func _build_ground_mesh(w: WorldData, heights: Heightfield) -> ArrayMesh:

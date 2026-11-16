@@ -200,16 +200,42 @@ static func _add_flower_details(batch: MeshBatch, at: Transform3D, model_id: Str
 		"house":
 			for wx: float in [-half.x * 0.62, half.x * 0.62]:
 				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 0.90, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"house_wing":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.56, 0.87, half.y + 0.11)), Color.WHITE, cutout_mat)
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x + 0.42, 0.75, 1.09)), Color.WHITE, cutout_mat)
+		"house_steep":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(0.68, 0.70, half.y + 0.11)), Color.WHITE, cutout_mat)
 		"house_timber":
 			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.56, 1.07, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"cabin_long":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(0.65, 0.97, 0.95)), Color.WHITE, cutout_mat)
+		"cabin_porch":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.58, 1.35, half.y + 0.11)), Color.WHITE, cutout_mat)
 		"chalet":
 			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.50, 0.83, half.y + 0.11)), Color.WHITE, cutout_mat)
 			for bx: float in [-1.4, 0.0, 1.4]:
 				batch.add_detail(flower_mesh, at.translated_local(Vector3(bx, 2.90, half.y + 0.98)), Color.WHITE, cutout_mat)
+		"chalet_terrace":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.50, 0.83, half.y + 0.11)), Color.WHITE, cutout_mat)
+			for wx: float in [-half.x * 0.48, half.x * 0.48]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 2.68, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"chalet_stone":
+			for wx: float in [-half.x * 0.62, half.x * 0.62]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 0.80, half.y + 0.11)), Color.WHITE, cutout_mat)
+			for bx: float in [-0.95, 0.95]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(bx, 2.92, half.y + 0.86)), Color.WHITE, cutout_mat)
 		"tall":
 			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.48, 0.90, half.y + 0.11)), Color.WHITE, cutout_mat)
 			for wx: float in [-half.x * 0.48, half.x * 0.48]:
 				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 3.12, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"tall_mansard":
+			for wx: float in [-half.x * 0.58, half.x * 0.58]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 0.85, half.y + 0.11)), Color.WHITE, cutout_mat)
+			for wx: float in [-half.x * 0.48, half.x * 0.48]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 2.75, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"tall_hall":
+			for wx: float in [-half.x * 0.65, 0.0, half.x * 0.65]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 2.89, half.y + 0.11)), Color.WHITE, cutout_mat)
 
 
 ## Прямоугольный блок с UV внутри выбранной ячейки общего атласа (для доски маршрутов и фонаря).
@@ -514,7 +540,7 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 			var foot := footing(heights, at, half)
 			var low := foot.x
 			var high := foot.y
-			at.origin.y = high if u.t in ["house", "house_timber", "chalet", "tall", "barn", "shelter"] else low
+			at.origin.y = high if (SettlementSets.is_home(u.t) or u.t in ["barn", "barn_loft", "boat_shed", "shelter"]) else low
 			top = maxf(top, at.origin.y)
 			if use_catalog and cat.settlements.has(u.t):
 				var entry: Dictionary = cat.settlements[u.t]

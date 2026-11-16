@@ -28,10 +28,21 @@ const SITE_SIZES := {
 	stone = {half = Vector2(0.35, 0.25), flat = 3.0, height = 2.0},
 }
 
+## Порядок моделей по категориям библиотеки (для линейки осмотра и отчётов).
+const MODEL_ORDER := [
+	"house", "house_wing", "house_steep",
+	"house_timber", "cabin_long", "cabin_porch",
+	"chalet", "chalet_terrace", "chalet_stone",
+	"tall", "tall_mansard", "tall_hall",
+	"barn", "barn_loft", "shed", "hay",
+	"fountain", "well_canopy", "market_stall", "boat_shed", "woodpile_rack",
+]
+
 ## Реестр построек поселений по строковым именам.
 ## category: "home" (жилой дом), "outbuilding" (хозпостройка), "landmark" (характерный объект).
 ## size: ключ из SIZE_CLASSES. glb: путь к модели в формате GLB.
 const MODELS := {
+	# --- Небольшие жилые дома (3) ---
 	house = {
 		size = "small",
 		category = "home",
@@ -40,22 +51,79 @@ const MODELS := {
 		form_v = 0,
 		title = "малый оштукатуренный дом",
 	},
+	house_wing = {
+		size = "small",
+		category = "home",
+		glb = "res://resources/models/settlements/house_wing.glb",
+		base = "house",
+		form_v = 1,
+		height = 3.2,
+		title = "малый дом с боковой пристройкой",
+	},
+	house_steep = {
+		size = "small",
+		category = "home",
+		glb = "res://resources/models/settlements/house_steep.glb",
+		base = "house",
+		form_v = 2,
+		height = 3.9,
+		title = "дом с крутой кровлей и люкарной",
+	},
+	# --- Лесные дома / срубы (3) ---
 	house_timber = {
 		size = "small",
 		category = "home",
 		glb = "res://resources/models/settlements/house_timber.glb",
 		base = "house",
 		form_v = 1,
-		title = "малый бревенчатый сруб с навесом",
+		title = "компактный сруб с дровяным навесом",
 	},
+	cabin_long = {
+		size = "small",
+		category = "home",
+		glb = "res://resources/models/settlements/cabin_long.glb",
+		base = "house",
+		form_v = 2,
+		height = 3.0,
+		title = "вытянутый сруб с крытой галереей",
+	},
+	cabin_porch = {
+		size = "small",
+		category = "home",
+		glb = "res://resources/models/settlements/cabin_porch.glb",
+		base = "house",
+		form_v = 3,
+		height = 3.7,
+		title = "высокий таёжный сруб на подклете с крыльцом",
+	},
+	# --- Горные шале (3) ---
 	chalet = {
 		size = "large",
 		category = "home",
 		glb = "res://resources/models/settlements/chalet.glb",
 		base = "chalet",
 		form_v = 0,
-		title = "горное шале с балконом",
+		title = "горное шале с передним балконом",
 	},
+	chalet_terrace = {
+		size = "large",
+		category = "home",
+		glb = "res://resources/models/settlements/chalet_terrace.glb",
+		base = "chalet",
+		form_v = 1,
+		height = 4.6,
+		title = "альпийское шале с боковой террасой и лестницей",
+	},
+	chalet_stone = {
+		size = "large",
+		category = "home",
+		glb = "res://resources/models/settlements/chalet_stone.glb",
+		base = "chalet",
+		form_v = 2,
+		height = 4.9,
+		title = "каменно-деревянное шале с контрфорсами",
+	},
+	# --- Крупные жилые и общественные дома (3) ---
 	tall = {
 		size = "medium",
 		category = "home",
@@ -64,13 +132,41 @@ const MODELS := {
 		form_v = 0,
 		title = "высокий двухэтажный дом",
 	},
+	tall_mansard = {
+		size = "medium",
+		category = "home",
+		glb = "res://resources/models/settlements/tall_mansard.glb",
+		base = "tall",
+		form_v = 1,
+		height = 5.4,
+		title = "крупный дом с ломаной мансардной крышей",
+	},
+	tall_hall = {
+		size = "large",
+		category = "home",
+		glb = "res://resources/models/settlements/tall_hall.glb",
+		base = "tall",
+		form_v = 2,
+		height = 7.4,
+		title = "общественный дом центра с башенкой-звонницей",
+	},
+	# --- Сараи и хозяйственные строения (4) ---
 	barn = {
 		size = "barn",
 		category = "outbuilding",
 		glb = "res://resources/models/settlements/barn.glb",
 		base = "barn",
 		form_v = 0,
-		title = "закрытый сарай",
+		title = "закрытый хозяйственный сарай",
+	},
+	barn_loft = {
+		size = "barn",
+		category = "outbuilding",
+		glb = "res://resources/models/settlements/barn_loft.glb",
+		base = "barn",
+		form_v = 1,
+		height = 3.5,
+		title = "сарай-сеновал с клювом и боковым навесом",
 	},
 	shed = {
 		size = "shed",
@@ -78,7 +174,7 @@ const MODELS := {
 		glb = "res://resources/models/settlements/shed.glb",
 		base = "shed",
 		form_v = 0,
-		title = "дровяной навес",
+		title = "открытый дровяной навес",
 	},
 	hay = {
 		size = "hay",
@@ -86,15 +182,52 @@ const MODELS := {
 		glb = "res://resources/models/settlements/hay.glb",
 		base = "hay",
 		form_v = 0,
-		title = "стог / сеновал",
+		title = "стог сена на поддоне",
 	},
+	# --- Характерные объекты (5) ---
 	fountain = {
 		size = "fountain",
 		category = "landmark",
 		glb = "res://resources/models/settlements/fountain.glb",
 		base = "fountain",
 		form_v = 0,
-		title = "колодец-корыто",
+		title = "каменный колодец-корыто",
+	},
+	well_canopy = {
+		size = "hay",
+		category = "landmark",
+		glb = "res://resources/models/settlements/well_canopy.glb",
+		base = "fountain",
+		form_v = 1,
+		height = 2.6,
+		title = "деревянный колодец под шатром с воротом",
+	},
+	market_stall = {
+		size = "shed",
+		category = "landmark",
+		glb = "res://resources/models/settlements/market_stall.glb",
+		base = "shed",
+		form_v = 1,
+		height = 2.5,
+		title = "торговый навес с прилавком и товарами",
+	},
+	boat_shed = {
+		size = "barn",
+		category = "landmark",
+		glb = "res://resources/models/settlements/boat_shed.glb",
+		base = "barn",
+		form_v = 2,
+		height = 2.9,
+		title = "прибрежный лодочный навес с сетями",
+	},
+	woodpile_rack = {
+		size = "shed",
+		category = "landmark",
+		glb = "res://resources/models/settlements/woodpile_rack.glb",
+		base = "shed",
+		form_v = 2,
+		height = 1.9,
+		title = "крытая поленница с козлами и колодой",
 	},
 }
 
@@ -103,46 +236,79 @@ const MODELS := {
 ## вероятность и веса хозпостроек, а также 1–2 характерных объекта.
 const SETS := {
 	center = {
-		homes = [["house", 0.35], ["house_timber", 0.15], ["chalet", 0.30], ["tall", 0.20]],
-		plaza_homes = [["tall", 0.60], ["chalet", 0.25], ["house", 0.15]],
+		homes = [
+			["house", 0.22], ["house_wing", 0.14], ["house_steep", 0.14],
+			["tall", 0.16], ["tall_mansard", 0.16], ["chalet", 0.10], ["chalet_terrace", 0.08],
+		],
+		plaza_homes = [
+			["tall", 0.28], ["tall_mansard", 0.26], ["tall_hall", 0.18],
+			["chalet", 0.12], ["chalet_terrace", 0.08], ["house_steep", 0.08],
+		],
 		outbuilding_chance = 0.60,
-		outbuildings = [["barn", 0.45], ["shed", 0.35], ["hay", 0.20]],
-		landmarks = [{id = "fountain", chance = 1.0}],
+		outbuildings = [["barn", 0.30], ["barn_loft", 0.25], ["shed", 0.25], ["hay", 0.20]],
+		landmarks = [{id = "fountain", chance = 1.0}, {id = "market_stall", chance = 0.85}],
 	},
 	coastal = {
-		homes = [["house", 0.50], ["house_timber", 0.20], ["chalet", 0.20], ["tall", 0.10]],
-		plaza_homes = [["tall", 0.35], ["house", 0.45], ["chalet", 0.20]],
-		outbuilding_chance = 0.40,
-		outbuildings = [["shed", 0.60], ["barn", 0.25], ["hay", 0.15]],
-		landmarks = [{id = "fountain", chance = 0.70}],
+		homes = [
+			["house", 0.28], ["house_wing", 0.18], ["house_timber", 0.16],
+			["cabin_long", 0.14], ["house_steep", 0.12], ["tall", 0.06], ["tall_mansard", 0.06],
+		],
+		plaza_homes = [
+			["tall_mansard", 0.22], ["tall", 0.18], ["house_wing", 0.24],
+			["house", 0.22], ["chalet_terrace", 0.14],
+		],
+		outbuilding_chance = 0.42,
+		outbuildings = [["shed", 0.48], ["barn", 0.20], ["barn_loft", 0.17], ["hay", 0.15]],
+		landmarks = [{id = "boat_shed", chance = 0.85}, {id = "fountain", chance = 0.60}],
 	},
 	forest = {
-		homes = [["house_timber", 0.55], ["chalet", 0.30], ["house", 0.15]],
-		plaza_homes = [["chalet", 0.45], ["house_timber", 0.45], ["tall", 0.10]],
+		homes = [
+			["house_timber", 0.32], ["cabin_long", 0.28], ["cabin_porch", 0.22],
+			["house_steep", 0.10], ["house", 0.08],
+		],
+		plaza_homes = [
+			["cabin_porch", 0.36], ["house_timber", 0.28], ["cabin_long", 0.22], ["house_steep", 0.14],
+		],
 		outbuilding_chance = 0.55,
-		outbuildings = [["shed", 0.55], ["barn", 0.25], ["hay", 0.20]],
-		landmarks = [{id = "fountain", chance = 0.35}],
+		outbuildings = [["shed", 0.45], ["barn", 0.20], ["barn_loft", 0.15], ["hay", 0.20]],
+		landmarks = [{id = "woodpile_rack", chance = 0.70}, {id = "well_canopy", chance = 0.45}],
 	},
 	foothill = {
-		homes = [["chalet", 0.55], ["house_timber", 0.25], ["house", 0.20]],
-		plaza_homes = [["chalet", 0.65], ["tall", 0.20], ["house_timber", 0.15]],
+		homes = [
+			["chalet", 0.26], ["chalet_terrace", 0.22], ["chalet_stone", 0.22],
+			["house_wing", 0.14], ["house_steep", 0.10], ["house_timber", 0.06],
+		],
+		plaza_homes = [
+			["chalet_stone", 0.32], ["chalet", 0.28], ["chalet_terrace", 0.24], ["tall", 0.16],
+		],
 		outbuilding_chance = 0.55,
-		outbuildings = [["barn", 0.35], ["shed", 0.40], ["hay", 0.25]],
-		landmarks = [{id = "fountain", chance = 0.65}],
+		outbuildings = [["barn", 0.25], ["barn_loft", 0.25], ["shed", 0.30], ["hay", 0.20]],
+		landmarks = [{id = "fountain", chance = 0.65}, {id = "woodpile_rack", chance = 0.40}],
 	},
 	remote = {
-		homes = [["house_timber", 0.55], ["house", 0.30], ["chalet", 0.15]],
-		plaza_homes = [["house_timber", 0.60], ["chalet", 0.25], ["house", 0.15]],
+		homes = [
+			["cabin_porch", 0.30], ["cabin_long", 0.28], ["house_timber", 0.22],
+			["chalet_stone", 0.12], ["house", 0.08],
+		],
+		plaza_homes = [
+			["cabin_porch", 0.40], ["chalet_stone", 0.25], ["house_timber", 0.20], ["cabin_long", 0.15],
+		],
 		outbuilding_chance = 0.55,
-		outbuildings = [["shed", 0.60], ["hay", 0.25], ["barn", 0.15]],
-		landmarks = [{id = "fountain", chance = 0.15}],
+		outbuildings = [["shed", 0.55], ["hay", 0.25], ["barn", 0.20]],
+		landmarks = [{id = "woodpile_rack", chance = 0.60}],
 	},
 	ordinary = {
-		homes = [["house", 0.50], ["house_timber", 0.20], ["chalet", 0.30]],
-		plaza_homes = [["house", 0.45], ["chalet", 0.35], ["tall", 0.20]],
-		outbuilding_chance = 0.45,
-		outbuildings = [["barn", 0.35], ["shed", 0.40], ["hay", 0.25]],
-		landmarks = [{id = "fountain", chance = 0.40}],
+		homes = [
+			["house", 0.28], ["house_wing", 0.20], ["house_steep", 0.16],
+			["house_timber", 0.14], ["cabin_long", 0.12], ["tall", 0.10],
+		],
+		plaza_homes = [
+			["house_wing", 0.25], ["house", 0.22], ["house_steep", 0.20],
+			["tall_mansard", 0.18], ["chalet", 0.15],
+		],
+		outbuilding_chance = 0.48,
+		outbuildings = [["barn", 0.25], ["barn_loft", 0.22], ["shed", 0.33], ["hay", 0.20]],
+		landmarks = [{id = "well_canopy", chance = 0.55}, {id = "fountain", chance = 0.35}],
 	},
 }
 
@@ -217,7 +383,7 @@ static func height_of(id: String, v: int = 0) -> float:
 	if catalog_meta.has(id):
 		return catalog_meta[id].height
 	if MODELS.has(id):
-		return SIZE_CLASSES[MODELS[id].size].height
+		return float(MODELS[id].get("height", SIZE_CLASSES[MODELS[id].size].height))
 	if SITE_SIZES.has(id):
 		return SITE_SIZES[id].height
 	return 2.0
@@ -279,6 +445,6 @@ static func outbuilding_chance(set_kind: String, s: SettlementData) -> float:
 static func pick_outbuilding(set_kind: String, s: SettlementData, u: float) -> String:
 	var ch: String = EntityCodec.value(s, "character", "")
 	if ch.begins_with("земледель") or ch.begins_with("торгов"):
-		return pick_weighted([["barn", 0.45], ["hay", 0.30], ["shed", 0.25]], u)
+		return pick_weighted([["barn", 0.30], ["barn_loft", 0.25], ["hay", 0.25], ["shed", 0.20]], u)
 	var spec: Dictionary = SETS.get(set_kind, SETS.ordinary)
 	return pick_weighted(spec.outbuildings, u)

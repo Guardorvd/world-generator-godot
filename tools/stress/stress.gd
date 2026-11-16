@@ -61,6 +61,7 @@ var _process_probe: RefCounted # ProcessMetrics (C#): сборки мусора 
 func _initialize() -> void:
 	Heightfield.allow_native_ride = not "--no-native-ride" in args
 	Heightfield.verify_native_ride = "--verify-ride" in args
+	SettlementsBuilder.use_legacy = "--legacy-settlements" in args
 	var groups := _groups()
 	preload("res://tools/watchdog.gd").arm(self, 30.0 if "--compare" in args else (540.0 if "world" in groups else 150.0))
 	_run.call_deferred(groups)

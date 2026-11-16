@@ -257,12 +257,29 @@ static func capacity(w: WorldData, ground: Heightfield, river: PackedByteArray, 
 	return _lay_out_one(w, ground, river, s, true).size()
 
 
+static func _plaza_radius(set_kind: String, town: bool) -> float:
+	match set_kind:
+		"center":
+			return 2.55 if town else 2.10
+		"ordinary", "coastal":
+			return 2.10 if town else 1.65
+		"forest":
+			return 2.05
+		"foothill":
+			return 1.80
+		"remote":
+			return 1.35
+	return 2.4 if town else 1.9
+
+
 static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArray, s: SettlementData, homes_only: bool) -> Array[HutData]:
 	var W := w.W
 	var rng := WGRandom.at(w.seed_num, "settlement.layout", floori(s.x), floori(s.y))
 	var town: bool = s.town
-	var plaza := 2.4 if town else 1.9
+	var set_kind := SettlementSets.kind_of(w, s)
+	var plaza := _plaza_radius(set_kind, town)
 	var slots: Array = [] # Vector4(порядок, x, y, поворот)
+
 	# Улицы: клетки путей вокруг площади; направление улицы — главная ось соседних клеток пути
 	for y in range(floori(s.y - LAYOUT_R), ceili(s.y + LAYOUT_R)):
 		for x in range(floori(s.x - LAYOUT_R), ceili(s.x + LAYOUT_R)):
@@ -289,20 +306,30 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 				for row in 2:
 					var p := c + n * side * (1.75 + row * 2.5) + t * (rng.next_float() - 0.5) * 0.6
 					var face := -n * side
-					var order := p.distance_to(Vector2(s.x, s.y)) + row * 2.2 + rng.next_float() * 0.8
+					var dist_s := p.distance_to(Vector2(s.x, s.y))
+					var order := dist_s + row * 2.2 + rng.next_float() * 0.8
+					if set_kind in ["ordinary", "coastal"]:
+						order = row * 4.2 + dist_s * 0.45 + rng.next_float() * 0.6
+						if set_kind == "coastal" and p.x >= 0.0 and p.y >= 0.0 and floori(p.x) < W and floori(p.y) < w.H:
+							var dw: float = w.dist_water[floori(p.y) * W + floori(p.x)]
+							if dw >= 1.2 and dw <= 5.5:
+								order -= 1.8
+					elif set_kind == "forest":
+						order = dist_s + row * 2.8 + 1.4 + rng.next_float() * 0.9
+					elif set_kind == "foothill":
+						order = dist_s * 0.85 + row * 2.4 + 0.8 + rng.next_float() * 0.8
+					elif set_kind == "remote":
+						order = dist_s + row * 3.0 + 1.8 + rng.next_float() * 0.8
 					slots.append(Vector4(order, p.x, p.y, atan2(face.x, face.y)))
-	# Кольцо у площади: запас на случай, если улиц мало; дома дверью к костру
-	for k in 24:
-		var a := TAU * k / 24.0 + rng.next_float() * 0.2
-		var r := plaza + 0.3 + rng.next_float() * 3.2
-		var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
-		slots.append(Vector4(r + 3.0 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
-	# Vector4 сортируется встроенным сравнением: сначала ближние к площади места первого ряда
+
+	_add_composition_slots(slots, w, ground, s, set_kind, plaza, rng)
+	# Vector4 сортируется встроенным сравнением: сначала ближние к приоритетным зонам места
 	slots.sort()
+
 	var huts: Array[HutData] = []
-	var set_kind := SettlementSets.kind_of(w, s)
 	var homes: int = s.homes
 	var placed := 0
+	var need_hall := (set_kind == "center" and town)
 	for sl: Vector4 in slots:
 		if placed >= homes:
 			break
@@ -310,51 +337,172 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 		var r := p.distance_to(Vector2(s.x, s.y))
 		if r < plaza or r > LAYOUT_R - 1.0:
 			continue
-		var kind := _house_kind(s, r - plaza, rng.next_float(), set_kind)
+		var kind := "tall_hall" if need_hall else _house_kind(s, r - plaza, rng.next_float(), set_kind)
+		if need_hall and (_crowded(huts, p, 2.25) or not _fits(w, ground, river, p, sl.w, kind)):
+			kind = _house_kind(s, r - plaza, rng.next_float(), set_kind)
 		if _crowded(huts, p, 1.95) or not _fits(w, ground, river, p, sl.w, kind):
 			continue
+		if kind == "tall_hall":
+			need_hall = false
 		var variant := floori(rng.next_float() * 4)
-		# Небольшой разворот проверяется тем же фундаментом; не встаёт — дом остаётся на проверенном угле.
-		# Порядок чисел rng прежний: соседние дома и сараи не сдвигаются.
-		var angle := sl.w + (rng.next_float() - 0.5) * 0.12
+		var yaw_spread := 0.30 if set_kind in ["forest", "remote"] else 0.12
+		var angle := sl.w + (rng.next_float() - 0.5) * yaw_spread
 		if not _fits(w, ground, river, p, angle, kind):
 			angle = sl.w
 		huts.append(HutData.new(p.x, p.y, variant, kind, angle))
 		placed += 1
 	if homes_only:
 		return huts
+
 	# Хозяйственный пояс: за частью домов, дальше от улицы — по набору вида поселения (SettlementSets)
 	var chance := SettlementSets.outbuilding_chance(set_kind, s)
+	var out_dist := 1.68 if set_kind == "remote" else 1.90
 	for h in placed:
 		var u: HutData = huts[h]
 		if rng.next_float() > chance:
 			continue
 		var back := Vector2(-sin(u.a), -cos(u.a))
-		var side := Vector2(back.y, -back.x) * (rng.next_float() - 0.5) * 1.4
-		var p := Vector2(u.x, u.y) + back * (1.9 + rng.next_float() * 0.5) + side
+		var side := Vector2(back.y, -back.x) * (rng.next_float() - 0.5) * (1.8 if set_kind in ["forest", "remote"] else 1.4)
+		var p := Vector2(u.x, u.y) + back * (out_dist + rng.next_float() * 0.5) + side
 		var kind := SettlementSets.pick_outbuilding(set_kind, s, rng.next_float())
-		var a: float = u.a + (PI / 2.0 if kind == "barn" and rng.next_float() < 0.5 else 0.0)
+		var a: float = u.a + (PI / 2.0 if kind in ["barn", "barn_loft"] and rng.next_float() < 0.5 else 0.0)
 		if p.distance_to(Vector2(s.x, s.y)) > LAYOUT_R - 0.3 or _crowded(huts, p, 1.45) or not _fits(w, ground, river, p, a, kind):
 			continue
 		huts.append(HutData.new(p.x, p.y, floori(rng.next_float() * 4), kind, a))
-	# Характерные объекты на краю площади, со стороны, дальней от путей
+
+	# Характерные объекты на площади, у берега или на краю дворов
 	var landmarks: Array = SettlementSets.SETS.get(set_kind, SettlementSets.SETS.ordinary).get("landmarks", [])
 	for lm: Dictionary in landmarks:
 		if town or rng.next_float() < float(lm.get("chance", 0.4)):
-			var best := -1.0
-			var spot := Vector2.ZERO
-			for k in 8:
-				var a := TAU * k / 8.0
-				var p := Vector2(s.x + cos(a) * 1.4, s.y + sin(a) * 1.4)
-				var j := floori(p.y) * W + floori(p.x)
-				var free := 0.0 if w.path_mask[j] >= 2 else 1.0 + float(not _crowded(huts, p, 1.3))
-				if free > best:
-					best = free
-					spot = p
-			var lm_id := str(lm.id)
-			if best >= 2.0 and _fits(w, ground, river, spot, atan2(s.x - spot.x, s.y - spot.y), lm_id):
-				huts.append(HutData.new(spot.x, spot.y, 0, lm_id, atan2(s.x - spot.x, s.y - spot.y)))
+			_place_landmark(w, ground, river, s, huts, str(lm.id))
 	return huts
+
+
+static func _add_composition_slots(slots: Array, w: WorldData, ground: Heightfield, s: SettlementData,
+		set_kind: String, plaza: float, rng: WGRandom) -> void:
+	var W := w.W
+	match set_kind:
+		"center":
+			# Парадное кольцо вокруг центральной площади + внешнее кольцо кварталов
+			for k in 16:
+				var a := TAU * k / 16.0 + rng.next_float() * 0.16
+				var r := plaza + 0.25 + rng.next_float() * 0.75
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				slots.append(Vector4(r * 0.82 + rng.next_float() * 0.5, p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+			for k in 16:
+				var a := TAU * k / 16.0 + 0.2 + rng.next_float() * 0.2
+				var r := plaza + 1.4 + rng.next_float() * 2.3
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				slots.append(Vector4(r + 3.2 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+		"forest":
+			# Живописная несимметричная расстановка на лесных полянах
+			var ang := rng.next_float() * TAU
+			for k in 22:
+				ang += (TAU / 22.0) * (0.45 + rng.next_float() * 1.10)
+				var r := plaza + 0.15 + rng.next_float() * 3.45
+				var p := Vector2(s.x + cos(ang) * r, s.y + sin(ang) * r)
+				var face := atan2(s.x - p.x, s.y - p.y) + (rng.next_float() - 0.5) * 0.55
+				slots.append(Vector4(r * 0.95 + rng.next_float() * 1.6, p.x, p.y, face))
+		"foothill":
+			# Ступенчатые террасы вдоль горизонталей склона на 3 уступах
+			var gx := ground.ground_at((s.x + 2.0) * GameConfig.TILE, s.y * GameConfig.TILE) - ground.ground_at((s.x - 2.0) * GameConfig.TILE, s.y * GameConfig.TILE)
+			var gz := ground.ground_at(s.x * GameConfig.TILE, (s.y + 2.0) * GameConfig.TILE) - ground.ground_at(s.x * GameConfig.TILE, (s.y - 2.0) * GameConfig.TILE)
+			var grad := Vector2(-gx, -gz)
+			if grad.length() < 0.05:
+				var fallback_a := rng.next_float() * TAU
+				grad = Vector2(cos(fallback_a), sin(fallback_a))
+			else:
+				grad = grad.normalized()
+			var contour := Vector2(-grad.y, grad.x)
+			for tier: int in [-1, 0, 1]:
+				for step: int in [-2, -1, 0, 1, 2]:
+					if tier == 0 and step == 0:
+						continue
+					var p := Vector2(s.x, s.y) + grad * (float(tier) * 2.45 + (rng.next_float() - 0.5) * 0.45) \
+						+ contour * (float(step) * 2.10 + (rng.next_float() - 0.5) * 0.45)
+					var to_center := Vector2(s.x - p.x, s.y - p.y)
+					var aim := (grad * 0.65 + (to_center.normalized() if to_center.length() > 0.1 else Vector2.ZERO) * 0.35).normalized()
+					var order := absf(float(step)) * 0.90 + float(tier + 1) * 0.60 + rng.next_float() * 0.65
+					slots.append(Vector4(order, p.x, p.y, atan2(aim.x, aim.y)))
+			for k in 16:
+				var a := TAU * k / 16.0 + rng.next_float() * 0.2
+				var r := plaza + 0.5 + rng.next_float() * 3.0
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				slots.append(Vector4(r + 3.8 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+		"remote":
+			# Тесный хутор / заимка: доминирующий дом у костра и компактная дуга построек
+			var anchor := rng.next_float() * TAU
+			var main_r := plaza + 0.22
+			var main_p := Vector2(s.x + cos(anchor) * main_r, s.y + sin(anchor) * main_r)
+			slots.append(Vector4(0.4 + rng.next_float() * 0.2, main_p.x, main_p.y, atan2(s.x - main_p.x, s.y - main_p.y)))
+			for k in 10:
+				var a := anchor + (rng.next_float() - 0.5) * 2.1
+				var r := plaza + 0.8 + rng.next_float() * 2.3
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				slots.append(Vector4(1.5 + r * 0.65 + rng.next_float() * 0.5, p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+			for k in 16:
+				var a := TAU * k / 16.0 + rng.next_float() * 0.2
+				var r := plaza + 0.4 + rng.next_float() * 3.2
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				slots.append(Vector4(r + 4.8 + rng.next_float(), p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+		_:
+			# ordinary / coastal: запасное кольцо после придорожных слотов
+			for k in 24:
+				var a := TAU * k / 24.0 + rng.next_float() * 0.2
+				var r := plaza + 0.3 + rng.next_float() * 3.2
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				var order := r + 5.2 + rng.next_float()
+				if set_kind == "coastal" and p.x >= 0.0 and p.y >= 0.0 and floori(p.x) < W and floori(p.y) < w.H:
+					var dw: float = w.dist_water[floori(p.y) * W + floori(p.x)]
+					if dw >= 1.2 and dw <= 5.5:
+						order -= 1.5
+				slots.append(Vector4(order, p.x, p.y, atan2(s.x - p.x, s.y - p.y)))
+
+
+static func _place_landmark(w: WorldData, ground: Heightfield, river: PackedByteArray, s: SettlementData,
+		huts: Array[HutData], lm_id: String) -> void:
+	var W := w.W
+	if lm_id == "boat_shed":
+		var best_score := INF
+		var best_spot := Vector2.ZERO
+		var best_yaw := 0.0
+		for r: float in [2.6, 3.8]:
+			for k in 16:
+				var a := TAU * k / 16.0
+				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+				var cx := clampi(floori(p.x), 0, W - 1)
+				var cy := clampi(floori(p.y), 0, w.H - 1)
+				var j := cy * W + cx
+				if w.path_mask[j] >= 2 or _crowded(huts, p, 1.85):
+					continue
+				var yaw := atan2(s.x - p.x, s.y - p.y)
+				if not _fits(w, ground, river, p, yaw, lm_id):
+					continue
+				var dw: float = w.dist_water[j] if not w.dist_water.is_empty() else 10.0
+				if dw < best_score:
+					best_score = dw
+					best_spot = p
+					best_yaw = yaw
+		if best_score < INF:
+			huts.append(HutData.new(best_spot.x, best_spot.y, 0, lm_id, best_yaw))
+		return
+
+	var radii := [1.4, 2.2] if lm_id == "woodpile_rack" else [1.4]
+	for r: float in radii:
+		var best := -1.0
+		var spot := Vector2.ZERO
+		for k in 12:
+			var a := TAU * k / 12.0
+			var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)
+			var j := clampi(floori(p.y), 0, w.H - 1) * W + clampi(floori(p.x), 0, W - 1)
+			var free := 0.0 if w.path_mask[j] >= 2 else 1.0 + float(not _crowded(huts, p, 1.35))
+			if free > best:
+				best = free
+				spot = p
+		var yaw := atan2(s.x - spot.x, s.y - spot.y)
+		if best >= 2.0 and _fits(w, ground, river, spot, yaw, lm_id):
+			huts.append(HutData.new(spot.x, spot.y, 0, lm_id, yaw))
+			return
 
 
 ## Жилые дома (без сараев и колодца): непустой huts ещё не значит, что в поселении можно жить.
