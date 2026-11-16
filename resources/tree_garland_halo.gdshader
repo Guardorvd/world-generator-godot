@@ -68,6 +68,7 @@ void fragment() {
 	float window_fade = pow(clamp(1.0 - r2, 0.0, 1.0), 2.0);
 	float aura = (exp(-r2 * 4.0) * 0.55 + exp(-r2 * 13.0) * 0.45) * window_fade;
 	float mist_k = mix(0.0028, 0.0085, clamp(mist_weather.z, 0.0, 1.0));
-	float fog_trans = exp(-v_dist * mist_k);
+	// mist_weather.w = 1 — туман выключен в настройках: ореол не гасится дымкой
+	float fog_trans = mix(exp(-v_dist * mist_k), 1.0, clamp(mist_weather.w, 0.0, 1.0));
 	ALBEDO = v_color * aura * fog_trans;
 }

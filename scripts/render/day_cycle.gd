@@ -21,6 +21,7 @@ const CLOUD_SHADOW := 0.44      # насколько тень облака те�
 const CLOUD_WIND := Vector2(-1.92, -0.64)  # м/с: тени облаков бегут туда же, куда облака на небе
 const MIST_TOP := 45.0           # высота фоновой дымки низин, м
 const MIST_DENSITY := 0.0015     # фоновая густота при mist = 1
+const MIST_OFF := Vector4(0.0, 0.0, 0.0, 1.0)   # глобальный mist_weather при выключенном тумане (w = 1)
 const POLE := Vector3(0.0, 0.5736, -0.8192)   # ось вращения звёзд: 35° над севером, как в sky.gdshader
 const MOON_DAYS := 8.0           # ночей от полнолуния до полнолуния
 ## Вероятности редких явлений на одну ночь
@@ -242,6 +243,9 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 		var mist_wind := CLOUD_WIND * time * 0.08
 		RenderingServer.global_shader_parameter_set("mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
 		RenderingServer.global_shader_parameter_set("mist_tint", mist_tint)
+	else:
+		# w = 1: туман выключен в настройках; шейдеры с fog_disabled (ореол гирлянд) не гасят себя «своей дымкой»
+		RenderingServer.global_shader_parameter_set("mist_weather", MIST_OFF)
 	# 13.11: визуальный стиль подстраивает выдержку тонмаппера и насыщенность; база запоминается для смены стиля на паузе
 	VisualStyle.apply_day(env, s[7], lerpf(float(s[13]), 0.96, overcast))
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)

@@ -42,6 +42,12 @@ var _bulb_mesh: ArrayMesh
 var _halo_mesh: ArrayMesh
 
 var _lights: Array[Dictionary] = []
+# Буферы отбора якорей света: кадр за кадром переиспользуются, без новых массивов и словарей.
+var _pick_pos: Array[Vector3] = []
+var _pick_dist := PackedFloat32Array()
+var _pick_n := 0
+var _claimed: Array[bool] = []
+var _slot_target: Array[int] = []
 var _last_draw := -1
 var _last_night := 0.0
 
@@ -195,7 +201,8 @@ func update(
 	var wire_vis_r := wire_max + TreeGarlandsLayout.CLUSTER_RADIUS + 20.0
 	var bulb_vis_r := bulb_max + TreeGarlandsLayout.CLUSTER_RADIUS + 20.0
 	var halo_vis_r := max_vis + TreeGarlandsLayout.CLUSTER_RADIUS + 20.0
-	for entry: Dictionary in _loaded.values():
+	for cid: int in _loaded:
+		var entry: Dictionary = _loaded[cid]
 		var d := cam2.distance_to(entry.center)
 		if entry.wire != null:
 			entry.wire.visible = d <= wire_vis_r
@@ -531,47 +538,57 @@ func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, n
 		return
 
 	_ensure_light_pool()
-	var candidates: Array[Dictionary] = []
-	for entry: Dictionary in _loaded.values():
-		var anchors: PackedVector3Array = entry.light_anchors
+	# cap ближайших к игроку якорей (cap ≤ MAX_LIGHTS) — вставкой в отсортированный буфер, без сортировки и словарей.
+	if _pick_pos.size() != MAX_LIGHTS:
+		_pick_pos.resize(MAX_LIGHTS)
+		_pick_dist.resize(MAX_LIGHTS)
+		_claimed.resize(MAX_LIGHTS)
+	_slot_target.resize(_lights.size())
+	_pick_n = 0
+	for cid: int in _loaded:
+		var anchors: PackedVector3Array = _loaded[cid].light_anchors
 		for a in anchors:
 			var d := a.distance_to(player_pos)
-			if d <= LIGHT_RADIUS:
-				candidates.append({pos = a, dist = d})
-	candidates.sort_custom(func(x: Dictionary, y: Dictionary) -> bool: return x.dist < y.dist)
-	if candidates.size() > cap:
-		candidates.resize(cap)
-
-	var desired: Array[Vector3] = []
-	for c: Dictionary in candidates:
-		desired.append(c.pos)
+			if d > LIGHT_RADIUS:
+				continue
+			var at := _pick_n
+			while at > 0 and _pick_dist[at - 1] > d:
+				at -= 1
+			if at >= cap:
+				continue
+			var n := mini(_pick_n + 1, cap)
+			var j := n - 1
+			while j > at:
+				_pick_pos[j] = _pick_pos[j - 1]
+				_pick_dist[j] = _pick_dist[j - 1]
+				j -= 1
+			_pick_pos[at] = a
+			_pick_dist[at] = d
+			_pick_n = n
 
 	# Сначала оставляем слоты, которые уже сидят на нужных или близких якорях (гистерезис от перескока).
-	var claimed_desired: Array[bool] = []
-	claimed_desired.resize(desired.size())
-	var slot_target: Array[int] = []
-	slot_target.resize(_lights.size())
-	slot_target.fill(-1)
+	_claimed.fill(false)
+	_slot_target.fill(-1)
 
 	for si in mini(cap, _lights.size()):
 		var slot: Dictionary = _lights[si]
 		if not slot.has_anchor:
 			continue
-		for di in desired.size():
-			if claimed_desired[di]:
+		for di in _pick_n:
+			if _claimed[di]:
 				continue
-			if slot.anchor.distance_to(desired[di]) < LIGHT_HYSTERESIS:
-				claimed_desired[di] = true
-				slot_target[si] = di
+			if slot.anchor.distance_to(_pick_pos[di]) < LIGHT_HYSTERESIS:
+				_claimed[di] = true
+				_slot_target[si] = di
 				break
 
 	for si in mini(cap, _lights.size()):
-		if slot_target[si] != -1:
+		if _slot_target[si] != -1:
 			continue
-		for di in desired.size():
-			if not claimed_desired[di]:
-				claimed_desired[di] = true
-				slot_target[si] = di
+		for di in _pick_n:
+			if not _claimed[di]:
+				_claimed[di] = true
+				_slot_target[si] = di
 				break
 
 	var night_k := smoothstep(0.02, 0.42, night)
@@ -579,7 +596,7 @@ func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, n
 	for si in _lights.size():
 		var slot: Dictionary = _lights[si]
 		var l: OmniLight3D = slot.node
-		var tidx := slot_target[si]
+		var tidx := _slot_target[si]
 		if si >= cap or tidx == -1:
 			slot.energy = move_toward(slot.energy, 0.0, fade_rate)
 			l.light_energy = slot.energy
@@ -589,7 +606,7 @@ func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, n
 				slot.pending_swap = false
 			continue
 
-		var target_pos := desired[tidx]
+		var target_pos := _pick_pos[tidx]
 		if not slot.has_anchor:
 			slot.anchor = target_pos
 			slot.has_anchor = true
