@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 9 # каталог поселений (21 .glb модель по категориям, общий атлас, LOD0..LOD2, 16.11.2026)
+const VERSION := 10 # каталог поселений и памятников (21 модель + 7 мешей StageSites/вершин на общем атласе, MultiMesh деталей, 16.11.2026)
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}
@@ -12,7 +12,8 @@ const PATH := "res://resources/catalog/standard.res"
 @export var levels: Dictionary = {} # explicit model/part -> all LOD resources
 @export var settlements: Dictionary = {} # id -> {lods: [LOD0, LOD1, LOD2], size, category, half, flat, height}
 @export var settlement_textures: Array[Texture2D] = [] # [albedo atlas, emission atlas]
-@export var settlement_details: Dictionary = {} # flower_box, bench, fire_logs
+@export var settlement_details: Dictionary = {} # flower_box, bench, fire_logs, lantern_post, fence_section, wooden_jetty
+@export var site_lods: Dictionary = {} # id -> [LOD0, LOD1, LOD2] для вершин и сооружений StageSites
 static var _catalog: Resource
 
 static func get_catalog() -> Resource:

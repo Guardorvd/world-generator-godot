@@ -111,6 +111,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 
 	for s in w.settlements:
 		var style: int = EntityCodec.value(s, "style", 0)
+		var set_kind := SettlementSets.kind_of(w, s)
 		for hut in s.huts:
 			var kind: String = EntityCodec.value(hut, "t", "house")
 			var model_id := kind if settlements_lib.has(kind) else "house"
@@ -125,15 +126,9 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 			var lods: Array = entry.lods
 			for level in lods.size():
 				batch.add_lod(lods[level], at, mat_pair, level, tints, true)
-			if drop > 0.35:
-				var qdrop := ceili((drop + 0.15) * 10.0) / 10.0
-				var pkey := "%s|%.1f" % [model_id, qdrop]
-				if not extra_plinths.has(pkey):
-					extra_plinths[pkey] = SettlementModels.build_extra_plinth(half, -0.45, -qdrop)
-				var plinth_mesh: Mesh = extra_plinths[pkey]
-				for level in lods.size():
-					batch.add_lod(plinth_mesh, at, [opaque_mat], level, tints, false)
+			_add_extra_plinth(batch, extra_plinths, model_id, half, at, drop, opaque_mat, tints, lods.size())
 			_add_flower_details(batch, at, model_id, half, hut.v, details_lib, cutout_mat)
+		_add_courtyard_details(batch, w, heights, s, set_kind, details_lib, opaque_mat, rng)
 
 		# Костёр, скамьи, доска маршрутов
 		var fx: float = s.x * TILE
@@ -174,11 +169,13 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
 		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
 
-	var legacy_m := _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
-	_build_peaks(parent, w, heights, batch, legacy_m)
+	var site_lods: Dictionary = catalog.site_lods
+	var legacy_m := {} if not site_lods.is_empty() else _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
+	_build_peaks(parent, w, heights, batch, legacy_m, site_lods, opaque_mat)
 	_build_sites(parent, w, heights, batch, legacy_m, {
 		settlements = settlements_lib,
 		details = details_lib,
+		site_lods = site_lods,
 		mat_pair = mat_pair,
 		opaque = opaque_mat,
 		cutout = cutout_mat,
@@ -238,6 +235,96 @@ static func _add_flower_details(batch: MeshBatch, at: Transform3D, model_id: Str
 				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 2.89, half.y + 0.11)), Color.WHITE, cutout_mat)
 
 
+static func _add_courtyard_details(batch: MeshBatch, w: WorldData, heights: Heightfield, s: SettlementData,
+		set_kind: String, details_lib: Dictionary, opaque_mat: Material, rng: WGRandom) -> void:
+	if details_lib.has("lantern_post") and s.huts.size() > 0:
+		var bp := board_foot(s, heights)
+		var l_at := Transform3D(Basis(Vector3.UP, -PI / 4.0), bp).translated_local(Vector3(-1.45, 0.0, 0.0))
+		l_at.origin.y = heights.ground_at(l_at.origin.x, l_at.origin.z)
+		if heights.depth_at(l_at.origin.x, l_at.origin.z) <= 0.0:
+			batch.add_detail(details_lib.lantern_post, l_at, Color.WHITE, opaque_mat)
+		var want_extra := 2 if set_kind == "center" else (1 if set_kind != "remote" and s.homes > 0 else 0)
+		var fx: float = s.x * TILE
+		var fz: float = s.y * TILE
+		var placed_l := 0
+		for k in 8:
+			if placed_l >= want_extra:
+				break
+			var ang := TAU * k / 8.0 + 0.35
+			var px := fx + cos(ang) * 5.2
+			var pz := fz + sin(ang) * 5.2
+			var cx := clampi(floori(px / TILE), 0, w.W - 1)
+			var cy := clampi(floori(pz / TILE), 0, w.H - 1)
+			var j := cy * w.W + cx
+			if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or heights.depth_at(px, pz) > 0.0:
+				continue
+			if _too_close_to_huts(Vector2(px, pz), s.huts, 2.0):
+				continue
+			var py := heights.ground_at(px, pz)
+			batch.add_detail(details_lib.lantern_post, Transform3D(Basis(Vector3.UP, atan2(fx - px, fz - pz)), Vector3(px, py, pz)), Color.WHITE, opaque_mat)
+			placed_l += 1
+
+	if details_lib.has("fence_section") and s.homes > 0 and set_kind in ["center", "ordinary", "foothill"]:
+		var fence_col := Color.html("#7c5738")
+		for hut: HutData in s.huts:
+			var kind: String = EntityCodec.value(hut, "t", "house")
+			if not SettlementSets.is_home(kind):
+				continue
+			if rng.next_float() > (0.55 if set_kind == "center" else 0.40):
+				continue
+			var half := SettlementSets.half_of(kind)
+			var side: float = -1.0 if rng.next_float() < 0.5 else 1.0
+			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
+			var world_p := at * Vector3(side * (half.x + 1.15), 0.0, half.y * 0.35)
+			var cx := clampi(floori(world_p.x / TILE), 0, w.W - 1)
+			var cy := clampi(floori(world_p.z / TILE), 0, w.H - 1)
+			var j := cy * w.W + cx
+			if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or heights.depth_at(world_p.x, world_p.z) > 0.0:
+				continue
+			if _too_close_to_huts(Vector2(world_p.x, world_p.z), s.huts, 2.1):
+				continue
+			var hy := heights.ground_at(hut.x * TILE, hut.y * TILE)
+			var fy := heights.ground_at(world_p.x, world_p.z)
+			if absf(fy - hy) > 0.7:
+				continue
+			var fence_at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut) + side * PI * 0.5), Vector3(world_p.x, fy, world_p.z))
+			batch.add_detail(details_lib.fence_section, fence_at, fence_col, opaque_mat)
+
+	if details_lib.has("wooden_jetty") and set_kind == "coastal" and s.homes > 0:
+		var best_d2 := INF
+		var water_cell := Vector2.ZERO
+		var sx := floori(s.x)
+		var sy := floori(s.y)
+		for wy in range(maxi(0, sy - 12), mini(w.H, sy + 13)):
+			for wx in range(maxi(0, sx - 12), mini(w.W, sx + 13)):
+				var j := wy * w.W + wx
+				if w.ocean[j] == 0 and w.lake[j] == 0:
+					continue
+				var d2 := Vector2(wx + 0.5 - s.x, wy + 0.5 - s.y).length_squared()
+				if d2 < best_d2:
+					best_d2 = d2
+					water_cell = Vector2(wx + 0.5, wy + 0.5)
+		if best_d2 < INF:
+			var out_v := water_cell - Vector2(s.x, s.y)
+			var dir := out_v.normalized() if out_v.length() > 0.1 else Vector2(0.0, 1.0)
+			# Ставим мостки на кромке берега с заходом в воду (1,2 м глубже первой водной клетки)
+			var jp := water_cell * TILE - dir * 1.2
+			var dry_y := heights.ground_at(jp.x - dir.x * 3.0, jp.y - dir.y * 3.0)
+			var g_y := heights.ground_at(jp.x, jp.y)
+			var w_y := g_y + heights.depth_at(jp.x, jp.y)
+			var deck_y := maxf(dry_y - 0.15, w_y - 0.10)
+			batch.add_detail(details_lib.wooden_jetty, Transform3D(Basis(Vector3.UP, atan2(dir.x, dir.y)), Vector3(jp.x, deck_y, jp.y)), Color.html("#6e5138"), opaque_mat)
+
+
+static func _too_close_to_huts(pos_m: Vector2, huts: Array, gap_m: float) -> bool:
+	var g2 := gap_m * gap_m
+	for hut: HutData in huts:
+		var hp := Vector2(hut.x * TILE, hut.y * TILE)
+		if hp.distance_squared_to(pos_m) < g2:
+			return true
+	return false
+
+
 ## Прямоугольный блок с UV внутри выбранной ячейки общего атласа (для доски маршрутов и фонаря).
 static func _uv_box(size: Vector3, cell: int) -> ArrayMesh:
 	var st := SurfaceTool.new()
@@ -294,25 +381,47 @@ static func _legacy_site_materials(door_m: Material, win_m: Material) -> Diction
 	}
 
 
-static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary) -> void:
-	var stone := mat(Color8(0x8f, 0x88, 0x80))
+static func _add_extra_plinth(batch: MeshBatch, extra_plinths: Dictionary, model_id: String, half: Vector2,
+		at: Transform3D, drop: float, opaque_mat: Material, tints: Dictionary, lod_count: int) -> void:
+	if drop <= 0.35:
+		return
+	var qdrop := ceili((drop + 0.15) * 10.0) / 10.0
+	var pkey := "%s|%.1f" % [model_id, qdrop]
+	if not extra_plinths.has(pkey):
+		extra_plinths[pkey] = SettlementModels.build_extra_plinth(half, -0.45, -qdrop)
+	var plinth_mesh: Mesh = extra_plinths[pkey]
+	for level in lod_count:
+		batch.add_lod(plinth_mesh, at, [opaque_mat], level, tints, false)
+
+
+static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary,
+		site_lods: Dictionary = {}, opaque_mat: Material = null) -> void:
+	var use_atlas := opaque_mat != null and site_lods.has("peak_cairn")
+	var peak_tints := SettlementModels.site_tints("peak_cairn", 0) if use_atlas else {}
+	var stone: Material = null if use_atlas else mat(Color8(0x8f, 0x88, 0x80))
 	var stone_meshes: Array[SphereMesh] = []
-	for rh: Vector2 in PEAK_STONES:
-		var sm := SphereMesh.new()
-		sm.radius = rh.x
-		sm.height = rh.x * 2.0
-		sm.radial_segments = 5
-		sm.rings = 2
-		stone_meshes.append(sm)
+	if not use_atlas:
+		for rh: Vector2 in PEAK_STONES:
+			var sm := SphereMesh.new()
+			sm.radius = rh.x
+			sm.height = rh.x * 2.0
+			sm.radial_segments = 5
+			sm.rings = 2
+			stone_meshes.append(sm)
 	for pk in w.peaks:
 		var x: float = pk.x * TILE
 		var z: float = pk.y * TILE
 		var y := heights.ground_at(x, z)
 		var at := Transform3D(Basis(), Vector3(x, y, z))
-		for k in PEAK_STONES.size():
-			batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
-		batch.add(m.pole, at.translated_local(Vector3(0, 3.2, 0)), m.pole_m)
-		batch.add(m.flag, at.translated_local(Vector3(0.5, 3.9, 0)), m.flag_m)
+		if use_atlas:
+			var lods: Array = site_lods.peak_cairn
+			for level in lods.size():
+				batch.add_lod(lods[level], at, [opaque_mat], level, peak_tints, level <= 1)
+		else:
+			for k in PEAK_STONES.size():
+				batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
+			batch.add(m.pole, at.translated_local(Vector3(0, 3.2, 0)), m.pole_m)
+			batch.add(m.flag, at.translated_local(Vector3(0.5, 3.9, 0)), m.flag_m)
 		parent.add_child(_label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z), WorldData.place_id("peak", pk.x, pk.y)))
 
 
@@ -513,24 +622,28 @@ static func footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vec
 	return Vector2(low, high)
 
 
-## Места вне поселений: дома/сараи/сеновалы берут модели из каталога (если не use_legacy), памятники — прежние.
+## Места вне поселений: дома/сараи/сеновалы и памятники (при не use_legacy) на общем атласе и с 3 LOD.
 static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary, cat: Dictionary) -> void:
-	var unit := _box_mesh(Vector3.ONE)
-	var old_stone := mat(Color.html("#6b6a5c"))
-	var weathered := [old_stone, mat(Color.html("#585749")), mat(Color.html("#5d6b48"))]
-	var pale_stone := mat(Color.html("#9a958a"))
-	var dark_roof: Material = m.dark_roof
-	var leg := _box_mesh(Vector3(0.25, 7.0, 0.25))
-	var deck := _box_mesh(Vector3(2.8, 0.2, 2.8))
-	var rail := _box_mesh(Vector3(2.8, 0.1, 0.08))
-	var tower_roof := _cone_mesh(2.2, 1.6, 4)
-	var tip := _cone_mesh(0.5, 0.7, 4)
-	var keep := CylinderMesh.new()
-	keep.top_radius = 1.5
-	keep.bottom_radius = 1.6
-	keep.height = 1.0
-	keep.radial_segments = 8
 	var use_catalog := not cat.is_empty()
+	var site_lods: Dictionary = cat.get("site_lods", {}) if use_catalog else {}
+	var legacy_shapes := m if site_lods.is_empty() else {}
+	var unit: Mesh = _box_mesh(Vector3.ONE) if site_lods.is_empty() else null
+	var old_stone: Material = mat(Color.html("#6b6a5c")) if site_lods.is_empty() else null
+	var weathered := [old_stone, mat(Color.html("#585749")), mat(Color.html("#5d6b48"))] if site_lods.is_empty() else []
+	var pale_stone: Material = mat(Color.html("#9a958a")) if site_lods.is_empty() else null
+	var dark_roof: Material = legacy_shapes.get("dark_roof", null)
+	var leg: Mesh = _box_mesh(Vector3(0.25, 7.0, 0.25)) if site_lods.is_empty() else null
+	var deck: Mesh = _box_mesh(Vector3(2.8, 0.2, 2.8)) if site_lods.is_empty() else null
+	var rail: Mesh = _box_mesh(Vector3(2.8, 0.1, 0.08)) if site_lods.is_empty() else null
+	var tower_roof: Mesh = _cone_mesh(2.2, 1.6, 4) if site_lods.is_empty() else null
+	var tip: Mesh = _cone_mesh(0.5, 0.7, 4) if site_lods.is_empty() else null
+	var keep: CylinderMesh = null
+	if site_lods.is_empty():
+		keep = CylinderMesh.new()
+		keep.top_radius = 1.5
+		keep.bottom_radius = 1.6
+		keep.height = 1.0
+		keep.radial_segments = 8
 	for s: SiteData in w.sites:
 		var top := -INF
 		for u: HutData in s.huts:
@@ -549,15 +662,21 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 				var lods: Array = entry.lods
 				for level in lods.size():
 					batch.add_lod(lods[level], at, cat.mat_pair, level, tints, true)
-				var drop := high - low
-				if drop > 0.35:
-					var qdrop := ceili((drop + 0.15) * 10.0) / 10.0
-					var pkey := "%s|%.1f" % [u.t, qdrop]
-					if not cat.extra_plinths.has(pkey):
-						cat.extra_plinths[pkey] = SettlementModels.build_extra_plinth(half, -0.45, -qdrop)
-					for level in lods.size():
-						batch.add_lod(cat.extra_plinths[pkey], at, [cat.opaque], level, tints, false)
+				_add_extra_plinth(batch, cat.extra_plinths, u.t, half, at, high - low, cat.opaque, tints, lods.size())
 				_add_flower_details(batch, at, u.t, half, v, cat.details, cat.cutout)
+				continue
+			if not site_lods.is_empty() and site_lods.has(u.t):
+				var xf := at
+				if u.t == "keep":
+					xf.basis = xf.basis.scaled(Vector3(1.0, (5.0 + float(v) * 1.5) / 6.4, 1.0))
+				elif u.t == "stone":
+					xf.basis = Basis(Vector3.UP, u.a).rotated(Vector3.RIGHT, (v - 1.5) * 0.06).scaled(Vector3(1.0, (1.7 + float(v) * 0.3) / 2.2, 1.0))
+				var stints := SettlementModels.site_tints(u.t, v)
+				var slods: Array = site_lods[u.t]
+				for level in slods.size():
+					batch.add_lod(slods[level], xf, [cat.opaque], level, stints, level <= 1)
+				if u.t == "shelter":
+					_add_extra_plinth(batch, cat.extra_plinths, u.t, half, at, high - low, cat.opaque, stints, slods.size())
 				continue
 			match u.t:
 				"house":

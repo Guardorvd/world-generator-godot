@@ -86,6 +86,7 @@ func run() -> void:
 		_check(StageLandmarks.homes_of(s) >= 2, "у поселения %s есть жилые дома" % s.name)
 	_append_lineup_settlement(w)
 	_append_bench50_settlement(w)
+	_append_sites_fixture(w)
 
 	ground_node = MeshInstance3D.new()
 	ground_node.mesh = _build_ground_mesh(w, heights)
@@ -166,6 +167,7 @@ func run() -> void:
 		["foothill", Vector3(128.0, 25.2, 384.0), Vector3(30.0, 13.0, 36.0), false],
 		["coastal", Vector3(384.0, 25.2, 384.0), Vector3(28.0, 14.0, 38.0), false],
 		["remote", Vector3(640.0, 25.2, 384.0), Vector3(22.0, 11.0, 26.0), true],
+		["sites", Vector3(896.0, 25.2, 384.0), Vector3(14.0, 9.5, 25.0), true],
 	]
 	for spec: Array in shots:
 		var kind: String = spec[0]
@@ -410,6 +412,30 @@ func _append_bench50_settlement(w: WorldData) -> void:
 		var yaw := (k % 4) * (PI * 0.5)
 		bench.huts.append(HutData.new(px / GameConfig.TILE, pz / GameConfig.TILE, k % 4, id, yaw))
 	w.settlements.append(bench)
+
+
+func _append_sites_fixture(w: WorldData) -> void:
+	# Квадрат (3, 1): центр (896, 384) м -> памятники и туры на общем атласе (tower, shelter, obelisk, ruin+keep, stones, peak)
+	var cx := 224.0
+	var cy := 96.0
+	var items := [
+		["tower", 2, "Дозорная вышка", cx - 3.6, cy - 1.5, [["tower", 0.0, 0.0, 0]]],
+		["shelter", 2, "Горный приют", cx - 0.8, cy - 1.6, [["shelter", 0.0, 0.0, 0]]],
+		["obelisk", 2, "Стела", cx + 1.8, cy - 1.8, [["obelisk", 0.0, 0.0, 0]]],
+		["ruin", 3, "Руины замка", cx + 4.4, cy + 0.8, [["ruin", 0.0, 0.0, 0], ["keep", -1.4, -0.6, 1]]],
+		["stones", 2, "Каменный круг", cx - 2.2, cy + 1.8, [
+			["stone", 1.2, 0.0, 0], ["stone", 0.4, 1.1, 1], ["stone", -0.8, 0.9, 2],
+			["stone", -1.1, -0.5, 3], ["stone", 0.1, -1.2, 1],
+		]],
+	]
+	for sp: Array in items:
+		var sx: float = sp[3]
+		var sy: float = sp[4]
+		var huts: Array[HutData] = []
+		for p: Array in sp[5]:
+			huts.append(HutData.new(sx + float(p[1]), sy + float(p[2]), int(p[3]), str(p[0]), 0.15))
+		w.sites.append(SiteData.new(sx, sy, int(sy) * w.W + int(sx), str(sp[0]), int(sp[1]), str(sp[2]), 2.0, huts))
+	w.peaks.append({x = cx + 0.8, y = cy + 2.0, i = int(cy + 2.0) * w.W + int(cx + 0.8), elev = 0.65, name = "Пик Каменный"})
 
 
 func _add_lineup_labels(parent: Node3D) -> void:

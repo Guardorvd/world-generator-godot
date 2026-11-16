@@ -1,43 +1,61 @@
 {
-  "format": 3,
-  "previews": [
-    {
-      "name": "242dd57132b599ad53e40ae642deac77.preview",
-      "sha256": "3389493056714346ed378375ebe550de27c62e6b8953dbec519306d7d9572689"
-    }
-  ],
-  "files": [
-    {
-      "key": "Кедр-888922|768|768|geo|9eae327d81a7933eead16a40306fae36",
-      "layer": 0,
-      "name": "242dd57132b599ad53e40ae642deac77.geo.wgc",
-      "size": 768,
-      "sha256": "37b5b24247d4561b2a8b12c305fa1eea357e4b25686425ce8732b861cdd39bb8",
-      "seed": "Кедр-888922"
-    },
-    {
-      "key": "Кедр-888922|768|768|nature|03257719e0a0e0ed1ac737c01a366038",
-      "layer": 2,
-      "name": "242dd57132b599ad53e40ae642deac77.nature.wgc",
-      "size": 768,
-      "sha256": "101ed00e55c3576ed81cc313d73033aebd8aa897af6290dd136916ad5926d446",
-      "seed": "Кедр-888922"
-    },
-    {
-      "key": "Кедр-888922|768|768|places|45a7a7db0ac7722a839513158bbd5b28",
-      "layer": 1,
-      "name": "242dd57132b599ad53e40ae642deac77.places.wgc",
-      "size": 768,
-      "sha256": "df21627ae7c31f4e016123ef381f70e0039dd4a6c88e454a927a7515a6307817",
-      "seed": "Кедр-888922"
-    },
-    {
-      "key": "Кедр-888922|768|768|view|2ebd3713e4342c36e3e366f17a85d9d8",
-      "layer": 3,
-      "name": "242dd57132b599ad53e40ae642deac77.view.wgc",
-      "size": 768,
-      "sha256": "0cefbc9c95887439fbe502e77095ec8f9d2f66dbcdc41d32a5e0a26a47dd7c09",
-      "seed": "Кедр-888922"
-    }
-  ]
+	"artifacts": [
+		{
+			"artifact": "base",
+			"key": "Кедр-888922|768|768|geo|3bf2fa2d1e90dad13827c772e6cd933e|base|1|0|4|64|0|0",
+			"name": "242dd57132b599ad53e40ae642deac77.base.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "a4210f57fe69f44e8e7337c5ae0a5835b23747cafa6a2e757b0e5ba5708c0b1e",
+			"size": 768
+		},
+		{
+			"artifact": "surface",
+			"key": "Кедр-888922|768|768|nature|1f9cf2f4ceb1495aa775be221f22b6e9|surface|22|31|4|64|1|1|2fe77c228432",
+			"name": "242dd57132b599ad53e40ae642deac77.surface.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "163a66c2fb83e2c62bdbccb7e3cb7c62c69dfc0319f9d84a2f540dec9789dc03",
+			"size": 768
+		}
+	],
+	"files": [
+		{
+			"key": "Кедр-888922|768|768|geo|3bf2fa2d1e90dad13827c772e6cd933e",
+			"layer": 0,
+			"name": "242dd57132b599ad53e40ae642deac77.geo.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "1f251b8ff94fbcc4e0a99c6a12720170ca275822ecaf031dc5616f40c1b81b59",
+			"size": 768
+		},
+		{
+			"key": "Кедр-888922|768|768|places|4418bf2c95f2e2377cde292a79bd26db",
+			"layer": 1,
+			"name": "242dd57132b599ad53e40ae642deac77.places.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "975c7b6c9ab8c48a506cc611a2f199c0cc0d34f1a9589881a43b2bfe34b7b216",
+			"size": 768
+		},
+		{
+			"key": "Кедр-888922|768|768|nature|1f9cf2f4ceb1495aa775be221f22b6e9",
+			"layer": 2,
+			"name": "242dd57132b599ad53e40ae642deac77.nature.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "bd3a4540e35e88835fcdb28cceed1de1716aa92ec22bc2eb1338509e96dd60f3",
+			"size": 768
+		},
+		{
+			"key": "Кедр-888922|768|768|view|344257304fe021f15a20a4e39007444a",
+			"layer": 3,
+			"name": "242dd57132b599ad53e40ae642deac77.view.wgc",
+			"seed": "Кедр-888922",
+			"sha256": "1dbe4dbc3a27f6e318efe582eb6c543234ae4c3b5b0304be6da2f6a1c786e056",
+			"size": 768
+		}
+	],
+	"format": 3,
+	"previews": [
+		{
+			"name": "242dd57132b599ad53e40ae642deac77.preview",
+			"sha256": "0b421411f7950bcedf33ce2b3b6c098e19e9dfc3034811a4791f9a77a151087d"
+		}
+	]
 }

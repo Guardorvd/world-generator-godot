@@ -448,3 +448,19 @@ static func pick_outbuilding(set_kind: String, s: SettlementData, u: float) -> S
 		return pick_weighted([["barn", 0.30], ["barn_loft", 0.25], ["hay", 0.25], ["shed", 0.20]], u)
 	var spec: Dictionary = SETS.get(set_kind, SETS.ordinary)
 	return pick_weighted(spec.outbuildings, u)
+
+
+## Выбор жилого дома для хутора или одинокого двора вне поселения (StageSites) по биому и рельефу.
+static func pick_site_home(biome: int, elev: float, slope: float, u: float) -> String:
+	if elev > 0.34 or slope > 0.20:
+		return pick_weighted([["chalet_stone", 0.40], ["chalet_terrace", 0.35], ["chalet", 0.25]], u)
+	if biome in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]:
+		return pick_weighted([["cabin_porch", 0.40], ["cabin_long", 0.35], ["house_timber", 0.25]], u)
+	return pick_weighted([["house_wing", 0.35], ["house_steep", 0.35], ["house", 0.30]], u)
+
+
+## Выбор хозяйственной постройки для хутора вне поселения (StageSites) по биому.
+static func pick_site_barn(biome: int, u: float) -> String:
+	if biome in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]:
+		return pick_weighted([["shed", 0.45], ["barn", 0.30], ["woodpile_rack", 0.25]], u)
+	return pick_weighted([["barn_loft", 0.45], ["barn", 0.35], ["shed", 0.20]], u)

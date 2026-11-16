@@ -44,6 +44,7 @@ func _initialize() -> void:
 		ImageTexture.create_from_image(atlas[1]),
 	])
 	catalog.settlement_details = SettlementModels.build_detail_meshes()
+	catalog.site_lods = SettlementModels.build_site_lods()
 	catalog.settlements = _load_and_validate_settlements()
 	if catalog.settlements.is_empty():
 		ForestModels.baking = false
@@ -87,6 +88,13 @@ func _initialize() -> void:
 	ok = ok and restored.settlement_details.keys() == catalog.settlement_details.keys()
 	for did: String in catalog.settlement_details:
 		ok = ok and same_mesh(catalog.settlement_details[did], restored.settlement_details[did])
+	ok = ok and restored.site_lods.keys() == catalog.site_lods.keys()
+	for sid: String in catalog.site_lods:
+		var bl: Array = catalog.site_lods[sid]
+		var al: Array = restored.site_lods[sid]
+		ok = ok and bl.size() == al.size()
+		for k in bl.size():
+			ok = ok and same_mesh(bl[k], al[k])
 	ok = ok and restored.settlement_textures.size() == catalog.settlement_textures.size()
 	for k in catalog.settlement_textures.size():
 		var a: Image = catalog.settlement_textures[k].get_image()

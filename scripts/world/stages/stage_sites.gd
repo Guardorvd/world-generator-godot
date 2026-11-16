@@ -27,10 +27,7 @@ const TYPES := {
 	farm = {base = 4.0, space = 22.0, clear = 5.0, title = "хутор"},
 	house = {base = 3.5, space = 30.0, clear = 3.0, title = "одинокий дом"},
 }
-## Наибольший перепад земли под постройкой, м: руинам и камням неровность не мешает
-## (с 9.5 и для построек поселений: шале на склоне стоит на высоком каменном цоколе)
-const FLAT := {house = 1.6, barn = 1.6, shelter = 1.8, tower = 1.4, obelisk = 1.2, ruin = 3.0, keep = 2.4, stone = 3.0, hay = 2.0,
-	chalet = 2.0, tall = 1.5, shed = 1.4, fountain = 0.8}
+## Допуски перепада земли под постройками и памятниками (SettlementSets.flat_of).
 
 
 static func run(w: WorldData) -> void:
@@ -171,12 +168,18 @@ static func _build(w: WorldData, river: PackedByteArray, type: String, x: float,
 			parts = [["shelter", Vector2.ZERO]]
 		"house":
 			rank = 1
-			parts = [["house", Vector2.ZERO]]
+			var home_id := SettlementSets.pick_site_home(w.biome[i], w.elev[i], w.slope[i], rng.next_float())
+			parts = [[home_id, Vector2.ZERO]]
+			if rng.next_float() < 0.65:
+				var aux := "woodpile_rack" if w.biome[i] in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE] else ("well_canopy" if rng.next_float() < 0.45 else "shed")
+				parts.append([aux, Vector2(1.55, -0.45)])
 		"farm":
 			rank = 2 if Biomes.LIST[w.biome[i]].get("habit", 0.0) > 0.8 and rng.next_float() < 0.4 else 1
-			parts = [["house", Vector2.ZERO], ["barn", Vector2(1.9, 0.2)], ["hay", Vector2(0.4, 1.8)]]
+			var home_id := SettlementSets.pick_site_home(w.biome[i], w.elev[i], w.slope[i], rng.next_float())
+			var barn1 := SettlementSets.pick_site_barn(w.biome[i], rng.next_float())
+			parts = [[home_id, Vector2.ZERO], [barn1, Vector2(1.9, 0.2)], ["hay", Vector2(0.4, 1.8)]]
 			if rank == 2:
-				parts += [["barn", Vector2(-0.3, -1.9)], ["hay", Vector2(1.6, 1.7)]]
+				parts += [["barn_loft", Vector2(-0.3, -1.9)], ["well_canopy" if rng.next_float() < 0.5 else "hay", Vector2(1.6, 1.7)]]
 		"ruin":
 			# Крепость — редкая: только на заметном холме
 			rank = 3 if prom > 0.045 and rng.next_float() < 0.5 else (2 if rng.next_float() < 0.5 else 1)

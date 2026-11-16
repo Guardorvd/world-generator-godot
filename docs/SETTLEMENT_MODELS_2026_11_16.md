@@ -171,7 +171,7 @@
   - **Сараи и хозпостройки (4):** `barn`, `barn_loft` (сарай-сеновал с коньковой балкой-клювом, открытым люком с сеном и боковым навесом), `shed`, `hay`.
   - **Характерные объекты (5):** `fountain`, `well_canopy` (бревенчатый колодец с воротом и двускатным шатром), `market_stall` (торговый навес с полосатым тентом и товарами), `boat_shed` (прибрежный лодочный навес на сваях с перевёрнутой лодкой и вешалами с сетями), `woodpile_rack` (крытая поленница с козлами и колодой).
 - **`scripts/render/settlements_builder.gd`:** обновлены расстановка цветочных ящиков (`_add_flower_details`) и отметка посадки по рельефу для всех новых вариантов.
-- **`scripts/render/asset_catalog.gd` (версия `9`):** каталог пересобран и проверен (`21` модель поселений, `70` деревьев, `1 982 636` байт, `exact roundtrip=true`).
+- **`scripts/render/asset_catalog.gd` (версия `10`):** каталог пересобран и проверен (`21` модель поселений, `70` деревьев, `114` LOD-групп, `7` сооружений `site_lods`, `7` мешей `MultiMesh` деталей, `2 008 531` байт, `exact roundtrip=true`).
 
 | Модель | Категория | Типоразмер (полуширина, м) | LOD0 | LOD1 | LOD2 |
 | --- | --- | --- | ---: | ---: | ---: |
@@ -204,30 +204,37 @@
   - **`forest`:** несимметричные слоты лесных полян с угловым разбросом, `woodpile_rack` и `well_canopy`.
   - **`foothill`:** 3 террасных уступа вдоль горизонталей локального уклона рельефа из `ground` с ориентацией фасадов к долине и дороге.
   - **`remote`:** тесный ансамбль-хутор (один дом у костра на `r ≈ 1,55` кл. и компактная дуга построек рядом с `woodpile_rack`).
-- Повышена версия кэша `WorldCache.SCHEMA_TRAILS_VERSION` с `36` до `37`.
+- Повышена версия кэша `WorldCache.SCHEMA_TRAILS_VERSION` с `36` до `38` (37: 21 модель и композиции поселений; 38: хутора и одинокие дома по биому и рельефу в `StageSites`).
 
-### Этап 8. Проверено (GTX 1650 SUPER, 16.11.2026)
+### Развитие: места вне поселений (`StageSites`), дворовые детали `MultiMesh` и вшитый кэш (16.11.2026)
+- **Хутора и одинокие дома (`scripts/world/settlement_sets.gd`, `scripts/world/stages/stage_sites.gd`):** добавлены `SettlementSets.pick_site_home` и `pick_site_barn`: одинокие дома и хутора (`house`, `farm`) выбирают модели по биому, высоте и уклону (`cabin_porch`/`cabin_long`/`woodpile_rack` в лесу, `chalet_stone`/`chalet_terrace` в предгорьях, `house_wing`/`house_steep`/`barn_loft`/`well_canopy` на равнинах).
+- **Памятники и вершины на общем атласе с 3 LOD (`scripts/render/settlement_models.gd`, `scripts/render/asset_catalog.gd` v10, `scripts/render/settlements_builder.gd`):** `build_site_lods()` строит 3 явных уровня (`LOD0/LOD1/LOD2`) для `shelter`, `tower`, `obelisk`, `ruin`, `keep`, `stone` и `peak_cairn` на одном общем атласе (фонарь `shelter` светится ночью по карте `emission`); `_build_peaks` и `_build_sites` используют `site_lods` вместо отдельных примитивов и материалов, вынесен общий `_add_extra_plinth`.
+- **Дворовые и придорожные детали `MultiMesh` (`build_detail_meshes`, `_add_courtyard_details`):** добавлены `lantern_post` (у доски маршрутов и на площади, светится ночью через `CELL_WINDOW`), `fence_section` (прясла палисадников в `center`/`ordinary`/`foothill`) и `wooden_jetty` (деревянные мостки у реальной кромки воды в `coastal`), радиус поиска берега для `boat_shed` расширен до `5,2` кл.
+- **Пересборка вшитого кэша (`tools/bundle_cache.gd`):** пересобран [resources/world_cache](file:///c:/Users/Luisa/Downloads/Godot_v4.7.2-stable_mono_win64/world-generator-godot/resources/world_cache) (`Кедр-888922`, `153` файла, `72,0` МБ); `tools/bundled_cache_check.gd` подтвердил `устарело миров: 0 из 1` по всем слоям `0..3`.
+
+### Этап 8. Итоговые проверки (GTX 1650 SUPER, 16.11.2026)
 - `dotnet build`: `0` ошибок, `0` предупреждений.
-- `tools/build_settlement_glb.gd` и `tools/bake_assets.gd`: все 21 `.glb` приняты, отказ на `bad_house.glb` подтверждён, `exact roundtrip=true`.
-- `tools/cache_schema_test.gd`: `ALL OK`.
-- `tools/village_look.gd` (Forward+ и Compatibility, квадрат `(4, 0)` с **50 постройками всех 21 видов**):
+- `tools/build_settlement_glb.gd` и `tools/bake_assets.gd`: все 21 `.glb` приняты, отказ на `bad_house.glb` подтверждён, `exact roundtrip=true` (`Asset catalog: trees=70 settlements=21 LOD groups=114 bytes=2008531`).
+- `tools/cache_schema_test.gd`: `ALL OK` (`SCHEMA_TRAILS_VERSION = 38`).
+- `tools/bundled_cache_check.gd`: `Кедр-888922: подходит`, слои `0..3` подходят, `устарело миров: 0 из 1`.
+- `tools/village_look.gd` (Forward+ и Compatibility, квадрат `(4, 0)` с **50 постройками всех 21 видов** + квадрат `(3, 1)` с памятниками `StageSites` и туром):
   - **БЫЛО** (40 м, `use_legacy = true`): `22` основных вызова отрисовки в Forward+ / `88` с тенями в Compatibility, `11 864` треуг.
-  - **СТАЛО** (40 м, `LOD0` + `MultiMesh` деталей): `5` основных вызовов (Forward+ `5`, Compatibility `8` с тенями), `22 560` треуг.; все 3 уровня LOD и `use_colors = true` подтверждены.
+  - **СТАЛО** (40 м, `LOD0` + `MultiMesh` деталей): `7` основных вызовов (Forward+ `7`, Compatibility `10` с тенями), `23 064` треуг.; все 3 уровня LOD и `use_colors = true` подтверждены.
   - `120` м (`LOD1`): `1` основной вызов (Forward+ `1`, Compatibility `3` с тенями), `14 856` треуг.
   - `350` м (`LOD2`): `1` вызов (без теней), `3 144` треуг.
   - `1500` м: `0` вызовов, `0` треуг.
 - `tools/settlement_look.gd -- --seeds Север-1234,Ущелье --roads`:
   - `Север-1234`: осталось `10/11` мест, мин. жилых домов в одном поселении — `5`, всего домов `69`, этап дорог `7,2` с.
   - `Ущелье`: осталось `8/8` мест, мин. жилых домов — `6`, всего домов `60`, этап дорог `7,0` с.
-- `tools/stress/stress.gd` («до» `--legacy-settlements --save-base` vs «после» на одном кэше `Север-1234@768`, `--only view_village,village_,road_still,ride`, добавлен ключ `--legacy-settlements`):
+- `tools/stress/stress.gd` («до» `--legacy-settlements --save-base` vs «после» на одном кэше `Север-1234@768`, `--only view_village,village_,road_still,ride`, v38):
   - **Регрессий нет (`0` предупреждений, пороги `вызовы/память <= +10%`, `FPS >= -15%` соблюдены с запасом):**
-    - `Мир: Улица «Ржанино»`: `100 -> 105 FPS (+5%)`, `Δ p99 -11%`, вызовы `-10%` (`1236 -> 1113`), видеопамять `+2%`.
-    - `Мир: Улица «Ржанино» ночью`: `102 -> 105 FPS (+3%)`, `Δ p99 -5%`, вызовы `-8%` (`1309 -> 1206`), видеопамять `+2%`.
-    - `Мир: начало дороги, на месте`: `108 -> 106 FPS (-2%)`, вызовы `-13%` (`1242 -> 1084`), видеопамять `+2%`.
-    - `Мир: езда по дороге 11 м/с`: `88 -> 87 FPS (-1%)`, вызовы `-2%` (`1459 -> 1424`), видеопамять `+2%`.
-    - `Мир: езда с физикой велосипеда`: `108 -> 104 FPS (-4%)`, вызовы `-7%` (`1045 -> 968`), видеопамять `+2%`.
+    - `Мир: Улица «Ржанино»`: `114 -> 127 FPS (+11%)`, `Δ p99 -13%`, вызовы `-11%` (`1240 -> 1108`), видеопамять `+2%`.
+    - `Мир: Улица «Ржанино» ночью`: `108 -> 126 FPS (+16%)`, `Δ p99 -19%`, вызовы `-8%` (`1309 -> 1200`), видеопамять `+2%`.
+    - `Мир: начало дороги, на месте`: `121 -> 128 FPS (+6%)`, `Δ p99 -13%`, вызовы `-8%` (`1225 -> 1128`), видеопамять `+2%`.
+    - `Мир: езда по дороге 11 м/с`: `100 -> 101 FPS (+2%)`, `Δ p99 -15%`, вызовы `-2%` (`1472 -> 1444`), видеопамять `+2%`.
+    - `Мир: езда с физикой велосипеда`: `114 -> 120 FPS (+5%)`, `Δ p99 -30%`, вызовы `-2%` (`1000 -> 980`), видеопамять `+2%`.
 
 ### Не проверено
 - Второй ПК с **Intel HD 4600** (в режиме Compatibility): требуется прогон на целевом ПК:
   `Godot --rendering-method gl_compatibility --path . --script res://tools/village_look.gd` и `tools/stress/stress.gd --rendering-method gl_compatibility`.
-- Полный прогон `tools/stress/stress.gd -- --groups all` без фильтра `--only` и пересборка вшитого кэша `resources/world_cache` (`tools/bundle_cache.gd` по отдельному решению перед релизом).
+- Полный прогон `tools/stress/stress.gd -- --groups all` без фильтра `--only` (проверены мировые кейсы в районе поселений и дороги).

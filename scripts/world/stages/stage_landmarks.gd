@@ -466,7 +466,7 @@ static func _place_landmark(w: WorldData, ground: Heightfield, river: PackedByte
 		var best_score := INF
 		var best_spot := Vector2.ZERO
 		var best_yaw := 0.0
-		for r: float in [2.6, 3.8]:
+		for r: float in [2.6, 3.8, 5.2]:
 			for k in 16:
 				var a := TAU * k / 16.0
 				var p := Vector2(s.x + cos(a) * r, s.y + sin(a) * r)

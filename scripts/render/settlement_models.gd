@@ -275,7 +275,7 @@ static func build_model_lods(id: String) -> Array[ArrayMesh]:
 	return [_build_house(0), _build_house(1), _build_house(2)]
 
 
-## Меши мелких повторяющихся деталей для MultiMesh (ящик с цветами двух оттенков, скамья, поленья костра).
+## Меши мелких повторяющихся деталей для MultiMesh (ящики с цветами, скамья, поленья, фонарь, прясло, мостки).
 static func build_detail_meshes() -> Dictionary:
 	var flower := SurfaceTool.new()
 	flower.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -303,7 +303,164 @@ static func build_detail_meshes() -> Dictionary:
 		_cyl(logs, 0.10, 0.10, 1.2, 5, xf.origin, xf.basis, CELL_DARK_WOOD)
 	logs.index()
 
-	return {flower_box = flower.commit(), flower_box_b = flower_b.commit(), bench = bench.commit(), fire_logs = logs.commit()}
+	var lantern := SurfaceTool.new()
+	lantern.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var stone_c := Color.html("#7c7567")
+	var wood_c := Color.html("#5f3e24")
+	var dark_c := Color.html("#3c2b1d")
+	_box(lantern, Vector3(0.32, 0.42, 0.32), Vector3(0, 0.11, 0), Basis.IDENTITY, CELL_STONE, stone_c)
+	_box(lantern, Vector3(0.13, 2.35, 0.13), Vector3(0, 1.25, 0), Basis.IDENTITY, CELL_TIMBER, wood_c)
+	_box(lantern, Vector3(0.11, 0.11, 0.62), Vector3(0, 2.34, 0.22), Basis.IDENTITY, CELL_DARK_WOOD, dark_c)
+	_box(lantern, Vector3(0.28, 0.36, 0.28), Vector3(0, 2.02, 0.46), Basis.IDENTITY, CELL_WINDOW, Color.WHITE)
+	_box(lantern, Vector3(0.36, 0.09, 0.36), Vector3(0, 2.24, 0.46), Basis.IDENTITY, CELL_DARK_WOOD, dark_c)
+	lantern.index()
+
+	var fence := SurfaceTool.new()
+	fence.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for sx: float in [-0.98, 0.98]:
+		_box(fence, Vector3(0.12, 1.05, 0.12), Vector3(sx, 0.38, 0), Basis.IDENTITY, CELL_TIMBER)
+	for ry: float in [0.42, 0.72]:
+		_box(fence, Vector3(2.24, 0.10, 0.07), Vector3(0, ry, 0), Basis.IDENTITY, CELL_TIMBER)
+	fence.index()
+
+	var jetty := SurfaceTool.new()
+	jetty.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for px: float in [-0.75, 0.75]:
+		for pz: float in [-1.25, 0.0, 1.25]:
+			_box(jetty, Vector3(0.16, 1.35, 0.16), Vector3(px, -0.20, pz), Basis.IDENTITY, CELL_TIMBER)
+		_box(jetty, Vector3(0.14, 0.14, 3.25), Vector3(px, 0.32, 0), Basis.IDENTITY, CELL_TIMBER)
+	for idx in 6:
+		_box(jetty, Vector3(1.85, 0.09, 0.44), Vector3(0, 0.43, -1.30 + idx * 0.52), Basis.IDENTITY, CELL_TIMBER)
+	_box(jetty, Vector3(0.20, 0.45, 0.20), Vector3(0.72, 0.65, 1.30), Basis.IDENTITY, CELL_DARK_WOOD)
+	jetty.index()
+
+	return {
+		flower_box = flower.commit(),
+		flower_box_b = flower_b.commit(),
+		bench = bench.commit(),
+		fire_logs = logs.commit(),
+		lantern_post = lantern.commit(),
+		fence_section = fence.commit(),
+		wooden_jetty = jetty.commit(),
+	}
+
+
+## Палитра ячеек общего атласа для сооружений и памятников вне поселений.
+static func site_tints(kind: String, v: int) -> Dictionary:
+	var stone_palette := [Color.html("#6b6a5c"), Color.html("#585749"), Color.html("#5d6b48")]
+	var stone_c := Color.html("#736d60")
+	if kind in ["obelisk", "stone"]:
+		stone_c = Color.html("#9a958a")
+	elif kind in ["ruin", "keep"]:
+		stone_c = stone_palette[posmod(v, stone_palette.size())]
+	elif kind == "peak_cairn":
+		stone_c = Color.html("#8f8880")
+	return {
+		CELL_STONE: stone_c,
+		CELL_PLASTER: Color.html("#dfd8c6"),
+		CELL_TIMBER: Color.html("#755337"),
+		CELL_DARK_WOOD: Color.html("#5a3d24"),
+		CELL_ROOF: _hex(ROOF_TINTS[posmod(v, ROOF_TINTS.size())]),
+		CELL_SHUTTER: Color.html("#4a5e44"),
+		CELL_METAL: Color.html("#62666b"),
+		CELL_FLOWER_A: Color.WHITE,
+		CELL_WINDOW: Color.WHITE,
+	}
+
+
+## Три уровня детализации [LOD0, LOD1, LOD2] на общем атласе для вершин и сооружений StageSites.
+static func build_site_lods() -> Dictionary:
+	var out := {}
+	for key: String in ["shelter", "tower", "obelisk", "ruin", "keep", "stone", "peak_cairn"]:
+		var lods: Array[ArrayMesh] = []
+		for level in 3:
+			lods.append(_build_site_mesh(key, level))
+		out[key] = lods
+	return out
+
+
+static func _build_site_mesh(kind: String, level: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	match kind:
+		"shelter":
+			_box(st, Vector3(3.10, 0.55, 3.10), Vector3(0, -0.225, 0), Basis.IDENTITY, CELL_STONE)
+			_box(st, Vector3(3.00, 2.00, 3.00), Vector3(0, 1.00, 0), Basis.IDENTITY, CELL_STONE)
+			_cyl(st, 0.0, 2.38, 1.38, 4, Vector3(0, 2.69, 0), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
+			if level <= 1:
+				_box(st, Vector3(0.92, 1.75, 0.12), Vector3(0, 0.88, 1.52), Basis.IDENTITY, CELL_DARK_WOOD)
+				_box(st, Vector3(0.28, 0.42, 0.16), Vector3(0.85, 1.55, 1.52), Basis.IDENTITY, CELL_WINDOW)
+			if level == 0:
+				_box(st, Vector3(1.12, 0.16, 0.55), Vector3(0, 0.06, 1.72), Basis.IDENTITY, CELL_STONE)
+				_box(st, Vector3(1.10, 0.12, 0.14), Vector3(0, 1.78, 1.53), Basis.IDENTITY, CELL_TIMBER)
+				_box(st, Vector3(0.45, 0.70, 0.45), Vector3(-0.75, 2.65, -0.75), Basis.IDENTITY, CELL_STONE)
+		"tower":
+			if level == 2:
+				_box(st, Vector3(1.45, 6.40, 1.45), Vector3(0, 3.10, 0), Basis.IDENTITY, CELL_TIMBER)
+				_box(st, Vector3(2.80, 0.25, 2.80), Vector3(0, 6.40, 0), Basis.IDENTITY, CELL_TIMBER)
+				_cyl(st, 0.0, 2.20, 1.65, 4, Vector3(0, 8.50, 0), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
+			else:
+				for cx: float in [-1.0, 1.0]:
+					for cz: float in [-1.0, 1.0]:
+						if level == 0:
+							_box(st, Vector3(0.46, 0.55, 0.46), Vector3(cx, -0.10, cz), Basis.IDENTITY, CELL_STONE)
+						_box(st, Vector3(0.25, 7.00, 0.25), Vector3(cx, 3.20, cz), Basis.IDENTITY, CELL_TIMBER)
+				_box(st, Vector3(2.80, 0.20, 2.80), Vector3(0, 6.40, 0), Basis.IDENTITY, CELL_TIMBER)
+				for k in 4:
+					var b := Basis(Vector3.UP, k * PI / 2.0)
+					_box(st, Vector3(2.80, 0.12, 0.10), b * Vector3(0, 7.20, 1.36), b, CELL_TIMBER)
+				_cyl(st, 0.0, 2.25, 1.65, 4, Vector3(0, 8.50, 0), Basis(Vector3.UP, PI / 4.0), CELL_ROOF)
+				_box(st, Vector3(0.10, 2.20, 0.10), Vector3(0, 9.95, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+				_box(st, Vector3(1.00, 0.60, 0.06), Vector3(0.50, 10.60, 0), Basis.IDENTITY, CELL_FLOWER_A)
+				if level == 0:
+					for sx: float in [-0.95, 0.95]:
+						_box(st, Vector3(0.10, 0.90, 0.10), Vector3(sx, 6.85, 1.35), Basis.IDENTITY, CELL_DARK_WOOD)
+						_box(st, Vector3(0.10, 0.90, 0.10), Vector3(sx, 6.85, -1.35), Basis.IDENTITY, CELL_DARK_WOOD)
+					_box(st, Vector3(2.20, 0.12, 0.12), Vector3(0, 3.20, 1.0), Basis(Vector3.BACK, 0.55), CELL_TIMBER)
+					_box(st, Vector3(2.20, 0.12, 0.12), Vector3(0, 3.20, -1.0), Basis(Vector3.BACK, -0.55), CELL_TIMBER)
+		"obelisk":
+			if level == 2:
+				_box(st, Vector3(1.40, 1.00, 1.40), Vector3(0, 0.10, 0), Basis.IDENTITY, CELL_STONE)
+				_box(st, Vector3(0.75, 4.70, 0.75), Vector3(0, 2.95, 0), Basis.IDENTITY, CELL_STONE)
+				_cyl(st, 0.0, 0.54, 0.72, 4, Vector3(0, 5.65, 0), Basis(Vector3.UP, PI / 4.0), CELL_STONE)
+			else:
+				_box(st, Vector3(1.60, 1.15, 1.60), Vector3(0, 0.05, 0), Basis.IDENTITY, CELL_STONE)
+				_box(st, Vector3(0.72, 4.60, 0.72), Vector3(0, 2.90, 0), Basis.IDENTITY, CELL_STONE)
+				_cyl(st, 0.0, 0.52, 0.75, 4, Vector3(0, 5.56, 0), Basis(Vector3.UP, PI / 4.0), CELL_STONE)
+				if level == 0:
+					_box(st, Vector3(1.15, 0.35, 1.15), Vector3(0, 0.72, 0), Basis.IDENTITY, CELL_STONE)
+		"ruin":
+			if level == 2:
+				_box(st, Vector3(3.40, 2.10, 3.40), Vector3(0, 0.65, 0), Basis.IDENTITY, CELL_STONE)
+			else:
+				_box(st, Vector3(3.40, 2.60, 0.48), Vector3(0, 0.90, -1.50), Basis.IDENTITY, CELL_STONE)
+				_box(st, Vector3(0.48, 1.75, 3.40), Vector3(-1.50, 0.48, 0), Basis.IDENTITY, CELL_STONE)
+				_box(st, Vector3(0.48, 1.15, 1.80), Vector3(1.50, 0.18, -0.80), Basis.IDENTITY, CELL_STONE)
+				if level == 0:
+					_box(st, Vector3(0.72, 0.55, 0.92), Vector3(1.20, 0.12, 1.40), Basis(Vector3.UP, 0.40), CELL_STONE)
+					_box(st, Vector3(0.80, 0.42, 0.48), Vector3(-0.80, 2.38, -1.50), Basis.IDENTITY, CELL_STONE)
+					_box(st, Vector3(0.75, 0.38, 0.48), Vector3(0.85, 2.36, -1.50), Basis.IDENTITY, CELL_STONE)
+		"keep":
+			var seg := 8 if level == 0 else (6 if level == 1 else 5)
+			_cyl(st, 1.50, 1.65, 6.40, seg, Vector3(0, 2.80, 0), Basis.IDENTITY, CELL_STONE)
+			if level == 0:
+				_cyl(st, 1.65, 1.65, 0.38, 8, Vector3(0, 5.90, 0), Basis.IDENTITY, CELL_STONE)
+				for k in 4:
+					var b := Basis(Vector3.UP, k * PI * 0.5)
+					_box(st, Vector3(0.55, 0.42, 0.32), b * Vector3(0, 6.26, 1.42), b, CELL_STONE)
+		"stone":
+			_box(st, Vector3(0.65, 2.40, 0.45), Vector3(0, 0.70, 0), Basis.IDENTITY, CELL_STONE)
+			if level == 0:
+				_box(st, Vector3(0.82, 0.45, 0.65), Vector3(0, -0.22, 0), Basis.IDENTITY, CELL_STONE)
+		"peak_cairn":
+			var seg := 5 if level <= 1 else 4
+			for rh: Vector2 in [Vector2(0.90, 0.50), Vector2(0.65, 1.30), Vector2(0.45, 1.95)]:
+				_cyl(st, rh.x * 0.85, rh.x, rh.x * 1.15, seg, Vector3(0, rh.y, 0), Basis.IDENTITY, CELL_STONE)
+			if level <= 1:
+				_box(st, Vector3(0.10, 2.20, 0.10), Vector3(0, 3.20, 0), Basis.IDENTITY, CELL_DARK_WOOD)
+				_box(st, Vector3(1.00, 0.60, 0.06), Vector3(0.50, 3.90, 0), Basis.IDENTITY, CELL_FLOWER_A)
+	st.index()
+	return st.commit()
 
 
 ## Доборный каменный цоколь под склоны глубже -0.45 м (в той же системе координат, что и модель).
@@ -1499,7 +1656,7 @@ static func _window(st: SurfaceTool, angle: float, pos: Vector3, shutters: bool)
 
 
 ## Прямоугольный ящик с лёгким затенением низа по вершинам и UV внутри ячейки cell.
-static func _box(st: SurfaceTool, size: Vector3, center: Vector3, basis: Basis, cell: int) -> void:
+static func _box(st: SurfaceTool, size: Vector3, center: Vector3, basis: Basis, cell: int, tint: Color = Color.WHITE) -> void:
 	var hx := size.x * 0.5
 	var hy := size.y * 0.5
 	var hz := size.z * 0.5
@@ -1524,7 +1681,7 @@ static func _box(st: SurfaceTool, size: Vector3, center: Vector3, basis: Basis, 
 		for idx: int in [0, 2, 1, 0, 3, 2]:
 			var lp: Vector3 = pts[idx]
 			var shade := 0.88 if lp.y < 0.0 else 1.0
-			st.set_color(Color(shade, shade, shade, 1.0))
+			st.set_color(Color(tint.r * shade, tint.g * shade, tint.b * shade, tint.a))
 			st.set_normal(nrm)
 			st.set_uv(uvs[idx])
 			st.add_vertex(center + basis * lp)
