@@ -933,6 +933,9 @@ static func main_road(a: SettlementData, b: SettlementData) -> bool:
 ## по всей длине, в том числе через малое поселение и по участкам, которые она делит с местной тропой (такой участок
 ## тропы делится узлами, и его средняя часть становится дорогой). Ширина постоянна вдоль участка и меняется в узле.
 ## Возвращает длину повышенных участков, м.
+const FLOW_ROAD := 0.35 # доля наибольшего потока по связи остова, с которой связь — дорога (_upgrade_roles)
+
+
 static func _upgrade_roles(w: WorldData, paths: Array) -> float:
 	var st := w.settlements
 	var links: Array = []
@@ -943,12 +946,18 @@ static func _upgrade_roles(w: WorldData, paths: Array) -> float:
 		if e[3]:
 			links[e[0]].append([e[1], k])
 			links[e[1]].append([e[0], k])
-	var strong: Array = []
+	var strong := {}
 	for s in st.size():
-		if EntityCodec.value(st[s], "importance", 1.0) >= 0.6: strong.append(s)
+		if EntityCodec.value(st[s], "importance", 1.0) >= 0.6: strong[s] = true
+	# 16.11.2026: кроме путей между сильными центрами, дорогой становится связь остова, по которой много ездят: поток
+	# по связи — сумма по всем парам мест (дома одного × дома другого / длина пути по остову), путь которых идёт через
+	# неё. Связь с потоком не меньше FLOW_ROAD от наибольшего — дорога. Так магистраль сама проходит через деревни
+	# на пути между крупными местами, а тупиковая тропа к маленькой деревне остаётся тропой.
 	var on_road := {}
-	for s: int in strong:
+	var flow := {}
+	for s in st.size():
 		var via := {s: -1}
+		var far := {s: 0.0}
 		var queue: Array = [s]
 		var at := 0
 		while at < queue.size():
@@ -957,14 +966,22 @@ static func _upgrade_roles(w: WorldData, paths: Array) -> float:
 			for l: Array in links[c]:
 				if not via.has(l[0]):
 					via[l[0]] = l[1]
+					far[l[0]] = far[c] + float(paths[l[1]][4])
 					queue.append(l[0])
-		for t: int in strong:
-			if t <= s or not via.has(t): continue
+		for t: int in via:
+			if t <= s: continue
+			var pull := float(EntityCodec.value(st[s], "homes", 6)) * float(EntityCodec.value(st[t], "homes", 6)) / maxf(1.0, far[t])
+			var both := strong.has(s) and strong.has(t)
 			var c := t
 			while via[c] >= 0:
 				var k: int = via[c]
-				on_road[k] = true
+				flow[k] = float(flow.get(k, 0.0)) + pull
+				if both: on_road[k] = true
 				c = paths[k][0] if paths[k][1] == c else paths[k][1]
+	var most := 0.0
+	for k: int in flow: most = maxf(most, flow[k])
+	for k: int in flow:
+		if flow[k] >= FLOW_ROAD * most: on_road[k] = true
 	var before := _kind_length(w, "road")
 	var keys := on_road.keys()
 	keys.sort()
