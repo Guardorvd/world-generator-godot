@@ -36,6 +36,7 @@ const ROAD_SHADER := """shader_type spatial;
 render_mode blend_mix, depth_draw_opaque, cull_disabled;
 uniform sampler2D detail_tex : hint_default_white, filter_linear_mipmap, repeat_enable;
 uniform vec3 road_color : source_color;
+uniform vec2 road_rut = vec2(0.47, 0.13); // RoadBump.RUT_AT, RUT_W (16.11.2026)
 varying vec3 wpos;
 #include "res://resources/cloud_shadow.gdshaderinc"
 void vertex() {
@@ -48,7 +49,7 @@ void fragment() {
 	// the real supporting terrain; only their sub-metre texture is simplified.
 	float aa = clamp(fwidth(COLOR.a) * 0.5, 0.004, 0.18);
 	ALPHA = smoothstep(0.38 - aa, 0.62 + aa, COLOR.a);
-	float ruts = exp(-pow((abs(UV.x) - 0.47) / 0.13, 2.0)) * (1.0 - UV.y);
+	float ruts = exp(-pow((abs(UV.x) - road_rut.x) / road_rut.y, 2.0)) * (1.0 - UV.y);
 	float foot = (1.0 - smoothstep(0.12, 0.60, abs(UV.x))) * UV.y;
 	ALBEDO = COLOR.rgb * (0.95 + (n1 - 0.5) * 0.10 + (n2 - 0.5) * 0.06) * (1.0 - ruts * 0.06 - foot * 0.035) * cloud_light(wpos.xz);
 	ROUGHNESS = 0.95;
@@ -113,6 +114,7 @@ func setup(w: WorldData, h: Heightfield, t: OuterTerrain, v: VegetationLayer) ->
 	_road_mat.shader = Shader.new()
 	_road_mat.shader.code = ROAD_SHADER
 	_road_mat.set_shader_parameter("road_color", ROAD_COLOR)
+	_road_mat.set_shader_parameter("road_rut", Vector2(RoadBump.RUT_AT, RoadBump.RUT_W))
 	_road_mat.set_shader_parameter("detail_tex", terrain_builder.outer_material().get_shader_parameter("detail_tex"))
 
 

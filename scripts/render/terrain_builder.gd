@@ -332,6 +332,7 @@ func _detail_material() -> ShaderMaterial:
 	mat.set_shader_parameter("surface_bump", PackedVector4Array(RoadBump.LIST))
 	mat.set_shader_parameter("surface_crack", PackedFloat32Array(RoadBump.CRACKS))
 	mat.set_shader_parameter("surface_look", PackedVector4Array(RoadBump.LOOK))
+	mat.set_shader_parameter("road_rut", Vector2(RoadBump.RUT_AT, RoadBump.RUT_W))
 	return mat
 
 

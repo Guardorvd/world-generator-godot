@@ -64,10 +64,11 @@ vec3 road_field(vec2 p, vec4 b, float grade, float across, vec2 ga) {
 	vec3 f = amp * (w1 + 0.7 * smoothstep(0.3, 0.8, 1.0 - pt.y) * w2);
 	float a = abs(across);
 	if (b.z > 0.0 && a < 1.0) {
-		float e = exp(-pow((a - 0.47) / 0.13, 2.0));
+		// колея RoadBump.RUT_AT / RUT_W — uniform road_rut шейдера рельефа (16.11.2026)
+		float e = exp(-pow((a - road_rut.x) / road_rut.y, 2.0));
 		float depth = b.z * smoothstep(0.35, 0.7, pt.y);
 		f.x -= depth * e;
-		f.yz -= depth * e * (-2.0 * (a - 0.47) / (0.13 * 0.13)) * sign(across) * ga;
+		f.yz -= depth * e * (-2.0 * (a - road_rut.x) / (road_rut.y * road_rut.y)) * sign(across) * ga;
 	}
 	if (b.w > 0.0 && a < 0.75) {
 		vec4 pit = road_hole(p, b.w * smoothstep(0.3, 0.8, pt.x) * 1.5);

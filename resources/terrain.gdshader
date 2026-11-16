@@ -19,6 +19,8 @@ uniform vec4 surface_bump[8];
 uniform float surface_crack[8];
 // 15.11.2026: характер фактуры из RoadBump.LOOK: комья, рябь песка, отклик на влагу, угловатость щебня.
 uniform vec4 surface_look[8];
+// 16.11.2026: колеи — доля полуширины от оси и ширина (RoadBump.RUT_AT, RUT_W; ставит TerrainBuilder). Те же, что трясут колесо.
+uniform vec2 road_rut = vec2(0.47, 0.13);
 // Сдвиг меша от мировых координат, м: у сохранённого участка Trail Lab (WorldData.world_origin), у мира ноль.
 // Деталь и кочки полотна остаются на своих мировых местах, как у колёс.
 uniform vec2 world_offset = vec2(0.0);
@@ -747,7 +749,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// Накатанные колеи: местами, с разрывами, плотнее и темнее, мелкий камень с них выбит.
 		// 12.3: там же, где колея RoadBump (её участки), а глубокие колеи на мягком ещё темнее.
 		float rut_on = smoothstep(0.35, 0.7, ruts_patch.y);
-		float tracks = exp(-pow((abs(ax) - 0.47) / 0.13, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
+		float tracks = exp(-pow((abs(ax) - road_rut.x) / road_rut.y, 2.0)) * max(rut_on * smoothstep(0.0, 0.02, road_bump_p.z),
 			smoothstep(0.35, 0.65, n_big + (fleck - 0.5) * 0.5) * 0.6)
 			* (1.0 - organic * 0.4) * (1.0 - smoothstep(0.6, 1.0, grain) * 0.5) * near;
 		tracks *= mix(1.0, meadow, singletrack);
