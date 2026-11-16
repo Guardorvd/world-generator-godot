@@ -1,6 +1,6 @@
 extends SceneTree
 ## 11.3: изолированная сцена полотна дорог без генерации мира. Ровный участок 64 × 64 м с метровой сеткой,
-## извилистая дорога одного покрытия; цвет вершин и UV2 считаются так же, как RoadRefinement._vertex
+## извилистая дорога одного покрытия; цвет вершин и UV2 считаются так же, как вершина метровой сетки в C# (FastGrid.RoadPatches)
 ## (маска кромки, поперечная координата, номер покрытия). Материал — GameContext.scope.terrain.material.
 ## Снимки: вид с велосипеда и сверху-сбоку для каждого покрытия. Нужно окно (не headless).
 ##   godot --path . --script res://tools/road_look.gd -- [--out <папка>] [--surfaces 1,2,6,7] [--shader <файл>]
@@ -143,7 +143,7 @@ func _axis(z: float) -> float:
 	return SIZE * 0.5 + 6.0 * sin(z / 11.0)
 
 
-## 15.11: высота участка с формами коридора: продольные волны, корыто полотна, обочины как RoadRefinement._vertex
+## 15.11: высота участка с формами коридора: продольные волны, корыто полотна, обочины как вершина метровой сетки в C# (FastGrid.RoadPatches)
 ## (вал > 0 у кромки, канава < 0 дальше, по сторонам и вдоль пути то одно, то другое; величины — таблица CORRIDOR дорог)
 func _height(x: float, z: float, d: float, half: float, side := 1.0) -> float:
 	if not relief:
@@ -198,7 +198,7 @@ func _build(surface: int) -> void:
 				colors.append(Color(0, 0, 0, 0))
 				uv2.append(Vector2.ZERO)
 				continue
-			# Как RoadRefinement._vertex: несимметричные края и обочина, примесь подстилки
+			# Как вершина метровой сетки в C# (FastGrid.RoadPatches): несимметричные края и обочина, примесь подстилки
 			var slow := noise.get_noise_2d(x * 0.13, z * 0.13)
 			var organic: float = data.organic
 			var color := Color8(data.color[0], data.color[1], data.color[2]).srgb_to_linear()

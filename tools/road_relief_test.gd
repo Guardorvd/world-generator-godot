@@ -24,7 +24,7 @@ func surface_at(r: RoadRefinement, h: Heightfield, x: float, z: float) -> float:
 	var y := r.height_at(x, z, h.world.W)
 	return y if is_finite(y) else h.base_ground_at(x, z)
 
-func compare(w: WorldData, label: String, parity := false) -> void:
+func compare(w: WorldData, label: String, parity := false) -> void: # parity — полный набор проверок стенда
 	var h := Heightfield.new(w, false)
 	RoadBed.refine(h); h.build_structures()
 	var before := build(h, false)
@@ -96,22 +96,8 @@ func compare(w: WorldData, label: String, parity := false) -> void:
 	for row: Dictionary in best.values(): profiles.append(row)
 	print("RELIEF ", label, " peak_m=", peak, " active_stations=", active)
 	if parity:
-		RoadRefinement.allow_fast_patches = false
-		var mixed := build(h, true)
-		check(after.patches == mixed.patches, "native whole/batched vertices parity")
-		RoadRefinement.allow_fast_nearest = false
-		RoadRefinement.allow_fast_vertices = false
-		var reference := build(h, true)
-		check(after.patches == reference.patches, "native/GDScript vertex parity")
-		check(after.fit_routes == reference.fit_routes, "native/GDScript profile fit parity")
-		var same := after.corridor_routes.keys() == reference.corridor_routes.keys()
-		for route: int in reference.corridor_routes:
-			var a: Vector2i = after.corridor_routes.get(route, Vector2i.ZERO)
-			var b: Vector2i = reference.corridor_routes[route]
-			same = same and a.y == b.y and after.corridor.slice(a.x * FORM_STRIDE, (a.x + a.y) * FORM_STRIDE) == reference.corridor.slice(b.x * FORM_STRIDE, (b.x + b.y) * FORM_STRIDE)
-		check(same, "native/GDScript corridor forms parity")
-		RoadRefinement.allow_fast_patches = true; RoadRefinement.allow_fast_nearest = true; RoadRefinement.allow_fast_vertices = true
-		check(after.patches == build(h, true).patches, "repeatable native bake")
+		# С 16.11.2026 копии на GDScript нет: хеши результата — tools/road_golden.gd; здесь — повтор и поведение
+		check(after.patches == build(h, true).patches, "repeatable bake")
 		h.road_refinement = after
 		for hz in [60, 120]:
 			for lane in 3: ride(h, lane, hz)
@@ -204,15 +190,11 @@ func short_switchback_contract() -> void:
 		var form := (span.x + j) * FORM_STRIDE
 		check(fit.strength[j] == 0.0 and native.corridor.slice(form, form + FORM_STRIDE) ==
 			PackedFloat64Array([0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0]), "tight switchback pins station %d" % j)
-	Grid.allow_fast = false
-	var reference := build(h, true)
-	Grid.allow_fast = true
-	check(native.fit_routes == reference.fit_routes and native.corridor == reference.corridor
-		and native.patches == reference.patches, "tight switchback native/reference parity")
+	check(native.patches == build(h, true).patches, "tight switchback bake repeats")
 
 
 func run() -> void:
-	check(Grid.fast_grid() != null, "native backend available")
+	check(Grid.native_grid() != null, "native backend available")
 	if failures: quit(1); return
 	section_contracts()
 	corridor_contracts()
@@ -354,14 +336,8 @@ func corridor_contracts() -> void:
 	for j in a.y:
 		error = maxf(error, absf(prepared.corridor[(b.x + j) * FORM_STRIDE + 1] - full.corridor[(a.x + j) * FORM_STRIDE + 1] * RoadRefinement.PREPARED_SCALE))
 	check(error < 0.0000001, "prepared cross-slope scales with all other forms: %.8f m" % error)
-	RoadRefinement.allow_fast_patches = false
-	RoadRefinement.allow_fast_nearest = false
-	RoadRefinement.allow_fast_vertices = false
-	var reference := build(h, true)
-	check(prepared.patches == reference.patches and prepared.corridor == reference.corridor, "sloped mountain native/reference parity")
-	RoadRefinement.allow_fast_patches = true
-	RoadRefinement.allow_fast_nearest = true
-	RoadRefinement.allow_fast_vertices = true
+	var repeated := build(h, true)
+	check(prepared.patches == repeated.patches and prepared.corridor == repeated.corridor, "sloped mountain bake repeats")
 	# 11.11.2026: полностью совпадающий путь (в том числе обратный) сеть больше не публикует — StageTrails._add_trail
 	# ничего не добавляет на готовой сети (tools/road_passage_test.gd), и RoadRefinement не ищет дубли по хешу линий.
 	# Запись остаётся вторым путём для проверок ниже (её заменяет параллельная линия).
@@ -393,30 +369,6 @@ func corridor_contracts() -> void:
 		changed = changed or absf(separate.corridor[j * FORM_STRIDE]) > 0.05
 		wide = wide or separate.corridor[j * FORM_STRIDE + 7] > 0.0
 	check(changed and not wide, "parallel treads retain core forms with wide terrain excluded")
-	# A strict configured grade limit must reduce peaks, never move a protected zero.
-	var r := RoadRefinement.new()
-	r._heights = h
-	r._noise = FastNoiseLite.new()
-	r._noise.seed = w.seed_num
-	r._noise.frequency = 1.0
-	r._noise.fractal_octaves = 2
-	var points := PackedVector2Array()
-	var halves := PackedFloat32Array()
-	var surfaces := PackedInt32Array()
-	var gates := PackedFloat32Array()
-	for j in 160:
-		points.append(Vector2(50 + j, 100))
-		halves.append(1.1)
-		surfaces.append(RoadSurface.FOREST)
-		gates.append(0.0 if j == 80 else 1.0)
-	var settings := RoadRefinement.corridor_params()
-	settings.kinds[0]["grade"] = 0.001
-	var forms := r._corridor_reference(points, halves, surfaces, gates, PackedInt32Array([0, 160]), PackedInt32Array([0]),
-		PackedFloat32Array([1.0]), PackedInt32Array([0]), settings)
-	var pinned := maxf(absf(forms[0]), maxf(absf(forms[80 * FORM_STRIDE]), absf(forms[159 * FORM_STRIDE])))
-	var grade := 0.0
-	for j in range(1, 160): grade = maxf(grade, absf(forms[j * FORM_STRIDE] - forms[(j - 1) * FORM_STRIDE]))
-	check(pinned == 0.0 and grade <= 0.001 + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)
 
 
 class SectionGround extends Heightfield:
@@ -483,13 +435,4 @@ func section_contracts() -> void:
 	var wide := native.sample(14 * tile, 16.72 * tile + 1.0, w.W)
 	var narrow := native.sample(55 * tile, 16.72 * tile + 1.0, w.W)
 	check(absf(wide.get("across", 10.0)) < absf(narrow.get("across", 0.0)), "metre mesh uses the local width within one segment")
-	RoadRefinement.allow_fast_patches = false
-	var batched := build(h, true)
-	RoadRefinement.allow_fast_nearest = false
-	RoadRefinement.allow_fast_vertices = false
-	var reference := build(h, true)
-	check(native.patches == batched.patches and native.patches == reference.patches,
-		"variable section is byte-identical in whole, batched and GDScript bakes")
-	RoadRefinement.allow_fast_patches = true
-	RoadRefinement.allow_fast_nearest = true
-	RoadRefinement.allow_fast_vertices = true
+	check(native.patches == build(h, true).patches, "variable section bake repeats")

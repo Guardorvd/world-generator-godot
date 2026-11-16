@@ -4,7 +4,6 @@ using Godot;
 /// <summary>
 /// Самые долгие циклы генерации на C#: поиск пути A* (Pathfinder, FastGrid.Path.cs), заполнение впадин (StageHydrology),
 /// шум макрорельефа (StageRelief) и поля шума (Parallel.fbm_field).
-/// Пакетный выбор сегментов метровой дорожной сетки — NearestRoadSegments.
 /// Алгоритмы те же, что в GDScript, и дают тот же результат бит в бит, но в десятки раз быстрее.
 /// Работает только в сборке Godot .NET, иначе генерация идёт на GDScript (см. Grid.fast_grid).
 /// Арифметика повторяет GDScript: расчёт в double, значения в массивах float — во float.
@@ -46,28 +45,6 @@ public partial class FastGrid : RefCounted
 			}
 		}
 		return best;
-	}
-
-	/// <summary>Пакетный выбор ближайшего сегмента, точная копия цикла RoadRefinement._vertex.
-	/// Индекс ячейки содержит те же сегменты в прежнем порядке; геометрия и покрытие считаются GDScript.</summary>
-	public double[] NearestRoadSegments(Vector2[] points, int width, int height, double tile, double reach,
-		Vector2[] anchors, Vector2[] deltas, double[] lengths, double[] halves, byte[] roads,
-		int[] starts, int[] candidates)
-	{
-		var result = new double[points.Length * 4];
-		for (int i = 0; i < points.Length; i++)
-		{
-			int selected = -1;
-			double u = 0.0, distance = 0.0, side = 0.0;
-			RoadNearest(points[i], width, height, tile, reach, anchors, deltas, lengths, halves, roads, starts, candidates,
-				ref selected, ref u, ref distance, ref side);
-			int at = i * 4;
-			result[at] = selected;
-			result[at + 1] = u;
-			result[at + 2] = distance;
-			result[at + 3] = side;
-		}
-		return result;
 	}
 
 	// ---------- Шум: копия Simplex.noise / fbm / ridged и циклов StageRelief._rows, Parallel.fbm_field ----------

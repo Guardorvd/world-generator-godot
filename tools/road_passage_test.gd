@@ -258,25 +258,25 @@ func junction() -> void:
 		{kind = "trail", pts = points([node, Vector2(49.5, 55.5)], 0.55)},
 	]
 	var heights := Heightfield.new(w, false)
-	var profiles := [RoadBed._profile(heights, w.trails[0].pts, RoadBed.KINDS.road),
-		RoadBed._profile(heights, w.trails[1].pts, RoadBed.KINDS.trail)]
-	var p: Dictionary = profiles[1]
-	var grade_before: float = (p.prof[1] - p.prof[0]) / p.along[1]
-	RoadBed._join(heights, [0, 1], [0, 1], profiles, RoadBed._pins(w))
-	var q := RoadBed._nearest(profiles[0], node.x * tile, node.y * tile)
-	var grade_after: float = (p.prof[1] - p.prof[0]) / p.along[1]
-	var target := 0.12 * Vector2(9, 15).normalized().x
-	check(absf(p.prof[0] - profiles[0].prof[q]) < 0.001 and absf(grade_after - target) < absf(grade_before - target)
-		and absf(p.cross_x[0]) > 0.04 and p.cross_x[-1] == 0.0, "junction matches height and blends longitudinal grade and crossfall")
-	if Grid.fast_grid() != null:
-		var reference := Heightfield.new(w, false)
-		RoadBed.allow_fast = false
-		RoadBed.refine(reference)
-		RoadBed.allow_fast = true
-		RoadBed.refine(heights)
-		check(heights.hv.to_byte_array() == reference.hv.to_byte_array(), "junction bed matches native implementation byte for byte")
-	else:
-		RoadBed.refine(heights)
+	var raw := heights.copy()
+	# 16.11.2026: профили и узлы считает только C# (хеши развилок — tools/road_golden.gd, «fork.*»); здесь поведение узла:
+	# у начала ветки высота совпадает с высотой дороги, а сам узел меняет ветку (она подтягивается к плоскости дороги)
+	RoadBed.refine(heights)
+	var solo := Fixture.world()
+	solo.h = w.h.duplicate()
+	solo.trails = [w.trails[1]]
+	var alone := Heightfield.new(solo, false)
+	RoadBed.refine(alone)
+	var dir := (Vector2(49.5, 55.5) - node).normalized()
+	var at := node * tile
+	var step := absf(heights.ground_at(at.x, at.y) - raw.ground_at(at.x, at.y))
+	var pull := 0.0
+	var moved := 0.0
+	for d in range(1, 13):
+		var p := at + dir * float(d)
+		pull = maxf(pull, absf(heights.ground_at(p.x, p.y) - alone.ground_at(p.x, p.y)))
+		moved = maxf(moved, absf(heights.ground_at(p.x, p.y) - raw.ground_at(p.x, p.y)))
+	check(step < 0.01 and pull > 0.005 and moved > 0.005, "junction keeps the node height and pulls the branch to the road plane (step %.4f, pull %.4f, moved %.4f m)" % [step, pull, moved])
 
 	RoadSurface.run(w)
 	heights.build_structures()

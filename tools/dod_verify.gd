@@ -2,7 +2,9 @@ extends SceneTree
 ## Сверка переносов в C# (DOD): старый путь GDScript и новый путь C# на одних и тех же данных в одном процессе,
 ## побайтно, и время обоих. Мир не генерируется: берётся готовая сохранённая географическая основа
 ## («network_game_cache», слои мира и базовый рельеф), если её нет — тест выходит с пояснением.
-##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only bed,refine] [--dir <папка кэша>]
+## Русла рек (rivers) и меш с метровой сеткой (mesh) — пока есть оба пути. Дорожное полотно RoadBed и метровая сетка
+## RoadRefinement с 16.11.2026 только на C#: их проверяет tools/road_golden.gd (хеши), здесь они лишь готовят рельеф для mesh.
+##   godot --headless --path . --script res://tools/dod_verify.gd -- [--only rivers,mesh] [--dir <папка кэша>]
 ## Лимит 240 с (watchdog). Код 1 при любом расхождении.
 
 const SEED := "Север-1234"
@@ -54,17 +56,10 @@ func run() -> void:
 		return
 	w.base_heights = base
 	print("мир ", w.W, "x", w.H, ", путей ", w.trails.size(), ", мостов ", w.bridges.size(), ", туннелей ", w.tunnels.size())
-	if wanted("bed"):
-		verify_bed(base)
 	if wanted("rivers"):
 		verify_rivers(w)
-	var refine_base: Heightfield = null
-	if wanted("refine") or wanted("mesh"):
-		refine_base = prepared_for_refinement(base)
-	if wanted("refine"):
-		verify_refinement(refine_base)
 	if wanted("mesh"):
-		verify_mesh(refine_base)
+		verify_mesh(prepared_for_refinement(base))
 	print("DOD RESULT ", failures, " failures")
 	quit(1 if failures else 0)
 
@@ -73,9 +68,7 @@ func run() -> void:
 func prepared_for_refinement(base: Heightfield) -> Heightfield:
 	var h := base.copy()
 	h.structures = base.structures
-	RoadBed.allow_fast = false
 	RoadBed.refine(h)
-	RoadBed.allow_fast = true
 	h.build_structures()
 	return h
 
@@ -124,69 +117,6 @@ func verify_rivers(w: WorldData) -> void:
 	check(slow_surface.water_level.to_byte_array() == fast_surface.water_level.to_byte_array(), "поверхность рек: water_level совпадает побайтно")
 
 
-func verify_bed(base: Heightfield) -> void:
-	var slow := base.copy()
-	var fast := base.copy()
-	var t := Time.get_ticks_usec()
-	RoadBed.allow_fast = false
-	var slow_changed := RoadBed.refine(slow)
-	var slow_ms := (Time.get_ticks_usec() - t) / 1000.0
-	t = Time.get_ticks_usec()
-	RoadBed.allow_fast = true
-	var fast_changed := RoadBed.refine(fast)
-	var fast_ms := (Time.get_ticks_usec() - t) / 1000.0
-	print("RoadBed.refine: GDScript %.0f мс, C# %.0f мс, изменено клеток %d" % [slow_ms, fast_ms, slow_changed.size()])
-	check(slow_changed == fast_changed, "RoadBed: списки изменённых клеток равны")
-	check(slow.hv.to_byte_array() == fast.hv.to_byte_array(), "RoadBed: рельеф hv совпадает побайтно")
-
-
-func verify_refinement(h: Heightfield) -> void:
-	var slow := time_build(h, false)
-	var fast := time_build(h, true)
-	print("RoadRefinement.build: GDScript %.0f мс, C# %.0f мс, патчей %d" % [slow.ms, fast.ms, slow.r.patches.size()])
-	print("  GDScript: ", JSON.stringify(slow.r.build_timings))
-	print("  C#:       ", JSON.stringify(fast.r.build_timings))
-	var a: RoadRefinement = slow.r
-	var b: RoadRefinement = fast.r
-	check(a.patches.keys() == b.patches.keys(), "RoadRefinement: те же патчи в том же порядке")
-	var same := var_to_bytes(a.patches) == var_to_bytes(b.patches)
-	check(same, "RoadRefinement: патчи совпадают побайтно")
-	if not same:
-		report_patch_diff(a.patches, b.patches)
-	check(var_to_bytes(a.fit_routes) == var_to_bytes(b.fit_routes), "RoadRefinement: подгонка профиля совпадает побайтно")
-
-
-## Где именно патчи разошлись: по каналам число различных клеток и первые три примера
-func report_patch_diff(a: Dictionary, b: Dictionary) -> void:
-	var diffs := {}
-	var samples := {}
-	for key: int in a:
-		if not b.has(key):
-			print("  нет патча ", key)
-			continue
-		for channel: String in ["h", "color", "uv", "surface", "road"]:
-			var pa = a[key][channel]
-			var pb = b[key][channel]
-			if var_to_bytes(pa) == var_to_bytes(pb):
-				continue
-			diffs[channel] = diffs.get(channel, 0) + 1
-			if not samples.has(channel): samples[channel] = []
-			if samples[channel].size() < 3:
-				for i in pa.size():
-					if var_to_bytes(pa[i]) != var_to_bytes(pb[i]):
-						samples[channel].append("клетка %d (x %d, z %d) вершина %d: было %s стало %s" % [key, key % 768, key / 768, i, str(pa[i]), str(pb[i])])
-						break
-	print("  расхождения по каналам: ", diffs)
-	var k0: int = a.keys()[0]
-	print("  первый патч: ключ ", typeof(k0), "/", typeof(b.keys()[0]), ", поля ", a[k0].keys(), " / ", b[k0].keys(),
-		", типы ", typeof(a[k0].h), typeof(b[k0].h), typeof(a[k0].color), typeof(b[k0].color), typeof(a[k0].uv), typeof(b[k0].uv),
-		typeof(a[k0].surface), typeof(b[k0].surface), typeof(a[k0].road), typeof(b[k0].road))
-	print("  словарь патча равен: ", var_to_bytes(a[k0]) == var_to_bytes(b[k0]), ", размеры ", var_to_bytes(a[k0]).size(), "/", var_to_bytes(b[k0]).size())
-	for channel: String in samples:
-		for line: String in samples[channel]:
-			print("  ", channel, ": ", line)
-
-
 ## Меш рельефа с метровой сеткой у путей (TerrainBuilder.refine_arrays): общий исходный меш, два пути
 func verify_mesh(h: Heightfield) -> void:
 	h.road_refinement = null
@@ -214,11 +144,3 @@ func clone_arrays(source: Array) -> Array:
 	for item: Variant in source:
 		copy.append(item.duplicate() if item != null else null)
 	return copy
-
-
-func time_build(h: Heightfield, fast: bool) -> Dictionary:
-	RoadRefinement.allow_fast_index = fast
-	RoadRefinement.allow_fast_patches = fast
-	var t := Time.get_ticks_usec()
-	var r := RoadRefinement.build(h)
-	return {r = r, ms = (Time.get_ticks_usec() - t) / 1000.0}

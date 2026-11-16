@@ -157,41 +157,24 @@ func _initialize() -> void:
 		var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
 		Metrics.draw(w, m, file)
 		print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
-	# --bed: полотно RoadBed на этой сети — GDScript и C# побайтно, время обоих (dod_verify без своей фикстуры)
+	# --bed: полотно RoadBed на этой сети (только C#): время, число клеток и хеш рельефа; --refine — и метровая сетка.
+	# Хеши сравнивать между версиями кода (было — запуск на прежнем коммите): изменение значит, что результат другой
 	if "--bed" in args:
 		var base := Heightfield.new(w, false)
-		var slow := base.copy()
-		var fast := base.copy()
+		var bed := base.copy()
 		var t0 := Time.get_ticks_usec()
-		RoadBed.allow_fast = false
-		var slow_changed := RoadBed.refine(slow)
-		var slow_ms := (Time.get_ticks_usec() - t0) / 1000.0
-		t0 = Time.get_ticks_usec()
-		RoadBed.allow_fast = true
-		var fast_changed := RoadBed.refine(fast)
-		var fast_ms := (Time.get_ticks_usec() - t0) / 1000.0
-		var same := slow_changed == fast_changed and slow.hv.to_byte_array() == fast.hv.to_byte_array()
-		var gap := 0.0
-		for i in w.N: gap = maxf(gap, absf(slow.hv[i] - fast.hv[i]))
-		print("RoadBed: GDScript %.0f мс, C# %.0f мс, клеток %d, %s (наибольшая разница %.6f м)" % [slow_ms, fast_ms, fast_changed.size(),
-			"совпадает побайтно" if same else "РАСХОДИТСЯ", gap])
-		if not same: fails += 1
-		# --refine: и метровая сетка RoadRefinement на этом полотне — GDScript и C# побайтно (долго: GDScript ~1 мин)
+		var changed := RoadBed.refine(bed)
+		var bed_ms := (Time.get_ticks_usec() - t0) / 1000.0
+		print("RoadBed (C#): %.0f мс, клеток %d, хеш hv %s" % [bed_ms, changed.size(), _digest(bed.hv)])
+		if changed.is_empty(): fails += 1
 		if "--refine" in args:
-			fast.structures = base.structures
-			fast.build_structures()
-			var built := {}
-			for native: bool in [false, true]:
-				RoadRefinement.allow_fast_index = native
-				RoadRefinement.allow_fast_patches = native
-				t0 = Time.get_ticks_usec()
-				built[native] = RoadRefinement.build(fast)
-				print("RoadRefinement %s: %.0f мс, патчей %d" % ["C#" if native else "GDScript", (Time.get_ticks_usec() - t0) / 1000.0, built[native].patches.size()])
-			var a: RoadRefinement = built[false]
-			var b: RoadRefinement = built[true]
-			var equal := var_to_bytes(a.patches) == var_to_bytes(b.patches) and var_to_bytes(a.fit_routes) == var_to_bytes(b.fit_routes)
-			print("RoadRefinement: GDScript и C# ", "совпадают побайтно" if equal else "РАСХОДЯТСЯ")
-			if not equal: fails += 1
+			bed.structures = base.structures
+			bed.build_structures()
+			t0 = Time.get_ticks_usec()
+			var built := RoadRefinement.build(bed)
+			print("RoadRefinement (C#): %.0f мс, патчей %d, хеш патчей %s, хеш подгонки %s" % [(Time.get_ticks_usec() - t0) / 1000.0,
+				built.patches.size(), _digest(built.patches), _digest(built.fit_routes)])
+			if built.patches.is_empty(): fails += 1
 	# --probe x,y: пути людей ближе 12 клеток к точке (номер, вид, длина, концы, ближайшее расстояние)
 	var probe := _arg(args, "--probe", "")
 	if not probe.is_empty():
@@ -322,3 +305,10 @@ func _fingerprint(w: WorldData) -> Dictionary:
 func _arg(args: PackedStringArray, name: String, fallback: String) -> String:
 	var k := args.find(name)
 	return args[k + 1] if k >= 0 and k + 1 < args.size() else fallback
+
+
+func _digest(value: Variant) -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	ctx.update(var_to_bytes(value))
+	return ctx.finish().hex_encode().substr(0, 16)

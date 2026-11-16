@@ -29,6 +29,13 @@ static var _fast_lock := Mutex.new()
 static func fast_grid() -> Object:
 	if not allow_fast:
 		return null
+	return native_grid()
+
+
+## То же без учёта allow_fast: для вычислений, у которых нет копии на GDScript (дорожное полотно RoadBed и метровая сетка
+## RoadRefinement, с 16.11.2026). Тесты, которые отключают allow_fast ради сверки других систем, дорожный C# не выключают.
+## null — не сборка .NET или C# не собран; вызывающий сообщает об ошибке.
+static func native_grid() -> Object:
 	# Даже чтение флага — под замком: публикация Script должна быть видна всем потокам.
 	_fast_lock.lock()
 	if not _fast_checked:

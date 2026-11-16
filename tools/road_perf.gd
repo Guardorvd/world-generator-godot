@@ -1,5 +1,6 @@
 extends SceneTree
-## Точное сравнение исходного и пакетного выбора сегмента на одном дорожном рельефе.
+## Время метровой сетки и сверка с прежней версией скрипта на одном дорожном рельефе (старый скрипт — копия road_refinement.gd
+## из прошлого коммита; без него сравнивается код сам с собой: время двух сборок и нормали меша).
 ## godot --headless --path . --script res://tools/road_perf.gd -- [сид] [размер] [старый скрипт]
 
 
@@ -8,7 +9,7 @@ func _initialize() -> void:
 	var args := OS.get_cmdline_user_args()
 	var seed_text := args[0] if args.size() > 0 else "Север-1234"
 	var size := int(args[1]) if args.size() > 1 else 256
-	if Grid.fast_grid() == null:
+	if Grid.native_grid() == null:
 		printerr("Требуется собранный C#-модуль")
 		quit(1)
 		return
@@ -16,7 +17,6 @@ func _initialize() -> void:
 	var h := Heightfield.new(w, false)
 	RoadBed.refine(h)
 	h.build_structures()
-	RoadRefinement.allow_fast_nearest = false
 	var baseline: Script = load(args[2]) if args.size() > 2 else null
 	if args.size() > 2 and (baseline == null or not baseline.can_instantiate()):
 		printerr("Не удалось загрузить исходный скрипт")
@@ -25,7 +25,6 @@ func _initialize() -> void:
 	var started := Time.get_ticks_usec()
 	var before: Variant = baseline.build(h) if baseline != null else RoadRefinement.build(h)
 	var before_ms := (Time.get_ticks_usec() - started) / 1000.0
-	RoadRefinement.allow_fast_nearest = true
 	started = Time.get_ticks_usec()
 	var after := RoadRefinement.build(h)
 	var after_ms := (Time.get_ticks_usec() - started) / 1000.0

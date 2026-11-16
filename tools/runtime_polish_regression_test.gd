@@ -144,20 +144,18 @@ func _test_speed() -> void:
 	check(limited, "sharp drop does not create gravity acceleration greater than G")
 
 func _test_road_edge() -> void:
-	var h := Heightfield.new()
-	h.world = _world()
-	h.water_level.resize(h.world.N)
-	h.water_level.fill(-INF)
-	h.structures = [{ax = 1.0, az = 1.0, bx = 12.0, bz = 1.0}]
-	var refinement := RoadRefinement.new()
-	refinement._heights = h
-	refinement._index_structures()
-	check(refinement._fit_safe(Vector2(1, 8), Vector2.RIGHT, 0, 0.0, true) == 0
-		and refinement._fit_safe(Vector2(8, 1), Vector2.RIGHT, 0, 0.0, true) == 0,
-		"bridge protection covers the left and top half cells")
-	check(refinement._fit_safe(Vector2(-1, 120), Vector2.RIGHT, 0, 0.0, true) == 0
-		and refinement._fit_safe(Vector2(40, 120), Vector2.RIGHT, 0, 0.0, true) == 3,
-		"fit checks reject outside samples without wrapping to another row")
+	# 16.11: метровая сетка только на C#; защита мостов и края карты проверяется на настоящей сборке стенда
+	var w := preload("res://tools/road_relief_fixture.gd").world()
+	var h := Heightfield.new(w, false)
+	h.structures = [{ax = 100.0, az = 66.0, bx = 140.0, bz = 66.0}] # на оси дороги 0, станции через 1 м от x = 32
+	var r := RoadRefinement.build(h)
+	var fit: Dictionary = r.fit_routes.get(0, {})
+	check(not fit.is_empty() and fit.strength[88] == 0.0 and fit.strength[68] == 0.0 and fit.strength[108] == 0.0 and fit.strength[250] > 0.0,
+		"bridge protection pins the profile fit along and beside the deck, far stations stay fitted")
+	var inside := not r.patches.is_empty()
+	for key: int in r.patches:
+		inside = inside and key % w.W < w.W - 1 and key / w.W < w.H - 1
+	check(inside, "metre patches stay inside the map without wrapping to another row")
 
 func _test_chunk_retirement() -> void:
 	var terrain := QuietTerrain.new()

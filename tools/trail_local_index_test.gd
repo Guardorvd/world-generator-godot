@@ -32,18 +32,15 @@ func run() -> void:
 		d.id = "local_" + kind
 		d.kind = kind
 		d.points = PackedVector2Array([Vector2(240, 640), Vector2(280, 520), Vector2(260, 400)])
-		RoadRefinement.restrict_local_index = false
 		var start := Time.get_ticks_usec()
-		var before := site.prepare([d], false)
-		var before_ms := (Time.get_ticks_usec() - start) / 1000.0
-		RoadRefinement.restrict_local_index = true
+		var first := site.prepare([d], false)
+		var first_ms := (Time.get_ticks_usec() - start) / 1000.0
 		start = Time.get_ticks_usec()
-		var after := site.prepare([d], false)
-		var after_ms := (Time.get_ticks_usec() - start) / 1000.0
-		check(before.errors.is_empty() and after.errors.is_empty(), kind + ": both builds complete")
-		check(Fixture.same_surface(before.heights, after.heights), kind + ": every patch, edge, material and height matches")
-		print("LOCAL INDEX ", JSON.stringify({kind = kind, before_ms = before_ms, after_ms = after_ms,
-			before = before.heights.path_timings, after = after.heights.path_timings}))
+		var second := site.prepare([d], false)
+		var second_ms := (Time.get_ticks_usec() - start) / 1000.0
+		check(first.errors.is_empty() and second.errors.is_empty(), kind + ": both builds complete")
+		check(Fixture.same_surface(first.heights, second.heights), kind + ": every patch, edge, material and height matches the repeat")
+		print("LOCAL INDEX ", JSON.stringify({kind = kind, first_ms = first_ms, second_ms = second_ms, timings = second.heights.path_timings}))
 	check(original == var_to_bytes([site.hv, site.patches]), "preparation leaves shared source patches unchanged")
 	print("LOCAL INDEX RESULT ", failures, " failures")
 	quit(1 if failures else 0)

@@ -3,7 +3,7 @@ extends SceneTree
 ## Нужен, чтобы переносить дорожный код и перестраивать его, не меняя результат: любая правка, после которой хеши
 ## расходятся, меняет мир. Эталон пишется один раз на проверенном коде; пересъёмка — только осознанно (поведение изменили),
 ## в том же коммите, с объяснением (docs/ROADS_CSHARP.md).
-##   godot --headless --path . --script res://tools/road_golden.gd -- [--save] [--reference]
+##   godot --headless --path . --script res://tools/road_golden.gd -- [--save]
 ## Без ключа сверяет с tools/control/golden/roads.txt и печатает «ROAD GOLDEN RESULT n failures»; код 1 при расхождении.
 ## Случаи (префикс ключа): whole/part — стенд road_relief_fixture, полная и частичная сборка; switchback — тесный серпантин;
 ## slope — косой склон (дорога, тропа, горная тропа, трасса без земляных работ и с ними, дубль и параллельная линия);
@@ -11,8 +11,7 @@ extends SceneTree
 ## мост, брод, скала; edge — пути до всех краёв карты; width — переменная ширина; settle — горная тропа у поселения;
 ## overlap — параллельные полотна дороги и тропы; lab — стенд Trail Lab (вода, сооружения, сдвиг начала, виды и покрытия вперемешку,
 ## частичные сборки, полотно RoadBed поверх готовых патчей: все, один путь, заморозка).
-## --reference — те же случаи на исходном GDScript (пока он есть): расходится только .corridor у путей с земляными работами —
-## C# хранит для них нулевые строки в общем массиве, GDScript не хранит (доступ по corridor_routes, на результат не влияет). Лимит 120 с.
+## Лимит 120 с.
 const Fixture := preload("res://tools/road_relief_fixture.gd")
 const LabFixture := preload("res://scripts/lab/trail_lab_fixture.gd")
 const Topology := preload("res://scripts/world/road_topology.gd")
@@ -35,17 +34,8 @@ func _initialize() -> void:
 
 
 func run() -> void:
-	var args := OS.get_cmdline_user_args()
-	var save := "--save" in args
-	if "--reference" in args:
-		# исходный GDScript вместо C# (сверка эталона с прежней реализацией, пока она есть)
-		RoadBed.allow_fast = false
-		RoadRefinement.allow_fast_index = false
-		RoadRefinement.allow_fast_patches = false
-		RoadRefinement.allow_fast_nearest = false
-		RoadRefinement.allow_fast_vertices = false
-		RoadRefinement.restrict_local_index = false
-	if Grid.fast_grid() == null:
+	var save := "--save" in OS.get_cmdline_user_args()
+	if Grid.native_grid() == null:
 		print("ROAD GOLDEN: нужен C# (dotnet build), без него эталон не снять и не сверить")
 		quit(1)
 		return

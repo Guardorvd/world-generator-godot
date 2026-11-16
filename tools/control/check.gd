@@ -94,10 +94,8 @@ func _initialize() -> void:
 	t_start = Time.get_ticks_msec()
 	out = Dev.out_dir()
 	if "--legacy-dod" in OS.get_cmdline_user_args():
-		# «Было» для переносов генерации в C# (DOD): тот же код, но старые пути GDScript (см. docs/GODOT_NOTES.md)
-		RoadBed.allow_fast = false
-		RoadRefinement.allow_fast_index = false
-		RoadRefinement.allow_fast_patches = false
+		# «Было» для переносов генерации в C# (DOD): тот же код, но старые пути GDScript (см. docs/GODOT_NOTES.md).
+		# Дорожное полотно и метровая сетка (RoadBed, RoadRefinement) с 16.11.2026 только на C#: их «было» — коммит до переноса
 		StageRivers.allow_fast = false
 		Heightfield.allow_fast_river_surface = false
 		TerrainBuilder.allow_fast_refine = false

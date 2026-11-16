@@ -47,7 +47,6 @@ func run() -> void:
 	var base := w.base_heights.copy()
 	base.finish_paths()
 	var reference := "--reference" in OS.get_cmdline_user_args()
-	RoadRefinement.restrict_local_index = not reference
 	var h := prepared_copy(base)
 	# --part: быстрый режим (QuickTrails): сеть только в середине мира (треть по каждой стороне) и короче обычной —
 	# та же область и те же пределы длины, что у игры с ключом --quick-trails. Своё имя файла эталона (_part):

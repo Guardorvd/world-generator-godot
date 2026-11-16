@@ -3,6 +3,10 @@ extends RefCounted
 ## 4.4: локальная метровая сетка Road Refinement Layer. Общая сетка мира не меняется.
 ## Патчи заменяют исходные треугольники, а ground_at читает те же вершины и диагонали.
 ## За зоной влияния дополнительные вершины лежат точно на прежних треугольниках.
+## 16.11.2026: математика — индекс отрезков, подгонка профиля, формы коридора и вершины метровой сетки — только на C#
+## (scripts/core/FastGrid.Road*.cs, scripts/core/roads/), здесь фасад: сбор столбцов, запись патчей и чтение готовой
+## сетки (height_at, weight_at, edge_at, sample, from_patches, pin_coarse_edges). Эталон — tools/road_golden.gd,
+## описание — docs/ROADS_CSHARP.md.
 
 const Section := preload("res://scripts/world/road_section.gd")
 const DIV := 4
@@ -63,19 +67,9 @@ const CORRIDOR_STRIDE := 8
 const CORRIDOR_FADE := 8.0     # формы включаются на столько метров от закреплённого места (вода, мост, развилка), м
 const CORRIDOR_GAP := 3.0    # зазор между полотнами, достаточный для узкого сечения
 const LAND_GAP := 10.5       # зазор для широких форм по обеим сторонам
-const CORRIDOR_HOLLOW_W := 0.6 # полуширина продавленного места, доля полуширины полотна
 const SHARED := 0.5            # (прежний порог дублей сети; с 11.11.2026 дублей нет, остаётся параметром C#)
-## 11.11.2026: полка в склон с умеренного поперечного уклона (раньше — с RoadBed.STEEP 0,5: на средних склонах дорога
-## лежала наклонной лентой). Тот же порог в C# (FastGrid BenchLo/BenchHi).
-const BENCH := Vector2(0.15, 0.45)
 const PREPARED_SCALE := 0.5    # путь трассы без земляных работ (trail_id, earthwork 0): формы слабее, без продавленных мест
 static var natural_relief := true # false — без форм коридора (сравнение было/стало в стендах)
-static var allow_fast_nearest := true # false — исходный цикл GDScript для сравнения
-static var allow_fast_vertices := true # reference switch for complete vertex-channel parity
-static var road_simd := true
-static var restrict_local_index := true # reference switch for exact local-build comparisons
-static var allow_fast_index := true # false — индекс отрезков на GDScript (эталон для tools/dod_verify.gd)
-static var allow_fast_patches := true # false — сбор патчей в GDScript (эталон для tools/dod_verify.gd)
 
 var patches := {}  # uv: across, surface + 0.25 for singletrack (round gives the material). Physics uses surface separately.
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
@@ -84,22 +78,15 @@ var corridor_routes := {} # маршрут -> Vector2i(первая станци
 var build_timings := {}
 var trail_shaping := {} # trail id -> cut/fill volumes, extremes, designed and natural grade, banking
 var trail_elements_baked := false # A fresh refinement accepts one authored earthwork pass.
-var _segments := {}
-var _segment_list: Array[Dictionary] = []
-var _structures := {}
 var _heights: Heightfield
 var _noise: FastNoiseLite
 var _height := 0
-var _base_cache := {} # одинаковые метровые выборки у соседних вершин, только на время запекания
-var _points := PackedVector2Array() # точки уникальных вершин, только на время запекания (12.2)
-var _dist_water := PackedFloat32Array() # w.dist_water; у копии потока — своя копия (12.2)
-var _surf: Array = RoadSurface.LIST # у копии потока — своя копия таблицы покрытий (12.2)
+var _dist_water := PackedFloat32Array() # w.dist_water
+var _surf: Array = RoadSurface.LIST
 var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум полотна в мировых координатах
 var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
 var _reach := NATURAL_REACH
-var _wanted := {} # exact patch keys of the new routes; old neighbours are indexed only here
-var _wanted_box := Rect2()
-# Быстрый путь (DOD, ноябрь 2026): отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex вместо словарей
+# Отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex; живут только на время сборки
 var _cs_starts := PackedInt32Array() # CSR по клеткам мира: _cs_ids[_cs_starts[k] .. _cs_starts[k + 1]) — отрезки клетки k
 var _cs_ids := PackedInt32Array()
 var _sg_a := PackedVector2Array()
@@ -114,6 +101,9 @@ var _route_identity := PackedInt32Array() # exact complete natural routes only; 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
 ## участвуют как соседи (ближайший отрезок, развилки). Тогда у патча есть owner: 1 у вершин, где ближе всего
 ## путь из only. Trail Lab так добавляет новую трассу к готовому участку; пусто — все пути (игра).
+## 16.11.2026: индекс, подгонка, формы коридора и патчи — только на C# (FastGrid.RoadIndex, RoadFitNetwork, RoadPatches),
+## в том числе при only. Без C# или при ошибке внутри него — сообщение и пустая сетка (патчей нет, дороги без метровой сетки).
+## w.outer не учитывается (в игре сетка строится до подключения OuterLand, в Trail Lab его нет).
 static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._heights = heights
@@ -131,150 +121,34 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		var t: Dictionary = heights.world.trails[route]
 		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
-	var started_us := Time.get_ticks_usec()
-	# 16.11: частичная пересборка (only, Trail Lab) идёт тем же вызовом C#: индекс, подгонка и патчи только вокруг своих путей,
-	# проверки соседей и зазоров видят все пути; без restrict_local_index (эталон сравнения) — прежний путь GDScript
-	if allow_fast_index and allow_fast_patches and allow_fast_nearest and allow_fast_vertices and heights.world.outer == null \
-			and (only.is_empty() or (restrict_local_index and r._local_native_ok())):
-		var whole := Grid.fast_grid()
-		if whole != null:
-			var built := r._build_native(whole, fit_road)
-			if built != null:
-				if only.is_empty(): pin_coarse_edges(heights, built.patches, built.patches.keys())
-				built._drop_mountain_fits(heights.world)
-				return built
-			push_error("RoadRefinement: C# вернул null, метровая сетка строится на GDScript")
-			r._reset_native_state()
-	if not only.is_empty() and restrict_local_index:
-		# Determine the exact output cells before indexing neighbours. Preserve the
-		# original route/segment order in the final index, including nearest ties.
-		for route: int in only:
-			r._index(heights.world.trails[route], route)
-		for key: int in r._segments:
-			r._wanted[key] = true
-			var point := Vector2(key % heights.world.W + 1, key / heights.world.W + 1) * TILE
-			if r._wanted.size() == 1: r._wanted_box = Rect2(point, Vector2.ZERO)
-			else: r._wanted_box = r._wanted_box.expand(point)
-		r._wanted_box = r._wanted_box.grow(TILE)
-		# A patch's last row/column is sampled through the adjacent cell's index.
-		for key: int in r._wanted.keys():
-			for dz in range(-1, 2):
-				for dx in range(-1, 2):
-					var x := key % heights.world.W + dx
-					var z := key / heights.world.W + dz
-					if x >= 0 and z >= 0 and x < heights.world.W and z < heights.world.H:
-						r._wanted[z * heights.world.W + x] = true
-		r._segments.clear()
-		r._segment_list.clear()
-	for route in heights.world.trails.size():
-		var t: Dictionary = heights.world.trails[route]
-		if RoadBed.KINDS.has(t.kind):
-			r._index(t, route)
-	r._index_structures()
-	var keys: Array = r._segments.keys()
-	if not only.is_empty():
-		keys = keys.filter(func(key: int) -> bool:
-			return (r._segments[key] as Array).any(func(s: Dictionary) -> bool: return only.has(s.route)))
-	r.build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	started_us = Time.get_ticks_usec()
-	if fit_road:
-		r._fit_network()
-	r.build_timings.fit_network_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	started_us = Time.get_ticks_usec()
-	var cache := {}
-	var fine_width := heights.world.W * DIV
-	var nearest := PackedFloat64Array()
-	var native := {}
-	var fast := Grid.fast_grid() if allow_fast_nearest else null
-	if fast != null:
-		nearest = r._nearest_vertices(cache, fast, keys)
-		r.build_timings.nearest_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-		var vertices_us := Time.get_ticks_usec()
-		# С 12.2 уникальные вершины считаются на всех ядрах: каждая зависит только от своей точки
-		# и уже готовых данных (рельеф, отрезки, профили), результат тот же, что подряд
-		if allow_fast_vertices and heights.world.outer == null:
-			native = r._native_vertices(fast, nearest)
-		else:
-			var points := r._points
-			var job := func(a: int, b: int) -> Array:
-				var own := r._thread_copy()
-				var out := []
-				for n in range(a, b): out.append(own._vertex(points[n].x, points[n].y, nearest, n * 4))
-				return out
-			var pieces := clampi(OS.get_processor_count(), 1, 8)
-			var parts := Parallel.bands(points.size(), job, ceili(points.size() / float(pieces)))
-			var done: Array = []
-			for part: Array in parts: done.append_array(part)
-			for vk: int in cache: cache[vk] = done[cache[vk]]
-		r._points = PackedVector2Array()
-		r.build_timings.vertex_math_ms = (Time.get_ticks_usec() - vertices_us) / 1000.0
-	var native_h: PackedFloat32Array = native.get("h", PackedFloat32Array())
-	var native_color: PackedColorArray = native.get("color", PackedColorArray())
-	var native_uv: PackedVector2Array = native.get("uv", PackedVector2Array())
-	var native_surface: PackedByteArray = native.get("surface", PackedByteArray())
-	var native_road: PackedByteArray = native.get("road", PackedByteArray())
-	var native_route: PackedInt32Array = native.get("route", PackedInt32Array())
-	var native_active: PackedByteArray = native.get("active", PackedByteArray())
-	for key: int in keys:
-		var cx := key % heights.world.W
-		var cz := key / heights.world.W
-		var hs := PackedFloat32Array()
-		var colors := PackedColorArray()
-		var uvs := PackedVector2Array()
-		var surfaces := PackedByteArray()
-		var roads := PackedByteArray()
-		var owners := PackedByteArray()
-		var changed := false
-		hs.resize(STRIDE * STRIDE)
-		colors.resize(STRIDE * STRIDE)
-		uvs.resize(STRIDE * STRIDE)
-		surfaces.resize(STRIDE * STRIDE)
-		roads.resize(STRIDE * STRIDE)
-		if not only.is_empty():
-			owners.resize(STRIDE * STRIDE)
-		for z in STRIDE:
-			for x in STRIDE:
-				var ix := cx * DIV + x
-				var iz := cz * DIV + z
-				var vk := iz * fine_width + ix
-				var idx := z * STRIDE + x
-				if not native.is_empty():
-					var request: int = cache[vk]
-					hs[idx] = native_h[request]; colors[idx] = native_color[request]; uvs[idx] = native_uv[request]
-					surfaces[idx] = native_surface[request]; roads[idx] = native_road[request]
-					var owned := only.is_empty() or only.has(native_route[request])
-					changed = changed or (owned and native_active[request] != 0)
-					if not only.is_empty(): owners[idx] = int(owned)
-					continue
-				if not cache.has(vk) or cache[vk] is int:
-					var at: int = cache[vk] * 4 if cache.has(vk) else -1
-					cache[vk] = r._vertex((ix * STEP) + TILE * 0.5, (iz * STEP) + TILE * 0.5, nearest, at)
-				var v: Dictionary = cache[vk]
-				hs[idx] = v.h
-				colors[idx] = v.color
-				uvs[idx] = v.uv
-				surfaces[idx] = v.surface
-				roads[idx] = 1 if v.road else 0
-				var owned := only.is_empty() or only.has(v.route)
-				changed = changed or (owned and v.active)
-				if not only.is_empty(): owners[idx] = int(owned)
-		if not changed:
-			continue
-		r.patches[key] = {h = hs, color = colors, uv = uvs, surface = surfaces, road = roads}
-		if not only.is_empty():
-			r.patches[key].owner = owners
-	r.build_timings.vertices_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	# После запекания нет ссылок на Heightfield (цикл RefCounted) и временного пространственного индекса.
-	r._heights = null
-	r._segments.clear()
-	r._wanted.clear()
-	r._segment_list.clear()
-	r._structures.clear()
-	r._noise = null
-	r._base_cache.clear()
-	if only.is_empty(): pin_coarse_edges(heights, r.patches, r.patches.keys())
-	r._drop_mountain_fits(heights.world)
-	return r
+	var fast := Grid.native_grid()
+	if fast == null:
+		push_error("RoadRefinement: метровая сетка дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
+		return from_patches({}, r._height)
+	if not r._only_valid():
+		return from_patches({}, r._height)
+	var built := r._build_native(fast, fit_road)
+	if built == null:
+		push_error("RoadRefinement: C# не построил метровую сетку (исключение внутри расчёта)")
+		return from_patches({}, r._height)
+	if only.is_empty(): pin_coarse_edges(heights, built.patches, built.patches.keys())
+	built._drop_mountain_fits(heights.world)
+	return built
+
+
+## Каждый путь only есть в мире, дорожного вида (RoadBed.KINDS) и с отрезками: так бывает у трасс Trail Lab
+## (TrailDefinition: «trail», «mountain», «road», не меньше двух точек). Иначе ошибка, сетка не строится.
+func _only_valid() -> bool:
+	var w := _heights.world
+	for route: int in _only:
+		if route < 0 or route >= w.trails.size():
+			push_error("RoadRefinement: пути %d нет в мире (путей %d)" % [route, w.trails.size()])
+			return false
+		var t: Dictionary = w.trails[route]
+		if not RoadBed.KINDS.has(t.kind) or t.pts.size() < 2:
+			push_error("RoadRefinement: путь %d не дорожный (вид %s, точек %d), частичная сборка невозможна" % [route, t.kind, t.pts.size()])
+			return false
+	return true
 
 
 ## Mountain entries carry temporary protection gates, not an engineered profile.
@@ -320,37 +194,8 @@ static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -
 			patches[key] = pinned
 
 
-## Индекс и вершины двумя вызовами C# (FastGrid.RoadIndex и FastGrid.RoadPatches): столбцами, без
-## словарей на отрезок и на вершину. Результат тот же, что у пути в build ниже (он остаётся эталоном для
-## tools/dod_verify.gd). Только для всей сети (only пусто) и без земли за краем карты.
-## Вернуть объект к состоянию до _build_native, если C# вернул null: путь GDScript строит индекс и подгонку заново.
-func _reset_native_state() -> void:
-	fit_routes = {}
-	corridor = PackedFloat64Array()
-	corridor_routes = {}
-	_segments.clear()
-	_structures.clear()
-	_cs_starts = PackedInt32Array()
-	_cs_ids = PackedInt32Array()
-	_sg_a = PackedVector2Array()
-	_sg_delta = PackedVector2Array()
-	_sg_len2 = PackedFloat64Array()
-	_sg_half = PackedFloat64Array()
-	_sg_route = PackedInt32Array()
-	_sg_along = PackedFloat64Array()
-
-
-## Частичная сборка идёт на C#, если у каждого пути only есть отрезки дорожного вида (RoadBed.KINDS)
-func _local_native_ok() -> bool:
-	var w := _heights.world
-	for route: int in _only:
-		if route < 0 or route >= w.trails.size(): return false
-		var t: Dictionary = w.trails[route]
-		if not RoadBed.KINDS.has(t.kind) or t.pts.size() < 2: return false
-	return true
-
-
-## null — C# вернул не словарь (исключение внутри); вызывающий считает на GDScript
+## Индекс отрезков, подгонка профиля, формы коридора и патчи тремя вызовами C# (FastGrid.RoadIndex, RoadFitNetwork и RoadPatches):
+## столбцами, без словарей на отрезок и на вершину. null — C# вернул не словарь (исключение внутри).
 func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var w := _heights.world
 	var started_us := Time.get_ticks_usec()
@@ -394,11 +239,10 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	_sg_half = index.half
 	_sg_route = index.route
 	_sg_along = index.along
-	_index_structures()
 	build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	started_us = Time.get_ticks_usec()
-	if fit_road:
-		_fit_network()
+	if fit_road and not _fit_network(fast):
+		return null
 	build_timings.fit_network_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	started_us = Time.get_ticks_usec()
 	var fits := PackedFloat64Array()
@@ -447,8 +291,6 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	build_timings.vertex_math_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	build_timings.vertices_ms = build_timings.vertex_math_ms
 	_heights = null
-	_segments.clear()
-	_structures.clear()
 	_noise = null
 	_cs_starts = PackedInt32Array()
 	_cs_ids = PackedInt32Array()
@@ -469,101 +311,6 @@ static func from_patches(ready: Dictionary, height: int) -> RoadRefinement:
 	return r
 
 
-## Копия для одного потока (12.2): свои массивы рельефа и воды и свои таблицы покрытий. Общие массивы,
-## которые читают все потоки на каждой вершине, упираются в один счётчик ссылок и почти не ускоряются
-func _thread_copy() -> RoadRefinement:
-	var c := RoadRefinement.new()
-	c.fit_routes = fit_routes.duplicate(true)
-	c.corridor = corridor.duplicate()
-	c.corridor_routes = corridor_routes.duplicate()
-	c._segments = _segments
-	c._segment_list = _segment_list
-	c._structures = _structures
-	c._noise = _noise.duplicate() # тот же шум (те же свойства), но свой объект
-	c._height = _height
-	c._origin = _origin
-	c._reach = _reach
-	var h := Heightfield.new()
-	h.world = _heights.world
-	h.hv = _heights.hv.duplicate()
-	h.hv_raw = _heights.hv_raw.duplicate()
-	h.water_level = _heights.water_level.duplicate()
-	c._heights = h
-	c._dist_water = _heights.world.dist_water.duplicate()
-	c._surf = RoadSurface.LIST.duplicate(true)
-	return c
-
-
-## Один вызов C# для всех уникальных вершин, без межъязыкового вызова на каждую из них.
-## В cache сначала номера запросов, затем они заменяются готовыми словарями вершин.
-func _nearest_vertices(cache: Dictionary, fast: Object, keys: Array) -> PackedFloat64Array:
-	var w := _heights.world
-	var points := PackedVector2Array()
-	for key: int in keys:
-		var cx := key % w.W
-		var cz := key / w.W
-		for z in STRIDE:
-			for x in STRIDE:
-				var ix := cx * DIV + x
-				var iz := cz * DIV + z
-				var vk := iz * (w.W * DIV) + ix
-				if not cache.has(vk):
-					cache[vk] = points.size()
-					points.append(Vector2(ix * STEP + TILE * 0.5, iz * STEP + TILE * 0.5))
-	_points = points
-	var anchors := PackedVector2Array()
-	var deltas := PackedVector2Array()
-	var lengths := PackedFloat64Array()
-	var halves := PackedFloat64Array()
-	var roads := PackedByteArray()
-	for s: Dictionary in _segment_list:
-		anchors.append(s.a)
-		deltas.append(s.delta)
-		lengths.append(s.len2)
-		halves.append(s.half_a)
-		halves.append(s.half_b)
-		roads.append(1 if s.kind == "road" else 0)
-	var starts := PackedInt32Array()
-	starts.resize(w.N + 1)
-	var candidates := PackedInt32Array()
-	for key in w.N:
-		starts[key] = candidates.size()
-		for s: Dictionary in _segments.get(key, []):
-			candidates.append(s.id)
-	starts[w.N] = candidates.size()
-	return fast.NearestRoadSegments(points, w.W, w.H, TILE, _reach, anchors, deltas, lengths, halves, roads, starts, candidates)
-
-
-## Вершине нужны только близкие сооружения, а не перебор всех мостов мира.
-func _native_vertices(fast: Object, nearest: PackedFloat64Array) -> Dictionary:
-	var segments := PackedFloat64Array()
-	var fits := PackedFloat64Array()
-	var offsets := {}
-	for route: int in fit_routes:
-		var fit: Dictionary = fit_routes[route]
-		offsets[route] = Vector2i(fits.size(), fit.profile.size())
-		for j in fit.profile.size(): fits.append_array(PackedFloat64Array([fit.profile[j], fit.strength[j], fit.limit[j]]))
-	for s: Dictionary in _segment_list:
-		var fit: Vector2i = offsets.get(s.route, Vector2i.ZERO)
-		var span: Vector2i = corridor_routes.get(s.route, Vector2i.ZERO)
-		segments.append_array(PackedFloat64Array([s.a.x, s.a.y, s.delta.x, s.delta.y, s.len2, s.half_a,
-			1 if s.kind == "road" else 0, s.surf, s.next, s.ha, s.hb, s.along, s.route, fit.x, fit.y, span.x * CORRIDOR_STRIDE, span.y, s.half_b]))
-	var starts := PackedInt32Array()
-	starts.resize(_heights.world.N + 1)
-	var axes := PackedFloat64Array()
-	if not _structures.is_empty():
-		for key in _heights.world.N:
-			starts[key] = axes.size() / 4
-			for s: Dictionary in _structures.get(key, []): axes.append_array(PackedFloat64Array([s.ax, s.az, s.bx, s.bz]))
-		starts[_heights.world.N] = axes.size() / 4
-	var surfaces := PackedFloat64Array()
-	for s: Dictionary in _surf:
-		var color: Array = s.get("color", [0, 0, 0])
-		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
-	return fast.RoadVertices(_points, nearest, _heights.world.W, _height, TILE, _heights.hv, _heights.water_level,
-		_dist_water, _noise, _origin, segments, fits, corridor, surfaces, starts, axes, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, road_simd, _authored_routes(), STEP, PackedFloat64Array(Section.NATIVE_TREAD))
-
-
 func _authored_routes() -> PackedByteArray:
 	var result := PackedByteArray()
 	for t: Dictionary in _heights.world.trails:
@@ -571,165 +318,12 @@ func _authored_routes() -> PackedByteArray:
 	return result
 
 
-func _index_structures() -> void:
-	var w := _heights.world
-	var reach := RoadBed.PIN + RoadBed.PIN_FADE
-	for s: Dictionary in _heights.structures:
-		for z in range(maxi(0, floori((minf(s.az, s.bz) - reach) / TILE - 0.5)), mini(w.H - 1, ceili((maxf(s.az, s.bz) + reach) / TILE - 0.5))):
-			for x in range(maxi(0, floori((minf(s.ax, s.bx) - reach) / TILE - 0.5)), mini(w.W - 1, ceili((maxf(s.ax, s.bx) + reach) / TILE - 0.5))):
-				var key := z * w.W + x
-				if not _structures.has(key):
-					_structures[key] = []
-				_structures[key].append(s)
-
-
-## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ (индекс отрезков на GDScript, как и частичный restrict_local_index): в игре и в Trail Lab индекс
-## строит FastGrid.RoadIndex, в том числе при only (localRoutes).
-func _index(t: Dictionary, route: int) -> void:
-	var w := _heights.world
-	var pts: Array = t.pts
-	var needed := PackedByteArray()
-	if not _wanted.is_empty():
-		needed.resize(pts.size())
-		for n in range(1, pts.size()):
-			var a := Vector2(pts[n - 1].x, pts[n - 1].y) * TILE
-			var b := Vector2(pts[n].x, pts[n].y) * TILE
-			var reach := maxf(pts[n - 1].w, pts[n].w) * TILE * 0.5 + _reach + TILE
-			if Rect2(a, b - a).abs().grow(reach).intersects(_wanted_box, true):
-				needed[n - 1] = 1
-				needed[n] = 1
-		if not needed.has(1): return
-	var profile := PackedFloat32Array()
-	# У троп сохраняем естественные перегибы; поперечная полка считается отдельно.
-	var smoothing := 0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0)
-	# Соседние окна используют одни и те же высоты; хранить в double, как результат выборки.
-	var base_heights := PackedFloat64Array()
-	if smoothing > 0.0:
-		base_heights.resize(pts.size())
-		var samples := needed.duplicate()
-		if not needed.is_empty():
-			for n in pts.size():
-				if needed[n] != 0:
-					for j in range(maxi(0, n - 3), mini(pts.size(), n + 4)): samples[j] = 1
-		for n in pts.size():
-			if not samples.is_empty() and samples[n] == 0: continue
-			base_heights[n] = _heights.base_ground_at(pts[n].x * TILE, pts[n].y * TILE)
-	# Короткое симметричное окно по уже выровненному полотну; концы развилок закреплены.
-	for n in pts.size():
-		if not needed.is_empty() and needed[n] == 0:
-			profile.append(0.0)
-			continue
-		var p := Vector2(pts[n].x, pts[n].y) * TILE
-		var h := _heights.base_ground_at(p.x, p.y)
-		var sum_h := h
-		var count := 1
-		var radius := mini(3, mini(n, pts.size() - 1 - n)) if smoothing > 0.0 else 0
-		for j in range(n - radius, n + radius + 1):
-			if j != n:
-				sum_h += base_heights[j]
-				count += 1
-		profile.append(lerpf(h, sum_h / count, smoothing))
-	var along := 0.0
-	for n in range(1, pts.size()):
-		var a := Vector2(pts[n - 1].x, pts[n - 1].y) * TILE
-		var b := Vector2(pts[n].x, pts[n].y) * TILE
-		if a.distance_squared_to(b) < 0.0001:
-			continue
-		if not needed.is_empty() and (needed[n - 1] == 0 or needed[n] == 0):
-			along += a.distance_to(b)
-			continue
-		var half_a := float(pts[n - 1].w) * TILE * 0.5
-		var half_b := float(pts[n].w) * TILE * 0.5
-		var half := maxf(half_a, half_b)
-		var surf: int = t.surf[n - 1]
-		var next_surf: int = t.surf[n]
-		var s := {a = a, delta = b - a, len2 = a.distance_squared_to(b), half_a = half_a, half_b = half_b, half_max = half,
-			ha = profile[n - 1], hb = profile[n], surf = surf, next = next_surf, kind = t.kind, route = route, along = along}
-		s.id = -1
-		along += a.distance_to(b)
-		var reach := half + _reach + TILE
-		for z in range(maxi(0, floori((minf(a.y, b.y) - reach) / TILE - 0.5)), mini(w.H - 1, ceili((maxf(a.y, b.y) + reach) / TILE - 0.5))):
-			for x in range(maxi(0, floori((minf(a.x, b.x) - reach) / TILE - 0.5)), mini(w.W - 1, ceili((maxf(a.x, b.x) + reach) / TILE - 0.5))):
-				var key := z * w.W + x
-				if not _wanted.is_empty() and not _wanted.has(key): continue
-				var center := Vector2(x + 1.0, z + 1.0) * TILE
-				if Grid.segment_dist(center.x, center.y, a.x, a.y, b.x, b.y) > half + _reach + TILE * 0.71:
-					continue
-				if s.id < 0:
-					s.id = _segment_list.size()
-					_segment_list.append(s)
-				if not _segments.has(key):
-					_segments[key] = []
-				_segments[key].append(s)
-
-
-## 4.5: три линейных прохода по пути — оценка, расстояние до защищённых мест, профиль.
-## Резкий локальный перегиб требует обработки, постоянный чрезмерный уклон — другого маршрута.
-## 14.11: тот же проход по станциям собирает входы форм коридора для всех видов путей (горные тропы — без подгонки
-## профиля); формы всех путей считаются потом одним пакетом (_build_corridor).
-## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ, в игре и в Trail Lab не вызывается (там весь проход — _fit_network_native, и для частичной
-## сборки only тоже): GDScript-подгонка и формы коридора остаются для сверки с C# (road_relief_test, road_native_test, road_golden).
-func _fit_network() -> void:
-	var w := _heights.world
+## 4.5, 14.11: весь проход одним вызовом C# (FastGrid.RoadFitNetwork): станции через STEP метров, подгонка профиля пути
+## (оценка, расстояние до защищённых мест, профиль), защита и формы коридора всех видов путей (горные тропы — без подгонки
+## профиля). Резкий локальный перегиб требует обработки, постоянный чрезмерный уклон — другого маршрута.
+## false — C# вернул не словарь (исключение внутри).
+func _fit_network(fast: Object) -> bool:
 	_index_route_identity()
-	if allow_fast_vertices and not _cs_starts.is_empty() and w.outer == null:
-		var fast := Grid.fast_grid()
-		if fast != null:
-			if _fit_network_native(fast):
-				return
-	var batch := {points = PackedVector2Array(), half = PackedFloat32Array(), surface = PackedInt32Array(), gate = PackedFloat32Array(),
-		starts = PackedInt32Array(), kinds = PackedInt32Array(), scales = PackedFloat32Array(), routes = PackedInt32Array()}
-	for route in w.trails.size():
-		var t: Dictionary = w.trails[route]
-		var kind := CORRIDOR_KINDS.find(t.kind)
-		if kind < 0 or not (_only.is_empty() or _only.has(route)):
-			continue
-		# Трасса с земляными работами (trail_id, earthwork > 0) — авторская геометрия TrailShaping: форм коридора под ней нет.
-		# Путь трассы без земляных работ — природная тропа: формы слабее и без продавленных мест.
-		var scale := 1.0
-		if t.has("trail_id"):
-			scale = PREPARED_SCALE if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
-		var shaped := natural_relief and scale > 0.0
-		var points := PackedVector2Array()
-		var halves := PackedFloat32Array()
-		var surfs := PackedInt32Array()
-		var along := 0.0
-		var next := 0.0
-		for n in range(1, t.pts.size()):
-			var a := Vector2(t.pts[n - 1].x, t.pts[n - 1].y) * TILE
-			var b := Vector2(t.pts[n].x, t.pts[n].y) * TILE
-			var length := a.distance_to(b)
-			if length < 0.01:
-				continue
-			while next <= along + length:
-				var f := (next - along) / length
-				points.append(a.lerp(b, f))
-				halves.append(lerpf(float(t.pts[n - 1].w), float(t.pts[n].w), f) * TILE * 0.5)
-				surfs.append(t.surf[n - 1] if f < 0.5 else t.surf[n])
-				next += STEP
-			along += length
-		var count := points.size()
-		if count < 3:
-			continue
-		var gate := PackedFloat32Array()
-		gate.resize(count)
-		_fit_route(t, route, points, halves, gate)
-		if shaped:
-			var batch_points: PackedVector2Array = batch.points
-			batch.starts.append(batch_points.size())
-			batch.kinds.append(kind)
-			batch.scales.append(scale)
-			batch.routes.append(route)
-			batch.points.append_array(points)
-			batch.half.append_array(halves)
-			batch.surface.append_array(surfs)
-			batch.gate.append_array(gate)
-	_build_corridor(batch)
-
-
-## 14.11: весь проход одним вызовом C# (FastGrid.RoadFitNetwork) — станции, подгонка профиля, защита, формы коридора.
-## Результат тот же, что у GDScript-пути выше (он остаётся эталоном): прежде этот проход был самым долгим этапом полотна.
-func _fit_network_native(fast: Object) -> bool:
 	var w := _heights.world
 	var starts := PackedInt32Array()
 	var xs := PackedFloat64Array()
@@ -769,7 +363,7 @@ func _fit_network_native(fast: Object) -> bool:
 		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
 		_cs_starts, _cs_ids, _route_identity, _noise, _origin, corridor_params(), _authored_routes())
 	if not out is Dictionary:
-		push_error("RoadRefinement: C# вернул null, подгонка идёт на GDScript")
+		push_error("RoadRefinement: C# не выполнил подгонку профиля и формы коридора (исключение внутри расчёта)")
 		return false
 	var routes: PackedInt32Array = out.routes
 	var at: PackedInt32Array = out.starts
@@ -792,136 +386,19 @@ func _fit_network_native(fast: Object) -> bool:
 	return true
 
 
-## Подгонка профиля одной дороги или тропы (4.5). gate получает долю станции, где разрешены формы коридора.
-## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ, в игре не вызывается (см. _fit_network_native).
-func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: PackedFloat32Array, gate: PackedFloat32Array) -> void:
-	var count := points.size()
-	var ground := PackedFloat32Array()
-	ground.resize(count)
-	for j in count:
-		ground[j] = _heights.base_ground_at(points[j].x, points[j].y)
-	if t.kind == "mountain":
-		# Preserve the natural profile, but honour the same protected stations as roads.
-		# The local transverse bench may trim 60 cm, without smoothing the axis.
-		var local_cut := 0.6 if natural_relief and (not t.has("trail_id") or (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0) else 0.3
-		var strength := PackedFloat32Array()
-		var limits := PackedFloat32Array()
-		var distance := PackedFloat32Array()
-		for j in count:
-			var tangent := (points[mini(count - 1, j + 2)] - points[maxi(0, j - 2)]).normalized()
-			var safe := _fit_safe(points[j], tangent, route, j * STEP, false, halves[j])
-			gate[j] = 1.0 if (safe & 2) != 0 else 0.0
-			distance.append(0.0 if safe == 0 or j == 0 else distance[j - 1] + STEP)
-		var back := 0.0
-		for j in range(count - 1, -1, -1):
-			back = 0.0 if j == count - 1 or distance[j] == 0.0 else back + STEP
-			distance[j] = minf(distance[j], back)
-		for j in count:
-			strength.append(smoothstep(0.0, FIT_FADE, distance[j]))
-			limits.append(local_cut)
-		fit_routes[route] = {points = points, profile = ground, strength = strength, limit = limits}
-		return
-	var need := PackedFloat32Array()
-	var cross_slopes := PackedFloat32Array()
-	var allowed := PackedFloat32Array()
-	var distance := PackedFloat32Array()
-	need.resize(count)
-	cross_slopes.resize(count)
-	allowed.resize(count)
-	distance.resize(count)
-	for j in count:
-		var p := points[j]
-		var lo := maxi(0, j - 2)
-		var hi := mini(count - 1, j + 2)
-		var tangent := (points[hi] - points[lo]).normalized()
-		var normal := Vector2(-tangent.y, tangent.x) * 1.5
-		var cross_grade := absf(_heights.base_ground_at(p.x + normal.x, p.y + normal.y) - _heights.base_ground_at(p.x - normal.x, p.y - normal.y)) / 3.0
-		cross_slopes[j] = cross_grade
-		var grade := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
-		var ripple := absf(ground[maxi(0, j - 4)] - 2.0 * ground[j] + ground[mini(count - 1, j + 4)]) / (8.0 * STEP)
-		need[j] = maxf(smoothstep(0.02, 0.10, cross_grade), maxf(smoothstep(0.08, 0.30, grade), smoothstep(0.004, 0.035, ripple)))
-		lo = maxi(0, j - 12)
-		hi = mini(count - 1, j + 12)
-		var sustained := absf(ground[hi] - ground[lo]) / maxf((hi - lo) * STEP, STEP)
-		# Косой склон требует полки и у обычной тропы. Непригодный продольный подъём остаётся защищён.
-		allowed[j] = 1.0 - smoothstep(0.45, 0.7, sustained)
-		# Keep the riding shelf where the natural grade or crossfall already needs it.
-		var short_fold := maxf(grade, cross_grade) <= 0.25
-		var safe := _fit_safe(p, tangent, route, j * STEP, t.kind == "road", halves[j], short_fold)
-		gate[j] = allowed[j] if (safe & 2) != 0 else 0.0
-		if (safe & 1) == 0:
-			allowed[j] = 0.0
-		distance[j] = 0.0 if allowed[j] <= 0.0 else (distance[j - 1] + STEP if j > 0 else 0.0)
-	# Симметричное окно не пересекает берег, сооружение, развилку или конец пути.
-	var back := 0.0
-	for j in range(count - 1, -1, -1):
-		back = 0.0 if j == count - 1 or allowed[j] <= 0.0 else back + STEP
-		distance[j] = minf(distance[j], back)
-	var profile := PackedFloat32Array()
-	var strength := PackedFloat32Array()
-	var limits := PackedFloat32Array()
-	for j in count:
-		var amount := 0.0
-		var cross_slope := 0.0
-		var lo := maxi(0, j - 4)
-		var hi := mini(count - 1, j + 4)
-		for k in range(lo, hi + 1):
-			amount += need[k]
-			cross_slope += cross_slopes[k]
-		amount /= hi - lo + 1
-		cross_slope /= hi - lo + 1
-		var radius := mini(12, maxi(0, floori(distance[j] / STEP) - 1))
-		var small := mini(4, radius)
-		var sum_h := 0.0
-		var sum_small := 0.0
-		for k in range(j - radius, j + radius + 1):
-			sum_h += ground[k]
-			if absi(k - j) <= small:
-				sum_small += ground[k]
-		var average := lerpf(sum_small / (2 * small + 1), sum_h / (2 * radius + 1), amount)
-		var axial_limit := lerpf(0.15, 0.9, amount) * (0.35 if t.kind == "trail" else 1.0)
-		# RoadBed already retained a safe natural profile. Do not erase its crests a second time.
-		var smoothing := 0.0 if t.kind == "road" and not t.has("trail_id") else lerpf(0.35, 0.95, amount)
-		var target := ground[j] + clampf((average - ground[j]) * smoothing, -axial_limit, axial_limit)
-		profile.append(target)
-		var power := lerpf(0.25, 1.0, amount) * allowed[j] * smoothstep(0.0, FIT_FADE, distance[j])
-		var trail_power := lerpf(0.55, 0.85, smoothstep(0.5, 0.9, cross_slope)) if t.kind == "trail" else 1.0
-		strength.append(power * trail_power)
-		var cap := lerpf(0.2, FIT_LIMIT, amount) * (0.5 if t.kind == "trail" else 1.0)
-		var bench_limit := BENCH_LIMIT if t.kind == "road" else TRAIL_BENCH_LIMIT
-		cap = maxf(cap, minf(bench_limit, cross_slope * halves[j]))
-		limits.append(cap)
-	fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
-
-
-## 16.11: эталон для стендов, в игре не вызывается. Формы коридора пакета на GDScript (эталон; весь мир в игре считает FastGrid.RoadFitNetwork, см. _fit_network_native).
-func _build_corridor(batch: Dictionary) -> void:
-	corridor = PackedFloat64Array()
-	corridor_routes = {}
-	var starts: PackedInt32Array = batch.starts
-	if starts.is_empty():
-		return
-	var points: PackedVector2Array = batch.points
-	starts.append(points.size())
-	corridor = _corridor_reference(points, batch.half, batch.surface, batch.gate, starts, batch.kinds, batch.scales, batch.routes, corridor_params())
-	var routes: PackedInt32Array = batch.routes
-	for k in routes.size():
-		corridor_routes[routes[k]] = Vector2i(starts[k], starts[k + 1] - starts[k])
-
-
 static var _code_version := -1
 
 
-## Версия дорожного кода на C# (Roads.RoadCode.Version) — часть ключа кэша поверхности; 0 без .NET (мир тогда считается на GDScript).
+## Версия дорожного кода на C# (Roads.RoadCode.Version) — часть ключа кэша поверхности; 0 без .NET (дороги тогда не строятся).
 static func code_version() -> int:
 	if _code_version < 0:
-		var fast := Grid.fast_grid()
+		var fast := Grid.native_grid()
 		_code_version = int(fast.RoadCodeVersion()) if fast != null else 0
 	return _code_version
 
 
 ## Все числа подгонки и форм коридора одним словарём с именованными ключами — единственное место, где они собираются:
-## C# (Roads.CorridorParams, FastGrid.RoadFitNetwork) разбирает его один раз на вызов, эталон _corridor_reference читает тот же.
+## C# (Roads.CorridorParams, FastGrid.RoadFitNetwork) разбирает его один раз на вызов.
 ## kinds — по виду пути в порядке CORRIDOR_KINDS (roll, bump, tilt, keep, max, dish, var, hollow, ditch, lip, grade); surface_gain —
 ## по покрытию RoadSurface; character — по покрытию × (roll, bump, wobble); rhythm — ритм участков по RoadBump.patch (1 — да);
 ## level_kind — выравнивание спокойных участков по виду, level_surface — по покрытию; fit — подгонка профиля и пределы полки;
@@ -951,214 +428,6 @@ static func corridor_params() -> Dictionary:
 	}
 
 
-## Эталон FastGrid.CorridorRoute: те же операции в том же порядке. Природный поперечный склон и уклон — по рельефу
-## до полотна (hv_raw), характер участка (спокойный, волнистый, разбитый) — медленный шум в мировых метрах.
-## Числа — из corridor_params().
-func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array, surfaces: PackedInt32Array, gates: PackedFloat32Array,
-		starts: PackedInt32Array, kinds: PackedInt32Array, scales: PackedFloat32Array, routes: PackedInt32Array, params: Dictionary) -> PackedFloat64Array:
-	var out := PackedFloat64Array()
-	out.resize(points.size() * CORRIDOR_STRIDE)
-	var surface_gain: PackedFloat64Array = params.surface_gain
-	var character_gain: PackedFloat64Array = params.character
-	var level_kind: PackedFloat64Array = params.level_kind
-	var level_surface: PackedFloat64Array = params.level_surface
-	var rhythm: bool = params.rhythm
-	var fit_p: Dictionary = params.fit
-	var land_gap: float = fit_p.land_gap
-	var fit_fade: float = fit_p.fit_fade
-	var gap_min: float = params.gap
-	var fade: float = params.fade
-	var rhythm_span: float = params.rhythm_span
-	var level_r: int = params.level_r
-	for r in kinds.size():
-		var from := starts[r]
-		var to := starts[r + 1]
-		var n := to - from
-		var kp: Dictionary = params.kinds[kinds[r]]
-		var k_roll: float = kp.roll
-		var k_bump: float = kp.bump
-		var k_tilt: float = kp.tilt
-		var k_keep: float = kp.keep
-		var k_max: float = kp.max
-		var k_dish: float = kp.dish
-		var k_var: float = kp["var"]
-		var k_hollow: float = kp.hollow
-		var k_ditch: float = kp.ditch
-		var k_lip: float = kp.lip
-		var k_grade: float = kp.grade
-		var scale: float = scales[r]
-		var holes := 1.0 if scale >= 1.0 else 0.0
-		var open := PackedFloat64Array()
-		open.resize(n)
-		var land_dist := PackedFloat64Array()
-		land_dist.resize(n)
-		for j in n:
-			open[j] = gates[from + j]
-			var tangent := (points[mini(to - 1, from + j + 2)] - points[maxi(from, from + j - 2)]).normalized()
-			var gap := _corridor_clearance(points[from + j], tangent, routes[r], j * STEP, halves[from + j]) if open[j] > 0.0 else 0.0
-			if gap < gap_min:
-				open[j] = 0.0
-			land_dist[j] = 0.0 if gap < land_gap or j == 0 or j == n - 1 else land_dist[j - 1] + STEP
-		# расстояние до закреплённой станции в обе стороны; концы пути закреплены
-		var dist := PackedFloat64Array()
-		dist.resize(n)
-		for j in n:
-			dist[j] = 0.0 if open[j] <= 0.0 or j == 0 else dist[j - 1] + STEP
-		var back := 0.0
-		var land_back := 0.0
-		for j in range(n - 1, -1, -1):
-			back = 0.0 if open[j] <= 0.0 or j == n - 1 else back + STEP
-			dist[j] = minf(dist[j], back)
-			land_back = 0.0 if land_dist[j] == 0.0 else land_back + STEP
-			land_dist[j] = minf(land_dist[j], land_back)
-		# высота оси по станциям и её скользящие суммы — для выравнивания спокойных участков. 16.11: у дорог и троп —
-		# ось уже после подгонки профиля (_fit_route: полотно + ограниченный сдвиг к профилю с его силой), иначе тропа
-		# выравнивалась дважды (сглаживание профиля + вычитание того же отклонения здесь) и бугор переходил в ложбину
-		var fit: Dictionary = fit_routes.get(routes[r], {}) if kinds[r] != 2 else {}
-		var bed := PackedFloat64Array()
-		bed.resize(n)
-		var bed_sum := PackedFloat64Array()
-		bed_sum.resize(n + 1)
-		for j in n:
-			bed[j] = _heights.base_ground_at(points[from + j].x, points[from + j].y)
-			if not fit.is_empty():
-				bed[j] += clampf(fit.profile[j] - bed[j], -fit.limit[j], fit.limit[j]) * fit.strength[j]
-			bed_sum[j + 1] = bed_sum[j] + bed[j]
-		var lift := PackedFloat64Array()
-		lift.resize(n)
-		for j in n:
-			var i := from + j
-			var gate: float = open[j] * smoothstep(0.0, fade, dist[j])
-			if gate <= 0.0:
-				continue
-			var tangent := (points[mini(to - 1, i + 2)] - points[maxi(from, i - 2)]).normalized()
-			var across := Vector2(tangent.y, -tangent.x)
-			var half: float = halves[i]
-			var reach := half + 3.0
-			var a := points[i] + across * reach
-			var b := points[i] - across * reach
-			var cross := (_heights.base_ground_at(a.x, a.y, true) - _heights.base_ground_at(b.x, b.y, true)) / (2.0 * reach)
-			var g0 := maxi(from, i - 5)
-			var g1 := mini(to - 1, i + 5)
-			var grade := absf(_heights.base_ground_at(points[g1].x, points[g1].y, true) - _heights.base_ground_at(points[g0].x, points[g0].y, true)) / maxf(1.0, g1 - g0) / STEP
-			var p := points[i] + _origin
-			var character := (floorf(RoadBump.patch_x(p.x, p.y) * 1048576.0) / 1048576.0 - 0.5) * rhythm_span if rhythm else _noise.get_noise_2d(p.x * 0.005 + 311.0, p.y * 0.005 - 97.0)
-			var c_at: int = surfaces[i] * 3
-			var roll := _noise.get_noise_2d(p.x * 0.033 + 17.0, p.y * 0.033 + 53.0)
-			var bump := _noise.get_noise_2d(p.x * 0.1 - 41.0, p.y * 0.1 + 9.0)
-			# односторонние величины берутся по обе стороны полотна: у пути в обратную сторону или у второго пути той же
-			# линии перекос, продавленное место и обочины лежат там же
-			var wide := across * 6.0
-			var wobble := (_noise.get_noise_2d((p.x + wide.x) * 0.045 + 88.0, (p.y + wide.y) * 0.045 - 14.0)
-				- _noise.get_noise_2d((p.x - wide.x) * 0.045 + 88.0, (p.y - wide.y) * 0.045 - 14.0)) * 0.9
-			var bowl := _noise.get_noise_2d(p.x * 0.022 - 201.0, p.y * 0.022 + 77.0)
-			var hole := _noise.get_noise_2d(p.x * 0.12 + 57.0, p.y * 0.12 + 211.0)
-			var near := across * 4.0
-			var spot := _noise.get_noise_2d((p.x + near.x) * 0.04 - 140.0, (p.y + near.y) * 0.04 + 33.0) \
-				- _noise.get_noise_2d((p.x - near.x) * 0.04 - 140.0, (p.y - near.y) * 0.04 + 33.0)
-			var out_r := p + across * (half + 1.5)
-			var out_l := p - across * (half + 1.5)
-			var left := _noise.get_noise_2d(out_l.x * 0.028 + 400.0, out_l.y * 0.028 + 12.0)
-			var right := _noise.get_noise_2d(out_r.x * 0.028 + 400.0, out_r.y * 0.028 + 12.0)
-			# 15.0: канава и вал прерывистые и бугристые (~9 м): то промоина, то холмик, то ровная обочина
-			var lump_l := _noise.get_noise_2d(out_l.x * 0.11 + 37.0, out_l.y * 0.11 - 19.0)
-			var lump_r := _noise.get_noise_2d(out_r.x * 0.11 + 37.0, out_r.y * 0.11 - 19.0)
-			var energy := lerpf(0.3, 1.0, smoothstep(-0.3, 0.0, character)) + 0.5 * smoothstep(0.15, 0.4, character)
-			energy *= 1.0 + 0.5 * smoothstep(0.05, 0.15, grade)
-			var broken := smoothstep(0.12, 0.35, character)
-			var mul: float = surface_gain[surfaces[i]] * scale
-			var at := i * CORRIDOR_STRIDE
-			# A real hollow/crest across the route takes precedence over an unrelated wave.
-			# Sample the raw terrain, before both road smoothing passes. The symmetric
-			# 20 m chord is direction-independent; existing pins/grade limits still apply.
-			var reach_along := tangent * 10.0
-			var raw_mid := _heights.base_ground_at(points[i].x, points[i].y, true)
-			var raw_a := _heights.base_ground_at(points[i].x - reach_along.x, points[i].y - reach_along.y, true)
-			var raw_b := _heights.base_ground_at(points[i].x + reach_along.x, points[i].y + reach_along.y, true)
-			var curve := raw_mid - (raw_a + raw_b) * 0.5
-			var landform := smoothstep(0.035, 0.16, absf(curve)) * (1.0 if kinds[r] == 0 else 0.55)
-			var terrain_lift := clampf(curve, -0.35, 0.35) * (1.0 - smoothstep(0.25, 0.5, maxf(grade, absf(cross))))
-			var free_lift := k_roll * roll * (0.6 + 0.4 * energy) * character_gain[c_at] + k_bump * bump * energy * character_gain[c_at + 1]
-			lift[j] = lerpf(free_lift, terrain_lift, landform) * mul * gate
-			if rhythm:
-				var lr := mini(level_r, mini(j, n - 1 - j))
-				var deviation := bed[j] - (bed_sum[j + lr + 1] - bed_sum[j - lr]) / (2 * lr + 1)
-				var calm := 1.0 - smoothstep(-0.3, 0.15, character)
-				lift[j] -= deviation * minf(0.9, level_kind[kinds[r]] * level_surface[surfaces[i]]) * calm * gate
-			var natural := cross * k_keep * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
-			var limit: float = k_max * half
-			out[at + 1] = clampf(natural + k_tilt * wobble * (0.5 + 0.5 * energy) * character_gain[c_at + 2], -limit, limit) * scale * gate
-			out[at + 2] = (k_dish + k_var * bowl) * (0.5 + 0.5 * energy) * scale * gate
-			out[at + 3] = k_hollow * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
-			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)
-			var slope := smoothstep(0.04, 0.15, absf(cross))
-			var gain := (0.6 + 0.4 * energy) * scale * gate
-			out[at + 5] = _shoulder(-1.0, cross, left, slope, k_ditch, k_lip) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_l))
-			out[at + 6] = _shoulder(1.0, cross, right, slope, k_ditch, k_lip) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_r))
-			var grade_max := maxf(grade, absf(cross))
-			var land_slope := (0.3 + 0.7 * smoothstep(0.02, 0.18, grade_max)) * (1.0 - smoothstep(0.28, 0.58, grade_max))
-			out[at + 7] = holes * mul * gate * smoothstep(0.0, fit_fade, land_dist[j]) * land_slope * smoothstep(-0.25, 0.12, character) * lerpf(0.35, 1.0, smoothstep(0.02, 0.3, -curve))
-		# добавленный продольный уклон не круче grade: от закреплённых нулей формы поднимаются плавно
-		var cap: float = k_grade * STEP
-		# Сначала ограничиваем высоту расстоянием до закреплённых нулей: проходы уклона
-		# должны уменьшать соседние пики, а не сдвигать сами закреплённые станции.
-		for j in n:
-			lift[j] = clampf(lift[j], -cap * dist[j] / STEP, cap * dist[j] / STEP)
-		for j in range(1, n):
-			lift[j] = clampf(lift[j], lift[j - 1] - cap, lift[j - 1] + cap)
-		for j in range(n - 2, -1, -1):
-			lift[j] = clampf(lift[j], lift[j + 1] - cap, lift[j + 1] + cap)
-		for j in n:
-			out[(from + j) * CORRIDOR_STRIDE] = 0.0 if dist[j] == 0.0 else lift[j]
-	return out
-
-
-## Обочина с одной стороны: на косом склоне выше по склону канава (сток), ниже — земляной вал (отвал); на ровном —
-## по шуму то канава, то вал. side — сторона полотна (−1/+1), cross — природный поперечный уклон (+: выше сторона +1).
-## Есть ли рядом другой путь или петля этого (отрезки клеток 3 × 3 вокруг точки; порядок не важен)
-func _corridor_clearance(p: Vector2, tangent: Vector2, route: int, along: float, own_half: float) -> float:
-	var w := _heights.world
-	var cx := floori(p.x / TILE - 0.5)
-	var cz := floori(p.y / TILE - 0.5)
-	var clearance := LAND_GAP
-	for dz in range(-1, 2):
-		for dx in range(-1, 2):
-			var x := cx + dx
-			var z := cz + dz
-			if x < 0 or z < 0 or x >= w.W or z >= w.H:
-				continue
-			var key := z * w.W + x
-			if not _cs_starts.is_empty():
-				for k in range(_cs_starts[key], _cs_starts[key + 1]):
-					var id := _cs_ids[k]
-					clearance = minf(clearance, _corridor_gap(p, tangent, route, along, own_half, _sg_a[id], _sg_delta[id], _sg_len2[id], maxf(_sg_half[2 * id], _sg_half[2 * id + 1]), _sg_route[id], _sg_along[id]))
-					if clearance < CORRIDOR_GAP:
-						return clearance
-			else:
-				for s: Dictionary in _segments.get(key, []):
-					clearance = minf(clearance, _corridor_gap(p, tangent, route, along, own_half, s.a, s.delta, s.len2, s.half_max, s.route, s.along))
-					if clearance < CORRIDOR_GAP:
-						return clearance
-	return clearance
-
-
-func _corridor_gap(p: Vector2, tangent: Vector2, route: int, along: float, own_half: float, a: Vector2, delta: Vector2, len2: float,
-	half: float, seg_route: int, seg_along: float) -> float:
-	if seg_route == route:
-		if absf(seg_along - along) <= 20.0:
-			return INF
-		var u := clampf((p - a).dot(delta) / len2, 0.0, 1.0)
-		if absf(seg_along + u * sqrt(len2) - along) <= 20.0:
-			return INF
-	var b := a + delta
-	var gap := Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y)
-	if seg_route != route and gap < 20.0:
-		var direction := delta.normalized()
-		if _shared(absf((p - a).cross(direction)), absf(tangent.dot(direction)) < 0.9, route, seg_route, own_half, half):
-			return INF
-	return gap - half - own_half
-
-
 ## 11.11.2026: каждая ось сети существует один раз (StageTrails._add_trail: участки и узлы), поэтому «тот же путь» —
 ## только сам путь. Прежний поиск полных дублей по хешу линий (sha256 каждой записи при каждой сборке) больше не нужен;
 ## массив остаётся входом FastGrid.RoadFitNetwork.
@@ -1168,246 +437,9 @@ func _index_route_identity() -> void:
 		_route_identity[route] = route
 
 
-func _shared(_gap: float, _crossing: bool, route: int, other: int, _own_half: float, _half: float) -> bool:
-	return route == other or (not _route_identity.is_empty() and _route_identity[route] == _route_identity[other])
-
-
-static func _shoulder(side: float, cross: float, n: float, slope: float, ditch: float, lip: float) -> float:
-	var flat := lip * minf(1.0, n * 2.5) if n >= 0.0 else -ditch * minf(1.0, -n * 2.5)
-	var sloped := -ditch * (0.7 + 0.3 * n) if side * cross > 0.0 else lip * (0.6 + 0.4 * n)
-	return lerpf(flat, sloped, slope)
-
-
 static func _bell(t: float) -> float:
 	var q := 1.0 - t * t
 	return q * q if q > 0.0 else 0.0
-
-
-# A short switchback can bring opposite legs together within 20 m along the axis.
-static func _fit_hairpin(p: Vector2, tangent: Vector2, along: float, a: Vector2, delta: Vector2,
-		len2: float, seg_along: float, close_gap: float, short_fold: bool) -> bool:
-	var dot := tangent.dot(delta)
-	var opposite := short_fold and dot < 0.0 and 4.0 * dot * dot > len2
-	if not opposite and absf(seg_along - along) <= 20.0:
-		return false
-	var offset := p - a
-	var u := clampf(offset.dot(delta) / len2, 0.0, 1.0)
-	var separation := absf(seg_along + u * sqrt(len2) - along)
-	if separation > 20.0:
-		return true
-	# Require at least twice as much distance along the road as across the gap.
-	return opposite and separation >= 6.0 and (offset - delta * u).length_squared() < minf(
-		close_gap * close_gap, separation * separation * 0.25)
-
-
-## Bit 0: existing profile fit allowed; bit 1: corridor forms allowed as well.
-## Overlapping independent profiles pin earthworks to their common base terrain.
-func _fit_safe(p: Vector2, tangent: Vector2, route: int, along: float, shore_ok := false,
-		own_half := -1.0, short_fold := false) -> int:
-	var w := _heights.world
-	var safe := 3
-	var x := floori(p.x / TILE)
-	var z := floori(p.y / TILE)
-	if x < 0 or x >= w.W or z < 0 or z >= w.H:
-		return 0
-	var cell := z * w.W + x
-	if (not shore_ok and w.dist_water[cell] < RoadBed.SHORE.y) or _heights.water_level[cell] != -INF:
-		return 0
-	var key := clampi(floori(p.y / TILE - 0.5), 0, w.H - 2) * w.W + clampi(floori(p.x / TILE - 0.5), 0, w.W - 2)
-	for s: Dictionary in _structures.get(key, []):
-		if Grid.segment_dist(p.x, p.y, s.ax, s.az, s.bx, s.bz) < RoadBed.PIN + RoadBed.PIN_FADE:
-			return 0
-	if not _cs_starts.is_empty():
-		# Быстрый путь: те же отрезки клетки столбцами (FastGrid.RoadIndex), те же вычисления
-		if key >= 0 and key < w.N:
-			for k in range(_cs_starts[key], _cs_starts[key + 1]):
-				var id := _cs_ids[k]
-				var a := _sg_a[id]
-				var delta := _sg_delta[id]
-				var b := a + delta
-				var seg_route := _sg_route[id]
-				var other := seg_route != route
-				var crossing: bool = other and absf(tangent.dot(delta.normalized())) < 0.9
-				var corridor_gap := maxf(_sg_half[2 * id], _sg_half[2 * id + 1]) + maxf(0.0, own_half) + CORRIDOR_GAP
-				var hairpin := not other and _fit_hairpin(p, tangent, along, a, delta, _sg_len2[id], _sg_along[id], corridor_gap, short_fold)
-				if other or hairpin:
-					var gap := Grid.segment_dist(p.x, p.y, a.x, a.y, b.x, b.y)
-					if gap < maxf(_sg_half[2 * id], _sg_half[2 * id + 1]) + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
-						if crossing or hairpin: return 0
-						# Independent station profiles cannot safely switch at a nearest-route boundary.
-						var lateral := absf((p - a).cross(delta.normalized()))
-						if not _shared(lateral, crossing, route, seg_route, own_half, maxf(_sg_half[2 * id], _sg_half[2 * id + 1])):
-							if gap < corridor_gap: return 0
-							safe &= 2 # distinct shelves stay pinned; disjoint narrow forms remain available
-	else:
-		for s: Dictionary in _segments.get(key, []):
-			var b: Vector2 = s.a + s.delta
-			var other: bool = s.route != route
-			var crossing: bool = other and absf(tangent.dot(s.delta.normalized())) < 0.9
-			var corridor_gap := float(s.half_max) + maxf(0.0, own_half) + CORRIDOR_GAP
-			var hairpin := not other and _fit_hairpin(p, tangent, along, s.a, s.delta, s.len2, s.along, corridor_gap, short_fold)
-			if other or hairpin:
-				var gap := Grid.segment_dist(p.x, p.y, s.a.x, s.a.y, b.x, b.y)
-				if gap < s.half_max + maxf(0.0, own_half) + 2.0 * REACH + 0.5:
-					if crossing or hairpin: return 0
-					var lateral := absf((p - (s.a as Vector2)).cross((s.delta as Vector2).normalized()))
-					if not _shared(lateral, crossing, route, s.route, own_half, s.half_max):
-						if gap < corridor_gap: return 0
-						safe &= 2
-	for village: SettlementData in w.settlements:
-		if p.distance_to(Vector2(village.x, village.y) * TILE) < 10.0:
-			return 0
-	return safe
-
-
-func _base_at(x: float, z: float) -> float:
-	return _heights.base_ground_at(x, z)
-
-
-## Без кэша (с 12.2): вершины считаются в нескольких потоках, а это всего восемь чтений
-func _wet_near(i: int) -> float:
-	return RoadBed.wet_near(_heights, i)
-
-
-func _vertex(x: float, z: float, nearest := PackedFloat64Array(), nearest_at := -1) -> Dictionary:
-	var W := _heights.world.W
-	var H := _height
-	var base := _base_at(x, z)
-	var key := clampi(floori(z / TILE - 0.5), 0, H - 2) * W + clampi(floori(x / TILE - 0.5), 0, W - 2)
-	var best := INF
-	var road: Dictionary = {}
-	var u := 0.0
-	var side := 0.0
-	var distance := 0.0
-	var fitted := false
-	if nearest_at >= 0:
-		if nearest[nearest_at] >= 0.0:
-			road = _segment_list[int(nearest[nearest_at])]
-			u = nearest[nearest_at + 1]
-			distance = nearest[nearest_at + 2]
-			side = nearest[nearest_at + 3]
-	for s: Dictionary in (_segments.get(key, []) if nearest_at < 0 else []):
-		var delta: Vector2 = s.delta
-		var f := clampf((Vector2(x, z) - s.a).dot(delta) / s.len2, 0.0, 1.0)
-		var offset: Vector2 = Vector2(x, z) - (s.a + delta * f)
-		var d := offset.length()
-		var width := lerpf(s.half_a, s.half_b, f)
-		var in_fit := d < width + REACH
-		var rank := d / width - (0.08 if s.kind == "road" else 0.0)
-		if d < width + _reach and (in_fit and not fitted or in_fit == fitted and rank < best):
-			best = rank
-			fitted = in_fit
-			road = s
-			u = f
-			side = offset.cross(delta.normalized())
-			distance = d
-	if road.is_empty():
-		return {h = base, color = Color(0, 0, 0, 0), uv = Vector2.ZERO, surface = 0, road = false, route = -1, active = false}
-	var half := lerpf(road.half_a, road.half_b, u)
-	var d := distance
-	# Несимметричные края и разная ширина обочины, плавные метровые неровности (шум — в мировых метрах).
-	var slow := _noise.get_noise_2d((x + _origin.x) * 0.13, (z + _origin.y) * 0.13)
-	var grain := _noise.get_noise_2d((x + _origin.x) * 0.8 + 71.0, (z + _origin.y) * 0.8)
-	var edge := half + slow * 0.24 + grain * 0.10
-	var shoulder := 0.7 + (slow + 1.0) * 0.3
-	var mask := 1.0 - smoothstep(edge * 0.55, edge + shoulder, d)
-	var surf: int = road.surf if u < 0.5 else road.next
-	var ca: Array = _surf[road.surf].color
-	var cb: Array = _surf[road.next].color
-	var color := Color8(ca[0], ca[1], ca[2]).lerp(Color8(cb[0], cb[1], cb[2]), smoothstep(0.0, 1.0, u)).srgb_to_linear()
-	if surf == RoadSurface.MEADOW:
-		mask *= 0.65
-	# Меняется только вид края. Прежняя маска остаётся для геометрической микронеровности.
-	var ground_mask := mask
-	var blend := smoothstep(0.0, 1.0, u)
-	var organic := lerpf(_surf[road.surf].organic, _surf[road.next].organic, blend)
-	var authored: bool = _heights.world.trails[road.route].has("trail_id")
-	color.a = tread_mask(half, d, slow, organic, road.kind == "road", authored, grain)
-	var influence := 1.0 - smoothstep(half + 0.3, half + REACH, d)
-	var cx := clampi(floori(x / TILE), 0, W - 1)
-	var cz := clampi(floori(z / TILE), 0, H - 1)
-	var i := cz * W + cx
-	var pin := smoothstep(RoadBed.SHORE.x, RoadBed.SHORE.y, _dist_water[i])
-	# Базовое уточнение затухает у берега; земляная полка дороги обрабатывается отдельно ниже.
-	if _heights.water_level[i] != -INF:
-		pin = 0.0
-	var structure_pin := 1.0
-	for s: Dictionary in _structures.get(key, []):
-		var dist := Grid.segment_dist(x, z, s.ax, s.az, s.bx, s.bz)
-		structure_pin = minf(structure_pin, smoothstep(RoadBed.PIN, RoadBed.PIN + RoadBed.PIN_FADE, dist))
-	pin = minf(pin, structure_pin)
-	var gx := _base_at(x + 1.0, z) - _base_at(x - 1.0, z)
-	var gz := _base_at(x, z + 1.0) - _base_at(x, z - 1.0)
-	pin *= 1.0 - smoothstep(RoadBed.STEEP.x, RoadBed.STEEP.y, Vector2(gx, gz).length() * 0.5)
-	var crown := 0.035 * (1.0 - smoothstep(0.0, half, d))
-	# Sub-metre ruts, stones and grain belong to RoadBump + its shader field. Baking 0.8 m noise or a 30 cm rut
-	# into a metre grid only aliases it (14.11: the grain term is gone from the height for that reason).
-	var detail: float = crown + slow * 0.06 * (1.0 - ground_mask)
-	var limit := 0.65 if road.kind == "road" else 0.3
-	var target := lerpf(road.ha, road.hb, u) + detail
-	var h := base + clampf(target - base, -limit, limit) * influence * pin
-	if fit_routes.has(road.route):
-		var fit: Dictionary = fit_routes[road.route]
-		var at := clampf((road.along + u * sqrt(road.len2)) / STEP, 0.0, fit.profile.size() - 1.0)
-		var j := mini(fit.profile.size() - 2, floori(at))
-		var f := at - j
-		var level := lerpf(fit.profile[j], fit.profile[j + 1], f)
-		var power := lerpf(fit.strength[j], fit.strength[j + 1], f)
-		var cap := lerpf(fit.limit[j], fit.limit[j + 1], f)
-		h = base + clampf(level + detail - base, -cap, cap) * influence * pin * power
-		# Ограниченная земляная полка дороги или обычной тропы на косом склоне.
-		# Полотно остаётся частью того же меша и поверхности движения; вода закреплена.
-		if influence > 0.0 and _heights.water_level[i] == -INF and power > 0.0:
-			var normal := Vector2(-road.delta.y, road.delta.x).normalized() * half
-			var on_axis: Vector2 = road.a + road.delta * u
-			var cross_grade := absf(_heights.base_ground_at(on_axis.x + normal.x, on_axis.y + normal.y) - _heights.base_ground_at(on_axis.x - normal.x, on_axis.y - normal.y)) / (2.0 * half)
-			var bench := smoothstep(BENCH.x, BENCH.y, cross_grade)
-			if bench > 0.0:
-				# Узкая тропа следует высоте своей оси: сильная полка не усиливает продольное сглаживание у поворота.
-				var axis_level := level if road.kind == "road" else _heights.base_ground_at(on_axis.x, on_axis.y)
-				var dry_level := maxf(axis_level + detail, _wet_near(i) + RoadBed.WATER_GAP)
-				var shelf := base + clampf(dry_level - base, -cap, cap)
-				h = lerpf(h, shelf, influence * structure_pin * power * bench)
-	var edge_pin := smoothstep(0.0, FIT_FADE, minf(minf(x - TILE * 0.5, (W - 0.5) * TILE - x), minf(z - TILE * 0.5, (H - 0.5) * TILE - z)))
-	h = lerpf(base, h, edge_pin)
-	# 14.11: формы коридора — одна настоящая поверхность для меша и колёс (дороги, тропы, горные тропы)
-	if corridor_routes.has(road.route):
-		var span: Vector2i = corridor_routes[road.route]
-		var at := clampf((road.along + u * sqrt(road.len2)) / STEP, 0.0, span.y - 1.0)
-		var j := mini(span.y - 2, floori(at))
-		var f := at - j
-		var o := (span.x + j) * CORRIDOR_STRIDE
-		var c := corridor
-		var lift := lerpf(c[o], c[o + CORRIDOR_STRIDE], f)
-		var tilt := lerpf(c[o + 1], c[o + CORRIDOR_STRIDE + 1], f)
-		var dish := lerpf(c[o + 2], c[o + CORRIDOR_STRIDE + 2], f)
-		var hollow := lerpf(c[o + 3], c[o + CORRIDOR_STRIDE + 3], f)
-		var hollow_at := lerpf(c[o + 4], c[o + CORRIDOR_STRIDE + 4], f)
-		var side_neg := lerpf(c[o + 5], c[o + CORRIDOR_STRIDE + 5], f)
-		var side_pos := lerpf(c[o + 6], c[o + CORRIDOR_STRIDE + 6], f)
-		var across := side / half
-		var s := clampf(across, -1.0, 1.0)
-		var section := tilt * s + dish * (1.0 - s * s) - hollow * _bell((across - hollow_at) / CORRIDOR_HOLLOW_W)
-		var core := (lift + section) * (1.0 - smoothstep(half, half + 1.5, d))
-		var e := d - half
-		var v := side_neg if across < 0.0 else side_pos
-		var bank := v * _bell((e - 0.35) / 0.8) if v > 0.0 else v * _bell((e - 0.85) / 0.65)
-		var land := lerpf(c[o + 7], c[o + CORRIDOR_STRIDE + 7], f)
-		var gain := pin * edge_pin
-		h += (core + bank + _land_shape(x + _origin.x, z + _origin.y, e, land)) * gain
-		# низкие места сечения (корыто, нижний край, продавленное место) темнее и сырее, выпуклые — светлее и суше;
-		# на земляном валу проступает трава. Так формы читаются и при ровном свете
-		var shade := clampf(section * gain * 2.5, -0.22, 0.12)
-		color.r *= 1.0 + shade
-		color.g *= 1.0 + shade
-		color.b *= 1.0 + shade
-	if _heights.water_level[i] == -INF and h < base:
-		h = maxf(h, minf(base, _wet_near(i) + RoadBed.WATER_GAP))
-	var active := color.a > 0.0
-	if not active and h != base:
-		var stored := PackedFloat32Array([h, base])
-		active = stored[0] != stored[1]
-	return {h = h, color = color, uv = Vector2(side / half, float(surf) + (0.0 if road.kind == "road" or authored else 0.25)), surface = surf, road = road.kind == "road", route = road.route, active = active}
 
 
 ## Visible wear lies inside the rideable/cleared corridor. This same alpha places grass,
@@ -1418,20 +450,6 @@ static func tread_mask(half: float, d: float, slow: float, organic: float, _road
 		var original_shoulder := (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5)
 		return (1.0 - smoothstep(original_edge * 0.55, original_edge + original_shoulder, d)) * (1.0 - organic * 0.35)
 	return Section.tread_alpha(half, d, slow, organic)
-
-
-## A meandering contour crosses the tread and shoulders in world space.
-## The broader convex patches separate the shallow cuts and leave quiet ground between them.
-func _land_shape(x: float, z: float, edge: float, strength: float) -> float:
-	if strength <= 0.0:
-		return 0.0
-	var contour := _noise.get_noise_2d(x * 0.027 + z * 0.016 + 629.0, z * 0.028 - x * 0.016 - 137.0)
-	var patch := _noise.get_noise_2d(x * 0.012 - 79.0, z * 0.012 + 401.0)
-	var cut := _bell((contour - 0.12) / 0.21) * smoothstep(-0.2, 0.35, patch)
-	var blend := (1.0 - smoothstep(0.8, NATURAL_REACH, edge)) * lerpf(0.72, 1.0, smoothstep(0.0, 1.8, edge))
-	# Global microrelief already belongs to StageRelief/OuterLand. Do not add
-	# unrelated knolls in a five-metre road strip; only shallow local wash remains.
-	return -cut * 0.32 * strength * blend
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).

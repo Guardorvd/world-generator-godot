@@ -24,20 +24,23 @@ func world() -> WorldData:
 	return w
 func route(a: Vector2, b: Vector2, kind := "road", width_a := 0.9, width_b := 0.9) -> Dictionary:
 	return {kind = kind, pts = [{x = a.x, y = a.y, w = width_a}, {x = b.x, y = b.y, w = width_b}], surf = PackedByteArray([1, 1])}
-func parity_check() -> void:
+func edge_check() -> void:
 	var w := world()
 	w.trails = [route(Vector2(0.5, 32.5), Vector2(63.5, 32.5)), route(Vector2(32.5, 0.5), Vector2(32.5, 63.5))]
 	var h := Heightfield.new(w, false)
-	RoadRefinement.allow_fast_vertices = false
-	var reference := RoadRefinement.build(h)
-	RoadRefinement.allow_fast_vertices = true
 	var native := RoadRefinement.build(h)
-	var error := 0.0
-	for key: int in reference.patches:
-		for j in reference.patches[key].h.size():
-			error = maxf(error, absf(reference.patches[key].h[j] - native.patches[key].h[j]))
-	print("EDGE parity max error ", error)
-	check(reference.patches == native.patches, "native patches match reference, including all four map edges")
+	var inside := not native.patches.is_empty()
+	for key: int in native.patches:
+		inside = inside and key % w.W < w.W - 1 and key / w.W < w.H - 1
+	# хеши («edge.cross») — tools/road_golden.gd; здесь: патчи дошли до всех четырёх краёв и не вышли за карту
+	var touched := [false, false, false, false]
+	for key: int in native.patches:
+		touched[0] = touched[0] or key % w.W == 0
+		touched[1] = touched[1] or key % w.W == w.W - 2
+		touched[2] = touched[2] or key / w.W == 0
+		touched[3] = touched[3] or key / w.W == w.H - 2
+	check(inside and touched.all(func(t: bool) -> bool: return t), "patches reach all four map edges and stay inside the map")
+	check(native.patches == RoadRefinement.build(h).patches, "edge bake repeats")
 func width_check() -> void:
 	var w := world()
 	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5), "road", 0.2, 2.5)]
@@ -45,24 +48,11 @@ func width_check() -> void:
 	# A uniform cross-slope makes the required cut depend on station width alone.
 	for y in w.H:
 		for x in w.W: h.hv[y * w.W + x] = 40.0 + y * 3.2
-	var reference := {}
-	for fast: bool in [false, true]:
-		RoadRefinement.allow_fast_vertices = fast
-		var r := RoadRefinement.build(h)
-		if not fast: reference = r.patches
-		else: check(r.patches == reference, "variable-width refinement has exact backend parity")
-		var limits: PackedFloat32Array = r.fit_routes[0].limit
-		check(limits[limits.size() - 20] > limits[20] * 1.5, "bench cap follows widening route (native=%s)" % fast)
-func bed_width_check() -> void:
-	var w := world()
-	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5), "road", 0.2, 2.5)]
-	Grid.allow_fast = false
-	var reference := Heightfield.new(w, false)
-	RoadBed.refine(reference)
-	Grid.allow_fast = true
-	var native := Heightfield.new(w, false)
-	RoadBed.refine(native)
-	check(reference.hv == native.hv, "variable-width RoadBed has exact backend parity")
+	var r := RoadRefinement.build(h)
+	check(r.patches == RoadRefinement.build(h).patches, "variable-width refinement repeats")
+	var limits: PackedFloat32Array = r.fit_routes[0].limit
+	check(limits[limits.size() - 20] > limits[20] * 1.5, "bench cap follows widening route")
+
 
 func anchor_check() -> void:
 	var w := world()
@@ -86,38 +76,13 @@ func mountain_check() -> void:
 	w.trails = [route(Vector2(8.5, 32.5), Vector2(55.5, 32.5), "mountain", 0.42, 0.42)]
 	w.settlements.append(SettlementData.from_dict({x = 32.5, y = 32.5, i = 32 * w.W + 32, huts = []}))
 	var h := Heightfield.new(w, false)
-	for fast: bool in [false, true]:
-		RoadRefinement.allow_fast_vertices = fast
-		var r := RoadRefinement.build(h)
-		var error := 0.0
-		for x in range(125, 136): error = maxf(error, absf(r.sample(x, 130, w.W).h - h.base_ground_at(x, 130)))
-		print("MOUNTAIN protected error ", error)
-		check(error < 0.00001, "mountain base shaping respects settlement protection (native=%s)" % fast)
-func overlap_probe(gap := 4.0, road_half := 1.8, trail_half := 1.1) -> void:
-	var w := world()
-	w.trails = [route(Vector2(8.5, 31.5), Vector2(55.5, 31.5), "road", road_half * 0.5, road_half * 0.5), route(Vector2(8.5, 31.5 + gap / 4.0), Vector2(55.5, 31.5 + gap / 4.0), "trail", trail_half * 0.5, trail_half * 0.5)]
-	var h := Heightfield.new(w, false)
-	RoadRefinement.allow_fast_vertices = false
-	var r := RoadRefinement.new()
-	r._heights = h
-	r._height = w.H
-	r._dist_water = w.dist_water
-	r._noise = FastNoiseLite.new()
-	r._noise.seed = w.seed_num
-	r._noise.frequency = 1.0
-	r._noise.fractal_octaves = 2
-	for index in w.trails.size(): r._index(w.trails[index], index)
-	r._fit_network()
-	# Evaluate the continuous formulas, rather than interpreting metre triangle edges as discontinuities.
-	var worst := 0.0
-	var boundary := 126.0 + (gap / trail_half + 0.08) / (1.0 / road_half + 1.0 / trail_half)
-	for x in range(70, 180):
-		var a := r._vertex(x, boundary - 0.0001)
-		var b := r._vertex(x, boundary + 0.0001)
-		if a.route != b.route: worst = maxf(worst, absf(a.h - b.h))
-	print("OVERLAP switch height ", worst)
-	check(worst < 0.01, "parallel tread selection has no height jump at equal rank")
-	r._heights = null
+	var r := RoadRefinement.build(h)
+	var error := 0.0
+	for x in range(125, 136): error = maxf(error, absf(r.sample(x, 130, w.W).h - h.base_ground_at(x, 130)))
+	print("MOUNTAIN protected error ", error)
+	check(error < 0.00001, "mountain base shaping respects settlement protection")
+
+
 func wheel_check() -> void:
 	var w := world()
 	var h := Heightfield.new(w, false)
@@ -341,7 +306,7 @@ func fixture_materials() -> void:
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)
-	check(Grid.fast_grid() != null, "native backend available")
+	check(Grid.native_grid() != null, "native backend available")
 	if "--fixtures-only" in OS.get_cmdline_user_args():
 		fixture_materials()
 		quit(1 if fails else 0)
@@ -349,15 +314,11 @@ func _initialize() -> void:
 	material_check()
 	native_material_check()
 	tread_check()
-	parity_check()
+	edge_check()
 	width_check()
-	bed_width_check()
 	anchor_check()
 	mountain_check()
-	overlap_probe()
-	overlap_probe(8.0, 5.0, 0.5)
 	wheel_check()
 	bake_seam_check()
-	RoadRefinement.allow_fast_vertices = true
 	print("FAILURES ", fails)
 	quit(1 if fails else 0)

@@ -364,7 +364,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>RoadRefinement._vertex для одной точки без пути (selected &lt; 0) и с путём; тот же порядок операций, что у
-	/// RoadVertices (двухпроходная запись там нужна только SIMD, значения те же).</summary>
+	/// прежнего пакета RoadVertices (удалён 16.11.2026; двухпроходная запись там нужна была только SIMD, значения те же).</summary>
 	private static void RoadVertexOne(int n, Vector2 pt, int selected, double u, double distance, double side, int width, int height,
 		double tile, double step, double[] segHalf, byte[] segRoad, int[] segSurf, int[] segNext, double[] segHa, double[] segHb, double[] segAlong,
 		double[] segLen2, int[] segRoute, Vector2[] segA, Vector2[] segDelta, int[] fitStart, int[] fitCount, double[] fits,
