@@ -15,7 +15,10 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	sun.shadow_enabled = shadows
 	apply_shadows(sun, level)
-	env.ssao_enabled = forward_plus and level >= 1
+	# 16.11: на среднем SSAO выключен. Сравнение style_look --ssao on|off (Forward+: утренний лес, дорога, луг) —
+	# разница только шум ветра в траве: рельеф и растительность пишут свой AO (min с SSAO), SSAO гасит лишь окружение.
+	# Половинное разрешение SSAO/SSIL в Godot уже по умолчанию (project.godot не переопределяет).
+	env.ssao_enabled = forward_plus and level == 2
 	# 15.1: SSAO стоит около 1,5 мс кадра в лесу (стресс-тест), но качество выборок почти ни при чём:
 	# «очень низкое» снимает лишь 0,2–0,3 мс — основная цена в обязательных проходах. Качество не трогаем.
 	env.ssao_radius = 0.75

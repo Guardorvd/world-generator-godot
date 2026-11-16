@@ -114,6 +114,9 @@ func _build_world(seed_text: String) -> void:
 	var template: Node = load("res://scenes/game_world.tscn").instantiate()
 	env = template.get_node("WorldEnvironment").environment.duplicate()
 	template.free()
+	# 16.11: --ssao off|on — сравнение затенения SSAO (оно работает только в Forward+: --rendering-method forward_plus)
+	if Dev.arg("ssao", "") != "":
+		env.ssao_enabled = Dev.arg("ssao", "") == "on"
 	env_node.environment = env
 	scene.add_child(env_node)
 	sun = DirectionalLight3D.new()
