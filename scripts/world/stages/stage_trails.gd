@@ -847,6 +847,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	# after all those opportunities, without deleting any safe road or structure.
 	_retain_connected_settlements(w, paths)
 	w.generation_profile.settlement_rejected = n - w.settlements.size()
+	w.generation_profile.journeys = _journeys(w, paths)
 	for s: SettlementData in w.settlements:
 		s.connections = []
 	for e: Array in paths:
@@ -1362,6 +1363,43 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 				_note_way(w, "shore", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 				all_paths.append(q)
 				near = _net_near(w)
+
+
+## 16.11.2026: замер поездок по основным связям (только отчёт, на мир не влияет; стенд settlement_look --roads).
+## На связь: [длина, м; длина / прямая; природных зон по пути; подъём над высшим концом, м]. Зона — лес, открытое,
+## берег, горы; участок зоны считается, если он не короче JOURNEY_RUN клеток подряд.
+const JOURNEY_RUN := 25 # клеток (100 м)
+
+
+static func _journeys(w: WorldData, paths: Array) -> Array:
+	var out: Array = []
+	for e: Array in paths:
+		if not e[3]: continue
+		var q: PackedInt32Array = e[2]
+		if q.size() < 2: continue
+		var zones := {}
+		var zone := -1
+		var run := 0
+		var top := -INF
+		for c: int in q:
+			var z := _zone(w, c)
+			run = run + 1 if z == zone else 1
+			zone = z
+			if run == JOURNEY_RUN: zones[z] = true
+			top = maxf(top, w.h[c])
+		var ends := maxf(w.h[q[0]], w.h[q[-1]])
+		out.append([roundi(_length(w, q) * GameConfig.TILE), snappedf(_length(w, q) / maxf(1.0, e[4]), 0.01), zones.size(),
+			roundi(maxf(0.0, top - ends) * HEIGHT_SCALE * GameConfig.TILE)])
+	return out
+
+
+## Природная зона клетки для замера поездок: 0 — открытое, 1 — лес, 2 — берег и вода, 3 — горы
+static func _zone(w: WorldData, c: int) -> int:
+	var b := w.biome[c]
+	if w.elev[c] >= 0.5 or b in [Biomes.ROCK, Biomes.SNOW, Biomes.PEAK]: return 3
+	if w.dist_water[c] < 3.0 or b in [Biomes.BEACH, Biomes.STONESHORE]: return 2
+	if b in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP]: return 1
+	return 0
 
 
 ## Место с единственным подъездом: вторые пути (сокращения, обходы) к нему не прокладываются

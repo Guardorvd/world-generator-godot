@@ -66,6 +66,7 @@ func _run() -> void:
 		print(line)
 		print("    роли [мест, связей]: %s; посёлков %d" % [JSON.stringify(p.roles), p.towns])
 		if roads:
+			print("    поездки: %s" % JSON.stringify(row.roads.journeys))
 			print("    после дорог роли [мест, связей]: %s; меньше всего жилых домов в одном месте: %d" % [JSON.stringify(row.after.roles), row.after.min_homes])
 			var r: Dictionary = row.roads
 			print("    дороги: осталось %d из %d, отказы %s, связи %s, км %s, мостов %d, туннелей %d, вторые %s, этап %.1f с, домов %d" % [r.kept, r.placed,
@@ -153,7 +154,17 @@ func _roads(w: WorldData, placed: int, ms: float) -> Dictionary:
 	var ways := {}
 	for note: Array in gp.get("second_ways", []):
 		ways[note[0]] = int(ways.get(note[0], 0)) + 1
-	return {placed = placed, kept = w.settlements.size(), failures = gp.get("road_failures", {}), degrees = degrees, km = km,
+	# Поездки по основным связям (StageTrails._journeys): [длина м, длина/прямая, зон, подъём м]
+	var trips: Array = gp.get("journeys", [])
+	var lengths: Array = trips.map(func(t: Array) -> int: return t[0])
+	lengths.sort()
+	var journeys := {links = trips.size(),
+		median_m = lengths[lengths.size() / 2] if not lengths.is_empty() else 0,
+		long_1km = trips.filter(func(t: Array) -> bool: return t[0] >= 1000).size(),
+		zones_2plus = trips.filter(func(t: Array) -> bool: return t[2] >= 2).size(),
+		pass_20m = trips.filter(func(t: Array) -> bool: return t[3] >= 20).size(),
+		mean_ratio = snappedf(trips.reduce(func(s: float, t: Array) -> float: return s + t[1], 0.0) / maxi(1, trips.size()), 0.01)}
+	return {journeys = journeys, placed = placed, kept = w.settlements.size(), failures = gp.get("road_failures", {}), degrees = degrees, km = km,
 		bridges = w.bridges.size(), tunnels = w.tunnels.size(), second_ways = ways, ms = ms,
 		main_ms = gp.get("main_roads_ms", 0), secondary_ms = gp.get("secondary_roads_ms", 0),
 		budget_stops = gp.get("budget_stops", 0), homes = gp.get("homes_kept", 0)}
