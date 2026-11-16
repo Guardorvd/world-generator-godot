@@ -81,6 +81,11 @@ func _init(environment: Environment, sun: DirectionalLight3D) -> void:
 	env.fog_height = MIST_TOP
 
 
+## 16.11: купол облаков для этого неба (scripts/render/sky_cloud_dome.gd) — узел, который надо добавить в дерево
+func make_cloud_dome() -> Node:
+	return preload("res://scripts/render/sky_cloud_dome.gd").new(sky_mat)
+
+
 ## Направление на солнце в час hour (0..24)
 static func sun_direction(hour: float) -> Vector3:
 	var a := (hour - 6.0) / 24.0 * TAU

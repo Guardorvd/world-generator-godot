@@ -396,6 +396,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	_speed_wind = SpeedWind.new()
 	wind_layer.add_child(_speed_wind)
 	day = DayCycle.new($WorldEnvironment.environment, $Sun)
+	add_child(day.make_cloud_dome()) # 16.11: облака неба считаются в куполе по полосам, не по пикселям экрана
 	camera.add_child(StyleGrain.new()) # 13.11: зерно визуального стиля, рисуется только в 3D-мире
 	local_mist = preload("res://scripts/render/local_mist.gd").new()
 	add_child(local_mist)

@@ -10,6 +10,8 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 		var material := env.sky.sky_material as ShaderMaterial
 		if material != null and material.shader == SKY_SHADER:
 			material.set_shader_parameter("cumulus_steps", 5 if level == 2 else 2)
+			# 16.11: на низком и среднем облака считаются в купол облаков (sky_cloud_dome.gd), на высоком — по пикселям
+			material.set_meta("cloud_dome", level < 2)
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	sun.shadow_enabled = shadows
 	apply_shadows(sun, level)
