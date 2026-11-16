@@ -1,24 +1,27 @@
 class_name SettlementsBuilder
 extends RefCounted
-## Поселения и вершины в 3D: дома, костры, туры с флажками, подписи. Копия js/render3d/settlements.js.
+## Поселения и вершины в 3D: дома из каталога (.glb с 3 LOD и общим атласом), мелкие детали в MultiMesh,
+## костры, туры с флажками, подписи. Старые процедурные дома сохранены под флагом use_legacy (для стенда «было»).
 
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const FIRE_SEEN := 300.0  # м: дальше костры не рисуются и не анимируются
-const HOMES := ["house", "chalet", "tall"] # жилые дома поселений (с 9.5), остальное в huts — сараи и колодцы
-## Облик жилых домов (с 9.5, по мотивам альпийских деревень): этажи снизу вверх [высота, стена],
-## стена фронтона, уклон крыши (рад) и свес (м). Размер в плане — PlayerState.SITE_HALF, конёк вдоль z,
-## фронтон с дверью смотрит на улицу
+const HOMES := ["house", "house_timber", "chalet", "tall"]
+## Облик жилых домов для запасного режима use_legacy (этап 1, «было» в village_look).
 const HOUSE_FORM := {
 	house = {floors = [[2.5, "plaster"]], gable = "timber", pitch = 0.62, eave = 0.55},
+	house_timber = {floors = [[1.2, "stone"], [1.4, "timber"]], gable = "timber", pitch = 0.72, eave = 0.5},
 	chalet = {floors = [[2.1, "stone"], [2.2, "timber"]], gable = "timber", pitch = 0.45, eave = 0.9, balcony = true},
 	tall = {floors = [[2.4, "plaster"], [2.3, "plaster"]], gable = "plaster", pitch = 0.72, eave = 0.5},
 }
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
+const Catalog := preload("res://scripts/render/asset_catalog.gd")
+
+## false — модели каталога (glb, 3 LOD, общий атлас, MultiMesh деталей); true — прежние дома (только «было» на стенде).
+static var use_legacy := false
 
 
-## glow > 0 — светится сам (огонь, окна): цвет идёт в излучение с этой силой, яркое пятно подхватывает
-## свечение окружения (glow). До 2.6 такие материалы были без освещения (unshaded)
+## glow > 0 — светится сам (огонь, окна в режиме legacy)
 static func mat(c: Color, glow: float = 0.0) -> StandardMaterial3D:
 	var m := StandardMaterial3D.new()
 	m.albedo_color = c
@@ -81,82 +84,74 @@ static func board_foot(s: Variant, heights: Heightfield) -> Vector3:
 	return Vector3(x, heights.ground_at(x, z), z)
 
 
-## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: Material}:
+## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: StandardMaterial3D}:
 ## огонь анимируется, окна ночью светятся ярче (set_night).
 static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
-	var tint := func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff))
-	# Палитры домов (с 9.5): светлая штукатурка, тёмное дерево, гонт, сланец и черепица, ставни, герань
-	var plasters := [0xece2cc, 0xf3eee4, 0xdcc08a, 0xe6cbb8, 0xd3d6c6].map(tint)
-	var timbers := [0x7a4b2b, 0x5f3b23, 0x8d5e36].map(tint)
-	var roofs := [0x4a3a30, 0x464b54, 0x94452f, 0x67503e].map(tint)
-	var shutters := [0x3f6e3c, 0x9a3a2e, 0x4c6283, 0x2f2a24].map(tint)
-	var flowers := [0xd23a3f, 0xe0709a].map(tint)
-	var door_m := mat(Color8(0x3a, 0x2a, 0x1c))
-	var win_m := mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
-	var roof_mesh := _cone_mesh(2.8, 2.2, 4)
-	var door_mesh := _box_mesh(Vector3(0.9, 1.7, 0.1))
-	var win_mesh := _box_mesh(Vector3(0.6, 0.5, 0.1))
-	var stone_m := mat(Color.html("#736d60"))
-	var timber_m := mat(Color.html("#755337"))
-	var step_mesh := _box_mesh(Vector3(1.1, 0.18, 0.65))
-	var bench_seat := _box_mesh(Vector3(1.8, 0.16, 0.48))
-	var bench_leg := _box_mesh(Vector3(0.15, 0.45, 0.4))
-	var board_post := _box_mesh(Vector3(0.12, 1.8, 0.12))
-	var board_mesh := _box_mesh(Vector3(1.8, 0.95, 0.13))
-	var log_mesh := CylinderMesh.new()
-	log_mesh.top_radius = 0.1
-	log_mesh.bottom_radius = 0.1
-	log_mesh.height = 1.2
-	log_mesh.radial_segments = 5
+	if use_legacy:
+		return _build_legacy(parent, w, heights)
+	var catalog := Catalog.get_catalog()
+	var mats := SettlementModels.make_materials(catalog.settlement_textures)
+	var opaque_mat: StandardMaterial3D = mats.opaque
+	var cutout_mat: StandardMaterial3D = mats.cutout
+	var mat_pair := [opaque_mat, cutout_mat]
+	var settlements_lib: Dictionary = catalog.settlements
+	var details_lib: Dictionary = catalog.settlement_details
+	var board_post := _uv_box(Vector3(0.12, 1.8, 0.12), SettlementModels.CELL_TIMBER)
+	var board_panel := _uv_box(Vector3(1.8, 0.95, 0.13), SettlementModels.CELL_DARK_WOOD)
+	var shelter_lantern := _uv_box(Vector3(0.24, 0.35, 0.20), SettlementModels.CELL_WINDOW)
+	var extra_plinths := {}
+
 	var flame_mesh := _cone_mesh(0.4, 1.1, 6)
 	var core_mesh := _cone_mesh(0.22, 0.7, 6)
 	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
 	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
-	var prism := PrismMesh.new()
-	var hay := CylinderMesh.new()
-	hay.top_radius = 0.75
-	hay.bottom_radius = 0.9
-	hay.height = 1.3
-	hay.radial_segments = 8
-	var house := {plasters = plasters, timbers = timbers, roofs = roofs, shutters = shutters, flowers = flowers,
-		leaf = mat(Color.html("#4f6e2f")), rail = mat(Color.html("#a57446")), logs = mat(Color.html("#b48d5c")),
-		water = mat(Color.html("#5d8ea6")), dark_roof = mat(Color.html("#4a3f36")), straw = mat(Color.html("#c2a35a")),
-		hay = hay, hay_top = _cone_mesh(0.75, 0.7, 8),
-		door = door_m, win = win_m, stone = stone_m, timber = timber_m, unit = _box_mesh(Vector3.ONE), prism = prism,
-		roof = roof_mesh, door_mesh = door_mesh, win_mesh = win_mesh, step = step_mesh}
 	var fires: Array = []
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
-	# дома и туры неподвижны: они собираются в общие меши по квадратам мира (MeshBatch), костры с огнём — отдельные узлы
 	var batch := MeshBatch.new()
+
 	for s in w.settlements:
+		var style: int = EntityCodec.value(s, "style", 0)
 		for hut in s.huts:
-			# С 9.5 дом стоит дверью к улице (поворот a), у заготовок тестов — к костру
 			var kind: String = EntityCodec.value(hut, "t", "house")
+			var model_id := kind if settlements_lib.has(kind) else "house"
+			var entry: Dictionary = settlements_lib[model_id]
+			var half: Vector2 = entry.get("half", SettlementSets.half_of(model_id))
 			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
-			# Пол выше верхнего угла; каменный цоколь закрывает перепад до нижнего.
-			var foot := footing(heights, at, PlayerState.SITE_HALF[kind])
+			var foot := footing(heights, at, half)
 			at.origin.y = foot.y
-			if kind in HOMES:
-				_house(batch, at, foot.y - foot.x, hut.v, house, kind, EntityCodec.value(s, "style", hut.v))
-			else:
-				_outbuilding(batch, at, foot.y - foot.x, kind, house)
-		# костёр
+			var drop := foot.y - foot.x
+			var outbuilding: bool = entry.get("category", "home") != "home"
+			var tints := SettlementModels.cell_tints(style, hut.v, outbuilding)
+			var lods: Array = entry.lods
+			for level in lods.size():
+				batch.add_lod(lods[level], at, mat_pair, level, tints, true)
+			if drop > 0.35:
+				var qdrop := ceili((drop + 0.15) * 10.0) / 10.0
+				var pkey := "%s|%.1f" % [model_id, qdrop]
+				if not extra_plinths.has(pkey):
+					extra_plinths[pkey] = SettlementModels.build_extra_plinth(half, -0.45, -qdrop)
+				var plinth_mesh: Mesh = extra_plinths[pkey]
+				for level in lods.size():
+					batch.add_lod(plinth_mesh, at, [opaque_mat], level, tints, false)
+			_add_flower_details(batch, at, model_id, half, hut.v, details_lib, cutout_mat)
+
+		# Костёр, скамьи, доска маршрутов
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
 		var fy := heights.ground_at(fx, fz)
-		# Небольшое общее место: скамьи и указатель стоят внутри кольца домов.
 		for side: float in [-1.0, 1.0]:
 			var bx := fx + side * 3.0
 			var by := heights.ground_at(bx, fz)
 			var bench := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(bx, by, fz))
-			batch.add(bench_seat, bench.translated_local(Vector3(0, 0.5, 0)), timber_m)
-			for leg: float in [-0.65, 0.65]:
-				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), timber_m)
+			batch.add_detail(details_lib.bench, bench, Color.html("#755337"), opaque_mat)
 		var board_pos := board_foot(s, heights)
 		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
+		var board_tint := SettlementModels.cell_tints(style, 0, false)
 		for side: float in [-0.7, 0.7]:
-			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), timber_m)
-		batch.add(board_mesh, board.translated_local(Vector3(0, 1.35, 0)), door_m)
+			batch.add_lod(board_post, board.translated_local(Vector3(side, 0.9, 0)), [opaque_mat], 0, board_tint, false)
+			batch.add_lod(board_post, board.translated_local(Vector3(side, 0.9, 0)), [opaque_mat], 1, board_tint, false)
+		batch.add_lod(board_panel, board.translated_local(Vector3(0, 1.35, 0)), [opaque_mat], 0, board_tint, false)
+		batch.add_lod(board_panel, board.translated_local(Vector3(0, 1.35, 0)), [opaque_mat], 1, board_tint, false)
 		var board_text := Label3D.new()
 		board_text.text = "МАРШРУТЫ"
 		board_text.font_size = 24
@@ -165,11 +160,9 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		board_text.visibility_range_end = 35.0
 		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
 		parent.add_child(board_text)
-		# Поленья неподвижны — в общий меш; узлами остаются только два языка пламени.
-		for k in 3:
-			batch.add(log_mesh, Transform3D(Basis.from_euler(Vector3(0, k * PI / 3.0, PI / 2.0)), Vector3(fx, fy + 0.1, fz)), door_m)
+
+		batch.add_detail(details_lib.fire_logs, Transform3D(Basis(), Vector3(fx, fy, fz)), Color8(0x3a, 0x2a, 0x1c), opaque_mat)
 		var fire := Node3D.new()
-		# пламя растёт от земли: узлы-основания масштабируются, конусы сдвинуты вверх
 		var flame := Node3D.new()
 		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
 		var core := Node3D.new()
@@ -180,18 +173,103 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		parent.add_child(fire)
 		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
 		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
-	# Туры на вершинах
-	var stone := mat(Color8(0x8f, 0x88, 0x80))
-	var flag_m := mat(Color8(0xc0, 0x39, 0x2b))
-	flag_m.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var pole_m := mat(Color8(0x5a, 0x3d, 0x24))
+
+	var legacy_m := _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
+	_build_peaks(parent, w, heights, batch, legacy_m)
+	_build_sites(parent, w, heights, batch, legacy_m, {
+		settlements = settlements_lib,
+		details = details_lib,
+		mat_pair = mat_pair,
+		opaque = opaque_mat,
+		cutout = cutout_mat,
+		lantern = shelter_lantern,
+		extra_plinths = extra_plinths,
+	})
+	for lk in w.lakes:
+		var at := Vector2(lk.x * TILE, lk.y * TILE)
+		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y), WorldData.place_id("lake", lk.x, lk.y)))
+	var mi := batch.build("Buildings")
+	if mi != null:
+		parent.add_child(mi)
+	return {fires = fires, windows = opaque_mat}
+
+
+static func _add_flower_details(batch: MeshBatch, at: Transform3D, model_id: String, half: Vector2, v: int, details_lib: Dictionary, cutout_mat: Material) -> void:
+	var flower_mesh: Mesh = details_lib.flower_box if v % 2 == 0 else details_lib.flower_box_b
+	match model_id:
+		"house":
+			for wx: float in [-half.x * 0.62, half.x * 0.62]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 0.90, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"house_timber":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.56, 1.07, half.y + 0.11)), Color.WHITE, cutout_mat)
+		"chalet":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.50, 0.83, half.y + 0.11)), Color.WHITE, cutout_mat)
+			for bx: float in [-1.4, 0.0, 1.4]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(bx, 2.90, half.y + 0.98)), Color.WHITE, cutout_mat)
+		"tall":
+			batch.add_detail(flower_mesh, at.translated_local(Vector3(half.x * 0.48, 0.90, half.y + 0.11)), Color.WHITE, cutout_mat)
+			for wx: float in [-half.x * 0.48, half.x * 0.48]:
+				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 3.12, half.y + 0.11)), Color.WHITE, cutout_mat)
+
+
+## Прямоугольный блок с UV внутри выбранной ячейки общего атласа (для доски маршрутов и фонаря).
+static func _uv_box(size: Vector3, cell: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	SettlementModels._box(st, size, Vector3.ZERO, Basis.IDENTITY, cell)
+	st.index()
+	return st.commit()
+
+
+static func _legacy_site_materials(door_m: Material, win_m: Material) -> Dictionary:
+	var tint := func(c: int) -> Material: return mat(Color.hex((c << 8) | 0xff))
 	var pole_mesh := CylinderMesh.new()
 	pole_mesh.top_radius = 0.04
 	pole_mesh.bottom_radius = 0.04
 	pole_mesh.height = 2.2
 	pole_mesh.radial_segments = 4
+	var flag_m := mat(Color8(0xc0, 0x39, 0x2b))
+	flag_m.cull_mode = BaseMaterial3D.CULL_DISABLED
 	var flag_mesh := QuadMesh.new()
 	flag_mesh.size = Vector2(1.0, 0.6)
+	var hay := CylinderMesh.new()
+	hay.top_radius = 0.75
+	hay.bottom_radius = 0.9
+	hay.height = 1.3
+	hay.radial_segments = 8
+	return {
+		plasters = [0xece2cc, 0xf3eee4, 0xdcc08a, 0xe6cbb8, 0xd3d6c6].map(tint),
+		timbers = [0x7a4b2b, 0x5f3b23, 0x8d5e36].map(tint),
+		roofs = [0x4a3a30, 0x464b54, 0x94452f, 0x67503e].map(tint),
+		shutters = [0x3f6e3c, 0x9a3a2e, 0x4c6283, 0x2f2a24].map(tint),
+		flowers = [0xd23a3f, 0xe0709a].map(tint),
+		leaf = mat(Color.html("#4f6e2f")),
+		rail = mat(Color.html("#a57446")),
+		logs = mat(Color.html("#b48d5c")),
+		water = mat(Color.html("#5d8ea6")),
+		dark_roof = mat(Color.html("#4a3f36")),
+		straw = mat(Color.html("#c2a35a")),
+		hay = hay,
+		hay_top = _cone_mesh(0.75, 0.7, 8),
+		door = door_m,
+		win = win_m,
+		stone = mat(Color.html("#736d60")),
+		timber = mat(Color.html("#755337")),
+		unit = _box_mesh(Vector3.ONE),
+		prism = PrismMesh.new(),
+		roof = _cone_mesh(2.8, 2.2, 4),
+		door_mesh = _box_mesh(Vector3(0.9, 1.7, 0.1)),
+		win_mesh = _box_mesh(Vector3(0.6, 0.5, 0.1)),
+		step = _box_mesh(Vector3(1.1, 0.18, 0.65)),
+		pole = pole_mesh,
+		pole_m = mat(Color8(0x5a, 0x3d, 0x24)),
+		flag = flag_mesh,
+		flag_m = flag_m,
+	}
+
+
+static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary) -> void:
+	var stone := mat(Color8(0x8f, 0x88, 0x80))
 	var stone_meshes: Array[SphereMesh] = []
 	for rh: Vector2 in PEAK_STONES:
 		var sm := SphereMesh.new()
@@ -207,12 +285,80 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 		var at := Transform3D(Basis(), Vector3(x, y, z))
 		for k in PEAK_STONES.size():
 			batch.add(stone_meshes[k], at.translated_local(Vector3(0, PEAK_STONES[k].y, 0)), stone)
-		batch.add(pole_mesh, at.translated_local(Vector3(0, 3.2, 0)), pole_m)
-		batch.add(flag_mesh, at.translated_local(Vector3(0.5, 3.9, 0)), flag_m)
+		batch.add(m.pole, at.translated_local(Vector3(0, 3.2, 0)), m.pole_m)
+		batch.add(m.flag, at.translated_local(Vector3(0.5, 3.9, 0)), m.flag_m)
 		parent.add_child(_label("▲ " + pk.name, Color.html("#e8f0ff"), Vector3(x, y + 8.0, z), WorldData.place_id("peak", pk.x, pk.y)))
-	house.merge({flag = flag_mesh, flag_m = flag_m, pole = pole_mesh, pole_m = pole_m})
-	_build_sites(parent, w, heights, batch, house)
-	# названия озёр над серединой воды (с 2.9)
+
+
+## Прежний процедурный сборщик домов (используется только при use_legacy = true как база «было»).
+static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
+	var door_m := mat(Color8(0x3a, 0x2a, 0x1c))
+	var win_m := mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
+	var house := _legacy_site_materials(door_m, win_m)
+	var bench_seat := _box_mesh(Vector3(1.8, 0.16, 0.48))
+	var bench_leg := _box_mesh(Vector3(0.15, 0.45, 0.4))
+	var board_post := _box_mesh(Vector3(0.12, 1.8, 0.12))
+	var board_mesh := _box_mesh(Vector3(1.8, 0.95, 0.13))
+	var log_mesh := CylinderMesh.new()
+	log_mesh.top_radius = 0.1
+	log_mesh.bottom_radius = 0.1
+	log_mesh.height = 1.2
+	log_mesh.radial_segments = 5
+	var flame_mesh := _cone_mesh(0.4, 1.1, 6)
+	var core_mesh := _cone_mesh(0.22, 0.7, 6)
+	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
+	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
+	var fires: Array = []
+	var rng := WGRandom.new(w.seed_num ^ 0x1234)
+	var batch := MeshBatch.new()
+	for s in w.settlements:
+		for hut in s.huts:
+			var kind: String = EntityCodec.value(hut, "t", "house")
+			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
+			var foot := footing(heights, at, SettlementSets.half_of(kind))
+			at.origin.y = foot.y
+			if SettlementSets.is_home(kind) or HOUSE_FORM.has(kind):
+				_house(batch, at, foot.y - foot.x, hut.v, house, kind, EntityCodec.value(s, "style", hut.v))
+			else:
+				_outbuilding(batch, at, foot.y - foot.x, kind, house)
+		var fx: float = s.x * TILE
+		var fz: float = s.y * TILE
+		var fy := heights.ground_at(fx, fz)
+		for side: float in [-1.0, 1.0]:
+			var bx := fx + side * 3.0
+			var by := heights.ground_at(bx, fz)
+			var bench := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(bx, by, fz))
+			batch.add(bench_seat, bench.translated_local(Vector3(0, 0.5, 0)), house.timber)
+			for leg: float in [-0.65, 0.65]:
+				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), house.timber)
+		var board_pos := board_foot(s, heights)
+		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
+		for side: float in [-0.7, 0.7]:
+			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), house.timber)
+		batch.add(board_mesh, board.translated_local(Vector3(0, 1.35, 0)), door_m)
+		var board_text := Label3D.new()
+		board_text.text = "МАРШРУТЫ"
+		board_text.font_size = 24
+		board_text.pixel_size = 0.005
+		board_text.no_depth_test = false
+		board_text.visibility_range_end = 35.0
+		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
+		parent.add_child(board_text)
+		for k in 3:
+			batch.add(log_mesh, Transform3D(Basis.from_euler(Vector3(0, k * PI / 3.0, PI / 2.0)), Vector3(fx, fy + 0.1, fz)), door_m)
+		var fire := Node3D.new()
+		var flame := Node3D.new()
+		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
+		var core := Node3D.new()
+		core.add_child(_part(core_mesh, Vector3(0, 0.35, 0), core_m))
+		fire.add_child(flame)
+		fire.add_child(core)
+		fire.position = Vector3(fx, fy, fz)
+		parent.add_child(fire)
+		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
+		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
+	_build_peaks(parent, w, heights, batch, house)
+	_build_sites(parent, w, heights, batch, house, {})
 	for lk in w.lakes:
 		var at := Vector2(lk.x * TILE, lk.y * TILE)
 		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y), WorldData.place_id("lake", lk.x, lk.y)))
@@ -222,21 +368,16 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	return {fires = fires, windows = win_m}
 
 
-## Жилой дом вида kind (HOUSE_FORM): цоколь на drop м вниз до нижнего угла, этажи, фронтон, двускатная
-## крыша со свесами, дверь и порог (к +z), окна со ставнями и ящиками герани, у шале — балкон, у чётных
-## вариантов — труба. at — пол дома. style — облик поселения (крыши, штукатурка, ставни), v — вариант дома.
-## Общий для поселений, хуторов и одиноких домов, m — меши и материалы из build
+## Жилой дом вида kind (HOUSE_FORM) для режима use_legacy.
 static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Dictionary, kind := "house", style := -1) -> void:
 	if style < 0:
 		style = v
-	var half: Vector2 = PlayerState.SITE_HALF[kind]
-	var form: Dictionary = HOUSE_FORM[kind]
+	var half := SettlementSets.half_of(kind)
+	var form: Dictionary = HOUSE_FORM.get(kind, HOUSE_FORM.house)
 	var wall := {stone = m.stone, plaster = m.plasters[(style * 2 + v) % 5], timber = m.timbers[(style + v / 2) % 3]}
-	# В деревне крыши в основном одного цвета: так видно, что это одно место
 	var roof: Material = m.roofs[(style + (1 if v == 3 else 0)) % 4]
 	var trim := {shutter = m.shutters[(style + (1 if v == 2 else 0)) % 4], flower = m.flowers[v % 2]}
 	var floors: Array = form.floors
-	# Маленький дом бывает и бревенчатым на каменном низе
 	if kind == "house" and v % 2 == 1:
 		floors = [[1.2, "stone"], [1.4, "timber"]]
 	_plinth(batch, m.unit, at, drop, half * 2.0 + Vector2(0.1, 0.1), m.stone)
@@ -244,7 +385,6 @@ static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Di
 	for f in floors.size():
 		var h: float = floors[f][0]
 		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, h, half.y * 2.0)), Vector3(0, y + h * 0.5, 0)), wall[floors[f][1]])
-		# Окна по этажу (низкий каменный низ — без окон): у земли место у фасада занимает дверь
 		if h >= 1.5:
 			var wy := maxf(y + h * 0.55, 1.45)
 			var front: Array = [-half.x * 0.5, half.x * 0.5] if y > 0.5 or half.x < 1.8 else [half.x * 0.5]
@@ -260,14 +400,12 @@ static func _house(batch: MeshBatch, at: Transform3D, drop: float, v: int, m: Di
 		y += h
 	var gable := half.x * tan(form.pitch)
 	batch.add(m.prism, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, gable, half.y * 2.0)), Vector3(0, y + gable * 0.5, 0)), wall[form.gable])
-	# Окошко чердака во фронтоне
 	batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.42, 0.42, 0.06)), Vector3(0, y + gable * 0.35, half.y + 0.02)), m.win)
 	_gable_roof(batch, at, half, y, form.pitch, form.eave, roof, m)
 	var door_x := -half.x * 0.45 if half.x >= 1.8 else 0.0
 	batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.95, 1.85, 0.1)), Vector3(door_x, 0.93, half.y + 0.03)), m.door)
 	batch.add(m.step, at.translated_local(Vector3(door_x, 0.02, half.y + 0.2)), m.stone)
 	if form.get("balcony", false):
-		# Балкон вдоль фасада второго этажа под свесом крыши, на перилах герань
 		var by: float = floors[0][0]
 		var bw := half.x * 2.0 + 0.3
 		batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(bw, 0.12, 0.95)), Vector3(0, by, half.y + 0.47)), m.timber)
@@ -296,8 +434,6 @@ static func _gable_roof(batch: MeshBatch, at: Transform3D, half: Vector2, top: f
 	batch.add(m.unit, at * Transform3D(ridge, Vector3(0, top + gable + thick * 0.8, 0)), roof)
 
 
-## Окно в стене: angle — поворот стены (0 — фасад к +z), pos — середина окна в местных осях стены
-## (z — расстояние стены от середины дома). Стекло ночью светится, по бокам ставни, на фасаде — ящик цветов
 static func _window(batch: MeshBatch, at: Transform3D, angle: float, pos: Vector3, m: Dictionary, trim: Dictionary, flowers: bool) -> void:
 	var b := Basis(Vector3.UP, angle)
 	var f := at * Transform3D(b, b * pos)
@@ -309,10 +445,8 @@ static func _window(batch: MeshBatch, at: Transform3D, angle: float, pos: Vector
 		batch.add(m.unit, f * Transform3D(Basis.from_scale(Vector3(0.7, 0.13, 0.18)), Vector3(0, -0.36, 0.11)), trim.flower)
 
 
-## Хозяйственная постройка поселения или хутора (с 9.5 общая): сарай с двускатной крышей, сеновал,
-## поленница под навесом, колодец-корыто. at — пол, drop — перепад до нижнего угла
 static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: String, m: Dictionary) -> void:
-	var half: Vector2 = PlayerState.SITE_HALF[kind]
+	var half := SettlementSets.half_of(kind)
 	match kind:
 		"barn":
 			_plinth(batch, m.unit, at, drop, half * 2.0 + Vector2(0.1, 0.1), m.stone)
@@ -327,7 +461,6 @@ static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: S
 			batch.add(m.hay, at.translated_local(Vector3(0, 0.55, 0)), m.straw)
 			batch.add(m.hay_top, at.translated_local(Vector3(0, 1.5, 0)), m.straw)
 		"shed":
-			# Навес у задней стенки, под ним поленья торцами наружу
 			_plinth(batch, m.unit, at, drop, half * 2.0, m.stone)
 			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 1.9, 0.15)), Vector3(0, 0.95, -half.y + 0.08)), m.timber)
 			for sx: float in [-1.0, 1.0]:
@@ -336,7 +469,6 @@ static func _outbuilding(batch: MeshBatch, at: Transform3D, drop: float, kind: S
 			var lean := Basis(Vector3.RIGHT, 0.28) * Basis.from_scale(Vector3(half.x * 2.0 + 0.5, 0.14, half.y * 2.0 + 0.6))
 			batch.add(m.unit, at * Transform3D(lean, Vector3(0, 1.95, 0.05)), m.dark_roof)
 		"fountain":
-			# Каменное корыто с водой и столбик с трубкой, как на площадях горных деревень
 			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0, 0.7, half.y * 2.0)), Vector3(0, 0.3, 0)), m.stone)
 			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(half.x * 2.0 - 0.2, 0.05, half.y * 2.0 - 0.2)), Vector3(0, 0.66, 0)), m.water)
 			batch.add(m.unit, at * Transform3D(Basis.from_scale(Vector3(0.3, 1.5, 0.3)), Vector3(-half.x + 0.15, 0.75, 0)), m.timber)
@@ -355,12 +487,10 @@ static func footing(heights: Heightfield, at: Transform3D, half: Vector2) -> Vec
 	return Vector2(low, high)
 
 
-## Места вне поселений (с 9.3): постройки из тех же простых мешей в общий MeshBatch. Вид постройки — u.t,
-## поворот — u.a (тот же, что у столкновений PlayerState.SITE_HALF). Подписи — у значимых мест.
-static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary) -> void:
+## Места вне поселений: дома/сараи/сеновалы берут модели из каталога (если не use_legacy), памятники — прежние.
+static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, batch: MeshBatch, m: Dictionary, cat: Dictionary) -> void:
 	var unit := _box_mesh(Vector3.ONE)
 	var old_stone := mat(Color.html("#6b6a5c"))
-	# камень руин: старый, потемневший и заросший мхом — стены одного места разные
 	var weathered := [old_stone, mat(Color.html("#585749")), mat(Color.html("#5d6b48"))]
 	var pale_stone := mat(Color.html("#9a958a"))
 	var dark_roof: Material = m.dark_roof
@@ -374,17 +504,35 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 	keep.bottom_radius = 1.6
 	keep.height = 1.0
 	keep.radial_segments = 8
+	var use_catalog := not cat.is_empty()
 	for s: SiteData in w.sites:
 		var top := -INF
 		for u: HutData in s.huts:
 			var v: int = u.v
 			var at := Transform3D(Basis(Vector3.UP, u.a), Vector3(u.x * TILE, 0, u.y * TILE))
-			var foot := footing(heights, at, PlayerState.SITE_HALF[u.t])
+			var half := SettlementSets.half_of(u.t)
+			var foot := footing(heights, at, half)
 			var low := foot.x
 			var high := foot.y
-			# Жилые постройки стоят на цоколе по верхнему углу, камни и руины уходят в землю.
-			at.origin.y = high if u.t in ["house", "barn", "shelter"] else low
+			at.origin.y = high if u.t in ["house", "house_timber", "chalet", "tall", "barn", "shelter"] else low
 			top = maxf(top, at.origin.y)
+			if use_catalog and cat.settlements.has(u.t):
+				var entry: Dictionary = cat.settlements[u.t]
+				var outbuilding: bool = entry.get("category", "home") != "home"
+				var tints := SettlementModels.cell_tints(v, v, outbuilding)
+				var lods: Array = entry.lods
+				for level in lods.size():
+					batch.add_lod(lods[level], at, cat.mat_pair, level, tints, true)
+				var drop := high - low
+				if drop > 0.35:
+					var qdrop := ceili((drop + 0.15) * 10.0) / 10.0
+					var pkey := "%s|%.1f" % [u.t, qdrop]
+					if not cat.extra_plinths.has(pkey):
+						cat.extra_plinths[pkey] = SettlementModels.build_extra_plinth(half, -0.45, -qdrop)
+					for level in lods.size():
+						batch.add_lod(cat.extra_plinths[pkey], at, [cat.opaque], level, tints, false)
+				_add_flower_details(batch, at, u.t, half, v, cat.details, cat.cutout)
+				continue
 			match u.t:
 				"house":
 					_house(batch, at, high - low, v, m)
@@ -395,8 +543,11 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					batch.add(unit, at * Transform3D(Basis.from_scale(Vector3(3.0, 2.0, 3.0)), Vector3(0, 1.0, 0)), old_stone)
 					batch.add(m.roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0).scaled(Vector3(0.95, 0.6, 0.95)), Vector3(0, 2.65, 0)), dark_roof)
 					batch.add(m.door_mesh, at.translated_local(Vector3(0, 0.85, 1.52)), m.door)
-					# фонарь у двери: тот же материал окон, ночью светится (set_night)
-					batch.add(m.win_mesh, at * Transform3D(Basis.from_scale(Vector3(0.4, 0.7, 2.0)), Vector3(0.85, 1.55, 1.52)), m.win)
+					if use_catalog:
+						for level in 3:
+							batch.add_lod(cat.lantern, at.translated_local(Vector3(0.85, 1.55, 1.52)), [cat.opaque], level, {}, false)
+					else:
+						batch.add(m.win_mesh, at * Transform3D(Basis.from_scale(Vector3(0.4, 0.7, 2.0)), Vector3(0.85, 1.55, 1.52)), m.win)
 				"tower":
 					for cx: float in [-1.0, 1.0]:
 						for cz: float in [-1.0, 1.0]:
@@ -405,7 +556,6 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					for k in 4:
 						batch.add(rail, at * Transform3D(Basis(Vector3.UP, k * PI / 2.0)) * Transform3D(Basis(), Vector3(0, 7.2, 1.36)), m.timber)
 					batch.add(tower_roof, at * Transform3D(Basis(Vector3.UP, PI / 4.0), Vector3(0, 8.5, 0)), m.roofs[v])
-					# флажок над крышей, как на турах вершин
 					batch.add(m.pole, at.translated_local(Vector3(0, 9.9, 0)), m.pole_m)
 					batch.add(m.flag, at.translated_local(Vector3(0.5, 10.6, 0)), m.flag_m)
 				"obelisk":
@@ -416,7 +566,6 @@ static func _build_sites(parent: Node3D, w: WorldData, heights: Heightfield, bat
 					var tilt := Basis(Vector3.UP, u.a).rotated(Vector3.RIGHT, (v - 1.5) * 0.06)
 					batch.add(unit, Transform3D(tilt.scaled(Vector3(0.65, 1.7 + v * 0.3, 0.45)), at.origin + Vector3(0, 0.6, 0)), pale_stone)
 				"ruin":
-					# Три стены комнаты разной высоты, четвёртой нет; рядом выпавший камень.
 					var hs := [2.4, 1.3, 0.7]
 					for k in 3:
 						var h: float = hs[(k + v) % 3]
@@ -438,12 +587,16 @@ static func _plinth(batch: MeshBatch, unit: Mesh, at: Transform3D, drop: float, 
 	batch.add(unit, base, material)
 
 
-## Окна и фонари: днём тёмное стекло (материал без освещения, тёплый цвет днём читался как горящий свет),
-## в сумерках разгораются, ночью светятся (яркость выше 1 подхватывает свечение окружения).
+## Окна и фонари: для общего атласа управляет силой свечения, для режима legacy — цветом без освещения.
 ## night — 0 днём, 1 ночью
 static func set_night(windows: StandardMaterial3D, night: float) -> void:
+	if windows == null:
+		return
 	var lit := smoothstep(0.25, 0.85, night)
-	windows.albedo_color = Color(0.16, 0.18, 0.2).lerp(Color8(0xf2, 0xd2, 0x7a) * 2.6, lit)
+	if windows.emission_enabled:
+		windows.emission_energy_multiplier = lit * 2.6
+	else:
+		windows.albedo_color = Color(0.16, 0.18, 0.2).lerp(Color8(0xf2, 0xd2, 0x7a) * 2.6, lit)
 
 
 ## Покачивание пламени костров; time — секунды игры. Дальше FIRE_SEEN от at пламя не видно (_part) и не качается

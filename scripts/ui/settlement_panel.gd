@@ -82,7 +82,7 @@ func open(settlement: Variant, world: WorldData, places: Array, bicycle_near: bo
 	_box.add_child(head)
 	_label(settlement.name, 25, head)
 	# с 9.5 в huts есть и сараи с колодцем: считаются только жилые дома
-	var homes: int = settlement.huts.filter(func(u: Variant) -> bool: return EntityCodec.value(u, "t", "house") in SettlementsBuilder.HOMES).size()
+	var homes: int = settlement.huts.filter(func(u: Variant) -> bool: return SettlementSets.is_home(EntityCodec.value(u, "t", "house"))).size()
 	var info := _label("%s · домов: %d" % [EntityCodec.value(settlement, "character", "деревня"), homes], 15, head, MUTED)
 	info.size_flags_vertical = Control.SIZE_SHRINK_END
 	var tabs := HBoxContainer.new()

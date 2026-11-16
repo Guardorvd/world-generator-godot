@@ -65,15 +65,7 @@ static func _hut(batch: Contacts, heights: Heightfield, hut: HutData, angle: flo
 		return
 	var foot := SettlementsBuilder.footing(heights, at, half)
 	at.origin.y = foot.y
-	var height := 2.0
-	if SettlementsBuilder.HOUSE_FORM.has(kind):
-		height = 0.0
-		for floor_spec: Array in SettlementsBuilder.HOUSE_FORM[kind].floors:
-			height += floor_spec[0]
-	elif kind == "barn":
-		height = 2.8
-	else:
-		height = {hay = 2.0, shed = 2.2, fountain = 1.0, stone = 2.0, obelisk = 5.5, tower = 8.5, keep = 5.0 + hut.v * 1.5, ruin = 2.4}.get(kind, 2.0)
+	var height := SettlementSets.height_of(kind, hut.v)
 	# Как в PlayerState: постройки — замкнутый объём по их габаритам, без входа внутрь.
 	var mesh := BoxMesh.new()
 	mesh.size = Vector3(half.x * 2.0, height + foot.y - foot.x + 0.15, half.y * 2.0)

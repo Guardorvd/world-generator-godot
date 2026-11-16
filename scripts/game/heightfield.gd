@@ -439,7 +439,7 @@ func _set_places(w: WorldData) -> bool:
 			for u in s.huts:
 				# угол и полуширина — теми же функциями, что is_passable; cos и sin — движка, а не .NET
 				var angle: float = u.a if for_sites else PlayerState.hut_angle(s, u)
-				var half: Vector2 = PlayerState.SITE_HALF[u.t] if for_sites else PlayerState.hut_half(u)
+				var half: Vector2 = PlayerState.hut_half(u)
 				huts.append_array([u.x, u.y, cos(angle), sin(angle), half.x, half.y])
 			# клетки — как OuterLand.index_collision_places
 			var px: float = s.x * TILE

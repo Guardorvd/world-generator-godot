@@ -224,12 +224,12 @@ static func _is_passable_script(w: WorldData, heights: Heightfield, x: float, z:
 			for u in s.huts:
 				if _box_hits(x - u.x * TILE, z - u.y * TILE, hut_angle(s, u), hut_half(u), r):
 					return false
-	# Постройки мест вне поселений (с 9.3): прямоугольник по виду, повёрнут на a, как в SettlementsBuilder
+	# Постройки мест вне поселений (с 9.3): прямоугольник по типоразмеру, повёрнут на a
 	for s in w.collision_places(collision_cell, true):
 		if absf(s.x * TILE - x) > 30.0 or absf(s.y * TILE - z) > 30.0:
 			continue
 		for u in s.huts:
-			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SITE_HALF[u.t], r):
+			if _box_hits(x - u.x * TILE, z - u.y * TILE, u.a, SettlementSets.half_of(EntityCodec.value(u, "t", "house")), r):
 				return false
 	if heights.wall_at(x, z, feet, r):
 		return false
@@ -245,9 +245,9 @@ static func hut_angle(s: Variant, u: Variant) -> float:
 	return u.a if u.has("a") else atan2(s.x - u.x, s.y - u.y)
 
 
-## Полуширина постройки по видам SITE_HALF; без вида — дом
+## Полуширина постройки по типоразмеру модели (SettlementSets); без вида — дом
 static func hut_half(u: Variant) -> Vector2:
-	return SITE_HALF[EntityCodec.value(u, "t", "house")]
+	return SettlementSets.half_of(EntityCodec.value(u, "t", "house"))
 
 
 ## Задевает ли тело радиуса r стены прямоугольника half (м), повёрнутого на angle вокруг вертикали,

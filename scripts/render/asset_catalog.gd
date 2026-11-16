@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 7 # высокий лес: возрастные формы сосны, берёзы и дуба (11.11.2026)
+const VERSION := 8 # каталог поселений (glb, общий атлас, LOD0..LOD2, мелкие детали, 16.11.2026)
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}
@@ -10,6 +10,9 @@ const PATH := "res://resources/catalog/standard.res"
 @export var textures: Array[Texture2D] = [] # bark, leaf, needle, ground detail, ground normal
 @export var far_forms: Dictionary = {} # номер формы подлеска (Floor.FIRST + вид) -> упрощённый меш для дальнего подлеска
 @export var levels: Dictionary = {} # explicit model/part -> all LOD resources
+@export var settlements: Dictionary = {} # id -> {lods: [LOD0, LOD1, LOD2], size, category, half, flat, height}
+@export var settlement_textures: Array[Texture2D] = [] # [albedo atlas, emission atlas]
+@export var settlement_details: Dictionary = {} # flower_box, bench, fire_logs
 static var _catalog: Resource
 
 static func get_catalog() -> Resource:
@@ -18,6 +21,8 @@ static func get_catalog() -> Resource:
 		var problem := check()
 		if not problem.is_empty():
 			push_error(problem)
+		elif _catalog != null and _catalog.settlements is Dictionary and not _catalog.settlements.is_empty():
+			SettlementSets.apply_catalog(_catalog.settlements)
 	return _catalog
 
 

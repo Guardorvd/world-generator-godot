@@ -222,7 +222,7 @@ static func _fits(w: WorldData, river: PackedByteArray, kind: String, hx: float,
 				return false
 			low = minf(low, w.h[j])
 			high = maxf(high, w.h[j])
-	return (high - low) * GameConfig.HS <= FLAT[kind]
+	return (high - low) * GameConfig.HS <= SettlementSets.flat_of(kind)
 
 
 static func _name(w: WorldData, type: String, rank: int, x: int, y: int) -> String:

@@ -300,6 +300,7 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 	# Vector4 сортируется встроенным сравнением: сначала ближние к площади места первого ряда
 	slots.sort()
 	var huts: Array[HutData] = []
+	var set_kind := SettlementSets.kind_of(w, s)
 	var homes: int = s.homes
 	var placed := 0
 	for sl: Vector4 in slots:
@@ -309,7 +310,7 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 		var r := p.distance_to(Vector2(s.x, s.y))
 		if r < plaza or r > LAYOUT_R - 1.0:
 			continue
-		var kind := _house_kind(s, r - plaza, rng.next_float())
+		var kind := _house_kind(s, r - plaza, rng.next_float(), set_kind)
 		if _crowded(huts, p, 1.95) or not _fits(w, ground, river, p, sl.w, kind):
 			continue
 		var variant := floori(rng.next_float() * 4)
@@ -322,10 +323,8 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 		placed += 1
 	if homes_only:
 		return huts
-	# Хозяйственный пояс: за частью домов, дальше от улицы — сарай, сеновал или поленница
-	var character: String = s.character
-	var farming := character.begins_with("земледель") or character.begins_with("торгов")
-	var chance := 0.7 if farming else (0.55 if character.begins_with("горн") or character.begins_with("предгорн") or character.begins_with("лесн") else 0.35)
+	# Хозяйственный пояс: за частью домов, дальше от улицы — по набору вида поселения (SettlementSets)
+	var chance := SettlementSets.outbuilding_chance(set_kind, s)
 	for h in placed:
 		var u: HutData = huts[h]
 		if rng.next_float() > chance:
@@ -333,37 +332,39 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 		var back := Vector2(-sin(u.a), -cos(u.a))
 		var side := Vector2(back.y, -back.x) * (rng.next_float() - 0.5) * 1.4
 		var p := Vector2(u.x, u.y) + back * (1.9 + rng.next_float() * 0.5) + side
-		var kinds: Array = ["barn", "hay", "shed"] if farming else ["shed", "barn", "hay", "shed"]
-		var kind: String = kinds[floori(rng.next_float() * kinds.size())]
+		var kind := SettlementSets.pick_outbuilding(set_kind, s, rng.next_float())
 		var a: float = u.a + (PI / 2.0 if kind == "barn" and rng.next_float() < 0.5 else 0.0)
 		if p.distance_to(Vector2(s.x, s.y)) > LAYOUT_R - 0.3 or _crowded(huts, p, 1.45) or not _fits(w, ground, river, p, a, kind):
 			continue
 		huts.append(HutData.new(p.x, p.y, floori(rng.next_float() * 4), kind, a))
-	# Колодец на краю площади, со стороны, дальней от путей
-	if town or rng.next_float() < 0.4:
-		var best := -1.0
-		var spot := Vector2.ZERO
-		for k in 8:
-			var a := TAU * k / 8.0
-			var p := Vector2(s.x + cos(a) * 1.4, s.y + sin(a) * 1.4)
-			var j := floori(p.y) * W + floori(p.x)
-			var free := 0.0 if w.path_mask[j] >= 2 else 1.0 + float(not _crowded(huts, p, 1.3))
-			if free > best:
-				best = free
-				spot = p
-		if best >= 2.0 and _fits(w, ground, river, spot, atan2(s.x - spot.x, s.y - spot.y), "fountain"):
-			huts.append(HutData.new(spot.x, spot.y, 0, "fountain", atan2(s.x - spot.x, s.y - spot.y)))
+	# Характерные объекты на краю площади, со стороны, дальней от путей
+	var landmarks: Array = SettlementSets.SETS.get(set_kind, SettlementSets.SETS.ordinary).get("landmarks", [])
+	for lm: Dictionary in landmarks:
+		if town or rng.next_float() < float(lm.get("chance", 0.4)):
+			var best := -1.0
+			var spot := Vector2.ZERO
+			for k in 8:
+				var a := TAU * k / 8.0
+				var p := Vector2(s.x + cos(a) * 1.4, s.y + sin(a) * 1.4)
+				var j := floori(p.y) * W + floori(p.x)
+				var free := 0.0 if w.path_mask[j] >= 2 else 1.0 + float(not _crowded(huts, p, 1.3))
+				if free > best:
+					best = free
+					spot = p
+			var lm_id := str(lm.id)
+			if best >= 2.0 and _fits(w, ground, river, spot, atan2(s.x - spot.x, s.y - spot.y), lm_id):
+				huts.append(HutData.new(spot.x, spot.y, 0, lm_id, atan2(s.x - spot.x, s.y - spot.y)))
 	return huts
 
 
 ## Жилые дома (без сараев и колодца): непустой huts ещё не значит, что в поселении можно жить.
-const HOMES := ["house", "chalet", "tall"] # как SettlementsBuilder.HOMES
+const HOMES := ["house", "house_timber", "chalet", "tall"]
 
 
 static func homes_of(s: SettlementData) -> int:
 	var count := 0
 	for hut: HutData in s.huts:
-		if hut.t in HOMES: count += 1
+		if SettlementSets.is_home(hut.t): count += 1
 	return count
 
 
@@ -373,13 +374,10 @@ static func count_homes(settlements: Array) -> int:
 	return count
 
 
-## Вид жилого дома: в горах и лесу — больше шале, у посёлка у площади — высокие дома
-static func _house_kind(s: SettlementData, from_plaza: float, r: float) -> String:
-	var character: String = s.character
-	if s.town and from_plaza < 1.6 and r < 0.6:
-		return "tall"
-	var chalets := 0.65 if character.begins_with("горн") or character.begins_with("предгорн") or character.begins_with("лесн") else 0.35
-	return "chalet" if r < chalets else "house"
+## Вид жилого дома берётся из набора вида поселения (SettlementSets)
+static func _house_kind(s: SettlementData, from_plaza: float, r: float, set_kind := "") -> String:
+	var kind := set_kind if not set_kind.is_empty() else SettlementSets.kind_of(null, s)
+	return SettlementSets.pick_home(kind, s.town, from_plaza, r)
 
 
 static func _crowded(huts: Array, p: Vector2, gap: float) -> bool:
@@ -389,12 +387,12 @@ static func _crowded(huts: Array, p: Vector2, gap: float) -> bool:
 	return false
 
 
-## Постройка вида kind (PlayerState.SITE_HALF) встаёт на сухую землю с перепадом не больше FLAT,
+## Постройка вида kind (SettlementSets) встаёт на сухую землю с перепадом не больше flat_of,
 ## не на путь и не на голую скалу. Пробы — по углам и серединам стен, повёрнутых на a
 static func _fits(w: WorldData, ground: Heightfield, river: PackedByteArray, p: Vector2, a: float, kind: String) -> bool:
 	if not structure_clear(w, p, a, kind):
 		return false
-	var half: Vector2 = PlayerState.SITE_HALF[kind] + Vector2(0.4, 0.4)
+	var half := SettlementSets.half_of(kind) + Vector2(0.4, 0.4)
 	var low := INF
 	var high := -INF
 	var basis := Basis(Vector3.UP, a)
@@ -415,13 +413,13 @@ static func _fits(w: WorldData, ground: Heightfield, river: PackedByteArray, p: 
 			var h := ground.ground_at(px, pz)
 			low = minf(low, h)
 			high = maxf(high, h)
-	return high - low <= StageSites.FLAT[kind]
+	return high - low <= SettlementSets.flat_of(kind)
 
 
 ## The base heightfield has no tunnel excavation. Reserve the entire rotated
 ## foundation before selecting a slot, rather than deleting the chosen house later.
 static func structure_clear(w: WorldData, p: Vector2, a: float, kind: String) -> bool:
-	var half: Vector2 = (PlayerState.SITE_HALF[kind] + Vector2(0.4, 0.4)) / GameConfig.TILE
+	var half := (SettlementSets.half_of(kind) + Vector2(0.4, 0.4)) / GameConfig.TILE
 	var basis := Basis(Vector3.UP, a)
 	for tunnel: bool in [false, true]:
 		for sp in (w.tunnels if tunnel else w.bridges):

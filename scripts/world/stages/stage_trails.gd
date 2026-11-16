@@ -1709,7 +1709,7 @@ static func _clear_huts(w: WorldData) -> void:
 		for u in st.huts:
 			var free := StageLandmarks.structure_clear(w, Vector2(u.x, u.y), u.a, u.t)
 			# Полоса дороги должна оставаться свободной и внутри деревни, не только на мостах.
-			var half: Vector2 = PlayerState.SITE_HALF[u.t] + Vector2(0.4, 0.4)
+			var half := SettlementSets.half_of(u.t) + Vector2(0.4, 0.4)
 			var basis := Basis(Vector3.UP, u.a)
 			for dz: float in [-1.0, 0.0, 1.0]:
 				for dx: float in [-1.0, 0.0, 1.0]:
