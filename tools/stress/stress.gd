@@ -392,6 +392,8 @@ func _group_forest() -> void:
 			await _ablate("forest", "Лес", "forest.off_", base, [
 				["shadows", "тени", func() -> void: sun.shadow_enabled = false, func() -> void: sun.shadow_enabled = true],
 				["shadows_far", "тени дальних уровней LOD", _far_shadows.bind(false), _far_shadows.bind(true)],
+				# 16.11: тени ближних крон (уровень 0, их собственный меш с вырезами) — сколько вообще можно выиграть
+				["crown0_shadow", "тени ближних крон", _near_crown_shadows.bind(veg, false), _near_crown_shadows.bind(veg, true)],
 				["details", "трава и подлесок", _details.bind(false), _details.bind(true)],
 				["half_res", "половина разрешения", func() -> void: root.scaling_3d_scale = 0.5, func() -> void: root.scaling_3d_scale = 1.0],
 			] + _shadow_parts(sun, veg, func() -> void: Lighting.apply_shadows(sun, 1)), still, veg)
@@ -476,6 +478,22 @@ func _shadow_parts(sun: DirectionalLight3D, under: Node, restore: Callable) -> A
 			func() -> void: RenderingServer.directional_soft_shadow_filter_set_quality(filter)],
 		["shadow_double", "двусторонние тени (односторонние)", _double_sided.bind(under, false), _double_sided.bind(under, true)],
 	]
+
+
+var _near_crowns := {}
+## Тени ближних крон (узлы кроны уровня 0 с двусторонней тенью)
+func _near_crown_shadows(under: Node, on: bool) -> void:
+	if on:
+		for node: Variant in _near_crowns:
+			if is_instance_valid(node):
+				node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
+		_near_crowns.clear()
+		return
+	for node: Node in under.find_children("*", "MultiMeshInstance3D", true, false):
+		var g := node as GeometryInstance3D
+		if g.cast_shadow == GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED and int(g.get_meta("level", -1)) == 0:
+			_near_crowns[g] = true
+			g.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
 
 var _double := {}
