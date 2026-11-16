@@ -71,10 +71,16 @@ static func _fast_build_stale() -> bool:
 	if dll.is_empty():
 		return false
 	var built := FileAccess.get_modified_time(dll)
-	var dir := FAST_GRID_SCRIPT.get_base_dir()
-	for name in DirAccess.get_files_at(dir):
-		if name.ends_with(".cs") and FileAccess.get_modified_time(dir.path_join(name)) > built:
-			return true
+	# 16.11.2026: и вложенные папки (scripts/core/roads: RoadCode, CorridorParams). Раньше смотрелась только сама папка,
+	# и правка там без пересборки молча шла на старой сборке: эталон road_golden «расходился на первом прогоне».
+	var dirs: Array[String] = [FAST_GRID_SCRIPT.get_base_dir()]
+	while not dirs.is_empty():
+		var dir: String = dirs.pop_back()
+		for sub in DirAccess.get_directories_at(dir):
+			dirs.append(dir.path_join(sub))
+		for name in DirAccess.get_files_at(dir):
+			if name.ends_with(".cs") and FileAccess.get_modified_time(dir.path_join(name)) > built:
+				return true
 	return false
 
 

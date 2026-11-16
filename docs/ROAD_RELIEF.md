@@ -66,8 +66,9 @@
 а метровая сетка на весь бесконечный мир — дорогое решение. Новых кэшей, растров и этапов нет.
 
 **Скорость.** Весь проход подгонки (станции, профиль, защита, формы) теперь один вызов
-`FastGrid.RoadFitNetwork` в C#, параллельно по путям. GDScript остаётся эталоном
-(`_fit_network`, `_corridor_reference`). C# и GDScript совпадают побайтно (`road_relief_test`).
+`FastGrid.RoadFitNetwork` в C#, параллельно по путям. С 16.11.2026 это единственная реализация:
+GDScript-копия (`_fit_network`, `_corridor_reference`) удалена, результат держит эталон `road_golden.gd`
+([ROADS_CSHARP.md](ROADS_CSHARP.md)).
 `WorldCache.SURFACE_VERSION` повышена до 5: готовая поверхность пересоберётся, география и пути
 остаются в кэше.
 
