@@ -4,6 +4,8 @@ extends RefCounted
 ## Пишет: w.settlements [{x, y, i, name, town, homes, style, character, huts: []}], w.peaks [{x, y, i, elev, name}].
 ## Дома (huts) ставит lay_out после путей.
 
+const Roles := preload("res://scripts/world/settlement_roles.gd")
+
 const PROGRESS := 0.46
 const LABEL := "Основание поселений"
 const LAYOUT_R := 6.8 # клеток: дома и сараи не дальше от костра (вырубка леса у поселения — 7 клеток)
@@ -14,7 +16,7 @@ const LAYOUT_R := 6.8 # клеток: дома и сараи не дальше �
 const WATER_WEIGHT := 0.5
 ## Поправка на удалённость в отборе плана: следующее место получает до SPREAD к оценке, если до ближайшего
 ## уже выбранного не меньше SPREAD_R клеток (800 м). Группы в пятнах плотности остаются, у дальней суши появляется шанс.
-const SPREAD := 0.5
+const SPREAD := 0.3 # 0,5 до ролей (этап 1); с ролями дальние места даёт роль remote, а обычные чаще держатся групп
 const SPREAD_R := 200.0
 ## Прежний отбор (стенд settlement_look.gd -- --legacy): водный член целиком, без поправки на удалённость.
 static var legacy := false
@@ -78,85 +80,116 @@ static func _place_settlements(w: WorldData) -> void:
 	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
 	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
 	var min_d := maxf(32.0, W / 8.0)
-	var spread := 0.0 if legacy else SPREAD
-	var count := cand.size() / 4
-	var dead := PackedByteArray() # кандидат уже выбран или слишком близко к выбранному (выбранных только прибавляется)
-	dead.resize(count)
-	var from := 0 # до этого номера все кандидаты dead
-	while settlements.size() < want:
-		# Лучший по оценке с поправкой на удалённость. Поправка не больше spread, поэтому кандидаты по убыванию
-		# оценки просматриваются, пока оценка + spread может обогнать лучшего; при равенстве — раньше в списке.
-		# Без поправки (legacy) это первый живой кандидат — прежний отбор.
-		var best := -1
-		var best_value := -INF
-		var k := from
-		while k < count:
-			if dead[k] != 0:
-				if k == from: from += 1
-				k += 1
-				continue
-			var at := k * 4
-			if best >= 0 and cand[at] + spread <= best_value:
-				break
-			var i := int(cand[at + 1])
-			var x := (i % W) + 0.5
-			var y := (i / W) + 0.5
-			# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
-			# Радиусы обоих соседей действуют и через границу любой области.
-			var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
-			var close := false
-			# За краем плана — соседние области со своими поселениями, а не пустота: край считается зеркалом
-			# (как будто там поселение на том же расстоянии), иначе углы плана выглядят самыми удалёнными местами.
-			var nearest := minf(SPREAD_R, 2.0 * minf(minf(x, y), minf(W - x, H - y)))
-			for s: SettlementData in settlements:
-				var dx: float = s.x - x
-				var dy: float = s.y - y
-				var separation: float = (spacing + s.spacing) * 0.5
-				if dx * dx + dy * dy < separation * separation:
-					close = true
-					break
-				nearest = minf(nearest, sqrt(dx * dx + dy * dy))
-			if close:
-				dead[k] = 1
-				if k == from: from += 1
-				k += 1
-				continue
-			var value: float = cand[at] + spread * nearest / SPREAD_R
-			if value > best_value:
-				best = k
-				best_value = value
-			if spread == 0.0:
-				break
-			k += 1
+	var pick := {cand = cand, dead = PackedByteArray(), min_d = min_d, spread = 0.0 if legacy else SPREAD,
+		fields = {}, centers = []}
+	pick.dead.resize(cand.size() / 4) # кандидат выбран или слишком близко к выбранному (выбранных только прибавляется)
+	# Роли слотов (с 16.11, SettlementRoles): центры, спутники, лес, предгорья, обычные, удалённые. Legacy — все обычные.
+	var slots: Array[String] = []
+	var lists := {} # роль -> номера подходящих кандидатов по убыванию оценки (только для ролей с постоянным условием)
+	if legacy:
+		for k in want: slots.append("ordinary")
+	else:
+		slots = Roles.slots(w.seed_num, want)
+		pick.fields = Roles.fields(w)
+		lists[""] = Roles.thin(w, pick.fields, cand, "")
+		for role: String in ["forest", "foothill"]:
+			lists[role] = Roles.thin(w, pick.fields, cand, role)
+	for slot: String in slots:
+		var role := slot
+		var best := _best(w, settlements, pick, role, lists.get(role, lists.get("", PackedInt32Array())))
+		if best < 0 and role != "ordinary":
+			# Карта не даёт места этой роли (нет гор, леса, свободного кольца у центра) — обычное место.
+			role = "ordinary"
+			best = _best(w, settlements, pick, role, lists.get("", PackedInt32Array()))
 		if best < 0:
 			break
-		dead[best] = 1
+		pick.dead[best] = 1
 		var at := best * 4
 		var i := int(cand[at + 1])
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
-		var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
-		# Берег большой воды и удобная долина делают место узлом округи.
+		# Берег большой воды и удобная долина делают место узлом округи; у ролей важность для сети — своя.
 		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
 		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + cand[at + 2] * 0.5 + cand[at + 3] * 0.3 + shore, 0.0, 1.0)
 		var settlement := SettlementData.new(x, y, i, w.make_name(Names.SETTLEMENT, "settlement", floori(x), floori(y)))
-		settlement.spacing = spacing
-		settlement.importance = importance
+		settlement.spacing = min_d * lerpf(1.35, 0.7, cand[at + 3])
+		settlement.importance = Roles.ROLES[role].importance if Roles.ROLES.has(role) else importance
+		settlement.role = "" if legacy else role
+		if role == "center": pick.centers.append(Vector2(x, y))
 		settlements.append(settlement)
-	# Посёлков — примерно треть, самые важные места; остальные — деревни.
+	# Посёлков — примерно треть, самые важные места; остальные — деревни. Роль задаёт размер сама.
 	var ranks: Array = settlements.map(func(s: SettlementData) -> float: return s.importance)
 	ranks.sort()
 	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
 	for s: SettlementData in settlements:
 		var rng := WGRandom.at(w.seed_num, "settlement.huts", floori(s.x), floori(s.y))
+		var role: Dictionary = Roles.ROLES.get(s.role, {})
 		# Посёлок — узел округи: вдвое больше домов, чем у деревни. Сами дома ставит lay_out,
 		# когда известны дороги (с 9.5): улицы — это дороги и тропы, пришедшие в поселение.
-		s.town = s.importance >= town_from
-		s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
+		s.town = role.town if role.has("town") else s.importance >= town_from
+		if role.has("homes"):
+			s.homes = int(role.homes[0]) + floori(rng.next_float() * (int(role.homes[1]) - int(role.homes[0]) + 1))
+		else:
+			s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
 		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
 		s.style = floori(rng.next_float() * 4)
-		s.character = _character(w, s.i, s.town)
+		s.character = _character(w, s.i, s.town, role.get("adjective", ""))
 	w.settlements = settlements
+
+
+## Номер лучшего кандидата для слота роли или -1. Оценка + поправка на удалённость + прибавка роли;
+## кандидаты идут по убыванию оценки (order — только подходящие роли, пусто — все), просмотр кончается, когда
+## оценка + наибольшие поправки уже не обгонит лучшего; при равенстве — раньше в списке. Без поправок (legacy) —
+## первый живой кандидат, как прежний отбор.
+static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: String, order: PackedInt32Array) -> int:
+	var cand: PackedFloat64Array = pick.cand
+	var dead: PackedByteArray = pick.dead
+	var spread: float = pick.spread
+	var min_d: float = pick.min_d
+	var top := spread + Roles.max_bonus(role)
+	var listed := not legacy # с ролями — прореженные списки (Roles.thin), legacy — все кандидаты, как раньше
+	var count := order.size() if listed else cand.size() / 4
+	var best := -1
+	var best_value := -INF
+	for n in count:
+		var k: int = order[n] if listed else n
+		if dead[k] != 0:
+			continue
+		var at := k * 4
+		if best >= 0 and cand[at] + top <= best_value:
+			break
+		var i := int(cand[at + 1])
+		var x := (i % w.W) + 0.5
+		var y := (i / w.W) + 0.5
+		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
+		# Радиусы обоих соседей действуют и через границу любой области.
+		var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
+		var close := false
+		# За краем плана — соседние области со своими поселениями, а не пустота: край считается зеркалом
+		# (как будто там поселение на том же расстоянии), иначе углы плана выглядят самыми удалёнными местами.
+		var edge := 2.0 * minf(minf(x, y), minf(w.W - x, w.H - y))
+		var nearest := edge
+		for s: SettlementData in settlements:
+			var dx: float = s.x - x
+			var dy: float = s.y - y
+			var separation: float = (spacing + s.spacing) * 0.5
+			if dx * dx + dy * dy < separation * separation:
+				close = true
+				break
+			nearest = minf(nearest, sqrt(dx * dx + dy * dy))
+		if close:
+			dead[k] = 1
+			continue
+		var extra := Roles.bonus(role, w, pick.fields, i, x, y, nearest, pick.centers) if not pick.fields.is_empty() else 0.0
+		if extra == -INF:
+			continue
+		var value: float = cand[at] + spread * minf(nearest, SPREAD_R) / SPREAD_R + extra
+		if value > best_value:
+			best = k
+			best_value = value
+		if top == 0.0:
+			break
+	return best
 
 
 static func _settlement_candidates(w: WorldData, river: PackedByteArray, wet: PackedByteArray, reachable: PackedByteArray,
@@ -283,7 +316,7 @@ static func _lay_out_one(w: WorldData, ground: Heightfield, river: PackedByteArr
 	# Хозяйственный пояс: за частью домов, дальше от улицы — сарай, сеновал или поленница
 	var character: String = s.character
 	var farming := character.begins_with("земледель") or character.begins_with("торгов")
-	var chance := 0.7 if farming else (0.55 if character.begins_with("горн") or character.begins_with("лесн") else 0.35)
+	var chance := 0.7 if farming else (0.55 if character.begins_with("горн") or character.begins_with("предгорн") or character.begins_with("лесн") else 0.35)
 	for h in placed:
 		var u: HutData = huts[h]
 		if rng.next_float() > chance:
@@ -336,7 +369,7 @@ static func _house_kind(s: SettlementData, from_plaza: float, r: float) -> Strin
 	var character: String = s.character
 	if s.town and from_plaza < 1.6 and r < 0.6:
 		return "tall"
-	var chalets := 0.65 if character.begins_with("горн") or character.begins_with("лесн") else 0.35
+	var chalets := 0.65 if character.begins_with("горн") or character.begins_with("предгорн") or character.begins_with("лесн") else 0.35
 	return "chalet" if r < chalets else "house"
 
 
@@ -399,7 +432,12 @@ static func structure_clear(w: WorldData, p: Vector2, a: float, kind: String) ->
 
 
 ## Характер поселения по месту: «приморский посёлок», «горная деревня»…
-static func _character(w: WorldData, i: int, town: bool) -> String:
+## role_stem — основа прилагательного роли (SettlementRoles: «лесн», «предгорн», «дальн»): роль важнее воды и биома.
+static func _character(w: WorldData, i: int, town: bool, role_stem := "") -> String:
+	if role_stem == "дальн":
+		return "дальний посёлок" if town else "дальняя деревня"
+	if not role_stem.is_empty():
+		return role_stem + ("ой" if role_stem == "лесн" else "ый") + " посёлок" if town else role_stem + "ая деревня"
 	var adj := ["окраинный", "окраинная"]
 	# Заготовки тестов задают не все поля
 	var sea := not w.dist_ocean.is_empty() and w.dist_ocean[i] < 8.0

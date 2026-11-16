@@ -1,6 +1,6 @@
 class_name SettlementData
 extends EntityRecord
-const FIELDS := ["x", "y", "i", "spacing", "importance", "name", "huts", "town", "homes", "style", "character", "connections", "id", "region", "net"]
+const FIELDS := ["x", "y", "i", "spacing", "importance", "name", "huts", "town", "homes", "style", "character", "connections", "id", "region", "net", "role"]
 var x: float = 0.0
 var y: float = 0.0
 var i: int = -1
@@ -15,6 +15,8 @@ var huts: Array[HutData] = []
 var connections: Array = []
 var id: String = ""
 var net: String = ""
+## Роль места в отборе плана (SettlementRoles: center, satellite, forest, foothill, remote, ordinary); пусто — без ролей
+var role: String = ""
 var region: Vector2i = Vector2i.ZERO
 
 func _init(px: float = 0.0, py: float = 0.0, index: int = -1, title: String = "") -> void:
@@ -26,6 +28,7 @@ func _init(px: float = 0.0, py: float = 0.0, index: int = -1, title: String = ""
 static func from_dict(data: Dictionary) -> SettlementData:
 	var result := SettlementData.new()
 	result.net = data.get("net", "")
+	result.role = data.get("role", "")
 	if data.has("x"):
 		result.x = data["x"]
 	if data.has("y"):
@@ -65,6 +68,8 @@ func to_dict() -> Dictionary:
 		out.erase("region")
 	if net.is_empty():
 		out.erase("net")
+	if role.is_empty():
+		out.erase("role")
 	if i < 0:
 		out.erase("i")
 	return out
@@ -76,4 +81,6 @@ func has(field: String) -> bool:
 		return not id.is_empty()
 	if field == "net":
 		return not net.is_empty()
+	if field == "role":
+		return not role.is_empty()
 	return super.has(field)

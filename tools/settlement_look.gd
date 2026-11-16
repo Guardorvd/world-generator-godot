@@ -16,6 +16,8 @@ extends SceneTree
 const MacroLook := preload("res://tools/macro_geo_look.gd")
 const CONTROL := ["Север-1234", "Ущелье", "Туман-4821", "Янтарь-5150", "a1", "b2", "c3", "d4"]
 const OUT := "res://tools/control/runs"
+const ROLE_COLORS := {center = Color(0.9, 0.1, 0.1), satellite = Color(1.0, 0.55, 0.1), forest = Color(0.05, 0.3, 0.1),
+	foothill = Color(0.6, 0.2, 0.8), remote = Color(1.0, 1.0, 1.0)}
 
 
 func _initialize() -> void:
@@ -62,7 +64,9 @@ func _run() -> void:
 		var line := "%s: %d мест, у воды %d, пустая суша %d %%, просвет %d м, сосед %d м, %s; старт — %s; отбор %.0f мс" % [seed_text, p.n,
 			p.by_water, roundi(p.land_far_800m * 100.0), p.widest_gap_m, p.mean_neighbor_m, JSON.stringify(p.kinds), p.home, row.landmarks_ms]
 		print(line)
+		print("    роли [мест, связей]: %s; посёлков %d" % [JSON.stringify(p.roles), p.towns])
 		if roads:
+			print("    после дорог роли [мест, связей]: %s; меньше всего жилых домов в одном месте: %d" % [JSON.stringify(row.after.roles), row.after.min_homes])
 			var r: Dictionary = row.roads
 			print("    дороги: осталось %d из %d, отказы %s, связи %s, км %s, мостов %d, туннелей %d, вторые %s, этап %.1f с, домов %d" % [r.kept, r.placed,
 				JSON.stringify(r.failures), JSON.stringify(r.degrees), JSON.stringify(r.km), r.bridges, r.tunnels, JSON.stringify(r.second_ways), r.ms / 1000.0, r.homes])
@@ -95,9 +99,13 @@ func _land_samples(w: WorldData) -> PackedInt32Array:
 
 func _describe(w: WorldData, land: PackedInt32Array) -> Dictionary:
 	var kinds := {}
+	var roles := {}
 	var water := 0
 	var cells := []
 	for s: SettlementData in w.settlements:
+		var role := s.role if not s.role.is_empty() else "—"
+		var entry: Array = roles.get(role, [0, 0])
+		roles[role] = [entry[0] + 1, entry[1] + s.connections.size()] # мест, связей у них всего
 		var kind := _kind(s.character)
 		kinds[kind] = int(kinds.get(kind, 0)) + 1
 		if w.dist_water[s.i] <= 6.0: water += 1
@@ -117,7 +125,9 @@ func _describe(w: WorldData, land: PackedInt32Array) -> Dictionary:
 			if b != a: near = minf(near, Vector2(a.x - b.x, a.y - b.y).length())
 		nn += near
 	var home: Variant = PlayerState.home(w)
-	return {n = w.settlements.size(), by_water = water, kinds = kinds, cells = cells,
+	return {n = w.settlements.size(), by_water = water, kinds = kinds, roles = roles, cells = cells,
+		min_homes = w.settlements.map(func(s: SettlementData) -> int: return StageLandmarks.homes_of(s)).min() if not w.settlements.is_empty() else 0,
+		towns = w.settlements.filter(func(s: SettlementData) -> bool: return s.town).size(),
 		land_far_800m = snappedf(float(far) / maxi(1, land.size()), 0.01), widest_gap_m = roundi(gap * GameConfig.TILE),
 		mean_neighbor_m = roundi(nn / maxi(1, w.settlements.size()) * GameConfig.TILE),
 		home = home.character if home is SettlementData else "—"}
@@ -125,7 +135,8 @@ func _describe(w: WorldData, land: PackedInt32Array) -> Dictionary:
 
 ## Вид места по характеру (StageLandmarks._character) без рода и размера
 static func _kind(character: String) -> String:
-	for pair: Array in [["прим", "приморские"], ["речн", "речные"], ["горн", "горные"], ["лесн", "лесные"], ["земл", "равнинные"], ["торг", "равнинные"]]:
+	for pair: Array in [["прим", "приморские"], ["речн", "речные"], ["горн", "горные"], ["предгорн", "предгорные"], ["лесн", "лесные"],
+			["дальн", "дальние"], ["земл", "равнинные"], ["торг", "равнинные"]]:
 		if character.begins_with(pair[0]): return pair[1]
 	return "окраинные"
 
@@ -157,7 +168,9 @@ func _map(w: WorldData, roads: bool) -> Image:
 				if w.path_mask[(py * s + 1) * w.W + px * s + 1] >= 2:
 					img.set_pixel(px, py, Color(0.25, 0.16, 0.08))
 	for st: SettlementData in w.settlements:
-		var col := Color(0.9, 0.1, 0.1) if st.town else Color(1.0, 0.6, 0.1)
+		# Роль: центр — красный, спутник — оранжевый, лесное — тёмно-зелёный, предгорное — фиолетовый,
+		# удалённое — белый, обычное и без ролей — жёлтый (посёлок — красный).
+		var col: Color = ROLE_COLORS.get(st.role, Color(0.9, 0.1, 0.1) if st.town else Color(1.0, 0.85, 0.1))
 		var cx := floori(st.x / s)
 		var cy := floori(st.y / s)
 		for dy in range(-2, 3):
