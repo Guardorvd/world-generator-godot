@@ -48,6 +48,10 @@ func run() -> void:
 	var after_local := RoadRefinement.build(h, true, {0: true})
 	print("ROAD local same=", before_local.patches == after_local.patches)
 	failures += int(before_local.patches != after_local.patches)
+	# 16.11: частичная сборка идёт на C# целиком (индекс, подгонка, патчи с владельцем), а не молча на GDScript
+	var local_native: bool = after_local.build_timings.has("native_points_ms") and not before_local.build_timings.has("native_points_ms")
+	print("ROAD local on C#: ", local_native)
+	failures += int(not local_native)
 	RoadRefinement.allow_fast_vertices = true
 	RoadRefinement.road_simd = true
 	check_bed(h)

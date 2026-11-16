@@ -132,12 +132,15 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
 	var started_us := Time.get_ticks_usec()
-	if allow_fast_index and allow_fast_patches and allow_fast_nearest and allow_fast_vertices and only.is_empty() and heights.world.outer == null:
+	# 16.11: частичная пересборка (only, Trail Lab) идёт тем же вызовом C#: индекс, подгонка и патчи только вокруг своих путей,
+	# проверки соседей и зазоров видят все пути; без restrict_local_index (эталон сравнения) — прежний путь GDScript
+	if allow_fast_index and allow_fast_patches and allow_fast_nearest and allow_fast_vertices and heights.world.outer == null \
+			and (only.is_empty() or (restrict_local_index and r._local_native_ok())):
 		var whole := Grid.fast_grid()
 		if whole != null:
 			var built := r._build_native(whole, fit_road)
 			if built != null:
-				pin_coarse_edges(heights, built.patches, built.patches.keys())
+				if only.is_empty(): pin_coarse_edges(heights, built.patches, built.patches.keys())
 				built._drop_mountain_fits(heights.world)
 				return built
 			push_error("RoadRefinement: C# вернул null, метровая сетка строится на GDScript")
@@ -337,6 +340,16 @@ func _reset_native_state() -> void:
 	_sg_along = PackedFloat64Array()
 
 
+## Частичная сборка идёт на C#, если у каждого пути only есть отрезки дорожного вида (RoadBed.KINDS)
+func _local_native_ok() -> bool:
+	var w := _heights.world
+	for route: int in _only:
+		if route < 0 or route >= w.trails.size(): return false
+		var t: Dictionary = w.trails[route]
+		if not RoadBed.KINDS.has(t.kind) or t.pts.size() < 2: return false
+	return true
+
+
 ## null — C# вернул не словарь (исключение внутри); вызывающий считает на GDScript
 func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var w := _heights.world
@@ -366,7 +379,11 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 			ws.append(p.w)
 			surf.append(covering[n])
 	starts.append(xs.size())
-	var index: Variant = fast.RoadIndex(w.W, w.H, TILE, _reach, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids)
+	var local_routes := PackedByteArray()
+	if not _only.is_empty():
+		local_routes.resize(w.trails.size())
+		for route: int in _only: local_routes[route] = 1
+	var index: Variant = fast.RoadIndex(w.W, w.H, TILE, _reach, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids, local_routes)
 	if not index is Dictionary:
 		return null
 	_cs_starts = index.starts
@@ -418,7 +435,8 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var out: Variant = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
 		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
 		corridor_start, corridor_count, corridor, surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes,
-		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes(), PackedFloat64Array(Section.NATIVE_TREAD))
+		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes(), PackedFloat64Array(Section.NATIVE_TREAD),
+		local_routes)
 	if not out is Dictionary:
 		return null
 	patches = out.patches
@@ -565,6 +583,8 @@ func _index_structures() -> void:
 				_structures[key].append(s)
 
 
+## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ (индекс отрезков на GDScript, как и частичный restrict_local_index): в игре и в Trail Lab индекс
+## строит FastGrid.RoadIndex, в том числе при only (localRoutes).
 func _index(t: Dictionary, route: int) -> void:
 	var w := _heights.world
 	var pts: Array = t.pts
@@ -647,6 +667,8 @@ func _index(t: Dictionary, route: int) -> void:
 ## Резкий локальный перегиб требует обработки, постоянный чрезмерный уклон — другого маршрута.
 ## 14.11: тот же проход по станциям собирает входы форм коридора для всех видов путей (горные тропы — без подгонки
 ## профиля); формы всех путей считаются потом одним пакетом (_build_corridor).
+## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ, в игре и в Trail Lab не вызывается (там весь проход — _fit_network_native, и для частичной
+## сборки only тоже): GDScript-подгонка и формы коридора остаются для сверки с C# (road_relief_test, road_native_test, road_golden).
 func _fit_network() -> void:
 	var w := _heights.world
 	_index_route_identity()
@@ -720,7 +742,7 @@ func _fit_network_native(fast: Object) -> bool:
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
 		var kind := CORRIDOR_KINDS.find(t.kind)
-		if kind < 0:
+		if kind < 0 or not (_only.is_empty() or _only.has(route)):
 			continue
 		var scale := 1.0
 		if t.has("trail_id"):
@@ -771,6 +793,7 @@ func _fit_network_native(fast: Object) -> bool:
 
 
 ## Подгонка профиля одной дороги или тропы (4.5). gate получает долю станции, где разрешены формы коридора.
+## 16.11: ЭТАЛОН ДЛЯ СТЕНДОВ, в игре не вызывается (см. _fit_network_native).
 func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: PackedFloat32Array, gate: PackedFloat32Array) -> void:
 	var count := points.size()
 	var ground := PackedFloat32Array()
@@ -871,7 +894,7 @@ func _fit_route(t: Dictionary, route: int, points: PackedVector2Array, halves: P
 	fit_routes[route] = {points = points, profile = profile, strength = strength, limit = limits}
 
 
-## Формы коридора пакета на GDScript (эталон; весь мир в игре считает FastGrid.RoadFitNetwork, см. _fit_network_native).
+## 16.11: эталон для стендов, в игре не вызывается. Формы коридора пакета на GDScript (эталон; весь мир в игре считает FastGrid.RoadFitNetwork, см. _fit_network_native).
 func _build_corridor(batch: Dictionary) -> void:
 	corridor = PackedFloat64Array()
 	corridor_routes = {}

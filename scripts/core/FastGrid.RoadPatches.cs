@@ -1,11 +1,12 @@
 using System;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading.Tasks;
 using Godot;
 
 public partial class FastGrid
 {
-	private static readonly StringName NameH = "h", NameColor = "color", NameUv = "uv", NameSurface = "surface", NameRoad = "road";
+	private static readonly StringName NameH = "h", NameColor = "color", NameUv = "uv", NameSurface = "surface", NameRoad = "road", NameOwner = "owner";
 
 	// RoadRefinement.build (scripts/game/road_refinement.gd), DOD: индекс и патчи двумя вызовами;
 	// формы коридора всех путей — внутри RoadFitNetwork (FastGrid.Road.cs).
@@ -16,23 +17,101 @@ public partial class FastGrid
 
 	/// <summary>Отрезки и индекс. Пути (только виды RoadBed.KINDS) — столбцами: ptStarts — CSR по точкам,
 	/// px/py/pw — x, y, w точек в клетках, psurf — покрытие точки; smoothing — сглаживание профиля пути,
-	/// roadKind — 1 у дороги, routeIds — номер пути в w.trails.</summary>
+	/// roadKind — 1 у дороги, routeIds — номер пути в w.trails. localRoutes — 1 по номеру пути у путей частичной пересборки
+	/// (RoadRefinement.build(..., only), Trail Lab: новая трасса на готовом участке); пусто — все пути (игра). Частичный режим —
+	/// копия прежнего GDScript: сначала отрезки только этих путей определяют нужные клетки (с соседними) и охватывающий прямоугольник,
+	/// затем индексируются все пути, но только в нужных клетках и у точек вблизи прямоугольника; keys — клетки с отрезком местного пути.</summary>
 	public Godot.Collections.Dictionary RoadIndex(int width, int height, double tile, double reach, float[] ground,
-		int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, double[] smoothing, byte[] roadKind, int[] routeIds)
+		int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, double[] smoothing, byte[] roadKind, int[] routeIds,
+		byte[] localRoutes)
 	{
-		var segA = new List<Vector2>(); var segDelta = new List<Vector2>();
-		var segLen2 = new List<double>(); var segHalf = new List<double>(); var segRoad = new List<byte>();
-		var segSurf = new List<int>(); var segNext = new List<int>(); var segHa = new List<double>(); var segHb = new List<double>();
-		var segAlong = new List<double>(); var segRoute = new List<int>();
+		bool local = localRoutes.Length > 0;
+		int cells = width * height;
+		byte[] wanted = null;
+		Rect2 box = default;
+		if (local)
+		{
+			var first = RoadIndexBuild(width, height, tile, reach, ground, ptStarts, px, py, pw, psurf, smoothing, roadKind, routeIds,
+				localRoutes, true, null, default, null);
+			float ftile = (float)tile;
+			var mask = new byte[cells];
+			int count = 0;
+			foreach (int key in first.Keys)
+			{
+				mask[key] = 1;
+				count++;
+				var point = new Vector2((float)(key % width + 1), (float)(key / width + 1)) * ftile;
+				box = count == 1 ? new Rect2(point, Vector2.Zero) : box.Expand(point);
+			}
+			if (count > 0)
+			{
+				box = box.Grow(ftile);
+				foreach (int key in first.Keys)
+					for (int dz = -1; dz <= 1; dz++)
+						for (int dx = -1; dx <= 1; dx++)
+						{
+							int x = key % width + dx, z = key / width + dz;
+							if (x >= 0 && z >= 0 && x < width && z < height) mask[z * width + x] = 1;
+						}
+				wanted = mask;
+			}
+		}
+		var all = RoadIndexBuild(width, height, tile, reach, ground, ptStarts, px, py, pw, psurf, smoothing, roadKind, routeIds,
+			localRoutes, false, wanted, box, local ? new bool[cells] : null);
+		int[] outKeys = all.Keys.ToArray();
+		if (local) outKeys = all.Keys.Where(k => all.LocalCell[k]).ToArray();
+		return new Godot.Collections.Dictionary
+		{
+			["a"] = all.SegA.ToArray(), ["delta"] = all.SegDelta.ToArray(), ["len2"] = all.SegLen2.ToArray(), ["half"] = all.SegHalf.ToArray(),
+			["road"] = all.SegRoad.ToArray(), ["surf"] = all.SegSurf.ToArray(), ["next"] = all.SegNext.ToArray(), ["ha"] = all.SegHa.ToArray(),
+			["hb"] = all.SegHb.ToArray(), ["along"] = all.SegAlong.ToArray(), ["route"] = all.SegRoute.ToArray(),
+			["starts"] = all.CellStarts, ["candidates"] = all.Candidates, ["keys"] = outKeys,
+		};
+	}
+
+	private sealed class RoadIndexData
+	{
+		public readonly List<Vector2> SegA = new(), SegDelta = new();
+		public readonly List<double> SegLen2 = new(), SegHalf = new(), SegHa = new(), SegHb = new(), SegAlong = new();
+		public readonly List<byte> SegRoad = new();
+		public readonly List<int> SegSurf = new(), SegNext = new(), SegRoute = new();
+		public readonly List<int> Keys = new();
+		public bool[] LocalCell;
+		public int[] CellStarts = Array.Empty<int>(), Candidates = Array.Empty<int>();
+	}
+
+	/// <summary>Отрезки путей и «клетка -> отрезки». onlyLocal — только пути localRoutes и без пересчёта клеток (первый проход
+	/// частичного режима); wanted/box — нужные клетки и прямоугольник второго прохода (null — без ограничения);
+	/// localCell — отметить клетки с отрезком местного пути.</summary>
+	private static RoadIndexData RoadIndexBuild(int width, int height, double tile, double reach, float[] ground,
+		int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, double[] smoothing, byte[] roadKind, int[] routeIds,
+		byte[] localRoutes, bool onlyLocal, byte[] wanted, Rect2 box, bool[] localCell)
+	{
+		var d = new RoadIndexData { LocalCell = localCell };
 		var pairKey = new List<int>(); var pairId = new List<int>();
 		int cells = width * height;
 		var firstSeen = new bool[cells];
-		var keys = new List<int>();
 		float ftile = (float)tile;
 		for (int t = 0; t < routeIds.Length; t++)
 		{
+			bool isLocal = localRoutes.Length > 0 && localRoutes[routeIds[t]] != 0;
+			if (onlyLocal && !isLocal) continue;
 			int from = ptStarts[t], to = ptStarts[t + 1], count = to - from;
 			double sm = smoothing[t];
+			byte[] needed = null;
+			if (wanted != null)
+			{
+				needed = new byte[count];
+				bool any = false;
+				for (int n = 1; n < count; n++)
+				{
+					var a = new Vector2((float)px[from + n - 1], (float)py[from + n - 1]) * ftile;
+					var b = new Vector2((float)px[from + n], (float)py[from + n]) * ftile;
+					double nr = Math.Max(pw[from + n - 1], pw[from + n]) * tile * 0.5 + reach + tile;
+					if (new Rect2(a, b - a).Abs().Grow((float)nr).Intersects(box, true)) { needed[n - 1] = 1; needed[n] = 1; any = true; }
+				}
+				if (!any) continue;
+			}
 			var baseHeights = new double[count];
 			if (sm > 0.0)
 				for (int n = 0; n < count; n++)
@@ -54,6 +133,7 @@ public partial class FastGrid
 				var a = new Vector2((float)px[from + n - 1], (float)py[from + n - 1]) * ftile;
 				var b = new Vector2((float)px[from + n], (float)py[from + n]) * ftile;
 				if (a.DistanceSquaredTo(b) < 0.0001) continue;
+				if (needed != null && (needed[n - 1] == 0 || needed[n] == 0)) { along += a.DistanceTo(b); continue; }
 				double halfA = pw[from + n - 1] * tile * 0.5, halfB = pw[from + n] * tile * 0.5;
 				double half = Math.Max(halfA, halfB);
 				var delta = b - a;
@@ -70,22 +150,25 @@ public partial class FastGrid
 				{
 					for (int x = x0; x < x1; x++)
 					{
+						int key = z * width + x;
+						if (wanted != null && wanted[key] == 0) continue;
 						var center = new Vector2((float)(x + 1.0), (float)(z + 1.0)) * ftile;
 						if (RbSegmentDist(center.X, center.Y, a.X, a.Y, b.X, b.Y) > half + reach + tile * 0.71) continue;
 						if (id < 0)
 						{
-							id = segA.Count;
-							segA.Add(a); segDelta.Add(delta); segLen2.Add(len2); segHalf.Add(halfA); segHalf.Add(halfB);
-							segRoad.Add(roadKind[t]); segSurf.Add(psurf[from + n - 1]); segNext.Add(psurf[from + n]);
-							segHa.Add(profile[n - 1]); segHb.Add(profile[n]); segAlong.Add(myAlong); segRoute.Add(routeIds[t]);
+							id = d.SegA.Count;
+							d.SegA.Add(a); d.SegDelta.Add(delta); d.SegLen2.Add(len2); d.SegHalf.Add(halfA); d.SegHalf.Add(halfB);
+							d.SegRoad.Add(roadKind[t]); d.SegSurf.Add(psurf[from + n - 1]); d.SegNext.Add(psurf[from + n]);
+							d.SegHa.Add(profile[n - 1]); d.SegHb.Add(profile[n]); d.SegAlong.Add(myAlong); d.SegRoute.Add(routeIds[t]);
 						}
-						int key = z * width + x;
-						if (!firstSeen[key]) { firstSeen[key] = true; keys.Add(key); }
+						if (!firstSeen[key]) { firstSeen[key] = true; d.Keys.Add(key); }
+						if (localCell != null && isLocal) localCell[key] = true;
 						pairKey.Add(key); pairId.Add(id);
 					}
 				}
 			}
 		}
+		if (onlyLocal) return d;
 		// «клетка -> отрезки» в порядке создания отрезков (устойчивая раскладка по клеткам)
 		var starts = new int[cells + 1];
 		foreach (int k in pairKey) starts[k + 1]++;
@@ -97,13 +180,8 @@ public partial class FastGrid
 			int k = pairKey[i];
 			candidates[starts[k] + fill[k]++] = pairId[i];
 		}
-		return new Godot.Collections.Dictionary
-		{
-			["a"] = segA.ToArray(), ["delta"] = segDelta.ToArray(), ["len2"] = segLen2.ToArray(), ["half"] = segHalf.ToArray(),
-			["road"] = segRoad.ToArray(), ["surf"] = segSurf.ToArray(), ["next"] = segNext.ToArray(), ["ha"] = segHa.ToArray(),
-			["hb"] = segHb.ToArray(), ["along"] = segAlong.ToArray(), ["route"] = segRoute.ToArray(),
-			["starts"] = starts, ["candidates"] = candidates, ["keys"] = keys.ToArray(),
-		};
+		d.CellStarts = starts; d.Candidates = candidates;
+		return d;
 	}
 
 	private static void RoadStructureIndex(int width, int height, double tile, double[] structures, double reach,
@@ -143,8 +221,10 @@ public partial class FastGrid
 		double[] segHa, double[] segHb, double[] segAlong, int[] segRoute, int[] cellStarts, int[] candidates,
 		int[] fitStart, int[] fitCount, double[] fits, int[] corStart, int[] corCount, double[] corridor, double[] surfaces,
 		float[] ground, float[] water, float[] distWater, FastNoiseLite noise, Vector2 origin, double[] structureAxes,
-		double steepLo, double steepHi, double waterGap, double pinStart, double pinFade, double reach, byte[] authoredRoutes, double[] tread)
+		double steepLo, double steepHi, double waterGap, double pinStart, double pinFade, double reach, byte[] authoredRoutes, double[] tread,
+		byte[] localRoutes)
 	{
+		bool local = localRoutes.Length > 0;
 		var clock = System.Diagnostics.Stopwatch.StartNew();
 		int stride = div + 1, fineW = width * div, fineH = height * div;
 		double step = tile / div;
@@ -176,6 +256,7 @@ public partial class FastGrid
 		var hs = new float[count]; var colors = new Color[count]; var uv = new Vector2[count];
 		var surface = new byte[count]; var roadFlags = new byte[count];
 		var active = new bool[count];
+		var vertexRoute = new int[count]; // номер пути ближайшего отрезка вершины, -1 — нет (владелец при частичной сборке)
 		int chunks = (count + 4095) / 4096;
 		Parallel.For(0, chunks, c =>
 		{
@@ -189,6 +270,7 @@ public partial class FastGrid
 					segAlong, segLen2, segRoute, segA, segDelta, fitStart, fitCount, fits, corStart, corCount, corridor, surfaces, ground, water, distWater, noise, origin,
 					structStarts, structs, steepLo, steepHi, waterGap, hs, colors, uv, surface, roadFlags, active,
 					selected >= 0 && authoredRoutes[segRoute[selected]] != 0, tread);
+				vertexRoute[n] = selected >= 0 ? segRoute[selected] : -1;
 			}
 		});
 		double msVertices = clock.Elapsed.TotalMilliseconds;
@@ -198,23 +280,29 @@ public partial class FastGrid
 		{
 			int cx = key % width, cz = key / width;
 			// Leave cells whose vertices all lie on the original terrain in the coarse mesh.
+			// Частичная сборка (Trail Lab): патч нужен, только если сдвинулась вершина, принадлежащая местному пути.
 			bool changed = false;
 			for (int z = 0; z < stride && !changed; z++)
 				for (int x = 0; x < stride && !changed; x++)
-					changed = active[request[(cz * div + z) * fineW + cx * div + x]];
+				{
+					int q0 = request[(cz * div + z) * fineW + cx * div + x];
+					changed = active[q0] && (!local || (vertexRoute[q0] >= 0 && localRoutes[vertexRoute[q0]] != 0));
+				}
 			if (!changed) continue;
 			var ph = new float[cellsPer]; var pc = new Color[cellsPer]; var pu = new Vector2[cellsPer];
-			var ps = new byte[cellsPer]; var pr = new byte[cellsPer];
+			var ps = new byte[cellsPer]; var pr = new byte[cellsPer]; var po = local ? new byte[cellsPer] : null;
 			for (int z = 0; z < stride; z++)
 			{
 				for (int x = 0; x < stride; x++)
 				{
 					int q = request[(cz * div + z) * fineW + cx * div + x], idx = z * stride + x;
 					ph[idx] = hs[q]; pc[idx] = colors[q]; pu[idx] = uv[q]; ps[idx] = surface[q]; pr[idx] = roadFlags[q];
+					if (local) po[idx] = (byte)(vertexRoute[q] >= 0 && localRoutes[vertexRoute[q]] != 0 ? 1 : 0);
 				}
 			}
 			// ключи — StringName, как у литерала {h = ...} в GDScript: словарь побайтно тот же
 			using var patch = new Godot.Collections.Dictionary { [NameH] = ph, [NameColor] = pc, [NameUv] = pu, [NameSurface] = ps, [NameRoad] = pr };
+			if (local) patch[NameOwner] = po;
 			patches[key] = patch;
 		}
 		return new Godot.Collections.Dictionary { ["patches"] = patches, ["points"] = count, ["ms_points"] = msPoints,
