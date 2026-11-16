@@ -23,17 +23,17 @@ const PATH := "res://resources/road_tuning.tres"
 
 @export_group("Общие")
 ## Радиус выравнивания спокойных участков, м
-@export var level_r := 12
+@export var level_r := 0
 ## Размах ритма участков (RoadBump.patch().x)
-@export var rhythm_span := 1.2
+@export var rhythm_span := 0.0
 ## Формы включаются на столько метров от закреплённого места (вода, мост, развилка), м
-@export var corridor_fade := 8.0
+@export var corridor_fade := 0.0
 ## Зазор между полотнами, достаточный для узкого сечения, м
-@export var corridor_gap := 3.0
+@export var corridor_gap := 0.0
 ## Зазор для широких форм по обеим сторонам, м
-@export var land_gap := 10.5
+@export var land_gap := 0.0
 ## Путь трассы без земляных работ (trail_id, earthwork 0): доля форм
-@export var prepared_scale := 0.5
+@export var prepared_scale := 0.0
 
 static var _current: RoadTuning
 static var _lock := Mutex.new()

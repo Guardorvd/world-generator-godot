@@ -50,7 +50,7 @@ func compare(w: WorldData, label: String, parity := false) -> void: # parity —
 			var cell := clampi(floori(z / 4), 0, w.H - 1) * w.W + clampi(floori(x / 4), 0, w.W - 1)
 			if h.water_level[cell] != -INF: wet = maxf(wet, absf(b[i] - a))
 			if x <= 2 or z <= 2 or x >= w.W * 4 - 2 or z >= w.H * 4 - 2: outer_edge = maxf(outer_edge, absf(b[i] - a))
-	# 14.11: формы коридора — подъём, сечение, продавленное место и обочина вместе; верх — с запасом к таблице CORRIDOR
+	# 14.11: формы коридора — подъём, сечение, продавленное место и обочина вместе; верх — с запасом к формам road_tuning.tres
 	check(peak <= LIMIT and wet < 0.0001, label + ": bounded displacement %.3f m; water unchanged" % peak)
 	check(original_peak <= LIMIT + 0.2, label + ": change against the saved Git patches %.3f m" % original_peak)
 	check(outer_edge < 0.0001, label + ": no extra lip against the outer mesh")
