@@ -2,16 +2,12 @@ extends RefCounted
 ## Station width is the usable tread, in cells. All offsets from its edge are in metres.
 const Topology := preload("res://scripts/world/road_topology.gd")
 const TILE := GameConfig.TILE
-const ROAD := {width = 0.75, clearance = 2.4, side_cut = 0.15, rock_cut = 0.09, ford_cut = 0.22,
-	bed = {flat = 0.6, shoulder = 3.0, window = 14.0, keep = 0.52, cut = 1.2, side = 1.6}}
-const TRAIL := {width = 0.55, clearance = 0.45, side_cut = 0.12, rock_cut = 0.09, ford_cut = 0.22,
-	bed = {flat = 0.4, shoulder = 2.0, window = 4.0, keep = 0.65, cut = 0.4, side = 0.8}}
-const MOUNTAIN := {width = 0.42, clearance = 0.45, side_cut = 0.10, rock_cut = 0.06, ford_cut = 0.14,
-	bed = {flat = 0.3, shoulder = 1.5, window = 2.0, keep = 0.85, cut = 0.2, side = 0.5}}
+const ROAD := {width = 0.75, clearance = 2.4, side_cut = 0.15, rock_cut = 0.09, ford_cut = 0.22}
+const TRAIL := {width = 0.55, clearance = 0.45, side_cut = 0.12, rock_cut = 0.09, ford_cut = 0.22}
+const MOUNTAIN := {width = 0.42, clearance = 0.45, side_cut = 0.10, rock_cut = 0.06, ford_cut = 0.14}
 const ANIMAL := {width = 0.32, clearance = 0.15}
 const KINDS := {road = ROAD, trail = TRAIL, mountain = MOUNTAIN, animal = ANIMAL}
 const WIDTHS := {road = ROAD.width, trail = TRAIL.width, mountain = MOUNTAIN.width, animal = ANIMAL.width}
-const BED := {road = ROAD.bed, trail = TRAIL.bed, mountain = MOUNTAIN.bed}
 const AUTHORED_CLEARANCE := 1.5
 const BRIDGE_HALF := 2.2
 const JUNCTION_TRANSITION := 12.0
@@ -32,7 +28,7 @@ static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
 	var routes: Array = []
 	var junctions := {}
 	for t: Dictionary in w.trails:
-		if not BED.has(t.kind) or t.has("trail_id") or not t.has("road_id") or t.pts.size() < 2:
+		if not RoadBed.KINDS.has(t.kind) or t.has("trail_id") or not t.has("road_id") or t.pts.size() < 2:
 			continue
 		routes.append(t)
 		for n: int in [0, t.pts.size() - 1]:

@@ -59,8 +59,7 @@ func compare(w: WorldData, label: String, parity := false) -> void: # parity —
 	var active := 0
 	for route: int in after.corridor_routes:
 		var span: Vector2i = after.corridor_routes[route]
-		var kind: int = RoadRefinement.CORRIDOR_KINDS.find(w.trails[route].kind)
-		var limit: float = RoadRefinement.CORRIDOR[RoadRefinement.CORRIDOR_KINDS[kind]][10]
+		var limit: float = RoadTuning.current().kind(w.trails[route].kind).grade
 		var fit: Dictionary = after.fit_routes.get(route, {})
 		for j in span.y:
 			var lift: float = after.corridor[(span.x + j) * RoadRefinement.CORRIDOR_STRIDE]
@@ -334,7 +333,7 @@ func corridor_contracts() -> void:
 	var b: Vector2i = prepared.corridor_routes[0]
 	var error := 0.0
 	for j in a.y:
-		error = maxf(error, absf(prepared.corridor[(b.x + j) * FORM_STRIDE + 1] - full.corridor[(a.x + j) * FORM_STRIDE + 1] * RoadRefinement.PREPARED_SCALE))
+		error = maxf(error, absf(prepared.corridor[(b.x + j) * FORM_STRIDE + 1] - full.corridor[(a.x + j) * FORM_STRIDE + 1] * RoadTuning.current().prepared_scale))
 	check(error < 0.0000001, "prepared cross-slope scales with all other forms: %.8f m" % error)
 	var repeated := build(h, true)
 	check(prepared.patches == repeated.patches and prepared.corridor == repeated.corridor, "sloped mountain bake repeats")

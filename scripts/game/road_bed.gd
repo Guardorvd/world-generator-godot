@@ -15,11 +15,9 @@ const TILE := GameConfig.TILE
 const STEP := 1.0        # шаг выборки профиля вдоль линии, м
 const PIN := 6.0         # точки рельефа ближе этого к оси моста или туннеля (м) не меняются: концы настила
 const PIN_FADE := 4.0    # и пола остаются вровень с землёй; дальше на столько метров полотно включается плавно
-## half — полуширина из линии; flat — сколько за краем полотна ещё ровно, м; shoulder — где за краем
-## изменение сходит на нет, м; window — полуокно сглаживания вдоль линии, м; keep — доля местной
-## неровности, которая остаётся; cut — наибольший срез или подсыпка профиля, м; side — то же для
-## точки рельефа сбоку от линии (поперечный уклон), м
-const KINDS := preload("res://scripts/world/road_section.gd").BED
+## Виды путей с полотном, в порядке обработки и номеров вида в C#. Числа вида (flat, shoulder, window, keep, cut, side)
+## с 16.11.2026 — в файле параметров дорог: RoadTuning.current().kind(<вид>) (resources/road_tuning.tres).
+const KINDS := {road = 0, trail = 1, mountain = 2}
 const WATER_GAP := 0.4   # рельеф у воды не опускается ниже уровня соседней воды плюс это, м
 const STEEP := Vector2(0.5, 0.9) # на склоне круче (уклон земли у линии) полотно сходит на нет: серпантин
                                  # и скальный участок остаются собой, а выравнивание не рвёт соседние петли
@@ -53,10 +51,10 @@ static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()
 static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray, only := {}) -> Variant:
 	var w := heights.world
 	var names: Array = KINDS.keys()
+	var tuning := RoadTuning.current()
 	var params := PackedFloat64Array()
 	for name: String in names:
-		var k: Dictionary = KINDS[name]
-		params.append_array(PackedFloat64Array([k.flat, k.shoulder, k.window, k.keep, k.cut, k.side]))
+		params.append_array(tuning.kind(name).bed_params())
 	var kinds := PackedInt32Array()
 	var starts := PackedInt32Array()
 	var xs := PackedFloat64Array()

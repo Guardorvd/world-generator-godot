@@ -68,7 +68,8 @@
 **Скорость.** Весь проход подгонки (станции, профиль, защита, формы) теперь один вызов
 `FastGrid.RoadFitNetwork` в C#, параллельно по путям. С 16.11.2026 это единственная реализация:
 GDScript-копия (`_fit_network`, `_corridor_reference`) удалена, результат держит эталон `road_golden.gd`
-([ROADS_CSHARP.md](ROADS_CSHARP.md)).
+([ROADS_CSHARP.md](ROADS_CSHARP.md)). Числа таблицы форм (`CORRIDOR`), выраженность и характер по покрытию,
+выравнивание и зазоры с того же дня в файле параметров `resources/road_tuning.tres` (`RoadTuning`).
 `WorldCache.SURFACE_VERSION` повышена до 5: готовая поверхность пересоберётся, география и пути
 остаются в кэше.
 

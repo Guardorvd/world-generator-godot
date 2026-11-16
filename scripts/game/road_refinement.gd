@@ -23,52 +23,17 @@ const TRAIL_BENCH_LIMIT := 2.0 # более узкая полка обычной
 ## По станциям пути через STEP метров считаются восемь величин (CORRIDOR_STRIDE): подъём оси, перекос, выпуклость
 ## или корыто, продавленное место (глубина и где поперёк), форма каждой обочины (вал > 0, канава < 0); вершина
 ## метровой сетки складывает из них поперечное сечение. Восьмая величина разрешает формы за обочиной.
-## Числа по виду пути, м: roll — пологие волны (~30 м), bump — бугры и впадины (~10 м), tilt — перекос от шума у края,
-## tilt_keep — доля природного поперечного склона, tilt_max — предел перекоса (доля полуширины), dish/dish_var —
-## выпуклость (+) или корыто (−) и разброс, hollow — продавленные места, ditch/lip — канава и вал у края,
-## grade — предел добавленного продольного уклона.
-const CORRIDOR := {
-	#           roll  bump  tilt  keep  max   dish   var   hollow ditch lip   grade
-	road =     [0.60, 0.26, 0.11, 0.30, 0.07, 0.03,  0.10, 0.20,  0.28, 0.09, 0.10],
-	trail =    [0.48, 0.24, 0.12, 0.30, 0.09, -0.05, 0.07, 0.15,  0.18, 0.11, 0.14],
-	mountain = [0.24, 0.18, 0.12, 0.20, 0.10, -0.03, 0.05, 0.10,  0.14, 0.13, 0.16],
-}
+## 16.11.2026: числа форм по виду пути (roll, bump, tilt, ..., grade), их выраженность и характер по покрытию RoadSurface
+## (15.11, docs/ROAD_CHARACTER_2026_11_15.md), выравнивание спокойных участков (LEVEL_*), ритм участков, включение форм
+## и зазоры — в файле параметров дорог RoadTuning (resources/road_tuning.tres, docs/ROADS_CSHARP.md), а не в коде.
+## Ритм участков — то же медленное поле, что у кочек и препятствий (RoadBump.patch().x, 75–160 м); значение поля
+## огрублено до 2^-20. Выравнивание спокойного участка: подъём оси минус доля отклонения оси (после подгонки профиля
+## _fit_route, с 16.11) от среднего по ±level_r м; разбитый участок не выравнивается.
 const CORRIDOR_KINDS := ["road", "trail", "mountain"]
-## Выраженность форм по покрытию RoadSurface: укатанная земля у поселений и песок спокойнее, грунт и лес — полностью
-const CORRIDOR_SURFACE := [0.0, 0.85, 1.0, 0.55, 0.9, 0.7, 1.0, 0.9]
-## 15.11.2026 (docs/ROAD_CHARACTER_2026_11_15.md): характер форм по покрытию — а покрытие RoadSurface выбрано по местности
-## (лес, луг, скалы и круча, поселение). Множители длинной волны (roll, ~30 м), бугра (bump, ~10 м) и перекоса (wobble):
-## луг и песок — плавный накат и разгон, лес — частые бугры, камень — бугры и перекос, укатанная земля — спокойно.
-const CORRIDOR_CHARACTER := [
-	1.0, 1.0, 1.0,     # нет
-	1.15, 0.8, 0.9,    # гравий
-	1.0, 1.0, 1.0,     # грунтовка
-	1.1, 0.6, 0.7,     # укатанная земля
-	0.8, 1.25, 1.4,    # камень
-	1.2, 0.6, 0.8,     # песок
-	0.85, 1.3, 1.1,    # лесная тропа
-	1.3, 0.7, 0.9,     # травяная колея
-]
-## Ритм участков (спокойный — волнистый — разбитый): с 15.11 то же медленное поле, что у кочек и препятствий
-## (RoadBump.patch().x, 75–160 м), а не отдельный шум ~200 м: спокойный по форме кусок спокоен и по кочкам.
-## Значение поля огрублено до 2^-20: синус в Godot и .NET может расходиться в последнем бите (паритет C#/GDScript).
-const RHYTHM_SPAN := 1.2
-## Спокойный участок выравнивает природную неровность 5–16 м под полотном (её не убирает RoadBed на сетке 4 м: у троп
-## окно ±4 м): подъём оси минус доля отклонения оси от среднего по ±LEVEL_R м. С 16.11 ось берётся после подгонки
-## профиля (_fit_route), а не голое полотно RoadBed: то, что уже сгладил профиль тропы, второй раз не вычитается. Доля — по виду пути и покрытию:
-## луг, укатанная земля и гравий — накат и разгон, лес и камень сохраняют больше, горные тропы почти не трогаются.
-## Разбитый участок не выравнивается. Пределы подъёма оси (уклон добавки, закреплённые места) — прежние.
-const LEVEL_R := 12
-const LEVEL_KIND := [0.75, 1.0, 0.35]  # дорога, тропа, горная тропа (16.11: тропа 1.0 — ось уже после подгонки, предел 0.9 тот же)
-const LEVEL_SURFACE := [1.0, 1.1, 1.0, 1.2, 0.5, 1.0, 0.7, 1.2] # нет, гравий, грунтовка, укатанная, камень, песок, лес, луг
 ## false — прежние характер и ритм (было/стало в стендах road_relief_test, road_corridor_probe)
 static var landscape_character := true
 const CORRIDOR_STRIDE := 8
-const CORRIDOR_FADE := 8.0     # формы включаются на столько метров от закреплённого места (вода, мост, развилка), м
-const CORRIDOR_GAP := 3.0    # зазор между полотнами, достаточный для узкого сечения
-const LAND_GAP := 10.5       # зазор для широких форм по обеим сторонам
 const SHARED := 0.5            # (прежний порог дублей сети; с 11.11.2026 дублей нет, остаётся параметром C#)
-const PREPARED_SCALE := 0.5    # путь трассы без земляных работ (trail_id, earthwork 0): формы слабее, без продавленных мест
 static var natural_relief := true # false — без форм коридора (сравнение было/стало в стендах)
 
 var patches := {}  # uv: across, surface + 0.25 for singletrack (round gives the material). Physics uses surface separately.
@@ -340,7 +305,7 @@ func _fit_network(fast: Object) -> bool:
 			continue
 		var scale := 1.0
 		if t.has("trail_id"):
-			scale = PREPARED_SCALE if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
+			scale = RoadTuning.current().prepared_scale if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
 		ids.append(route)
 		kinds.append(kind)
 		scales.append(scale if natural_relief else 0.0)
@@ -404,27 +369,28 @@ static func code_version() -> int:
 ## level_kind — выравнивание спокойных участков по виду, level_surface — по покрытию; fit — подгонка профиля и пределы полки;
 ## fade, gap — включение форм и зазор между полотнами; stride — чисел на станцию; level_r — радиус выравнивания, rhythm_span —
 ## размах ритма. Без landscape_character — прежние характер и ритм (множители 1, ритм по шуму, выравнивания нет).
+## 16.11.2026: числа форм, характера, выравнивания и зазоров — из файла параметров RoadTuning.
 static func corridor_params() -> Dictionary:
+	var tuning := RoadTuning.current()
 	var kinds: Array = []
-	for name: String in CORRIDOR_KINDS:
-		var v: Array = CORRIDOR[name]
-		kinds.append({"roll": v[0], "bump": v[1], "tilt": v[2], "keep": v[3], "max": v[4], "dish": v[5], "var": v[6],
-			"hollow": v[7], "ditch": v[8], "lip": v[9], "grade": v[10]})
-	var character := PackedFloat64Array()
-	for v: float in CORRIDOR_CHARACTER:
-		character.append(v if landscape_character else 1.0)
 	var level_kind := PackedFloat64Array()
-	for v: float in LEVEL_KIND:
-		level_kind.append(v if landscape_character else 0.0)
+	for name: String in CORRIDOR_KINDS:
+		var k := tuning.kind(name)
+		kinds.append(k.corridor())
+		level_kind.append(k.level if landscape_character else 0.0)
+	var character := PackedFloat64Array()
+	for v: float in tuning.character:
+		character.append(v if landscape_character else 1.0)
 	var level_surface := PackedFloat64Array()
-	for v: float in LEVEL_SURFACE:
+	for v: float in tuning.level_surface:
 		level_surface.append(v if landscape_character else 0.0)
 	return {
-		"kinds": kinds, "surface_gain": PackedFloat64Array(CORRIDOR_SURFACE), "character": character,
+		"kinds": kinds, "surface_gain": PackedFloat64Array(tuning.surface_gain), "character": character,
 		"rhythm": landscape_character, "level_kind": level_kind, "level_surface": level_surface,
 		"fit": {"shore": RoadBed.SHORE.y, "pin": RoadBed.PIN, "pin_fade": RoadBed.PIN_FADE, "reach": REACH, "shared": SHARED,
-			"fit_fade": FIT_FADE, "fit_limit": FIT_LIMIT, "road_bench": BENCH_LIMIT, "trail_bench": TRAIL_BENCH_LIMIT, "land_gap": LAND_GAP},
-		"fade": CORRIDOR_FADE, "gap": CORRIDOR_GAP, "stride": CORRIDOR_STRIDE, "level_r": LEVEL_R, "rhythm_span": RHYTHM_SPAN,
+			"fit_fade": FIT_FADE, "fit_limit": FIT_LIMIT, "road_bench": BENCH_LIMIT, "trail_bench": TRAIL_BENCH_LIMIT, "land_gap": tuning.land_gap},
+		"fade": tuning.corridor_fade, "gap": tuning.corridor_gap, "stride": CORRIDOR_STRIDE, "level_r": tuning.level_r,
+		"rhythm_span": tuning.rhythm_span,
 	}
 
 

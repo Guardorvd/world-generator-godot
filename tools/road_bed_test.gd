@@ -80,7 +80,7 @@ func _invariants(w: WorldData, before: Heightfield, after: Heightfield) -> void:
 	for t: Dictionary in w.trails:
 		if not RoadBed.KINDS.has(t.kind):
 			continue
-		var k: Dictionary = RoadBed.KINDS[t.kind]
+		var k := RoadTuning.current().kind(t.kind)
 		var reach: float = (float(t.pts[0].w) * TILE * 0.5 + k.flat + k.shoulder) / TILE + 0.8
 		for p: Dictionary in t.pts:
 			for cy in range(maxi(0, floori(p.y - reach)), mini(w.H, ceili(p.y + reach))):

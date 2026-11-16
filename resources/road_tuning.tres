@@ -1,0 +1,82 @@
+[gd_resource type="Resource" script_class="RoadTuning" load_steps=6 format=3]
+
+[ext_resource type="Script" path="res://scripts/game/road_tuning.gd" id="1_tuning"]
+[ext_resource type="Script" path="res://scripts/game/road_kind_tuning.gd" id="2_kind"]
+
+[sub_resource type="Resource" id="Resource_road"]
+script = ExtResource("2_kind")
+flat = 0.6
+shoulder = 3.0
+window = 14.0
+bed_keep = 0.52
+cut = 1.2
+side = 1.6
+roll = 0.6
+bump = 0.26
+tilt = 0.11
+tilt_keep = 0.3
+tilt_max = 0.07
+dish = 0.03
+dish_var = 0.1
+hollow = 0.2
+ditch = 0.28
+lip = 0.09
+grade = 0.1
+level = 0.75
+
+[sub_resource type="Resource" id="Resource_trail"]
+script = ExtResource("2_kind")
+flat = 0.4
+shoulder = 2.0
+window = 4.0
+bed_keep = 0.65
+cut = 0.4
+side = 0.8
+roll = 0.48
+bump = 0.24
+tilt = 0.12
+tilt_keep = 0.3
+tilt_max = 0.09
+dish = -0.05
+dish_var = 0.07
+hollow = 0.15
+ditch = 0.18
+lip = 0.11
+grade = 0.14
+level = 1.0
+
+[sub_resource type="Resource" id="Resource_mountain"]
+script = ExtResource("2_kind")
+flat = 0.3
+shoulder = 1.5
+window = 2.0
+bed_keep = 0.85
+cut = 0.2
+side = 0.5
+roll = 0.24
+bump = 0.18
+tilt = 0.12
+tilt_keep = 0.2
+tilt_max = 0.1
+dish = -0.03
+dish_var = 0.05
+hollow = 0.1
+ditch = 0.14
+lip = 0.13
+grade = 0.16
+level = 0.35
+
+[resource]
+script = ExtResource("1_tuning")
+road = SubResource("Resource_road")
+trail = SubResource("Resource_trail")
+mountain = SubResource("Resource_mountain")
+surface_gain = PackedFloat64Array(0.0, 0.85, 1.0, 0.55, 0.9, 0.7, 1.0, 0.9)
+character = PackedFloat64Array(1.0, 1.0, 1.0, 1.15, 0.8, 0.9, 1.0, 1.0, 1.0, 1.1, 0.6, 0.7, 0.8, 1.25, 1.4, 1.2, 0.6, 0.8, 0.85, 1.3, 1.1, 1.3, 0.7, 0.9)
+level_surface = PackedFloat64Array(1.0, 1.1, 1.0, 1.2, 0.5, 1.0, 0.7, 1.2)
+level_r = 12
+rhythm_span = 1.2
+corridor_fade = 8.0
+corridor_gap = 3.0
+land_gap = 10.5
+prepared_scale = 0.5
