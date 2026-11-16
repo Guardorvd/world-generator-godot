@@ -11,6 +11,9 @@ const SHADER := preload("res://resources/water.gdshader")
 static func _material(ocean := false, river := false) -> ShaderMaterial:
 	var m := ShaderMaterial.new()
 	m.shader = SHADER
+	# Вода рисуется раньше локальной дымки (у неё приоритет -1, см. LocalMist): иначе вода, нарисованная после дымки,
+	# перекрывала её, и озёра было видно сквозь плотный туман.
+	m.render_priority = -2
 	m.set_shader_parameter("ocean", ocean)
 	m.set_shader_parameter("river_surface", river)
 	return m
