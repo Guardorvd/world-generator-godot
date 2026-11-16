@@ -1290,6 +1290,10 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		var old_len := _length(w, old)
 		if old.is_empty() or old_len <= e[2] * SHORTCUT:
 			continue
+		# 16.11.2026: у удалённого места (SettlementRoles, роль remote) один подъезд — сокращений к нему нет.
+		# Тропа между сетями выше остаётся: без неё отрезанное место удалилось бы.
+		if _single_access(st[e[0]]) or _single_access(st[e[1]]):
+			continue
 		var corr := _corridor(w, [old])
 		var avoiding := _avoiding(w, _open_ends(w, corr, a, b))
 		var p := _land_path(finder, avoiding, a, b, "trail")
@@ -1308,7 +1312,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	for index in primary_paths.size():
 		if finder.search_budget == 0: break
 		var e: Array = primary_paths[index]
-		if not e[3]:
+		if not e[3] or _single_access(st[e[0]]) or _single_access(st[e[1]]):
 			continue
 		if step.is_valid():
 			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
@@ -1358,6 +1362,11 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 				_note_way(w, "shore", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 				all_paths.append(q)
 				near = _net_near(w)
+
+
+## Место с единственным подъездом: вторые пути (сокращения, обходы) к нему не прокладываются
+static func _single_access(s: SettlementData) -> bool:
+	return s.role == "remote"
 
 
 ## Какие записи w.trails добавил каждый вид вторых путей (стенд road_plan_test)

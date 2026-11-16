@@ -117,8 +117,10 @@ static func _place_settlements(w: WorldData) -> void:
 		settlement.role = "" if legacy else role
 		if role == "center": pick.centers.append(Vector2(x, y))
 		settlements.append(settlement)
-	# Посёлков — примерно треть, самые важные места; остальные — деревни. Роль задаёт размер сама.
-	var ranks: Array = settlements.map(func(s: SettlementData) -> float: return s.importance)
+	# Роль задаёт размер сама. Среди мест без роли (обычные; legacy — все) посёлков примерно треть, самые важные места:
+	# их доля не зависит от того, сколько мест заняли роли.
+	var ranks: Array = settlements.filter(func(s: SettlementData) -> bool: return not Roles.ROLES.has(s.role)) \
+		.map(func(s: SettlementData) -> float: return s.importance)
 	ranks.sort()
 	var town_from: float = ranks[ranks.size() - ceili(ranks.size() / 3.0)] if not ranks.is_empty() else 1.0
 	for s: SettlementData in settlements:
@@ -133,7 +135,7 @@ static func _place_settlements(w: WorldData) -> void:
 			s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
 		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
 		s.style = floori(rng.next_float() * 4)
-		s.character = _character(w, s.i, s.town, role.get("adjective", ""))
+		s.character = _character(w, s.i, s.town, role.get("adjective", []))
 	w.settlements = settlements
 
 
@@ -432,13 +434,11 @@ static func structure_clear(w: WorldData, p: Vector2, a: float, kind: String) ->
 
 
 ## Характер поселения по месту: «приморский посёлок», «горная деревня»…
-## role_stem — основа прилагательного роли (SettlementRoles: «лесн», «предгорн», «дальн»): роль важнее воды и биома.
-static func _character(w: WorldData, i: int, town: bool, role_stem := "") -> String:
-	if role_stem == "дальн":
-		return "дальний посёлок" if town else "дальняя деревня"
-	if not role_stem.is_empty():
-		return role_stem + ("ой" if role_stem == "лесн" else "ый") + " посёлок" if town else role_stem + "ая деревня"
+## role_adjective — [посёлок, деревня] роли (SettlementRoles.ROLES.adjective): роль важнее воды и биома.
+static func _character(w: WorldData, i: int, town: bool, role_adjective: Array = []) -> String:
 	var adj := ["окраинный", "окраинная"]
+	if not role_adjective.is_empty():
+		return role_adjective[0] + " посёлок" if town else role_adjective[1] + " деревня"
 	# Заготовки тестов задают не все поля
 	var sea := not w.dist_ocean.is_empty() and w.dist_ocean[i] < 8.0
 	var high := not w.h.is_empty() and w.h[i] > 0.38

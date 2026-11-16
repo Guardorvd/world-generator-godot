@@ -6,19 +6,20 @@ extends RefCounted
 ## Размер (town, homes), важность для сети (importance → дорога или тропа, StageTrails.main_road) и удалённость — разные
 ## величины: маленькая предгорная деревня получает тропу, дорогу — только если через неё идёт путь между центрами.
 
-## count — [от, до] мест на план 768; importance — для сети (дорога между местами, где у обоих ≥ 0,6);
-## town — посёлок; homes — [от, до] жилых домов (иначе обычная формула StageLandmarks).
+## count — [от, до] мест на план 768; importance — для сети (StageTrails.main_road: дорога между местами, где у обоих
+## ≥ 0,6, иначе тропа); town — посёлок; homes — [от, до] жилых домов (иначе обычная формула StageLandmarks);
+## adjective — [посёлок, деревня] для характера места (пусто — характер по воде и биому, StageLandmarks._character).
 const ROLES := {
 	# Центр: большая долина или вода — обычная оценка площадки. Первый слот всегда центр: там старт игрока.
-	center = {count = [1, 2], importance = 0.9, town = true, adjective = ""},
+	center = {count = [1, 2], importance = 0.9, town = true, adjective = []},
 	# Спутник: деревня в RING клеток от своего центра — центр с двумя-тремя деревнями вокруг.
-	satellite = {per_center = [0, 3], importance = 0.45, town = false, adjective = ""},
+	satellite = {per_center = [0, 3], importance = 0.45, town = false, adjective = []},
 	# Лесное: поляна в глубине леса, не ближе FOREST_DEPTH клеток к опушке.
-	forest = {count = [0, 2], importance = 0.5, town = false, adjective = "лесн"},
+	forest = {count = [0, 2], importance = 0.5, town = false, adjective = ["лесной", "лесная"]},
 	# Предгорное: ровная терраса не дальше FOOT_NEAR клеток от гор.
-	foothill = {count = [0, 2], importance = 0.45, town = false, adjective = "предгорн"},
-	# Удалённое: редкая точка вдали от остальных, маленькое, с одним подъездом.
-	remote = {count = [0, 1], importance = 0.2, town = false, homes = [3, 5], adjective = "дальн"},
+	foothill = {count = [0, 2], importance = 0.45, town = false, adjective = ["предгорный", "предгорная"]},
+	# Удалённое: редкая точка вдали от остальных, маленькое, с одним подъездом (вторые пути к нему не прокладываются).
+	remote = {count = [0, 1], importance = 0.2, town = false, homes = [3, 5], adjective = ["дальний", "дальняя"]},
 }
 ## Порядок слотов: центры, спутники, лес, предгорья, обычные, удалённые (последними — дальше всех от уже выбранных).
 const ORDER := ["center", "satellite", "forest", "foothill", "ordinary", "remote"]

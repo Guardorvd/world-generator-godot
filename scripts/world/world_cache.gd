@@ -28,7 +28,7 @@ const EXT := ".wgc"
 ## Любая версия инвалидирует свой слой и следующие; UI/рендеринг не требуют смены GEO/TRAILS.
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 19 # 17: start area; 18: regional moisture; 19: dry pockets, relief-position moisture, swamp (docs/MACRO_GEOGRAPHY.md)
-const SCHEMA_TRAILS_VERSION := 32 # 16.11: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
+const SCHEMA_TRAILS_VERSION := 33 # 16.11: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
 const SCHEMA_NATURE_VERSION := 15 # stand composition and shrub distribution
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
