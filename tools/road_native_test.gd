@@ -50,5 +50,40 @@ func run() -> void:
 	failures += int(before_local.patches != after_local.patches)
 	RoadRefinement.allow_fast_vertices = true
 	RoadRefinement.road_simd = true
+	check_bed(h)
 	print("road_native: ", failures, " failures")
 	quit(1 if failures else 0)
+
+
+## 16.11: полотно RoadBed на готовой метровой сетке (путь Trail Lab: only/frozen, патчи в опоре линии) — GDScript и C# побайтно
+func check_bed(h: Heightfield) -> void:
+	var frozen := PackedByteArray()
+	frozen.resize(h.world.N)
+	for i in h.world.N:
+		frozen[i] = 1 if (i % 97) < 9 else 0
+	var cases := [["все пути", {}, PackedByteArray()], ["один путь", {0: true}, PackedByteArray()],
+		["два пути, углы заморожены", {1: true, 2: true}, frozen], ["все, заморожено", {}, frozen]]
+	for c: Array in cases:
+		var results := []
+		for native in [false, true]:
+			var copy := h.copy()
+			copy.road_refinement = h.road_refinement
+			RoadBed.allow_fast = native
+			var changed := RoadBed.refine(copy, c[1], c[2])
+			results.append({hv = copy.hv, changed = changed})
+		RoadBed.allow_fast = true
+		var same: bool = results[0].hv == results[1].hv and results[0].changed == results[1].changed
+		print("BED ", c[0], " same=", same, " changed=", results[0].changed.size(), "/", results[1].changed.size())
+		failures += int(not same)
+		if results[0].changed.is_empty(): print("BED ", c[0], ": пустая проверка, ничего не изменилось"); failures += 1
+	# контроль: без патчей в опоре результат другой, значит сверка выше действительно проходит через патчи
+	var bare := h.copy()
+	RoadBed.allow_fast = false
+	RoadBed.refine(bare)
+	RoadBed.allow_fast = true
+	var patched := h.copy()
+	patched.road_refinement = h.road_refinement
+	RoadBed.refine(patched)
+	var differs := bare.hv != patched.hv
+	print("BED патчей ", h.road_refinement.patches.size(), ", опора с патчами отличается от опоры без них: ", differs)
+	failures += int(not differs)

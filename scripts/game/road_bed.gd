@@ -36,10 +36,11 @@ static var allow_fast := true # false — исходный GDScript для св�
 ## по весам (раньше побеждал один путь — ступень или вал вдоль стыка). Порядок: дороги, тропы, горные тропы.
 static func refine(heights: Heightfield, only := {}, frozen := PackedByteArray()) -> PackedInt32Array:
 	var w := heights.world
-	if allow_fast and only.is_empty() and w.outer == null and heights.road_refinement == null:
+	# 16.11: и частичная пересборка (only, frozen) идёт на C#: опору линии он читает как ground_at, с патчами готовой сетки
+	if allow_fast and w.outer == null:
 		var fast := Grid.fast_grid()
 		if fast != null:
-			var native: Variant = _refine_native(fast, heights, frozen)
+			var native: Variant = _refine_native(fast, heights, frozen, only)
 			if native != null:
 				return native
 			push_error("RoadBed: C# вернул null, полотно считается на GDScript")
@@ -113,7 +114,7 @@ static func _order(w: WorldData, routes: Array) -> Array:
 
 ## DOD (ноябрь 2026): весь этап одним вызовом C# (FastGrid.RoadBedRefine), пути — столбцами. Результат тот же, что у
 ## GDScript-пути выше (он остаётся эталоном для tools/dod_verify.gd): hv правится на месте, как там.
-static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray) -> Variant:
+static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByteArray, only := {}) -> Variant:
 	var w := heights.world
 	var names: Array = KINDS.keys()
 	var params := PackedFloat64Array()
@@ -125,8 +126,9 @@ static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByt
 	var xs := PackedFloat64Array()
 	var ys := PackedFloat64Array()
 	var ws := PackedFloat64Array()
-	for t: Dictionary in w.trails:
-		if KINDS.has(t.kind) and t.pts.size() >= 2:
+	for k in w.trails.size():
+		var t: Dictionary = w.trails[k]
+		if KINDS.has(t.kind) and t.pts.size() >= 2 and (only.is_empty() or only.has(k)):
 			kinds.append(names.find(t.kind))
 			starts.append(xs.size())
 			for p: Dictionary in t.pts:
@@ -138,8 +140,21 @@ static func _refine_native(fast: Object, heights: Heightfield, frozen: PackedByt
 	for s: EntityRecord in w.bridges + w.tunnels:
 		ends.append(s.a)
 		ends.append(s.b)
+	# патчи готовой метровой сетки (частичная пересборка Trail Lab): ключи клеток, высоты по 25 на патч, число строк клеток
+	var patch_keys := PackedInt32Array()
+	var patch_h := PackedFloat32Array()
+	var rows := 0
+	var r := heights.road_refinement
+	if r != null:
+		rows = r._height
+		for key: int in r.patches:
+			var hs: PackedFloat32Array = r.patches[key].h
+			if hs.size() != RoadRefinement.STRIDE * RoadRefinement.STRIDE:
+				return null # неполный патч: C# не берётся, считает GDScript
+			patch_keys.append(key)
+			patch_h.append_array(hs)
 	var out: Variant = fast.RoadBedRefine(w.W, w.H, TILE, heights.hv, heights.water_level, w.dist_water, ends, kinds, starts,
-		xs, ys, ws, params, frozen, STEP, STEEP.x, STEEP.y, SHORE.x, SHORE.y, PIN, PIN_FADE, WATER_GAP)
+		xs, ys, ws, params, frozen, STEP, STEEP.x, STEEP.y, SHORE.x, SHORE.y, PIN, PIN_FADE, WATER_GAP, patch_keys, patch_h, rows)
 	if not out is Dictionary:
 		return null   # исключение внутри C#: hv не тронут, вызывающий считает на GDScript
 	var changed: PackedInt32Array = out.changed

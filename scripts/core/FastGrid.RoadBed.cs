@@ -77,9 +77,18 @@ public partial class FastGrid
 	public Godot.Collections.Dictionary RoadBedRefine(int w, int h, double tile, float[] hv, float[] waterLevel,
 		float[] distWater, int[] structureEnds, int[] kinds, int[] starts, double[] px, double[] py, double[] pw,
 		double[] kindParams, byte[] frozen, double step, double steepLo, double steepHi, double shoreLo, double shoreHi,
-		double pinStart, double pinFade, double waterGap)
+		double pinStart, double pinFade, double waterGap, int[] patchKeys, float[] patchHeights, int patchRows)
 	{
 		int n = w * h;
+		// 16.11: опора линии — Heightfield.ground_at: метровые патчи готовой сетки дорог, где они есть (частичные пересборки
+		// Trail Lab: новый путь на готовом участке), иначе hv. Без патчей (первая сборка мира) — только hv, как раньше.
+		int[] patchOf = null;
+		if (patchKeys.Length > 0)
+		{
+			patchOf = new int[w * patchRows];
+			Array.Fill(patchOf, -1);
+			for (int k = 0; k < patchKeys.Length; k++) patchOf[patchKeys[k]] = k;
+		}
 		var pin = RbPins(w, h, tile, distWater, structureEnds, shoreLo, shoreHi, pinStart, pinFade);
 		if (frozen.Length == n)
 			for (int i = 0; i < n; i++) if (frozen[i] != 0) pin[i] = 0.0f;
@@ -91,7 +100,7 @@ public partial class FastGrid
 		Parallel.For(0, parts, new ParallelOptions { MaxDegreeOfParallelism = parts }, part =>
 		{
 			for (int t = part; t < trails; t += parts)
-				profiles[t] = RbProfileOf(w, h, tile, ground, kindParams, kinds[t] * 6, starts[t], starts[t + 1], px, py, pw, step, steepLo, steepHi);
+				profiles[t] = RbProfileOf(w, h, tile, ground, patchOf, patchHeights, patchRows, kindParams, kinds[t] * 6, starts[t], starts[t + 1], px, py, pw, step, steepLo, steepHi);
 		});
 		RbJoin(w, h, tile, pin, order, starts, px, py, profiles);
 		var results = new RbTrail[trails];
@@ -142,7 +151,34 @@ public partial class FastGrid
 		return order;
 	}
 
-	private static RbProfile RbProfileOf(int w, int h, double tile, float[] hv, double[] kp, int kAt, int from, int to,
+	/// <summary>Heightfield.ground_at для точки плана (без OuterLand): патч метровой сетки, если точка в нём, иначе hv.
+	/// Формулы патча — как RideGround.GroundIn (там же сверка бит в бит).</summary>
+	private static double RbGround(float[] hv, int[] patchOf, float[] patchH, int patchRows, int w, int h, double tile, double x, double z)
+	{
+		if (patchOf != null)
+		{
+			double fx = x / tile - 0.5, fz = z / tile - 0.5;
+			if (!(fx < 0.0 || fz < 0.0 || fx >= w - 1 || fz >= patchRows - 1))
+			{
+				int patch = patchOf[(int)Math.Floor(fz) * w + (int)Math.Floor(fx)];
+				if (patch >= 0)
+				{
+					const int Div = 4, Stride = Div + 1;
+					double sx = (fx - Math.Floor(fx)) * Div, sz = (fz - Math.Floor(fz)) * Div;
+					int ix = Math.Min(Div - 1, (int)Math.Floor(sx)), iz = Math.Min(Div - 1, (int)Math.Floor(sz));
+					double tx = sx - ix, tz = sz - iz;
+					int a = iz * Stride + ix, o = patch * Stride * Stride;
+					if (tx + tz <= 1.0)
+						return patchH[o + a] + (patchH[o + a + 1] - (double)patchH[o + a]) * tx + (patchH[o + a + Stride] - (double)patchH[o + a]) * tz;
+					int d = a + Stride + 1;
+					return patchH[o + d] + (patchH[o + a + Stride] - (double)patchH[o + d]) * (1.0 - tx) + (patchH[o + a + 1] - (double)patchH[o + d]) * (1.0 - tz);
+				}
+			}
+		}
+		return RoadGround(hv, w, h, tile, x, z);
+	}
+
+	private static RbProfile RbProfileOf(int w, int h, double tile, float[] hv, int[] patchOf, float[] patchH, int patchRows, double[] kp, int kAt, int from, int to,
 		double[] px, double[] py, double[] pw, double step, double steepLo, double steepHi)
 	{
 		double window = kp[kAt + 2], keep = kp[kAt + 3], cut = kp[kAt + 4];
@@ -169,7 +205,7 @@ public partial class FastGrid
 		var sum = new double[count + 1];
 		for (int i = 0; i < count; i++)
 		{
-			g[i] = (float)RoadGround(hv, w, h, tile, xs[i], zs[i]);
+			g[i] = (float)RbGround(hv, patchOf, patchH, patchRows, w, h, tile, xs[i], zs[i]);
 			sum[i + 1] = sum[i] + g[i];
 		}
 		int win = (int)(window / step);
@@ -180,8 +216,8 @@ public partial class FastGrid
 			int r = Math.Min(win, Math.Min(i, count - 1 - i));
 			double smooth = (sum[i + r + 1] - sum[i - r]) / (2 * r + 1);
 			prof[i] = RbClamp(smooth + keep * (g[i] - smooth), g[i] - cut, g[i] + cut);
-			double gx = RoadGround(hv, w, h, tile, xs[i] + 2.0, zs[i]) - RoadGround(hv, w, h, tile, xs[i] - 2.0, zs[i]);
-			double gz = RoadGround(hv, w, h, tile, xs[i], zs[i] + 2.0) - RoadGround(hv, w, h, tile, xs[i], zs[i] - 2.0);
+			double gx = RbGround(hv, patchOf, patchH, patchRows, w, h, tile, xs[i] + 2.0, zs[i]) - RbGround(hv, patchOf, patchH, patchRows, w, h, tile, xs[i] - 2.0, zs[i]);
+			double gz = RbGround(hv, patchOf, patchH, patchRows, w, h, tile, xs[i], zs[i] + 2.0) - RbGround(hv, patchOf, patchH, patchRows, w, h, tile, xs[i], zs[i] - 2.0);
 			fade[i] = 1.0 - RoadSmooth(steepLo, steepHi, Math.Sqrt(gx * gx + gz * gz) / 4.0);
 		}
 		var along = new double[xs.Count];
