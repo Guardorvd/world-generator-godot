@@ -1,48 +1,22 @@
 class_name Pathfinder
 extends RefCounted
 ## Поиск пути A* по сетке со стоимостью прохода клеток (8 направлений). Основа — js/core/pathfinding.js;
-## с 2.3 диагональный шаг не срезает углы (см. find_path), оценка остатка пути — H_COST.
+## с 2.3 диагональный шаг не срезает углы, оценка остатка пути — 0.6 × восьмисвязное расстояние.
 ## Стоимость прохода передаётся в каждый поиск, поэтому её можно менять между вызовами
 ## (так протоптанные тропы становятся дешевле). INF — непроходимо. Знает только размер сетки, не мир.
-## Куча из MinHeap развёрнута прямо в цикле поиска: в GDScript вызовы методов дороги, а алгоритм тот же.
-## В сборке Godot .NET поиск ведёт FastGrid.FindPath (FastGrid.Path.cs): тот же алгоритм на C#, в десятки раз быстрее;
-## с 9.9 он ещё помнит последние поиски и умеет заранее искать запасной путь в фоне (prefetch) — пути те же.
+## 16.11.2026: поиск только на C# — FastGrid.FindPath, Reach, Prefetch (scripts/core/FastGrid.Path.cs): алгоритм,
+## штрафы поворота (TurnShape) и длинных галсов (BendShape, 3 шага), ширина прохода, кэш последних поисков и фоновый
+## запасной поиск. Здесь — фасад с прежним API. Копия A* на GDScript удалена; эталон результата — tools/path_golden.gd
+## (снят на C# и совпал с GDScript-копией), описание — docs/ROADS_CSHARP.md. Grid.allow_fast поиск не выключает.
 
-## Оценка остатка пути A* — восьмисвязное расстояние до цели, умноженное на H_COST. Самая дешёвая клетка
-## (протоптанная тропа, StageTrails._add_trail) стоит 0.3, так что оценка у троп бывает выше настоящей
-## стоимости и путь может выйти чуть дороже самого дешёвого. Замер 2.3 (5 миров, ~380 поисков): так вышло
-## у 4 путей, дороже не больше чем на 0,1 %; с честной оценкой 0.3 пути те же, а поиск дорог на четверть дольше
-const H_COST := 0.6
-## 15.11.2026: штраф за смену направления внутри поиска (аргумент turn у find_path/prefetch, 0 — прежний поиск
-## побайтно). Направление прихода в клетку — шаг from[c] → c; разница с новым шагом в 45°-ступенях (0..4)
-## стоит turn × TURN_SHAPE[ступени] (в единицах стоимости шага). Закрытое множество по клеткам, как и было:
-## путь может выйти чуть дороже лучшего с учётом поворотов, зато поиск не растёт в 8 раз. Штрафы ≥ 0 — оценка остаётся допустимой.
-const TURN_SHAPE: Array[float] = [0.0, 0.03, 0.4, 1.0, 2.0]
-## 15.11.2026: длинные галсы (аргумент bend). Новый шаг сравнивается с шагом BEND_STEPS шагов назад (from-цепочка, 12 м):
-## поворот на 90° и круче на таком отрезке стоит bend × BEND_SHAPE[ступени]. Резкий угол платит на каждом из BEND_STEPS
-## шагов, растянутый — один раз: поиску выгоднее длинные прямые и широкие развороты, в которые впишется дуга полотна.
-const BEND_SHAPE: Array[float] = [0.0, 0.0, 0.4, 1.0, 2.0]
-const BEND_STEPS := 3
-## Октант направления шага k (угол / 45°) для Grid.DX/DY: разница двух шагов — min(|a − b|, 8 − |a − b|).
-const OCTANT: Array[int] = [0, 4, 2, 6, 1, 7, 3, 5]
-## Начальная ёмкость кучи (элементов); растёт вдвое по необходимости
-const HEAP_START_CAP := 1 << 16
 ## Дополнительные счётчики только для tools/bench.gd; в игре выключены.
 static var profile_searches := false
 var _search_us := 0
 ## Политика запасного поиска (P2 аудита 29.10): true — prefetch в фоне сразу (как с 9.9), false — запасной
 ## поиск только когда он понадобился (ленивый). Пути и остаток запаса одинаковы; разные CPU и задержка.
 var eager_fallback := true
-## Счётчики как у FastGrid.SearchStats (для GDScript-поиска): раскрытия, исчерпанный запас и доказанное
-## отсутствие пути — разные исходы. _skipped — отказ без поиска при нулевом запасе (обе реализации).
-var _calls := 0
-var _expanded := 0
-var _budget_stops := 0
-var _no_path := 0
+## Отказ без поиска при нулевом запасе
 var _skipped := 0
-var _reach_calls := 0
-var _reach_rejects := 0
-var _reach_visited := 0
 
 var W := 0
 var H := 0
@@ -72,22 +46,6 @@ var max_cross_grade := INF # предел земляных работ попер
 ## Общий остаток раскрытий для нескольких поисков: -1 без ограничения, 0 — отказаться.
 ## Позволяет проверять кандидат поселения без полного перебора карты по каждому соседу.
 var search_budget := -1
-## Реальная ширина прохода: кэш продольного уклона и поперечного крена шагов.
-var _ground := PackedFloat32Array()
-var _water := PackedFloat32Array()
-var _wet := PackedByteArray()
-var _half := 0.0
-var _corridor := PackedFloat32Array()
-var _cross := PackedFloat32Array()
-## Рабочие массивы поиска. seen и done содержат номер поиска (gen), а не флаг, поэтому между поисками их не чистят.
-var g := PackedFloat32Array()
-var from := PackedInt32Array()
-var arrive := PackedByteArray() # шаг k, которым поиск пришёл в клетку (только при turn > 0)
-var seen := PackedInt32Array()
-var done := PackedInt32Array()
-var heap_ids := PackedInt32Array()
-var heap_keys := PackedFloat64Array()
-var gen := 0
 var _fast: Object = null
 
 
@@ -95,18 +53,12 @@ func _init(width: int, height: int, terrain: PackedFloat32Array = PackedFloat32A
 	W = width
 	H = height
 	heights = terrain
-	_fast = Grid.fast_grid()
-	if _fast != null:
-		_fast.Setup(W, H)
-		_fast.ProfileSearches = profile_searches
+	_fast = Grid.native_grid()
+	if _fast == null:
+		push_error("Pathfinder: поиск пути идёт только на C#: нужна сборка Godot .NET и dotnet build")
 		return
-	g.resize(W * H)
-	from.resize(W * H)
-	arrive.resize(W * H)
-	seen.resize(W * H)
-	done.resize(W * H)
-	heap_ids.resize(HEAP_START_CAP)
-	heap_keys.resize(HEAP_START_CAP)
+	_fast.Setup(W, H)
+	_fast.ProfileSearches = profile_searches
 
 
 func fast() -> Object:
@@ -138,379 +90,48 @@ func _search_versions(cost_version: int) -> void:
 func set_corridor(ground: PackedFloat32Array, water: PackedFloat32Array, wet: PackedByteArray, half: float) -> void:
 	if _fast != null:
 		_fast.SetCorridor(ground, water, wet, half)
-		return
-	_ground = ground
-	_water = water
-	_wet = wet
-	_half = half
-	_corridor.resize(W * H * 8)
-	_corridor.fill(-1.0)
-	_cross.resize(W * H * 8)
 
 
-## Метровые поля мира: C# переводит их в единицы поиска без прохода GDScript по всей карте.
-## Без .NET остаётся исходное преобразование, включая запись float32 после деления.
+## Метровые поля мира: C# переводит их в единицы поиска (высота / tile, вода — (max(0, уровень) − 0,1) / tile).
 func set_world_corridor(ground_meters: PackedFloat32Array, water_meters: PackedFloat32Array,
 		ocean: PackedByteArray, lake: PackedByteArray, river: PackedByteArray, tile: float, half: float) -> void:
 	if _fast != null:
 		_fast.SetWorldCorridor(ground_meters, water_meters, ocean, lake, river, tile, half)
-		return
-	var ground := ground_meters.duplicate()
-	var water := water_meters.duplicate()
-	var wet := PackedByteArray()
-	wet.resize(W * H)
-	for i in W * H:
-		ground[i] /= tile
-		water[i] = (maxf(0.0, water[i]) - 0.1) / tile
-		wet[i] = int(ocean[i] != 0 or lake[i] != 0 or river[i] != 0)
-	set_corridor(ground, water, wet, half)
 
 
-func _height(x: float, y: float) -> float:
-	x = clampf(x, 0.0, W - 1.001)
-	y = clampf(y, 0.0, H - 1.001)
-	var ix := floori(x)
-	var iy := floori(y)
-	var tx := x - ix
-	var ty := y - iy
-	var a := iy * W + ix
-	if tx + ty <= 1.0:
-		return _ground[a] + (_ground[a + 1] - _ground[a]) * tx + (_ground[a + W] - _ground[a]) * ty
-	var d := a + W + 1
-	return _ground[d] + (_ground[d - 1] - _ground[d]) * (1.0 - tx) + (_ground[d - W] - _ground[d]) * (1.0 - ty)
-
-
-func _measure_corridor(c: int, k: int) -> void:
-	var key := c * 8 + k
-	if _corridor[key] >= 0.0:
-		return
-	var n := c + Grid.DY[k] * W + Grid.DX[k]
-	var grade := 0.0
-	var cross_grade := 0.0
-	# Консервативный коридор реки включает сухой берег. Пропускается только
-	# настоящий водный шаг под будущим мостом, а не проверка всей дороги у реки.
-	if (_wet[c] == 0 or _ground[c] >= _water[c]) and (_wet[n] == 0 or _ground[n] >= _water[n]):
-		var nx := -Grid.DY[k] / Grid.DL[k] * _half
-		var ny := Grid.DX[k] / Grid.DL[k] * _half
-		var previous := [0.0, 0.0, 0.0]
-		for j in 5:
-			var left := 0.0
-			var right := 0.0
-			for side in 3:
-				var x: float = c % W + Grid.DX[k] * j * 0.25 + nx * (side - 1)
-				var y: float = c / W + Grid.DY[k] * j * 0.25 + ny * (side - 1)
-				var h := _height(x, y)
-				var cell := clampi(floori(y + 0.5), 0, H - 1) * W + clampi(floori(x + 0.5), 0, W - 1)
-				if _water[cell] > h:
-					grade = INF
-				if j > 0:
-					grade = maxf(grade, absf(h - previous[side]) * 4.0 / Grid.DL[k])
-				previous[side] = h
-				if side == 0: left = h
-				if side == 2: right = h
-			cross_grade = maxf(cross_grade, maxf(absf(right - previous[1]), absf(left - previous[1])) / _half)
-	_corridor[key] = grade
-	_cross[key] = cross_grade
-	# Обратный шаг имеет тот же профиль и ширину.
-	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
-	_corridor[n * 8 + opposite[k]] = grade
-	_cross[n * 8 + opposite[k]] = cross_grade
-
-
-## Границы окна поиска: [x0, y0, x1, y1), без окна — вся карта.
-func _bounds() -> PackedInt32Array:
-	if not window.has_area():
-		return PackedInt32Array([0, 0, W, H])
-	return PackedInt32Array([maxi(0, window.position.x), maxi(0, window.position.y), mini(W, window.end.x), mini(H, window.end.y)])
-
-
-## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет
-@warning_ignore("integer_division")
+## Путь от клетки s до клетки t (индексы клеток) по стоимости прохода cost или пустой массив, если пути нет.
+## turn — штраф смены направления (15.11.2026, 0 — прежний поиск), bend — длинные галсы (поворот на 90° и круче в
+## пределах трёх шагов). Без C# — пустой путь и сообщение об ошибке из _init.
 func find_path(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0, bend: float = 0.0) -> PackedInt32Array:
 	if search_budget == 0:
 		_skipped += 1
 		return PackedInt32Array()
-	if _fast != null:
-		_search_versions(cost_version)
-		_fast.TurnCost = turn
-		_fast.BendCost = bend
-		_fast.SearchBudget = search_budget
-		var started := Time.get_ticks_usec()
-		var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
-		search_budget = _fast.SearchBudget
-		if profile_searches:
-			_search_us += Time.get_ticks_usec() - started
-		return path
-	# Локальные ссылки на поля (в цикле локальные переменные быстрее полей)
-	var W := self.W
-	var heights := self.heights
-	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
-	var g := self.g
-	var from := self.from
-	var seen := self.seen
-	var done := self.done
-	var ids := heap_ids
-	var keys := heap_keys
-	var DX := PackedInt32Array(Grid.DX)
-	var DY := PackedInt32Array(Grid.DY)
-	var DL := PackedFloat64Array(Grid.DL)
-	var OFF := PackedInt32Array()
-	for k in 8:
-		OFF.append(DY[k] * W + DX[k])
-	# Штраф поворота: строка ka (направление прихода, 8 — старт) × новый шаг k
-	var bending := bend > 0.0
-	var turning := turn > 0.0 or bending
-	var arrive := self.arrive
-	var PEN := PackedFloat64Array()
-	var BPEN := PackedFloat64Array()
-	if turning:
-		PEN.resize(72)
-		BPEN.resize(72)
-		for ka in 8:
-			for k in 8:
-				var d := absi(OCTANT[ka] - OCTANT[k])
-				PEN[ka * 8 + k] = turn * TURN_SHAPE[mini(d, 8 - d)]
-				BPEN[ka * 8 + k] = bend * BEND_SHAPE[mini(d, 8 - d)]
-	var bounds := _bounds()
-	var X0 := bounds[0]
-	var Y0 := bounds[1]
-	var X1 := bounds[2]
-	var Y1 := bounds[3]
-	gen += 1
-	var gn := gen
-	var tx := t % W
-	var ty := t / W
-	g[s] = 0.0
-	seen[s] = gn
-	from[s] = -1
-	if turning:
-		arrive[s] = 8
-	ids[0] = s
-	keys[0] = 0.0
-	var hn := 1
-	var expanded := 0
-	_calls += 1
-	while hn > 0:
-		# извлечь минимум из кучи
-		var c := ids[0]
-		hn -= 1
-		if hn > 0:
-			var id := ids[hn]
-			var kk := keys[hn]
-			var i := 0
-			while true:
-				var l := 2 * i + 1
-				if l >= hn:
-					break
-				var r := l + 1
-				if r < hn and keys[r] < keys[l]:
-					l = r
-				if keys[l] >= kk:
-					break
-				ids[i] = ids[l]
-				keys[i] = keys[l]
-				i = l
-			ids[i] = id
-			keys[i] = kk
-		if c == t:
-			break
-		if done[c] == gn:
-			continue
-		if search_budget == 0:
-			heap_ids = ids
-			heap_keys = keys
-			_expanded += expanded
-			_budget_stops += 1
-			return PackedInt32Array()
-		if search_budget > 0:
-			search_budget -= 1
-		expanded += 1
-		done[c] = gn
-		var cx := c % W
-		var cy := c / W
-		var gc := g[c]
-		var cc := cost[c]
-		var row := arrive[c] * 8 if turning else 0
-		var brow := 64
-		if bending:
-			var x := c
-			for j in BEND_STEPS - 1:
-				if x == -1: break
-				x = from[x]
-			if x != -1:
-				brow = arrive[x] * 8
-		# у клеток не на краю все 8 соседей внутри карты: проверка границ не нужна
-		var inner := cx > X0 and cy > Y0 and cx < X1 - 1 and cy < Y1 - 1
-		for k in 8:
-			var nx := cx + DX[k]
-			var ny := cy + DY[k]
-			var n := c + OFF[k]
-			if not inner and (nx < X0 or ny < Y0 or nx >= X1 or ny >= Y1):
-				continue
-			var cn := cost[n]
-			if cn == INF or done[n] == gn:
-				continue
-			var step := (cc + cn) * 0.5
-			var linked := not links.is_empty() and (links[c] & (1 << k)) != 0
-			# диагональный шаг проходит через угол двух соседних клеток: нельзя мимо непроходимой,
-			# и он стоит не меньше, чем их пересечь (иначе путь срезает угол озера и бесплатно переходит
-			# реку, текущую по диагонали)
-			if k >= 4 and not linked:
-				var ca := cost[c + DX[k]]
-				var cb := cost[c + DY[k] * W]
-				if ca == INF or cb == INF:
-					continue
-				step = maxf(step, (ca + cb) * 0.5)
-			# Штраф за уклон вдоль шага, а не только за крутизну всей клетки:
-			# по склону можно идти поперёк подъёма. Квадрат предпочитает плавный набор высоты.
-			if terrain:
-				var grade := absf(heights[n] - heights[c]) / DL[k]
-				# Эта диагональ пересекает два треугольника меша: между равными концами
-				# может быть крутая ложбина или выступ. Вторая диагональ идёт по ребру.
-				if (k == 4 or k == 7) and not linked:
-					var mid := (float(heights[c + DX[k]]) + heights[c + DY[k] * W]) * 0.5
-					grade = maxf(absf(mid - heights[c]), absf(heights[n] - mid)) * 2.0 / DL[k]
-				var cross_grade := 0.0
-				if use_corridor and not _ground.is_empty() and not linked:
-					_measure_corridor(c, k)
-					grade = maxf(grade, _corridor[c * 8 + k])
-					cross_grade = _cross[c * 8 + k]
-					if grade == INF:
-						continue
-				if grade > max_grade or cross_grade > max_cross_grade:
-					continue
-				var steep := maxf(0.0, grade - 0.22)
-				# Подъём и земляные работы оплачиваются отдельно: крен не скрывает крутой подъём.
-				step += climb * (grade * grade + 4.0 * steep * steep + cross_grade * cross_grade)
-			var ng := gc + DL[k] * step
-			if turning:
-				ng += PEN[row + k]
-			if bending:
-				ng += BPEN[brow + k]
-			if seen[n] != gn or ng < g[n]:
-				seen[n] = gn
-				g[n] = ng
-				from[n] = c
-				if turning:
-					arrive[n] = k
-				var ax := absi(nx - tx)
-				var ay := absi(ny - ty)
-				# 0.414 ≈ √2 − 1 (октильная оценка). Не заменять на Grid.SQRT2 - 1: другие знаки меняют
-				# тай-брейки и результат, и тогда GDScript перестаёт совпадать с FastGrid.cs
-				var key: float = ng + (maxi(ax, ay) + 0.414 * mini(ax, ay)) * H_COST
-				# добавить в кучу
-				if hn >= ids.size():
-					ids.resize(ids.size() * 2)
-					keys.resize(keys.size() * 2)
-				var i := hn
-				hn += 1
-				while i > 0:
-					var p := (i - 1) >> 1
-					if keys[p] <= key:
-						break
-					ids[i] = ids[p]
-					keys[i] = keys[p]
-					i = p
-				ids[i] = n
-				keys[i] = key
-	heap_ids = ids
-	heap_keys = keys
-	_expanded += expanded
-	var path := PackedInt32Array()
-	if seen[t] != gn:
-		_no_path += 1
-		return path
-	var c := t
-	while c != -1:
-		path.append(c)
-		c = from[c]
-	path.reverse()
+	if _fast == null:
+		return PackedInt32Array()
+	_search_versions(cost_version)
+	_fast.TurnCost = turn
+	_fast.BendCost = bend
+	_fast.SearchBudget = search_budget
+	var started := Time.get_ticks_usec()
+	var path: PackedInt32Array = _fast.FindPath(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
+	search_budget = _fast.SearchBudget
+	if profile_searches:
+		_search_us += Time.get_ticks_usec() - started
 	return path
 
 
 ## Шаг 0–2 ревью дорожной сети 29.10: «невозможно» отдельно от «кончился запас». false — только если find_path
 ## с теми же входами (heights, links, use_corridor, max_cross_grade) точно не найдёт пути: s и t в разных
-## областях, связанных разрешёнными шагами. Поиск в ширину без стоимостей попеременно от обоих концов —
-## меньшая область исчерпывается первой; запас раскрытий не тратится. От s идут шаги поиска, от t — они же
-## в обратную сторону: ответ точный. Копия FastGrid.Reach.
-@warning_ignore("integer_division")
+## областях, связанных разрешёнными шагами (FastGrid.Reach: поиск в ширину попеременно от обоих концов, запас не тратится).
 func can_reach(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF) -> bool:
-	if _fast != null:
-		return _fast.Reach(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
-	_reach_calls += 1
-	if s == t:
-		return true
-	var terrain := not heights.is_empty() and (climb > 0.0 or max_grade < INF)
-	var opposite := [1, 0, 3, 2, 7, 6, 5, 4]
-	var bounds := _bounds()
-	# A* permits an out-of-window start, but every destination must be inside.
-	if t % W < bounds[0] or t / W < bounds[1] or t % W >= bounds[2] or t / W >= bounds[3] or cost[t] == INF:
-		_reach_rejects += 1
+	if _fast == null:
 		return false
-	var mark := {s: 0, t: 1}
-	var queues: Array[PackedInt32Array] = [PackedInt32Array([s]), PackedInt32Array([t])]
-	var heads := [0, 0]
-	while heads[0] < queues[0].size() and heads[1] < queues[1].size():
-		var side := 0 if queues[0].size() - heads[0] <= queues[1].size() - heads[1] else 1
-		var q: PackedInt32Array = queues[side]
-		var end := q.size()
-		for head in range(heads[side], end):
-			var c := q[head]
-			_reach_visited += 1
-			var cx := c % W
-			var cy := c / W
-			for k in 8:
-				var nx := cx + Grid.DX[k]
-				var ny := cy + Grid.DY[k]
-				if nx < 0 or ny < 0 or nx >= W or ny >= H:
-					continue
-				var n := ny * W + nx
-				if (side == 0 or n != s) and (nx < bounds[0] or ny < bounds[1] or nx >= bounds[2] or ny >= bounds[3]):
-					continue
-				var m: int = mark.get(n, -1)
-				# Поиск не ставит в кучу непроходимую клетку: такой может быть только старт.
-				if m == side or n != s and cost[n] == INF:
-					continue
-				# От s — шаги поиска вперёд, от t — те же шаги в обратную сторону (n → c).
-				if not (_step_allowed(cost, terrain, max_grade, c, k) if side == 0 else _step_allowed(cost, terrain, max_grade, n, opposite[k])):
-					continue
-				if m == 1 - side:
-					return true
-				mark[n] = side
-				q.append(n)
-		heads[side] = end
-		queues[side] = q
-	_reach_rejects += 1
-	return false
-
-
-## Разрешил бы find_path шаг c → c + (DX[k], DY[k]) (без учёта стоимости): те же проверки в том же порядке.
-func _step_allowed(cost: PackedFloat32Array, terrain: bool, max_grade: float, c: int, k: int) -> bool:
-	var n := c + Grid.DY[k] * W + Grid.DX[k]
-	if cost[n] == INF:
-		return false
-	var linked := not links.is_empty() and (links[c] & (1 << k)) != 0
-	if k >= 4 and not linked and (cost[c + Grid.DX[k]] == INF or cost[c + Grid.DY[k] * W] == INF):
-		return false
-	if not terrain:
-		return true
-	var grade := absf(heights[n] - heights[c]) / Grid.DL[k]
-	if (k == 4 or k == 7) and not linked:
-		var mid := (float(heights[c + Grid.DX[k]]) + heights[c + Grid.DY[k] * W]) * 0.5
-		grade = maxf(absf(mid - heights[c]), absf(heights[n] - mid)) * 2.0 / Grid.DL[k]
-	var cross_grade := 0.0
-	if use_corridor and not _ground.is_empty() and not linked:
-		_measure_corridor(c, k)
-		grade = maxf(grade, _corridor[c * 8 + k])
-		cross_grade = _cross[c * 8 + k]
-		if grade == INF:
-			return false
-	return not (grade > max_grade or cross_grade > max_cross_grade)
+	return _fast.Reach(cost, s, t, heights, climb, max_grade, links, use_corridor, max_cross_grade)
 
 
 ## Начать в фоне поиск find_path(cost, s, t, climb, max_grade) с нынешними heights, links, use_corridor и запасом
 ## не больше search_budget (с 9.9). Если следующий find_path с теми же входами будет именно таким, он возьмёт готовый
-## результат; иначе фоновый поиск ни на что не влияет. На GDScript ничего не делает.
+## результат; иначе фоновый поиск ни на что не влияет.
 func prefetch(cost: PackedFloat32Array, s: int, t: int, climb: float = 0.0, max_grade: float = INF, cost_version: int = -1, turn: float = 0.0, bend: float = 0.0) -> void:
 	if eager_fallback and _fast != null and search_budget != 0:
 		_search_versions(cost_version)
@@ -534,8 +155,8 @@ func release() -> void:
 ## budget_stops — запас кончился (путь мог существовать), no_path — поиск доказал, что пути нет.
 func search_stats() -> Dictionary:
 	if _fast == null:
-		return {calls = _calls, expanded = _expanded, budget_stops = _budget_stops + _skipped, no_path = _no_path,
-			skipped = _skipped, reach_calls = _reach_calls, reach_rejects = _reach_rejects, reach_visited = _reach_visited}
+		return {calls = 0, expanded = 0, budget_stops = _skipped, no_path = 0, skipped = _skipped,
+			reach_calls = 0, reach_rejects = 0, reach_visited = 0}
 	# Раскрытия, исходы и судьба фонового поиска считаются всегда: они нужны отчёту подготовки,
 	# а не только bench.gd. calls/native_ms/call_ms — только с profile_searches.
 	var stats: Dictionary = _fast.SearchStats()

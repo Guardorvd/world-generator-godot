@@ -70,8 +70,8 @@ func _initialize() -> void:
 	quit(1 if fails else 0)
 
 
-## 15.11.2026: штраф поворота (аргумент turn): другой turn — другой запрос кэша; C# и GDScript дают те же пути и тот же
-## остаток запаса на холмистой сетке с коридором (turn 0 и turn > 0).
+## 15.11.2026: штраф поворота (аргумент turn): другой turn — другой запрос кэша; два поиска дают те же пути и тот же
+## остаток запаса на холмистой сетке с коридором (turn 0 и turn > 0). Сверку с прежним GDScript заменил эталон path_golden.
 func _turn_checks() -> void:
 	const N := 48
 	var heights := PackedFloat32Array()
@@ -92,17 +92,7 @@ func _turn_checks() -> void:
 	if fast.fast() == null:
 		check(false, "нужна сборка .NET (dotnet build)")
 		return
-	var slow := Pathfinder.new(N, N, heights)
-	slow._fast = null
-	slow.g.resize(N * N)
-	slow.from.resize(N * N)
-	slow.arrive.resize(N * N)
-	slow.seen.resize(N * N)
-	slow.done.resize(N * N)
-	slow.heap_ids.resize(Pathfinder.HEAP_START_CAP)
-	slow.heap_keys.resize(Pathfinder.HEAP_START_CAP)
-	for f: Pathfinder in [fast, slow]:
-		f.set_corridor(heights, water, wet, 0.6)
+	fast.set_corridor(heights, water, wet, 0.6)
 	var revision := fast.next_cost_version()
 	var plain := fast.find_path(costs, 5 * N + 3, 42 * N + 44, 8.0, 0.6, revision)
 	var hits: int = fast.fast().SearchStats().cache_hits
@@ -110,23 +100,27 @@ func _turn_checks() -> void:
 	check(fast.fast().SearchStats().cache_hits == hits and not turned.is_empty(), "другой штраф поворота — другой запрос кэша")
 	check(fast.find_path(costs, 5 * N + 3, 42 * N + 44, 8.0, 0.6, revision, 8.0) == turned
 		and fast.fast().SearchStats().cache_hits == hits + 1, "тот же штраф поворота берётся из кэша")
+	# 16.11.2026: копии на GDScript нет — пути со штрафами сверяет эталон tools/path_golden.gd; здесь повтор без кэша
 	var same := true
 	var changed := false
+	var other := Pathfinder.new(N, N, heights)
+	other.set_corridor(heights, water, wet, 0.6)
 	for pair: Vector2i in [Vector2i(5 * N + 3, 42 * N + 44), Vector2i(40 * N + 2, 3 * N + 45), Vector2i(24 * N + 10, 24 * N + 40)]:
 		for shape: Vector2 in [Vector2(0, 0), Vector2(2, 0), Vector2(8, 0), Vector2(8, 6), Vector2(0, 12)]:
 			var turn := shape.x
 			var bend := shape.y
 			for budget: int in [-1, 300]:
 				fast.search_budget = budget
-				slow.search_budget = budget
+				other.search_budget = budget
 				var a := fast.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn, bend)
-				var b := slow.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn, bend)
-				if a != b or fast.search_budget != slow.search_budget:
+				var b := other.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, turn, bend)
+				if a != b or fast.search_budget != other.search_budget:
 					same = false
-					print("  расхождение: %s turn %.1f bend %.1f запас %d: C# %d клеток, GDScript %d" % [pair, turn, bend, budget, a.size(), b.size()])
+					print("  расхождение: %s turn %.1f bend %.1f запас %d: %d / %d клеток" % [pair, turn, bend, budget, a.size(), b.size()])
 				if turn > 0.0 and budget < 0 and a != fast.find_path(costs, pair.x, pair.y, 8.0, 0.6, -1, 0.0): changed = true
+	other.release()
 	fast.search_budget = -1
-	check(same, "C# и GDScript со штрафом поворота и длинных галсов: те же пути и запас")
+	check(same, "два поиска со штрафом поворота и длинных галсов: те же пути и запас")
 	check(changed, "штраф поворота меняет путь хотя бы в одной паре")
 	check(plain != turned or changed, "штраф поворота действует")
 	fast.release()

@@ -25,7 +25,8 @@ func _initialize() -> void:
 	if OS.get_cmdline_user_args().has("--alloc-only"):
 		quit(0 if fails == 0 else 1)
 		return
-	# Сравнить направления через границы полос 32/64 с последовательным GDScript.
+	# Направления через границы полос 32/64: параллельный проход C# против последовательного GDScript был здесь до 16.11.2026;
+	# копии A* на GDScript больше нет — пути с шириной прохода держит эталон tools/path_golden.gd, здесь — повтор поиска.
 	var side := 70
 	var surface := PackedFloat32Array()
 	surface.resize(side * side)
@@ -39,9 +40,7 @@ func _initialize() -> void:
 		for x in side:
 			surface[y * side + x] = sin(x * 0.2) * cos(y * 0.1) * 0.01
 	var native := Pathfinder.new(side, side, surface)
-	Grid.allow_fast = false
 	var reference := Pathfinder.new(side, side, surface)
-	Grid.allow_fast = true
 	for half in [0.45, 0.3]:
 		native.set_corridor(surface, level, dry, half)
 		reference.set_corridor(surface, level, dry, half)
