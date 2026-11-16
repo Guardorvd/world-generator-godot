@@ -97,7 +97,12 @@ const WIND := {
 	Biomes.T_REED: [0.16, 0.03, 1.4, 0.8, 0.3],
 	Biomes.T_DEAD: [0.04, 0.0, 0.8, 0.8, 0.0],
 }
-const GRASS_WIND := [0.09, 0.02, 1.6, 0.85, 0.3]
+const GRASS_WIND := [0.09, 0.02, 1.6, 0.85, 0.3, 0.6]
+## 16.11: тени у основания (base_shade у травы, rock_contact у камней, впадины рельефа — TerrainBuilder.set_cavity).
+## false — всё как до 16.11 (сравнение «было/стало» в одном запуске стенда: style_look -- --contact off).
+static var contact_shade := true
+## Сила затемнения света неба у основания камней (rock_contact в vegetation.gdshaderinc)
+const ROCK_CONTACT := 0.55
 
 var world: WorldData
 var heights: Heightfield
@@ -221,6 +226,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK:
 				shader = preload("res://resources/rock.gdshader")
 			var mat := _wind_mat(shader, wind, part == "crown")
+			if kind % ForestModels.MODEL_STRIDE == Biomes.T_ROCK:
+				mat.set_shader_parameter("rock_contact", ROCK_CONTACT if contact_shade else 0.0)
 			if def.has(part + "_texture"):
 				mat.set_shader_parameter("albedo_tex", def[part + "_texture"])
 			if part == "trunk":
@@ -494,28 +501,31 @@ func set_draw(level: int) -> bool:
 
 
 ## 6.7: ветер и свет по виду. sway/flutter — м, ao — свет неба у основания и в глубине кроны,
-## glow — просвечивание листвы. Хвоя жёсткая и густая, берёза лёгкая и дрожит, пальма гибкая.
+## glow — просвечивание листвы; шестое (необязательно, 16.11) — прямой свет у основания низкой травы без теней
+## (base_shade), с ним свет неба у основания ещё на 0,12 ниже: внутри пучка небо заслонено. Хвоя жёсткая и густая, берёза лёгкая и дрожит, пальма гибкая.
 static func _wind_mat(shader: Shader, wind: Array, leaves: bool) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader
 	mat.set_shader_parameter("sway", wind[0])
 	mat.set_shader_parameter("flutter", wind[1] if leaves else 0.0)
 	mat.set_shader_parameter("sway_speed", wind[2])
-	mat.set_shader_parameter("ao_low", wind[3])
+	var base: float = wind[5] if wind.size() > 5 and contact_shade else 1.0
+	mat.set_shader_parameter("ao_low", wind[3] - (0.12 if base < 1.0 else 0.0))
+	mat.set_shader_parameter("base_shade", base)
 	mat.set_shader_parameter("translucency", wind[4] if leaves else 0.0)
 	return mat
 
 
 static func _plant_wind(kind: int) -> Array:
 	if kind in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW]:
-		return [0.13, 0.018, 1.4, 0.85, 0.25]
+		return [0.13, 0.018, 1.4, 0.85, 0.25, 0.6]
 	if kind == Understory.SEDGE:
-		return [0.07, 0.012, 1.2, 0.8, 0.2]
+		return [0.07, 0.012, 1.2, 0.8, 0.2, 0.65]
 	if kind == Understory.STIPA:
 		# 16.1: ковыль — длинные гибкие ости: сильный наклон и просвечивание против солнца (серебристая волна)
-		return [0.22, 0.03, 1.5, 0.88, 0.4]
+		return [0.22, 0.03, 1.5, 0.88, 0.4, 0.7]
 	if kind == Understory.FIREWEED:
-		return [0.1, 0.02, 1.0, 0.85, 0.3]
+		return [0.1, 0.02, 1.0, 0.85, 0.3, 0.75]
 	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
 		return [0.08, 0.02, 0.85, 0.8, 0.25]
 	if kind in [Understory.PINE, Understory.YOUNG_PINE]:

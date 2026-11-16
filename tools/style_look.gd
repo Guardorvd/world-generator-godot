@@ -8,6 +8,7 @@ extends SceneTree
 ##   godot --path . --script res://tools/style_look.gd -- [--seed Север-1234] [--out <папка>] [--states a,b] [--variants off,all]
 ##     [--tonemap] — только сравнение тонмапперов на светлых состояниях (лист tonemap_sheet.png, показатели срезов)
 ##     [--checks] — LUT без поправки, неподвижность зерна, ход камеры (кадры off/all)
+##     [--contact off] — без теней у основания (16.11: впадины рельефа, низ травы, основание камней) — «было»
 ## Параметры тонмаппера для подбора: --agx-white, --agx-contrast, --agx-exposure.
 
 const Dev := preload("res://tools/control/control.gd")
@@ -107,6 +108,21 @@ func _build_world(seed_text: String) -> void:
 	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, TerrainBuilder.build_arrays(world, heights))
 	terrain.mesh = mesh
 	terrain.material_override = TerrainBuilder.new().material(MapBaker.bake(world, 2, true), Floor.surface_image(world))
+	# 16.11: --contact off — без теней у основания (впадины рельефа, низ куртин травы, основание камней), «было»
+	VegetationLayer.contact_shade = Dev.arg("contact", "on") != "off"
+	if VegetationLayer.contact_shade:
+		var cavity_started := Time.get_ticks_usec()
+		TerrainBuilder.set_cavity(terrain.material_override, heights)
+		var cav := TerrainBuilder.cavity_image(heights.hv, world.W, world.H)
+		var cav_data := cav.get_data()
+		var shaded := 0
+		var darkest := 255
+		for v in cav_data:
+			shaded += int(v < 242)
+			darkest = mini(darkest, v)
+		print("STYLE_CAVITY ms=", (Time.get_ticks_usec() - cavity_started) / 1000.0 * 0.5, " shaded_5pct=", snappedf(100.0 * shaded / cav_data.size(), 0.1),
+			"% darkest=", snappedf(darkest / 255.0, 0.01))
+		cav.save_png(ProjectSettings.globalize_path(out).path_join("cavity_map.png"))
 	scene.add_child(terrain)
 	for node: Node in WaterBuilder.build(world, WaterBuilder.prepare(world, heights)):
 		scene.add_child(node)

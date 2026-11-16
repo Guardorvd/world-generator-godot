@@ -277,6 +277,43 @@ func material(base: Image, forest: Image = null) -> ShaderMaterial:
 	return mat
 
 
+## 16.11.2026: затенение впадин (свет неба, AO рельефа). Замер видимости неба (SVF) показал: в крупном масштабе
+## суша почти вся открыта (SVF ≥ 0,93 у ~75 %), поэтому затенение слабое и только во впадинах: насколько клетка ниже
+## средней высоты окрестности ~16 м (ложбины, промоины, русла) и ~64 м (днища долин, котловины). На ровном склоне
+## среднее равно высоте — склоны не темнеют, гребни тоже. Влияет только на свет неба (AO), не на солнце: при солнце
+## почти не видно, в тени и в пасмурную погоду впадины читаются. Карта — R8 на клетку плана (как forest_tex),
+## ~десятки мс на загрузке; без неё (меню, Trail Lab, области за краем) шейдер берёт белый — без затенения.
+const CAVITY_NEAR := 0.18   # наибольшее ослабление света неба в мелких ложбинах
+const CAVITY_FAR := 0.12    # в днищах долин
+
+static func cavity_image(hv: PackedFloat32Array, W: int, H: int) -> Image:
+	var src := Image.create_from_data(W, H, false, Image.FORMAT_RF, hv.to_byte_array())
+	var near := _blurred(src, 2).get_data().to_float32_array()
+	var far := _blurred(src, 4).get_data().to_float32_array()
+	var out := PackedByteArray()
+	out.resize(W * H)
+	for k in W * H:
+		var h := hv[k]
+		var occ := CAVITY_NEAR * smoothstep(0.3, 1.6, near[k] - h) + CAVITY_FAR * smoothstep(0.6, 6.0, far[k] - h)
+		out[k] = clampi(roundi((1.0 - occ) * 255.0), 0, 255)
+	return Image.create_from_data(W, H, false, Image.FORMAT_R8, out)
+
+
+## Среднее по блокам 2^levels клеток (каждое уменьшение вдвое усредняет 2×2) и обратно до исходного размера
+static func _blurred(src: Image, levels: int) -> Image:
+	var img := src.duplicate() as Image
+	for i in levels:
+		img.resize(maxi(1, img.get_width() / 2), maxi(1, img.get_height() / 2), Image.INTERPOLATE_BILINEAR)
+	img.resize(src.get_width(), src.get_height(), Image.INTERPOLATE_BILINEAR)
+	return img
+
+
+static func set_cavity(mat: ShaderMaterial, heights: Heightfield) -> void:
+	var img := cavity_image(heights.hv, heights.world.W, heights.world.H)
+	img.generate_mipmaps()
+	mat.set_shader_parameter("cavity_tex", ImageTexture.create_from_image(img))
+
+
 ## 15.11.2026: дальний вариант материала рельефа — тот же resources/terrain.gdshader, где вес ближней детали
 ## near — константа 0. Дальше DETAIL_FAR (110 м) near и так ровно 0, поэтому для частей рельефа целиком дальше
 ## этого картинка та же до пикселя. Но шейдер без ближних веток (микроструктура, подстилка, травинки, галька,

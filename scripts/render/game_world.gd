@@ -194,6 +194,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		_grass_mesh = Models.grass_mesh()
 	t = _mark("start_models_ms", t)
 	$Terrain.material_override = services.terrain.material(loaded.terrain_image, loaded.forest_surface)
+	TerrainBuilder.set_cavity($Terrain.material_override, heights)
 	terrain_stream = PlanTerrain.new()
 	terrain_stream.name = "PlanTerrain"
 	$Terrain.add_child(terrain_stream)

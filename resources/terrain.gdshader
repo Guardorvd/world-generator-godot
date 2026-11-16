@@ -31,6 +31,8 @@ uniform vec3 rock_color : source_color = vec3(0.56, 0.54, 0.51);
 // 6.6+: полог, доля хвойных, влажность и каменистость из готового леса.
 uniform sampler2D forest_tex : hint_default_black, filter_linear_mipmap, repeat_disable;
 uniform bool forest_enabled = false;
+// 16.11: затенение впадин для света неба (TerrainBuilder.set_cavity): 1 — открыто; без карты — белый, без затенения
+uniform sampler2D cavity_tex : hint_default_white, filter_linear_mipmap, repeat_disable;
 uniform vec3 leaf_soil : source_color = vec3(0.32, 0.26, 0.16);
 // 7.8: доля солнечного света (DayCycle): ночью и в сумерках солнечных просветов под пологом нет.
 uniform float sunlight = 1.0;
@@ -942,7 +944,7 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 	ROUGHNESS = 1.0 - gloss_v * 0.12 - road_gloss * 0.15;
 	SPECULAR = 0.3 + gloss_v * 0.08;
 	BACKLIGHT = vec3(mix(micro_shadow, road_shade, road), gloss_v, 0.0);
-	AO = sky;
+	AO = sky * (use_vertex_color ? 1.0 : texture(cavity_tex, UV).r);
 	AO_LIGHT_AFFECT = 0.0;
 	NORMAL_MAP = detail_n;
 	NORMAL_MAP_DEPTH = mix(0.6 + 0.6 * rock + 0.5 * ground_n + 0.55 * lumps, 0.5 + road_rough * 0.5, road) * near;
