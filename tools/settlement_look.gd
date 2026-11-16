@@ -137,7 +137,7 @@ func _describe(w: WorldData, land: PackedInt32Array) -> Dictionary:
 ## Вид места по характеру (StageLandmarks._character) без рода и размера
 static func _kind(character: String) -> String:
 	for pair: Array in [["прим", "приморские"], ["речн", "речные"], ["горн", "горные"], ["предгорн", "предгорные"], ["лесн", "лесные"],
-			["дальн", "дальние"], ["земл", "равнинные"], ["торг", "равнинные"]]:
+			["рыбацк", "рыбацкие"], ["земл", "равнинные"], ["торг", "равнинные"]]:
 		if character.begins_with(pair[0]): return pair[1]
 	return "окраинные"
 

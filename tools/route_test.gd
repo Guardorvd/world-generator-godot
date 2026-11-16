@@ -359,7 +359,7 @@ func _rollback_check() -> void:
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	var on_axis := PackedByteArray()
 	on_axis.resize(w.N)
-	var state := {surface = surface, on_axis = on_axis, detour = false}
+	var state := {surface = surface, on_axis = on_axis}
 	var mask := w.path_mask.duplicate()
 	var before := surface.hv.duplicate()
 	var heights_before := heights.duplicate()
@@ -375,8 +375,8 @@ func _rollback_check() -> void:
 	result = StageTrails._structures(w, path, true, finder, w.cost, state)
 	_check(result.is_empty() and w.bridges == bridges_before and w.tunnels.is_empty()
 		and finder.links.is_empty() and finder.heights == heights_before and state.on_axis == axis_before
-		and surface.hv == before and not state.detour,
-		"отказ после повторного использования моста восстанавливает оси, высоты, шаги и очередь обходов")
+		and surface.hv == before,
+		"отказ после повторного использования моста восстанавливает оси, высоты и шаги")
 	# Отказ до первого сооружения не должен оставлять даже пустой рабочий массив links.
 	result = StageTrails._structures(w, Grid.line_cells(14, 8, 23, 8, w.W), true, finder, w.cost, state)
 	_check(result.is_empty() and finder.links.is_empty() and state.on_axis == axis_before,

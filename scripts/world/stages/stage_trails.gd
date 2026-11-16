@@ -10,8 +10,8 @@ extends RefCounted
 ## Где дорога или тропа между поселениями пересекает воду, ставится мост,
 ## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
 ## сухие впадины дорога проходит по рельефу, без декоративных мостов.
-## Туннели и обходы горы чередуются: после туннеля следующий хребет путь по возможности обходит
-## понизу (_detour), после обхода — снова туннель. Высоты здесь в единицах w.h (1 = 260 м).
+## Хребет путь обходит понизу (_detour), если обход не длиннее DETOUR_PREFER длин туннеля, иначе строится туннель
+## (с 16.11.2026; раньше туннели и обходы чередовались по очереди от чётности сида). Высоты здесь в единицах w.h (1 = 260 м).
 ## Путь, который пересекает воду или хребет там же, где уже построен мост или туннель (концы рядом,
 ## _same), проходит по нему: к его входу и от выхода — короткими путями по суше.
 ## Дополнительные тропы сокращают обход по сети или предлагают другой проход по рельефу;
@@ -45,6 +45,7 @@ const HUT_CLEAR := 1.5      # дом ближе этого к оси моста 
 const FORD_LEN := 2         # тропа переходит вброд реку не шире стольких клеток пути
 const FORD_SLOPE := 0.3     # на более крутом перепаде русла глубина между клетками ненадёжна для брода
 const DETOUR := 4.5         # обход горы не длиннее стольких прямых расстояний между входами туннеля
+const DETOUR_PREFER := 2.5  # обход не длиннее стольких длин туннеля выбирается вместо туннеля
 const ALT_LEN := 2.0        # второй путь не длиннее стольких первых
 const BRANCH_LEN := 3.0     # тропа к берегу не длиннее стольких прямых расстояний
 const SHORTCUT := 1.25      # новая связь сокращает существующий обход хотя бы на пятую часть
@@ -718,7 +719,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.bridges = []
 	w.tunnels = []
 	var road_cost := w.cost.duplicate()
-	var state := {detour = w.seed_num % 2 == 1, on_axis = PackedByteArray(), surface = surface}
+	var state := {on_axis = PackedByteArray(), surface = surface}
 	state.on_axis.resize(w.N)
 	finder.links.resize(w.N)
 	var setup_us := Time.get_ticks_usec()
@@ -1373,6 +1374,9 @@ const JOURNEY_RUN := 25 # клеток (100 м)
 
 static func _journeys(w: WorldData, paths: Array) -> Array:
 	var out: Array = []
+	# Заготовки тестов задают не все поля — без них замера нет
+	if w.elev.size() != w.N or w.dist_water.size() != w.N or w.biome.size() != w.N or w.h.size() != w.N:
+		return out
 	for e: Array in paths:
 		if not e[3]: continue
 		var q: PackedInt32Array = e[2]
@@ -1710,15 +1714,15 @@ static func _wet(w: WorldData, i: int) -> bool:
 ## Мосты и туннели на пути между поселениями: заносит их в w.bridges и w.tunnels и возвращает путь,
 ## в котором участки под ними заменены прямыми. Мост — только через воду между берегами;
 ## туннель — сквозь хребет выше RISE. У обоих уклон не круче GRADE.
-## Тропа (road = false) переходит реку не шире FORD_LEN вброд. Новый туннель через раз заменяется
-## обходом горы, если он есть (state.detour — очередь обхода; cost — стоимость, по которой ищется обход).
+## Тропа (road = false) переходит реку не шире FORD_LEN вброд. Новый туннель заменяется обходом горы, если обход
+## не длиннее DETOUR_PREFER длин туннеля (cost — стоимость, по которой ищется обход).
 ## Клетки осей мостов и туннелей отмечаются в state.on_axis.
 static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary) -> Dictionary:
 	var part_us := Time.get_ticks_usec()
 	var surface: Heightfield = state.get("surface")
 	var checkpoint := {bridges = w.bridges.duplicate(), tunnels = w.tunnels.duplicate(), mask = w.path_mask.duplicate(),
 		heights = finder.heights.duplicate(), links = finder.links.duplicate(), on_axis = state.on_axis.duplicate(),
-		detour = state.detour, hv = surface.hv.duplicate() if surface != null else PackedFloat32Array()}
+		hv = surface.hv.duplicate() if surface != null else PackedFloat32Array()}
 	# Число и объём снимков (P0 аудита 29.10): основа решения о журнале изменений вместо копий.
 	state.checkpoints = int(state.get("checkpoints", 0)) + 1
 	state.checkpoint_bytes = int(state.get("checkpoint_bytes", 0)) + checkpoint.mask.size() + checkpoint.links.size() \
@@ -1730,7 +1734,7 @@ static func _make_checkpoint(w: WorldData, finder: Pathfinder, state: Dictionary
 static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: Pathfinder, cost: PackedFloat32Array, state: Dictionary, retries: int = 0, limit := ROAD_GRADE, accept := Callable()) -> PackedInt32Array:
 	var part_us := Time.get_ticks_usec()
 	# Неудачная связь не оставляет за собой мосты, выемки и разрешённые шаги по их осям.
-	var ctx := {checkpoint = null, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
+	var ctx := {checkpoint = null, initial_links_empty = finder.links.is_empty()}
 	var result := _build_structures(w, p, road, finder, cost, state, retries, ctx, limit)
 	if not result.is_empty() and accept.is_valid() and not accept.call(result):
 		result = PackedInt32Array()
@@ -1743,7 +1747,6 @@ static func _structures(w: WorldData, p: PackedInt32Array, road: bool, finder: P
 
 static func _restore_structures(w: WorldData, finder: Pathfinder, state: Dictionary, ctx: Dictionary) -> void:
 	if ctx.checkpoint == null:
-		state.detour = ctx.initial_detour
 		if ctx.initial_links_empty:
 			finder.links = PackedByteArray()
 		return
@@ -1757,7 +1760,6 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 	finder.heights = checkpoint.heights.duplicate()
 	finder.links = PackedByteArray() if ctx.initial_links_empty else checkpoint.links.duplicate()
 	state.on_axis = checkpoint.on_axis.duplicate()
-	state.detour = ctx.initial_detour
 	if state.has("surface"):
 		var changed_ground: bool = state.surface.hv != checkpoint.hv
 		state.surface.hv = checkpoint.hv.duplicate()
@@ -1906,19 +1908,18 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 				out.append(around[k])
 			i = j
 			continue
+		# 16.11.2026: туннель или обход решает рельеф — обход, если он есть и не длиннее DETOUR_PREFER длин туннеля
+		# (раньше они чередовались по очереди). Обход ничего не строит — снимок для него не нужен.
+		if kind == "tunnel" and ends.is_empty():
+			var q := _detour(w, finder, cost, a, b, "road" if road else "trail", ROAD_LIMIT if road else TRAIL_GRADE)
+			if q.size() > 0 and _length(w, q) <= Grid.hypot(b % w.W - a % w.W, b / w.W - a / w.W) * DETOUR_PREFER:
+				for k in range(1, q.size()):
+					out.append(q[k])
+				i = j
+				continue
 		# Повторно используемый мост тоже записывает on_axis, heights и links ниже.
 		if ctx.checkpoint == null:
 			ctx.checkpoint = _make_checkpoint(w, finder, state)
-		if kind == "tunnel" and ends.is_empty():
-			if state.detour:
-				var q := _detour(w, finder, cost, a, b, "road" if road else "trail", ROAD_LIMIT if road else TRAIL_GRADE)
-				if q.size() > 0:
-					state.detour = false
-					for k in range(1, q.size()):
-						out.append(q[k])
-					i = j
-					continue
-			state.detour = true
 		if ends.is_empty():
 			list.append(TunnelData.new(a, b) if kind == "tunnel" else BridgeData.new(a, b))
 			_mark_cut(w, a, b, TUNNEL_R if kind == "tunnel" else BRIDGE_R)

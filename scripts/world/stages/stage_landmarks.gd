@@ -116,6 +116,10 @@ static func _place_settlements(w: WorldData) -> void:
 		settlement.importance = Roles.ROLES[role].importance if Roles.ROLES.has(role) else importance
 		settlement.role = "" if legacy else role
 		if role == "center": pick.centers.append(Vector2(x, y))
+		if not legacy and settlements.is_empty():
+			# Следующие места — только там, куда от первого центра можно дойти хотя бы тропой (SettlementRoles.walk):
+			# иначе место удалилось бы после дорог (StageTrails._retain_connected_settlements).
+			pick.walk = Roles.walk(w, wet, i)
 		settlements.append(settlement)
 	# Роль задаёт размер сама. Среди мест без роли (обычные; legacy — все) посёлков примерно треть, самые важные места:
 	# их доля не зависит от того, сколько мест заняли роли.
@@ -135,7 +139,7 @@ static func _place_settlements(w: WorldData) -> void:
 			s.homes = (8 if s.town else 4) + roundi(s.importance * 3.0) + floori(rng.next_float() * 3)
 		# Облик поселения: свои крыши, штукатурка и ставни, чтобы соседние деревни не были копиями
 		s.style = floori(rng.next_float() * 4)
-		s.character = _character(w, s.i, s.town, role.get("adjective", []))
+		s.character = _character(w, s.i, s.town, Roles.character(s.role, w, pick.fields, s.i))
 	w.settlements = settlements
 
 
@@ -148,6 +152,7 @@ static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: Stri
 	var dead: PackedByteArray = pick.dead
 	var spread: float = pick.spread
 	var min_d: float = pick.min_d
+	var walk: PackedByteArray = pick.get("walk", PackedByteArray())
 	var top := spread + Roles.max_bonus(role)
 	var listed := not legacy # с ролями — прореженные списки (Roles.thin), legacy — все кандидаты, как раньше
 	var count := order.size() if listed else cand.size() / 4
@@ -161,6 +166,8 @@ static func _best(w: WorldData, settlements: Array, pick: Dictionary, role: Stri
 		if best >= 0 and cand[at] + top <= best_value:
 			break
 		var i := int(cand[at + 1])
+		if not walk.is_empty() and walk[i] == 0:
+			continue
 		var x := (i % w.W) + 0.5
 		var y := (i / w.W) + 0.5
 		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
@@ -434,11 +441,11 @@ static func structure_clear(w: WorldData, p: Vector2, a: float, kind: String) ->
 
 
 ## Характер поселения по месту: «приморский посёлок», «горная деревня»…
-## role_adjective — [посёлок, деревня] роли (SettlementRoles.ROLES.adjective): роль важнее воды и биома.
-static func _character(w: WorldData, i: int, town: bool, role_adjective: Array = []) -> String:
+## by_role — [посёлок, деревня] роли (SettlementRoles.character): роль важнее воды и биома.
+static func _character(w: WorldData, i: int, town: bool, by_role: Array = []) -> String:
+	if not by_role.is_empty():
+		return by_role[0] if town else by_role[1]
 	var adj := ["окраинный", "окраинная"]
-	if not role_adjective.is_empty():
-		return role_adjective[0] + " посёлок" if town else role_adjective[1] + " деревня"
 	# Заготовки тестов задают не все поля
 	var sea := not w.dist_ocean.is_empty() and w.dist_ocean[i] < 8.0
 	var high := not w.h.is_empty() and w.h[i] > 0.38

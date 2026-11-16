@@ -137,7 +137,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	var ground := RegionalGround.new(w, surface.water_level)
 	# tunnels = false: области не умеют сохранять и воспроизводить туннели, поэтому хребет только
 	# обходится — это известно до сооружений (ревью дорожной сети 29.10, шаг 1).
-	var state := {detour = false, tunnels = false, on_axis = PackedByteArray(), surface = ground, failures = {}}
+	var state := {tunnels = false, on_axis = PackedByteArray(), surface = ground, failures = {}}
 	state.on_axis.resize(w.N)
 	var edges: Array = []
 	var attempts := 0
@@ -324,7 +324,7 @@ static func _build(w: WorldData, finder: Pathfinder, state: Dictionary, open: Pa
 		StageTrails._count_failure(state.failures, state)
 		return false
 	var checkpoint := StageTrails._make_checkpoint(w, finder, state)
-	var ctx := {checkpoint = checkpoint, initial_detour = state.detour, initial_links_empty = finder.links.is_empty()}
+	var ctx := {checkpoint = checkpoint, initial_links_empty = finder.links.is_empty()}
 	var path := StageTrails._connect_settlement(w, finder, w.cost, a, b, state)
 	if path.size() < 2:
 		StageTrails._count_failure(state.failures, state)

@@ -228,11 +228,10 @@ func limits_and_cuts_check() -> void:
 	var c := setup(w)
 	var finder := ProbeFinder.new(w.W, w.H, c.finder.heights)
 	c.finder.release()
-	c.state.detour = true
 	var before: PackedFloat32Array = c.surface.hv.duplicate()
 	var q := StageTrails._structures(w, Grid.line_cells(10, 16, 40, 16, w.W), true, finder, w.cost, c.state)
 	check(not q.is_empty() and not w.tunnels.is_empty() and finder.last_grade == StageTrails.ROAD_LIMIT,
-		"RN-06: alternating road detours use the road limit, not the trail limit")
+		"RN-06: road detours use the road limit, not the trail limit")
 	var changed := 0
 	var outside_portals := 0
 	var consistent := true

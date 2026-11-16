@@ -49,6 +49,58 @@ public partial class FastGrid
 	private static double SiteAccess(int cell, byte[] wet, byte[] biome, float[] slope, double[] habit)
 		=> wet[cell] != 0 || double.IsNegativeInfinity(habit[biome[cell]]) ? 0.0 : Math.Max(0.0, 1.0 - slope[cell] / 0.45);
 
+	/// <summary>
+	/// Cells reachable on foot from start (SettlementRoles.walk): 8-neighbour flood where the step grade
+	/// |dh| * heightScale / step length is at most maxGrade (height * heightScale is in cell units). Wet cells are
+	/// passable only within reachMax of dry land (a bridge spans them); a step to or from a wet cell has no grade
+	/// limit. Approximate trail reachability: no ribbon width, no bridge banks.
+	/// </summary>
+	public byte[] WalkRegion(int w, int h, float[] heightRaw, double heightScale, byte[] wet, double reachMax, int start, double maxGrade)
+	{
+		int n = checked(w * h);
+		var result = new byte[n];
+		var passable = new byte[n];
+		var height = new double[n];
+		var dry = new byte[n];
+		for (int i = 0; i < n; i++) dry[i] = wet[i] == 0 ? (byte)1 : (byte)0;
+		var reach = DistanceField(w, h, dry); // как StageTrails._bridge_reach
+		for (int i = 0; i < n; i++)
+		{
+			passable[i] = wet[i] == 0 || reach[i] <= reachMax ? (byte)1 : (byte)0;
+			height[i] = heightRaw[i] * heightScale;
+		}
+		if (start < 0 || start >= n || passable[start] == 0) return result;
+		var queue = new int[n];
+		int head = 0, tail = 0;
+		result[start] = 1;
+		queue[tail++] = start;
+		while (head < tail)
+		{
+			int c = queue[head++];
+			int x = c % w, y = c / w;
+			for (int dy = -1; dy <= 1; dy++)
+			{
+				int ny = y + dy;
+				if (ny < 0 || ny >= h) continue;
+				for (int dx = -1; dx <= 1; dx++)
+				{
+					int nx = x + dx;
+					if ((dx == 0 && dy == 0) || nx < 0 || nx >= w) continue;
+					int next = ny * w + nx;
+					if (result[next] != 0 || passable[next] == 0) continue;
+					if (wet[c] == 0 && wet[next] == 0)
+					{
+						double step = dx != 0 && dy != 0 ? 1.4142135623730951 : 1.0;
+						if (Math.Abs(height[next] - height[c]) / step > maxGrade) continue;
+					}
+					result[next] = 1;
+					queue[tail++] = next;
+				}
+			}
+		}
+		return result;
+	}
+
 	/// <summary>Exact Grid.bridge_region traversal, including first-region tie breaking.</summary>
 	public byte[] BridgeRegion(int w, int h, byte[] wet, int maxSpan)
 	{

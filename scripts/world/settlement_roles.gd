@@ -8,19 +8,25 @@ extends RefCounted
 
 ## count — [от, до] мест на план 768; importance — для сети (StageTrails.main_road: дорога между местами, где у обоих
 ## ≥ 0,6, иначе тропа); town — посёлок; homes — [от, до] жилых домов (иначе обычная формула StageLandmarks);
-## adjective — [посёлок, деревня] для характера места (пусто — характер по воде и биому, StageLandmarks._character).
+## character — [посёлок, деревня]: характер места (пусто — по воде и биому, StageLandmarks._character).
 const ROLES := {
 	# Центр: большая долина или вода — обычная оценка площадки. Первый слот всегда центр: там старт игрока.
-	center = {count = [1, 2], importance = 0.9, town = true, adjective = []},
+	center = {count = [1, 2], importance = 0.9, town = true, character = []},
 	# Спутник: деревня в RING клеток от своего центра — центр с двумя-тремя деревнями вокруг.
-	satellite = {per_center = [0, 3], importance = 0.45, town = false, adjective = []},
+	satellite = {per_center = [0, 3], importance = 0.45, town = false, character = []},
 	# Лесное: поляна в глубине леса, не ближе FOREST_DEPTH клеток к опушке.
-	forest = {count = [0, 2], importance = 0.5, town = false, adjective = ["лесной", "лесная"]},
+	forest = {count = [0, 2], importance = 0.5, town = false, character = ["лесной посёлок", "лесная деревня"]},
 	# Предгорное: ровная терраса не дальше FOOT_NEAR клеток от гор.
-	foothill = {count = [0, 2], importance = 0.45, town = false, adjective = ["предгорный", "предгорная"]},
+	foothill = {count = [0, 2], importance = 0.45, town = false, character = ["предгорный посёлок", "предгорная деревня"]},
 	# Удалённое: редкая точка вдали от остальных, маленькое, с одним подъездом (вторые пути к нему не прокладываются).
-	remote = {count = [0, 1], importance = 0.2, town = false, homes = [3, 5], adjective = ["дальний", "дальняя"]},
+	# Стоит только там, где есть причина жить вдали (REASONS); характер — по причине.
+	remote = {count = [0, 1], importance = 0.2, town = false, homes = [3, 5], character = []},
 }
+## Причины удалённого места, по порядку проверки: [условие, характер посёлка, характер деревни].
+## mountain — горы не дальше FOOT_NEAR, water — вода не дальше REMOTE_WATER, forest — глубина леса от FOREST_DEPTH.
+const REASONS := [["mountain", "горный посёлок", "горная деревня"], ["water", "рыбацкий посёлок", "рыбацкая деревня"],
+	["forest", "лесной посёлок", "лесная заимка"]]
+const REMOTE_WATER := 6.0 # клеток (24 м) до воды
 ## Порядок слотов: центры, спутники, лес, предгорья, обычные, удалённые (последними — дальше всех от уже выбранных).
 const ORDER := ["center", "satellite", "forest", "foothill", "ordinary", "remote"]
 
@@ -85,6 +91,21 @@ static func fields(w: WorldData) -> Dictionary:
 	return out
 
 
+## Куда можно дойти пешком от клетки start (первый центр): уклон шага не круче предела тропы StageTrails.TRAIL_GRADE,
+## вода — там, где её перекроет мост (StageTrails.BRIDGE_REACH). Приближение (без ширины тропы и берегов моста), но
+## место вне маски почти наверняка осталось бы без пути и было бы удалено. Пусто без C# — тогда проверки нет.
+## wet — вода (океан, озёра, реки), как в StageLandmarks._place_settlements.
+## Предел уклона маски — запасной предел дороги: с ним ищется каркас сети. Маска грубее поиска (нет ширины полотна,
+## берегов моста и прорезанного рельефа), поэтому редкое место всё же может остаться без связи и удалиться
+## (16.11.2026: одно предгорное на Север-1234 — и с пределом тропы 0,4, и с 0,28).
+const WALK_GRADE := StageTrails.ROAD_LIMIT
+static func walk(w: WorldData, wet: PackedByteArray, start: int) -> PackedByteArray:
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return PackedByteArray()
+	return fast.WalkRegion(w.W, w.H, w.h, StageTrails.HEIGHT_SCALE, wet, StageTrails.BRIDGE_REACH, start, WALK_GRADE)
+
+
 ## Отбор работает по прореженным спискам: в каждом квадрате BLOCK × BLOCK клеток — только лучший подходящий кандидат
 ## (кандидаты уже по убыванию оценки, порядок сохраняется). spacing мест — от 67 клеток, так что точность не теряется,
 ## а просмотр с поправками короче в десятки раз. role — для постоянного условия роли (forest, foothill), "" — все.
@@ -129,8 +150,28 @@ static func bonus(role: String, w: WorldData, f: Dictionary, i: int, x: float, y
 			var d: float = f.to_high[i]
 			return FOOT_BONUS * (1.0 - d / FOOT_NEAR) if d > FOOT_GAP and d <= FOOT_NEAR and w.slope[i] <= FOOT_SLOPE else -INF
 		"remote":
-			return REMOTE_BONUS * minf(nearest, REMOTE_FULL) / REMOTE_FULL if nearest >= REMOTE_MIN else -INF
+			if nearest < REMOTE_MIN or reason(w, f, i).is_empty(): return -INF
+			return REMOTE_BONUS * minf(nearest, REMOTE_FULL) / REMOTE_FULL
 	return 0.0
+
+
+## Причина удалённого места в клетке i (строка из REASONS[k][1..2]) или [] — причины нет
+static func reason(w: WorldData, f: Dictionary, i: int) -> Array:
+	for r: Array in REASONS:
+		var ok := false
+		match r[0]:
+			"mountain": ok = f.has("to_high") and f.to_high[i] <= FOOT_NEAR
+			"water": ok = w.dist_water[i] <= REMOTE_WATER
+			"forest": ok = f.depth[i] >= FOREST_DEPTH
+		if ok: return [r[1], r[2]]
+	return []
+
+
+## Характер места роли: [посёлок, деревня] или [] (тогда — по воде и биому)
+static func character(role: String, w: WorldData, f: Dictionary, i: int) -> Array:
+	if role == "remote" and not f.is_empty():
+		return reason(w, f, i)
+	return ROLES[role].character if ROLES.has(role) else []
 
 
 ## Наибольшая прибавка роли — граница просмотра отсортированного списка
