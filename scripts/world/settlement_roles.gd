@@ -73,20 +73,21 @@ static func fields(w: WorldData) -> Dictionary:
 	var forest_biome := PackedByteArray()
 	forest_biome.resize(Biomes.LIST.size())
 	for b: int in FOREST_BIOMES: forest_biome[b] = 1
-	var biome := w.biome
-	var elev := w.elev
 	var open := PackedByteArray()
-	open.resize(w.N)
 	var high := PackedByteArray()
-	high.resize(w.N)
-	var mountains := false
-	for i in w.N:
-		open[i] = 1 - forest_biome[biome[i]]
-		if elev[i] >= MOUNTAIN:
-			high[i] = 1
-			mountains = true
+	var fast := Grid.fast_grid()
+	if fast != null:
+		# Маски на C#: цикл по 590 тыс. клеток на GDScript стоил ~0,2 с
+		open = fast.OutsideBiomes(w.biome, forest_biome)
+		high = fast.AtLeast(w.elev, MOUNTAIN)
+	else:
+		open.resize(w.N)
+		high.resize(w.N)
+		for i in w.N:
+			open[i] = 1 - forest_biome[w.biome[i]]
+			high[i] = int(w.elev[i] >= MOUNTAIN)
 	var out := {depth = Grid.distance_field(w.W, w.H, open)}
-	if mountains:
+	if high.has(1):
 		out.to_high = Grid.distance_field(w.W, w.H, high)
 	return out
 

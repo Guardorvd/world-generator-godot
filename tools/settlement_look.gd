@@ -71,6 +71,7 @@ func _run() -> void:
 			var r: Dictionary = row.roads
 			print("    дороги: осталось %d из %d, отказы %s, связи %s, км %s, мостов %d, туннелей %d, вторые %s, этап %.1f с, домов %d" % [r.kept, r.placed,
 				JSON.stringify(r.failures), JSON.stringify(r.degrees), JSON.stringify(r.km), r.bridges, r.tunnels, JSON.stringify(r.second_ways), r.ms / 1000.0, r.homes])
+	_summary(rows, roads)
 	var sheet := MacroLook._sheet(maps)
 	sheet.save_png(ProjectSettings.globalize_path(OUT.path_join("settlement_look%s.png" % tag)))
 	var f := FileAccess.open(ProjectSettings.globalize_path(OUT.path_join("settlement_look%s.json" % tag)), FileAccess.WRITE)
@@ -78,6 +79,39 @@ func _run() -> void:
 	f.close()
 	print("OK ", ProjectSettings.globalize_path(OUT.path_join("settlement_look%s.json" % tag)))
 	quit(0)
+
+
+## Итог по всем сидам одной строкой (сравнивать прогоны: было — с --legacy, стало — без)
+func _summary(rows: Dictionary, roads: bool) -> void:
+	var total := {places = 0, by_water = 0, ms = 0.0}
+	var far: Array = []
+	var gaps: Array = []
+	var roles := {}
+	var trips := {links = 0, long_1km = 0, zones_2plus = 0, pass_20m = 0}
+	var kept := 0
+	var placed := 0
+	var stage_ms := 0.0
+	for seed_text: String in rows:
+		var row: Dictionary = rows[seed_text]
+		var p: Dictionary = row.places
+		total.places += p.n
+		total.by_water += p.by_water
+		total.ms += row.landmarks_ms
+		far.append(p.land_far_800m)
+		gaps.append(p.widest_gap_m)
+		for role: String in p.roles: roles[role] = int(roles.get(role, 0)) + int(p.roles[role][0])
+		if roads:
+			var r: Dictionary = row.roads
+			kept += r.kept
+			placed += r.placed
+			stage_ms += r.ms
+			for key: String in trips: trips[key] += int(r.journeys[key])
+	far.sort()
+	gaps.sort()
+	print("ИТОГ: мест %d, у воды %d %%, пустая суша (медиана) %d %%, наименьший просвет %d м, роли %s, отбор %.0f мс на сид" % [total.places,
+		roundi(100.0 * total.by_water / maxi(1, total.places)), roundi(far[far.size() / 2] * 100.0), gaps[0], JSON.stringify(roles), total.ms / maxi(1, rows.size())])
+	if roads:
+		print("ИТОГ дорог: осталось %d из %d мест, поездки %s, этап путей %.1f с на сид" % [kept, placed, JSON.stringify(trips), stage_ms / 1000.0 / maxi(1, rows.size())])
 
 
 ## Пригодная суша — те же условия, что у кандидатов (без доступа по пяти пробам), шаг 6 клеток

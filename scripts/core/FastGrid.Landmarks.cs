@@ -101,6 +101,22 @@ public partial class FastGrid
 		return result;
 	}
 
+	/// <summary>SettlementRoles.fields: 1 where the cell's biome is NOT in the table (open land for the forest depth field).</summary>
+	public byte[] OutsideBiomes(byte[] biome, byte[] table)
+	{
+		var result = new byte[biome.Length];
+		for (int i = 0; i < biome.Length; i++) result[i] = table[biome[i]] != 0 ? (byte)0 : (byte)1;
+		return result;
+	}
+
+	/// <summary>SettlementRoles.fields: 1 where value is at least threshold (mountains for the distance-to-mountains field).</summary>
+	public byte[] AtLeast(float[] values, double threshold)
+	{
+		var result = new byte[values.Length];
+		for (int i = 0; i < values.Length; i++) result[i] = values[i] >= threshold ? (byte)1 : (byte)0;
+		return result;
+	}
+
 	/// <summary>Exact Grid.bridge_region traversal, including first-region tie breaking.</summary>
 	public byte[] BridgeRegion(int w, int h, byte[] wet, int maxSpan)
 	{
