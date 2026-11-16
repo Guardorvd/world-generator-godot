@@ -93,6 +93,16 @@ func run() -> int:
 	var right := plain(Rect2i(256, 0, 256, 256))
 	var no_water := {rivers = [], outlets = [], unresolved = []}
 	var p := Regions.finish_neighbors(source, [left, right], [no_water, no_water])
+	if not RoadPolicy.NETWORK:
+		# 16.11.2026: соседние области — только вид. Проверяется, что поселений и дорог там нет, а поля
+		# для воды и растительности готовы; проверки сети ниже относятся к RegionRoads.NETWORK = true.
+		check(p.ready and p.settlements[0].is_empty() and p.settlements[1].is_empty(), "в соседних областях нет поселений (только вид)")
+		var visual := Regions.prepare_roads(source, [left, right], p)
+		check(visual.get("sample_rect") is Rect2i and visual.trails.is_empty() and visual.settlements.is_empty() and visual.exits.is_empty()
+			and visual.path_mask.count(0) == visual.path_mask.size() and visual.get("dist_path") != null,
+			"в соседних областях нет дорог и выходов, поля для растительности готовы")
+		completed = true
+		return fails
 	check(p.ready and not p.settlements[0].is_empty() and not p.settlements[1].is_empty(), "пригодные соседи получают площадки поселений")
 	var valid := true
 	var seen := {}

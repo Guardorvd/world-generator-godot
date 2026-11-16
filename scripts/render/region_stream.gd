@@ -25,7 +25,7 @@ const HIDE := OuterTerrain.DROP + 200.0     # м: дальше узлы обла
 const KEEP := 2800.0                        # м: ближе поля клеток в памяти (соседи готовящейся области — ближе)
 const EVICT := 3400.0                       # м: дальше поля клеток выгружаются из памяти
 const RECHECK := 32.0                       # м пути между пересмотром очереди и выгрузки
-const FORMAT := 4                           # foundation clearance: rebuild old regional building layouts
+const FORMAT := 5                           # 16.11.2026: regions are visual only (no settlements/roads); 4: foundation clearance
 ## 07.11.2026: соседние области — только вид, своей трассы у них нет (прежний поиск TrailScout — 1 в ключе журнала,
 ## до 8 с на область). 0 в ключе: журналы с трассами областей не подходят и готовятся заново, без трасс.
 const REGION_TRAILS := 0

@@ -44,6 +44,12 @@ static func finish_neighbors(source: WorldData, regions: Array, networks: Array,
 	batch.geographies = [] # уклоны, расстояния до воды и биомы областей; живут, пока жив пакет
 	if not batch.ready: return batch
 	for i in regions.size():
+		# 16.11.2026: соседние области — только вид (Roads.NETWORK): поселений там нет, география считается в Roads.prepare.
+		if not Roads.NETWORK:
+			batch.settlements.append([])
+			batch.settlement_profiles.append({})
+			batch.geographies.append({})
+			continue
 		var places := Settlements.prepare(source, regions[i], batch.surfaces[i], ledger)
 		batch.settlements.append(places.settlements)
 		batch.settlement_profiles.append(places.get("profile", {}))

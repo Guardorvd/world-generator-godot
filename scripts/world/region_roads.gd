@@ -13,6 +13,10 @@ const APPROACH := 64 # клеток: глубина подхода к старо
 const EXIT_MARGIN := 12 # выход не ставится у угла области
 const PLAN := "plan" # метка сети, связанной со старыми дорогами плана
 const SIDES := [Vector2i.UP, Vector2i.RIGHT, Vector2i.DOWN, Vector2i.LEFT]
+## 16.11.2026: соседние области — только вид. Поселений (RegionPreparation.finish_neighbors их не выбирает), дорог,
+## подходов к сети плана и выходов там нет; prepare отдаёт только поля для воды и растительности.
+## true возвращает прежнюю сеть областей (код оставлен до решения, удалять ли его совсем).
+const NETWORK := false
 ## P2 аудита 29.10, замер на стенде соседей (две области 256, два запуска с обратным порядком политик):
 ## когда связи удаются с первой попытки, фоновый запасной поиск (prefetch) делает столько же раскрытий,
 ## сколько основной, и ни разу не нужен (83 579 + 83 579 против 83 579). У реки без моста он нужен 4 раза,
@@ -99,7 +103,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			open[i] = 1
 		elif plan.has_point(cell) and not wet and blocked[i] == 0:
 			open[i] = 1
-			if w.path_mask[i] >= 2: targets.append(i)
+			if NETWORK and w.path_mask[i] >= 2: targets.append(i)
 		w.cost[i] = INF if open[i] == 0 or wet and span_reach[i] > StageTrails.BRIDGE_REACH else (bridge_cost if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
 		if edge_dist[i] < StageTrails.EDGE_COST_BAND + 1:
 			w.cost[i] += StageTrails.edge_cost(edge_dist[i] - 1.0)
@@ -115,7 +119,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		nodes.append({id = s.id, i = s.i, net = ""})
 	var edge_of := {} # локальная клетка выхода -> точка на границе области
 	var incoming: Array = []
-	for exit: Dictionary in ledger.get("exits", []):
+	for exit: Dictionary in (ledger.get("exits", []) if NETWORK else []):
 		var cell := Vector2i(floori(exit.x + exit.dx * 0.5), floori(exit.y + exit.dy * 0.5))
 		for region: Dictionary in regions:
 			if region.rect.has_point(cell): incoming.append(exit)
@@ -135,61 +139,16 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	# обходится — это известно до сооружений (ревью дорожной сети 29.10, шаг 1).
 	var state := {detour = false, tunnels = false, on_axis = PackedByteArray(), surface = ground, failures = {}}
 	state.on_axis.resize(w.N)
-	var heights := ground.hv.duplicate()
-	for i in heights.size():
-		# Поиск переправы оценивает воду, а не уклон спуска на дно.
-		if StageTrails._wet(w, i): heights[i] = maxf(heights[i], ground.water_level[i])
-		heights[i] /= GameConfig.TILE
-	var finder := Pathfinder.new(w.W, w.H, heights)
-	finder.eager_fallback = eager_fallback
-	StageTrails._route_surface(finder, ground, RoadTuning.current().section.widths.road)
-	# Один суммарный бюджет на группу, включая неудачные направления.
-	finder.search_budget = w.N * 4
-	# Пара со старой сетью идёт к ближайшей клетке её дороги в полосе подхода.
-	var pairs: Array = []
-	for a in nodes.size():
-		for b in range(a + 1, nodes.size()):
-			if nodes[a].i < 0: continue
-			var choices := PackedInt32Array([nodes[b].i]) if nodes[b].i >= 0 else _plan_targets(w, targets, nodes[a].i)
-			for to: int in choices:
-				pairs.append([_distance2(w, nodes[a].i, to), a, b, to])
-	pairs.sort_custom(func(a: Array, b: Array) -> bool:
-		return a[0] < b[0] or a[0] == b[0] and (a[1] < b[1] or a[1] == b[1] and a[2] < b[2]))
 	var edges: Array = []
 	var attempts := 0
-	for pair: Array in pairs:
-		var a: int = pair[1]
-		var b: int = pair[2]
-		if _root(groups, a) == _root(groups, b): continue
-		if finder.search_budget <= 0 or attempts >= maxi(1, nodes.size() * 3): break
-		if stop.is_valid() and stop.call():
-			finder.release()
-			return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
-		attempts += 1
-		# 11.11.2026: подход к сети плана — того же класса, что её путь в точке примыкания (тропа плана не продолжается дорогой)
-		var kind := "trail" if nodes[b].i < 0 and w.path_mask[pair[3]] == 2 else "road"
-		if not _build(w, finder, state, open, nodes[a].i, pair[3], kind): continue
-		edges.append({from = nodes[a].id, to = nodes[b].id})
-		_join(groups, a, b)
-	# Выходы на свободные стороны: следующий сосед продолжит дорогу, а не начнёт заново.
 	var exits: Array = []
-	for n: int in order:
-		var rect: Rect2i = regions[n].rect
-		for d: Vector2i in SIDES:
-			if finder.search_budget <= 0: break
-			if stop.is_valid() and stop.call():
-				finder.release()
-				return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
-			var beyond := Rect2i(rect.position + d * rect.size, rect.size)
-			if not _free_side(beyond, regions, ledger, plan): continue
-			var from := _side_node(w, nodes, bounds, rect, d)
-			if from < 0: continue
-			var cell := _side_cell(w, fields, open, bounds, rect, d, nodes[from].i)
-			if cell < 0 or not _build(w, finder, state, open, nodes[from].i, cell): continue
-			edge_of[cell] = Vector2(cell % w.W, cell / w.W) + Vector2.ONE * 0.5 + Vector2(d) * 0.5
-			exits.append({cell = cell, dx = d.x, dy = d.y, node = from})
-	profile.merge(finder.search_stats())
-	finder.release()
+	# Без узлов с клетками (NETWORK = false: ни поселений, ни выходов, ни подходов) поиск не нужен совсем.
+	if nodes.any(func(node: Dictionary) -> bool: return node.i >= 0):
+		var cancelled := _search(w, ground, state, open, nodes, groups, targets, regions, order, ledger, plan, bounds, fields,
+			edge_of, edges, exits, profile, stop)
+		if cancelled:
+			return {ready = false, reason = "cancelled", trails = [], settlements = [], exits = []}
+		attempts = profile.get("attempts", 0)
 	profile.roads_ms = (Time.get_ticks_usec() - started) / 1000.0
 	profile.checkpoints = state.get("checkpoints", 0)
 	profile.checkpoint_mb = state.get("checkpoint_bytes", 0) / 1048576.0
@@ -293,6 +252,68 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		elev = w.elev, temp = w.temp, moist = w.moist, light = w.generation.light,
 		slope = w.slope, dw = w.dist_water, dist_path = dist_path, village = village,
 		profile = profile} # время и счётчики работы; при сравнении результатов не учитывать
+
+
+## Связи между узлами области и выходы на свободные стороны (штатный поиск; при NETWORK = false не вызывается).
+## true — отменено (stop).
+static func _search(w: WorldData, ground: Variant, state: Dictionary, open: PackedByteArray, nodes: Array, groups: Array,
+		targets: PackedInt32Array, regions: Array, order: Array, ledger: Dictionary, plan: Rect2i, bounds: Rect2i,
+		fields: Dictionary, edge_of: Dictionary, edges: Array, exits: Array, profile: Dictionary, stop: Callable) -> bool:
+	var attempts := 0
+	var heights: PackedFloat32Array = ground.hv.duplicate()
+	for i in heights.size():
+		# Поиск переправы оценивает воду, а не уклон спуска на дно.
+		if StageTrails._wet(w, i): heights[i] = maxf(heights[i], ground.water_level[i])
+		heights[i] /= GameConfig.TILE
+	var finder := Pathfinder.new(w.W, w.H, heights)
+	finder.eager_fallback = eager_fallback
+	StageTrails._route_surface(finder, ground, RoadTuning.current().section.widths.road)
+	# Один суммарный бюджет на группу, включая неудачные направления.
+	finder.search_budget = w.N * 4
+	# Пара со старой сетью идёт к ближайшей клетке её дороги в полосе подхода.
+	var pairs: Array = []
+	for a in nodes.size():
+		for b in range(a + 1, nodes.size()):
+			if nodes[a].i < 0: continue
+			var choices := PackedInt32Array([nodes[b].i]) if nodes[b].i >= 0 else _plan_targets(w, targets, nodes[a].i)
+			for to: int in choices:
+				pairs.append([_distance2(w, nodes[a].i, to), a, b, to])
+	pairs.sort_custom(func(a: Array, b: Array) -> bool:
+		return a[0] < b[0] or a[0] == b[0] and (a[1] < b[1] or a[1] == b[1] and a[2] < b[2]))
+	for pair: Array in pairs:
+		var a: int = pair[1]
+		var b: int = pair[2]
+		if _root(groups, a) == _root(groups, b): continue
+		if finder.search_budget <= 0 or attempts >= maxi(1, nodes.size() * 3): break
+		if stop.is_valid() and stop.call():
+			finder.release()
+			return true
+		attempts += 1
+		# 11.11.2026: подход к сети плана — того же класса, что её путь в точке примыкания (тропа плана не продолжается дорогой)
+		var kind := "trail" if nodes[b].i < 0 and w.path_mask[pair[3]] == 2 else "road"
+		if not _build(w, finder, state, open, nodes[a].i, pair[3], kind): continue
+		edges.append({from = nodes[a].id, to = nodes[b].id})
+		_join(groups, a, b)
+	# Выходы на свободные стороны: следующий сосед продолжит дорогу, а не начнёт заново.
+	for n: int in order:
+		var rect: Rect2i = regions[n].rect
+		for d: Vector2i in SIDES:
+			if finder.search_budget <= 0: break
+			if stop.is_valid() and stop.call():
+				finder.release()
+				return true
+			var beyond := Rect2i(rect.position + d * rect.size, rect.size)
+			if not _free_side(beyond, regions, ledger, plan): continue
+			var from := _side_node(w, nodes, bounds, rect, d)
+			if from < 0: continue
+			var cell := _side_cell(w, fields, open, bounds, rect, d, nodes[from].i)
+			if cell < 0 or not _build(w, finder, state, open, nodes[from].i, cell): continue
+			edge_of[cell] = Vector2(cell % w.W, cell / w.W) + Vector2.ONE * 0.5 + Vector2(d) * 0.5
+			exits.append({cell = cell, dx = d.x, dy = d.y, node = from})
+	profile.merge(finder.search_stats())
+	finder.release()
+	profile.attempts = attempts
+	return false
 
 
 ## Штатный поиск, мосты и проверка ленты; непригодная связь откатывается целиком.
