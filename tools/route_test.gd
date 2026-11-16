@@ -165,7 +165,7 @@ func _surface_check() -> void:
 	for k in range(1, p.size()):
 		var a := {x = p[k - 1] % w.W + 0.5, y = p[k - 1] / w.W + 0.5, w = 0.0}
 		var b := {x = p[k] % w.W + 0.5, y = p[k] / w.W + 0.5, w = 0.0}
-		drivable = drivable and StageTrails._road_segment(ground, a, b)
+		drivable = drivable and StageTrails.RoadLine.segment_ok(ground, a, b)
 	_check(drivable and passed, "дорога обходит обрыв через проход с проезжаемым уклоном игрового меша")
 	if Grid.allow_fast:
 		Grid.allow_fast = false
@@ -178,19 +178,19 @@ func _surface_check() -> void:
 	ground = Heightfield.new(w, false)
 	var a := {x = 5.0, y = 4.5, w = 0.9}
 	var b := {x = 5.0, y = 5.5, w = 0.9}
-	_check(StageTrails._road_segment(ground, a, b), "пологий подход непосредственно к воде разрешён")
+	_check(StageTrails.RoadLine.segment_ok(ground, a, b), "пологий подход непосредственно к воде разрешён")
 	var q := {x = 5.8, y = 4.5, w = 0.9}
 	var r := {x = 5.8, y = 6.5, w = 0.9}
-	_check(not StageTrails._road_segment(ground, q, r), "сглаживание не уводит край дороги в глубокую воду")
+	_check(not StageTrails.RoadLine.segment_ok(ground, q, r), "сглаживание не уводит край дороги в глубокую воду")
 	w.lake.fill(0)
 	w.h[5 * w.W + 6] = 0.2
 	ground = Heightfield.new(w, false)
-	_check(not StageTrails._road_segment(ground, q, r), "сглаживание проверяет крутизну под всей шириной дороги")
+	_check(not StageTrails.RoadLine.segment_ok(ground, q, r), "сглаживание проверяет крутизну под всей шириной дороги")
 	var axis := PackedByteArray()
 	axis.resize(w.N)
 	axis[5 * w.W + 5] = 1
 	var corner := [a, b, {x = 6.5, y = 5.5, w = 0.9}]
-	_check(StageTrails._road_line(w, corner, axis, ground) == corner, "скругление сохраняет точный вход на ось сооружения")
+	_check(StageTrails.RoadLine.build(w, corner, axis, ground) == corner, "скругление сохраняет точный вход на ось сооружения")
 	# Непригодная переправа не должна превращаться в мост ради связи любой ценой.
 	w.h.fill(0.1)
 	w.h[4 * w.W + 8] = 0.2
@@ -301,7 +301,7 @@ func _corridor_check() -> void:
 	for k in range(1, wide.size()):
 		var a := {x = wide[k - 1] % w.W + 0.5, y = wide[k - 1] / w.W + 0.5, w = 0.9}
 		var b := {x = wide[k] % w.W + 0.5, y = wide[k] / w.W + 0.5, w = 0.9}
-		safe = safe and StageTrails._road_segment(surface, a, b)
+		safe = safe and StageTrails.RoadLine.segment_ok(surface, a, b)
 	_check(wide != axis and safe, "поиск по ширине уводит горизонтальную дорогу со стены на пологую землю")
 	var narrow := cost.duplicate()
 	narrow.fill(INF)
@@ -328,7 +328,7 @@ func _corridor_check() -> void:
 	var points: Array = w.trails[0].pts
 	safe = Vector2(points[0].x, points[0].y) == Vector2(2.5, 8.5)
 	for k in range(1, points.size()):
-		safe = safe and StageTrails._road_segment(surface, points[k - 1], points[k])
+		safe = safe and StageTrails.RoadLine.segment_ok(surface, points[k - 1], points[k])
 	_check(safe, "обычная тропа после скругления сохраняет безопасный проход и точный вход")
 
 
@@ -435,11 +435,11 @@ func _technical_check() -> void:
 			w.h[y * w.W + x] = (20.0 + x * GameConfig.TILE * 0.5) / GameConfig.HS
 	var surface := Heightfield.new(w, false)
 	var corner: Array = [{x = 4.5, y = 4.5, w = 0.42}, {x = 6.5, y = 4.5, w = 0.42}, {x = 8.5, y = 6.5, w = 0.42}]
-	var mountain := StageTrails._road_line(w, corner, PackedByteArray(), surface, "mountain")
-	_check(mountain.size() > corner.size() and StageTrails._road_line(w, corner, PackedByteArray(), surface) == corner,
+	var mountain := StageTrails.RoadLine.build(w, corner, PackedByteArray(), surface, "mountain")
+	_check(mountain.size() > corner.size() and StageTrails.RoadLine.build(w, corner, PackedByteArray(), surface) == corner,
 		"горная тропа скругляется на своём допустимом уклоне, дорога такой угол не срезает")
 	for i in w.N: w.h[i] *= 1.5
-	_check(StageTrails._road_line(w, corner, PackedByteArray(), Heightfield.new(w, false), "mountain") == corner,
+	_check(StageTrails.RoadLine.build(w, corner, PackedByteArray(), Heightfield.new(w, false), "mountain") == corner,
 		"скругление горной тропы не срезает угол через обрыв")
 
 

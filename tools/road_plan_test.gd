@@ -116,7 +116,7 @@ func _initialize() -> void:
 	for key: String in w.generation_profile:
 		if key in KEYS or key.begins_with("mountain_"): profile[key] = w.generation_profile[key]
 	print("загрузка %d мс, места %d мс, пути %d мс" % [load_ms, landmarks_ms, trails_ms])
-	print("линий без поблажки на бугры (профиль круче предела): ", StageTrails.line_fallbacks)
+	print("линий без поблажки на бугры (профиль круче предела): ", StageTrails.RoadLine.fallbacks)
 	print("PROFILE ", JSON.stringify(profile))
 	print("SECOND WAYS ", JSON.stringify(w.generation_profile.get("second_ways", [])), " повышено до дорог, м: ", w.generation_profile.get("upgraded_m", 0))
 	for link: Array in w.generation_profile.get("road_links", []):

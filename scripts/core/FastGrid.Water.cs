@@ -4,7 +4,7 @@ using Godot;
 
 /// <summary>
 /// Земля и вода базового рельефа для дорожного этапа (с 9.7): копии Heightfield.base_ground_at, river_level,
-/// lake_level, depth_at без настилов мостов и StageTrails._road_segment. Только для рельефа генерации:
+/// lake_level, depth_at без настилов мостов и StageTrails.RoadLine.segment_ok. Только для рельефа генерации:
 /// без полотна дорог (RoadRefinement) и без земли за краем карты (OuterLand). Арифметика как в GDScript:
 /// double, значения массивов и вершин лент — float.
 /// </summary>
@@ -206,7 +206,7 @@ public partial class FastGrid
 		return outCells.ToArray();
 	}
 
-	/// <summary>Копия StageTrails._road_segment: участок ленты от (ax, ay) до (bx, by) шириной aw (клетки)
+	/// <summary>Копия StageTrails.RoadLine.segment_ok: участок ленты от (ax, ay) до (bx, by) шириной aw (клетки)
 	/// не уходит в воду глубже 0,3 м и не круче maxGrade вдоль и maxCross поперёк.</summary>
 	public bool RoadSegment(double ax, double ay, double bx, double by, double aw, double maxGrade, double maxCross)
 	{

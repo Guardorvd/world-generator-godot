@@ -44,7 +44,7 @@ func _initialize() -> void:
 		for x in range(2, 10):
 			var a := {x = float(x), y = float(y), w = 0.9}
 			var b := {x = float(x + 1), y = float(y + 1), w = 0.9}
-			same = same and StageTrails._road_segment(h, a, b, 0.35, 0.8) == native.RoadSegment(a.x, a.y, b.x, b.y, a.w, 0.35, 0.8)
+			same = same and StageTrails.RoadLine.segment_ok(h, a, b, 0.35, 0.8) == native.RoadSegment(a.x, a.y, b.x, b.y, a.w, 0.35, 0.8)
 	check(same, "native road grade, cross slope and depth decisions match GDScript")
 	var replacement := h.hv.duplicate()
 	replacement.fill(80)

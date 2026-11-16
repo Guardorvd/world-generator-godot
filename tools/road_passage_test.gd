@@ -199,24 +199,24 @@ func turns() -> void:
 	var ground := TestGround.new(w, false)
 	var elbow := Vector2(40.5, 40.5)
 	var right_angle := points([Vector2(28.5, 40.5), elbow, Vector2(40.5, 52.5)])
-	var flat := StageTrails._road_line(w, right_angle, PackedByteArray(), ground)
+	var flat := StageTrails.RoadLine.build(w, right_angle, PackedByteArray(), ground)
 	check(not on_polyline(flat, elbow) and flat[0] == right_angle[0] and flat[-1] == right_angle[-1],
 		"ordinary bend is rounded and keeps its endpoints")
 	ride_bend(w, flat)
-	var trimmed := StageTrails._road_line(w, right_angle, PackedByteArray(), ground, "road", {},
+	var trimmed := StageTrails.RoadLine.build(w, right_angle, PackedByteArray(), ground, "road", {},
 		func(curve: Array) -> bool: return curve[0].x > 38.5)
 	check(not on_polyline(trimmed, elbow) and trimmed != flat, "blocked long entry retries with a shifted curve")
 	ground.wet = Rect2(36.0, 39.0, 6.0, 6.0)
-	var wet := StageTrails._road_line(w, right_angle, PackedByteArray(), ground)
+	var wet := StageTrails.RoadLine.build(w, right_angle, PackedByteArray(), ground)
 	check(on_polyline(wet, elbow), "a wet corridor keeps the original bend")
 	ground.wet = Rect2()
 
 	var pins := PackedByteArray()
 	pins.resize(w.N)
 	pins[40 * w.W + 40] = 1
-	check(on_polyline(StageTrails._road_line(w, right_angle, pins, ground), elbow), "structure axis is pinned")
+	check(on_polyline(StageTrails.RoadLine.build(w, right_angle, pins, ground), elbow), "structure axis is pinned")
 	var dogleg := points([Vector2(34.5, 40.5), elbow, Vector2(41.5, 41.5), Vector2(47.5, 41.5)])
-	var relaxed := StageTrails._road_line(w, dogleg, PackedByteArray(), ground)
+	var relaxed := StageTrails.RoadLine.build(w, dogleg, PackedByteArray(), ground)
 	check(not on_polyline(relaxed, elbow) and not on_polyline(relaxed, Vector2(41.5, 41.5)),
 		"opposite grid turns share one transition")
 	var tight := points([Vector2(38.5, 39.5), Vector2(39.5, 40.5), elbow, Vector2(41.5, 41.5)])
@@ -228,39 +228,39 @@ func turns() -> void:
 		if curve[0].x < tight[1].x and curve[-1].x > elbow.x:
 			groups.append(curve)
 		return true
-	var joined := StageTrails._road_line(w, tight, PackedByteArray(), ground, "road", {}, collect_groups)
+	var joined := StageTrails.RoadLine.build(w, tight, PackedByteArray(), ground, "road", {}, collect_groups)
 	check(groups.size() == 1 and joined.has(groups[0][0])
 		and joined[0] == tight[0] and joined[-1] == tight[-1], "tight S-bend uses a shared transition")
 	groups.clear()
-	StageTrails._road_line(w, tight, PackedByteArray(), ground, "trail", {}, collect_groups, "road")
+	StageTrails.RoadLine.build(w, tight, PackedByteArray(), ground, "trail", {}, collect_groups, "road")
 	check(groups.is_empty(), "trail retains ordinary curve selection with road design limits")
 	var uneven := points([Vector2(38.5, 40.5), elbow, Vector2(41.5, 41.5), Vector2(43.5, 39.5)])
 	var collect_uneven := func(curve: Array) -> bool:
 		if curve[0].x < elbow.x and curve[-1].x > uneven[2].x:
 			groups.append(curve)
 		return true
-	StageTrails._road_line(w, uneven, PackedByteArray(), ground, "trail", {}, collect_uneven, "road")
+	StageTrails.RoadLine.build(w, uneven, PackedByteArray(), ground, "trail", {}, collect_uneven, "road")
 	check(groups.is_empty(), "standard candidates cannot fit the uneven S-bend")
-	var retry := StageTrails._road_line(w, uneven, PackedByteArray(), ground, "road", {}, collect_uneven)
+	var retry := StageTrails.RoadLine.build(w, uneven, PackedByteArray(), ground, "road", {}, collect_uneven)
 	check(groups.size() == 1 and retry.has(groups[0][0]) and retry[0] == uneven[0] and retry[-1] == uneven[-1],
 		"uneven S-bend fits a shared curve with asymmetric handles")
 	StageTrails.routing_overrides = overrides
 	var hairpin := points([Vector2(28.5, 40.5), elbow, Vector2(30.5, 50.5)], RoadTuning.current().section.widths.mountain)
-	check(not on_polyline(StageTrails._road_line(w, hairpin, PackedByteArray(), ground, "mountain"), elbow),
+	check(not on_polyline(StageTrails.RoadLine.build(w, hairpin, PackedByteArray(), ground, "mountain"), elbow),
 		"switchback fits at the lower design speed")
 
 	var control := [Vector2(38.5, 40.5), Vector2(39.6, 40.5), Vector2(40.5, 41.4), Vector2(40.5, 42.5)]
 	var corridor := [Vector2(38.5, 40.5), elbow, Vector2(40.5, 42.5)]
 	var rules := {grade = 0.28, cross = 0.65, accel = 5.4, axis = PackedByteArray(), probe = null, corridor = Callable(), relax = 0.0}
 	ground.grade_x = 0.24
-	var slow := StageTrails._road_curve(ground, control, corridor, 0.9, 3.0, rules)
-	var fast := StageTrails._road_curve(ground, control, corridor, 0.9, 6.3, rules)
+	var slow := StageTrails.RoadLine.fit_curve(ground, control, corridor, 0.9, 3.0, rules)
+	var fast := StageTrails.RoadLine.fit_curve(ground, control, corridor, 0.9, 6.3, rules)
 	ground.grade_x = 0.0
-	var fast_flat := StageTrails._road_curve(ground, control, corridor, 0.9, 6.3, rules)
+	var fast_flat := StageTrails.RoadLine.fit_curve(ground, control, corridor, 0.9, 6.3, rules)
 	check(not slow.is_empty() and fast.is_empty() and not fast_flat.is_empty(), "same radius and grade fit separately but exceed the combined budget")
 	ground.wet = Rect2(38.38, 40.0, 0.28, 0.18)
-	var wide := StageTrails._road_curve(ground, control, corridor, 0.9, 3.0, rules)
-	var narrow := StageTrails._road_curve(ground, control, corridor, 0.42, 3.0, rules)
+	var wide := StageTrails.RoadLine.fit_curve(ground, control, corridor, 0.9, 3.0, rules)
+	var narrow := StageTrails.RoadLine.fit_curve(ground, control, corridor, 0.42, 3.0, rules)
 	check(wide.is_empty() and not narrow.is_empty(), "water at the outer edge rejects the wide curve")
 
 
@@ -311,7 +311,7 @@ func junction() -> void:
 	var ground := TestGround.new(w, false)
 	var node := Vector2(40.5, 40.5)
 	var branch := points([node, Vector2(52.5, 43.5)])
-	var shaped := StageTrails._road_line(w, branch, PackedByteArray(), ground, "road", {0: {tangent = Vector2.RIGHT}})
+	var shaped := StageTrails.RoadLine.build(w, branch, PackedByteArray(), ground, "road", {0: {tangent = Vector2.RIGHT}})
 	var heading := (Vector2(shaped[1].x, shaped[1].y) - node).angle()
 	check(shaped[0] == branch[0] and heading > deg_to_rad(24), "merge keeps the node and opens a readable approach angle")
 

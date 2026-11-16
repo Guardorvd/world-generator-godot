@@ -172,7 +172,7 @@ func ride(h: Heightfield, lane: int, hz: int) -> void:
 
 func short_switchback_contract() -> void:
 	var w := Fixture.world()
-	var pts := StageTrails._road_stations([
+	var pts := StageTrails.RoadLine.stations([
 		{x = 15.5, y = 30.5, w = 0.75}, {x = 55.5, y = 30.5, w = 0.75},
 		{x = 55.5, y = 31.5, w = 0.75}, {x = 15.5, y = 31.5, w = 0.75}])
 	var surf := PackedByteArray()
