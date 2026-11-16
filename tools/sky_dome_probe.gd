@@ -40,7 +40,7 @@ var dome: Node
 
 
 func _initialize() -> void:
-	preload("res://tools/watchdog.gd").arm(self, 120)
+	preload("res://tools/watchdog.gd").arm(self, 150)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://.godot/sky_probe"))
 	root.size = Vector2i(1280, 720)
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -101,33 +101,44 @@ func _half_res_test() -> void:
 	env.sky.sky_material = old
 
 
-func _measure(label: String, shader: Shader, steps: int, forest: bool, use_dome := false) -> void:
-	day.sky_mat.shader = shader
-	day.sky_mat.set_meta("cloud_dome", use_dome)
+const Lighting := preload("res://scripts/render/lighting_quality.gd")
+const MODES := ["низкие (купол)", "средние (облегч.)", "высокие (прежние)"]
+
+
+## Качество облаков как в игре: LightingQuality.apply_clouds (0 — купол, 1 — облегчённые, 2 — прежние)
+func _mode(q: int, steps: int) -> void:
+	day.sky_mat.shader = real_shader
+	Lighting.apply_clouds(env, q)
 	day.sky_mat.set_shader_parameter("cumulus_steps", steps)
+
+
+func _measure(label: String, forest: bool, q := -1, steps := 2, shader: Shader = null) -> void:
+	if q >= 0:
+		_mode(q, steps)
+	else:
+		day.sky_mat.shader = shader
+		day.sky_mat.set_meta("cloud_dome", false)
 	cover.visible = forest
 	camera.rotation = Vector3(0.12, 0.6, 0.0)
 	var rid := root.get_viewport_rid()
+	var dome_rid: RID = dome.get_child(0).get_viewport_rid()
 	var t := 100.0
 	for i in 20:
 		t += 0.05
 		day.apply(13.2, t)
 		await process_frame
 	var gpu := 0.0
-	var cpu_ms := 0.0
 	var n := 90
-	var t0 := Time.get_ticks_usec()
 	for i in n:
 		t += 0.05
 		day.apply(13.2, t)
 		await process_frame
-		gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid) + (RenderingServer.viewport_get_measured_render_time_gpu(dome.get_child(0).get_viewport_rid()) if use_dome else 0.0)
-	cpu_ms = float(Time.get_ticks_usec() - t0) / 1000.0 / n
-	print("%-28s gpu %.2f ms   frame %.2f ms" % [label, gpu / n, cpu_ms])
+		gpu += RenderingServer.viewport_get_measured_render_time_gpu(rid) + (RenderingServer.viewport_get_measured_render_time_gpu(dome_rid) if q == 0 else 0.0)
+	print("%-34s gpu %.2f ms" % [label, gpu / n])
 
 
-func _shot(hour: float, use_dome: bool) -> Image:
-	day.sky_mat.set_meta("cloud_dome", use_dome)
+func _shot(hour: float, q: int) -> Image:
+	_mode(q, 2)
 	for i in 6:
 		day.apply(hour, 140.0)
 		await process_frame
@@ -137,27 +148,29 @@ func _shot(hour: float, use_dome: bool) -> Image:
 	return img
 
 
+## Сверка с прежними облаками: средняя и наибольшая разница, лист прежние | средние | низкие
 func _compare(label: String, hour: float, dir: Vector3) -> void:
 	cover.visible = false
-	day.sky_mat.set_shader_parameter("cumulus_steps", 2)
 	camera.look_at_from_position(Vector3(0, 3, 0), Vector3(0, 3, 0) + dir * 100.0)
-	var a := await _shot(hour, false)
-	var b := await _shot(hour, true)
-	var diff := 0.0
-	var mx := 0.0
-	var n := 0
-	for y in range(0, a.get_height(), 4):
-		for x in range(0, a.get_width(), 4):
-			var ca := a.get_pixel(x, y)
-			var cb := b.get_pixel(x, y)
-			var dd := (absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)) / 3.0
-			diff += dd
-			mx = maxf(mx, dd)
-			n += 1
-	print("сравнение %s: средняя разница %.4f, наибольшая %.3f (в долях 0..1)" % [label, diff / n, mx])
-	var sheet := Image.create(a.get_width() * 2, a.get_height(), false, Image.FORMAT_RGB8)
-	sheet.blit_rect(a, Rect2i(Vector2i.ZERO, a.get_size()), Vector2i.ZERO)
-	sheet.blit_rect(b, Rect2i(Vector2i.ZERO, b.get_size()), Vector2i(a.get_width(), 0))
+	var shots: Array[Image] = [await _shot(hour, 2), await _shot(hour, 1), await _shot(hour, 0)]
+	var a := shots[0]
+	for k in [1, 2]:
+		var b := shots[k]
+		var diff := 0.0
+		var mx := 0.0
+		var n := 0
+		for y in range(0, a.get_height(), 4):
+			for x in range(0, a.get_width(), 4):
+				var ca := a.get_pixel(x, y)
+				var cb := b.get_pixel(x, y)
+				var dd := (absf(ca.r - cb.r) + absf(ca.g - cb.g) + absf(ca.b - cb.b)) / 3.0
+				diff += dd
+				mx = maxf(mx, dd)
+				n += 1
+		print("сравнение %s, %s с прежними: средняя разница %.4f, наибольшая %.3f" % [label, MODES[2 - k], diff / n, mx])
+	var sheet := Image.create(a.get_width() * 3, a.get_height(), false, Image.FORMAT_RGB8)
+	for k in 3:
+		sheet.blit_rect(shots[k], Rect2i(Vector2i.ZERO, a.get_size()), Vector2i(a.get_width() * k, 0))
 	sheet.save_png(ProjectSettings.globalize_path("res://.godot/sky_probe/cmp_%s.png" % label))
 
 
@@ -169,12 +182,11 @@ func _run() -> void:
 	plain.code = PLAIN_SH
 	for forest in [false, true]:
 		var where := "лес " if forest else "небо"
-		await _measure(where + " простое", plain, 2, forest)
-		await _measure(where + " настоящее 2 шага", real_shader, 2, forest)
-		await _measure(where + " настоящее 5 шагов", real_shader, 5, forest)
-		await _measure(where + " купол 2 шага", real_shader, 2, forest, true)
-		await _measure(where + " купол 5 шагов", real_shader, 5, forest, true)
-	day.sky_mat.shader = real_shader
+		await _measure(where + " без облаков", forest, -1, 2, plain)
+		for q in [2, 1, 0, 2]:
+			await _measure("%s %s, 2 шага" % [where, MODES[q]], forest, q)
+		await _measure(where + " высокие, 5 шагов", forest, 2, 5)
+		await _measure(where + " средние, 5 шагов", forest, 1, 5)
 	await _compare("noon", 13.2, Vector3(0.35, 0.42, 0.85))
 	await _compare("sunset", 17.55, Vector3(-0.85, 0.28, 0.42))
 	await _compare("night", 0.8, Vector3(-0.3, 0.48, -0.82))

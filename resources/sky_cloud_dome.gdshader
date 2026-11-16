@@ -14,6 +14,7 @@ uniform float night = 0.0;
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;
 uniform int cumulus_steps = 5;
+uniform bool cloud_lite = false;
 uniform float cloud_time = 0.0;
 uniform float cloud_seed = 0.0;
 uniform float moon_phase = 0.5;

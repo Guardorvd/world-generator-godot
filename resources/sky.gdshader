@@ -28,6 +28,7 @@ uniform float night = 0.0;                       // 0 днём, 1 ночью: з
 uniform vec3 cloud_color : source_color = vec3(1.0);
 uniform float cloud_cover = 0.4;                 // доля неба под кучевыми облаками, примерно
 uniform int cumulus_steps : hint_range(2, 5) = 5;
+uniform bool cloud_lite = false;                // 16.11: среднее качество облаков — синоптика кучевых раз на пиксель
 uniform float cloud_time = 0.0;                 // секунды анимации неба, общие для облаков и ночных эффектов
 uniform float cloud_seed = 0.0;                  // сид погоды мира: разнообразие форм и гряд
 uniform float star_rot = 0.0;                    // поворот звёздного неба вокруг полюса, рад

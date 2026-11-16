@@ -1094,6 +1094,20 @@ custom_minimum_size = Vector2(260, 40)
 layout_mode = 2
 tooltip_text = "Низкий — атмосферная дымка. Средний добавляет туман во влажных низинах. Высокий добавляет объёмное рассеяние света в Forward+."
 
+[node name="CloudRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
+layout_mode = 2
+
+[node name="CloudLabel" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/CloudRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Облака"
+
+[node name="CloudQualityOption" type="OptionButton" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page/CloudRow"]
+unique_name_in_owner = true
+custom_minimum_size = Vector2(260, 40)
+layout_mode = 2
+tooltip_text = "Низкие — облака считаются заранее в текстуру неба, быстрее всего. Средние — облегчённые объёмные облака. Высокие — полные объёмные облака."
+
 [node name="ChecksRow" type="HBoxContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Графика/Page"]
 layout_mode = 2
 theme_override_constants/separation = 18

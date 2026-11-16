@@ -6,8 +6,8 @@ extends Node
 ## берёт из текстуры (C, T): col * T + C; солнце, луна, звёзды, градиент и сумерки остаются в полном разрешении.
 ## Цена облаков — примерно SIZE / BANDS пикселей за кадр, не зависит от разрешения экрана и ракурса.
 ## Облака за кадр сдвигаются меньше чем на тексель, поэтому обновление полосами незаметно; при скачке
-## времени или солнца купол пересчитывается целиком. Включается по качеству (LightingQuality: мета
-## «cloud_dome» материала неба); без купола небо считает облака само, как раньше.
+## времени или солнца купол пересчитывается целиком. Включается низким качеством облаков (LightingQuality.apply_clouds:
+## мета «cloud_dome» материала неба); без купола небо считает облака само для каждого пикселя.
 
 const SHADER := preload("res://resources/sky_cloud_dome.gdshader")
 const SIZE := Vector2i(2048, 512)
@@ -43,6 +43,7 @@ func _ready() -> void:
 	add_child(_vp)
 	_mat = ShaderMaterial.new()
 	_mat.shader = SHADER
+	_mat.set_shader_parameter("cloud_lite", true)   # облегчённый кучевой ярус, как на среднем качестве
 	_rect = ColorRect.new()
 	_rect.material = _mat
 	_vp.add_child(_rect)
@@ -55,7 +56,7 @@ func _exit_tree() -> void:
 
 
 func _process(_delta: float) -> void:
-	var want: bool = sky_mat.get_meta("cloud_dome", true)
+	var want: bool = sky_mat.get_meta("cloud_dome", false)
 	if want != _on:
 		_on = want
 		_full = true

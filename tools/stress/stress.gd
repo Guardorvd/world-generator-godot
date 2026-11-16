@@ -803,6 +803,11 @@ func _group_world() -> void:
 			# 15.1: «освещение» по частям — какая из них дорогая
 			["cascades", "каскады теней как на низком (2 каскада, 110 м)", func() -> void: Lighting.apply_shadows(sun, 0), relight],
 			["ssao", "затенение SSAO", func() -> void: env.ssao_enabled = false, relight],
+			# 16.11: качество облаков (по умолчанию средние): низкие — купол облаков, высокие — прежние по пикселям
+			["clouds_low", "облака низкие (купол) вместо средних", func() -> void: Lighting.apply_clouds(env, 0),
+				func() -> void: Lighting.apply_clouds(env, settings.cloud_quality)],
+			["clouds_high", "облака высокие (прежние) вместо средних", func() -> void: Lighting.apply_clouds(env, 2),
+				func() -> void: Lighting.apply_clouds(env, settings.cloud_quality)],
 			["local_fog", "местный и объёмный туман", low_fog, relight],
 			["style", "визуальный стиль", func() -> void: VisualStyle.configure({grade = false, depth = false, highlights = false, grain = false}, {}), relight],
 			# 15.11: цена частей теней солнца (дальность, атлас, фильтр, смешивание каскадов, двусторонние тени)

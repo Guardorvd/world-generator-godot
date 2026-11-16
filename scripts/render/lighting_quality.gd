@@ -10,8 +10,6 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 		var material := env.sky.sky_material as ShaderMaterial
 		if material != null and material.shader == SKY_SHADER:
 			material.set_shader_parameter("cumulus_steps", 5 if level == 2 else 2)
-			# 16.11: на низком и среднем облака считаются в купол облаков (sky_cloud_dome.gd), на высоком — по пикселям
-			material.set_meta("cloud_dome", level < 2)
 	var forward_plus := RenderingServer.get_current_rendering_method() == "forward_plus"
 	sun.shadow_enabled = shadows
 	apply_shadows(sun, level)
@@ -41,6 +39,19 @@ static func apply(env: Environment, sun: DirectionalLight3D, level: int, shadows
 		env.volumetric_fog_temporal_reprojection_enabled = false
 		RenderingServer.environment_set_volumetric_fog_volume_size(96, 64)
 	env.sdfgi_enabled = false
+
+
+## 16.11: качество облаков неба (GameSettings.CLOUD_QUALITY_LEVELS). Низкое — купол облаков (sky_cloud_dome.gd:
+## облака в текстуре направлений по полосам, цена не зависит от экрана), среднее — по пикселям с облегчённым кучевым
+## ярусом (cloud_lite в sky_clouds.gdshaderinc), высокое — прежние облака по пикселям. Число шагов задаёт apply().
+static func apply_clouds(env: Environment, cloud_quality: int) -> void:
+	if env.sky == null:
+		return
+	var material := env.sky.sky_material as ShaderMaterial
+	if material == null or material.shader != SKY_SHADER:
+		return
+	material.set_meta("cloud_dome", cloud_quality == 0)
+	material.set_shader_parameter("cloud_lite", cloud_quality == 1)
 
 
 ## Каскады теней солнца по уровню качества (отдельно — для стендов без окружения, tools/stress)

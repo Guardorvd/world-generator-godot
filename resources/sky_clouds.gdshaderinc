@@ -4,7 +4,7 @@
 // поэтому их можно считать заранее в текстуру купола и брать из неё.
 // sky_clouds(d) возвращает (C, T): небо под облаками превращается в col * T + C (три яруса и лучи).
 // Перед #include шейдер объявляет параметры: zenith_color, horizon_color, sun_dir, sun_color, halo,
-// moon_dir, night, cloud_color, cloud_cover, cumulus_steps, cloud_time, cloud_seed, moon_phase.
+// moon_dir, night, cloud_color, cloud_cover, cumulus_steps, cloud_time, cloud_seed, moon_phase, cloud_lite.
 
 const mat2 OCT_ROT = mat2(vec2(0.80, 0.60), vec2(-0.60, 0.80));
 
@@ -89,30 +89,41 @@ float cloud_phase(float cos_theta) {
 	return mix(f2, f1, 0.74) * 0.24;
 }
 
-// 3D-плотность кучевого яруса (крупная форма FBM + скульптурная эрозия Worley-куполами):
-// p — координаты в слое, h (0..1) — доля высоты от плоской подошвы до вершин башен,
-// cov — базовое покрытие, morph — фаза живой конвекции, shadow_pass — облегчённая выборка для самотени
-float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass, out float out_tower, out float out_cauli) {
+// Синоптические поля кучевого яруса в точке p: x — группы облаков, y — высота башен (out_tower), z — гряды.
+// 16.11: вынесены из cumulus_density, чтобы на среднем качестве облаков (cloud_lite) считать их раз на пиксель.
+vec4 cumulus_syn(vec2 p, float morph) {
 	vec2 seed_ofs = vec2(cloud_seed * 0.37, cloud_seed * 0.61);
 	vec2 mp = p * 0.28 + seed_ofs;
 	// Синоптическая карта погоды: чередование чистых небесных окон, кучевых островов, мощных башен и валов
 	float syn_group = smoothstep(0.28, 0.72, fbm(mp + vec2(morph * 0.04, -morph * 0.03)));
 	float syn_tower = smoothstep(0.30, 0.75, noise(mp * 1.35 + vec2(13.4, -7.8) + morph * 0.05));
-	out_tower = mix(0.45, 1.0, syn_tower);
+	float syn_street = smoothstep(0.45, 0.82, noise(mp * 0.90 + vec2(-9.1, 19.2)));
+	return vec4(syn_group, mix(0.45, 1.0, syn_tower), syn_street, 0.0);
+}
+
+// Плавное вихревое искажение области кучевого яруса
+vec2 cumulus_warp(vec2 p, float morph) {
+	vec2 w_uv = p * 0.62 + vec2(cloud_seed * 0.37, cloud_seed * 0.61);
+	return vec2(
+		noise(w_uv + vec2(1.7 + morph * 0.12, 4.3)),
+		noise(w_uv + vec2(8.9, 2.1 - morph * 0.12))
+	) - 0.5;
+}
+
+// 3D-плотность кучевого яруса (крупная форма FBM + скульптурная эрозия Worley-куполами) при готовых
+// синоптических полях syn и искажении warp: p — координаты в слое, h (0..1) — доля высоты от плоской подошвы
+// до вершин башен, cov — базовое покрытие, morph — фаза живой конвекции, shadow_pass — облегчённая выборка для самотени
+float cumulus_density_at(vec2 p, float h, float cov, float morph, bool shadow_pass, vec4 syn, vec2 warp, out float out_cauli) {
+	float syn_group = syn.x;
+	float out_tower = syn.y;
+	float syn_street = syn.z;
 
 	// Башни сужаются к вершине: широкое основание и рельефные пики наверху
 	float taper = mix(0.0, 0.16, (h * h) / max(out_tower, 0.38));
 	float eff_cov = clamp(cov * 0.90 - taper, 0.06, 0.74);
 	float edge = 1.0 - eff_cov;
 
-	float syn_street = smoothstep(0.45, 0.82, noise(mp * 0.90 + vec2(-9.1, 19.2)));
-
-	// Плавное вихревое искажение области + небольшой ветровой наклон вершин башен
-	vec2 w_uv = p * 0.62 + seed_ofs;
-	vec2 warp = vec2(
-		noise(w_uv + vec2(1.7 + morph * 0.12, 4.3)),
-		noise(w_uv + vec2(8.9, 2.1 - morph * 0.12))
-	) - 0.5;
+	// Небольшой ветровой наклон вершин башен
 	vec2 aniso = mix(vec2(1.0), vec2(0.76, 1.32), syn_street * 0.55);
 	vec2 q = (p * aniso + warp * 0.45 + vec2(h * 0.08, h * 0.03)) * 1.55;
 
@@ -163,6 +174,12 @@ float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass,
 	return clamp(dens + fractus, 0.0, 1.0);
 }
 
+// Полная плотность: синоптические поля и искажение в самой точке (как до 16.11)
+float cumulus_density(vec2 p, float h, float cov, float morph, bool shadow_pass, out float out_tower, out float out_cauli) {
+	vec4 syn = cumulus_syn(p, morph);
+	out_tower = syn.y;
+	return cumulus_density_at(p, h, cov, morph, shadow_pass, syn, cumulus_warp(p, morph), out_cauli);
+}
 // Три яруса облаков и лучи в направлении d (d.y > 0.005). Небо под ними: col * T + C, результат vec4(C, T).
 // Каждое прежнее col = mix(col, X, a) здесь C = mix(C, X, a), T *= 1 - a — та же формула, только без col.
 vec4 sky_clouds(vec3 d) {
@@ -256,19 +273,37 @@ vec4 sky_clouds(vec3 d) {
 	vec3 top_ambient = mix(cloud_color * 0.96, zenith_color * 1.04, 0.16);
 	vec3 direct_tint = mix(cloud_color * 1.15, warm_sunset * 1.20, low_sun * 0.70);
 
+	// 16.11, среднее качество облаков (cloud_lite): синоптические поля и искажение — раз на пиксель в середине слоя,
+	// общие для всех шагов и выборки самотени (точка сдвигается за слой лишь на доли их масштаба)
+	vec4 lite_syn = vec4(0.0);
+	vec2 lite_warp = vec2(0.0);
+	if (cloud_lite) {
+		vec2 p_mid = uv_base * (1.0 + 0.0325 * (1.0 - h * 0.82)) + wind * 1.04;
+		lite_syn = cumulus_syn(p_mid, morph);
+		lite_warp = cumulus_warp(p_mid, morph);
+	}
+
 	for (int i = 0; i < steps; i++) {
 		float lh = (float(i) + 0.5) * step_height;
 		// По мере подъёма луча сквозь облачный слой точка пересечения плавно уходит вперёд по взгляду
 		vec2 p_step = uv_base * (1.0 + 0.065 * lh * (1.0 - h * 0.82)) + wind * (1.0 + 0.08 * lh);
 		float tower_h = 0.6;
 		float cauli_rel = 0.5;
-		float dens = cumulus_density(p_step, lh, cloud_cover, morph, false, tower_h, cauli_rel);
+		float dens;
+		if (cloud_lite) {
+			tower_h = lite_syn.y;
+			dens = cumulus_density_at(p_step, lh, cloud_cover, morph, false, lite_syn, lite_warp, cauli_rel);
+		} else {
+			dens = cumulus_density(p_step, lh, cloud_cover, morph, false, tower_h, cauli_rel);
+		}
 		if (dens > 0.002) {
 			// Шаг к светилу для настоящей объёмной самотени и просвечивания краёв (облегчённая выборка shadow_pass = true)
 			float dummy_t = 0.0;
 			float sh_c = 0.5;
 			float sh_h = clamp(lh + light_vert, 0.05, 0.98);
-			float sh_dens = cumulus_density(p_step + light_horiz, sh_h, cloud_cover, morph, true, dummy_t, sh_c);
+			float sh_dens = cloud_lite
+				? cumulus_density_at(p_step + light_horiz, sh_h, cloud_cover, morph, true, lite_syn, lite_warp, sh_c)
+				: cumulus_density(p_step + light_horiz, sh_h, cloud_cover, morph, true, dummy_t, sh_c);
 			// Вторая выборка тени заменена оценкой: втрое меньше обращений к плотности на пиксель
 			float sh_dens2 = sh_dens * 0.62;
 			float opt_depth = sh_dens * 3.0 + sh_dens2 * 1.7;

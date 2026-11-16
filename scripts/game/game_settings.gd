@@ -30,6 +30,9 @@ const LIGHTING_LEVELS := ["Низкое", "Среднее", "Высокое"]
 const DEFAULT_FOG_QUALITY := DEFAULT_LIGHTING
 const FOG_OFF := 3
 const FOG_QUALITY_LEVELS := ["Низкий", "Средний", "Высокий", "Выключен"]
+## 16.11: облака неба — купол (низкие), облегчённые по пикселям (средние), прежние (высокие); LightingQuality.apply_clouds
+const CLOUD_QUALITY_LEVELS := ["Низкие", "Средние", "Высокие"]
+const DEFAULT_CLOUD_QUALITY := 1
 const DEFAULT_VOLUME := 0.8
 const DEFAULT_DAY_MINUTES := 7.0   # с 12.9 сутки за 7 минут; 0 — время стоит
 const DEFAULT_LONG_TWILIGHT := true
@@ -116,6 +119,7 @@ var shadows := DEFAULT_SHADOWS # только тени направленног�
 var tree_garlands := DEFAULT_TREE_GARLANDS # парковые гирлянды вдоль отдельных дорог и полян
 var lighting := DEFAULT_LIGHTING
 var fog_quality := DEFAULT_FOG_QUALITY
+var cloud_quality := DEFAULT_CLOUD_QUALITY
 ## 13.11: визуальный стиль (VisualStyle) — выключатель и сила 0..1 у каждого из четырёх эффектов
 var style_on: Dictionary = VisualStyle.DEFAULT_ON.duplicate()
 var style_amount: Dictionary = VisualStyle.DEFAULT_AMOUNT.duplicate()
@@ -162,6 +166,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	tree_garlands = _flag(cfg, "view", "tree_garlands", tree_garlands)
 	lighting = roundi(_number(cfg, "view", "lighting", lighting, 0, 2))
 	fog_quality = roundi(_number(cfg, "view", "fog_quality", lighting, 0, FOG_QUALITY_LEVELS.size() - 1))
+	cloud_quality = roundi(_number(cfg, "view", "cloud_quality", cloud_quality, 0, CLOUD_QUALITY_LEVELS.size() - 1))
 	draw = roundi(_number(cfg, "view", "draw", draw, 0, DRAW_LEVELS.size() - 1))
 	flora = roundi(_number(cfg, "view", "flora", flora, 0, FLORA_LEVELS.size() - 1))
 	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
@@ -262,6 +267,7 @@ func reset_defaults() -> void:
 	tree_garlands = DEFAULT_TREE_GARLANDS
 	lighting = DEFAULT_LIGHTING
 	fog_quality = DEFAULT_FOG_QUALITY
+	cloud_quality = DEFAULT_CLOUD_QUALITY
 	draw = DEFAULT_DRAW
 	flora = DEFAULT_FLORA
 	particles = DEFAULT_PARTICLES
@@ -294,6 +300,7 @@ func save_settings() -> Error:
 	cfg.set_value("view", "tree_garlands", tree_garlands)
 	cfg.set_value("view", "lighting", lighting)
 	cfg.set_value("view", "fog_quality", fog_quality)
+	cfg.set_value("view", "cloud_quality", cloud_quality)
 	cfg.set_value("view", "draw", draw)
 	cfg.set_value("view", "flora", flora)
 	cfg.set_value("view", "particles", particles)
@@ -330,7 +337,7 @@ func apply_window() -> void:
 func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
 		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
-		fog_quality = fog_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
+		fog_quality = fog_quality, cloud_quality = cloud_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
 		road_quality = road_quality, road_range = road_range,
 		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
@@ -352,6 +359,7 @@ func set_display_state(state: Dictionary) -> void:
 	road_range = clampi(state.get("road_range", road_range), 0, ROAD_RANGE.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)
 	fog_quality = clampi(state.get("fog_quality", fog_quality), 0, FOG_QUALITY_LEVELS.size() - 1)
+	cloud_quality = clampi(state.get("cloud_quality", cloud_quality), 0, CLOUD_QUALITY_LEVELS.size() - 1)
 	for id: String in VisualStyle.EFFECTS:
 		style_on[id] = bool(state.get("style_on", style_on).get(id, style_on[id]))
 		style_amount[id] = clampf(float(state.get("style_amount", style_amount).get(id, style_amount[id])), 0.0, 1.0)

@@ -588,6 +588,7 @@ func _apply_lighting_and_fog() -> void:
 	preload("res://scripts/render/lighting_quality.gd").apply(
 		$WorldEnvironment.environment, $Sun, settings.lighting, settings.shadows, settings.fog_quality)
 	local_mist.set_quality(settings.fog_quality, $WorldEnvironment.environment)
+	preload("res://scripts/render/lighting_quality.gd").apply_clouds($WorldEnvironment.environment, settings.cloud_quality)
 	# визуальный стиль (13.11): окружение мира и настройки игрока; на паузе меню меняет их сразу, здесь — на старте и после паузы
 	VisualStyle.bind($WorldEnvironment.environment)
 	VisualStyle.configure(settings.style_on, settings.style_amount)
