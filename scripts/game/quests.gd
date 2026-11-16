@@ -53,6 +53,16 @@ const DELIVERY_TEXTS := [
 	"Там ждут инструменты из нашей кузни. Сумка тяжёлая, но падение ей не страшно — главное, довезите.",
 	"Обменяемся припасами с соседями. Сумку берите у доски — и в путь по дороге.",
 ]
+## 16.11.2026: доставка в поселение с ролью (SettlementRoles) — путешествие; ROLE_CHANCE — доля досок, где цель такая
+const ROLE_CHANCE := 0.5
+const ROLE_DELIVERY_TEXTS := {
+	remote = ["До них одна дальняя дорога, и бываем мы там редко. Отвезите припасы — по пути не раз сменится местность.",
+		"Дальнее поселение ждёт почту с осени. Путь неблизкий: рассчитайте силы."],
+	forest = ["Деревня в глубине леса: последняя часть пути — лесом, где на тропе ветки и корни.",
+		"Отвезите инструменты лесным соседям. Под кронами темнее — не торопитесь на корнях."],
+	foothill = ["Деревня у самых гор: в конце пути подъём, его легче взять стоя на педалях.",
+		"Отвезите соль и муку к подножию гор. Обратная дорога — под горку, отдохнёте."],
+}
 const FRAGILE_TITLES := ["Склянки: «%s»", "Яйца: «%s»", "Стекло: «%s»"]
 const FRAGILE_TEXTS := [
 	"Бьётся от любого падения: объезжайте брёвна и валуны, на камнях и в ямах сбавляйте ход, не прыгайте с обрывов. Разобьёте — придётся вернуться за новым.",
@@ -102,7 +112,11 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 	var out: Array = []
 	# доставка: в соседнее по дороге поселение, иногда — в дальнее; иногда хрупкий груз
 	var carry_kind := "fragile" if rng.randf() < FRAGILE_CHANCE else "delivery"
-	var to := _pick(towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id(carry_kind, here, t))), rng)
+	var open := towns.filter(func(t: Dictionary) -> bool: return not _done.has(_id(carry_kind, here, t)))
+	# 16.11.2026: доставка чаще ведёт в дальнее, лесное или предгорное поселение (SettlementRoles) — путешествие,
+	# а не соседняя улица; где таких по дорогам нет, выбор прежний.
+	var trips := open.filter(func(t: Dictionary) -> bool: return ROLE_DELIVERY_TEXTS.has(_role(t)))
+	var to := _pick(trips if not trips.is_empty() and rng.randf() < ROLE_CHANCE else open, rng)
 	if not to.is_empty():
 		out.append(_make(carry_kind, here, [to]))
 	# снимок: одно из ближних мест, отвезти в соседнее поселение или обратно сюда;
@@ -129,6 +143,12 @@ func offers(here: Dictionary, places: Array, neighbors: Array, far: Dictionary, 
 		else:
 			out.append(_make("visit", here, [walk]))
 	return out
+
+
+## Роль поселения-цели (SettlementData.role) или "" — у мест и старых миров её нет
+static func _role(place: Dictionary) -> String:
+	var src: Variant = place.get("src")
+	return "" if src == null else str(EntityCodec.value(src, "role", ""))
 
 
 static func _id(kind: String, here: Dictionary, target: Dictionary) -> String:
@@ -165,7 +185,7 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 	match kind:
 		"delivery":
 			q.title = _variant(DELIVERY_TITLES, id) % target.name
-			q.text = _variant(DELIVERY_TEXTS, id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
+			q.text = _variant(ROLE_DELIVERY_TEXTS.get(_role(target), DELIVERY_TEXTS), id, 1) + " С сумкой за спиной быстрое перемещение недоступно."
 			q.steps = [{do = "pickup", place = here}, {do = "carry", place = target}]
 		"fragile":
 			q.title = _variant(FRAGILE_TITLES, id) % target.name
