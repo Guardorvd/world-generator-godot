@@ -92,12 +92,7 @@ static func prepare(source: WorldData, region: Dictionary, surface: Dictionary, 
 					else:
 						close = at.distance_to(Vector2(item[0], item[1])) < (spacing + item[2]) * 0.5
 				if close: continue
-				var dw := w.dist_water[i]
-				var score: float = bd.habit + WGRandom.hash2(x, y, seed) * 0.2 - w.slope[i] * 0.6
-				score += access * 0.45 + density * 0.35
-				if dw >= 1.5 and dw <= 6.0: score += 0.6
-				elif dw > 16.0: score -= minf(0.6, (dw - 16.0) / 40.0)
-				if dw < 1.5: score -= 0.4
+				var score := StageLandmarks.site_score(bd.habit, WGRandom.hash2(x, y, seed), w.slope[i], access, density, w.dist_water[i])
 				candidates.append([score, i, access, density, spacing])
 		# Резерв: лучшие разнесённые места окна; порядок и равенства — как у StageLandmarks._by_score_desc.
 		var reserve: Array = []

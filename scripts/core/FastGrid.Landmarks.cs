@@ -6,8 +6,9 @@ public partial class FastGrid
 	// StageLandmarks candidate scores, including row-order ties. Settlement
 	// spacing and all entity creation still run through the common GDScript path.
 	public double[] SettlementCandidates(int width, int height, byte[] biome, byte[] wet, byte[] reachable,
-		float[] slope, float[] distance, double[] habit, long candidateSeed, long densitySeed)
+		float[] slope, float[] distance, double[] habit, long candidateSeed, long densitySeed, double waterWeight = 1.0)
 	{
+		// waterWeight — StageLandmarks.water_weight(); порядок действий как в StageLandmarks.site_score.
 		var candidates = new List<(double Score, int Cell, double Access, double Density)>();
 		for (int y = 6; y < height - 6; y += 2)
 		{
@@ -26,9 +27,9 @@ public partial class FastGrid
 					RoadLerp(MapHash(gx, gy + 1, seed), MapHash(gx + 1, gy + 1, seed), tx), ty);
 				double score = habit[biome[i]] + MapHash(x, y, unchecked((uint)candidateSeed)) * 0.2 - slope[i] * 0.6;
 				score += access * 0.45 + density * 0.35;
-				if (distance[i] >= 1.5 && distance[i] <= 6.0) score += 0.6;
-				else if (distance[i] > 16.0) score -= Math.Min(0.6, (distance[i] - 16.0) / 40.0);
-				if (distance[i] < 1.5) score -= 0.4;
+				if (distance[i] >= 1.5 && distance[i] <= 6.0) score += 0.6 * waterWeight;
+				else if (distance[i] > 16.0) score -= Math.Min(0.6, (distance[i] - 16.0) / 40.0) * waterWeight;
+				if (distance[i] < 1.5) score -= 0.4 * waterWeight;
 				candidates.Add((score, i, access, density));
 			}
 		}

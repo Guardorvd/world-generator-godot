@@ -8,6 +8,37 @@ const PROGRESS := 0.46
 const LABEL := "Основание поселений"
 const LAYOUT_R := 6.8 # клеток: дома и сараи не дальше от костра (вырубка леса у поселения — 7 клеток)
 
+## 16.11.2026 (план «Поселения и география дорог»): вода — преимущество площадки, но не сильнее биома.
+## Раньше водный член (+0,6 у берега, до −0,6 вдали) перевешивал всё остальное: у воды 2–3 % кандидатов,
+## а выбиралось туда 85 % поселений. Теперь он вдвое слабее.
+const WATER_WEIGHT := 0.5
+## Поправка на удалённость в отборе плана: следующее место получает до SPREAD к оценке, если до ближайшего
+## уже выбранного не меньше SPREAD_R клеток (800 м). Группы в пятнах плотности остаются, у дальней суши появляется шанс.
+const SPREAD := 0.5
+const SPREAD_R := 200.0
+## Прежний отбор (стенд settlement_look.gd -- --legacy): водный член целиком, без поправки на удалённость.
+static var legacy := false
+
+
+## Оценка площадки поселения — одна для плана (здесь и FastGrid.SettlementCandidates) и соседних областей
+## (RegionSettlements). Порядок действий не менять: при legacy результат совпадает с прежним до бита.
+static func site_score(habit: float, noise: float, slope: float, access: float, density: float, dw: float) -> float:
+	var score := habit + noise * 0.2 - slope * 0.6
+	score += access * 0.45 + density * 0.35
+	var k := water_weight()
+	if dw >= 1.5 and dw <= 6.0:
+		score += 0.6 * k
+	elif dw > 16.0:
+		score -= minf(0.6, (dw - 16.0) / 40.0) * k
+	# Сухая площадка непосредственно у воды уступает береговой террасе.
+	if dw < 1.5:
+		score -= 0.4 * k
+	return score
+
+
+static func water_weight() -> float:
+	return 1.0 if legacy else WATER_WEIGHT
+
 
 static func run(w: WorldData) -> void:
 	_place_settlements(w)
@@ -47,25 +78,64 @@ static func _place_settlements(w: WorldData) -> void:
 	var density := WGRandom.new(w.seed_num ^ 0x5e771e)
 	var want := minimum + floori(density.next_float() * (maximum - minimum + 1))
 	var min_d := maxf(32.0, W / 8.0)
-	for at in range(0, cand.size(), 4):
-		if settlements.size() >= want:
+	var spread := 0.0 if legacy else SPREAD
+	var count := cand.size() / 4
+	var dead := PackedByteArray() # кандидат уже выбран или слишком близко к выбранному (выбранных только прибавляется)
+	dead.resize(count)
+	var from := 0 # до этого номера все кандидаты dead
+	while settlements.size() < want:
+		# Лучший по оценке с поправкой на удалённость. Поправка не больше spread, поэтому кандидаты по убыванию
+		# оценки просматриваются, пока оценка + spread может обогнать лучшего; при равенстве — раньше в списке.
+		# Без поправки (legacy) это первый живой кандидат — прежний отбор.
+		var best := -1
+		var best_value := -INF
+		var k := from
+		while k < count:
+			if dead[k] != 0:
+				if k == from: from += 1
+				k += 1
+				continue
+			var at := k * 4
+			if best >= 0 and cand[at] + spread <= best_value:
+				break
+			var i := int(cand[at + 1])
+			var x := (i % W) + 0.5
+			var y := (i / W) + 0.5
+			# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
+			# Радиусы обоих соседей действуют и через границу любой области.
+			var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
+			var close := false
+			# За краем плана — соседние области со своими поселениями, а не пустота: край считается зеркалом
+			# (как будто там поселение на том же расстоянии), иначе углы плана выглядят самыми удалёнными местами.
+			var nearest := minf(SPREAD_R, 2.0 * minf(minf(x, y), minf(W - x, H - y)))
+			for s: SettlementData in settlements:
+				var dx: float = s.x - x
+				var dy: float = s.y - y
+				var separation: float = (spacing + s.spacing) * 0.5
+				if dx * dx + dy * dy < separation * separation:
+					close = true
+					break
+				nearest = minf(nearest, sqrt(dx * dx + dy * dy))
+			if close:
+				dead[k] = 1
+				if k == from: from += 1
+				k += 1
+				continue
+			var value: float = cand[at] + spread * nearest / SPREAD_R
+			if value > best_value:
+				best = k
+				best_value = value
+			if spread == 0.0:
+				break
+			k += 1
+		if best < 0:
 			break
+		dead[best] = 1
+		var at := best * 4
 		var i := int(cand[at + 1])
 		var x := (i % W) + 0.5
 		var y := (i / W) + 0.5
-		# Благоприятные долины дают группы деревень, бедные окраины — редкие места.
-		# Радиусы обоих соседей действуют и через границу любой области.
 		var spacing: float = min_d * lerpf(1.35, 0.7, cand[at + 3])
-		var close := false
-		for s: SettlementData in settlements:
-			var dx: float = s.x - x
-			var dy: float = s.y - y
-			var separation: float = (spacing + s.spacing) * 0.5
-			if dx * dx + dy * dy < separation * separation:
-				close = true
-				break
-		if close:
-			continue
 		# Берег большой воды и удобная долина делают место узлом округи.
 		var shore := 0.12 if dist_water[i] < 6.0 else 0.0
 		var importance := clampf(float(biome[i] == Biomes.GRASS) * 0.15 + cand[at + 2] * 0.5 + cand[at + 3] * 0.3 + shore, 0.0, 1.0)
@@ -101,7 +171,7 @@ static func _settlement_candidates(w: WorldData, river: PackedByteArray, wet: Pa
 		var habit := PackedFloat64Array()
 		for definition: Dictionary in Biomes.LIST:
 			habit.append(definition.get("habit", -INF))
-		return fast.SettlementCandidates(W, H, biome, wet, reachable, slope, dist_water, habit, candidate_seed, density_seed)
+		return fast.SettlementCandidates(W, H, biome, wet, reachable, slope, dist_water, habit, candidate_seed, density_seed, water_weight())
 	var cand: Array = []
 	for y in range(6, H - 6, 2):
 		for x in range(6, W - 6, 2):
@@ -117,15 +187,7 @@ static func _settlement_candidates(w: WorldData, river: PackedByteArray, wet: Pa
 			if access < 0.35:
 				continue
 			var density_value := patches(x, y, 96.0, density_seed)
-			var score: float = bd.habit + WGRandom.hash2(x, y, candidate_seed) * 0.2 - slope[i] * 0.6
-			score += access * 0.45 + density_value * 0.35
-			if dist_water[i] >= 1.5 and dist_water[i] <= 6.0:
-				score += 0.6
-			elif dist_water[i] > 16.0:
-				score -= minf(0.6, (dist_water[i] - 16.0) / 40.0)
-			# Сухая площадка непосредственно у воды уступает береговой террасе.
-			if dist_water[i] < 1.5:
-				score -= 0.4
+			var score := site_score(bd.habit, WGRandom.hash2(x, y, candidate_seed), slope[i], access, density_value, dist_water[i])
 			cand.append([score, i, access, density_value])
 	cand.sort_custom(_by_score_desc)
 	var columns := PackedFloat64Array()
