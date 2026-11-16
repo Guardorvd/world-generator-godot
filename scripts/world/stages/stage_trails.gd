@@ -19,6 +19,7 @@ extends RefCounted
 
 const Topology := preload("res://scripts/world/road_topology.gd")
 const RoadRecords := preload("res://scripts/world/road_records.gd")
+const RoadRides := preload("res://scripts/world/road_rides.gd")
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
@@ -86,6 +87,9 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.path_mask = PackedByteArray()
 	w.path_mask.resize(w.N)
 	w.trails = []
+	w.road_rides = {version = RoadRides.VERSION, routes = {}}
+	w.generation_profile.road_width_decisions = {}
+	w.generation_profile.road_line_grade_fallbacks = {}
 	_net_reset(w)
 	var surface := Heightfield.base_of(w)
 	w.generation_profile.route_heightfield_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
@@ -120,6 +124,8 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.generation_profile.parts_ms = parts.duplicate()
 	finder.release()
 	var issue := RoadRecords.validation_error(w.trails, "StageTrails (%s)" % w.seed_text, RoadRecords.Phase.PUBLISHED)
+	if issue.is_empty():
+		issue = RoadRides.validation_error(w)
 	if not issue.is_empty():
 		push_error(issue)
 
@@ -272,8 +278,10 @@ static func _net_ready(w: WorldData) -> void:
 ## (связи поселений ищутся с пределами дороги, даже если публикуются тропой: StageTrails._upgrade_roles).
 ## path_mask отмечается по нарисованной линии (Grid.stamp_path), дешевле становятся клетки пути.
 ## changed_lines — журнал прежних pts для отката. corridor проверяет, что дуга остаётся в готовой области.
+## legs получает направленные интервалы, включая повторы по существующей сети.
 static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array = PackedFloat32Array(),
-		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "", changed_lines: Variant = null, corridor := Callable()) -> Array:
+		on_axis: PackedByteArray = PackedByteArray(), surface: Heightfield = null, smooth_kind := "", changed_lines: Variant = null,
+		corridor := Callable(), legs: Variant = null) -> Array:
 	var part_us := Time.get_ticks_usec()
 	_net_ready(w)
 	path = _explicit(w, path, on_axis)
@@ -302,7 +310,11 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 		w.generation.road_cells.append(PackedInt32Array())
 	else:
 		var owner := w.generation.road_owner
-		for piece: Dictionary in _pieces(path, owner, w.W):
+		var pieces := _pieces(path, owner, w.W)
+		var reused := PackedInt32Array()
+		if legs != null:
+			for cell: int in path: reused.append(owner[cell])
+		for piece: Dictionary in pieces:
 			var cells: PackedInt32Array = piece.cells
 			var pts := _cell_points(w, cells, on_axis, width)
 			var joins := {}
@@ -326,13 +338,66 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 			for join: Dictionary in joins.values():
 				Topology.attach(w, join.host, join.point, changed_lines)
 			added.append(index)
+			if legs != null:
+				piece.section = index
+				piece.joins = joins
 		w.generation.road_owner = owner
+		if legs != null:
+			_trace_ride(w, path, reused, pieces, legs)
 	_trodden(w, path, kind, road_cost)
 	var protect_us := Time.get_ticks_usec()
 	_protect_structures(w, road_cost)
 	_part("protect_structures", protect_us)
 	_part("add_trail", part_us)
 	return added
+
+
+static func _trace_ride(w: WorldData, path: PackedInt32Array, reused: PackedInt32Array, pieces: Array, legs: Array) -> void:
+	var cursor := 0
+	var entry := {}
+	for piece: Dictionary in pieces:
+		_trace_reuse(w, path, reused, cursor, piece.first, entry, piece.joins.get(0, {}), legs)
+		var section: Dictionary = w.trails[piece.section]
+		RoadRides.append_interval(legs, section.road_id, 0.0, Topology.length_m(section.pts))
+		cursor = piece.last
+		entry = piece.joins.get(1, {})
+	_trace_reuse(w, path, reused, cursor, path.size() - 1, entry, {}, legs)
+
+
+## Use the same owner decisions as physical publication. Locate stations only on those axes;
+## a nearby parallel section is never a candidate for membership.
+static func _trace_reuse(w: WorldData, path: PackedInt32Array, reused: PackedInt32Array, first: int, last: int,
+		entry: Dictionary, exit: Dictionary, legs: Array) -> void:
+	if first >= last:
+		return
+	var a: Vector2 = entry.get("point", _cell_centre(path[first], w.W))
+	var host: int = entry.get("host", reused[first])
+	var offset := _ride_station(w, host, a)
+	for k in range(first + 1, last + 1):
+		var next_host := reused[k]
+		var b := _cell_centre(path[k], w.W)
+		if k == last:
+			next_host = exit.get("host", next_host)
+			b = exit.get("point", b)
+		if host != next_host:
+			var boundary := a.lerp(b, 0.5)
+			if host >= 0:
+				RoadRides.append_interval(legs, w.trails[host].road_id, offset, _ride_station(w, host, boundary))
+			offset = _ride_station(w, next_host, boundary)
+		var end := _ride_station(w, next_host, b)
+		if next_host >= 0:
+			RoadRides.append_interval(legs, w.trails[next_host].road_id, offset, end)
+		a = b
+		host = next_host
+		offset = end
+
+
+static func _cell_centre(cell: int, width: int) -> Vector2:
+	return Vector2(cell % width + 0.5, cell / width + 0.5)
+
+
+static func _ride_station(w: WorldData, host: int, p: Vector2) -> float:
+	return float(_locate(w.trails[host].pts, p)[2]) * GameConfig.TILE if host >= 0 else 0.0
 
 
 ## Протоптанный путь дешевле: следующие маршруты идут по нему. Клетки рядом с участком сети (не на нём) один раз
@@ -406,7 +471,7 @@ static func _pieces(path: PackedInt32Array, owner: PackedInt32Array, width: int)
 		var jitter := k > 0 and e < n - 1 and owner[path[a]] == owner[path[b]] \
 			and (e - k + 1 <= JITTER_RUN or _hugs(path, k, e, owner, owner[path[a]], width))
 		if b > a and not jitter:
-			out.append({cells = path.slice(a, b + 1), anchored = [k > 0, e < n - 1]})
+			out.append({cells = path.slice(a, b + 1), first = a, last = b, anchored = [k > 0, e < n - 1]})
 		elif jitter:
 			for j in range(k, e + 1):
 				owner[path[j]] = owner[path[a]]
@@ -541,6 +606,8 @@ static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surfa
 	if _profile_ok(surface, profile, grade, skip):
 		return line
 	line_fallbacks += 1
+	var decisions: Dictionary = w.generation_profile.get_or_add("road_line_grade_fallbacks", {})
+	decisions[kind] = int(decisions.get(kind, 0)) + 1
 	return _road_line_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, 0.0)
 
 

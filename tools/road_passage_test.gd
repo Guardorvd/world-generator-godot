@@ -5,6 +5,9 @@ extends SceneTree
 ## параллельных полотен. Секунды, без окна.
 ##   godot --headless --path . --script res://tools/road_passage_test.gd
 const Fixture := preload("res://tools/road_relief_fixture.gd")
+const Rides := preload("res://scripts/world/road_rides.gd")
+const Topology := preload("res://scripts/world/road_topology.gd")
+const Metrics := preload("res://tools/road_network_metrics.gd")
 var fails := 0
 
 
@@ -64,7 +67,8 @@ func run() -> void:
 	# Сходится на дорогу, идёт по ней 20 клеток и уходит: два новых участка, общий участок не копируется
 	var path: Array = line(Vector2i(14, 30), Vector2i(30, 46)) + line(Vector2i(30, 47), Vector2i(30, 48)).slice(1) \
 		+ line(Vector2i(31, 48), Vector2i(50, 48)) + line(Vector2i(51, 49), Vector2i(66, 64))
-	var added := StageTrails._add_trail(w, cells(path), "trail")
+	var through: Array = []
+	var added := StageTrails._add_trail(w, cells(path), "trail", PackedFloat32Array(), PackedByteArray(), null, "", null, Callable(), through)
 	check(added.size() == 2, "merge-and-leave makes two new segments (%d)" % added.size())
 	var shared := 0.0
 	for k: int in added: shared += overlap(w, k, 0)
@@ -75,6 +79,9 @@ func run() -> void:
 			if on_polyline(w.trails[0].pts, Vector2(end.x, end.y)): nodes += 1
 	check(nodes == 2, "each branch ends on an exact vertex of the host axis (node)")
 	check(not host_id.is_empty() and w.trails[0].road_id == host_id, "physical ID survives insertion of branch vertices")
+	check(through.size() == 3 and through[0].section == w.trails[added[0]].road_id and through[1].section == host_id
+		and through[1].from_m > 0.0 and through[1].from_m < through[1].to_m and through[2].section == w.trails[added[1]].road_id,
+		"publication records branch, partial host interval and departing branch in order")
 	# Пересечение: вертикальный путь через дорогу — один участок насквозь
 	var before := w.trails.size()
 	var cross := StageTrails._add_trail(w, cells(line(Vector2i(72, 30), Vector2i(72, 66))), "trail")
@@ -83,11 +90,13 @@ func run() -> void:
 	before = w.trails.size()
 	check(StageTrails._add_trail(w, cells(line(Vector2i(12, 48), Vector2i(80, 48))), "trail").is_empty() and w.trails.size() == before,
 		"a route that runs entirely on the network publishes nothing")
+	_shared_rides(w, host_id, through)
 	# Стоимость: на участке дешевле, рядом — не дешевле свободной земли
 	check(w.cost[48 * 96 + 40] < 0.5 and w.cost[47 * 96 + 40] >= 1.0, "trodden discount only on the segment, not a ghost strip beside it")
 	# Повышение класса: часть тропы, по которой идёт дорога-связь, — дорога; тропа делится узлами
 	StageTrails._net_reset(w)
 	w.trails = []
+	w.road_rides = {}
 	StageTrails._add_trail(w, cells(line(Vector2i(8, 20), Vector2i(88, 20))), "trail")
 	var length := StageTrails._kind_length_of(w.trails[0])
 	StageTrails._upgrade_path(w, cells(line(Vector2i(30, 20), Vector2i(60, 20))))
@@ -108,16 +117,50 @@ func run() -> void:
 	check(StageTrails._adds_network(w, far, near), "a route 160 m away is a real addition")
 	turns()
 	junction()
+	surface_metrics()
 	print("ROAD PASSAGE RESULT ", fails, " failures")
 	quit(1 if fails else 0)
 
 
+func _shared_rides(w: WorldData, host_id: String, through: Array) -> void:
+	w.road_rides = {version = Rides.VERSION, routes = {"first": {style = "flow", legs = through, ascent_legs = 0}}}
+	var geometry := var_to_bytes([w.trails, w.path_mask])
+	var graph := var_to_bytes(Topology.compile(w))
+	var back := line(Vector2i(56, 48), Vector2i(24, 48))
+	var forth := line(Vector2i(24, 48), Vector2i(44, 48))
+	var legs: Array = []
+	var added := StageTrails._add_trail(w, cells(back + forth.slice(1)), "trail", PackedFloat32Array(), PackedByteArray(), null,
+		"", null, Callable(), legs)
+	w.road_rides.routes["second"] = {style = "forest", legs = legs, ascent_legs = 1}
+	check(added.is_empty() and var_to_bytes([w.trails, w.path_mask]) == geometry
+		and var_to_bytes(Topology.compile(w)) == graph,
+		"adding a route wholly on the host preserves sections, mask and topology byte for byte")
+	check(legs.size() == 2 and legs[0].section == host_id and legs[1].section == host_id
+		and is_equal_approx(legs[0].from_m, 192.0) and is_equal_approx(legs[0].to_m, 64.0)
+		and is_equal_approx(legs[1].from_m, 64.0) and is_equal_approx(legs[1].to_m, 144.0),
+		"partial reverse and repeated forward traversals retain their direction and metre offsets")
+	var issue := Rides.validation_error(w)
+	check(issue.is_empty(), "two rides reference the same physical record " + issue)
+	var usage: Dictionary = Metrics.measure(w).route_usage
+	check(usage.status == "recorded" and usage.by_kind.road.shared_between_routes_m == 80.0
+		and usage.by_kind.road.covered_m == 128.0 and usage.by_kind.road.repeated_m == 160.0
+		and usage.routes.second.reverse_m == 128.0,
+		"route report counts shared coverage once and repeated travel separately")
+	w.road_rides = {}
+	w.trails[0].merge({ride = "legacy_ride", ride_style = "flow"})
+	var legacy: Dictionary = Metrics.measure(w)
+	check(legacy.route_usage.status == "legacy_tags_only" and legacy.route_usage.tags.legacy_ride.tagged_sections == 1
+		and legacy.length_m.has("road") and not legacy.length_m.has("ride"),
+		"legacy tags are visible in route usage while their width and length stay in the physical kind")
+
+
 class TestGround extends Heightfield:
 	var grade_x := 0.0
+	var grade_z := 0.0
 	var wet := Rect2()
 
-	func ground_at(x: float, _z: float, _refined := true) -> float:
-		return 20.0 + grade_x * x
+	func ground_at(x: float, z: float, _refined := true) -> float:
+		return 20.0 + grade_x * x + grade_z * z
 
 	func depth_at(x: float, z: float, _feet := -INF) -> float:
 		return 0.5 if wet.has_point(Vector2(x, z) / GameConfig.TILE) else 0.0
@@ -128,6 +171,27 @@ class TestGround extends Heightfield:
 
 func points(positions: Array, width := 0.9) -> Array:
 	return positions.map(func(p: Vector2) -> Dictionary: return {x = p.x, y = p.y, w = width})
+
+
+func surface_metrics() -> void:
+	var w := Fixture.world()
+	var axis := points([Vector2(8.5, 48.5), Vector2(28.5, 48.5)], 0.75)
+	w.trails = [Topology.section("trail", axis, w.world_origin)]
+	var ground := TestGround.new(w, false)
+	ground.grade_x = 0.125
+	ground.grade_z = 0.25
+	var report: Dictionary = Metrics.measure(w, PackedFloat32Array(), ground).character_by_kind.trail
+	check(report.width_m.samples == 81 and report.width_m.mean == 3.0
+		and report.cross_slope_pct.samples == 81 and report.cross_slope_pct.mean == 25.0,
+		"the shared sampler returns tread width and finished cross slope on a plane")
+	check(report.longitudinal_roughness_cm.samples == 61 and report.longitudinal_roughness_cm.rms == 0.0
+		and report.roughness_excluded.incomplete_window == 20 and report.obstacles == null,
+		"longitudinal roughness removes constant grade and accounts for incomplete end windows")
+	w.dist_water[48 * w.W + 18] = 1.0
+	report = Metrics.measure(w, PackedFloat32Array(), ground).character_by_kind.trail
+	check(report.cross_excluded.near_water == 4 and report.cross_slope_pct.samples == 77
+		and report.roughness_excluded.window_intersects_near_water == 20,
+		"water exclusions account for the station and for windows crossing it")
 
 
 func turns() -> void:

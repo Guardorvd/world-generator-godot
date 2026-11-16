@@ -17,8 +17,8 @@ extends RefCounted
 ##    лес, доля новой земли (идти рядом с готовой сетью — дубликат).
 ## 4. Отбор жадный: сначала лучший маршрут каждого характера, потом по оценке. Маршрут, который больше чем на SAME_SHARE
 ##    идёт рядом с принятым, — дубликат. Ниже MIN_SCORE маршрута нет: где нет хороших склонов, трассы не навязываются.
-## 5. Принятые линии — тропы ("trail" — плавная и лесная, "mountain" — техническая) с пометкой ride и ride_style
-##    (для будущих элементов: их можно искать на готовых линиях, не перестраивая трассу).
+## 5. Опубликованные полотна получают метки ride и ride_style. Направленные интервалы всего маршрута, включая
+##    общий подъём и повторное использование сети, сохраняются отдельно в w.road_rides.
 ## Поиски последовательные: A* на C# занимает миллисекунды, а один FastGrid держит общие буферы поиска (параллельный
 ## поиск потребовал бы отдельных сеток и копий стоимости — выигрыша при десятках поисков нет).
 ## Откат: ENABLED = false или запуск с `-- --trail-network` (прежняя универсальная сеть, без этих маршрутов).
@@ -194,18 +194,25 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		if top.virtual and not top.has("published"):
 			# Подъём к вершине — часть маршрута: публикуется как горная тропа перед первым спуском с неё
 			top.published = "climb_%d" % number
-			for k: int in StageTrails._add_trail(w, top.approach, "mountain", PackedFloat32Array(), on_axis, surface):
+			top.ascent_legs = []
+			for k: int in StageTrails._add_trail(w, top.approach, "mountain", PackedFloat32Array(), on_axis, surface,
+					"", null, Callable(), top.ascent_legs):
 				w.trails[k].ride = top.published
 				w.trails[k].ride_style = "climb"
 			stats.climbs += 1
 			stats.climb_km += StageTrails._length(w, top.approach) * GameConfig.TILE / 1000.0
 		var path: PackedInt32Array = c.path
+		var id := "ride_%d" % number
+		var descent: Array = []
 		# Маршрут — участки сети: где он идёт по готовому пути, новых записей нет (11.11.2026)
-		for k: int in StageTrails._add_trail(w, path, "mountain" if STYLES[c.search].grade > StageTrails.TRAIL_GRADE else "trail", PackedFloat32Array(), on_axis, surface):
+		for k: int in StageTrails._add_trail(w, path, "mountain" if STYLES[c.search].grade > StageTrails.TRAIL_GRADE else "trail",
+				PackedFloat32Array(), on_axis, surface, "", null, Callable(), descent):
 			var route: Dictionary = w.trails[k]
-			route.ride = "ride_%d" % number
+			route.ride = id
 			route.ride_style = c.style
 			if top.virtual: route.ride_climb = top.published
+		var ascent: Array = top.get("ascent_legs", [])
+		w.road_rides.routes[id] = {style = c.style, legs = ascent.duplicate(true) + descent, ascent_legs = ascent.size()}
 		number += 1
 		stats.km += c.length / 1000.0
 		stats.styles[c.style] = int(stats.styles.get(c.style, 0)) + 1

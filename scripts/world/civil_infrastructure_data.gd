@@ -2,13 +2,14 @@ class_name CivilInfrastructureData
 extends RefCounted
 ## Стоимость прохода, дорожные покрытия, сооружения, поселения и места инфраструктуры.
 const GridBuffer = preload("res://scripts/core/grid_buffer_2d.gd")
-const CACHE_FIELDS := ["cost", "path_mask", "road_surface", "trails", "bridges", "tunnels", "settlements", "sites", "trail_plan"]
+const CACHE_FIELDS := ["cost", "path_mask", "road_surface", "trails", "bridges", "tunnels", "settlements", "sites", "trail_plan", "road_rides"]
 var layout: GridBuffer.Layout
 var cost: GridBuffer.Float32
 var path_mask: GridBuffer.Byte
 var road_surface: GridBuffer.Byte
 ## Полная сеть путей для движения, карты и покрытий. Велотрассы входят сюда как path_record() с trail_id.
 var trails: Array = []        # Физические участки и их покрытия. Контракт: docs/ROAD_DATA_CONTRACT.md.
+var road_rides := {}           # Направленные интервалы природных веломаршрутов. Пустой словарь у старых миров.
 var bridges: Array[BridgeData] = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
 var tunnels: Array[TunnelData] = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array[SettlementData] = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]

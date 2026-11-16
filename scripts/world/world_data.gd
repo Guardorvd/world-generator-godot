@@ -463,6 +463,11 @@ var trails: Array:
 		return civil.trails
 	set(value):
 		civil.trails = value
+var road_rides: Dictionary:
+	get:
+		return civil.road_rides
+	set(value):
+		civil.road_rides = value
 var trail_plan: Dictionary:
 	get:
 		return civil.trail_plan

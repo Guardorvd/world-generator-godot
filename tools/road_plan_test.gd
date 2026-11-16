@@ -1,14 +1,17 @@
 extends SceneTree
 ## Стенд дорог стартового плана (ревью дорожной сети 29.10): места и пути (StageLandmarks + StageTrails) на готовой
-## географии одного мира, без растительности, полотна и сцены. География генерируется один раз и хранится в
+## географии одного мира, без сцены. Для отчёта дополнительно строятся готовая поверхность и растительность.
+## География генерируется один раз и хранится в
 ## user://road_plan_test как слой кэша миров (тот же путь, что загрузка мира с одной географией из кэша), дальше
 ## каждый запуск начинается сразу с мест. Печатает причины отказов, работу поиска, время и отпечаток результата.
 ##   godot --headless --path . --script res://tools/road_plan_test.gd -- [--seed Север-1234] [--save <файл.json>] [--compare <файл.json>]
 ## --save пишет отпечаток (было), --compare сверяет с ним (стало): тот же мир — рефакторинг, разный — изменение маршрутов.
+## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
 
 const SelfTest := preload("res://tools/selftest.gd")
 const Metrics := preload("res://tools/road_network_metrics.gd")
+const Floor := preload("res://scripts/render/forest_floor.gd")
 const SIZE := 512
 const DIR := "user://road_plan_test"
 const KEYS := ["stage_ms", "main_roads_ms", "secondary_roads_ms", "mountain_trails_ms", "settlement_attempts",
@@ -22,6 +25,12 @@ func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 300)
 	var args := OS.get_cmdline_user_args()
 	var seed_text := _arg(args, "--seed", "Север-1234")
+	var metrics_file := _arg(args, "--metrics-json", "")
+	if "--metrics-json" in args and (metrics_file.is_empty() or metrics_file.begins_with("--")):
+		printerr("--metrics-json требует путь к файлу")
+		quit(1)
+		return
+	var report_metrics := "--metrics" in args or not metrics_file.is_empty()
 	# --profile: время поиска A* в каждой попытке и всего (FastGrid считает вызовы; на мир не влияет).
 	Pathfinder.profile_searches = "--profile" in args
 	# --macro-legacy: прежние старт, осадки и лужи (docs/MACRO_GEOGRAPHY.md) — сравнить время путей на той же версии
@@ -119,6 +128,10 @@ func _initialize() -> void:
 	# Готовая поверхность, как в игре (полотно, сооружения с площадками въездов, метровая сетка дорог):
 	# въезд каждого моста по ширине настила на уровне его конца и не над водой (как road_safety_test).
 	started = Time.get_ticks_msec()
+	if report_metrics:
+		StageSites.run(w)
+		StageLakes.run(w)
+		w.generation.surface_rock = RockRelief.field_of(w)
 	RoadSurface.run(w)
 	var final := Heightfield.new(w)
 	var max_gap := 0.0
@@ -145,18 +158,32 @@ func _initialize() -> void:
 	if "--rides" in args:
 		fails += _rides(w, final, seed_text)
 	# --metrics: измеритель сети (tools/road_network_metrics.gd) и картинка tools/control/runs/network/<сид>[-<метка>].png
-	if "--metrics" in args:
+	if report_metrics:
 		started = Time.get_ticks_msec()
+		StageVegetation.run(w, final)
 		var trodden := w.cost
 		StageTrails._build_cost(w)
 		var base := w.cost
 		w.cost = trodden
-		var m: Dictionary = Metrics.measure(w, base, final)
-		print("NETWORK ", JSON.stringify(Metrics.summary(m)))
-		var tag := _arg(args, "--tag", "")
-		var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
-		Metrics.draw(w, m, file)
-		print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
+		var m: Dictionary = Metrics.measure(w, base, final, Floor.surface_image(w))
+		var report := Metrics.summary(m)
+		print("NETWORK ", JSON.stringify(report))
+		if report.route_usage.status != "recorded" or report.route_usage.routes.size() != w.generation_profile.rides.accepted:
+			printerr("Отчёт не содержит полного набора принятых веломаршрутов")
+			fails += 1
+		if not metrics_file.is_empty():
+			var output := FileAccess.open(metrics_file, FileAccess.WRITE)
+			if output == null or not output.store_string(JSON.stringify(report, "\t") + "\n"):
+				printerr("Не записан отчёт ", metrics_file)
+				fails += 1
+			else:
+				output.close()
+				print("отчёт сети: ", metrics_file)
+		if "--metrics" in args:
+			var tag := _arg(args, "--tag", "")
+			var file := ProjectSettings.globalize_path("res://tools/control/runs/network").path_join(seed_text + ("" if tag.is_empty() else "-" + tag) + ".png")
+			Metrics.draw(w, m, file)
+			print("картинка сети: %s (%d мс)" % [file, Time.get_ticks_msec() - started])
 	# --bed: полотно RoadBed на этой сети (только C#): время, число клеток и хеш рельефа; --refine — и метровая сетка.
 	# Хеши сравнивать между версиями кода (было — запуск на прежнем коммите): изменение значит, что результат другой
 	if "--bed" in args:
@@ -213,8 +240,8 @@ func _initialize() -> void:
 	quit(1 if fails > 0 else 0)
 
 
-## Природные маршруты: сводка RideRoutes, каждый маршрут на готовой поверхности (уклон на 8 м, вода на оси),
-## картинка tools/control/runs/rides/<сид>.png (дороги светлые, тропы серые, горные тропы коричневые; маршруты: плавные
+## Природные маршруты: сводка RideRoutes и проверка добавленных ими полотен (уклон на 8 м, вода на оси),
+## картинка tools/control/runs/rides/<сид>.png (дороги светлые, тропы серые, горные тропы коричневые; метки полотен: плавные
 ## оранжевые, лесные зелёные, технические красные, старт — белая точка). Возвращает число отказов.
 func _rides(w: WorldData, final: Heightfield, seed_text: String) -> int:
 	var stats: Dictionary = w.generation_profile.get("rides", {})

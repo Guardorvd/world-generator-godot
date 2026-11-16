@@ -12,7 +12,7 @@ extends RefCounted
 ##   hairpins    — развороты > 110° на 16 м (хорды по 8 м до и после точки), один на 16 м; sharp — то же > 60°
 ##   grade       — по виду: доля длины круче 12 %, средний и наибольший продольный уклон на хордах 16 м
 ##                 по готовой поверхности (surface, вне сооружений); без surface не считается
-##   С 15.11 природные маршруты (ключ ride) считаются отдельным видом ride в длинах, изломах и новых показателях.
+##   Характер полотна группируется по kind. Использование участков веломаршрутами измеряется отдельно.
 ##   corners     — настоящие углы (с 15.11): вершина линии с поворотом > 20°, у которой оба соседних отрезка не короче
 ##                 0,3 клетки. Вписанная дуга (_road_curve) идёт точками через ≤ 0,25 клетки и углом не считается, даже
 ##                 тесная (kinks её считает); угол — место, где сглаживание оставило вершину ломаной. Один на 1 клетку.
@@ -32,14 +32,25 @@ const SHARP := 60.0
 const STEEP := 0.12
 const CORNER := 20.0
 const CORNER_SEG := 0.3
+const Samples := preload("res://tools/road_surface_samples.gd")
+const Topology := preload("res://scripts/world/road_topology.gd")
+const RoadRides := preload("res://scripts/world/road_rides.gd")
 
 
-static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: Heightfield = null) -> Dictionary:
+static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: Heightfield = null, forest: Image = null) -> Dictionary:
 	var routes: Array = []
+	var excluded := {}
 	for k in w.trails.size():
 		var t: Dictionary = w.trails[k]
-		if t.kind == "animal" or t.has("trail_id") or t.pts.size() < 2: continue
+		var reason := "animal" if t.kind == "animal" else ("prepared" if t.has("trail_id") else "")
+		if reason.is_empty() and t.pts.size() < 2: reason = "short_axis"
+		if not reason.is_empty():
+			var entry: Dictionary = excluded.get_or_add(reason, {sections = 0, axis_m = 0.0})
+			entry.sections += 1
+			entry.axis_m += Topology.length_m(t.pts)
+			continue
 		routes.append(k)
+	for entry: Dictionary in excluded.values(): entry.axis_m = snappedf(entry.axis_m, 0.01)
 	# индекс отрезков и концов
 	var bins := {}
 	var ends := {}
@@ -57,7 +68,7 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 					var key := Vector2i(bx, by)
 					if not bins.has(key): bins[key] = []
 					bins[key].append([r, a, b])
-		var kind: String = _kind(w.trails[r])
+		var kind: String = String(w.trails[r].kind)
 		length_by_kind[kind] = float(length_by_kind.get(kind, 0.0)) + total * GameConfig.TILE
 		for p: Dictionary in [pts[0], pts[-1]]:
 			var key := Vector2i(floori(p.x / BIN), floori(p.y / BIN))
@@ -70,12 +81,12 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var parallel := 0.0
 	var spots: Array = [] # [point, "overlap" | "parallel"]
 	var pairs := {} # "r:other:вид" -> м
-	var kinks := {road = 0, trail = 0, mountain = 0, ride = 0}
+	var kinks := {road = 0, trail = 0, mountain = 0}
 	var kink_spots: Array = []
-	var corners := {road = 0, trail = 0, mountain = 0, ride = 0}
+	var corners := {road = 0, trail = 0, mountain = 0}
 	var corner_spots: Array = []
-	var hairpins := {road = 0, trail = 0, mountain = 0, ride = 0}
-	var sharp := {road = 0, trail = 0, mountain = 0, ride = 0}
+	var hairpins := {road = 0, trail = 0, mountain = 0}
+	var sharp := {road = 0, trail = 0, mountain = 0}
 	var hairpin_spots: Array = []
 	var grade_acc := {} # вид -> [длина, длина круче STEEP, сумма уклон×длина, наибольший]
 	var grade_at := {} # вид -> [путь, x, y, рядом с концом пути (16 м)] — где наибольший уклон
@@ -125,8 +136,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 			if absf(rad_to_deg((b - a).angle_to(c - b))) <= CORNER: continue
 			if b.distance_to(last_corner) < 1.0 or _near_end(ends, b, 2.0) or _near_structure(structures, b, 3.0): continue
 			last_corner = b
-			corners[_kind(t)] = int(corners.get(_kind(t), 0)) + 1
-			if _kind(t) != "mountain": corner_spots.append(b)
+			corners[t.kind] = int(corners.get(t.kind, 0)) + 1
+			if t.kind != "mountain": corner_spots.append(b)
 		var hairpin_skip := 0
 		var sharp_skip := 0
 		for n in stations.size():
@@ -140,8 +151,8 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 				var d0 := stations[n] - stations[n - 1]
 				var d1 := stations[n + 1] - stations[n]
 				if d0.length() > 0.01 and d1.length() > 0.01 and absf(rad_to_deg(d0.angle_to(d1))) > KINK:
-					kinks[_kind(t)] = int(kinks.get(_kind(t), 0)) + 1
-					if _kind(t) != "mountain": kink_spots.append(p)
+					kinks[t.kind] = int(kinks.get(t.kind, 0)) + 1
+					if t.kind != "mountain": kink_spots.append(p)
 			# развороты: хорды по 8 м до и после точки
 			if n >= 2 and n + 2 < stations.size() and not _near_end(ends, p, 2.0) and not _near_structure(structures, p, 3.0):
 				var u0 := stations[n] - stations[n - 2]
@@ -149,11 +160,11 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 				if u0.length() > 0.01 and u1.length() > 0.01:
 					var turn := absf(rad_to_deg(u0.angle_to(u1)))
 					if turn > HAIRPIN and n >= hairpin_skip:
-						hairpins[_kind(t)] = int(hairpins.get(_kind(t), 0)) + 1
+						hairpins[t.kind] = int(hairpins.get(t.kind, 0)) + 1
 						hairpin_skip = n + 4
-						if _kind(t) != "mountain": hairpin_spots.append(p)
+						if t.kind != "mountain": hairpin_spots.append(p)
 					elif turn > SHARP and turn <= HAIRPIN and n >= sharp_skip:
-						sharp[_kind(t)] = int(sharp.get(_kind(t), 0)) + 1
+						sharp[t.kind] = int(sharp.get(t.kind, 0)) + 1
 						sharp_skip = n + 4
 			# продольный уклон по готовой поверхности на хордах 16 м
 			if surface != null and n % 2 == 0 and n + 4 < stations.size():
@@ -164,15 +175,16 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 					if run > 8.0:
 						var rise := absf(surface.ground_at(q.x * GameConfig.TILE, q.y * GameConfig.TILE) - surface.ground_at(p.x * GameConfig.TILE, p.y * GameConfig.TILE))
 						var gr := rise / run
-						if not grade_acc.has(_kind(t)): grade_acc[_kind(t)] = [0.0, 0.0, 0.0, 0.0]
-						var acc: Array = grade_acc[_kind(t)]
+						if not grade_acc.has(t.kind): grade_acc[t.kind] = [0.0, 0.0, 0.0, 0.0, 0]
+						var acc: Array = grade_acc[t.kind]
 						var share := run * 0.5 # хорды через одну станцию перекрываются вдвое
 						acc[0] += share
+						acc[4] += 1
 						if gr > STEEP: acc[1] += share
 						acc[2] += gr * share
 						if gr > acc[3]:
 							acc[3] = gr
-							grade_at[_kind(t)] = [r, snappedf(mid.x, 0.1), snappedf(mid.y, 0.1), _near_end(ends, mid, 4.0)]
+							grade_at[t.kind] = [r, snappedf(mid.x, 0.1), snappedf(mid.y, 0.1), _near_end(ends, mid, 4.0)]
 			var near_node := _near_end(ends, p, NODE_R)
 			var best := {}
 			for by in range(floori((p.y - NEAR_MAX) / BIN), floori((p.y + NEAR_MAX) / BIN) + 1):
@@ -229,14 +241,14 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	var grade := {}
 	for kind: String in grade_acc:
 		var acc: Array = grade_acc[kind]
-		grade[kind] = {steep_share = snappedf(acc[1] / maxf(acc[0], 1.0), 0.001), mean = snappedf(acc[2] / maxf(acc[0], 1.0), 0.001), max = snappedf(acc[3], 0.001), max_at = grade_at.get(kind, [])}
+		grade[kind] = {samples = acc[4], weighted_chord_m = snappedf(acc[0], 0.01), steep_share = snappedf(acc[1] / maxf(acc[0], 1.0), 0.001), mean = snappedf(acc[2] / maxf(acc[0], 1.0), 0.001), max = snappedf(acc[3], 0.001), max_at = grade_at.get(kind, [])}
 	var raw_turns := {}
 	var road_cells: Array = w.generation.road_cells if w.generation != null else []
 	var raw_acc := {}
 	for r: int in routes:
 		if r >= road_cells.size(): continue
 		var cells: PackedInt32Array = road_cells[r]
-		var kind: String = _kind(w.trails[r])
+		var kind: String = String(w.trails[r].kind)
 		if not raw_acc.has(kind): raw_acc[kind] = [0, 0, 0]
 		var acc: Array = raw_acc[kind]
 		acc[0] += maxi(0, cells.size() - 1)
@@ -249,16 +261,106 @@ static func measure(w: WorldData, base_cost := PackedFloat32Array(), surface: He
 	for kind: String in raw_acc:
 		var acc: Array = raw_acc[kind]
 		raw_turns[kind] = {per100 = snappedf(acc[1] * 100.0 / maxf(acc[0], 1.0), 0.1), right_or_more = acc[2], steps = acc[0]}
-	return {routes = routes.size(), length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
+	return {seed = w.seed_text, grid_cells = [w.W, w.H], requested = _requested(), route_usage = _route_usage(w),
+		sections = routes.size(), excluded = excluded, character_by_kind = Samples.measure(w, routes, surface, forest),
+		decisions = {width = w.generation_profile.get("road_width_decisions"),
+			line_grade_fallbacks = w.generation_profile.get("road_line_grade_fallbacks"),
+			ride_rejections = w.generation_profile.get("rides", {}).get("rejected")},
+		length_m = lengths, overlap_m = roundi(overlap), parallel_m = roundi(parallel),
 		double_cross = double_cross, crossings = crossings.size(), kinks = kinks,
 		corners = corners, corner_spots = corner_spots, hairpins = hairpins, sharp = sharp, grade = grade, raw_turns = raw_turns, hairpin_spots = hairpin_spots, ghost_cells = ghost if not base_cost.is_empty() else -1,
 		mask_orphan = orphan, line_unmasked = unmasked, samples = samples, junction_ends = junctions,
 		spots = spots, kink_spots = kink_spots, double_spots = double_spots, pairs = _top(pairs, 8)}
 
 
-## Вид пути для измерителя: природные велосипедные маршруты (RideRoutes, ключ ride) отдельно от троп (с 15.11)
-static func _kind(t: Dictionary) -> String:
-	return "ride" if t.has("ride") else String(t.kind)
+static func _requested() -> Dictionary:
+	var tuning := RoadTuning.current()
+	var settings := _exported(tuning)
+	for kind: String in ["road", "trail", "mountain"]:
+		settings[kind] = _exported(tuning.kind(kind))
+	settings.routing = _exported(tuning.routing)
+	settings.section = _exported(tuning.section)
+	settings.obstacles = _exported(tuning.obstacles)
+	return {road_tuning = settings, bed_digest = tuning.digest(), routing_overrides = StageTrails.routing_overrides.duplicate(true),
+		landscape_character = RoadRefinement.landscape_character, rides_enabled = RideRoutes.enabled(), ride_search_styles = RideRoutes.STYLES}
+
+
+static func _exported(resource: Resource) -> Dictionary:
+	var values := {}
+	for property: Dictionary in resource.get_property_list():
+		if (property.usage & PROPERTY_USAGE_SCRIPT_VARIABLE) == 0 or (property.usage & PROPERTY_USAGE_EDITOR) == 0:
+			continue
+		var value: Variant = resource.get(property.name)
+		if value is Resource: continue
+		values[String(property.name)] = Array(value) if value is PackedFloat64Array else value
+	return values
+
+
+static func _route_usage(w: WorldData) -> Dictionary:
+	if w.road_rides.is_empty():
+		var tags := {}
+		for t: Dictionary in w.trails:
+			if not t.has("ride"): continue
+			var label: Dictionary = tags.get_or_add(t.ride, {style = t.ride_style, tagged_sections = 0, tagged_m = 0.0})
+			label.tagged_sections += 1
+			label.tagged_m += Topology.length_m(t.pts)
+		for label: Dictionary in tags.values(): label.tagged_m = snappedf(label.tagged_m, 0.01)
+		return {status = "legacy_tags_only" if not tags.is_empty() else "unavailable", tags = tags}
+	var issue := RoadRides.validation_error(w)
+	if not issue.is_empty(): return {status = "invalid", error = issue}
+	var sections := Topology.sections(w)
+	var result := {status = "recorded", routes = {}, by_style = {}, by_kind = {}}
+	var events := {}
+	for id: String in w.road_rides.routes:
+		var route: Dictionary = w.road_rides.routes[id]
+		var length := 0.0
+		var ascent := 0.0
+		var reverse := 0.0
+		for i in route.legs.size():
+			var leg: Dictionary = route.legs[i]
+			var distance := absf(leg.to_m - leg.from_m)
+			length += distance
+			if i < route.ascent_legs: ascent += distance
+			if leg.to_m < leg.from_m: reverse += distance
+			var cuts: Array = events.get_or_add(leg.section, [])
+			cuts.append([minf(leg.from_m, leg.to_m), id, 1])
+			cuts.append([maxf(leg.from_m, leg.to_m), id, -1])
+			var group: Dictionary = result.by_kind.get_or_add(sections[leg.section].kind, {sections = 0, traversed_m = 0.0,
+				covered_m = 0.0, shared_between_routes_m = 0.0})
+			group.traversed_m += distance
+		var style: Dictionary = result.by_style.get_or_add(route.style, {routes = 0, traversed_m = 0.0, ascent_m = 0.0})
+		style.routes += 1
+		style.traversed_m += length
+		style.ascent_m += ascent
+		result.routes[id] = {style = route.style, legs = route.legs.duplicate(true), ascent_legs = route.ascent_legs,
+			traversed_m = snappedf(length, 0.01), ascent_m = snappedf(ascent, 0.01), reverse_m = snappedf(reverse, 0.01)}
+	for id: String in events:
+		var group: Dictionary = result.by_kind[sections[id].kind]
+		group.sections += 1
+		_count_coverage(events[id], group)
+	for group: Dictionary in result.by_kind.values():
+		group.repeated_m = snappedf(group.traversed_m - group.covered_m, 0.01)
+		for field: String in ["traversed_m", "covered_m", "shared_between_routes_m"]: group[field] = snappedf(group[field], 0.01)
+	for style: Dictionary in result.by_style.values():
+		style.traversed_m = snappedf(style.traversed_m, 0.01)
+		style.ascent_m = snappedf(style.ascent_m, 0.01)
+	return result
+
+
+static func _count_coverage(events: Array, group: Dictionary) -> void:
+	events.sort_custom(func(a: Array, b: Array) -> bool: return a[0] < b[0])
+	var active := {}
+	var previous: float = events[0][0]
+	for event: Array in events:
+		var distance: float = event[0] - previous
+		if not active.is_empty(): group.covered_m += distance
+		if active.size() > 1: group.shared_between_routes_m += distance
+		var count := int(active.get(event[1], 0)) + int(event[2])
+		if count == 0:
+			active.erase(event[1])
+		else:
+			active[event[1]] = count
+		previous = event[0]
 
 
 static func _tally(pairs: Dictionary, a: int, b: int, what: String, length: float) -> void:
@@ -288,7 +390,7 @@ static func _near_structure(structures: Array, p: Vector2, r: float) -> bool:
 	return false
 
 
-## Картинка сети: дороги белые, тропы светло-серые, горные коричневые, природные маршруты оранжевые;
+## Картинка полотна: дороги белые, тропы светло-серые, горные коричневые;
 ## красные точки — совпадающие оси, жёлтые — параллельные полотна, малиновые — углы (corners, с 15.11; раньше изломы
 ## kinks), голубые — двойные пересечения,
 ## зелёные — развороты > 110° на 16 м.
@@ -306,7 +408,7 @@ static func draw(w: WorldData, m: Dictionary, file: String) -> void:
 	var colors := {road = Color(1, 1, 0.92), trail = Color(0.7, 0.7, 0.66), mountain = Color(0.65, 0.42, 0.25)}
 	for t: Dictionary in w.trails:
 		if t.kind == "animal": continue
-		var color: Color = Color(1.0, 0.55, 0.1) if t.has("ride") else colors.get(t.kind, Color.MAGENTA)
+		var color: Color = colors.get(t.kind, Color.MAGENTA)
 		for k in range(1, t.pts.size()):
 			var a := Vector2(t.pts[k - 1].x, t.pts[k - 1].y) * S
 			var b := Vector2(t.pts[k].x, t.pts[k].y) * S
@@ -330,5 +432,11 @@ static func _dot(img: Image, p: Vector2, c: Color, r: int) -> void:
 ## Без точек для картинки — для печати
 static func summary(m: Dictionary) -> Dictionary:
 	var out := m.duplicate()
-	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots", "corner_spots"]: out.erase(key)
-	return out
+	var metadata := {version = 2}
+	for key: String in ["seed", "grid_cells", "requested", "route_usage", "decisions"]:
+		metadata[key] = out[key]
+		out.erase(key)
+	for key: String in ["spots", "kink_spots", "double_spots", "hairpin_spots", "corner_spots"]:
+		out.erase(key)
+	metadata.physical = out
+	return metadata

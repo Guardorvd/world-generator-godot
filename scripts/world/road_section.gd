@@ -37,19 +37,29 @@ static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
 		var z := Vector2(b.b % w.W + 0.5, b.b / w.W + 0.5) * TILE
 		if a != z:
 			decks.append([a, z, a.direction_to(z)])
+	var by_kind: Dictionary = w.generation_profile.get_or_add("road_width_decisions", {})
 	for t: Dictionary in routes:
-		var shaped := _profile(w, t, surface, junctions, decks, tuning)
+		var decisions: Dictionary = by_kind.get_or_add(t.kind, {stations = 0, sections = 0})
+		decisions.sections += 1
+		decisions.stations += t.pts.size()
+		var shaped := _profile(w, t, surface, junctions, decks, tuning, decisions)
 		if accept.is_valid() and not accept.call(shaped):
+			_note(decisions, "regional_widening_rejected_sections")
 			# A regional bank can constrain widening. Preserve safe narrowing.
 			for k in shaped.size():
 				shaped[k].w = minf(shaped[k].w, t.pts[k].w)
 			if not accept.call(shaped):
+				_note(decisions, "regional_profile_rejected_sections")
 				continue
 		t.pts = shaped
 
 
+static func _note(decisions: Dictionary, reason: String) -> void:
+	decisions[reason] = int(decisions.get(reason, 0)) + 1
+
+
 static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions: Dictionary, decks: Array,
-		tuning: RoadTuning.Section) -> Array:
+		tuning: RoadTuning.Section, decisions: Dictionary) -> Array:
 	var pts: Array = route.pts
 	var count := pts.size()
 	var base: float = tuning.widths[route.kind]
@@ -77,8 +87,15 @@ static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions
 		var rocky := w.biome[cell] in [Biomes.ROCK, Biomes.PEAK, Biomes.STONESHORE]
 		var ford: bool = surface.depth_at(at.x, at.y) > 0.08
 		wet.append(int(ford))
-		var pinch := maxf(side_cut * smoothstep(0.14, 0.52, grade), rock_cut if rocky else 0.0)
-		widths.append(base * (1.0 - maxf(pinch, ford_cut if ford else 0.0)))
+		var by_slope := side_cut * smoothstep(0.14, 0.52, grade)
+		var by_rock := rock_cut if rocky else 0.0
+		var by_ford := ford_cut if ford else 0.0
+		var pinch := maxf(maxf(by_slope, by_rock), by_ford)
+		if pinch > 0.0:
+			if pinch == by_slope: _note(decisions, "side_slope")
+			if pinch == by_rock: _note(decisions, "rock")
+			if pinch == by_ford: _note(decisions, "ford")
+		widths.append(base * (1.0 - pinch))
 		var p: Dictionary = pts[k]
 		var joint: Dictionary = junctions.get(Topology.anchor_key(Vector2(p.x, p.y), w.world_origin), {})
 		var target := -1.0
@@ -88,17 +105,19 @@ static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions
 		junction.append(target)
 		bridge.append(2.0 * BRIDGE_HALF / TILE if _deck(at, axis[maxi(k - 1, 0)], axis[mini(k + 1, count - 1)], decks) else -1.0)
 
-	widths = _blend_junctions(widths, stations, junction, base, wet, cross, axis, surface, tuning.junction_transition)
-	widths = _limit_rate(widths, stations)
+	widths = _blend_junctions(widths, stations, junction, base, wet, cross, axis, surface, tuning.junction_transition, decisions)
+	var limited := _limit_rate(widths.duplicate(), stations)
 	var on_deck := _nearest_anchor(stations, bridge)
 	var result: Array = []
 	for k in count:
 		var p: Dictionary = pts[k].duplicate()
 		var n := on_deck[k]
-		p.w = widths[k]
+		p.w = limited[k]
+		if limited[k] < widths[k]: _note(decisions, "width_rate")
 		if n >= 0:
 			var fade := 1.0 - smoothstep(0.0, BRIDGE_TRANSITION, absf(stations[n] - stations[k]))
-			p.w = lerpf(widths[k], bridge[n], fade)
+			p.w = lerpf(limited[k], bridge[n], fade)
+			if p.w != limited[k]: _note(decisions, "bridge_transition")
 		result.append(p)
 	return result
 
@@ -132,19 +151,27 @@ static func _nearest_anchor(stations: PackedFloat64Array, targets: PackedFloat64
 
 
 static func _blend_junctions(widths: PackedFloat64Array, stations: PackedFloat64Array, junction: PackedFloat64Array,
-		base: float, wet: PackedByteArray, cross: PackedFloat64Array, axis: PackedVector2Array, surface: Object, transition: float) -> PackedFloat64Array:
+		base: float, wet: PackedByteArray, cross: PackedFloat64Array, axis: PackedVector2Array, surface: Object, transition: float,
+		decisions: Dictionary) -> PackedFloat64Array:
 	var closest := _nearest_anchor(stations, junction)
 	for k in widths.size():
 		var n := closest[k]
-		if n < 0 or wet[k] != 0: continue
+		if n < 0: continue
 		var fade := 1.0 - smoothstep(0.0, transition, absf(stations[n] - stations[k]))
 		if fade <= 0.0: continue
+		if wet[k] != 0:
+			_note(decisions, "junction_ford")
+			continue
 		var target := lerpf(widths[k], junction[n], fade)
 		if target > base:
 			var direction := (axis[mini(k + 1, axis.size() - 1)] - axis[maxi(k - 1, 0)]).normalized()
 			var side := direction.orthogonal() * target * TILE * 0.5
 			var at := axis[k]
-			if cross[k] > 0.35 or surface.depth_at(at.x + side.x, at.y + side.y) > 0.08 or surface.depth_at(at.x - side.x, at.y - side.y) > 0.08:
+			if cross[k] > 0.35:
+				_note(decisions, "junction_side_slope")
+				target = base
+			elif surface.depth_at(at.x + side.x, at.y + side.y) > 0.08 or surface.depth_at(at.x - side.x, at.y - side.y) > 0.08:
+				_note(decisions, "junction_wet_edge")
 				target = base
 		widths[k] = target
 	return widths

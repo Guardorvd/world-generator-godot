@@ -19,6 +19,7 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 enum { BRANCH, STONES, LOG, BOULDER, ROOT }
+const KIND_NAMES := ["branch", "stones", "log", "boulder", "root"]
 const CHUNK := 8         # клеток в стороне ячейки индекса линий
 const SAMPLE_STEP := 3.8 # м: скругление пути может добавлять точки через полметра
 const CLEAR_R := 45.0    # у старта (вступительный проезд 11.0) пусто, м
@@ -243,12 +244,35 @@ func protected(route: int, station: float, extent := 5.0) -> bool:
 	return false
 
 
-func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
+## Measure the same candidates as the renderer before window-dependent placement.
+func measure_candidates(h: Heightfield, surface: Image, route: int) -> Dictionary:
+	var decisions := {}
+	var parts := {}
+	var occupied := 0
+	var sample_count := maxi(0, _sampled[route].size() - 1)
+	for n in range(1, sample_count + 1):
+		var candidate := _pick(h, surface, route, n, decisions)
+		if candidate.is_empty():
+			continue
+		occupied += 1
+		for part: Dictionary in candidate.parts:
+			var kind: String = KIND_NAMES[part.kind]
+			parts[kind] = int(parts.get(kind, 0)) + 1
+	return {chords = sample_count, occupied = occupied, parts = parts, rejected = decisions}
+
+
+static func _reject(decisions: Variant, reason: String) -> Dictionary:
+	if decisions != null:
+		decisions[reason] = int(decisions.get(reason, 0)) + 1
+	return {}
+
+
+func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Variant = null) -> Dictionary:
 	var t: Dictionary = _trails[route]
 	var samples := _sampled[route]
 	if n < 3 or n > samples.size() - 3:
-		return {}
-	if protected(route, (_along[route][n - 1] + _along[route][n]) * 0.5): return {}
+		return _reject(decisions, "section_end")
+	if protected(route, (_along[route][n - 1] + _along[route][n]) * 0.5): return _reject(decisions, "prepared_protection")
 	var roll := _roll(route, n, 0)
 	# соседние отрезки не заняты вместе: бревно и камни не ложатся друг на друга
 	var ceiling := _tuning.probability_ceiling
@@ -257,7 +281,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var b := _point(t, samples[n])
 	var length := a.distance_to(b)
 	if length < 1.0:
-		return {}
+		return _reject(decisions, "short_chord")
 	var dir := (b - a) / length
 	var side := Vector2(-dir.y, dir.x)
 	var mid := (a + b) * 0.5
@@ -272,12 +296,13 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	else:
 		var key := Vector2i(floori(float(i) / WorldData.REGION_SIZE), floori(float(j) / WorldData.REGION_SIZE))
 		var region: Dictionary = _regions.get(key, {})
-		if not region.has("fields") or placement == null: return {}
+		if not region.has("fields") or placement == null: return _reject(decisions, "outside_loaded_surface")
 		var rect: Rect2i = region.rect
-		if not rect.has_point(Vector2i(i, j)): return {}
+		if not rect.has_point(Vector2i(i, j)): return _reject(decisions, "outside_loaded_surface")
 		regional = region.fields
 		k = (j - rect.position.y) * rect.size.x + i - rect.position.x
-		if regional.ocean[k] != 0 or regional.lake[k] != 0 or (regional.has("village") and regional.village[k] != 0): return {}
+		if regional.ocean[k] != 0 or regional.lake[k] != 0: return _reject(decisions, "water")
+		if regional.has("village") and regional.village[k] != 0: return _reject(decisions, "near_place")
 		var wet: float = regional.moist[k] if regional.has("moist") else 0.45 + 0.4 * exp(-regional.dw[k] / 3.0)
 		var exposed := StageVegetation.Surface.exposure(OuterLand._saved_elev(regional, k), regional.slope[k], wet)
 		ground = Color(placement.cover_at(mid.x, mid.y), 0.5, wet, exposed)
@@ -307,7 +332,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 		var root_chance: float = _tuning.root_chance * (1.0 - smoothstep(0.4, ROOT_REACH, root_gap)) * _tuning.root_surface[surf]
 		root_chance *= _tuning.root_on_road if t.kind == "road" else 1.0
 		rooted = _tree_roll(root_tree, 0) < root_chance
-	if not debris and not rooted: return {}
+	if not debris and not rooted: return _reject(decisions, "no_selected_candidate")
 	var weights := PackedFloat32Array([
 		# ветки — под деревьями: полог клетки и деревья у отрезка
 		(cover * _tuning.branch_cover + minf(trees, 6) * _tuning.branch_tree) * organic,
@@ -329,21 +354,21 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var kind_scale: float = _tuning.kind_scale[t.kind]
 	total *= kind_scale
 	if not rooted and roll >= minf(total, ceiling):
-		return {}
+		return _reject(decisions, "weighted_probability")
 	# Расчищенные и опасные для раскладки места: старт, поселения, сооружения, вода, развилки.
 	for spot in clear:
 		if spot.distance_to(mid) < CLEAR_R:
-			return {}
+			return _reject(decisions, "opening_clearance")
 	for list: Array in [world.settlements, world.sites]:
 		for place: EntityRecord in list:
 			if absf(place.x - mid.x / TILE) < VILLAGE and absf(place.y - mid.y / TILE) < VILLAGE:
-				return {}
+				return _reject(decisions, "near_place")
 	if (inside and (world.river[k] != 0 or world.dist_water[k] < 1.5 or h.depth_at(mid.x, mid.y) > 0.0)) or (not inside and (regional.river[k] != 0 or regional.dw[k] < 1.5)):
-		return {}
+		return _reject(decisions, "water")
 	for dj in range(-STRUCTURE, STRUCTURE + 1):
 		for di in range(-STRUCTURE, STRUCTURE + 1):
 			if h._cell_list(mid.x + di * TILE, mid.y + dj * TILE) != null:
-				return {}
+				return _reject(decisions, "near_structure")
 	var pairs := around(mid.x, mid.y, JUNCTION + SAMPLE_STEP)
 	for p in range(0, pairs.size(), 2):
 		var other := pairs[p]
@@ -361,16 +386,16 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 		var heading := segment.normalized()
 		var same_direction := absf(dir.dot(heading)) > 0.94
 		if gap < JUNCTION and protected(other, (_along[other][end - 1] + _along[other][end]) * 0.5):
-			return {}
+			return _reject(decisions, "prepared_protection")
 		if same_direction and absf((mid - from).cross(heading)) < 0.6:
 			# A coincident route should not forbid debris on the shared tread.
 			# The first route owns the overlap, regardless of direction.
 			if gap < 0.6 and other < route:
-				return {}
+				return _reject(decisions, "shared_tread_owner")
 			continue
 		var other_half := (float(nearby.pts[other_samples[end - 1]].w) + float(nearby.pts[other_samples[end]].w)) * TILE * 0.25
 		if gap < (half + other_half + 0.5 if same_direction else JUNCTION):
-			return {}
+			return _reject(decisions, "junction_clearance")
 	if rooted:
 		return _roots(route, n, a, dir, side, length, half, root_tree, around_me.owner, ground.b > 0.55)
 	var pick_at: float = _roll(route, n, 1) * total / kind_scale
@@ -424,7 +449,8 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var part := {kind = kind, x = at.x, z = at.y, rot = rot, scale = scale, stretch = stretch, sink = sink}
 	# Keep one continuous central handlebar corridor, including the neighbouring
 	# approach and departure. A bypass on a steep shoulder is not rideable tread.
-	if kind in [LOG, BOULDER] and not _solid_clear(part, t, samples, n, seen, grade): return {}
+	if kind in [LOG, BOULDER] and not _solid_clear(part, t, samples, n, seen, grade):
+		return _reject(decisions, "rideable_corridor")
 	var out := part.duplicate()
 	out.owner = -1
 	out.moss = ground.b > 0.55

@@ -31,6 +31,13 @@ static func section(kind: String, points: Array, origin: Vector2i) -> Dictionary
 	return {kind = kind, pts = points, road_id = section_id(points, origin)}
 
 
+static func length_m(points: Array) -> float:
+	var along := 0.0
+	for i in range(1, points.size()):
+		along += _position(points[i - 1]).distance_to(_position(points[i]))
+	return along * GameConfig.TILE
+
+
 ## Publish the shared anchor in the physical host. Keep its section ID when inserting a vertex.
 static func attach(w: WorldData, host: int, point: Vector2, changed_lines: Variant = null) -> void:
 	var pts: Array = w.trails[host].pts

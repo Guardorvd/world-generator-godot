@@ -4,6 +4,8 @@ extends SceneTree
 const Files := preload("res://scripts/core/cache_file.gd")
 const Surface := preload("res://scripts/game/surface_snapshot.gd")
 const Fixture := preload("res://scripts/lab/trail_lab_fixture.gd")
+const Topology := preload("res://scripts/world/road_topology.gd")
+const Rides := preload("res://scripts/world/road_rides.gd")
 const ROOT := "res://.godot/cache_pipeline_test"
 var fails := 0
 var checks := 0
@@ -278,7 +280,11 @@ func _test_world(cache: WorldCache) -> void:
 	w.trail_plan = {version = StageTrailPlan.VERSION, state = "none"}
 	w.generation_profile = {stages_ms = {historic = 999999}}
 	var prev := cache._save_layer(w, w.W, 0, {})
-	w.trails = [{kind = "trail", pts = [{x = 2.0, y = 2.0, w = 0.4}, {x = 4.0, y = 2.0, w = 0.4}], surf = PackedByteArray([0, 0])}]
+	var section := Topology.section("trail", [{x = 2.0, y = 2.0, w = 0.4}, {x = 4.0, y = 2.0, w = 0.4}], w.world_origin)
+	section.merge({surf = PackedByteArray([0, 0]), ride = "ride_0", ride_style = "flow"})
+	w.trails = [section]
+	w.road_rides = {version = Rides.VERSION, routes = {"ride_0": {style = "flow", ascent_legs = 0,
+		legs = [{section = section.road_id, from_m = 6.0, to_m = 2.0}]}}}
 	prev = cache._save_layer(w, w.W, 1, prev)
 	w.trails[0].pts[0].w = 0.7
 	w.trails[0].surf[0] = RoadSurface.DIRT
@@ -299,12 +305,19 @@ func _test_world(cache: WorldCache) -> void:
 	cache.wait_writes()
 	var canonical: Dictionary = cache._load(w.seed_text, w.W)
 	check(canonical.layers == 3 and canonical.world.trails[0].pts[0].w == 0.7 and canonical.world.trails[0].surf[0] == RoadSurface.DIRT, "explicit layer writers retain nested point/surface changes")
+	check(canonical.world.road_rides == w.road_rides, "places and nature layers preserve directed, partial ride intervals")
+	var broken_ride: Dictionary = canonical.data.duplicate()
+	broken_ride.road_rides = w.road_rides.duplicate(true)
+	broken_ride.road_rides.routes.ride_0.legs[0].to_m = 9.0
+	check(cache._restore(broken_ride, true) == null, "a ride outside the physical axis is rejected before cached paths are used")
 	var old_trails: Array = canonical.data.trails.duplicate(true)
 	old_trails[0].erase("surf")
+	old_trails[0].erase("road_id")
 	var old_layer: Dictionary = canonical.data.merged({trails = old_trails}, true)
+	old_layer.erase("road_rides")
 	var partial := cache._restore(old_layer, false)
-	check(partial != null and partial.trails == old_trails and not partial.trails[0].has("road_id"),
-		"restore accepts a paths layer with no station surfaces or road IDs and preserves its dictionaries")
+	check(partial != null and partial.trails == old_trails and partial.road_rides.is_empty(),
+		"restore accepts a legacy paths layer with tags, no station surfaces and no ride intervals")
 	check(cache._restore(old_layer, true) == null, "a nature layer requires assigned station surfaces")
 	old_trails[0].pts[1].w = 0.0
 	check(cache._restore(old_layer, false) == null, "a corrupt tread is rejected before cached paths are used")

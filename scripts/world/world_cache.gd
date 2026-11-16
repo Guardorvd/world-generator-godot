@@ -52,6 +52,7 @@ var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
 const RoadRecords := preload("res://scripts/world/road_records.gd")
+const RoadRides := preload("res://scripts/world/road_rides.gd")
 const SURFACE_VERSION := 22 # 16.11: calm sections level the fitted trail axis, trail level 1.0; key adds RoadBump.PATCH_VERSION
 const BASE_VERSION := 1
 var io_timings := {}
@@ -783,6 +784,8 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 	var w := WorldData.new()
 	for name: String in WorldData.CACHE_FIELDS:
 		var cur: Variant = w.get(name)
+		if name == "road_rides" and not data.has(name):
+			continue # Older places layers and full-world fixtures have only the publication tags.
 		if not data.has(name) or typeof(data[name]) != typeof(cur):
 			return null
 		if name in ["settlements", "sites", "lakes", "bridges", "tunnels"]:
@@ -804,6 +807,8 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 		return null
 	var phase := RoadRecords.Phase.SURFACED if complete else RoadRecords.Phase.COMPATIBLE
 	var issue := RoadRecords.validation_error(w.trails, "WorldCache (%s)" % w.seed_text, phase)
+	if issue.is_empty():
+		issue = RoadRides.validation_error(w)
 	if not issue.is_empty():
 		push_warning(issue)
 		return null

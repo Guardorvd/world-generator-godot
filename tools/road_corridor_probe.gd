@@ -16,10 +16,10 @@ extends SceneTree
 
 const Snapshot := preload("res://scripts/game/surface_snapshot.gd")
 const Floor := preload("res://scripts/render/forest_floor.gd")
+const Samples := preload("res://tools/road_surface_samples.gd")
 const TILE := GameConfig.TILE
 const KINDS := ["road", "trail", "mountain"]
 const WINDOW := 20          # м, окно продольной меры
-const MID_R := 10           # м, полуокно среднего: «средние формы» — отклонение от среднего по ±10 м
 const NOTICE := 0.06        # м, размах полосы 5–17 м (среднее ±2 м минус среднее ±8 м) в окне: бугор или впадина, заметные с велосипеда
 const REGULAR := Vector3(0.05, 0.03, 0.015) # окно «гладкая лента»: размах продольных форм, разброс выпуклости, разброс перекоса
 
@@ -133,7 +133,7 @@ func run() -> void:
 			var previous: Dictionary = JSON.parse_string(FileAccess.get_file_as_string(previous_path))
 			sections = []
 			for old: Dictionary in previous.sections:
-				var surf: int = w.road_surface[_cell(w, Vector2(old.x, old.z))]
+				var surf: int = w.road_surface[Samples.cell(w, Vector2(old.x, old.z))]
 				sections.append({kind = old.kind, route = int(old.route), station = int(old.station), x = old.x, z = old.z,
 					surface = surf, surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"})
 		stations = {}
@@ -194,64 +194,8 @@ func _material_runs(w: WorldData) -> Dictionary:
 	return result
 
 
-## Станции через 1 м по линии пути: точка, полуширина
-func _stations(t: Dictionary) -> Dictionary:
-	var pts: Array = t.pts
-	var ps := PackedVector2Array()
-	var half := PackedFloat32Array()
-	var along := 0.0
-	var next := 0.0
-	for n in range(1, pts.size()):
-		var a := Vector2(pts[n - 1].x, pts[n - 1].y) * TILE
-		var b := Vector2(pts[n].x, pts[n].y) * TILE
-		var length := a.distance_to(b)
-		if length < 0.01: continue
-		while next <= along + length:
-			var f := (next - along) / length
-			ps.append(a.lerp(b, f))
-			half.append(lerpf(float(pts[n - 1].w), float(pts[n].w), f) * TILE * 0.5)
-			next += 1.0
-		along += length
-	return {p = ps, half = half}
-
-
-func _normal(ps: PackedVector2Array, j: int) -> Vector2:
-	var t := (ps[mini(ps.size() - 1, j + 2)] - ps[maxi(0, j - 2)]).normalized()
-	return Vector2(-t.y, t.x)
-
-
-## Клетки, где полотно по правилам закреплено: вода рядом, сооружения, поселения — их не считаем
-func _pinned(w: WorldData, h: Heightfield) -> PackedByteArray:
-	var pin := PackedByteArray()
-	pin.resize(w.N)
-	for i in w.N:
-		if w.dist_water[i] < 3.0 or h.water_level[i] != -INF: pin[i] = 1
-	for s: Dictionary in h.structures:
-		var a := Vector2(s.ax, s.az)
-		var b := Vector2(s.bx, s.bz)
-		var steps := maxi(1, ceili(a.distance_to(b) / TILE))
-		for k in steps + 1:
-			var p := a.lerp(b, float(k) / steps) / TILE
-			for dz in range(-4, 5):
-				for dx in range(-4, 5):
-					var x := floori(p.x) + dx
-					var z := floori(p.y) + dz
-					if x >= 0 and z >= 0 and x < w.W and z < w.H: pin[z * w.W + x] = 1
-	for v: SettlementData in w.settlements:
-		for dz in range(-3, 4):
-			for dx in range(-3, 4):
-				var x := floori(v.x) + dx
-				var z := floori(v.y) + dz
-				if x >= 0 and z >= 0 and x < w.W and z < w.H: pin[z * w.W + x] = 1
-	return pin
-
-
-func _cell(w: WorldData, p: Vector2) -> int:
-	return clampi(floori(p.y / TILE), 0, w.H - 1) * w.W + clampi(floori(p.x / TILE), 0, w.W - 1)
-
-
 func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
-	var pin := _pinned(w, h)
+	var pin := Samples.protection(w, h)
 	var picked := []
 	# по виду пути самый длинный; ещё самая длинная лесная тропа (покрытие у начала), если она есть
 	for kind: String in KINDS + ["stone", "prepared"] + ([] if forest != null else ["forest"]):
@@ -267,24 +211,24 @@ func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
 			elif kind == "forest":
 				if t.kind != "trail" or t.surf.is_empty() or t.surf[t.surf.size() / 3] != RoadSurface.FOREST: continue
 			elif kind != "prepared" and t.kind != kind: continue
-			var n: int = _stations(t).p.size()
+			var n: int = Samples.stations(t).p.size()
 			if n > best_len:
 				best_len = n
 				best = k
 		if best < 0 or best_len < 90: continue
-		var st := _stations(w.trails[best])
+		var st := Samples.stations(w.trails[best])
 		var ps: PackedVector2Array = st.p
 		var at := int(best_len * 0.35)
 		if kind == "stone":
-			while at < best_len - 45 and w.road_surface[_cell(w, ps[at])] != RoadSurface.STONE: at += 1
+			while at < best_len - 45 and w.road_surface[Samples.cell(w, ps[at])] != RoadSurface.STONE: at += 1
 		while at < best_len - 45:
 			var clean := true
 			for j in range(at - 30, at + 31, 3):
-				if pin[_cell(w, ps[j])] != 0: clean = false; break
+				if pin[Samples.cell(w, ps[j])] != 0: clean = false; break
 			if clean: break
 			at += 10
 		if at >= best_len - 45: continue
-		var surf: int = w.road_surface[_cell(w, ps[at])]
+		var surf: int = w.road_surface[Samples.cell(w, ps[at])]
 		picked.append({kind = kind, route = best, station = at, x = ps[at].x, z = ps[at].y, surface = surf,
 			surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"})
 	if forest != null:
@@ -293,19 +237,19 @@ func _sections(w: WorldData, h: Heightfield, forest: Image) -> Array:
 		for route in w.trails.size():
 			var trail: Dictionary = w.trails[route]
 			if trail.kind != "trail" or trail.has("trail_id"): continue
-			var points: PackedVector2Array = _stations(trail).p
+			var points: PackedVector2Array = Samples.stations(trail).p
 			for j in range(45, points.size() - 45, 16):
-				if pin[_cell(w, points[j])] != 0: continue
+				if pin[Samples.cell(w, points[j])] != 0: continue
 				var cover := 0.0
 				for k in range(j - 24, j + 25, 8):
-					var side := _normal(points, k) * 4.0
+					var side := Samples.normal(points, k) * 4.0
 					for p: Vector2 in [points[k] - side, points[k] + side]:
-						var cell := _cell(w, p)
+						var cell := Samples.cell(w, p)
 						cover += forest.get_pixel(cell % w.W, cell / w.W).r
 				cover *= minf(1.0, (points.size() - j) / float(ride_metres))
 				if cover <= best_cover: continue
 				best_cover = cover
-				var surf: int = w.road_surface[_cell(w, points[j])]
+				var surf: int = w.road_surface[Samples.cell(w, points[j])]
 				best = {kind = "forest", route = route, station = j, x = points[j].x, z = points[j].y, surface = surf,
 					surface_name = RoadSurface.LIST[surf].get("name", "-") if surf > 0 else "-"}
 		if not best.is_empty(): picked.append(best)
@@ -337,28 +281,13 @@ func _band(a: PackedFloat64Array) -> PackedFloat64Array:
 	return outv
 
 
-## Отклонение от среднего по ±MID_R станций (префиксные суммы)
-func _detrend(a: PackedFloat64Array) -> PackedFloat64Array:
-	var n := a.size()
-	var sum := PackedFloat64Array()
-	sum.resize(n + 1)
-	for j in n: sum[j + 1] = sum[j] + a[j]
-	var outv := PackedFloat64Array()
-	outv.resize(n)
-	for j in n:
-		var lo := maxi(0, j - MID_R)
-		var hi := mini(n - 1, j + MID_R)
-		outv[j] = a[j] - (sum[hi + 1] - sum[lo]) / (hi - lo + 1)
-	return outv
-
-
 func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
-	var pin := _pinned(w, h)
+	var pin := Samples.protection(w, h)
 	var groups := {}
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
 		if not t.kind in KINDS: continue
-		var st := _stations(t)
+		var st := Samples.stations(t)
 		var ps: PackedVector2Array = st.p
 		var hw: PackedFloat32Array = st.half
 		var n := ps.size()
@@ -369,7 +298,7 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 		for arr: PackedFloat64Array in [c, raw, l, r, tilt, dish, shoulder, grade]: arr.resize(n)
 		for j in n:
 			var p := ps[j]
-			var nn := _normal(ps, j)
+			var nn := Samples.normal(ps, j)
 			var half := hw[j]
 			c[j] = h.ground_at(p.x, p.y)
 			raw[j] = h.ground_at(p.x, p.y, true)
@@ -392,24 +321,24 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 		var keep := PackedFloat32Array()
 		keep.resize(n * 6)
 		for j in n:
-			var nn := _normal(ps, j)
+			var nn := Samples.normal(ps, j)
 			keep[j * 6] = c[j]
 			keep[j * 6 + 1] = l[j]
 			keep[j * 6 + 2] = r[j]
 			keep[j * 6 + 3] = h.ground_at(ps[j].x - nn.x * hw[j] * 0.9, ps[j].y - nn.y * hw[j] * 0.9)
 			keep[j * 6 + 4] = h.ground_at(ps[j].x + nn.x * hw[j] * 0.9, ps[j].y + nn.y * hw[j] * 0.9)
-			keep[j * 6 + 5] = pin[_cell(w, ps[j])]
+			keep[j * 6 + 5] = int(pin[Samples.cell(w, ps[j])] != 0)
 		stations[route] = keep
-		var mids := _detrend(c); var raw_mids := _detrend(raw); var tvs := _detrend(tilt)
+		var mids := Samples.detrend(c); var raw_mids := Samples.detrend(raw); var tvs := Samples.detrend(tilt)
 		var band := _band(c); var raw_band := _band(raw)
-		var ls := _detrend(l); var rs := _detrend(r)
+		var ls := Samples.detrend(l); var rs := Samples.detrend(r)
 		var windows := floori(n / float(WINDOW))
 		for k in windows:
 			var lo := k * WINDOW
 			var hi := lo + WINDOW
 			var pinned := false
 			for j in range(lo, hi, 2):
-				if pin[_cell(w, ps[j])] != 0: pinned = true; break
+				if pin[Samples.cell(w, ps[j])] != 0: pinned = true; break
 			var slope := absf(raw[mini(n - 1, hi)] - raw[lo]) / WINDOW
 			var acc := {mid2 = 0.0, raw_mid2 = 0.0, tilt_var2 = 0.0, dish_abs = 0.0, line2 = 0.0, shoulder = 0.0}
 			var notice := false
@@ -439,7 +368,7 @@ func _metrics(w: WorldData, h: Heightfield) -> Dictionary:
 			var key: String = t.kind + ("/плоско" if slope < 0.03 else "/склон")
 			# 15.11: характер по покрытию (лес, луг, камень...) и ритм — спокойные и насыщенные окна, связь с полем кочек
 			var centre := ps[(lo + hi) / 2]
-			var surf_id: int = w.road_surface[_cell(w, centre)] if not w.road_surface.is_empty() else 0
+			var surf_id: int = w.road_surface[Samples.cell(w, centre)] if not w.road_surface.is_empty() else 0
 			var by_surface: String = "~" + t.kind + "@" + String(RoadSurface.LIST[surf_id].name)
 			var window_rms := sqrt(acc.mid2 / WINDOW)
 			var patch := RoadBump.patch_x(centre.x + w.world_origin.x * GameConfig.TILE, centre.y + w.world_origin.y * GameConfig.TILE)
@@ -490,7 +419,7 @@ static func _corr(g: Dictionary, n: int) -> float:
 
 ## Заезд по участку с 8 м/с, руль держит ось (точка в 5 м впереди).
 func _ride(w: WorldData, h: Heightfield, s: Dictionary, with_clutter := false) -> Dictionary:
-	var st := _stations(w.trails[s.route])
+	var st := Samples.stations(w.trails[s.route])
 	var ps: PackedVector2Array = st.p
 	var from: int = maxi(0, s.station - 25)
 	var b := BikeRide.new()
@@ -608,19 +537,19 @@ func _nearest_root(at: Vector2) -> Vector2:
 ## Высоты участка для чертежа: ось и две линии движения ±0,5 полуширины на ±30 м, три поперечника
 func _profile(h: Heightfield, s: Dictionary) -> Dictionary:
 	var w := h.world
-	var st := _stations(w.trails[s.route])
+	var st := Samples.stations(w.trails[s.route])
 	var ps: PackedVector2Array = st.p
 	var hw: PackedFloat32Array = st.half
 	var axis := []
 	for j in range(s.station - 30, s.station + 31):
-		var nn := _normal(ps, j)
+		var nn := Samples.normal(ps, j)
 		var half := hw[j]
 		axis.append([h.ground_at(ps[j].x, ps[j].y), h.ground_at(ps[j].x - nn.x * half * 0.5, ps[j].y - nn.y * half * 0.5),
 			h.ground_at(ps[j].x + nn.x * half * 0.5, ps[j].y + nn.y * half * 0.5), h.ground_at(ps[j].x, ps[j].y, true)])
 	var cuts := []
 	for off in [-12, 0, 12]:
 		var j: int = s.station + off
-		var nn := _normal(ps, j)
+		var nn := Samples.normal(ps, j)
 		var row := []
 		for k in range(-24, 25):
 			var d := k * 0.25
@@ -660,7 +589,7 @@ func _scene() -> void:
 
 
 func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> void:
-	var st := _stations(w.trails[s.route])
+	var st := Samples.stations(w.trails[s.route])
 	var ps: PackedVector2Array = st.p
 	var hw: PackedFloat32Array = st.half
 	var j: int = s.station
@@ -674,7 +603,7 @@ func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> v
 	mesh.surface_set_material(0, terrain_material)
 	mesh_node.mesh = mesh
 	var back := ps[maxi(0, j - 9)]
-	var nn := _normal(ps, j)
+	var nn := Samples.normal(ps, j)
 	var views := {
 		ride = [Vector3(back.x + nn.x * 0.4, h.ground_at(back.x, back.y) + 1.35, back.y + nn.y * 0.4), ps[mini(ps.size() - 1, j + 14)], 0.2],
 		side = [_side_camera(h, ps[j], nn, hw[j]), ps[j], 0.0],
@@ -702,14 +631,14 @@ func _shoot(w: WorldData, h: Heightfield, seed_text: String, s: Dictionary) -> v
 
 ## A short eye-level camera pass over the same production mesh, not a full-game FPS benchmark.
 func _motion(w: WorldData, h: Heightfield, s: Dictionary) -> Dictionary:
-	var ps: PackedVector2Array = _stations(w.trails[s.route]).p
+	var ps: PackedVector2Array = Samples.stations(w.trails[s.route]).p
 	var times := PackedFloat32Array()
 	var gpu := PackedFloat32Array()
 	for frame in 120:
 		var station := float(s.station) - 9.0 + frame * 8.0 / 60.0
 		var j := clampi(floori(station), 0, ps.size() - 16)
 		var p := ps[j].lerp(ps[j + 1], station - floorf(station))
-		var side := _normal(ps, j) * 0.4
+		var side := Samples.normal(ps, j) * 0.4
 		var target := ps[j + 14]
 		camera.look_at_from_position(Vector3(p.x + side.x, h.ground_at(p.x, p.y) + 1.35, p.y + side.y),
 			Vector3(target.x, h.ground_at(target.x, target.y) + 0.2, target.y), Vector3.UP)
