@@ -1,4 +1,6 @@
 extends SceneTree
+
+var climb_costs := RoadTuning.current().routing.climb_costs
 ## Проверка маршрутов: проезжаемый рельеф 4.2, полезные связи, препятствия и реальные миры.
 ## -- --gdscript проверяет ту же логику без C#; -- --quick — только искусственный рельеф.
 
@@ -40,7 +42,7 @@ func _terrain_check() -> void:
 	var finder := Pathfinder.new(W, H, heights)
 	var paths: Array[PackedInt32Array] = []
 	var efforts: Array[float] = []
-	for weight in [StageTrails.ROAD_CLIMB, StageTrails.TRAIL_CLIMB, StageTrails.MOUNTAIN_CLIMB]:
+	for weight in [climb_costs.road, climb_costs.trail, climb_costs.mountain]:
 		var p := finder.find_path(cost, 4 * W + 3, 4 * W + 37, weight)
 		paths.append(p)
 		efforts.append(_effort(p, heights, W))
@@ -51,18 +53,18 @@ func _terrain_check() -> void:
 		Grid.allow_fast = false
 		var gd := Pathfinder.new(W, H, heights)
 		var k := 0
-		for weight in [StageTrails.ROAD_CLIMB, StageTrails.TRAIL_CLIMB, StageTrails.MOUNTAIN_CLIMB]:
+		for weight in [climb_costs.road, climb_costs.trail, climb_costs.mountain]:
 			_check(gd.find_path(cost, 4 * W + 3, 4 * W + 37, weight) == paths[k], "C# и GDScript выбирают одинаковый проход (вес %.0f)" % weight)
 			k += 1
 		Grid.allow_fast = true
 	# INF остаётся запретом независимо от готовности к сложным подъёмам.
 	for y in H:
 		cost[y * W + 20] = INF
-	for weight in [StageTrails.ROAD_CLIMB, StageTrails.TRAIL_CLIMB, StageTrails.MOUNTAIN_CLIMB]:
+	for weight in [climb_costs.road, climb_costs.trail, climb_costs.mountain]:
 		_check(finder.find_path(cost, 4 * W + 3, 4 * W + 37, weight).is_empty(), "непроходимая полоса не пересекается (вес %.0f)" % weight)
 	# Диагональ не должна протиснуться между двумя непроходимыми клетками.
 	var corner := Pathfinder.new(2, 2, PackedFloat32Array([0, 0, 0, 0]))
-	_check(corner.find_path(PackedFloat32Array([1, INF, INF, 1]), 0, 3, StageTrails.MOUNTAIN_CLIMB).is_empty(), "техническая тропа не срезает закрытый угол")
+	_check(corner.find_path(PackedFloat32Array([1, INF, INF, 1]), 0, 3, climb_costs.mountain).is_empty(), "техническая тропа не срезает закрытый угол")
 
 
 func _connection_check(blocked: bool) -> void:
@@ -131,9 +133,9 @@ func _surface_check() -> void:
 	# Равные концы диагонали не делают её ровной: между ними проходит ребро меша.
 	var saddle := Pathfinder.new(2, 2, PackedFloat32Array([0, 2, 2, 0]))
 	var cost := PackedFloat32Array([1, 1, 1, 1])
-	_check(saddle.find_path(cost, 0, 3, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty(), "дорога не перескакивает скрытый выступ между равными концами диагонали")
+	_check(saddle.find_path(cost, 0, 3, climb_costs.road, StageTrails.ROAD_GRADE).is_empty(), "дорога не перескакивает скрытый выступ между равными концами диагонали")
 	saddle.links = PackedByteArray([1 << 4, 0, 0, 1 << 7])
-	_check(saddle.find_path(PackedFloat32Array([1, INF, INF, 1]), 0, 3, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == PackedInt32Array([0, 3]), "готовый диагональный настил доступен вдоль оси между непроходимыми берегами")
+	_check(saddle.find_path(PackedFloat32Array([1, INF, INF, 1]), 0, 3, climb_costs.road, StageTrails.ROAD_GRADE) == PackedInt32Array([0, 3]), "готовый диагональный настил доступен вдоль оси между непроходимыми берегами")
 	var w := WorldData.new()
 	w.W = 16
 	w.H = 16
@@ -155,7 +157,7 @@ func _surface_check() -> void:
 	for i in w.N:
 		heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
-	var p := finder.find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	var p := finder.find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, climb_costs.road, StageTrails.ROAD_GRADE)
 	var passed := false
 	var drivable := not p.is_empty()
 	for i in p:
@@ -167,7 +169,7 @@ func _surface_check() -> void:
 	_check(drivable and passed, "дорога обходит обрыв через проход с проезжаемым уклоном игрового меша")
 	if Grid.allow_fast:
 		Grid.allow_fast = false
-		_check(Pathfinder.new(w.W, w.H, heights).find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == p, "C# и GDScript совпадают при ограничении реального уклона")
+		_check(Pathfinder.new(w.W, w.H, heights).find_path(w.cost, 4 * w.W + 3, 4 * w.W + 12, climb_costs.road, StageTrails.ROAD_GRADE) == p, "C# и GDScript совпадают при ограничении реального уклона")
 		Grid.allow_fast = true
 	# Плоский берег разрешён. Вода и склон под краем ленты запрещают срезать угол.
 	w.h.fill(0.1)
@@ -292,9 +294,9 @@ func _corridor_check() -> void:
 	var start := 8 * w.W + 2
 	var finish := 8 * w.W + 20
 	var finder := Pathfinder.new(w.W, w.H, heights)
-	var axis := finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	var axis := finder.find_path(cost, start, finish, climb_costs.road, StageTrails.ROAD_GRADE)
 	StageTrails._route_surface(finder, surface, 0.9)
-	var wide := finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+	var wide := finder.find_path(cost, start, finish, climb_costs.road, StageTrails.ROAD_GRADE)
 	var safe := not wide.is_empty()
 	for k in range(1, wide.size()):
 		var a := {x = wide[k - 1] % w.W + 0.5, y = wide[k - 1] / w.W + 0.5, w = 0.9}
@@ -311,7 +313,7 @@ func _corridor_check() -> void:
 		Grid.allow_fast = false
 		var gd := Pathfinder.new(w.W, w.H, heights)
 		StageTrails._route_surface(gd, surface, 0.9)
-		_check(gd.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) == wide, "C# и GDScript совпадают при проверке ширины прохода")
+		_check(gd.find_path(cost, start, finish, climb_costs.road, StageTrails.ROAD_GRADE) == wide, "C# и GDScript совпадают при проверке ширины прохода")
 		Grid.allow_fast = true
 	# Обычная тропа проходит той же проверкой углов и сохраняет вход на ось.
 	w.rng = WGRandom.new(41)
@@ -395,20 +397,20 @@ func _technical_check() -> void:
 	var finder := Pathfinder.new(W, W, terrain)
 	var start := 4 * W + 14
 	var finish := 4 * W + 26
-	var gentle := finder.find_path(cost, start, finish, StageTrails.TRAIL_CLIMB, StageTrails.ROAD_GRADE)
-	var technical := StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB)
+	var gentle := finder.find_path(cost, start, finish, climb_costs.trail, StageTrails.ROAD_GRADE)
+	var technical := StageTrails._land_path(finder, cost, start, finish, "trail")
 	_check(not technical.is_empty() and technical.size() < gentle.size(),
 		"тропа выбирает короткий технический проход при существующем длинном пологом обходе")
 	if Grid.allow_fast:
 		Grid.allow_fast = false
-		_check(StageTrails._land_path(Pathfinder.new(W, W, terrain), cost, start, finish, StageTrails.TRAIL_CLIMB) == technical,
+		_check(StageTrails._land_path(Pathfinder.new(W, W, terrain), cost, start, finish, "trail") == technical,
 			"C# и GDScript совпадают на техническом проходе")
 		Grid.allow_fast = true
 	# Единственный коридор с подъёмом 38 %: тропа проходит, дорожный предел его запрещает.
 	cost.fill(INF)
 	for x in range(14, 27): cost[4 * W + x] = 1.0
-	_check(not StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty()
-		and finder.find_path(cost, start, finish, StageTrails.ROAD_CLIMB, StageTrails.ROAD_LIMIT).is_empty(),
+	_check(not StageTrails._land_path(finder, cost, start, finish, "trail").is_empty()
+		and finder.find_path(cost, start, finish, climb_costs.road, StageTrails.ROAD_LIMIT).is_empty(),
 		"пределы дороги и технической тропы различаются")
 	var road_terrain := terrain.duplicate()
 	for i in road_terrain.size(): road_terrain[i] *= 0.65
@@ -417,7 +419,7 @@ func _technical_check() -> void:
 		"дорога допускает короткий подъём 25 % и сохраняет проверку ширины")
 	for i in terrain.size(): terrain[i] *= 2.0
 	finder = Pathfinder.new(W, W, terrain)
-	_check(StageTrails._land_path(finder, cost, start, finish, StageTrails.TRAIL_CLIMB).is_empty(),
+	_check(StageTrails._land_path(finder, cost, start, finish, "trail").is_empty(),
 		"тропа не принимает подъём 76 %")
 	var w := WorldData.new()
 	w.W = 16
@@ -515,20 +517,20 @@ func _reach_check() -> void:
 			finder.links = cases[name][2]
 			var s := 5 * S + 2
 			var t := 20 * S + 21
-			var reach := finder.can_reach(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
-			var found := not finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty()
+			var reach := finder.can_reach(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE)
+			var found := not finder.find_path(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE).is_empty()
 			_check(reach == expect[name] and (reach or not found), "can_reach %s: %s, путь найден: %s" % [name, reach, found])
 			if answers.has(name): _check(answers[name] == reach, "can_reach %s: C# и GDScript совпадают" % name)
 			answers[name] = reach
 			if name == "gap":
 				# Окно без щели: пути в нём нет; окно со щелью — тот же путь, что без окна.
-				var whole := finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+				var whole := finder.find_path(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE)
 				finder.window = Rect2i(0, 0, S, 16)
-				var shut := not finder.can_reach(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE) \
-					and finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE).is_empty()
+				var shut := not finder.can_reach(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE) \
+					and finder.find_path(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE).is_empty()
 				_check(shut, "окно без щели: пути нет (%s)" % ("C#" if fast else "GDScript"))
 				finder.window = Rect2i(0, 0, S, 22)
-				var inside := finder.find_path(cases[name][0], s, t, StageTrails.ROAD_CLIMB, StageTrails.ROAD_GRADE)
+				var inside := finder.find_path(cases[name][0], s, t, climb_costs.road, StageTrails.ROAD_GRADE)
 				var within := not inside.is_empty()
 				for i in inside: within = within and i / S < 22
 				_check(within and inside == whole, "окно со щелью: путь внутри окна, как без окна (%s)" % ("C#" if fast else "GDScript"))

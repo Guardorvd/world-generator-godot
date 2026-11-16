@@ -41,7 +41,7 @@ func _technical_profile() -> void:
 		var w := _world("bumps")
 		w.trails[0].kind = kind
 		for p: Dictionary in w.trails[0].pts:
-			p.w = StageTrails.WIDTHS[kind]
+			p.w = RoadTuning.current().section.widths[kind]
 		var h := Heightfield.new(w)
 		var low := INF
 		var high := -INF

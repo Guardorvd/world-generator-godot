@@ -7,6 +7,7 @@ extends RefCounted
 const Places := preload("res://scripts/world/region_settlements.gd")
 const RegionalGround := preload("res://scripts/world/region_road_heightfield.gd")
 const Known := preload("res://scripts/world/region_known.gd")
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 const MAX_CELLS := 4 * 260 * 260
 const APPROACH := 64 # клеток: глубина подхода к старой дороге внутри стартового плана
 const EXIT_MARGIN := 12 # выход не ставится у угла области
@@ -90,6 +91,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 	w.cost.resize(w.N)
 	var edge_dist := _unprepared_distance(bounds, regions, ledger, plan)
 	var span_reach := StageTrails._bridge_reach(w) # вода дальше любого возможного моста — непроходима
+	var bridge_cost := RoadTuning.current().routing.bridge_cost
 	for i in w.N:
 		var wet := w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0
 		var cell := bounds.position + Vector2i(i % w.W, i / w.W)
@@ -98,7 +100,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		elif plan.has_point(cell) and not wet and blocked[i] == 0:
 			open[i] = 1
 			if w.path_mask[i] >= 2: targets.append(i)
-		w.cost[i] = INF if open[i] == 0 or wet and span_reach[i] > StageTrails.BRIDGE_REACH else (StageTrails.BRIDGE_COST if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
+		w.cost[i] = INF if open[i] == 0 or wet and span_reach[i] > StageTrails.BRIDGE_REACH else (bridge_cost if wet else Biomes.LIST[w.biome[i]].get("cost", 2.0) + w.slope[i] * 7.0)
 		if edge_dist[i] < StageTrails.EDGE_COST_BAND + 1:
 			w.cost[i] += StageTrails.edge_cost(edge_dist[i] - 1.0)
 	# Узлы: поселения, приходящие выходы закреплённых дорог, старая сеть плана.
@@ -140,7 +142,7 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 		heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
 	finder.eager_fallback = eager_fallback
-	StageTrails._route_surface(finder, ground, StageTrails.WIDTHS.road)
+	StageTrails._route_surface(finder, ground, RoadTuning.current().section.widths.road)
 	# Один суммарный бюджет на группу, включая неудачные направления.
 	finder.search_budget = w.N * 4
 	# Пара со старой сетью идёт к ближайшей клетке её дороги в полосе подхода.
@@ -265,6 +267,10 @@ static func prepare(source: WorldData, regions: Array, batch: Dictionary, ledger
 			p.x += bounds.position.x
 			p.y += bounds.position.y
 			trail.approach = trail.approach or plan.has_point(Vector2i(floori(p.x), floori(p.y)))
+	var issue := RoadRecords.validation_error(w.trails, "RegionRoads (%s)" % bounds, RoadRecords.Phase.SURFACED)
+	if not issue.is_empty():
+		push_warning(issue)
+		return {ready = false, reason = "invalid_road_records", error = issue, trails = [], settlements = [], exits = []}
 	var out_exits: Array = []
 	for exit: Dictionary in exits:
 		var edge: Vector2 = edge_of[exit.cell] + Vector2(bounds.position)

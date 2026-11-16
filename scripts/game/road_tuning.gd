@@ -1,12 +1,22 @@
 class_name RoadTuning
 extends Resource
-## Файл параметров дорог (с 16.11.2026, docs/ROADS_CSHARP.md): числа полотна RoadBed и форм коридора RoadRefinement
-## в одном месте, resources/road_tuning.tres. Алгоритм — в C# (FastGrid.RoadBedRefine, RoadFitNetwork), числа — здесь;
-## меняются в инспекторе без правки кода и без dotnet build. Хеш значений входит в ключ кэша поверхности
-## (WorldCache.artifact_key), поэтому после правки готовая поверхность мира пересобирается сама.
-## Пределы и зазоры, на которые опираются другие системы (REACH, PIN, SHORE, WATER_GAP, BENCH_LIMIT), остаются в коде.
+## Параметры природных дорог (resources/road_tuning.tres).
+## Зависимости кэша и пределы проходимости описаны в docs/ROAD_DATA_CONTRACT.md.
 
 const PATH := "res://resources/road_tuning.tres"
+const Routing := preload("res://scripts/game/road_routing_tuning.gd")
+const Section := preload("res://scripts/game/road_section_tuning.gd")
+const Obstacles := preload("res://scripts/game/road_obstacle_tuning.gd")
+## Отпечатки значений до добавления зависимостей. С этими значениями старый кэш уже правильный.
+const BASELINE_BED_DIGEST := "2fe77c228432"
+const BASELINE_ROUTING_DIGEST := "e98e0d0e16d5"
+const BASELINE_WIDTH_DIGEST := "2f05a2e55136"
+const BASELINE_CLEARANCE_DIGEST := "1a9220c8b0d0"
+const BASELINE_TREAD_DIGEST := "8bc1a25b1f49"
+
+@export var routing: Routing
+@export var section: Section
+@export var obstacles: Obstacles
 
 ## По видам пути; порядок видов в C# — road, trail, mountain (RoadBed.KINDS, RoadRefinement.CORRIDOR_KINDS)
 @export var road: RoadKindTuning
@@ -51,9 +61,10 @@ static func current() -> RoadTuning:
 	return t
 
 
-## Все три вида и таблицы по восьми покрытиям на месте.
+## Все группы и таблицы по восьми покрытиям на месте.
 func valid() -> bool:
-	return road != null and trail != null and mountain != null and surface_gain.size() == 8 \
+	return routing != null and routing.valid() and section != null and section.valid() and obstacles != null and obstacles.valid() \
+		and road != null and trail != null and mountain != null and surface_gain.size() == 8 \
 		and character.size() == 24 and level_surface.size() == 8
 
 
@@ -66,7 +77,7 @@ func kind(name: String) -> RoadKindTuning:
 	return null
 
 
-## Короткий хеш всех значений для ключа кэша: меняется при любой правке чисел, а не формата файла.
+## Отпечаток полотна и форм коридора. Старый ключ производной поверхности хранит его целиком.
 func digest() -> String:
 	var values := []
 	for k: RoadKindTuning in [road, trail, mountain]:
@@ -74,4 +85,33 @@ func digest() -> String:
 		values.append(k.corridor())
 		values.append(k.level)
 	values.append_array([surface_gain, character, level_surface, level_r, rhythm_span, corridor_fade, corridor_gap, land_gap, prepared_scale])
+	return _digest_values(values)
+
+
+func routing_cache_suffix() -> String:
+	var key := _digest_values(routing.cache_values())
+	return "" if key == BASELINE_ROUTING_DIGEST else "|routing=" + key
+
+
+func bed_cache_suffix() -> String:
+	var key := digest()
+	return "" if key == BASELINE_BED_DIGEST else "|bed=" + key
+
+
+func width_cache_suffix() -> String:
+	var key := _digest_values(section.geometry_values())
+	return "" if key == BASELINE_WIDTH_DIGEST else "|width=" + key
+
+
+func clearance_cache_suffix() -> String:
+	var key := _digest_values(section.clearance_values())
+	return "" if key == BASELINE_CLEARANCE_DIGEST else "|clearance=" + key
+
+
+func tread_cache_suffix() -> String:
+	var key := _digest_values([section.tread_params()])
+	return "" if key == BASELINE_TREAD_DIGEST else "|tread=" + key
+
+
+static func _digest_values(values: Array) -> String:
 	return var_to_bytes(values).hex_encode().sha256_text().left(12)

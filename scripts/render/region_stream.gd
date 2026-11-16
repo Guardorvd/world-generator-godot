@@ -16,6 +16,7 @@ var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## там, где у плана уже есть своя дорога, лента не кладётся поверх неё.
 
 const Regions := preload("res://scripts/world/region_preparation.gd")
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 const TILE := GameConfig.TILE
 const HS := GameConfig.HS
 const REACH := OuterTerrain.RADIUS + 400.0 # м: области ближе готовятся заранее, до того как их видно
@@ -127,6 +128,10 @@ static func store_dir(w: WorldData) -> String:
 		ctx.update(("region-basis-v2|%s|%d|%d|%d|%d|%d|%d|" % [w.seed_text, w.W, w.H, WorldCache.SCHEMA_GEO_VERSION, FORMAT, StageTrailPlan.VERSION, REGION_TRAILS]).to_utf8_buffer())
 		ctx.update(w.h.to_byte_array())
 		ctx.update(w.path_mask)
+		var tuning := RoadTuning.current()
+		var roads: String = WorldCache._road_layer_suffixes(tuning, QuickTrails.network()).places + tuning.clearance_cache_suffix()
+		if not roads.is_empty():
+			ctx.update(roads.to_utf8_buffer())
 		w.region_basis_id = ctx.finish().hex_encode().left(24)
 	if w.region_store_leaf.is_empty():
 		# Legacy journals predate the rare-water geography. They must not pin old
@@ -156,12 +161,20 @@ static func _valid_ledger(value: Dictionary) -> bool:
 	if value.get("format") != FORMAT or not value.get("ledger") is Dictionary: return false
 	var current: Dictionary = value.ledger
 	if not current.get("regions") is Dictionary or not current.get("settlements", []) is Array: return false
+	var issue := RoadRecords.validation_error(current.get("trails", []), "RegionStream ledger")
+	if not issue.is_empty():
+		push_warning(issue)
+		return false
 	for key: Variant in current.regions:
 		var entry: Variant = current.regions[key]
 		if not key is Vector2i or not entry is Dictionary or not entry.get("rect") is Rect2i or not entry.rect.has_area(): return false
 		if not entry.get("decor") is Dictionary: return false
 		for field: String in ["settlements", "bridges", "trails"]:
 			if not entry.decor.get(field) is Array: return false
+		issue = RoadRecords.validation_error(entry.decor.trails, "RegionStream region %s decor" % key)
+		if not issue.is_empty():
+			push_warning(issue)
+			return false
 		if entry.decor.has("tunnels") and not entry.decor.tunnels is Array: return false
 		for field: String in ["field_file", "field_sha"]:
 			if entry.has(field) and not entry[field] is String: return false
@@ -886,6 +899,7 @@ static func _cell_m(w: WorldData, heights: Heightfield, regions: Dictionary, i: 
 ## Прозрачность края — общая tread_mask в цвете вершины; UV.x — поперечная доля, UV.y — singletrack.
 ## Участки по клеткам, где у плана уже есть дорога (path_mask ≥ 2), пропускаются: её рисует план.
 static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
+	var section := RoadTuning.current().section
 	var noise := FastNoiseLite.new()
 	noise.seed = w.seed_num
 	noise.frequency = 1.0
@@ -956,7 +970,7 @@ static func road_arrays(w: WorldData, ground: Callable, trails: Array) -> Array:
 				var v := at + side * u
 				pos.append(Vector3(v.x, ground.call(v.x, v.y) + ROAD_LIFT, v.y))
 				var tint := dcolors[k]
-				tint.a = RoadRefinement.tread_mask(dhalf[k], absf(u) * dhalf[k], slow, tint.a, road)
+				tint.a = section.tread_alpha(dhalf[k], absf(u) * dhalf[k], slow, tint.a)
 				col.append(tint)
 				uv.append(Vector2(u, 0.0 if road else 1.0))
 			if run != -1:

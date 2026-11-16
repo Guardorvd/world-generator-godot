@@ -51,6 +51,7 @@ var _writes: Array[int] = []
 var _lock := Mutex.new()
 var _layer_keys := PackedStringArray()
 const Files := preload("res://scripts/core/cache_file.gd")
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 const SURFACE_VERSION := 22 # 16.11: calm sections level the fitted trail axis, trail level 1.0; key adds RoadBump.PATCH_VERSION
 const BASE_VERSION := 1
 var io_timings := {}
@@ -77,19 +78,30 @@ func layer_keys() -> PackedStringArray:
 	_lock.lock()
 	if _layer_keys.is_empty():
 		_layer_keys = schema_keys(SCHEMA_WORLD_VERSION, PackedInt32Array([
-			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]))
+			SCHEMA_GEO_VERSION, SCHEMA_TRAILS_VERSION, SCHEMA_NATURE_VERSION, SCHEMA_VIEW_VERSION]),
+			_road_layer_suffixes(RoadTuning.current(), QuickTrails.network()))
 	var keys := _layer_keys.duplicate()
 	_lock.unlock()
 	return keys
 
 
-## Чистая функция: только формат, размер плана, имена слоёв и явно переданные целочисленные версии.
-static func schema_keys(world_version: int, versions: PackedInt32Array) -> PackedStringArray:
+## Зависимости начинаются со слоя, который впервые читает эти настройки.
+static func _road_layer_suffixes(tuning: RoadTuning, prepared_paths: bool) -> Dictionary:
+	var bed := tuning.bed_cache_suffix()
+	var places := tuning.routing_cache_suffix() + tuning.width_cache_suffix()
+	if prepared_paths:
+		places += bed + tuning.tread_cache_suffix()
+	return {"places": places, "nature": bed + tuning.clearance_cache_suffix()}
+
+
+## Чистая функция: версии слоёв и входы, добавленные к каждому звену цепочки.
+static func schema_keys(world_version: int, versions: PackedInt32Array, suffixes := {}) -> PackedStringArray:
 	assert(versions.size() == WorldGenerator.LAYERS.size() + 1)
 	var keys := PackedStringArray()
 	var prev := "WGC|%d|%d|%d" % [FORMAT, WorldGenerator.PLAN_SIZE, world_version]
 	for k in versions.size():
-		prev = ("%s|%s|%d" % [prev, _layer_name(k), versions[k]]).sha256_text()
+		var name := _layer_name(k)
+		prev = ("%s|%s|%d%s" % [prev, name, versions[k], suffixes.get(name, "")]).sha256_text()
 		keys.append(prev.left(32))
 	return keys
 
@@ -127,11 +139,13 @@ func artifact_path(seed_text: String, size: int, artifact: String) -> String:
 func artifact_key(seed_text: String, size: int, artifact: String) -> String:
 	var layer := 0 if artifact == "base" else 2
 	var version := BASE_VERSION if artifact == "base" else SURFACE_VERSION
-	# 16.11.2026: и хеш чисел файла параметров дорог (RoadTuning) — правка чисел пересобирает поверхность без подъёма версий
-	# (только у поверхности: ключ основы не меняется, готовая география и пути остаются в кэше).
+	# Готовая поверхность зависит от природы и от чисел полотна. Основа строится до дорог.
 	var key := "%s|%s|%d|%d|%d|%d|%d|%d" % [_key(seed_text, size, layer), artifact, version, StageTrailPlan.VERSION if layer == 2 else 0, RoadRefinement.DIV, PlanTerrain.CELLS,
 		RoadBump.PATCH_VERSION if layer == 2 else 0, RoadRefinement.code_version() if layer == 2 else 0]
-	return key + "|" + RoadTuning.current().digest() if layer == 2 else key
+	if layer == 0:
+		return key
+	var tuning := RoadTuning.current()
+	return key + "|" + tuning.digest() + tuning.tread_cache_suffix()
 
 
 ## Artifact passport without decompressing payloads. Sizes include the retained recovery generation.
@@ -787,6 +801,11 @@ func _restore(data: Dictionary, complete: bool) -> WorldData:
 		if w.get(name).size() != w.obj_count:
 			return null
 	if complete and w.chunks.size() != w.CW * w.CH or w.seed_num != WGRandom.hash_string(w.seed_text):
+		return null
+	var phase := RoadRecords.Phase.SURFACED if complete else RoadRecords.Phase.COMPATIBLE
+	var issue := RoadRecords.validation_error(w.trails, "WorldCache (%s)" % w.seed_text, phase)
+	if not issue.is_empty():
+		push_warning(issue)
 		return null
 	for name: String in WorldGenerator.NOISE_SLOTS:
 		w.noise[name] = Simplex.new(WorldGenerator.noise_rng(w.seed_num, name))

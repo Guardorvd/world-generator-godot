@@ -101,7 +101,7 @@ func _init() -> void:
 	var heights := surface.hv.duplicate()
 	for i in w.N: heights[i] /= GameConfig.TILE
 	var finder := Pathfinder.new(w.W, w.H, heights)
-	StageTrails._route_surface(finder, surface, StageTrails.WIDTHS.road)
+	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.road)
 	var wet := w.ocean.duplicate()
 	check(Grid.bridge_region(w.W, w.H, wet, StageTrails.SPAN)[45 * w.W + 92] == 1,
 		"прежний фильтр по ширине пролива допускает недоступный берег")

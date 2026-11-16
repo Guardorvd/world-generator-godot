@@ -286,11 +286,13 @@ func material(base: Image, forest: Image = null) -> ShaderMaterial:
 ## null — строка near в шейдере не найдена (шейдер переписали): тогда дальних частей нет, всё как раньше.
 const NEAR_LINE := "float near = 1.0 - smoothstep(DETAIL_FAR * 0.35, DETAIL_FAR, length(wpos - CAMERA_POSITION_WORLD));"
 static var _far_shader: Shader
+static var _tuned_road_shader: Shader
 
 
 func far_material(near_mat: ShaderMaterial) -> ShaderMaterial:
+	var shader := _terrain_shader()
 	if _far_shader == null:
-		var code := SHADER.code
+		var code := shader.code
 		if code.count(NEAR_LINE) != 1:
 			push_warning("TerrainBuilder.far_material: строка near в terrain.gdshader не найдена, дальнего варианта нет")
 			return null
@@ -298,7 +300,7 @@ func far_material(near_mat: ShaderMaterial) -> ShaderMaterial:
 		_far_shader.code = code.replace(NEAR_LINE, "const float near = 0.0; // дальний вариант (TerrainBuilder.far_material)")
 	var mat := ShaderMaterial.new()
 	mat.shader = _far_shader
-	for u: Dictionary in SHADER.get_shader_uniform_list():
+	for u: Dictionary in shader.get_shader_uniform_list():
 		mat.set_shader_parameter(u.name, near_mat.get_shader_parameter(u.name))
 	return mat
 
@@ -310,12 +312,22 @@ func outer_material() -> ShaderMaterial:
 	return mat
 
 
+## Compile the original edge expression at the shipped settings to preserve its rounding.
+static func _terrain_shader() -> Shader:
+	if RoadTuning.current().tread_cache_suffix().is_empty():
+		return SHADER
+	if _tuned_road_shader == null:
+		_tuned_road_shader = Shader.new()
+		_tuned_road_shader.code = "#define ROAD_TUNED_EDGE\n" + SHADER.code
+	return _tuned_road_shader
+
+
 func _detail_material() -> ShaderMaterial:
 	if _detail.is_empty():
 		var catalog := preload("res://scripts/render/asset_catalog.gd").get_catalog()
 		_detail.assign([catalog.textures[3], catalog.textures[4]])
 	var mat := ShaderMaterial.new()
-	mat.shader = SHADER
+	mat.shader = _terrain_shader()
 	mat.set_shader_parameter("detail_tex", _detail[0])
 	mat.set_shader_parameter("detail_normal", _detail[1])
 	# 13.11: микроструктура земли (tools/bake_ground_micro.gd); без файлов шейдер работает как прежде
@@ -333,6 +345,9 @@ func _detail_material() -> ShaderMaterial:
 	mat.set_shader_parameter("surface_crack", PackedFloat32Array(RoadBump.CRACKS))
 	mat.set_shader_parameter("surface_look", PackedVector4Array(RoadBump.LOOK))
 	mat.set_shader_parameter("road_rut", Vector2(RoadBump.RUT_AT, RoadBump.RUT_W))
+	if mat.shader != SHADER:
+		var section := RoadTuning.current().section
+		mat.set_shader_parameter("road_edge", Vector3(section.edge, section.litter, 1.0 / section.fade))
 	return mat
 
 

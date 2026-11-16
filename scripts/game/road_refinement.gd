@@ -8,7 +8,7 @@ extends RefCounted
 ## сетки (height_at, weight_at, edge_at, sample, from_patches, pin_coarse_edges). Эталон — tools/road_golden.gd,
 ## описание — docs/ROADS_CSHARP.md.
 
-const Section := preload("res://scripts/world/road_section.gd")
+var _section := RoadTuning.current().section
 const DIV := 4
 const TILE := GameConfig.TILE
 const STEP := TILE / DIV
@@ -244,7 +244,7 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	var out: Variant = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
 		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
 		corridor_start, corridor_count, corridor, surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes,
-		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes(), PackedFloat64Array(Section.NATIVE_TREAD),
+		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes(), _section.tread_params(),
 		local_routes)
 	if not out is Dictionary:
 		return null
@@ -415,7 +415,7 @@ static func tread_mask(half: float, d: float, slow: float, organic: float, _road
 		var original_edge := (half + slow * 0.24 + grain * 0.10) * (1.0 - organic * 0.12)
 		var original_shoulder := (0.7 + (slow + 1.0) * 0.3) * (1.0 + organic * 0.5)
 		return (1.0 - smoothstep(original_edge * 0.55, original_edge + original_shoulder, d)) * (1.0 - organic * 0.35)
-	return Section.tread_alpha(half, d, slow, organic)
+	return RoadTuning.current().section.tread_alpha(half, d, slow, organic)
 
 
 ## Та же треугольная интерполяция, что у TerrainBuilder (без билинейного расхождения с мешем).
@@ -482,7 +482,7 @@ func edge_at(x: float, z: float, width: int) -> float:
 		return 0.0
 	var mask: float = at.weight
 	var organic: float = RoadSurface.LIST[at.surface].organic if at.surface > 0 else 0.0
-	var linear := clampf(0.5 + (0.84 - organic * 0.04 - absf(at.across)) * 1.25, 0.0, 1.0)
+	var linear := clampf(0.5 + (_section.edge - organic * _section.litter - absf(at.across)) * (1.0 / _section.fade), 0.0, 1.0)
 	return lerpf(mask, linear, 1.0 - smoothstep(0.2, 0.4, absf(linear - mask)))
 
 

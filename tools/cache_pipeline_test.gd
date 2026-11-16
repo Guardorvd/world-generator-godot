@@ -299,6 +299,15 @@ func _test_world(cache: WorldCache) -> void:
 	cache.wait_writes()
 	var canonical: Dictionary = cache._load(w.seed_text, w.W)
 	check(canonical.layers == 3 and canonical.world.trails[0].pts[0].w == 0.7 and canonical.world.trails[0].surf[0] == RoadSurface.DIRT, "explicit layer writers retain nested point/surface changes")
+	var old_trails: Array = canonical.data.trails.duplicate(true)
+	old_trails[0].erase("surf")
+	var old_layer: Dictionary = canonical.data.merged({trails = old_trails}, true)
+	var partial := cache._restore(old_layer, false)
+	check(partial != null and partial.trails == old_trails and not partial.trails[0].has("road_id"),
+		"restore accepts a paths layer with no station surfaces or road IDs and preserves its dictionaries")
+	check(cache._restore(old_layer, true) == null, "a nature layer requires assigned station surfaces")
+	old_trails[0].pts[1].w = 0.0
+	check(cache._restore(old_layer, false) == null, "a corrupt tread is rejected before cached paths are used")
 	var services := ServiceScope.new()
 	services.cache = cache
 	cache.io_timings["previous_load_marker"] = 1

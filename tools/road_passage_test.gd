@@ -99,7 +99,7 @@ func run() -> void:
 	check(kinds.get("road", 0) == 1 and kinds.get("trail", 0) == 2, "promotion splits the trail into trail-road-trail (%s)" % str(kinds))
 	check(absf(total - length) < 0.01, "promotion keeps the axis (%.3f / %.3f cells)" % [total, length])
 	var road: Dictionary = w.trails[0]
-	check(road.kind == "road" and road.pts.all(func(p: Dictionary) -> bool: return p.w == StageTrails.WIDTHS.road), "promoted part has one road width")
+	check(road.kind == "road" and road.pts.all(func(p: Dictionary) -> bool: return p.w == RoadTuning.current().section.widths.road), "promoted part has one road width")
 	# Параллельное полотно в 3 клетках вдоль сети на той же высоте — не новое; далеко — новое
 	var near := StageTrails._net_near(w)
 	var beside := cells(line(Vector2i(8, 23), Vector2i(88, 23)))
@@ -156,6 +156,9 @@ func turns() -> void:
 	check(not on_polyline(relaxed, elbow) and not on_polyline(relaxed, Vector2(41.5, 41.5)),
 		"opposite grid turns share one transition")
 	var tight := points([Vector2(38.5, 39.5), Vector2(39.5, 40.5), elbow, Vector2(41.5, 41.5)])
+	# Keep both input bends so these fixtures exercise the grouped curve candidates.
+	var overrides := StageTrails.routing_overrides.duplicate()
+	StageTrails.routing_overrides.straighten = {}
 	var groups: Array = []
 	var collect_groups := func(curve: Array) -> bool:
 		if curve[0].x < tight[1].x and curve[-1].x > elbow.x:
@@ -177,13 +180,14 @@ func turns() -> void:
 	var retry := StageTrails._road_line(w, uneven, PackedByteArray(), ground, "road", {}, collect_uneven)
 	check(groups.size() == 1 and retry.has(groups[0][0]) and retry[0] == uneven[0] and retry[-1] == uneven[-1],
 		"uneven S-bend fits a shared curve with asymmetric handles")
-	var hairpin := points([Vector2(28.5, 40.5), elbow, Vector2(30.5, 50.5)], StageTrails.WIDTHS.mountain)
+	StageTrails.routing_overrides = overrides
+	var hairpin := points([Vector2(28.5, 40.5), elbow, Vector2(30.5, 50.5)], RoadTuning.current().section.widths.mountain)
 	check(not on_polyline(StageTrails._road_line(w, hairpin, PackedByteArray(), ground, "mountain"), elbow),
 		"switchback fits at the lower design speed")
 
 	var control := [Vector2(38.5, 40.5), Vector2(39.6, 40.5), Vector2(40.5, 41.4), Vector2(40.5, 42.5)]
 	var corridor := [Vector2(38.5, 40.5), elbow, Vector2(40.5, 42.5)]
-	var rules := {grade = 0.28, cross = 0.65, accel = 5.4, axis = PackedByteArray(), probe = null, corridor = Callable()}
+	var rules := {grade = 0.28, cross = 0.65, accel = 5.4, axis = PackedByteArray(), probe = null, corridor = Callable(), relax = 0.0}
 	ground.grade_x = 0.24
 	var slow := StageTrails._road_curve(ground, control, corridor, 0.9, 3.0, rules)
 	var fast := StageTrails._road_curve(ground, control, corridor, 0.9, 6.3, rules)

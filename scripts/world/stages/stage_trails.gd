@@ -2,11 +2,11 @@ class_name StageTrails
 extends RefCounted
 ## Этап 7. Естественные тропы и дороги: поиск пути A* по стоимости местности.
 ## Пишет: w.cost (стоимость прохода), w.path_mask (1 — звериная тропа, 2 — тропа людей, 3 — дорога),
-## w.trails [{kind: "animal" | "trail" | "mountain" | "road", pts}], w.bridges, w.tunnels;
+## w.trails (контракт в docs/ROAD_DATA_CONTRACT.md), w.bridges, w.tunnels;
 ## убирает дома поселений, которые оказались на мосту или в туннеле.
 ##
 ## Основная сеть связывает принятые поселения дорогами и местными тропами (остов), по стоимости, в которой вода
-## проходима, но дорога (BRIDGE_COST за клетку): так поселения на разных берегах тоже связаны.
+## проходима, но дорога (routing.bridge_cost за клетку): так поселения на разных берегах тоже связаны.
 ## Где дорога или тропа между поселениями пересекает воду, ставится мост,
 ## где переваливает через крутой хребет — туннель. Тропа переходит узкую речку вброд, без моста;
 ## сухие впадины дорога проходит по рельефу, без декоративных мостов.
@@ -18,11 +18,11 @@ extends RefCounted
 ## ответвления ведут к берегам и вершинам, без заданного количества связей (_second_ways).
 
 const Topology := preload("res://scripts/world/road_topology.gd")
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 
 const PROGRESS := 0.55
 const LABEL := "Прокладка звериных троп"
 
-const BRIDGE_COST := 30.0   # стоимость клетки воды для дороги: дорога обходит воду, если обход не слишком длинный
 const EDGE_COST_BAND := 12  # ширина полосы у неподготовленного края, в клетках
 const EDGE_COST_MAX := 6.0
 const RISE := 0.1           # хребет выше этого (около 26 м) над входами — туннель
@@ -49,26 +49,14 @@ const RELIEF_CHOICE := 0.02 # другой проход отличается в�
 const SHORE_MIN := 15       # береговой ориентир не ближе стольких клеток от поселения
 const SHORE_MAX := 45       # и не дальше стольких
 const AVOID_R := 3          # коридор вокруг прежнего пути, клеток: второй путь его избегает
-const AVOID_MUL := 8.0      # во столько раз дороже клетки коридора
 const AVOID_SHARE := 0.4    # второй путь идёт по коридору не больше чем такой долей клеток
 const REUSE_R := 5.0        # путь идёт по уже построенному мосту или туннелю, если оба его конца не дальше стольких клеток
 const KEY_R := 1.5          # и проходит не дальше стольких клеток от того, что пересекает путь (_key_cell)
 const CROSS_GAP := 8.0      # 10.4: вода ближе стольких клеток к мосту закрыта для следующих путей — они сходятся к одной переправе
 ## Три характера езды без отдельных режимов: дорога, извилистый обход, техническая горная тропа.
 const Section := preload("res://scripts/world/road_section.gd")
-const WIDTHS := Section.WIDTHS
-const ROAD_CLIMB := 32.0
-const TRAIL_CLIMB := 12.0
-const MOUNTAIN_CLIMB := 4.0
-## 15.11.2026: штраф смены направления в поиске пути (Pathfinder.find_path, аргумент turn; шкала × TURN_SHAPE
-## по 45°-ступеням). Убирает зигзаги сетки на склонах до сглаживания (_road_line). static var — стенд road_plan_test
-## подбирает числа ключом --turn; 0 — прежний поиск. Звериные тропы, короткие подходы (_link) и природные маршруты
-## (RideRoutes) без штрафа. Подбор на «Север-1234» — docs/ROAD_NETWORK.md, раздел 15.11.2026.
-static var turn_costs := {road = 12.0, trail = 6.0, mountain = 4.0}
-## 15.11.2026: длинные галсы — поворот на 90° и круче в пределах 12 м пути (BendSteps в FastGrid.Path.cs) дороже на
-## bend × BEND_SHAPE: на крутом склоне поиск набирает высоту длинными галсами с широкими разворотами, а не зубцами
-## в 1–2 клетки, куда дуга полотна не помещается (разбор 15.11: главная причина углов без дуги — радиус).
-static var bend_costs := {road = 6.0, trail = 0.0, mountain = 0.0}
+## Стенды могут на время запуска заменить таблицы turn_costs, bend_costs, straighten и line_relax.
+static var routing_overrides := {}
 const HEIGHT_SCALE := 65.0  # 260 м высоты / 4 м на клетку; единицы высоты и шага A* одинаковы
 ## Основная сеть сначала ищет удобный проход; у дополнительных и горных троп свои пределы.
 ## В пределах своего класса крутизна дополнительно оплачивается штрафом climb.
@@ -91,6 +79,7 @@ static func _part(key: String, since_us: int) -> void:
 static func run(w: WorldData, step: Callable) -> void:
 	parts = {}
 	var started_us := Time.get_ticks_usec()
+	var widths := RoadTuning.current().section.widths
 	_build_cost(w)
 	var detail_us := Time.get_ticks_usec()
 	w.generation_profile.cost_ms = (detail_us - started_us) / 1000.0
@@ -107,10 +96,10 @@ static func run(w: WorldData, step: Callable) -> void:
 	detail_us = Time.get_ticks_usec()
 	_animal_trails(w, finder)
 	w.generation_profile.animal_trails_ms = (Time.get_ticks_usec() - detail_us) / 1000.0
-	_route_surface(finder, surface, WIDTHS.road, "corridor_road_ms")
+	_route_surface(finder, surface, widths.road, "corridor_road_ms")
 	step.call(0.66, "Прокладка троп между поселениями")
 	_settlement_trails(w, finder, surface, step)
-	_route_surface(finder, surface, WIDTHS.mountain, "corridor_mountain_ms")
+	_route_surface(finder, surface, widths.mountain, "corridor_mountain_ms")
 	step.call(0.74, "Прокладка горных троп")
 	detail_us = Time.get_ticks_usec()
 	var on_axis := _mountain_trails(w, finder, surface)
@@ -130,6 +119,9 @@ static func run(w: WorldData, step: Callable) -> void:
 	w.generation_profile.stage_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	w.generation_profile.parts_ms = parts.duplicate()
 	finder.release()
+	var issue := RoadRecords.validation_error(w.trails, "StageTrails (%s)" % w.seed_text, RoadRecords.Phase.PUBLISHED)
+	if not issue.is_empty():
+		push_error(issue)
 
 
 ## Keep inherited plan marks and protected structure footprints when the final tread replaces the search ribbon.
@@ -250,7 +242,6 @@ static func cost_reference(w: WorldData, cost_n: PackedFloat64Array) -> PackedFl
 ## а скидка стоимости, маска и линия описывают одну и ту же дорогу (раньше — _shared_passage после сглаживания).
 const CROSS_RUN := 2
 const JITTER_RUN := 3   # свободных клеток между двумя касаниями одного участка — шаг в сторону, а не новый путь
-const SIDE_MUL := 1.3   # клетка рядом с участком (не на нём) дороже свободной земли: поиск идёт по участку или уходит
 const JOIN_R := 1.2     # конец нового участка ближе этого (клеток) к оси хозяина ложится на неё
 
 
@@ -286,7 +277,7 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 	var part_us := Time.get_ticks_usec()
 	_net_ready(w)
 	path = _explicit(w, path, on_axis)
-	var width: float = WIDTHS[kind]
+	var width: float = RoadTuning.current().section.widths[kind]
 	var mark := 1 if kind == "animal" else (3 if kind == "road" else 2)
 	var added: Array = []
 	if kind == "animal":
@@ -345,10 +336,11 @@ static func _add_trail(w: WorldData, path: PackedInt32Array, kind: String, road_
 
 
 ## Протоптанный путь дешевле: следующие маршруты идут по нему. Клетки рядом с участком сети (не на нём) один раз
-## дорожают в SIDE_MUL раз: соседняя клетка больше не тянет поиск идти вплотную параллельно (раньше она дешевела).
+## дорожают в routing.side_cost раз: соседняя клетка больше не тянет поиск идти вплотную параллельно.
 static func _trodden(w: WorldData, path: PackedInt32Array, kind: String, road_cost: PackedFloat32Array) -> void:
+	var routing := RoadTuning.current().routing
 	var cost := w.cost
-	var cheaper := 0.6 if kind == "animal" else 0.35
+	var cheaper := routing.animal_reuse if kind == "animal" else routing.human_reuse
 	var both := road_cost.size() > 0
 	for i: int in path:
 		cost[i] = maxf(0.3, cost[i] * cheaper)
@@ -370,9 +362,9 @@ static func _trodden(w: WorldData, path: PackedInt32Array, kind: String, road_co
 					continue
 				side[n] = 1
 				if cost[n] != INF:
-					cost[n] *= SIDE_MUL
+					cost[n] *= routing.side_cost
 				if both and road_cost[n] != INF:
-					road_cost[n] *= SIDE_MUL
+					road_cost[n] *= routing.side_cost
 		w.generation.road_side = side
 	w.cost = cost
 
@@ -531,7 +523,8 @@ const GROUP_RETRIES := [Vector4(1, 1, 1.30, 1), Vector4(1, 1, 1, 1.30)]
 
 static func _road_line(w: WorldData, pts: Array, on_axis: PackedByteArray, surface: Heightfield,
 		kind := "road", joins := {}, corridor := Callable(), smooth_kind := "") -> Array:
-	var relax: float = line_relax.get(kind if smooth_kind.is_empty() else smooth_kind, 0.0)
+	var relaxation: Dictionary = routing_overrides.get("line_relax", RoadTuning.current().routing.line_relax)
+	var relax: float = relaxation.get(kind if smooth_kind.is_empty() else smooth_kind, 0.0)
 	if relax <= 1.0 or pts.size() < 3:
 		return _road_line_with(w, pts, on_axis, surface, kind, joins, corridor, smooth_kind, 0.0)
 	# Линия с поблажкой на бугры принимается, только если её профиль целиком (окна PROFILE_BASE, вне настилов) в пределе;
@@ -573,7 +566,8 @@ static func _road_line_with(w: WorldData, pts: Array, on_axis: PackedByteArray, 
 		speed = TURN_SPEED[design_kind], accel = TURN_ACCEL[design_kind], long_s_handles = kind == "road",
 		probe = surface.fast_water(), axis = on_axis, corridor = corridor, relax = relax,
 	}
-	var tolerance: float = straighten.get(design_kind, 0.0)
+	var straightening: Dictionary = routing_overrides.get("straighten", RoadTuning.current().routing.straighten)
+	var tolerance: float = straightening.get(design_kind, 0.0)
 	if tolerance > 0.0 and pts.size() > 2:
 		var pulled := _straighten(surface, pts, fixed, rules, tolerance)
 		pts = pulled[0]
@@ -649,7 +643,6 @@ static func _road_line_with(w: WorldData, pts: Array, on_axis: PackedByteArray, 
 ## коридора (соседние области). Закреплённые точки (у сооружений) и смена ширины не срезаются; концы остаются.
 ## Маршрут тот же, по тем же склонам, без ступенек 45°/90°. Допуск по видам — straighten (0 — выключено); виды —
 ## по расчёту линии (связи поселений — «road»), природные маршруты — по своему виду (trail/mountain).
-static var straighten := {road = 0.5, trail = 1.0, mountain = 1.0}
 const STRAIGHT_SPAN := 10 # клеток пути в одной хорде, не больше
 
 
@@ -891,7 +884,6 @@ static func _road_curve(surface: Heightfield, control: Array, corridor: Array, w
 ## проверяется так же: на каждые PROFILE_BASE клеток уклон не круче предела вида, а короткий бугор (по _road_segment)
 ## не круче предела × line_relax. Иначе прямая или дуга через бугор в 4 м запрещена, и линия остаётся «пилой» сетки,
 ## хотя маршрут в целом в пределе (разбор 15.11, отрог у озера на «Север-1234»). Поиск пути этим не меняется.
-static var line_relax := {road = 1.4, trail = 1.4, mountain = 1.3}
 const PROFILE_BASE := 3.0 # клеток (12 м)
 
 
@@ -1060,7 +1052,7 @@ static func _animal_trails(w: WorldData, finder: Pathfinder) -> void:
 			best = _nearest_water(cost, dist_water, W, H, sx, sy, R)
 		if best < 0:
 			continue
-		var p := finder.find_path(w.cost, s, best, TRAIL_CLIMB)
+		var p := finder.find_path(w.cost, s, best, RoadTuning.current().routing.climb_costs.trail)
 		if p.size() > 6:
 			_add_trail(w, p, "animal")
 			k += 1
@@ -1089,6 +1081,7 @@ const SETTLEMENT_NEIGHBORS := 3
 const BRIDGE_RETRIES := 2
 
 static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Heightfield, step: Callable = Callable()) -> void:
+	var bridge_cost := RoadTuning.current().routing.bridge_cost
 	var started := Time.get_ticks_msec()
 	var st := w.settlements
 	var n := st.size()
@@ -1107,7 +1100,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	for i in w.N:
 		# Сначала дешёвое условие: результат тот же (_wet — без вызова на клетку).
 		if cost[i] == INF and (ocean[i] != 0 or lake[i] != 0 or river[i] != 0):
-			road_cost[i] = BRIDGE_COST + edge_cost(_plan_edge_gap(w, i)) if reach[i] <= BRIDGE_REACH else INF
+			road_cost[i] = bridge_cost + edge_cost(_plan_edge_gap(w, i)) if reach[i] <= BRIDGE_REACH else INF
 	_part("roads_setup", setup_us)
 	var budgets := PackedInt32Array()
 	budgets.resize(n)
@@ -1212,7 +1205,7 @@ static func _settlement_trails(w: WorldData, finder: Pathfinder, surface: Height
 	w.generation_profile.main_roads_search = finder.search_stats()
 	w.generation_profile.upgraded_m = _upgrade_roles(w, paths)
 	finder.use_corridor = true
-	_route_surface(finder, surface, WIDTHS.trail, "corridor_trail_ms")
+	_route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_trail_ms")
 	# Необязательные петли тоже не могут бесконечно перебирать непригодный берег.
 	finder.search_budget = w.N * maxi(1, n)
 	var detail_us := Time.get_ticks_usec()
@@ -1406,17 +1399,18 @@ static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
 			cuts.append(_locate(pts, Vector2(cells[k] % w.W + 0.5, cells[k] / w.W + 0.5)))
 	if cuts[0][2] > cuts[1][2]:
 		return # клетки и ось разошлись: не режем наугад
-	var road_pts: Array = [_point(cuts[0][1], WIDTHS.road)]
+	var widths := RoadTuning.current().section.widths
+	var road_pts: Array = [_point(cuts[0][1], widths.road)]
 	for j in range(cuts[0][0], cuts[1][0]):
-		road_pts.append(_point(Vector2(pts[j].x, pts[j].y), WIDTHS.road))
-	road_pts.append(_point(cuts[1][1], WIDTHS.road))
+		road_pts.append(_point(Vector2(pts[j].x, pts[j].y), widths.road))
+	road_pts.append(_point(cuts[1][1], widths.road))
 	var parts: Array = []
 	if k0 > 0:
 		var head: Array = pts.slice(0, cuts[0][0])
-		head.append(_point(cuts[0][1], WIDTHS.trail))
+		head.append(_point(cuts[0][1], widths.trail))
 		parts.append([_dedupe(head), cells.slice(0, k0 + 1)])
 	if k1 < cells.size() - 1:
-		var tail: Array = [_point(cuts[1][1], WIDTHS.trail)]
+		var tail: Array = [_point(cuts[1][1], widths.trail)]
 		tail.append_array(pts.slice(cuts[1][0]))
 		parts.append([_dedupe(tail), cells.slice(k1)])
 	var record: Dictionary = w.trails[e]
@@ -1434,7 +1428,7 @@ static func _promote(w: WorldData, e: int, c0: int, c1: int) -> void:
 		for c: int in part[1]:
 			if owner[c] == e and not on_road.has(c): owner[c] = index
 	w.generation.road_owner = owner
-	Grid.stamp_path(w.path_mask, w.W, w.H, record.pts, 3, WIDTHS.road * 0.5 - Grid.PATH_IN)
+	Grid.stamp_path(w.path_mask, w.W, w.H, record.pts, 3, widths.road * 0.5 - Grid.PATH_IN)
 
 
 static func _point(p: Vector2, width: float) -> Dictionary:
@@ -1528,19 +1522,23 @@ static func _connect_in_windows(w: WorldData, finder: Pathfinder, cost: PackedFl
 	# Следующая связь получает новый номер, в том числе после изменения стоимости.
 	var cost_version := finder.next_cost_version()
 	finder.use_corridor = true
+	var routing := RoadTuning.current().routing
+	var climb: float = routing.climb_costs.road
 	# Ревью дорожной сети 29.10: связь, которой нет даже при ROAD_LIMIT, отвергается без A*. Раньше такой
 	# поиск обходил всю доступную область и тратил запас места, и следующие пары того же места
 	# останавливались по запасу. Причина отказа — в state.failure (_count_failure).
-	if not finder.can_reach(cost, a, b, ROAD_CLIMB, ROAD_LIMIT):
+	if not finder.can_reach(cost, a, b, climb, ROAD_LIMIT):
 		state.failure = "unreachable"
 		return PackedInt32Array()
-	var limits: Array = [ROAD_GRADE, ROAD_LIMIT] if finder.can_reach(cost, a, b, ROAD_CLIMB, ROAD_GRADE) else [ROAD_LIMIT]
+	var limits: Array = [ROAD_GRADE, ROAD_LIMIT] if finder.can_reach(cost, a, b, climb, ROAD_GRADE) else [ROAD_LIMIT]
 	var windows := _windows(finder, a, b)
 	# С 9.9 запасной поиск (ROAD_LIMIT) идёт в фоне, пока проверяется первый путь: после неудачи
 	# состояние восстановлено, и он с теми же входами. Совпадение входов (и окна) проверяет сам поиск.
 	if limits.size() > 1:
 		finder.window = windows[0]
-		finder.prefetch(cost, a, b, ROAD_CLIMB, ROAD_LIMIT, cost_version, turn_costs.road, bend_costs.road)
+		var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
+		var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
+		finder.prefetch(cost, a, b, climb, ROAD_LIMIT, cost_version, turns.road, bends.road)
 	for limit: float in limits:
 		for level in windows.size():
 			if state.get("no_bridge", {}).size() != known:
@@ -1651,7 +1649,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if old.is_empty():
 			# С 9.8: соседи из разных сетей дорог (между ними река без места для моста) —
 			# тропа между сетями: вброд, по мосту для тропы или в обход.
-			var link := _land_path(finder, w.cost, a, b, TRAIL_CLIMB)
+			var link := _land_path(finder, w.cost, a, b, "trail")
 			var joint := _structures(w, link, false, finder, w.cost, state) if not link.is_empty() else link
 			if not joint.is_empty():
 				_note_way(w, "bridge_gap", _add_trail(w, joint, "trail", road_cost, state.on_axis, state.get("surface")))
@@ -1664,7 +1662,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			continue
 		var corr := _corridor(w, [old])
 		var avoiding := _avoiding(w, _open_ends(w, corr, a, b))
-		var p := _land_path(finder, avoiding, a, b, TRAIL_CLIMB)
+		var p := _land_path(finder, avoiding, a, b, "trail")
 		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(p, corr) > AVOID_SHARE or not _new_ground(w, p) or not _adds_network(w, p, near):
 			continue
 		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
@@ -1686,7 +1684,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
 		var corr := _corridor(w, [e[2]])
 		var avoiding := _avoiding(w, _open_ends(w, corr, st[e[0]].i, st[e[1]].i))
-		var p := _land_path(finder, avoiding, st[e[0]].i, st[e[1]].i, TRAIL_CLIMB)
+		var p := _land_path(finder, avoiding, st[e[0]].i, st[e[1]].i, "trail")
 		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(p, corr) > AVOID_SHARE \
 				or not _new_ground(w, p) or not _different_relief(w, p, e[2]) or not _adds_network(w, p, near) or _far_share(w, p, e[2]) < FAR_SHARE:
 			continue
@@ -1720,7 +1718,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			var source := _nearest_path(w, t, SHORE_MAX)
 			if source < 0:
 				source = s.i # У единственного поселения ещё нет общей линии пути.
-			var p := _land_path(finder, w.cost, source, t, TRAIL_CLIMB)
+			var p := _land_path(finder, w.cost, source, t, "trail")
 			var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
 			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p) and _adds_network(w, p, near):
 				var q := _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE,
@@ -1771,32 +1769,24 @@ static func _network_cost(w: WorldData) -> PackedFloat32Array:
 
 
 ## У троп свой предел: короткий технический подъём конкурирует с длинным обходом по цене A*.
-static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, climb: float, limit: float = TRAIL_GRADE) -> PackedInt32Array:
-	if finder.search_budget == 0:
-		return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb), _bend(climb))
-	if not finder.can_reach(cost, a, b, climb, limit):
+static func _land_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, kind: String, limit := TRAIL_GRADE) -> PackedInt32Array:
+	var routing := RoadTuning.current().routing
+	var climb: float = routing.climb_costs[kind]
+	if finder.search_budget != 0 and not finder.can_reach(cost, a, b, climb, limit):
 		return PackedInt32Array()
-	return finder.find_path(cost, a, b, climb, limit, -1, _turn(climb), _bend(climb))
-
-
-## Штраф поворота вида пути по его цене подъёма
-static func _turn(climb: float) -> float:
-	if climb == ROAD_CLIMB: return turn_costs.road
-	if climb == MOUNTAIN_CLIMB: return turn_costs.mountain
-	return turn_costs.trail
-
-
-static func _bend(climb: float) -> float:
-	if climb == ROAD_CLIMB: return bend_costs.road
-	if climb == MOUNTAIN_CLIMB: return bend_costs.mountain
-	return bend_costs.trail
+	var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
+	var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
+	return finder.find_path(cost, a, b, climb, limit, -1, turns[kind], bends[kind])
 
 
 ## Земляные работы могут исправить край полотна; продольный обрыв ими не исправить.
 ## Вода доступна для сооружений; на суше полная ширина проверяется во всех попытках.
 static func _road_path(finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int, wide := true, limit := ROAD_GRADE, cost_version: int = -1) -> PackedInt32Array:
 	finder.use_corridor = wide
-	return finder.find_path(cost, a, b, ROAD_CLIMB, limit, cost_version, turn_costs.road, bend_costs.road)
+	var routing := RoadTuning.current().routing
+	var turns: Dictionary = routing_overrides.get("turn_costs", routing.turn_costs)
+	var bends: Dictionary = routing_overrides.get("bend_costs", routing.bend_costs)
+	return finder.find_path(cost, a, b, routing.climb_costs.road, limit, cost_version, turns.road, bends.road)
 
 
 static func _length(w: WorldData, p: PackedInt32Array) -> float:
@@ -1968,18 +1958,19 @@ static func _open_ends(w: WorldData, near: PackedByteArray, a: int, b: int) -> P
 	return out
 
 
-## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в AVOID_MUL раз дороже
+## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в routing.avoid_cost раз дороже
 static func _avoiding(w: WorldData, near: PackedByteArray) -> PackedFloat32Array:
 	var part_us := Time.get_ticks_usec()
+	var avoid_cost := RoadTuning.current().routing.avoid_cost
 	var fast := Grid.fast_grid()
 	if fast != null:
-		var quick: PackedFloat32Array = fast.ScaledCost(w.cost, near, AVOID_MUL) # тот же цикл на C# (шаг 5 ревью)
+		var quick: PackedFloat32Array = fast.ScaledCost(w.cost, near, avoid_cost) # тот же цикл на C# (шаг 5 ревью)
 		_part("avoiding", part_us)
 		return quick
 	var c := w.cost.duplicate()
 	for i: int in w.N:
 		if near[i] != 0 and c[i] != INF:
-			c[i] *= AVOID_MUL
+			c[i] *= avoid_cost
 	_part("avoiding", part_us)
 	return c
 
@@ -2096,7 +2087,7 @@ static func _restore_structures(w: WorldData, finder: Pathfinder, state: Diction
 		var build_us := Time.get_ticks_usec()
 		state.surface.build_structures()
 		if changed_ground:
-			_route_surface(finder, state.surface, finder.get_meta("route_width", WIDTHS.road))
+			_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.current().section.widths.road))
 		_part("build_structures", build_us)
 	_part("restore", part_us)
 
@@ -2193,7 +2184,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					# Новый переход ищется от начала связи: фиксированный крутой берег
 					# не должен заставлять объезд карабкаться вверх сразу от воды.
 					_restore_structures(w, finder, state, ctx)
-					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor, limit) if road else _land_path(finder, bypass, p[0], p[-1], TRAIL_CLIMB)
+					var q := _road_path(finder, bypass, p[0], p[-1], finder.use_corridor, limit) if road else _land_path(finder, bypass, p[0], p[-1], "trail")
 					if not q.is_empty():
 						return _build_structures(w, q, road, finder, bypass, state, retries + 1, ctx, limit)
 					state.failure = "budget" if finder.search_budget == 0 else "bridge_site"
@@ -2230,7 +2221,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 		# связь отвергается здесь, а не после целого пути с туннелем. Обход ничего не меняет — снимок не нужен.
 		if kind == "tunnel" and ends.is_empty() and not state.get("tunnels", true):
 			# Обход дороги — с пределами дороги: построитель не выравнивает подъём круче ROAD_LIMIT.
-			var around := _detour(w, finder, cost, a, b, ROAD_CLIMB if road else TRAIL_CLIMB, ROAD_LIMIT if road else TRAIL_GRADE)
+			var around := _detour(w, finder, cost, a, b, "road" if road else "trail", ROAD_LIMIT if road else TRAIL_GRADE)
 			if around.is_empty():
 				state.failure = "budget" if finder.search_budget == 0 else "tunnel"
 				return PackedInt32Array()
@@ -2243,7 +2234,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 			ctx.checkpoint = _make_checkpoint(w, finder, state)
 		if kind == "tunnel" and ends.is_empty():
 			if state.detour:
-				var q := _detour(w, finder, cost, a, b, ROAD_CLIMB if road else TRAIL_CLIMB, ROAD_LIMIT if road else TRAIL_GRADE)
+				var q := _detour(w, finder, cost, a, b, "road" if road else "trail", ROAD_LIMIT if road else TRAIL_GRADE)
 				if q.size() > 0:
 					state.detour = false
 					for k in range(1, q.size()):
@@ -2262,7 +2253,7 @@ static func _build_structures(w: WorldData, p: PackedInt32Array, road: bool, fin
 					finder.terrain_changed()
 					for c: int in changed:
 						if state.on_axis[c] == 0: finder.heights[c] = state.surface.hv[c] / GameConfig.TILE
-					_route_surface(finder, state.surface, finder.get_meta("route_width", WIDTHS.road))
+					_route_surface(finder, state.surface, finder.get_meta("route_width", RoadTuning.current().section.widths.road))
 				_part("build_structures", build_us)
 			ends = [a, b]
 		# дорога, слившаяся с прежней, проходит по уже построенному
@@ -2448,7 +2439,7 @@ static func _no_backtrack(p: PackedInt32Array) -> PackedInt32Array:
 static func _link(w: WorldData, finder: Pathfinder, a: int, b: int) -> PackedInt32Array:
 	if a == b:
 		return PackedInt32Array()
-	var q := finder.find_path(w.cost, a, b, ROAD_CLIMB, ROAD_GRADE)
+	var q := finder.find_path(w.cost, a, b, RoadTuning.current().routing.climb_costs.road, ROAD_GRADE)
 	if q.size() == 0 or q.size() > REUSE_R * 3.0:
 		return PackedInt32Array()
 	return q.slice(1)
@@ -2478,7 +2469,7 @@ static func _key_cell(p: PackedInt32Array, hp: PackedFloat32Array, wet: PackedBy
 ## Обход горы от a до b вместо туннеля: путь в окрестности отрезка a–b, не выше входов больше чем
 ## на 0.7 RISE (около 18 м), без воды и не длиннее DETOUR прямых расстояний; пустой, если такого нет
 static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, a: int, b: int,
-		climb := TRAIL_CLIMB, limit := TRAIL_GRADE) -> PackedInt32Array:
+		kind := "trail", limit := TRAIL_GRADE) -> PackedInt32Array:
 	var W := w.W
 	var ax := a % W
 	var ay := a / W
@@ -2495,7 +2486,7 @@ static func _detour(w: WorldData, finder: Pathfinder, cost: PackedFloat32Array, 
 			var k := y * W + x
 			if w.h[k] <= top and not _wet(w, k):
 				c[k] = cost[k]
-	var q := _land_path(finder, c, a, b, climb, limit)
+	var q := _land_path(finder, c, a, b, kind, limit)
 	if _length(w, q) > d * DETOUR:
 		return PackedInt32Array()
 	return q
@@ -2706,7 +2697,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 		if best >= 0 and bd < w.W * 0.4:
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.
 			detail_us = Time.get_ticks_usec()
-			var p := _land_path(finder, w.cost, best, pk.i, MOUNTAIN_CLIMB, MOUNTAIN_GRADE)
+			var p := _land_path(finder, w.cost, best, pk.i, "mountain", MOUNTAIN_GRADE)
 			search_us += Time.get_ticks_usec() - detail_us
 			detail_us = Time.get_ticks_usec()
 			if p.size() > 0:

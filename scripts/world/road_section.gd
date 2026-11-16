@@ -2,29 +2,15 @@ extends RefCounted
 ## Station width is the usable tread, in cells. All offsets from its edge are in metres.
 const Topology := preload("res://scripts/world/road_topology.gd")
 const TILE := GameConfig.TILE
-const ROAD := {width = 0.75, clearance = 2.4, side_cut = 0.15, rock_cut = 0.09, ford_cut = 0.22}
-const TRAIL := {width = 0.55, clearance = 0.45, side_cut = 0.12, rock_cut = 0.09, ford_cut = 0.22}
-const MOUNTAIN := {width = 0.42, clearance = 0.45, side_cut = 0.10, rock_cut = 0.06, ford_cut = 0.14}
-const ANIMAL := {width = 0.32, clearance = 0.15}
-const KINDS := {road = ROAD, trail = TRAIL, mountain = MOUNTAIN, animal = ANIMAL}
-const WIDTHS := {road = ROAD.width, trail = TRAIL.width, mountain = MOUNTAIN.width, animal = ANIMAL.width}
 const AUTHORED_CLEARANCE := 1.5
 const BRIDGE_HALF := 2.2
-const JUNCTION_TRANSITION := 12.0
 const BRIDGE_TRANSITION := 18.0
 const WIDTH_RATE := 0.10 # metres of full width per metre along the ground axis
-const TREAD := {edge = 0.84, litter = 0.04, wander = 0.08, full_wander_half = 1.1, fade = 0.8, min_fade = 0.5, max_fade = 1.2}
-const NATIVE_TREAD := [TREAD.edge, TREAD.litter, TREAD.wander, TREAD.full_wander_half, TREAD.fade, TREAD.min_fade, TREAD.max_fade]
-
-
-static func tread_alpha(half: float, d: float, slow: float, organic: float) -> float:
-	var edge := half * (TREAD.edge - organic * TREAD.litter) + slow * TREAD.wander * minf(1.0, half / TREAD.full_wander_half)
-	var ramp := clampf(half * TREAD.fade, TREAD.min_fade, TREAD.max_fade)
-	return clampf(0.5 + (edge - d) / ramp, 0.0, 1.0)
 
 
 ## Fit published natural roads once the full network and its structures are known.
 static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
+	var tuning := RoadTuning.current().section
 	var routes: Array = []
 	var junctions := {}
 	for t: Dictionary in w.trails:
@@ -37,7 +23,7 @@ static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
 			junctions[key] = {owners = {}, low = INF, high = 0.0}
 	for r in routes.size():
 		var t: Dictionary = routes[r]
-		var base: float = WIDTHS[t.kind]
+		var base: float = tuning.widths[t.kind]
 		for p: Dictionary in t.pts:
 			var key := Topology.anchor_key(Vector2(p.x, p.y), w.world_origin)
 			if junctions.has(key):
@@ -52,7 +38,7 @@ static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
 		if a != z:
 			decks.append([a, z, a.direction_to(z)])
 	for t: Dictionary in routes:
-		var shaped := _profile(w, t, surface, junctions, decks)
+		var shaped := _profile(w, t, surface, junctions, decks, tuning)
 		if accept.is_valid() and not accept.call(shaped):
 			# A regional bank can constrain widening. Preserve safe narrowing.
 			for k in shaped.size():
@@ -62,11 +48,14 @@ static func fit(w: WorldData, surface: Object, accept := Callable()) -> void:
 		t.pts = shaped
 
 
-static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions: Dictionary, decks: Array) -> Array:
+static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions: Dictionary, decks: Array,
+		tuning: RoadTuning.Section) -> Array:
 	var pts: Array = route.pts
 	var count := pts.size()
-	var section: Dictionary = KINDS[route.kind]
-	var base: float = section.width
+	var base: float = tuning.widths[route.kind]
+	var side_cut: float = tuning.side_cut[route.kind]
+	var rock_cut: float = tuning.rock_cut[route.kind]
+	var ford_cut: float = tuning.ford_cut[route.kind]
 	var axis := PackedVector2Array()
 	var stations := PackedFloat64Array()
 	var widths := PackedFloat64Array()
@@ -88,8 +77,8 @@ static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions
 		var rocky := w.biome[cell] in [Biomes.ROCK, Biomes.PEAK, Biomes.STONESHORE]
 		var ford: bool = surface.depth_at(at.x, at.y) > 0.08
 		wet.append(int(ford))
-		var pinch := maxf(section.side_cut * smoothstep(0.14, 0.52, grade), section.rock_cut if rocky else 0.0)
-		widths.append(base * (1.0 - maxf(pinch, section.ford_cut if ford else 0.0)))
+		var pinch := maxf(side_cut * smoothstep(0.14, 0.52, grade), rock_cut if rocky else 0.0)
+		widths.append(base * (1.0 - maxf(pinch, ford_cut if ford else 0.0)))
 		var p: Dictionary = pts[k]
 		var joint: Dictionary = junctions.get(Topology.anchor_key(Vector2(p.x, p.y), w.world_origin), {})
 		var target := -1.0
@@ -99,7 +88,7 @@ static func _profile(w: WorldData, route: Dictionary, surface: Object, junctions
 		junction.append(target)
 		bridge.append(2.0 * BRIDGE_HALF / TILE if _deck(at, axis[maxi(k - 1, 0)], axis[mini(k + 1, count - 1)], decks) else -1.0)
 
-	widths = _blend_junctions(widths, stations, junction, base, wet, cross, axis, surface)
+	widths = _blend_junctions(widths, stations, junction, base, wet, cross, axis, surface, tuning.junction_transition)
 	widths = _limit_rate(widths, stations)
 	var on_deck := _nearest_anchor(stations, bridge)
 	var result: Array = []
@@ -143,12 +132,12 @@ static func _nearest_anchor(stations: PackedFloat64Array, targets: PackedFloat64
 
 
 static func _blend_junctions(widths: PackedFloat64Array, stations: PackedFloat64Array, junction: PackedFloat64Array,
-		base: float, wet: PackedByteArray, cross: PackedFloat64Array, axis: PackedVector2Array, surface: Object) -> PackedFloat64Array:
+		base: float, wet: PackedByteArray, cross: PackedFloat64Array, axis: PackedVector2Array, surface: Object, transition: float) -> PackedFloat64Array:
 	var closest := _nearest_anchor(stations, junction)
 	for k in widths.size():
 		var n := closest[k]
 		if n < 0 or wet[k] != 0: continue
-		var fade := 1.0 - smoothstep(0.0, JUNCTION_TRANSITION, absf(stations[n] - stations[k]))
+		var fade := 1.0 - smoothstep(0.0, transition, absf(stations[n] - stations[k]))
 		if fade <= 0.0: continue
 		var target := lerpf(widths[k], junction[n], fade)
 		if target > base:

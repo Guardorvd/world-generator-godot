@@ -43,26 +43,26 @@ func _initialize() -> void:
 		print("TRAIL PLAN ", JSON.stringify(full.trail_plan.get("stats", {})))
 		quit(0)
 		return
-	# --turn r,t,m: штраф поворота в поиске пути дорог, троп и горных троп (StageTrails.turn_costs) — подбор чисел
+	# --turn r,t,m: штраф поворота в поиске пути дорог, троп и горных троп (StageTrails.routing_overrides.turn_costs) — подбор чисел
 	var turn := _arg(args, "--turn", "")
 	if not turn.is_empty():
-		StageTrails.turn_costs = {road = float(turn.get_slice(",", 0)), trail = float(turn.get_slice(",", 1)), mountain = float(turn.get_slice(",", 2))}
-		print("штраф поворота: ", StageTrails.turn_costs)
-	# --straighten r,t,m: допуск срезания лесенки сетки (клеток) для дорог, троп и горных (StageTrails.straighten)
+		StageTrails.routing_overrides.turn_costs = {road = float(turn.get_slice(",", 0)), trail = float(turn.get_slice(",", 1)), mountain = float(turn.get_slice(",", 2))}
+		print("штраф поворота: ", StageTrails.routing_overrides.turn_costs)
+	# --straighten r,t,m: допуск срезания лесенки сетки (клеток) для дорог, троп и горных (StageTrails.routing_overrides.straighten)
 	var pull := _arg(args, "--straighten", "")
 	if not pull.is_empty():
-		StageTrails.straighten = {road = float(pull.get_slice(",", 0)), trail = float(pull.get_slice(",", 1)), mountain = float(pull.get_slice(",", 2))}
-		print("срезание лесенки: ", StageTrails.straighten)
-	# --bend r,t,m: штраф длинных галсов дорог, троп и горных (StageTrails.bend_costs)
+		StageTrails.routing_overrides.straighten = {road = float(pull.get_slice(",", 0)), trail = float(pull.get_slice(",", 1)), mountain = float(pull.get_slice(",", 2))}
+		print("срезание лесенки: ", StageTrails.routing_overrides.straighten)
+	# --bend r,t,m: штраф длинных галсов дорог, троп и горных (StageTrails.routing_overrides.bend_costs)
 	var bend := _arg(args, "--bend", "")
 	if not bend.is_empty():
-		StageTrails.bend_costs = {road = float(bend.get_slice(",", 0)), trail = float(bend.get_slice(",", 1)), mountain = float(bend.get_slice(",", 2))}
-		print("длинные галсы: ", StageTrails.bend_costs)
-	# --line-relax r,t,m: срезаемый бугор при построении линии (StageTrails.line_relax, доля предела; 0 — без поблажки)
+		StageTrails.routing_overrides.bend_costs = {road = float(bend.get_slice(",", 0)), trail = float(bend.get_slice(",", 1)), mountain = float(bend.get_slice(",", 2))}
+		print("длинные галсы: ", StageTrails.routing_overrides.bend_costs)
+	# --line-relax r,t,m: срезаемый бугор при построении линии (StageTrails.routing_overrides.line_relax, доля предела; 0 — без поблажки)
 	var line_arg := _arg(args, "--line-relax", "")
 	if not line_arg.is_empty():
-		StageTrails.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
-		print("линия: срезаемый бугор ", StageTrails.line_relax)
+		StageTrails.routing_overrides.line_relax = {road = float(line_arg.get_slice(",", 0)), trail = float(line_arg.get_slice(",", 1)), mountain = float(line_arg.get_slice(",", 2))}
+		print("линия: срезаемый бугор ", StageTrails.routing_overrides.line_relax)
 	var cache := WorldCache.new()
 	cache.dir = DIR
 	cache.enabled = true

@@ -224,6 +224,14 @@ func _placement() -> void:
 	check(plain.per_km < 3.0, "на открытой равнинной дороге почти ничего не лежит")
 	var scree := _count(_world("mountain", 0.0, 0.9, 0.35))
 	print("  горная тропа на косогоре: %.0f на км, %s" % [scree.per_km, scree.kinds])
+	if "--fingerprint" in OS.get_cmdline_user_args():
+		var placements := []
+		for result: Dictionary in [forest, road, open, plain, scree]:
+			placements.append([result.kinds, result.list])
+		var context := HashingContext.new()
+		context.start(HashingContext.HASH_SHA256)
+		context.update(var_to_bytes(placements))
+		print("OBSTACLE SHA256 ", context.finish().hex_encode())
 	check(scree.kinds[RoadObstacles.BOULDER] > 0 and scree.kinds[RoadObstacles.STONES] > 0, "на косогоре камни и валуны")
 	# у валуна на косогоре — сторона подъёма (уклон по +x), а не середина
 	var uphill := true
@@ -295,6 +303,16 @@ func _contracts() -> void:
 	check(road._cache.is_empty(), "новая защищённая зона инвалидирует в том числе пустые результаты")
 	road.begin_fill(g, scene[2], PackedInt32Array())
 	check(road._cache.is_empty(), "кэш не держит выгруженные участки")
+	var tuning := RoadTuning.current().obstacles
+	var old_ceiling := tuning.probability_ceiling
+	var old_chance := tuning.root_chance
+	tuning.probability_ceiling = 0.0
+	tuning.root_chance = 0.0
+	var disabled := _count(scene)
+	tuning.probability_ceiling = old_ceiling
+	tuning.root_chance = old_chance
+	check(disabled.list.is_empty() and road._tuning.probability_ceiling == old_ceiling and road._tuning.root_chance == old_chance,
+		"новая раскладка читает настройки, у существующего экземпляра свой снимок")
 	var d := TrailDefinition.new()
 	d.id = "prepared"
 	d.kind = "trail"

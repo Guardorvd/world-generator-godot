@@ -15,7 +15,6 @@ extends SceneTree
 const Fixture := preload("res://tools/road_relief_fixture.gd")
 const LabFixture := preload("res://scripts/lab/trail_lab_fixture.gd")
 const Topology := preload("res://scripts/world/road_topology.gd")
-const Section := preload("res://scripts/world/road_section.gd")
 const FILE := "res://tools/control/golden/roads.txt"
 var lines := {}
 
@@ -258,7 +257,7 @@ func _section() -> void:
 func _section_line(kind: String, x0: int, x1: int, z: float) -> Dictionary:
 	var points: Array = []
 	for x in range(x0, x1 + 1):
-		points.append({x = x + 0.5, y = z, w = Section.WIDTHS[kind]})
+		points.append({x = x + 0.5, y = z, w = RoadTuning.current().section.widths[kind]})
 	return Topology.section(kind, points, Vector2i.ZERO)
 
 

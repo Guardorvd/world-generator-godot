@@ -175,17 +175,18 @@ static func fields(w: WorldData) -> Dictionary:
 ## Поле просвета (м) у путей trails в клетках W × H: см. Grid.path_clearance и RoadSection. Тот же расчёт у плана
 ## и у закреплённых областей (RegionRoads), поэтому на границе областей не бывает внезапной просеки.
 static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -> PackedFloat32Array:
+	var clearing := RoadTuning.current().section.clearance
 	var starts := PackedInt32Array()
 	var px := PackedFloat64Array()
 	var py := PackedFloat64Array()
 	var pw := PackedFloat64Array()
 	var margin := PackedFloat64Array()
 	for t: Dictionary in trails:
-		if t.pts.size() < 2 or not Section.KINDS.has(t.kind):
+		if t.pts.size() < 2 or not clearing.has(t.kind):
 			continue
 		starts.append(px.size())
 		# A prepared trail needs room at the landings as well as along the tread.
-		var edge: float = Section.KINDS[t.kind].clearance
+		var edge: float = clearing[t.kind]
 		margin.append(maxf(edge, Section.AUTHORED_CLEARANCE) if t.has("trail_id") else edge)
 		var previous: Dictionary = t.pts[0]
 		for p: Dictionary in t.pts:

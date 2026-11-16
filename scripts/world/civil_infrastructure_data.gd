@@ -8,7 +8,7 @@ var cost: GridBuffer.Float32
 var path_mask: GridBuffer.Byte
 var road_surface: GridBuffer.Byte
 ## Полная сеть путей для движения, карты и покрытий. Велотрассы входят сюда как path_record() с trail_id.
-var trails: Array = []        # [{kind: "animal" | "trail" | "mountain" | "road", pts, surf — покрытие точек (RoadSurface)}]
+var trails: Array = []        # Физические участки и их покрытия. Контракт: docs/ROAD_DATA_CONTRACT.md.
 var bridges: Array[BridgeData] = []       # мосты [{a, b}]: клетки на берегах, мост — прямой отрезок между их центрами
 var tunnels: Array[TunnelData] = []       # туннели [{a, b}]: клетки у входов, туннель — прямой отрезок между ними
 var settlements: Array[SettlementData] = []   # [{x, y, i, name, character, spacing, importance, huts: [{x, y, v}], connections: [i соседей по путям]}]

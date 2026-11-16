@@ -21,6 +21,9 @@ uniform float surface_crack[8];
 uniform vec4 surface_look[8];
 // 16.11.2026: колеи — доля полуширины от оси и ширина (RoadBump.RUT_AT, RUT_W; ставит TerrainBuilder). Те же, что трясут колесо.
 uniform vec2 road_rut = vec2(0.47, 0.13);
+#ifdef ROAD_TUNED_EDGE
+uniform vec3 road_edge;
+#endif
 // Сдвиг меша от мировых координат, м: у сохранённого участка Trail Lab (WorldData.world_origin), у мира ноль.
 // Деталь и кочки полотна остаются на своих мировых местах, как у колёс.
 uniform vec2 world_offset = vec2(0.0);
@@ -666,7 +669,11 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 		// ступеньками. Поперечная координата UV2.x на прямом отрезке интерполируется точно: кромка по ней — та же
 		// формула tread_alpha (0,5 при |x| = 0,84 − подстилка·0,04, наклон 1,25 = полуширина / ramp), с извивом по миру (шум 7 и 37 м, как шум
 		// вершин ~8 м) вместо шума вершин. Где она расходится с маской (развилка, сужение, мост) — прежняя маска.
+#ifdef ROAD_TUNED_EDGE
+		float edge_lin = clamp(0.5 + (road_edge.x - organic * road_edge.y + (n_big - 0.5) * 0.16 + (n_mid - 0.5) * 0.24 - abs(UV2.x)) * road_edge.z, 0.0, 1.0);
+#else
 		float edge_lin = clamp(0.5 + (0.84 - organic * 0.04 + (n_big - 0.5) * 0.16 + (n_mid - 0.5) * 0.24 - abs(UV2.x)) * 1.25, 0.0, 1.0);
+#endif
 		float edge_a = mix(COLOR.a, edge_lin, 1.0 - smoothstep(0.2, 0.4, abs(edge_lin - COLOR.a)));
 		float edge_v = edge_a + ((mh.g - 0.5) * grain + (0.5 - mh.r)) * 0.12 * near * step(0.02, COLOR.a);
 		float soft = mix(0.09, 0.19, organic * (0.55 + wet * 0.45));

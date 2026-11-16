@@ -20,12 +20,16 @@ const BATCH_CELLS := 256
 const EVAL_BAND_MIN := 400
 const EVAL_BAND_MAX := 1500
 const EVAL_BANDS := 12
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 
 static func append_routes(w: WorldData, definitions: Array[TrailDefinition], rebuild_map := true) -> PackedStringArray:
+	var issue := RoadRecords.validation_error(w.trails, "TrailBuilder.append_routes")
+	if not issue.is_empty():
+		return PackedStringArray([issue])
 	var errors := _validate(w, definitions, false)
 	if not errors.is_empty(): return errors
 	for route: Dictionary in w.trails:
-		if not route.has("surf") or route.surf.size() != route.pts.size(): RoadSurface.assign_route(w, route)
+		if not route.has("surf"): RoadSurface.assign_route(w, route)
 	for d in definitions:
 		var route := d.path_record()
 		RoadSurface.assign_route(w, route)

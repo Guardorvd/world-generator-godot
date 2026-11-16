@@ -34,6 +34,7 @@ const LIST := [
 const VILLAGE_R := 7.0    # ближе этого к костру (клеток) дорога укатана
 const STONE_SLOPE := 0.19 # средняя крутизна окружения, а не отдельный камень в клетке
 const ORDER := ["mountain", "trail", "road"]   # кто кого перекрывает в w.road_surface (дорога сверху)
+const RoadRecords := preload("res://scripts/world/road_records.gd")
 static var allow_fast := true # the scalar pick() remains the reference and small authored-route API
 
 
@@ -45,6 +46,10 @@ static func run(w: WorldData) -> void:
 		_assign_native(w, fast)
 	else:
 		for t: Dictionary in w.trails: assign_route(w, t)
+	var issue := RoadRecords.validation_error(w.trails, "RoadSurface (%s)" % w.seed_text, RoadRecords.Phase.SURFACED)
+	if not issue.is_empty():
+		push_error(issue)
+		return
 	rebuild_map(w)
 	# The dominant route continues through the junction. Use the existing stamped map;
 	# neither route order nor direction chooses a new material at a crossing.

@@ -57,8 +57,6 @@ const STYLES := {
 	tech = {climb = 4.0, grade = 0.5, wood = false, via = false},
 	forest = {climb = 12.0, grade = 0.36, wood = true, via = true},
 }
-## Подъём к виртуальной вершине — те же пределы, что у горных троп
-const APPROACH := {climb = StageTrails.MOUNTAIN_CLIMB, grade = StageTrails.MOUNTAIN_GRADE}
 const WOODED := [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]
 
 
@@ -69,6 +67,8 @@ static func enabled() -> bool:
 ## finder — поиск этапа; on_axis — клетки осей мостов и туннелей
 static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis: PackedByteArray) -> void:
 	var started := Time.get_ticks_usec()
+	# Подъём к виртуальной вершине использует профиль горной тропы.
+	var approach := {climb = RoadTuning.current().routing.climb_costs.mountain, grade = StageTrails.MOUNTAIN_GRADE}
 	var stats := {anchors = 0, tops = 0, pairs = 0, searches = 0, found = 0, rejected = {}, accepted = 0,
 		from_mountain = 0, virtual_tops = 0, virtual_failed = [], climbs = 0, climb_km = 0.0, km = 0.0, styles = {},
 		by_search = {}, ms = 0.0} # by_search: стиль поиска → [попыток, линий, годных]
@@ -76,7 +76,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	if not enabled() or surface == null:
 		return
 	# Flow/forest publish a wider trail than mountain approaches. Search its full width.
-	StageTrails._route_surface(finder, surface, StageTrails.WIDTHS.trail, "corridor_rides_ms")
+	StageTrails._route_surface(finder, surface, RoadTuning.current().section.widths.trail, "corridor_rides_ms")
 	var W := w.W
 	var hv := surface.hv
 	# Расстояние до готовой сети (дороги, тропы, горные тропы) — одна проходка C#
@@ -139,7 +139,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if not s.has("approach") and stats.searches < budget:
 				s.approach = PackedInt32Array()
 				for from: int in s.from:
-					s.approach = _search(finder, w, cost, cost_version, from, s.i, APPROACH, stats)
+					s.approach = _search(finder, w, cost, cost_version, from, s.i, approach, stats)
 					if not s.approach.is_empty(): break
 				# Не поднялись: вокруг вершины стены круче горной тропы (замер 07.11: путь есть только с уклоном больше 55 %)
 				if s.approach.is_empty(): stats.virtual_failed.append([s.x, s.y, roundi(s.rise)])

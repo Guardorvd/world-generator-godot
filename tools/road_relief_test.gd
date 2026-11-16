@@ -1,6 +1,5 @@
 extends SceneTree
 const Fixture := preload("res://tools/road_relief_fixture.gd")
-const Section := preload("res://scripts/world/road_section.gd")
 const Topology := preload("res://scripts/world/road_topology.gd")
 const FORM_STRIDE := RoadRefinement.CORRIDOR_STRIDE
 const OUT := "res://tools/control/runs/road_relief"
@@ -381,7 +380,7 @@ class SectionGround extends Heightfield:
 func section_line(kind: String, x0: int, x1: int, z: float) -> Dictionary:
 	var points: Array = []
 	for x in range(x0, x1 + 1):
-		points.append({x = x + 0.5, y = z, w = Section.WIDTHS[kind]})
+		points.append({x = x + 0.5, y = z, w = RoadTuning.current().section.widths[kind]})
 	return Topology.section(kind, points, Vector2i.ZERO)
 
 

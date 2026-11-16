@@ -7,7 +7,8 @@ class ProbeFinder extends Pathfinder:
 	var result := PackedInt32Array()
 	func can_reach(_cost: PackedFloat32Array, _s: int, _t: int, _climb := 0.0, _max_grade := INF) -> bool:
 		return true
-	func find_path(_cost: PackedFloat32Array, _s: int, _t: int, _climb := 0.0, max_grade := INF, _cost_version := -1) -> PackedInt32Array:
+	func find_path(_cost: PackedFloat32Array, _s: int, _t: int, _climb := 0.0, max_grade := INF,
+			_cost_version := -1, _turn := 0.0, _bend := 0.0) -> PackedInt32Array:
 		last_grade = max_grade
 		return result
 
@@ -15,7 +16,8 @@ class ExhaustingFinder extends Pathfinder:
 	var first := true
 	func can_reach(_cost: PackedFloat32Array, _s: int, _t: int, _climb := 0.0, _max_grade := INF) -> bool:
 		return true
-	func find_path(_cost: PackedFloat32Array, s: int, t: int, _climb := 0.0, _max_grade := INF, _cost_version := -1) -> PackedInt32Array:
+	func find_path(_cost: PackedFloat32Array, s: int, t: int, _climb := 0.0, _max_grade := INF,
+			_cost_version := -1, _turn := 0.0, _bend := 0.0) -> PackedInt32Array:
 		if search_budget == 0: return PackedInt32Array()
 		if first:
 			first = false
@@ -109,7 +111,7 @@ func isolated_check() -> void:
 	for x: int in [50, 70]:
 		w.settlements.append(SettlementData.from_dict({x = x + 0.5, y = 48.5, i = 48 * w.W + x, huts = []}))
 	var c := setup(w)
-	StageTrails._route_surface(c.finder, c.surface, StageTrails.WIDTHS.road)
+	StageTrails._route_surface(c.finder, c.surface, RoadTuning.current().section.widths.road)
 	StageTrails._net_reset(w)
 	StageTrails._settlement_trails(w, c.finder, c.surface)
 	check(w.settlements.size() == 2 and w.settlements[0].connections.has(w.settlements[1].i),
@@ -193,13 +195,13 @@ func acceptance_check() -> void:
 func corridor_rollback_check() -> void:
 	var w := world(64, 48)
 	var c := setup(w)
-	StageTrails._route_surface(c.finder, c.surface, StageTrails.WIDTHS.road)
+	StageTrails._route_surface(c.finder, c.surface, RoadTuning.current().section.widths.road)
 	c.state.failures = {}
 	c.state.tunnels = false
 	StageTrails._add_trail(w, Grid.line_cells(8, 24, 56, 24, w.W), "road")
 	# Sparse host guarantees the join inserts a vertex, rather than finding one already there.
-	w.trails[0].pts = [{x = 8.5, y = 24.5, w = StageTrails.WIDTHS.road},
-		{x = 56.5, y = 24.5, w = StageTrails.WIDTHS.road}]
+	w.trails[0].pts = [{x = 8.5, y = 24.5, w = RoadTuning.current().section.widths.road},
+		{x = 56.5, y = 24.5, w = RoadTuning.current().section.widths.road}]
 	var before := var_to_bytes([w.trails, w.path_mask, w.cost, w.generation.road_cells,
 		w.generation.road_owner, w.generation.road_side, w.generation.road_protected,
 		c.finder.heights, c.finder.links, c.state.on_axis, c.surface.hv])

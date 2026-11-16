@@ -19,8 +19,6 @@ extends RefCounted
 
 const TILE := GameConfig.TILE
 enum { BRANCH, STONES, LOG, BOULDER, ROOT }
-const KIND_SCALE := {road = 0.6, trail = 1.0, mountain = 0.8} # дорогу расчищают, горную тропу засыпает камнем
-const MAX_P := 0.26      # верхний предел вероятности, прежде чем учесть местность
 const CHUNK := 8         # клеток в стороне ячейки индекса линий
 const SAMPLE_STEP := 3.8 # м: скругление пути может добавлять точки через полметра
 const CLEAR_R := 45.0    # у старта (вступительный проезд 11.0) пусто, м
@@ -34,10 +32,10 @@ const ROOT_REACH := 3.5  # от кромки полотна до ствола, �
 const ROOT_TREE := 0.85  # масштаб дерева, с которого у него крупные корни (ствол около 0,2 м, как VegetationLayer.ROOT_TRUNK)
 const TRUNK_UNIT := 0.23 # м: ствол, которому соответствует масштаб 1 в ROOT_TREE
 const LOOK := 6.0        # радиус поиска причин вокруг отрезка за кромкой, м
-## Сколько корней даёт тропе ствол по покрытию полотна: лесная подстилка и грунт — да, гравий и укатанная земля — редко
-const ROOT_SURFACE := [0.0, 0.2, 0.8, 0.15, 0.5, 0.1, 1.0, 0.6]
 
 var world: WorldData
+## Настройки и кэш кандидатов имеют одно время жизни.
+var _tuning: RoadTuning.Obstacles
 var clear: Array[Vector2] = [] # места без препятствий (старт), м
 var _index := {}               # Vector2i(ячейка) -> PackedInt32Array пар (маршрут, точка)
 var _sampled: Array[PackedInt32Array] = [] # номер станции -> исходная точка пути
@@ -55,6 +53,7 @@ var _revision := 0
 
 func _init(w: WorldData) -> void:
 	world = w
+	_tuning = RoadTuning.current().obstacles.duplicate(true) as RoadTuning.Obstacles
 	_trails = w.trails.duplicate()
 	if w.trail_plan.get("state") == "found":
 		for d: TrailDefinition in StageTrailPlan._kit(w.trail_plan):
@@ -70,7 +69,7 @@ func _build_index() -> void:
 	_along.resize(_trails.size())
 	for route in _trails.size():
 		var t: Dictionary = _trails[route]
-		if not KIND_SCALE.has(t.kind) or t.pts.size() < 2:
+		if not _tuning.kind_scale.has(t.kind) or t.pts.size() < 2:
 			continue
 		var samples := PackedInt32Array([0])
 		var previous := _point(t, 0)
@@ -252,7 +251,8 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	if protected(route, (_along[route][n - 1] + _along[route][n]) * 0.5): return {}
 	var roll := _roll(route, n, 0)
 	# соседние отрезки не заняты вместе: бревно и камни не ложатся друг на друга
-	var debris := roll < MAX_P and _roll(route, n - 1, 0) >= MAX_P
+	var ceiling := _tuning.probability_ceiling
+	var debris := roll < ceiling and _roll(route, n - 1, 0) >= ceiling
 	var a := _point(t, samples[n - 1])
 	var b := _point(t, samples[n])
 	var length := a.distance_to(b)
@@ -296,35 +296,39 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 	var half := (float(t.pts[samples[n - 1]].w) + float(t.pts[samples[n]].w)) * TILE * 0.25
 	var around_me := _context(mid, dir, side, half, length, uphill)
 	var trees: int = around_me.trees
-	var organic := 1.3 if surf == RoadSurface.FOREST or surf == RoadSurface.MEADOW else (0.5 if surf == RoadSurface.GRAVEL or surf == RoadSurface.PACKED else 1.0)
-	organic *= lerpf(0.35, 1.15, RoadBump.patch(mid.x + world.world_origin.x * TILE, mid.y + world.world_origin.y * TILE).x)
+	var organic := _tuning.branch_surface[surf]
+	organic *= lerpf(_tuning.branch_rhythm_min, _tuning.branch_rhythm_max,
+		RoadBump.patch(mid.x + world.world_origin.x * TILE, mid.y + world.world_origin.y * TILE).x)
 	var falls := minf(float(around_me.rocks), 2.0) # обломки выше по склону
 	var root_gap: float = around_me.gap
 	var root_tree: Vector3 = around_me.root
 	var rooted := false
 	if root_tree.x != INF:
-		var root_chance: float = 0.32 * (1.0 - smoothstep(0.4, ROOT_REACH, root_gap)) * ROOT_SURFACE[surf]
-		root_chance *= 0.25 if t.kind == "road" else 1.0
+		var root_chance: float = _tuning.root_chance * (1.0 - smoothstep(0.4, ROOT_REACH, root_gap)) * _tuning.root_surface[surf]
+		root_chance *= _tuning.root_on_road if t.kind == "road" else 1.0
 		rooted = _tree_roll(root_tree, 0) < root_chance
 	if not debris and not rooted: return {}
 	var weights := PackedFloat32Array([
 		# ветки — под деревьями: полог клетки и деревья у отрезка
-		(cover * 0.065 + minf(trees, 6) * 0.016) * organic,
+		(cover * _tuning.branch_cover + minf(trees, 6) * _tuning.branch_tree) * organic,
 		# камни — порода, обломки сверху, крутое размытое полотно; без причины почти нет
-		(0.002 + rocky * 0.075 + falls * 0.03 + smoothstep(0.08, 0.3, grade) * 0.04 * maxf(rocky, 0.3))
-			* (1.6 if surf == RoadSurface.STONE else (0.3 if surf == RoadSurface.SAND else 1.0)),
+		(_tuning.stone_base + rocky * _tuning.stone_rock + falls * _tuning.stone_scree
+			+ smoothstep(0.08, 0.3, grade) * _tuning.stone_grade * maxf(rocky, 0.3))
+			* (_tuning.stone_on_stone if surf == RoadSurface.STONE else (_tuning.stone_on_sand if surf == RoadSurface.SAND else 1.0)),
 		# бревно — упавшее дерево: нужны деревья рядом
-		((pow(cover, 1.5) * 0.035 + minf(trees, 5) * 0.012) if trees >= 2 else 0.0) * seen * (0.3 if t.kind == "road" else 1.0),
+		((pow(cover, 1.5) * _tuning.log_cover + minf(trees, 5) * _tuning.log_tree) if trees >= 2 else 0.0)
+			* seen * (_tuning.log_on_road if t.kind == "road" else 1.0),
 		# валун скатился с косогора под скалой
-		(rocky * 0.06 + falls * 0.02) * smoothstep(0.1, 0.5, cross) * lerpf(0.5, 1.0, seen),
+		(rocky * _tuning.boulder_rock + falls * _tuning.boulder_scree) * smoothstep(0.1, 0.5, cross) * lerpf(0.5, 1.0, seen),
 		# корни — только от настоящего ствола у кромки
 		0.0, # Roots are selected by their tree, independently of the debris lottery.
 	])
 	var total := 0.0
 	for weight in weights:
 		total += weight
-	total *= KIND_SCALE[t.kind]
-	if not rooted and roll >= minf(total, MAX_P):
+	var kind_scale: float = _tuning.kind_scale[t.kind]
+	total *= kind_scale
+	if not rooted and roll >= minf(total, ceiling):
 		return {}
 	# Расчищенные и опасные для раскладки места: старт, поселения, сооружения, вода, развилки.
 	for spot in clear:
@@ -369,7 +373,7 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int) -> Dictionary:
 			return {}
 	if rooted:
 		return _roots(route, n, a, dir, side, length, half, root_tree, around_me.owner, ground.b > 0.55)
-	var pick_at: float = _roll(route, n, 1) * total / KIND_SCALE[t.kind]
+	var pick_at: float = _roll(route, n, 1) * total / kind_scale
 	var kind := 0
 	while kind < weights.size() - 1 and pick_at >= weights[kind]:
 		pick_at -= weights[kind]
