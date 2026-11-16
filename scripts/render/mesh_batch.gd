@@ -16,6 +16,7 @@ var _lod_tools: Dictionary = {}   # world square -> [level 0..2 dict: material -
 var _lod_centers: Dictionary = {} # world square -> {sum: Vector3, count: int}
 var _details: Dictionary = {}     # world square -> material -> mesh -> Array[{xform, color}]
 var _geometry := {}               # cache (mesh, surface) -> surface arrays
+var keep_world_origin := false    # true для Trail Lab (visible_deck читает вершины без mi.position)
 
 
 func _arrays_of(mesh: Mesh, surface: int) -> Array:
@@ -146,8 +147,32 @@ func build(node_name: String) -> Node3D:
 		root.add_child(mi)
 
 	for key: Vector2i in _lod_tools:
-		var center := _square_center(key)
 		var levels: Array = _lod_tools[key]
+		if keep_world_origin:
+			var groups: Dictionary = levels[0]
+			if groups.is_empty():
+				continue
+			var mesh := ArrayMesh.new()
+			var surface := 0
+			for mat: Material in groups:
+				var data: Dictionary = groups[mat]
+				var arrays := []
+				arrays.resize(Mesh.ARRAY_MAX)
+				arrays[Mesh.ARRAY_VERTEX] = data.vertices
+				arrays[Mesh.ARRAY_NORMAL] = data.normals
+				arrays[Mesh.ARRAY_TEX_UV] = data.uv
+				arrays[Mesh.ARRAY_COLOR] = data.colors
+				arrays[Mesh.ARRAY_INDEX] = data.indices
+				mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+				mesh.surface_set_material(surface, mat)
+				surface += 1
+			var mi := MeshInstance3D.new()
+			mi.name = "%s_%d_%d" % [node_name, key.x, key.y]
+			mi.mesh = mesh
+			mi.visibility_range_end = SEEN
+			root.add_child(mi)
+			continue
+		var center := _square_center(key)
 		for level in 3:
 			var groups: Dictionary = levels[level]
 			if groups.is_empty():

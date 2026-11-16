@@ -334,6 +334,43 @@ static func build_detail_meshes() -> Dictionary:
 	_box(jetty, Vector3(0.20, 0.45, 0.20), Vector3(0.72, 0.65, 1.30), Basis.IDENTITY, CELL_DARK_WOOD)
 	jetty.index()
 
+	# Дорожный столб-указатель на развилке (с двумя табличками и светящимся ночью фонарём)
+	var signpost := SurfaceTool.new()
+	signpost.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_box(signpost, Vector3(0.44, 0.34, 0.44), Vector3(0, 0.14, 0), Basis.IDENTITY, CELL_STONE, stone_c)
+	_box(signpost, Vector3(0.16, 2.38, 0.16), Vector3(0, 1.24, 0), Basis.IDENTITY, CELL_TIMBER, wood_c)
+	_cyl(signpost, 0.0, 0.20, 0.16, 4, Vector3(0, 2.48, 0), Basis(Vector3.UP, PI * 0.25), CELL_ROOF, Color.html("#4a3a2c"))
+	var arm_b1 := Basis(Vector3.UP, 0.14)
+	_box(signpost, Vector3(0.96, 0.22, 0.04), arm_b1 * Vector3(0.36, 1.88, 0.06), arm_b1, CELL_DARK_WOOD, dark_c)
+	_box(signpost, Vector3(0.90, 0.17, 0.05), arm_b1 * Vector3(0.37, 1.88, 0.09), arm_b1, CELL_PLASTER, Color.html("#e3dac8"))
+	var arm_b2 := Basis(Vector3.UP, -1.08)
+	_box(signpost, Vector3(0.88, 0.21, 0.04), arm_b2 * Vector3(0.34, 2.12, 0.06), arm_b2, CELL_DARK_WOOD, dark_c)
+	_box(signpost, Vector3(0.82, 0.16, 0.05), arm_b2 * Vector3(0.35, 2.12, 0.09), arm_b2, CELL_PLASTER, Color.html("#ded4bf"))
+	_box(signpost, Vector3(0.42, 0.08, 0.08), Vector3(-0.20, 1.62, 0), Basis.IDENTITY, CELL_DARK_WOOD, dark_c)
+	_box(signpost, Vector3(0.24, 0.32, 0.24), Vector3(-0.34, 1.40, 0), Basis.IDENTITY, CELL_WINDOW, Color.WHITE)
+	_box(signpost, Vector3(0.32, 0.08, 0.32), Vector3(-0.34, 1.59, 0), Basis.IDENTITY, CELL_DARK_WOOD, dark_c)
+	signpost.index()
+
+	# Каменный верстовой столб вдоль главных дорог
+	var milestone := SurfaceTool.new()
+	milestone.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_box(milestone, Vector3(0.50, 0.24, 0.44), Vector3(0, 0.09, 0), Basis.IDENTITY, CELL_STONE, Color.html("#747068"))
+	_box(milestone, Vector3(0.38, 0.86, 0.34), Vector3(0, 0.62, 0), Basis.IDENTITY, CELL_STONE, Color.html("#948e84"))
+	_cyl(milestone, 0.10, 0.28, 0.20, 4, Vector3(0, 1.15, 0), Basis(Vector3.UP, PI * 0.25), CELL_STONE, Color.html("#78726a"))
+	_box(milestone, Vector3(0.26, 0.42, 0.36), Vector3(0, 0.68, 0), Basis.IDENTITY, CELL_PLASTER, Color.html("#e6dfd0"))
+	_box(milestone, Vector3(0.41, 0.07, 0.37), Vector3(0, 0.96, 0), Basis.IDENTITY, CELL_DARK_WOOD, Color.html("#45392c"))
+	milestone.index()
+
+	# Перевальный тур с деревянной вехой и флажком на высокогорных проходах
+	var pass_cairn := SurfaceTool.new()
+	pass_cairn.begin(Mesh.PRIMITIVE_TRIANGLES)
+	_cyl(pass_cairn, 0.56, 0.68, 0.48, 6, Vector3(0, 0.20, 0), Basis.IDENTITY, CELL_STONE, Color.html("#847f77"))
+	_cyl(pass_cairn, 0.38, 0.48, 0.40, 6, Vector3(0, 0.62, 0), Basis(Vector3.UP, 0.35), CELL_STONE, Color.html("#969087"))
+	_cyl(pass_cairn, 0.22, 0.32, 0.30, 5, Vector3(0, 0.94, 0), Basis.IDENTITY, CELL_STONE, Color.html("#7a756d"))
+	_box(pass_cairn, Vector3(0.09, 2.15, 0.09), Vector3(0, 1.60, 0), Basis.IDENTITY, CELL_DARK_WOOD, dark_c)
+	_box(pass_cairn, Vector3(0.72, 0.40, 0.05), Vector3(0.36, 2.42, 0), Basis.IDENTITY, CELL_FLOWER_A, Color.html("#d65a38"))
+	pass_cairn.index()
+
 	return {
 		flower_box = flower.commit(),
 		flower_box_b = flower_b.commit(),
@@ -342,6 +379,9 @@ static func build_detail_meshes() -> Dictionary:
 		lantern_post = lantern.commit(),
 		fence_section = fence.commit(),
 		wooden_jetty = jetty.commit(),
+		signpost = signpost.commit(),
+		milestone = milestone.commit(),
+		pass_cairn = pass_cairn.commit(),
 	}
 
 
@@ -1755,15 +1795,15 @@ static func _trapezoid(st: SurfaceTool, w_bot: float, w_top: float, height: floa
 	_tri(st, flb, brb, blb, Vector3(0, -1, 0), u_bl, u_tr, u_tl)
 
 
-static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, nrm: Vector3, uva: Vector2, uvb: Vector2, uvc: Vector2) -> void:
+static func _tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, nrm: Vector3, uva: Vector2, uvb: Vector2, uvc: Vector2, tint: Color = Color.WHITE) -> void:
 	for item: Array in [[a, uva], [b, uvb], [c, uvc]]:
-		st.set_color(Color.WHITE)
+		st.set_color(tint)
 		st.set_normal(nrm)
 		st.set_uv(item[1])
 		st.add_vertex(item[0])
 
 
-static func _cyl(st: SurfaceTool, rt: float, rb: float, h: float, seg: int, center: Vector3, basis: Basis, cell: int) -> void:
+static func _cyl(st: SurfaceTool, rt: float, rb: float, h: float, seg: int, center: Vector3, basis: Basis, cell: int, tint: Color = Color.WHITE) -> void:
 	var uv_r := cell_uv_rect(cell)
 	var hy := h * 0.5
 	for k in seg:
@@ -1778,9 +1818,9 @@ static func _cyl(st: SurfaceTool, rt: float, rb: float, h: float, seg: int, cent
 		var u0 := lerpf(uv_r.position.x, uv_r.end.x, float(k) / seg)
 		var u1 := lerpf(uv_r.position.x, uv_r.end.x, float(k + 1) / seg)
 		if rt > 0.001:
-			_tri(st, center + basis * b0, center + basis * t1, center + basis * t0, nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.position.y), Vector2(u0, uv_r.position.y))
-			_tri(st, center + basis * b0, center + basis * b1, center + basis * t1, nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.end.y), Vector2(u1, uv_r.position.y))
-			_tri(st, center + basis * Vector3(0, hy, 0), center + basis * t0, center + basis * t1, (basis * Vector3.UP).normalized(), uv_r.get_center(), uv_r.position, uv_r.end)
+			_tri(st, center + basis * b0, center + basis * t1, center + basis * t0, nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.position.y), Vector2(u0, uv_r.position.y), tint)
+			_tri(st, center + basis * b0, center + basis * b1, center + basis * t1, nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.end.y), Vector2(u1, uv_r.position.y), tint)
+			_tri(st, center + basis * Vector3(0, hy, 0), center + basis * t0, center + basis * t1, (basis * Vector3.UP).normalized(), uv_r.get_center(), uv_r.position, uv_r.end, tint)
 		else:
-			_tri(st, center + basis * b0, center + basis * b1, center + basis * Vector3(0, hy, 0), nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.end.y), Vector2((u0 + u1) * 0.5, uv_r.position.y))
-		_tri(st, center + basis * Vector3(0, -hy, 0), center + basis * b1, center + basis * b0, (basis * Vector3.DOWN).normalized(), uv_r.get_center(), uv_r.position, uv_r.end)
+			_tri(st, center + basis * b0, center + basis * b1, center + basis * Vector3(0, hy, 0), nrm, Vector2(u0, uv_r.end.y), Vector2(u1, uv_r.end.y), Vector2((u0 + u1) * 0.5, uv_r.position.y), tint)
+		_tri(st, center + basis * Vector3(0, -hy, 0), center + basis * b1, center + basis * b0, (basis * Vector3.DOWN).normalized(), uv_r.get_center(), uv_r.position, uv_r.end, tint)

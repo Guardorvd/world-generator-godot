@@ -20,6 +20,7 @@ var ground_node: MeshInstance3D
 var water_node: MeshInstance3D
 var forest_props: Node3D
 var active_buildings: Node3D
+var active_structures: Node3D
 var fails := 0
 
 
@@ -86,7 +87,7 @@ func run() -> void:
 		_check(StageLandmarks.homes_of(s) >= 2, "у поселения %s есть жилые дома" % s.name)
 	_append_lineup_settlement(w)
 	_append_bench50_settlement(w)
-	_append_sites_fixture(w)
+	_append_sites_fixture(w, heights)
 
 	ground_node = MeshInstance3D.new()
 	ground_node.mesh = _build_ground_mesh(w, heights)
@@ -146,6 +147,19 @@ func run() -> void:
 	var built_new := SettlementsBuilder.build(active_buildings, w, heights)
 	windows_mat = built_new.windows
 
+	# Мосты и туннель в квадрате (3, 1) на общем атласе с 3 LOD
+	active_structures = Node3D.new()
+	active_structures.name = "VillageLookStructures"
+	root.add_child(active_structures)
+	StructuresBuilder.build(active_structures, heights)
+	var struct_lods := 0
+	var st_root := active_structures.get_node_or_null("Structures")
+	if st_root != null:
+		for sub in st_root.get_children():
+			if sub is MeshInstance3D and sub.name.contains("_LOD"):
+				struct_lods += 1
+	_check(struct_lods == 3, "мосты и туннель в квадрате (3, 1) собраны в 3 уровня LOD (найдено %d)" % struct_lods)
+
 	# Линейка всех 21 моделей в 2 ряда (12 жилых сзади z=120, 9 хозпостроек и характерных спереди z=142)
 	await _set_time(12.5, Vector3(896.0, 25.2, 100.0))
 	_add_lineup_labels(active_buildings)
@@ -167,7 +181,7 @@ func run() -> void:
 		["foothill", Vector3(128.0, 25.2, 384.0), Vector3(30.0, 13.0, 36.0), false],
 		["coastal", Vector3(384.0, 25.2, 384.0), Vector3(28.0, 14.0, 38.0), false],
 		["remote", Vector3(640.0, 25.2, 384.0), Vector3(22.0, 11.0, 26.0), true],
-		["sites", Vector3(896.0, 25.2, 384.0), Vector3(14.0, 9.5, 25.0), true],
+		["sites", Vector3(894.0, 25.2, 398.0), Vector3(14.0, 12.5, 36.0), true],
 	]
 	for spec: Array in shots:
 		var kind: String = spec[0]
@@ -238,6 +252,8 @@ func _measure_square(square: Vector2i, cam_pos: Vector3, cam_target: Vector3) ->
 	ground_node.visible = false
 	water_node.visible = false
 	forest_props.visible = false
+	if active_structures != null:
+		active_structures.visible = false
 	_aim(cam_pos, cam_target)
 	for i in 4:
 		await process_frame
@@ -255,6 +271,8 @@ func _measure_square(square: Vector2i, cam_pos: Vector3, cam_target: Vector3) ->
 	ground_node.visible = true
 	water_node.visible = true
 	forest_props.visible = true
+	if active_structures != null:
+		active_structures.visible = true
 	_isolate_square(square, false)
 	return {draw_calls = dc, main_draw_calls = main_dc, tris = prims, nodes = vis}
 
@@ -414,8 +432,8 @@ func _append_bench50_settlement(w: WorldData) -> void:
 	w.settlements.append(bench)
 
 
-func _append_sites_fixture(w: WorldData) -> void:
-	# Квадрат (3, 1): центр (896, 384) м -> памятники и туры на общем атласе (tower, shelter, obelisk, ruin+keep, stones, peak)
+func _append_sites_fixture(w: WorldData, heights: Heightfield) -> void:
+	# Квадрат (3, 1): центр (896, 384) м -> памятники, мосты/туннель (3 LOD на общем атласе) и дорожные ориентиры
 	var cx := 224.0
 	var cy := 96.0
 	var items := [
@@ -436,6 +454,53 @@ func _append_sites_fixture(w: WorldData) -> void:
 			huts.append(HutData.new(sx + float(p[1]), sy + float(p[2]), int(p[3]), str(p[0]), 0.15))
 		w.sites.append(SiteData.new(sx, sy, int(sy) * w.W + int(sx), str(sp[0]), int(sp[1]), str(sp[2]), 2.0, huts))
 	w.peaks.append({x = cx + 0.8, y = cy + 2.0, i = int(cy + 2.0) * w.W + int(cx + 0.8), elev = 0.65, name = "Пик Каменный"})
+
+	# Мосты (wood, stone, planks) и туннель на переднем/левом плане квадрата (3, 1)
+	var by := 25.2
+	heights.structures.append({
+		tunnel = false, style = "wood", rails = true,
+		ax = 875.0, az = 402.0, ay = by + 0.4,
+		bx = 889.0, bz = 402.0, by = by + 0.4,
+		half = 2.0, len = 14.0, ux = 1.0, uz = 0.0, arch = 0.28,
+	})
+	heights.structures.append({
+		tunnel = false, style = "stone", rails = true,
+		ax = 892.0, az = 402.0, ay = by + 0.3,
+		bx = 902.0, bz = 402.0, by = by + 0.3,
+		half = 1.9, len = 10.0, ux = 1.0, uz = 0.0, arch = 0.18,
+	})
+	heights.structures.append({
+		tunnel = false, style = "planks", rails = false,
+		ax = 905.0, az = 402.0, ay = by + 0.25,
+		bx = 913.0, bz = 402.0, by = by + 0.25,
+		half = 0.9, len = 8.0, ux = 1.0, uz = 0.0, arch = 0.08,
+	})
+	heights.structures.append({
+		tunnel = true, style = "tunnel", rails = true,
+		ax = 870.0, az = 376.0, ay = by,
+		bx = 870.0, bz = 388.0, by = by,
+		half = 2.5, len = 12.0, ux = 0.0, uz = 1.0, arch = 0.0,
+	})
+
+	# Дорога + развилка + высокогорная тропа в (3, 1) для автоматической расстановки milestone, signpost и pass_cairn
+	var road_pts: Array = []
+	for k in 53:
+		var rx := 211.0 + k * 0.5
+		road_pts.append({x = rx, y = 102.8, w = 1.0})
+		w.path_mask[102 * w.W + clampi(floori(rx), 0, w.W - 1)] = 3
+	w.trails.append({kind = "road", pts = road_pts})
+	var branch_pts: Array = []
+	for k in 12:
+		var bz := 102.8 + k * 0.15
+		branch_pts.append({x = 223.2, y = bz, w = 0.6})
+	w.trails.append({kind = "trail", pts = branch_pts})
+	var pass_pts: Array = []
+	for k in 19:
+		var px := 227.5 + k * 0.35
+		var idx_p := 102 * w.W + clampi(floori(px), 0, w.W - 1)
+		w.elev[idx_p] = 0.52 if k == 10 else 0.45
+		pass_pts.append({x = px, y = 102.0, w = 0.6})
+	w.trails.append({kind = "mountain", pts = pass_pts})
 
 
 func _add_lineup_labels(parent: Node3D) -> void:

@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 10 # каталог поселений и памятников (21 модель + 7 мешей StageSites/вершин на общем атласе, MultiMesh деталей, 16.11.2026)
+const VERSION := 11 # каталог поселений, памятников и дорожных ориентиров (21 модель + 7 мешей StageSites/вершин + signpost/milestone/pass_cairn, 16.11.2026)
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}

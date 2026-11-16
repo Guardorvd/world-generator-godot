@@ -19,6 +19,7 @@ const Catalog := preload("res://scripts/render/asset_catalog.gd")
 
 ## false — модели каталога (glb, 3 LOD, общий атлас, MultiMesh деталей); true — прежние дома (только «было» на стенде).
 static var use_legacy := false
+static var shared_opaque_mat: StandardMaterial3D
 
 
 ## glow > 0 — светится сам (огонь, окна в режиме legacy)
@@ -92,6 +93,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var catalog := Catalog.get_catalog()
 	var mats := SettlementModels.make_materials(catalog.settlement_textures)
 	var opaque_mat: StandardMaterial3D = mats.opaque
+	shared_opaque_mat = opaque_mat
 	var cutout_mat: StandardMaterial3D = mats.cutout
 	var mat_pair := [opaque_mat, cutout_mat]
 	var settlements_lib: Dictionary = catalog.settlements
@@ -185,6 +187,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	for lk in w.lakes:
 		var at := Vector2(lk.x * TILE, lk.y * TILE)
 		parent.add_child(_label(lk.name, Color.html("#cfeaff"), Vector3(at.x, maxf(0.0, lk.level) * HS + 6.0, at.y), WorldData.place_id("lake", lk.x, lk.y)))
+	_add_road_landmarks(batch, w, heights, details_lib, opaque_mat)
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
@@ -314,6 +317,166 @@ static func _add_courtyard_details(batch: MeshBatch, w: WorldData, heights: Heig
 			var w_y := g_y + heights.depth_at(jp.x, jp.y)
 			var deck_y := maxf(dry_y - 0.15, w_y - 0.10)
 			batch.add_detail(details_lib.wooden_jetty, Transform3D(Basis(Vector3.UP, atan2(dir.x, dir.y)), Vector3(jp.x, deck_y, jp.y)), Color.html("#6e5138"), opaque_mat)
+
+
+## Размещает дорожные указатели (signpost) на развилках, верстовые камни (milestone) вдоль дорог
+## и перевальные туры (pass_cairn) на высокогорных перевалах — всё через MultiMesh на общем атласе.
+static func _add_road_landmarks(batch: MeshBatch, w: WorldData, heights: Heightfield,
+		details_lib: Dictionary, opaque_mat: Material) -> void:
+	if w.trails.is_empty() or w.W <= 0 or w.H <= 0:
+		return
+	var sign_mesh: Mesh = details_lib.get("signpost")
+	var mile_mesh: Mesh = details_lib.get("milestone")
+	var cairn_mesh: Mesh = details_lib.get("pass_cairn")
+	if sign_mesh == null and mile_mesh == null and cairn_mesh == null:
+		return
+
+	# Пространственная хеш-таблица всех трасс для быстрого поиска развилок.
+	var buckets := {}
+	for tr_idx in w.trails.size():
+		var tr: Dictionary = w.trails[tr_idx]
+		var kind: String = str(tr.get("kind", ""))
+		if kind == "animal":
+			continue
+		var pts: Array = tr.get("pts", [])
+		for k in pts.size():
+			if k != 0 and k != pts.size() - 1 and k % 5 != 0:
+				continue
+			var p: Dictionary = pts[k]
+			var b := Vector2i(roundi(float(p.x) / 2.5), roundi(float(p.y) / 2.5))
+			if not buckets.has(b):
+				buckets[b] = [tr_idx]
+			elif not (tr_idx in buckets[b]):
+				buckets[b].append(tr_idx)
+
+	var signs_placed: Array[Vector2] = []
+	var miles_placed: Array[Vector2] = []
+	var cairns_placed: Array[Vector2] = []
+
+	for tr_idx in w.trails.size():
+		var tr: Dictionary = w.trails[tr_idx]
+		var kind: String = str(tr.get("kind", ""))
+		if kind == "animal":
+			continue
+		var pts: Array = tr.get("pts", [])
+		if pts.size() < 4:
+			continue
+
+		# 1. Указатели на развилках в начале/конце участка, где сходится другая трасса.
+		if sign_mesh != null:
+			for end_i: int in [0, pts.size() - 1]:
+				var ep: Dictionary = pts[end_i]
+				var b := Vector2i(roundi(float(ep.x) / 2.5), roundi(float(ep.y) / 2.5))
+				var is_junction := false
+				for dy in range(-1, 2):
+					if is_junction:
+						break
+					for dx in range(-1, 2):
+						for other: int in buckets.get(b + Vector2i(dx, dy), []):
+							if other != tr_idx:
+								is_junction = true
+								break
+						if is_junction:
+							break
+				if not is_junction:
+					continue
+				var st_i := clampi(4 if end_i == 0 else pts.size() - 5, 1, pts.size() - 2)
+				var xf := _road_shoulder(w, heights, pts, st_i, 1.45)
+				if not xf.is_empty():
+					var p2 := Vector2(xf.origin.x, xf.origin.z)
+					if _far_from(signs_placed, p2, 90.0):
+						signs_placed.append(p2)
+						batch.add_detail(sign_mesh, xf.xform, Color.WHITE, opaque_mat)
+
+		# 2. Каменные верстовые столбы вдоль главных дорог (~каждые 200 м).
+		if mile_mesh != null and kind == "road" and pts.size() >= 30:
+			var idx := 22
+			while idx < pts.size() - 12:
+				var xf := _road_shoulder(w, heights, pts, idx, 1.25)
+				if not xf.is_empty():
+					var p2 := Vector2(xf.origin.x, xf.origin.z)
+					if _far_from(miles_placed, p2, 120.0) and _far_from(signs_placed, p2, 28.0):
+						miles_placed.append(p2)
+						batch.add_detail(mile_mesh, xf.xform, Color.WHITE, opaque_mat)
+				idx += 48
+
+		# 3. Перевальные туры на высоких гребнях горных и пешеходных троп.
+		if cairn_mesh != null and kind in ["mountain", "trail"] and pts.size() >= 18:
+			var best_i := -1
+			var best_elev := 0.36
+			for k in range(8, pts.size() - 8, 2):
+				var p: Dictionary = pts[k]
+				var cx := clampi(floori(float(p.x)), 0, w.W - 1)
+				var cy := clampi(floori(float(p.y)), 0, w.H - 1)
+				var ev: float = w.elev[cy * w.W + cx]
+				if ev > best_elev:
+					best_elev = ev
+					best_i = k
+			if best_i >= 0:
+				var xf := _road_shoulder(w, heights, pts, best_i, 1.55)
+				if not xf.is_empty():
+					var p2 := Vector2(xf.origin.x, xf.origin.z)
+					if _far_from(cairns_placed, p2, 120.0) and _far_from(signs_placed, p2, 24.0):
+						cairns_placed.append(p2)
+						batch.add_detail(cairn_mesh, xf.xform, Color.WHITE, opaque_mat)
+
+
+static func _road_shoulder(w: WorldData, heights: Heightfield, pts: Array, idx: int, extra_m: float) -> Dictionary:
+	var p: Dictionary = pts[idx]
+	var center := Vector2(float(p.x) * TILE, float(p.y) * TILE)
+	if _landmark_blocked(w, heights, center):
+		return {}
+	var p_prev: Dictionary = pts[maxi(0, idx - 2)]
+	var p_next: Dictionary = pts[mini(pts.size() - 1, idx + 2)]
+	var tan := Vector2(float(p_next.x - p_prev.x), float(p_next.y - p_prev.y))
+	if tan.length_squared() < 1e-6:
+		return {}
+	tan = tan.normalized()
+	var perp := Vector2(-tan.y, tan.x)
+	var offset := clampf(float(p.w) * TILE * 0.5, 0.8, 3.0) + extra_m
+	var road_y := heights.ground_at(center.x, center.y)
+	for side: float in [1.0, -1.0]:
+		var pos := center + perp * (side * offset)
+		var cx := floori(pos.x / TILE)
+		var cy := floori(pos.y / TILE)
+		if cx < 2 or cy < 2 or cx >= w.W - 2 or cy >= w.H - 2:
+			continue
+		var j := cy * w.W + cx
+		if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or w.river[j] != 0:
+			continue
+		if heights.depth_at(pos.x, pos.y) > 0.0:
+			continue
+		var y := heights.ground_at(pos.x, pos.y)
+		if absf(y - road_y) > 1.2:
+			continue
+		var to_road := (center - pos).normalized()
+		var xform := Transform3D(Basis(Vector3.UP, atan2(to_road.x, to_road.y)), Vector3(pos.x, y, pos.y))
+		return {xform = xform, origin = xform.origin}
+	return {}
+
+
+static func _landmark_blocked(w: WorldData, heights: Heightfield, pos_m: Vector2) -> bool:
+	var min_settle2 := pow((StageLandmarks.LAYOUT_R + 2.5) * TILE, 2.0)
+	for s in w.settlements:
+		if Vector2(s.x * TILE, s.y * TILE).distance_squared_to(pos_m) < min_settle2:
+			return true
+	for site: SiteData in w.sites:
+		if Vector2(site.x * TILE, site.y * TILE).distance_squared_to(pos_m) < 196.0:
+			return true
+	for st: Dictionary in heights.structures:
+		var t := clampf((pos_m.x - float(st.ax)) * float(st.ux) + (pos_m.y - float(st.az)) * float(st.uz), -4.0, float(st.len) + 4.0)
+		var near := Vector2(float(st.ax) + float(st.ux) * t, float(st.az) + float(st.uz) * t)
+		if near.distance_to(pos_m) < float(st.half) + 5.0:
+			return true
+	return false
+
+
+static func _far_from(placed: Array[Vector2], pos: Vector2, min_dist: float) -> bool:
+	var d2 := min_dist * min_dist
+	for prev in placed:
+		if prev.distance_squared_to(pos) < d2:
+			return false
+	return true
 
 
 static func _too_close_to_huts(pos_m: Vector2, huts: Array, gap_m: float) -> bool:
@@ -735,13 +898,14 @@ static func _plinth(batch: MeshBatch, unit: Mesh, at: Transform3D, drop: float, 
 ## Окна и фонари: для общего атласа управляет силой свечения, для режима legacy — цветом без освещения.
 ## night — 0 днём, 1 ночью
 static func set_night(windows: StandardMaterial3D, night: float) -> void:
-	if windows == null:
-		return
 	var lit := smoothstep(0.25, 0.85, night)
-	if windows.emission_enabled:
-		windows.emission_energy_multiplier = lit * 2.6
-	else:
-		windows.albedo_color = Color(0.16, 0.18, 0.2).lerp(Color8(0xf2, 0xd2, 0x7a) * 2.6, lit)
+	if windows != null:
+		if windows.emission_enabled:
+			windows.emission_energy_multiplier = lit * 2.6
+		else:
+			windows.albedo_color = Color(0.16, 0.18, 0.2).lerp(Color8(0xf2, 0xd2, 0x7a) * 2.6, lit)
+	if shared_opaque_mat != null and shared_opaque_mat != windows and shared_opaque_mat.emission_enabled:
+		shared_opaque_mat.emission_energy_multiplier = lit * 2.6
 
 
 ## Покачивание пламени костров; time — секунды игры. Дальше FIRE_SEEN от at пламя не видно (_part) и не качается
