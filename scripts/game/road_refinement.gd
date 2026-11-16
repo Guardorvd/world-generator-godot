@@ -743,15 +743,9 @@ func _fit_network_native(fast: Object) -> bool:
 	var villages := PackedFloat64Array()
 	for village: SettlementData in w.settlements:
 		villages.append_array(PackedFloat64Array([village.x, village.y]))
-	var table := PackedFloat64Array()
-	for name: String in CORRIDOR_KINDS:
-		table.append_array(PackedFloat64Array(CORRIDOR[name]))
-	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
-	table.append_array(_character_table())
-	var limits := PackedFloat64Array([RoadBed.SHORE.y, RoadBed.PIN, RoadBed.PIN_FADE, REACH, SHARED, FIT_FADE, FIT_LIMIT, BENCH_LIMIT, TRAIL_BENCH_LIMIT, LAND_GAP])
 	var out: Variant = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
 		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
-		_cs_starts, _cs_ids, _route_identity, _noise, _origin, limits, CORRIDOR_FADE, CORRIDOR_GAP, CORRIDOR_STRIDE, table, _authored_routes())
+		_cs_starts, _cs_ids, _route_identity, _noise, _origin, corridor_params(), _authored_routes())
 	if not out is Dictionary:
 		push_error("RoadRefinement: C# вернул null, подгонка идёт на GDScript")
 		return false
@@ -886,47 +880,89 @@ func _build_corridor(batch: Dictionary) -> void:
 		return
 	var points: PackedVector2Array = batch.points
 	starts.append(points.size())
-	var table := PackedFloat64Array()
-	for name: String in CORRIDOR_KINDS:
-		table.append_array(PackedFloat64Array(CORRIDOR[name]))
-	table.append_array(PackedFloat64Array(CORRIDOR_SURFACE))
-	table.append_array(_character_table())
-	corridor = _corridor_reference(points, batch.half, batch.surface, batch.gate, starts, batch.kinds, batch.scales, batch.routes, table)
+	corridor = _corridor_reference(points, batch.half, batch.surface, batch.gate, starts, batch.kinds, batch.scales, batch.routes, corridor_params())
 	var routes: PackedInt32Array = batch.routes
 	for k in routes.size():
 		corridor_routes[routes[k]] = Vector2i(starts[k], starts[k + 1] - starts[k])
 
 
+static var _code_version := -1
+
+
+## Версия дорожного кода на C# (Roads.RoadCode.Version) — часть ключа кэша поверхности; 0 без .NET (мир тогда считается на GDScript).
+static func code_version() -> int:
+	if _code_version < 0:
+		var fast := Grid.fast_grid()
+		_code_version = int(fast.RoadCodeVersion()) if fast != null else 0
+	return _code_version
+
+
+## Все числа подгонки и форм коридора одним словарём с именованными ключами — единственное место, где они собираются:
+## C# (Roads.CorridorParams, FastGrid.RoadFitNetwork) разбирает его один раз на вызов, эталон _corridor_reference читает тот же.
+## kinds — по виду пути в порядке CORRIDOR_KINDS (roll, bump, tilt, keep, max, dish, var, hollow, ditch, lip, grade); surface_gain —
+## по покрытию RoadSurface; character — по покрытию × (roll, bump, wobble); rhythm — ритм участков по RoadBump.patch (1 — да);
+## level_kind — выравнивание спокойных участков по виду, level_surface — по покрытию; fit — подгонка профиля и пределы полки;
+## fade, gap — включение форм и зазор между полотнами; stride — чисел на станцию; level_r — радиус выравнивания, rhythm_span —
+## размах ритма. Без landscape_character — прежние характер и ритм (множители 1, ритм по шуму, выравнивания нет).
+static func corridor_params() -> Dictionary:
+	var kinds: Array = []
+	for name: String in CORRIDOR_KINDS:
+		var v: Array = CORRIDOR[name]
+		kinds.append({"roll": v[0], "bump": v[1], "tilt": v[2], "keep": v[3], "max": v[4], "dish": v[5], "var": v[6],
+			"hollow": v[7], "ditch": v[8], "lip": v[9], "grade": v[10]})
+	var character := PackedFloat64Array()
+	for v: float in CORRIDOR_CHARACTER:
+		character.append(v if landscape_character else 1.0)
+	var level_kind := PackedFloat64Array()
+	for v: float in LEVEL_KIND:
+		level_kind.append(v if landscape_character else 0.0)
+	var level_surface := PackedFloat64Array()
+	for v: float in LEVEL_SURFACE:
+		level_surface.append(v if landscape_character else 0.0)
+	return {
+		"kinds": kinds, "surface_gain": PackedFloat64Array(CORRIDOR_SURFACE), "character": character,
+		"rhythm": landscape_character, "level_kind": level_kind, "level_surface": level_surface,
+		"fit": {"shore": RoadBed.SHORE.y, "pin": RoadBed.PIN, "pin_fade": RoadBed.PIN_FADE, "reach": REACH, "shared": SHARED,
+			"fit_fade": FIT_FADE, "fit_limit": FIT_LIMIT, "road_bench": BENCH_LIMIT, "trail_bench": TRAIL_BENCH_LIMIT, "land_gap": LAND_GAP},
+		"fade": CORRIDOR_FADE, "gap": CORRIDOR_GAP, "stride": CORRIDOR_STRIDE, "level_r": LEVEL_R, "rhythm_span": RHYTHM_SPAN,
+	}
+
+
 ## Эталон FastGrid.CorridorRoute: те же операции в том же порядке. Природный поперечный склон и уклон — по рельефу
 ## до полотна (hv_raw), характер участка (спокойный, волнистый, разбитый) — медленный шум в мировых метрах.
-## Хвост таблицы форм: характер по покрытию (8 × 3), признак ритма по RoadBump.patch (1 — да), выравнивание спокойных
-## участков по виду (3) и покрытию (8).
-static func _character_table() -> PackedFloat64Array:
-	var out := PackedFloat64Array()
-	for v: float in CORRIDOR_CHARACTER:
-		out.append(v if landscape_character else 1.0)
-	out.append(1.0 if landscape_character else 0.0)
-	for v: float in LEVEL_KIND:
-		out.append(v if landscape_character else 0.0)
-	for v: float in LEVEL_SURFACE:
-		out.append(v if landscape_character else 0.0)
-	return out
-
-
+## Числа — из corridor_params().
 func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array, surfaces: PackedInt32Array, gates: PackedFloat32Array,
-		starts: PackedInt32Array, kinds: PackedInt32Array, scales: PackedFloat32Array, routes: PackedInt32Array, table: PackedFloat64Array) -> PackedFloat64Array:
+		starts: PackedInt32Array, kinds: PackedInt32Array, scales: PackedFloat32Array, routes: PackedInt32Array, params: Dictionary) -> PackedFloat64Array:
 	var out := PackedFloat64Array()
 	out.resize(points.size() * CORRIDOR_STRIDE)
-	var kind_size: int = CORRIDOR.road.size()
-	var surface_at := kind_size * CORRIDOR_KINDS.size()
-	var character_at := surface_at + CORRIDOR_SURFACE.size()
-	var rhythm: bool = table[character_at + CORRIDOR_CHARACTER.size()] > 0.0
-	var level_at := character_at + CORRIDOR_CHARACTER.size() + 1
+	var surface_gain: PackedFloat64Array = params.surface_gain
+	var character_gain: PackedFloat64Array = params.character
+	var level_kind: PackedFloat64Array = params.level_kind
+	var level_surface: PackedFloat64Array = params.level_surface
+	var rhythm: bool = params.rhythm
+	var fit_p: Dictionary = params.fit
+	var land_gap: float = fit_p.land_gap
+	var fit_fade: float = fit_p.fit_fade
+	var gap_min: float = params.gap
+	var fade: float = params.fade
+	var rhythm_span: float = params.rhythm_span
+	var level_r: int = params.level_r
 	for r in kinds.size():
 		var from := starts[r]
 		var to := starts[r + 1]
 		var n := to - from
-		var k := kinds[r] * kind_size
+		var kp: Dictionary = params.kinds[kinds[r]]
+		var k_roll: float = kp.roll
+		var k_bump: float = kp.bump
+		var k_tilt: float = kp.tilt
+		var k_keep: float = kp.keep
+		var k_max: float = kp.max
+		var k_dish: float = kp.dish
+		var k_var: float = kp["var"]
+		var k_hollow: float = kp.hollow
+		var k_ditch: float = kp.ditch
+		var k_lip: float = kp.lip
+		var k_grade: float = kp.grade
 		var scale: float = scales[r]
 		var holes := 1.0 if scale >= 1.0 else 0.0
 		var open := PackedFloat64Array()
@@ -937,9 +973,9 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			open[j] = gates[from + j]
 			var tangent := (points[mini(to - 1, from + j + 2)] - points[maxi(from, from + j - 2)]).normalized()
 			var gap := _corridor_clearance(points[from + j], tangent, routes[r], j * STEP, halves[from + j]) if open[j] > 0.0 else 0.0
-			if gap < CORRIDOR_GAP:
+			if gap < gap_min:
 				open[j] = 0.0
-			land_dist[j] = 0.0 if gap < LAND_GAP or j == 0 or j == n - 1 else land_dist[j - 1] + STEP
+			land_dist[j] = 0.0 if gap < land_gap or j == 0 or j == n - 1 else land_dist[j - 1] + STEP
 		# расстояние до закреплённой станции в обе стороны; концы пути закреплены
 		var dist := PackedFloat64Array()
 		dist.resize(n)
@@ -969,7 +1005,7 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 		lift.resize(n)
 		for j in n:
 			var i := from + j
-			var gate: float = open[j] * smoothstep(0.0, CORRIDOR_FADE, dist[j])
+			var gate: float = open[j] * smoothstep(0.0, fade, dist[j])
 			if gate <= 0.0:
 				continue
 			var tangent := (points[mini(to - 1, i + 2)] - points[maxi(from, i - 2)]).normalized()
@@ -983,8 +1019,8 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var g1 := mini(to - 1, i + 5)
 			var grade := absf(_heights.base_ground_at(points[g1].x, points[g1].y, true) - _heights.base_ground_at(points[g0].x, points[g0].y, true)) / maxf(1.0, g1 - g0) / STEP
 			var p := points[i] + _origin
-			var character := (floorf(RoadBump.patch_x(p.x, p.y) * 1048576.0) / 1048576.0 - 0.5) * RHYTHM_SPAN if rhythm else _noise.get_noise_2d(p.x * 0.005 + 311.0, p.y * 0.005 - 97.0)
-			var c_at := character_at + surfaces[i] * 3
+			var character := (floorf(RoadBump.patch_x(p.x, p.y) * 1048576.0) / 1048576.0 - 0.5) * rhythm_span if rhythm else _noise.get_noise_2d(p.x * 0.005 + 311.0, p.y * 0.005 - 97.0)
+			var c_at: int = surfaces[i] * 3
 			var roll := _noise.get_noise_2d(p.x * 0.033 + 17.0, p.y * 0.033 + 53.0)
 			var bump := _noise.get_noise_2d(p.x * 0.1 - 41.0, p.y * 0.1 + 9.0)
 			# односторонние величины берутся по обе стороны полотна: у пути в обратную сторону или у второго пути той же
@@ -1007,7 +1043,7 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var energy := lerpf(0.3, 1.0, smoothstep(-0.3, 0.0, character)) + 0.5 * smoothstep(0.15, 0.4, character)
 			energy *= 1.0 + 0.5 * smoothstep(0.05, 0.15, grade)
 			var broken := smoothstep(0.12, 0.35, character)
-			var mul: float = table[surface_at + surfaces[i]] * scale
+			var mul: float = surface_gain[surfaces[i]] * scale
 			var at := i * CORRIDOR_STRIDE
 			# A real hollow/crest across the route takes precedence over an unrelated wave.
 			# Sample the raw terrain, before both road smoothing passes. The symmetric
@@ -1019,28 +1055,28 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			var curve := raw_mid - (raw_a + raw_b) * 0.5
 			var landform := smoothstep(0.035, 0.16, absf(curve)) * (1.0 if kinds[r] == 0 else 0.55)
 			var terrain_lift := clampf(curve, -0.35, 0.35) * (1.0 - smoothstep(0.25, 0.5, maxf(grade, absf(cross))))
-			var free_lift := table[k] * roll * (0.6 + 0.4 * energy) * table[c_at] + table[k + 1] * bump * energy * table[c_at + 1]
+			var free_lift := k_roll * roll * (0.6 + 0.4 * energy) * character_gain[c_at] + k_bump * bump * energy * character_gain[c_at + 1]
 			lift[j] = lerpf(free_lift, terrain_lift, landform) * mul * gate
 			if rhythm:
-				var lr := mini(LEVEL_R, mini(j, n - 1 - j))
+				var lr := mini(level_r, mini(j, n - 1 - j))
 				var deviation := bed[j] - (bed_sum[j + lr + 1] - bed_sum[j - lr]) / (2 * lr + 1)
 				var calm := 1.0 - smoothstep(-0.3, 0.15, character)
-				lift[j] -= deviation * minf(0.9, table[level_at + kinds[r]] * table[level_at + 3 + surfaces[i]]) * calm * gate
-			var natural := cross * table[k + 3] * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
-			var limit := table[k + 4] * half
-			out[at + 1] = clampf(natural + table[k + 2] * wobble * (0.5 + 0.5 * energy) * table[c_at + 2], -limit, limit) * scale * gate
-			out[at + 2] = (table[k + 5] + table[k + 6] * bowl) * (0.5 + 0.5 * energy) * scale * gate
-			out[at + 3] = table[k + 7] * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
+				lift[j] -= deviation * minf(0.9, level_kind[kinds[r]] * level_surface[surfaces[i]]) * calm * gate
+			var natural := cross * k_keep * (1.0 - smoothstep(0.25, 0.5, absf(cross))) * half
+			var limit: float = k_max * half
+			out[at + 1] = clampf(natural + k_tilt * wobble * (0.5 + 0.5 * energy) * character_gain[c_at + 2], -limit, limit) * scale * gate
+			out[at + 2] = (k_dish + k_var * bowl) * (0.5 + 0.5 * energy) * scale * gate
+			out[at + 3] = k_hollow * smoothstep(0.2, 0.55, hole) * lerpf(0.3, 1.0, broken) * mul * holes * gate
 			out[at + 4] = clampf(spot * 1.6, -0.7, 0.7)
 			var slope := smoothstep(0.04, 0.15, absf(cross))
 			var gain := (0.6 + 0.4 * energy) * scale * gate
-			out[at + 5] = _shoulder(-1.0, cross, left, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_l))
-			out[at + 6] = _shoulder(1.0, cross, right, slope, table[k + 8], table[k + 9]) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_r))
+			out[at + 5] = _shoulder(-1.0, cross, left, slope, k_ditch, k_lip) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_l))
+			out[at + 6] = _shoulder(1.0, cross, right, slope, k_ditch, k_lip) * gain * lerpf(0.2, 1.25, smoothstep(-0.35, 0.35, lump_r))
 			var grade_max := maxf(grade, absf(cross))
 			var land_slope := (0.3 + 0.7 * smoothstep(0.02, 0.18, grade_max)) * (1.0 - smoothstep(0.28, 0.58, grade_max))
-			out[at + 7] = holes * mul * gate * smoothstep(0.0, FIT_FADE, land_dist[j]) * land_slope * smoothstep(-0.25, 0.12, character) * lerpf(0.35, 1.0, smoothstep(0.02, 0.3, -curve))
+			out[at + 7] = holes * mul * gate * smoothstep(0.0, fit_fade, land_dist[j]) * land_slope * smoothstep(-0.25, 0.12, character) * lerpf(0.35, 1.0, smoothstep(0.02, 0.3, -curve))
 		# добавленный продольный уклон не круче grade: от закреплённых нулей формы поднимаются плавно
-		var cap := table[k + 10] * STEP
+		var cap: float = k_grade * STEP
 		# Сначала ограничиваем высоту расстоянием до закреплённых нулей: проходы уклона
 		# должны уменьшать соседние пики, а не сдвигать сами закреплённые станции.
 		for j in n:

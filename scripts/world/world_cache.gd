@@ -127,8 +127,8 @@ func artifact_path(seed_text: String, size: int, artifact: String) -> String:
 func artifact_key(seed_text: String, size: int, artifact: String) -> String:
 	var layer := 0 if artifact == "base" else 2
 	var version := BASE_VERSION if artifact == "base" else SURFACE_VERSION
-	return "%s|%s|%d|%d|%d|%d|%d" % [_key(seed_text, size, layer), artifact, version, StageTrailPlan.VERSION if layer == 2 else 0, RoadRefinement.DIV, PlanTerrain.CELLS,
-		RoadBump.PATCH_VERSION if layer == 2 else 0]
+	return "%s|%s|%d|%d|%d|%d|%d|%d" % [_key(seed_text, size, layer), artifact, version, StageTrailPlan.VERSION if layer == 2 else 0, RoadRefinement.DIV, PlanTerrain.CELLS,
+		RoadBump.PATCH_VERSION if layer == 2 else 0, RoadRefinement.code_version() if layer == 2 else 0]
 
 
 ## Artifact passport without decompressing payloads. Sizes include the retained recovery generation.

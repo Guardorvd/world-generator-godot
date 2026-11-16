@@ -409,18 +409,14 @@ func corridor_contracts() -> void:
 		halves.append(1.1)
 		surfaces.append(RoadSurface.FOREST)
 		gates.append(0.0 if j == 80 else 1.0)
-	var table := PackedFloat64Array()
-	for kind: String in RoadRefinement.CORRIDOR_KINDS:
-		table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR[kind]))
-	table.append_array(PackedFloat64Array(RoadRefinement.CORRIDOR_SURFACE))
-	table.append_array(RoadRefinement._character_table())
-	table[10] = 0.001
+	var settings := RoadRefinement.corridor_params()
+	settings.kinds[0]["grade"] = 0.001
 	var forms := r._corridor_reference(points, halves, surfaces, gates, PackedInt32Array([0, 160]), PackedInt32Array([0]),
-		PackedFloat32Array([1.0]), PackedInt32Array([0]), table)
+		PackedFloat32Array([1.0]), PackedInt32Array([0]), settings)
 	var pinned := maxf(absf(forms[0]), maxf(absf(forms[80 * FORM_STRIDE]), absf(forms[159 * FORM_STRIDE])))
 	var grade := 0.0
 	for j in range(1, 160): grade = maxf(grade, absf(forms[j * FORM_STRIDE] - forms[(j - 1) * FORM_STRIDE]))
-	check(pinned == 0.0 and grade <= table[10] + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)
+	check(pinned == 0.0 and grade <= 0.001 + 0.0000001, "grade limiter preserves exact protected zeros: %.8f m" % pinned)
 
 
 class SectionGround extends Heightfield:
