@@ -149,7 +149,7 @@ public partial class FastGrid
 		0.5 + 0.5 * (0.55 * Math.Sin(0.083 * x + 0.047 * z + 1.7) + 0.45 * Math.Sin(-0.039 * x + 0.091 * z + 4.1));
 
 	private static void CorridorRoute(int from, int to, int kind, double scale, int route, Vector2[] points, float[] half, int[] surface,
-		float[] gate, float[] raw, float[] bedHeights, int width, int height, double tile, FastNoiseLite noise, Vector2 origin, double step, double fade,
+		float[] gate, float[] fitProfile, float[] fitStrength, float[] fitLimit, float[] raw, float[] bedHeights, int width, int height, double tile, FastNoiseLite noise, Vector2 origin, double step, double fade,
 		double gap, double landGap, double shared, int[] routeKinds, int stride, double[] table, Vector2[] segA, Vector2[] segDelta, double[] segLen2, double[] segHalf, int[] segRoute,
 		double[] segAlong, int[] cellStarts, int[] candidates, double[] outv)
 	{
@@ -181,12 +181,15 @@ public partial class FastGrid
 			landBack = landDist[j] == 0.0 ? 0.0 : landBack + step;
 			landDist[j] = Math.Min(landDist[j], landBack);
 		}
-		// высота полотна по станциям и скользящие суммы — выравнивание спокойных участков (копия RoadRefinement)
+		// высота оси по станциям и скользящие суммы — выравнивание спокойных участков (копия RoadRefinement).
+		// 16.11: у дорог и троп ось после подгонки профиля — без двойного выравнивания троп
 		var bed = new double[n];
 		var bedSum = new double[n + 1];
 		for (int j = 0; j < n; j++)
 		{
 			bed[j] = RoadGround(bedHeights, width, height, tile, points[from + j].X, points[from + j].Y);
+			if (kind != 2)
+				bed[j] += Math.Clamp((double)fitProfile[from + j] - bed[j], -(double)fitLimit[from + j], (double)fitLimit[from + j]) * fitStrength[from + j];
 			bedSum[j + 1] = bedSum[j] + bed[j];
 		}
 		var lift = new double[n];
@@ -435,7 +438,7 @@ public partial class FastGrid
 				}
 			}
 			if (scales[t] > 0.0f)
-				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, raw, ground, width, height, tile, noise, origin, step,
+				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, profile, strength, limits, raw, ground, width, height, tile, noise, origin, step,
 					fade, gap, landGap, shared, routeKinds, stride, table, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
 		});
 		return new Godot.Collections.Dictionary

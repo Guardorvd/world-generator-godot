@@ -50,7 +50,8 @@ const CORRIDOR_CHARACTER := [
 ## Значение поля огрублено до 2^-20: синус в Godot и .NET может расходиться в последнем бите (паритет C#/GDScript).
 const RHYTHM_SPAN := 1.2
 ## Спокойный участок выравнивает природную неровность 5–16 м под полотном (её не убирает RoadBed на сетке 4 м: у троп
-## окно ±4 м): подъём оси минус доля отклонения земли от среднего по ±LEVEL_R м. Доля — по виду пути и покрытию:
+## окно ±4 м): подъём оси минус доля отклонения оси от среднего по ±LEVEL_R м. С 16.11 ось берётся после подгонки
+## профиля (_fit_route), а не голое полотно RoadBed: то, что уже сгладил профиль тропы, второй раз не вычитается. Доля — по виду пути и покрытию:
 ## луг, укатанная земля и гравий — накат и разгон, лес и камень сохраняют больше, горные тропы почти не трогаются.
 ## Разбитый участок не выравнивается. Пределы подъёма оси (уклон добавки, закреплённые места) — прежние.
 const LEVEL_R := 12
@@ -951,13 +952,18 @@ func _corridor_reference(points: PackedVector2Array, halves: PackedFloat32Array,
 			dist[j] = minf(dist[j], back)
 			land_back = 0.0 if land_dist[j] == 0.0 else land_back + STEP
 			land_dist[j] = minf(land_dist[j], land_back)
-		# высота полотна (после RoadBed) по станциям и её скользящие суммы — для выравнивания спокойных участков
+		# высота оси по станциям и её скользящие суммы — для выравнивания спокойных участков. 16.11: у дорог и троп —
+		# ось уже после подгонки профиля (_fit_route: полотно + ограниченный сдвиг к профилю с его силой), иначе тропа
+		# выравнивалась дважды (сглаживание профиля + вычитание того же отклонения здесь) и бугор переходил в ложбину
+		var fit: Dictionary = fit_routes.get(routes[r], {}) if kinds[r] != 2 else {}
 		var bed := PackedFloat64Array()
 		bed.resize(n)
 		var bed_sum := PackedFloat64Array()
 		bed_sum.resize(n + 1)
 		for j in n:
 			bed[j] = _heights.base_ground_at(points[from + j].x, points[from + j].y)
+			if not fit.is_empty():
+				bed[j] += clampf(fit.profile[j] - bed[j], -fit.limit[j], fit.limit[j]) * fit.strength[j]
 			bed_sum[j + 1] = bed_sum[j] + bed[j]
 		var lift := PackedFloat64Array()
 		lift.resize(n)
