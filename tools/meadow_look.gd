@@ -8,6 +8,7 @@ extends SceneTree
 ##   --tag <имя>     подпись снимков и замера (.godot/meadow_look/<tag>_*.png, <tag>.json)
 ##   --compose a,b   склеить снимки двух прогонов попарно (было | стало), без сцены
 ##   --no-perf       только снимки
+##   --scan-bands N  обход клеток раскладки N полосами (1 — подряд); сверка — layout_hash
 ##   --no-twins      «было» для смены форм подлеска: форма по центру раскладки, без пар ближняя/дальняя
 ##   --base-grass    «было» для дернины: VegetationLayer без ближнего низкого покрова (A/B)
 
@@ -61,6 +62,7 @@ func setup() -> void:
 	tag = Dev.arg("tag", "after")
 	VegetationLayer.legacy_open = "--legacy" in OS.get_cmdline_user_args()
 	VegetationLayer.form_twins = not "--no-twins" in OS.get_cmdline_user_args()
+	VegetationLayer.scan_bands = int(Dev.arg("scan-bands", "0")) # 17.11.2026: число полос обхода (1 — подряд, для сверки)
 	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	Engine.max_fps = 0
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -153,6 +155,8 @@ func _process(delta: float) -> bool:
 		root.get_texture().get_image().save_png(ProjectSettings.globalize_path(OUT).path_join("%s_%s.png" % [tag, _views[view][0]]))
 		if view == 0:
 			results.instances = _counts()
+			results.bands = _bands(Vector2(camera.position.x, camera.position.z))
+			results.layout_hash = _layout_hash()
 		if view + 1 < _views.size():
 			_goto(view + 1)
 			return false
@@ -225,6 +229,61 @@ func _finish() -> bool:
 	veg.queue_free()
 	quit()
 	return true
+
+
+## 17.11.2026: отпечаток раскладки первого вида (трава и все группы подлеска) — сверка обхода полосами с обходом подряд
+func _layout_hash() -> String:
+	var ctx := HashingContext.new()
+	ctx.start(HashingContext.HASH_SHA256)
+	if veg._grass_n > 0: ctx.update(veg.grass_buf.slice(0, veg._grass_n * VegetationLayer.STRIDE).to_byte_array())
+	for e: Dictionary in veg.understory:
+		if e.count > 0: ctx.update((e.buf as PackedFloat32Array).slice(0, e.count * VegetationLayer.STRIDE).to_byte_array())
+	return ctx.finish().hex_encode().substr(0, 16)
+
+
+## 17.11.2026: сколько подлеска видно по поясам расстояния (доля каждого экземпляра — как в шейдере: край дальности,
+## поредение по рангу, near_fade, доля пары ближняя/дальняя форма). open — куртины открытых мест, woody — кусты
+## и подрост, sod — дерновины, other — остальное (травы, папоротник, подстилка).
+const BANDS := [0.0, 15.0, 30.0, 50.0, 80.0, 120.0, 170.0, 230.0, 300.0]
+func _bands(at: Vector2) -> Dictionary:
+	var out := {}
+	for name in ["open", "woody", "sod", "other"]:
+		var row := []
+		row.resize(BANDS.size() - 1)
+		row.fill(0.0)
+		out[name] = row
+	for g in veg.understory.size():
+		var e: Dictionary = veg.understory[g]
+		var mat: ShaderMaterial = e.node.material_override
+		var fade_far: float = mat.get_shader_parameter("fade_far")
+		var fade_len: float = mat.get_shader_parameter("fade_len")
+		var thin_full: float = mat.get_shader_parameter("thin_full")
+		var near_fade = mat.get_shader_parameter("near_fade")
+		var sw = mat.get_shader_parameter("form_switch")
+		var name := "sod" if g == veg._sod_entry else ("open" if e.base in VegetationLayer.Understory.OPEN_FORMS else
+			("woody" if VegetationLayer.Placement.priority(e.base) == 1 else "other"))
+		var data: PackedFloat32Array = e.mm.buffer
+		for i in mini(e.mm.visible_instance_count, e.mm.instance_count):
+			var o := i * VegetationLayer.STRIDE
+			if data[o + 19] < 0.0: continue
+			var d := Vector2(data[o + 3], data[o + 11]).distance_to(at)
+			var w := clampf((fade_far - d) / maxf(fade_len, 1.0), 0.0, 1.0)
+			if thin_full > 0.0:
+				var keep := minf(1.0, thin_full * thin_full / maxf(d * d, 1.0))
+				var rank := data[o + 16]
+				if rank > 0.0: w *= clampf((keep - rank) / maxf(minf(1.0, rank * 1.3) - rank, 1e-4), 0.0, 1.0)
+			if near_fade is Vector2 and near_fade.y > 0.0:
+				w *= clampf((d - near_fade.x) / near_fade.y, 0.0, 1.0)
+			if sw is Vector3 and sw.z > 0.5 and data[o + 18] >= 1.5:
+				var s := smoothstep(sw.x - sw.y * 0.5, sw.x + sw.y * 0.5, d)
+				w *= (1.0 - s) if sw.z < 1.5 else s
+			for b in BANDS.size() - 1:
+				if d >= BANDS[b] and d < BANDS[b + 1]:
+					out[name][b] += w
+	for name in out:
+		var row: Array = out[name]
+		for b in row.size(): row[b] = roundi(row[b])
+	return out
 
 
 ## 17.11.2026: упрощённые (дальние) формы, которые рисуются ближе границы смены формы от нынешнего места игрока.

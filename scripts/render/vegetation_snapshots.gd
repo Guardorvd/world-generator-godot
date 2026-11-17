@@ -65,7 +65,9 @@ func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, r
 				if stamp < 0.0:
 					changes.append_array(PackedFloat64Array([at, 1, stamp]))
 			old.erase(id)
-		elif not immediate and not instant_arrival:
+		elif not immediate and not instant_arrival and result[at + 18] < 1.5:
+			# 17.11.2026: вторая форма пары (VegetationLayer._put_twin, z + 2) появляется сразу: её место на экране
+			# делит шейдер с первой формой по расстоянию, и проявление поверх уже видимой формы дало бы просвет
 			changes.append_array(PackedFloat64Array([at, 2, 0]))
 		result[at + 19] = stamp
 	var box := bounds

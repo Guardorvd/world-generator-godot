@@ -180,6 +180,9 @@ var understory: Array = [] # те же фоновые буферы и цикл �
 var _forest_surface: Image
 var placement: Placement
 var _understory_sites: Array = []
+var _scan_ctx: Array = [] # 17.11.2026: выходы полос обхода (_scan_band)
+const SCAN_BANDS_MAX := 6 # больше шести полос не быстрее (замер meadow_look 17.11: 4 — 1,05 с, 6 — 0,84 с, 8 — 0,93 с)
+static var scan_bands := 0 # > 0 — число полос задано (проверка совпадения: 1 против нескольких)
 var obstacles := PackedFloat32Array() # 7.7: валежник и сухостой рядом с игроком для ForestObstacles (тот же формат)
 var obstacles_version := 0            # растёт с каждой новой раскладкой подлеска
 var _obstacles_next := PackedFloat32Array() # пишет фоновая задача
@@ -1740,42 +1743,46 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	# Obstacles still own first placement, after the complete snapshot is ready.
 	road.sync_regions(regions, placement, snapshot.trees, snapshot.get("road_revision", 0))
 	_fill_road(px, pz)
+	# 17.11.2026: клетки плана обходятся полосами строк параллельно (раньше — одним потоком, 2–3 с из 3–5 с снимка).
+	# У каждой полосы свои места подлеска и пучки травы; сливаются по порядку полос — результат тот же, что
+	# при обходе подряд. Кэш сообществ открытых клеток в полосах только читается, новые записи — после слияния.
+	_prepare_open_cache()
+	var j0 := maxi(0, floori(scan_low.y))
+	var j1 := mini(w.H - 1, ceili(scan_high.y))
+	var bands := clampi(OS.get_processor_count() / 3, 1, SCAN_BANDS_MAX) if j1 >= j0 else 0
+	if scan_bands > 0 and bands > 0:
+		bands = scan_bands
+	while _scan_ctx.size() < bands:
+		_scan_ctx.append({sites = [], open_new = {}, grass = PackedFloat32Array(), n = 0})
+	var scan := {origin = origin, px = px, pz = pz, rT = rT, rF = rF, low = scan_low, high = scan_high, canopy = canopy, canopy_rect = canopy_rect,
+		j0 = j0, rows = j1 - j0 + 1, bands = bands}
+	if bands > 1:
+		var group := WorkerThreadPool.add_group_task(_scan_band.bind(scan), bands, bands, true, "Раскладка полосами")
+		WorkerThreadPool.wait_for_group_task_completion(group)
+	elif bands == 1:
+		_scan_band(0, scan)
 	var under_us := 0
 	var grass_us := 0
-	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
-	for j in range(maxi(0, floori(scan_low.y)), mini(w.H - 1, ceili(scan_high.y)) + 1):
-		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
-			var k := j * w.W + i
-			var bd: Dictionary = Biomes.LIST[w.biome[k]]
-			var rocky_cell := w.biome[k] == Biomes.ROCK
-			if (not bd.has("grass") and not rocky_cell) or w.river[k] != 0:
-				continue
-			var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, origin, _fill_lead) / TILE
-			var d2 := d * d
-			if d2 > rF * rF:
-				continue
-			var surface := _forest_surface.get_pixel(i, j)
-			if canopy != null:
-				var cover := canopy.get_pixel(i - canopy_rect.position.x, j - canopy_rect.position.y)
-				surface.r = cover.r
-				surface.g = cover.g
-			if d2 > rT * rT:
-				# За кругом травы — только крупный подлесок
-				_fill_understory(i, j, surface, StageClimate.natural_conditions(w, i, j).x, px, pz)
-				continue
-			var gr: Dictionary = ROCK_GRASS if rocky_cell else bd.grass
-			# Почвенная влага и освещение общие с генератором леса.
-			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
-			var light := StageClimate.natural_conditions(w, i, j).x
-			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
-			lush *= 1.0 - 0.65 * surface.r
-			var t_u := Time.get_ticks_usec()
-			lush *= _fill_understory(i, j, surface, light, px, pz)
-			if rocky_cell: lush *= _rock_shelter(surface, i + world.world_origin.x, j + world.world_origin.y)
-			var t_g := Time.get_ticks_usec()
-			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
-			under_us += t_g - t_u
-			grass_us += Time.get_ticks_usec() - t_g
+	var merged := PackedFloat32Array()
+	for b in bands:
+		var ctx: Dictionary = _scan_ctx[b]
+		_understory_sites.append_array(ctx.sites)
+		for at: int in ctx.open_new:
+			var q: PackedByteArray = ctx.open_new[at]
+			for c in OPEN_CACHE:
+				_open_cache[at + c] = q[c]
+		merged.append_array((ctx.grass as PackedFloat32Array).slice(0, ctx.n * STRIDE))
+		_grass_low = _grass_low.min(ctx.low)
+		_grass_high = _grass_high.max(ctx.high)
+		under_us += ctx.under_us
+		grass_us += ctx.grass_us
+		ctx.sites = []
+		ctx.open_new = {}
+	n = mini(merged.size() / STRIDE, grass_buf.size() / STRIDE)
+	if merged.size() > grass_buf.size():
+		fill_capped += 1
+	merged.resize(grass_buf.size())
+	grass_buf = merged
 	if canopy != null:
 		for j in range(floori(scan_low.y), ceili(scan_high.y) + 1):
 			for i in range(floori(scan_low.x), ceili(scan_high.x) + 1):
@@ -1833,10 +1840,85 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	_understory_sites.clear()
 
 
+## 17.11.2026: полоса строк плана для _fill_grass (поток пула). Тело — прежний обход клеток; пишет только в свой ctx.
+func _scan_band(b: int, scan: Dictionary) -> void:
+	var w := world
+	var ctx: Dictionary = _scan_ctx[b]
+	ctx.sites = []
+	ctx.open_new = {}
+	ctx.n = 0
+	ctx.low = Vector3.INF
+	ctx.high = -Vector3.INF
+	ctx.under_us = 0
+	ctx.grass_us = 0
+	var rows: int = scan.rows
+	var bands: int = scan.bands
+	var from: int = scan.j0 + rows * b / bands
+	var to: int = scan.j0 + rows * (b + 1) / bands
+	var scan_low: Vector2 = scan.low
+	var scan_high: Vector2 = scan.high
+	var origin: Vector2 = scan.origin
+	var px: float = scan.px
+	var pz: float = scan.pz
+	var rT: float = scan.rT
+	var rF: float = scan.rF
+	var canopy: Image = scan.canopy
+	var canopy_rect: Rect2i = scan.canopy_rect
+	var buf: PackedFloat32Array = ctx.grass
+	if buf.size() < grass_buf.size() / bands + 64 * STRIDE:
+		buf.resize(grass_buf.size() / bands + 64 * STRIDE)
+	var n := 0
+	for j in range(from, to):
+		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
+			var k := j * w.W + i
+			var bd: Dictionary = Biomes.LIST[w.biome[k]]
+			var rocky_cell := w.biome[k] == Biomes.ROCK
+			if (not bd.has("grass") and not rocky_cell) or w.river[k] != 0:
+				continue
+			var d := StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, origin, _fill_lead) / TILE
+			var d2 := d * d
+			if d2 > rF * rF:
+				continue
+			var surface := _forest_surface.get_pixel(i, j)
+			if canopy != null:
+				var cover := canopy.get_pixel(i - canopy_rect.position.x, j - canopy_rect.position.y)
+				surface.r = cover.r
+				surface.g = cover.g
+			if d2 > rT * rT:
+				# За кругом травы — только крупный подлесок
+				_fill_understory(i, j, surface, StageClimate.natural_conditions(w, i, j).x, px, pz, ctx)
+				continue
+			var gr: Dictionary = ROCK_GRASS if rocky_cell else bd.grass
+			# Почвенная влага и освещение общие с генератором леса.
+			var lush := clampf(1.0 - 0.45 * (w.slope[k] - 0.5), 0.35, 1.0) * (1.25 if w.dist_water[k] < 3.0 else 1.0)
+			var light := StageClimate.natural_conditions(w, i, j).x
+			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
+			lush *= 1.0 - 0.65 * surface.r
+			var t_u := Time.get_ticks_usec()
+			lush *= _fill_understory(i, j, surface, light, px, pz, ctx)
+			if rocky_cell: lush *= _rock_shelter(surface, i + world.world_origin.x, j + world.world_origin.y)
+			var t_g := Time.get_ticks_usec()
+			if n + 64 >= buf.size() / STRIDE:
+				buf.resize(buf.size() * 2)
+			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k], {}, ctx)
+			ctx.under_us += t_g - t_u
+			ctx.grass_us += Time.get_ticks_usec() - t_g
+	ctx.n = n
+
+
+## Кэш сообществ открытых клеток создаётся до обхода полосами (в полосах — только чтение)
+func _prepare_open_cache() -> void:
+	if _open_cache.size() != world.N * OPEN_CACHE:
+		_open_cache.resize(world.N * OPEN_CACHE)
+		_open_cache.fill(0)
+		_open_valid.resize(world.N * 2)
+		_open_valid.fill(0)
+
+
 ## Пучки травы клетки (i, j) в grass_buf начиная с n; возвращает новое n. path — путь клетки
 ## (без локальной детализации дорог на нём травы нет)
-func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}) -> int:
-	var buf := grass_buf
+func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2: float, n: int, path: int, regions := {}, ctx = null) -> int:
+	var buf: PackedFloat32Array = grass_buf if ctx == null else ctx.grass
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
 	if cnt <= 0:
@@ -1853,7 +1935,7 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var straw := _straw(gr, i, j, surface)
 	var inside := i >= 0 and j >= 0 and i < w.W and j < w.H
 	for m in cnt:
-		if n >= grass_buf.size() / STRIDE:
+		if n >= buf.size() / STRIDE:
 			fill_capped += 1
 			break
 		var rank := (m + shift) / cnt
@@ -1882,8 +1964,12 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 		var sy := sc * (0.55 + WGRandom.hash2(i + m, j, 31) * 0.9) * (1.0 + verge * 0.35)
 		_put_xform(buf, n * STRIDE, x, y - 0.05, z, WGRandom.hash2(i - m, j + m, 19) * 6.28, sc, sy)
 		var origin := Vector3(x, y - 0.05, z)
-		_grass_low = _grass_low.min(origin)
-		_grass_high = _grass_high.max(origin)
+		if ctx == null:
+			_grass_low = _grass_low.min(origin)
+			_grass_high = _grass_high.max(origin)
+		else:
+			ctx.low = (ctx.low as Vector3).min(origin)
+			ctx.high = (ctx.high as Vector3).max(origin)
 		var v := 1.25 + WGRandom.hash2(m, i + j, 23) * 0.3 # 9.4: светлее, основание темнит меш
 		var dry := clampf(straw * (0.4 + WGRandom.hash2(m + 3, i - j, 37) * 1.2), 0.0, 0.85)
 		buf[n * STRIDE + 12] = lerpf(tc[0], 0.66, dry) * v * (1.0 + verge * 0.12)
@@ -1976,29 +2062,29 @@ static func _keep(d: float, full: float, ahead: float) -> float:
 
 
 ## Возвращает множитель низкой травы по характеру места.
-func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float) -> float:
+func _fill_understory(i: int, j: int, surface: Color, sunlight: float, px: float, pz: float, ctx = null) -> float:
 	var k := j * world.W + i
-	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz, world.elev[k], world.dist_water[k])
+	return _fill_understory_cell(i, j, world.biome[k], world.path_mask[k], world.slope[k], surface, sunlight, px, pz, world.elev[k], world.dist_water[k], ctx)
 
 
 ## Подлесок клетки по её биому, пути и уклону (на плане — из WorldData, за краем — OuterLand.info).
 ## alt — высота, water — расстояние до воды в клетках (для сообществ открытых мест).
 func _fill_understory_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float,
-		alt := 0.2, water := 99.0) -> float:
+		alt := 0.2, water := 99.0, ctx = null) -> float:
 	var canopy := surface.r
 	if bi == Biomes.ROCK and canopy < 0.15:
-		_fill_rock_hollow(i, j, path, slope, surface, px, pz)
+		_fill_rock_hollow(i, j, path, slope, surface, px, pz, ctx)
 		return 1.0
 	if canopy < 0.15:
 		# 16.0: открытые места — растительные сообщества (раньше подлеска здесь не было вовсе)
 		if legacy_open:
-			return 1.0 if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water)
-		return _fill_open_cell(i, j, bi, path, slope, surface, sunlight, px, pz, alt, water)
-	return _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water)
+			return 1.0 if bi not in [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water, ctx)
+		return _fill_open_cell(i, j, bi, path, slope, surface, sunlight, px, pz, alt, water, ctx)
+	return _fill_forest_cell(i, j, bi, path, slope, surface, sunlight, px, pz, water, ctx)
 
 
 ## Подлесок под пологом: характер леса (8.2) и, с 16.0, опушка — кусты, подрост и высокотравье у края
-func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float, water := 99.0) -> float:
+func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float, water := 99.0, ctx = null) -> float:
 	var canopy := surface.r
 	var moisture := surface.b
 	# 8.2: характер леса от полога, хвои, влаги, солнца и возраста участка
@@ -2095,14 +2181,19 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			var hz_squash := lerpf(0.84, 1.06, WGRandom.hash2(i * 8 + m, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(i * 8 + m, j, seed + 11))
 			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + WGRandom.hash2(i * 8 + m, j, seed + 12) * 0.6)
 			var hz_hue := Color.WHITE.lerp(Color(1.16, 1.08, 0.72), yellow * 0.75)
-			_understory_sites.append([kind, x, z, rot, hz_scale, tint, rank, hz_hue, -1, hz_squash])
+			_sites(ctx).append([kind, x, z, rot, hz_scale, tint, rank, hz_hue, -1, hz_squash])
 		else:
-			_understory_sites.append([kind, x, z, rot, scale, tint, rank])
+			_sites(ctx).append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
 
 
 ## 16.0: доля и размер растения по качеству растительности. Валежник, сухостой, пни и камни
 ## (столкновения) не зависят от настройки.
+## Куда пишутся места подлеска: свой список полосы обхода или общий
+func _sites(ctx) -> Array:
+	return _understory_sites if ctx == null else ctx.sites
+
+
 ## 17.11.2026: множитель лещины по месту: ложбина (вогнутость рельефа в 8 м) или низина у воды — до 1,6,
 ## ровное и выпуклое место — 0,3
 func _hazel_site(i: int, j: int, water: float) -> float:
@@ -2139,7 +2230,7 @@ func _flora_grow(kind: int) -> float:
 ## у воды, дернина в горах, а между ними — газон для контраста. Поля — существующие (влага, свет,
 ## высота, уклон, порода, вода, полог, пути) и плавный шум трёх масштабов; новых карт нет.
 func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: Color, sunlight: float, px: float, pz: float,
-		alt: float, water: float) -> float:
+		alt: float, water: float, ctx = null) -> float:
 	if path == 1 or slope > 1.15:
 		return 1.0
 	var seed := world.seed_num ^ 8803
@@ -2149,11 +2240,8 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	# первая и повторная раскладки совпадают.
 	var at := -1
 	if inside:
-		if _open_cache.size() != world.N * OPEN_CACHE:
-			_open_cache.resize(world.N * OPEN_CACHE)
-			_open_cache.fill(0)
-			_open_valid.resize(world.N * 2)
-			_open_valid.fill(0)
+		if ctx == null:
+			_prepare_open_cache()
 		at = (j * world.W + i) * OPEN_CACHE
 	var q: PackedByteArray
 	var o := 0
@@ -2162,9 +2250,11 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		o = at
 	else:
 		q = _open_community(i, j, bi, slope, surface, sunlight, alt, water, inside)
-		if at >= 0:
+		if at >= 0 and ctx == null:
 			for n in OPEN_CACHE:
 				_open_cache[at + n] = q[n]
+		elif at >= 0:
+			ctx.open_new[at] = q
 	var com := PackedFloat32Array()
 	com.resize(Understory.COMMUNITIES)
 	for c in Understory.COMMUNITIES:
@@ -2176,7 +2266,7 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	var steppe := q[o + 11] / 255.0
 	var bloom := q[o + 12] / 255.0
 	if _sod_entry >= 0 and mid_grass > 0.0:
-		_open_sod(i, j, bi, surface, px, pz, density, grass_mul, inside)
+		_open_sod(i, j, bi, surface, px, pz, density, grass_mul, inside, ctx)
 	if density <= 0.004:
 		return grass_mul
 	var weights := PackedFloat32Array()
@@ -2262,7 +2352,7 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		elif kind == Understory.FIREWEED:
 			scale *= 0.85 + 0.3 * bloom
 		var tint := 0.88 + WGRandom.hash2(hx + m, j, seed + 7) * 0.24
-		_understory_sites.append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, site_hue,
+		_sites(ctx).append([kind, x, z, WGRandom.hash2(hx + m, j, seed + 6) * TAU, scale * flora.grow, tint, rank, site_hue,
 			(j * world.W + i) * 8 + m if inside else -1, squash])
 	return grass_mul
 
@@ -2276,7 +2366,7 @@ func _sod_reach() -> float:
 	return minf(grass_r, OPEN_MAX_R * flora.reach)
 
 
-func _open_sod(i: int, j: int, bi: int, surface: Color, px: float, pz: float, density: float, grass_mul: float, inside: bool) -> void:
+func _open_sod(i: int, j: int, bi: int, surface: Color, px: float, pz: float, density: float, grass_mul: float, inside: bool, ctx = null) -> void:
 	var bd: Dictionary = Biomes.LIST[bi]
 	var gr: Dictionary = bd.grass if bd.has("grass") else ROCK_GRASS
 	var chance := SOD_SHARE * mid_grass * clampf(grass_mul, 0.0, 1.0) * (1.0 - 0.7 * density) * (1.0 - 0.8 * surface.a)
@@ -2309,7 +2399,7 @@ func _open_sod(i: int, j: int, bi: int, surface: Color, px: float, pz: float, de
 		var dry := clampf(straw * (0.4 + WGRandom.hash2(m + 3, i - j, seed + 6) * 1.2), 0.0, 0.85)
 		var hue := Color(lerpf(tc[0], 0.66, dry) * v, lerpf(tc[1], 0.58, dry) * v, lerpf(tc[2], 0.31, dry) * v)
 		var scale: float = (0.8 + WGRandom.hash2(hx + m, j, seed + 9) * 0.4) * flora.grow
-		_understory_sites.append([_sod_entry, x, z, WGRandom.hash2(hx + m, j, seed + 7) * TAU, scale, 1.0, rank, hue,
+		_sites(ctx).append([_sod_entry, x, z, WGRandom.hash2(hx + m, j, seed + 7) * TAU, scale, 1.0, rank, hue,
 			(j * world.W + i) * 8 + m if inside else -1, 1.0])
 
 
@@ -2407,7 +2497,7 @@ func _verge(i: int, j: int) -> float:
 ## Скальные ложбины (07.11.2026): редкие мох, травы, низкий кустарник и мелкие камни из общих форм
 ## подлеска (их MultiMesh общие на весь круг — новых узлов и вызовов отрисовки нет). Только там,
 ## где _rock_shelter: сыро и закрыто; открытая порода остаётся голой.
-func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, px: float, pz: float) -> void:
+func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, px: float, pz: float, ctx = null) -> void:
 	if path == 1 or slope > 0.9:
 		return
 	var origin: Vector2i = world.world_origin if i >= 0 and j >= 0 and i < world.W and j < world.H else Vector2i.ZERO
@@ -2441,9 +2531,9 @@ func _fill_rock_hollow(i: int, j: int, path: int, slope: float, surface: Color, 
 		var tint := 0.8 + WGRandom.hash2(hx * 8 + m, hy, seed + 7) * 0.25
 		if kind == Understory.BUSH and not legacy_open:
 			# 16.1: среди камней куст — стелющийся можжевельник
-			_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale * JUNIPER_SPREAD, tint, rank, JUNIPER_HUE, -1, JUNIPER_SQUASH])
+			_sites(ctx).append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale * JUNIPER_SPREAD, tint, rank, JUNIPER_HUE, -1, JUNIPER_SQUASH])
 		else:
-			_understory_sites.append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale, tint, rank])
+			_sites(ctx).append([kind, x, z, WGRandom.hash2(hx * 8 + m, hy, seed + 6) * TAU, scale, tint, rank])
 
 
 func _in_plan(i: int, j: int) -> bool:
