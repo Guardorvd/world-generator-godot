@@ -31,15 +31,17 @@ func pixels(shot: Image) -> int:
 	return count
 
 
-func form_pixels(shot: Image) -> Vector2i:
-	var counts := Vector2i.ZERO
+func form_pixels(shot: Image) -> Vector3i:
+	var counts := Vector3i.ZERO
 	for y in range(0, shot.get_height(), 2):
 		for x in range(0, shot.get_width(), 2):
 			var col := shot.get_pixel(x, y)
-			if col.r > col.g + 0.03:
+			if col.r > maxf(col.g, col.b) + 0.03:
 				counts.x += 1
-			elif col.g > col.r + 0.03:
+			elif col.g > maxf(col.r, col.b) + 0.03:
 				counts.y += 1
+			elif col.b > maxf(col.r, col.g) + 0.03:
+				counts.z += 1
 	return counts
 
 
@@ -71,15 +73,46 @@ func check_form_pair(mesh: Mesh) -> void:
 	var half := form_pixels(await capture())
 	RenderingServer.global_shader_parameter_set("vegetation_clock", 20.5)
 	var full := form_pixels(await capture())
-	check(hidden == Vector2i.ZERO and half.x > full.x * 0.4 and half.x < full.x * 0.6
+	check(hidden == Vector3i.ZERO and half.x > full.x * 0.4 and half.x < full.x * 0.6
 		and half.y > full.y * 0.4 and half.y < full.y * 0.6, "Both LODs reveal together across the blend: %s / %s / %s" % [hidden, half, full])
 	RenderingServer.global_shader_parameter_set("veg_center", Vector2.ZERO)
 	var near := form_pixels(await capture())
 	RenderingServer.global_shader_parameter_set("veg_center", Vector2(50, 0))
 	var far := form_pixels(await capture())
 	check(near.x > 30 and near.y == 0 and far.x == 0 and far.y > 30, "The shader chooses detailed or distant LOD as the player moves")
+	await check_third_form(nodes[1], Plants.meshes()[Plants.MEADOW])
 	for node in nodes:
 		node.free()
+
+
+func colored_mesh(mesh: Mesh, color: Color) -> ArrayMesh:
+	var arrays := mesh.surface_get_arrays(0)
+	var colors := PackedColorArray()
+	colors.resize(arrays[Mesh.ARRAY_VERTEX].size())
+	colors.fill(color)
+	arrays[Mesh.ARRAY_COLOR] = colors
+	var result := ArrayMesh.new()
+	result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return result
+
+
+func check_third_form(node: MultiMeshInstance3D, mesh: Mesh) -> void:
+	node.multimesh.mesh = Plants.pack_open_lods(colored_mesh(mesh, Color.GREEN), colored_mesh(mesh, Color.BLUE))
+	var mat: ShaderMaterial = node.material_override
+	mat.set_shader_parameter("albedo_color", Color.WHITE)
+	mat.set_shader_parameter("use_vertex_color", true)
+	mat.set_shader_parameter("form_group_lod", Vector3(55, 20, mesh.get_aabb().end.y))
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2(40, 0))
+	var middle := form_pixels(await capture())
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2(55, 0))
+	var blend := form_pixels(await capture())
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2(70, 0))
+	var coarse := form_pixels(await capture())
+	check(middle.y > 30 and middle.z == 0 and coarse.y == 0 and coarse.z > 30,
+		"Only the intended middle or coarse LOD is visible outside the second blend")
+	check(blend.x == 0 and blend.y > middle.y * 0.4 and blend.y < middle.y * 0.6
+		and blend.z > coarse.z * 0.4 and blend.z < coarse.z * 0.6,
+		"The middle and coarse LODs share pixels during the second blend: %s / %s / %s" % [middle, blend, coarse])
 
 
 func run() -> void:

@@ -45,6 +45,8 @@ uniform vec2 near_fade = vec2(0.0);
 // z: 0 — нет, 1 — ближняя форма, 2 — упрощённая). Только у пар (INSTANCE_CUSTOM.z >= 1.5, VegetationLayer._put_twin):
 // пиксель берёт ровно одну форму той же сеткой порогов, что уровни LOD деревьев.
 uniform vec3 form_switch = vec3(0.0);
+// У дальнего меша куртин UV2.y отмечает группу кочек. x/y — середина и ширина второго перехода, z — высота кочек для ветра.
+uniform vec3 form_group_lod = vec3(0.0);
 // Только общий меш травы: лёгкий индивидуальный наклон каждого листа.
 uniform bool grass_variation = false;
 // 14.11.2026: дернина расступается у игрока (veg_center): м отклонения кончиков в полуметре от него, 0 — нет.
@@ -91,10 +93,13 @@ void vertex() {
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float dist = distance(origin.xz, veg_center);
 	bool form_twin = form_switch.z > 0.5 && INSTANCE_CUSTOM.z >= 1.5;
+	bool has_group_lod = form_group_lod.y > 0.0;
+	bool coarse_form = has_group_lod && UV2.y > 0.5;
 	v_lod = vec2(0.0, 2.0);
-	if (form_twin) {
-		float s = smoothstep(form_switch.x - form_switch.y * 0.5, form_switch.x + form_switch.y * 0.5, dist);
-		v_lod = form_switch.z < 1.5 ? vec2(s, 2.0) : vec2(0.0, s);
+	if (form_twin || has_group_lod) {
+		float s = form_twin ? smoothstep(form_switch.x - form_switch.y * 0.5, form_switch.x + form_switch.y * 0.5, dist) : 1.0;
+		float s2 = has_group_lod ? min(s, smoothstep(form_group_lod.x - form_group_lod.y * 0.5, form_group_lod.x + form_group_lod.y * 0.5, dist)) : 0.0;
+		v_lod = form_switch.z < 1.5 ? vec2(s, 2.0) : (coarse_form ? vec2(0.0, s2) : vec2(s2, s));
 	} else if (lod_level >= 0) {
 		float s1 = smoothstep(LOD1_D - LOD1_BAND * 0.5, LOD1_D + LOD1_BAND * 0.5, dist);
 		float s2 = smoothstep(LOD2_D - LOD2_BAND * 0.5, LOD2_D + LOD2_BAND * 0.5, dist);
@@ -105,7 +110,7 @@ void vertex() {
 	bark_local = VERTEX;
 	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
 #endif
-	float h = clamp(VERTEX.y / height, 0.0, 1.0);
+	float h = clamp(VERTEX.y / (coarse_form ? form_group_lod.z : height), 0.0, 1.0);
 	float custom_z = form_twin ? INSTANCE_CUSTOM.z - 2.0 : INSTANCE_CUSTOM.z;
 	if (grass_variation && !lod_hidden) {
 		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;

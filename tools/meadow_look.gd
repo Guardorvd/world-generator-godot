@@ -326,8 +326,8 @@ func _far_forms_near(at: Vector2) -> Dictionary:
 	var out := {wrong = 0, twins = 0}
 	for form: int in veg._far_of:
 		var e: Dictionary = veg.understory[veg._far_of[form]]
-		var woody := VegetationLayer.Placement.priority(form) == 1
-		var r := veg.far_form_r * (VegetationLayer.WOODY_FAR_FORM if woody else 1.0) * 0.85
+		var transition := veg._form_switch(form)
+		var r := transition.x * 0.85
 		var data: PackedFloat32Array = e.mm.buffer
 		var n := mini(e.mm.visible_instance_count, e.mm.instance_count)
 		for i in n:

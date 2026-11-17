@@ -51,6 +51,7 @@ const UNDERSTORY_FAR_MAX := 12288 # на форму крупного подле�
 const OPEN_FULL_R := 45.0
 const OPEN_GROW := 1.0
 const OPEN_MAX_R := 200.0 # дальше куртины растворяются (за 160–200 м куртина — пара пикселей)
+const OPEN_GROUP_LOD := Vector2(56.0, 16.0) # середина и ширина перехода от упрощённой куртины к группе кочек
 ## 17.11.2026: групповые дальние формы (куртины открытых мест, злаковая трава) при поредении раздвигаются в стороны
 ## как 1/√доли (покрытие земли то же), но не больше GROUP_SPREAD раз, и чуть растут в высоту (GROUP_GROW).
 const GROUP_SPREAD := 2.6
@@ -64,8 +65,6 @@ const SOD_BAND := 8.0
 const SOD_PLACE_FROM := 14.0
 var _sod_entry := -1
 var mid_grass := 1.0 # множитель доли дерновин (GameSettings.MID_GRASS), 0 — слоя нет
-## 16.0: кусты и подрост переходят на дальнюю форму позже мелочи (крупнее, заметнее)
-const WOODY_FAR_FORM := 1.6
 const HAZEL_CORE := 0.4 # 17.11.2026: доля ширины кроны лещины, которую занимает пучок стволов
 const FORM_BAND := 0.25 # 17.11.2026: полоса смены формы в долях границы (пиксели делятся сеткой порогов)
 static var form_twins := true # false — «было» (meadow_look --no-twins): форма по центру раскладки, без пар
@@ -295,19 +294,20 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	var specs: Array = []
 	for form in meshes.size():
 		specs.append([meshes[form], form])
-	var far_forms: Dictionary = preload("res://scripts/render/asset_catalog.gd").get_catalog().far_forms.duplicate()
+	var catalog_forms: Dictionary = preload("res://scripts/render/asset_catalog.gd").get_catalog().far_forms
+	var far_forms := catalog_forms.duplicate()
 	far_forms.merge(Floor.road_far_meshes(), true)
-	# 17.11.2026: дальние формы куртин и злаковой травы — группы кочек (UnderstoryModels.build_group_meshes)
+	# У каждой куртины средняя форма и дальние кочки делят один экземпляр и метку проявления.
 	var groups: Dictionary = Understory.build_group_meshes()
 	var sod: Mesh = groups[Understory.GRASS]
 	groups.erase(Understory.GRASS) # злаковая трава леса остаётся прежней; группа травы — только дерновины открытых мест
-	far_forms.merge(groups, true)
+	for form: int in groups:
+		far_forms[form] = Understory.pack_open_lods(catalog_forms[form], groups[form])
 	for form: int in far_forms:
 		_far_of[form] = specs.size()
 		specs.append([far_forms[form], form])
 	if not legacy_open:
 		_sod_entry = specs.size()
-		groups[Understory.GRASS] = sod
 		specs.append([sod, Understory.GRASS])
 	for spec: Array in specs:
 		var mesh: Mesh = spec[0]
@@ -321,17 +321,20 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM]
 		var wind := CALM if still else _plant_wind(base)
 		var mat := _wind_mat(SHADER, wind, true)
-		mat.set_shader_parameter("height", maxf(mesh.get_aabb().end.y, 0.2))
+		var has_group_lod: bool = groups.has(base) and mesh == far_forms[base]
+		var wind_mesh: Mesh = catalog_forms[base] if has_group_lod else mesh
+		mat.set_shader_parameter("height", maxf(wind_mesh.get_aabb().end.y, 0.2))
 		var blades := base in [Understory.GRASS, Understory.HIGH_GRASS, Understory.MEADOW, Understory.SEDGE, Understory.STIPA]
 		mat.set_shader_parameter("grass_variation", blades)
-		var detail := []
-		if not still and not blades:
-			var woody := Placement.priority(base) == 1
-			detail = [35.0, 120.0] if woody else [12.0, 45.0]
+		var priority := Placement.priority(base)
+		var woody := priority == 1
+		var group := has_group_lod or mesh == sod
+		var thin_leaves := not still and not blades and not group
+		if thin_leaves:
 			mat.set_shader_parameter("detail_keep", 0.5 if woody else 0.6)
 		# 16.0: куртины открытых мест видны дальше травы, как кусты; места не занимают (мягкие)
 		var open_form := base in Understory.OPEN_FORMS
-		var far := Placement.priority(base) < 2 or open_form
+		var far := priority < 2 or open_form
 		# Начальная ёмкость ближней формы меньше. При плотной раскладке буфер растёт по фактическому числу растений.
 		var cap := _understory_cap(far and not (far_forms.has(base) and mesh != far_forms[base]))
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
@@ -339,11 +342,10 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
 		# Один MultiMesh покрывает всю раскладку: её центр не является расстоянием до каждого растения.
 		# Дальность и растворение задаёт общий шейдер, AABB оставляем для отсечения по фрустуму.
-		var group: bool = groups.has(base) and mesh == groups[base]
-		if group:
-			detail = [] # у групп нет мелких листьев для поредения
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), mesh_box = mesh.get_aabb(), base = base, detail = detail,
+			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), mesh_box = mesh.get_aabb(), base = base,
+			thin_leaves = thin_leaves, woody = woody,
+			group_height = maxf((groups[base] as Mesh).get_aabb().end.y, 0.2) if has_group_lod else 0.0,
 			shadows = shadows, near_cap = cap != _understory_cap(far), has_contacts = has_contacts, group = group,
 			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0) + (GROUP_SPREAD - 1.0 if group else 0.0)})
 	_grass_mat = grass_mat
@@ -449,9 +451,19 @@ func _apply_fade() -> void:
 			# 17.11.2026: пара ближняя/дальняя форма делит пиксели по расстоянию до игрока (1 — ближняя, 2 — дальняя)
 			var switch := _form_switch(entry.base)
 			mat.set_shader_parameter("form_switch", Vector3(switch.x, switch.y, 1.0 if kind == entry.base else 2.0))
-		if not entry.detail.is_empty():
-			mat.set_shader_parameter("detail_full", entry.detail[0] * flora.detail)
-			mat.set_shader_parameter("detail_far", entry.detail[1] * flora.detail)
+		if entry.group_height > 0.0:
+			var group_switch := OPEN_GROUP_LOD * float(flora.reach)
+			if flora.has("open_group_range"):
+				group_switch = _form_blend(flora.open_group_range)
+			mat.set_shader_parameter("form_group_lod", Vector3(group_switch.x, group_switch.y, entry.group_height))
+		if entry.thin_leaves:
+			var detail_full: float = flora.woody_detail_full if entry.woody else 12.0
+			var detail_far := 120.0 if entry.woody else 45.0
+			detail_full *= flora.detail
+			if entry.base in Understory.OPEN_FORMS and flora.has("open_form_range"):
+				detail_full = maxf(detail_full, flora.open_form_range.x)
+			mat.set_shader_parameter("detail_full", detail_full)
+			mat.set_shader_parameter("detail_far", detail_far * flora.detail)
 		if entry.shadows:
 			entry.node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if not flora.shadows and entry.base < Floor.FIRST \
 				else (GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED if entry.base < Floor.FIRST else GeometryInstance3D.SHADOW_CASTING_SETTING_ON)
@@ -2584,10 +2596,16 @@ func _fill_road(px: float, pz: float) -> void:
 
 
 ## 17.11.2026: граница смены ближней формы на упрощённую (м от игрока) и полоса, в которой пиксели делятся между ними.
-## Кусты и подрост меняются дальше (WOODY_FAR_FORM).
+## Кусты и подрост меняются дальше (множитель woody_form в настройках качества).
 func _form_switch(kind: int) -> Vector2:
-	var r := far_form_r * (WOODY_FAR_FORM if Placement.priority(kind) == 1 else 1.0)
+	if kind in Understory.OPEN_FORMS and flora.has("open_form_range"):
+		return _form_blend(flora.open_form_range)
+	var r := far_form_r * (float(flora.woody_form) if Placement.priority(kind) == 1 else 1.0)
 	return Vector2(r, r * FORM_BAND)
+
+
+static func _form_blend(bounds: Vector2) -> Vector2:
+	return Vector2((bounds.x + bounds.y) * 0.5, bounds.y - bounds.x)
 
 
 ## Вторая форма того же растения: те же строки буфера (без проверок места — их прошла первая), обе помечены

@@ -52,9 +52,13 @@ const DEFAULT_DRAW := 2 # высокая (решение пользовател�
 ## чтобы земля не пустела), граница упрощённых форм, поредение листьев вдали и тени подроста.
 ## География, деревья, столкновения и препятствия на тропах от неё не зависят. Читает VegetationLayer.
 const FLORA_LEVELS := [
-	{title = "низкое", density = 0.45, grass = 0.55, grow = 1.25, far_form = 12.0, detail = 0.6, reach = 0.6, shadows = false},
-	{title = "среднее", density = 0.65, grass = 0.72, grow = 1.14, far_form = 16.0, detail = 0.75, reach = 0.8, shadows = true},
-	{title = "высокое", density = 1.0, grass = 1.0, grow = 1.0, far_form = 24.0, detail = 1.0, reach = 1.0, shadows = true},
+	{title = "низкое", density = 0.45, grass = 0.55, grow = 1.25, far_form = 12.0,
+		woody_form = 1.6, woody_detail_full = 35.0, detail = 0.6, reach = 0.6, shadows = false},
+	{title = "среднее", density = 0.65, grass = 0.72, grow = 1.14, far_form = 16.0,
+		woody_form = 1.6, woody_detail_full = 35.0, detail = 0.75, reach = 0.8, shadows = true},
+	{title = "высокое", density = 1.0, grass = 1.0, grow = 1.0, far_form = 24.0,
+		open_form_range = Vector2(27.0, 48.0), open_group_range = Vector2(64.0, 82.0),
+		woody_form = 2.2, woody_detail_full = 46.2, detail = 1.0, reach = 1.0, shadows = true},
 ]
 const DEFAULT_FLORA := 2
 # 11.11.2026: частицы окружения (AmbientParticles): название и множитель плотности

@@ -126,7 +126,7 @@ static func build_meshes() -> Array[Mesh]:
 	var young_pine := _spruce(3.32, bark, 6, 0.76, 0.22, Color(0.24, 0.41, 0.26), 41)
 
 	# 16.0: групповые формы открытых мест
-	var meadow := _stand(16, 6, 7, 0.78, 0.82, 1.38, 0.34, 0.034, Color(0.44, 0.58, 0.24), Color(0.62, 0.56, 0.32))
+	var meadow := _meadow(false)
 	var forbs := _forb_patch(false)
 	var sedge := _sedge()
 	var stipa := _stipa(false)
@@ -152,19 +152,18 @@ static func build_far_meshes() -> Dictionary:
 		parts.append([p0, pm + side * 0.20 + Vector3.UP * 0.02, p1, pm - side * 0.20 + Vector3.UP * 0.02])
 	var fern := _leaves(parts, green, 0)
 	var moss := _dome_mesh([[Vector3(0.02, 0.0, 0.04), Vector3(0.40, 0.085, 0.32), Color(0.38, 0.52, 0.21), 8]])
-	# 16.0: дальняя куртина — меньше, но шире травинки и те же колосья; разнотравье — без листовой розетки
-	var meadow := _stand(4, 0, 2, 0.78, 0.9, 1.36, 0.45, 0.1, Color(0.44, 0.58, 0.24), Color(0.64, 0.58, 0.34))
+	# Куртины на среднем LOD сохраняют расположение и форму основных листьев и соцветий.
+	var meadow := _meadow(true)
 	# 16.0: дальние кусты и подрост — те же каркас и объём, вчетверо меньше пластин (крупнее), без тонких веток
 	var bark := Color(0.36, 0.26, 0.16)
 	var bush := _crowned(0, bark, Vector3(0.05, 0.34, 0.03), Vector3(0.64, 0.38, 0.54), 16, 1.7, false)
 	var sapling := _crowned(1, bark, Vector3(0.04, 1.12, 0.0), Vector3(0.46, 0.56, 0.44), 14, 1.6, false)
 	var young := _crowned(2, Color(0.60, 0.58, 0.52), Vector3(0.0, 2.32, 0.0), Vector3(0.86, 1.06, 0.86), 22, 1.65, false)
-	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), BUSH: bush, SAPLING: sapling, YOUNG: young,
+	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), SEDGE: _sedge(true), BUSH: bush, SAPLING: sapling, YOUNG: young,
 		STIPA: _stipa(true), FIREWEED: _fireweed(true), HAZEL: _hazel(0, true), HAZEL_TALL: _hazel(1, true)}
 
 
-## 17.11.2026: групповые формы средних дистанций — дальняя форма куртин открытых мест и злаковой травы (вместо
-## прежних «меньше травинок»). Экземпляр изображает не одно растение, а группу: несколько непрозрачных кочек-«шатров»
+## Третий LOD куртин открытых мест и отдельные дерновины. Экземпляр изображает группу: несколько непрозрачных кочек
 ## разной высоты (по 4 треугольника) и редкие акценты (колосья, цветы, ости, кисти, початки). Вдали шейдер раздвигает
 ## группу в стороны сильнее, чем в высоту (thin_spread), поэтому при поредении покрытие земли сохраняется.
 ## Меши строятся при запуске (каталог не меняется). Ключ — номер формы подлеска.
@@ -178,6 +177,30 @@ static func build_group_meshes() -> Dictionary:
 		# дерновина газона, степи и горного луга: низкие плотные кочки, тон даёт экземпляр (по биому и суши)
 		GRASS: _group(8, 0.72, 0.3, 0.6, Color(1.0, 0.95, 0.92), 0, Color.WHITE, 0),
 	}
+
+
+## LOD1 и LOD2 одной куртины пользуются общим экземпляром MultiMesh. UV2.y отмечает треугольники LOD2.
+static func pack_open_lods(middle: Mesh, distant: Mesh) -> ArrayMesh:
+	var arrays := middle.surface_get_arrays(0)
+	var coarse := distant.surface_get_arrays(0)
+	var first_coarse: int = arrays[Mesh.ARRAY_VERTEX].size()
+	for channel in [Mesh.ARRAY_VERTEX, Mesh.ARRAY_NORMAL, Mesh.ARRAY_COLOR, Mesh.ARRAY_TEX_UV]:
+		var data: Variant = arrays[channel]
+		data.append_array(coarse[channel])
+		arrays[channel] = data
+	arrays[Mesh.ARRAY_TANGENT] = null # обе формы используют нормали вершин без карты нормалей
+	var detail: PackedVector2Array = arrays[Mesh.ARRAY_TEX_UV2] if arrays[Mesh.ARRAY_TEX_UV2] != null else PackedVector2Array()
+	detail.resize(arrays[Mesh.ARRAY_VERTEX].size())
+	for vertex in range(first_coarse, detail.size()):
+		detail[vertex] = Vector2(0.0, 1.0)
+	arrays[Mesh.ARRAY_TEX_UV2] = detail
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	for index: int in coarse[Mesh.ARRAY_INDEX]:
+		indices.append(first_coarse + index)
+	arrays[Mesh.ARRAY_INDEX] = indices
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 
 ## Группа из tufts кочек на круге radius высотой h_min..h_max; accents акцентов цвета accent_c над кочками.
@@ -263,10 +286,12 @@ static func _stipa(far: bool) -> ArrayMesh:
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var leaf := Color(0.50, 0.58, 0.40)
 	var silver := Color(0.76, 0.76, 0.66)
-	var leaves := 5 if far else 14
-	var awns := 4 if far else 10
+	var leaves := 14
+	var awns := 10
 	var total := leaves + awns
 	for n in total:
+		if far and (n % (3 if n < leaves else 2)) != 0:
+			continue
 		var a := n * 2.39996 + 0.3
 		var r := 0.42 * sqrt(fposmod(0.17 + n * 0.618034, 1.0))
 		var foot := Vector3(cos(a), 0.0, sin(a)) * r
@@ -276,7 +301,7 @@ static func _stipa(far: bool) -> ArrayMesh:
 		if n < leaves:
 			# Узкий лист-нить, слегка согнут наружу
 			var h := 0.42 + 0.28 * fposmod(n * 0.381966, 1.0)
-			var w := (0.03 if far else 0.011)
+			var w := (0.022 if far else 0.011)
 			var knee := foot + dir * 0.07 + Vector3.UP * h * 0.6
 			var tip := foot + dir * (0.2 + 0.1 * fposmod(n * 0.7548, 1.0)) + Vector3.UP * h
 			var nrm := (-dir * 0.3 + Vector3.UP * 0.95).normalized()
@@ -317,7 +342,7 @@ static func _stipa(far: bool) -> ArrayMesh:
 
 ## 16.1: иван-чай: 6 стеблей 1,1–1,7 м, ланцетные листья ярусами вдоль стебля и вытянутая
 ## пирамидальная кисть розово-лиловых цветков (крест из двух сужающихся пластин) с бутонами на верхушке.
-## far — 4 стебля, без нижних листьев, кисть одной парой пластин.
+## far — 4 стебля с прореженными листьями и упрощённой кистью.
 static func _fireweed(far: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -325,8 +350,10 @@ static func _fireweed(far: bool) -> ArrayMesh:
 	var leaf_c := Color(0.28, 0.45, 0.21)
 	var bloom := Color(0.86, 0.38, 0.66)
 	var bud := Color(0.62, 0.30, 0.45)
-	var stems := 4 if far else 6
+	var stems := 6
 	for k in stems:
+		if far and k % 3 == 1:
+			continue
 		var a := k * 2.39996 + 0.7
 		var foot := Vector3(cos(a), 0.0, sin(a)) * 0.32 * sqrt(fposmod(0.2 + k * 0.618034, 1.0))
 		var h := 1.1 + 0.6 * fposmod(k * 0.381966 + 0.15, 1.0)
@@ -343,8 +370,10 @@ static func _fireweed(far: bool) -> ArrayMesh:
 			st.set_uv(Vector2(u, v[1]))
 			st.add_vertex(v[0])
 		# Листья: узкие, косо вверх, по спирали; верхние мельче
-		var leaves := 2 if far else 6
+		var leaves := 6
 		for l in leaves:
+			if far and l % 2 != 0:
+				continue
 			var t := 0.18 + 0.4 * float(l) / leaves
 			var base := foot.lerp(top, t)
 			var la := a + l * 2.2
@@ -363,7 +392,7 @@ static func _fireweed(far: bool) -> ArrayMesh:
 		# Кисть: от 62 % высоты до верхушки, широкая внизу, сужается к бутонам
 		st.set_uv2(Vector2(0.0, 0))
 		var width := 0.075 if far else 0.06
-		var planes := [side, Vector3(cos(a), 0.0, sin(a))] if not far else [side]
+		var planes := [side, Vector3(cos(a), 0.0, sin(a))]
 		for axis: Vector3 in planes:
 			var w0 := axis * width
 			var w1 := axis * width * 0.35
@@ -371,9 +400,12 @@ static func _fireweed(far: bool) -> ArrayMesh:
 			var high := foot.lerp(top, 0.92) + lean * 0.3
 			var tip := top + lean * 0.4 + Vector3.UP * 0.06
 			var nrm := axis.cross(Vector3.UP).normalized()
-			for v: Array in [[low - w0, 0.62, bloom * 0.92], [low + w0, 0.62, bloom * 0.92], [high + w1, 0.92, bloom * 1.06],
+			var vertices := [[low - w0, 0.62, bloom * 0.92], [low + w0, 0.62, bloom * 0.92], [high + w1, 0.92, bloom * 1.06],
 					[low - w0, 0.62, bloom * 0.92], [high + w1, 0.92, bloom * 1.06], [high - w1, 0.92, bloom * 1.06],
-					[high - w1, 0.92, bud], [high + w1, 0.92, bud], [tip, 1.0, bud * 0.9]]:
+					[high - w1, 0.92, bud], [high + w1, 0.92, bud], [tip, 1.0, bud * 0.9]]
+			if far:
+				vertices = [vertices[0], vertices[1], vertices[8]]
+			for v: Array in vertices:
 				st.set_normal((nrm * 0.5 + Vector3.UP * 0.5).normalized())
 				st.set_color(v[2])
 				st.set_uv(Vector2(u, v[1]))
@@ -382,10 +414,14 @@ static func _fireweed(far: bool) -> ArrayMesh:
 	return st.commit()
 
 
+static func _meadow(far: bool) -> ArrayMesh:
+	return _stand(16, 6, 7, 0.78, 0.82, 1.38, 0.34, 0.034, Color(0.44, 0.58, 0.24), Color(0.62, 0.56, 0.32), far)
+
+
 ## 16.0: куртина высокотравья: травинки на круге radius, дугой наружу, плюс колосья на стеблях.
 ## UV.x — номер травинки (индивидуальный изгиб в шейдере), UV.y — доля высоты; UV2.x — ранг поредения.
 static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: float, h_max: float,
-		reach_max: float, width: float, color: Color, head_color: Color) -> ArrayMesh:
+		reach_max: float, width: float, color: Color, head_color: Color, far: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var total := arched + spears + heads
@@ -393,6 +429,8 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 	var mid_c := Color(color.r * 0.95, color.g * 0.97, color.b * 0.9)
 	var tip_c := Color(minf(1.0, color.r * 1.18), minf(1.0, color.g * 1.1), color.b * 0.9)
 	for n in total:
+		if far and n % 2 != 0:
+			continue
 		var a := n * 2.39996 + 0.4 * sin(n * 1.3)
 		var r := radius * sqrt(fposmod(0.1 + n * 0.618034, 1.0))
 		var foot := Vector3(cos(a), 0.0, sin(a)) * r
@@ -404,7 +442,7 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 		var u := float(n) / total
 		if n < arched + spears:
 			var reach := reach_max * (0.55 + 0.6 * fposmod(n * 0.5698, 1.0)) * (1.0 if n < arched else 0.4)
-			var w := width * (0.8 + 0.5 * fposmod(n * 0.3247, 1.0))
+			var w := width * (0.8 + 0.5 * fposmod(n * 0.3247, 1.0)) * (1.65 if far else 1.0)
 			var knee := foot + dir * reach * 0.38 + Vector3.UP * h * 0.6
 			var tip := foot + dir * reach + Vector3.UP * h * (1.0 if n >= arched else 0.92)
 			var n_low := (-dir * 0.3 + Vector3.UP * 0.95).normalized()
@@ -421,8 +459,8 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 			var top := foot + dir * 0.12 + Vector3.UP * h * 1.12
 			# 16.1: метёлка узкая и длинная — вблизи колос, а не жёлтый ромб
 			var head_top := top + dir * 0.08 + Vector3.UP * 0.24
-			var sw := side * 0.007
-			var hw := side * (0.018 if width < 0.05 else 0.03)
+			var sw := side * (0.011 if far else 0.007)
+			var hw := side * (0.028 if far else 0.018)
 			var n_up := (side * 0.3 + Vector3.UP * 0.9).normalized()
 			var hc := head_color * (0.9 + 0.2 * fposmod(n * 0.4142, 1.0))
 			for v: Array in [[foot - sw, 0.0, base_c], [foot + sw, 0.0, base_c], [top, 0.88, mid_c],
@@ -437,17 +475,19 @@ static func _stand(arched: int, spears: int, heads: int, radius: float, h_min: f
 
 
 ## 16.0: пятно лугового разнотравья ~1,3 м: розетка листьев, стебли и соцветия четырёх видов
-## (ромашка, лютик, колокольчик-шпорник, зонтичное). far — только стебли и соцветия.
+## (ромашка, лютик, колокольчик-шпорник, зонтичное). far — более редкие листья и соцветия.
 static func _forb_patch(far: bool) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var leaf_c := Color(0.30, 0.50, 0.21)
 	var stem_c := Color(0.33, 0.50, 0.22)
-	var leaves := 0 if far else 8
+	var leaves := 8
 	for l in leaves:
+		if far and l % 2 != 0:
+			continue
 		var a := l * 2.39996
 		var dir := Vector3(cos(a), 0.0, sin(a))
-		var side := Vector3(-dir.z, 0.0, dir.x) * 0.05
+		var side := Vector3(-dir.z, 0.0, dir.x) * (0.075 if far else 0.05)
 		var foot := dir * (0.1 + 0.45 * fposmod(l * 0.618034, 1.0))
 		var tip := foot + dir * 0.22 + Vector3.UP * (0.2 + 0.12 * fposmod(l * 0.3819, 1.0))
 		var mid := foot.lerp(tip, 0.5) + Vector3.UP * 0.05
@@ -458,8 +498,10 @@ static func _forb_patch(far: bool) -> ArrayMesh:
 			st.set_uv(Vector2(float(l) / 24.0, v[1]))
 			st.add_vertex(v[0])
 	var palette := [Color(0.97, 0.96, 0.92), Color(0.98, 0.84, 0.22), Color(0.56, 0.42, 0.86), Color(0.95, 0.93, 0.85), Color(0.86, 0.34, 0.52)]
-	var count := 4 if far else 11
+	var count := 11
 	for k in count:
+		if far and k % 3 == 1:
+			continue
 		var a := k * 2.39996 + 1.1
 		var dir := Vector3(cos(a), 0.0, sin(a))
 		var side := Vector3(-dir.z, 0.0, dir.x)
@@ -503,16 +545,18 @@ static func _forb_patch(far: bool) -> ArrayMesh:
 
 
 ## 16.0: осока с рогозом у воды: жёсткие прямые листья тёмно-сизого тона, три початка.
-static func _sedge() -> ArrayMesh:
+static func _sedge(far := false) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
 	var green := Color(0.34, 0.46, 0.25)
 	var leaves := 18
 	for n in leaves:
+		if far and n % 2 != 0:
+			continue
 		var a := n * 2.39996
 		var foot := Vector3(cos(a), 0.0, sin(a)) * 0.32 * sqrt(fposmod(0.15 + n * 0.618034, 1.0))
 		var dir := Vector3(cos(a + 0.5), 0.0, sin(a + 0.5))
-		var side := Vector3(-dir.z, 0.0, dir.x) * 0.022
+		var side := Vector3(-dir.z, 0.0, dir.x) * (0.036 if far else 0.022)
 		var h := 0.75 + 0.6 * fposmod(n * 0.381966, 1.0)
 		var lean := 0.12 + 0.22 * fposmod(n * 0.5698, 1.0)
 		var mid := foot + dir * lean * 0.35 + Vector3.UP * h * 0.6
@@ -540,7 +584,7 @@ static func _sedge() -> ArrayMesh:
 		# 16.1: початок тоньше и короче — вблизи не «кирпич»
 		var brown := Color(0.44, 0.31, 0.19)
 		var low := top - Vector3.UP * 0.15
-		for s in 4:
+		for s in (2 if far else 4):
 			var d0 := Vector3(cos(s * TAU / 4.0), 0.0, sin(s * TAU / 4.0)) * 0.018
 			var d1 := Vector3(cos((s + 1) * TAU / 4.0), 0.0, sin((s + 1) * TAU / 4.0)) * 0.018
 			for v: Vector3 in [low + d0, low + d1, top + d1, low + d0, top + d1, top + d0]:
