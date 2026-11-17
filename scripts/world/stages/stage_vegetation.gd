@@ -353,13 +353,18 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				dens /= 1.0 + (sl - STEEP) * 1.5
 			# Горная сосна (стланик): естественные куртины по горным склонам, предгорьям и переходной зоне к вершинам (не на скальных стенах и снегу).
 			var mugo_belt := _ss(0.18, 0.28, e) * (1.0 - _ss(0.38, 0.46, e)) * (1.0 - _ss(0.58, 0.78, sl)) * _ss(-0.25, 0.25, fv)
-			if mugo_belt > 0.0 and (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.ROCK or bi == Biomes.TUNDRA):
-				dens = maxf(dens, mugo_belt * 0.42)
+			# 17.11.2026: стланик дополняет древостой, а не вытесняет его: прежняя густота остаётся прежним видам,
+			# а прибавка до густоты пояса — только стланик (доля проверки rng выше mugo_from).
+			var mugo_from := INF
+			if mugo_belt > 0.0 and mugo_belt * 0.42 > dens and (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.ROCK or bi == Biomes.TUNDRA):
+				mugo_from = dens * 0.6
+				dens = mugo_belt * 0.42
 			# клетка целиком под полотном широкой дороги (полудиагональ клетки 2,83 м)
 			if has_path and dist_path[i] < -3.0:
 				continue
 			if has_village and village[i] != 0:
 				dens *= 0.08
+				mugo_from *= 0.08
 			if bi == Biomes.GRASS:
 				# Рощи на лугах продолжают поле древостоя соседнего леса.
 				var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
@@ -370,13 +375,15 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 			var community_moist := -1.0
 			# Числа rng на объект: проверка, x, y, вид, вариант, масштаб
 			for k in 2:
-				if rng.next_float() < dens * 0.6:
+				var roll := rng.next_float()
+				if roll < dens * 0.6:
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
 					if community_moist < 0.0:
 						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
-					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
+					var r_kind := rng.next_float()
+					var kind := Biomes.T_MUGO if roll >= mugo_from else _kind(bi, kinds, r_kind, e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
@@ -542,8 +549,9 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 	var r_sub := fposmod(r * 17.37, 1.0)
 	var r_rowan := fposmod(r * 23.17, 1.0)
 	if (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TUNDRA) and sl < 0.72 and (e > 0.20 or (e > 0.14 and (sl > 0.25 or exposed > 0.22))):
-		var mugo_share := clampf(_ss(0.20, 0.34, e) * 0.55 + _ss(0.14, 0.26, e) * maxf(_ss(0.22, 0.52, sl), exposed) * 0.45, 0.0, 0.75)
-		if mugo_share > 0.08 and r_sub < mugo_share:
+		# Примесь стланика в прежнем древостое — до 10 % (основную часть даёт прибавка густоты пояса в place_chunk).
+		var mugo_share := minf(0.10, (_ss(0.20, 0.34, e) * 0.55 + _ss(0.14, 0.26, e) * maxf(_ss(0.22, 0.52, sl), exposed) * 0.45) * 0.14)
+		if mugo_share > 0.011 and r_sub < mugo_share:
 			return Biomes.T_MUGO
 	if (bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TAIGA) and m < 0.58 and r < 0.28 * _ss(0.24, 0.45, e):
 		return Biomes.T_BUSH

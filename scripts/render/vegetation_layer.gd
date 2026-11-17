@@ -66,6 +66,10 @@ var _sod_entry := -1
 var mid_grass := 1.0 # множитель доли дерновин (GameSettings.MID_GRASS), 0 — слоя нет
 ## 16.0: кусты и подрост переходят на дальнюю форму позже мелочи (крупнее, заметнее)
 const WOODY_FAR_FORM := 1.6
+const HAZEL_CORE := 0.4 # 17.11.2026: доля ширины кроны лещины, которую занимает пучок стволов
+const FORM_BAND := 0.25 # 17.11.2026: полоса смены формы в долях границы (пиксели делятся сеткой порогов)
+const FORM_SLACK := StreamPolicy.REFILL_STEP # м: запас пары форм на путь игрока до следующего снимка
+static var form_twins := true # false — «было» (meadow_look --no-twins): форма по центру раскладки, без пар
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
 ## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
 ## поэтому их число растёт как логарифм дальности, а не как площадь круга (своя простая LOD-ступень).
@@ -439,6 +443,10 @@ func _apply_fade() -> void:
 		mat.set_shader_parameter("thin_spread", GROUP_SPREAD if entry.group else 0.0)
 		if kind == _sod_entry:
 			mat.set_shader_parameter("near_fade", Vector2(SOD_FROM * flora.detail, SOD_BAND))
+		if _far_of.has(entry.base) and (kind == entry.base or kind == _far_of[entry.base]):
+			# 17.11.2026: пара ближняя/дальняя форма делит пиксели по расстоянию до игрока (1 — ближняя, 2 — дальняя)
+			var switch := _form_switch(entry.base)
+			mat.set_shader_parameter("form_switch", Vector3(switch.x, switch.y, 1.0 if kind == entry.base else 2.0))
 		if not entry.detail.is_empty():
 			mat.set_shader_parameter("detail_full", entry.detail[0] * flora.detail)
 			mat.set_shader_parameter("detail_far", entry.detail[1] * flora.detail)
@@ -2036,7 +2044,10 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	for weight in weights:
 		total += weight
 	# Пятна по 12 м и случайные пропуски; соседние клетки связаны без нового шума.
-	var density := minf(1.0, (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) * (1.0 - 0.65 * surface.a))
+	# 17.11.2026: лещина дополняет подлесок, а не вытесняет: густота растёт на её долю весов, прежние формы
+	# сохраняют своё число (раньше её веса отнимали у кустов и подроста до трети мест)
+	var hazel_w := weights[Understory.HAZEL] + weights[Understory.HAZEL_TALL]
+	var density := minf(1.0, (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) * (1.0 - 0.65 * surface.a) 		* total / maxf(total - hazel_w, 0.0001))
 	var cluster := smoothstep(0.32, 0.76, patch)
 	var woody_keep := minf(1.0, lerpf(0.55, 0.96, cluster) + ch[Understory.THICKET] * 0.12)
 	var ground_keep := lerpf(0.7, 0.96, cluster)
@@ -2181,6 +2192,10 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	weights[Understory.FIREWEED] *= bloom * 3.0 * (1.0 - steppe)
 	for weight in weights:
 		total += weight
+	# 17.11.2026: лещина дополняет кусты и травы открытого места (как в лесу): густота растёт на её долю
+	var hazel_w := weights[Understory.HAZEL] + weights[Understory.HAZEL_TALL]
+	if hazel_w > 0.0:
+		density = minf(1.0, density * total / maxf(total - hazel_w, 0.0001))
 	# 12.11.2026: конец лета — травы и кусты открытых мест зрелые: чуть теплее и глуше и на сочном месте,
 	# на сухом — соломенные. В тайге, джунглях и на болоте сдвиг слабее.
 	var ripe := 0.35 if bi in [Biomes.TAIGA, Biomes.JUNGLE, Biomes.SWAMP] else 1.0
@@ -2451,6 +2466,36 @@ func _fill_road(px: float, pz: float) -> void:
 				counts[label] = counts.get(label, 0) + 1
 
 
+## 17.11.2026: граница смены ближней формы на упрощённую (м от игрока) и полоса, в которой пиксели делятся между ними.
+## Кусты и подрост меняются дальше (WOODY_FAR_FORM).
+func _form_switch(kind: int) -> Vector2:
+	var r := far_form_r * (WOODY_FAR_FORM if Placement.priority(kind) == 1 else 1.0)
+	return Vector2(r, r * FORM_BAND)
+
+
+## Полоса раскладки парой: дальняя форма нужна дальше x от какого-то места капсулы снимка, ближняя — ближе y.
+## Запас FORM_SLACK — путь игрока до следующего снимка сверх упреждения.
+func _form_band(kind: int) -> Vector2:
+	var s := _form_switch(kind)
+	return Vector2(s.x - s.y * 0.5 - FORM_SLACK, s.x + s.y * 0.5 + FORM_SLACK)
+
+
+## Вторая форма того же растения: те же строки буфера (без проверок места — их прошла первая), обе помечены
+## INSTANCE_CUSTOM.z + 2 — шейдер делит между ними пиксели по расстоянию (form_switch). Нет места в буфере — одна форма.
+func _put_twin(other: Dictionary, entry: Dictionary, offset: int, xf: Transform3D, scale: float) -> void:
+	if other.count >= other.cap:
+		return
+	var at: int = other.count * STRIDE
+	for c in 19:
+		other.buf[at + c] = entry.buf[offset + c]
+	other.buf[at + 18] += 2.0
+	entry.buf[offset + 18] += 2.0
+	var render_box: AABB = (xf * (other.mesh_box as AABB)).grow(other.margin * scale)
+	other.low = other.low.min(render_box.position)
+	other.high = other.high.max(render_box.end)
+	other.count += 1
+
+
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло.
 ## stretch — длина вдоль локальной X в долях масштаба (бревно, ветка, корень), sink — насколько утоплено в грунт, м
 func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1, squash := 1.0) -> int:
@@ -2461,10 +2506,23 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	kind = entry.base
 	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
 	# 16.0: граница — по качеству растительности (far_form_r)
-	var woody := Placement.priority(kind) == 1
-	var switch_r := far_form_r * (WOODY_FAR_FORM if woody else 1.0)
-	if group == kind and _far_of.has(kind) and not (legacy_open and woody) and Vector2(x, z).distance_squared_to(_fill_at) > switch_r * switch_r:
-		entry = understory[_far_of[kind]]
+	# 17.11.2026: форму видимого растения выбирает шейдер по нынешнему расстоянию до игрока (как LOD деревьев), а не
+	# раскладка по её центру: снимок готовится секунды, и за это время упрощённые формы оказывались у самых колёс.
+	# Растение у границы смены формы (с запасом на путь игрока до следующего снимка) кладётся парой — ближняя и дальняя
+	# формы (twin); вне этой полосы — одной формой, как прежде.
+	var twin := -1
+	if group == kind and _far_of.has(kind) and not (legacy_open and Placement.priority(kind) == 1):
+		var band := _form_band(kind)
+		var at := Vector2(x, z)
+		var near_need := StreamPolicy.distance_to_coverage(at, _fill_at, _fill_lead) < band.y if form_twins else at.distance_to(_fill_at) <= _form_switch(kind).x
+		var far_need := maxf(at.distance_to(_fill_at), at.distance_to(_fill_at + _fill_lead)) > band.x
+		if not near_need:
+			entry = understory[_far_of[kind]]
+		elif far_need and form_twins:
+			twin = _far_of[kind]
+	if twin >= 0 and entry.count >= entry.cap:
+		entry = understory[twin] # буфер ближних форм полон: как прежде, одна упрощённая форма
+		twin = -1
 	if entry.count >= entry.cap:
 		fill_capped += 1
 		return RoadPlacement.CAPACITY
@@ -2536,8 +2594,15 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.low = entry.low.min(render_box.position)
 	entry.high = entry.high.max(render_box.end)
 	entry.count += 1
+	if twin >= 0:
+		_put_twin(understory[twin], entry, offset, xf, scale)
 	# The roots of one tree fan out from a shared base. Their boxes may overlap.
-	if (on_road and floor_kind != Floor.ROOT_SPAN) or Placement.priority(kind) < 2:
+	if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
+		# 17.11.2026: лещина занимает место пучком стволов, а не всей кроной (до 5 м): под краем кроны растут
+		# трава и куртины, иначе каждый куст вычищал под собой луг
+		var core := Vector3(box.size.x * HAZEL_CORE, box.size.y, box.size.z * HAZEL_CORE)
+		placement.occupy(AABB(box.get_center() - core * 0.5, core))
+	elif (on_road and floor_kind != Floor.ROOT_SPAN) or Placement.priority(kind) < 2:
 		placement.occupy(box.grow(0.03))
 	if StreamPolicy.distance_to_coverage(Vector2(x, z), _fill_at, _fill_lead) > OBSTACLE_R:
 		return RoadPlacement.VISUAL

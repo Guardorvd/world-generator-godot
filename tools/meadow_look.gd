@@ -8,6 +8,7 @@ extends SceneTree
 ##   --tag <имя>     подпись снимков и замера (.godot/meadow_look/<tag>_*.png, <tag>.json)
 ##   --compose a,b   склеить снимки двух прогонов попарно (было | стало), без сцены
 ##   --no-perf       только снимки
+##   --no-twins      «было» для смены форм подлеска: форма по центру раскладки, без пар ближняя/дальняя
 ##   --base-grass    «было» для дернины: VegetationLayer без ближнего низкого покрова (A/B)
 
 const Dev := preload("res://tools/control/control.gd")
@@ -59,6 +60,7 @@ func _initialize() -> void:
 func setup() -> void:
 	tag = Dev.arg("tag", "after")
 	VegetationLayer.legacy_open = "--legacy" in OS.get_cmdline_user_args()
+	VegetationLayer.form_twins = not "--no-twins" in OS.get_cmdline_user_args()
 	RenderingServer.viewport_set_measure_render_time(root.get_viewport_rid(), true)
 	Engine.max_fps = 0
 	DisplayServer.window_set_vsync_mode(DisplayServer.VSYNC_DISABLED)
@@ -194,6 +196,7 @@ func _process(delta: float) -> bool:
 			results.carpet_lead_m = veg.carpet.stream.lead().length()
 		results.carpet_near_10m_moving = near_n
 		results.coverage_lag_m = veg.coverage_lag(Vector2(x, z))
+		results.far_forms_near = _far_forms_near(Vector2(x, z))
 		root.get_texture().get_image().save_png(ProjectSettings.globalize_path(OUT).path_join("%s_moving.png" % tag))
 	if elapsed < 9.0:
 		return false
@@ -222,6 +225,27 @@ func _finish() -> bool:
 	veg.queue_free()
 	quit()
 	return true
+
+
+## 17.11.2026: упрощённые (дальние) формы, которые рисуются ближе границы смены формы от нынешнего места игрока.
+## Пара «ближняя + дальняя» (INSTANCE_CUSTOM.z >= 1.5) не считается: её форму выбирает шейдер по расстоянию.
+func _far_forms_near(at: Vector2) -> Dictionary:
+	var out := {wrong = 0, twins = 0}
+	for form: int in veg._far_of:
+		var e: Dictionary = veg.understory[veg._far_of[form]]
+		var woody := VegetationLayer.Placement.priority(form) == 1
+		var r := veg.far_form_r * (VegetationLayer.WOODY_FAR_FORM if woody else 1.0) * 0.85
+		var data: PackedFloat32Array = e.mm.buffer
+		var n := mini(e.mm.visible_instance_count, e.mm.instance_count)
+		for i in n:
+			var o := i * VegetationLayer.STRIDE
+			if data[o + 19] < 0.0: continue # уходит
+			if Vector2(data[o + 3], data[o + 11]).distance_to(at) >= r: continue
+			if data[o + 18] >= 1.5:
+				out.twins += 1
+			else:
+				out.wrong += 1
+	return out
 
 
 func _mean(a: PackedFloat32Array) -> float:

@@ -186,6 +186,8 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 		var row: Array = Understory.COMMUNITY[c]
 		for f in Understory.COUNT:
 			total += com[c] * row[f]
+		# 17.11.2026: лещина — прибавка к густоте (VegetationLayer._fill_open_cell): доли считаются без её весов
+		total -= com[c] * (row[Understory.HAZEL] + row[Understory.HAZEL_TALL])
 		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE] + row[Understory.HAZEL])
 		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE] + row[Understory.HAZEL_TALL])
 		herb += com[c] * (row[Understory.MEADOW] + row[Understory.HIGH_GRASS] + row[Understory.SEDGE] + row[Understory.STIPA] + row[Understory.FORBS] * 0.6)

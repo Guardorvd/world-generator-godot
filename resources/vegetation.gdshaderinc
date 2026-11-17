@@ -41,6 +41,10 @@ uniform float thin_grow = 0.0;
 uniform float thin_spread = 0.0; // 17.11.2026: 0 — как прежде; иначе наибольшее раздвижение групповой формы в стороны
 // 17.11.2026: ближняя граница (x — от, y — полоса, м; y = 0 — нет): дерновины средних дистанций не видны у игрока
 uniform vec2 near_fade = vec2(0.0);
+// 17.11.2026: смена ближней формы подлеска на упрощённую по нынешнему расстоянию до игрока (x — граница, y — полоса, м;
+// z: 0 — нет, 1 — ближняя форма, 2 — упрощённая). Только у пар (INSTANCE_CUSTOM.z >= 1.5, VegetationLayer._put_twin):
+// пиксель берёт ровно одну форму той же сеткой порогов, что уровни LOD деревьев.
+uniform vec3 form_switch = vec3(0.0);
 // Только общий меш травы: лёгкий индивидуальный наклон каждого листа.
 uniform bool grass_variation = false;
 // 14.11.2026: дернина расступается у игрока (veg_center): м отклонения кончиков в полуметре от него, 0 — нет.
@@ -89,11 +93,13 @@ void vertex() {
 	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
 #endif
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
+	bool form_twin = form_switch.z > 0.5 && INSTANCE_CUSTOM.z >= 1.5;
+	float custom_z = form_twin ? INSTANCE_CUSTOM.z - 2.0 : INSTANCE_CUSTOM.z;
 	if (grass_variation) {
 		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;
 		float bend = UV.y * (0.35 + 0.65 * UV.y);
-		VERTEX.xz = VERTEX.xz * mix(1.16, 0.92, INSTANCE_CUSTOM.z) + vec2(cos(seed), sin(seed)) * (0.04 + INSTANCE_CUSTOM.z * 0.08) * bend;
-		VERTEX.y *= mix(0.84, 1.18, fract(seed * 0.381966 + INSTANCE_CUSTOM.z * 0.5));
+		VERTEX.xz = VERTEX.xz * mix(1.16, 0.92, custom_z) + vec2(cos(seed), sin(seed)) * (0.04 + custom_z * 0.08) * bend;
+		VERTEX.y *= mix(0.84, 1.18, fract(seed * 0.381966 + custom_z * 0.5));
 	}
 	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
@@ -123,6 +129,10 @@ void vertex() {
 		float s1 = smoothstep(LOD1_D - LOD1_BAND * 0.5, LOD1_D + LOD1_BAND * 0.5, dist);
 		float s2 = smoothstep(LOD2_D - LOD2_BAND * 0.5, LOD2_D + LOD2_BAND * 0.5, dist);
 		v_lod = lod_level == 0 ? vec2(s1, 2.0) : (lod_level == 1 ? vec2(s2, s1) : vec2(0.0, s2));
+	}
+	if (form_twin) {
+		float s = smoothstep(form_switch.x - form_switch.y * 0.5, form_switch.x + form_switch.y * 0.5, dist);
+		v_lod = form_switch.z < 1.5 ? vec2(s, 2.0) : vec2(0.0, s);
 	}
 	if (thin_full > 0.0) {
 		float keep = min(1.0, thin_full * thin_full / max(dist * dist, 1.0));
