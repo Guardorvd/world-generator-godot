@@ -8,6 +8,7 @@ const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
 const OUTCROP_CHANCE := 0.12
 const HILL_OUTCROP_CHANCE := 0.065
+const HILL_OUTCROP_SLOPE := 0.28
 ## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
 const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
 const FIELD_HALO := 15 # соседний источник массива, его полный круг просвета и выборки посадки
@@ -39,8 +40,8 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 	var rivers: PackedByteArray = f.get("river", PackedByteArray())
 	var water: PackedByteArray = StageVegetation._TABLES.water
 	var moist: PackedFloat32Array = f.get("moist", PackedFloat32Array())
-	var rock: PackedByteArray=f.get("rock",PackedByteArray())
-	if rock.is_empty(): rock=Surface.field(elev,slope,f.get("moist",PackedFloat32Array()))
+	var rock: PackedByteArray = f.get("rock", PackedByteArray())
+	if rock.is_empty(): rock = Surface.field(elev, slope, moist)
 	var rows := elev.size()/stride
 	# Несколько хешей на чанк вместо нового шума на каждую клетку.
 	var px0 := floori(float(x0) / PATCH_CELLS)
@@ -57,6 +58,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 		if big[at] >= x0 and big[at] < x1 and big[at + 1] >= y0 and big[at + 1] < y1:
 			store.add(big[at], big[at + 1], Biomes.T_ROCK, int(big[at + 2]), big[at + 3])
 	for y in range(y0, y1):
+		var gy := float(y) / PATCH_CELLS
+		var ty := smoothstep(0.0, 1.0, gy - floor(gy))
+		var patch_row := (floori(gy) - py0) * pw
 		for x in range(x0, x1):
 			var i := (y - oy) * stride + x - ox
 			var bi := biome[i]
@@ -67,31 +71,35 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			# 15.0: dist_path — просвет (м) до кромки полотна с запасом пути (StageVegetation.path_clearance)
 			var dp: float = paths[i] if not paths.is_empty() else 100.0
 			if dp < 0.0: continue
-			var mountain := smoothstep(0.12, 0.36, elev[i])
-			var exposed := float(rock[i])/255.0
+			var outcrop_site := dp > 10.0 and dw[i] >= 1.5 and (sl > HILL_OUTCROP_SLOPE or (bi == Biomes.ROCK and sl > 0.12))
+			# Отбрасываем пустые клетки до выборки месторождения и проверки массива.
+			var hc := WGRandom.hash_cell(seed_num, x, y, 37)
+			var roll := float(hc) / 4294967296.0
+			var boulder_candidate := sl <= 0.85 and roll < MAX_CHANCE
+			if not boulder_candidate and not outcrop_site: continue
+			# В теле массива ни выходов, ни валунов.
+			if not big.is_empty() and RockMassif.covers(big, x + 0.5, y + 0.5, 0.0): continue
+			var e := elev[i]
+			var mountain := smoothstep(0.12, 0.36, e)
+			var exposed := float(rock[i]) / 255.0
 			var gx := float(x) / PATCH_CELLS
-			var gy := float(y) / PATCH_CELLS
 			var tx := smoothstep(0.0, 1.0, gx - floor(gx))
-			var ty := smoothstep(0.0, 1.0, gy - floor(gy))
-			var pi := (floori(gy) - py0) * pw + floori(gx) - px0
+			var pi := patch_row + floori(gx) - px0
 			var deposit := lerpf(lerpf(patches[pi], patches[pi + 1], tx), lerpf(patches[pi + pw], patches[pi + pw + 1], tx), ty)
 			# Коренная порода выходит там, где склон открыт и крут; на пологих скалах — редкие останцы.
 			# Места выходов собраны в те же пятна, что россыпи: скальный пояс, а не ровный посев.
-			# В теле массива ни выходов, ни валунов: они бы утонули в нём или торчали из его граней.
-			if not big.is_empty() and RockMassif.covers(big, x + 0.5, y + 0.5, 0.0): continue
-			if dp > 10.0 and dw[i] >= 1.5:
+			if outcrop_site:
 				var steep := smoothstep(0.45, 0.95, sl)
 				var oc := 0.0
 				if mountain > 0.0 and exposed > 0.3:
 					var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
 					oc = OUTCROP_CHANCE * smoothstep(0.3, 0.75, exposed) * mountain * maxf(steep, tor) * lerpf(0.04, 1.8, smoothstep(0.3, 0.85, deposit))
-				var e := elev[i]
-				if e > 0.035 and e < 0.15 and sl > 0.28 and deposit > 0.55 and not moist.is_empty() and moist[i] < 0.62:
+				if e > 0.035 and e < 0.15 and sl > HILL_OUTCROP_SLOPE and deposit > 0.55 and not moist.is_empty() and moist[i] < 0.62:
 					var convex := local_convexity(elev, i, stride)
 					var hill := smoothstep(0.035, 0.07, e) * (1.0 - smoothstep(0.11, 0.15, e))
 					var dry := 1.0 - smoothstep(0.42, 0.62, moist[i])
 					var shoulder_chance := HILL_OUTCROP_CHANCE * hill * dry * smoothstep(0.15, 0.9, convex) \
-						* smoothstep(0.28, 0.62, sl) * smoothstep(0.55, 0.84, deposit)
+						* smoothstep(HILL_OUTCROP_SLOPE, 0.62, sl) * smoothstep(0.55, 0.84, deposit)
 					oc = maxf(oc, shoulder_chance)
 				var ho := WGRandom.hash_cell(seed_num, x, y, 38) if oc > 0.0 else 0
 				if oc > 0.0 and float(ho) / 4294967296.0 < oc:
@@ -107,11 +115,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 							and (rivers.is_empty() or clear_path(rivers, ox, oy, stride, ocx, ocy, reach)):
 						store.add(ocx, ocy, Biomes.T_ROCK, otint, os)
 						continue
-			if sl > 0.85: continue
-			# Верхняя граница вероятности отсекает дорогие расчёты и RNG у половины клеток.
-			var hc := WGRandom.hash_cell(seed_num, x, y, 37)
-			var roll := float(hc) / 4294967296.0
-			if roll >= MAX_CHANCE: continue
+			if not boulder_candidate: continue
 			var patch := smoothstep(-0.15, 0.5, stony[i])
 			# Камни у обочины — там, где им есть откуда взяться (порода, горы); у равнинной дороги их мало
 			# The road is a clearance boundary, never a source of geology.

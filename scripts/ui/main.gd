@@ -1110,22 +1110,28 @@ func start_game(seed_text: String, size: int = WorldGenerator.START_SIZE, slot :
 	_show("loading")
 	gen_thread = Thread.new()
 	var start_at := Vector2(_pending_save.player.x, _pending_save.player.z) if not _pending_save.is_empty() else Vector2.INF
-	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled))
+	gen_thread.start(_generate_job.bind(seed_text, size, start_at, allow_bundled, Time.get_ticks_usec()))
 
 
-func _generate_job(seed_text: String, size: int, start_at := Vector2.INF, allow_bundled := true) -> void:
+func _generate_job(seed_text: String, size: int, start_at: Vector2, allow_bundled: bool, dispatched_us: int) -> void:
+	var entered_us := Time.get_ticks_usec()
 	var cache := GameContext.scope.cache
 	if cache.enabled:
 		cache.keep_only(GameContext.scope.settings.keep_seeds())
 		if allow_bundled and not QuickTrails.active() and size == WorldGenerator.START_SIZE:
 			cache.install_bundled(WorldCache.BUNDLED, seed_text)
+	var before_loader_us := Time.get_ticks_usec()
 	var loaded := WorldLoader.load_world(seed_text, size, func(p: float, label: String) -> void:
 		_set_progress.call_deferred(p, label), null, start_at)
 	if loaded == null:
 		# ошибка скрипта оборвала загрузку: вернуть меню, а не держать экран загрузки вечно
 		_on_world_failed.call_deferred()
 		return
-	loaded.timings.ready_queued_us = Time.get_ticks_usec()
+	var ready_us := Time.get_ticks_usec()
+	loaded.timings.thread_dispatch_ms = (entered_us - dispatched_us) / 1000.0
+	loaded.timings.before_loader_ms = (before_loader_us - entered_us) / 1000.0
+	loaded.timings.loader_call_ms = (ready_us - before_loader_us) / 1000.0
+	loaded.timings.ready_queued_us = ready_us
 	_on_world_ready.call_deferred(loaded)
 
 
@@ -1200,6 +1206,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 	if _pending_save.is_empty():
 		_save_current()
 	loaded.timings.initial_save_ms = (Time.get_ticks_usec() - phase_started) / 1000.0
+	loaded.timings.published_us = Time.get_ticks_usec()
 
 
 func _toggle_pause() -> void:

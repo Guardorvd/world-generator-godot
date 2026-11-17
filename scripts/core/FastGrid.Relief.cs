@@ -12,6 +12,7 @@ public partial class FastGrid
 
 	/// <summary>Негорный рельеф: копия StageRelief.SEA_RAW, CHARACTER, PLAIN_LIFT, PLAIN_HILLS, HILL_AMP, FOOTHILLS, MASK_EDGE, VALLEY, VALLEY_WIDTH, VALLEY_DEPTH.</summary>
 	private const double SeaRaw = 0.067;
+	private const double BottomRaw = -0.7; // StageRelief.BOTTOM_RAW
 	private const double Character = 520.0;
 	private const double PlainLift = 0.3;
 	private const double PlainHills = 0.15;
@@ -26,12 +27,32 @@ public partial class FastGrid
 	private const double ValleyDepth = 0.06;
 
 	/// <summary>
-	/// Макрорельеф до уровня моря: копия StageRelief.raw_at по прямоугольнику клеток W × H с углом (x0, y0).
+	/// Рельеф прямоугольника W × H с углом (x0, y0). Нулевая полоса microPad запрашивает
+	/// сырые высоты, положительная — готовую поверхность с рябью.
 	/// Шумы — perm в порядке warpX, warpY, cont, mask, ridge, hill; (mx, my) — сдвиг шума материков.
 	/// </summary>
-	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel, bool detail, double heightScale, double tile)
+	public float[] ReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel, bool detail, double heightScale, double tile, int[] microNoise, int microPad)
 	{
 		if (W <= 0 || H <= 0) return Array.Empty<float>();
+		int stride = W + 2 * microPad;
+		int rows = H + 2 * microPad;
+		var heights = RawReliefField(warpX, warpY, cont, mask, ridge, hill, mx, my,
+			x0 - microPad, y0 - microPad, stride, rows, mountainScale, mountainBias, mountainHeight, foothillSpread, parallel, detail, heightScale, tile);
+		if (microPad == 0) return heights;
+		void NormalizeRow(int y)
+		{
+			for (int i = y * stride, end = i + stride; i < end; i++)
+			{
+				double v = heights[i];
+				heights[i] = (float)(v >= SeaRaw ? Math.Min(Math.Pow((v - SeaRaw) / (TopRaw - SeaRaw), 1.25), 1.4) : (v - SeaRaw) / (SeaRaw - BottomRaw));
+			}
+		}
+		RunRows(rows, parallel, NormalizeRow);
+		return ReliefMicro(heights, microNoise, x0, y0, W, H, microPad, heightScale, tile, parallel);
+	}
+
+	private static float[] RawReliefField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel, bool detail, double heightScale, double tile)
+	{
 		if (!detail)
 			return BaseField(warpX, warpY, cont, mask, ridge, hill, mx, my, x0, y0, W, H, mountainScale, mountainBias, mountainHeight, foothillSpread, parallel);
 		// Слой детализации гор (GEO 9): основа с полосой DetailPad, затем склоны по соседям.
@@ -66,7 +87,7 @@ public partial class FastGrid
 	private const double TopRaw = 1.05; // StageRelief.TOP_RAW
 
 	/// <summary>Копия StageRelief.add_micro. Вход — нормированные высоты с полосой соседей.</summary>
-	public float[] ReliefMicro(float[] heights, int[] noise, int x0, int y0, int width, int height, int pad, double heightScale, double tile, bool parallel)
+	private static float[] ReliefMicro(float[] heights, int[] noise, int x0, int y0, int width, int height, int pad, double heightScale, double tile, bool parallel)
 	{
 		int stride = width + 2 * pad;
 		int d = pad * stride;
@@ -80,20 +101,28 @@ public partial class FastGrid
 				double h = heights[k];
 				if (h > 0.0)
 				{
-					double gx = (double)heights[k + 2] - heights[k - 2];
-					double gy = (double)heights[k + 2 * stride] - heights[k - 2 * stride];
-					double grade = Math.Sqrt(gx * gx + gy * gy) * heightScale / (4.0 * tile);
 					double around = ((double)heights[k - pad] + heights[k + pad] + heights[k - d] + heights[k + d]) * 0.25;
 					double hollow = (around - h) * heightScale;
-					double flank = ReliefSmooth(0.02, 0.16, grade);
-					double shoulder = ReliefSmooth(0.25, 1.5, -hollow);
-					double shelter = ReliefSmooth(0.25, 1.5, hollow) * (1.0 - ReliefSmooth(0.12, 0.35, grade));
-					double terrain = 0.06 + 0.94 * Math.Max(flank, shoulder) * (1.0 - 0.9 * shelter);
-					int x = x0 + i;
-					double patch = Noise(noise, x / 90.0 + 83.7, y / 90.0 - 41.3);
-					double varied = terrain * (0.35 + 0.65 * ReliefSmooth(-0.55, 0.15, patch));
 					double lowland = 1.0 - ReliefSmooth(32.0, 68.0, h * heightScale);
-					double strength = 1.0 + (varied - 1.0) * Math.Max(lowland, shelter);
+					int x = x0 + i;
+					double strength = 1.0;
+					if (lowland > 0.0 || hollow > 0.25)
+					{
+						double gx = (double)heights[k + 2] - heights[k - 2];
+						double gy = (double)heights[k + 2 * stride] - heights[k - 2 * stride];
+						double grade = Math.Sqrt(gx * gx + gy * gy) * heightScale / (4.0 * tile);
+						double shelter = ReliefSmooth(0.25, 1.5, hollow) * (1.0 - ReliefSmooth(0.12, 0.35, grade));
+						double weight = Math.Max(lowland, shelter);
+						if (weight > 0.0)
+						{
+							double flank = ReliefSmooth(0.02, 0.16, grade);
+							double shoulder = ReliefSmooth(0.25, 1.5, -hollow);
+							double terrain = 0.06 + 0.94 * Math.Max(flank, shoulder) * (1.0 - 0.9 * shelter);
+							double patch = Noise(noise, x / 90.0 + 83.7, y / 90.0 - 41.3);
+							double varied = terrain * (0.35 + 0.65 * ReliefSmooth(-0.55, 0.15, patch));
+							strength = 1.0 + (varied - 1.0) * weight;
+						}
+					}
 					h = Math.Max(1e-4, h + Fbm(noise, x / 9.0, y / 9.0, 2) * 0.006 * Math.Min(1.0, h * 40.0) * strength);
 				}
 				output[j * width + i] = (float)h;
@@ -202,7 +231,7 @@ public partial class FastGrid
 	}
 
 	/// <summary>Макрорельеф GEO 7 без слоя детализации (копия StageRelief._base_rows).</summary>
-	private float[] BaseField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel)
+	private static float[] BaseField(int[] warpX, int[] warpY, int[] cont, int[] mask, int[] ridge, int[] hill, double mx, double my, int x0, int y0, int W, int H, double mountainScale, double mountainBias, double mountainHeight, double foothillSpread, bool parallel)
 	{
 		var outH = new float[W * H];
 		// World parameters are constant for the whole request, not per cell.

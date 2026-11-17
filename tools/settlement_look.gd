@@ -64,7 +64,7 @@ func _run() -> void:
 			row.after = _describe(w, land)
 			if not surface_dir.is_empty():
 				RoadSurface.run(w)
-				var surface := Heightfield.base_of(w).copy()
+				var surface := Heightfield.base_of(w)
 				surface.finish_paths()
 				var heights := surface.hv.duplicate()
 				for i in heights.size(): heights[i] /= GameConfig.HS

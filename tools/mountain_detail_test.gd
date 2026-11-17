@@ -4,6 +4,7 @@ extends SceneTree
 ## отрицательные координаты, перекрытие запросов соседних кусков (швы). Метрики склонов,
 ## кривизны, высоты, береговой маски и времени. Поля для mountain_detail_look — в OUT.
 ## godot --headless --path . --script res://tools/mountain_detail_test.gd [-- --seeds "Ущелье"]
+## --same-heights --base <папка> проверяет оптимизацию побайтно по сохранённым полям off/on.
 const OUT := "res://.godot/mountain_detail"
 const SEEDS := ["Вальхейм 3", "Север-1234", "Ущелье"]
 const SIDE := 768
@@ -172,6 +173,11 @@ func run() -> void:
 	var a := OS.get_cmdline_user_args()
 	if a.has("--seeds"): seeds = a[a.find("--seeds") + 1].split(",", false)
 	var baseline := a[a.find("--base") + 1] if a.has("--base") else ""
+	var same_heights := a.has("--same-heights")
+	if same_heights and baseline.is_empty():
+		push_error("--same-heights требует --base с ранее сохранёнными полями")
+		quit(1)
+		return
 	var rows := []
 	for seed_text: String in seeds:
 		var w := world(seed_text)
@@ -221,8 +227,20 @@ func run() -> void:
 			for x in range(-p.x, 24):
 				plan_match = plan_match and heights[y * 24 + x] == w.h[(p.y + y) * w.W + p.x + x]
 		check(plan_match, "ripple overlaps the plan edge " + seed_text)
+		for cell: int in [detail_cell, low_cell]:
+			var at := Vector2i(cell % SIDE - 8, cell / SIDE - 8)
+			var native := StageRelief.height_rect(w, at.x, at.y, 16, 16, true)
+			Grid.allow_fast = false
+			var gd := StageRelief.height_rect(w, at.x, at.y, 16, 16, false)
+			Grid.allow_fast = true
+			check(native.to_byte_array() == gd.to_byte_array(), "C#/GDScript ground bytes " + seed_text + str(at))
 		for v: String in ["off", "on"]:
 			var data: Dictionary = off if v == "off" else on
+			if same_heights:
+				var ref := FileAccess.open(baseline.path_join(seed_text + "_" + v + ".bin"), FileAccess.READ)
+				var previous: Variant = ref.get_var() if ref != null else null
+				check(previous is Dictionary and previous.h.to_byte_array() == data.h.to_byte_array(),
+					"ground bytes identical to baseline " + seed_text + " " + v)
 			FileAccess.open(OUT.path_join(seed_text + "_" + v + ".bin"), FileAccess.WRITE).store_var({h=data.h, macro=data.macro})
 		var row := {seed=seed_text, off=measure(off.h, 52.0), on=measure(on.h, 52.0), off_ms=snappedf(off.ms, 1), on_ms=snappedf(on.ms, 1),
 			low_off=measure(off.h, 0.0001, 30.0), low_on=measure(on.h, 0.0001, 30.0), low_delta_m=snappedf(low_delta, 0.01),

@@ -49,6 +49,7 @@ var load_ms := {}          # из чего сложилась загрузка: 
 var phase := "menu"
 var frames := 0
 var started := 0
+var load_request_ms := 0.0
 var wait := 0
 var shots: Array = []      # {name, pos, target, hour, suffix}
 var shot := 0
@@ -285,10 +286,12 @@ func _process(delta: float) -> bool:
 				if compute_probe != null:
 					compute_before = compute_probe.CaptureMetrics()
 				started = Time.get_ticks_msec()
+				var request_started := Time.get_ticks_usec()
 				main.start_game(seed_text, size)
+				load_request_ms = (Time.get_ticks_usec() - request_started) / 1000.0
 				phase = "loading"
 		"loading":
-			if game == null or game.player == null:
+			if main.busy or game == null or game.player == null:
 				if Time.get_ticks_msec() - started > Dev.LOAD_TIMEOUT_MS:
 					printerr("Мир не загрузился за %d с" % (Dev.LOAD_TIMEOUT_MS / 1000))
 					failed = true
@@ -303,6 +306,10 @@ func _process(delta: float) -> bool:
 					managed_allocated_bytes = int(after.managed_allocated_bytes) - int(compute_before.managed_allocated_bytes)})
 			timing.load = result.load_s
 			load_ms = game.load_timings.duplicate()
+			load_ms.request_ms = load_request_ms
+			var frame_us := Time.get_ticks_usec()
+			load_ms.first_playable_frame_wait_ms = (frame_us - int(load_ms.get("published_us", frame_us))) / 1000.0
+			load_ms.erase("published_us")
 			load_ms["stored_generation_profile" if game.load_timings.get("profile_origin") == "stored_generation" else "generation_profile"] = game.world.generation_profile.duplicate()
 			game.paused = true
 			main.hud.visible = false
@@ -311,7 +318,7 @@ func _process(delta: float) -> bool:
 				game.pause_requested.disconnect(main._toggle_pause)
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 			# Вступительный облёт ведёт свою камеру: без завершения точка осмотра — кадр вступления.
-			if game._opening: game._finish_opening()
+			if game.opening_active(): game._finish_opening()
 			game.camera.fov = 70.0
 			spawn = game.camera.global_transform
 			yaw0 = game.yaw

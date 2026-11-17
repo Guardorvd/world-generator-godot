@@ -238,15 +238,31 @@ static func normalize(v: float) -> float:
 ## Нормированные высоты с рябью. Полоса вокруг запроса даёт одинаковые уклоны и
 ## ложбины в каждой клетке, включая края плана и прямоугольники лаборатории.
 static func height_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
+	return _rect(w, x0, y0, cw, ch, parallel, include_detail, true)
+
+
+## Сырой рельеф нужен стендам и пробам. Игровые высоты возвращает height_rect.
+static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
+	return _rect(w, x0, y0, cw, ch, parallel, include_detail, false)
+
+
+static func _rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool, surface: bool) -> PackedFloat32Array:
 	if cw <= 0 or ch <= 0:
 		return PackedFloat32Array()
-	var stride := cw + 2 * MICRO_PAD
-	var base := raw_rect(w, x0 - MICRO_PAD, y0 - MICRO_PAD, stride, ch + 2 * MICRO_PAD, parallel, include_detail)
-	for i in base.size():
-		base[i] = normalize(base[i])
 	var fast := Grid.fast_grid()
 	if fast != null:
-		return fast.ReliefMicro(base, w.noise.micro.perm, x0, y0, cw, ch, MICRO_PAD, GameConfig.HS, GameConfig.TILE, parallel)
+		var n := w.noise
+		var micro: PackedInt32Array = n.micro.perm if surface else PackedInt32Array()
+		var pad := MICRO_PAD if surface else 0
+		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm,
+			w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height,
+			w.foothill_spread, parallel, include_detail, GameConfig.HS, GameConfig.TILE, micro, pad)
+	if not surface:
+		return _raw_rect_gd(w, x0, y0, cw, ch, parallel, include_detail)
+	var stride := cw + 2 * MICRO_PAD
+	var base := _raw_rect_gd(w, x0 - MICRO_PAD, y0 - MICRO_PAD, stride, ch + 2 * MICRO_PAD, parallel, include_detail)
+	for i in base.size():
+		base[i] = normalize(base[i])
 	if not parallel:
 		return _micro_rows(w.noise.micro, base, x0, y0, cw, 0, ch)
 	var out := PackedFloat32Array()
@@ -274,22 +290,25 @@ static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simp
 	var h := base[k]
 	if h <= 0.0:
 		return h
-	var gx := base[k + 2] - base[k - 2]
-	var gy := base[k + 2 * stride] - base[k - 2 * stride]
-	var grade := sqrt(gx * gx + gy * gy) * GameConfig.HS / (4.0 * GameConfig.TILE)
 	var d := MICRO_PAD * stride
 	var around := (base[k - MICRO_PAD] + base[k + MICRO_PAD] + base[k - d] + base[k + d]) * 0.25
 	var hollow := (around - h) * GameConfig.HS
-	var flank := smoothstep(0.02, 0.16, grade)
-	var shoulder := smoothstep(0.25, 1.5, -hollow)
-	var shelter := smoothstep(0.25, 1.5, hollow) * (1.0 - smoothstep(0.12, 0.35, grade))
-	var terrain := 0.06 + 0.94 * maxf(flank, shoulder) * (1.0 - 0.9 * shelter)
-	var patch := noise.noise(x / 90.0 + 83.7, y / 90.0 - 41.3)
-	var varied := terrain * (0.35 + 0.65 * smoothstep(-0.55, 0.15, patch))
-	# На высоких открытых склонах оставляем прежнюю рябь. Горные ложбины с пологим
-	# дном, как и низинные, сохраняют затухание.
 	var lowland := 1.0 - smoothstep(32.0, 68.0, h * GameConfig.HS)
-	var strength := lerpf(1.0, varied, maxf(lowland, shelter))
+	var strength := 1.0
+	# Высокие открытые склоны сохраняют прежнюю рябь, без расчёта уклона и пятна.
+	if lowland > 0.0 or hollow > 0.25:
+		var gx := base[k + 2] - base[k - 2]
+		var gy := base[k + 2 * stride] - base[k - 2 * stride]
+		var grade := sqrt(gx * gx + gy * gy) * GameConfig.HS / (4.0 * GameConfig.TILE)
+		var shelter := smoothstep(0.25, 1.5, hollow) * (1.0 - smoothstep(0.12, 0.35, grade))
+		var weight := maxf(lowland, shelter)
+		if weight > 0.0:
+			var flank := smoothstep(0.02, 0.16, grade)
+			var shoulder := smoothstep(0.25, 1.5, -hollow)
+			var terrain := 0.06 + 0.94 * maxf(flank, shoulder) * (1.0 - 0.9 * shelter)
+			var patch := noise.noise(x / 90.0 + 83.7, y / 90.0 - 41.3)
+			var varied := terrain * (0.35 + 0.65 * smoothstep(-0.55, 0.15, patch))
+			strength = lerpf(1.0, varied, weight)
 	return maxf(1e-4, h + noise.fbm(x / 9.0, y / 9.0, 2) * 0.006 * minf(1.0, h * 40.0) * strength)
 
 
@@ -298,13 +317,7 @@ static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simp
 ## parallel — считать полосами на всех ядрах (иначе в текущем потоке)
 ## include_detail — параметр запроса, а не глобальный переключатель: фоновые запросы независимы.
 ## false возвращает макрорельеф без слоя склонов для проб и стендов. Игровые вызовы используют true.
-static func raw_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
-	if cw <= 0 or ch <= 0:
-		return PackedFloat32Array()
-	var fast := Grid.fast_grid()
-	if fast != null:
-		var n := w.noise
-		return fast.ReliefField(n.warpX.perm, n.warpY.perm, n.cont.perm, n.mask.perm, n.ridge.perm, n.hill.perm, w.macro_x, w.macro_y, x0, y0, cw, ch, w.mountain_scale, w.mountain_bias, w.mountain_height, w.foothill_spread, parallel, include_detail, GameConfig.HS, GameConfig.TILE)
+static func _raw_rect_gd(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool) -> PackedFloat32Array:
 	if not parallel:
 		return _rows(w, x0, y0, cw, 0, ch, include_detail)
 	var h := PackedFloat32Array()

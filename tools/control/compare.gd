@@ -187,23 +187,42 @@ func _compare_perf(base: String, fresh: String) -> void:
 	lines.append("")
 	lines.append("| Размер | Показатель | Было | Стало | Разница |")
 	lines.append("|---|---|---:|---:|---:|")
-	for s in b.sizes:
+	for s: String in b.sizes:
 		if not a.sizes.has(s):
 			lines.append("| %s | нет в базе | | | |" % s)
 			continue
 		var ra: Dictionary = a.sizes[s]
 		var rb: Dictionary = b.sizes[s]
 		_perf_row(s, "Загрузка, с", ra.load_s, rb.load_s, LOAD_WORSE, true)
-		_perf_row(s, "FPS, осмотр", ra.look.fps, rb.look.fps, FPS_WORSE, false)
-		_perf_row(s, "FPS 1% худших, осмотр", ra.look.low1, rb.look.low1, FPS_WORSE, false)
-		_perf_row(s, "FPS, дорога", ra.road.fps, rb.road.fps, FPS_WORSE, false)
-		_perf_row(s, "FPS 1% худших, дорога", ra.road.low1, rb.road.low1, FPS_WORSE, false)
+		var world_id := Dev.world_id(str(b.seed), int(s)) if s.is_valid_int() else s
+		var frozen := _same_camera_frames(base, world_id) or _same_camera_frames(fresh, world_id)
+		if frozen:
+			lines.append("| %s | FPS | — | — | три разных вида сохранены одним кадром |" % s)
+			notes.append("%s: сравнение FPS пропущено из-за одинаковых кадров" % world_id)
+		else:
+			_perf_row(s, "FPS, осмотр", ra.look.fps, rb.look.fps, FPS_WORSE, false)
+			_perf_row(s, "FPS 1% худших, осмотр", ra.look.low1, rb.look.low1, FPS_WORSE, false)
+			_perf_row(s, "FPS, дорога", ra.road.fps, rb.road.fps, FPS_WORSE, false)
+			_perf_row(s, "FPS 1% худших, дорога", ra.road.low1, rb.road.low1, FPS_WORSE, false)
 		_perf_row(s, "Память процесса, МБ", ra.memory.rss_mb, rb.memory.rss_mb, MEMORY_WORSE, true)
 		_perf_row(s, "Видеопамять, МБ", ra.memory.video_mb, rb.memory.video_mb, MEMORY_WORSE, true)
-		_perf_row(s, "Вызовов отрисовки", ra.draw_calls, rb.draw_calls, MEMORY_WORSE, true)
+		if not frozen:
+			_perf_row(s, "Вызовов отрисовки", ra.draw_calls, rb.draw_calls, MEMORY_WORSE, true)
 	lines.append("")
 	lines.append("Загрузка и FPS от прогона к прогону гуляют на 5–10 %%: заметным считается хуже на %d %% (загрузка), %d %% (FPS), %d %% (память)." % [LOAD_WORSE, FPS_WORSE, MEMORY_WORSE])
 	lines.append("")
+
+
+## Сравнение разных камер недостоверно, если во всех файлах один и тот же кадр.
+static func _same_camera_frames(dir: String, world_id: String) -> bool:
+	var first := ""
+	for view: String in ["spawn", "road", "mountain_road"]:
+		var path := dir.path_join(world_id + "_" + view + ".jpg")
+		if not FileAccess.file_exists(path): return false
+		var digest := FileAccess.get_md5(path)
+		if digest.is_empty() or (not first.is_empty() and digest != first): return false
+		first = digest
+	return true
 
 
 ## Строка таблицы; higher_worse — рост показателя плохо (время, память), иначе плохо падение (FPS)

@@ -7,10 +7,13 @@ extends SceneTree
 ## глаз седока — 1,8 м над землёй своей версии.
 ## godot --path . --script res://tools/mountain_detail_look.gd -- [--seeds "Ущелье"] [--views close,player] [--game]
 const OUT := "res://.godot/mountain_detail"
-const N := 768
+const N := WorldGenerator.PLAN_SIZE
 const SIZE := 256
+const TILE := GameConfig.TILE
+const Dev := preload("res://tools/control/control.gd")
 var cam: Camera3D
 var terrain: MeshInstance3D
+var triangles := PackedInt32Array()
 
 
 func _initialize() -> void:
@@ -19,52 +22,49 @@ func _initialize() -> void:
 
 
 func ground(h: PackedFloat32Array, p: Vector2) -> float:
-	var q := (p / 4.0).clamp(Vector2.ZERO, Vector2.ONE * (N - 2))
+	var q := (p / TILE).clamp(Vector2.ZERO, Vector2.ONE * (N - 2))
 	var x := int(q.x); var y := int(q.y)
 	return lerpf(lerpf(h[y*N+x], h[y*N+x+1], q.x-x), lerpf(h[(y+1)*N+x], h[(y+1)*N+x+1], q.x-x), q.y-y) * GameConfig.HS
 
 
 func mesh(h: PackedFloat32Array, origin: Vector2i) -> ArrayMesh:
 	var vertices := PackedVector3Array(); var normals := PackedVector3Array()
-	var colors := PackedColorArray(); var indices := PackedInt32Array()
+	var colors := PackedColorArray()
 	for y in SIZE:
 		for x in SIZE:
 			var i := (origin.y+y)*N+origin.x+x
 			var v := h[i]*GameConfig.HS
-			vertices.append(Vector3((origin.x+x)*4.0, v, (origin.y+y)*4.0))
-			var dx := (h[i+1]-h[i-1])*GameConfig.HS/8.0
-			var dz := (h[i+N]-h[i-N])*GameConfig.HS/8.0
+			vertices.append(Vector3((origin.x+x)*TILE, v, (origin.y+y)*TILE))
+			var dx := (h[i+1]-h[i-1])*GameConfig.HS/(2.0*TILE)
+			var dz := (h[i+N]-h[i-N])*GameConfig.HS/(2.0*TILE)
 			normals.append(Vector3(-dx, 1, -dz).normalized())
 			colors.append(Color(0.44, 0.49, 0.36) if v < 120 else Color(0.58, 0.56, 0.50))
-	for y in SIZE-1:
-		for x in SIZE-1:
-			var i := y*SIZE+x
-			indices.append_array(PackedInt32Array([i, i+1, i+SIZE, i+1, i+SIZE+1, i+SIZE]))
 	var arrays := []; arrays.resize(Mesh.ARRAY_MAX)
 	arrays[Mesh.ARRAY_VERTEX] = vertices; arrays[Mesh.ARRAY_NORMAL] = normals
-	arrays[Mesh.ARRAY_COLOR] = colors; arrays[Mesh.ARRAY_INDEX] = indices
+	arrays[Mesh.ARRAY_COLOR] = colors; arrays[Mesh.ARRAY_INDEX] = triangles
 	var result := ArrayMesh.new(); result.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
 	return result
 
 
 func load_h(file: String) -> PackedFloat32Array:
-	if not FileAccess.file_exists(file):
-		push_error("нет поля " + file + " (сначала mountain_detail_test)")
+	var input := FileAccess.open(file, FileAccess.READ)
+	var data: Variant = input.get_var() if input != null else null
+	if not data is Dictionary or not data.get("h") is PackedFloat32Array or data.h.size() != N * N:
+		push_error("Нет корректного поля высот %dx%d: %s" % [N, N, file])
 		quit(1)
 		return PackedFloat32Array()
-	var data: Dictionary = FileAccess.open(file, FileAccess.READ).get_var()
 	return data.h
 
 
 func lowland_flank(h: PackedFloat32Array) -> Vector2i:
 	var best := -INF
-	var chosen := Vector2i(N / 2, N / 2)
+	var chosen := Vector2i(-1, -1)
 	for y in range(60, N - 60, 3):
 		for x in range(60, N - 60, 3):
 			var i := y * N + x
 			var metres := h[i] * GameConfig.HS
 			if metres < 13.0 or metres > 28.0: continue
-			var grade := Vector2(h[i+2]-h[i-2], h[i+2*N]-h[i-2*N]).length() * GameConfig.HS / 16.0
+			var grade := Vector2(h[i+2]-h[i-2], h[i+2*N]-h[i-2*N]).length() * GameConfig.HS / (4.0 * TILE)
 			if grade < 0.13 or grade > 0.34: continue
 			var low := minf(minf(h[i-16], h[i+16]), minf(h[i-16*N], h[i+16*N])) * GameConfig.HS
 			if low < 8.0: continue
@@ -75,16 +75,40 @@ func lowland_flank(h: PackedFloat32Array) -> Vector2i:
 	return chosen
 
 
+func build_triangles() -> void:
+	triangles.resize(6 * (SIZE - 1) * (SIZE - 1))
+	var at := 0
+	for y in SIZE - 1:
+		for x in SIZE - 1:
+			var i := y * SIZE + x
+			triangles[at] = i
+			triangles[at + 1] = i + 1
+			triangles[at + 2] = i + SIZE
+			triangles[at + 3] = i + 1
+			triangles[at + 4] = i + SIZE + 1
+			triangles[at + 5] = i + SIZE
+			at += 6
+
+
 func run() -> void:
 	var a := OS.get_cmdline_user_args()
-	var seeds: Array = ["Вальхейм 3", "Север-1234", "Ущелье"]
-	if a.has("--seeds"): seeds = a[a.find("--seeds") + 1].split(",", false)
-	var only: Array = []
-	if a.has("--views"): only = a[a.find("--views") + 1].split(",", false)
+	var seeds := Dev.arg("seeds", "Вальхейм 3,Север-1234,Ущелье").split(",", false)
+	var only := Dev.arg("views").split(",", false)
 	var game := a.has("--game")
-	var before := a[a.find("--before") + 1] if game and a.has("--before") else ""
-	var after := a[a.find("--after") + 1] if game and a.has("--after") else ""
-	var lowland := a[a.find("--lowland") + 1] if a.has("--lowland") else ""
+	var before := Dev.arg("before")
+	var after := Dev.arg("after")
+	var lowland := Dev.arg("lowland")
+	if ("--before" in a or "--after" in a) and (not game or before.is_empty() or after.is_empty()
+			or before.begins_with("--") or after.begins_with("--")):
+		push_error("Укажите пару папок через --game --before <папка> --after <папка>")
+		quit(1)
+		return
+	for view in only:
+		if view not in ["overview", "slope", "close", "player", "uphill"]:
+			push_error("Неизвестный вид: " + view)
+			quit(1)
+			return
+	build_triangles()
 	root.size = Vector2i(1280, 720)
 	var scene := Node3D.new(); root.add_child(scene)
 	var env := WorldEnvironment.new(); env.environment = Environment.new()
@@ -106,25 +130,31 @@ func run() -> void:
 		var top := 0
 		if low:
 			var hill := lowland_flank(h)
+			if hill.x < 0:
+				push_error("Нет низкого склона для камеры: " + seed_text)
+				quit(1)
+				return
 			top = hill.y * N + hill.x
 		else:
 			for i in h.size():
 				if h[i] > h[top]: top = i
 		var origin := Vector2i(clampi(top%N-SIZE/2, 1, N-SIZE-2), clampi(top/N-SIZE/2, 1, N-SIZE-2))
-		var peak := Vector3((top%N)*4.0, h[top]*GameConfig.HS, (top/N)*4.0)
+		var peak := Vector3((top%N)*TILE, h[top]*GameConfig.HS, (top/N)*TILE)
 		# Точка на склоне 12–45 % без слоя, ближайшая к 180 м на юго-запад от вершины
 		var wanted := Vector2(peak.x, peak.z) + Vector2(-180, 180)
-		var best := INF; var flank := Vector2(peak.x, peak.z)
+		var best := INF
+		var flank := Vector2(peak.x, peak.z).clamp(Vector2(origin) * TILE, Vector2(origin + Vector2i.ONE * (SIZE - 1)) * TILE)
 		if not low:
 			for y in range(origin.y+24, origin.y+SIZE-24):
 				for x in range(origin.x+24, origin.x+SIZE-24):
 					var i := y*N+x
-					var g := Vector2(h[i+1]-h[i-1], h[i+N]-h[i-N])*GameConfig.HS/8.0
+					var g := Vector2(h[i+1]-h[i-1], h[i+N]-h[i-N])*GameConfig.HS/(2.0*TILE)
 					if g.length() < 0.12 or g.length() > 0.45 or h[i] < 0.2: continue
-					var p := Vector2(x, y)*4.0; var d := p.distance_squared_to(wanted)
+					var p := Vector2(x, y)*TILE; var d := p.distance_squared_to(wanted)
 					if d < best: best = d; flank = p
-		var fi := int(flank.y/4)*N+int(flank.x/4)
+		var fi := int(flank.y/TILE)*N+int(flank.x/TILE)
 		var downhill := Vector2(h[fi-1]-h[fi+1], h[fi-N]-h[fi+N]).normalized()
+		if downhill == Vector2.ZERO: downhill = Vector2.DOWN
 		for version: String in ["off", "on"]:
 			var source := before if version == "off" else after
 			var field := load_h(source.path_join(seed_text + ".bin") if not source.is_empty() else OUT.path_join(seed_text + ("_game_" if game else "_") + version + ".bin"))
@@ -146,5 +176,10 @@ func run() -> void:
 				for k in 4: await process_frame
 				await RenderingServer.frame_post_draw
 				var file := OUT.path_join(seed_text+"_"+view+("_game" if game else "")+"_"+version+".png")
-				root.get_texture().get_image().save_png(file); print("SHOT ", file)
+				var err := root.get_texture().get_image().save_png(file)
+				if err != OK:
+					push_error("Не удалось сохранить %s: %s" % [file, error_string(err)])
+					quit(1)
+					return
+				print("SHOT ", file)
 	quit()

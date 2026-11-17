@@ -9,6 +9,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/roadside_probe.gd -- [--tag after] [--out <папка>] [--fixtures <папка>]
 ##         [--base <папка было>] [--seeds Север-1234,Туман-4821,Ущелье] [--parity]
 ## --parity — ещё сверка поля просвета C# и GDScript (Grid.path_clearance) побайтно (только новый код).
+## --same-layout с --base — проверка идентичности всех размещённых объектов.
 
 const TILE := GameConfig.TILE
 const CELL := 8.0
@@ -38,6 +39,10 @@ func _initialize() -> void:
 	out = _arg("out", "res://tools/control/runs/roadside/" + _arg("tag", "after"))
 	fixtures = _arg("fixtures", fixtures)
 	base_dir = _arg("base", "")
+	if "--same-layout" in OS.get_cmdline_user_args() and base_dir.is_empty():
+		printerr("ROADSIDE: --same-layout требует --base")
+		quit(1)
+		return
 	var listed := _arg("seeds", "")
 	if listed != "": seeds = listed.split(",")
 	DirAccess.make_dir_recursive_absolute(out)
@@ -62,7 +67,8 @@ func run() -> void:
 		var started := Time.get_ticks_usec()
 		StageVegetation.run(w)
 		var ms := (Time.get_ticks_usec() - started) / 1000.0
-		var row := {seed = seed_text, metrics_version = 2, vegetation_ms = ms, objects = w.obj_count, trees = 0}
+		var layout := Util.sha256(var_to_bytes([w.obj_x, w.obj_y, w.obj_k, w.obj_v, w.obj_s])).hex_encode()
+		var row := {seed = seed_text, metrics_version = 2, vegetation_ms = ms, objects = w.obj_count, trees = 0, layout = layout}
 		for o in w.obj_count:
 			if TRUNK.has(w.obj_k[o]) and w.obj_s[o] >= 0.6: row.trees += 1
 		row.kinds = _measure(w)
@@ -215,10 +221,14 @@ func _compare() -> bool:
 			printerr("ROADSIDE: в базе нет сида ", seed_text)
 			return false
 	var lines := PackedStringArray()
+	var ok := true
 	for seed_text: String in summary:
 		if not before.has(seed_text): continue
 		var a: Dictionary = before[seed_text]
 		var b: Dictionary = summary[seed_text]
+		if "--same-layout" in OS.get_cmdline_user_args() and a.get("layout") != b.layout:
+			printerr("ROADSIDE: раскладка отличается от базы или в базе нет отпечатка, ", seed_text)
+			ok = false
 		lines.append("%s: растительность %.0f → %.0f мс, объектов %d → %d (%+.1f%%), деревьев %d → %d (%+.1f%%)" % [seed_text,
 			a.vegetation_ms, b.vegetation_ms, a.objects, b.objects, (float(b.objects) / a.objects - 1.0) * 100.0,
 			a.trees, b.trees, (float(b.trees) / a.trees - 1.0) * 100.0])
@@ -235,4 +245,4 @@ func _compare() -> bool:
 	var text := "\n".join(lines)
 	print("ROADSIDE COMPARE\n", text)
 	FileAccess.open(out.path_join("compare.txt"), FileAccess.WRITE).store_string(text)
-	return true
+	return ok
