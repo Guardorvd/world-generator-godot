@@ -1314,12 +1314,14 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if _single_access(st[e[0]]) or _single_access(st[e[1]]):
 			continue
 		var corr := _corridor(w, [old])
-		var avoiding := _avoiding(w, _open_ends(w, corr, a, b))
+		var avoiding := _exit_cost(w, corr, a, b)
 		var p := _land_path(finder, avoiding, a, b, "trail")
-		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(p, corr) > AVOID_SHARE or not _new_ground(w, p) or not _adds_network(w, p, near):
+		# Совпадение с прежней связью и доля новой земли — по добавляемой части (_core): общий выезд не в счёт
+		# Повторные касания сети в общем выезде (сход и возврат у поселения) не в счёт: _adds_network — за кругами EXIT_R
+		if p.is_empty() or _length(w, p) * SHORTCUT >= old_len or _share(_core(w, p), corr) > AVOID_SHARE or not _new_ground(w, _core(w, p)) or not _adds_network(w, _beyond_exits(w, p), near):
 			continue
 		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q) and _adds_network(w, q, near))
+			func(q: PackedInt32Array) -> bool: return _length(w, q) * SHORTCUT < old_len and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _adds_network(w, _beyond_exits(w, q), near))
 		if q.is_empty():
 			continue
 		_note_way(w, "shortcut", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
@@ -1336,13 +1338,14 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 		if step.is_valid():
 			step.call(0.705 + 0.015 * index / maxi(1, primary_paths.size()), "Обходные тропы: %d/%d" % [index + 1, primary_paths.size()])
 		var corr := _corridor(w, [e[2]])
-		var avoiding := _avoiding(w, _open_ends(w, corr, st[e[0]].i, st[e[1]].i))
+		var avoiding := _exit_cost(w, corr, st[e[0]].i, st[e[1]].i)
 		var p := _land_path(finder, avoiding, st[e[0]].i, st[e[1]].i, "trail")
-		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(p, corr) > AVOID_SHARE \
-				or not _new_ground(w, p) or not _different_relief(w, p, e[2]) or not _adds_network(w, p, near) or _far_share(w, p, e[2]) < FAR_SHARE:
+		# Совпадение, новая земля, другой рельеф и удаление от связи — по добавляемой части (_core): общий выезд не в счёт
+		if p.is_empty() or _length(w, p) > _length(w, e[2]) * ALT_LEN or _share(_core(w, p), corr) > AVOID_SHARE \
+				or not _new_ground(w, _core(w, p)) or not _different_relief(w, _core(w, p), e[2]) or not _adds_network(w, _beyond_exits(w, p), near) or _far_share(w, _core(w, p), e[2]) < FAR_SHARE:
 			continue
 		var q := _structures(w, p, false, finder, avoiding, state, 0, ROAD_GRADE,
-			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(q, corr) <= AVOID_SHARE and _new_ground(w, q) and _different_relief(w, q, e[2]) and _adds_network(w, q, near) and _far_share(w, q, e[2]) >= FAR_SHARE)
+			func(q: PackedInt32Array) -> bool: return _length(w, q) <= _length(w, e[2]) * ALT_LEN and _share(_core(w, q), corr) <= AVOID_SHARE and _new_ground(w, _core(w, q)) and _different_relief(w, _core(w, q), e[2]) and _adds_network(w, _beyond_exits(w, q), near) and _far_share(w, _core(w, q), e[2]) >= FAR_SHARE)
 		if q.is_empty():
 			continue
 		_note_way(w, "alternative", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
@@ -1355,22 +1358,34 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 	# Коридор зависит только от списка путей: пересчёт лишь после новой тропы.
 	var corr := PackedByteArray()
 	var corr_paths := -1
-	for index in st.size():
-		if finder.search_budget == 0: break
-		var s: SettlementData = st[index]
+	# 17.11.2026: берег ищется от точек на перегонах основных связей (_shore_anchors), а не от центра поселения:
+	# тропа к воде отходит там, где дорога проходит у берега, а не пятачком у деревни. Тропы к берегу не ближе
+	# SHORE_GAP друг к другу и не больше, чем поселений (прежний предел — одна на поселение).
+	var settle_d := _settle_dist(w)
+	var water_d := _water_dist(w)
+	var anchors := _shore_anchors(w, paths, settle_d, water_d)
+	var targets: Array[Vector2i] = []
+	var shores := 0
+	for index in anchors.size():
+		if finder.search_budget == 0 or shores >= st.size(): break
 		if step.is_valid():
-			step.call(0.72 + 0.02 * index / maxi(1, st.size()), "Тропы к берегам: %d/%d" % [index + 1, st.size()])
+			step.call(0.72 + 0.02 * index / maxi(1, anchors.size()), "Тропы к берегам: %d/%d" % [index + 1, anchors.size()])
 		if corr_paths != all_paths.size():
 			corr = _corridor(w, all_paths)
 			corr_paths = all_paths.size()
 		var shore_us := Time.get_ticks_usec()
-		var t := _shore(w, s.i, corr)
+		var t := _shore(w, anchors[index], corr, water_d)
 		_part("shore", shore_us)
-		if t >= 0:
+		var tv := Vector2i(t % w.W, t / w.W)
+		var spaced := true
+		for o: Vector2i in targets:
+			if (o - tv).length_squared() < SHORE_GAP * SHORE_GAP: spaced = false
+		if t >= 0 and spaced:
+			targets.append(tv) # и неудачная попытка: соседние точки перегона нашли бы тот же берег
 			# Ответвление от общей сети: не строим отдельный длинный подход от каждого дома.
 			var source := _nearest_path(w, t, SHORE_MAX)
-			if source < 0:
-				source = s.i # У единственного поселения ещё нет общей линии пути.
+			if source < 0 or settle_d[source] < EXIT_R:
+				source = anchors[index] # ближайшая точка сети у поселения — тропа отходит от перегона
 			var p := _land_path(finder, w.cost, source, t, "trail")
 			var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
 			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p) and _adds_network(w, p, near):
@@ -1380,6 +1395,7 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 					continue
 				_note_way(w, "shore", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
 				all_paths.append(q)
+				shores += 1
 				near = _net_near(w)
 
 
@@ -1620,9 +1636,55 @@ static func _different_relief(w: WorldData, a: PackedInt32Array, b: PackedInt32A
 	return top_a < top_b - RELIEF_CHOICE or absf(mean_a / a.size() - mean_b / b.size()) > RELIEF_CHOICE
 
 
+const MOUNTAIN_DETOUR := 1.15 # горная тропа: вход на перегоне не дальше от вершины, чем во столько раз (+4 клетки)
+const SHORE_STEP := 20.0 # клеток (80 м) между точками поиска берега на перегоне
+const SHORE_GAP := 50    # клеток (200 м): тропы к берегу не ближе друг к другу
+
+
+## Расстояние (клеток) до ближайшего центра поселения
+static func _settle_dist(w: WorldData) -> PackedFloat32Array:
+	var src := PackedByteArray()
+	src.resize(w.N)
+	for s: SettlementData in w.settlements: src[s.i] = 1
+	return Grid.distance_field(w.W, w.H, src)
+
+
+## Точки поиска берега: клетки основных связей через SHORE_STEP, дальше EXIT_R от поселений и не дальше SHORE_MAX
+## от моря или озера. Поселение без основных связей — само точка поиска (как раньше).
+static func _shore_anchors(w: WorldData, paths: Array, settle_d: PackedFloat32Array, water_d: PackedFloat32Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var seen := {}
+	var linked := {}
+	for e: Array in paths:
+		if not e[3]: continue
+		linked[e[0]] = true
+		linked[e[1]] = true
+		var p: PackedInt32Array = e[2]
+		var run := 0.0
+		for k in range(1, p.size()):
+			run += Grid.hypot(p[k] % w.W - p[k - 1] % w.W, p[k] / w.W - p[k - 1] / w.W)
+			var c := p[k]
+			if run < SHORE_STEP or settle_d[c] < EXIT_R or water_d[c] > SHORE_MAX or seen.has(c): continue
+			run = 0.0
+			seen[c] = true
+			out.append(c)
+	for k in w.settlements.size():
+		if not linked.has(k): out.append(w.settlements[k].i)
+	return out
+
+
+## Расстояние (клеток) до моря или озера; не дальше 1,5 — то же, что _at_mouth (вода в восьми соседях или сама клетка)
+static func _water_dist(w: WorldData) -> PackedFloat32Array:
+	var water := PackedByteArray()
+	water.resize(w.N)
+	for i: int in w.N:
+		if w.ocean[i] != 0 or w.lake[i] != 0: water[i] = 1
+	return Grid.distance_field(w.W, w.H, water)
+
+
 ## Ближайшая к клетке s клетка морского или озёрного берега от SHORE_MIN до SHORE_MAX клеток,
 ## не в коридоре near прежних путей; -1, если такой нет
-static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
+static func _shore(w: WorldData, s: int, near: PackedByteArray, water_d: PackedFloat32Array) -> int:
 	var W := w.W
 	var sx := s % W
 	var sy := s / W
@@ -1632,7 +1694,7 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 		for x in range(maxi(0, sx - SHORE_MAX), mini(W, sx + SHORE_MAX + 1)):
 			var i := y * W + x
 			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
-			if d < SHORE_MIN * SHORE_MIN or d >= bd or near[i] != 0 or w.cost[i] == INF or not _at_mouth(w, x, y):
+			if d < SHORE_MIN * SHORE_MIN or d >= bd or near[i] != 0 or w.cost[i] == INF or water_d[i] > 1.5:
 				continue
 			bd = d
 			best = i
@@ -1641,19 +1703,74 @@ static func _shore(w: WorldData, s: int, near: PackedByteArray) -> int:
 
 ## 11.11.2026: у концов второй путь может идти по готовой сети — развилка в стороне от поселения, а не второе полотно
 ## рядом с первым от самого поселения (коридор избегания раньше отталкивал его сразу от общего конца).
-const OPEN_END := 12.0 # клеток (48 м)
+## 17.11.2026: общий выезд длиннее (было 12 клеток, 48 м — развилки всё равно оставались у самого поселения), а новая
+## земля в этом круге в EXIT_MUL раз дороже: путь выходит из поселения по готовой дороге и отделяется на перегоне.
+## Мягко: если подходящего выезда нет, путь платит за новую землю, а не пропадает.
+const EXIT_R := 28.0   # клеток (112 м): окрестность поселения, где необязательные пути не отделяются от сети
+const EXIT_MUL := 3.0
 
 
+## Коридор near без клеток в круге EXIT_R вокруг концов a и b (в нём путь идёт по прежней связи свободно)
 static func _open_ends(w: WorldData, near: PackedByteArray, a: int, b: int) -> PackedByteArray:
 	var out := near.duplicate()
-	var r := ceili(OPEN_END)
-	for c: int in [a, b]:
+	for i: int in _exit_cells(w, [a, b]): out[i] = 0
+	return out
+
+
+## Клетки не на сети в круге EXIT_R вокруг поселений a и b — дорогая новая земля у выезда
+static func _exit_ring(w: WorldData, a: int, b: int) -> PackedByteArray:
+	var out := PackedByteArray()
+	out.resize(w.N)
+	for i: int in _exit_cells(w, [a, b]):
+		if w.path_mask[i] < 2: out[i] = 1
+	return out
+
+
+static func _exit_cells(w: WorldData, centres: Array) -> PackedInt32Array:
+	var out := PackedInt32Array()
+	var r := ceili(EXIT_R)
+	for c: int in centres:
 		var cx := c % w.W
 		var cy := c / w.W
 		for y in range(maxi(0, cy - r), mini(w.H, cy + r + 1)):
 			for x in range(maxi(0, cx - r), mini(w.W, cx + r + 1)):
-				if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= OPEN_END * OPEN_END: out[y * w.W + x] = 0
+				if (x - cx) * (x - cx) + (y - cy) * (y - cy) <= EXIT_R * EXIT_R: out.append(y * w.W + x)
 	return out
+
+
+## Стоимость второго пути между поселениями a и b: коридор прежней связи near дорогой (_avoiding), кроме общего
+## выезда; новая земля у самих поселений — в EXIT_MUL раз дороже (_exit_ring)
+static func _exit_cost(w: WorldData, near: PackedByteArray, a: int, b: int) -> PackedFloat32Array:
+	var cost := _avoiding(w, _open_ends(w, near, a, b))
+	var ring := _exit_ring(w, a, b)
+	var fast := Grid.fast_grid()
+	if fast != null:
+		return fast.ScaledCost(cost, ring, EXIT_MUL)
+	for i: int in w.N:
+		if ring[i] != 0 and cost[i] != INF: cost[i] *= EXIT_MUL
+	return cost
+
+
+## Путь между поселениями без концов внутри кругов EXIT_R вокруг его первой и последней клетки (общие выезды)
+static func _beyond_exits(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+	var n := p.size()
+	if n < 2: return p
+	var a := Vector2(p[0] % w.W, p[0] / w.W)
+	var b := Vector2(p[-1] % w.W, p[-1] / w.W)
+	var first := 0
+	var last := n - 1
+	while first < n - 1 and Vector2(p[first] % w.W, p[first] / w.W).distance_to(a) <= EXIT_R: first += 1
+	while last > first and Vector2(p[last] % w.W, p[last] / w.W).distance_to(b) <= EXIT_R: last -= 1
+	return p.slice(first, last + 1)
+
+
+## Путь без начальных и конечных клеток готовой сети: та часть, которую он добавит (общий выезд не в счёт)
+static func _core(w: WorldData, p: PackedInt32Array) -> PackedInt32Array:
+	var first := 0
+	var last := p.size() - 1
+	while first < last and w.path_mask[p[first]] >= 2: first += 1
+	while last > first and w.path_mask[p[last]] >= 2: last -= 1
+	return p.slice(first, last + 1)
 
 
 ## Стоимость по суше (w.cost), в которой клетки коридора near (_corridor) в routing.avoid_cost раз дороже
@@ -2370,6 +2487,7 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 		w.cost[i] = INF
 	w.generation_profile.mountain_fords_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	var fast := finder.fast() # 9.7: ближайший путь к вершине ищет C# (FastGrid.NearestPath), тот же перебор
+	var settle_d := _settle_dist(w)
 	for pk in w.peaks:
 		var detail_us := Time.get_ticks_usec()
 		var best := -1
@@ -2388,6 +2506,24 @@ static func _mountain_trails(w: WorldData, finder: Pathfinder, surface: Heightfi
 				if d < bd:
 					bd = d
 					best = i
+		# 17.11.2026: ближайшая точка сети у самого поселения — тропа к вершине отходит от перегона, если там есть
+		# точка не намного дальше (MOUNTAIN_DETOUR): без крюка ради этого
+		if best >= 0 and settle_d[best] < EXIT_R:
+			var limit := bd * MOUNTAIN_DETOUR + 4.0
+			var alt := -1
+			var ad := INF
+			var r := ceili(limit)
+			for y in range(maxi(0, int(pk.y) - r), mini(w.H, int(pk.y) + r + 1)):
+				for x in range(maxi(0, int(pk.x) - r), mini(w.W, int(pk.x) + r + 1)):
+					var i := y * w.W + x
+					if w.path_mask[i] < 2 or w.cost[i] == INF or settle_d[i] < EXIT_R: continue
+					var d := Grid.hypot(x + 0.5 - pk.x, y + 0.5 - pk.y)
+					if d <= limit and d < ad:
+						ad = d
+						alt = i
+			if alt >= 0:
+				best = alt
+				bd = ad
 		nearest_us += Time.get_ticks_usec() - detail_us
 		if best >= 0 and bd < w.W * 0.4:
 			# Технический подъём остаётся крутым, но отвесная вершина не получает фиктивную тропу.

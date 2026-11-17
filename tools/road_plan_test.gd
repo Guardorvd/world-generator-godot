@@ -7,6 +7,7 @@ extends SceneTree
 ##   godot --headless --path . --script res://tools/road_plan_test.gd -- [--seed Север-1234] [--save <файл.json>] [--compare <файл.json>]
 ## --save пишет отпечаток (было), --compare сверяет с ним (стало): тот же мир — рефакторинг, разный — изменение маршрутов.
 ## --metrics-json <файл> сохраняет сравнимый отчёт о готовой сети; --metrics также пишет картинку.
+## --forks — где отходят необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты): у поселения или на перегоне.
 ## Первый запуск на этом ПК ~1,5 мин (география), следующие ~1 мин.
 
 const SelfTest := preload("res://tools/selftest.gd")
@@ -202,6 +203,9 @@ func _initialize() -> void:
 			print("RoadRefinement (C#): %.0f мс, патчей %d, хеш патчей %s, хеш подгонки %s" % [(Time.get_ticks_usec() - t0) / 1000.0,
 				built.patches.size(), _digest(built.patches), _digest(built.fit_routes)])
 			if built.patches.is_empty(): fails += 1
+	# --forks: где необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты) отходят от сети
+	if "--forks" in args:
+		_forks(w)
 	# --probe x,y: пути людей ближе 12 клеток к точке (номер, вид, длина, концы, ближайшее расстояние)
 	var probe := _arg(args, "--probe", "")
 	if not probe.is_empty():
@@ -299,6 +303,71 @@ func _rides(w: WorldData, final: Heightfield, seed_text: String) -> int:
 	img.save_png(file)
 	print("картинка: ", file)
 	return fails
+
+
+## 17.11.2026: развилки необязательных путей. Конец новой записи w.trails, лежащий на оси другого пути, — развилка;
+## для неё — расстояние до ближайшего поселения и до ближайшей другой развилки (или поселения). По видам: число путей,
+## длина, развилок, доля ближе 100 м к поселению, медиана расстояния. Строка FORKS — итог для сравнения было/стало.
+func _forks(w: WorldData) -> void:
+	var what := {}
+	for note: Array in w.generation_profile.get("second_ways", []):
+		for k: int in note[1]: what[k] = note[0]
+	for k in w.trails.size():
+		var t: Dictionary = w.trails[k]
+		if what.has(k) or t.kind == "animal": continue
+		if t.has("ride"): what[k] = "ride"
+		elif t.kind == "mountain": what[k] = "mountain"
+	var lines: Array = []
+	for k in w.trails.size():
+		if w.trails[k].kind != "animal": lines.append(k)
+	var forks: Array = [] # [вид, Vector2]
+	var stats := {}
+	for k: int in what:
+		var t: Dictionary = w.trails[k]
+		var kind: String = what[k]
+		var s: Dictionary = stats.get(kind, {paths = 0, m = 0.0, forks = 0, near = 0, dist = []})
+		s.paths += 1
+		s.m += StageTrails._kind_length_of(t) * GameConfig.TILE
+		for end: Dictionary in [t.pts[0], t.pts[-1]]:
+			var p := Vector2(end.x, end.y)
+			var on := false
+			for j: int in lines:
+				if j == k: continue
+				var q: Array = w.trails[j].pts
+				for m in range(1, q.size()):
+					if Grid.segment_dist(p.x, p.y, q[m - 1].x, q[m - 1].y, q[m].x, q[m].y) < 0.6:
+						on = true
+						break
+				if on: break
+			if not on: continue
+			var d := INF
+			for st: SettlementData in w.settlements: d = minf(d, Vector2(st.x, st.y).distance_to(p))
+			d *= GameConfig.TILE
+			s.forks += 1
+			s.dist.append(d)
+			if d < 100.0: s.near += 1
+			forks.append(p)
+		stats[kind] = s
+	var spacing: Array = []
+	for a in forks.size():
+		var d := INF
+		for st: SettlementData in w.settlements: d = minf(d, Vector2(st.x, st.y).distance_to(forks[a]))
+		for b in forks.size():
+			if b != a and forks[b].distance_to(forks[a]) > 0.6: d = minf(d, forks[b].distance_to(forks[a]))
+		spacing.append(d * GameConfig.TILE)
+	spacing.sort()
+	var out := {}
+	var near_all := 0
+	for kind: String in stats:
+		var s: Dictionary = stats[kind]
+		s.dist.sort()
+		near_all += s.near
+		out[kind] = "%d путей %.0f м, развилок %d, у поселения (<100 м) %d, медиана до поселения %.0f м" % [s.paths, s.m, s.forks, s.near,
+			s.dist[s.dist.size() / 2] if not s.dist.is_empty() else 0.0]
+		print("  развилки %-11s %s" % [kind, out[kind]])
+	var close := spacing.filter(func(d: float) -> bool: return d < 80.0).size()
+	print("FORKS всего %d, у поселения %d, до соседней развилки или поселения < 80 м: %d, медиана %.0f м" % [forks.size(), near_all,
+		close, spacing[spacing.size() / 2] if not spacing.is_empty() else 0.0])
 
 
 func _draw(img: Image, pts: Array, S: int, color: Color, width: int) -> void:
