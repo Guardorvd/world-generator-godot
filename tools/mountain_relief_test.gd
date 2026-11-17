@@ -246,7 +246,7 @@ func run() -> void:
 		var started := Time.get_ticks_msec()
 		var raw: PackedFloat32Array = Old.raw_rect(before,0,0,768,768,true)
 		var micro := Parallel.fbm_field(768,768,w.noise.micro,9.0,2)
-		for i in before.N: raw[i]=StageRelief.add_micro(StageRelief.normalize(raw[i]),micro[i])
+		for i in before.N: raw[i]=Old.add_micro(Old.normalize(raw[i]),micro[i])
 		before.h=raw
 		var before_reference_ms := Time.get_ticks_msec()-started
 		StageOcean.run(before)

@@ -65,6 +65,44 @@ public partial class FastGrid
 	private const double DetailCross = 0.08;
 	private const double TopRaw = 1.05; // StageRelief.TOP_RAW
 
+	/// <summary>Копия StageRelief.add_micro. Вход — нормированные высоты с полосой соседей.</summary>
+	public float[] ReliefMicro(float[] heights, int[] noise, int x0, int y0, int width, int height, int pad, double heightScale, double tile, bool parallel)
+	{
+		int stride = width + 2 * pad;
+		int d = pad * stride;
+		var output = new float[width * height];
+		void Row(int j)
+		{
+			int y = y0 + j;
+			for (int i = 0; i < width; i++)
+			{
+				int k = (j + pad) * stride + i + pad;
+				double h = heights[k];
+				if (h > 0.0)
+				{
+					double gx = (double)heights[k + 2] - heights[k - 2];
+					double gy = (double)heights[k + 2 * stride] - heights[k - 2 * stride];
+					double grade = Math.Sqrt(gx * gx + gy * gy) * heightScale / (4.0 * tile);
+					double around = ((double)heights[k - pad] + heights[k + pad] + heights[k - d] + heights[k + d]) * 0.25;
+					double hollow = (around - h) * heightScale;
+					double flank = ReliefSmooth(0.02, 0.16, grade);
+					double shoulder = ReliefSmooth(0.25, 1.5, -hollow);
+					double shelter = ReliefSmooth(0.25, 1.5, hollow) * (1.0 - ReliefSmooth(0.12, 0.35, grade));
+					double terrain = 0.06 + 0.94 * Math.Max(flank, shoulder) * (1.0 - 0.9 * shelter);
+					int x = x0 + i;
+					double patch = Noise(noise, x / 90.0 + 83.7, y / 90.0 - 41.3);
+					double varied = terrain * (0.35 + 0.65 * ReliefSmooth(-0.55, 0.15, patch));
+					double lowland = 1.0 - ReliefSmooth(32.0, 68.0, h * heightScale);
+					double strength = 1.0 + (varied - 1.0) * Math.Max(lowland, shelter);
+					h = Math.Max(1e-4, h + Fbm(noise, x / 9.0, y / 9.0, 2) * 0.006 * Math.Min(1.0, h * 40.0) * strength);
+				}
+				output[j * width + i] = (float)h;
+			}
+		}
+		RunRows(height, parallel, Row);
+		return output;
+	}
+
 	/// <summary>Копия mountain_detail.gd.apply; base b is read-only.</summary>
 	private static double Detail(int[] ridge, int[] hill, float[] b, int bw, int k, double x, double y, double heightScale, double tile)
 	{

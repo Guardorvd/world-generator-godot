@@ -72,6 +72,37 @@ func contracts() -> void:
 	var scaled := Detail.apply(ridge,hill,plane,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS*2,GameConfig.TILE*2)
 	check(absf((a-plane[12])*0.5-(scaled-plane[12]))<1e-10,"detail uses explicit world units")
 	check(plane==original,"detail does not mutate its base field")
+	var r := StageRelief.MICRO_PAD
+	var width := 2 * r + 1
+	var center := r * width + r
+	var flat := PackedFloat32Array()
+	flat.resize(width * width)
+	flat.fill(0.12)
+	var shoulder := flat.duplicate()
+	var hollow := flat.duplicate()
+	var flank := flat.duplicate()
+	for z in range(-r, r + 1):
+		for x in range(-r, r + 1):
+			var i := center + z * width + x
+			shoulder[i] -= (x*x + z*z) * 0.0002
+			hollow[i] += (x*x + z*z) * 0.0002
+			flank[i] += x * 0.004
+	var flat_ripple := absf(StageRelief.add_micro(flat, center, width, hill, 20.0, 50.0) - flat[center])
+	var hollow_ripple := absf(StageRelief.add_micro(hollow, center, width, hill, 20.0, 50.0) - hollow[center])
+	var shoulder_ripple := absf(StageRelief.add_micro(shoulder, center, width, hill, 20.0, 50.0) - shoulder[center])
+	var flank_ripple := absf(StageRelief.add_micro(flank, center, width, hill, 20.0, 50.0) - flank[center])
+	check(flat_ripple > 0.0 and is_equal_approx(hollow_ripple, flat_ripple) and flat_ripple < minf(flank_ripple, shoulder_ripple) * 0.1,
+		"flat and hollow ripple below 10% of slope and shoulder ripple")
+	var micro_noise := Simplex.new(WGRandom.new(271))
+	var calm := INF
+	var lively := 0.0
+	for x in range(-300, 301, 17):
+		var carrier := micro_noise.fbm(x / 9.0, 50.0 / 9.0, 2)
+		if absf(carrier) < 0.1: continue
+		var strength := absf((StageRelief.add_micro(flank, center, width, micro_noise, x, 50.0) - flank[center]) / (carrier * 0.006))
+		calm = minf(calm, strength)
+		lively = maxf(lively, strength)
+	check(calm > 0.0 and lively > calm * 2.0, "ripple strength varies along the same slope")
 	# The result for attempt k must not depend on which earlier basins were rejected.
 	var proposals := []
 	for k in 32: proposals.append(StageHydrology.lake_candidate(1234,128,96,k))
@@ -140,6 +171,7 @@ func run() -> void:
 	var seeds: Array = SEEDS
 	var a := OS.get_cmdline_user_args()
 	if a.has("--seeds"): seeds = a[a.find("--seeds") + 1].split(",", false)
+	var baseline := a[a.find("--base") + 1] if a.has("--base") else ""
 	var rows := []
 	for seed_text: String in seeds:
 		var w := world(seed_text)
@@ -176,12 +208,36 @@ func run() -> void:
 		var requests := Parallel.bands(2,func(j0:int,_j1:int)->PackedFloat32Array:return StageRelief.raw_rect(w,190,290,24,16,false,j0==1),1)
 		check(requests[0]==StageRelief.raw_rect(w,190,290,24,16,false,false) and requests[1]==StageRelief.raw_rect(w,190,290,24,16,false,true),"concurrent modes remain independent")
 		check(StageRelief.raw_rect(w,0,0,0,16,false).is_empty(),"empty rectangle")
+		var p := Vector2i(-11, 701)
+		var heights := StageRelief.height_rect(w, p.x, p.y, 24, 16, false)
+		check(heights == StageRelief.height_rect(w, p.x, p.y, 24, 16, true), "parallel ripple " + seed_text)
+		Grid.allow_fast = false
+		var gd_heights := StageRelief.height_rect(w, p.x, p.y, 24, 16, true)
+		Grid.allow_fast = true
+		check(heights == gd_heights, "C#/GDScript ripple " + seed_text)
+		check(heights == OuterLand.compute(w, p.x, p.y, 24, 16).h, "OuterLand ripple " + seed_text)
+		var plan_match := true
+		for y in 16:
+			for x in range(-p.x, 24):
+				plan_match = plan_match and heights[y * 24 + x] == w.h[(p.y + y) * w.W + p.x + x]
+		check(plan_match, "ripple overlaps the plan edge " + seed_text)
 		for v: String in ["off", "on"]:
 			var data: Dictionary = off if v == "off" else on
 			FileAccess.open(OUT.path_join(seed_text + "_" + v + ".bin"), FileAccess.WRITE).store_var({h=data.h, macro=data.macro})
 		var row := {seed=seed_text, off=measure(off.h, 52.0), on=measure(on.h, 52.0), off_ms=snappedf(off.ms, 1), on_ms=snappedf(on.ms, 1),
 			low_off=measure(off.h, 0.0001, 30.0), low_on=measure(on.h, 0.0001, 30.0), low_delta_m=snappedf(low_delta, 0.01),
 			max_delta_m=snappedf(delta, 0.01), mean_delta_m=snappedf(mean / w.N, 0.001), changed_pct=snappedf(100.0*changed/w.N, 0.1)}
+		if not baseline.is_empty():
+			var previous: Dictionary = FileAccess.open(baseline.path_join(seed_text + "_on.bin"), FileAccess.READ).get_var()
+			check(previous.macro == on.macro, "start window unchanged from baseline " + seed_text)
+			var baseline_coast := 0
+			for i in w.N:
+				baseline_coast += int((previous.h[i] > 0.0) != (on.h[i] > 0.0))
+			check(baseline_coast == 0, "sea mask unchanged from baseline " + seed_text)
+			row.before = measure(previous.h, 0.0001)
+			row.before_low = measure(previous.h, 0.0001, 30.0)
+			row.after = measure(on.h, 0.0001)
+			check(row.after.over100_pct <= row.before.over100_pct + 1.0, "100% slopes within one percentage point " + seed_text)
 		rows.append(row)
 		print("RESULT ", JSON.stringify(row))
 	FileAccess.open(OUT.path_join("results.json"), FileAccess.WRITE).store_string(JSON.stringify(rows, "\t"))

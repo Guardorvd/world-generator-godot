@@ -104,11 +104,8 @@ static func generate(seed_value: int, kind_name: String) -> void:
 				best_score = score
 				best = Vector2i(x0, y0)
 	if not good.is_empty(): best = good[rng.randi() % good.size()]
-	var raw_cells := StageRelief.raw_rect(w, best.x, best.y, CELLS, CELLS, true)
-	var micro := Parallel.fbm_rect(n.micro, best.x, best.y, CELLS, CELLS, 9.0, 2)
-	var base := PackedFloat32Array()
-	base.resize(CELLS * CELLS)
-	for i in base.size(): base[i] = StageRelief.add_micro(StageRelief.normalize(raw_cells[i]), micro[i]) * GameConfig.HS
+	var base := StageRelief.height_rect(w, best.x, best.y, CELLS, CELLS, true)
+	for i in base.size(): base[i] *= GameConfig.HS
 	# поворот и отражение
 	var turns := rng.randi() % 4
 	var mirror := rng.randf() < 0.5

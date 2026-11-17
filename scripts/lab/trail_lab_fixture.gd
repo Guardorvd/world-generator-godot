@@ -111,14 +111,13 @@ static func relief(kind: String) -> PackedFloat32Array:
 				best_score = score
 				best = Vector2i(cx * 64, cy * 64)
 				across = fall_x > fall_z
-	var raw := StageRelief.raw_rect(w, best.x, best.y, 64, 64, false)
-	var micro := Parallel.fbm_rect(n.micro, best.x, best.y, 64, 64, 9.0, 2)
+	var heights := StageRelief.height_rect(w, best.x, best.y, 64, 64, false)
 	var cells := PackedFloat32Array()
 	cells.resize(64 * 64)
 	var low := INF
 	for i in cells.size():
 		var source := (i % 64) * 64 + int(i / 64.0) if across else i
-		cells[i] = StageRelief.add_micro(StageRelief.normalize(raw[source]), micro[source]) * GameConfig.HS
+		cells[i] = heights[source] * GameConfig.HS
 		low = minf(low, cells[i])
 	var near := 0.0
 	var far := 0.0

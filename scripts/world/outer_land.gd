@@ -63,20 +63,10 @@ static func compute(w: WorldData, x0: int, y0: int, cw: int, ch: int, snapshot: 
 	var ledger: Dictionary = snapshot if snapshot is Dictionary else (w.outer.get_ledger() if w.outer != null else {})
 	var pw := cw + 2 * PAD
 	var ph := ch + 2 * PAD
-	var raw := StageRelief.raw_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
-	var micro := Parallel.fbm_rect(w.noise.micro, x0 - PAD, y0 - PAD, pw, ph, 9.0, 2)
-	var hn := PackedFloat32Array()
-	hn.resize(pw * ph)
+	var hn := StageRelief.height_rect(w, x0 - PAD, y0 - PAD, pw, ph, false)
 	var sea_src := PackedByteArray()
 	sea_src.resize(pw * ph)
-	# StageRelief.normalize и add_micro развёрнуты на месте: куски считаются в потоках (см. Parallel)
-	var sea := StageRelief.SEA_RAW
-	var top := StageRelief.TOP_RAW
-	var bottom := StageRelief.BOTTOM_RAW
 	for k in pw * ph:
-		var v := raw[k]
-		var hh := minf(pow((v - sea) / (top - sea), 1.25), 1.4) if v >= sea else (v - sea) / (sea - bottom)
-		hn[k] = maxf(1e-4, hh + micro[k] * 0.006 * minf(1.0, hh * 40.0)) if hh > 0.0 else hh
 		sea_src[k] = 1 if hn[k] < 0.0 else 0
 	var water_src := sea_src.duplicate()
 	var halo := Rect2i(x0 - PAD, y0 - PAD, pw, ph)

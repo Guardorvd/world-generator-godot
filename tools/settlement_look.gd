@@ -11,6 +11,7 @@ extends SceneTree
 ##   -- --legacy        прежний отбор (StageLandmarks.legacy: полный водный член, без поправки на удалённость)
 ##   -- --roads         ещё дороги
 ##   -- --tag <имя>     суффикс файлов, например _old
+##   -- --surface <папка> --roads   сохранить поверхность после подгонки дорог для mountain_detail_look
 ## Лимит 240 с.
 
 const MacroLook := preload("res://tools/macro_geo_look.gd")
@@ -38,6 +39,9 @@ func _run() -> void:
 	StageLandmarks.legacy = args.has("--legacy")
 	var roads := args.has("--roads")
 	var tag := _arg("--tag", "")
+	var surface_dir := _arg("--surface", "")
+	if roads and not surface_dir.is_empty():
+		DirAccess.make_dir_recursive_absolute(surface_dir)
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(OUT))
 	var seeds: PackedStringArray = _arg("--seeds", ",".join(CONTROL)).split(",", false)
 	var rows := {}
@@ -58,6 +62,14 @@ func _run() -> void:
 			StageTrails.run(w, func(_p: float, _l: String) -> void: pass)
 			row.roads = _roads(w, placed, (Time.get_ticks_usec() - t) / 1000.0)
 			row.after = _describe(w, land)
+			if not surface_dir.is_empty():
+				RoadSurface.run(w)
+				var surface := Heightfield.base_of(w).copy()
+				surface.finish_paths()
+				var heights := surface.hv.duplicate()
+				for i in heights.size(): heights[i] /= GameConfig.HS
+				FileAccess.open(surface_dir.path_join(seed_text + ".bin"), FileAccess.WRITE).store_var({h = heights})
+				surface.weaken_world()
 		rows[seed_text] = row
 		maps.append(_map(w, roads))
 		var p: Dictionary = row.places

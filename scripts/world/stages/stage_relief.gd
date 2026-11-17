@@ -7,6 +7,7 @@ extends RefCounted
 ## Оба прохода можно распараллеливать. Native-копия — FastGrid.Relief.cs; результат бит в бит.
 
 const Detail := preload("res://scripts/world/mountain_detail.gd")
+const MICRO_PAD := 6 # 24 м до соседей для оценки ложбины
 
 const PROGRESS := 0.02
 const LABEL := "Формирование континентов"
@@ -77,17 +78,9 @@ const PICK_W_RELIEF := 0.3
 
 ## Рельеф карты: стартовая область, нормировка по уровню моря, микрорельеф суши
 static func run(w: WorldData, include_detail: bool = true) -> void:
-	var N := w.N
 	configure(w)
 	_pick_start(w)
-	var h := raw_rect(w, 0, 0, w.W, w.H, true, include_detail)
-	for i in N:
-		h[i] = normalize(h[i])
-	# Микрорельеф суши: небольшие неровности поверхности, с затуханием к берегу.
-	var micro := Parallel.fbm_field(w.W, w.H, w.noise.micro, 9.0, 2)
-	for i in N:
-		h[i] = add_micro(h[i], micro[i])
-	w.h = h
+	w.h = height_rect(w, 0, 0, w.W, w.H, true, include_detail)
 
 
 ## Параметры всего мира, без расхода общего RNG. Не меняет окно старта и готовые высоты.
@@ -242,9 +235,62 @@ static func normalize(v: float) -> float:
 	return minf(pow((v - SEA_RAW) / (TOP_RAW - SEA_RAW), 1.25), 1.4) if v >= SEA_RAW else (v - SEA_RAW) / (SEA_RAW - BOTTOM_RAW)
 
 
-## Микрорельеф на суше (h > 0); под водой (h <= 0) не действует. Тот же вид развёрнут в OuterLand.compute
-static func add_micro(h: float, micro: float) -> float:
-	return maxf(1e-4, h + micro * 0.006 * minf(1.0, h * 40.0)) if h > 0.0 else h
+## Нормированные высоты с рябью. Полоса вокруг запроса даёт одинаковые уклоны и
+## ложбины в каждой клетке, включая края плана и прямоугольники лаборатории.
+static func height_rect(w: WorldData, x0: int, y0: int, cw: int, ch: int, parallel: bool, include_detail: bool = true) -> PackedFloat32Array:
+	if cw <= 0 or ch <= 0:
+		return PackedFloat32Array()
+	var stride := cw + 2 * MICRO_PAD
+	var base := raw_rect(w, x0 - MICRO_PAD, y0 - MICRO_PAD, stride, ch + 2 * MICRO_PAD, parallel, include_detail)
+	for i in base.size():
+		base[i] = normalize(base[i])
+	var fast := Grid.fast_grid()
+	if fast != null:
+		return fast.ReliefMicro(base, w.noise.micro.perm, x0, y0, cw, ch, MICRO_PAD, GameConfig.HS, GameConfig.TILE, parallel)
+	if not parallel:
+		return _micro_rows(w.noise.micro, base, x0, y0, cw, 0, ch)
+	var out := PackedFloat32Array()
+	for b in Parallel.bands(ch, func(j0: int, j1: int) -> PackedFloat32Array:
+		return _micro_rows(w.noise.micro, base, x0, y0, cw, j0, j1)):
+		out.append_array(b)
+	return out
+
+
+static func _micro_rows(noise: Simplex, base: PackedFloat32Array, x0: int, y0: int, cw: int, j0: int, j1: int) -> PackedFloat32Array:
+	var n := noise.clone()
+	var stride := cw + 2 * MICRO_PAD
+	var out := PackedFloat32Array()
+	out.resize((j1 - j0) * cw)
+	for j in range(j0, j1):
+		for i in cw:
+			var k := (j + MICRO_PAD) * stride + i + MICRO_PAD
+			out[(j - j0) * cw + i] = add_micro(base, k, stride, n, x0 + i, y0 + j)
+	return out
+
+
+## Рябь остаётся слабой в поймах и ложбинах, а на склонах её сила меняется пятнами.
+## Соседи читаются из основы до ряби. Численная копия — FastGrid.ReliefMicro.
+static func add_micro(base: PackedFloat32Array, k: int, stride: int, noise: Simplex, x: float, y: float) -> float:
+	var h := base[k]
+	if h <= 0.0:
+		return h
+	var gx := base[k + 2] - base[k - 2]
+	var gy := base[k + 2 * stride] - base[k - 2 * stride]
+	var grade := sqrt(gx * gx + gy * gy) * GameConfig.HS / (4.0 * GameConfig.TILE)
+	var d := MICRO_PAD * stride
+	var around := (base[k - MICRO_PAD] + base[k + MICRO_PAD] + base[k - d] + base[k + d]) * 0.25
+	var hollow := (around - h) * GameConfig.HS
+	var flank := smoothstep(0.02, 0.16, grade)
+	var shoulder := smoothstep(0.25, 1.5, -hollow)
+	var shelter := smoothstep(0.25, 1.5, hollow) * (1.0 - smoothstep(0.12, 0.35, grade))
+	var terrain := 0.06 + 0.94 * maxf(flank, shoulder) * (1.0 - 0.9 * shelter)
+	var patch := noise.noise(x / 90.0 + 83.7, y / 90.0 - 41.3)
+	var varied := terrain * (0.35 + 0.65 * smoothstep(-0.55, 0.15, patch))
+	# На высоких открытых склонах оставляем прежнюю рябь. Горные ложбины с пологим
+	# дном, как и низинные, сохраняют затухание.
+	var lowland := 1.0 - smoothstep(32.0, 68.0, h * GameConfig.HS)
+	var strength := lerpf(1.0, varied, maxf(lowland, shelter))
+	return maxf(1e-4, h + noise.fbm(x / 9.0, y / 9.0, 2) * 0.006 * minf(1.0, h * 40.0) * strength)
 
 
 ## Макрорельеф до уровня моря по прямоугольнику клеток cw × ch с углом (x0, y0), в том числе за краем карты.
