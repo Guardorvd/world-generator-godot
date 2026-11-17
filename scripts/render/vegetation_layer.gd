@@ -2029,14 +2029,18 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		weights[Understory.HIGH_GRASS] += rim * 0.2
 		weights[Understory.FIREWEED] += rim * 0.4 * light
 		if not conifer:
-			weights[Understory.HAZEL] += rim * 0.45
-			weights[Understory.HAZEL_TALL] += rim * 0.25
+			weights[Understory.HAZEL] += rim * 0.2
+			weights[Understory.HAZEL_TALL] += rim * 0.1
 	if not legacy_open and _in_plan(i, j) and surface.g <= 0.55:
 		var trail_edge := _verge(i, j)
 		if trail_edge > 0.0 and patch > 0.44:
-			weights[Understory.HAZEL] += trail_edge * 0.32
-			weights[Understory.HAZEL_TALL] += trail_edge * 0.18
+			weights[Understory.HAZEL] += trail_edge * 0.12
+			weights[Understory.HAZEL_TALL] += trail_edge * 0.06
 	# 16.1: иван-чай — теми же пятнами, что на лугу (общий шум), иначе его нет
+	# 17.11.2026: лещина в лесу изредка, чаще в ложбинах и низинах у воды
+	var hazel_k := _hazel_site(i, j, water)
+	weights[Understory.HAZEL] *= hazel_k
+	weights[Understory.HAZEL_TALL] *= hazel_k
 	if weights[Understory.FIREWEED] > 0.0:
 		weights[Understory.FIREWEED] *= 3.0 * smoothstep(0.58, 0.82, _vnoise(i, j, 6.0, (world.seed_num ^ 8803) + 41))
 	weights.append_array(floor_weights)
@@ -2099,6 +2103,15 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 
 ## 16.0: доля и размер растения по качеству растительности. Валежник, сухостой, пни и камни
 ## (столкновения) не зависят от настройки.
+## 17.11.2026: множитель лещины по месту: ложбина (вогнутость рельефа в 8 м) или низина у воды — до 1,6,
+## ровное и выпуклое место — 0,3
+func _hazel_site(i: int, j: int, water: float) -> float:
+	var hollow := 0.0
+	if _in_plan(i, j):
+		hollow = clampf(-RockScatter.local_convexity(world.elev, j * world.W + i, world.W) / 0.9, 0.0, 1.0)
+	return lerpf(0.3, 1.6, maxf(hollow, 1.0 - smoothstep(2.0, 10.0, water)))
+
+
 ## Дальность раскладки формы, м
 func _reach_r(kind: int, far: bool) -> float:
 	if kind in Understory.OPEN_FORMS:
@@ -2190,6 +2203,9 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	weights[Understory.MEADOW] *= 1.0 - 0.8 * steppe
 	weights[Understory.HIGH_GRASS] *= 1.0 - steppe
 	weights[Understory.FIREWEED] *= bloom * 3.0 * (1.0 - steppe)
+	var hazel_k := _hazel_site(i, j, water)
+	weights[Understory.HAZEL] *= hazel_k
+	weights[Understory.HAZEL_TALL] *= hazel_k
 	for weight in weights:
 		total += weight
 	# 17.11.2026: лещина дополняет кусты и травы открытого места (как в лесу): густота растёт на её долю

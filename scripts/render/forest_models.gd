@@ -422,112 +422,122 @@ static func _young_oak(form: int, rng: RandomNumberGenerator, bark: Color, color
 	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_OAK, YOUNG_AGE, height))
 
 
-## Рябина (Sorbus aucuparia): невысокое дерево второго яруса с гладковатой серо-бурой корой,
-## ажурной разрежённой кроной из перистых листьев и ярко-красными гроздьями ягод (только LOD0).
-## Вариант 2 взрослой — многоствольная; 4–5 — молодая, 6–7 — старая раскидистая с сухими сучками.
+## Рябина (Sorbus aucuparia), 17.11.2026 (вторая версия): изогнутый, часто наклонный ствол (S-изгиб в двух
+## плоскостях) и раскидистая округлая крона на 3–4 дугообразных сучьях: сук сначала круто идёт вверх, потом
+## уходит в сторону, концы веток слегка поднимаются. Перистая листва — текстурой пластин, гроздья ягод на концах
+## веток (LOD0). Взрослые: 0 — раскидистая на развилке, 1 — сильный наклон и однобокая крона, 2 — три изогнутых
+## ствола от основания (ваза), 3 — выше развилка, широкий купол. Молодые — тонкий изогнутый ствол и редкие ветви,
+## старые — толстый кривой ствол, низкая широкая крона и тяжёлый нижний сук.
 static func _rowan(variant: int) -> Dictionary:
 	var age := age_of(variant)
 	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 7331 + variant * 359
-	var bark := Color("6a5f54") if age != OLD_AGE else Color("5c5248")
+	var bark := Color("6f655a") if age != OLD_AGE else Color("5e554b")
 	var colors := [Color("518438"), Color("61933e"), Color("467732")]
 	var branches: Array = []
 	var foliage: Array = []
 	var berries: Array = []
-	var height: float
-	var radius: float
 	var angle := rng.randf() * TAU
 	var lean_dir := Vector3(cos(angle), 0, sin(angle))
-	var multi := age == ADULT_AGE and form == 2
+	var height: float
+	var radius: float
 	if age == YOUNG_AGE:
 		height = [4.9, 6.0][form]
-		radius = [0.068, 0.082][form]
-		var path: Array[Vector3] = []
-		for i in 5:
-			var t := i / 4.0
-			path.append(lean_dir * (0.14 * t + (0.20 + form * 0.12) * t * t) + Vector3(0, height * t, 0))
-		branches.append([path, radius, 0.016, bark, false])
+		radius = [0.07, 0.085][form]
+		var path := _rowan_trunk(Vector3.ZERO, lean_dir, height, 0.35 + form * 0.2, 0.22, form * 1.3, 6)
+		branches.append([path, radius, 0.02, bark, false])
 		_roots(branches, rng, 3, Vector2(radius * 1.2, radius * 1.7), radius * 1.0, radius * 0.18, radius * 0.42, bark)
-		for b in 7 + form * 2:
-			var t := lerpf(0.38, 0.90, float(b) / float(6 + form * 2))
-			var orig := _path_at(path, t)
-			var a := angle + b * 2.399 + rng.randf_range(-0.22, 0.22)
-			var dir := Vector3(cos(a), 0, sin(a))
-			var reach := rng.randf_range(0.62, 1.08) * (1.12 - 0.36 * (t - 0.38) / 0.52)
-			var tip := orig + dir * reach + Vector3(0, reach * rng.randf_range(0.48, 0.80), 0)
-			branches.append([[orig, orig.lerp(tip, 0.52) + Vector3.UP * 0.08, tip], 0.026 * (1.1 - t * 0.5), 0.007, bark, false, true])
-			foliage.append([tip, Vector3(0.84, 0.58, 0.80) * rng.randf_range(0.90, 1.14), a, rng.randf() * 10.0])
-			if form == 1 and b in [2, 5, 7]:
-				berries.append([tip + Vector3(0, -0.14, 0) + dir * 0.16, 0.22, a])
-		foliage.append([path[-1] + Vector3.UP * 0.16, Vector3(0.80, 0.72, 0.80), angle, rng.randf() * 10.0, true])
+		var count := 5 + form * 2
+		for b in count:
+			var t := lerpf(0.36, 0.86, float(b) / float(count - 1))
+			var a := angle + b * 2.399 + rng.randf_range(-0.25, 0.25)
+			_rowan_limb(branches, foliage, berries, rng, _path_at(path, t), a, rng.randf_range(0.8, 1.3) * (1.15 - 0.4 * t),
+				_path_at(path, t).y + rng.randf_range(0.5, 0.9), 0.03 * (1.1 - t * 0.5), bark, 1, 0.82, 0.35 if form == 1 else 0.0)
+		foliage.append([path[-1] + Vector3.UP * 0.18, Vector3(0.86, 0.74, 0.84), angle, rng.randf() * 10.0, true])
 		return _leafy(branches, foliage, colors, false, _ref(Biomes.T_ROWAN, age, height), _texture(true, false, true), berries)
 
+	var multi := age == ADULT_AGE and form == 2
 	if age == OLD_AGE:
-		height = [10.4, 11.2][form]
-		radius = [0.20, 0.22][form]
+		height = [10.6, 11.4][form]
+		radius = [0.21, 0.23][form]
 	elif multi:
-		height = 9.0
-		radius = 0.14
+		height = 9.2
+		radius = 0.15
 	else:
-		height = [9.2, 9.8, 9.0, 10.2][form]
-		radius = [0.15, 0.14, 0.14, 0.16][form]
-
+		height = [9.4, 9.8, 9.0, 10.4][form]
+		radius = [0.16, 0.15, 0.14, 0.17][form]
 	var stems := 3 if multi else 1
 	for st_idx in stems:
-		var fork_h: float = 0.28 if multi else height * (0.34 if age == OLD_AGE else [0.38, 0.42, 0.36, 0.40][form])
-		var st_h: float = height * ([1.0, 0.84, 0.72][st_idx] if multi else 1.0)
-		var st_r: float = radius * ([0.92, 0.78, 0.66][st_idx] if multi else 1.0)
-		var st_a := angle + (st_idx * 2.15 + rng.randf_range(-0.2, 0.2) if multi else 0.0)
+		var st_a := angle + (st_idx * 2.2 + rng.randf_range(-0.25, 0.25) if multi else 0.0)
 		var st_dir := Vector3(cos(st_a), 0, sin(st_a))
-		var base_pt := st_dir * (0.08 if multi and st_idx > 0 else 0.0)
-		var trunk: Array[Vector3] = []
-		var rings := 4 if multi else 5
-		var trunk_top_y: float = fork_h if not multi else st_h * 0.60
-		var bow := (0.65 + st_idx * 0.25 if multi else (0.52 if age == OLD_AGE else 0.22 + form * 0.06))
-		for i in rings:
-			var t := i / float(rings - 1)
-			var wigg := Vector3(-st_dir.z, 0, st_dir.x) * sin(t * PI) * 0.10 * (1.0 if st_idx % 2 == 0 else -1.0)
-			trunk.append(base_pt + st_dir * bow * (0.35 * t + 0.65 * t * t) + wigg + Vector3(0, t * trunk_top_y, 0))
-		branches.append([trunk, st_r, st_r * (0.55 if not multi else 0.25), bark, false])
+		var st_h: float = height * ([0.96, 0.86, 0.76][st_idx] if multi else 1.0)
+		var st_r: float = radius * ([0.88, 0.76, 0.66][st_idx] if multi else 1.0)
+		# Высота развилки: у вазы стволы ветвятся выше, у старой — низко и широко
+		var fork: float = st_h * (0.50 if multi else (0.30 if age == OLD_AGE else [0.34, 0.30, 0.0, 0.44][form]))
+		var bow: float = (0.55 + st_idx * 0.3) if multi else (1.1 if age == OLD_AGE else [0.45, 1.25, 0.0, 0.35][form])
+		var wave: float = 0.18 if multi else (0.30 if age == OLD_AGE else [0.22, 0.16, 0.0, 0.26][form])
+		var trunk := _rowan_trunk(st_dir * (0.1 if multi and st_idx > 0 else 0.0), st_dir, fork, bow, wave, form * 1.7 + st_idx, 6)
+		branches.append([trunk, st_r, st_r * 0.62, bark, false])
 		if st_idx == 0:
-			_roots(branches, rng, 4 if age == OLD_AGE else 3, Vector2(radius * 1.25, radius * 1.75), radius * 1.05, radius * 0.18, radius * 0.42, bark)
-		var limbs := 2 if multi else 4
-		var fork_origin := trunk[-1]
+			_roots(branches, rng, 4 if age == OLD_AGE else 3, Vector2(radius * 1.25, radius * 1.8), radius * 1.05, radius * 0.18, radius * 0.44, bark)
+		var top := trunk[-1]
+		var limbs := 2 if multi else (4 if age == OLD_AGE or form == 3 else 3)
 		for i in limbs:
-			var a := st_a + i * TAU / limbs + rng.randf_range(-0.28, 0.28)
-			var out := Vector3(cos(a), 0, sin(a))
-			var top_leader := i == 0 and (not multi or st_idx == 0)
-			var limb_reach := (rng.randf_range(0.55, 0.85) if top_leader else rng.randf_range(1.10, 1.75)) * (1.16 if age == OLD_AGE else 1.0)
-			var target_y: float = st_h * (rng.randf_range(0.95, 1.02) if top_leader else rng.randf_range(0.74, 0.90))
-			var end := fork_origin + out * limb_reach + Vector3(0, maxf(0.9, target_y - fork_origin.y), 0)
-			var elbow := fork_origin.lerp(end, 0.48) + out * rng.randf_range(0.18, 0.34) + Vector3.UP * 0.18
-			var leader: Array[Vector3] = [fork_origin, elbow, end]
-			branches.append([leader, st_r * (0.62 if top_leader else 0.50), 0.022, bark, false])
-			var twigs := 3 if multi else (4 if age == OLD_AGE else 3)
-			for j in twigs:
-				var u := 0.26 + j * (0.62 / maxf(1, twigs - 1))
-				var orig := _path_at(leader, u)
-				var sa := a + (-0.78 if j % 2 == 0 else 0.78) + rng.randf_range(-0.20, 0.20)
-				var sdir := Vector3(cos(sa), 0, sin(sa))
-				var slen := rng.randf_range(0.58, 1.02) * (1.12 if age == OLD_AGE else 1.0)
-				var tip := orig + sdir * slen + Vector3(0, slen * rng.randf_range(0.36, 0.62), 0)
-				branches.append([[orig, orig.lerp(tip, 0.5) + Vector3.UP * 0.06, tip], 0.040 * (1.0 - u * 0.4), 0.009, bark, false, true])
-				foliage.append([tip, Vector3(0.94, 0.62, 0.88) * rng.randf_range(0.88, 1.12), sa, rng.randf() * 10.0])
-				if (j + i + st_idx) % 2 == 0:
-					berries.append([tip + Vector3(0, -0.15, 0) + sdir * 0.14, rng.randf_range(0.23, 0.30), sa])
-			if not multi and (i % 2 == 0 or age == OLD_AGE):
-				foliage.append([elbow + Vector3.UP * 0.22, Vector3(0.82, 0.54, 0.78) * rng.randf_range(0.90, 1.08), a + 0.4, rng.randf() * 10.0])
-			foliage.append([end, Vector3(1.02, 0.68, 0.96) * rng.randf_range(0.92, 1.10), a, rng.randf() * 10.0, true])
-			if i == 0 or age == OLD_AGE:
-				berries.append([end + Vector3(0, -0.16, 0) + out * 0.18, rng.randf_range(0.25, 0.32), a + 0.5])
+			# Сучья расходятся веером; у наклонной формы крона уходит в сторону наклона
+			var a := st_a + i * TAU / limbs + rng.randf_range(-0.3, 0.3) + (0.0 if form != 1 or age != ADULT_AGE else -0.5)
+			var reach: float = rng.randf_range(1.5, 2.2) * (1.18 if age == OLD_AGE else 1.0) * (0.8 if multi else 1.0)
+			var top_y: float = st_h * (rng.randf_range(0.86, 0.98) if i == 0 else rng.randf_range(0.70, 0.86)) * (0.92 if age == OLD_AGE else 1.0)
+			_rowan_limb(branches, foliage, berries, rng, top, a, reach, top_y, st_r * 0.66, bark,
+				2 if multi else 4, 1.22 * (1.1 if age == OLD_AGE else 1.0), 0.45)
 		if age == OLD_AGE and st_idx == 0:
-			var sa := angle + 1.4
-			var orig := _path_at(trunk, 0.78)
-			var tip := orig + Vector3(cos(sa), 0.46, sin(sa)) * rng.randf_range(0.85, 1.20)
-			branches.append([[orig, orig.lerp(tip, 0.5) + Vector3.UP * 0.10, tip], 0.046, 0.012, bark, false, true])
-			foliage.append([tip, Vector3(0.82, 0.56, 0.78), sa, rng.randf() * 10.0])
+			# Тяжёлый нижний сук старой рябины, почти горизонтальный
+			var a := angle + 2.6
+			_rowan_limb(branches, foliage, berries, rng, _path_at(trunk, 0.8), a, 2.4, top.y + 0.6, st_r * 0.5, bark, 3, 1.15, 0.4)
 	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_ROWAN, age, height), _texture(true, false, true), berries)
+
+
+## Ствол рябины: наклон по dir с дугой (bow, м у вершины) и S-изгиб поперёк (wave, м), rings точек до высоты h
+static func _rowan_trunk(base: Vector3, dir: Vector3, h: float, bow: float, wave: float, phase: float, rings: int) -> Array[Vector3]:
+	var side := Vector3(-dir.z, 0, dir.x)
+	var out: Array[Vector3] = []
+	for i in rings:
+		var t := i / float(rings - 1)
+		out.append(base + dir * bow * (0.35 * t + 0.65 * t * t) + side * sin(t * PI * 1.6 + phase) * wave * t + Vector3(0, h * t, 0))
+	return out
+
+
+## Дугообразный сук рябины от origin в сторону a: сначала круто вверх, затем наружу; вдоль него twigs веток
+## (с провисом посередине и приподнятым концом) с перистой листвой, гроздья ягод — с долей berry_k.
+static func _rowan_limb(branches: Array, foliage: Array, berries: Array, rng: RandomNumberGenerator, origin: Vector3, a: float,
+		reach: float, top_y: float, r0: float, bark: Color, twigs: int, pad: float, berry_k: float) -> void:
+	var out := Vector3(cos(a), 0, sin(a))
+	var side := Vector3(-out.z, 0, out.x)
+	var curl := rng.randf_range(-0.4, 0.4) * reach
+	var rise := maxf(0.6, top_y - origin.y)
+	var p1 := origin + out * reach * 0.18 + side * curl * 0.2 + Vector3.UP * rise * 0.45
+	var p2 := origin + out * reach * 0.60 + side * curl * 0.7 + Vector3.UP * rise * 0.82
+	var p3 := origin + out * reach + side * curl + Vector3.UP * rise
+	var limb: Array[Vector3] = [origin, p1, p2, p3]
+	branches.append([limb, r0, maxf(0.012, r0 * 0.2), bark, false])
+	for j in twigs:
+		var u := lerpf(0.42, 0.95, float(j) / maxf(1, twigs - 1))
+		var orig := _path_at(limb, u)
+		var sa := a + (-1.0 if j % 2 == 0 else 1.0) * rng.randf_range(0.7, 1.15)
+		var sdir := Vector3(cos(sa), 0, sin(sa))
+		var slen := rng.randf_range(0.85, 1.35) * (1.15 - u * 0.35) * pad
+		var mid := orig + sdir * slen * 0.5 + Vector3(0, slen * 0.04, 0)
+		var tip := orig + sdir * slen + Vector3(0, slen * rng.randf_range(0.22, 0.42), 0)
+		branches.append([[orig, mid, tip], r0 * 0.4, 0.008, bark, false, true])
+		foliage.append([tip, Vector3(1.0, 0.6, 0.92) * pad * rng.randf_range(0.9, 1.12), sa, rng.randf() * 10.0])
+		if j % 2 == 1:
+			foliage.append([mid + Vector3.UP * 0.14, Vector3(0.82, 0.5, 0.78) * pad, sa + 0.6, rng.randf() * 10.0])
+		if rng.randf() < berry_k:
+			berries.append([tip + Vector3(0, -0.17, 0) + sdir * 0.1, rng.randf_range(0.24, 0.32), sa])
+	foliage.append([p2 + out * 0.2 + Vector3.UP * 0.18, Vector3(0.95, 0.6, 0.9) * pad, a + 0.4, rng.randf() * 10.0])
+	foliage.append([p3 + Vector3.UP * 0.1, Vector3(1.1, 0.7, 1.0) * pad, a, rng.randf() * 10.0, true])
+	if rng.randf() < berry_k:
+		berries.append([p3 + out * 0.2 - Vector3(0, 0.12, 0), rng.randf_range(0.26, 0.33), a + 0.5])
 
 
 ## Горная сосна (Pinus mugo): низкий многоствольный кустарник/стланик с искривлёнными толстыми

@@ -7,7 +7,7 @@ extends SceneTree
 ##   godot --path . --script tools/tree_age_look.gd [-- --only <вид> --before <файл>]
 
 const OUT := "res://.godot/tree_age"
-const NEW_CROWN := {Biomes.T_PINE: 0.65, Biomes.T_BIRCH: 0.55, Biomes.T_OAK: 1.05, Biomes.T_SNOWPINE: 0.60, Biomes.T_ROWAN: 0.48, Biomes.T_MUGO: 0.52}
+const NEW_CROWN := {Biomes.T_PINE: 0.65, Biomes.T_BIRCH: 0.55, Biomes.T_OAK: 1.05, Biomes.T_SNOWPINE: 0.60, Biomes.T_ROWAN: 0.68, Biomes.T_MUGO: 0.52}
 const NEW_TRUNK := {Biomes.T_PINE: 0.29, Biomes.T_BIRCH: 0.20, Biomes.T_OAK: 0.50, Biomes.T_SNOWPINE: 0.29, Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24}
 const NAMES := {Biomes.T_PINE: "pine", Biomes.T_BIRCH: "birch", Biomes.T_OAK: "oak", Biomes.T_SNOWPINE: "snowpine", Biomes.T_ROWAN: "rowan", Biomes.T_MUGO: "mugo"}
 var camera: Camera3D

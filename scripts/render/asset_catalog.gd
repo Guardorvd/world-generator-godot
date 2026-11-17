@@ -1,6 +1,6 @@
 extends Resource
 ## Seed-independent authoring output. Shared meshes/textures only; scene materials stay private.
-const VERSION := 12 # лещина (подлесок), горная сосна и рябина (перистая крона и гроздья на LOD0, 17.11.2026)
+const VERSION := 13 # 13: лещина и рябина второй версии (стволы-ваза и купол листвы; изогнутый ствол и раскидистая крона), 17.11.2026; 12: лещина, горная сосна и рябина
 const PATH := "res://resources/catalog/standard.res"
 @export var version := VERSION
 @export var trees: Dictionary = {}
