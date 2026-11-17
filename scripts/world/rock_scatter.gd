@@ -167,6 +167,9 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				chance *= lerpf(1.6, 0.6, smoothstep(0.42, 0.82, moist[i]))
 			if bi == Biomes.SWAMP or bi == Biomes.SNOW: chance *= 0.35
 			if bi == Biomes.DESERT or bi == Biomes.BEACH: chance *= 0.5
+			# До множителя формы допускаем только кандидатов, которые ещё могут пройти порог.
+			if roll >= chance * 1.45: continue
+			chance *= 1.0 + 0.45 * clampf(local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 			if roll >= minf(MAX_CHANCE, chance): continue
 			rng.reset(hc ^ 0x51ed270b)
 			var cx := x + 0.12 + rng.next_float() * 0.76

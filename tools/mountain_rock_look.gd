@@ -134,6 +134,73 @@ func low_hill_rules(old_scatter: Script) -> void:
 	check(valid, "low hill outcrops require dry convex slopes and keep clear of paths, houses and rivers")
 
 
+func nature_relief_rules() -> void:
+	var heights := PackedFloat32Array()
+	heights.resize(N * N)
+	for y in N:
+		for x in N:
+			heights[y * N + x] = 21.0 + 3.8 * cos(x * TAU / 12.0)
+	var f := fields(heights)
+	f.biome.fill(Biomes.FOREST)
+	f.moist.fill(0.49)
+	f.path.fill(0)
+	f.dist_path.fill(100.0)
+	f.stony.fill(0.65)
+	for name: String in ["temp", "light"]:
+		f[name] = PackedFloat32Array()
+		f[name].resize(N * N)
+		f[name].fill(0.55)
+	for name: String in ["age_n", "wood", "stand", "glade"]:
+		f[name] = PackedFloat64Array()
+		f[name].resize(N * N)
+	f.wood.fill(0.8)
+	var full := StageVegetation.ObjStore.new(null)
+	var counts := [[0, 0, 0], [0, 0, 0]] # сосна, лиственные, камни на выпуклости и в ложбине
+	var expected := {}
+	for cy in range(2, 8):
+		for cx in range(2, 8):
+			var lo := Vector2i(cx, cy) * CS
+			var hi := lo + Vector2i.ONE * CS
+			var begin := full.k.size()
+			StageVegetation.place_chunk(29, lo.x, lo.y, hi.x, hi.y, f, 0, 0, N, null, full)
+			expected[lo] = full.k.size() - begin
+			for o in range(begin, full.k.size()):
+				var i := floori(full.y[o]) * N + floori(full.x[o])
+				var convex := RockScatter.local_convexity(f.elev, i, N)
+				if absf(convex) < 0.4: continue
+				var row: Array = counts[0 if convex > 0.0 else 1]
+				var kind := full.k[o]
+				row[0] += int(kind == Biomes.T_PINE)
+				row[1] += int(kind == Biomes.T_OAK or kind == Biomes.T_BIRCH)
+				row[2] += int(kind == Biomes.T_ROCK)
+	var equal := true
+	var ended := full.k.size()
+	var chunks := expected.keys()
+	chunks.reverse()
+	for lo: Vector2i in chunks:
+		var hi := lo + Vector2i.ONE * CS
+		var pad := RockScatter.FIELD_HALO
+		var origin := lo - Vector2i.ONE * pad
+		var side := CS + 2 * pad
+		var crop := {}
+		for key: String in f:
+			var values: Variant = f[key].slice(0, 0)
+			for y in range(origin.y, origin.y + side):
+				values.append_array(f[key].slice(y * N + origin.x, y * N + origin.x + side))
+			crop[key] = values
+		var st := StageVegetation.ObjStore.new(null)
+		StageVegetation.place_chunk(29, lo.x, lo.y, hi.x, hi.y, crop, origin.x, origin.y, side, null, st)
+		var begin: int = ended - expected[lo]
+		equal = equal and st.x == full.x.slice(begin, ended) and st.y == full.y.slice(begin, ended) \
+			and st.k == full.k.slice(begin, ended) and st.v == full.v.slice(begin, ended) and st.s == full.s.slice(begin, ended)
+		ended = begin
+	check(equal, "tree and stone placement identical in reverse order and with cropped halos")
+	var convex: Array = counts[0]
+	var hollow: Array = counts[1]
+	check(convex[0] * hollow[1] > hollow[0] * convex[1] and convex[2] > hollow[2],
+		"pine and stone favor convex ground, deciduous species favor hollows: " + str(counts))
+
+
 func world_of(st: StageVegetation.ObjStore, f: Dictionary) -> WorldData:
 	var w := WorldData.new()
 	w.W = N
@@ -197,6 +264,7 @@ func run() -> void:
 		quit(1)
 		return
 	low_hill_rules(old_scatter)
+	nature_relief_rules()
 	var hv := relief()
 	var f := fields(hv)
 	var h := Heightfield.new()

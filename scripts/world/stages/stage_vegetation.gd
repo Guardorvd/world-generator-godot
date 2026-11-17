@@ -360,13 +360,17 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				var sv: float = stand_f[i] if has_stand else w.noise.forest.fbm(x / STAND_SCALE + STAND_OX, y / STAND_SCALE + STAND_OY, 2)
 				stand = _ss(-0.4, 0.4, sv)
 			var kinds: Array = b_kinds[bi]
+			# Берём соседей из всего плана или из полосы снимка OuterLand. Ложбины
+			# поддерживают влаголюбивые виды, на выпуклостях больше сухолюбивых.
+			var community_moist := -1.0
 			# Числа rng на объект: проверка, x, y, вид, вариант, масштаб
 			for k in 2:
 				if rng.next_float() < dens * 0.6:
 					var px := x + 0.1 + rng.next_float() * 0.8
 					var py := y + 0.15 + rng.next_float() * 0.8
-					# сомкнутые участки — влажнее и лиственнее, редкие — светлые сосняки (9.2)
-					var community_moist := clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3, 0.0, 1.0)
+					if community_moist < 0.0:
+						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
+						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
 					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior, stand)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
