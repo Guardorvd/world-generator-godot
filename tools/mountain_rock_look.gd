@@ -93,6 +93,47 @@ func scatter(script: Script, f: Dictionary, reverse := false, sites: Variant = n
 	return st
 
 
+func low_hill_rules(old_scatter: Script) -> void:
+	var heights := PackedFloat32Array()
+	heights.resize(N * N)
+	for y in N:
+		for x in N:
+			heights[y * N + x] = 18.0 + 9.0 * cos(x * 0.33) * cos(y * 0.15)
+	var f := fields(heights)
+	for y in N:
+		for x in N:
+			var i := y * N + x
+			f.moist[i] = 0.75 if x >= N / 2 else 0.4
+			f.river[i] = int(x == 38)
+			f.village[i] = int(y >= 70 and y <= 73)
+			f.path[i] = int(x == 62)
+			f.dist_path[i] = absf(x - 62.0) * GameConfig.TILE
+	var after := scatter(RockScatter, f)
+	var before := scatter(old_scatter, f)
+	var prior_count := 0
+	var count := 0
+	var supported := 0
+	var valid := true
+	var h := Heightfield.new()
+	var w := world_of(after, f)
+	h.world = w
+	h.hv = heights
+	for v in before.v: prior_count += int(RockModels.is_outcrop(v))
+	for o in after.v.size():
+		if not RockModels.is_outcrop(after.v[o]): continue
+		count += 1
+		var x: float = after.x[o]
+		var y: float = after.y[o]
+		var i := floori(y) * N + floori(x)
+		valid = valid and f.moist[i] < 0.62 and f.slope[i] > 0.28 and RockScatter.local_convexity(f.elev, i, N) > 0.15
+		for mask: PackedByteArray in [f.path, f.village, f.river]:
+			valid = valid and RockScatter.clear_path(mask, 0, 0, N, x, y, after.s[o] * RockScatter.OUTCROP_CLEAR)
+		supported += int(RockModels.seat(h, x * GameConfig.TILE, y * GameConfig.TILE, after.s[o] * 1.2, after.v[o]).x != INF)
+	check(prior_count == 0 and count > 0 and count < N * N / 100 and supported > 0,
+		"rare supported low-hill outcrops: %d -> %d (%d seated)" % [prior_count, count, supported])
+	check(valid, "low hill outcrops require dry convex slopes and keep clear of paths, houses and rivers")
+
+
 func world_of(st: StageVegetation.ObjStore, f: Dictionary) -> WorldData:
 	var w := WorldData.new()
 	w.W = N
@@ -155,6 +196,7 @@ func run() -> void:
 	if old_scatter == null or old_shader == null or old_layer == null:
 		quit(1)
 		return
+	low_hill_rules(old_scatter)
 	var hv := relief()
 	var f := fields(hv)
 	var h := Heightfield.new()

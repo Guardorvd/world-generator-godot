@@ -7,6 +7,7 @@ extends RefCounted
 const PATCH_CELLS := 8
 const MAX_CHANCE := 0.48
 const OUTCROP_CHANCE := 0.12
+const HILL_OUTCROP_CHANCE := 0.065
 ## Conservative projected upper-block footprint, in clear_path's boulder-scale units.
 const OUTCROP_CLEAR := 2.2 # includes the projected upper blocks on a tilted instance
 const FIELD_HALO := 15 # соседний источник массива, его полный круг просвета и выборки посадки
@@ -78,12 +79,22 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 			# Места выходов собраны в те же пятна, что россыпи: скальный пояс, а не ровный посев.
 			# В теле массива ни выходов, ни валунов: они бы утонули в нём или торчали из его граней.
 			if not big.is_empty() and RockMassif.covers(big, x + 0.5, y + 0.5, 0.0): continue
-			if mountain > 0.0 and exposed > 0.3 and dp > 10.0 and dw[i] >= 1.5:
+			if dp > 10.0 and dw[i] >= 1.5:
 				var steep := smoothstep(0.45, 0.95, sl)
-				var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
-				var oc := OUTCROP_CHANCE * smoothstep(0.3, 0.75, exposed) * mountain * maxf(steep, tor) * lerpf(0.04, 1.8, smoothstep(0.3, 0.85, deposit))
-				var ho := WGRandom.hash_cell(seed_num, x, y, 38)
-				if float(ho) / 4294967296.0 < oc:
+				var oc := 0.0
+				if mountain > 0.0 and exposed > 0.3:
+					var tor := smoothstep(0.12, 0.4, sl) * 0.03 if bi == Biomes.ROCK else 0.0
+					oc = OUTCROP_CHANCE * smoothstep(0.3, 0.75, exposed) * mountain * maxf(steep, tor) * lerpf(0.04, 1.8, smoothstep(0.3, 0.85, deposit))
+				var e := elev[i]
+				if e > 0.035 and e < 0.15 and sl > 0.28 and deposit > 0.55 and not moist.is_empty() and moist[i] < 0.62:
+					var convex := local_convexity(elev, i, stride)
+					var hill := smoothstep(0.035, 0.07, e) * (1.0 - smoothstep(0.11, 0.15, e))
+					var dry := 1.0 - smoothstep(0.42, 0.62, moist[i])
+					var shoulder_chance := HILL_OUTCROP_CHANCE * hill * dry * smoothstep(0.15, 0.9, convex) \
+						* smoothstep(0.28, 0.62, sl) * smoothstep(0.55, 0.84, deposit)
+					oc = maxf(oc, shoulder_chance)
+				var ho := WGRandom.hash_cell(seed_num, x, y, 38) if oc > 0.0 else 0
+				if oc > 0.0 and float(ho) / 4294967296.0 < oc:
 					rng.reset(ho ^ 0x0c7c0e5)
 					var ocx := x + 0.3 + rng.next_float() * 0.4
 					var ocy := y + 0.3 + rng.next_float() * 0.4
@@ -187,6 +198,17 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int,
 				if not villages.is_empty() and not clear_path(villages,ox,oy,stride,px,py,fragment): continue
 				if not rivers.is_empty() and not clear_path(rivers,ox,oy,stride,px,py,fragment): continue
 				store.add(px, py, Biomes.T_ROCK, tint, fragment)
+
+
+## Высота над средним соседей в метрах на радиусе 8 м. Положительная — выпуклое плечо.
+## Весь план или его полоса соседей доступны в полях. На внешнем краю поля форма нейтральна.
+static func local_convexity(elev: PackedFloat32Array, i: int, stride: int) -> float:
+	const R := 2
+	var x := i % stride
+	var d := R * stride
+	if x < R or x + R >= stride or i < d or i + d >= elev.size():
+		return 0.0
+	return (elev[i] - (elev[i - R] + elev[i + R] + elev[i - d] + elev[i + d]) * 0.25) * GameConfig.HS
 
 
 ## Радиус камня масштаба scale на земле, м: столько просвета ему нужно у кромки пути
