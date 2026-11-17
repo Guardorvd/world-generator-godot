@@ -68,7 +68,6 @@ var mid_grass := 1.0 # множитель доли дерновин (GameSetting
 const WOODY_FAR_FORM := 1.6
 const HAZEL_CORE := 0.4 # 17.11.2026: доля ширины кроны лещины, которую занимает пучок стволов
 const FORM_BAND := 0.25 # 17.11.2026: полоса смены формы в долях границы (пиксели делятся сеткой порогов)
-const FORM_SLACK := StreamPolicy.REFILL_STEP # м: запас пары форм на путь игрока до следующего снимка
 static var form_twins := true # false — «было» (meadow_look --no-twins): форма по центру раскладки, без пар
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
 ## до GRASS_R, крупного подлеска — до UNDERSTORY_FAR_R; дальше они редеют как (радиус / расстояние)²,
@@ -316,7 +315,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var kind := Floor.base_kind(base - Floor.FIRST)
 		var has_contacts := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER, Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]
 		if has_contacts:
-			_last_contact_group = understory.size()
+			_last_contact_group = maxi(_last_contact_group, base)
 		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL]
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM]
@@ -333,8 +332,8 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		# 16.0: куртины открытых мест видны дальше травы, как кусты; места не занимают (мягкие)
 		var open_form := base in Understory.OPEN_FORMS
 		var far := Placement.priority(base) < 2 or open_form
-		# Ближняя форма с упрощённой дальней живёт только в FAR_FORM_R (кусты — в 1,6 раза дальше): ей хватает буфера мелочи
-		var cap := _understory_cap(far and not (far_forms.has(base) and spec[0] != far_forms[base]))
+		# Начальная ёмкость ближней формы меньше. При плотной раскладке буфер растёт по фактическому числу растений.
+		var cap := _understory_cap(far and not (far_forms.has(base) and mesh != far_forms[base]))
 		var node := _multimesh(mesh, mat, cap, true, shadows, true)
 		if shadows and kind < 0:
 			node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_DOUBLE_SIDED
@@ -929,7 +928,14 @@ func _fill_details(px: float, pz: float, lead: Vector2, epoch: int, clock: float
 	for kind in understory.size():
 		var entry: Dictionary = understory[kind]
 		var bounds := AABB(entry.low, entry.high - entry.low) if entry.count > 0 else AABB()
-		frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate, entry.has_contacts)
+		var other_form := {}
+		if not immediate and _far_of.has(entry.base):
+			var far_group: int = _far_of[entry.base]
+			if kind == entry.base or kind == far_group:
+				var peer: int = far_group if kind == entry.base else entry.base
+				var other: Dictionary = understory[peer]
+				other_form = snapshots.form_history(peer, other.buf, other.count)
+		frames[kind] = snapshots.prepare(kind, entry.buf, entry.count, bounds, _radius(entry.mm.mesh) + entry.margin, clock, immediate, entry.has_contacts, other_form)
 	var now := clock + (Time.get_ticks_usec() - started) / 1000000.0
 	for group: int in frames:
 		snapshots.stamp(frames[group], now)
@@ -1507,8 +1513,10 @@ func _apply_grass(immediate := false) -> void:
 func _begin_present() -> void:
 	_present.clear()
 	_present.append(-1)
+	var far_groups := _far_of.values()
 	for kind in understory.size():
-		_present.append(kind)
+		if not far_groups.has(kind):
+			_present.append(kind)
 
 
 func _accept_contacts() -> void:
@@ -1522,6 +1530,9 @@ func _present_next(deadline_usec: int) -> void:
 	while not _present.is_empty() and (deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec):
 		var group: int = _present.pop_front()
 		_present_group(group, false)
+		if _far_of.has(group):
+			# Both forms switch to the same snapshot and fade timestamp in this frame.
+			_present_group(_far_of[group], false)
 		# Even a prepared worker snapshot can spend several frames in this queue.
 		if group == _last_contact_group:
 			_accept_contacts()
@@ -2579,23 +2590,21 @@ func _form_switch(kind: int) -> Vector2:
 	return Vector2(r, r * FORM_BAND)
 
 
-## Полоса раскладки парой: дальняя форма нужна дальше x от какого-то места капсулы снимка, ближняя — ближе y.
-## Запас FORM_SLACK — путь игрока до следующего снимка сверх упреждения.
-func _form_band(kind: int) -> Vector2:
-	var s := _form_switch(kind)
-	return Vector2(s.x - s.y * 0.5 - FORM_SLACK, s.x + s.y * 0.5 + FORM_SLACK)
-
-
 ## Вторая форма того же растения: те же строки буфера (без проверок места — их прошла первая), обе помечены
-## INSTANCE_CUSTOM.z + 2 — шейдер делит между ними пиксели по расстоянию (form_switch). Нет места в буфере — одна форма.
+## INSTANCE_CUSTOM.z + 2 — шейдер делит между ними пиксели по расстоянию (form_switch).
 func _put_twin(other: Dictionary, entry: Dictionary, offset: int, xf: Transform3D, scale: float) -> void:
 	if other.count >= other.cap:
-		return
+		if other.base >= Floor.FIRST:
+			return
+		other.cap *= 2
+		other.buf.resize(other.cap * STRIDE)
 	var at: int = other.count * STRIDE
+	var source: PackedFloat32Array = entry.buf
+	var target: PackedFloat32Array = other.buf
 	for c in 19:
-		other.buf[at + c] = entry.buf[offset + c]
-	other.buf[at + 18] += 2.0
-	entry.buf[offset + 18] += 2.0
+		target[at + c] = source[offset + c]
+	target[at + 18] += 2.0
+	source[offset + 18] += 2.0
 	var render_box: AABB = (xf * (other.mesh_box as AABB)).grow(other.margin * scale)
 	other.low = other.low.min(render_box.position)
 	other.high = other.high.max(render_box.end)
@@ -2610,28 +2619,29 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	var group := kind
 	var entry: Dictionary = understory[group]
 	kind = entry.base
-	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
-	# 16.0: граница — по качеству растительности (far_form_r)
-	# 17.11.2026: форму видимого растения выбирает шейдер по нынешнему расстоянию до игрока (как LOD деревьев), а не
-	# раскладка по её центру: снимок готовится секунды, и за это время упрощённые формы оказывались у самых колёс.
-	# Растение у границы смены формы (с запасом на путь игрока до следующего снимка) кладётся парой — ближняя и дальняя
-	# формы (twin); вне этой полосы — одной формой, как прежде.
 	var twin := -1
 	if group == kind and _far_of.has(kind) and not (legacy_open and Placement.priority(kind) == 1):
-		var band := _form_band(kind)
-		var at := Vector2(x, z)
-		var near_need := StreamPolicy.distance_to_coverage(at, _fill_at, _fill_lead) < band.y if form_twins else at.distance_to(_fill_at) <= _form_switch(kind).x
-		var far_need := maxf(at.distance_to(_fill_at), at.distance_to(_fill_at + _fill_lead)) > band.x
-		if not near_need:
-			entry = understory[_far_of[kind]]
-		elif far_need and form_twins:
+		if form_twins and kind < Floor.FIRST:
+			# Оба LOD готовы для всего снимка: при задержке и повороте форму по-прежнему выбирает шейдер.
 			twin = _far_of[kind]
-	if twin >= 0 and entry.count >= entry.cap:
-		entry = understory[twin] # буфер ближних форм полон: как прежде, одна упрощённая форма
-		twin = -1
+		else:
+			var s := _form_switch(kind)
+			var at := Vector2(x, z)
+			var margin := s.y * 0.5 + StreamPolicy.REFILL_STEP
+			var near_need := StreamPolicy.distance_to_coverage(at, _fill_at, _fill_lead) < s.x + margin if form_twins else at.distance_to(_fill_at) <= s.x
+			if not near_need:
+				group = _far_of[kind]
+				entry = understory[group]
+			elif form_twins and maxf(at.distance_to(_fill_at), at.distance_to(_fill_at + _fill_lead)) > s.x - margin:
+				twin = _far_of[kind]
 	if entry.count >= entry.cap:
-		fill_capped += 1
-		return RoadPlacement.CAPACITY
+		if group == kind and _far_of.has(kind):
+			# Keep the detailed mesh when the wider reserve outgrows its initial buffer.
+			entry.cap *= 2
+			entry.buf.resize(entry.cap * STRIDE)
+		else:
+			fill_capped += 1
+			return RoadPlacement.CAPACITY
 	var floor_kind := Floor.base_kind(kind - Floor.FIRST)
 	var local_box: AABB = entry.box
 	# Проверка стволов должна видеть ту же длину, что меш и капсула столкновения.

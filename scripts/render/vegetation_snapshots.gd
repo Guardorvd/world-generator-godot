@@ -44,36 +44,53 @@ func merge(group: int, source: PackedFloat32Array, count: int, bounds: AABB, rad
 	return commit(group, prepare(group, source, count, bounds, radius, now, immediate, instant_arrival), now)
 
 
+## Two meshes at the same planting site share the history of the plant.
+func form_history(group: int, source: PackedFloat32Array, count: int) -> Dictionary:
+	var stamps := {}
+	var previous: PackedFloat32Array = displayed.get(group, PackedFloat32Array())
+	for at in range(0, int(shown.get(group, 0)) * STRIDE, STRIDE):
+		stamps[key(previous, at)] = previous[at + 19]
+	var incoming := {}
+	for at in range(0, count * STRIDE, STRIDE):
+		incoming[key(source, at)] = true
+	return {stamps = stamps, incoming = incoming}
+
+
 ## Подготовка выполняется фоновым потоком. История неизменна до завершения задачи.
 ## Препятствия видны сразу после передачи группы, когда для неё могут включиться контакты.
-func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false) -> Dictionary:
+func prepare(group: int, source: PackedFloat32Array, count: int, bounds: AABB, radius: float, now: float, immediate := false, instant_arrival := false, other_form := {}) -> Dictionary:
 	var previous: PackedFloat32Array = displayed.get(group, PackedFloat32Array())
 	var rows: int = shown.get(group, previous.size() / STRIDE)
 	var changes := PackedFloat64Array()
 	var deadline := 0.0
 	var old := {}
+	var other_stamps: Dictionary = other_form.get("stamps", {})
+	var other_incoming: Dictionary = other_form.get("incoming", {})
 	if not immediate:
 		for at in range(0, rows * STRIDE, STRIDE):
 			old[key(previous, at)] = at
 	var result := source.slice(0, count * STRIDE)
 	for at in range(0, result.size(), STRIDE):
 		var id := key(result, at)
+		var old_at: int = old.get(id, -1)
 		var stamp := 0.0
-		if old.has(id):
-			if not instant_arrival:
-				stamp = previous[old[id] + 19]
-				if stamp < 0.0:
-					changes.append_array(PackedFloat64Array([at, 1, stamp]))
+		if not immediate and not instant_arrival:
+			stamp = previous[old_at + 19] if old_at >= 0 else other_stamps.get(id, INF)
+			if stamp == INF:
+				changes.append_array(PackedFloat64Array([at, 2, 0]))
+				stamp = 0.0
+			elif stamp < 0.0:
+				changes.append_array(PackedFloat64Array([at, 1, stamp]))
+		if old_at >= 0:
 			old.erase(id)
-		elif not immediate and not instant_arrival and result[at + 18] < 1.5:
-			# 17.11.2026: вторая форма пары (VegetationLayer._put_twin, z + 2) появляется сразу: её место на экране
-			# делит шейдер с первой формой по расстоянию, и проявление поверх уже видимой формы дало бы просвет
-			changes.append_array(PackedFloat64Array([at, 2, 0]))
 		result[at + 19] = stamp
 	var box := bounds
 	var have_bounds := count > 0
 	# Уходящие экземпляры остаются только на время растворения; общие растения не дублируются.
-	for at: int in old.values():
+	for id: Vector2 in old:
+		if other_incoming.has(id):
+			continue
+		var at: int = old[id]
 		var stamp := previous[at + 19]
 		var alpha := opacity(stamp, now)
 		if alpha <= 0.0:

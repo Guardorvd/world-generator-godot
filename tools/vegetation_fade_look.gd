@@ -30,6 +30,58 @@ func pixels(shot: Image) -> int:
 				count += 1
 	return count
 
+
+func form_pixels(shot: Image) -> Vector2i:
+	var counts := Vector2i.ZERO
+	for y in range(0, shot.get_height(), 2):
+		for x in range(0, shot.get_width(), 2):
+			var col := shot.get_pixel(x, y)
+			if col.r > col.g + 0.03:
+				counts.x += 1
+			elif col.g > col.r + 0.03:
+				counts.y += 1
+	return counts
+
+
+func check_form_pair(mesh: Mesh) -> void:
+	var nodes: Array[MultiMeshInstance3D] = []
+	for form in [1, 2]:
+		var mm := MultiMesh.new()
+		mm.transform_format = MultiMesh.TRANSFORM_3D
+		mm.use_custom_data = true
+		mm.mesh = mesh
+		mm.instance_count = 1
+		mm.set_instance_transform(0, Transform3D.IDENTITY)
+		mm.set_instance_custom_data(0, Color(0, 0, 2, 20))
+		var node := MultiMeshInstance3D.new()
+		node.multimesh = mm
+		var mat := VegetationLayer._wind_mat(VegetationLayer.SHADER, VegetationLayer.CALM, false)
+		mat.set_shader_parameter("albedo_color", Color.RED if form == 1 else Color.GREEN)
+		mat.set_shader_parameter("form_switch", Vector3(25, 20, form))
+		node.material_override = mat
+		root.add_child(node)
+		nodes.append(node)
+	var center := mesh.get_aabb().get_center()
+	camera.size = mesh.get_aabb().size.length() * 1.2
+	camera.look_at_from_position(center + Vector3(2, 1.1, -3), center)
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2(25, 0))
+	RenderingServer.global_shader_parameter_set("vegetation_clock", 20.0)
+	var hidden := form_pixels(await capture())
+	RenderingServer.global_shader_parameter_set("vegetation_clock", 20.25)
+	var half := form_pixels(await capture())
+	RenderingServer.global_shader_parameter_set("vegetation_clock", 20.5)
+	var full := form_pixels(await capture())
+	check(hidden == Vector2i.ZERO and half.x > full.x * 0.4 and half.x < full.x * 0.6
+		and half.y > full.y * 0.4 and half.y < full.y * 0.6, "Both LODs reveal together across the blend: %s / %s / %s" % [hidden, half, full])
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2.ZERO)
+	var near := form_pixels(await capture())
+	RenderingServer.global_shader_parameter_set("veg_center", Vector2(50, 0))
+	var far := form_pixels(await capture())
+	check(near.x > 30 and near.y == 0 and far.x == 0 and far.y > 30, "The shader chooses detailed or distant LOD as the player moves")
+	for node in nodes:
+		node.free()
+
+
 func run() -> void:
 	if DisplayServer.get_name() == "headless":
 		quit(1)
@@ -100,5 +152,6 @@ func run() -> void:
 		var gone := pixels(await capture())
 		check(half > 0 and half < counts[2] and gone == 0, "%s dissolves progressively" % test[0])
 		node.free()
+	await check_form_pair(plants[Plants.BUSH])
 	print("vegetation_fade_look: %d failures" % fails)
 	quit(1 if fails else 0)

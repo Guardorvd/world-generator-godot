@@ -5,8 +5,10 @@ var fails := 0
 
 class ContactLayer extends VegetationLayer:
 	var version_at_upload := {}
+	var upload_order := []
 	func _present_group(group: int, _immediate: bool) -> void:
 		version_at_upload[group] = obstacles_version
+		upload_order.append(group)
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 120)
@@ -51,6 +53,13 @@ func contact_publication() -> void:
 	layer._apply_grass(true)
 	check(layer.version_at_upload == {-1: 1, 0: 1, 1: 1, 2: 1} and layer.obstacles_version == 2,
 		"Forced publication also uploads before publishing contacts")
+	layer._far_of = {1: 3}
+	layer.understory.append({})
+	layer.upload_order.clear()
+	layer._begin_present()
+	layer._present_next(0)
+	check(layer.upload_order == [-1, 0, 1, 3, 2] and layer.version_at_upload[3] == 2 and layer.version_at_upload[2] == 3,
+		"Paired uploads are adjacent and contacts publish after both forms")
 	layer.free()
 
 
@@ -67,9 +76,42 @@ func stale_contacts() -> void:
 	forest.finish()
 
 
+func form_frames(history: Snapshots, near_xs: Array, far_xs: Array, now: float) -> Array:
+	var near_rows := rows(near_xs)
+	var far_rows := rows(far_xs)
+	for data: PackedFloat32Array in [near_rows, far_rows]:
+		for at in range(0, data.size(), Snapshots.STRIDE):
+			data[at + 18] = 2.0
+	var near_form := history.form_history(0, near_rows, near_xs.size())
+	var far_form := history.form_history(1, far_rows, far_xs.size())
+	var bounds := AABB(Vector3.ZERO, Vector3.ONE * 40)
+	var near_frame := history.prepare(0, near_rows, near_xs.size(), bounds, 1.0, now, false, false, far_form)
+	var far_frame := history.prepare(1, far_rows, far_xs.size(), bounds, 1.0, now, false, false, near_form)
+	return [history.commit(0, near_frame, now), history.commit(1, far_frame, now)]
+
+
+func paired_forms() -> void:
+	var history := Snapshots.new()
+	var frames := form_frames(history, [10], [10, 20], 10.0)
+	check(stamp(frames[0], 10) == 10.0 and stamp(frames[1], 10) == 10.0 and stamp(frames[1], 20) == 10.0,
+		"Both representations of a new plant start their reveal at upload")
+	frames = form_frames(history, [10, 20], [10, 20], 10.25)
+	check(stamp(frames[0], 20) == 10.0 and stamp(frames[1], 20) == 10.0,
+		"A detailed form inherits the partially revealed plant's timestamp")
+	frames = form_frames(history, [20], [10, 20], 11.0)
+	check(frames[0].count == 1 and stamp(frames[1], 10) == 10.0,
+		"A far-only plant keeps its history and releases the obsolete detailed mesh")
+	frames = form_frames(history, [20], [20], 12.0)
+	check(stamp(frames[1], 10) == -12.0, "A removed plant dissolves")
+	frames = form_frames(history, [10, 20], [10, 20], 12.25)
+	check(stamp(frames[0], 10) == stamp(frames[1], 10) and Snapshots.opacity(stamp(frames[0], 10), 12.25) == 0.5,
+		"Reversing a fade preserves opacity even when the returning plant adds a mesh")
+
+
 func run() -> void:
 	contact_publication()
 	await stale_contacts()
+	paired_forms()
 	var history := Snapshots.new()
 	var bounds := AABB(Vector3.ZERO, Vector3.ONE * 40)
 	var first := rows([10, 20])

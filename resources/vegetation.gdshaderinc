@@ -88,22 +88,32 @@ varying float bark_north;
 #endif
 
 void vertex() {
+	vec3 origin = MODEL_MATRIX[3].xyz;
+	float dist = distance(origin.xz, veg_center);
+	bool form_twin = form_switch.z > 0.5 && INSTANCE_CUSTOM.z >= 1.5;
+	v_lod = vec2(0.0, 2.0);
+	if (form_twin) {
+		float s = smoothstep(form_switch.x - form_switch.y * 0.5, form_switch.x + form_switch.y * 0.5, dist);
+		v_lod = form_switch.z < 1.5 ? vec2(s, 2.0) : vec2(0.0, s);
+	} else if (lod_level >= 0) {
+		float s1 = smoothstep(LOD1_D - LOD1_BAND * 0.5, LOD1_D + LOD1_BAND * 0.5, dist);
+		float s2 = smoothstep(LOD2_D - LOD2_BAND * 0.5, LOD2_D + LOD2_BAND * 0.5, dist);
+		v_lod = lod_level == 0 ? vec2(s1, 2.0) : (lod_level == 1 ? vec2(s2, s1) : vec2(0.0, s2));
+	}
+	bool lod_hidden = v_lod.x >= min(v_lod.y, 1.0);
 #ifdef BARK
 	bark_local = VERTEX;
 	bark_north = dot(normalize(mat3(MODEL_MATRIX) * NORMAL), vec3(-0.45, 0.0, -0.89));
 #endif
 	float h = clamp(VERTEX.y / height, 0.0, 1.0);
-	bool form_twin = form_switch.z > 0.5 && INSTANCE_CUSTOM.z >= 1.5;
 	float custom_z = form_twin ? INSTANCE_CUSTOM.z - 2.0 : INSTANCE_CUSTOM.z;
-	if (grass_variation) {
+	if (grass_variation && !lod_hidden) {
 		float seed = INSTANCE_CUSTOM.y * 6.2831853 + UV.x * 17.0;
 		float bend = UV.y * (0.35 + 0.65 * UV.y);
 		VERTEX.xz = VERTEX.xz * mix(1.16, 0.92, custom_z) + vec2(cos(seed), sin(seed)) * (0.04 + custom_z * 0.08) * bend;
 		VERTEX.y *= mix(0.84, 1.18, fract(seed * 0.381966 + custom_z * 0.5));
 	}
-	vec3 origin = MODEL_MATRIX[3].xyz;
 	float sheltered = 1.0 - COLOR.a;
-	float dist = distance(origin.xz, veg_center);
 	float fade_dist = directional_carpet ? carpet_fade_distance(origin.xz - veg_center) : dist;
 	v_fade = clamp((fade_far - fade_dist) / fade_len, 0.0, 1.0);
 	if (near_fade.y > 0.0) {
@@ -124,17 +134,7 @@ void vertex() {
 	} else if (stamp < 0.0) {
 		v_fade *= 1.0 - clamp((vegetation_clock + stamp) / 0.5, 0.0, 1.0);
 	}
-	v_lod = vec2(0.0, 2.0);
-	if (lod_level >= 0) {
-		float s1 = smoothstep(LOD1_D - LOD1_BAND * 0.5, LOD1_D + LOD1_BAND * 0.5, dist);
-		float s2 = smoothstep(LOD2_D - LOD2_BAND * 0.5, LOD2_D + LOD2_BAND * 0.5, dist);
-		v_lod = lod_level == 0 ? vec2(s1, 2.0) : (lod_level == 1 ? vec2(s2, s1) : vec2(0.0, s2));
-	}
-	if (form_twin) {
-		float s = smoothstep(form_switch.x - form_switch.y * 0.5, form_switch.x + form_switch.y * 0.5, dist);
-		v_lod = form_switch.z < 1.5 ? vec2(s, 2.0) : vec2(0.0, s);
-	}
-	if (thin_full > 0.0) {
+	if (thin_full > 0.0 && !lod_hidden) {
 		float keep = min(1.0, thin_full * thin_full / max(dist * dist, 1.0));
 		float rank = INSTANCE_CUSTOM.x;
 		if (rank > 0.0) {
@@ -145,13 +145,13 @@ void vertex() {
 		float spread = thin_spread > 0.0 ? max(grow, min(inversesqrt(max(keep, 1e-4)), thin_spread)) : grow;
 		VERTEX *= vec3(spread, grow, spread);
 	}
-	if (detail_full > 0.0) {
+	if (detail_full > 0.0 && !lod_hidden) {
 		float detail_dist = directional_carpet ? carpet_detail_distance(origin.xz - veg_center) : dist;
 		float keep_detail = mix(1.0, detail_keep, smoothstep(detail_full, detail_far, detail_dist));
 		v_fade *= clamp((keep_detail - UV2.x) * 10.0 + 1.0, 0.0, 1.0);
 	}
 	// Скрытый LOD не тратит вычисления на ветер, цвет и облака.
-	if (v_fade <= 0.0 || v_lod.x >= min(v_lod.y, 1.0)) {
+	if (v_fade <= 0.0 || lod_hidden) {
 		VERTEX = vec3(0.0);
 		v_cloud = 1.0;
 		v_ao = 1.0;
@@ -206,7 +206,12 @@ void vertex() {
 void fragment() {
 	// Сетка порогов (interleaved gradient noise): без прозрачности и сортировки, тени редеют так же.
 	float dither = fract(52.9829189 * fract(dot(FRAGCOORD.xy, vec2(0.06711056, 0.00583715))));
-	if (v_fade < 1.0 && v_fade <= dither || dither < v_lod.x || dither >= v_lod.y) {
+	if (dither < v_lod.x || dither >= v_lod.y) {
+		discard;
+	}
+	// Each form reveals its own share of pixels during a snapshot fade.
+	float reveal_dither = form_switch.z > 0.5 ? (dither - v_lod.x) / max(min(1.0, v_lod.y) - v_lod.x, 1e-4) : dither;
+	if (v_fade < 1.0 && v_fade <= reveal_dither) {
 		discard;
 	}
 #ifdef CUTOUT

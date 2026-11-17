@@ -10,6 +10,7 @@ extends SceneTree
 ##   --no-perf       только снимки
 ##   --scan-bands N  обход клеток раскладки N полосами (1 — подряд); сверка — layout_hash
 ##   --no-twins      «было» для смены форм подлеска: форма по центру раскладки, без пар ближняя/дальняя
+##   --check-lod-delay  проверка форм при движении по одному задержанному снимку, без генерации мира
 ##   --base-grass    «было» для дернины: VegetationLayer без ближнего низкого покрова (A/B)
 
 const Dev := preload("res://tools/control/control.gd")
@@ -105,6 +106,9 @@ func setup() -> void:
 	camera.current = true
 	results.legacy = VegetationLayer.legacy_open
 	results.flora = veg.flora_level
+	if "--check-lod-delay" in OS.get_cmdline_user_args():
+		_check_lod_delay()
+		return
 	# 17.11.2026: --views a,b — только эти виды (на HD 4600 все десять не укладываются в лимит); none — только замер
 	var only := Dev.arg("views")
 	if only != "":
@@ -129,6 +133,36 @@ func _start_ride() -> void:
 	var at := Vector2(40.0 * GameConfig.TILE, 132.0 * GameConfig.TILE)
 	veg.update(at.x, at.y, true)
 	last_us = Time.get_ticks_usec()
+
+
+## Проверяем реальные GPU-буферы первого снимка при отставании более 60 м в любом направлении.
+func _check_lod_delay() -> void:
+	_start_ride()
+	var checked := 0
+	var misses := 0
+	for form: int in veg._far_of:
+		if form >= VegetationLayer.Floor.FIRST:
+			continue
+		var near_mm: MultiMesh = veg.understory[form].mm
+		var far_mm: MultiMesh = veg.understory[veg._far_of[form]].mm
+		var near_rows := near_mm.buffer
+		var far_rows := far_mm.buffer
+		var detailed := {}
+		for i in near_mm.visible_instance_count:
+			var offset := i * VegetationLayer.STRIDE
+			detailed[veg.Snapshots.key(near_rows, offset)] = near_rows[offset + 18] >= 1.5
+		var switch := veg._form_switch(form)
+		for i in far_mm.visible_instance_count:
+			var offset := i * VegetationLayer.STRIDE
+			var at := veg.Snapshots.key(far_rows, offset)
+			for direction: Vector2 in [Vector2.RIGHT, Vector2.LEFT, Vector2.DOWN, Vector2.UP]:
+				var next := veg._fill_at + direction * 120.0
+				if at.distance_to(next) < switch.x - switch.y * 0.5:
+					checked += 1
+					if far_rows[offset + 18] < 1.5 or not detailed.get(at, false):
+						misses += 1
+	print("meadow_look: 120 m of movement on one snapshot, plants checked=%d, missing near LODs=%d" % [checked, misses])
+	quit(0 if checked > 0 and misses == 0 else 1)
 
 
 func _goto(v: int) -> void:
