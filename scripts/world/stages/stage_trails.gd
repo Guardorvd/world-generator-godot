@@ -1382,21 +1382,82 @@ static func _second_ways(w: WorldData, finder: Pathfinder, paths: Array, road_co
 			if (o - tv).length_squared() < SHORE_GAP * SHORE_GAP: spaced = false
 		if t >= 0 and spaced:
 			targets.append(tv) # и неудачная попытка: соседние точки перегона нашли бы тот же берег
-			# Ответвление от общей сети: не строим отдельный длинный подход от каждого дома.
-			var source := _nearest_path(w, t, SHORE_MAX)
-			if source < 0 or settle_d[source] < EXIT_R:
-				source = anchors[index] # ближайшая точка сети у поселения — тропа отходит от перегона
-			var p := _land_path(finder, w.cost, source, t, "trail")
-			var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
-			if not p.is_empty() and _length(w, p) <= d * BRANCH_LEN and _new_ground(w, p) and _adds_network(w, p, near):
-				var q := _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE,
-					func(q: PackedInt32Array) -> bool: return _length(w, q) <= d * BRANCH_LEN and _new_ground(w, q) and _adds_network(w, q, near))
-				if q.is_empty():
-					continue
-				_note_way(w, "shore", _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
-				all_paths.append(q)
+			if _spur(w, finder, anchors[index], t, SHORE_MAX, "shore", road_cost, state, near, settle_d, all_paths):
 				shores += 1
 				near = _net_near(w)
+	# 17.11.2026: смотровые точки — вершины холмов над перегоном (_overlook): короткая тропа наверх, откуда видно долину.
+	# Те же точки перегонов (без условия воды), не ближе VIEW_GAP друг к другу, не больше, чем поселений.
+	var views := 0
+	var view_targets: Array[Vector2i] = []
+	var legs := _shore_anchors(w, paths, settle_d, PackedFloat32Array())
+	for index in legs.size():
+		if finder.search_budget == 0 or views >= st.size(): break
+		if corr_paths != all_paths.size():
+			corr = _corridor(w, all_paths)
+			corr_paths = all_paths.size()
+		var view_us := Time.get_ticks_usec()
+		var t := _overlook(w, legs[index], corr)
+		_part("overlook", view_us)
+		if t < 0: continue
+		var tv := Vector2i(t % w.W, t / w.W)
+		var spaced := true
+		for o: Vector2i in view_targets:
+			if (o - tv).length_squared() < VIEW_GAP * VIEW_GAP: spaced = false
+		if not spaced: continue
+		view_targets.append(tv)
+		if _spur(w, finder, legs[index], t, VIEW_MAX, "view", road_cost, state, near, settle_d, all_paths):
+			views += 1
+			near = _net_near(w)
+
+
+## Короткая тропа от сети к цели t (берег, смотровая точка): от ближайшей к цели точки сети (не дальше reach), а если
+## она у поселения или её нет — от точки перегона anchor. Не длиннее BRANCH_LEN прямых, не дубль сети. true — добавлена.
+static func _spur(w: WorldData, finder: Pathfinder, anchor: int, t: int, reach: int, what: String, road_cost: PackedFloat32Array,
+		state: Dictionary, near: PackedFloat32Array, settle_d: PackedFloat32Array, all_paths: Array) -> bool:
+	var source := _nearest_path(w, t, reach)
+	if source < 0 or settle_d[source] < EXIT_R:
+		source = anchor
+	var p := _land_path(finder, w.cost, source, t, "trail")
+	var d := Grid.hypot(t % w.W - source % w.W, t / w.W - source / w.W)
+	if p.is_empty() or _length(w, p) > d * BRANCH_LEN or not _new_ground(w, p) or not _adds_network(w, p, near):
+		return false
+	var q := _structures(w, p, false, finder, w.cost, state, 0, ROAD_GRADE,
+		func(q: PackedInt32Array) -> bool: return _length(w, q) <= d * BRANCH_LEN and _new_ground(w, q) and _adds_network(w, q, near))
+	if q.is_empty():
+		return false
+	_note_way(w, what, _add_trail(w, q, "trail", road_cost, state.on_axis, state.get("surface")))
+	all_paths.append(q)
+	return true
+
+
+const VIEW_MIN := 12     # смотровая точка не ближе стольких клеток (48 м) от точки перегона
+const VIEW_MAX := 45     # и не дальше (180 м)
+const VIEW_RISE := 15.0  # м: выше точки перегона хотя бы на столько
+const VIEW_GAP := 60     # клеток (240 м) между смотровыми точками
+const VIEW_STEP := 2     # шаг перебора клеток
+
+
+## Смотровая точка у клетки сети s: самая высокая клетка суши в кольце VIEW_MIN..VIEW_MAX (перебор через VIEW_STEP),
+## выше s на VIEW_RISE м, не в коридоре near прежних путей и не на краю кольца (там склон продолжается — это не вершина);
+## -1, если такой нет
+static func _overlook(w: WorldData, s: int, near: PackedByteArray) -> int:
+	var sx := s % w.W
+	var sy := s / w.W
+	var best := -1
+	var top := w.h[s] + VIEW_RISE / (HEIGHT_SCALE * GameConfig.TILE)
+	var best_d := 0
+	for y in range(maxi(0, sy - VIEW_MAX), mini(w.H, sy + VIEW_MAX + 1), VIEW_STEP):
+		for x in range(maxi(0, sx - VIEW_MAX), mini(w.W, sx + VIEW_MAX + 1), VIEW_STEP):
+			var d := (x - sx) * (x - sx) + (y - sy) * (y - sy)
+			if d < VIEW_MIN * VIEW_MIN or d > VIEW_MAX * VIEW_MAX: continue
+			var i := y * w.W + x
+			if w.h[i] <= top or near[i] != 0 or w.cost[i] == INF or w.ocean[i] != 0 or w.lake[i] != 0: continue
+			top = w.h[i]
+			best = i
+			best_d = d
+	if best < 0 or best_d > (VIEW_MAX - 3) * (VIEW_MAX - 3):
+		return -1
+	return best
 
 
 ## 16.11.2026: замер поездок по основным связям (только отчёт, на мир не влияет; стенд settlement_look --roads).
@@ -1650,7 +1711,8 @@ static func _settle_dist(w: WorldData) -> PackedFloat32Array:
 
 
 ## Точки поиска берега: клетки основных связей через SHORE_STEP, дальше EXIT_R от поселений и не дальше SHORE_MAX
-## от моря или озера. Поселение без основных связей — само точка поиска (как раньше).
+## от моря или озера. Поселение без основных связей — само точка поиска (как раньше). Пустой water_d — все точки
+## перегонов без условия воды и без поселений (смотровые точки).
 static func _shore_anchors(w: WorldData, paths: Array, settle_d: PackedFloat32Array, water_d: PackedFloat32Array) -> PackedInt32Array:
 	var out := PackedInt32Array()
 	var seen := {}
@@ -1664,12 +1726,12 @@ static func _shore_anchors(w: WorldData, paths: Array, settle_d: PackedFloat32Ar
 		for k in range(1, p.size()):
 			run += Grid.hypot(p[k] % w.W - p[k - 1] % w.W, p[k] / w.W - p[k - 1] / w.W)
 			var c := p[k]
-			if run < SHORE_STEP or settle_d[c] < EXIT_R or water_d[c] > SHORE_MAX or seen.has(c): continue
+			if run < SHORE_STEP or settle_d[c] < EXIT_R or not water_d.is_empty() and water_d[c] > SHORE_MAX or seen.has(c): continue
 			run = 0.0
 			seen[c] = true
 			out.append(c)
 	for k in w.settlements.size():
-		if not linked.has(k): out.append(w.settlements[k].i)
+		if not linked.has(k) and not water_d.is_empty(): out.append(w.settlements[k].i)
 	return out
 
 
