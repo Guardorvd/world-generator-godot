@@ -129,7 +129,7 @@ func _initialize() -> void:
 	# Готовая поверхность, как в игре (полотно, сооружения с площадками въездов, метровая сетка дорог):
 	# въезд каждого моста по ширине настила на уровне его конца и не над водой (как road_safety_test).
 	started = Time.get_ticks_msec()
-	if report_metrics:
+	if report_metrics or "--landmarks" in args:
 		StageSites.run(w)
 		StageLakes.run(w)
 		w.generation.surface_rock = RockRelief.field_of(w)
@@ -203,6 +203,11 @@ func _initialize() -> void:
 			print("RoadRefinement (C#): %.0f мс, патчей %d, хеш патчей %s, хеш подгонки %s" % [(Time.get_ticks_usec() - t0) / 1000.0,
 				built.patches.size(), _digest(built.patches), _digest(built.fit_routes)])
 			if built.patches.is_empty(): fails += 1
+	# --landmarks: дорожные ориентиры (SettlementsBuilder.road_landmarks): сколько указателей, верстовых камней и туров;
+	# --landmarks-old — ещё и прежним кодом (копия в .godot/landmarks_old, см. _landmarks)
+	if "--landmarks" in args:
+		if "--landmarks-old" in args: _landmarks(w, final, true)
+		_landmarks(w, final, false)
 	# --forks: где необязательные пути (сокращения, обходы, берег, горные тропы, природные маршруты) отходят от сети
 	if "--forks" in args:
 		_forks(w)
@@ -368,6 +373,40 @@ func _forks(w: WorldData) -> void:
 	var close := spacing.filter(func(d: float) -> bool: return d < 80.0).size()
 	print("FORKS всего %d, у поселения %d, до соседней развилки или поселения < 80 м: %d, медиана %.0f м" % [forks.size(), near_all,
 		close, spacing[spacing.size() / 2] if not spacing.is_empty() else 0.0])
+
+
+## Ориентиры вдоль дорог: число по видам, на км дорог, туров на гребне (выше обоих концов участка на 8 м).
+## old — прежний SettlementsBuilder._add_road_landmarks из копии .godot/landmarks_old/settlements_builder_old.gd
+## (git show <коммит>:scripts/render/settlements_builder.gd без строки class_name) через счётчик вместо MeshBatch.
+func _landmarks(w: WorldData, final: Heightfield, old: bool) -> void:
+	var marks: Array = []
+	if old:
+		var script: GDScript = load("res://.godot/landmarks_old/settlements_builder_old.gd")
+		var counter := LandmarkCounter.new()
+		var lib := {signpost = BoxMesh.new(), milestone = BoxMesh.new(), pass_cairn = BoxMesh.new()}
+		script._add_road_landmarks(counter, w, final, lib, StandardMaterial3D.new())
+		var kinds := {}
+		kinds[lib.signpost] = "sign"
+		kinds[lib.milestone] = "mile"
+		kinds[lib.pass_cairn] = "cairn"
+		for m: Array in counter.marks: marks.append({kind = kinds[m[0]], xform = m[1]})
+	else:
+		marks = SettlementsBuilder.road_landmarks(w, final)
+	var count := {sign = 0, mile = 0, cairn = 0}
+	for m: Dictionary in marks: count[m.kind] += 1
+	var road_km := StageTrails._kind_length(w, "road") * GameConfig.TILE / 1000.0
+	print("LANDMARKS %s: указателей %d, верстовых камней %d (%.1f на км дорог, %.1f км), туров %d" % ["было" if old else "стало",
+		count.sign, count.mile, count.mile / maxf(road_km, 0.01), road_km, count.cairn])
+	var spots: Array = []
+	for m: Dictionary in marks:
+		if m.kind == "cairn": spots.append("(%d,%d) %.0f м" % [floori(m.xform.origin.x / GameConfig.TILE), floori(m.xform.origin.z / GameConfig.TILE), m.xform.origin.y])
+	print("  туры: ", spots)
+
+
+class LandmarkCounter extends MeshBatch:
+	var marks: Array = []
+	func add_detail(mesh: Mesh, xform: Transform3D, _color: Color, _mat: Material) -> void:
+		marks.append([mesh, xform])
 
 
 func _draw(img: Image, pts: Array, S: int, color: Color, width: int) -> void:

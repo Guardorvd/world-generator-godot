@@ -320,23 +320,38 @@ static func _add_courtyard_details(batch: MeshBatch, w: WorldData, heights: Heig
 
 
 ## Размещает дорожные указатели (signpost) на развилках, верстовые камни (milestone) вдоль дорог
-## и перевальные туры (pass_cairn) на высокогорных перевалах — всё через MultiMesh на общем атласе.
+## и перевальные туры (pass_cairn) на перевалах — всё через MultiMesh на общем атласе. Места — road_landmarks.
 static func _add_road_landmarks(batch: MeshBatch, w: WorldData, heights: Heightfield,
 		details_lib: Dictionary, opaque_mat: Material) -> void:
-	if w.trails.is_empty() or w.W <= 0 or w.H <= 0:
-		return
-	var sign_mesh: Mesh = details_lib.get("signpost")
-	var mile_mesh: Mesh = details_lib.get("milestone")
-	var cairn_mesh: Mesh = details_lib.get("pass_cairn")
-	if sign_mesh == null and mile_mesh == null and cairn_mesh == null:
-		return
+	var meshes := {sign = details_lib.get("signpost"), mile = details_lib.get("milestone"), cairn = details_lib.get("pass_cairn")}
+	for mark: Dictionary in road_landmarks(w, heights):
+		var mesh: Mesh = meshes[mark.kind]
+		if mesh != null:
+			batch.add_detail(mesh, mark.xform, Color.WHITE, opaque_mat)
 
+
+const MILE_STEP := 200.0   # м между верстовыми камнями (по прямой, по всей сети дорог)
+const MILE_PROBE := 20.0   # м между пробами места вдоль участка
+const MILE_END := 20.0     # м: у конца участка (узла) камня нет — там указатель
+const CREST_RISE := 8.0    # м: тур — на гребне, выше обоих концов участка хотя бы на столько
+const CAIRN_ELEV := 0.36   # и выше этой отметки (w.elev) — высокогорье
+
+
+## 17.11.2026: места ориентиров [{kind: sign | mile | cairn, xform}] без отрисовки (стенд road_plan_test -- --landmarks).
+## Указатель — у конца участка, где сходится другой путь (развилка), на обочине, не ближе 90 м к другому. Верстовые
+## камни — по всей сети дорог не ближе MILE_STEP друг к другу (прежде — через каждые 48 точек линии участка: на коротких
+## участках между узлами их не было, на изогнутых шли чаще). Тур — на гребне участка тропы (выше обоих концов на CREST_RISE: перевал или
+## седловина), а у конца участка на вершине (_summit) — у этого конца; прежде ставился в самой высокой точке любого участка,
+## то есть посреди подъёма у узла.
+static func road_landmarks(w: WorldData, heights: Heightfield) -> Array:
+	var out: Array = []
+	if w.trails.is_empty() or w.W <= 0 or w.H <= 0:
+		return out
 	# Пространственная хеш-таблица всех трасс для быстрого поиска развилок.
 	var buckets := {}
 	for tr_idx in w.trails.size():
 		var tr: Dictionary = w.trails[tr_idx]
-		var kind: String = str(tr.get("kind", ""))
-		if kind == "animal":
+		if str(tr.get("kind", "")) == "animal":
 			continue
 		var pts: Array = tr.get("pts", [])
 		for k in pts.size():
@@ -361,64 +376,100 @@ static func _add_road_landmarks(batch: MeshBatch, w: WorldData, heights: Heightf
 		var pts: Array = tr.get("pts", [])
 		if pts.size() < 4:
 			continue
+		var junction := [_junction(buckets, tr_idx, pts[0]), _junction(buckets, tr_idx, pts[-1])]
 
 		# 1. Указатели на развилках в начале/конце участка, где сходится другая трасса.
-		if sign_mesh != null:
-			for end_i: int in [0, pts.size() - 1]:
-				var ep: Dictionary = pts[end_i]
-				var b := Vector2i(roundi(float(ep.x) / 2.5), roundi(float(ep.y) / 2.5))
-				var is_junction := false
-				for dy in range(-1, 2):
-					if is_junction:
-						break
-					for dx in range(-1, 2):
-						for other: int in buckets.get(b + Vector2i(dx, dy), []):
-							if other != tr_idx:
-								is_junction = true
-								break
-						if is_junction:
-							break
-				if not is_junction:
+		for end in 2:
+			if not junction[end]:
+				continue
+			var st_i := clampi(4 if end == 0 else pts.size() - 5, 1, pts.size() - 2)
+			var xf := _road_shoulder(w, heights, pts, st_i, 1.45)
+			if not xf.is_empty():
+				var p2 := Vector2(xf.origin.x, xf.origin.z)
+				if _far_from(signs_placed, p2, 90.0):
+					signs_placed.append(p2)
+					out.append({kind = "sign", xform = xf.xform})
+
+		# 2. Каменные верстовые столбы вдоль главных дорог — по всей сети дорог через MILE_STEP: точка участка, от которой
+		# до любого камня не меньше MILE_STEP (участки между узлами короткие — счёт по участку их пропускал)
+		var along := PackedFloat32Array()
+		along.resize(pts.size())
+		for k in range(1, pts.size()):
+			along[k] = along[k - 1] + Vector2(float(pts[k].x - pts[k - 1].x), float(pts[k].y - pts[k - 1].y)).length() * TILE
+		var total := along[-1]
+		if kind == "road":
+			var last := -INF
+			for k in range(1, pts.size() - 1):
+				if along[k] < MILE_END or total - along[k] < MILE_END or along[k] - last < MILE_PROBE:
 					continue
-				var st_i := clampi(4 if end_i == 0 else pts.size() - 5, 1, pts.size() - 2)
-				var xf := _road_shoulder(w, heights, pts, st_i, 1.45)
+				last = along[k]
+				var c := Vector2(float(pts[k].x) * TILE, float(pts[k].y) * TILE)
+				if not _far_from(miles_placed, c, MILE_STEP):
+					continue
+				var xf := _road_shoulder(w, heights, pts, k, 1.25)
 				if not xf.is_empty():
 					var p2 := Vector2(xf.origin.x, xf.origin.z)
-					if _far_from(signs_placed, p2, 90.0):
-						signs_placed.append(p2)
-						batch.add_detail(sign_mesh, xf.xform, Color.WHITE, opaque_mat)
+					if _far_from(signs_placed, p2, 28.0):
+						miles_placed.append(c)
+						out.append({kind = "mile", xform = xf.xform})
 
-		# 2. Каменные верстовые столбы вдоль главных дорог (~каждые 200 м).
-		if mile_mesh != null and kind == "road" and pts.size() >= 30:
-			var idx := 22
-			while idx < pts.size() - 12:
-				var xf := _road_shoulder(w, heights, pts, idx, 1.25)
-				if not xf.is_empty():
-					var p2 := Vector2(xf.origin.x, xf.origin.z)
-					if _far_from(miles_placed, p2, 120.0) and _far_from(signs_placed, p2, 28.0):
-						miles_placed.append(p2)
-						batch.add_detail(mile_mesh, xf.xform, Color.WHITE, opaque_mat)
-				idx += 48
-
-		# 3. Перевальные туры на высоких гребнях горных и пешеходных троп.
-		if cairn_mesh != null and kind in ["mountain", "trail"] and pts.size() >= 18:
+		# 3. Перевальные туры на гребнях горных и пешеходных троп; в тупике — у вершины.
+		if kind in ["mountain", "trail"] and pts.size() >= 18:
+			var elev := PackedFloat32Array()
+			var hm := PackedFloat32Array()
+			elev.resize(pts.size())
+			hm.resize(pts.size())
+			for k in pts.size():
+				var cx := clampi(floori(float(pts[k].x)), 0, w.W - 1)
+				var cy := clampi(floori(float(pts[k].y)), 0, w.H - 1)
+				elev[k] = w.elev[cy * w.W + cx]
+				hm[k] = heights.ground_at(float(pts[k].x) * TILE, float(pts[k].y) * TILE)
 			var best_i := -1
-			var best_elev := 0.36
+			var best_h := -INF
 			for k in range(8, pts.size() - 8, 2):
-				var p: Dictionary = pts[k]
-				var cx := clampi(floori(float(p.x)), 0, w.W - 1)
-				var cy := clampi(floori(float(p.y)), 0, w.H - 1)
-				var ev: float = w.elev[cy * w.W + cx]
-				if ev > best_elev:
-					best_elev = ev
+				if elev[k] > CAIRN_ELEV and hm[k] > best_h:
+					best_h = hm[k]
 					best_i = k
+			var crest := best_i >= 0 and best_h - maxf(hm[0], hm[-1]) >= CREST_RISE
+			var top := -INF
+			for v: float in hm: top = maxf(top, v)
+			if not crest:
+				best_i = -1
+				# конец участка на вершине (высший на участке и выше земли вокруг, _summit) — тур чуть ниже конца;
+				# узел посреди подъёма (рядом земля выше) — не вершина
+				for end in 2:
+					var k_end := 0 if end == 0 else pts.size() - 1
+					var k_in := clampi(6 if end == 0 else pts.size() - 7, 1, pts.size() - 2)
+					if elev[k_end] > CAIRN_ELEV and hm[k_end] >= top - 0.5 and _summit(heights, float(pts[k_end].x) * TILE, float(pts[k_end].y) * TILE, hm[k_end]):
+						best_i = k_in
 			if best_i >= 0:
 				var xf := _road_shoulder(w, heights, pts, best_i, 1.55)
 				if not xf.is_empty():
 					var p2 := Vector2(xf.origin.x, xf.origin.z)
 					if _far_from(cairns_placed, p2, 120.0) and _far_from(signs_placed, p2, 24.0):
 						cairns_placed.append(p2)
-						batch.add_detail(cairn_mesh, xf.xform, Color.WHITE, opaque_mat)
+						out.append({kind = "cairn", xform = xf.xform})
+	return out
+
+
+## Точка на вершине или гребне: из восьми направлений на 20 м земля ниже на 1,5 м хотя бы в шести
+static func _summit(heights: Heightfield, x: float, z: float, y: float) -> bool:
+	var lower := 0
+	for k in 8:
+		var a := TAU * k / 8.0
+		if heights.ground_at(x + cos(a) * 20.0, z + sin(a) * 20.0) < y - 1.5: lower += 1
+	return lower >= 6
+
+
+## Конец участка ep — развилка: рядом (±1 ячейка хеша, ~15 м) есть точка другого пути
+static func _junction(buckets: Dictionary, tr_idx: int, ep: Dictionary) -> bool:
+	var b := Vector2i(roundi(float(ep.x) / 2.5), roundi(float(ep.y) / 2.5))
+	for dy in range(-1, 2):
+		for dx in range(-1, 2):
+			for other: int in buckets.get(b + Vector2i(dx, dy), []):
+				if other != tr_idx:
+					return true
+	return false
 
 
 static func _road_shoulder(w: WorldData, heights: Heightfield, pts: Array, idx: int, extra_m: float) -> Dictionary:
