@@ -18,7 +18,7 @@ const BUSH_END := 820.0
 const OUTER_END := 940.0
 const OUTER_SCRUB_END := 720.0
 const PLANT_SHARE := 0.8
-const TURF_SHARE := 0.75 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальней дерновиной
+const TURF_SHARE := 1.0 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальними дерновинами
 enum { FINE, COARSE, SCRUB, PLANT }
 enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS }
 const PARTS := ["f", "c", "s", "p"]

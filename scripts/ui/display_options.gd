@@ -23,6 +23,7 @@ var flora: OptionButton # 16.0: качество растительности
 var particles: OptionButton # 11.11: частицы окружения
 var carpet_density: OptionButton # 14.11.2026: дернина — густота и дальность
 var carpet_range: OptionButton
+var mid_grass: OptionButton # 17.11.2026: дерновины вдали — густота
 var road_quality: OptionButton # 15.11.2026: детализация дорог — качество и дальность
 var road_range: OptionButton
 var style_on := {}      # 13.11: «Визуальный стиль» — CheckBox и HSlider у каждого эффекта VisualStyle.EFFECTS
@@ -56,6 +57,7 @@ func setup(host: Node) -> void:
 	particles = host.get_node("%ParticlesOption")
 	carpet_density = host.get_node("%CarpetDensityOption")
 	carpet_range = host.get_node("%CarpetRangeOption")
+	mid_grass = host.get_node("%MidGrassOption")
 	road_quality = host.get_node("%RoadQualityOption")
 	road_range = host.get_node("%RoadRangeOption")
 	if road_quality.item_count == 0:
@@ -67,6 +69,9 @@ func setup(host: Node) -> void:
 	if carpet_density.item_count == 0:
 		for level: Dictionary in GameSettings.CARPET_DENSITY:
 			carpet_density.add_item(level.title.capitalize())
+	if mid_grass.item_count == 0:
+		for level: Dictionary in GameSettings.MID_GRASS:
+			mid_grass.add_item(level.title.capitalize())
 	if carpet_range.item_count == 0:
 		for level: Dictionary in GameSettings.CARPET_RANGE:
 			carpet_range.add_item(level.title.capitalize())
@@ -105,7 +110,7 @@ func setup(host: Node) -> void:
 	apply_button.pressed.connect(preview)
 	for option: OptionButton in [mode, resolution]:
 		option.item_selected.connect(func(_i: int) -> void: _update_apply())
-	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, cloud_quality, particles, carpet_density, carpet_range, road_quality, road_range]:
+	for option: OptionButton in [scale, aa, draw, flora, lighting, fog_quality, cloud_quality, particles, carpet_density, carpet_range, mid_grass, road_quality, road_range]:
 		option.item_selected.connect(func(_i: int) -> void: apply_graphics())
 	for box: CheckBox in [vsync, shadows, tree_garlands]:
 		box.toggled.connect(func(_on: bool) -> void: apply_graphics())
@@ -141,6 +146,7 @@ func sync() -> void:
 	particles.select(state.particles)
 	carpet_density.select(state.carpet_density)
 	carpet_range.select(state.carpet_range)
+	mid_grass.select(state.get("mid_grass", GameSettings.DEFAULT_MID_GRASS))
 	road_quality.select(state.get("road_quality", GameSettings.DEFAULT_ROAD_QUALITY))
 	road_range.select(state.get("road_range", GameSettings.DEFAULT_ROAD_RANGE))
 	for id: String in VisualStyle.EFFECTS:
@@ -171,7 +177,7 @@ func selected_state() -> Dictionary:
 		render_scale = SCALES[scale.selected], msaa = aa.selected, vsync = vsync.button_pressed,
 		shadows = shadows.button_pressed, tree_garlands = tree_garlands.button_pressed, draw = draw.selected, flora = flora.selected, lighting = lighting.selected,
 		fog_quality = fog_quality.selected, cloud_quality = cloud_quality.selected, particles = particles.selected,
-		carpet_density = carpet_density.selected, carpet_range = carpet_range.selected,
+		carpet_density = carpet_density.selected, carpet_range = carpet_range.selected, mid_grass = mid_grass.selected,
 		road_quality = road_quality.selected, road_range = road_range.selected}
 
 func pending() -> bool:
@@ -187,7 +193,7 @@ func _update_apply() -> void:
 func apply_graphics() -> void:
 	var state := GameContext.scope.settings.display_state()
 	var chosen := selected_state()
-	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "road_quality", "road_range"]:
+	for key: String in ["render_scale", "msaa", "vsync", "shadows", "tree_garlands", "draw", "flora", "lighting", "fog_quality", "cloud_quality", "particles", "carpet_density", "carpet_range", "mid_grass", "road_quality", "road_range"]:
 		state[key] = chosen[key]
 		if pending():
 			_pending[key] = chosen[key]

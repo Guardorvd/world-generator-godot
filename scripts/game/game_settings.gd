@@ -82,6 +82,14 @@ const CARPET_RANGE := [
 	{title = "экстра", meters = 22.0, directional = true},
 ]
 const DEFAULT_CARPET_RANGE := 4
+# 17.11.2026: дерновины средних дистанций (VegetationLayer._open_sod) — множитель их доли; 0 — слоя нет
+const MID_GRASS := [
+	{title = "выключена", scale = 0.0},
+	{title = "редкая", scale = 0.55},
+	{title = "обычная", scale = 1.0},
+	{title = "густая", scale = 1.35},
+]
+const DEFAULT_MID_GRASS := 2
 # 15.11.2026: детализация дорог — объём полотна (глубина и тени колей и ям, мелкий камень, россыпь у кромок) и дальность,
 # на которой он виден. quality идёт в шейдер рельефа (общий параметр road_quality.x), stones — доля россыпи камней,
 # range — множитель дальности мелкой детали (road_quality.y).
@@ -113,6 +121,7 @@ var flora := DEFAULT_FLORA      # номер в FLORA_LEVELS
 var particles := DEFAULT_PARTICLES # номер в PARTICLE_LEVELS
 var carpet_density := DEFAULT_CARPET_DENSITY # номер в CARPET_DENSITY
 var carpet_range := DEFAULT_CARPET_RANGE     # номер в CARPET_RANGE
+var mid_grass := DEFAULT_MID_GRASS           # номер в MID_GRASS
 var road_quality := DEFAULT_ROAD_QUALITY     # номер в ROAD_QUALITY
 var road_range := DEFAULT_ROAD_RANGE         # номер в ROAD_RANGE
 var shadows := DEFAULT_SHADOWS # только тени направленного света
@@ -172,6 +181,7 @@ func _apply_config(cfg: ConfigFile) -> void:
 	particles = roundi(_number(cfg, "view", "particles", particles, 0, PARTICLE_LEVELS.size() - 1))
 	carpet_density = roundi(_number(cfg, "view", "carpet_density", carpet_density, 0, CARPET_DENSITY.size() - 1))
 	carpet_range = roundi(_number(cfg, "view", "carpet_range", carpet_range, 0, CARPET_RANGE.size() - 1))
+	mid_grass = roundi(_number(cfg, "view", "mid_grass", mid_grass, 0, MID_GRASS.size() - 1))
 	road_quality = roundi(_number(cfg, "view", "road_quality", road_quality, 0, ROAD_QUALITY.size() - 1))
 	road_range = roundi(_number(cfg, "view", "road_range", road_range, 0, ROAD_RANGE.size() - 1))
 	for id: String in VisualStyle.EFFECTS:
@@ -273,6 +283,7 @@ func reset_defaults() -> void:
 	particles = DEFAULT_PARTICLES
 	carpet_density = DEFAULT_CARPET_DENSITY
 	carpet_range = DEFAULT_CARPET_RANGE
+	mid_grass = DEFAULT_MID_GRASS
 	road_quality = DEFAULT_ROAD_QUALITY
 	road_range = DEFAULT_ROAD_RANGE
 	style_on = VisualStyle.DEFAULT_ON.duplicate()
@@ -306,6 +317,7 @@ func save_settings() -> Error:
 	cfg.set_value("view", "particles", particles)
 	cfg.set_value("view", "carpet_density", carpet_density)
 	cfg.set_value("view", "carpet_range", carpet_range)
+	cfg.set_value("view", "mid_grass", mid_grass)
 	cfg.set_value("view", "road_quality", road_quality)
 	cfg.set_value("view", "road_range", road_range)
 	for id: String in VisualStyle.EFFECTS:
@@ -338,7 +350,7 @@ func display_state() -> Dictionary:
 	return {fullscreen = fullscreen, resolution = resolution, render_scale = render_scale,
 		msaa = msaa, vsync = vsync, shadows = shadows, tree_garlands = tree_garlands, draw = draw, flora = flora, lighting = lighting,
 		fog_quality = fog_quality, cloud_quality = cloud_quality, particles = particles, carpet_density = carpet_density, carpet_range = carpet_range,
-		road_quality = road_quality, road_range = road_range,
+		mid_grass = mid_grass, road_quality = road_quality, road_range = road_range,
 		style_on = style_on.duplicate(), style_amount = style_amount.duplicate()}
 
 
@@ -355,6 +367,7 @@ func set_display_state(state: Dictionary) -> void:
 	particles = clampi(state.get("particles", particles), 0, PARTICLE_LEVELS.size() - 1)
 	carpet_density = clampi(state.get("carpet_density", carpet_density), 0, CARPET_DENSITY.size() - 1)
 	carpet_range = clampi(state.get("carpet_range", carpet_range), 0, CARPET_RANGE.size() - 1)
+	mid_grass = clampi(state.get("mid_grass", mid_grass), 0, MID_GRASS.size() - 1)
 	road_quality = clampi(state.get("road_quality", road_quality), 0, ROAD_QUALITY.size() - 1)
 	road_range = clampi(state.get("road_range", road_range), 0, ROAD_RANGE.size() - 1)
 	lighting = clampi(state.get("lighting", lighting), 0, 2)

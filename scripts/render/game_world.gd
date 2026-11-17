@@ -654,6 +654,7 @@ func set_paused(p: bool) -> void:
 		_apply_lighting_and_fog()
 		var redraw := vegetation.set_draw(services.settings.draw) # и дальность прорисовки (с 9.8+)
 		redraw = vegetation.set_flora(services.settings.flora) or redraw # и качество растительности (16.0)
+		redraw = vegetation.set_mid_grass(services.settings.mid_grass) or redraw # 17.11.2026: дерновины вдали
 		vegetation.set_carpet() # 14.11.2026: густота и дальность дернины; ковёр пересоберёт своя фоновая задача
 		if ambient != null:
 			ambient.density = GameSettings.PARTICLE_LEVELS[services.settings.particles].density

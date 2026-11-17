@@ -59,9 +59,11 @@ const GROUP_GROW := 0.8
 ## полоса SOD_BAND) и с какого от центра раскладки кладутся (игрок может уйти от центра на шаг обновления).
 const SOD_SHARE := 1.0
 const SOD_FROM := 30.0
+const SOD_FULL := 45.0 # полная густота дерновин; дальше редеют как (SOD_FULL / d)², как куртины открытых мест
 const SOD_BAND := 8.0
 const SOD_PLACE_FROM := 14.0
 var _sod_entry := -1
+var mid_grass := 1.0 # множитель доли дерновин (GameSettings.MID_GRASS), 0 — слоя нет
 ## 16.0: кусты и подрост переходят на дальнюю форму позже мелочи (крупнее, заметнее)
 const WOODY_FAR_FORM := 1.6
 ## С 9.8+ дальность — настройка игрока (GameSettings.DRAW_LEVELS). Полная густота травы и мелких растений —
@@ -271,6 +273,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 	grass_mat.set_shader_parameter("grass_variation", true)
 	_set_radii(settings.draw)
 	_set_flora(settings.flora)
+	mid_grass = GameSettings.MID_GRASS[settings.mid_grass].scale
 	grass = _multimesh(grass_mesh, grass_mat, _grass_cap(), true, false, true).multimesh
 	_grass_margin = _radius(grass_mesh) * 1.5
 	_grass_box = grass_mesh.get_aabb().grow(0.1) # запас на индивидуальный изгиб кончиков
@@ -428,7 +431,7 @@ func _apply_fade() -> void:
 			radius = GameConfig.GRASS_R
 		var mat: ShaderMaterial = entry.node.material_override
 		_fade(mat, radius, _ahead(radius))
-		mat.set_shader_parameter("thin_full", _full_r(entry.base, entry.far))
+		mat.set_shader_parameter("thin_full", SOD_FULL if kind == _sod_entry else _full_r(entry.base, entry.far))
 		# 16.0: редеющие вдали куртины крупнее — массив сохраняет объём (как пучки травы за GRASS_R)
 		mat.set_shader_parameter("thin_grow", GROUP_GROW if entry.group else (OPEN_GROW if entry.base in Understory.OPEN_FORMS else 0.0))
 		mat.set_shader_parameter("thin_spread", GROUP_SPREAD if entry.group else 0.0)
@@ -484,6 +487,18 @@ func _set_flora(level: int) -> void:
 	flora_level = clampi(level, 0, GameSettings.FLORA_LEVELS.size() - 1)
 	flora = GameSettings.FLORA_LEVELS[flora_level]
 	far_form_r = flora.far_form
+
+
+## 17.11.2026: густота дерновин вдали изменилась на паузе; true — другая, вызывающий затем делает update(..., true).
+func set_mid_grass(level: int) -> bool:
+	var value: float = GameSettings.MID_GRASS[clampi(level, 0, GameSettings.MID_GRASS.size() - 1)].scale
+	if value == mid_grass:
+		return false
+	_finish()
+	snapshots.reset()
+	mid_grass = value
+	last_fill = Vector2.INF
+	return true
 
 
 ## Смена качества растительности на паузе; true — другое, вызывающий затем делает update(..., true).
@@ -1715,6 +1730,8 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	# Obstacles still own first placement, after the complete snapshot is ready.
 	road.sync_regions(regions, placement, snapshot.trees, snapshot.get("road_revision", 0))
 	_fill_road(px, pz)
+	var under_us := 0
+	var grass_us := 0
 	# Без раннего выхода по полному буферу травы: подлесок дальних рядов собирается всегда.
 	for j in range(maxi(0, floori(scan_low.y)), mini(w.H - 1, ceili(scan_high.y)) + 1):
 		for i in range(maxi(0, floori(scan_low.x)), mini(w.W - 1, ceili(scan_high.x)) + 1):
@@ -1742,9 +1759,13 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 			var light := StageClimate.natural_conditions(w, i, j).x
 			lush *= (0.45 + 0.75 * w.moist[k]) * (0.65 + 0.7 * light)
 			lush *= 1.0 - 0.65 * surface.r
+			var t_u := Time.get_ticks_usec()
 			lush *= _fill_understory(i, j, surface, light, px, pz)
 			if rocky_cell: lush *= _rock_shelter(surface, i + world.world_origin.x, j + world.world_origin.y)
+			var t_g := Time.get_ticks_usec()
 			n = _grass_cell(i, j, gr, lush, surface, d2, n, w.path_mask[k])
+			under_us += t_g - t_u
+			grass_us += Time.get_ticks_usec() - t_g
 	if canopy != null:
 		for j in range(floori(scan_low.y), ceili(scan_high.y) + 1):
 			for i in range(floori(scan_low.x), ceili(scan_high.x) + 1):
@@ -1781,19 +1802,22 @@ func _fill_grass(px: float, pz: float, snapshot: Dictionary = {}) -> void:
 	# Иначе невидимый ещё куст, попавший в раскладку с запасом, вытеснял бы видимый соседний.
 	_understory_sites.sort_custom(func(a: Array, b: Array) -> bool: return a[6] < b[6])
 	var t_sort := Time.get_ticks_usec()
-	for priority in 3:
-		for site: Array in _understory_sites:
-			if Placement.priority(site[0]) == priority:
-				if site.size() > 7:
-					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6], false, 1.0, 0.0, site[7], site[8],
-						site[9] if site.size() > 9 else 1.0, site[10] if site.size() > 10 else -1)
-				else:
-					_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
+	# 17.11.2026: приоритет считается один раз на место (раньше — в каждом из трёх проходов); порядок тот же
+	var buckets: Array[Array] = [[], [], []]
+	for site: Array in _understory_sites:
+		buckets[Placement.priority(understory[site[0]].base)].append(site)
+	for bucket: Array in buckets:
+		for site: Array in bucket:
+			if site.size() > 7:
+				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6], false, 1.0, 0.0, site[7], site[8],
+					site[9] if site.size() > 9 else 1.0)
+			else:
+				_put_understory(site[0], site[1], site[2], site[3], site[4], site[5], -1, site[6])
 	var t_place := Time.get_ticks_usec()
 	_fill_tree_roots(px, pz)
 	_fill_outer_roots(snapshot.trees, px, pz)
 	_filter_grass()
-	fill_stats = {scan_ms = (t_scan - _fill_started) / 1000.0, sort_ms = (t_sort - t_scan) / 1000.0,
+	fill_stats = {scan_ms = (t_scan - _fill_started) / 1000.0, scan_under_ms = under_us / 1000.0, scan_grass_ms = grass_us / 1000.0, sort_ms = (t_sort - t_scan) / 1000.0,
 		place_ms = (t_place - t_sort) / 1000.0, grass_filter_ms = (Time.get_ticks_usec() - t_place) / 1000.0,
 		sites = _understory_sites.size()}
 	_understory_sites.clear()
@@ -1805,19 +1829,26 @@ func _grass_cell(i: int, j: int, gr: Dictionary, lush: float, surface: Color, d2
 	var buf := grass_buf
 	var w := world
 	var cnt := floori(gr.dens * (0.5 + WGRandom.hash2(i, j, 5)) * lush * (1.0-0.9*surface.a))
+	if cnt <= 0:
+		return n
 	var tc: Array = gr.tint
-	var straw := _straw(gr, i, j, surface)
 	# Дальше GRASS_R трава редеет, а пучки чуть крупнее (на средней и высокой дальности). С 9.9+ это
 	# решает шейдер по нынешнему расстоянию и порогу пучка; здесь — с запасом на _ahead ближе.
 	var keep: float = _keep(sqrt(d2) * TILE, GameConfig.GRASS_R, _ahead(grass_r)) * flora.grass
+	# 17.11.2026: пороги поредения пучков клетки стратифицированы (m + сдвиг) / cnt: пучки с порогом выше keep —
+	# хвост цикла, и вдали он не перебирается (раньше на 150 м хешировались все ~9 пучков ради одного).
+	var shift := WGRandom.hash2(i * 5, j, 41)
+	if shift / cnt > keep:
+		return n
+	var straw := _straw(gr, i, j, surface)
 	var inside := i >= 0 and j >= 0 and i < w.W and j < w.H
 	for m in cnt:
 		if n >= grass_buf.size() / STRIDE:
 			fill_capped += 1
 			break
-		var rank := WGRandom.hash2(i * 5 + m, j, 41)
+		var rank := (m + shift) / cnt
 		if rank > keep:
-			continue
+			break
 		var x := (i + WGRandom.hash2(i * 7 + m, j, 11)) * TILE
 		var z := (j + WGRandom.hash2(i, j * 7 + m, 13)) * TILE
 		# Плавная, неодинаковая обочина вместо пустых квадратов клеточной маски.
@@ -2101,7 +2132,7 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 	var verge := q[o + 10] / 255.0
 	var steppe := q[o + 11] / 255.0
 	var bloom := q[o + 12] / 255.0
-	if _sod_entry >= 0:
+	if _sod_entry >= 0 and mid_grass > 0.0:
 		_open_sod(i, j, bi, surface, px, pz, density, grass_mul, inside)
 	if density <= 0.004:
 		return grass_mul
@@ -2180,7 +2211,7 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 ## 17.11.2026: дерновины средних дистанций — газон, степь, горный луг, где куртин мало. Пустые места клетки (6 и 7,
 ## после OPEN_SLOTS) получают групповую форму злаковой травы: тон и сушь как у пучков травы клетки, густота — от травы
 ## места и обратно густоте куртин. Вблизи (до SOD_FROM от игрока) их нет — там ковёр и трава: шейдер их растворяет.
-## Поредение — как у травы ((GRASS_R / d)², та же дальность), поэтому число растёт как логарифм дальности.
+## Поредение — как у куртин ((SOD_FULL / d)²), поэтому число растёт как логарифм дальности.
 ## Дальность дерновин: как у куртин открытых мест (дальше — дальние валы FarForest с 144 м)
 func _sod_reach() -> float:
 	return minf(grass_r, OPEN_MAX_R * flora.reach)
@@ -2189,13 +2220,16 @@ func _sod_reach() -> float:
 func _open_sod(i: int, j: int, bi: int, surface: Color, px: float, pz: float, density: float, grass_mul: float, inside: bool) -> void:
 	var bd: Dictionary = Biomes.LIST[bi]
 	var gr: Dictionary = bd.grass if bd.has("grass") else ROCK_GRASS
-	var chance := SOD_SHARE * clampf(grass_mul, 0.0, 1.0) * (1.0 - 0.7 * density) * (1.0 - 0.8 * surface.a)
+	var chance := SOD_SHARE * mid_grass * clampf(grass_mul, 0.0, 1.0) * (1.0 - 0.7 * density) * (1.0 - 0.8 * surface.a)
 	if chance <= 0.01:
+		return
+	var reach := _sod_reach()
+	# вся клетка дальше дальности — без хешей мест (таких клеток в круге раскладки больше половины)
+	if StreamPolicy.distance_to_coverage(Vector2(i + 0.5, j + 0.5) * TILE, Vector2(px, pz), _fill_lead) > reach + TILE:
 		return
 	var tc: Array = gr.tint
 	var straw := -1.0 # считается только для занятого места (раскладка проходит десятки тысяч клеток)
 	var seed := world.seed_num ^ 8817
-	var reach := _sod_reach()
 	var hx := i * 8
 	for m in [6, 7]:
 		if WGRandom.hash2(hx + m, j, seed + 1) > chance:
@@ -2210,14 +2244,14 @@ func _open_sod(i: int, j: int, bi: int, surface: Color, px: float, pz: float, de
 		if d > reach:
 			continue
 		var rank := WGRandom.hash2(hx + m, j, seed + 8)
-		if rank > _keep(d, GameConfig.GRASS_R, _ahead(reach)) * flora.grass:
+		if rank > _keep(d, SOD_FULL, _ahead(reach)) * flora.grass:
 			continue
 		var v := 1.0 + WGRandom.hash2(m, i + j, seed + 5) * 0.25
 		var dry := clampf(straw * (0.4 + WGRandom.hash2(m + 3, i - j, seed + 6) * 1.2), 0.0, 0.85)
 		var hue := Color(lerpf(tc[0], 0.66, dry) * v, lerpf(tc[1], 0.58, dry) * v, lerpf(tc[2], 0.31, dry) * v)
 		var scale: float = (0.8 + WGRandom.hash2(hx + m, j, seed + 9) * 0.4) * flora.grow
-		_understory_sites.append([Understory.GRASS, x, z, WGRandom.hash2(hx + m, j, seed + 7) * TAU, scale, 1.0, rank, hue,
-			(j * world.W + i) * 8 + m if inside else -1, 1.0, _sod_entry])
+		_understory_sites.append([_sod_entry, x, z, WGRandom.hash2(hx + m, j, seed + 7) * TAU, scale, 1.0, rank, hue,
+			(j * world.W + i) * 8 + m if inside else -1, 1.0])
 
 
 ## Сушь открытого места по биому: общая для ближней раскладки и дальних зарослей (DistantForest.scrub_site)
@@ -2391,15 +2425,17 @@ func _fill_road(px: float, pz: float) -> void:
 
 ## on_road — препятствие на полотне (RoadObstacles): дорога ему не помеха, свои проверки места оно прошло.
 ## stretch — длина вдоль локальной X в долях масштаба (бревно, ветка, корень), sink — насколько утоплено в грунт, м
-func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1, squash := 1.0, entry_index := -1) -> int:
-	var entry: Dictionary = understory[kind]
+func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, tint: float = 1.0, owner: int = -1, rank: float = 0.0, on_road := false, stretch := 1.0, sink := 0.0, hue := Color.WHITE, key := -1, squash := 1.0) -> int:
+	# kind — номер группы understory: обычно сама форма; 17.11.2026 — и своя группа той же формы (дерновины, _sod_entry).
+	# Дальше в проверках kind — форма группы.
+	var group := kind
+	var entry: Dictionary = understory[group]
+	kind = entry.base
 	# 15.0: дальше FAR_FORM_R от центра раскладки - упрощённая форма в своей группе (та же посадка и проверки)
 	# 16.0: граница — по качеству растительности (far_form_r)
 	var woody := Placement.priority(kind) == 1
 	var switch_r := far_form_r * (WOODY_FAR_FORM if woody else 1.0)
-	if entry_index >= 0:
-		entry = understory[entry_index] # 17.11.2026: дерновина — своя группа той же формы
-	elif _far_of.has(kind) and not (legacy_open and woody) and Vector2(x, z).distance_squared_to(_fill_at) > switch_r * switch_r:
+	if group == kind and _far_of.has(kind) and not (legacy_open and woody) and Vector2(x, z).distance_squared_to(_fill_at) > switch_r * switch_r:
 		entry = understory[_far_of[kind]]
 	if entry.count >= entry.cap:
 		fill_capped += 1

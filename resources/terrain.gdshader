@@ -414,6 +414,25 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				open_col = mix(open_col, vec3(lum) * vec3(1.35, 0.78, 1.15), bloom * 0.42);
 				// Keep the ground visible between the sparser dry communities.
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));
+				// 17.11.2026: вдали (за ~100 м) отдельные кочки меньше пикселя (сверху по глубине пиксель — метры), видны только
+				// их скопления: тёмные мягкие пятна шагом ~7 м по густоте сообщества (газон реже, высокотравье и кустарник
+				// чаще). Пятно сглажено по размеру пикселя, а когда оно меньше ~2 пикселей, остаётся средняя доля — без мерцания.
+				float far_k = smoothstep(80.0, 170.0, view_d) * (1.0 - smoothstep(500.0, 800.0, view_d));
+				if (far_k > 0.0) {
+					vec2 tq = p * (1.0 / 7.0);
+					vec2 th = grain_hash(floor(tq));
+					float tr = 0.26 + th.x * 0.16;
+					vec2 tf = fract(tq) - (vec2(0.3) + th * 0.4);
+					float tl = length(tf);
+					// сглаживание по своему направлению (gdx/gdy — производные p до ветвлений): вдоль глубины пятно уже,
+					// поперёк — шире; по-настоящему меньшее двух пикселей пятно уходит в среднюю долю
+					vec2 tn = tf / max(tl, 1e-4);
+					float taa = max((abs(dot(tn, gdx)) + abs(dot(tn, gdy))) * (1.0 / 7.0), 0.03);
+					float share = clamp(0.35 + 0.35 * ca.y + 0.2 * ca.z + 0.4 * cb.x + 0.15 * cb.z, 0.0, 0.85);
+					float tdot = (1.0 - smoothstep(tr - taa, tr + taa, tl)) * step(th.y, share);
+					tdot = mix(tdot, 0.45 * share, smoothstep(0.3, 0.7, taa));
+					turf = mix(turf, turf * mix(vec3(0.36, 0.5, 0.32), vec3(0.6, 0.58, 0.46), dryness), tdot * far_k * (1.0 - stony * 0.7));
+				}
 			}
 			// 17.11.2026: за ковром луг не светлеет кольцом. Тень густой травы у корней остаётся и дальше, слабее
 			// (body): густой луг вдали темнее голой земли, на сухом, каменистом и в проплешинах — меньше.
