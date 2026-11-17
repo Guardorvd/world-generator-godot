@@ -110,7 +110,7 @@ func _forest(density: float) -> WorldData:
 	w.biome.fill(Biomes.FOREST)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77
-	var kinds := [Biomes.T_OAK, Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_PINE]
+	var kinds := [Biomes.T_OAK, Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_PINE, Biomes.T_ROWAN]
 	var store := StageVegetation.ObjStore.new(null)
 	for cy in range(0, 256, w.CS):
 		for cx in range(0, 256, w.CS):

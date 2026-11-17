@@ -37,11 +37,13 @@ const T_BIRCH := 8
 const T_DEAD := 9
 const T_REED := 10
 const T_ACACIA := 11
+const T_ROWAN := 12
+const T_MUGO := 13
 
 # Приблизительный радиус кроны/объекта в клетках (клетка 4 м), по Models.
 # Общий для размещения и оценки полога; масштаб экземпляра применяется отдельно.
 # 11.11.2026: высокий лес — дуб, сосна, снежная ель и берёза в номинальном размере (ForestModels.NOMINAL).
-const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80]
+const CROWN_RADIUS := [1.05, 0.65, 0.65, 0.95, 0.325, 0.20, 0.43, 0.60, 0.55, 0.20, 0.125, 0.80, 0.48, 0.52]
 # Поля записи биома (индекс в массиве = номер биома):
 #   name       — название для интерфейса
 #   color      — цвет на карте и в текстуре рельефа, [r, g, b]
@@ -89,15 +91,15 @@ const LIST: Array[Dictionary] = [
 
 
 static func is_tree(kind: int) -> bool:
-	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA
+	return kind == T_OAK or kind == T_PINE or kind == T_PALM or kind == T_JUNGLE or kind == T_SNOWPINE or kind == T_BIRCH or kind == T_ACACIA or kind == T_ROWAN or kind == T_MUGO
 
 
 ## 12.11.2026: конец лета. Тон кроны одного дерева — общий для ближних моделей и дальних крон (DistantForest):
-## зелень лиственных чуть глубже и спокойнее, а часть берёз, дубов, кустов и акаций уже тронута золотом и
+## зелень лиственных чуть глубже и спокойнее, а часть берёз, дубов, рябин, кустов и акаций уже тронута золотом и
 ## ржавчиной. Желтеют не поодиночке вразброс, а куртинами (~100 м), внутри куртины — не каждое дерево.
 ## Хвойные, джунгли и пальмы остаются в своей палитре. x, y — место дерева в клетках мира.
 static func leaf_tone(kind: int, col: Color, x: float, y: float) -> Color:
-	if kind != T_OAK and kind != T_BIRCH and kind != T_BUSH and kind != T_ACACIA:
+	if kind != T_OAK and kind != T_BIRCH and kind != T_BUSH and kind != T_ACACIA and kind != T_ROWAN:
 		return col
 	var stand := WGRandom.hash2(floori(x / 26.0), floori(y / 26.0), 911)
 	var own := WGRandom.hash2(floori(x * 127.0), floori(y * 131.0), 913)
@@ -109,6 +111,8 @@ static func leaf_tone(kind: int, col: Color, x: float, y: float) -> Color:
 	elif kind == T_OAK:
 		out = Color(col.r * 0.97, col.g * 0.95, col.b * 0.86)
 		out = out.lerp(Color("a8923f") if own > 0.5 else Color("9c7238"), smoothstep(0.66, 0.92, turn) * 0.6)
+	elif kind == T_ROWAN:
+		out = out.lerp(Color("a67d38") if own > 0.45 else Color("8b9636"), smoothstep(0.64, 0.92, turn) * 0.42)
 	elif kind == T_BUSH:
 		out = Color(col.r * 0.97, col.g * 0.92, col.b * 0.84)
 		out = out.lerp(Color("b08a3a") if own > 0.45 else Color("a05c34"), smoothstep(0.56, 0.9, turn) * 0.7)

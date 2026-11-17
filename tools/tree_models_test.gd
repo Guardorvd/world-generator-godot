@@ -32,7 +32,7 @@ func run() -> void:
 	var baseline_at := args.find("--baseline")
 	if baseline_at >= 0 and baseline_at + 1 < args.size():
 		baseline = load(args[baseline_at + 1])
-	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
+	for kind in [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_ACACIA, Biomes.T_DEAD, Biomes.T_BUSH]:
 		var silhouettes := []
 		for variant in ForestModels.form_count(kind):
 			var def: Dictionary = defs[kind + variant * ForestModels.MODEL_STRIDE]

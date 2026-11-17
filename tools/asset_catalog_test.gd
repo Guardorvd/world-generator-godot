@@ -22,7 +22,7 @@ func run() -> void:
 	ForestModels.baking = false
 	var plants := preload("res://scripts/render/understory_models.gd").meshes()
 	plants.append(catalog.grass)
-	var isolated: bool = preload("res://scripts/render/understory_models.gd").meshes().size() == 12
+	var isolated: bool = preload("res://scripts/render/understory_models.gd").meshes().size() == preload("res://scripts/render/understory_models.gd").COUNT
 	print("asset_catalog: private instance lists=", isolated)
 	failures += int(not isolated)
 	viewport = SubViewport.new()

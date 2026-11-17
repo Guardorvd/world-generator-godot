@@ -29,7 +29,7 @@ const EXT := ".wgc"
 const SCHEMA_WORLD_VERSION := 1
 const SCHEMA_GEO_VERSION := 20 # broad low-hill relief and terrain-dependent surface ripple
 const SCHEMA_TRAILS_VERSION := 42 # 17.11: no loops in settlement exits, spurs share forks; 41: traverse ride style around mountains; 40: overlook spurs from road legs; 39: optional ways fork away from settlements (EXIT_R), shore trails from road legs; 38 16.11: site homes/barns by biome and slope (StageSites); 37: 21 settlement models & distinct layouts by settlement kind; 36: settlement sets & string model variants (SettlementSets); 35: road class by link flow (_upgrade_roles); 34: walk mask for places, remote reason, tunnel vs detour by length; 33: remote single access, towns among ordinary; 32: settlement roles (SettlementRoles); 31: weaker water term, remoteness bonus; 30: long road legs (bend)
-const SCHEMA_NATURE_VERSION := 17 # 16: hill outcrops; 17: species and stone density follow local terrain
+const SCHEMA_NATURE_VERSION := 18 # 16: hill outcrops; 17: species and stone density follow local terrain; 18: 17.11 лещина, горная сосна (Pinus mugo) и рябина (Sorbus aucuparia)
 const SCHEMA_VIEW_VERSION := 2 # shared exposure in forest texture alpha and distant bedrock material
 ## Картинки мира: имя файла и исходники рисования
 const VIEW := "view"

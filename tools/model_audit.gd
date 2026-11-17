@@ -23,11 +23,14 @@ const TREE_KIND_NAMES := {
 	Biomes.T_DEAD: "T_DEAD",
 	Biomes.T_REED: "T_REED",
 	Biomes.T_ACACIA: "T_ACACIA",
+	Biomes.T_ROWAN: "T_ROWAN",
+	Biomes.T_MUGO: "T_MUGO",
 }
 
 const UNDERSTORY_NAMES := [
 	"FERN", "MOSS", "MUSHROOM", "HERB", "GRASS", "BUSH", "SAPLING", "PINE",
-	"FLOWERS", "HIGH_GRASS", "YOUNG", "YOUNG_PINE", "MEADOW", "FORBS", "SEDGE", "STIPA", "FIREWEED"
+	"FLOWERS", "HIGH_GRASS", "YOUNG", "YOUNG_PINE", "MEADOW", "FORBS", "SEDGE", "STIPA", "FIREWEED",
+	"HAZEL", "HAZEL_TALL"
 ]
 
 const FLOOR_NAMES := [
@@ -40,7 +43,7 @@ const FLOOR_NAMES := [
 const UV2_USED_UNDERSTORY := [
 	Understory.FERN, Understory.HERB, Understory.FLOWERS, Understory.BUSH,
 	Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE,
-	Understory.FORBS, Understory.FIREWEED
+	Understory.FORBS, Understory.FIREWEED, Understory.HAZEL, Understory.HAZEL_TALL
 ]
 
 var _mat_fingerprints := {} # fingerprint -> {ids = {instance_id -> Array[String]}, labels = Array[String]}

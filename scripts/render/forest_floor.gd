@@ -81,7 +81,7 @@ static func surface_image(w: WorldData) -> Image:
 		var trees := PackedByteArray()
 		var water := PackedByteArray()
 		for kind in Biomes.CROWN_RADIUS.size():
-			trees.append(2 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE else int(Biomes.is_tree(kind)))
+			trees.append(2 if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO else int(Biomes.is_tree(kind)))
 		for biome: Dictionary in Biomes.LIST:
 			water.append(int(biome.get("water", false)))
 		var pixels: PackedByteArray = native.ForestSurface(w.W, w.H, w.obj_count, w.obj_x, w.obj_y, w.obj_k, w.obj_s,
@@ -103,7 +103,7 @@ static func surface_image(w: WorldData) -> Image:
 				var k := j * w.W + i
 				var weight := maxf(0.0, 1.0 - Vector2(i + 0.5 - ox, j + 0.5 - oy).length() / r)
 				cover[k] += weight
-				if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE:
+				if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO:
 					needles[k] += weight
 	var bytes := PackedByteArray()
 	bytes.resize(w.N * 4)
@@ -339,7 +339,7 @@ static func canopy_image(rect: Rect2i, batches: Array) -> Image:
 					var k := (y - rect.position.y) * rect.size.x + x - rect.position.x
 					var weight := maxf(0.0, 1.0 - Vector2(x + 0.5 - ox, y + 0.5 - oy).length() / r)
 					cover[k] += weight
-					if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE: needles[k] += weight
+					if kind == Biomes.T_PINE or kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO: needles[k] += weight
 	var bytes := PackedByteArray()
 	bytes.resize(rect.get_area() * 4)
 	for k in cover.size():

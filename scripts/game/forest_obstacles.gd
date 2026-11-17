@@ -170,7 +170,8 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 					s *= 1.2
 					_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 				elif heights.depth_at(x, z) <= GameConfig.WATER_MARGIN:
-					_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+					var top := base + 1.85 * s if kind == Biomes.T_MUGO else INF
+					_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, top)
 	# 8.4: за краем карты — объекты, которые VegetationLayer уже разложил (OuterLand.veg, с высотой земли)
 	for chunk: Vector2i in outer:
 		var items: Dictionary = outer[chunk]
@@ -196,7 +197,8 @@ func _add_objects(out: Dictionary, px: float, pz: float, outer: Dictionary) -> v
 				s *= 1.2
 				_put(out, x, z, x, z, ROCK_R * s, base, base - 0.1 + ROCK_TOP * s)
 			else:
-				_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, INF)
+				var top := base + 1.85 * s if kind == Biomes.T_MUGO else INF
+				_put(out, x, z, x, z, TRUNK[kind] * s * SNUG, base, top)
 
 
 ## 15.0: ствол на самом полотне (вес покрытия метровой сетки), а не в клетке пути: так дерево у кромки тропы остаётся.

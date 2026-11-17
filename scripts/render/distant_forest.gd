@@ -108,7 +108,7 @@ static func _nominal_height(kind: int) -> float:
 
 static func _form(kind: int) -> int:
 	match kind:
-		Biomes.T_BUSH: return Form.BUSH
+		Biomes.T_BUSH, Biomes.T_MUGO: return Form.BUSH
 		Biomes.T_PINE, Biomes.T_SNOWPINE: return Form.CONIFER
 		Biomes.T_ACACIA: return Form.UMBRELLA
 		Biomes.T_PALM: return Form.PALM
@@ -122,18 +122,20 @@ static func _plant_hash(at: Vector3, salt: int) -> float:
 static func _add_woody(raw: Array, plants: Dictionary, kind: int, variant: int, at: Vector3, radius: float,
 		height: float, outer: bool) -> void:
 	var color := tint(kind, variant, at.x / TILE, at.z / TILE)
+	var is_bush := kind == Biomes.T_BUSH or kind == Biomes.T_MUGO
+	var r := radius * (1.15 if kind == Biomes.T_MUGO else 1.0)
 	if _plant_hash(at, 461) < PLANT_SHARE:
 		# Open up the outline on the last LOD. Cards carry the gaps in the leaves.
 		var age := variant / 3 if ForestModels.has_ages(kind) else ForestModels.ADULT_AGE
 		var profile := lerpf(0.87, 1.19, _plant_hash(at, 727))
 		if age == ForestModels.YOUNG_AGE: profile *= 0.84
 		elif age == ForestModels.OLD_AGE: profile *= 1.18
-		_append_plant(plants, at, radius * profile * 1.13, height, color, _form(kind), outer, float(age))
+		_append_plant(plants, at, r * profile * 1.13, height, color, _form(kind), outer, float(age))
 	else:
-		var center := 0.48 if kind == Biomes.T_BUSH else (0.60 if color.a > 0.5 else 0.70)
-		var extent := 0.39 if kind == Biomes.T_BUSH or color.a > 0.5 else 0.29
-		var stem_base := 0.0 if kind == Biomes.T_BUSH else -center / extent
-		raw.append([at + Vector3.UP * height * center, Vector3(radius, height * extent, radius), color, stem_base, 0.0])
+		var center := 0.48 if is_bush else (0.60 if color.a > 0.5 else 0.70)
+		var extent := 0.39 if is_bush or color.a > 0.5 else 0.29
+		var stem_base := 0.0 if is_bush else -center / extent
+		raw.append([at + Vector3.UP * height * center, Vector3(r, height * extent, r), color, stem_base, 0.0])
 
 ## One distant planting site per 12 m sample where the open-land community has enough vegetation.
 static func _plan_scrub(w: WorldData, h: Heightfield, rect: Rect2i, wooded: Dictionary, plants: Dictionary) -> Array:
@@ -184,8 +186,8 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 		var row: Array = Understory.COMMUNITY[c]
 		for f in Understory.COUNT:
 			total += com[c] * row[f]
-		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE])
-		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE])
+		woody += com[c] * (row[Understory.BUSH] + row[Understory.SAPLING] + row[Understory.PINE] + row[Understory.HAZEL])
+		tall += com[c] * (row[Understory.YOUNG] + row[Understory.YOUNG_PINE] + row[Understory.HAZEL_TALL])
 		herb += com[c] * (row[Understory.MEADOW] + row[Understory.HIGH_GRASS] + row[Understory.SEDGE] + row[Understory.STIPA] + row[Understory.FORBS] * 0.6)
 	var wetland := Understory.open_wetland(bi, com[Understory.C_WET], water)
 	var patch := Understory.open_patch(VegetationLayer._vnoise(i, j, 3.0, seed + 31), wetland)
@@ -262,6 +264,8 @@ static func tint(kind: int, variant: int, x: float, y: float) -> Color:
 	var color := Color("7ca94e")
 	if kind == Biomes.T_PINE: color = Color("568758")
 	elif kind == Biomes.T_SNOWPINE: color = Color("a1b6aa")
+	elif kind == Biomes.T_ROWAN: color = Color("55863a")
+	elif kind == Biomes.T_MUGO: color = Color("355e3a")
 	elif kind == Biomes.T_BIRCH: color = Color("8caf50")
 	elif kind == Biomes.T_JUNGLE: color = Color("48824a")
 	elif kind == Biomes.T_BUSH: color = Color("6a8c42")

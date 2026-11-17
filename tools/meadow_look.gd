@@ -318,7 +318,7 @@ func _world() -> WorldData:
 	# Лес: дуб, берёза, сосна; редкие деревья и кусты на лугу (как Biomes «Луга»)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 77
-	var kinds := [Biomes.T_OAK, Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE]
+	var kinds := [Biomes.T_OAK, Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_ROWAN]
 	for y in w.H:
 		for x in w.W:
 			var b := w.biome[y * w.W + x]

@@ -201,7 +201,10 @@ void fragment() {
 	}
 #ifdef CUTOUT
 	// Край объёма сохраняет силуэт даже на мелких mip-уровнях; углы карточки не рисуются и не отбрасывают тень.
-	float cluster_radius = length((UV - vec2(0.5)) * 2.0);
+	// Рябина (LOD0): UV.x > 1.5 отмечает карточки гроздьев ягод на той же поверхности кроны без доп. материалов и проходов.
+	bool is_berry = UV.x > 1.5;
+	vec2 cluster_uv = is_berry ? vec2(UV.x - 2.0, UV.y) : UV;
+	float cluster_radius = length((cluster_uv - vec2(0.5)) * 2.0);
 	if (cluster_radius >= 1.0) {
 		discard;
 	}
@@ -213,6 +216,22 @@ void fragment() {
 	}
 	vec4 tex = texture(albedo_tex, UV);
 	vec3 col = albedo_color.rgb * tex.rgb;
+#ifdef CUTOUT
+	float berry_alpha = 1.0;
+	if (is_berry) {
+		vec2 p = cluster_uv;
+		float bd = 9.0;
+		bd = min(bd, length(p - vec2(0.50, 0.44)) / 0.16);
+		bd = min(bd, length(p - vec2(0.32, 0.45)) / 0.15);
+		bd = min(bd, length(p - vec2(0.68, 0.46)) / 0.15);
+		bd = min(bd, length(p - vec2(0.40, 0.62)) / 0.15);
+		bd = min(bd, length(p - vec2(0.60, 0.61)) / 0.15);
+		bd = min(bd, length(p - vec2(0.50, 0.28)) / 0.14);
+		bd = min(bd, length(p - vec2(0.51, 0.74)) / 0.13);
+		berry_alpha = 1.0 - smoothstep(0.76, 1.0, bd);
+		col = mix(vec3(0.96, 0.30, 0.045), vec3(0.58, 0.07, 0.012), clamp(bd * bd, 0.0, 1.0));
+	}
+#endif
 	if (use_vertex_color) {
 		col *= COLOR.rgb;
 	}
@@ -304,7 +323,7 @@ void fragment() {
 	// Interior occlusion belongs to sky light, not a second albedo shadow.
 	AO *= inner_shade;
 	BACKLIGHT *= mix(1.0, 0.60, simplification);
-	ALPHA = tex.a * (1.0 - smoothstep(mix(0.86, 0.92, simplification), 1.0, cluster_radius));
+	ALPHA = (is_berry ? berry_alpha : tex.a) * (1.0 - smoothstep(mix(0.86, 0.92, simplification), 1.0, cluster_radius));
 	ALPHA_SCISSOR_THRESHOLD = mix(0.35, 0.24, simplification);
 #endif
 }

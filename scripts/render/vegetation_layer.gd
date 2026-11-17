@@ -16,7 +16,7 @@ const TREE_UPLOAD_US := 2000 # хотя бы один MultiMesh; продолж�
 const DETAIL_UPLOAD_US := 1500 # трава и формы подлеска готового снимка: хотя бы одна группа за кадр
 const FREE_US := 800 # удаление ушедших узлов за кадр: ряд чанков на скорости — тысячи MultiMesh
 const TREE_NODES_PER_SLICE := 4
-const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE] # виды без ствола на дальнем уровне
+const FAR_TRUNKLESS := [Biomes.T_OAK, Biomes.T_BIRCH, Biomes.T_PINE, Biomes.T_SNOWPINE, Biomes.T_ROWAN, Biomes.T_MUGO] # виды без ствола на дальнем уровне
 const FAR_FORM_R := 24.0 # м: дальше от центра раскладки мох, папоротник, корни и камни рисуются упрощённой формой
 ## 15.0: на самом дальнем уровне все силуэты вида одного чанка рисуются одним узлом с мешом первого силуэта
 ## (высота выровнена по ряду Y): у дерева за 160 м силуэт различим меньше, чем стоит лишний draw call.
@@ -90,7 +90,7 @@ const SHADER := preload("res://resources/vegetation.gdshader")
 const CUTOUT_SHADER := preload("res://resources/vegetation_cutout.gdshader")
 const TRUNK_SHADER := preload("res://resources/vegetation_trunk.gdshader")
 ## 11.11.2026: рисунок коры в шейдере ствола — только у деревьев: 1 — пластины и борозды, 2 — берёза, 0 — нет.
-const BARK_PLATES := [Biomes.T_OAK, Biomes.T_PINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_SNOWPINE, Biomes.T_DEAD, Biomes.T_ACACIA]
+const BARK_PLATES := [Biomes.T_OAK, Biomes.T_PINE, Biomes.T_PALM, Biomes.T_JUNGLE, Biomes.T_SNOWPINE, Biomes.T_DEAD, Biomes.T_ACACIA, Biomes.T_MUGO]
 
 
 static func bark_detail(kind: int) -> float:
@@ -103,6 +103,8 @@ const WIND := {
 	Biomes.T_BIRCH: [0.32, 0.06, 1.0, 0.8, 0.42],
 	Biomes.T_PINE: [0.18, 0.012, 0.65, 0.7, 0.15],
 	Biomes.T_SNOWPINE: [0.1, 0.008, 0.6, 0.62, 0.08],
+	Biomes.T_ROWAN: [0.20, 0.045, 1.05, 0.78, 0.36],
+	Biomes.T_MUGO: [0.05, 0.008, 0.9, 0.68, 0.12],
 	Biomes.T_PALM: [0.3, 0.08, 0.7, 0.8, 0.35],
 	Biomes.T_JUNGLE: [0.1, 0.03, 0.6, 0.65, 0.25],
 	Biomes.T_ACACIA: [0.1, 0.03, 0.7, 0.7, 0.25],
@@ -308,7 +310,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		var has_contacts := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER, Floor.BRANCH, Floor.STONES, Floor.ROOT_SPAN]
 		if has_contacts:
 			_last_contact_group = understory.size()
-		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]
+		var shadows := kind in [Floor.LOG, Floor.MOSS_LOG, Floor.SNAG, Floor.STUMP, Floor.BOULDER] or base in [Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL]
 		# Мох, подстилка, валежник и камни неподвижны.
 		var still := kind >= 0 or base in [Understory.MOSS, Understory.MUSHROOM]
 		var wind := CALM if still else _plant_wind(base)
@@ -335,7 +337,7 @@ func setup(w: WorldData, h: Heightfield, defs: Dictionary, grass_mesh: Mesh, for
 		if group:
 			detail = [] # у групп нет мелких листьев для поредения
 		understory.append({mm = node.multimesh, node = node, buf = _buffer(cap, STRIDE), count = 0, cap = cap, far = far,
-			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), base = base, detail = detail,
+			low = Vector3.INF, high = -Vector3.INF, box = meshes[base].get_aabb(), mesh_box = mesh.get_aabb(), base = base, detail = detail,
 			shadows = shadows, near_cap = cap != _understory_cap(far), has_contacts = has_contacts, group = group,
 			margin = wind[0] * 1.2 + wind[1] * 2.0 + (0.18 if blades else 0.0) + (GROUP_SPREAD - 1.0 if group else 0.0)})
 	_grass_mat = grass_mat
@@ -567,7 +569,7 @@ static func _plant_wind(kind: int) -> Array:
 		return [0.22, 0.03, 1.5, 0.88, 0.4, 0.7]
 	if kind == Understory.FIREWEED:
 		return [0.1, 0.02, 1.0, 0.85, 0.3, 0.75]
-	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG]:
+	if kind in [Understory.BUSH, Understory.SAPLING, Understory.YOUNG, Understory.HAZEL, Understory.HAZEL_TALL]:
 		return [0.08, 0.02, 0.85, 0.8, 0.25]
 	if kind in [Understory.PINE, Understory.YOUNG_PINE]:
 		return [0.045, 0.006, 0.7, 0.8, 0.1]
@@ -2008,6 +2010,8 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	if legacy_open:
 		for f: int in Understory.OPEN_FORMS: weights[f] = 0.0
 	var rim := 0.0 if legacy_open or not _in_plan(i, j) else smoothstep(0.3, 0.05, _ring_canopy(i, j).y) * (1.0 - smoothstep(0.55, 0.9, canopy))
+	var seed := world.seed_num ^ 6601
+	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
 	if rim > 0.0:
 		var conifer := surface.g > 0.5
 		weights[Understory.BUSH] += rim * 0.55
@@ -2016,6 +2020,14 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		weights[Understory.MEADOW] += rim * 0.35 * light
 		weights[Understory.HIGH_GRASS] += rim * 0.2
 		weights[Understory.FIREWEED] += rim * 0.4 * light
+		if not conifer:
+			weights[Understory.HAZEL] += rim * 0.45
+			weights[Understory.HAZEL_TALL] += rim * 0.25
+	if not legacy_open and _in_plan(i, j) and surface.g <= 0.55:
+		var trail_edge := _verge(i, j)
+		if trail_edge > 0.0 and patch > 0.44:
+			weights[Understory.HAZEL] += trail_edge * 0.32
+			weights[Understory.HAZEL_TALL] += trail_edge * 0.18
 	# 16.1: иван-чай — теми же пятнами, что на лугу (общий шум), иначе его нет
 	if weights[Understory.FIREWEED] > 0.0:
 		weights[Understory.FIREWEED] *= 3.0 * smoothstep(0.58, 0.82, _vnoise(i, j, 6.0, (world.seed_num ^ 8803) + 41))
@@ -2024,8 +2036,6 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 	for weight in weights:
 		total += weight
 	# Пятна по 12 м и случайные пропуски; соседние клетки связаны без нового шума.
-	var seed := world.seed_num ^ 6601
-	var patch := WGRandom.hash2(floori(i / 3.0), floori(j / 3.0), seed)
 	var density := minf(1.0, (0.3 + 0.75 * patch) * (0.5 + 0.5 * moisture) * Understory.mix(Understory.DENSITY, ch) * (1.0 - 0.65 * surface.a))
 	var cluster := smoothstep(0.32, 0.76, patch)
 	var woody_keep := minf(1.0, lerpf(0.55, 0.96, cluster) + ch[Understory.THICKET] * 0.12)
@@ -2045,7 +2055,7 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 			var keep := ground_keep
 			if kind == Understory.MOSS:
 				keep = moss_keep
-			elif kind in [Understory.BUSH, Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE]:
+			elif kind in [Understory.BUSH, Understory.SAPLING, Understory.PINE, Understory.YOUNG, Understory.YOUNG_PINE, Understory.HAZEL, Understory.HAZEL_TALL]:
 				keep = woody_keep
 			if roll > density * lerpf(keep, 1.0, bank):
 				continue
@@ -2063,7 +2073,16 @@ func _fill_forest_cell(i: int, j: int, bi: int, path: int, slope: float, surface
 		var rot := WGRandom.hash2(i * 8 + m, j, seed + 6) * TAU
 		var tint := 0.85 + WGRandom.hash2(i * 8 + m, j, seed + 7) * 0.3
 		kind = Floor.FIRST + Floor.variant_kind(kind - Floor.FIRST, int(WGRandom.hash2(i * 8 + m, j, seed + 9) * 3.0)) if kind >= Floor.FIRST else kind
-		_understory_sites.append([kind, x, z, rot, scale, tint, rank])
+		if kind == Understory.HAZEL or kind == Understory.HAZEL_TALL:
+			var grow_hz := _flora_grow(kind)
+			var h_u := WGRandom.hash2(i * 8 + m, j, seed + 10)
+			var hz_scale := (lerpf(0.68, 1.24, h_u) if kind == Understory.HAZEL else lerpf(0.92, 1.38, h_u)) * grow_hz
+			var hz_squash := lerpf(0.84, 1.06, WGRandom.hash2(i * 8 + m, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(i * 8 + m, j, seed + 11))
+			var yellow := smoothstep(0.68, 0.96, patch * 0.4 + WGRandom.hash2(i * 8 + m, j, seed + 12) * 0.6)
+			var hz_hue := Color.WHITE.lerp(Color(1.16, 1.08, 0.72), yellow * 0.75)
+			_understory_sites.append([kind, x, z, rot, hz_scale, tint, rank, hz_hue, -1, hz_squash])
+		else:
+			_understory_sites.append([kind, x, z, rot, scale, tint, rank])
 	return grass_mul
 
 
@@ -2147,10 +2166,13 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 		for f in Understory.COUNT:
 			weights[f] += com[c] * row[f]
 	if conifer:
-		weights[Understory.PINE] += weights[Understory.SAPLING]
+		weights[Understory.PINE] += weights[Understory.SAPLING] + weights[Understory.HAZEL_TALL] * 0.5
 		weights[Understory.YOUNG_PINE] += weights[Understory.YOUNG]
+		weights[Understory.BUSH] += weights[Understory.HAZEL] + weights[Understory.HAZEL_TALL] * 0.5
 		weights[Understory.SAPLING] = 0.0
 		weights[Understory.YOUNG] = 0.0
+		weights[Understory.HAZEL] = 0.0
+		weights[Understory.HAZEL_TALL] = 0.0
 	# 16.1: в сухом и степном высокотравье место куртин и высоких пучков занимает ковыль (не поверх них);
 	# в степном газоне — ковыль куртинами. Иван-чай — только в своих пятнах (bloom), там гуще.
 	weights[Understory.STIPA] += steppe * (weights[Understory.MEADOW] * 0.8 + weights[Understory.HIGH_GRASS] + com[Understory.C_LAWN] * 2.5)
@@ -2198,6 +2220,12 @@ func _fill_open_cell(i: int, j: int, bi: int, path: int, slope: float, surface: 
 			# часть кустов уже рыжеет
 			var rust := smoothstep(0.7, 0.95, WGRandom.hash2(hx + m, j, seed + 9)) * ripe
 			site_hue = Color(hue.r * (1.0 + 0.3 * rust), hue.g * (1.0 - 0.12 * rust), hue.b * (1.0 - 0.4 * rust))
+		elif kind in [Understory.HAZEL, Understory.HAZEL_TALL]:
+			var h_u := WGRandom.hash2(hx + m, j, seed + 10)
+			scale = (lerpf(0.72, 1.24, h_u) if kind == Understory.HAZEL else lerpf(0.92, 1.36, h_u)) * (0.85 + 0.25 * com[Understory.C_SHRUB])
+			squash = lerpf(0.84, 1.06, WGRandom.hash2(hx + m, j, seed + 11)) if kind == Understory.HAZEL else lerpf(0.94, 1.12, WGRandom.hash2(hx + m, j, seed + 11))
+			var yellow := smoothstep(0.68, 0.96, WGRandom.hash2(hx + m, j, seed + 9)) * ripe
+			site_hue = Color(hue.r * (1.0 + 0.14 * yellow), hue.g * (1.0 + 0.04 * yellow), hue.b * (1.0 - 0.28 * yellow))
 		elif kind == Understory.STIPA:
 			site_hue = Color.WHITE # серебро остей не желтим
 		elif kind == Understory.FIREWEED:
@@ -2452,7 +2480,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	# неизменна — считается один раз (бит «посчитано» и бит «можно»), а не в каждой раскладке.
 	var cell := key >> 3
 	var bit := 1 << (key & 7)
-	if key >= 0 and (_open_valid[cell * 2] & bit) != 0:
+	if key >= 0 and world.lake[cell] == 0 and (_open_valid[cell * 2] & bit) != 0:
 		if (_open_valid[cell * 2 + 1] & bit) == 0:
 			return RoadPlacement.OBJECT
 	else:
@@ -2504,7 +2532,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	entry.buf[offset + 16] = rank
 	entry.buf[offset + 17] = WGRandom.hash2(floori(x * 13), floori(z * 11), 73)
 	entry.buf[offset + 18] = WGRandom.hash2(floori(x * 7), floori(z * 17), 79)
-	var render_box := box.grow(entry.margin * scale)
+	var render_box: AABB = (xf * (entry.mesh_box as AABB)).grow(entry.margin * scale)
 	entry.low = entry.low.min(render_box.position)
 	entry.high = entry.high.max(render_box.end)
 	entry.count += 1
@@ -2591,8 +2619,9 @@ func _fill_tree_roots(px: float, pz: float) -> void:
 		for cx in range(maxi(0, floori((minf(px, tip.x) / TILE - r) / world.CS)), mini(world.CW, ceili((maxf(px, tip.x) / TILE + r) / world.CS))):
 			for o in world.chunks[cy * world.CW + cx]:
 				# 11.11.2026: корни — у ствола толще ROOT_TRUNK, их размер — по толщине ствола
-				var trunk: float = StageVegetation.TRUNK.get(world.obj_k[o], 0.0) * world.obj_s[o]
-				if not Biomes.is_tree(world.obj_k[o]) or trunk < ROOT_TRUNK:
+				var kind := world.obj_k[o]
+				var trunk: float = StageVegetation.TRUNK.get(kind, 0.0) * world.obj_s[o]
+				if kind == Biomes.T_MUGO or not Biomes.is_tree(kind) or trunk < ROOT_TRUNK:
 					continue
 				var x := world.obj_x[o] * TILE
 				var z := world.obj_y[o] * TILE
@@ -2610,8 +2639,9 @@ func _fill_outer_roots(batches: Array, px: float, pz: float) -> void:
 	for b in range(1, batches.size()):
 		var batch: Dictionary = batches[b]
 		for o in batch.x.size():
-			var trunk: float = StageVegetation.TRUNK.get(batch.k[o], 0.0) * batch.s[o]
-			if trunk < ROOT_TRUNK: continue
+			var kind: int = batch.k[o]
+			var trunk: float = StageVegetation.TRUNK.get(kind, 0.0) * batch.s[o]
+			if kind == Biomes.T_MUGO or trunk < ROOT_TRUNK: continue
 			var x: float = batch.x[o] * TILE
 			var z: float = batch.y[o] * TILE
 			if StreamPolicy.distance_to_coverage(Vector2(x, z), Vector2(px, pz), _fill_lead) > reach: continue

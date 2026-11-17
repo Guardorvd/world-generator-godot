@@ -47,7 +47,7 @@ func run() -> void:
 				check(ranks[idx[i]].x == ranks[idx[i + 1]].x and ranks[idx[i]].x == ranks[idx[i + 2]].x, "Поредение выключает целый треугольник")
 			for rank in ranks:
 				check(rank.x >= 0.0 and rank.x < 1.0, "Ранг поредения находится в [0,1)")
-			if kind in [Plants.BUSH, Plants.SAPLING, Plants.YOUNG, Plants.PINE, Plants.YOUNG_PINE]:
+			if kind in [Plants.BUSH, Plants.SAPLING, Plants.YOUNG, Plants.PINE, Plants.YOUNG_PINE, Plants.HAZEL, Plants.HAZEL_TALL]:
 				var low := Vector3.INF
 				var high := -Vector3.INF
 				for i in v.size():

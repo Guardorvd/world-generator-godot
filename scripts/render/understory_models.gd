@@ -3,8 +3,8 @@ extends RefCounted
 ## 8.2: мелкие цветы, высокая трава, молодые деревья и характеры леса.
 ## UV2.x — ранг удаления отдельного листа вдали; жилки, стебли и сплошные лапы имеют ранг 0.
 
-enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED }
-const COUNT := 17
+enum { FERN, MOSS, MUSHROOM, HERB, GRASS, BUSH, SAPLING, PINE, FLOWERS, HIGH_GRASS, YOUNG, YOUNG_PINE, MEADOW, FORBS, SEDGE, STIPA, FIREWEED, HAZEL, HAZEL_TALL }
+const COUNT := 19
 ## 16.0: групповые формы открытых мест. Одна куртина — десятки травинок на 1,5–2 м: густой массив
 ## получается из сотен экземпляров, а не из тысяч мелких пучков. Видны дальше травы (как кусты).
 ## MEADOW — высокотравье с колосьями (0,9–1,5 м), FORBS — цветущее разнотравье, SEDGE — осока с рогозом.
@@ -17,13 +17,13 @@ const COMMUNITIES := 6
 ## Вес каждой формы в сообществе (порядок форм как в enum). Кусты и подрост у опушек и в предгорьях,
 ## осока у воды, разнотравье на солнечных сухих местах, высокотравье в сырых ложбинах и у обочин.
 const COMMUNITY := [
-	#  FERN MOSS MUSH HERB GRASS BUSH SAPL PINE FLOW HIGH YOUNG YPINE MEAD FORBS SEDGE STIPA FIRE
-	[0.0, 0.0, 0.0, 0.2, 0.5, 0.0, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.0],  # газон: редкие пучки, контраст
-	[0.0, 0.0, 0.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 3.2, 0.45, 0.0, 0.0, 0.15],  # высокотравье
-	[0.0, 0.0, 0.0, 0.2, 0.15, 0.0, 0.0, 0.0, 0.3, 0.2, 0.0, 0.0, 0.5, 2.6, 0.0, 0.15, 0.3],  # разнотравье
-	[0.2, 0.0, 0.0, 0.1, 0.0, 2.2, 0.5, 0.3, 0.1, 0.5, 0.25, 0.15, 1.2, 0.3, 0.0, 0.0, 0.6], # кустарник, опушка
-	[0.1, 0.1, 0.0, 0.2, 0.0, 0.25, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.5, 0.2, 3.0, 0.0, 0.1],  # сырое место, берег
-	[0.0, 0.08, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0, 0.4, 0.25], # горная дернина
+	#  FERN MOSS MUSH HERB GRASS BUSH SAPL PINE FLOW HIGH YOUNG YPINE MEAD FORBS SEDGE STIPA FIRE HAZEL HAZEL_T
+	[0.0, 0.0, 0.0, 0.2, 0.5, 0.0, 0.0, 0.0, 0.15, 0.15, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.0, 0.0, 0.0],  # газон: редкие пучки, контраст
+	[0.0, 0.0, 0.0, 0.1, 0.1, 0.0, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 3.2, 0.45, 0.0, 0.0, 0.15, 0.08, 0.04],  # высокотравье
+	[0.0, 0.0, 0.0, 0.2, 0.15, 0.0, 0.0, 0.0, 0.3, 0.2, 0.0, 0.0, 0.5, 2.6, 0.0, 0.15, 0.3, 0.06, 0.02],  # разнотравье
+	[0.2, 0.0, 0.0, 0.1, 0.0, 2.2, 0.5, 0.3, 0.1, 0.5, 0.25, 0.15, 1.2, 0.3, 0.0, 0.0, 0.6, 1.35, 0.75], # кустарник, опушка (лещина)
+	[0.1, 0.1, 0.0, 0.2, 0.0, 0.25, 0.0, 0.0, 0.1, 0.4, 0.0, 0.0, 0.5, 0.2, 3.0, 0.0, 0.1, 0.18, 0.10],  # сырое место, берег
+	[0.0, 0.08, 0.0, 0.7, 1.0, 0.45, 0.0, 0.15, 0.4, 0.2, 0.0, 0.0, 0.15, 0.6, 0.0, 0.4, 0.25, 0.0, 0.0], # горная дернина
 ]
 ## Доля занятых мест (из OPEN_SLOTS на клетку) и множитель низкой травы по сообществу
 const COMMUNITY_DENSITY := [0.06, 0.81, 0.55, 0.55, 0.8, 0.34]
@@ -35,10 +35,10 @@ const OPEN_SLOTS := 6
 enum { LIGHT, DARK, THICKET, FERNY }
 # Множитель веса каждой формы для каждого характера, порядок как в enum форм.
 const TEMPLATE := [
-	[0.6, 0.4, 0.3, 1.4, 2.2, 1.2, 0.6, 0.6, 1.0, 1.0, 0.5, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0],
-	[1.0, 1.7, 1.9, 0.5, 0.12, 0.45, 0.3, 0.5, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.2],
-	[0.7, 0.5, 0.4, 0.8, 0.5, 3.2, 3.0, 3.0, 0.2, 0.3, 1.0, 1.0, 0.3, 0.2, 1.0, 0.3, 1.2],
-	[3.2, 1.2, 0.8, 0.8, 0.5, 0.6, 0.6, 0.6, 0.2, 0.3, 0.3, 0.3, 0.3, 0.2, 1.0, 0.0, 0.4],
+	[0.6, 0.4, 0.3, 1.4, 2.2, 1.2, 0.6, 0.6, 1.0, 1.0, 0.5, 0.4, 1.0, 1.0, 1.0, 1.0, 1.0, 1.3, 1.1],
+	[1.0, 1.7, 1.9, 0.5, 0.12, 0.45, 0.3, 0.5, 0.0, 0.0, 0.0, 0.6, 0.0, 0.0, 1.0, 0.0, 0.2, 0.45, 0.35],
+	[0.7, 0.5, 0.4, 0.8, 0.5, 3.2, 3.0, 3.0, 0.2, 0.3, 1.0, 1.0, 0.3, 0.2, 1.0, 0.3, 1.2, 2.8, 2.6],
+	[3.2, 1.2, 0.8, 0.8, 0.5, 0.6, 0.6, 0.6, 0.2, 0.3, 0.3, 0.3, 0.3, 0.2, 1.0, 0.0, 0.4, 1.2, 1.4],
 ]
 const DENSITY := [1.0, 0.8, 1.6, 1.4] # доля занятых мест подлеска (9.4: гуще, как в лесах KCD и Valheim)
 const LOW_GRASS := [1.5, 0.3, 0.55, 0.7] # множитель низкой травы
@@ -131,8 +131,10 @@ static func build_meshes() -> Array[Mesh]:
 	var sedge := _sedge()
 	var stipa := _stipa(false)
 	var fireweed := _fireweed(false)
+	var hazel := _hazel(0, false)
+	var hazel_tall := _hazel(1, false)
 
-	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed]
+	return [fern, moss, mushrooms, herb, tall_grass, bush, sapling, pine, flowers, high_grass, young, young_pine, meadow, forbs, sedge, stipa, fireweed, hazel, hazel_tall]
 
 
 ## 15.0: упрощённые формы для дальнего подлеска (дальше FAR_FORM_R от игрока), ключ - номер формы.
@@ -158,7 +160,7 @@ static func build_far_meshes() -> Dictionary:
 	var sapling := _crowned(1, bark, Vector3(0.04, 1.12, 0.0), Vector3(0.46, 0.56, 0.44), 14, 1.6, false)
 	var young := _crowned(2, Color(0.60, 0.58, 0.52), Vector3(0.0, 2.32, 0.0), Vector3(0.86, 1.06, 0.86), 22, 1.65, false)
 	return {FERN: fern, MOSS: moss, MEADOW: meadow, FORBS: _forb_patch(true), BUSH: bush, SAPLING: sapling, YOUNG: young,
-		STIPA: _stipa(true), FIREWEED: _fireweed(true)}
+		STIPA: _stipa(true), FIREWEED: _fireweed(true), HAZEL: _hazel(0, true), HAZEL_TALL: _hazel(1, true)}
 
 
 ## 17.11.2026: групповые формы средних дистанций — дальняя форма куртин открытых мест и злаковой травы (вместо
@@ -996,6 +998,100 @@ static func _crowned(kind_mode: int, bark: Color, center: Vector3, size: Vector3
 	return st.commit()
 
 
+## Лещина (орешник, Corylus avellana): крупный многоствольный кустарник с пучком расходящихся
+## от основания стволов и объёмными группами крупных округлых листьев с просветами.
+## variant 0 — раскидистый (до ~3 м), variant 1 — высокий/асимметричный (до ~4,2 м; с масштабом до 5–6 м).
+static func _hazel(variant: int, far: bool) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var bark := Color(0.41, 0.33, 0.24)
+	var stems := (4 if variant == 0 else 5) if far else (5 if variant == 0 else 6)
+	var base_h := 3.05 if variant == 0 else 4.25
+	var base_spread := 1.48 if variant == 0 else 1.72
+	var r0 := 0.036 if variant == 0 else 0.045
+	var anchors: Array[Array] = [] # [pos, size]
+	var center := Vector3(0.10 if variant == 1 else 0.0, base_h * 0.58, 0.0)
+	for s in stems:
+		var a := s * TAU / stems + (0.28 if variant == 0 else -0.22) + sin(s * 2.1 + variant) * 0.22
+		var dir := Vector3(cos(a), 0, sin(a))
+		var side_dir := Vector3(-dir.z, 0, dir.x)
+		var asym := (1.22 if s == 1 else (0.74 if s == 3 else (0.86 if s == 4 else 1.0))) if variant == 1 else (1.10 if s == 0 else (0.76 if s == 2 else 0.96))
+		var reach := base_spread * asym * (0.86 + fmod(s * 0.381966, 1.0) * 0.26)
+		var h := base_h * asym * (0.72 + fmod((s + 2) * 0.618034, 1.0) * 0.30)
+		var foot := dir * (0.06 + 0.03 * float(s % 2)) + Vector3(0, r0 * 0.65, 0)
+		var mid := dir * (reach * 0.50) + side_dir * (0.08 if s % 2 == 0 else -0.07) + Vector3(0, h * 0.42, 0)
+		var top := dir * reach + side_dir * (0.14 if s % 2 == 0 else -0.10) + Vector3(0, h, 0)
+		if far:
+			_add_open_branch(st, foot, top, r0, r0 * 0.30, 3, bark)
+		else:
+			_add_open_branch(st, foot, mid, r0, r0 * 0.62, 4, bark)
+			_add_open_branch(st, mid, top, r0 * 0.62, r0 * 0.22, 3, bark)
+		anchors.append([top, Vector3(0.58, 0.42, 0.58) * (1.0 if variant == 0 else 1.12)])
+		if not far:
+			var shoulder := mid.lerp(top, 0.45) + dir * (reach * 0.14) - Vector3(0, h * 0.06, 0)
+			var fork_a := a + (0.68 if s % 2 == 0 else -0.68)
+			var fdir := Vector3(cos(fork_a), 0, sin(fork_a))
+			var twig_origin := mid.lerp(top, 0.36)
+			var twig_tip := twig_origin + fdir * (reach * 0.48) + Vector3(0, h * 0.20, 0)
+			_add_open_branch(st, twig_origin, twig_tip, r0 * 0.40, r0 * 0.14, 3, bark)
+			anchors.append([twig_tip, Vector3(0.52, 0.36, 0.52)])
+			if s % 2 == 0:
+				anchors.append([shoulder, Vector3(0.46, 0.32, 0.46)])
+	# Верхняя и средняя внутренние кроны: куполообразный силуэт без плоского «зонта», но с просветами.
+	anchors.append([center + Vector3(0.0, base_h * 0.28, 0.0), Vector3(0.64, 0.46, 0.64)])
+	if not far:
+		anchors.append([center + Vector3(-0.18, base_h * 0.02, 0.14), Vector3(0.52, 0.36, 0.52)])
+	var per_anchor := 1 if far else 6
+	var span := 1.72 if far else 1.0
+	var card_idx := 0
+	for k in anchors.size():
+		var anc: Array = anchors[k]
+		var apos: Vector3 = anc[0]
+		var asize: Vector3 = anc[1]
+		for j in per_anchor:
+			var u := fmod((k * 7 + j) * 0.618034, 1.0)
+			var v := fmod((k * 13 + j) * 0.754878, 1.0)
+			var structural := j < 2 or far
+			var rad := (0.52 + 0.36 * u) if structural else (0.34 + 0.56 * sqrt(v))
+			var th := u * TAU + k * 1.37
+			var yb := lerpf(-0.42, 0.78, v)
+			var xyr := sqrt(maxf(0.0, 1.0 - yb * yb))
+			var p := apos + Vector3(xyr * cos(th) * asize.x, yb * asize.y, xyr * sin(th) * asize.z) * rad
+			if far:
+				p = apos + Vector3(cos(th) * asize.x * 0.25, 0.0, sin(th) * asize.z * 0.25)
+			p.y = maxf(p.y, base_h * 0.42)
+			var rel_anchor := (p - apos) / asize
+			var rel_global := (p - center) / Vector3(base_spread, base_h * 0.44, base_spread)
+			var normal := (rel_global * 0.55 + rel_anchor * 0.25 + Vector3.UP * 0.55).normalized()
+			var tangent := normal.cross(Vector3.UP if absf(normal.y) < 0.9 else Vector3.RIGHT).normalized()
+			var bitangent := tangent.cross(normal).normalized()
+			var roll := (card_idx * 1.618034) * TAU
+			var leaf_r := (0.22 if structural else 0.17) * (0.90 + 0.22 * u) * span
+			var side := (tangent * cos(roll) + bitangent * sin(roll) * 0.48).normalized() * leaf_r
+			var up := (bitangent * cos(roll) - tangent * sin(roll) * 0.38 + Vector3.UP * 0.34).normalized() * (leaf_r * 0.96)
+			var camber := normal * (leaf_r * 0.16)
+			var shade := clampf(lerpf(0.76, 1.15, clampf(rel_global.y * 0.38 + 0.55, 0.0, 1.0) * 0.6 + clampf(rel_global.length() * 0.65, 0.0, 1.0) * 0.4) * (0.92 + 0.14 * u), 0.72, 1.18)
+			var warm := 0.06 * v
+			st.set_color(Color((0.28 + warm) * shade, (0.48 + warm * 0.3) * shade, 0.17 * shade))
+			st.set_normal(normal)
+			var rank := fposmod(card_idx * 0.173, 0.44) if structural else clampf(0.54 + 0.42 * fposmod(card_idx * 0.754878, 1.0), 0.54, 0.96)
+			st.set_uv2(Vector2(rank, 0.0))
+			var pl := p - side - camber
+			var pr := p + side - camber
+			var pt := p + up + camber
+			var pb := p - up * 0.88 - camber * 0.35
+			for q: Vector3 in [pl, pt, pr, pl, pr, pb]:
+				st.add_vertex(q)
+			if far:
+				# Перекрёстный второй лист для объёмного дальнего силуэта при малом числе треугольников.
+				var cross_s := normal * (leaf_r * 0.62) + bitangent * (leaf_r * 0.32)
+				for q: Vector3 in [p - cross_s, pt, p + cross_s, p - cross_s, p + cross_s, pb]:
+					st.add_vertex(q)
+			card_idx += 1
+	st.index()
+	return st.commit()
+
+
 static func _leaves(leaves: Array, color: Color, persistent_from := -1, use_uv2 := true) -> ArrayMesh:
 	var st := SurfaceTool.new()
 	st.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -1057,6 +1153,7 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	var shade := 1.0 - light
 	var wet := smoothstep(0.25, 0.8, moisture)
 	var conifer := biome == Biomes.TAIGA
+	var hazel_suit := (0.045 if conifer else 0.24) * (0.45 + 0.55 * wet) * (0.35 + 0.65 * light) * (0.45 + 0.55 * canopy)
 	var out := PackedFloat32Array([
 		wet * shade * (0.7 if conifer else 1.2),
 		wet * shade * (1.6 if conifer else 1.0),
@@ -1076,6 +1173,8 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 		wet * wet * (1.0 - canopy * 0.6) * (0.25 if biome == Biomes.SWAMP else 0.06),
 		0.0, # ковыль под пологом не растёт
 		light * (1.0 - canopy) * (0.04 if conifer else 0.1), # 16.1: иван-чай в просветах (пятнами — VegetationLayer)
+		hazel_suit * 0.62,
+		hazel_suit * 0.38 * (0.5 + 0.5 * canopy),
 	])
 	# Характер меняет состав, а не долю растений рядом с подстилкой: её задаёт DENSITY.
 	var before := 0.0
@@ -1093,6 +1192,8 @@ static func weights(biome: int, moisture: float, light: float, canopy: float, ch
 	out[PINE] += thicket * (0.3 if conifer else 0.08)
 	out[YOUNG] += thicket * (0.04 if conifer else 0.14)
 	out[YOUNG_PINE] += thicket * (0.14 if conifer else 0.04)
+	out[HAZEL] += thicket * (0.05 if conifer else 0.26)
+	out[HAZEL_TALL] += thicket * (0.03 if conifer else 0.16)
 	return out
 
 

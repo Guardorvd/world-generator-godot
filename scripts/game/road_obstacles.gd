@@ -188,7 +188,7 @@ func _consider(out: Dictionary, p: Vector2, kind: int, s: float, owner: int, mid
 	# 11.11.2026: размер дерева — по толщине ствола в прежних единицах (сосна масштаба 1 со стволом TRUNK_UNIT):
 	# пороги и толщина корней не зависят от того, что номинальное дерево стало выше
 	s = StageVegetation.TRUNK.get(kind, TRUNK_UNIT) * s / TRUNK_UNIT
-	if not Biomes.is_tree(kind) or s < 0.6: return
+	if kind == Biomes.T_MUGO or not Biomes.is_tree(kind) or s < 0.6: return
 	out.trees += 1
 	var along := off.dot(dir)
 	if s < ROOT_TREE or not StageVegetation.TRUNK.has(kind) or along < -length * 0.5 or along >= length * 0.5: return

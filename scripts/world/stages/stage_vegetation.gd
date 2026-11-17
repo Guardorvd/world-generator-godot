@@ -41,6 +41,7 @@ const CLEAR_CAP := 12.0  # дальше этого от пути (м) просв
 ## 11.11.2026: высокий лес — стволы взрослого дерева номинального размера (ForestModels.NOMINAL).
 const TRUNK := {
 	Biomes.T_BIRCH: 0.20, Biomes.T_PINE: 0.29, Biomes.T_SNOWPINE: 0.29, Biomes.T_OAK: 0.50,
+	Biomes.T_ROWAN: 0.15, Biomes.T_MUGO: 0.24,
 	Biomes.T_JUNGLE: 0.32, Biomes.T_ACACIA: 0.3, Biomes.T_PALM: 0.25, Biomes.T_DEAD: 0.34, Biomes.T_CACTUS: 0.3,
 }
 ## Снежная ель и молодые деревья (крона до земли) опускают ветви к земле: эта доля кроны тоже не над полотном.
@@ -215,10 +216,10 @@ static func path_clearance(W: int, H: int, trails: Array, tunnels: Array = []) -
 	return Grid.path_clearance(W, H, starts, px, py, pw, margin, GameConfig.TILE, CLEAR_CAP)
 
 
-## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели) не на полотне
+## Хватает ли просвета объекту вида kind масштаба sc в точке (x, y): ствол (и нижние ветви ели и стланика) не на полотне
 static func clear_of_path(field: PackedFloat32Array, ox: int, oy: int, stride: int, x: float, y: float, kind: int, sc: float, age := ForestModels.ADULT_AGE) -> bool:
 	var need: float = TRUNK.get(kind, 0.0) * sc
-	if kind == Biomes.T_SNOWPINE or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
+	if kind == Biomes.T_SNOWPINE or kind == Biomes.T_MUGO or (age == ForestModels.YOUNG_AGE and ForestModels.has_ages(kind)):
 		need += LOW_CROWN * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE
 	elif not TRUNK.has(kind):
 		need = 0.5 * Biomes.CROWN_RADIUS[kind] * sc * GameConfig.TILE # куст и камыш — краем к кромке
@@ -350,6 +351,10 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 				dens *= 1.0 - 0.65 * line
 			if sl > STEEP:
 				dens /= 1.0 + (sl - STEEP) * 1.5
+			# Горная сосна (стланик): естественные куртины по горным склонам, предгорьям и переходной зоне к вершинам (не на скальных стенах и снегу).
+			var mugo_belt := _ss(0.18, 0.28, e) * (1.0 - _ss(0.38, 0.46, e)) * (1.0 - _ss(0.58, 0.78, sl)) * _ss(-0.25, 0.25, fv)
+			if mugo_belt > 0.0 and (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.ROCK or bi == Biomes.TUNDRA):
+				dens = maxf(dens, mugo_belt * 0.42)
 			# клетка целиком под полотном широкой дороги (полудиагональ клетки 2,83 м)
 			if has_path and dist_path[i] < -3.0:
 				continue
@@ -371,7 +376,7 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 					if community_moist < 0.0:
 						var dry_shoulder := clampf(RockScatter.local_convexity(elev, i, stride) / 0.9, -1.0, 1.0)
 						community_moist = clampf(moist[i] + (age - 0.5) * 0.22 + (stand - 0.5) * 0.3 - 0.16 * dry_shoulder, 0.0, 1.0)
-					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior, stand)
+					var kind := _kind(bi, kinds, rng.next_float(), e, community_moist, sl, dw, temp[i], light, interior, stand, exposed)
 					var v := floori(rng.next_float() * 3)
 					var sc: float
 					var tree_age := ForestModels.ADULT_AGE
@@ -379,9 +384,13 @@ static func place_chunk(seed_num: int, x0: int, y0: int, x1: int, y1: int, f: Di
 						# 11.11.2026: размер и возрастной класс древостоя; класс пишется в вариант: v = оттенок + 3 * класс
 						var form := tree_form(age, interior, line, moist[i], exposed, rng.next_float())
 						sc = form.x
-						if ForestModels.has_ages(kind):
+						if kind == Biomes.T_MUGO:
+							sc = lerpf(0.74, 1.30, fposmod(form.x * 7.13, 1.0)) * lerpf(1.0, 0.76, _ss(0.28, 0.44, e))
+						elif ForestModels.has_ages(kind):
 							tree_age = int(form.y)
 							v += 3 * tree_age
+							if kind == Biomes.T_ROWAN:
+								sc *= 0.92
 						elif form.y == ForestModels.YOUNG_AGE:
 							sc = maxf(sc, 0.55) # у видов без молодой формы нет карликов взрослого силуэта
 					else:
@@ -528,8 +537,14 @@ static func _reedy(bi: int) -> bool:
 ## Вид объекта по местности. r — случайное число 0..1, e — высота, m — влажность, sl — крутизна,
 ## dw — клеток до воды. Без особых условий — вид из списка биома, как раньше
 static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float, dw: float, t: float, light: float,
-		interior: float, stand := 0.5) -> int:
+		interior: float, stand := 0.5, exposed := 0.0) -> int:
 	var shore := dw < SHORE
+	var r_sub := fposmod(r * 17.37, 1.0)
+	var r_rowan := fposmod(r * 23.17, 1.0)
+	if (bi == Biomes.TAIGA or bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TUNDRA) and sl < 0.72 and (e > 0.20 or (e > 0.14 and (sl > 0.25 or exposed > 0.22))):
+		var mugo_share := clampf(_ss(0.20, 0.34, e) * 0.55 + _ss(0.14, 0.26, e) * maxf(_ss(0.22, 0.52, sl), exposed) * 0.45, 0.0, 0.75)
+		if mugo_share > 0.08 and r_sub < mugo_share:
+			return Biomes.T_MUGO
 	if (bi == Biomes.FOREST or bi == Biomes.GRASS or bi == Biomes.TAIGA) and m < 0.58 and r < 0.28 * _ss(0.24, 0.45, e):
 		return Biomes.T_BUSH
 	# Ограничение действует и на специальные сообщества ниже.
@@ -539,6 +554,9 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 		Biomes.FOREST, Biomes.GRASS:
 			if bi == Biomes.GRASS and m < 0.35:
 				return Biomes.T_BUSH if r < 0.75 else Biomes.T_PINE
+			var rowan_chance := (0.045 + 0.065 * (1.0 - interior) + 0.04 * _ss(0.12, 0.28, e)) * _ss(0.22, 0.55, m)
+			if r_rowan > 1.0 - rowan_chance:
+				return Biomes.T_ROWAN
 			var high := _ss(HIGH_LO, HIGH_HI, e)
 			var pine := 0.1 + 0.5 * high + 0.25 * (1.0 - m) + 0.1 * light
 			var birch := 0.12 + 0.18 * m + 0.12 * (1.0 - interior)
@@ -556,6 +574,9 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 				return Biomes.T_BIRCH
 			return Biomes.T_OAK if r < 0.94 or interior > 0.75 else Biomes.T_BUSH
 		Biomes.TAIGA:
+			var rowan_chance := (0.025 + 0.055 * (1.0 - interior) + 0.03 * _ss(0.10, 0.26, e)) * _ss(0.25, 0.55, m)
+			if e < 0.32 and r_rowan > 1.0 - rowan_chance:
+				return Biomes.T_ROWAN
 			var high := _ss(HIGH_LO, HIGH_HI, e)
 			var birch := lerpf(0.30 + 0.18 * m, 0.06 + 0.07 * m, high)
 			birch += (_ss(0.26, 0.8, stand) - 0.5) * 0.42 * (1.0 - high) * _ss(0.25, 0.55, m)
@@ -570,6 +591,8 @@ static func _kind(bi: int, kinds: Array, r: float, e: float, m: float, sl: float
 			if shore and t > 0.24:
 				return Biomes.T_BIRCH if r < 0.45 else Biomes.T_BUSH
 		Biomes.ROCK:
+			if e >= 0.16 and e < 0.44 and sl < 0.72 and r < 0.48:
+				return Biomes.T_MUGO if e >= 0.22 or r_sub < 0.65 else Biomes.T_PINE
 			# нижние скалы ещё в соснах, верхние — голый камень
 			return Biomes.T_PINE if e < 0.3 and r < 0.5 else Biomes.T_ROCK
 		Biomes.JUNGLE:

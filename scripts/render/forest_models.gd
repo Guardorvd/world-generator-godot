@@ -16,8 +16,9 @@ const YOUNG_AGE := 1
 const OLD_AGE := 2
 ## Номинальная высота взрослого дерева породы при масштабе 1, м. Поле ref формы — её высота в долях номинала:
 ## масштаб экземпляра = obj_s / ref, поэтому obj_s — линейный размер дерева независимо от возрастной формы.
-const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0}
+const NOMINAL := {Biomes.T_PINE: 19.0, Biomes.T_BIRCH: 16.0, Biomes.T_OAK: 14.5, Biomes.T_SNOWPINE: 12.0, Biomes.T_ROWAN: 9.5, Biomes.T_MUGO: 2.2}
 static var _leaf_texture: Texture2D
+static var _pinnate_texture: Texture2D
 static var _bark_texture: Texture2D
 static var _needle_texture: Texture2D
 static var baking := false # authoring tool only
@@ -25,7 +26,7 @@ static var baking := false # authoring tool only
 
 ## Есть ли у вида молодые и старые формы.
 static func has_ages(kind: int) -> bool:
-	return kind == Biomes.T_PINE or kind == Biomes.T_BIRCH or kind == Biomes.T_OAK
+	return kind == Biomes.T_PINE or kind == Biomes.T_BIRCH or kind == Biomes.T_OAK or kind == Biomes.T_ROWAN
 
 
 ## Сколько форм вида запекается.
@@ -53,6 +54,10 @@ static func definition(kind: int, variant: int) -> Dictionary:
 		return _birch(variant)
 	if kind == Biomes.T_OAK:
 		return _oak(variant)
+	if kind == Biomes.T_ROWAN:
+		return _rowan(variant)
+	if kind == Biomes.T_MUGO:
+		return _mugo(variant)
 	return _conifer(kind, variant)
 
 
@@ -417,8 +422,171 @@ static func _young_oak(form: int, rng: RandomNumberGenerator, bark: Color, color
 	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_OAK, YOUNG_AGE, height))
 
 
-static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool, ref := 1.0) -> Dictionary:
-	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, false), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, needles), ref = ref}
+## Рябина (Sorbus aucuparia): невысокое дерево второго яруса с гладковатой серо-бурой корой,
+## ажурной разрежённой кроной из перистых листьев и ярко-красными гроздьями ягод (только LOD0).
+## Вариант 2 взрослой — многоствольная; 4–5 — молодая, 6–7 — старая раскидистая с сухими сучками.
+static func _rowan(variant: int) -> Dictionary:
+	var age := age_of(variant)
+	var form := variant if age == ADULT_AGE else variant % AGE_FORMS
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7331 + variant * 359
+	var bark := Color("6a5f54") if age != OLD_AGE else Color("5c5248")
+	var colors := [Color("518438"), Color("61933e"), Color("467732")]
+	var branches: Array = []
+	var foliage: Array = []
+	var berries: Array = []
+	var height: float
+	var radius: float
+	var angle := rng.randf() * TAU
+	var lean_dir := Vector3(cos(angle), 0, sin(angle))
+	var multi := age == ADULT_AGE and form == 2
+	if age == YOUNG_AGE:
+		height = [4.9, 6.0][form]
+		radius = [0.068, 0.082][form]
+		var path: Array[Vector3] = []
+		for i in 5:
+			var t := i / 4.0
+			path.append(lean_dir * (0.14 * t + (0.20 + form * 0.12) * t * t) + Vector3(0, height * t, 0))
+		branches.append([path, radius, 0.016, bark, false])
+		_roots(branches, rng, 3, Vector2(radius * 1.2, radius * 1.7), radius * 1.0, radius * 0.18, radius * 0.42, bark)
+		for b in 7 + form * 2:
+			var t := lerpf(0.38, 0.90, float(b) / float(6 + form * 2))
+			var orig := _path_at(path, t)
+			var a := angle + b * 2.399 + rng.randf_range(-0.22, 0.22)
+			var dir := Vector3(cos(a), 0, sin(a))
+			var reach := rng.randf_range(0.62, 1.08) * (1.12 - 0.36 * (t - 0.38) / 0.52)
+			var tip := orig + dir * reach + Vector3(0, reach * rng.randf_range(0.48, 0.80), 0)
+			branches.append([[orig, orig.lerp(tip, 0.52) + Vector3.UP * 0.08, tip], 0.026 * (1.1 - t * 0.5), 0.007, bark, false, true])
+			foliage.append([tip, Vector3(0.84, 0.58, 0.80) * rng.randf_range(0.90, 1.14), a, rng.randf() * 10.0])
+			if form == 1 and b in [2, 5, 7]:
+				berries.append([tip + Vector3(0, -0.14, 0) + dir * 0.16, 0.22, a])
+		foliage.append([path[-1] + Vector3.UP * 0.16, Vector3(0.80, 0.72, 0.80), angle, rng.randf() * 10.0, true])
+		return _leafy(branches, foliage, colors, false, _ref(Biomes.T_ROWAN, age, height), _texture(true, false, true), berries)
+
+	if age == OLD_AGE:
+		height = [10.4, 11.2][form]
+		radius = [0.20, 0.22][form]
+	elif multi:
+		height = 9.0
+		radius = 0.14
+	else:
+		height = [9.2, 9.8, 9.0, 10.2][form]
+		radius = [0.15, 0.14, 0.14, 0.16][form]
+
+	var stems := 3 if multi else 1
+	for st_idx in stems:
+		var fork_h: float = 0.28 if multi else height * (0.34 if age == OLD_AGE else [0.38, 0.42, 0.36, 0.40][form])
+		var st_h: float = height * ([1.0, 0.84, 0.72][st_idx] if multi else 1.0)
+		var st_r: float = radius * ([0.92, 0.78, 0.66][st_idx] if multi else 1.0)
+		var st_a := angle + (st_idx * 2.15 + rng.randf_range(-0.2, 0.2) if multi else 0.0)
+		var st_dir := Vector3(cos(st_a), 0, sin(st_a))
+		var base_pt := st_dir * (0.08 if multi and st_idx > 0 else 0.0)
+		var trunk: Array[Vector3] = []
+		var rings := 4 if multi else 5
+		var trunk_top_y: float = fork_h if not multi else st_h * 0.60
+		var bow := (0.65 + st_idx * 0.25 if multi else (0.52 if age == OLD_AGE else 0.22 + form * 0.06))
+		for i in rings:
+			var t := i / float(rings - 1)
+			var wigg := Vector3(-st_dir.z, 0, st_dir.x) * sin(t * PI) * 0.10 * (1.0 if st_idx % 2 == 0 else -1.0)
+			trunk.append(base_pt + st_dir * bow * (0.35 * t + 0.65 * t * t) + wigg + Vector3(0, t * trunk_top_y, 0))
+		branches.append([trunk, st_r, st_r * (0.55 if not multi else 0.25), bark, false])
+		if st_idx == 0:
+			_roots(branches, rng, 4 if age == OLD_AGE else 3, Vector2(radius * 1.25, radius * 1.75), radius * 1.05, radius * 0.18, radius * 0.42, bark)
+		var limbs := 2 if multi else 4
+		var fork_origin := trunk[-1]
+		for i in limbs:
+			var a := st_a + i * TAU / limbs + rng.randf_range(-0.28, 0.28)
+			var out := Vector3(cos(a), 0, sin(a))
+			var top_leader := i == 0 and (not multi or st_idx == 0)
+			var limb_reach := (rng.randf_range(0.55, 0.85) if top_leader else rng.randf_range(1.10, 1.75)) * (1.16 if age == OLD_AGE else 1.0)
+			var target_y: float = st_h * (rng.randf_range(0.95, 1.02) if top_leader else rng.randf_range(0.74, 0.90))
+			var end := fork_origin + out * limb_reach + Vector3(0, maxf(0.9, target_y - fork_origin.y), 0)
+			var elbow := fork_origin.lerp(end, 0.48) + out * rng.randf_range(0.18, 0.34) + Vector3.UP * 0.18
+			var leader: Array[Vector3] = [fork_origin, elbow, end]
+			branches.append([leader, st_r * (0.62 if top_leader else 0.50), 0.022, bark, false])
+			var twigs := 3 if multi else (4 if age == OLD_AGE else 3)
+			for j in twigs:
+				var u := 0.26 + j * (0.62 / maxf(1, twigs - 1))
+				var orig := _path_at(leader, u)
+				var sa := a + (-0.78 if j % 2 == 0 else 0.78) + rng.randf_range(-0.20, 0.20)
+				var sdir := Vector3(cos(sa), 0, sin(sa))
+				var slen := rng.randf_range(0.58, 1.02) * (1.12 if age == OLD_AGE else 1.0)
+				var tip := orig + sdir * slen + Vector3(0, slen * rng.randf_range(0.36, 0.62), 0)
+				branches.append([[orig, orig.lerp(tip, 0.5) + Vector3.UP * 0.06, tip], 0.040 * (1.0 - u * 0.4), 0.009, bark, false, true])
+				foliage.append([tip, Vector3(0.94, 0.62, 0.88) * rng.randf_range(0.88, 1.12), sa, rng.randf() * 10.0])
+				if (j + i + st_idx) % 2 == 0:
+					berries.append([tip + Vector3(0, -0.15, 0) + sdir * 0.14, rng.randf_range(0.23, 0.30), sa])
+			if not multi and (i % 2 == 0 or age == OLD_AGE):
+				foliage.append([elbow + Vector3.UP * 0.22, Vector3(0.82, 0.54, 0.78) * rng.randf_range(0.90, 1.08), a + 0.4, rng.randf() * 10.0])
+			foliage.append([end, Vector3(1.02, 0.68, 0.96) * rng.randf_range(0.92, 1.10), a, rng.randf() * 10.0, true])
+			if i == 0 or age == OLD_AGE:
+				berries.append([end + Vector3(0, -0.16, 0) + out * 0.18, rng.randf_range(0.25, 0.32), a + 0.5])
+		if age == OLD_AGE and st_idx == 0:
+			var sa := angle + 1.4
+			var orig := _path_at(trunk, 0.78)
+			var tip := orig + Vector3(cos(sa), 0.46, sin(sa)) * rng.randf_range(0.85, 1.20)
+			branches.append([[orig, orig.lerp(tip, 0.5) + Vector3.UP * 0.10, tip], 0.046, 0.012, bark, false, true])
+			foliage.append([tip, Vector3(0.82, 0.56, 0.78), sa, rng.randf() * 10.0])
+	return _leafy(branches, foliage, colors, false, _ref(Biomes.T_ROWAN, age, height), _texture(true, false, true), berries)
+
+
+## Горная сосна (Pinus mugo): низкий многоствольный кустарник/стланик с искривлёнными толстыми
+## ветвями и плотной тёмно-зелёной хвоей. Варианты: 0 — компактная подушка, 1 — широкая раскидистая,
+## 2 — асимметричная ветровая, 3 — стелющаяся вдоль склона (ширина больше высоты).
+static func _mugo(variant: int) -> Dictionary:
+	var form := posmod(variant, VARIANTS)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 7589 + form * 409
+	var bark := Color("564538")
+	var colors := [Color("376139"), Color("426e42"), Color("2f5734")]
+	var branches: Array = []
+	var foliage: Array = []
+	var stem_count: int = [4, 5, 5, 6][form]
+	var spread_k: float = [1.45, 1.92, 1.80, 2.05][form]
+	var height_k: float = [1.85, 2.10, 2.25, 1.38][form]
+	var wind_angle := rng.randf() * TAU
+	var wind_dir := Vector3(cos(wind_angle), 0, sin(wind_angle))
+	for s_idx in stem_count:
+		var a: float = wind_angle + (s_idx * TAU / stem_count if form != 2 else lerpf(-1.05, 1.25, float(s_idx) / maxf(1, stem_count - 1)) + (PI if s_idx == 0 else 0.0))
+		a += rng.randf_range(-0.22, 0.22)
+		var dir := Vector3(cos(a), 0, sin(a))
+		var wind_boost := 1.28 if form == 2 and s_idx > 0 else (0.58 if form == 2 and s_idx == 0 else 1.0)
+		var reach: float = rng.randf_range(0.78, 1.12) * spread_k * wind_boost
+		var top_y: float = rng.randf_range(0.76, 1.06) * height_k * (0.68 if form == 3 else (0.52 if form == 2 and s_idx == 0 else 1.0))
+		var p0 := dir * 0.04 + Vector3(0, 0.0, 0)
+		var low_y: float = top_y * float([0.28, 0.22, 0.26, 0.14][form])
+		var p1: Vector3 = dir * (reach * 0.38) + Vector3(0, low_y, 0)
+		var crook := Vector3(-dir.z, 0, dir.x) * rng.randf_range(-0.22, 0.22)
+		var p2: Vector3 = dir * (reach * 0.76) + crook + Vector3(0, top_y * float([0.62, 0.50, 0.56, 0.36][form]), 0)
+		var p3: Vector3 = dir * reach + crook * 0.6 + Vector3(0, top_y, 0)
+		var stem: Array[Vector3] = [p0, p1, p2, p3]
+		var r0 := rng.randf_range(0.088, 0.118) * (1.08 if form in [1, 3] else 0.96)
+		branches.append([stem, r0, 0.022, bark, false])
+		# Боковые побеги расходятся широкой лапой по краю куртины и поднимают хвойные «свечи».
+		var shoots := 2 if form == 0 else 3
+		for j in shoots:
+			var t := 0.38 + j * 0.25
+			var orig := _path_at(stem, t)
+			var sa: float = a + (-0.68 if j % 2 == 0 else 0.68) + rng.randf_range(-0.18, 0.18)
+			var sdir := Vector3(cos(sa), 0, sin(sa))
+			var s_len := rng.randf_range(0.55, 0.92) * (1.12 if form in [1, 3] else 0.9)
+			var s_end := orig + sdir * s_len + Vector3(0, rng.randf_range(0.22, 0.48) * (0.65 if form == 3 else 1.0), 0)
+			branches.append([[orig, s_end], r0 * 0.45, 0.015, bark, false, true])
+			var pad_sz := Vector3(0.84, 0.44, 0.78) * rng.randf_range(0.88, 1.12)
+			foliage.append([s_end + Vector3(0, 0.08, 0), pad_sz, sa, rng.randf() * 10.0])
+		var mid_pos: Vector3 = p1.lerp(p2, 0.55) + Vector3(0, 0.18, 0)
+		foliage.append([mid_pos, Vector3(0.90, 0.46, 0.86) * rng.randf_range(0.90, 1.10), a, rng.randf() * 10.0])
+		foliage.append([p3 + Vector3(0, 0.10, 0), Vector3(0.92, 0.50, 0.88) * rng.randf_range(0.90, 1.12), a, rng.randf() * 10.0, true])
+	# Центральная связующая подушка, чтобы центр куста-стланика не проваливался в пустое кольцо.
+	var hub_dir := wind_dir * (0.28 if form == 2 else 0.0)
+	foliage.append([hub_dir + Vector3(0, height_k * 0.54, 0), Vector3(1.05, 0.52, 1.00), wind_angle, 1.7, true])
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, true), bark = Color.WHITE, leaves = colors,
+		colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = _texture(true, true), ref = 1.0}
+
+
+static func _leafy(branches: Array, foliage: Array, colors: Array, needles: bool, ref := 1.0, crown_tex: Texture2D = null, berries: Array = []) -> Dictionary:
+	var tex: Texture2D = crown_tex if crown_tex != null else _texture(true, needles)
+	return {trunk = _mesh(branches, [], false), crown = _mesh([], foliage, false, berries), bark = Color.WHITE, leaves = colors, colored_bark = true, cutout = true, trunk_texture = _texture(false), crown_texture = tex, ref = ref}
 
 
 ## Компактные корневые лапы у самого комля: плавно уходят в землю без торчащих в воздухе распорок.
@@ -622,10 +790,11 @@ static func _dead(variant: int) -> Dictionary:
 
 ## Общие текстуры 128x128: фактурная кора и мягкие стилизованные букеты листьев / хвои
 ## с естественными просветами между листовыми группами и плавным объёмным градиентом.
-static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
+static func _texture(leaves: bool, needles: bool = false, pinnate: bool = false) -> Texture2D:
 	if not baking:
-		return preload("res://scripts/render/asset_catalog.gd").get_catalog().textures[2 if needles else (1 if leaves else 0)]
-	var cached := _needle_texture if needles else (_leaf_texture if leaves else _bark_texture)
+		var idx := 5 if pinnate else (2 if needles else (1 if leaves else 0))
+		return preload("res://scripts/render/asset_catalog.gd").get_catalog().textures[idx]
+	var cached := _pinnate_texture if pinnate else (_needle_texture if needles else (_leaf_texture if leaves else _bark_texture))
 	if cached != null:
 		return cached
 	var image := Image.create(128, 128, false, Image.FORMAT_RGBA8)
@@ -639,7 +808,48 @@ static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
 				var ridge := sin(x * 0.75 + sin(y * TAU / 128.0) * 1.8) * 0.075 + sin(x * 2.1 + y * 0.15) * 0.035
 				var bark_val := clampf(0.84 + ridge + grain * 0.05, 0.65, 1.0)
 				image.set_pixel(x, y, Color(bark_val, bark_val * 0.99, bark_val * 0.96, 1.0))
-	if leaves:
+	if pinnate:
+		# Сложный непарноперистый лист рябины: несколько веточек-черешков с узкими парными листочками и ажурными просветами.
+		var rng := RandomNumberGenerator.new()
+		rng.seed = 673
+		for branch_idx in 9:
+			var ba := branch_idx * TAU / 9.0 + rng.randf_range(-0.22, 0.22)
+			var base := Vector2(64, 64) + Vector2(cos(ba + 2.4), sin(ba + 2.4)) * rng.randf_range(4.0, 22.0)
+			var bdir := Vector2(cos(ba), sin(ba))
+			var bperp := Vector2(-bdir.y, bdir.x)
+			var rachis_len := rng.randf_range(26.0, 36.0)
+			var layer_shade := lerpf(0.76, 0.96, branch_idx / 8.0)
+			# Листочки: 4 пары боковых + непарный верхушечный
+			for step in 5:
+				var u := 0.22 + step * 0.18
+				var hub := (base + bdir * (rachis_len * u) - Vector2(64, 64)).limit_length(46.0) + Vector2(64, 64)
+				var sides := [0.0] if step == 4 else [-1.0, 1.0]
+				for s_sign: float in sides:
+					var la := ba + s_sign * (0.95 - step * 0.08) + rng.randf_range(-0.14, 0.14)
+					var ldir := Vector2(cos(la), sin(la))
+					var length := 9.2 if step == 4 else rng.randf_range(7.2, 9.6) * (1.05 - step * 0.08)
+					var width := length * 0.34
+					var c := hub + ldir * (length * 0.65)
+					var bound := ceili(length) + 1
+					for dy in range(-bound, bound + 1):
+						for dx in range(-bound, bound + 1):
+							var px := posmod(int(c.x) + dx, 128)
+							var py := posmod(int(c.y) + dy, 128)
+							var p := Vector2(dx, dy).rotated(-la)
+							if absf(p.x) / length + pow(absf(p.y) / width, 1.45) > 1.0:
+								continue
+							var shade := layer_shade * (0.86 + 0.16 * (1.0 - absf(p.y) / width))
+							if absf(p.y) < 0.45:
+								shade *= 0.85
+							shade = clampf(shade, 0.64, 1.0)
+							image.set_pixel(px, py, Color(shade, shade, shade * 0.96, 1.0))
+			# Черешок по оси ветки
+			for rstep in 24:
+				var rp := (base + bdir * (rachis_len * float(rstep) / 23.0) - Vector2(64, 64)).limit_length(48.0) + Vector2(64, 64)
+				for w: int in [-1, 0]:
+					var q: Vector2 = rp + bperp * (w * 0.5)
+					image.set_pixel(posmod(int(q.x), 128), posmod(int(q.y), 128), Color(0.72, 0.72, 0.66, 1.0))
+	elif leaves:
 		var rng := RandomNumberGenerator.new()
 		rng.seed = 651
 		# Семейство мягких под-куполов (букетов) внутри карточки: создаёт живой кружевной контур
@@ -680,7 +890,9 @@ static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
 					image.set_pixel(px, py, Color(shade, shade, shade * 0.97, 1.0))
 	image.generate_mipmaps()
 	cached = ImageTexture.create_from_image(image)
-	if needles:
+	if pinnate:
+		_pinnate_texture = cached
+	elif needles:
 		_needle_texture = cached
 	elif leaves:
 		_leaf_texture = cached
@@ -691,7 +903,7 @@ static func _texture(leaves: bool, needles: bool = false) -> Texture2D:
 
 ## Явные LOD для растворения в VegetationLayer. Каждый уровень хранится только один раз.
 ## Ближний меш владеет двумя дальними, обратных ссылок и циклов ресурсов нет.
-static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
+static func _mesh(branches: Array, foliage: Array, conifer: bool, berries: Array = []) -> ArrayMesh:
 	var levels: Array[Mesh] = []
 	var crown := [Vector3.ZERO, Vector3.ONE]
 	if not foliage.is_empty():
@@ -719,11 +931,34 @@ static func _mesh(branches: Array, foliage: Array, conifer: bool) -> ArrayMesh:
 		var lod_foliage: Array = _far_foliage(_far_foliage(foliage, conifer, false), conifer, true) if level == 2 else (_far_foliage(foliage, conifer, false) if level == 1 else foliage)
 		for spray: Array in lod_foliage:
 			_spray(st, spray, level, conifer, crown)
+		if level == 0 and not berries.is_empty():
+			for berry: Array in berries:
+				_berry_cluster(st, berry[0], berry[1], berry[2], crown)
 		st.index()
 		levels.append(st.commit())
 	var mesh: ArrayMesh = levels[0]
 	mesh.set_meta("lod_meshes", [levels[1], levels[2]])
 	return mesh
+
+
+## Гроздь ягод рябины (только LOD0): пара перекрещённых карточек с UV.x + 2.0 для выреза в шейдере.
+static func _berry_cluster(st: SurfaceTool, center: Vector3, radius: float, rot: float, crown: Array) -> void:
+	var uv := [Vector2(2.0, 1.0), Vector2(3.0, 1.0), Vector2(3.0, 0.0), Vector2(2.0, 0.0)]
+	for turn in 2:
+		var a := rot + turn * PI * 0.5
+		var side := Vector3(cos(a), 0, sin(a)) * radius
+		var across := Vector3(-sin(a), 0, cos(a))
+		var up := (Vector3.UP * 0.92 + across * (0.38 if turn == 0 else -0.34)).normalized() * radius
+		var pts := [center - side - up, center + side - up, center + side + up, center - side + up]
+		var min_y := minf(minf(pts[0].y, pts[1].y), minf(pts[2].y, pts[3].y))
+		if min_y < 0.05:
+			for k in 4:
+				pts[k] += Vector3(0.0, 0.05 - min_y, 0.0)
+		for idx: int in [0, 1, 2, 0, 2, 3]:
+			st.set_uv(uv[idx])
+			var lit := _crown_light(pts[idx], crown)
+			var col := Color(maxf(0.84, lit[1].r), maxf(0.84, lit[1].g), maxf(0.84, lit[1].b), 1.0)
+			_vertex(st, pts[idx], (lit[0] * 0.65 + Vector3.UP * 0.35).normalized(), col)
 
 
 static func lod_meshes(mesh: Mesh) -> Array[Mesh]:

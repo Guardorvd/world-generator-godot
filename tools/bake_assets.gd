@@ -32,6 +32,7 @@ func _initialize() -> void:
 	nrm.generate_mipmaps()
 	catalog.textures.append(ImageTexture.create_from_image(img))
 	catalog.textures.append(ImageTexture.create_from_image(nrm))
+	catalog.textures.append(ForestModels._texture(true, false, true))
 
 	# Проверка и сборка моделей поселений из .glb + общий атлас и мелкие детали.
 	if not _check_bad_glb_rejection():
