@@ -78,6 +78,8 @@ func _settlements() -> void:
 	w.h.resize(w.N)
 	w.h.fill(0.1)
 	w.filled.resize(w.N)
+	w.elev.resize(w.N)
+	w.elev.fill(0.1)
 	w.biome.resize(w.N)
 	w.biome.fill(Biomes.OCEAN)
 	w.ocean.resize(w.N)
@@ -95,7 +97,7 @@ func _settlements() -> void:
 				w.biome[i] = Biomes.GRASS
 				w.ocean[i] = 0
 				# Недоступный остров привлекательнее всех кандидатов на материке.
-				w.slope[i] = 0.59 if x < 60 else 0.0
+				w.slope[i] = 0.25 if x < 60 else 0.0
 	StageLandmarks._place_settlements(w)
 	var mainland := true
 	for s in w.settlements: mainland = mainland and s.x < 60.0

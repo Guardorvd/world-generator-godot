@@ -68,7 +68,7 @@ func _menu_smoke() -> void:
 	await scene_changed
 	main = current_scene
 	_check(main.get_node("%Start").has_focus() and main.bg.texture != null, "афиша и управление доступны на первом кадре")
-	_check(main._backdrop == null, "сборка фона отложена")
+	_check(main._startup_cover != null and not main.get_node("%LiveBackdrop").visible, "первый кадр прикрыт заставкой до готовности живого фона")
 	_check(main.get_node("%Carousel/Card/CardContent/Artwork/Art/Map").texture != null, "миниатюра мира читается из сборки")
 	await _wait_for_backdrop()
 	var live: TextureRect = main.get_node("%LiveBackdrop")

@@ -83,9 +83,11 @@ static func fields(w: WorldData) -> Dictionary:
 	else:
 		open.resize(w.N)
 		high.resize(w.N)
+		var has_elev := w.elev.size() == w.N
 		for i in w.N:
 			open[i] = 1 - forest_biome[w.biome[i]]
-			high[i] = int(w.elev[i] >= MOUNTAIN)
+			if has_elev and w.elev[i] >= MOUNTAIN:
+				high[i] = 1
 	var out := {depth = Grid.distance_field(w.W, w.H, open)}
 	if high.has(1):
 		out.to_high = Grid.distance_field(w.W, w.H, high)

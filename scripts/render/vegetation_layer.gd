@@ -2480,7 +2480,7 @@ func _put_understory(kind: int, x: float, z: float, rot: float, scale: float, ti
 	# неизменна — считается один раз (бит «посчитано» и бит «можно»), а не в каждой раскладке.
 	var cell := key >> 3
 	var bit := 1 << (key & 7)
-	if key >= 0 and world.lake[cell] == 0 and (_open_valid[cell * 2] & bit) != 0:
+	if key >= 0 and (world.lake.size() <= cell or world.lake[cell] == 0) and (_open_valid[cell * 2] & bit) != 0:
 		if (_open_valid[cell * 2 + 1] & bit) == 0:
 			return RoadPlacement.OBJECT
 	else:

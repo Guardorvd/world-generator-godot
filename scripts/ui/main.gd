@@ -163,6 +163,8 @@ func _show(screen: String) -> void:
 		if s != "back":
 			screens[s].visible = s == screen
 	screens.back.visible = screen in ["menu", "new_world", "all_worlds", "loading"] or (screen == "settings" and game == null)
+	if screen != "menu" and _startup_cover != null:
+		_lift_startup_cover()
 	if _progress_enabled:
 		var mode := "frozen" if screen == "loading" else ("live" if screens.back.visible else "")
 		_set_backdrop_mode(mode)

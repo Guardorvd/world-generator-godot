@@ -100,6 +100,10 @@ func _process(_delta: float) -> bool:
 		_shot("compass")
 		# быстрое перемещение к цели, как будто там уже побывали
 		var goal: Dictionary = game.hud.goal
+		if goal.is_empty():
+			printerr("SMOKE FAIL: цель путешествия не выбрана")
+			quit(1)
+			return true
 		game.hud.visited[goal.key] = true
 		game.travel_to(goal)
 	elif game.time > 6.2 and not shots.has("travel"):
@@ -120,13 +124,20 @@ func _process(_delta: float) -> bool:
 	return false
 
 
-## Самое дальнее от игрока поселение — как место из Hud.places()
+## Самое дальнее от игрока открытое место — предпочтительно другое поселение, иначе любая открытая цель
 func _farthest(game: GameWorld) -> Dictionary:
-	var best := {}
-	var bd := -1.0
+	var best_settlement := {}
+	var best_any := {}
+	var bd_settlement := -1.0
+	var bd_any := -1.0
 	for pl: Dictionary in game.hud.places():
+		if game.hud.at_place(pl, game.player.x, game.player.z):
+			continue
 		var d := Grid.hypot(pl.x * GameConfig.TILE - game.player.x, pl.y * GameConfig.TILE - game.player.z)
-		if pl.kind == "settlement" and d > bd:
-			bd = d
-			best = pl
-	return best
+		if pl.kind == "settlement" and d > bd_settlement:
+			bd_settlement = d
+			best_settlement = pl
+		if d > bd_any:
+			bd_any = d
+			best_any = pl
+	return best_settlement if not best_settlement.is_empty() else best_any

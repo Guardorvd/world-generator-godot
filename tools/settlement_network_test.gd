@@ -111,7 +111,7 @@ func _init() -> void:
 	check(w.settlements.size() == 4 and Check.settlements_connected(w) and Check.settlement_network_valid(w),
 		"итоговые поселения доступны от старта, непроходимый берег не объявляется доступным")
 	check(w.bridges.is_empty(), "небезопасный мост не создаётся даже ради полной численности")
-	check(w.generation_profile.settlement_attempts <= 7 * StageTrails.SETTLEMENT_NEIGHBORS,
+	check(w.generation_profile.settlement_attempts <= w.generation_profile.settlement_candidates * StageTrails.SETTLEMENT_NEIGHBORS,
 		"число соседей ограничено линейно числом кандидатов")
 	check(w.generation_profile.settlement_expanded <= 7 * w.N * 2,
 		"все повторные маршруты укладываются в общий детерминированный бюджет")

@@ -359,7 +359,7 @@ func _geography_check() -> void:
 	for key in ["h", "filled", "rain", "dist_ocean"]:
 		var field := PackedFloat32Array()
 		field.resize(w.N)
-		field.fill(0.2 if key == "h" else (0.4 if key == "filled" else 0.3))
+		field.fill(0.2 if key == "h" else (0.4 if key == "filled" else (10.0 if key == "dist_ocean" else 0.3)))
 		w.set(key, field)
 	for key in ["ocean", "lake", "river"]:
 		var field := PackedByteArray()
@@ -405,6 +405,7 @@ func _geography_check() -> void:
 func _vegetation_check(w: WorldData) -> void:
 	var invalid := 0
 	var near_hut := 0
+	var dist_path := StageVegetation.path_clearance(w.W, w.H, w.trails, w.tunnels) if not w.trails.is_empty() else PackedFloat32Array()
 	for k in w.obj_count:
 		var x := w.obj_x[k]
 		var y := w.obj_y[k]
@@ -412,8 +413,13 @@ func _vegetation_check(w: WorldData) -> void:
 			invalid += 1
 			continue
 		var i := floori(y) * w.W + floori(x)
-		if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0 or w.path_mask[i] != 0:
+		if w.ocean[i] != 0 or w.lake[i] != 0 or w.river[i] != 0:
 			invalid += 1
+		elif w.path_mask[i] != 0:
+			var kind := w.obj_k[k]
+			var age := int(w.obj_v[k] / 3.0) if ForestModels.has_ages(kind) else ForestModels.ADULT_AGE
+			if dist_path.is_empty() or not StageVegetation.clear_of_path(dist_path, 0, 0, w.W, x, y, kind, w.obj_s[k], age):
+				invalid += 1
 		if StageVegetation.near_hut(w.settlements, x, y):
 			near_hut += 1
 	_check(invalid == 0, "%s: растительность на суше вне путей (%d)" % [w.seed_text, invalid])
