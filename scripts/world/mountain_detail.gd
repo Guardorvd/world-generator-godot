@@ -6,12 +6,14 @@ extends RefCounted
 ##    повёрнутых осях, вес оси — по направлению склона), глубина растёт с крутизной;
 ##  - перегибы и локальные формы следуют склону; общие плечи остаются частью макроформы;
 ##  - сила и характер меняются по местности: пологие склоны — волны, крутые — рёбра и ложбины.
-## Низкая и почти горизонтальная суша исключена, на выпуклых гребнях детализация слабее. Это слой склонов:
-## высокие холмы тоже подходят; отдельная маска массива не вычисляется повторно.
+## На низких холмах остаются слабые широкие формы. У берега, на почти горизонтальной
+## суше и на выпуклых гребнях детализация затухает.
 ## Полоса соседей для уклона, в клетках
 const DETAIL_PAD := 2
-## Высота над морем, м: ниже DETAIL_LOW слоя нет, выше DETAIL_HIGH — в полную силу
-const DETAIL_LOW := 30.0
+## Высоты над морем, м: начало широких форм, начало горных рёбер и конец перехода.
+const DETAIL_LOW := 9.0
+const DETAIL_MOUNTAIN := 30.0
+const DETAIL_TRANSITION := 42.0
 const DETAIL_HIGH := 60.0
 ## Ширина рёбер поперёк склона (клетки): на пологих склонах, на крутых и мелкие; вдоль склона они
 ## в DETAIL_LONG раз длиннее
@@ -44,10 +46,15 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	# Нормированная высота в метрах и метров на единицу сырой высоты (как в normalize)
 	var r4 := sqrt(sqrt(q))
 	var elev := q * r4 * height_scale
-	var t := clampf((elev - DETAIL_LOW) / (DETAIL_HIGH - DETAIL_LOW), 0.0, 1.0)
-	if t <= 0.0:
+	if elev <= DETAIL_LOW:
 		return v
+	var t := clampf((elev - DETAIL_MOUNTAIN) / (DETAIL_HIGH - DETAIL_MOUNTAIN), 0.0, 1.0)
 	var lift := t * t * (3.0 - 2.0 * t)
+	var mountain := 1.0
+	if elev < DETAIL_TRANSITION:
+		mountain = smoothstep(DETAIL_MOUNTAIN, DETAIL_TRANSITION, elev)
+		var shore := smoothstep(0.015, 0.08, v - sea_raw)
+		lift += 0.28 * smoothstep(DETAIL_LOW, DETAIL_MOUNTAIN, elev) * (1.0 - mountain) * shore
 	var per_raw := 1.25 * r4 / (top_raw - sea_raw) * height_scale
 	# Уклон основы (Собель на ±2 клетки), м на м
 	var b := 2 * bw
@@ -69,8 +76,6 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	# и уступы чередуются пятнами
 	t = clampf((hill.noise(x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0, 0.0, 1.0)
 	var vary := t * t * (3.0 - 2.0 * t)
-	t = clampf((hill.noise(x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0, 0.0, 1.0)
-	var patch := t * t * (3.0 - 2.0 * t)
 	# Пологие склоны — слабые волны; крутые — глубже, но самые крутые ослаблены
 	t = clampf((s - 0.04) / (0.12 - 0.04), 0.0, 1.0)
 	var gentle := t * t * (3.0 - 2.0 * t)
@@ -80,9 +85,13 @@ static func apply(ridge: Simplex, hill: Simplex, base: PackedFloat32Array, bw: i
 	# Ширина форм растёт к пологим склонам: там, где ходят дороги, — широкие ложбины и увалы
 	# (стенки их положе), на крутых — узкие рёбра и промоины; самые мелкие — от 40 % крутизны
 	t = clampf((s - 0.25) / (0.45 - 0.25), 0.0, 1.0)
-	var narrow := t * t * (3.0 - 2.0 * t)
-	t = clampf((s - 0.4) / (0.6 - 0.4), 0.0, 1.0)
-	var fine := (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t))
+	var narrow := t * t * (3.0 - 2.0 * t) * mountain
+	var fine := 0.0
+	if mountain > 0.0 and s > 0.4:
+		t = clampf((hill.noise(x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0, 0.0, 1.0)
+		var patch := t * t * (3.0 - 2.0 * t)
+		t = clampf((s - 0.4) / (0.6 - 0.4), 0.0, 1.0)
+		fine = (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t)) * mountain
 	# Амплитуда растёт с крутизной. На крутом склоне стенки
 	# складываются с его уклоном (DETAIL_WALL); стенка ложбины не круче, чем позволяет её ширина
 	# (DETAIL_CROSS). Это оценка амплитуды, не жёсткий предел градиента итоговой поверхности:

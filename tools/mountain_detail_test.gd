@@ -45,12 +45,17 @@ func profile(height: float, grade: float, convexity: float = 0.0) -> PackedFloat
 
 func contracts() -> void:
 	var ridge := CountingNoise.new(); var hill := CountingNoise.new()
-	for spec: Array in [[20.0,0.35],[100.0,0.0],[100.0,0.9]]:
+	for spec: Array in [[8.0,0.35],[20.0,0.03],[100.0,0.0],[100.0,0.9]]:
 		var b := profile(spec[0],spec[1])
 		ridge.calls=0; hill.calls=0
 		var v := Detail.apply(ridge,hill,b,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)
 		check(v==b[12],"no detail on low, flat or steep ground "+str(spec))
 		check(ridge.calls==0 and hill.calls==0,"no noise calls for inactive layer "+str(spec))
+	var low := profile(24.0, 0.5)
+	ridge.calls = 0
+	hill.calls = 0
+	var low_rib := Detail.apply(ridge, hill, low, 5, 12, 313.0, -127.0, StageRelief.SEA_RAW, StageRelief.TOP_RAW, GameConfig.HS, GameConfig.TILE)
+	check(low_rib != low[12] and ridge.calls == 1 and hill.calls == 1, "low steep slopes use broad ribs only")
 	var convex := profile(100.0,0.35,0.04)
 	var same_grade := profile(100.0,0.35)
 	var rib := absf(Detail.apply(ridge,hill,same_grade,5,12,313.0,-127.0,StageRelief.SEA_RAW,StageRelief.TOP_RAW,GameConfig.HS,GameConfig.TILE)-same_grade[12])
@@ -88,8 +93,8 @@ static func world(seed_text: String) -> WorldData:
 	return w
 
 
-## Склоны и формы на суше выше 52 м (горы и предгорья), выборка через клетку
-func measure(h: PackedFloat32Array) -> Dictionary:
+## Склоны и формы по диапазонам высоты, выборка через клетку.
+func measure(h: PackedFloat32Array, min_m: float, max_m: float = INF) -> Dictionary:
 	var slopes := PackedFloat32Array()
 	var bends := [0.0, 0.0, 0.0]
 	var buckets := [0, 0, 0, 0] # >0.3, >0.6, >1.0, >1.5
@@ -98,8 +103,9 @@ func measure(h: PackedFloat32Array) -> Dictionary:
 	for y in range(16, SIDE - 16, 2):
 		for x in range(16, SIDE - 16, 2):
 			var i := y * SIDE + x
-			max_h = maxf(max_h, h[i] * GameConfig.HS)
-			if h[i] * GameConfig.HS < 52.0: continue
+			var metres := h[i] * GameConfig.HS
+			if metres < min_m or metres >= max_m: continue
+			max_h = maxf(max_h, metres)
 			count += 1
 			var g := Vector2(h[i+1]-h[i-1], h[i+SIDE]-h[i-SIDE]).length()*GameConfig.HS/(2*GameConfig.TILE)
 			slopes.append(g)
@@ -110,7 +116,7 @@ func measure(h: PackedFloat32Array) -> Dictionary:
 	slopes.sort()
 	var n := maxi(count, 1)
 	if slopes.is_empty(): slopes.append(0.0)
-	return {cells=count, max_m=snappedf(max_h, 0.01), slope_p50=snappedf(slopes[slopes.size()/2], 0.001),
+	return {cells=count, max_m=snappedf(max_h, 0.01) if count > 0 else 0.0, slope_p50=snappedf(slopes[slopes.size()/2], 0.001),
 		slope_p90=snappedf(slopes[int(slopes.size()*0.9)], 0.001), slope_p99=snappedf(slopes[int(slopes.size()*0.99)], 0.001),
 		over30_pct=snappedf(100.0*buckets[0]/n, 0.01), over60_pct=snappedf(100.0*buckets[1]/n, 0.01),
 		over100_pct=snappedf(100.0*buckets[2]/n, 0.01), over150_pct=snappedf(100.0*buckets[3]/n, 0.01),
@@ -142,16 +148,20 @@ func run() -> void:
 		var on := relief(w, true)
 		check(off.macro == on.macro, "same world window " + seed_text)
 		var delta := 0.0; var mean := 0.0; var coast := 0; var changed := 0; var detail_cell := 0
+		var low_delta := 0.0; var low_cell := 0
 		for i in w.N:
 			var d: float = (on.h[i] - off.h[i]) * GameConfig.HS
 			if absf(d)>delta: delta=absf(d); detail_cell=i
+			if off.h[i] * GameConfig.HS < 30.0 and absf(d) > low_delta:
+				low_delta = absf(d)
+				low_cell = i
 			mean += d
 			coast += int((on.h[i] > 0) != (off.h[i] > 0))
 			changed += int(on.h[i] != off.h[i])
 		check(coast == 0, "sea mask unchanged " + seed_text)
 		# C#/GDScript, параллельность, отрицательные координаты, независимость от размера запроса
 		for enabled: bool in [false,true]:
-			for p: Vector2i in [Vector2i(-37,701),Vector2i(740,740),Vector2i(detail_cell%SIDE-12,detail_cell/SIDE-8)]:
+			for p: Vector2i in [Vector2i(-37,701),Vector2i(740,740),Vector2i(detail_cell%SIDE-12,detail_cell/SIDE-8),Vector2i(low_cell%SIDE-12,low_cell/SIDE-8)]:
 				var native := StageRelief.raw_rect(w,p.x,p.y,24,16,false,enabled)
 				check(native==StageRelief._rows(w,p.x,p.y,24,0,16,enabled),"C#/GDScript "+seed_text+str(p)+str(enabled))
 				check(native==StageRelief.raw_rect(w,p.x,p.y,24,16,true,enabled),"parallel "+str(p)+str(enabled))
@@ -169,7 +179,8 @@ func run() -> void:
 		for v: String in ["off", "on"]:
 			var data: Dictionary = off if v == "off" else on
 			FileAccess.open(OUT.path_join(seed_text + "_" + v + ".bin"), FileAccess.WRITE).store_var({h=data.h, macro=data.macro})
-		var row := {seed=seed_text, off=measure(off.h), on=measure(on.h), off_ms=snappedf(off.ms, 1), on_ms=snappedf(on.ms, 1),
+		var row := {seed=seed_text, off=measure(off.h, 52.0), on=measure(on.h, 52.0), off_ms=snappedf(off.ms, 1), on_ms=snappedf(on.ms, 1),
+			low_off=measure(off.h, 0.0001, 30.0), low_on=measure(on.h, 0.0001, 30.0), low_delta_m=snappedf(low_delta, 0.01),
 			max_delta_m=snappedf(delta, 0.01), mean_delta_m=snappedf(mean / w.N, 0.001), changed_pct=snappedf(100.0*changed/w.N, 0.1)}
 		rows.append(row)
 		print("RESULT ", JSON.stringify(row))

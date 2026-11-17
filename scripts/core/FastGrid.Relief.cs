@@ -50,7 +50,9 @@ public partial class FastGrid
 
 	/// <summary>Копия mountain_detail.gd; единицы мира передаются из GameConfig.</summary>
 	private const int DetailPad = 2;
-	private const double DetailLow = 30.0;
+	private const double DetailLow = 9.0;
+	private const double DetailMountain = 30.0;
+	private const double DetailTransition = 42.0;
 	private const double DetailHigh = 60.0;
 	private const double DetailRibBroad = 40.0;
 	private const double DetailRib = 22.0;
@@ -72,10 +74,17 @@ public partial class FastGrid
 			return v;
 		double r4 = Math.Sqrt(Math.Sqrt(q));
 		double elev = q * r4 * heightScale;
-		double t = Clamp01((elev - DetailLow) / (DetailHigh - DetailLow));
-		if (t <= 0.0)
+		if (elev <= DetailLow)
 			return v;
+		double t = Clamp01((elev - DetailMountain) / (DetailHigh - DetailMountain));
 		double lift = t * t * (3.0 - 2.0 * t);
+		double mountain = 1.0;
+		if (elev < DetailTransition)
+		{
+			mountain = ReliefSmooth(DetailMountain, DetailTransition, elev);
+			double shore = ReliefSmooth(0.015, 0.08, v - SeaRaw);
+			lift += 0.28 * ReliefSmooth(DetailLow, DetailMountain, elev) * (1.0 - mountain) * shore;
+		}
 		double perRaw = 1.25 * r4 / (TopRaw - SeaRaw) * heightScale;
 		int r = 2 * bw;
 		double gx = (((double)b[k + 2 - r] + 2.0 * b[k + 2] + b[k + 2 + r]) - ((double)b[k - 2 - r] + 2.0 * b[k - 2] + b[k - 2 + r])) * perRaw / (16.0 * tile);
@@ -91,16 +100,20 @@ public partial class FastGrid
 		double crest = 1.0 - 0.65 * t * t * (3.0 - 2.0 * t);
 		t = Clamp01((Noise(hill, x / 170.0 + 211.7, y / 170.0 - 93.1) + 0.5) / 1.0);
 		double vary = t * t * (3.0 - 2.0 * t);
-		t = Clamp01((Noise(hill, x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0);
-		double patch = t * t * (3.0 - 2.0 * t);
 		t = Clamp01((s - 0.04) / (0.12 - 0.04));
 		double gentle = t * t * (3.0 - 2.0 * t);
 		double c2 = (gx * gx - gy * gy) / g2;
 		double s2 = 2.0 * gx * gy / g2;
 		t = Clamp01((s - 0.25) / (0.45 - 0.25));
-		double narrow = t * t * (3.0 - 2.0 * t);
-		t = Clamp01((s - 0.4) / (0.6 - 0.4));
-		double fine = (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t));
+		double narrow = t * t * (3.0 - 2.0 * t) * mountain;
+		double fine = 0.0;
+		if (mountain > 0.0 && s > 0.4)
+		{
+			t = Clamp01((Noise(hill, x / 95.0 - 57.3, y / 95.0 + 138.9) + 0.5) / 1.0);
+			double patch = t * t * (3.0 - 2.0 * t);
+			t = Clamp01((s - 0.4) / (0.6 - 0.4));
+			fine = (0.1 + 0.3 * patch) * (t * t * (3.0 - 2.0 * t)) * mountain;
+		}
 		double cross = DetailCross * tile / ((1.0 - narrow) / DetailRibBroad + narrow / DetailRib + fine / DetailRibFine);
 		t = Clamp01((s - DetailSteepFrom) / (DetailLimit - DetailSteepFrom));
 		double steepFade = 1.0 - t * t * (3.0 - 2.0 * t);
