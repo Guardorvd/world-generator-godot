@@ -18,6 +18,7 @@ const BUSH_END := 820.0
 const OUTER_END := 940.0
 const OUTER_SCRUB_END := 720.0
 const PLANT_SHARE := 0.8
+const TURF_SHARE := 0.75 # 17.11.2026: доля 12-метровых мест газона/степи/дернины с дальней дерновиной
 enum { FINE, COARSE, SCRUB, PLANT }
 enum Form { BROADLEAF, CONIFER, UMBRELLA, PALM, BUSH, SCRUB_BUSH, SCRUB_PINE, SCRUB_GRASS }
 const PARTS := ["f", "c", "s", "p"]
@@ -200,7 +201,14 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 		# 12.11.2026: без кустов холм вдали не голый — массивы высокотравья (куртины по пояс) тоже видны
 		# низкими широкими валами: там, где ближняя раскладка ставит густые куртины, осоку и ковыль.
 		var herb_mass := density * Understory.OPEN_SLOTS * herb / maxf(total, 0.001) * patch
-		if herb_mass < 0.4 or WGRandom.hash2(i, j, seed + 979) > smoothstep(0.4, 1.6, herb_mass) * 0.85: return {}
+		if herb_mass < 0.4 or WGRandom.hash2(i, j, seed + 979) > smoothstep(0.4, 1.6, herb_mass) * 0.85:
+			# 17.11.2026: газон, степь и горный луг вдали — низкие дерновины-валы (продолжение ближних дерновин
+			# VegetationLayer._open_sod): без них за 150 м такие луга были одной окраской земли.
+			var lawn := com[Understory.C_LAWN] + com[Understory.C_TURF] + com[Understory.C_FORBS] * 0.6
+			var sod := TURF_SHARE * clampf(lawn, 0.0, 1.0) * Understory.open_exposure(rock, slope) * (0.6 + 0.8 * patch)
+			if WGRandom.hash2(i, j, seed + 983) > sod: return {}
+			return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = 1.0, tall = 0.0,
+				juniper = false, conifer = false, u = u, turf = true, parch = clampf((0.55 - moisture) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)}
 		return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = 1.0, tall = 0.0, juniper = false,
 			conifer = false, u = u, herb = true, parch = clampf((0.55 - moisture) * 1.6 + dry * 0.35 + alt * 0.4, 0.0, 1.0)}
 	return {at = (Vector2(i, j) + Vector2(0.5 + (u - 0.5) * 2.2, 0.5 + (v - 0.5) * 2.2)) * TILE, mass = minf(mass, 1.6),
@@ -210,6 +218,13 @@ static func scrub_site(seed_num: int, i: int, j: int, bi: int, moisture: float, 
 static func _scrub_item(site: Dictionary, p: Vector2, ground: float) -> Array:
 	var mass: float = site.mass
 	var u: float = site.u
+	if site.get("turf", false):
+		# дерновина: широкий низкий вал, чуть темнее дёрна земли (шейдер берёт половину тона, как у крон)
+		var turf_r := lerpf(2.2, 3.8, u)
+		var turf_h := lerpf(0.45, 0.75, fposmod(u * 3.71, 1.0))
+		var turf_c := Color("86a64c").lerp(Color("b4a463"), float(site.parch)) * lerpf(0.92, 1.08, fposmod(u * 6.17, 1.0))
+		turf_c.a = 0.0
+		return [Vector3(p.x, ground + turf_h * 0.25, p.y), Vector3(turf_r, turf_h * 0.5, turf_r), turf_c, 3.0, 0.0]
 	if site.get("herb", false):
 		# вал высокотравья: сочный оливково-зелёный, на сухом месте — соломенный (как ближние куртины)
 		var grass_r := lerpf(3.2, 5.6, u)
@@ -233,7 +248,7 @@ static func _scrub_item(site: Dictionary, p: Vector2, ground: float) -> Array:
 static func _add_scrub(proxies: Array, plants: Dictionary, site: Dictionary, p: Vector2, ground: float, outer: bool) -> void:
 	var item := _scrub_item(site, p, ground)
 	var at := Vector3(p.x, ground, p.y)
-	if _plant_hash(at, 461) >= PLANT_SHARE:
+	if site.get("turf", false) or _plant_hash(at, 461) >= PLANT_SHARE: # дерновины — только непрозрачные валы
 		proxies.append(item)
 		return
 	var form := Form.SCRUB_BUSH

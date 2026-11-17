@@ -40,6 +40,8 @@ global uniform vec4 distant_vegetation;
 // 14.11.2026: дернина у игрока (VegetationLayer, carpet): x — дальность, y — полоса растворения, м (0 — нет).
 // Под ней дёрн в тени травинок: темнее и зеленее у корней, проплешины остаются светлой землёй.
 global uniform vec2 ground_carpet;
+// 17.11.2026: доля той же тени за ковром (густой луг вдали), см. блок дёрна
+const float MEADOW_BODY = 0.5;
 // 15.11.2026: детализация дорог (GameSettings.ROAD_QUALITY / ROAD_RANGE): x — качество 0..1, y — множитель дальности мелкой детали.
 global uniform vec2 road_quality;
 #include "res://resources/ground_carpet.gdshaderinc"
@@ -413,14 +415,17 @@ void fragment() {	vec2 p = wpos.xz + world_offset;
 				// Keep the ground visible between the sparser dry communities.
 				turf = mix(turf, open_col, open_w * (0.82 + 0.18 * max(cb.y, steppe)));
 			}
+			// 17.11.2026: за ковром луг не светлеет кольцом. Тень густой травы у корней остаётся и дальше, слабее
+			// (body): густой луг вдали темнее голой земли, на сухом, каменистом и в проплешинах — меньше.
+			float under = MEADOW_BODY * (1.0 - stony * 0.6) * (1.0 - snow_biome) * mix(1.0, 0.5, dryness);
 			if (ground_carpet.x > 0.0) {
 				vec2 offset = wpos.xz - veg_center;
 				float carpet_dist = ground_carpet_forward == vec2(0.0) ? length(offset) : carpet_fade_distance(offset);
-				float under = clamp((ground_carpet.x - carpet_dist) / ground_carpet.y, 0.0, 1.0);
-				under *= (1.0 - carpet_bare) * (1.0 - stony * 0.6) * (1.0 - snow_biome);
-				// на сухом дернина реже и соломенная: тень слабее и не зеленит
-				turf = mix(turf, turf * mix(vec3(0.46, 0.60, 0.40), vec3(0.68, 0.66, 0.54), dryness), under * mix(0.92, 0.55, dryness));
+				float carpet_k = clamp((ground_carpet.x - carpet_dist) / ground_carpet.y, 0.0, 1.0);
+				under = mix(under, (1.0 - carpet_bare) * (1.0 - stony * 0.6) * (1.0 - snow_biome), carpet_k);
 			}
+			// на сухом дернина реже и соломенная: тень слабее и не зеленит
+			turf = mix(turf, turf * mix(vec3(0.46, 0.60, 0.40), vec3(0.68, 0.66, 0.54), dryness), under * mix(0.92, 0.55, dryness));
 			col = mix(col, turf, veg * ground_w);
 		}
 		if (sand > 0.01) {

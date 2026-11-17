@@ -101,16 +101,38 @@ func setup() -> void:
 	camera.current = true
 	results.legacy = VegetationLayer.legacy_open
 	results.flora = veg.flora_level
+	# 17.11.2026: --views a,b — только эти виды (на HD 4600 все десять не укладываются в лимит); none — только замер
+	var only := Dev.arg("views")
+	if only != "":
+		for v in VIEWS:
+			if v[0] in only.split(","):
+				_views.append(v)
+	else:
+		_views = VIEWS.duplicate()
+	if _views.is_empty():
+		phase = 1
+		_start_ride()
+		return
 	phase = 0
 	_goto(0)
 
 
+var _views: Array = []
+
+
+func _start_ride() -> void:
+	elapsed = 0.0
+	var at := Vector2(40.0 * GameConfig.TILE, 132.0 * GameConfig.TILE)
+	veg.update(at.x, at.y, true)
+	last_us = Time.get_ticks_usec()
+
+
 func _goto(v: int) -> void:
 	view = v
-	var at: Vector2 = VIEWS[v][1] * GameConfig.TILE
-	var look: Vector2 = VIEWS[v][2] * GameConfig.TILE
+	var at: Vector2 = _views[v][1] * GameConfig.TILE
+	var look: Vector2 = _views[v][2] * GameConfig.TILE
 	var y := heights.ground_at(at.x, at.y) + EYE
-	var aim: float = VIEWS[v][3] if VIEWS[v].size() > 3 else EYE * 0.8
+	var aim: float = _views[v][3] if _views[v].size() > 3 else EYE * 0.8
 	camera.look_at_from_position(Vector3(at.x, y, at.y), Vector3(look.x, heights.ground_at(look.x, look.y) + aim, look.y), Vector3.UP)
 	var t0 := Time.get_ticks_usec()
 	veg.update(at.x, at.y, true)
@@ -126,18 +148,16 @@ func _process(delta: float) -> bool:
 		wait += 1
 		if wait < 40:
 			return false
-		root.get_texture().get_image().save_png(ProjectSettings.globalize_path(OUT).path_join("%s_%s.png" % [tag, VIEWS[view][0]]))
+		root.get_texture().get_image().save_png(ProjectSettings.globalize_path(OUT).path_join("%s_%s.png" % [tag, _views[view][0]]))
 		if view == 0:
 			results.instances = _counts()
-		if view + 1 < VIEWS.size():
+		if view + 1 < _views.size():
 			_goto(view + 1)
 			return false
 		if "--no-perf" in OS.get_cmdline_user_args():
 			return _finish()
 		phase = 1
-		elapsed = 0.0
-		_goto(0)
-		last_us = Time.get_ticks_usec()
+		_start_ride()
 		return false
 	# Замер: езда 12 м/с по лугу вдоль дороги, камера рыскает ±70° (резкие повороты), 8 с.
 	elapsed += delta
@@ -187,6 +207,10 @@ func _process(delta: float) -> bool:
 		detail_fill_s = veg._detail_seconds, video_mb = Performance.get_monitor(Performance.RENDER_VIDEO_MEM_USED) / 1048576.0,
 		static_mb = Performance.get_monitor(Performance.MEMORY_STATIC) / 1048576.0}
 	results.force_fill_max_ms = fill_max
+	var cap_floats := veg.grass_buf.size()
+	for e: Dictionary in veg.understory:
+		cap_floats += e.buf.size()
+	results.buffers_mb = cap_floats * 4.0 / 1048576.0
 	results.fill_parts = veg.fill_stats
 	return _finish()
 

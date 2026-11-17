@@ -161,6 +161,97 @@ static func build_far_meshes() -> Dictionary:
 		STIPA: _stipa(true), FIREWEED: _fireweed(true)}
 
 
+## 17.11.2026: групповые формы средних дистанций — дальняя форма куртин открытых мест и злаковой травы (вместо
+## прежних «меньше травинок»). Экземпляр изображает не одно растение, а группу: несколько непрозрачных кочек-«шатров»
+## разной высоты (по 4 треугольника) и редкие акценты (колосья, цветы, ости, кисти, початки). Вдали шейдер раздвигает
+## группу в стороны сильнее, чем в высоту (thin_spread), поэтому при поредении покрытие земли сохраняется.
+## Меши строятся при запуске (каталог не меняется). Ключ — номер формы подлеска.
+static func build_group_meshes() -> Dictionary:
+	return {
+		MEADOW: _group(7, 0.75, 0.75, 1.35, Color(0.42, 0.56, 0.23), 3, Color(0.66, 0.60, 0.34), 0),
+		FORBS: _group(6, 0.62, 0.28, 0.55, Color(0.38, 0.55, 0.24), 6, Color(0.95, 0.92, 0.80), 1),
+		SEDGE: _group(6, 0.6, 0.7, 1.15, Color(0.30, 0.43, 0.27), 2, Color(0.36, 0.24, 0.14), 0),
+		STIPA: _group(6, 0.55, 0.3, 0.52, Color(0.48, 0.55, 0.38), 5, Color(0.80, 0.80, 0.70), 2),
+		FIREWEED: _group(5, 0.6, 0.9, 1.5, Color(0.30, 0.46, 0.22), 5, Color(0.86, 0.40, 0.66), 0),
+		# дерновина газона, степи и горного луга: низкие плотные кочки, тон даёт экземпляр (по биому и суши)
+		GRASS: _group(8, 0.72, 0.3, 0.6, Color(1.0, 0.95, 0.92), 0, Color.WHITE, 0),
+	}
+
+
+## Группа из tufts кочек на круге radius высотой h_min..h_max; accents акцентов цвета accent_c над кочками.
+## accent_kind: 0 — узкий колос/кисть/початок вверх, 1 — цветок (пятно трёх цветов), 2 — ость дугой наружу.
+## UV.x — номер кочки (изгиб в шейдере у злаков), UV.y — доля высоты. Нормали мягкие (наружу и вверх).
+static func _group(tufts: int, radius: float, h_min: float, h_max: float, color: Color, accents: int, accent_c: Color,
+		accent_kind: int) -> ArrayMesh:
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var base_c := Color(color.r * 0.6, color.g * 0.66, color.b * 0.58)
+	var tip_c := Color(minf(1.1, color.r * 1.22), minf(1.1, color.g * 1.14), color.b * 0.95)
+	var tops: Array = []
+	for n in tufts:
+		var a := n * 2.39996 + 0.5
+		var r := radius * sqrt(fposmod(0.12 + n * 0.618034, 1.0))
+		var c := Vector3(cos(a), 0.0, sin(a)) * r
+		# в середине группы кочки выше, по краю ниже и шире — силуэт неровный, без одинаковых бугров
+		var edge := r / radius
+		var h := lerpf(h_min, h_max, fposmod(n * 0.381966 + 0.27, 1.0)) * (1.0 - 0.3 * edge)
+		var w := lerpf(0.13, 0.22, fposmod(n * 0.754878, 1.0)) * (0.8 + 0.6 * edge)
+		var lean := Vector3(cos(a), 0.0, sin(a)) * h * 0.18 * edge
+		var spin := fposmod(n * 1.618, 1.0) * TAU
+		var apex := c + lean + Vector3.UP * h
+		tops.append(apex)
+		var feet: Array = []
+		for k in 3:
+			var t := spin + k * TAU / 3.0
+			feet.append(c + Vector3(cos(t), 0.0, sin(t)) * w)
+		var u := float(n) / tufts
+		for k in 3:
+			var f0: Vector3 = feet[k]
+			var f1: Vector3 = feet[(k + 1) % 3]
+			var out := ((f0 + f1) * 0.5 - c).normalized()
+			var nrm := (out * 0.55 + Vector3.UP * 0.8).normalized()
+			for v: Array in [[f0, 0.0, base_c], [f1, 0.0, base_c], [apex, 1.0, tip_c]]:
+				st.set_normal(nrm)
+				st.set_color(v[2])
+				st.set_uv(Vector2(u, v[1]))
+				st.add_vertex(v[0])
+		# отдельный лист наружу: рваный край кочки
+		var la := spin + 0.9
+		var ld := Vector3(cos(la), 0.0, sin(la))
+		var ls := Vector3(-ld.z, 0.0, ld.x) * w * 0.35
+		var ltip := c + ld * (w + h * 0.45) + Vector3.UP * h * 0.75
+		for v: Array in [[c - ls, 0.0, base_c], [c + ls, 0.0, base_c], [ltip, 0.85, tip_c * 0.97]]:
+			st.set_normal((ld * 0.4 + Vector3.UP * 0.9).normalized())
+			st.set_color(v[2])
+			st.set_uv(Vector2(u, v[1]))
+			st.add_vertex(v[0])
+	var palette := [accent_c, Color(0.96, 0.82, 0.24), Color(0.62, 0.48, 0.86)]
+	for m in accents:
+		var top: Vector3 = tops[(m * 3 + 1) % tops.size()]
+		var a := m * 2.39996 + 1.3
+		var dir := Vector3(cos(a), 0.0, sin(a))
+		var side := Vector3(-dir.z, 0.0, dir.x)
+		var col: Color = palette[m % 3] if accent_kind == 1 else accent_c * (0.9 + 0.2 * fposmod(m * 0.4142, 1.0))
+		var tri: Array
+		match accent_kind:
+			1:
+				var p := top + dir * 0.06 + Vector3.UP * 0.02
+				tri = [p - side * 0.07, p + side * 0.07, p + Vector3.UP * 0.1]
+			2:
+				var p := top - Vector3.UP * 0.05
+				tri = [p - side * 0.03, p + side * 0.03, p + dir * 0.4 + Vector3.UP * 0.12]
+			_:
+				var p := top - Vector3.UP * 0.04
+				tri = [p - side * 0.045, p + side * 0.045, p + dir * 0.04 + Vector3.UP * 0.3]
+		for p: Vector3 in tri:
+			st.set_normal((side.cross(Vector3.UP) * 0.3 + Vector3.UP * 0.9).normalized())
+			st.set_color(col)
+			st.set_uv(Vector2(1.0, 1.0))
+			st.add_vertex(p)
+	st.index()
+	return st.commit()
+
+
 ## 16.1: куртина ковыля ~1,2 м. Тонкие жёсткие листья (сизо-зелёные) и длинные перистые ости: от верхушки
 ## стебля ость уходит дугой вверх-наружу и поникает к концу. Ость — лента из трёх треугольников, светлая
 ## и просвечивающая: на ветру куртины качаются вместе (общий порыв шейдера) и дают серебристую волну.

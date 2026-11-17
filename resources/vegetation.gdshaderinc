@@ -38,6 +38,9 @@ global uniform float vegetation_night;
 // thin_grow — пучки за thin_full крупнее, тоже по нынешнему расстоянию.
 uniform float thin_full = 0.0;
 uniform float thin_grow = 0.0;
+uniform float thin_spread = 0.0; // 17.11.2026: 0 — как прежде; иначе наибольшее раздвижение групповой формы в стороны
+// 17.11.2026: ближняя граница (x — от, y — полоса, м; y = 0 — нет): дерновины средних дистанций не видны у игрока
+uniform vec2 near_fade = vec2(0.0);
 // Только общий меш травы: лёгкий индивидуальный наклон каждого листа.
 uniform bool grass_variation = false;
 // 14.11.2026: дернина расступается у игрока (veg_center): м отклонения кончиков в полуметре от него, 0 — нет.
@@ -97,6 +100,9 @@ void vertex() {
 	float dist = distance(origin.xz, veg_center);
 	float fade_dist = directional_carpet ? carpet_fade_distance(origin.xz - veg_center) : dist;
 	v_fade = clamp((fade_far - fade_dist) / fade_len, 0.0, 1.0);
+	if (near_fade.y > 0.0) {
+		v_fade *= clamp((dist - near_fade.x) / near_fade.y, 0.0, 1.0);
+	}
 #ifdef ROCK_DETAIL
 	rock_local = VERTEX;
 	float rock_scale = length(MODEL_MATRIX[0].xyz);
@@ -124,7 +130,10 @@ void vertex() {
 		if (rank > 0.0) {
 			v_fade *= clamp((keep - rank) / max(min(1.0, rank * 1.3) - rank, 1e-4), 0.0, 1.0);
 		}
-		VERTEX *= 1.0 + thin_grow * (1.0 - keep);
+		float grow = 1.0 + thin_grow * (1.0 - keep);
+		// 17.11.2026: групповые формы раздвигаются в стороны как 1/√keep (покрытие земли не падает), до thin_spread раз
+		float spread = thin_spread > 0.0 ? max(grow, min(inversesqrt(max(keep, 1e-4)), thin_spread)) : grow;
+		VERTEX *= vec3(spread, grow, spread);
 	}
 	if (detail_full > 0.0) {
 		float detail_dist = directional_carpet ? carpet_detail_distance(origin.xz - veg_center) : dist;
