@@ -54,10 +54,21 @@ const ECHO_SHARE := 0.5    # больше этой доли вдоль пути 
 ## Поиск: climb — штраф за уклон (больше — ровнее и извилистее), grade — предел уклона шага.
 const STYLES := {
 	flow = {climb = 24.0, grade = 0.32, wood = false, via = false},
+	traverse = {climb = 150.0, grade = 0.22, wood = false, via = false}, # 17.11: подъём очень дорог — путь по склону
 	tech = {climb = 4.0, grade = 0.5, wood = false, via = false},
 	forest = {climb = 12.0, grade = 0.36, wood = true, via = true},
 }
 const WOODED := [Biomes.FOREST, Biomes.TAIGA, Biomes.JUNGLE]
+const WOOD_SCORE := 0.4    # вес доли леса в оценке маршрута
+## 17.11.2026: траверс (характер traverse) — путь вокруг горы почти по одной высоте от горной тропы к другому пути
+## сети. Те же пары, поиск, оценка и отбор, что у спусков; свои только условия пары и годности (_pairs, _score).
+const TRAVERSE_BAND := 15.0  # м: конец не дальше по высоте от начала; путь — не дальше BAND + 10 м
+const TRAVERSE_ANGLE := 80.0 # градусов вокруг вершины (w.peaks) между началом и концом хотя бы
+const TRAVERSE_R := 120.0    # клеток: вершина не дальше от начала
+const TRAVERSE_RISE := 30.0  # м: вершина выше начала хотя бы на столько
+const TRAVERSE_LEN := Vector2(300.0, 1000.0) # м длины
+const TRAVERSE_PAIRS := 6    # пар на мир 512 (в общем лимите поисков SEARCHES)
+const TRAVERSE_PRIORITY := 80.0 # место пары в очереди поиска — как спуск с таким перепадом, м
 
 
 static func enabled() -> bool:
@@ -71,7 +82,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 	var approach := {climb = RoadTuning.current().routing.climb_costs.mountain, grade = StageTrails.MOUNTAIN_GRADE}
 	var stats := {anchors = 0, tops = 0, pairs = 0, searches = 0, found = 0, rejected = {}, accepted = 0,
 		from_mountain = 0, virtual_tops = 0, virtual_failed = [], climbs = 0, climb_km = 0.0, km = 0.0, styles = {},
-		by_search = {}, ms = 0.0} # by_search: стиль поиска → [попыток, линий, годных]
+		by_search = {}, wood = {}, ms = 0.0} # by_search: стиль поиска → [попыток, линий, годных]
 	w.generation_profile.rides = stats
 	if not enabled() or surface == null:
 		return
@@ -148,6 +159,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			echo_ready = true
 		for style: String in STYLES:
 			if stats.searches >= budget: break
+			if (style == "traverse") != (pair.size() > 3): continue # пара траверса — только поиск траверса
 			var spec: Dictionary = STYLES[style]
 			var path := PackedInt32Array()
 			if spec.via:
@@ -165,7 +177,7 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 			if path.is_empty(): continue
 			stats.found += 1
 			tally[1] += 1
-			var c := _score(w, hv, dist, path)
+			var c := _score(w, hv, dist, path, style == "traverse")
 			# 11.11.2026: и не идёт подряд вдоль готовой сети на той же высоте (параллельное полотно)
 			if c.reason.is_empty() and StageTrails._parallel_stats(w, path, dist, net).y > StageTrails.PARALLEL_RUN:
 				c.reason = "вдоль готовой сети"
@@ -175,7 +187,8 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 					finder.window = Rect2i()
 					finder.search_budget = SEARCH_BUDGET
 					echo = finder.find_path(network, s.i, t.i, 0.0, INF, network_version)
-				if _echo_share(w, path, echo) > ECHO_SHARE: c.reason = "повторяет путь сети"
+				# траверс: копия пути сети — только ближе NEAR_R (40 м); дальше — другой уровень склона (это и проверяет доля новой земли)
+				if _echo_share(w, path, echo, NEAR_R if style == "traverse" else ECHO_R) > ECHO_SHARE: c.reason = "повторяет путь сети"
 			if not c.reason.is_empty():
 				stats.rejected[c.reason] = int(stats.rejected.get(c.reason, 0)) + 1
 				continue
@@ -216,6 +229,10 @@ static func run(w: WorldData, finder: Pathfinder, surface: Heightfield, on_axis:
 		number += 1
 		stats.km += c.length / 1000.0
 		stats.styles[c.style] = int(stats.styles.get(c.style, 0)) + 1
+		# Доля пути по лесу (в процентах) у каждого принятого маршрута по характеру — отчёт стенда
+		var woods: Array = stats.wood.get(c.style, [])
+		woods.append(roundi(c.wood * 100.0))
+		stats.wood[c.style] = woods
 		if c.top.mountain: stats.from_mountain += 1
 	stats.publish_ms = (Time.get_ticks_usec() - publish_us) / 1000.0
 	stats.accepted = chosen.size()
@@ -314,9 +331,50 @@ static func _pairs(w: WorldData, anchors: Array, virtual: Array, stats: Dictiona
 			# Вершина горной тропы — готовый подъём к спуску: небольшой приоритет
 			pairs.append([s, t, e[1] * (1.25 if s.mountain else 1.0)])
 			if taken.size() >= ENDS_PER_TOP: break
+	_traverse_pairs(w, anchors, pairs)
 	pairs.sort_custom(func(p: Array, q: Array) -> bool: return p[2] > q[2] if p[2] != q[2] else p[0].i * 7 + p[1].i < q[0].i * 7 + q[1].i)
 	stats.pairs = pairs.size()
 	return pairs
+
+
+## Пары траверса (четвёртый элемент — вершина): начало — опорная точка горной тропы, вершина w.peaks в TRAVERSE_R выше
+## на TRAVERSE_RISE; конец — опорная точка сети той же высоты (±TRAVERSE_BAND), повёрнутая вокруг вершины на
+## TRAVERSE_ANGLE и больше, на расстоянии длины траверса. Одна пара на вершину — с наименьшим поворотом; не больше TRAVERSE_PAIRS.
+static func _traverse_pairs(w: WorldData, anchors: Array, pairs: Array) -> void:
+	var added := 0
+	var used := {}
+	for s: Dictionary in anchors:
+		if added >= roundi(TRAVERSE_PAIRS * w.scale): break
+		if not s.mountain: continue
+		var peak: Variant = null
+		var pd := TRAVERSE_R
+		for pk in w.peaks:
+			var d := Grid.hypot(pk.x - s.x, pk.y - s.y)
+			if d < pd and not used.has(pk.i):
+				pd = d
+				peak = pk
+		if peak == null or pd < 6.0: continue
+		var from := Vector2(s.x - peak.x, s.y - peak.y)
+		var best: Dictionary = {}
+		var best_angle := INF
+		for t: Dictionary in anchors:
+			if absf(t.h - s.h) > TRAVERSE_BAND or t.i == s.i: continue
+			var to := Vector2(t.x - peak.x, t.y - peak.y)
+			var d := Grid.hypot(t.x - s.x, t.y - s.y) * GameConfig.TILE
+			if to.length() < 6.0 or d < TRAVERSE_LEN.x * 0.5 or d > TRAVERSE_LEN.y * 0.8: continue
+			var angle := rad_to_deg(absf(from.angle_to(to)))
+			if angle >= TRAVERSE_ANGLE and angle < best_angle:
+				best_angle = angle
+				best = t
+		if best.is_empty(): continue
+		# вершина выше начала (высота вершины — по самой высокой опорной точке, если в w.peaks её нет)
+		var top_h: float = s.h
+		for a: Dictionary in anchors:
+			if Grid.hypot(a.x - peak.x, a.y - peak.y) < 8.0: top_h = maxf(top_h, a.h)
+		if top_h - s.h < TRAVERSE_RISE: continue
+		used[peak.i] = true
+		pairs.append([s, best, TRAVERSE_PRIORITY, peak])
+		added += 1
 
 
 ## Промежуточный ориентир: плечо склона в стороне от прямой старт–финиш — та из двух точек сбоку от середины, что выше,
@@ -372,7 +430,7 @@ static func _join(w: WorldData, a: PackedInt32Array, b: PackedInt32Array) -> Pac
 
 ## Доля точек пути (через три клетки) ближе ECHO_R к пути сети echo между теми же концами: спуск в паре десятков метров
 ## от горной тропы к той же дороге — её копия, а не новый маршрут. Путь сети далеко — другой склон, это годится.
-static func _echo_share(w: WorldData, path: PackedInt32Array, echo: PackedInt32Array) -> float:
+static func _echo_share(w: WorldData, path: PackedInt32Array, echo: PackedInt32Array, r := ECHO_R) -> float:
 	if echo.is_empty(): return 0.0
 	var W := w.W
 	var near := 0
@@ -384,14 +442,14 @@ static func _echo_share(w: WorldData, path: PackedInt32Array, echo: PackedInt32A
 		for m in range(0, echo.size(), 3):
 			var dx := echo[m] % W - px
 			var dy := echo[m] / W - py
-			if dx * dx + dy * dy < ECHO_R * ECHO_R:
+			if dx * dx + dy * dy < r * r:
 				near += 1
 				break
 	return float(near) / maxi(1, total)
 
 
 ## Оценка виртуальной линии: {path, length (м), drop, score, style, reason — пусто, если линия годна}
-static func _score(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Array, path: PackedInt32Array) -> Dictionary:
+static func _score(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Array, path: PackedInt32Array, traverse := false) -> Dictionary:
 	var W := w.W
 	var length := 0.0
 	var climb := 0.0
@@ -418,6 +476,19 @@ static func _score(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Arra
 	var drop: float = hv[path[0]] - hv[path[-1]]
 	var straight := Grid.hypot(path[0] % W - path[-1] % W, path[0] / W - path[-1] / W) * GameConfig.TILE
 	var out := {path = path, length = length, drop = drop, climb = climb, score = 0.0, style = "", reason = ""}
+	if traverse:
+		# 17.11: траверс — по одной высоте; оценка: длина, доля новой земли и леса
+		var off := 0.0
+		for i: int in path: off = maxf(off, absf(hv[i] - hv[path[0]]))
+		if ford > FORD_RUN: out.reason = "долгий брод"
+		elif off > TRAVERSE_BAND + 10.0: out.reason = "траверс уходит с высоты"
+		elif length < TRAVERSE_LEN.x or length > TRAVERSE_LEN.y: out.reason = "траверс не той длины"
+		elif float(fresh) / path.size() < NEW_SHARE: out.reason = "вдоль готовой сети"
+		if not out.reason.is_empty(): return out
+		out.style = "traverse"
+		out.wood = float(wooded) / path.size()
+		out.score = MIN_SCORE + 0.6 * length / 1000.0 + WOOD_SCORE * out.wood
+		return out
 	if ford > FORD_RUN: out.reason = "долгий брод"
 	elif drop < DROP_MIN: out.reason = "мал перепад"
 	elif length < 300.0: out.reason = "короткий"
@@ -449,7 +520,7 @@ static func _score(w: WorldData, hv: PackedFloat32Array, dist: PackedFloat32Arra
 	out.grade = grade
 	out.turns_km = turns_km
 	out.score = minf(drop, 300.0) / 100.0 + 0.6 * minf(length, 2500.0) / 1000.0 + 0.4 * minf(turns_km / 12.0, 1.0) \
-		+ 0.4 * minf(spread / 0.08, 1.0) + 0.4 * wood_share - 2.0 * climb / drop
+		+ 0.4 * minf(spread / 0.08, 1.0) + WOOD_SCORE * wood_share - 2.0 * climb / drop
 	return out
 
 
