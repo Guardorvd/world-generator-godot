@@ -46,6 +46,7 @@ const BASE_POSES := {
 }
 var _bones: Dictionary[String, int] = {}
 var _poses: Dictionary[int, Transform3D] = {}
+var _parents := PackedInt32Array()
 var _rig_checked := false
 var _rig_valid := false
 ## Изгиб спины дугой (0 — прямая, как в bind-позе; сборщик модели ставит 0 на время сборки).
@@ -68,6 +69,9 @@ func _bind_skeleton() -> bool:
 			push_warning("CyclistRig: неверная кость или родитель у %s; процедурная поза отключена" % bone_name)
 			return false
 		_bones[bone_name] = index
+	_parents.resize(skeleton.get_bone_count())
+	for i in skeleton.get_bone_count():
+		_parents[i] = skeleton.get_bone_parent(i)
 	_hand_rest_l = skeleton.get_bone_rest(_bones["HandL"]).basis.orthonormalized()
 	_hand_rest_r = skeleton.get_bone_rest(_bones["HandR"]).basis.orthonormalized()
 	return true
@@ -377,7 +381,8 @@ func _blend_base_pose(drive_effort: float, up: float, attack: float, brake: floa
 func _set_bone(bone_name: String, origin: Vector3, basis := Basis.IDENTITY) -> void:
 	var index: int = _bones[bone_name]
 	var target := Transform3D(basis, origin)
-	var parent := skeleton.get_bone_parent(index)
+	# 17.11: родитель — из таблицы, собранной при проверке скелета (без вызова движка на каждую кость)
+	var parent: int = _parents[index] if index < _parents.size() else skeleton.get_bone_parent(index)
 	var local := target
 	if parent >= 0:
 		local = (_poses[parent] as Transform3D).affine_inverse() * target

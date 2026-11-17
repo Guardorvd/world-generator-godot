@@ -4,7 +4,7 @@ extends SceneTree
 ##     спереди в лоб, игровая камера;
 ##   rider_anim_sheet.png — позы: езда сидя, подъём стоя, спуск («атака»), поворот, торможение, приземление,
 ##     стоянка (нога на земле), долгая стоянка (отдых: рука на бедре) спереди и сзади, встряхивание кисти в спокойной езде.
-## Нужно окно, секунды. «Было» — тем же запуском на прежнем коде с --tag _old.
+## Нужно окно, секунды. «Было» — тем же запуском на прежнем коде с --tag _old. Свет — tools/bike_stand.gd.
 ##   godot --path . --script res://tools/rider_look.gd -- [--out <папка>] [--tag <суффикс>]
 const DT := 1.0 / 60.0
 var out := ""
@@ -23,27 +23,7 @@ func _initialize() -> void:
 	at = args.find("--tag")
 	tag = args[at + 1] if at >= 0 and at + 1 < args.size() else ""
 	root.size = Vector2i(800, 600)
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color("a6bbc5")
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color.WHITE
-	e.ambient_light_energy = 0.6
-	env.environment = e
-	root.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-45.0, -35.0, 0.0)
-	sun.shadow_enabled = true
-	root.add_child(sun)
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(30, 30)
-	ground.mesh = plane
-	var ground_mat := StandardMaterial3D.new()
-	ground_mat.albedo_color = Color(0.5, 0.47, 0.4)
-	ground.material_override = ground_mat
-	root.add_child(ground)
+	preload("res://tools/bike_stand.gd").setup(root) # свет игры; --flat — прежний плоский стенд, --hour — час
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
 	camera = Camera3D.new()

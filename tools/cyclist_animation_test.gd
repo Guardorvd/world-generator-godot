@@ -65,7 +65,7 @@ func advance(throttle := 0.0, boost := false, dt := DT) -> void:
 
 func _check_model() -> void:
 	body_mesh = bike.rider.skeleton.get_node("Body") as MeshInstance3D
-	check(bike.rider.get_meta("model_version", 0) == 8 and body_mesh != null, "Eighth model version uses one native skinned body")
+	check(bike.rider.get_meta("model_version", 0) == 9 and body_mesh != null, "Ninth model version uses one native skinned body")
 	if body_mesh == null:
 		return
 	var sk := bike.rider.skeleton
@@ -97,20 +97,17 @@ func _check_model() -> void:
 		for i in range(0, vertices.size(), maxi(1, vertices.size() / 20)):
 			skin_samples.append({position = vertices[i], bones = bones.slice(i * 4, i * 4 + 4), weights = weights.slice(i * 4, i * 4 + 4)})
 	check(valid, "Skin weights, bone indices and outward triangle winding are valid")
-	check(triangles < 6000 and body_mesh.mesh.get_surface_count() <= 8, "Model stays within 6000 triangles and 8 material surfaces")
-	var clearcoat_count := 0
-	var rim_count := 0
-	var roughness_values := {}
-	for surface in body_mesh.mesh.get_surface_count():
-		var mat := body_mesh.mesh.surface_get_material(surface) as StandardMaterial3D
-		if mat != null:
-			if mat.clearcoat_enabled:
-				clearcoat_count += 1
-			if mat.rim_enabled:
-				rim_count += 1
-			roughness_values[snappedf(mat.roughness, 0.01)] = true
-	check(clearcoat_count >= 2 and rim_count >= 3 and roughness_values.size() >= 6, "Materials distinguish fabric, skin, helmet shell, lens and shoes")
-	print("Cyclist v8 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces")
+	# 17.11 (v9): одна поверхность с общим материалом велосипеда и седока; ткань, кожа, скорлупа шлема, стекло и обувь
+	# различаются видом поверхности в вершинах (UV.y), цвет — местом палитры (UV.x)
+	check(triangles < 7500 and body_mesh.mesh.get_surface_count() == 1, "Model stays within 7500 triangles in one surface (one draw call)")
+	var mat := body_mesh.material_override as ShaderMaterial
+	var kinds := {}
+	var slots := {}
+	for uv: Vector2 in body_mesh.mesh.surface_get_arrays(0)[Mesh.ARRAY_TEX_UV]:
+		slots[roundi(uv.x)] = true
+		kinds[roundi(uv.y)] = true
+	check(mat != null and mat.shader == preload("res://resources/bike_rider.gdshader") and kinds.size() >= 6 and slots.size() >= 8, "Shared material distinguishes fabric, skin, helmet shell, lens and shoes")
+	print("Cyclist v9 geometry: ", triangles, " triangles, ", body_mesh.mesh.get_surface_count(), " surfaces, ", kinds.size(), " surface kinds")
 
 
 func check_skin_pose() -> void:

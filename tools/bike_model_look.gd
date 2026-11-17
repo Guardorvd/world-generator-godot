@@ -1,8 +1,13 @@
 extends SceneTree
 ## Вид модели велосипеда и седока без мира и без физики: один лист bike_model_sheet.png (3×2) —
 ## сбоку, три четверти спереди, игровая камера сзади, стоянка с ногой на земле, перёд сбоку крупно,
-## перёд с повёрнутым рулём и сжатой вилкой. Нужно окно, секунды.
-##   godot --path . --script res://tools/bike_model_look.gd -- [--out <папка>] [--tag <суффикс>]
+## перёд с повёрнутым рулём и сжатой вилкой. Свет игры (tools/bike_stand.gd, --hour, --flat). Нужно окно, секунды.
+## Печатает цену модели (отрисовки, тени, треугольники, материалы) и время расчёта позы на кадр;
+## --measure — ещё время отрисовки кадра с моделью и без (игровая камера, ~10 с);
+## --schemes — лист расцветок bike_schemes.png (BikeView.set_scheme, BikePalette.SCHEMES).
+## Режим отрисовки — как у игры (Forward+); Compatibility — ключом движка --rendering-method gl_compatibility.
+##   godot --path . --script res://tools/bike_model_look.gd -- [--out <папка>] [--tag <суффикс>] [--hour 10.5] [--measure]
+const Stand := preload("res://tools/bike_stand.gd")
 const DT := 1.0 / 60.0
 var out := ""
 var tag := ""
@@ -13,33 +18,10 @@ var camera: Camera3D
 
 func _initialize() -> void:
 	preload("res://tools/watchdog.gd").arm(self, 60)
-	var args := OS.get_cmdline_user_args()
-	var at := args.find("--out")
-	out = args[at + 1] if at >= 0 and at + 1 < args.size() else "res://tools/control/runs"
-	at = args.find("--tag")
-	tag = args[at + 1] if at >= 0 and at + 1 < args.size() else ""
+	out = Stand.arg("--out", "res://tools/control/runs")
+	tag = Stand.arg("--tag", "")
 	root.size = Vector2i(960, 600)
-	var env := WorldEnvironment.new()
-	var e := Environment.new()
-	e.background_mode = Environment.BG_COLOR
-	e.background_color = Color("a6bbc5")
-	e.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
-	e.ambient_light_color = Color.WHITE
-	e.ambient_light_energy = 0.6
-	env.environment = e
-	root.add_child(env)
-	var sun := DirectionalLight3D.new()
-	sun.rotation_degrees = Vector3(-45.0, -35.0, 0.0)
-	sun.shadow_enabled = true
-	root.add_child(sun)
-	var ground := MeshInstance3D.new()
-	var plane := PlaneMesh.new()
-	plane.size = Vector2(30, 30)
-	ground.mesh = plane
-	var ground_mat := StandardMaterial3D.new()
-	ground_mat.albedo_color = Color(0.5, 0.47, 0.4)
-	ground.material_override = ground_mat
-	root.add_child(ground)
+	Stand.setup(root)
 	bike = load("res://scenes/bike.tscn").instantiate()
 	root.add_child(bike)
 	camera = Camera3D.new()
@@ -75,7 +57,21 @@ func shot(from: Vector3, to: Vector3, fov: float) -> Image:
 	return root.get_texture().get_image()
 
 
+## Время такта вида и кадра позы (tick + draw) на GDScript, мкс.
+func pose_cost() -> float:
+	ride(10, 6.0, 1.0, 5.0)
+	var t0 := Time.get_ticks_usec()
+	for i in 600:
+		state.crank += 5.0 * DT
+		state.wheel += 6.0 / 0.34 * DT
+		state._step_effort(1.0, DT)
+		bike.tick(state, DT, 1.0, false)
+		bike.draw(1.0)
+	return float(Time.get_ticks_usec() - t0) / 600.0
+
+
 func look() -> void:
+	print("Bike model cost: ", Stand.cost(bike), " pose %.0f us/frame" % pose_cost())
 	var frames: Array[Image] = []
 	ride(40, 6.0, 1.0, 5.0)
 	frames.append(await shot(Vector3(2.3, 0.95, 0.0), Vector3(0, 0.75, 0.0), 42.0))
@@ -94,4 +90,25 @@ func look() -> void:
 	var path := out.path_join("bike_model_sheet" + tag + ".png")
 	sheet.save_png(path)
 	print("Bike model look: ", path)
+	if OS.get_cmdline_user_args().has("--schemes"):
+		# расцветки (BikePalette.SCHEMES): сбоку и три четверти спереди, по столбцу на расцветку
+		var shots: Array[Image] = []
+		var names: Array = preload("res://scripts/render/bike_palette.gd").SCHEMES.keys()
+		for row in 2:
+			for scheme: String in names:
+				bike.set_scheme(scheme)
+				ride(40, 6.0, 1.0, 5.0)
+				shots.append(await shot(Vector3(2.3, 0.95, 0.0), Vector3(0, 0.75, 0.0), 42.0) if row == 0 else await shot(Vector3(-1.5, 1.6, 1.9), Vector3(0, 0.95, 0.0), 42.0))
+		var schemes := Image.create(size.x * names.size(), size.y * 2, false, shots[0].get_format())
+		for i in shots.size():
+			schemes.blit_rect(shots[i], Rect2i(Vector2i.ZERO, size), Vector2i((i % names.size()) * size.x, (i / names.size()) * size.y))
+		schemes.save_png(out.path_join("bike_schemes" + tag + ".png"))
+		print("Bike schemes: ", out.path_join("bike_schemes" + tag + ".png"))
+		bike.set_scheme("ember")
+	if OS.get_cmdline_user_args().has("--measure"):
+		ride(40, 6.0, 1.0, 5.0)
+		camera.fov = 68.0
+		camera.position = Vector3(0.0, 2.25, 2.85)
+		camera.look_at(Vector3(0.0, 1.15, -0.25))
+		print("Bike model frame: ", await Stand.measure(self, bike))
 	quit(0)

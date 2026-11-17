@@ -15,6 +15,7 @@ const FORK_RAKE := 0.30
 const GRIP := Vector3(0.24, 1.0, -0.413) # середина правого грипса; левый — зеркально по X
 const STEER_VIEW := 0.6  # поворот переднего колеса в долях угла руля (30.10: было 0,35 — поворот читался как крен)
 const Lamp = preload("res://scripts/render/bike_lamp.gd")
+const BikePalette := preload("res://scripts/render/bike_palette.gd")
 const PACK_AT := Vector3(0.0, -0.08, 0.06) # сумка на кости Chest: у спины (+Z), низ — у поясницы
 const PACK_SCALE := 0.8
 
@@ -141,6 +142,10 @@ var _heat_f := 0.0
 var _heat_r := 0.0
 var _shudder_phase := 0.0
 var lamp: Lamp
+var _skin_mats: Array[ShaderMaterial] = []
+var _rear_mechanics: Node3D
+var _wind := 0.0
+var _speed := 0.0
 
 @onready var rider: CyclistRig = get_node_or_null("Rider") as CyclistRig
 @onready var rear_wheel: Node3D = get_node_or_null("RearWheel") as Node3D
@@ -206,28 +211,39 @@ func _ready() -> void:
 	lamp.name = "Lamp"
 	lamp.position = Vector3(0.0, GRIP.y - 0.05, GRIP.z - 0.057) - STEERING_PIVOT # под зажимом руля
 	_steering.add_child(lamp)
-	_build_watch()
+	_own_materials()
+	_rear_mechanics = get_node_or_null("RearMechanics") as Node3D
 	_view_ready = true
 
 
-func _build_watch() -> void:
-	var wrist := BoneAttachment3D.new()
-	wrist.bone_name = "HandL"
-	rider.skeleton.add_child(wrist)
-	var dimensions := [Vector3(0.066, 0.050, 0.034), Vector3(0.052, 0.010, 0.047), Vector3(0.040, 0.003, 0.035)]
-	var offsets := [Vector3(0.0, 0.0, 0.038), Vector3(0.0, 0.027, 0.036), Vector3(0.0, 0.033, 0.036)]
-	var colors := [Color("22292c"), Color("636d71"), Color("24434a")]
-	for i in dimensions.size():
-		var part := MeshInstance3D.new()
-		var box := BoxMesh.new()
-		box.size = dimensions[i]
-		var material := StandardMaterial3D.new()
-		material.albedo_color = colors[i]
-		box.material = material
-		part.mesh = box
-		part.position = offsets[i]
-		part.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		wrist.add_child(part)
+## 17.11: у каждого велосипеда свой экземпляр общего материала (bike_rider.gdshader): палитра и ветер
+## меняются у него, а не у всех копий сцены. Часы на руке седока — часть его меша (build_cyclist.gd).
+func _own_materials() -> void:
+	var copies := {}
+	for item: Node in find_children("*", "GeometryInstance3D", true, false):
+		var geo := item as GeometryInstance3D
+		var mat := geo.material_override as ShaderMaterial
+		if mat == null or mat.shader != BikePalette.SHADER:
+			continue
+		if not copies.has(mat):
+			copies[mat] = mat.duplicate()
+		geo.material_override = copies[mat]
+	_skin_mats.assign(copies.values())
+
+
+## Расцветка велосипеда и формы (BikePalette.SCHEMES)
+func set_scheme(scheme: String) -> void:
+	var colors: PackedColorArray = BikePalette.colors(scheme)
+	for mat in _skin_mats:
+		mat.set_shader_parameter("palette", colors)
+
+
+func _set_wind(value: float) -> void:
+	if absf(value - _wind) < 0.02 and not (value == 0.0 and _wind != 0.0):
+		return
+	_wind = value
+	for mat in _skin_mats:
+		mat.set_shader_parameter("wind", value)
 
 
 ## Совместимый интерфейс управления фарой из игры.
@@ -270,6 +286,7 @@ func tick(b: BikeRide, dt := 1.0 / 60.0, throttle := 0.0, boost := false) -> voi
 		_prev = _cur
 		_cur = spare
 	_cur[S_X] = b.x
+	_speed = absf(b.speed) if b.riding and not b.airborne else absf(b.speed) * 0.8
 	# рама — посередине между концами подвесок, каждый на своём ходе над точкой касания колеса
 	_cur[S_BODY_Y] = b.y + (b.ground_f + b.ground_r) * 0.5 - (b.squash_f + b.squash_r) * 0.5
 	_cur[S_Z] = b.z
@@ -667,8 +684,8 @@ func draw(alpha: float, allow_watch := true) -> void:
 	for lower in _fork_lowers:
 		# Штаны идут вдоль ног вилки (их узел уже наклонён), детали оси — на тот же ход вдоль оси рулевой.
 		lower.position = Vector3(0, fork_travel, 0) if lower.name == "Lower" else _fork_arch_rest + steer_axis * fork_travel
-	if has_node("RearMechanics"):
-		get_node("RearMechanics").position.y = _mix[S_SQUASH_R]
+	if _rear_mechanics != null:
+		_rear_mechanics.position.y = _mix[S_SQUASH_R]
 	rear_wheel.rotation.x = -_mix[S_WHEEL]
 	if _rotor_mat_f != null:
 		_rotor_mat_f.set_shader_parameter("heat", _mix[S_HEAT_F])
@@ -684,6 +701,8 @@ func draw(alpha: float, allow_watch := true) -> void:
 	pedal_l.rotation.x = _mix[S_CRANK]
 	pedal_r.rotation.x = _mix[S_CRANK]
 	rider.visible = _riding
+	# ткань формы треплется на скорости (шейдер, без костей): заметно с 3 м/с, в полную силу к 14 м/с
+	_set_wind(smoothstep(3.0, 14.0, _speed) if _riding else 0.0)
 	if _riding:
 		# Небольшая группировка на скорости и работа корпусом при сжатии подвески.
 		var tuck := _mix[S_TUCK] + clampf(_mix[S_SQUASH], 0.0, 0.12) * 0.4

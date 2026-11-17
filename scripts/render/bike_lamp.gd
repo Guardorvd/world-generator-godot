@@ -16,23 +16,23 @@ func _ready() -> void:
 	body_mat.albedo_color = Color(0.12, 0.12, 0.13)
 	body_mat.roughness = 0.45
 	body_mat.metallic = 0.3
-	var bracket := MeshInstance3D.new()
+	# 17.11: корпус и кронштейн — один меш (одна отрисовка); фара мала и тени не отбрасывает
 	var bracket_mesh := BoxMesh.new()
 	bracket_mesh.size = Vector3(0.025, 0.06, 0.05)
-	bracket.mesh = bracket_mesh
-	bracket.material_override = body_mat
-	bracket.position = Vector3(0.0, 0.035, 0.035)
-	add_child(bracket)
-	var body := MeshInstance3D.new()
 	var body_mesh := CylinderMesh.new()
 	body_mesh.top_radius = 0.034
 	body_mesh.bottom_radius = 0.03
 	body_mesh.height = 0.085
 	body_mesh.radial_segments = 12
 	body_mesh.rings = 1
-	body.mesh = body_mesh
+	var merged := SurfaceTool.new()
+	merged.begin(Mesh.PRIMITIVE_TRIANGLES)
+	merged.append_from(bracket_mesh, 0, Transform3D(Basis.IDENTITY, Vector3(0.0, 0.035, 0.035)))
+	merged.append_from(body_mesh, 0, Transform3D(Basis.from_euler(Vector3(-PI * 0.5, 0.0, 0.0)), Vector3.ZERO)) # ось вдоль -Z, широкий край — вперёд
+	var body := MeshInstance3D.new()
+	body.mesh = merged.commit()
 	body.material_override = body_mat
-	body.rotation = Vector3(-PI * 0.5, 0.0, 0.0) # ось цилиндра вдоль -Z, широкий край — вперёд
+	body.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(body)
 	_lens_off = StandardMaterial3D.new()
 	_lens_off.albedo_color = Color(0.75, 0.78, 0.8)
@@ -53,6 +53,7 @@ func _ready() -> void:
 	_lens.mesh = lens_mesh
 	_lens.material_override = _lens_off
 	_lens.rotation = Vector3(-PI * 0.5, 0.0, 0.0)
+	_lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_lens.position = Vector3(0.0, 0.0, -0.044)
 	add_child(_lens)
 	# 12.4: свет рассеянный, без чётких краёв: большое spot_angle_attenuation (4) — яркость плавно падает
