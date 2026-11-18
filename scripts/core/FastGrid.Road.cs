@@ -280,13 +280,24 @@ public partial class FastGrid
 	/// order as the GDScript reference; PackedFloat32Array stores are rounded to float. kinds: 0 road, 1 trail, 2 mountain;
 	/// scales: corridor scale of the route (0 — no forms; natural mountain profiles still carry protection gates). settings: Roads.CorridorParams (fit: shore,
 	/// pin, pin fade, reach, shared, fit fade, fit limit, road bench limit, trail bench limit.
-	/// Returns {routes, starts, fitted, points, profile, strength, limit, corridor} — per included route and per station.</summary>
-	public Godot.Collections.Dictionary RoadFitNetwork(int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, int[] kinds,
+	/// Returns profile and corridor columns by included route and station.</summary>
+	private static RoadFitData RoadFitNetwork(int[] ptStarts, double[] px, double[] py, double[] pw, int[] psurf, int[] kinds,
 		float[] scales, int[] routeIds, int width, int height, double tile, double step, float[] ground, float[] raw, float[] water,
-		float[] distWater, double[] structureAxes, double[] settlements, Vector2[] segA, Vector2[] segDelta, double[] segLen2,
-		double[] segHalf, int[] segRoute, double[] segAlong, int[] cellStarts, int[] candidates, int[] routeKinds, FastNoiseLite noise,
-		Vector2 origin, Godot.Collections.Dictionary settings, byte[] authoredRoutes)
+		float[] distWater, double[] structureAxes, double[] settlements, RoadSegments index, FastNoiseLite noise,
+		Vector2 origin, Godot.Collections.Dictionary settings, byte[] authoredRoutes, byte[] localRoutes)
 	{
+		var segA = index.A;
+		var segDelta = index.Delta;
+		var segLen2 = index.Len2;
+		var segHalf = index.Half;
+		var segRoute = index.Route;
+		var segAlong = index.Along;
+		var cellStarts = index.CellStarts;
+		var candidates = index.Candidates;
+		// Each section exists once; only identical route IDs share an alignment.
+		var routeKinds = new int[authoredRoutes.Length];
+		for (int route = 0; route < routeKinds.Length; route++)
+			routeKinds[route] = route;
 		var cp = new CorridorParams(settings);
 		var fp = cp.Fit;
 		double gap = cp.Gap;
@@ -302,6 +313,8 @@ public partial class FastGrid
 		var surfs = new System.Collections.Generic.List<int>();
 		for (int t = 0; t < routeIds.Length; t++)
 		{
+			if (localRoutes.Length != 0 && localRoutes[routeIds[t]] == 0)
+				continue;
 			int from = ptStarts[t], to = ptStarts[t + 1], first = points.Count;
 			double along = 0.0, next = 0.0;
 			for (int n = from + 1; n < to; n++)
@@ -339,17 +352,15 @@ public partial class FastGrid
 		var profile = new float[total];
 		var strength = new float[total];
 		var limits = new float[total];
-		var fittedOut = new byte[count];
 		var corridor = new double[total * stride];
 		var routes = new int[count];
 		var routeStarts = starts.ToArray();
-		var kindOf = new int[count];
 		var scaleOf = new float[count];
 		for (int r = 0; r < count; r++)
 		{
 			int t = included[r];
-			routes[r] = routeIds[t]; kindOf[r] = kinds[t]; scaleOf[r] = scales[t];
-			fittedOut[r] = 1;
+			routes[r] = routeIds[t];
+			scaleOf[r] = scales[t];
 		}
 		System.Threading.Tasks.Parallel.For(0, count, r =>
 		{
@@ -450,11 +461,14 @@ public partial class FastGrid
 				CorridorRoute(from, to, kinds[t], scales[t], routes[r], pts, half, surface, gate, profile, strength, limits, raw, ground, width, height, tile, noise, origin, step,
 					cp, routeKinds, segA, segDelta, segLen2, segHalf, segRoute, segAlong, cellStarts, candidates, corridor);
 		});
-		return new Godot.Collections.Dictionary
-		{
-			["routes"] = routes, ["starts"] = routeStarts, ["fitted"] = fittedOut, ["scales"] = scaleOf, ["points"] = pts,
-			["profile"] = profile, ["strength"] = strength, ["limit"] = limits, ["corridor"] = corridor,
-		};
+		return new RoadFitData(routes, routeStarts, scaleOf, pts, profile, strength, limits, corridor);
+	}
+
+	private sealed record RoadFitData(int[] Routes, int[] Starts, float[] Scales, Vector2[] Points,
+		float[] Profile, float[] Strength, float[] Limit, double[] Corridor)
+	{
+		public static readonly RoadFitData Empty = new(Array.Empty<int>(), new[] { 0 }, Array.Empty<float>(),
+			Array.Empty<Vector2>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<float>(), Array.Empty<double>());
 	}
 
 	/// <summary>RoadRefinement._fit_safe on the column index: bit 0 — profile fit allowed, bit 1 — corridor forms too.</summary>

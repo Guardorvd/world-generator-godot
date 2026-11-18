@@ -182,11 +182,27 @@ public partial class FastGrid : RefCounted
 	/// с теми же округлениями (сравнение в double, хранение во float). С 8.4: его считают и куски OuterLand.</summary>
 	public float[] DistanceField(int w, int h, byte[] source)
 	{
+		var d = DistanceSources(w * h, source, 1);
+		PropagateDistances(w, h, d);
+		return d;
+	}
+
+	private static float[] DistanceSources(int cells, byte[] source, byte minimum)
+	{
+		var distance = new float[cells];
+		if (source.Length == cells)
+		{
+			for (int i = 0; i < cells; i++)
+				distance[i] = source[i] >= minimum ? 0f : 1e9f;
+		}
+		else
+			Array.Fill(distance, 1e9f);
+		return distance;
+	}
+
+	private static void PropagateDistances(int w, int h, float[] d)
+	{
 		const double Sqrt2 = 1.4142135623730951;
-		int n = w * h;
-		var d = new float[n];
-		for (int i = 0; i < n; i++)
-			d[i] = source[i] != 0 ? 0f : 1e9f;
 		for (int y = 0; y < h; y++)
 			for (int x = 0; x < w; x++)
 			{
@@ -215,7 +231,6 @@ public partial class FastGrid : RefCounted
 				}
 				d[i] = (float)v;
 			}
-		return d;
 	}
 
 	// Куски уже параллельны на WorkerThreadPool Godot. Вложенный пул .NET здесь

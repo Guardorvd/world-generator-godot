@@ -17,6 +17,11 @@ const DENSITY_CELL := 128.0 # размер областей, где тип вс�
 const RING := [Vector2i(10, 0), Vector2i(7, 7), Vector2i(0, 10), Vector2i(-7, 7),
 	Vector2i(-10, 0), Vector2i(-7, -7), Vector2i(0, -10), Vector2i(7, -7)]
 const SETTLEMENT_REACH := 70.0 # дальше от поселения оценки уже не зависят от расстояния
+const OPEN := [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA, Biomes.TUNDRA]
+const FARM_BIOMES := [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA]
+const RUIN_FOREST := [Biomes.FOREST, Biomes.TAIGA]
+## Порядок размещения и столбцов FastGrid.SiteCandidates.
+const CANDIDATE_TYPES := ["ruin", "tower", "stones", "shelter", "obelisk", "farm", "house"]
 
 ## Сколько мест каждого типа на мир размером 512 (w.scale = 1); сид умножает на 0,5..1,5.
 ## Порядок — от значимых к мелким: значимые первыми выбирают лучшие места.
@@ -42,6 +47,59 @@ const BENCH_SKIP := [Biomes.SNOW, Biomes.PEAK] # на снегу и на лед�
 
 static func run(w: WorldData) -> void:
 	var W := w.W
+	var river := w.river_cells()
+	var selection := _select_candidates(w, river)
+	var dist_path: PackedFloat32Array = selection.distance
+	var candidates: Array = selection.candidates
+	var sites: Array = []
+	var names := {}
+	for s: SettlementData in w.settlements:
+		names[s.name] = true
+	for t in CANDIDATE_TYPES.size():
+		var type: String = CANDIDATE_TYPES[t]
+		var rng := WGRandom.new(WGRandom.derive(w.seed_num, "site.count." + type))
+		var want := roundi(TYPES[type].base * w.scale * (0.5 + rng.next_float()))
+		var placed := 0
+		for i: int in candidates[t]:
+			if placed >= want:
+				break
+			var x := (i % W) + 0.5
+			var y := (i / W) + 0.5
+			if _crowded(sites, type, x, y):
+				continue
+			var site := _build(w, river, type, x, y, i, names)
+			if site.is_empty():
+				continue
+			sites.append(site)
+			placed += 1
+	_place_fishing(w, river, dist_path, sites, names)
+	_place_benches(w, river, dist_path, sites, names)
+	w.sites = sites
+
+
+static func _select_candidates(w: WorldData, river: PackedByteArray) -> Dictionary:
+	var pick_seed := WGRandom.derive(w.seed_num, "site.candidate")
+	var density_seeds := PackedInt64Array()
+	for type: String in CANDIDATE_TYPES:
+		density_seeds.append(WGRandom.derive(w.seed_num, "site.density." + type))
+	var fast := Grid.fast_grid()
+	if fast == null:
+		return _select_script(w, river, pick_seed, density_seeds)
+	var habit := PackedFloat64Array()
+	var flags := PackedByteArray()
+	for bi in Biomes.LIST.size():
+		habit.append(float(Biomes.LIST[bi].get("habit", 0.0)))
+		flags.append(int(bi in OPEN) | (int(bi in FARM_BIOMES) << 1) | (int(bi in RUIN_FOREST) << 2))
+	var settlements := PackedFloat64Array()
+	for s: SettlementData in w.settlements:
+		settlements.append(s.x)
+		settlements.append(s.y)
+	return fast.SiteCandidates(w.W, w.H, STEP, w.path_mask, w.ocean, w.lake, river, w.elev, w.slope, w.biome,
+		habit, flags, settlements, NEAR_VILLAGE, SETTLEMENT_REACH, pick_seed, density_seeds, DENSITY_CELL)
+
+
+static func _select_script(w: WorldData, river: PackedByteArray, pick_seed: int, density_seeds: PackedInt64Array) -> Dictionary:
+	var W := w.W
 	var H := w.H
 	var paths := w.path_mask
 	var ocean := w.ocean
@@ -54,15 +112,9 @@ static func run(w: WorldData) -> void:
 	for i in w.N:
 		human[i] = int(paths[i] >= 2)
 	var dist_path := Grid.distance_field(W, H, human)
-	var river := w.river_cells()
-	var pick_seed := WGRandom.derive(w.seed_num, "site.candidate")
-	var cand := {}
-	var density_seed := {}
-	for type: String in TYPES:
-		if TYPES[type].base <= 0.0:
-			continue
-		cand[type] = []
-		density_seed[type] = WGRandom.derive(w.seed_num, "site.density." + type)
+	var cand := []
+	for t in CANDIDATE_TYPES.size():
+		cand.append([])
 	for y in range(8, H - 8, STEP):
 		var nearby: Array[SettlementData] = []
 		for s: SettlementData in w.settlements:
@@ -78,47 +130,29 @@ static func run(w: WorldData) -> void:
 			var f := {e = elev[i], sl = slope[i], dp = dist_path[i], settle = settle, bi = biome[i],
 				habit = float(Biomes.LIST[biome[i]].get("habit", 0.0)), prom = _prominence(elev, W, H, x, y),
 				r = WGRandom.hash2(x, y, pick_seed)}
-			for type: String in cand:
-				var s := _score(type, f)
+			for t in CANDIDATE_TYPES.size():
+				var s := _score(CANDIDATE_TYPES[t], f)
 				if s == -INF:
 					continue
 				# Области, где тип часто встречается, и области почти без него: места не размазаны ровно.
-				var d := StageLandmarks.patches(x, y, DENSITY_CELL, density_seed[type])
+				var d := StageLandmarks.patches(x, y, DENSITY_CELL, density_seeds[t])
 				if d < 0.22:
 					continue
 				# Vector2 сортируется встроенным сравнением, без вызова функции на каждую пару (клетка < 2^24).
-				cand[type].append(Vector2(s + (d - 0.5) * 1.2, -i))
-	var sites: Array = []
-	var names := {}
-	for s: SettlementData in w.settlements:
-		names[s.name] = true
-	for type: String in cand:
-		var list: Array = cand[type]
+				cand[t].append(Vector2(s + (d - 0.5) * 1.2, -i))
+	var ranked := []
+	for list: Array in cand:
 		list.sort()
-		var rng := WGRandom.new(WGRandom.derive(w.seed_num, "site.count." + type))
-		var want := roundi(TYPES[type].base * w.scale * (0.5 + rng.next_float()))
-		var placed := 0
+		var cells := PackedInt32Array()
+		cells.resize(list.size())
 		for k in range(list.size() - 1, -1, -1):
-			if placed >= want:
-				break
-			var i := -int(list[k].y)
-			var x := (i % W) + 0.5
-			var y := (i / W) + 0.5
-			if _crowded(sites, type, x, y):
-				continue
-			var site := _build(w, river, type, x, y, i, names)
-			if site.is_empty():
-				continue
-			sites.append(site)
-			placed += 1
-	_place_fishing(w, river, dist_path, sites, names)
-	_place_benches(w, river, dist_path, sites, names)
-	w.sites = sites
+			cells[list.size() - 1 - k] = -int(list[k].y)
+		ranked.append(cells)
+	return {distance = dist_path, candidates = ranked}
 
 
 ## Оценка клетки для типа места или -INF, если тип здесь не стоит
 static func _score(type: String, f: Dictionary) -> float:
-	const OPEN := [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA, Biomes.TUNDRA]
 	match type:
 		"tower":
 			# Холм с видом на дорогу или тропу.
@@ -132,7 +166,7 @@ static func _score(type: String, f: Dictionary) -> float:
 			return f.e * 0.8 + (0.3 if f.bi in OPEN else 0.0) + f.r * 0.8
 		"ruin":
 			# Брошенное место: в стороне от нынешних дорог, часто на возвышенности.
-			if f.habit <= 0.0 and f.bi not in [Biomes.FOREST, Biomes.TAIGA]:
+			if f.habit <= 0.0 and f.bi not in RUIN_FOREST:
 				return -INF
 			if f.sl > 0.6 or f.settle < 30.0:
 				return -INF
@@ -143,7 +177,7 @@ static func _score(type: String, f: Dictionary) -> float:
 			return f.habit + f.r * 0.6 + (0.3 if f.settle > 40.0 else 0.0)
 		"farm":
 			# Поле у дороги в дне пути от поселения.
-			if f.bi not in [Biomes.GRASS, Biomes.STEPPE, Biomes.SAVANNA] or f.sl > 0.25:
+			if f.bi not in FARM_BIOMES or f.sl > 0.25:
 				return -INF
 			if f.dp < 2.0 or f.dp > 10.0 or f.settle > SETTLEMENT_REACH:
 				return -INF

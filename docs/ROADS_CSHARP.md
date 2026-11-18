@@ -9,13 +9,14 @@
 | Что | C# | GDScript (оболочка) |
 |---|---|---|
 | Полотно в узлах и на путях | `FastGrid.RoadBedRefine` (`scripts/core/FastGrid.RoadBed.cs`) | `RoadBed.refine` (`scripts/game/road_bed.gd`) — собирает массивы и вызывает C# |
-| Индекс отрезков, патчи метровой сетки | `FastGrid.RoadIndex`, `FastGrid.RoadPatches` (`FastGrid.RoadPatches.cs`) | `RoadRefinement.build` (`scripts/game/road_refinement.gd`), в том числе частичная сборка `only` (Trail Lab) |
+| Индекс отрезков, патчи метровой сетки | `FastGrid.BuildRoadRefinement` (`FastGrid.RoadPatches.cs`) | `RoadRefinement.build` (`scripts/game/road_refinement.gd`), в том числе частичная сборка `only` (Trail Lab) |
 | Подгонка профиля и формы коридора | `FastGrid.RoadFitNetwork` (`FastGrid.Road.cs`), параметры — `Roads.CorridorParams` (`scripts/core/roads/`) | `RoadRefinement.corridor_params` — собирает числа из `RoadTuning` |
 | Числа полотна и форм | — | `RoadTuning` (`resources/road_tuning.tres`), см. ниже |
 | Версия результата | `Roads.RoadCode.Version` (`scripts/core/roads/RoadCode.cs`) | входит в ключ кэша поверхности (`WorldCache.artifact_key`) |
 
-На GDScript остались только чтение готовой сетки (`height_at`, `weight_at`, `edge_at`, `sample`, `from_patches`,
-`pin_coarse_edges`) и `tread_mask` для `road_look`.
+`BuildRoadRefinement` принимает столбцы маршрутов одним вызовом и использует индекс и профили на стороне C#.
+GDScript получает готовые патчи, профили и формы коридора, закрепляет края патчей через `pin_coarse_edges`
+и запрашивает просвет до соседних путей при формировании оврагов.
 
 C# берётся через `Grid.native_grid()`. Он не зависит от `Grid.allow_fast`: тесты, которые выключают C# ради сверки
 других систем, дорожный C# не выключают. Без сборки .NET или при ошибке внутри C# — `push_error` с понятным

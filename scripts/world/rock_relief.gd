@@ -97,6 +97,23 @@ static func apply(h: Heightfield) -> int:
 	var w := h.world
 	if w == null or w.N <= 0 or w.elev.size() != w.N or w.slope.size() != w.N or w.biome.size() != w.N:
 		return 0
+	var fast := Grid.fast_grid()
+	if fast != null:
+		var exclusions := PackedFloat64Array()
+		for s: SettlementData in w.settlements:
+			exclusions.append_array(PackedFloat64Array([s.x, s.y, StageVegetation.VILLAGE_R]))
+		for s: SiteData in w.sites:
+			exclusions.append_array(PackedFloat64Array([s.x, s.y, maxf(2.0, s.clear)]))
+		var result: Dictionary = fast.ApplyRockRelief(w.W, w.H, w.world_origin, w.seed_num, h.hv, w.elev, w.slope,
+			w.biome, field_of(w), w.dist_water, w.path_mask, StageVegetation._TABLES.water, exclusions,
+			Biomes.ROCK, Biomes.PEAK, GameConfig.HS, GameConfig.TILE, EDGE, PATH_CLEAR, PATH_FULL, MAX_SHIFT)
+		h.hv = result.height
+		return result.changed
+	return _apply_script(h)
+
+
+static func _apply_script(h: Heightfield) -> int:
+	var w := h.world
 	var W := w.W
 	var H := w.H
 	var rock_field := field_of(w)
@@ -108,7 +125,7 @@ static func apply(h: Heightfield) -> int:
 	# Поселения (квадрат StageVegetation.VILLAGE_R) и места (их поляна) — как у растительности.
 	for list: Array in [w.settlements, w.sites]:
 		for s: EntityRecord in list:
-			var r: float = StageVegetation.VILLAGE_R if list == w.settlements else maxf(2.0, s.get("clear") if "clear" in s else 3.0)
+			var r: float = StageVegetation.VILLAGE_R if s is SettlementData else maxf(2.0, (s as SiteData).clear)
 			for yy in range(maxi(0, floori(s.y - r)), mini(H, ceili(s.y + r) + 1)):
 				for xx in range(maxi(0, floori(s.x - r)), mini(W, ceili(s.x + r) + 1)):
 					busy[yy * W + xx] = 1

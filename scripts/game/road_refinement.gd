@@ -44,75 +44,42 @@ var corridor_routes := {} # маршрут -> Vector2i(первая станци
 var build_timings := {}
 var trail_shaping := {} # trail id -> cut/fill volumes, extremes, designed and natural grade, banking
 var trail_elements_baked := false # A fresh refinement accepts one authored earthwork pass.
-var _heights: Heightfield
-var _noise: FastNoiseLite
 var _height := 0
-var _dist_water := PackedFloat32Array() # w.dist_water
-var _surf: Array = RoadSurface.LIST
-var _origin := Vector2.ZERO # WorldData.world_origin в метрах: шум полотна в мировых координатах
-var _only := {} # номера путей, у которых строятся патчи; пусто — у всех
 var _reach := NATURAL_REACH
-# Отрезки столбцами и индекс «клетка -> отрезки» от FastGrid.RoadIndex; живут только на время сборки
-var _cs_starts := PackedInt32Array() # CSR по клеткам мира: _cs_ids[_cs_starts[k] .. _cs_starts[k + 1]) — отрезки клетки k
-var _cs_ids := PackedInt32Array()
-var _sg_a := PackedVector2Array()
-var _sg_delta := PackedVector2Array()
-var _sg_len2 := PackedFloat64Array()
-var _sg_half := PackedFloat64Array()
-var _sg_route := PackedInt32Array()
-var _sg_along := PackedFloat64Array()
-var _route_identity := PackedInt32Array() # exact complete natural routes only; never aliases merely nearby axes
 
 
 ## only — номера путей w.trails (ключи словаря): патчи и подгонка профиля только вокруг них, прочие пути
 ## участвуют как соседи (ближайший отрезок, развилки). Тогда у патча есть owner: 1 у вершин, где ближе всего
 ## путь из only. Trail Lab так добавляет новую трассу к готовому участку; пусто — все пути (игра).
-## 16.11.2026: индекс, подгонка, формы коридора и патчи — только на C# (FastGrid.RoadIndex, RoadFitNetwork, RoadPatches),
+## Индекс, подгонка, формы коридора и патчи собирает FastGrid.BuildRoadRefinement,
 ## в том числе при only. Без C# или при ошибке внутри него — сообщение и пустая сетка (патчей нет, дороги без метровой сетки).
 ## w.outer не учитывается (в игре сетка строится до подключения OuterLand, в Trail Lab его нет).
 static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false) -> RoadRefinement:
 	var r := RoadRefinement.new()
-	r._heights = heights
 	r._height = heights.world.H
-	r._noise = FastNoiseLite.new()
-	r._noise.seed = heights.world.seed_num
-	r._noise.frequency = 1.0
-	r._noise.fractal_octaves = 2
-	r._dist_water = heights.world.dist_water
-	r._origin = Vector2(heights.world.world_origin) * TILE
-	r._only = only
+	var fast := Grid.native_grid()
+	if fast == null:
+		push_error("RoadRefinement: метровая сетка дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
+		return r
+	if not _only_valid(heights.world, only):
+		return r
 	# TrailSite rebuilds authored lines over the existing surface. Its patch
 	# ownership must use the same reach as TrailBuilder and TrailShaping.
 	if not only.is_empty() and only.keys().all(func(route: int) -> bool:
 		var t: Dictionary = heights.world.trails[route]
 		return t.has("trail_id") and (t.get("formation", Vector3.ZERO) as Vector3).x > 0.0):
 		r._reach = REACH
-	var fast := Grid.native_grid()
-	if fast == null:
-		push_error("RoadRefinement: метровая сетка дорог считается только на C#: нужна сборка Godot .NET и dotnet build")
-		return from_patches({}, r._height)
-	if not r._only_valid():
-		return from_patches({}, r._height)
-	var built := r._build_native(fast, fit_road)
-	if built == null:
+	if not r._build_native(fast, heights, fit_road, only, with_gaps):
 		push_error("RoadRefinement: C# не построил метровую сетку (исключение внутри расчёта)")
-		return from_patches({}, r._height)
-	if only.is_empty():
-		pin_coarse_edges(heights, built.patches, built.patches.keys())
-		if with_gaps and not built.patches.is_empty():
-			var started := Time.get_ticks_usec()
-			load("res://scripts/game/road_gaps.gd").apply(heights, built)
-			built.build_timings.gaps_ms = (Time.get_ticks_usec() - started) / 1000.0
-	built._release_build_data()
-	built._drop_mountain_fits(heights.world)
-	return built
+		return r
+	r._drop_mountain_fits(heights.world)
+	return r
 
 
 ## Каждый путь only есть в мире, дорожного вида (RoadBed.KINDS) и с отрезками: так бывает у трасс Trail Lab
 ## (TrailDefinition: «trail», «mountain», «road», не меньше двух точек). Иначе ошибка, сетка не строится.
-func _only_valid() -> bool:
-	var w := _heights.world
-	for route: int in _only:
+static func _only_valid(w: WorldData, only: Dictionary) -> bool:
+	for route: int in only:
 		if route < 0 or route >= w.trails.size():
 			push_error("RoadRefinement: пути %d нет в мире (путей %d)" % [route, w.trails.size()])
 			return false
@@ -166,26 +133,33 @@ static func pin_coarse_edges(h: Heightfield, patches: Dictionary, keys: Array) -
 			patches[key] = pinned
 
 
-## Индекс отрезков, подгонка профиля, формы коридора и патчи тремя вызовами C# (FastGrid.RoadIndex, RoadFitNetwork и RoadPatches):
-## столбцами, без словарей на отрезок и на вершину. null — C# вернул не словарь (исключение внутри).
-func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
-	var w := _heights.world
+## Путь передаётся столбцами один раз. Индекс, профили и коридор используются на стороне C# до публикации результата.
+func _build_native(fast: Object, heights: Heightfield, fit_road: bool, only: Dictionary, with_gaps: bool) -> bool:
+	var w := heights.world
 	var started_us := Time.get_ticks_usec()
 	var ids := PackedInt32Array()
-	var smoothing := PackedFloat64Array()
-	var is_road := PackedByteArray()
+	var kinds := PackedInt32Array()
+	var scales := PackedFloat32Array()
 	var starts := PackedInt32Array()
 	var xs := PackedFloat64Array()
 	var ys := PackedFloat64Array()
 	var ws := PackedFloat64Array()
 	var surf := PackedInt32Array()
+	var authored := PackedByteArray()
+	var tuning := RoadTuning.current()
 	for route in w.trails.size():
 		var t: Dictionary = w.trails[route]
-		if not RoadBed.KINDS.has(t.kind):
+		var is_authored := t.has("trail_id")
+		authored.append(int(is_authored))
+		var kind := CORRIDOR_KINDS.find(t.kind)
+		if kind < 0:
 			continue
+		var scale := 1.0
+		if is_authored:
+			scale = tuning.prepared_scale if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
 		ids.append(route)
-		is_road.append(1 if t.kind == "road" else 0)
-		smoothing.append(0.65 if t.kind == "road" else (0.25 if t.kind == "trail" else 0.0))
+		kinds.append(kind)
+		scales.append(scale if natural_relief else 0.0)
 		starts.append(xs.size())
 		var line: Array = t.pts
 		var covering: Variant = t.surf
@@ -197,85 +171,65 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 			surf.append(covering[n])
 	starts.append(xs.size())
 	var local_routes := PackedByteArray()
-	if not _only.is_empty():
+	if not only.is_empty():
 		local_routes.resize(w.trails.size())
-		for route: int in _only: local_routes[route] = 1
-	var index: Variant = fast.RoadIndex(w.W, w.H, TILE, _reach, _heights.hv, starts, xs, ys, ws, surf, smoothing, is_road, ids, local_routes)
-	if not index is Dictionary:
-		return null
-	_cs_starts = index.starts
-	_cs_ids = index.candidates
-	_sg_a = index.a
-	_sg_delta = index.delta
-	_sg_len2 = index.len2
-	_sg_half = index.half
-	_sg_route = index.route
-	_sg_along = index.along
-	build_timings.index_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	started_us = Time.get_ticks_usec()
-	if fit_road and not _fit_network(fast):
-		return null
-	build_timings.fit_network_ms = (Time.get_ticks_usec() - started_us) / 1000.0
-	started_us = Time.get_ticks_usec()
-	var fits := PackedFloat64Array()
-	var fit_start := PackedInt32Array()
-	var fit_count := PackedInt32Array()
-	fit_start.resize(w.trails.size())
-	fit_count.resize(w.trails.size())
-	for route: int in fit_routes:
-		var fit: Dictionary = fit_routes[route]
-		fit_start[route] = fits.size()
-		fit_count[route] = fit.profile.size()
-		for j in fit.profile.size():
-			fits.append(fit.profile[j])
-			fits.append(fit.strength[j])
-			fits.append(fit.limit[j])
-	var corridor_start := PackedInt32Array()
-	var corridor_count := PackedInt32Array()
-	corridor_start.resize(w.trails.size())
-	corridor_count.resize(w.trails.size())
-	for route: int in corridor_routes:
-		var span: Vector2i = corridor_routes[route]
-		corridor_start[route] = span.x * CORRIDOR_STRIDE
-		corridor_count[route] = span.y
+		for route: int in only:
+			local_routes[route] = 1
 	var axes := PackedFloat64Array()
-	for s: Dictionary in _heights.structures:
-		axes.append(s.ax)
-		axes.append(s.az)
-		axes.append(s.bx)
-		axes.append(s.bz)
+	for s: Dictionary in heights.structures:
+		axes.append_array(PackedFloat64Array([s.ax, s.az, s.bx, s.bz]))
+	var villages := PackedFloat64Array()
+	if fit_road:
+		for village: SettlementData in w.settlements:
+			villages.append(village.x)
+			villages.append(village.y)
 	var surfaces := PackedFloat64Array()
-	for s: Dictionary in _surf:
+	for s: Dictionary in RoadSurface.LIST:
 		var color: Array = s.get("color", [0, 0, 0])
 		surfaces.append_array(PackedFloat64Array([color[0] / 255.0, color[1] / 255.0, color[2] / 255.0, s.get("rough", 0.0), s.get("organic", 0.0)]))
-	var out: Variant = fast.RoadPatches(PackedInt32Array(index.keys), w.W, w.H, TILE, DIV, _sg_a, _sg_delta, _sg_len2, _sg_half,
-		index.road, index.surf, index.next, index.ha, index.hb, _sg_along, _sg_route, _cs_starts, _cs_ids, fit_start, fit_count, fits,
-		corridor_start, corridor_count, corridor, surfaces, _heights.hv, _heights.water_level, _dist_water, _noise, _origin, axes,
-		RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN, RoadBed.PIN_FADE, _reach, _authored_routes(), _section.tread_params(),
-		local_routes)
+	var noise := FastNoiseLite.new()
+	noise.seed = w.seed_num
+	noise.frequency = 1.0
+	noise.fractal_octaves = 2
+	var settings := corridor_params() if fit_road else {}
+	var input_ms := (Time.get_ticks_usec() - started_us) / 1000.0
+	var out: Variant = fast.BuildRoadRefinement(w.W, w.H, TILE, DIV, _reach, heights.hv, heights.hv_raw, heights.water_level,
+		w.dist_water, starts, xs, ys, ws, surf, kinds, scales, ids, authored, local_routes, noise, Vector2(w.world_origin) * TILE,
+		axes, villages, surfaces, fit_road, only.is_empty() and with_gaps, settings, RoadBed.STEEP.x, RoadBed.STEEP.y, RoadBed.WATER_GAP, RoadBed.PIN,
+		RoadBed.PIN_FADE, _section.tread_params())
 	if not out is Dictionary:
-		return null
+		return false
 	patches = out.patches
+	var routes: PackedInt32Array = out.routes
+	var at: PackedInt32Array = out.starts
+	var shaped: PackedFloat32Array = out.scales
+	var points: PackedVector2Array = out.points
+	var profile: PackedFloat32Array = out.profile
+	var strength: PackedFloat32Array = out.strength
+	var limit: PackedFloat32Array = out.limit
+	corridor = out.corridor
+	for r in routes.size():
+		var from := at[r]
+		var to := at[r + 1]
+		fit_routes[routes[r]] = {points = points.slice(from, to), profile = profile.slice(from, to),
+			strength = strength.slice(from, to), limit = limit.slice(from, to)}
+		if shaped[r] > 0.0:
+			corridor_routes[routes[r]] = Vector2i(from, to - from)
+	build_timings.index_ms = input_ms + out.index_ms
+	build_timings.fit_network_ms = out.fit_network_ms
 	build_timings.native_points_ms = out.ms_points
 	build_timings.native_vertices_ms = out.ms_vertices
 	build_timings.native_assemble_ms = out.ms_assemble
 	build_timings.nearest_ms = 0.0
-	build_timings.vertex_math_ms = (Time.get_ticks_usec() - started_us) / 1000.0
+	build_timings.vertex_math_ms = out.ms_points + out.ms_vertices + out.ms_assemble
 	build_timings.vertices_ms = build_timings.vertex_math_ms
-	return self
-
-
-func _release_build_data() -> void:
-	_heights = null
-	_noise = null
-	_cs_starts = PackedInt32Array()
-	_cs_ids = PackedInt32Array()
-	_sg_a = PackedVector2Array()
-	_sg_delta = PackedVector2Array()
-	_sg_len2 = PackedFloat64Array()
-	_sg_half = PackedFloat64Array()
-	_sg_route = PackedInt32Array()
-	_sg_along = PackedFloat64Array()
+	if only.is_empty():
+		pin_coarse_edges(heights, patches, patches.keys())
+		if with_gaps and not patches.is_empty():
+			var started := Time.get_ticks_usec()
+			load("res://scripts/game/road_gaps.gd").apply(heights, self, out.gap_clear)
+			build_timings.gaps_ms = (Time.get_ticks_usec() - started) / 1000.0
+	return true
 
 
 ## Готовые патчи без пересчёта (сохранённый участок Trail Lab): height — число строк клеток мира.
@@ -284,82 +238,6 @@ static func from_patches(ready: Dictionary, height: int) -> RoadRefinement:
 	r.patches = ready
 	r._height = height
 	return r
-
-
-func _authored_routes() -> PackedByteArray:
-	var result := PackedByteArray()
-	for t: Dictionary in _heights.world.trails:
-		result.append(1 if t.has("trail_id") else 0)
-	return result
-
-
-## 4.5, 14.11: весь проход одним вызовом C# (FastGrid.RoadFitNetwork): станции через STEP метров, подгонка профиля пути
-## (оценка, расстояние до защищённых мест, профиль), защита и формы коридора всех видов путей (горные тропы — без подгонки
-## профиля). Резкий локальный перегиб требует обработки, постоянный чрезмерный уклон — другого маршрута.
-## false — C# вернул не словарь (исключение внутри).
-func _fit_network(fast: Object) -> bool:
-	_index_route_identity()
-	var w := _heights.world
-	var starts := PackedInt32Array()
-	var xs := PackedFloat64Array()
-	var ys := PackedFloat64Array()
-	var ws := PackedFloat64Array()
-	var surf := PackedInt32Array()
-	var kinds := PackedInt32Array()
-	var scales := PackedFloat32Array()
-	var ids := PackedInt32Array()
-	for route in w.trails.size():
-		var t: Dictionary = w.trails[route]
-		var kind := CORRIDOR_KINDS.find(t.kind)
-		if kind < 0 or not (_only.is_empty() or _only.has(route)):
-			continue
-		var scale := 1.0
-		if t.has("trail_id"):
-			scale = RoadTuning.current().prepared_scale if (t.get("formation", Vector3.ZERO) as Vector3).x <= 0.0 else 0.0
-		ids.append(route)
-		kinds.append(kind)
-		scales.append(scale if natural_relief else 0.0)
-		starts.append(xs.size())
-		var covering: Variant = t.surf
-		for n in t.pts.size():
-			var p: Dictionary = t.pts[n]
-			xs.append(p.x)
-			ys.append(p.y)
-			ws.append(p.w)
-			surf.append(covering[n])
-	starts.append(xs.size())
-	var axes := PackedFloat64Array()
-	for s: Dictionary in _heights.structures:
-		axes.append_array(PackedFloat64Array([s.ax, s.az, s.bx, s.bz]))
-	var villages := PackedFloat64Array()
-	for village: SettlementData in w.settlements:
-		villages.append_array(PackedFloat64Array([village.x, village.y]))
-	var out: Variant = fast.RoadFitNetwork(starts, xs, ys, ws, surf, kinds, scales, ids, w.W, w.H, TILE, STEP, _heights.hv,
-		_heights.hv_raw, _heights.water_level, _dist_water, axes, villages, _sg_a, _sg_delta, _sg_len2, _sg_half, _sg_route, _sg_along,
-		_cs_starts, _cs_ids, _route_identity, _noise, _origin, corridor_params(), _authored_routes())
-	if not out is Dictionary:
-		push_error("RoadRefinement: C# не выполнил подгонку профиля и формы коридора (исключение внутри расчёта)")
-		return false
-	var routes: PackedInt32Array = out.routes
-	var at: PackedInt32Array = out.starts
-	var fitted: PackedByteArray = out.fitted
-	var shaped: PackedFloat32Array = out.scales
-	var points: PackedVector2Array = out.points
-	var profile: PackedFloat32Array = out.profile
-	var strength: PackedFloat32Array = out.strength
-	var limit: PackedFloat32Array = out.limit
-	corridor = out.corridor
-	corridor_routes = {}
-	for r in routes.size():
-		var from := at[r]
-		var to := at[r + 1]
-		if fitted[r] != 0:
-			fit_routes[routes[r]] = {points = points.slice(from, to), profile = profile.slice(from, to),
-				strength = strength.slice(from, to), limit = limit.slice(from, to)}
-		if shaped[r] > 0.0:
-			corridor_routes[routes[r]] = Vector2i(from, to - from)
-	return true
-
 
 static var _code_version := -1
 
@@ -402,15 +280,6 @@ static func corridor_params() -> Dictionary:
 		"fade": tuning.corridor_fade, "gap": tuning.corridor_gap, "stride": CORRIDOR_STRIDE, "level_r": tuning.level_r,
 		"rhythm_span": tuning.rhythm_span,
 	}
-
-
-## 11.11.2026: каждая ось сети существует один раз (StageTrails._add_trail: участки и узлы), поэтому «тот же путь» —
-## только сам путь. Прежний поиск полных дублей по хешу линий (sha256 каждой записи при каждой сборке) больше не нужен;
-## массив остаётся входом FastGrid.RoadFitNetwork.
-func _index_route_identity() -> void:
-	_route_identity.resize(_heights.world.trails.size())
-	for route in _route_identity.size():
-		_route_identity[route] = route
 
 
 static func _bell(t: float) -> float:

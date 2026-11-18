@@ -15,7 +15,7 @@ const MAX_ATTEMPTS := 160
 const GULLY_REACH := 5.1
 
 
-static func apply(h: Heightfield, r: RoadRefinement) -> void:
+static func apply(h: Heightfield, r: RoadRefinement, gap_clear: Callable) -> void:
 	var w := h.world
 	if w.biome.size() != w.N or w.dist_water.size() != w.N:
 		return
@@ -50,13 +50,13 @@ static func apply(h: Heightfield, r: RoadRefinement) -> void:
 		if placed.any(func(p: Vector2) -> bool: return p.distance_squared_to(center) < SITE_SPACING * SITE_SPACING):
 			continue
 		var rng := WGRandom.at(seed, "shape", roundi(center.x) + w.world_origin.x * int(TILE), roundi(center.y) + w.world_origin.y * int(TILE))
-		if _place(h, r, route, points, station, rng):
+		if _place(h, r, route, points, station, rng, gap_clear):
 			placed.append(center)
 			if placed.size() >= count:
 				break
 
 
-static func _place(h: Heightfield, r: RoadRefinement, route: int, points: PackedVector2Array, station: int, rng: WGRandom) -> bool:
+static func _place(h: Heightfield, r: RoadRefinement, route: int, points: PackedVector2Array, station: int, rng: WGRandom, gap_clear: Callable) -> bool:
 	# Center the pit on a metre vertex so both lips survive the triangle sampling more evenly.
 	var center := points[station].snapped(Vector2.ONE * STEP)
 	var axis := (points[station + HALF_LENGTH] - points[station - HALF_LENGTH]).normalized()
@@ -80,7 +80,7 @@ static func _place(h: Heightfield, r: RoadRefinement, route: int, points: Packed
 	var extent := axis.abs() * HALF_LENGTH + side.abs() * (BYPASS_OFFSET + BYPASS_HALF + STEP)
 	var area := Rect2(center - extent, 2.0 * extent)
 	var cells := _cells(area.grow(STEP), 0)
-	if not _clear(h, r, route, station, center, cells):
+	if not _clear(h, center, cells) or not gap_clear.call(cells, center, route, station, APPROACH):
 		return false
 	var lip := lerpf(1.65, 1.8, rng.next_float())
 	var rise := lerpf(0.97, 1.05, rng.next_float())
@@ -111,7 +111,7 @@ static func _cells(area: Rect2, padding: int) -> Rect2i:
 	return Rect2i(first, end - first)
 
 
-static func _clear(h: Heightfield, r: RoadRefinement, route: int, station: int, center: Vector2, cells: Rect2i) -> bool:
+static func _clear(h: Heightfield, center: Vector2, cells: Rect2i) -> bool:
 	var w := h.world
 	if not Rect2i(1, 1, w.W - 3, w.H - 3).encloses(cells):
 		return false
@@ -121,24 +121,11 @@ static func _clear(h: Heightfield, r: RoadRefinement, route: int, station: int, 
 	for place: SiteData in w.sites:
 		if center.distance_to(Vector2(place.x, place.y) * TILE) < 22.0 + place.clear * TILE:
 			return false
-	var seen := {}
 	for z in range(cells.position.y, cells.end.y):
 		for x in range(cells.position.x, cells.end.x):
 			var key := z * w.W + x
 			if h._cells.has(key) or h.water_level[key] != -INF or w.dist_water[key] < 1.5:
 				return false
-			for n in range(r._cs_starts[key], r._cs_starts[key + 1]):
-				var id := r._cs_ids[n]
-				if seen.has(id):
-					continue
-				seen[id] = true
-				var delta := r._sg_delta[id]
-				var from := r._sg_a[id]
-				var t := clampf((center - from).dot(delta) / r._sg_len2[id], 0.0, 1.0)
-				if r._sg_route[id] == route and absf(r._sg_along[id] + t * delta.length() - station * STEP) <= APPROACH + 3:
-					continue
-				if center.distance_to(from + delta * t) < APPROACH + maxf(r._sg_half[2 * id], r._sg_half[2 * id + 1]):
-					return false
 	return true
 
 
