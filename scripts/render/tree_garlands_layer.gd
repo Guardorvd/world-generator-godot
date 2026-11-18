@@ -9,7 +9,9 @@ const HALO_SHADER := preload("res://resources/tree_garland_halo.gdshader")
 const NavigationSnapshot := preload("res://scripts/game/navigation_snapshot.gd")
 
 const MAX_LIGHTS := 3
-const LIGHT_RANGE := 16.5
+const LIGHT_RANGE := 13.5
+const LIGHT_SPACING := 16.0
+const LIGHT_FRUSTUM_MARGIN := 3.0
 const LIGHT_ATTENUATION := 1.35
 const LIGHT_ENERGY := 2.45
 const LIGHT_RADIUS := 78.0
@@ -44,7 +46,6 @@ var _halo_mesh: ArrayMesh
 var _lights: Array[Dictionary] = []
 # Буферы отбора якорей света: кадр за кадром переиспользуются, без новых массивов и словарей.
 var _pick_pos: Array[Vector3] = []
-var _pick_dist := PackedFloat32Array()
 var _pick_n := 0
 var _claimed: Array[bool] = []
 var _slot_target: Array[int] = []
@@ -169,7 +170,8 @@ func update(
 	draw_level: int,
 	lighting_level: int,
 	delta: float,
-	budget = null
+	deadline_usec := 0,
+	camera: Camera3D = null
 ) -> void:
 	if not _enabled:
 		return
@@ -192,9 +194,9 @@ func update(
 
 	var cam2 := Vector2(cam_pos.x, cam_pos.z)
 	var pos2 := Vector2(player_pos.x, player_pos.z)
-	_poll_pending(budget)
+	_poll_pending(deadline_usec)
 	_evict_distant(pos2, drop_r)
-	if _pending_task == -1 and (budget == null or budget.allows_work()):
+	if _pending_task == -1 and _can_stream(deadline_usec):
 		_start_nearest_pending(pos2, load_r)
 
 	var halos_on := night > 0.004
@@ -209,7 +211,7 @@ func update(
 		entry.bulbs.visible = d <= bulb_vis_r
 		entry.halos.visible = halos_on and d <= halo_vis_r
 
-	_update_lights(player_pos, fire_pos, fire_active, night, lighting_level, delta)
+	_update_lights(player_pos, fire_pos, fire_active, night, lighting_level, delta, camera)
 
 
 ## Немедленно дожидается фоновой задачи и монтирует результат (удобно для тестов).
@@ -322,12 +324,16 @@ func _ensure_light_pool() -> void:
 		})
 
 
-func _poll_pending(budget) -> void:
+static func _can_stream(deadline_usec: int) -> bool:
+	return deadline_usec == 0 or Time.get_ticks_usec() < deadline_usec
+
+
+func _poll_pending(deadline_usec: int) -> void:
 	if _pending_task == -1:
 		return
 	if not WorkerThreadPool.is_task_completed(_pending_task):
 		return
-	if budget != null and not budget.allows_work():
+	if not _can_stream(deadline_usec):
 		return
 	WorkerThreadPool.wait_for_task_completion(_pending_task)
 	_pending_task = -1
@@ -524,7 +530,16 @@ func _mute_all_lights() -> void:
 		l.visible = false
 
 
-func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, night: float, lighting_level: int, delta: float) -> void:
+static func _light_in_view(anchor: Vector3, frustum: Array[Plane]) -> bool:
+	# Свет может попадать в кадр при невидимом источнике. Проверяем его сферу с запасом на поворот камеры.
+	for plane in frustum:
+		if plane.distance_to(anchor) > LIGHT_RANGE + LIGHT_FRUSTUM_MARGIN:
+			return false
+	return true
+
+
+func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, night: float, lighting_level: int,
+		delta: float, camera: Camera3D) -> void:
 	var cap := _light_budget(lighting_level)
 	if cap <= 0 or night <= 0.01 or _loaded.is_empty():
 		for slot: Dictionary in _lights:
@@ -538,33 +553,34 @@ func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, n
 		return
 
 	_ensure_light_pool()
-	# cap ближайших к игроку якорей (cap ≤ MAX_LIGHTS) — вставкой в отсортированный буфер, без сортировки и словарей.
+	# Layout разносит опоры одного кластера. Здесь тот же зазор действует и между кластерами.
 	if _pick_pos.size() != MAX_LIGHTS:
 		_pick_pos.resize(MAX_LIGHTS)
-		_pick_dist.resize(MAX_LIGHTS)
 		_claimed.resize(MAX_LIGHTS)
 	_slot_target.resize(_lights.size())
+	var frustum: Array[Plane] = camera.get_frustum() if camera != null and camera.is_inside_tree() else []
 	_pick_n = 0
-	for cid: int in _loaded:
-		var anchors: PackedVector3Array = _loaded[cid].light_anchors
-		for a in anchors:
-			var d := a.distance_to(player_pos)
-			if d > LIGHT_RADIUS:
-				continue
-			var at := _pick_n
-			while at > 0 and _pick_dist[at - 1] > d:
-				at -= 1
-			if at >= cap:
-				continue
-			var n := mini(_pick_n + 1, cap)
-			var j := n - 1
-			while j > at:
-				_pick_pos[j] = _pick_pos[j - 1]
-				_pick_dist[j] = _pick_dist[j - 1]
-				j -= 1
-			_pick_pos[at] = a
-			_pick_dist[at] = d
-			_pick_n = n
+	for slot_index in cap:
+		var nearest := Vector3.INF
+		var nearest_d2 := LIGHT_RADIUS * LIGHT_RADIUS
+		for cid: int in _loaded:
+			var anchors: PackedVector3Array = _loaded[cid].light_anchors
+			for anchor in anchors:
+				var d2 := anchor.distance_squared_to(player_pos)
+				if d2 >= nearest_d2 or not _light_in_view(anchor, frustum):
+					continue
+				var separated := true
+				for i in _pick_n:
+					if anchor.distance_squared_to(_pick_pos[i]) < LIGHT_SPACING * LIGHT_SPACING:
+						separated = false
+						break
+				if separated:
+					nearest = anchor
+					nearest_d2 = d2
+		if not nearest.is_finite():
+			break
+		_pick_pos[slot_index] = nearest
+		_pick_n += 1
 
 	# Сначала оставляем слоты, которые уже сидят на нужных или близких якорях (гистерезис от перескока).
 	_claimed.fill(false)
@@ -572,6 +588,11 @@ func _update_lights(player_pos: Vector3, fire_pos: Vector3, fire_active: bool, n
 
 	for si in mini(cap, _lights.size()):
 		var slot: Dictionary = _lights[si]
+		if slot.has_anchor and not _light_in_view(slot.anchor, frustum):
+			# За кадром можно освободить слот сразу: новый источник появится с обычным плавным входом.
+			slot.energy = 0.0
+			slot.has_anchor = false
+			slot.pending_swap = false
 		if not slot.has_anchor:
 			continue
 		for di in _pick_n:

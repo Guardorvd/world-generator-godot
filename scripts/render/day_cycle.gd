@@ -71,6 +71,7 @@ var _fog_time := NAN
 var _air_density := 0.0
 var _clock := NAN              # часы без сброса в полночь: по ним вращаются звёзды и считаются ночи
 var _night := 0x7fffffff
+var _shader_globals := {}
 var _dark_active := true       # были ли включены ночные параметры шейдера неба на прошлом кадре
 var _last_sunlight := -1.0     # кэш sunlight для материалов рельефа
 
@@ -207,6 +208,13 @@ func _night_events(n: int) -> Dictionary:
 	return e
 
 
+func _publish_global(parameter: StringName, value: Variant) -> void:
+	if _shader_globals.get(parameter) == value:
+		return
+	_shader_globals[parameter] = value
+	RenderingServer.global_shader_parameter_set(parameter, value)
+
+
 ## В игре передаётся полный ход часов для выбора ночи. Инструменты могут задавать только час суток.
 func apply(hour: float, time: float, full_clock := false) -> void:
 	var s := state(hour)
@@ -234,8 +242,9 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	env.fog_light_color = s[2]
 	env.ambient_light_color = s[5]
 	env.ambient_light_energy = s[6]
-	VisualStyle.set_haze(s[2])
-	RenderingServer.global_shader_parameter_set("sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
+	var haze: Color = s[2]
+	_publish_global(&"style_haze", Vector3(haze.r, haze.g, haze.b))
+	_publish_global(&"sun_dir", src) # направление на светило: микротень пучков травы в terrain.gdshader
 	env.fog_sun_scatter = 0.06 + s[8] * 0.22   # низкое солнце светит сквозь дымку
 	var mist: float = s[15]
 	env.adjustment_saturation = s[13]
@@ -269,11 +278,11 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 		light.light_volumetric_fog_energy = lerpf(1.0, 0.35, overcast)
 	if env.fog_enabled:
 		var mist_wind := CLOUD_WIND * time * 0.08
-		RenderingServer.global_shader_parameter_set("mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
-		RenderingServer.global_shader_parameter_set("mist_tint", mist_tint)
+		_publish_global(&"mist_weather", Vector4(mist_wind.x, mist_wind.y, local_mist, 0.0))
+		_publish_global(&"mist_tint", mist_tint)
 	else:
 		# w = 1: туман выключен в настройках; шейдеры с fog_disabled (ореол гирлянд) не гасят себя «своей дымкой»
-		RenderingServer.global_shader_parameter_set("mist_weather", MIST_OFF)
+		_publish_global(&"mist_weather", MIST_OFF)
 	# 13.11: визуальный стиль подстраивает выдержку тонмаппера и насыщенность; база запоминается для смены стиля на паузе
 	VisualStyle.apply_day(env, s[7], lerpf(float(s[13]), 0.96, overcast))
 	light.shadow_opacity = lerpf(float(s[14]), 0.95, sunlight)
@@ -282,8 +291,9 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	env.fog_aerial_perspective = lerpf(0.24, 0.40, maxf(overcast, s[8] * 0.6))
 	# Облегчённая проекция: общие ветер, покрытие и сид; силуэты облаков приближённые.
 	var shadow_ofs := Vector2(seed_phase * 0.37, seed_phase * 0.61) * 160.0
-	RenderingServer.global_shader_parameter_set("cloud_shadow",
-		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75), cover))
+	var shadow_strength := CLOUD_SHADOW * sunlight * (1.0 - overcast * 0.75)
+	_publish_global(&"cloud_shadow", Vector4.ZERO if shadow_strength == 0.0 else
+		Vector4(CLOUD_WIND.x * time - shadow_ofs.x, CLOUD_WIND.y * time - shadow_ofs.y, shadow_strength, cover))
 	var zenith: Color = s[1]
 	sky_mat.set_shader_parameter("zenith_color", zenith.lerp(s[2], overcast * 0.45))
 	sky_mat.set_shader_parameter("horizon_color", s[2])
@@ -298,7 +308,7 @@ func apply(hour: float, time: float, full_clock := false) -> void:
 	sky_mat.set_shader_parameter("cloud_seed", seed_phase)
 	# редкие ночные явления, звёзды и фаза луны передаются только в сумерках и ночью
 	var dark := smoothstep(0.25, 0.85, s[9])
-	RenderingServer.global_shader_parameter_set("vegetation_night", dark)
+	_publish_global(&"vegetation_night", dark)
 	if s[9] > 0.001 or _dark_active:
 		sky_mat.set_shader_parameter("star_rot", hour / 24.0 * TAU)
 		sky_mat.set_shader_parameter("moon_phase", events.phase)

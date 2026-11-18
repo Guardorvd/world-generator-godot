@@ -15,6 +15,7 @@ func check(ok: bool, message: String) -> void:
 	if not ok: failures += 1
 
 func run() -> void:
+	_camera_ray_checks()
 	var c := Controls.new()
 	for i in 60:
 		c.bike_steer(1, 1.0 / 60, 10)
@@ -65,3 +66,49 @@ func run() -> void:
 	await process_frame
 	print("ride_input: ", failures, " failures")
 	quit(1 if failures else 0)
+
+
+func _camera_ray_checks() -> void:
+	var w := WorldData.new()
+	w.W = 64
+	w.H = 64
+	w.N = w.W * w.H
+	w.lake.resize(w.N)
+	w.filled.resize(w.N)
+	var h := Heightfield.new()
+	h.world = w
+	h.hv.resize(w.N)
+	var bridge := Heightfield._axis_between(Vector2(118.0, 60.0), Vector2(118.0, 120.0), false)
+	bridge.merge({ay = 0.5, by = 0.5, rails = true})
+	var tunnel := Heightfield._axis_between(Vector2(132.0, 60.0), Vector2(132.0, 120.0), true)
+	tunnel.merge({ay = 0.0, by = 0.0, rails = false})
+	h.structures = [bridge, tunnel]
+	h.index_structures()
+	var patch := PackedFloat32Array()
+	for z in RoadRefinement.STRIDE:
+		for x in RoadRefinement.STRIDE:
+			patch.append(1.0 if x == 2 else 0.0)
+	h.road_refinement = RoadRefinement.from_patches({20 * w.W + 20: {h = patch}}, w.H)
+	var controller := PlayerCameraController.new()
+	controller.heights = h
+	var distance := GameConfig.BIKE_CAM
+	var cases := {
+		"flat": [Vector3(50.0, 1.0, 80.0), Vector3.LEFT],
+		"metre patch": [Vector3(82.0, 1.16, 84.0), Vector3.LEFT],
+		"bridge rail": [Vector3(118.0, 1.9, 80.0), Vector3.LEFT],
+		"tunnel wall": [Vector3(132.0, 2.0, 80.0), Vector3.LEFT],
+		"tunnel ceiling": [Vector3(132.0, 3.7, 80.0), Vector3.DOWN],
+		"plan edge": [Vector3(3.0, 1.0, 80.0), Vector3.RIGHT],
+	}
+	var has_native := Grid.fast_grid() != null
+	for label: String in cases:
+		var ray: Array = cases[label]
+		h.native_ride = false
+		var script := controller._obstruction_distance(ray[0], ray[1], distance, 0.5)
+		h.native_ride = true
+		var native := controller._obstruction_distance(ray[0], ray[1], distance, 0.5)
+		check(native == script and (script < distance) == (label != "flat" and label != "plan edge"), "camera ray matches on " + label)
+		if has_native:
+			var hit := h.native_camera_ray_hit(ray[0], ray[1], distance, PlayerCameraController.CAM_STEPS, 0.5,
+				PlayerCameraController.CAM_PROBE_GAP, PlayerCameraController.CAM_WALL_RADIUS)
+			check((hit == -1) == (label == "plan edge"), "camera snapshot boundary on " + label)

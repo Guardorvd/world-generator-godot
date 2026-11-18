@@ -93,6 +93,7 @@ var _task := -1
 var _last := Vector2.INF
 var _last_lead := Vector2.ZERO
 var _last_forward := Vector2.UP
+var _published_forward := Vector2.INF
 var _started_clock := 0.0
 var _out: Array = []         # результат задачи: на слой — квадраты отсечения {buf, n, low, high}
 var _out_n := PackedInt32Array()
@@ -200,7 +201,7 @@ func apply_ranges() -> void:
 		mat.set_shader_parameter("detail_keep", Models.CARPET_FAR_KEEP)
 	# Тень дернины на дёрне материала земли (terrain.gdshader) — та же дальность и полоса
 	RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(r, maxf(r * FADE, 0.1)))
-	RenderingServer.global_shader_parameter_set("ground_carpet_forward", _view_forward() if directional else Vector2.ZERO)
+	_publish_forward(_view_forward() if directional else Vector2.ZERO, true)
 
 
 func busy() -> bool:
@@ -216,7 +217,7 @@ func finish() -> void:
 func release() -> void:
 	finish()
 	RenderingServer.global_shader_parameter_set("ground_carpet", Vector2(0.0, 1.0))
-	RenderingServer.global_shader_parameter_set("ground_carpet_forward", Vector2.ZERO)
+	_publish_forward(Vector2.ZERO, true)
 
 
 ## Земля в rect (клетки плана) перестроена: плитки в ней устарели.
@@ -239,29 +240,31 @@ func clear() -> void:
 
 ## Каждый кадр из VegetationLayer.update. Не блокирует: считает фоновая задача, главный поток только
 ## передаёт готовые буферы.
-func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> void:
+func update(p: Vector2, dt: float, road_revision: int, may_work := true) -> bool:
 	stream.sample(p, maxf(dt, 0.000001), false)
 	if not _enabled:
-		return
+		return false
 	var forward := _view_forward() if directional else Vector2.UP
 	if directional:
-		RenderingServer.global_shader_parameter_set("ground_carpet_forward", forward)
+		_publish_forward(forward)
+	if not may_work:
+		return false
 	if _task != -1:
 		if not WorkerThreadPool.is_task_completed(_task):
-			return
-		if not may_work:
-			return
+			return false
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		stream.record_latency(maxf(last_job_ms / 1000.0, stream.clock - _started_clock))
 		_present()
+		return true
 	var lead := stream.lead()
 	if _last != Vector2.INF and p.distance_to(_last) < STEP and lead.distance_to(_last_lead) < STEP * 2.0 \
 			and forward.dot(_last_forward) >= TURN_COS and road_revision == _road_revision:
-		return
+		return false
 	_last_forward = forward
 	_begin(p, lead, road_revision)
 	_task = WorkerThreadPool.add_task(_job.bind(p, lead, forward), true, "Дернина")
+	return false
 
 
 ## Сразу, на месте (старт, возрождение): ковёр готов в том же кадре. Дальше — update.
@@ -272,10 +275,16 @@ func build_now(p: Vector2, road_revision: int) -> void:
 		return
 	_last_forward = _view_forward() if directional else Vector2.UP
 	if directional:
-		RenderingServer.global_shader_parameter_set("ground_carpet_forward", _last_forward)
+		_publish_forward(_last_forward, true)
 	_begin(p, Vector2.ZERO, road_revision)
 	_job(p, Vector2.ZERO, _last_forward)
 	_present()
+
+
+func _publish_forward(forward: Vector2, force := false) -> void:
+	if force or forward != _published_forward:
+		_published_forward = forward
+		RenderingServer.global_shader_parameter_set("ground_carpet_forward", forward)
 
 
 func _view_forward() -> Vector2:

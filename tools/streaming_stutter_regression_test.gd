@@ -104,8 +104,9 @@ func _test_pool_and_slices() -> void:
 	var built := {chunk = Vector2i.ZERO, entries = [{kind = 0, count = 1, tbuf = buf, cbuf = cbuf, bounds = AABB(Vector3.ZERO, Vector3.ONE)}]}
 	check(not layer._apply_chunk(built, 1, Time.get_ticks_usec() + 1000000) and layer.node_stats.created == 4,
 		"one runtime tree slice creates at most four render nodes even with time to spare")
-	check(layer._apply_chunk(built, 1, Time.get_ticks_usec() + 1000000) and layer.node_stats.created == 6,
-		"resuming a partial chunk publishes its remaining LOD nodes exactly once")
+	# Дуб: два LOD ствола, три LOD кроны и два отдельных узла теней.
+	check(layer._apply_chunk(built, 1, Time.get_ticks_usec() + 1000000) and layer.node_stats.created == 7,
+		"resuming a partial chunk publishes the remaining LOD and shadow nodes exactly once")
 	var node: MultiMeshInstance3D = layer.veg[Vector3i.ZERO].nodes[0]
 	var id := node.get_instance_id()
 	layer._trash_node(node)
@@ -145,6 +146,12 @@ func _test_deadlines() -> void:
 		"terrain rechecks the common deadline after preparation and defers GPU publication")
 	check(terrain.update(0.0, 0.0, true) and terrain.nodes.size() == 1, "forced spawn publication still bypasses runtime deadline")
 	terrain.free()
+	var outer := OuterTerrain.new()
+	budget.deadline_usec = Time.get_ticks_usec() - 1
+	outer.frame_budget = budget
+	check(not outer.update(0.0, 0.0) and outer._checked_at == Vector2.INF and outer._tasks.is_empty(),
+		"expired shared deadline defers outer queue refresh and launches")
+	outer.free()
 	var scheduler := WorldStreamCoordinator.new()
 	var flags := []
 	scheduler.vegetation_budgeted = func(_x: float, _z: float, _force: bool, allow: bool) -> bool:
@@ -154,5 +161,12 @@ func _test_deadlines() -> void:
 	scheduler.terrain_update = func(_x: float, _z: float, _force: bool, allow: bool) -> bool:
 		flags.append(allow)
 		return false
-	scheduler.update(Vector3.ZERO)
-	check(flags == [true, false] and scheduler.frame_budget.deadline_usec == 0, "an indivisible overrun denies later uploads and deadline ends with its frame")
+	var spare := scheduler.update(Vector3.ZERO)
+	check(flags == [true, false] and spare == -1 and scheduler.frame_budget.deadline_usec == 0,
+		"an indivisible overrun denies later uploads including decor")
+	var within_budget := WorldStreamCoordinator.new()
+	check(within_budget.publication_budget_us == 2000, "runtime stream uses a 2 ms publication deadline")
+	within_budget.publication_budget_us = 100000
+	check(within_budget.update(Vector3.ZERO) > Time.get_ticks_usec(), "unused publication time is available to decor")
+	within_budget.region_update = func(_x: float, _z: float) -> bool: return true
+	check(within_budget.update(Vector3.ZERO) == -1, "normal-priority region publication consumes the decor slot")

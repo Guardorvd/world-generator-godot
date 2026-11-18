@@ -75,13 +75,15 @@ func preload_around(x: float, z: float, radius: float = RADIUS) -> void:
 
 ## Каждый кадр: забрать готовые куски, выгрузить дальние, запустить расчёт ближайших недостающих
 func update(x: float, z: float, allow_apply: bool = true) -> bool:
+	if not _within_frame_budget():
+		return false
 	var applied := false
 	# Не более одного готового куска за кадр, без временного массива ключей каждый кадр.
 	var done: Variant = null
 	var completed := {}
 	for key: Vector2i in _tasks:
 		var t: Dictionary = _tasks[key]
-		if allow_apply and (frame_budget == null or frame_budget.allows_work()) and WorkerThreadPool.is_task_completed(t.id):
+		if allow_apply and _within_frame_budget() and WorkerThreadPool.is_task_completed(t.id):
 			WorkerThreadPool.wait_for_task_completion(t.id)
 			done = key
 			# При переносе игрока результат старого запроса уже может оказаться слишком далеко.
@@ -101,6 +103,9 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 				_redo.append(done)
 			else:
 				_checked_at = Vector2.INF
+	# Пересчёт очереди и запуск задач тоже работают на главном потоке.
+	if not _within_frame_budget():
+		return applied
 	if Vector2(x, z).distance_to(_checked_at) > RECHECK:
 		_checked_at = Vector2(x, z)
 		for key: Vector2i in _nodes.keys():
@@ -114,14 +119,14 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 			if not _nodes.has(key) and not _tasks.has(key):
 				_queue.append(key)
 		_queue.reverse()
-	while _tasks.size() < _task_limit and not _redo.is_empty():
+	while _tasks.size() < _task_limit and not _redo.is_empty() and _within_frame_budget():
 		var key: Vector2i = _redo.pop_back()
 		if not _nodes.has(key) or _tasks.has(key):
 			continue
 		var out := {}
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
-	while _tasks.size() < _task_limit and not _queue.is_empty():
+	while _tasks.size() < _task_limit and not _queue.is_empty() and _within_frame_budget():
 		var key: Vector2i = _queue.pop_back()
 		if _nodes.has(key):
 			continue # уже загружен сразу (preload_around)
@@ -130,6 +135,10 @@ func update(x: float, z: float, allow_apply: bool = true) -> bool:
 		var id := WorkerThreadPool.add_task(func() -> void: out.r = _build(key), false)
 		_tasks[key] = {id = id, out = out}
 	return applied
+
+
+func _within_frame_budget() -> bool:
+	return frame_budget == null or frame_budget.allows_work()
 
 
 ## 13.9: область rect (клетки) закреплена — её куски пересчитываются. Старый кусок остаётся,

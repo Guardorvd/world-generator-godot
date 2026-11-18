@@ -11,6 +11,8 @@ const RUSH_DIST := 0.7          # на полной скорости камер�
 const RUSH_RESPONSE := 2.5      # как быстро нарастает ощущение скорости
 const CAM_MIN_DIST := 1.2       # ближе к седоку камера не подходит, даже у стены
 const CAM_STEP := 0.3           # шаг проверки препятствий между седоком и камерой
+const CAM_PROBE_GAP := 0.3
+const CAM_WALL_RADIUS := 0.25
 const CAM_CLOSE := 22.0        # как быстро камера подходит ближе при небольшом препятствии
 const CAM_SNAP := 0.45          # а если надо подойти ближе, чем на столько, — сразу (стена)
 const CAM_RETURN := 3.0         # как быстро камера отходит обратно после стены
@@ -66,13 +68,24 @@ var _tick_yaw := 0.0    # насколько последний такт пов�
 var _tick_pitch := 0.0  # кадр доворачивает этот поворот плавно, а мышь — сразу
 
 func _cam_blocked(p: Vector3, feet: float) -> bool:
-	if p.y < heights.surface_at(p.x, p.z, p.y) + 0.3:
+	if p.y < heights.surface_at(p.x, p.z, p.y) + CAM_PROBE_GAP:
 		return true
-	if p.y > heights.ceiling_at(p.x, p.z, feet) - 0.3:
+	if p.y > heights.ceiling_at(p.x, p.z, feet) - CAM_PROBE_GAP:
 		return true # свод туннеля, в котором едет седок
 	# перила и стены: на высоте глаз (чуть выше ног) стена на пути камеры закрывает обзор;
 	# камера держится в 0,25 м от них, чтобы ближняя плоскость отсечения не заглядывала за стену
-	return heights.wall_at(p.x, p.z, p.y - 1.0, 0.25)
+	return heights.wall_at(p.x, p.z, p.y - 1.0, CAM_WALL_RADIUS)
+
+
+func _obstruction_distance(target: Vector3, dir: Vector3, desired: float, feet: float) -> float:
+	var steps := maxi(CAM_STEPS, ceili(desired / CAM_STEP))
+	var hit := heights.native_camera_ray_hit(target, dir, desired, steps, feet, CAM_PROBE_GAP, CAM_WALL_RADIUS)
+	if hit == -1:
+		for k in range(1, steps + 1):
+			if _cam_blocked(target - dir * (desired * k / steps), feet):
+				hit = k
+				break
+	return maxf(CAM_MIN_DIST, desired * (hit - 1) / steps) if hit >= 1 and hit <= steps else desired
 
 
 func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
@@ -112,14 +125,7 @@ func update(alpha: float, dt: float, player: PlayerState, bike: BikeRide,
 		var target := Vector3(pos.x, _cam_y + dip - BRAKE_DIP * _brake_feel, pos.z)
 		var dir := Vector3(-sin(view_yaw) * cos(view_pitch), sin(view_pitch), -cos(view_yaw) * cos(view_pitch))
 		var desired_dist := GameConfig.BIKE_CAM + _speed_rush * RUSH_DIST - BRAKE_DIST * _brake_feel
-		var dist := desired_dist
-		var steps := maxi(CAM_STEPS, ceili(desired_dist / CAM_STEP))
-		# шаг проверки 0,3 м: тоньше перил и стен с запасом камеры, их не перешагнуть
-		for k in range(1, steps + 1):
-			var p := target - dir * (desired_dist * k / steps)
-			if _cam_blocked(p, pos.y):
-				dist = maxf(CAM_MIN_DIST, desired_dist * (k - 1) / steps)
-				break
+		var dist := _obstruction_distance(target, dir, desired_dist, pos.y)
 		# ближе — сразу, дальше — плавно, чтобы камера не прыгала за каждым бугром
 		# малое сближение (бугор, куст у луча) — быстро, но плавно: камера не дёргается; у стены — сразу
 		if dist >= _cam_dist:

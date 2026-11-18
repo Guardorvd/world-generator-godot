@@ -12,7 +12,7 @@ var region_update: Callable
 var region_restore: Callable
 const MAX_REGION_WAIT := 8
 var _region_wait := 0
-var publication_budget_us := 2500
+var publication_budget_us := 2000
 var frame_budget := preload("res://scripts/render/stream_frame_budget.gd").new()
 var _turn := 0
 var stats := {frames = 0, elapsed_us = 0, max_us = 0, over_budget = 0, grants = [0, 0, 0],
@@ -36,14 +36,15 @@ func force_terrain(pos: Vector3, radius: float) -> void:
 func force_vegetation(pos: Vector3) -> void:
 	vegetation_update.call(pos.x, pos.z, true)
 
-func update(pos: Vector3) -> void:
+## Остаток того же срока можно отдать необязательным декорациям. -1 — кадр уже занят.
+func update(pos: Vector3) -> int:
 	var started := Time.get_ticks_usec()
 	stats.group_last_us.fill(0)
 	frame_budget.deadline_usec = started + publication_budget_us
 	var uploaded := false
 	var region_ticked := false
 	# Длинная очередь леса не должна лишать соседние области возможности начать/закончить подготовку.
-	if (_region_wait >= MAX_REGION_WAIT or (region_priority.is_valid() and region_priority.call())) and region_update.is_valid():
+	if (_region_wait >= MAX_REGION_WAIT or (region_priority.is_valid() and region_priority.call())) and region_update.is_valid() and frame_budget.allows_work():
 		var began := Time.get_ticks_usec()
 		uploaded = region_update.call(pos.x, pos.z)
 		_record_group(4, began)
@@ -54,7 +55,7 @@ func update(pos: Vector3) -> void:
 	# Rotate first opportunity. Housekeeping still runs with allow=false after budget exhaustion.
 	for offset in 3:
 		var group := (_turn + offset) % 3
-		var allow := not uploaded and Time.get_ticks_usec() - started < publication_budget_us
+		var allow := not uploaded and frame_budget.allows_work()
 		var changed := false
 		var began := Time.get_ticks_usec()
 		if group == 0:
@@ -68,13 +69,14 @@ func update(pos: Vector3) -> void:
 	_turn = (_turn + 1) % 3
 	if outer_update.is_valid():
 		var began := Time.get_ticks_usec()
-		uploaded = bool(outer_update.call(pos.x, pos.z, not uploaded and Time.get_ticks_usec() - started < publication_budget_us)) or uploaded
+		uploaded = bool(outer_update.call(pos.x, pos.z, not uploaded and frame_budget.allows_work())) or uploaded
 		_record_group(3, began)
 	if not region_ticked:
-		if not uploaded and region_update.is_valid() and Time.get_ticks_usec() - started < publication_budget_us:
+		if not uploaded and region_update.is_valid() and frame_budget.allows_work():
 			_region_wait = 0
 			var began := Time.get_ticks_usec()
-			if region_update.call(pos.x, pos.z):
+			uploaded = region_update.call(pos.x, pos.z)
+			if uploaded:
 				region_committed.emit()
 			_record_group(4, began)
 		else:
@@ -84,4 +86,6 @@ func update(pos: Vector3) -> void:
 	stats.elapsed_us += elapsed
 	stats.max_us = maxi(stats.max_us, elapsed)
 	stats.over_budget += int(elapsed > publication_budget_us)
+	var spare := frame_budget.deadline_usec if not uploaded and elapsed < publication_budget_us else -1
 	frame_budget.deadline_usec = 0
+	return spare

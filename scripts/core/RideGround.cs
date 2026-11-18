@@ -227,6 +227,47 @@ public partial class RideGround : RefCounted
 		return Max(GroundIn(s, x, z), DeckIn(s, x, z, feet));
 	}
 
+	/// <summary>First blocked point on the same discrete ray as PlayerCameraController, or -1 outside the snapshot.</summary>
+	public int CameraRayHit(Vector3 target, Vector3 direction, double distance, int steps, double feet, double gap, double wallRadius)
+	{
+		var s = Volatile.Read(ref _snap);
+		if (s == null)
+			return -1;
+		for (int k = 1; k <= steps; k++)
+		{
+			Vector3 p = target - direction * (float)(distance * k / steps);
+			if (!Inside(s, p.X, p.Z))
+				return -1;
+			double y = p.Y;
+			if (y < Max(GroundIn(s, p.X, p.Z), DeckIn(s, p.X, p.Z, y)) + gap
+				|| y > CeilingIn(s, p.X, p.Z, feet) - gap || WallIn(s, p.X, p.Z, y - 1.0, wallRadius))
+				return k;
+		}
+		return steps + 1;
+	}
+
+	private static double CeilingIn(Snapshot s, double x, double z, double feet)
+	{
+		int cell = (int)Math.Floor(z / s.Tile) * s.W + (int)Math.Floor(x / s.Tile);
+		double top = double.PositiveInfinity;
+		var g = s.Geo;
+		for (int n = s.StructStart[cell]; n < s.StructStart[cell + 1]; n++)
+		{
+			int k = s.StructOf[n];
+			if (!s.Tunnel[k])
+				continue;
+			int o = k * GeoStride;
+			double dx = x - g[o], dz = z - g[o + 1];
+			double t = dx * g[o + 8] + dz * g[o + 9];
+			if (t < 0.0 || t > g[o + 7] || Math.Abs(dx * g[o + 9] - dz * g[o + 8]) > g[o + 6] + TunnelWall)
+				continue;
+			double floor = Level(s, k, t);
+			if (feet >= floor - Step && feet < floor + TunnelHeight)
+				top = Math.Min(top, floor + TunnelHeight);
+		}
+		return top;
+	}
+
 	private static double WaterTriangle(double x, double z, double ax, double ay, double az,
 		double bx, double by, double bz, double cx, double cy, double cz)
 	{

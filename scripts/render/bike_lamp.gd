@@ -1,14 +1,15 @@
 extends Node3D
 ## Корпус, стекло и свет фары. Не зависит от физики велосипеда.
-const LAMP_TILT := 0.045
+const LAMP_TILT := 0.09
 const BEAM_LENGTH := 9.0 # длина видимого луча (м)
 const BEAM_RADIUS := 2.0 # его радиус на дальнем конце (м)
 var _enabled := false
 var _lens_on: StandardMaterial3D
 var _lens_off: StandardMaterial3D
 var _lens: MeshInstance3D
-var _lights: Array[Light3D] = []
+var _beam: SpotLight3D
 var _beam_mesh: MeshInstance3D
+var _halo: MeshInstance3D
 
 
 func _ready() -> void:
@@ -56,52 +57,34 @@ func _ready() -> void:
 	_lens.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_lens.position = Vector3(0.0, 0.0, -0.044)
 	add_child(_lens)
-	# 12.4: свет рассеянный, без чётких краёв: большое spot_angle_attenuation (4) — яркость плавно падает
-	# от середины пятна и у края конуса уже почти нулевая, граница не видна. Конусы шире, чтобы пятно не сжалось
-	var beam := SpotLight3D.new()
-	beam.light_volumetric_fog_energy = 0.0
-	beam.name = "Beam"
-	beam.light_color = Color(1.0, 0.93, 0.8)
-	beam.light_energy = 18.0
-	beam.light_specular = 0.2
-	beam.spot_range = 55.0
-	beam.spot_attenuation = 0.45
-	beam.spot_angle = 40.0
-	beam.spot_angle_attenuation = 4.0
-	beam.shadow_enabled = false
-	beam.position = Vector3(0.0, 0.0, -0.05)
-	beam.rotation = Vector3(-LAMP_TILT, 0.0, 0.0)
-	add_child(beam)
-	_lights.append(beam)
-	# Ближняя заливка: рассеивает пятно под колесом и переход к темноте по бокам
-	var flood := SpotLight3D.new()
-	flood.light_volumetric_fog_energy = 0.0
-	flood.name = "Flood"
-	flood.light_color = Color(1.0, 0.9, 0.76)
-	flood.light_energy = 2.6
-	flood.light_specular = 0.08
-	flood.spot_range = 18.0
-	flood.spot_attenuation = 0.9
-	flood.spot_angle = 75.0
-	flood.spot_angle_attenuation = 4.0
-	flood.shadow_enabled = false
-	flood.position = Vector3(0.0, 0.0, -0.05)
-	flood.rotation = Vector3(-0.22, 0.0, 0.0)
-	add_child(flood)
-	_lights.append(flood)
-	# Ореол вокруг фары: слабый свет на руль, колесо и землю рядом — свет не только впереди
-	var halo := OmniLight3D.new()
-	halo.light_volumetric_fog_energy = 0.0
-	halo.name = "Halo"
-	halo.light_color = Color(1.0, 0.9, 0.76)
-	halo.light_energy = 0.35
-	halo.light_specular = 0.0
-	halo.omni_range = 3.0
-	halo.omni_attenuation = 1.6
-	halo.shadow_enabled = false
-	halo.position = Vector3(0.0, 0.0, -0.12)
-	add_child(halo)
-	_lights.append(halo)
+	# Один конус освещает дорогу и ближнюю обочину. Рассеяние у стекла рисуется отдельно.
+	_beam = SpotLight3D.new()
+	_beam.name = "Beam"
+	_beam.light_volumetric_fog_energy = 0.0
+	_beam.light_color = Color(1.0, 0.93, 0.8)
+	_beam.light_energy = 19.0
+	_beam.light_specular = 0.2
+	_beam.spot_range = 55.0
+	_beam.spot_attenuation = 0.45
+	_beam.spot_angle = 47.0
+	_beam.spot_angle_attenuation = 5.0
+	_beam.shadow_enabled = false
+	_beam.position = Vector3(0.0, 0.0, -0.05)
+	_beam.rotation = Vector3(-LAMP_TILT, 0.0, 0.0)
+	add_child(_beam)
+
+	_halo = MeshInstance3D.new()
+	_halo.name = "LensHalo"
+	var halo_quad := QuadMesh.new()
+	halo_quad.size = Vector2(0.36, 0.36)
+	var halo_mat := ShaderMaterial.new()
+	halo_mat.shader = preload("res://resources/lamp_lens_halo.gdshader")
+	_halo.mesh = halo_quad
+	_halo.material_override = halo_mat
+	_halo.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_halo.extra_cull_margin = 0.2 # шейдер поворачивает квад к камере
+	_halo.position = Vector3(0.0, 0.0, -0.052)
+	add_child(_halo)
 	# Видимый луч в воздухе: мягкий конус дымки (resources/lamp_beam.gdshader)
 	var cone := CylinderMesh.new()
 	cone.top_radius = BEAM_RADIUS
@@ -128,8 +111,9 @@ func _ready() -> void:
 
 func set_enabled(on: bool) -> void:
 	_enabled = on
-	for light in _lights:
-		light.visible = on
+	if is_instance_valid(_beam):
+		_beam.visible = on
+		_halo.visible = on
 	if is_instance_valid(_beam_mesh):
 		_beam_mesh.visible = on
 	if is_instance_valid(_lens):

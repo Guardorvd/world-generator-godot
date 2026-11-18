@@ -186,10 +186,10 @@ func run(finish := true) -> void:
 	reset()
 	bike.set_lamp(true)
 	check(bike.lamp_on(), "Lamp enabled")
-	check(bike.lamp.get_node("Beam").visible and bike.lamp.get_node("Flood").visible, "Both lamp beams enabled")
+	check(bike.lamp.get_node("Beam").visible and bike.lamp.get_node("LensHalo").visible, "Lamp beam and lens halo enabled")
 	bike.set_lamp(false)
 	check(not bike.lamp_on(), "Lamp disabled")
-	check(not bike.lamp.get_node("Beam").visible and not bike.lamp.get_node("Flood").visible, "Both lamp beams disabled")
+	check(not bike.lamp.get_node("Beam").visible and not bike.lamp.get_node("LensHalo").visible, "Lamp beam and lens halo disabled")
 	state.x += 2.0
 	bike.tick(state)
 	bike.draw(-1)

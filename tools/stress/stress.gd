@@ -1056,14 +1056,14 @@ func _look(_t: float, dt: float, v: Dictionary) -> void:
 	game.camera.look_at_from_position(v.pos, v.target, Vector3.UP)
 	game.hour = hour
 	game.day.apply(hour, clock)
-	game.stream_coordinator.update(v.pos)
+	var decor_deadline := game.stream_coordinator.update(v.pos)
 	if not _quiet_particles:
 		game.ambient.update(dt, v.pos, game.day.sunlight)
 		game.local_mist.update(v.pos, dt)
 	if game._ocean != null:
 		game._ocean.position = Vector3(v.pos.x, 0.0, v.pos.z)
 	if _night_lights:
-		game.update_lights(v.pos, v.pos, clock, dt) # 15.1: на паузе не было ни костров, ни окон, ни гирлянд
+		game.update_lights(v.pos, v.pos, clock, dt, decor_deadline) # 15.1: на паузе не было ни костров, ни окон, ни гирлянд
 
 
 func _ride(t: float, dt: float, speed: float) -> void:

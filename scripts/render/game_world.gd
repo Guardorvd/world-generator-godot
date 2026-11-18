@@ -837,7 +837,7 @@ func travel_active() -> bool:
 
 
 ## Костры, ночные окна, свет ближайшего костра и гирлянды. Зовёт и tools/stress на паузе (там нет _process).
-func update_lights(pos: Vector3, eye: Vector3, fire_time: float, delta: float) -> void:
+func update_lights(pos: Vector3, eye: Vector3, fire_time: float, delta: float, stream_deadline := 0) -> void:
 	SettlementsBuilder.animate_fires(fires, fire_time, pos)
 	if regions != null:
 		SettlementsBuilder.animate_fires(regions.fires, fire_time, pos)
@@ -847,8 +847,7 @@ func update_lights(pos: Vector3, eye: Vector3, fire_time: float, delta: float) -
 		var fire_on := fire_light != null and fire_light.visible
 		var fire_pos := fire_light.global_position if fire_on else Vector3.ZERO
 		garlands.update(pos, eye, fire_pos, fire_on, garland_night,
-			services.settings.draw, services.settings.lighting, delta,
-			stream_coordinator.frame_budget if stream_coordinator != null else null)
+			services.settings.draw, services.settings.lighting, delta, stream_deadline, camera)
 
 
 func travel_to(place: Dictionary) -> void:
@@ -1420,12 +1419,12 @@ func _process(delta: float) -> void:
 
 	if ambient != null:
 		ambient.update(delta, camera.global_position, day.sunlight)
-	stream_coordinator.update(pos)
+	var decor_deadline := stream_coordinator.update(pos)
 	t0 = _tick_mark("frame_stream", t0)
 	local_mist.update(camera.global_position, delta)
 	if _ocean != null:
 		_ocean.position = Vector3(pos.x, 0.0, pos.z)
-	update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta)
+	update_lights(pos, camera.global_position, lerpf(_prev_time, time, _clock_frame_alpha), delta, decor_deadline)
 	audio.update(pos, bike.speed if bike.riding else 0.0, bike.riding and not bike.airborne, delta, bike.lean if bike.riding else 0.0, bike.crank if bike.riding else 0.0, _bike_skid_sound() if bike.riding else 0.0)
 
 	info_timer -= delta

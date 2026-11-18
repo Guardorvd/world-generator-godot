@@ -659,8 +659,9 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 	phase_stats.last_us.fill(0)
 	var p := Vector2(px, pz)
 	var dt := delta if delta >= 0.0 else get_process_delta_time()
+	if force or p != stream.previous:
+		RenderingServer.global_shader_parameter_set("veg_center", p)
 	stream.sample(p, maxf(dt, 0.000001), force)
-	RenderingServer.global_shader_parameter_set("veg_center", p)
 	RenderingServer.global_shader_parameter_set("vegetation_clock", stream.clock)
 	_clean_retired()
 	if force or frame_budget == null or frame_budget.allows_work():
@@ -685,9 +686,9 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		_apply_grass(true)
 		_refresh_details = false # the initial snapshot already includes these trees
 		return true
-	if carpet != null:
-		carpet.update(p, dt, _road_revision, allow_upload and (frame_budget == null or frame_budget.allows_work()))
 	var uploaded := false
+	if carpet != null:
+		uploaded = carpet.update(p, dt, _road_revision, allow_upload and (frame_budget == null or frame_budget.allows_work()))
 	if (frame_budget == null or frame_budget.allows_work()) and _tree_task != -1 and WorkerThreadPool.is_task_completed(_tree_task):
 		WorkerThreadPool.wait_for_task_completion(_tree_task)
 		_tree_task = -1
@@ -699,7 +700,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 				_queued.erase(built.chunk)
 		_built = []
 	phase_started = _record_phase(1, phase_started)
-	if allow_upload and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
+	if allow_upload and not uploaded and (frame_budget == null or frame_budget.allows_work()) and _task != -1 and WorkerThreadPool.is_task_completed(_task):
 		WorkerThreadPool.wait_for_task_completion(_task)
 		_task = -1
 		stream.record_latency(maxf(_detail_seconds, stream.clock - _detail_started_clock))
@@ -708,7 +709,7 @@ func update(px: float, pz: float, force: bool, delta := -1.0, allow_upload := tr
 		else:
 			last_fill = Vector2.INF
 			_detail_frames.clear()
-	if allow_upload and not _present.is_empty():
+	if allow_upload and not uploaded and not _present.is_empty():
 		if frame_budget == null or frame_budget.allows_work():
 			_present_next(Time.get_ticks_usec() + DETAIL_UPLOAD_US if frame_budget == null else frame_budget.deadline(DETAIL_UPLOAD_US))
 			uploaded = true

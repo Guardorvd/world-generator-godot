@@ -76,8 +76,7 @@ func run() -> void:
 	_geography_checks(world, day)
 	var lamp := preload("res://scripts/render/bike_lamp.gd").new()
 	root.add_child(lamp)
-	for light: Light3D in lamp._lights:
-		check(light.light_volumetric_fog_energy == 0.0, "moving lamp has no volumetric trails")
+	check(lamp._beam.light_volumetric_fog_energy == 0.0, "moving lamp has no volumetric trails")
 	quit(1 if failures else 0)
 
 func _streaming_checks(world: WorldData, day: DayCycle) -> void:

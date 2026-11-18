@@ -796,6 +796,15 @@ func surface_at(x: float, z: float, feet: float) -> float:
 	return maxf(ground_at(x, z), deck_at(x, z, feet))
 
 
+## Первая проба, которую блокирует рельеф или сооружение. -1 — нужен полный путь GDScript.
+func native_camera_ray_hit(target: Vector3, direction: Vector3, distance: float, steps: int, feet: float,
+		gap: float, wall_radius: float) -> int:
+	if not native_ride or verify_native_ride:
+		return -1
+	var ride := _ride_ground()
+	return ride.CameraRayHit(target, direction, distance, steps, feet, gap, wall_radius) if ride != null else -1
+
+
 ## Свод туннеля над точкой (x, z) для ног на высоте feet (ноги внутри туннеля) или INF
 func ceiling_at(x: float, z: float, feet: float) -> float:
 	var list: Variant = _cell_list(x, z)
