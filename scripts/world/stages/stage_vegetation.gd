@@ -59,7 +59,11 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 	w.CS = WorldData.CHUNK_SIZE
 	w.CW = ceili(float(W) / w.CS)
 	w.CH = ceili(float(H) / w.CS)
-	var f := fields(w)
+	var bypasses: Array = []
+	if surface != null and surface.road_refinement != null:
+		for gap: Dictionary in surface.road_refinement.gaps:
+			bypasses.append(gap.bypass)
+	var f := fields(w, bypasses)
 	if surface != null:
 		f.massifs = RockMassif.seated(f.massifs, surface)
 	# С 8.4 каждый чанк раскладывается сам по себе (см. place_chunk), тем же кодом, что и чанки за краем карты.
@@ -111,7 +115,7 @@ static func run(w: WorldData, surface: Heightfield = null) -> void:
 
 
 ## Поля стартовой области для place_chunk (stride W, угол 0, 0)
-static func fields(w: WorldData) -> Dictionary:
+static func fields(w: WorldData, bypasses: Array = []) -> Dictionary:
 	var started := Time.get_ticks_usec()
 	var W := w.W
 	var H := w.H
@@ -125,7 +129,8 @@ static func fields(w: WorldData) -> Dictionary:
 	var moist := w.moist
 	var forest := w.noise_field("forest")
 	var stony := w.noise_field("cost") # тот же шум, что и у стоимости троп: россыпи валунов пятнами
-	var dist_path := path_clearance(W, H, w.trails, w.tunnels)
+	var lines := w.trails if bypasses.is_empty() else w.trails + bypasses
+	var dist_path := path_clearance(W, H, lines, w.tunnels)
 	# Окрестности поселений (квадрат ±7 клеток) и клетки под домами
 	var village := PackedByteArray()
 	village.resize(N)

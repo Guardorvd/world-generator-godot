@@ -37,6 +37,7 @@ const SHARED := 0.5            # (прежний порог дублей сет�
 static var natural_relief := true # false — без форм коридора (сравнение было/стало в стендах)
 
 var patches := {}  # uv: across, surface + 0.25 for singletrack (round gives the material). Physics uses surface separately.
+var gaps: Array[Dictionary] = [] # Sparse final-surface features and their vegetation clearance lines.
 var fit_routes := {} # маршрут -> метровые points, profile, strength, limit; горные тропы остаются прежними
 var corridor := PackedFloat64Array() # формы коридора всех путей подряд, по CORRIDOR_STRIDE на станцию
 var corridor_routes := {} # маршрут -> Vector2i(первая станция в corridor, число станций)
@@ -69,7 +70,7 @@ var _route_identity := PackedInt32Array() # exact complete natural routes only; 
 ## 16.11.2026: индекс, подгонка, формы коридора и патчи — только на C# (FastGrid.RoadIndex, RoadFitNetwork, RoadPatches),
 ## в том числе при only. Без C# или при ошибке внутри него — сообщение и пустая сетка (патчей нет, дороги без метровой сетки).
 ## w.outer не учитывается (в игре сетка строится до подключения OuterLand, в Trail Lab его нет).
-static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRefinement:
+static func build(heights: Heightfield, fit_road := true, only := {}, with_gaps := false) -> RoadRefinement:
 	var r := RoadRefinement.new()
 	r._heights = heights
 	r._height = heights.world.H
@@ -96,7 +97,13 @@ static func build(heights: Heightfield, fit_road := true, only := {}) -> RoadRef
 	if built == null:
 		push_error("RoadRefinement: C# не построил метровую сетку (исключение внутри расчёта)")
 		return from_patches({}, r._height)
-	if only.is_empty(): pin_coarse_edges(heights, built.patches, built.patches.keys())
+	if only.is_empty():
+		pin_coarse_edges(heights, built.patches, built.patches.keys())
+		if with_gaps and not built.patches.is_empty():
+			var started := Time.get_ticks_usec()
+			load("res://scripts/game/road_gaps.gd").apply(heights, built)
+			built.build_timings.gaps_ms = (Time.get_ticks_usec() - started) / 1000.0
+	built._release_build_data()
 	built._drop_mountain_fits(heights.world)
 	return built
 
@@ -255,6 +262,10 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	build_timings.nearest_ms = 0.0
 	build_timings.vertex_math_ms = (Time.get_ticks_usec() - started_us) / 1000.0
 	build_timings.vertices_ms = build_timings.vertex_math_ms
+	return self
+
+
+func _release_build_data() -> void:
 	_heights = null
 	_noise = null
 	_cs_starts = PackedInt32Array()
@@ -265,7 +276,6 @@ func _build_native(fast: Object, fit_road: bool) -> RoadRefinement:
 	_sg_half = PackedFloat64Array()
 	_sg_route = PackedInt32Array()
 	_sg_along = PackedFloat64Array()
-	return self
 
 
 ## Готовые патчи без пересчёта (сохранённый участок Trail Lab): height — число строк клеток мира.

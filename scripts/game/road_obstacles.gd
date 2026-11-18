@@ -285,6 +285,10 @@ func _pick(h: Heightfield, surface: Image, route: int, n: int, decisions: Varian
 	var dir := (b - a) / length
 	var side := Vector2(-dir.y, dir.x)
 	var mid := (a + b) * 0.5
+	if h.road_refinement != null:
+		for gap: Dictionary in h.road_refinement.gaps:
+			if gap.area.grow(4.0).has_point(mid):
+				return _reject(decisions, "gap_approach")
 	var i := floori(mid.x / TILE)
 	var j := floori(mid.y / TILE)
 	var inside := i >= 0 and j >= 0 and i < world.W and j < world.H

@@ -139,7 +139,7 @@ func gap_profile(along: float) -> float:
 	var knuckle := lip + gap
 	var land := height * GAP_LAND
 	var pit := height * GAP_PIT
-	var kicker := height * pow(clampf(along / lip, 0.0, 1.0), 2.0) if along <= lip else lerpf(height, pit, smoothstep(lip, lip + GAP_FACE, along))
+	var kicker := gap_kicker(along, lip, height) if along <= lip else lerpf(height, pit, smoothstep(lip, lip + GAP_FACE, along))
 	if along > knuckle: kicker = 0.0 # the pit floor ends under the landing; past it only the landing backside counts
 	var landing := lerpf(pit, land, smoothstep(knuckle - GAP_FACE, knuckle, along)) if along > lip else 0.0
 	if along > knuckle + GAP_KNUCKLE:
@@ -153,6 +153,11 @@ func gap_profile(along: float) -> float:
 		if tail > 0.0: drop -= grade * tail * tail / (2.0 * GAP_EASE)
 		landing = maxf(0.0, land - drop)
 	return maxf(kicker, landing)
+
+## Concave approach, mirrored for a jump that can be ridden in both directions.
+static func gap_kicker(along: float, lip: float, rise: float) -> float:
+	return rise * pow(clampf(along / lip, 0.0, 1.0), 2.0)
+
 
 ## GAP: distance from the element start to the lip, m (the concave face reaches GAP_LIP there).
 func gap_lip() -> float:

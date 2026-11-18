@@ -8,6 +8,7 @@ static func capture(h: Heightfield, stage: String) -> Dictionary:
 		hv = h.hv, hv_raw = h.hv_raw, water_level = h.water_level, ribbons = h.ribbons.duplicate(true),
 		structures = h.structures.duplicate(true), decks = h._deck_keys.duplicate(),
 		patches = r.patches.duplicate(true) if r != null else {},
+		gaps = r.gaps.duplicate(true) if r != null else [],
 		shaping = r.trail_shaping.duplicate(true) if r != null else {},
 		baked = r.trail_elements_baked if r != null else false}
 
@@ -25,6 +26,7 @@ static func restore(w: WorldData, data: Dictionary, stage: String) -> Heightfiel
 	h.index_structures()
 	if stage == "final":
 		h.road_refinement = RoadRefinement.from_patches(data.patches, w.H)
+		h.road_refinement.gaps.assign(data.get("gaps", []))
 		h.road_refinement.trail_shaping = data.shaping
 		h.road_refinement.trail_elements_baked = data.baked
 	return h
@@ -57,7 +59,13 @@ static func valid(w: WorldData, d: Dictionary, stage: String) -> bool:
 		var types := {h = TYPE_PACKED_FLOAT32_ARRAY, color = TYPE_PACKED_COLOR_ARRAY, uv = TYPE_PACKED_VECTOR2_ARRAY, surface = TYPE_PACKED_BYTE_ARRAY, road = TYPE_PACKED_BYTE_ARRAY}
 		for field: String in types:
 			if typeof(p.get(field)) != types[field] or p[field].size() != RoadRefinement.STRIDE * RoadRefinement.STRIDE: return false
-	return stage == "final" or (d.patches.is_empty() and d.structures.is_empty() and not d.baked)
+	var gaps: Variant = d.get("gaps", [])
+	if not gaps is Array or gaps.size() > 4: return false
+	for gap: Variant in gaps:
+		if not gap is Dictionary or not gap.get("area") is Rect2 or not gap.area.position.is_finite() or not gap.area.has_area(): return false
+		if not gap.area.size.is_finite() or not gap.get("bypass") is Dictionary: return false
+		if not preload("res://scripts/world/road_records.gd").validation_error([gap.bypass], "surface gap").is_empty(): return false
+	return stage == "final" or (d.patches.is_empty() and d.structures.is_empty() and gaps.is_empty() and not d.baked)
 
 static func mesh_valid(a: Variant, allow_empty := true) -> bool:
 	if not a is Array: return false

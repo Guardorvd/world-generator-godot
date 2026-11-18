@@ -298,7 +298,8 @@ func finish_paths() -> PackedInt32Array:
 	t = Time.get_ticks_usec()
 	changed.append_array(build_structures())
 	path_timings.structures_ms = (Time.get_ticks_usec() - t) / 1000.0
-	road_refinement = RoadRefinement.build(self)
+	var with_gaps: bool = not QuickTrails.network() and world.trail_plan.get("state", "none") == "none"
+	road_refinement = RoadRefinement.build(self, true, {}, with_gaps)
 	path_timings.merge(road_refinement.build_timings)
 	clear_rock_seats()
 	return changed
