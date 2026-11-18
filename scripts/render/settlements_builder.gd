@@ -16,6 +16,7 @@ const HOUSE_FORM := {
 }
 const PEAK_STONES := [Vector2(0.9, 0.5), Vector2(0.65, 1.3), Vector2(0.45, 1.95)] # радиус, высота центра
 const Catalog := preload("res://scripts/render/asset_catalog.gd")
+const Courtyard := preload("res://scripts/render/settlement_courtyard.gd")
 
 ## false — модели каталога (glb, 3 LOD, общий атлас, MultiMesh деталей); true — прежние дома (только «было» на стенде).
 static var use_legacy := false
@@ -78,18 +79,11 @@ static func _label(text: String, color: Color, pos: Vector3, place_id: String = 
 	return l
 
 
-## Где у костра поселения s стоит доска маршрутов (низ столбов, м); её же ищет наведение GameWorld._aim
-static func board_foot(s: Variant, heights: Heightfield) -> Vector3:
-	var x: float = s.x * TILE + 3.0
-	var z: float = s.y * TILE - 3.0
-	return Vector3(x, heights.ground_at(x, z), z)
-
-
-## Добавляет постройки в parent. Возвращает {fires: [{flame, core, phase, pos}], windows: StandardMaterial3D}:
-## огонь анимируется, окна ночью светятся ярче (set_night).
-static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
+## Возвращает также фактические трансформы досок для наведения и доставки.
+static func build(parent: Node3D, w: WorldData, heights: Heightfield, regional_paths: Array = []) -> Dictionary:
+	var courtyards := Courtyard.new(w, heights, regional_paths)
 	if use_legacy:
-		return _build_legacy(parent, w, heights)
+		return _build_legacy(parent, w, heights, courtyards)
 	var catalog := Catalog.get_catalog()
 	var mats := SettlementModels.make_materials(catalog.settlement_textures)
 	var opaque_mat: StandardMaterial3D = mats.opaque
@@ -108,6 +102,7 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
 	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
 	var fires: Array = []
+	var boards: Array = []
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
 	var batch := MeshBatch.new()
 
@@ -130,46 +125,28 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 				batch.add_lod(lods[level], at, mat_pair, level, tints, true)
 			_add_extra_plinth(batch, extra_plinths, model_id, half, at, drop, opaque_mat, tints, lods.size())
 			_add_flower_details(batch, at, model_id, half, hut.v, details_lib, cutout_mat)
-		_add_courtyard_details(batch, w, heights, s, set_kind, details_lib, opaque_mat, rng)
-
-		# Костёр, скамьи, доска маршрутов
-		var fx: float = s.x * TILE
-		var fz: float = s.y * TILE
-		var fy := heights.ground_at(fx, fz)
-		for side: float in [-1.0, 1.0]:
-			var bx := fx + side * 3.0
-			var by := heights.ground_at(bx, fz)
-			var bench := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(bx, by, fz))
+		var yard := courtyards.choose(s)
+		_add_courtyard_details(batch, heights.world, heights, s, set_kind, details_lib, opaque_mat, rng)
+		_add_settlement_label(parent, s, heights, yard)
+		if yard.is_empty():
+			continue
+		if details_lib.has("lantern_post") and not s.huts.is_empty():
+			_add_courtyard_lights(batch, heights, s, yard, courtyards, set_kind, details_lib.lantern_post, opaque_mat)
+		for bench: Transform3D in yard.benches:
 			batch.add_detail(details_lib.bench, bench, Color.html("#755337"), opaque_mat)
-		var board_pos := board_foot(s, heights)
-		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
+		var board: Transform3D = yard.board
+		var face := _add_board_label(parent, board)
+		boards.append({at = face, place = s})
 		var board_tint := SettlementModels.cell_tints(style, 0, false)
 		for side: float in [-0.7, 0.7]:
 			batch.add_lod(board_post, board.translated_local(Vector3(side, 0.9, 0)), [opaque_mat], 0, board_tint, false)
 			batch.add_lod(board_post, board.translated_local(Vector3(side, 0.9, 0)), [opaque_mat], 1, board_tint, false)
-		batch.add_lod(board_panel, board.translated_local(Vector3(0, 1.35, 0)), [opaque_mat], 0, board_tint, false)
-		batch.add_lod(board_panel, board.translated_local(Vector3(0, 1.35, 0)), [opaque_mat], 1, board_tint, false)
-		var board_text := Label3D.new()
-		board_text.text = "МАРШРУТЫ"
-		board_text.font_size = 24
-		board_text.pixel_size = 0.005
-		board_text.no_depth_test = false
-		board_text.visibility_range_end = 35.0
-		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
-		parent.add_child(board_text)
+		batch.add_lod(board_panel, face, [opaque_mat], 0, board_tint, false)
+		batch.add_lod(board_panel, face, [opaque_mat], 1, board_tint, false)
 
-		batch.add_detail(details_lib.fire_logs, Transform3D(Basis(), Vector3(fx, fy, fz)), Color8(0x3a, 0x2a, 0x1c), opaque_mat)
-		var fire := Node3D.new()
-		var flame := Node3D.new()
-		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
-		var core := Node3D.new()
-		core.add_child(_part(core_mesh, Vector3(0, 0.35, 0), core_m))
-		fire.add_child(flame)
-		fire.add_child(core)
-		fire.position = Vector3(fx, fy, fz)
-		parent.add_child(fire)
-		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
-		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
+		if yard.fire.is_finite():
+			batch.add_detail(details_lib.fire_logs, Transform3D(Basis.IDENTITY, yard.fire), Color8(0x3a, 0x2a, 0x1c), opaque_mat)
+			fires.append(_add_fire(parent, yard.fire, s, rng.next_float() * 10.0, flame_mesh, flame_m, core_mesh, core_m))
 
 	var site_lods: Dictionary = catalog.site_lods
 	var legacy_m := {} if not site_lods.is_empty() else _legacy_site_materials(mat(Color8(0x3a, 0x2a, 0x1c)), opaque_mat)
@@ -191,7 +168,45 @@ static func build(parent: Node3D, w: WorldData, heights: Heightfield) -> Diction
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
-	return {fires = fires, windows = opaque_mat}
+	return {fires = fires, windows = opaque_mat, boards = boards}
+
+
+static func _add_settlement_label(parent: Node3D, s: SettlementData, heights: Heightfield, yard: Dictionary) -> void:
+	var pos: Vector3
+	if not yard.is_empty() and yard.fire.is_finite():
+		pos = yard.fire
+	elif not yard.is_empty():
+		pos = yard.board.origin
+	else:
+		var at := Vector2(s.x, s.y) * TILE
+		pos = Vector3(at.x, heights.ground_at(at.x, at.y), at.y)
+	parent.add_child(_label(s.name, Color.html("#fff6d8"), pos + Vector3.UP * 9.0, WorldData.place_id("settlement", s.x, s.y)))
+
+
+static func _add_board_label(parent: Node3D, board: Transform3D) -> Transform3D:
+	var face := board.translated_local(Vector3.UP * Courtyard.BOARD_HEIGHT)
+	var label := Label3D.new()
+	label.text = "МАРШРУТЫ"
+	label.font_size = 24
+	label.pixel_size = 0.005
+	label.visibility_range_end = 35.0
+	label.transform = face.translated_local(Vector3(0, 0, 0.08))
+	parent.add_child(label)
+	return face
+
+
+static func _add_fire(parent: Node3D, pos: Vector3, s: SettlementData, phase: float,
+		flame_mesh: Mesh, flame_mat: Material, core_mesh: Mesh, core_mat: Material) -> Dictionary:
+	var fire := Node3D.new()
+	var flame := Node3D.new()
+	flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_mat))
+	var core := Node3D.new()
+	core.add_child(_part(core_mesh, Vector3(0, 0.35, 0), core_mat))
+	fire.add_child(flame)
+	fire.add_child(core)
+	fire.position = pos
+	parent.add_child(fire)
+	return {flame = flame, core = core, phase = phase, pos = pos, place = s}
 
 
 static func _add_flower_details(batch: MeshBatch, at: Transform3D, model_id: String, half: Vector2, v: int, details_lib: Dictionary, cutout_mat: Material) -> void:
@@ -238,35 +253,34 @@ static func _add_flower_details(batch: MeshBatch, at: Transform3D, model_id: Str
 				batch.add_detail(flower_mesh, at.translated_local(Vector3(wx, 2.89, half.y + 0.11)), Color.WHITE, cutout_mat)
 
 
+static func _add_courtyard_lights(batch: MeshBatch, heights: Heightfield, s: SettlementData, yard: Dictionary,
+		courtyards: Courtyard, set_kind: String, mesh: Mesh, material: Material) -> void:
+	var board: Transform3D = yard.board
+	var lamp := board.translated_local(Vector3(-1.45, 0.0, 0.0))
+	lamp.origin.y = heights.ground_at(lamp.origin.x, lamp.origin.z)
+	if heights.depth_at(lamp.origin.x, lamp.origin.z) <= 0.0:
+		batch.add_detail(mesh, lamp, Color.WHITE, material)
+	if not yard.fire.is_finite():
+		return
+	var center := Vector2(yard.fire.x, yard.fire.z)
+	var remaining := 2 if set_kind == "center" else (1 if set_kind != "remote" and s.homes > 0 else 0)
+	for k in 8:
+		if remaining == 0:
+			break
+		var facing := Vector2.RIGHT.rotated(TAU * k / 8.0 + 0.35)
+		var at := center - facing * 5.2
+		if not heights.known(at.x, at.y) or not courtyards.road_clear(at, 0.4) or heights.depth_at(at.x, at.y) > 0.0:
+			continue
+		if _too_close_to_huts(at, s.huts, 2.0):
+			continue
+		var y := heights.ground_at(at.x, at.y)
+		var pose := Transform3D(Basis(Vector3.UP, atan2(facing.x, facing.y)), Vector3(at.x, y, at.y))
+		batch.add_detail(mesh, pose, Color.WHITE, material)
+		remaining -= 1
+
+
 static func _add_courtyard_details(batch: MeshBatch, w: WorldData, heights: Heightfield, s: SettlementData,
 		set_kind: String, details_lib: Dictionary, opaque_mat: Material, rng: WGRandom) -> void:
-	if details_lib.has("lantern_post") and s.huts.size() > 0:
-		var bp := board_foot(s, heights)
-		var l_at := Transform3D(Basis(Vector3.UP, -PI / 4.0), bp).translated_local(Vector3(-1.45, 0.0, 0.0))
-		l_at.origin.y = heights.ground_at(l_at.origin.x, l_at.origin.z)
-		if heights.depth_at(l_at.origin.x, l_at.origin.z) <= 0.0:
-			batch.add_detail(details_lib.lantern_post, l_at, Color.WHITE, opaque_mat)
-		var want_extra := 2 if set_kind == "center" else (1 if set_kind != "remote" and s.homes > 0 else 0)
-		var fx: float = s.x * TILE
-		var fz: float = s.y * TILE
-		var placed_l := 0
-		for k in 8:
-			if placed_l >= want_extra:
-				break
-			var ang := TAU * k / 8.0 + 0.35
-			var px := fx + cos(ang) * 5.2
-			var pz := fz + sin(ang) * 5.2
-			var cx := clampi(floori(px / TILE), 0, w.W - 1)
-			var cy := clampi(floori(pz / TILE), 0, w.H - 1)
-			var j := cy * w.W + cx
-			if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or heights.depth_at(px, pz) > 0.0:
-				continue
-			if _too_close_to_huts(Vector2(px, pz), s.huts, 2.0):
-				continue
-			var py := heights.ground_at(px, pz)
-			batch.add_detail(details_lib.lantern_post, Transform3D(Basis(Vector3.UP, atan2(fx - px, fz - pz)), Vector3(px, py, pz)), Color.WHITE, opaque_mat)
-			placed_l += 1
-
 	if details_lib.has("fence_section") and s.homes > 0 and set_kind in ["center", "ordinary", "foothill"]:
 		var fence_col := Color.html("#7c5738")
 		for hut: HutData in s.huts:
@@ -279,10 +293,8 @@ static func _add_courtyard_details(batch: MeshBatch, w: WorldData, heights: Heig
 			var side: float = -1.0 if rng.next_float() < 0.5 else 1.0
 			var at := Transform3D(Basis(Vector3.UP, PlayerState.hut_angle(s, hut)), Vector3(hut.x * TILE, 0, hut.y * TILE))
 			var world_p := at * Vector3(side * (half.x + 1.15), 0.0, half.y * 0.35)
-			var cx := clampi(floori(world_p.x / TILE), 0, w.W - 1)
-			var cy := clampi(floori(world_p.z / TILE), 0, w.H - 1)
-			var j := cy * w.W + cx
-			if w.path_mask[j] >= 2 or w.ocean[j] != 0 or w.lake[j] != 0 or heights.depth_at(world_p.x, world_p.z) > 0.0:
+			var tile := w.tile_info(world_p.x / TILE, world_p.z / TILE)
+			if tile.is_empty() or tile.path >= 2 or heights.depth_at(world_p.x, world_p.z) > 0.0:
 				continue
 			if _too_close_to_huts(Vector2(world_p.x, world_p.z), s.huts, 2.1):
 				continue
@@ -640,7 +652,7 @@ static func _build_peaks(parent: Node3D, w: WorldData, heights: Heightfield, bat
 
 
 ## Прежний процедурный сборщик домов (используется только при use_legacy = true как база «было»).
-static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield) -> Dictionary:
+static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield, courtyards: Courtyard) -> Dictionary:
 	var door_m := mat(Color8(0x3a, 0x2a, 0x1c))
 	var win_m := mat(Color8(0xf2, 0xd2, 0x7a), 1.1)
 	var house := _legacy_site_materials(door_m, win_m)
@@ -658,6 +670,7 @@ static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield) ->
 	var flame_m := mat(Color8(0xff, 0x8a, 0x2a), 2.2)
 	var core_m := mat(Color8(0xff, 0xd3, 0x6b), 3.0)
 	var fires: Array = []
+	var boards: Array = []
 	var rng := WGRandom.new(w.seed_num ^ 0x1234)
 	var batch := MeshBatch.new()
 	for s in w.settlements:
@@ -670,42 +683,24 @@ static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield) ->
 				_house(batch, at, foot.y - foot.x, hut.v, house, kind, EntityCodec.value(s, "style", hut.v))
 			else:
 				_outbuilding(batch, at, foot.y - foot.x, kind, house)
-		var fx: float = s.x * TILE
-		var fz: float = s.y * TILE
-		var fy := heights.ground_at(fx, fz)
-		for side: float in [-1.0, 1.0]:
-			var bx := fx + side * 3.0
-			var by := heights.ground_at(bx, fz)
-			var bench := Transform3D(Basis(Vector3.UP, PI / 2.0), Vector3(bx, by, fz))
+		var yard := courtyards.choose(s)
+		_add_settlement_label(parent, s, heights, yard)
+		if yard.is_empty():
+			continue
+		for bench: Transform3D in yard.benches:
 			batch.add(bench_seat, bench.translated_local(Vector3(0, 0.5, 0)), house.timber)
 			for leg: float in [-0.65, 0.65]:
 				batch.add(bench_leg, bench.translated_local(Vector3(leg, 0.23, 0)), house.timber)
-		var board_pos := board_foot(s, heights)
-		var board := Transform3D(Basis(Vector3.UP, -PI / 4.0), board_pos)
+		var board: Transform3D = yard.board
+		var face := _add_board_label(parent, board)
+		boards.append({at = face, place = s})
 		for side: float in [-0.7, 0.7]:
 			batch.add(board_post, board.translated_local(Vector3(side, 0.9, 0)), house.timber)
-		batch.add(board_mesh, board.translated_local(Vector3(0, 1.35, 0)), door_m)
-		var board_text := Label3D.new()
-		board_text.text = "МАРШРУТЫ"
-		board_text.font_size = 24
-		board_text.pixel_size = 0.005
-		board_text.no_depth_test = false
-		board_text.visibility_range_end = 35.0
-		board_text.transform = board.translated_local(Vector3(0, 1.35, 0.08))
-		parent.add_child(board_text)
-		for k in 3:
-			batch.add(log_mesh, Transform3D(Basis.from_euler(Vector3(0, k * PI / 3.0, PI / 2.0)), Vector3(fx, fy + 0.1, fz)), door_m)
-		var fire := Node3D.new()
-		var flame := Node3D.new()
-		flame.add_child(_part(flame_mesh, Vector3(0, 0.55, 0), flame_m))
-		var core := Node3D.new()
-		core.add_child(_part(core_mesh, Vector3(0, 0.35, 0), core_m))
-		fire.add_child(flame)
-		fire.add_child(core)
-		fire.position = Vector3(fx, fy, fz)
-		parent.add_child(fire)
-		fires.append({flame = flame, core = core, phase = rng.next_float() * 10.0, pos = fire.position})
-		parent.add_child(_label(s.name, Color.html("#fff6d8"), Vector3(fx, fy + 9.0, fz), WorldData.place_id("settlement", s.x, s.y)))
+		batch.add(board_mesh, face, door_m)
+		if yard.fire.is_finite():
+			for k in 3:
+				batch.add(log_mesh, Transform3D(Basis.from_euler(Vector3(0, k * PI / 3.0, PI / 2.0)), yard.fire + Vector3.UP * 0.1), door_m)
+			fires.append(_add_fire(parent, yard.fire, s, rng.next_float() * 10.0, flame_mesh, flame_m, core_mesh, core_m))
 	_build_peaks(parent, w, heights, batch, house)
 	_build_sites(parent, w, heights, batch, house, {})
 	for lk in w.lakes:
@@ -714,7 +709,7 @@ static func _build_legacy(parent: Node3D, w: WorldData, heights: Heightfield) ->
 	var mi := batch.build("Buildings")
 	if mi != null:
 		parent.add_child(mi)
-	return {fires = fires, windows = win_m}
+	return {fires = fires, windows = win_m, boards = boards}
 
 
 ## Жилой дом вида kind (HOUSE_FORM) для режима use_legacy.

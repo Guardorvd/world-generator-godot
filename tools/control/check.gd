@@ -368,7 +368,7 @@ func _process(delta: float) -> bool:
 			stats.erase("fingerprint")
 			Dev.save_json(out.path_join("stats_%s.json" % id), stats)
 			if "map" in want_views:
-				_save(main.hud.map_tex.get_image(), "%s_map" % id, true)
+				_save(main.hud.map_preview, "%s_map" % id, true)
 			if Dev.arg("lamp", "no") != "no":
 				game.bike_view.set_lamp(true)
 			var available_views := Dev.views(game)
@@ -510,7 +510,7 @@ func _process_cache(game: GameWorld) -> bool:
 
 func _cache_sums(game: GameWorld, fingerprint: Dictionary) -> Dictionary:
 	return {world = JSON.stringify(fingerprint, "", true).md5_text(), heights = _md5(game.heights.hv.to_byte_array()),
-		map = _md5(main.hud.map_tex.get_image().get_data()), objects = game.world.obj_count,
+		map = _md5(main.hud.map_preview.get_data()), objects = game.world.obj_count,
 		terrain = _tex_md5(game, "base_tex"), forest = _tex_md5(game, "forest_tex")}
 
 

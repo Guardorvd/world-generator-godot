@@ -35,6 +35,7 @@ const CargoBag = preload("res://scripts/render/cargo_bag.gd")
 const SettlementPanel = preload("res://scripts/ui/settlement_panel.gd")
 const BikePlacement = preload("res://scripts/render/bike_placement.gd")
 const DayTiming := preload("res://scripts/game/day_timing.gd")
+const HudStyle := preload("res://scripts/ui/hud_style.gd")
 var bike_placement: BikePlacement
 var place_names: PlaceNames
 var photo: PhotoCamera
@@ -53,7 +54,7 @@ var _opening := false
 var _opening_time := 0.0
 var _opening_camera := Vector3.ZERO
 var _opening_target := Vector3.ZERO
-var _opening_caption: Label
+var _opening_caption: PanelContainer
 var _opening_points: Array[Vector2] = []
 var _opening_point := 1
 
@@ -184,7 +185,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	heights.native_ride = true
 	hud = hud_node
 	hud.settlement_panel.closed.connect(_close_settlement)
-	hud.settlement_panel.destination_selected.connect(_choose_settlement_route)
+	hud.settlement_panel.travel_requested.connect(_board_travel)
 	hud.settlement_panel.bike_requested.connect(_recall_bike)
 	hud.settlement_panel.quest_accepted.connect(_accept_quest)
 	hud.settlement_panel.quest_abandoned.connect(_abandon_quest)
@@ -244,6 +245,8 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	photo.familiar = func(id: String) -> bool: return hud.knows(id)
 	photo.capturing.connect(_photo_capturing)
 	fires = built.fires
+	_boards = built.boards
+	audio.fires = fires
 	windows = built.windows
 	fire_light = OmniLight3D.new()
 	fire_light.light_color = Color8(0xff, 0xa8, 0x55)
@@ -271,6 +274,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		add_child(regions)
 		regions.setup(world, heights, null, vegetation)
 		regions.storage_failed.connect(hud.toast_now)
+		regions.settlements_changed.connect(_sync_region_settlements)
 		stream_coordinator.region_restore = regions.restore
 		if saved.is_empty():
 			stream_coordinator.restore_regions(Vector3(world.W * TILE * 0.5, 0.0, world.H * TILE * 0.5))
@@ -310,9 +314,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	if chunk_source != null: chunk_source.finish_startup()
 	t = _mark("start_terrain_ms", t)
 	if saved.is_empty() and opening_spot.is_empty() and world.settlements.size() > 0:
-		# лицом к костру
 		var s: Variant = PlayerState.home(world)
-		yaw = atan2(player.x - s.x * GameConfig.TILE, player.z - s.y * GameConfig.TILE)
+		var look_at := Vector2(s.x, s.y) * TILE
+		for fire: Dictionary in fires:
+			if fire.place == s:
+				look_at = Vector2(fire.pos.x, fire.pos.z)
+				break
+		yaw = atan2(player.x - look_at.x, player.z - look_at.y)
 	outer = OuterTerrain.new()
 	outer.cpu_budget = services.cpu_budget
 	outer.terrain_builder = services.terrain
@@ -326,6 +334,7 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	if heights.obstacles == null:
 		heights.obstacles = ForestObstacles.new(world, heights)
 	t = _mark("start_outer_ms", t)
+	hud.controls = services.controls
 	hud.set_world(world, loaded.map_image)
 	stream_coordinator.force_vegetation(Vector3(player.x, player.feet, player.z))
 	heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
@@ -433,15 +442,13 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		for p: Dictionary in hud.all_places():
 			places[p.key] = p
 		hud.visited = saved.visited.duplicate()
+		hud.map_journal.restore(saved.get("atlas", {}))
 		if not quests.restore_state(saved.quest, places):
 			push_warning("Задание из сохранения не восстановлено: данные неверны или его места не найдены в мире.")
 		_quest_changed()
 		hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
 	photo.photo_taken.connect(_quest_photo)
 	photo.wanted_reach = Quests.SHOT_REACH_M
-	for s: SettlementData in world.settlements:
-		var foot := SettlementsBuilder.board_foot(s, heights)
-		_boards.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
 	if world.outer != null and outer != null:
 		outer.frame_budget = stream_coordinator.frame_budget
 		stream_coordinator.outer_update = outer.update
@@ -451,6 +458,9 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 	stream_coordinator.region_committed.connect(func() -> void:
 		for m: StandardMaterial3D in regions.windows:
 			SettlementsBuilder.set_night(m, _night)
+		if hud.big_map.visible:
+			hud.big_map.prepare_player_view()
+			hud.sync_map_places()
 		if garlands != null and regions != null:
 			garlands.sync_regions(regions.ledger.get("regions", {}), _garland_huts()))
 	garlands = TreeGarlandsLayer.new()
@@ -514,7 +524,7 @@ func _exit_tree() -> void:
 		if is_instance_valid(hud.settlement_panel):
 			var panel: SettlementPanel = hud.settlement_panel
 			connections.append_array([[panel.closed, _close_settlement],
-				[panel.destination_selected, _choose_settlement_route], [panel.bike_requested, _recall_bike],
+				[panel.travel_requested, _board_travel], [panel.bike_requested, _recall_bike],
 				[panel.quest_accepted, _accept_quest], [panel.quest_abandoned, _abandon_quest]])
 		for connection: Array in connections:
 			var source: Signal = connection[0]
@@ -565,6 +575,7 @@ static func can_restore(saved: Dictionary, w: WorldData, _settings: GameSettings
 func save_state() -> Dictionary:
 	var state := {format = 1, seed = world.seed_text, saved_at = Time.get_unix_time_from_system(),
 		signature = save_signature(world), visited = hud.visited.duplicate(), quest = quests.save_state(),
+		atlas = hud.map_journal.save_state(),
 		goal = hud.goal.get("key", ""),
 		lamp = bike_view.lamp_on(),
 		player = {x = player.x, z = player.z, feet = player.feet, yaw = yaw, pitch = pitch, hour = hour,
@@ -780,8 +791,6 @@ func toggle_map() -> void:
 		capture_mouse()
 
 
-## Быстрое перемещение в любое место с карты (Hud.places; с 3.0.2 и туда, где игрок ещё не был): к костру поселения,
-## к вершине или на берег озера. Велосипед переезжает вместе с игроком и встаёт рядом, карта закрывается
 func travel_active() -> bool:
 	return _travel_task != -1 or _travel_waiting
 
@@ -810,6 +819,7 @@ func travel_to(place: Dictionary) -> void:
 	if quests != null and quests.cargo:
 		hud.toast_now("С сумкой за спиной быстро не переместиться — довезите её сами")
 		return
+	var from_board := _settlement_open()
 	_set_photo(false)
 	_close_settlement(false)
 	# стволы у места прибытия, чтобы не встать в дерево (валежник появится после раскладки подлеска)
@@ -817,7 +827,7 @@ func travel_to(place: Dictionary) -> void:
 	var arriving := PlayerState.arrive(world, heights, place)
 	if arriving == null:
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
-		hud.toast_now("Рядом с местом прибытия не найдено безопасной точки")
+		_finish_travel("Рядом с местом прибытия не найдено безопасной точки", from_board)
 		return
 	if chunk_source != null:
 		services.controls.release_motion()
@@ -837,10 +847,10 @@ func travel_to(place: Dictionary) -> void:
 		if chunk_source != null and not await _travel_load(Vector2(origin.x, origin.z)): return
 		_travel_publish(origin)
 		heights.obstacles.update(player.x, player.z, vegetation.obstacles, vegetation.obstacles_version, true)
-		audio.set_paused(paused)
-		hud.toast_now("Рядом с местом прибытия нет свободного места для игрока и велосипеда")
+		_finish_travel("Рядом с местом прибытия нет свободного места для игрока и велосипеда", from_board)
 		return
 	crash.abort()
+	hud.map_journal.end_trip()
 	player = arriving
 	yaw = arrival_yaw
 	pitch = -0.05
@@ -854,8 +864,14 @@ func travel_to(place: Dictionary) -> void:
 		outer.preload_around(player.x, player.z, OuterTerrain.RADIUS / 2.0)
 	if show_map:
 		toggle_map()
+	_finish_travel("Вы переместились: «%s»" % place.name, from_board)
+
+
+func _finish_travel(message: String, from_board: bool) -> void:
+	if from_board and not paused and not show_map:
+		capture_mouse()
 	audio.set_paused(paused)
-	hud.toast_now("Вы переместились: «%s»" % place.name)
+	hud.toast_now(message)
 
 
 ## Рельеф, вода и растительность вокруг at — в фоновой задаче, кадры идут. false — мир закрыт во время ожидания.
@@ -1199,13 +1215,20 @@ func _physics_process(dt: float) -> void:
 	t0 = _tick_mark("audio", t0)
 	if crashed:
 		_snap()
+	if bike.riding and not _opening and not crashed and not crash.active():
+		hud.map_journal.record(Vector2(player.x, player.z), dt)
+	else:
+		hud.map_journal.end_trip()
 	# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
 	# радиус открытия — 2,5 клетки (10 м), за 0,1 с даже на спуске игрок проезжает 1–2 м
 	_discovery_tick += 1
 	if _discovery_tick >= DISCOVERY_TICKS:
 		_discovery_tick = 0
+		var known := hud.visited.size()
 		for text: String in player.check_discoveries(world, hud.visited):
 			hud.toast(text)
+		if hud.visited.size() != known:
+			hud.sync_map_places()
 	# шаг задания раньше цели компаса: он сам переставит цель на следующее место
 	_quest_progress(quests.tick(func(place: Dictionary) -> bool: return hud.at_place(place, player.x, player.z)))
 	var reached := hud.check_goal(player.x, player.z) if navigation_line == null or navigation_line.can_arrive(Vector3(player.x, player.feet, player.z)) else ""
@@ -1264,7 +1287,8 @@ func _process(delta: float) -> void:
 	if player == null or travel_active():
 		return
 	if services.resource_profile != null: services.resource_profile.frame(get_viewport(), delta * 1000.0, self)
-	hud.lock_hint.visible = not paused and not _settlement_open() and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED
+	hud.lock_hint.visible = (not paused and not show_map and not _settlement_open() and not photo.active
+		and not services.controls.joypad and Input.mouse_mode != Input.MOUSE_MODE_CAPTURED)
 	if paused:
 		return
 	var t0 := Time.get_ticks_usec()
@@ -1304,6 +1328,8 @@ func _process(delta: float) -> void:
 		# подпись над сумкой покачивается, чтобы её было видно издалека
 		_bag_label.position.y = 0.75 + sin(time * 2.5) * 0.06
 		_bag_label.visible = summary and camera.global_position.distance_to(_bag.position) < 60.0
+		if _bag_label.visible:
+			_update_bag_label()
 	photo.bike_at = Vector3.INF if bike.riding or crash.active() else Vector3(bike.x, bike.y + 0.6, bike.z)
 	photo.update(camera, delta)
 	_target = _aim()
@@ -1377,15 +1403,27 @@ func _draw_opening(alpha: float) -> void:
 	if not is_instance_valid(_opening_caption):
 		var layer := CanvasLayer.new()
 		add_child(layer)
-		_opening_caption = Label.new()
+		_opening_caption = PanelContainer.new()
 		layer.add_child(_opening_caption)
-		_opening_caption.set_anchors_and_offsets_preset(Control.PRESET_BOTTOM_WIDE)
-		_opening_caption.offset_top = -65
-		_opening_caption.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_opening_caption.add_theme_color_override("font_shadow_color", Color.BLACK)
-		_opening_caption.add_theme_constant_override("shadow_offset_x", 2)
-		_opening_caption.add_theme_constant_override("shadow_offset_y", 2)
-		_opening_caption.text = "«%s»\n%s — пропустить · %s — пауза" % [opening_place.name, services.controls.label("jump"), services.controls.label("pause")]
+		_opening_caption.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+		_opening_caption.offset_top = -96
+		_opening_caption.offset_bottom = -18
+		_opening_caption.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		_opening_caption.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_opening_caption.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13, Vector2(18, 10)))
+		var rows := VBoxContainer.new()
+		rows.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_opening_caption.add_child(rows)
+		var title := Label.new()
+		title.text = opening_place.name
+		title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		HudStyle.label(title, 22)
+		rows.add_child(title)
+		var controls_hint := Label.new()
+		controls_hint.text = "%s · пропустить     %s · пауза" % [services.controls.label("jump"), services.controls.label("pause")]
+		controls_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		HudStyle.label(controls_hint, 13, HudStyle.MUTED)
+		rows.add_child(controls_hint)
 	var elapsed := maxf(0.0, _opening_time - (1.0 - alpha) / Engine.physics_ticks_per_second)
 	var pos := _prev.lerp(Vector3(player.x, player.feet, player.z), alpha)
 	var target := pos + Vector3.UP * 1.4
@@ -1430,7 +1468,7 @@ func _crash() -> void:
 
 
 ## Подсказки внизу экрана и у прицела — по тому, что игрок делает сейчас.
-## 14.2: только действия к месту, чипами [клавиша] действие; постоянные клавиши (WASD, Esc, Tab, M) — в паузе
+## Действия к месту чипами [клавиша] действие; полная раскладка — в паузе.
 func _update_hints() -> void:
 	var k := services.controls.label
 	if _placing_bike():
@@ -1439,7 +1477,7 @@ func _update_hints() -> void:
 		var help := [[cancel_key, "Отмена"], ["Левый стик", "Поворот и расстояние"]] if services.controls.joypad else [[cancel_key, "Отмена"], ["A/D / колесо", "Поворот"], ["W/S", "Расстояние"]]
 		hud.set_hints(help, [[confirm_key, bike_placement.reason]], true)
 		return
-	if _opening or _settlement_open() or photo.active:
+	if _opening or show_map or _settlement_open() or photo.active:
 		hud.set_hints([], [])
 		return
 	if crash.active():
@@ -1450,7 +1488,7 @@ func _update_hints() -> void:
 		"board": near = [[k.call("interact"), "Доска «%s»" % _target.place.name]]
 		"bike": near = [[k.call("interact"), "Сесть"]]
 		"cargo": near = [[k.call("interact"), "Надеть сумку"]]
-	# внизу (видно с зажатым Tab) — главное для того, чем игрок занят
+	# Внизу сводки — главное для того, чем игрок занят.
 	if bike.riding:
 		var hints := [[k.call("run"), "Сильнее"], [k.call("jump"), "Прыжок"], [k.call("interact"), "Слезть"], [k.call("recover_bike"), "Поставить велосипед"]]
 		if not services.controls.joypad:
@@ -1460,6 +1498,13 @@ func _update_hints() -> void:
 		return
 	var photo_key: String = k.call("photo") if services.controls.joypad else "ПКМ"
 	hud.set_hints([[k.call("run"), "Бег"], [k.call("jump"), "Прыжок"], [photo_key, "Фотоаппарат"], [k.call("recover_bike"), "Поставить велосипед"]], near)
+
+
+func _update_bag_label() -> void:
+	var key := services.controls.label(&"interact")
+	var caption := "▼ Сумка" if key.is_empty() else "▼ Сумка · %s" % key
+	if _bag_label.text != caption:
+		_bag_label.text = caption
 
 
 func _settlement_open() -> bool:
@@ -1472,7 +1517,7 @@ func _settlement_open() -> bool:
 ##    (велосипед у самой доски выбирается, когда взгляд на нём, а не на щите за ним);
 ## 2) если не попал никуда, луч «толще» на AIM_R: из задетых краем — ближайший к центру взгляда по углу.
 ## Берутся только предметы рядом: велосипед, на который можно сесть, доски не дальше REACH от глаз.
-## Подсказку E показывают только для выбранного
+## Подсказку взаимодействия показывают только для выбранного.
 func _aim() -> Dictionary:
 	if player == null or paused or show_map or crash.active() or _settlement_open() or photo.active or _placing_bike():
 		return {}
@@ -1494,9 +1539,9 @@ func _aim() -> Dictionary:
 	return interaction_service.select(items, from, dir)
 
 
-## E: действие с тем, на что смотрит игрок; на велосипеде, если смотреть не на что, — слезть
+## Действие с тем, на что смотрит игрок; на велосипеде без цели — слезть.
 func interact() -> void:
-	_set_photo(false) # E с фотоаппаратом у глаз — сначала убрать его
+	_set_photo(false) # С фотоаппаратом у глаз — сначала убрать его.
 	_target = _aim()
 	match _target.get("kind", ""):
 		"board": _open_settlement(_target.place)
@@ -1528,12 +1573,14 @@ func _open_settlement(village: Variant = {}) -> void:
 	_snap()
 	_dragging = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
-	hud.settlement_panel.open(village, world, hud.places(), bike.distance_to(player) < 4.0, quests, _offers(village))
+	var catalog := hud.all_places()
+	hud.settlement_panel.open(village, world, hud.board_places(village, catalog), bike.distance_to(player) < 4.0,
+		quests, _offers(village, catalog), hud.map_data)
 
 
 ## Задания доски поселения village (Quests.offers): соседи по дорогам и дальнее поселение — из индекса мира
-func _offers(village: Variant) -> Array:
-	return interaction_service.offers(village)
+func _offers(village: Variant, catalog: Variant = null) -> Array:
+	return interaction_service.offers(village, catalog)
 
 
 func _accept_quest(q: QuestData) -> void:
@@ -1561,38 +1608,54 @@ func _quest_changed() -> void:
 		_quest_goal = ""
 	var s := quests.step()
 	photo.wanted = s.place.key if s.get("do") == "shoot" else ""
-	if s.get("do") == "pickup":
-		if _bag == null:
-			_bag = CargoBag.build()
-			add_child(_bag)
-			# подпись над сумкой: видна издалека и сквозь кусты, как метка предмета в играх
-			_bag_label = Label3D.new()
-			_bag_label.text = "▼ Сумка · E"
-			_bag_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-			_bag_label.no_depth_test = true
-			_bag_label.fixed_size = true
-			_bag_label.pixel_size = 0.0015
-			_bag_label.font_size = 28
-			_bag_label.outline_size = 8
-			_bag_label.modulate = Quests.KINDS.delivery.color
-			_bag.add_child(_bag_label)
-		# у правого края доски, лицом туда же, куда щит; стоит на земле
-		var board := SettlementsBuilder.board_foot(s.place.src, heights)
-		var basis := Basis(Vector3.UP, -PI / 4.0)
-		var at := board + basis * Vector3(1.35, 0.0, 0.35)
-		at.y = heights.ground_at(at.x, at.z) + CargoBag.SIZE.y * 0.5 + 0.03
-		_bag.transform = Transform3D(basis.rotated(Vector3.UP, 0.4), at)
-		_bag.visible = true
-	elif _bag != null:
-		_bag.visible = false
+	_sync_delivery_bag()
 	bike_view.set_pack(quests.cargo)
 	hud.quest_changed()
+
+
+func _sync_region_settlements() -> void:
+	audio.regional_fires = regions.fires
+	if quests != null:
+		_sync_delivery_bag()
+
+
+func _sync_delivery_bag() -> void:
+	var s := quests.step()
+	var board := {}
+	if s.get("do") == "pickup":
+		for b: Dictionary in _boards + (regions.boards if regions != null else []):
+			if WorldData.place_id("settlement", b.place.x, b.place.y) == s.place.key:
+				board = b
+				break
+	if board.is_empty():
+		if _bag != null:
+			_bag.hide()
+		return
+	if _bag == null:
+		_bag = CargoBag.build()
+		add_child(_bag)
+		_bag_label = Label3D.new()
+		_update_bag_label()
+		_bag_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_bag_label.no_depth_test = true
+		_bag_label.fixed_size = true
+		_bag_label.pixel_size = 0.0015
+		_bag_label.font_size = 28
+		_bag_label.outline_size = 8
+		_bag_label.modulate = Quests.KINDS.delivery.color
+		_bag.add_child(_bag_label)
+	var face: Transform3D = board.at
+	var at := face * SettlementsBuilder.Courtyard.BAG_OFFSET
+	at.y = heights.ground_at(at.x, at.z) + CargoBag.SIZE.y * 0.5 + 0.03
+	_bag.transform = Transform3D(face.basis.rotated(Vector3.UP, 0.4), at)
+	_bag.show()
 
 
 func _close_settlement(capture := true) -> void:
 	if not _settlement_open():
 		return
-	hud.settlement_panel.hide()
+	hud._close_travel()
+	hud.settlement_panel.clear()
 	if capture and not paused and not show_map:
 		capture_mouse()
 
@@ -1602,10 +1665,13 @@ func _navigation_goal(place: Dictionary) -> void:
 	place_names.set_goal(place)
 
 
-func _choose_settlement_route(place: Dictionary) -> void:
-	hud.set_goal(place)
-	_close_settlement()
-	hud.toast_now("На указателе: путь к «%s». Цель отмечена на компасе и карте" % place.name)
+func _board_travel(place: Dictionary) -> void:
+	if not _settlement_open() or not hud.in_open_land(place) or quests.cargo:
+		return
+	for offered: Dictionary in hud.settlement_panel.board_map.places.slice(1):
+		if offered.key == place.key:
+			hud.ask_travel(offered)
+			return
 
 
 func _recall_bike() -> void:

@@ -78,98 +78,166 @@ grow_vertical = 2
 mouse_filter = 2
 script = ExtResource("3_hud")
 
-[node name="Crosshair" type="ColorRect" parent="UI/Root/Hud"]
+[node name="Crosshair" type="Control" parent="UI/Root/Hud"]
 layout_mode = 1
-anchors_preset = -1
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -2.0
-offset_top = -2.0
-offset_right = 2.0
-offset_bottom = 2.0
-mouse_filter = 2
-color = Color(1, 1, 1, 0.8)
-
-[node name="InfoPanel" type="PanelContainer" parent="UI/Root/Hud"]
-layout_mode = 0
-offset_left = 14.0
-offset_top = 14.0
+offset_left = -14.0
+offset_top = -14.0
 offset_right = 14.0
 offset_bottom = 14.0
 mouse_filter = 2
-theme_type_variation = &"HudPanel"
+
+[node name="InfoPanel" type="PanelContainer" parent="UI/Root/Hud"]
+layout_mode = 0
+offset_left = 18.0
+offset_top = 18.0
+offset_right = 284.0
+offset_bottom = 18.0
+mouse_filter = 2
 
 [node name="Rows" type="VBoxContainer" parent="UI/Root/Hud/InfoPanel"]
 layout_mode = 2
 mouse_filter = 2
-theme_override_constants/separation = 0
+theme_override_constants/separation = 7
 
-[node name="Clock" type="Label" parent="UI/Root/Hud/InfoPanel/Rows"]
+[node name="Header" type="HBoxContainer" parent="UI/Root/Hud/InfoPanel/Rows"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 12
+
+[node name="Info" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Header"]
+layout_mode = 2
+size_flags_horizontal = 3
+text_overrun_behavior = 3
+
+[node name="Time" type="PanelContainer" parent="UI/Root/Hud/InfoPanel/Rows/Header"]
+layout_mode = 2
+size_flags_vertical = 4
 visible = false
-layout_mode = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 15
+mouse_filter = 2
 
-[node name="Info" type="Label" parent="UI/Root/Hud/InfoPanel/Rows"]
+[node name="Clock" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Header/Time"]
 layout_mode = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.9)
-theme_override_constants/outline_size = 4
-theme_override_font_sizes/font_size = 15
+horizontal_alignment = 1
 
-[node name="Hint" type="HBoxContainer" parent="UI/Root/Hud"]
-layout_mode = 1
-anchors_preset = -1
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = -42.0
-offset_bottom = -14.0
-grow_horizontal = 2
-grow_vertical = 0
+[node name="Surface" type="Label" parent="UI/Root/Hud/InfoPanel/Rows"]
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Divider" type="ColorRect" parent="UI/Root/Hud/InfoPanel/Rows"]
+layout_mode = 2
+custom_minimum_size = Vector2(0, 1)
+mouse_filter = 2
+
+[node name="Readings" type="HBoxContainer" parent="UI/Root/Hud/InfoPanel/Rows"]
+layout_mode = 2
 mouse_filter = 2
 theme_override_constants/separation = 18
+
+[node name="Altitude" type="VBoxContainer" parent="UI/Root/Hud/InfoPanel/Rows/Readings"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Readings/Altitude"]
+layout_mode = 2
+text = "Высота"
+
+[node name="Value" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Readings/Altitude"]
+layout_mode = 2
+
+[node name="Temperature" type="VBoxContainer" parent="UI/Root/Hud/InfoPanel/Rows/Readings"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
+theme_override_constants/separation = 0
+
+[node name="Title" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Readings/Temperature"]
+layout_mode = 2
+text = "Температура"
+
+[node name="Value" type="Label" parent="UI/Root/Hud/InfoPanel/Rows/Readings/Temperature"]
+layout_mode = 2
+
+[node name="Nearby" type="Label" parent="UI/Root/Hud/InfoPanel/Rows"]
+layout_mode = 2
+autowrap_mode = 3
+
+[node name="Hint" type="HFlowContainer" parent="UI/Root/Hud"]
+layout_mode = 1
+anchor_left = 0.22
+anchor_top = 1.0
+anchor_right = 0.8
+anchor_bottom = 1.0
+offset_top = -47.0
+offset_bottom = -16.0
+grow_vertical = 0
+mouse_filter = 2
+theme_override_constants/h_separation = 7
+theme_override_constants/v_separation = 5
 alignment = 1
 
 [node name="Prompt" type="HBoxContainer" parent="UI/Root/Hud"]
 layout_mode = 1
-anchors_preset = -1
-anchor_top = 0.55
+anchor_top = 0.5
 anchor_right = 1.0
-anchor_bottom = 0.55
-offset_bottom = 32.0
+anchor_bottom = 0.5
+offset_top = 24.0
+offset_bottom = 60.0
 grow_horizontal = 2
 mouse_filter = 2
 alignment = 1
 
-[node name="LockHint" type="Label" parent="UI/Root/Hud"]
+[node name="LockHint" type="PanelContainer" parent="UI/Root/Hud"]
 layout_mode = 1
-anchors_preset = -1
-anchor_top = 0.62
-anchor_right = 1.0
-anchor_bottom = 0.62
-offset_bottom = 40.0
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_top = 72.0
+offset_bottom = 72.0
 grow_horizontal = 2
-theme_override_colors/font_outline_color = Color(0, 0, 0, 0.95)
-theme_override_constants/outline_size = 6
-text = "Щёлкните по экрану, чтобы управлять взглядом мышью"
+mouse_filter = 2
+
+[node name="Text" type="Label" parent="UI/Root/Hud/LockHint"]
+layout_mode = 2
+text = "Щёлкните, чтобы управлять взглядом"
 horizontal_alignment = 1
 
 [node name="Toast" type="PanelContainer" parent="UI/Root/Hud"]
-offset_left = 16.0
-offset_top = 132.0
-offset_right = 344.0
+offset_left = 18.0
+offset_top = 170.0
+offset_right = 314.0
 mouse_filter = 2
-theme_type_variation = &"HudPanel"
 modulate = Color(1, 1, 1, 0)
 
-[node name="Text" type="Label" parent="UI/Root/Hud/Toast"]
+[node name="Stack" type="VBoxContainer" parent="UI/Root/Hud/Toast"]
 layout_mode = 2
 mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="Line" type="HBoxContainer" parent="UI/Root/Hud/Toast/Stack"]
+layout_mode = 2
+mouse_filter = 2
+theme_override_constants/separation = 8
+
+[node name="Text" type="Label" parent="UI/Root/Hud/Toast/Stack/Line"]
+layout_mode = 2
+size_flags_horizontal = 3
+mouse_filter = 2
 autowrap_mode = 3
-theme_override_font_sizes/font_size = 15
+
+[node name="TimeLeft" type="ProgressBar" parent="UI/Root/Hud/Toast/Stack"]
+layout_mode = 2
+mouse_filter = 2
+custom_minimum_size = Vector2(0, 2)
+max_value = 1.0
+step = 0.0
+show_percentage = false
 
 [node name="Menu" type="Control" parent="UI/Root"]
 unique_name_in_owner = true
@@ -1349,6 +1417,12 @@ custom_minimum_size = Vector2(520, 0)
 layout_mode = 2
 theme_type_variation = &"HintLabel"
 text = "Применяется сразу. Препятствия на тропах убираются и появляются на участках, которые подгружаются после переключения."
+autowrap_mode = 3
+
+[node name="ActionBindings" type="Label" parent="UI/Root/Settings/Panel/Box/SettingsTabs/Управление/Page"]
+unique_name_in_owner = true
+layout_mode = 2
+theme_type_variation = &"HintLabel"
 autowrap_mode = 3
 
 [node name="Звук и время" type="ScrollContainer" parent="UI/Root/Settings/Panel/Box/SettingsTabs"]

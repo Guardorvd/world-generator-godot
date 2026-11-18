@@ -5,10 +5,11 @@ var failures := 0
 
 class SpawnGround extends Heightfield:
 	var flooded := false
+	var flood_radius := 12.0
 	func ground_at(_x: float, _z: float, _raw := false) -> float: return 10.0
 	func known(_x: float, _z: float) -> bool: return true
 	func depth_at(x: float, z: float, _feet := -INF) -> float:
-		return 2.0 if flooded or Vector2(x, z).distance_to(Vector2(128, 128)) < 12.0 else 0.0
+		return 2.0 if flooded or Vector2(x, z).distance_to(Vector2(128, 128)) < flood_radius else 0.0
 
 class ProfileGround extends Heightfield:
 	var grade := 0.0
@@ -66,6 +67,11 @@ func _test_spawn() -> void:
 	w.settlements.clear()
 	p = PlayerState.spawn(w, h)
 	check(p != null and h.depth_at(p.x, p.z) == 0.0, "world without settlements also checks its fallback")
+	h.flood_radius = 65.0
+	check(PlayerState.spawn(w, h) != null and PlayerState.arrive(w, h, {kind = "peak", x = 32.0, y = 32.0}) == null,
+		"blocked destination does not send the player to a distant valid spawn")
+	check(PlayerState.arrive(w, h, {kind = "settlement", x = 32.0, y = 32.0, src = town}) == null,
+		"settlement arrival uses only nearby ground")
 	h.flooded = true
 	check(PlayerState.spawn(w, h) == null, "fully flooded world reports no safe spawn")
 	check(PlayerState.arrive(w, h, {kind = "peak", x = 32.0, y = 32.0}) == null,
@@ -92,7 +98,7 @@ func _test_save_snapshot() -> void:
 	RegionStream.root = "res://.godot/polish_snapshot_%d_%d" % [OS.get_process_id(), Time.get_ticks_usec()]
 	var key := Vector2i(1, 0)
 	var town := SettlementData.new(70, 10, 0, "Before")
-	var entry := {rect = Rect2i(64, 0, 1, 1), fields = {h = PackedFloat32Array([7])},
+	var entry := {rect = Rect2i(64, 0, 1, 1), fields = {h = PackedFloat32Array([7]), biome = PackedByteArray([8])},
 		decor = {settlements = [town], bridges = [], trails = []}, trail_plan = {state = "before"}}
 	var stream := RegionStream.new()
 	stream.world = w
@@ -103,19 +109,22 @@ func _test_save_snapshot() -> void:
 	town.name = "After"
 	entry.trail_plan.state = "after"
 	entry.fields.h[0] = 99
+	entry.fields.biome[0] = 9
 	stream._evict(key)
 	RegionStream._store_lock.unlock()
 	stream.finish()
 	var folder := RegionStream.store_dir(w)
 	var stored: Variant = RegionStream._read(folder.path_join("ledger.bin"))
-	var good := stored is Dictionary
-	if good:
+	var metadata_ok := false
+	var fields_ok := false
+	if stored is Dictionary:
 		var saved: Dictionary = stored.ledger
-		good = saved.settlements[0].name == "Before" and saved.regions[key].decor.settlements[0].name == "Before" \
+		metadata_ok = saved.settlements[0].name == "Before" and saved.regions[key].decor.settlements[0].name == "Before" \
 			and saved.regions[key].trail_plan.state == "before"
 		var fields: Variant = RegionStream._read(folder.path_join(saved.regions[key].field_file))
-		good = good and fields is Dictionary and fields.fields.h[0] == 7
-	check(good, "background save owns metadata, entity records and pre-eviction fields")
+		fields_ok = fields is Dictionary and fields.fields.h[0] == 7 and fields.fields.biome[0] == 8
+	check(metadata_ok, "background save owns metadata and entity records")
+	check(fields_ok, "background save owns pre-eviction fields")
 	stream.free()
 	for name: String in DirAccess.get_files_at(folder): DirAccess.remove_absolute(folder.path_join(name))
 	DirAccess.remove_absolute(folder)

@@ -52,11 +52,11 @@ static func home(w: WorldData) -> Variant:
 ## Точка появления: в 3,5 м от костра поселения (по умолчанию home), внутри кольца домов (дома стоят
 ## не ближе 6 м от центра). Из восьми сторон света берётся та, где до ближайшего дома дальше всего,
 ## чтобы не стоять носом в стену. При равенстве — юг, как в JS-версии.
-static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> PlayerState:
+static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}, nearby_only := false) -> PlayerState:
 	var p := PlayerState.new()
 	p.x = (w.W / 2.0) * TILE
 	p.z = (w.H / 2.0) * TILE
-	if w.settlements.size() > 0:
+	if not at.is_empty() or not w.settlements.is_empty():
 		var s: Variant = at if not at.is_empty() else home(w)
 		var fx: float = s.x * TILE
 		var fz: float = s.y * TILE
@@ -78,7 +78,7 @@ static func spawn(w: WorldData, heights: Heightfield, at: Variant = {}) -> Playe
 			p.x = fx
 			p.z = fz
 	if not _spawn_safe(w, heights, p.x, p.z):
-		var safe := _spawn_fallback(w, heights, Vector2(p.x, p.z))
+		var safe := _spawn_fallback(w, heights, Vector2(p.x, p.z), nearby_only)
 		if not safe.is_finite(): return null
 		p.x = safe.x
 		p.z = safe.y
@@ -94,12 +94,14 @@ static func _spawn_safe(w: WorldData, heights: Heightfield, x: float, z: float) 
 
 
 ## Rare fallback: nearby rings first, then known cell centres. Never return an unchecked point.
-static func _spawn_fallback(w: WorldData, heights: Heightfield, center: Vector2) -> Vector2:
+static func _spawn_fallback(w: WorldData, heights: Heightfield, center: Vector2, nearby_only: bool) -> Vector2:
 	for ring in range(1, 40):
 		var radius := ring * 1.5
 		for k in ring * 6:
 			var at := center + Vector2(sin(k * TAU / (ring * 6)), cos(k * TAU / (ring * 6))) * radius
 			if _spawn_safe(w, heights, at.x, at.y): return at
+	if nearby_only:
+		return Vector2.INF
 	var rect := Rect2i(0, 0, w.W, w.H)
 	if w.available_rect.has_area(): rect = rect.intersection(w.available_rect)
 	for z in range(rect.position.y, rect.end.y):
@@ -124,7 +126,7 @@ static func arrival_heading(place: Dictionary, at: Vector2, current: float) -> f
 ## Быстрое перемещение: к костру, вершине, берегу или старту трассы; x и y места — в клетках.
 static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> PlayerState:
 	if place.kind == "settlement":
-		return spawn(w, heights, place.src)
+		return spawn(w, heights, place.src, true)
 	var p := PlayerState.new()
 	var cx: float = place.x * TILE
 	var cz: float = place.y * TILE
@@ -152,7 +154,7 @@ static func arrive(w: WorldData, heights: Heightfield, place: Dictionary) -> Pla
 		if found:
 			break
 	if not found:
-		return spawn(w, heights)
+		return null
 	p.feet = heights.ground_at(p.x, p.z)
 	return p
 

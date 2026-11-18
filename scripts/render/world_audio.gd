@@ -43,6 +43,8 @@ const HARD := [Biomes.BEACH, Biomes.DESERT, Biomes.ROCK, Biomes.PEAK, Biomes.STO
 
 var world: WorldData
 var heights: Heightfield
+var fires: Array = []
+var regional_fires: Array = []
 var _water: AudioStreamPlayer
 var _surf: AudioStreamPlayer
 var _roll: AudioStreamPlayer
@@ -323,12 +325,13 @@ func _sample(pos: Vector3) -> void:
 	# костёр: звук стоит у ближайшего, если он ближе FIRE_R
 	var best := FIRE_R * FIRE_R
 	var at := Vector3()
-	for s in world.settlements:
-		var dx: float = s.x * TILE - pos.x
-		var dz: float = s.y * TILE - pos.z
-		if dx * dx + dz * dz < best:
-			best = dx * dx + dz * dz
-			at = Vector3(s.x * TILE, heights.ground_at(s.x * TILE, s.y * TILE) + 0.5, s.y * TILE)
+	for list: Array in [fires, regional_fires]:
+		for fire: Dictionary in list:
+			var point: Vector3 = fire.pos
+			var distance := Vector2(point.x - pos.x, point.z - pos.z).length_squared()
+			if distance < best:
+				best = distance
+				at = point + Vector3.UP * 0.5
 	if best < FIRE_R * FIRE_R:
 		_fire.position = at
 		if not _fire.playing:

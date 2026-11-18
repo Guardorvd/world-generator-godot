@@ -340,11 +340,11 @@ func _navigation_test() -> void:
 	_check(line.path[-1] == Vector2(42, 22), "озёрная цель ведёт к берегу, не в середину воды")
 	_check(is_same(cached, line.roads), "новая цель использует уже собранную дорожную сеть")
 	# Свободная метка: используем тот же обработчик, что у клика по карте.
-	var frame: Array = hud.big_map._frame()
 	var click := InputEventMouseButton.new()
 	click.button_index = MOUSE_BUTTON_LEFT
+	click.ctrl_pressed = true
 	click.pressed = true
-	click.position = frame[0] + Vector2(10.5, 5.5) * float(frame[2])
+	click.position = hud.big_map.world_to_screen(Vector2(10.5, 5.5) * GameConfig.TILE)
 	hud.big_map._gui_input(click)
 	click.pressed = false # карта выбирает при отпускании без перетаскивания
 	hud.big_map._gui_input(click)

@@ -83,14 +83,13 @@ func run() -> void:
 		if not offers.is_empty():
 			game.quests.accept(offers[0])
 			quest_title = offers[0].title
-	var map: Hud.BigMap = main.hud.big_map
+	var map: Hud.Atlas = main.hud.big_map
 	map.size = Vector2(1280, 720)
-	var before_k: float = map._frame()[2]
+	var before_k := map._scale
 	var cursor := Vector2(900, 300)
-	var cell: Vector2 = (cursor - map._frame()[0]) / before_k
+	var cell := map.screen_to_world(cursor)
 	map._zoom_at(cursor, 1.25)
-	var f: Array = map._frame()
-	check(f[2] > before_k and ((cursor - f[0]) / float(f[2])).distance_to(cell) < 0.01, "колесо приближает карту вокруг курсора")
+	check(map._scale > before_k and map.screen_to_world(cursor).distance_to(cell) < 0.01, "колесо приближает карту вокруг курсора")
 	map.reset_view()
 	# Взятое задание само ставит свою цель: проверяется та, что была при сохранении.
 	goal_key = main.hud.goal.get("key", "")

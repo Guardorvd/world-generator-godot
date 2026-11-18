@@ -53,13 +53,14 @@ static func _ray_box(o: Vector3, d: Vector3, half: Vector3) -> float:
 
 
 
-func offers(village: Variant) -> Array:
+func offers(village: Variant, catalog: Variant = null) -> Array:
 	var here := target(world.place(WorldData.place_id("settlement", village.x, village.y)))
 	var neighbors: Array = []
 	for r: Dictionary in world.routes(here.id):
 		neighbors.append(target(world.place(r.to if r.from == here.id else r.from)))
 	var far := world.far_destination(here.id)
-	return quests.offers(here, all_places.call(), neighbors, {} if far.is_empty() else target(far), visited, world.seed_num)
+	var places: Array = all_places.call() if catalog == null else catalog
+	return quests.offers(here, places, neighbors, {} if far.is_empty() else target(far), visited, world.seed_num)
 
 func accept(q: QuestData) -> void:
 	quests.accept(q)

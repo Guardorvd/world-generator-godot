@@ -94,7 +94,7 @@ func _process(_delta: float) -> bool:
 		main.hud.visible = false
 		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 		Dev.save_json(out.path_join("stats_%s.json" % id), Dev.world_stats(game.world))
-		_save(main.hud.map_tex.get_image(), "%s_map" % id, false)
+		_save(main.hud.map_preview, "%s_map" % id, false)
 		views = Dev.views(game)
 		view = 0
 		wait = 0

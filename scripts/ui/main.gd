@@ -181,12 +181,15 @@ func _show(screen: String) -> void:
 			var target: Control = _tab_button(_seed_tab) if play.disabled else play
 			target.grab_focus()
 		"pause":
+			_fill_controls()
 			%Resume.grab_focus()
 		"settings":
 			%Done.grab_focus()
 
 
 func _input(event: InputEvent) -> void:
+	if %Settings.visible and game == null:
+		GameContext.scope.controls.note(event)
 	if _confirm != null or not %Menu.is_visible_in_tree():
 		return
 	var direction := int(event.is_action_pressed("ui_right", true)) - int(event.is_action_pressed("ui_left", true))
@@ -1002,12 +1005,14 @@ func _fit_menu() -> void:
 func _process(delta: float) -> void:
 	if display_options != null:
 		display_options.tick()
+	if %Settings.visible:
+		_update_control_hint()
 	_flush_settings()
 	if _backdrop_mode == "live" and get_window().mode != Window.MODE_MINIMIZED:
 		_animate_menu(delta)
 	if game != null and not busy and not game.paused and not game.travel_active():
 		_save_elapsed += delta
-		if _save_elapsed >= 60.0 or hud.visited.size() != _saved_discoveries:
+		if _save_elapsed >= 60.0 or hud.map_place_count() != _saved_discoveries:
 			_save_elapsed = 0.0
 			_save_current()
 	if busy:
@@ -1198,7 +1203,7 @@ func _on_world_ready(loaded: WorldLoader) -> void:
 		busy = false
 		return
 	_save_elapsed = 0.0
-	_saved_discoveries = hud.visited.size()
+	_saved_discoveries = hud.map_place_count()
 	game.quests.changed.connect(func() -> void: _save_elapsed = 60.0)
 	hud.visible = not game.opening_active()
 	hud.set_map_visible(false)
@@ -1226,7 +1231,6 @@ func _toggle_pause() -> void:
 		_save_current()
 		hud.visible = false   # подсказки и сообщения не лезут поверх панели паузы
 		%PauseWorld.text = "Мир «%s»" % game.world.seed_text
-		_fill_controls()
 		_show("pause")
 
 
@@ -1347,7 +1351,7 @@ func _save_current(slot := "auto") -> bool:
 		return true
 	var err := Saves.write_slot(game.save_state(), slot)
 	if err == OK:
-		_saved_discoveries = hud.visited.size()
+		_saved_discoveries = hud.map_place_count()
 	_save_status.text = ("Ручное сохранение записано" if slot == "manual" else "Автосохранение записано") if err == OK else "Ошибка сохранения: " + error_string(err)
 	if err != OK:
 		_message("Не удалось сохранить", "Прогресс остаётся в текущей игре. Освободите место и повторите сохранение.\n" + error_string(err))
@@ -1401,9 +1405,9 @@ func _control_rows() -> Array:
 		[c.label(&"run"), "бег, рывок на велосипеде"], [c.label(&"jump"), "прыжок"],
 	]
 	if not pad:
-		rows.append(["ЛКМ (держать)", "памп на велосипеде"])
+		rows.append([c.label(&"bike_pump"), "памп на велосипеде (держать)"])
 		rows.append(["%s → %s" % [c.label(&"bike_back"), c.label(&"bike_forward")], "баннихоп"])
-	rows.append([c.label(&"interact"), "действие, слезть"])
+	rows.append([c.label(&"interact"), "взаимодействовать, сесть / слезть"])
 	rows.append([c.label(&"flashlight"), "фонарик"])
 	rows.append([c.label(&"recover_bike"), "выбрать место для велосипеда"])
 	rows.append([c.label(&"toggle_map"), "карта"])
@@ -1413,6 +1417,15 @@ func _control_rows() -> Array:
 	rows.append([c.label(&"show_hud"), "сводка (показать / скрыть)"])
 	rows.append([c.label(&"pause"), "пауза"])
 	return rows
+
+
+func _update_control_hint() -> void:
+	var controls := GameContext.scope.controls
+	var caption := "%s — взаимодействовать · %s — показать или скрыть сводку" % [
+		controls.label(&"interact"), controls.label(&"show_hud"),
+	]
+	if %ActionBindings.text != caption:
+		%ActionBindings.text = caption
 
 
 func _fill_controls() -> void:

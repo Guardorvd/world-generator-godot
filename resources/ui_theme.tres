@@ -1,4 +1,4 @@
-[gd_resource type="Theme" load_steps=76 format=3]
+[gd_resource type="Theme" load_steps=75 format=3]
 
 [ext_resource type="Texture2D" path="res://resources/icons/checkbox_unchecked.svg" id="checkbox_unchecked"]
 
@@ -696,19 +696,6 @@ corner_radius_top_right = 8
 corner_radius_bottom_right = 8
 corner_radius_bottom_left = 8
 
-[sub_resource type="StyleBoxFlat" id="tracker"]
-content_margin_left = 12.0
-content_margin_top = 8.0
-content_margin_right = 8.0
-content_margin_bottom = 8.0
-bg_color = Color(0.06, 0.07, 0.06, 0.62)
-border_width_left = 3
-border_color = Color(1, 0.82, 0.32, 0.85)
-corner_radius_top_left = 4
-corner_radius_top_right = 4
-corner_radius_bottom_right = 4
-corner_radius_bottom_left = 4
-
 [sub_resource type="StyleBoxFlat" id="section"]
 content_margin_left = 16.0
 content_margin_top = 12.0
@@ -1168,8 +1155,6 @@ TitleLabel/font_sizes/font_size = 34
 TooltipLabel/colors/font_color = Color(0.93, 0.93, 0.9, 1)
 TooltipLabel/font_sizes/font_size = 14
 TooltipPanel/styles/panel = SubResource("tip")
-TrackerPanel/base_type = &"PanelContainer"
-TrackerPanel/styles/panel = SubResource("tracker")
 VBoxContainer/constants/separation = 8
 VScrollBar/styles/grabber = SubResource("grab_VScrollBar")
 VScrollBar/styles/grabber_highlight = SubResource("grab_hi_VScrollBar")

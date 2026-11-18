@@ -9,6 +9,7 @@ func check(ok: bool, message: String) -> void:
 		failures += 1
 
 func _initialize() -> void:
+	preload("res://tools/watchdog.gd").arm(self, 15)
 	_run.call_deferred()
 
 func _run() -> void:
@@ -24,6 +25,9 @@ func _run() -> void:
 	var map := Image.create(8, 8, false, Image.FORMAT_RGB8)
 	hud.set_world(world, map)
 	await process_frame
+	check(hud.summary_visible(), "сводка видна при старте")
+	await _toggle_hud()
+	await create_timer(Hud.SUMMARY_FADE + 0.04).timeout
 	hud.set_hints([], [["F", "Сесть"]])
 	check(hud.prompt.visible and hud.get_node("Crosshair").visible and not hud.summary_visible(), "контекстная подсказка видна без сводки")
 	hud.set_hints([], [])
@@ -35,17 +39,9 @@ func _run() -> void:
 	check(not hud.prompt.visible, "подсказка скрывается в режиме фото")
 	hud.set_photo_mode(false)
 	hud.set_summary_blocked(false)
-	Input.action_press("show_hud")
-	await process_frame
-	await process_frame
-	Input.action_release("show_hud")
-	await process_frame
+	await _toggle_hud()
 	check(hud.summary_visible(), "сводка остаётся после отпускания")
-	Input.action_press("show_hud")
-	await process_frame
-	await process_frame
-	Input.action_release("show_hud")
-	await process_frame
+	await _toggle_hud()
 	check(not hud.summary_visible(), "повторное нажатие скрывает сводку")
 	hud.set_goal(Hud.marker_goal(Vector2(3, 4)))
 	hud.set_map_visible(true)
@@ -59,10 +55,31 @@ func _run() -> void:
 	hud.map_close_requested.connect(func() -> void: close_count[0] += 1)
 	(hud.big_map.get_child(0) as Button).pressed.emit()
 	check(close_count[0] == 1, "кнопка закрытия карты отправляет запрос")
+	var game: GameWorld = preload("res://scenes/game_world.tscn").instantiate()
+	root.add_child(game)
+	game.hud = hud
+	game._captured_at = 0
+	game._finish_travel("Прибытие", true)
+	check(game._captured_at > 0, "после переноса с доски возвращается управление взглядом")
+	game.free()
+	hud.ask_travel({name = "Пункт", x = 4.0, y = 4.0})
+	hud.clear_world()
+	check(hud._travel_dialog == null, "выход из мира закрывает подтверждение переноса")
 	main.queue_free()
 	await process_frame
 	print("UIUX failures: ", failures)
 	quit(1 if failures else 0)
+
+func _toggle_hud() -> void:
+	var event := InputEventAction.new()
+	event.action = &"show_hud"
+	event.pressed = true
+	Input.parse_input_event(event)
+	await process_frame
+	event = InputEventAction.new()
+	event.action = &"show_hud"
+	Input.parse_input_event(event)
+	await process_frame
 
 func _map_click(map: Control, at: Vector2, ctrl: bool) -> void:
 	var press := InputEventMouseButton.new()

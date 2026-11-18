@@ -1,6 +1,7 @@
 class_name RegionStream
 extends Node3D
 signal storage_failed(message: String)
+signal settlements_changed
 var terrain_builder: TerrainBuilder = GameContext.scope.terrain
 ## 13.9: соседние области в игре. Ближайшая к игроку неготовая область за краем плана готовится
 ## в задаче WorkerThreadPool (по одной): заготовка, реки, поселения, дороги, закрепление в журнале.
@@ -757,12 +758,12 @@ static func build_decor(world: WorldData, heights: Heightfield, key: Vector2i, e
 	var places := WorldData.new()
 	places.seed_num = world.seed_num ^ (key.x * 73856093) ^ (key.y * 19349663)
 	places.settlements = decor.settlements
-	var built := SettlementsBuilder.build(node, places, heights)
-	var own: Array = []
-	for s: SettlementData in decor.settlements:
-		var foot := SettlementsBuilder.board_foot(s, heights)
-		own.append({at = Transform3D(Basis(Vector3.UP, -PI / 4.0), foot + Vector3(0, 1.35, 0)), place = s})
-	return {node = node, fires = built.fires, windows = built.windows, boards = own}
+	var local_roads: Array = decor.trails
+	if heights.world.outer != null:
+		local_roads = heights.world.outer.get_ledger().get("trails", local_roads)
+	var built := SettlementsBuilder.build(node, places, heights, local_roads)
+	built.node = node
+	return built
 
 
 func _hide(key: Vector2i) -> void:
@@ -784,6 +785,7 @@ func _collect() -> void:
 		fires.append_array(_shown[key].fires)
 		windows.append(_shown[key].windows)
 		boards.append_array(_shown[key].boards)
+	settlements_changed.emit()
 
 
 ## Сколько областей с полями в памяти и показанных (для проверок памяти)
@@ -1002,8 +1004,17 @@ func _persist(key: Vector2i) -> void:
 	# Own a snapshot of the entity records and fields. Generation waits for the
 	# write, but the frame only polls and can keep streaming existing regions.
 	_unsaved_fields[key] = true
-	# encode уже собирает новые словари и массивы (записи — через to_dict): вторая глубокая копия не нужна.
+	# encode копирует контейнеры и записи, но оставляет числовые буферы общими.
 	var accepted: Dictionary = EntityCodec.encode(ledger)
+	for region_key: Vector2i in accepted.regions:
+		var entry: Dictionary = accepted.regions[region_key]
+		if not entry.has("fields") or (region_key != key and entry.has("field_file")):
+			continue
+		var fields: Dictionary = entry.fields
+		for field: String in fields:
+			var values: Variant = fields[field]
+			if values is PackedByteArray or values is PackedFloat32Array:
+				fields[field] = values.duplicate()
 	_save_result = {key = key}
 	var result := _save_result
 	var dir := store_dir(world)

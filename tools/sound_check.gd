@@ -42,6 +42,11 @@ func _run() -> void:
 	var a := WorldAudio.new()
 	root.add_child(a)   # _ready создаёт проигрыватели
 	a.setup(w, h)
+	var yards := SettlementsBuilder.Courtyard.new(w, h)
+	for s: SettlementData in w.settlements:
+		var yard := yards.choose(s)
+		if not yard.is_empty() and yard.fire.is_finite():
+			a.fires.append({pos = yard.fire})
 	var kinds := {}
 	for y in range(2, w.H - 2, 3):
 		for x in range(2, w.W - 2, 3):
@@ -55,7 +60,9 @@ func _run() -> void:
 			ok = false
 	var p := PlayerState.spawn(w, h)
 	a._sample(Vector3(p.x, p.feet, p.z))
-	if a._fire.playing != (Vector2(p.x, p.z).distance_to(Vector2(PlayerState.home(w).x, PlayerState.home(w).y) * GameConfig.TILE) < WorldAudio.FIRE_R):
+	var nearby_fire := a.fires.any(func(f: Dictionary) -> bool:
+		return Vector2(p.x, p.z).distance_to(Vector2(f.pos.x, f.pos.z)) < WorldAudio.FIRE_R)
+	if a._fire.playing != nearby_fire:
 		push_error("костёр")
 		ok = false
 	print("у точки появления: вода %.2f, море %.2f, птицы %s" % [a._goal[a._water], a._goal[a._surf], a._bird_ok], ", костёр ", a._fire.playing)

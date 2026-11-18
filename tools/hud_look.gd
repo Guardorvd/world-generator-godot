@@ -74,6 +74,150 @@ func _tick(stamina: Stamina, frames: int, ride: bool, throttle: float, boost: bo
 		await process_frame
 
 
+func _map_fixture() -> WorldData:
+	var world := WorldData.new()
+	world.W = 256
+	world.H = 256
+	world.N = world.W * world.H
+	var biomes := PackedByteArray()
+	biomes.resize(world.N)
+	for y in world.H:
+		for x in world.W:
+			var at := Vector2(x, y)
+			var biome := Biomes.GRASS
+			if x < 113 + sin(y * 0.07) * 9 or (x > 143 and y < 127):
+				biome = Biomes.FOREST
+			if ((at - Vector2(154, 147)) / Vector2(15, 11)).length_squared() < 1.0:
+				biome = Biomes.LAKE
+			biomes[y * world.W + x] = biome
+	world.biome = biomes
+	var wet := PackedByteArray()
+	wet.resize(world.N)
+	world.river = wet
+	var paths := PackedByteArray()
+	paths.resize(world.N)
+	paths[128 * world.W + 128] = 3
+	world.path_mask = paths
+	var weather := PackedFloat32Array()
+	weather.resize(world.N)
+	weather.fill(13.0 / 60.0)
+	world.temp = weather
+	world.moist = weather
+	world.elev = weather
+	world.slope = weather
+	world.rivers = [[{x = 145, y = 80}, {x = 136, y = 102}, {x = 138, y = 115},
+		{x = 145, y = 130}, {x = 153, y = 139}]]
+	world.trails = [
+		{kind = "road", pts = [{x = 79.0, y = 148.0}, {x = 110.0, y = 141.0},
+			{x = 125.0, y = 133.0}, {x = 129.0, y = 116.0}, {x = 147.0, y = 105.0}, {x = 163.0, y = 80.0}]},
+		{kind = "trail", pts = [{x = 129.0, y = 116.0}, {x = 143.0, y = 120.0},
+			{x = 155.0, y = 116.0}, {x = 171.0, y = 119.0}]},
+	]
+	var village := SettlementData.new()
+	village.x = 126
+	village.y = 114
+	village.name = "Ольховка"
+	world.settlements = [village]
+	world.outer = OuterLand.new()
+	return world
+
+
+func _tap_hud() -> void:
+	var event := InputEventAction.new()
+	event.action = &"show_hud"
+	event.pressed = true
+	Input.parse_input_event(event)
+	await process_frame
+	await process_frame
+	event = InputEventAction.new()
+	event.action = &"show_hud"
+	Input.parse_input_event(event)
+
+
+func _map_checks(world: WorldData) -> void:
+	_check(hud.summary_visible() and hud.minimap.visible and hud.compass.visible, "сводка видна при старте")
+	await _tap_hud()
+	_check(not hud.summary_visible() and hud.minimap.visible, "Tab запускает плавное скрытие")
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
+	_check(not hud.minimap.visible and hud._summary_hint.text.ends_with("показать сводку"), "скрытие оставляет подсказку")
+	await _tap_hud()
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
+	_check(hud.summary_visible() and is_equal_approx(hud.minimap.modulate.a, 1.0), "Tab возвращает сводку")
+	hud.set_map_visible(true)
+	_check(not hud.summary_visible() and not hud.minimap.visible and not hud._summary_hint.visible, "большая карта скрывает сводку и подсказку")
+	hud.set_map_visible(false)
+	hud.set_photo_mode(true)
+	_check(not hud.minimap.visible and not hud._summary_hint.visible, "фоторежим скрывает сводку и подсказку")
+	hud.set_photo_mode(false)
+	hud.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
+	_check(hud.summary_visible(), "потеря фокуса сохраняет выбор игрока")
+	var original := InputMap.action_get_events("interact")
+	var remap := InputEventKey.new()
+	remap.physical_keycode = KEY_F
+	InputMap.action_erase_events("interact")
+	InputMap.action_add_event("interact", remap)
+	var game := GameWorld.new()
+	game._bag_label = Label3D.new()
+	game.add_child(game._bag_label)
+	game._update_bag_label()
+	main._update_control_hint()
+	var action_row: bool = main._control_rows().any(func(row: Array) -> bool:
+		return row[0] == "F" and row[1].begins_with("взаимодействовать"))
+	_check(game._bag_label.text.ends_with("F") and action_row and main.get_node("%ActionBindings").text.begins_with("F "),
+		"сумка, пауза и настройки используют переназначенную клавишу")
+	InputMap.action_erase_events("interact")
+	for event in original:
+		InputMap.action_add_event("interact", event)
+	game.services.controls.joypad = true
+	game._update_bag_label()
+	var pad_key := game.services.controls.label("interact")
+	_check(not pad_key.is_empty() and game._bag_label.text.ends_with(pad_key), "надпись обновляется при переходе на геймпад")
+	game.services.controls.joypad = false
+	game.free()
+	var landmark := Vector2(560, 512)
+	var before: Vector2 = hud.minimap.world_to_map(landmark)
+	hud.set_player(552, 512, PI * 0.5)
+	var after: Vector2 = hud.minimap.world_to_map(landmark)
+	_check(is_equal_approx(before.x - after.x, 40.0 * hud.minimap.PIXELS_PER_METER)
+		and is_equal_approx(before.y, after.y), "движение сдвигает окрестности в постоянном масштабе при любом курсе")
+	var view := Rect2(372, 332, 360, 360)
+	hud.minimap._data.update(view)
+	var key := Vector2i(2, 2)
+	var cached: Texture2D = hud.minimap._data.tiles[key].texture
+	_check(not hud.minimap._data.update(view), "неподвижная карта плана пропускает обновление подложки")
+	hud.minimap._data.release_view()
+	_check(hud.minimap._data.update(view) and hud.minimap._data.tiles[key].texture == cached,
+		"при возврате карты в той же области используется готовая текстура")
+	hud.set_player(1040, 512, 0.0)
+	await process_frame
+	await process_frame
+	var outer_key := Vector2i(4, 2)
+	var biome := PackedByteArray()
+	biome.resize((OuterLand.C + 3) * (OuterLand.C + 3))
+	biome.fill(Biomes.FOREST)
+	world.outer.chunks[outer_key] = {biome = biome}
+	await process_frame
+	await process_frame
+	_check(hud.minimap._data.tiles.has(outer_key), "карта подхватывает соседний кусок на месте")
+	var forest := PackedByteArray()
+	forest.resize(OuterLand.C * OuterLand.C)
+	forest.fill(Biomes.FOREST)
+	var dry := PackedByteArray()
+	dry.resize(forest.size())
+	var region := {
+		rect = Rect2i(256, 128, OuterLand.C, OuterLand.C),
+		fields = {biome = forest, lake = dry, river = dry},
+	}
+	world.outer.set_ledger({regions = {Vector2i(1, 0): region}})
+	await process_frame
+	await process_frame
+	_check(is_same(hud.minimap._data.tiles[outer_key].fields, region.fields), "карта применяет опубликованные поля соседней области")
+	hud.set_player(512, 512, 0.3)
+	hud.set_bike(480, 548, true)
+	hud.set_goal(Hud.marker_goal(Vector2(139, 122)))
+	hud.visited[WorldData.place_id("settlement", 126, 114)] = true
+
+
 func _run() -> void:
 	_build()
 	await process_frame
@@ -82,40 +226,39 @@ func _run() -> void:
 		main.get_node(path).visible = false
 	hud.visible = true
 	hud.lock_hint.visible = false
-	var world := WorldData.new()
-	world.W = 64
-	world.H = 64
-	world.N = 4096
+	var world := _map_fixture()
 	var map := Image.create(128, 128, false, Image.FORMAT_RGB8)
 	map.fill(Color(0.85, 0.88, 0.9))
 	hud.set_world(world, map)
-	hud.set_player(128, 128, 0.3)
+	hud.set_player(512, 512, 0.3)
 	await process_frame
-	_check(not hud.minimap.visible and not hud.compass.visible, "без Tab экран чистый")
-	Input.action_press("show_hud") # как зажатый Tab: панель сведений, компас и нижние подсказки
-	await process_frame
-	await process_frame
-	_check(hud.summary_visible(), "Tab показывает сводку")
-	hud.set_map_visible(true)
-	await process_frame
-	await process_frame
-	_check(not hud.summary_visible() and not hud.minimap.visible, "большая карта скрывает сводку")
-	hud.set_map_visible(false)
-	hud.notification(NOTIFICATION_APPLICATION_FOCUS_OUT)
-	_check(not hud.summary_visible(), "потеря фокуса сбрасывает Tab")
-	Input.action_release("show_hud")
-	await process_frame
-	await process_frame
-	Input.action_press("show_hud")
-	hud.info.text = "Тундра, тропа (снег)\nВысота: 1240 м · -12°C\nБлижайшее поселение: «Ольховка», 1,2 км"
+	await _map_checks(world)
+	var player := PlayerState.new()
+	player.x = 512
+	player.z = 512
+	player.feet = 1240
+	hud.update_info(player, 0.3, 0.0)
 	hud.set_clock(5.5)
-	_check(hud._clock_label.text == "05:30", "часы показываются над сведениями о местности")
+	_check(hud._clock_label.text == "05:30" and hud._clock_label.get_parent().visible
+		and hud._altitude.text == "1240 м" and hud._temperature.text == "−12 °C", "часы и показания местности выведены отдельными полями")
+	hud.quests = Hud.Quests.new()
+	var delivery := QuestData.new("hud", "delivery")
+	delivery.title = "Письма для Каменки"
+	delivery.steps.append({do = "pickup", place = {name = "Ольховка", kind = "settlement", x = 126, y = 114}})
+	delivery.steps.append({do = "carry", place = {name = "Каменка", kind = "settlement", x = 139, y = 120}})
+	delivery.step = 1
+	hud.quests.active = delivery
+	hud.quests.cargo = true
+	hud.quest_changed()
+	_check(hud.tracker.visible and hud._tracker_count.text == "2 / 2" and hud._tracker_note.visible, "карточка задания показывает ход доставки")
+	await _shot("hud_map")
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.toast("Достигнута цель")
 	hud.toast_now("Открыто место: перевал Седой")
 	_check(hud._toast_queue.size() == 1 and hud.toast_label.text.begins_with("Открыто"), "очередь сохраняет событие без дубля")
 	hud.set_hints([["Shift", "Сильнее"], ["Пробел", "Прыжок"], ["F", "Слезть"], ["Y", "Поставить велосипед"]], [["F", "Доска «Ольховка»"]])
 	_check(hud.hint.get_child_count() == 4 and hud.prompt.get_child_count() == 1, "чипы: четыре внизу и один у прицела")
+	_check(hud._reticle_on_target, "прицел обозначает доступное действие")
 	# 15.0: рывок (Shift) берёт треть полоски: с 40 % остаётся ~7 % — пульс и затемнение краёв в приливе
 	var stamina := Stamina.new()
 	stamina.value = 0.4
@@ -152,7 +295,13 @@ func _run() -> void:
 	_check(stamina.state == Stamina.State.COAST and hud._stamina.warning < 0.05 and hud._stamina._coast > 0.9, "накат: предупреждение погасло, ореол наката")
 	await _tick(stamina, 150, true, 0.0, false)
 	await _shot("hud_coast")
-	Input.action_release("show_hud")
+	hud.set_hints([["Правый бампер", "Поставить велосипед"], ["Треугольник", "Открыть меню"],
+		["Левый стик", "Повернуть велосипед"], ["Крестик", "Подтвердить"],
+		["Кружок", "Отменить размещение"], ["Левый бампер", "Переключить карту"]], [])
+	await process_frame
+	await process_frame
+	_check(hud.hint.get_line_count() > 1 and hud.get_global_rect().encloses(hud.hint.get_global_rect()),
+		"длинные подсказки переносятся внутри экрана")
 	# меню: карточка над кнопкой запуска, зерно можно изменить на отдельном экране
 	hud.visible = false
 	main.get_node("UI/Root/Back").visible = true

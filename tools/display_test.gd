@@ -119,11 +119,13 @@ func run() -> void:
 		check(projected.distance_to(root.get_visible_rect().get_center()) < 1.0, "3D names and photo aim align with UI %s" % size)
 		main.hud.set_map_visible(true)
 		await settle()
-		var frame: Array = main.hud.big_map._frame()
 		var click := InputEventMouseButton.new()
 		click.button_index = MOUSE_BUTTON_LEFT
+		click.ctrl_pressed = true
 		click.pressed = true
-		click.position = frame[0] + Vector2(12, 16) * float(frame[2])
+		click.position = main.hud.big_map.world_to_screen(Vector2(12, 16) * GameConfig.TILE)
+		main.hud.big_map._gui_input(click)
+		click.pressed = false
 		main.hud.big_map._gui_input(click)
 		check(main.hud.goal.get("kind") == "marker" and absf(main.hud.goal.x - 12.0) < 0.1, "map picking matches scaled UI %s" % size)
 		main.hud.set_goal({})

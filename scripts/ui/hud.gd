@@ -4,13 +4,11 @@ const BrakeIndicator = preload("res://scripts/ui/brake_indicator.gd")
 var _brakes: BrakeIndicator
 ## Интерфейс поверх 3D: сведения о местности, мини-карта, большая карта, всплывающие сообщения,
 ## прицел и подсказки. Прицел, панель сведений и надписи — узлы сцены main.tscn (правятся в редакторе),
-## мини-карта и большая карта рисуются кодом (MiniMap, BigMap). Копия js/ui/hud.js. Подсказки внизу и у прицела меняются по тому, что игрок
+## мини-карта и личная карта рисуются кодом (LocalMap, WorldMapView). Подсказки внизу и у прицела меняются по тому, что игрок
 ## делает сейчас (GameWorld._update_hints); велосипед отмечен на картах, пока игрок не на нём.
-## С 2.8 на большой карте можно выбрать цель путешествия (ЛКМ по поселению или вершине) — она видна
-## только меткой на компасе вверху и на картах — и переместиться в любое из них (ПКМ; до 3.0.2 — только где уже побывали).
 ## С 2.9 к местам добавились крупные озёра с названиями (WorldData.lakes): открываются на берегу.
 ## С 12.5+ у каждого сведения одно место: курс и расстояния до цели и задания — на компасе, что делать — в
-## счётчике задания, местность под ногами — в панели сведений. Перемещение с большой карты — с подтверждением.
+## счётчике задания, местность под ногами — в панели сведений. Перемещение с доски требует подтверждения.
 
 signal travel_requested(place: Dictionary)
 signal goal_changed(place: Dictionary)
@@ -18,13 +16,20 @@ signal map_close_requested
 
 const TILE := GameConfig.TILE
 const DIRS := ["С", "СЗ", "З", "ЮЗ", "Ю", "ЮВ", "В", "СВ"]
-const MINI := 200.0
+const LocalMap = preload("res://scripts/ui/local_map.gd")
+const Atlas = preload("res://scripts/ui/world_map_view.gd")
+const MapData = preload("res://scripts/ui/local_map_data.gd")
+const Journal = preload("res://scripts/game/map_journal.gd")
+const MINI := LocalMap.DIAMETER
+const SUMMARY_FADE := 0.24
+const SUMMARY_HINT_TIME := 5.0
 const TOAST_TIME := 3.5 # сколько сообщение висит на экране (с)
 const TOAST_FADE := 0.4 # сколько гаснет без очереди (с)
 const TOAST_QUEUE := 3 # сколько сообщений ждут в очереди, старые отбрасываются
 const GOLD := Color(1.0, 0.82, 0.32)  # цвет цели путешествия
 const Quests = preload("res://scripts/game/quests.gd")
 const UiIcons = preload("res://scripts/ui/ui_icons.gd")
+const HudStyle = preload("res://scripts/ui/hud_style.gd")
 ## 14.2: края экрана темнеют к углам, середина не тронута; strength — от StaminaArc.warning
 const VIGNETTE_CODE := """shader_type canvas_item;
 uniform float strength = 0.0;
@@ -35,23 +40,35 @@ void fragment() {
 """
 
 var world: WorldData
-var map_tex: ImageTexture
-var minimap: MiniMap
-var big_map: BigMap
+var map_preview: Image
+var map_data: MapData
+var map_journal := Journal.new()
+var minimap: LocalMap
+var controls: Controls = GameContext.scope.controls
+var big_map: Atlas
 var compass: Compass
 var settlement_panel
 var goal := {}  # цель путешествия — место из places() или пусто
 var quests: Quests  # 11.9: задания игры (GameWorld), счётчик под мини-картой показывает активное
 var tracker: PanelContainer
+var _tracker_content: VBoxContainer
 var _tracker_title: Label
 var _tracker_icon: TextureRect  # 12.5: пиктограмма вида задания или галочка выполненного
+var _tracker_kind: Label
+var _tracker_count: Label
 var _tracker_step: Label
 var _tracker_note: Label
+var _tracker_progress: Control
+var _step_count := 0
+var _step_index := 0
 var _photo_mode := false
-var _revealed := false # сводка закрепляется повторным нажатием show_hud
-var _reveal_needs_release := false
+var _revealed := true
 var _summary_blocked := false
-var _summary_shown := false
+var _summary_progress := 1.0
+var _summary_hint_left := SUMMARY_HINT_TIME
+var _summary_hint: Label
+var _summary_switch: PanelContainer
+var _reticle_on_target := false
 var _hint_urgent := false # подсказка, которую видно и без Tab (падение)
 var _flash_tween: Tween
 var _travel_dialog: ConfirmationDialog  # 12.5+: подтверждение перемещения с большой карты
@@ -59,18 +76,25 @@ var _stamina: StaminaArc  # 14.2: дуга выносливости (14.4: в л
 var _vignette: ColorRect  # 14.2: затемнение краёв экрана, когда силы на исходе
 var _hint_items: Array = []   # 14.2: чипы подсказок внизу и у прицела: [[клавиша, действие], ...]
 var _prompt_items: Array = []
-var _chip_style: StyleBoxFlat
-@onready var info: Label = $InfoPanel/Rows/Info
-@onready var _clock_label: Label = $InfoPanel/Rows/Clock
-@onready var toast_label: Label = $Toast/Text
-@onready var lock_hint: Label = $LockHint
-@onready var hint: HBoxContainer = $Hint
+var _key_style: StyleBoxFlat
+var _hint_style: StyleBoxFlat
+var _prompt_style: StyleBoxFlat
+var _warning_style: StyleBoxFlat
+@onready var _info_panel: PanelContainer = $InfoPanel
+@onready var info: Label = $InfoPanel/Rows/Header/Info
+@onready var _clock_label: Label = $InfoPanel/Rows/Header/Time/Clock
+@onready var _surface: Label = $InfoPanel/Rows/Surface
+@onready var _altitude: Label = $InfoPanel/Rows/Readings/Altitude/Value
+@onready var _temperature: Label = $InfoPanel/Rows/Readings/Temperature/Value
+@onready var _nearby: Label = $InfoPanel/Rows/Nearby
+@onready var _reticle: Control = $Crosshair
+@onready var toast_label: Label = $Toast/Stack/Line/Text
+@onready var _toast_time: ProgressBar = $Toast/Stack/TimeLeft
+@onready var lock_hint: PanelContainer = $LockHint
+@onready var hint: HFlowContainer = $Hint
 @onready var prompt: HBoxContainer = $Prompt
 var _toast_left := 0.0
 var _toast_queue: PackedStringArray = []
-var _places: Array = []
-var _region_tex := {} # 13.9+final: картинки соседних областей для большой карты (область -> ImageTexture)
-var _places_revision := -1 # доступные места обновляются при расширении территории
 var _clock_minute := -1
 
 # Состояние игрока для отрисовки карт
@@ -83,15 +107,15 @@ var bike_shown := false
 
 
 func _ready() -> void:
+	_style_summary()
 	# мини-карта в правом верхнем углу, под надписями (как вторым узлом после панели сведений)
-	minimap = MiniMap.new()
-	minimap.hud = self
+	minimap = LocalMap.new()
 	minimap.anchor_left = 1.0
 	minimap.anchor_right = 1.0
-	minimap.offset_left = -MINI - 14
-	minimap.offset_top = 14
-	minimap.offset_right = -14
-	minimap.offset_bottom = MINI + 14
+	minimap.offset_left = -MINI - 18
+	minimap.offset_top = 18
+	minimap.offset_right = -18
+	minimap.offset_bottom = MINI + 18
 	add_child(minimap)
 	move_child(minimap, $InfoPanel.get_index() + 1)
 
@@ -99,19 +123,20 @@ func _ready() -> void:
 	compass.hud = self
 	compass.anchor_left = 0.5
 	compass.anchor_right = 0.5
-	compass.offset_left = -150
-	compass.offset_right = 150
-	compass.offset_top = 10
-	compass.offset_bottom = 38
+	compass.offset_left = -162
+	compass.offset_right = 162
+	compass.offset_top = 18
+	compass.offset_bottom = 74
 	add_child(compass)
+	compass.visibility_changed.connect(compass.queue_redraw)
 	move_child(compass, minimap.get_index() + 1)
 
 	tracker = _build_tracker()
 	add_child(tracker)
 	move_child(tracker, compass.get_index() + 1)
 
-	big_map = BigMap.new()
-	big_map.hud = self
+	big_map = Atlas.new()
+	big_map.journal = map_journal
 	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
@@ -127,6 +152,9 @@ func _ready() -> void:
 	close_map.offset_bottom = 56
 	close_map.pressed.connect(func() -> void: map_close_requested.emit())
 	big_map.add_child(close_map)
+	big_map.move_child(close_map, 0)
+	big_map.place_selected.connect(_select_map_goal)
+	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
 	add_child(settlement_panel)
 	_vignette = ColorRect.new()
@@ -136,18 +164,6 @@ func _ready() -> void:
 	vignette_shader.code = VIGNETTE_CODE
 	_vignette.material = ShaderMaterial.new()
 	_vignette.material.shader = vignette_shader
-	_chip_style = StyleBoxFlat.new()
-	_chip_style.bg_color = Color(0.04, 0.06, 0.1, 0.82)
-	_chip_style.border_color = Color(1, 1, 1, 0.9)
-	_chip_style.set_border_width_all(2)
-	_chip_style.set_corner_radius_all(4)
-	# светлая рамка видна на тёмном, тёмная кайма за ней — на снегу
-	_chip_style.shadow_color = Color(0, 0, 0, 0.75)
-	_chip_style.shadow_size = 2
-	_chip_style.content_margin_left = 7
-	_chip_style.content_margin_right = 7
-	_chip_style.content_margin_top = 1
-	_chip_style.content_margin_bottom = 1
 	_vignette.visible = false
 	add_child(_vignette)
 	move_child(_vignette, 0)
@@ -155,8 +171,8 @@ func _ready() -> void:
 	_stamina = StaminaArc.new()
 	_stamina.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
 	_stamina.offset_left = 18
-	_stamina.offset_right = 18 + (StaminaArc.R + 12) * 2.0
-	_stamina.offset_top = -18 - (StaminaArc.R + 12) * 2.0
+	_stamina.offset_right = 18 + StaminaArc.DIAMETER
+	_stamina.offset_top = -18 - StaminaArc.DIAMETER
 	_stamina.offset_bottom = -18
 	_stamina.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(_stamina)
@@ -164,30 +180,85 @@ func _ready() -> void:
 	_brakes = BrakeIndicator.new()
 	_brakes.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_brakes.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-	_brakes.offset_left = 100
-	_brakes.offset_right = 380
-	_brakes.offset_top = -94
+	_brakes.offset_left = 102
+	_brakes.offset_right = 102 + BrakeIndicator.DIAMETER
+	_brakes.offset_top = -18 - BrakeIndicator.DIAMETER
 	_brakes.offset_bottom = -18
 	_brakes.hide()
 	add_child(_brakes)
+	move_child(_brakes, big_map.get_index())
+	_summary_switch = PanelContainer.new()
+	_summary_switch.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_summary_switch.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	_summary_switch.offset_left = -18
+	_summary_switch.offset_right = -18
+	_summary_switch.offset_top = -47
+	_summary_switch.offset_bottom = -16
+	_summary_switch.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	_summary_switch.add_theme_stylebox_override("panel", _hint_style)
+	add_child(_summary_switch)
+	_summary_hint = Label.new()
+	HudStyle.label(_summary_hint, 12, HudStyle.MUTED)
+	_summary_switch.add_child(_summary_hint)
 	_apply_reveal()
+
+
+func _style_summary() -> void:
+	_info_panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13, Vector2(14, 10)))
+	HudStyle.label(info, 20)
+	var clock_card := _clock_label.get_parent() as PanelContainer
+	clock_card.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(8, 3), false))
+	HudStyle.label(_clock_label, 14, HudStyle.MINT)
+	HudStyle.label(_surface, 13, HudStyle.MUTED)
+	HudStyle.label(_altitude, 17)
+	HudStyle.label(_temperature, 17)
+	HudStyle.label(_nearby, 13, HudStyle.MINT)
+	HudStyle.label($InfoPanel/Rows/Readings/Altitude/Title, 11, HudStyle.MUTED)
+	HudStyle.label($InfoPanel/Rows/Readings/Temperature/Title, 11, HudStyle.MUTED)
+	$InfoPanel/Rows/Divider.color = HudStyle.BORDER
+	_nearby.hide()
+	_surface.hide()
+	_info_panel.resized.connect(_place_toast)
+
+	_hint_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 8, Vector2(7, 4))
+	_prompt_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.MINT, 10, Vector2(8, 5))
+	_warning_style = HudStyle.panel(HudStyle.SURFACE, HudStyle.AMBER, 8, Vector2(8, 5))
+	_key_style = HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 5, Vector2(6, 2), false)
+	lock_hint.add_theme_stylebox_override("panel", _hint_style)
+	HudStyle.label($LockHint/Text, 13, HudStyle.MUTED)
+	_reticle.draw.connect(_draw_reticle)
+
+	$Toast.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 11, Vector2(12, 9)))
+	var icon := UiIcons.rect(UiIcons.QUESTS.visit, 17, HudStyle.MINT)
+	$Toast/Stack/Line.add_child(icon)
+	$Toast/Stack/Line.move_child(icon, 0)
+	HudStyle.label(toast_label, 14)
+	_toast_time.add_theme_stylebox_override("background", HudStyle.panel(HudStyle.RECESS, HudStyle.RECESS, 1, Vector2.ZERO, false))
+	_toast_time.add_theme_stylebox_override("fill", HudStyle.panel(HudStyle.MINT, HudStyle.MINT, 1, Vector2.ZERO, false))
 
 
 ## Новая игра: запомнить карту мира и забыть сообщения прошлой игры
 func set_world(w: WorldData, map_image: Image) -> void:
 	world = w
 	_clock_minute = -1
-	_clock_label.hide()
+	_clock_label.get_parent().hide()
 	info.text = ""
-	map_tex = ImageTexture.create_from_image(map_image)
-	_places = []
-	_region_tex = {}
-	if big_map != null:
-		big_map.reset_view()
+	_surface.hide()
+	_nearby.hide()
+	map_preview = map_image
+	map_data = MapData.new(w)
+	map_journal = Journal.new()
+	minimap.set_world(w, knows, map_data)
+	big_map.journal = map_journal
+	big_map.set_source(map_data)
 	px = NAN # первый set_player нового мира точно перерисует карты
 	visited = {}
 	goal = {}
-	_revealed = false
+	bike_shown = false
+	_revealed = true
+	_summary_progress = 1.0
+	_summary_hint_left = SUMMARY_HINT_TIME
+	_apply_reveal()
 	_toast_queue.clear()
 	_toast_left = 0.0
 	$Toast.modulate.a = 0.0
@@ -195,15 +266,20 @@ func set_world(w: WorldData, map_image: Image) -> void:
 
 ## Выход из игры: забыть мир и карту, чтобы прошлый мир освободился, пока в меню
 func clear_world() -> void:
+	_close_travel()
 	if settlement_panel != null:
 		settlement_panel.clear()
 	world = null
-	_places = []
-	_region_tex = {}
-	map_tex = null
+	map_preview = null
+	map_data = null
+	map_journal = Journal.new()
+	big_map.journal = map_journal
+	big_map.set_source(null)
+	minimap.set_world(null)
 	visited = {}
 	goal = {}
 	quests = null
+	_summary_blocked = false
 	update_tracker()
 	bike_pos = Vector2.ZERO
 	bike_shown = false
@@ -220,19 +296,22 @@ func clear_world() -> void:
 func set_map_visible(v: bool) -> void:
 	if not v:
 		_close_travel()
+	else:
+		big_map.prepare_player_view()
 	big_map.visible = v
-	# открытая карта ловит мышь: щелчки по ней выбирают цель и место перемещения
+	# Личная карта перехватывает мышь и позволяет ставить цель.
 	big_map.mouse_filter = Control.MOUSE_FILTER_STOP if v else Control.MOUSE_FILTER_IGNORE
 	big_map.hover = {}
 	_apply_reveal()
-	update_tracker()
 	if v:
-		big_map.queue_redraw()
+		big_map.move_hint = "Колесо · масштаб     Перетащить · обзор     СКМ · к себе     Ctrl+ЛКМ · метка"
+		sync_map_places()
+		big_map.set_player(Vector2(px, pz), yaw)
 
 
 ## Открытые места мира: поселения, вершины и озёра из индекса WorldData (с 8.9 extra).
 ## {key = id — устойчивый адрес и ключ в visited, name, x, y — клетки, kind, region, src — запись места}
-## Быстрое перемещение — только после подтверждения: случайный ПКМ по карте не переносит игрока.
+## Быстрое перемещение с дорожной доски требует подтверждения.
 ## Фокус на «Остаться», Esc закрывает вопрос, а не карту
 func ask_travel(place: Dictionary) -> void:
 	_close_travel()
@@ -264,15 +343,7 @@ func _close_travel() -> void:
 func places() -> Array:
 	if world == null:
 		return []
-	if _places_revision == world.territory_revision and not _places.is_empty():
-		return _places
-	_places_revision = world.territory_revision
-	var out: Array = []
-	for p: Dictionary in all_places():
-		if in_open_land(p):
-			out.append(p)
-	_places = out
-	return out
+	return all_places().filter(in_open_land)
 
 
 ## Все места плана, включая ещё не открытые земли: далёкую цель можно выбрать заранее.
@@ -328,12 +399,54 @@ func in_open_land(p: Dictionary) -> bool:
 	return world.accessible(p.x, p.y)
 
 
-## Картинка соседней области для карты (из её записи журнала), один раз на область
-func region_texture(key: Vector2i, png: PackedByteArray) -> ImageTexture:
-	if not _region_tex.has(key):
-		var img := Image.new()
-		_region_tex[key] = ImageTexture.create_from_image(img) if img.load_png_from_buffer(png) == OK else null
-	return _region_tex[key]
+## Доска показывает само поселение и два ближайших доступных места.
+func board_places(settlement: Variant, catalog: Variant = null) -> Array:
+	var id := WorldData.place_id("settlement", settlement.x, settlement.y)
+	var here := InteractionService.target(world.place(id))
+	var center := Vector2(settlement.x, settlement.y)
+	var options: Array = []
+	var places_to_check: Array = all_places() if catalog == null else catalog
+	for place: Dictionary in places_to_check:
+		if place.key != id and in_open_land(place):
+			options.append(place)
+	options.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
+		var da := center.distance_squared_to(Vector2(a.x, a.y))
+		var db := center.distance_squared_to(Vector2(b.x, b.y))
+		return a.key < b.key if da == db else da < db)
+	var nearby := [here] + options.slice(0, 2)
+	map_journal.reveal(nearby)
+	return nearby
+
+
+func map_place_count() -> int:
+	return visited.size() + map_journal.read.size()
+
+
+func sync_map_places() -> void:
+	if not big_map.visible or world == null:
+		return
+	var known: Array = []
+	var ids := map_journal.read.merged(visited)
+	for id: String in ids:
+		var place := world.place(id)
+		if not place.is_empty():
+			known.append(InteractionService.target(place))
+	big_map.set_places(known)
+	_sync_map_goal()
+
+
+func _select_map_goal(place: Dictionary) -> void:
+	var same: bool = place.key == goal.get("key")
+	if same and place.kind == "marker":
+		same = Vector2(place.x, place.y).distance_to(Vector2(goal.x, goal.y)) < 4.0
+	set_goal({} if same else place)
+
+
+func _sync_map_goal() -> void:
+	var id: String = goal.get("key", "")
+	var show_goal: bool = not goal.is_empty() and (goal.kind == "marker" or visited.has(id) or map_journal.read.has(id))
+	big_map.goal = Atlas.place_at(goal) if show_goal else Vector2.INF
+	big_map.refresh_overlay()
 
 
 ## Новая цель путешествия (пустой словарь — без цели)
@@ -343,8 +456,8 @@ func set_goal(place: Dictionary) -> void:
 	# вне сцены (проверки без окна) карт и компаса нет
 	if is_node_ready():
 		compass.queue_redraw()
-		minimap.queue_redraw()
-		big_map.queue_redraw()
+		_sync_minimap_destinations()
+		_sync_map_goal()
 
 
 static func marker_goal(at: Vector2) -> Dictionary:
@@ -356,8 +469,12 @@ func restore_goal(key: String, marker_position := Vector2.INF) -> void:
 	if key == "marker":
 		set_goal(marker_goal(marker_position) if marker_position.is_finite() else {})
 		return
-	if not key.is_empty():
-		for place: Dictionary in all_places() + trail_places():
+	if not key.is_empty() and world != null:
+		var known_place := world.place(key)
+		if not known_place.is_empty():
+			set_goal(InteractionService.target(known_place))
+			return
+		for place: Dictionary in trail_places():
 			if place.key == key:
 				set_goal(place)
 				return
@@ -398,65 +515,82 @@ func quest_color() -> Color:
 	return GOLD if quests == null or quests.active.is_empty() else Quests.KINDS[quests.active.kind].color
 
 
-## Метка задания: квадрат, повёрнутый ромбом, с тёмной обводкой и точкой — не путается с целью (золотой ромб)
-static func draw_quest_mark(c: CanvasItem, at: Vector2, r: float, color: Color) -> void:
-	var pts := PackedVector2Array([at + Vector2(-r, -r), at + Vector2(r, -r), at + Vector2(r, r), at + Vector2(-r, r)])
-	c.draw_colored_polygon(pts, color)
-	pts.append(pts[0])
-	c.draw_polyline(pts, Color(0, 0, 0, 0.7 * color.a), 1.5)
-	c.draw_circle(at, r * 0.35, Color(0, 0, 0, 0.7 * color.a))
-
-
 ## 11.9: счётчик задания под мини-картой — вид и название, текущий шаг с расстоянием, шаг из скольких, груз
 func _build_tracker() -> PanelContainer:
 	var panel := PanelContainer.new()
 	panel.anchor_left = 1.0
 	panel.anchor_right = 1.0
-	panel.offset_left = -MINI - 74
-	panel.offset_right = -14
-	panel.offset_top = MINI + 24
+	panel.offset_left = -288
+	panel.offset_right = -18
+	panel.offset_top = MINI + 30
 	panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	panel.theme_type_variation = &"TrackerPanel"  # золотая черта слева, поля 12 и 8 px
+	panel.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13, Vector2(12, 10)))
 	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 3)
+	_tracker_content = box
+	box.add_theme_constant_override("separation", 6)
 	panel.add_child(box)
 	var head := HBoxContainer.new()
 	head.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	head.add_theme_constant_override("separation", 7)
 	box.add_child(head)
-	_tracker_icon = UiIcons.rect(null, 18)
-	head.add_child(_tracker_icon)
-	_tracker_title = _tracker_label(head, 15, GOLD, 18 + 8)
-	_tracker_step = _tracker_label(box, 14, Color(1, 1, 1, 0.95))
-	_tracker_note = _tracker_label(box, 12, Color(1, 1, 1, 0.6))
+	var badge := PanelContainer.new()
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_theme_stylebox_override("panel", HudStyle.panel(HudStyle.RECESS, HudStyle.BORDER, 6, Vector2(5, 5), false))
+	head.add_child(badge)
+	_tracker_icon = UiIcons.rect(null, 15)
+	badge.add_child(_tracker_icon)
+	_tracker_kind = _tracker_label(head, 12, HudStyle.MINT)
+	_tracker_kind.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_tracker_count = _tracker_label(head, 12, HudStyle.MUTED)
+	_tracker_count.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_tracker_title = _tracker_label(box, 18, HudStyle.CREAM)
+	_tracker_step = _tracker_label(box, 13, HudStyle.MUTED)
+	_tracker_note = _tracker_label(box, 12, HudStyle.MINT)
+	_tracker_progress = Control.new()
+	_tracker_progress.custom_minimum_size.y = 4
+	_tracker_progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	box.add_child(_tracker_progress)
+	_tracker_progress.draw.connect(_draw_tracker_progress)
+	_tracker_progress.resized.connect(_tracker_progress.queue_redraw)
 	panel.visible = false
 	return panel
 
 
-func _tracker_label(box: BoxContainer, font_size: int, color: Color, inset := 0.0) -> Label:
+func _tracker_label(box: BoxContainer, font_size: int, color: Color) -> Label:
 	var label := Label.new()
-	label.add_theme_font_size_override("font_size", font_size)
-	label.add_theme_color_override("font_color", color)
-	label.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.6))
-	label.add_theme_constant_override("outline_size", 3)
+	HudStyle.label(label, font_size, color)
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	label.custom_minimum_size.x = MINI + 60 - 20 - inset # ширина счётчика без полей: перенос считает высоту по ней
 	box.add_child(label)
 	return label
 
 
-## Задание изменилось: счётчик вспыхивает, чтобы взгляд заметил новый шаг; карты и компас — с новой меткой
+func _draw_tracker_progress() -> void:
+	if _step_count == 0:
+		return
+	var gap := 4.0
+	var width := (_tracker_progress.size.x + gap) / _step_count
+	for i in _step_count:
+		var color := HudStyle.RECESS
+		if i < _step_index:
+			color = quest_color().lerp(HudStyle.RECESS, 0.35)
+		elif i == _step_index:
+			color = quest_color()
+		_tracker_progress.draw_rect(Rect2(Vector2(i * width, 0), Vector2(maxf(1.0, width - gap), 3.0)), color)
+
+
+## Новый шаг подсвечивает карточку и обновляет метки на компасе и карте.
 func quest_changed() -> void:
 	update_tracker()
 	if is_node_ready():
 		compass.queue_redraw()
-		minimap.queue_redraw()
-		big_map.queue_redraw()
+		_sync_minimap_destinations()
+		_sync_map_goal()
 	if not tracker.visible:
 		return
 	if _flash_tween != null and _flash_tween.is_valid():
 		_flash_tween.kill()
-	tracker.modulate = Color(1.6, 1.5, 1.2)
+	tracker.modulate = Color(1.12, 1.18, 1.15)
 	_flash_tween = create_tween()
 	_flash_tween.tween_property(tracker, "modulate", Color.WHITE, 0.8)
 
@@ -468,29 +602,28 @@ func update_tracker() -> void:
 	var title := ""
 	var line := ""
 	var note := ""
+	var kind := ""
+	_step_count = 0
+	_step_index = 0
 	if quests != null and not quests.active.is_empty():
 		var q := quests.active
 		title = q.title
+		kind = Quests.KINDS[q.kind].title
 		_tracker_icon.texture = UiIcons.quest(q.kind)
 		_tracker_icon.modulate = quest_color()
-		var s := quests.step()
-		line = quests.step_text(s)  # расстояние до места шага — на компасе у метки задания
-		# шаги точками: ● пройден или текущий, ○ впереди
-		var pips := ""
-		for i in q.steps.size():
-			pips += "●" if i <= q.step else "○"
-		note = "%s %s · шаг %d из %d" % [pips, Quests.KINDS[q.kind].title, q.step + 1, q.steps.size()]
+		line = quests.step_text(quests.step())
+		_step_count = q.steps.size()
+		_step_index = q.step
 		if quests.cargo:
-			note += " · сумка за спиной"
-		_tracker_title.add_theme_color_override("font_color", quest_color())
-	tracker.visible = title != "" and summary_visible()
-	if _tracker_title.text != title:
-		_tracker_title.text = title
-	if _tracker_step.text != line:
-		_tracker_step.text = line
-	_tracker_step.visible = line != ""
-	if _tracker_note.text != note:
-		_tracker_note.text = note
+			note = "сумка за спиной"
+		_tracker_kind.add_theme_color_override("font_color", quest_color())
+	_tracker_kind.text = kind
+	_tracker_count.text = "%d / %d" % [_step_index + 1, _step_count] if _step_count > 0 else ""
+	_tracker_title.text = title
+	_set_optional_text(_tracker_step, line)
+	_set_optional_text(_tracker_note, note)
+	_tracker_progress.queue_redraw()
+	_apply_reveal()
 
 
 ## Курс на точку (x, z в метрах) от игрока — в тех же единицах, что yaw: 0 — север, PI/2 — запад
@@ -500,14 +633,19 @@ func heading_to(x: float, z: float) -> float:
 
 ## 11.8: с фотоаппаратом у глаз (GameWorld.photo) видны только рамка видоискателя и сообщения
 func set_photo_mode(on: bool) -> void:
+	if _photo_mode == on:
+		return
 	_photo_mode = on
 	_apply_reveal()
-	update_tracker()
 
 
-## Сводку можно закрепить; контекстная подсказка видна отдельно.
+## Контекстная подсказка у прицела видна отдельно от сводки.
 func summary_visible() -> bool:
-	return _revealed and is_visible_in_tree() and not _photo_mode and not big_map.visible \
+	return _revealed and _summary_allowed()
+
+
+func _summary_allowed() -> bool:
+	return is_visible_in_tree() and not _photo_mode and not big_map.visible \
 		and not settlement_panel.visible and not _summary_blocked
 
 
@@ -515,29 +653,72 @@ func set_summary_blocked(blocked: bool) -> void:
 	if _summary_blocked != blocked:
 		_summary_blocked = blocked
 		_apply_reveal()
-		update_tracker()
 
 
 func _apply_reveal() -> void:
-	var shown := summary_visible()
-	for node: CanvasItem in [$InfoPanel, minimap, compass]:
-		node.visible = shown
+	var allowed := _summary_allowed()
+	var alpha := smoothstep(0.0, 1.0, _summary_progress) if allowed else 0.0
+	for node: CanvasItem in [minimap, compass]:
+		node.visible = alpha > 0.0
+		node.modulate.a = alpha
+	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
+	_info_panel.modulate.a = alpha
+	_place_toast()
+	tracker.visible = alpha > 0.0 and not _tracker_title.text.is_empty()
+	# modulate оставлен вспышке задания. Для затухания используем родительский цвет панели и её строк.
+	tracker.self_modulate.a = alpha
+	_tracker_content.modulate.a = alpha
 	var urgent: bool = _hint_urgent and not _photo_mode and not big_map.visible and not settlement_panel.visible
-	hint.visible = shown or urgent
+	hint.visible = (alpha > 0.0 or urgent) and hint.get_child_count() > 0
+	hint.modulate.a = 1.0 if urgent else alpha
 	prompt.visible = is_visible_in_tree() and not _photo_mode and not big_map.visible \
-		and not settlement_panel.visible and (not _summary_blocked or _hint_urgent) and not _prompt_items.is_empty()
-	$Crosshair.visible = shown or prompt.visible
+		and not settlement_panel.visible and (not _summary_blocked or _hint_urgent) and prompt.get_child_count() > 0
+	_reticle.visible = alpha > 0.0 or prompt.visible
+	_reticle.modulate.a = 1.0 if prompt.visible else alpha
+	if _reticle_on_target != prompt.visible:
+		_reticle_on_target = prompt.visible
+		_reticle.queue_redraw()
+	var show_switch := false
+	if allowed and (not _revealed or _summary_hint_left > 0.0):
+		var key := controls.label(&"show_hud")
+		show_switch = not key.is_empty()
+		if show_switch:
+			var action := "скрыть сводку" if _revealed else "показать сводку"
+			var caption := "%s · %s" % [key, action]
+			if _summary_hint.text != caption:
+				_summary_hint.text = caption
+				_summary_switch.reset_size()
+			_summary_switch.modulate.a = smoothstep(0.0, 0.5, _summary_hint_left) if _revealed else 1.0
+	_summary_hint.visible = show_switch
+	_summary_switch.visible = show_switch
+
+
+func _draw_reticle() -> void:
+	var center := _reticle.size * 0.5
+	if not _reticle_on_target:
+		_reticle.draw_circle(center, 3.2, Color(HudStyle.SURFACE, 0.85), true, -1, true)
+		_reticle.draw_circle(center, 1.6, HudStyle.CREAM, true, -1, true)
+		return
+	for x: float in [-1.0, 1.0]:
+		for y: float in [-1.0, 1.0]:
+			var corner := center + Vector2(x, y) * 8.0
+			var points := PackedVector2Array([corner - Vector2(x * 4, 0), corner, corner - Vector2(0, y * 4)])
+			_reticle.draw_polyline(points, HudStyle.SURFACE, 4.0, true)
+			_reticle.draw_polyline(points, HudStyle.CREAM, 1.5, true)
 
 
 ## Подсказки внизу и у прицела — чипы [клавиша] действие (пустой список — скрыты).
 ## urgent — нижние видно и без Tab (падение: как восстановиться)
 func set_hints(bottom: Array, near: Array, urgent := false) -> void:
-	if _hint_items != bottom:
+	if _hint_items == bottom and _prompt_items == near and _hint_urgent == urgent:
+		return
+	var urgency_changed := _hint_urgent != urgent
+	if _hint_items != bottom or urgency_changed:
 		_hint_items = bottom.duplicate()
-		_fill_chips(hint, bottom)
-	if _prompt_items != near:
+		_fill_chips(hint, bottom, _warning_style if urgent else _hint_style)
+	if _prompt_items != near or urgency_changed:
 		_prompt_items = near.duplicate()
-		_fill_chips(prompt, near)
+		_fill_chips(prompt, near, _warning_style if urgent else _prompt_style)
 	_hint_urgent = urgent
 	_apply_reveal()
 
@@ -547,7 +728,9 @@ func set_hints(bottom: Array, near: Array, urgent := false) -> void:
 func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
 	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
 	_stamina.set_value(value, exhausted, state, allowed)
-	_stamina.visible = allowed and (summary_visible() or (state == Stamina.State.DRAIN and value < StaminaArc.LOW))
+	var urgent := state == Stamina.State.DRAIN and value < StaminaArc.LOW
+	_stamina.visible = allowed and (_summary_progress > 0.0 or urgent)
+	_stamina.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
 	var mat: ShaderMaterial = _vignette.material
 	mat.set_shader_parameter("strength", _stamina.warning * 0.4)
 	_vignette.visible = _stamina.warning > 0.01
@@ -555,46 +738,48 @@ func set_stamina(value: float, exhausted: bool, state: Stamina.State) -> void:
 
 func set_brakes(bike: BikeRide) -> void:
 	var allowed: bool = not _photo_mode and not big_map.visible and not settlement_panel.visible and not _summary_blocked
-	_brakes.update_state(bike, allowed and (summary_visible() or bike.brakes.risk > 0.65 or bike.brakes.skid > 0.2))
+	var urgent: bool = bike.brakes.risk > 0.65 or bike.brakes.skid > 0.2
+	_brakes.update_state(bike, allowed and (_summary_progress > 0.0 or urgent))
+	_brakes.modulate.a = 1.0 if urgent else smoothstep(0.0, 1.0, _summary_progress)
 
 
-## 14.2: чипы клавиш — тёмная плашка с контрастной обводкой, рядом действие; читаются боковым зрением
-func _fill_chips(row: HBoxContainer, items: Array) -> void:
+func _fill_chips(row: Container, items: Array, style: StyleBoxFlat) -> void:
 	for child in row.get_children():
 		row.remove_child(child)
 		child.queue_free()
 	for item: Array in items:
+		if str(item[0]).is_empty():
+			continue
+		var action := PanelContainer.new()
+		action.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		action.add_theme_stylebox_override("panel", style)
+		row.add_child(action)
 		var pair := HBoxContainer.new()
-		pair.add_theme_constant_override("separation", 6)
+		pair.add_theme_constant_override("separation", 7)
 		pair.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		action.add_child(pair)
 		var chip := PanelContainer.new()
-		chip.add_theme_stylebox_override("panel", _chip_style)
+		chip.add_theme_stylebox_override("panel", _key_style)
 		chip.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		chip.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		var key := Label.new()
 		key.text = str(item[0])
-		key.add_theme_font_size_override("font_size", 14)
-		key.add_theme_color_override("font_color", Color.WHITE)
+		HudStyle.label(key, 13, HudStyle.MINT)
 		chip.add_child(key)
 		pair.add_child(chip)
 		var what := Label.new()
 		what.text = str(item[1])
-		what.add_theme_font_size_override("font_size", 15)
-		what.add_theme_color_override("font_outline_color", Color(0, 0, 0, 0.95))
-		what.add_theme_constant_override("outline_size", 5)
+		HudStyle.label(what, 15 if row == prompt else 13)
 		pair.add_child(what)
-		row.add_child(pair)
 
 
 ## Где стоит велосипед (метры) и показывать ли его на картах
 func set_bike(x: float, z: float, shown: bool) -> void:
+	var changed := shown != bike_shown or (shown and bike_pos != Vector2(x, z))
 	bike_pos = Vector2(x, z)
 	bike_shown = shown
-
-
-static func draw_bike(c: CanvasItem, at: Vector2, r: float) -> void:
-	c.draw_circle(at, r, Color.html("#3fa7ff"))
-	c.draw_arc(at, r, 0.0, TAU, 16, Color.WHITE, 1.5)
+	if changed:
+		minimap.set_bike(bike_pos if shown else Vector2.INF)
 
 
 ## Пока одно уведомление на экране, следующие ждут в очереди,
@@ -631,37 +816,32 @@ func _show_toast(text: String) -> void:
 	toast_label.text = text
 	$Toast.modulate.a = 0.0
 	_toast_left = TOAST_TIME
+	_toast_time.value = 1.0
 
 
-func _notification(what: int) -> void:
-	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-		_reveal_needs_release = true
-		_revealed = false
-		if is_node_ready():
-			_apply_reveal()
-			update_tracker()
+func _place_toast() -> void:
+	var top := _info_panel.position.y + _info_panel.size.y + 10.0 if _info_panel.visible else 18.0
+	if $Toast.position.y != top:
+		$Toast.position.y = top
+
+
+func _input(event: InputEvent) -> void:
+	if event.is_action_pressed(&"show_hud") and _summary_allowed():
+		_revealed = not _revealed
+		_summary_hint_left = SUMMARY_HINT_TIME
 
 
 func _process(delta: float) -> void:
-	var held := Input.is_action_pressed("show_hud")
-	if not held and (get_window().has_focus() or DisplayServer.get_name() == "headless"):
-		_reveal_needs_release = false
-	if Input.is_action_just_pressed("show_hud") and is_visible_in_tree() and not _reveal_needs_release and not _summary_blocked \
-			and not _photo_mode and not big_map.visible and not settlement_panel.visible:
-		_revealed = not _revealed
-	var shown := summary_visible()
-	if shown != _summary_shown:
-		_summary_shown = shown
-		_apply_reveal()
-		update_tracker()
-		if shown:
-			minimap.queue_redraw()
-			compass.queue_redraw()
+	_summary_progress = move_toward(_summary_progress, 1.0 if _revealed else 0.0, delta / SUMMARY_FADE)
+	if _summary_allowed() and _revealed:
+		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
+	_apply_reveal()
 	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible
 	$Toast.visible = not obscured and _toast_left > 0.0
 	if obscured or _toast_left <= 0.0:
 		return
 	_toast_left -= delta
+	_toast_time.value = clampf(_toast_left / TOAST_TIME, 0.0, 1.0)
 	$Toast.modulate.a = smoothstep(0.0, 0.18, TOAST_TIME - _toast_left) * smoothstep(0.0, TOAST_FADE, _toast_left)
 	if _toast_left > 0.0:
 		return
@@ -681,10 +861,15 @@ func set_player(x: float, z: float, y: float) -> void:
 	px = x
 	pz = z
 	yaw = y
-	minimap.queue_redraw()
-	compass.queue_redraw()
+	minimap.set_view(Vector2(x, z), y)
+	if compass.is_visible_in_tree():
+		compass.queue_redraw()
 	if big_map.visible:
-		big_map.queue_redraw()
+		big_map.set_player(Vector2(x, z), y)
+
+
+func _sync_minimap_destinations() -> void:
+	minimap.set_destinations(goal, quest_place(), quest_color())
 
 
 func set_clock(hour: float) -> void:
@@ -693,7 +878,7 @@ func set_clock(hour: float) -> void:
 		return
 	_clock_minute = minute
 	_clock_label.text = "%02d:%02d" % [minute / 60, minute % 60]
-	_clock_label.show()
+	_clock_label.get_parent().show()
 
 
 ## Строки о местности под ногами: биом и дорога, высота и температура; без цели — ближайшее поселение.
@@ -705,411 +890,107 @@ func update_info(p: PlayerState, _look_yaw: float, depth: float) -> void:
 	var ti := w.tile_info(p.x / TILE, p.z / TILE)
 	if ti.is_empty():
 		return
-	var where: String = Biomes.LIST[ti.biome].name
+	var terrain: Array[String] = []
 	if ti.river:
-		where += ", брод через реку"
+		terrain.append("Брод через реку")
 	var surf := PlayerState.surface(ti)
 	if surf != RoadSurface.NONE:
-		where += ", %s (%s)" % ["дорога" if ti.path == 3 else "тропа", RoadSurface.LIST[surf].name]
+		terrain.append("%s · %s" % ["Дорога" if ti.path == 3 else "Тропа", RoadSurface.LIST[surf].name])
 	elif ti.path == 1:
-		where += ", звериная тропа"
+		terrain.append("Звериная тропа")
 	if depth > 0.3:
-		where += " (по колено в воде)"
+		terrain.append("Вода по колено")
 	var temp_c := roundi(-25.0 + ti.temp * 60.0)
-	var nearest = null
-	var nd := INF
-	for s in w.settlements:
-		if not w.accessible(s.x, s.y):
-			continue
-		var d := Grid.hypot(s.x * TILE - p.x, s.y * TILE - p.z)
-		if d < nd:
-			nd = d
-			nearest = s
-	var text := "%s\nВысота: %d м · %s%d°C" % [where, roundi(p.feet), "+" if temp_c > 0 else "", temp_c]
-	if goal.is_empty() and nearest != null:
-		text += "\nБлижайшее поселение: «%s», %s" % [nearest.name, Util.distance_text(nd)]
-	# текст панели меняется не каждый кадр: не трогаем Label, пока строки те же
-	if info.text != text:
-		info.text = text
-	update_tracker()
-
-
-static func draw_arrow(c: CanvasItem, pos: Vector2, size: float, look_yaw: float) -> void:
-	c.draw_set_transform(pos, -look_yaw, Vector2.ONE)
-	var pts := PackedVector2Array([Vector2(0, -size), Vector2(size * 0.65, size * 0.7), Vector2(0, size * 0.35), Vector2(-size * 0.65, size * 0.7)])
-	c.draw_colored_polygon(pts, Color.html("#ff3b30"))
-	pts.append(pts[0])
-	c.draw_polyline(pts, Color.WHITE, 1.5)
-	c.draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-
-
-static func draw_label(c: CanvasItem, text: String, pos: Vector2, color: Color, font_size: int, selected := false) -> void:
-	var font := ThemeDB.fallback_font
-	var w := font.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size).x
-	var at := pos - Vector2(w / 2.0, 0)
-	if selected:
-		c.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 8, Color(GOLD, 0.85))
-	c.draw_string_outline(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, 6, Color(0, 0, 0, 0.7))
-	c.draw_string(font, at, text, HORIZONTAL_ALIGNMENT_LEFT, -1, font_size, color)
-
-
-## Мини-карта 200×200 в углу экрана
-class MiniMap extends Control:
-	var hud: Hud
-
-	func _init() -> void:
-		mouse_filter = Control.MOUSE_FILTER_IGNORE
-
-	func _draw() -> void:
-		if hud.world == null:
-			return
-		var w := hud.world
-		var k := Hud.MINI / w.W
-		draw_texture_rect(hud.map_tex, Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), false)
-		draw_rect(Rect2(Vector2.ZERO, Vector2(Hud.MINI, Hud.MINI)), Color(1, 1, 1, 0.5), false, 2.0)
+	var nearby := ""
+	if goal.is_empty():
+		var nearest = null
+		var nd := INF
 		for s in w.settlements:
 			if not w.accessible(s.x, s.y):
 				continue
-			draw_rect(Rect2(s.x * k - 1.5, s.y * k - 1.5, 3, 3), Color.html("#ffdd55"))
-		if not hud.goal.is_empty():
-			draw_arc(_inside(Vector2(hud.goal.x, hud.goal.y) * k, 5.0), 4.5, 0.0, TAU, 16, Hud.GOLD, 2.0)
-		var q := hud.quest_place()
-		if not q.is_empty():
-			Hud.draw_quest_mark(self, _inside(Vector2(q.x, q.y) * k, 6.0), 4.0, hud.quest_color())
-		if hud.bike_shown:
-			Hud.draw_bike(self, _inside(hud.bike_pos / Hud.TILE * k, 4.0), 3.0)
-		Hud.draw_arrow(self, _inside(Vector2(hud.px, hud.pz) / Hud.TILE * k, 8.0), 6.0, hud.yaw)
-
-	## Маркер у края мира прижимается к рамке, а не вылезает за неё
-	func _inside(at: Vector2, margin: float) -> Vector2:
-		return at.clamp(Vector2(margin, margin), Vector2(Hud.MINI - margin, Hud.MINI - margin))
+			var d := Grid.hypot(s.x * TILE - p.x, s.y * TILE - p.z)
+			if d < nd:
+				nd = d
+				nearest = s
+		if nearest != null:
+			nearby = "До «%s» · %s" % [nearest.name, Util.distance_text(nd)]
+	_set_location(Biomes.LIST[ti.biome].name, " · ".join(terrain), roundi(p.feet), temp_c, nearby)
 
 
-## Компас вверху экрана: стороны света по курсу взгляда и неяркая метка цели, если она выбрана.
-## Метка цели за краем видимой дуги прижимается к краю и бледнеет
+func _set_location(biome: String, surface: String, altitude: int, temp: int, nearby: String) -> void:
+	if info.text != biome:
+		info.text = biome
+	_set_optional_text(_surface, surface)
+	_set_optional_text(_altitude, "%d м" % altitude)
+	_set_optional_text(_temperature, "%s%s °C" % ["+" if temp > 0 else "", str(temp).replace("-", "−")])
+	_set_optional_text(_nearby, nearby)
+
+
+static func _set_optional_text(label: Label, value: String) -> void:
+	if label.text != value:
+		label.text = value
+	label.visible = not value.is_empty()
+
+
+## Компас: градусы, лента направлений и две отдельные метки расстояния.
 class Compass extends Control:
-	const SPAN := PI * 0.8   # видимая дуга курса
+	const HALF_ANGLE := 72.0
+	const TICK := 7.5
+	const INSET := 18.0
+	const BADGE_WIDTH := 72.0
 	var hud: Hud
-	var _back := StyleBoxFlat.new()
+	var _back := HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 13)
+	var _badge := HudStyle.panel(HudStyle.SURFACE, HudStyle.BORDER, 7, Vector2.ZERO, false)
 
 	func _init() -> void:
 		mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_back.bg_color = Color(0.04, 0.06, 0.1, 0.45)
-		_back.set_corner_radius_all(8)
 
 	func _draw() -> void:
 		if hud.world == null:
 			return
-		var half := size.x / 2.0
-		var font := ThemeDB.fallback_font
-		# 14.2: тёмная подложка, чтобы буквы не терялись на снегу и в ярком небе
-		draw_style_box(_back, Rect2(Vector2(-10, -2), size + Vector2(20, 4)))
-		draw_line(Vector2(0, size.y - 1), Vector2(size.x, size.y - 1), Color(1, 1, 1, 0.18), 1.0)
-		for d in 8:
-			var off := wrapf(d * PI / 4.0 - hud.yaw, -PI, PI)
-			if absf(off) > SPAN / 2.0:
-				continue
-			var x := half - off / (SPAN / 2.0) * half
-			var a := 1.0 - absf(off) / (SPAN / 2.0)
-			var fs := 15 if d % 2 == 0 else 11
-			var t: String = Hud.DIRS[d]
-			var tw := font.get_string_size(t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x
-			var at := Vector2(x - tw / 2.0, size.y - 8.0)
-			draw_string_outline(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, 5, Color(0, 0, 0, 0.9 * a))
-			draw_string(font, at, t, HORIZONTAL_ALIGNMENT_LEFT, -1, fs, Color(1, 1, 1, 0.8 * a))
-		# метка задания (11.9+) — квадрат цвета вида над линией; за краем дуги прижата к краю и бледнее.
-		# Расстояние подписано под меткой (12.5+ только здесь, не в счётчике и не в панели сведений)
-		var q := hud.quest_place()
+		var heading := -rad_to_deg(hud.yaw)
+		var mid := size.x * 0.5
+		draw_style_box(_back, Rect2(Vector2.ZERO, size))
+		HudStyle.centered(self, Vector2(mid, 21), "%03d°" % posmod(roundi(heading), 360), 16, HudStyle.CREAM)
+		draw_line(Vector2(INSET, 31), Vector2(size.x - INSET, 31), Color(HudStyle.BORDER, 0.7), 1.0)
+		for i in range(ceili((heading - HALF_ANGLE) / TICK), floori((heading + HALF_ANGLE) / TICK) + 1):
+			var off := i * TICK - heading
+			var x := _ruler_x(off)
+			var direction := i % 6 == 0
+			var a := lerpf(1.0, 0.36, smoothstep(HALF_ANGLE * 0.56, HALF_ANGLE, absf(off)))
+			draw_line(Vector2(x, 31), Vector2(x, 38 if direction else 35), Color(HudStyle.MUTED, a), 1.0, true)
+			if direction:
+				var d := posmod(-roundi(i / 6.0), 8)
+				HudStyle.centered(self, Vector2(x, 49), Hud.DIRS[d], 13 if d % 2 == 0 else 11, Color(HudStyle.CREAM, a))
+		draw_colored_polygon(PackedVector2Array([Vector2(mid - 4, 26), Vector2(mid + 4, 26), Vector2(mid, 32)]), HudStyle.MINT)
+		var quest := hud.quest_place()
 		var qx := -INF
-		if not q.is_empty():
-			var qoff := wrapf(hud.heading_to(q.x * Hud.TILE, q.y * Hud.TILE) - hud.yaw, -PI, PI)
-			var qseen := absf(qoff) <= SPAN / 2.0
-			qx = half - clampf(qoff / (SPAN / 2.0), -1.0, 1.0) * (half - 6.0)
-			var qc := hud.quest_color() if qseen else Color(hud.quest_color(), 0.5)
-			Hud.draw_quest_mark(self, Vector2(qx, size.y - 15.0), 4.5, qc)
-			_distance(font, qx, q, qc)
-		if hud.goal.is_empty():
-			return
-		var g := hud.goal
-		var off := wrapf(hud.heading_to(g.x * Hud.TILE, g.y * Hud.TILE) - hud.yaw, -PI, PI)
-		var seen := absf(off) <= SPAN / 2.0
-		var x := half - clampf(off / (SPAN / 2.0), -1.0, 1.0) * (half - 4.0)
-		var c := Hud.GOLD if seen else Color(Hud.GOLD, 0.45)
-		var y := size.y - 1.0
-		draw_colored_polygon(PackedVector2Array([Vector2(x, y - 7), Vector2(x + 4, y - 3), Vector2(x, y + 1), Vector2(x - 4, y - 3)]), c)
-		# у задания и цели в одной стороне подпись одна (задания): иначе они наползают друг на друга
-		if absf(x - qx) > 40.0:
-			_distance(font, x, g, c)
-
-	## Расстояние до места под его меткой
-	func _distance(font: Font, x: float, place: Dictionary, color: Color) -> void:
-		var dist := Util.distance_text(Grid.hypot(place.x * Hud.TILE - hud.px, place.y * Hud.TILE - hud.pz))
-		var dw := font.get_string_size(dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11).x
-		var dat := Vector2(clampf(x - dw / 2.0, 0.0, size.x - dw), size.y + 13.0)
-		draw_string_outline(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, 4, Color(0, 0, 0, 0.9))
-		draw_string(font, dat, dist, HORIZONTAL_ALIGNMENT_LEFT, -1, 11, color)
-
-
-## 13.9+final: колесо мыши — масштаб вокруг курсора, перетаскивание ЛКМ или средней кнопкой — сдвиг,
-## щелчок средней кнопкой — к игроку. Видны и закреплённые соседние области с их поселениями.
-## Большая карта (M): посещённые поселения и вершины отмечены жёлтым. С 2.8 карта ловит мышь:
-## ЛКМ по месту — цель путешествия (ещё раз — снять), ПКМ по любому месту — перемещение туда (с 3.0.2 и туда, где ещё не были).
-## С 12.5+ метку легче поймать (PICK 24 px), а перемещение спрашивает подтверждение (Hud.ask_travel)
-class BigMap extends Control:
-	const PICK := 24.0  # на сколько пикселей можно промахнуться по метке места
-	const ZOOM_MIN := 0.25 # доля масштаба «весь план в рамке»
-	const ZOOM_MAX := 16.0
-	const ZOOM_STEP := 1.25
-	const DRAG := 6.0      # пикселей: дальше нажатие ЛКМ — перетаскивание, а не выбор
-	var hud: Hud
-	var hover := {}     # место под курсором или пусто
-	var zoom := 1.0
-	var center := Vector2.INF  # клетка в середине экрана; INF — середина плана
-	var _press := Vector2.INF  # где нажата ЛКМ или средняя кнопка
-	var _dragged := false
-
-	func _init() -> void:
-		clip_contents = true
-
-	func reset_view() -> void:
-		zoom = 1.0
-		center = Vector2.INF
-
-	func _queue_name(names: Array[Dictionary], pl: Dictionary, at: Vector2, color: Color, fs: int, text := "") -> void:
-		var selected: bool = pl.key == hud.goal.get("key")
-		names.append({text = pl.name if text.is_empty() else text, at = at, color = Hud.GOLD if selected else color,
-			fs = fs, selected = selected, distance = Vector2(pl.x * Hud.TILE - hud.px, pl.y * Hud.TILE - hud.pz).length_squared()})
-
-	func _draw_names(names: Array[Dictionary]) -> void:
-		names.sort_custom(func(a: Dictionary, b: Dictionary) -> bool:
-			return a.selected if a.selected != b.selected else a.distance < b.distance)
-		var occupied: Array[Rect2] = []
-		var font := ThemeDB.fallback_font
-		for item: Dictionary in names:
-			var size := font.get_string_size(item.text, HORIZONTAL_ALIGNMENT_LEFT, -1, item.fs)
-			var rect := Rect2(item.at - Vector2(size.x * 0.5, font.get_ascent(item.fs)), Vector2(size.x, font.get_height(item.fs))).grow(6.0)
-			var overlaps := false
-			for other: Rect2 in occupied:
-				if rect.intersects(other):
-					overlaps = true
-					break
-			if overlaps:
-				continue
-			occupied.append(rect)
-			Hud.draw_label(self, item.text, item.at, item.color, item.fs, item.selected)
-
-	## Где на экране лежит карта плана: [левый верхний угол, сторона, пикселей на клетку]
-	func _frame() -> Array:
-		var k := minf(size.x, size.y) * 0.88 / hud.world.W * zoom
-		var c := center if center != Vector2.INF else Vector2(hud.world.W, hud.world.H) * 0.5
-		var o := size * 0.5 - c * k
-		return [o, hud.world.W * k, k]
-
-	## Масштаб вокруг точки экрана: клетка под курсором остаётся под ним
-	func _zoom_at(pos: Vector2, factor: float) -> void:
-		var f := _frame()
-		var cell: Vector2 = (pos - f[0]) / float(f[2])
-		zoom = clampf(zoom * factor, ZOOM_MIN, ZOOM_MAX)
-		var k := minf(size.x, size.y) * 0.88 / hud.world.W * zoom
-		center = cell - (pos - size * 0.5) / k
-		_clamp_center()
-		queue_redraw()
-
-	## Середина экрана не уходит дальше области от плана и закреплённых земель
-	func _clamp_center() -> void:
-		var known := Rect2(Vector2.ZERO, Vector2(hud.world.W, hud.world.H))
-		if hud.world.outer != null:
-			for key: Vector2i in hud.world.outer.get_ledger().get("regions", {}):
-				known = known.expand(Vector2(key * WorldData.REGION_SIZE)).expand(Vector2((key + Vector2i.ONE) * WorldData.REGION_SIZE))
-		known = known.grow(WorldData.REGION_SIZE)
-		center = center.clamp(known.position, known.end)
-
-	## Ближайшее к точке экрана место не дальше PICK пикселей
-	func _place_at(pos: Vector2) -> Dictionary:
-		if hud.world == null:
-			return {}
-		var f := _frame()
-		var best := {}
-		var bd := PICK
-		for pl: Dictionary in hud.all_places() + hud.trail_places():
-			if pl.kind != "settlement" and not hud.world.accessible(pl.x, pl.y):
-				continue # за краем открытых земель на карте видны только поселения
-			var d := pos.distance_to(f[0] + Vector2(pl.x, pl.y) * f[2])
-			if d < bd:
-				bd = d
-				best = pl
-		return best
-
-	func _gui_input(event: InputEvent) -> void:
-		if event is InputEventMouseMotion:
-			if _press != Vector2.INF and event.button_mask & (MOUSE_BUTTON_MASK_LEFT | MOUSE_BUTTON_MASK_MIDDLE):
-				if _dragged or event.position.distance_to(_press) > DRAG:
-					if center == Vector2.INF:
-						center = Vector2(hud.world.W, hud.world.H) * 0.5
-					center -= event.relative / float(_frame()[2])
-					_clamp_center()
-					_dragged = true
-					queue_redraw()
-					accept_event()
-					return
-			var h := _place_at(event.position)
-			if h.get("key") != hover.get("key"):
-				hover = h
-				queue_redraw()
-		elif event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
-			if event.pressed:
-				_zoom_at(event.position, ZOOM_STEP if event.button_index == MOUSE_BUTTON_WHEEL_UP else 1.0 / ZOOM_STEP)
-			accept_event()
-		elif event is InputEventMouseButton and event.button_index in [MOUSE_BUTTON_LEFT, MOUSE_BUTTON_MIDDLE] and event.pressed:
-			# выбор — при отпускании без перетаскивания
-			_press = event.position
-			_dragged = false
-			accept_event()
-		elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_MIDDLE:
-			if not _dragged:
-				center = Vector2(hud.px, hud.pz) / Hud.TILE
-				_clamp_center()
-				queue_redraw()
-			_press = Vector2.INF
-			accept_event()
-		elif event is InputEventMouseButton and (event.pressed or event.button_index == MOUSE_BUTTON_LEFT):
-			var was_drag := _dragged
-			var from_map: bool = _press != Vector2.INF or event.pressed
-			_press = Vector2.INF
-			_dragged = false
-			if was_drag or not from_map: # отпускание после нажатия вне карты — не выбор
-				accept_event()
-				return
-			var pl := _place_at(event.position)
-			if event.button_index == MOUSE_BUTTON_LEFT and not pl.is_empty():
-				var same: bool = pl.key == hud.goal.get("key")
-				hud.set_goal({} if same else pl)
-			elif event.button_index == MOUSE_BUTTON_LEFT and event.ctrl_pressed:
-				var frame := _frame()
-				var cell: Vector2 = (event.position - frame[0]) / float(frame[2])
-				var same: bool = hud.goal.get("kind") == "marker" and cell.distance_to(Vector2(hud.goal.x, hud.goal.y)) < 4.0
-				hud.set_goal({} if same else Hud.marker_goal(cell))
-			elif event.button_index == MOUSE_BUTTON_RIGHT and not pl.is_empty() and hud.in_open_land(pl):
-				hud.ask_travel(pl)
-			accept_event()
-
-	func _draw() -> void:
-		if hud.world == null:
-			return
-		var w := hud.world
-		var cw := size.x
-		draw_rect(Rect2(Vector2.ZERO, size), Color(8 / 255.0, 12 / 255.0, 20 / 255.0, 0.82))
-		var f := _frame()
-		var o: Vector2 = f[0]
-		var sz: float = f[1]
-		var k: float = f[2]
-		draw_texture_rect(hud.map_tex, Rect2(o, Vector2(sz, sz)), false)
-		# Закреплённые соседние области — их картинки по местам в мире
-		if w.outer != null:
-			var regions: Dictionary = w.outer.get_ledger().get("regions", {})
-			for key: Vector2i in regions:
-				var png: PackedByteArray = regions[key].get("map", PackedByteArray())
-				var tex := hud.region_texture(key, png) if not png.is_empty() else null
-				if tex != null:
-					var r: Rect2i = regions[key].rect
-					draw_texture_rect(tex, Rect2(o + Vector2(r.position) * k, Vector2(r.size) * k), false)
-		draw_rect(Rect2(o, Vector2(sz, sz)), Color.html("#d8c79a"), false, 2.0)
-		# За рамкой виден тот же мир; соседняя территория откроется при приближении.
-		if w.available_rect.has_area():
-			var a := o + Vector2(w.available_rect.position) * k
-			var b := o + Vector2(w.available_rect.end) * k
-			var shade := Color(0.0, 0.0, 0.0, 0.65)
-			draw_rect(Rect2(o, Vector2(sz, a.y - o.y)), shade)
-			draw_rect(Rect2(Vector2(o.x, b.y), Vector2(sz, o.y + sz - b.y)), shade)
-			draw_rect(Rect2(Vector2(o.x, a.y), Vector2(a.x - o.x, b.y - a.y)), shade)
-			draw_rect(Rect2(Vector2(b.x, a.y), Vector2(o.x + sz - b.x, b.y - a.y)), shade)
-			draw_rect(Rect2(a, b - a), Hud.GOLD, false, 1.5)
-		# Outline the whole route and mark its start as a selectable destination.
-		for trail: Dictionary in hud.trail_places():
-			var line := PackedVector2Array()
-			for point: Vector2 in trail.points: line.append(o + point / Hud.TILE * k)
-			if line.size() >= 2:
-				draw_polyline(line, Color(0.05, 0.12, 0.10, 0.95), 7.0, true)
-				draw_polyline(line, Color.html("#54e1aa"), 3.0, true)
-			var start := o + Vector2(trail.x, trail.y) * k
-			draw_circle(start, 7.0, Color(0.05, 0.12, 0.10, 0.95))
-			draw_arc(start, 6.0, 0.0, TAU, 24, Color.html("#54e1aa"), 2.5, true)
-		var names: Array[Dictionary] = []
-		for pl: Dictionary in hud.all_places() + hud.trail_places():
-			var at := o + Vector2(pl.x, pl.y) * k
-			if not w.accessible(pl.x, pl.y):
-				# Дальние поселения — тусклые точки без подписи: их можно выбрать целью заранее.
-				if pl.kind == "settlement":
-					draw_circle(at, 2.5, Color(1, 1, 1, 0.45))
-				if pl.key == hud.goal.get("key"):
-					_queue_name(names, pl, at - Vector2(0, 7), Hud.GOLD, 13)
-				continue
-			var seen: bool = hud.visited.has(pl.key)
-			match pl.kind:
-				"trail":
-					_queue_name(names, pl, at - Vector2(0, 10), Color.html("#9cf5cc"), 13)
-				"settlement":
-					draw_circle(at, 3.5, Color.html("#ffdd55") if seen else Color.WHITE)
-					_queue_name(names, pl, at - Vector2(0, 7), Color.html("#fff6d8"), 13)
-				"peak":
-					var col := Color.html("#ffdd55") if seen else Color.html("#e8f0ff")
-					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -3), at + Vector2(3, 3), at + Vector2(-3, 3)]), col)
-					_queue_name(names, pl, at - Vector2(0, 7), col, 13)
-				"lake":
-					var col := Color.html("#ffdd55") if seen else Color.html("#cfeaff")
-					draw_arc(at, 3.0, 0.0, TAU, 12, col, 1.5)
-					_queue_name(names, pl, at - Vector2(0, 7), col, 12)
-				"site":
-					# Ромбик по значимости; название — у крупных мест и у тех, где уже были.
-					var col := Color.html("#ffdd55") if seen else Color.html("#e6d6b0")
-					var r: float = 1.5 + pl.src.rank
-					draw_colored_polygon(PackedVector2Array([at + Vector2(0, -r), at + Vector2(r, 0), at + Vector2(0, r), at + Vector2(-r, 0)]), col)
-					if seen or pl.src.rank >= 3 or pl.key == hud.goal.get("key") or hud.knows(pl.key):
-						_queue_name(names, pl, at - Vector2(0, 6), col, 11)
-		_draw_names(names)
+		if not quest.is_empty():
+			qx = _destination(quest, hud.quest_color(), true, -INF)
 		if not hud.goal.is_empty():
-			draw_arc(o + Vector2(hud.goal.x, hud.goal.y) * k, 9.0, 0.0, TAU, 24, Hud.GOLD, 2.5)
-		var q := hud.quest_place()
-		if not q.is_empty():
-			var qat := _inside(o + Vector2(q.x, q.y) * k, 8.0)
-			Hud.draw_quest_mark(self, qat + Vector2(11, -11), 5.5, hud.quest_color())
-			# шаг задания — вверху внутри рамки карты: под ней уже две строки
-			Hud.draw_label(self, "Задание: " + hud.quests.step_text(), Vector2(cw / 2.0, 54.0), hud.quest_color(), 15)
-		if hud.bike_shown:
-			Hud.draw_bike(self, _inside(o + hud.bike_pos / Hud.TILE * k, 5.0), 5.0)
-		Hud.draw_arrow(self, _inside(o + Vector2(hud.px, hud.pz) / Hud.TILE * k, 9.0), 9.0, hud.yaw)
-		# легенду про велосипед пишем, только когда он действительно нарисован
-		var legend := "Мир «%s» · территория %d × %d — M или Esc, чтобы закрыть" % [w.seed_text, w.available_rect.size.x, w.available_rect.size.y]
-		if hud.bike_shown:
-			legend += " · синим отмечен велосипед"
-		Hud.draw_label(self, legend, Vector2(cw / 2.0, 30.0), Color.WHITE, 16)
-		Hud.draw_label(self, _found_line(), Vector2(cw / 2.0, size.y - 16.0), Color(1, 1, 1, 0.6), 13)
-		var tip := "ЛКМ — цель · Ctrl+ЛКМ — метка · ПКМ — перемещение · колесо — масштаб · перетаскивание — сдвиг"
-		if not hover.is_empty():
-			var d := Grid.hypot(hover.x * Hud.TILE - hud.px, hover.y * Hud.TILE - hud.pz)
-			tip = "«%s», %s · ЛКМ — %s · " % [hover.name, Util.distance_text(d), "снять цель" if hover.key == hud.goal.get("key") else "цель"]
-			tip += "ПКМ — переместиться сюда" if hud.in_open_land(hover) else "земли откроются по пути"
-			draw_arc(o + Vector2(hover.x, hover.y) * k, 10.0, 0.0, TAU, 24, Color.WHITE, 2.0)
-		Hud.draw_label(self, tip, Vector2(cw / 2.0, size.y - 38.0), Color(1, 1, 1, 0.85), 15)
+			_destination(hud.goal, HudStyle.AMBER, false, qx)
 
-	## Сколько мест уже открыто: «Открыто: поселений 2 из 12 · вершин 0 из 6 · озёр 1 из 9»
-	func _found_line() -> String:
-		var n := {settlement = 0, peak = 0, lake = 0, site = 0}
-		for key: String in hud.visited:
-			n[key.get_slice(":", 0)] += 1
-		var counts := {settlement = 0, peak = 0, lake = 0, site = 0}
-		for place: Dictionary in hud.places():
-			counts[place.kind] += 1
-		var text := "Открыто: поселений %d из %d · вершин %d из %d" % [n.settlement, counts.settlement, n.peak, counts.peak]
-		if counts.lake > 0:
-			text += " · озёр %d из %d" % [n.lake, counts.lake]
-		if counts.site > 0:
-			text += " · мест %d из %d" % [n.site, counts.site]
-		return text
+	func _ruler_x(offset: float) -> float:
+		return size.x * 0.5 + clampf(offset / HALF_ANGLE, -1.0, 1.0) * (size.x * 0.5 - INSET)
 
-	## Маркер за краем видимой части карты прижимается к краю экрана
-	func _inside(at: Vector2, margin: float) -> Vector2:
-		return at.clamp(Vector2(margin, margin), size - Vector2(margin, margin))
+	func _destination(place: Dictionary, color: Color, quest: bool, other_x: float) -> float:
+		var dx: float = place.x * Hud.TILE - hud.px
+		var dz: float = place.y * Hud.TILE - hud.pz
+		var offset := -rad_to_deg(wrapf(hud.heading_to(place.x * Hud.TILE, place.y * Hud.TILE) - hud.yaw, -PI, PI))
+		var x := _ruler_x(offset)
+		var cx := clampf(x, BADGE_WIDTH * 0.5, size.x - BADGE_WIDTH * 0.5)
+		var top := size.y + 6.0 + (25.0 if absf(cx - other_x) < BADGE_WIDTH else 0.0)
+		var tint := color if absf(offset) <= HALF_ANGLE else color.lerp(HudStyle.MUTED, 0.42)
+		draw_line(Vector2(x, size.y - 2), Vector2(x, size.y + 6), tint, 1.5, true)
+		draw_style_box(_badge, Rect2(cx - BADGE_WIDTH * 0.5, top, BADGE_WIDTH, 21.0))
+		var icon := Vector2(cx - BADGE_WIDTH * 0.5 + 10, top + 10.5)
+		if quest:
+			draw_rect(Rect2(icon - Vector2.ONE * 2.5, Vector2.ONE * 5.0), tint)
+		else:
+			draw_colored_polygon(PackedVector2Array([icon + Vector2(0, -4), icon + Vector2(4, 0),
+				icon + Vector2(0, 4), icon + Vector2(-4, 0)]), tint)
+		HudStyle.centered(self, Vector2(cx + 6.0, top + 14.5), Util.distance_text(Vector2(dx, dz).length()), 12, tint)
+		return cx
 
 
 ## 14.2: дуга выносливости (с 14.4 — кольцо в левом нижнем углу). Появляется, пока силы тратятся или копятся, полная — гаснет.
@@ -1117,10 +998,11 @@ class BigMap extends Control:
 ## заливки быстро тает и показывает темп траты. Ниже LOW при трате дуга пульсирует, warning (0..1) затемняет
 ## края экрана; при восстановлении предупреждение гаснет быстро. Накат подсвечен холодным ореолом.
 class StaminaArc extends Control:
-	const R := 26.0                       # радиус кольца, px
+	const DIAMETER := 76.0
+	const R := 28.0
 	const FROM := deg_to_rad(135.0)       # кольцо с разрывом внизу: от левого низа через верх к правому низу
 	const SPAN := deg_to_rad(270.0)
-	const WIDTH := 5.0
+	const WIDTH := 4.0
 	const LOW := 0.2
 	const GHOST_LAG := 1.5                # 1/с: шлейф догоняет заливку с запаздыванием — чем быстрее трата, тем он
 	                                      # длиннее рывок Shift (треть дуги) тает за доли секунды
@@ -1138,6 +1020,7 @@ class StaminaArc extends Control:
 	func set_value(v: float, tired: bool, st: Stamina.State, allowed: bool) -> void:
 		var dt := get_process_delta_time()
 		_t += dt
+		var was_visible := _alpha > 0.01
 		var active := st == Stamina.State.DRAIN or st == Stamina.State.COAST or st == Stamina.State.REST or v < 0.999
 		_alpha = move_toward(_alpha, 1.0 if allowed and active else 0.0, dt * (4.0 if allowed and active else 1.5))
 		_ghost = v if v >= _ghost else lerpf(_ghost, v, Util.damp(GHOST_LAG, dt))
@@ -1154,7 +1037,8 @@ class StaminaArc extends Control:
 		value = v
 		exhausted = tired
 		state = st
-		queue_redraw()
+		if was_visible or _alpha > 0.01:
+			queue_redraw()
 
 	func _arc(from: float, to: float, width: float, color: Color) -> void:
 		if to - from < 0.002:
@@ -1166,19 +1050,21 @@ class StaminaArc extends Control:
 		if _alpha <= 0.01:
 			return
 		var a := _alpha
-		_arc(0.0, 1.0, WIDTH + 3.0, Color(0, 0, 0, 0.45 * a))
+		var c := size / 2.0
+		HudStyle.dial_face(self, c, DIAMETER * 0.5 - 2.0, a)
+		_arc(0.0, 1.0, WIDTH, Color(HudStyle.BORDER, 0.65 * a))
 		if _coast > 0.0:
-			_arc(0.0, value, WIDTH + 6.0, Color(0.45, 0.85, 1.0, 0.22 * _coast * a))
-		_arc(value, _ghost, WIDTH, Color(1, 1, 1, 0.8 * a))
-		var fill := Color(0.92, 0.95, 0.9)
+			_arc(0.0, value, WIDTH + 5.0, Color(0.45, 0.85, 1.0, 0.20 * _coast * a))
+		_arc(value, _ghost, WIDTH, Color(HudStyle.CREAM, 0.55 * a))
+		var fill := HudStyle.MINT
 		if exhausted:
-			fill = Color(0.9, 0.3, 0.25)
+			fill = HudStyle.RED
 		elif value < LOW:
-			fill = Color(1.0, 0.72, 0.3)
+			fill = HudStyle.AMBER
 		fill = fill.lerp(Color(0.6, 0.9, 1.0), _coast * 0.6)
 		# 14.5: расход — тёплый оттенок и мягкий пульс, в начале расхода — вспышка шире и ярче
 		if not exhausted and value >= LOW:
-			fill = fill.lerp(Color(1.0, 0.8, 0.4), _drain * 0.55)
+			fill = fill.lerp(HudStyle.AMBER, _drain * 0.55)
 		fill = fill.lerp(Color.WHITE, _kick * 0.5)
 		var pulse := 0.5 + 0.5 * sin(_t * 7.0)
 		var spend := 0.5 + 0.5 * sin(_t * 4.5)
@@ -1187,7 +1073,7 @@ class StaminaArc extends Control:
 		# засечка цены рывка (треть полоски): поперёк дуги, светлая с тёмной обводкой
 		var ang := FROM + SPAN * Stamina.RECOVERED
 		var dir := Vector2(cos(ang), sin(ang))
-		var c := size / 2.0
-		var mark := Color(1, 1, 1, a) if exhausted or value < Stamina.RECOVERED + 0.1 else Color(1, 1, 1, 0.6 * a)
-		draw_line(c + dir * (R - 6.0), c + dir * (R + 6.0), Color(0, 0, 0, 0.7 * a), 4.0)
-		draw_line(c + dir * (R - 5.0), c + dir * (R + 5.0), mark, 2.0)
+		var mark := Color(HudStyle.CREAM, a if exhausted or value < Stamina.RECOVERED + 0.1 else 0.6 * a)
+		draw_line(c + dir * (R - 4.0), c + dir * (R + 4.0), Color(HudStyle.SURFACE, a), 3.0)
+		draw_line(c + dir * (R - 3.0), c + dir * (R + 3.0), mark, 1.5, true)
+		HudStyle.dial_text(self, c, value, "СИЛЫ", fill, a)

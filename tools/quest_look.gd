@@ -1,8 +1,8 @@
 extends SceneTree
 ## 11.9: изолированная сцена заданий без генерации мира. Несколько мест словарями и WorldData только со списками
 ## мест — для доски. Проверяет Quests: три вида на доске, устойчивость выбора, шаги доставки (сумка), снимка
-## (нужное место в прицеле) и посещения, отказ, выполненное не предлагается снова. Снимает доску с вкладкой
-## заданий, доску с текущим заданием и седока с сумкой за спиной со счётчиком задания. Нужно окно.
+## (нужное место в прицеле) и посещения, отказ, выполненное не предлагается снова.
+## Снимает дорожную доску, личную карту и интерфейс доставки. Нужно окно.
 ##   godot --path . --script res://tools/quest_look.gd -- [--out <папка>]
 
 const Quests = preload("res://scripts/game/quests.gd")
@@ -31,10 +31,37 @@ func _initialize() -> void:
 	world.peaks = [{x = 160, y = 40, i = 2, name = "Седая"}]
 	world.lakes = [{x = 60, y = 150, i = 3, name = "Тихое", cells = 900, sx = 70, sy = 140}]
 	world.sites = [{x = 130, y = 40, i = 4, name = "Сторожевая", type = "tower", rank = 2}, {x = 105, y = 104, i = 5, name = "Колодец", type = "tower", rank = 2}]
+	_map_terrain()
 	for kind: String in WorldData.PLACE_KINDS:
 		for src: Variant in world.get(kind + "s"):
 			places.append(InteractionService.target(world.place(WorldData.place_id(kind, src.x, src.y))))
 	_run()
+
+
+func _map_terrain() -> void:
+	world.W = 224
+	world.H = 192
+	world.N = world.W * world.H
+	var biomes := PackedByteArray()
+	var relief := PackedFloat32Array()
+	biomes.resize(world.N)
+	relief.resize(world.N)
+	for y in world.H:
+		for x in world.W:
+			var at := Vector2(x, y)
+			var hill := exp(-at.distance_squared_to(Vector2(112, 66)) / 2600.0)
+			var woods := x < 99 + sin(y * 0.045) * 17 or x > 146 + cos(y * 0.08) * 15
+			var water := ((at - Vector2(59, 149)) / Vector2(22, 15)).length_squared() < 1.0
+			var i := y * world.W + x
+			biomes[i] = Biomes.LAKE if water else (Biomes.FOREST if woods else Biomes.GRASS)
+			relief[i] = (25.0 + hill * 310.0) / GameConfig.HS
+	world.biome = biomes
+	world.h = relief
+	world.rivers = [[{x = 84, y = 70}, {x = 91, y = 91}, {x = 88, y = 112},
+		{x = 78, y = 128}, {x = 69, y = 140}]]
+	world.trails = [{kind = "road", pts = [{x = 35, y = 121}, {x = 70, y = 111}, {x = 100, y = 100},
+		{x = 133, y = 110}, {x = 161, y = 113}, {x = 180, y = 130}, {x = 210, y = 146}]},
+		{kind = "trail", pts = [{x = 70, y = 111}, {x = 76, y = 125}, {x = 70, y = 140}]}]
 
 
 func _check(ok: bool, text: String) -> void:
@@ -70,7 +97,8 @@ func _logic() -> void:
 	var offers := _offers(quests)
 	var kinds := offers.map(func(q: QuestData) -> String: return q.kind)
 	_check(kinds.size() == 3 and kinds[0] in Quests.CARGO_KINDS and kinds[1] in ["photo", "chronicle"] and kinds[2] in ["visit", "tour"], "доска предлагает доставку, снимок и посещение или обход (%s)" % ", ".join(PackedStringArray(kinds)))
-	_check(offers == _offers(quests), "те же задания при повторном открытии доски")
+	var offer_id := func(q: QuestData) -> String: return q.id
+	_check(offers.map(offer_id) == _offers(quests).map(offer_id), "те же задания при повторном открытии доски")
 	_check(not offers.any(func(q: QuestData) -> bool: return q.target.name == "Колодец"), "место в паре шагов от поселения не задание")
 	var changes := [0]
 	quests.changed.connect(func() -> void: changes[0] += 1)
@@ -197,15 +225,28 @@ func _run() -> void:
 	hud.lock_hint.visible = false
 	var quests := Quests.new()
 	hud.quests = quests
-	# доска с вкладкой заданий
+	hud.set_world(world, null)
+	hud.set_player(400.0, 400.0, 0.3)
+	hud.set_map_visible(true)
+	_check(hud.big_map.places.is_empty(), "личная карта не показывает неизвестные места")
+	hud.set_map_visible(false)
 	var home: SettlementData = world.settlements[0]
 	var offers := _offers(quests)
-	hud.settlement_panel.open(home, world, [], true, quests, offers)
+	var pins := hud.board_places(home)
+	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	var buttons: Array[Node] = hud.settlement_panel.find_children("*", "Button", true, false)
 	_check(buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Взять")).size() == 3, "на доске три кнопки «Взять»")
-	_check(buttons.any(func(b: Button) -> bool: return b.text.begins_with("Каменка")), "маршруты на второй вкладке")
-	_check(hud.settlement_panel.size.y < root.size.y - 40, "доска помещается на экране 720 px (%d)" % hud.settlement_panel.size.y)
+	_check(pins.size() == 3 and pins[1].name == "Колодец" and pins[2].name == "Тихое", "на доске два ближайших места")
+	var travels := []
+	hud.settlement_panel.travel_requested.connect(hud.ask_travel)
+	hud.travel_requested.connect(func(place: Dictionary) -> void: travels.append(place.key))
+	var transfer: Button = buttons.filter(func(b: Button) -> bool: return b.text.begins_with("Тихое"))[0]
+	transfer.pressed.emit()
+	_check(travels.is_empty() and hud._travel_dialog != null, "перемещение с доски требует подтверждения")
+	hud._travel_dialog.confirmed.emit()
+	_check(travels == [_place("Тихое").key], "подтверждение передаёт выбранное место")
 	await _shot("quest_board")
+	_check(hud.get_global_rect().encloses(hud.settlement_panel.get_global_rect()), "доска помещается на экране 720 px")
 	# взять доставку кнопкой: текущее задание со шагами и «Отказаться»
 	var accepted := []
 	hud.settlement_panel.quest_accepted.connect(func(q: QuestData) -> void: accepted.append(q))
@@ -214,7 +255,7 @@ func _run() -> void:
 			b.pressed.emit()
 	_check(accepted.size() == 1 and accepted[0].kind in Quests.CARGO_KINDS, "кнопка «Взять» отдаёт задание")
 	quests.accept(accepted[0])
-	hud.settlement_panel.open(home, world, [], true, quests, offers)
+	hud.settlement_panel.open(home, world, pins, true, quests, offers, hud.map_data)
 	buttons = hud.settlement_panel.find_children("*", "Button", true, false)
 	_check(buttons.any(func(b: Button) -> bool: return b.text == "Отказаться от задания") and not buttons.any(func(b: Button) -> bool: return b.text.begins_with("Взять")),
 		"с текущим заданием — «Отказаться», новых не взять")
@@ -227,13 +268,12 @@ func _run() -> void:
 	drop.pressed.emit()
 	_check(dropped[0] == 1, "второе нажатие отказывается")
 	hud.settlement_panel.hide()
+	await _personal_map()
 	# сумка за спиной седока и счётчик
 	quests.pick_up()
 	bike.set_pack(quests.cargo)
 	hud.px = 100 * GameConfig.TILE
 	hud.pz = 100 * GameConfig.TILE
-	# с 12.4 счётчик виден, пока зажат Tab
-	Input.action_press("show_hud")
 	for i in 2:
 		await process_frame
 	hud.update_tracker()
@@ -241,7 +281,6 @@ func _run() -> void:
 	var pack := bike.rider.skeleton.get_node_or_null("Pack") as Node3D
 	_check(pack != null and pack.visible, "сумка висит на седоке")
 	await _shot("quest_pack")
-	Input.action_release("show_hud")
 	camera.look_at_from_position(Vector3(2.6, 1.3, 0.2), Vector3(0.0, 1.0, 0.1), Vector3.UP)
 	await _shot("quest_pack_side")
 	camera.look_at_from_position(Vector3(1.7, 1.6, 2.4), Vector3(-0.3, 0.9, 0.0), Vector3.UP)
@@ -251,10 +290,43 @@ func _run() -> void:
 	hud.toast("Задание выполнено\nПосылка: «Каменка»")
 	quests.cargo = false
 	bike.set_pack(false)
-	_check(hud.tracker.visible and hud._tracker_icon.texture == hud.UiIcons.CHECK, "выполненное задание видно в счётчике")
 	for i in 30:
 		await process_frame
-	_check(hud._banner.visible and hud._banner.modulate.a > 0.9, "крупная надпись «Задание выполнено» посередине")
+	_check(hud.toast_label.text.begins_with("Задание выполнено"), "о выполнении задания сообщает HUD")
 	await _shot("quest_done")
 	print("quest_look: %s, снимки в %s" % ["FAIL %d" % failed if failed else "ok", out])
 	quit(1 if failed else 0)
+
+
+func _personal_map() -> void:
+	var short_ride := Hud.Journal.new()
+	short_ride.record(Vector2.ZERO, 0.1)
+	short_ride.record(Vector2(2, 0), 0.1)
+	var short_save := short_ride.save_state()
+	_check(short_ride.current.size() == 1, "сохранение короткого трека не меняет текущую запись")
+	short_ride.record(Vector2(900, 0), 0.1)
+	var short_track := short_ride.save_state()
+	_check(short_save.legs.size() == 1 and short_save.legs[0][-1] == Vector2(2, 0)
+		and short_track.legs == short_save.legs and is_equal_approx(short_track.distance, 2.0),
+		"короткая поездка сохраняется, скачок координат не попадает в трек")
+	var trail := hud.map_journal
+	for i in 25:
+		trail.record(Vector2(201 + i * 9, 464 - i * 3), 0.3)
+	trail.end_trip() # перенос
+	for i in 22:
+		trail.record(Vector2(534 + i * 6, 442 + i * 3.7), 0.3)
+	var state: Dictionary = bytes_to_var(var_to_bytes(EntityCodec.encode(trail.save_state())))
+	_check(Hud.Journal.valid(state) and state.legs.size() == 2 and state.legs[0][-1].distance_to(state.legs[1][0]) > 100.0,
+		"сохранение содержит раздельные части поездки вокруг телепорта")
+	trail.restore(state)
+	_check(trail.current.is_empty() and trail.read.size() == 3 and trail.distance > 350.0, "трек и открытия восстанавливаются при загрузке")
+	hud.visited[_place("Каменка").key] = true
+	hud.set_map_visible(true)
+	_check(hud.big_map.places.size() == 4 and not hud.big_map.places.any(func(p: Dictionary) -> bool: return p.name == "Седая"),
+		"личная карта показывает только посещённые и прочитанные места")
+	var cursor := Vector2(630.0, 320.0)
+	var before := hud.big_map.screen_to_world(cursor)
+	hud.big_map._zoom_at(cursor, 1.1)
+	_check(before.distance_to(hud.big_map.screen_to_world(cursor)) < 0.01, "масштабирование удерживает место под курсором")
+	await _shot("personal_map")
+	hud.set_map_visible(false)

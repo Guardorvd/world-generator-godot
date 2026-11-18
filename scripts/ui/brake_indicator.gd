@@ -1,6 +1,8 @@
 extends Control
 ## Compact brake-pressure gauge; physics remains the source of truth.
-const R := 26.0
+const HudStyle = preload("res://scripts/ui/hud_style.gd")
+const DIAMETER := 76.0
+const R := 28.0
 const FROM := deg_to_rad(135.0)
 const SPAN := deg_to_rad(270.0)
 const MIN_SPEED := 1.0
@@ -9,6 +11,7 @@ var risk := 0.0
 var skid := 0.0
 var _alpha := 0.0
 var _t := 0.0
+var _warning := HudStyle.panel(HudStyle.SURFACE, HudStyle.AMBER, 8, Vector2.ZERO)
 
 func update_state(bike: BikeRide, allowed: bool) -> void:
 	pressure = clampf(bike.brakes.pressure, 0.0, 1.0)
@@ -27,29 +30,24 @@ func update_state(bike: BikeRide, allowed: bool) -> void:
 
 func _arc(from: float, to: float, width: float, color: Color) -> void:
 	if to - from > 0.002:
-		draw_arc(Vector2(38, 38), R, FROM + SPAN * from, FROM + SPAN * to, 48, color, width, true)
+		draw_arc(size * 0.5, R, FROM + SPAN * from, FROM + SPAN * to, 48, color, width, true)
 
 func _draw() -> void:
 	var a := _alpha
 	var danger := risk > 0.65
 	var slipping := skid > 0.2
-	var color := Color(1.0, 0.72, 0.3) if slipping else Color(0.92, 0.95, 0.9)
+	var color := HudStyle.AMBER if slipping else HudStyle.MINT
 	if danger:
-		color = Color(1.0, 0.35, 0.25)
+		color = HudStyle.RED
 		color.a = a * (0.75 + 0.25 * sin(_t * 8.0))
 	else:
 		color.a = a
-	_arc(0.0, 1.0, 8.0, Color(0, 0, 0, 0.45 * a))
-	_arc(0.0, 1.0, 5.0, Color(1, 1, 1, 0.15 * a))
-	_arc(0.0, pressure, 5.0, color)
-	# A small brake-disc symbol keeps the gauge distinct from stamina.
-	var center := Vector2(38, 38)
-	draw_arc(center, 9.0, 0.0, TAU, 32, Color(0, 0, 0, 0.55 * a), 4.0, true)
-	draw_arc(center, 9.0, 0.0, TAU, 32, Color(color.r, color.g, color.b, 0.9 * a), 2.0, true)
-	draw_line(center + Vector2(-5, 0), center + Vector2(5, 0), Color(color.r, color.g, color.b, a), 2.0, true)
+	var center := size * 0.5
+	HudStyle.dial_face(self, center, DIAMETER * 0.5 - 2, a)
+	_arc(0.0, 1.0, 4.0, Color(HudStyle.BORDER, 0.65 * a))
+	_arc(0.0, pressure, 4.0, color)
+	HudStyle.dial_text(self, center, pressure, "ТОРМОЗ", color, a)
 	if danger or slipping:
-		var label := "Отпусти тормоз" if danger else "Потеря сцепления"
-		var font := ThemeDB.fallback_font
-		var pos := Vector2(80, 43)
-		draw_string_outline(font, pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, 3, Color(0, 0, 0, 0.8 * a))
-		draw_string(font, pos, label, HORIZONTAL_ALIGNMENT_LEFT, -1, 15, color)
+		var caption := "Отпустите тормоз" if danger else "Потеря сцепления"
+		draw_style_box(_warning, Rect2(center.x - 77.0, -32.0, 154.0, 24.0))
+		HudStyle.centered(self, Vector2(center.x, -16.0), caption, 13, Color(color, a))
