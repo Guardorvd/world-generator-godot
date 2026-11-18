@@ -10,7 +10,10 @@ const MAX_STEP := 30.0  # дальше за такт — перенос или �
 const END_STEP := 1.0
 
 var read := {}
-var distance := 0.0
+var foot := 0.0   # пройдено пешком, м
+var bike := 0.0   # проехано на велосипеде, м
+var distance: float:   # весь путь (подпись на карте)
+	get: return foot + bike
 var revision := 0
 var legs: Array[Dictionary] = []
 var current := PackedVector2Array()
@@ -24,7 +27,7 @@ func reveal(places: Array) -> void:
 		read[place.key] = true
 
 
-func record(at: Vector2, dt: float) -> void:
+func record(at: Vector2, dt: float, riding := false) -> void:
 	if not at.is_finite():
 		return
 	if current.is_empty():
@@ -35,7 +38,10 @@ func record(at: Vector2, dt: float) -> void:
 		end_trip()
 		_begin(at)
 		return
-	distance += step
+	if riding:
+		bike += step
+	else:
+		foot += step
 	_position = at
 	_elapsed += dt
 	if _elapsed < SAMPLE_TIME:
@@ -96,12 +102,18 @@ func save_state() -> Dictionary:
 		history.append(points)
 		if history.size() > MAX_LEGS:
 			history.pop_front()
-	return {read = read.duplicate(), legs = history, distance = distance}
+	return {read = read.duplicate(), legs = history, foot = foot, bike = bike}
 
 
 func restore(state: Dictionary) -> void:
 	read = state.get("read", {}).duplicate()
-	distance = state.get("distance", 0.0)
+	# старые сохранения хранили один путь (трек вёлся только на велосипеде)
+	if state.has("foot"):
+		foot = float(state.foot)
+		bike = float(state.bike)
+	else:
+		foot = 0.0
+		bike = float(state.get("distance", 0.0))
 	legs.clear()
 	current = PackedVector2Array()
 	_position = Vector2.INF
@@ -117,9 +129,10 @@ func restore(state: Dictionary) -> void:
 static func valid(state: Variant) -> bool:
 	if not state is Dictionary or not state.get("read") is Dictionary or not state.get("legs") is Array:
 		return false
-	var length: Variant = state.get("distance")
-	if not (length is float or length is int) or not is_finite(float(length)) or length < 0.0:
-		return false
+	var lengths: Array = [state.get("foot"), state.get("bike")] if state.has("foot") else [state.get("distance")]
+	for length: Variant in lengths:
+		if not (length is float or length is int) or not is_finite(float(length)) or length < 0.0:
+			return false
 	if state.legs.size() > MAX_LEGS:
 		return false
 	for key: Variant in state.read:

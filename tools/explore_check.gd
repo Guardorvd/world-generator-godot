@@ -69,6 +69,27 @@ func _track() -> void:
 	_walk(copy, Vector2(-9000, 9000), Vector2(1, 0), 4.0, 5.0)
 	copy.end_trip()
 	check(copy.legs.size() == j.legs.size() + 1, "после загрузки — новый отрезок")
+	# пеший и велосипедный путь считаются раздельно, перенос не считается, старое сохранение читается
+	j = Journal.new()
+	at = _walk(j, Vector2(0, 0), Vector2(1, 0), 1.0, 60.0)
+	j.record(at + Vector2(900, 0), 1.0 / 60.0)
+	at += Vector2(900, 0)
+	var dt := 1.0 / 60.0
+	for k in 600:
+		at += Vector2(0.2, 0)
+		j.record(at, dt, true)
+	check(absf(j.foot - 60.0) < 0.5 and absf(j.bike - 120.0) < 0.5 and absf(j.distance - 180.0) < 1.0, "пешком %.1f м, на велосипеде %.1f м, перенос не считается" % [j.foot, j.bike])
+	var split := Journal.new()
+	split.restore(j.save_state())
+	check(split.foot == j.foot and split.bike == j.bike, "раздельный путь сохраняется")
+	var old_state := j.save_state()
+	old_state.erase("foot")
+	old_state.erase("bike")
+	old_state.distance = 321.0
+	var old := Journal.new()
+	check(Journal.valid(old_state), "сохранение со старым полем distance проходит проверку")
+	old.restore(old_state)
+	check(old.bike == 321.0 and old.foot == 0.0, "старый путь (трек был только на велосипеде) попадает в велосипедный")
 	# предел: старые отрезки отбрасываются, число точек ограничено
 	var big := Journal.new()
 	var rng := RandomNumberGenerator.new()
@@ -87,17 +108,9 @@ func _track() -> void:
 
 func _stats_and_reveal() -> void:
 	var e := Exploration.new()
-	var at := Vector2(100, 100)
 	for k in 600:
-		at += Vector2(0.1, 0)
-		e.tick(1.0 / 60.0, at, false, 50.0 + k * 0.01)
-	e.tick(1.0 / 60.0, at + Vector2(500, 0), false, 60.0) # перенос
-	at += Vector2(500, 0)
-	for k in 600:
-		at += Vector2(0.2, 0)
-		e.tick(1.0 / 60.0, at, true, 55.0)
-	check(absf(e.foot_m - 60.0) < 0.5 and absf(e.bike_m - 120.0) < 0.5, "пешком %.1f м, на велосипеде %.1f м, перенос не считается" % [e.foot_m, e.bike_m])
-	check(absf(e.play_s - 20.0) < 0.1 and absf(e.max_alt - 60.0) < 0.1, "время %.1f с, высшая точка %.1f м" % [e.play_s, e.max_alt])
+		e.tick(1.0 / 60.0, 50.0 + k * 0.01)
+	check(absf(e.play_s - 10.0) < 0.1 and absf(e.max_alt - 55.99) < 0.1, "время %.1f с, высшая точка %.1f м" % [e.play_s, e.max_alt])
 	var places: Array = [
 		{key = "site:1:1", kind = "site", x = 25.0, y = 0.0},   # 100 м: видно
 		{key = "site:2:2", kind = "site", x = 600.0, y = 0.0},  # далеко
@@ -140,8 +153,6 @@ func _save() -> void:
 	var e := Exploration.new()
 	e.revealed["site:1:1"] = true
 	e.scanned["site:9:9"] = true
-	e.foot_m = 1234.5
-	e.bike_m = 99.0
 	e.play_s = 77.0
 	e.max_alt = 410.0
 	e.add_photo({path = "user://photo.jpg", place = "peak:4:4"}, PackedStringArray(["peak"]), "2026-11-18 12:00:00")
@@ -149,11 +160,11 @@ func _save() -> void:
 	check(Exploration.valid_save(state), "состояние проходит проверку")
 	var copy := Exploration.new()
 	copy.restore(state)
-	check(copy.revealed == e.revealed and copy.scanned == e.scanned and copy.album == e.album and copy.foot_m == e.foot_m and copy.photos == 1, "сохранение и загрузка без потерь")
+	check(copy.revealed == e.revealed and copy.scanned == e.scanned and copy.album == e.album and copy.play_s == e.play_s and copy.photos == 1, "сохранение и загрузка без потерь")
 	check(Exploration.valid_save(var_to_bytes_and_back(state)), "и через байты сохранения")
 	var bad := state.duplicate(true)
-	bad.foot = -1.0
-	check(not Exploration.valid_save(bad), "отрицательный путь отвергается")
+	bad.time = -1.0
+	check(not Exploration.valid_save(bad), "отрицательное время отвергается")
 	bad = state.duplicate(true)
 	bad.album["x"] = {path = 1, date = "", place = ""}
 	check(not Exploration.valid_save(bad), "битая страница отвергается")

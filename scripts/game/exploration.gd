@@ -13,7 +13,6 @@ extends RefCounted
 
 const TOWER_RADIUS := 700.0   # м
 const PEAK_RADIUS := 1500.0   # м
-const MAX_STEP := 30.0        # больше за такт — перенос, путь не считается
 const NIGHT_MIN := 0.55       # 1 - sunlight не меньше: достаточно темно для ночных явлений
 const EVENT_MIN := 0.3        # сила явления (DayCycle.events), с которой его видно
 const UP_MIN := 0.12          # взгляд камеры выше горизонта не меньше чем на столько (y единичного вектора)
@@ -24,13 +23,10 @@ const GROUPS := ["Биомы", "Места", "Вершины и озёра", "Н
 
 var revealed := {}   # id места -> true: открыто сверху
 var scanned := {}    # id вышки или вершины -> true: с неё уже смотрели
-var foot_m := 0.0
-var bike_m := 0.0
 var play_s := 0.0
 var max_alt := 0.0   # высшая точка, м (как высота в сводке)
 var photos := 0
 var album := {}      # ключ страницы -> {path, date, place}
-var _last := Vector2.INF
 
 
 ## Название вида места с большой буквы («Дозорная вышка»)
@@ -68,26 +64,11 @@ static func page_title(key: String) -> String:
 	return key
 
 
-## Счётчики пути: pos — положение игрока (м), riding — едет ли, alt — высота ног
-func tick(dt: float, pos: Vector2, riding: bool, alt: float) -> void:
+## Время в игре и высшая точка (alt — высота ног). Пройденный путь по видам хранит MapJournal: он уже снимает положение игрока
+func tick(dt: float, alt: float) -> void:
 	play_s += dt
 	if is_finite(alt):
 		max_alt = maxf(max_alt, alt)
-	if not pos.is_finite():
-		return
-	if _last.is_finite():
-		var step := _last.distance_to(pos)
-		if step < MAX_STEP:
-			if riding:
-				bike_m += step
-			else:
-				foot_m += step
-	_last = pos
-
-
-## Разрыв пути (перенос, загрузка): следующий такт не считается шагом
-func break_trip() -> void:
-	_last = Vector2.INF
 
 
 ## Места kind site, lake, peak из places (элементы Hud.all_places: {key, kind, x, y — клетки}) в радиусе radius м от eye,
@@ -152,20 +133,17 @@ func add_photo(shot: Dictionary, keys: PackedStringArray, date: String) -> Packe
 
 
 func save_state() -> Dictionary:
-	return {revealed = revealed.duplicate(), scanned = scanned.duplicate(), foot = foot_m, bike = bike_m, time = play_s,
+	return {revealed = revealed.duplicate(), scanned = scanned.duplicate(), time = play_s,
 		alt = max_alt, photos = photos, album = album.duplicate(true)}
 
 
 func restore(state: Dictionary) -> void:
 	revealed = state.get("revealed", {}).duplicate()
 	scanned = state.get("scanned", {}).duplicate()
-	foot_m = float(state.get("foot", 0.0))
-	bike_m = float(state.get("bike", 0.0))
 	play_s = float(state.get("time", 0.0))
 	max_alt = float(state.get("alt", 0.0))
 	photos = int(state.get("photos", 0))
 	album = state.get("album", {}).duplicate(true)
-	_last = Vector2.INF
 
 
 static func valid_save(state: Variant) -> bool:
@@ -174,7 +152,7 @@ static func valid_save(state: Variant) -> bool:
 	for key: String in ["revealed", "scanned", "album"]:
 		if not state.get(key) is Dictionary:
 			return false
-	for key: String in ["foot", "bike", "time", "alt"]:
+	for key: String in ["time", "alt"]:
 		var v: Variant = state.get(key)
 		if not (v is float or v is int) or not is_finite(float(v)) or v < 0.0:
 			return false

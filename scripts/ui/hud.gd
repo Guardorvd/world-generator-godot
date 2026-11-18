@@ -548,7 +548,7 @@ func journey_data() -> Dictionary:
 		var entry := page.duplicate()
 		entry.shot = explore.album.get(page.key, {})
 		pages.append(entry)
-	return {foot = explore.foot_m, bike = explore.bike_m, time = explore.play_s, alt = explore.max_alt, photos = explore.photos,
+	return {foot = map_journal.foot, bike = map_journal.bike, time = explore.play_s, alt = explore.max_alt, photos = explore.photos,
 		quests = quests.done if quests != null else 0, places = rows, pages = pages, groups = Exploration.GROUPS}
 
 

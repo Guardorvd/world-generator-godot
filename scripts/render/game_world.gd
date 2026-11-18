@@ -855,7 +855,6 @@ func travel_to(place: Dictionary) -> void:
 		return
 	crash.abort()
 	hud.map_journal.end_trip()
-	hud.explore.break_trip()
 	player = arriving
 	yaw = arrival_yaw
 	pitch = -0.05
@@ -1230,12 +1229,11 @@ func _physics_process(dt: float) -> void:
 		_snap()
 	# 18.11.2026: трек и счётчики пути ведутся и пешком, и на велосипеде (при езде player — положение велосипеда)
 	if not _opening and not crashed and not crash.active():
-		hud.map_journal.record(Vector2(player.x, player.z), dt)
-		hud.explore.tick(dt, Vector2(player.x, player.z), bike.riding, player.feet)
+		hud.map_journal.record(Vector2(player.x, player.z), dt, bike.riding)
+		hud.explore.tick(dt, player.feet)
 	else:
 		hud.map_journal.end_trip()
-		hud.explore.break_trip()
-	# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
+		# 15.11: открытия мест — 10 раз в секунду, а не каждый такт (стресс-тест: 0,13–0,16 мс на такт). Самый малый
 	# радиус открытия — 2,5 клетки (10 м), за 0,1 с даже на спуске игрок проезжает 1–2 м
 	_discovery_tick += 1
 	if _discovery_tick >= DISCOVERY_TICKS:

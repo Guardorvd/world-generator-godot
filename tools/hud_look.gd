@@ -225,8 +225,8 @@ func _journal_checks() -> void:
 	image.fill_rect(Rect2i(0, 210, 640, 150), Color(0.3, 0.5, 0.25))
 	var shot_path := OS.get_user_data_dir().path_join("hud_look_shot.jpg")
 	image.save_jpg(shot_path, 0.9)
-	hud.explore.foot_m = 4200.0
-	hud.explore.bike_m = 31800.0
+	hud.map_journal.foot = 4200.0
+	hud.map_journal.bike = 31800.0
 	hud.explore.play_s = 5400.0
 	hud.explore.max_alt = 812.0
 	var keys := Exploration.classify({}, Biomes.FOREST, {dark = 0.9, up = 0.4, aurora = 0.8})
