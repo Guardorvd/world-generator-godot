@@ -475,6 +475,12 @@ func start(loaded: WorldLoader, hud_node: Hud, saved: Dictionary = {}, service_s
 		# Точка установки уже восстановлена из шага задания, её нет в каталоге мест.
 		if hud.goal.get("kind") not in Quests.FIELD_PLACES or hud.goal.key != saved.goal:
 			hud.restore_goal(saved.goal, saved.get("goal_marker", Vector2.INF))
+	else:
+		# 18.11.2026: новая игра начинается с основного задания — доехать до ближайшего поселения (там доска заданий);
+		# цель сразу на компасе, путь рисуется
+		var home := _nearest_village(Vector2(player.x, player.z) / TILE)
+		if not home.is_empty():
+			quests.accept(Quests.start(home))
 	photo.photo_taken.connect(_quest_photo)
 	photo.photo_taken.connect(_album_photo)
 	photo.wanted_reach = Quests.SHOT_REACH_M
@@ -1384,7 +1390,7 @@ func _process(delta: float) -> void:
 		_draw_opening(alpha)
 	if navigation_line != null:
 		var navigating := not _opening and not show_map and not crash.active() and not photo.active and not _placing_bike() and not _settlement_open()
-		navigation_line.update_line(pos, delta, navigating, summary)
+		navigation_line.update_line(pos, delta, navigating, hud.navigation_visible())
 		if navigating and navigation_line.status != _navigation_status:
 			_navigation_status = navigation_line.status
 			if _navigation_status != "": hud.toast_now(_navigation_status)
@@ -1756,12 +1762,17 @@ func _tick_repair(dt: float) -> void:
 
 ## Поселение, где отблагодарят за ремонт по пути: ближайшее к месту на открытой земле (InteractionService.target) или пусто
 func _thanks_village(place: Dictionary) -> Dictionary:
+	return _nearest_village(Vector2(place.x, place.y))
+
+
+## Ближайшее к точке (клетки) поселение на открытой земле (InteractionService.target) или пусто
+func _nearest_village(at: Vector2) -> Dictionary:
 	var best := {}
 	var best_d := INF
 	for p: Dictionary in hud.all_places():
 		if p.kind != "settlement" or not hud.in_open_land(p):
 			continue
-		var d := Vector2(p.x, p.y).distance_squared_to(Vector2(place.x, place.y))
+		var d := Vector2(p.x, p.y).distance_squared_to(at)
 		if d < best_d:
 			best_d = d
 			best = p

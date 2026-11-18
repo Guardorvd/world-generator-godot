@@ -135,11 +135,19 @@ func _tap_hud() -> void:
 
 
 func _map_checks(world: WorldData) -> void:
-	_check(hud.summary_visible() and hud.minimap.visible and hud.compass.visible, "сводка видна при старте")
+	# 18.11.2026: три вида — лёгкий (основной: мини-карта на 75 % и навигация), полный, скрытый
+	_check(not hud.summary_visible() and hud.navigation_visible() and hud.minimap.visible and not hud.compass.visible
+		and is_equal_approx(hud.minimap.modulate.a, Hud.LIGHT_ALPHA), "при старте лёгкий вид: мини-карта на 75 %, навигация видна")
+	await _tap_hud()
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
+	_check(hud.summary_visible() and hud.compass.visible and is_equal_approx(hud.minimap.modulate.a, 1.0), "Tab — полная сводка")
 	await _tap_hud()
 	_check(not hud.summary_visible() and hud.minimap.visible, "Tab запускает плавное скрытие")
 	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
-	_check(not hud.minimap.visible and hud._summary_hint.text.ends_with("показать сводку"), "скрытие оставляет подсказку")
+	_check(not hud.minimap.visible and not hud.navigation_visible() and hud._summary_hint.text.ends_with("показать сводку"), "скрытие оставляет подсказку и прячет навигацию")
+	await _tap_hud()
+	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
+	_check(not hud.summary_visible() and hud.navigation_visible() and is_equal_approx(hud.minimap.modulate.a, Hud.LIGHT_ALPHA), "Tab возвращает лёгкий вид")
 	await _tap_hud()
 	await create_timer(Hud.SUMMARY_FADE + 0.1).timeout
 	_check(hud.summary_visible() and is_equal_approx(hud.minimap.modulate.a, 1.0), "Tab возвращает сводку")
@@ -278,6 +286,15 @@ func _run() -> void:
 	hud.quest_changed()
 	_check(hud.tracker.visible and hud._tracker_count.text == "2 / 2" and hud._tracker_note.visible, "карточка задания показывает ход доставки")
 	await _shot("hud_map")
+	# 18.11.2026: личная карта в стиле нацпарка — открыто только вокруг пройденного пути и открытых мест
+	for i in 40:
+		hud.map_journal.record(Vector2(400 + i * 8.0, 470 + sin(i * 0.3) * 30.0), 0.3, true)
+	hud.set_map_visible(true)
+	await create_timer(0.6).timeout
+	_check(hud.big_map._fog != null and hud.big_map._fog.get_pixelv(Vector2i(Vector2(512, 512) / hud.big_map.FOG_CELL)).a < 0.1
+		and hud.big_map._fog.get_pixel(0, 0).a > 0.9, "личная карта: у пути открыто, вдали бумага")
+	await _shot("hud_big_map")
+	hud.set_map_visible(false)
 	await _journal_checks()
 	hud.toast_now("Открыто место: перевал Седой")
 	hud.toast("Достигнута цель")

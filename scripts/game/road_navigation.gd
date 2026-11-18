@@ -71,7 +71,7 @@ func build(w: WorldData, h: Heightfield = null) -> void:
 		var key := _edge_key(a, b)
 		if _edges.has(key) or not points.has(a) or not points.has(b):
 			continue
-		var end := _segment(points[a], points[b], levels[a])
+		var end := _edge_level(points[a], points[b], levels[a])
 		if not is_finite(end) or absf(end - float(levels[b])) > 0.5:
 			continue
 		_edges[key] = edge
@@ -251,6 +251,24 @@ func _segment(a: Vector2, b: Vector2, feet: float) -> float:
 		var y := _heights.surface_at(at.x, at.y, last + 0.1)
 		if not is_finite(y) or absf(y - last) > maxf(0.35, a.distance_to(b) / steps * 1.0): return INF
 		if not _passable(at, y) or not BikeRecovery.headroom(_heights, at.x, at.y, y): return INF
+		last = y
+	return last
+
+## 18.11.2026: связь графа дорог при сборке — только непрерывность уровня с шагом EDGE_STEP (мост, туннель, обрыв,
+## неизвестная или закрытая земля). Проходимость самого полотна обеспечивает генерация дорог; полная проверка _segment
+## по 0,5 м со столкновениями на каждом метре всей сети делала первый расчёт маршрута долгим (секунды на мир 768).
+## Видимую часть пути NavigationLine всё равно проверяет полностью.
+const EDGE_STEP := 2.0
+func _edge_level(a: Vector2, b: Vector2, feet: float) -> float:
+	if _heights == null: return 0.0
+	var steps := maxi(1, ceili(a.distance_to(b) / EDGE_STEP))
+	var last := feet
+	for i in range(0, steps + 1):
+		if cancelled: return INF
+		var at := a.lerp(b, float(i) / steps)
+		if not _heights.known(at.x, at.y) or not _world.accessible(at.x / GameConfig.TILE, at.y / GameConfig.TILE): return INF
+		var y := _heights.surface_at(at.x, at.y, last + 0.1)
+		if not is_finite(y) or absf(y - last) > maxf(0.35, a.distance_to(b) / steps): return INF
 		last = y
 	return last
 

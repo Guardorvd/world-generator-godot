@@ -343,7 +343,7 @@ static func _add_road_landmarks(batch: MeshBatch, w: WorldData, heights: Heightf
 	for mark: Dictionary in road_landmarks(w, heights):
 		var mesh: Mesh = meshes[mark.kind]
 		if mesh != null:
-			batch.add_detail(mesh, mark.xform, Color.WHITE, opaque_mat)
+			batch.add_detail(mesh, mark.xform, Color.WHITE, opaque_mat, true)
 
 
 const MILE_STEP := 200.0   # м между верстовыми камнями (по прямой, по всей сети дорог)

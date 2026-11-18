@@ -67,9 +67,15 @@ var _tracker_series: Label  # вторая строка счётчика: «Ле
 var _step_count := 0
 var _step_index := 0
 var _photo_mode := false
-var _revealed := true
+## 18.11.2026: три вида сводки по Tab. LIGHT — основной: видна только мини-карта (LIGHT_ALPHA) и линия навигации;
+## FULL — вся сводка; HIDDEN — ничего, кроме срочного. Порядок по Tab: лёгкий → полный → скрытый → лёгкий
+enum View { HIDDEN, LIGHT, FULL }
+const LIGHT_ALPHA := 0.75
+var view_mode := View.LIGHT
+var _revealed := false      # view_mode == FULL
+var _light := 1.0           # 0..1: проявление лёгкого вида
 var _summary_blocked := false
-var _summary_progress := 1.0
+var _summary_progress := 0.0
 var _summary_hint_left := SUMMARY_HINT_TIME
 var _summary_hint: Label
 var _summary_switch: PanelContainer
@@ -143,6 +149,7 @@ func _ready() -> void:
 
 	big_map = Atlas.new()
 	big_map.journal = map_journal
+	big_map.paper = true # 18.11.2026: стиль карты нацпарка, открыто только исследованное
 	big_map.set_anchors_preset(Control.PRESET_FULL_RECT)
 	big_map.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	big_map.visible = false
@@ -158,7 +165,7 @@ func _ready() -> void:
 	close_map.offset_bottom = 56
 	close_map.pressed.connect(func() -> void: map_close_requested.emit())
 	big_map.add_child(close_map)
-	big_map.move_child(close_map, 0)
+	big_map.move_child(close_map, -1) # поверх подложки и меток карты
 	big_map.place_selected.connect(_select_map_goal)
 	big_map.marker_requested.connect(func(at: Vector2) -> void: _select_map_goal(marker_goal(at)))
 	settlement_panel = preload("res://scripts/ui/settlement_panel.gd").new()
@@ -278,8 +285,10 @@ func set_world(w: WorldData, map_image: Image) -> void:
 	visited = {}
 	goal = {}
 	bike_shown = false
-	_revealed = true
-	_summary_progress = 1.0
+	view_mode = View.LIGHT
+	_revealed = false
+	_summary_progress = 0.0
+	_light = 1.0
 	_summary_hint_left = SUMMARY_HINT_TIME
 	_apply_reveal()
 	_toast_queue.clear()
@@ -728,6 +737,11 @@ func summary_visible() -> bool:
 	return _revealed and _summary_allowed()
 
 
+## Линия навигации видна в лёгком и полном виде
+func navigation_visible() -> bool:
+	return view_mode != View.HIDDEN and _summary_allowed()
+
+
 func _summary_allowed() -> bool:
 	return is_visible_in_tree() and not _photo_mode and not big_map.visible \
 		and not settlement_panel.visible and not _summary_blocked
@@ -742,9 +756,11 @@ func set_summary_blocked(blocked: bool) -> void:
 func _apply_reveal() -> void:
 	var allowed := _summary_allowed()
 	var alpha := smoothstep(0.0, 1.0, _summary_progress) if allowed else 0.0
-	for node: CanvasItem in [minimap, compass]:
-		node.visible = alpha > 0.0
-		node.modulate.a = alpha
+	compass.visible = alpha > 0.0
+	compass.modulate.a = alpha
+	var map_alpha := maxf(alpha, LIGHT_ALPHA * smoothstep(0.0, 1.0, _light)) if allowed else 0.0
+	minimap.visible = map_alpha > 0.0
+	minimap.modulate.a = map_alpha
 	_info_panel.visible = alpha > 0.0 and not info.text.is_empty()
 	_info_panel.modulate.a = alpha
 	_place_toast()
@@ -763,16 +779,16 @@ func _apply_reveal() -> void:
 		_reticle_on_target = prompt.visible
 		_reticle.queue_redraw()
 	var show_switch := false
-	if allowed and (not _revealed or _summary_hint_left > 0.0):
+	if allowed and (view_mode == View.HIDDEN or _summary_hint_left > 0.0):
 		var key := controls.label(&"show_hud")
 		show_switch = not key.is_empty()
 		if show_switch:
-			var action := "скрыть сводку" if _revealed else "показать сводку"
+			var action: String = {View.LIGHT: "вся сводка", View.FULL: "скрыть сводку", View.HIDDEN: "показать сводку"}[view_mode]
 			var caption := "%s · %s" % [key, action]
 			if _summary_hint.text != caption:
 				_summary_hint.text = caption
 				_summary_switch.reset_size()
-			_summary_switch.modulate.a = smoothstep(0.0, 0.5, _summary_hint_left) if _revealed else 1.0
+			_summary_switch.modulate.a = 1.0 if view_mode == View.HIDDEN else smoothstep(0.0, 0.5, _summary_hint_left)
 	_summary_hint.visible = show_switch
 	_summary_switch.visible = show_switch
 
@@ -911,13 +927,15 @@ func _place_toast() -> void:
 
 func _input(event: InputEvent) -> void:
 	if event.is_action_pressed(&"show_hud") and _summary_allowed():
-		_revealed = not _revealed
+		view_mode = {View.LIGHT: View.FULL, View.FULL: View.HIDDEN, View.HIDDEN: View.LIGHT}[view_mode]
+		_revealed = view_mode == View.FULL
 		_summary_hint_left = SUMMARY_HINT_TIME
 
 
 func _process(delta: float) -> void:
 	_summary_progress = move_toward(_summary_progress, 1.0 if _revealed else 0.0, delta / SUMMARY_FADE)
-	if _summary_allowed() and _revealed:
+	_light = move_toward(_light, 1.0 if view_mode == View.LIGHT else 0.0, delta / SUMMARY_FADE)
+	if _summary_allowed() and view_mode != View.HIDDEN:
 		_summary_hint_left = maxf(0.0, _summary_hint_left - delta)
 	_apply_reveal()
 	var obscured: bool = not is_visible_in_tree() or big_map.visible or settlement_panel.visible

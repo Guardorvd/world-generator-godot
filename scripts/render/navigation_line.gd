@@ -45,6 +45,18 @@ var _reroute_timer := 0.0
 var status := ""
 var _revision := ""
 var _progress := 0.0
+## 18.11.2026, цена кадра: перерисовка 4 раза/с больше не проверяет весь видимый путь заново и не ищет высоту каждого
+## кусочка штриха. _checked — до какой дуги участок пути i уже проверен (_levels — высота там), _lifts — готовые
+## вершины кусочков и стрелок. Сбрасываются с новым путём.
+var _checked := {}
+var _levels := {}
+var _lifts := {}
+## Снимок мира для пересчёта при отклонении: тот же, пока игрок рядом с местом снимка и сеть та же (копия мира на
+## главном потоке — заметный рывок, а при съезде с пути пересчёт идёт каждые 2 с)
+var _snapshot: Heightfield
+var _snapshot_at := Vector2.INF
+var _snapshot_revision := ""
+const SNAPSHOT_REUSE := 120.0
 
 func _network_revision() -> String:
 	var outer := _world.outer.get_ledger() if _world.outer != null else {}
@@ -56,6 +68,7 @@ func setup(w: WorldData, h: Heightfield) -> void:
 	_world = w
 	_heights = h
 	roads = null
+	_snapshot = null
 	_revision = ""
 	_goal = {}
 	path.clear()
@@ -100,9 +113,9 @@ func set_goal(goal: Dictionary, at: Vector2, feet := INF) -> void:
 	_rebuild(at, feet)
 
 
-func _rebuild(at: Vector2, feet := INF, recheck_graph := false) -> void:
+func _rebuild(at: Vector2, feet := INF, recheck_graph := false, fresh := false) -> void:
 	if background_search:
-		_request_search(at, feet, recheck_graph)
+		_request_search(at, feet, recheck_graph, fresh)
 		return
 	if recheck_graph: roads.build(_world, _heights)
 	path = roads.route_to(at, _target, feet)
@@ -117,6 +130,9 @@ func _accept_path() -> void:
 	_flow = 0.0
 	_road_first = roads.road_first
 	_road_last = roads.road_last
+	_checked.clear()
+	_levels.clear()
+	_lifts.clear()
 	_cum.resize(path.size())
 	var total := 0.0
 	for i in path.size():
@@ -200,13 +216,28 @@ func update_line(at: Vector3, dt: float, active: bool, shown := true) -> void:
 		var c0 := maxf(start, base)
 		var c1 := minf(_cum[i], start + REACH)
 		var end := a0 + direction * (c1 - base)
-		var next_ground := roads._segment(nearest if i == segment else a0, end, ground)
-		if next_ground == INF:
-			if _reroute_timer <= 0.0:
-				_rebuild(here, at.y, true)
-			return # не продолжаем рисовать сквозь обновившееся препятствие
 		# короткий подход к дороге (до STEP) — тот же пунктир, чтобы не было стрелки под ногами
 		var on_road := (i > _road_first and i <= _road_last) or (i == _road_first and length < STEP)
+		var next_ground := INF
+		var checked: float = _checked.get(i, -INF)
+		if c1 <= checked + 0.01:
+			next_ground = _levels[i]
+		else:
+			# проверяется только ещё не проверенная часть участка (от прежней границы или от игрока)
+			var from := nearest if i == segment else a0
+			var from_level := ground
+			if checked > c0:
+				from = a0 + direction * (checked - base)
+				from_level = _levels[i]
+			next_ground = roads._segment(from, end, from_level)
+			if next_ground != INF:
+				_checked[i] = c1
+				_levels[i] = next_ground
+		if next_ground == INF:
+			if _reroute_timer <= 0.0:
+				# препятствие на дороге — пересобрать граф; на подходе вне дороги хватит нового подхода по свежему снимку
+				_rebuild(here, at.y, i > _road_first and i <= _road_last, true)
+			return # не продолжаем рисовать сквозь обновившееся препятствие
 		var reference := maxf(ground, next_ground)
 		if on_road:
 			_dashes(vertices, colors, a0, direction, base, c0, c1, reference, start, here)
@@ -262,14 +293,19 @@ func _piece(vertices: PackedVector3Array, colors: PackedColorArray, pa: Vector2,
 	var fade := (1.0 - smoothstep(50.0, REACH, along)) * smoothstep(1.0, 4.0, here.distance_to((pa + pb) * 0.5))
 	if fade <= 0.01:
 		return
-	var lift := func(p: Vector2, up: float) -> Vector3:
-		return Vector3(p.x, _heights.surface_at(p.x, p.y, ground) + 0.10 + up, p.y)
-	var al: Vector3 = lift.call(pa - side, 0.0)
-	var ac: Vector3 = lift.call(pa, ARCH)
-	var ar: Vector3 = lift.call(pa + side, 0.0)
-	var bl: Vector3 = lift.call(pb - side, 0.0)
-	var bc: Vector3 = lift.call(pb, ARCH)
-	var br: Vector3 = lift.call(pb + side, 0.0)
+	var key := Vector4(pa.x, pa.y, pb.x, pb.y)
+	var lifted: PackedVector3Array = _lifts.get(key, PackedVector3Array())
+	if lifted.is_empty():
+		for corner: Array in [[pa - side, 0.0], [pa, ARCH], [pa + side, 0.0], [pb - side, 0.0], [pb, ARCH], [pb + side, 0.0]]:
+			var p: Vector2 = corner[0]
+			lifted.append(Vector3(p.x, _heights.surface_at(p.x, p.y, ground) + 0.10 + corner[1], p.y))
+		_remember(key, lifted)
+	var al := lifted[0]
+	var ac := lifted[1]
+	var ar := lifted[2]
+	var bl := lifted[3]
+	var bc := lifted[4]
+	var br := lifted[5]
 	var edge := Color(EDGE.lerp(WARN_EDGE, _wrong), fade * (0.12 + 0.08 * _wrong))
 	var core := Color(CORE.lerp(WARN, _wrong), fade * (0.62 + 0.28 * _wrong))
 	for v: Array in [[al, edge], [ac, core], [bc, core], [al, edge], [bc, core], [bl, edge],
@@ -285,7 +321,12 @@ func _arrow(vertices: PackedVector3Array, colors: PackedColorArray, p: Vector2, 
 	var fade := (1.0 - smoothstep(50.0, REACH, along)) * smoothstep(2.0, 6.0, here.distance_to(p))
 	if fade <= 0.01:
 		return
-	var base := Vector3(p.x, _heights.surface_at(p.x, p.y, ground) + HOVER, p.y)
+	var key := Vector4(p.x, p.y, -1e9, 0.0)
+	var cached: PackedVector3Array = _lifts.get(key, PackedVector3Array())
+	if cached.is_empty():
+		cached = PackedVector3Array([Vector3(p.x, _heights.surface_at(p.x, p.y, ground) + HOVER, p.y)])
+		_remember(key, cached)
+	var base := cached[0]
 	var ahead := Vector3(dir.x, 0.0, dir.y) * cos(TILT) + Vector3.UP * sin(TILT)
 	var side := Vector3(-dir.y, 0.0, dir.x)
 	var tip := base + ahead * (ARM * 0.5)
@@ -298,6 +339,12 @@ func _arrow(vertices: PackedVector3Array, colors: PackedColorArray, p: Vector2, 
 				[tip - band, core], [wing + band, edge], [wing - band, edge]]:
 			vertices.append(v[0])
 			colors.append(v[1])
+
+
+func _remember(key: Vector4, lifted: PackedVector3Array) -> void:
+	if _lifts.size() > 6000:
+		_lifts.clear()
+	_lifts[key] = lifted
 
 
 ## Движение против маршрута: направление пути берём сразу за ближайшей точкой, чтобы развилка
@@ -325,10 +372,10 @@ func _ahead(s: float, dist: float) -> Vector2:
 	return path[path.size() - 1]
 
 ## Only one worker exists. A newer goal/revision supersedes its result without blocking a frame.
-func _request_search(at: Vector2, feet: float, recheck_graph := false) -> void:
+func _request_search(at: Vector2, feet: float, recheck_graph := false, fresh := false) -> void:
 	var revision := _network_revision()
 	if _search_task != -1 and _search_serial == _serial and _search_revision == revision: return
-	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph}
+	_request = {at=at, feet=feet, target=_target, revision=revision, serial=_serial, recheck_graph=recheck_graph, fresh=fresh}
 	if _search_task != -1:
 		_search_roads.cancelled = true
 		return
@@ -338,7 +385,14 @@ func _start_search() -> void:
 	var request := _request
 	_request = {}
 	var reuse: bool = roads != null and _revision == request.revision and not request.recheck_graph
-	var h := Snapshot.capture(_heights, not reuse)
+	var h: Heightfield
+	if reuse and not request.get("fresh", false) and _snapshot != null and _snapshot_revision == request.revision 			and _snapshot_at.distance_to(request.at) < SNAPSHOT_REUSE:
+		h = _snapshot # снимок только читается, рабочий поток один
+	else:
+		h = Snapshot.capture(_heights, not reuse)
+		_snapshot = h
+		_snapshot_at = request.at
+		_snapshot_revision = request.revision
 	var search := Roads.new()
 	_search_roads = search
 	_search_revision = request.revision

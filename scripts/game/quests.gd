@@ -373,6 +373,15 @@ static func _make(kind: String, here: Dictionary, at: Array) -> QuestData:
 	return q
 
 
+## 18.11.2026: основное задание новой игры — доехать до поселения target (ближайшего к старту); вид «Посещение»
+static func start(target: Dictionary) -> QuestData:
+	var q := QuestData.new("start:%s" % target.key, "visit", target.key, target)
+	q.title = "Дорога в «%s»" % target.name
+	q.text = "Доберитесь до поселения «%s»: у костра — доска заданий и указатели дорог. Путь к нему на земле и на мини-карте." % target.name
+	q.steps = [{do = "reach", place = target}]
+	return q
+
+
 ## Взять задание q (из offers). Прошлое активное бросается
 func accept(q: QuestData) -> void:
 	if q.kind == "obelisks":

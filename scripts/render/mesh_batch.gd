@@ -10,11 +10,17 @@ const CELL := 256.0     # сторона квадрата, м
 const SEEN := 1400.0    # дальше не рисуется: туман на 900 м уже скрывает больше 80 % цвета
 const LOD_ENDS := [60.0, 250.0, SEEN]
 const DETAIL_SEEN := 60.0
+## 18.11.2026: одиночные ориентиры у дорог (указатели, верстовые камни, туры) — своими мелкими квадратами MARK_CELL с
+## дальностью MARK_SEEN. В общем квадрате деталей 256 м дальность 60 м мерилась от середины построек квадрата, и указатель
+## на развилке у края квадрата появлялся, только когда игрок подъезжал вплотную, или пропадал прямо в кадре.
+const MARK_CELL := 48.0
+const MARK_SEEN := 260.0
 
 var _tools: Dictionary = {}       # world square -> material -> CPU arrays (мосты, туннели, туры)
 var _lod_tools: Dictionary = {}   # world square -> [level 0..2 dict: material -> CPU arrays]
 var _lod_centers: Dictionary = {} # world square -> {sum: Vector3, count: int}
 var _details: Dictionary = {}     # world square -> material -> mesh -> Array[{xform, color}]
+var _marks: Dictionary = {}       # квадрат MARK_CELL -> material -> mesh -> Array[{xform, color}] (ориентиры у дорог)
 var _geometry := {}               # cache (mesh, surface) -> surface arrays
 var keep_world_origin := false    # true для Trail Lab (visible_deck читает вершины без mi.position)
 
@@ -105,13 +111,15 @@ func add_lod(mesh: Mesh, xform: Transform3D, mats: Array, level: int, cell_tints
 
 
 ## Добавить мелкую повторяющуюся деталь (ящик с цветами, скамья, поленья) для MultiMesh квадрата 256 м.
-func add_detail(mesh: Mesh, xform: Transform3D, color: Color, mat: Material) -> void:
+func add_detail(mesh: Mesh, xform: Transform3D, color: Color, mat: Material, landmark := false) -> void:
 	if mesh == null or mat == null:
 		return
-	var key := Vector2i(floori(xform.origin.x / CELL), floori(xform.origin.z / CELL))
-	if not _details.has(key):
-		_details[key] = {}
-	var by_mat: Dictionary = _details[key]
+	var cell := MARK_CELL if landmark else CELL
+	var groups: Dictionary = _marks if landmark else _details
+	var key := Vector2i(floori(xform.origin.x / cell), floori(xform.origin.z / cell))
+	if not groups.has(key):
+		groups[key] = {}
+	var by_mat: Dictionary = groups[key]
 	if not by_mat.has(mat):
 		by_mat[mat] = {}
 	var by_mesh: Dictionary = by_mat[mat]
@@ -121,7 +129,7 @@ func add_detail(mesh: Mesh, xform: Transform3D, color: Color, mat: Material) -> 
 
 
 func build(node_name: String) -> Node3D:
-	if _tools.is_empty() and _lod_tools.is_empty() and _details.is_empty():
+	if _tools.is_empty() and _lod_tools.is_empty() and _details.is_empty() and _marks.is_empty():
 		return null
 	var root := Node3D.new()
 	root.name = node_name
@@ -205,9 +213,26 @@ func build(node_name: String) -> Node3D:
 			mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF if level >= 2 else GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 			root.add_child(mi)
 
-	for key: Vector2i in _details:
+	for landmark: bool in [false, true]:
+		_build_details(root, node_name, landmark)
+	return root
+
+
+func _build_details(root: Node3D, node_name: String, landmark: bool) -> void:
+	var groups: Dictionary = _marks if landmark else _details
+	for key: Vector2i in groups:
 		var center := _square_center(key)
-		var by_mat: Dictionary = _details[key]
+		var by_mat: Dictionary = groups[key]
+		if landmark:
+			# середина своих ориентиров: дальность считается от неё
+			var sum := Vector3.ZERO
+			var count := 0
+			for by_mesh: Dictionary in by_mat.values():
+				for items: Array in by_mesh.values():
+					for item: Dictionary in items:
+						sum += item.xform.origin
+						count += 1
+			center = sum / maxf(1.0, count)
 		var idx := 0
 		for mat: Material in by_mat:
 			var by_mesh: Dictionary = by_mat[mat]
@@ -227,16 +252,15 @@ func build(node_name: String) -> Node3D:
 					mm.set_instance_transform(i, xf)
 					mm.set_instance_color(i, item.color)
 				var mmi := MultiMeshInstance3D.new()
-				mmi.name = "%s_Detail_%d_%d_%d" % [node_name, key.x, key.y, idx]
+				mmi.name = "%s_%s_%d_%d_%d" % [node_name, "Mark" if landmark else "Detail", key.x, key.y, idx]
 				idx += 1
 				mmi.multimesh = mm
 				mmi.material_override = mat
 				mmi.position = center
 				mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 				mmi.visibility_range_begin = 0.0
-				mmi.visibility_range_end = DETAIL_SEEN
+				mmi.visibility_range_end = MARK_SEEN if landmark else DETAIL_SEEN
 				root.add_child(mmi)
-	return root
 
 
 func _square_center(key: Vector2i) -> Vector3:
